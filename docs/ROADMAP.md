@@ -218,9 +218,9 @@ named program or test demonstrates it.
   it; the controller, a page and a script)~~ Done (`xpwin`,
   `chrometest`); ~~drawing the page without a GPU (the Basic Render
   Driver adapter, a WARP device, DirectComposition, the GPU process's
-  window inside the browser's)~~ Done (`dcomptest`).  Still to do:
-  Windows' `WOW6432Node` registry view for machine-wide installs, and
-  drawing with ANGLE on DXVK when a GPU is there.
+  window inside the browser's)~~ Done (`dcomptest`); ~~Windows'
+  `WOW6432Node` registry view for machine-wide installs~~ Done (`regtest`).
+  Still to do: drawing with ANGLE on DXVK when a GPU is there.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music

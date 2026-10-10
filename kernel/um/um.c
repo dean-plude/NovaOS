@@ -3033,6 +3033,7 @@ int UmList(UmProcInfo *out, int max)
         out[n].mem_kb = p->pages * 4;
         out[n].threads = (UINT32)p->live_threads;
         out[n].exited = p->exited;
+        out[n].parent_pid = p->parent_pid;
         n++;
     }
     return n;

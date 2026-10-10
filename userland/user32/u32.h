@@ -179,6 +179,7 @@ enum {
     WF_NOTIFYSENT = 32, WF_ERASEBK_DONE = 64, WF_HIDDEN_BY_OWNER = 128, WF_MAPPED = 256,
     WF_NEED_SIZE = 512,             /* WM_SIZE and WM_MOVE still owed, at the first ShowWindow */
     WF_TOUCH = 1024,                /* RegisterTouchWindow: WM_TOUCH instead of WM_POINTER* */
+    WF_MESSAGE_ONLY = 2048,         /* made with HWND_MESSAGE: gets no broadcasts */
 };
 
 void u32_lock(void);                /* a recursive lock over the window table and the queues */
@@ -199,6 +200,8 @@ LRESULT touch_default(Wnd *w, UINT msg, WPARAM wp, LPARAM lp);  /* DefWindowProc
  * from the pen packet @pen (0: the mouse); 1 if it became WM_POINTER* */
 int   pointer_from_mouse(Wnd *target, UINT msg, WPARAM mk, POINT pt, DWORD time, UINT32 pen, int hit);
 void  pointer_left(Wnd *top);          /* the desktop's WM_MOUSELEAVE for @top: the pen (or mouse) left it */
+void  devnotify_init(void);          /* devnotify.c: at start-up */
+void  devnotify_kernel(DWORD after);  /* the desktop's WM_DEVICECHANGE: devices changed after PnP event @after */
 BOOL  raw_nolegacy(BOOL keyboard);      /* rawinput.c: the mouse's (keyboard's) input is raw input only (RIDEV_NOLEGACY) */
 HWND  recently_active(void);         /* win.c: the window that was active a moment ago (none is now) */
 void  pointer_taken(const MSG *m);     /* GetMessage took @m (GetPointerInfo answers for it) */

@@ -4,11 +4,14 @@
   Done: the root, the PCI functions, the USB root hubs and devices, their
   functions and HID and disk children, with Windows instance, hardware
   and compatible IDs, classes, drivers, devices not present kept, and
-  arrival and removal events for programs (`CTL_PNP`).  Still to do: the
-  PlugPlay service reported running, `WM_DEVICECHANGE` and
+  arrival and removal events for programs (`CTL_PNP`).  ~~The PlugPlay
+  service, `WM_DEVICECHANGE`~~ Done: the PlugPlay service running and
+  keeping `HKLM\SYSTEM\CurrentControlSet\Enum`,
   `RegisterDeviceNotification` (`DBT_DEVICEARRIVAL`,
-  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes),
-  `CM_Register_Notification`, and setupapi's and cfgmgr32's enumeration
+  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services)
+  and `CM_Register_Notification`.  Still to do: query-remove
+  (`DBT_DEVICEQUERYREMOVE`), handle notifications (`DBT_DEVTYP_HANDLE`),
+  and setupapi's and cfgmgr32's enumeration
   of the tree (`SetupDiGetClassDevs` for every class, `CM_Locate_DevNode`,
   `CM_Get_Child`/`Sibling`/`Parent`, device properties) with
   `pnputil /enum-devices` matching the driver store.

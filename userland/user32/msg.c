@@ -887,6 +887,7 @@ static void from_kernel_(Wnd *top, const MSG *kmsg, UINT32 pen)
         if (W_quiet(top->h)) send_msg(top, WM_DISPLAYCHANGE, km->wParam, km->lParam);
         break;
     case WM_NOVA_DPI: dpi_monitors_changed(top); break;
+    case WM_DEVICECHANGE: devnotify_kernel((DWORD)km->lParam); break;   /* (devnotify.c sends the messages) */
     case WM_CHAR: case WM_SYSCHAR: break;                  /* TranslateMessage makes these, as on Windows */
     case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
         if (!raw_nolegacy(TRUE)) route_key(top, km);         /* (RIDEV_NOLEGACY: raw input only) */

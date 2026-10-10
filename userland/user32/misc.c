@@ -728,8 +728,6 @@ USERAPI BOOL LockWorkStation(void) { SetLastError(ERROR_ACCESS_DENIED); return F
 
 USERAPI BOOL ChangeWindowMessageFilterEx(HWND h, UINT msg, DWORD action, void *cf) { (void)h; (void)msg; (void)action; (void)cf; return TRUE; }
 USERAPI BOOL ChangeWindowMessageFilter(UINT msg, DWORD f) { (void)msg; (void)f; return TRUE; }
-USERAPI HANDLE RegisterDeviceNotificationW(HANDLE r, LPVOID filter, DWORD f) { (void)r; (void)filter; (void)f; return (HANDLE)(ULONG_PTR)0xDE01; }
-USERAPI BOOL UnregisterDeviceNotification(HANDLE h) { (void)h; return TRUE; }
 USERAPI HANDLE RegisterPowerSettingNotification(HANDLE r, const GUID *g, DWORD f) { (void)r; (void)g; (void)f; return (HANDLE)(ULONG_PTR)0xDE02; }
 USERAPI BOOL UnregisterPowerSettingNotification(HANDLE h) { (void)h; return TRUE; }
 /* Suspend and resume arrive as WM_POWERBROADCAST to every top-level window */

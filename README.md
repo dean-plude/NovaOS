@@ -215,7 +215,8 @@ same bytes, as Windows shares image sections), I/O,
   through the I/O APIC), and the embedded controller laptops keep their
   lid and battery behind.
 - **Networking**: lwIP (TCP/IP over IPv4 and IPv6: DHCP, SLAAC, DNS over
-  either), an HTTP/1.1 client, and Mbed TLS with the Mozilla root store.
+  either, or a static address and DNS servers set in Settings > Network or
+  with `netsh` and kept across restarts), an HTTP/1.1 client, and Mbed TLS with the Mozilla root store.
   The loopback interface carries 127.0.0.1 and ::1 (and traffic to the
   machine's own addresses), and `localhost` resolves to both without DNS.
   Winsock (`ws2_32`, and `wsock32` with Winsock 1.1's ordinals) speaks IPv6
@@ -640,10 +641,13 @@ To make the ISO yourself from a fresh build, run
   `schanneltest stores` (a certificate found through a collection of
   collections, a root's extended key usages, and
   `InternetGetConnectedState` offline without a network; 64- and
-  32-bit), `crash kernel`, a deliberate kernel fault whose serial log
-  must show a backtrace with function names, and last the kernel crash
-  report: after `crash kernel` and a reset, `crashes last` shows the
-  fault's backtrace.<!-- END generated:core-tests -->
+  32-bit), driver packages staged in the driver store and published as
+  oemN.inf from a program (`DiInstallDriver`, `SetupCopyOEMInf`), with
+  `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`), `crash
+  kernel`, a deliberate kernel fault whose serial log must show a
+  backtrace with function names, and last the kernel crash report: after
+  `crash kernel` and a reset, `crashes last` shows the fault's
+  backtrace.<!-- END generated:core-tests -->
 - **Network** (in the boot-test job): two boots with a virtio-net card.
   On QEMU's user network, `ipconfig`, `ping`, Winsock over IPv4 and
   `httptest suite` (winhttp with HTTP/2 by ALPN) against
@@ -695,7 +699,7 @@ It posts a pass/fail table per program to the "Nightly app corpus" issue.
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`).  Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `edgeupdtest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `glgeneric`, `httptest`, `icutest`, `inputtest`, `kbdtest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tztest`, `unwindtest`, `usptest`, `waitmigrationtest`, `warptest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.  `soundtest`
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `glgeneric`, `httptest`, `icutest`, `inputtest`, `kbdtest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tztest`, `unwindtest`, `usptest`, `waitmigrationtest`, `warptest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.  `soundtest`
   plays tones through `waveOut`, WASAPI, `PlaySound` and `Beep`, records
   through `waveIn` and WASAPI capture, and lists the sound devices,
   chooses the default and sets each device's own volume;

@@ -25,6 +25,7 @@
 #include "lwip/netif.h"
 #include "lwip/timeouts.h"
 #include "lwip/dhcp.h"
+#include "lwip/dhcp6.h"
 #include "lwip/dns.h"
 #include "lwip/raw.h"
 #include "lwip/ip6_addr.h"
@@ -651,6 +652,8 @@ bool NetInitialize(void)
      * advertisements (SLAAC), DNS servers from their RDNSS option */
     netif_create_ip6_linklocal_address(&g_netif, 1);
     netif_set_ip6_autoconfig_enabled(&g_netif, 1);
+    if (dhcp6_enable_stateless(&g_netif) != ERR_OK)
+        kprintf("[NET] DHCPv6 could not start\n");
 
     if (g_nic != &g_none && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");
     g_up = true;

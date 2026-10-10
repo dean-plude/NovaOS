@@ -218,9 +218,9 @@ named program or test demonstrates it.
   it; the controller, a page and a script)~~ Done (`xpwin`,
   `chrometest`); ~~drawing the page without a GPU (the Basic Render
   Driver adapter, a WARP device, DirectComposition, the GPU process's
-  window inside the browser's)~~ Done (`dcomptest`).  Still to do:
-  Windows' `WOW6432Node` registry view for machine-wide installs, and
-  drawing with ANGLE on DXVK when a GPU is there.
+  window inside the browser's)~~ Done (`dcomptest`); ~~Windows'
+  `WOW6432Node` registry view for machine-wide installs~~ Done (`regtest`).
+  Still to do: drawing with ANGLE on DXVK when a GPU is there.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music
@@ -340,8 +340,10 @@ named program or test demonstrates it.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).
-  The `network` self-test suite checks both.  Still to do: DHCPv6,
-  connection reuse in `winhttp`, WinHTTP WebSockets, HTTP/3.
+  The `network` self-test suite checks both.  Stateless DHCPv6 supplies DNS
+  configuration; stateful DHCPv6 address assignment remains unsupported by
+  the vendored lwIP client.  WinHTTP reuses HTTP/1.1 connections and supports
+  WebSockets.  HTTP/3 remains to do; it needs a QUIC transport.
 - ~~USB (xHCI) with HID keyboards and mice~~ Done: keyboards, mice,
   tablets and touch screens in report protocol, on root ports or behind
   hubs, with hot-plug; USB mass storage (FAT and NTFS sticks as the next

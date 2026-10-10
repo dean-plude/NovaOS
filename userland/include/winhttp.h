@@ -64,12 +64,20 @@ typedef int INTERNET_SCHEME;
 #define WINHTTP_OPTION_SECURE_PROTOCOLS        84
 #define WINHTTP_OPTION_REDIRECT_POLICY         88
 #define WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS 89
+#define WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET   114
 #define WINHTTP_OPTION_DECOMPRESSION           118
 #define WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL    133
 #define WINHTTP_OPTION_HTTP_PROTOCOL_USED      134
 
 #define WINHTTP_PROTOCOL_FLAG_HTTP2   0x1
 #define WINHTTP_PROTOCOL_FLAG_HTTP3   0x2
+
+#define WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE  0
+#define WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE 1
+#define WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE    2
+#define WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE   3
+#define WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE           4
+typedef DWORD WINHTTP_WEB_SOCKET_BUFFER_TYPE;
 
 #define WINHTTP_HANDLE_TYPE_SESSION   1
 #define WINHTTP_HANDLE_TYPE_CONNECT   2
@@ -217,6 +225,15 @@ WINHTTPAPI BOOL WINAPI WinHttpGetDefaultProxyConfiguration(WINHTTP_PROXY_INFO *i
 WINHTTPAPI BOOL WINAPI WinHttpSetDefaultProxyConfiguration(WINHTTP_PROXY_INFO *info);
 WINHTTPAPI BOOL WINAPI WinHttpGetProxyForUrl(HINTERNET session, LPCWSTR url, LPVOID options, WINHTTP_PROXY_INFO *info);
 WINHTTPAPI BOOL WINAPI WinHttpDetectAutoProxyConfigUrl(DWORD flags, LPWSTR *url);
+WINHTTPAPI HINTERNET WINAPI WinHttpWebSocketCompleteUpgrade(HINTERNET request, DWORD_PTR context);
+WINHTTPAPI DWORD WINAPI WinHttpWebSocketSend(HINTERNET websocket, WINHTTP_WEB_SOCKET_BUFFER_TYPE type,
+                                             PVOID buffer, DWORD length);
+WINHTTPAPI DWORD WINAPI WinHttpWebSocketReceive(HINTERNET websocket, PVOID buffer, DWORD length,
+                                                LPDWORD read, WINHTTP_WEB_SOCKET_BUFFER_TYPE *type);
+WINHTTPAPI DWORD WINAPI WinHttpWebSocketShutdown(HINTERNET websocket, USHORT status, PVOID reason, DWORD length);
+WINHTTPAPI DWORD WINAPI WinHttpWebSocketClose(HINTERNET websocket, USHORT status, PVOID reason, DWORD length);
+WINHTTPAPI DWORD WINAPI WinHttpWebSocketQueryCloseStatus(HINTERNET websocket, USHORT *status, PVOID reason,
+                                                         DWORD length, LPDWORD reason_length);
 #ifdef __cplusplus
 }
 #endif

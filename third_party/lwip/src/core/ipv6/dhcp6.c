@@ -482,7 +482,14 @@ dhcp6_information_request(struct netif *netif, struct dhcp6 *dhcp6)
     err = udp_sendto_if(dhcp6_pcb, p_out, &dhcp6_All_DHCP6_Relay_Agents_and_Servers, DHCP6_SERVER_PORT, netif);
     pbuf_free(p_out);
     LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_STATE, ("dhcp6_information_request: INFOREQUESTING -> %d\n", (int)err));
-    LWIP_UNUSED_ARG(err);
+    if (err == ERR_RTE) {
+      /* NovaOS: no usable source address yet (the link-local address is
+       * still tentative while DAD runs): nothing was sent, so try again on
+       * the next timer tick instead of backing off */
+      dhcp6_set_state(dhcp6, DHCP6_STATE_REQUESTING_CONFIG, "dhcp6_information_request");
+      dhcp6->request_timeout = 1;
+      return;
+    }
   } else {
     LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_SERIOUS, ("dhcp6_information_request: could not allocate DHCP6 request\n"));
   }
@@ -546,8 +553,22 @@ dhcp6_handle_config_reply(struct netif *netif, struct pbuf *p_msg_in)
         return;
       }
       ip6_addr_assign_zone(dns_addr6, IP6_UNKNOWN, netif);
-      /* @todo: do we need a different offset than DHCP(v4)? */
-      dns_setserver(n, &dns_addr);
+      /* NovaOS: as for RDNSS (nd6.c), don't replace servers DHCPv4 set;
+       * add this one at the first free slot, unless it is there already */
+      {
+        u8_t s, free_s = DNS_MAX_SERVERS;
+        for (s = 0; s < DNS_MAX_SERVERS; s++) {
+          if (ip_addr_eq(dns_getserver(s), &dns_addr)) {
+            break;
+          }
+          if ((free_s == DNS_MAX_SERVERS) && ip_addr_isany(dns_getserver(s))) {
+            free_s = s;
+          }
+        }
+        if ((s == DNS_MAX_SERVERS) && (free_s < DNS_MAX_SERVERS)) {
+          dns_setserver(free_s, &dns_addr);
+        }
+      }
     }
   }
   /* @ todo: parse and set Domain Search List */

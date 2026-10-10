@@ -1277,9 +1277,12 @@ static UINT32 view_path(RegKey *start, const UINT16 *path, UINT32 n, UINT32 reg_
     UINT16 *full = kmalloc(2 * (size_t)cap);
     if (!full) return ST_NO_MEMORY;
     UINT32 fn = full_name(start, full, cap);
-    if (fn < 10) { kfree(full); return ST_OBJECT_PATH_NOT_FOUND; }
-    memmove(full, full + 10, 2 * (size_t)(fn - 10));
-    fn -= 10;                                               /* omit \REGISTRY */
+    if (fn < 9) { kfree(full); return ST_OBJECT_PATH_NOT_FOUND; }
+    fn -= 9;                                                /* omit \REGISTRY (the root itself: nothing left) */
+    memmove(full, full + 9, 2 * (size_t)fn);
+    if (fn && full[0] == '\\') { fn--; memmove(full, full + 1, 2 * (size_t)fn); }
+    UINT32 start_fn = fn;
+    if (n && path[0] == '\\') { path++; n--; }             /* an absolute name: "\Machine\..." after \Registry */
     if (n) {
         if (fn) full[fn++] = '\\';
         memcpy(full + fn, path, 2 * (size_t)n);
@@ -1293,7 +1296,7 @@ static UINT32 view_path(RegKey *start, const UINT16 *path, UINT32 n, UINT32 reg_
         return ST_SUCCESS;
     }
     bool start_wow = false;
-    UINT32 start_path_len = fn - n - (n && fn > n ? 1 : 0);
+    UINT32 start_path_len = start_fn;
     bool was_wow = fn > software_len + 1 &&
                    path_prefix(full + software_len + 1, fn - software_len - 1, "WOW6432Node", 11);
     if (start_path_len > software_len + 1)

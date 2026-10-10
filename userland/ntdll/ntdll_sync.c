@@ -23,6 +23,8 @@ static void  backoff(ULONG *round)
     LARGE_INTEGER iv; iv.QuadPart = -10000;     /* 1 ms: the next 10 ms tick */
     NtDelayExecution(FALSE, &iv);
 }
+/* The CPUs at work (KUSER_SHARED_DATA.ActiveProcessorCount) */
+static ULONG active_cpus(void) { return *(volatile ULONG *)(ULONG_PTR)0x7FFE03C0; }
 /* Milliseconds since boot (KUSER_SHARED_DATA.TickCount, 10 ms ticks) */
 static ULONGLONG now_ms(void) { return (ULONGLONG)*(volatile ULONG *)(ULONG_PTR)0x7FFE0320 * 10; }
 
@@ -62,8 +64,8 @@ static HANDLE cs_event(PRTL_CRITICAL_SECTION cs)
  * run while we spin */
 static ULONG cs_spin(PRTL_CRITICAL_SECTION cs)
 {
-    if (*(volatile ULONG *)(ULONG_PTR)0x7FFE03C0 < 2) return 0;     /* KUSER_SHARED_DATA.ActiveProcessorCount */
-    return (ULONG)(cs->SpinCount & 0x00FFFFFF);
+    ULONG n = (ULONG)(cs->SpinCount & 0x00FFFFFF);
+    return n && active_cpus() > 1 ? n : 0;
 }
 
 static NTSTATUS cs_owned(PRTL_CRITICAL_SECTION cs, ULONG tid)

@@ -164,17 +164,13 @@ static int websocket_test(void)
     HINTERNET s = WinHttpOpen(L"NovaOS-httptest/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, 0, 0, 0);
     HINTERNET c = s ? WinHttpConnect(s, L"10.0.2.2", 18080, 0) : 0;
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/websocket", 0, 0, 0, 0) : 0;
-    static const WCHAR headers[] =
-        L"Connection: Upgrade\r\n"
-        L"Upgrade: websocket\r\n"
-        L"Sec-WebSocket-Version: 13\r\n"
-        L"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
     DWORD status = 0, n = sizeof(status);
     HINTERNET ws = 0;
     char reply[64] = { 0 };
     DWORD got = 0;
     WINHTTP_WEB_SOCKET_BUFFER_TYPE type = WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE;
-    int ok = r && WinHttpSendRequest(r, headers, (DWORD)-1, 0, 0, 0, 0) &&
+    int ok = r && WinHttpSetOption(r, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, 0, 0) &&
+             WinHttpSendRequest(r, 0, 0, 0, 0, 0, 0) &&
              WinHttpReceiveResponse(r, 0) &&
              WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, 0, &status, &n, 0) &&
              status == 101 && (ws = WinHttpWebSocketCompleteUpgrade(r, 0)) != 0;
@@ -185,6 +181,19 @@ static int websocket_test(void)
                  WinHttpWebSocketReceive(ws, reply, sizeof(reply), &got, &type) == 0 &&
                  type == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE &&
                  got == sizeof(message) - 1 && !memcmp(reply, message, got);
+    /* the same text in two fragments: the server echoes the whole message */
+    if (ok) {
+        DWORD total = 0;
+        ok = WinHttpWebSocketSend(ws, WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE, (void *)message, 9) == 0 &&
+             WinHttpWebSocketSend(ws, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (void *)(message + 9),
+                                  sizeof(message) - 1 - 9) == 0;
+        memset(reply, 0, sizeof(reply));
+        while (ok && total < sizeof(message) - 1) {
+            ok = WinHttpWebSocketReceive(ws, reply + total, sizeof(reply) - 1 - total, &got, &type) == 0 && got;
+            total += got;
+        }
+        ok = ok && total == sizeof(message) - 1 && !memcmp(reply, message, total);
+    }
     if (ws) WinHttpWebSocketClose(ws, 1000, 0, 0);
     if (c) WinHttpCloseHandle(c);
     if (s) WinHttpCloseHandle(s);

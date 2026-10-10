@@ -546,8 +546,22 @@ dhcp6_handle_config_reply(struct netif *netif, struct pbuf *p_msg_in)
         return;
       }
       ip6_addr_assign_zone(dns_addr6, IP6_UNKNOWN, netif);
-      /* @todo: do we need a different offset than DHCP(v4)? */
-      dns_setserver(n, &dns_addr);
+      /* NovaOS: as for RDNSS (nd6.c), don't replace servers DHCPv4 set;
+       * add this one at the first free slot, unless it is there already */
+      {
+        u8_t s, free_s = DNS_MAX_SERVERS;
+        for (s = 0; s < DNS_MAX_SERVERS; s++) {
+          if (ip_addr_eq(dns_getserver(s), &dns_addr)) {
+            break;
+          }
+          if ((free_s == DNS_MAX_SERVERS) && ip_addr_isany(dns_getserver(s))) {
+            free_s = s;
+          }
+        }
+        if ((s == DNS_MAX_SERVERS) && (free_s < DNS_MAX_SERVERS)) {
+          dns_setserver(free_s, &dns_addr);
+        }
+      }
     }
   }
   /* @ todo: parse and set Domain Search List */

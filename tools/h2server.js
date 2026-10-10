@@ -86,11 +86,11 @@ function websocket(req, socket, head) {
     const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
                  `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    let pending = head;
+    let pending = head, message = null;
     socket.on('data', (chunk) => {
         pending = Buffer.concat([pending, chunk]);
         while (pending.length >= 2) {
-            const opcode = pending[0] & 0x0f, masked = pending[1] & 0x80;
+            const frame0 = pending[0], opcode = frame0 & 0x0f, masked = pending[1] & 0x80;
             let length = pending[1] & 0x7f, offset = 2;
             if (length === 126) {
                 if (pending.length < 4) return;
@@ -107,11 +107,21 @@ function websocket(req, socket, head) {
             const data = Buffer.from(pending.subarray(offset + 4, offset + 4 + length));
             for (let i = 0; i < data.length; i++) data[i] ^= mask[i & 3];
             pending = pending.subarray(offset + 4 + length);
-            if (opcode === 1 || opcode === 2) {
-                const frame = Buffer.alloc(data.length + 2);
-                frame[0] = 0x80 | opcode;
-                frame[1] = data.length;
-                data.copy(frame, 2);
+            const fin = (frame0 & 0x80) !== 0;
+            if (opcode === 1 || opcode === 2 || opcode === 0) {
+                // a fragmented message: a data frame first, then continuation
+                // frames (opcode 0) up to the one with FIN; echoed whole
+                if ((opcode === 0) !== (message !== null)) return socket.destroy();
+                if (opcode !== 0) message = { opcode, parts: [] };
+                message.parts.push(data);
+                if (!fin) continue;
+                const whole = Buffer.concat(message.parts);
+                if (whole.length > 125) return socket.destroy();
+                const frame = Buffer.alloc(whole.length + 2);
+                frame[0] = 0x80 | message.opcode;
+                frame[1] = whole.length;
+                whole.copy(frame, 2);
+                message = null;
                 socket.write(frame);
             } else if (opcode === 8) {
                 socket.write(Buffer.from([0x88, data.length, ...data]));

@@ -91,7 +91,8 @@ void um_unlock_excl(UmRwLock *l);
  * Kernel objects reachable through handles
  * ----------------------------------------------------------------------- */
 typedef enum { UO_EVENT = 1, UO_MUTANT, UO_SEMAPHORE, UO_THREAD, UO_SOCKET, UO_WINDOW, UO_PROCESS, UO_KEY, UO_SECTION, UO_PIPE,
-               UO_DIRECTORY, UO_SYMLINK, UO_TIMER, UO_AUDIO, UO_CONSOLE, UO_TOKEN, UO_GPU, UO_AFD, UO_KEYED_EVENT } UmObType;
+               UO_DIRECTORY, UO_SYMLINK, UO_TIMER, UO_AUDIO, UO_CONSOLE, UO_TOKEN, UO_GPU, UO_AFD, UO_KEYED_EVENT,
+               UO_PSEUDO_CONSOLE } UmObType;
 
 typedef struct UmThread UmThread;
 
@@ -398,6 +399,8 @@ int        um_console_count(UmConsole *c);
 void       um_console_flush(UmConsole *c);
 void       um_console_set_mode(UmConsole *c, bool input, UINT32 mode);
 UINT32     um_console_cursor(UmConsole *c, UINT32 op, UINT32 value, UINT32 *result);
+void       um_console_set_output_object(UmConsole *c, UmObject *o);
+void       um_console_end_output(UmConsole *c);
 int        um_console_write_screen(UmConsole *c, UINT32 screen, const char *data, int len);
 UINT32     um_console_screen_create(UmConsole *c, UINT32 *screen);
 void       um_console_screen_ref(UmConsole *c, UINT32 screen);

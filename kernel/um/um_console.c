@@ -55,6 +55,9 @@ struct UmConsole {
     UmConsoleScreen screen[CON_SCREENS];
     UINT8 active_screen;
     UmObject       *ob;                      /* UO_CONSOLE: signaled while input is queued */
+    UmObject       *out_ob;                  /* a pseudo console's object (not referenced): signaled
+                                                while output waits to be read or the console has ended */
+    volatile bool   out_ended;               /* ClosePseudoConsole: its reader stops */
 };
 
 static int console_write_locked(UmConsole *c, const char *data, int len);
@@ -233,6 +236,18 @@ void um_console_flush_log(UmProcess *p)
     p->log_n = 0;
 }
 
+/* The pseudo console object's state follows the output ring */
+static void out_changed(UmConsole *c)
+{
+    UmObject *o = __atomic_load_n(&c->out_ob, __ATOMIC_ACQUIRE);
+    if (!o) return;
+    IrqState s = ob_lock();
+    bool sig = __atomic_load_n(&c->out_head, __ATOMIC_ACQUIRE) != c->out_tail || c->out_ended;
+    if (sig && !o->signaled) um_ob_wake(o);
+    o->signaled = sig;
+    ob_unlock(s);
+}
+
 /* Caller holds out_lock; a control sequence stays together with ordinary output. */
 static int console_write_locked(UmConsole *c, const char *data, int len)
 {
@@ -242,6 +257,7 @@ static int console_write_locked(UmConsole *c, const char *data, int len)
         UINT32 used = c->out_head - c->out_tail;
         if (used == OUT_SIZE) {                         /* full: let the Terminal drain */
             if (p && um_stopping()) break;
+            out_changed(c);                             /* (a pseudo console's reader may be waiting) */
             sched_wait();
             continue;
         }
@@ -251,7 +267,23 @@ static int console_write_locked(UmConsole *c, const char *data, int len)
         __atomic_store_n(&c->out_head, c->out_head + n, __ATOMIC_RELEASE);
         done += (int)n;
     }
+    out_changed(c);
     return done;
+}
+
+/* @o (NULL: none) is signaled while output waits or the console has ended */
+void um_console_set_output_object(UmConsole *c, UmObject *o)
+{
+    um_lock(&c->out_lock);
+    __atomic_store_n(&c->out_ob, o, __ATOMIC_RELEASE);
+    um_unlock(&c->out_lock);
+    out_changed(c);
+}
+
+void um_console_end_output(UmConsole *c)
+{
+    c->out_ended = true;
+    out_changed(c);
 }
 
 /* Program → Terminal */
@@ -396,6 +428,7 @@ int UmConsoleRead(UmConsole *c, char *buf, int cap)
         n++;
     }
     __atomic_store_n(&c->out_tail, c->out_tail + (UINT32)n, __ATOMIC_RELEASE);
+    out_changed(c);
     return n;
 }
 

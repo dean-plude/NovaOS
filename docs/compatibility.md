@@ -311,9 +311,19 @@ reason to change Steam:
 - Steam's service pipe ("Failed to create Service pipe") and its
   security descriptors in SDDL form (`advapi32`'s SDDL functions are
   incomplete).
-- `GetAdaptersAddresses` reports no adapters.  (The browser's sockets
-  and Steam's downloads no longer fail with `WSAENOBUFS`: NovaOS's socket
-  tables were sized for a small device; see `loadtest`.)
+- `GetAdaptersAddresses` lists the network adapter now (Steam asserted
+  "CalcUnIPThisBox - GetAdaptersAddresses returned 232" while it listed
+  none; see `adaptertest`).  (The browser's sockets and Steam's downloads
+  no longer fail with `WSAENOBUFS`: NovaOS's socket tables were sized for
+  a small device; see `loadtest`.)
+- The login window does not open yet.  Steam's interface (the hidden
+  "SP Shared JS Context" page) connects to `steam.exe`, starts its
+  stores and then waits on Steam Input ("SteamApp Init - Before Login -
+  ControllerStore": the controller glyph strings and the controller list)
+  without an answer, so it never reaches the login step and never asks
+  for the login window; Steam does not contact its servers before
+  someone signs in.  Which NovaOS call holds Steam Input up is not found
+  yet (its HID and USB threads, SDL3 and libusb, wait normally).
   Chromium's network change and DNS watchers do not start
   (`WSALookupServiceBegin` has no providers, error 10108).
 - The "Thread creation failed" messages `steam.exe` logged once under

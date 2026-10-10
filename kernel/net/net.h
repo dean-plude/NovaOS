@@ -28,7 +28,9 @@ typedef struct {
 typedef struct {
     bool   present;          /* a supported NIC was found */
     bool   link;             /* cable/link up */
-    bool   configured;       /* DHCP lease obtained */
+    bool   configured;       /* DHCP lease obtained (or a manual address, with a link) */
+    bool   manual_ip;        /* the IPv4 address was set by hand (no DHCP) */
+    bool   manual_dns;       /* ... and the DNS servers */
     UINT8  mac[6];
     UINT32 ip, mask, gw;     /* network byte order (as lwIP stores them) */
     UINT32 dns[2];
@@ -48,6 +50,21 @@ void NetFormatAddr(const NetIp *ip, char *buf, int cap);
 bool NetParseAddr(const char *s, NetIp *ip);
 /* Whether the interface has an IPv6 address other than its link-local one */
 bool NetHasIp6(void);
+
+/* Manual IPv4 settings (Settings > Network's Edit, netsh).  All network
+ * byte order; manual_ip off: the address comes from DHCP; manual_dns off:
+ * the DNS servers do too.  NetSetConfig applies them at once and keeps
+ * them in the registry (false with @err set when they are not valid);
+ * NetRestoreConfig puts the saved ones back once the registry is loaded. */
+typedef struct {
+    bool   manual_ip;
+    UINT32 ip, mask, gw;     /* (gw 0: none) */
+    bool   manual_dns;
+    UINT32 dns[2];           /* preferred, alternate (0: none) */
+} NetConfig;
+void NetGetConfig(NetConfig *c);
+bool NetSetConfig(const NetConfig *c, char *err, int cap);
+void NetRestoreConfig(void);
 
 /* -----------------------------------------------------------------------
  * Asynchronous operations

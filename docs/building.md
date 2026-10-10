@@ -700,7 +700,10 @@ certificate, then `looptest` (socket pairs over 127.0.0.1 and ::1,
 `localhost`), `loadtest` (hundreds of sockets open at once, parallel
 downloads) and `dltest -w` (eight 32 MB downloads at once from
 `tools/h2server.js`'s `/stream` while the files are written and mapped,
-as an installer does; it fails if the transfer stops for 5 s); on an IPv6-only network made by `tools/v6peer.py` it checks
+as an installer does; it fails if the transfer stops for 5 s), then `netsh`
+gives the adapter the static address 10.0.2.16 and DNS server 10.0.2.3
+(`netsh interface ipv4 show config`), `ping 10.0.2.2` runs on it, and
+`source=dhcp` hands the address back to DHCP; on an IPv6-only network made by `tools/v6peer.py` it checks
 SLAAC and RDNSS (`ipconfig`), `ping -6`, `curl -6` and `netcat` over IPv6.
 A third boot (`tests/selftest/network-e1000e`) has QEMU's e1000e (the
 82574L) instead of virtio-net: the boot log must show the PHY's ID, its

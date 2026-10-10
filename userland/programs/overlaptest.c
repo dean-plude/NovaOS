@@ -164,6 +164,20 @@ int main(void)
     ov = next(port, &key, &bytes, &err, 5000);
     check("the pending WSARecv completes with the data", ov == &rov && key == 3 && !err && bytes == 4 && !memcmp(rbuf, "ping", 4));
 
+    /* WSAIoctl's FIONREAD and SIOCATMARK, as Qt's socket engine asks them
+     * (bytesAvailable before every read) */
+    send(c, "pong", 4, 0);
+    u_long avail = 0, atmark = 0;
+    DWORD sz = 0;
+    for (int i = 0; i < 100 && avail < 4; i++) {
+        if (WSAIoctl(acc, FIONREAD, 0, 0, &avail, sizeof(avail), &sz, 0, 0)) break;
+        if (avail < 4) Sleep(20);
+    }
+    check("WSAIoctl FIONREAD counts the waiting bytes", avail == 4 && sz == sizeof(avail));
+    check("WSAIoctl SIOCATMARK: no urgent data",
+          !WSAIoctl(acc, SIOCATMARK, 0, 0, &atmark, sizeof(atmark), &sz, 0, 0) && atmark);
+    check("the counted bytes are read", recv(acc, rbuf, sizeof(rbuf), 0) == 4 && !memcmp(rbuf, "pong", 4));
+
     /* CancelIoEx ends a pending receive with ERROR_OPERATION_ABORTED */
     check("another WSARecv is pending", recv_pending(acc, rbuf, sizeof(rbuf), &rov));
     check("CancelIoEx", CancelIoEx((HANDLE)acc, &rov));

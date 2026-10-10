@@ -553,6 +553,7 @@ static BOOL proc_next(HANDLE h, PROCESSENTRY32W_ *pe, BOOL first)
     memset((BYTE *)pe + 4, 0, sizeof(*pe) - 4);
     pe->dwSize = size;
     pe->th32ProcessID = e->Pid;
+    pe->th32ParentProcessID = e->ParentPid;    /* (Steam checks its UI transport's client is its browser's child) */
     pe->cntThreads = e->Threads;
     pe->pcPriClassBase = 8;
     u2w(e->Name, -1, pe->szExeFile, MAX_PATH);

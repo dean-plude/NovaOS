@@ -195,7 +195,22 @@ explains how C: is stored.
 
 Wired networking starts by itself: NovaOS gets an address from the
 network's DHCP server.  Settings > Network, or `ipconfig` in the
-Terminal, shows it.  Wi-Fi is not supported.
+Terminal, shows it.  To set the address by hand, choose **Edit** on
+Settings > Network's Ethernet card, pick **Manual** and type the IP
+address, subnet mask, gateway and DNS servers, then **Save**; or keep
+**Automatic (DHCP)** and type only DNS servers to use instead of the ones
+DHCP hands out (blank: DHCP's).  The Terminal does the same the Windows
+way:
+
+    netsh interface ipv4 set address name=Ethernet static 192.168.1.50 255.255.255.0 192.168.1.1
+    netsh interface ipv4 set dnsservers name=Ethernet static 1.1.1.1
+    netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
+    netsh interface ipv4 set address name=Ethernet source=dhcp
+    netsh interface ipv4 show config
+
+The choice takes effect at once and is kept across restarts (in the
+registry, under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`).
+Wi-Fi is not supported.
 
 Sound plays through the newest output device; Settings > Sound picks
 another and sets each device's volume, and the choices are kept across

@@ -31,6 +31,10 @@ typedef struct {
     int tz;                          /* ... and the time zone */
     int kbd;                         /* ... and the keyboard layout */
     UINT32 sound_sig;                /* Sound: the devices shown (repainted when they change) */
+    bool net_edit, net_manual;       /* Network: editing the IP settings; Manual chosen */
+    int net_focus;                   /* ... the field typed into */
+    char net_text[5][16];            /* ... address, mask, gateway, two DNS servers */
+    char net_err[96];                /* ... why Save was refused */
 } Settings;
 
 static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Time & language", "About" };
@@ -380,11 +384,145 @@ static void page_storage(int x, int y, int w)
     else bar(x + 16, y + 66, w - 32, bytes, bytes + 1024 * 1024);
 }
 
-static void page_network(int x, int y, int w)
+/* Network: the Edit button on the Ethernet card, and the IP settings form
+ * (layout shared by set_paint + set_mouse) */
+#define NET_FIELDS  5
+#define NET_CHIP_W  168
+#define NET_BOX_W   200
+static const char *const g_net_labels[NET_FIELDS] = {
+    "IP address", "Subnet mask", "Gateway", "Preferred DNS", "Alternate DNS"
+};
+static GdiRect r_net_edit(int x, int y, int w) { return RECT(x + w - 16 - 96, y + 20, 96, 32); }
+static GdiRect r_net_chip(int x, int y, int i) { return RECT(x + i * (NET_CHIP_W + CHIP_GAP), y + 88 + 26, NET_CHIP_W, CHIP_H); }
+/* field @f's row (manual: all five; automatic: the two DNS servers only) */
+static bool net_shown(const Settings *st, int f) { return st->net_manual || f >= 3; }
+static int net_row_y(const Settings *st, int y, int f)
+{
+    int r = 0;
+    for (int i = 0; i < f; i++) r += net_shown(st, i);
+    return y + 88 + 26 + CHIP_H + 16 + r * 50;
+}
+static GdiRect r_net_box(const Settings *st, int x, int y, int w, int f)
+{
+    return RECT(x + w - 16 - NET_BOX_W, net_row_y(st, y, f) + 6, NET_BOX_W, 32);
+}
+static int net_end_y(const Settings *st, int y) { return net_row_y(st, y, NET_FIELDS); }
+static GdiRect r_net_save(const Settings *st, int x, int y)   { return RECT(x, net_end_y(st, y) + 28, 100, 32); }
+static GdiRect r_net_cancel(const Settings *st, int x, int y) { return RECT(x + 112, net_end_y(st, y) + 28, 100, 32); }
+
+static void net_form(Settings *st, int x, int y, int w)
+{
+    GdiTextBold(x, y + 88, "IP assignment", UI_TEXT);
+    for (int i = 0; i < 2; i++) {
+        GdiRect r = r_net_chip(x, y, i);
+        bool on = st->net_manual == (i == 1);
+        GdiRoundRect(r, 6, on ? UI_ACCENT : UI_CARD, GDI_TRANSPARENT);
+        GdiTextCenter(r.x, r.y + 8, r.w, i ? "Manual" : "Automatic (DHCP)", on ? GDI_WHITE : UI_TEXT);
+    }
+    for (int f = 0; f < NET_FIELDS; f++) {
+        if (!net_shown(st, f)) continue;
+        int ry = net_row_y(st, y, f);
+        GdiRoundRect(RECT(x, ry, w, 44), 6, UI_CARD, GDI_TRANSPARENT);
+        GdiTextT(x + 16, ry + 14, g_net_labels[f], UI_TEXT);
+        GdiRect b = r_net_box(st, x, y, w, f);
+        GdiRoundRect(b, 6, UI_BG, GDI_TRANSPARENT);
+        GdiRoundBorderAlpha(b, 6, f == st->net_focus ? UI_ACCENT : GDI_WHITE, f == st->net_focus ? 200 : 30);
+        GdiTextT(b.x + 10, b.y + (b.h - GDI_FONT_H) / 2, st->net_text[f], UI_TEXT);
+        if (f == st->net_focus)                                            /* the caret */
+            GdiFillRect(RECT(b.x + 10 + GdiTextW(st->net_text[f]) + 1, b.y + 7, 2, b.h - 14), UI_ACCENT);
+    }
+    int ey = net_end_y(st, y);
+    GdiTextT(x, ey, st->net_manual ? "Leave the DNS servers blank for none." :
+                                     "Leave the DNS servers blank to get them from DHCP.", UI_TEXT2);
+    UiButton(r_net_save(st, x, y), "Save", true);
+    UiButton(r_net_cancel(st, x, y), "Cancel", false);
+    if (st->net_err[0]) GdiTextT(x + 228, ey + 36, st->net_err, GDI_C(0xE0, 0x60, 0x60));
+}
+
+static void net_begin_edit(Settings *st)
+{
+    NetStatus ns;
+    NetConfig c;
+    NetGetStatus(&ns);
+    NetGetConfig(&c);
+    memset(st->net_text, 0, sizeof(st->net_text));
+    st->net_manual = c.manual_ip;
+    UINT32 ip = c.manual_ip ? c.ip : ns.configured ? ns.ip : 0;      /* (start from what is in use) */
+    UINT32 v[NET_FIELDS] = { ip, c.manual_ip ? c.mask : ns.configured ? ns.mask : 0,
+                             c.manual_ip ? c.gw : ns.configured ? ns.gw : 0,
+                             c.manual_dns ? c.dns[0] : 0, c.manual_dns ? c.dns[1] : 0 };
+    for (int f = 0; f < NET_FIELDS; f++)
+        if (v[f]) NetFormatIp(v[f], st->net_text[f], sizeof(st->net_text[f]));
+    st->net_focus = st->net_manual ? 0 : 3;
+    st->net_err[0] = '\0';
+    st->net_edit = true;
+}
+
+static void net_save(Settings *st)
+{
+    NetConfig c = { 0 };
+    UINT32 v[NET_FIELDS] = { 0 };
+    for (int f = 0; f < NET_FIELDS; f++) {
+        if (!net_shown(st, f) || !st->net_text[f][0]) continue;
+        if (!NetParseIp(st->net_text[f], &v[f])) {
+            ksnprintf(st->net_err, sizeof(st->net_err), "The %s is not a valid IPv4 address.", g_net_labels[f]);
+            st->net_focus = f;
+            return;
+        }
+    }
+    c.manual_ip = st->net_manual;
+    c.ip = v[0]; c.mask = v[1]; c.gw = v[2];
+    c.dns[0] = v[3]; c.dns[1] = v[4];
+    c.manual_dns = v[3] || v[4] || c.manual_ip;
+    if (NetSetConfig(&c, st->net_err, sizeof(st->net_err))) st->net_edit = false;
+}
+
+static bool net_mouse(Settings *st, int x, int y, int w, int mx, int my)
+{
+    if (!st->net_edit) {
+        NetStatus ns;
+        NetGetStatus(&ns);
+        if (ns.present && UiHit(r_net_edit(x, y, w), mx, my)) { net_begin_edit(st); return true; }
+        return false;
+    }
+    for (int i = 0; i < 2; i++)
+        if (UiHit(r_net_chip(x, y, i), mx, my)) {
+            st->net_manual = i == 1;
+            if (!net_shown(st, st->net_focus)) st->net_focus = 3;
+            return true;
+        }
+    for (int f = 0; f < NET_FIELDS; f++)
+        if (net_shown(st, f) && UiHit(r_net_box(st, x, y, w, f), mx, my)) { st->net_focus = f; return true; }
+    if (UiHit(r_net_save(st, x, y), mx, my)) { net_save(st); return true; }
+    if (UiHit(r_net_cancel(st, x, y), mx, my)) { st->net_edit = false; return true; }
+    return false;
+}
+
+static void net_key(Settings *st, const KeyEvent *k)
+{
+    if (k->scancode == KEY_ESC) { st->net_edit = false; return; }
+    if (k->scancode == KEY_ENTER && !k->extended) { net_save(st); return; }
+    if (k->scancode == KEY_TAB || (k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN))) {
+        int d = (k->scancode == KEY_UP || (k->scancode == KEY_TAB && k->shift)) ? -1 : 1, f = st->net_focus;
+        do f = (f + d + NET_FIELDS) % NET_FIELDS; while (!net_shown(st, f));
+        st->net_focus = f;
+        return;
+    }
+    char *t = st->net_text[st->net_focus];
+    size_t n = strlen(t);
+    if (k->ch == '\b') { if (n) t[n - 1] = '\0'; }
+    else if (!k->ctrl && !k->alt && ((k->ch >= '0' && k->ch <= '9') || k->ch == '.') && n < sizeof(st->net_text[0]) - 1) {
+        t[n] = k->ch;
+        t[n + 1] = '\0';
+    }
+}
+
+static void page_network(Settings *st, int x, int y, int w)
 {
     NetStatus ns;
     NetGetStatus(&ns);
     char mac[24], ip[20], mask[20], gw[20], dns[48], d2[20];
+    int top = y;
 
     GdiRoundRect(RECT(x, y, w, 72), 8, UI_CARD, GDI_TRANSPARENT);
     GdiTextBold(x + 16, y + 14, "Ethernet", UI_TEXT);
@@ -395,6 +533,8 @@ static void page_network(int x, int y, int w)
                    ns.link ? GDI_C(0xE8, 0xA8, 0x20) : GDI_C(0xD0, 0x40, 0x40);
     GdiRoundRect(RECT(x + 16, y + 44, 10, 10), 5, dot, GDI_TRANSPARENT);
     GdiTextT(x + 34, y + 40, state, UI_TEXT2);
+    if (ns.present && !st->net_edit) UiButton(r_net_edit(x, y, w), "Edit", false);
+    if (ns.present && st->net_edit) { net_form(st, x, top, w); return; }
     y += 88;
     if (!ns.present) return;
 
@@ -406,16 +546,17 @@ static void page_network(int x, int y, int w)
     NetFormatIp(ns.ip, ip, sizeof(ip));
     NetFormatIp(ns.mask, mask, sizeof(mask));
     NetFormatIp(ns.gw, gw, sizeof(gw));
-    NetFormatIp(ns.dns[0], dns, sizeof(dns));
+    if (ns.dns[0]) NetFormatIp(ns.dns[0], dns, sizeof(dns));
+    else strcpy(dns, "None");
     if (ns.dns[1]) {
         NetFormatIp(ns.dns[1], d2, sizeof(d2));
         strcat(dns, ", ");
         strcat(dns, d2);
     }
-    row(x, y, w, "IPv4 address (DHCP)", ip);      y += 50;
+    row(x, y, w, ns.manual_ip ? "IPv4 address (manual)" : "IPv4 address (DHCP)", ip);  y += 50;
     row(x, y, w, "Subnet mask", mask);            y += 50;
-    row(x, y, w, "Default gateway", gw);          y += 50;
-    row(x, y, w, "DNS servers", dns);                 y += 50;
+    row(x, y, w, "Default gateway", ns.gw ? gw : "None"); y += 50;
+    row(x, y, w, ns.manual_dns ? "DNS servers (manual)" : "DNS servers", dns); y += 50;
     char roots[48];
     int imported, n = NetRootCount(&imported);
     if (imported) ksnprintf(roots, sizeof(roots), "%d (%d imported)", n, imported);
@@ -608,7 +749,7 @@ static void set_paint(WND *w)
     case SETTINGS_SOUND:       page_sound(st, x, y, w2);   break;
     case SETTINGS_PERSONALIZE: page_personalize(x, y, w2); break;
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
-    case SETTINGS_NETWORK:     page_network(x, y, w2);    break;
+    case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
     case SETTINGS_ABOUT:       page_about(x, y, w2);      break;
     }
@@ -648,6 +789,10 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
         }
     }
     if (msg != WM_MOUSE_DOWN) return;
+    if (x >= SIDE_W && st->page == SETTINGS_NETWORK) {
+        net_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+        return;
+    }
     if (x >= SIDE_W) {
         if (st->page == SETTINGS_DISPLAY) {
             /* resolution chips (layout matches set_paint + page_display) */
@@ -697,12 +842,13 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
         return;
     }
     int i = (y - 64) / ITEM_H;
-    if (y >= 64 && i >= 0 && i < N_PAGES) st->page = i;
+    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; }
 }
 
 static void set_key(WND *w, const KeyEvent *k)
 {
     Settings *st = w->user;
+    if (st->page == SETTINGS_NETWORK && st->net_edit) { if (k->pressed) net_key(st, k); return; }
     if (!k->extended) return;
     if (k->scancode == KEY_UP && st->page > 0) st->page--;
     if (k->scancode == KEY_DOWN && st->page < N_PAGES - 1) st->page++;

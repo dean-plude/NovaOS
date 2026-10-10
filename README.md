@@ -458,14 +458,13 @@ To make the ISO yourself from a fresh build, run
   64- and 32-bit), `sectest`, `acltest` (64- and 32-bit),
   `consolecursortest` (classic console screen buffers: cursor, cell I/O,
   fills, scrolling, attributes and independent buffers; 64- and 32-bit),
-  `guitest auto`,
-  `inputtest` (side buttons, horizontal wheel, volume keys), `usbcheck`
-  (media keys, AC Pan, pen pressure, tilt and twist, virtio pens and
-  tablets), `anitest` (animated cursors and program pointers),
-  `cursortest` (system pointers, SetSystemCursor, cursors at the display
-  scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections, cursors from
-  bitmaps with alpha or monochrome masks), `pentest` (a pen as
-  WM_POINTER* messages: enter, down, update, up, leave;
+  `guitest auto`, `inputtest` (side buttons, horizontal wheel, volume
+  keys), `usbcheck` (media keys, AC Pan, pen pressure, tilt and twist,
+  virtio pens and tablets), `anitest` (animated cursors and program
+  pointers), `cursortest` (system pointers, SetSystemCursor, cursors at
+  the display scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections,
+  cursors from bitmaps with alpha or monochrome masks), `pentest` (a pen
+  as WM_POINTER* messages: enter, down, update, up, leave;
   GetPointerPenInfo pressure, tilt, rotation, barrel and eraser;
   DefWindowProc promotion to mouse with the pen signature in
   GetMessageExtraInfo; WM_NCPOINTER* over a title bar and

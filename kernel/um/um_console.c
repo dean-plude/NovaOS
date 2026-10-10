@@ -32,6 +32,7 @@ typedef struct {
     UINT8 utf8_need;
     UINT32 refs;
     UINT8 esc_state, csi_n;
+    bool sized;                    /* SetConsoleScreenBufferSize chose its size */
     char csi[32];
     bool used;
 } UmConsoleScreen;
@@ -109,14 +110,19 @@ static bool screen_resize(UmConsoleScreen *s, UINT32 cols, UINT32 rows)
     return true;
 }
 
-/* Caller holds out_lock. */
-static void screen_render(UmConsole *c, UmConsoleScreen *s)
+/* Caller holds out_lock: rows @top..@bottom of @s drawn again on the
+ * Terminal (@clear: the whole screen, cleared first), then the current
+ * attributes and cursor put back */
+static void screen_render_rows(UmConsole *c, UmConsoleScreen *s, UINT32 top, UINT32 bottom, bool clear)
 {
     char seq[64];
-    int n = ksnprintf(seq, sizeof(seq), "\x1b[2J\x1b[H");
-    console_write_locked(c, seq, n);
+    int n;
+    if (clear) {
+        n = ksnprintf(seq, sizeof(seq), "\x1b[2J\x1b[H");
+        console_write_locked(c, seq, n);
+    }
     UINT16 old_attr = 0xFFFF;
-    for (UINT32 y = 0; y < s->rows; y++) {
+    for (UINT32 y = top; y <= bottom && y < s->rows; y++) {
         n = ksnprintf(seq, sizeof(seq), "\x1b[%u;1H", y + 1);
         console_write_locked(c, seq, n);
         for (UINT32 x = 0; x < s->cols; x++) {
@@ -148,6 +154,20 @@ static void screen_render(UmConsole *c, UmConsoleScreen *s)
     console_write_locked(c, seq, n);
     n = ksnprintf(seq, sizeof(seq), "\x1b[%u;%uH", s->cursor_y + 1, s->cursor_x + 1);
     console_write_locked(c, seq, n);
+}
+
+static void screen_render(UmConsole *c, UmConsoleScreen *s)
+{
+    screen_render_rows(c, s, 0, s->rows ? s->rows - 1u : 0, true);
+}
+
+/* Caller holds out_lock: the first screen buffer keeps the Terminal's size
+ * until a program sets its size (SetConsoleScreenBufferSize) */
+static void screen0_follow(UmConsole *c)
+{
+    UmConsoleScreen *s = &c->screen[0];
+    if (s->sized || !c->cols || !c->rows || (s->cols == c->cols && s->rows == c->rows)) return;
+    screen_resize(s, c->cols, c->rows);
 }
 
 UmConsole *UmConsoleNew(void)
@@ -320,6 +340,7 @@ int um_console_write_screen(UmConsole *c, UINT32 id, const char *data, int len)
 {
     if (!c) return um_console_write(NULL, data, len);
     um_lock(&c->out_lock);
+    screen0_follow(c);
     UmConsoleScreen *s = console_screen(c, id);
     if (!s) { um_unlock(&c->out_lock); return 0; }
     for (int i = 0; i < len; i++) {
@@ -616,7 +637,8 @@ UINT32 um_console_cursor(UmConsole *c, UINT32 op, UINT32 value, UINT32 *result)
     int n;
     if (op == 9) {
         int x = (INT16)(value & 0xFFFF), y = (INT16)(value >> 16);
-        if (x < 0 || y < 0 || x >= screen->cols || y >= screen->rows) return 0xC000000Du;
+        int cols = screen->sized ? screen->cols : c->cols, rows = screen->sized ? screen->rows : c->rows;
+        if (x < 0 || y < 0 || x >= cols || y >= rows) return 0xC000000Du;
         n = ksnprintf(seq, sizeof(seq), "\x1b[%d;%dH", y + 1, x + 1);
     } else if (op == 11) {
         if ((value & 0xFF) < 1 || (value & 0xFF) > 100 || (value & ~0x1FFu)) return 0xC000000Du;
@@ -687,10 +709,12 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
     if (!c) return 0xC0000008u;
     if (result) *result = 0;
     um_lock(&c->out_lock);
+    screen0_follow(c);
     UmConsoleScreen *s = console_screen(c, id);
     if (!s) { um_unlock(&c->out_lock); return 0xC0000008u; }
     UINT32 status = 0;
-    bool redraw = false;
+    bool redraw = false, clear = false;
+    UINT32 top = 0, bottom = s->rows ? s->rows - 1u : 0;   /* the rows to draw again */
     if (op == CON_SCREEN_INFO) {
         if (!data || len < sizeof(UmConsoleScreenInfo)) status = 0xC000000Du;
         else {
@@ -721,7 +745,11 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
             UINT32 total = (UINT32)s->cols * s->rows;
             if (op == CON_SCREEN_SET_ATTR) {
                 s->attr = r->value;
-                redraw = id == c->active_screen;
+                if (id == c->active_screen) {           /* what is written next: in these colours */
+                    char seq[32];
+                    int n = screen_sgr(seq, sizeof(seq), s->attr);
+                    console_write_locked(c, seq, n);
+                }
             } else if (op == CON_SCREEN_SET_CURSOR) {
                 if (!screen_coord(s, r->x, r->y)) status = 0xC000000Du;
                 else {
@@ -736,7 +764,11 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
                 else if (r->width > 32767 || r->height > 32767 ||
                          (UINT64)(UINT16)r->width * (UINT16)r->height > CON_MAX_CELLS) status = 0xC000000Du;
                 else if (!screen_resize(s, (UINT16)r->width, (UINT16)r->height)) status = 0xC0000017u;
-                else redraw = id == c->active_screen;
+                else {
+                    s->sized = true;
+                    redraw = clear = id == c->active_screen;
+                    bottom = s->rows - 1u;
+                }
             } else if (op == CON_SCREEN_FILL_CHAR || op == CON_SCREEN_FILL_ATTR ||
                        op == CON_SCREEN_READ_TEXT || op == CON_SCREEN_READ_ATTR) {
                 UINT32 at;
@@ -759,7 +791,9 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
                         for (UINT32 i = 0; i < done; i++) out[i] = s->cells[at + i].attr;
                     }
                     if (result) *result = done;
-                    redraw = (op == CON_SCREEN_FILL_CHAR || op == CON_SCREEN_FILL_ATTR) && id == c->active_screen;
+                    redraw = (op == CON_SCREEN_FILL_CHAR || op == CON_SCREEN_FILL_ATTR) && id == c->active_screen && done;
+                    top = at / s->cols;
+                    bottom = (at + (done ? done - 1 : 0)) / s->cols;
                 }
             } else if (op == CON_SCREEN_WRITE_CELLS || op == CON_SCREEN_READ_CELLS) {
                 if (r->width <= 0 || r->height <= 0 || r->left > r->right || r->top > r->bottom ||
@@ -784,6 +818,8 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
                         }
                         r->left = (INT16)l; r->top = (INT16)t; r->right = (INT16)rr; r->bottom = (INT16)b;
                         redraw = op == CON_SCREEN_WRITE_CELLS && id == c->active_screen;
+                        top = (UINT32)t;
+                        bottom = (UINT32)b;
                     }
                 }
             } else if (op == CON_SCREEN_SCROLL) {
@@ -813,12 +849,16 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
                         }
                         kfree(copy);
                         redraw = id == c->active_screen;
+                        int lo = r->top < r->dest_y ? r->top : r->dest_y;
+                        int hi = r->bottom > r->dest_y + height - 1 ? r->bottom : r->dest_y + height - 1;
+                        top = lo < 0 ? 0 : (UINT32)lo;
+                        bottom = hi >= s->rows ? s->rows - 1u : (UINT32)hi;
                     }
                 }
             }
         }
     } else status = 0xC000000Du;
-    if (!status && redraw) screen_render(c, s);
+    if (!status && redraw && top <= bottom) screen_render_rows(c, s, top, bottom, clear);
     um_unlock(&c->out_lock);
     return status;
 }

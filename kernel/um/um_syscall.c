@@ -2942,6 +2942,9 @@ static bool clip_name(UINT64 ptr, char *name)
 enum { CON_GET_MODE, CON_SET_MODE, CON_READ_INPUT, CON_PEEK_INPUT, CON_WRITE_INPUT,
        CON_COUNT_INPUT, CON_FLUSH_INPUT, CON_GET_SIZE, CON_PROCESS_LIST,
        CON_SET_CURSOR, CON_GET_CURSOR_INFO, CON_SET_CURSOR_INFO };
+static UINT64 nova_console_on(UmProcess *p, UmConsole *c, UmHandleKind kind, UINT32 screen,
+                              UINT64 a2, UINT64 a3, UINT64 a4, UINT64 res_ptr);
+
 static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     UmProcess *p = UmCurrent();
@@ -2959,9 +2962,19 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmHandle *h = handle(p, a1);
     UmHandleKind kind = h ? h->kind : H_FREE;
     UINT32 screen = h ? h->con_screen : 0;
+    /* (another thread may close the handle once the lock is let go) */
+    UmConsole *own = h && h->console ? um_console_ref(h->console) : NULL;
     um_unlock_excl(&p->lock);
-    if (kind != H_CON_IN && kind != H_CON_OUT) return ST_INVALID_HANDLE;
-    UmConsole *c = h && h->console ? h->console : p->con;
+    if (kind != H_CON_IN && kind != H_CON_OUT) { UmConsoleRelease(own); return ST_INVALID_HANDLE; }
+    UINT64 r = nova_console_on(p, own ? own : p->con, kind, screen, a2, a3, a4, res_ptr);
+    UmConsoleRelease(own);
+    return r;
+}
+
+/* NtNovaConsole on a console handle (@kind) of console @c, screen buffer @screen */
+static UINT64 nova_console_on(UmProcess *p, UmConsole *c, UmHandleKind kind, UINT32 screen,
+                              UINT64 a2, UINT64 a3, UINT64 a4, UINT64 res_ptr)
+{
     bool in = kind == H_CON_IN;
     UINT32 res = 0;
     if ((UINT32)a2 == CON_SCREEN_CREATE) {

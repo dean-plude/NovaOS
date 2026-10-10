@@ -537,43 +537,47 @@ CRTEXP int __stdio_common_vsnwprintf_s(unsigned long long opt, wchar_t *buf, siz
 CRTEXP int __stdio_common_vswprintf_p(unsigned long long opt, wchar_t *buf, size_t count, const wchar_t *fmt, void *loc, va_list ap)
 { return __stdio_common_vswprintf(opt | OPT_STANDARD_SNPRINTF, buf, count, fmt, loc, ap); }
 
+/* opt bit 0 is _CRT_INTERNAL_SCANF_SECURECRT: sscanf_s and its kin, whose
+ * %c, %s and %[ take the buffer's size after the pointer */
+#define SCANF_SECURECRT 1
 CRTEXP int __stdio_common_vsscanf(unsigned long long opt, const char *buf, size_t count, const char *fmt, void *loc, va_list ap)
 {
-    (void)opt; (void)loc;
+    int secure = (opt & SCANF_SECURECRT) != 0;
+    (void)loc;
     if (count != (size_t)-1 && buf) {
         char *tmp = malloc(count + 1);
         if (!tmp) return EOF;
         memcpy(tmp, buf, count);
         tmp[count] = 0;
-        int r = vsscanf(tmp, fmt, ap);
+        int r = __nova_vsscanf(tmp, fmt, ap, secure);
         free(tmp);
         return r;
     }
-    return vsscanf(buf, fmt, ap);
+    return __nova_vsscanf(buf, fmt, ap, secure);
 }
 CRTEXP int __stdio_common_vfscanf(unsigned long long opt, FILE *f, const char *fmt, void *loc, va_list ap)
 {
-    (void)opt; (void)loc;
-    return vfscanf(f, fmt, ap);
+    (void)loc;
+    return __nova_vfscanf(f, fmt, ap, (opt & SCANF_SECURECRT) != 0);
 }
 /* Wide scanf: numbers and wide/narrow strings, via the narrow scanner on a
  * UTF-8 copy (targets of %s/%c/%[ in wide mode are narrowed back) */
 CRTEXP int __stdio_common_vswscanf(unsigned long long opt, const wchar_t *buf, size_t count, const wchar_t *fmt, void *loc, va_list ap)
 {
-    (void)opt; (void)loc; (void)count;
+    (void)loc; (void)count;
     size_t nb = wcstombs(NULL, buf, 0), nf = wcstombs(NULL, fmt, 0);
     if (nb == (size_t)-1 || nf == (size_t)-1) return EOF;
     char *b = malloc(nb + 1), *f = malloc(nf + 1);
     if (!b || !f) { free(b); free(f); return EOF; }
     wcstombs(b, buf, nb + 1);
     wcstombs(f, fmt, nf + 1);
-    int r = vsscanf(b, f, ap);
+    int r = __nova_vsscanf(b, f, ap, (opt & SCANF_SECURECRT) != 0);
     free(b); free(f);
     return r;
 }
 CRTEXP int vswscanf(const wchar_t *buf, const wchar_t *fmt, va_list ap) { return __stdio_common_vswscanf(0, buf, (size_t)-1, fmt, NULL, ap); }
 CRTEXP int swscanf(const wchar_t *buf, const wchar_t *fmt, ...) { va_list a; va_start(a, fmt); int r = vswscanf(buf, fmt, a); va_end(a); return r; }
-int sscanf_s(const char *buf, const char *fmt, ...) { va_list a; va_start(a, fmt); int r = vsscanf(buf, fmt, a); va_end(a); return r; }
+int sscanf_s(const char *buf, const char *fmt, ...) { va_list a; va_start(a, fmt); int r = __nova_vsscanf(buf, fmt, a, 1); va_end(a); return r; }
 
 /* -----------------------------------------------------------------------
  * Threads

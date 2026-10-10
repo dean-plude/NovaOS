@@ -54,6 +54,7 @@ enum { PG_WELCOME, PG_NAME, PG_TIMEZONE, PG_KEYBOARD, PG_DISPLAY, PG_DONE, N_PAG
 #define TEST_MAX 40                    /* Keyboard: what the test field holds */
 
 #define OWNER_KEY "Machine\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+#define OWNER_KEY_WOW "Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion"   /* (32-bit programs' view) */
 
 typedef struct {
     int  page;
@@ -502,6 +503,7 @@ static void finish(WND *w)
     if (!name_ok(s, nm)) return;
     um_registry_set_sz(UM_SETUP_KEY, "UserName", nm);
     um_registry_set_sz(OWNER_KEY, "RegisteredOwner", nm);
+    um_registry_set_sz(OWNER_KEY_WOW, "RegisteredOwner", nm);
     um_registry_set_dword(UM_SETUP_KEY, "FirstBootDone", 1);
     DisplayMode cur = DisplayHeadMode(0);
     kprintf("[WELCOME] Finished: user \"%s\", time zone %s, keyboard %s, display %dx%d\n", nm,

@@ -2,7 +2,9 @@
  * the C99 complex functions in ucrtbase (with MSVC's _Dcomplex and
  * _Fcomplex structures, as NumPy calls them), conio's _cprintf family, and
  * the DLL search directories (AddDllDirectory, RemoveDllDirectory,
- * SetDllDirectory) */
+ * SetDllDirectory), and the UCRT's secure scanf (sscanf_s as MSVC's
+ * headers inline it) */
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -31,6 +33,7 @@ __declspec(dllimport) _Fcomplex cexpf(_Fcomplex);
 __declspec(dllimport) float cabsf(_Fcomplex);
 __declspec(dllimport) int _cprintf(const char *, ...);
 __declspec(dllimport) int _cputs(const char *);
+__declspec(dllimport) int __stdio_common_vsscanf(unsigned long long, const char *, size_t, const char *, void *, va_list);
 
 static int near(double a, double b) { return fabs(a - b) <= 1e-9 * (1 + fabs(b)); }
 static int cnear(_Dcomplex z, double re, double im) { return near(z._Val[0], re) && near(z._Val[1], im); }
@@ -94,11 +97,35 @@ static void dll_directories(void)
     CHECK("not found after resetting", LoadLibraryW(L"dirtest4.dll") == NULL);
 }
 
+/* MSVC's <stdio.h> inlines sscanf_s as this call, option 1 being
+ * _CRT_INTERNAL_SCANF_SECURECRT: %c, %s and %[ take a size after the
+ * pointer (Qt's network code parses with it) */
+static int my_sscanf_s(const char *buf, const char *fmt, ...)
+{
+    va_list a;
+    va_start(a, fmt);
+    int r = __stdio_common_vsscanf(1, buf, (size_t)-1, fmt, NULL, a);
+    va_end(a);
+    return r;
+}
+
+static void secure_scanf(void)
+{
+    char w[8] = "x", c[2] = "", set[8] = "";
+    int n = 0, m = 0;
+    CHECK("sscanf_s %s takes a size", my_sscanf_s("abc 42", "%s %d", w, (unsigned)sizeof(w), &n) == 2 && !strcmp(w, "abc") && n == 42);
+    CHECK("sscanf_s %c and %[ take sizes", my_sscanf_s("Zxyz9 7", "%c%[a-z]%d %d", c, 1u, set, (unsigned)sizeof(set), &n, &m) == 4 &&
+          c[0] == 'Z' && !strcmp(set, "xyz") && n == 9 && m == 7);
+    CHECK("sscanf_s %*s takes no size", my_sscanf_s("skip 5", "%*s %d", &n) == 1 && n == 5);
+    CHECK("sscanf_s too long a string fails", my_sscanf_s("toolongword 1", "%s %d", w, 4u, &n) == 0 && w[0] == 0);
+}
+
 int main(void)
 {
     complex_math();
     conio();
     dll_directories();
+    secure_scanf();
     printf("rttest: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

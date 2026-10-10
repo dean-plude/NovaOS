@@ -25,3 +25,7 @@ int __nova_vsnprintf(char *s, size_t n, const char *fmt, va_list ap, int flags);
 int __nova_vfprintf(struct _iobuf *f, const char *fmt, va_list ap, int flags);
 int __nova_vsnwprintf(unsigned short *s, size_t n, const unsigned short *fmt, va_list ap, int flags);
 int __nova_vfwprintf(struct _iobuf *f, const unsigned short *fmt, va_list ap, int flags);
+
+/* scanf.c: the scanner; secure = the _s forms (%c/%s/%[ take a size) */
+int __nova_vsscanf(const char *s, const char *fmt, va_list ap, int secure);
+int __nova_vfscanf(struct _iobuf *f, const char *fmt, va_list ap, int secure);

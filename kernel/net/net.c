@@ -19,6 +19,7 @@
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../arch/x86_64/cpu.h"
+#include "../um/um.h"
 
 #include "lwip/init.h"
 #include "lwip/netif.h"
@@ -53,6 +54,7 @@ static u32_t             g_dhcp6_timer;
 static volatile int     g_lock;
 static NetOp            g_ops[NET_OPS];
 static struct raw_pcb  *g_ping_pcb, *g_ping6_pcb;
+static NetConfig        g_cfg;                 /* manual settings (zero: DHCP for everything) */
 
 /* The adapter: an Intel e1000/e1000e or a virtio one, the first found */
 typedef struct {
@@ -512,7 +514,9 @@ void NetGetStatus(NetStatus *st)
     net_lock();
     g_nic->mac(st->mac);
     st->link = g_link;
-    st->configured = g_up && dhcp_supplied_address(&g_netif);
+    st->configured = g_up && (g_cfg.manual_ip ? g_link : dhcp_supplied_address(&g_netif));
+    st->manual_ip  = g_cfg.manual_ip;
+    st->manual_dns = g_cfg.manual_dns;
     st->ip   = ip4_addr_get_u32(netif_ip4_addr(&g_netif));
     st->mask = ip4_addr_get_u32(netif_ip4_netmask(&g_netif));
     st->gw   = ip4_addr_get_u32(netif_ip4_gw(&g_netif));
@@ -532,6 +536,8 @@ void NetGetStatus(NetStatus *st)
     }
     net_unlock();
 }
+
+static void keep_manual_dns(void);
 
 /* -----------------------------------------------------------------------
  * Net thread
@@ -599,6 +605,7 @@ static void net_thread(void *arg)
                 }
             kprintf("[NET] IPv6: address %s (from a router advertisement), DNS %s\n", buf, dns);
         }
+        keep_manual_dns();
         net_unlock();
         if (busy) net_wake();               /* data, connections or operations moved on */
         /* Nothing arriving, no operation under way and nobody waiting for
@@ -666,4 +673,150 @@ bool NetInitialize(void)
 void NetResume(void)
 {
     g_nic->resume();
+}
+
+/* -----------------------------------------------------------------------
+ * Manual (static) settings: Settings > Network's Edit, or netsh
+ *
+ * Kept where Windows keeps them, in the Tcpip service's parameters
+ * (EnableDHCP, IPAddress, SubnetMask, DefaultGateway, NameServer), and
+ * put back by NetRestoreConfig once the registry has been loaded.
+ * ----------------------------------------------------------------------- */
+#define TCPIP_KEY "Machine\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters"
+
+/* DHCP (and IPv6 router advertisements) write the DNS servers they are
+ * given; manual ones win (called from the net thread, under the lock) */
+static void keep_manual_dns(void)
+{
+    if (!g_cfg.manual_dns) return;
+    for (int i = 0; i < 2; i++) {
+        const ip_addr_t *cur = dns_getserver((u8_t)i);
+        if (IP_IS_V4(cur) && ip4_addr_get_u32(ip_2_ip4(cur)) == g_cfg.dns[i]) continue;
+        ip_addr_t a;
+        ip_addr_set_ip4_u32(&a, g_cfg.dns[i]);
+        dns_setserver((u8_t)i, &a);
+    }
+}
+
+static bool mask_ok(UINT32 mask_be)
+{
+    UINT32 m = __builtin_bswap32(mask_be);
+    return m && !(~m & (~m + 1));                  /* ones, then zeros */
+}
+
+void NetGetConfig(NetConfig *c)
+{
+    net_lock();
+    *c = g_cfg;
+    net_unlock();
+}
+
+static void apply_config(const NetConfig *old)
+{
+    ip4_addr_t a, m, g;
+    if (g_cfg.manual_ip) {
+        dhcp_release_and_stop(&g_netif);
+        ip4_addr_set_u32(&a, g_cfg.ip);
+        ip4_addr_set_u32(&m, g_cfg.mask);
+        ip4_addr_set_u32(&g, g_cfg.gw);
+        netif_set_addr(&g_netif, &a, &m, &g);
+        kprintf("[NET] Manual address set\n");
+    } else if (old->manual_ip) {
+        ip4_addr_set_zero(&a);
+        netif_set_addr(&g_netif, &a, &a, &a);
+        if (g_nic != &g_none && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");
+        kprintf("[NET] Address from DHCP again\n");
+    } else if (old->manual_dns && !g_cfg.manual_dns && dhcp_supplied_address(&g_netif)) {
+        dhcp_renew(&g_netif);                      /* the ACK brings DHCP's DNS servers back */
+    }
+    if (g_cfg.manual_dns) keep_manual_dns();
+    else if (g_cfg.manual_ip || old->manual_dns) {  /* no DHCP to supply them: none */
+        for (int i = 0; i < 2; i++) dns_setserver((u8_t)i, NULL);
+    }
+}
+
+static void put_ip(const char *name, UINT32 ip_be)
+{
+    char s[16] = "";
+    if (ip_be) NetFormatIp(ip_be, s, sizeof(s));
+    um_registry_set_sz(TCPIP_KEY, name, s);
+}
+
+bool NetSetConfig(const NetConfig *c, char *err, int cap)
+{
+    NetConfig n = *c;
+    const char *bad = NULL;
+    if (n.manual_ip) {
+        if (!n.ip || (n.ip & 0xFF) == 127 || (n.ip & 0xF0) >= 0xE0) bad = "The IP address is not valid.";
+        else if (!mask_ok(n.mask)) bad = "The subnet mask is not valid.";
+        else if ((n.ip & ~n.mask) == 0 || (n.ip | n.mask) == 0xFFFFFFFFu)
+            bad = "The IP address is the subnet's own address or its broadcast address.";
+        else if (n.gw && ((n.gw ^ n.ip) & n.mask)) bad = "The gateway is not in the address's subnet.";
+        else if (n.gw == n.ip) bad = "The gateway is the address itself.";
+    } else {
+        n.ip = n.mask = n.gw = 0;
+    }
+    if (!bad && n.manual_dns && !n.dns[0]) { n.dns[0] = n.dns[1]; n.dns[1] = 0; }
+    if (!bad && n.manual_dns && !n.dns[0]) n.manual_dns = false;   /* both blank: automatic */
+    if (!n.manual_dns) n.dns[0] = n.dns[1] = 0;
+    if (bad) {
+        if (err && cap) ksnprintf(err, cap, "%s", bad);
+        return false;
+    }
+    net_lock();
+    NetConfig old = g_cfg;
+    g_cfg = n;
+    apply_config(&old);
+    net_unlock();
+
+    um_registry_set_dword(TCPIP_KEY, "EnableDHCP", n.manual_ip ? 0 : 1);
+    put_ip("IPAddress", n.ip);
+    put_ip("SubnetMask", n.mask);
+    put_ip("DefaultGateway", n.gw);
+    char d[40] = "";
+    if (n.manual_dns) {
+        NetFormatIp(n.dns[0], d, sizeof(d));
+        if (n.dns[1]) {
+            size_t k = strlen(d);
+            d[k++] = ',';
+            NetFormatIp(n.dns[1], d + k, (int)(sizeof(d) - k));
+        }
+    }
+    um_registry_set_sz(TCPIP_KEY, "NameServer", d);
+    if (err && cap) err[0] = '\0';
+    return true;
+}
+
+static UINT32 get_ip(const char *name)
+{
+    char s[40];
+    UINT32 ip = 0;
+    if (!um_registry_get_sz(TCPIP_KEY, name, s, sizeof(s)) || !NetParseIp(s, &ip)) return 0;
+    return ip;
+}
+
+void NetRestoreConfig(void)
+{
+    if (!g_up) return;
+    NetConfig c = { 0 };
+    UINT32 dhcp = 1;
+    um_registry_get_dword(TCPIP_KEY, "EnableDHCP", &dhcp);
+    c.manual_ip = !dhcp;
+    if (c.manual_ip) {
+        c.ip = get_ip("IPAddress");
+        c.mask = get_ip("SubnetMask");
+        c.gw = get_ip("DefaultGateway");
+    }
+    char s[40];
+    if (um_registry_get_sz(TCPIP_KEY, "NameServer", s, sizeof(s)) && s[0]) {
+        char *second = s;
+        while (*second && *second != ',' && *second != ' ') second++;
+        if (*second) *second++ = '\0';
+        while (*second == ' ' || *second == ',') second++;
+        c.manual_dns = NetParseIp(s, &c.dns[0]);
+        if (c.manual_dns && *second) NetParseIp(second, &c.dns[1]);
+    }
+    if (!c.manual_ip && !c.manual_dns) return;
+    char err[80];
+    if (!NetSetConfig(&c, err, sizeof(err))) kprintf("[NET] Saved settings not used: %s\n", err);
 }

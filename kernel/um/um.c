@@ -2259,6 +2259,10 @@ static void handle_copy(UmHandle *d, const UmHandle *s)
     *d = *s;
     if (d->kind == H_FILE || d->kind == H_DIR) RamfsRef(d->node);
     else if (d->kind == H_OBJECT) um_ob_ref(d->obj);
+    else if (d->kind == H_CON_OUT && d->console) {
+        um_console_ref(d->console);
+        um_console_screen_ref(d->console, d->con_screen);
+    }
     if (d->kind == H_FILE) um_fpos_ref(d->fp);              /* the same position as the parent's */
 }
 
@@ -3033,6 +3037,7 @@ int UmList(UmProcInfo *out, int max)
         out[n].mem_kb = p->pages * 4;
         out[n].threads = (UINT32)p->live_threads;
         out[n].exited = p->exited;
+        out[n].parent_pid = p->parent_pid;
         n++;
     }
     return n;
@@ -3056,4 +3061,3 @@ bool UmKillPid(UINT32 pid)
     }
     return false;
 }
-

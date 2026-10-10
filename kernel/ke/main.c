@@ -62,6 +62,7 @@
 #include "../cm/cm.h"
 #include "../se/se.h"
 #include "../io/io.h"
+#include "../io/pnp.h"
 #include "../mm/vma.h"
 #include "../mm/section.h"
 #include "../ldr/ldr.h"
@@ -402,6 +403,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
 
     /* Devices and networking: PCI scan, e1000 NIC, lwIP + DHCP */
     PciInitialize();
+    PnpInit();                            /* the Plug and Play device tree: root, PCI functions */
     AcpiInitialize(rsdp);                 /* power-off, reset, the power button; MADT for SMP */
     IoApicInit();                         /* (masked; the SCI is routed when the interpreter loads) */
     AmlInitialize();                      /* the AML interpreter (a thread): batteries, buttons */

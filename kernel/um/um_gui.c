@@ -32,6 +32,7 @@
 #include "../wm/kbdlayout.h"
 #include "../hal/display.h"
 #include "../hal/pci.h"
+#include "../io/pnp.h"
 
 /* Win32 window messages we deliver */
 #define WM_DESTROY        0x0002
@@ -1269,6 +1270,15 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 #define CTL_EMBED_INFO     53
 #define CTL_XBLIT          54
 #define CTL_SET_BACK       55
+/* The Plug and Play device tree (io/pnp.h; cfgmgr32, setupapi, user32's
+ * WM_DEVICECHANGE and the PlugPlay service), by arg's low byte:
+ *  56 PNP  0 returns the highest device node ID;
+ *          1 ptr <- node arg >> 8's PnpNode; returns 0 if there is none;
+ *          2 ptr <-> { after, wait ms (1 s at most), max (<= 32); out:
+ *            newest seq } then PnpEvent[max]: the arrivals and removals
+ *            after seq "after", waiting for one up to "wait ms"; returns
+ *            how many */
+#define CTL_PNP            56
 #define GUI_TAGS         2048
 #define GUI_TAG_MIN      4               /* keeps every handle above 0xFFFF */
 #define GUI_TAG_SHIFT    14
@@ -1596,6 +1606,32 @@ static UINT64 gamepad_ctl(UINT64 arg, UINT64 ptr)
     case 8: return (UINT64)(INT64)um_hid_slot(p, ptr, NULL);
     case 9: return um_hid_flush(p, ptr) ? 1 : 0;
     case 10: return (UINT64)(INT64)PadSlotOfSerial((UINT32)(arg >> 8));
+    }
+    return 0;
+}
+
+/* The device tree (CTL_PNP) */
+static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
+{
+    switch (arg & 0xFF) {
+    case 0: return PnpCount();
+    case 1: {
+        PnpNode *n = kmalloc(sizeof(PnpNode));
+        bool ok = n && PnpGet((UINT32)(arg >> 8), n) && NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, n, sizeof(*n)));
+        kfree(n);
+        return ok ? 1 : 0;
+    }
+    case 2: {
+        UINT32 q[4];
+        if (!NT_SUCCESS(CopyFromUser(q, (const void *)(uintptr_t)ptr, 3 * sizeof(UINT32)))) return 0;
+        int max = q[2] > 32 ? 32 : (int)q[2];
+        PnpEvent e[32];
+        UINT64 ticks = q[1] ? (q[1] + 9) / 10 : 0;
+        int n = PnpWaitEvents(q[0], e, max, ticks > 100 ? 100 : ticks, &q[3]);
+        bool ok = NT_SUCCESS(CopyToUser((void *)(uintptr_t)(ptr + 3 * sizeof(UINT32)), &q[3], sizeof(UINT32))) &&
+                  (!n || NT_SUCCESS(CopyToUser((void *)(uintptr_t)(ptr + sizeof(q)), e, sizeof(PnpEvent) * (size_t)n)));
+        return ok ? (UINT64)n : 0;
+    }
     }
     return 0;
 }
@@ -2221,6 +2257,7 @@ static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (a2 == CTL_TOUCH) return (UINT64)InputTouchContacts();
     if (a2 == CTL_TABLET) return tablet_ctl(p, a3, a4);
     if (a2 == CTL_GAMEPAD) return gamepad_ctl(a3, a4);
+    if (a2 == CTL_PNP) return pnp_ctl(a3, a4);
     if (a2 == CTL_SET_CURSOR_POS) return cursor_set_pos(p, a4);
     if (a2 == CTL_CLIP_CURSOR) return cursor_clip(p, a3, a4);
     if (a2 == CTL_FOREIGN) return hwnd_foreign((UINT32)a3, a4);

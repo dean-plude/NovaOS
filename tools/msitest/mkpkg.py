@@ -32,6 +32,11 @@ tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Msi:
               SystemFolder, which is SysWOW64 on 64-bit Windows
   wow64.msi   "Nova WoW64 Test", the same as a 64-bit package: its
               novawow64.txt goes to System32 (msiqtest installs both)
+  driver.msi  "Nova Driver Test": tools/drivertest/mkdriver.py's driver
+              package (novadrv.inf, .sys, .cat) in C:\\Programs\\NovaDriverTest,
+              then a deferred custom action (type 34, no impersonation) runs
+              "pnputil /add-driver novadrv.inf /install" on it, as driver
+              installers built without DIFx do
   wow32v2.msi "Nova WoW32 Test" 2.0.0, a new product code for the same
               upgrade code: its Upgrade table finds 1.0.0 (below 2.0.0) and
               removes it, and fails the install (a type 19 action) if it
@@ -42,6 +47,8 @@ Each package is written by mkmsi.py; nothing here needs msitools.
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mkmsi
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'drivertest'))
+import mkdriver
 
 BASE = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000B001}'
 BASE_UP = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000B0F1}'
@@ -51,6 +58,8 @@ SVC = '{6E1D0C3A-5A1B-4C2D-8E3F-000000005001}'
 SVC_UP = '{6E1D0C3A-5A1B-4C2D-8E3F-0000000050F1}'
 OTHER = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000E001}'
 PATCH = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000A001}'
+DRV = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000D001}'
+DRV_UP = '{6E1D0C3A-5A1B-4C2D-8E3F-00000000D0F1}'
 
 HKLM = 2
 
@@ -189,6 +198,17 @@ def wow32_v2():
     return db
 
 
+def driver():
+    files = [(n.replace('.', '_'), n, d) for n, d in mkdriver.FILES]
+    db = mkmsi.package('Nova Driver Test', '1.0.0', DRV, DRV_UP, 'NovaDriverTest', files)
+    # 34 = a command line run in a folder; 0x400 deferred, 0x800 without
+    # impersonation (in the system context, as driver installs run)
+    db.add('CustomAction', ('AddDriver', 34 | 0x400 | 0x800, 'INSTALLDIR',
+                            '"[SystemFolder]pnputil.exe" /add-driver "[INSTALLDIR]novadrv.inf" /install'))
+    db.add('InstallExecuteSequence', ('AddDriver', 'NOT Installed', 6200))
+    return db
+
+
 def main():
     out, exe = sys.argv[1], sys.argv[2]
     os.makedirs(out, exist_ok=True)
@@ -206,6 +226,7 @@ def main():
     wow(32).write(os.path.join(out, 'wow32.msi'))
     wow(64).write(os.path.join(out, 'wow64.msi'))
     wow32_v2().write(os.path.join(out, 'wow32v2.msi'))
+    driver().write(os.path.join(out, 'driver.msi'))
 
 
 if __name__ == '__main__':

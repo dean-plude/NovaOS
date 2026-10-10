@@ -80,7 +80,7 @@ UINT32      UmPid(const UmProcess *p);
 const char *UmName(const UmProcess *p);
 
 /* Process list, for tasklist: fills up to @max entries. */
-typedef struct { UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; } UmProcInfo;
+typedef struct { UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; UINT32 parent_pid; } UmProcInfo;
 int  UmList(UmProcInfo *out, int max);
 /* taskkill: false if no running process has @pid. */
 bool UmKillPid(UINT32 pid);

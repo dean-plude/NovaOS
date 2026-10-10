@@ -1,6 +1,8 @@
-- Win32 console screen buffers: cursor positioning, size and visibility
-  controls now reach the Terminal (`consolecursortest`, x64 and x86).
-  Still to do: current cursor position in `GetConsoleScreenBufferInfo`,
-  cell reads and writes, fills, scrolling, text attributes and independent
-  screen buffers. Verify a real console-screen API application before
-  claiming full coverage; Git still uses NovaOS's own `less`.
+- Win32 console screen buffers: the console keeps each buffer's cells,
+  cursor and text attributes, so `GetConsoleScreenBufferInfo` reports the
+  cursor, and cell reads and writes, fills, scrolling, colours and
+  independent buffers work (`consolecursortest`, x64 and x86); the first
+  buffer follows the Terminal's size.  Still to do: verify a real
+  console-screen API application, and read the cells from the Terminal's
+  own libvterm screen instead of a copy kept by the console; Git still
+  uses NovaOS's own `less`.

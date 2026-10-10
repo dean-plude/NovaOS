@@ -168,6 +168,16 @@ from the App Store does that) and run the program.  Only part of what
 Windows programs use is there yet, so many programs still fail:
 [compatibility.md](compatibility.md) lists the ones known to work.
 
+**Drivers.**  A Windows driver package (an `.inf` with its `.sys` and
+`.cat` files) installs the same three ways: run its setup `.exe` or
+`.msi`, or unzip it and, in the Terminal, run
+`pnputil /add-driver <folder>\*.inf /install`.  `pnputil /enum-drivers`
+lists the packages installed and `pnputil /delete-driver oemN.inf` removes
+one.  The package is kept in the driver store as on Windows, but NovaOS
+runs its devices with its own drivers and does not load Windows
+kernel-mode drivers, so the driver itself does not start: `pnputil`
+reports that no device took it.
+
 ## Your files
 
 Drive C: holds your files and the programs you install.  On an installed
@@ -185,7 +195,22 @@ explains how C: is stored.
 
 Wired networking starts by itself: NovaOS gets an address from the
 network's DHCP server.  Settings > Network, or `ipconfig` in the
-Terminal, shows it.  Wi-Fi is not supported.
+Terminal, shows it.  To set the address by hand, choose **Edit** on
+Settings > Network's Ethernet card, pick **Manual** and type the IP
+address, subnet mask, gateway and DNS servers, then **Save**; or keep
+**Automatic (DHCP)** and type only DNS servers to use instead of the ones
+DHCP hands out (blank: DHCP's).  The Terminal does the same the Windows
+way:
+
+    netsh interface ipv4 set address name=Ethernet static 192.168.1.50 255.255.255.0 192.168.1.1
+    netsh interface ipv4 set dnsservers name=Ethernet static 1.1.1.1
+    netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
+    netsh interface ipv4 set address name=Ethernet source=dhcp
+    netsh interface ipv4 show config
+
+The choice takes effect at once and is kept across restarts (in the
+registry, under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`).
+Wi-Fi is not supported.
 
 Sound plays through the newest output device; Settings > Sound picks
 another and sets each device's volume, and the choices are kept across

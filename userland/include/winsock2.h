@@ -48,6 +48,7 @@ struct linger { USHORT l_onoff; USHORT l_linger; };
 typedef struct linger LINGER, *PLINGER, *LPLINGER;
 #define FIONBIO      0x8004667e
 #define FIONREAD     0x4004667f
+#define SIOCATMARK   0x40047307
 
 #define INADDR_ANY        0x00000000
 #define INADDR_LOOPBACK   0x7f000001

@@ -42,6 +42,11 @@ superseded PR runs; main, scheduled, manual and release work are not actively
 cancelled by new commits. GitHub may replace older queued runs in a concurrency
 group; completion checks reject cancelled required execution.
 
+A scheduled run that executed the corpus posts its results (each app's
+report, the smpstress log and a link to the run) as a comment on the
+tracking issue #210 (`tools/ci/corpus_comment.py`); runs whose gate skipped
+an already-tested commit post nothing.
+
 Each selected app runs in its own VM and job, with at most four app jobs running
 at once. A failed or timed-out app cannot prevent sibling app jobs or the separate
 SMP job from running. Isolation also gives each game's own controller fixture a

@@ -517,13 +517,17 @@ void um_close_all_handles(UmProcess *p)
         if (p->handles[i].kind != H_FREE) handle_close(&p->handles[i]);
 }
 
-UINT64 um_handle_new_object(UmProcess *p, UmObject *o)
+UINT64 um_handle_new_object(UmProcess *p, UmObject *o) { return um_handle_new_object_access(p, o, false, 0); }
+
+UINT64 um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32 granted)
 {
     UmHandle *h;
     um_lock_shared(&p->lock);
     UINT64 hv = slot_alloc(p, &h);
     if (hv) {
         h->obj = um_ob_ref(o);
+        h->access_known = known;
+        h->access = granted;
         h->kind = H_OBJECT;
         slot_unlock(p, (int)(hv / 4 - 1));
     }

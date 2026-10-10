@@ -383,6 +383,18 @@ bool um_map_image_page(UmProcess *p, UINT64 va, const void *content, UINT32 prot
     return true;
 }
 
+/* The same with the shared frame @f already found (img_get): the entry
+ * takes over its reference */
+static bool map_image_frame(UmProcess *p, UINT64 va, PADDR f, UINT32 protect)
+{
+    pte_t *e = walk(p->pml4, va, true);
+    if (!e || (*e & (PTE_PRESENT | PTE_LAZY))) return false;
+    *e = f | (pte_flags(protect) & ~PTE_WRITE) | PTE_IMAGE;
+    p->commit++;
+    __atomic_add_fetch(&p->pages, 1, __ATOMIC_RELAXED);
+    return true;
+}
+
 /* The shared page at @e (@va) becomes the process's own copy, keeping
  * the entry's flags; false when memory ran out.  (Two threads may race
  * here: the entry only changes by compare-and-swap, and the loser's copy
@@ -1400,6 +1412,18 @@ static int module_index(UmProcess *p, const char *name, char *lname, int cap, bo
  * its address, relocate it and register the module.  Its imports are bound
  * afterwards by bind_module; returns the module index (an already loaded
  * module's when it is one). */
+/* The bytes of section @s (its 40-byte header) the file supplies, in an
+ * image of @size bytes from a file of @fsz (the section starts inside) */
+static UINT32 section_bytes(const UINT8 *s, UINT32 size, UINT32 fsz)
+{
+    UINT32 va = rd32(s + 12), vsz = rd32(s + 8), raw = rd32(s + 16), ptr = rd32(s + 20);
+    UINT32 n = raw < vsz || !vsz ? raw : vsz;
+    if (n > size - va) n = size - va;
+    if (ptr > fsz || n > fsz - ptr) n = ptr > fsz ? 0 : fsz - ptr;
+    return n;
+}
+
+#define UM_MAX_SECTIONS 96                          /* more: the image is cleared whole */
 static int map_module(Loader *L, RamNode *file, const char *name, bool top)
 {
     UmProcess *p = L->p;
@@ -1447,18 +1471,40 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
     Image *im = &L->img[m];
     memset(im, 0, sizeof(*im));
     im->size = (size + 0xFFF) & ~0xFFFU;
-    im->img = kzalloc(im->size + 16);             /* zero tail: names always terminate */
-    if (!im->img) return fail(L, "Out of memory loading %s", name);
-    memcpy(im->img, f, hdr);
-    for (int i = 0; i < nsec; i++) {
-        const UINT8 *s = sec + 40 * i;
-        UINT32 va = rd32(s + 12), vsz = rd32(s + 8), raw = rd32(s + 16), ptr = rd32(s + 20);
-        UINT32 n = raw < vsz || !vsz ? raw : vsz;
-        if (va >= im->size) { kfree(im->img); im->img = NULL; return fail(L, "%s has a section outside the image", name); }
-        if (n > im->size - va) n = im->size - va;
-        if (ptr > fsz || n > fsz - ptr) n = ptr > fsz ? 0 : fsz - ptr;
-        memcpy(im->img + va, f + ptr, n);
+    for (int i = 0; i < nsec; i++)
+        if (rd32(sec + 40 * i + 12) >= im->size) return fail(L, "%s has a section outside the image", name);
+    /* The copy is made without the process lock (a runtime load: the
+     * loader lock keeps other loads out), and only what the file does not
+     * fill is zeroed, plus a zero tail so names always terminate: clearing
+     * a 160 MB image first and then copying over it doubled the work */
+    if (L->plock) um_unlock_excl(&p->lock);
+    im->img = kmalloc(im->size + 16);
+    if (im->img) {
+        UINT32 span_at[UM_MAX_SECTIONS + 1], span_n[UM_MAX_SECTIONS + 1], ns = 0;
+        span_at[ns] = 0; span_n[ns++] = hdr;
+        for (int i = 0; i < nsec && ns <= UM_MAX_SECTIONS; i++) {     /* (kept in address order) */
+            const UINT8 *s = sec + 40 * i;
+            UINT32 va = rd32(s + 12), n = section_bytes(s, im->size, fsz), j = ns++;
+            for (; j > 0 && span_at[j - 1] > va; j--) { span_at[j] = span_at[j - 1]; span_n[j] = span_n[j - 1]; }
+            span_at[j] = va; span_n[j] = n;
+        }
+        if (ns > UM_MAX_SECTIONS) memset(im->img, 0, im->size + 16);     /* (an odd image: all of it) */
+        else {
+            UINT32 at = 0;
+            for (UINT32 j = 0; j < ns; j++) {
+                if (span_at[j] > at) memset(im->img + at, 0, span_at[j] - at);
+                if (span_at[j] + span_n[j] > at) at = span_at[j] + span_n[j];
+            }
+            memset(im->img + at, 0, im->size + 16 - at);
+        }
+        memcpy(im->img, f, hdr);
+        for (int i = 0; i < nsec; i++) {
+            const UINT8 *s = sec + 40 * i;
+            memcpy(im->img + rd32(s + 12), f + rd32(s + 20), section_bytes(s, im->size, fsz));
+        }
     }
+    if (L->plock) um_lock_excl(&p->lock);
+    if (!im->img) return fail(L, "Out of memory loading %s", name);
     im->exp_rva = dirv[0]; im->exp_size = dirs[0];
 
     /* Choose the load address */
@@ -1611,14 +1657,26 @@ static int bind_module(Loader *L, int m)
         if (va < im->size)
             for (UINT32 a = va & ~0xFFFU; a < end; a += PAGE_SIZE) prot[a >> 12] = x ? (w ? 0x40 : 0x20) : (w ? 0x04 : 0x02);
     }
-    bool ok = true;
+    /* The shared frames of the read-only pages are found first, without
+     * the process lock: hashing and comparing every page is most of the
+     * work of loading a large module (Firefox's xul.dll is 160 MB, in
+     * each of its processes), and meanwhile the process's other threads,
+     * whose every handle lookup takes that lock, would wait. */
+    PADDR *frames = kzalloc((UINT64)npages * sizeof(PADDR));
+    bool ok = frames != NULL;
+    if (ok && L->plock) um_unlock_excl(&p->lock);
+    for (UINT32 i = 0; ok && i < npages; i++)
+        if (prot[i] != 0x04 && prot[i] != 0x40) ok = (frames[i] = img_get(im->img + ((UINT64)i << 12))) != 0;
+    if (frames && L->plock) um_lock_excl(&p->lock);
     for (UINT32 i = 0; ok && i < npages; i++) {
         UINT64 va = base + ((UINT64)i << 12);
         const UINT8 *pg = im->img + ((UINT64)i << 12);
-        ok = prot[i] == 0x04 || prot[i] == 0x40
-             ? um_commit(p, va, PAGE_SIZE, prot[i]) && um_write(p, va, pg, PAGE_SIZE)
-             : um_map_image_page(p, va, pg, prot[i]);
+        if (prot[i] == 0x04 || prot[i] == 0x40) ok = um_commit(p, va, PAGE_SIZE, prot[i]) && um_write(p, va, pg, PAGE_SIZE);
+        else if ((ok = map_image_frame(p, va, frames[i], prot[i]))) frames[i] = 0;
     }
+    if (frames)
+        for (UINT32 i = 0; i < npages; i++) if (frames[i]) img_put(frames[i]);    /* not mapped after all */
+    kfree(frames);
     kfree(prot);
     if (!ok) return fail(L, "Out of memory loading %s", name);
     return m;

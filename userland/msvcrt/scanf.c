@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include "msvcrt_internal.h"
 
 typedef struct {
     int (*get)(void *ctx);
@@ -16,7 +17,10 @@ typedef struct {
 static int  sget(Src *s)          { int c = s->get(s->ctx); if (c != EOF) s->count++; return c; }
 static void sunget(Src *s, int c) { if (c != EOF) { s->unget(c, s->ctx); s->count--; } }
 
-static int core(Src *src, const char *f, va_list ap)
+/* secure: the _s forms (sscanf_s, and the UCRT's __stdio_common_v*scanf
+ * with _CRT_INTERNAL_SCANF_SECURECRT): %c, %s and %[ take the buffer's
+ * size, an unsigned, after the pointer */
+static int core(Src *src, const char *f, va_list ap, int secure)
 {
     int assigned = 0, any = 0;
     for (; *f; f++) {
@@ -57,8 +61,10 @@ static int core(Src *src, const char *f, va_list ap)
         int n = 0;
         if (conv == 'c') {
             char *d = skip ? 0 : va_arg(ap, char *);
+            unsigned size = d && secure ? va_arg(ap, unsigned) : 0xFFFFFFFFu;
             for (; n < width; n++) {
                 if ((c = sget(src)) == EOF) break;
+                if ((unsigned)n >= size) { if (size) d[0] = 0; return assigned; }
                 if (d) d[n] = (char)c;
             }
             if (!n) return any ? assigned : EOF;
@@ -78,11 +84,14 @@ static int core(Src *src, const char *f, va_list ap)
                 }
             }
             char *d = skip ? 0 : va_arg(ap, char *);
+            unsigned size = d && secure ? va_arg(ap, unsigned) : 0xFFFFFFFFu;
             while (n < width) {
                 c = sget(src);
                 if (c == EOF) break;
                 int ok = conv == 's' ? !isspace(c) : set[c] != invert;
                 if (!ok) { sunget(src, c); break; }
+                /* no room for it and the terminator: the _s forms fail */
+                if ((unsigned)n + 1 >= size) { if (size) d[0] = 0; return assigned; }
                 if (d) d[n] = (char)c;
                 n++;
             }
@@ -137,18 +146,21 @@ static void str_unget(int c, void *ctx) { (void)c; ((StrSrc *)ctx)->s--; }
 static int  file_get(void *ctx)          { return fgetc((FILE *)ctx); }
 static void file_unget(int c, void *ctx) { ungetc(c, (FILE *)ctx); }
 
-int vsscanf(const char *s, const char *fmt, va_list ap)
+int __nova_vsscanf(const char *s, const char *fmt, va_list ap, int secure)
 {
     StrSrc ss = { s };
     Src src = { str_get, str_unget, &ss, 0 };
-    return core(&src, fmt, ap);
+    return core(&src, fmt, ap, secure);
 }
 
-int vfscanf(FILE *f, const char *fmt, va_list ap)
+int __nova_vfscanf(FILE *f, const char *fmt, va_list ap, int secure)
 {
     Src src = { file_get, file_unget, f, 0 };
-    return core(&src, fmt, ap);
+    return core(&src, fmt, ap, secure);
 }
+
+int vsscanf(const char *s, const char *fmt, va_list ap) { return __nova_vsscanf(s, fmt, ap, 0); }
+int vfscanf(FILE *f, const char *fmt, va_list ap)       { return __nova_vfscanf(f, fmt, ap, 0); }
 
 int sscanf(const char *s, const char *fmt, ...) { va_list a; va_start(a, fmt); int r = vsscanf(s, fmt, a); va_end(a); return r; }
 int fscanf(FILE *f, const char *fmt, ...)       { va_list a; va_start(a, fmt); int r = vfscanf(f, fmt, a); va_end(a); return r; }

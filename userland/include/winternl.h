@@ -270,7 +270,7 @@ NTSYSAPI NTSTATUS NTAPI NtNovaCreateProcess(const char *image, const char *cmdli
 /* NovaOS: Out = { process id, exit code (STILL_ACTIVE while running), exited } */
 NTSYSAPI NTSTATUS NTAPI NtNovaProcessInfo(HANDLE p, ULONG64 out[3]);
 /* NovaOS: the running programs */
-typedef struct { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32]; } NOVA_PROCESS_ENTRY;
+typedef struct { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32]; ULONG ParentPid; } NOVA_PROCESS_ENTRY;
 NTSYSAPI NTSTATUS NTAPI NtNovaProcessList(NOVA_PROCESS_ENTRY *buf, ULONG max, PULONG count);
 /* NovaOS: NtQuerySystemInformation(SystemFirmwareTableInformation)'s kernel half */
 NTSYSAPI NTSTATUS NTAPI NtNovaFirmwareTable(PVOID info, ULONG len, PULONG ret);

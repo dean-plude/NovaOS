@@ -487,6 +487,16 @@ static void handle_close(UmHandle *h)
         um_ob_unref(o);
         return;
     }
+    if (h->kind == H_CON_OUT && h->console) {
+        UmConsole *c = h->console;
+        UINT32 screen = h->con_screen;
+        h->kind = H_FREE;
+        h->console = NULL;
+        h->con_screen = 0;
+        um_console_screen_unref(c, screen);
+        UmConsoleRelease(c);
+        return;
+    }
     h->kind = H_FREE;
 }
 
@@ -1166,6 +1176,8 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
                  (h->kind == H_FILE && !h->write) ? ST_ACCESS_DENIED :
                  (h->kind != H_FILE && h->kind != H_CON_OUT && h->kind != H_NULL) ? ST_INVALID_HANDLE : 0;
     bool file = h && h->kind == H_FILE && !bad;
+    UINT32 con_screen = h && h->kind == H_CON_OUT ? h->con_screen : 0;
+    UmConsole *console = h && h->kind == H_CON_OUT && h->console ? h->console : p->con;
     if (!file) FsUnlockShared();
     if (bad) return h ? iosb(iosb_ptr, bad, 0) : bad;
     if (h->kind == H_NULL) { set_io_event(a2); return iosb(iosb_ptr, ST_SUCCESS, len); }
@@ -1192,7 +1204,7 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
             break;
         }
         if (h->kind == H_CON_OUT) {
-            int w = um_console_write(p->con, tmp, (int)chunk);     /* (its own lock) */
+            int w = um_console_write_screen(console, con_screen, tmp, (int)chunk); /* (its own lock) */
             done += (UINT64)w;
             if ((UINT32)w < chunk) break;                        /* killed */
         } else {
@@ -2417,7 +2429,7 @@ static UINT64 sys_nova_process_info(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 }
 
 /* NtNovaProcessList(NOVA_PROCESS_ENTRY *Buffer, ULONG Max, PULONG Count):
- * { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32] } per program */
+ * { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32]; ULONG ParentPid } per program */
 static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
@@ -2427,7 +2439,7 @@ static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     int n = UmList(list, UM_MAX_PROCS);
     UINT32 st = ST_SUCCESS;
     for (int i = 0; i < n && (UINT64)i < a2; i++) {
-        UINT8 e[48];
+        UINT8 e[52];
         memset(e, 0, sizeof(e));
         memcpy(e, &list[i].pid, 4);
         memcpy(e + 4, &list[i].mem_kb, 4);
@@ -2435,7 +2447,8 @@ static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT32 ex = list[i].exited;
         memcpy(e + 12, &ex, 4);
         memcpy(e + 16, list[i].name, 31);
-        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a1 + 48 * (UINT64)i), e, 48))) { st = UM_STATUS_ACCESS_VIOLATION; break; }
+        memcpy(e + 48, &list[i].parent_pid, 4);
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a1 + 52 * (UINT64)i), e, 52))) { st = UM_STATUS_ACCESS_VIOLATION; break; }
     }
     um_unlock(&lk);
     UINT32 cnt = (UINT32)n;
@@ -2945,6 +2958,9 @@ static void pseudo_console_destroy(UmObject *o)
     UmConsoleRelease((UmConsole *)o->ptr);
 }
 
+static UINT64 nova_console_on(UmProcess *p, UmConsole *c, UmHandleKind kind, UINT32 screen,
+                              UINT64 a2, UINT64 a3, UINT64 a4, UINT64 res_ptr);
+
 static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     UmProcess *p = UmCurrent();
@@ -3027,11 +3043,71 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     um_lock_excl(&p->lock);
     UmHandle *h = handle(p, a1);
     UmHandleKind kind = h ? h->kind : H_FREE;
+    UINT32 screen = h ? h->con_screen : 0;
+    /* (another thread may close the handle once the lock is let go) */
+    UmConsole *own = h && h->console ? um_console_ref(h->console) : NULL;
     um_unlock_excl(&p->lock);
-    if (kind != H_CON_IN && kind != H_CON_OUT) return ST_INVALID_HANDLE;
-    UmConsole *c = p->con;
+    if (kind != H_CON_IN && kind != H_CON_OUT) { UmConsoleRelease(own); return ST_INVALID_HANDLE; }
+    UINT64 r = nova_console_on(p, own ? own : p->con, kind, screen, a2, a3, a4, res_ptr);
+    UmConsoleRelease(own);
+    return r;
+}
+
+/* NtNovaConsole on a console handle (@kind) of console @c, screen buffer @screen */
+static UINT64 nova_console_on(UmProcess *p, UmConsole *c, UmHandleKind kind, UINT32 screen,
+                              UINT64 a2, UINT64 a3, UINT64 a4, UINT64 res_ptr)
+{
     bool in = kind == H_CON_IN;
     UINT32 res = 0;
+    if ((UINT32)a2 == CON_SCREEN_CREATE) {
+        if (in) return ST_INVALID_HANDLE;
+        if (!res_ptr) return ST_INVALID_PARAMETER;
+        UINT32 new_screen = 0;
+        UINT32 st = um_console_screen_create(c, &new_screen);
+        if (st) return st;
+        um_lock_excl(&p->lock);
+        UmHandle *created = NULL;
+        UINT64 hv = handle_alloc(p, &created);
+        if (created) {
+            created->con_screen = new_screen;
+            created->console = um_console_ref(c);
+            created->read = created->write = true;
+            created->inherit = !!a4;
+            created->kind = H_CON_OUT;
+        }
+        um_unlock_excl(&p->lock);
+        if (!hv) { um_console_screen_unref(c, new_screen); return ST_NO_MEMORY; }
+        res = (UINT32)hv;
+        if (res_ptr && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)res_ptr, &res, 4))) {
+            um_close_handle(res);
+            return UM_STATUS_ACCESS_VIOLATION;
+        }
+        return ST_SUCCESS;
+    }
+    if ((UINT32)a2 >= CON_SCREEN_INFO) {
+        if (in) return ST_INVALID_HANDLE;
+        if ((UINT32)a2 == CON_SCREEN_ACTIVATE) {
+            NTSTATUS st = um_console_screen_call(c, screen, (UINT32)a2, NULL, 0, &res);
+            if (!NT_SUCCESS(st)) return st;
+        } else {
+            UINT32 len = (UINT32)a4;
+            if (len > 4u * 1024u * 1024u + sizeof(UmConsoleScreenRequest) || (len && !a3))
+                return ST_INVALID_PARAMETER;
+            void *buf = kmalloc(len ? len : 1);
+            if (!buf) return ST_NO_MEMORY;
+            if (len && !NT_SUCCESS(CopyFromUser(buf, (const void *)(uintptr_t)a3, len))) {
+                kfree(buf);
+                return UM_STATUS_ACCESS_VIOLATION;
+            }
+            NTSTATUS st = um_console_screen_call(c, screen, (UINT32)a2, buf, len, &res);
+            if (NT_SUCCESS(st) && len && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, buf, len)))
+                st = UM_STATUS_ACCESS_VIOLATION;
+            kfree(buf);
+            if (!NT_SUCCESS(st)) return st;
+        }
+        if (res_ptr && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)res_ptr, &res, 4))) return UM_STATUS_ACCESS_VIOLATION;
+        return ST_SUCCESS;
+    }
     switch ((UINT32)a2) {
     case CON_GET_MODE: {
         res = !c ? (in ? CON_IN_DEFAULT : CON_OUT_DEFAULT) :

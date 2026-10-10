@@ -1740,7 +1740,7 @@ K32 BOOL WINAPI GetNumberOfConsoleMouseButtons(LPDWORD n) { *n = 2; return TRUE;
  * separate threads carrying its byte streams to and from the host's pipes.
  * ----------------------------------------------------------------------- */
 #define PSEUDO_MAGIC 0x4350594Eu
-enum { CON_PSEUDO_CREATE = 12, CON_PSEUDO_RESIZE, CON_PSEUDO_INPUT, CON_PSEUDO_OUTPUT, CON_PSEUDO_EOF };
+enum { CON_PSEUDO_CREATE = 32, CON_PSEUDO_RESIZE, CON_PSEUDO_INPUT, CON_PSEUDO_OUTPUT, CON_PSEUDO_EOF };   /* (kernel/um/um_syscall.c) */
 
 typedef struct {
     DWORD magic;
@@ -1794,7 +1794,7 @@ static DWORD WINAPI pseudo_output_thread(LPVOID arg)
         if (!NT_SUCCESS(s)) break;
         if (!got) {
             if (pseudo_closing(p)) break;
-            Sleep(5);
+            WaitForSingleObject(p->out_console, INFINITE);   /* signaled: output, or the console ended */
             continue;
         }
         DWORD put = 0;
@@ -1885,7 +1885,7 @@ K32 VOID WINAPI ClosePseudoConsole(HPCON h)
     if (!p || p->magic != PSEUDO_MAGIC || __atomic_exchange_n(&p->closing, 1, __ATOMIC_ACQ_REL)) return;
     HANDLE console = p->console;
     p->console = 0;
-    if (console) NtNovaConsole(console, CON_PSEUDO_EOF, 0, 0, 0);
+    if (console) NtNovaConsole(console, CON_PSEUDO_EOF, 0, 1, 0);       /* (1: the output thread ends too) */
     if (console) CloseHandle(console);
     pseudo_release(p);
 }

@@ -264,10 +264,12 @@ named program or test demonstrates it.
   cell reads and writes, fills, scrolling, text attributes and independent
   screen buffers. Verify a real console-screen API application before
   claiming full coverage; Git still uses NovaOS's own `less`.
-- Pseudo consoles (`CreatePseudoConsole`) attach children to virtual
-  consoles and bridge input/output through host pipes; `pipetest` covers
-  resizing and child stream I/O. Run the self-test on a booted image to
-  verify end-to-end behavior.
+- Pseudo consoles (`CreatePseudoConsole`, for Neovim's `:terminal` and
+  Windows Terminal-style hosts): a child started with
+  `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` gets a console of its own whose
+  input and output travel over the host's pipes, and
+  `ResizePseudoConsole` sets its size (`pipetest`).  Still to do: run
+  Neovim's `:terminal` on it.
 - ~~Move files, the registry, process creation and the console off the
   big kernel lock~~ Done (Phase 17.7): file and registry throughput scale
   about 3x from one CPU to four (`smpstress scaling 3`, run nightly).

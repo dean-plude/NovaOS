@@ -2936,10 +2936,12 @@ static bool clip_name(UINT64 ptr, char *name)
 enum { CON_GET_MODE, CON_SET_MODE, CON_READ_INPUT, CON_PEEK_INPUT, CON_WRITE_INPUT,
        CON_COUNT_INPUT, CON_FLUSH_INPUT, CON_GET_SIZE, CON_PROCESS_LIST,
        CON_SET_CURSOR, CON_GET_CURSOR_INFO, CON_SET_CURSOR_INFO,
-       CON_PSEUDO_CREATE, CON_PSEUDO_RESIZE, CON_PSEUDO_INPUT, CON_PSEUDO_OUTPUT, CON_PSEUDO_EOF };
+       /* (32 on: the screen-buffer calls take the numbers after 11) */
+       CON_PSEUDO_CREATE = 32, CON_PSEUDO_RESIZE, CON_PSEUDO_INPUT, CON_PSEUDO_OUTPUT, CON_PSEUDO_EOF };
 
 static void pseudo_console_destroy(UmObject *o)
 {
+    um_console_set_output_object((UmConsole *)o->ptr, NULL);   /* (its programs may keep the console) */
     UmConsoleRelease((UmConsole *)o->ptr);
 }
 
@@ -2961,6 +2963,7 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         o->ptr = c;
         o->destroy = pseudo_console_destroy;
         UmConsoleSetSize(c, cols, rows);
+        um_console_set_output_object(c, o);             /* waitable: output to read */
         UINT64 hv = um_handle_new_object(p, o);
         um_ob_unref(o);
         if (!hv) return ST_TOO_MANY_HANDLES;
@@ -2983,6 +2986,7 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
             UmConsoleSetSize(c, cols, rows);
         } else if ((UINT32)a2 == CON_PSEUDO_EOF) {
             UmConsoleEof(c);
+            if (a4) um_console_end_output(c);              /* ClosePseudoConsole: the output reader stops too */
         } else if ((UINT32)a2 == CON_PSEUDO_INPUT) {
             char buf[512];
             UINT32 left = (UINT32)a4;

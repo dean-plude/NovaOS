@@ -81,6 +81,8 @@ struct UsbDev {
     bool             is_hub;
     UINT16           vid, pid;
     UINT8            iproduct;     /* the product's string descriptor (0: none) */
+    UINT16           rev;          /* bcdDevice */
+    UINT32           pnp;          /* its device node (io/pnp.h), 0 if none */
     UINT16           ep0_mps;
     char             name[32];
     UINT8           *buf;          /* control-transfer data (USB_CTL_BUF bytes, below 4 GiB) */
@@ -158,9 +160,25 @@ struct UsbHc {
     int             ports;
     UINT8           addr_used[16]; /* USB addresses in use (bit per address) */
     volatile bool   rescan;        /* treat every root port as changed (after S3) */
+    UINT32          pnp;           /* its root hub's device node (io/pnp.h) */
 };
 
 extern KSpinLock g_usb_lock;
+
+/* ---- the Plug and Play device tree (usbpnp.c) ---- */
+
+/* An interface offered to the drivers, and who took it */
+#define USBPNP_MAX_FN   16
+enum { USBPNP_NONE, USBPNP_HUB, USBPNP_HID, USBPNP_PAD, USBPNP_XPAD, USBPNP_MSC, USBPNP_AUDIO };
+typedef struct {
+    UINT8       number, cls, sub, proto;
+    int         kind;              /* USBPNP_*: the driver that took it */
+    const char *driver;            /* its name, or NULL: none did */
+} UsbPnpFn;
+/* A controller was started: its root hub's node, under its PCI function's */
+void UsbPnpController(UsbHc *hc, const PciDevice *pci);
+/* A device was enumerated and its interfaces offered: its node(s) (d->pnp) */
+void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn);
 
 /* Register a started controller with @ports root ports (powered) */
 UsbHc *UsbAddController(const UsbHcOps *ops, void *priv, int ports);

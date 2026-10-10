@@ -160,6 +160,7 @@ set(KERNEL_C_SOURCES
     drivers/uhci.c
     drivers/usbhid.c
     drivers/usbhub.c
+    drivers/usbpnp.c
     drivers/usbmsc.c
     drivers/usbaudio.c
     drivers/nvme.c
@@ -212,6 +213,7 @@ set(KERNEL_C_SOURCES
     cm/cm.c
     se/se.c
     io/io.c
+    io/pnp.c
     mm/vma.c
     mm/section.c
     ldr/ldr.c

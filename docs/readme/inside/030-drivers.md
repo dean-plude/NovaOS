@@ -22,7 +22,10 @@
   each with its own volume; the choice and the levels are kept across
   restarts), and game controllers (wired Xbox 360 and Xbox One
   controllers, with their motors, and HID game pads, for XInput,
-  DirectInput 8, Raw Input and `hid.dll`); virtio multi-touch screens,
+  DirectInput 8, Raw Input and `hid.dll`); a Plug and Play device tree
+  of the PCI and USB devices (Windows instance, hardware and compatible
+  IDs, setup classes and drivers; arrivals and removals as events, an
+  unplugged device kept as not present); virtio multi-touch screens,
   pens (pressure, tilt, rotation) and tablets; CMOS clock; a VBE display
   driver for QEMU's standard VGA, QXL, virtio-vga and VMware adapters,
   bochs-display and VirtualBox (resolutions switched at run time, page

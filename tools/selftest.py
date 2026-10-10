@@ -65,7 +65,10 @@ order; --list prints them):
             Xbox One and a HID game pad on xHCI (tools/padpeer.py behind
             usb-redir devices): padtest reads their buttons and sticks
             through XInput and DirectInput 8 while the test moves them,
-            sets their motors, and one is unplugged
+            sets their motors, and one is unplugged; "pnp", an xHCI
+            controller into which the test plugs a keyboard, a hub and a
+            USB stick and takes them out again: pnptest follows the
+            Plug and Play device tree
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -283,6 +286,7 @@ CDBOOT = load_suite('devices/cdboot')
 LAPTOP = load_suite('devices/laptop')
 UPDATE = load_suite('devices/update')
 GAMEPAD = load_suite('devices/gamepad')
+PNP = load_suite('devices/pnp')
 
 
 def net4_boot(work):
@@ -399,6 +403,12 @@ def gamepad_boot(work):
     return args, procs
 
 
+def pnp_boot(work):
+    """An xHCI controller with nothing on it: the tests plug a keyboard, a
+    hub and a USB stick in and take them out (tests/selftest/devices/pnp)"""
+    return ['-device', 'qemu-xhci,id=xhci'], []
+
+
 def monitors_boot(work):
     """One card with three outputs: a virtio-vga (the boot display, on its
     first output) and a VNC server on each other output (work/vnc1.sock,
@@ -507,7 +517,7 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
-                ('gamepad', GAMEPAD, gamepad_boot)],
+                ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot)],
 }
 
 

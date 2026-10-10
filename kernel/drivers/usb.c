@@ -30,6 +30,7 @@
 #include "../ke/scheduler.h"
 #include "../arch/x86_64/cpu.h"
 #include "../arch/x86_64/apic.h"
+#include "../io/pnp.h"
 
 #define MAX_HCS     16
 #define MAX_DEVS    128
@@ -387,6 +388,7 @@ static void remove_dev(UsbDev *d)
     for (int i = d->nbind - 1; i >= 0; i--)
         if (d->bind[i].gone) d->bind[i].gone(d->bind[i].inst);
     d->nbind = 0;
+    if (d->pnp) { PnpRemove(d->pnp); d->pnp = 0; }      /* (its node stays, not present) */
     while (__atomic_load_n(&d->users, __ATOMIC_ACQUIRE)) UsbDelay(1);
     d->hc->ops->dev_remove(d->hc, d);
     for (int i = 0; i < 32; i++) {
@@ -589,6 +591,7 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
     d->vid = (UINT16)(d->buf[8] | d->buf[9] << 8);
     d->pid = (UINT16)(d->buf[10] | d->buf[11] << 8);
     d->iproduct = d->buf[15];
+    d->rev = (UINT16)(d->buf[12] | d->buf[13] << 8);
     UINT8 dev_class = d->buf[4];
 
     /* Configuration descriptor: header first, then the whole thing */
@@ -613,6 +616,8 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
             d->name, d->vid, d->pid, dev_class, speed_name(speed), hc->ops->kind, d->addr);
 
     /* Offer each interface (first alternate setting) to the drivers */
+    UsbPnpFn fn[USBPNP_MAX_FN];
+    int nfn = 0;
     for (int off = 0; off + 2 <= total && cfg[off] >= 2; off += cfg[off]) {
         const UINT8 *p = &cfg[off];
         if (p[1] != USB_DT_INTERFACE || p[0] < 9 || p[3] != 0) continue;
@@ -624,15 +629,23 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
         while (end + 2 <= total && cfg[end] >= 2 && cfg[end + 1] != USB_DT_INTERFACE) end += cfg[end];
         f.len = end - off;
         void *inst = NULL;
-        if (f.cls == 9)       inst = UsbHubProbe(d, &f);
-        else if (f.cls == 3)  inst = (inst = UsbPadHidProbe(d, &f)) ? inst : UsbHidProbe(d, &f);
-        else if (f.cls == 0xFF) inst = UsbXpadProbe(d, &f);
-        else if (f.cls == 8)  inst = UsbMscProbe(d, &f);
-        else if (f.cls == 1)  inst = UsbAudioProbe(d, &f);
+        int kind = USBPNP_NONE;
+        if (f.cls == 9)       inst = UsbHubProbe(d, &f), kind = USBPNP_HUB;
+        else if (f.cls == 3) {
+            if ((inst = UsbPadHidProbe(d, &f))) kind = USBPNP_PAD;
+            else inst = UsbHidProbe(d, &f), kind = USBPNP_HID;
+        }
+        else if (f.cls == 0xFF) inst = UsbXpadProbe(d, &f), kind = USBPNP_XPAD;
+        else if (f.cls == 8)  inst = UsbMscProbe(d, &f), kind = USBPNP_MSC;
+        else if (f.cls == 1)  inst = UsbAudioProbe(d, &f), kind = USBPNP_AUDIO;
         if (!inst)
             kprintf("[USB] %s: interface %d (class %02x/%02x/%02x) not used\n",
                     d->name, f.number, f.cls, f.sub, f.proto);
+        static const char *const drivers[] = { NULL, "usbhub", "usbhid", "gamepad", "xpad", "usbmsc", "usbaudio" };
+        if (nfn < USBPNP_MAX_FN)
+            fn[nfn++] = (UsbPnpFn){ f.number, f.cls, f.sub, f.proto, inst ? kind : USBPNP_NONE, inst ? drivers[kind] : NULL };
     }
+    UsbPnpDevice(d, dev_class, fn, nfn);              /* (the device tree: after the drivers took it) */
     return d;
 
 fail:
@@ -739,11 +752,14 @@ static int probe_class(UINT8 prog_if, bool (*probe)(const PciDevice *), const ch
 {
     int n = 0;
     PciDevice pci;
-    for (int i = 0; i < MAX_HCS && PciFindClass(0x0C, 0x03, prog_if, i, &pci); i++)
+    for (int i = 0; i < MAX_HCS && PciFindClass(0x0C, 0x03, prog_if, i, &pci); i++) {
+        int before = g_nhc;
         if (probe(&pci)) {
             PciClaim(&pci, driver);
+            if (g_nhc > before) UsbPnpController(g_hcs[g_nhc - 1], &pci);
             n++;
         }
+    }
     return n;
 }
 

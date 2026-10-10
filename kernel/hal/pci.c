@@ -8,6 +8,7 @@
 #include "../ke/printf.h"
 #include "../arch/x86_64/paging.h"
 #include "../lib/string.h"
+#include "../io/pnp.h"
 
 #define PCI_ADDR  0xCF8
 #define PCI_DATA  0xCFC
@@ -241,6 +242,7 @@ void PciClaim(const PciDevice *d, const char *driver)
     for (int i = 0; i < g_count; i++)
         if (g_devices[i].bus == d->bus && g_devices[i].dev == d->dev && g_devices[i].func == d->func) {
             g_driver[i] = driver;
+            PnpSetDriver(PnpPciNode(d->bus, d->dev, d->func), driver);   /* (its device node: started) */
             return;
         }
 }

@@ -168,6 +168,16 @@ from the App Store does that) and run the program.  Only part of what
 Windows programs use is there yet, so many programs still fail:
 [compatibility.md](compatibility.md) lists the ones known to work.
 
+**Drivers.**  A Windows driver package (an `.inf` with its `.sys` and
+`.cat` files) installs the same three ways: run its setup `.exe` or
+`.msi`, or unzip it and, in the Terminal, run
+`pnputil /add-driver <folder>\*.inf /install`.  `pnputil /enum-drivers`
+lists the packages installed and `pnputil /delete-driver oemN.inf` removes
+one.  The package is kept in the driver store as on Windows, but NovaOS
+runs its devices with its own drivers and does not load Windows
+kernel-mode drivers, so the driver itself does not start: `pnputil`
+reports that no device took it.
+
 ## Your files
 
 Drive C: holds your files and the programs you install.  On an installed

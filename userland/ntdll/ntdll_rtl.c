@@ -1128,10 +1128,12 @@ NTSYSAPI NTSTATUS NTAPI NtQuerySystemInformation(ULONG cls, PVOID buf, ULONG len
             img->Buffer = w;
             if (sizeof(PVOID) == 8) {
                 *(ULONG_PTR *)(p + 0x50) = list[i].Pid;              /* UniqueProcessId */
+                *(ULONG_PTR *)(p + 0x58) = list[i].ParentPid;        /* InheritedFromUniqueProcessId */
                 *(ULONG_PTR *)(p + 0x68) = (ULONG_PTR)list[i].MemoryKb * 1024;  /* PeakVirtualSize... */
                 *(ULONG_PTR *)(p + 0x90) = (ULONG_PTR)list[i].MemoryKb * 1024;  /* WorkingSetSize */
             } else {
                 *(ULONG_PTR *)(p + 0x44) = list[i].Pid;
+                *(ULONG_PTR *)(p + 0x48) = list[i].ParentPid;
                 *(ULONG_PTR *)(p + 0x6C) = (ULONG_PTR)list[i].MemoryKb * 1024;
             }
             if (last) *(ULONG *)last = (ULONG)(p - last);           /* NextEntryOffset */

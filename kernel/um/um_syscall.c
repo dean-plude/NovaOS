@@ -2411,7 +2411,7 @@ static UINT64 sys_nova_process_info(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 }
 
 /* NtNovaProcessList(NOVA_PROCESS_ENTRY *Buffer, ULONG Max, PULONG Count):
- * { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32] } per program */
+ * { ULONG Pid, MemoryKb, Threads, Exited; CHAR Name[32]; ULONG ParentPid } per program */
 static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
@@ -2421,7 +2421,7 @@ static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     int n = UmList(list, UM_MAX_PROCS);
     UINT32 st = ST_SUCCESS;
     for (int i = 0; i < n && (UINT64)i < a2; i++) {
-        UINT8 e[48];
+        UINT8 e[52];
         memset(e, 0, sizeof(e));
         memcpy(e, &list[i].pid, 4);
         memcpy(e + 4, &list[i].mem_kb, 4);
@@ -2429,7 +2429,8 @@ static UINT64 sys_nova_process_list(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT32 ex = list[i].exited;
         memcpy(e + 12, &ex, 4);
         memcpy(e + 16, list[i].name, 31);
-        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a1 + 48 * (UINT64)i), e, 48))) { st = UM_STATUS_ACCESS_VIOLATION; break; }
+        memcpy(e + 48, &list[i].parent_pid, 4);
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a1 + 52 * (UINT64)i), e, 52))) { st = UM_STATUS_ACCESS_VIOLATION; break; }
     }
     um_unlock(&lk);
     UINT32 cnt = (UINT32)n;

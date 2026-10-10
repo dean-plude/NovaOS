@@ -265,6 +265,7 @@ static void cmd_help(Term *t)
         "  update [install]    check for a newer NovaOS (and install it)\n"
         "  update channel [url]  where updates come from\n"
         "  ipconfig            show the network configuration\n"
+        "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
         "  wget <url> [url...] download web pages to C:\\Downloads\n"
@@ -751,6 +752,128 @@ static void cmd_ipconfig(Term *t)
         tprintf(t, first ? "   DNS Servers . . . . : %s" : "                         %s", ds);
         first = false;
     }
+}
+
+/* netsh interface ipv4 set address|dnsservers, add dnsservers, show config:
+ * the manual settings Settings > Network edits (net.h NetSetConfig) */
+static const char *netsh_value(char *a, const char *key)
+{
+    char *eq = strchr(a, '=');
+    if (!eq) return NULL;
+    *eq = '\0';
+    if (!is(a, key)) { *eq = '='; return NULL; }
+    char *v = eq + 1;
+    size_t n = strlen(v);
+    if (n >= 2 && v[0] == '"' && v[n - 1] == '"') { v[n - 1] = '\0'; v++; }
+    return v;
+}
+
+static void netsh_show(Term *t)
+{
+    NetStatus st;
+    NetConfig c;
+    NetGetStatus(&st);
+    NetGetConfig(&c);
+    char a[16], m[16], g[16];
+    tprint(t, "\nConfiguration for interface \"Ethernet\"");
+    tprintf(t, "    DHCP enabled:                         %s", c.manual_ip ? "No" : "Yes");
+    if (st.configured) {
+        ip_str(st.ip, a); ip_str(st.mask, m); ip_str(st.gw, g);
+        tprintf(t, "    IP Address:                           %s", a);
+        tprintf(t, "    Subnet Mask:                          %s", m);
+        if (st.gw) tprintf(t, "    Default Gateway:                      %s", g);
+    }
+    bool first = true;
+    for (int i = 0; i < 2; i++) {
+        if (!st.dns[i]) continue;
+        ip_str(st.dns[i], a);
+        if (first) tprintf(t, "    %s%s", c.manual_dns ? "Statically Configured DNS Servers:    " :
+                                                       "DNS servers configured through DHCP:  ", a);
+        else tprintf(t, "                                          %s", a);
+        first = false;
+    }
+    if (first) tprintf(t, "    %sNone", c.manual_dns || c.manual_ip ? "Statically Configured DNS Servers:    " :
+                                                                      "DNS servers configured through DHCP:  ");
+}
+
+static void cmd_netsh(Term *t, int argc, char **argv)
+{
+    static const char usage[] =
+        "Usage: netsh interface ipv4 set address [name=]Ethernet [source=]dhcp\n"
+        "       netsh interface ipv4 set address [name=]Ethernet [source=]static [address=]IP [mask=]MASK [[gateway=]IP]\n"
+        "       netsh interface ipv4 set dnsservers [name=]Ethernet [source=]dhcp | static [address=]IP\n"
+        "       netsh interface ipv4 add dnsservers [name=]Ethernet [address=]IP [index=2]\n"
+        "       netsh interface ipv4 show config";
+    if (argc < 4 || !(is(argv[1], "interface") || is(argv[1], "int")) ||
+        !(is(argv[2], "ipv4") || is(argv[2], "ip"))) { terr(t, usage); return; }
+    if (is(argv[3], "show")) { netsh_show(t); return; }
+    if (argc < 5 || !(is(argv[3], "set") || is(argv[3], "add"))) { terr(t, usage); return; }
+    bool add = is(argv[3], "add"), dns = is(argv[4], "dnsservers") || is(argv[4], "dns");
+    if (!dns && (add || !is(argv[4], "address"))) { terr(t, usage); return; }
+
+    /* positional or name=value, in netsh's order */
+    static const char *const addr_keys[] = { "name", "source", "address", "mask", "gateway", "gwmetric" };
+    static const char *const dns_keys[]  = { "name", "source", "address", "register", "validate" };
+    static const char *const add_keys[]  = { "name", "address", "index", "validate" };
+    const char *const *keys = add ? add_keys : dns ? dns_keys : addr_keys;
+    int nkeys = add ? 4 : dns ? 5 : 6, next = 0;
+    const char *val[6] = { 0 };
+    for (int i = 5; i < argc; i++) {
+        const char *v = NULL;
+        int k;
+        for (k = 0; k < nkeys && !v; k++) v = netsh_value(argv[i], keys[k]);
+        if (v) { val[k - 1] = v; continue; }
+        if (strchr(argv[i], '=')) { tprintf(t, "The following command was not found: %s", argv[i]); return; }
+        if (next >= nkeys) { terr(t, usage); return; }
+        while (next < nkeys && val[next]) next++;
+        /* "static 10.0.0.2 ..." with the name left out */
+        if (next == 0 && (is(argv[i], "dhcp") || is(argv[i], "static")) && !add) next = 1;
+        if (next < nkeys) val[next++] = argv[i];
+    }
+    if (val[0] && !is(val[0], "Ethernet")) {
+        tprintf(t, "The interface \"%s\" was not found; this PC's adapter is \"Ethernet\".", val[0]);
+        return;
+    }
+    NetConfig c;
+    NetGetConfig(&c);
+    UINT32 ip = 0;
+    if (add) {
+        const char *a = val[1];
+        if (!a || !NetParseIp(a, &ip)) { terr(t, "The DNS server address is not valid."); return; }
+        if (!c.manual_dns) { c.manual_dns = true; c.dns[0] = c.dns[1] = 0; }
+        int index = val[2] && val[2][0] >= '0' && val[2][0] <= '9' && !val[2][1] ? val[2][0] - '0' : 0;
+        if (index == 1) { c.dns[1] = c.dns[0]; c.dns[0] = ip; }
+        else if (!c.dns[0]) c.dns[0] = ip;
+        else c.dns[1] = ip;
+    } else {
+        const char *src = val[1];
+        bool dhcp = src && is(src, "dhcp");
+        if (!src || (!dhcp && !is(src, "static"))) { terr(t, usage); return; }
+        if (dns) {
+            c.manual_dns = !dhcp;
+            c.dns[0] = c.dns[1] = 0;
+            if (!dhcp) {
+                if (!val[2] || (!is(val[2], "none") && !NetParseIp(val[2], &c.dns[0]))) {
+                    terr(t, "The DNS server address is not valid.");
+                    return;
+                }
+                if (is(val[2], "none")) c.manual_dns = c.manual_ip;   /* (manual address: no DNS) */
+            }
+        } else if (dhcp) {
+            c.manual_ip = false;
+        } else {
+            c.manual_ip = true;
+            if (!val[2] || !NetParseIp(val[2], &c.ip)) { terr(t, "The IP address is not valid."); return; }
+            if (!val[3] || !NetParseIp(val[3], &c.mask)) { terr(t, "The subnet mask is not valid."); return; }
+            c.gw = 0;
+            if (val[4] && !is(val[4], "none") && !NetParseIp(val[4], &c.gw)) {
+                terr(t, "The gateway address is not valid.");
+                return;
+            }
+        }
+    }
+    char err[96];
+    if (!NetSetConfig(&c, err, sizeof(err))) terr(t, err);
 }
 
 static bool g_marked;          /* this command's end was marked already */
@@ -1798,6 +1921,7 @@ static void run_cmd_line(Term *t, char *cmdline, const char *original)
         }
     }
     else if (is(c, "ipconfig") || is(c, "ifconfig")) cmd_ipconfig(t);
+    else if (is(c, "netsh"))                    cmd_netsh(t, argc, argv);
     else if (is(c, "ping"))                     cmd_ping(t, argc, argv);
     else if (is(c, "nslookup"))                 cmd_nslookup(t, a1);
     else if (is(c, "wget"))                     cmd_fetch(t, argc, argv, true);

@@ -67,7 +67,7 @@ results; until then they are kept by hand.
 | **Microsoft Build of OpenJDK 21** (App Store) | Untested | Temurin 21 (above) works | — |
 | **OpenTTD 15.3** (App Store; free on GOG; the corpus installs OpenTTD's own Windows installer, as GOG's copy needs an account to download) | Works | Its setup program installs it silently (run as administrator, as its manifest asks); with the OpenGFX graphics it reaches its main menu, and its animated title game plays, drawn in software (no hardware acceleration yet) | nightly corpus |
 | **GOG GALAXY 2.1** (offline installer, Inno Setup 6) | Partly | Its setup program runs elevated, through its wizard or silently (`/VERYSILENT`), installs the Visual C++ runtimes it carries (x86 and x64), copies GOG GALAXY's files and makes its shortcuts; the client starts (`GalaxyClient.exe`, 64-bit, Qt 6 WebEngine: every import resolves, 89 modules, and the Windows Runtime `UISettings` its Qt plugin reads the theme from), installs and starts its service (`GalaxyClientService.exe`, which trusts the client and answers its requests over 127.0.0.1:9978), opens its window and warns that drive C: is not NTFS; past that warning it finishes initialising, opens its sign-in window and starts its first Chromium renderer (`QtWebEngineProcess.exe`), which needs the App Store's Mesa 3D (Qt then draws with its OpenGL; without it Qt ends the client: "Could not get handle for shared context") and DXVK (Chromium's Direct3D 11, through ANGLE); with both, Chromium shares its Direct3D 11 textures and fences with Qt (on lavapipe NovaOS's Vulkan loader provides the sharing), ANGLE compiles its shaders with NovaOS's HLSL compiler, and the sign-in window loads GOG's sign-in page (`login.gog.com`) over HTTPS, its certificate checked against the Windows root stores as Chromium reads them; the page draws, then shows "Oops! Something went wrong" with a Log in button, because the client's own requests through Qt's Schannel backend (`cfg.gog.com`'s configuration) still end with "Connection closed". Setup warns that drive C: is not NTFS (answer Yes) | by hand |
-| **Steam** (App Store, the current client) | Partly | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes but does not open the login window yet ([Steam](#steam)). Signing in and games are unchecked | nightly corpus (install and update) |
+| **Steam** (App Store, the current client) | Partly | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes and Steam accepts its UI connection; the login window is not checked yet ([Steam](#steam)). Signing in and games are unchecked | nightly corpus (install and update) |
 | **Chocolate Doom 3.1.0** (32-bit, SDL2) with **Freedoom** | Works | Plays in a window on Mesa 3D's OpenGL (install "Mesa 3D" from the App Store first) in the right colours; an Xbox or HID game pad walks, turns and fires | by hand in QEMU; graphics self-test `gltest colors` |
 | **Beneath a Steel Sky** on **ScummVM 2026.3** (App Store; free on GOG, which ships it with ScummVM; the corpus takes the freeware floppy release Revolution and ScummVM publish, as GOG's copy needs an account to download) | Works | ScummVM's setup program (Inno Setup, 32-bit, installing the 64-bit ScummVM) installs it silently or through its wizard; the game starts, Esc skips the intro and a click walks Robert Foster along the first scene's gantry. ScummVM draws with OpenGL 1.1, NovaOS's own when no OpenGL driver is installed; sound not checked yet (the corpus runs without a sound card) | nightly corpus |
 | **Teeworlds 0.7.5** (App Store; free and open source, SDL2) | Partly | Installs from the App Store and starts in full screen on Mesa 3D's OpenGL (install "Mesa 3D" first: it needs OpenGL 1.2), plays its menu music through the sound card and goes through its first-start questions to its start menu with the keyboard, and its menus follow the mouse with its default settings (SDL reads the pointer's moves and recentres it with `SetCursorPos`; with `inp_grab 1` it reads Raw Input instead; the corpus opens Settings with a click). Joining a game on its own server times out without KVM, while Mesa compiles its shaders | nightly corpus |
@@ -273,10 +273,16 @@ NovaOS's kernel did not support, it hands sockets between processes with
 on a check that a file handle it passes to a child is read-only
 (`NtQueryObject` reported every handle as holding all rights).  All three
 are fixed; the browser no longer stops, and about half an hour in Steam
-opens its first window of its own, an "Unexpected Transport Error"
-dialog, drawn by the browser but with its text missing.  Its network
-process still ends and restarts every minute or two, which is the next
-thing to find.
+opened its first window of its own, an "Unexpected Transport Error"
+dialog.  Its text now draws (DirectWrite's GDI interop,
+`CreateBitmapRenderTarget`), the page's websocket to `steam.exe` falls
+back from `::1` to `127.0.0.1` the way it does on Windows, and Steam
+accepts the connection: it checks that the connecting program is its
+browser or one of the browser's child processes through the Tool Help
+snapshot's parent process ids, which NovaOS used to report as 0.  The UI
+now logs "WebUITransportStore: Connection status: connected" and starts
+its login stores within about two minutes of the browser starting.
+Whether the login window itself appears is the next thing to check.
 What is known to be missing on the way, each a NovaOS gap and none a
 reason to change Steam:
 
@@ -310,8 +316,6 @@ reason to change Steam:
   tables were sized for a small device; see `loadtest`.)
   Chromium's network change and DNS watchers do not start
   (`WSALookupServiceBegin` has no providers, error 10108).
-- DirectWrite's GDI interop (`CreateBitmapRenderTarget`), which Chromium
-  draws text with.
 - The "Thread creation failed" messages `steam.exe` logged once under
   load did not come back in about three hours of runs; NovaOS logs a
   refused thread (`no new thread`) and never did.

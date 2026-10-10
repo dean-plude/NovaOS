@@ -14,6 +14,9 @@ UmProcess *UmCurrent(void) { return &fake; }
 bool um_stopping(void) { return stopping; }
 void um_lock(UmLock *l) { (void)l; }
 void um_unlock(UmLock *l) { (void)l; }
+KSpinLock g_um_oblock;                      /* (pseudo-console output objects: none here) */
+void smp_poll_tlb(void) {}
+void um_ob_wake(UmObject *o) { (void)o; }
 void sched_wait(void) { waits++; drain->out_tail = drain->out_head; }
 int ksnprintf(char *b, size_t n, const char *f, ...) {
     va_list v; va_start(v,f); int k=vsnprintf(b,n,f,v); va_end(v); return k;

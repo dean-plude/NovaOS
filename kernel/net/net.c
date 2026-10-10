@@ -50,7 +50,6 @@
 static struct netif     g_netif;
 static bool             g_up;
 static bool             g_link;
-static u32_t             g_dhcp6_timer;
 static volatile int     g_lock;
 static NetOp            g_ops[NET_OPS];
 static struct raw_pcb  *g_ping_pcb, *g_ping6_pcb;
@@ -574,10 +573,6 @@ static void net_thread(void *arg)
         bool busy = got;
         for (int i = 0; i < NET_OPS && !busy; i++) busy = g_ops[i].in_use;
         sys_check_timeouts();
-        if ((u32_t)(sys_now() - g_dhcp6_timer) >= DHCP6_TIMER_MSECS) {
-            dhcp6_tmr();
-            g_dhcp6_timer = sys_now();
-        }
         check_timeouts();
         http_poll();
         if (!announced && dhcp_supplied_address(&g_netif)) {

@@ -31,7 +31,7 @@ MY_LL = bytes.fromhex('fe800000000000000000000000000001')
 MY_GL = PREFIX + bytes.fromhex('0000000000000001')
 DHCP6_DNS = PREFIX + bytes.fromhex('0000000000000002')
 ALL_NODES = bytes.fromhex('ff020000000000000000000000000001')
-ALL_DHCP6 = bytes.fromhex('ff020000000000000000000100000002')
+ALL_DHCP6 = bytes.fromhex('ff020000000000000000000000010002')   # ff02::1:2
 NAME = 'nova6.test'
 PAGE = (b'<html><body><h1>Hello over IPv6</h1>'
         b'<p>Served by the NovaOS test peer (tools/v6peer.py).</p></body></html>\n')

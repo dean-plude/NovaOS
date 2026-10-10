@@ -482,7 +482,14 @@ dhcp6_information_request(struct netif *netif, struct dhcp6 *dhcp6)
     err = udp_sendto_if(dhcp6_pcb, p_out, &dhcp6_All_DHCP6_Relay_Agents_and_Servers, DHCP6_SERVER_PORT, netif);
     pbuf_free(p_out);
     LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_STATE, ("dhcp6_information_request: INFOREQUESTING -> %d\n", (int)err));
-    LWIP_UNUSED_ARG(err);
+    if (err == ERR_RTE) {
+      /* NovaOS: no usable source address yet (the link-local address is
+       * still tentative while DAD runs): nothing was sent, so try again on
+       * the next timer tick instead of backing off */
+      dhcp6_set_state(dhcp6, DHCP6_STATE_REQUESTING_CONFIG, "dhcp6_information_request");
+      dhcp6->request_timeout = 1;
+      return;
+    }
   } else {
     LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_SERIOUS, ("dhcp6_information_request: could not allocate DHCP6 request\n"));
   }

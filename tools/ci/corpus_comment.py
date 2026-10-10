@@ -59,6 +59,12 @@ def job_result(needs, name):
     return job.get('result', 'missing') if isinstance(job, dict) else 'missing'
 
 
+def corpus_ran(needs):
+    gate = needs.get('gate') if isinstance(needs, dict) else None
+    outputs = gate.get('outputs') if isinstance(gate, dict) else None
+    return isinstance(outputs, dict) and outputs.get('run') == 'true'
+
+
 def make_comment(root, matrix, needs, repository, ref, sha, run_id):
     if not isinstance(needs, dict):
         needs = {}
@@ -147,6 +153,11 @@ def main():
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
             summary.write(body)
+    if not corpus_ran(needs):
+        # The gate skips a sha it already tested, several times a day:
+        # nothing new to tell the issue.
+        print('corpus did not run: no issue comment')
+        return 0
     post_comment(os.environ['GITHUB_REPOSITORY'], os.environ['CORPUS_ISSUE'],
                  os.environ['GH_TOKEN'], body)
     return 0

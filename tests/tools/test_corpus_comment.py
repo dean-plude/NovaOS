@@ -69,6 +69,19 @@ class CorpusCommentTests(unittest.TestCase):
         self.assertIn('no corpus execution', body)
         self.assertIn('SMP stress did not run', body)
 
+    def test_gate_skip_posts_no_issue_comment(self):
+        needs = {'gate': {'result': 'success', 'outputs': {'run': 'false'}}}
+        env = {'EVENT': 'schedule', 'NEEDS_JSON': json.dumps(needs), 'CORPUS_MATRIX': '[]',
+               'GITHUB_REPOSITORY': 'dean-plude/os', 'GITHUB_REF_NAME': 'main',
+               'GITHUB_SHA': 'abcdef123', 'GITHUB_RUN_ID': '42', 'CORPUS_ISSUE': '210',
+               'GH_TOKEN': 'token'}
+        with patch.dict('os.environ', env, clear=True), \
+             patch.object(sys, 'argv', ['corpus_comment.py', str(self.root)]), \
+             patch.object(corpus_comment, 'post_comment') as post:
+            self.assertEqual(corpus_comment.main(), 0)
+        post.assert_not_called()
+        self.assertTrue(corpus_comment.corpus_ran({'gate': {'outputs': {'run': 'true'}}}))
+
     def test_missing_workflow_context_fails_closed_in_report(self):
         body = corpus_comment.make_comment(self.root, None, None,
                                            'dean-plude/os', 'main', 'abcdef123', '42')

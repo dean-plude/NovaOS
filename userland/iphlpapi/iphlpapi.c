@@ -1,11 +1,14 @@
 /*
  * iphlpapi.dll — IP helper: the host's network parameters and tables.
  *
- * GetNetworkParams gives the computer's name (no DNS domain).  The
- * adapter tables are empty: programs find no interfaces to list, the
- * answer Windows gives on a machine without IP configured.  The TCP
- * connection tables are real (the kernel's sockets, with the process that
- * owns each): a local server finds which process is calling it this way.
+ * GetNetworkParams gives the computer's name (no DNS domain) and its DNS
+ * servers.  The adapter tables (GetAdaptersAddresses, GetAdaptersInfo,
+ * GetIpAddrTable) list the network adapter with its addresses, gateway and
+ * DNS servers, from the kernel (NtNovaSockCtl op 16); without an adapter
+ * they are empty, as Windows answers on a machine without IP configured.
+ * The TCP connection tables are real (the kernel's sockets, with the
+ * process that owns each): a local server finds which process is calling
+ * it this way.
  */
 #include <windows.h>
 #include <winternl.h>
@@ -17,6 +20,8 @@
 #define NO_ERROR 0
 #endif
 #define ERROR_INVALID_DATA_ 13
+#define AF_INET_  2
+#define AF_INET6_ 23
 
 typedef struct IP_ADDR_STRING_ { struct IP_ADDR_STRING_ *Next; char IpAddress[16], IpMask[16]; DWORD Context; } IP_ADDR_STRING_;
 typedef struct {
@@ -32,27 +37,373 @@ void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
 
+/* The adapter, as the kernel reports it (kernel/um/um_socket.c NetAdapterInfo) */
+typedef struct {
+    DWORD flags;                        /* bit 0 configured, 1 link, 2 present, 3 IPv4 by DHCP */
+    DWORD if_index;
+    BYTE  mac[6], ip6_count, dns_count;
+    DWORD ip, mask, gw;                 /* network byte order */
+    BYTE  ip6[3][16];
+    BYTE  ip6_preferred[3];
+    BYTE  dns_v6[3];
+    BYTE  dns[3][16];
+    char  adapter[64];
+} KAdapter;
+
+/* FALSE: no adapter */
+static BOOL adapter(KAdapter *a)
+{
+    memset(a, 0, sizeof(*a));
+    return NtNovaSockCtl(0, 16, 0, a) == (LONG_PTR)sizeof(*a) && (a->flags & 4);
+}
+
+static char *put_dec(char *o, unsigned v)
+{
+    if (v >= 10) o = put_dec(o, v / 10);
+    *o++ = (char)('0' + v % 10);
+    return o;
+}
+
+static void ip_text(DWORD be, char out[16])
+{
+    const BYTE *b = (const BYTE *)&be;
+    char *o = out;
+    for (int i = 0; i < 4; i++) {
+        o = put_dec(o, b[i]);
+        *o++ = i < 3 ? '.' : 0;
+    }
+}
+
 IPHLPAPI DWORD WINAPI GetNetworkParams(FIXED_INFO_ *info, PULONG size)
 {
     if (!size) return ERROR_INVALID_PARAMETER;
-    if (!info || *size < sizeof(FIXED_INFO_)) { *size = sizeof(FIXED_INFO_); return ERROR_BUFFER_OVERFLOW_; }
-    memset(info, 0, sizeof(*info));
+    KAdapter a;
+    DWORD dns[3], n4 = 0;
+    if (adapter(&a))
+        for (int i = 0; i < a.dns_count; i++)
+            if (!a.dns_v6[i]) memcpy(&dns[n4++], a.dns[i], 4);
+    ULONG need = sizeof(FIXED_INFO_) + (n4 > 1 ? n4 - 1 : 0) * sizeof(IP_ADDR_STRING_);
+    if (!info || *size < need) { *size = need; return ERROR_BUFFER_OVERFLOW_; }
+    memset(info, 0, need);
     DWORD n = sizeof(info->HostName);
     if (!GetComputerNameA(info->HostName, &n)) lstrcpyA(info->HostName, "NOVA-PC");
     info->NodeType = 1;                                  /* BROADCAST */
+    IP_ADDR_STRING_ *more = (IP_ADDR_STRING_ *)(info + 1);
+    for (DWORD i = 0; i < n4; i++) {
+        IP_ADDR_STRING_ *e = i ? &more[i - 1] : &info->DnsServerList;
+        ip_text(dns[i], e->IpAddress);
+        lstrcpyA(e->IpMask, "255.255.255.255");
+        if (i + 1 < n4) e->Next = &more[i];
+    }
+    if (n4) info->CurrentDnsServer = &info->DnsServerList;
     return NO_ERROR;
 }
 
-/* No adapters, addresses or connections to report */
+/* -----------------------------------------------------------------------
+ * GetAdaptersAddresses: IP_ADAPTER_ADDRESSES (the LH layout) and the
+ * lists it points to, all in the caller's buffer
+ * ----------------------------------------------------------------------- */
+typedef struct { USHORT family, port; DWORD addr; BYTE zero[8]; } Sin;
+typedef struct { USHORT family, port; DWORD flowinfo; BYTE addr[16]; DWORD scope; } Sin6;
+typedef struct { void *lpSockaddr; INT iSockaddrLength; } SockAddr;
+
+typedef struct Unicast_ {
+    union { ULONGLONG Alignment; struct { ULONG Length; DWORD Flags; }; };
+    struct Unicast_ *Next;
+    SockAddr Address;
+    int PrefixOrigin, SuffixOrigin, DadState;
+    ULONG ValidLifetime, PreferredLifetime, LeaseLifetime;
+    UINT8 OnLinkPrefixLength;
+} Unicast;
+
+/* the DNS server, gateway, anycast and multicast entries */
+typedef struct Addr_ {
+    union { ULONGLONG Alignment; struct { ULONG Length; DWORD Reserved; }; };
+    struct Addr_ *Next;
+    SockAddr Address;
+} Addr;
+
+typedef struct Prefix_ {
+    union { ULONGLONG Alignment; struct { ULONG Length; DWORD Flags; }; };
+    struct Prefix_ *Next;
+    SockAddr Address;
+    ULONG PrefixLength;
+} Prefix;
+
+typedef struct Adapter_ {
+    union { ULONGLONG Alignment; struct { ULONG Length; DWORD IfIndex; }; };
+    struct Adapter_ *Next;
+    char *AdapterName;
+    Unicast *FirstUnicastAddress;
+    Addr *FirstAnycastAddress, *FirstMulticastAddress, *FirstDnsServerAddress;
+    WCHAR *DnsSuffix, *Description, *FriendlyName;
+    BYTE PhysicalAddress[8];
+    ULONG PhysicalAddressLength;
+    ULONG Flags;
+    ULONG Mtu;
+    ULONG IfType;
+    int OperStatus;
+    DWORD Ipv6IfIndex;
+    ULONG ZoneIndices[16];
+    Prefix *FirstPrefix;
+    ULONG64 TransmitLinkSpeed, ReceiveLinkSpeed;
+    Addr *FirstWinsServerAddress, *FirstGatewayAddress;
+    ULONG Ipv4Metric, Ipv6Metric;
+    ULONG64 Luid;
+    SockAddr Dhcpv4Server;
+    ULONG CompartmentId;
+    GUID NetworkGuid;
+    int ConnectionType, TunnelType;
+    SockAddr Dhcpv6Server;
+    BYTE Dhcpv6ClientDuid[130];
+    ULONG Dhcpv6ClientDuidLength, Dhcpv6Iaid;
+    void *FirstDnsSuffix;
+} Adapter;
+
+#define AF_UNSPEC_ 0
+#define GAA_FLAG_SKIP_UNICAST_      0x1
+#define GAA_FLAG_SKIP_ANYCAST_      0x2
+#define GAA_FLAG_SKIP_MULTICAST_    0x4
+#define GAA_FLAG_SKIP_DNS_SERVER_   0x8
+#define GAA_FLAG_INCLUDE_PREFIX_    0x10
+#define GAA_FLAG_SKIP_FRIENDLY_NAME_ 0x20
+#define GAA_FLAG_INCLUDE_GATEWAYS_  0x80
+
+/* bump allocation in the caller's buffer (or just counting, when @base is NULL) */
+typedef struct { BYTE *base; ULONG used; } Arena;
+static void *take(Arena *ar, ULONG n)
+{
+    ULONG at = (ar->used + 7) & ~7u;
+    ar->used = at + n;
+    return ar->base ? memset(ar->base + at, 0, n) : NULL;
+}
+static WCHAR *wstr(Arena *ar, const char *s)
+{
+    ULONG n = (ULONG)lstrlenA(s) + 1;
+    WCHAR *w = take(ar, n * sizeof(WCHAR));
+    for (ULONG i = 0; w && i < n; i++) w[i] = (BYTE)s[i];
+    return w;
+}
+static SockAddr sockaddr(Arena *ar, BOOL v6, const BYTE *a, DWORD scope)
+{
+    SockAddr r = { take(ar, v6 ? sizeof(Sin6) : sizeof(Sin)), v6 ? sizeof(Sin6) : sizeof(Sin) };
+    if (r.lpSockaddr && v6) {
+        Sin6 *s = r.lpSockaddr;
+        s->family = AF_INET6_;
+        memcpy(s->addr, a, 16);
+        s->scope = scope;
+    } else if (r.lpSockaddr) {
+        Sin *s = r.lpSockaddr;
+        s->family = AF_INET_;
+        memcpy(&s->addr, a, 4);
+    }
+    return r;
+}
+static int mask_bits(DWORD be)
+{
+    int n = 0;
+    for (const BYTE *b = (const BYTE *)&be, *e = b + 4; b < e; b++)
+        for (int i = 7; i >= 0 && (*b >> i & 1); i--) n++;
+    return n;
+}
+static BOOL link_local6(const BYTE *a) { return a[0] == 0xFE && (a[1] & 0xC0) == 0x80; }
+
+/* The adapter's name: a GUID made from its MAC, as Windows names adapters by GUID */
+static void adapter_guid(const KAdapter *k, char out[40])
+{
+    static const char hex[] = "0123456789ABCDEF";
+    lstrcpyA(out, "{4E4F5641-0000-4000-8000-");
+    char *o = out + lstrlenA(out);
+    for (int i = 0; i < 6; i++) { *o++ = hex[k->mac[i] >> 4]; *o++ = hex[k->mac[i] & 15]; }
+    *o++ = '}';
+    *o = 0;
+}
+
+static void build_adapter(Arena *ar, const KAdapter *k, ULONG family, ULONG flags)
+{
+    BOOL want4 = family != AF_INET6_, want6 = family != AF_INET_;
+    BOOL has4 = (k->flags & 1) && k->ip;
+    Adapter *ad = take(ar, sizeof(Adapter));
+    char guid[40];
+    adapter_guid(k, guid);
+    char *name = take(ar, (ULONG)lstrlenA(guid) + 1);
+    if (name) lstrcpyA(name, guid);
+    WCHAR *suffix = wstr(ar, ""), *desc = wstr(ar, k->adapter[0] ? k->adapter : "Ethernet adapter");
+    WCHAR *friendly = wstr(ar, (flags & GAA_FLAG_SKIP_FRIENDLY_NAME_) ? "" : "Ethernet");
+    if (ad) {
+        ad->Length = sizeof(Adapter);
+        ad->IfIndex = want4 ? k->if_index : 0;
+        ad->AdapterName = name;
+        ad->DnsSuffix = suffix;
+        ad->Description = desc;
+        ad->FriendlyName = friendly;
+        memcpy(ad->PhysicalAddress, k->mac, 6);
+        ad->PhysicalAddressLength = 6;
+        ad->Flags = 0x1 | 0x2 | ((k->flags & 8) ? 0x4 : 0) | 0x40 | 0x80 | 0x100;  /* DDNS, suffix, DHCPv4, NetBIOS, IPv4, IPv6 */
+        ad->Mtu = 1500;
+        ad->IfType = 6;                                       /* IF_TYPE_ETHERNET_CSMACD */
+        ad->OperStatus = (k->flags & 2) ? 1 : 2;               /* IfOperStatusUp / Down */
+        ad->Ipv6IfIndex = want6 ? k->if_index : 0;
+        for (int i = 0; i < 16; i++) ad->ZoneIndices[i] = i < 3 ? k->if_index : (i == 14 || i == 15) ? 1 : 0;
+        ad->TransmitLinkSpeed = ad->ReceiveLinkSpeed = (k->flags & 2) ? 1000000000ull : ~0ull;
+        ad->Ipv4Metric = ad->Ipv6Metric = 25;
+        ad->Luid = (6ull << 48) | ((ULONG64)k->if_index << 24);  /* IfType, NetLuidIndex */
+        ad->CompartmentId = 1;
+        ad->ConnectionType = 1;                               /* NET_IF_CONNECTION_DEDICATED */
+        ad->TunnelType = 0;
+    }
+    /* addresses: IPv6 first, then IPv4 (Windows' order) */
+    if (!(flags & GAA_FLAG_SKIP_UNICAST_)) {
+        Unicast **link = ad ? &ad->FirstUnicastAddress : NULL;
+        for (int i = 0; want6 && i < k->ip6_count; i++) {
+            Unicast *u = take(ar, sizeof(Unicast));
+            SockAddr sa = sockaddr(ar, TRUE, k->ip6[i], link_local6(k->ip6[i]) ? k->if_index : 0);
+            if (!u) continue;
+            u->Length = sizeof(Unicast);
+            u->Address = sa;
+            u->PrefixOrigin = link_local6(k->ip6[i]) ? 2 : 3;           /* WellKnown / RouterAdvertisement */
+            u->SuffixOrigin = link_local6(k->ip6[i]) ? 4 : 4;           /* LinkLayerAddress (EUI-64) */
+            u->DadState = k->ip6_preferred[i] ? 4 : 1;                  /* Preferred / Tentative */
+            u->ValidLifetime = u->PreferredLifetime = u->LeaseLifetime = 0xFFFFFFFF;
+            u->OnLinkPrefixLength = 64;
+            *link = u;
+            link = &u->Next;
+        }
+        if (want4 && has4) {
+            Unicast *u = take(ar, sizeof(Unicast));
+            SockAddr sa = sockaddr(ar, FALSE, (const BYTE *)&k->ip, 0);
+            if (u) {
+                u->Length = sizeof(Unicast);
+                u->Flags = 0x2;                                         /* IP_ADAPTER_ADDRESS_DNS_ELIGIBLE */
+                u->Address = sa;
+                u->PrefixOrigin = u->SuffixOrigin = (k->flags & 8) ? 3 : 1;    /* Dhcp / Manual */
+                u->DadState = 4;
+                u->ValidLifetime = u->PreferredLifetime = u->LeaseLifetime = 86400;
+                u->OnLinkPrefixLength = (UINT8)mask_bits(k->mask);
+                *link = u;
+            }
+        }
+    }
+    if (!(flags & GAA_FLAG_SKIP_DNS_SERVER_)) {
+        Addr **link = ad ? &ad->FirstDnsServerAddress : NULL;
+        for (int i = 0; i < k->dns_count; i++) {
+            if (k->dns_v6[i] ? !want6 : !want4) continue;
+            Addr *d = take(ar, sizeof(Addr));
+            SockAddr sa = sockaddr(ar, k->dns_v6[i], k->dns[i], 0);
+            if (!d) continue;
+            d->Length = sizeof(Addr);
+            d->Address = sa;
+            *link = d;
+            link = &d->Next;
+        }
+    }
+    if ((flags & GAA_FLAG_INCLUDE_GATEWAYS_) && want4 && has4 && k->gw) {
+        Addr *g = take(ar, sizeof(Addr));
+        SockAddr sa = sockaddr(ar, FALSE, (const BYTE *)&k->gw, 0);
+        if (g) { g->Length = sizeof(Addr); g->Address = sa; ad->FirstGatewayAddress = g; }
+    }
+    if ((flags & GAA_FLAG_INCLUDE_PREFIX_) && want4 && has4) {
+        /* the subnet, then the address itself (/32), as Windows lists them */
+        DWORD net = k->ip & k->mask;
+        Prefix *p = take(ar, sizeof(Prefix));
+        SockAddr sa = sockaddr(ar, FALSE, (const BYTE *)&net, 0);
+        Prefix *q = take(ar, sizeof(Prefix));
+        SockAddr sb = sockaddr(ar, FALSE, (const BYTE *)&k->ip, 0);
+        if (p && q) {
+            p->Length = q->Length = sizeof(Prefix);
+            p->Address = sa; p->PrefixLength = (ULONG)mask_bits(k->mask);
+            q->Address = sb; q->PrefixLength = 32;
+            p->Next = q;
+            ad->FirstPrefix = p;
+        }
+    }
+}
+
 IPHLPAPI ULONG WINAPI GetAdaptersAddresses(ULONG family, ULONG flags, PVOID reserved, PVOID addrs, PULONG size)
 {
-    (void)family; (void)flags; (void)reserved; (void)addrs;
-    if (!size) return ERROR_INVALID_PARAMETER;
-    return ERROR_NO_DATA_;
+    (void)reserved;
+    if (!size || (family != AF_UNSPEC_ && family != AF_INET_ && family != AF_INET6_)) return ERROR_INVALID_PARAMETER;
+    KAdapter k;
+    if (!adapter(&k)) return ERROR_NO_DATA_;
+    Arena count = { NULL, 0 };
+    build_adapter(&count, &k, family, flags);
+    if (!addrs || *size < count.used) { *size = count.used; return ERROR_BUFFER_OVERFLOW_; }
+    if ((ULONG_PTR)addrs & 7) return ERROR_INVALID_PARAMETER;
+    Arena ar = { addrs, 0 };
+    build_adapter(&ar, &k, family, flags);
+    return NO_ERROR;
 }
-IPHLPAPI DWORD WINAPI GetAdaptersInfo(PVOID info, PULONG size) { (void)info; if (!size) return ERROR_INVALID_PARAMETER; return ERROR_NO_DATA_; }
+
+/* -----------------------------------------------------------------------
+ * GetAdaptersInfo (IPv4) and GetIpAddrTable
+ * ----------------------------------------------------------------------- */
+typedef struct Info_ {
+    struct Info_ *Next;
+    DWORD ComboIndex;
+    char AdapterName[260], Description[132];
+    UINT AddressLength;
+    BYTE Address[8];
+    DWORD Index;
+    UINT Type, DhcpEnabled;
+    IP_ADDR_STRING_ *CurrentIpAddress;
+    IP_ADDR_STRING_ IpAddressList, GatewayList, DhcpServer;
+    BOOL HaveWins;
+    IP_ADDR_STRING_ PrimaryWinsServer, SecondaryWinsServer;
+    LONGLONG LeaseObtained, LeaseExpires;                 /* time_t: 64-bit on both */
+} Info;
+
+IPHLPAPI DWORD WINAPI GetAdaptersInfo(PVOID info, PULONG size)
+{
+    if (!size) return ERROR_INVALID_PARAMETER;
+    KAdapter k;
+    if (!adapter(&k)) return ERROR_NO_DATA_;
+    if (!info || *size < sizeof(Info)) { *size = sizeof(Info); return ERROR_BUFFER_OVERFLOW_; }
+    Info *a = memset(info, 0, sizeof(Info));
+    adapter_guid(&k, a->AdapterName);
+    lstrcpynA(a->Description, k.adapter[0] ? k.adapter : "Ethernet adapter", sizeof(a->Description));
+    a->ComboIndex = a->Index = k.if_index;
+    a->AddressLength = 6;
+    memcpy(a->Address, k.mac, 6);
+    a->Type = 6;                                          /* MIB_IF_TYPE_ETHERNET */
+    a->DhcpEnabled = (k.flags & 8) != 0;
+    BOOL has4 = (k.flags & 1) && k.ip;
+    ip_text(has4 ? k.ip : 0, a->IpAddressList.IpAddress);
+    ip_text(has4 ? k.mask : 0, a->IpAddressList.IpMask);
+    ip_text(has4 ? k.gw : 0, a->GatewayList.IpAddress);
+    ip_text(has4 ? 0xFFFFFFFF : 0, a->GatewayList.IpMask);
+    ip_text(has4 && (k.flags & 8) ? k.gw : 0, a->DhcpServer.IpAddress);   /* (the router: QEMU's DHCP server) */
+    lstrcpyA(a->DhcpServer.IpMask, "255.255.255.255");
+    lstrcpyA(a->PrimaryWinsServer.IpAddress, "0.0.0.0");
+    lstrcpyA(a->SecondaryWinsServer.IpAddress, "0.0.0.0");
+    return NO_ERROR;
+}
+
+typedef struct { DWORD dwAddr, dwIndex, dwMask, dwBCastAddr, dwReasmSize; USHORT unused1, wType; } IpAddrRow;
+
+IPHLPAPI DWORD WINAPI GetIpAddrTable(PVOID t, PULONG size, BOOL order)
+{
+    (void)order;
+    if (!size) return ERROR_INVALID_PARAMETER;
+    KAdapter k;
+    DWORD n = adapter(&k) && (k.flags & 1) && k.ip ? 1 : 0;
+    ULONG need = sizeof(DWORD) + n * sizeof(IpAddrRow);
+    if (!t || *size < need) { *size = need; return ERROR_INSUFFICIENT_BUFFER; }
+    memset(t, 0, need);
+    *(DWORD *)t = n;
+    if (n) {
+        IpAddrRow *r = (IpAddrRow *)((DWORD *)t + 1);
+        r->dwAddr = k.ip;
+        r->dwIndex = k.if_index;
+        r->dwMask = k.mask;
+        r->dwBCastAddr = 1;
+        r->dwReasmSize = 65535;
+        r->wType = (k.flags & 8) ? 0x0005 : 0x0001;          /* MIB_IPADDR_PRIMARY (| MIB_IPADDR_DYNAMIC) */
+    }
+    return NO_ERROR;
+}
+
 IPHLPAPI DWORD WINAPI GetIfEntry(PVOID row) { (void)row; return ERROR_INVALID_DATA_; }
-IPHLPAPI DWORD WINAPI GetNumberOfInterfaces(PDWORD n) { *n = 0; return NO_ERROR; }
+IPHLPAPI DWORD WINAPI GetNumberOfInterfaces(PDWORD n) { KAdapter k; *n = adapter(&k) ? 1 : 0; return NO_ERROR; }
 
 /* An empty MIB table: just its entry count */
 static DWORD empty_table(PVOID table, PULONG size)
@@ -62,7 +413,6 @@ static DWORD empty_table(PVOID table, PULONG size)
     *(DWORD *)table = 0;
     return NO_ERROR;
 }
-IPHLPAPI DWORD WINAPI GetIpAddrTable(PVOID t, PULONG size, BOOL order) { (void)order; return empty_table(t, size); }
 IPHLPAPI DWORD WINAPI GetIpForwardTable(PVOID t, PULONG size, BOOL order) { (void)order; return empty_table(t, size); }
 IPHLPAPI DWORD WINAPI GetUdpTable(PVOID t, PULONG size, BOOL order) { (void)order; return empty_table(t, size); }
 IPHLPAPI DWORD WINAPI GetIfTable(PVOID t, PULONG size, BOOL order) { (void)order; return empty_table(t, size); }
@@ -77,8 +427,6 @@ typedef struct { USHORT family, port; BYTE addr[16]; ULONG scope; } KAddr;
 typedef struct { KAddr local, remote; DWORD state, owner; } KTcpRow;
 
 #define MIB_TCP_STATE_LISTEN_ 2
-#define AF_INET_  2
-#define AF_INET6_ 23
 enum { TCP_BASIC_LISTENER, TCP_BASIC_CONNECTIONS, TCP_BASIC_ALL, TCP_PID_LISTENER, TCP_PID_CONNECTIONS,
        TCP_PID_ALL, TCP_MODULE_LISTENER, TCP_MODULE_CONNECTIONS, TCP_MODULE_ALL };
 

@@ -206,7 +206,46 @@ static UINT64 tcp_table(UINT64 max, UINT64 out)
  *   14 the TCP connection table (no handle; up to arg NetTcpRow rows into
  *   outptr; returns how many there are);
  *   15 the network's state (no handle): bit 0 an address is configured
- *   (DHCP), bit 1 the link is up, bit 2 there is an adapter */
+ *   (DHCP), bit 1 the link is up, bit 2 there is an adapter;
+ *   16 the adapter's configuration (no handle): a NetAdapterInfo into
+ *   outptr (iphlpapi's adapter tables) */
+/* NtNovaSockCtl op 16 (userland/iphlpapi/iphlpapi.c reads the same layout) */
+typedef struct {
+    UINT32 flags;                       /* bit 0 configured, 1 link, 2 present, 3 IPv4 by DHCP */
+    UINT32 if_index;
+    UINT8  mac[6], ip6_count, dns_count;
+    UINT32 ip, mask, gw;                /* network byte order */
+    UINT8  ip6[NET_IP6_MAX][16];
+    UINT8  ip6_preferred[NET_IP6_MAX];
+    UINT8  dns_v6[3];                   /* dns[i] is IPv6 (else IPv4 in its first 4 bytes) */
+    UINT8  dns[3][16];
+    char   adapter[64];
+} NetAdapterInfo;
+
+static UINT64 adapter_info(UINT64 out)
+{
+    NetStatus st;
+    NetGetStatus(&st);
+    NetAdapterInfo a;
+    memset(&a, 0, sizeof(a));
+    a.flags = (st.configured ? 1u : 0u) | (st.link ? 2u : 0u) | (st.present ? 4u : 0u) | (st.manual_ip ? 0u : 8u);
+    a.if_index = st.if_index;
+    memcpy(a.mac, st.mac, 6);
+    a.ip = st.ip; a.mask = st.mask; a.gw = st.gw;
+    a.ip6_count = (UINT8)st.ip6_count;
+    memcpy(a.ip6, st.ip6, sizeof(a.ip6));
+    for (int i = 0; i < NET_IP6_MAX; i++) a.ip6_preferred[i] = st.ip6_preferred[i];
+    static const UINT8 zero[16];
+    for (int i = 0; i < 3; i++) {
+        if (!memcmp(st.dns_all[i].a, zero, 16)) continue;
+        a.dns_v6[a.dns_count] = st.dns_all[i].v6;
+        memcpy(a.dns[a.dns_count++], st.dns_all[i].a, 16);
+    }
+    if (st.adapter) strncpy(a.adapter, st.adapter, sizeof(a.adapter) - 1);
+    if (!out || !NT_SUCCESS(CopyToUser((void *)(uintptr_t)out, &a, sizeof(a)))) return (UINT64)(INT64)-SOCK_EFAULT;
+    return sizeof(a);
+}
+
 static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     /* 6: the network generation (select reads it before looking);
@@ -219,6 +258,7 @@ static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         NetGetStatus(&st);
         return (st.configured ? 1u : 0u) | (st.link ? 2u : 0u) | (st.present ? 4u : 0u);
     }
+    if (a2 == 16) return adapter_info(a4);
     if (a2 == 5) {
         UINT64 ticks = (a4 + 9) / 10;
         if (ticks > 10) ticks = 10;

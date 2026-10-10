@@ -558,7 +558,8 @@ static void move_system_files(const StoreApp *a)
         if (strstr(name, "_icd.") && ends_with(name, ".json")) {   /* a Vulkan driver, as its installer registers it */
             char reg[RAMFS_PATH_MAX];
             ksnprintf(reg, sizeof(reg), "C:%s\\%s", sys, name);
-            um_registry_set_dword("Machine\\SOFTWARE\\Khronos\\Vulkan\\Drivers", reg, 0);
+            um_registry_set_dword(x86 ? "Machine\\SOFTWARE\\WOW6432Node\\Khronos\\Vulkan\\Drivers"   /* 32-bit loaders' view */
+                                      : "Machine\\SOFTWARE\\Khronos\\Vulkan\\Drivers", reg, 0);
         }
     }
     RamNode *top = RamfsResolve(NULL, "\\Programs");

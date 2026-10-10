@@ -189,6 +189,19 @@ int WSAIoctl(SOCKET s, DWORD code, LPVOID in, DWORD inlen, LPVOID out, DWORD out
     }
     case SIO_KEEPALIVE_VALS:
         return complete(s, ov, cr, 0, 0);
+    case FIONREAD: {                              /* Qt's bytesAvailable asks this way */
+        u_long n = 0;
+        if (!out || outlen < sizeof(u_long)) { set_err(WSAEFAULT); return SOCKET_ERROR; }
+        if (ioctlsocket(s, FIONREAD, &n)) return SOCKET_ERROR;
+        *(u_long *)out = n;
+        if (ret) *ret = sizeof(u_long);
+        return complete(s, ov, cr, 0, sizeof(u_long));
+    }
+    case SIOCATMARK:                              /* no urgent (out-of-band) data: always at the mark */
+        if (!out || outlen < sizeof(BOOL)) { set_err(WSAEFAULT); return SOCKET_ERROR; }
+        *(BOOL *)out = TRUE;
+        if (ret) *ret = sizeof(BOOL);
+        return complete(s, ov, cr, 0, sizeof(BOOL));
     case 0x48000022:                              /* SIO_BASE_HANDLE */
     case 0x4800001B:                              /* SIO_BSP_HANDLE */
     case 0x4800001C:                              /* SIO_BSP_HANDLE_SELECT */

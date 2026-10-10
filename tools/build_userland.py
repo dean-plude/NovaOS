@@ -605,6 +605,11 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msitest', 'mk
      os.path.join(out, 'msitest.exe')])
 for n in sorted(os.listdir(msipkg)):
     built.append((f'\\Tests\\Msi\\{n}', os.path.join(msipkg, n)))
+# 3a2a. the driver package the drvtest self-test installs (tools/drivertest/mkdriver.py)
+drvdir = os.path.join(out, 'drivertest')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mkdriver.py'), drvdir])
+for n in sorted(os.listdir(drvdir)):
+    built.append((f'\\Tests\\Driver\\{n}', os.path.join(drvdir, n)))
 # 3a2b. the Authenticode self-test's signed files (authtest.exe), made by
 # tools/authenticode/mktests.py from copies of hello.exe
 authdir = os.path.join(out, 'authenticode')

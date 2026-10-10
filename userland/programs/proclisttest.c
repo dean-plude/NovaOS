@@ -2,7 +2,7 @@
  * command line, as Microsoft Edge Update does before it uninstalls itself
  * (it must not while one of its install workers runs): EnumProcesses, the
  * Tool Help snapshot, OpenProcess, GetProcessImageFileName and
- * QueryDosDevice, QueryFullProcessImageName, GetModuleFileNameEx, the
+ * QueryDosDevice, QueryFullProcessImageName, the snapshot's parent process, GetModuleFileNameEx, the
  * process token's user, ProcessIdToSessionId, IsWow64Process, and the
  * other program's command line read from its PEB with ReadProcessMemory
  * and through NtQueryInformationProcess(ProcessCommandLineInformation).
@@ -167,11 +167,16 @@ static void look_up(const WCHAR *exe, BOOL wow, const WCHAR *tag)
 
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W pe = { sizeof(pe) };
-    BOOL named = FALSE;
+    BOOL named = FALSE, parent = FALSE;
     for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
-        if (pe.th32ProcessID == pi.dwProcessId) named = !_wcsicmp(pe.szExeFile, L"proclisttest.exe");
+        if (pe.th32ProcessID == pi.dwProcessId) {
+            named = !_wcsicmp(pe.szExeFile, L"proclisttest.exe");
+            parent = pe.th32ParentProcessID == GetCurrentProcessId();
+        }
     CloseHandle(snap);
     C("Tool Help names the child", named);
+    /* (Steam accepts its UI transport's client when the client's parent is its browser) */
+    C("Tool Help gives the child's parent", parent);
 
     WCHAR dev[MAX_PATH], path[MAX_PATH], buf[MAX_PATH];
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pi.dwProcessId);

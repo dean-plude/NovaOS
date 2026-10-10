@@ -532,6 +532,34 @@ static void msxml_classes(void)
     }
 }
 
+/* The 32-bit registry view (WOW6432Node) carries its own copy of the
+ * system keys Windows keeps in both views: values (and, @deep, subkeys)
+ * of @src missing from @dst are copied, so later 64-bit changes stay */
+static void mirror_wow(RegKey *src, RegKey *dst, bool deep)
+{
+    if (!src || !dst) return;
+    for (RegValue *v = src->values; v; v = v->next)
+        if (!find_value(dst, v->name, v->nlen)) set_value(dst, v->name, v->nlen, v->type, v->data, v->len);
+    if (!deep) return;
+    for (RegKey *c = src->child; c; c = c->next) {
+        RegKey *d = find_child(dst, c->name, c->nlen);
+        if (!d) d = add_child(dst, c->name, c->nlen, c->vol);
+        mirror_wow(c, d, true);
+    }
+}
+
+static void wow_defaults(void)
+{
+    mirror_wow(kpath("Machine\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", false),
+               kpath("Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion", false), false);
+    mirror_wow(kpath("Machine\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Time Zones", true),
+               kpath("Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Time Zones", true), true);
+    mirror_wow(kpath("Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion", false),
+               kpath("Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion", false), false);
+    kpath("Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", false);
+    kpath("Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall", false);
+}
+
 static void defaults(void)
 {
     /* HKLM\SOFTWARE */
@@ -661,6 +689,7 @@ static void defaults(void)
     }
     time_zones();
     keyboard_layouts();
+    wow_defaults();
     RegKey *nls = kpath("Machine\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", false);
     if (!has_value(nls, "ACP")) { kset_sz(nls, "ACP", "65001", 1); kset_sz(nls, "OEMCP", "65001", 1); }
     kpath("Machine\\SYSTEM\\CurrentControlSet\\Services", false);

@@ -381,15 +381,9 @@ static UINT64 new_handle_access(UmProcess *p, UmObject *o, UINT64 handle_ptr, UI
 {
     UINT32 granted = 0;
     bool known = um_map_access(o->type, access, &granted);
-    UINT64 h = um_handle_new_object(p, o);
+    UINT64 h = um_handle_new_object_access(p, o, known, granted);
     um_ob_unref(o);                                  /* the handle holds it now */
     if (!h) return ST_TOO_MANY_HANDLES;
-    if (known) {
-        um_lock_excl(&p->lock);
-        UmHandle *hd = &p->handles[h / 4 - 1];
-        if (hd->kind == H_OBJECT) { hd->access_known = true; hd->access = granted; }
-        um_unlock_excl(&p->lock);
-    }
     if (!put_handle(handle_ptr, h)) {
         um_close_handle(h);
         return ST_ACCESS_VIOLATION;
@@ -586,7 +580,12 @@ static UINT64 sys_alert_by_tid(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     (void)a2; (void)a3; (void)a4;
     UmProcess *p = UmCurrent();
     UINT64 st = 0xC000000Bu;                                /* STATUS_INVALID_CID */
-    um_lock_excl(&p->lock);
+    /* Shared: the thread table is only read (the alert itself is set under
+     * the object lock).  Taken exclusive, every SRW lock or condition
+     * variable wake-up stopped all the process's handle lookups while it
+     * waited for them to drain: in Firefox's start, the commonest reason
+     * a thread waited on its process's lock. */
+    um_lock_shared(&p->lock);
     for (int i = 0; i < UM_MAX_THREADS; i++) {
         UmThread *t = p->threads[i];
         if (!t || t->tid != (UINT32)a1 || t->exited) continue;
@@ -597,7 +596,7 @@ static UINT64 sys_alert_by_tid(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         st = ST_SUCCESS;
         break;
     }
-    um_unlock_excl(&p->lock);
+    um_unlock_shared(&p->lock);
     return st;
 }
 

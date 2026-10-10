@@ -428,6 +428,9 @@ UINT64     um_stack_arg(int n);                 /* syscall argument n >= 5 */
 UINT64     um_now_100ns(void);                  /* system time (100 ns since 1601) */
 UINT64     um_boot_time_100ns(void);            /* the system time NovaOS started at */
 UINT64     um_handle_new_object(UmProcess *p, UmObject *o);   /* takes a reference; 0 if full */
+/* The same remembering the access it was granted (when @known), set
+ * before the handle can be seen: no second trip through the process lock */
+UINT64     um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32 granted);
 void       um_handles_full(UmProcess *p);  /* @p's handle table is full: say once in the log what holds it */
 UmObject  *um_handle_object(UmProcess *p, UINT64 h, UmObType type);   /* referenced; NULL if bad */
 /* The process a handle names (-1: @self); @ob holds a reference to drop

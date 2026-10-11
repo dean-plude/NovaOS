@@ -121,6 +121,8 @@ enum {
     DISPLAY_STAT_SCREEN,                  /* the desktop's back buffer copied to the screens */
     DISPLAY_STAT_DIRECT_FRAMES,           /* frames shown by direct presentation */
     DISPLAY_STAT_DIRECT_BYTES,            /* ... and the bytes the host wrote into the screen for them */
+    DISPLAY_STAT_DIRECT_US,               /* microseconds programs spent asking for them (in the kernel) */
+    DISPLAY_STAT_DIRECT_LOCK_US,          /* ... of which waiting for the desktop */
     DISPLAY_STATS
 };
 void DisplayStatAdd(int k, UINT64 n);

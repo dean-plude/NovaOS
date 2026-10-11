@@ -73,9 +73,11 @@ static GLuint shader(GLenum kind, const char *src)
 /* The kernel's display counters (NtNovaGpuCtl 14): bytes moved through
  * guest memory to show frames (sent to a virtio GPU's outputs, read back
  * by virgl, window bitmaps drawn by the desktop, its back buffer copied to
- * the screen), frames shown by direct presentation and the bytes the host
- * wrote into the screen for them; false if none */
-enum { ST_TO_HOST, ST_FROM_HOST, ST_PAINTED, ST_SCREEN, ST_DIRECT, ST_DIRECT_BYTES, ST_N };
+ * the screen), frames shown by direct presentation, the bytes the host
+ * wrote into the screen for them, and the microseconds programs spent
+ * asking for them (and waiting for the desktop meanwhile); false if none */
+enum { ST_TO_HOST, ST_FROM_HOST, ST_PAINTED, ST_SCREEN, ST_DIRECT, ST_DIRECT_BYTES, ST_DIRECT_US, ST_DIRECT_LOCK_US,
+       ST_N };
 typedef LONG_PTR(NTAPI *PFN_NtNovaGpuCtl)(INT_PTR, ULONG, ULONG_PTR, void *);
 static int gpu_stats(unsigned long long st[ST_N])
 {
@@ -117,8 +119,10 @@ static void pump(void)
 }
 
 /* The child: draw the scene for @secs seconds; prints "fps-result
- * RENDERER|FRAMES|MS|DIRECT|BYTES": DIRECT of the frames shown from the
- * host, BYTES moved through guest memory meanwhile */
+ * RENDERER|FRAMES|MS|DIRECT|BYTES|SWAP|ASK|LOCK": DIRECT of the frames
+ * shown from the host, BYTES moved through guest memory meanwhile, and
+ * microseconds in SwapBuffers, in the kernel's direct presentation and
+ * waiting there for the desktop */
 static int fps_child(int secs)
 {
     HDC dc;
@@ -134,6 +138,9 @@ static int fps_child(int secs)
     glOrtho(0, FPS_W, FPS_H, 0, -1, 1);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    LARGE_INTEGER qf;
+    QueryPerformanceFrequency(&qf);
+    long long swap = 0;
     DWORD t0 = GetTickCount(), frames = 0;
     while (GetTickCount() - t0 < (DWORD)secs * 1000) {
         pump();
@@ -147,19 +154,29 @@ static int fps_child(int secs)
             glVertex2f(FPS_W - 8 + x0, FPS_H - 8 + y0); glVertex2f(x0, FPS_H - 8 + y0);
         }
         glEnd();
+        LARGE_INTEGER a, b;
+        QueryPerformanceCounter(&a);
         if (!SwapBuffers(dc)) { printf("FAIL SwapBuffers\n"); return 1; }
+        QueryPerformanceCounter(&b);
+        swap += b.QuadPart - a.QuadPart;
         frames++;
     }
     glFinish();
     DWORD ms = GetTickCount() - t0;
     gpu_stats(s1);
-    printf("fps-result %s|%lu|%lu|%llu|%llu\n", renderer ? renderer : "?", (unsigned long)frames, (unsigned long)ms,
-           s1[ST_DIRECT] - s0[ST_DIRECT], (s1[ST_TO_HOST] - s0[ST_TO_HOST]) + (s1[ST_FROM_HOST] - s0[ST_FROM_HOST]) +
-           (s1[ST_PAINTED] - s0[ST_PAINTED]) + (s1[ST_SCREEN] - s0[ST_SCREEN]));
+    printf("fps-result %s|%lu|%lu|%llu|%llu|%llu|%llu|%llu\n", renderer ? renderer : "?", (unsigned long)frames,
+           (unsigned long)ms, s1[ST_DIRECT] - s0[ST_DIRECT],
+           (s1[ST_TO_HOST] - s0[ST_TO_HOST]) + (s1[ST_FROM_HOST] - s0[ST_FROM_HOST]) + (s1[ST_PAINTED] - s0[ST_PAINTED]) +
+           (s1[ST_SCREEN] - s0[ST_SCREEN]), (unsigned long long)(swap * 1000000 / qf.QuadPart),
+           s1[ST_DIRECT_US] - s0[ST_DIRECT_US], s1[ST_DIRECT_LOCK_US] - s0[ST_DIRECT_LOCK_US]);
     return 0;
 }
 
-typedef struct { double fps; unsigned long frames, direct; double kib; char renderer[256]; } FpsResult;
+typedef struct {
+    double fps; unsigned long frames, direct; double kib;
+    double swap_ms, ask_ms, lock_ms;      /* a frame: in SwapBuffers, asking the kernel, waiting there for the desktop */
+    char renderer[256];
+} FpsResult;
 
 /* Run the child with GALLIUM_DRIVER=@driver (and NOVA_PRESENT=@present);
  * its frames per second (or -1), the renderer it reported, the frames
@@ -195,10 +212,15 @@ static double fps_run(const char *driver, const char *present, int secs, FpsResu
     *bar = 0;
     snprintf(r->renderer, sizeof(r->renderer), "%s", line + 11);
     unsigned long ms = 0;
-    unsigned long long direct = 0, bytes = 0;
-    if (sscanf(bar + 1, "%lu|%lu|%llu|%llu", &r->frames, &ms, &direct, &bytes) != 4 || !ms || !r->frames) return -1;
+    unsigned long long direct = 0, bytes = 0, swap = 0, ask = 0, lock = 0;
+    if (sscanf(bar + 1, "%lu|%lu|%llu|%llu|%llu|%llu|%llu", &r->frames, &ms, &direct, &bytes, &swap, &ask, &lock) != 7 ||
+        !ms || !r->frames)
+        return -1;
     r->direct = (unsigned long)direct;
     r->kib = bytes / 1024.0 / r->frames;
+    r->swap_ms = swap / 1000.0 / r->frames;
+    r->ask_ms = ask / 1000.0 / r->frames;
+    r->lock_ms = lock / 1000.0 / r->frames;
     return r->fps = r->frames * 1000.0 / ms;
 }
 
@@ -206,6 +228,8 @@ static void fps_print(const char *name, const FpsResult *r)
 {
     printf("%-10s %.2f frames/s, %lu of %lu frames shown from the host, %.0f KiB a frame through guest memory  (%s)\n",
            name, r->fps, r->direct, r->frames, r->kib, r->renderer);
+    printf("%-10s a frame: %.1f ms in SwapBuffers, %.1f ms of it asking the kernel to show it, %.1f ms of that waiting "
+           "for the desktop\n", "", r->swap_ms, r->ask_ms, r->lock_ms);
 }
 
 /* Add run @b to @a (both ran, or @a is marked failed) */
@@ -213,7 +237,11 @@ static void fps_add(FpsResult *a, const FpsResult *b)
 {
     if (a->fps <= 0 || b->fps <= 0) { a->fps = -1; return; }
     double ms = a->frames * 1000.0 / a->fps + b->frames * 1000.0 / b->fps;
-    a->kib = (a->kib * a->frames + b->kib * b->frames) / (a->frames + b->frames);
+    unsigned long n = a->frames + b->frames;
+    a->kib = (a->kib * a->frames + b->kib * b->frames) / n;
+    a->swap_ms = (a->swap_ms * a->frames + b->swap_ms * b->frames) / n;
+    a->ask_ms = (a->ask_ms * a->frames + b->ask_ms * b->frames) / n;
+    a->lock_ms = (a->lock_ms * a->frames + b->lock_ms * b->frames) / n;
     a->frames += b->frames;
     a->direct += b->direct;
     a->fps = a->frames * 1000.0 / ms;

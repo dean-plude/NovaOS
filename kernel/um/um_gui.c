@@ -34,6 +34,7 @@
 #include "../hal/pci.h"
 #include "../io/pnp.h"
 #include "../drivers/virtio_gpu.h"
+#include "../ke/scheduler.h"
 
 /* Win32 window messages we deliver */
 #define WM_DESTROY        0x0002
@@ -2611,7 +2612,9 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
 {
     int r = 1;
     VgpuScreen scr;
+    UINT64 t0 = rdtsc();
     DesktopLockAlone();
+    UINT64 t1 = rdtsc();
     GuiWin *g = win_by_hwnd(hwnd);
     if (g && g->proc == p && DisplayPrimaryScreen(&scr) && w > 0 && h > 0) {
         GdiRect rr = RECT(x, y, w, h);
@@ -2631,6 +2634,10 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
         }
     }
     DesktopUnlockAlone();
+    static UINT64 per_us;                         /* (TSC counts a microsecond) */
+    if (!per_us) per_us = (sched_tsc_after(10000000) - rdtsc()) / 1000000 ?: 1;
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_US, (rdtsc() - t0) / per_us);
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_LOCK_US, (t1 - t0) / per_us);
     return r;
 }
 

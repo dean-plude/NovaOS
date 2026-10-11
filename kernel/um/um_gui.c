@@ -371,14 +371,23 @@ static void gui_paint(WND *w)
     int h_px = cr.h < g->ch - sy ? cr.h : g->ch - sy;
     if ((w_px + sx) * k > g->pmaxw) w_px = g->pmaxw / k - sx;
     if ((h_px + sy) * k > g->pmaxh) h_px = g->pmaxh / k - sy;
+    /* Only what the clip lets through (a frame that redraws a part of
+     * the screen): reading the program's pixels is most of the cost */
+    GdiRect c = GdiClipRect();
+    int x0 = c.x - cr.x, x1 = c.x + c.w - cr.x, y0 = c.y - cr.y, y1 = c.y + c.h - cr.y;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > w_px) x1 = w_px;
+    if (y1 > h_px) y1 = h_px;
+    int n = x1 - x0;
     static UINT32 row[GUI_MAX_W * GDI_MAX_SCALE];   /* desktop thread only: k bitmap rows */
-    for (int y = 0; y < h_px; y++) {
+    for (int y = y0; y < y1 && n > 0; y++) {
         bool ok = true;
         for (int j = 0; j < k && ok; j++)
-            ok = um_read(g->proc, g->bitmap + (((UINT64)(y + sy) * k + j) * g->stride + (UINT64)sx * k) * 4,
-                         row + j * w_px * k, (UINT64)w_px * k * 4);
+            ok = um_read(g->proc, g->bitmap + (((UINT64)(y + sy) * k + j) * g->stride + (UINT64)(sx + x0) * k) * 4,
+                         row + j * n * k, (UINT64)n * k * 4);
         if (!ok) break;
-        GdiBlitBGRAScaled(RECT(cr.x, cr.y + y, w_px, 1), row, w_px * k, k);
+        GdiBlitBGRAScaled(RECT(cr.x + x0, cr.y + y, n, 1), row, n * k, k);
     }
 }
 
@@ -830,6 +839,7 @@ static UINT64 sys_gui_create(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         w->owner = owner && owner->wnd ? owner->wnd->id : 0;
         w->on_key = gui_key;
         w->key_releases = true;             /* WM_KEYUP */
+        w->presents = true;                 /* (CTL_PRESENT) */
         w->on_mouse = gui_mouse;
         w->on_touch = popup ? NULL : gui_touch;   /* (menus: the touch works the mouse) */
         w->on_close = gui_close;
@@ -2124,6 +2134,29 @@ static UINT64 xblit(UmProcess *p, UINT64 target, UINT64 ptr)
     return rv;
 }
 
+/* CTL_PRESENT: the program drew in its window, inside the bitmap pixels
+ * (left, top, right, bottom) at @ptr when it gives them; only there is
+ * redrawn (the whole screen for an embedded window, which its host's
+ * clipping decides) */
+static void present_damage(UINT32 id, UINT64 ptr)
+{
+    INT32 r[4] = { 0, 0, 0x7FFFFFFF, 0x7FFFFFFF };
+    if (ptr && !NT_SUCCESS(CopyFromUser(r, (const void *)(uintptr_t)ptr, sizeof(r)))) ptr = 0;
+    IrqState st = spin_lock_irqsave(&g_gui_lock);
+    GuiWin *g = win_by_id(id);
+    WND *w = g && g->proc == UmCurrent() && !g->host ? g->wnd : NULL;
+    int k = g && g->scale > 1 ? g->scale : 1;
+    GdiRect cr = w ? WmClientRect(w) : RECT(0, 0, 0, 0);
+    spin_unlock_irqrestore(&g_gui_lock, st);
+    if (!w) { WmInvalidate(); return; }
+    int x0 = r[0] / k, y0 = r[1] / k, x1 = r[2] / k + 1, y1 = r[3] / k + 1;   /* (logical, rounded out) */
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > cr.w) x1 = cr.w;
+    if (y1 > cr.h) y1 = cr.h;
+    if (x1 > x0 && y1 > y0) WmInvalidateRect(RECT(cr.x + x0, cr.y + y0, x1 - x0, y1 - y0));
+}
+
 static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     UmProcess *p = UmCurrent();
@@ -2138,7 +2171,7 @@ static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         INT32 c[4] = { r.x, r.y, r.w, r.h };
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, c, sizeof(c))) ? 1 : 0;
     }
-    if (a2 == CTL_PRESENT) { WmInvalidate(); return 1; }
+    if (a2 == CTL_PRESENT) { present_damage((UINT32)a1, a4); return 1; }
     if (a2 == CTL_SET_CURSOR) return cursor_from_user(p, a3, a4);
     if (a2 == CTL_SET_SYSCURSOR) return syscursor_set(a3, a4);
     if (a2 == CTL_SYSCURSOR_IMAGE) return syscursor_image(a3, a4);

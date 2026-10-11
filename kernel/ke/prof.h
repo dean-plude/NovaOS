@@ -13,3 +13,6 @@ void ProfSample(UINT64 rip, UINT64 rbp, bool user, bool lock_wait, bool idle);
 void ProfSyscall(UINT64 num);
 /* An interrupt or exception @vector taken under the big kernel lock */
 void ProfInterrupt(UINT64 vector);
+/* The desktop drew a frame in @tsc cycles, the whole screen or a part
+ * (@spoiled: a part was tried first, and could not be drawn alone) */
+void ProfFrame(UINT64 tsc, bool whole, bool spoiled);

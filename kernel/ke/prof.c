@@ -22,6 +22,8 @@ static volatile UINT32 g_n;
 static UINT64 g_rip[PROF_MAX], g_caller[PROF_MAX];
 #define PROF_CALLS 0x400                    /* system calls, then 0x300 + interrupt vectors */
 static UINT32 g_calls[PROF_CALLS];
+static UINT32 g_frames, g_whole, g_spoiled, g_slow;           /* the desktop's frames (ProfFrame) */
+static UINT64 g_frame_tsc, g_frame_max;
 
 static void serial_line(void *ctx, const char *line) { (void)ctx; (void)line; }
 static volatile UINT32 g_gen;               /* which ProfStart a reporter belongs to */
@@ -43,6 +45,8 @@ void ProfStart(UINT64 delay, UINT64 len)
     g_from = sched_ticks() + delay;
     g_to = len ? g_from + len : 0;
     memset(g_calls, 0, sizeof(g_calls));
+    g_frames = g_whole = g_spoiled = g_slow = 0;
+    g_frame_tsc = g_frame_max = 0;
     UINT32 gen = __atomic_add_fetch(&g_gen, 1, __ATOMIC_RELAXED);
     g_on = true;
     if (len) sched_create_thread("profile", reporter, (void *)(uintptr_t)gen, 8);
@@ -51,6 +55,17 @@ void ProfStart(UINT64 delay, UINT64 len)
 void ProfInterrupt(UINT64 vector)
 {
     if (vector < 256 && in_window()) __atomic_add_fetch(&g_calls[0x300 + vector], 1, __ATOMIC_RELAXED);
+}
+
+void ProfFrame(UINT64 tsc, bool whole, bool spoiled)
+{
+    if (!in_window()) return;                       /* (the desktop thread only: no atomics) */
+    g_frames++;
+    g_whole += whole || spoiled;
+    g_spoiled += spoiled;
+    g_frame_tsc += tsc;
+    if (tsc > g_frame_max) g_frame_max = tsc;
+    if (tsc > (sched_tick_tsc(10) - sched_tick_tsc(0))) g_slow++;   /* (over 100 ms) */
 }
 
 void ProfSyscall(UINT64 num)
@@ -158,6 +173,14 @@ void ProfReport(void (*out)(void *ctx, const char *line), void *ctx)
               n, user * 100 / n, (n - user - wait - idle) * 100 / n, wait * 100 / n, idle * 100 / n);
     kprintf("[PROF] %s\n", line);
     out(ctx, line);
+    UINT64 tick = sched_tick_tsc(1) - sched_tick_tsc(0);
+    if (g_frames && tick) {
+        ksnprintf(line, sizeof(line), "Desktop: %u frames (%u of the whole screen, %u of them after trying a part), %llu ms drawing, %u over 100 ms, longest %llu ms",
+                  g_frames, g_whole, g_spoiled, (unsigned long long)(g_frame_tsc * 10 / tick), g_slow,
+                  (unsigned long long)(g_frame_max * 10 / tick));
+        kprintf("[PROF] %s\n", line);
+        out(ctx, line);
+    }
     top(fn, nf, 15, n, false, out, ctx);
     out(ctx, "Callers:");
     top(pair, np, 15, n, true, out, ctx);

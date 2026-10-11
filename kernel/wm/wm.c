@@ -12,6 +12,9 @@
  */
 
 #include "../ke/smp.h"
+#include "../ke/spinlock.h"
+#include "../ke/prof.h"
+#include "../arch/x86_64/cpu.h"
 #include "wm.h"
 #include "desktop.h"
 #include "../um/um.h"
@@ -35,7 +38,18 @@ static bool       g_ready;
  * any thread, even while a frame is being drawn: that frame may predate
  * them), a finished frame records the generation it started from */
 static volatile UINT32 g_dirty_gen = 1, g_drawn_gen;
-static inline void mark_dirty(void) { __atomic_add_fetch(&g_dirty_gen, 1, __ATOMIC_RELEASE); }
+/* ... and what changed since that frame: a rectangle (logical) or, after
+ * any invalidation that names none, everything */
+static KSpinLock  g_damage_lock = KSPINLOCK_INIT;
+static GdiRect    g_damage;
+static bool       g_damage_all = true;
+static inline void mark_dirty(void)
+{
+    IrqState st = spin_lock_irqsave(&g_damage_lock);
+    g_damage_all = true;
+    __atomic_add_fetch(&g_dirty_gen, 1, __ATOMIC_RELEASE);
+    spin_unlock_irqrestore(&g_damage_lock, st);
+}
 static struct WND *by_id(int id);
 static GdiRect    g_work;
 static WmIconFn   g_icon_fn;
@@ -119,6 +133,33 @@ GdiRect WmWorkAreaFor(GdiRect r) { return WmMonitorWork(GdiMonitorNearest(r)); }
 static GdiRect work_at(int x, int y) { return WmWorkAreaFor(RECT(x, y, 1, 1)); }
 
 void WmInvalidate(void)           { mark_dirty(); }
+
+/* Only @r (logical) changed: the next frame redraws that part */
+void WmInvalidateRect(GdiRect r)
+{
+    if (r.w <= 0 || r.h <= 0) return;
+    IrqState st = spin_lock_irqsave(&g_damage_lock);
+    if (g_damage.w <= 0 || g_damage.h <= 0) g_damage = r;
+    else {
+        int x0 = r.x < g_damage.x ? r.x : g_damage.x, y0 = r.y < g_damage.y ? r.y : g_damage.y;
+        int x1 = r.x + r.w > g_damage.x + g_damage.w ? r.x + r.w : g_damage.x + g_damage.w;
+        int y1 = r.y + r.h > g_damage.y + g_damage.h ? r.y + r.h : g_damage.y + g_damage.h;
+        g_damage = RECT(x0, y0, x1 - x0, y1 - y0);
+    }
+    __atomic_add_fetch(&g_dirty_gen, 1, __ATOMIC_RELEASE);
+    spin_unlock_irqrestore(&g_damage_lock, st);
+}
+/* A window's frame with room for its drop shadow (draw_window) */
+static GdiRect painted_rect(const WND *w)
+{
+    GdiRect f = w->frame;
+    return RECT(f.x - 24, f.y - 24, f.w + 48, f.h + 48);
+}
+
+/* What a built-in app's painter draws changed (its input, its tick):
+ * only its window is redrawn */
+static void dirty_window(const WND *w) { WmInvalidateRect(painted_rect(w)); }
+
 void WmInvalidateBackground(void) { GdiCacheInvalidate(); mark_dirty(); }
 bool WmNeedsRedraw(void)          { return __atomic_load_n(&g_dirty_gen, __ATOMIC_ACQUIRE) != g_drawn_gen; }
 
@@ -541,7 +582,7 @@ static void to_client(WND *w, WmMouseMsg msg, int x, int y)
     if (!w->on_mouse) return;
     GdiRect c = WmClientRect(w);
     w->on_mouse(w, msg, x - c.x, y - c.y);
-    mark_dirty();
+    if (!w->presents) dirty_window(w);
 }
 
 /* Keep the title bar in work area @a, enough of it to grab */
@@ -752,7 +793,7 @@ void WmTick(void)
         if (!g_used[i] || !w->on_tick) continue;
         bool files = !w->tick_lock_free;
         if (files) FsLock();
-        if (w->on_tick(w)) mark_dirty();
+        if (w->on_tick(w)) dirty_window(w);
         if (files) FsUnlock();
     }
 }
@@ -775,7 +816,7 @@ bool WmKey(const KeyEvent *k)
     }
     if (w->on_key) {
         w->on_key(w, k);
-        mark_dirty();
+        if (!w->presents) dirty_window(w);
     }
     return true;
 }
@@ -890,14 +931,71 @@ static void draw_window(WND *w)
  * ----------------------------------------------------------------------- */
 static void cursor_after_present(void);
 
+static bool compose(const GdiRect *part, UINT32 gen);
+
+static bool meets(GdiRect a, GdiRect b)
+{
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/* @r grown until it holds all that an acrylic window it meets blurs (its
+ * backdrop reads what is under the window and somewhat around it) */
+static GdiRect with_backdrops(GdiRect r)
+{
+    if (!DesktopAurora()) return r;
+    for (bool grew = true; grew; ) {
+        grew = false;
+        for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+            const WND *w = &g_windows[i];
+            if (!shown(w) || !w->acrylic) continue;
+            GdiRect f = w->frame, b = RECT(f.x - 40, f.y - 40, f.w + 80, f.h + 80);
+            if (!meets(r, painted_rect(w)) ||
+                (r.x <= b.x && r.y <= b.y && r.x + r.w >= b.x + b.w && r.y + r.h >= b.y + b.h)) continue;
+            int x0 = r.x < b.x ? r.x : b.x, y0 = r.y < b.y ? r.y : b.y;
+            int x1 = r.x + r.w > b.x + b.w ? r.x + r.w : b.x + b.w, y1 = r.y + r.h > b.y + b.h ? r.y + r.h : b.y + b.h;
+            r = RECT(x0, y0, x1 - x0, y1 - y0);
+            grew = true;
+        }
+    }
+    return r;
+}
+
+/* Draws the frame: only what changed since the last one when that is a
+ * part of the screen (most frames: a program drew in its window), so the
+ * windows elsewhere, their painters and the backdrop blurs under them
+ * cost nothing; the whole screen otherwise */
 void WmComposite(void)
 {
     if (!g_ready) return;
+    IrqState st = spin_lock_irqsave(&g_damage_lock);
     UINT32 gen = __atomic_load_n(&g_dirty_gen, __ATOMIC_ACQUIRE);
-    GdiResetClip();
+    GdiRect part = g_damage;
+    bool all = g_damage_all;
+    g_damage = RECT(0, 0, 0, 0);
+    g_damage_all = false;
+    spin_unlock_irqrestore(&g_damage_lock, st);
+
+    /* (more than half the screen: the whole of it costs about the same) */
+    if (!all && (INT64)part.w * part.h * 2 > (INT64)GdiScreenW() * GdiScreenH()) all = true;
+    UINT64 t0 = rdtsc();
+    bool spoiled = false;
+    if (!all) {
+        part = with_backdrops(part);
+        if (!compose(&part, gen)) spoiled = true;
+    }
+    if (all || spoiled) compose(NULL, gen);
+    ProfFrame(rdtsc() - t0, all, spoiled);
+}
+
+/* Draws and shows the frame, or only @part of it; false when that part
+ * cannot be drawn alone (WmComposite then draws the whole) */
+static bool compose(const GdiRect *part, UINT32 gen)
+{
+    if (!GdiSetBounds(part)) { g_drawn_gen = gen; return true; }   /* (off screen) */
 
     /* 1. Desktop background (wallpaper + icons), cached between frames */
     if (!GdiCacheRestore()) {
+        if (part) return false;                  /* (the cache is made from a whole frame) */
         if (g_background) g_background();
         GdiCacheSave();
     }
@@ -916,7 +1014,7 @@ void WmComposite(void)
         order[j] = w;
     }
     for (int i = 0; i < n; i++)
-        draw_window(order[i]);
+        if (!part || GdiInClip(painted_rect(order[i]))) draw_window(order[i]);
 
     /* Where a window being dragged to a screen edge would be tiled */
     if (g_drag && g_snap_zone) {
@@ -932,11 +1030,17 @@ void WmComposite(void)
     GdiResetClip();
     if (g_overlay) g_overlay();
 
-    /* 4. Show the finished frame, with the pointer drawn over it */
+    if (part && GdiBoundsSpoiled()) return false;
+
+    /* 4. Show the finished frame, with the pointer drawn over it.  A part
+     * leaves the rest of the screen as it is, so the pointer is taken off
+     * it first (its save-under puts back what it covered) */
+    if (part) WmCursorHide();
     GdiPresent();
     cursor_after_present();
     GdiFlip();
     g_drawn_gen = gen;
+    return true;
 }
 
 /* -----------------------------------------------------------------------

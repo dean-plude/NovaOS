@@ -110,6 +110,8 @@ typedef struct WND {
                               * lock itself around what does (a built-in app's) */
     WndKeyFn   on_key;       /* key pressed while focused */
     bool       key_releases; /* on_key also gets releases (pressed = false) */
+    bool       presents;     /* a program's: it redraws itself and says where
+                              * (WmInvalidateRect), so its input needs no frame */
     WndMouseFn on_mouse;     /* mouse in / captured by the client area */
     WndTouchFn on_touch;     /* touch contacts that went down in the client area (else
                               * the first contact works the mouse there) */
@@ -231,6 +233,7 @@ void WmSetDesktop(WmLayerFn background, WmLayerFn overlay);
 
 /* Mark the scene as needing a redraw / the background as changed. */
 void WmInvalidate(void);
+void WmInvalidateRect(GdiRect r);       /* only that part (logical) changed */
 void WmInvalidateBackground(void);
 bool WmNeedsRedraw(void);
 

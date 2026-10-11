@@ -44,6 +44,9 @@ static struct {
     int     s;                    /* scale: device px per logical px */
     int     lw, lh;               /* the primary's logical size */
     int     cx0, cy0, cx1, cy1;   /* clip rectangle, device px, [x0,x1) */
+    int     kx0, ky0, kx1, ky1;   /* what this frame redraws (GdiSetBounds): the clip never leaves it */
+    int     px0, py0, px1, py1;   /* ... the last frame's, for the page off screen */
+    bool    outside;              /* a backdrop wanted pixels outside the bounds */
     UINT32 *cache;                /* saved copy of the back buffer */
     bool    cache_valid;
     bool    direct;               /* no back buffer: drawing goes to vram */
@@ -246,7 +249,8 @@ static bool gdi_setup(void)
     g.bx0 = bx0; g.by0 = by0; g.bx1 = bx1; g.by1 = by1;
     g.cache_valid = false;
 
-    g.cx0 = g.bx0; g.cy0 = g.by0; g.cx1 = g.bx1; g.cy1 = g.by1;
+    g.cx0 = g.kx0 = g.px0 = g.bx0; g.cy0 = g.ky0 = g.py0 = g.by0;
+    g.cx1 = g.kx1 = g.px1 = g.bx1; g.cy1 = g.ky1 = g.py1 = g.by1;
     g.ready = true;
     kprintf("[GDI] %dx%d device, scale %dx -> %dx%d logical, %s\n",
             g.dw, g.dh, g.s, g.lw, g.lh,
@@ -374,15 +378,56 @@ void GdiSetMonitorOrigin(int i, int x, int y)
 void GdiSetClip(GdiRect r)
 {
     int s = g.s;
-    g.cx0 = imax(r.x * s, g.bx0);            g.cy0 = imax(r.y * s, g.by0);
-    g.cx1 = imin((r.x + r.w) * s, g.bx1);    g.cy1 = imin((r.y + r.h) * s, g.by1);
+    g.cx0 = imax(r.x * s, g.kx0);            g.cy0 = imax(r.y * s, g.ky0);
+    g.cx1 = imin((r.x + r.w) * s, g.kx1);    g.cy1 = imin((r.y + r.h) * s, g.ky1);
     if (g.cx1 < g.cx0) g.cx1 = g.cx0;
     if (g.cy1 < g.cy0) g.cy1 = g.cy0;
 }
 
 void GdiResetClip(void)
 {
-    g.cx0 = g.bx0; g.cy0 = g.by0; g.cx1 = g.bx1; g.cy1 = g.by1;
+    g.cx0 = g.kx0; g.cy0 = g.ky0; g.cx1 = g.kx1; g.cy1 = g.ky1;
+}
+
+/* The part of the desktop a frame redraws (logical; the whole desktop
+ * when @r is NULL): every clip stays inside it, GdiCacheRestore restores
+ * only it and GdiPresent shows only it.  Returns false when it is empty. */
+bool GdiSetBounds(const GdiRect *r)
+{
+    g.kx0 = g.bx0; g.ky0 = g.by0; g.kx1 = g.bx1; g.ky1 = g.by1;
+    if (r && !g.direct) {
+        int s = g.s;
+        g.kx0 = imax(r->x * s, g.bx0);               g.ky0 = imax(r->y * s, g.by0);
+        g.kx1 = imin((r->x + r->w) * s, g.bx1);      g.ky1 = imin((r->y + r->h) * s, g.by1);
+        if (g.kx1 < g.kx0) g.kx1 = g.kx0;
+        if (g.ky1 < g.ky0) g.ky1 = g.ky0;
+    }
+    g.outside = false;
+    GdiResetClip();
+    return g.kx1 > g.kx0 && g.ky1 > g.ky0;
+}
+
+/* Since GdiSetBounds: a backdrop needed pixels outside the bounds (they
+ * hold the last frame, not what is under it), so the frame is wrong
+ * there and must be drawn whole */
+bool GdiBoundsSpoiled(void) { return g.outside; }
+
+/* The clip in logical px, rounded out */
+GdiRect GdiClipRect(void)
+{
+    int s = g.s, x0 = g.cx0 / s, y0 = g.cy0 / s;
+    int x1 = (g.cx1 + s - 1) / s, y1 = (g.cy1 + s - 1) / s;
+    if (g.cx0 < 0) x0 = -((-g.cx0 + s - 1) / s);
+    if (g.cy0 < 0) y0 = -((-g.cy0 + s - 1) / s);
+    return RECT(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* @r (logical) meets the clip */
+bool GdiInClip(GdiRect r)
+{
+    int s = g.s;
+    return r.w > 0 && r.h > 0 && r.x * s < g.cx1 && (r.x + r.w) * s > g.cx0 &&
+           r.y * s < g.cy1 && (r.y + r.h) * s > g.cy0;
 }
 
 static size_t buf_bytes(void) { return (size_t)(g.bx1 - g.bx0) * (g.by1 - g.by0) * sizeof(UINT32); }
@@ -402,7 +447,14 @@ bool GdiCacheSave(void)
 bool GdiCacheRestore(void)
 {
     if (!g.cache_valid) return false;
-    memcpy(g.base, g.cache, buf_bytes());
+    if (g.kx0 == g.bx0 && g.ky0 == g.by0 && g.kx1 == g.bx1 && g.ky1 == g.by1) {
+        memcpy(g.base, g.cache, buf_bytes());
+        return true;
+    }
+    for (int y = g.ky0; y < g.ky1; y++) {             /* only what the frame redraws */
+        size_t off = (size_t)(y - g.by0) * g.bstride + (size_t)(g.kx0 - g.bx0);
+        memcpy(g.base + off, g.cache + off, (size_t)(g.kx1 - g.kx0) * sizeof(UINT32));
+    }
     return true;
 }
 
@@ -412,42 +464,61 @@ int GdiScreenW(void) { return g.ready ? g.lw : 0; }
 int GdiScreenH(void) { return g.ready ? g.lh : 0; }
 int GdiScale(void)   { return g.ready ? g.s  : 1; }
 
-/* Monitor @m's part of the back buffer to @dst (its screen) */
-static void present_monitor(const Monitor *m, UINT32 *dst, int dstride)
+/* Monitor @m's part of the back buffer inside [x0, x1) x [y0, y1) (back
+ * buffer device px) to @dst (its screen); tells the head which part */
+static void present_monitor(int head, const Monitor *m, UINT32 *dst, int dstride,
+                            int x0, int y0, int x1, int y1)
 {
-    const UINT32 *src = g.buf + (INT64)m->r.y * g.s * g.bstride + (INT64)m->r.x * g.s;
-    if (m->k == 1) {
-        for (int y = 0; y < m->dh; y++)
-            memcpy(dst + (size_t)y * dstride, src + (INT64)y * g.bstride, (size_t)m->dw * sizeof(UINT32));
-        return;
-    }
-    /* Half the scale: the average of each 2x2 block */
-    for (int y = 0; y < m->dh; y++) {
-        const UINT32 *a = src + (INT64)(2 * y) * g.bstride, *b = a + g.bstride;
-        UINT32 *o = dst + (size_t)y * dstride;
-        for (int x = 0; x < m->dw; x++, a += 2, b += 2) {
-            UINT32 rb = (a[0] & 0xFF00FF) + (a[1] & 0xFF00FF) + (b[0] & 0xFF00FF) + (b[1] & 0xFF00FF);
-            UINT32 gg = (a[0] & 0x00FF00) + (a[1] & 0x00FF00) + (b[0] & 0x00FF00) + (b[1] & 0x00FF00);
-            o[x] = (((rb + 0x020002) >> 2) & 0xFF00FF) | (((gg + 0x000200) >> 2) & 0x00FF00);
+    int ox = m->r.x * g.s, oy = m->r.y * g.s, k = m->k;
+    /* the screen px whose back buffer px meet the rectangle */
+    int sx0 = imax((x0 - ox) / k, 0), sy0 = imax((y0 - oy) / k, 0);
+    int sx1 = imin((x1 - ox + k - 1) / k, m->dw), sy1 = imin((y1 - oy + k - 1) / k, m->dh);
+    if (x1 <= ox || y1 <= oy || sx1 <= sx0 || sy1 <= sy0) return;
+    const UINT32 *src = g.buf + (INT64)oy * g.bstride + ox;
+    if (k == 1) {
+        for (int y = sy0; y < sy1; y++)
+            memcpy(dst + (size_t)y * dstride + sx0, src + (INT64)y * g.bstride + sx0,
+                   (size_t)(sx1 - sx0) * sizeof(UINT32));
+    } else {
+        /* Half the scale: the average of each 2x2 block */
+        for (int y = sy0; y < sy1; y++) {
+            const UINT32 *a = src + (INT64)(2 * y) * g.bstride + 2 * sx0, *b = a + g.bstride;
+            UINT32 *o = dst + (size_t)y * dstride;
+            for (int x = sx0; x < sx1; x++, a += 2, b += 2) {
+                UINT32 rb = (a[0] & 0xFF00FF) + (a[1] & 0xFF00FF) + (b[0] & 0xFF00FF) + (b[1] & 0xFF00FF);
+                UINT32 gg = (a[0] & 0x00FF00) + (a[1] & 0x00FF00) + (b[0] & 0x00FF00) + (b[1] & 0x00FF00);
+                o[x] = (((rb + 0x020002) >> 2) & 0xFF00FF) | (((gg + 0x000200) >> 2) & 0x00FF00);
+            }
         }
     }
+    DisplayHeadDamage(head, sx0, sy0, sx1 - sx0, sy1 - sy0);
 }
 
+/* Shows the bounds (GdiSetBounds) of the frame */
 void GdiPresent(void)
 {
     if (!g.ready || g.direct) return;
+    int x0 = g.kx0, y0 = g.ky0, x1 = g.kx1, y1 = g.ky1;
     /* With page flipping the frame goes to the page off screen, which is
-     * also where the pointer is drawn next; GdiFlip() shows it there */
+     * also where the pointer is drawn next; GdiFlip() shows it there.
+     * That page last showed the frame before the last one: what the last
+     * frame redrew is out of date on it too */
     UINT32 *back = DisplayBackPage();
-    if (back) g.vram = back;
-    present_monitor(&g_mon[0], g.vram, g.vstride);
-    DisplayHeadDamage(0, 0, 0, g_mon[0].dw, g_mon[0].dh);
+    if (back) {
+        g.vram = back;
+        int px0 = g.px0, py0 = g.py0, px1 = g.px1, py1 = g.py1;
+        g.px0 = x0; g.py0 = y0; g.px1 = x1; g.py1 = y1;
+        if (px1 > px0 && py1 > py0) {
+            x0 = imin(x0, px0); y0 = imin(y0, py0);
+            x1 = imax(x1, px1); y1 = imax(y1, py1);
+        }
+    }
+    if (x1 <= x0 || y1 <= y0) return;
+    present_monitor(0, &g_mon[0], g.vram, g.vstride, x0, y0, x1, y1);
     for (int i = 1; i < g_nmon; i++) {
         int stride;
         UINT32 *v = DisplayHeadSurface(i, &stride);
-        if (!v) continue;
-        present_monitor(&g_mon[i], v, stride);
-        DisplayHeadDamage(i, 0, 0, g_mon[i].dw, g_mon[i].dh);
+        if (v) present_monitor(i, &g_mon[i], v, stride, x0, y0, x1, y1);
     }
 }
 
@@ -804,8 +875,8 @@ void GdiDropShadowAround(GdiRect r, int rad, int blur, int alpha, GdiRect cover,
     int    bl  = blur * g.s * FX;           /* fade distance, fixed point */
     int    m   = blur * g.s;
     UINT32 blk = pixof(GDI_BLACK);
-    int ya = imax(b.y0 - m, g.by0), yb = imin(b.y1 + m, g.by1);
-    int xa = imax(b.x0 - m, g.bx0), xb = imin(b.x1 + m, g.bx1);
+    int ya = imax(b.y0 - m, g.cy0), yb = imin(b.y1 + m, g.cy1);   /* (only what the clip lets through) */
+    int xa = imax(b.x0 - m, g.cx0), xb = imin(b.x1 + m, g.cx1);
     /* The part of @cover certain to be covered (its rounded corners cut
      * off), in device pixels: nothing there needs a shadow */
     int s = g.s;
@@ -1009,9 +1080,14 @@ static void blur8(UINT8 *p, int w, int h, int r, UINT8 *tmp)
 }
 
 /* Blurred backdrops are cached per region: the blur is redone only when
- * the pixels underneath have changed (a checksum tells), which matters
- * because the dock and tray are composited on every frame. */
+ * the pixels underneath have changed, which matters because the dock and
+ * tray are composited on every frame.  The blur runs on the region shrunk
+ * BD_DOWN times each way (the average of each block) and is scaled back
+ * up: the box radius is many pixels, so the result looks the same, and a
+ * window-sized backdrop (File Explorer's acrylic) costs a sixteenth.  The
+ * shrunk pixels are also what tells a change. */
 #define BD_CACHE 4
+#define BD_DOWN  4
 static struct {
     int x0, y0, w, h, br;
     UINT64 sum;
@@ -1020,24 +1096,58 @@ static struct {
 } g_bd[BD_CACHE];
 static UINT32 g_bd_clock;
 
-static UINT64 region_sum(int x0, int y0, int w, int h)
+/* The region's average of each BD_DOWN x BD_DOWN block into @out
+ * (@sw x @sh), and a checksum of it */
+static UINT64 shrink(int x0, int y0, int w, int h, UINT32 *out, int sw, int sh)
 {
-    UINT64 s = 1469598103934665603ull;
-    for (int y = 0; y < h; y++) {
-        const UINT32 *row = g.buf + (INT64)(y0 + y) * g.bstride + x0;
-        for (int x = 0; x < w; x++) s = (s ^ row[x]) * 1099511628211ull;
+    UINT64 sum = 1469598103934665603ull;
+    for (int by = 0; by < sh; by++) {
+        int ya = y0 + by * BD_DOWN, yb = imin(ya + BD_DOWN, y0 + h);
+        for (int bx = 0; bx < sw; bx++) {
+            int xa = x0 + bx * BD_DOWN, xb = imin(xa + BD_DOWN, x0 + w);
+            UINT32 rb = 0, gg = 0, n = (UINT32)((yb - ya) * (xb - xa));
+            for (int y = ya; y < yb; y++) {
+                const UINT32 *row = g.buf + (INT64)y * g.bstride;
+                for (int x = xa; x < xb; x++) { rb += row[x] & 0xFF00FF; gg += row[x] & 0x00FF00; }
+            }
+            /* (16 pixels at most: the sums of a lane stay within its 16 bits) */
+            UINT32 v = ((((rb & 0xFFFF) / n) | (((rb >> 16) / n) << 16)) & 0xFF00FF) | (((gg >> 8) / n) << 8 & 0x00FF00);
+            out[(size_t)by * sw + bx] = v;
+            sum = (sum ^ v) * 1099511628211ull;
+        }
     }
-    return s;
+    return sum;
+}
+
+/* @small (@sw x @sh, one pixel per BD_DOWN-pixel block) scaled up to @img
+ * (@w x @h), bilinear between the block centres */
+static void grow(const UINT32 *small, int sw, int sh, UINT32 *img, int w, int h)
+{
+    for (int y = 0; y < h; y++) {
+        int fy = imax((y * 2 + 1) * 128 / BD_DOWN - 128, 0);   /* source row, 1/256 */
+        int y0 = imin(fy >> 8, sh - 1), y1 = imin(y0 + 1, sh - 1), ty = fy & 255;
+        const UINT32 *r0 = small + (size_t)y0 * sw, *r1 = small + (size_t)y1 * sw;
+        UINT32 *o = img + (size_t)y * w;
+        for (int x = 0; x < w; x++) {
+            int fx = imax((x * 2 + 1) * 128 / BD_DOWN - 128, 0);
+            int x0 = imin(fx >> 8, sw - 1), x1 = imin(x0 + 1, sw - 1), tx = fx & 255;
+            UINT32 top = blend(r0[x0], r0[x1], (UINT32)tx), bot = blend(r1[x0], r1[x1], (UINT32)tx);
+            o[x] = blend(top, bot, (UINT32)ty);
+        }
+    }
 }
 
 static UINT32 *blurred(int x0, int y0, int w, int h, int br)
 {
-    UINT64 sum = region_sum(x0, y0, w, h);
+    int sw = (w + BD_DOWN - 1) / BD_DOWN, sh = (h + BD_DOWN - 1) / BD_DOWN;
+    UINT32 *small = kmalloc((size_t)sw * sh * 4 + (size_t)imax(sw, sh) * 4);
+    if (!small) return NULL;
+    UINT64 sum = shrink(x0, y0, w, h, small, sw, sh);
     int slot = 0;
     for (int i = 0; i < BD_CACHE; i++) {
         if (g_bd[i].img && g_bd[i].x0 == x0 && g_bd[i].y0 == y0 && g_bd[i].w == w && g_bd[i].h == h && g_bd[i].br == br) {
             g_bd[i].age = ++g_bd_clock;
-            if (g_bd[i].sum == sum) return g_bd[i].img;   /* unchanged: reuse */
+            if (g_bd[i].sum == sum) { kfree(small); return g_bd[i].img; }   /* unchanged: reuse */
             slot = i;
             goto refill;
         }
@@ -1045,18 +1155,15 @@ static UINT32 *blurred(int x0, int y0, int w, int h, int br)
     }
     kfree(g_bd[slot].img);
     g_bd[slot].img = kmalloc((size_t)w * h * 4);
-    if (!g_bd[slot].img) return NULL;
+    if (!g_bd[slot].img) { kfree(small); return NULL; }
     g_bd[slot].x0 = x0; g_bd[slot].y0 = y0; g_bd[slot].w = w; g_bd[slot].h = h; g_bd[slot].br = br;
     g_bd[slot].age = ++g_bd_clock;
-refill:;
-    UINT32 *img = g_bd[slot].img, *tmp = kmalloc((size_t)imax(w, h) * 4);
-    if (!tmp) { g_bd[slot].sum = 0; return NULL; }
-    for (int y = 0; y < h; y++)
-        memcpy(img + (size_t)y * w, g.buf + (INT64)(y0 + y) * g.bstride + x0, (size_t)w * 4);
-    blur32(img, w, h, br, tmp);
-    kfree(tmp);
+refill:
+    blur32(small, sw, sh, imax(1, (br + BD_DOWN / 2) / BD_DOWN), small + (size_t)sw * sh);
+    grow(small, sw, sh, g_bd[slot].img, w, h);
+    kfree(small);
     g_bd[slot].sum = sum;
-    return img;
+    return g_bd[slot].img;
 }
 
 void GdiBackdrop(GdiRect r, int rad, int blur, GdiColor tint, int tint_alpha)
@@ -1069,6 +1176,8 @@ void GdiBackdrop(GdiRect r, int rad, int blur, GdiColor tint, int tint_alpha)
     int x1 = imin(b.x1 + 3 * br, g.bx1), y1 = imin(b.y1 + 3 * br, g.by1);
     int w = x1 - x0, h = y1 - y0;
     if (w <= 0 || h <= 0) return;
+    if (b.x1 <= g.cx0 || b.x0 >= g.cx1 || b.y1 <= g.cy0 || b.y0 >= g.cy1) return;   /* (nothing to draw) */
+    if (x0 < g.kx0 || y0 < g.ky0 || x1 > g.kx1 || y1 > g.ky1) g.outside = true;     /* (GdiBoundsSpoiled) */
     UINT32 *img = blurred(x0, y0, w, h, br), *tmp = img;
     UINT32 tn = pixof(tint);
     int cx0 = imax(b.x0, g.cx0), cx1 = imin(b.x1, g.cx1);

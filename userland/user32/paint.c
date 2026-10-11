@@ -215,7 +215,10 @@ USERAPI BOOL LockWindowUpdate(HWND h) { (void)h; return TRUE; }
 /* -----------------------------------------------------------------------
  * Device contexts
  * ----------------------------------------------------------------------- */
-typedef struct DcRec { struct DcRec *next; NOVA_DC *dc; HWND h; int own, client, foreign; } DcRec;
+typedef struct DcRec {
+    struct DcRec *next; NOVA_DC *dc; HWND h; int own, client, foreign;
+    HWND xtop; int dx, dy;          /* (foreign child window) the top-level it is in, and where */
+} DcRec;
 static DcRec *g_dcs;
 
 static void clip_to(RECT *r, const RECT *by)
@@ -311,20 +314,50 @@ void dcs_follow(Wnd *t)
  * or flushed */
 typedef struct { INT32 dir, x, y, w, h, stride; UINT64 buf; } XBlit;
 
-static void foreign_flush(NOVA_DC *d, const RECT *r)
+static void foreign_flush(DcRec *rec, const RECT *r)
 {
+    NOVA_DC *d = rec->dc;
     RECT x = r ? *r : d->vis;
     clip_to(&x, &d->vis);
     if (IsRectEmpty(&x)) return;
-    XBlit b = { 0, x.left, x.top, x.right - x.left, x.bottom - x.top, d->stride,
+    XBlit b = { rec->xtop ? 2 : 0, x.left + rec->dx, x.top + rec->dy, x.right - x.left, x.bottom - x.top, d->stride,
                 (UINT64)(ULONG_PTR)(d->bits + (size_t)x.top * d->stride + x.left) };
-    NtNovaGuiCtl(0, CTL_XBLIT, (ULONG_PTR)d->hwnd, &b);
+    NtNovaGuiCtl(0, CTL_XBLIT, (ULONG_PTR)(rec->xtop ? rec->xtop : d->hwnd), &b);
+}
+
+/* Where a child window of another process is: its top-level window (the
+ * one the desktop knows), the child's client area in that window's bitmap
+ * (x, y), its size (w, h) and the part of it that can show, in its own
+ * client coordinates (left, top, right, bottom).  Chromium's GPU process
+ * draws so into the browser's window when an embedder (Steam) made it a
+ * child */
+HWND wnd_place(HWND h, INT32 out[8])
+{
+    memset(out, 0, 8 * sizeof(INT32));
+    Wnd *w = W_quiet(h), *t = w ? top_of(w) : NULL;
+    if (!t) return 0;
+    POINT c;
+    RECT v;
+    wnd_to_bitmap(w, 1, &c);
+    visible_rect(w, 1, &v);
+    if (!wnd_visible(w)) SetRectEmpty(&v);
+    else OffsetRect(&v, -c.x, -c.y);
+    out[0] = c.x; out[1] = c.y;
+    out[2] = w->client.right - w->client.left; out[3] = w->client.bottom - w->client.top;
+    out[4] = v.left; out[5] = v.top; out[6] = v.right; out[7] = v.bottom;
+    return t->h;
 }
 
 static HDC foreign_dc(HWND h)
 {
-    INT32 f[11];
-    if (foreign_info(h, f) != 2) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return 0; }
+    INT32 f[11], place[8];
+    HWND top = 0;
+    int kind = foreign_info(h, f);
+    if (kind == 1) {                                        /* a child window: drawn into its top-level */
+        top = x_place(h, place);
+        if (!top) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return 0; }
+        f[5] = place[2]; f[6] = place[3];
+    } else if (kind != 2) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return 0; }
     int w = MAX(f[5], 1), ht = MAX(f[6], 1);
     if (w > 8192) w = 8192;
     if (ht > 8192) ht = 8192;
@@ -332,12 +365,17 @@ static HDC foreign_dc(HWND h)
     DcRec *rec = calloc(1, sizeof(DcRec));
     DWORD *px = VirtualAlloc(NULL, (SIZE_T)w * ht * 4, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!d || !rec || !px) { free(d); free(rec); if (px) VirtualFree(px, 0, MEM_RELEASE); return 0; }
-    XBlit b = { 1, 0, 0, w, ht, w, (UINT64)(ULONG_PTR)px };
-    NtNovaGuiCtl(0, CTL_XBLIT, (ULONG_PTR)h, &b);           /* what it shows now */
+    if (top) { rec->xtop = top; rec->dx = place[0]; rec->dy = place[1]; }
+    XBlit b = { top ? 3 : 1, rec->dx, rec->dy, w, ht, w, (UINT64)(ULONG_PTR)px };
+    NtNovaGuiCtl(0, CTL_XBLIT, (ULONG_PTR)(top ? top : h), &b);   /* what it shows now */
     d->bits = px;
     d->stride = w;
     d->w = w; d->h = ht;
     SetRect(&d->vis, 0, 0, w, ht);
+    if (top) {
+        RECT v = { place[4], place[5], place[6], place[7] };
+        clip_to(&d->vis, &v);
+    }
     d->has_vis = 1;
     d->text_color = 0x000000;
     d->bk_color = 0xFFFFFF;
@@ -363,7 +401,7 @@ void release_dc(HDC dc)
     UNLOCK();
     if (!rec) return;
     if (rec->foreign) {                                     /* another process's window: what was drawn goes to it */
-        foreign_flush(d, NULL);
+        foreign_flush(rec, NULL);
         VirtualFree(d->bits, 0, MEM_RELEASE);
         free(rec);
         free(d);
@@ -443,12 +481,12 @@ USERAPI void NovaFlushDC(HDC dc, const RECT *r)
     if (!d || d == &g_screen_dc || !r) return;
     Wnd *w = W_quiet(d->hwnd);
     if (!w && d->hwnd && hwnd_foreign(d->hwnd)) {           /* a DC on another process's window */
-        int foreign = 0;
+        DcRec *found = NULL;
         LOCK();
-        for (DcRec *rec = g_dcs; rec; rec = rec->next) if (rec->dc == d && rec->foreign) foreign = 1;
+        for (DcRec *rec = g_dcs; rec; rec = rec->next) if (rec->dc == d && rec->foreign) found = rec;
         UNLOCK();
         RECT x = { r->left + d->org_x, r->top + d->org_y, r->right + d->org_x, r->bottom + d->org_y };
-        if (foreign) foreign_flush(d, &x);
+        if (found) foreign_flush(found, &x);
         return;
     }
     if (!w || w->paint_dc == dc) return;                  /* EndPaint presents */

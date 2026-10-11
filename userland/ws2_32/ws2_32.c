@@ -248,11 +248,11 @@ int ioctlsocket(SOCKET s, long cmd, u_long *argp)
 }
 
 /* Socket options: the kernel's SOCKOPT_* (kernel/net/sock.h) for a level
- * and name, 0 for one NovaOS accepts and ignores (IPV6_V6ONLY, the
- * AcceptEx/ConnectEx context updates, SO_EXCLUSIVEADDRUSE...), as it
- * accepted every option before */
+ * and name, 0 for one NovaOS accepts and ignores (the AcceptEx/ConnectEx
+ * context updates, SO_EXCLUSIVEADDRUSE...), as it accepted every option
+ * before */
 enum { KO_RCVBUF = 1, KO_SNDBUF, KO_REUSEADDR, KO_KEEPALIVE, KO_BROADCAST, KO_NODELAY, KO_RCVTIMEO,
-       KO_SNDTIMEO, KO_LINGER, KO_TTL, KO_TYPE, KO_ERROR, KO_ACCEPTCONN };
+       KO_SNDTIMEO, KO_LINGER, KO_TTL, KO_TYPE, KO_ERROR, KO_ACCEPTCONN, KO_V6ONLY };
 static int kernel_opt(int level, int opt)
 {
     if (level == SOL_SOCKET) switch (opt) {
@@ -264,6 +264,7 @@ static int kernel_opt(int level, int opt)
         case SO_ACCEPTCONN: return KO_ACCEPTCONN;
     }
     if (level == IPPROTO_TCP && opt == TCP_NODELAY) return KO_NODELAY;
+    if (level == IPPROTO_IPV6 && opt == IPV6_V6ONLY) return KO_V6ONLY;
     if ((level == IPPROTO_IP && opt == IP_TTL) || (level == IPPROTO_IPV6 && opt == IPV6_UNICAST_HOPS)) return KO_TTL;
     return 0;
 }
@@ -302,7 +303,7 @@ int setsockopt(SOCKET s, int level, int opt, const char *val, int len)
     }
     long r = NtNovaSockCtl((INT_PTR)s, 9, (ULONG_PTR)ko, (void *)(ULONG_PTR)v);
     if (r < 0) {
-        if (r == -7 /* SOCK_EINVAL */) { set_err(ko == KO_TTL ? WSAEINVAL : WSAENOPROTOOPT); return SOCKET_ERROR; }
+        if (r == -7 /* SOCK_EINVAL */) { set_err(ko == KO_TTL || ko == KO_V6ONLY ? WSAEINVAL : WSAENOPROTOOPT); return SOCKET_ERROR; }
         return sock_err(r);
     }
     return 0;

@@ -1,8 +1,8 @@
 # looptest: Winsock over 127.0.0.1 and ::1 (lwIP's loopback interface), as
 # Firefox's parent and child processes use it, "localhost", wsock32's ordinals,
-# connected UDP sockets, WSADuplicateSocket (Chromium's browser hands its network process sockets)
+# connected UDP sockets, IPV6_V6ONLY, WSADuplicateSocket (Chromium's browser hands its network process sockets)
 # and a large non-blocking send taken whole (Steam's WebUI transport)
-DOC = '`looptest` (a socket pair over 127.0.0.1 and ::1, `getpeername` and `shutdown`, data before `accept`, `localhost`, Winsock 1.1 ordinals, socket options that read back, and `TCP_NODELAY`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `SO_LINGER` and `SO_REUSEADDR` changing what a socket does, `connect` on a UDP socket, and `WSADuplicateSocket` handing a socket to another process, and a large non-blocking `send` taken whole)'
+DOC = '`looptest` (a socket pair over 127.0.0.1 and ::1, `getpeername` and `shutdown`, data before `accept`, `localhost`, Winsock 1.1 ordinals, socket options that read back, and `TCP_NODELAY`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `SO_LINGER` and `SO_REUSEADDR` changing what a socket does, `connect` on a UDP socket, `IPV6_V6ONLY` (on by default, so `::` and `0.0.0.0` share a port), `WSADuplicateSocket` handing a socket to another process, and a large non-blocking `send` taken whole)'
 TESTS = [
     Test('looptest', 'looptest', [r'looptest: \d+ passed, 0 failed']),
 ]

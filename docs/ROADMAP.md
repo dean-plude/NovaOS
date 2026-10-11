@@ -86,11 +86,10 @@ named program or test demonstrates it.
 - **Direct3D 12** (After 0.1, step 24.4): VKD3D-Proton (LGPL-2.1, from the
   App Store as its own unchanged DLLs, `d3d12_vkd3d.dll` and `d3d12core.dll`)
   behind NovaOS's `d3d12.dll`.  ~~A Direct3D 12 sample renders~~ Done:
-  `d3d12test` draws, reads back and (64-bit) presents a triangle on
-  lavapipe ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton)).
-  Still to do: 32-bit programs' first present (it crashes inside
-  lavapipe's 32-bit window-system code), and one Direct3D 12 game that
-  renders.
+  `d3d12test` draws, reads back and presents a triangle on lavapipe,
+  64- and 32-bit ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton),
+  [32-bit present](HISTORY.md#direct3d-12-presents-in-32-bit-programs)).
+  Still to do: one Direct3D 12 game that renders.
 - ~~**Audio**: `winmm` wave output and WASAPI over a real sound device
   (QEMU's Intel HDA)~~ Done; see [Sound](HISTORY.md#sound-intel-hd-audio-winmm-and-wasapi).
   ~~Recording (`waveIn`, capture endpoints) and endpoint volume
@@ -137,8 +136,13 @@ named program or test demonstrates it.
   brings Mesa's virgl, which NovaOS's own `opengl32.dll` picks on that
   GPU; `gltest` passes on it and `gltest fps` draws faster than on
   llvmpipe; see [virgl](HISTORY.md#opengl-on-the-hosts-gpu-virgl).
-  Still to do: showing Vulkan's and OpenGL's frames on the virtio GPU
-  directly instead of reading them back and copying them through the GDI.
+  ~~Showing OpenGL's frames on the virtio GPU directly~~ Done (step
+  25.2): virgl's frames are written into the screen by the host while the
+  window is alone there, instead of being read back and drawn through the
+  GDI (`gltest present`, and `gltest fps` against the GDI way); see
+  [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
+  Still to do: the same for Vulkan's frames (Venus, DXVK, VKD3D-Proton)
+  and for windows on the other monitors.
 - ~~NetSurf: SVG; redrawing pages a script changes after layout.~~ Done
   (Phase 19.8): SVG images (`<img>`, `<object>`, CSS backgrounds, `.svg`
   pages) and `<svg>` elements written inline in HTML drawn anti-aliased,
@@ -235,7 +239,10 @@ named program or test demonstrates it.
   ANGLE's Direct3D 11 device on Venus and presents through the WARP device
   and DirectComposition instead of restarting until the browser crashed)~~
   Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
-  (DirectComposition on the GPU, `DCompositionCreateDevice3`).
+  (DirectComposition on the GPU): ~~composition swap chains on the GPU
+  device~~ Done (`dcomptest dxvk`); next `DCompositionCreateDevice3`
+  (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces) and the
+  DXVK adapter's factory making them, so Chromium turns the path on.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music

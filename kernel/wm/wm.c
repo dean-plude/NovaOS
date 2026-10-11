@@ -175,6 +175,18 @@ static bool shown(const WND *w)
 /* Stacking: popups above every normal window, then by z */
 static long long zkey(const WND *w) { return (w->popup ? (1LL << 40) : 0) + w->z; }
 
+bool WmRectUncovered(const WND *w, GdiRect r)
+{
+    if (!shown(w) || g_drag) return false;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        const WND *o = &g_windows[i];
+        if (o == w || !shown(o) || zkey(o) < zkey(w)) continue;
+        GdiRect p = painted_rect(o);
+        if (p.x < r.x + r.w && r.x < p.x + p.w && p.y < r.y + r.h && r.y < p.y + p.h) return false;
+    }
+    return true;
+}
+
 /* Topmost shown window, optionally excluding one */
 static WND *topmost(const WND *except)
 {

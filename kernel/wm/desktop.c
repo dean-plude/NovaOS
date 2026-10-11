@@ -1365,6 +1365,14 @@ void DesktopInitialize(void)
 
 bool DesktopAvailable(void) { return g_ready; }
 
+bool DesktopOverlayCovers(GdiRect r)
+{
+    if (g_start_open || g_menu.open || g_switch.on) return true;
+    if (dock_hidden()) return false;
+    int top = L_dock.y - 64;                    /* (the dock, its tooltips and the tray's) */
+    return r.y + r.h > top;
+}
+
 /* Where Windows keeps each display's settings: ...\Video\{GUID}\0000 for the
  * first, 0001 for the second, ... (DefaultSettings.* and, for the others,
  * Attach.RelativeX/Y: the position next to the primary) */

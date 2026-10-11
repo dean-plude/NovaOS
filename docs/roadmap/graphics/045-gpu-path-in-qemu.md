@@ -8,5 +8,10 @@
   brings Mesa's virgl, which NovaOS's own `opengl32.dll` picks on that
   GPU; `gltest` passes on it and `gltest fps` draws faster than on
   llvmpipe; see [virgl](HISTORY.md#opengl-on-the-hosts-gpu-virgl).
-  Still to do: showing Vulkan's and OpenGL's frames on the virtio GPU
-  directly instead of reading them back and copying them through the GDI.
+  ~~Showing OpenGL's frames on the virtio GPU directly~~ Done (step
+  25.2): virgl's frames are written into the screen by the host while the
+  window is alone there, instead of being read back and drawn through the
+  GDI (`gltest present`, and `gltest fps` against the GDI way); see
+  [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
+  Still to do: the same for Vulkan's frames (Venus, DXVK, VKD3D-Proton)
+  and for windows on the other monitors.

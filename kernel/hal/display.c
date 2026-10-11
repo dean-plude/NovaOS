@@ -593,9 +593,37 @@ bool DisplayPoll(UINT32 *removed)
     return changed;
 }
 
+static void (*g_damage_hook)(int x, int y, int w, int h);
+static UINT64 g_stat[DISPLAY_STATS];
+
+void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h)) { g_damage_hook = fn; }
+
+void DisplayStatAdd(int k, UINT64 n) { __atomic_add_fetch(&g_stat[k], n, __ATOMIC_RELAXED); }
+
+void DisplayStats(UINT64 *out)
+{
+    for (int k = 0; k < DISPLAY_STATS; k++) out[k] = __atomic_load_n(&g_stat[k], __ATOMIC_RELAXED);
+}
+
+bool DisplayPrimaryScreen(VgpuScreen *s)
+{
+    if ((d.kind != DRV_BOCHS && d.kind != DRV_VIRTIO) || !Vgpu3dPresent()) return false;
+    s->phys = d.vram_phys;
+    s->stride = d.stride;
+    s->lines = d.cur.h;
+    s->pages = d.kind == DRV_BOCHS && d.flip ? 2 : 1;
+    return true;
+}
+
+void DisplayPrimaryShow(int x, int y, int w, int ht)
+{
+    if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
+}
+
 void DisplayHeadDamage(int head, int x, int y, int w, int ht)
 {
     if (head == 0) {
+        if (g_damage_hook) g_damage_hook(x, y, w, ht);   /* (the overlays go back over it first) */
         if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
         return;
     }

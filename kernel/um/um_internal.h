@@ -525,6 +525,12 @@ UINT64     um_section_frames(UmProcess *p, const PADDR *frames, UINT64 n, UINT64
                              void (*release)(void *), void *ctx);
 void       um_gui_syscalls_init(void);
 void       um_gui_process_gone(UmProcess *p);   /* destroy the process's windows */
+/* Show virgl resource @src's top left @w x @h at (x, y) on screen, over
+ * the client area of @p's window @hwnd (user32's handle), straight from
+ * the host's GPU: 0 shown, 1 not now (the program presents it through the
+ * GDI) */
+struct VgpuBlob;
+int        UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int y, int w, int h);
 /* Wait until @o is signaled (acquiring it), @timeout_100ns passes (-1:
  * forever) or the process is being killed. */
 UINT32     um_wait_one(UmObject *o, INT64 timeout_100ns);

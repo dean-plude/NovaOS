@@ -39,7 +39,9 @@
   monitors on one card, plugged in and unplugged while NovaOS runs, and
   which on a 3D one (`virtio-vga-gl`) gives Mesa's Venus and virgl (App
   Store) their contexts, host-visible blobs, 3D resources, transfers and
-  fences, so Vulkan, DXVK and OpenGL run on the host's GPU; ACPI power-off, reset, power buttons,
+  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and OpenGL's
+  frames are written into the screen there while their window is alone
+  on it (direct presentation); ACPI power-off, reset, power buttons,
   sleep (S3, or low-power S0 idle on firmware without it), batteries and
   AC adapters, the lid, thermal zones, wake devices and PCI interrupt
   routing (AML interpreted by uACPI, with the SCI a real interrupt

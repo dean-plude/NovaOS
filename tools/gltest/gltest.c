@@ -8,10 +8,21 @@
  *        GL_RENDERER must name it)
  *
  * gltest fps [seconds]: the frame-rate test.  A scene that keeps the
- * rasterizer busy (64 blended full-window quads at 640x480) runs once on
- * virgl (the host's GPU through the virtio-gpu) and once on llvmpipe
- * (NovaOS's CPU), each in a child process whose GALLIUM_DRIVER names the
- * driver; virgl must draw more frames per second.
+ * rasterizer busy (64 blended full-window quads at 640x480) runs on virgl
+ * (the host's GPU through the virtio-gpu) twice, its frames shown straight
+ * from the host (direct presentation) and then read back and drawn through
+ * the GDI (NOVA_PRESENT=gdi), and once on llvmpipe (NovaOS's CPU), each in
+ * a child process whose GALLIUM_DRIVER names the driver; virgl must draw
+ * more frames per second than llvmpipe, and direct presentation more than
+ * the GDI way while moving fewer bytes through guest memory per frame (the
+ * kernel's counters: NtNovaGpuCtl's statistics).
+ *
+ * gltest present: direct presentation on virgl.  Four coloured quadrants
+ * (red, green / blue, white) presented with SwapBuffers in a 256x192
+ * window: shown from the host while the window is alone on screen
+ * ("present: quadrants at X Y W H": the self-test checks the screen
+ * there), through the GDI while a window covers part of it, and from the
+ * host again once that window has gone.
  *
  * gltest colors [DRIVER]: frames in each colour depth Mesa offers a window (8:8:8,
  * 5:6:5, 5:5:5:1, 4:4:4:4 and 10:10:10:2): four coloured bars presented
@@ -59,6 +70,24 @@ static GLuint shader(GLenum kind, const char *src)
     return s;
 }
 
+/* The kernel's display counters (NtNovaGpuCtl 14): bytes moved through
+ * guest memory to show frames (sent to a virtio GPU's outputs, read back
+ * by virgl, window bitmaps drawn by the desktop, its back buffer copied to
+ * the screen), frames shown by direct presentation and the bytes the host
+ * wrote into the screen for them; false if none */
+enum { ST_TO_HOST, ST_FROM_HOST, ST_PAINTED, ST_SCREEN, ST_DIRECT, ST_DIRECT_BYTES, ST_N };
+typedef LONG_PTR(NTAPI *PFN_NtNovaGpuCtl)(INT_PTR, ULONG, ULONG_PTR, void *);
+static int gpu_stats(unsigned long long st[ST_N])
+{
+    static PFN_NtNovaGpuCtl ctl;
+    memset(st, 0, sizeof(unsigned long long) * ST_N);
+    if (!ctl) ctl = (PFN_NtNovaGpuCtl)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtNovaGpuCtl");
+    return ctl && ctl(0, 14, 0, st) == 0;
+}
+
+/* The pointer out of the way (over a window it stops direct presentation) */
+static void pointer_away(void) { SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 1, 0); }
+
 /* ---- the frame-rate test ------------------------------------------------ */
 #define FPS_W 640
 #define FPS_H 480
@@ -87,13 +116,18 @@ static void pump(void)
     while (PeekMessageA(&m, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&m);
 }
 
-/* The child: draw the scene for @secs seconds; prints "fps-result RENDERER|FRAMES|MS" */
+/* The child: draw the scene for @secs seconds; prints "fps-result
+ * RENDERER|FRAMES|MS|DIRECT|BYTES": DIRECT of the frames shown from the
+ * host, BYTES moved through guest memory meanwhile */
 static int fps_child(int secs)
 {
     HDC dc;
     HGLRC rc;
     if (!gl_window("OpenGL frame rate", 60, 60, FPS_W, FPS_H, &dc, &rc)) { printf("FAIL context\n"); return 1; }
+    pointer_away();
     const char *renderer = (const char *)glGetString(GL_RENDERER);
+    unsigned long long s0[ST_N], s1[ST_N];
+    gpu_stats(s0);
     glViewport(0, 0, FPS_W, FPS_H);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -118,14 +152,22 @@ static int fps_child(int secs)
     }
     glFinish();
     DWORD ms = GetTickCount() - t0;
-    printf("fps-result %s|%lu|%lu\n", renderer ? renderer : "?", (unsigned long)frames, (unsigned long)ms);
+    gpu_stats(s1);
+    printf("fps-result %s|%lu|%lu|%llu|%llu\n", renderer ? renderer : "?", (unsigned long)frames, (unsigned long)ms,
+           s1[ST_DIRECT] - s0[ST_DIRECT], (s1[ST_TO_HOST] - s0[ST_TO_HOST]) + (s1[ST_FROM_HOST] - s0[ST_FROM_HOST]) +
+           (s1[ST_PAINTED] - s0[ST_PAINTED]) + (s1[ST_SCREEN] - s0[ST_SCREEN]));
     return 0;
 }
 
-/* Run the child with GALLIUM_DRIVER=@driver; its frames per second (or
- * -1), the renderer it reported in @renderer */
-static double fps_run(const char *driver, int secs, char *renderer, int cap)
+typedef struct { double fps; unsigned long frames, direct; double kib; char renderer[256]; } FpsResult;
+
+/* Run the child with GALLIUM_DRIVER=@driver (and NOVA_PRESENT=@present);
+ * its frames per second (or -1), the renderer it reported, the frames
+ * shown from the host and the KiB per frame through guest memory in @r */
+static double fps_run(const char *driver, const char *present, int secs, FpsResult *r)
 {
+    memset(r, 0, sizeof(*r));
+    r->fps = -1;
     char exe[MAX_PATH], cmd[2 * MAX_PATH], out[MAX_PATH];
     GetModuleFileNameA(NULL, exe, sizeof(exe));
     GetTempPathA(sizeof(out), out);
@@ -133,13 +175,16 @@ static double fps_run(const char *driver, int secs, char *renderer, int cap)
     DeleteFileA(out);
     snprintf(cmd, sizeof(cmd), "\"%s\" fpsrun %d \"%s\"", exe, secs, out);
     SetEnvironmentVariableA("GALLIUM_DRIVER", driver);
+    SetEnvironmentVariableA("NOVA_PRESENT", present);
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return -1;
+    BOOL started = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    SetEnvironmentVariableA("GALLIUM_DRIVER", NULL);
+    SetEnvironmentVariableA("NOVA_PRESENT", NULL);
+    if (!started) return -1;
     WaitForSingleObject(pi.hProcess, (DWORD)(secs + 600) * 1000);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    SetEnvironmentVariableA("GALLIUM_DRIVER", NULL);
     char line[512] = "";
     FILE *f = fopen(out, "r");
     if (!f) return -1;
@@ -148,28 +193,122 @@ static double fps_run(const char *driver, int secs, char *renderer, int cap)
     char *bar = strchr(line, '|');
     if (strncmp(line, "fps-result ", 11) || !bar) return -1;
     *bar = 0;
-    snprintf(renderer, cap, "%s", line + 11);
-    unsigned long frames = 0, ms = 0;
-    if (sscanf(bar + 1, "%lu|%lu", &frames, &ms) != 2 || !ms) return -1;
-    return frames * 1000.0 / ms;
+    snprintf(r->renderer, sizeof(r->renderer), "%s", line + 11);
+    unsigned long ms = 0;
+    unsigned long long direct = 0, bytes = 0;
+    if (sscanf(bar + 1, "%lu|%lu|%llu|%llu", &r->frames, &ms, &direct, &bytes) != 4 || !ms || !r->frames) return -1;
+    r->direct = (unsigned long)direct;
+    r->kib = bytes / 1024.0 / r->frames;
+    return r->fps = r->frames * 1000.0 / ms;
+}
+
+static void fps_print(const char *name, const FpsResult *r)
+{
+    printf("%-10s %.2f frames/s, %lu of %lu frames shown from the host, %.0f KiB a frame through guest memory  (%s)\n",
+           name, r->fps, r->direct, r->frames, r->kib, r->renderer);
 }
 
 static int fps_test(int secs)
 {
-    char r_virgl[256] = "", r_llvm[256] = "";
+    FpsResult v, g, l;
     printf("fps: virgl for %d s\n", secs);
-    double v = fps_run("virgl", secs, r_virgl, sizeof(r_virgl));
-    printf("virgl     %.2f frames/s  (%s)\n", v, r_virgl);
+    fps_run("virgl", NULL, secs, &v);
+    fps_print("virgl", &v);
+    printf("fps: virgl through the GDI for %d s\n", secs);
+    fps_run("virgl", "gdi", secs, &g);
+    fps_print("virgl/GDI", &g);
     printf("fps: llvmpipe for %d s\n", secs);
-    double l = fps_run("llvmpipe", secs, r_llvm, sizeof(r_llvm));
-    printf("llvmpipe  %.2f frames/s  (%s)\n", l, r_llvm);
-    check("virgl ran", v > 0);
-    check("virgl is the renderer", strstr(r_virgl, "virgl") != NULL);
-    check("llvmpipe ran", l > 0);
-    check("llvmpipe is the renderer", strstr(r_llvm, "llvmpipe") != NULL && !strstr(r_llvm, "virgl"));
-    check("virgl beats llvmpipe", v > 0 && l > 0 && v > l);
-    if (v > 0 && l > 0) printf("virgl is %.1fx llvmpipe\n", v / l);
+    fps_run("llvmpipe", NULL, secs, &l);
+    fps_print("llvmpipe", &l);
+    check("virgl ran", v.fps > 0 && g.fps > 0);
+    check("virgl is the renderer", strstr(v.renderer, "virgl") != NULL);
+    check("llvmpipe ran", l.fps > 0);
+    check("llvmpipe is the renderer", strstr(l.renderer, "llvmpipe") != NULL && !strstr(l.renderer, "virgl"));
+    check("virgl beats llvmpipe", v.fps > 0 && l.fps > 0 && g.fps > l.fps);
+    check("virgl shows its frames from the host", v.direct * 10 >= v.frames * 9);
+    check("NOVA_PRESENT=gdi shows them through the GDI", g.fps > 0 && g.direct == 0);
+    check("direct presentation moves fewer bytes", v.fps > 0 && g.fps > 0 && v.kib * 4 < g.kib);
+    check("direct presentation is faster", v.fps > 0 && g.fps > 0 && v.fps > g.fps);
+    if (v.fps > 0 && l.fps > 0) printf("virgl is %.1fx llvmpipe\n", v.fps / l.fps);
+    if (v.fps > 0 && g.fps > 0)
+        printf("direct presentation: %.1f ms a frame against %.1f ms, %.0f KiB against %.0f KiB through guest memory\n",
+               1000.0 / v.fps, 1000.0 / g.fps, v.kib, g.kib);
     printf("gltest fps: %d passed, %d failed\n", pass, fail);
+    return fail != 0;
+}
+
+/* ---- direct presentation ------------------------------------------------ */
+#define PR_W 256
+#define PR_H 192
+
+static void quadrants(void)
+{
+    static const float c[4][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 1, 1 } };   /* (top left first) */
+    glEnable(GL_SCISSOR_TEST);
+    for (int i = 0; i < 4; i++) {
+        glScissor((i & 1) * PR_W / 2, (i & 2) ? 0 : PR_H / 2, PR_W / 2, PR_H / 2);
+        glClearColor(c[i][0], c[i][1], c[i][2], 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glDisable(GL_SCISSOR_TEST);
+}
+
+/* Present for @ms; the frames, and the frames shown from the host */
+static unsigned long present_for(HDC dc, DWORD ms, unsigned long *direct)
+{
+    unsigned long long a[ST_N], b[ST_N];
+    unsigned long frames = 0;
+    gpu_stats(a);
+    for (DWORD t0 = GetTickCount(); GetTickCount() - t0 < ms; frames++) {
+        pump();
+        quadrants();
+        SwapBuffers(dc);
+    }
+    glFinish();
+    gpu_stats(b);
+    *direct = (unsigned long)(b[ST_DIRECT] - a[ST_DIRECT]);
+    return frames;
+}
+
+static int present_test(void)
+{
+    HDC dc;
+    HGLRC rc;
+    unsigned long long st[ST_N];
+    HWND w = gl_window("Direct presentation", 100, 100, PR_W, PR_H, &dc, &rc);
+    check("context", w != NULL);
+    check("the kernel's counters", gpu_stats(st));
+    if (!w) { printf("gltest present: %d passed, %d failed\n", pass, fail); return 1; }
+    printf("GL_RENDERER %s\n", glGetString(GL_RENDERER));
+    pointer_away();
+    glViewport(0, 0, PR_W, PR_H);
+    unsigned long d1, d2, d3, f;
+    present_for(dc, 1000, &d1);                         /* (the window is shown and active) */
+    POINT o = { 0, 0 };
+    ClientToScreen(w, &o);
+    printf("present: quadrants at %ld %ld %d %d\n", o.x, o.y, PR_W, PR_H);
+    f = present_for(dc, 6000, &d1);
+    printf("alone: %lu of %lu frames shown from the host\n", d1, f);
+    check("frames shown from the host while the window is alone", f > 0 && d1 * 10 >= f * 9);
+
+    HWND cover = CreateWindowA("gltest", "Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, o.x + PR_W / 2, o.y + PR_H / 2,
+                               200, 150, 0, 0, GetModuleHandleA(NULL), 0);
+    present_for(dc, 1000, &d2);                         /* (the window is drawn) */
+    f = present_for(dc, 3000, &d2);
+    printf("covered: %lu of %lu frames shown from the host\n", d2, f);
+    check("frames go through the GDI while a window covers it", cover && f > 0 && d2 == 0);
+
+    DestroyWindow(cover);
+    SetForegroundWindow(w);
+    pointer_away();
+    present_for(dc, 1000, &d3);
+    f = present_for(dc, 3000, &d3);
+    printf("uncovered: %lu of %lu frames shown from the host\n", d3, f);
+    check("frames shown from the host again once it has gone", f > 0 && d3 * 10 >= f * 9);
+    wglMakeCurrent(NULL, NULL);
+    wglDeleteContext(rc);
+    DestroyWindow(w);
+    printf("gltest present: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }
 
@@ -259,7 +398,8 @@ static int colors_test(void)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc > 1 && (!strcmp(argv[1], "fpsrun") || !strcmp(argv[1], "fps") || !strcmp(argv[1], "colors"))) {
+    if (argc > 1 && (!strcmp(argv[1], "fpsrun") || !strcmp(argv[1], "fps") || !strcmp(argv[1], "colors") ||
+                     !strcmp(argv[1], "present"))) {
         WNDCLASSA wc = { CS_OWNDC, proc, 0, 0, GetModuleHandleA(NULL), 0, LoadCursor(NULL, IDC_ARROW), 0, 0, "gltest" };
         RegisterClassA(&wc);
         if (!strcmp(argv[1], "colors")) {
@@ -282,6 +422,7 @@ int main(int argc, char **argv)
             return colors_test();
         }
         if (!strcmp(argv[1], "fps")) return fps_test(argc > 2 ? atoi(argv[2]) : 10);
+        if (!strcmp(argv[1], "present")) return present_test();
         if (argc > 3) freopen(argv[3], "w", stdout);   /* the child: fpsrun SECS FILE */
         return fps_child(argc > 2 ? atoi(argv[2]) : 5);
     }

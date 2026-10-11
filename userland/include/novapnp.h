@@ -10,6 +10,7 @@
 #pragma once
 #include <windows.h>
 #include <winternl.h>
+#include <string.h>
 
 #define NOVA_CTL_PNP 56
 
@@ -166,4 +167,103 @@ static inline void nova_pnp_iface_path(const NovaPnpNode *n, const GUID *g, WCHA
     gs[j++] = '}'; gs[j] = 0;
     for (const char *s = gs; *s && k < cap - 1; s++) out[k++] = (WCHAR)*s;
     out[k] = 0;
+}
+
+/* @g as Windows writes a class GUID: "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}"
+ * in lower case (39 characters with the NUL) */
+static inline void nova_pnp_guid_str(const GUID *g, char *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    const unsigned char *b = (const unsigned char *)g;
+    static const signed char order[] = { 3, 2, 1, 0, -1, 5, 4, -1, 7, 6, -1, 8, 9, -1, 10, 11, 12, 13, 14, 15 };
+    int j = 0;
+    out[j++] = '{';
+    for (unsigned i = 0; i < sizeof(order); i++) {
+        if (order[i] < 0) { out[j++] = '-'; continue; }
+        out[j++] = hex[b[order[i]] >> 4];
+        out[j++] = hex[b[order[i]] & 15];
+    }
+    out[j++] = '}';
+    out[j] = 0;
+}
+
+/* The length of a REG_MULTI_SZ list in bytes, its final NUL included
+ * (2 for an empty one) */
+static inline int nova_pnp_multi_len(const char *m)
+{
+    int n = 0;
+    while (m[n]) while (m[n++]) ;
+    return n ? n + 1 : 2;
+}
+
+/* A device registry property (SPDRP_*; cfgmgr32's CM_DRP_* is one more)
+ * of node @n into @out (@cap bytes, ANSI): its size in bytes, NULs
+ * included, and its type in *@type; -1 for one the node does not have.
+ * A REG_DWORD is 4 bytes of @out. */
+static inline int nova_pnp_property(const NovaPnpNode *n, DWORD prop, char *out, int cap, DWORD *type)
+{
+    const char *s = NULL;
+    char tmp[64];
+    DWORD dw = 0;
+    *type = REG_SZ;
+    switch (prop) {
+    case 0x00: s = n->desc; break;                                    /* SPDRP_DEVICEDESC */
+    case 0x01: case 0x02: {                                           /* SPDRP_HARDWAREID, _COMPATIBLEIDS */
+        const char *m = prop == 1 ? n->hwids : n->compat;
+        if (!m[0]) return -1;
+        int len = nova_pnp_multi_len(m);
+        *type = REG_MULTI_SZ;
+        if (len <= cap) memcpy(out, m, (size_t)len);
+        return len;
+    }
+    case 0x04: s = n->service; break;                                 /* SPDRP_SERVICE */
+    case 0x07: s = n->cls; break;                                     /* SPDRP_CLASS */
+    case 0x08: case 0x09: {                                           /* SPDRP_CLASSGUID, _DRIVER */
+        GUID g;
+        if (!nova_pnp_class_guid(n->cls, &g)) return -1;
+        nova_pnp_guid_str(&g, tmp);
+        if (prop == 0x09) {
+            if (!n->service[0]) return -1;
+            DWORD v = n->id;
+            char *e = tmp + 38;
+            *e++ = '\\';
+            for (int d = 1000; d; d /= 10) *e++ = (char)('0' + v / (DWORD)d % 10);
+            *e = 0;
+        }
+        s = tmp;
+        break;
+    }
+    case 0x0A: *type = REG_DWORD; break;                              /* SPDRP_CONFIGFLAGS */
+    case 0x0B: s = n->mfg; break;                                     /* SPDRP_MFG */
+    case 0x0C: s = n->friendly; break;                                /* SPDRP_FRIENDLYNAME */
+    case 0x0D: s = n->location; break;                                /* SPDRP_LOCATION_INFORMATION */
+    case 0x0E: {                                                      /* SPDRP_PHYSICAL_DEVICE_OBJECT_NAME */
+        static const char hex[] = "0123456789abcdef";
+        memcpy(tmp, "\\Device\\", 8);
+        for (int k = 0; k < 8; k++) tmp[8 + k] = hex[(n->id >> (28 - 4 * k)) & 15];
+        tmp[16] = 0;
+        s = tmp;
+        break;
+    }
+    case 0x0F:                                                        /* SPDRP_CAPABILITIES */
+        *type = REG_DWORD;
+        dw = (n->flags & NOVA_PNP_REMOVABLE) ? 0x04 | 0x10 : 0;       /* CM_DEVCAP_REMOVABLE | _SURPRISEREMOVALOK */
+        break;
+    case 0x16: {                                                      /* SPDRP_ENUMERATOR_NAME */
+        int k = 0;
+        while (n->instance[k] && n->instance[k] != '\\' && k < 63) { tmp[k] = n->instance[k]; k++; }
+        tmp[k] = 0;
+        s = tmp;
+        break;
+    }
+    default: return -1;
+    }
+    if (*type == REG_DWORD) {
+        if (cap >= 4) memcpy(out, &dw, 4);
+        return 4;
+    }
+    if (!s || !s[0]) return -1;
+    int len = lstrlenA(s) + 1;
+    if (len <= cap) memcpy(out, s, (size_t)len);
+    return len;
 }

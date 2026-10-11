@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mkdriver.py — the driver package the drvtest self-test installs
 
-    mkdriver.py OUTDIR
+    mkdriver.py OUTDIR [--pnp]
 
 tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Driver:
 novadrv.inf (a root-enumerated "System" class device, ROOT\\NOVADRV, with a
@@ -9,6 +9,11 @@ kernel service), novadrv.sys and novadrv.cat.  The .sys and .cat are
 placeholders: NovaOS stages a package in its driver store but never loads a
 Windows kernel-mode driver, and does not check driver catalogs.
 tools/msitest/mkpkg.py packs the same files into driver.msi.
+
+With --pnp it writes the Plug and Play self-test's package instead (for
+C:\\Tests\\PnpDriver): novakbd.inf, a Keyboard-class driver for QEMU's USB
+keyboard (HID\\VID_0627&PID_0001), which pnputil /enum-devices /drivers
+lists as matching the keyboard, outranked by NovaOS's own driver.
 """
 import os, sys
 
@@ -66,11 +71,18 @@ CAT = b'0\x82\0\0NovaOS driver-install test catalog placeholder\r\n'
 
 FILES = [('novadrv.inf', INF), ('novadrv.sys', SYS), ('novadrv.cat', CAT)]
 
+PNP_INF = INF.decode('ascii').replace('novadrv', 'novakbd').replace('NovaDrv', 'NovaKbd') \
+    .replace('Class       = System', 'Class       = Keyboard') \
+    .replace('{4d36e97d-e325-11ce-bfc1-08002be10318}', '{4d36e96b-e325-11ce-bfc1-08002be10318}') \
+    .replace('ROOT\\NOVADRV', 'HID\\VID_0627&PID_0001') \
+    .replace('"NovaOS Test Device"', '"NovaOS Test Keyboard"').encode('ascii')
+PNP_FILES = [('novakbd.inf', PNP_INF), ('novakbd.sys', SYS), ('novakbd.cat', CAT)]
+
 
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
-    for name, data in FILES:
+    for name, data in (PNP_FILES if '--pnp' in sys.argv[2:] else FILES):
         with open(os.path.join(out, name), 'wb') as f:
             f.write(data)
 

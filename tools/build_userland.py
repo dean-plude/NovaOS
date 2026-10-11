@@ -610,6 +610,10 @@ drvdir = os.path.join(out, 'drivertest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mkdriver.py'), drvdir])
 for n in sorted(os.listdir(drvdir)):
     built.append((f'\\Tests\\Driver\\{n}', os.path.join(drvdir, n)))
+pnpdrv = os.path.join(out, 'pnpdriver')                   # (and the Plug and Play self-test's)
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mkdriver.py'), pnpdrv, '--pnp'])
+for n in sorted(os.listdir(pnpdrv)):
+    built.append((f'\\Tests\\PnpDriver\\{n}', os.path.join(pnpdrv, n)))
 # 3a2b. the Authenticode self-test's signed files (authtest.exe), made by
 # tools/authenticode/mktests.py from copies of hello.exe
 authdir = os.path.join(out, 'authenticode')

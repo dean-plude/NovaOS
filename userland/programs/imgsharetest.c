@@ -7,8 +7,11 @@
  * itself (`imgsharetest child`) while it still runs.  The copy's pages come
  * from the cache: it must see its data, its read-only page and its zeroed
  * data as the file has them, not as the first process changed them, and
- * its imports must work (it calls through them).  It reports the number of
- * failed checks as its exit code. */
+ * its imports must work (it calls through them).  The 64-bit build also
+ * commits fifteen sixteenths of the RAM at once (past the old cap of 7/8,
+ * which shared module pages used to count towards) and must be refused
+ * more than the RAM.  It reports the number of failed checks as its exit
+ * code. */
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -57,6 +60,23 @@ int main(int argc, char **argv)
     *(volatile char *)ro = 'X';
     CHECK("the changed read-only page", MARK0 == 'X');
     CHECK("LoadLibrary advapi32", LoadLibraryA("advapi32.dll") != NULL);
+
+    if (sizeof(void *) == 8) {                      /* (a 32-bit process has 2 GB of addresses) */
+        MEMORYSTATUSEX ms = { sizeof(ms) };
+        GlobalMemoryStatusEx(&ms);
+        SIZE_T big = (SIZE_T)(ms.ullTotalPhys / 16 * 15) & ~(SIZE_T)0xFFFF;
+        volatile char *m = VirtualAlloc(NULL, big, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        CHECK("commit 15/16 of the RAM", m != NULL);
+        if (m) {
+            m[0] = 1;
+            m[big - 1] = 2;
+            CHECK("its first and last pages", m[0] == 1 && m[big - 1] == 2 && m[big / 2] == 0);
+            VirtualFree((void *)m, 0, MEM_RELEASE);
+        }
+        void *over = VirtualAlloc(NULL, (SIZE_T)ms.ullTotalPhys + (64 << 20), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        CHECK("more than the RAM refused", over == NULL);
+        if (over) VirtualFree(over, 0, MEM_RELEASE);
+    }
 
     char self[MAX_PATH], cmd[MAX_PATH + 16];
     GetModuleFileNameA(NULL, self, MAX_PATH);

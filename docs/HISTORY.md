@@ -10390,6 +10390,29 @@ Vulkan drivers from the App Store need reinstalling for 32-bit games.
 `regtest` checks the isolation, the explicit view flags and shared keys,
 64- and 32-bit.
 
+## Commit cap: a program may commit the whole RAM
+
+A program could commit 7/8 of the machine's RAM.  Firefox's main process
+at 2 GB reached that once the 160 MB of `xul.dll` it shares counted
+towards it; since the image cache, shared module pages are not charged,
+and the main process had about 170 MB of room left.
+
+- **The cap is the RAM** (`kernel/um/um_syscall.c`).  A commit counts a
+  program's own memory only, so it may promise all of the RAM; a commit
+  past it still fails up front with `STATUS_NO_MEMORY`.  At 2 GB that is
+  256 MB more room for Firefox's main process.
+- **A touched page waits for memory** (`kernel/um/um.c`, `UmDemandWait`).
+  Commit is not backed by a page file, so a promised page can find no
+  free memory when it is first touched.  The thread then runs the
+  instruction again for up to 3 seconds, while the saved files of C: the
+  "persist" thread lets go of when memory is short, and programs ending,
+  give memory back.  Only then is it an access violation, with
+  `[UM] NAME: no memory for a committed page at ADDRESS (N MB free)` on
+  the serial log.
+- **Test.**  The 64-bit `imgsharetest` commits fifteen sixteenths of the
+  RAM at once, touches its first, middle and last pages, and must be
+  refused a commit larger than the RAM.
+
 ## Memory: the compressed system files are given back once unpacked
 
 The kernel image carries the system files, most of them zlib-compressed,
@@ -10426,6 +10449,35 @@ Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
 in the minute against 49 (34 of them a part of the screen), its longest
 frame took 0.9 s against 4.2 s, programs got 47% of the CPU against 38%,
 and the desktop watchdog (3 s without a frame) never fired.
+
+## Direct3D 12 through VKD3D-Proton
+
+The first step of the gaming roadmap's Direct3D 12 item (After 0.1, step
+24.4).  NovaOS's `d3d12.dll` answered as Windows does on a PC without a
+Direct3D 12 driver.  The App Store now lists **VKD3D-Proton** 2.14.1
+(Runtimes), the Direct3D 12 that runs on Vulkan, and Direct3D 12 programs
+draw through it on Mesa's lavapipe (or Venus).  Nothing in VKD3D-Proton is
+changed (it is LGPL-2.1, so it stays its own DLLs).
+
+- **App Store**: the release is a `.tar.zst`; the Store now takes the
+  Zstandard layer off with 7-Zip (as it does `.tar.gz`), then the `.tar`.
+  Its `d3d12.dll` goes into System32 and SysWOW64 as `d3d12_vkd3d.dll`,
+  next to its `d3d12core.dll`.
+- **d3d12.dll**: every export (`D3D12CreateDevice`, the root signature
+  serializers and deserializers, `D3D12GetDebugInterface`,
+  `D3D12GetInterface`, `D3D12EnableExperimentalFeatures`) hands the call to
+  `d3d12_vkd3d.dll` when it is installed, as `d3d9.dll` and `d3d11.dll` do
+  with DXVK; without it nothing changes.
+- **Swap chains**: DXVK's `dxgi` (behind NovaOS's) makes the swap chain on
+  a Direct3D 12 command queue, which VKD3D-Proton presents through.
+- **tools/d3d12test** (graphics suite, on lavapipe): a device, a command
+  queue, list and fence, a root signature and pipeline from HLSL compiled
+  by NovaOS's `d3dcompiler_47`, a triangle drawn into a render target and
+  copied to a read-back buffer (blue around a red centre), then 64-bit only
+  the same triangle presented in a window through a flip-model swap chain.
+  The 32-bit program's first present crashes inside lavapipe's 32-bit
+  window-system code (`HeapFree` of the pointer 0x50); that, and a Direct3D
+  12 game, are the next steps.
 
 ## Drawing into another process's child window
 
@@ -10555,6 +10607,11 @@ start.
 The two architectures' llvmpipe add about 97 MB to drive C:'s system
 files (they are unpacked into memory at boot, as the other system files
 are).
+
+The Teeworlds corpus tests (`925-teeworlds.py`, `926-teeworlds-join.py`)
+no longer install Mesa 3D from the App Store first: they run on the built-in
+OpenGL.  The Direct3D games (OpenTyrian, Blobby Volley 2) still install it
+for lavapipe, DXVK's Vulkan driver.
 
 ## Non-blocking TCP sends taken whole, as on Windows
 

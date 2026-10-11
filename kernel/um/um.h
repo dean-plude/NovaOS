@@ -230,6 +230,7 @@ void UmDumpAll(void);
 /* A page fault at @va in the current program: back a committed page that
  * was never touched (demand-zero).  True if the access can be retried. */
 bool UmDemandFault(UINT64 va);
+bool UmDemandWait(UINT64 va);
 /* An instruction fetch at @va from a data page: in a program running with
  * DEP off, the page becomes executable.  True if the fetch can be retried. */
 bool UmDepFault(UINT64 va);

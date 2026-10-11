@@ -130,6 +130,7 @@ struct UmThread {
     UINT32          tid;
     int             slot;           /* TEB slot */
     UINT64          teb, stack_lo, stack_size;
+    UINT64          oom_tick;       /* when a touched page first found no free memory (UmDemandWait) */
     UINT64          start, arg;     /* where it begins (via ntdll) */
     volatile INT32  suspend;        /* suspend count */
     volatile bool   terminate;      /* NtTerminateThread from another thread */

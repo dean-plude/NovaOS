@@ -1,4 +1,4 @@
-# glgeneric: OpenGL with no driver installed (no App Store Mesa 3D):
+# glgeneric: OpenGL with no driver (GALLIUM_DRIVER=generic, as before Mesa):
 # opengl32.dll's own OpenGL 1.1 gives a pixel format and a context, clears,
 # reads back and swaps, and draws in 2D (textures, vertex arrays, blending,
 # scissor, glBegin/glEnd), 64- and 32-bit

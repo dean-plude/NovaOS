@@ -3,21 +3,24 @@
  *
  * On Windows, opengl32.dll is the system's and the display driver brings
  * the OpenGL implementation.  On NovaOS the implementations are Mesa's,
- * from the App Store, each a whole opengl32 of its own under another name:
+ * each a whole opengl32 of its own under another name:
  *
- *   opengl32_virgl.dll  Mesa's virgl ("Venus"): OpenGL on the host's GPU
- *                       through a 3D virtio-gpu (QEMU's virtio-vga-gl)
- *   opengl32_mesa.dll   Mesa's llvmpipe ("Mesa 3D"): OpenGL on the CPU
+ *   opengl32_virgl.dll  Mesa's virgl (the App Store's "Venus"): OpenGL on
+ *                       the host's GPU through a 3D virtio-gpu (QEMU's
+ *                       virtio-vga-gl)
+ *   opengl32_mesa.dll   Mesa's llvmpipe: OpenGL 4.5 on the CPU, on drive C:
+ *                       from the start (tools/bundle_mesa.py)
  *
  * When the process starts, this one picks virgl if the machine has a
  * virtio GPU with virgl's capability set and virgl is installed, and
  * llvmpipe otherwise, and every export (OpenGL 1.1 and wgl*) jumps to the
  * one picked.  GALLIUM_DRIVER chooses as in Mesa: "virgl" only virgl,
- * "llvmpipe" or "softpipe" only Mesa 3D.  With neither installed, NovaOS's
- * own OpenGL 1.1 answers (generic.c, draw.c), as Windows' "GDI Generic"
- * does on a machine without an OpenGL driver: programs get a context and
- * see OpenGL 1.1; those that need more fall back to drawing without it,
- * and those that draw in 2D with OpenGL 1.1 (ScummVM) draw with it.
+ * "llvmpipe" or "softpipe" only llvmpipe, and NovaOS's "generic" neither.
+ * Without a driver, NovaOS's own OpenGL 1.1 answers (generic.c, draw.c),
+ * as Windows' "GDI Generic" does on a machine without an OpenGL driver:
+ * programs get a context and see OpenGL 1.1; those that need more fall
+ * back to drawing without it, and those that draw in 2D with OpenGL 1.1
+ * (ScummVM) draw with it.
  */
 #include <windows.h>
 
@@ -81,7 +84,7 @@ static void load_driver(void)
     HMODULE m = NULL;
     if (streq(want, "virgl") || (!want[0] && virgl_gpu()))
         m = LoadLibraryW(L"opengl32_virgl.dll");
-    if (!m && !streq(want, "virgl"))
+    if (!m && !streq(want, "virgl") && !streq(want, "generic"))
         m = LoadLibraryW(L"opengl32_mesa.dll");
     if (!m) {                                    /* no driver: NovaOS's own OpenGL 1.1 (generic.c) */
         typedef struct { const char *name; void *fn; } Fn;

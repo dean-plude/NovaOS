@@ -28,6 +28,7 @@ import os, re, subprocess, sys, threading, types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_netsurf
 import bundle_firefox
+import bundle_mesa
 
 HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'userland')
 def parse_args(argv):
@@ -651,6 +652,10 @@ if os.environ.get('NOVA_NO_NETSURF') != '1':
 # 3c. Mozilla's pinned, checksum-verified Firefox payload (default browser).
 # Keep NetSurf available for its focused regression suite and as a fallback.
 built += bundle_firefox.stage(out)
+
+# 3d. Mesa's software OpenGL (llvmpipe, mesa-dist-win), pinned and
+# checksum-verified: the OpenGL 4.5 NovaOS's opengl32.dll hands programs to
+built += bundle_mesa.stage(out)
 
 # 4. embed (.incbin: the browser alone is megabytes, too much for C arrays).
 # Files of 1 MiB or more (ICU's data and DLLs, NetSurf) go in zlib-compressed

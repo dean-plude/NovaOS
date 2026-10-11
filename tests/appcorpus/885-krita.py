@@ -7,8 +7,8 @@
 # its pixels, and Ctrl+Z must take it away again (so Krita closes with no
 # "Save?"); the window must then match tests/reference/krita.png.  The
 # portable zip from download.kde.org, the download the App Store lists.
-# Krita needs OpenGL 3 for its canvas, so the App Store's Mesa 3D
-# (llvmpipe) is installed first, as a user without a GPU driver would.
+# Krita needs OpenGL 3 for its canvas: Mesa's llvmpipe is built in, so
+# nothing is installed first.
 # Windowed; it loads about 90 DLLs, its resources and Python plugins before
 # the window.
 import os, tempfile, time
@@ -52,6 +52,5 @@ def new_image(nova, echo):
 
 
 APP = App('Krita', '5.3.4', 'https://download.kde.org/stable/krita/5.3.4/krita-x64-5.3.4.zip',
-          'Krita', [Test('install Mesa 3D', 'store install Mesa 3D', store='Mesa 3D', timeout=1200),
-                    Test('new image', rf'start {A}\Krita\bin\krita.exe --nosplash', timeout=300)],
-          strip=1, gui=True, interact=new_image, runtimes=['Mesa 3D'])
+          'Krita', [Test('new image', rf'start {A}\Krita\bin\krita.exe --nosplash', timeout=300)],
+          strip=1, gui=True, interact=new_image)

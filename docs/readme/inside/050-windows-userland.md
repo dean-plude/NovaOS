@@ -43,7 +43,8 @@
   Qt and Krita), `cabinet` (the FDI functions installers extract cabinets
   with, MSZIP and LZX, on `msi`'s cabinet readers), `wldap32` (LDAP
   sessions, for programs that link to it; no directory servers yet),
-  `opengl32` (Mesa from the App Store, or with no driver NovaOS's own
+  `opengl32` (Mesa's llvmpipe, OpenGL 4.5 on the CPU, built in; virgl on a
+  3D virtio-gpu from the App Store; or with no driver NovaOS's own
   OpenGL 1.1, which draws 2D as ScummVM needs: textures, vertex arrays,
   blending, scissor), `ddraw` (DirectDraw for 32-bit programs: the
   MIT-licensed cnc-ddraw, every surface in memory and the screen drawn

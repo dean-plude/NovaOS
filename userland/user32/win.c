@@ -819,7 +819,14 @@ void wnd_set_pos(Wnd *w, HWND after, int x, int y, int cx, int cy, UINT flags)
         if (!(flags & SWP_NOZORDER) && !(flags & SWP_NOACTIVATE) && w->kid && (w->style & WS_VISIBLE))
             NtNovaGuiCtl(w->kid, CTL_ACTIVATE, 0, NULL);
         if (flags & SWP_FRAMECHANGED) invalidate_nc(w);
-    } else if (!(flags & SWP_NOREDRAW)) {
+    } else if (moved || sized || (flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW))) {
+        /* the DCs a program keeps on a child window (or one inside it)
+         * draw where it is now: VLC's OpenGL output keeps its video
+         * window's DC for good and moves the window to centre the picture */
+        Wnd *t = top_of(w);
+        if (t && t->back) dcs_follow(t);
+    }
+    if (w->parent && !(flags & SWP_NOREDRAW)) {
         int vis = wnd_visible(w);
         if (was_visible && (moved || sized || !vis)) invalidate(w->parent, &old, TRUE, 1);   /* uncover what it covered */
         if (vis && (moved || sized || !was_visible || (flags & SWP_FRAMECHANGED))) {

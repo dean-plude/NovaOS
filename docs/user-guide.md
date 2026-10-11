@@ -158,9 +158,10 @@ The **App Store** in the dock lists programs by category.  **Get**
 downloads one to `C:\Downloads`, **Install** installs it (with 7-Zip, the
 Windows Installer, or the program's own setup), and **Open** starts it;
 installed programs also appear in Start.  Some programs need a runtime
-first, as their notes in the App Store say: Krita needs **Mesa 3D**, and
-3D programs and games need **Mesa 3D** and **DXVK** (both under
-Runtimes).
+first, as their notes in the App Store say: Direct3D programs and games
+need **Mesa 3D** (its Vulkan) and **DXVK** (both under Runtimes).
+OpenGL needs nothing: Mesa's llvmpipe is built in, so Krita and other
+OpenGL 2 and later programs run as they are.
 
 Programs from anywhere else install as on Windows: download the
 installer, `.msi` or `.zip`, then run the installer or unzip it (7-Zip

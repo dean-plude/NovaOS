@@ -5,9 +5,10 @@
  * resolving to ::1 and 127.0.0.1 without DNS, and socket options
  * (setsockopt/getsockopt) that read back and change what a socket does,
  * connect on a UDP socket, and a socket handed to another process
- * (WSADuplicateSocket), and WSAEventSelect's FD_CONNECT carrying a
+ * (WSADuplicateSocket), WSAEventSelect's FD_CONNECT carrying a
  * refused connect's error (Chromium dialling "localhost" tries ::1, then
- * 127.0.0.1 when ::1 refuses). */
+ * 127.0.0.1 when ::1 refuses), and a large non-blocking send taken whole
+ * (Steam's WebUI transport never sends the rest of a short one). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -285,6 +286,41 @@ static LONGLONG write_write(SOCKET c, SOCKET s)
     }
     qsort(took, 8, sizeof(took[0]), cmp_ll);
     return took[4];
+}
+
+/* Read @len bytes of the pattern send_big wrote, then the end of stream */
+static int read_big(SOCKET s, int len, int seed)
+{
+    static char b[4096];
+    int got = 0, ok = 1;
+    while (got < len && wait_for(s, 0, 5000) == 1) {
+        int n = recv(s, b, sizeof(b), 0);
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) if (b[i] != (char)((got + i) * 7 + seed)) ok = 0;
+        got += n;
+    }
+    return ok && got == len;
+}
+
+/* A non-blocking send larger than the send buffer: Windows takes all of
+ * it (or none, WSAEWOULDBLOCK), never part, and the peer gets every byte,
+ * also when the sender closes straight after */
+static void send_big(void)
+{
+    enum { BIG = 100000 };
+    static char b[BIG];
+    SOCKET c, s;
+    u_long nb = 1;
+    if (!tcp_pair(&c, &s)) { check("non-blocking large send: a pair", 0); return; }
+    ioctlsocket(c, FIONBIO, &nb);
+    for (int i = 0; i < BIG; i++) b[i] = (char)(i * 7 + 1);
+    check("non-blocking send of 100000 bytes takes them all", send(c, b, BIG, 0) == BIG);
+    for (int i = 0; i < BIG; i++) b[i] = (char)((BIG + i) * 7 + 1);
+    int r = send(c, b, BIG, 0);
+    check("a second one is taken whole or not at all", r == BIG || (r == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK));
+    closesocket(c);                                      /* (what was taken still goes out) */
+    check("the peer reads every byte, in order, then the end", read_big(s, r == BIG ? 2 * BIG : BIG, 1) && recv(s, b, 1, 0) == 0);
+    closesocket(s);
 }
 
 static int get_int(SOCKET s, int level, int opt)
@@ -568,6 +604,7 @@ int main(int argc, char **argv)
     sockopts();
     udp_connected();
     duplicate();
+    send_big();
     printf("looptest: %d passed, %d failed\n", passed, failed);
     return failed != 0;
 }

@@ -26,6 +26,7 @@
 #define RXBUF        (32 * 1024)
 #define ACCEPT_MAX   8
 #define DGRAM_HDR    (2 + (int)sizeof(NetSockAddr))
+#define OVF_MAX      (4 * 1024 * 1024)   /* most a non-blocking send takes beyond lwIP's send buffer */
 
 typedef struct {
     bool          used;
@@ -65,6 +66,17 @@ typedef struct {
     UINT8         so_options;             /* lwIP SOF_* (REUSEADDR, KEEPALIVE, BROADCAST) */
     UINT8         ttl;
     UINT32        owner;                  /* the process id the connection tables name (0: the system) */
+
+    /* A non-blocking TCP send takes the whole buffer, as Windows' AFD
+     * does: what lwIP's send buffer cannot hold waits here and goes out
+     * from tcp_sent_cb as acknowledgements free room (later sends join
+     * it, up to OVF_MAX, then see WSAEWOULDBLOCK).  Programs (Steam's
+     * WebUI transport among them) treat a short non-blocking send as
+     * all-or-nothing and never send the rest. */
+    UINT8        *ovf;
+    UINT32        ovf_len, ovf_off;
+    bool          fin_pending;            /* shutdown(SD_SEND) waits for ovf to drain */
+    bool          closing;                /* closed by the program, its slot kept until ovf drains */
 } Sock;
 
 static Sock g_sock[NSOCK];
@@ -104,7 +116,7 @@ static int rx_get(Sock *s, UINT8 *d, int cap)
     return n;
 }
 
-static Sock *slot(int s) { return (s >= 0 && s < NSOCK && g_sock[s].used) ? &g_sock[s] : NULL; }
+static Sock *slot(int s) { return (s >= 0 && s < NSOCK && g_sock[s].used && !g_sock[s].closing) ? &g_sock[s] : NULL; }
 
 static bool wait_cancel(SockCancelFn c, void *a) { return c && c(a); }
 
@@ -169,11 +181,15 @@ static bool family_ok(const Sock *s, const NetSockAddr *a)
 /* -----------------------------------------------------------------------
  * lwIP callbacks (net thread, lock held)
  * ----------------------------------------------------------------------- */
+static void free_slot(Sock *s);
+static bool ovf_drain(Sock *s);
+
 static void tcp_err_cb(void *arg, err_t err)
 {
     Sock *s = arg;
     if (!s) return;
     s->tcp = NULL;                 /* lwIP already freed the pcb */
+    if (s->closing) { free_slot(s); return; }               /* a deferred close: the rest is lost */
     if (err == ERR_CLSD) s->peer_closed = true;              /* closed in order after our FIN */
     else s->reset = true;
     s->connecting = false;
@@ -199,9 +215,11 @@ static err_t tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t e
 
 static err_t tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
 {
-    (void)arg; (void)pcb; (void)len;
+    Sock *s = arg;
+    (void)pcb; (void)len;
+    bool aborted = s && s->ovf && ovf_drain(s);
     net_wake();                    /* send buffer space for a waiting writer */
-    return ERR_OK;
+    return aborted ? ERR_ABRT : ERR_OK;
 }
 
 static err_t tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
@@ -398,15 +416,55 @@ int NetSockSend(int sd, const void *buf, int len, SockCancelFn c, void *ca)
     if (len <= 0) return 0;
     const UINT8 *p = buf;
     int sent = 0;
+    if (s->nonblock) {
+        /* All or nothing, as on Windows: what lwIP takes now goes to it,
+         * the rest waits in the overflow (see Sock.ovf) */
+        net_lock();
+        if (!s->tcp || s->reset) { net_unlock(); return -SOCK_ECONNRESET; }
+        if (s->ovf) ovf_drain(s);
+        if (s->ovf) {                                        /* behind waiting data: joins it, up to OVF_MAX */
+            UINT32 pend = s->ovf_len - s->ovf_off;
+            UINT8 *n = pend + (UINT32)len <= OVF_MAX ? kmalloc(pend + (UINT32)len) : NULL;
+            if (!n) { net_unlock(); return -SOCK_EWOULDBLOCK; }
+            memcpy(n, s->ovf + s->ovf_off, pend);
+            memcpy(n + pend, p, (UINT32)len);
+            kfree(s->ovf);
+            s->ovf = n; s->ovf_len = pend + (UINT32)len; s->ovf_off = 0;
+            net_unlock();
+            return len;
+        }
+        if (tcp_sndbuf(s->tcp) == 0) { net_unlock(); return -SOCK_EWOULDBLOCK; }
+        while (sent < len) {
+            UINT16 space = tcp_sndbuf(s->tcp);
+            if (!space) break;
+            int chunk = len - sent;
+            if (chunk > space) chunk = space;
+            err_t e = tcp_write(s->tcp, p + sent, (UINT16)chunk, TCP_WRITE_FLAG_COPY);
+            if (e == ERR_MEM) break;
+            if (e != ERR_OK) { net_unlock(); return sent ? sent : -SOCK_ECONNRESET; }
+            sent += chunk;
+        }
+        if (!sent) { net_unlock(); return -SOCK_EWOULDBLOCK; }
+        UINT32 rest = (UINT32)(len - sent);
+        if (rest > OVF_MAX) rest = OVF_MAX;
+        if (rest && (s->ovf = kmalloc(rest)) != NULL) {
+            memcpy(s->ovf, p + sent, rest);
+            s->ovf_len = rest; s->ovf_off = 0;
+            sent += (int)rest;
+        }
+        tcp_output(s->tcp);
+        net_unlock();
+        return sent;
+    }
     UINT64 deadline = deadline_of(s->sndtimeo);
     while (sent < len) {
         UINT32 ng = net_gen();
         net_lock();
         if (!s->tcp || s->reset) { net_unlock(); return sent ? sent : -SOCK_ECONNRESET; }
-        UINT16 space = tcp_sndbuf(s->tcp);
+        if (s->ovf) ovf_drain(s);
+        UINT16 space = s->ovf ? 0 : tcp_sndbuf(s->tcp);      /* earlier waiting data goes first */
         if (space == 0) {
             net_unlock();
-            if (s->nonblock) return sent ? sent : -SOCK_EWOULDBLOCK;
             if (wait_cancel(c, ca) || past(deadline)) return sent ? sent : -SOCK_ETIMEDOUT;
             wait_until(ng, deadline);
             continue;
@@ -417,13 +475,11 @@ int NetSockSend(int sd, const void *buf, int len, SockCancelFn c, void *ca)
         if (e == ERR_OK) { tcp_output(s->tcp); sent += chunk; }
         net_unlock();
         if (e == ERR_MEM) {
-            if (s->nonblock) return sent ? sent : -SOCK_EWOULDBLOCK;
             if (past(deadline)) return sent ? sent : -SOCK_ETIMEDOUT;
             wait_until(ng, deadline);
         } else if (e != ERR_OK) {
             return sent ? sent : -SOCK_ECONNRESET;
         }
-        if (s->nonblock) break;
     }
     return sent;
 }
@@ -589,14 +645,68 @@ int NetSockShutdown(int sd, int how)
         while (n) { u16_t k = n > 0xFFFF ? 0xFFFF : (u16_t)n; tcp_recved(s->tcp, k); n -= k; }   /* ...and its window reopened */
         if (s->tcp->refused_data) tcp_process_refused_data(s->tcp);
     }
-    if ((how == 1 || how == 2) && !s->send_shut) { tcp_shutdown(s->tcp, 0, 1); s->send_shut = true; }
+    if ((how == 1 || how == 2) && !s->send_shut) {
+        if (s->ovf) s->fin_pending = true;                   /* the FIN follows the waiting data */
+        else tcp_shutdown(s->tcp, 0, 1);
+        s->send_shut = true;
+    }
     net_unlock();
     return 0;
+}
+
+static void free_slot(Sock *s)
+{
+    if (s->rx) { kfree(s->rx); s->rx = NULL; }
+    if (s->ovf) { kfree(s->ovf); s->ovf = NULL; }
+    s->closing = false;
+    s->used = false;
+}
+
+/* Feed the overflow into lwIP as far as its send buffer allows (lock
+ * held).  Once it is empty, a shutdown or close that waited on it goes
+ * ahead.  True when that close had to abort the pcb (a callback must
+ * then return ERR_ABRT). */
+static bool ovf_drain(Sock *s)
+{
+    bool wrote = false;
+    while (s->ovf && s->tcp && s->ovf_off < s->ovf_len) {
+        UINT32 n = s->ovf_len - s->ovf_off;
+        UINT16 space = tcp_sndbuf(s->tcp);
+        if (!space) break;
+        if (n > space) n = space;
+        if (tcp_write(s->tcp, s->ovf + s->ovf_off, (UINT16)n, TCP_WRITE_FLAG_COPY) != ERR_OK) break;
+        s->ovf_off += n;
+        wrote = true;
+    }
+    if (wrote && s->tcp) tcp_output(s->tcp);
+    if (!s->ovf || s->ovf_off < s->ovf_len) return false;
+    kfree(s->ovf); s->ovf = NULL; s->ovf_len = s->ovf_off = 0;
+    if (s->fin_pending && s->tcp) { s->fin_pending = false; tcp_shutdown(s->tcp, 0, 1); }
+    if (s->closing) {
+        struct tcp_pcb *pcb = s->tcp;
+        bool aborted = false;
+        if (pcb) {
+            tcp_arg(pcb, NULL); tcp_recv(pcb, NULL); tcp_sent(pcb, NULL); tcp_err(pcb, NULL);
+            if (tcp_close(pcb) != ERR_OK) { tcp_abort(pcb); aborted = true; }
+        }
+        s->tcp = NULL;
+        free_slot(s);
+        return aborted;
+    }
+    return false;
 }
 
 static void close_locked(Sock *s)
 {
     if (s->udp && s->udp_pcb) udp_remove(s->udp_pcb);
+    /* Data a non-blocking send left waiting still goes out (a graceful
+     * close sends what was accepted): the slot stays, hidden from the
+     * program, until tcp_sent_cb drains it and closes the pcb */
+    if (!s->udp && s->tcp && s->ovf && !(s->linger_on && !s->linger_s)) {
+        s->closing = true;
+        s->recv_shut = true;                                 /* what still arrives is dropped */
+        return;
+    }
     if (!s->udp && s->tcp) {
         tcp_arg(s->tcp, NULL);
         if (s->listening) tcp_accept(s->tcp, NULL);         /* (a listener has no recv/sent/err) */
@@ -613,8 +723,7 @@ static void close_locked(Sock *s)
         if (ps->tcp) { tcp_arg(ps->tcp, NULL); tcp_err(ps->tcp, NULL); tcp_abort(ps->tcp); ps->tcp = NULL; }
         close_locked(ps);
     }
-    if (s->rx) { kfree(s->rx); s->rx = NULL; }
-    s->used = false;
+    free_slot(s);
 }
 
 void NetSockClose(int sd)
@@ -720,7 +829,7 @@ void NetSockPoll(int sd, bool *readable, bool *writable, bool *error)
     if (s) {
         er = s->reset;
         rd = rx_used(s) > 0 || s->peer_closed || (s->listening && s->acc_tail != s->acc_head) || s->reset;
-        wr = s->udp || (s->connected && s->tcp && tcp_sndbuf(s->tcp) > 0) || (!s->connecting && !s->connected && !s->udp && !s->listening);
+        wr = s->udp || (s->connected && s->tcp && !s->ovf && tcp_sndbuf(s->tcp) > 0) || (!s->connecting && !s->connected && !s->udp && !s->listening);
     }
     net_unlock();
     if (readable) *readable = rd;

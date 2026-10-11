@@ -208,14 +208,32 @@ static void fps_print(const char *name, const FpsResult *r)
            name, r->fps, r->direct, r->frames, r->kib, r->renderer);
 }
 
+/* Add run @b to @a (both ran, or @a is marked failed) */
+static void fps_add(FpsResult *a, const FpsResult *b)
+{
+    if (a->fps <= 0 || b->fps <= 0) { a->fps = -1; return; }
+    double ms = a->frames * 1000.0 / a->fps + b->frames * 1000.0 / b->fps;
+    a->kib = (a->kib * a->frames + b->kib * b->frames) / (a->frames + b->frames);
+    a->frames += b->frames;
+    a->direct += b->direct;
+    a->fps = a->frames * 1000.0 / ms;
+}
+
 static int fps_test(int secs)
 {
-    FpsResult v, g, l;
-    printf("fps: virgl for %d s\n", secs);
-    fps_run("virgl", NULL, secs, &v);
+    FpsResult v, g, l, v2, g2;
+    /* virgl both ways in turn, half the time each turn (direct, GDI, GDI,
+     * direct): the host draws most of each frame, and whatever else it does
+     * meanwhile weighs on both ways alike */
+    int half = secs > 1 ? secs / 2 : 1;
+    printf("fps: virgl for %d s, through the GDI for %d s, twice\n", 2 * half, 2 * half);
+    fps_run("virgl", NULL, half, &v);
+    fps_run("virgl", "gdi", half, &g);
+    fps_run("virgl", "gdi", half, &g2);
+    fps_run("virgl", NULL, half, &v2);
+    fps_add(&v, &v2);
+    fps_add(&g, &g2);
     fps_print("virgl", &v);
-    printf("fps: virgl through the GDI for %d s\n", secs);
-    fps_run("virgl", "gdi", secs, &g);
     fps_print("virgl/GDI", &g);
     printf("fps: llvmpipe for %d s\n", secs);
     fps_run("llvmpipe", NULL, secs, &l);

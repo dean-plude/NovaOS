@@ -90,14 +90,14 @@ void      VgpuDump(void);
 /* Direct presentation: a virgl resource's frame written into the screen's
  * memory by the host (virtio_gpu.c).  Callers hold the desktop lock.  The
  * screen: @pages pages of @lines rows of @stride pixels (little-endian
- * XRGB) from physical address @phys.  An overlay keeps a window's last
- * frame on the host. */
+ * XRGB) from physical address @phys.  An overlay holds the resource a
+ * window showed last. */
 typedef struct { UINT64 phys; int stride, lines, pages; } VgpuScreen;
 typedef struct VgpuOverlay VgpuOverlay;
 VgpuOverlay *VgpuOverlayCreate(void);
 void         VgpuOverlayDestroy(VgpuOverlay *o);
-/* Copy the top left @w x @h of virgl resource @src into @o, and @o into
- * every page of @s at (dx, dy) (clipped to it) */
+/* Copy the top left @w x @h of virgl resource @src into every page of @s at
+ * (dx, dy) (clipped to it); @o holds @src from now on */
 bool         VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy);
 /* Write (x, y, w, h) of @o at (dx, dy) of @s again (the desktop drew there) */
 bool         VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h);

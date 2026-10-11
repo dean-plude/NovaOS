@@ -1269,14 +1269,17 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
  * Direct presentation (um_gui.c; its callers hold the desktop lock, which
  * keeps these in order).  A program's frame is not read back into the
  * program and drawn through the GDI: the kernel's own virgl context copies
- * it on the host into the window's overlay (a texture that keeps the last
- * whole frame while the program draws the next one into its buffers),
- * then from there into a texture whose guest memory is the screen itself
- * (the VGA framebuffer, or a virtio output's picture), and a transfer
- * writes that part into the screen's memory.  Nothing in the guest copies
- * a pixel.  The window's bitmap keeps its last GDI frame, so whenever the
- * desktop draws over that part again (display.c's damage hook) the overlay
- * is written there once more.
+ * it on the host into a texture whose guest memory is the screen itself
+ * (the VGA framebuffer, or a virtio output's picture), in the frame's own
+ * format when that is laid out as the screen is (a plain copy, the
+ * cheapest blit), and a transfer writes that part into the screen's
+ * memory.  Nothing in the guest copies a pixel, and the host copies the
+ * frame once, as many bytes as the read-back would (the host's time is
+ * most of a frame's).  The window's overlay holds the resource it showed
+ * last: the program draws the next frame into its other buffer, so that
+ * one keeps the frame on screen.  The window's bitmap keeps its last GDI
+ * frame, so whenever the desktop draws over that part again (display.c's
+ * damage hook) the overlay is written there once more.
  * ----------------------------------------------------------------------- */
 #define CAPSET_VIRGL2       2
 #define CCMD_BLIT           16             /* virgl_protocol.h: VIRGL_CCMD_BLIT */
@@ -1287,9 +1290,10 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
 #define BIND_SAMPLER_VIEW   (1u << 3)
 #define N_ATTACHED          16
 
+#define FORMAT_B8G8R8A8     1             /* (laid out as the screen is, alpha where it has nothing) */
+
 struct VgpuOverlay {
-    VgpuBlob *tex;                        /* the last frame (NULL: none yet) */
-    UINT32    format;
+    VgpuBlob *src;                        /* the resource shown last (a reference; NULL: none yet) */
     int       w, h;
 };
 
@@ -1300,6 +1304,7 @@ static UINT32   g_pattached[N_ATTACHED];  /* resources it knows (numbers are nev
 static int      g_pnext;
 static VgpuBlob *g_pscreen;               /* the screen: a texture over its memory */
 static VgpuScreen g_pscr;
+static UINT32   g_pfmt;                   /* its format */
 
 static Vgpu *present_dev(void)
 {
@@ -1321,11 +1326,14 @@ static void present_attach(Vgpu *v, UINT32 res)
     g_pattached[g_pnext++ % N_ATTACHED] = res;
 }
 
-/* A texture whose guest memory is @s's (every page), made once per screen */
-static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s)
+/* A texture whose guest memory is @s's (every page), made once per screen
+ * and format: frames of @fmt are copied into it as they are when the screen
+ * holds their bytes as it is (B, G, R and then alpha or nothing) */
+static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s, UINT32 fmt)
 {
+    if (fmt != FORMAT_B8G8R8A8) fmt = FORMAT_B8G8R8X8;
     if (g_pscreen && g_pscr.phys == s->phys && g_pscr.stride == s->stride && g_pscr.lines == s->lines &&
-        g_pscr.pages == s->pages)
+        g_pscr.pages == s->pages && g_pfmt == fmt)
         return g_pscreen;
     if (g_pscreen) {                       /* (its memory is the screen's: only the resource goes) */
         g_pscreen->frames = NULL;
@@ -1336,7 +1344,7 @@ static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s)
     PADDR *f = kmalloc(n * sizeof(PADDR));
     if (!f) return NULL;
     for (UINT64 k = 0; k < n; k++) f[k] = s->phys + k * PAGE_SIZE;
-    UINT32 p[10] = { TEXTURE_2D, FORMAT_B8G8R8X8, BIND_RENDER_TARGET | BIND_SAMPLER_VIEW, (UINT32)s->stride,
+    UINT32 p[10] = { TEXTURE_2D, fmt, BIND_RENDER_TARGET | BIND_SAMPLER_VIEW, (UINT32)s->stride,
                      (UINT32)(s->lines * s->pages), 1, 1, 0, 0, 0 };
     VgpuBlob *b = VgpuRes3dCreate(g_pctx, p, f, n);
     if (!b) { kfree(f); return NULL; }
@@ -1346,6 +1354,7 @@ static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s)
     g_pattached[g_pnext++ % N_ATTACHED] = b->res;
     g_pscreen = b;
     g_pscr = *s;
+    g_pfmt = fmt;
     return b;
 }
 
@@ -1362,22 +1371,21 @@ static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 s
     return c + BLIT_SIZE + 1;
 }
 
-/* After the commands in @cs .. @end: copy (x, y, w, h) of @o to (dx, dy)
- * of every page of the screen and write it into the screen's memory */
-static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, UINT32 *cs, UINT32 *end,
-                          int x, int y, int dx, int dy, int w, int h)
+/* Copy (x, y, w, h) of @o's frame to (dx, dy) of every page of the screen
+ * and write it into the screen's memory */
+static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h)
 {
-    VgpuBlob *scr = screen_res(v, s);
-    if (!scr || !o->tex) return false;
+    VgpuBlob *scr = o->src ? screen_res(v, s, o->src->format) : NULL;
+    if (!scr) return false;
     if (dx < 0) { x -= dx; w += dx; dx = 0; }
     if (dy < 0) { y -= dy; h += dy; dy = 0; }
     if (dx + w > s->stride) w = s->stride - dx;
     if (dy + h > s->lines) h = s->lines - dy;
-    bool any = w > 0 && h > 0;
-    for (int pg = 0; any && pg < s->pages; pg++)
-        end = blit(end, scr->res, FORMAT_B8G8R8X8, dx, dy + pg * s->lines, o->tex->res, o->format, x, y, w, h);
-    if (end > cs && !VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
-    if (!any) return true;
+    if (w <= 0 || h <= 0) return true;
+    UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
+    for (int pg = 0; pg < s->pages && pg < 2; pg++)
+        end = blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
+    if (!VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
     for (int pg = 0; pg < s->pages; pg++) {
         UINT32 row = (UINT32)(dy + pg * s->lines);
         UINT32 box[6] = { (UINT32)dx, row, 0, (UINT32)w, (UINT32)h, 1 };
@@ -1406,7 +1414,7 @@ VgpuOverlay *VgpuOverlayCreate(void) { return kzalloc(sizeof(VgpuOverlay)); }
 void VgpuOverlayDestroy(VgpuOverlay *o)
 {
     if (!o) return;
-    VgpuBlobUnref(o->tex);
+    VgpuBlobUnref(o->src);
     kfree(o);
 }
 
@@ -1415,19 +1423,14 @@ bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuS
     Vgpu *v = present_dev();
     if (!v || src->v != v || !src->format || w <= 0 || h <= 0 || (UINT32)w > src->width || (UINT32)h > src->height)
         return false;
-    if (!o->tex || o->format != src->format || o->w != w || o->h != h) {
-        VgpuBlobUnref(o->tex);
-        UINT32 p[10] = { TEXTURE_2D, src->format, BIND_RENDER_TARGET | BIND_SAMPLER_VIEW, (UINT32)w, (UINT32)h,
-                         1, 1, 0, 0, 0 };
-        o->tex = VgpuRes3dCreate(g_pctx, p, NULL, 0);
-        o->format = src->format; o->w = w; o->h = h;
-        if (!o->tex) return false;
-        g_pattached[g_pnext++ % N_ATTACHED] = o->tex->res;   /* (made in the context) */
-    }
     present_attach(v, src->res);
-    UINT32 cs[3 * (BLIT_SIZE + 1)];
-    UINT32 *end = blit(cs, o->tex->res, o->format, 0, 0, src->res, src->format, 0, 0, w, h);
-    if (!overlay_write(v, o, s, cs, end, 0, 0, dx, dy, w, h)) return false;
+    if (o->src != src) {
+        VgpuBlobRef(src);
+        VgpuBlobUnref(o->src);
+        o->src = src;
+    }
+    o->w = w; o->h = h;
+    if (!overlay_write(v, o, s, 0, 0, dx, dy, w, h)) return false;
     DisplayStatAdd(DISPLAY_STAT_DIRECT_FRAMES, 1);
     return true;
 }
@@ -1435,12 +1438,11 @@ bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuS
 bool VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h)
 {
     Vgpu *v = g_pctx ? dev3d() : NULL;
-    if (!v || !o->tex) return false;
+    if (!v || !o->src) return false;
     if (x < 0) { dx -= x; w += x; x = 0; }
     if (y < 0) { dy -= y; h += y; y = 0; }
     if (x + w > o->w) w = o->w - x;
     if (y + h > o->h) h = o->h - y;
     if (w <= 0 || h <= 0) return true;
-    UINT32 cs[2 * (BLIT_SIZE + 1)];
-    return overlay_write(v, o, s, cs, cs, x, y, dx, dy, w, h);
+    return overlay_write(v, o, s, x, y, dx, dy, w, h);
 }

@@ -605,7 +605,13 @@ peer's control port, and `padtest` must read them through both APIs
 (and DirectInput's buffered events); the motors it sets must reach the
 two Xbox controllers (the peers' logs), and the Xbox 360 one is
 unplugged while it runs.  The 32-bit `padtest still` then reads the two
-left.  To run the suite:
+left.  The "ntfs" boot has a second disk with a fresh, empty NTFS volume
+(`mkntfs`, from the ntfs-3g package): `linktest D:\LinkTest` runs the
+hard-link checks there, NovaOS restarts, `linktest restarted
+D:\LinkTest` must find the file it left under three names (one in a
+folder the new boot has not read yet) still one file, and once QEMU has
+quit `scripts/ntfs-check.py` must find the volume consistent and
+`ntfscat` must read the file by its third name.  To run the suite:
 
 ```bash
 python3 tools/selftest.py --suite devices

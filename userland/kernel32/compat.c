@@ -5,7 +5,7 @@
  * wait registrations, job objects, once-initialization, national-language
  * formatting, search paths and a few console calls.
  *
- * Where NovaOS has no such thing (hard links, alternate data streams,
+ * Where NovaOS has no such thing (alternate data streams,
  * large pages, CPU affinity), the call answers the way Windows does on a
  * file system or machine without it.
  */
@@ -242,11 +242,115 @@ K32 BOOL WINAPI FindNextStreamW(HANDLE h, LPVOID data)
     return FALSE;
 }
 
-/* FindClose (extra.c) frees directory searches; stream searches come here first */
+/* A file's names (hard links): FindFirstFileNameW lists them all at
+ * once, from the kernel's FileHardLinkInformation, each as its path on the
+ * volume ("\\dir\\file.txt", no drive letter, as Windows gives them) */
+typedef struct { DWORD magic; int next, count; WCHAR *names[]; } NameFind;
+#define NAME_FIND_MAGIC 0x4C4E4B53
+
+static BOOL give_name(const WCHAR *name, LPDWORD len, PWSTR out)
+{
+    DWORD need = (DWORD)wlen(name) + 1;
+    if (!len || !out || *len < need) {
+        if (len) *len = need;
+        SetLastError(ERROR_MORE_DATA);
+        return FALSE;
+    }
+    memcpy(out, name, need * sizeof(WCHAR));
+    *len = need - 1;
+    return TRUE;
+}
+
+static void names_free(NameFind *f)
+{
+    for (int i = 0; i < f->count; i++) zfree(f->names[i]);
+    f->magic = 0;
+    zfree(f);
+}
+
+/* The path on the volume of @leaf in the directory whose file id is @parent:
+ * opened by its id beside @h (OpenFileById), then its own name */
+static WCHAR *link_path(HANDLE h, LONGLONG parent, const WCHAR *leaf, ULONG leaf_bytes)
+{
+    UNICODE_STRING us = { 8, 8, (PWSTR)&parent };
+    OBJECT_ATTRIBUTES oa = { sizeof(oa), h, &us, 0, 0, 0 };
+    IO_STATUS_BLOCK io;
+    HANDLE dh;
+    NTSTATUS s = NtCreateFile(&dh, 0x80 /* FILE_READ_ATTRIBUTES */ | SYNCHRONIZE, &oa, &io, 0, 0, 7, FILE_OPEN,
+                              0x2000 /* FILE_OPEN_BY_FILE_ID */ | FILE_SYNCHRONOUS_IO_NONALERT, 0, 0);
+    if (!NT_SUCCESS(s)) return NULL;
+    BYTE buf[4 + 2 * (MAX_PATH + 8)];
+    s = NtQueryInformationFile(dh, &io, buf, sizeof(buf), 9 /* FileNameInformation */);
+    NtClose(dh);
+    if (!NT_SUCCESS(s)) return NULL;
+    ULONG dir_bytes = *(ULONG *)buf;
+    const WCHAR *dir = (const WCHAR *)(buf + 4);
+    int sep = !dir_bytes || dir[dir_bytes / 2 - 1] != '\\';
+    WCHAR *path = zalloc(dir_bytes + 2 * sep + leaf_bytes + 2);
+    if (!path) return NULL;
+    memcpy(path, dir, dir_bytes);
+    if (sep) path[dir_bytes / 2] = '\\';
+    memcpy(path + dir_bytes / 2 + sep, leaf, leaf_bytes);
+    return path;
+}
+
+K32 HANDLE WINAPI FindFirstFileNameW(LPCWSTR name, DWORD flags, LPDWORD len, PWSTR out)
+{
+    (void)flags;
+    HANDLE h = CreateFileW(name, 0, 7, 0, OPEN_EXISTING, 0x02000000 /* BACKUP_SEMANTICS */, 0);
+    if (h == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+    IO_STATUS_BLOCK io;
+    ULONG size = 4096;
+    BYTE *info = NULL;
+    NTSTATUS s;
+    for (;;) {                                  /* (as big as the kernel says it needs) */
+        zfree(info);
+        if (!(info = zalloc(size))) { NtClose(h); SetLastError(ERROR_NOT_ENOUGH_MEMORY); return INVALID_HANDLE_VALUE; }
+        s = NtQueryInformationFile(h, &io, info, size, 46 /* FileHardLinkInformation */);
+        if (s != (NTSTATUS)0x80000005 || *(ULONG *)info <= size) break;
+        size = *(ULONG *)info;
+    }
+    ULONG count = NT_SUCCESS(s) ? ((ULONG *)info)[1] : 0;
+    NameFind *f = NT_SUCCESS(s) ? zalloc(sizeof(NameFind) + count * sizeof(WCHAR *)) : NULL;
+    if (f) {
+        f->magic = NAME_FIND_MAGIC;
+        /* FILE_LINK_ENTRY_INFORMATION { ULONG NextEntryOffset; LONGLONG ParentFileId; ULONG FileNameLength; WCHAR FileName[] } */
+        BYTE *e = info + 8;
+        for (ULONG i = 0; i < count; i++, e += *(ULONG *)e) {
+            LONGLONG parent;
+            memcpy(&parent, e + 8, 8);
+            WCHAR *path = link_path(h, parent, (const WCHAR *)(e + 20), *(ULONG *)(e + 16));
+            if (path) f->names[f->count++] = path;  /* (a folder this process can't open: skipped) */
+            if (!*(ULONG *)e) break;
+        }
+    }
+    NtClose(h);
+    zfree(info);
+    if (!NT_SUCCESS(s)) { fail_status(s); return INVALID_HANDLE_VALUE; }
+    if (!f) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return INVALID_HANDLE_VALUE; }
+    if (!f->count) { names_free(f); SetLastError(ERROR_HANDLE_EOF); return INVALID_HANDLE_VALUE; }
+    if (!give_name(f->names[0], len, out)) { names_free(f); return INVALID_HANDLE_VALUE; }
+    f->next = 1;
+    return (HANDLE)f;
+}
+
+K32 BOOL WINAPI FindNextFileNameW(HANDLE h, LPDWORD len, PWSTR out)
+{
+    NameFind *f = (NameFind *)h;
+    if (!f || (ULONG_PTR)f < 0x10000 || f->magic != NAME_FIND_MAGIC) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
+    if (f->next >= f->count) { SetLastError(ERROR_HANDLE_EOF); return FALSE; }
+    if (!give_name(f->names[f->next], len, out)) return FALSE;
+    f->next++;
+    return TRUE;
+}
+
+/* FindClose (extra.c) frees directory searches; stream and name searches come here first */
 BOOL k32_find_close_stream(HANDLE h)
 {
     StreamFind *f = (StreamFind *)h;
-    if (!f || (ULONG_PTR)f < 0x10000 || f->magic != 0x5354524D) return FALSE;
+    if (!f || (ULONG_PTR)f < 0x10000) return FALSE;
+    if (f->magic == NAME_FIND_MAGIC) { names_free((NameFind *)h); return TRUE; }
+    if (f->magic != 0x5354524D) return FALSE;
     f->magic = 0;
     zfree(f);
     return TRUE;

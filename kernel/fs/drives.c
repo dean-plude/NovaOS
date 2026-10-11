@@ -45,6 +45,10 @@ static bool ntfs_link(void *vol, UINT64 ref, UINT64 dir, const char *name)
     return NtfsLink(vol, ref, dir, name) && NtfsSync(vol);
 }
 static UINT32 ntfs_links(void *vol, UINT64 ref) { return NtfsLinks(vol, ref); }
+static bool ntfs_names(void *vol, UINT64 ref, bool (*add)(const char *path, void *ctx), void *ctx)
+{
+    return NtfsNames(vol, ref, add, ctx);
+}
 static bool ntfs_write(void *vol, UINT64 ref, const void *data, UINT64 len)
 {
     return NtfsWriteFile(vol, ref, data, len) && NtfsSync(vol);
@@ -54,9 +58,10 @@ static UINT64 ntfs_free(void *vol) { return NtfsFreeBytes(vol); }
 static bool ntfs_can_write(void *vol, UINT64 ref) { return NtfsCanWrite(vol, ref); }
 
 static const RamfsSource g_ntfs_source = { ntfs_list, ntfs_size, ntfs_read, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL, ntfs_links };
+                                           NULL, ntfs_links, ntfs_names };
 static const RamfsSource g_ntfs_rw_source = { ntfs_list, ntfs_size, ntfs_read, ntfs_create, ntfs_remove,
-                                              ntfs_rename, ntfs_write, ntfs_free, ntfs_can_write, ntfs_link, ntfs_links };
+                                              ntfs_rename, ntfs_write, ntfs_free, ntfs_can_write, ntfs_link, ntfs_links,
+                                              ntfs_names };
 
 typedef struct { bool (*add)(const RamfsExtEntry *e, void *ctx); void *ctx; } ListCtx;
 
@@ -150,7 +155,7 @@ static bool fat_read(void *vol, UINT64 ref, UINT64 off, void *buf, UINT64 len)
     return ok;
 }
 
-static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
 /* ---- mounting ---- */
 

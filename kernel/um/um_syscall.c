@@ -863,12 +863,41 @@ static UINT32 opened(UINT64 hv, UmHandle *h, UINT64 handle_ptr, UINT64 iosb_ptr,
     return iosb(iosb_ptr, ST_SUCCESS, info);
 }
 
+/* FILE_OPEN_BY_FILE_ID (OpenFileById): the name is the 8-byte id
+ * FileInternalInformation gives, RootDirectory a handle on the same drive */
+static UINT32 open_by_id(UmProcess *p, UINT64 handle_ptr, UINT32 access, UINT64 oa_ptr, UINT64 iosb_ptr,
+                         UINT32 disposition, UINT32 options)
+{
+    UINT64 oa[6], us[2], id;
+    if (!oa_ptr || !NT_SUCCESS(CopyFromUser(oa, (const void *)(uintptr_t)oa_ptr, sizeof(oa))))
+        return UM_STATUS_ACCESS_VIOLATION;
+    if (disposition != 1 || !oa[2] || !NT_SUCCESS(CopyFromUser(us, (const void *)(uintptr_t)oa[2], sizeof(us))) ||
+        (us[0] & 0xFFFF) != 8 || !NT_SUCCESS(CopyFromUser(&id, (const void *)(uintptr_t)us[1], 8)))
+        return iosb(iosb_ptr, ST_INVALID_PARAMETER, 0);
+    FsLock();
+    UmHandle *rh = handle(p, oa[1]);
+    if (!rh || (rh->kind != H_FILE && rh->kind != H_DIR)) { FsUnlock(); return iosb(iosb_ptr, ST_INVALID_HANDLE, 0); }
+    RamNode *node = RamfsFindId(rh->node, id);
+    UINT32 granted, st = !node || node->pending ? ST_INVALID_PARAMETER :     /* (as Windows: no such id) */
+        ((options & 0x1) && !node->dir) ? ST_NOT_A_DIRECTORY : ((options & 0x40) && node->dir) ? ST_FILE_IS_A_DIRECTORY :
+        RamfsReadOnly(node) && (access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA)) ?
+            ST_MEDIA_WRITE_PROTECTED :
+        !FsecAccess(node, access, &granted) ? ST_ACCESS_DENIED :
+        ((node->xflags & RAMFS_X_EXTERN) || (access & FILE_DATA_ACCESS)) && !RamfsLoad(node) ? ST_DISK_CORRUPT : 0;
+    if (st) { FsUnlock(); return iosb(iosb_ptr, st, 0); }
+    UmHandle *h;
+    UINT64 hv = file_handle(p, node, access, options, (UINT32)oa[3] & 0x2, &h);
+    FsUnlock();
+    return opened(hv, h, handle_ptr, iosb_ptr, 1);              /* FILE_OPENED */
+}
+
 static UINT32 open_file(UINT64 handle_ptr, UINT32 access, UINT64 oa_ptr, UINT64 iosb_ptr,
                         UINT32 disposition, UINT32 options)
 {
     UmProcess *p = UmCurrent();
     char path[RAMFS_PATH_MAX];
     RamNode *root;
+    if (options & 0x2000) return open_by_id(p, handle_ptr, access, oa_ptr, iosb_ptr, disposition, options);
     FsLockShared();                                             /* (held for files: @root stays) */
     UINT32 st = get_path(p, oa_ptr, path, sizeof(path), &root);
     if (st) { FsUnlockShared(); return iosb(iosb_ptr, st, 0); }
@@ -1271,7 +1300,42 @@ static UINT64 sys_query_info_file_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64
     UINT32 need;
     memset(b, 0, 40);
     bool file = h->kind == H_FILE || h->kind == H_DIR;
+    if (h->kind == H_FILE && (cls == 5 || cls == 18 || cls == 46 || cls == 68))
+        RamfsGatherLinks(h->node);                              /* (a mounted volume's names not read yet count too) */
     switch (cls) {
+    case 46: {                                                  /* FileHardLinkInformation: the file's names */
+        /* { ULONG BytesNeeded, EntriesReturned; then each FILE_LINK_ENTRY_INFORMATION
+         *   { ULONG NextEntryOffset; LONGLONG ParentFileId; ULONG FileNameLength; WCHAR FileName[] } } */
+        if (!file) return iosb(a2, ST_INVALID_PARAMETER, 0);
+        if (len < 8) return iosb(a2, ST_INFO_LENGTH_MISMATCH, 0);
+        UINT32 total = 8, count = 0;
+        RamNode *m = h->node;
+        do {
+            UINT8 w[2 * RAMFS_NAME_MAX];
+            total += (20 + 2 * u2w(m->name, w, RAMFS_NAME_MAX) + 7) & ~7u;
+            count++;
+        } while ((m = RamfsNextLink(m)) != h->node);
+        if (total > len) {                                      /* (the caller asks again with BytesNeeded) */
+            UINT32 hdr[2] = { total, 0 };
+            if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, hdr, 8))) return UM_STATUS_ACCESS_VIOLATION;
+            return iosb(a2, 0x80000005u, 8);                    /* STATUS_BUFFER_OVERFLOW */
+        }
+        UINT8 *out = kzalloc(total);
+        if (!out) return iosb(a2, ST_NO_MEMORY, 0);
+        memcpy(out, &total, 4); memcpy(out + 4, &count, 4);
+        UINT32 off = 8;
+        m = h->node;
+        do {
+            UINT32 n = u2w(m->name, out + off + 20, RAMFS_NAME_MAX), size = (20 + 2 * n + 7) & ~7u, bytes = 2 * n;
+            UINT32 next = off + size < total ? size : 0;
+            UINT64 parent = (UINT64)(uintptr_t)m->parent;       /* (its FileInternalInformation: OpenFileById opens it) */
+            memcpy(out + off, &next, 4); memcpy(out + off + 8, &parent, 8); memcpy(out + off + 16, &bytes, 4);
+            off += size;
+        } while ((m = RamfsNextLink(m)) != h->node);
+        UINT32 r = NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, out, total)) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;
+        kfree(out);
+        return r == ST_SUCCESS ? iosb(a2, ST_SUCCESS, total) : r;
+    }
     case 6: {                                                   /* FileInternalInformation */
         need = 8;
         UINT64 id = (UINT64)(uintptr_t)(file ? RamfsFileId(h->node) : h->node);  /* (the same by every name of the file) */

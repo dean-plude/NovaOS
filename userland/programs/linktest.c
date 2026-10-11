@@ -1,8 +1,9 @@
-/* linktest.exe — hard links (CreateHardLink) self-test
+/* linktest.exe — hard links (CreateHardLink, FindFirstFileNameW) self-test
  *
- *   linktest [DIR]         the tests, in DIR (C:\LinkTest); leaves kept-a.txt and
- *                          kept-b.txt there, two names of one file
- *   linktest restarted     after a restart: they are still one file
+ *   linktest [DIR]             the tests, in DIR (C:\LinkTest); leaves kept-a.txt,
+ *                              kept-b.txt and kept-sub\kept-c.txt there, three
+ *                              names of one file
+ *   linktest restarted [DIR]   after a restart: they are still one file
  */
 #include <stdio.h>
 #include <string.h>
@@ -11,6 +12,9 @@
 #ifndef FILE_SUPPORTS_HARD_LINKS
 #define FILE_SUPPORTS_HARD_LINKS 0x00400000
 #endif
+
+HANDLE WINAPI FindFirstFileNameW(LPCWSTR name, DWORD flags, LPDWORD len, PWSTR out);
+BOOL   WINAPI FindNextFileNameW(HANDLE h, LPDWORD len, PWSTR out);
 
 static int pass, fail;
 #define CHECK(cond) do { if (cond) pass++; else { fail++; printf("FAIL line %d: %s (error %lu)\n", __LINE__, #cond, GetLastError()); } } while (0)
@@ -64,22 +68,71 @@ static BOOL write_all(const char *name, const char *text, DWORD how)
     return ok;
 }
 
+/* The names FindFirstFileNameW lists for @name, as "|\\dir\\a.txt|\\dir\\b.txt|"
+ * (UTF-8, sorted, any case folded to lower) in @out; how many there are */
+static int names_of(const char *name, char *out, int cap)
+{
+    WCHAR w[MAX_PATH], got[16][MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, w, MAX_PATH);
+    int n = 0;
+    DWORD len = MAX_PATH;
+    HANDLE f = FindFirstFileNameW(w, 0, &len, got[0]);
+    if (f == INVALID_HANDLE_VALUE) { out[0] = '\0'; return -1; }
+    do {
+        n++;
+        len = MAX_PATH;
+    } while (n < 16 && FindNextFileNameW(f, &len, got[n]));
+    FindClose(f);
+    for (int i = 1; i < n; i++)                                 /* (sorted: the order is the volume's) */
+        for (int j = i; j > 0 && lstrcmpiW(got[j - 1], got[j]) > 0; j--) {
+            WCHAR t[MAX_PATH];
+            lstrcpyW(t, got[j]); lstrcpyW(got[j], got[j - 1]); lstrcpyW(got[j - 1], t);
+        }
+    int o = 0;
+    out[o++] = '|';
+    for (int i = 0; i < n && o < cap - 1; i++) {
+        o += WideCharToMultiByte(CP_UTF8, 0, got[i], -1, out + o, cap - o - 1, 0, 0) - 1;
+        out[o++] = '|';
+    }
+    out[o] = '\0';
+    CharLowerA(out);
+    return n;
+}
+
+/* "|\\dir\\@a|\\dir\\@b|..." for g_dir (lower case; @b, @c may be NULL), to
+ * compare names_of with */
+static const char *expect_names(const char *a, const char *b, const char *c)
+{
+    static char e[512];
+    const char *d = g_dir[1] == ':' ? g_dir + 2 : g_dir, *n[3] = { a, b, c };
+    int o = sprintf(e, "|");
+    for (int i = 0; i < 3 && n[i]; i++) o += sprintf(e + o, "%s\\%s|", d, n[i]);
+    CharLowerA(e);
+    return e;
+}
+
 static void clean(void)
 {
-    const char *names[] = { "a.txt", "b.txt", "sub\\c.txt", "sub\\d.txt", "e.txt", "kept-a.txt", "kept-b.txt" };
+    const char *names[] = { "a.txt", "b.txt", "sub\\c.txt", "sub\\d.txt", "e.txt", "kept-a.txt", "kept-b.txt",
+                            "kept-sub\\kept-c.txt" };
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         SetFileAttributesA(names[i], FILE_ATTRIBUTE_NORMAL);
         DeleteFileA(names[i]);
     }
     RemoveDirectoryA("sub");
+    RemoveDirectoryA("kept-sub");
 }
 
 static int restarted(void)
 {
     CHECK(SetCurrentDirectoryA(g_dir));
-    char buf[256];
-    CHECK(links("kept-a.txt") == 2 && links("kept-b.txt") == 2);
-    CHECK(same_file("kept-a.txt", "kept-b.txt"));
+    char buf[256], names[512];
+    /* (first: on a mounted volume kept-sub is not read yet, its name counts all the same) */
+    CHECK(links("kept-a.txt") == 3 && links("kept-b.txt") == 3);
+    CHECK(names_of("kept-b.txt", names, sizeof(names)) == 3 &&
+          !strcmp(names, expect_names("kept-a.txt", "kept-b.txt", "kept-sub\\kept-c.txt")));
+    CHECK(same_file("kept-a.txt", "kept-b.txt") && same_file("kept-a.txt", "kept-sub\\kept-c.txt"));
+    CHECK(read_all("kept-sub\\kept-c.txt", buf, sizeof(buf)) > 0 && !strcmp(buf, "Kept by linktest\r\n"));
     CHECK(read_all("kept-b.txt", buf, sizeof(buf)) > 0 && !strcmp(buf, "Kept by linktest\r\n"));
     CHECK(write_all("kept-a.txt", "and again\r\n", OPEN_EXISTING));
     CHECK(read_all("kept-b.txt", buf, sizeof(buf)) > 0 && !strcmp(buf, "Kept by linktest\r\nand again\r\n"));
@@ -89,7 +142,10 @@ static int restarted(void)
 
 int main(int argc, char **argv)
 {
-    if (argc > 1 && !strcmp(argv[1], "restarted")) return restarted();
+    if (argc > 1 && !strcmp(argv[1], "restarted")) {
+        if (argc > 2) g_dir = argv[2];
+        return restarted();
+    }
     if (argc > 1) g_dir = argv[1];
     char buf[256], root[4] = "C:\\";
     DWORD n, flags = 0;
@@ -156,6 +212,14 @@ int main(int argc, char **argv)
     CHECK(links("b.txt") == 3 && same_file("sub\\d.txt", "b.txt"));
     CHECK(read_all("sub\\d.txt", buf, sizeof(buf)) == 12 && !strcmp(buf, "hello world!"));
 
+    /* FindFirstFileNameW lists every name, by any of them; a file with one name has just it */
+    char names[512];
+    CHECK(names_of("b.txt", names, sizeof(names)) == 3 && !strcmp(names, expect_names("a.txt", "b.txt", "sub\\d.txt")));
+    CHECK(names_of("sub\\d.txt", names, sizeof(names)) == 3 && !strcmp(names, expect_names("a.txt", "b.txt", "sub\\d.txt")));
+    CHECK(write_all("e.txt", "alone", CREATE_ALWAYS));
+    CHECK(names_of("e.txt", names, sizeof(names)) == 1 && !strcmp(names, expect_names("e.txt", NULL, NULL)));
+    CHECK(DeleteFileA("e.txt"));
+
     /* deleting a name leaves the file to the others; the last name takes it */
     CHECK(DeleteFileA("a.txt"));
     CHECK(GetFileAttributesA("a.txt") == INVALID_FILE_ATTRIBUTES);
@@ -184,7 +248,8 @@ int main(int argc, char **argv)
     /* kept for "linktest restarted" */
     CHECK(write_all("kept-a.txt", "Kept by linktest\r\n", CREATE_ALWAYS));
     CHECK(CreateHardLinkA("kept-b.txt", "kept-a.txt", 0));
-    CHECK(links("kept-b.txt") == 2);
+    CHECK(CreateDirectoryA("kept-sub", 0) && CreateHardLinkA("kept-sub\\kept-c.txt", "kept-a.txt", 0));
+    CHECK(links("kept-b.txt") == 3);
 
     printf("linktest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

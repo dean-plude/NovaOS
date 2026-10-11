@@ -503,6 +503,59 @@ bool RamfsLoad(RamNode *n)
     return ok;
 }
 
+static RamNode *resolve(RamNode *cwd, const char *path, bool *unloaded);
+
+/* The paths of a file's names, as its volume lists them (RamfsGatherLinks) */
+#define GATHER_MAX 16
+typedef struct { char *paths[GATHER_MAX]; int n; } Gather;
+
+static bool gather_add(const char *path, void *ctx)
+{
+    Gather *g = ctx;
+    if (g->n >= GATHER_MAX) return false;
+    size_t l = strlen(path);
+    if (l >= RAMFS_PATH_MAX || !(g->paths[g->n] = kmalloc(l + 1))) return false;
+    memcpy(g->paths[g->n++], path, l + 1);
+    return true;
+}
+
+void RamfsGatherLinks(RamNode *n)
+{
+    Drive *d;
+    if (!n || n->dir || !ext(n) || !(d = drive_of(n)) || !d->src || !d->src->names || !d->src->links) return;
+    Gather g = { { NULL }, 0 };
+    bkl_acquire();
+    if (d->src->links(d->vol, n->xref) > (UINT32)RamfsLinks(n))
+        d->src->names(d->vol, n->xref, gather_add, &g);
+    for (int i = 0; i < g.n; i++) {                          /* (resolving lists the directories on the way) */
+        RamNode *m = resolve(top_of(n), g.paths[i], NULL);
+        if (m && m != n && !m->dir && m->xref == n->xref) {
+            RamNode *had = (m->xflags & RAMFS_X_LOADED) ? m : n;  /* (one ring loads its contents once) */
+            join_rings(n, m);
+            sync_links(had);
+        }
+        kfree(g.paths[i]);
+    }
+    bkl_release();
+}
+
+static RamNode *find_id(RamNode *dir, UINT64 id)
+{
+    for (RamNode *c = dir->child; c; c = c->next) {
+        if ((UINT64)(uintptr_t)(c->dir ? c : RamfsFileId(c)) == id) return c;
+        RamNode *f = c->dir && RamfsLoaded(c) ? find_id(c, id) : NULL;
+        if (f) return f;
+    }
+    return NULL;
+}
+
+RamNode *RamfsFindId(RamNode *any, UINT64 id)
+{
+    RamNode *top = top_of(any);
+    if (!top || !id) return NULL;
+    return (UINT64)(uintptr_t)top == id ? top : find_id(top, id);
+}
+
 /* Files on mounted volumes whose new contents are not on the disk yet */
 UINT32 RamfsExtDirty(void)   { return g_xdirty; }
 UINT32 RamfsExtChanges(void) { return g_xchanges; }

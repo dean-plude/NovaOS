@@ -559,6 +559,22 @@
       "system": "dxvk-2.5.3\\x64\\d3d8.dll dxvk-2.5.3\\x64\\d3d9.dll>d3d9_dxvk.dll dxvk-2.5.3\\x64\\d3d10core.dll dxvk-2.5.3\\x64\\d3d11.dll>d3d11_dxvk.dll dxvk-2.5.3\\x64\\dxgi.dll>dxgi_dxvk.dll dxvk-2.5.3\\x32\\d3d8.dll dxvk-2.5.3\\x32\\d3d9.dll>d3d9_dxvk.dll dxvk-2.5.3\\x32\\d3d10core.dll dxvk-2.5.3\\x32\\d3d11.dll>d3d11_dxvk.dll dxvk-2.5.3\\x32\\dxgi.dll>dxgi_dxvk.dll"
     },
     {
+      "name": "VKD3D-Proton",
+      "publisher": "Hans-Kristian Arntzen / vkd3d-proton",
+      "summary": "Direct3D 12 on Vulkan, for games and 3D programs",
+      "category": "runtimes",
+      "url": "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v2.14.1/vkd3d-proton-2.14.1.tar.zst",
+      "file": "vkd3d-proton-2.14.1.tar.zst",
+      "dest": "VKD3D-Proton",
+      "exe": "\\Windows\\System32\\d3d12_vkd3d.dll",
+      "kind": "archive",
+      "size_mb": 3,
+      "note": "The system Direct3D 12 for 64- and 32-bit programs, drawn on the CPU through Mesa's Vulkan (or on the host's GPU with Venus): get Mesa 3D first",
+      "label": "12",
+      "color": "#0E6B0E",
+      "system": "vkd3d-proton-2.14.1\\x64\\d3d12.dll>d3d12_vkd3d.dll vkd3d-proton-2.14.1\\x64\\d3d12core.dll vkd3d-proton-2.14.1\\x86\\d3d12.dll>d3d12_vkd3d.dll vkd3d-proton-2.14.1\\x86\\d3d12core.dll"
+    },
+    {
       "name": "Venus",
       "publisher": "Mesa / NovaOS",
       "summary": "Vulkan and OpenGL on the host's GPU when NovaOS runs in QEMU with a 3D virtio-gpu",

@@ -36,7 +36,7 @@ static const char *g_cat_name[CAT_COUNT] = {
 enum {
     KIND_SETUP,        /* a 64-bit installer (.exe) or a Windows Installer package (.msi) */
     KIND_PORTABLE,     /* the 64-bit program itself: Run it from Downloads */
-    KIND_ARCHIVE,      /* a .zip, .7z or 7-Zip self-extractor: 7-Zip unpacks it into C:\Programs\<dest> */
+    KIND_ARCHIVE,      /* a .zip, .7z, .tar.gz, .tar.zst or 7-Zip self-extractor: 7-Zip unpacks it into C:\Programs\<dest> */
 };
 
 typedef struct {
@@ -499,15 +499,18 @@ static void unpack(Store *s, int i, RamNode *f)
     if (!z) { failed_msg(s, i, "Could not unpack: get 7-Zip first (Utilities)"); return; }
     char path[RAMFS_PATH_MAX], cmd[2 * RAMFS_PATH_MAX + 640], err[160];
     RamfsPath(f, path, sizeof(path));
-    s->tar_layer = ends_with(f->name, ".tar.gz") || ends_with(f->name, ".tgz");
+    s->tar_layer = ends_with(f->name, ".tar.gz") || ends_with(f->name, ".tgz") ||
+                   ends_with(f->name, ".tar.zst") || ends_with(f->name, ".tzst");
     if (s->tar_layer) {
         /* 7-Zip takes one layer at a time: the .tar beside the download first */
         char dir[RAMFS_PATH_MAX];
         RamfsPath(f->parent, dir, sizeof(dir));
         ksnprintf(cmd, sizeof(cmd), "7z x \"%s\" \"-o%s\" -y", path, dir);
         ksnprintf(s->tar, sizeof(s->tar), "%s\\%s", dir + 2, f->name);
-        int n = (int)strlen(s->tar);                        /* x.tar.gz -> x.tar, x.tgz -> x.tar */
+        int n = (int)strlen(s->tar);                        /* x.tar.gz, x.tar.zst -> x.tar; x.tgz, x.tzst -> x.tar */
         if (ends_with(s->tar, ".tgz")) strcpy(s->tar + n - 2, "ar");
+        else if (ends_with(s->tar, ".tzst")) strcpy(s->tar + n - 4, "ar");
+        else if (ends_with(s->tar, ".zst")) s->tar[n - 4] = '\0';
         else s->tar[n - 3] = '\0';
     } else {
         int n = ksnprintf(cmd, sizeof(cmd), "7z x \"%s\" \"-oC:\\Programs\\%s\" -y", path, a->dest);

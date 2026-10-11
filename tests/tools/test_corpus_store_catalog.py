@@ -72,9 +72,9 @@ with open(os.environ['FIXTURE_DOWNLOAD_LOG'], 'a') as f:
             subprocess.run(['bash', str(root / 'tools/ci/stage-graphics.sh'), str(out), str(cache)],
                            env=env, check=True, stdout=subprocess.DEVNULL)
             urls = log.read_text().splitlines()
-            for name in ('Mesa 3D', 'DXVK'):
+            for name in ('Mesa 3D', 'DXVK', 'VKD3D-Proton'):
                 url, file = appcorpus.catalog_entry(name)
                 self.assertIn(url, urls)
                 self.assertTrue((out / 'downloads' / url.rsplit('/', 1)[-1]).is_file())
-            self.assertEqual(len(urls), 3)
+            self.assertEqual(len(urls), 4)
             self.assertTrue((out / 'downloads/venus.7z').is_file())

@@ -63,5 +63,6 @@
   the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
   `dhcpcsvc`), the ones Qt WebEngine imports
   (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12
-  device or WinUSB device, as on a PC without them, with Bluetooth's SDP
+  device (until the App Store's VKD3D-Proton is installed, which `d3d12`
+  then hands every call to) or WinUSB device, as on a PC without them, with Bluetooth's SDP
   record parsers working in full), and more.

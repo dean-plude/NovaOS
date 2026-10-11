@@ -469,8 +469,8 @@ checks, fall back to TCG with a warning on every event so main and pull
 requests never go red on the runner alone.  Every job's summary and the corpus table say which accelerator
 the test VMs used.
 
-The graphics suite downloads 7-Zip, Mesa and DXVK, builds Venus
-(`tools/build_venus.py`) and gltest/d3dtest/d2dtest/dwtest/dw3test, and runs on a
+The graphics suite downloads 7-Zip, Mesa, DXVK and VKD3D-Proton, builds Venus
+(`tools/build_venus.py`) and gltest/d3dtest/d3d12test/d2dtest/dwtest/dw3test, and runs on a
 QEMU with Venus (`tools/ci/build-qemu-venus.sh`; without one the first
 monitor is a standard VGA and the Venus tests fail) with an OpenGL display,
 so on a machine without a screen it runs under `xvfb-run`:
@@ -665,7 +665,8 @@ system font set and face references, matching by full and PostScript
 name, set builders and collections made from sets, `IDWriteFont3` and
 `IDWriteFontFace3`, the system font fallback and a built one, grayscale
 glyph run analysis and rendering params.  It then types `store
-install Mesa 3D`, `store install DXVK` and `store install Venus` (the
+install Mesa 3D`, `store install DXVK`, `store install VKD3D-Proton` and
+`store install Venus` (the
 archives are already in `C:\Downloads`, so the App Store installs without
 a network) and then runs `gltest` (on virgl and, with
 `GALLIUM_DRIVER=llvmpipe`, on llvmpipe) and `d3dtest` (on Venus:
@@ -682,7 +683,13 @@ with Qt WebEngine: one device clears it, a second opens the handle
 (`OpenSharedResource1`) and reads the colour, the first reads the second's
 write, a child process opens an inherited copy of the handle and
 reads it too, and a shared fence (`ID3D11Fence`) signalled on either
-device completes on the other.  `gltest fps 10` draws an OpenGL
+device completes on the other.  `d3d12test` (on lavapipe, which its
+`VK_DRIVER_FILES` picks) brings Direct3D 12 up through NovaOS's
+`d3d12.dll` and VKD3D-Proton: a device, a root signature and pipeline
+from HLSL, a triangle drawn and read back, a fence, and (64-bit; the
+32-bit run passes `0` seconds and stops after the read-back) three
+seconds of the triangle presented in a window through a flip-model swap
+chain on the command queue.  `gltest fps 10` draws an OpenGL
 scene that keeps the rasterizer busy (64 blended quads over a 640x480
 window) for 10 s on virgl and 10 s on llvmpipe, each in a child process
 whose `GALLIUM_DRIVER` names the driver, and passes when virgl draws more

@@ -2104,6 +2104,49 @@ UINT32 NtfsLinks(NtfsVol *v, UINT64 mft)
     return k;
 }
 
+/* The name of @mft in the directory @parent its first $FILE_NAME (not a
+ * DOS alias) gives, in @name; false if it can't be read */
+static bool first_name(NtfsVol *v, UINT8 *rec, UINT64 mft, UINT64 *parent, char *name, UINT32 cap)
+{
+    if (!read_record(v, mft, rec)) return false;
+    for (const UINT8 *x = NULL; (x = next_attr(rec, v->rec_size, x, AT_FILE_NAME)); ) {
+        const UINT8 *fn = x + rd16(x + 0x14);
+        if (fn[0x41] == 2) continue;
+        *parent = rd64(fn) & 0xFFFFFFFFFFFFull;
+        utf16_to_utf8(fn + 0x42, fn[0x40], name, cap);
+        return true;
+    }
+    return false;
+}
+
+bool NtfsNames(NtfsVol *v, UINT64 mft, bool (*add)(const char *path, void *ctx), void *ctx)
+{
+    UINT8 *rec = kmalloc(v->rec_size), *up = kmalloc(v->rec_size);
+    char *path = kmalloc(NTFS_PATH_MAX), *part = kmalloc(NTFS_PATH_MAX);
+    bool ok = rec && up && path && part && read_record(v, mft, rec);
+    for (const UINT8 *x = NULL; ok && (x = next_attr(rec, v->rec_size, x, AT_FILE_NAME)); ) {
+        const UINT8 *fn = x + rd16(x + 0x14);
+        if (fn[0x41] == 2) continue;                             /* (a DOS alias: its long name is listed) */
+        UINT64 dir = rd64(fn) & 0xFFFFFFFFFFFFull;
+        utf16_to_utf8(fn + 0x42, fn[0x40], path, NTFS_PATH_MAX);
+        /* up through the directories to the root (record 5), each name in front */
+        for (int depth = 0; ok && dir != 5; depth++) {
+            UINT64 parent;
+            ok = depth < 64 && first_name(v, up, dir, &parent, part, NTFS_PATH_MAX);
+            size_t pl = ok ? strlen(part) : 0, l = strlen(path);
+            if (ok && pl + 1 + l + 1 > NTFS_PATH_MAX) ok = false;
+            if (!ok) break;
+            memmove(path + pl + 1, path, l + 1);
+            memcpy(path, part, pl);
+            path[pl] = '\\';
+            dir = parent;
+        }
+        if (ok && !add(path, ctx)) break;
+    }
+    kfree(rec); kfree(up); kfree(path); kfree(part);
+    return ok;
+}
+
 /* ---------------------------------------------------------------------------
  * Formatting
  *

@@ -10091,4 +10091,423 @@ running.  With `--log-times` it logs the connection's events with times
 and, every five seconds, what it took and sent, so a stall in a CI run
 shows in the artifact.
 
+## Console screen buffers
+
+The classic console screen-buffer calls work on NovaOS's consoles.  The
+console keeps a copy of each screen buffer's cells (character and
+attributes), cursor and current attributes, following what programs write
+(text, line ends, tabs, UTF-8 and the common cursor and colour escape
+sequences), so `GetConsoleScreenBufferInfo` reports the real cursor and
+colours, `ReadConsoleOutput*` read the cells back, and
+`FillConsoleOutput*`, `WriteConsoleOutput*` and
+`ScrollConsoleScreenBuffer*` change them; only the rows a call changed are
+drawn again on the Terminal.  `SetConsoleTextAttribute` sends the colour to
+the Terminal instead of being ignored.  `CreateConsoleScreenBuffer` makes
+independent buffers (up to seven more per console) and
+`SetConsoleActiveScreenBuffer` shows one.  The first buffer follows the
+Terminal's size until a program sets it with
+`SetConsoleScreenBufferSize`.  `consolecursortest` covers these, 64- and
+32-bit.
+
+## Critical sections stop spinning for nothing
+
+A thread that found a critical section taken incremented its lock count,
+then spun `SpinCount` rounds before it slept on the section's event.  Once
+counted in, it could never take the lock by spinning (the lock is handed to
+the queue), so every round was wasted; and the count was used whole, flag
+bits and all, so a section set up with the top bit (an old way to ask for
+the event up front) spun about two billion rounds.  Profiling Firefox's
+start (`profile on 50 6000`, QEMU TCG, 2 CPUs) put 33% of all samples on that
+one loop in `RtlEnterCriticalSection`.  A contending thread now spins first,
+taking the lock as soon as it is free with nobody queued, and only then
+joins the queue and sleeps; it spins the low 24 bits of the count only, and
+not at all on one CPU.  In the same 60-second window Firefox made 1.8 times
+the system calls (61,896 against 33,891 of the busiest) with the loop at
+0.2% of samples, and 100 seconds after `start browser` its Welcome page was
+on screen, where before no window had appeared yet.  `smpstress` runs its
+critical-section test again with a spin count (11 passed).
+
+A profile with a LENGTH (`profile on DELAY LENGTH`) now also reports to the
+serial log by itself when its window closes, so a program holding the
+keyboard does not keep the report from being read.
+
+## A drawn triangle in the ANGLE-style Direct3D 11 test
+
+`d3dtest angle`, which sets up Direct3D 11 the way ANGLE does for
+Chromium's GPU process, now also draws on its swap chain: two HLSL shaders
+compiled with NovaOS's `d3dcompiler_47.dll` draw a red triangle, and the
+centre pixel is read back through a staging texture.  On DXVK over Venus,
+64- and 32-bit, the graphics suite expects the Venus adapter and a red
+pixel, so a Direct3D 11 draw that reaches the GPU is checked, not only the
+device set-up.  ANGLE's own libraries are not loaded by the test; drawing
+WebView2 pages with ANGLE on DXVK stays on the roadmap.
+
+## Stateless DHCPv6, kept WinHTTP connections and WinHTTP WebSockets
+
+lwIP's stateless DHCPv6 client now runs: when a router's advertisement
+sets the "other configuration" flag, NovaOS asks for DNS servers by
+DHCPv6 and adds them after the ones DHCPv4 and router advertisements gave,
+never replacing them.  Stateful DHCPv6 (an address handed out by the
+server) is still not supported by lwIP's client.
+
+WinHTTP keeps an HTTP/1.1 connection on its connection handle when a
+response ends cleanly and reuses it for the next request to the same
+server for up to 30 seconds; a request on a kept connection the server has
+since closed is sent once more on a new one.  `WINHTTP_DISABLE_KEEP_ALIVE`
+and `Connection: close` turn it off.
+
+WinHTTP WebSockets work the way Windows programs ask for them: a request
+with `WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET` sends the upgrade headers and
+a random key, the server's `Sec-WebSocket-Accept` is checked against it,
+and `WinHttpWebSocketCompleteUpgrade` hands back a WebSocket that sends
+and receives whole messages or fragments (continuation frames), answers
+pings and closes with a status and reason.  The calls are synchronous,
+including on asynchronous sessions.  `httptest` checks connection reuse and
+an echoed WebSocket message, whole and in two fragments.
+
+## Driver packages install from a program, a .zip or an MSI
+
+A Windows driver package (an INF with its `.sys` and catalog) can be
+installed the ways one arrives.  `setupapi.dll` reads INF files
+(`SetupOpenInfFile`, `SetupGetLineText`, with `[Strings]` substitution)
+and stages a package as Windows does: `SetupCopyOEMInf` copies the INF, its
+`CatalogFile` and every file its `SourceDisksFiles` sections list to
+`C:\Windows\System32\DriverStore\FileRepository\<inf>_<arch>_<hash>`,
+publishes the INF as `C:\Windows\INF\oemN.inf`, records both under
+`HKLM\SYSTEM\DriverDatabase`, refuses a package with a file missing and
+finds a published one again instead of publishing it twice;
+`SetupUninstallOEMInf` and `SetupGetInfDriverStoreLocation` complete it.
+The new `newdev.dll` has `DiInstallDriver`, `DiUninstallDriver` and
+`UpdateDriverForPlugAndPlayDevices`, which driver setup programs call, and
+the new `pnputil.exe` adds (`/add-driver`, with `*.inf`, `/subdirs`,
+`/install`), lists (`/enum-drivers`) and deletes (`/delete-driver`)
+packages, so a driver unpacked from a .zip installs with it and an MSI's
+custom action can run it.  NovaOS's own kernel drivers run its devices and
+it does not load Windows kernel-mode drivers, so a staged package is not
+started on a device: `UpdateDriverForPlugAndPlayDevices` answers
+`ERROR_NO_SUCH_DEVINST`, as Windows does when the device is not present,
+and catalogs are not checked.  The `drvtest` self-test installs
+`tools/drivertest/mkdriver.py`'s package all three ways.
+
+## Qt's socket reads: `WSAIoctl(FIONREAD)`
+
+GOG GALAXY's own requests (its configuration from `cfg.gog.com`, its
+metrics and problem reports, the updater's file list) all ended with Qt
+error 2, "Connection closed", while its Chromium pages loaded.  The
+cause was not TLS but Winsock: before every read, Qt's socket engine
+asks how many bytes are waiting with `WSAIoctl(FIONREAD)`, and ws2_32's
+`WSAIoctl` answered `WSAEOPNOTSUPP` for it.  Qt took the -1 as a size,
+read nothing, and treated that as the server closing the connection, so
+every Qt TCP connection (TLS or not) failed at its first read.
+
+`WSAIoctl` now answers `FIONREAD` as `ioctlsocket` does (the bytes
+waiting) and `SIOCATMARK` as Windows does without urgent data (TRUE).
+`overlaptest` checks both, 64- and 32-bit.
+
+Qt's Schannel backend turns TLS 1.3 off on Windows builds before 20221,
+so GALAXY's connections use TLS 1.2 on NovaOS (which reports build
+18362); that path needed no change.
+
+## The secure scanf: `sscanf_s`'s buffer sizes
+
+GOG GALAXY stopped about three seconds after its "drive C: is not
+NTFS" warning was answered, with an access violation in `ucrtbase.dll`
+under Qt's network code.  Qt6Network parses with `sscanf_s`, which
+MSVC's headers inline as `__stdio_common_vsscanf` with option 1
+(`_CRT_INTERNAL_SCANF_SECURECRT`): after each `%s`, `%c` and `%[` comes
+the buffer's size.  NovaOS's C runtime ignored the option, so it took
+that size as the next conversion's pointer and wrote an `int` to
+address 4.
+
+The scanner now reads the size in the secure forms (`sscanf_s`, and the
+UCRT's `__stdio_common_vsscanf`, `__stdio_common_vfscanf` and
+`__stdio_common_vswscanf` with that option), takes none after `%*s`,
+and fails a string that does not fit, emptying the buffer, as Windows
+does.  `rttest` checks it, 64- and 32-bit.  GALAXY now keeps running
+and shows its sign-in window.
+
+## Programs see the network adapter
+
+iphlpapi's adapter tables were empty, the answer Windows gives on a
+machine without IP configured, so Steam asserted "CalcUnIPThisBox -
+GetAdaptersAddresses returned 232" when it looked for the computer's own
+address, and Chromium's network watchers found no adapter.
+`GetAdaptersAddresses` now lists the adapter the way Windows does: its
+`{GUID}` name, "Ethernet", the driver's description, MAC, link state,
+IPv6 and IPv4 addresses with their prefix lengths, DNS servers and, when
+asked, the gateway and subnet prefixes, all inside the caller's buffer
+(`IP_ADAPTER_ADDRESSES_LH`, 448 bytes, 376 in 32-bit programs), with the
+size query and the IPv4- and IPv6-only views.  `GetAdaptersInfo`,
+`GetIpAddrTable` and `GetNumberOfInterfaces` report the same adapter, and
+`GetNetworkParams` now names the DNS servers too.  The kernel hands the
+adapter's configuration to iphlpapi through `NtNovaSockCtl` (operation
+16).  `adaptertest` (network suite, 64- and 32-bit) checks the tables on
+QEMU's network.
+
+Steam's login window still does not open: its interface waits on Steam
+Input before the login step (docs/compatibility.md, Steam).
+
+## Network settings can be edited
+
+Settings > Network's Ethernet card has an **Edit** button.  It opens the
+IP settings: **Automatic (DHCP)** or **Manual** with an IP address, subnet
+mask and gateway, and a preferred and alternate DNS server (with DHCP,
+typed DNS servers replace the ones DHCP hands out).  **Save** checks the
+values (a real subnet mask, an address that is neither the subnet's own nor
+its broadcast address, a gateway inside the subnet) and applies them at
+once: a manual address stops DHCP and sets the interface's address, going
+back to DHCP starts it again, and manual DNS servers stay in place when a
+DHCP lease or a router advertisement brings others.  The Terminal's
+`netsh interface ipv4 set address`, `set dnsservers`, `add dnsservers` and
+`show config` do the same with Windows' syntax.  The settings are kept
+where Windows keeps them, in `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
+(`EnableDHCP`, `IPAddress`, `SubnetMask`, `DefaultGateway`, `NameServer`),
+and are put back after the registry loads at boot.  The network self-test
+suite sets a static address and DNS server with `netsh`, pings QEMU's
+gateway on it and goes back to DHCP (`tests/selftest/network4/070-netsh.py`).
+
+## Nightly corpus results on the tracking issue
+
+A scheduled nightly that runs the app corpus now posts its results to
+issue #210: the jobs' outcomes, how many programs passed, each program's
+version, result, checks and time, the smpstress log on four CPUs, and a link
+to the run's logs and screenshots.  Runs whose gate skips a commit that was
+already tested post nothing, so the issue only gains a comment when there
+is something new to read.
+
+## Plug and Play: the device tree
+
+NovaOS keeps a Plug and Play device tree the way Windows' PnP manager
+does (`kernel/io/pnp.c`): the root (`HTREE\ROOT\0`), the PCI bus and
+every PCI function found at boot, each USB controller's root hub, and
+the USB devices plugged in at boot or later, with a node per function of
+a composite device and a `HID\...` node (class Keyboard or Mouse, or a
+game controller) or a `USBSTOR\Disk...` node (class DiskDrive) under the
+function that is one.  Each node has a Windows device instance ID,
+hardware and compatible IDs, a setup class, a description and the NovaOS
+driver that runs it; a device nothing drives has problem 28, as on
+Windows without a driver.  A device that is unplugged keeps its node,
+marked not present, and gets it back when it returns to the same port.
+Every arrival and removal is an event with a sequence number, which
+programs read and wait for through `NtNovaGuiCtl`'s `CTL_PNP`
+(`novapnp.h`); the kernel log shows them as `[PNP] arrival:` and
+`[PNP] removal:` lines.  The devices suite's new "pnp" boot plugs a USB
+keyboard, a hub and a USB stick behind it into an xHCI controller through
+QEMU's monitor and takes them out again while `pnptest` follows the tree.
+The PlugPlay service, `WM_DEVICECHANGE` and setupapi's and cfgmgr32's
+enumeration of these nodes come next.
+
+## Threads stop queueing on their process's lock
+
+Every handle lookup takes its process's lock shared, and three hot paths
+took it exclusive, so each of them stopped all of the process's other
+threads.  A profile of Firefox's start (`profile on 50 6000`, QEMU TCG,
+2 CPUs, with the critical-section fix) put 23% of all samples on threads
+waiting for that lock.  Timing who held it exclusive showed three holders:
+
+- `NtAlertThreadByThreadId`, which wakes a thread parked on an SRW lock,
+  condition variable or `WaitOnAddress`, took it exclusive only to find the
+  thread.  It takes it shared now; the alert is set under the object lock.
+- Opening or creating an object handle took it a second time, exclusive,
+  to record the access the handle was granted.  The access is now filled in
+  with the handle, before the handle can be seen.
+- `LoadLibrary` held it while copying the DLL, zeroing all of it first, and
+  hashing every read-only page to share it with other processes.  xul.dll
+  is 160 MB, loaded in every Firefox process.  The copy and the hashing run
+  without the process lock now (the loader lock still keeps other loads
+  out), and only the parts of the image the file does not fill are zeroed.
+
+In the same 60-second window, time spent waiting for the process lock fell
+from 23% to 8% of samples, time the loader held it exclusive fell 25-fold
+(124,533 to 4,898 million cycles over about 180 loads), and programs got 33%
+of the CPU against 24%.  dlltest, crtthreads, wait migration, tlsslots
+(x64 and x86) and smpstress (4 CPUs) pass.
+
+## Pseudo consoles
+
+`CreatePseudoConsole`, `ResizePseudoConsole` and `ClosePseudoConsole` work:
+a pseudo console is a console of its own in the kernel, sized as asked; a
+child created with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` in its
+`STARTUPINFOEX` attaches to it instead of a Terminal, and two kernel32
+threads carry the host's input pipe to the console's input and the
+console's output to the host's output pipe.  The output thread sleeps until
+the console has output or is closed (the pseudo console's object is
+signaled then), so an idle pseudo console costs no wake-ups.
+`ClosePseudoConsole` ends the child's input and stops the output thread
+once it has drained what was written.  `pipetest` covers a child's output
+and input through a pseudo console and resizing it.
+
+## Programs see which process started another
+
+NovaOS's kernel kept each process's parent, and
+`NtQueryInformationProcess(ProcessBasicInformation)` returned it, but the
+process list behind the Tool Help snapshot and
+`NtQuerySystemInformation(SystemProcessInformation)` left it out, so
+`Process32First/Next` gave every process a `th32ParentProcessID` of 0 and
+`InheritedFromUniqueProcessId` was 0 too.  Steam checks that the program
+connecting to its UI transport websocket is its own browser
+(`steamwebhelper.exe`) or one of the browser's child processes, found
+through the snapshot's parent ids, and refused the connection
+("WebUITransport: Connection rejected").  `NtNovaProcessList` now carries
+the parent id and both lists report it; `proclisttest` checks that the
+snapshot names the test's child with the test as its parent.
+
+## uACPI field lengths are bit counts, not byte spans
+
+The uACPI hardening in #270 made every PkgLength fit inside its enclosing
+code.  A ReservedField or NamedField length inside a `Field` is also
+encoded as a PkgLength, but it counts bits, so a 16-bit or longer field
+runs past the end of the Field's own bytes and the table was refused with
+"invalid PkgLength bounds".  The embedded controller, lid, thermal zone,
+battery and I2C touchpad tables of the test machine failed to load, and the
+core and devices self-tests (powertest, hwcheck, touchpad interrupt, ec
+battery, lid sleep) failed on main.  Only the tracked PkgLength of an
+operation that really is a byte span (Scope, Device, Method, If, Else,
+Buffer, Package and the like) is checked against its enclosing code now;
+field lengths keep the overflow check only.
+Looking for the byte after a finished If or Else is bounded by the enclosing
+code block only again: with the new bound the If's own package ended exactly
+there, so an Else after it was never seen and the PCI interrupt routing table
+(`_PRT`, which chooses with If/Else) could not be built.
+
+## The 32-bit registry view (WOW6432Node)
+
+32-bit programs, and 64-bit ones asking with `KEY_WOW64_32KEY`, now see
+Windows' 32-bit view of `HKLM\SOFTWARE`: their keys live under
+`SOFTWARE\WOW6432Node`, apart from the 64-bit ones, and `KEY_WOW64_64KEY`
+reaches the 64-bit view from a 32-bit program.  Keys Windows shares between
+the views (`Classes`, fonts, OLE, COM3 and the others in `regtest`) stay
+shared.  Unlike Windows 7 and later, all of `SOFTWARE\Classes` is shared,
+`CLSID` and `Interface` included, because NovaOS registers its COM classes
+once for both bitnesses.  The 32-bit view has its own copy of
+`Microsoft\Windows NT\CurrentVersion` (with the time zones) and
+`Microsoft\Windows\CurrentVersion`, made at start-up from the 64-bit keys,
+and the App Store registers 32-bit Vulkan drivers under
+`WOW6432Node\Khronos\Vulkan\Drivers`, where 32-bit Vulkan loaders look.
+Keys 32-bit installers wrote before this change are in the 64-bit view and
+no longer seen by their programs; installing again puts them in place, and
+Vulkan drivers from the App Store need reinstalling for 32-bit games.
+`regtest` checks the isolation, the explicit view flags and shared keys,
+64- and 32-bit.
+
+## Memory: the compressed system files are given back once unpacked
+
+The kernel image carries the system files, most of them zlib-compressed,
+and unpacks them into the RAM disk at start.  The compressed copies (142 MB)
+were kept for as long as the system ran.  They now sit in a page-aligned
+section of their own (`.userland_z`, written by `build_userland.py`), and
+`UmInit` hands its pages back to the physical memory manager once every
+file is unpacked ("Gave back the 142 MB ..." in the boot log).  At 2 GB,
+memory in use after start fell from 463 MB to 315 MB, and Firefox with
+File Explorer open together no longer ran out of memory loading
+`xul.dll` ("Couldn't load XPCOM").
+
+## The desktop redraws only what changed
+
+Every change on screen made the desktop draw the whole frame: every
+window, each built-in app's painter (under the big kernel lock and the
+file-system lock), the acrylic blur under File Explorer and a copy of the
+whole screen.  A program presenting its window, the pointer moving over a
+program's window, a key press and `InvalidateRect` all did that, so each
+app open made every other app's drawing slower.
+
+A frame now redraws only the part of the screen that changed, when it is
+a part: the windows outside it are not drawn, the program's pixels are
+read only there, and only that part is copied to the screen (with page
+flipping, also what the last frame changed).  user32 tells the desktop
+which part of its window it presented.  Input to a program's window
+redraws nothing (the program redraws itself); input to a built-in app
+redraws its window.  Acrylic backdrops are blurred at a quarter of the
+resolution and scaled back up, a sixteenth of the work.  The profiler
+reports the desktop's frames.
+
+Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
+2 CPUs, with the lock change of the same day): the desktop drew 82 frames
+in the minute against 49 (34 of them a part of the screen), its longest
+frame took 0.9 s against 4.2 s, programs got 47% of the CPU against 38%,
+and the desktop watchdog (3 s without a frame) never fired.
+
+## Services run as administrators
+
+A service whose account is `LocalSystem` (the default for
+`CreateService`) now runs with the full, elevated token, as on Windows,
+even when a program with the limited token starts it.  Until now
+`StartService` started the service's process with the caller's own token,
+so GOG GALAXY's service (`GalaxyClientService.exe`, registered as
+`LocalSystem`) saw itself unelevated: it refused the client's request to
+write its Vulkan registry keys ("Cannot create Vulkan keys without
+elevation and a registry elevator"), the client asked ten times, gave up
+and sent a "Registry-Operation-Failed" problem report.  Now the service
+writes them and the client goes on to its sign-in window.  A service set
+to run under another account keeps the caller's token.  `svctest` checks
+that its service runs elevated, 64- and 32-bit.
+
+## Threads waiting for a lock sleep instead of spinning
+
+With Firefox and File Explorer open together the machine crawled: on two
+CPUs (QEMU TCG), 60-90% of all time went to threads spinning for one of
+Firefox's process locks, and the desktop drew 25 frames a minute.  Every
+handle lookup takes its process's lock shared; while a thread held it
+exclusively (mapping a view, duplicating a handle) and then waited for a
+CPU, the process's other threads spun, yielded to each other and spun
+again, keeping the holder off the CPU they were waiting on.
+
+The kernel's process, desktop and file-system locks now spin a moment (the
+holder is usually running on another CPU) and then sleep on a wait queue
+until the holder lets go: releasing a lock that has sleepers wakes them.
+A writer waiting for readers to leave sleeps the same way, woken by the
+last one out.
+
+Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
+2 CPUs): programs got 38% of the CPU against 20%, and samples spinning on a
+process lock fell from about 6% to under 1%.  A minute later, with both up,
+the CPU was 90% idle against 91% busy spinning (`profile on 9000 6000`).
+
+## Plug and Play: setupapi and cfgmgr32 enumerate the device tree
+
+Windows programs can now walk NovaOS's devices the way they do on
+Windows.  cfgmgr32 serves the kernel's Plug and Play tree:
+`CM_Locate_DevNode` (devices no longer present only with
+`CM_LOCATE_DEVNODE_PHANTOM`), `CM_Get_Child`, `CM_Get_Sibling`,
+`CM_Get_Parent` and `CM_Get_Depth`, `CM_Get_DevNode_Status` with the
+`DN_*` flags and problem codes, device ID lists filtered by enumerator,
+service, setup class, bus relations and presence, registry properties
+(`CM_DRP_*`) and `DEVPKEY_*` properties, a device's hardware and
+software keys (`CM_Open_DevNode_Key`), and interface lists for every
+interface class the tree exposes (USB devices and hubs, keyboards, mice,
+disks, audio, network and display adapters).  The game controllers stay
+the HID devices hid.dll opens, now children of their USB devices.
+setupapi's device information sets are built from the same tree: by
+setup class or all classes, by enumerator (`USB`, or one instance ID),
+by interface class, present or not, and `SetupDiOpenDeviceInfo`,
+`SetupDiOpenDeviceInterface` and `SetupDiOpenDevRegKey` work by name.
+`pnputil /enum-devices` lists the devices (`/connected`,
+`/disconnected`, `/class`, `/instanceid`, `/deviceid`, `/ids`) and with
+`/drivers` the published driver packages whose models match each one,
+shown outranked by the NovaOS driver that runs it, since NovaOS loads no
+kernel-mode driver.  `devenumtest` and three `pnputil` checks in the
+devices suite's "pnp" boot cover it with a USB keyboard plugged in.
+
+## Plug and Play: the PlugPlay service and WM_DEVICECHANGE
+
+Windows programs now hear of devices arriving and leaving the way they
+do on Windows.  `RegisterDeviceNotification` (wide and ANSI) delivers
+`WM_DEVICECHANGE` with `DBT_DEVICEARRIVAL` and `DBT_DEVICEREMOVECOMPLETE`
+and a `DEV_BROADCAST_DEVICEINTERFACE` (the interface's `\\?\USB#VID_...`
+symbolic link) to a window registered for an interface class, or for all
+of them, message-only windows included, and as
+`SERVICE_CONTROL_DEVICEEVENT` to a service registered with its status
+handle; every top-level window, hidden ones too, gets a USB stick's drive
+letter as a `DEV_BROADCAST_VOLUME` and `DBT_DEVNODES_CHANGED`.
+`CM_Register_Notification` calls back for interface classes and device
+instances (enumerated, started, removed).  A thread of the program
+follows the kernel's device events once it registers, or once the
+desktop tells one of its windows that devices changed.  The new PlugPlay
+service (`plugplay.exe`, started automatically) is reported running and
+keeps `HKLM\SYSTEM\CurrentControlSet\Enum` current, a key per device with
+its description, hardware and compatible IDs, class, class GUID, driver
+and location.  `devnotifytest` in the devices suite's "pnp" boot checks
+all of it as a USB keyboard and a FAT USB stick are plugged in and taken
+out.
+
 <!-- END generated:history -->

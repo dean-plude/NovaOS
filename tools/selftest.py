@@ -82,7 +82,7 @@ failed and the rest run).
 The exit status is the number of failed tests (0: all passed), so CI can
 gate on it.  --summary appends a Markdown table (GitHub's step summary).
 """
-import argparse, copy, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, copy, os, re, shutil, struct, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, qemu_binary
@@ -287,6 +287,7 @@ LAPTOP = load_suite('devices/laptop')
 UPDATE = load_suite('devices/update')
 GAMEPAD = load_suite('devices/gamepad')
 PNP = load_suite('devices/pnp')
+NTFS = load_suite('devices/ntfs')
 
 
 def net4_boot(work):
@@ -409,6 +410,29 @@ def pnp_boot(work):
     return ['-device', 'qemu-xhci,id=xhci'], []
 
 
+def ntfs_boot(work):
+    """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
+    NOVATEST (mkntfs, from the ntfs-3g package): drive D:, read-write.  It
+    stays in work/ntfs.img for the tests' check once QEMU has quit
+    (tests/selftest/devices/ntfs)"""
+    mkntfs = shutil.which('mkntfs') or ('/usr/sbin/mkntfs' if os.path.exists('/usr/sbin/mkntfs') else None)
+    if not mkntfs:
+        raise RuntimeError('mkntfs is not installed (the ntfs-3g package)')
+    disk, vol, mb = os.path.join(work, 'ntfs.img'), os.path.join(work, 'ntfs.vol'), 128
+    with open(vol, 'wb') as f:
+        f.truncate((mb - 1) << 20)
+    subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVATEST', '-p', '2048', '-H', '255', '-S', '63', vol],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    mbr = bytearray(512)                                    # one NTFS partition (type 7) from LBA 2048
+    mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\xfe\xff\xff', 0x07, b'\xfe\xff\xff', 2048, (mb - 1) * 2048)
+    mbr[510:512] = b'\x55\xaa'
+    with open(disk, 'wb') as out, open(vol, 'rb') as src:
+        out.write(mbr + bytes((1 << 20) - 512))
+        shutil.copyfileobj(src, out)
+    os.unlink(vol)
+    return ['-drive', f'format=raw,file={disk}'], []
+
+
 def monitors_boot(work):
     """One card with three outputs: a virtio-vga (the boot display, on its
     first output) and a VNC server on each other output (work/vnc1.sock,
@@ -517,7 +541,7 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
-                ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot)],
+                ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot)],
 }
 
 

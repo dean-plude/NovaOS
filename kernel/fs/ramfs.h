@@ -93,6 +93,9 @@ typedef struct {
      * name @name in @dir too; how many names @ref has */
     bool (*link)(void *vol, UINT64 ref, UINT64 dir, const char *name);
     UINT32 (*links)(void *vol, UINT64 ref);
+    /* Calls @add with the path of each name of @ref from the volume's root
+     * ("Dir\file.txt"; NULL on a file system without hard links) */
+    bool (*names)(void *vol, UINT64 ref, bool (*add)(const char *path, void *ctx), void *ctx);
 } RamfsSource;
 
 /* Change tracking, for saving drive C: to disk (fs/persist.c).  Nodes
@@ -236,6 +239,12 @@ int      RamfsLinks(const RamNode *n);
 const RamNode *RamfsFileId(const RamNode *n);
 /* The next name of @n's file (around the ring, back to @n), for walking its names */
 RamNode *RamfsNextLink(RamNode *n);
+/* On a mounted volume, @n's names in directories not read yet are loaded
+ * and joined to its ring, so walking it finds every name of the file */
+void     RamfsGatherLinks(RamNode *n);
+/* The file or directory whose id (FileInternalInformation's) is @id, on
+ * the drive of @any; only what is loaded is looked at.  NULL if none. */
+RamNode *RamfsFindId(RamNode *any, UINT64 id);
 
 /* Mark a node as held (e.g. shown in a window) so it cannot be deleted
  * underneath its holder.  NULL is ignored.  (Both are atomic: readers

@@ -77,6 +77,10 @@ bool   NtfsRename(NtfsVol *v, UINT64 old_dir, UINT64 mft, const char *old_name, 
 bool   NtfsLink(NtfsVol *v, UINT64 mft, UINT64 dir, const char *name);
 /* How many names @mft has (DOS aliases aside); 0 if it can't be read. */
 UINT32 NtfsLinks(NtfsVol *v, UINT64 mft);
+/* Calls @add with the path of each name of @mft (DOS aliases aside), from
+ * the volume's root ("Dir\file.txt"); false if one can't be read */
+#define NTFS_PATH_MAX 1024
+bool   NtfsNames(NtfsVol *v, UINT64 mft, bool (*add)(const char *path, void *ctx), void *ctx);
 
 /* Find @name (UTF-8, any case) in directory @dir */
 bool   NtfsLookup(NtfsVol *v, UINT64 dir, const char *name, UINT64 *mft, bool *is_dir);

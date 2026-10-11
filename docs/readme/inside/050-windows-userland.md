@@ -57,7 +57,8 @@
   container parts), `dxgi`, `d3d11` and `dcomp` without a GPU (Windows'
   Microsoft Basic Render Driver adapter, a WARP device whose textures
   the CPU maps and copies, and DirectComposition showing its swap chains:
-  what Chromium's software compositor draws WebView2's pages with), and
+  what Chromium's software compositor draws WebView2's pages with, with
+  DXVK installed too), and
   the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
   `dhcpcsvc`), the ones Qt WebEngine imports
   (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12

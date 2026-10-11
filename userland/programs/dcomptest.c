@@ -7,9 +7,14 @@
  * and presented with dirty rectangles; a swap chain on a window; and the
  * window Chromium composites into, made by the GPU process as a child of a
  * hidden window of its own and parented in the browser's window by the
- * browser process (SetParent across processes).  Without DXVK.
+ * browser process (SetParent across processes).
  *
  *   dcomptest            runs the checks
+ *   dcomptest dxvk       runs them with DXVK installed: programs' factory
+ *                        and hardware devices are DXVK's (the GPU), while
+ *                        a WARP device stays the software device, whose
+ *                        swap chains (for composition too) that factory
+ *                        still makes (WebView2's GPU process on Venus)
  *   dcomptest gpu HWND   the "GPU process": makes the child window, posts it
  *                        to HWND, and draws into it once it is parented
  *
@@ -37,6 +42,7 @@ typedef ULONG   (STDMETHODCALLTYPE *Rel_t)(void *);
 
 static const char *g_step = "start";
 static HMODULE g_dxgi, g_d3d11, g_dcomp;
+static int g_dxvk;                  /* "dcomptest dxvk": DXVK is installed */
 
 static DWORD WINAPI watchdog(void *arg)
 {
@@ -192,6 +198,29 @@ static void check_adapter(void)
     RELEASE(dev);
 }
 
+/* ---- With DXVK installed (the graphics suite) ------------------------------ */
+/* The factory programs get is DXVK's, on the GPU, and a hardware device is
+ * DXVK's; WARP stays the software device (check_composition) */
+static void check_dxvk(void)
+{
+    g_step = "DXVK's factory";
+    CreateFactory_t cf = (CreateFactory_t)GetProcAddress(g_dxgi, "CreateDXGIFactory1");
+    void *f = NULL, *a = NULL, *dev = NULL;
+    NDXGI_ADAPTER_DESC3 d;
+    memset(&d, 0, sizeof(d));
+    if (cf && SUCCEEDED(cf(&NIID_IDXGIFactory1, &f)) &&
+        SUCCEEDED(VT(f, 12, HRESULT (STDMETHODCALLTYPE *)(void *, UINT, void **))(f, 0, &a)))
+        VT(a, 10, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(a, &d);
+    CHECK("CreateDXGIFactory1's first adapter: the GPU, not the Basic Render Driver", a && d.VendorId != 0x1414);
+    RELEASE(a); RELEASE(f);
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    UINT level = 0;
+    CHECK("a hardware Direct3D 11 device (DXVK), feature level 10_0 or higher",
+          cd && SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, &level, NULL)) &&
+          dev && level >= 0xa000);
+    RELEASE(dev);
+}
+
 /* ---- Chromium's software output in this process (64-bit) ------------------ */
 static void check_composition(HWND top, HWND child)
 {
@@ -211,8 +240,15 @@ static void check_composition(HWND top, HWND child)
         RELEASE(a); RELEASE(dxgidev); RELEASE(dev);
     }
     const UINT angle[] = { 0xb000, 0xa000, 0x9300 };       /* ANGLE's levels: not this device */
-    CHECK("WARP at feature levels 9_3 and up: refused (it does not rasterize)",
-          FAILED(cd(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, angle, 3, D3D11_SDK_VERSION, &dev, NULL, NULL)) && !dev);
+    if (g_dxvk) {
+        level = 0;
+        CHECK("WARP at feature levels 9_3 and up: DXVK's device (ANGLE's WARP renderer)",
+              SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, angle, 3, D3D11_SDK_VERSION, &dev, &level, NULL)) && dev &&
+              level >= 0xa000);
+        RELEASE(dev);
+    } else
+        CHECK("WARP at feature levels 9_3 and up: refused (it does not rasterize)",
+              FAILED(cd(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, angle, 3, D3D11_SDK_VERSION, &dev, NULL, NULL)) && !dev);
 
     g_step = "composition";
     Out o;
@@ -411,7 +447,9 @@ int main(int argc, char **argv)
     CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
     CHECK("dxgi.dll, d3d11.dll and dcomp.dll load", g_dxgi && g_d3d11 && g_dcomp);
     if (!g_dxgi || !g_d3d11) { printf("dcomptest: %d passed, %d failed\n", pass, fail); return 1; }
-    check_adapter();
+    g_dxvk = argc >= 2 && !strcmp(argv[1], "dxvk");
+    if (g_dxvk) check_dxvk();
+    else check_adapter();
 
     WNDCLASSW wc = { 0 };
     wc.lpfnWndProc = host_proc;

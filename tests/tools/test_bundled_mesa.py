@@ -1,4 +1,4 @@
-"""The built-in Mesa llvmpipe: the App Store's archive, verified, all files staged."""
+"""The built-in Mesa llvmpipe: a pinned mesa-dist-win archive, verified, all files staged."""
 import importlib.util
 import io
 import json
@@ -14,10 +14,16 @@ spec.loader.exec_module(mesa)
 
 
 class BundleMesaTests(unittest.TestCase):
-    def test_same_archive_as_the_app_store(self):
+    def test_same_project_as_the_app_store(self):
         catalog = json.loads((ROOT / 'userland/store/catalog.json').read_text())
         entry = next(a for a in catalog['apps'] if a['name'] == 'Mesa 3D')
-        self.assertEqual(entry['url'], mesa.URL)
+        # both are mesa-dist-win's MSVC build; the App Store's Vulkan driver
+        # may be newer (lavapipe in 24.2.4 cannot compile Godot's shaders),
+        # while the built-in OpenGL keeps its pinned release (later ones
+        # drop libglapi.dll)
+        prefix = 'https://github.com/pal1000/mesa-dist-win/releases/download/'
+        self.assertTrue(entry['url'].startswith(prefix) and entry['url'].endswith('-release-msvc.7z'))
+        self.assertTrue(mesa.URL.startswith(prefix))
         # the App Store installs only the Vulkan driver now: OpenGL is built in
         self.assertNotIn('opengl32', entry['system'])
         self.assertTrue(entry['exe'].endswith('vulkan_lvp.dll'))

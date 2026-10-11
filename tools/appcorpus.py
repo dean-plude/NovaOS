@@ -703,7 +703,7 @@ def gui(nova, t, a, app, echo, close):
         return out, m.group(0).split(') ', 1)[1]
     w = app.interact(nova, echo) if app.interact else None
     time.sleep(3)
-    if app.reference:
+    if getattr(app, 'reference', True):        # (tests stand in a bare namespace for the App)
         visual = check_shot(nova, a, app.name.lower() + '.png')
     else:
         nova.shot(os.path.join(a.out, app.name.lower() + '.png'))

@@ -302,7 +302,9 @@ without being copied, relocated or hashed again), I/O,
   Microsoft Basic Render Driver adapter, a WARP device whose textures
   the CPU maps and copies, and DirectComposition showing its swap chains:
   what Chromium's software compositor draws WebView2's pages with, with
-  DXVK installed too), and
+  DXVK installed too; with DXVK, also Chromium's GPU DirectComposition path:
+  `DCompositionCreateDevice3`, surfaces and composition swap chains on the
+  GPU device, read back for DirectComposition), and
   the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
   `dhcpcsvc`), the ones Qt WebEngine imports
   (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12

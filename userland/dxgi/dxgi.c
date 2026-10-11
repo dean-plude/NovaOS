@@ -26,7 +26,10 @@
  * too: their buffer is a texture on that device, which the program renders
  * into on the GPU; each present copies the part that changed into a staging
  * texture and reads it back, and dcomp.dll draws that frame into the
- * target's window as it does a software device's.
+ * target's window as it does a software device's.  DXVK's adapters, as the
+ * wrapped factory hands them out, are wrapped too, so that a device's
+ * adapter's GetParent is that factory: Chromium takes its DirectComposition
+ * swap chains from there, and asks them for IDXGISwapChain3.
  */
 #include <windows.h>
 #include <novadx.h>
@@ -42,7 +45,6 @@
 #define D3D11_BIND_RENDER_TARGET_              0x20
 #define D3D11_USAGE_STAGING_                   3
 #define D3D11_CPU_ACCESS_READ_                 0x20000
-#define D3D11_MAP_READ_                        1
 
 typedef struct Factory Factory;
 typedef struct Adapter Adapter;
@@ -225,6 +227,21 @@ typedef struct {
     HRESULT (STDMETHODCALLTYPE *GetBackgroundColor)(Chain *, void *);
     HRESULT (STDMETHODCALLTYPE *SetRotation)(Chain *, UINT);
     HRESULT (STDMETHODCALLTYPE *GetRotation)(Chain *, UINT *);
+    /* IDXGISwapChain2 */
+    HRESULT (STDMETHODCALLTYPE *SetSourceSize)(Chain *, UINT, UINT);
+    HRESULT (STDMETHODCALLTYPE *GetSourceSize)(Chain *, UINT *, UINT *);
+    HRESULT (STDMETHODCALLTYPE *SetMaximumFrameLatency)(Chain *, UINT);
+    HRESULT (STDMETHODCALLTYPE *GetMaximumFrameLatency)(Chain *, UINT *);
+    HANDLE  (STDMETHODCALLTYPE *GetFrameLatencyWaitableObject)(Chain *);
+    HRESULT (STDMETHODCALLTYPE *SetMatrixTransform)(Chain *, const DWORD *);    /* DXGI_MATRIX_3X2_F */
+    HRESULT (STDMETHODCALLTYPE *GetMatrixTransform)(Chain *, DWORD *);
+    /* IDXGISwapChain3 */
+    UINT    (STDMETHODCALLTYPE *GetCurrentBackBufferIndex)(Chain *);
+    HRESULT (STDMETHODCALLTYPE *CheckColorSpaceSupport)(Chain *, UINT, UINT *);
+    HRESULT (STDMETHODCALLTYPE *SetColorSpace1)(Chain *, UINT);
+    HRESULT (STDMETHODCALLTYPE *ResizeBuffers1)(Chain *, UINT, UINT, UINT, UINT, UINT, const UINT *, IUnknown *const *);
+    /* IDXGISwapChain4 */
+    HRESULT (STDMETHODCALLTYPE *SetHDRMetaData)(Chain *, UINT, UINT, void *);
 } ChainVtbl;
 
 /* One buffer: what GetBuffer(0) gives is what the next present shows, and
@@ -247,6 +264,7 @@ struct Chain {
     NovaPresentSink sink;
     void *sink_ctx;
     UINT presents, rotation;
+    UINT src_w, src_h, latency;         /* (IDXGISwapChain2's source size, 0: the buffer's) */
     BYTE *rgba_tmp;                     /* (R8G8B8A8 buffers: the BGRA copy shown) */
     size_t rgba_size;
 };
@@ -302,30 +320,11 @@ static HRESULT chain_make_buffer(Chain *c)
     return S_OK;
 }
 
-typedef void    (STDMETHODCALLTYPE *CopyRegion_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, UINT, IUnknown *, UINT, const ND3D11_BOX *);
-typedef HRESULT (STDMETHODCALLTYPE *Map_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, ND3D11_MAPPED_SUBRESOURCE *);
-typedef void    (STDMETHODCALLTYPE *Unmap_t)(IUnknown *, IUnknown *, UINT);
-#define CTX(c, i, T) ((T)((void **)*(void **)(c)->ctx)[i])
-
 /* A GPU's present: the part @dirty (NULL: all) of the buffer, copied on the
  * GPU into the staging texture, read back into the frame */
 static void chain_read_back(Chain *c, const RECT *dirty)
 {
-    RECT a = { 0, 0, (LONG)c->desc.Width, (LONG)c->desc.Height };
-    if (dirty) IntersectRect(&a, &a, dirty);
-    if (IsRectEmpty(&a) || !c->frame) return;
-    ND3D11_BOX box = { (UINT)a.left, (UINT)a.top, 0, (UINT)a.right, (UINT)a.bottom, 1 };
-    CTX(c, 46, CopyRegion_t)(c->ctx, c->staging, 0, box.left, box.top, 0, c->buffer, 0, &box);   /* CopySubresourceRegion */
-    ND3D11_MAPPED_SUBRESOURCE m;
-    if (FAILED(CTX(c, 14, Map_t)(c->ctx, c->staging, 0, D3D11_MAP_READ_, 0, &m)) || !m.pData) return;
-    int rgba = c->desc.Format == NDXGI_FORMAT_R8G8B8A8_UNORM || c->desc.Format == NDXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-    for (LONG y = a.top; y < a.bottom; y++) {
-        const DWORD *s = (const DWORD *)((const BYTE *)m.pData + (size_t)y * m.RowPitch);
-        DWORD *d = (DWORD *)(c->frame + (size_t)y * c->desc.Width * 4);
-        for (LONG x = a.left; x < a.right; x++)
-            d[x] = rgba ? (s[x] & 0xFF00FF00u) | (s[x] >> 16 & 0xFF) | (s[x] & 0xFF) << 16 : s[x];
-    }
-    CTX(c, 15, Unmap_t)(c->ctx, c->staging, 0);
+    novadx_read_back(c->ctx, c->staging, c->buffer, c->desc.Format, c->desc.Width, c->desc.Height, c->frame, dirty);
 }
 
 /* The buffer's pixels as BGRA */
@@ -353,7 +352,9 @@ static HRESULT STDMETHODCALLTYPE c_qi(Chain *c, const GUID *iid, void **out)
 {
     if (!out) return E_POINTER;
     if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDXGIObject) || novadx_same(iid, &NIID_IDXGIDeviceSubObject) ||
-        novadx_same(iid, &NIID_IDXGISwapChain) || novadx_same(iid, &NIID_IDXGISwapChain1)) {
+        novadx_same(iid, &NIID_IDXGISwapChain) || novadx_same(iid, &NIID_IDXGISwapChain1) ||
+        novadx_same(iid, &NIID_IDXGISwapChain2) || novadx_same(iid, &NIID_IDXGISwapChain3) ||
+        novadx_same(iid, &NIID_IDXGISwapChain4)) {
         InterlockedIncrement(&c->refs);
         *out = c;
         return S_OK;
@@ -475,6 +476,7 @@ static HRESULT STDMETHODCALLTYPE c_resize(Chain *c, UINT count, UINT w, UINT h, 
     chain_drop_buffer(c);
     HRESULT hr = chain_make_buffer(c);
     if (FAILED(hr)) { c->desc = old; if (FAILED(chain_make_buffer(c))) return hr; return hr; }
+    c->src_w = c->src_h = 0;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE c_resizetarget(Chain *c, const NDXGI_MODE_DESC *m) { (void)c; return m ? S_OK : E_INVALIDARG; }
@@ -505,10 +507,57 @@ static HRESULT STDMETHODCALLTYPE c_getbg(Chain *c, void *col)
 static HRESULT STDMETHODCALLTYPE c_setrot(Chain *c, UINT r) { c->rotation = r; return S_OK; }
 static HRESULT STDMETHODCALLTYPE c_getrot(Chain *c, UINT *r) { if (!r) return E_INVALIDARG; *r = c->rotation ? c->rotation : 1; return S_OK; }
 
+/* IDXGISwapChain2 to 4: Chromium's DirectComposition swap chains need
+ * IDXGISwapChain3 (it sets their color space).  The source size and the
+ * matrix are kept, not applied; the one color space shown is sRGB's. */
+static HRESULT STDMETHODCALLTYPE c_setsrc(Chain *c, UINT w, UINT h)
+{
+    if (!w || !h || w > c->desc.Width || h > c->desc.Height) return E_INVALIDARG;
+    c->src_w = w; c->src_h = h;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE c_getsrc(Chain *c, UINT *w, UINT *h)
+{
+    if (!w || !h) return E_INVALIDARG;
+    *w = c->src_w ? c->src_w : c->desc.Width;
+    *h = c->src_h ? c->src_h : c->desc.Height;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE c_setlatency(Chain *c, UINT n) { if (!n || n > 16) return E_INVALIDARG; c->latency = n; return S_OK; }
+static HRESULT STDMETHODCALLTYPE c_getlatency(Chain *c, UINT *n) { if (!n) return E_INVALIDARG; *n = c->latency ? c->latency : 1; return S_OK; }
+static HANDLE STDMETHODCALLTYPE c_waitable(Chain *c) { (void)c; return CreateEventW(NULL, TRUE, TRUE, NULL); }   /* (always ready) */
+static HRESULT STDMETHODCALLTYPE c_setmatrix(Chain *c, const DWORD *m) { (void)c; return m ? S_OK : E_INVALIDARG; }
+static HRESULT STDMETHODCALLTYPE c_getmatrix(Chain *c, DWORD *m)
+{
+    (void)c;
+    if (!m) return E_INVALIDARG;
+    m[0] = m[3] = 0x3f800000;                           /* (the identity: 1.0f, as bits; no C runtime for floats here) */
+    m[1] = m[2] = m[4] = m[5] = 0;
+    return S_OK;
+}
+static UINT STDMETHODCALLTYPE c_backindex(Chain *c) { (void)c; return 0; }
+static HRESULT STDMETHODCALLTYPE c_checkcs(Chain *c, UINT cs, UINT *support)
+{
+    (void)c;
+    if (!support) return E_INVALIDARG;
+    *support = cs == 0 ? 1 : 0;                         /* DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: PRESENT */
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE c_setcs(Chain *c, UINT cs) { (void)c; (void)cs; return S_OK; }
+static HRESULT STDMETHODCALLTYPE c_resize1(Chain *c, UINT count, UINT w, UINT h, UINT fmt, UINT flags, const UINT *mask,
+                                           IUnknown *const *queues)
+{
+    (void)mask; (void)queues;
+    return c_resize(c, count, w, h, fmt, flags);
+}
+static HRESULT STDMETHODCALLTYPE c_sethdr(Chain *c, UINT type, UINT size, void *data) { (void)c; (void)type; (void)size; (void)data; return S_OK; }
+
 static const ChainVtbl g_chain_vtbl = {
     c_qi, c_addref, c_release, c_setpriv, c_setprivif, c_getpriv, c_getparent, c_getdevice, c_present, c_getbuffer,
     c_setfs, c_getfs, c_getdesc, c_resize, c_resizetarget, c_getoutput, c_getstats, c_getcount, c_getdesc1, c_getfsdesc,
     c_gethwnd, c_getcore, c_present1, c_mono, c_getrestrict, c_setbg, c_getbg, c_setrot, c_getrot,
+    c_setsrc, c_getsrc, c_setlatency, c_getlatency, c_waitable, c_setmatrix, c_getmatrix,
+    c_backindex, c_checkcs, c_setcs, c_resize1, c_sethdr,
 };
 
 /* the private side, which dcomp.dll's visuals use */
@@ -810,8 +859,9 @@ static HRESULT STDMETHODCALLTYPE w_getpriv(Wrapped *w, const GUID *g, UINT *n, v
 { return INNER(w, 5, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, UINT *, void *))(w->inner, g, n, d); }
 static HRESULT STDMETHODCALLTYPE w_getparent(Wrapped *w, const GUID *g, void **out)
 { return INNER(w, 6, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, void **))(w->inner, g, out); }
+static HRESULT wrap_adapter(Wrapped *w, HRESULT hr, const GUID *iid, void **out);
 static HRESULT STDMETHODCALLTYPE w_enum(Wrapped *w, UINT i, void **out)
-{ return INNER(w, 7, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out); }
+{ return wrap_adapter(w, INNER(w, 7, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out), &NIID_IDXGIAdapter, out); }
 static HRESULT STDMETHODCALLTYPE w_assoc(Wrapped *w, HWND h, UINT flags)
 { return INNER(w, 8, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND, UINT))(w->inner, h, flags); }
 static HRESULT STDMETHODCALLTYPE w_getassoc(Wrapped *w, HWND *h)
@@ -824,7 +874,7 @@ static HRESULT STDMETHODCALLTYPE w_swapchain(Wrapped *w, IUnknown *dev, NDXGI_SW
 static HRESULT STDMETHODCALLTYPE w_soft(Wrapped *w, HMODULE m, void **out)
 { return INNER(w, 11, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HMODULE, void **))(w->inner, m, out); }
 static HRESULT STDMETHODCALLTYPE w_enum1(Wrapped *w, UINT i, void **out)
-{ return INNER(w, 12, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out); }
+{ return wrap_adapter(w, INNER(w, 12, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out), &NIID_IDXGIAdapter1, out); }
 static BOOL STDMETHODCALLTYPE w_current(Wrapped *w) { return INNER(w, 13, BOOL (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
 static BOOL STDMETHODCALLTYPE w_stereo(Wrapped *w) { return INNER(w, 14, BOOL (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
 static HRESULT STDMETHODCALLTYPE w_forhwnd(Wrapped *w, IUnknown *dev, HWND h, const NDXGI_SWAP_CHAIN_DESC1 *d, const void *fs,
@@ -860,13 +910,16 @@ static HRESULT STDMETHODCALLTYPE w_forcomp(Wrapped *w, IUnknown *dev, const NDXG
 }
 static UINT STDMETHODCALLTYPE w_flags(Wrapped *w) { return INNER(w, 25, UINT (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
 static HRESULT STDMETHODCALLTYPE w_byluid(Wrapped *w, LUID l, const GUID *iid, void **out)
-{ return INNER(w, 26, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, LUID, const GUID *, void **))(w->inner, l, iid, out); }
+{ return wrap_adapter(w, INNER(w, 26, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, LUID, const GUID *, void **))(w->inner, l, iid, out), iid, out); }
 static HRESULT STDMETHODCALLTYPE w_warp(Wrapped *w, const GUID *iid, void **out)
 { return INNER(w, 27, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, void **))(w->inner, iid, out); }
 static HRESULT STDMETHODCALLTYPE w_feature(Wrapped *w, UINT feature, void *data, UINT size)
 { return INNER(w, 28, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void *, UINT))(w->inner, feature, data, size); }
 static HRESULT STDMETHODCALLTYPE w_bypref(Wrapped *w, UINT i, UINT pref, const GUID *iid, void **out)
-{ return INNER(w, 29, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, UINT, const GUID *, void **))(w->inner, i, pref, iid, out); }
+{
+    return wrap_adapter(w, INNER(w, 29, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, UINT, const GUID *, void **))(w->inner, i, pref, iid, out),
+                        iid, out);
+}
 static HRESULT STDMETHODCALLTYPE w_regac(Wrapped *w, HANDLE e, DWORD *c)
 { return INNER(w, 30, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(w->inner, e, c); }
 static HRESULT STDMETHODCALLTYPE w_unregac(Wrapped *w, DWORD c) { return INNER(w, 31, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(w->inner, c); }
@@ -881,6 +934,98 @@ static const void *const g_wrapped_vtbl[] = {
     (void *)w_unreg23, (void *)w_forcomp, (void *)w_flags, (void *)w_byluid, (void *)w_warp, (void *)w_feature,
     (void *)w_bypref, (void *)w_regac, (void *)w_unregac,
 };
+
+/* ---- DXVK's adapters, as programs get them ------------------------------ */
+/* DXVK's adapter, whose GetParent is the wrapped factory it came from:
+ * Chromium makes its DirectComposition swap chains with the factory of
+ * its device's adapter (IDXGIDevice::GetAdapter, then GetParent), and DXVK's
+ * device keeps the adapter it was created on, which is this one when it
+ * came from the wrapped factory (as it does when D3D11CreateDevice is given
+ * no adapter: DXVK's d3d11 then enumerates one from dxgi.dll's factory).
+ * Every other call, and QueryInterface for DXVK's own interfaces
+ * (IDXGIDXVKAdapter, which DXVK's D3D11CreateDevice asks for), goes to
+ * DXVK's adapter. */
+typedef struct { const void *const *vtbl; LONG refs; IUnknown *inner; Wrapped *factory; } WAdapter;
+
+static int is_adapter_iid(const GUID *iid)
+{
+    return novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDXGIObject) || novadx_same(iid, &NIID_IDXGIAdapter) ||
+           novadx_same(iid, &NIID_IDXGIAdapter1) || novadx_same(iid, &NIID_IDXGIAdapter2) ||
+           novadx_same(iid, &NIID_IDXGIAdapter3) || novadx_same(iid, &NIID_IDXGIAdapter4);
+}
+
+static HRESULT STDMETHODCALLTYPE wa_qi(WAdapter *a, const GUID *iid, void **out)
+{
+    if (!out) return E_POINTER;
+    HRESULT hr = a->inner->lpVtbl->QueryInterface(a->inner, iid, out);
+    if (SUCCEEDED(hr) && is_adapter_iid(iid)) {             /* (the same object: stay wrapped) */
+        ((IUnknown *)*out)->lpVtbl->Release((IUnknown *)*out);
+        InterlockedIncrement(&a->refs);
+        *out = a;
+    }
+    return hr;
+}
+static ULONG STDMETHODCALLTYPE wa_addref(WAdapter *a) { return (ULONG)InterlockedIncrement(&a->refs); }
+static ULONG STDMETHODCALLTYPE wa_release(WAdapter *a)
+{
+    LONG r = InterlockedDecrement(&a->refs);
+    if (!r) {
+        a->inner->lpVtbl->Release(a->inner);
+        w_release(a->factory);
+        HeapFree(GetProcessHeap(), 0, a);
+    }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE wa_setpriv(WAdapter *a, const GUID *g, UINT n, const void *d)
+{ return INNER(a, 3, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, UINT, const void *))(a->inner, g, n, d); }
+static HRESULT STDMETHODCALLTYPE wa_setprivif(WAdapter *a, const GUID *g, const IUnknown *u)
+{ return INNER(a, 4, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, const IUnknown *))(a->inner, g, u); }
+static HRESULT STDMETHODCALLTYPE wa_getpriv(WAdapter *a, const GUID *g, UINT *n, void *d)
+{ return INNER(a, 5, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, UINT *, void *))(a->inner, g, n, d); }
+static HRESULT STDMETHODCALLTYPE wa_getparent(WAdapter *a, const GUID *iid, void **out) { return w_qi(a->factory, iid, out); }
+static HRESULT STDMETHODCALLTYPE wa_enumoutputs(WAdapter *a, UINT i, void **out)
+{ return INNER(a, 7, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(a->inner, i, out); }
+static HRESULT STDMETHODCALLTYPE wa_getdesc(WAdapter *a, void *d) { return INNER(a, 8, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, void *))(a->inner, d); }
+static HRESULT STDMETHODCALLTYPE wa_checkif(WAdapter *a, const GUID *iid, LARGE_INTEGER *umd)
+{ return INNER(a, 9, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, LARGE_INTEGER *))(a->inner, iid, umd); }
+static HRESULT STDMETHODCALLTYPE wa_getdesc1(WAdapter *a, void *d) { return INNER(a, 10, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, void *))(a->inner, d); }
+static HRESULT STDMETHODCALLTYPE wa_getdesc2(WAdapter *a, void *d) { return INNER(a, 11, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, void *))(a->inner, d); }
+static HRESULT STDMETHODCALLTYPE wa_regprot(WAdapter *a, HANDLE e, DWORD *c)
+{ return INNER(a, 12, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(a->inner, e, c); }
+static void STDMETHODCALLTYPE wa_unregprot(WAdapter *a, DWORD c) { INNER(a, 13, void (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(a->inner, c); }
+static HRESULT STDMETHODCALLTYPE wa_vidmem(WAdapter *a, UINT node, UINT group, void *info)
+{ return INNER(a, 14, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, UINT, void *))(a->inner, node, group, info); }
+static HRESULT STDMETHODCALLTYPE wa_reserve(WAdapter *a, UINT node, UINT group, UINT64 n)
+{ return INNER(a, 15, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, UINT, UINT64))(a->inner, node, group, n); }
+static HRESULT STDMETHODCALLTYPE wa_regbudget(WAdapter *a, HANDLE e, DWORD *c)
+{ return INNER(a, 16, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(a->inner, e, c); }
+static void STDMETHODCALLTYPE wa_unregbudget(WAdapter *a, DWORD c) { INNER(a, 17, void (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(a->inner, c); }
+static HRESULT STDMETHODCALLTYPE wa_getdesc3(WAdapter *a, void *d) { return INNER(a, 18, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, void *))(a->inner, d); }
+
+/* (IDXGIAdapter4's methods: a program calls only those of the interfaces
+ * QueryInterface gave it, which DXVK's adapter has) */
+static const void *const g_wadapter_vtbl[] = {
+    (void *)wa_qi, (void *)wa_addref, (void *)wa_release, (void *)wa_setpriv, (void *)wa_setprivif, (void *)wa_getpriv,
+    (void *)wa_getparent, (void *)wa_enumoutputs, (void *)wa_getdesc, (void *)wa_checkif, (void *)wa_getdesc1,
+    (void *)wa_getdesc2, (void *)wa_regprot, (void *)wa_unregprot, (void *)wa_vidmem, (void *)wa_reserve,
+    (void *)wa_regbudget, (void *)wa_unregbudget, (void *)wa_getdesc3,
+};
+
+/* DXVK's adapter in *@out (the result @hr of getting it from @w's inner
+ * factory as @iid), wrapped */
+static HRESULT wrap_adapter(Wrapped *w, HRESULT hr, const GUID *iid, void **out)
+{
+    if (FAILED(hr) || !out || !*out || !is_adapter_iid(iid)) return hr;
+    WAdapter *a = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*a));
+    if (!a) return hr;                                      /* (DXVK's own, unwrapped) */
+    a->vtbl = g_wadapter_vtbl;
+    a->refs = 1;
+    a->inner = *out;
+    a->factory = w;
+    w_addref(w);
+    *out = a;
+    return hr;
+}
 
 /* DXVK's factory in *@out (the result @hr of creating it), wrapped */
 static HRESULT wrap(HRESULT hr, const GUID *iid, void **out)

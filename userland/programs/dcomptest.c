@@ -16,7 +16,9 @@
  *                        swap chains (for composition too) that factory
  *                        still makes (WebView2's GPU process on Venus);
  *                        and a composition swap chain on the GPU device,
- *                        rendered on the GPU and shown by a visual
+ *                        rendered on the GPU and shown by a visual; and
+ *                        DirectComposition surfaces on the GPU device,
+ *                        with the factory of the device's adapter
  *   dcomptest gpu HWND   the "GPU process": makes the child window, posts it
  *                        to HWND, and draws into it once it is parented
  *
@@ -246,6 +248,13 @@ static void check_gpu_composition(HWND child)
                                  3 /* FLIP_SEQUENTIAL */, 1 /* PREMULTIPLIED */, 0 };
     ok = ok && SUCCEEDED(VT(f, 24, HRESULT (STDMETHODCALLTYPE *)(void *, void *, const void *, void *, void **))(f, dev, &d, NULL, &chain));
     CHECK("CreateSwapChainForComposition on the GPU device", ok);
+    void *sc3 = NULL;
+    UINT support = 0;
+    ok = ok && SUCCEEDED(VT(chain, 0, QI_t)(chain, &NIID_IDXGISwapChain3, &sc3)) &&
+         SUCCEEDED(VT(sc3, 37, HRESULT (STDMETHODCALLTYPE *)(void *, UINT, UINT *))(sc3, 0, &support)) && (support & 1) &&
+         SUCCEEDED(VT(sc3, 38, HRESULT (STDMETHODCALLTYPE *)(void *, UINT))(sc3, 0));   /* sRGB */
+    CHECK("IDXGISwapChain3: CheckColorSpaceSupport, SetColorSpace1 (Chromium's)", ok);
+    RELEASE(sc3);
     ok = ok && SUCCEEDED(VT(visual, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(visual, chain)) &&
          SUCCEEDED(VT(dc, 3, HRESULT (STDMETHODCALLTYPE *)(void *))(dc));
     CHECK("SetContent, Commit", ok);
@@ -277,6 +286,118 @@ static void check_gpu_composition(HWND child)
     CHECK("frame 2: the rest kept", pixel(child, 10, 10) == RGB(255, 0, 255) && pixel(child, 160, 70) == RGB(255, 0, 255));
     RELEASE(prtv); RELEASE(part); RELEASE(rtv); RELEASE(got); RELEASE(owner); RELEASE(buf);
     RELEASE(chain); RELEASE(visual); RELEASE(target); RELEASE(dc); RELEASE(f); RELEASE(ctx); RELEASE(dev);
+    CHECK("everything released", 1);
+}
+
+/* ---- Chromium's hardware DirectComposition path ---------------------------- */
+/* What gl::InitializeDirectComposition, DCLayerTree and
+ * DirectCompositionChildSurfaceWin do on ANGLE's device: an
+ * IDCompositionDesktopDevice from DCompositionCreateDevice3 on the device,
+ * also an IDCompositionDevice3; a target, a visual (IDCompositionVisual2,
+ * also 3) and a DirectComposition surface drawn through BeginDraw and
+ * EndDraw (the texture on the device, at the update rectangle's offset),
+ * shown at Commit; a rectangle clip; and, on the GPU, the swap-chain
+ * factory taken from the device's adapter (GetAdapter, GetParent), which
+ * makes composition swap chains.  @gpu: on DXVK's hardware device, else on
+ * the software device (WARP) */
+static void fill(void *ctx, void *tex, LONG x, LONG y, LONG w, LONG h, DWORD bgra)
+{
+    typedef void (STDMETHODCALLTYPE *Update_t)(void *, void *, UINT, const ND3D11_BOX *, const void *, UINT, UINT);
+    DWORD *px = malloc((size_t)w * h * 4);
+    if (!px) return;
+    for (LONG i = 0; i < w * h; i++) px[i] = bgra;
+    ND3D11_BOX box = { (UINT)x, (UINT)y, 0, (UINT)(x + w), (UINT)(y + h), 1 };
+    VT(ctx, 48, Update_t)(ctx, tex, 0, &box, px, (UINT)w * 4, 0);                      /* UpdateSubresource */
+    free(px);
+}
+
+/* BeginDraw @r (NULL: all) of @surf, fill it with @bgra, EndDraw */
+static int draw_surface(void *surf, void *dev, void *ctx, const RECT *r, DWORD bgra)
+{
+    typedef HRESULT (STDMETHODCALLTYPE *Begin_t)(void *, const RECT *, const GUID *, void **, POINT *);
+    void *tex = NULL, *owner = NULL;
+    POINT at = { -1, -1 };
+    if (FAILED(VT(surf, 3, Begin_t)(surf, r, &NIID_ID3D11Texture2D, &tex, &at)) || !tex) return 0;
+    VT(tex, 3, void (STDMETHODCALLTYPE *)(void *, void **))(tex, &owner);             /* ID3D11DeviceChild::GetDevice */
+    int ok = owner == dev && at.x == (r ? r->left : 0) && at.y == (r ? r->top : 0);
+    RELEASE(owner);
+    RECT all = { 0, 0, 200, 120 };
+    if (!r) r = &all;
+    fill(ctx, tex, at.x, at.y, r->right - r->left, r->bottom - r->top, bgra);
+    RELEASE(tex);
+    return SUCCEEDED(VT(surf, 4, HRESULT (STDMETHODCALLTYPE *)(void *))(surf)) && ok;    /* EndDraw */
+}
+
+static void check_dcomp_surfaces(HWND child, int gpu)
+{
+    g_step = gpu ? "DirectComposition surfaces on the GPU" : "DirectComposition surfaces on the software device";
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    CreateDComp_t cdc3 = g_dcomp ? (CreateDComp_t)GetProcAddress(g_dcomp, "DCompositionCreateDevice3") : NULL;
+    CHECK("DCompositionCreateDevice3 exported", cdc3 != NULL);
+    void *dev = NULL, *ctx = NULL, *dxgidev = NULL, *desk = NULL, *dev3 = NULL, *dev2 = NULL, *target = NULL, *visual = NULL;
+    void *v3 = NULL, *surf = NULL, *clip = NULL;
+    int ok = cd && cdc3 && SUCCEEDED(cd(NULL, gpu ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, NULL, 0, NULL, 0,
+                                        D3D11_SDK_VERSION, &dev, NULL, &ctx)) &&
+             SUCCEEDED(VT(dev, 0, QI_t)(dev, &NIID_IDXGIDevice, &dxgidev));
+    CHECK("a device and its IDXGIDevice", ok);
+    ok = ok && SUCCEEDED(cdc3(dxgidev, &NIID_IDCompositionDesktopDevice, &desk));
+    CHECK("DCompositionCreateDevice3(IDCompositionDesktopDevice)", ok);
+    ok = ok && SUCCEEDED(VT(desk, 0, QI_t)(desk, &NIID_IDCompositionDevice3, &dev3)) &&
+         SUCCEEDED(VT(dev3, 0, QI_t)(dev3, &NIID_IDCompositionDevice2, &dev2));
+    CHECK("QueryInterface IDCompositionDevice3, IDCompositionDevice2", ok);
+    ok = ok && SUCCEEDED(VT(desk, 24, HRESULT (STDMETHODCALLTYPE *)(void *, HWND, BOOL, void **))(desk, child, TRUE, &target)) &&
+         SUCCEEDED(VT(dev3, 6, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(dev3, &visual)) &&
+         SUCCEEDED(VT(visual, 0, QI_t)(visual, &NIID_IDCompositionVisual3, &v3)) &&
+         SUCCEEDED(VT(target, 3, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(target, visual));
+    CHECK("CreateTargetForHwnd, CreateVisual (IDCompositionVisual3), SetRoot", ok);
+    ok = ok && SUCCEEDED(VT(dev3, 8, HRESULT (STDMETHODCALLTYPE *)(void *, UINT, UINT, UINT, UINT, void **))(
+                   dev3, 200, 120, NDXGI_FORMAT_B8G8R8A8_UNORM, 1 /* PREMULTIPLIED */, &surf)) &&
+         SUCCEEDED(VT(visual, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(visual, surf));
+    CHECK("CreateSurface, SetContent", ok);
+    typedef HRESULT (STDMETHODCALLTYPE *Commit_t)(void *);
+    ok = ok && draw_surface(surf, dev, ctx, NULL, 0xFFFFFF00);                            /* yellow */
+    CHECK("BeginDraw: a texture on the device; EndDraw", ok);
+    ok = ok && SUCCEEDED(VT(dev3, 3, Commit_t)(dev3));
+    COLORREF c = pixel(child, 10, 10);
+    CHECK("Commit: the surface in the window", ok && c == RGB(255, 255, 0));
+    if (c != RGB(255, 255, 0)) printf("pixel %06lx\n", (unsigned long)c);
+    RECT part = { 100, 50, 150, 100 };
+    CHECK("BeginDraw of a rectangle: its offset", ok && draw_surface(surf, dev, ctx, &part, 0xFF00FFFF));   /* cyan */
+    VT(dev3, 3, Commit_t)(dev3);
+    CHECK("the rectangle drawn, the rest kept",
+          pixel(child, 120, 70) == RGB(0, 255, 255) && pixel(child, 10, 10) == RGB(255, 255, 0) && pixel(child, 160, 70) == RGB(255, 255, 0));
+    typedef HRESULT (STDMETHODCALLTYPE *SetF_t)(void *, float);
+    ok = ok && SUCCEEDED(VT(dev3, 22, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(dev3, &clip));   /* CreateRectangleClip */
+    if (ok) {
+        VT(clip, 4, SetF_t)(clip, 0.0f); VT(clip, 6, SetF_t)(clip, 0.0f);              /* SetLeft, SetTop */
+        VT(clip, 8, SetF_t)(clip, 100.0f); VT(clip, 10, SetF_t)(clip, 120.0f);         /* SetRight, SetBottom */
+        ok = SUCCEEDED(VT(visual, 13, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(visual, clip));  /* SetClip */
+    }
+    ok = ok && draw_surface(surf, dev, ctx, NULL, 0xFFFF00FF) && SUCCEEDED(VT(dev3, 3, Commit_t)(dev3));   /* magenta */
+    CHECK("a rectangle clip: drawn inside it, not outside",
+          ok && pixel(child, 10, 10) == RGB(255, 0, 255) && pixel(child, 160, 10) == RGB(255, 255, 0));
+    RELEASE(clip); RELEASE(surf); RELEASE(v3); RELEASE(visual); RELEASE(target); RELEASE(dev2); RELEASE(dev3); RELEASE(desk);
+
+    if (gpu) {                                              /* the swap-chain factory of the device's adapter */
+        g_step = "the factory of the device's adapter";
+        void *a = NULL, *f = NULL, *chain = NULL, *dxvk = NULL, *f1 = NULL, *parent = NULL;
+        ok = dxgidev && SUCCEEDED(VT(dxgidev, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(dxgidev, &a)) &&   /* GetAdapter */
+             SUCCEEDED(VT(a, 6, HRESULT (STDMETHODCALLTYPE *)(void *, const GUID *, void **))(a, &NIID_IDXGIFactory2, &f));
+        CHECK("the device's adapter: GetParent(IDXGIFactory2)", ok);
+        NDXGI_SWAP_CHAIN_DESC1 d = { 64, 64, NDXGI_FORMAT_B8G8R8A8_UNORM, FALSE, { 1, 0 }, 0x20, 2, 0, 3, 1, 0 };
+        CHECK("its CreateSwapChainForComposition on the GPU device",
+              ok && SUCCEEDED(VT(f, 24, HRESULT (STDMETHODCALLTYPE *)(void *, void *, const void *, void *, void **))(f, dev, &d, NULL, &chain)));
+        static const GUID dxvk_adapter = { 0x907bf281, 0xea3c, 0x43b4, { 0xa8, 0xe4, 0x9f, 0x23, 0x11, 0x07, 0xb4, 0xff } };
+        CHECK("QueryInterface IDXGIDXVKAdapter: DXVK's", a && SUCCEEDED(VT(a, 0, QI_t)(a, &dxvk_adapter, &dxvk)));
+        CreateFactory_t cf = (CreateFactory_t)GetProcAddress(g_dxgi, "CreateDXGIFactory1");
+        void *ea = NULL;
+        ok = cf && SUCCEEDED(cf(&NIID_IDXGIFactory1, &f1)) &&
+             SUCCEEDED(VT(f1, 12, HRESULT (STDMETHODCALLTYPE *)(void *, UINT, void **))(f1, 0, &ea)) &&
+             SUCCEEDED(VT(ea, 6, HRESULT (STDMETHODCALLTYPE *)(void *, const GUID *, void **))(ea, &NIID_IDXGIFactory1, &parent));
+        CHECK("EnumAdapters1's adapter: GetParent is its factory", ok && parent == f1);
+        RELEASE(parent); RELEASE(ea); RELEASE(f1); RELEASE(dxvk); RELEASE(chain); RELEASE(f); RELEASE(a);
+    }
+    RELEASE(dxgidev); RELEASE(ctx); RELEASE(dev);
     CHECK("everything released", 1);
 }
 
@@ -527,8 +648,12 @@ int main(int argc, char **argv)
     pump(200);
 #ifdef _WIN64
     check_composition(top, child);
+    check_dcomp_surfaces(child, 0);
 #endif
-    if (g_dxvk) check_gpu_composition(child);
+    if (g_dxvk) {
+        check_gpu_composition(child);
+        check_dcomp_surfaces(child, 1);
+    }
     DestroyWindow(child);
     pump(100);
     check_cross_process(top);

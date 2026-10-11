@@ -63,6 +63,16 @@ SECTIONS {
         __rodata_end = .;
     }
 
+    /* ---- The userland files embedded compressed (tools/build_userland.py):
+     * only read while UmInit unpacks them onto drive C:, then their pages
+     * go back to the physical memory manager (whole pages only) ---- */
+    .userland_z ALIGN(4096) : AT(ADDR(.userland_z) - KERNEL_VIRT_BASE + KERNEL_PHYS_BASE) {
+        __userland_z_start = .;
+        KEEP(*(.userland_z))
+        . = ALIGN(4096);
+        __userland_z_end = .;
+    }
+
     /* ---- Read-write data ---- */
     .data ALIGN(4096) : AT(ADDR(.data) - KERNEL_VIRT_BASE + KERNEL_PHYS_BASE) {
         __data_start = .;

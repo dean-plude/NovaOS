@@ -1,5 +1,5 @@
 # Teeworlds 0.7.5 joins a game on its own server: the App Store installs
-# it (and Mesa 3D, for OpenGL 1.2), its dedicated server
+# it (OpenGL 1.2 comes from the Mesa built into the image), its dedicated server
 # (teeworlds_srv.exe, from the same zip) is opened from the Terminal and
 # loads its first map (dm1) on UDP port 8303, over IPv4 alone since its
 # IPv6 socket on [::] is IPv6-only (IPV6_V6ONLY, on by default as on
@@ -53,12 +53,11 @@ def join(nova, echo):
 
 APP = App('Teeworlds (own server)', '0.7.5',
           'https://github.com/teeworlds/teeworlds/releases/download/0.7.5/teeworlds-0.7.5-win64.zip',
-          'Teeworlds', [Test('install Mesa 3D', 'store install Mesa 3D', store='Mesa 3D', timeout=1200),
-                        Test('install from the App Store', 'store install Teeworlds', store='Teeworlds', timeout=600),
+          'Teeworlds', [Test('install from the App Store', 'store install Teeworlds', store='Teeworlds', timeout=600),
                         Test('its folder', rf'cd {GAME}', builtin=True),
                         Test('open its server', 'open teeworlds_srv.exe', builtin=True, settle=15),
                         Test('join the server', 'start teeworlds.exe "connect 127.0.0.1:8303"', timeout=60),
                         Test('server still running', 'taskkill /IM teeworlds_srv.exe',
                              [r'(?i)SUCCESS: Sent termination signal to the process "teeworlds_srv\.exe"'], builtin=True),
                         Test('back to Documents', r'cd C:\Documents', builtin=True)],
-          store='Teeworlds', gui=True, runtimes=['Mesa 3D'], interact=join, reference=False)
+          store='Teeworlds', gui=True, interact=join, reference=False)

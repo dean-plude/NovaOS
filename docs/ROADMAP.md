@@ -66,8 +66,9 @@ named program or test demonstrates it.
 ### Graphics, 3D and media
 <!-- BEGIN generated:next-graphics -->
 
-- ~~**OpenGL**: a working `opengl32.dll`~~ Done: Mesa's llvmpipe from the
-  App Store is the system OpenGL (OpenGL 4.5, 64- and 32-bit); see
+- ~~**OpenGL**: a working `opengl32.dll`~~ Done: Mesa's llvmpipe, built
+  in since [Mesa's OpenGL built in](HISTORY.md#mesas-opengl-built-in), is
+  the system OpenGL (OpenGL 4.5, 64- and 32-bit); see
   [OpenGL](HISTORY.md#opengl-mesa-as-the-system-opengl32dll).  NovaOS's
   own `opengl32.dll` hands it to Mesa's virgl on a 3D virtio-gpu (see
   [virgl](HISTORY.md#opengl-on-the-hosts-gpu-virgl)).
@@ -79,7 +80,9 @@ named program or test demonstrates it.
   `dxgi.dll` lists Windows' Microsoft Basic Render Driver and `d3d11.dll`
   gives a WARP device that maps and copies textures, with `dcomp.dll`
   showing its swap chains, for Chromium's software compositor
-  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)).
+  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)); with
+  DXVK the WARP device and its swap chains stay NovaOS's
+  ([WebView2 on Venus](HISTORY.md#webview2-on-venus)).
 - ~~**Audio**: `winmm` wave output and WASAPI over a real sound device
   (QEMU's Intel HDA)~~ Done; see [Sound](HISTORY.md#sound-intel-hd-audio-winmm-and-wasapi).
   ~~Recording (`waveIn`, capture endpoints) and endpoint volume
@@ -220,7 +223,11 @@ named program or test demonstrates it.
   Driver adapter, a WARP device, DirectComposition, the GPU process's
   window inside the browser's)~~ Done (`dcomptest`); ~~Windows'
   `WOW6432Node` registry view for machine-wide installs~~ Done (`regtest`).
-  Still to do: drawing with ANGLE on DXVK when a GPU is there.
+  ~~WebView2 with DXVK installed and Venus the GPU (the GPU process keeps
+  ANGLE's Direct3D 11 device on Venus and presents through the WARP device
+  and DirectComposition instead of restarting until the browser crashed)~~
+  Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
+  (DirectComposition on the GPU, `DCompositionCreateDevice3`).
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music
@@ -338,8 +345,12 @@ named program or test demonstrates it.
   links and persistence~~ Done (Phase 17.5; `linktest` and `linktest
   restarted`; on a mounted NTFS volume across a restart, with
   `FindFirstFileNameW` and an offline volume check, in the devices
-  suite's "ntfs" boot).  Interrupted writes and a full volume are still
-  to be tested on a disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  suite's "ntfs" boot).  ~~Interrupted writes and a full volume~~ Done:
+  a volume NovaOS is writing to is marked dirty until the changes are on
+  the disk, so after a power cut it mounts read-only (`ntfstest churn`,
+  the machine reset, `ntfstest cut`); a write past the free space fails
+  with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
+  disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).

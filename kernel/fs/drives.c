@@ -21,8 +21,11 @@
 #include "../um/um.h"
 #include "../wm/wm.h"
 #include "../ke/scheduler.h"
+#include "../ke/smp.h"
 
 /* ---- NTFS ---- */
+
+static UINT32 g_ops;                       /* creates, deletes, renames, links: changes too (DrivesPoll) */
 
 static bool ntfs_list(void *vol, UINT64 ref, bool (*add)(const RamfsExtEntry *e, void *ctx), void *ctx);
 static bool ntfs_size(void *vol, UINT64 ref, UINT64 *size) { return NtfsSize(vol, ref, size); }
@@ -30,18 +33,22 @@ static bool ntfs_read(void *vol, UINT64 ref, UINT64 off, void *buf, UINT64 len) 
 
 static bool ntfs_create(void *vol, UINT64 dir, const char *name, bool is_dir, UINT64 *ref)
 {
+    g_ops++;
     return NtfsCreate(vol, dir, name, is_dir, ref) && NtfsSync(vol);
 }
 static bool ntfs_remove(void *vol, UINT64 dir, UINT64 ref, const char *name)
 {
+    g_ops++;
     return NtfsDelete(vol, dir, ref, name) && NtfsSync(vol);
 }
 static bool ntfs_rename(void *vol, UINT64 dir, UINT64 ref, const char *old_name, UINT64 to, const char *name)
 {
+    g_ops++;
     return NtfsRename(vol, dir, ref, old_name, to, name) && NtfsSync(vol);
 }
 static bool ntfs_link(void *vol, UINT64 ref, UINT64 dir, const char *name)
 {
+    g_ops++;
     return NtfsLink(vol, ref, dir, name) && NtfsSync(vol);
 }
 static UINT32 ntfs_links(void *vol, UINT64 ref) { return NtfsLinks(vol, ref); }
@@ -55,13 +62,14 @@ static bool ntfs_write(void *vol, UINT64 ref, const void *data, UINT64 len)
 }
 
 static UINT64 ntfs_free(void *vol) { return NtfsFreeBytes(vol); }
+static bool ntfs_fits(void *vol, UINT64 len) { return NtfsFits(vol, len); }
 static bool ntfs_can_write(void *vol, UINT64 ref) { return NtfsCanWrite(vol, ref); }
 
 static const RamfsSource g_ntfs_source = { ntfs_list, ntfs_size, ntfs_read, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL, ntfs_links, ntfs_names };
+                                           NULL, ntfs_links, ntfs_names, NULL };
 static const RamfsSource g_ntfs_rw_source = { ntfs_list, ntfs_size, ntfs_read, ntfs_create, ntfs_remove,
                                               ntfs_rename, ntfs_write, ntfs_free, ntfs_can_write, ntfs_link, ntfs_links,
-                                              ntfs_names };
+                                              ntfs_names, ntfs_fits };
 
 typedef struct { bool (*add)(const RamfsExtEntry *e, void *ctx); void *ctx; } ListCtx;
 
@@ -155,7 +163,7 @@ static bool fat_read(void *vol, UINT64 ref, UINT64 off, void *buf, UINT64 len)
     return ok;
 }
 
-static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
 /* ---- mounting ---- */
 
@@ -194,6 +202,7 @@ static void try_mount(BlockDev *d, UINT64 lba)
     if (v) {
         NtfsSetClock(RamfsNow);
         bool rw = NtfsEnableWrite(v);
+        if (rw) NtfsMarkWhileWriting(v);                 /* (dirty while changes are being written) */
         if (!RamfsMountDrive(letter, rw ? &g_ntfs_rw_source : &g_ntfs_source, v, NTFS_ROOT, NtfsLabel(v), "NTFS",
                              NtfsTotalBytes(v))) {
             NtfsUnmount(v);
@@ -286,17 +295,26 @@ void DrivesPoll(void)
 {
     static UINT32 seen;
     static UINT64 since;
-    UINT32 c = RamfsExtChanges();
+    UINT32 c = RamfsExtChanges() + g_ops;
     UINT64 t = sched_ticks();
     if (c != seen) { seen = c; since = t; }
-    if (!RamfsExtDirty() || t - since < 100) return;         /* wait for a quiet second */
-    DrivesSync();
+    if (t - since < 100) return;                             /* wait for a quiet second */
+    bool marked = false;
+    for (int i = 0; i < MAX_MOUNTS && !marked; i++)
+        marked = g_mounts[i].dev && g_mounts[i].ntfs && NtfsMarked(g_mounts[i].vol);
+    if (RamfsExtDirty() || marked) DrivesSync();
 }
 
+/* The changed files written, then the NTFS volumes marked clean */
 bool DrivesSync(void)
 {
     DesktopLock();
     bool ok = RamfsFlush();
+    bkl_acquire();                                           /* (the volume and disk drivers rely on it) */
+    for (int i = 0; i < MAX_MOUNTS; i++)
+        if (g_mounts[i].dev && g_mounts[i].ntfs && !g_mounts[i].dev->gone && !RamfsExtDirty())
+            ok &= NtfsMarkClean(g_mounts[i].vol);
+    bkl_release();
     DesktopUnlock();
     return ok;
 }

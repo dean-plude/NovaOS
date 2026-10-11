@@ -11,7 +11,8 @@
  * rewritten, created, renamed, linked and deleted.  There is no journal: the
  * $LogFile is marked clean when writing is enabled, and every change is
  * written through before its call returns, so the volume is consistent
- * between calls.  Files kept in an attribute list, and compressed, sparse
+ * between calls (a call cut off half-way is what NtfsMarkWhileWriting
+ * is for).  Files kept in an attribute list, and compressed, sparse
  * or encrypted files, can't be rewritten.
  */
 
@@ -60,6 +61,16 @@ bool   NtfsWritable(const NtfsVol *v);
 UINT64 NtfsFreeBytes(NtfsVol *v);
 /* Write the cached bitmaps back (each call already does). */
 bool   NtfsSync(NtfsVol *v);
+/* Mark the volume dirty while changes are being written to it: set before
+ * the first change, cleared by NtfsMarkClean once the changes are on the
+ * disk (and by NtfsUnmount), so a volume cut off mid-change mounts
+ * read-only next time and Windows checks it (chkdsk).  For the volumes
+ * mounted as drives D:, E:, ... */
+void   NtfsMarkWhileWriting(NtfsVol *v);
+bool   NtfsMarkClean(NtfsVol *v);
+bool   NtfsMarked(const NtfsVol *v);
+/* Whether a file of @len bytes can be written (the free clusters) */
+bool   NtfsFits(NtfsVol *v, UINT64 len);
 /* Whether NtfsWriteFile can rewrite file @mft (not compressed, sparse,
  * encrypted or kept in an attribute list) */
 bool   NtfsCanWrite(NtfsVol *v, UINT64 mft);

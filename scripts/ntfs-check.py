@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
-"""Offline NTFS consistency check (a chkdsk-style subset): scripts/ntfs-check.py image [offset_bytes]
+"""Offline NTFS consistency check (a chkdsk-style subset):
+scripts/ntfs-check.py [--after-cut] image [offset_bytes]
 Checks: record fixups/headers, MFT bitmap vs in-use records, every cluster
 owned once and $Bitmap matching ownership, link counts, $I30 indexes (sorted
 by $UpCase collation, same leaf depth, VCNs, index bitmap, entries <-> $FILE_NAME
-attributes, sequence numbers), $LogFile clean."""
-import struct, sys
+attributes, sequence numbers), $LogFile clean, the volume not marked dirty.
+--after-cut: a volume whose writing was cut off half-way (the power went):
+what chkdsk mends without losing anything is a NOTE, not an error: the
+dirty mark, clusters marked used that no file owns, a directory entry's
+stale size, a file whose name its directory does not list yet."""
+import re, struct, sys
 
+args = [a for a in sys.argv[1:] if a != '--after-cut']
+AFTER_CUT = re.compile(r'volume marked dirty|clusters marked used but owned by no file|\(minor\)$|: name .* not in directory \d+ index$') \
+    if '--after-cut' in sys.argv else None
 errs = []
 def err(m):
+    if AFTER_CUT and AFTER_CUT.search(m):
+        print('NOTE:', m)
+        return
     errs.append(m)
     if len(errs) <= 60: print('ERROR:', m)
 
-f = open(sys.argv[1], 'rb'); base = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+f = open(args[0], 'rb'); base = int(args[1]) if len(args) > 1 else 0
 def rd(off, n): f.seek(base + off); return f.read(n)
 bs = rd(0, 512)
 assert bs[3:11] == b'NTFS    '

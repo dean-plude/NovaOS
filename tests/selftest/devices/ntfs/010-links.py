@@ -6,7 +6,8 @@
 # names (FindFirstFileNameW) whole before kept-sub has been read.  Once
 # QEMU has quit, scripts/ntfs-check.py looks the volume over as chkdsk
 # would (records, bitmaps, $I30 indexes, link counts against names) and
-# ntfs-3g reads the file by its third name.
+# ntfs-3g reads the file by its third name (on the copy of the disk
+# 020-full-and-cut.py takes before it fills the volume, when there is one).
 import os
 import shutil
 import subprocess
@@ -14,7 +15,9 @@ import sys
 
 
 def _volume_ok(nova):
-    disk = os.path.join(nova.work, 'ntfs.img')
+    disk = os.path.join(nova.work, 'ntfs-links.img')
+    if not os.path.exists(disk):
+        disk = os.path.join(nova.work, 'ntfs.img')
     vol = os.path.join(nova.work, 'ntfs-vol.img')
     with open(disk, 'rb') as src, open(vol, 'wb') as out:      # (the partition starts at 1 MiB)
         src.seek(1 << 20)

@@ -77,11 +77,14 @@ int  NetSockTcpTable(NetTcpRow *rows, int max);
  * and names onto these).  Booleans are 0/1, buffers in bytes, timeouts in
  * ms (0: none), SOCKOPT_LINGER is on | seconds << 16.  The read-only
  * ones: SOCKOPT_TYPE (1 stream, 2 datagram), SOCKOPT_ERROR (a SOCK_E*
- * code, 0: none), SOCKOPT_ACCEPTCONN. */
+ * code, 0: none), SOCKOPT_ACCEPTCONN.  SOCKOPT_V6ONLY (IPV6_V6ONLY, an
+ * IPv6 socket's only): on by default, as on Windows, so an IPv6 socket
+ * bound to :: takes IPv6 alone and an IPv4 socket can have the same port;
+ * off, it takes both families. */
 enum {
     SOCKOPT_RCVBUF = 1, SOCKOPT_SNDBUF, SOCKOPT_REUSEADDR, SOCKOPT_KEEPALIVE, SOCKOPT_BROADCAST,
     SOCKOPT_NODELAY, SOCKOPT_RCVTIMEO, SOCKOPT_SNDTIMEO, SOCKOPT_LINGER, SOCKOPT_TTL,
-    SOCKOPT_TYPE, SOCKOPT_ERROR, SOCKOPT_ACCEPTCONN,
+    SOCKOPT_TYPE, SOCKOPT_ERROR, SOCKOPT_ACCEPTCONN, SOCKOPT_V6ONLY,
 };
 int NetSockSetOpt(int s, int opt, UINT32 value);       /* 0 or -err */
 int NetSockGetOpt(int s, int opt, UINT32 *value);      /* 0 or -err */

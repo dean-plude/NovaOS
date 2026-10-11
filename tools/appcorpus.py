@@ -92,17 +92,20 @@ class App:
     the program's tests to install first with Test(store=NAME).  @pad: a
     game pad of that kind (tools/padpeer.py --kind: xbox360, xboxone or
     hid) is plugged in before NovaOS boots; the interaction moves it with
-    pad("buttons=0x1000 lx=32767") (padpeer's control lines)."""
+    pad("buttons=0x1000 lx=32767") (padpeer's control lines).  @reference:
+    False for a program whose screen differs from run to run (a game in
+    play), so its interaction alone decides and its screenshot is only
+    kept in --out."""
     def __init__(self, name, version, url, dir, tests, unpack='zip', strip=0, extra=(),
                  gui=False, net=False, interact=None, https=False, store=None, processes=False,
-                 mic=False, sound=None, runtimes=(), pad=None, mutable=False, online=False):
+                 mic=False, sound=None, runtimes=(), pad=None, mutable=False, online=False, reference=True):
         self.name, self.version, self.url, self.dir, self.tests = name, version, url, dir, tests
         self.unpack, self.strip, self.extra = unpack, strip, list(extra)
         self.gui, self.net, self.interact = gui, net, interact
         self.https, self.store, self.ca, self.processes = https, store, None, processes
         self.mic, self.sound = mic, sound
         self.runtimes = list(runtimes)
-        self.pad, self.mutable, self.online = pad, mutable, online
+        self.pad, self.mutable, self.online, self.reference = pad, mutable, online, reference
 
 
 def pad(line):
@@ -580,6 +583,9 @@ def main():
                     out = ANSI.sub('', out)          # rg and fd colour their output in a console
                     exe = re.split(r'[\\/]', t.cmd.split()[0])[-1]
                     w = verdict(t, out, ok, exe)
+                    if t.settle and not w:           # (a server it opened gets ready; what it logs is kept)
+                        time.sleep(t.settle)
+                        out += nova.sr.read_new()
                 if app.name == 'WebView2':
                     version = re.search(r'wv2host: runtime ([0-9]+(?:\.[0-9]+)+)', out)
                     if version:
@@ -697,7 +703,11 @@ def gui(nova, t, a, app, echo, close):
         return out, m.group(0).split(') ', 1)[1]
     w = app.interact(nova, echo) if app.interact else None
     time.sleep(3)
-    visual = check_shot(nova, a, app.name.lower() + '.png')
+    if app.reference:
+        visual = check_shot(nova, a, app.name.lower() + '.png')
+    else:
+        nova.shot(os.path.join(a.out, app.name.lower() + '.png'))
+        visual = None
     w = w or visual  # retain the semantic failure while always keeping a capture
     if close:
         nova.keys('alt-f4')

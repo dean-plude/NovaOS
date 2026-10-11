@@ -64,6 +64,7 @@ typedef struct {
     UINT16        linger_s;
     UINT8         so_options;             /* lwIP SOF_* (REUSEADDR, KEEPALIVE, BROADCAST) */
     UINT8         ttl;
+    bool          v6only;                 /* IPV6_V6ONLY: :: takes IPv6 alone (Windows' default) */
     UINT32        owner;                  /* the process id the connection tables name (0: the system) */
 } Sock;
 
@@ -305,6 +306,7 @@ int NetSockTcp(int family)
     if (i < 0) { net_unlock(); return i; }
     Sock *s = &g_sock[i];
     s->family = family;
+    s->v6only = family == NET_AF_INET6;
     s->tcp = tcp_new_ip_type(family == NET_AF_INET6 ? IPADDR_TYPE_ANY : IPADDR_TYPE_V4);
     if (!s->tcp) { s->used = false; net_unlock(); return -SOCK_ENOBUFS; }
     tcp_callbacks(s->tcp, s);
@@ -322,6 +324,7 @@ int NetSockUdp(int family)
     if (i < 0) { net_unlock(); return i; }
     Sock *s = &g_sock[i];
     s->family = family;
+    s->v6only = family == NET_AF_INET6;
     s->udp = true;
     s->udp_pcb = udp_new_ip_type(family == NET_AF_INET6 ? IPADDR_TYPE_ANY : IPADDR_TYPE_V4);
     if (!s->udp_pcb) { s->used = false; net_unlock(); return -SOCK_ENOBUFS; }
@@ -524,7 +527,8 @@ int NetSockBind(int sd, const NetSockAddr *a)
     if (!family_ok(s, a)) { net_unlock(); return -SOCK_EAFNOSUPPORT; }
     static const UINT8 zero[16];
     ip_addr_t ip;
-    if (s->family == NET_AF_INET6 && !memcmp(a->addr, zero, 16)) ip_addr_copy(ip, *IP_ANY_TYPE);   /* :: takes both families */
+    if (s->family == NET_AF_INET6 && a->family == NET_AF_INET6 && !memcmp(a->addr, zero, 16))
+        ip_addr_copy(ip, *(s->v6only ? IP6_ADDR_ANY : IP_ANY_TYPE));  /* :: takes IPv6 alone, or both families */
     else to_lwip(a, &ip);
     err_t e;
     if (s->udp) e = udp_bind(s->udp_pcb, &ip, lwip_htons(a->port_be));
@@ -780,6 +784,10 @@ int NetSockSetOpt(int sd, int opt, UINT32 v)
             if (s->nodelay) tcp_output(s->tcp);         /* what Nagle held back goes now */
         }
         break;
+    case SOCKOPT_V6ONLY:                                /* (decides what a later bind to :: takes) */
+        if (s->family != NET_AF_INET6) { r = -SOCK_EINVAL; break; }
+        s->v6only = v != 0;
+        break;
     case SOCKOPT_LINGER:
         if (s->udp) { r = -SOCK_EINVAL; break; }
         s->linger_on = (v & 0xFFFF) != 0;
@@ -810,6 +818,10 @@ int NetSockGetOpt(int sd, int opt, UINT32 *v)
     case SOCKOPT_LINGER:     *v = (UINT32)s->linger_on | ((UINT32)s->linger_s << 16); break;
     case SOCKOPT_TYPE:       *v = s->udp ? 2 : 1; break;
     case SOCKOPT_ACCEPTCONN: *v = s->listening; break;
+    case SOCKOPT_V6ONLY:
+        if (s->family != NET_AF_INET6) { r = -SOCK_EINVAL; break; }
+        *v = s->v6only;
+        break;
     case SOCKOPT_ERROR:      /* a failed connect, or a connection reset */
         *v = !s->reset ? 0 : s->connected ? SOCK_ECONNRESET : SOCK_ECONNREFUSED;
         break;

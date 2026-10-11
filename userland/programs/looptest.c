@@ -495,6 +495,51 @@ static void udp_connected(void)
     closesocket(sc);
 }
 
+/* IPV6_V6ONLY: on by default, as on Windows, so an IPv6 socket bound to ::
+ * leaves the port to an IPv4 one (a game server binds both); off, :: takes
+ * IPv4 as well */
+static void v6only(void)
+{
+    struct sockaddr_in a, to;
+    struct sockaddr_in6 b;
+    int len = sizeof(a), opt = -1, ol = sizeof(opt);
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    SOCKET s4 = socket(AF_INET, SOCK_DGRAM, 0), s6 = socket(AF_INET6, SOCK_DGRAM, 0);
+    check("IPV6_V6ONLY is on in a new IPv6 socket",
+          getsockopt(s6, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&opt, &ol) == 0 && opt == 1);
+    bind(s4, (struct sockaddr *)&a, sizeof(a));
+    getsockname(s4, (struct sockaddr *)&a, &len);
+    memset(&b, 0, sizeof(b));
+    b.sin6_family = AF_INET6;
+    b.sin6_port = a.sin_port;
+    b.sin6_addr = in6addr_any;
+    check("an IPv6 socket binds :: on the port an IPv4 socket has on 0.0.0.0",
+          a.sin_port && bind(s6, (struct sockaddr *)&b, sizeof(b)) == 0);
+    closesocket(s6);
+    s6 = socket(AF_INET6, SOCK_DGRAM, 0);
+    opt = 0;
+    b.sin6_port = 0;
+    len = sizeof(b);
+    check("with IPV6_V6ONLY off, :: takes IPv4 too",
+          setsockopt(s6, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&opt, sizeof(opt)) == 0 &&
+          bind(s6, (struct sockaddr *)&b, sizeof(b)) == 0 && getsockname(s6, (struct sockaddr *)&b, &len) == 0);
+    memset(&to, 0, sizeof(to));
+    to.sin_family = AF_INET;
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    to.sin_port = b.sin6_port;
+    char buf[16];
+    check("... and gets a datagram sent to 127.0.0.1",
+          sendto(s4, "dual", 4, 0, (struct sockaddr *)&to, sizeof(to)) == 4 && wait_for(s6, 0, 2000) == 1 &&
+          recv(s6, buf, sizeof(buf), 0) == 4 && !memcmp(buf, "dual", 4));
+    opt = 1;
+    check("IPV6_V6ONLY is no option of an IPv4 socket",
+          setsockopt(s4, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&opt, sizeof(opt)) == SOCKET_ERROR &&
+          WSAGetLastError() == WSAEINVAL);
+    closesocket(s4);
+    closesocket(s6);
+}
+
 static void duplicate(void)
 {
     struct sockaddr_in a;
@@ -567,6 +612,7 @@ int main(int argc, char **argv)
     winsock11();
     sockopts();
     udp_connected();
+    v6only();
     duplicate();
     printf("looptest: %d passed, %d failed\n", passed, failed);
     return failed != 0;

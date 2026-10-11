@@ -118,7 +118,6 @@ struct nova_winsys {
    int32_t blob_id;
    struct virgl_resource_cache cache;
    bool direct;            /* try direct presentation */
-   uint64_t presented;     /* the last submission when a frame was last shown that way */
 };
 
 struct virgl_hw_res {
@@ -656,15 +655,16 @@ nova_present(struct nova_winsys *nws, struct virgl_hw_res *res, HDC dc)
        cr.bottom - cr.top != (LONG)res->height || !ClientToScreen(hwnd, &o))
       return false;
    HWND root = GetAncestor(hwnd, GA_ROOT);
-   /* (one frame ahead of the host at most, as the read-back keeps it) */
-   nova_wait_seq(nws, nws->presented, OS_TIMEOUT_INFINITE);
+   /* The host finishes drawing the frame first, here, as the read-back
+    * would wait for it: the kernel copies it with the desktop held, which
+    * then has to wait for nothing more than the copy */
+   nova_wait_seq(nws, p_atomic_read(&nws->seq), OS_TIMEOUT_INFINITE);
    struct gpu_present a = {
       .hwnd = (uint32_t)(uintptr_t)(root ? root : hwnd),
       .x = o.x, .y = o.y, .w = (int32_t)res->width, .h = (int32_t)res->height,
    };
    if (gpu_ctl(nws->h, GPU_PRESENT, res->blob, &a) != 0)
       return false;
-   nws->presented = p_atomic_read(&nws->seq);
    return true;
 }
 

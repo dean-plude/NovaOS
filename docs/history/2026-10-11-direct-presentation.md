@@ -10,7 +10,7 @@ straight into the screen's memory: no pixel is copied by the guest.
 
 - **virgl's winsys** (`third_party/mesa-venus/virgl_nova_winsys.c`): a
   present asks the kernel first (`NtNovaGpuCtl` 13, the window and where
-  it is on screen), keeping at most one frame ahead of the host; when
+  it is on screen) once the host has drawn the frame; when
   the kernel says no it reads the frame back as before.
   `NOVA_PRESENT=gdi` always takes the old way.
 - **Kernel**: a virgl context of the kernel's own copies the program's
@@ -40,10 +40,12 @@ straight into the screen's memory: no pixel is copied by the guest.
   per second and move fewer bytes through guest memory a frame
   (read-backs, window bitmaps drawn, the desktop's back buffer copied to
   the screen, transfers to a virtio output).  In the QEMU VM without
-  KVM: 23.6 against 18.3 frames a second (42.4 against 54.6 ms a frame),
-  20 KiB against 3561 KiB a frame through guest memory.  A first version
+  KVM: 25.7 against 22.0 frames a second (39.0 against 45.5 ms a frame),
+  70 KiB against 3567 KiB a frame through guest memory.  A first version
   copied each frame on the host twice (into the window's own texture,
   then onto the screen) and was slower than the GDI under KVM, where the
-  guest's copies cost little and the host's time is all.
+  guest's copies cost little and the host's time is all; it also asked
+  the kernel before the host had drawn the frame, so the desktop stayed
+  held while the host drew.
 - Vulkan's frames (Venus: DXVK and VKD3D-Proton) still come back through
   the GDI; they are the next step.

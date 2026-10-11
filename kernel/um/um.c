@@ -33,6 +33,7 @@
 #include "um_internal.h"
 #include "../ke/syscall.h"
 #include "../ke/scheduler.h"
+#include "../ke/waitq.h"
 #include "../ke/probe.h"
 #include "../ke/printf.h"
 #include "../ke/kpcr.h"
@@ -83,20 +84,51 @@ static void um_give_way(int *yields)
     else sched_sleep_until_tsc(NULL, sched_tsc_after(UM_LOCK_NAP_100NS));
 }
 
+/* Sleeping until a lock is let go (parking).  Spinning on, or yielding
+ * to, threads that spin too kept the holder off the CPU: with Firefox and
+ * File Explorer open on two CPUs, 60-90% of all time went to threads
+ * spinning for a Firefox process's lock while the thread holding it
+ * waited for a CPU.  A waiter now spins a moment (the holder is likely
+ * running on another CPU), then sleeps on a wait queue shared by the
+ * locks hashed to it until the holder lets go, at most a tick at a time
+ * (the condition is looked at again on waking, so a wake-up meant for
+ * another lock costs only a look).  A thread on its way to blocking only
+ * gives way, as before: a sleep would lose that. */
+#define PARK_QUEUES 64
+static WaitQueue g_park[PARK_QUEUES];
+static WaitQueue *park_queue(const volatile void *key) { return &g_park[((uintptr_t)key / 64) % PARK_QUEUES]; }
+
+static void unpark(volatile UINT32 *parked)
+{
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);           /* (the release before, the count after) */
+    if (__atomic_load_n(parked, __ATOMIC_SEQ_CST)) waitq_wake(park_queue(parked));
+}
+
+#define UM_PARK_SPINS 2000
+#define UM_PARK_UNTIL(parked, cond, most) do { \
+        int most_ = (most), yields_ = 0; \
+        for (int spins_ = 0; !(cond); ) { \
+            if (++spins_ < most_) { pause_cpu(); continue; } \
+            spins_ = 0; \
+            if (sched_current()->state != THREAD_RUNNING) { um_give_way(&yields_); continue; } \
+            WaitQueue *q_ = park_queue(parked); \
+            __atomic_add_fetch((parked), 1, __ATOMIC_SEQ_CST); \
+            UINT32 gen_ = waitq_gen(q_); \
+            if (!(cond)) waitq_wait(q_, gen_, 1); \
+            __atomic_sub_fetch((parked), 1, __ATOMIC_SEQ_CST); \
+        } \
+    } while (0)
+
 void um_lock(UmLock *l)
 {
     Thread *me = sched_current();
     if (l->owner == me) { l->depth++; return; }
     /* Held briefly as a rule: spin a while (the holder is likely running
-     * on another CPU) before giving the CPU away — but not holding the big
-     * kernel lock, which the holder may be waiting for (yielding lets it go) */
-    int most = bkl_held() ? 0 : 2000, yields = 0;
-    for (int spins = 0; __atomic_exchange_n(&l->v, 1, __ATOMIC_ACQUIRE); ) {
-        while (__atomic_load_n(&l->v, __ATOMIC_RELAXED)) {
-            if (++spins < most) pause_cpu();
-            else { um_give_way(&yields); spins = 0; }
-        }
-    }
+     * on another CPU) before sleeping — but not holding the big kernel
+     * lock, which the holder may be waiting for (sleeping lets it go) */
+    int most = bkl_held() ? 0 : UM_PARK_SPINS;
+    while (__atomic_exchange_n(&l->v, 1, __ATOMIC_ACQUIRE))
+        UM_PARK_UNTIL(&l->parked, !__atomic_load_n(&l->v, __ATOMIC_SEQ_CST), most);
     l->owner = me;
     l->depth = 1;
 }
@@ -106,20 +138,8 @@ void um_unlock(UmLock *l)
     if (--l->depth > 0) return;
     l->owner = NULL;
     __atomic_store_n(&l->v, 0, __ATOMIC_RELEASE);
+    unpark(&l->parked);
 }
-
-/* Wait (spin a while, then give way) until @cond holds.  Spinning holding
- * the big kernel lock too: what is waited for (readers leaving) takes
- * moments, and a thread that yields here may not run again for a whole
- * time slice, holding up everyone its taken write lock keeps out.  (A
- * reader the waiter keeps off the CPU never leaves: see um_give_way.) */
-#define UM_WAIT_UNTIL(cond) do { \
-        int most_ = 2000, yields_ = 0; \
-        for (int spins_ = 0; !(cond); ) { \
-            if (++spins_ < most_) pause_cpu(); \
-            else { um_give_way(&yields_); spins_ = 0; } \
-        } \
-    } while (0)
 
 /* Readers count on their CPU's counter (and a thread that moved count down
  * on another's): the writer waits for the sum to reach 0 */
@@ -137,7 +157,7 @@ void um_lock_excl(UmRwLock *l)
     um_lock(&l->w);                             /* new readers stay out */
     if (l->w.depth > 1) return;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    UM_WAIT_UNTIL(readers_of(l) == 0);
+    UM_PARK_UNTIL(&l->drain_parked, readers_of(l) == 0, UM_PARK_SPINS);
 }
 
 void um_unlock_excl(UmRwLock *l) { um_unlock(&l->w); }
@@ -150,14 +170,16 @@ void um_lock_shared(UmRwLock *l)
         __atomic_add_fetch(r, 1, __ATOMIC_SEQ_CST);
         if (!__atomic_load_n(&l->w.v, __ATOMIC_SEQ_CST)) return;
         __atomic_sub_fetch(r, 1, __ATOMIC_SEQ_CST);                /* a writer: let it go first */
-        UM_WAIT_UNTIL(!__atomic_load_n(&l->w.v, __ATOMIC_RELAXED));
+        unpark(&l->drain_parked);                                  /* (it may be waiting for this count) */
+        UM_PARK_UNTIL(&l->w.parked, !__atomic_load_n(&l->w.v, __ATOMIC_SEQ_CST), UM_PARK_SPINS);
     }
 }
 
 void um_unlock_shared(UmRwLock *l)
 {
     if (l->w.owner == sched_current()) { um_unlock(&l->w); return; }
-    __atomic_sub_fetch(my_readers(l), 1, __ATOMIC_RELEASE);
+    __atomic_sub_fetch(my_readers(l), 1, __ATOMIC_SEQ_CST);
+    unpark(&l->drain_parked);                                      /* (the last reader out: the writer goes on) */
 }
 
 /* The desktop lock (recursive for its owner), and the file-system lock it

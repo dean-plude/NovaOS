@@ -67,11 +67,13 @@ typedef struct {
 #define UM_STATUS_ACCESS_VIOLATION 0xC0000005u
 #define UM_STATUS_NOT_SAME_OBJECT  0xC00001ACu
 
-/* A recursive lock that waits by yielding (never held across user code) */
+/* A recursive lock (never held across user code).  A waiter spins a
+ * moment, then sleeps until the holder lets go (um.c, park) */
 typedef struct {
     volatile int v;
     Thread      *owner;
     int          depth;
+    volatile UINT32 parked;     /* threads asleep waiting for it */
 } UmLock;
 void um_lock(UmLock *l);
 void um_unlock(UmLock *l);
@@ -80,6 +82,7 @@ void um_unlock(UmLock *l);
  * take it shared too) or many readers, who must not take it twice. */
 typedef struct {
     UmLock       w;
+    volatile UINT32 drain_parked;   /* a writer asleep until the readers leave */
     struct { volatile int n; } __attribute__((aligned(64))) readers[16];   /* by CPU (MAX_CPUS): each on a line of its own */
 } __attribute__((aligned(64))) UmRwLock;
 void um_lock_shared(UmRwLock *l);

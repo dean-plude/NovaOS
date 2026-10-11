@@ -67,7 +67,7 @@ results; until then they are kept by hand.
 | **Microsoft Build of OpenJDK 21** (App Store) | Untested | Temurin 21 (above) works | — |
 | **OpenTTD 15.3** (App Store; free on GOG; the corpus installs OpenTTD's own Windows installer, as GOG's copy needs an account to download) | Works | Its setup program installs it silently (run as administrator, as its manifest asks); with the OpenGFX graphics it reaches its main menu, and its animated title game plays, drawn in software (no hardware acceleration yet) | nightly corpus |
 | **GOG GALAXY 2.1** (offline installer, Inno Setup 6) | Partly | Its setup program runs elevated, through its wizard or silently (`/VERYSILENT`), installs the Visual C++ runtimes it carries (x86 and x64), copies GOG GALAXY's files and makes its shortcuts; the client starts (`GalaxyClient.exe`, 64-bit, Qt 6 WebEngine: every import resolves, 89 modules, and the Windows Runtime `UISettings` its Qt plugin reads the theme from), installs and starts its service (`GalaxyClientService.exe`, which trusts the client and answers its requests over 127.0.0.1:9978), opens its window and warns that drive C: is not NTFS; past that warning it finishes initialising, opens its sign-in window and starts its first Chromium renderer (`QtWebEngineProcess.exe`), which needs the App Store's Mesa 3D (Qt then draws with its OpenGL; without it Qt ends the client: "Could not get handle for shared context") and DXVK (Chromium's Direct3D 11, through ANGLE); with both, Chromium shares its Direct3D 11 textures and fences with Qt (on lavapipe NovaOS's Vulkan loader provides the sharing), ANGLE compiles its shaders with NovaOS's HLSL compiler, and the sign-in window loads GOG's sign-in page (`login.gog.com`) over HTTPS, its certificate checked against the Windows root stores as Chromium reads them; the page draws, then shows "Oops! Something went wrong" with a Log in button.  The client's own requests through Qt's network (its configuration, metrics and problem reports, over Schannel's TLS 1.2) get their answers; past the drive warning the client keeps running (Qt's `sscanf_s` calls get their buffer sizes honoured) and its sign-in window waits on its Log in button, and pressing it loads GOG's sign-in form again (email, password, Google, Steam, Discord and Xbox); its service runs elevated, as `LocalSystem` services do, and writes the client's Vulkan registry keys. Under QEMU without KVM the sign-in page does not always finish loading in time and shows the "Oops" page again; signing in with an account is not yet checked. Setup warns that drive C: is not NTFS (answer Yes) | by hand |
-| **Steam** (App Store, the current client) | Partly | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes and Steam accepts its UI connection; the login window does not open yet: Steam's interface waits on Steam Input before the login step ([Steam](#steam)). Signing in and games are unchecked | nightly corpus (install and update) |
+| **Steam** (App Store, the current client) | Partly | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes and Steam accepts its UI connection; the "Sign in to Steam" window opens and draws its form (account name, password, Remember me, Sign in) ([Steam](#steam)). Signing in and games are unchecked | nightly corpus (install and update) |
 | **Chocolate Doom 3.1.0** (32-bit, SDL2) with **Freedoom** | Works | Plays in a window on Mesa 3D's OpenGL (install "Mesa 3D" from the App Store first) in the right colours; an Xbox or HID game pad walks, turns and fires | by hand in QEMU; graphics self-test `gltest colors` |
 | **Beneath a Steel Sky** on **ScummVM 2026.3** (App Store; free on GOG, which ships it with ScummVM; the corpus takes the freeware floppy release Revolution and ScummVM publish, as GOG's copy needs an account to download) | Works | ScummVM's setup program (Inno Setup, 32-bit, installing the 64-bit ScummVM) installs it silently or through its wizard; the game starts, Esc skips the intro and a click walks Robert Foster along the first scene's gantry. ScummVM draws with OpenGL 1.1, NovaOS's own when no OpenGL driver is installed; sound not checked yet (the corpus runs without a sound card) | nightly corpus |
 | **Teeworlds 0.7.5** (App Store; free and open source, SDL2) | Partly | Installs from the App Store and starts in full screen on Mesa 3D's OpenGL (install "Mesa 3D" first: it needs OpenGL 1.2), plays its menu music through the sound card and goes through its first-start questions to its start menu with the keyboard, and its menus follow the mouse with its default settings (SDL reads the pointer's moves and recentres it with `SetCursorPos`; with `inp_grab 1` it reads Raw Input instead; the corpus opens Settings with a click). Joining a game on its own server times out without KVM, while Mesa compiles its shaders | nightly corpus |
@@ -245,7 +245,8 @@ packages, checks every file and starts the 64-bit client, which starts
 `bin\cef\cef.win64`).  Steam picks the proxy from the user's Internet
 Settings, as on Windows.
 
-The login window does not come up yet.  The browser now starts its child
+The login window opens and draws its sign-in form (see the end of the
+list below).  The browser starts its child
 processes as on Windows: the GPU process, the network and storage
 services and a page (renderer) process for Steam's first page.  The GPU
 process draws with ANGLE on Direct3D 11 when Mesa 3D and DXVK are
@@ -316,14 +317,21 @@ reason to change Steam:
   none; see `adaptertest`).  (The browser's sockets and Steam's downloads
   no longer fail with `WSAENOBUFS`: NovaOS's socket tables were sized for
   a small device; see `loadtest`.)
-- The login window does not open yet.  Steam's interface (the hidden
-  "SP Shared JS Context" page) connects to `steam.exe`, starts its
-  stores and then waits on Steam Input ("SteamApp Init - Before Login -
-  ControllerStore": the controller glyph strings and the controller list)
-  without an answer, so it never reaches the login step and never asks
-  for the login window; Steam does not contact its servers before
-  someone signs in.  Which NovaOS call holds Steam Input up is not found
-  yet (its HID and USB threads, SDL3 and libusb, wait normally).
+- The login window opens: Steam's interface (the hidden "SP Shared JS
+  Context" page) connects to `steam.exe`, starts its stores, gets Steam
+  Input's controller strings and list (a 28 KB answer that a short
+  non-blocking send used to cut off) and opens "Sign in to Steam".  Its
+  contents were black: Steam's browser composer puts Chromium's window
+  inside an SDL window of its own as a child window, and Chromium's GPU
+  process, drawing in software, draws into that child with `GetDC` and
+  `BitBlt` from another process, which NovaOS allowed only on top-level
+  windows.  It now works on child windows too, and the form draws (QR
+  code area aside, see the next point).
+- Steam's connection to its servers (its CM servers, over WebSockets on
+  ports 443 and 27017 to 27023) fails in the test sandbox, whose only way
+  out is an HTTPS proxy; the sign-in page logs "Failed to start auth
+  session" and Steam retries.  On a real network this is expected to
+  connect; signing in is a hand check.
   Chromium's network change and DNS watchers do not start
   (`WSALookupServiceBegin` has no providers, error 10108).
 - The "Thread creation failed" messages `steam.exe` logged once under

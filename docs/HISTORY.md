@@ -10427,6 +10427,24 @@ in the minute against 49 (34 of them a part of the screen), its longest
 frame took 0.9 s against 4.2 s, programs got 47% of the CPU against 38%,
 and the desktop watchdog (3 s without a frame) never fired.
 
+## Drawing into another process's child window
+
+Steam's "Sign in to Steam" window opened with black contents.  Steam's
+browser composer makes an SDL window and puts Chromium's window inside it
+as a child window; Chromium, drawing in software, draws its frames from
+its GPU process with `GetDC` and `BitBlt` on that child window.  NovaOS
+let another process draw only into top-level windows (the ones the
+desktop knows), so `GetDC` on the child failed and nothing was drawn.
+Now `GetDC`, `GetWindowDC` and `GetDCEx` on another process's child
+window ask that process where the child sits in its top-level window and
+which part of it can show, and the drawing lands there, clipped to the
+child.  The sign-in form (account name, password, Remember me, Sign in)
+now draws.  `xpwin` in the core suite draws from a third process into a
+child window of a framed window of another process and checks the
+pixels inside and outside it.  Steam's connection to its servers still
+fails in the test sandbox, which reaches the internet only through an
+HTTPS proxy; signing in is a hand check.
+
 ## Services run as administrators
 
 A service whose account is `LocalSystem` (the default for
@@ -10462,6 +10480,49 @@ Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
 2 CPUs): programs got 38% of the CPU against 20%, and samples spinning on a
 process lock fell from about 6% to under 1%.  A minute later, with both up,
 the CPU was 90% idle against 91% busy spinning (`profile on 9000 6000`).
+
+## Non-blocking TCP sends taken whole, as on Windows
+
+A non-blocking `send` or `WSASend` on a TCP socket now takes the whole
+buffer, as Windows' AFD driver does, instead of only what fits in lwIP's
+11,680-byte send buffer.  What does not fit waits in a per-socket buffer
+(up to 4 MB) and goes out as the peer acknowledges; later sends join it,
+and only past that limit does a send see `WSAEWOULDBLOCK`.  A
+`shutdown(SD_SEND)` or `closesocket` waits for that data, so the peer
+still gets every byte before the end of the stream.  Programs written for
+Windows treat a short non-blocking send as all-or-nothing and never send
+the rest: Steam's client answered its UI's controller list request
+(`GetControllerAccessibilityStrings`, a 28 KB websocket frame) with only
+its first 11,680 bytes, so the UI waited for ever and the login window
+never opened.  `looptest` in the network suite sends 100,000 bytes on a
+non-blocking socket, closes it at once, and checks the peer reads them
+all.
+
+## Hard links on NTFS volumes, checked; FindFirstFileNameW
+
+Hard links on a mounted NTFS volume (drive D:, ...) are now checked on
+every pull request, and a file's names can be listed as on Windows.
+
+- **A file's names** (`kernel/um/um_syscall.c`, `kernel32/compat.c`):
+  `NtQueryInformationFile(FileHardLinkInformation)` lists each name with
+  its folder's file id (`STATUS_BUFFER_OVERFLOW` and `BytesNeeded` when
+  the buffer is short), `NtCreateFile` opens a file or folder by its id
+  (`FILE_OPEN_BY_FILE_ID`, beside a handle on the same drive), and
+  kernel32's `FindFirstFileNameW`/`FindNextFileNameW` give each name's
+  path on its volume (`\LinkTest\a.txt`, as Windows does).
+- **Names not read yet** (`kernel/fs/ntfs.c`, `ramfs.c`): on a mounted
+  NTFS volume a file's names in folders NovaOS has not listed yet were
+  missed, so after a restart its link count could read 1.  `NtfsNames`
+  walks a record's `$FILE_NAME`s up to the root, and `RamfsGatherLinks`
+  loads those names and joins them to the file before its link count or
+  names are given.
+- **Checks**: `linktest` lists names by each of them and leaves a third
+  name in another folder; `linktest restarted [DIR]` checks all three
+  after the restart.  The devices suite's new "ntfs" boot attaches a
+  fresh `mkntfs` disk as D:, runs `linktest D:\LinkTest`, restarts,
+  runs `linktest restarted D:\LinkTest`, and once QEMU has quit checks
+  the volume with `scripts/ntfs-check.py` (records, bitmaps, indexes,
+  link counts against names) and reads the third name with `ntfscat`.
 
 ## Plug and Play: setupapi and cfgmgr32 enumerate the device tree
 

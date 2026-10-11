@@ -2,11 +2,15 @@
  * WebView2 needs: its host parents the browser process's window in its own
  * window (SetParent), sizes, moves and shows it, sends it messages, and
  * Chromium's GPU process, a third process, draws into it (GetDC, BitBlt).
+ * Steam makes the browser's window a child of a window of its own (an SDL
+ * window in the same process), and the GPU process draws into that child.
  *
  *   xpwin               the host: runs the checks
  *   xpwin child HWND    a process with a hidden top-level window, as the
- *                       browser process's; posts its handle to HWND
- *   xpwin draw HWND     paints a red square into another process's window
+ *                       browser process's, and a window with a child window
+ *                       of its own, as Steam's; posts their handles to HWND
+ *   xpwin draw HWND [N] paints a red square (N pixels, 50) into another
+ *                       process's window
  *
  * A watchdog ends the program (exit code 3) if any step hangs. */
 #include <stdio.h>
@@ -18,11 +22,12 @@
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
 
-#define XP_HELLO  (WM_APP + 1)       /* child -> host: wParam = its window */
+#define XP_HELLO  (WM_APP + 1)       /* child -> host: wParam = its window, lParam = its inner child window */
 #define XP_REPORT (WM_APP + 2)       /* host -> child: wParam = the parent it should have, lParam = where it should be */
 #define XP_RESULT (WM_APP + 3)       /* child -> host: wParam = checks passed, lParam = failed ones (bits) */
 #define XP_PIXEL  (WM_APP + 4)       /* host -> child: is the drawer's red square in my window? */
 #define XP_PIXOK  (WM_APP + 5)       /* child -> host: wParam = 1 yes */
+#define XP_PIXEL2 (WM_APP + 7)       /* host -> child: is the drawer's red square in the inner child window (only)? */
 #define XP_TWICE  (WM_APP + 6)       /* sent: returns wParam * 2 */
 
 static const char *g_step = "start";
@@ -76,6 +81,16 @@ static LRESULT CALLBACK child_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         PostMessageW(g_host, XP_PIXOK, in == RGB(255, 0, 0) && out != RGB(255, 0, 0), (LPARAM)in);
         return 0;
     }
+    case XP_PIXEL2: {
+        /* the inner window is at (20, 30) in the frame's client area, 100 x 80 */
+        HWND frame = GetParent((HWND)wp);
+        HDC dc = GetDC(frame);
+        COLORREF in = GetPixel(dc, 25, 35), last = GetPixel(dc, 119, 109), out = GetPixel(dc, 5, 5), past = GetPixel(dc, 125, 112);
+        ReleaseDC(frame, dc);
+        PostMessageW(g_host, XP_PIXOK, in == RGB(255, 0, 0) && last == RGB(255, 0, 0) && out != RGB(255, 0, 0) &&
+                     past != RGB(255, 0, 0), (LPARAM)in);
+        return 0;
+    }
     case WM_CLOSE: DestroyWindow(h); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     }
@@ -94,7 +109,14 @@ static int child_main(HWND host)
     /* hidden, as the browser process's window is until its host shows it */
     HWND h = CreateWindowExW(0, L"xpwin_child", L"xpwin child", WS_POPUP, 600, 500, 120, 90, NULL, NULL, wc.hInstance, NULL);
     if (!h) return 2;
-    if (!PostMessageW(host, XP_HELLO, (WPARAM)h, 0)) return 4;
+    /* Steam's way: a shown window of ours with a child window in it */
+    HWND frame = CreateWindowExW(0, L"xpwin_child", L"xpwin frame", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE,
+                                 500, 80, 240, 200, NULL, NULL, wc.hInstance, NULL);
+    HWND inner = frame ? CreateWindowExW(0, L"xpwin_child", L"xpwin inner", WS_CHILD | WS_VISIBLE, 20, 30, 100, 80, frame,
+                                         NULL, wc.hInstance, NULL) : NULL;
+    if (!inner) return 2;
+    UpdateWindow(frame);
+    if (!PostMessageW(host, XP_HELLO, (WPARAM)h, (LPARAM)inner)) return 4;
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }
     return 0;
@@ -104,17 +126,17 @@ static int child_main(HWND host)
  * The drawer: GetDC on another process's window, as Chromium's GPU process
  * draws its software frames (SoftwareOutputDeviceWinDirect)
  * ----------------------------------------------------------------------- */
-static int draw_main(HWND target)
+static int draw_main(HWND target, int n)
 {
     HDC dc = GetDC(target);
     if (!dc) return 2;
     HDC mem = CreateCompatibleDC(dc);
-    HBITMAP bm = CreateCompatibleBitmap(dc, 50, 50);
+    HBITMAP bm = CreateCompatibleBitmap(dc, n, n);
     HGDIOBJ old = SelectObject(mem, bm);
-    RECT r = { 0, 0, 50, 50 };
+    RECT r = { 0, 0, n, n };
     HBRUSH red = CreateSolidBrush(RGB(255, 0, 0));
     FillRect(mem, &r, red);
-    BOOL ok = BitBlt(dc, 0, 0, 50, 50, mem, 0, 0, SRCCOPY);
+    BOOL ok = BitBlt(dc, 0, 0, n, n, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
     DeleteObject(bm);
     DeleteObject(red);
@@ -126,13 +148,13 @@ static int draw_main(HWND target)
 /* -----------------------------------------------------------------------
  * The host
  * ----------------------------------------------------------------------- */
-static HWND g_child;
+static HWND g_child, g_inner;
 static int g_result_ok = -1, g_result_bad = -1, g_pix = -1;
 
 static LRESULT CALLBACK host_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
-    case XP_HELLO: g_child = (HWND)wp; return 0;
+    case XP_HELLO: g_child = (HWND)wp; g_inner = (HWND)lp; return 0;
     case XP_RESULT: g_result_ok = (int)wp; g_result_bad = (int)lp; return 0;
     case XP_PIXOK: g_pix = (int)wp; if (!wp) printf("pixel: %06lx\n", (unsigned long)lp); return 0;
     }
@@ -208,7 +230,7 @@ static DWORD wait_exit(HANDLE p, DWORD ms)
 int main(int argc, char **argv)
 {
     if (argc >= 3 && !strcmp(argv[1], "child")) return child_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16));
-    if (argc >= 3 && !strcmp(argv[1], "draw")) return draw_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16));
+    if (argc >= 3 && !strcmp(argv[1], "draw")) return draw_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16), argc >= 4 ? atoi(argv[3]) : 50);
     CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
 
     WNDCLASSW wc = { 0 };
@@ -286,6 +308,17 @@ int main(int argc, char **argv)
     PostMessageW(g_child, XP_PIXEL, 0, 0);
     wait_for(&g_pix, -1, 10000);
     CHECK("the drawing is in the window", g_pix == 1);
+
+    g_step = "drawing into another process's child window";
+    snprintf(args, sizeof(args), "draw %llx 150", (unsigned long long)(ULONG_PTR)g_inner);   /* more than it holds */
+    code = 99;
+    if (run(args, &dpi)) { code = wait_exit(dpi.hProcess, 20000); CloseHandle(dpi.hProcess); CloseHandle(dpi.hThread); }
+    CHECK("GetDC + BitBlt on another process's child window", code == 0);
+    if (code) printf("drawer exit code %lu\n", code);
+    g_pix = -1;
+    PostMessageW(g_child, XP_PIXEL2, (WPARAM)g_inner, 0);
+    wait_for(&g_pix, -1, 10000);
+    CHECK("the drawing is in the child window, clipped to it", g_pix == 1);
 
     g_step = "the host moves";
     SetWindowPos(host, NULL, 160, 120, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);

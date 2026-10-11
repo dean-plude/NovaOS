@@ -239,7 +239,8 @@ named program or test demonstrates it.
   joining a Teeworlds game on its own server (it times out under TCG
   while Mesa compiles its shaders; its menus follow the mouse with its
   default settings, SDL recentring the pointer with `SetCursorPos`), GOG
-  GALAXY's client, Steam's login window, Roblox's player (its anti-cheat
+  GALAXY's client, signing in to Steam (its login window opens and draws),
+  Roblox's player (its anti-cheat
   refuses virtual machines).
 
 <!-- END generated:next-apps -->
@@ -336,7 +337,10 @@ named program or test demonstrates it.
   Done: the installer formats C: as NTFS (or FAT32), and files there keep
   security descriptors that opening, deleting and renaming obey.  ~~Hard
   links and persistence~~ Done (Phase 17.5; `linktest` and `linktest
-  restarted`).  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  restarted`; on a mounted NTFS volume across a restart, with
+  `FindFirstFileNameW` and an offline volume check, in the devices
+  suite's "ntfs" boot).  Interrupted writes and a full volume are still
+  to be tested on a disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).

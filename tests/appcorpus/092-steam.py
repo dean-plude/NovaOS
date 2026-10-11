@@ -15,7 +15,7 @@
 # user's Internet Settings (Steam reads them through WinHTTP).
 import os, re, shutil
 
-DOC = 'Steam (installs and updates itself; its browser does not open the login window yet)'
+DOC = 'Steam (installs and updates itself; the login window opens after the test\'s time)'
 INSTALLER = 'SteamSetup.exe'
 STEAM = r'C:\Programs\Steam'
 INET = r'"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"'

@@ -16,5 +16,6 @@
   joining a Teeworlds game on its own server (it times out under TCG
   while Mesa compiles its shaders; its menus follow the mouse with its
   default settings, SDL recentring the pointer with `SetCursorPos`), GOG
-  GALAXY's client, Steam's login window, Roblox's player (its anti-cheat
+  GALAXY's client, signing in to Steam (its login window opens and draws),
+  Roblox's player (its anti-cheat
   refuses virtual machines).

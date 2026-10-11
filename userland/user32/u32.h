@@ -215,6 +215,7 @@ WClass *find_class_w(LPCWSTR name, HINSTANCE inst);
 int class_proc_wide(WNDPROC fn);
 void  wnd_screen_origin(Wnd *w, int client, POINT *p);      /* the window's (client) origin on screen */
 void  wnd_to_bitmap(Wnd *w, int client, POINT *p);          /* ...in its top-level's bitmap */
+HWND  wnd_place(HWND h, INT32 out[8]);  /* (x_place's answer, in the window's process) */
 int   wnd_visible(Wnd *w);          /* the window and all its ancestors are visible */
 void  wnd_calc_client(Wnd *w);      /* WM_NCCALCSIZE for the current rectangle */
 void  wnd_set_pos(Wnd *w, HWND after, int x, int y, int cx, int cy, UINT flags);
@@ -375,6 +376,7 @@ BOOL    x_enable(HWND h, BOOL on);
 DWORD   x_thread(HWND h);
 int     x_get_text(HWND h, WCHAR *buf, int n);       /* -1: failed */
 int     x_class_name(HWND h, WCHAR *buf, int n);     /* 0: failed */
+HWND    x_place(HWND h, INT32 out[8]);               /* another process's child window: its top-level, where in it */
 HWND    x_set_parent(HWND h, Wnd *parent);           /* embed another process's window (parent NULL: let it go) */
 HWND    x_embed_parent(HWND h);                      /* the window of ours that holds it (0: none) */
 void    embeds_follow(void);                         /* our windows moved: the embedded ones follow */

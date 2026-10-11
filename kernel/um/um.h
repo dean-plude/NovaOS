@@ -78,6 +78,10 @@ void       UmHold(UmProcess *p);
 void       UmUnhold(UmProcess *p);
 
 UINT32      UmPid(const UmProcess *p);
+
+/* The image cache (um.c): the modules whose pages are kept for the next
+ * process that loads them, their size, and the loads that took them */
+void        um_image_cache_stats(UINT32 *files, UINT64 *bytes, UINT64 *reused);
 const char *UmName(const UmProcess *p);
 
 /* Process list, for tasklist: fills up to @max entries. */

@@ -396,6 +396,15 @@ static PADDR img_get(const void *content)
     return f;
 }
 
+/* One reference more to the shared frame @f (one already held) */
+static void img_ref(PADDR f)
+{
+    IrqState s = spin_lock_irqsave(&g_img_lock);
+    for (ImgPage *i = g_img_frame[frame_bucket(f)]; i; i = i->by_frame)
+        if (i->frame == f) { i->refs++; break; }
+    spin_unlock_irqrestore(&g_img_lock, s);
+}
+
 /* One reference to the shared frame @f fewer; the last frees it */
 static void img_put(PADDR f)
 {
@@ -420,8 +429,7 @@ bool um_map_image_page(UmProcess *p, UINT64 va, const void *content, UINT32 prot
     if (!e || (*e & (PTE_PRESENT | PTE_LAZY))) return false;
     PADDR f = img_get(content);
     if (!f) return false;
-    *e = f | (pte_flags(protect) & ~PTE_WRITE) | PTE_IMAGE;
-    p->commit++;
+    *e = f | (pte_flags(protect) & ~PTE_WRITE) | PTE_IMAGE;     /* (not charged: see map_image_frame) */
     __atomic_add_fetch(&p->pages, 1, __ATOMIC_RELAXED);
     return true;
 }
@@ -433,7 +441,10 @@ static bool map_image_frame(UmProcess *p, UINT64 va, PADDR f, UINT32 protect)
     pte_t *e = walk(p->pml4, va, true);
     if (!e || (*e & (PTE_PRESENT | PTE_LAZY))) return false;
     *e = f | (pte_flags(protect) & ~PTE_WRITE) | PTE_IMAGE;
-    p->commit++;
+    /* Not charged to the process's commit: as on Windows, a shared image
+     * page is backed by its file, and Firefox's main process at 2 GB was
+     * refused memory for 160 MB of xul.dll it shares with its other
+     * processes.  It is charged once it becomes the process's own. */
     __atomic_add_fetch(&p->pages, 1, __ATOMIC_RELAXED);
     return true;
 }
@@ -457,6 +468,7 @@ static bool img_privatize(UmProcess *p, UINT64 va, pte_t *e)
     if (is_current(p)) invlpg(va);
     smp_tlb_flush(p->pml4);
     img_put(old);
+    p->commit++;                                        /* (its own now: charged) */
     return true;
 }
 
@@ -596,9 +608,9 @@ void um_decommit(UmProcess *p, UINT64 va, UINT64 size)
         }
         if ((*e & PTE_ADDR_MASK) == g_kusd_pa) continue;   /* the shared page stays */
         batch[n++] = (*e & PTE_ADDR_MASK) | ((*e & PTE_IMAGE) ? 1 : 0);   /* (bit 0: a shared module page) */
+        if (!(*e & PTE_IMAGE)) p->commit--;             /* (shared image pages are not charged) */
         *e = 0;
         p->pages--;
-        p->commit--;
         if (is_current(p)) invlpg(a);
         if (n == 64) {
             smp_tlb_flush(p->pml4);
@@ -920,10 +932,151 @@ void um_region_remove(UmProcess *p, UmRegion *r)
 }
 
 /* -----------------------------------------------------------------------
+ * Image cache: a module's pages as its first load at an address left
+ * them, kept while a process runs it.  Another process loading the same
+ * file at the same address (each of Firefox's processes loads the 164 MB
+ * xul.dll) maps the read-only frames straight away and copies the
+ * writable pages from the kept ones: no kernel copy of the whole image,
+ * no relocating and no hashing of every page.  Only binding its imports
+ * is done again, and an import table page whose addresses differ in that
+ * process becomes its own copy (as a write to an image page does).
+ * Keyed by the file (the node, its contents and when it was last
+ * written: a running image cannot be replaced, see um_image_in_use) and
+ * the load address.
+ * ----------------------------------------------------------------------- */
+typedef struct ImgCache {
+    struct ImgCache *next;
+    const RamNode *file;
+    const char    *data;
+    UINT32         fsize, npages;
+    UINT64         mtime, base;
+    UINT32         users;       /* processes that loaded it (the last one to end frees it) */
+    PADDR         *frame;       /* per page: a shared frame (read-only), the */
+    UINT8         *prot;        /*   writable page's contents, or 0 (all zeros) */
+} ImgCache;
+static ImgCache *g_imgc;
+static KSpinLock g_imgc_lock = KSPINLOCK_INIT;
+static UINT64 g_imgc_reused;    /* loads that took their pages from the cache */
+
+static bool imgc_ro(UINT8 prot) { return prot != 0x04 && prot != 0x40; }
+
+static bool imgc_same(const ImgCache *c, const RamNode *f, UINT64 base, UINT32 size)
+{
+    return c->file == f && c->data == f->data && c->fsize == f->size && c->mtime == f->mtime &&
+           c->base == base && c->npages == size >> 12;
+}
+
+static void imgc_free(ImgCache *c)
+{
+    for (UINT32 i = 0; i < c->npages; i++)
+        if (c->frame[i]) { if (imgc_ro(c->prot[i])) img_put(c->frame[i]); else pmm_free_page(c->frame[i]); }
+    kfree(c->frame);
+    kfree(c->prot);
+    kfree(c);
+}
+
+/* The entry for @f loaded at @base, with one user more; NULL if none */
+static ImgCache *imgc_find(const RamNode *f, UINT64 base, UINT32 size)
+{
+    IrqState s = spin_lock_irqsave(&g_imgc_lock);
+    ImgCache *c = g_imgc;
+    while (c && !imgc_same(c, f, base, size)) c = c->next;
+    if (c) { c->users++; g_imgc_reused++; }
+    spin_unlock_irqrestore(&g_imgc_lock, s);
+    return c;
+}
+
+/* One user fewer: the last one's going frees the entry */
+static void imgc_put(ImgCache *c)
+{
+    IrqState s = spin_lock_irqsave(&g_imgc_lock);
+    bool last = !--c->users;
+    if (last)
+        for (ImgCache **pp = &g_imgc; *pp; pp = &(*pp)->next)
+            if (*pp == c) { *pp = c->next; break; }
+    spin_unlock_irqrestore(&g_imgc_lock, s);
+    if (last) imgc_free(c);
+}
+
+/* The process holds @c until it ends (or lets go of it now, when its
+ * list is full: its mapped pages hold their own references) */
+static void imgc_hold(UmProcess *p, ImgCache *c)
+{
+    if (p->nimgc < UM_MAX_MODULES) p->imgc[p->nimgc++] = c;
+    else imgc_put(c);
+}
+
+static void imgc_release(UmProcess *p)
+{
+    for (int i = 0; i < p->nimgc; i++) imgc_put(p->imgc[i]);
+    p->nimgc = 0;
+}
+
+/* Keep the pages of module image @img (@npages, each with protection
+ * @prot; @frames: the read-only pages' shared frames) just mapped at
+ * @base from file @f, for the next process that loads it there */
+static void imgc_add(UmProcess *p, const RamNode *f, UINT64 base, const UINT8 *img,
+                     UINT32 npages, const UINT8 *prot, const PADDR *frames)
+{
+    ImgCache *c = kzalloc(sizeof(*c));
+    if (!c) return;
+    c->file = f; c->data = f->data; c->fsize = f->size; c->mtime = f->mtime;
+    c->base = base; c->npages = npages; c->users = 1;
+    c->frame = kzalloc((UINT64)npages * sizeof(PADDR));
+    c->prot = kmalloc(npages);
+    if (!c->frame || !c->prot) { kfree(c->frame); kfree(c->prot); kfree(c); return; }
+    memcpy(c->prot, prot, npages);
+    for (UINT32 i = 0; i < npages; i++) {
+        const UINT64 *pg = (const UINT64 *)(img + ((UINT64)i << 12));
+        if (imgc_ro(prot[i])) { img_ref(frames[i]); c->frame[i] = frames[i]; continue; }
+        UINT32 w = 0;
+        while (w < PAGE_SIZE / 8 && !pg[w]) w++;
+        if (w == PAGE_SIZE / 8) continue;                    /* zeros: committed, backed on first touch */
+        PADDR t = pmm_alloc_page();
+        if (!t) { imgc_free(c); return; }
+        memcpy(um_frame_ptr(t), pg, PAGE_SIZE);
+        c->frame[i] = t;
+    }
+    IrqState s = spin_lock_irqsave(&g_imgc_lock);
+    ImgCache *o = g_imgc;
+    while (o && !imgc_same(o, f, base, npages << 12)) o = o->next;
+    if (!o) { c->next = g_imgc; g_imgc = c; }
+    spin_unlock_irqrestore(&g_imgc_lock, s);
+    if (o) imgc_free(c);                                    /* (another process kept the same meanwhile) */
+    else imgc_hold(p, c);
+}
+
+/* Map the kept pages of @c at @base (a new region); false when memory ran out */
+static bool imgc_map(UmProcess *p, const ImgCache *c, UINT64 base)
+{
+    for (UINT32 i = 0; i < c->npages; i++) {
+        UINT64 va = base + ((UINT64)i << 12);
+        if (imgc_ro(c->prot[i])) {
+            img_ref(c->frame[i]);
+            if (!map_image_frame(p, va, c->frame[i], c->prot[i])) { img_put(c->frame[i]); return false; }
+        } else if (!um_commit(p, va, PAGE_SIZE, c->prot[i]) ||
+                   (c->frame[i] && !um_write(p, va, um_frame_ptr(c->frame[i]), PAGE_SIZE)))
+            return false;
+    }
+    return true;
+}
+
+void um_image_cache_stats(UINT32 *files, UINT64 *bytes, UINT64 *reused)
+{
+    *files = 0; *bytes = 0;
+    IrqState s = spin_lock_irqsave(&g_imgc_lock);
+    for (const ImgCache *c = g_imgc; c; c = c->next) { (*files)++; *bytes += (UINT64)c->npages << 12; }
+    *reused = g_imgc_reused;
+    spin_unlock_irqrestore(&g_imgc_lock, s);
+}
+
+/* -----------------------------------------------------------------------
  * PE loader
  * ----------------------------------------------------------------------- */
 typedef struct {
     UINT8   *img;               /* assembled image (kernel copy); NULL: fetch from user memory */
+    ImgCache *cache;            /* mapped from the image cache: no kernel copy, bound in the process */
+    RamNode *file;              /* the file it was loaded from (to keep its pages in the cache) */
     UINT32   size;              /* SizeOfImage */
     UINT64   base;              /* chosen load address */
     UINT32   exp_rva, exp_size; /* export directory */
@@ -950,6 +1103,7 @@ typedef struct {
     int        npins;
     bool       keep;                /* loaded: the process holds the files while it runs */
     bool       nomem;               /* an export could not be looked up: out of memory */
+    char       sym[1024];           /* an imported name read from a module mapped from the image cache */
 } Loader;
 
 static UINT16 rd16(const UINT8 *b) { return (UINT16)(b[0] | b[1] << 8); }
@@ -1514,8 +1668,16 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
     Image *im = &L->img[m];
     memset(im, 0, sizeof(*im));
     im->size = (size + 0xFFF) & ~0xFFFU;
+    im->file = file;
     for (int i = 0; i < nsec; i++)
         if (rd32(sec + 40 * i + 12) >= im->size) return fail(L, "%s has a section outside the image", name);
+    /* Loaded at the same address by a process still running it: its pages
+     * from the image cache, nothing copied or relocated here */
+    UINT64 base = pref;
+    if (!um_is_free(p, base, im->size))
+        base = chars & 0x0001 /* RELOCS_STRIPPED */ ? 0 : um_find_free(p, im->size, p->lay.dll_min, p->lay.dll_max);
+    ImgCache *c = !data && base ? imgc_find(file, base, im->size) : NULL;
+    if (c) goto place;
     /* The copy is made without the process lock (a runtime load: the
      * loader lock keeps other loads out), and only what the file does not
      * fill is zeroed, plus a zero tail so names always terminate: clearing
@@ -1548,10 +1710,9 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
     }
     if (L->plock) um_lock_excl(&p->lock);
     if (!im->img) return fail(L, "Out of memory loading %s", name);
-    im->exp_rva = dirv[0]; im->exp_size = dirs[0];
 
     /* Choose the load address */
-    UINT64 base = pref;
+    base = pref;
     if (!um_is_free(p, base, im->size)) {
         /* (no relocation table and not RELOCS_STRIPPED: nothing to fix up,
          * e.g. a resource-only DLL; Windows loads it anywhere too) */
@@ -1562,7 +1723,6 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
         base = um_find_free(p, im->size, p->lay.dll_min, p->lay.dll_max);
         if (!base) { kfree(im->img); im->img = NULL; return fail(L, "No address space left for %s", name); }
     }
-    im->base = base;
     /* Relocations */
     INT64 delta = (INT64)(base - pref);
     if (delta && dirv[5]) {
@@ -1582,10 +1742,25 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
             off += bsz;
         }
     }
+place:
+    im->base = base;
+    im->exp_rva = dirv[0]; im->exp_size = dirs[0];
     /* Register before resolving imports (DLLs may import each other) */
     if (!um_region_add(p, base, im->size, 0x04, true)) {
         kfree(im->img); im->img = NULL;
+        if (c) imgc_put(c);
         return fail(L, "Too many memory regions loading %s", name);
+    }
+    if (c) {                                        /* mapped now: later modules read its exports from it */
+        if (!imgc_map(p, c, base)) {
+            um_decommit(p, base, im->size);
+            UmRegion *r = um_region_find(p, base);
+            if (r) um_region_remove(p, r);
+            imgc_put(c);
+            return fail(L, "Out of memory loading %s", name);
+        }
+        im->cache = c;
+        imgc_hold(p, c);
     }
     UmModule *mod = &p->modules[p->nmodules];   /* counted once filled in (others read it) */
     memset(mod, 0, sizeof(*mod));
@@ -1607,34 +1782,74 @@ static int map_module(Loader *L, RamNode *file, const char *name, bool top)
     return m;
 }
 
+/* @n bytes of module image @im at @rva: from the kernel copy, or (mapped
+ * from the image cache) from the process */
+static bool imp_read(Loader *L, const Image *im, UINT32 rva, void *buf, UINT32 n)
+{
+    if (rva > im->size || n > im->size - rva) return false;
+    if (!im->cache) { memcpy(buf, im->img + rva, n); return true; }
+    return um_read(L->p, im->base + rva, buf, n);
+}
+
+/* The name at @rva of @im (NUL-terminated within the image) */
+static const char *imp_name(Loader *L, const Image *im, UINT32 rva)
+{
+    if (!im->cache) return (const char *)im->img + rva;     /* (the copy has a zero tail) */
+    UINT32 n = sizeof(L->sym) - 1;
+    if (n > im->size - rva) n = im->size - rva;
+    if (!um_read(L->p, im->base + rva, L->sym, n)) n = 0;
+    L->sym[n] = '\0';
+    return L->sym;
+}
+
+/* Store import address @v (@ts bytes) at @rva of @im.  Mapped from the
+ * image cache: written in the process only when it differs, so the page
+ * stays shared when the DLLs it imports are where they were. */
+static bool imp_write(Loader *L, Image *im, UINT32 rva, UINT64 v, UINT32 ts)
+{
+    UINT8 b[8], old[8];
+    if (ts == 4) put_u32(b, (UINT32)v); else wr64(b, v);
+    if (!im->cache) { memcpy(im->img + rva, b, ts); return true; }
+    if (um_read(L->p, im->base + rva, old, ts) && !memcmp(old, b, ts)) return true;
+    return um_write(L->p, im->base + rva, b, ts);
+}
+
 /* Bind module @m's imports, mapping the DLLs it needs (found in its own
  * folder too), then copy it into the process with each section's
- * protection.  Nothing recurses: a DLL mapped here is bound by the loop in
- * load_module, so a program may chain its DLLs as deep as it likes. */
+ * protection (a module from the image cache is there already).  Nothing
+ * recurses: a DLL mapped here is bound by the loop in load_module, so a
+ * program may chain its DLLs as deep as it likes. */
 static int bind_module(Loader *L, int m)
 {
     UmProcess *p = L->p;
     Image *im = &L->img[m];
     const char *name = p->modules[m].name;
     im->bound = true;
-    const UINT8 *f = im->img;
-    UINT32 nt = rd32(f + 0x3C);
-    const UINT8 *fh = f + nt + 4, *oh = fh + 20;
-    bool pe32 = rd16(fh) == 0x014C;
-    UINT16 nsec = rd16(fh + 2), opt_size = rd16(fh + 16);
+    UINT8 h[0x200];                                 /* the headers up to the data directories */
+    if (!imp_read(L, im, 0, h, 0x40)) return fail(L, "%s has a corrupt header", name);
+    UINT32 nt = rd32(h + 0x3C);
+    if (!imp_read(L, im, nt, h + 0x40, 24)) return fail(L, "%s has a corrupt header", name);
+    bool pe32 = rd16(h + 0x40 + 4) == 0x014C;
+    UINT16 nsec = rd16(h + 0x40 + 6), opt_size = rd16(h + 0x40 + 20);
+    UINT32 dsz = pe32 ? 96 + 16 : 112 + 16;          /* the optional header to the import directory */
+    if (!imp_read(L, im, nt + 24, h + 0x60, dsz)) return fail(L, "%s has a corrupt header", name);
+    const UINT8 *oh = h + 0x60;
     UINT32 hdr = rd32(oh + 60), ndirs = rd32(oh + (pe32 ? 92 : 108));
-    const UINT8 *sec = oh + opt_size, *dir = oh + (pe32 ? 96 : 112);
-    UINT32 imports = ndirs > 1 ? rd32(dir + 8) : 0;
+    UINT32 imports = ndirs > 1 ? rd32(oh + (pe32 ? 96 : 112) + 8) : 0;
     UINT64 base = im->base;
+    bool keep = im->file && !im->cache && !im->data;    /* its pages go to the image cache */
 
     if (im->data) imports = 0;                      /* mapped as data: no imports */
     L->dep_dir = im->dir;
-    for (UINT32 d = imports; d && d + 20 <= im->size; d += 20) {
-        UINT32 ilt = rd32(im->img + d), nm = rd32(im->img + d + 12), iat = rd32(im->img + d + 16);
+    for (UINT32 d = imports; d; d += 20) {
+        UINT8 desc[20];
+        if (!imp_read(L, im, d, desc, 20)) break;
+        UINT32 ilt = rd32(desc), nm = rd32(desc + 12), iat = rd32(desc + 16);
         if (!nm && !iat) break;
         if (nm >= im->size) return fail(L, "%s has a corrupt import table", name);
+        if (!ilt) keep = false;                     /* (names read from the IAT: bound, they are gone) */
         char dll[64];
-        strncpy(dll, (const char *)im->img + nm, sizeof(dll) - 1);
+        strncpy(dll, imp_name(L, im, nm), sizeof(dll) - 1);
         dll[sizeof(dll) - 1] = '\0';
         int dm = map_module(L, NULL, dll, false);
         if (dm < 0) return -1;
@@ -1650,7 +1865,9 @@ static int bind_module(Loader *L, int m)
         if (alt >= 0) im->deps[alt / 64] |= UINT64_C(1) << (alt % 64);
         UINT32 t = ilt ? ilt : iat, ts = pe32 ? 4 : 8;              /* thunk size */
         for (UINT32 k = 0; t + ts * (k + 1) <= im->size && iat + ts * (k + 1) <= im->size; k++) {
-            UINT64 th = pe32 ? rd32(im->img + t + 4 * k) : rd64(im->img + t + 8 * k);
+            UINT8 tb[8] = { 0 };
+            if (!imp_read(L, im, t + ts * k, tb, ts)) return fail(L, "%s has a corrupt import table", name);
+            UINT64 th = pe32 ? rd32(tb) : rd64(tb);
             if (!th) break;
             UINT64 addr;
             char what[80];
@@ -1660,7 +1877,7 @@ static int bind_module(Loader *L, int m)
             } else {
                 UINT32 hn = (UINT32)th;
                 if (hn + 2 >= im->size) return fail(L, "%s has a corrupt import entry", name);
-                const char *fn = (const char *)im->img + hn + 2;
+                const char *fn = imp_name(L, im, hn + 2);
                 addr = find_export(L, dm, fn, 0, 0);
                 if (!addr && alt >= 0) addr = find_export(L, alt, fn, 0, 0);
                 /* ucrtbase's "_o_" exports (api-ms-win-crt-private) are
@@ -1676,16 +1893,17 @@ static int bind_module(Loader *L, int m)
             if (!addr && L->nomem) return fail(L, "Out of memory loading %s", name);
             if (!addr) addr = stub_for(p, what);
             if (!addr) return fail(L, "The procedure entry point %s could not be located", what);
-            if (pe32) put_u32(im->img + iat + 4 * k, (UINT32)addr);
-            else      wr64(im->img + iat + 8 * k, addr);
+            if (!imp_write(L, im, iat + ts * k, addr, ts)) return fail(L, "Out of memory loading %s", name);
         }
     }
     L->dep_dir = NULL;
+    if (im->cache) return m;
 
     /* Each page's protection: the headers read-only, then each section's
      * (a page two sections share takes the later one's), the rest
      * read/write.  Read-only pages map the frames every process loading
      * the same bytes shares (image pages); the others are copied in. */
+    const UINT8 *sec = im->img + nt + 24 + opt_size;
     UINT32 npages = im->size >> 12;
     UINT8 *prot = kmalloc(npages);
     if (!prot) return fail(L, "Out of memory loading %s", name);
@@ -1709,16 +1927,20 @@ static int bind_module(Loader *L, int m)
     bool ok = frames != NULL;
     if (ok && L->plock) um_unlock_excl(&p->lock);
     for (UINT32 i = 0; ok && i < npages; i++)
-        if (prot[i] != 0x04 && prot[i] != 0x40) ok = (frames[i] = img_get(im->img + ((UINT64)i << 12))) != 0;
+        if (imgc_ro(prot[i])) ok = (frames[i] = img_get(im->img + ((UINT64)i << 12))) != 0;
     if (frames && L->plock) um_lock_excl(&p->lock);
-    for (UINT32 i = 0; ok && i < npages; i++) {
-        UINT64 va = base + ((UINT64)i << 12);
-        const UINT8 *pg = im->img + ((UINT64)i << 12);
-        if (prot[i] == 0x04 || prot[i] == 0x40) ok = um_commit(p, va, PAGE_SIZE, prot[i]) && um_write(p, va, pg, PAGE_SIZE);
-        else if ((ok = map_image_frame(p, va, frames[i], prot[i]))) frames[i] = 0;
+    UINT32 done = 0;                                /* the pages mapped */
+    for (; ok && done < npages; done++) {
+        UINT64 va = base + ((UINT64)done << 12);
+        const UINT8 *pg = im->img + ((UINT64)done << 12);
+        if (!imgc_ro(prot[done])) ok = um_commit(p, va, PAGE_SIZE, prot[done]) && um_write(p, va, pg, PAGE_SIZE);
+        else ok = map_image_frame(p, va, frames[done], prot[done]);
+        if (!ok) break;
     }
-    if (frames)
-        for (UINT32 i = 0; i < npages; i++) if (frames[i]) img_put(frames[i]);    /* not mapped after all */
+    if (frames) {
+        if (ok && keep) imgc_add(p, im->file, base, im->img, npages, prot, frames);
+        for (UINT32 i = done; i < npages; i++) if (frames[i]) img_put(frames[i]);    /* not mapped after all */
+    }
     kfree(frames);
     kfree(prot);
     if (!ok) return fail(L, "Out of memory loading %s", name);
@@ -2389,6 +2611,7 @@ static void destroy(UmProcess *p)
 {
     um_console_flush_log(p);
     release_images(p);
+    imgc_release(p);
     um_close_all_handles(p);
     if (p->pml4) free_address_space(p->pml4);
     um_release_views(p);

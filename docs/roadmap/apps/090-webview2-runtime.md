@@ -21,4 +21,7 @@
   ANGLE's Direct3D 11 device on Venus and presents through the WARP device
   and DirectComposition instead of restarting until the browser crashed)~~
   Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
-  (DirectComposition on the GPU, `DCompositionCreateDevice3`).
+  (DirectComposition on the GPU): ~~composition swap chains on the GPU
+  device~~ Done (`dcomptest dxvk`); next `DCompositionCreateDevice3`
+  (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces) and the
+  DXVK adapter's factory making them, so Chromium turns the path on.

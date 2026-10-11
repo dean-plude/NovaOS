@@ -19,6 +19,9 @@
  *   dcomp.dll  devices, targets and visuals; a visual whose content is a swap
  *              chain gets its presents and draws them into the target's
  *              window with GDI.
+ * With DXVK, dxgi.dll also makes composition swap chains on the GPU device
+ * (DXVK makes none): the program renders into a texture of that device, and
+ * each present reads the frame back for the visual.
  */
 #pragma once
 #include <windows.h>

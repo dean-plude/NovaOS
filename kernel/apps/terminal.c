@@ -496,6 +496,11 @@ static void cmd_mem(Term *t)
     if (PersistActive())
         tprintf(t, "The rest is read from the data disk when wanted (let go of so far: %u files, %u MB)",
                 (unsigned)gone, (unsigned)(gone_bytes >> 20));
+    UINT32 images;
+    UINT64 image_bytes, reused;
+    um_image_cache_stats(&images, &image_bytes, &reused);
+    tprintf(t, "Program images kept for sharing: %u, %u MB; loads that reused one: %u",
+            (unsigned)images, (unsigned)(image_bytes >> 20), (unsigned)reused);
 }
 
 static void cmd_date(Term *t, bool time)

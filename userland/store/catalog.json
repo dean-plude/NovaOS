@@ -529,18 +529,18 @@
     {
       "name": "Mesa 3D",
       "publisher": "Mesa / mesa-dist-win",
-      "summary": "Software OpenGL and Vulkan for programs that need 3D without a GPU driver",
+      "summary": "Software Vulkan for Direct3D games and 3D programs without a GPU driver (OpenGL is built in)",
       "category": "runtimes",
       "url": "https://github.com/pal1000/mesa-dist-win/releases/download/24.2.4/mesa3d-24.2.4-release-msvc.7z",
       "file": "mesa3d-24.2.4-release-msvc.7z",
       "dest": "Mesa3D",
-      "exe": "\\Windows\\System32\\opengl32_mesa.dll",
+      "exe": "\\Windows\\System32\\vulkan_lvp.dll",
       "kind": "archive",
       "size_mb": 90,
-      "note": "The system OpenGL 4.5 and Vulkan 1.3, drawn on the CPU (llvmpipe, lavapipe), for 64- and 32-bit programs",
+      "note": "Vulkan 1.3 drawn on the CPU (lavapipe), for 64- and 32-bit programs; NovaOS's OpenGL 4.5 (llvmpipe) is already built in",
       "label": "GL",
       "color": "#3B5BA0",
-      "system": "x64\\opengl32.dll>opengl32_mesa.dll x64\\libgallium_wgl.dll x64\\libglapi.dll x64\\vulkan_lvp.dll x64\\lvp_icd.x86_64.json x86\\opengl32.dll>opengl32_mesa.dll x86\\libgallium_wgl.dll x86\\libglapi.dll x86\\vulkan_lvp.dll x86\\lvp_icd.x86.json"
+      "system": "x64\\vulkan_lvp.dll x64\\lvp_icd.x86_64.json x86\\vulkan_lvp.dll x86\\lvp_icd.x86.json"
     },
     {
       "name": "DXVK",

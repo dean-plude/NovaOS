@@ -17,4 +17,8 @@
   Driver adapter, a WARP device, DirectComposition, the GPU process's
   window inside the browser's)~~ Done (`dcomptest`); ~~Windows'
   `WOW6432Node` registry view for machine-wide installs~~ Done (`regtest`).
-  Still to do: drawing with ANGLE on DXVK when a GPU is there.
+  ~~WebView2 with DXVK installed and Venus the GPU (the GPU process keeps
+  ANGLE's Direct3D 11 device on Venus and presents through the WARP device
+  and DirectComposition instead of restarting until the browser crashed)~~
+  Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
+  (DirectComposition on the GPU, `DCompositionCreateDevice3`).

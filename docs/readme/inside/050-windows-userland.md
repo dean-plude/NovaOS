@@ -43,7 +43,8 @@
   Qt and Krita), `cabinet` (the FDI functions installers extract cabinets
   with, MSZIP and LZX, on `msi`'s cabinet readers), `wldap32` (LDAP
   sessions, for programs that link to it; no directory servers yet),
-  `opengl32` (Mesa from the App Store, or with no driver NovaOS's own
+  `opengl32` (Mesa's llvmpipe, OpenGL 4.5 on the CPU, built in; virgl on a
+  3D virtio-gpu from the App Store; or with no driver NovaOS's own
   OpenGL 1.1, which draws 2D as ScummVM needs: textures, vertex arrays,
   blending, scissor), `ddraw` (DirectDraw for 32-bit programs: the
   MIT-licensed cnc-ddraw, every surface in memory and the screen drawn
@@ -57,7 +58,8 @@
   container parts), `dxgi`, `d3d11` and `dcomp` without a GPU (Windows'
   Microsoft Basic Render Driver adapter, a WARP device whose textures
   the CPU maps and copies, and DirectComposition showing its swap chains:
-  what Chromium's software compositor draws WebView2's pages with), and
+  what Chromium's software compositor draws WebView2's pages with, with
+  DXVK installed too), and
   the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
   `dhcpcsvc`), the ones Qt WebEngine imports
   (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12

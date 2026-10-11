@@ -16,5 +16,5 @@
   game on its own server (`teeworlds_srv.exe` on the same machine, over
   the loopback interface; it times out under TCG while Mesa compiles its
   shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
-  to do: GOG GALAXY's client, Steam's login window, Roblox's player (its
-  anti-cheat refuses virtual machines).
+  to do: GOG GALAXY's client, signing in to Steam (its login window opens
+  and draws), Roblox's player (its anti-cheat refuses virtual machines).

@@ -66,8 +66,9 @@ named program or test demonstrates it.
 ### Graphics, 3D and media
 <!-- BEGIN generated:next-graphics -->
 
-- ~~**OpenGL**: a working `opengl32.dll`~~ Done: Mesa's llvmpipe from the
-  App Store is the system OpenGL (OpenGL 4.5, 64- and 32-bit); see
+- ~~**OpenGL**: a working `opengl32.dll`~~ Done: Mesa's llvmpipe, built
+  in since [Mesa's OpenGL built in](HISTORY.md#mesas-opengl-built-in), is
+  the system OpenGL (OpenGL 4.5, 64- and 32-bit); see
   [OpenGL](HISTORY.md#opengl-mesa-as-the-system-opengl32dll).  NovaOS's
   own `opengl32.dll` hands it to Mesa's virgl on a 3D virtio-gpu (see
   [virgl](HISTORY.md#opengl-on-the-hosts-gpu-virgl)).
@@ -79,7 +80,9 @@ named program or test demonstrates it.
   `dxgi.dll` lists Windows' Microsoft Basic Render Driver and `d3d11.dll`
   gives a WARP device that maps and copies textures, with `dcomp.dll`
   showing its swap chains, for Chromium's software compositor
-  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)).
+  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)); with
+  DXVK the WARP device and its swap chains stay NovaOS's
+  ([WebView2 on Venus](HISTORY.md#webview2-on-venus)).
 - ~~**Audio**: `winmm` wave output and WASAPI over a real sound device
   (QEMU's Intel HDA)~~ Done; see [Sound](HISTORY.md#sound-intel-hd-audio-winmm-and-wasapi).
   ~~Recording (`waveIn`, capture endpoints) and endpoint volume
@@ -220,7 +223,11 @@ named program or test demonstrates it.
   Driver adapter, a WARP device, DirectComposition, the GPU process's
   window inside the browser's)~~ Done (`dcomptest`); ~~Windows'
   `WOW6432Node` registry view for machine-wide installs~~ Done (`regtest`).
-  Still to do: drawing with ANGLE on DXVK when a GPU is there.
+  ~~WebView2 with DXVK installed and Venus the GPU (the GPU process keeps
+  ANGLE's Direct3D 11 device on Venus and presents through the WARP device
+  and DirectComposition instead of restarting until the browser crashed)~~
+  Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
+  (DirectComposition on the GPU, `DCompositionCreateDevice3`).
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music
@@ -239,8 +246,8 @@ named program or test demonstrates it.
   game on its own server (`teeworlds_srv.exe` on the same machine, over
   the loopback interface; it times out under TCG while Mesa compiles its
   shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
-  to do: GOG GALAXY's client, Steam's login window, Roblox's player (its
-  anti-cheat refuses virtual machines).
+  to do: GOG GALAXY's client, signing in to Steam (its login window opens
+  and draws), Roblox's player (its anti-cheat refuses virtual machines).
 
 <!-- END generated:next-apps -->
 

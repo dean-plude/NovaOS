@@ -21,7 +21,7 @@
 
 /* What travels: user32's own layout, the same in 32- and 64-bit processes */
 enum { XOP_POST = 1, XOP_SEND, XOP_SETPOS, XOP_SHOW, XOP_GETLONG, XOP_SETLONG, XOP_FOCUS, XOP_ENABLE,
-       XOP_CLASS, XOP_TEXT, XOP_THREAD, XOP_EMBEDDED };
+       XOP_CLASS, XOP_TEXT, XOP_THREAD, XOP_EMBEDDED, XOP_PLACE };
 typedef struct {
     UINT32 op, msg;
     UINT64 hwnd, wp, lp;
@@ -238,6 +238,18 @@ static int x_string(HWND h, UINT op, WCHAR *buf, int n)
 }
 
 int x_get_text(HWND h, WCHAR *buf, int n) { return x_string(h, XOP_TEXT, buf, n); }
+
+/* Where another process's child window is in the top-level window the
+ * desktop knows (wnd_place's answer): that window, 0 if none */
+HWND x_place(HWND h, INT32 out[8])
+{
+    XHdr hd;
+    hdr(&hd, XOP_PLACE, h);
+    UINT32 got = 0;
+    int failed;
+    LRESULT r = x_call(h, &hd, NULL, X_TIMEOUT, out, 8 * sizeof(INT32), &got, &failed);
+    return failed || got != 8 * sizeof(INT32) ? 0 : (HWND)(ULONG_PTR)(UINT64)r;
+}
 int x_class_name(HWND h, WCHAR *buf, int n) { int k = x_string(h, XOP_CLASS, buf, n); return k < 0 ? 0 : k; }
 
 /* -----------------------------------------------------------------------
@@ -303,6 +315,10 @@ static void x_run(void *arg)
     case XOP_ENABLE: r = EnableWindow(h, hd->a[0]); break;
     case XOP_THREAD: r = GetWindowThreadProcessId(h, NULL); break;
     case XOP_EMBEDDED: wnd_embed_child(h, (HWND)(ULONG_PTR)hd->lp); break;
+    case XOP_PLACE:
+        out = malloc(8 * sizeof(INT32));
+        if (out) { r = (LRESULT)(ULONG_PTR)wnd_place(h, out); outn = 8 * sizeof(INT32); }
+        break;
     case XOP_CLASS: case XOP_TEXT: {
         int n = hd->a[0] > 0 && hd->a[0] <= 16384 ? hd->a[0] : 256;
         out = malloc(2 * (size_t)n);
@@ -346,7 +362,9 @@ int x_claim(void)
         memcpy(j->data, hd + 1, hd->n);
         j->data[hd->n] = j->data[hd->n + 1] = 0;
         DWORD tid = w == W_quiet(GetDesktopWindow()) ? g_main_tid : w->tid;
-        if (!tid || tid == GetCurrentThreadId()) x_run(j);
+        /* (a window's place is only read: answered at once, so a GPU process
+         * drawing into it never waits on a busy window thread) */
+        if (!tid || tid == GetCurrentThreadId() || hd->op == XOP_PLACE) x_run(j);
         else x_send_queue(tid, x_run, j);
     }
     free(b);

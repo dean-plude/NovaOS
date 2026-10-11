@@ -37,6 +37,11 @@ jobs:
       with:
         path: ~/.cache/novaos/firefox
         key: firefox-${{ runner.os }}-${{ hashFiles('tools/bundle_firefox.py') }}
+    - name: Restore Mesa archive cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/novaos/mesa
+        key: mesa-${{ runner.os }}-${{ hashFiles('tools/bundle_mesa.py') }}
     - name: Fetch release DSP firmware
       run: python3 tools/fetch_sof_firmware.py --all
       if: inputs.release

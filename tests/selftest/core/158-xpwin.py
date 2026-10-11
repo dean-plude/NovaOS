@@ -5,7 +5,9 @@
 # shows it (SetWindowPos, MoveWindow, ShowWindow, SetWindowLong), sends it
 # messages (SendMessage, SendMessageTimeout, WM_COPYDATA, text and class
 # queries) and gets its posted ones; the child sees its foreign parent,
-# size and place; a third process draws into it with GetDC and BitBlt;
+# size and place; a third process draws into it with GetDC and BitBlt,
+# and into a child window inside another window of the child process (as
+# Steam's SDL window holds Chromium's), clipped to that child window;
 # the window follows its host and parent as they move, hide and show, and
 # SetParent(NULL) lets it go.  64- and 32-bit.
 DOC = '`xpwin` (windows of different processes: SetParent, SetWindowPos, ShowWindow and messages across processes, GetDC on another process\'s window; 64- and 32-bit)'

@@ -2094,7 +2094,10 @@ static void embed_pending_check(GuiWin *g)
     }
 }
 
-/* CTL_XBLIT: rows between the caller's buffer and a window's bitmap */
+/* CTL_XBLIT: rows between the caller's buffer and a window's bitmap; dir
+ * bit 0: to the caller, bit 1: x and y count from the bitmap's corner
+ * (another process's child window, which its own user32 placed) rather
+ * than from the client area */
 static UINT64 xblit(UmProcess *p, UINT64 target, UINT64 ptr)
 {
     struct { INT32 dir, x, y, w, h, stride; UINT64 buf; } b;
@@ -2106,7 +2109,7 @@ static UINT64 xblit(UmProcess *p, UINT64 target, UINT64 ptr)
     DesktopLock();
     GuiWin *g = win_by_hwnd((UINT32)target);
     if (g && g->proc != p) {
-        int ox = g->uc[2] > 0 ? g->uc[0] : 0, oy = g->uc[2] > 0 ? g->uc[1] : 0;
+        int ox = g->uc[2] > 0 && !(b.dir & 2) ? g->uc[0] : 0, oy = g->uc[2] > 0 && !(b.dir & 2) ? g->uc[1] : 0;
         if (ox < 0) ox = 0;
         if (oy < 0) oy = 0;
         int x = b.x, y = b.y, w = b.w, h = b.h, sx = 0, sy = 0;
@@ -2118,7 +2121,7 @@ static UINT64 xblit(UmProcess *p, UINT64 target, UINT64 ptr)
             UINT64 src = b.buf + ((UINT64)(sy + r) * (UINT64)b.stride + (UINT64)sx) * 4;
             UINT64 dst = g->bitmap + ((UINT64)(oy + y + r) * g->stride + (UINT64)(ox + x)) * 4;
             UINT64 bk = g->back ? g->back + ((UINT64)(oy + y + r) * (UINT64)g->back_stride + (UINT64)(ox + x)) * 4 : 0;
-            if (b.dir == 0) {
+            if (!(b.dir & 1)) {
                 if (!um_read(p, src, row, (UINT64)w * 4)) break;
                 um_write(g->proc, dst, row, (UINT64)w * 4);
                 if (bk) um_write(g->proc, bk, row, (UINT64)w * 4);
@@ -2127,7 +2130,7 @@ static UINT64 xblit(UmProcess *p, UINT64 target, UINT64 ptr)
             }
         }
         rv = 1;
-        if (b.dir == 0) WmInvalidate();
+        if (!(b.dir & 1)) WmInvalidate();
     }
     DesktopUnlock();
     kfree(row);

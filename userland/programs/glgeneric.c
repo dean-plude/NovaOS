@@ -5,8 +5,9 @@
  * what they got and fall back (Krita, Qt).  It also draws in 2D as
  * ScummVM does: a texture uploaded and updated, a quad of two triangles
  * through an orthographic projection (vertex arrays), blended, scissored,
- * modulated by the colour, and glBegin/glEnd quads.  Run before the App
- * Store installs Mesa 3D (the core self-tests). */
+ * modulated by the colour, and glBegin/glEnd quads.  Mesa's llvmpipe is
+ * on drive C: from the start, so GALLIUM_DRIVER=generic asks opengl32.dll
+ * for its own OpenGL 1.1 as if no driver were installed. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -176,6 +177,7 @@ static void draw_checks(HWND w)
 
 int main(void)
 {
+    SetEnvironmentVariableA("GALLIUM_DRIVER", "generic");
     HMODULE gl = LoadLibraryA("opengl32.dll");
     check("opengl32.dll loads", gl != 0);
     if (!gl) { printf("glgeneric: %d passed, %d failed\n", passed, failed); return 1; }

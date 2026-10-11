@@ -10427,6 +10427,62 @@ in the minute against 49 (34 of them a part of the screen), its longest
 frame took 0.9 s against 4.2 s, programs got 47% of the CPU against 38%,
 and the desktop watchdog (3 s without a frame) never fired.
 
+## Drawing into another process's child window
+
+Steam's "Sign in to Steam" window opened with black contents.  Steam's
+browser composer makes an SDL window and puts Chromium's window inside it
+as a child window; Chromium, drawing in software, draws its frames from
+its GPU process with `GetDC` and `BitBlt` on that child window.  NovaOS
+let another process draw only into top-level windows (the ones the
+desktop knows), so `GetDC` on the child failed and nothing was drawn.
+Now `GetDC`, `GetWindowDC` and `GetDCEx` on another process's child
+window ask that process where the child sits in its top-level window and
+which part of it can show, and the drawing lands there, clipped to the
+child.  The sign-in form (account name, password, Remember me, Sign in)
+now draws.  `xpwin` in the core suite draws from a third process into a
+child window of a framed window of another process and checks the
+pixels inside and outside it.  Steam's connection to its servers still
+fails in the test sandbox, which reaches the internet only through an
+HTTPS proxy; signing in is a hand check.
+
+## Image cache: Firefox's processes share xul.dll's pages at load
+
+Firefox starts about ten processes, and each loaded its own `xul.dll`
+(164 MB): the kernel copied the whole file into a kernel buffer,
+relocated it, bound its imports, then hashed and compared every
+read-only page to find the frames other processes already shared.
+Several processes doing that at once on a 2 GB machine held hundreds of
+megabytes of transient copies, and Firefox did not get a window up in
+170 seconds under TCG.
+
+- **Image cache** (`kernel/um/um.c`).  After a module's first load at an
+  address, its pages are kept: the shared frames of its read-only pages,
+  and a copy of each writable page that is not all zeros.  Another
+  process loading the same file (same node, contents and last write) at
+  the same address maps those frames and copies those pages straight
+  away, with no kernel copy of the image, no relocating and no hashing.
+  Only its imports are bound again, read and written in the process; an
+  import address that differs makes that one page the process's own
+  copy, as any write to a shared image page does.  An entry lives while
+  a process that loaded it runs (a running image cannot be replaced) and
+  goes with the last one.  Modules whose import table has no separate
+  name table (binding overwrites the names) and modules mapped as data
+  are not kept.
+- **Shared image pages are not charged** to a process's commit, as on
+  Windows, where an image page is backed by its file.  Firefox's main
+  process at 2 GB was refused memory (`MOZ_CRASH`) once its commit,
+  160 MB of it the `xul.dll` it shares, passed the per-process cap.  A
+  page is charged once it becomes the process's own.
+- **`mem`** in the Terminal prints the modules kept, their size, and the
+  loads that reused one.  `imgsharetest` (64- and 32-bit) changes its
+  data and a read-only page, starts a copy of itself, and the copy must
+  see its file's contents and work through its imports.
+
+Firefox at 2 GB, QEMU TCG, 2 CPUs, 100 seconds after `start browser`:
+1127 MB used before, 549 MB after (62 modules kept, 213 MB; 484 loads
+reused one).  Before, no Firefox window by 170 seconds; after, the
+Welcome page is up by 150 seconds.
+
 ## Services run as administrators
 
 A service whose account is `LocalSystem` (the default for
@@ -10462,6 +10518,43 @@ Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
 2 CPUs): programs got 38% of the CPU against 20%, and samples spinning on a
 process lock fell from about 6% to under 1%.  A minute later, with both up,
 the CPU was 90% idle against 91% busy spinning (`profile on 9000 6000`).
+
+## Mesa's OpenGL built in
+
+OpenGL 2 and later used to need the App Store's **Mesa 3D** first: without
+it NovaOS's `opengl32.dll` had only its own OpenGL 1.1, so Krita (OpenGL 3
+for its canvas and Qt Quick), Chocolate Doom, Teeworlds and GOG GALAXY's
+Qt all waited on a download.  On Windows a display driver's OpenGL is
+simply there, so NovaOS now carries Mesa's llvmpipe on drive C: from the
+start.
+
+- `tools/bundle_mesa.py` (called by `tools/build_userland.py`, as Firefox's
+  bundler is) downloads the same mesa-dist-win 24.2.4 archive the App
+  Store lists, checks its SHA-256, and stages the unmodified 64- and
+  32-bit `opengl32.dll` (as `opengl32_mesa.dll`), `libgallium_wgl.dll` and
+  `libglapi.dll` into System32 and SysWOW64; CI caches the archive.
+  NovaOS's `opengl32.dll` already hands every program to
+  `opengl32_mesa.dll` when it is there (virgl first on a 3D virtio-gpu
+  with Venus installed), so every program gets OpenGL 4.5 on the CPU.
+- `GALLIUM_DRIVER=generic` asks for NovaOS's own OpenGL 1.1 instead (as
+  with no driver); `glgeneric` uses it.
+- The App Store's **Mesa 3D** now installs only lavapipe (Vulkan, for
+  DXVK), and shows as installed by `vulkan_lvp.dll`.
+- New core self-test `gl2test` (64- and 32-bit, nothing installed):
+  OpenGL 3.0 or later on llvmpipe, a GLSL program compiled, linked and
+  drawn with, read back and swapped to the window, and an OpenGL 3.3
+  core-profile context from `wglCreateContextAttribsARB`.
+- The nightly corpus starts Krita with nothing installed first.
+- VLC now picks its OpenGL video output (on Windows with a GL driver it
+  would too), which showed a NovaOS fault: a DC a program keeps on a child
+  window stayed where the window was when it was taken.  VLC keeps its
+  video window's DC and moves the window to centre the picture, so the
+  video stayed at the left edge.  user32 now moves kept DCs with a child
+  window that moves, resizes, shows or hides (`gl2test` checks it).
+
+The two architectures' llvmpipe add about 97 MB to drive C:'s system
+files (they are unpacked into memory at boot, as the other system files
+are).
 
 ## Non-blocking TCP sends taken whole, as on Windows
 
@@ -10607,5 +10700,38 @@ socket (`setsockopt`/`getsockopt` at `IPPROTO_IPV6`), on by default: an
 IPv6 socket bound to `::` takes IPv6 alone and leaves the port's IPv4
 side to an IPv4 socket, and one with the option turned off takes both
 families as before.  `looptest` checks both.
+
+## WebView2 on Venus
+
+With the App Store's DXVK installed (Direct3D on Venus, the 3D virtio-gpu,
+or on Mesa's lavapipe), WebView2 loaded its page and ran its script, but
+its GPU process exited six times in a row and the browser process then
+stopped at a breakpoint.  Each GPU process created its Direct3D 11 device
+on Venus for ANGLE (feature level 11.1) and then, for the frames it
+presents, a WARP device and a swap chain for DirectComposition from
+`CreateDXGIFactory2`'s factory.  With DXVK installed, WARP went to DXVK and
+so did the factory, and DXVK does not implement
+`CreateSwapChainForComposition` (`E_NOTIMPL`), so Chromium restarted the
+GPU process until it gave up.  Now the GPU process starts once, keeps its
+device on Venus, and the page is drawn.  Nothing in the runtime or in DXVK
+is changed.
+
+- **d3d11.dll**: a WARP device that accepts feature level 9_1 is NovaOS's
+  software device on the Basic Render Driver whether DXVK is installed or
+  not, as WARP on Windows is the CPU's rasterizer whatever the GPU.  WARP
+  at 9_3 and up (ANGLE's D3D11-WARP renderer) and every WARP request in a
+  32-bit process still go to DXVK.
+- **dxgi.dll**: the factory programs get from DXVK is wrapped: a swap chain
+  for NovaOS's software device (for a window, or for DirectComposition)
+  comes from NovaOS's own factory, everything else from DXVK's.  The
+  software device's adapter stays the Basic Render Driver
+  (`NovaCreateBasicRenderFactory`, private to `d3d11.dll`).
+
+The self-test `dcomptest dxvk` (graphics suite) runs `dcomptest`'s checks
+with DXVK on Venus: DXVK's factory and devices for the GPU, the software
+device for WARP, and its composition and window swap chains made through
+DXVK's factory.  The GPU-composited path, DirectComposition on the GPU
+(`DCompositionCreateDevice3`, which NovaOS's `dcomp.dll` does not export),
+is the next step.
 
 <!-- END generated:history -->

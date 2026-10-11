@@ -2,8 +2,8 @@
  * soft.c — d3d11.dll's software device, on the Basic Render Driver.
  *
  * What a program without a GPU gets from D3D11CreateDevice with
- * D3D_DRIVER_TYPE_WARP (or the Basic Render Driver adapter) when DXVK is
- * not installed: a device of feature level 9_1 whose textures live in
+ * D3D_DRIVER_TYPE_WARP (or the Basic Render Driver adapter), with DXVK
+ * installed or not (d3d11.c): a device of feature level 9_1 whose textures live in
  * memory, that the CPU creates, maps, updates and copies, and that
  * dxgi.dll's swap chains present (novadx.h).  That is the whole of what
  * Chromium's software compositor does with it: it draws each frame into a
@@ -244,7 +244,9 @@ static HRESULT warp_adapter(const GUID *iid, void **out)
     typedef HRESULT (WINAPI *CreateFn)(const GUID *, void **);
     *out = NULL;
     HMODULE m = LoadLibraryW(L"dxgi.dll");
-    CreateFn create = m ? (CreateFn)GetProcAddress(m, "CreateDXGIFactory1") : NULL;
+    /* dxgi.dll's own factory: CreateDXGIFactory1 hands out DXVK's when it is
+     * installed, whose adapters are the GPU's */
+    CreateFn create = m ? (CreateFn)GetProcAddress(m, "NovaCreateBasicRenderFactory") : NULL;
     IUnknown *f = NULL;
     if (!create || FAILED(create(&NIID_IDXGIFactory1, (void **)&f))) return E_FAIL;
     typedef HRESULT (STDMETHODCALLTYPE *EnumFn)(IUnknown *, UINT, IUnknown **);

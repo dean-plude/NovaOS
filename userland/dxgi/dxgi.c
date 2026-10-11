@@ -16,7 +16,11 @@
  * gets NovaOS's: it loads System32\dxgi.dll and needs a factory before it
  * reads its drivers, and DXVK's factory starts Vulkan, so giving it DXVK's
  * would have DXVK and the loader start each other until DXVK's own lock
- * deadlocks.  (The loader skips software adapters.)
+ * deadlocks.  (The loader skips software adapters.)  d3d11.dll's WARP
+ * device stays on this factory's Basic Render Driver either way
+ * (NovaCreateBasicRenderFactory), and DXVK's factory as programs get it is
+ * wrapped so that swap chains for that device, among them those for
+ * DirectComposition (which DXVK does not make at all), still come from here.
  */
 #include <windows.h>
 #include <novadx.h>
@@ -688,22 +692,168 @@ static FARPROC dxvk_proc(void *caller, const char *name)
     return m ? GetProcAddress(m, name) : NULL;
 }
 
+/* ---- DXVK's factory, as programs get it ------------------------------------ */
+/* DXVK's factory with the software device's swap chains: a program that
+ * creates a WARP device (d3d11.dll's software device, on this dll's Basic
+ * Render Driver) and then a factory of its own asks DXVK's factory for that
+ * device's swap chains, which only this dll can make (DXVK's
+ * CreateSwapChainForComposition is not implemented at all): Chromium's
+ * software output in WebView2's GPU process does exactly that.  The
+ * wrapper hands the three swap-chain calls for a software device to this
+ * dll's factory and every other call to DXVK's. */
+typedef struct { const void *const *vtbl; LONG refs; IUnknown *inner; } Wrapped;
+#define INNER(w, i, T) ((T)((void *const *)*(void **)(w)->inner)[i])
+
+static int is_factory_iid(const GUID *iid)
+{
+    return novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDXGIObject) || novadx_same(iid, &NIID_IDXGIFactory) ||
+           novadx_same(iid, &NIID_IDXGIFactory1) || novadx_same(iid, &NIID_IDXGIFactory2) ||
+           novadx_same(iid, &NIID_IDXGIFactory3) || novadx_same(iid, &NIID_IDXGIFactory4) ||
+           novadx_same(iid, &NIID_IDXGIFactory5) || novadx_same(iid, &NIID_IDXGIFactory6) ||
+           novadx_same(iid, &NIID_IDXGIFactory7);
+}
+
+static int is_soft(IUnknown *dev)
+{
+    IUnknown *soft = NULL;
+    if (!dev || FAILED(dev->lpVtbl->QueryInterface(dev, &NIID_INovaSoftDevice, (void **)&soft))) return 0;
+    soft->lpVtbl->Release(soft);
+    return 1;
+}
+
+static HRESULT STDMETHODCALLTYPE w_qi(Wrapped *w, const GUID *iid, void **out)
+{
+    if (!out) return E_POINTER;
+    HRESULT hr = w->inner->lpVtbl->QueryInterface(w->inner, iid, out);
+    if (SUCCEEDED(hr) && is_factory_iid(iid)) {             /* (the same object: stay wrapped) */
+        ((IUnknown *)*out)->lpVtbl->Release((IUnknown *)*out);
+        InterlockedIncrement(&w->refs);
+        *out = w;
+    }
+    return hr;
+}
+static ULONG STDMETHODCALLTYPE w_addref(Wrapped *w) { return (ULONG)InterlockedIncrement(&w->refs); }
+static ULONG STDMETHODCALLTYPE w_release(Wrapped *w)
+{
+    LONG r = InterlockedDecrement(&w->refs);
+    if (!r) { w->inner->lpVtbl->Release(w->inner); HeapFree(GetProcessHeap(), 0, w); }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE w_setpriv(Wrapped *w, const GUID *g, UINT n, const void *d)
+{ return INNER(w, 3, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, UINT, const void *))(w->inner, g, n, d); }
+static HRESULT STDMETHODCALLTYPE w_setprivif(Wrapped *w, const GUID *g, const IUnknown *u)
+{ return INNER(w, 4, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, const IUnknown *))(w->inner, g, u); }
+static HRESULT STDMETHODCALLTYPE w_getpriv(Wrapped *w, const GUID *g, UINT *n, void *d)
+{ return INNER(w, 5, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, UINT *, void *))(w->inner, g, n, d); }
+static HRESULT STDMETHODCALLTYPE w_getparent(Wrapped *w, const GUID *g, void **out)
+{ return INNER(w, 6, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, void **))(w->inner, g, out); }
+static HRESULT STDMETHODCALLTYPE w_enum(Wrapped *w, UINT i, void **out)
+{ return INNER(w, 7, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out); }
+static HRESULT STDMETHODCALLTYPE w_assoc(Wrapped *w, HWND h, UINT flags)
+{ return INNER(w, 8, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND, UINT))(w->inner, h, flags); }
+static HRESULT STDMETHODCALLTYPE w_getassoc(Wrapped *w, HWND *h)
+{ return INNER(w, 9, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND *))(w->inner, h); }
+static HRESULT STDMETHODCALLTYPE w_swapchain(Wrapped *w, IUnknown *dev, NDXGI_SWAP_CHAIN_DESC *d, void **out)
+{
+    if (is_soft(dev)) return f_swapchain(NULL, dev, d, out);
+    return INNER(w, 10, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, NDXGI_SWAP_CHAIN_DESC *, void **))(w->inner, dev, d, out);
+}
+static HRESULT STDMETHODCALLTYPE w_soft(Wrapped *w, HMODULE m, void **out)
+{ return INNER(w, 11, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HMODULE, void **))(w->inner, m, out); }
+static HRESULT STDMETHODCALLTYPE w_enum1(Wrapped *w, UINT i, void **out)
+{ return INNER(w, 12, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void **))(w->inner, i, out); }
+static BOOL STDMETHODCALLTYPE w_current(Wrapped *w) { return INNER(w, 13, BOOL (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
+static BOOL STDMETHODCALLTYPE w_stereo(Wrapped *w) { return INNER(w, 14, BOOL (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
+static HRESULT STDMETHODCALLTYPE w_forhwnd(Wrapped *w, IUnknown *dev, HWND h, const NDXGI_SWAP_CHAIN_DESC1 *d, const void *fs,
+                                           void *restrict_to, void **out)
+{
+    if (is_soft(dev)) return f_forhwnd(NULL, dev, h, d, fs, restrict_to, out);
+    return INNER(w, 15, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, HWND, const NDXGI_SWAP_CHAIN_DESC1 *, const void *,
+                                                     void *, void **))(w->inner, dev, h, d, fs, restrict_to, out);
+}
+static HRESULT STDMETHODCALLTYPE w_forcore(Wrapped *w, IUnknown *dev, IUnknown *win, const NDXGI_SWAP_CHAIN_DESC1 *d, void *r, void **out)
+{
+    return INNER(w, 16, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, IUnknown *, const NDXGI_SWAP_CHAIN_DESC1 *, void *,
+                                                     void **))(w->inner, dev, win, d, r, out);
+}
+static HRESULT STDMETHODCALLTYPE w_sharedluid(Wrapped *w, HANDLE h, LUID *l)
+{ return INNER(w, 17, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, LUID *))(w->inner, h, l); }
+static HRESULT STDMETHODCALLTYPE w_regwin18(Wrapped *w, HWND h, UINT m, DWORD *c)
+{ return INNER(w, 18, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND, UINT, DWORD *))(w->inner, h, m, c); }
+static HRESULT STDMETHODCALLTYPE w_regevent19(Wrapped *w, HANDLE e, DWORD *c)
+{ return INNER(w, 19, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(w->inner, e, c); }
+static void STDMETHODCALLTYPE w_unreg20(Wrapped *w, DWORD c) { INNER(w, 20, void (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(w->inner, c); }
+static HRESULT STDMETHODCALLTYPE w_regwin21(Wrapped *w, HWND h, UINT m, DWORD *c)
+{ return INNER(w, 21, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND, UINT, DWORD *))(w->inner, h, m, c); }
+static HRESULT STDMETHODCALLTYPE w_regevent22(Wrapped *w, HANDLE e, DWORD *c)
+{ return INNER(w, 22, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(w->inner, e, c); }
+static void STDMETHODCALLTYPE w_unreg23(Wrapped *w, DWORD c) { INNER(w, 23, void (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(w->inner, c); }
+static HRESULT STDMETHODCALLTYPE w_forcomp(Wrapped *w, IUnknown *dev, const NDXGI_SWAP_CHAIN_DESC1 *d, void *restrict_to, void **out)
+{
+    if (is_soft(dev)) return f_forcomp(NULL, dev, d, restrict_to, out);
+    return INNER(w, 24, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, const NDXGI_SWAP_CHAIN_DESC1 *, void *, void **))(
+        w->inner, dev, d, restrict_to, out);
+}
+static UINT STDMETHODCALLTYPE w_flags(Wrapped *w) { return INNER(w, 25, UINT (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
+static HRESULT STDMETHODCALLTYPE w_byluid(Wrapped *w, LUID l, const GUID *iid, void **out)
+{ return INNER(w, 26, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, LUID, const GUID *, void **))(w->inner, l, iid, out); }
+static HRESULT STDMETHODCALLTYPE w_warp(Wrapped *w, const GUID *iid, void **out)
+{ return INNER(w, 27, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, const GUID *, void **))(w->inner, iid, out); }
+static HRESULT STDMETHODCALLTYPE w_feature(Wrapped *w, UINT feature, void *data, UINT size)
+{ return INNER(w, 28, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, void *, UINT))(w->inner, feature, data, size); }
+static HRESULT STDMETHODCALLTYPE w_bypref(Wrapped *w, UINT i, UINT pref, const GUID *iid, void **out)
+{ return INNER(w, 29, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, UINT, UINT, const GUID *, void **))(w->inner, i, pref, iid, out); }
+static HRESULT STDMETHODCALLTYPE w_regac(Wrapped *w, HANDLE e, DWORD *c)
+{ return INNER(w, 30, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HANDLE, DWORD *))(w->inner, e, c); }
+static HRESULT STDMETHODCALLTYPE w_unregac(Wrapped *w, DWORD c) { return INNER(w, 31, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, DWORD))(w->inner, c); }
+
+/* (a program calls only the methods of the interfaces QueryInterface gave it,
+ * so no slot past what DXVK's factory has is reached) */
+static const void *const g_wrapped_vtbl[] = {
+    (void *)w_qi, (void *)w_addref, (void *)w_release, (void *)w_setpriv, (void *)w_setprivif, (void *)w_getpriv,
+    (void *)w_getparent, (void *)w_enum, (void *)w_assoc, (void *)w_getassoc, (void *)w_swapchain, (void *)w_soft,
+    (void *)w_enum1, (void *)w_current, (void *)w_stereo, (void *)w_forhwnd, (void *)w_forcore, (void *)w_sharedluid,
+    (void *)w_regwin18, (void *)w_regevent19, (void *)w_unreg20, (void *)w_regwin21, (void *)w_regevent22,
+    (void *)w_unreg23, (void *)w_forcomp, (void *)w_flags, (void *)w_byluid, (void *)w_warp, (void *)w_feature,
+    (void *)w_bypref, (void *)w_regac, (void *)w_unregac,
+};
+
+/* DXVK's factory in *@out (the result @hr of creating it), wrapped */
+static HRESULT wrap(HRESULT hr, const GUID *iid, void **out)
+{
+    if (FAILED(hr) || !out || !*out || !is_factory_iid(iid)) return hr;
+    Wrapped *w = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*w));
+    if (!w) return hr;                                      /* (DXVK's own, unwrapped) */
+    w->vtbl = g_wrapped_vtbl;
+    w->refs = 1;
+    w->inner = *out;
+    *out = w;
+    return hr;
+}
+
 DXGIAPI HRESULT WINAPI CreateDXGIFactory(const GUID *iid, void **out)
 {
     CreateFn fn = (CreateFn)dxvk_proc(__builtin_return_address(0), "CreateDXGIFactory");
-    return fn ? fn(iid, out) : own_factory(0, iid, out);
+    return fn ? wrap(fn(iid, out), iid, out) : own_factory(0, iid, out);
 }
 
 DXGIAPI HRESULT WINAPI CreateDXGIFactory1(const GUID *iid, void **out)
 {
     CreateFn fn = (CreateFn)dxvk_proc(__builtin_return_address(0), "CreateDXGIFactory1");
-    return fn ? fn(iid, out) : own_factory(0, iid, out);
+    return fn ? wrap(fn(iid, out), iid, out) : own_factory(0, iid, out);
 }
 
 DXGIAPI HRESULT WINAPI CreateDXGIFactory2(UINT flags, const GUID *iid, void **out)
 {
     Create2Fn fn = (Create2Fn)dxvk_proc(__builtin_return_address(0), "CreateDXGIFactory2");
-    return fn ? fn(flags, iid, out) : own_factory(flags, iid, out);
+    return fn ? wrap(fn(flags, iid, out), iid, out) : own_factory(flags, iid, out);
+}
+
+/* NovaOS's own: this dll's factory, with the Basic Render Driver, even when
+ * DXVK's is installed; for d3d11.dll's WARP device, which is on it */
+DXGIAPI HRESULT WINAPI NovaCreateBasicRenderFactory(const GUID *iid, void **out)
+{
+    return own_factory(0, iid, out);
 }
 
 DXGIAPI HRESULT WINAPI DXGIGetDebugInterface1(UINT flags, const GUID *iid, void **out)

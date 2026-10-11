@@ -1,7 +1,9 @@
 - **Kernel** (`kernel/`): NT-style executive: object manager and handles,
   processes and threads, virtual memory with sections and guard pages
 (the read-only pages of loaded DLLs are shared by every process with the
-same bytes, as Windows shares image sections), I/O,
+same bytes, as Windows shares image sections, and a module another
+running process loaded at the same address is mapped from its kept pages
+without being copied, relocated or hashed again), I/O,
   registry, security tokens (restricted tokens, impersonation) and
   security descriptors checked when named objects and files on drive C:
   are opened.  SMP with per-core scheduling and fine-grained

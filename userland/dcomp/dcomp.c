@@ -5,14 +5,18 @@
  * What it provides is what Chromium's software compositor (the GPU
  * process of WebView2 and of Steam's and Galaxy's browsers) uses: a device,
  * a target on a window, visuals with offsets and children, and a visual
- * whose content is a swap chain of dxgi.dll's software device (novadx.h).
- * Each present of such a swap chain (and each Commit) draws its frame into
- * the target's window with GDI, at the visual's offset.  Surfaces,
- * transforms, effects, clips and animations are not implemented.
+ * whose content is a composition swap chain of dxgi.dll's (novadx.h): on
+ * the software device, or on a GPU device (DXVK's), whose frames dxgi.dll
+ * reads back from the GPU.  Each present of such a swap chain (and each
+ * Commit) draws its frame into the target's window with GDI, at the
+ * visual's offset.  Surfaces, transforms, effects, clips and animations are
+ * not implemented.
  *
  * Only DCompositionCreateDevice is exported: Chromium turns on its
  * hardware DirectComposition path (overlays, swap chains on the GPU) only
- * when DCompositionCreateDevice3 exists, and that path needs a real GPU.
+ * when DCompositionCreateDevice3 exists, and that path also needs
+ * IDCompositionDesktopDevice, IDCompositionDevice3 and surfaces, which
+ * are not here yet.
  */
 #include <windows.h>
 #include <novadx.h>

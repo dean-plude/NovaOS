@@ -14,7 +14,9 @@
  *                        and hardware devices are DXVK's (the GPU), while
  *                        a WARP device stays the software device, whose
  *                        swap chains (for composition too) that factory
- *                        still makes (WebView2's GPU process on Venus)
+ *                        still makes (WebView2's GPU process on Venus);
+ *                        and a composition swap chain on the GPU device,
+ *                        rendered on the GPU and shown by a visual
  *   dcomptest gpu HWND   the "GPU process": makes the child window, posts it
  *                        to HWND, and draws into it once it is parented
  *
@@ -219,6 +221,63 @@ static void check_dxvk(void)
           cd && SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, &level, NULL)) &&
           dev && level >= 0xa000);
     RELEASE(dev);
+}
+
+/* ---- A composition swap chain on the GPU (with DXVK, both widths) ---------- */
+/* What Chromium's DirectComposition output does on a GPU: the device's
+ * factory makes a swap chain for composition on the GPU device, a visual
+ * shows it, and frames are rendered into its buffer on the GPU (cleared,
+ * and a part copied in from another texture) and presented */
+static void check_gpu_composition(HWND child)
+{
+    g_step = "a composition swap chain on the GPU";
+    CreateFactory_t cf = (CreateFactory_t)GetProcAddress(g_dxgi, "CreateDXGIFactory1");
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    CreateDComp_t cdc = g_dcomp ? (CreateDComp_t)GetProcAddress(g_dcomp, "DCompositionCreateDevice") : NULL;
+    void *dev = NULL, *ctx = NULL, *f = NULL, *dc = NULL, *target = NULL, *visual = NULL, *chain = NULL;
+    void *buf = NULL, *rtv = NULL, *part = NULL, *prtv = NULL, *owner = NULL, *got = NULL;
+    int ok = cf && cd && cdc && SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, NULL, &ctx)) &&
+             SUCCEEDED(cf(&NIID_IDXGIFactory2, &f)) && SUCCEEDED(cdc(NULL, &NIID_IDCompositionDevice, &dc));
+    CHECK("a hardware device, its factory, a DirectComposition device", ok);
+    ok = ok && SUCCEEDED(VT(dc, 6, HRESULT (STDMETHODCALLTYPE *)(void *, HWND, BOOL, void **))(dc, child, TRUE, &target)) &&
+         SUCCEEDED(VT(dc, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(dc, &visual)) &&
+         SUCCEEDED(VT(target, 3, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(target, visual));
+    NDXGI_SWAP_CHAIN_DESC1 d = { 200, 120, NDXGI_FORMAT_B8G8R8A8_UNORM, FALSE, { 1, 0 }, 0x20, 2, 0 /* STRETCH */,
+                                 3 /* FLIP_SEQUENTIAL */, 1 /* PREMULTIPLIED */, 0 };
+    ok = ok && SUCCEEDED(VT(f, 24, HRESULT (STDMETHODCALLTYPE *)(void *, void *, const void *, void *, void **))(f, dev, &d, NULL, &chain));
+    CHECK("CreateSwapChainForComposition on the GPU device", ok);
+    ok = ok && SUCCEEDED(VT(visual, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(visual, chain)) &&
+         SUCCEEDED(VT(dc, 3, HRESULT (STDMETHODCALLTYPE *)(void *))(dc));
+    CHECK("SetContent, Commit", ok);
+    ok = ok && SUCCEEDED(VT(chain, 9, GetBuffer_t)(chain, 0, &NIID_ID3D11Texture2D, &buf));
+    if (ok) VT(buf, 3, void (STDMETHODCALLTYPE *)(void *, void **))(buf, &owner);                 /* ID3D11DeviceChild::GetDevice */
+    CHECK("its buffer: a texture of the GPU device", ok && owner == dev);
+    ok = ok && SUCCEEDED(VT(chain, 7, HRESULT (STDMETHODCALLTYPE *)(void *, const GUID *, void **))(chain, &NIID_ID3D11Device, &got)) &&
+         got == dev;
+    CHECK("GetDevice: the GPU device", ok);
+    typedef HRESULT (STDMETHODCALLTYPE *RTV_t)(void *, void *, const void *, void **);
+    typedef void (STDMETHODCALLTYPE *Clear_t)(void *, void *, const float *);
+    const float magenta[4] = { 1, 0, 1, 1 }, yellow[4] = { 1, 1, 0, 1 };
+    ok = ok && SUCCEEDED(VT(dev, 9, RTV_t)(dev, buf, NULL, &rtv));
+    if (ok) VT(ctx, 50, Clear_t)(ctx, rtv, magenta);                                              /* ClearRenderTargetView */
+    CHECK("frame 1 rendered on the GPU and presented", ok && SUCCEEDED(VT(chain, 8, Present_t)(chain, 0, 0)));
+    COLORREF c = pixel(child, 10, 10);
+    CHECK("frame 1 in the window", c == RGB(255, 0, 255));
+    if (c != RGB(255, 0, 255)) printf("pixel %06lx\n", (unsigned long)c);
+    ND3D11_TEXTURE2D_DESC td = { 50, 50, 1, 1, NDXGI_FORMAT_B8G8R8A8_UNORM, { 1, 0 }, 0 /* DEFAULT */, 0x20 /* RENDER_TARGET */, 0, 0 };
+    ok = ok && SUCCEEDED(VT(dev, 5, Tex2D_t)(dev, &td, NULL, &part)) && SUCCEEDED(VT(dev, 9, RTV_t)(dev, part, NULL, &prtv));
+    RECT r = { 100, 50, 150, 100 };
+    if (ok) {
+        VT(ctx, 50, Clear_t)(ctx, prtv, yellow);
+        VT(ctx, 46, CopyRegion_t)(ctx, buf, 0, 100, 50, 0, part, 0, NULL);
+    }
+    NDXGI_PRESENT_PARAMETERS pp = { 1, &r, NULL, NULL };
+    CHECK("frame 2 (a dirty rectangle) presented", ok && SUCCEEDED(VT(chain, 22, Present1_t)(chain, 0, 0, &pp)));
+    CHECK("frame 2: the rectangle drawn", pixel(child, 120, 70) == RGB(255, 255, 0));
+    CHECK("frame 2: the rest kept", pixel(child, 10, 10) == RGB(255, 0, 255) && pixel(child, 160, 70) == RGB(255, 0, 255));
+    RELEASE(prtv); RELEASE(part); RELEASE(rtv); RELEASE(got); RELEASE(owner); RELEASE(buf);
+    RELEASE(chain); RELEASE(visual); RELEASE(target); RELEASE(dc); RELEASE(f); RELEASE(ctx); RELEASE(dev);
+    CHECK("everything released", 1);
 }
 
 /* ---- Chromium's software output in this process (64-bit) ------------------ */
@@ -469,6 +528,7 @@ int main(int argc, char **argv)
 #ifdef _WIN64
     check_composition(top, child);
 #endif
+    if (g_dxvk) check_gpu_composition(child);
     DestroyWindow(child);
     pump(100);
     check_cross_process(top);

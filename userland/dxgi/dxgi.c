@@ -21,6 +21,12 @@
  * (NovaCreateBasicRenderFactory), and DXVK's factory as programs get it is
  * wrapped so that swap chains for that device, among them those for
  * DirectComposition (which DXVK does not make at all), still come from here.
+ *
+ * DirectComposition swap chains on a GPU device (DXVK's) come from here
+ * too: their buffer is a texture on that device, which the program renders
+ * into on the GPU; each present copies the part that changed into a staging
+ * texture and reads it back, and dcomp.dll draws that frame into the
+ * target's window as it does a software device's.
  */
 #include <windows.h>
 #include <novadx.h>
@@ -34,11 +40,15 @@
 #define DXGI_USAGE_RENDER_TARGET_OUTPUT_       0x20
 #define D3D11_BIND_SHADER_RESOURCE_            0x8
 #define D3D11_BIND_RENDER_TARGET_              0x20
+#define D3D11_USAGE_STAGING_                   3
+#define D3D11_CPU_ACCESS_READ_                 0x20000
+#define D3D11_MAP_READ_                        1
 
 typedef struct Factory Factory;
 typedef struct Adapter Adapter;
 typedef struct Chain Chain;
 static HRESULT own_factory(UINT flags, const GUID *iid, void **out);
+static int is_soft(IUnknown *dev);
 
 /* ---- The Basic Render Driver ---------------------------------------------- */
 typedef struct {
@@ -219,16 +229,21 @@ typedef struct {
 
 /* One buffer: what GetBuffer(0) gives is what the next present shows, and
  * it keeps the last frame, so a present with dirty rectangles shows the
- * rest unchanged, as a flip-model chain's runtime-copied back buffer does */
+ * rest unchanged, as a flip-model chain's runtime-copied back buffer does.
+ * On a GPU device (composition only) the buffer is the device's texture and
+ * each present reads the part that changed back into @frame. */
 struct Chain {
     const ChainVtbl *vtbl;
     INovaSwapChain nova;
     LONG refs;
-    IUnknown *device;
+    IUnknown *device;                   /* (on a GPU: its ID3D11Device) */
     HWND hwnd;                          /* (0: for DirectComposition) */
     NDXGI_SWAP_CHAIN_DESC1 desc;
     IUnknown *buffer;                   /* its ID3D11Texture2D */
-    INovaSoftTexture *bits;
+    INovaSoftTexture *bits;             /* (the software device's) */
+    IUnknown *ctx;                      /* (a GPU's) its immediate context, */
+    IUnknown *staging;                  /*   a texture the CPU reads, */
+    BYTE *frame;                        /*   and the frame read back: BGRA, Width * 4 bytes a row */
     NovaPresentSink sink;
     void *sink_ctx;
     UINT presents, rotation;
@@ -249,6 +264,9 @@ static void chain_drop_buffer(Chain *c)
 {
     if (c->bits) { c->bits->lpVtbl->Release(c->bits); c->bits = NULL; }
     if (c->buffer) { c->buffer->lpVtbl->Release(c->buffer); c->buffer = NULL; }
+    if (c->staging) { c->staging->lpVtbl->Release(c->staging); c->staging = NULL; }
+    HeapFree(GetProcessHeap(), 0, c->frame);
+    c->frame = NULL;
 }
 
 static HRESULT chain_make_buffer(Chain *c)
@@ -264,17 +282,56 @@ static HRESULT chain_make_buffer(Chain *c)
     IUnknown *t = NULL;
     HRESULT hr = create(c->device, &td, NULL, &t);
     if (FAILED(hr)) return hr;
+    c->buffer = t;
+    if (c->ctx) {                                           /* (a GPU's: the staging texture and the frame) */
+        td.Usage = D3D11_USAGE_STAGING_;
+        td.BindFlags = 0;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ_;
+        IUnknown *s = NULL;
+        hr = create(c->device, &td, NULL, &s);
+        if (FAILED(hr)) { chain_drop_buffer(c); return hr; }
+        c->staging = s;
+        c->frame = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size_t)td.Width * 4 * td.Height);
+        if (!c->frame) { chain_drop_buffer(c); return E_OUTOFMEMORY; }
+        return S_OK;
+    }
     void *b = NULL;
     hr = t->lpVtbl->QueryInterface(t, &NIID_INovaSoftTexture, &b);
-    if (FAILED(hr)) { t->lpVtbl->Release(t); return NDXGI_ERROR_UNSUPPORTED; }
-    c->buffer = t;
+    if (FAILED(hr)) { chain_drop_buffer(c); return NDXGI_ERROR_UNSUPPORTED; }
     c->bits = b;
     return S_OK;
+}
+
+typedef void    (STDMETHODCALLTYPE *CopyRegion_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, UINT, IUnknown *, UINT, const ND3D11_BOX *);
+typedef HRESULT (STDMETHODCALLTYPE *Map_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, ND3D11_MAPPED_SUBRESOURCE *);
+typedef void    (STDMETHODCALLTYPE *Unmap_t)(IUnknown *, IUnknown *, UINT);
+#define CTX(c, i, T) ((T)((void **)*(void **)(c)->ctx)[i])
+
+/* A GPU's present: the part @dirty (NULL: all) of the buffer, copied on the
+ * GPU into the staging texture, read back into the frame */
+static void chain_read_back(Chain *c, const RECT *dirty)
+{
+    RECT a = { 0, 0, (LONG)c->desc.Width, (LONG)c->desc.Height };
+    if (dirty) IntersectRect(&a, &a, dirty);
+    if (IsRectEmpty(&a) || !c->frame) return;
+    ND3D11_BOX box = { (UINT)a.left, (UINT)a.top, 0, (UINT)a.right, (UINT)a.bottom, 1 };
+    CTX(c, 46, CopyRegion_t)(c->ctx, c->staging, 0, box.left, box.top, 0, c->buffer, 0, &box);   /* CopySubresourceRegion */
+    ND3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(CTX(c, 14, Map_t)(c->ctx, c->staging, 0, D3D11_MAP_READ_, 0, &m)) || !m.pData) return;
+    int rgba = c->desc.Format == NDXGI_FORMAT_R8G8B8A8_UNORM || c->desc.Format == NDXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    for (LONG y = a.top; y < a.bottom; y++) {
+        const DWORD *s = (const DWORD *)((const BYTE *)m.pData + (size_t)y * m.RowPitch);
+        DWORD *d = (DWORD *)(c->frame + (size_t)y * c->desc.Width * 4);
+        for (LONG x = a.left; x < a.right; x++)
+            d[x] = rgba ? (s[x] & 0xFF00FF00u) | (s[x] >> 16 & 0xFF) | (s[x] & 0xFF) << 16 : s[x];
+    }
+    CTX(c, 15, Unmap_t)(c->ctx, c->staging, 0);
 }
 
 /* The buffer's pixels as BGRA */
 static BYTE *chain_frame(Chain *c, UINT *pitch)
 {
+    if (c->ctx) { *pitch = c->desc.Width * 4; return c->frame; }
     if (!c->bits) return NULL;
     ND3D11_TEXTURE2D_DESC td;
     BYTE *p = c->bits->lpVtbl->Bits(c->bits, pitch, &td);
@@ -315,6 +372,7 @@ static ULONG STDMETHODCALLTYPE c_release(Chain *c)
     LONG r = InterlockedDecrement(&c->refs);
     if (!r) {
         chain_drop_buffer(c);
+        if (c->ctx) c->ctx->lpVtbl->Release(c->ctx);
         if (c->device) c->device->lpVtbl->Release(c->device);
         HeapFree(GetProcessHeap(), 0, c->rgba_tmp);
         HeapFree(GetProcessHeap(), 0, c);
@@ -336,6 +394,7 @@ static HRESULT chain_present(Chain *c, UINT flags, const RECT *dirty)
 {
     if (flags & DXGI_PRESENT_TEST_) return S_OK;
     c->presents++;
+    if (c->ctx) chain_read_back(c, dirty);
     if (c->sink) { c->sink(c->sink_ctx, dirty); return S_OK; }
     if (!c->hwnd) return S_OK;                              /* (a composition chain no visual shows yet) */
     if (!IsWindow(c->hwnd)) return NDXGI_ERROR_INVALID_CALL;
@@ -479,9 +538,10 @@ static HRESULT make_chain(IUnknown *device, HWND hwnd, const NDXGI_SWAP_CHAIN_DE
     if (!out) return E_POINTER;
     *out = NULL;
     if (!device || !desc) return NDXGI_ERROR_INVALID_CALL;
-    IUnknown *soft = NULL;
-    if (FAILED(device->lpVtbl->QueryInterface(device, &NIID_INovaSoftDevice, (void **)&soft))) return NDXGI_ERROR_UNSUPPORTED;
-    soft->lpVtbl->Release(soft);
+    IUnknown *gpu = NULL;                                   /* (a GPU device: for composition only) */
+    if (!is_soft(device) && (hwnd || FAILED(device->lpVtbl->QueryInterface(device, &NIID_ID3D11Device, (void **)&gpu))))
+        return NDXGI_ERROR_UNSUPPORTED;
+    if (gpu) gpu->lpVtbl->Release(gpu);                     /* (held below, as the device) */
     if (!chain_format(desc->Format) || desc->SampleDesc.Count > 1) return NDXGI_ERROR_INVALID_CALL;
     if (!hwnd && (desc->SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL_ && desc->SwapEffect != DXGI_SWAP_EFFECT_FLIP_DISCARD_))
         return NDXGI_ERROR_INVALID_CALL;                    /* (composition takes flip-model chains only) */
@@ -490,8 +550,10 @@ static HRESULT make_chain(IUnknown *device, HWND hwnd, const NDXGI_SWAP_CHAIN_DE
     c->vtbl = &g_chain_vtbl;
     c->nova.lpVtbl = &g_nova_chain_vtbl;
     c->refs = 1;
-    c->device = device;
-    device->lpVtbl->AddRef(device);
+    c->device = gpu ? gpu : device;
+    c->device->lpVtbl->AddRef(c->device);
+    if (gpu)
+        ((void (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)gpu)[40])(gpu, &c->ctx);   /* GetImmediateContext */
     c->hwnd = hwnd;
     c->desc = *desc;
     if (!c->desc.BufferCount) c->desc.BufferCount = 1;
@@ -700,7 +762,8 @@ static FARPROC dxvk_proc(void *caller, const char *name)
  * CreateSwapChainForComposition is not implemented at all): Chromium's
  * software output in WebView2's GPU process does exactly that.  The
  * wrapper hands the three swap-chain calls for a software device to this
- * dll's factory and every other call to DXVK's. */
+ * dll's factory, composition swap chains DXVK refuses on its own devices
+ * too, and every other call to DXVK's. */
 typedef struct { const void *const *vtbl; LONG refs; IUnknown *inner; } Wrapped;
 #define INNER(w, i, T) ((T)((void *const *)*(void **)(w)->inner)[i])
 
@@ -791,8 +854,9 @@ static void STDMETHODCALLTYPE w_unreg23(Wrapped *w, DWORD c) { INNER(w, 23, void
 static HRESULT STDMETHODCALLTYPE w_forcomp(Wrapped *w, IUnknown *dev, const NDXGI_SWAP_CHAIN_DESC1 *d, void *restrict_to, void **out)
 {
     if (is_soft(dev)) return f_forcomp(NULL, dev, d, restrict_to, out);
-    return INNER(w, 24, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, const NDXGI_SWAP_CHAIN_DESC1 *, void *, void **))(
+    HRESULT hr = INNER(w, 24, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, const NDXGI_SWAP_CHAIN_DESC1 *, void *, void **))(
         w->inner, dev, d, restrict_to, out);
+    return SUCCEEDED(hr) ? hr : f_forcomp(NULL, dev, d, restrict_to, out);   /* (DXVK makes none: this dll's, on the GPU) */
 }
 static UINT STDMETHODCALLTYPE w_flags(Wrapped *w) { return INNER(w, 25, UINT (STDMETHODCALLTYPE *)(IUnknown *))(w->inner); }
 static HRESULT STDMETHODCALLTYPE w_byluid(Wrapped *w, LUID l, const GUID *iid, void **out)

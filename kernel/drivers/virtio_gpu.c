@@ -1371,9 +1371,29 @@ static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 s
     return c + BLIT_SIZE + 1;
 }
 
+bool VgpuPresentWait(UINT64 seq)
+{
+    return g_pctx && VgpuWait(g_pctx, 1, &g_psync, &seq, false, 1000000000ull) == 0;
+}
+
+void VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    for (int pg = 0; pg < s->pages; pg++)
+        for (int r = 0; r < h; r++) {
+            volatile UINT32 *row = (volatile UINT32 *)(PHYSMAP_BASE + s->phys) +
+                                   (UINT64)(y + pg * s->lines + r) * s->stride + x;
+            for (int c = 0; c < w; c += 1024) row[c] = row[c];
+            row[w - 1] = row[w - 1];
+        }
+}
+
 /* Copy (x, y, w, h) of @o's frame to (dx, dy) of every page of the screen
- * and write it into the screen's memory */
-static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h)
+ * and write it into the screen's memory: done when this returns, or (with
+ * @shown) once the host reaches shown->seq, the part of the screen in
+ * @shown to be touched then (VgpuPresentWait, VgpuScreenTouch) */
+static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
+                          VgpuShown *shown)
 {
     VgpuBlob *scr = o->src ? screen_res(v, s, o->src->format) : NULL;
     if (!scr) return false;
@@ -1381,6 +1401,7 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
     if (dy < 0) { y -= dy; h += dy; dy = 0; }
     if (dx + w > s->stride) w = s->stride - dx;
     if (dy + h > s->lines) h = s->lines - dy;
+    if (shown) *shown = (VgpuShown){ g_pseq, dx, dy, 0, 0 };
     if (w <= 0 || h <= 0) return true;
     UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
     for (int pg = 0; pg < s->pages && pg < 2; pg++)
@@ -1395,17 +1416,13 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
             return false;
     }
     UINT64 want = ++g_pseq;
-    if (VgpuWait(g_pctx, 1, &g_psync, &want, false, 1000000000ull) != 0) return false;
-    /* The host wrote the memory behind the guest's back: a write from the
-     * guest to each page of it marks them changed for QEMU's display */
-    for (int pg = 0; pg < s->pages; pg++)
-        for (int r = 0; r < h; r++) {
-            volatile UINT32 *row = (volatile UINT32 *)(PHYSMAP_BASE + s->phys) +
-                                   (UINT64)(dy + pg * s->lines + r) * s->stride + dx;
-            for (int c = 0; c < w; c += 1024) row[c] = row[c];
-            row[w - 1] = row[w - 1];
-        }
     DisplayStatAdd(DISPLAY_STAT_DIRECT_BYTES, (UINT64)w * h * 4 * s->pages);
+    if (shown) {
+        *shown = (VgpuShown){ want, dx, dy, w, h };
+        return true;
+    }
+    if (!VgpuPresentWait(want)) return false;
+    VgpuScreenTouch(s, dx, dy, w, h);
     return true;
 }
 
@@ -1418,7 +1435,8 @@ void VgpuOverlayDestroy(VgpuOverlay *o)
     kfree(o);
 }
 
-bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy)
+bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy,
+                        VgpuShown *shown)
 {
     Vgpu *v = present_dev();
     if (!v || src->v != v || !src->format || w <= 0 || h <= 0 || (UINT32)w > src->width || (UINT32)h > src->height)
@@ -1430,7 +1448,7 @@ bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuS
         o->src = src;
     }
     o->w = w; o->h = h;
-    if (!overlay_write(v, o, s, 0, 0, dx, dy, w, h)) return false;
+    if (!overlay_write(v, o, s, 0, 0, dx, dy, w, h, shown)) return false;
     DisplayStatAdd(DISPLAY_STAT_DIRECT_FRAMES, 1);
     return true;
 }
@@ -1444,5 +1462,5 @@ bool VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, 
     if (x + w > o->w) w = o->w - x;
     if (y + h > o->h) h = o->h - y;
     if (w <= 0 || h <= 0) return true;
-    return overlay_write(v, o, s, x, y, dx, dy, w, h);
+    return overlay_write(v, o, s, x, y, dx, dy, w, h, NULL);
 }

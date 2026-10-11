@@ -35,6 +35,7 @@
 #include "../io/pnp.h"
 #include "../drivers/virtio_gpu.h"
 #include "../ke/scheduler.h"
+#include "../ke/smp.h"
 
 /* Win32 window messages we deliver */
 #define WM_DESTROY        0x0002
@@ -2561,7 +2562,8 @@ void um_gui_process_gone(UmProcess *p)
  * drawn over that part of the screen: the window is on the primary monitor
  * at scale 1, and no window, popup, shadow, menu, the dock or the pointer
  * is over it.  The host then writes the frame into the screen's memory
- * (VgpuOverlayPresent), the window's bitmap keeping its last GDI frame.
+ * (VgpuOverlayPresent; the "present" thread finishes that while the
+ * program draws on), the window's bitmap keeping its last GDI frame.
  * Each time the desktop draws a part of the primary's screen (a frame of
  * the desktop, the pointer moving), gui_damage puts the overlay back over
  * it, or, when it is no longer alone there, stops showing it and asks
@@ -2608,6 +2610,65 @@ static void gui_damage(int x, int y, int w, int h)
     }
 }
 
+/* What the host is still writing into the screen for direct presentation:
+ * the "present" thread waits for it, then (desktop lock) touches that part
+ * and shows it, so that the program goes on to its next frame meanwhile */
+static KSpinLock  g_shown_lock = KSPINLOCK_INIT;
+static VgpuShown  g_shown;                    /* (w 0: nothing) */
+static VgpuScreen g_shown_scr;
+static Thread    *g_shown_thread;
+static volatile UINT32 g_shown_kick;
+
+static void shown_thread(void *arg)
+{
+    (void)arg;
+    bkl_release();                                /* (the desktop lock and its own) */
+    for (;;) {
+        __atomic_store_n(&g_shown_kick, 0, __ATOMIC_RELEASE);
+        IrqState st = spin_lock_irqsave(&g_shown_lock);
+        VgpuShown sh = g_shown;
+        VgpuScreen scr = g_shown_scr;
+        g_shown.w = 0;
+        spin_unlock_irqrestore(&g_shown_lock, st);
+        if (!sh.w) {
+            sched_sleep_until(&g_shown_kick, sched_ticks() + 100);
+            continue;
+        }
+        VgpuPresentWait(sh.seq);
+        DesktopLockAlone();
+        VgpuScreenTouch(&scr, sh.x, sh.y, sh.w, sh.h);
+        DisplayPrimaryShow(sh.x, sh.y, sh.w, sh.h);
+        DesktopUnlockAlone();
+    }
+}
+
+/* (desktop lock) */
+static void shown_add(const VgpuScreen *scr, const VgpuShown *sh)
+{
+    if (sh->w <= 0 || sh->h <= 0) return;
+    if (!g_shown_thread && !(g_shown_thread = sched_create_thread("present", shown_thread, NULL, PRIO_DESKTOP))) {
+        VgpuPresentWait(sh->seq);                 /* (no thread: here and now) */
+        VgpuScreenTouch(scr, sh->x, sh->y, sh->w, sh->h);
+        DisplayPrimaryShow(sh->x, sh->y, sh->w, sh->h);
+        return;
+    }
+    IrqState st = spin_lock_irqsave(&g_shown_lock);
+    if (g_shown.w && g_shown_scr.phys == scr->phys && g_shown_scr.stride == scr->stride &&
+        g_shown_scr.lines == scr->lines && g_shown_scr.pages == scr->pages) {
+        int x0 = g_shown.x < sh->x ? g_shown.x : sh->x, y0 = g_shown.y < sh->y ? g_shown.y : sh->y;
+        int x1 = g_shown.x + g_shown.w, y1 = g_shown.y + g_shown.h;
+        if (sh->x + sh->w > x1) x1 = sh->x + sh->w;
+        if (sh->y + sh->h > y1) y1 = sh->y + sh->h;
+        g_shown = (VgpuShown){ sh->seq, x0, y0, x1 - x0, y1 - y0 };
+    } else {
+        g_shown = *sh;
+        g_shown_scr = *scr;
+    }
+    spin_unlock_irqrestore(&g_shown_lock, st);
+    __atomic_store_n(&g_shown_kick, 1, __ATOMIC_RELEASE);
+    sched_unblock(g_shown_thread);
+}
+
 int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int y, int w, int h)
 {
     int r = 1;
@@ -2622,9 +2683,10 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
             g->ovl_on = false;                    /* (the GDI way from now: its bitmap is current again) */
         } else {
             if (!g->ovl) g->ovl = VgpuOverlayCreate();
-            if (g->ovl && VgpuOverlayPresent(g->ovl, src, w, h, &scr, x, y)) {
+            VgpuShown sh;
+            if (g->ovl && VgpuOverlayPresent(g->ovl, src, w, h, &scr, x, y, &sh)) {
                 GdiRect cr = WmClientRect(g->wnd);
-                DisplayPrimaryShow(x, y, w, h);
+                shown_add(&scr, &sh);
                 g->ovl_on = true;
                 g->ovl_r = rr;
                 g->ovl_dx = x - cr.x; g->ovl_dy = y - cr.y;

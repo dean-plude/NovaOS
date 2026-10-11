@@ -20,7 +20,10 @@ straight into the screen's memory: no pixel is copied by the guest.
   is a plain one, and a transfer writes that part into it.  The host
   draws most of a frame, so it copies each frame once; the window keeps
   the program's last shown buffer (it draws the next frame into the
-  other one) to write it there again.  (Showing a texture as the
+  other one) to write it there again.  The program goes on to its next
+  frame as soon as the copy is asked for: a kernel thread waits for the
+  host and then marks that part of the screen changed for QEMU's display
+  (a write from the guest to each page the host wrote).  (Showing a texture as the
   output itself would save that write, but QEMU then has no picture to
   take a screenshot of.)  It says yes only for a window on the primary at
   scale 1 with no window, shadow, popup, menu, the dock or the pointer
@@ -40,12 +43,14 @@ straight into the screen's memory: no pixel is copied by the guest.
   per second and move fewer bytes through guest memory a frame
   (read-backs, window bitmaps drawn, the desktop's back buffer copied to
   the screen, transfers to a virtio output).  In the QEMU VM without
-  KVM: 25.7 against 22.0 frames a second (39.0 against 45.5 ms a frame),
-  70 KiB against 3567 KiB a frame through guest memory.  A first version
+  KVM: 27.0 against 20.5 frames a second (37.1 against 48.7 ms a frame),
+  18 KiB against 3542 KiB a frame through guest memory.  It also prints
+  how much of a frame goes to SwapBuffers and to asking the kernel.  A first version
   copied each frame on the host twice (into the window's own texture,
   then onto the screen) and was slower than the GDI under KVM, where the
   guest's copies cost little and the host's time is all; it also asked
   the kernel before the host had drawn the frame, so the desktop stayed
-  held while the host drew.
+  held while the host drew, and then waited for the host's copy and
+  touched the screen's pages itself (6.6 ms a frame under KVM).
 - Vulkan's frames (Venus: DXVK and VKD3D-Proton) still come back through
   the GDI; they are the next step.

@@ -10413,6 +10413,30 @@ and the main process had about 170 MB of room left.
   RAM at once, touches its first, middle and last pages, and must be
   refused a commit larger than the RAM.
 
+## Composition swap chains on the GPU
+
+The first step of WebView2's GPU-composited output on Venus.  A program
+that renders with a GPU device (DXVK's, on Venus or lavapipe) and shows
+its frames through DirectComposition asks the factory for a swap chain
+made for composition on that device, and DXVK does not make those
+(`CreateSwapChainForComposition` returns `E_NOTIMPL`).  Now `dxgi.dll`
+makes them when DXVK refuses: the swap chain's buffer is a texture of the
+GPU device, which the program renders into on the GPU; each present copies
+the part that changed into a staging texture on the GPU and reads it back,
+and `dcomp.dll`'s visual draws that frame into its window as it does the
+software device's.  Nothing in DXVK is changed.
+
+- **dxgi.dll**: swap chains for composition on any Direct3D 11 device,
+  from DXVK's factory (wrapped) and from NovaOS's own; dirty rectangles
+  read back only the part that changed.
+- **dcomptest dxvk** (graphics suite, 64- and 32-bit): a hardware device,
+  its factory's composition swap chain, whose buffer is a texture of that
+  device; frames cleared and copied on the GPU, presented whole and with a
+  dirty rectangle, are in the window.
+- Chromium still uses its software output: its DirectComposition path
+  needs `DCompositionCreateDevice3` and surfaces, and the swap chains from
+  the factory of its device's adapter; those are the next step.
+
 ## Memory: the compressed system files are given back once unpacked
 
 The kernel image carries the system files, most of them zlib-compressed,
@@ -10449,6 +10473,34 @@ Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
 in the minute against 49 (34 of them a part of the screen), its longest
 frame took 0.9 s against 4.2 s, programs got 47% of the CPU against 38%,
 and the desktop watchdog (3 s without a frame) never fired.
+
+## Direct3D 12 presents in 32-bit programs
+
+The second part of the gaming roadmap's Direct3D 12 item (After 0.1,
+step 24.4).  A 32-bit Direct3D 12 program crashed the first time
+VKD3D-Proton reused its swap chain's blit command buffer: lavapipe freed
+the pointer 0x50 while resetting it.
+
+- **Cause**: 32-bit Mesa (lavapipe in the App Store's Mesa 3D 24.2.4, and
+  every Mesa release up to 26.1) sizes each recorded Vulkan command as the
+  entry header plus the command's arguments, but the header it measures
+  (`vk_cmd_queue_entry_base`, 20 bytes) is 4 bytes shorter than where the
+  arguments start in the real entry (24, as the union holds 64-bit
+  handles).  Every recorded command is allocated 4 bytes short.  NovaOS's
+  heap rounds blocks up to 16 bytes, so most commands had room to spare,
+  but `vkCmdSetScissor`'s entry fills its 32-byte class exactly and wrote
+  its scissor pointer over the size field of the next block's header.  The
+  heap then handed out a live block twice, and a later reset freed garbage.
+  64-bit Mesa is not affected (its header is already 8-byte aligned).
+- **Fix** (`ntdll`): the 32-bit heap header keeps its 16 bytes, but its 8
+  bytes of alignment padding now come first and the size and tag last, so
+  a write a few bytes past a block's end lands in padding nobody reads;
+  carving leaves the next header's room committed, so a block at the end
+  of the heap's committed memory has that slack too.  Mesa and
+  VKD3D-Proton are unchanged.
+- **Test**: `d3d12test` presents in its 32-bit run too (graphics suite,
+  `C:\Tests\d3d12test32.exe 3`): 40 frames on lavapipe in a local boot,
+  with the window centre read back red.
 
 ## Direct3D 12 through VKD3D-Proton
 
@@ -10496,6 +10548,61 @@ child window of a framed window of another process and checks the
 pixels inside and outside it.  Steam's connection to its servers still
 fails in the test sandbox, which reaches the internet only through an
 HTTPS proxy; signing in is a hand check.
+
+## A Direct3D 12 game: Squash the Creeps on Godot
+
+The last part of the gaming roadmap's Direct3D 12 item (After 0.1, step
+24.4).  The game is Squash the Creeps, the finished game of Godot's "Your
+first 3D game" tutorial (MIT, from Godot's demo projects), run by the
+official Godot 4.7 Windows build (MIT) with `--rendering-driver d3d12`.
+Godot was picked because it is free, open source, needs no store or
+sign-in, and its Direct3D 12 driver turns its shaders into DXIL itself, so
+nothing but `d3d12.dll` (VKD3D-Proton, on Mesa 3D's lavapipe) and DXVK's
+`dxgi.dll` stands between it and the screen.
+
+What NovaOS lacked, in the order Godot hit it:
+
+- **shell32 `StrRStrIW`**: Godot's console launcher
+  (`Godot_..._console.exe`) finds its own name's `_console.exe` with it.
+- **CreateProcess with an unquoted path with spaces**: the launcher starts
+  the game as `C:\Apps\Squash the Creeps\Godot....exe ARGS`, unquoted, with
+  no program name.  NovaOS took `C:\Apps\Squash` as the program; it now
+  tries the path at each space in turn, as Windows does.
+- **crypt32 `CryptBinaryToStringA` with `CRYPT_STRING_BASE64HEADER`**
+  (PEM, with `CRYPT_STRING_NOCR`): Godot exports the root certificate
+  store that way at start, and its loop never moved to the next
+  certificate when the call failed, so it printed the same error forever.
+- **Job object notifications**: the launcher puts the game in a job with a
+  completion port and waits for `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO`.
+  Jobs were stubs; kernel32 now watches the processes assigned to a job
+  and posts `NEW_PROCESS`, `EXIT_PROCESS` and `ACTIVE_PROCESS_ZERO` to its
+  port (processes they start themselves are not added).
+- **uiautomationcore `UiaLookupId`** (Godot's accessibility layer looks up
+  newer property GUIDs at start; each GUID gets its own number, as no UI
+  Automation client reads them on NovaOS), and the imports Godot names but
+  had not called yet: ole32 `GetErrorInfo`/`SetErrorInfo` (handed to
+  oleaut32) and dbghelp `ImageDirectoryEntryToData(Ex)`/`ImageRvaToVa`.
+
+- **ntdll `__chkstk` and the half-float helpers** (`__extendhfsf2`,
+  `__truncsfhf2` and their double forms): lavapipe's LLVM compiles Godot's
+  shaders to machine code and links the helpers it calls by name from the
+  loaded DLLs, as Windows' ntdll exports them.  Without F16C (NovaOS's
+  test machine has none) every half-precision conversion is such a call,
+  and an unresolved one jumped to address 0.
+- **Mesa 3D 26.2.0 in the App Store**: lavapipe in Mesa 24.2.4 (LLVM 19)
+  crashed inside its own compiler on Godot's shaders; 26.2.0 (LLVM 22)
+  compiles them.  The built-in OpenGL stays on 24.2.4.
+
+Godot's default Forward+ renderer now plays the game on Direct3D 12
+("D3D12 11_0 - Forward+ - llvmpipe (LLVM 22.1.8)").  Lavapipe still refuses
+two of its compute pipelines (`vkCreateComputePipelines` returns
+`VK_ERROR_UNKNOWN`); the game draws without them.
+
+- **Test**: the app corpus's `Squash the Creeps` installs Mesa 3D, DXVK and
+  VKD3D-Proton from the App Store, imports the game's assets, starts it on
+  Direct3D 12 and waits for its field to fill the window; Godot's log must
+  name D3D12.  `cmdlinetest spawn` checks the unquoted path and the job's
+  completion port.
 
 ## Image cache: Firefox's processes share xul.dll's pages at load
 

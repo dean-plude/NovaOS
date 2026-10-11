@@ -4,8 +4,9 @@ NovaOS's own opengl32.dll hands every OpenGL call to Mesa's when it is
 there (userland/opengl32/opengl32.c), so with these files on drive C: every
 program gets OpenGL 4.5 on the CPU with nothing to install, as Windows
 programs expect a display driver's OpenGL to be there.  The files are the
-unmodified 64- and 32-bit WGL build of mesa-dist-win (MIT), the same
-pinned, checksum-verified archive the App Store's "Mesa 3D" entry lists:
+unmodified 64- and 32-bit WGL build of mesa-dist-win (MIT), pinned and
+checksum-verified (the App Store's "Mesa 3D" entry, the Vulkan driver, has
+moved on to a newer release):
 Mesa's opengl32.dll installed as opengl32_mesa.dll, with libgallium_wgl.dll
 (llvmpipe) and libglapi.dll beside it.
 """

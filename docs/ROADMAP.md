@@ -86,11 +86,13 @@ named program or test demonstrates it.
 - **Direct3D 12** (After 0.1, step 24.4): VKD3D-Proton (LGPL-2.1, from the
   App Store as its own unchanged DLLs, `d3d12_vkd3d.dll` and `d3d12core.dll`)
   behind NovaOS's `d3d12.dll`.  ~~A Direct3D 12 sample renders~~ Done:
-  `d3d12test` draws, reads back and (64-bit) presents a triangle on
-  lavapipe ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton)).
-  Still to do: 32-bit programs' first present (it crashes inside
-  lavapipe's 32-bit window-system code), and one Direct3D 12 game that
-  renders.
+  `d3d12test` draws, reads back and presents a triangle on lavapipe,
+  64- and 32-bit ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton),
+  [32-bit present](HISTORY.md#direct3d-12-presents-in-32-bit-programs)).
+  ~~One Direct3D 12 game renders~~ Done: Squash the Creeps on Godot 4.7's
+  Forward+ renderer ([A Direct3D 12 game](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot)).
+  Still to do: two of Godot's compute pipelines lavapipe refuses
+  (`VK_ERROR_UNKNOWN`), and sound in Godot (WASAPI).
 - ~~**Audio**: `winmm` wave output and WASAPI over a real sound device
   (QEMU's Intel HDA)~~ Done; see [Sound](HISTORY.md#sound-intel-hd-audio-winmm-and-wasapi).
   ~~Recording (`waveIn`, capture endpoints) and endpoint volume
@@ -235,7 +237,10 @@ named program or test demonstrates it.
   ANGLE's Direct3D 11 device on Venus and presents through the WARP device
   and DirectComposition instead of restarting until the browser crashed)~~
   Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
-  (DirectComposition on the GPU, `DCompositionCreateDevice3`).
+  (DirectComposition on the GPU): ~~composition swap chains on the GPU
+  device~~ Done (`dcomptest dxvk`); next `DCompositionCreateDevice3`
+  (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces) and the
+  DXVK adapter's factory making them, so Chromium turns the path on.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music

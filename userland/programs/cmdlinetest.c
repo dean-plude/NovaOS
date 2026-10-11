@@ -11,7 +11,11 @@
  * (1,000, 8,191 and 32,766 characters, the longest Windows takes: spaces,
  * quotes, backslashes and characters outside ASCII in the arguments),
  * CreateProcessA, and cmd.exe /c (8,000 characters), and checks that
- * 32,767 characters fail with ERROR_FILENAME_EXCED_RANGE. */
+ * 32,767 characters fail with ERROR_FILENAME_EXCED_RANGE.  A copy of itself
+ * in a folder with spaces starts from an unquoted command line with no
+ * program name given (Windows tries the path at each space in turn; Godot's
+ * console launcher starts its game that way, suspended in a job whose
+ * completion port must then say no process is left in it). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -188,10 +192,45 @@ static void spawn_tests(void)
     CHECK("cmd.exe /c, 8000 characters", run_child(cmd, c.s, 0, &err) == 0);
     free(c.s);
     free(inner);
+
+    /* an unquoted path with spaces as the program (no application name) */
+    WCHAR dir[MAX_PATH], copy[MAX_PATH], unq[MAX_PATH + 32];
+    GetTempPathW(MAX_PATH, dir);
+    wcscat(dir, L"cmdline space dir");
+    CreateDirectoryW(dir, NULL);
+    swprintf(copy, MAX_PATH, L"%ls\\cmdline test.exe", dir);
+    BOOL copied = CopyFileW(self, copy, FALSE);
+    swprintf(unq, MAX_PATH + 32, L"%ls spaced-child", copy);
+    /* started as Godot's console launcher starts its game: suspended, in a
+     * job whose completion port says when no process is left in it */
+    STARTUPINFOW sw = { sizeof(sw) };
+    PROCESS_INFORMATION pi;
+    DWORD code = 99, msg = 0;
+    HANDLE job = CreateJobObjectW(NULL, NULL), port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT jp = { job, port };
+    SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &jp, sizeof(jp));
+    if (copied && CreateProcessW(NULL, unq, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &sw, &pi)) {
+        AssignProcessToJobObject(job, pi.hProcess);
+        ResumeThread(pi.hThread);
+        ULONG_PTR key;
+        LPOVERLAPPED ov;
+        while (GetQueuedCompletionStatus(port, &msg, &key, &ov, 60000))
+            if ((HANDLE)key == job && msg == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) break;
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    } else printf("  unquoted path with spaces: copy %d, error %lu\n", copied, (unsigned long)GetLastError());
+    CloseHandle(job);
+    CloseHandle(port);
+    CHECK("job completion port: no process left", msg == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO);
+    CHECK("CreateProcessW, unquoted program path with spaces", code == 7);
+    DeleteFileW(copy);
+    RemoveDirectoryW(dir);
 }
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[argc - 1], "spaced-child")) return 7;
     if (argc > 1 && !strncmp(argv[1], "len=", 4)) return check_self(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "spawn")) {
         spawn_tests();

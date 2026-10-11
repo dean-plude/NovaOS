@@ -949,3 +949,21 @@ SHSTDAPI_(HRESULT) SHCreateAssociationRegistration(REFIID iid, void **out)
     *out = 0;
     return (HRESULT)0x80040154L;                        /* REGDB_E_CLASSNOTREG */
 }
+
+/* The last case-insensitive match of @find in @s that starts before @last
+ * (the end of @s when NULL); shell32 exports it as shlwapi does (Godot
+ * finds its own path's extension with it) */
+static WCHAR fold_ch(WCHAR c) { return (WCHAR)(ULONG_PTR)CharLowerW((LPWSTR)(ULONG_PTR)c); }
+
+SHSTDAPI_(LPWSTR) StrRStrIW(LPCWSTR s, LPCWSTR last, LPCWSTR find)
+{
+    if (!s || !find || !*find) return 0;
+    int n = lstrlenW(find);
+    if (!last) last = s + lstrlenW(s);
+    for (LPCWSTR p = last - 1; p >= s; p--) {
+        int i = 0;
+        while (i < n && p[i] && fold_ch(p[i]) == fold_ch(find[i])) i++;
+        if (i == n) return (LPWSTR)p;
+    }
+    return 0;
+}

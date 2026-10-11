@@ -1,1 +1,1 @@
-| **Mesa 3D 24.2.4** (OpenGL built in; Vulkan from the App Store, Runtimes) | Works | OpenGL 4.5 on the CPU (llvmpipe, on drive C: from the start) and Vulkan (lavapipe), 64- and 32-bit | core self-test `gl2test`, CI graphics tests (`gltest`) |
+| **Mesa 3D** (OpenGL 24.2.4 built in; Vulkan 26.2.0 from the App Store, Runtimes) | Works | OpenGL 4.5 on the CPU (llvmpipe, on drive C: from the start) and Vulkan (lavapipe), 64- and 32-bit | core self-test `gl2test`, CI graphics tests (`gltest`) |

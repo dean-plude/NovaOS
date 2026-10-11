@@ -67,19 +67,19 @@
 #define ST_CANNOT_DELETE           0xC0000121u
 #define ST_DELETE_PENDING          0xC0000056u
 
-/* A program may commit up to 7/8 of the machine's memory (pages are only
- * taken when first touched, so this bounds promises, not use).  The
- * machine's memory is its RAM: pmm_stats' total also counts the holes
- * below the highest address (6144 pages on a 4 GB machine), and a promise
- * past the RAM became an access violation when the page was first touched
- * instead of a commit that fails, as on Windows. */
+/* A program may commit up to the machine's RAM (pages are only taken when
+ * first touched, so this bounds promises, not use).  The machine's memory
+ * is its RAM: pmm_stats' total also counts the holes below the highest
+ * address (6144 pages on a 4 GB machine).  Shared module pages are not
+ * charged (img_privatize charges a page once it is the process's own), so
+ * this counts a program's own memory only; the cap was 7/8 of the RAM
+ * before that, and Firefox's main process reached it.  A touched page that
+ * finds no free memory waits for some (UmDemandWait) before it becomes an
+ * access violation, since there is no page file to back the promise. */
 static UINT64 proc_commit_limit(void)
 {
     static UINT64 limit;
-    if (!limit) {
-        UINT64 total = pmm_ram_pages();
-        limit = total - total / 8;
-    }
+    if (!limit) limit = pmm_ram_pages();
     return limit;
 }
 #define PROC_MEM_LIMIT_PAGES proc_commit_limit()

@@ -524,7 +524,33 @@ bool UmDemandFault(UINT64 va)
     UmProcess *p = UmCurrent();
     if (!p || va >= UINT64_C(0x00007FFFFFFF0000)) return false;
     pte_t *e = walk(p->pml4, va, false);
-    return e && back_page(p, e);
+    if (!e || !back_page(p, e)) return false;
+    UmThread *t = UmCurrentThread();
+    if (t) t->oom_tick = 0;
+    return true;
+}
+
+/* A committed page touched from user mode found no free memory (UmDemandFault
+ * failed on a PTE_LAZY entry).  Commit is not backed by a page file, so a
+ * program can be promised more than is free when it touches it; the saved
+ * files of C: the "persist" thread lets go of when memory is short, and
+ * programs ending, give memory back.  So the thread runs the instruction
+ * again (the timer lets the others run in between) for up to 3 seconds
+ * before the access violation. */
+bool UmDemandWait(UINT64 va)
+{
+    UmProcess *p = UmCurrent();
+    UmThread *t = UmCurrentThread();
+    if (!p || !t || va >= UINT64_C(0x00007FFFFFFF0000)) return false;
+    pte_t *e = walk(p->pml4, va, false);
+    if (!e || !(__atomic_load_n(e, __ATOMIC_ACQUIRE) & PTE_LAZY)) return false;
+    UINT64 now = sched_ticks();
+    if (!t->oom_tick) t->oom_tick = now ? now : 1;
+    if (now - t->oom_tick < 300) return true;
+    t->oom_tick = 0;
+    kprintf("[UM] %s: no memory for a committed page at 0x%llx (%llu MB free); access violation\n",
+            p->name, (unsigned long long)va, (unsigned long long)(pmm_free_now() >> 8));
+    return false;
 }
 
 /* An instruction fetch from @va hit a page that is not executable: in a

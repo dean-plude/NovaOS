@@ -334,6 +334,13 @@ int main(int argc, char **argv)
     InitializeCriticalSection(&g_cs);
     run("critical section", cs_worker, g_threads, NULL);
     if (g_plain == (long)g_threads * ITER) pass++; else { fail++; printf("  counter %ld, expected %ld\n", g_plain, (long)g_threads * ITER); }
+    /* Again spinning before a waiter sleeps, as the CRT's locks do (the top
+     * bit is a flag, not part of the count: spin 4000 rounds, not 2^31) */
+    DeleteCriticalSection(&g_cs);
+    InitializeCriticalSectionAndSpinCount(&g_cs, 0x80000000u | 4000);
+    g_plain = 0;
+    run("critical section (spin count)", cs_worker, g_threads, NULL);
+    if (g_plain == (long)g_threads * ITER) pass++; else { fail++; printf("  counter %ld, expected %ld\n", g_plain, (long)g_threads * ITER); }
 
     Pair pairs[8];
     void *pa[16];

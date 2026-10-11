@@ -23,6 +23,19 @@ static UINT64 g_rip[PROF_MAX], g_caller[PROF_MAX];
 #define PROF_CALLS 0x400                    /* system calls, then 0x300 + interrupt vectors */
 static UINT32 g_calls[PROF_CALLS];
 
+static void serial_line(void *ctx, const char *line) { (void)ctx; (void)line; }
+static volatile UINT32 g_gen;               /* which ProfStart a reporter belongs to */
+
+/* A window with an end: report it on the serial log when it closes, so a
+ * program holding the keyboard (a browser starting) needs no "profile" */
+static void reporter(void *arg)
+{
+    UINT32 gen = (UINT32)(uintptr_t)arg;
+    while (g_on && g_gen == gen && sched_ticks() < g_to) sched_sleep_until(NULL, g_to);
+    if (g_on && g_gen == gen) ProfReport(serial_line, NULL);
+    sched_exit_current();
+}
+
 void ProfStart(UINT64 delay, UINT64 len)
 {
     g_on = false;
@@ -30,7 +43,9 @@ void ProfStart(UINT64 delay, UINT64 len)
     g_from = sched_ticks() + delay;
     g_to = len ? g_from + len : 0;
     memset(g_calls, 0, sizeof(g_calls));
+    UINT32 gen = __atomic_add_fetch(&g_gen, 1, __ATOMIC_RELAXED);
     g_on = true;
+    if (len) sched_create_thread("profile", reporter, (void *)(uintptr_t)gen, 8);
 }
 
 void ProfInterrupt(UINT64 vector)

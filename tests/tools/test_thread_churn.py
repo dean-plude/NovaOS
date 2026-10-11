@@ -217,6 +217,7 @@ typedef bool BOOLEAN;
 typedef struct { void *DebugInfo; int LockCount, RecursionCount; HANDLE OwningThread, LockSemaphore; ULONG_PTR SpinCount; } RTL_CRITICAL_SECTION, *PRTL_CRITICAL_SECTION;
 static _Thread_local ULONG tid = 1;
 static ULONG cur_tid(void) { return tid; }
+static ULONG active_cpus(void) { return 2; }
 static volatile int handles;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;

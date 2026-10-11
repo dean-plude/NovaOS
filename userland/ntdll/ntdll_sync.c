@@ -23,6 +23,8 @@ static void  backoff(ULONG *round)
     LARGE_INTEGER iv; iv.QuadPart = -10000;     /* 1 ms: the next 10 ms tick */
     NtDelayExecution(FALSE, &iv);
 }
+/* The CPUs at work (KUSER_SHARED_DATA.ActiveProcessorCount) */
+static ULONG active_cpus(void) { return *(volatile ULONG *)(ULONG_PTR)0x7FFE03C0; }
 /* Milliseconds since boot (KUSER_SHARED_DATA.TickCount, 10 ms ticks) */
 static ULONGLONG now_ms(void) { return (ULONGLONG)*(volatile ULONG *)(ULONG_PTR)0x7FFE0320 * 10; }
 
@@ -56,26 +58,39 @@ static HANDLE cs_event(PRTL_CRITICAL_SECTION cs)
     return ne;
 }
 
+/* The rounds a contending thread spins before it sleeps: the low 24 bits
+ * of SpinCount (the top byte holds flags, as on Windows: 0x80000000 asks
+ * for the event up front), and none on one CPU, where the owner cannot
+ * run while we spin */
+static ULONG cs_spin(PRTL_CRITICAL_SECTION cs)
+{
+    ULONG n = (ULONG)(cs->SpinCount & 0x00FFFFFF);
+    return n && active_cpus() > 1 ? n : 0;
+}
+
+static NTSTATUS cs_owned(PRTL_CRITICAL_SECTION cs, ULONG tid)
+{
+    cs->OwningThread = (HANDLE)(ULONG_PTR)tid;
+    cs->RecursionCount = 1;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS NTAPI RtlEnterCriticalSection(PRTL_CRITICAL_SECTION cs)
 {
     ULONG tid = cur_tid();
     if ((ULONG)(ULONG_PTR)cs->OwningThread == tid) { cs->RecursionCount++; return STATUS_SUCCESS; }
-    if (InterlockedIncrement(&cs->LockCount) == 0) {
-        cs->OwningThread = (HANDLE)(ULONG_PTR)tid;
-        cs->RecursionCount = 1;
-        return STATUS_SUCCESS;
-    }
-    /* Contended: spin briefly, then park on the event. */
-    for (ULONG_PTR i = 0; i < cs->SpinCount; i++) {
-        if (cs->OwningThread == 0 && InterlockedCompareExchange(&cs->LockCount, 0, -1) < 0) {
-            /* raced to free — unlikely with our increment; fall through to wait */
-        }
+    /* Contended: spin while the owner may be about to leave, taking the
+     * lock the moment it is free with nobody queued (LockCount -1), and
+     * only then join the queue and park on the event.  (Spinning after
+     * joining the queue could never win the lock: the queue is handed it.) */
+    for (ULONG i = 0, n = cs_spin(cs); i < n; i++) {
+        if (cs->LockCount == -1 && InterlockedCompareExchange(&cs->LockCount, 0, -1) == -1)
+            return cs_owned(cs, tid);
         YieldProcessor();
     }
+    if (InterlockedIncrement(&cs->LockCount) == 0) return cs_owned(cs, tid);
     NtWaitForSingleObject(cs_event(cs), FALSE, 0);
-    cs->OwningThread = (HANDLE)(ULONG_PTR)tid;        /* we were handed ownership */
-    cs->RecursionCount = 1;
-    return STATUS_SUCCESS;
+    return cs_owned(cs, tid);                        /* we were handed ownership */
 }
 
 BOOLEAN NTAPI RtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION cs)

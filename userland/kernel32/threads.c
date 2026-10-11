@@ -402,8 +402,8 @@ BOOL WINAPI CompareObjectHandles(HANDLE first, HANDLE second)
 VOID WINAPI InitializeCriticalSection(LPCRITICAL_SECTION cs) { RtlInitializeCriticalSection(cs); }
 BOOL WINAPI InitializeCriticalSectionAndSpinCount(LPCRITICAL_SECTION cs, DWORD spin)
 { RtlInitializeCriticalSectionAndSpinCount(cs, spin); return TRUE; }
-/* The spin count before a waiter sleeps (NovaOS's critical sections keep
- * it but don't spin on it): returns the old one */
+/* The rounds a waiter spins before it sleeps (low 24 bits; see
+ * RtlEnterCriticalSection): returns the old count */
 WINBASEAPI DWORD WINAPI SetCriticalSectionSpinCount(LPCRITICAL_SECTION cs, DWORD spin)
 {
     DWORD old = (DWORD)cs->SpinCount;

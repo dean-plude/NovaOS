@@ -1098,7 +1098,11 @@ at once from `/stream/BYTES/SEED`).
   (look the address up in a DLL's `.map` next to it in the build); and the
   system calls made (3xx: an interrupt under the big lock).  For example
   `tools/novarun.py --smp 4 "profile on 550 100" "smpstress throughput 0
-  files many" profile`.
+  files many" profile`.  With a LENGTH the report also goes to the serial
+  log on its own when the window closes, so a program that takes the
+  keyboard (a browser starting) needs no `profile`: `tools/novarun.py
+  --keep out "profile on 50 6000" "start browser" "!wait 100"`, then
+  `grep PROF out/serial.log`.
 
 ### GDB
 

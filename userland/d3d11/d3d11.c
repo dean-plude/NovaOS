@@ -3,11 +3,21 @@
  *
  * NovaOS has no display adapter driver of its own.  When DXVK is installed
  * from the App Store (as d3d11_dxvk.dll beside this one), every entry point
- * hands the call to DXVK, so Direct3D 11 runs on Mesa's lavapipe; without
- * it, a hardware device fails the way Windows does when no adapter supports
- * Direct3D 11, and programs fall back to their software paths.  What a WARP
- * device is asked for (Chromium's software compositor) gets the software
- * device in soft.c, on dxgi.dll's Basic Render Driver.
+ * hands the call to DXVK, so Direct3D 11 runs on Venus or Mesa's lavapipe;
+ * without it, a hardware device fails the way Windows does when no adapter
+ * supports Direct3D 11, and programs fall back to their software paths.
+ *
+ * What a WARP device is asked for at feature level 9_1 (Chromium's software
+ * compositor) gets the software device in soft.c, on dxgi.dll's Basic
+ * Render Driver, whether DXVK is installed or not: on Windows WARP is the
+ * CPU's rasterizer whatever the GPU.  Chromium presents that device's
+ * frames through a swap chain for DirectComposition, which DXVK's factory
+ * does not make (E_NOTIMPL: WebView2's GPU process restarted until the
+ * browser gave up); dxgi.dll's factories, DXVK's as programs get it
+ * included, make the software device's swap chains themselves.  A WARP
+ * device at 9_3 or higher (ANGLE's D3D11-WARP renderer) still goes to
+ * DXVK, as does every WARP request in a 32-bit process (soft.c is 64-bit
+ * only).
  */
 #include <windows.h>
 #include <novadx.h>
@@ -59,8 +69,11 @@ D3D11API HRESULT WINAPI D3D11CreateDevice(void *adapter, UINT type, HMODULE sw, 
                                           UINT sdk, void **device, UINT *level, void **context)
 {
     CreateDevice_t f = (CreateDevice_t)dxvk("D3D11CreateDevice");
+    if (soft_wanted(adapter, type, levels, n)) {
+        HRESULT hr = soft_create_device(flags, device, level, context);
+        if (SUCCEEDED(hr) || !f) return hr;
+    }
     if (f) return f(adapter, type, sw, flags, levels, n, sdk, device, level, context);
-    if (soft_wanted(adapter, type, levels, n)) return soft_create_device(flags, device, level, context);
     none(device, context, level);
     return DXGI_ERROR_UNSUPPORTED_;
 }
@@ -70,11 +83,11 @@ D3D11API HRESULT WINAPI D3D11CreateDeviceAndSwapChain(void *adapter, UINT type, 
                                                       UINT *level, void **context)
 {
     CreateDeviceAndSwapChain_t f = (CreateDeviceAndSwapChain_t)dxvk("D3D11CreateDeviceAndSwapChain");
-    if (f) return f(adapter, type, sw, flags, levels, n, sdk, desc, swapchain, device, level, context);
     if (swapchain) *swapchain = NULL;
     if (soft_wanted(adapter, type, levels, n)) {         /* the device, and a swap chain from dxgi.dll's factory */
         IUnknown *dev = NULL;
         HRESULT hr = soft_create_device(flags, (void **)&dev, level, context);
+        if ((FAILED(hr) || !dev) && f) return f(adapter, type, sw, flags, levels, n, sdk, desc, swapchain, device, level, context);
         if (FAILED(hr) || !dev) { none(device, context, level); return FAILED(hr) ? hr : E_INVALIDARG; }
         if (swapchain && desc) {
             typedef HRESULT (WINAPI *CreateFn)(const GUID *, void **);
@@ -98,6 +111,7 @@ D3D11API HRESULT WINAPI D3D11CreateDeviceAndSwapChain(void *adapter, UINT type, 
         else dev->lpVtbl->Release(dev);
         return S_OK;
     }
+    if (f) return f(adapter, type, sw, flags, levels, n, sdk, desc, swapchain, device, level, context);
     none(device, context, level);
     return DXGI_ERROR_UNSUPPORTED_;
 }

@@ -6,4 +6,6 @@
   `dxgi.dll` lists Windows' Microsoft Basic Render Driver and `d3d11.dll`
   gives a WARP device that maps and copies textures, with `dcomp.dll`
   showing its swap chains, for Chromium's software compositor
-  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)).
+  ([WebView2 draws its page](HISTORY.md#webview2-draws-its-page)); with
+  DXVK the WARP device and its swap chains stay NovaOS's
+  ([WebView2 on Venus](HISTORY.md#webview2-on-venus)).

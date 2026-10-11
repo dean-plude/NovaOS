@@ -235,13 +235,12 @@ named program or test demonstrates it.
   SDL 1.2 through winmm's joystick functions, into its first level)~~ Done;
   ~~a DirectInput game pad game (Cave Story with an Xbox 360 pad through
   DirectInput 7: the opening talk and Quote walking in the Start Point
-  cave)~~ Done (all nine in the nightly corpus).  Still to do:
-  joining a Teeworlds game on its own server (it times out under TCG
-  while Mesa compiles its shaders; its menus follow the mouse with its
-  default settings, SDL recentring the pointer with `SetCursorPos`), GOG
-  GALAXY's client, signing in to Steam (its login window opens and draws),
-  Roblox's player (its anti-cheat
-  refuses virtual machines).
+  cave)~~ Done (all nine in the nightly corpus); ~~joining a Teeworlds
+  game on its own server (`teeworlds_srv.exe` on the same machine, over
+  the loopback interface; it times out under TCG while Mesa compiles its
+  shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
+  to do: GOG GALAXY's client, signing in to Steam (its login window opens
+  and draws), Roblox's player (its anti-cheat refuses virtual machines).
 
 <!-- END generated:next-apps -->
 

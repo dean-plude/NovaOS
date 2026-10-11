@@ -7,7 +7,8 @@
   and dual-stack sockets with `getaddrinfo`, and its socket options reach
   the TCP/IP stack (`TCP_NODELAY`, `SO_RCVTIMEO`/`SO_SNDTIMEO`,
   `SO_LINGER`, `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_BROADCAST`, `IP_TTL`,
-  `SO_RCVBUF`/`SO_SNDBUF`) and read back; a program keeps hundreds of
+  `SO_RCVBUF`/`SO_SNDBUF`, and `IPV6_V6ONLY`, on by default as on
+  Windows, so `[::]` and `0.0.0.0` can share a port) and read back; a program keeps hundreds of
   sockets open at once, as a browser does, and `select`, `WSAPoll` and
   `WSAEventSelect` wait on any number of them; a UDP socket can be
   connected to a peer, and `WSADuplicateSocket` hands a socket to another

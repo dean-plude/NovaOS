@@ -623,7 +623,7 @@ void present(Wnd *t)
         size_t off = (size_t)y * t->stride + r.left;
         memcpy(t->front + off, t->back + off, n);
     }
-    NtNovaGuiCtl(t->kid, CTL_PRESENT, 0, NULL);
+    NtNovaGuiCtl(t->kid, CTL_PRESENT, 0, &r);        /* (the desktop redraws only that part) */
 }
 
 void present_thread(DWORD tid)

@@ -1096,7 +1096,9 @@ at once from `/stream/BYTES/SEED`).
   kernel, waiting for the big kernel lock and idle; the busiest kernel
   functions and their callers; the busiest 64-byte lines of program code
   (look the address up in a DLL's `.map` next to it in the build); and the
-  system calls made (3xx: an interrupt under the big lock).  For example
+  system calls made (3xx: an interrupt under the big lock); and the
+  desktop's frames: how many, how many redrew the whole screen rather than
+  the part that changed, the time spent drawing and the longest frame.  For example
   `tools/novarun.py --smp 4 "profile on 550 100" "smpstress throughput 0
   files many" profile`.  With a LENGTH the report also goes to the serial
   log on its own when the window closes, so a program that takes the

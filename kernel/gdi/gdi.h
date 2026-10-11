@@ -93,6 +93,14 @@ void GdiFlip(void);
 /* Clip all drawing to a logical rectangle (e.g. a window's client area). */
 void GdiSetClip(GdiRect r);
 void GdiResetClip(void);
+bool GdiInClip(GdiRect r);
+GdiRect GdiClipRect(void);           /* (logical, rounded out) */
+
+/* The part of the desktop a frame redraws (NULL: all of it): clips stay
+ * inside it, GdiCacheRestore and GdiPresent touch only it.  Spoiled: a
+ * backdrop blur read pixels outside it, so draw the frame whole. */
+bool GdiSetBounds(const GdiRect *r);
+bool GdiBoundsSpoiled(void);
 
 /* Frame cache: save the back buffer (e.g. after drawing the static desktop
  * background) and restore it at the start of the next frame instead of

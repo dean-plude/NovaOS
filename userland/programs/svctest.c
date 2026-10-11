@@ -5,7 +5,9 @@
  *                      name with spaces and an ImagePath of the form
  *                      "path" /service, starts it with arguments, waits
  *                      for SERVICE_RUNNING, sends it controls, stops and
- *                      deletes it, and checks what the service saw;
+ *                      deletes it, and checks what the service saw (a
+ *                      LocalSystem service runs elevated, as GOG Galaxy's
+ *                      expects, though the test itself is not);
  *   svctest /service   (started by the control manager) the service:
  *                      StartServiceCtrlDispatcher, ServiceMain, the
  *                      SERVICE_STATUS handshake and a control handler;
@@ -125,6 +127,17 @@ static DWORD run_self(const WCHAR *arg)
     return code;
 }
 
+/* TokenElevation of this process: 1 when it runs as an administrator */
+static DWORD elevation(void)
+{
+    HANDLE t;
+    DWORD e = 0, n;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t)) return 0xFFFFFFFF;
+    if (!GetTokenInformation(t, TokenElevation, &e, sizeof(e), &n)) e = 0xFFFFFFFE;
+    CloseHandle(t);
+    return e;
+}
+
 static void WINAPI service_main(DWORD argc, LPWSTR *argv)
 {
     g_status = RegisterServiceCtrlHandlerExW(argv[0], handler, &g_st);
@@ -137,6 +150,7 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv)
         at += snprintf(line + at, sizeof(line) - at, " [%ls]", argv[i]);
     note("%s", line);
     note("child %lu", (unsigned long)run_self(L"/child"));
+    note("elevated %lu", (unsigned long)elevation());
     report(SERVICE_RUNNING, SERVICE_ACCEPT_STOP, 0, 0);
     WaitForSingleObject(g_stop, INFINITE);
     note("stopping");
@@ -295,6 +309,7 @@ int main(int argc, char **argv)
     snprintf(want, sizeof(want), "control %d ctx ok", USER_CONTROL);
     CHECK("the handler gets its context and the user control", strstr(log, want) != NULL);
     CHECK("the handler never sees a control the service does not accept", strstr(log, "control 2 ") == NULL);
+    CHECK("a LocalSystem service runs elevated", strstr(log, "elevated 1") != NULL);
     CHECK("the dispatcher returns once the service stops", strstr(log, "stopping") && strstr(log, "dispatcher returned"));
 
     CHECK("DeleteService", DeleteService(s));

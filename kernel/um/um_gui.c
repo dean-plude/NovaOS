@@ -932,7 +932,7 @@ static UINT64 sys_gui_invalidate(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     GuiWin *g = win_of_handle(p, a1);
     if (g) enqueue_locked(g, WM_PAINT, 0, 0, 0, 0);
     spin_unlock_irqrestore(&g_gui_lock, s);
-    if (g) { WmInvalidate(); gui_wake(g->tid, WM_PAINT); }
+    if (g) gui_wake(g->tid, WM_PAINT);        /* (it presents what it paints: CTL_PRESENT) */
     return 0;
 }
 

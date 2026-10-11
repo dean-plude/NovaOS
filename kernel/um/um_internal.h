@@ -290,6 +290,8 @@ struct UmProcess {
     int         nmodules;
     RamNode    *images[UM_MAX_MODULES];   /* its program and DLL files, held (in use: not deleted or replaced) */
     int         nimages;
+    struct ImgCache *imgc[UM_MAX_MODULES];  /* the image cache entries its loads kept or took (um.c) */
+    int         nimgc;
     UINT16      init_order[UM_MAX_MODULES];   /* dependencies first */
     int         ninit;
     volatile UINT32 pages;      /* resident user pages (backed by memory) */

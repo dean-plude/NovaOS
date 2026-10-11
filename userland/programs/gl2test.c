@@ -181,6 +181,32 @@ int main(void)
     wglMakeCurrent(0, 0);
     if (core) wglDeleteContext(core);
     check("wglDeleteContext", rc && wglDeleteContext(rc));
+
+    /* OpenGL in a child window whose DC was taken before the window moved,
+     * as VLC's video output does (it centres its video window): the frame
+     * shows where the window is now */
+    wc.lpszClassName = "gl2child";
+    RegisterClassA(&wc);
+    HWND kid = CreateWindowA("gl2child", "", WS_CHILD | WS_VISIBLE, 0, 0, 100, 80, w, 0, wc.hInstance, 0);
+    HDC kdc = GetDC(kid);
+    int kfmt = ChoosePixelFormat(kdc, &pfd);
+    HGLRC krc = kfmt > 0 && SetPixelFormat(kdc, kfmt, &pfd) ? wglCreateContext(kdc) : 0;
+    int kok = krc && wglMakeCurrent(kdc, krc);
+    SetWindowPos(kid, 0, 150, 60, 100, 80, SWP_NOZORDER | SWP_NOACTIVATE);
+    if (kok) {
+        glClearColor(0, 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        SwapBuffers(kdc);
+    }
+    HDC pdc = GetDC(w);
+    COLORREF moved = GetPixel(pdc, 200, 100), left = GetPixel(pdc, 20, 20);
+    ReleaseDC(w, pdc);
+    check("a child window's kept DC follows the window: the frame shows where it moved",
+          kok && moved == RGB(0, 0, 255) && left != RGB(0, 0, 255));
+    wglMakeCurrent(0, 0);
+    if (krc) wglDeleteContext(krc);
+    ReleaseDC(kid, kdc);
+    DestroyWindow(kid);
     ReleaseDC(w, dc);
     DestroyWindow(w);
     printf("gl2test: %d passed, %d failed\n", passed, failed);

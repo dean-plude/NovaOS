@@ -24,6 +24,12 @@ start.
   drawn with, read back and swapped to the window, and an OpenGL 3.3
   core-profile context from `wglCreateContextAttribsARB`.
 - The nightly corpus starts Krita with nothing installed first.
+- VLC now picks its OpenGL video output (on Windows with a GL driver it
+  would too), which showed a NovaOS fault: a DC a program keeps on a child
+  window stayed where the window was when it was taken.  VLC keeps its
+  video window's DC and moves the window to centre the picture, so the
+  video stayed at the left edge.  user32 now moves kept DCs with a child
+  window that moves, resizes, shows or hides (`gl2test` checks it).
 
 The two architectures' llvmpipe add about 97 MB to drive C:'s system
 files (they are unpacked into memory at boot, as the other system files

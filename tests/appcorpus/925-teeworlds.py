@@ -7,9 +7,9 @@
 # tests/reference/teeworlds.png and the sound NovaOS played must hold the
 # music (App(sound=...)).  The App Store installs it (the official 64-bit
 # zip from GitHub, unpacked into C:\Programs\Teeworlds).  Teeworlds
-# needs OpenGL 1.2 (3D textures), more than NovaOS's own OpenGL 1.1, so the
-# App Store's Mesa 3D is installed first, as a user without a GPU driver
-# would.  Then the mouse opens Settings, with Teeworlds' own default
+# needs OpenGL 1.2 (3D textures), more than NovaOS's own OpenGL 1.1, which
+# Mesa's llvmpipe, built into the image, provides with nothing installed
+# first.  The mouse opens Settings, with Teeworlds' own default
 # (inp_grab 0): SDL's relative mouse mode reads WM_MOUSEMOVE and recentres
 # the pointer in the window with SetCursorPos every time it moves; the
 # test pushes the menu cursor into the top-left corner and moves it over
@@ -47,10 +47,9 @@ def first_start(nova, echo):
 
 
 APP = App('Teeworlds', '0.7.5', 'https://github.com/teeworlds/teeworlds/releases/download/0.7.5/teeworlds-0.7.5-win64.zip',
-          'Teeworlds', [Test('install Mesa 3D', 'store install Mesa 3D', store='Mesa 3D', timeout=1200),
-                        Test('install from the App Store', 'store install Teeworlds', store='Teeworlds', timeout=600),
+          'Teeworlds', [Test('install from the App Store', 'store install Teeworlds', store='Teeworlds', timeout=600),
                         Test('pin daytime menu fixture', r'del C:\Programs\Teeworlds\teeworlds-0.7.5-win64\data\ui\themes\winter_night.map',
                              builtin=True),
                         Test('settings with the mouse', r'start C:\Programs\Teeworlds\teeworlds-0.7.5-win64\teeworlds.exe',
                              timeout=90)],
-          store='Teeworlds', gui=True, runtimes=['Mesa 3D'], sound=(None, 5000), interact=first_start)
+          store='Teeworlds', gui=True, sound=(None, 5000), interact=first_start)

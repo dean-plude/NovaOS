@@ -34,3 +34,8 @@ start.
 The two architectures' llvmpipe add about 97 MB to drive C:'s system
 files (they are unpacked into memory at boot, as the other system files
 are).
+
+The Teeworlds corpus tests (`925-teeworlds.py`, `926-teeworlds-join.py`)
+no longer install Mesa 3D from the App Store first: they run on the built-in
+OpenGL.  The Direct3D games (OpenTyrian, Blobby Volley 2) still install it
+for lavapipe, DXVK's Vulkan driver.

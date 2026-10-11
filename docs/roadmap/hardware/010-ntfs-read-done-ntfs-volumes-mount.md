@@ -6,5 +6,9 @@
   links and persistence~~ Done (Phase 17.5; `linktest` and `linktest
   restarted`; on a mounted NTFS volume across a restart, with
   `FindFirstFileNameW` and an offline volume check, in the devices
-  suite's "ntfs" boot).  Interrupted writes and a full volume are still
-  to be tested on a disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  suite's "ntfs" boot).  ~~Interrupted writes and a full volume~~ Done:
+  a volume NovaOS is writing to is marked dirty until the changes are on
+  the disk, so after a power cut it mounts read-only (`ntfstest churn`,
+  the machine reset, `ntfstest cut`); a write past the free space fails
+  with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
+  disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.

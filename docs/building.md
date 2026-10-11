@@ -407,9 +407,20 @@ into memory when it is opened, so the largest one that opens is 256 MiB.
 
 There is no journal: `$LogFile` is emptied when a volume is mounted and
 each change is complete on disk when it returns, so Windows and
-`ntfsfix` find the volume clean.  A volume Windows left hibernated (Fast
-Startup included), with a chkdsk pending or with transactions in its
-`$LogFile` is mounted read-only, as ntfs-3g does.
+`ntfsfix` find the volume clean.  While changes are being written, the
+volume is marked dirty (`$Volume`'s flag, set and on the disk before the
+first change, cleared a quiet second after the last one and at
+shutdown), so a volume cut off half-way (the power went, the machine was
+reset) is found dirty: NovaOS then mounts it read-only and Windows runs
+chkdsk on it (`ntfsfix -d` on Linux clears the mark).  A file rewritten
+on disk gets new clusters before it lets go of its old ones, so a cut
+leaves it whole, old or new.  A file may grow only as far as the
+volume's free clusters reach: a write past that fails with
+`ERROR_DISK_FULL` (nothing of it written) and the file keeps what it
+had.  A volume Windows left hibernated (Fast Startup included), with a
+chkdsk pending or with transactions in its `$LogFile` is mounted
+read-only, as ntfs-3g does.  `scripts/ntfs-dirty.py image [offset]`
+tells whether a volume is marked dirty.
 
 For a test disk (needs `ntfs-3g`):
 
@@ -611,7 +622,17 @@ hard-link checks there, NovaOS restarts, `linktest restarted
 D:\LinkTest` must find the file it left under three names (one in a
 folder the new boot has not read yet) still one file, and once QEMU has
 quit `scripts/ntfs-check.py` must find the volume consistent and
-`ntfscat` must read the file by its third name.  To run the suite:
+`ntfscat` must read the file by its third name.  Then `ntfstest fill
+D:\Full` fills the volume until a write fails with `ERROR_DISK_FULL`,
+and `ntfstest churn D:\Churn` rewrites four 4 MB files without end
+until the test resets the machine; the next boot must mount D:
+read-only because NovaOS left it marked dirty, and `ntfstest cut
+D:\Churn` must find each file whole (old or new).  Offline, the disk as
+it was after filling (copied once NovaOS had marked it clean) must pass
+`scripts/ntfs-check.py`, and the disk after the reset must be marked
+dirty and pass `scripts/ntfs-check.py --after-cut` (only what chkdsk
+mends without losing anything: the mark, clusters no file owns, stale
+sizes in a directory).  To run the suite:
 
 ```bash
 python3 tools/selftest.py --suite devices
@@ -771,7 +792,7 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 |---|---|
 | `crttest` | The C runtime |
 | `filetest` | Files and directories; delete on close (`FILE_FLAG_DELETE_ON_CLOSE`, `FileDispositionInfo`, `DeleteFile` of an open file: deleted when the last handle closes, meanwhile `ERROR_ACCESS_DENIED`; a running program's file is refused); `RegNotifyChangeKeyValue` (values, subkeys, subtrees, deleted keys, synchronous); `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)`.  `filetest install`, a restart and `filetest installed` check that a running program replaced at boot |
-| `linktest` | Hard links: `CreateHardLink`, the link count and file id by every name, a write or attribute change by one name seen by the others (open handles too), a link in another folder renamed there, deleting names down to the last, a file replaced under a linked name, `FILE_SUPPORTS_HARD_LINKS`.  `linktest restarted` after the restart checks a linked pair is still one file |
+| `linktest` | Hard links: `CreateHardLink`, the link count and file id by every name, a write or attribute change by one name seen by the others (open handles too), a link in another folder renamed there, deleting names down to the last, a file replaced under a linked name, `FILE_SUPPORTS_HARD_LINKS`, every name listed by `FindFirstFileNameW`/`FindNextFileNameW` (`FileHardLinkInformation`, the folders opened by `OpenFileById`'s `FILE_OPEN_BY_FILE_ID`).  `linktest restarted [DIR]` after the restart checks the three names it left (one in another folder) are still one file, its link count and names whole before that folder is read.  The core suite runs both on drive C:; the devices suite's "ntfs" boot runs them on a fresh NTFS drive D: with a restart between, then checks the volume offline (`scripts/ntfs-check.py`, `ntfscat`) |
 | `sectest` (x64) | Hostile system calls refused (kernel pointers, bogus handles, bad descriptors); tokens and object security through the native API: a restricted or deny-only impersonation token is refused a protected named event |
 | `threads` | Threads, synchronization, SEH |
 | `dlltest` | DLL loading, TLS, `DllMain`; a DLL whose `DllMain` returns FALSE stops the program at start with 0xC0000142 |
@@ -838,7 +859,7 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 | `disktest write`, restart, `disktest verify` | Drive C: surviving a reboot |
 | `httptest suite HTTPS-BASE HTTP-BASE` | winhttp against `tools/h2server.js`: HTTP/2 by ALPN, a 300 KB body, POST, a redirect, an untrusted certificate refused, chunked HTTP/1.1, the asynchronous API.  `httptest [-2] [-k] [-a] URL` fetches one URL |
 | `netcat [-4\|-6] [-p PORT] HOST [PATH]` | Winsock: `getaddrinfo`, IPv4 or IPv6 sockets, an HTTP/1.0 GET |
-| `looptest` | Winsock over the loopback interface: a socket pair over 127.0.0.1 and ::1 (port 0, `getsockname`, a non-blocking connect, `getpeername` after it, data sent before `accept`, the accepted socket inheriting non-blocking mode), `shutdown(SD_BOTH)` with unread data, closing a listener with a queued connection, `localhost`, `wsock32.dll`'s Winsock 1.1 ordinals, and socket options: `SO_RCVBUF`, `SO_SNDBUF`, `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_BROADCAST`, `TCP_NODELAY`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `SO_LINGER`/`SO_DONTLINGER` and `IP_TTL` read back what was set, `SO_TYPE`/`SO_ERROR`/`SO_ACCEPTCONN` answer, and five change behaviour: `TCP_NODELAY` sends the second of two small writes at once (under 30 ms, against Nagle's wait for the delayed ACK), `SO_RCVTIMEO` and `SO_SNDTIMEO` of 300 ms end a blocked `recv` and `send` with `WSAETIMEDOUT`, `SO_LINGER {1, 0}` resets the connection on close, and `SO_REUSEADDR` lets two sockets share a port; `connect` on a UDP socket (`send` and `recv` use the peer, `getsockname` names 127.0.0.1, a stranger's datagram is dropped), and `WSADuplicateSocket` into a child process that makes the socket with `WSASocket(FROM_PROTOCOL_INFO)` and sends on it after the parent closed its copy |
+| `looptest` | Winsock over the loopback interface: a socket pair over 127.0.0.1 and ::1 (port 0, `getsockname`, a non-blocking connect, `getpeername` after it, data sent before `accept`, the accepted socket inheriting non-blocking mode), `shutdown(SD_BOTH)` with unread data, closing a listener with a queued connection, `localhost`, `wsock32.dll`'s Winsock 1.1 ordinals, and socket options: `SO_RCVBUF`, `SO_SNDBUF`, `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_BROADCAST`, `TCP_NODELAY`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `SO_LINGER`/`SO_DONTLINGER` and `IP_TTL` read back what was set, `SO_TYPE`/`SO_ERROR`/`SO_ACCEPTCONN` answer, and five change behaviour: `TCP_NODELAY` sends the second of two small writes at once (under 30 ms, against Nagle's wait for the delayed ACK), `SO_RCVTIMEO` and `SO_SNDTIMEO` of 300 ms end a blocked `recv` and `send` with `WSAETIMEDOUT`, `SO_LINGER {1, 0}` resets the connection on close, and `SO_REUSEADDR` lets two sockets share a port; `connect` on a UDP socket (`send` and `recv` use the peer, `getsockname` names 127.0.0.1, a stranger's datagram is dropped), `IPV6_V6ONLY` (on in a new IPv6 socket, so `[::]` binds the port an IPv4 socket has on `0.0.0.0`; turned off, `[::]` gets a datagram sent to 127.0.0.1; no option of an IPv4 socket), and `WSADuplicateSocket` into a child process that makes the socket with `WSASocket(FROM_PROTOCOL_INFO)` and sends on it after the parent closed its copy |
 | `dltest [-n N] [-t S] [-w] HOST PORT BYTES` | A long download over N connections at once (up to 16), read through `select()` as libcurl's multi interface reads them, from `tools/h2server.js`'s `/stream/BYTES/SEED`; every byte is checked against the pattern.  `-w` also does what an installer does meanwhile: writes each download to a file in `C:\Temp\dltest` while two threads map files over and over.  It fails if the transfer as a whole makes no progress for S seconds (default 5), and prints the throughput and the longest pause |
 | `overlaptest` | Overlapped sockets on an I/O completion port over 127.0.0.1, as Python's asyncio uses them: `AcceptEx`, `ConnectEx` and the other extension functions from `WSAIoctl`, an `AcceptEx` and a `WSARecv` pending until a connection or data comes, `CancelIoEx`, closing a socket with a receive pending, and `WSAIoctl`'s `FIONREAD` (the bytes waiting, as Qt asks before every read) and `SIOCATMARK`; the `AcceptEx` and `GetAcceptExSockaddrs` it uses are `wsock32`'s, by ordinal, as Steam imports them |
 | `loadtest` | Winsock under a browser's or a game client's load: 200 loopback connections (401 sockets) open at once in one process, one `select` over all 200 (a program's own `FD_SETSIZE` of 1024) and `WSAPoll` over all 200, a `WSAEventSelect` registration on each socket whose event fires on data, 200 new sockets registering again after `closesocket` ended the old ones, 400 connections opened and closed one after another (each leaves a TIME-WAIT behind), 100 UDP sockets open at once, and 24 parallel HTTP downloads of 300,000 bytes from `tools/h2server.js`, checked byte for byte; on the old limits it failed with `WSAENOBUFS` after 8 connections |
@@ -879,6 +900,7 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 | `pnptest` | The Plug and Play device tree (the devices suite's "pnp" boot): `pnptest list` prints every device node and checks the tree (one root, each present node's parent present, instance IDs unique, hardware IDs given); `pnptest arrival`/`removal PREFIX` follow the arrival and removal events of a USB keyboard, a hub and a USB stick the test plugs in and takes out through QEMU's monitor, which must leave their nodes behind as devices not present |
 | `devnotifytest` | Devices arriving and leaving as Windows programs hear of it (the devices suite's "pnp" boot, after `pnptest`): the PlugPlay service running and its `HKLM\SYSTEM\CurrentControlSet\Enum` keys; `RegisterDeviceNotificationW` on a message-only window for `GUID_DEVINTERFACE_USB_DEVICE` and `RegisterDeviceNotificationA` on a hidden window for all interface classes, `DBT_DEVICEARRIVAL`/`DBT_DEVICEREMOVECOMPLETE` with `DEV_BROADCAST_DEVICEINTERFACE` (wide and ANSI names), a USB stick's drive letter as `DEV_BROADCAST_VOLUME`, `DBT_DEVNODES_CHANGED`; `CM_Register_Notification` for an interface class and for every device instance, as the test plugs in and takes out a USB keyboard and a FAT USB stick |
 | `devenumtest` | The device tree as Windows programs walk it (the devices suite's "pnp" boot, after `devnotifytest`), with a USB keyboard the test plugs in: cfgmgr32's `CM_Locate_DevNode`, `CM_Get_Child`/`Sibling`/`Parent`/`Depth`, `CM_Get_DevNode_Status`, registry and `DEVPKEY` properties, device ID lists filtered by enumerator, service, class, bus relations and presence, a phantom found only with `CM_LOCATE_DEVNODE_PHANTOM`, the keyboard interface list and `CM_Open_DevNode_Key`; setupapi's `SetupDiGetClassDevs` by setup class, enumerator and interface class, `SetupDiOpenDeviceInfo`/`SetupDiOpenDeviceInterface` by name and `SetupDiOpenDevRegKey` |
+| `ntfstest` | An NTFS drive D: full and cut off (the devices suite's "ntfs" boot, after `linktest restarted`): `ntfstest fill DIR` grows a file until `WriteFile` fails with `ERROR_DISK_FULL`, reads back what was written, finds the free space under 2 MB, a second file refused by `WriteFile` and `SetEndOfFile` alike, and the space back once the file is deleted; `ntfstest churn DIR` leaves `kept.txt` and rewrites four 4 MB files without end while the test resets the machine; `ntfstest cut DIR` in the next boot finds D: read-only (`ERROR_WRITE_PROTECT`: NovaOS left it marked dirty), `kept.txt` whole and each file one whole generation, old or new.  Offline, `scripts/ntfs-check.py` passes the disk after filling, and with `--after-cut` the disk after the reset (marked dirty, `scripts/ntfs-dirty.py`) |
 
 <!-- END generated:selftest-table -->
 

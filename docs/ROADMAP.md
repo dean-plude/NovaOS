@@ -235,12 +235,12 @@ named program or test demonstrates it.
   SDL 1.2 through winmm's joystick functions, into its first level)~~ Done;
   ~~a DirectInput game pad game (Cave Story with an Xbox 360 pad through
   DirectInput 7: the opening talk and Quote walking in the Start Point
-  cave)~~ Done (all nine in the nightly corpus).  Still to do:
-  joining a Teeworlds game on its own server (it times out under TCG
-  while Mesa compiles its shaders; its menus follow the mouse with its
-  default settings, SDL recentring the pointer with `SetCursorPos`), GOG
-  GALAXY's client, Steam's login window, Roblox's player (its anti-cheat
-  refuses virtual machines).
+  cave)~~ Done (all nine in the nightly corpus); ~~joining a Teeworlds
+  game on its own server (`teeworlds_srv.exe` on the same machine, over
+  the loopback interface; it times out under TCG while Mesa compiles its
+  shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
+  to do: GOG GALAXY's client, Steam's login window, Roblox's player (its
+  anti-cheat refuses virtual machines).
 
 <!-- END generated:next-apps -->
 
@@ -336,7 +336,14 @@ named program or test demonstrates it.
   Done: the installer formats C: as NTFS (or FAT32), and files there keep
   security descriptors that opening, deleting and renaming obey.  ~~Hard
   links and persistence~~ Done (Phase 17.5; `linktest` and `linktest
-  restarted`).  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  restarted`; on a mounted NTFS volume across a restart, with
+  `FindFirstFileNameW` and an offline volume check, in the devices
+  suite's "ntfs" boot).  ~~Interrupted writes and a full volume~~ Done:
+  a volume NovaOS is writing to is marked dirty until the changes are on
+  the disk, so after a power cut it mounts read-only (`ntfstest churn`,
+  the machine reset, `ntfstest cut`); a write past the free space fails
+  with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
+  disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).

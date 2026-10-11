@@ -1230,7 +1230,9 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     }
     UINT64 off = h->kind == H_FILE ? start_offset(h, um_stack_arg(8)) : 0, done = 0;
     UINT32 st = ST_SUCCESS;
-    while (done < len) {
+    if (h->kind == H_FILE && !RamfsFits(h->node, (h->append ? h->node->size : off) + len))
+        st = ST_DISK_FULL;                                       /* (the volume is full: nothing written, as on Windows) */
+    while (st == ST_SUCCESS && done < len) {
         UINT32 chunk = len - done < cap ? (UINT32)(len - done) : cap;
         if (!NT_SUCCESS(CopyFromUser(tmp, (const void *)(uintptr_t)(buf + done), chunk))) {
             st = UM_STATUS_ACCESS_VIOLATION;

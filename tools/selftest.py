@@ -99,6 +99,10 @@ class Test:
     new boot, as after a crash on a real PC).
     @reboot: restart NovaOS ("shutdown /r", drive C: kept) and pass when
     the new boot's log shows @expect; later tests run in that boot.
+    @cut: a regex; once @cmd's output matches it, the machine is reset
+    while the program runs on (a power cut half-way through what it
+    writes), and the test passes when the new boot's log shows @expect;
+    later tests run in that boot.
     @acts: (regex, function(nova)) pairs run when the output matches (the
     program asks for something only the test can do).  @boot_expect: regexes
     the whole serial log so far must match (what the kernel logged at boot).
@@ -110,11 +114,11 @@ class Test:
     then not taken for a panic of this boot."""
     def __init__(self, name, cmd, expect=(), timeout=180, check=None, store=None, shot=None, crash=False, reboot=False,
                  acts=(), boot_expect=(), builtin=False, settle=0, before=None, restart=False,
-                 quotes_panic=False):
+                 quotes_panic=False, cut=None):
         self.name, self.cmd, self.expect, self.timeout, self.check = name, cmd, expect, timeout, check
         self.store, self.shot, self.crash, self.reboot = store, shot, crash, reboot
         self.acts, self.boot_expect, self.builtin, self.settle = acts, boot_expect, builtin, settle
-        self.before, self.restart, self.quotes_panic = before, restart, quotes_panic
+        self.before, self.restart, self.quotes_panic, self.cut = before, restart, quotes_panic, cut
 
 
 def tones(*hz, wav=None, only=False):
@@ -729,6 +733,24 @@ def run_boot(a, tests, work, label, **nova_args):
                     out, ok = nova.reboot(t.timeout), True
                 except RuntimeError as e:
                     out, ok = str(e), False
+            elif t.cut:
+                if t.before:
+                    t.before(nova)
+                nova.sr.read_new()
+                nova.qmp.type(t.cmd + '\n')
+                out, end = '', time.time() + t.timeout
+                while not re.search(t.cut, out) and time.time() < end and '[TERM-DONE]' not in out:
+                    time.sleep(0.25)
+                    out += nova.sr.read_new()
+                ok = bool(re.search(t.cut, out))
+                if ok:
+                    time.sleep(1)                           # (well into the writing)
+                    nova.qmp.cmd('system_reset')
+                    try:
+                        nova.start()
+                        out += nova.boot_log
+                    except RuntimeError as e:
+                        out, ok = out + str(e), False
             else:
                 if t.before:
                     t.before(nova)
@@ -737,9 +759,10 @@ def run_boot(a, tests, work, label, **nova_args):
             if t.crash:
                 miss = [e for e in t.expect if not re.search(e, out)]
                 why = None if ok and not miss else ('no kernel fault' if not ok else 'no symbolized backtrace')
-            elif t.reboot:
+            elif t.reboot or t.cut:
                 miss = [e for e in t.expect if not re.search(e, out)]
-                why = 'did not boot again' if not ok else f'missing "{miss[0]}"' if miss else None
+                why = ('did not boot again' if t.reboot else f'no "{t.cut}" to cut off, or no boot after it') if not ok \
+                    else f'missing "{miss[0]}"' if miss else None
             elif t.store:
                 why, out = store_verdict(nova, t, out)
             else:

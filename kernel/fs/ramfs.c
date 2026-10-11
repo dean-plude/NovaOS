@@ -764,9 +764,22 @@ static bool unshare(RamNode *f)
     return true;
 }
 
+/* Whether @f, on a mounted volume, can grow to @len bytes there (a file on
+ * drive C: is limited by memory alone) */
+bool RamfsFits(RamNode *f, UINT64 len)
+{
+    if (!ext(f) || len <= f->size) return true;
+    Drive *d = drive_of(f);
+    if (!d || !d->src || !d->src->fits) return true;
+    bkl_acquire();                                  /* (the volume and disk drivers rely on it) */
+    bool ok = d->src->fits(d->vol, len);
+    bkl_release();
+    return ok;
+}
+
 bool RamfsWrite(RamNode *f, const char *data, UINT32 len)
 {
-    if (!f || f->dir || ring_pins(f) || len > RAMFS_FILE_MAX || RamfsReadOnly(f)) return false;
+    if (!f || f->dir || ring_pins(f) || len > RAMFS_FILE_MAX || RamfsReadOnly(f) || !RamfsFits(f, len)) return false;
     char *buf = NULL;
     if (len) {
         buf = kmalloc(len);
@@ -830,7 +843,7 @@ static bool reserve(RamNode *f, UINT32 need, bool exact)
 bool RamfsWriteAt(RamNode *f, UINT32 off, const void *data, UINT32 len)
 {
     if (!f || f->dir || ring_pins(f) || off > RAMFS_FILE_MAX || len > RAMFS_FILE_MAX - off || RamfsReadOnly(f)) return false;
-    if (!RamfsLoad(f) || !unshare(f) || !reserve(f, off + len, false)) return false;
+    if (!RamfsFits(f, (UINT64)off + len) || !RamfsLoad(f) || !unshare(f) || !reserve(f, off + len, false)) return false;
     if (ext(f)) set_dirty(f);
     if (off > f->size) memset(f->data + f->size, 0, off - f->size);
     memcpy(f->data + off, data, len);
@@ -850,7 +863,8 @@ bool RamfsResize(RamNode *f, UINT32 len)
         touch(f);
         return true;
     }
-    if (!f || f->dir || ring_pins(f) || RamfsReadOnly(f) || !RamfsLoad(f) || !unshare(f) || !reserve(f, len, true)) return false;
+    if (!f || f->dir || ring_pins(f) || RamfsReadOnly(f) || !RamfsFits(f, len) || !RamfsLoad(f) || !unshare(f) ||
+        !reserve(f, len, true)) return false;
     if (ext(f)) set_dirty(f);
     if (len > f->size) memset(f->data + f->size, 0, len - f->size);
     f->size = len;

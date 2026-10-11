@@ -96,6 +96,9 @@ typedef struct {
     /* Calls @add with the path of each name of @ref from the volume's root
      * ("Dir\file.txt"; NULL on a file system without hard links) */
     bool (*names)(void *vol, UINT64 ref, bool (*add)(const char *path, void *ctx), void *ctx);
+    /* Whether a file of @len bytes can be written there (NULL: any): a
+     * file may not grow past that (ERROR_DISK_FULL) */
+    bool (*fits)(void *vol, UINT64 len);
 } RamfsSource;
 
 /* Change tracking, for saving drive C: to disk (fs/persist.c).  Nodes
@@ -208,6 +211,9 @@ RamNode *RamfsFind(RamNode *dir, const char *name);
 RamNode *RamfsCreate(RamNode *dir, const char *name, bool is_dir);
 
 /* Replace a file's contents.  False if too large or out of memory. */
+/* Whether @file can grow to @len bytes: on a mounted volume, whether the
+ * volume has room for it (RamfsSource.fits); writes past that fail */
+bool     RamfsFits(RamNode *file, UINT64 len);
 bool     RamfsWrite(RamNode *file, const char *data, UINT32 len);
 /* The same with @buf (from kmalloc), which the file takes over: no copy.
  * On failure @buf is still the caller's. */

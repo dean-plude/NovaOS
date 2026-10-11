@@ -10463,6 +10463,79 @@ Firefox and File Explorer started together (`profile on 50 6000`, 4 GB,
 process lock fell from about 6% to under 1%.  A minute later, with both up,
 the CPU was 90% idle against 91% busy spinning (`profile on 9000 6000`).
 
+## Non-blocking TCP sends taken whole, as on Windows
+
+A non-blocking `send` or `WSASend` on a TCP socket now takes the whole
+buffer, as Windows' AFD driver does, instead of only what fits in lwIP's
+11,680-byte send buffer.  What does not fit waits in a per-socket buffer
+(up to 4 MB) and goes out as the peer acknowledges; later sends join it,
+and only past that limit does a send see `WSAEWOULDBLOCK`.  A
+`shutdown(SD_SEND)` or `closesocket` waits for that data, so the peer
+still gets every byte before the end of the stream.  Programs written for
+Windows treat a short non-blocking send as all-or-nothing and never send
+the rest: Steam's client answered its UI's controller list request
+(`GetControllerAccessibilityStrings`, a 28 KB websocket frame) with only
+its first 11,680 bytes, so the UI waited for ever and the login window
+never opened.  `looptest` in the network suite sends 100,000 bytes on a
+non-blocking socket, closes it at once, and checks the peer reads them
+all.
+
+## NTFS drives: a full volume, and writing cut off half-way
+
+A mounted NTFS volume (drive D:, ...) now says when it is full, and one
+NovaOS was writing to when the power went comes back read-only with
+nothing lost, as Windows would have chkdsk look it over.
+
+- **Marked dirty while writing** (`kernel/fs/ntfs.c`, `drives.c`): there
+  is no journal, so before the first change NovaOS sets `$Volume`'s dirty
+  flag and flushes it to the disk, and clears it once the changes are on
+  the disk and a second has passed with none (and at shutdown and
+  unmount).  A volume cut off mid-change is found dirty at the next
+  mount and stays read-only ("stays read-only: marked dirty"), and
+  Windows runs chkdsk on it.  Drive C:, which NovaOS saves itself, is not
+  marked.  A file rewritten on disk already took new clusters before it
+  let go of its old ones, so a cut leaves it whole, old or new.
+- **Full volumes** (`kernel/fs/ramfs.c`, `um/um_syscall.c`): a file on
+  a mounted volume lives in memory until it is closed, so it could grow
+  past the free space and then fail to reach the disk unseen.  Now a
+  write or `SetEndOfFile` that would take it past the volume's free
+  clusters fails with `ERROR_DISK_FULL` and writes nothing, as on
+  Windows (`RamfsSource.fits`, `NtfsFits`).
+- **Checks**: the devices suite's "ntfs" boot goes on after the hard-link
+  tests: `ntfstest fill D:\Full` fills the volume, `ntfstest churn
+  D:\Churn` rewrites four files until the test resets the machine (the
+  self-tests' new `cut=` option), and in the next boot D: must be
+  read-only and `ntfstest cut D:\Churn` must find every file whole.
+  Offline, `scripts/ntfs-check.py` passes the disk after filling and,
+  with the new `--after-cut` (only what chkdsk mends without loss), the
+  disk after the reset, which `scripts/ntfs-dirty.py` must find dirty.
+
+## Hard links on NTFS volumes, checked; FindFirstFileNameW
+
+Hard links on a mounted NTFS volume (drive D:, ...) are now checked on
+every pull request, and a file's names can be listed as on Windows.
+
+- **A file's names** (`kernel/um/um_syscall.c`, `kernel32/compat.c`):
+  `NtQueryInformationFile(FileHardLinkInformation)` lists each name with
+  its folder's file id (`STATUS_BUFFER_OVERFLOW` and `BytesNeeded` when
+  the buffer is short), `NtCreateFile` opens a file or folder by its id
+  (`FILE_OPEN_BY_FILE_ID`, beside a handle on the same drive), and
+  kernel32's `FindFirstFileNameW`/`FindNextFileNameW` give each name's
+  path on its volume (`\LinkTest\a.txt`, as Windows does).
+- **Names not read yet** (`kernel/fs/ntfs.c`, `ramfs.c`): on a mounted
+  NTFS volume a file's names in folders NovaOS has not listed yet were
+  missed, so after a restart its link count could read 1.  `NtfsNames`
+  walks a record's `$FILE_NAME`s up to the root, and `RamfsGatherLinks`
+  loads those names and joins them to the file before its link count or
+  names are given.
+- **Checks**: `linktest` lists names by each of them and leaves a third
+  name in another folder; `linktest restarted [DIR]` checks all three
+  after the restart.  The devices suite's new "ntfs" boot attaches a
+  fresh `mkntfs` disk as D:, runs `linktest D:\LinkTest`, restarts,
+  runs `linktest restarted D:\LinkTest`, and once QEMU has quit checks
+  the volume with `scripts/ntfs-check.py` (records, bitmaps, indexes,
+  link counts against names) and reads the third name with `ntfscat`.
+
 ## Plug and Play: setupapi and cfgmgr32 enumerate the device tree
 
 Windows programs can now walk NovaOS's devices the way they do on
@@ -10509,5 +10582,30 @@ its description, hardware and compatible IDs, class, class GUID, driver
 and location.  `devnotifytest` in the devices suite's "pnp" boot checks
 all of it as a USB keyboard and a FAT USB stick are plugged in and taken
 out.
+
+## Teeworlds joins its own server
+
+Teeworlds now joins a game on its own server in the nightly corpus
+(`tests/appcorpus/926-teeworlds-join.py`): its dedicated server
+(`teeworlds_srv.exe`, in the same zip) is opened from the Terminal, the
+game starts in full screen with `connect 127.0.0.1:8303` on its command
+line, and the connection goes over NovaOS's loopback interface into the
+server's map: the server must log "player has entered the game" and
+neither end may drop the connection for the next 20 seconds.  Where the
+tee lands differs from run to run, so the corpus keeps this screenshot
+without a reference picture (`App(reference=False)` in
+`tools/appcorpus.py`) and the interaction decides.  Under QEMU's TCG the join still times out (Mesa
+compiles its shaders for longer than the ten seconds both ends wait), so
+only the corpus's KVM runs judge it.
+
+The server's log showed one NovaOS fault on the way: its IPv6 socket
+could not bind `[::]:8303` after its IPv4 socket had `0.0.0.0:8303`
+(`WSAEADDRINUSE`), because NovaOS's IPv6 sockets always took both
+families and ignored `IPV6_V6ONLY`.  On Windows that option is on by
+default, so the two binds coexist.  Now NovaOS keeps the option per
+socket (`setsockopt`/`getsockopt` at `IPPROTO_IPV6`), on by default: an
+IPv6 socket bound to `::` takes IPv6 alone and leaves the port's IPv4
+side to an IPv4 socket, and one with the option turned off takes both
+families as before.  `looptest` checks both.
 
 <!-- END generated:history -->

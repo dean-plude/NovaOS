@@ -85,6 +85,8 @@ struct NtfsVol {
     struct SecEnt *sec;                    /* $Secure's descriptors (as $SII lists them), once read */
     UINT32    nsec;
     bool      sec_read;
+    /* marked dirty while changes are being written (NtfsMarkWhileWriting) */
+    bool      guard, marked;
 };
 
 static UINT16 rd16(const UINT8 *p) { UINT16 v; memcpy(&v, p, 2); return v; }
@@ -561,7 +563,10 @@ fail:
 void NtfsUnmount(NtfsVol *v)
 {
     if (!v) return;
-    if (v->rw && v->dev->flush && !v->dev->gone) v->dev->flush(v->dev);
+    if (v->rw && !v->dev->gone) {
+        if (v->marked) NtfsMarkClean(v);
+        else if (v->dev->flush) v->dev->flush(v->dev);
+    }
     stream_free(&v->cbm);
     stream_free(&v->mbm);
     kfree(v->cmap);
@@ -1515,6 +1520,63 @@ bool NtfsSync(NtfsVol *v)
     return !v->rw || !v->dev->flush || v->dev->flush(v->dev);
 }
 
+/* ---- the dirty mark ----
+ * With no journal, a change cut off half-way (the power goes, the machine
+ * is reset) can leave the volume inconsistent.  On a volume NovaOS marks
+ * while writing, $Volume's dirty flag is set and on the disk before the
+ * first change, and cleared once the changes are on the disk and nothing
+ * is being written: a volume cut off mid-change is found dirty, so NovaOS
+ * mounts it read-only and Windows runs chkdsk on it, as after a crash. */
+static bool flush_dev(NtfsVol *v) { return !v->dev->flush || v->dev->flush(v->dev); }
+
+static bool set_dirty(NtfsVol *v, bool dirty)
+{
+    UINT8 *rec = kmalloc(v->rec_size);
+    bool ok = rec && read_record(v, 3, rec);
+    UINT8 *a = ok ? find_attr(rec, v->rec_size, AT_VOLUME_INFORMATION, NULL, 0) : NULL;
+    ok = a && !a[8] && rd32(a + 0x10) >= 12;
+    if (ok) {
+        UINT8 *val = a + rd16(a + 0x14);
+        wr16(val + 10, (UINT16)(dirty ? rd16(val + 10) | 0x0001 : rd16(val + 10) & ~0x0001));
+        ok = write_record(v, 3, rec) && flush_dev(v);
+    }
+    kfree(rec);
+    return ok;
+}
+
+/* Before a change: writable, and marked if the volume is guarded */
+static bool writing(NtfsVol *v)
+{
+    if (!v->rw) return false;
+    if (!v->guard || v->marked) return true;
+    if (!set_dirty(v, true)) {
+        kprintf("[NTFS] %s: \"%s\" could not be marked dirty, so it is not written\n", v->dev->name, v->label);
+        return false;
+    }
+    v->marked = true;
+    return true;
+}
+
+void NtfsMarkWhileWriting(NtfsVol *v) { v->guard = v->rw; }
+
+bool NtfsMarkClean(NtfsVol *v)
+{
+    if (!v->marked) return true;
+    if (!flush_dev(v) || !set_dirty(v, false)) return false;          /* (the changes first) */
+    v->marked = false;
+    return true;
+}
+
+bool NtfsMarked(const NtfsVol *v) { return v->marked; }
+
+bool NtfsFits(NtfsVol *v, UINT64 len)
+{
+    if (!v->rw || !v->cmap) return false;
+    /* (a rewrite takes new clusters for the whole file before it gives
+     * the old ones back; a small file is kept in its record) */
+    return len <= 512 || (len + v->cluster - 1) / v->cluster <= v->nfree;
+}
+
 /* ---- the MFT ---- */
 
 static bool grow_mft(NtfsVol *v)
@@ -1740,7 +1802,7 @@ bool NtfsCanWrite(NtfsVol *v, UINT64 mft)
 
 bool NtfsWriteFile(NtfsVol *v, UINT64 mft, const void *data, UINT64 len)
 {
-    if (!v->rw || mft < MFT_FIRST_USER) return false;
+    if (!writing(v) || mft < MFT_FIRST_USER) return false;
     UINT8 *rec = kmalloc(v->rec_size), *attr = kmalloc(v->rec_size), *keep = kmalloc(v->rec_size);
     Stream ns;
     memset(&ns, 0, sizeof(ns));
@@ -1804,7 +1866,7 @@ out:
 
 bool NtfsCreate(NtfsVol *v, UINT64 dir, const char *name, bool is_dir, UINT64 *out)
 {
-    if (!v->rw) return false;
+    if (!writing(v)) return false;
     UINT16 wname[255];
     int nlen = utf8_to_utf16(name, wname, 255);
     if (nlen <= 0) return false;
@@ -1938,7 +2000,7 @@ static void count_links(NtfsVol *v, UINT8 *rec)
 
 bool NtfsDelete(NtfsVol *v, UINT64 dir, UINT64 mft, const char *name)
 {
-    if (!v->rw || mft < MFT_FIRST_USER) return false;
+    if (!writing(v) || mft < MFT_FIRST_USER) return false;
     UINT16 wname[255];
     int nlen = 0;
     if (name && (nlen = utf8_to_utf16(name, wname, 255)) <= 0) return false;
@@ -1996,7 +2058,7 @@ out:
 
 bool NtfsRename(NtfsVol *v, UINT64 old_dir, UINT64 mft, const char *old_name, UINT64 new_dir, const char *name)
 {
-    if (!v->rw || mft < MFT_FIRST_USER) return false;
+    if (!writing(v) || mft < MFT_FIRST_USER) return false;
     UINT16 wname[255], wold[255];
     int nlen = utf8_to_utf16(name, wname, 255), olen = 0;
     if (nlen <= 0) return false;
@@ -2057,7 +2119,7 @@ out:
  * @dir's index (a hard link; directories have one name) */
 bool NtfsLink(NtfsVol *v, UINT64 mft, UINT64 dir, const char *name)
 {
-    if (!v->rw || mft < MFT_FIRST_USER) return false;
+    if (!writing(v) || mft < MFT_FIRST_USER) return false;
     UINT16 wname[255];
     int nlen = utf8_to_utf16(name, wname, 255);
     if (nlen <= 0) return false;
@@ -2748,7 +2810,7 @@ static Ent sec_entry(const void *key, UINT16 klen, const UINT8 *hdr, UINT32 pad)
 
 UINT32 NtfsAddSecurity(NtfsVol *v, const void *sd, UINT32 len)
 {
-    if (!v->rw || len < 0x14 || len > 0x10000 || !sec_load(v)) return 0;
+    if (!writing(v) || len < 0x14 || len > 0x10000 || !sec_load(v)) return 0;
     UINT32 hash = sd_hash(sd, len), id = 0x100;
     UINT64 end = 0;
     UINT8 *cmp = kmalloc(len);
@@ -2854,7 +2916,7 @@ out:
 
 bool NtfsSetSecurityId(NtfsVol *v, UINT64 mft, UINT32 id)
 {
-    if (!v->rw || (mft < MFT_FIRST_USER && mft != NTFS_ROOT) || (id && !sec_find(v, id))) return false;
+    if (!writing(v) || (mft < MFT_FIRST_USER && mft != NTFS_ROOT) || (id && !sec_find(v, id))) return false;
     UINT8 *rec = kmalloc(v->rec_size);
     bool ok = false;
     if (rec && read_record(v, mft, rec)) {
@@ -2871,7 +2933,7 @@ bool NtfsSetSecurityId(NtfsVol *v, UINT64 mft, UINT32 id)
 
 bool NtfsSetInfo(NtfsVol *v, UINT64 mft, UINT64 ctime, UINT64 mtime, UINT32 attrs)
 {
-    if (!v->rw || mft < MFT_FIRST_USER) return false;
+    if (!writing(v) || mft < MFT_FIRST_USER) return false;
     UINT8 *rec = kmalloc(v->rec_size);
     bool ok = false;
     if (rec && read_record(v, mft, rec)) {

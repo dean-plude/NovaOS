@@ -686,10 +686,9 @@ reads it too, and a shared fence (`ID3D11Fence`) signalled on either
 device completes on the other.  `d3d12test` (on lavapipe, which its
 `VK_DRIVER_FILES` picks) brings Direct3D 12 up through NovaOS's
 `d3d12.dll` and VKD3D-Proton: a device, a root signature and pipeline
-from HLSL, a triangle drawn and read back, a fence, and (64-bit; the
-32-bit run passes `0` seconds and stops after the read-back) three
-seconds of the triangle presented in a window through a flip-model swap
-chain on the command queue.  `gltest fps 10` draws an OpenGL
+from HLSL, a triangle drawn and read back, a fence, and three seconds of
+the triangle presented in a window through a flip-model swap chain on the
+command queue, 64- and 32-bit.  `gltest fps 10` draws an OpenGL
 scene that keeps the rasterizer busy (64 blended quads over a 640x480
 window) for 10 s on virgl and 10 s on llvmpipe, each in a child process
 whose `GALLIUM_DRIVER` names the driver, and passes when virgl draws more

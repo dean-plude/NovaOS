@@ -473,12 +473,19 @@ __declspec(dllexport) int strcmp(const char *a, const char *b)
  * Heap
  * ----------------------------------------------------------------------- */
 typedef struct Block {
-    SIZE_T        size;        /* usable bytes (class size, or the large size) */
-    SIZE_T        tag;         /* HEAP_MAGIC with the arena and class in its low bytes, or HEAP_LARGE */
 #ifndef _WIN64
     SIZE_T        pad[2];      /* (32-bit: SSE code and JIT compilers such as
-                                * Mesa's expect 16-byte-aligned blocks too) */
+                                * Mesa's expect 16-byte-aligned blocks too.
+                                * The padding comes first, so a block written a
+                                * few bytes past its end spoils only padding:
+                                * 32-bit Mesa (lavapipe, every release up to
+                                * 26.1) allocates its recorded Vulkan commands
+                                * 4 bytes short, and a command whose block
+                                * filled its class exactly overwrote the next
+                                * block's size; see the carve below too) */
 #endif
+    SIZE_T        size;        /* usable bytes (class size, or the large size) */
+    SIZE_T        tag;         /* HEAP_MAGIC with the arena and class in its low bytes, or HEAP_LARGE */
 } Block;                       /* 16 bytes: user data stays 16-byte aligned */
 
 #define HEAP_MAGIC   ((SIZE_T)0x4E4F564148454150ULL)   /* "NOVAHEAP" (its low half in 32-bit programs; low 2 bytes: arena, class) */
@@ -556,7 +563,7 @@ static int class_of(SIZE_T n)
 
 static void *carve(SIZE_T bytes)
 {
-    if (arena_cur + bytes > arena_end) {
+    if (arena_cur + bytes + sizeof(Block) > arena_end) {   /* (the next header's room is committed too) */
         SIZE_T grow = bytes > ARENA_SIZE ? (bytes + ARENA_SIZE - 1) & ~(SIZE_T)(ARENA_SIZE - 1) : ARENA_SIZE;
         if (!arena_base || arena_end + grow > arena_reserved_end) {
             /* this reservation is used up: start another */

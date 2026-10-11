@@ -676,7 +676,10 @@ with open(gen_c + '.tmp', 'w') as f:
     for i, (path, file, size, zsize) in enumerate(stored):
         src = os.path.abspath(file).replace('\\', '\\\\').replace('"', '\\"')
         f.write(f'extern const unsigned char nova_userland_{i}[];\n')
-        f.write(f'__asm__(".section .rodata.userland,\\"a\\"\\n.balign 16\\n'
+        # (compressed ones apart: the kernel gives their pages back once
+        # it has unpacked them, UmInit)
+        sect = '.userland_z' if zsize else '.rodata.userland'
+        f.write(f'__asm__(".section {sect},\\"a\\"\\n.balign 16\\n'
                 f'.globl nova_userland_{i}\\nnova_userland_{i}:\\n.incbin \\"{src}\\"\\n.previous");\n')
     f.write('\nconst UserlandFile g_userland_files[] = {\n')
     for i, (path, file, size, zsize) in enumerate(stored):

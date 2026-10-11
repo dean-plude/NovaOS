@@ -205,6 +205,26 @@ static void   kusd_init(void);
 /* -----------------------------------------------------------------------
  * Initialization
  * ----------------------------------------------------------------------- */
+/* The compressed userland files are unpacked onto drive C: (UmInit): the
+ * kernel image's pages holding them go back to the physical memory
+ * manager, 140 MB with Firefox's.  (Their kernel mapping stays: nothing
+ * reads them again.) */
+static void free_unpacked(void)
+{
+    extern char __userland_z_start[], __userland_z_end[];
+    uintptr_t a = ((uintptr_t)__userland_z_start + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+    uintptr_t e = (uintptr_t)__userland_z_end & ~(uintptr_t)(PAGE_SIZE - 1);
+    UINT64 freed = 0;
+    for (; a < e; a += PAGE_SIZE) {
+        uintptr_t pa = paging_virt_to_phys(a);
+        if (!pa) continue;
+        pmm_mark_free(pa, PAGE_SIZE);
+        freed++;
+    }
+    if (freed) kprintf("[UM] Gave back the %llu MB the compressed system files took in the kernel image\n",
+                       (unsigned long long)(freed >> 8));
+}
+
 void UmInit(void)
 {
     /* SSE for user code: FPU present (EM=0, MP=1), FXSAVE/FXRSTOR and
@@ -255,6 +275,7 @@ void UmInit(void)
     }
     kprintf("[UM] User-mode subsystem ready: %d system files installed (C:\\Windows\\System32, C:\\Programs)\n",
             installed);
+    free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
     KbdLoad();                                      /* the user's keyboard layout */

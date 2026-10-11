@@ -1976,6 +1976,16 @@ USERAPI BOOL ChangeWindowMessageFilterEx(HWND h, UINT msg, DWORD action, void *c
 USERAPI BOOL ChangeWindowMessageFilter(UINT msg, DWORD f);
 USERAPI BOOL RegisterTouchWindow(HWND h, ULONG f);
 USERAPI HANDLE RegisterDeviceNotificationW(HANDLE r, LPVOID filter, DWORD f);
+USERAPI HANDLE RegisterDeviceNotificationA(HANDLE r, LPVOID filter, DWORD f);
+#define WM_DEVICECHANGE                     0x0219
+#define DEVICE_NOTIFY_WINDOW_HANDLE         0x00000000
+#define DEVICE_NOTIFY_SERVICE_HANDLE        0x00000001
+#define DEVICE_NOTIFY_ALL_INTERFACE_CLASSES 0x00000004
+#ifndef SMTO_NORMAL
+#define SMTO_NORMAL         0x0000
+#define SMTO_BLOCK          0x0001
+#define SMTO_ABORTIFHUNG    0x0002
+#endif
 USERAPI BOOL UnregisterDeviceNotification(HANDLE h);
 /* Raw input */
 #define WM_INPUT_DEVICE_CHANGE 0x00FE

@@ -1,0 +1,4 @@
+{
+  "selftest": true,
+  "libs": ["advapi32", "cfgmgr32"]
+}

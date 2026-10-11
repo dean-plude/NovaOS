@@ -1031,6 +1031,18 @@ static SERVICE_STATUS_HANDLE register_handler(HANDLER_FN fn, HANDLER_EX_FN fnex,
     return &g_status_handle;
 }
 
+/* user32's devnotify.c: a device event for a service that registered with
+ * its status handle (DEVICE_NOTIFY_SERVICE_HANDLE): its HandlerEx gets
+ * SERVICE_CONTROL_DEVICEEVENT (a plain Handler gets nothing, as on Windows) */
+WINADVAPI DWORD WINAPI NovaServiceDeviceEvent(SERVICE_STATUS_HANDLE h, DWORD type, PVOID data)
+{
+    if (h != (SERVICE_STATUS_HANDLE)&g_status_handle || !g_handler_ex) return ERROR_INVALID_HANDLE;
+    AcquireSRWLockShared(&g_control_lock);
+    DWORD r = g_handler_ex(0x0000000B /* SERVICE_CONTROL_DEVICEEVENT */, type, data, g_handler_ctx);
+    ReleaseSRWLockShared(&g_control_lock);
+    return r;
+}
+
 WINADVAPI SERVICE_STATUS_HANDLE WINAPI RegisterServiceCtrlHandlerW(LPCWSTR name, HANDLER_FN fn) { (void)name; return register_handler(fn, NULL, NULL); }
 WINADVAPI SERVICE_STATUS_HANDLE WINAPI RegisterServiceCtrlHandlerA(LPCSTR name, HANDLER_FN fn) { (void)name; return register_handler(fn, NULL, NULL); }
 WINADVAPI SERVICE_STATUS_HANDLE WINAPI RegisterServiceCtrlHandlerExW(LPCWSTR name, HANDLER_EX_FN fn, LPVOID ctx) { (void)name; return register_handler(NULL, fn, ctx); }

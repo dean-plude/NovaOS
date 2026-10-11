@@ -693,6 +693,16 @@ static void defaults(void)
     RegKey *nls = kpath("Machine\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", false);
     if (!has_value(nls, "ACP")) { kset_sz(nls, "ACP", "65001", 1); kset_sz(nls, "OEMCP", "65001", 1); }
     kpath("Machine\\SYSTEM\\CurrentControlSet\\Services", false);
+    /* The Plug and Play service (plugplay.exe): services /autostart starts
+     * it; it keeps HKLM\SYSTEM\CurrentControlSet\Enum current */
+    RegKey *pnp = kpath("Machine\\SYSTEM\\CurrentControlSet\\Services\\PlugPlay", false);
+    kset_sz(pnp, "ImagePath", "C:\\Windows\\System32\\plugplay.exe", 2);
+    kset_sz(pnp, "DisplayName", "Plug and Play", 1);
+    kset_sz(pnp, "Description", "Enables a computer to recognize and adapt to hardware changes with little or no user input.", 1);
+    kset_sz(pnp, "ObjectName", "LocalSystem", 1);
+    kset_dword(pnp, "Type", 0x10);                         /* SERVICE_WIN32_OWN_PROCESS */
+    kset_dword(pnp, "ErrorControl", 1);
+    if (!has_value(pnp, "Start")) kset_dword(pnp, "Start", 2);   /* (automatic; a choice made since is kept) */
 
     /* HKLM\HARDWARE: rebuilt every boot */
     add_cpus(1);                           /* the others once they start */

@@ -14,6 +14,7 @@
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
 #include "../ke/scheduler.h"
+#include "../um/um.h"
 
 #define MAX_NODES   512
 #define RING        256
@@ -56,7 +57,7 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *in)
         n->id = ++g_count;
         g_node[n->id] = n;
     }
-    UINT32 id = 0;
+    UINT32 id = 0, after = g_seq;
     if (n) {
         id = n->id;
         UINT32 seq = n->seq;
@@ -71,6 +72,7 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *in)
     }
     spin_unlock_irqrestore(&g_lock, s);
     kfree(fresh);
+    if (id && id != PNP_ROOT && g_live) UmGuiDevicesChanged(after);
     if (id && g_live)
         kprintf("[PNP] arrival: %s (%s%s%s)\n", in->instance, in->cls[0] ? in->cls : "no class",
                 in->service[0] ? ", " : "", in->service);
@@ -97,10 +99,12 @@ void PnpRemove(UINT32 id)
     if (!id || id == PNP_ROOT) return;
     char inst[128] = "";
     IrqState s = spin_lock_irqsave(&g_lock);
+    UINT32 after = g_seq;
     if (id <= g_count && g_node[id]) copy_str(inst, sizeof(inst), g_node[id]->instance);
     remove_locked(id, 0);
     spin_unlock_irqrestore(&g_lock, s);
     if (inst[0]) kprintf("[PNP] removal: %s\n", inst);
+    if (g_seq != after) UmGuiDevicesChanged(after);
 }
 
 void PnpSetDriver(UINT32 id, const char *service)

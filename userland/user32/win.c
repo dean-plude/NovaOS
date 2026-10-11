@@ -219,6 +219,7 @@ static Wnd *desktop(void)
         d->style = WS_VISIBLE | WS_CLIPCHILDREN | WS_POPUP;
         d->wide = 1;
         d->proc = DesktopProc;
+        devnotify_init();                                   /* (the drive letters there are now) */
     }
     static int aware_rect;                                  /* d->rect is in a DPI-aware thread's pixels */
     if (dpi_aware()) { dpi_desktop_rect(&d->rect); d->client = d->rect; aware_rect = 1; }   /* the primary, as we see it */
@@ -1014,7 +1015,7 @@ static HWND create_window(DWORD ex, WClass *cls, LPCWSTR title, DWORD style, int
             if (y < wa.top) y = wa.top;
             if (x < wa.left) x = wa.left;
         }
-        if (message_only) w->flags |= WF_MAPPED;            /* never shown */
+        if (message_only) w->flags |= WF_MAPPED | WF_MESSAGE_ONLY;   /* never shown */
         if (!wcscmp(cls->name, L"#32768") || !wcscmp(cls->name, L"ComboLBox") || !wcscmp(cls->name, L"tooltips_class32"))
             w->flags |= WF_MENU_TRACK;                      /* a popup: no frame, no focus */
     } else {

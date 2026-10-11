@@ -1284,6 +1284,8 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 #define GUI_TAG_SHIFT    14
 #define WM_NOVA_DROP     0x03FE
 #define WM_DISPLAYCHANGE 0x007E
+#define WM_DEVICECHANGE  0x0219
+#define DBT_DEVNODES_CHANGED 0x0007
 #define CDS_UPDATEREGISTRY 0x01
 #define CDS_TEST           0x02
 #define CDS_FULLSCREEN     0x04
@@ -1409,6 +1411,20 @@ void UmGuiDpiChanged(void)
     for (int i = 0; i < GUI_MAX_WINDOWS; i++)
         if (g_win[i].used && g_win[i].proc)
             enqueue_locked(&g_win[i], WM_NOVA_DPI, 0, 0, 0, 0);
+    spin_unlock_irqrestore(&g_gui_lock, s);
+    waitq_wake(&g_guiq);
+}
+
+/* A device arrived or left (io/pnp.h): WM_DEVICECHANGE, DBT_DEVNODES_CHANGED,
+ * with the PnP event seq before it in lParam, to every window.  user32 takes
+ * it as the cue to follow the events (it then sends the messages Windows
+ * sends, to hidden windows too: devnotify.c) */
+void UmGuiDevicesChanged(UINT32 after)
+{
+    IrqState s = spin_lock_irqsave(&g_gui_lock);
+    for (int i = 0; i < GUI_MAX_WINDOWS; i++)
+        if (g_win[i].used && g_win[i].proc)
+            enqueue_locked(&g_win[i], WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, after, 0, 0);
     spin_unlock_irqrestore(&g_gui_lock, s);
     waitq_wake(&g_guiq);
 }

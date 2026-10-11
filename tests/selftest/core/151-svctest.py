@@ -4,8 +4,9 @@
 # StartServiceCtrlDispatcher / ServiceMain / SetServiceStatus handshake,
 # controls through the handler, stop, delete; a program the service starts
 # before it is running cannot connect as the service; CopyFile keeps the
-# last-write time and attributes (Steam's service compares them).
-DOC = '`svctest` (a real service: start with arguments, status handshake, controls, stop and delete; CopyFile keeps file times; 64- and 32-bit)'
+# last-write time and attributes (Steam's service compares them); a
+# LocalSystem service runs elevated though a limited program starts it.
+DOC = '`svctest` (a real service: start with arguments, status handshake, controls, stop and delete; a LocalSystem service runs elevated; CopyFile keeps file times; 64- and 32-bit)'
 
 TESTS = [
     Test('service x64', 'svctest', [r'svctest: \d+ passed, 0 failed']),

@@ -775,6 +775,32 @@ static WCHAR *service_env(const WCHAR *name)
     return env;
 }
 
+/* The token a service runs with.  Its account (ObjectName) is
+ * LocalSystem unless it names another; a LocalSystem service runs as an
+ * administrator even when a limited program starts it, so it gets the
+ * elevated half of the caller's split token (GOG Galaxy's service writes
+ * HKLM only once it sees itself elevated).  0: the caller's own token
+ * (already elevated or not split, or another account). */
+WINADVAPI BOOL WINAPI CreateProcessAsUserW(HANDLE, LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL,
+                                           DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);   /* security.c */
+
+static HANDLE service_token(HKEY k)
+{
+    WCHAR acct[256];
+    HANDLE t, linked = 0;
+    DWORD type = 0, n;
+    get_str(k, L"ObjectName", acct, 256);
+    if (acct[0] && lstrcmpiW(acct, L"LocalSystem") && lstrcmpiW(acct, L".\\LocalSystem") &&
+        lstrcmpiW(acct, L"NT AUTHORITY\\SYSTEM"))
+        return 0;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t)) return 0;
+    if (!GetTokenInformation(t, TokenElevationType, &type, sizeof(type), &n) || type != 3 /* TokenElevationTypeLimited */ ||
+        !GetTokenInformation(t, TokenLinkedToken, &linked, sizeof(linked), &n))
+        linked = 0;
+    CloseHandle(t);
+    return linked;
+}
+
 WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
 {
     SvcH *s = handle(h, K_SVC);
@@ -819,9 +845,11 @@ WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
     si.cb = sizeof(si);
-    BOOL ok = env && CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-                                    env, NULL, &si, &pi);
+    HANDLE token = service_token(k);
+    BOOL ok = env && CreateProcessAsUserW(token, NULL, cmd, NULL, NULL, FALSE,
+                                          CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, env, NULL, &si, &pi);
     DWORD err = env ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
+    if (token) CloseHandle(token);
     hfree(env);
     if (!ok) {
         set_dword(k, L"NovaState", SERVICE_STOPPED);

@@ -40,7 +40,11 @@ What NovaOS lacked, in the order Godot hit it:
   and an unresolved one jumped to address 0.
 - **Mesa 3D 26.2.0 in the App Store**: lavapipe in Mesa 24.2.4 (LLVM 19)
   crashed inside its own compiler on Godot's shaders; 26.2.0 (LLVM 22)
-  compiles them.  The built-in OpenGL stays on 24.2.4.
+  compiles them.  The built-in OpenGL stays on 24.2.4.  Mesa 26.2 also
+  offers R8G8B8A8 window surfaces, which its CPU swap chain shows with red
+  and blue swapped (it copies the bytes into a blue-green-red bitmap), so
+  NovaOS's Vulkan loader leaves those formats out for lavapipe, as Mesa
+  24.2 did; Blobby Volley 2's Direct3D 9 menu caught it.
 
 Godot's default Forward+ renderer now plays the game on Direct3D 12
 ("D3D12 11_0 - Forward+ - llvmpipe (LLVM 22.1.8)").  Lavapipe still refuses

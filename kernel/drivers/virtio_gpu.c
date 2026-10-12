@@ -681,6 +681,9 @@ struct VgpuBlob {
      * (lent_len 0: its own pages); lending held while changed */
     UINT64  lent_at, lent_len;
     volatile int lending;
+    /* Direct presentation of a frame in a blob (VgpuFrame): the present
+     * context's texture over the blob's host-visible memory (NULL: none) */
+    VgpuBlob *mirror;
 };
 
 #define XFER_COUNT  1                     /* a read-back of a program's (DISPLAY_STAT_FROM_HOST) */
@@ -1066,6 +1069,7 @@ bool VgpuBlobFrames(VgpuBlob *b, const PADDR **frames, UINT64 *n)
 static void blob_lend_lock(VgpuBlob *b) { while (__atomic_exchange_n(&b->lending, 1, __ATOMIC_ACQUIRE)) sched_yield(); }
 static void blob_lend_unlock(VgpuBlob *b) { __atomic_store_n(&b->lending, 0, __ATOMIC_RELEASE); }
 static bool blob_restore(VgpuBlob *b);
+static void post_detach(Vgpu *v, UINT32 res);
 
 bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
                     UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value)
@@ -1161,6 +1165,13 @@ void VgpuBlobUnref(VgpuBlob *b)
     bool last = --b->refs == 0;
     spin_unlock_irqrestore(&g_lock, s);
     if (!last) return;
+    if (b->mirror) {
+        /* (its memory goes first: the host holds the region while it is lent,
+         * and would wait for that before unmapping it; an overlay may keep the
+         * texture, which keeps the frame) */
+        post_detach(v, b->mirror->res);
+        VgpuBlobUnref(b->mirror);
+    }
     if (b->shm_off >= 0) {
         int i = slot3d(v, CMD_RESOURCE_UNMAP_BLOB, 0, sizeof(Unref));
         ((Unref *)v->slot[i].page)->id = b->res;
@@ -1320,6 +1331,7 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
 #define N_ATTACHED          16
 
 #define FORMAT_B8G8R8A8     1             /* (laid out as the screen is, alpha where it has nothing) */
+#define FORMAT_R8G8B8A8     67            /* (red first: blitted into the screen's order) */
 
 struct VgpuOverlay {
     VgpuBlob *src;                        /* the resource shown last (a reference; NULL: none yet) */
@@ -1583,12 +1595,49 @@ void VgpuOverlayDestroy(VgpuOverlay *o)
     kfree(o);
 }
 
-bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy,
-                        VgpuShown *shown)
+/* The texture over blob @b's memory for frames like @fr of @w x @h (made
+ * once, again when they grow or change format), the frame copied into it on
+ * the host (not waited for: the overlay's transfer comes after it) */
+static VgpuBlob *blob_mirror(Vgpu *v, VgpuBlob *b, const VgpuFrame *fr, int w, int h)
+{
+    if (!fr || (fr->format != FORMAT_B8G8R8A8 && fr->format != FORMAT_B8G8R8X8 && fr->format != FORMAT_R8G8B8A8) ||
+        fr->stride < (UINT32)w * 4 || fr->offset > b->size ||
+        fr->offset + (UINT64)fr->stride * (UINT64)(h - 1) + (UINT64)w * 4 > b->size)
+        return NULL;
+    VgpuBlob *m = b->mirror;
+    if (!m || m->width < (UINT32)w || m->height < (UINT32)h || m->format != fr->format) {
+        UINT64 pa, size;
+        if (!VgpuBlobMap(b, &pa, &size)) return NULL;
+        UINT64 n = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+        PADDR *f = kmalloc(n * sizeof(PADDR));
+        if (!f) return NULL;
+        for (UINT64 k = 0; k < n; k++) f[k] = pa + k * PAGE_SIZE;
+        UINT32 p[10] = { TEXTURE_2D, fr->format, BIND_RENDER_TARGET | BIND_SAMPLER_VIEW, (UINT32)w, (UINT32)h, 1, 1,
+                         0, 0, 0 };
+        VgpuBlob *nm = VgpuRes3dCreate(g_pctx, p, f, n);
+        if (!nm) { kfree(f); return NULL; }
+        kfree(nm->frames);                 /* (the blob's memory: not pages to free when it goes) */
+        nm->frames = NULL;
+        nm->nframes = 0;
+        g_pattached[g_pnext++ % N_ATTACHED] = nm->res;
+        if (m) {
+            post_detach(v, m->res);
+            VgpuBlobUnref(m);
+        }
+        b->mirror = m = nm;
+    }
+    UINT32 box[6] = { 0, 0, 0, (UINT32)w, (UINT32)h, 1 };
+    if (!VgpuTransfer3dEx(g_pctx, m, true, box, fr->offset, 0, fr->stride, 0, 0, 0, XFER_QUIET)) return NULL;
+    return m;
+}
+
+bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, const VgpuFrame *fr, int w, int h, const VgpuScreen *s,
+                        int dx, int dy, VgpuShown *shown)
 {
     Vgpu *v = present_dev();
-    if (!v || src->v != v || !src->format || w <= 0 || h <= 0 || (UINT32)w > src->width || (UINT32)h > src->height)
-        return false;
+    if (!v || src->v != v || w <= 0 || h <= 0) return false;
+    if (!src->format && !(src = blob_mirror(v, src, fr, w, h))) return false;
+    if (!src->format || (UINT32)w > src->width || (UINT32)h > src->height) return false;
     present_attach(v, src->res);
     if (o->src != src) {
         VgpuBlobRef(src);

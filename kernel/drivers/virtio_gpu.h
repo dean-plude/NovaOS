@@ -105,11 +105,19 @@ void         VgpuOverlayDestroy(VgpuOverlay *o);
 typedef struct { UINT64 seq; int x, y, w, h; } VgpuShown;
 bool         VgpuPresentWait(UINT64 seq);
 void         VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h);
-/* Copy the top left @w x @h of virgl resource @src into the pages of @s at
- * (dx, dy) (clipped to it); @o holds @src from now on.  The host may still
- * be at it: @shown says what is left to do */
-bool         VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy,
-                                VgpuShown *shown);
+/* A frame in a blob's memory (Venus's linear images, which the host can
+ * neither draw from nor read into the screen in Venus's context): virgl's
+ * @format (B8G8R8A8, B8G8R8X8 or R8G8B8A8), rows of @stride bytes from @offset.  The
+ * kernel's virgl context keeps a texture for the blob whose guest memory is
+ * the blob's place in the host-visible region, and the host copies the
+ * frame into it (a transfer to the host) before showing that */
+typedef struct VgpuFrame { UINT32 format, stride; UINT64 offset; } VgpuFrame;
+/* Copy the top left @w x @h of virgl resource @src (or of the frame @fr in
+ * blob @src) into the pages of @s at (dx, dy) (clipped to it); @o holds
+ * @src (the blob's texture) from now on.  The host may still be at it:
+ * @shown says what is left to do */
+bool         VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, const VgpuFrame *fr, int w, int h, const VgpuScreen *s,
+                                int dx, int dy, VgpuShown *shown);
 /* Write (x, y, w, h) of @o at (dx, dy) of @s again (the desktop drew there) */
 bool         VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h);
 int       VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any, UINT64 timeout_ns);

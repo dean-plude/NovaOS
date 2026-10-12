@@ -4,13 +4,28 @@
  * seconds of presented frames from each.
  * Build: x86_64-w64-mingw32-gcc -O2 -o d3dtest.exe d3dtest.c -ld3d9 -ld3d11 -ldxgi -luser32 -lgdi32 -lole32
  *        (i686-w64-mingw32-gcc for the 32-bit one).  Usage: d3dtest [seconds [9|11]], d3dtest angle,
- *        d3dtest fps [seconds], d3dtest shared
+ *        d3dtest fps [seconds], d3dtest present, d3dtest shared
  *
  * d3dtest fps [seconds]: the frame-rate test.  A Direct3D 9 scene that
  * keeps the rasterizer busy (64 blended full-window quads at 640x480) runs
- * once on Mesa's Venus (Vulkan on the host's GPU through a virtio-gpu) and
- * once on lavapipe (Vulkan on NovaOS's CPU), each in a child process whose
- * VK_DRIVER_FILES names the driver; Venus must draw more frames per second.
+ * on Mesa's Venus (Vulkan on the host's GPU through a virtio-gpu) twice,
+ * its frames shown straight from the host (direct presentation) and then
+ * copied to the window through the GDI (NOVA_PRESENT=gdi), and once on
+ * lavapipe (Vulkan on NovaOS's CPU), each in a child process whose
+ * VK_DRIVER_FILES names the driver.  An uncounted turn on Venus comes
+ * first (the host compiles the scene's shaders then).  Venus must draw
+ * more frames per second than lavapipe, and direct presentation more than
+ * the GDI way while moving fewer bytes through guest memory per frame (the
+ * kernel's counters: NtNovaGpuCtl's statistics).  Under KVM, where the
+ * host's drawing is nearly the whole frame, direct presentation must move
+ * a sixteenth of the bytes or less instead of being faster.
+ *
+ * d3dtest present: direct presentation of Vulkan frames (DXVK on Venus).
+ * Four coloured quadrants (red, green / blue, white) presented by Direct3D
+ * 9 in a 256x192 window: shown from the host while the window is alone on
+ * screen ("present: quadrants at X Y W H": the self-test checks the screen
+ * there), through the GDI while a window covers part of it, and from the
+ * host again once that window has gone.
  *
  * d3dtest angle: Direct3D 11 brought up the way ANGLE's D3D11 back end
  * (Chromium's GPU process, so Steam's browser, WebView2 and Qt WebEngine)
@@ -43,6 +58,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <intrin.h>
 
 static int pass, fail;
 static void check(const char *what, int ok) { if (ok) pass++; else { fail++; printf("FAIL %s\n", what); } }
@@ -71,6 +87,33 @@ static HWND make_window(const char *title)
     return CreateWindowA("d3dtest", title, WS_OVERLAPPEDWINDOW | WS_VISIBLE, 120, 120,
                          r.right - r.left, r.bottom - r.top, 0, 0, GetModuleHandleA(NULL), 0);
 }
+
+/* The kernel's display counters (NtNovaGpuCtl 14): bytes moved through
+ * guest memory to show frames (sent to a virtio GPU's outputs, read back
+ * by virgl, window bitmaps drawn by the desktop, its back buffer copied to
+ * the screen), frames shown by direct presentation, the bytes the host
+ * wrote into the screen for them, and the microseconds programs spent
+ * asking for them (and waiting for the desktop meanwhile); false if none */
+enum { ST_TO_HOST, ST_FROM_HOST, ST_PAINTED, ST_SCREEN, ST_DIRECT, ST_DIRECT_BYTES, ST_DIRECT_US, ST_DIRECT_LOCK_US,
+       ST_N };
+typedef LONG_PTR(NTAPI *PFN_NtNovaGpuCtl)(INT_PTR, ULONG, ULONG_PTR, void *);
+static int gpu_stats(unsigned long long st[ST_N])
+{
+    static PFN_NtNovaGpuCtl ctl;
+    memset(st, 0, sizeof(unsigned long long) * ST_N);
+    if (!ctl) ctl = (PFN_NtNovaGpuCtl)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtNovaGpuCtl");
+    return ctl && ctl(0, 14, 0, st) == 0;
+}
+
+/* Bytes moved through guest memory between @a and @b */
+static unsigned long long guest_bytes(const unsigned long long *a, const unsigned long long *b)
+{
+    return (b[ST_TO_HOST] - a[ST_TO_HOST]) + (b[ST_FROM_HOST] - a[ST_FROM_HOST]) + (b[ST_PAINTED] - a[ST_PAINTED]) +
+           (b[ST_SCREEN] - a[ST_SCREEN]);
+}
+
+/* The pointer out of the way (over a window it stops direct presentation) */
+static void pointer_away(void) { SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 1, 0); }
 
 /* ---- Direct3D 9 ---------------------------------------------------------- */
 struct vtx { float x, y, z, rhw; DWORD c; };
@@ -482,7 +525,9 @@ static void test_angle(void)
 #define FPS_H 480
 #define FPS_QUADS 64
 
-/* The child: draw the scene for @secs seconds; prints "fps-result ADAPTER|FRAMES|MS" */
+/* The child: draw the scene for @secs seconds; prints "fps-result
+ * ADAPTER|FRAMES|MS|DIRECT|BYTES": DIRECT of the frames shown from the
+ * host, BYTES moved through guest memory meanwhile */
 static int fps_child(int secs)
 {
     IDirect3D9 *d3d = Direct3DCreate9(D3D_SDK_VERSION);
@@ -521,6 +566,10 @@ static int fps_child(int secs)
         q[i * 6] = a; q[i * 6 + 1] = b; q[i * 6 + 2] = d;
         q[i * 6 + 3] = b; q[i * 6 + 4] = e; q[i * 6 + 5] = d;
     }
+    pump();
+    pointer_away();
+    unsigned long long s0[ST_N], s1[ST_N];
+    gpu_stats(s0);
     DWORD t0 = GetTickCount(), frames = 0;
     while (GetTickCount() - t0 < (DWORD)secs * 1000) {
         pump();
@@ -532,17 +581,28 @@ static int fps_child(int secs)
         frames++;
     }
     DWORD ms = GetTickCount() - t0;
-    printf("fps-result %s|%lu|%lu\n", id.Description, (unsigned long)frames, (unsigned long)ms);
+    gpu_stats(s1);
+    printf("fps-result %s|%lu|%lu|%llu|%llu\n", id.Description, (unsigned long)frames, (unsigned long)ms,
+           s1[ST_DIRECT] - s0[ST_DIRECT], guest_bytes(s0, s1));
     IDirect3DDevice9_Release(dev);
     IDirect3D9_Release(d3d);
     DestroyWindow(w);
     return 0;
 }
 
-/* Run the child on the driver whose manifest is @manifest; its frames per
- * second (or -1), the adapter it reported in @adapter */
-static double fps_run(const char *manifest, int secs, char *adapter, int cap)
+typedef struct {
+    double fps; unsigned long frames, direct; double kib;
+    char adapter[256];
+} FpsResult;
+
+/* Run the child on the driver whose manifest is @manifest (and with
+ * NOVA_PRESENT=@present); its frames per second (or -1), the adapter it
+ * reported, the frames shown from the host and the KiB per frame through
+ * guest memory in @r */
+static double fps_run(const char *manifest, const char *present, int secs, FpsResult *r)
 {
+    memset(r, 0, sizeof(*r));
+    r->fps = -1;
     char exe[MAX_PATH], cmd[2 * MAX_PATH], out[MAX_PATH];
     GetModuleFileNameA(NULL, exe, sizeof(exe));
     GetTempPathA(sizeof(out), out);
@@ -550,13 +610,16 @@ static double fps_run(const char *manifest, int secs, char *adapter, int cap)
     DeleteFileA(out);
     snprintf(cmd, sizeof(cmd), "\"%s\" fpsrun %d \"%s\"", exe, secs, out);
     SetEnvironmentVariableA("VK_DRIVER_FILES", manifest);
+    SetEnvironmentVariableA("NOVA_PRESENT", present);
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return -1;
+    BOOL started = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    SetEnvironmentVariableA("VK_DRIVER_FILES", NULL);
+    SetEnvironmentVariableA("NOVA_PRESENT", NULL);
+    if (!started) return -1;
     WaitForSingleObject(pi.hProcess, (DWORD)(secs + 600) * 1000);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    SetEnvironmentVariableA("VK_DRIVER_FILES", NULL);
     char line[512] = "";
     FILE *f = fopen(out, "r");
     if (!f) return -1;
@@ -565,32 +628,172 @@ static double fps_run(const char *manifest, int secs, char *adapter, int cap)
     char *bar = strchr(line, '|');
     if (strncmp(line, "fps-result ", 11) || !bar) return -1;
     *bar = 0;
-    snprintf(adapter, cap, "%s", line + 11);
-    unsigned long frames = 0, ms = 0;
-    if (sscanf(bar + 1, "%lu|%lu", &frames, &ms) != 2 || !ms) return -1;
-    return frames * 1000.0 / ms;
+    snprintf(r->adapter, sizeof(r->adapter), "%s", line + 11);
+    unsigned long ms = 0;
+    unsigned long long direct = 0, bytes = 0;
+    if (sscanf(bar + 1, "%lu|%lu|%llu|%llu", &r->frames, &ms, &direct, &bytes) != 4 || !ms || !r->frames) return -1;
+    r->direct = (unsigned long)direct;
+    r->kib = bytes / 1024.0 / r->frames;
+    return r->fps = r->frames * 1000.0 / ms;
+}
+
+static void fps_print(const char *name, const FpsResult *r)
+{
+    printf("%-10s %.2f frames/s, %lu of %lu frames shown from the host, %.0f KiB a frame through guest memory  (%s)\n",
+           name, r->fps, r->direct, r->frames, r->kib, r->adapter);
+}
+
+/* Add run @b to @a (both ran, or @a is marked failed) */
+static void fps_add(FpsResult *a, const FpsResult *b)
+{
+    if (a->fps <= 0 || b->fps <= 0) { a->fps = -1; return; }
+    double ms = a->frames * 1000.0 / a->fps + b->frames * 1000.0 / b->fps;
+    unsigned long n = a->frames + b->frames;
+    a->kib = (a->kib * a->frames + b->kib * b->frames) / n;
+    a->frames = n;
+    a->direct += b->direct;
+    a->fps = a->frames * 1000.0 / ms;
+}
+
+/* Under KVM the guest's own copies cost little and the host's drawing is
+ * nearly the whole frame: direct presentation must still move far fewer
+ * bytes, and the times are printed */
+static int under_kvm(void)
+{
+    int r[4];
+    __cpuid(r, 0x40000000);
+    return r[1] == 0x4b4d564b && r[2] == 0x564b4d56 && r[3] == 0x4d;     /* "KVMKVMKVM" */
 }
 
 static int fps_test(int secs)
 {
-    char sys[MAX_PATH], venus[MAX_PATH], lvp[MAX_PATH], a_venus[256] = "", a_lvp[256] = "";
+    char sys[MAX_PATH], venus[MAX_PATH], lvp[MAX_PATH];
     GetSystemDirectoryA(sys, sizeof(sys));      /* (SysWOW64 for the 32-bit one) */
     const char *bits = sizeof(void *) == 8 ? "x86_64" : "x86";
     snprintf(venus, sizeof(venus), "%s\\virtio_icd.%s.json", sys, bits);
     snprintf(lvp, sizeof(lvp), "%s\\lvp_icd.%s.json", sys, bits);
-    printf("fps: Venus for %d s\n", secs);
-    double v = fps_run(venus, secs, a_venus, sizeof(a_venus));
-    printf("Venus     %.2f frames/s  (%s)\n", v, a_venus);
+    FpsResult w, v, g, v2, g2, l;
+    /* A turn that is not counted first: the host compiles the scene's
+     * shaders for the first program that draws it.  Then Venus both ways
+     * in turn, half the time each turn (direct, GDI, GDI, direct): the
+     * host draws most of each frame, and whatever else it does meanwhile
+     * weighs on both ways alike */
+    int half = secs > 1 ? secs / 2 : 1;
+    printf("fps: Venus for 1 s (not counted), then for %d s, through the GDI for %d s, twice\n", 2 * half, 2 * half);
+    fps_run(venus, NULL, 1, &w);
+    printf("fps: turns: warm-up %.2f frames/s\n", w.fps);
+    fps_run(venus, NULL, half, &v);
+    fps_run(venus, "gdi", half, &g);
+    fps_run(venus, "gdi", half, &g2);
+    fps_run(venus, NULL, half, &v2);
+    printf("fps: turns: direct %.2f, GDI %.2f, GDI %.2f, direct %.2f frames/s\n", v.fps, g.fps, g2.fps, v2.fps);
+    fps_add(&v, &v2);
+    fps_add(&g, &g2);
+    fps_print("Venus", &v);
+    fps_print("Venus/GDI", &g);
     printf("fps: lavapipe for %d s\n", secs);
-    double l = fps_run(lvp, secs, a_lvp, sizeof(a_lvp));
-    printf("lavapipe  %.2f frames/s  (%s)\n", l, a_lvp);
-    check("Venus ran", v > 0);
-    check("Venus is the adapter", strstr(a_venus, "Venus") != NULL);
-    check("lavapipe ran", l > 0);
-    check("lavapipe is the adapter", strstr(a_lvp, "llvmpipe") != NULL && !strstr(a_lvp, "Venus"));
-    check("Venus beats lavapipe", v > 0 && l > 0 && v > l);
-    if (v > 0 && l > 0) printf("Venus is %.1fx lavapipe\n", v / l);
+    fps_run(lvp, NULL, secs, &l);
+    fps_print("lavapipe", &l);
+    check("Venus ran", v.fps > 0 && g.fps > 0);
+    check("Venus is the adapter", strstr(v.adapter, "Venus") != NULL);
+    check("lavapipe ran", l.fps > 0);
+    check("lavapipe is the adapter", strstr(l.adapter, "llvmpipe") != NULL && !strstr(l.adapter, "Venus"));
+    check("Venus beats lavapipe", g.fps > 0 && l.fps > 0 && g.fps > l.fps);
+    check("Venus shows its frames from the host", v.direct * 10 >= v.frames * 9);
+    check("NOVA_PRESENT=gdi shows them through the GDI", g.fps > 0 && g.direct == 0);
+    check("direct presentation moves fewer bytes", v.fps > 0 && g.fps > 0 && v.kib * 4 < g.kib);
+    if (under_kvm())
+        check("direct presentation moves far fewer bytes under KVM", v.fps > 0 && g.fps > 0 && v.kib * 16 < g.kib);
+    else
+        check("direct presentation is faster", v.fps > 0 && g.fps > 0 && v.fps > g.fps);
+    if (v.fps > 0 && l.fps > 0) printf("Venus is %.1fx lavapipe\n", v.fps / l.fps);
+    if (v.fps > 0 && g.fps > 0)
+        printf("direct presentation: %.1f ms a frame against %.1f ms, %.0f KiB against %.0f KiB through guest memory\n",
+               1000.0 / v.fps, 1000.0 / g.fps, v.kib, g.kib);
     printf("d3dtest fps: %d passed, %d failed\n", pass, fail);
+    return fail != 0;
+}
+
+/* ---- direct presentation ------------------------------------------------ */
+#define PR_W 256
+#define PR_H 192
+
+/* Present the quadrants for @ms; the frames, and the frames shown from the host */
+static unsigned long present_for(IDirect3DDevice9 *dev, DWORD ms, unsigned long *direct)
+{
+    static const D3DCOLOR c[4] = { D3DCOLOR_XRGB(255, 0, 0), D3DCOLOR_XRGB(0, 255, 0), D3DCOLOR_XRGB(0, 0, 255),
+                                   D3DCOLOR_XRGB(255, 255, 255) };     /* (top left first) */
+    unsigned long long a[ST_N], b[ST_N];
+    unsigned long frames = 0;
+    gpu_stats(a);
+    for (DWORD t0 = GetTickCount(); GetTickCount() - t0 < ms; frames++) {
+        pump();
+        for (int i = 0; i < 4; i++) {
+            D3DRECT r = { (i & 1) * PR_W / 2, (i >> 1) * PR_H / 2, (i & 1) * PR_W / 2 + PR_W / 2,
+                          (i >> 1) * PR_H / 2 + PR_H / 2 };
+            IDirect3DDevice9_Clear(dev, 1, &r, D3DCLEAR_TARGET, c[i], 1.0f, 0);
+        }
+        IDirect3DDevice9_Present(dev, NULL, NULL, NULL, NULL);
+    }
+    gpu_stats(b);
+    *direct = (unsigned long)(b[ST_DIRECT] - a[ST_DIRECT]);
+    return frames;
+}
+
+static int present_test(void)
+{
+    unsigned long long st[ST_N];
+    RECT rr = { 0, 0, PR_W, PR_H };
+    AdjustWindowRect(&rr, WS_OVERLAPPEDWINDOW, FALSE);
+    HWND w = CreateWindowA("d3dtest", "Direct presentation", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100,
+                           rr.right - rr.left, rr.bottom - rr.top, 0, 0, GetModuleHandleA(NULL), 0);
+    IDirect3D9 *d3d = Direct3DCreate9(D3D_SDK_VERSION);
+    D3DADAPTER_IDENTIFIER9 id = { 0 };
+    if (d3d) IDirect3D9_GetAdapterIdentifier(d3d, 0, 0, &id);
+    printf("adapter: %s\n", id.Description);
+    D3DPRESENT_PARAMETERS pp = { 0 };
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp.BackBufferWidth = PR_W;
+    pp.BackBufferHeight = PR_H;
+    pp.hDeviceWindow = w;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    IDirect3DDevice9 *dev = NULL;
+    check("device", d3d && w &&
+                        SUCCEEDED(IDirect3D9_CreateDevice(d3d, 0, D3DDEVTYPE_HAL, w,
+                                                          D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev)));
+    check("Venus is the adapter", strstr(id.Description, "Venus") != NULL);
+    check("the kernel's counters", gpu_stats(st));
+    if (!dev) { printf("d3dtest present: %d passed, %d failed\n", pass, fail); return 1; }
+    pointer_away();
+    unsigned long d1, d2, d3, f;
+    present_for(dev, 1000, &d1);                        /* (the window is shown and active) */
+    POINT o = { 0, 0 };
+    ClientToScreen(w, &o);
+    printf("present: quadrants at %ld %ld %d %d\n", o.x, o.y, PR_W, PR_H);
+    f = present_for(dev, 6000, &d1);
+    printf("alone: %lu of %lu frames shown from the host\n", d1, f);
+    check("frames shown from the host while the window is alone", f > 0 && d1 * 10 >= f * 9);
+
+    HWND cover = CreateWindowA("d3dtest", "Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, o.x + PR_W / 2, o.y + PR_H / 2,
+                               200, 150, 0, 0, GetModuleHandleA(NULL), 0);
+    present_for(dev, 1000, &d2);                        /* (the window is drawn) */
+    f = present_for(dev, 3000, &d2);
+    printf("covered: %lu of %lu frames shown from the host\n", d2, f);
+    check("frames go through the GDI while a window covers it", cover && f > 0 && d2 == 0);
+
+    DestroyWindow(cover);
+    SetForegroundWindow(w);
+    pointer_away();
+    present_for(dev, 1000, &d3);
+    f = present_for(dev, 3000, &d3);
+    printf("uncovered: %lu of %lu frames shown from the host\n", d3, f);
+    check("frames shown from the host again once it has gone", f > 0 && d3 * 10 >= f * 9);
+    IDirect3DDevice9_Release(dev);
+    IDirect3D9_Release(d3d);
+    DestroyWindow(w);
+    printf("d3dtest present: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }
 
@@ -836,6 +1039,7 @@ int main(int argc, char **argv)
     wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
     wc.lpszClassName = "d3dtest";
     RegisterClassA(&wc);
+    if (argc > 1 && !strcmp(argv[1], "present")) return present_test();
     if (argc > 1 && !strcmp(argv[1], "angle")) test_angle();
     else {
         if (strcmp(only, "11")) test_d3d9(secs);

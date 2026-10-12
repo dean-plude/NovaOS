@@ -2692,7 +2692,8 @@ static void shown_add(const VgpuScreen *scr, const VgpuShown *sh)
     sched_unblock(g_shown_thread);
 }
 
-int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int y, int w, int h)
+int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struct VgpuFrame *fr, int x, int y, int w,
+                    int h)
 {
     int r = 1;
     VgpuScreen scr;
@@ -2708,7 +2709,7 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
             if (!g->ovl) g->ovl = VgpuOverlayCreate();
             VgpuShown sh;
             scr.only = scr.front;                 /* (the other page: gui_flip) */
-            if (g->ovl && VgpuOverlayPresent(g->ovl, src, w, h, &scr, x, y, &sh)) {
+            if (g->ovl && VgpuOverlayPresent(g->ovl, src, fr, w, h, &scr, x, y, &sh)) {
                 GdiRect cr = WmClientRect(g->wnd);
                 shown_add(&scr, &sh);
                 g->ovl_on = true;

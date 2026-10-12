@@ -188,7 +188,7 @@ Binary files mesa-26.2.4/src/util/perf/__pycache__/u_trace.cpython-313.pyc and .
  #endif
 --- a/src/virtio/vulkan/vn_renderer.h
 +++ b/src/virtio/vulkan/vn_renderer.h
-@@ -225,6 +225,13 @@
+@@ -225,6 +225,24 @@
                           const VkAllocationCallbacks *alloc,
                           struct vn_renderer **renderer);
  
@@ -197,12 +197,23 @@ Binary files mesa-26.2.4/src/util/perf/__pycache__/u_trace.cpython-313.pyc and .
 +vn_renderer_create_nova(struct vn_instance *instance,
 +                        const VkAllocationCallbacks *alloc,
 +                        struct vn_renderer **renderer);
++
++/* show a CPU image straight from the host's GPU (wsi_device::win32) */
++bool
++vn_renderer_nova_show(VkDevice device,
++                      VkDeviceMemory memory,
++                      uint64_t offset,
++                      uint32_t row_pitch,
++                      uint32_t width,
++                      uint32_t height,
++                      VkFormat format,
++                      void *hwnd);
 +#endif
 +
  static inline VkResult
  vn_renderer_create(struct vn_instance *instance,
                     const VkAllocationCallbacks *alloc,
-@@ -242,6 +249,8 @@
+@@ -242,6 +260,8 @@
           result = vn_renderer_create_vtest(instance, alloc, renderer);
     }
     return result;
@@ -275,6 +286,18 @@ Binary files mesa-26.2.4/src/util/perf/__pycache__/u_trace.cpython-313.pyc and .
        } while (true);
     }
  }
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -186,6 +186,9 @@
+    if (result != VK_SUCCESS)
+       return result;
+ 
++#ifdef _WIN32
++   physical_dev->wsi_device.win32.present_memory = vn_renderer_nova_show;
++#endif
+    physical_dev->wsi_device.supports_scanout = false;
+    physical_dev->wsi_device.supports_modifiers =
+       physical_dev->base.vk.supported_extensions.EXT_image_drm_format_modifier;
 --- a/src/vulkan/runtime/vk_instance.c
 +++ b/src/vulkan/runtime/vk_instance.c
 @@ -578,9 +578,18 @@
@@ -299,6 +322,22 @@ Binary files mesa-26.2.4/src/util/perf/__pycache__/u_trace.cpython-313.pyc and .
 Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_entrypoints.cpython-313.pyc and ../mesa-26.2.4/src/vulkan/util/__pycache__/vk_entrypoints.cpython-313.pyc differ
 Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_extensions.cpython-313.pyc and ../mesa-26.2.4/src/vulkan/util/__pycache__/vk_extensions.cpython-313.pyc differ
 Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features_gen.cpython-313.pyc and ../mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features_gen.cpython-313.pyc differ
+--- a/src/vulkan/wsi/wsi_common.h
++++ b/src/vulkan/wsi/wsi_common.h
+@@ -145,6 +145,13 @@
+       VkResult (*create_image_memory)(VkDevice device, void *resource,
+                                       const VkAllocationCallbacks *alloc,
+                                       VkDeviceMemory *out);
++      /* NovaOS: show the CPU image in @memory (rows of @row_pitch bytes
++       * from @offset) in window @hwnd straight from the GPU; false: present
++       * it through the GDI */
++      bool (*present_memory)(VkDevice device, VkDeviceMemory memory,
++                             uint64_t offset, uint32_t row_pitch,
++                             uint32_t width, uint32_t height,
++                             VkFormat format, void *hwnd);
+    } win32;
+ 
+    struct {
 --- a/src/vulkan/wsi/wsi_common_win32.cpp
 +++ b/src/vulkan/wsi/wsi_common_win32.cpp
 @@ -37,8 +37,8 @@
@@ -312,7 +351,7 @@ Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features
  
  #include <dcomp.h>
  
-@@ -820,6 +820,12 @@
+@@ -820,6 +820,26 @@
     if (chain->dxgi)
        return wsi_win32_queue_present_dxgi(chain, image, damage);
  
@@ -321,6 +360,20 @@ Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features
 +   if (!chain->base.wsi->sw)
 +      chain->base.wsi->WaitForFences(chain->base.device, 1, &chain->base.fences[image_index],
 +                                     true, UINT64_MAX);
++
++   /* (NovaOS: the kernel shows it straight from the GPU when it can; Venus
++    * there is a "software" device, without dma-bufs, whose frames common
++    * code has waited for) */
++   if (chain->base.wsi->win32.present_memory &&
++       chain->base.wsi->win32.present_memory(chain->base.device,
++                                             image->base.blit.memory ? image->base.blit.memory
++                                                                     : image->base.memory,
++                                             image->base.offsets[0], image->base.row_pitches[0],
++                                             chain->extent.width, chain->extent.height,
++                                             chain->base.image_info.create.format, chain->wnd)) {
++      wsi_win32_set_image_idle(chain, image);
++      return chain->status;
++   }
 +
     char *ptr = (char *)image->base.cpu_map;
     char *dptr = (char *)image->sw.ppvBits;

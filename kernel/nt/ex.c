@@ -214,8 +214,10 @@ static void lookaside_init(NT_LOOKASIDE_LIST *l, void *allocate, void *free, UIN
     l->MaximumDepth = 256;
     l->Size = (UINT32)size;
     l->Tag = tag ? tag : 0x6B414C6Cu;                /* 'lLAk' */
-    l->Allocate = allocate;
-    l->Free = free;
+    /* as on Windows, no routine means the pool's own: the WDK's inline
+     * ExAllocateFromNPagedLookasideList calls Allocate without a check */
+    l->Allocate = allocate ? allocate : (void *)nt_ExAllocatePoolWithTag;
+    l->Free = free ? free : (void *)nt_ExFreePool;
 }
 
 NT_API void nt_ExInitializeNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,

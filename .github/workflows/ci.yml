@@ -179,6 +179,21 @@ jobs:
         name: venus
         path: venus-out/venus.7z
         if-no-files-found: error
+    - name: Cache VKD3D-Proton
+      id: vkd3d-cache
+      uses: actions/cache@v4
+      with:
+        path: vkd3d-out/vkd3d-proton.7z
+        key: vkd3d-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/build_vkd3d_proton.py') }}
+    - name: Build VKD3D-Proton (Direct3D 12 on Vulkan) for the App Store
+      if: steps.vkd3d-cache.outputs.cache-hit != 'true'
+      run: python3 tools/build_vkd3d_proton.py vkd3d-out --work "$RUNNER_TEMP/vkd3d-work"
+    - name: Keep VKD3D-Proton for the release
+      uses: actions/upload-artifact@v4
+      with:
+        name: vkd3d-proton
+        path: vkd3d-out/vkd3d-proton.7z
+        if-no-files-found: error
     - name: Cache the QEMU with Venus
       id: qemu-cache
       uses: actions/cache@v4
@@ -189,7 +204,7 @@ jobs:
       if: steps.qemu-cache.outputs.cache-hit != 'true'
       run: tools/ci/build-qemu-venus.sh ~/qv "$RUNNER_TEMP/qemu-src"
     - name: Stage 7-Zip, the downloads and the test programs
-      run: VENUS_7Z=venus-out/venus.7z tools/ci/stage-graphics.sh gfx gfx-cache
+      run: VENUS_7Z=venus-out/venus.7z VKD3D_7Z=vkd3d-out/vkd3d-proton.7z tools/ci/stage-graphics.sh gfx gfx-cache
     - name: Run d2dtest, install Mesa, DXVK and Venus from the App Store, run gltest, d3dtest and the frame-rate
         tests
       run: |
@@ -252,6 +267,9 @@ jobs:
         name: venus
     - uses: actions/download-artifact@v4
       with:
+        name: vkd3d-proton
+    - uses: actions/download-artifact@v4
+      with:
         name: nova-boot
         path: boot
     - name: Make the update channel of this build
@@ -289,7 +307,7 @@ jobs:
         An installed NovaOS follows these builds with
         update channel https://github.com/dean-plude/os/releases/download/latest/novaos-update.txt"
         fi
-        files=(nova.iso nova.iso.sha256 venus.7z channel/kernel.elf channel/bootx64.efi channel/novaos-update.txt)
+        files=(nova.iso nova.iso.sha256 venus.7z vkd3d-proton.7z channel/kernel.elf channel/bootx64.efi channel/novaos-update.txt)
         if gh release view latest >/dev/null 2>&1; then
           gh release upload latest "${files[@]}" --clobber
           gh release edit latest --title "NovaOS (latest main)" --notes "$notes" "${mark[@]}"

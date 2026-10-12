@@ -31,6 +31,22 @@ class CorpusTests(unittest.TestCase):
             self.assertEqual([p['outcome'] for p in report['programs']],
                              ['passed', 'failed', 'skipped', 'not run', 'not run'])
 
+    def test_runtimes_novaos_builds_come_from_local_downloads(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            local, work = Path(d) / 'local', Path(d) / 'work'
+            local.mkdir()
+            (local / 'vkd3d-proton.7z').write_bytes(b'local build')
+            fetched = []
+            fake_fetch = lambda url, cache: fetched.append(url) or str(Path(d) / 'fetched')
+            (Path(d) / 'fetched').write_bytes(b'download')
+            app = SimpleNamespace(runtimes=['VKD3D-Proton', 'DXVK'])
+            with mock.patch.dict('os.environ', {'CORPUS_LOCAL_DOWNLOADS': str(local)}), \
+                 mock.patch.object(appcorpus, 'fetch', fake_fetch), mock.patch.object(appcorpus, 'stage_7zip'):
+                appcorpus.stage_runtimes(app, None, str(work))
+            self.assertEqual((work / 'Downloads' / 'vkd3d-proton.7z').read_bytes(), b'local build')
+            self.assertEqual(fetched, [appcorpus.catalog_entry('DXVK')[0], appcorpus.SEVENZIP])
+
     def test_isolated_apps_declare_network_without_inheriting_other_apps(self):
         for name in ('WebView2', 'Firefox', 'PuTTY'):
             with self.subTest(app=name):

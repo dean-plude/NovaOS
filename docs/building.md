@@ -469,8 +469,9 @@ checks, fall back to TCG with a warning on every event so main and pull
 requests never go red on the runner alone.  Every job's summary and the corpus table say which accelerator
 the test VMs used.
 
-The graphics suite downloads 7-Zip, Mesa, DXVK and VKD3D-Proton, builds Venus
-(`tools/build_venus.py`) and gltest/d3dtest/d3d12test/d2dtest/dwtest/dw3test, and runs on a
+The graphics suite downloads 7-Zip, Mesa and DXVK, builds Venus
+(`tools/build_venus.py`), VKD3D-Proton (`tools/build_vkd3d_proton.py`, which
+also needs `mingw-w64-tools` for `widl`) and gltest/d3dtest/d3d12test/d2dtest/dwtest/dw3test, and runs on a
 QEMU with Venus (`tools/ci/build-qemu-venus.sh`; without one the first
 monitor is a standard VGA and the Venus tests fail) with an OpenGL display,
 so on a machine without a screen it runs under `xvfb-run`:
@@ -478,7 +479,7 @@ so on a machine without a screen it runs under `xvfb-run`:
 ```bash
 sudo apt install p7zip-full gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
   ninja-build pkg-config libglib2.0-dev libpixman-1-dev libsdl2-dev libepoxy-dev libgbm-dev libdrm-dev \
-  libvulkan-dev libpng-dev glslang-tools bison flex python3-mako python3-yaml mesa-vulkan-drivers seabios ipxe-qemu xvfb
+  libvulkan-dev libpng-dev glslang-tools bison flex python3-mako python3-yaml mesa-vulkan-drivers seabios ipxe-qemu xvfb mingw-w64-tools
 pip install --user 'meson>=1.5' pycotap
 sudo install -d -o "$USER" /opt/qv
 tools/ci/build-qemu-venus.sh /opt/qv
@@ -696,7 +697,9 @@ device completes on the other.  `d3d12test` (on lavapipe, which its
 `d3d12.dll` and VKD3D-Proton: a device, a root signature and pipeline
 from HLSL, a triangle drawn and read back, a fence, and three seconds of
 the triangle presented in a window through a flip-model swap chain on the
-command queue, 64- and 32-bit.  `gltest present` shows four coloured
+command queue, 64- and 32-bit; `d3d12test compute` builds a compute
+pipeline from a real game's shader (Godot's SDFGI direct light, whose
+branches VKD3D-Proton 3.0.1's own translator got wrong), 64- and 32-bit.  `gltest present` shows four coloured
 quadrants on virgl: from the host's GPU while its window is alone on the
 screen (the test takes a screenshot and checks the quadrants are there,
 the right way up), through the GDI while another window covers part of

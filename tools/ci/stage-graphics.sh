@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Stage what tools/selftest.py --suite graphics puts on drive C::
 #   DIR/7zip       7-Zip (C:\Programs\7-Zip), which the App Store unpacks with
-#   DIR/downloads  the Mesa 3D, DXVK and VKD3D-Proton archives the App Store lists, and
+#   DIR/downloads  the Mesa 3D and DXVK archives the App Store lists, and
 #                  Venus's venus.7z (tools/build_venus.py; VENUS_7Z names one
-#                  already built) (C:\Downloads: the Store installs them
-#                  without a network)
+#                  already built) and VKD3D-Proton's vkd3d-proton.7z
+#                  (tools/build_vkd3d_proton.py; VKD3D_7Z names one already
+#                  built) (C:\Downloads: the Store installs them without a
+#                  network)
 #   DIR/tests      tools/gltest, tools/d3dtest, tools/d3d12test, tools/hlsltest, tools/d2dtest, tools/dwtest and tools/dw3test,
 #                  64- and 32-bit,
 #                  and d2dtest's reference image (C:\Tests)
 # Needs curl, 7z (p7zip-full) and MinGW-w64 (x86-64 and i686), and what
-# tools/build_venus.py needs unless VENUS_7Z is set.
+# tools/build_venus.py and tools/build_vkd3d_proton.py need unless VENUS_7Z
+# and VKD3D_7Z are set.
 #     tools/ci/stage-graphics.sh DIR [CACHE]
 # CACHE (default DIR/cache) keeps the downloads between runs.
 set -euo pipefail
@@ -24,7 +27,7 @@ RUNTIME_URLS_TEXT=$(python3 - "$ROOT" <<'PYTHON'
 import sys
 sys.path.insert(0, sys.argv[1] + '/tools')
 from appcorpus import catalog_entry
-for name in ('Mesa 3D', 'DXVK', 'VKD3D-Proton'):
+for name in ('Mesa 3D', 'DXVK'):
     print(catalog_entry(name)[0])
 PYTHON
 )
@@ -42,6 +45,11 @@ if [ -z "${VENUS_7Z:-}" ]; then
   VENUS_7Z="$CACHE/venus/venus.7z"
 fi
 cp "$VENUS_7Z" "$OUT/downloads/venus.7z"
+if [ -z "${VKD3D_7Z:-}" ]; then
+  python3 "$ROOT/tools/build_vkd3d_proton.py" "$CACHE/vkd3d"
+  VKD3D_7Z="$CACHE/vkd3d/vkd3d-proton.7z"
+fi
+cp "$VKD3D_7Z" "$OUT/downloads/vkd3d-proton.7z"
 
 for arch in x86_64 i686; do
   sfx=""

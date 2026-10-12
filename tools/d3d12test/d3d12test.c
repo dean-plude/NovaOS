@@ -6,8 +6,12 @@
  * DXGI flip-model swap chain on the command queue, as games draw.  It runs
  * on lavapipe (VK_DRIVER_FILES), which has every Vulkan feature
  * VKD3D-Proton needs, even when Venus is installed.
+ * `d3d12test compute` instead builds a compute pipeline from a real game's
+ * shader (godot_sdfgi_direct_light.h, DXIL whose branches VKD3D-Proton 3.0.1
+ * turned into SPIR-V that lavapipe refused) with a root signature covering
+ * its resources, and checks that the pipeline builds.
  * Build: x86_64-w64-mingw32-gcc -O2 -o d3d12test.exe d3d12test.c -ld3dcompiler_47 -ldxgi -ldxguid -luser32
- *        (i686-w64-mingw32-gcc for the 32-bit one).  Usage: d3d12test [seconds]
+ *        (i686-w64-mingw32-gcc for the 32-bit one).  Usage: d3d12test [seconds | compute]
  *        (0 seconds: the read-back only, no window)
  * d3d12.dll is loaded at run time, so the program starts (and says why it
  * cannot draw) when VKD3D-Proton is not installed. */
@@ -20,6 +24,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "godot_sdfgi_direct_light.h"
 
 #define W 64
 #define H 64
@@ -302,15 +308,79 @@ static void test_present(int secs)
     DestroyWindow(hwnd);
 }
 
+/* Godot's SDFGI direct-light compute shader: its resources (from the DXIL's
+ * PSV0 part, all in space 0) are two constant buffers (b900000 and
+ * b1700000000, root descriptors here), SRVs t100000-t100007, t100000000,
+ * t400000 and t1000000, UAVs u500000-u800000 and samplers s200000 and
+ * s300000 (a table each, as Godot binds them) */
+static void test_compute(Serialize_t serialize)
+{
+    static const D3D12_DESCRIPTOR_RANGE res[] = {
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 8, 100000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 100000000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 400000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1000000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 500000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 600000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 700000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 800000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+    };
+    static const D3D12_DESCRIPTOR_RANGE smp[] = {
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 200000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+        { D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 300000, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND },
+    };
+    D3D12_ROOT_PARAMETER rp[4];
+    memset(rp, 0, sizeof(rp));
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rp[0].Descriptor.ShaderRegister = 900000;
+    rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rp[1].Descriptor.ShaderRegister = 1700000000;
+    rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rp[2].DescriptorTable.NumDescriptorRanges = sizeof(res) / sizeof(res[0]);
+    rp[2].DescriptorTable.pDescriptorRanges = res;
+    rp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rp[3].DescriptorTable.NumDescriptorRanges = sizeof(smp) / sizeof(smp[0]);
+    rp[3].DescriptorTable.pDescriptorRanges = smp;
+    D3D12_ROOT_SIGNATURE_DESC rd = { 4, rp, 0, NULL, D3D12_ROOT_SIGNATURE_FLAG_NONE };
+    ID3DBlob *sig = NULL, *err = NULL;
+    ID3D12RootSignature *rs = NULL;
+    ID3D12PipelineState *cs = NULL;
+    HRESULT hr = serialize(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+    if (SUCCEEDED(hr)) hr = ID3D12Device_CreateRootSignature(dev, 0, ID3D10Blob_GetBufferPointer(sig), ID3D10Blob_GetBufferSize(sig),
+                                                             &IID_ID3D12RootSignature, (void **)&rs);
+    if (sig) ID3D10Blob_Release(sig);
+    if (err) ID3D10Blob_Release(err);
+    check("compute root signature", SUCCEEDED(hr) && rs);
+    if (!rs) return;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC cd;
+    memset(&cd, 0, sizeof(cd));
+    cd.pRootSignature = rs;
+    cd.CS.pShaderBytecode = godot_sdfgi_direct_light;
+    cd.CS.BytecodeLength = sizeof(godot_sdfgi_direct_light);
+    hr = ID3D12Device_CreateComputePipelineState(dev, &cd, &IID_ID3D12PipelineState, (void **)&cs);
+    printf("CreateComputePipelineState (Godot SDFGI direct light)  0x%08lx\n", (unsigned long)hr);
+    check("Godot's compute pipeline", SUCCEEDED(hr) && cs);
+    if (cs) ID3D12PipelineState_Release(cs);
+    ID3D12RootSignature_Release(rs);
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    int secs = argc > 1 ? atoi(argv[1]) : 3;
+    int compute = argc > 1 && !strcmp(argv[1], "compute");
+    int secs = argc > 1 && !compute ? atoi(argv[1]) : 3;
     char sys[MAX_PATH], lvp[MAX_PATH];
     GetSystemDirectoryA(sys, sizeof(sys));      /* (SysWOW64 for the 32-bit one) */
     snprintf(lvp, sizeof(lvp), "%s\\lvp_icd.%s.json", sys, sizeof(void *) == 8 ? "x86_64" : "x86");
     SetEnvironmentVariableA("VK_DRIVER_FILES", lvp);
-    if (setup()) {
+    if (compute) {
+        HMODULE m = LoadLibraryA("d3d12.dll");
+        CreateDevice_t create = m ? (CreateDevice_t)GetProcAddress(m, "D3D12CreateDevice") : NULL;
+        Serialize_t serialize = m ? (Serialize_t)GetProcAddress(m, "D3D12SerializeRootSignature") : NULL;
+        HRESULT hr = create ? create(NULL, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device, (void **)&dev) : E_FAIL;
+        check("d3d12.dll and device", serialize && SUCCEEDED(hr) && dev);
+        if (dev) test_compute(serialize);
+    } else if (setup()) {
         test_offscreen();
         if (secs > 0) test_present(secs);
     }

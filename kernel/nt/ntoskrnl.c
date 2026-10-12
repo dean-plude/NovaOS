@@ -315,6 +315,16 @@ NT_API NTSTATUS nt_RtlGetVersion(void *info)
     return STATUS_SUCCESS;
 }
 
+/* PsGetVersion: the version RtlGetVersion reports (FALSE: a free build, not a checked one) */
+NT_API UINT8 nt_PsGetVersion(UINT32 *major, UINT32 *minor, UINT32 *build, NT_UNICODE_STRING *csd)
+{
+    if (major) *major = 10;
+    if (minor) *minor = 0;
+    if (build) *build = 19041;
+    if (csd && csd->Buffer && csd->MaximumLength >= 2) { csd->Length = 0; csd->Buffer[0] = 0; }
+    return 0;
+}
+
 /* The debugger is not attached, so no frames are captured */
 NT_API UINT16 nt_RtlCaptureStackBackTrace(UINT32 skip, UINT32 count, void **frames, UINT32 *hash)
 {

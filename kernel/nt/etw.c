@@ -51,3 +51,11 @@ NT_API NTSTATUS nt_WmiTraceMessage(UINT64 logger, UINT32 flags, void *guid, UINT
     (void)logger; (void)flags; (void)guid; (void)num;
     return NT_STATUS_SUCCESS;
 }
+
+/* WmiQueryTraceInformation: no trace session to tell about */
+NT_API NTSTATUS nt_WmiQueryTraceInformation(UINT32 cls, void *info, UINT32 len, UINT32 *ret, void *buf)
+{
+    (void)cls; (void)info; (void)len; (void)buf;
+    if (ret) *ret = 0;
+    return NT_STATUS_NOT_SUPPORTED;
+}

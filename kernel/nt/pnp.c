@@ -142,6 +142,12 @@ bool NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql)
     return true;
 }
 
+const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo)
+{
+    NtPdo *p = pdo_of(pdo);
+    return p ? p->instance : NULL;
+}
+
 /* ---- strings for the driver: wide, in pool it frees with ExFreePool ---- */
 
 static NT_WCHAR *pool_wide(const char *s, size_t n)
@@ -263,6 +269,12 @@ static UINT32 config(NtPdo *p, bool write, UINT8 *buf, UINT32 off, UINT32 len)
         else buf[i] = (UINT8)(v >> sh);
     }
     return len;
+}
+
+UINT32 NtPnpConfig(NT_DEVICE_OBJECT *pdo, bool write, void *buf, UINT32 off, UINT32 len)
+{
+    NtPdo *p = pdo_of(pdo);
+    return p ? config(p, write, buf, off, len) : 0;
 }
 
 static NT_API void bus_ref(void *ctx) { (void)ctx; }

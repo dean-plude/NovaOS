@@ -30,3 +30,6 @@
   Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
   runs on KMDF, reports its serial ports as child devices, and a program
   exchanges bytes with the host through `\\.\Global\<port name>`.
+  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
+  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
+  the NTFS volume on its disk.

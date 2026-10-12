@@ -90,6 +90,23 @@ bus driver alone) when it says it may, and a child no longer reported is
 removed.  `vioser.sys` itself is Microsoft-signed, but it runs on the
 KMDF framework above, so it too needs test signing on for now.
 
+Since step 30.11 a Windows **storage driver** (a Storport miniport) runs a
+disk controller, on NovaOS's own Storport host (`kernel/nt/storport.c`,
+the `storport.sys` exports; Microsoft's `storport.sys` is never shipped).
+The miniport registers with `StorPortInitialize`; NovaOS starts the
+adapter as Windows does (`HwFindAdapter` with the controller's resources
+in its `PORT_CONFIGURATION_INFORMATION`, `HwInitialize`, the passive
+initialization routine), sends it SCSI requests as `STORAGE_REQUEST_BLOCK`s
+through `HwBuildIo` and `HwStartIo` with a scatter/gather list, and takes
+completions from `StorPortNotification(RequestComplete)` in the
+miniport's interrupt and DPCs.  Each disk it finds (INQUIRY, READ
+CAPACITY) joins the block layer as `storN`, and its volumes mount like any
+other disk's (`[DRIVES] D: is NTFS volume "..." on stor0`).  virtio-win's
+`viostor.sys` on QEMU's virtio-blk card is the first.  For now the host
+sends one request at a time through a 64 KiB bounce buffer, interrupts
+are line-based (no MSI-X), and a started adapter cannot be removed yet;
+deeper queues, MSI-X and removal come later.
+
 ### Driver signing
 
 A kernel driver loads only if it is signed the way Windows 11 requires

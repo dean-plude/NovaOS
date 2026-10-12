@@ -9,6 +9,15 @@
  * (neither I/O, on the caller's own buffers) and report the objects as the
  * driver sees them.  DriverUnload removes the link and the device.
  *
+ * Step 30.2's kernel API: direct-I/O control codes read and fill the
+ * caller's buffer through its MDL (MmGetSystemAddressForMdlSafe, as the
+ * WDK has it); one runs checks of the IRQL (CR8 written directly, as the
+ * WDK's inline KeRaiseIrql does, and the exports), a DPC queued under a
+ * spin lock, the pool, events, semaphores, a timer, a fast mutex and an
+ * MDL for pool; another returns STATUS_PENDING and has a timer's DPC
+ * complete the IRP.  DriverEntry leaves one pool block (tag 'Leak') for
+ * the unload report.
+ *
  * It is built by tools/drivertest/mksys.py with clang and lld-link
  * /driver against kernel/nt/exports.h's ntoskrnl.exe, and uses NovaOS's
  * own wdm.h for the structures (the WDK is not needed).  The wdmtest self-
@@ -28,6 +37,73 @@ IMPORT void      IofCompleteRequest(NT_IRP *irp, char boost);
 IMPORT void      RtlInitUnicodeString(NT_UNICODE_STRING *u, const NT_WCHAR *s);
 IMPORT void      RtlCopyUnicodeString(NT_UNICODE_STRING *dst, const NT_UNICODE_STRING *src);
 IMPORT unsigned int DbgPrint(const char *fmt, ...);
+IMPORT unsigned char KeGetCurrentIrql(void);
+IMPORT unsigned char KeRaiseIrqlToDpcLevel(void);
+IMPORT void      KeLowerIrql(unsigned char irql);
+IMPORT unsigned char KeAcquireSpinLockRaiseToDpc(NT_KSPIN_LOCK *l);
+IMPORT void      KeReleaseSpinLock(NT_KSPIN_LOCK *l, unsigned char old);
+IMPORT void      KeAcquireInStackQueuedSpinLock(NT_KSPIN_LOCK *l, NT_KLOCK_QUEUE_HANDLE *h);
+IMPORT void      KeReleaseInStackQueuedSpinLock(NT_KLOCK_QUEUE_HANDLE *h);
+IMPORT void      KeInitializeDpc(NT_KDPC *dpc, NT_KDEFERRED_ROUTINE fn, void *ctx);
+IMPORT unsigned char KeInsertQueueDpc(NT_KDPC *dpc, void *a1, void *a2);
+IMPORT void      KeFlushQueuedDpcs(void);
+IMPORT void      KeStallExecutionProcessor(unsigned int us);
+IMPORT void     *ExAllocatePoolWithTag(int type, unsigned long long size, unsigned int tag);
+IMPORT void     *ExAllocatePool2(unsigned long long flags, unsigned long long size, unsigned int tag);
+IMPORT void      ExFreePoolWithTag(void *p, unsigned int tag);
+IMPORT void      KeInitializeEvent(NT_KEVENT *ev, int type, unsigned char state);
+IMPORT int       KeSetEvent(NT_KEVENT *ev, int increment, unsigned char wait);
+IMPORT NT_STATUS KeWaitForSingleObject(void *obj, int reason, char mode, unsigned char alertable, long long *timeout);
+IMPORT void      KeInitializeSemaphore(NT_KSEMAPHORE *s, int count, int limit);
+IMPORT int       KeReleaseSemaphore(NT_KSEMAPHORE *s, int increment, int adjustment, unsigned char wait);
+IMPORT void      KeInitializeTimer(NT_KTIMER *t);
+IMPORT unsigned char KeSetTimer(NT_KTIMER *t, long long due, NT_KDPC *dpc);
+IMPORT unsigned char KeCancelTimer(NT_KTIMER *t);
+IMPORT long long KeQueryPerformanceCounter(long long *freq);
+IMPORT void      ExAcquireFastMutex(NT_FAST_MUTEX *m);
+IMPORT void      ExReleaseFastMutex(NT_FAST_MUTEX *m);
+IMPORT NT_MDL   *IoAllocateMdl(void *va, unsigned int len, unsigned char secondary, unsigned char quota, NT_IRP *irp);
+IMPORT void      IoFreeMdl(NT_MDL *m);
+IMPORT void      MmBuildMdlForNonPagedPool(NT_MDL *m);
+IMPORT void     *MmMapLockedPagesSpecifyCache(NT_MDL *m, char mode, int cache, void *at, unsigned int bugcheck,
+                                              unsigned int priority);
+IMPORT long long MmGetPhysicalAddress(void *va);
+IMPORT void     *MmGetSystemRoutineAddress(NT_UNICODE_STRING *name);
+
+#define DISPATCH_LEVEL        2
+#define APC_LEVEL             1
+#define NonPagedPoolNx        512
+#define POOL_FLAG_NON_PAGED   0x40ull
+#define TAG_WDMT              0x746D6457u        /* 'Wdmt' */
+#define TAG_LEAK              0x6B61654Cu        /* 'Leak' */
+
+/* The WDK's inline KeGetCurrentIrql and KeRaiseIrql/KeLowerIrql on x64 */
+static inline unsigned char read_cr8(void)
+{
+    unsigned long long v;
+    __asm__ volatile ("mov %%cr8, %0" : "=r"(v));
+    return (unsigned char)v;
+}
+static inline void write_cr8(unsigned char irql)
+{
+    __asm__ volatile ("mov %0, %%cr8" : : "r"((unsigned long long)irql) : "memory");
+}
+
+/* The WDK's MmGetSystemAddressForMdlSafe (a macro) */
+static void *mdl_address(NT_MDL *m)
+{
+    if (m->MdlFlags & (NT_MDL_MAPPED_TO_SYSTEM_VA | NT_MDL_SOURCE_IS_NONPAGED_POOL)) return m->MappedSystemVa;
+    return MmMapLockedPagesSpecifyCache(m, 0, 1 /* MmCached */, 0, 0, 16 /* NormalPagePriority */);
+}
+
+/* The WDK's ExInitializeFastMutex (inline) */
+static void init_fast_mutex(NT_FAST_MUTEX *m)
+{
+    m->Count = 1;
+    m->Owner = 0;
+    m->Contention = 0;
+    KeInitializeEvent(&m->Event, NT_SynchronizationEvent, 0);
+}
 
 typedef struct {
     unsigned int  opens;
@@ -35,6 +111,9 @@ typedef struct {
     unsigned char data[256];
     NT_UNICODE_STRING registry_path;
     NT_WCHAR      registry_buf[128];
+    NT_KTIMER     timer;                         /* IOCTL_WDMTEST_PENDING */
+    NT_KDPC       dpc;
+    NT_IRP       *pending;
 } Ext;
 
 static NT_STATUS complete(NT_IRP *irp, NT_STATUS st, unsigned long long info)
@@ -82,6 +161,133 @@ static NT_API NT_STATUS read_write(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
     return complete(irp, NT_STATUS_SUCCESS, n);
 }
 
+/* -----------------------------------------------------------------------
+ * Step 30.2: the kernel API
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    volatile int   ran;
+    unsigned char  irql;
+    void          *a1, *a2;
+} DpcState;
+
+static NT_API void dpc_routine(NT_KDPC *dpc, void *ctx, void *a1, void *a2)
+{
+    DpcState *s = ctx;
+    s->irql = read_cr8();
+    s->a1 = a1;
+    s->a2 = a2;
+    s->ran = 1;
+}
+
+static void kernel_checks(WDMTEST_KERNEL *k)
+{
+    k->irql_passive = read_cr8() == 0 && KeGetCurrentIrql() == 0;
+
+    /* the IRQL as the WDK's inline functions keep it, then the exports */
+    unsigned char old = read_cr8();
+    write_cr8(DISPATCH_LEVEL);
+    k->irql_cr8 = read_cr8() == DISPATCH_LEVEL && KeGetCurrentIrql() == DISPATCH_LEVEL;
+    write_cr8(old);
+    old = KeRaiseIrqlToDpcLevel();
+    k->irql_export = old == 0 && read_cr8() == DISPATCH_LEVEL;
+    KeLowerIrql(old);
+    k->irql_export &= read_cr8() == 0;
+
+    /* a DPC queued while a spin lock is held runs when it is let go */
+    NT_KSPIN_LOCK lock = 0;
+    NT_KDPC dpc;
+    DpcState ds = { 0, 0, 0, 0 };
+    KeInitializeDpc(&dpc, dpc_routine, &ds);
+    unsigned char irql = KeAcquireSpinLockRaiseToDpc(&lock);
+    unsigned char first = KeInsertQueueDpc(&dpc, (void *)0x1234, (void *)0x5678);
+    k->dpc_once = first && !KeInsertQueueDpc(&dpc, 0, 0);
+    KeStallExecutionProcessor(2000);
+    k->dpc_held = first && !ds.ran;
+    KeReleaseSpinLock(&lock, irql);
+    for (int i = 0; i < 1000 && !ds.ran; i++) KeStallExecutionProcessor(10);
+    k->dpc_ran = ds.ran && ds.irql == DISPATCH_LEVEL && ds.a1 == (void *)0x1234 && ds.a2 == (void *)0x5678 && read_cr8() == 0;
+
+    /* an in-stack queued spin lock */
+    NT_KLOCK_QUEUE_HANDLE h;
+    KeAcquireInStackQueuedSpinLock(&lock, &h);
+    k->queued_lock = read_cr8() == DISPATCH_LEVEL && lock != 0;
+    KeReleaseInStackQueuedSpinLock(&h);
+    k->queued_lock &= read_cr8() == 0 && lock == 0;
+
+    /* the pool */
+    unsigned char *a = ExAllocatePoolWithTag(NonPagedPoolNx, 100, TAG_WDMT);
+    unsigned char *b = ExAllocatePool2(POOL_FLAG_NON_PAGED, 8192, TAG_WDMT);
+    k->pool = a && b && !((unsigned long long)a & 15) && !((unsigned long long)b & 4095);
+    for (int i = 0; b && i < 8192; i++) if (b[i]) k->pool = 0;
+
+    /* an MDL for pool */
+    if (a) {
+        NT_MDL *m = IoAllocateMdl(a, 100, 0, 0, 0);
+        if (m) {
+            MmBuildMdlForNonPagedPool(m);
+            k->pool_mdl = mdl_address(m) == a && (m->MdlFlags & NT_MDL_SOURCE_IS_NONPAGED_POOL) &&
+                          MmGetPhysicalAddress(a) == (long long)(NtMdlPfns(m)[0] << 12 | ((unsigned long long)a & 4095));
+            IoFreeMdl(m);
+        }
+    }
+    if (a) ExFreePoolWithTag(a, TAG_WDMT);
+    if (b) ExFreePoolWithTag(b, TAG_WDMT);
+
+    /* a synchronization event: one wait takes it */
+    NT_KEVENT ev;
+    long long zero = 0;
+    KeInitializeEvent(&ev, NT_SynchronizationEvent, 0);
+    k->event = KeWaitForSingleObject(&ev, 0, 0, 0, &zero) == NT_STATUS_TIMEOUT && KeSetEvent(&ev, 0, 0) == 0 &&
+               KeWaitForSingleObject(&ev, 0, 0, 0, &zero) == NT_STATUS_SUCCESS &&
+               KeWaitForSingleObject(&ev, 0, 0, 0, &zero) == NT_STATUS_TIMEOUT;
+
+    /* a semaphore */
+    NT_KSEMAPHORE sem;
+    KeInitializeSemaphore(&sem, 0, 5);
+    k->semaphore = KeReleaseSemaphore(&sem, 0, 2, 0) == 0 && KeWaitForSingleObject(&sem, 0, 0, 0, &zero) == 0 &&
+                   KeWaitForSingleObject(&sem, 0, 0, 0, &zero) == 0 &&
+                   KeWaitForSingleObject(&sem, 0, 0, 0, &zero) == NT_STATUS_TIMEOUT;
+
+    /* a 20 ms timer */
+    NT_KTIMER t;
+    long long freq, t0, t1;
+    KeInitializeTimer(&t);
+    t0 = KeQueryPerformanceCounter(&freq);
+    KeSetTimer(&t, -200000, 0);
+    NT_STATUS st = KeWaitForSingleObject(&t, 0, 0, 0, 0);
+    t1 = KeQueryPerformanceCounter(0);
+    k->timer_ms = freq ? (unsigned int)((t1 - t0) * 1000 / freq) : 0;
+    k->timer = st == NT_STATUS_SUCCESS && k->timer_ms >= 20;
+
+    /* a fast mutex */
+    NT_FAST_MUTEX fm;
+    init_fast_mutex(&fm);
+    ExAcquireFastMutex(&fm);
+    k->fast_mutex = read_cr8() == APC_LEVEL && !(fm.Count & 1);
+    ExReleaseFastMutex(&fm);
+    k->fast_mutex &= read_cr8() == 0 && (fm.Count & 1);
+
+    NT_UNICODE_STRING name;
+    RtlInitUnicodeString(&name, L"KeSetEvent");
+    k->routine = MmGetSystemRoutineAddress(&name) == (void *)KeSetEvent;
+}
+
+/* IOCTL_WDMTEST_PENDING: completed by the timer's DPC */
+static NT_API void pending_dpc(NT_KDPC *dpc, void *ctx, void *a1, void *a2)
+{
+    Ext *x = ctx;
+    NT_IRP *irp = x->pending;
+    x->pending = 0;
+    if (!irp) return;
+    WDMTEST_PENDING *p = irp->AssociatedIrp.SystemBuffer;
+    p->text[0] = 'l'; p->text[1] = 'a'; p->text[2] = 't'; p->text[3] = 'e';
+    p->dpc_irql = read_cr8();
+    p->pending_returned = (NtIrpCurrentStack(irp)->Control & NT_SL_PENDING_RETURNED) != 0;
+    irp->IoStatus.Status = NT_STATUS_SUCCESS;
+    irp->IoStatus.Information = sizeof(WDMTEST_PENDING);
+    IofCompleteRequest(irp, 0);
+}
+
 static NT_API NT_STATUS control(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 {
     NT_IO_STACK_LOCATION *sl = NtIrpCurrentStack(irp);
@@ -104,6 +310,40 @@ static NT_API NT_STATUS control(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
         if (out < in || !src || !dst) return complete(irp, NT_STATUS_INVALID_PARAMETER, 0);
         for (unsigned int i = 0; i < in; i++) dst[i] = (unsigned char)(src[i] + 1);
         return complete(irp, NT_STATUS_SUCCESS, in);
+    }
+    case IOCTL_WDMTEST_DIRECT: {                       /* METHOD_IN_DIRECT: read the buffer through its MDL */
+        NT_MDL *m = irp->MdlAddress;
+        const unsigned char *p = m ? mdl_address(m) : 0;
+        if (!p || m->ByteCount != out) return complete(irp, NT_STATUS_INVALID_PARAMETER, 0);
+        unsigned int same = 0;
+        for (unsigned int i = 0; i < out; i++) same += p[i] == (unsigned char)(i * 7);
+        return complete(irp, NT_STATUS_SUCCESS, same);
+    }
+    case IOCTL_WDMTEST_DIRECT_OUT: {                   /* METHOD_OUT_DIRECT: fill it through its MDL */
+        NT_MDL *m = irp->MdlAddress;
+        unsigned char *p = m ? mdl_address(m) : 0;
+        if (!p || in < 1 || out < sizeof(WDMTEST_MDL)) return complete(irp, NT_STATUS_INVALID_PARAMETER, 0);
+        for (unsigned int i = 0; i < out; i++) p[i] = (unsigned char)(sys[0] + i);
+        WDMTEST_MDL *d = (WDMTEST_MDL *)p;
+        d->flags = (unsigned short)m->MdlFlags;
+        d->byte_count = m->ByteCount;
+        d->byte_offset = m->ByteOffset;
+        d->pages = (unsigned int)((m->Size - sizeof(NT_MDL)) / 8);
+        return complete(irp, NT_STATUS_SUCCESS, out);
+    }
+    case IOCTL_WDMTEST_KERNEL: {
+        if (out < sizeof(WDMTEST_KERNEL)) return complete(irp, NT_STATUS_BUFFER_TOO_SMALL, 0);
+        WDMTEST_KERNEL *k = (WDMTEST_KERNEL *)sys;
+        for (unsigned int i = 0; i < sizeof(*k); i++) ((unsigned char *)k)[i] = 0;
+        kernel_checks(k);
+        return complete(irp, NT_STATUS_SUCCESS, sizeof(WDMTEST_KERNEL));
+    }
+    case IOCTL_WDMTEST_PENDING: {
+        if (out < sizeof(WDMTEST_PENDING) || x->pending) return complete(irp, NT_STATUS_INVALID_PARAMETER, 0);
+        NtIrpMarkPending(irp);
+        x->pending = irp;
+        KeSetTimer(&x->timer, -300000, &x->dpc);       /* 30 ms */
+        return NT_STATUS_PENDING;
     }
     case IOCTL_WDMTEST_INFO: {
         if (out < sizeof(WDMTEST_INFO)) return complete(irp, NT_STATUS_BUFFER_TOO_SMALL, 0);
@@ -134,6 +374,9 @@ static NT_API NT_STATUS control(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 
 static NT_API void unload(NT_DRIVER_OBJECT *drv)
 {
+    Ext *x = drv->DeviceObject->DeviceExtension;
+    KeCancelTimer(&x->timer);
+    KeFlushQueuedDpcs();
     NT_UNICODE_STRING link;
     RtlInitUnicodeString(&link, WDMTEST_LINK);
     IoDeleteSymbolicLink(&link);
@@ -154,6 +397,9 @@ NT_API NT_STATUS DriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *registry_
     x->registry_path.Buffer = x->registry_buf;
     x->registry_path.MaximumLength = sizeof(x->registry_buf);
     RtlCopyUnicodeString(&x->registry_path, registry_path);   /* (RegistryPath is only lent for the call) */
+    KeInitializeTimer(&x->timer);
+    KeInitializeDpc(&x->dpc, pending_dpc, x);
+    ExAllocatePoolWithTag(NonPagedPoolNx, 32, TAG_LEAK);       /* (left for the unload report) */
     RtlInitUnicodeString(&link, WDMTEST_LINK);
     st = IoCreateSymbolicLink(&link, &name);
     if (!NT_SUCCESS_(st)) { IoDeleteDevice(dev); return st; }

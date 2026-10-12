@@ -532,6 +532,10 @@ named program or test demonstrates it.
   driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
   kernel-mode test driver loads with `sc start`, serves a program's
   `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.
+  Step 30.2's first part is in: the IRQL in `CR8`, DPCs, spin locks,
+  events, semaphores, timers, fast mutexes, the pool, MDLs and direct I/O,
+  and IRPs completed later from a DPC; kernel-mode SEH, work items and
+  system threads, `Zw*` registry and file calls and ETW stubs are next.
 
 <!-- END generated:next-hardware -->
 

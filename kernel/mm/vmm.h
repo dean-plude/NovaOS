@@ -77,3 +77,11 @@ void *kernel_alloc_pages(size_t count);
  * @count must match the count passed to the allocator.
  */
 void kernel_free_pages(void *ptr, size_t count);
+
+/*
+ * Map @n physical frames @pa[] (not necessarily one run) at consecutive
+ * kernel addresses, writable, not executable (uncached with @no_cache):
+ * the address of the first, or NULL.  The frames stay the caller's.
+ */
+void *kernel_map_frames(const uintptr_t *pa, size_t n, bool no_cache);
+void  kernel_unmap_frames(void *va, size_t n);

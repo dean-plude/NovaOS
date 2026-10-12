@@ -28,6 +28,7 @@
 #include "smp.h"
 #include "spinlock.h"
 #include "ksym.h"
+#include "irql.h"
 #include "../mm/vmm.h"
 #include "../arch/x86_64/cpu.h"
 #include "../arch/x86_64/gdt.h"
@@ -745,10 +746,19 @@ static void switch_locked(RunQueue *rq)
 
     bkl_switch_out(prev);               /* its big kernel lock waits for it */
 
+    /* The IRQL is the thread's own (a Windows driver waiting at APC_LEVEL,
+     * holding a fast mutex): the next thread starts at PASSIVE_LEVEL or
+     * goes on at its own */
+    UINT8 irql = KeIrql();
+    if (irql >= DISPATCH_LEVEL)
+        kprintf("[SCHED] IRQL_NOT_LESS_OR_EQUAL: thread '%s' (TID %lu) waits at IRQL %u\n", prev->name, prev->tid, irql);
+    if (irql) KeIrqlSet(PASSIVE_LEVEL);
+
     /* Perform the actual register swap */
     context_switch(&prev->context, &next->context);
     /* Running as the thread that called us, switched back in */
     finish_switch();
+    if (irql) KeIrqlSet(irql);
 }
 
 /* The second half of a switch, in the thread switched to */
@@ -932,6 +942,7 @@ void sched_tick(void)
              * wait timeout due on this CPU meanwhile.) */
             DesktopWatchdog(tick_count);
             UmTimerTick(tick_count);
+            KiTimerTick(tick_count);             /* (Windows drivers' KTIMERs) */
             static uint64_t last_balance;
             if (tick_count - last_balance >= 100) {     /* once a second */
                 last_balance = tick_count;
@@ -980,8 +991,16 @@ void sched_tick(void)
     }
     if ((g_resched[cpu] || preempt) && !slice_over) g_preempting[cpu] = true;
     g_slice_end[cpu] = slice_over;
-    if (preempt || steal_now || g_resched[cpu] || slice_over)
+    if (preempt || steal_now || g_resched[cpu] || slice_over) {
+        /* A Windows driver at DISPATCH_LEVEL or above is never switched
+         * out: the switch happens when its IRQL drops (the DPC interrupt) */
+        if (KeIrql() >= DISPATCH_LEVEL) {
+            g_resched[cpu] = true;
+            KiRequestDispatchInterrupt();
+            return;
+        }
         perform_switch();
+    }
 }
 
 /* Timer ticks since boot (100 Hz) */
@@ -1219,6 +1238,7 @@ void sched_resched_ipi(void)
 {
     uint32_t cpu = this_cpu();
     if (!g_resched[cpu] || !current_thread) return;
+    if (KeIrql() >= DISPATCH_LEVEL) { KiRequestDispatchInterrupt(); return; }   /* (see sched_tick) */
     g_preempting[cpu] = current_thread->ticks_slice < slice_ticks(current_thread);
     perform_switch();
 }

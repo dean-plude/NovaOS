@@ -418,6 +418,43 @@ static void mapped_free(void *ptr)
     slots_free((va - MAPPED_BASE) / MAPPED_SLOT, slots);
 }
 
+/* Frames that are not one run, at consecutive kernel addresses (Windows
+ * drivers' MDLs): whole slots of the mapped window with no header page */
+void *kernel_map_frames(const uintptr_t *pa, size_t n, bool no_cache)
+{
+    if (!g_mapped_ready || !n) return NULL;
+    size_t slots = (n + SLOT_PAGES - 1) / SLOT_PAGES;
+    IrqState s = spin_lock_irqsave(&g_slot_lock);
+    size_t first = slots_find(slots);
+    if (first < MAPPED_SLOTS) {
+        slots_mark(g_slot_used, first, slots, true);
+        if (first == g_slot_hint) g_slot_hint = first + slots;
+    }
+    spin_unlock_irqrestore(&g_slot_lock, s);
+    if (first >= MAPPED_SLOTS) return NULL;
+    uintptr_t va = MAPPED_BASE + first * MAPPED_SLOT;
+    for (size_t i = 0; i < n; i++) {
+        if (NT_SUCCESS(paging_map(va + i * PAGE_SIZE, pa[i], PAGE_SIZE,
+                                  MAP_WRITABLE | MAP_NO_EXEC | (no_cache ? MAP_NO_CACHE : 0))))
+            continue;
+        for (size_t k = 0; k < i; k++) paging_unmap(va + k * PAGE_SIZE, PAGE_SIZE);
+        slots_free(first, slots);
+        return NULL;
+    }
+    return (void *)va;
+}
+
+void kernel_unmap_frames(void *va, size_t n)
+{
+    uintptr_t at = ALIGN_DOWN((uintptr_t)va, PAGE_SIZE);
+    if (!is_mapped((void *)at)) {
+        kprintf("[VMM] BUG: kernel_unmap_frames(%p): not a mapping of frames\n", va);
+        return;
+    }
+    for (size_t i = 0; i < n; i++) paging_unmap(at + i * PAGE_SIZE, PAGE_SIZE);
+    slots_free((at - MAPPED_BASE) / MAPPED_SLOT, (n + SLOT_PAGES - 1) / SLOT_PAGES);
+}
+
 static bool mapped_resize(void *ptr, size_t size)
 {
     MappedHeader *h = mapped_header(ptr);

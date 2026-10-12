@@ -1,0 +1,23 @@
+# Import list of viostor.sys, extracted from the real signed driver with
+# tools/ci/check-driver-imports.py --dump (do not edit by hand).  The
+# import-coverage check (the same tool) verifies every ntoskrnl.exe and
+# hal.dll import below is provided by kernel/nt/exports.h; wdfldr.sys
+# imports are the KMDF loader's own exports, provided by a later driver
+# step (30.4/30.5), and are allow-listed there.
+ntoskrnl.exe	DbgPrint
+ntoskrnl.exe	KeBugCheck
+ntoskrnl.exe	KeGetCurrentIrql
+ntoskrnl.exe	KeQueryActiveProcessorCountEx
+ntoskrnl.exe	KeQueryMaximumProcessorCountEx
+ntoskrnl.exe	MmGetPhysicalAddress
+storport.sys	StorPortBusy
+storport.sys	StorPortExtendedFunction
+storport.sys	StorPortGetBusData
+storport.sys	StorPortGetDeviceBase
+storport.sys	StorPortGetPhysicalAddress
+storport.sys	StorPortGetScatterGatherList
+storport.sys	StorPortGetUncachedExtension
+storport.sys	StorPortInitialize
+storport.sys	StorPortNotification
+storport.sys	StorPortSetDeviceQueueDepth
+storport.sys	StorPortStallExecution

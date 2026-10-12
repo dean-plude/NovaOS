@@ -32,7 +32,7 @@ IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports
 
 # Modules NovaOS itself provides (its export tables); every import from one
 # of these must appear in exports.h.
-PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "usbd.sys", "wmilib.sys"}
+PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "usbd.sys", "wmilib.sys", "storport.sys"}
 # The KMDF loader NovaOS ships (tools/kmdf/wdfldr.c): its exports are the
 # WDFLDR_EXPORTS list of tools/kmdf/build_kmdf.py, which its .def is made from.
 KMDF_BUILD = os.path.join(ROOT, "tools", "kmdf", "build_kmdf.py")

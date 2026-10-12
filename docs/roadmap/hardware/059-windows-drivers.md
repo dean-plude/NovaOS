@@ -34,3 +34,6 @@
   through NovaOS's own USB bus interface (URBs over its USB core): FTDI's
   driver, downloaded by hardware ID, makes QEMU's `usb-serial` converter
   COM3, which programs open with the communications functions.
+  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
+  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
+  the NTFS volume on its disk.

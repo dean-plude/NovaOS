@@ -30,6 +30,9 @@
  *   intr.c      device interrupts (IoConnectInterrupt(Ex)) at DIRQL
  *   dma.c       device registers (MmMapIoSpace), contiguous memory and DMA
  *               adapters (IoGetDmaAdapter)
+ *   storport.c  storport.sys: the Storport host storage miniports run on,
+ *               each disk it finds handed to the block layer (storport.h:
+ *               the Storport structures)
  *   wdm.h       the structures drivers see, in Windows' x64 layout
  *
  * Program-facing glue (the system calls and handles) is in um/um_driver.c.
@@ -99,7 +102,8 @@ bool      NtPsHandleClose(void *handle);
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
 /* exports.c: whether the kernel itself provides @module's exports
- * (ntoskrnl.exe, hal.dll, and usbd.sys and wmilib.sys, which NovaOS writes) */
+ * (ntoskrnl.exe, hal.dll, and the usbd.sys, wmilib.sys and storport.sys
+ * NovaOS writes) */
 bool      NtExportModule(const char *module);
 
 /* io.c */
@@ -159,6 +163,11 @@ bool      NtUsbPdoProperty(NT_DEVICE_OBJECT *pdo, int prop, UINT32 *num);
 /* io.c: give unnamed device @d a name, as Windows names a PDO a bus driver left
  * unnamed (\Device\NTPNP_nnnnnnnn) */
 NTSTATUS  NtIoNameDevice(NT_DEVICE_OBJECT *d);
+
+/* PDO @pdo's PCI configuration space (bytes read or written), and its
+ * device instance (PCI\VEN_...), for ndis.c and storport.c */
+UINT32    NtPnpConfig(NT_DEVICE_OBJECT *pdo, bool write, void *buf, UINT32 off, UINT32 len);
+const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo);
 
 /* intr.c: a vector of its own for GSI @gsi, routed (masked until a driver
  * connects to it) to the boot CPU; 0 if it cannot be routed */

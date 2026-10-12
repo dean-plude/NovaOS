@@ -22,7 +22,7 @@
  * devices that waits until the last one closes, as on Windows.
  *
  * An import from a module other than the kernel's own (ntoskrnl.exe,
- * hal.dll, and usbd.sys and wmilib.sys, NtExportModule) is an
+ * hal.dll, usbd.sys, wmilib.sys and storport.sys: NtExportModule) is an
  * export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
  * already loaded, or System32\drivers\<module> loaded for it: mapped the
  * same way (signature checked, its own imports bound), no driver object

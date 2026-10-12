@@ -516,6 +516,136 @@ named program or test demonstrates it.
 
 ---
 
+## After 0.1: what comes next
+
+The following phases extend the roadmap beyond the first release. Keep the
+same rule as Phases 15–22: each step is a focused change with a repeatable
+check. The order is a proposal; Phase 23 comes first because 0.1 is not
+complete until it has been checked on a real PC. The checked items below
+reflect work already demonstrated in this repository.
+
+### Phase 23: Finish 0.1 on real hardware
+
+**Goal:** close what 0.1 still owes. **Gate:** the 0.1 ISO boots on the
+ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
+
+- [ ] **23.1 T14 hand checks.** Run the boot and device checklist in
+  [install-and-power.md](install-and-power.md) on the T14 and keep its boot
+  log and PCI IDs. Mark each device in [hardware.md](hardware.md) verified
+  or missing; this settles the real-machine checks in 21.2–21.5 and 22.5.
+- [ ] **23.2 First missing T14 driver.** Use the 23.1 log to choose and fix
+  the first device that does not work, retaining its QEMU regression test.
+- [ ] **23.3 A clean nightly week.** Fix failures until seven scheduled
+  nightly runs in a row pass; this also completes 15.4 and 17.7.
+- [ ] **23.4 Hyper-V.** Check VMBus keyboard and mouse in a Hyper-V
+  Generation 2 VM. Done when NovaOS reaches the desktop and accepts input.
+- [ ] **23.5 Update signing key.** Ship the release public key in
+  `update_key.h`; verify that a 0.1 install accepts a signed 0.1.1 test
+  update and rejects an unsigned one.
+
+### Phase 24: Gaming
+
+**Goal:** Steam and GOG Galaxy each install, sign in and launch a DRM-free
+game with sound and a controller.
+
+- [ ] **24.1 Steam library.** Sign in through Steam's own browser and show
+  the account's library.
+- [ ] **24.2 GOG Galaxy library.** Complete sign-in and show an owned game.
+- [ ] **24.3 Install and play from a store.** Install a DRM-free game through
+  Steam or Galaxy and reach gameplay with sound and a controller.
+- [x] **24.4 Direct3D 12.** VKD3D-Proton support renders a D3D12 sample and
+  the Godot 4.7 game Squash the Creeps; see [the D3D12 game
+  check](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot).
+- [ ] **24.5 Roblox on the T14.** Check Roblox's VM test on real hardware
+  without bypassing it; done when Roblox reaches its home page.
+- [ ] **24.6 Epic Games Launcher.** Start after WebView2's GPU path and
+  sign in to show its library.
+- [ ] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
+  what NovaOS lacks and the faithful fix; never bypass or patch them.
+
+### Phase 25: GPU
+
+**Goal:** fast graphics without CPU copies, retaining CPU rendering when no
+supported GPU exists. **Gate:** WebView2 and a game render on the GPU with a
+measured frame-time gain over the CPU path.
+
+- [x] **25.1 WebView2 on the GPU.** ANGLE and DirectComposition present
+  WebView2's page on Venus across resize, cross-process parenting and
+  teardown, on x64 and x86 (`dcomptest dxvk`, `dcomptest life`).
+- [x] **25.2 Direct virtio-GPU presentation.** OpenGL frames on virgl reach
+  the display without CPU readback or GDI copies; `gltest present` and
+  `gltest fps` compare the direct and fallback paths. See
+  [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
+- [ ] **25.3 Intel GPU design.** Design a native driver for the T14's Intel
+  Iris Xe, covering kernel display and memory management under Mesa's iris
+  and anv. Done when the design is merged and display modes change on the
+  T14's panel.
+- [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
+  outperform llvmpipe and lavapipe.
+- [ ] **25.5 Second monitor.** Drive an external display through HDMI or
+  USB-C and move windows between it and the T14 panel.
+
+### Phase 26: Kernel, console and storage
+
+**Goal:** close the remaining API gaps. **Gate:** a terminal app hosts
+`cmd.exe` through ConPTY, and NTFS C: survives a power cut.
+
+- [ ] **26.1 Console cells on libvterm.** Make console screen buffers and
+  pseudo consoles share one cell model. Done when a full-screen program
+  draws the same in a console window and through a pseudo console.
+- [ ] **26.2 ConPTY end to end.** Complete process attachment, pipe lifetime,
+  resize and VT output together. Done when a terminal app runs and resizes
+  an interactive `cmd.exe` through `CreatePseudoConsole`.
+- [ ] **26.3 NTFS robustness.** Verify interrupted writes and a full disk:
+  after a power cut during writes, `chkdsk` reports no errors; a full disk
+  returns `ERROR_DISK_FULL` without corruption. Existing tests cover
+  interrupted writes and full-disk behavior; the clean `chkdsk` gate remains.
+- [ ] **26.4 Performance budget.** Build on the lock and redraw work in
+  PRs #297–#306. CI should report boot time, Firefox start time and
+  `smpstress` scaling on every run and fail on a large regression.
+
+### Phase 27: Apps for everyday use
+
+**Goal:** make NovaOS a desktop someone can use all day. **Gate:** 40 GUI
+apps from the App Store catalog pass their nightly scripts.
+
+- [ ] **27.1 Grow the corpus.** Add an App Store app per pull request,
+  starting from failures in the existing corpus, until 40 GUI apps pass.
+- [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
+  and save `.docx` and `.xlsx` files.
+- [ ] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
+- [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
+  from the T14 over its own network.
+- [ ] **27.5 App Store badges from CI.** Show each app's verified badge from
+  the latest nightly run (completing 20.7).
+
+### Phase 28: Laptop hardware
+
+**Goal:** make the T14 fully usable away from a desk. **Gate:** it goes
+online over Wi-Fi, takes a video call and runs a day on battery with sleep.
+
+- [ ] **28.1 Wi-Fi.** Support the Intel AX211 and its redistributable
+  firmware; join WPA2 and WPA3 networks and fetch HTTPS content.
+- [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
+  after sleep.
+- [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
+  show the built-in webcam in a camera app.
+- [ ] **28.4 Battery life.** Add processor idle states and device power
+  management; measure idle power within 50% of Windows on the same T14.
+- [ ] **28.5 A second reference PC.** Pick an AMD machine and list its
+  devices in [hardware.md](hardware.md), each marked supported or missing.
+
+### Phase 29: NovaOS 0.2 release
+
+**Goal:** a release that runs games and works on real laptops. **Gate:** a
+tagged `v0.2.0` passes the full CI suite and T14 checks.
+
+- [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
+  write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
+  must boot in QEMU and on both reference PCs.
+
+---
+
 ## Cross-cutting (maintain throughout)
 
 - **Automated boot CI** (done): every pull request builds NovaOS, boots it

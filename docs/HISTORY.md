@@ -11003,6 +11003,42 @@ DXVK's factory.  The GPU-composited path, DirectComposition on the GPU
 (`DCompositionCreateDevice3`, which NovaOS's `dcomp.dll` does not export),
 is the next step.
 
+## Corpus downloads survive a bad minute at github.com
+
+The scheduled nightly of 2026-10-12 (main `810709f`) failed only because
+the SuperTux shard could not download 7-Zip from `github.com/ip7z/7zip`
+(`curl` exit 22, an HTTP error), and PR #325's shard (05) lost the same way on
+MinGit.  Every program and the SMP stress passed.  `curl --retry` retries
+only 408, 429 and 5xx answers, so a hosted runner that got a 403 or 404 for
+a moment gave up at once.
+
+- **`tools/download_cache.py`** retries every failed download (`curl
+  --retry-all-errors`, then up to four more attempts after 10, 30, 60 and
+  120 s) before the shard fails.  Pinned hashes are still checked on the
+  bytes that finally arrive.
+- **`tests/tools/test_download_cache.py`** covers the retry pauses and the
+  final failure.
+
+## Direct presentation measured fairly under KVM
+
+Direct presentation (roadmap 25.2) looked a few per cent slower than the
+GDI way on the CI runners, where QEMU uses KVM.  A host-side profile of
+each turn of `gltest fps` (`tools/ci/host_profile.py`, CPU time of QEMU's
+threads per turn) showed why: the first virgl program after boot waits
+while the host compiles the scene's shaders, leaving the host idle for
+part of its turn, and later programs find them in the host's cache.
+Direct presentation always went first, so it carried that wait; its
+second turn used the host's CPU as fully as the GDI turns and drew more
+frames.
+
+- **gltest fps** now starts with a short virgl turn that is not counted,
+  prints every turn's frame rate, and again requires direct presentation
+  to be faster under KVM as well as without it (the check that only
+  compared bytes under KVM is gone).
+- `tools/ci/host_profile.py` also echoes gltest's own figures into the CI
+  log, which otherwise shows a passing test's output only in the
+  `graphics-out` artifact.
+
 ## DirectComposition on the GPU through resizes, teardown and other processes
 
 The last part of WebView2's GPU-composited output (roadmap 25.1): the path

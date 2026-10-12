@@ -34,6 +34,15 @@ shipped).
   communications functions (`comm.c`) send the `IOCTL_SERIAL_*` requests.
 - **`pnputil /scan-devices /search-online /install`** installs what it
   finds and searches again for the devices the new drivers bring.
+- **Fixed on the way**: setupapi copied none of a `CopyFiles` section's
+  plain file lines (no `=`) and now takes each file from the store
+  subfolder its `SourceDisksFiles` line names; kernel `Zw*` and
+  `RtlQueryRegistryValues` paths starting `\Registry\` never matched the
+  prefix (a case fold turned its `\` into `|`); `KUSER_SHARED_DATA` is
+  also mapped at its kernel address, where drivers' inline
+  `KeQuerySystemTime` reads it; `ExFreePoolWithTag(p, 0)` is not checked,
+  as on Windows; a device's class and friendly name are read again when
+  its driver starts.
 
 The new `usbserial` devices boot puts QEMU's `usb-serial` (an FTDI FT232)
 on xHCI with its line looped back: pnputil downloads FTDI's

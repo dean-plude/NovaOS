@@ -1271,8 +1271,8 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
  * program and drawn through the GDI: the kernel's own virgl context copies
  * it on the host into a texture whose guest memory is the screen itself
  * (the VGA framebuffer, or a virtio output's picture), in the frame's own
- * format when that is laid out as the screen is (a plain copy, the
- * cheapest blit), and a transfer writes that part into the screen's
+ * format when that is laid out as the screen is (a plain copy of the
+ * bytes, not a blit that draws them), and a transfer writes that part into the screen's
  * memory.  Nothing in the guest copies a pixel, and the host copies the
  * frame once, as many bytes as the read-back would (the host's time is
  * most of a frame's).  The window's overlay holds the resource it showed
@@ -1284,6 +1284,8 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
 #define CAPSET_VIRGL2       2
 #define CCMD_BLIT           16             /* virgl_protocol.h: VIRGL_CCMD_BLIT */
 #define BLIT_SIZE           21
+#define CCMD_COPY_REGION    17             /* VIRGL_CCMD_RESOURCE_COPY_REGION */
+#define COPY_REGION_SIZE    13
 #define PIPE_MASK_RGBA      0xF
 #define TEXTURE_2D          2
 #define BIND_RENDER_TARGET  (1u << 1)
@@ -1388,6 +1390,17 @@ void VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h)
         }
 }
 
+/* The same as a plain copy, for resources of one format (the host copies
+ * the bytes, as glCopyImageSubData does, where a blit draws them) */
+static UINT32 *copy_region(UINT32 *c, UINT32 dst, int dx, int dy, UINT32 src, int sx, int sy, int w, int h)
+{
+    c[0] = CCMD_COPY_REGION | ((UINT32)COPY_REGION_SIZE << 16);
+    c[1] = dst; c[2] = 0; c[3] = (UINT32)dx; c[4] = (UINT32)dy; c[5] = 0;
+    c[6] = src; c[7] = 0; c[8] = (UINT32)sx; c[9] = (UINT32)sy; c[10] = 0;
+    c[11] = (UINT32)w; c[12] = (UINT32)h; c[13] = 1;
+    return c + COPY_REGION_SIZE + 1;
+}
+
 /* Copy (x, y, w, h) of @o's frame to (dx, dy) of every page of the screen
  * and write it into the screen's memory: done when this returns, or (with
  * @shown) once the host reaches shown->seq, the part of the screen in
@@ -1405,7 +1418,9 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
     if (w <= 0 || h <= 0) return true;
     UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
     for (int pg = 0; pg < s->pages && pg < 2; pg++)
-        end = blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
+        end = g_pfmt == o->src->format
+                  ? copy_region(end, scr->res, dx, dy + pg * s->lines, o->src->res, x, y, w, h)
+                  : blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
     if (!VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
     for (int pg = 0; pg < s->pages; pg++) {
         UINT32 row = (UINT32)(dy + pg * s->lines);

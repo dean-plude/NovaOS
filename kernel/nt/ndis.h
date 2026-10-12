@@ -114,7 +114,7 @@ typedef struct {
 } NDIS_MINIPORT_DRIVER_CHARACTERISTICS;
 
 /* NDIS_MINIPORT_PNP_CHARACTERISTICS (NdisSetOptionalHandlers) */
-#define NDIS_OBJECT_TYPE_MINIPORT_PNP_CHARACTERISTICS 0x8C
+#define NDIS_OBJECT_TYPE_MINIPORT_PNP_CHARACTERISTICS 0x92
 typedef struct {
     NDIS_OBJECT_HEADER Header;
     void              *MiniportAddDeviceHandler, *MiniportRemoveDeviceHandler,

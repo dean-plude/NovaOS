@@ -488,8 +488,8 @@ NOVARUN_QEMU=/opt/qv/bin/qemu-system-x86_64 LD_LIBRARY_PATH=/opt/qv/lib/x86_64-l
 ```
 
 Beside it runs `tools/ci/host_profile.py graphics-out &`: for each turn of
-`gltest fps` (a virgl warm-up, direct presentation, the GDI way, the GDI way,
-direct, then llvmpipe) it prints one `host profile:` line, also kept in
+`gltest fps` (direct presentation, the GDI way, the GDI way, direct, then
+llvmpipe) it prints one `host profile:` line, also kept in
 `host-profile.log`, with the turn's wall time and the CPU milliseconds a second
 used by each group of QEMU's threads (the main thread, where virglrenderer
 draws and copies, the vCPUs, llvmpipe's workers, ...), and echoes gltest's own

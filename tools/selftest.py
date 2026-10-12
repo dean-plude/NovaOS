@@ -574,6 +574,7 @@ def verdict(t, out, ok, exe):
             if not re.search(e, out):
                 return f'missing "{e}"'
         return None
+    exe = exe[:31]                  # (the kernel logs a process's name cut to 31 characters)
     m = re.search(r'\[UM\] Started ' + re.escape(exe) + r' \(PID (\d+)\)', out)
     if not m:
         return 'did not start'

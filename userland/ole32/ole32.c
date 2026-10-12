@@ -1065,3 +1065,24 @@ WINOLEAPI_(HRESULT) CoGetObject(LPCWSTR name, void *opts, REFIID iid, void **out
 { (void)name; (void)opts; (void)iid; if (out) *out = NULL; return (HRESULT)0x800401E4L; }   /* MK_E_SYNTAX */
 WINOLEAPI_(HRESULT) OleSetContainedObject(IUnknown *obj, BOOL contained) { (void)contained; return obj ? S_OK : E_INVALIDARG; }
 WINOLEAPI_(HRESULT) OleNoteObjectVisible(IUnknown *obj, BOOL visible) { (void)visible; return obj ? S_OK : E_INVALIDARG; }
+
+/* The thread's error object: ole32 exports these as Windows does (Godot
+ * imports them from here); oleaut32 keeps the object */
+static FARPROC errinfo_fn(const char *name)
+{
+    HMODULE oa = LoadLibraryA("oleaut32.dll");
+    return oa ? GetProcAddress(oa, name) : 0;
+}
+
+WINOLEAPI_(HRESULT) SetErrorInfo(ULONG reserved, IUnknown *e)
+{
+    HRESULT (WINAPI *f)(ULONG, IUnknown *) = (void *)errinfo_fn("SetErrorInfo");
+    return f ? f(reserved, e) : E_NOTIMPL;
+}
+
+WINOLEAPI_(HRESULT) GetErrorInfo(ULONG reserved, IUnknown **out)
+{
+    HRESULT (WINAPI *f)(ULONG, IUnknown **) = (void *)errinfo_fn("GetErrorInfo");
+    if (out) *out = 0;
+    return f ? f(reserved, out) : S_FALSE;
+}

@@ -1447,3 +1447,107 @@ NTSYSAPI BOOLEAN NTAPI RtlDosPathNameToNtPathName_U(PCWSTR dos, PUNICODE_STRING 
 {
     return NT_SUCCESS(RtlDosPathNameToNtPathName_U_WithStatus(dos, nt, part, rel));
 }
+
+/* __chkstk (x64): RAX bytes are about to be taken below RSP; touch each
+ * page of them from the top down, so a guard page meets them in order.
+ * Keeps every register but R10 and R11, and RSP.  Code that takes over 4 KB
+ * of stack at once calls it: LLVM's JIT in Mesa's llvmpipe and lavapipe
+ * looks it up among the loaded modules (Windows' ntdll exports it) for
+ * shaders with big stack frames, and jumped to garbage without it. */
+#ifdef __x86_64__
+__asm__(".text\n"
+        ".globl __chkstk\n"
+        "__chkstk:\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "leaq 24(%rsp), %r10\n\t"                  /* the caller's RSP */
+        "movq %r10, %r11\n\t"
+        "subq %rax, %r11\n\t"                      /* the lowest byte wanted */
+        "jb 3f\n"
+        "1:\n\t"
+        "subq $0x1000, %r10\n\t"
+        "cmpq %r11, %r10\n\t"
+        "jb 2f\n\t"
+        "testb %al, (%r10)\n\t"
+        "jmp 1b\n"
+        "2:\n\t"
+        "testb %al, (%r11)\n"
+        "3:\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "ret\n"
+        ".section .drectve,\"yn\"\n\t"
+        ".ascii \" /EXPORT:__chkstk\"\n\t"
+        ".text\n");
+#endif
+
+/* Half-precision conversions as LLVM's compiler-rt names them.  Without
+ * F16C (NovaOS does not turn on AVX state, and QEMU's default CPU has
+ * none), LLVM's JIT in Mesa's lavapipe and llvmpipe calls these for every
+ * 16-bit float a shader reads or writes, and looks them up among the loaded
+ * modules; Windows has them in no DLL, so they are here.  The half travels
+ * in the low 16 bits of XMM0 (LLVM's x86-64 convention for _Float16). */
+#ifdef __x86_64__
+int _fltused = 0x9875;                      /* (the linker's mark of floating-point code) */
+
+static float h2f(unsigned short h)
+{
+    unsigned sign = (unsigned)(h & 0x8000) << 16, exp = (h >> 10) & 0x1F, man = h & 0x3FF, bits;
+    if (exp == 0x1F) bits = sign | 0x7F800000 | (man << 13);              /* infinity, NaN */
+    else if (exp) bits = sign | ((exp + 112) << 23) | (man << 13);          /* normal */
+    else if (!man) bits = sign;                                             /* zero */
+    else {                                                                  /* subnormal: normalize */
+        exp = 113;
+        while (!(man & 0x400)) { man <<= 1; exp--; }
+        bits = sign | (exp << 23) | ((man & 0x3FF) << 13);
+    }
+    float f;
+    __builtin_memcpy(&f, &bits, 4);
+    return f;
+}
+
+static unsigned short f2h(unsigned bits)
+{
+    unsigned short sign = (unsigned short)((bits >> 16) & 0x8000);
+    unsigned exp = (bits >> 23) & 0xFF, man = bits & 0x7FFFFF;
+    if (exp == 0xFF) return sign | 0x7C00 | (man ? 0x200 | (man >> 13) : 0);   /* infinity, NaN (quiet) */
+    int e = (int)exp - 112;                                                /* the half's exponent */
+    if (e >= 0x1F) return sign | 0x7C00;                                   /* too big: infinity */
+    if (e <= 0) {                                                          /* subnormal half, or zero */
+        if (e < -10) return sign;
+        man |= 0x800000;
+        unsigned shift = (unsigned)(14 - e), h = man >> shift, rest = man & ((1u << shift) - 1), half = 1u << (shift - 1);
+        if (rest > half || (rest == half && (h & 1))) h++;
+        return sign | (unsigned short)h;
+    }
+    unsigned h = ((unsigned)e << 10) | (man >> 13), rest = man & 0x1FFF;
+    if (rest > 0x1000 || (rest == 0x1000 && (h & 1))) h++;                /* (a carry rounds up to infinity) */
+    return sign | (unsigned short)h;
+}
+
+static _Float16 as_half(unsigned short h) { _Float16 r; __builtin_memcpy(&r, &h, 2); return r; }
+static unsigned short half_bits(_Float16 x) { unsigned short h; __builtin_memcpy(&h, &x, 2); return h; }
+
+__declspec(dllexport) float __extendhfsf2(_Float16 x) { return h2f(half_bits(x)); }
+__declspec(dllexport) double __extendhfdf2(_Float16 x) { return (double)h2f(half_bits(x)); }
+__declspec(dllexport) _Float16 __truncsfhf2(float x) { unsigned b; __builtin_memcpy(&b, &x, 4); return as_half(f2h(b)); }
+__declspec(dllexport) _Float16 __truncdfhf2(double x)
+{
+    /* (through float would round twice: round the double's bits instead) */
+    unsigned long long d;
+    __builtin_memcpy(&d, &x, 8);
+    unsigned sign = (unsigned)(d >> 48) & 0x8000;
+    int exp = (int)((d >> 52) & 0x7FF);
+    unsigned long long man = d & 0xFFFFFFFFFFFFFull;
+    if (exp == 0x7FF) return as_half((unsigned short)(sign | 0x7C00 | (man ? 0x200 | (unsigned)(man >> 42) : 0)));
+    int e = exp - 1008;
+    if (e >= 0x1F) return as_half((unsigned short)(sign | 0x7C00));
+    unsigned long long full = man | (1ull << 52);
+    unsigned shift = e > 0 ? 42 : (unsigned)(42 + 1 - e);
+    if (e <= 0 && (exp == 0 || shift > 63)) return as_half((unsigned short)sign);
+    unsigned long long h = full >> shift, rest = full & ((1ull << shift) - 1), half = 1ull << (shift - 1);
+    if (e > 0) h = ((unsigned long long)e << 10) | (h & 0x3FF);
+    if (rest > half || (rest == half && (h & 1))) h++;
+    return as_half((unsigned short)(sign | h));
+}
+#endif

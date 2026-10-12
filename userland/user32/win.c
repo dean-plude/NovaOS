@@ -792,6 +792,7 @@ void wnd_set_pos(Wnd *w, HWND after, int x, int y, int cx, int cy, UINT flags)
         send_msg(w, WM_NCCALCSIZE, TRUE, (LPARAM)&np);
         w->client = np.rgrc[0];
         clamp_client(w);
+        publish_client(w);                                  /* (other processes see its client area: GetClientRect, their DCs on it) */
     }
     if (!(flags & SWP_NOZORDER) && w->parent) {
         Wnd *a = NULL;

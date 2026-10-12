@@ -265,7 +265,8 @@ static HRESULT surface_make(Surface *s, UINT w, UINT h)
 static HRESULT STDMETHODCALLTYPE s_qi(Surface *s, const GUID *iid, void **out)
 {
     if (!out) return E_POINTER;
-    if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDCompositionSurface)) {
+    if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDCompositionSurface) ||
+        novadx_same(iid, &NIID_IDCompositionVirtualSurface)) {
         InterlockedIncrement(&s->refs);
         *out = s;
         return S_OK;
@@ -318,16 +319,33 @@ static HRESULT STDMETHODCALLTYPE s_end(Surface *s)
 static HRESULT STDMETHODCALLTYPE s_suspend(Surface *s) { return s->drawing ? S_OK : DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED_; }
 static HRESULT STDMETHODCALLTYPE s_scroll(Surface *s, const RECT *scroll, const RECT *clip, int dx, int dy)
 { (void)s; (void)scroll; (void)clip; (void)dx; (void)dy; return E_NOTIMPL; }
-static HRESULT STDMETHODCALLTYPE s_resize(Surface *s, UINT w, UINT h)              /* (IDCompositionVirtualSurface) */
+/* (IDCompositionVirtualSurface) the pixels both sizes cover are kept, on
+ * the device and as read back */
+static HRESULT STDMETHODCALLTYPE s_resize(Surface *s, UINT w, UINT h)
 {
+    typedef void (STDMETHODCALLTYPE *CopyRegion_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, UINT, IUnknown *, UINT, const ND3D11_BOX *);
     if (s->drawing) return DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED_;
     if (!w || !h) return E_INVALIDARG;
+    if (w == s->w && h == s->h && s->tex) return S_OK;
+    Surface n = *s;
+    n.tex = n.staging = NULL;
+    n.frame = NULL;
+    HRESULT hr = surface_make(&n, w, h);
+    if (FAILED(hr)) return hr;
+    UINT cw = w < s->w ? w : s->w, ch = h < s->h ? h : s->h;
+    if (s->tex && cw && ch) {
+        ND3D11_BOX box = { 0, 0, 0, cw, ch, 1 };
+        ((CopyRegion_t)((void **)*(void **)s->ctx)[46])(s->ctx, n.tex, 0, 0, 0, 0, s->tex, 0, &box);   /* CopySubresourceRegion */
+    }
     EnterCriticalSection(&g_lock);
+    for (UINT y = 0; s->frame && y < ch; y++) __builtin_memcpy(n.frame + (size_t)y * w * 4, s->frame + (size_t)y * s->w * 4, (size_t)cw * 4);
     surface_drop(s);
-    HRESULT hr = surface_make(s, w, h);
+    s->tex = n.tex; s->staging = n.staging; s->frame = n.frame;
+    s->w = w; s->h = h;
+    SetRectEmpty(&s->dirty);
     changed();
     LeaveCriticalSection(&g_lock);
-    return hr;
+    return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE s_trim(Surface *s, const RECT *r, UINT n) { (void)s; (void)r; (void)n; return S_OK; }
 
@@ -403,24 +421,31 @@ static HRESULT STDMETHODCALLTYPE e_transform(Effect *e, IUnknown *t) { (void)e; 
 static const void *const g_effect_vtbl[] = { (void *)e_qi, (void *)e_addref, (void *)e_release, (void *)e_anim, (void *)e_opacity, (void *)e_transform };
 
 /* ---- Visuals ------------------------------------------------------------- */
+/* @v shows @content (NULL: nothing).  A swap chain's present calls its
+ * sink with the chain's lock held and then takes this dll's lock, so the
+ * sink is set and taken back with this dll's lock not held: taking it back
+ * waits for a present on another thread that is drawing @v */
 static void visual_set_content(Visual *v, IUnknown *content)
 {
-    if (v->chain) {
-        v->chain->lpVtbl->SetSink(v->chain, NULL, NULL);
-        v->chain->lpVtbl->Release(v->chain);
-        v->chain = NULL;
+    INovaSwapChain *chain = NULL;
+    if (content) {
+        content->lpVtbl->AddRef(content);
+        if (!surface_of(content)) content->lpVtbl->QueryInterface(content, &NIID_INovaSwapChain, (void **)&chain);
     }
-    v->surface = NULL;
-    if (v->content) v->content->lpVtbl->Release(v->content);
+    EnterCriticalSection(&g_lock);
+    INovaSwapChain *old_chain = v->chain;
+    IUnknown *old = v->content;
     v->content = content;
-    if (!content) return;
-    content->lpVtbl->AddRef(content);
-    void *c = NULL;
-    if ((v->surface = surface_of(content))) return;
-    if (SUCCEEDED(content->lpVtbl->QueryInterface(content, &NIID_INovaSwapChain, &c))) {
-        v->chain = c;
-        v->chain->lpVtbl->SetSink(v->chain, visual_sink, v);
+    v->surface = surface_of(content);
+    v->chain = chain;
+    changed();
+    LeaveCriticalSection(&g_lock);
+    if (old_chain) {
+        old_chain->lpVtbl->SetSink(old_chain, NULL, v);
+        old_chain->lpVtbl->Release(old_chain);
     }
+    if (chain) chain->lpVtbl->SetSink(chain, visual_sink, v);
+    if (old) old->lpVtbl->Release(old);
 }
 
 static HRESULT STDMETHODCALLTYPE v_qi(Visual *v, const GUID *iid, void **out)
@@ -438,16 +463,21 @@ static HRESULT STDMETHODCALLTYPE v_qi(Visual *v, const GUID *iid, void **out)
 }
 static ULONG STDMETHODCALLTYPE v_addref(Visual *v) { return (ULONG)InterlockedIncrement(&v->refs); }
 static HRESULT STDMETHODCALLTYPE v_removeall(Visual *v);
+/* (never called with this dll's lock held: the last reference is no
+ * parent's nor target's, and the content's sink is taken back) */
 static ULONG STDMETHODCALLTYPE v_release(Visual *v)
 {
     LONG r = InterlockedDecrement(&v->refs);
     if (!r) {
-        EnterCriticalSection(&g_lock);
         visual_set_content(v, NULL);
         v_removeall(v);
-        if (v->clip) k_release(v->clip);
-        if (v->effect) e_release(v->effect);
+        EnterCriticalSection(&g_lock);
+        Clip *k = v->clip;
+        Effect *e = v->effect;
+        v->clip = NULL; v->effect = NULL;
         LeaveCriticalSection(&g_lock);
+        if (k) k_release(k);
+        if (e) e_release(e);
         HeapFree(GetProcessHeap(), 0, v);
     }
     return (ULONG)r;
@@ -492,7 +522,7 @@ static HRESULT STDMETHODCALLTYPE v_clip(Visual *v, const float *r)              
 }
 static HRESULT STDMETHODCALLTYPE v_opacity(Visual *v, float f) { SET(v->opacity = f); }
 static HRESULT STDMETHODCALLTYPE v_visible(Visual *v, BOOL on) { SET(v->hidden = !on); }
-static HRESULT STDMETHODCALLTYPE v_setcontent(Visual *v, IUnknown *content) { SET(visual_set_content(v, content)); }
+static HRESULT STDMETHODCALLTYPE v_setcontent(Visual *v, IUnknown *content) { visual_set_content(v, content); return S_OK; }
 static HRESULT STDMETHODCALLTYPE v_add(Visual *v, Visual *kid, BOOL above, Visual *ref)
 {
     kid = visual_of(kid);

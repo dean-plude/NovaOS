@@ -1005,12 +1005,23 @@ static BOOL create_process(const char *app, char *cmd, const char *dir, HANDLE s
         if (n >= MAX_PATH) { SetLastError(ERROR_INVALID_NAME); return FALSE; }
         memcpy(name, app, (SIZE_T)n + 1);
     } else {
-        /* the program is the first token of the command line */
+        /* the program is the first token of the command line; unquoted,
+         * a path with spaces is tried at each space in turn, as Windows
+         * does ("C:\Program Files\A B\c.exe x" is C:\Program.exe, then
+         * C:\Program Files\A.exe, then C:\Program Files\A B\c.exe) */
         const char *c = cmd;
         while (*c == ' ' || *c == '\t') c++;
         int n = 0;
         if (*c == '"') { c++; while (*c && *c != '"' && n < MAX_PATH - 1) name[n++] = *c++; }
-        else while (*c && *c != ' ' && *c != '\t' && n < MAX_PATH - 1) name[n++] = *c++;
+        else {
+            for (;;) {
+                while (*c && *c != ' ' && *c != '\t' && n < MAX_PATH - 1) name[n++] = *c++;
+                name[n] = 0;
+                if (!*c || n >= MAX_PATH - 1 || find_program(name, image, MAX_PATH)) break;
+                while ((*c == ' ' || *c == '\t') && n < MAX_PATH - 1) name[n++] = *c++;
+            }
+            while (n && (name[n - 1] == ' ' || name[n - 1] == '\t')) n--;
+        }
         name[n] = 0;
     }
     if (!name[0] || !find_program(name, image, MAX_PATH)) { SetLastError(ERROR_FILE_NOT_FOUND); return FALSE; }

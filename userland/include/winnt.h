@@ -281,6 +281,16 @@ typedef IMAGE_OPTIONAL_HEADER64 IMAGE_OPTIONAL_HEADER;
 typedef IMAGE_NT_HEADERS32 IMAGE_NT_HEADERS, *PIMAGE_NT_HEADERS;
 typedef IMAGE_OPTIONAL_HEADER32 IMAGE_OPTIONAL_HEADER;
 #endif
+#define IMAGE_NT_OPTIONAL_HDR32_MAGIC 0x10b
+#define IMAGE_NT_OPTIONAL_HDR64_MAGIC 0x20b
+typedef struct _IMAGE_SECTION_HEADER {
+    BYTE Name[8];
+    union { DWORD PhysicalAddress, VirtualSize; } Misc;
+    DWORD VirtualAddress, SizeOfRawData, PointerToRawData, PointerToRelocations, PointerToLinenumbers;
+    WORD NumberOfRelocations, NumberOfLinenumbers;
+    DWORD Characteristics;
+} IMAGE_SECTION_HEADER, *PIMAGE_SECTION_HEADER;
+#define IMAGE_FIRST_SECTION(nt) ((PIMAGE_SECTION_HEADER)((ULONG_PTR)(nt) + 24 + (nt)->FileHeader.SizeOfOptionalHeader))
 #define IMAGE_DIRECTORY_ENTRY_EXPORT     0
 #define IMAGE_DIRECTORY_ENTRY_IMPORT     1
 #define IMAGE_DIRECTORY_ENTRY_RESOURCE   2

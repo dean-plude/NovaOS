@@ -1188,17 +1188,112 @@ K32 __declspec(noreturn) VOID WINAPI FreeLibraryAndExitThread(HMODULE m, DWORD c
 
 /* -----------------------------------------------------------------------
  * Job objects: a job is an event handle standing for the group; limits
- * are remembered and answered back
+ * are remembered and answered back.  The processes assigned to a job in
+ * this process are watched: with a completion port associated
+ * (JobObjectAssociateCompletionPortInformation) the port is told when one
+ * joins (JOB_OBJECT_MSG_NEW_PROCESS), when one exits
+ * (JOB_OBJECT_MSG_EXIT_PROCESS) and when none is left
+ * (JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO), which Godot's console launcher
+ * waits for before it exits.  Processes the members start themselves are
+ * not added (only those assigned here).
  * ----------------------------------------------------------------------- */
+#define JOB_MAX 63
+typedef struct Job {
+    struct Job *next;
+    HANDLE h, port, wake, watcher;
+    ULONG_PTR key;
+    int n;
+    HANDLE proc[JOB_MAX];
+    DWORD pid[JOB_MAX];
+} Job;
+static Job *g_jobs;
+static SRWLOCK g_job_lock = SRWLOCK_INIT;
+
+static Job *find_job(HANDLE h)
+{
+    for (Job *j = g_jobs; j; j = j->next) if (j->h == h) return j;
+    return 0;
+}
+
+static void job_post(Job *j, DWORD msg, DWORD pid)
+{
+    if (j->port) PostQueuedCompletionStatus(j->port, msg, j->key, (LPOVERLAPPED)(ULONG_PTR)pid);
+}
+
+static DWORD WINAPI job_watch(LPVOID arg)
+{
+    Job *j = arg;
+    for (;;) {
+        HANDLE w[JOB_MAX + 1];
+        AcquireSRWLockExclusive(&g_job_lock);
+        int n = j->n;
+        w[0] = j->wake;
+        for (int i = 0; i < n; i++) w[i + 1] = j->proc[i];
+        ReleaseSRWLockExclusive(&g_job_lock);
+        DWORD r = WaitForMultipleObjects((DWORD)n + 1, w, FALSE, INFINITE);
+        if (r == WAIT_FAILED) Sleep(100);
+        if (r == WAIT_OBJECT_0 || r > WAIT_OBJECT_0 + (DWORD)n) continue;
+        HANDLE done = w[r - WAIT_OBJECT_0];
+        AcquireSRWLockExclusive(&g_job_lock);
+        for (int i = 0; i < j->n; i++)
+            if (j->proc[i] == done) {
+                DWORD pid = j->pid[i];
+                CloseHandle(done);
+                j->proc[i] = j->proc[j->n - 1];
+                j->pid[i] = j->pid[j->n - 1];
+                j->n--;
+                job_post(j, 7 /* JOB_OBJECT_MSG_EXIT_PROCESS */, pid);
+                if (!j->n) job_post(j, 4 /* JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO */, 0);
+                break;
+            }
+        ReleaseSRWLockExclusive(&g_job_lock);
+    }
+    return 0;
+}
+
 K32 HANDLE WINAPI CreateJobObjectW(LPSECURITY_ATTRIBUTES sa, LPCWSTR name)
 {
     (void)sa; (void)name;
-    return CreateEventW(0, TRUE, FALSE, 0);
+    HANDLE h = CreateEventW(0, TRUE, FALSE, 0);
+    Job *j = h ? HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Job)) : 0;
+    if (j) {
+        j->h = h;
+        AcquireSRWLockExclusive(&g_job_lock);
+        j->next = g_jobs;
+        g_jobs = j;
+        ReleaseSRWLockExclusive(&g_job_lock);
+    }
+    return h;
 }
 K32 HANDLE WINAPI CreateJobObjectA(LPSECURITY_ATTRIBUTES sa, LPCSTR name) { (void)name; return CreateJobObjectW(sa, 0); }
 K32 HANDLE WINAPI OpenJobObjectW(DWORD access, BOOL inherit, LPCWSTR name) { (void)access; (void)inherit; (void)name; SetLastError(ERROR_FILE_NOT_FOUND); return 0; }
-K32 BOOL WINAPI AssignProcessToJobObject(HANDLE job, HANDLE proc) { (void)job; (void)proc; return TRUE; }
-K32 BOOL WINAPI SetInformationJobObject(HANDLE job, int cls, LPVOID info, DWORD n) { (void)job; (void)cls; (void)info; (void)n; return TRUE; }
+K32 BOOL WINAPI AssignProcessToJobObject(HANDLE job, HANDLE proc)
+{
+    HANDLE dup = 0;
+    if (!DuplicateHandle(GetCurrentProcess(), proc, GetCurrentProcess(), &dup, SYNCHRONIZE, FALSE, 0)) return TRUE;
+    AcquireSRWLockExclusive(&g_job_lock);
+    Job *j = find_job(job);
+    if (!j || j->n >= JOB_MAX) { ReleaseSRWLockExclusive(&g_job_lock); CloseHandle(dup); return TRUE; }
+    DWORD pid = GetProcessId(proc);
+    j->proc[j->n] = dup;
+    j->pid[j->n++] = pid;
+    job_post(j, 6 /* JOB_OBJECT_MSG_NEW_PROCESS */, pid);
+    if (!j->wake) j->wake = CreateEventW(0, FALSE, FALSE, 0);
+    if (!j->watcher && j->wake) j->watcher = CreateThread(0, 64 * 1024, job_watch, j, 0, 0);
+    else if (j->wake) SetEvent(j->wake);
+    ReleaseSRWLockExclusive(&g_job_lock);
+    return TRUE;
+}
+K32 BOOL WINAPI SetInformationJobObject(HANDLE job, int cls, LPVOID info, DWORD n)
+{
+    if (cls == 7 /* JobObjectAssociateCompletionPortInformation */ && info && n >= 2 * sizeof(void *)) {
+        AcquireSRWLockExclusive(&g_job_lock);
+        Job *j = find_job(job);
+        if (j) { j->key = (ULONG_PTR)((void **)info)[0]; j->port = ((HANDLE *)info)[1]; }
+        ReleaseSRWLockExclusive(&g_job_lock);
+    }
+    return TRUE;
+}
 K32 BOOL WINAPI QueryInformationJobObject(HANDLE job, int cls, LPVOID info, DWORD n, LPDWORD ret)
 {
     (void)job; (void)cls;

@@ -78,7 +78,7 @@ work is in NovaOS.  "Tested" is what has been checked in QEMU.
 | **Windows Installer packages** | 7-Zip, CMake, Node.js, Temurin, KeePassXC `.msi` | 7-Zip and CMake install through their own wizards (licence, options, feature tree, progress), CMake's dialogs running its DLL custom actions; custom-action DLLs run in 64-bit and 32-bit custom-action servers; shortcuts and a test service are created and removed again by `msiexec /x`; transforms (`TRANSFORMS=`), whole-file patches (`msiexec /p`, `/uninstall`) and rollback of a failed install; automatic services start at boot; JScript and VBScript custom actions run on `msiscript.dll`. A 32-bit package's system files go to `SysWOW64`, a 64-bit one's to `System32`, whichever process installs it. |
 | **Python 3.14** | NuGet package | `-c`, a hashlib/JSON/regex/threads/subprocess test script. |
 | **NumPy 2.5.3** | The Windows wheel (`cp314`) in Python 3.14, on NovaOS's own `vcruntime140`, `msvcp140` and UCRT | `import numpy`, complex `exp`/`sqrt`/`log`/`sin`/`tanh`/`power`, `linalg.inv`, `fft`, `eigvals`: the same output as NumPy on Linux. |
-| **Mesa 3D 24.2.4** (mesa-dist-win) | `opengl32.dll` (llvmpipe; on drive C: from the start as `opengl32_mesa.dll`, which NovaOS's `opengl32.dll` loads, staged by `tools/bundle_mesa.py`) and the Vulkan driver (lavapipe, from the App Store), x64 and x86 | OpenGL 4.5: `tools/gltest` (pixel formats, immediate mode, GLSL, read-back, animated `SwapBuffers`) passes as a 64-bit and a 32-bit program, and the core self-test `gl2test` draws with GLSL shaders on it with nothing installed. |
+| **Mesa 3D** (mesa-dist-win; OpenGL 24.2.4 built in, Vulkan 26.2.0 from the App Store) | `opengl32.dll` (llvmpipe; on drive C: from the start as `opengl32_mesa.dll`, which NovaOS's `opengl32.dll` loads, staged by `tools/bundle_mesa.py`) and the Vulkan driver (lavapipe, from the App Store), x64 and x86 | OpenGL 4.5: `tools/gltest` (pixel formats, immediate mode, GLSL, read-back, animated `SwapBuffers`) passes as a 64-bit and a 32-bit program, and the core self-test `gl2test` draws with GLSL shaders on it with nothing installed. Vulkan: Godot 4.7 draws Squash the Creeps on it through VKD3D-Proton. |
 | **DXVK 2.5.3** | `d3d8`, `d3d9` and `d3d11` (as `d3d9_dxvk` and `d3d11_dxvk`, behind NovaOS's own `d3d9` and `d3d11`), `d3d10core`, `dxgi`, x64 and x86, from the App Store, on Mesa's Vulkan and NovaOS's own `vulkan-1.dll` | Direct3D 9 and 11: `tools/d3dtest` (device creation, a D3D9 triangle, D3D11 clear, read-back, animated `Present` in a window) passes as a 64-bit and a 32-bit program, `d3dtest angle` brings Direct3D 11 up the way ANGLE (Chromium's GPU process) does, `d3dtest shared` shares a Direct3D 11 texture by NT handle between two devices and with a second process, and a fence between two devices (on lavapipe NovaOS's `vulkan-1.dll` provides `VK_KHR_external_memory_win32` and `VK_KHR_external_semaphore_win32`), and `d3d9test` checks NovaOS's `d3d9.dll` with and without DXVK. |
 | **VKD3D-Proton 2.14.1** | `d3d12` (as `d3d12_vkd3d`, behind NovaOS's own `d3d12`) and `d3d12core`, x64 and x86, from the App Store, on Mesa's Vulkan and NovaOS's own `vulkan-1.dll`; DXVK's `dxgi` makes its swap chains | Direct3D 12: `tools/d3d12test` (a device on lavapipe, a root signature and pipeline from HLSL compiled by NovaOS's `d3dcompiler_47`, a triangle drawn and read back, a fence) passes as a 64-bit and a 32-bit program, and the 64-bit one presents the triangle in a window through a flip-model swap chain on its command queue. |
 | **Venus** (Mesa 26.2.4, built by `tools/build_venus.py`) | `vulkan_virtio.dll` and Mesa's virgl (`opengl32_virgl.dll`, `libgallium_virgl.dll`), x64 and x86, from the App Store: Vulkan and OpenGL on the host's GPU through a QEMU 3D virtio-gpu (`virtio-vga-gl,venus=on`); the Vulkan loader prefers Venus to lavapipe and NovaOS's `opengl32.dll` virgl to llvmpipe | `tools/d3dtest` (DXVK) and `tools/gltest` pass on it as 64-bit and 32-bit programs, and `d3dtest fps` and `gltest fps` draw faster on it than on lavapipe and llvmpipe. |
@@ -306,7 +306,8 @@ without being copied, relocated or hashed again), I/O,
   what Chromium's software compositor draws WebView2's pages with, with
   DXVK installed too; with DXVK, also Chromium's GPU DirectComposition path:
   `DCompositionCreateDevice3`, surfaces and composition swap chains on the
-  GPU device, read back for DirectComposition), and
+  GPU device, read back for DirectComposition, through resizes, teardown
+  and windows of another process), and
   the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
   `dhcpcsvc`), the ones Qt WebEngine imports
   (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12
@@ -567,106 +568,106 @@ To make the ISO yourself from a fresh build, run
   and three times a background process's time slice, 64- and 32-bit),
   `tlsslots` (1088 TLS indexes and FLS callbacks at process exit, 64-
   and 32-bit), `cmdlinetest` (a 1,200-character command typed into the
-  Terminal and into cmd.exe, CreateProcess with up to 32,766 characters,
-  64- and 32-bit), `devices` (every PCI function and the driver that
-  claimed it: AHCI, the VGA card, HD Audio, xHCI; bridges marked),
-  `gl2test` (OpenGL 3+ with shaders on the built-in Mesa llvmpipe, 64-
-  and 32-bit), `glgeneric` (OpenGL 1.1 with no OpenGL driver installed,
-  drawing in 2D, 64- and 32-bit), `hwcheck` audio DSP: NHLT digital
-  microphones, the SOF firmware manifest, the DSP boot (ROM, code
-  loader, FW_READY, IPC4), the IPC4 capture pipeline into a host ring,
-  paused and run again, and the boot again after sleep, on a modelled
-  DSP, `hwcheck` (HD Audio controller matching, a modelled ALC257 codec
-  with its headphone jack, a modelled I2C-HID touchpad); the touchpad in
-  the boot's ACPI table is found and its missing controller reported,
-  `crashtest` (crash.exe's report in `C:\NovaOS\Crashes`: exception,
-  module+offset, stack, modules; 64- and 32-bit), and the Terminal's
-  `Crash report:` line and `crashes last`, `hwcheck` touchpad gestures
-  on a modelled precision touchpad: tap to click, two-finger tap for the
-  right button, two-finger scrolling (vertical and horizontal) as wheel
-  notches, palms ignored, `wndthreads` (child windows of other threads,
-  sends to an ended thread's window, 64- and 32-bit), `hwcheck mic`: a
-  modelled audio DSP as the "Microphone Array" recording device
-  (`waveIn`, WASAPI and DirectSound list it, `soundtest record` and
-  `capture` hear its tone, before and after a modelled sleep), `fpstate`
-  (x87 control word and MXCSR on new threads, across switches,
-  `RtlRestoreContext` and SEH unwinds, 64- and 32-bit), `ramdisktest`
-  (files on drive C: take the memory their contents need: appended
-  files, SetEndOfFile, deleting; the memory programs are told), the
-  first-boot setup, `start welcome` (name, time zone, keyboard layout
-  and display pages from the keyboard; German typed in the layout's test
-  field), `kbdtest` with German in effect and US put back, then `whoami`
-  as the name it gave (the program and the Terminal command), `tztest`
-  in the zone it chose (Tokyo: UTC+9 in GetLocalTime and localtime;
-  Berlin, Sydney and Los Angeles rules) and `tzutil /s UTC`,
-  `edgeupdtest` (Task Scheduler 2.0, DPAPI, UrlCombine and the other
-  APIs Microsoft Edge Update needs, 64- and 32-bit), `setuptest` (run as
-  administrator, Rich Edit with RTF, variant arithmetic, a 300 MB file
-  on C:, 64- and 32-bit), `msxmltest` (MSXML 6 DOM, XPath, XSL Patterns,
-  SAX2 and registration, 64- and 32-bit), `cabtest` (cabinet.dll: MSZIP
-  and LZX cabinets, an attached container, a cabinet set; 64- and
-  32-bit), `authtest` (Authenticode: WinVerifyTrust, signer chains and
-  timestamps, CryptQueryObject; 64- and 32-bit), `ndrtest` (rpcrt4's NDR
-  engine: stubless proxies, NdrStubCall2, CStdStubBuffer and the NdrDll*
-  entry points, 64- and 32-bit), `regtest` (isolated 32- and 64-bit
-  machine registry views, shared keys, and registry keys and values
-  changed concurrently), `msiqtest` (Windows Installer: 32-bit packages
-  into SysWOW64, product information by context, source lists, patch
-  applicability; 64- and 32-bit), `chrometest` (Chromium start-up:
-  read-only shared memory, handle lists, ordinal exports; 64- and
-  32-bit), `svctest` (a real service: start with arguments, status
-  handshake, controls, stop and delete; a LocalSystem service runs
-  elevated; CopyFile keeps file times; 64- and 32-bit), `comoop`
-  (cross-process COM: LocalServer32 activation, the standard marshaler
-  and RPC channel, the IDispatch proxy/stub, BSTR/VARIANT marshalling;
-  64- and 32-bit clients and servers), `etwtest` (event-tracing
-  controllers with no sessions: StartTrace, StopTrace, ControlTrace,
-  EnableTrace, QueryAllTraces, OpenTrace, ProcessTrace, CloseTrace; 64-
-  and 32-bit), `qtwebtest` (the calls Qt WebEngine imports: Bluetooth
-  and SDP records, Direct3D 12, WinUSB, AppContainer profiles, proxy
-  resolver, security zones and more; 64- and 32-bit), `cachetest` (saved
-  files of drive C: let go of and read back from the data disk: memory,
-  ReadFile, a mapped view, renamed, hard-linked and emptied files,
-  `shutdown /r`, `cachetest after`), `qtthemetest`
-  (Windows.UI.ViewManagement UISettings and UIViewSettings as Qt reads
-  them, ColorValuesChanged, Schannel's cipher suites; 64- and 32-bit),
-  `samplertest` (a sampling profiler: GetThreadContext of a waiting
-  thread, unwound with RtlVirtualUnwind), `hwcheck` touchpad interrupt:
-  a modelled Intel GPIO controller from the ACPI tables, its interrupt
-  routed, the touchpad's GpioInt pin set up and its reports read on the
-  interrupt instead of polling, `proclisttest` (another program's image
-  name, user and command line, as Edge Update looks for its install
-  worker; 64- and 32-bit), `rawtest` (the mouse and the keyboard through
-  Raw Input: device list, names and info; WM_INPUT with relative motion,
-  button flags and the wheel; keys through GetRawInputBuffer with
-  RIDEV_NOLEGACY; 64- and 32-bit), `libmtest` (the 32-bit C runtime's
-  `_libm_sse2_*` and `_CI*` math, which MSVC-built SDL2 imports),
-  `warptest` (SetCursorPos and ClipCursor: the pointer moved and
-  confined by the window in front, WM_MOUSEMOVE but no WM_INPUT for a
-  warp, the mouse kept in the rectangle, a background process refused;
-  64- and 32-bit), `wvsetuptest` (a 300 MB file mapped whole, wer.dll's
-  report API and FlsGetValue2, as the WebView2 runtime's setup needs;
-  64- and 32-bit), `wvstarttest` (COM's apartment in the TEB,
-  TerminateProcess on itself, FLS slots and the functions the WebView2
-  runtime's browser process calls), `xpwin` (windows of different
-  processes: SetParent, SetWindowPos, ShowWindow and messages across
-  processes, GetDC on another process's window; 64- and 32-bit),
-  `dcomptest` (Direct3D without a GPU as Chromium's software compositor
-  uses it: the Basic Render Driver adapter, a WARP device,
-  DirectComposition showing a swap chain, dirty-rectangle presents, a
-  GPU process's window parented in another process's; 64- and 32-bit),
-  `schanneltest stores` (a certificate found through a collection of
-  collections, a root's extended key usages, and
-  `InternetGetConnectedState` offline without a network; 64- and
-  32-bit), driver packages staged in the driver store and published as
-  oemN.inf from a program (`DiInstallDriver`, `SetupCopyOEMInf`), with
-  `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`),
-  `imgsharetest` (a second process of a running program shares its image
-  pages from the image cache; 64- and 32-bit; a commit of 15/16 of the
-  RAM), `crash kernel`, a deliberate kernel fault whose serial log must
-  show a backtrace with function names, and last the kernel crash
-  report: after `crash kernel` and a reset, `crashes last` shows the
-  fault's backtrace.<!-- END generated:core-tests -->
+  Terminal and into cmd.exe, CreateProcess with up to 32,766 characters
+  and from an unquoted path with spaces, 64- and 32-bit), `devices`
+  (every PCI function and the driver that claimed it: AHCI, the VGA
+  card, HD Audio, xHCI; bridges marked), `gl2test` (OpenGL 3+ with
+  shaders on the built-in Mesa llvmpipe, 64- and 32-bit), `glgeneric`
+  (OpenGL 1.1 with no OpenGL driver installed, drawing in 2D, 64- and
+  32-bit), `hwcheck` audio DSP: NHLT digital microphones, the SOF
+  firmware manifest, the DSP boot (ROM, code loader, FW_READY, IPC4),
+  the IPC4 capture pipeline into a host ring, paused and run again, and
+  the boot again after sleep, on a modelled DSP, `hwcheck` (HD Audio
+  controller matching, a modelled ALC257 codec with its headphone jack,
+  a modelled I2C-HID touchpad); the touchpad in the boot's ACPI table is
+  found and its missing controller reported, `crashtest` (crash.exe's
+  report in `C:\NovaOS\Crashes`: exception, module+offset, stack,
+  modules; 64- and 32-bit), and the Terminal's `Crash report:` line and
+  `crashes last`, `hwcheck` touchpad gestures on a modelled precision
+  touchpad: tap to click, two-finger tap for the right button,
+  two-finger scrolling (vertical and horizontal) as wheel notches, palms
+  ignored, `wndthreads` (child windows of other threads, sends to an
+  ended thread's window, 64- and 32-bit), `hwcheck mic`: a modelled
+  audio DSP as the "Microphone Array" recording device (`waveIn`, WASAPI
+  and DirectSound list it, `soundtest record` and `capture` hear its
+  tone, before and after a modelled sleep), `fpstate` (x87 control word
+  and MXCSR on new threads, across switches, `RtlRestoreContext` and SEH
+  unwinds, 64- and 32-bit), `ramdisktest` (files on drive C: take the
+  memory their contents need: appended files, SetEndOfFile, deleting;
+  the memory programs are told), the first-boot setup, `start welcome`
+  (name, time zone, keyboard layout and display pages from the keyboard;
+  German typed in the layout's test field), `kbdtest` with German in
+  effect and US put back, then `whoami` as the name it gave (the program
+  and the Terminal command), `tztest` in the zone it chose (Tokyo: UTC+9
+  in GetLocalTime and localtime; Berlin, Sydney and Los Angeles rules)
+  and `tzutil /s UTC`, `edgeupdtest` (Task Scheduler 2.0, DPAPI,
+  UrlCombine and the other APIs Microsoft Edge Update needs, 64- and
+  32-bit), `setuptest` (run as administrator, Rich Edit with RTF,
+  variant arithmetic, a 300 MB file on C:, 64- and 32-bit), `msxmltest`
+  (MSXML 6 DOM, XPath, XSL Patterns, SAX2 and registration, 64- and
+  32-bit), `cabtest` (cabinet.dll: MSZIP and LZX cabinets, an attached
+  container, a cabinet set; 64- and 32-bit), `authtest` (Authenticode:
+  WinVerifyTrust, signer chains and timestamps, CryptQueryObject; 64-
+  and 32-bit), `ndrtest` (rpcrt4's NDR engine: stubless proxies,
+  NdrStubCall2, CStdStubBuffer and the NdrDll* entry points, 64- and
+  32-bit), `regtest` (isolated 32- and 64-bit machine registry views,
+  shared keys, and registry keys and values changed concurrently),
+  `msiqtest` (Windows Installer: 32-bit packages into SysWOW64, product
+  information by context, source lists, patch applicability; 64- and
+  32-bit), `chrometest` (Chromium start-up: read-only shared memory,
+  handle lists, ordinal exports; 64- and 32-bit), `svctest` (a real
+  service: start with arguments, status handshake, controls, stop and
+  delete; a LocalSystem service runs elevated; CopyFile keeps file
+  times; 64- and 32-bit), `comoop` (cross-process COM: LocalServer32
+  activation, the standard marshaler and RPC channel, the IDispatch
+  proxy/stub, BSTR/VARIANT marshalling; 64- and 32-bit clients and
+  servers), `etwtest` (event-tracing controllers with no sessions:
+  StartTrace, StopTrace, ControlTrace, EnableTrace, QueryAllTraces,
+  OpenTrace, ProcessTrace, CloseTrace; 64- and 32-bit), `qtwebtest` (the
+  calls Qt WebEngine imports: Bluetooth and SDP records, Direct3D 12,
+  WinUSB, AppContainer profiles, proxy resolver, security zones and
+  more; 64- and 32-bit), `cachetest` (saved files of drive C: let go of
+  and read back from the data disk: memory, ReadFile, a mapped view,
+  renamed, hard-linked and emptied files, `shutdown /r`, `cachetest
+  after`), `qtthemetest` (Windows.UI.ViewManagement UISettings and
+  UIViewSettings as Qt reads them, ColorValuesChanged, Schannel's cipher
+  suites; 64- and 32-bit), `samplertest` (a sampling profiler:
+  GetThreadContext of a waiting thread, unwound with RtlVirtualUnwind),
+  `hwcheck` touchpad interrupt: a modelled Intel GPIO controller from
+  the ACPI tables, its interrupt routed, the touchpad's GpioInt pin set
+  up and its reports read on the interrupt instead of polling,
+  `proclisttest` (another program's image name, user and command line,
+  as Edge Update looks for its install worker; 64- and 32-bit),
+  `rawtest` (the mouse and the keyboard through Raw Input: device list,
+  names and info; WM_INPUT with relative motion, button flags and the
+  wheel; keys through GetRawInputBuffer with RIDEV_NOLEGACY; 64- and
+  32-bit), `libmtest` (the 32-bit C runtime's `_libm_sse2_*` and `_CI*`
+  math, which MSVC-built SDL2 imports), `warptest` (SetCursorPos and
+  ClipCursor: the pointer moved and confined by the window in front,
+  WM_MOUSEMOVE but no WM_INPUT for a warp, the mouse kept in the
+  rectangle, a background process refused; 64- and 32-bit),
+  `wvsetuptest` (a 300 MB file mapped whole, wer.dll's report API and
+  FlsGetValue2, as the WebView2 runtime's setup needs; 64- and 32-bit),
+  `wvstarttest` (COM's apartment in the TEB, TerminateProcess on itself,
+  FLS slots and the functions the WebView2 runtime's browser process
+  calls), `xpwin` (windows of different processes: SetParent,
+  SetWindowPos, ShowWindow and messages across processes, GetDC on
+  another process's window; 64- and 32-bit), `dcomptest` (Direct3D
+  without a GPU as Chromium's software compositor uses it: the Basic
+  Render Driver adapter, a WARP device, DirectComposition showing a swap
+  chain, dirty-rectangle presents, a GPU process's window parented in
+  another process's; 64- and 32-bit), `schanneltest stores` (a
+  certificate found through a collection of collections, a root's
+  extended key usages, and `InternetGetConnectedState` offline without a
+  network; 64- and 32-bit), driver packages staged in the driver store
+  and published as oemN.inf from a program (`DiInstallDriver`,
+  `SetupCopyOEMInf`), with `pnputil` and from an MSI (`drvtest exe`,
+  `zip`, `msi`), `imgsharetest` (a second process of a running program
+  shares its image pages from the image cache; 64- and 32-bit; a commit
+  of 15/16 of the RAM), `crash kernel`, a deliberate kernel fault whose
+  serial log must show a backtrace with function names, and last the
+  kernel crash report: after `crash kernel` and a reset, `crashes last`
+  shows the fault's backtrace.<!-- END generated:core-tests -->
 - **Network** (in the boot-test job): two boots with a virtio-net card.
   On QEMU's user network, `ipconfig`, `ping`, Winsock over IPv4 and
   `httptest suite` (winhttp with HTTP/2 by ALPN) against
@@ -711,7 +712,7 @@ it with `sudo apt install acpica-tools` first.
 
 **Every night, real programs.**  `.github/workflows/nightly.yml` builds
 main and runs `tools/appcorpus.py`: the official Windows x64 releases of
-<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, Firefox, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level) and PuTTY<!-- END generated:corpus -->.  The
+<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, Firefox, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.  The
 windowed programs run last, one at a time: SumatraPDF opens a PDF,
 WinMerge compares two files, Firefox installs from the App Store and
 loads a page from an HTTPS server on the host, Notepad++ opens a file and PuTTY makes a raw

@@ -89,7 +89,10 @@ named program or test demonstrates it.
   `d3d12test` draws, reads back and presents a triangle on lavapipe,
   64- and 32-bit ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton),
   [32-bit present](HISTORY.md#direct3d-12-presents-in-32-bit-programs)).
-  Still to do: one Direct3D 12 game that renders.
+  ~~One Direct3D 12 game renders~~ Done: Squash the Creeps on Godot 4.7's
+  Forward+ renderer ([A Direct3D 12 game](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot)).
+  Still to do: two of Godot's compute pipelines lavapipe refuses
+  (`VK_ERROR_UNKNOWN`), and sound in Godot (WASAPI).
 - ~~**Audio**: `winmm` wave output and WASAPI over a real sound device
   (QEMU's Intel HDA)~~ Done; see [Sound](HISTORY.md#sound-intel-hd-audio-winmm-and-wasapi).
   ~~Recording (`waveIn`, capture endpoints) and endpoint volume
@@ -244,10 +247,13 @@ named program or test demonstrates it.
   (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces, clips),
   the DXVK adapter's factory making the swap chains, `IDXGISwapChain3`, so
   Chromium turns the path on~~ Done (`dcomptest dxvk`; WebView2's GPU
-  process composites the page through a swap chain on Venus).  Next:
-  presenting without the CPU readback and GDI copy (direct virtio GPU
-  scan-out): done for OpenGL's frames (direct presentation), still to do
-  for Venus's Vulkan frames, which WebView2's are.
+  process composites the page through a swap chain on Venus); ~~that
+  path through resizes, teardown while frames are presented, and the GPU
+  process's window inside the browser's, 64- and 32-bit~~ Done
+  (`dcomptest life`).  Next: presenting without the CPU readback and GDI
+  copy (direct virtio GPU scan-out): done for OpenGL's frames (direct
+  presentation), still to do for Venus's Vulkan frames, which WebView2's
+  are.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music

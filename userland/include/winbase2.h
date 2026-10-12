@@ -173,6 +173,19 @@ typedef union __attribute__((aligned(8))) _SLIST_HEADER {
 #endif
 
 
+/* job objects (kernel32 tells a job's completion port when its processes
+ * come and go) */
+typedef int JOBOBJECTINFOCLASS;
+#define JobObjectAssociateCompletionPortInformation 7
+#define JobObjectExtendedLimitInformation 9
+#define JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO 4
+#define JOB_OBJECT_MSG_NEW_PROCESS 6
+#define JOB_OBJECT_MSG_EXIT_PROCESS 7
+typedef struct { PVOID CompletionKey; HANDLE CompletionPort; } JOBOBJECT_ASSOCIATE_COMPLETION_PORT;
+WINBASEAPI HANDLE WINAPI CreateJobObjectW(LPSECURITY_ATTRIBUTES sa, LPCWSTR name);
+WINBASEAPI BOOL   WINAPI AssignProcessToJobObject(HANDLE job, HANDLE proc);
+WINBASEAPI BOOL   WINAPI SetInformationJobObject(HANDLE job, JOBOBJECTINFOCLASS cls, LPVOID info, DWORD n);
+
 /* completion ports, overlapped I/O */
 WINBASEAPI HANDLE WINAPI CreateIoCompletionPort(HANDLE file, HANDLE port, ULONG_PTR key, DWORD threads);
 WINBASEAPI BOOL   WINAPI GetQueuedCompletionStatus(HANDLE port, LPDWORD bytes, PULONG_PTR key, LPOVERLAPPED *ov, DWORD ms);

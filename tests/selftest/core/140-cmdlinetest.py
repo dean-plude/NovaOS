@@ -4,8 +4,10 @@
 # checks its GetCommandLineW/A length, its argv (quoted paths with spaces,
 # escaped quotes) and the last argument.  "cmdlinetest spawn" passes command
 # lines of 1,000, 8,191 and 32,766 characters to CreateProcessW/A and
-# cmd.exe /c, and checks that 32,767 are refused, 64- and 32-bit.
-DOC = '`cmdlinetest` (a 1,200-character command typed into the Terminal and into cmd.exe, CreateProcess with up to 32,766 characters, 64- and 32-bit)'
+# cmd.exe /c, and checks that 32,767 are refused, and starts a copy of
+# itself from an unquoted path with spaces (no program name given), 64- and
+# 32-bit.
+DOC = '`cmdlinetest` (a 1,200-character command typed into the Terminal and into cmd.exe, CreateProcess with up to 32,766 characters and from an unquoted path with spaces, 64- and 32-bit)'
 
 
 def _fnv(h, s):

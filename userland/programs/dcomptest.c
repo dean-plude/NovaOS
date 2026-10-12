@@ -19,8 +19,14 @@
  *                        rendered on the GPU and shown by a visual; and
  *                        DirectComposition surfaces on the GPU device,
  *                        with the factory of the device's adapter
- *   dcomptest gpu HWND   the "GPU process": makes the child window, posts it
- *                        to HWND, and draws into it once it is parented
+ *   dcomptest life       with DXVK: a composition swap chain and a surface
+ *                        through window resizes, teardown while frames
+ *                        are presented on another thread, and the GPU
+ *                        process's window composited on the GPU, resized
+ *                        and its process killed while presenting
+ *   dcomptest gpu HWND [life]  the "GPU process": makes the child window,
+ *                        posts it to HWND, and draws into it once it is
+ *                        parented (life: on the GPU, through a visual)
  *
  * The software device is 64-bit only; the 32-bit run checks the factory,
  * the adapter and the cross-process parenting (drawing with GDI). */
@@ -43,15 +49,19 @@ typedef ULONG   (STDMETHODCALLTYPE *Rel_t)(void *);
 #define DC_HELLO  (WM_APP + 1)      /* gpu -> host: wParam = its child window */
 #define DC_DRAW   (WM_APP + 2)      /* host -> gpu (to the child window): wParam = the parent it should have */
 #define DC_RESULT (WM_APP + 3)      /* gpu -> host: wParam = checks passed, lParam = failed ones (bits) */
+#define DC_RESIZE (WM_APP + 4)      /* host -> gpu: wParam = the new width, lParam = height */
+#define DC_SPIN   (WM_APP + 5)      /* host -> gpu: present frames on another thread until killed */
+#define DC_SPINNING (WM_APP + 6)    /* gpu -> host: frames are being presented */
 
 static const char *g_step = "start";
 static HMODULE g_dxgi, g_d3d11, g_dcomp;
 static int g_dxvk;                  /* "dcomptest dxvk": DXVK is installed */
+static int g_life;                  /* "dcomptest life" (DXVK installed too) */
 
 static DWORD WINAPI watchdog(void *arg)
 {
     (void)arg;
-    Sleep(120000);
+    Sleep(g_life ? 300000 : 120000);
     printf("FAIL: hung at: %s\n", g_step);
     fflush(stdout);
     ExitProcess(3);
@@ -74,6 +84,9 @@ static COLORREF pixel(HWND h, int x, int y)
     ReleaseDC(h, dc);
     return c;
 }
+
+/* until @cond, pumping messages, at most @ms */
+#define WAIT_FOR(cond, ms) do { for (int w_ = 0; w_ < (ms) / 20 && !(cond); w_++) pump(20); } while (0)
 
 /* ---- Direct3D helpers ----------------------------------------------------- */
 typedef HRESULT (WINAPI *CreateFactory_t)(const GUID *, void **);
@@ -500,12 +513,248 @@ static void check_composition(HWND top, HWND child)
     RELEASE(chain); RELEASE(dev);
 }
 
+
+/* ---- Lifecycles (dcomptest life, both widths) ----------------------------- */
+/* A composition swap chain on DXVK's device, shown by a visual of a target
+ * on @hwnd: what Chromium's DirectComposition output makes */
+typedef struct { void *dev, *ctx, *f, *dc, *target, *visual, *chain; } Gpu;
+typedef HRESULT (STDMETHODCALLTYPE *ResizeBuffers_t)(void *, UINT, UINT, UINT, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *RTV_t)(void *, void *, const void *, void **);
+typedef void (STDMETHODCALLTYPE *Clear_t)(void *, void *, const float *);
+typedef HRESULT (STDMETHODCALLTYPE *Commit_t)(void *);
+
+static void gpu_free(Gpu *g)
+{
+    RELEASE(g->chain); RELEASE(g->visual); RELEASE(g->target); RELEASE(g->dc); RELEASE(g->f); RELEASE(g->ctx); RELEASE(g->dev);
+}
+
+static int gpu_make(Gpu *g, HWND hwnd, UINT w, UINT h)
+{
+    memset(g, 0, sizeof(*g));
+    CreateFactory_t cf = (CreateFactory_t)GetProcAddress(g_dxgi, "CreateDXGIFactory1");
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    CreateDComp_t cdc = g_dcomp ? (CreateDComp_t)GetProcAddress(g_dcomp, "DCompositionCreateDevice") : NULL;
+    NDXGI_SWAP_CHAIN_DESC1 d = { w, h, NDXGI_FORMAT_B8G8R8A8_UNORM, FALSE, { 1, 0 }, 0x20, 2, 0, 3, 1, 0 };
+    return cf && cd && cdc && SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &g->dev, NULL, &g->ctx)) &&
+           SUCCEEDED(cf(&NIID_IDXGIFactory2, &g->f)) && SUCCEEDED(cdc(NULL, &NIID_IDCompositionDevice, &g->dc)) &&
+           SUCCEEDED(VT(g->dc, 6, HRESULT (STDMETHODCALLTYPE *)(void *, HWND, BOOL, void **))(g->dc, hwnd, TRUE, &g->target)) &&
+           SUCCEEDED(VT(g->dc, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(g->dc, &g->visual)) &&
+           SUCCEEDED(VT(g->target, 3, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(g->target, g->visual)) &&
+           SUCCEEDED(VT(g->f, 24, HRESULT (STDMETHODCALLTYPE *)(void *, void *, const void *, void *, void **))(g->f, g->dev, &d, NULL, &g->chain)) &&
+           SUCCEEDED(VT(g->visual, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(g->visual, g->chain)) &&
+           SUCCEEDED(VT(g->dc, 3, Commit_t)(g->dc));
+}
+
+/* the whole buffer cleared to @rgba on the GPU, on @ctx (NULL: the
+ * device's), and presented */
+static int gpu_frame(Gpu *g, void *ctx, const float *rgba)
+{
+    void *buf = NULL, *rtv = NULL;
+    int ok = SUCCEEDED(VT(g->chain, 9, GetBuffer_t)(g->chain, 0, &NIID_ID3D11Texture2D, &buf)) &&
+             SUCCEEDED(VT(g->dev, 9, RTV_t)(g->dev, buf, NULL, &rtv));
+    if (ok) VT(ctx ? ctx : g->ctx, 50, Clear_t)(ctx ? ctx : g->ctx, rtv, rgba);
+    RELEASE(rtv); RELEASE(buf);
+    return ok && SUCCEEDED(VT(g->chain, 8, Present_t)(g->chain, 0, 0));
+}
+
+static const float c_red[4] = { 1, 0, 0, 1 }, c_green[4] = { 0, 1, 0, 1 }, c_blue[4] = { 0, 0, 1, 1 };
+static const float c_magenta[4] = { 1, 0, 1, 1 }, c_cyan[4] = { 0, 1, 1, 1 }, c_yellow[4] = { 1, 1, 0, 1 };
+
+static void size_window(HWND h, int w, int ht)
+{
+    SetWindowPos(h, NULL, 0, 0, w, ht, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOCOPYBITS);
+    pump(50);
+}
+
+/* Chromium on a resize of its window: the window sized, ResizeBuffers on
+ * the composition swap chain, a frame at the new size; a virtual surface
+ * resized (its pixels kept) */
+static void check_resize(HWND child)
+{
+    g_step = "resizing a composition swap chain";
+    Gpu g;
+    int ok = gpu_make(&g, child, 200, 120) && gpu_frame(&g, NULL, c_magenta);
+    CHECK("a composition swap chain on the GPU, frame 1 shown", ok && pixel(child, 10, 10) == RGB(255, 0, 255));
+    size_window(child, 300, 160);
+    ok = ok && SUCCEEDED(VT(g.chain, 13, ResizeBuffers_t)(g.chain, 0, 300, 160, 0, 0));
+    NDXGI_SWAP_CHAIN_DESC1 got;
+    memset(&got, 0, sizeof(got));
+    if (ok) VT(g.chain, 18, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(g.chain, &got);
+    CHECK("ResizeBuffers to 300x160", ok && got.Width == 300 && got.Height == 160);
+    if (ok) {                                               /* (a change to the tree, so Commit draws all of it) */
+        VT(g.visual, 4, HRESULT (STDMETHODCALLTYPE *)(void *, float))(g.visual, 0.0f);
+        VT(g.dc, 3, Commit_t)(g.dc);
+    }
+    COLORREF c = pixel(child, 10, 10);
+    CHECK("a Commit before the next present: the last frame stays", ok && c == RGB(255, 0, 255));
+    if (c != RGB(255, 0, 255)) printf("pixel %06lx\n", (unsigned long)c);
+    ok = ok && gpu_frame(&g, NULL, c_cyan);
+    CHECK("a frame at the new size, all of it shown",
+          ok && pixel(child, 250, 140) == RGB(0, 255, 255) && pixel(child, 10, 10) == RGB(0, 255, 255));
+    size_window(child, 120, 80);
+    ok = ok && SUCCEEDED(VT(g.chain, 13, ResizeBuffers_t)(g.chain, 2, 120, 80, NDXGI_FORMAT_B8G8R8A8_UNORM, 0)) &&
+         gpu_frame(&g, NULL, c_yellow);
+    CHECK("smaller: ResizeBuffers to 120x80, a frame", ok && pixel(child, 60, 40) == RGB(255, 255, 0));
+    memset(&got, 0, sizeof(got));
+    ok = ok && FAILED(VT(g.chain, 13, ResizeBuffers_t)(g.chain, 0, 0, 0, 0, 0)) &&
+         SUCCEEDED(VT(g.chain, 18, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(g.chain, &got)) && got.Width == 120;
+    CHECK("ResizeBuffers to no size refused (a composition swap chain has no window to take it from)", ok);
+    gpu_free(&g);
+
+    g_step = "resizing a virtual surface";
+    size_window(child, 300, 160);
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    CreateDComp_t cdc3 = (CreateDComp_t)GetProcAddress(g_dcomp, "DCompositionCreateDevice3");
+    void *dev = NULL, *ctx = NULL, *dxgidev = NULL, *desk = NULL, *target = NULL, *visual = NULL, *surf = NULL, *virt = NULL;
+    ok = cd && cdc3 && SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev, NULL, &ctx)) &&
+         SUCCEEDED(VT(dev, 0, QI_t)(dev, &NIID_IDXGIDevice, &dxgidev)) &&
+         SUCCEEDED(cdc3(dxgidev, &NIID_IDCompositionDesktopDevice, &desk)) &&
+         SUCCEEDED(VT(desk, 24, HRESULT (STDMETHODCALLTYPE *)(void *, HWND, BOOL, void **))(desk, child, TRUE, &target)) &&
+         SUCCEEDED(VT(desk, 6, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(desk, &visual)) &&
+         SUCCEEDED(VT(target, 3, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(target, visual)) &&
+         SUCCEEDED(VT(desk, 9, HRESULT (STDMETHODCALLTYPE *)(void *, UINT, UINT, UINT, UINT, void **))(
+             desk, 200, 120, NDXGI_FORMAT_B8G8R8A8_UNORM, 1, &surf)) &&                 /* CreateVirtualSurface */
+         SUCCEEDED(VT(surf, 0, QI_t)(surf, &NIID_IDCompositionVirtualSurface, &virt)) &&
+         SUCCEEDED(VT(visual, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(visual, surf));
+    CHECK("CreateVirtualSurface (IDCompositionVirtualSurface), SetContent", ok);
+    ok = ok && draw_surface(surf, dev, ctx, NULL, 0xFFFFFF00) && SUCCEEDED(VT(desk, 3, Commit_t)(desk));   /* yellow */
+    CHECK("drawn and committed", ok && pixel(child, 10, 10) == RGB(255, 255, 0));
+    typedef HRESULT (STDMETHODCALLTYPE *VResize_t)(void *, UINT, UINT);
+    ok = ok && SUCCEEDED(VT(virt, 8, VResize_t)(virt, 300, 160));
+    RECT strip = { 200, 0, 300, 160 };
+    ok = ok && draw_surface(surf, dev, ctx, &strip, 0xFF00FFFF) && SUCCEEDED(VT(desk, 3, Commit_t)(desk));   /* cyan */
+    c = pixel(child, 10, 10);
+    CHECK("Resize to 300x160: the new part drawn, the old pixels kept", ok && pixel(child, 250, 60) == RGB(0, 255, 255) &&
+                                                                     c == RGB(255, 255, 0));
+    if (c != RGB(255, 255, 0)) printf("pixel %06lx\n", (unsigned long)c);
+    ok = ok && SUCCEEDED(VT(virt, 8, VResize_t)(virt, 100, 60)) && SUCCEEDED(VT(desk, 3, Commit_t)(desk));
+    CHECK("Resize to 100x60: kept", ok && pixel(child, 50, 30) == RGB(255, 255, 0));
+    typedef HRESULT (STDMETHODCALLTYPE *Begin_t)(void *, const RECT *, const GUID *, void **, POINT *);
+    RECT big = { 0, 0, 200, 120 };
+    void *tex = NULL;
+    POINT at;
+    CHECK("BeginDraw outside the new size refused", ok && FAILED(VT(surf, 3, Begin_t)(surf, &big, &NIID_ID3D11Texture2D, &tex, &at)) && !tex);
+    RELEASE(tex);
+    RELEASE(virt); RELEASE(surf); RELEASE(visual); RELEASE(target); RELEASE(desk); RELEASE(dxgidev); RELEASE(ctx); RELEASE(dev);
+    size_window(child, 200, 120);
+}
+
+/* frames presented on another thread until @stop (the thread that starts
+ * it does no Direct3D meanwhile: one immediate context) */
+typedef struct { Gpu *g; void *ctx; volatile LONG stop, presents, failed; } Spin;
+
+static DWORD WINAPI spin_thread(void *arg)
+{
+    Spin *sp = arg;
+    const float *colors[3] = { c_red, c_green, c_blue };
+    for (LONG i = 0; !sp->stop; i++) {
+        if (gpu_frame(sp->g, sp->ctx, colors[i % 3])) InterlockedIncrement(&sp->presents);
+        else InterlockedIncrement(&sp->failed);
+        Sleep(1);
+    }
+    return 0;
+}
+
+/* @n more presents on @sp's thread, at most 20 s */
+static int spun(Spin *sp, LONG n)
+{
+    LONG want = sp->presents + n;
+    for (int i = 0; i < 2000 && sp->presents < want; i++) Sleep(10);
+    return sp->presents >= want;
+}
+
+static HANDLE spin_start(Spin *sp, Gpu *g)
+{
+    memset((void *)sp, 0, sizeof(*sp));
+    sp->g = g;
+    sp->ctx = g->ctx;
+    return CreateThread(NULL, 0, spin_thread, sp, 0, NULL);
+}
+
+static int spin_stop(Spin *sp, HANDLE t)
+{
+    sp->stop = 1;
+    int ended = t && WaitForSingleObject(t, 20000) == WAIT_OBJECT_0;
+    if (t) CloseHandle(t);
+    return ended;
+}
+
+/* What a closing browser tab or a lost GPU device does: a visual, its
+ * target, the DirectComposition device, the Direct3D device and the window
+ * go away while another thread is still presenting into the swap chain */
+static void check_teardown(HWND top, HWND child)
+{
+    g_step = "teardown while frames are presented";
+    HWND w = CreateWindowExW(0, L"dcomptest_bare", L"", WS_CHILD | WS_VISIBLE, 240, 0, 200, 120, top, NULL, GetModuleHandleW(NULL), NULL);
+    Gpu g;
+    Spin sp;
+    int ok = w && gpu_make(&g, w, 200, 120) && gpu_frame(&g, NULL, c_magenta);
+    CHECK("a composition swap chain on a second window", ok);
+    HANDLE t = ok ? spin_start(&sp, &g) : NULL;
+    CHECK("frames presented on another thread", t && spun(&sp, 3));
+    RELEASE(g.target);                                      /* the target first, its visual still held */
+    CHECK("the target released, frames go on", spun(&sp, 3));
+    VT(g.dc, 3, Commit_t)(g.dc);
+    RELEASE(g.visual);                                      /* the visual: its swap chain's sink taken back */
+    CHECK("the visual released, frames go on", spun(&sp, 3));
+    VT(g.dc, 3, Commit_t)(g.dc);
+    RELEASE(g.dc);
+    RELEASE(g.f);
+    CHECK("the DirectComposition device released, frames go on", spun(&sp, 3));
+    CHECK("the presenting thread ends", spin_stop(&sp, t));
+    CHECK("no present failed", sp.failed == 0);
+    RELEASE(g.ctx);
+    RELEASE(g.dev);                                         /* the device before the swap chain made on it */
+    void *kept = NULL;
+    ok = SUCCEEDED(VT(g.chain, 7, HRESULT (STDMETHODCALLTYPE *)(void *, const GUID *, void **))(g.chain, &NIID_ID3D11Device, &kept)) &&
+         kept && SUCCEEDED(VT(g.chain, 8, Present_t)(g.chain, 0, 0));
+    CHECK("the Direct3D device released before its swap chain: the swap chain keeps it and presents", ok);
+    RELEASE(kept);
+    RELEASE(g.chain);
+
+    g_step = "a window destroyed while frames are presented";
+    ok = gpu_make(&g, w, 200, 120) && gpu_frame(&g, NULL, c_cyan) && pixel(w, 10, 10) == RGB(0, 255, 255);
+    CHECK("a swap chain on the window again", ok);
+    t = ok ? spin_start(&sp, &g) : NULL;
+    ok = t && spun(&sp, 2);
+    DestroyWindow(w);
+    CHECK("the window destroyed, frames go on", ok && spun(&sp, 5));
+    CHECK("Commit with the window gone", SUCCEEDED(VT(g.dc, 3, Commit_t)(g.dc)));
+    CHECK("the thread ends, no present failed", spin_stop(&sp, t) && sp.failed == 0);
+    gpu_free(&g);
+
+    g_step = "composition after the teardowns";
+    ok = gpu_make(&g, child, 200, 120) && gpu_frame(&g, NULL, c_green);
+    CHECK("a new swap chain on another window shown", ok && pixel(child, 10, 10) == RGB(0, 255, 0));
+    gpu_free(&g);
+    CHECK("everything released", 1);
+}
+
 /* ---- The GPU process: its compositing window, parented by the browser ----- */
 static HWND g_host, g_child;
 static int g_tries;
+static Gpu g_gpu;                       /* (life: the window's swap chain) */
+static Spin g_spin;
 
 static LRESULT CALLBACK gpu_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
+    if (m == DC_RESIZE) {                                   /* the browser's window resized: ours, its buffers, a frame */
+        int w = (int)wp, ht = (int)lp, ok = 0, bad = 0, bit = 0;
+#define C(cond) do { if (cond) ok++; else bad |= 1 << bit; bit++; } while (0)
+        C(SetWindowPos(h, NULL, 0, 0, w, ht, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOOWNERZORDER | SWP_NOZORDER));  /* bit 0 */
+        C(g_gpu.chain && SUCCEEDED(VT(g_gpu.chain, 13, ResizeBuffers_t)(g_gpu.chain, 0, (UINT)w, (UINT)ht, 0, 0)));   /* bit 1 */
+        C(g_gpu.chain && gpu_frame(&g_gpu, NULL, c_green));                                                            /* bit 2 */
+        C(pixel(h, w - 10, ht - 10) == RGB(0, 255, 0));                                                               /* bit 3 */
+#undef C
+        PostMessageW(g_host, DC_RESULT, (WPARAM)ok, (LPARAM)bad);
+        return 0;
+    }
+    if (m == DC_SPIN) {                                     /* (until the browser kills this process) */
+        HANDLE t = g_gpu.chain ? spin_start(&g_spin, &g_gpu) : NULL;
+        if (t) spun(&g_spin, 3);
+        PostMessageW(g_host, DC_SPINNING, (WPARAM)(t != NULL), (LPARAM)g_spin.presents);
+        return 0;
+    }
     if (m != DC_DRAW) return DefWindowProcW(h, m, wp, lp);
     HWND parent = (HWND)wp;
     if (GetParent(h) != parent && ++g_tries < 200) {         /* (the browser's SetParent reaches us on its own) */
@@ -522,23 +771,27 @@ static LRESULT CALLBACK gpu_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     C(SetWindowPos(h, NULL, 0, 0, 200, 120, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOOWNERZORDER | SWP_NOZORDER));   /* bit 3 */
     RECT cr;
     C(GetClientRect(h, &cr) && cr.right == 200 && cr.bottom == 120);   /* bit 4 */
+    RECT all = { 0, 0, 200, 120 };
 #ifdef _WIN64
     Out o;
-    RECT all = { 0, 0, 200, 120 };
-    C(out_make(&o, h, 200, 120, 0) && out_frame(&o, all, 0xFFFF0000));  /* bit 5: composited, red */
-#else
-    HDC dc = GetDC(h);
-    HBRUSH red = CreateSolidBrush(RGB(255, 0, 0));
-    RECT all = { 0, 0, 200, 120 };
-    C(FillRect(dc, &all, red));                             /* bit 5: drawn with GDI, red */
-    DeleteObject(red);
-    ReleaseDC(h, dc);
 #endif
+    if (g_life) C(gpu_make(&g_gpu, h, 200, 120) && gpu_frame(&g_gpu, NULL, c_red));   /* bit 5: composited on the GPU, red */
+    else {
+#ifdef _WIN64
+        C(out_make(&o, h, 200, 120, 0) && out_frame(&o, all, 0xFFFF0000));      /* bit 5: composited, red */
+#else
+        HDC dc = GetDC(h);
+        HBRUSH red = CreateSolidBrush(RGB(255, 0, 0));
+        C(FillRect(dc, &all, red));                         /* bit 5: drawn with GDI, red */
+        DeleteObject(red);
+        ReleaseDC(h, dc);
+#endif
+    }
     C(pixel(h, 100, 60) == RGB(255, 0, 0));                 /* bit 6 */
 #undef C
     PostMessageW(g_host, DC_RESULT, (WPARAM)ok, (LPARAM)bad);
 #ifdef _WIN64
-    out_free(&o);
+    if (!g_life) out_free(&o);
 #endif
     return 0;
 }
@@ -565,7 +818,7 @@ static int gpu_main(HWND host)
 }
 
 /* ---- The browser ----------------------------------------------------------- */
-static int g_result_ok = -1, g_result_bad = -1;
+static int g_result_ok = -1, g_result_bad = -1, g_spinning;
 
 /* a window that draws nothing of its own (Chromium's draws only through DirectComposition) */
 static LRESULT CALLBACK bare_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
@@ -580,8 +833,53 @@ static LRESULT CALLBACK host_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     switch (m) {
     case DC_HELLO: g_child = (HWND)wp; return 0;
     case DC_RESULT: g_result_ok = (int)wp; g_result_bad = (int)lp; return 0;
+    case DC_SPINNING: g_spinning = wp ? 1 : 2; return 0;
     }
     return DefWindowProcW(h, m, wp, lp);
+}
+
+
+/* The GPU process's window composited on the GPU (life): seen from the
+ * browser's process, resized when the browser's is, and the
+ * process killed while it presents (a GPU process crash): its window goes,
+ * the browser's lives on and draws its own again */
+static void check_cross_process_life(HWND browser, HANDLE gpu)
+{
+    g_step = "the GPU process's window, composited on the GPU";
+    COLORREF c = pixel(g_child, 100, 60);                   /* (another process's window: what it shows now) */
+    CHECK("its frame, seen from the browser's process", c == RGB(255, 0, 0));
+    if (c != RGB(255, 0, 0)) printf("pixel %06lx\n", (unsigned long)c);
+    g_step = "the GPU process's window resized";
+    g_result_ok = g_result_bad = -1;
+    PostMessageW(g_child, DC_RESIZE, 300, 160);
+    WAIT_FOR(g_result_bad != -1, 20000);
+    CHECK("the GPU process sizes its window and buffers and presents", g_result_bad == 0);
+    if (g_result_bad) printf("gpu resize checks: %d passed, failed bits %#x\n", g_result_ok, g_result_bad);
+    RECT r = { 0, 0, 0, 0 };
+    GetWindowRect(g_child, &r);
+    CHECK("the browser sees it 300x160", r.right - r.left == 300 && r.bottom - r.top == 160);
+    RECT cr = { 0, 0, 0, 0 };
+    GetClientRect(g_child, &cr);
+    CHECK("its client area too (GetClientRect from another process)", cr.right == 300 && cr.bottom == 160);
+    if (cr.right != 300 || cr.bottom != 160) printf("client %ldx%ld\n", cr.right, cr.bottom);
+    c = pixel(g_child, 250, 140);
+    CHECK("the new frame seen from the browser's process, the new part too", c == RGB(0, 255, 0) && pixel(g_child, 10, 10) == RGB(0, 255, 0));
+    if (c != RGB(0, 255, 0)) printf("pixel %06lx\n", (unsigned long)c);
+    g_step = "the GPU process killed while presenting";
+    PostMessageW(g_child, DC_SPIN, 0, 0);
+    WAIT_FOR(g_spinning, 20000);
+    CHECK("the GPU process presents frames on another thread", g_spinning == 1);
+    TerminateProcess(gpu, 9);
+    CHECK("it ends", WaitForSingleObject(gpu, 20000) == WAIT_OBJECT_0);
+    WAIT_FOR(!IsWindow(g_child), 5000);
+    CHECK("its window goes with it", !IsWindow(g_child));
+    CHECK("the browser's window lives on", IsWindow(browser) && IsWindowVisible(browser));
+    InvalidateRect(browser, NULL, TRUE);
+    UpdateWindow(browser);
+    pump(200);
+    c = pixel(browser, 100, 60);
+    CHECK("the browser's window drawn again where the GPU process's was", c == RGB(128, 128, 128));
+    if (c != RGB(128, 128, 128)) printf("pixel %06lx\n", (unsigned long)c);
 }
 
 static void check_cross_process(HWND browser)
@@ -589,7 +887,7 @@ static void check_cross_process(HWND browser)
     g_step = "starting the GPU process";
     char self[MAX_PATH], cl[MAX_PATH + 64];
     GetModuleFileNameA(NULL, self, MAX_PATH);
-    snprintf(cl, sizeof(cl), "\"%s\" gpu %llx", self, (unsigned long long)(ULONG_PTR)browser);
+    snprintf(cl, sizeof(cl), "\"%s\" gpu %llx%s", self, (unsigned long long)(ULONG_PTR)browser, g_life ? " life" : "");
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     if (!CreateProcessA(self, cl, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CHECK("CreateProcess", 0); return; }
@@ -612,6 +910,7 @@ static void check_cross_process(HWND browser)
         }
         CHECK("the window is over the browser's client area", placed);
         if (!placed) printf("child at %ld,%ld %ldx%ld, wanted %ld,%ld 200x120\n", r.left, r.top, r.right - r.left, r.bottom - r.top, o.x, o.y);
+        if (g_life) check_cross_process_life(browser, pi.hProcess);
     }
     TerminateProcess(pi.hProcess, 0);
     CloseHandle(pi.hProcess);
@@ -623,13 +922,17 @@ int main(int argc, char **argv)
     g_dxgi = LoadLibraryW(L"dxgi.dll");
     g_d3d11 = LoadLibraryW(L"d3d11.dll");
     g_dcomp = LoadLibraryW(L"dcomp.dll");
-    if (argc >= 3 && !strcmp(argv[1], "gpu")) return gpu_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16));
+    if (argc >= 3 && !strcmp(argv[1], "gpu")) {
+        g_life = argc >= 4 && !strcmp(argv[3], "life");
+        return gpu_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16));
+    }
+    g_life = argc >= 2 && !strcmp(argv[1], "life");
     CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
     CHECK("dxgi.dll, d3d11.dll and dcomp.dll load", g_dxgi && g_d3d11 && g_dcomp);
     if (!g_dxgi || !g_d3d11) { printf("dcomptest: %d passed, %d failed\n", pass, fail); return 1; }
-    g_dxvk = argc >= 2 && !strcmp(argv[1], "dxvk");
-    if (g_dxvk) check_dxvk();
-    else check_adapter();
+    g_dxvk = g_life || (argc >= 2 && !strcmp(argv[1], "dxvk"));
+    if (!g_life && g_dxvk) check_dxvk();
+    else if (!g_life) check_adapter();
 
     WNDCLASSW wc = { 0 };
     wc.lpfnWndProc = host_proc;
@@ -646,13 +949,18 @@ int main(int argc, char **argv)
     RegisterClassW(&bc);
     HWND child = CreateWindowExW(0, L"dcomptest_bare", L"", WS_CHILD | WS_VISIBLE, 0, 0, 200, 120, top, NULL, wc.hInstance, NULL);
     pump(200);
+    if (g_life) {
+        check_resize(child);
+        check_teardown(top, child);
+    } else {
 #ifdef _WIN64
-    check_composition(top, child);
-    check_dcomp_surfaces(child, 0);
+        check_composition(top, child);
+        check_dcomp_surfaces(child, 0);
 #endif
-    if (g_dxvk) {
-        check_gpu_composition(child);
-        check_dcomp_surfaces(child, 1);
+        if (g_dxvk) {
+            check_gpu_composition(child);
+            check_dcomp_surfaces(child, 1);
+        }
     }
     DestroyWindow(child);
     pump(100);

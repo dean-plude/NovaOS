@@ -24,8 +24,9 @@ straight into the screen's memory: no pixel is copied by the guest.
   window's last frame just before it is shown).  The window keeps
   the program's last shown buffer (it draws the next frame into the
   other one) to write it there again.  The program goes on to its next
-  frame as soon as the copy is asked for: a kernel thread waits for the
-  host and then marks that part of the screen changed for QEMU's display
+  frame as soon as the copy is asked for: a kernel thread notifies the
+  device (a notification waits while QEMU's main thread draws: 9 ms a
+  frame without KVM when the program did it), waits for the host and then marks that part of the screen changed for QEMU's display
   (a write from the guest to each page the host wrote).  (Showing a texture as the
   output itself would save that write, but QEMU then has no picture to
   take a screenshot of.)  It says yes only for a window on the primary at
@@ -46,8 +47,8 @@ straight into the screen's memory: no pixel is copied by the guest.
   per second and move fewer bytes through guest memory a frame
   (read-backs, window bitmaps drawn, the desktop's back buffer copied to
   the screen, transfers to a virtio output).  In the QEMU VM without
-  KVM: 25.6 against 19.9 frames a second (39.1 against 50.3 ms a frame),
-  19 KiB against 3540 KiB a frame through guest memory.  It also prints
+  KVM: 35.8 against 48.3 ms a frame, 17 KiB against 3531 KiB a frame
+  through guest memory.  It also prints
   how much of a frame goes to SwapBuffers and to asking the kernel.  A first version
   copied each frame on the host twice (into the window's own texture,
   then onto the screen), and into both pages of a flipping display, and

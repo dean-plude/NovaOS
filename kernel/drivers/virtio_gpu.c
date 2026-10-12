@@ -678,8 +678,10 @@ struct VgpuBlob {
     UINT32  format, width, height;        /* a virgl resource's (0: a blob) */
 };
 
+#define XFER_COUNT  1                     /* a read-back of a program's (DISPLAY_STAT_FROM_HOST) */
+#define XFER_QUIET  2                     /* no notification: a later one sends it */
 static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
-                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, bool count);
+                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, int how);
 
 static Vgpu *dev3d(void)
 {
@@ -750,15 +752,18 @@ static UINT32 call3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len, void *ans, UIN
     return slot_wait(v, i, ans, alen);
 }
 
-/* Send slot @i and don't wait (its answer frees it) */
-static void post3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len)
+/* Send slot @i and don't wait (its answer frees it); notify the device
+ * unless @quiet (a later notification sends it) */
+static void post3d_ex(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len, bool quiet)
 {
     IrqState s = spin_lock_irqsave(&g_lock);
     v->slot[i].autofree = true;
     slot_send(v, i, qlen, ext_len, sizeof(Hdr));
     spin_unlock_irqrestore(&g_lock, s);
-    kick(v);
+    if (!quiet) kick(v);
 }
+
+static void post3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len) { post3d_ex(v, i, qlen, ext_len, false); }
 
 typedef struct __attribute__((packed)) { Hdr h; UINT32 index, pad; } CapsetInfoReq;
 typedef struct __attribute__((packed)) { Hdr h; UINT32 id, max_version, max_size, pad; } CapsetInfo;
@@ -1056,12 +1061,12 @@ bool VgpuBlobFrames(VgpuBlob *b, const PADDR **frames, UINT64 *n)
 bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
                     UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value)
 {
-    return VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, true);
+    return VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
 }
 
-/* The same; @count: a read-back of a program's (DISPLAY_STAT_FROM_HOST) */
+/* The same; @how: XFER_* */
 static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
-                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, bool count)
+                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, int how)
 {
     Vgpu *v = c->v;
     bool ok;
@@ -1070,7 +1075,7 @@ static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32
     int i = slot3d(v, to_host ? CMD_TRANSFER_TO_HOST_3D : CMD_TRANSFER_FROM_HOST_3D, c->id, sizeof(Transfer3d));
     Transfer3d *q = (Transfer3d *)v->slot[i].page;
     memcpy(&q->x, box, 6 * sizeof(UINT32));
-    if (!to_host && count) DisplayStatAdd(DISPLAY_STAT_FROM_HOST, (UINT64)box[3] * box[4] * (box[5] ? box[5] : 1) * 4);
+    if (!to_host && (how & XFER_COUNT)) DisplayStatAdd(DISPLAY_STAT_FROM_HOST, (UINT64)box[3] * box[4] * (box[5] ? box[5] : 1) * 4);
     q->offset = offset;
     q->res = b->res;
     q->level = level;
@@ -1083,7 +1088,7 @@ static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32
     v->slot[i].autofree = true;
     slot_send(v, i, sizeof(Transfer3d), 0, sizeof(Hdr));
     spin_unlock_irqrestore(&g_lock, s);
-    kick(v);
+    if (!(how & XFER_QUIET)) kick(v);
     return true;
 }
 
@@ -1383,6 +1388,7 @@ static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 s
 
 bool VgpuPresentWait(UINT64 seq)
 {
+    if (g_pctx) kick(g_pctx->v);                  /* (overlay_read leaves it to here) */
     return g_pctx && VgpuWait(g_pctx, 1, &g_psync, &seq, false, 1000000000ull) == 0;
 }
 
@@ -1419,21 +1425,23 @@ static void post_attach(Vgpu *v, UINT32 res, void *pl, size_t pages, UINT32 n)
     a->n = n;
     v->slot[i].ext = pl;
     v->slot[i].ext_pages = pages;
-    post3d(v, i, sizeof(Hdr) + 8, n * 16);
+    post3d_ex(v, i, sizeof(Hdr) + 8, n * 16, true);
 }
 
 static void post_detach(Vgpu *v, UINT32 res)
 {
     int i = slot3d(v, CMD_DETACH_BACKING, 0, sizeof(Unref));
     ((Unref *)v->slot[i].page)->id = res;
-    post3d(v, i, sizeof(Unref), 0);
+    post3d_ex(v, i, sizeof(Unref), 0, true);
 }
 
 /* The frame read back straight into the screen: for the transfer, the
  * program's resource gets the screen's rows as its memory, then its own
  * back (the host's only copy, as the GDI's read-back is; the program does
  * not touch a buffer it showed until its next frame).  @src's bytes must
- * be the screen's (B, G, R, then alpha or nothing) */
+ * be the screen's (B, G, R, then alpha or nothing).  The device is not
+ * notified: VgpuPresentWait does that, from the "present" thread (a
+ * notification waits while QEMU's main thread draws) */
 static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
                          int first, int last)
 {
@@ -1465,7 +1473,7 @@ static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int
         post_attach(v, src->res, rows[pg], rpages[pg], 1);
         UINT32 box[6] = { (UINT32)x, (UINT32)y, 0, (UINT32)w, (UINT32)h, 1 };
         VgpuTransfer3dEx(g_pctx, src, false, box, off[pg], 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
-                         pg == last ? g_pseq + 1 : 0, false);
+                         pg == last ? g_pseq + 1 : 0, XFER_QUIET);
     }
     post_detach(v, src->res);
     post_attach(v, src->res, own, opages, nown);
@@ -1510,7 +1518,7 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
         UINT32 row = (UINT32)(dy + pg * s->lines);
         UINT32 box[6] = { (UINT32)dx, row, 0, (UINT32)w, (UINT32)h, 1 };
         if (!VgpuTransfer3dEx(g_pctx, scr, false, box, ((UINT64)row * s->stride + dx) * 4, 0, (UINT32)s->stride * 4, 0,
-                              pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, false))
+                              pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, 0))
             return false;
     }
 done:;

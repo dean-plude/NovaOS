@@ -658,6 +658,12 @@ NT_API UINT32 nt_KeQueryActiveProcessorCountEx(UINT16 group)
     return group == 0 || group == 0xFFFF ? g_cpu_count : 0;
 }
 
+/* (no processors are hot-added: the most there can be are the ones running) */
+NT_API UINT32 nt_KeQueryMaximumProcessorCountEx(UINT16 group)
+{
+    return nt_KeQueryActiveProcessorCountEx(group);
+}
+
 /* -----------------------------------------------------------------------
  * KeBugCheckEx: a driver found the system in a state it cannot go on in
  * ----------------------------------------------------------------------- */

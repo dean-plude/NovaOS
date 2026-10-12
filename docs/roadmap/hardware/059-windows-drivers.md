@@ -23,3 +23,6 @@
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
   the tests); line-based interrupts only, MSI comes later.
+  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
+  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
+  the NTFS volume on its disk.

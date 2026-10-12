@@ -8,9 +8,11 @@ NovaOS loads real signed Windows driver packages unchanged (step 30, the
 Windows driver model), so every symbol they import from ntoskrnl.exe and
 hal.dll must be an export kernel/nt/exports.h lists (step 30.2 completes the
 kernel API for exactly this reason).  This compares the import lists of the
-drivers we target first — the VirtIO serial driver (vioser.sys) and the
-KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) — against exports.h and
-fails naming any import that is neither provided nor allow-listed.
+drivers we target first — the VirtIO serial driver (vioser.sys), the
+KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) and the VirtIO block
+miniport (viostor.sys, whose storport.sys imports NovaOS's own Storport
+host provides) — against exports.h and fails naming any import that is
+neither provided nor allow-listed.
 
 The import lists live beside the wdm self-test
 (tests/selftest/devices/wdm/imports/*.txt), extracted from the signed
@@ -27,7 +29,7 @@ IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports
 
 # Modules NovaOS itself provides (its export tables); every import from one
 # of these must appear in exports.h.
-PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll"}
+PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "storport.sys"}
 # Modules a driver package brings with it (provided by a later driver step),
 # so their imports are not NovaOS exports.
 ALLOWLISTED_MODULES = {"wdfldr.sys"}

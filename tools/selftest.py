@@ -82,6 +82,10 @@ order; --list prints them):
             edu PCI device, on which pnputil installs a Plug and Play
             driver (edutest.sys) that gets its memory, interrupt and DMA
             from the PnP manager, and which pnputil disables and enables
+            again; "viostor", a second disk on QEMU's virtio-blk card with
+            an NTFS volume, on which pnputil installs virtio-win's signed
+            viostor.sys: it runs on NovaOS's Storport host and the volume
+            mounts as D:
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -308,6 +312,7 @@ PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
+VIOSTOR = load_suite('devices/viostor')
 
 
 def net4_boot(work):
@@ -443,27 +448,58 @@ def edu_boot(work):
     return ['-device', 'edu'], []
 
 
-def ntfs_boot(work):
-    """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
-    NOVATEST (mkntfs, from the ntfs-3g package): drive D:, read-write.  It
-    stays in work/ntfs.img for the tests' check once QEMU has quit
-    (tests/selftest/devices/ntfs)"""
+def ntfs_disk(path, label, mb=128, files=()):
+    """A disk image at @path with one fresh NTFS volume from 1 MiB labelled
+    @label (mkntfs, from the ntfs-3g package), holding @files ((name, text)
+    pairs, written with ntfscp)"""
     mkntfs = shutil.which('mkntfs') or ('/usr/sbin/mkntfs' if os.path.exists('/usr/sbin/mkntfs') else None)
     if not mkntfs:
         raise RuntimeError('mkntfs is not installed (the ntfs-3g package)')
-    disk, vol, mb = os.path.join(work, 'ntfs.img'), os.path.join(work, 'ntfs.vol'), 128
+    vol = path + '.vol'
     with open(vol, 'wb') as f:
         f.truncate((mb - 1) << 20)
-    subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVATEST', '-p', '2048', '-H', '255', '-S', '63', vol],
+    subprocess.run([mkntfs, '-F', '-Q', '-L', label, '-p', '2048', '-H', '255', '-S', '63', vol],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name, text in files:
+        src = vol + '.file'
+        with open(src, 'w', newline='\r\n') as f:
+            f.write(text)
+        ntfscp = shutil.which('ntfscp') or '/usr/bin/ntfscp'
+        subprocess.run([ntfscp, '-f', vol, src, name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.unlink(src)
     mbr = bytearray(512)                                    # one NTFS partition (type 7) from LBA 2048
     mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\xfe\xff\xff', 0x07, b'\xfe\xff\xff', 2048, (mb - 1) * 2048)
     mbr[510:512] = b'\x55\xaa'
-    with open(disk, 'wb') as out, open(vol, 'rb') as src:
+    with open(path, 'wb') as out, open(vol, 'rb') as src:
         out.write(mbr + bytes((1 << 20) - 512))
         shutil.copyfileobj(src, out)
     os.unlink(vol)
+
+
+def ntfs_boot(work):
+    """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
+    NOVATEST (ntfs_disk): drive D:, read-write.  It stays in work/ntfs.img
+    for the tests' check once QEMU has quit (tests/selftest/devices/ntfs)"""
+    disk = os.path.join(work, 'ntfs.img')
+    ntfs_disk(disk, 'NOVATEST')
     return ['-drive', f'format=raw,file={disk}'], []
+
+
+def viostor_boot(work):
+    """A second disk on QEMU's virtio-blk card (PCI 1af4:1001), which no
+    NovaOS driver runs, with an NTFS volume labelled VIOSTOR holding
+    viostor.txt (ntfs_disk), and virtio-win's signed viostor package
+    (tools/drivertest/viostor.py) in C:\\Tests\\VioStor: pnputil installs it
+    on the card, which then runs on NovaOS's Storport host, and the volume
+    mounts as D: (tests/selftest/devices/viostor)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import viostor
+    pkg = os.path.join(work, 'viostor')
+    viostor.fetch(pkg)
+    disk = os.path.join(work, 'viostor.img')
+    ntfs_disk(disk, 'VIOSTOR', 64, [('viostor.txt', 'NovaOS reads this file through viostor.sys\n')])
+    return ['-drive', f'if=none,id=vd0,format=raw,file={disk}', '-device', 'virtio-blk-pci,drive=vd0'], [], \
+        dict(puts=[(pkg, r'C:\Tests\VioStor')])
 
 
 def monitors_boot(work):
@@ -587,7 +623,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('viostor', VIOSTOR, viostor_boot)],
 }
 
 

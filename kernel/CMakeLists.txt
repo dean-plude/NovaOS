@@ -228,6 +228,7 @@ set(KERNEL_C_SOURCES
     nt/ntoskrnl.c
     nt/pnp.c
     nt/ps.c
+    nt/storport.c
     nt/seh.c
     nt/zw.c
     io/pnp.c

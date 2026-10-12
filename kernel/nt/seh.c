@@ -235,8 +235,12 @@ static SehHandler virtual_unwind(UINT32 type, UINT64 base, UINT64 pc, RuntimeFun
  * Rip on the unwound stack); does not return. */
 static __attribute__((noreturn)) void seh_resume(SehContext *ctx)
 {
+    /* Switch to the target frame's stack, then push the resume address so
+     * the final ret lands RSP back at exactly ctx->Reg[R_RSP] (the push and
+     * the ret cancel): a target RSP minus 8 here would leave the resumed
+     * frame 8 bytes low and its epilogue's ret would pop a stale word. */
     __asm__ volatile(
-        "movq %0, %%rsp\n\t"           /* the caller is done with its frame */
+        "movq %0, %%rsp\n\t"           /* the target frame's own stack pointer */
         "pushq %1\n\t"                 /* return address = Rip */
         "movq %2, %%rax\n\t"
         "movq 0x08(%%rax), %%rcx\n\t" "movq 0x10(%%rax), %%rdx\n\t" "movq 0x18(%%rax), %%rbx\n\t"
@@ -246,7 +250,7 @@ static __attribute__((noreturn)) void seh_resume(SehContext *ctx)
         "movq 0x70(%%rax), %%r14\n\t" "movq 0x78(%%rax), %%r15\n\t"
         "movq 0x00(%%rax), %%rax\n\t"
         "ret\n\t"
-        : : "r"(ctx->Reg[R_RSP] - 8), "r"(ctx->Rip), "r"(ctx) : "memory");
+        : : "r"(ctx->Reg[R_RSP]), "r"(ctx->Rip), "r"(ctx) : "memory");
     __builtin_unreachable();
 }
 
@@ -401,8 +405,13 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
 {
     if (!NtDrvByAddress(f->rip)) return false;        /* not in driver code */
     SehContext ctx;
+    /* A fault taken in ring 0 does not change rings, so the CPU pushed only
+     * RIP/CS/RFLAGS (and the error code): InterruptFrame.rsp holds the
+     * interrupted code's stack data, not the faulting RSP.  The real one is
+     * where the CPU frame sits, i.e. the address of that rsp field. */
+    UINT64 fault_rsp = (UINT64)(uintptr_t)&f->rsp;
     ctx.Reg[R_RAX] = f->rax; ctx.Reg[R_RCX] = f->rcx; ctx.Reg[R_RDX] = f->rdx; ctx.Reg[R_RBX] = f->rbx;
-    ctx.Reg[R_RSP] = f->rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
+    ctx.Reg[R_RSP] = fault_rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
     ctx.Reg[R_R8] = f->r8; ctx.Reg[R_R9] = f->r9; ctx.Reg[R_R10] = f->r10; ctx.Reg[R_R11] = f->r11;
     ctx.Reg[R_R12] = f->r12; ctx.Reg[R_R13] = f->r13; ctx.Reg[R_R14] = f->r14; ctx.Reg[R_R15] = f->r15;
     ctx.Rip = f->rip;

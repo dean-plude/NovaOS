@@ -1295,13 +1295,37 @@ GDIAPI BOOL DeleteObject(HGDIOBJ obj)
 }
 
 GDIAPI BOOL GetBitmapDimensionEx(HBITMAP h, LPSIZE sz) { GObj *o = obj_of(h); if (!o) return FALSE; sz->cx = o->bw; sz->cy = o->bh; return TRUE; }
+/* A bitmap's bits as GetObject reports them: 32 bits a pixel (blue, green,
+ * red, then alpha or 0), rows top-down, @n bytes at most; SetBitmapBits
+ * writes them back (PhotoCraft's brush cursor, a custom winit cursor) */
 GDIAPI LONG GetBitmapBits(HBITMAP h, LONG n, LPVOID out)
 {
     GObj *o = bitmap_of(h);
-    if (!o || o->kind != K_BITMAP) return 0;
-    LONG k = n < o->bw * o->bh * 4 ? n : o->bw * o->bh * 4;
-    memcpy(out, o->bits, (size_t)k);
-    return k;
+    if (!o || o->kind != K_BITMAP || n < 0) return 0;
+    LONG k = n < o->bw * o->bh * 4 ? n / 4 : o->bw * o->bh;
+    BYTE *q = out;
+    for (LONG i = 0; i < k; i++, q += 4) {
+        int y = (int)(i / o->bw), row = o->flip ? o->bh - 1 - y : y;
+        DWORD p = o->bits[(size_t)row * o->bw + i % o->bw];
+        COLORREF c = o->fmt ? (p >> 16 & 0xFF) | (p & 0xFF00) | (p & 0xFF) << 16 : p;
+        q[0] = GetBValue(c); q[1] = GetGValue(c); q[2] = GetRValue(c); q[3] = o->fmt ? (BYTE)(p >> 24) : 0;
+    }
+    return k * 4;
+}
+
+GDIAPI LONG SetBitmapBits(HBITMAP h, DWORD n, const void *in)
+{
+    GObj *o = bitmap_of(h);
+    if (!o || o->kind != K_BITMAP || !in) return 0;
+    LONG k = n < (DWORD)o->bw * o->bh * 4 ? (LONG)(n / 4) : o->bw * o->bh;
+    const BYTE *q = in;
+    for (LONG i = 0; i < k; i++, q += 4) {
+        int y = (int)(i / o->bw), row = o->flip ? o->bh - 1 - y : y;
+        o->bits[(size_t)row * o->bw + i % o->bw] = o->fmt ? (DWORD)q[3] << 24 | q[2] << 16 | q[1] << 8 | q[0]
+                                                          : (DWORD)RGB(q[2], q[1], q[0]);
+    }
+    if (o->view24) dib24_sync(o);
+    return k * 4;
 }
 
 /* -----------------------------------------------------------------------

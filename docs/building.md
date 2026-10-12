@@ -487,6 +487,13 @@ NOVARUN_QEMU=/opt/qv/bin/qemu-system-x86_64 LD_LIBRARY_PATH=/opt/qv/lib/x86_64-l
   xvfb-run -a -s '-screen 0 1280x1024x24' python3 tools/selftest.py --suite graphics --gfx /tmp/gfx
 ```
 
+Beside it runs `tools/ci/host_profile.py graphics-out &`: for each turn of
+`gltest fps` (direct presentation, the GDI way, the GDI way, direct, then
+llvmpipe) it prints one `host profile:` line, also kept in `host-profile.log`,
+with the turn's wall time and the CPU milliseconds a second used by each group
+of QEMU's threads (the main thread, where virglrenderer draws and copies, the
+vCPUs, llvmpipe's workers, ...).
+
 When a graphics test hangs, the guest can only say that it waits for the
 host, so CI's graphics job runs `tools/ci/host_watch.py graphics-out &` beside
 the suite (needs `gdb` and `sudo`) and sets `VIRGL_LOG_LEVEL=debug` and

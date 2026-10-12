@@ -1481,13 +1481,51 @@ __asm__(".text\n"
         ".text\n");
 #endif
 
+/* _chkstk (x86): EAX bytes are about to be taken below ESP; touch each
+ * page of them from the top down, then return with ESP lowered by EAX, as
+ * MSVC's x86 runtime does (ECX kept, EAX lost).  Windows' 32-bit ntdll
+ * exports it under that name; MSVC-built 32-bit programs import it, and
+ * LLVM's 32-bit JIT (Mesa's x86 lavapipe and llvmpipe) looks it up for big
+ * stack frames as the x64 JIT looks up __chkstk. */
+#ifdef __i386__
+__asm__(".text\n"
+        ".globl __chkstk\n"
+        "__chkstk:\n\t"
+        "pushl %ecx\n\t"
+        "leal 4(%esp), %ecx\n\t"                   /* the return address's slot */
+        "subl %eax, %ecx\n\t"                      /* the new top of stack */
+        "sbbl %eax, %eax\n\t"
+        "notl %eax\n\t"
+        "andl %eax, %ecx\n\t"                      /* (below 0: 0) */
+        "movl %esp, %eax\n\t"
+        "andl $0xFFFFF000, %eax\n"                  /* this page */
+        "1:\n\t"
+        "cmpl %eax, %ecx\n\t"
+        "jb 2f\n\t"
+        "movl %ecx, %eax\n\t"
+        "popl %ecx\n\t"
+        "xchgl %eax, %esp\n\t"                     /* ESP: the new top, EAX: the old */
+        "movl (%eax), %eax\n\t"                    /* the return address */
+        "movl %eax, (%esp)\n\t"
+        "ret\n"                                     /* (ESP ends EAX below the caller's) */
+        "2:\n\t"
+        "subl $0x1000, %eax\n\t"
+        "testl %eax, (%eax)\n\t"
+        "jmp 1b\n"
+        ".section .drectve,\"yn\"\n\t"
+        ".ascii \" /EXPORT:__chkstk\"\n\t"
+        ".text\n");
+#endif
+
 /* Half-precision conversions as LLVM's compiler-rt names them.  Without
  * F16C (NovaOS does not turn on AVX state, and QEMU's default CPU has
  * none), LLVM's JIT in Mesa's lavapipe and llvmpipe calls these for every
  * 16-bit float a shader reads or writes, and looks them up among the loaded
  * modules; Windows has them in no DLL, so they are here.  The half travels
- * in the low 16 bits of XMM0 (LLVM's x86-64 convention for _Float16). */
-#ifdef __x86_64__
+ * in the low 16 bits of XMM0 (LLVM's x86-64 convention for _Float16); on
+ * x86 a half argument is on the stack and a half result in XMM0, a float or
+ * double result in ST(0) (the same in 32-bit lavapipe). */
+#if defined(__x86_64__) || defined(__i386__)
 int _fltused = 0x9875;                      /* (the linker's mark of floating-point code) */
 
 static float h2f(unsigned short h)

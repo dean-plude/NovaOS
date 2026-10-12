@@ -113,11 +113,14 @@ void         VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h);
  * frame into it (a transfer to the host) before showing that */
 typedef struct VgpuFrame { UINT32 format, stride; UINT64 offset; } VgpuFrame;
 /* Copy the top left @w x @h of virgl resource @src (or of the frame @fr in
- * blob @src) into the pages of @s at (dx, dy) (clipped to it); @o holds
- * @src (the blob's texture) from now on.  The host may still be at it:
- * @shown says what is left to do */
+ * blob @src) into the pages of @s at (dx, dy) (clipped to it) as @dw x @dh
+ * screen pixels: the same, twice (a monitor at scale 2 showing a frame of
+ * logical pixels) or half (a monitor at scale 1 and a frame drawn for
+ * scale 2) in each direction; @o holds @src (the blob's texture) from now
+ * on.  The host may still be at it: @shown says what is left to do */
 bool         VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, const VgpuFrame *fr, int w, int h, const VgpuScreen *s,
-                                int dx, int dy, VgpuShown *shown);
-/* Write (x, y, w, h) of @o at (dx, dy) of @s again (the desktop drew there) */
+                                int dx, int dy, int dw, int dh, VgpuShown *shown);
+/* Write (x, y, w, h) of @o, screen pixels from its top left, at (dx, dy)
+ * of @s again (the desktop drew there) */
 bool         VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h);
 int       VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any, UINT64 timeout_ns);

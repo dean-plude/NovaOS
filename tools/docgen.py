@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the generated parts of README.md, docs/ROADMAP.md,
+"""Build the generated parts of README.md, docs/ROADMAP.md, docs/testing.md,
 docs/HISTORY.md, docs/building.md and docs/compatibility.md from
 one-file-per-item fragments.
 
@@ -21,9 +21,9 @@ Parallel pull requests used to collide on the same lines of these files
   docs/readme/licenses/*.md    README's list of bundled licences
   docs/selftests/*.md          docs/building.md's self-test program table
   docs/compatibility/*.md      docs/compatibility.md's rating tables
-  tests/selftest/core/*.py     README's core self-test list (their DOC)
-  tests/appcorpus/*.py         README's nightly app list (their DOC)
-  userland/programs/*.json     README's self-test programs ("selftest")
+  tests/selftest/core/*.py     docs/testing.md's core self-test list (their DOC)
+  tests/appcorpus/*.py         docs/testing.md's nightly app list (their DOC)
+  userland/programs/*.json     docs/testing.md's self-test programs ("selftest")
 
 Fragments are taken in file-name order (a number or date prefix places
 them).  A region sits between "<!-- BEGIN generated:NAME -->" and
@@ -144,10 +144,12 @@ ROADMAP_AREAS = {'next-graphics': 'graphics', 'next-apps': 'apps', 'next-kernel'
 REGIONS = {
     'README.md': {
         'inside': (lambda: blocks('docs/readme/inside', ''), 'docs/readme/inside/*.md'),
+        'licenses': (lambda: inline('docs/readme/licenses', '; '), 'docs/readme/licenses/*.md'),
+    },
+    'docs/testing.md': {
         'core-tests': (core_tests, 'tests/selftest/core/*.py (DOC)'),
         'selftest-programs': (selftest_programs, 'userland/programs/*.json ("selftest": true)'),
         'corpus': (corpus_apps, 'tests/appcorpus/*.py (DOC)'),
-        'licenses': (lambda: inline('docs/readme/licenses', '; '), 'docs/readme/licenses/*.md'),
     },
     'docs/inside.md': {
         'inside': (lambda: blocks('docs/inside', ''), 'docs/inside/*.md'),

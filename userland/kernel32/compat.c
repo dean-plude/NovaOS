@@ -156,20 +156,21 @@ K32 BOOLEAN WINAPI CreateSymbolicLinkW(LPCWSTR link, LPCWSTR target, DWORD flags
 K32 BOOLEAN WINAPI CreateSymbolicLinkA(LPCSTR link, LPCSTR target, DWORD flags)
 { (void)link; (void)target; (void)flags; SetLastError(ERROR_PRIVILEGE_NOT_HELD); return FALSE; }
 
-/* Device I/O.  Video control codes go to the kernel: a shared GPU
- * resource's handle (a section, see userland/vulkan-1) answers the two
- * DXVK keeps a shared texture's description with.  No other device
- * answers control codes. */
+/* Device I/O: every control code goes to the kernel.  A Windows driver's
+ * device (kernel/nt/io.c) answers its own; a shared GPU resource's handle
+ * (a section, see userland/vulkan-1) the two DXVK keeps a shared
+ * texture's description with; other handles refuse them
+ * (ERROR_INVALID_FUNCTION). */
 K32 BOOL WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPVOID out, DWORD out_n,
                                 LPDWORD ret, LPOVERLAPPED ov)
 {
     if (ret) *ret = 0;
-    if ((code >> 16) != 0x23 /* FILE_DEVICE_VIDEO */) {
-        SetLastError(ERROR_INVALID_FUNCTION);
-        return FALSE;
-    }
     IO_STATUS_BLOCK io = { 0 };
     NTSTATUS s = NtDeviceIoControlFile(h, 0, 0, 0, &io, code, in, in_n, out, out_n);
+    if (s == STATUS_PENDING && !ov) {               /* (a synchronous caller waits for it) */
+        NtWaitForSingleObject(h, FALSE, NULL);
+        s = io.Status;
+    }
     DWORD n = NT_SUCCESS(s) ? (DWORD)io.Information : 0;
     if (ret) *ret = n;
     if (ov) {                                       /* (finished at once) */

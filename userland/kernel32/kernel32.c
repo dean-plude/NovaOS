@@ -115,6 +115,13 @@ const char *cwd(void)
 
 /* Absolute, normalized "C:\a\b" for @name; 0 on error */
 /* "\\?\C:\x", "\??\C:\x" and "\\.\C:\x" all name C:\x */
+/* @s starts with @pre, case-insensitively */
+static BOOL iprefix(const char *s, const char *pre)
+{
+    for (; *pre; s++, pre++) if ((*s | 0x20) != (*pre | 0x20)) return FALSE;
+    return TRUE;
+}
+
 static const char *skip_prefix(const char *name)
 {
     if ((name[0] == '\\' || name[0] == '/') && (name[1] == '\\' || name[1] == '/' || name[1] == '?') &&
@@ -229,7 +236,13 @@ BOOL nt_path(const char *name, NtPath *p)
     for (const char *c = name; *c; c++) if (*c == '\\' || *c == '/' || *c == ':') base = c + 1;
     if ((base[0] | 0x20) == 'n' && (base[1] | 0x20) == 'u' && (base[2] | 0x20) == 'l' && (!base[3] || base[3] == '.')) dev = "NUL";
     if (ieq(name, "NUL:") || ieq(name, "nul:")) dev = "NUL";
+    /* \\.\NAME and \\?\NAME, where NAME is no drive, volume or UNC path,
+     * is the object \??\NAME as given: a device's link, such as a
+     * Windows driver's \DosDevices\NAME */
+    BOOL device = !dev && name != orig && name[0] && name[1] != ':' && !iprefix(name, "Volume{") &&
+                  !iprefix(name, "UNC\\");
     if (dev) { int k = 0; while (dev[k] && k < 16) { full[k] = dev[k]; k++; } full[k] = 0; }
+    else if (device) { int k = 0; while (name[k] && k < MAX_PATH - 1) { full[k] = name[k] == '/' ? '\\' : name[k]; k++; } full[k] = 0; }
     else if (!full_path(name, full, MAX_PATH)) { SetLastError(ERROR_INVALID_NAME); return FALSE; }
     p->buf[0] = '\\'; p->buf[1] = '?'; p->buf[2] = '?'; p->buf[3] = '\\';
     int n = u2w(full, -1, p->buf + 4, MAX_PATH);

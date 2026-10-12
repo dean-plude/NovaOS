@@ -11148,6 +11148,53 @@ turn, and gltest's own figures echoed into the CI log) shows why:
   compiling the scene's shaders is not what slows a turn.
 - `gltest fps` prints every turn's frame rate (`fps: turns:`).
 
+## DirectComposition composited on the GPU
+
+The Phase 25 step after [the other monitors](#direct-presentation-on-every-monitor-and-at-scale-2).
+WebView2's GPU process renders its page on Venus into a DirectComposition
+swap chain, but every present then copied the changed part into a staging
+texture, read it back into guest memory and drew it into the window with
+the GDI.  Now `dcomp.dll` composites such a target on the GPU, and the
+frame never comes back to the guest:
+
+- **GPU composition**: a target whose visible tree shows only swap chains
+  of one GPU device (BGRA or RGBA ones) gets a picture of its window's
+  size on that device and a swap chain of the device's own on the window
+  (made by the device adapter's factory, DXVK's).  Each present copies
+  the part that changed into the picture on the GPU, a Commit after a
+  change to the tree copies all of it, and the picture is copied into the
+  window's swap chain and presented.  DXVK's frame goes through Mesa's
+  Win32 swapchain, so the kernel writes it straight into the screen while
+  the window is alone ([Vulkan's frames](#direct-presentation-of-vulkans-frames)),
+  and Mesa draws it in with the GDI while something covers it.  Parts of
+  the window no visual covers show black.
+- **Read-back only when asked for**: `dxgi.dll`'s GPU composition swap
+  chains no longer read each present back; the parts presented since are
+  read back when `dcomp.dll` asks for the frame (the GDI way).
+- **Back to the GDI way**: once the tree no longer qualifies (a
+  DirectComposition surface, a software swap chain, a second device), the
+  target is drawn with the GDI again and tells the kernel
+  (`NtNovaGpuCtl` 15), which stops showing the window's last frame from
+  the host and redraws the window's own pixels.  `NOVA_PRESENT=gdi` keeps
+  every target on the GDI way.
+- **Mesa's GDI way for RGBA swapchains**: DXVK picks an RGBA Vulkan
+  swapchain for an 8-bit DXGI one, and Mesa's Win32 swapchain copied its
+  frames into a BGRA bitmap as they were, red and blue swapped; it now
+  swaps them back (the frames shown from the host were already right).
+- **Embedded windows**: the kernel now shows direct frames for a window
+  embedded in another process's (the window WebView2's GPU process
+  composites into, inside the host's), by the part of it that shows.
+- **dcomptest direct** (graphics suite, 64- and 32-bit): the quadrants
+  from the host while the window is alone (a screenshot of the screen
+  must show them), through the GDI while another window covers it, from
+  the host again, then the GDI way once a swap chain of another device
+  joins the tree (the screen must show the frame drawn that way), and the
+  GPU process's embedded window shown from the host.  `dcomptest dxvk`
+  and `dcomptest life` keep the GDI way, since they check frames with
+  `GetPixel`.
+- Not covered: DirectComposition surfaces still go the GDI way (each
+  `EndDraw` reads back), and WebView2 itself was not rerun for this step.
+
 ## DirectComposition on the GPU through resizes, teardown and other processes
 
 The last part of WebView2's GPU-composited output (roadmap 25.1): the path
@@ -11355,6 +11402,85 @@ copies no pixel.
 - Still to do: windows on the other monitors and at scale 2 (the kernel
   refuses both, so they go through the GDI), and the composition swap
   chains (DirectComposition) that WebView2's GPU process presents into.
+
+## The kernel API Windows drivers live on
+
+Step 30.2 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)), first part:
+the calls nearly every Windows driver makes besides its I/O.
+
+- **IRQL in `CR8`** (`kernel/ke/irql.h`), as on Windows x64, where the
+  WDK's `KeRaiseIrql` and `KeLowerIrql` write `CR8` inline.  The scheduler
+  never switches a thread out at `DISPATCH_LEVEL` or above: it asks for
+  the DPC interrupt, which the local APIC delivers when the IRQL drops,
+  and switches then.  A thread waiting at `APC_LEVEL` keeps its IRQL.
+- **DPCs** (`kernel/nt/ke.c`): a queue per CPU, run by the DPC interrupt
+  (vector 0x2F, Windows' own) at `DISPATCH_LEVEL`, keeping the
+  interrupted code's SSE registers.
+- **Spin locks** (plain and in-stack queued), the interlocked list calls,
+  **events, semaphores, timers** (with DPCs, on the clock tick),
+  **fast mutexes** and `KeWaitForSingleObject`, `KeDelayExecutionThread`,
+  the performance counter and `KeBugCheckEx`.
+- **Pool** (`kernel/nt/ex.c`): `ExAllocatePool2`, `ExAllocatePoolWithTag`
+  and the rest on the kernel heap, each block's tag and owner recorded: a
+  wrong tag or double free is logged as `BAD_POOL_CALLER`, and the blocks a
+  driver never freed are named when it unloads.
+- **MDLs and direct I/O** (`kernel/nt/mm.c`, `io.c`): `IoAllocateMdl`,
+  `MmProbeAndLockPages`, `MmBuildMdlForNonPagedPool`,
+  `MmMapLockedPagesSpecifyCache` (frames mapped at consecutive kernel
+  addresses, `kernel_map_frames` in `mm/vmm.c`), `MmGetPhysicalAddress`;
+  devices with `DO_DIRECT_IO` and `METHOD_IN_DIRECT`/`OUT_DIRECT` control
+  codes get the caller's buffer in `MdlAddress`.
+- **Pending IRPs**: a dispatch routine may return `STATUS_PENDING` and
+  complete the IRP later; the requester sleeps on its event.  The cancel
+  spin lock and `IoCancelIrp`; a dispatch routine returning above
+  `PASSIVE_LEVEL` is logged and put back.
+- **`tools/sys_imports.py`**: the imports of a `.sys` file NovaOS does not
+  export yet.
+- **`wdmtest.sys`** exercises all of it in the devices suite's "wdm" boot.
+
+Still to come in 30.2: kernel-mode SEH (`__try` in drivers), work items
+and system threads, `Zw*` registry and file calls, ETW/WMI stubs.
+
+## The first Windows kernel-mode driver
+
+Step 30.1 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): NovaOS loads a
+real Windows `.sys` file into its kernel, runs its `DriverEntry`, and lets
+programs talk to it through Windows IRPs.
+
+- **Kernel PE loader** (`kernel/nt/ldr.c`): a native-subsystem PE32+
+  image from the service's `ImagePath`, mapped section by section with
+  W^X protections into a 1 GiB driver range every process shares,
+  relocated, bound to the kernel's exports, `/GS` cookie set.  A missing
+  import is logged by name and the load fails.
+- **`ntoskrnl.exe` and `hal.dll` exports** (`kernel/nt/exports.h`,
+  `ntoskrnl.c`): the device, symbolic-link and IRP calls a first WDM driver
+  makes, `DbgPrint` into the kernel log and the string helpers, all
+  `ms_abi`, on Windows' exact x64 `DRIVER_OBJECT`, `DEVICE_OBJECT`, `IRP`,
+  `IO_STACK_LOCATION` and `FILE_OBJECT` layouts (`kernel/nt/wdm.h`).
+- **I/O manager** (`kernel/nt/io.c`): `\Device` names and `\DosDevices`
+  links; `CreateFile("\\.\NAME")`, `ReadFile`, `WriteFile`,
+  `DeviceIoControl` and `CloseHandle` become `IRP_MJ_CREATE`, `READ`,
+  `WRITE`, `DEVICE_CONTROL`, `CLEANUP` and `CLOSE`, buffered and neither
+  I/O, with completion routines.
+- **`NtLoadDriver` and `NtUnloadDriver`**, behind `SeLoadDriverPrivilege`,
+  and advapi32's service manager starting and stopping
+  `SERVICE_KERNEL_DRIVER` services with them; a new **`sc`** (`create`,
+  `start`, `stop`, `query`, `delete`).
+- **kernel32 `\\.\NAME` and `DeviceIoControl`**: a `CreateFile` name such as `\\.\WdmTest` (no
+  drive, volume or UNC path after the prefix) now reaches the kernel as
+  `\??\WdmTest`, as on Windows, instead of a file in the current folder;
+  `DeviceIoControl` passes every control code to the kernel, where it
+  passed only video ones.
+- **Test signing only, for now**: NovaOS checks no driver signatures until
+  step 30.7, so drivers load only with `TestSigning` set under
+  `HKLM\SYSTEM\CurrentControlSet\Control\NovaOS` and a restart; otherwise
+  Windows' error 577.
+- **`wdmtest.sys`** (`tools/drivertest/wdmtest.c`, clang and lld-link
+  `/driver`, no WDK) and the devices suite's "wdm" boot: refused before
+  test signing, then `sc create type= kernel`, `sc start`, `wdmtest`'s
+  round trips and `sc stop`.
 
 ## The stack probe and half-float helpers in 32-bit ntdll
 

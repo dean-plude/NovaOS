@@ -95,7 +95,7 @@ void um_unlock_excl(UmRwLock *l);
  * ----------------------------------------------------------------------- */
 typedef enum { UO_EVENT = 1, UO_MUTANT, UO_SEMAPHORE, UO_THREAD, UO_SOCKET, UO_WINDOW, UO_PROCESS, UO_KEY, UO_SECTION, UO_PIPE,
                UO_DIRECTORY, UO_SYMLINK, UO_TIMER, UO_AUDIO, UO_CONSOLE, UO_TOKEN, UO_GPU, UO_AFD, UO_KEYED_EVENT,
-               UO_PSEUDO_CONSOLE } UmObType;
+               UO_PSEUDO_CONSOLE, UO_DEVICE } UmObType;
 
 typedef struct UmThread UmThread;
 
@@ -489,6 +489,13 @@ UINT32     um_pipe_device(const char *path, UINT32 options, UmObject **srv, UmOb
 bool       um_pipe_feed(UmObject *srv, const void *data, UINT32 len, UINT32 max);
 void       um_pipe_device_flush(UmObject *client);
 bool       um_pipe_device_open(UmObject *srv);
+/* um_driver.c: Windows kernel-mode drivers (NtLoadDriver) and handles on their devices */
+void       um_driver_syscalls_init(void);
+bool       um_driver_name(const char *path);
+UINT32     um_driver_open(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options, UmObject **out);
+UINT32     um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offset_ptr, UINT64 *info);
+UINT32     um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info);
+
 /* um_hid.c: HID device handles (game controllers by their HID paths) */
 bool       um_hid_name(const char *path);
 UINT32     um_hid_open(const char *path, UINT32 options, UmObject **out);
@@ -533,6 +540,7 @@ struct VgpuBlob;
 struct VgpuFrame;
 int        UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struct VgpuFrame *fr, int x, int y, int w,
                            int h);
+void       UmGuiGpuStop(UmProcess *p, UINT32 hwnd);
 /* Wait until @o is signaled (acquiring it), @timeout_100ns passes (-1:
  * forever) or the process is being killed. */
 UINT32     um_wait_one(UmObject *o, INT64 timeout_100ns);

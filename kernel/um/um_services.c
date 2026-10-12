@@ -23,6 +23,7 @@
 #include "../mm/pmm.h"
 #include "../lib/string.h"
 #include "../fs/persist.h"
+#include "../nt/nt.h"
 
 #define ST_SUCCESS                0x00000000u
 #define ST_USER_APC               0x000000C0u
@@ -36,6 +37,7 @@
 #define ST_NOT_SUPPORTED          0xC00000BBu
 #define ST_INVALID_PARAMETER      0xC000000Du
 #define ST_PRIVILEGE_NOT_HELD     0xC0000061u
+#define ST_INSUFFICIENT_RESOURCES 0xC000009Au
 #define ST_SERVICE_NOTIFICATION   0x50000018u     /* (with HARDERROR_OVERRIDE_ERRORMODE) */
 
 static bool put(UINT64 va, const void *v, UINT64 n)
@@ -120,41 +122,62 @@ static UINT64 sysinfo_processes(UINT64 buf, UINT32 len, UINT64 ret)
 }
 
 /* SystemModuleInformation (11) and SystemModuleInformationEx (77): the
- * kernel's modules, which on NovaOS is one, the kernel itself, listed as
- * Windows lists its own (\SystemRoot\system32\ntoskrnl.exe).  An
- * RTL_PROCESS_MODULE_INFORMATION is 0x128 bytes; class 11 puts a count
- * (padded to 8) before the records, class 77 chains 0x140-byte records
- * { NextOffset (padded to 8), the record, ImageChecksum, TimeDateStamp,
- * DefaultBase }, the last with NextOffset 0. */
+ * kernel's modules: the kernel itself, listed as Windows lists its own
+ * (\SystemRoot\system32\ntoskrnl.exe), then the Windows drivers loaded
+ * (kernel/nt/ldr.c; \??\C:\... as Windows shows a driver loaded from
+ * outside the Windows folder).  An RTL_PROCESS_MODULE_INFORMATION is 0x128
+ * bytes; class 11 puts a count (padded to 8) before the records, class 77
+ * chains 0x140-byte records { NextOffset (padded to 8), the record,
+ * ImageChecksum, TimeDateStamp, DefaultBase }, the last with NextOffset 0. */
 extern char __text_start[], __kernel_end[];
+
+#define MAX_MODULES 33
 
 static UINT64 sysinfo_modules(bool ex, UINT64 buf, UINT32 len, UINT64 ret)
 {
-    static const char path[] = "\\SystemRoot\\system32\\ntoskrnl.exe";
-    UINT8 rec[0x140];
-    memset(rec, 0, sizeof(rec));
-    UINT8 *m = rec + 8;                           /* both: the record starts at 8 */
-    UINT64 base = (UINT64)(uintptr_t)__text_start;
-    UINT32 size = (UINT32)((uintptr_t)__kernel_end - (uintptr_t)__text_start), flags = 0x08804000u;
-    UINT16 load = 1, off = 21;                    /* LoadCount; "ntoskrnl.exe" after "\SystemRoot\system32\" */
-    memcpy(m + 0x10, &base, 8);                   /* ImageBase */
-    memcpy(m + 0x18, &size, 4);                   /* ImageSize */
-    memcpy(m + 0x1C, &flags, 4);                  /* Flags (as Windows reports its kernel) */
-    memcpy(m + 0x24, &load, 2);
-    memcpy(m + 0x26, &off, 2);                    /* OffsetToFileName */
-    memcpy(m + 0x28, path, sizeof(path));         /* FullPathName */
-    UINT32 need;
-    if (ex) {
-        memcpy(rec + 0x138, &base, 8);            /* DefaultBase; NextOffset 0: the last */
-        need = 0x140;
-    } else {
-        UINT32 one = 1;
-        memcpy(rec, &one, 4);                     /* NumberOfModules */
-        need = 8 + 0x128;
+    UINT64 base[MAX_MODULES];
+    UINT32 size[MAX_MODULES];
+    char (*path)[260] = kmalloc(sizeof(char[260]) * MAX_MODULES);
+    if (!path) return ST_INSUFFICIENT_RESOURCES;
+    base[0] = (UINT64)(uintptr_t)__text_start;
+    size[0] = (UINT32)((uintptr_t)__kernel_end - (uintptr_t)__text_start);
+    strcpy(path[0], "\\SystemRoot\\system32\\ntoskrnl.exe");
+    UINT32 n = 1 + (UINT32)NtDrvModules(base + 1, size + 1, path + 1, MAX_MODULES - 1);
+    for (UINT32 i = 1; i < n; i++) {
+        char tmp[260];
+        ksnprintf(tmp, sizeof(tmp), "\\??\\%s", path[i]);
+        strcpy(path[i], tmp);
     }
-    if (!put(ret, &need, 4)) return ST_ACCESS_VIOLATION;
-    if (len < need) return ST_INFO_LENGTH_MISMATCH;
-    return put(buf, rec, need) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    UINT32 rec = ex ? 0x140 : 0x128, need = ex ? rec * n : 8 + rec * n;
+    if (!put(ret, &need, 4)) { kfree(path); return ST_ACCESS_VIOLATION; }
+    if (len < need) { kfree(path); return ST_INFO_LENGTH_MISMATCH; }
+    UINT8 r[0x140];
+    UINT64 at = buf;
+    if (!ex && !put(at, &n, 4)) { kfree(path); return ST_ACCESS_VIOLATION; }   /* NumberOfModules */
+    if (!ex) at += 8;
+    for (UINT32 i = 0; i < n; i++) {
+        memset(r, 0, sizeof(r));
+        UINT8 *m = ex ? r + 8 : r;
+        UINT32 flags = 0x08804000u, next = i + 1 < n ? 0x140 : 0;
+        UINT16 order = (UINT16)i, load = 1, off = 0;
+        for (UINT16 k = 0; path[i][k] && k < 255; k++) if (path[i][k] == '\\') off = (UINT16)(k + 1);
+        memcpy(m + 0x10, &base[i], 8);            /* ImageBase */
+        memcpy(m + 0x18, &size[i], 4);            /* ImageSize */
+        memcpy(m + 0x1C, &flags, 4);              /* Flags (as Windows reports its kernel) */
+        memcpy(m + 0x20, &order, 2);              /* LoadOrderIndex */
+        memcpy(m + 0x22, &order, 2);              /* InitOrderIndex */
+        memcpy(m + 0x24, &load, 2);               /* LoadCount */
+        memcpy(m + 0x26, &off, 2);                /* OffsetToFileName */
+        memcpy(m + 0x28, path[i], strlen(path[i]) < 255 ? strlen(path[i]) + 1 : 256);   /* FullPathName */
+        if (ex) {
+            memcpy(r, &next, 4);                  /* NextOffset */
+            memcpy(r + 0x138, &base[i], 8);       /* DefaultBase */
+        }
+        if (!put(at, r, rec)) { kfree(path); return ST_ACCESS_VIOLATION; }
+        at += rec;
+    }
+    kfree(path);
+    return ST_SUCCESS;
 }
 
 static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
@@ -394,6 +417,20 @@ static UINT64 sys_device_io_control(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a3;
     UINT64 io = um_stack_arg(5);
+    UmObject *dv = um_handle_object(UmCurrent(), a1, UO_DEVICE);     /* a Windows driver's device (um_driver.c) */
+    if (dv) {
+        UINT64 info = 0;
+        UINT32 st = um_driver_ioctl(dv, (UINT32)um_stack_arg(6), um_stack_arg(7), (UINT32)um_stack_arg(8),
+                                    um_stack_arg(9), (UINT32)um_stack_arg(10), &info);
+        um_ob_unref(dv);
+        if (a2) call(SYSCALL_NtSetEvent, a2, 0, 0, 0);          /* (finished already) */
+        if (io >> 63) {
+            UINT32 b[2] = { st, (UINT32)info };
+            return put(io & ~(UINT64_C(1) << 63), b, sizeof(b)) ? st : ST_ACCESS_VIOLATION;
+        }
+        UINT64 b[2] = { st, info };
+        return put(io, b, sizeof(b)) ? st : ST_ACCESS_VIOLATION;
+    }
     UmObject *sec = um_handle_object(UmCurrent(), a1, UO_SECTION);   /* shared GPU resources (um_thread.c) */
     if (sec) {
         UINT32 info = 0;

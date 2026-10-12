@@ -157,7 +157,11 @@ named program or test demonstrates it.
   the frame into whichever monitor's screen the window is on, twice as
   wide and high on a monitor at scale 2 (`gltest monitors`); see
   [the other monitors](HISTORY.md#direct-presentation-on-every-monitor-and-at-scale-2).
-  Still to do: DirectComposition's swap chains (WebView2's GPU process).
+  ~~DirectComposition's swap chains (WebView2's GPU process)~~ Done: a
+  target showing only swap chains of one GPU device is composited on that
+  GPU into a swap chain of its own on the window, whose frames the host
+  writes into the screen, embedded windows included (`dcomptest direct`);
+  see [DirectComposition on the GPU](HISTORY.md#directcomposition-composited-on-the-gpu).
 - ~~NetSurf: SVG; redrawing pages a script changes after layout.~~ Done
   (Phase 19.8): SVG images (`<img>`, `<object>`, CSS backgrounds, `.svg`
   pages) and `<svg>` elements written inline in HTML drawn anti-aliased,
@@ -527,7 +531,13 @@ named program or test demonstrates it.
   `pnputil /scan-devices /search-online` downloads a device's package from
   the Microsoft Update Catalog and stages it), and enforce Windows'
   kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
-  driver to virtio-win's serial, network and disk drivers.
+  driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
+  kernel-mode test driver loads with `sc start`, serves a program's
+  `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.
+  Step 30.2's first part is in: the IRQL in `CR8`, DPCs, spin locks,
+  events, semaphores, timers, fast mutexes, the pool, MDLs and direct I/O,
+  and IRPs completed later from a DPC; kernel-mode SEH, work items and
+  system threads, `Zw*` registry and file calls and ETW stubs are next.
 
 <!-- END generated:next-hardware -->
 

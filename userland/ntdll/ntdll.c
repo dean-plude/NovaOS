@@ -443,6 +443,11 @@ NTSYSAPI ULONG NTAPI RtlNtStatusToDosError(NTSTATUS s)
     case 0xC0000079: return 1338;                         /* ERROR_INVALID_SECURITY_DESCR */
     case 0xC000007C: return 1008;                         /* ERROR_NO_TOKEN */
     case 0xC00000A8: return 1349;                         /* ERROR_BAD_TOKEN_TYPE */
+    case 0xC0000061: return 1314;                         /* ERROR_PRIVILEGE_NOT_HELD */
+    case 0xC000007A: return 127;                          /* STATUS_PROCEDURE_NOT_FOUND: ERROR_PROC_NOT_FOUND */
+    case 0xC000010E: return 1056;                         /* STATUS_IMAGE_ALREADY_LOADED: ERROR_SERVICE_ALREADY_RUNNING */
+    case 0xC0000428: return 577;                          /* STATUS_INVALID_IMAGE_HASH: ERROR_INVALID_IMAGE_HASH */
+    case 0xC000000E: return ERROR_FILE_NOT_FOUND;         /* STATUS_NO_SUCH_DEVICE */
     }
     return ERROR_INVALID_FUNCTION;
 }

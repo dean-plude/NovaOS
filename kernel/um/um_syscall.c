@@ -772,7 +772,7 @@ static bool may_delete(RamNode *n)
 
 /* open_file's names that are not files: the pipe file system's root, a
  * pipe's client end, the console's input or output */
-static UINT32 open_other(UmProcess *p, const char *path, UINT32 access, UINT32 options, bool inherit,
+static UINT32 open_other(UmProcess *p, const char *path, UINT32 access, UINT32 disposition, UINT32 options, bool inherit,
                          UINT64 handle_ptr, UINT64 iosb_ptr)
 {
     UmHandleKind ck;
@@ -786,11 +786,13 @@ static UINT32 open_other(UmProcess *p, const char *path, UINT32 access, UINT32 o
         if (!put_u64(handle_ptr, hv)) { um_close_handle(hv); return UM_STATUS_ACCESS_VIOLATION; }
         return iosb(iosb_ptr, ST_SUCCESS, 1);
     }
-    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path)) {   /* a pipe's client end, a HID device, an AFD helper */
+    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || um_driver_name(path)) {
+        /* a pipe's client end, a HID device, an AFD helper, a Windows driver's device */
         UmObject *o;
         bool rd = true, wr = false;
         UINT32 pst;
         if (um_afd_name(path)) { pst = (o = um_afd_open()) ? ST_SUCCESS : ST_NO_MEMORY; wr = true; }
+        else if (um_driver_name(path)) { pst = um_driver_open(path, access, 7, disposition, options, &o); wr = true; }
         else pst = um_hid_name(path) ? um_hid_open(path, options, &o) : um_pipe_open(path, access, options, &o, &rd, &wr);
         if (pst) return iosb(iosb_ptr, pst, 0);
         um_lock_excl(&p->lock);
@@ -905,10 +907,11 @@ static UINT32 open_file(UINT64 handle_ptr, UINT32 access, UINT64 oa_ptr, UINT64 
     bool inherit = *oa_attrs() & 0x2;                           /* OBJ_INHERIT */
     UmHandleKind ck;
     UmHandle *h;
-    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || is_console_name(path, &ck)) {   /* not files: under the big lock */
+    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || is_console_name(path, &ck) ||
+        um_driver_name(path)) {                                 /* not files: under the big lock */
         FsUnlockShared();
         bkl_acquire();
-        st = open_other(p, path, access, options, inherit, handle_ptr, iosb_ptr);
+        st = open_other(p, path, access, disposition, options, inherit, handle_ptr, iosb_ptr);
         bkl_release();
         return st;
     }
@@ -1148,6 +1151,14 @@ static UINT64 sys_read_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         um_ob_unref(po);
         return st == ST_PENDING ? st : iosb(iosb_ptr, st, info);
     }
+    UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
+    if (dv) {                               /* a Windows driver's device: an IRP */
+        UINT64 info;
+        UINT32 st = um_driver_rw(dv, false, buf, len, um_stack_arg(8), &info);
+        um_ob_unref(dv);
+        set_io_event(a2);
+        return iosb(iosb_ptr, st, info);
+    }
     FsLockShared();                         /* keeps the handle and its file alive */
     UmHandle *h = handle(p, a1);
     if (!h) { FsUnlockShared(); return ST_INVALID_HANDLE; }
@@ -1202,6 +1213,14 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         bkl_release();
         um_ob_unref(po);
         return st == ST_PENDING ? st : iosb(iosb_ptr, st, info);
+    }
+    UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
+    if (dv) {                               /* a Windows driver's device: an IRP */
+        UINT64 info;
+        UINT32 st = um_driver_rw(dv, true, buf, len, um_stack_arg(8), &info);
+        um_ob_unref(dv);
+        set_io_event(a2);
+        return iosb(iosb_ptr, st, info);
     }
     FsLockShared();                         /* files: held throughout; console: released */
     UmHandle *h = handle(p, a1);
@@ -3427,4 +3446,5 @@ void um_syscall_init(void)
     um_audio_syscalls_init();
     um_gpu_syscalls_init();
     um_gui_syscalls_init();
+    um_driver_syscalls_init();
 }

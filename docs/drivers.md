@@ -20,20 +20,45 @@ of how its kernel is built:
 
 A Windows driver package (an `.inf` with `.sys` and `.cat` files)
 installs on NovaOS as on Windows ([user-guide.md](user-guide.md#installing-programs)):
-`pnputil`, a setup program or an `.msi` puts it in the driver store.  But
-the `.sys` is a Windows kernel-mode driver: it calls `ntoskrnl.exe`'s
-kernel API (the I/O manager, IRPs, WDF through `Wdf01000.sys`, NDIS for
-network cards, the WDDM `dxgkrnl.sys` interface for GPUs), which NovaOS's
-kernel does not offer yet, so today a staged package is not started.
+`pnputil`, a setup program or an `.msi` puts it in the driver store.  The
+`.sys` is a Windows kernel-mode driver, and NovaOS is learning to run those
+the way Windows 11 does, through the NT kernel-mode driver interface, with
+KMDF and UMDF from Microsoft's own MIT-licensed source, packages matched
+by hardware ID from the driver store and downloaded by hardware ID when
+none is there.  The design and its steps (roadmap Phase 30) are in
+[design/windows-drivers.md](design/windows-drivers.md).
 
-That is changing: NovaOS will run Windows drivers the way Windows 11 does,
-through the NT kernel-mode driver interface, with KMDF and UMDF from
-Microsoft's own MIT-licensed source, packages matched by hardware ID from
-the driver store and downloaded by hardware ID when none is there.  The
-design and its steps (roadmap Phase 30) are in
-[design/windows-drivers.md](design/windows-drivers.md).  Until those
-steps land, the default set is the built-in drivers and the firmware
-below.
+What runs today (step 30.1): a kernel driver installed as a service
+(`sc create NAME type= kernel binPath= C:\path\driver.sys`) starts with
+`sc start NAME` and stops with `sc stop NAME`.  The kernel loads the
+`.sys` into kernel memory and calls its `DriverEntry`; the devices and
+`\DosDevices` links it creates open from programs (`\\.\NAME`), whose
+`ReadFile`, `WriteFile` and `DeviceIoControl` reach the driver's dispatch
+routines as Windows IRPs.  Since step 30.2 the driver can also use the
+kernel API most drivers are written against: the IRQL (kept in `CR8`, as
+on Windows x64), spin locks, DPCs, timers, events, semaphores, fast
+mutexes, the pool (`ExAllocatePool2`, `ExAllocatePoolWithTag`) and MDLs
+with direct I/O, and it may return `STATUS_PENDING` and complete a request
+later, from a DPC.  Pool blocks a driver never frees are named in the log
+when it unloads (`[NT] x.sys: 2 pool blocks (96 bytes, tags 'Abcd') never
+freed`).  Only part of `ntoskrnl.exe` is there yet (the list is
+`kernel/nt/exports.h`); a driver that imports anything else does not load,
+and the log names what it missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not
+implemented`).  `tools/sys_imports.py x.sys` lists, before trying, the
+imports of a driver that NovaOS does not have yet.  Plug and Play
+drivers for real devices, KMDF and the rest follow in later steps; until
+then the default set is the built-in drivers and the firmware below.
+
+NovaOS does not check driver signatures yet (step 30.7), so it loads
+kernel drivers only with **test signing** on, as Windows does for drivers
+not signed by Microsoft.  Turn it on, as an administrator, and restart:
+
+    reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f
+
+With it off, starting a kernel driver fails with Windows' error 577
+(`ERROR_INVALID_IMAGE_HASH`), as an unsigned driver does on Windows.  A
+kernel driver runs with full access to the machine, so only turn it on
+for drivers you trust.
 
 ## The default firmware set
 

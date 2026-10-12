@@ -54,27 +54,34 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
 
 ### Loading an image
 
-- **Kernel PE loader** (`kernel/nt/ldr.c`): maps a PE32+ image with
-  subsystem native into a reserved kernel range, section by section with
-  W^X protections, applies base relocations, binds imports, registers its
-  `.pdata` so kernel-mode exceptions unwind through it, initialises the
-  `/GS` cookie and calls `DriverEntry(DRIVER_OBJECT*, UNICODE_STRING
-  *RegistryPath)`.  It reuses what `kernel/ldr/ldr.c` already knows of PE
-  headers.  A driver whose import is missing does not start: the boot log
-  names the image and the export ("`[NT] vioser.sys: ntoskrnl.exe!KeFoo
-  not implemented`") and the device shows problem code 39, as Windows
+- **Kernel PE loader** (`kernel/nt/ldr.c`, step 30.1): maps a PE32+
+  image with subsystem native into a reserved 1 GiB kernel range
+  (`0xFFFFFFFF00000000`, under the top page-map entry every process
+  shares, so a driver is mapped in all of them), section by section with
+  W^X protections, applies base relocations, binds imports, initialises
+  the `/GS` cookie and calls `DriverEntry(DRIVER_OBJECT*, UNICODE_STRING
+  *RegistryPath)`.  Registering its `.pdata` so kernel-mode exceptions
+  unwind through it comes with kernel-mode SEH (30.2).  A driver whose
+  import is missing does not start: the log names the image and the
+  export ("`[NT] vioser.sys: ntoskrnl.exe!KeFoo not implemented`"),
+  `NtLoadDriver` fails with `STATUS_PROCEDURE_NOT_FOUND`, and once drivers
+  start on devices (30.3) the device shows problem code 39, as Windows
   shows for a driver that cannot load.
 - **Services**: a kernel driver is a service key under
   `HKLM\SYSTEM\CurrentControlSet\Services\<name>` (`Type` 1, `Start`,
   `ImagePath`, `Group`), as written by an `.inf`'s `AddService` or by `sc
-  create type= kernel`.  `NtLoadDriver`/`NtUnloadDriver` and the service
-  manager start and stop them; boot-start drivers (`Start` 0) start after
+  create type= kernel`.  `NtLoadDriver`/`NtUnloadDriver` (which need
+  `SeLoadDriverPrivilege`) and the service manager (advapi32's
+  `StartService` and `ControlService`) start and stop them; a driver with
+  open files unloads when the last one closes, and one without a
+  `DriverUnload` cannot be stopped, as on Windows; boot-start drivers (`Start` 0) start after
   the file system is up, since NovaOS boots from its own built-in storage
   drivers.
 - **Export layer** (`kernel/nt/`): `ntoskrnl.exe` and `hal.dll` are export
-  tables built into the NovaOS kernel, generated from one list
-  (`kernel/nt/exports.txt`) by a small script, as the userland `.def`
-  files are.  Every export is compiled with `__attribute__((ms_abi))`,
+  tables built into the NovaOS kernel from one list, `kernel/nt/exports.h`
+  (`NT_EXPORT(module, name)` lines, expanded by `exports.c` into the table
+  the loader binds against, and read by `tools/drivertest/mksys.py` to
+  make the import libraries test drivers link with).  Every export is compiled with `__attribute__((ms_abi))`,
   because drivers use the Microsoft x64 calling convention and the NovaOS
   kernel the System V one; callbacks a driver hands in (`DriverEntry`,
   dispatch routines, ISRs, DPCs, completion routines, thread start
@@ -91,31 +98,57 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   Windows device carries the Windows `FILE_OBJECT` beside it, and
   `NtCreateFile`, `NtReadFile`, `NtWriteFile`, `NtDeviceIoControlFile`
   and `NtClose` on it build a Windows `IRP` and call the driver's
-  dispatch routine (buffered, direct and neither I/O, pending IRPs,
-  cancellation, completion routines).
+  dispatch routine (`kernel/nt/io.c`).  Step 30.1 served buffered and
+  neither I/O and completion routines; 30.2 added direct I/O (an MDL for
+  the caller's buffer in `MdlAddress`, a control code's input still
+  buffered), dispatch routines returning `STATUS_PENDING` (the requesting
+  thread sleeps on the IRP's event until the driver completes it, from a
+  DPC or another thread), the cancel spin lock and `IoCancelIrp`.
 
 ### What a driver expects of the kernel
 
-- **IRQL**: Windows x64 keeps IRQL in `CR8`, and so will NovaOS while a
-  Windows driver runs (`KeRaiseIrql`, `KeLowerIrql`,
-  `KeAcquireSpinLock`, `KeGetCurrentIrql`).  At `DISPATCH_LEVEL` and
-  above the NovaOS scheduler does not switch threads; device interrupts
+- **IRQL**: Windows x64 keeps IRQL in `CR8`, and so does NovaOS (step
+  30.2, `kernel/ke/irql.h`): the WDK's `KeRaiseIrql` and `KeLowerIrql` are
+  inline `CR8` writes on x64, so drivers set it themselves, and the
+  exports (`KeRaiseIrqlToDpcLevel`, `KeAcquireSpinLockRaiseToDpc`, ...)
+  do the same.  `CR8` is the local APIC's task priority: at
+  `DISPATCH_LEVEL` the APIC holds back vectors below 0x30, where the DPC
+  interrupt is (0x2F, Windows' own), while NovaOS's device interrupts and
+  timer (0x30 up) still arrive.  At `DISPATCH_LEVEL` and above the NovaOS
+  scheduler does not switch threads: it asks for the DPC interrupt, which
+  the APIC delivers once the IRQL drops, and switches then; a thread
+  that blocks at `APC_LEVEL` (holding a fast mutex) keeps its IRQL across
+  the switch.  A dispatch routine that returns above `PASSIVE_LEVEL` is
+  logged (`IRQL_GT_ZERO_AT_SYSTEM_SERVICE`) and its IRQL put back.  Device interrupts
   for a Windows driver run at the vector's IRQL (`vector / 16`, as on
   Windows), so NovaOS's own interrupt vectors have to be placed so they
   are not masked by a raised IRQL they must still serve.
 - **DPCs and work items**: a per-CPU DPC queue drained when IRQL drops
-  below `DISPATCH_LEVEL`; `IoQueueWorkItem`/`ExQueueWorkItem` on a
+  below `DISPATCH_LEVEL` (step 30.2: by the DPC interrupt, at
+  `DISPATCH_LEVEL` with interrupts on, the interrupted code's SSE
+  registers kept since driver code may use them); `IoQueueWorkItem`/`ExQueueWorkItem` on a
   pool of system threads.
 - **Synchronisation and time**: `KEVENT`, `KMUTEX`, `KSEMAPHORE`,
   `FAST_MUTEX`, `ERESOURCE`, push locks, `KTIMER` with DPCs,
   `KeWaitForSingleObject`/`MultipleObjects`, `KeQueryPerformanceCounter`,
   `KeStallExecutionProcessor`, all mapped onto NovaOS's wait queues and
-  timers.
+  timers.  Step 30.2 has events, semaphores, timers (on the 100 Hz clock
+  tick, with their DPCs), fast mutexes and `KeWaitForSingleObject`; the
+  waiters sit in the object's `WaitListHead` under one dispatcher lock.
 - **Memory**: `ExAllocatePool2`/`ExAllocatePoolWithTag`/`ExFreePool`
   (paged and non-paged, tags kept for the log), lookaside lists, MDLs
   (`IoAllocateMdl`, `MmProbeAndLockPages`, `MmGetSystemAddressForMdlSafe`),
   `MmMapIoSpaceEx`, `MmAllocateContiguousMemorySpecifyCache`,
-  `MmGetPhysicalAddress`.  Kernel stacks of threads that call into a
+  `MmGetPhysicalAddress`.  Step 30.2 has the pool (every type is the
+  kernel heap, which is never paged; tag, size and owner recorded beside
+  each block, a wrong tag or a double free logged as `BAD_POOL_CALLER`,
+  blocks left at unload logged) and MDLs (`MmProbeAndLockPages` on a
+  program's or a kernel buffer, `MmBuildMdlForNonPagedPool`,
+  `MmMapLockedPagesSpecifyCache` mapping the frames at consecutive kernel
+  addresses).  NovaOS keeps no reference counts on a program's frames, so
+  a locked page is described, not pinned; and until kernel-mode SEH
+  raises, `MmProbeAndLockPages` on a bad buffer logs it and describes the
+  bad pages by a spare zeroed frame.  Kernel stacks of threads that call into a
   driver need Windows' 24 KB (`KERNEL_STACK_SIZE`); NovaOS's are 16 KB
   today.
 - **Threads and processes**: `PsCreateSystemThread`,
@@ -246,6 +279,16 @@ on.  NovaOS follows the same policy and does not bypass it:
   shows "Test Mode".  NovaOS's own test drivers (`tests/selftest/devices/`)
   are signed with a NovaOS test certificate and load only there; CI boots
   the devices suite with it on.
+- Until 30.7 lands NovaOS checks no driver signatures, so it loads kernel
+  drivers only with test signing on: the DWORD `TestSigning` = 1 under
+  `HKLM\SYSTEM\CurrentControlSet\Control\NovaOS`, NovaOS's
+  `bcdedit /set testsigning on`, read at boot (so it takes a restart) and
+  shown in `Control\SystemStartOptions` as ` TESTSIGNING`, as Windows
+  shows it.  With it off, `NtLoadDriver` fails with
+  `STATUS_INVALID_IMAGE_HASH` (Win32 577) and the log says why.  Without
+  this gate, any program that can start a service could load an
+  arbitrary vendor or anti-cheat `.sys` before the signature checks
+  exist.
 - What does not work, and stays so: drivers that need Secure Boot's
   measured state, HVCI/memory integrity guarantees or a TPM-backed
   attestation (anti-cheat and DRM drivers among them) are documented as

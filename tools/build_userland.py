@@ -622,6 +622,11 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'authenticode'
      os.path.join(out, 'hello.exe'), os.path.join(out, 'x86' if 'x86' in passes else '', 'hello.exe')])
 for n in sorted(os.listdir(authdir)):
     built.append((f'\\Tests\\Authenticode\\{n}', os.path.join(authdir, n)))
+# 3a2c. wdmtest.sys, the Windows kernel-mode driver the wdm self-test loads
+# (tools/drivertest/mksys.py: clang and lld-link /driver)
+wdmdir = os.path.join(out, 'wdmtest')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), wdmdir])
+built.append(('\\Tests\\Wdm\\wdmtest.sys', os.path.join(wdmdir, 'wdmtest.sys')))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)
 sf2 = os.path.join(out, 'gm.sf2')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'make_gm_soundfont.py'), sf2])

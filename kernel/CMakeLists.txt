@@ -192,6 +192,7 @@ set(KERNEL_C_SOURCES
     um/um_hid.c
     um/um_gui.c
     um/um_services.c
+    um/um_driver.c
     um/um_registry.c
     um/um_crash.c
     um/um_security.c
@@ -213,6 +214,13 @@ set(KERNEL_C_SOURCES
     cm/cm.c
     se/se.c
     io/io.c
+    nt/ex.c
+    nt/exports.c
+    nt/io.c
+    nt/ke.c
+    nt/ldr.c
+    nt/mm.c
+    nt/ntoskrnl.c
     io/pnp.c
     mm/vma.c
     mm/section.c

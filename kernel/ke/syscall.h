@@ -273,6 +273,9 @@
 #define SYSCALL_NtSetVolumeInformationFile        0x01AC
 #define SYSCALL_NtLockVirtualMemory               0x0108
 #define SYSCALL_NtUnlockVirtualMemory             0x01C5
+/* Windows kernel-mode drivers (um_driver.c) */
+#define SYSCALL_NtLoadDriver                      0x0100
+#define SYSCALL_NtUnloadDriver                    0x01C0
 #define SYSCALL_NtTestAlert                       0x01BA
 #define SYSCALL_NtRaiseHardError                  0x0161
 /* NovaOS GUI (user32/gdi32's kernel half) */

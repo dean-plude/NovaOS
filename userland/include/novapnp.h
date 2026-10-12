@@ -140,8 +140,9 @@ static inline int nova_pnp_interfaces(const NovaPnpNode *n, GUID *g)
     if (!lstrcmpiA(n->cls, "MEDIA")) g[k++] = audio;
     if (!lstrcmpiA(n->cls, "Net")) g[k++] = net;
     if (!lstrcmpiA(n->cls, "Display")) g[k++] = disp;
-    /* and those a Windows driver on it turned on (IoSetDeviceInterfaceState) */
-    if (nova_pnp_prefix(n->instance, "PCI\\")) {
+    /* and those a Windows driver on it turned on (IoSetDeviceInterfaceState):
+     * a PCI device's, or a child device's its bus driver reported */
+    if (!nova_pnp_prefix(n->instance, "USB\\") && !nova_pnp_prefix(n->instance, "HID\\")) {
         GUID w[8];
         int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
         for (int i = 0; i < m && k < 4; i++) g[k++] = w[i];

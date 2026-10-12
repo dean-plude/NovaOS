@@ -614,6 +614,16 @@ int NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max)
     return n;
 }
 
+/* For backtraces (kernel/ke/ksym.c): the image's file name and the offset
+ * in it, or NULL */
+const char *NtDrvNameOf(UINT64 addr, UINT64 *offset)
+{
+    NtDriver *d = NtDrvByAddress(addr);
+    if (!d) return NULL;
+    *offset = addr - d->base;
+    return d->image;
+}
+
 NtDriver *NtDrvByAddress(UINT64 addr)
 {
     if (addr < DRV_BASE || addr >= DRV_BASE + DRV_SIZE) return NULL;

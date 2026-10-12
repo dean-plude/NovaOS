@@ -214,8 +214,10 @@ static void lookaside_init(NT_LOOKASIDE_LIST *l, void *allocate, void *free, UIN
     l->MaximumDepth = 256;
     l->Size = (UINT32)size;
     l->Tag = tag ? tag : 0x6B414C6Cu;                /* 'lLAk' */
-    l->Allocate = allocate;
-    l->Free = free;
+    /* (Windows fills in the pool's own routines: the WDK's inline
+     * allocate and free call them without a check) */
+    l->Allocate = allocate ? allocate : (void *)nt_ExAllocatePoolWithTag;
+    l->Free = free ? free : (void *)nt_ExFreePool;
 }
 
 NT_API void nt_ExInitializeNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,
@@ -238,8 +240,7 @@ static void lookaside_drain(NT_LOOKASIDE_LIST *l)
 {
     NT_SLIST_ENTRY *e;
     while ((e = nt_ExpInterlockedPopEntrySList(&l->ListHead))) {
-        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(e);
-        else nt_ExFreePoolWithTag(e, l->Tag);
+        ((NT_FREE_FUNCTION)l->Free)(e);
     }
 }
 
@@ -248,17 +249,20 @@ NT_API void nt_ExDeletePagedLookasideList(NT_LOOKASIDE_LIST *l) { lookaside_drai
 
 NT_API void *nt_ExAllocateFromNPagedLookasideList(NT_LOOKASIDE_LIST *l)
 {
+    l->TotalAllocates++;
     NT_SLIST_ENTRY *e = nt_ExpInterlockedPopEntrySList(&l->ListHead);
     if (e) return e;
-    if (l->Allocate) return ((NT_ALLOCATE_FUNCTION)l->Allocate)(l->Type, l->Size, l->Tag);
-    return nt_ExAllocatePoolWithTag(l->Type, l->Size, l->Tag);
+    l->AllocateMisses++;
+    return ((NT_ALLOCATE_FUNCTION)l->Allocate)(l->Type, l->Size, l->Tag);
 }
 NT_API void *nt_ExAllocateFromPagedLookasideList(NT_LOOKASIDE_LIST *l) { return nt_ExAllocateFromNPagedLookasideList(l); }
 
 NT_API void nt_ExFreeToNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *p)
 {
-    if (l->ListHead.Depth >= l->MaximumDepth) {
-        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(p); else nt_ExFreePoolWithTag(p, l->Tag);
+    l->TotalFrees++;
+    if (l->ListHead.Depth >= l->Depth) {
+        l->FreeMisses++;
+        ((NT_FREE_FUNCTION)l->Free)(p);
         return;
     }
     nt_ExpInterlockedPushEntrySList(&l->ListHead, (NT_SLIST_ENTRY *)p);

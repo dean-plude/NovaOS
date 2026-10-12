@@ -35,6 +35,13 @@ virtio-net card, and NovaOS's network stack uses it as its adapter.
   messages); and `KUSER_SHARED_DATA` at `0xFFFFF78000000000`, where a
   driver reads the clocks (`KeQuerySystemTime` and `KeQueryTickCount` are
   macros that do).
+- **Driver spin locks and the big kernel lock**: a thread waiting for a
+  driver's spin lock lets go of the big kernel lock while it waits (a
+  download through `netkvm.sys` stopped the machine: one processor held
+  the big lock and waited for the driver's lock, while the other held the
+  driver's lock and took an interrupt that wanted the big lock).  A
+  receive DPC indicates no more frames than the stack has room for, and
+  waits for the stack when it has none.
 - **Kernel faults in drivers** are logged before their `__except` handler
   is looked for (`[NT] x.sys+0x1234: exception 14 ...`), and a backtrace
   names driver addresses as `x.sys+offset` and shows where a call through

@@ -1335,7 +1335,8 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
 
 struct VgpuOverlay {
     VgpuBlob *src;                        /* the resource shown last (a reference; NULL: none yet) */
-    int       w, h;
+    int       w, h;                       /* its frame */
+    int       dw, dh;                     /* ... on the screen: the same, twice or half of it */
 };
 
 static VgpuCtx *g_pctx;                   /* the kernel's virgl context (made at the first present) */
@@ -1343,9 +1344,11 @@ static UINT32   g_psync;                  /* its timeline */
 static UINT64   g_pseq;
 static UINT32   g_pattached[N_ATTACHED];  /* resources it knows (numbers are never reused) */
 static int      g_pnext;
-static VgpuBlob *g_pscreen;               /* the screen: a texture over its memory */
-static VgpuScreen g_pscr;
-static UINT32   g_pfmt;                   /* its format */
+/* The screens: a texture over each one's memory (and format), the last
+ * few used (a monitor each, and a second format) */
+#define N_SCREENS           4
+static struct { VgpuBlob *b; VgpuScreen s; UINT32 fmt; UINT64 used; } g_pscreen[N_SCREENS];
+static UINT64   g_pscreen_use;
 
 static Vgpu *present_dev(void)
 {
@@ -1369,17 +1372,27 @@ static void present_attach(Vgpu *v, UINT32 res)
 
 /* A texture whose guest memory is @s's (every page), made once per screen
  * and format: frames of @fmt are copied into it as they are when the screen
- * holds their bytes as it is (B, G, R and then alpha or nothing) */
-static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s, UINT32 fmt)
+ * holds their bytes as it is (B, G, R and then alpha or nothing); *fmt_out
+ * its format */
+static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s, UINT32 fmt, UINT32 *fmt_out)
 {
+    (void)v;
     if (fmt != FORMAT_B8G8R8A8) fmt = FORMAT_B8G8R8X8;
-    if (g_pscreen && g_pscr.phys == s->phys && g_pscr.stride == s->stride && g_pscr.lines == s->lines &&
-        g_pscr.pages == s->pages && g_pfmt == fmt)
-        return g_pscreen;
-    if (g_pscreen) {                       /* (its memory is the screen's: only the resource goes) */
-        g_pscreen->frames = NULL;
-        VgpuBlobUnref(g_pscreen);
-        g_pscreen = NULL;
+    *fmt_out = fmt;
+    int slot = 0;
+    for (int i = 0; i < N_SCREENS; i++) {
+        const VgpuScreen *c = &g_pscreen[i].s;
+        if (g_pscreen[i].b && c->phys == s->phys && c->stride == s->stride && c->lines == s->lines &&
+            c->pages == s->pages && g_pscreen[i].fmt == fmt) {
+            g_pscreen[i].used = ++g_pscreen_use;
+            return g_pscreen[i].b;
+        }
+        if (g_pscreen[i].used < g_pscreen[slot].used) slot = i;   /* (the one unused longest goes) */
+    }
+    if (g_pscreen[slot].b) {               /* (its memory is the screen's: only the resource goes) */
+        g_pscreen[slot].b->frames = NULL;
+        VgpuBlobUnref(g_pscreen[slot].b);
+        g_pscreen[slot].b = NULL;
     }
     UINT64 bytes = (UINT64)s->stride * s->lines * s->pages * 4, n = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     PADDR *f = kmalloc(n * sizeof(PADDR));
@@ -1393,22 +1406,28 @@ static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s, UINT32 fmt)
     b->frames = NULL;
     b->nframes = 0;
     g_pattached[g_pnext++ % N_ATTACHED] = b->res;
-    g_pscreen = b;
-    g_pscr = *s;
-    g_pfmt = fmt;
+    g_pscreen[slot].b = b;
+    g_pscreen[slot].s = *s;
+    g_pscreen[slot].fmt = fmt;
+    g_pscreen[slot].used = ++g_pscreen_use;
     return b;
 }
 
-static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 src, UINT32 sfmt, int sx, int sy,
-                    int w, int h)
+/* (sw, sh) of @src at (sx, sy) drawn as (w, h) of @dst at (dx, dy): pixel
+ * for pixel, each one twice as wide and high (nearest), or each 2x2 block
+ * as one (linear: their average, as the GDI shows a monitor at half its
+ * scale) */
+#define FILTER_LINEAR       (1u << 8)     /* VIRGL_CMD_BLIT_S0_FILTER(PIPE_TEX_FILTER_LINEAR) */
+static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, int w, int h, UINT32 src, UINT32 sfmt,
+                    int sx, int sy, int sw, int sh)
 {
     c[0] = CCMD_BLIT | ((UINT32)BLIT_SIZE << 16);
-    c[1] = PIPE_MASK_RGBA;                /* (nearest filter, no scissor, no blending) */
+    c[1] = PIPE_MASK_RGBA | (sw > w ? FILTER_LINEAR : 0);   /* (no scissor, no blending) */
     c[2] = c[3] = 0;
     c[4] = dst; c[5] = 0; c[6] = dfmt; c[7] = (UINT32)dx; c[8] = (UINT32)dy; c[9] = 0;
     c[10] = (UINT32)w; c[11] = (UINT32)h; c[12] = 1;
     c[13] = src; c[14] = 0; c[15] = sfmt; c[16] = (UINT32)sx; c[17] = (UINT32)sy; c[18] = 0;
-    c[19] = (UINT32)w; c[20] = (UINT32)h; c[21] = 1;
+    c[19] = (UINT32)sw; c[20] = (UINT32)sh; c[21] = 1;
     return c + BLIT_SIZE + 1;
 }
 
@@ -1532,21 +1551,42 @@ static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int
     return true;
 }
 
-/* Copy (x, y, w, h) of @o's frame to (dx, dy) of the screen's pages (all,
- * or s->only) and write it into the screen's memory: done when this returns, or (with
- * @shown) once the host reaches shown->seq, the part of the screen in
- * @shown to be touched then (VgpuPresentWait, VgpuScreenTouch) */
+/* Copy (x, y, w, h) of @o as the screen shows it (its frame, or the frame
+ * twice or half its size) to (dx, dy) of the screen's pages (all, or
+ * s->only) and write it into the screen's memory: done when this returns,
+ * or (with @shown) once the host reaches shown->seq, the part of the
+ * screen in @shown to be touched then (VgpuPresentWait, VgpuScreenTouch) */
 static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
                           VgpuShown *shown)
 {
     if (!o->src) return false;
-    bool read = o->src->frames && (o->src->format == FORMAT_B8G8R8A8 || o->src->format == FORMAT_B8G8R8X8);
-    VgpuBlob *scr = read ? NULL : screen_res(v, s, o->src->format);
+    bool scaled = o->dw != o->w || o->dh != o->h;
+    bool read = !scaled && o->src->frames &&
+                (o->src->format == FORMAT_B8G8R8A8 || o->src->format == FORMAT_B8G8R8X8);
+    UINT32 sfmt = 0;
+    VgpuBlob *scr = read ? NULL : screen_res(v, s, o->src->format, &sfmt);
     if (!read && !scr) return false;
     if (dx < 0) { x -= dx; w += dx; dx = 0; }
     if (dy < 0) { y -= dy; h += dy; dy = 0; }
     if (dx + w > s->stride) w = s->stride - dx;
     if (dy + h > s->lines) h = s->lines - dy;
+    /* The frame's part for it: when the screen shows each pixel twice, from
+     * an even screen pixel to an even one (one more at each end, perhaps) */
+    int sx = x, sy = y, sw = w, sh = h;
+    if (scaled) {
+        int kx = o->dw > o->w ? 2 : 1, ky = o->dh > o->h ? 2 : 1;      /* screen px per frame px */
+        int qx = o->w > o->dw ? 2 : 1, qy = o->h > o->dh ? 2 : 1;      /* frame px per screen px */
+        int x1 = x + w, y1 = y + h;
+        int ex = x % kx, ey = y % ky;
+        x -= ex; dx -= ex; y -= ey; dy -= ey;
+        x1 += x1 % kx; y1 += y1 % ky;
+        if (x1 > o->dw) x1 = o->dw;
+        if (y1 > o->dh) y1 = o->dh;
+        if (dx < 0 || dy < 0 || dx + (x1 - x) > s->stride || dy + (y1 - y) > s->lines) return false;
+        w = x1 - x; h = y1 - y;
+        sx = x / kx * qx; sy = y / ky * qy;
+        sw = w / kx * qx; sh = h / ky * qy;
+    }
     if (shown) *shown = (VgpuShown){ g_pseq, dx, dy, 0, 0 };
     if (w <= 0 || h <= 0) return true;
     UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
@@ -1562,9 +1602,10 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
         goto done;
     }
     for (int pg = first; pg <= last; pg++)
-        end = g_pfmt == o->src->format
+        end = sfmt == o->src->format && !scaled
                   ? copy_region(end, scr->res, dx, dy + pg * s->lines, o->src->res, x, y, w, h)
-                  : blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
+                  : blit(end, scr->res, sfmt, dx, dy + pg * s->lines, w, h, o->src->res, o->src->format, sx, sy,
+                         sw, sh);
     if (!VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
     for (int pg = first; pg <= last; pg++) {
         UINT32 row = (UINT32)(dy + pg * s->lines);
@@ -1632,10 +1673,11 @@ static VgpuBlob *blob_mirror(Vgpu *v, VgpuBlob *b, const VgpuFrame *fr, int w, i
 }
 
 bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, const VgpuFrame *fr, int w, int h, const VgpuScreen *s,
-                        int dx, int dy, VgpuShown *shown)
+                        int dx, int dy, int dw, int dh, VgpuShown *shown)
 {
     Vgpu *v = present_dev();
     if (!v || src->v != v || w <= 0 || h <= 0) return false;
+    if ((dw != w && dw != 2 * w && 2 * dw != w) || (dh != h && dh != 2 * h && 2 * dh != h)) return false;
     if (!src->format && !(src = blob_mirror(v, src, fr, w, h))) return false;
     if (!src->format || (UINT32)w > src->width || (UINT32)h > src->height) return false;
     present_attach(v, src->res);
@@ -1645,7 +1687,8 @@ bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, const VgpuFrame *fr, int 
         o->src = src;
     }
     o->w = w; o->h = h;
-    if (!overlay_write(v, o, s, 0, 0, dx, dy, w, h, shown)) return false;
+    o->dw = dw; o->dh = dh;
+    if (!overlay_write(v, o, s, 0, 0, dx, dy, dw, dh, shown)) return false;
     DisplayStatAdd(DISPLAY_STAT_DIRECT_FRAMES, 1);
     return true;
 }
@@ -1656,8 +1699,8 @@ bool VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, 
     if (!v || !o->src) return false;
     if (x < 0) { dx -= x; w += x; x = 0; }
     if (y < 0) { dy -= y; h += y; y = 0; }
-    if (x + w > o->w) w = o->w - x;
-    if (y + h > o->h) h = o->h - y;
+    if (x + w > o->dw) w = o->dw - x;
+    if (y + h > o->dh) h = o->dh - y;
     if (w <= 0 || h <= 0) return true;
     return overlay_write(v, o, s, x, y, dx, dy, w, h, NULL);
 }

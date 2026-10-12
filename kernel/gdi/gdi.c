@@ -1478,9 +1478,10 @@ void GdiCursorErase(int dx, int dy)
     g_under_w = g_under_h = 0;
 }
 
-bool GdiCursorBox(GdiRect *r)
+bool GdiCursorBox(int *head, GdiRect *r)
 {
-    if (!g_under_vram || g_under_head != 0 || g_under_w <= 0 || g_under_h <= 0) return false;
+    if (!g_under_vram || g_under_w <= 0 || g_under_h <= 0) return false;
+    *head = g_under_head;
     *r = RECT(g_under_x, g_under_y, g_under_w, g_under_h);
     return true;
 }

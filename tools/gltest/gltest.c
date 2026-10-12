@@ -26,6 +26,14 @@
  * there), through the GDI while a window covers part of it, and from the
  * host again once that window has gone.
  *
+ * gltest monitors: direct presentation on the second monitor and at scale
+ * 2.  The same quadrants on the second monitor ("present: display 2
+ * quadrants at X Y W H", that monitor's own pixels), again once it is in
+ * 2560x1600, where the desktop's scale is 2 and the screen shows each of
+ * the window's pixels twice as wide and high ("display 2 at scale 2"),
+ * and on the primary, now shown at half the desktop's scale ("display 1
+ * at scale 2"); most frames must be shown from the host each time.
+ *
  * gltest colors [DRIVER]: frames in each colour depth Mesa offers a window (8:8:8,
  * 5:6:5, 5:5:5:1, 4:4:4:4 and 10:10:10:2): four coloured bars presented
  * with SwapBuffers and read back from the window with GetPixel.  Mesa
@@ -376,6 +384,109 @@ static int present_test(void)
     return fail != 0;
 }
 
+/* ---- direct presentation on the monitors -------------------------------- */
+static BOOL CALLBACK monitor_n(HMONITOR m, HDC dc, LPRECT r, LPARAM l)
+{
+    HMONITOR *out = (HMONITOR *)l;
+    if (!out[0]) out[0] = m;
+    else if (!out[1]) out[1] = m;
+    return TRUE;
+}
+
+/* Display @n's monitor (1 or 2): its rectangle, and its screen's pixels
+ * per desktop pixel */
+static int monitor_of(int n, RECT *r, int *scale)
+{
+    HMONITOR m[2] = { 0, 0 };
+    EnumDisplayMonitors(NULL, NULL, monitor_n, (LPARAM)m);
+    for (int i = 0; i < 2; i++) {
+        MONITORINFOEXA mi;
+        mi.cbSize = sizeof(mi);
+        char dev[16];
+        snprintf(dev, sizeof(dev), "\\\\.\\DISPLAY%d", n);
+        if (!m[i] || !GetMonitorInfoA(m[i], (MONITORINFO *)&mi) || strcmp(mi.szDevice, dev)) continue;
+        DEVMODEA dm;
+        memset(&dm, 0, sizeof(dm));
+        dm.dmSize = sizeof(dm);
+        *r = mi.rcMonitor;
+        *scale = EnumDisplaySettingsA(dev, ENUM_CURRENT_SETTINGS, &dm) && r->right > r->left
+                     ? (int)dm.dmPelsWidth / (r->right - r->left) : 1;
+        return 1;
+    }
+    return 0;
+}
+
+static int set_mode(const char *dev, DWORD w, DWORD h)
+{
+    DEVMODEA dm;
+    memset(&dm, 0, sizeof(dm));
+    dm.dmSize = sizeof(dm);
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    dm.dmPelsWidth = w;
+    dm.dmPelsHeight = h;
+    return ChangeDisplaySettingsExA(dev, &dm, NULL, 0, NULL) == DISP_CHANGE_SUCCESSFUL;
+}
+
+/* The window's client area 64 px into display @n, the quadrants presented
+ * there (where the self-test looks: @label) and counted */
+static void present_on(HWND w, HDC dc, int n, const char *label)
+{
+    RECT m;
+    int scale = 1;
+    char what[128];
+    snprintf(what, sizeof(what), "%s: the monitor is there", label);
+    check(what, monitor_of(n, &m, &scale));
+    RECT r = { 0, 0, PR_W, PR_H };
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+    SetWindowPos(w, HWND_TOP, m.left + 64 + r.left, m.top + 64 + r.top, 0, 0, SWP_NOSIZE);
+    SetForegroundWindow(w);
+    pointer_away();
+    unsigned long d, f;
+    present_for(dc, 1000, &d);                          /* (the window is drawn there) */
+    POINT o = { 0, 0 };
+    ClientToScreen(w, &o);
+    printf("present: %s quadrants at %ld %ld %d %d\n", label, (o.x - m.left) * scale, (o.y - m.top) * scale,
+           PR_W * scale, PR_H * scale);
+    f = present_for(dc, 6000, &d);
+    printf("%s (scale %d): %lu of %lu frames shown from the host\n", label, scale, d, f);
+    snprintf(what, sizeof(what), "frames shown from the host on %s", label);
+    check(what, f > 0 && d * 10 >= f * 9);
+}
+
+static int monitors_test(void)
+{
+    HDC dc;
+    HGLRC rc;
+    RECT m2;
+    int s2 = 1;
+    HWND w = gl_window("Direct presentation", 100, 100, PR_W, PR_H, &dc, &rc);
+    check("context", w != NULL);
+    check("a second monitor", GetSystemMetrics(SM_CMONITORS) >= 2 && monitor_of(2, &m2, &s2));
+    if (!w || fail) { printf("gltest monitors: %d passed, %d failed\n", pass, fail); return 1; }
+    printf("GL_RENDERER %s\n", glGetString(GL_RENDERER));
+    glViewport(0, 0, PR_W, PR_H);
+    DEVMODEA was;
+    memset(&was, 0, sizeof(was));
+    was.dmSize = sizeof(was);
+    EnumDisplaySettingsA("\\\\.\\DISPLAY2", ENUM_CURRENT_SETTINGS, &was);
+    present_on(w, dc, 2, "display 2");
+    int big = set_mode("\\\\.\\DISPLAY2", 2560, 1600);
+    check("\\\\.\\DISPLAY2 in 2560x1600", big);
+    if (big) {
+        int s;
+        RECT m;
+        check("it is at scale 2", monitor_of(2, &m, &s) && s == 2);
+        present_on(w, dc, 2, "display 2 at scale 2");
+        present_on(w, dc, 1, "display 1 at scale 2");
+        check("\\\\.\\DISPLAY2 back as it was", set_mode("\\\\.\\DISPLAY2", was.dmPelsWidth, was.dmPelsHeight));
+    }
+    wglMakeCurrent(NULL, NULL);
+    wglDeleteContext(rc);
+    DestroyWindow(w);
+    printf("gltest monitors: %d passed, %d failed\n", pass, fail);
+    return fail != 0;
+}
+
 /* ---- the colour-depth test ---------------------------------------------- */
 static const struct { int r, g, b, a; int must; } depths[] = {
     { 8, 8, 8, 0, 1 }, { 5, 6, 5, 0, 1 }, { 5, 5, 5, 1, 0 }, { 4, 4, 4, 4, 1 }, { 10, 10, 10, 2, 0 }};
@@ -463,7 +574,7 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc > 1 && (!strcmp(argv[1], "fpsrun") || !strcmp(argv[1], "fps") || !strcmp(argv[1], "colors") ||
-                     !strcmp(argv[1], "present"))) {
+                     !strcmp(argv[1], "present") || !strcmp(argv[1], "monitors"))) {
         WNDCLASSA wc = { CS_OWNDC, proc, 0, 0, GetModuleHandleA(NULL), 0, LoadCursor(NULL, IDC_ARROW), 0, 0, "gltest" };
         RegisterClassA(&wc);
         if (!strcmp(argv[1], "colors")) {
@@ -487,6 +598,7 @@ int main(int argc, char **argv)
         }
         if (!strcmp(argv[1], "fps")) return fps_test(argc > 2 ? atoi(argv[2]) : 10);
         if (!strcmp(argv[1], "present")) return present_test();
+        if (!strcmp(argv[1], "monitors")) return monitors_test();
         if (argc > 3) freopen(argv[3], "w", stdout);   /* the child: fpsrun SECS FILE */
         return fps_child(argc > 2 ? atoi(argv[2]) : 5);
     }

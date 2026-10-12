@@ -102,15 +102,16 @@ UINT32 *DisplayHeadSurface(int head, int *stride);
 /* A rectangle of head @head's screen (its pixels) was drawn: a virtio GPU
  * output copies it to the monitor; nothing on the others */
 void DisplayHeadDamage(int head, int x, int y, int w, int h);
-/* Direct presentation (um_gui.c): there is a 3D virtio GPU, and the
- * primary's pixels are memory it can write (the VGA framebuffer, both its
- * pages when flipping, or a virtio GPU output's picture): where, in @s */
-bool DisplayPrimaryScreen(VgpuScreen *s);
+/* Direct presentation (um_gui.c): there is a 3D virtio GPU, and head
+ * @head's pixels are memory it can write (the VGA framebuffer, both its
+ * pages when flipping, a further DISPI adapter's video memory, or a virtio
+ * GPU output's picture): where, in @s */
+bool DisplayHeadScreen(int head, VgpuScreen *s);
 /* That memory changed in a rectangle the display was not told of: show it */
-void DisplayPrimaryShow(int x, int y, int w, int h);
-/* Called with each rectangle of the primary that was drawn, before it is
- * shown (the overlays go back over it) */
-void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h));
+void DisplayHeadShow(int head, int x, int y, int w, int h);
+/* Called with each rectangle of a head's screen that was drawn, before it
+ * is shown (the overlays go back over it) */
+void DisplaySetDamageHook(void (*fn)(int head, int x, int y, int w, int h));
 /* Called with the page about to be shown, before each flip */
 void DisplaySetFlipHook(void (*fn)(int page));
 

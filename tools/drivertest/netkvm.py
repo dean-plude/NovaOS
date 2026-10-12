@@ -11,9 +11,10 @@ tools installer (virtio-win-gt-x64.msi, from fedorapeople.org, where the
 virtio-win project publishes its releases), as Microsoft signed it
 (Windows Hardware Compatibility Publisher); it is not kept in the
 repository.  This downloads the installer once into the cache
-(~/.cache/novaos, or $NOVA_CACHE), checks its SHA-256, takes the three
-files out with 7z and writes them into DIR as netkvm.inf, netkvm.sys and
-netkvm.cat, checking each one's SHA-256 too.
+(~/.cache/novaos, or $NOVA_CACHE), checks its SHA-256, takes the
+files the package's .inf names out with 7z and writes them into DIR as
+netkvm.inf, netkvm.sys, netkvm.cat and netkvmp.exe (its configuration
+tool, which the .inf copies too), checking each one's SHA-256.
 """
 import hashlib, os, shutil, subprocess, sys, tempfile, time, urllib.request
 
@@ -25,6 +26,7 @@ FILES = {
     'FILE_netkvm_w11_amd64.inf': ('netkvm.inf', '60f7c0ff6815b6edc7a8acf2b46b83c4605ddfbacbcd74b15c9d9653159a3a45'),
     'FILE_netkvm_w11_amd64.sys': ('netkvm.sys', '1b6f8892d39efe28c1a6b20dcc92b76f7dede567d9628fa8d6cebb62d33daf4c'),
     'FILE_netkvm_w11_amd64.cat': ('netkvm.cat', 'b4c5c6c70df75777b1e5a44df8fa67bf0f2a85c016cf93f3113c0b3ab01ebc90'),
+    'FILE_netkvm_netkvmp_w11_amd64': ('netkvmp.exe', 'd0188e6abc35693776930a757c377067b3738d049a51ec317dbfe5214f5fef74'),
 }
 PAUSES = (10, 30, 60, 120)        # seconds between attempts, as tools/download_cache.py
 
@@ -66,7 +68,7 @@ def installer():
 
 
 def fetch(dest):
-    """Write netkvm.inf, netkvm.sys and netkvm.cat into @dest"""
+    """Write the package's files into @dest"""
     msi = installer()
     os.makedirs(dest, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:

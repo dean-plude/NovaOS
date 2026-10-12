@@ -23,3 +23,7 @@
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
   the tests); line-based interrupts only, MSI comes later.
+  Step 30.9's first half is in: NovaOS's own NDIS host (`ndis.sys`) runs
+  virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
+  built-in driver, and the network stack uses it for DHCP, ping and
+  downloads; Intel AX211 Wi-Fi (WDI) is the second half.

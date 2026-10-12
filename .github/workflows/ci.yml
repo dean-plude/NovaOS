@@ -198,7 +198,9 @@ jobs:
         mkdir -p graphics-out
         export VIRGL_LOG_LEVEL=debug VIRGL_LOG_FILE="$PWD/graphics-out/virglrenderer-%PID%.log"
         python3 tools/ci/host_watch.py graphics-out &
-        trap 'kill $! 2>/dev/null || true' EXIT
+        # the host's CPU time in each turn of gltest fps (tools/ci/host_profile.py)
+        python3 tools/ci/host_profile.py graphics-out &
+        trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
         xvfb-run -a -s '-screen 0 1280x1024x24' \
           python3 tools/selftest.py --suite graphics --gfx gfx --img build/nova.img --out graphics-out \
           --junit graphics-out/junit.xml --summary "$GITHUB_STEP_SUMMARY"

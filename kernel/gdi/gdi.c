@@ -491,6 +491,7 @@ static void present_monitor(int head, const Monitor *m, UINT32 *dst, int dstride
             }
         }
     }
+    DisplayStatAdd(DISPLAY_STAT_SCREEN, (UINT64)(sx1 - sx0) * (sy1 - sy0) * 4);
     DisplayHeadDamage(head, sx0, sy0, sx1 - sx0, sy1 - sy0);
 }
 
@@ -1475,6 +1476,13 @@ void GdiCursorErase(int dx, int dy)
     }
     DisplayHeadDamage(g_under_head, g_under_x, g_under_y, g_under_w, g_under_h);
     g_under_w = g_under_h = 0;
+}
+
+bool GdiCursorBox(GdiRect *r)
+{
+    if (!g_under_vram || g_under_head != 0 || g_under_w <= 0 || g_under_h <= 0) return false;
+    *r = RECT(g_under_x, g_under_y, g_under_w, g_under_h);
+    return true;
 }
 
 void GdiCursorForget(void)

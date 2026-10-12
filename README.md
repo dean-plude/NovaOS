@@ -215,7 +215,9 @@ without being copied, relocated or hashed again), I/O,
   monitors on one card, plugged in and unplugged while NovaOS runs, and
   which on a 3D one (`virtio-vga-gl`) gives Mesa's Venus and virgl (App
   Store) their contexts, host-visible blobs, 3D resources, transfers and
-  fences, so Vulkan, DXVK and OpenGL run on the host's GPU; ACPI power-off, reset, power buttons,
+  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and OpenGL's
+  frames are written into the screen there while their window is alone
+  on it (direct presentation); ACPI power-off, reset, power buttons,
   sleep (S3, or low-power S0 idle on firmware without it), batteries and
   AC adapters, the lid, thermal zones, wake devices and PCI interrupt
   routing (AML interpreted by uACPI, with the SCI a real interrupt
@@ -682,10 +684,15 @@ To make the ISO yourself from a fresh build, run
   on llvmpipe) and `tools/d3dtest` (17 tests, on Venus: the first monitor
   is a QEMU 3D virtio-gpu, `virtio-vga-gl,venus=on`, whose Vulkan and
   OpenGL are the runner's lavapipe and llvmpipe); each 64- and 32-bit,
-  with a screenshot of each while it draws; then `gltest fps` and
-  `d3dtest fps`, which draw the same OpenGL scene on virgl and on
+  with a screenshot of each while it draws; `gltest present` (virgl's
+  frames shown straight from the host's GPU while the window is alone,
+  checked on the screen itself, and through the GDI while a window covers
+  it); then `gltest fps` and
+  `d3dtest fps`, which draw the same OpenGL scene on virgl (shown
+  directly and through the GDI) and on
   llvmpipe, and the same Direct3D 9 scene on Venus and on lavapipe,
-  inside NovaOS and need the GPU to be faster.
+  inside NovaOS and need the GPU to be faster, and direct presentation
+  faster than the GDI way.
 
 The build compiles through ccache, and the boot-test job saves the cache
 after each build, so a pull request recompiles only what it changed.  A pull

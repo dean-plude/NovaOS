@@ -47,6 +47,7 @@
 #include "../arch/x86_64/cpu.h"
 #include "../ke/scheduler.h"
 #include "../mm/pmm.h"
+#include "../hal/display.h"
 
 #define CAP_COMMON   1
 #define CAP_NOTIFY   2
@@ -500,6 +501,7 @@ static void flush_locked(Vgpu *v, int scanout, int x, int y, int w, int h)
     if (y + h > o->h) h = o->h - y;
     if (w <= 0 || h <= 0) return;
     Rect r = { (UINT32)x, (UINT32)y, (UINT32)w, (UINT32)h };
+    DisplayStatAdd(DISPLAY_STAT_TO_HOST_2D, (UINT64)w * h * 4);
     Transfer *t = req(v, 0, CMD_TRANSFER_TO_HOST_2D, sizeof(Transfer));
     t->r = r; t->offset = ((UINT64)y * o->w + x) * 4; t->id = o->id;
     Flush *f = req(v, 1, CMD_RESOURCE_FLUSH, sizeof(Flush));
@@ -673,7 +675,18 @@ struct VgpuBlob {
     INT64   shm_off;                      /* where it is mapped in the host-visible region (-1: not) */
     PADDR  *frames;                       /* a virgl resource's guest memory (NULL: a blob) */
     UINT64  nframes;
+    UINT32  format, width, height;        /* a virgl resource's (0: a blob) */
+    /* Direct presentation lends a resource the screen's rows as its memory
+     * (overlay_read) and leaves them until something else reads it back
+     * (lent_len 0: its own pages); lending held while changed */
+    UINT64  lent_at, lent_len;
+    volatile int lending;
 };
+
+#define XFER_COUNT  1                     /* a read-back of a program's (DISPLAY_STAT_FROM_HOST) */
+#define XFER_QUIET  2                     /* no notification: a later one sends it */
+static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
+                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, int how);
 
 static Vgpu *dev3d(void)
 {
@@ -744,15 +757,18 @@ static UINT32 call3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len, void *ans, UIN
     return slot_wait(v, i, ans, alen);
 }
 
-/* Send slot @i and don't wait (its answer frees it) */
-static void post3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len)
+/* Send slot @i and don't wait (its answer frees it); notify the device
+ * unless @quiet (a later notification sends it) */
+static void post3d_ex(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len, bool quiet)
 {
     IrqState s = spin_lock_irqsave(&g_lock);
     v->slot[i].autofree = true;
     slot_send(v, i, qlen, ext_len, sizeof(Hdr));
     spin_unlock_irqrestore(&g_lock, s);
-    kick(v);
+    if (!quiet) kick(v);
 }
+
+static void post3d(Vgpu *v, int i, UINT32 qlen, UINT32 ext_len) { post3d_ex(v, i, qlen, ext_len, false); }
 
 typedef struct __attribute__((packed)) { Hdr h; UINT32 index, pad; } CapsetInfoReq;
 typedef struct __attribute__((packed)) { Hdr h; UINT32 id, max_version, max_size, pad; } CapsetInfo;
@@ -959,6 +975,24 @@ typedef struct __attribute__((packed)) {
     Hdr h; UINT32 x, y, z, w, h2, d; UINT64 offset; UINT32 res, level, stride, layer_stride;
 } Transfer3d;
 
+/* ATTACH_BACKING's entries for @nframes pages at @frames into @ent (16
+ * bytes a page at most): one per run of consecutive pages; how many */
+static UINT32 frame_runs(const PADDR *frames, UINT64 nframes, UINT64 *ent)
+{
+    UINT32 n = 0;
+    for (UINT64 k = 0; k < nframes; k++) {
+        if (n && ent[2 * (n - 1)] + (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) == frames[k] &&
+            (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) < (1u << 30)) {
+            ent[2 * (n - 1) + 1] += PAGE_SIZE;
+            continue;
+        }
+        ent[2 * n] = frames[k];
+        ent[2 * n + 1] = PAGE_SIZE;
+        n++;
+    }
+    return n;
+}
+
 VgpuBlob *VgpuRes3dCreate(VgpuCtx *c, const UINT32 *p, PADDR *frames, UINT64 nframes)
 {
     Vgpu *v = c->v;
@@ -976,6 +1010,7 @@ VgpuBlob *VgpuRes3dCreate(VgpuCtx *c, const UINT32 *p, PADDR *frames, UINT64 nfr
     Create3d *q = (Create3d *)v->slot[i].page;
     q->res = b->res;
     memcpy(&q->target, p, 10 * sizeof(UINT32));
+    b->format = p[1]; b->width = p[3]; b->height = p[4];
     UINT32 t = call3d(v, i, sizeof(Create3d), 0, NULL, sizeof(Hdr));
     if (t != RESP_OK_NODATA) {
         kprintf("[VGPU] %s: a %ux%u resource (format %u, bind %x) was refused (%x)\n", v->name,
@@ -985,19 +1020,9 @@ VgpuBlob *VgpuRes3dCreate(VgpuCtx *c, const UINT32 *p, PADDR *frames, UINT64 nfr
     }
     if (nframes) {
         /* its memory: one entry per run of consecutive pages */
-        UINT32 n = 0;
         ent = kmalloc(nframes * 16);
         if (!ent) goto fail;
-        for (UINT64 k = 0; k < nframes; k++) {
-            if (n && ent[2 * (n - 1)] + (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) == frames[k] &&
-                (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) < (1u << 30)) {
-                ent[2 * (n - 1) + 1] += PAGE_SIZE;
-                continue;
-            }
-            ent[2 * n] = frames[k];
-            ent[2 * n + 1] = PAGE_SIZE;
-            n++;
-        }
+        UINT32 n = frame_runs(frames, nframes, ent);
         size_t pages;
         void *pl = payload(ent, n * 16, &pages);
         kfree(ent);
@@ -1038,8 +1063,24 @@ bool VgpuBlobFrames(VgpuBlob *b, const PADDR **frames, UINT64 *n)
     return true;
 }
 
+static void blob_lend_lock(VgpuBlob *b) { while (__atomic_exchange_n(&b->lending, 1, __ATOMIC_ACQUIRE)) sched_yield(); }
+static void blob_lend_unlock(VgpuBlob *b) { __atomic_store_n(&b->lending, 0, __ATOMIC_RELEASE); }
+static bool blob_restore(VgpuBlob *b);
+
 bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
                     UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value)
+{
+    if (!b->frames) return VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
+    blob_lend_lock(b);
+    bool ok = blob_restore(b) &&
+              VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
+    blob_lend_unlock(b);
+    return ok;
+}
+
+/* The same; @how: XFER_* */
+static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
+                             UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value, int how)
 {
     Vgpu *v = c->v;
     bool ok;
@@ -1048,6 +1089,7 @@ bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UI
     int i = slot3d(v, to_host ? CMD_TRANSFER_TO_HOST_3D : CMD_TRANSFER_FROM_HOST_3D, c->id, sizeof(Transfer3d));
     Transfer3d *q = (Transfer3d *)v->slot[i].page;
     memcpy(&q->x, box, 6 * sizeof(UINT32));
+    if (!to_host && (how & XFER_COUNT)) DisplayStatAdd(DISPLAY_STAT_FROM_HOST, (UINT64)box[3] * box[4] * (box[5] ? box[5] : 1) * 4);
     q->offset = offset;
     q->res = b->res;
     q->level = level;
@@ -1060,7 +1102,7 @@ bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UI
     v->slot[i].autofree = true;
     slot_send(v, i, sizeof(Transfer3d), 0, sizeof(Hdr));
     spin_unlock_irqrestore(&g_lock, s);
-    kick(v);
+    if (!(how & XFER_QUIET)) kick(v);
     return true;
 }
 
@@ -1248,4 +1290,325 @@ int VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any,
             sched_sleep_until_tsc(&never, next < deadline ? next : deadline);
         }
     }
+}
+
+/* -----------------------------------------------------------------------
+ * Direct presentation (um_gui.c; its callers hold the desktop lock, which
+ * keeps these in order).  A program's frame is not read back into the
+ * program and drawn through the GDI: the kernel's own virgl context copies
+ * it on the host into a texture whose guest memory is the screen itself
+ * (the VGA framebuffer, or a virtio output's picture), in the frame's own
+ * format when that is laid out as the screen is (a plain copy of the
+ * bytes, not a blit that draws them), and a transfer writes that part into the screen's
+ * memory.  Nothing in the guest copies a pixel, and the host copies the
+ * frame once, as many bytes as the read-back would (the host's time is
+ * most of a frame's).  The window's overlay holds the resource it showed
+ * last: the program draws the next frame into its other buffer, so that
+ * one keeps the frame on screen.  The window's bitmap keeps its last GDI
+ * frame, so whenever the desktop draws over that part again (display.c's
+ * damage hook) the overlay is written there once more.
+ * ----------------------------------------------------------------------- */
+#define CAPSET_VIRGL2       2
+#define CCMD_BLIT           16             /* virgl_protocol.h: VIRGL_CCMD_BLIT */
+#define BLIT_SIZE           21
+#define CCMD_COPY_REGION    17             /* VIRGL_CCMD_RESOURCE_COPY_REGION */
+#define COPY_REGION_SIZE    13
+#define PIPE_MASK_RGBA      0xF
+#define TEXTURE_2D          2
+#define BIND_RENDER_TARGET  (1u << 1)
+#define BIND_SAMPLER_VIEW   (1u << 3)
+#define N_ATTACHED          16
+
+#define FORMAT_B8G8R8A8     1             /* (laid out as the screen is, alpha where it has nothing) */
+
+struct VgpuOverlay {
+    VgpuBlob *src;                        /* the resource shown last (a reference; NULL: none yet) */
+    int       w, h;
+};
+
+static VgpuCtx *g_pctx;                   /* the kernel's virgl context (made at the first present) */
+static UINT32   g_psync;                  /* its timeline */
+static UINT64   g_pseq;
+static UINT32   g_pattached[N_ATTACHED];  /* resources it knows (numbers are never reused) */
+static int      g_pnext;
+static VgpuBlob *g_pscreen;               /* the screen: a texture over its memory */
+static VgpuScreen g_pscr;
+static UINT32   g_pfmt;                   /* its format */
+
+static Vgpu *present_dev(void)
+{
+    Vgpu *v = dev3d();
+    if (!v) return NULL;
+    if (!g_pctx && (g_pctx = VgpuCtxCreate(CAPSET_VIRGL2, "NovaOS present")) != NULL)
+        g_psync = VgpuSyncCreate(g_pctx, 0);
+    return g_pctx && g_psync ? v : NULL;
+}
+
+/* The present context names resource @res: attach it (once) */
+static void present_attach(Vgpu *v, UINT32 res)
+{
+    for (int k = 0; k < N_ATTACHED; k++)
+        if (g_pattached[k] == res) return;
+    int i = slot3d(v, CMD_CTX_ATTACH_RESOURCE, g_pctx->id, sizeof(CtxResource));
+    ((CtxResource *)v->slot[i].page)->res = res;
+    post3d(v, i, sizeof(CtxResource), 0);
+    g_pattached[g_pnext++ % N_ATTACHED] = res;
+}
+
+/* A texture whose guest memory is @s's (every page), made once per screen
+ * and format: frames of @fmt are copied into it as they are when the screen
+ * holds their bytes as it is (B, G, R and then alpha or nothing) */
+static VgpuBlob *screen_res(Vgpu *v, const VgpuScreen *s, UINT32 fmt)
+{
+    if (fmt != FORMAT_B8G8R8A8) fmt = FORMAT_B8G8R8X8;
+    if (g_pscreen && g_pscr.phys == s->phys && g_pscr.stride == s->stride && g_pscr.lines == s->lines &&
+        g_pscr.pages == s->pages && g_pfmt == fmt)
+        return g_pscreen;
+    if (g_pscreen) {                       /* (its memory is the screen's: only the resource goes) */
+        g_pscreen->frames = NULL;
+        VgpuBlobUnref(g_pscreen);
+        g_pscreen = NULL;
+    }
+    UINT64 bytes = (UINT64)s->stride * s->lines * s->pages * 4, n = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    PADDR *f = kmalloc(n * sizeof(PADDR));
+    if (!f) return NULL;
+    for (UINT64 k = 0; k < n; k++) f[k] = s->phys + k * PAGE_SIZE;
+    UINT32 p[10] = { TEXTURE_2D, fmt, BIND_RENDER_TARGET | BIND_SAMPLER_VIEW, (UINT32)s->stride,
+                     (UINT32)(s->lines * s->pages), 1, 1, 0, 0, 0 };
+    VgpuBlob *b = VgpuRes3dCreate(g_pctx, p, f, n);
+    if (!b) { kfree(f); return NULL; }
+    kfree(b->frames);                      /* (not pages to free when it goes) */
+    b->frames = NULL;
+    b->nframes = 0;
+    g_pattached[g_pnext++ % N_ATTACHED] = b->res;
+    g_pscreen = b;
+    g_pscr = *s;
+    g_pfmt = fmt;
+    return b;
+}
+
+static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 src, UINT32 sfmt, int sx, int sy,
+                    int w, int h)
+{
+    c[0] = CCMD_BLIT | ((UINT32)BLIT_SIZE << 16);
+    c[1] = PIPE_MASK_RGBA;                /* (nearest filter, no scissor, no blending) */
+    c[2] = c[3] = 0;
+    c[4] = dst; c[5] = 0; c[6] = dfmt; c[7] = (UINT32)dx; c[8] = (UINT32)dy; c[9] = 0;
+    c[10] = (UINT32)w; c[11] = (UINT32)h; c[12] = 1;
+    c[13] = src; c[14] = 0; c[15] = sfmt; c[16] = (UINT32)sx; c[17] = (UINT32)sy; c[18] = 0;
+    c[19] = (UINT32)w; c[20] = (UINT32)h; c[21] = 1;
+    return c + BLIT_SIZE + 1;
+}
+
+/* Not VgpuWait: that notifies the device each time it looks (sooner news
+ * of fences), and two waiters doing so for each frame (the program and
+ * this) took host time from drawing.  Once, then QEMU's own fence polling
+ * and the program's waits bring the news (the "present" thread; a wait
+ * under the desktop lock uses VgpuWait) */
+bool VgpuPresentWait(UINT64 seq)
+{
+    if (!g_pctx) return false;
+    Vgpu *v = g_pctx->v;
+    kick(v);                                      /* (overlay_read leaves it to here) */
+    UINT64 deadline = sched_tsc_after(10000000);  /* 1 s */
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_lock);
+        reap(v);
+        VgpuSync *y = sync_of(g_pctx, g_psync);
+        bool done = !y || y->value >= seq;
+        spin_unlock_irqrestore(&g_lock, s);
+        if (done) return y != NULL;
+        if (rdtsc() >= deadline) return false;
+        static UINT32 never;
+        sched_sleep_until_tsc(&never, sched_tsc_after(5000));   /* 0.5 ms */
+    }
+}
+
+void VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    for (int pg = 0; pg < s->pages; pg++)
+        for (int r = 0; r < h && (s->only < 0 || pg == s->only); r++) {
+            volatile UINT32 *row = (volatile UINT32 *)(PHYSMAP_BASE + s->phys) +
+                                   (UINT64)(y + pg * s->lines + r) * s->stride + x;
+            for (int c = 0; c < w; c += 1024) row[c] = row[c];
+            row[w - 1] = row[w - 1];
+        }
+}
+
+/* The same as a plain copy, for resources of one format (the host copies
+ * the bytes, as glCopyImageSubData does, where a blit draws them) */
+static UINT32 *copy_region(UINT32 *c, UINT32 dst, int dx, int dy, UINT32 src, int sx, int sy, int w, int h)
+{
+    c[0] = CCMD_COPY_REGION | ((UINT32)COPY_REGION_SIZE << 16);
+    c[1] = dst; c[2] = 0; c[3] = (UINT32)dx; c[4] = (UINT32)dy; c[5] = 0;
+    c[6] = src; c[7] = 0; c[8] = (UINT32)sx; c[9] = (UINT32)sy; c[10] = 0;
+    c[11] = (UINT32)w; c[12] = (UINT32)h; c[13] = 1;
+    return c + COPY_REGION_SIZE + 1;
+}
+
+/* ATTACH_BACKING (ctx 0) of @n entries @pl (payload pages) to @res, not
+ * waited for */
+static void post_attach(Vgpu *v, UINT32 res, void *pl, size_t pages, UINT32 n)
+{
+    int i = slot3d(v, CMD_ATTACH_BACKING, 0, sizeof(Attach));
+    Attach *a = (Attach *)v->slot[i].page;
+    a->id = res;
+    a->n = n;
+    v->slot[i].ext = pl;
+    v->slot[i].ext_pages = pages;
+    post3d_ex(v, i, sizeof(Hdr) + 8, n * 16, true);
+}
+
+static void post_detach(Vgpu *v, UINT32 res)
+{
+    int i = slot3d(v, CMD_DETACH_BACKING, 0, sizeof(Unref));
+    ((Unref *)v->slot[i].page)->id = res;
+    post3d_ex(v, i, sizeof(Unref), 0, true);
+}
+
+/* @b's own pages back as its memory (lent_len 0 already: nothing to do);
+ * lending held */
+static bool blob_restore(VgpuBlob *b)
+{
+    if (!b->lent_len) return true;
+    UINT64 *ent = kmalloc(b->nframes * 16);
+    if (!ent) return false;
+    size_t pages;
+    UINT32 n = frame_runs(b->frames, b->nframes, ent);
+    void *pl = payload(ent, n * 16, &pages);
+    kfree(ent);
+    if (!pl) return false;
+    post_detach(b->v, b->res);
+    post_attach(b->v, b->res, pl, pages, n);
+    b->lent_at = b->lent_len = 0;
+    return true;
+}
+
+/* The frame read back straight into the screen: the program's resource
+ * gets the screen's rows as its memory for the transfer (the host's only
+ * copy, as the GDI's read-back is) and keeps them while the window stays
+ * where it is, until it is read back otherwise (blob_restore; the program
+ * does not touch a buffer it showed until its next frame).  @src's bytes
+ * must be the screen's (B, G, R, then alpha or nothing).  The device is
+ * not notified: VgpuPresentWait does that, from the "present" thread (a
+ * notification waits while QEMU's main thread draws) */
+static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
+                         int first, int last)
+{
+    present_attach(v, src->res);
+    blob_lend_lock(src);
+    for (int pg = first; pg <= last; pg++) {
+        UINT64 start = s->phys + ((UINT64)(dy + pg * s->lines) * s->stride + dx) * 4;
+        UINT64 end = s->phys + ((UINT64)(dy + pg * s->lines + h - 1) * s->stride + dx + w) * 4;
+        UINT64 base = start & ~(UINT64)(PAGE_SIZE - 1);
+        UINT64 e[2] = { base, (end - base + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1) };
+        if (src->lent_at != e[0] || src->lent_len != e[1]) {
+            size_t pages;
+            void *pl = payload(e, 16, &pages);
+            if (!pl) { blob_lend_unlock(src); return false; }
+            post_detach(v, src->res);
+            post_attach(v, src->res, pl, pages, 1);
+            src->lent_at = e[0];
+            src->lent_len = e[1];
+        }
+        UINT32 box[6] = { (UINT32)x, (UINT32)y, 0, (UINT32)w, (UINT32)h, 1 };
+        VgpuTransfer3dEx(g_pctx, src, false, box, start - base, 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
+                         pg == last ? g_pseq + 1 : 0, XFER_QUIET);
+    }
+    blob_lend_unlock(src);
+    return true;
+}
+
+/* Copy (x, y, w, h) of @o's frame to (dx, dy) of the screen's pages (all,
+ * or s->only) and write it into the screen's memory: done when this returns, or (with
+ * @shown) once the host reaches shown->seq, the part of the screen in
+ * @shown to be touched then (VgpuPresentWait, VgpuScreenTouch) */
+static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
+                          VgpuShown *shown)
+{
+    if (!o->src) return false;
+    bool read = o->src->frames && (o->src->format == FORMAT_B8G8R8A8 || o->src->format == FORMAT_B8G8R8X8);
+    VgpuBlob *scr = read ? NULL : screen_res(v, s, o->src->format);
+    if (!read && !scr) return false;
+    if (dx < 0) { x -= dx; w += dx; dx = 0; }
+    if (dy < 0) { y -= dy; h += dy; dy = 0; }
+    if (dx + w > s->stride) w = s->stride - dx;
+    if (dy + h > s->lines) h = s->lines - dy;
+    if (shown) *shown = (VgpuShown){ g_pseq, dx, dy, 0, 0 };
+    if (w <= 0 || h <= 0) return true;
+    UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
+    int first = -1, last = 0;
+    for (int pg = 0; pg < s->pages && pg < 2; pg++)
+        if (s->only < 0 || pg == s->only) {
+            if (first < 0) first = pg;
+            last = pg;
+        }
+    if (first < 0) return true;
+    if (read) {
+        if (!overlay_read(v, o->src, s, x, y, dx, dy, w, h, first, last)) return false;
+        goto done;
+    }
+    for (int pg = first; pg <= last; pg++)
+        end = g_pfmt == o->src->format
+                  ? copy_region(end, scr->res, dx, dy + pg * s->lines, o->src->res, x, y, w, h)
+                  : blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
+    if (!VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
+    for (int pg = first; pg <= last; pg++) {
+        UINT32 row = (UINT32)(dy + pg * s->lines);
+        UINT32 box[6] = { (UINT32)dx, row, 0, (UINT32)w, (UINT32)h, 1 };
+        if (!VgpuTransfer3dEx(g_pctx, scr, false, box, ((UINT64)row * s->stride + dx) * 4, 0, (UINT32)s->stride * 4, 0,
+                              pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, 0))
+            return false;
+    }
+done:;
+    UINT64 want = ++g_pseq;
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_BYTES, (UINT64)w * h * 4 * (last - first + 1));
+    if (shown) {
+        *shown = (VgpuShown){ want, dx, dy, w, h };
+        return true;
+    }
+    kick(v);                                      /* (the desktop waits: news as soon as can be) */
+    if (VgpuWait(g_pctx, 1, &g_psync, &want, false, 1000000000ull) != 0) return false;
+    VgpuScreenTouch(s, dx, dy, w, h);
+    return true;
+}
+
+VgpuOverlay *VgpuOverlayCreate(void) { return kzalloc(sizeof(VgpuOverlay)); }
+
+void VgpuOverlayDestroy(VgpuOverlay *o)
+{
+    if (!o) return;
+    VgpuBlobUnref(o->src);
+    kfree(o);
+}
+
+bool VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy,
+                        VgpuShown *shown)
+{
+    Vgpu *v = present_dev();
+    if (!v || src->v != v || !src->format || w <= 0 || h <= 0 || (UINT32)w > src->width || (UINT32)h > src->height)
+        return false;
+    present_attach(v, src->res);
+    if (o->src != src) {
+        VgpuBlobRef(src);
+        VgpuBlobUnref(o->src);
+        o->src = src;
+    }
+    o->w = w; o->h = h;
+    if (!overlay_write(v, o, s, 0, 0, dx, dy, w, h, shown)) return false;
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_FRAMES, 1);
+    return true;
+}
+
+bool VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h)
+{
+    Vgpu *v = g_pctx ? dev3d() : NULL;
+    if (!v || !o->src) return false;
+    if (x < 0) { dx -= x; w += x; x = 0; }
+    if (y < 0) { dy -= y; h += y; y = 0; }
+    if (x + w > o->w) w = o->w - x;
+    if (y + h > o->h) h = o->h - y;
+    if (w <= 0 || h <= 0) return true;
+    return overlay_write(v, o, s, x, y, dx, dy, w, h, NULL);
 }

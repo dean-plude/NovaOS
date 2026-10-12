@@ -86,4 +86,30 @@ UINT32    VgpuSyncCreate(VgpuCtx *c, UINT64 value);
 void      VgpuSyncDestroy(VgpuCtx *c, UINT32 id);
 bool      VgpuSyncAccess(VgpuCtx *c, UINT32 id, int op, UINT64 *value);
 void      VgpuDump(void);
+
+/* Direct presentation: a virgl resource's frame written into the screen's
+ * memory by the host (virtio_gpu.c).  Callers hold the desktop lock.  The
+ * screen: @pages pages of @lines rows of @stride pixels (little-endian
+ * XRGB) from physical address @phys, page @front on screen; the host
+ * writes every page, or only page @only when that is not -1.  An overlay
+ * holds the resource a window showed last. */
+typedef struct { UINT64 phys; int stride, lines, pages, front, only; } VgpuScreen;
+typedef struct VgpuOverlay VgpuOverlay;
+VgpuOverlay *VgpuOverlayCreate(void);
+void         VgpuOverlayDestroy(VgpuOverlay *o);
+/* What a present left to do: once the host reaches @seq (VgpuPresentWait),
+ * touch (x, y, w, h) of the screen (VgpuScreenTouch: the host wrote that
+ * memory behind the guest's back, and a write from the guest to each page
+ * of it marks it changed for QEMU's display; under the desktop lock, which
+ * keeps the desktop's own writes there out) */
+typedef struct { UINT64 seq; int x, y, w, h; } VgpuShown;
+bool         VgpuPresentWait(UINT64 seq);
+void         VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h);
+/* Copy the top left @w x @h of virgl resource @src into the pages of @s at
+ * (dx, dy) (clipped to it); @o holds @src from now on.  The host may still
+ * be at it: @shown says what is left to do */
+bool         VgpuOverlayPresent(VgpuOverlay *o, VgpuBlob *src, int w, int h, const VgpuScreen *s, int dx, int dy,
+                                VgpuShown *shown);
+/* Write (x, y, w, h) of @o at (dx, dy) of @s again (the desktop drew there) */
+bool         VgpuOverlayShow(VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h);
 int       VgpuWait(VgpuCtx *c, int n, const UINT32 *ids, const UINT64 *vals, bool any, UINT64 timeout_ns);

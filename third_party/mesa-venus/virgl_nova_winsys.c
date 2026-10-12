@@ -16,8 +16,11 @@
  * (under the winsys's lock, so the numbers reach the kernel in order):
  * a resource remembers the number of the last stream or transfer that
  * used it, and is busy while the timeline is below it.  Fences are such
- * numbers too.  Frames reach the window through the GDI: the front buffer
- * is read back into its guest pages and copied to the WGL display target
+ * numbers too.  Frames are shown straight from the host's GPU when the
+ * kernel can (direct presentation: it copies the front buffer onto the
+ * screen there, kernel/um/um_gui.c); otherwise, and with NOVA_PRESENT=gdi,
+ * they reach the window through the GDI: the front buffer is read back
+ * into its guest pages and copied to the WGL display target
  * (gdi_sw_winsys), as vtest does.
  */
 
@@ -58,6 +61,7 @@ enum {
    GPU_WAIT = 10,
    GPU_RES_CREATE = 11,
    GPU_TRANSFER = 12,
+   GPU_PRESENT = 13,
 };
 struct gpu_info { uint32_t present, pad; uint64_t host_visible; };
 struct gpu_capset { uint32_t id, version, size, pad; uint64_t out; };
@@ -66,6 +70,7 @@ struct gpu_blob_create { uint32_t blob_mem, flags; uint64_t blob_id, size, cs; u
 struct gpu_sync_op { uint32_t id, op; uint64_t value; };
 struct gpu_wait { uint32_t n, any; uint64_t timeout_ns, ids, values; };
 struct gpu_res_create { uint32_t p[10]; uint32_t res, pad; uint64_t size; };
+struct gpu_present { uint32_t hwnd, pad; int32_t x, y, w, h; };
 struct gpu_transfer {
    uint64_t blob, offset;
    uint32_t to_host, level, stride, layer_stride;
@@ -112,6 +117,7 @@ struct nova_winsys {
    uint64_t done;          /* the timeline's value when last read */
    int32_t blob_id;
    struct virgl_resource_cache cache;
+   bool direct;            /* try direct presentation */
 };
 
 struct virgl_hw_res {
@@ -636,6 +642,31 @@ nova_get_fd(struct virgl_winsys *vws)
 
 /* -- the window -- */
 
+/* Show the whole of @res in the window of @dc straight from the host: the
+ * kernel copies it onto the screen there when nothing covers the window
+ * (false: show it through the GDI) */
+static bool
+nova_present(struct nova_winsys *nws, struct virgl_hw_res *res, HDC dc)
+{
+   HWND hwnd = dc ? WindowFromDC(dc) : NULL;
+   RECT cr;
+   POINT o = { 0, 0 };
+   if (!hwnd || !GetClientRect(hwnd, &cr) || cr.right - cr.left != (LONG)res->width ||
+       cr.bottom - cr.top != (LONG)res->height || !ClientToScreen(hwnd, &o))
+      return false;
+   HWND root = GetAncestor(hwnd, GA_ROOT);
+   /* No waiting for the host to draw the frame: the kernel only queues
+    * its read into the screen behind it (its "present" thread waits), so
+    * the host goes from drawing straight on to that */
+   struct gpu_present a = {
+      .hwnd = (uint32_t)(uintptr_t)(root ? root : hwnd),
+      .x = o.x, .y = o.y, .w = (int32_t)res->width, .h = (int32_t)res->height,
+   };
+   if (gpu_ctl(nws->h, GPU_PRESENT, res->blob, &a) != 0)
+      return false;
+   return true;
+}
+
 static void
 nova_flush_frontbuffer(struct virgl_winsys *vws, struct virgl_cmd_buf *cmdbuf,
                        struct virgl_hw_res *res, unsigned level, unsigned layer,
@@ -643,6 +674,8 @@ nova_flush_frontbuffer(struct virgl_winsys *vws, struct virgl_cmd_buf *cmdbuf,
 {
    struct nova_winsys *nws = nova_winsys(vws);
    if (!res->dt)
+      return;
+   if (nws->direct && !sub_box && !level && !layer && nova_present(nws, res, winsys_drawable_handle))
       return;
 
    struct pipe_box box;
@@ -720,6 +753,9 @@ virgl_nova_winsys_wrap(struct sw_winsys *sws)
    if (!nws)
       return NULL;
    nws->sws = sws;
+   char how[8] = "";
+   GetEnvironmentVariableA("NOVA_PRESENT", how, sizeof(how));
+   nws->direct = _stricmp(how, "gdi") != 0;
    nws->capset = NOVA_CAPSET_VIRGL2;
    nws->h = gpu_ctl(0, GPU_OPEN, NOVA_CAPSET_VIRGL2, NULL);
    if (!nws->h) {

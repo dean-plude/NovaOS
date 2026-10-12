@@ -487,6 +487,13 @@ NOVARUN_QEMU=/opt/qv/bin/qemu-system-x86_64 LD_LIBRARY_PATH=/opt/qv/lib/x86_64-l
   xvfb-run -a -s '-screen 0 1280x1024x24' python3 tools/selftest.py --suite graphics --gfx /tmp/gfx
 ```
 
+Beside it runs `tools/ci/host_profile.py graphics-out &`: for each turn of
+`gltest fps` (direct presentation, the GDI way, the GDI way, direct, then
+llvmpipe) it prints one `host profile:` line, also kept in `host-profile.log`,
+with the turn's wall time and the CPU milliseconds a second used by each group
+of QEMU's threads (the main thread, where virglrenderer draws and copies, the
+vCPUs, llvmpipe's workers, ...).
+
 When a graphics test hangs, the guest can only say that it waits for the
 host, so CI's graphics job runs `tools/ci/host_watch.py graphics-out &` beside
 the suite (needs `gdb` and `sudo`) and sets `VIRGL_LOG_LEVEL=debug` and
@@ -688,11 +695,19 @@ device completes on the other.  `d3d12test` (on lavapipe, which its
 `d3d12.dll` and VKD3D-Proton: a device, a root signature and pipeline
 from HLSL, a triangle drawn and read back, a fence, and three seconds of
 the triangle presented in a window through a flip-model swap chain on the
-command queue, 64- and 32-bit.  `gltest fps 10` draws an OpenGL
+command queue, 64- and 32-bit.  `gltest present` shows four coloured
+quadrants on virgl: from the host's GPU while its window is alone on the
+screen (the test takes a screenshot and checks the quadrants are there,
+the right way up), through the GDI while another window covers part of
+it, and from the host again once that window has gone; 64- and 32-bit.
+`gltest fps 10` draws an OpenGL
 scene that keeps the rasterizer busy (64 blended quads over a 640x480
-window) for 10 s on virgl and 10 s on llvmpipe, each in a child process
+window) for 10 s on virgl with its frames shown directly, 10 s on virgl
+through the GDI (`NOVA_PRESENT=gdi`) and 10 s on llvmpipe, each in a child process
 whose `GALLIUM_DRIVER` names the driver, and passes when virgl draws more
-frames per second (under TCG: 12.6 to 15.9 against 0.24).  Last, `d3dtest fps 10` draws a
+frames per second (under TCG: 12.6 to 15.9 against 0.24), and direct
+presentation draws more than the GDI way while moving fewer bytes through
+guest memory a frame (the kernel's counters).  Last, `d3dtest fps 10` draws a
 Direct3D 9 scene that keeps the rasterizer busy (64 blended quads over a
 640x480 window) for 10 s on Venus and 10 s on lavapipe, each in a child
 process whose `VK_DRIVER_FILES` names the driver, and passes when Venus

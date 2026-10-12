@@ -76,6 +76,10 @@ void DesktopToggleStart(void);
 /* Returns true if the shell has a usable framebuffer to draw on. */
 bool DesktopAvailable(void);
 
+/* The shell may draw over @r (logical): the Start menu, a menu or Alt+Tab
+ * is open, or @r reaches the dock (or its tooltips).  Desktop lock. */
+bool DesktopOverlayCovers(GdiRect r);
+
 /* Wallpaper / colour themes (Settings > Personalization) */
 int         DesktopThemeCount(void);
 const char *DesktopThemeName(int i);

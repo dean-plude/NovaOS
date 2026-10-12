@@ -22,6 +22,7 @@
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../drivers/virtio_gpu.h"
+#include "../hal/display.h"
 
 #define MAX_STREAM  (8u << 20)        /* largest command stream a program may send */
 #define MAX_WAIT    256               /* timelines one wait may name */
@@ -101,6 +102,7 @@ typedef struct { UINT32 id, op; UINT64 value; } GpuSyncOp;
 typedef struct { UINT32 p[10]; UINT32 res; UINT32 pad; UINT64 size; } GpuRes3d;
 typedef struct { UINT64 blob, offset; UINT32 to_host, level, stride, layer_stride; UINT32 box[6]; UINT32 sync, pad; UINT64 value; } GpuTransfer;
 typedef struct { UINT32 n, any; UINT64 timeout_ns, ids, values; } GpuWaitArgs;
+typedef struct { UINT32 hwnd, pad; INT32 x, y, w, h; } GpuPresent;
 
 static UINT64 do_submit(Gpu *g, UINT64 ptr)
 {
@@ -181,6 +183,17 @@ static UINT64 do_blob_map(Gpu *g, UINT64 n, UINT64 size_ptr)
     return h;
 }
 
+static UINT64 do_present(Gpu *g, UINT64 n, UINT64 ptr)
+{
+    GpuPresent a;
+    if (!NT_SUCCESS(CopyFromUser(&a, (const void *)(uintptr_t)ptr, sizeof(a)))) return FAIL;
+    VgpuBlob *b = get_blob(g, n, false);
+    if (!b) return FAIL;
+    int r = UmGuiGpuPresent(UmCurrent(), a.hwnd, b, a.x, a.y, a.w, a.h);
+    VgpuBlobUnref(b);
+    return (UINT64)r;
+}
+
 static UINT64 do_wait(Gpu *g, UINT64 ptr)
 {
     GpuWaitArgs a;
@@ -218,12 +231,20 @@ static UINT64 do_wait(Gpu *g, UINT64 ptr)
  *  10 wait: GpuWaitArgs at @ptr: 0 reached, 1 timed out
  *  11 create a virgl resource: GpuRes3d at @ptr (res filled in); its number, like a blob's (0: refused)
  *  12 transfer: GpuTransfer at @ptr
+ *  13 present virgl resource @arg straight from the host: GpuPresent at @ptr (the window, user32's
+ *     top-level handle, and where on screen): 0 shown, 1 not now (present it through the GDI)
+ *  14 statistics (h unused): DISPLAY_STATS counters (hal/display.h) at @ptr
  * Returns 0 (or as said), or -1 for a bad handle or argument. */
 static UINT64 sys_gpu(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     if (a2 == 0) {
         GpuInfo i = { Vgpu3dPresent(), 0, Vgpu3dHostVisibleSize() };
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, &i, sizeof(i))) ? 0 : FAIL;
+    }
+    if (a2 == 14) {
+        UINT64 st[DISPLAY_STATS];
+        DisplayStats(st);
+        return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, st, sizeof(st))) ? 0 : FAIL;
     }
     if (a2 == 1) {
         GpuCapset c;
@@ -276,6 +297,7 @@ static UINT64 sys_gpu(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     case 10: r = do_wait(g, a4); break;
     case 11: r = do_res_create(g, a4); break;
     case 12: r = do_transfer(g, a4); break;
+    case 13: r = do_present(g, a3, a4); break;
     }
     um_ob_unref(ob);
     return r;

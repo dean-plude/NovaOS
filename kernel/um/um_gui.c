@@ -33,6 +33,9 @@
 #include "../hal/display.h"
 #include "../hal/pci.h"
 #include "../io/pnp.h"
+#include "../drivers/virtio_gpu.h"
+#include "../ke/scheduler.h"
+#include "../ke/smp.h"
 
 /* Win32 window messages we deliver */
 #define WM_DESTROY        0x0002
@@ -144,6 +147,13 @@ typedef struct {
     UINT32      key_embed;          /* (a host) the embedded window that has the keyboard */
     UINT64      back;               /* user32's back buffer (CTL_SET_BACK): CTL_XBLIT writes it with the bitmap */
     int         back_stride;        /* its pixels per row */
+    /* Direct presentation (UmGuiGpuPresent): the program's last frame,
+     * on the host, shown over part of the client area while ovl_on */
+    VgpuOverlay *ovl;
+    bool        ovl_on;
+    GdiRect     ovl_r;              /* where on screen (logical = the primary's pixels) */
+    int         ovl_dx, ovl_dy;     /* ... from the client area's top left */
+    UINT8       ovl_stale;          /* pages of the screen still showing an older frame there */
 } GuiWin;
 
 /* The table's slots (used, proc, id), the message queues, the quit flags
@@ -388,6 +398,7 @@ static void gui_paint(WND *w)
                          row + j * n * k, (UINT64)n * k * 4);
         if (!ok) break;
         GdiBlitBGRAScaled(RECT(cr.x + x0, cr.y + y, n, 1), row, n * k, k);
+        DisplayStatAdd(DISPLAY_STAT_PAINTED, (UINT64)n * k * k * 4);
     }
 }
 
@@ -967,9 +978,17 @@ static UINT64 sys_gui_show(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     return 0;
 }
 
+static void overlay_free(GuiWin *g)
+{
+    g->ovl_on = false;
+    VgpuOverlayDestroy(g->ovl);
+    g->ovl = NULL;
+}
+
 static void destroy_window(GuiWin *g)
 {
     UINT64 va = g->bitmap;
+    overlay_free(g);
     UmProcess *p = g->proc;
     if (g->wnd) {
         if (WmGetCapture() == g->wnd) WmSetCapture(NULL);
@@ -2505,6 +2524,7 @@ void um_gui_process_gone(UmProcess *p)
     for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
         GuiWin *g = &g_win[i];
         if (g->used && g->proc == p) {
+            overlay_free(g);
             if (g->wnd && WmGetCapture() == g->wnd) WmSetCapture(NULL);
             if (g->wnd) { g->wnd->user = NULL; WmDestroyWindow(g->wnd); g->wnd = NULL; }
             IrqState s = spin_lock_irqsave(&g_gui_lock);
@@ -2534,8 +2554,184 @@ void um_gui_process_gone(UmProcess *p)
     DesktopUnlock();
 }
 
+/* -----------------------------------------------------------------------
+ * Direct presentation.  A program's OpenGL driver (Mesa's virgl,
+ * third_party/mesa-venus/virgl_nova_winsys.c) asks to show a frame it drew
+ * on the host's GPU straight onto the screen, through NtNovaGpuCtl
+ * (um_gpu.c), instead of reading it back and drawing it into the window's
+ * bitmap with the GDI.  The kernel says yes only when nothing else is
+ * drawn over that part of the screen: the window is on the primary monitor
+ * at scale 1, and no window, popup, shadow, menu, the dock or the pointer
+ * is over it.  The host then writes the frame into the screen's memory
+ * (VgpuOverlayPresent; the "present" thread finishes that while the
+ * program draws on), the window's bitmap keeping its last GDI frame.
+ * Each time the desktop draws a part of the primary's screen (a frame of
+ * the desktop, the pointer moving), gui_damage puts the overlay back over
+ * it, or, when it is no longer alone there, stops showing it and asks
+ * the program to draw again (WM_PAINT), which then goes the GDI way until
+ * the window is clear again.  Desktop lock throughout.
+ * ----------------------------------------------------------------------- */
+static bool rect_meets(GdiRect a, GdiRect b)
+{
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/* Nothing but @g's program draws on @r now (screen, logical) */
+static bool overlay_alone(GuiWin *g, GdiRect r)
+{
+    if (!g->wnd || g->host || g->scale > 1 || GdiScale() != 1 || !g->proc || g->proc->exited) return false;
+    GdiRect cr = WmClientRect(g->wnd), cur;
+    if (r.x < cr.x || r.y < cr.y || r.x + r.w > cr.x + (cr.w < g->cw ? cr.w : g->cw) ||
+        r.y + r.h > cr.y + (cr.h < g->ch ? cr.h : g->ch))
+        return false;
+    if (r.x < 0 || r.y < 0 || r.x + r.w > GdiScreenW() || r.y + r.h > GdiScreenH()) return false;
+    if (!WmRectUncovered(g->wnd, r) || DesktopOverlayCovers(r)) return false;
+    return !GdiCursorBox(&cur) || !rect_meets(cur, r);
+}
+
+static void gui_damage(int x, int y, int w, int h)
+{
+    if (DesktopLockOwner() != sched_current()) return;
+    VgpuScreen scr;
+    if (!DisplayPrimaryScreen(&scr)) return;
+    GdiRect d = RECT(x, y, w, h);
+    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+        GuiWin *g = &g_win[i];
+        if (!g->used || !g->ovl_on || !rect_meets(g->ovl_r, d)) continue;
+        GdiRect cr = g->wnd ? WmClientRect(g->wnd) : RECT(0, 0, 0, 0);
+        if (cr.x + g->ovl_dx != g->ovl_r.x || cr.y + g->ovl_dy != g->ovl_r.y || !overlay_alone(g, g->ovl_r)) {
+            g->ovl_on = false;                    /* (its bitmap is stale: the program draws again) */
+            enqueue(g, WM_PAINT, 0, 0, 0, 0);
+            continue;
+        }
+        int x0 = x > g->ovl_r.x ? x : g->ovl_r.x, y0 = y > g->ovl_r.y ? y : g->ovl_r.y;
+        int x1 = x + w < g->ovl_r.x + g->ovl_r.w ? x + w : g->ovl_r.x + g->ovl_r.w;
+        int y1 = y + h < g->ovl_r.y + g->ovl_r.h ? y + h : g->ovl_r.y + g->ovl_r.h;
+        VgpuOverlayShow(g->ovl, &scr, x0 - g->ovl_r.x, y0 - g->ovl_r.y, x0, y0, x1 - x0, y1 - y0);
+    }
+}
+
+/* A frame goes only to the page on screen (half the host's work when the
+ * display flips): before the other page is shown, the overlays still
+ * older there are written into it */
+static void gui_flip(int page)
+{
+    if (DesktopLockOwner() != sched_current()) return;
+    VgpuScreen scr;
+    if (!DisplayPrimaryScreen(&scr)) return;
+    scr.only = page;
+    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+        GuiWin *g = &g_win[i];
+        if (!g->used || !g->ovl_on || !(g->ovl_stale & (1u << page))) continue;
+        g->ovl_stale &= (UINT8)~(1u << page);
+        if (!overlay_alone(g, g->ovl_r)) {
+            g->ovl_on = false;
+            enqueue(g, WM_PAINT, 0, 0, 0, 0);
+            continue;
+        }
+        VgpuOverlayShow(g->ovl, &scr, 0, 0, g->ovl_r.x, g->ovl_r.y, g->ovl_r.w, g->ovl_r.h);
+    }
+}
+
+/* What the host is still writing into the screen for direct presentation:
+ * the "present" thread waits for it, then (desktop lock) touches that part
+ * and shows it, so that the program goes on to its next frame meanwhile */
+static KSpinLock  g_shown_lock = KSPINLOCK_INIT;
+static VgpuShown  g_shown;                    /* (w 0: nothing) */
+static VgpuScreen g_shown_scr;
+static Thread    *g_shown_thread;
+static volatile UINT32 g_shown_kick;
+
+static void shown_thread(void *arg)
+{
+    (void)arg;
+    bkl_release();                                /* (the desktop lock and its own) */
+    for (;;) {
+        __atomic_store_n(&g_shown_kick, 0, __ATOMIC_RELEASE);
+        IrqState st = spin_lock_irqsave(&g_shown_lock);
+        VgpuShown sh = g_shown;
+        VgpuScreen scr = g_shown_scr;
+        g_shown.w = 0;
+        spin_unlock_irqrestore(&g_shown_lock, st);
+        if (!sh.w) {
+            sched_sleep_until(&g_shown_kick, sched_ticks() + 100);
+            continue;
+        }
+        VgpuPresentWait(sh.seq);
+        DesktopLockAlone();
+        VgpuScreenTouch(&scr, sh.x, sh.y, sh.w, sh.h);
+        DisplayPrimaryShow(sh.x, sh.y, sh.w, sh.h);
+        DesktopUnlockAlone();
+    }
+}
+
+/* (desktop lock) */
+static void shown_add(const VgpuScreen *scr, const VgpuShown *sh)
+{
+    if (sh->w <= 0 || sh->h <= 0) return;
+    if (!g_shown_thread && !(g_shown_thread = sched_create_thread("present", shown_thread, NULL, PRIO_DESKTOP))) {
+        VgpuPresentWait(sh->seq);                 /* (no thread: here and now) */
+        VgpuScreenTouch(scr, sh->x, sh->y, sh->w, sh->h);
+        DisplayPrimaryShow(sh->x, sh->y, sh->w, sh->h);
+        return;
+    }
+    IrqState st = spin_lock_irqsave(&g_shown_lock);
+    if (g_shown.w && g_shown_scr.phys == scr->phys && g_shown_scr.stride == scr->stride &&
+        g_shown_scr.lines == scr->lines && g_shown_scr.pages == scr->pages && g_shown_scr.only == scr->only) {
+        int x0 = g_shown.x < sh->x ? g_shown.x : sh->x, y0 = g_shown.y < sh->y ? g_shown.y : sh->y;
+        int x1 = g_shown.x + g_shown.w, y1 = g_shown.y + g_shown.h;
+        if (sh->x + sh->w > x1) x1 = sh->x + sh->w;
+        if (sh->y + sh->h > y1) y1 = sh->y + sh->h;
+        g_shown = (VgpuShown){ sh->seq, x0, y0, x1 - x0, y1 - y0 };
+    } else {
+        g_shown = *sh;
+        g_shown_scr = *scr;
+    }
+    spin_unlock_irqrestore(&g_shown_lock, st);
+    __atomic_store_n(&g_shown_kick, 1, __ATOMIC_RELEASE);
+    sched_unblock(g_shown_thread);
+}
+
+int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int y, int w, int h)
+{
+    int r = 1;
+    VgpuScreen scr;
+    UINT64 t0 = rdtsc();
+    DesktopLockAlone();
+    UINT64 t1 = rdtsc();
+    GuiWin *g = win_by_hwnd(hwnd);
+    if (g && g->proc == p && DisplayPrimaryScreen(&scr) && w > 0 && h > 0) {
+        GdiRect rr = RECT(x, y, w, h);
+        if (!overlay_alone(g, rr)) {
+            g->ovl_on = false;                    /* (the GDI way from now: its bitmap is current again) */
+        } else {
+            if (!g->ovl) g->ovl = VgpuOverlayCreate();
+            VgpuShown sh;
+            scr.only = scr.front;                 /* (the other page: gui_flip) */
+            if (g->ovl && VgpuOverlayPresent(g->ovl, src, w, h, &scr, x, y, &sh)) {
+                GdiRect cr = WmClientRect(g->wnd);
+                shown_add(&scr, &sh);
+                g->ovl_on = true;
+                g->ovl_r = rr;
+                g->ovl_dx = x - cr.x; g->ovl_dy = y - cr.y;
+                g->ovl_stale = (UINT8)(((1u << scr.pages) - 1) & ~(1u << scr.front));
+                r = 0;
+            } else
+                g->ovl_on = false;
+        }
+    }
+    DesktopUnlockAlone();
+    static UINT64 per_us;                         /* (TSC counts a microsecond) */
+    if (!per_us) per_us = (sched_tsc_after(10000000) - rdtsc()) / 1000000 ?: 1;
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_US, (rdtsc() - t0) / per_us);
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_LOCK_US, (t1 - t0) / per_us);
+    return r;
+}
+
 void um_gui_syscalls_init(void)
 {
+    DisplaySetDamageHook(gui_damage);
+    DisplaySetFlipHook(gui_flip);
     um_install(SYSCALL_NtNovaGuiCreate,      sys_gui_create);
     um_install(SYSCALL_NtNovaGuiGetMessage,  sys_gui_getmessage);
     um_install(SYSCALL_NtNovaGuiInvalidate,  sys_gui_invalidate);

@@ -139,8 +139,13 @@ named program or test demonstrates it.
   brings Mesa's virgl, which NovaOS's own `opengl32.dll` picks on that
   GPU; `gltest` passes on it and `gltest fps` draws faster than on
   llvmpipe; see [virgl](HISTORY.md#opengl-on-the-hosts-gpu-virgl).
-  Still to do: showing Vulkan's and OpenGL's frames on the virtio GPU
-  directly instead of reading them back and copying them through the GDI.
+  ~~Showing OpenGL's frames on the virtio GPU directly~~ Done (step
+  25.2): virgl's frames are written into the screen by the host while the
+  window is alone there, instead of being read back and drawn through the
+  GDI (`gltest present`, and `gltest fps` against the GDI way); see
+  [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
+  Still to do: the same for Vulkan's frames (Venus, DXVK, VKD3D-Proton)
+  and for windows on the other monitors.
 - ~~NetSurf: SVG; redrawing pages a script changes after layout.~~ Done
   (Phase 19.8): SVG images (`<img>`, `<object>`, CSS backgrounds, `.svg`
   pages) and `<svg>` elements written inline in HTML drawn anti-aliased,
@@ -246,7 +251,9 @@ named program or test demonstrates it.
   path through resizes, teardown while frames are presented, and the GPU
   process's window inside the browser's, 64- and 32-bit~~ Done
   (`dcomptest life`).  Next: presenting without the CPU readback and GDI
-  copy (direct virtio GPU scan-out).
+  copy (direct virtio GPU scan-out): done for OpenGL's frames (direct
+  presentation), still to do for Venus's Vulkan frames, which WebView2's
+  are.
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music

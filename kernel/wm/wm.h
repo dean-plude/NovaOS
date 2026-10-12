@@ -163,6 +163,11 @@ void WmToggleMaximize(WND *w);
 /* Client area in screen coordinates. */
 GdiRect WmClientRect(const WND *w);
 
+/* Nothing is drawn over @r (screen, logical): @w shows, and no window
+ * above it (nor its shadow) reaches into @r, and no window is being
+ * dragged.  Desktop lock. */
+bool WmRectUncovered(const WND *w, GdiRect r);
+
 /* Topmost window belonging to app `app`, or NULL. */
 WND *WmFindApp(int app);
 int  WmWindowCount(void);

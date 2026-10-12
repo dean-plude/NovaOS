@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include "../drivers/virtio_gpu.h"
+
 #include "../include/types.h"
 #include "../../include/boot_protocol.h"
 
@@ -100,6 +102,33 @@ UINT32 *DisplayHeadSurface(int head, int *stride);
 /* A rectangle of head @head's screen (its pixels) was drawn: a virtio GPU
  * output copies it to the monitor; nothing on the others */
 void DisplayHeadDamage(int head, int x, int y, int w, int h);
+/* Direct presentation (um_gui.c): there is a 3D virtio GPU, and the
+ * primary's pixels are memory it can write (the VGA framebuffer, both its
+ * pages when flipping, or a virtio GPU output's picture): where, in @s */
+bool DisplayPrimaryScreen(VgpuScreen *s);
+/* That memory changed in a rectangle the display was not told of: show it */
+void DisplayPrimaryShow(int x, int y, int w, int h);
+/* Called with each rectangle of the primary that was drawn, before it is
+ * shown (the overlays go back over it) */
+void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h));
+/* Called with the page about to be shown, before each flip */
+void DisplaySetFlipHook(void (*fn)(int page));
+
+/* Bytes moved to show frames, since boot (gltest fps compares the GDI way
+ * of presenting with direct presentation) */
+enum {
+    DISPLAY_STAT_TO_HOST_2D,              /* guest memory to a virtio GPU: its outputs' pictures */
+    DISPLAY_STAT_FROM_HOST,               /* a virtio GPU to guest memory: virgl's read-backs */
+    DISPLAY_STAT_PAINTED,                 /* programs' window bitmaps drawn by the desktop */
+    DISPLAY_STAT_SCREEN,                  /* the desktop's back buffer copied to the screens */
+    DISPLAY_STAT_DIRECT_FRAMES,           /* frames shown by direct presentation */
+    DISPLAY_STAT_DIRECT_BYTES,            /* ... and the bytes the host wrote into the screen for them */
+    DISPLAY_STAT_DIRECT_US,               /* microseconds programs spent asking for them (in the kernel) */
+    DISPLAY_STAT_DIRECT_LOCK_US,          /* ... of which waiting for the desktop */
+    DISPLAY_STATS
+};
+void DisplayStatAdd(int k, UINT64 n);
+void DisplayStats(UINT64 *out);
 /* Desktop loop: whether monitors were plugged in or unplugged since the
  * last call.  A new one is the last head; *removed has bit N set for each
  * head N (by its number before the call) that went, the later heads

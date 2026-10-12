@@ -18,4 +18,8 @@
   the screen while the window is alone (`d3dtest present`, and
   `d3dtest fps` against the GDI way); see
   [Vulkan's frames](HISTORY.md#direct-presentation-of-vulkans-frames).
-  Still to do: windows on the other monitors and at scale 2.
+  ~~Windows on the other monitors and at scale 2~~ Done: the host writes
+  the frame into whichever monitor's screen the window is on, twice as
+  wide and high on a monitor at scale 2 (`gltest monitors`); see
+  [the other monitors](HISTORY.md#direct-presentation-on-every-monitor-and-at-scale-2).
+  Still to do: DirectComposition's swap chains (WebView2's GPU process).

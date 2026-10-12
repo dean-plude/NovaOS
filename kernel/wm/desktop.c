@@ -1369,8 +1369,8 @@ bool DesktopOverlayCovers(GdiRect r)
 {
     if (g_start_open || g_menu.open || g_switch.on) return true;
     if (dock_hidden()) return false;
-    int top = L_dock.y - 64;                    /* (the dock, its tooltips and the tray's) */
-    return r.y + r.h > top;
+    int top = L_dock.y - 64;                    /* (the dock, its tooltips and the tray's: the primary's) */
+    return r.y + r.h > top && r.x < GdiScreenW() && r.x + r.w > 0;
 }
 
 /* Where Windows keeps each display's settings: ...\Video\{GUID}\0000 for the

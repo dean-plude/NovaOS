@@ -593,13 +593,13 @@ bool DisplayPoll(UINT32 *removed)
     return changed;
 }
 
-static void (*g_damage_hook)(int x, int y, int w, int h);
+static void (*g_damage_hook)(int head, int x, int y, int w, int h);
 static void (*g_flip_hook)(int page);
 
 void DisplaySetFlipHook(void (*fn)(int page)) { g_flip_hook = fn; }
 static UINT64 g_stat[DISPLAY_STATS];
 
-void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h)) { g_damage_hook = fn; }
+void DisplaySetDamageHook(void (*fn)(int head, int x, int y, int w, int h)) { g_damage_hook = fn; }
 
 void DisplayStatAdd(int k, UINT64 n) { __atomic_add_fetch(&g_stat[k], n, __ATOMIC_RELAXED); }
 
@@ -608,27 +608,47 @@ void DisplayStats(UINT64 *out)
     for (int k = 0; k < DISPLAY_STATS; k++) out[k] = __atomic_load_n(&g_stat[k], __ATOMIC_RELAXED);
 }
 
-bool DisplayPrimaryScreen(VgpuScreen *s)
+static Head *head_of(int head);
+
+bool DisplayHeadScreen(int head, VgpuScreen *s)
 {
-    if ((d.kind != DRV_BOCHS && d.kind != DRV_VIRTIO) || !Vgpu3dPresent()) return false;
-    s->phys = d.vram_phys;
-    s->stride = d.stride;
-    s->lines = d.cur.h;
-    s->pages = d.kind == DRV_BOCHS && d.flip ? 2 : 1;
-    s->front = s->pages > 1 ? d.page : 0;
+    if (!Vgpu3dPresent()) return false;
+    if (head == 0) {
+        if (d.kind != DRV_BOCHS && d.kind != DRV_VIRTIO) return false;
+        s->phys = d.vram_phys;
+        s->stride = d.stride;
+        s->lines = d.cur.h;
+        s->pages = d.kind == DRV_BOCHS && d.flip ? 2 : 1;
+        s->front = s->pages > 1 ? d.page : 0;
+        s->only = -1;
+        return true;
+    }
+    Head *h = head_of(head);
+    if (!h || !h->vram) return false;
+    /* (a DISPI adapter's video memory, or a virtio output's picture: RAM) */
+    s->phys = h->regs ? h->vram_phys : (UINT64)(uintptr_t)h->vram - PHYSMAP_BASE;
+    s->stride = h->stride;
+    s->lines = h->cur.h;
+    s->pages = 1;
+    s->front = 0;
     s->only = -1;
     return true;
 }
 
-void DisplayPrimaryShow(int x, int y, int w, int ht)
+void DisplayHeadShow(int head, int x, int y, int w, int ht)
 {
-    if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
+    if (head == 0) {
+        if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
+        return;
+    }
+    Head *h = head_of(head);
+    if (h && !h->regs) VgpuFlush(h->vdev, h->vscan, x, y, w, ht);
 }
 
 void DisplayHeadDamage(int head, int x, int y, int w, int ht)
 {
+    if (g_damage_hook) g_damage_hook(head, x, y, w, ht);   /* (the overlays go back over it first) */
     if (head == 0) {
-        if (g_damage_hook) g_damage_hook(x, y, w, ht);   /* (the overlays go back over it first) */
         if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
         return;
     }

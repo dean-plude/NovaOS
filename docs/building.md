@@ -704,6 +704,11 @@ quadrants on virgl: from the host's GPU while its window is alone on the
 screen (the test takes a screenshot and checks the quadrants are there,
 the right way up), through the GDI while another window covers part of
 it, and from the host again once that window has gone; 64- and 32-bit.
+`gltest monitors` shows them on the second monitor, again once that
+monitor is in 2560x1600 (scale 2, where its screen shows each of the
+window's pixels twice as wide and high), and on the primary beside it
+(now shown at half the desktop's scale), checking a screenshot of each
+screen and that most frames came from the host each time; 64-bit.
 `gltest fps 10` draws an OpenGL
 scene that keeps the rasterizer busy (64 blended quads over a 640x480
 window) for 10 s on virgl with its frames shown directly, 10 s on virgl

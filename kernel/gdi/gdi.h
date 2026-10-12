@@ -214,9 +214,9 @@ void GdiCursorErase(int dev_x, int dev_y);
 /* The screen the pointer was drawn on went away (a monitor unplugged):
  * forget what was under it instead of putting it back */
 void GdiCursorForget(void);
-/* Where the pointer is drawn on the primary's screen (its pixels); false
- * when it is not drawn there */
-bool GdiCursorBox(GdiRect *r);
+/* Where the pointer is drawn: on which head's screen, and where in its
+ * pixels; false when it is not drawn */
+bool GdiCursorBox(int *head, GdiRect *r);
 /* System pointer @id (OCR_*, syscursor.h) with its hot spot at the device
  * pixel; @phase turns the busy ring */
 void GdiCursorDrawSys(int dev_x, int dev_y, int id, int phase);

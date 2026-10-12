@@ -1403,7 +1403,8 @@ static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 s
 /* Not VgpuWait: that notifies the device each time it looks (sooner news
  * of fences), and two waiters doing so for each frame (the program and
  * this) took host time from drawing.  Once, then QEMU's own fence polling
- * and the program's waits bring the news */
+ * and the program's waits bring the news (the "present" thread; a wait
+ * under the desktop lock uses VgpuWait) */
 bool VgpuPresentWait(UINT64 seq)
 {
     if (!g_pctx) return false;
@@ -1567,7 +1568,8 @@ done:;
         *shown = (VgpuShown){ want, dx, dy, w, h };
         return true;
     }
-    if (!VgpuPresentWait(want)) return false;
+    kick(v);                                      /* (the desktop waits: news as soon as can be) */
+    if (VgpuWait(g_pctx, 1, &g_psync, &want, false, 1000000000ull) != 0) return false;
     VgpuScreenTouch(s, dx, dy, w, h);
     return true;
 }

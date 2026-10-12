@@ -211,6 +211,9 @@ def patched_tree(src, dest):
         shutil.rmtree(dest)
     for sub in ('framework', 'publicinc'):
         shutil.copytree(os.path.join(src, 'src', sub), os.path.join(dest, 'src', sub), symlinks=True)
+    # (a repository of its own: inside another one, such as NovaOS's build
+    # directory, git apply would skip every path outside that one's index)
+    run(['git', 'init', '-q', dest])
     pdir = os.path.join(HERE, 'patches')
     for name in sorted(os.listdir(pdir)):
         if name.endswith('.patch'):

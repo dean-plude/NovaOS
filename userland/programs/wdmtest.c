@@ -7,9 +7,13 @@
  * on its own buffers (IRP_MJ_DEVICE_CONTROL), asks the driver how it sees
  * the objects (the DRIVER_OBJECT, DEVICE_OBJECT, IRP and FILE_OBJECT
  * types and sizes, its names and RegistryPath), opens \\.\WdmTest\sub to
- * see the rest of the name reach the driver, and checks that a direct-I/O
- * control code fails (MDLs come with step 30.2).  Closing the handles is
- * IRP_MJ_CLEANUP and IRP_MJ_CLOSE.
+ * see the rest of the name reach the driver.  Step 30.2: direct-I/O control
+ * codes on a buffer over several pages (the driver reads it and fills it
+ * through MDLs), one with a bad buffer failing, the driver's own checks
+ * of the kernel API (IRQL, DPCs, spin locks, pool, events, semaphores,
+ * timers, fast mutexes, MDLs for pool), and a request the driver returns
+ * STATUS_PENDING for and completes from a timer's DPC.  Closing the
+ * handles is IRP_MJ_CLEANUP and IRP_MJ_CLOSE.
  *
  * "wdmtest absent" checks the device is gone (after "sc stop WdmTest"). */
 #include <windows.h>
@@ -87,8 +91,67 @@ int main(int argc, char **argv)
     check(DeviceIoControl(h, IOCTL_WDMTEST_NEITHER, nin, 4, nout, 4, &n, NULL) && n == 4 &&
           nout[0] == 2 && nout[1] == 3 && nout[2] == 4 && nout[3] == 251, "neither-I/O control code");
 
-    /* METHOD_IN_DIRECT: not served yet */
-    check(!DeviceIoControl(h, IOCTL_WDMTEST_DIRECT, in, 6, out, sizeof(out), &n, NULL), "direct-I/O control code fails");
+    /* Direct I/O on a buffer over four pages, at an offset in the first:
+     * committed but never touched (the MDL backs it) for METHOD_OUT_DIRECT */
+    const DWORD dlen = 3 * 4096 + 50;
+    unsigned char *mem = VirtualAlloc(NULL, 5 * 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    check(mem != NULL, "VirtualAlloc");
+    if (mem) {
+        unsigned char *db = mem + 100, seed = 9;
+        n = 0;
+        check(DeviceIoControl(h, IOCTL_WDMTEST_DIRECT_OUT, &seed, 1, db, dlen, &n, NULL) && n == dlen,
+              "METHOD_OUT_DIRECT control code");
+        WDMTEST_MDL md;
+        memcpy(&md, db, sizeof(md));
+        int fill = 1;
+        for (DWORD i = sizeof(md); i < dlen; i++) if (db[i] != (unsigned char)(9 + i)) fill = 0;
+        check(fill, "the driver filled the buffer through its MDL");
+        printf("  MDL: flags %#x, %u bytes at offset %u, %u pages\n", md.flags, md.byte_count, md.byte_offset, md.pages);
+        check(md.byte_count == dlen && md.byte_offset == 100 && md.pages == 4 && (md.flags & 0x83) == 0x83,
+              "MDL: byte count, offset, pages, mapped, locked for writing");
+        for (DWORD i = 0; i < dlen; i++) db[i] = (unsigned char)(i * 7);
+        n = 0;
+        check(DeviceIoControl(h, IOCTL_WDMTEST_DIRECT, in, 6, db, dlen, &n, NULL) && n == dlen,
+              "METHOD_IN_DIRECT control code: the driver read the buffer through its MDL");
+        VirtualFree(mem, 0, MEM_RELEASE);
+    }
+    check(!DeviceIoControl(h, IOCTL_WDMTEST_DIRECT_OUT, in, 1, (void *)(ULONG_PTR)0x1000, 64, &n, NULL),
+          "direct I/O on a bad buffer fails");
+
+    /* the kernel API, checked inside the driver */
+    WDMTEST_KERNEL k;
+    memset(&k, 0, sizeof(k));
+    n = 0;
+    check(DeviceIoControl(h, IOCTL_WDMTEST_KERNEL, NULL, 0, &k, sizeof(k), &n, NULL) && n == sizeof(k),
+          "kernel API control code");
+    printf("  kernel API: irql %u%u%u, dpc %u%u%u, queued lock %u, pool %u, pool MDL %u, event %u, semaphore %u, "
+           "timer %u (%u ms), fast mutex %u, routine %u\n", k.irql_passive, k.irql_cr8, k.irql_export, k.dpc_held,
+           k.dpc_once, k.dpc_ran, k.queued_lock, k.pool, k.pool_mdl, k.event, k.semaphore, k.timer, k.timer_ms,
+           k.fast_mutex, k.routine);
+    check(k.irql_passive, "dispatch routine at PASSIVE_LEVEL");
+    check(k.irql_cr8, "IRQL is CR8 (the WDK's inline KeRaiseIrql)");
+    check(k.irql_export, "KeRaiseIrqlToDpcLevel, KeLowerIrql");
+    check(k.dpc_held && k.dpc_once, "a DPC queued under a spin lock waits for it, queued once");
+    check(k.dpc_ran, "the DPC ran at DISPATCH_LEVEL when the lock went, with its arguments");
+    check(k.queued_lock, "in-stack queued spin lock");
+    check(k.pool, "ExAllocatePoolWithTag, ExAllocatePool2");
+    check(k.pool_mdl, "MmBuildMdlForNonPagedPool, MmGetPhysicalAddress");
+    check(k.event, "synchronization event");
+    check(k.semaphore, "semaphore");
+    check(k.timer, "a 20 ms timer");
+    check(k.fast_mutex, "fast mutex at APC_LEVEL");
+    check(k.routine, "MmGetSystemRoutineAddress");
+
+    /* STATUS_PENDING, completed from a timer's DPC */
+    WDMTEST_PENDING pd;
+    memset(&pd, 0, sizeof(pd));
+    n = 0;
+    DWORD t0 = GetTickCount();
+    check(DeviceIoControl(h, IOCTL_WDMTEST_PENDING, NULL, 0, &pd, sizeof(pd), &n, NULL) && n == sizeof(pd) &&
+          !memcmp(pd.text, "late", 4), "a pending request completed from a DPC");
+    DWORD took = GetTickCount() - t0;
+    printf("  pending: %lu ms, DPC at IRQL %u, pending returned %u\n", took, pd.dpc_irql, pd.pending_returned);
+    check(pd.dpc_irql == 2 && pd.pending_returned && took >= 20, "completed at DISPATCH_LEVEL after the timer");
 
     /* an unknown control code */
     check(!DeviceIoControl(h, WDMTEST_CTL(0x8FF, 0), NULL, 0, NULL, 0, &n, NULL) &&

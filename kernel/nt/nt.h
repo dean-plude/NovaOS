@@ -9,7 +9,12 @@
  *   exports.h   the ntoskrnl.exe and hal.dll exports a driver can link
  *               against: the one list the tables are made from
  *   exports.c   the tables made from that list
- *   ntoskrnl.c  those exports (Microsoft x64 calling convention)
+ *   ntoskrnl.c  those exports (Microsoft x64 calling convention): debug
+ *               output, the run-time library, hal.dll
+ *   ke.c        the kernel's: IRQL, DPCs, spin locks, events, semaphores,
+ *               timers, fast mutexes, time, KeBugCheckEx
+ *   ex.c        the pool (ExAllocatePool*)
+ *   mm.c        MDLs, physical addresses, MmGetSystemRoutineAddress
  *   io.c        Windows devices and their names, IRPs: what a program's
  *               NtCreateFile, NtReadFile, NtWriteFile, NtDeviceIoControlFile
  *               and NtClose on a Windows device turn into
@@ -59,6 +64,11 @@ NTSTATUS  NtDrvUnload(const char *service);
 int       NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max);
 /* The last file open on @drv's devices closed */
 void      NtDrvLastClose(NtDriver *drv);
+/* The loaded driver whose image holds @addr, or NULL */
+NtDriver *NtDrvByAddress(UINT64 addr);
+
+/* ex.c: @drv unloads: log the pool blocks it never freed */
+void      NtPoolDriverGone(NtDriver *drv);
 
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
@@ -86,3 +96,8 @@ NTSTATUS  NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len,
 void      NtIoClose(NT_FILE_OBJECT *fo);
 /* Remove @drv's devices and links that its DriverUnload left behind */
 void      NtIoDropDevices(NtDriver *drv);
+
+/* mm.c: describe @m's pages (of the calling program's buffer when @user)
+ * for an access by a driver (@op IoReadAccess 0, IoWriteAccess 1,
+ * IoModifyAccess 2): STATUS_ACCESS_VIOLATION when a page cannot be used */
+NTSTATUS  NtMdlLock(NT_MDL *m, bool user, int op);

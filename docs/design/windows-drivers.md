@@ -98,33 +98,57 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   Windows device carries the Windows `FILE_OBJECT` beside it, and
   `NtCreateFile`, `NtReadFile`, `NtWriteFile`, `NtDeviceIoControlFile`
   and `NtClose` on it build a Windows `IRP` and call the driver's
-  dispatch routine (`kernel/nt/io.c`).  Step 30.1 serves buffered and
-  neither I/O and completion routines, with every request finished before
-  the call returns; direct I/O (MDLs), pending IRPs and cancellation come
-  with 30.2.
+  dispatch routine (`kernel/nt/io.c`).  Step 30.1 served buffered and
+  neither I/O and completion routines; 30.2 added direct I/O (an MDL for
+  the caller's buffer in `MdlAddress`, a control code's input still
+  buffered), dispatch routines returning `STATUS_PENDING` (the requesting
+  thread sleeps on the IRP's event until the driver completes it, from a
+  DPC or another thread), the cancel spin lock and `IoCancelIrp`.
 
 ### What a driver expects of the kernel
 
-- **IRQL**: Windows x64 keeps IRQL in `CR8`, and so will NovaOS while a
-  Windows driver runs (`KeRaiseIrql`, `KeLowerIrql`,
-  `KeAcquireSpinLock`, `KeGetCurrentIrql`).  At `DISPATCH_LEVEL` and
-  above the NovaOS scheduler does not switch threads; device interrupts
+- **IRQL**: Windows x64 keeps IRQL in `CR8`, and so does NovaOS (step
+  30.2, `kernel/ke/irql.h`): the WDK's `KeRaiseIrql` and `KeLowerIrql` are
+  inline `CR8` writes on x64, so drivers set it themselves, and the
+  exports (`KeRaiseIrqlToDpcLevel`, `KeAcquireSpinLockRaiseToDpc`, ...)
+  do the same.  `CR8` is the local APIC's task priority: at
+  `DISPATCH_LEVEL` the APIC holds back vectors below 0x30, where the DPC
+  interrupt is (0x2F, Windows' own), while NovaOS's device interrupts and
+  timer (0x30 up) still arrive.  At `DISPATCH_LEVEL` and above the NovaOS
+  scheduler does not switch threads: it asks for the DPC interrupt, which
+  the APIC delivers once the IRQL drops, and switches then; a thread
+  that blocks at `APC_LEVEL` (holding a fast mutex) keeps its IRQL across
+  the switch.  A dispatch routine that returns above `PASSIVE_LEVEL` is
+  logged (`IRQL_GT_ZERO_AT_SYSTEM_SERVICE`) and its IRQL put back.  Device interrupts
   for a Windows driver run at the vector's IRQL (`vector / 16`, as on
   Windows), so NovaOS's own interrupt vectors have to be placed so they
   are not masked by a raised IRQL they must still serve.
 - **DPCs and work items**: a per-CPU DPC queue drained when IRQL drops
-  below `DISPATCH_LEVEL`; `IoQueueWorkItem`/`ExQueueWorkItem` on a
+  below `DISPATCH_LEVEL` (step 30.2: by the DPC interrupt, at
+  `DISPATCH_LEVEL` with interrupts on, the interrupted code's SSE
+  registers kept since driver code may use them); `IoQueueWorkItem`/`ExQueueWorkItem` on a
   pool of system threads.
 - **Synchronisation and time**: `KEVENT`, `KMUTEX`, `KSEMAPHORE`,
   `FAST_MUTEX`, `ERESOURCE`, push locks, `KTIMER` with DPCs,
   `KeWaitForSingleObject`/`MultipleObjects`, `KeQueryPerformanceCounter`,
   `KeStallExecutionProcessor`, all mapped onto NovaOS's wait queues and
-  timers.
+  timers.  Step 30.2 has events, semaphores, timers (on the 100 Hz clock
+  tick, with their DPCs), fast mutexes and `KeWaitForSingleObject`; the
+  waiters sit in the object's `WaitListHead` under one dispatcher lock.
 - **Memory**: `ExAllocatePool2`/`ExAllocatePoolWithTag`/`ExFreePool`
   (paged and non-paged, tags kept for the log), lookaside lists, MDLs
   (`IoAllocateMdl`, `MmProbeAndLockPages`, `MmGetSystemAddressForMdlSafe`),
   `MmMapIoSpaceEx`, `MmAllocateContiguousMemorySpecifyCache`,
-  `MmGetPhysicalAddress`.  Kernel stacks of threads that call into a
+  `MmGetPhysicalAddress`.  Step 30.2 has the pool (every type is the
+  kernel heap, which is never paged; tag, size and owner recorded beside
+  each block, a wrong tag or a double free logged as `BAD_POOL_CALLER`,
+  blocks left at unload logged) and MDLs (`MmProbeAndLockPages` on a
+  program's or a kernel buffer, `MmBuildMdlForNonPagedPool`,
+  `MmMapLockedPagesSpecifyCache` mapping the frames at consecutive kernel
+  addresses).  NovaOS keeps no reference counts on a program's frames, so
+  a locked page is described, not pinned; and until kernel-mode SEH
+  raises, `MmProbeAndLockPages` on a bad buffer logs it and describes the
+  bad pages by a spare zeroed frame.  Kernel stacks of threads that call into a
   driver need Windows' 24 KB (`KERNEL_STACK_SIZE`); NovaOS's are 16 KB
   today.
 - **Threads and processes**: `PsCreateSystemThread`,

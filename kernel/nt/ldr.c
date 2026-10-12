@@ -52,6 +52,7 @@ static NtDriver *g_drivers;
 static bool      g_slot_used[DRV_SLOTS];
 static bool      g_ready;
 static bool      g_test_signing;
+static NtDriver *g_loading;           /* the driver whose DriverEntry runs */
 
 /* The signing policy (step 30.7 checks signatures as Windows does).  Until
  * NovaOS verifies a driver's catalog, no driver is known to be signed, so
@@ -346,12 +347,15 @@ NTSTATUS NtDrvLoad(const char *service)
     drv->ext.DriverObject = obj;
     NtIoAddDriver(drv);                            /* (fills MajorFunction with the default) */
 
+    g_loading = drv;
     st = obj->DriverInit(obj, &drv->reg_path);
+    g_loading = NULL;
     kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image, (unsigned long long)base,
             service, (UINT32)st);
     if (!NT_SUCCESS(st)) {
         NtIoDropDevices(drv);
         NtIoRemoveDriver(drv);
+        NtPoolDriverGone(drv);
         unmap_image(base, pages);
         goto free_drv;
     }
@@ -384,6 +388,7 @@ static void unload(NtDriver *drv)
     if (drv->obj->DriverUnload) drv->obj->DriverUnload(drv->obj);
     NtIoDropDevices(drv);
     NtIoRemoveDriver(drv);
+    NtPoolDriverGone(drv);
     unmap_image(drv->base, drv->size / PAGE_SIZE);
     for (int k = 0; k < drv->slots; k++) g_slot_used[drv->slot + k] = false;
     kprintf("[NT] %s unloaded (service %s)\n", drv->image, drv->service);
@@ -422,4 +427,13 @@ int NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max)
         memcpy(path[n], d->path, sizeof(d->path));
     }
     return n;
+}
+
+NtDriver *NtDrvByAddress(UINT64 addr)
+{
+    if (addr < DRV_BASE || addr >= DRV_BASE + DRV_SIZE) return NULL;
+    for (NtDriver *d = g_drivers; d; d = d->next)
+        if (addr - d->base < d->size) return d;
+    /* (DriverEntry is running: not on the list yet) */
+    return g_loading && addr - g_loading->base < g_loading->size ? g_loading : NULL;
 }

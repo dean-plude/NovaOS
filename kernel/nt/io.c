@@ -13,19 +13,23 @@
  * DEVICE_CONTROL, CLEANUP then CLOSE) with a stack location for each
  * device in the stack, and wait for it to complete: buffered I/O through
  * a kernel copy of the caller's buffer (AssociatedIrp.SystemBuffer),
- * neither I/O on the caller's own buffers.  Direct I/O needs MDLs, which
- * come with step 30.2; until then such a request fails with
- * STATUS_NOT_SUPPORTED and a log line.
+ * direct I/O through an MDL describing the caller's buffer (MdlAddress;
+ * a control code's input still buffered), neither I/O on the caller's own
+ * buffers.  A dispatch routine may return STATUS_PENDING and complete the
+ * IRP later, from a DPC or another thread: the requester sleeps on the
+ * IRP's event until it does.  A dispatch routine must return at
+ * PASSIVE_LEVEL: one that does not is logged and its IRQL put back.
  *
  * IofCompleteRequest runs the stack's completion routines from the
  * bottom up, as Windows does, then copies the status to the requester's
  * block and signals its event.
  */
-#include "nt.h"
+#include "ntapi.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
 #include "../ke/probe.h"
 #include "../ke/scheduler.h"
+#include "../ke/irql.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 
@@ -356,7 +360,33 @@ NT_API void nt_IofCompleteRequest(NT_IRP *irp, char boost)
         }
     }
     if (irp->UserIosb) *irp->UserIosb = irp->IoStatus;
-    if (irp->UserEvent) __atomic_store_n(&irp->UserEvent->Header.SignalState, 1, __ATOMIC_RELEASE);
+    if (irp->UserEvent) nt_KeSetEvent(irp->UserEvent, 0, 0);
+}
+
+/* -----------------------------------------------------------------------
+ * Cancelling IRPs: the cancel spin lock, IoCancelIrp
+ * ----------------------------------------------------------------------- */
+static NT_KSPIN_LOCK g_cancel_lock;
+
+NT_API void nt_IoAcquireCancelSpinLock(UINT8 *irql) { *irql = nt_KeAcquireSpinLockRaiseToDpc(&g_cancel_lock); }
+NT_API void nt_IoReleaseCancelSpinLock(UINT8 irql) { nt_KeReleaseSpinLock(&g_cancel_lock, irql); }
+
+typedef void (NT_API *NT_DRIVER_CANCEL)(NT_DEVICE_OBJECT *, NT_IRP *);
+
+NT_API UINT8 nt_IoCancelIrp(NT_IRP *irp)
+{
+    UINT8 irql;
+    nt_IoAcquireCancelSpinLock(&irql);
+    irp->Cancel = 1;
+    NT_DRIVER_CANCEL routine = (NT_DRIVER_CANCEL)__atomic_exchange_n(&irp->CancelRoutine, NULL, __ATOMIC_ACQ_REL);
+    if (!routine) {
+        nt_IoReleaseCancelSpinLock(irql);
+        return 0;
+    }
+    irp->CancelIrql = irql;
+    NT_IO_STACK_LOCATION *sl = NtIrpCurrentStack(irp);
+    routine(sl->DeviceObject, irp);                   /* (it lets the cancel spin lock go) */
+    return 1;
 }
 
 static NT_API NT_STATUS nt_IopInvalidDeviceRequest(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
@@ -396,6 +426,7 @@ static NT_IO_STACK_LOCATION *req_new(Req *r, NT_FILE_OBJECT *fo, UINT8 major, UI
     irp->Flags = IRP_SYNCHRONOUS_API | flags;
     irp->UserIosb = &r->iosb;
     irp->UserEvent = &r->done;
+    nt_KeInitializeEvent(&r->done, NT_NotificationEvent, 0);
     irp->ThreadListEntry.Flink = irp->ThreadListEntry.Blink = &irp->ThreadListEntry;
     NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
     sl->MajorFunction = major;
@@ -407,20 +438,43 @@ static NT_IO_STACK_LOCATION *req_new(Req *r, NT_FILE_OBJECT *fo, UINT8 major, UI
 static NTSTATUS req_send(Req *r, NT_FILE_OBJECT *fo)
 {
     NT_STATUS st = nt_IofCallDriver(fo->DeviceObject, r->irp);
-    if (st != NT_STATUS_PENDING && !__atomic_load_n(&r->done.Header.SignalState, __ATOMIC_ACQUIRE)) {
+    UINT8 irql = KeIrql();
+    if (irql != PASSIVE_LEVEL) {
+        NtDriver *drv = NtIoDriverOf(fo->DeviceObject->DriverObject);
+        kprintf("[NT] %s: IRQL_GT_ZERO_AT_SYSTEM_SERVICE: dispatch returned at IRQL %u\n", drv ? drv->image : "?", irql);
+        KeIrqlSet(PASSIVE_LEVEL);
+    }
+    if (st != NT_STATUS_PENDING && !nt_KeReadStateEvent(&r->done)) {
         NtDriver *drv = NtIoDriverOf(fo->DeviceObject->DriverObject);
         kprintf("[NT] %s: dispatch returned 0x%08x without completing its IRP\n", drv ? drv->image : "?", (UINT32)st);
         r->iosb.Status = st;
         r->irp = NULL;                                           /* (the driver may still hold it) */
         return st;
     }
-    while (!__atomic_load_n(&r->done.Header.SignalState, __ATOMIC_ACQUIRE)) sched_yield();
+    nt_KeWaitForSingleObject(&r->done, 0, 0, 0, NULL);          /* (STATUS_PENDING: completed later) */
     return r->iosb.Status;
 }
 
+/* The IRP goes, and the MDLs the I/O manager made for it */
 static void req_free(Req *r)
 {
+    if (!r->irp) return;
+    for (NT_MDL *m = r->irp->MdlAddress, *next; m; m = next) {
+        next = m->Next;
+        nt_MmUnlockPages(m);
+        nt_IoFreeMdl(m);
+    }
     kfree(r->irp);
+}
+
+/* Direct I/O: an MDL for the caller's buffer (@op: what the driver does
+ * to it), MdlAddress of the IRP */
+static NTSTATUS req_mdl(Req *r, UINT64 buf, UINT32 len, int op)
+{
+    if (!len) return STATUS_SUCCESS;
+    NT_MDL *m = nt_IoAllocateMdl((void *)(uintptr_t)buf, len, 0, 0, r->irp);
+    if (!m) return STATUS_INSUFFICIENT_RESOURCES;
+    return NtMdlLock(m, true, op);
 }
 
 /* An open's device and driver references go; the last one lets a
@@ -505,11 +559,8 @@ static NTSTATUS transfer(NT_FILE_OBJECT *fo, bool write, UINT64 buf, UINT32 len,
 {
     NT_DEVICE_OBJECT *d = fo->DeviceObject;
     *info = 0;
-    if (d->Flags & NT_DO_DIRECT_IO) {
-        kprintf("[NT] %s on a direct-I/O device: MDLs come with step 30.2\n", write ? "write" : "read");
-        return NT_STATUS_NOT_SUPPORTED;
-    }
-    bool buffered = d->Flags & NT_DO_BUFFERED_IO;
+    bool direct = d->Flags & NT_DO_DIRECT_IO;
+    bool buffered = !direct && (d->Flags & NT_DO_BUFFERED_IO);
     void *sys = NULL;
     if (buffered) {
         sys = kmalloc(len ? len : 1);
@@ -525,7 +576,9 @@ static NTSTATUS transfer(NT_FILE_OBJECT *fo, bool write, UINT64 buf, UINT32 len,
     sl->Parameters.Read.ByteOffset = offset ? *offset : fo->CurrentByteOffset;
     r.irp->AssociatedIrp.SystemBuffer = sys;
     r.irp->UserBuffer = (void *)(uintptr_t)buf;
-    NTSTATUS st = req_send(&r, fo);
+    NTSTATUS st = direct ? req_mdl(&r, buf, len, write ? 0 /* IoReadAccess */ : 1 /* IoWriteAccess */) : STATUS_SUCCESS;
+    if (!NT_SUCCESS(st)) { req_free(&r); return st; }
+    st = req_send(&r, fo);
     UINT64 n = r.iosb.Information < len ? r.iosb.Information : len;
     if (NT_SUCCESS(st) && buffered && !write && n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)buf, sys, n)))
         st = STATUS_ACCESS_VIOLATION;
@@ -551,14 +604,11 @@ NTSTATUS NtIoWrite(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offs
 NTSTATUS NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info)
 {
     UINT32 method = code & 3;
+    bool direct = method == NT_METHOD_IN_DIRECT || method == NT_METHOD_OUT_DIRECT;
     *info = 0;
-    if (method == NT_METHOD_IN_DIRECT || method == NT_METHOD_OUT_DIRECT) {
-        kprintf("[NT] control code 0x%08x uses direct I/O: MDLs come with step 30.2\n", code);
-        return NT_STATUS_NOT_SUPPORTED;
-    }
     void *sys = NULL;
-    UINT32 sys_len = in_len > out_len ? in_len : out_len;
-    if (method == NT_METHOD_BUFFERED && sys_len) {
+    UINT32 sys_len = direct ? in_len : in_len > out_len ? in_len : out_len;   /* (direct: the input is buffered) */
+    if (method != NT_METHOD_NEITHER && sys_len) {
         sys = kzalloc(sys_len);
         if (!sys) return STATUS_INSUFFICIENT_RESOURCES;
         if (in_len && !NT_SUCCESS(CopyFromUser(sys, (const void *)(uintptr_t)in, in_len))) { kfree(sys); return STATUS_ACCESS_VIOLATION; }
@@ -572,10 +622,13 @@ NTSTATUS NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, 
     if (method == NT_METHOD_NEITHER) sl->Parameters.DeviceIoControl.Type3InputBuffer = (void *)(uintptr_t)in;
     r.irp->AssociatedIrp.SystemBuffer = sys;
     r.irp->UserBuffer = (void *)(uintptr_t)out;
-    NTSTATUS st = req_send(&r, fo);
+    /* METHOD_IN_DIRECT: the driver reads the output buffer; OUT_DIRECT: it writes it */
+    NTSTATUS st = direct ? req_mdl(&r, out, out_len, method == NT_METHOD_IN_DIRECT ? 0 : 1) : STATUS_SUCCESS;
+    if (!NT_SUCCESS(st)) { kfree(sys); req_free(&r); return st; }
+    st = req_send(&r, fo);
     UINT64 n = r.iosb.Information;
+    if (n > out_len) n = out_len;
     if (method == NT_METHOD_BUFFERED) {
-        if (n > out_len) n = out_len;
         if (NT_SUCCESS(st) && n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)out, sys, n))) st = STATUS_ACCESS_VIOLATION;
     }
     if (NT_SUCCESS(st)) *info = n;

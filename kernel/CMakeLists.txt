@@ -214,9 +214,12 @@ set(KERNEL_C_SOURCES
     cm/cm.c
     se/se.c
     io/io.c
+    nt/ex.c
     nt/exports.c
     nt/io.c
+    nt/ke.c
     nt/ldr.c
+    nt/mm.c
     nt/ntoskrnl.c
     io/pnp.c
     mm/vma.c

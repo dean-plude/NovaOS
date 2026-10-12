@@ -5,6 +5,7 @@
  * interrupts/exceptions in interrupt_dispatch().
  */
 
+#include "../../ke/irql.h"
 #include "idt.h"
 #include "../../ke/prof.h"
 #include "../../um/um.h"
@@ -387,6 +388,13 @@ void interrupt_dispatch(InterruptFrame *frame)
      * (another CPU may hold it while it waits for us to flush). */
     if (vector == IPI_WAKE || vector == IPI_TLB) {
         smp_ipi(vector);
+        return;
+    }
+    /* Windows drivers' DPCs, and a switch put off at DISPATCH_LEVEL: the
+     * APIC delivers it once the IRQL drops below DISPATCH_LEVEL (irql.h) */
+    if (vector == VECTOR_DPC) {
+        apic_eoi();
+        KiDispatchInterrupt();
         return;
     }
     if (vector == EXC_NMI && SleepFreezing()) {   /* the machine is going to sleep */

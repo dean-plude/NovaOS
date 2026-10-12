@@ -83,8 +83,8 @@ without being copied, relocated or hashed again), I/O,
   Store) their contexts, host-visible blobs, 3D resources, transfers and
   fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and their
   frames (OpenGL's, and Vulkan's swapchains, so DXVK's and VKD3D-Proton's)
-  are written into the screen there while their window is alone on it
-  (direct presentation); ACPI power-off, reset, power buttons,
+  are written into the screen there, on any monitor and at scale 2 too,
+  while their window is alone on it (direct presentation); ACPI power-off, reset, power buttons,
   sleep (S3, or low-power S0 idle on firmware without it), batteries and
   AC adapters, the lid, thermal zones, wake devices and PCI interrupt
   routing (AML interpreted by uACPI, with the SCI a real interrupt

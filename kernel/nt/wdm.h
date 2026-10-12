@@ -14,7 +14,7 @@
  * Every function pointer a driver hands in, and every export it calls, is
  * NT_API: the Microsoft x64 calling convention.
  *
- * Only what the drivers of roadmap step 30.1 use is complete; the rest is
+ * Only what the drivers of roadmap steps 30.1 and 30.2 use is complete; the rest is
  * there for the layout (opaque members, reserved space) and is filled in
  * by the steps that need it.
  */
@@ -46,8 +46,8 @@ typedef struct _NT_IO_STATUS_BLOCK {
     NT_ULONG_PTR Information;
 } NT_IO_STATUS_BLOCK;
 
-/* DISPATCHER_HEADER and KEVENT: the I/O manager's completion event uses
- * SignalState only (the wait objects themselves are step 30.2) */
+/* DISPATCHER_HEADER and KEVENT: the wait objects (nt/ke.c keeps its
+ * waiters in WaitListHead) */
 typedef struct _NT_DISPATCHER_HEADER {
     unsigned char Type, Signalling, Size, Reserved1;
     int           SignalState;
@@ -57,6 +57,66 @@ typedef struct _NT_DISPATCHER_HEADER {
 typedef struct _NT_KEVENT {
     NT_DISPATCHER_HEADER Header;
 } NT_KEVENT;
+
+/* The dispatcher objects drivers wait on (DISPATCHER_HEADER.Type) */
+#define NT_NotificationEvent         0
+#define NT_SynchronizationEvent      1
+#define NT_SemaphoreObject           5
+#define NT_TimerNotificationObject   8
+#define NT_TimerSynchronizationObject 9
+
+typedef struct _NT_KSEMAPHORE {
+    NT_DISPATCHER_HEADER Header;
+    int                  Limit;
+} NT_KSEMAPHORE;
+
+typedef struct _NT_KTIMER {
+    NT_DISPATCHER_HEADER Header;
+    unsigned long long   DueTime;
+    NT_LIST_ENTRY        TimerListEntry;
+    struct _NT_KDPC     *Dpc;
+    unsigned int         Processor;
+    unsigned int         Period;        /* ms */
+} NT_KTIMER;
+
+/* FAST_MUTEX (ExInitializeFastMutex, inline in the WDK: Count 1, a
+ * synchronization event) */
+typedef struct _NT_FAST_MUTEX {
+    int                  Count;         /* bit 0 set: free */
+    void                *Owner;
+    unsigned int         Contention;
+    NT_KEVENT            Event;
+    unsigned int         OldIrql;
+} NT_FAST_MUTEX;
+
+typedef unsigned long long NT_KSPIN_LOCK;
+
+typedef struct _NT_KLOCK_QUEUE_HANDLE {
+    struct { void *Next; NT_KSPIN_LOCK *Lock; } LockQueue;
+    unsigned char        OldIrql;
+} NT_KLOCK_QUEUE_HANDLE;
+
+/* MDL: a buffer described by its physical pages (the PFN array follows) */
+typedef struct _NT_MDL {
+    struct _NT_MDL      *Next;
+    short                Size;          /* the MDL with its PFN array */
+    short                MdlFlags;
+    unsigned short       AllocationProcessorNumber, Reserved;
+    void                *Process;
+    void                *MappedSystemVa;
+    void                *StartVa;       /* page-aligned */
+    unsigned int         ByteCount;
+    unsigned int         ByteOffset;
+} NT_MDL;
+
+#define NT_MDL_MAPPED_TO_SYSTEM_VA      0x0001
+#define NT_MDL_PAGES_LOCKED             0x0002
+#define NT_MDL_SOURCE_IS_NONPAGED_POOL  0x0004
+#define NT_MDL_ALLOCATED_FIXED_SIZE     0x0008
+#define NT_MDL_PARTIAL                  0x0010
+#define NT_MDL_WRITE_OPERATION          0x0080
+
+static inline unsigned long long *NtMdlPfns(NT_MDL *m) { return (unsigned long long *)(m + 1); }
 
 typedef struct _NT_KDEVICE_QUEUE_ENTRY {
     NT_LIST_ENTRY      DeviceListEntry;
@@ -74,10 +134,13 @@ typedef struct _NT_KDEVICE_QUEUE {
 typedef struct _NT_KDPC {
     unsigned char      Type, Importance;
     unsigned short     Number;
-    void              *DpcListEntry;
+    void              *DpcListEntry;    /* (NovaOS: the next DPC queued on its CPU) */
     NT_ULONG_PTR       ProcessorHistory;
-    void              *DeferredRoutine, *DeferredContext, *SystemArgument1, *SystemArgument2, *DpcData;
+    void              *DeferredRoutine, *DeferredContext, *SystemArgument1, *SystemArgument2;
+    void              *DpcData;         /* set while queued */
 } NT_KDPC;
+
+typedef void (NT_API *NT_KDEFERRED_ROUTINE)(NT_KDPC *, void *Context, void *Arg1, void *Arg2);
 
 typedef struct _NT_WAIT_CONTEXT_BLOCK {
     NT_KDEVICE_QUEUE_ENTRY WaitQueueEntry;
@@ -278,7 +341,10 @@ struct _NT_FILE_OBJECT {
 
 /* Status codes the export layer and the test drivers use */
 #define NT_STATUS_SUCCESS                  ((NT_STATUS)0x00000000)
+#define NT_STATUS_TIMEOUT                  ((NT_STATUS)0x00000102)
 #define NT_STATUS_PENDING                  ((NT_STATUS)0x00000103)
+#define NT_STATUS_CANCELLED                ((NT_STATUS)0xC0000120)
+#define NT_STATUS_ACCESS_VIOLATION         ((NT_STATUS)0xC0000005)
 #define NT_STATUS_MORE_PROCESSING_REQUIRED ((NT_STATUS)0xC0000016)
 #define NT_STATUS_INVALID_PARAMETER        ((NT_STATUS)0xC000000D)
 #define NT_STATUS_INVALID_DEVICE_REQUEST   ((NT_STATUS)0xC0000010)
@@ -308,12 +374,23 @@ static inline NT_IO_STACK_LOCATION *NtIrpNextStack(NT_IRP *irp)
 {
     return irp->Tail.Overlay.CurrentStackLocation - 1;
 }
+/* IoMarkIrpPending: the dispatch routine will return STATUS_PENDING */
+static inline void NtIrpMarkPending(NT_IRP *irp)
+{
+    NtIrpCurrentStack(irp)->Control |= NT_SL_PENDING_RETURNED;
+}
 
 /* The layouts as Windows x64 has them (offsets from the WDK's wdm.h) */
 #define NT_OFFSET(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(NT_UNICODE_STRING) == 0x10 && sizeof(NT_IO_STATUS_BLOCK) == 0x10, "UNICODE_STRING, IO_STATUS_BLOCK");
 _Static_assert(sizeof(NT_KEVENT) == 0x18 && sizeof(NT_KDEVICE_QUEUE) == 0x28 && sizeof(NT_KDPC) == 0x40, "KEVENT, KDEVICE_QUEUE, KDPC");
 _Static_assert(sizeof(NT_WAIT_CONTEXT_BLOCK) == 0x48, "WAIT_CONTEXT_BLOCK");
+_Static_assert(sizeof(NT_KSEMAPHORE) == 0x20 && sizeof(NT_KTIMER) == 0x40 && NT_OFFSET(NT_KTIMER, Dpc) == 0x30,
+               "KSEMAPHORE, KTIMER");
+_Static_assert(sizeof(NT_FAST_MUTEX) == 0x38 && NT_OFFSET(NT_FAST_MUTEX, Event) == 0x18 &&
+               sizeof(NT_KLOCK_QUEUE_HANDLE) == 0x18, "FAST_MUTEX, KLOCK_QUEUE_HANDLE");
+_Static_assert(sizeof(NT_MDL) == 0x30 && NT_OFFSET(NT_MDL, MappedSystemVa) == 0x18 && NT_OFFSET(NT_MDL, ByteCount) == 0x28,
+               "MDL");
 _Static_assert(NT_OFFSET(NT_DRIVER_OBJECT, DriverExtension) == 0x30 && NT_OFFSET(NT_DRIVER_OBJECT, DriverName) == 0x38 &&
                NT_OFFSET(NT_DRIVER_OBJECT, DriverUnload) == 0x68 && NT_OFFSET(NT_DRIVER_OBJECT, MajorFunction) == 0x70 &&
                sizeof(NT_DRIVER_OBJECT) == 0x150, "DRIVER_OBJECT");

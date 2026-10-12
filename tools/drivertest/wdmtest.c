@@ -69,6 +69,41 @@ IMPORT void     *MmMapLockedPagesSpecifyCache(NT_MDL *m, char mode, int cache, v
                                               unsigned int priority);
 IMPORT long long MmGetPhysicalAddress(void *va);
 IMPORT void     *MmGetSystemRoutineAddress(NT_UNICODE_STRING *name);
+/* step 30.2 part 2: work items, system threads, registry (Zw) */
+typedef void (NT_API *IO_WORKITEM_ROUTINE)(NT_DEVICE_OBJECT *dev, void *ctx);
+IMPORT void     *IoAllocateWorkItem(NT_DEVICE_OBJECT *dev);
+IMPORT void      IoQueueWorkItem(void *w, IO_WORKITEM_ROUTINE routine, int queue_type, void *ctx);
+IMPORT void      IoFreeWorkItem(void *w);
+typedef void (NT_API *THREAD_START)(void *ctx);
+IMPORT NT_STATUS PsCreateSystemThread(void *handle, unsigned int access, void *attr, void *process, void *cid,
+                                      THREAD_START start, void *ctx);
+IMPORT NT_STATUS PsTerminateSystemThread(NT_STATUS status);
+IMPORT NT_STATUS ObReferenceObjectByHandle(void *h, unsigned int access, void *type, char mode, void **obj, void *info);
+IMPORT void      ObfDereferenceObject(void *obj);
+IMPORT NT_STATUS ZwCreateKey(void *handle, unsigned int access, void *oa, unsigned int title, NT_UNICODE_STRING *cls,
+                             unsigned int options, unsigned int *disposition);
+IMPORT NT_STATUS ZwSetValueKey(void *key, NT_UNICODE_STRING *name, unsigned int title, unsigned int type,
+                               void *data, unsigned int size);
+IMPORT NT_STATUS ZwQueryValueKey(void *key, NT_UNICODE_STRING *name, unsigned int cls, void *out, unsigned int cap,
+                                 unsigned int *result_len);
+IMPORT NT_STATUS ZwDeleteValueKey(void *key, NT_UNICODE_STRING *name);
+IMPORT NT_STATUS ZwDeleteKey(void *key);
+IMPORT NT_STATUS ZwClose(void *handle);
+
+/* OBJECT_ATTRIBUTES, as far as this driver fills it (kernel/nt/zw.c) */
+typedef struct {
+    unsigned int       Length, pad;
+    void              *RootDirectory;
+    NT_UNICODE_STRING *ObjectName;
+    unsigned int       Attributes;
+    void              *SecurityDescriptor, *SecurityQualityOfService;
+} OBJ_ATTR;
+#define DelayedWorkQueue      1
+#define OBJ_CASE_INSENSITIVE  0x40u
+#define KEY_ALL_ACCESS        0xF003Fu
+#define REG_DWORD             4u
+#define KEY_VALUE_PARTIAL     2u
+#define ObjectThreadType      0        /* NULL expected-type: any object */
 
 #define DISPATCH_LEVEL        2
 #define APC_LEVEL             1
@@ -179,7 +214,101 @@ static NT_API void dpc_routine(NT_KDPC *dpc, void *ctx, void *a1, void *a2)
     s->ran = 1;
 }
 
-static void kernel_checks(WDMTEST_KERNEL *k)
+/* step 30.2 part 2: a work item runs on a system worker thread */
+typedef struct { NT_KEVENT done; unsigned char irql; volatile int ran; } WorkState;
+static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
+{
+    WorkState *w = ctx;
+    w->irql = read_cr8();
+    w->ran = 1;
+    KeSetEvent(&w->done, 0, 0);
+}
+
+/* a driver's own system thread signals an event and ends itself */
+typedef struct { NT_KEVENT done; unsigned char irql; volatile int ran; } ThreadState;
+static NT_API void thread_routine(void *ctx)
+{
+    ThreadState *t = ctx;
+    t->irql = read_cr8();
+    t->ran = 1;
+    KeSetEvent(&t->done, 0, 0);
+    PsTerminateSystemThread(NT_STATUS_SUCCESS);
+}
+
+static void part2_checks(NT_DEVICE_OBJECT *dev, WDMTEST_KERNEL *k)
+{
+    long long wait5 = -50000000;                 /* 5 s, in case a worker is slow */
+
+    /* structured exception handling: a null write faults in kernel mode and
+     * __except catches it (kernel/nt/seh.c dispatches over the driver's
+     * .pdata through __C_specific_handler) */
+    unsigned int code = 0;
+    __try {
+        volatile int *p = (volatile int *)0;
+        *p = 1;
+    } __except (1 /* EXCEPTION_EXECUTE_HANDLER */) {
+        code = (unsigned int)_exception_code();
+    }
+    k->exception = code == 0xC0000005u;          /* STATUS_ACCESS_VIOLATION */
+    k->exception_code = code;
+    k->irql_after_seh = read_cr8() == 0;         /* back at PASSIVE_LEVEL after unwinding */
+
+    /* a work item queued to a system worker thread (runs at PASSIVE_LEVEL) */
+    void *wi = IoAllocateWorkItem(dev);
+    if (wi) {
+        WorkState ws;
+        KeInitializeEvent(&ws.done, NT_NotificationEvent, 0);
+        ws.ran = 0; ws.irql = 0xFF;
+        IoQueueWorkItem(wi, work_routine, DelayedWorkQueue, &ws);
+        NT_STATUS s = KeWaitForSingleObject(&ws.done, 0, 0, 0, &wait5);
+        k->work_item = s == NT_STATUS_SUCCESS && ws.ran && ws.irql == 0;
+        IoFreeWorkItem(wi);
+    }
+
+    /* a system thread: create it, wait for it, reference its object by
+     * handle, wait on the object, close the handle and let the object go */
+    void *th = 0, *obj = 0;
+    ThreadState ts;
+    KeInitializeEvent(&ts.done, NT_NotificationEvent, 0);
+    ts.ran = 0; ts.irql = 0xFF;
+    NT_STATUS cs = PsCreateSystemThread(&th, 0, 0, 0, 0, thread_routine, &ts);
+    if (NT_SUCCESS_(cs) && th) {
+        NT_STATUS ws = KeWaitForSingleObject(&ts.done, 0, 0, 0, &wait5);
+        NT_STATUS rs = ObReferenceObjectByHandle(th, 0, (void *)ObjectThreadType, 0, &obj, 0);
+        NT_STATUS os = NT_SUCCESS_(rs) ? KeWaitForSingleObject(obj, 0, 0, 0, &wait5) : rs;
+        ZwClose(th);
+        if (obj) ObfDereferenceObject(obj);
+        k->system_thread = ws == NT_STATUS_SUCCESS && ts.ran && ts.irql == 0 &&
+                           NT_SUCCESS_(rs) && obj == th && os == NT_STATUS_SUCCESS;
+    }
+
+    /* the registry through Zw: create a key, set a DWORD, read it back,
+     * delete the value and the key */
+    NT_UNICODE_STRING keyname, valname;
+    RtlInitUnicodeString(&keyname, L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\NovaOS\\WdmTestZw");
+    RtlInitUnicodeString(&valname, L"Answer");
+    OBJ_ATTR oa = { sizeof(oa), 0, 0, &keyname, OBJ_CASE_INSENSITIVE, 0, 0 };
+    void *key = 0;
+    unsigned int disp = 0;
+    if (NT_SUCCESS_(ZwCreateKey(&key, KEY_ALL_ACCESS, &oa, 0, 0, 0, &disp)) && key) {
+        unsigned int answer = 42, type = 0, len = 0;
+        unsigned char info[32];
+        NT_STATUS ss = ZwSetValueKey(key, &valname, 0, REG_DWORD, &answer, sizeof(answer));
+        NT_STATUS qs = ZwQueryValueKey(key, &valname, KEY_VALUE_PARTIAL, info, sizeof(info), &len);
+        /* KEY_VALUE_PARTIAL_INFORMATION: TitleIndex(4), Type(4), DataLength(4), Data[] */
+        if (NT_SUCCESS_(qs) && len >= 12) {
+            type = *(unsigned int *)(info + 4);
+            unsigned int dlen = *(unsigned int *)(info + 8), data = 0;
+            if (dlen == 4) data = *(unsigned int *)(info + 12);
+            k->zw_registry = NT_SUCCESS_(ss) && type == REG_DWORD && data == 42;
+        }
+        ZwDeleteValueKey(key, &valname);
+        ZwDeleteKey(key);
+        ZwClose(key);
+    }
+}
+
+static void kernel_checks(NT_DEVICE_OBJECT *dev, WDMTEST_KERNEL *k)
 {
     k->irql_passive = read_cr8() == 0 && KeGetCurrentIrql() == 0;
 
@@ -270,6 +399,8 @@ static void kernel_checks(WDMTEST_KERNEL *k)
     NT_UNICODE_STRING name;
     RtlInitUnicodeString(&name, L"KeSetEvent");
     k->routine = MmGetSystemRoutineAddress(&name) == (void *)KeSetEvent;
+
+    part2_checks(dev, k);
 }
 
 /* IOCTL_WDMTEST_PENDING: completed by the timer's DPC */
@@ -335,7 +466,7 @@ static NT_API NT_STATUS control(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
         if (out < sizeof(WDMTEST_KERNEL)) return complete(irp, NT_STATUS_BUFFER_TOO_SMALL, 0);
         WDMTEST_KERNEL *k = (WDMTEST_KERNEL *)sys;
         for (unsigned int i = 0; i < sizeof(*k); i++) ((unsigned char *)k)[i] = 0;
-        kernel_checks(k);
+        kernel_checks(dev, k);
         return complete(irp, NT_STATUS_SUCCESS, sizeof(WDMTEST_KERNEL));
     }
     case IOCTL_WDMTEST_PENDING: {

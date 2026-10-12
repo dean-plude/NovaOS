@@ -46,6 +46,7 @@ jobs:
     - name: Validate manifests and suites
       run: |-
         python3 tools/ci/check-conflict-markers.py
+        python3 tools/ci/check-driver-imports.py
         python3 tools/build_userland.py --check
         for suite in core network devices graphics; do python3 tools/selftest.py --suite "$suite" --list; done
         python3 tools/compat_smoke.py --list

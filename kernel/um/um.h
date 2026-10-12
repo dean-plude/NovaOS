@@ -172,6 +172,12 @@ bool um_registry_get_sz(const char *path, const char *name, char *out, int cap);
 UINT32 um_registry_generation(void);
 void um_registry_set_bin(const char *path, const char *name, const void *data, UINT32 len);
 int  um_registry_get_bin(const char *path, const char *name, void *out, int cap);   /* its length, or -1 */
+/* Any-type value access, for kernel-mode Zw* registry calls (nt/zw.c) */
+int  um_registry_get_value(const char *path, const char *name, UINT32 *type, void *out, int cap);
+void um_registry_set_value(const char *path, const char *name, UINT32 type, const void *data, UINT32 len);
+bool um_registry_delete_value(const char *path, const char *name);
+bool um_registry_create_key(const char *path);
+bool um_registry_key_exists(const char *path);
 /* The first-boot setup's answers (apps/welcome.c): UserName, FirstBootDone */
 #define UM_SETUP_KEY "Machine\\SOFTWARE\\NovaOS\\Setup"
 /* The user's SID: HKEY_CURRENT_USER is "User\\" UM_USER_SID */

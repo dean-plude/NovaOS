@@ -435,6 +435,93 @@ int um_registry_get_bin(const char *path, const char *name, void *out, int cap)
     return len;
 }
 
+/* A value of any type, for kernel-mode ZwQueryValueKey (nt/zw.c): its
+ * length (at most @cap bytes copied to @out), and *@type its REG_* type,
+ * or -1 when the key or value is missing.  @path and @name are ASCII. */
+int um_registry_get_value(const char *path, const char *name, UINT32 *type, void *out, int cap)
+{
+    UINT16 w[256], nm[128];
+    UINT32 n = 0, m = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    for (; name[m] && m < 127; m++) nm[m] = (UINT8)name[m];
+    int len = -1;
+    um_lock_shared(&g_reg);
+    RegKey *k = NULL;
+    if (walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k) {
+        um_lock(key_lock(k));
+        RegValue *v = find_value(k, nm, m);
+        if (v) {
+            if (type) *type = v->type;
+            len = (int)v->len;
+            if (cap > 0) memcpy(out, v->data, (size_t)(len < cap ? len : cap));
+        }
+        um_unlock(key_lock(k));
+    }
+    um_unlock_shared(&g_reg);
+    return len;
+}
+
+/* Set a value of any REG_* type, the key created if need be (nt/zw.c). */
+void um_registry_set_value(const char *path, const char *name, UINT32 type, const void *data, UINT32 len)
+{
+    UINT16 nm[128];
+    UINT32 n = 0;
+    for (; name[n] && n < 127; n++) nm[n] = (UINT8)name[n];
+    um_lock_excl(&g_reg);
+    RegKey *k = kpath(path, false);
+    if (k) set_value(k, nm, n, type, data, len);
+    um_unlock_excl(&g_reg);
+}
+
+/* Delete one value (nt/zw.c): true when it was there. */
+bool um_registry_delete_value(const char *path, const char *name)
+{
+    UINT16 w[256], nm[128];
+    UINT32 n = 0, m = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    for (; name[m] && m < 127; m++) nm[m] = (UINT8)name[m];
+    bool done = false;
+    um_lock_excl(&g_reg);
+    RegKey *k = NULL;
+    if (walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k) {
+        um_lock(key_lock(k));
+        for (RegValue **pp = &k->values; *pp; pp = &(*pp)->next)
+            if (name_eq((*pp)->name, (*pp)->nlen, nm, m)) {
+                RegValue *v = *pp;
+                *pp = v->next;
+                free_value(v);
+                done = true;
+                touch(k);
+                break;
+            }
+        um_unlock(key_lock(k));
+    }
+    um_unlock_excl(&g_reg);
+    return done;
+}
+
+/* Create or delete a key by absolute path (without "\Registry\"), for
+ * kernel-mode ZwCreateKey/ZwDeleteKey (nt/zw.c): true on success. */
+bool um_registry_create_key(const char *path)
+{
+    um_lock_excl(&g_reg);
+    RegKey *k = kpath(path, false);
+    um_unlock_excl(&g_reg);
+    return k != NULL;
+}
+
+bool um_registry_key_exists(const char *path)
+{
+    UINT16 w[256];
+    UINT32 n = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    um_lock_shared(&g_reg);
+    RegKey *k = NULL;
+    bool yes = walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k;
+    um_unlock_shared(&g_reg);
+    return yes;
+}
+
 /* HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Time Zones: one key
  * per zone NovaOS knows (ke/timezone.c), as Windows has them; rebuilt
  * every boot (volatile), so the hive on drive C: does not carry them */

@@ -13,15 +13,17 @@
 # creates \Device\WdmTest and \DosDevices\WdmTest), wdmtest.exe's ReadFile,
 # WriteFile and DeviceIoControl round-trip through it as IRPs (step 30.2:
 # direct I/O through MDLs, the driver's checks of the IRQL, DPCs, spin
-# locks, pool, events, semaphores, timers and fast mutexes, and an IRP the
-# driver pends and completes from a timer's DPC), sc stop unloads it,
-# naming the pool block the driver left, and the catalog-signed wdmcat.sys
-# then loads in its place.
+# locks, pool, events, semaphores, timers and fast mutexes, an IRP the
+# driver pends and completes from a timer's DPC, and part 2: an access
+# violation caught by __try/__except, a work item, a system thread and a
+# registry value through Zw), sc stop unloads it, naming the pool block the
+# driver left, and the catalog-signed wdmcat.sys then loads in its place.
 DOC = ('a Windows kernel-mode driver (wdmtest.sys, clang and lld-link /driver) under Windows\' signing policy: '
        'test-signed and catalog-signed copies refused before test signing is on, an unsigned and a tampered copy '
        'refused even with it, a package whose file does not match its catalog refused by `pnputil`; then installed '
        'with `sc create type= kernel`, started, driven by `wdmtest` (buffered, neither and direct I/O, the IRQL, DPCs, '
-       'spin locks, pool, events, timers, a pending IRP completed from a DPC) and unloaded with `sc stop`')
+       'spin locks, pool, events, timers, a pending IRP completed from a DPC, and step 30.2 part 2: SEH, a work item, '
+       'a system thread, a registry value through Zw) and unloaded with `sc stop`')
 TESTS = [
     Test('wdm create', r'sc create WdmTest type= kernel binPath= C:\Tests\Wdm\wdmtest.sys',
          [r'\[SC\] CreateService SUCCESS']),
@@ -60,6 +62,7 @@ TESTS = [
           r'\[DbgPrint\] wdmtest: DriverEntry \\Registry\\Machine\\System\\CurrentControlSet\\Services\\WdmTest',
           r'\[NT\] wdmtest\.sys loaded at 0x[0-9a-f]+ \(service WdmTest\): DriverEntry returned 0x00000000']),
     Test('wdm round trip', 'wdmtest', [r'read back: "hello from user mode"', r'pending: \d+ ms, DPC at IRQL 2',
+                                       r'part 2: exception 1 \(code 0xc0000005\), work item 1, system thread 1, Zw registry 1',
                                        r'wdmtest: \d+ passed, 0 failed']),
     Test('wdm stop', 'sc stop WdmTest',
          [r'STATE\s+: 1  STOPPED', r'\[DbgPrint\] wdmtest: unloaded',

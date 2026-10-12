@@ -148,6 +148,9 @@ typedef struct NdisAdapter {
     UINT64               rx_frames, tx_frames, rx_dropped;
     UINT64               tx_done, isrs, dpcs, sgs, sgs_freed;   /* (for the log when sending stalls) */
     bool                 tx_told;
+    bool                 dpc_held;      /* the receive copies are full: the DPC waits for the stack */
+    void                *dpc_held_ctx;
+    UINT64               dpc_log;       /* (the DPC count of the next progress line) */
 } NdisAdapter;
 
 /* A control device (NdisRegisterDeviceEx): the miniport's own dispatch
@@ -236,6 +239,7 @@ static UINT8 *mdl_va(NT_MDL *m)
  * The net.c side: one adapter is NovaOS's network adapter
  * ----------------------------------------------------------------------- */
 static void return_pending(NdisAdapter *a);
+static UINT32 rx_room(NdisAdapter *a);
 
 static const char *net_name(void) { return "Windows network adapter (NDIS)"; }
 static void net_mac(UINT8 mac[6]) { if (g_net) memcpy(mac, g_net->mac, 6); }
@@ -295,6 +299,10 @@ static int net_receive(void *buf, int cap)
         n = a->rx_len[k] < cap ? a->rx_len[k] : cap;
         memcpy(buf, a->rx + (UINT64)k * RX_FRAME, (size_t)n);
         a->rx_tail++;
+        if (a->dpc_held && rx_room(a) >= RX_SLOTS / 2) {    /* (room again: the DPC goes on) */
+            a->dpc_held = false;
+            nt_KeInsertQueueDpc(&a->dpc, a->dpc_held_ctx, NULL);
+        }
     }
     nt_KeReleaseSpinLock(&a->rx_lock, old);
     return n;
@@ -794,6 +802,27 @@ NT_API void nt_NdisMFreeSharedMemory(void *h, UINT32 len, UINT8 cached, void *va
 /* -----------------------------------------------------------------------
  * Interrupts
  * ----------------------------------------------------------------------- */
+/* Free receive copies */
+static UINT32 rx_room(NdisAdapter *a)
+{
+    return RX_SLOTS - (UINT32)(__atomic_load_n(&a->rx_head, __ATOMIC_ACQUIRE) - __atomic_load_n(&a->rx_tail, __ATOMIC_ACQUIRE));
+}
+
+/* The DPC waits for the stack to take frames (net_receive queues it again) */
+static void hold_dpc(NdisAdapter *a, void *dpc_ctx)
+{
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&a->rx_lock);
+    a->dpc_held_ctx = dpc_ctx;
+    a->dpc_held = true;
+    nt_KeReleaseSpinLock(&a->rx_lock, old);
+}
+
+static void queue_dpc(NdisAdapter *a, void *dpc_ctx)
+{
+    if (!rx_room(a)) hold_dpc(a, dpc_ctx);
+    else nt_KeInsertQueueDpc(&a->dpc, dpc_ctx, NULL);
+}
+
 static NT_API UINT8 isr(void *obj, void *ctx)
 {
     (void)obj;
@@ -810,11 +839,24 @@ static NT_API void dpc(NT_KDPC *k, void *ctx, void *dpc_ctx, void *unused)
 {
     (void)k; (void)unused;
     NdisAdapter *a = ctx;
-    NDIS_RECEIVE_THROTTLE_PARAMETERS t = { NDIS_INDICATE_ALL_NBLS, 0 };
-    a->dpcs++;
+    /* Windows' stack takes frames inside the DPC; NovaOS's runs in its own
+     * thread, so a DPC indicates no more frames than there is room for until
+     * that thread has taken them (NDIS' receive throttling), and one that
+     * would find no room waits for it (rx_room): the DPC would otherwise
+     * run again and again and keep the stack's thread off its processor */
+    UINT32 room = rx_room(a);
+    if (!room) { hold_dpc(a, dpc_ctx); return; }
+    NDIS_RECEIVE_THROTTLE_PARAMETERS t = { room, 0 };
+    if (++a->dpcs >= a->dpc_log) {
+        a->dpc_log = a->dpc_log ? a->dpc_log * 4 : 4096;
+        kprintf("[NDIS] %s: %llu interrupts, %llu DPCs, %llu frames received (%llu dropped), %llu sent (%llu completed)\n",
+                a->drv->service, (unsigned long long)a->isrs, (unsigned long long)a->dpcs,
+                (unsigned long long)a->rx_frames, (unsigned long long)a->rx_dropped,
+                (unsigned long long)a->tx_frames, (unsigned long long)a->tx_done);
+    }
     ((ISR_DPC)a->intr.InterruptDpcHandler)(a->intr_ctx, dpc_ctx, &t, NULL);
     return_pending(a);
-    if (t.MoreNblsPending) nt_KeInsertQueueDpc(&a->dpc, dpc_ctx, NULL);
+    if (t.MoreNblsPending) queue_dpc(a, dpc_ctx);
 }
 
 NT_API NDIS_STATUS nt_NdisMRegisterInterruptEx(void *h, void *ctx, NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS *ch,
@@ -859,7 +901,7 @@ NT_API UINT64 nt_NdisMQueueDpcEx(void *h, UINT32 message, void *target, void *dp
     (void)message; (void)target;
     NdisAdapter *a = adapter_of(h);
     if (!a) return 0;
-    nt_KeInsertQueueDpc(&a->dpc, dpc_ctx, NULL);
+    queue_dpc(a, dpc_ctx);
     return 1;
 }
 

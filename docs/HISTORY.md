@@ -11599,7 +11599,16 @@ virtio-net card, and NovaOS's network stack uses it as its adapter.
   Windows driver keeps the card at every boot after.
 - **ntoskrnl.exe**: `KeGetProcessorIndexFromNumber`,
   `KeGetProcessorNumberFromIndex`, `KeInitializeMutex`, `KeReleaseMutex`
-  and `_vsnprintf_s`, which `netkvm.sys` also imports.
+  and `_vsnprintf_s`, which `netkvm.sys` also imports; `WmiTraceMessage`,
+  `WmiQueryTraceInformation` and `PsGetVersion` for WPP software tracing
+  (`MmGetSystemRoutineAddress` finds them; no trace session takes the
+  messages); and `KUSER_SHARED_DATA` at `0xFFFFF78000000000`, where a
+  driver reads the clocks (`KeQuerySystemTime` and `KeQueryTickCount` are
+  macros that do).
+- **Kernel faults in drivers** are logged before their `__except` handler
+  is looked for (`[NT] x.sys+0x1234: exception 14 ...`), and a backtrace
+  names driver addresses as `x.sys+offset` and shows where a call through
+  a null pointer came from.
 - **The import check** (`tools/ci/check-driver-imports.py`) covers
   `ndis.sys` imports, with `netkvm.sys`'s list as a fixture.
 - **The devices suite's "netkvm" boot** installs the package

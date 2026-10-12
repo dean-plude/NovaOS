@@ -206,6 +206,7 @@ typedef struct {
 } NdisWork;
 
 static NdisDriver   *g_drivers;
+static UINT8         g_binding;         /* the network stack's binding: its frames' SourceHandle */
 static NdisAdapter  *g_net;             /* the adapter net.c uses */
 static NT_KSPIN_LOCK g_lock;
 
@@ -268,7 +269,8 @@ static bool net_transmit(const void *frame, UINT16 len)
     NET_BUFFER *nb = nbl->FirstNetBuffer;
     nbl->Next = NULL;
     nbl->Status = NDIS_STATUS_SUCCESS;
-    nbl->SourceHandle = a;
+    nbl->SourceHandle = &g_binding;    /* (the sender's binding, as NDIS sets it: never the miniport's own handle,
+                                        * which netkvm takes for a frame of its own and does not complete) */
     memset(nbl->NetBufferListInfo, 0, sizeof(nbl->NetBufferListInfo));
     nb->Next = NULL;
     nb->MdlChain = nb->CurrentMdl = s->mdl;

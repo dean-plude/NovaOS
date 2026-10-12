@@ -66,6 +66,15 @@ void KsymBacktrace(UINT64 rip, UINT64 rbp, UINT64 rsp)
 {
     kprintf("Backtrace:\n");
     int i = 0;
+    /* outside the kernel (a driver, or a call through a null pointer) the
+     * frames have no frame pointer: the top of the stack holds the return
+     * address, so show it raw */
+    if (rip < (UINT64)__text_start || rip >= (UINT64)__text_end) {
+        const UINT64 *sp = (const UINT64 *)rsp;
+        kprintf("  stack at %016lx:", (unsigned long)rsp);
+        for (int k = 0; k < 8 && !(rsp & 7); k++) kprintf(" %016lx", (unsigned long)sp[k]);
+        kprintf("\n");
+    }
     frame_line(i++, rip);
     /* Outside the kernel (a Windows driver, which keeps no frame chain, or
      * a call through a null pointer): the code addresses near the top of

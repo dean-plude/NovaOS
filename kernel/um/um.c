@@ -762,11 +762,12 @@ bool um_read(UmProcess *p, UINT64 va, void *dst, UINT64 n)        { return copy_
 /* Free every user page and page table, then the PML4 itself. */
 /* -----------------------------------------------------------------------
  * KUSER_SHARED_DATA: one page, mapped read-only at 0x7FFE0000 in every
- * program, with the clocks programs read without a system call (the Go
- * runtime's nanotime, GetTickCount in some CRTs) and the version fields.
+ * program (and at 0xFFFFF78000000000 for drivers), with the clocks programs
+ * read without a system call (the Go runtime's nanotime, GetTickCount in
+ * some CRTs) and the version fields.
  * ----------------------------------------------------------------------- */
 #define UM_KUSD_VA UINT64_C(0x7FFE0000)
-#define UM_KUSD_KERNEL_VA UINT64_C(0xFFFFF78000000000)   /* (Windows' KI_USER_SHARED_DATA) */
+#define UM_KI_USER_SHARED_DATA UINT64_C(0xFFFFF78000000000)
 
 static void kusd_time(UINT32 off, UINT64 v)       /* KSYSTEM_TIME: High2, Low, then High1 */
 {
@@ -786,12 +787,6 @@ static void kusd_init(void)
     if (!g_kusd) return;
     memset(g_kusd, 0, PAGE_SIZE);
     g_kusd_pa = (PADDR)((uintptr_t)g_kusd - PHYSMAP_BASE);
-    /* Windows drivers read it at its kernel address too (KeQueryTickCount,
-     * KeQueryInterruptTime and SharedUserData are macros reading it), so
-     * the same page is mapped read-only there before any process copies
-     * the kernel's half of the page tables */
-    if (!NT_SUCCESS(paging_map(UM_KUSD_KERNEL_VA, g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC)))
-        kprintf("[UM] KUSER_SHARED_DATA: no kernel mapping at 0x%llx\n", (unsigned long long)UM_KUSD_KERNEL_VA);
     *(UINT32 *)(g_kusd + 0x04) = 10u << 24;               /* TickCountMultiplier: 10 ms per tick */
     *(UINT16 *)(g_kusd + 0x2C) = 0x8664;                  /* ImageNumberLow/High: x64 */
     *(UINT16 *)(g_kusd + 0x2E) = 0x8664;
@@ -817,6 +812,13 @@ static void kusd_init(void)
     UmCpuCountChanged();
     UmSharedKeyboard(g_kbd_hkl);
     UmTimerTick(sched_ticks());
+    /* The same page at KI_USER_SHARED_DATA in kernel space, read-only, as on
+     * Windows x64: a driver's KeQueryTickCount, KeQuerySystemTime and
+     * KeQueryInterruptTime are WDK macros that read it there.  (Before any
+     * program starts, so every address space's copy of the kernel's
+     * top-level entries has it.) */
+    if (NT_SUCCESS(paging_prepare(UM_KI_USER_SHARED_DATA, PAGE_SIZE)))
+        paging_map(UM_KI_USER_SHARED_DATA, g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC | MAP_GLOBAL);
 }
 
 void UmSharedKeyboard(UINT32 hkl)

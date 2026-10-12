@@ -690,9 +690,10 @@ typedef struct _NT_ERESOURCE {
     unsigned char Reserved[0x68 - 0x28];
 } NT_ERESOURCE;
 
-/* (N)PAGED_LOOKASIDE_LIST: a free list of fixed-size blocks, Windows'
- * GENERAL_LOOKASIDE layout: the WDK's inline ExAllocateFrom... and
- * ExFreeTo... read the fields and call Allocate and Free directly. */
+/* (N)PAGED_LOOKASIDE_LIST: a free list of fixed-size blocks, laid out as
+ * Windows x64's GENERAL_LOOKASIDE: the WDK's inline
+ * ExAllocateFromNPagedLookasideList and ExFreeToNPagedLookasideList (which
+ * KMDF uses) read and count in it directly. */
 typedef struct __attribute__((aligned(16))) _NT_LOOKASIDE_LIST {
     NT_SLIST_HEADER ListHead;
     unsigned short  Depth, MaximumDepth;
@@ -700,8 +701,8 @@ typedef struct __attribute__((aligned(16))) _NT_LOOKASIDE_LIST {
     int             Type;          /* POOL_TYPE */
     unsigned int    Tag;
     unsigned int    Size;
-    void           *Allocate;      /* the driver's own, or ExAllocatePoolWithTag */
-    void           *Free;          /* the driver's own, or ExFreePool */
+    void           *Allocate;      /* the driver's own, or the pool's */
+    void           *Free;
     unsigned char   Reserved[0x80 - 0x40];
 } NT_LOOKASIDE_LIST, NT_PAGED_LOOKASIDE_LIST, NT_NPAGED_LOOKASIDE_LIST;
 
@@ -733,7 +734,7 @@ typedef struct _NT_KWAIT_BLOCK { unsigned char Opaque[0x30]; } NT_KWAIT_BLOCK;
 #define NT_OFFSET(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(NT_KMUTEX) == 0x30 && NT_OFFSET(NT_KMUTANT, OwnerThread) == 0x28, "KMUTANT");
 _Static_assert(sizeof(NT_SLIST_HEADER) == 0x10 && sizeof(NT_ERESOURCE) == 0x68, "SLIST_HEADER, ERESOURCE");
-_Static_assert(sizeof(NT_PAGED_LOOKASIDE_LIST) == 0x80 && NT_OFFSET(NT_LOOKASIDE_LIST, Size) == 0x2c &&
+_Static_assert(sizeof(NT_PAGED_LOOKASIDE_LIST) == 0x80 && NT_OFFSET(NT_LOOKASIDE_LIST, Size) == 0x2C &&
                NT_OFFSET(NT_LOOKASIDE_LIST, Allocate) == 0x30, "LOOKASIDE_LIST");
 _Static_assert(sizeof(NT_IO_REMOVE_LOCK) == 0x20 && NT_OFFSET(NT_IO_REMOVE_LOCK, RemoveEvent) == 0x08, "IO_REMOVE_LOCK");
 

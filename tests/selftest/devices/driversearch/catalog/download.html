@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- Recorded from https://www.catalog.update.microsoft.com/DownloadDialog.aspx
+     (POST updateIDs=, a JSON list naming update 958a8300-...) on 2026-10-12
+     and cut down to the script that lists the update's files.
+     tools/drivertest/catalog_fixture.py fills in the fields in braces: the update,
+     and the self-test package's cabinet, its address and its SHA-1 and
+     SHA-256 (base64, as the Catalog gives them). -->
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head><title>Microsoft Update Catalog</title>
+    <script language="javascript" type="text/javascript">  
+        // Writes the eula and file info arrays
+        var downloadInformation = new Array();
+downloadInformation[0] = new Object();
+downloadInformation[0].updateID ='{update_id}';
+downloadInformation[0].isHotFix =false;
+downloadInformation[0].enTitle ='{title}';
+downloadInformation[0].sizeLanguage ='';
+downloadInformation[0].files = new Array();
+downloadInformation[0].files[0] = new Object();
+downloadInformation[0].files[0].url = '{url}';
+downloadInformation[0].files[0].digest = '{sha1}';
+downloadInformation[0].files[0].sha256 = '{sha256}';
+downloadInformation[0].files[0].architectures = '';
+downloadInformation[0].files[0].languages = '';
+downloadInformation[0].files[0].longLanguages = '';
+downloadInformation[0].files[0].fileName = '{file_name}';
+downloadInformation[0].files[0].defaultFileNameLength = {name_length};
+downloadInformation[0].allFilesExist = false;
+var minFilePathLength =141;
+var eulaInfo =  new Array();
+var eulaInfo = '';
+    </script>
+</head>
+<body></body>
+</html>

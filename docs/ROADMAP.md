@@ -153,7 +153,11 @@ named program or test demonstrates it.
   the screen while the window is alone (`d3dtest present`, and
   `d3dtest fps` against the GDI way); see
   [Vulkan's frames](HISTORY.md#direct-presentation-of-vulkans-frames).
-  Still to do: windows on the other monitors and at scale 2.
+  ~~Windows on the other monitors and at scale 2~~ Done: the host writes
+  the frame into whichever monitor's screen the window is on, twice as
+  wide and high on a monitor at scale 2 (`gltest monitors`); see
+  [the other monitors](HISTORY.md#direct-presentation-on-every-monitor-and-at-scale-2).
+  Still to do: DirectComposition's swap chains (WebView2's GPU process).
 - ~~NetSurf: SVG; redrawing pages a script changes after layout.~~ Done
   (Phase 19.8): SVG images (`<img>`, `<object>`, CSS backgrounds, `.svg`
   pages) and `<svg>` elements written inline in HTML drawn anti-aliased,
@@ -519,7 +523,9 @@ named program or test demonstrates it.
   kernel PE loader and `ntoskrnl.exe`/`hal.dll` exports, KMDF and UMDF
   built from Microsoft's MIT source, then USB, NDIS and Storport hosts),
   install them on devices matched by hardware ID from the driver store,
-  download them by hardware ID when none is there, and enforce Windows'
+  download them by hardware ID when none is there (step 30.6 is in:
+  `pnputil /scan-devices /search-online` downloads a device's package from
+  the Microsoft Update Catalog and stages it), and enforce Windows'
   kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
   driver to virtio-win's serial, network and disk drivers.
 

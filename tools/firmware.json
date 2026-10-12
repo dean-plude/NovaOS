@@ -1,0 +1,152 @@
+{
+  "_comment": "The default firmware set: files from linux-firmware, pinned by tag and SHA-256, that tools/fetch_firmware.py downloads into third_party/firmware and tools/build_userland.py builds into C:\\Windows\\Firmware with the same layout as Linux's /lib/firmware. docs/drivers.md explains each set and how to add one.",
+  "source": {
+    "name": "linux-firmware",
+    "tag": "20260916",
+    "urls": [
+      "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{path}?h={tag}",
+      "https://gitlab.com/kernel-firmware/linux-firmware/-/raw/{tag}/{path}"
+    ]
+  },
+  "sets": [
+    {
+      "id": "intel-graphics",
+      "device": "Intel Iris Xe and UHD graphics, Alder Lake-P and Raptor Lake-P (the ThinkPad T14 Gen 4)",
+      "linux_driver": "i915",
+      "novaos_driver": null,
+      "licence": "LICENSES/LICENSE.i915",
+      "files": [
+        {
+          "path": "i915/adlp_dmc.bin",
+          "sha256": "3516de2e134ddcf3b319c75d2e437779fecbd58cbb77234bd6f297c544e92ccb",
+          "size": 79088
+        },
+        {
+          "path": "i915/adlp_guc_70.bin",
+          "sha256": "b7a800cbdcdf687e7b1c81f3316d040ab75fa3e5c698ebc356f077af17462ef8",
+          "size": 347904
+        },
+        {
+          "path": "i915/tgl_huc.bin",
+          "sha256": "dbb1316bac13a76427ffa7827e52b5b9affe8a4cadd23dc22e2a54e35c53bdad",
+          "size": 589888
+        }
+      ]
+    },
+    {
+      "id": "intel-wifi",
+      "device": "Intel Wi-Fi 6E AX211 (CNVi, Alder Lake and Raptor Lake laptops)",
+      "linux_driver": "iwlwifi",
+      "novaos_driver": null,
+      "licence": "LICENSES/LICENCE.iwlwifi_firmware",
+      "files": [
+        {
+          "path": "intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode",
+          "sha256": "698c913f938d9a8adce7ab9c049b1cd37daaa7473d8185f93e98f22733092f6b",
+          "size": 1737012
+        },
+        {
+          "path": "intel/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm",
+          "sha256": "776606c7b5d0f582b5ec78a591fb1e5e621a6efa670e8261f29114bbf1b0f8d1",
+          "size": 55176
+        }
+      ]
+    },
+    {
+      "id": "intel-bluetooth",
+      "device": "Intel AX211 Bluetooth",
+      "linux_driver": "btintel",
+      "novaos_driver": null,
+      "licence": "LICENSES/LICENCE.ibt_firmware",
+      "files": [
+        {
+          "path": "intel/ibt-0040-0041.sfi",
+          "sha256": "8dcfb3a7c1592c11c3e80505d21ee78dbde3de0c830d8e3e856371c37717b62c",
+          "size": 720988
+        },
+        {
+          "path": "intel/ibt-0040-0041.ddc",
+          "sha256": "fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077",
+          "size": 9
+        }
+      ]
+    },
+    {
+      "id": "qualcomm-wifi",
+      "device": "Qualcomm WCN6855 Wi-Fi 6E (NFA725A, the T14 Gen 4's other Wi-Fi card)",
+      "linux_driver": "ath11k",
+      "novaos_driver": null,
+      "licence": "LICENSES/LICENSE.QualcommAtheros_ath10k",
+      "notice": "LICENSES/NOTICE.qca",
+      "files": [
+        {
+          "path": "ath11k/WCN6855/hw2.0/amss.bin",
+          "sha256": "e12b23ddc4b8d2d2a10a651a5d6fdcd00f60fcae884d2cf5dad17627211fcdfd",
+          "size": 4988928
+        },
+        {
+          "path": "ath11k/WCN6855/hw2.0/m3.bin",
+          "sha256": "0c590881870d0e6e98fc7d393ce05690e09287933b1b535e935bf5d98b77713f",
+          "size": 266684
+        },
+        {
+          "path": "ath11k/WCN6855/hw2.0/board-2.bin",
+          "sha256": "9287fa8d14d915892666b03e9403135875d08371fd1438d2c6d9fe96ae71cf68",
+          "size": 7237392
+        },
+        {
+          "path": "ath11k/WCN6855/hw2.0/regdb.bin",
+          "sha256": "e1b774b1feda4cab01f5a26089124059539fc31544ac34129dce45c8ff26d645",
+          "size": 24310
+        }
+      ]
+    },
+    {
+      "id": "qualcomm-bluetooth",
+      "device": "Qualcomm WCN6855 Bluetooth",
+      "linux_driver": "btqca",
+      "novaos_driver": null,
+      "licence": "LICENSES/LICENSE.QualcommAtheros_ath10k",
+      "notice": "LICENSES/NOTICE.qca",
+      "files": [
+        {
+          "path": "qca/wcnhpbtfw21.tlv",
+          "sha256": "77d8979da5c613c85550549dcef8fb8ec6fe2e5576942855ea03179a11597c1f",
+          "size": 152784
+        },
+        {
+          "path": "qca/wcnhpnv21.bin",
+          "sha256": "642e3457f0a283881d4ca7b132daed43c917e05e0465d00b6e4c751c73e3bd91",
+          "size": 6610
+        }
+      ]
+    }
+  ],
+  "licences": [
+    {
+      "path": "LICENSES/LICENSE.i915",
+      "sha256": "8542aeabf2761935122d693561e16766ce1bcc2b0d003204f9040b7d6d929f2e",
+      "size": 2080
+    },
+    {
+      "path": "LICENSES/LICENCE.iwlwifi_firmware",
+      "sha256": "16d5040c7cf851fc693b7542e20870935b99802533ea1bfd231c377a2305e5c5",
+      "size": 2046
+    },
+    {
+      "path": "LICENSES/LICENCE.ibt_firmware",
+      "sha256": "5181b0b51efc79d5acb2c9bb92042878fdbad97a92114d4ab5e32e2b5b52fce4",
+      "size": 2040
+    },
+    {
+      "path": "LICENSES/LICENSE.QualcommAtheros_ath10k",
+      "sha256": "337a55102138d7baa143ee4a4c6c91693e0113fece35d380b2a12109e8c23b3f",
+      "size": 2713
+    },
+    {
+      "path": "LICENSES/NOTICE.qca",
+      "sha256": "600276e0992c8e5a85300d605fb2db6132ffcf2a21ddcfd0e8566a19e0f491c3",
+      "size": 19013
+    }
+  ]
+}

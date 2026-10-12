@@ -37,10 +37,12 @@ GitHub release.  Nothing is uploaded by hand.
 - **Runs CI on the tag** (`ci.yml`, called with `release: true`): the
   checks, the boot-test job's core, network and devices suites (the
   devices suite also starts NovaOS from the ISO) and the graphics suite.
-  The boot-test job first runs `tools/fetch_sof_firmware.py --all`, so the
-  image carries the Sound Open Firmware the audio DSP needs for laptop
-  microphones (the T14 Gen 4 and other Tiger Lake to Raptor Lake
-  machines); pull requests build without it.  It keeps the ISO, the
+  The boot-test job first runs `tools/fetch_firmware.py`, so the image
+  carries the default firmware set ([drivers.md](drivers.md#the-default-firmware-set):
+  Intel graphics, Intel and Qualcomm Wi-Fi and Bluetooth) and the Sound
+  Open Firmware the audio DSP needs for laptop microphones (the T14 Gen 4
+  and other Tiger Lake to Raptor Lake machines); pull requests build
+  without them.  It keeps the ISO, the
   kernel and the boot loader it tested.
 - **Publishes the release** for the tag, titled "NovaOS 0.1.0", with:
 
@@ -117,7 +119,7 @@ step 3 merged keep working: their kernels have no key and check nothing.
 The same steps run locally after a build:
 
 ```bash
-python3 tools/fetch_sof_firmware.py --all
+python3 tools/fetch_firmware.py
 cmake -S . -B build -G "Unix Makefiles"
 make -C build -j"$(nproc)"
 scripts/create-iso.sh dist/nova.iso build/bootx64.efi build/kernel.elf

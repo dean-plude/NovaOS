@@ -47,6 +47,7 @@
 #include "userland_files.h"
 #include "../gdi/png.h"
 #include "../drivers/virtio_gpu.h"
+#include "../nt/nt.h"
 
 static UmProcess     *g_procs[UM_MAX_PROCS];
 static UINT32         g_next_id = 100;
@@ -278,6 +279,7 @@ void UmInit(void)
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
+    NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
     KbdLoad();                                      /* the user's keyboard layout */
     AudioLoadSettings();                            /* the sound devices' saved volumes and default */
     um_registry_pending_renames();                  /* before any program runs */

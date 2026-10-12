@@ -68,7 +68,10 @@ order; --list prints them):
             sets their motors, and one is unplugged; "pnp", an xHCI
             controller into which the test plugs a keyboard, a hub and a
             USB stick and takes them out again: pnptest follows the
-            Plug and Play device tree
+            Plug and Play device tree; "wdm", the machine as the core
+            boot has it, where sc installs a Windows kernel-mode test
+            driver (wdmtest.sys), which loads once test signing is on
+            and a restart later, and wdmtest talks to it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -292,6 +295,7 @@ UPDATE = load_suite('devices/update')
 GAMEPAD = load_suite('devices/gamepad')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
+WDM = load_suite('devices/wdm')
 
 
 def net4_boot(work):
@@ -412,6 +416,12 @@ def pnp_boot(work):
     """An xHCI controller with nothing on it: the tests plug a keyboard, a
     hub and a USB stick in and take them out (tests/selftest/devices/pnp)"""
     return ['-device', 'qemu-xhci,id=xhci'], []
+
+
+def wdm_boot(work):
+    """Nothing beyond the core boot's machine: sc loads a Windows kernel-mode
+    driver, wdmtest.sys, once test signing is on (tests/selftest/devices/wdm)"""
+    return [], []
 
 
 def ntfs_boot(work):
@@ -545,7 +555,8 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
-                ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot)],
+                ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
+                ('wdm', WDM, wdm_boot)],
 }
 
 

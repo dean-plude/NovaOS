@@ -14,6 +14,12 @@
  * on a thread and serves controls on the pipe \\.\pipe\NovaService_<name>,
  * where ControlService sends them. A program started any other way gets
  * ERROR_FAILED_SERVICE_CONTROLLER_CONNECT, as on Windows.
+ *
+ * A kernel driver's service (Type SERVICE_KERNEL_DRIVER or
+ * SERVICE_FILE_SYSTEM_DRIVER) starts with NtLoadDriver and stops with
+ * NtUnloadDriver, as Windows' service control manager starts and stops
+ * one: the kernel loads its ImagePath (kernel/nt/). Its state is written
+ * here; it has no process.
  */
 #define NOVA_BUILD_ADVAPI32
 #include <winternl.h>
@@ -55,6 +61,11 @@ WINADVAPI BOOL WINAPI ConvertStringSidToSidW(LPCWSTR s, PSID *out);
 #define SERVICE_FILE_SYSTEM_DRIVER 2
 #define SERVICE_ACTIVE           1
 #define SERVICE_INACTIVE         2
+
+#ifdef _WIN64
+NTSYSAPI NTSTATUS NTAPI NtLoadDriver(PUNICODE_STRING name);
+NTSYSAPI NTSTATUS NTAPI NtUnloadDriver(PUNICODE_STRING name);
+#endif
 
 typedef void *SC_HANDLE;
 typedef void *SERVICE_STATUS_HANDLE;
@@ -226,7 +237,8 @@ static void query_status(const WCHAR *name, SERVICE_STATUS_PROCESS *st)
     st->dwCheckPoint = get_dword(k, L"NovaCheckPoint", 0);
     st->dwWaitHint = get_dword(k, L"NovaWaitHint", 0);
     st->dwProcessId = get_dword(k, L"NovaPid", 0);
-    if (st->dwCurrentState != SERVICE_STOPPED) {
+    if (st->dwServiceType & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER)) st->dwProcessId = 0;   /* (no process: in the kernel) */
+    else if (st->dwCurrentState != SERVICE_STOPPED) {
         bool alive = false;
         HANDLE p = st->dwProcessId ? OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, FALSE, st->dwProcessId) : NULL;
         if (p) {
@@ -801,6 +813,31 @@ static HANDLE service_token(HKEY k)
     return linked;
 }
 
+/* Start (@load) or stop a kernel driver's service @name (its key @k) */
+static BOOL load_driver(HKEY k, const WCHAR *name, bool load)
+{
+    WCHAR path[400];
+    wcopy(path, 400, L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\");
+    wcat(path, 400, name);
+    UNICODE_STRING us;
+    RtlInitUnicodeString(&us, path);
+#ifdef _WIN64
+    NTSTATUS st = load ? NtLoadDriver(&us) : NtUnloadDriver(&us);
+#else
+    NTSTATUS st = (NTSTATUS)0xC00000BB;      /* STATUS_NOT_SUPPORTED: 32-bit programs' ntdll has no driver services yet */
+#endif
+    if (st < 0) {
+        DWORD err = RtlNtStatusToDosError(st);
+        if (!load && st == (NTSTATUS)0xC0000010) err = ERROR_INVALID_SERVICE_CONTROL;   /* (no DriverUnload: it cannot stop) */
+        SetLastError(err);
+        return FALSE;
+    }
+    set_dword(k, L"NovaState", load ? SERVICE_RUNNING : SERVICE_STOPPED);
+    set_dword(k, L"NovaControls", load ? SERVICE_ACCEPT_STOP : 0);
+    set_dword(k, L"NovaPid", 0);
+    return TRUE;
+}
+
 WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
 {
     SvcH *s = handle(h, K_SVC);
@@ -812,7 +849,7 @@ WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
     if (open_key(s->name, true, &k)) { SetLastError(ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
     DWORD type = get_dword(k, L"Type", 0x10);
     if (get_dword(k, L"Start", 3) == SERVICE_DISABLED) { RegCloseKey(k); SetLastError(ERROR_SERVICE_DISABLED); return FALSE; }
-    if (type & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER)) { RegCloseKey(k); SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+    if (type & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER)) { BOOL r = load_driver(k, s->name, true); RegCloseKey(k); return r; }
     WCHAR raw[1024], cmd[2048];
     get_str(k, L"ImagePath", raw, 1024);
     if (!ExpandEnvironmentStringsW(raw, cmd, 2048)) wcopy(cmd, 2048, raw);
@@ -902,6 +939,17 @@ WINADVAPI BOOL WINAPI ControlService(SC_HANDLE h, DWORD control, SERVICE_STATUS 
         if (out) memcpy(out, &st, sizeof(*out));
         SetLastError(ERROR_INVALID_SERVICE_CONTROL);
         return FALSE;
+    }
+    if (st.dwServiceType & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER)) {   /* a driver: stop is all it takes */
+        HKEY k;
+        BOOL r = FALSE;
+        if (control == SERVICE_CONTROL_INTERROGATE) r = TRUE;
+        else if (control != SERVICE_CONTROL_STOP) SetLastError(ERROR_INVALID_SERVICE_CONTROL);
+        else if (open_key(s->name, true, &k)) SetLastError(ERROR_SERVICE_DOES_NOT_EXIST);
+        else { r = load_driver(k, s->name, false); RegCloseKey(k); }
+        query_status(s->name, &st);
+        if (out) memcpy(out, &st, sizeof(*out));
+        return r;
     }
     WCHAR pn[300];
     pipe_name(s->name, pn, 300);

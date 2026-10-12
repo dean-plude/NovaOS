@@ -176,9 +176,11 @@ Windows programs use is there yet, so many programs still fail:
 `pnputil /add-driver <folder>\*.inf /install`.  `pnputil /enum-drivers`
 lists the packages installed and `pnputil /delete-driver oemN.inf` removes
 one.  The package is kept in the driver store as on Windows, but NovaOS
-runs its devices with its own drivers and does not load Windows
-kernel-mode drivers, so the driver itself does not start: `pnputil`
-reports that no device took it.  The firmware NovaOS's own drivers load
+runs its devices with its own drivers and does not yet start a Windows
+driver on a device, so `pnputil` reports that no device took it.  A
+simple kernel-mode driver that is not tied to a device can already run as
+a kernel service (`sc create NAME type= kernel binPath= ...`, then `sc
+start NAME`), with test signing on ([drivers.md](drivers.md#windows-driver-packages)).  The firmware NovaOS's own drivers load
 into devices comes with release images ([drivers.md](drivers.md)).
 
 ## Your files

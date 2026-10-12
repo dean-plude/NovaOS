@@ -671,34 +671,12 @@ To make the ISO yourself from a fresh build, run
   serial log must show a backtrace with function names, and last the
   kernel crash report: after `crash kernel` and a reset, `crashes last`
   shows the fault's backtrace.<!-- END generated:core-tests -->
-- **Network** (in the boot-test job): two boots with a virtio-net card.
-  On QEMU's user network, `ipconfig`, `ping`, Winsock over IPv4 and
-  `httptest suite` (winhttp with HTTP/2 by ALPN) against
-  `tools/h2server.js`, and `looptest` (Winsock over 127.0.0.1 and ::1);
-  on an IPv6-only network that is `tools/v6peer.py`,
-  SLAAC and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6.  A third
-  boot has an Intel e1000e instead: its PHY and link, the link pulled
-  and plugged back, sleep and wake, and the IPv4 tests again.
-- **Graphics tests**: `tools/d2dtest` (Direct2D geometry answers, and a
-  scene that must match the reference `tools/d2dtest/reference.py` draws
-  with Skia), then installs Mesa 3D, DXVK and Venus with the App Store
-  (`store install NAME` in the Terminal; `tools/ci/stage-graphics.sh`
-  stages the downloads) and runs `tools/gltest` (15 tests, on virgl and
-  on llvmpipe) and `tools/d3dtest` (17 tests, on Venus: the first monitor
-  is a QEMU 3D virtio-gpu, `virtio-vga-gl,venus=on`, whose Vulkan and
-  OpenGL are the runner's lavapipe and llvmpipe); each 64- and 32-bit,
-  with a screenshot of each while it draws; `gltest present` (virgl's
-  frames shown straight from the host's GPU while the window is alone,
-  checked on the screen itself, and through the GDI while a window covers
-  it) and `d3dtest present` (the same for Direct3D 9 on Venus, whose
-  Vulkan swapchain's frames the host copies into the screen); then
-  `gltest fps` and
-  `d3dtest fps`, which draw the same OpenGL scene on virgl (shown
-  directly and through the GDI) and on
-  llvmpipe, and the same Direct3D 9 scene on Venus (shown directly and
-  through the GDI) and on lavapipe,
-  inside NovaOS and need the GPU to be faster, and direct presentation
-  faster than the GDI way.
+- **Network** (in the boot-test job): two boots with a virtio-net card: IPv4,
+  IPv6 (SLAAC, RDNSS), HTTP/2 and loopback tests, then an Intel e1000e.
+- **Graphics tests**: Direct2D, then OpenGL, Vulkan and Direct3D 9/11 on Mesa,
+  DXVK and Venus, each 64- and 32-bit with screenshots, and the frame-rate
+  checks for direct presentation.  What each one runs:
+  [docs/ci.md](docs/ci.md#what-the-network-and-graphics-suites-run).
 
 The build compiles through ccache, and the boot-test job saves the cache
 after each build, so a pull request recompiles only what it changed.  A pull
@@ -830,50 +808,21 @@ os/
 
 ## Key design decisions
 
-- **Clean-room, ABI-faithful (the "hybrid" path)**: every DLL and service is
-  written from scratch, but syscall numbers, `NTSTATUS` codes and structure
-  layouts (PEB, TEB, loader data, `CONTEXT`…) follow Windows 10 1903 x64, so
-  unmodified binaries find what they expect.  See
-  [docs/ROADMAP.md](docs/ROADMAP.md#the-pivotal-decision-how-to-get-the-win32-api-surface).
-- **Native execution, both bitnesses**: x64 code runs in long mode; x86 code
-  runs in compatibility mode with a 32-bit `ntdll` that converts each system
-  call to the kernel's 64-bit form, the way Windows' WoW64 does.
-- **The window system lives in the program**: `user32` keeps each program's
-  window tree; the kernel's window manager composites only top-level
-  windows, drawn from bitmaps the programs own.  The kernel also draws the
-  pointer: a program's `SetCursor` shape (animated .ani cursors included)
-  over its own windows, the desktop's arrow elsewhere, and the system
-  pointers (I-beam, busy ring, resize arrows on window edges, hand, cross,
-  "no" and the rest of `IDC_*`) from vector outlines, sharp at 200 %.
-- **Software rendering**: GDI is a CPU rasterizer drawing into a back
-  buffer in RAM at integer HiDPI scale.  On QEMU's standard VGA, QXL,
-  virtio-vga and VMware adapters (and Bochs, VirtualBox's VBoxVGA) a VBE
-  "DISPI" driver sets the resolution at run time (Settings > Display,
-  `ChangeDisplaySettings`) and flips between two pages of video memory
-  when both fit; Cirrus gets 800x600 and 640x480; elsewhere frames are
-  copied to the UEFI framebuffer in the boot mode.  There is no 3D GPU driver.
-- **Drive C: in memory, saved to FAT**: the RAM disk is saved to a FAT32
-  volume a second after each change and restored at boot.  A file takes
-  the memory its contents need (one written by appending gives back the
-  rest of the buffer it grew into when it is closed; `mem` in the Terminal
-  shows what C: takes).  When memory runs short, the contents of saved
-  files nothing holds are let go of, those unused longest first, and read
-  back from the volume when wanted, as Windows drops cached file pages;
-  at boot the large files are restored without being read until then
-  (`cachetest`).  System files
-  come from the kernel image, so a new build always brings its own.  The
-  save runs on its own thread and holds no lock while the disk is written
-  (`savetest`), and a crash during a FAT save leaves each file old or new.
-- **SMP with fine-grained locks**: the scheduler, memory,
-  synchronization, sockets, the GUI, the program loader, files, the
-  registry, the console and starting processes have their own locks, and
-  file and registry throughput scale about 3x from one CPU to four
-  (`smpstress scaling 3`); the SATA, NVMe and USB disk drivers take a lock
-  per disk; the rest of the kernel keeps a big lock (rules
-  and lock order in `kernel/ke/smp.h`; the Terminal's `profile` command
-  shows where the CPUs spend their time).
-- **Kernel-helper syscalls (0x01F0–0x01FF)** are private to NovaOS's own
-  DLLs and invisible to Windows programs.
+The full list, with the reasons, is in
+[docs/design/architecture.md](docs/design/architecture.md).
+
+- **Clean-room and ABI-faithful**: every DLL and service is written from
+  scratch, but syscall numbers, `NTSTATUS` codes and structure layouts
+  follow Windows 10 1903 x64, so unmodified binaries find what they expect.
+- **Native execution, both bitnesses**: x64 in long mode, x86 in compatibility
+  mode through a 32-bit `ntdll`, the way WoW64 does.
+- **The window system lives in the program**: `user32` keeps the window tree;
+  the kernel composites top-level windows from bitmaps the programs own.
+- **Software rendering**: GDI is a CPU rasterizer at integer HiDPI scale;
+  the QEMU 3D virtio-gpu (Venus, virgl) is the only GPU path so far.
+- **Drive C: in memory, saved to FAT**, with its files read back on demand.
+- **SMP with fine-grained locks**, and a big lock for the rest of the kernel.
+- **Kernel-helper syscalls (0x01F0–0x01FF)** are private to NovaOS's own DLLs.
 
 ## Documentation
 
@@ -887,6 +836,10 @@ os/
   how to merge main into a branch.
 - [docs/building.md](docs/building.md): building, running, the data disk,
   tests, debugging.
+- [docs/ci.md](docs/ci.md): how CI is organised, and what its network and
+  graphics suites run.
+- [docs/design/architecture.md](docs/design/architecture.md): the key design
+  decisions in full.
 - [docs/macos.md](docs/macos.md): running and building on a Mac (Apple
   Silicon and Intel).
 - [docs/ROADMAP.md](docs/ROADMAP.md): the compatibility strategy and what

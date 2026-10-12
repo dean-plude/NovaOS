@@ -40,7 +40,11 @@ def unpack(app, files, dest):
 def drawn(nova, echo):
     """Godot shows its dark boot splash while it builds the game's
     pipelines (minutes on llvmpipe without KVM), then the game: its light
-    field fills the window.  Waits up to 20 minutes for it"""
+    field fills the window (the centre's mean brightness is about 50 on the
+    splash, 180-220 while playing, and about 100 once a creep has caught
+    the player and the field is dimmed under "Press Space or Enter to
+    retry", which with KVM can happen before the first look).  Waits up to
+    20 minutes for it"""
     import time
     from PIL import Image, ImageStat
     f = os.path.join(nova.work, 'creeps.png')
@@ -49,7 +53,7 @@ def drawn(nova, echo):
         nova.shot(f)
         g = Image.open(f).convert('L')
         w, h = g.size
-        if ImageStat.Stat(g.crop((w // 4, h // 4, 3 * w // 4, 3 * h // 4))).mean[0] > 120:
+        if ImageStat.Stat(g.crop((w // 4, h // 4, 3 * w // 4, 3 * h // 4))).mean[0] > 80:
             time.sleep(10)                          # (creeps walk on)
             return None
     return 'the game did not draw its field in 20 minutes (still on the boot splash)'

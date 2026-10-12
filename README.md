@@ -759,28 +759,28 @@ See [docs/building.md#tests](docs/building.md#tests) for how to run them.
 
 ## Roadmap
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1 | Boot and kernel foundation (UEFI, memory, interrupts, scheduler) | ✅ Done |
-| 2 | NT kernel personality (Object Manager, syscalls, registry) | ✅ Done |
-| 3 | I/O subsystem (IRPs, section objects, PE loader) | ✅ Done |
-| 4 | VFS and InitRD | ✅ Done |
-| 5 | Process isolation (per-process page tables, KPCR, PEB/TEB) | ✅ Done |
-| 6 | User-mode foundation (syscall thunks, Win32 helpers, CSRSS shim) | ✅ Done |
-| 7 | GUI (GDI renderer, window manager, desktop shell) | ✅ Done |
-| 8 | Interactive desktop, built-in apps, networking, HTTPS | ✅ Done |
-| 9 | Windows programs in ring 3: loader, threads, TLS, SEH, sockets, GUI; the NetSurf browser (9.5) | ✅ Done |
-| 10 | Standard DLLs (UCRT, C++ EH, advapi32, shell32…), registry, COM, persistent storage | ✅ Done |
-| 11 | Multiprocessor: every core runs threads, fine-grained kernel locking | ✅ Done |
-| 12 | Win32 GUI subsystem; unmodified 7-Zip; App Store; Windows Installer; installing NovaOS | ✅ Done |
-| 13 | 32-bit programs (WoW64); NSIS installers; `.lnk` shortcuts | ✅ Done |
-| 14 | Pipes, `cmd.exe`, shared clipboard, Git and MSYS2, the Java/.NET/Node.js/Python runtimes | ✅ Done |
-| 15 | 3D graphics on the CPU: OpenGL 4.5 (Mesa llvmpipe), Vulkan 1.3 (lavapipe), Direct3D 8–11 (DXVK) | ✅ Done |
-| 16 | Sound: Intel HD Audio, a kernel mixer, `waveOut`/`PlaySound`/`Beep`, WASAPI | ✅ Done |
+**Current status: Phase 22, preparing the first release (0.1).** UEFI boot,
+the x64/x86 Windows environment, desktop, persistent storage, tested apps,
+software graphics and QEMU virtio-GPU acceleration are in place. The app
+corpus and QEMU checks provide evidence for these features; they do not imply
+broad Windows compatibility or native physical-GPU support.
 
-What comes next (broader app coverage, the GPU, the
-remaining kernel and API gaps, storage and hardware) is in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+The 0.1 release is not complete until its ISO boots on the reference ThinkPad
+T14 Gen 4 and the release is tagged. Real-hardware validation remains
+outstanding.
+
+| Next phase | Focus |
+|---|---|
+| 23 | Finish 0.1: check the T14, fix its first missing driver, achieve a clean nightly week, check Hyper-V input and verify update signing. |
+| 24 | Gaming: Steam/GOG sign-in and a DRM-free game; Direct3D 12 support is already demonstrated. |
+| 25 | GPU: design and implement native Intel GPU support, then test 3D and an external monitor; retain the CPU fallback. |
+| 26 | Kernel, console and storage: complete console cells and ConPTY, verify NTFS after power loss, and track performance regressions. |
+| 27 | Everyday apps: grow the nightly App Store corpus, add office-suite coverage and verify public HTTPS browsing. |
+| 28 | Laptop hardware: Wi-Fi, Bluetooth, camera, battery life and a second reference PC. |
+| 29 | NovaOS 0.2 release on both reference PCs. |
+
+See the [full roadmap](docs/ROADMAP.md) for current evidence, remaining
+milestones and completion gates.
 
 ## Repository layout
 

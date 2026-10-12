@@ -467,3 +467,73 @@ NT_API NTSTATUS nt_ZwQuerySystemInformation(UINT32 cls, void *info, UINT32 len, 
     }
     return NT_STATUS_SUCCESS;
 }
+
+/* -----------------------------------------------------------------------
+ * RtlQueryRegistryValues(Ex): a table of values to read from a key, each
+ * stored straight into the caller's variable (RTL_QUERY_REGISTRY_DIRECT)
+ * or handed to a query routine, with a default for a missing one
+ * ----------------------------------------------------------------------- */
+typedef NTSTATUS (NT_API *RtlQueryRoutine)(NT_WCHAR *name, UINT32 type, void *data, UINT32 len, void *ctx, void *entry_ctx);
+
+typedef struct {                                     /* RTL_QUERY_REGISTRY_TABLE */
+    RtlQueryRoutine QueryRoutine;
+    UINT32          Flags;
+    NT_WCHAR       *Name;
+    void           *EntryContext;
+    UINT32          DefaultType;
+    void           *DefaultData;
+    UINT32          DefaultLength;
+} RtlQueryTable;
+
+#define RTL_REGISTRY_ABSOLUTE     0
+#define RTL_REGISTRY_SERVICES     1
+#define RTL_REGISTRY_CONTROL      2
+#define RTL_REGISTRY_WINDOWS_NT   3
+#define RTL_REGISTRY_DEVICEMAP    4
+#define RTL_REGISTRY_HANDLE       0x40000000u
+#define RTL_REGISTRY_OPTIONAL     0x80000000u
+#define RTL_QUERY_REGISTRY_SUBKEY     0x01u
+#define RTL_QUERY_REGISTRY_TOPKEY     0x02u
+#define RTL_QUERY_REGISTRY_REQUIRED   0x04u
+#define RTL_QUERY_REGISTRY_NOVALUE    0x08u
+#define RTL_QUERY_REGISTRY_DIRECT     0x20u
+#define RTL_QUERY_REGISTRY_DELETE     0x40u
+#define RTL_QUERY_REGISTRY_TYPECHECK  0x100u
+#define REG_NONE 0
+#define REG_SZ 1
+#define REG_EXPAND_SZ 2
+#define REG_MULTI_SZ 7
+
+/* (RtlQueryRegistryValues itself is ntoskrnl.c's) */
+NT_API NTSTATUS nt_RtlQueryRegistryValues(UINT32 relative, const NT_WCHAR *path, void *table, void *ctx,
+                                          void *environment);
+
+/* The Ex form: the same, but a DIRECT value of a type the table did not
+ * check is refused rather than written over the caller's variable */
+NT_API NTSTATUS nt_RtlQueryRegistryValuesEx(UINT32 relative, const NT_WCHAR *path, RtlQueryTable *table,
+                                            void *ctx, void *environment)
+{
+    for (RtlQueryTable *q = table; q->QueryRoutine || q->Name; q++)
+        if ((q->Flags & RTL_QUERY_REGISTRY_DIRECT) && !(q->Flags & RTL_QUERY_REGISTRY_TYPECHECK)) {
+            kprintf("[NT] RtlQueryRegistryValuesEx: a DIRECT entry without RTL_QUERY_REGISTRY_TYPECHECK\n");
+            return NT_STATUS_INVALID_PARAMETER;
+        }
+    return nt_RtlQueryRegistryValues(relative, path, table, ctx, environment);
+}
+
+/* IoOpenDriverRegistryKey: the driver's Parameters key, or its State key
+ * for state it keeps across starts (under its service key, created when
+ * missing) */
+NT_API NTSTATUS nt_IoOpenDriverRegistryKey(NT_DRIVER_OBJECT *obj, int type, UINT32 access, UINT32 flags, void *handle)
+{
+    (void)access; (void)flags;
+    NtDriver *drv = NtIoDriverOf(obj);
+    if (!drv || (type != 0 && type != 1)) return NT_STATUS_INVALID_PARAMETER;   /* DriverRegKeyParameters, DriverRegKeyPersistentState */
+    ZwObject *o = zw_new(ZW_KEY);
+    if (!o) return STATUS_INSUFFICIENT_RESOURCES;
+    ksnprintf(o->path, sizeof(o->path), "Machine\\System\\CurrentControlSet\\Services\\%s\\%s", drv->service,
+              type ? "State" : "Parameters");
+    if (!um_registry_create_key(o->path)) { kfree(o); return STATUS_INSUFFICIENT_RESOURCES; }
+    if (!put_handle(handle, o)) { kfree(o); return NT_STATUS_ACCESS_VIOLATION; }
+    return NT_STATUS_SUCCESS;
+}

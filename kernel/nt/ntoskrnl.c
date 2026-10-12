@@ -181,6 +181,33 @@ NT_API UINT64 nt_wcslen(const NT_WCHAR *s)
     return n;
 }
 
+NT_API int nt_strncmp(const char *a, const char *b, UINT64 n)
+{
+    for (; n; n--, a++, b++) {
+        if (*a != *b) return (UINT8)*a - (UINT8)*b;
+        if (!*a) break;
+    }
+    return 0;
+}
+
+/* (ASCII case folding, as the C runtime's in the "C" locale) */
+NT_API int nt__stricmp(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : (UINT8)*a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : (UINT8)*b;
+        if (x != y || !x) return x - y;
+    }
+}
+
+NT_API NT_WCHAR *nt_wcsrchr(const NT_WCHAR *s, NT_WCHAR c)
+{
+    const NT_WCHAR *last = NULL;
+    for (;; s++) {
+        if (*s == c) last = s;
+        if (!*s) return (NT_WCHAR *)last;
+    }
+}
+
 /* -----------------------------------------------------------------------
  * hal.dll
  * ----------------------------------------------------------------------- */

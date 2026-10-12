@@ -233,6 +233,7 @@ set(KERNEL_C_SOURCES
     nt/se.c
     nt/seh.c
     nt/usbd.c
+    nt/win10.c
     nt/zw.c
     io/pnp.c
     mm/vma.c

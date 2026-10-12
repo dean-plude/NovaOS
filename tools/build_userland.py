@@ -637,6 +637,15 @@ edudir = os.path.join(out, 'edutest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), edudir, 'edutest'])
 for n in sorted(os.listdir(edudir)):
     built.append((f'\\Tests\\Edu\\{n}', os.path.join(edudir, n)))
+# 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
+# MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
+# that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in
+# System32\drivers as on Windows, and the KMDF test driver kmdftest.sys
+kmdfdir = os.path.join(out, 'kmdf')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'kmdf', 'build_kmdf.py'), kmdfdir])
+for n in ('Wdf01000.sys', 'WdfLdr.sys'):
+    built.append((f'\\Windows\\System32\\drivers\\{n}', os.path.join(kmdfdir, n)))
+built.append(('\\Tests\\Kmdf\\kmdftest.sys', os.path.join(kmdfdir, 'kmdftest.sys')))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)
 sf2 = os.path.join(out, 'gm.sf2')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'make_gm_soundfont.py'), sf2])

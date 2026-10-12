@@ -55,6 +55,7 @@ struct NtDriver {
     int               opens;            /* file objects open on its devices */
     bool              unload_pending;   /* NtUnloadDriver came while files were open */
     bool              started;          /* DriverEntry succeeded */
+    bool              dll;              /* an export driver, loaded for its exports (WdfLdr.sys): no driver object */
 };
 
 /* ke.c: set the processor-count and debugger data exports once the CPUs
@@ -88,6 +89,8 @@ NtDriver *NtDrvByAddress(UINT64 addr);
 
 /* ex.c: @drv unloads: log the pool blocks it never freed */
 void      NtPoolDriverGone(NtDriver *drv);
+/* ex.c: a new random (version 4) UUID, as ExUuidCreate makes */
+NTSTATUS  NtExUuid(UINT8 out[16]);
 
 /* ps.c: ZwClose of a system-thread handle drops its reference (true when
  * @handle was one) */

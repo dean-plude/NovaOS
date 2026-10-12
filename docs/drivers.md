@@ -61,9 +61,10 @@ and register a device interface that programs open.  `pnputil
 `pnputil /disable-device /deviceid ID` takes the driver away (it may
 refuse while a program has the device open) and keeps the device off
 across restarts, and `/enable-device` starts it again.  A device NovaOS
-has its own driver for keeps it.  KMDF drivers and the rest follow in
-later steps; until then the default set is the built-in drivers and the
-firmware below.
+has its own driver for keeps it.  Since step 30.4 KMDF drivers load
+too, on `Wdf01000.sys` and `WdfLdr.sys`; the rest follow in later steps,
+and until then the default set is the built-in drivers and the firmware
+below.
 
 Since step 30.8 a Windows **USB client driver** runs a USB device that
 has no NovaOS driver, the way a vendor's driver runs it on Windows.
@@ -93,6 +94,17 @@ rest), which send the driver the `IOCTL_SERIAL_*` requests Windows sends.
 downloads, installs and starts FTDI's driver for an FTDI USB serial
 converter, then finds and installs the port driver for the COM port it
 reports.
+
+KMDF drivers run too (step 30.4): NovaOS ships Microsoft's framework,
+`Wdf01000.sys`, built from Microsoft's MIT-licensed source, and its own
+KMDF loader, `WdfLdr.sys`, both in `C:\Windows\System32\drivers` as on
+Windows (`tools/kmdf/build_kmdf.py`).  A KMDF driver starting imports
+`WdfLdr.sys`, which loads `Wdf01000.sys` and binds the driver to KMDF
+1.33; the framework's error messages go to the log as `[DbgPrint]
+Wdf01000: ...` lines.  For now the framework is test-signed,
+so a KMDF driver needs test signing on (below) until NovaOS trusts its own
+system files; class-extension drivers (those that bind with
+`WdfVersionBindClass`) do not load yet.
 
 ### Driver signing
 

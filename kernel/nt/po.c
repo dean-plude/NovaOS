@@ -25,40 +25,39 @@
 
 typedef void (NT_API *PoFxCondition)(void *ctx, UINT32 component);
 
-/* PO_FX_DEVICE (V1 and V2 share the callbacks' layout up to DeviceContext) */
 typedef struct {
-    UINT32        Version;
-    UINT32        ComponentCount;
-    PoFxCondition ComponentActiveConditionCallback;
-    PoFxCondition ComponentIdleConditionCallback;
-    void         *ComponentIdleStateCallback;
-    void         *DevicePowerRequiredCallback;
-    void         *DevicePowerNotRequiredCallback;
-    void         *PowerControlCallback;
-    void         *DeviceContext;
-} NtPoFxDeviceHead;
-_Static_assert(sizeof(NtPoFxDeviceHead) == 64, "PO_FX_DEVICE");
+    PoFxCondition active, idle;                 /* ComponentActive/IdleConditionCallback */
+    void         *ctx;                          /* DeviceContext */
+} NtPoFxCallbacks;
 
 #define MAX_COMPONENTS 32
 
 typedef struct {
     NT_DEVICE_OBJECT *pdo;
-    NtPoFxDeviceHead  cb;
+    NtPoFxCallbacks   cb;
     UINT32            count;
     int               refs[MAX_COMPONENTS];     /* activation references */
     bool              idle[MAX_COMPONENTS];     /* in the idle condition */
     KSpinLock         lock;
 } NtPoFx;
 
-NT_API NTSTATUS nt_PoFxRegisterDevice(NT_DEVICE_OBJECT *pdo, const NtPoFxDeviceHead *dev, NtPoFx **handle)
+/* PO_FX_DEVICE: V1 has Version, ComponentCount, then the callbacks at 8
+ * and DeviceContext at 56; V2 and V3 put a ULONGLONG Flags after
+ * ComponentCount (callbacks at 16, DeviceContext at 64 and, after V3's
+ * directed power callbacks, 88) */
+NT_API NTSTATUS nt_PoFxRegisterDevice(NT_DEVICE_OBJECT *pdo, const UINT8 *dev, NtPoFx **handle)
 {
-    if (!pdo || !dev || !handle || dev->Version < 1 || dev->Version > 2 || !dev->ComponentCount)
-        return NT_STATUS_INVALID_PARAMETER;
+    if (!pdo || !dev || !handle) return NT_STATUS_INVALID_PARAMETER;
+    UINT32 version = *(const UINT32 *)dev, components = *(const UINT32 *)(dev + 4);
+    if (version < 1 || version > 3 || !components) return NT_STATUS_INVALID_PARAMETER;
+    UINT32 cb = version == 1 ? 8 : 16, ctx = version == 1 ? 56 : version == 2 ? 64 : 88;
     NtPoFx *h = kzalloc(sizeof(*h));
     if (!h) return NT_STATUS_INSUFFICIENT_RESOURCES;
     h->pdo = pdo;
-    h->cb = *dev;
-    h->count = dev->ComponentCount < MAX_COMPONENTS ? dev->ComponentCount : MAX_COMPONENTS;
+    h->cb.active = *(PoFxCondition const *)(dev + cb);
+    h->cb.idle = *(PoFxCondition const *)(dev + cb + 8);
+    h->cb.ctx = *(void *const *)(dev + ctx);
+    h->count = components < MAX_COMPONENTS ? components : MAX_COMPONENTS;
     /* (a zeroed KSpinLock is KSPINLOCK_INIT) */
     *handle = h;
     return NT_STATUS_SUCCESS;
@@ -76,7 +75,7 @@ NT_API void nt_PoFxActivateComponent(NtPoFx *h, UINT32 c, UINT32 flags)
     bool wake = h->refs[c]++ == 0 && h->idle[c];
     if (wake) h->idle[c] = false;
     spin_unlock_irqrestore(&h->lock, s);
-    if (wake && h->cb.ComponentActiveConditionCallback) h->cb.ComponentActiveConditionCallback(h->cb.DeviceContext, c);
+    if (wake && h->cb.active) h->cb.active(h->cb.ctx, c);
 }
 
 NT_API void nt_PoFxIdleComponent(NtPoFx *h, UINT32 c, UINT32 flags)
@@ -92,7 +91,7 @@ NT_API void nt_PoFxIdleComponent(NtPoFx *h, UINT32 c, UINT32 flags)
     bool idle = --h->refs[c] == 0;
     if (idle) h->idle[c] = true;
     spin_unlock_irqrestore(&h->lock, s);
-    if (idle && h->cb.ComponentIdleConditionCallback) h->cb.ComponentIdleConditionCallback(h->cb.DeviceContext, c);
+    if (idle && h->cb.idle) h->cb.idle(h->cb.ctx, c);
 }
 
 /* The driver's answers to callbacks NovaOS makes (idle condition) or never

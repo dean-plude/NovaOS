@@ -44,6 +44,7 @@
 #include <wchar.h>
 #include <winhttp.h>
 #include <fdi.h>
+#include "novapnp.h"
 
 __declspec(dllimport) BOOL WINAPI SetupCopyOEMInfW(PCWSTR src, PCWSTR media_loc, DWORD media_type, DWORD style,
                                                    PWSTR dest, DWORD size, PDWORD need, PWSTR *component);
@@ -459,10 +460,13 @@ typedef struct {
     BOOL ids, drivers;
 } EnumOpts;
 
-/* Whether @service, running device @id, is the Windows driver a device
- * install named in its Enum key (not one of NovaOS's own) */
-static BOOL windows_driver(const WCHAR *id, const WCHAR *service)
+/* Whether @service, of device @id (node @dn), is a Windows driver: the
+ * kernel says so of a running one; one not running is the driver a device
+ * install named in its Enum key */
+static BOOL windows_driver(DWORD dn, const WCHAR *id, const WCHAR *service)
 {
+    NovaPnpNode node;
+    if (nova_pnp_node(dn, &node) && (node.flags & NOVA_PNP_STARTED)) return (node.flags & NOVA_PNP_WINDOWS) != 0;
     WCHAR k[300], v[64];
     swprintf(k, 300, L"SYSTEM\\CurrentControlSet\\Enum\\%ls", id);
     HKEY h;
@@ -567,7 +571,7 @@ static int enum_devices(const EnumOpts *o)
             printf("Status:                     Problem\n");
             printf("Problem Code:               %lu (0x%lX) [%s]\n", (unsigned long)problem, (unsigned long)problem, problem_name(problem));
         } else printf("Status:                     %s\n", status & 0x8 /* DN_STARTED */ ? "Started" : "Stopped");
-        BOOL windows = service[0] && windows_driver(id, service);
+        BOOL windows = service[0] && windows_driver(dn, id, service);
         if (service[0]) printf("Driver Name:                %ls%s\n", service, windows ? "" : " (a NovaOS driver)");
         if (o->ids) {
             if (hw[0]) print_list("Hardware IDs:", hw);

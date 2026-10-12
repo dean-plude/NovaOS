@@ -32,6 +32,7 @@
 #define PNP_PRESENT       0x01      /* plugged in (clear: a phantom) */
 #define PNP_STARTED       0x02      /* a NovaOS driver runs it */
 #define PNP_REMOVABLE     0x04      /* can be unplugged (USB) */
+#define PNP_WINDOWS       0x08      /* the driver running it is a Windows driver (kernel/nt/pnp.c) */
 
 /* What a program gets (NovaPnpNode in userland/include/novapnp.h).  The
  * ID lists are several NUL-terminated strings ended by an empty one
@@ -77,6 +78,8 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *n);
 void PnpRemove(UINT32 id);
 /* A driver took the node: its service, and started */
 void PnpSetDriver(UINT32 id, const char *service);
+/* The same, for a Windows driver (PNP_WINDOWS) */
+void PnpSetWindowsDriver(UINT32 id, const char *service);
 /* Its setup class and friendly name, as its driver's install wrote them
  * (each left as it was when NULL or "") */
 void PnpSetNames(UINT32 id, const char *cls, const char *friendly);

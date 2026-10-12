@@ -277,13 +277,15 @@ static NT_API NT_DMA_ADAPTER *bus_dma(void *ctx, NT_DEVICE_DESCRIPTION *d, unsig
 {
     return nt_IoGetDmaAdapter(((NtPdo *)ctx)->pdo, d, regs);
 }
+/* (drivers pass PCI_WHICHSPACE_CONFIG, 0, as the type, as virtio-win's
+ * do, or the bus data type PCIConfiguration, 4: both are config space) */
 static NT_API unsigned int bus_get(void *ctx, unsigned int type, void *buf, unsigned int off, unsigned int len)
 {
-    return type == NT_PCI_CONFIG_DATA ? config(ctx, false, buf, off, len) : 0;
+    return type == NT_PCI_WHICHSPACE_CONFIG || type == NT_PCI_CONFIG_DATA ? config(ctx, false, buf, off, len) : 0;
 }
 static NT_API unsigned int bus_set(void *ctx, unsigned int type, void *buf, unsigned int off, unsigned int len)
 {
-    return type == NT_PCI_CONFIG_DATA ? config(ctx, true, buf, off, len) : 0;
+    return type == NT_PCI_WHICHSPACE_CONFIG || type == NT_PCI_CONFIG_DATA ? config(ctx, true, buf, off, len) : 0;
 }
 
 static NT_STATUS pdo_pnp(NtPdo *p, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
@@ -807,6 +809,16 @@ static void child_start(NtPdo *c)
     if (um_registry_get_dword(key, "ConfigFlags", &flags) && (flags & 1)) { PnpSetProblem(c->node, PROB_DISABLED); return; }
     um_registry_get_sz(key, "Service", service, sizeof(service));
     if (!service[0] && !(c->caps & CAP_RAW_DEVICE_OK)) { PnpSetProblem(c->node, PROB_NO_DRIVER); return; }
+    /* Resource assignment, as Windows asks it before the start: what the
+     * child needs and what its bus gave it.  A child of a software bus
+     * asks for nothing; KMDF also takes the first question as the sign
+     * that PnP knows the PDO, and only then registers its interfaces */
+    NT_ULONG_PTR info = 0;
+    if (NT_SUCCESS(send_pnp(c->pdo, NT_IRP_MN_QUERY_RESOURCE_REQUIREMENTS, NULL, NULL, &info)) && info)
+        nt_ExFreePool((void *)info);
+    info = 0;
+    if (NT_SUCCESS(send_pnp(c->pdo, NT_IRP_MN_QUERY_RESOURCES, NULL, NULL, &info)) && info)
+        nt_ExFreePool((void *)info);
     UINT32 prob = start_stack(c, service);
     if (prob) { PnpSetProblem(c->node, prob); return; }
     c->rawpdo = !service[0];

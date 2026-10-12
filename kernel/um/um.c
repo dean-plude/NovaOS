@@ -766,6 +766,7 @@ bool um_read(UmProcess *p, UINT64 va, void *dst, UINT64 n)        { return copy_
  * runtime's nanotime, GetTickCount in some CRTs) and the version fields.
  * ----------------------------------------------------------------------- */
 #define UM_KUSD_VA UINT64_C(0x7FFE0000)
+#define UM_KUSD_KERNEL_VA UINT64_C(0xFFFFF78000000000)   /* (Windows' KI_USER_SHARED_DATA) */
 
 static void kusd_time(UINT32 off, UINT64 v)       /* KSYSTEM_TIME: High2, Low, then High1 */
 {
@@ -785,6 +786,12 @@ static void kusd_init(void)
     if (!g_kusd) return;
     memset(g_kusd, 0, PAGE_SIZE);
     g_kusd_pa = (PADDR)((uintptr_t)g_kusd - PHYSMAP_BASE);
+    /* Windows drivers read it at its kernel address too (KeQueryTickCount,
+     * KeQueryInterruptTime and SharedUserData are macros reading it), so
+     * the same page is mapped read-only there before any process copies
+     * the kernel's half of the page tables */
+    if (!NT_SUCCESS(paging_map(UM_KUSD_KERNEL_VA, g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC)))
+        kprintf("[UM] KUSER_SHARED_DATA: no kernel mapping at 0x%llx\n", (unsigned long long)UM_KUSD_KERNEL_VA);
     *(UINT32 *)(g_kusd + 0x04) = 10u << 24;               /* TickCountMultiplier: 10 ms per tick */
     *(UINT16 *)(g_kusd + 0x2C) = 0x8664;                  /* ImageNumberLow/High: x64 */
     *(UINT16 *)(g_kusd + 0x2E) = 0x8664;

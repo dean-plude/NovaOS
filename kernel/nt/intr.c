@@ -142,7 +142,7 @@ NT_API NT_STATUS nt_IoConnectInterrupt(void **out, NT_KSERVICE_ROUTINE isr, void
 NT_API NT_STATUS nt_IoConnectInterruptEx(NT_IO_CONNECT_INTERRUPT_PARAMETERS *p)
 {
     if (!p) return NT_STATUS_INVALID_PARAMETER;
-    if (p->Version == NT_CONNECT_FULLY_SPECIFIED) {
+    if (p->Version == NT_CONNECT_FULLY_SPECIFIED || p->Version == NT_CONNECT_FULLY_SPECIFIED_GROUP) {   /* (one group) */
         return connect((NtInterrupt **)p->FullySpecified.InterruptObject, p->FullySpecified.ServiceRoutine,
                        p->FullySpecified.ServiceContext, p->FullySpecified.SpinLock, p->FullySpecified.Vector,
                        p->FullySpecified.Irql,

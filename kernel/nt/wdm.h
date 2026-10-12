@@ -479,6 +479,7 @@ typedef struct _NT_DEVICE_CAPABILITIES {
 #define NT_CONNECT_FULLY_SPECIFIED   1
 #define NT_CONNECT_LINE_BASED        2
 #define NT_CONNECT_MESSAGE_BASED     3
+#define NT_CONNECT_FULLY_SPECIFIED_GROUP 4   /* (KMDF's: FullySpecified with its Group) */
 typedef unsigned char (NT_API *NT_KSERVICE_ROUTINE)(void *Interrupt, void *Context);
 typedef unsigned char (NT_API *NT_KSYNCHRONIZE_ROUTINE)(void *Context);
 

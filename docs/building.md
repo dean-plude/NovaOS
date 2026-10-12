@@ -708,11 +708,18 @@ through the GDI (`NOVA_PRESENT=gdi`) and 10 s on llvmpipe, each in a child proce
 whose `GALLIUM_DRIVER` names the driver, and passes when virgl draws more
 frames per second (under TCG: 12.6 to 15.9 against 0.24), and direct
 presentation draws more than the GDI way while moving fewer bytes through
-guest memory a frame (the kernel's counters).  Last, `d3dtest fps 10` draws a
+guest memory a frame (the kernel's counters).  `d3dtest present` does
+what `gltest present` does with Direct3D 9 on Venus (DXVK through Mesa's
+Win32 swapchain), 64- and 32-bit.  Last, `d3dtest fps 10` draws a
 Direct3D 9 scene that keeps the rasterizer busy (64 blended quads over a
-640x480 window) for 10 s on Venus and 10 s on lavapipe, each in a child
-process whose `VK_DRIVER_FILES` names the driver, and passes when Venus
-draws more frames per second (under TCG: 14 to 17 against about 0.13).  The
+640x480 window) on Venus, first for 1 s that is not counted (the host
+compiles the scene's shaders), then for 10 s with its frames shown
+directly and 10 s through the GDI (`NOVA_PRESENT=gdi`), and 10 s on
+lavapipe, each in a child process whose `VK_DRIVER_FILES` names the
+driver, and passes when Venus draws more frames per second (under TCG:
+14 to 17 against about 0.13) and direct presentation moves fewer bytes
+through guest memory a frame than the GDI way and, without KVM, draws
+faster (under KVM: a sixteenth of the bytes or less).  The
 graphics boot has a second monitor (a QEMU
 `secondary-vga`): between the installs and `gltest` it runs `montest 2`,
 which checks the monitor calls and layout changes; when it asks, the test

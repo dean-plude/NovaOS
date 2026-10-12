@@ -15,8 +15,10 @@ kernel/um/um_gpu.c's NtNovaGpuCtl, found in ntdll) for a 3D context on the
 Venus capability set, submits Venus's command streams, creates and maps
 blobs (a mappable one comes back as a section that NtMapViewOfSection
 maps) and uses the kernel's timelines for Vulkan's timeline semaphores and
-fences.  It also stubs three SPIR-V specialization helpers the Windows
-link wants but Venus never calls.
+fences.  vn_renderer_nova_show asks the kernel to show a swapchain's frame
+straight from the host (direct presentation: NtNovaGpuCtl 13 with the
+frame's blob, format, row pitch and offset).  It also stubs three SPIR-V
+specialization helpers the Windows link wants but Venus never calls.
 
 virgl_nova_winsys.c (MIT; follows Mesa's virgl_vtest_winsys.c, Red Hat,
 MIT): virgl's winsys for NovaOS, in place of Linux's DRM and vtest ones.
@@ -30,7 +32,9 @@ the front buffer back.
 novaos.patch changes:
 - src/virtio/vulkan/meson.build: build vn_renderer_nova.c on Windows.
 - src/virtio/vulkan/vn_renderer.h: vn_renderer_create() makes the NovaOS
-  renderer on Windows.
+  renderer on Windows (and declares vn_renderer_nova_show).
+- src/virtio/vulkan/vn_wsi.c: on Windows, the WSI's present_memory hook
+  is vn_renderer_nova_show.
 - src/virtio/vulkan/vn_instance.c: VK_KHR_win32_surface (Venus's
   Windows build left it out; DXVK needs it).
 - src/virtio/vulkan/vn_common.h: no sync files on Windows (sync_wait and
@@ -47,7 +51,10 @@ novaos.patch changes:
 - src/vulkan/wsi/wsi_common_win32.cpp: MinGW-w64's d3d12.h instead of the
   DirectX-Headers project's (the DXGI swap chain path is not used; images
   are presented through GDI), and a present on a GPU's CPU image waits for
-  the copy into it to finish (Mesa waits only on a software device).
+  the copy into it to finish (Mesa waits only on a software device), then
+  offers it to the driver's present_memory hook (new in
+  src/vulkan/wsi/wsi_common.h's win32 hooks) before copying it to the
+  window through the GDI.
 
 - src/gallium/meson.build, src/gallium/drivers/virgl/meson.build and the
   new src/gallium/winsys/virgl/nova/ (meson.build, virgl_nova_public.h):

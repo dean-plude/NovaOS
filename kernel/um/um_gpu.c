@@ -102,7 +102,9 @@ typedef struct { UINT32 id, op; UINT64 value; } GpuSyncOp;
 typedef struct { UINT32 p[10]; UINT32 res; UINT32 pad; UINT64 size; } GpuRes3d;
 typedef struct { UINT64 blob, offset; UINT32 to_host, level, stride, layer_stride; UINT32 box[6]; UINT32 sync, pad; UINT64 value; } GpuTransfer;
 typedef struct { UINT32 n, any; UINT64 timeout_ns, ids, values; } GpuWaitArgs;
-typedef struct { UINT32 hwnd, pad; INT32 x, y, w, h; } GpuPresent;
+/* (flags bit 0: the frame is in a blob's memory, as format, stride and offset say: Venus's linear images) */
+typedef struct { UINT32 hwnd, flags; INT32 x, y, w, h; UINT32 format, stride; UINT64 offset; } GpuPresent;
+#define PRESENT_SHORT 24                      /* (a virgl resource's: no format, stride or offset) */
 
 static UINT64 do_submit(Gpu *g, UINT64 ptr)
 {
@@ -185,11 +187,13 @@ static UINT64 do_blob_map(Gpu *g, UINT64 n, UINT64 size_ptr)
 
 static UINT64 do_present(Gpu *g, UINT64 n, UINT64 ptr)
 {
-    GpuPresent a;
-    if (!NT_SUCCESS(CopyFromUser(&a, (const void *)(uintptr_t)ptr, sizeof(a)))) return FAIL;
+    GpuPresent a = { 0 };
+    if (!NT_SUCCESS(CopyFromUser(&a, (const void *)(uintptr_t)ptr, PRESENT_SHORT))) return FAIL;
+    if ((a.flags & 1) && !NT_SUCCESS(CopyFromUser(&a, (const void *)(uintptr_t)ptr, sizeof(a)))) return FAIL;
     VgpuBlob *b = get_blob(g, n, false);
     if (!b) return FAIL;
-    int r = UmGuiGpuPresent(UmCurrent(), a.hwnd, b, a.x, a.y, a.w, a.h);
+    VgpuFrame fr = { a.format, a.stride, a.offset };
+    int r = UmGuiGpuPresent(UmCurrent(), a.hwnd, b, (a.flags & 1) ? &fr : NULL, a.x, a.y, a.w, a.h);
     VgpuBlobUnref(b);
     return (UINT64)r;
 }
@@ -232,7 +236,8 @@ static UINT64 do_wait(Gpu *g, UINT64 ptr)
  *  11 create a virgl resource: GpuRes3d at @ptr (res filled in); its number, like a blob's (0: refused)
  *  12 transfer: GpuTransfer at @ptr
  *  13 present virgl resource @arg straight from the host: GpuPresent at @ptr (the window, user32's
- *     top-level handle, and where on screen): 0 shown, 1 not now (present it through the GDI)
+ *     top-level handle, and where on screen; with flags bit 0, blob @arg's memory holds the frame:
+ *     Venus's): 0 shown, 1 not now (present it through the GDI)
  *  14 statistics (h unused): DISPLAY_STATS counters (hal/display.h) at @ptr
  * Returns 0 (or as said), or -1 for a bad handle or argument. */
 static UINT64 sys_gpu(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)

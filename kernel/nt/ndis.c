@@ -1000,6 +1000,8 @@ NT_API void nt_NdisFreeNetBufferList(NET_BUFFER_LIST *nbl)
 }
 
 /* A clone: its own NET_BUFFERs over the original's MDLs */
+NT_API void nt_NdisFreeCloneNetBufferList(NET_BUFFER_LIST *nbl, UINT32 flags);
+
 NT_API NET_BUFFER_LIST *nt_NdisAllocateCloneNetBufferList(NET_BUFFER_LIST *orig, void *nbl_pool, void *nb_pool,
                                                           UINT32 flags)
 {

@@ -82,6 +82,10 @@ order; --list prints them):
             edu PCI device, on which pnputil installs a Plug and Play
             driver (edutest.sys) that gets its memory, interrupt and DMA
             from the PnP manager, and which pnputil disables and enables
+            again; "netkvm", QEMU's virtio-net card, on which pnputil
+            installs virtio-win's signed netkvm.sys in place of the
+            built-in driver: it runs on NovaOS's own NDIS host while DHCP,
+            a ping and a download go through it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -308,6 +312,7 @@ PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
+NETKVM = load_suite('devices/netkvm')
 
 
 def net4_boot(work):
@@ -441,6 +446,19 @@ def edu_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
     edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
     return ['-device', 'edu'], []
+
+
+def netkvm_boot(work):
+    """QEMU's virtio-net card on its user-mode network with tools/h2server.js
+    as for the IPv4 boot, and virtio-win's signed netkvm package
+    (tools/drivertest/netkvm.py) in C:\\Tests\\NetKVM: pnputil installs it on the
+    card, which then runs on NovaOS's NDIS host (tests/selftest/devices/netkvm)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import netkvm
+    pkg = os.path.join(work, 'netkvm')
+    netkvm.fetch(pkg)
+    args, procs = net4_boot(work)
+    return args, procs, dict(puts=[(pkg, r'C:\Tests\NetKVM')])
 
 
 def ntfs_boot(work):
@@ -587,7 +605,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('netkvm', NETKVM, netkvm_boot)],
 }
 
 

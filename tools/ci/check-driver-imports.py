@@ -7,9 +7,11 @@
 NovaOS loads real signed Windows driver packages unchanged (step 30, the
 Windows driver model), so every symbol they import from ntoskrnl.exe and
 hal.dll must be an export kernel/nt/exports.h lists (step 30.2 completes the
-kernel API for exactly this reason).  This compares the import lists of the
-drivers we target first — the VirtIO serial driver (vioser.sys) and the
-KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) — against exports.h and
+kernel API for exactly this reason), and so must every ndis.sys import of a
+network miniport (step 30.9: NovaOS's own NDIS host).  This compares the
+import lists of the drivers we target first — the VirtIO serial driver
+(vioser.sys), the KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) and the
+VirtIO network miniport (netkvm.sys) — against exports.h and
 fails naming any import that is neither provided nor allow-listed.
 
 The import lists live beside the wdm self-test
@@ -25,9 +27,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 EXPORTS_H = os.path.join(ROOT, "kernel", "nt", "exports.h")
 IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports")
 
-# Modules NovaOS itself provides (its export tables); every import from one
-# of these must appear in exports.h.
-PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll"}
+# Modules NovaOS itself provides (its export tables; ndis.sys is NovaOS's own
+# NDIS host, kernel/nt/ndis.c); every import from one of these must appear
+# in exports.h.
+PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "ndis.sys"}
 # Modules a driver package brings with it (provided by a later driver step),
 # so their imports are not NovaOS exports.
 ALLOWLISTED_MODULES = {"wdfldr.sys"}
@@ -133,8 +136,8 @@ def pe_imports(path):
 def dump(paths):
     hdr = ("# Import list of %s, extracted from the real signed driver with\n"
            "# tools/ci/check-driver-imports.py --dump (do not edit by hand).  The\n"
-           "# import-coverage check (the same tool) verifies every ntoskrnl.exe and\n"
-           "# hal.dll import below is provided by kernel/nt/exports.h; wdfldr.sys\n"
+           "# import-coverage check (the same tool) verifies every ntoskrnl.exe,\n"
+           "# hal.dll and ndis.sys import below is provided by kernel/nt/exports.h; wdfldr.sys\n"
            "# imports are the KMDF loader's own exports, provided by a later driver\n"
            "# step (30.4/30.5), and are allow-listed there.\n")
     os.makedirs(IMPORTS_DIR, exist_ok=True)

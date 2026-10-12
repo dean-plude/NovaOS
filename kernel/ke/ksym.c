@@ -44,10 +44,20 @@ const char *KsymLookup(UINT64 addr, UINT64 *offset)
     return names + e[lo].name;
 }
 
+/* A loaded Windows driver's name for addresses in it (kernel/nt/ldr.c) */
+const char *NtDrvNameOf(UINT64 addr, UINT64 *offset);
+
+static bool code_address(UINT64 a)
+{
+    UINT64 off;
+    return (a >= (UINT64)__text_start && a < (UINT64)__text_end) || NtDrvNameOf(a, &off);
+}
+
 static void frame_line(int i, UINT64 pc)
 {
     UINT64 off = 0;
     const char *name = KsymLookup(pc, &off);
+    if (!name) name = NtDrvNameOf(pc, &off);
     if (name) kprintf("  #%d %016lx  %s+0x%lx\n", i, (unsigned long)pc, name, (unsigned long)off);
     else      kprintf("  #%d %016lx  ?\n", i, (unsigned long)pc);
 }
@@ -66,6 +76,21 @@ void KsymBacktrace(UINT64 rip, UINT64 rbp, UINT64 rsp)
         kprintf("\n");
     }
     frame_line(i++, rip);
+    /* Outside the kernel (a Windows driver, which keeps no frame chain, or
+     * a call through a null pointer): the code addresses near the top of
+     * the stack, the first usually the caller */
+    if (!KsymLookup(rip, NULL) && !(rsp & 7)) {
+        const UINT64 *w = (const UINT64 *)rsp;
+        int words = (int)((((rsp | 0xFFF) + 1) - rsp) / 8);   /* (only this stack page: it is mapped) */
+        for (int k = 0, shown = 0; k < words && k < 64 && shown < 8; k++)
+            if (code_address(w[k])) {
+                UINT64 off = 0;
+                const char *name = KsymLookup(w[k], &off);
+                if (!name) name = NtDrvNameOf(w[k], &off);
+                kprintf("  [rsp+0x%x] %016lx  %s+0x%lx\n", k * 8, (unsigned long)w[k], name, (unsigned long)off);
+                shown++;
+            }
+    }
     /* each frame: [rbp] = the caller's rbp, [rbp + 8] = the return address;
      * only frames on this stack (from @rsp up 128 KiB) are read, so a
      * corrupt chain cannot fault in here */

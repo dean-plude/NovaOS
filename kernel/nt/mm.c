@@ -237,8 +237,6 @@ NT_API void *nt_MmGetSystemRoutineAddress(NT_UNICODE_STRING *name)
     return (void *)(uintptr_t)fn;
 }
 
-/* MMIO mapping (MmMapIoSpace, MmMapIoSpaceEx, MmUnmapIoSpace) is in dma.c */
-
 /* -----------------------------------------------------------------------
  * Pageable code and data sections.  A NovaOS driver's image and the pool
  * are never paged out, so locking one in memory is nothing to do: the

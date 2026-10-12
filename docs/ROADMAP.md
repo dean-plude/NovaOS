@@ -541,15 +541,18 @@ named program or test demonstrates it.
   signing policy is in: a kernel driver loads only with a Microsoft driver
   signature (embedded or in its installed catalog), a test-signed one only
   with test signing on, an unsigned or tampered one never, and a package
-  whose files do not match its catalog is not staged.  Step 30.4's
+  whose files do not match its catalog is not staged.
+  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
+  driver on a PCI device with no NovaOS driver, and the PnP manager starts
+  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
+  the tests); line-based interrupts only, MSI comes later.  Step 30.4's
   framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
   and NovaOS's `WdfLdr.sys` load KMDF drivers
   (a test driver's control device and queue); the KMDF version of the
   `edu` PnP test driver, which finishes the step, follows 30.3.
-  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
-  driver on a PCI device with no NovaOS driver, and the PnP manager starts
-  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts only, MSI comes later.
+  Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
+  runs on KMDF, reports its serial ports as child devices, and a program
+  exchanges bytes with the host through `\\.\Global\<port name>`.
   Step 30.8 is in: a vendor's Windows USB client driver runs a USB device
   through NovaOS's own USB bus interface (URBs over its USB core): FTDI's
   driver, downloaded by hardware ID, makes QEMU's `usb-serial` converter

@@ -7,6 +7,8 @@
 NT_API void      nt_KeInitializeEvent(NT_KEVENT *ev, int type, UINT8 state);
 NT_API int       nt_KeSetEvent(NT_KEVENT *ev, int increment, UINT8 wait);
 NT_API int       nt_KeReadStateEvent(NT_KEVENT *ev);
+NT_API void      nt_KeInitializeMutex(NT_KMUTEX *m, UINT32 level);
+NT_API int       nt_KeReleaseMutex(NT_KMUTEX *m, UINT8 wait);
 NT_API NT_STATUS nt_KeWaitForSingleObject(void *obj, int reason, char mode, UINT8 alertable, const INT64 *timeout);
 NT_API UINT8     nt_KeAcquireSpinLockRaiseToDpc(NT_KSPIN_LOCK *l);
 NT_API void      nt_KeReleaseSpinLock(NT_KSPIN_LOCK *l, UINT8 old);

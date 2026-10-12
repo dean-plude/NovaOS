@@ -475,17 +475,11 @@ typedef struct _NT_DEVICE_CAPABILITIES {
     unsigned int   D1Latency, D2Latency, D3Latency;
 } NT_DEVICE_CAPABILITIES;
 
-/* IO_REMOVE_LOCK (a free build's: the common block only) */
-typedef struct _NT_IO_REMOVE_LOCK {
-    unsigned char  Removed, Reserved[3];
-    int            IoCount;
-    NT_KEVENT      RemoveEvent;
-} NT_IO_REMOVE_LOCK;
-
 /* IoConnectInterruptEx's parameters */
 #define NT_CONNECT_FULLY_SPECIFIED   1
 #define NT_CONNECT_LINE_BASED        2
 #define NT_CONNECT_MESSAGE_BASED     3
+#define NT_CONNECT_FULLY_SPECIFIED_GROUP 4   /* (KMDF's: FullySpecified with its Group) */
 typedef unsigned char (NT_API *NT_KSERVICE_ROUTINE)(void *Interrupt, void *Context);
 typedef unsigned char (NT_API *NT_KSYNCHRONIZE_ROUTINE)(void *Context);
 
@@ -636,6 +630,8 @@ struct _NT_DMA_ADAPTER {
 #define NT_STATUS_INFO_LENGTH_MISMATCH     ((NT_STATUS)0xC0000004)
 /* KeWaitForMultipleObjects: WAIT_OBJECT_0 + index, or STATUS_TIMEOUT */
 #define NT_STATUS_WAIT_0                   ((NT_STATUS)0x00000000)
+#define NT_STATUS_DELETE_PENDING           ((NT_STATUS)0xC0000056)
+#define NT_STATUS_DEVICE_NOT_READY         ((NT_STATUS)0xC00000A3)
 
 /* CTL_CODE and the transfer methods */
 #define NT_CTL_CODE(type, fn, method, access) (((type) << 16) | ((access) << 14) | ((fn) << 2) | (method))
@@ -712,6 +708,14 @@ typedef struct __attribute__((aligned(16))) _NT_LOOKASIDE_LIST {
     void           *Free;
     unsigned char   Reserved[0x80 - 0x40];
 } NT_LOOKASIDE_LIST, NT_PAGED_LOOKASIDE_LIST, NT_NPAGED_LOOKASIDE_LIST;
+
+/* IO_REMOVE_LOCK: holds off a device's removal while I/O is in flight. */
+typedef struct _NT_IO_REMOVE_LOCK {
+    unsigned char  Removed;
+    unsigned char  Reserved[3];
+    int            IoCount;
+    NT_KEVENT      RemoveEvent;
+} NT_IO_REMOVE_LOCK;
 
 /* An I/O work item is opaque to the driver: IoAllocateWorkItem returns a
  * pointer it keeps and passes back; its body lives in the kernel. */

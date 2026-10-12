@@ -18,6 +18,7 @@ void KiInitializeKpcr(PKPCR kpcr, UINT32 cpu)
     __builtin_memset(kpcr, 0, sizeof(KPCR));
     kpcr->Self      = kpcr;
     kpcr->CpuNumber = cpu;
+    kpcr->WinNumber = (UINT16)cpu;
 
     wrmsr(MSR_GS_BASE, (UINT64)(uintptr_t)kpcr);      /* kernel GS: this KPCR */
     wrmsr(MSR_KERNEL_GS_BASE, 0);                     /* user GS until a thread sets it */
@@ -37,4 +38,5 @@ void *KiGetCurrentThread(void)
 void KiSetCurrentThread(void *Thread)
 {
     KiGetCurrentKpcr()->CurrentThread = Thread;
+    KiGetCurrentKpcr()->WinCurrentThread = Thread;
 }

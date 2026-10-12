@@ -527,6 +527,7 @@ void sched_init(void)
     idle->on_cpu   = true;
     KiGetCurrentKpcr()->IdleThread    = idle;
     KiGetCurrentKpcr()->CurrentThread = idle;
+    KiGetCurrentKpcr()->WinCurrentThread = idle;
     tsc_at_boot    = rdtsc();
 
     kprintf("[SCHED] Scheduler initialized (idle TID=%lu)\n", idle->tid);
@@ -553,6 +554,7 @@ void sched_init_cpu(Thread *idle)
     idle->on_cpu     = true;
     k->IdleThread    = idle;
     k->CurrentThread = idle;
+    k->WinCurrentThread = idle;
     k->KernelRsp     = top;
     gdt_set_rsp0(top);
 }
@@ -710,6 +712,7 @@ static void switch_locked(RunQueue *rq)
     next->preempted     = false;
     next->woken         = false;
     kpcr->CurrentThread = next;
+    kpcr->WinCurrentThread = next;
     kpcr->Idle          = 0;
     kpcr->PrevThread    = prev;
 

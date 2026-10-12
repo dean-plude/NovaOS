@@ -109,6 +109,8 @@ void      NtIoRemoveDriver(NtDriver *drv);
  * Windows device: \Device\<name>[\...], or a link a driver made in
  * \DosDevices (<link>[\...]) */
 bool      NtIoIsDevice(const char *path);
+/* The name in \Device of @d ("\Device\0000004a"); false if it has none */
+bool      NtIoDeviceName(NT_DEVICE_OBJECT *d, char *out, int cap);
 /* Open it: IRP_MJ_CREATE; *@out the file object */
 NTSTATUS  NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options,
                    NT_FILE_OBJECT **out);
@@ -151,9 +153,7 @@ NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node);
 /* A USB PDO's DevicePropertyAddress (16: its port) or BusNumber (14) */
 bool      NtUsbPdoProperty(NT_DEVICE_OBJECT *pdo, int prop, UINT32 *num);
 
-/* io.c: @d's name in \Device ("\Device\X"), or false when it has none */
-bool      NtIoDeviceName(NT_DEVICE_OBJECT *d, char *out, int cap);
-/* Give unnamed device @d a name, as Windows names a PDO a bus driver left
+/* io.c: give unnamed device @d a name, as Windows names a PDO a bus driver left
  * unnamed (\Device\NTPNP_nnnnnnnn) */
 NTSTATUS  NtIoNameDevice(NT_DEVICE_OBJECT *d);
 

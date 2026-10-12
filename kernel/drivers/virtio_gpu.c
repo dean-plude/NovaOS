@@ -1400,10 +1400,27 @@ static UINT32 *blit(UINT32 *c, UINT32 dst, UINT32 dfmt, int dx, int dy, UINT32 s
     return c + BLIT_SIZE + 1;
 }
 
+/* Not VgpuWait: that notifies the device each time it looks (sooner news
+ * of fences), and two waiters doing so for each frame (the program and
+ * this) took host time from drawing.  Once, then QEMU's own fence polling
+ * and the program's waits bring the news */
 bool VgpuPresentWait(UINT64 seq)
 {
-    if (g_pctx) kick(g_pctx->v);                  /* (overlay_read leaves it to here) */
-    return g_pctx && VgpuWait(g_pctx, 1, &g_psync, &seq, false, 1000000000ull) == 0;
+    if (!g_pctx) return false;
+    Vgpu *v = g_pctx->v;
+    kick(v);                                      /* (overlay_read leaves it to here) */
+    UINT64 deadline = sched_tsc_after(10000000);  /* 1 s */
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_lock);
+        reap(v);
+        VgpuSync *y = sync_of(g_pctx, g_psync);
+        bool done = !y || y->value >= seq;
+        spin_unlock_irqrestore(&g_lock, s);
+        if (done) return y != NULL;
+        if (rdtsc() >= deadline) return false;
+        static UINT32 never;
+        sched_sleep_until_tsc(&never, sched_tsc_after(5000));   /* 0.5 ms */
+    }
 }
 
 void VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h)

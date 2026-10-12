@@ -169,7 +169,9 @@ struct INovaSoftTexture { const INovaSoftTextureVtbl *lpVtbl; };
 
 /* A swap chain (dxgi.dll) shown by a DirectComposition visual (dcomp.dll):
  * the visual sets a sink, which every present calls (@dirty: the part
- * that changed, or NULL for all of it) */
+ * that changed, or NULL for all of it).  A GPU's chain reads a frame back
+ * only when Frame asks for it: dcomp.dll composites those on the GPU
+ * (Texture) when it can */
 typedef void (STDMETHODCALLTYPE *NovaPresentSink)(void *ctx, const RECT *dirty);
 typedef struct INovaSwapChain INovaSwapChain;
 typedef struct {
@@ -179,6 +181,11 @@ typedef struct {
     void    (STDMETHODCALLTYPE *SetSink)(INovaSwapChain *, NovaPresentSink sink, void *ctx);
     /* the last presented frame: 32-bit BGRA pixels */
     BYTE   *(STDMETHODCALLTYPE *Frame)(INovaSwapChain *, UINT *pitch, UINT *width, UINT *height);
+    /* a GPU's: its buffer, a texture of *@device (neither counted), its
+     * format and size, and whether it was presented since it was made
+     * (else its contents mean nothing yet); NULL for the software device's */
+    IUnknown *(STDMETHODCALLTYPE *Texture)(INovaSwapChain *, IUnknown **device, UINT *format, UINT *width, UINT *height,
+                                         BOOL *shown);
 } INovaSwapChainVtbl;
 struct INovaSwapChain { const INovaSwapChainVtbl *lpVtbl; };
 

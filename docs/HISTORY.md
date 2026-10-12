@@ -11069,6 +11069,37 @@ a moment gave up at once.
 - **`tests/tools/test_download_cache.py`** covers the retry pauses and the
   final failure.
 
+## Direct presentation on every monitor and at scale 2
+
+The Phase 25 step after [Vulkan's frames](#direct-presentation-of-vulkans-frames).
+Direct presentation (the host writing a program's OpenGL or Vulkan frame
+straight into the screen) only worked for a window on the primary monitor
+while the desktop drew at scale 1; on a second monitor, or once any
+monitor was at scale 2, every frame went the GDI way again.  Now the
+kernel shows it on whichever monitor the window is wholly on:
+
+- **Any monitor**: `DisplayHeadScreen` says where a head's pixels are
+  (the primary's VGA framebuffer or virtio output as before, a further
+  `secondary-vga`'s video memory, or another virtio output's picture), and
+  the kernel's virgl context keeps a texture over each screen it writes
+  (the last four).  The display's damage hook now reports which head was
+  drawn, so the overlays on that screen go back over what the desktop
+  drew there, and the pointer only stops a window's direct frames when it
+  is over that window on the same screen.  A window across two monitors
+  still goes the GDI way.  The dock only covers windows on the primary.
+- **Scale 2**: a window's frame is placed in that monitor's own pixels.
+  On a monitor at scale 2 a frame of logical pixels (a program that is not
+  DPI-aware) is blitted by the host with each pixel twice as wide and
+  high, as the GDI shows it; a frame drawn for scale 2 on a monitor at
+  scale 1 is blitted at half its size (each 2x2 block averaged, as the GDI
+  shows a monitor at half the desktop's scale).  Otherwise frames are
+  copied as before.
+- **gltest monitors** (graphics suite, 64-bit): the four quadrants on the
+  second monitor, again with that monitor in 2560x1600 (scale 2), and on
+  the primary beside it; each screen's screenshot must show them where
+  the program says, and nine frames in ten must come from the host.
+- Still to do: DirectComposition's swap chains (WebView2's GPU process).
+
 ## Direct presentation under KVM, measured from the host
 
 Direct presentation (roadmap 25.2) takes about as long a frame as the GDI
@@ -11086,6 +11117,53 @@ turn, and gltest's own figures echoed into the CI log) shows why:
   in all).  A virgl turn run first and not counted drew 31.1, so the host
   compiling the scene's shaders is not what slows a turn.
 - `gltest fps` prints every turn's frame rate (`fps: turns:`).
+
+## DirectComposition composited on the GPU
+
+The Phase 25 step after [the other monitors](#direct-presentation-on-every-monitor-and-at-scale-2).
+WebView2's GPU process renders its page on Venus into a DirectComposition
+swap chain, but every present then copied the changed part into a staging
+texture, read it back into guest memory and drew it into the window with
+the GDI.  Now `dcomp.dll` composites such a target on the GPU, and the
+frame never comes back to the guest:
+
+- **GPU composition**: a target whose visible tree shows only swap chains
+  of one GPU device (BGRA or RGBA ones) gets a picture of its window's
+  size on that device and a swap chain of the device's own on the window
+  (made by the device adapter's factory, DXVK's).  Each present copies
+  the part that changed into the picture on the GPU, a Commit after a
+  change to the tree copies all of it, and the picture is copied into the
+  window's swap chain and presented.  DXVK's frame goes through Mesa's
+  Win32 swapchain, so the kernel writes it straight into the screen while
+  the window is alone ([Vulkan's frames](#direct-presentation-of-vulkans-frames)),
+  and Mesa draws it in with the GDI while something covers it.  Parts of
+  the window no visual covers show black.
+- **Read-back only when asked for**: `dxgi.dll`'s GPU composition swap
+  chains no longer read each present back; the parts presented since are
+  read back when `dcomp.dll` asks for the frame (the GDI way).
+- **Back to the GDI way**: once the tree no longer qualifies (a
+  DirectComposition surface, a software swap chain, a second device), the
+  target is drawn with the GDI again and tells the kernel
+  (`NtNovaGpuCtl` 15), which stops showing the window's last frame from
+  the host and redraws the window's own pixels.  `NOVA_PRESENT=gdi` keeps
+  every target on the GDI way.
+- **Mesa's GDI way for RGBA swapchains**: DXVK picks an RGBA Vulkan
+  swapchain for an 8-bit DXGI one, and Mesa's Win32 swapchain copied its
+  frames into a BGRA bitmap as they were, red and blue swapped; it now
+  swaps them back (the frames shown from the host were already right).
+- **Embedded windows**: the kernel now shows direct frames for a window
+  embedded in another process's (the window WebView2's GPU process
+  composites into, inside the host's), by the part of it that shows.
+- **dcomptest direct** (graphics suite, 64- and 32-bit): the quadrants
+  from the host while the window is alone (a screenshot of the screen
+  must show them), through the GDI while another window covers it, from
+  the host again, then the GDI way once a swap chain of another device
+  joins the tree (the screen must show the frame drawn that way), and the
+  GPU process's embedded window shown from the host.  `dcomptest dxvk`
+  and `dcomptest life` keep the GDI way, since they check frames with
+  `GetPixel`.
+- Not covered: DirectComposition surfaces still go the GDI way (each
+  `EndDraw` reads back), and WebView2 itself was not rerun for this step.
 
 ## DirectComposition on the GPU through resizes, teardown and other processes
 

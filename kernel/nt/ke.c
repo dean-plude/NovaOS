@@ -23,6 +23,7 @@
 #include "../ke/printf.h"
 #include "../ke/kpcr.h"
 #include "../ke/scheduler.h"
+#include "../ke/smp.h"
 #include "../ke/spinlock.h"
 #include "../arch/x86_64/apic.h"
 #include "../arch/x86_64/cpu.h"
@@ -180,8 +181,14 @@ void KiDispatchInterrupt(void)
  * ----------------------------------------------------------------------- */
 static void lock_word(NT_KSPIN_LOCK *l)
 {
-    while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE))
+    while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
+        /* (a driver's lock is not waited for with the big kernel lock held:
+         * its holder may be on another CPU taking an interrupt, which wants
+         * the big lock, while this one would spin with it for ever) */
+        uint32_t bkl = interrupts_enabled() ? bkl_drop() : 0;
         while (__atomic_load_n(l, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+        bkl_restore(bkl);
+    }
 }
 
 static void unlock_word(NT_KSPIN_LOCK *l) { __atomic_store_n(l, 0, __ATOMIC_RELEASE); }

@@ -462,7 +462,9 @@ python3 tools/selftest.py --only apitest,guitest --out /tmp/st
 `tools/novarun.py` (and so `tools/selftest.py`) starts QEMU with `-accel kvm`
 when `/dev/kvm` is readable and writable, and with TCG otherwise.  Set
 `NOVARUN_ACCEL=tcg` or `NOVARUN_ACCEL=kvm` to force one.  The CPU model stays
-`qemu64` with the same feature flags under both.  CI runs the test VMs under
+`qemu64` with the same feature flags under both (SSSE3 to SSE4.2,
+POPCNT, RDTSCP, and XSAVE, XSAVEOPT, AVX and F16C, so the kernel's AVX state is
+tested too).  CI runs the test VMs under
 KVM: each job's `tools/ci/enable-kvm.sh` step opens `/dev/kvm` to the runner
 user and sets `NOVARUN_ACCEL=kvm` (history entry "Kernel under KVM" has the
 timings).  The app corpus job fails at that step, with a message, when the runner has no

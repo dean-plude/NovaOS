@@ -62,6 +62,11 @@ static void message(DWORD e)
 {
     char m[256];
     if (e == 0xE0000100) { printf("The INF file is not a valid driver package (no [Version] section).\n"); return; }
+    if (e == 0xE000024B) {                                  /* ERROR_FILE_HASH_NOT_IN_CATALOG */
+        printf("The hash for the file is not present in the specified catalog file. "
+               "The file is likely corrupt or the victim of tampering.\n");
+        return;
+    }
     if (!FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, e, 0, m, sizeof(m), NULL))
         snprintf(m, sizeof(m), "Error 0x%08lX.\n", (unsigned long)e);
     printf("%s", m);
@@ -176,7 +181,10 @@ static void enum_drivers(void)
                 if (db_get(sub, L"SourceUpdateId", v, 256)) printf(" (update %ls)", v);
                 printf("\n");
             }
-            printf("Signer Name:        (not checked: NovaOS does not load kernel-mode drivers)\n\n");
+            v[0] = 0;
+            db_get(sub, L"SignerName", v, 256);
+            if (v[0]) printf("Signer Name:        %ls\n\n", v);
+            else printf("Signer Name:        (none: the package is not signed)\n\n");
             n++;
         } while (FindNextFileW(h, &fd));
         FindClose(h);

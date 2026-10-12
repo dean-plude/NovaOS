@@ -180,7 +180,8 @@ runs its devices with its own drivers and does not yet start a Windows
 driver on a device, so `pnputil` reports that no device took it.  A
 simple kernel-mode driver that is not tied to a device can already run as
 a kernel service (`sc create NAME type= kernel binPath= ...`, then `sc
-start NAME`), with test signing on ([drivers.md](drivers.md#windows-driver-packages)).  The firmware NovaOS's own drivers load
+start NAME`), when it is signed as Windows 11 requires: by Microsoft, or with a test signature
+while test signing is on ([drivers.md](drivers.md#driver-signing)).  The firmware NovaOS's own drivers load
 into devices comes with release images ([drivers.md](drivers.md)).
 
 **Finding a driver online.**  For a device that has no driver (problem

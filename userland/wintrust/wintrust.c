@@ -18,8 +18,16 @@
  * Revocation lists are never fetched: a check that asks for revocation
  * fails as on a Windows machine that is offline (CERT_E_REVOCATION_FAILURE).
  * Nested (secondary) signatures are read; WINTRUST_SIGNATURE_SETTINGS picks
- * one or counts them.  NovaOS has no catalog files, so the CryptCATAdmin
- * functions find no catalog for any hash (they do compute the hashes).
+ * one or counts them.
+ *
+ * Catalogs (WTD_CHOICE_CATALOG): a signed .cat lists files by hash; the
+ * check is the catalog's signature and chain as above, then whether it
+ * lists the member file's hash.  The driver action
+ * (DRIVER_ACTION_VERIFY) does not expire a catalog's certificates, as
+ * Windows' driver policy does not.  CryptCATAdminAddCatalog installs a
+ * catalog in CatRoot, where the kernel's driver signature check finds it;
+ * CryptCATAdminEnumCatalogFromHash does not search CatRoot yet (it finds
+ * none), the hash functions work.
  */
 #include <windows.h>
 
@@ -675,6 +683,146 @@ static LONG verify_signature(const BYTE *blob, DWORD len, Subject *s, const PeLa
 }
 
 /* -----------------------------------------------------------------------
+ * Catalogs: a PKCS #7 SignedData over a certificate trust list (szOID_CTL)
+ * whose members are files' hashes (WTD_CHOICE_CATALOG, as setupapi checks
+ * a driver package's files)
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    DWORD cbStruct, dwCatalogVersion;
+    LPCWSTR pcwszCatalogFilePath, pcwszMemberTag, pcwszMemberFilePath;
+    HANDLE hMemberFile;
+    BYTE *pbCalculatedFileHash;
+    DWORD cbCalculatedFileHash;
+    const void *pcCatalogContext;
+    HANDLE hCatAdmin;
+} CATALOG_INFO_;
+#define WTD_CHOICE_CATALOG_ 2
+#define CRYPT_E_NOT_FOUND_  ((LONG)0x80092004L)
+
+static BOOL calc_hash(HANDLE f, BOOL sha256, DWORD *n, BYTE *hash);
+
+static BYTE *read_file(LPCWSTR path, DWORD *n)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return NULL;
+    DWORD size = GetFileSize(f, NULL), got = 0;
+    BYTE *b = size != INVALID_FILE_SIZE ? HeapAlloc(GetProcessHeap(), 0, size ? size : 1) : NULL;
+    if (b && !ReadFile(f, b, size, &got, NULL)) got = (DWORD)-1;
+    CloseHandle(f);
+    if (b && got != size) { zfree(b); b = NULL; SetLastError(30 /* ERROR_READ_FAULT */); }
+    *n = size;
+    return b;
+}
+
+/* Whether a member's tag names hash @h: the hash itself, or (version 1
+ * catalogs) its hex text in UTF-16 */
+static BOOL tag_is(Span tag, const BYTE *h, DWORD hl)
+{
+    if (!hl) return FALSE;
+    if (tag.n == hl && !bytes_cmp(tag.p, h, hl)) return TRUE;
+    if (tag.n < 4 * (SIZE_T)hl) return FALSE;
+    for (DWORD i = 0; i < 2 * hl; i++) {
+        BYTE c = tag.p[2 * i], want = (BYTE)"0123456789ABCDEF"[(h[i / 2] >> (i & 1 ? 0 : 4)) & 15];
+        if (tag.p[2 * i + 1] || (c != want && c != want + 32)) return FALSE;
+    }
+    return TRUE;
+}
+
+/* Whether the trust list @ctl (its encoding) lists a file by hash @a or @b */
+static BOOL ctl_lists(const BYTE *ctl, DWORD n, const BYTE *a, DWORD al, const BYTE *b, DWORD bl)
+{
+    /* CertificateTrustList { subjectUsage, listIdentifier?, sequenceNumber?, thisUpdate, nextUpdate?,
+     *                        subjectAlgorithm, trustedSubjects?, [0] extensions? } */
+    const BYTE *p = ctl, *end = ctl + n;
+    Span v, subjects;
+    BYTE tag;
+    if (!der_expect(&p, end, 0x30, &v, NULL)) return FALSE;
+    p = v.p;
+    end = v.p + v.n;
+    if (!der_expect(&p, end, 0x30, NULL, NULL)) return FALSE;
+    if (p < end && *p == 0x04) der_next(&p, end, NULL, NULL, NULL);
+    if (p < end && *p == 0x02) der_next(&p, end, NULL, NULL, NULL);
+    if (!der_next(&p, end, &tag, NULL, NULL) || (tag != 0x17 && tag != 0x18)) return FALSE;
+    if (p < end && (*p == 0x17 || *p == 0x18)) der_next(&p, end, NULL, NULL, NULL);
+    if (!der_expect(&p, end, 0x30, NULL, NULL) || !der_expect(&p, end, 0x30, &subjects, NULL)) return FALSE;
+    for (p = subjects.p; p < subjects.p + subjects.n;) {
+        Span member, t, attrs;
+        if (!der_expect(&p, subjects.p + subjects.n, 0x30, &member, NULL)) return FALSE;
+        const BYTE *q = member.p, *qe = member.p + member.n;
+        if (!der_expect(&q, qe, 0x04, &t, NULL)) continue;
+        if (tag_is(t, a, al) || tag_is(t, b, bl)) return TRUE;
+        if (!der_expect(&q, qe, 0x31, &attrs, NULL)) continue;
+        for (const BYTE *r = attrs.p; r < attrs.p + attrs.n;) {         /* its SPC_INDIRECT_DATA's digest */
+            Span at, o, vals, spc, di, alg, dig;
+            if (!der_expect(&r, attrs.p + attrs.n, 0x30, &at, NULL)) break;
+            const BYTE *x = at.p;
+            if (!der_expect(&x, at.p + at.n, 0x06, &o, NULL) || !oid_is(o, "1.3.6.1.4.1.311.2.1.4") ||
+                !der_expect(&x, at.p + at.n, 0x31, &vals, NULL)) continue;
+            x = vals.p;
+            if (!der_expect(&x, vals.p + vals.n, 0x30, &spc, NULL)) continue;
+            x = spc.p;
+            if (!der_expect(&x, spc.p + spc.n, 0x30, NULL, NULL) || !der_expect(&x, spc.p + spc.n, 0x30, &di, NULL)) continue;
+            x = di.p;
+            if (!der_expect(&x, di.p + di.n, 0x30, &alg, NULL) || !der_expect(&x, di.p + di.n, 0x04, &dig, NULL)) continue;
+            if ((dig.n == al && !bytes_cmp(dig.p, a, al)) || (dig.n == bl && !bytes_cmp(dig.p, b, bl))) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* The catalog @ci names, its signature, and whether it lists the member.
+ * For drivers (@driver) the signer's certificates are checked as of when
+ * they were issued unless a timestamp says otherwise: Windows' driver
+ * policy does not expire a signed catalog. */
+static LONG verify_catalog(const CATALOG_INFO_ *ci, BOOL driver, DWORD chain_flags, Sig *g)
+{
+    ZeroMemory(g, sizeof(*g));
+    if (!ci->pcwszCatalogFilePath) return ERROR_INVALID_PARAMETER;
+    DWORD n = 0;
+    BYTE *b = read_file(ci->pcwszCatalogFilePath, &n);
+    if (!b) return (LONG)(0x80070000 | (GetLastError() & 0xFFFF));
+    g->msg = open_msg(b, n);
+    zfree(b);
+    if (!g->msg) return TRUST_E_NOSIGNATURE_;
+    char *inner = msg_param(g->msg, 4 /* CMSG_INNER_CONTENT_TYPE_PARAM */, 0, NULL);
+    BOOL ctl = inner && str_eq(inner, "1.3.6.1.4.1.311.10.1");
+    zfree(inner);
+    if (!ctl) return TRUST_E_NOSIGNATURE_;
+    LONG err;
+    if (!(g->store = CertOpenStore((LPCSTR)1 /* CERT_STORE_PROV_MSG */, ENC_, 0, 0, g->msg))) return TRUST_E_NOSIGNATURE_;
+    if (!(g->signer = msg_signer(g->msg, g->store, &err))) return err;
+
+    /* the member's hashes: the caller's, or its file's SHA-1 and SHA-256 */
+    BYTE h1[64], h2[64];
+    DWORD l1 = 0, l2 = 0;
+    if (ci->pbCalculatedFileHash && ci->cbCalculatedFileHash && ci->cbCalculatedFileHash <= sizeof(h1)) {
+        l1 = ci->cbCalculatedFileHash;
+        CopyMemory(h1, ci->pbCalculatedFileHash, l1);
+    } else {
+        HANDLE f = ci->hMemberFile && ci->hMemberFile != INVALID_HANDLE_VALUE ? ci->hMemberFile : INVALID_HANDLE_VALUE, opened = f;
+        if (f == INVALID_HANDLE_VALUE && ci->pcwszMemberFilePath)
+            f = CreateFileW(ci->pcwszMemberFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (f == INVALID_HANDLE_VALUE) return (LONG)(0x80070000 | (GetLastError() & 0xFFFF));
+        l1 = sizeof(h1);
+        l2 = sizeof(h2);
+        if (!calc_hash(f, FALSE, &l1, h1)) l1 = 0;
+        if (!calc_hash(f, TRUE, &l2, h2)) l2 = 0;
+        if (opened == INVALID_HANDLE_VALUE) CloseHandle(f);
+    }
+    DWORD clen = 0;
+    BYTE *content = msg_param(g->msg, 2 /* CMSG_CONTENT_PARAM */, 0, &clen);
+    BOOL listed = content && ctl_lists(content, clen, h1, l1, h2, l2);
+    zfree(content);
+    if (!listed) return CRYPT_E_NOT_FOUND_;
+
+    LONG ts = check_timestamp(g, chain_flags);
+    if (ts < 0) return ts;
+    g->timestamped = ts == 0;
+    const FILETIME *when = g->timestamped ? &g->when : driver ? &((const CERT_INFO_ *)g->signer->pCertInfo)->NotBefore : NULL;
+    return check_chain(g->signer, when, g->store, "1.3.6.1.5.5.7.3.3", (LPCSTR)2 /* AUTHENTICODE */, chain_flags, &g->chain);
+}
+
+/* -----------------------------------------------------------------------
  * The provider's state (WTD_STATEACTION_VERIFY) and its helpers
  * ----------------------------------------------------------------------- */
 typedef struct {
@@ -819,7 +967,15 @@ static LONG verify(GUID *action, WINTRUST_DATA_ *wd)
         const BLOB_INFO_ *bi = wd->pInfo;
         s.mem = bi->pbMemObject;
         s.size = bi->cbMemObject;
-    } else err = TRUST_E_NOSIGNATURE_;               /* catalogs (none exist), signers, certificates */
+    } else if (wd->dwUnionChoice == WTD_CHOICE_CATALOG_ && wd->pInfo) {
+        Sig g;
+        DWORD flags = wd->fdwRevocationChecks == WTD_REVOKE_WHOLECHAIN_ && !(wd->dwProvFlags & WTD_REVOCATION_CHECK_NONE_) ?
+                      0x40000000 : 0;
+        err = verify_catalog(wd->pInfo, !bytes_cmp(action, &DRIVER_VERIFY, sizeof(GUID)), flags, &g);
+        if (wd->dwStateAction == WTD_STATEACTION_VERIFY_) wd->hWVTStateData = state_new(wd, action, &g, err);
+        sig_free(&g);
+        return err;
+    } else err = TRUST_E_NOSIGNATURE_;               /* signers, certificates */
 
     PeLayout pl;
     Sig g;
@@ -876,7 +1032,7 @@ WTAPI LONG WINAPI WinVerifyTrust(HWND w, GUID *action, LPVOID data)
 WTAPI HRESULT WINAPI WinVerifyTrustEx(HWND w, GUID *action, LPVOID data) { return WinVerifyTrust(w, action, data); }
 
 /* -----------------------------------------------------------------------
- * Catalogs: there are none; the hashes they are looked up by are made
+ * The catalog administrator: hashes, installing and removing catalogs
  * ----------------------------------------------------------------------- */
 typedef struct { DWORD magic; BOOL sha256; } CatAdmin;
 #define CAT_MAGIC 0x43415441
@@ -945,7 +1101,74 @@ WTAPI BOOL WINAPI CryptCATAdminCalcHashFromFileHandle2(HANDLE h, HANDLE f, DWORD
 }
 WTAPI HANDLE WINAPI CryptCATAdminEnumCatalogFromHash(HANDLE h, BYTE *hash, DWORD n, DWORD flags, HANDLE *prev)
 { (void)h; (void)hash; (void)n; (void)flags; (void)prev; SetLastError(ERROR_NOT_FOUND); return 0; }
-/* No catalog context is ever handed out (above), so none can be described */
-WTAPI BOOL WINAPI CryptCATCatalogInfoFromContext(HANDLE c, void *info, DWORD flags)
-{ (void)c; (void)info; (void)flags; SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
-WTAPI BOOL WINAPI CryptCATAdminReleaseCatalogContext(HANDLE h, HANDLE c, DWORD flags) { (void)h; (void)c; (void)flags; return TRUE; }
+
+/* Installed catalogs: CryptCATAdminAddCatalog copies one into CatRoot
+ * (where the kernel's driver signature check looks, kernel/nt/ci.c) and
+ * hands back a catalog context naming the copy */
+typedef struct { DWORD magic; WCHAR path[MAX_PATH]; } CatInfo;
+typedef struct { DWORD cbStruct; WCHAR wszCatalogFile[MAX_PATH]; } CATALOG_INFO_STRUCT_;
+#define CATINFO_MAGIC 0x43494E46
+
+static void catroot(WCHAR *out, LPCWSTR name)
+{
+    UINT n = GetWindowsDirectoryW(out, MAX_PATH);
+    if (!n || n >= MAX_PATH - 80) lstrcpyW(out, L"C:\\Windows");
+    lstrcatW(out, L"\\System32\\CatRoot");
+    CreateDirectoryW(out, NULL);
+    lstrcatW(out, L"\\{F750E6C3-38EE-11D1-85E5-00C04FC295EE}");
+    CreateDirectoryW(out, NULL);
+    if (name) {
+        lstrcatW(out, L"\\");
+        lstrcatW(out, name);
+    }
+}
+
+static LPCWSTR base_of(LPCWSTR p)
+{
+    LPCWSTR b = p;
+    for (; *p; p++) if (*p == '\\' || *p == '/') b = p + 1;
+    return b;
+}
+
+WTAPI HANDLE WINAPI CryptCATAdminAddCatalog(HANDLE h, PWSTR file, PWSTR name, DWORD flags)
+{
+    (void)flags;
+    CatAdmin *c = h;
+    if (!c || c->magic != CAT_MAGIC || !file) { SetLastError(ERROR_INVALID_PARAMETER); return NULL; }
+    LPCWSTR as = name && *name ? name : base_of(file);
+    if (base_of(as) != as || lstrlenW(as) > 100) { SetLastError(ERROR_INVALID_PARAMETER); return NULL; }
+    CatInfo *ci = zalloc(sizeof(*ci));
+    if (!ci) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+    catroot(ci->path, as);
+    if (!CopyFileW(file, ci->path, FALSE)) { DWORD e = GetLastError(); zfree(ci); SetLastError(e); return NULL; }
+    ci->magic = CATINFO_MAGIC;
+    return ci;
+}
+
+WTAPI BOOL WINAPI CryptCATAdminRemoveCatalog(HANDLE h, LPCWSTR name, DWORD flags)
+{
+    (void)flags;
+    CatAdmin *c = h;
+    WCHAR path[MAX_PATH];
+    if (!c || c->magic != CAT_MAGIC || !name || base_of(name) != name) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    catroot(path, name);
+    return DeleteFileW(path);
+}
+
+WTAPI BOOL WINAPI CryptCATCatalogInfoFromContext(HANDLE ctx, void *info, DWORD flags)
+{
+    (void)flags;
+    CatInfo *ci = ctx;
+    CATALOG_INFO_STRUCT_ *out = info;
+    if (!ci || ci->magic != CATINFO_MAGIC || !out || out->cbStruct < sizeof(*out)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    lstrcpynW(out->wszCatalogFile, ci->path, MAX_PATH);
+    return TRUE;
+}
+
+WTAPI BOOL WINAPI CryptCATAdminReleaseCatalogContext(HANDLE h, HANDLE ctx, DWORD flags)
+{
+    (void)h; (void)flags;
+    CatInfo *ci = ctx;
+    if (ci && ci->magic == CATINFO_MAGIC) { ci->magic = 0; zfree(ci); }
+    return TRUE;
+}

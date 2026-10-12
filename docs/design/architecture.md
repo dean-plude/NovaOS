@@ -51,4 +51,5 @@ The short list is in the [README](../../README.md#key-design-decisions).
   NT kernel-mode driver interface (a kernel PE loader, `ntoskrnl.exe` and
   `hal.dll` exports in the Microsoft x64 ABI, KMDF and UMDF built from
   Microsoft's MIT source), matched by hardware ID from the driver store and
-  downloaded by hardware ID.  See [windows-drivers.md](windows-drivers.md).
+  downloaded by hardware ID, under Windows' kernel-mode signing policy
+  (`kernel/nt/ci.c`).  See [windows-drivers.md](windows-drivers.md).

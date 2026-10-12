@@ -6,6 +6,9 @@
  *   ldr.c       loads a driver's PE32+ image into the driver window, binds
  *               its imports against the export tables, calls DriverEntry,
  *               and unloads it again (NtLoadDriver, NtUnloadDriver)
+ *   ci.c        code integrity: the signing policy a driver image must meet
+ *               (an embedded or installed-catalog signature; Microsoft's
+ *               unless test signing is on), checked before it loads
  *   exports.h   the ntoskrnl.exe and hal.dll exports a driver can link
  *               against: the one list the tables are made from
  *   exports.c   the tables made from that list

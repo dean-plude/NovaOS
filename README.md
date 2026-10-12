@@ -275,8 +275,9 @@ The full list, with the reasons, is in
   hardware, which of its devices NovaOS drives, and every driver NovaOS
   has.
 - [docs/drivers.md](docs/drivers.md): the default driver and firmware
-  set (firmware downloaded from linux-firmware), and why Windows `.sys`
-  drivers do not load yet.
+  set (firmware downloaded from linux-firmware), Windows kernel drivers
+  as services, and the driver signing policy (Microsoft-signed, or
+  test-signed with test signing on).
 - [docs/design/windows-drivers.md](docs/design/windows-drivers.md): the
   plan to run Windows driver packages the way Windows 11 does (NT
   kernel-mode driver interface, KMDF/UMDF, download by hardware ID).

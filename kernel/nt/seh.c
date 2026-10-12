@@ -39,6 +39,7 @@
 typedef struct {
     UINT64 Reg[16];                  /* by unwind register number */
     UINT64 Rip;
+    UINT64 Rflags;                   /* restored on resume: a fault clears IF */
 } SehContext;
 enum { R_RAX, R_RCX, R_RDX, R_RBX, R_RSP, R_RBP, R_RSI, R_RDI,
        R_R8, R_R9, R_R10, R_R11, R_R12, R_R13, R_R14, R_R15 };
@@ -235,22 +236,30 @@ static SehHandler virtual_unwind(UINT32 type, UINT64 base, UINT64 pc, RuntimeFun
  * Rip on the unwound stack); does not return. */
 static __attribute__((noreturn)) void seh_resume(SehContext *ctx)
 {
-    /* Switch to the target frame's stack, then push the resume address so
-     * the final ret lands RSP back at exactly ctx->Reg[R_RSP] (the push and
-     * the ret cancel): a target RSP minus 8 here would leave the resumed
-     * frame 8 bytes low and its epilogue's ret would pop a stale word. */
+    /* Switch to the target frame's stack and stage Rflags then Rip just
+     * below it, so the trailing popfq/ret restore both and leave RSP at
+     * exactly ctx->Reg[R_RSP].  Rflags matters: a CPU exception is taken
+     * through an interrupt gate, which clears IF, and a resume that only
+     * set RIP/RSP/GPRs (as a bare ret does) would run the handler with
+     * interrupts still disabled — the scheduler and timer then wedge.  The
+     * normal return from a fault is IRET, which restores the flags; this is
+     * the same, restoring the interrupted code's own Rflags. */
     __asm__ volatile(
-        "movq %0, %%rsp\n\t"           /* the target frame's own stack pointer */
-        "pushq %1\n\t"                 /* return address = Rip */
-        "movq %2, %%rax\n\t"
-        "movq 0x08(%%rax), %%rcx\n\t" "movq 0x10(%%rax), %%rdx\n\t" "movq 0x18(%%rax), %%rbx\n\t"
-        "movq 0x28(%%rax), %%rbp\n\t" "movq 0x30(%%rax), %%rsi\n\t" "movq 0x38(%%rax), %%rdi\n\t"
-        "movq 0x40(%%rax), %%r8\n\t"  "movq 0x48(%%rax), %%r9\n\t"  "movq 0x50(%%rax), %%r10\n\t"
-        "movq 0x58(%%rax), %%r11\n\t" "movq 0x60(%%rax), %%r12\n\t" "movq 0x68(%%rax), %%r13\n\t"
-        "movq 0x70(%%rax), %%r14\n\t" "movq 0x78(%%rax), %%r15\n\t"
-        "movq 0x00(%%rax), %%rax\n\t"
-        "ret\n\t"
-        : : "r"(ctx->Reg[R_RSP]), "r"(ctx->Rip), "r"(ctx) : "memory");
+        "movq %0, %%rax\n\t"               /* rax = ctx */
+        "movq 0x20(%%rax), %%rcx\n\t"      /* rcx = target RSP (Reg[R_RSP]) */
+        "subq $16, %%rcx\n\t"              /* room for Rflags and Rip */
+        "movq 0x80(%%rax), %%rdx\n\t" "movq %%rdx, 8(%%rcx)\n\t"     /* [target-8]  = Rip */
+        "movq 0x88(%%rax), %%rdx\n\t" "movq %%rdx, (%%rcx)\n\t"      /* [target-16] = Rflags */
+        "movq %%rcx, %%rsp\n\t"            /* switch to the target stack */
+        "movq 0x18(%%rax), %%rbx\n\t" "movq 0x28(%%rax), %%rbp\n\t" "movq 0x30(%%rax), %%rsi\n\t"
+        "movq 0x38(%%rax), %%rdi\n\t" "movq 0x40(%%rax), %%r8\n\t"  "movq 0x48(%%rax), %%r9\n\t"
+        "movq 0x50(%%rax), %%r10\n\t" "movq 0x58(%%rax), %%r11\n\t" "movq 0x60(%%rax), %%r12\n\t"
+        "movq 0x68(%%rax), %%r13\n\t" "movq 0x70(%%rax), %%r14\n\t" "movq 0x78(%%rax), %%r15\n\t"
+        "movq 0x08(%%rax), %%rcx\n\t" "movq 0x10(%%rax), %%rdx\n\t"
+        "movq 0x00(%%rax), %%rax\n\t"      /* rax last */
+        "popfq\n\t"                        /* Rflags = [rsp]; rsp = target-8 */
+        "ret\n\t"                          /* Rip = [rsp]; rsp = target */
+        : : "r"(ctx) : "memory");
     __builtin_unreachable();
 }
 
@@ -418,6 +427,7 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
     ctx.Reg[R_R8] = f->r8; ctx.Reg[R_R9] = f->r9; ctx.Reg[R_R10] = f->r10; ctx.Reg[R_R11] = f->r11;
     ctx.Reg[R_R12] = f->r12; ctx.Reg[R_R13] = f->r13; ctx.Reg[R_R14] = f->r14; ctx.Reg[R_R15] = f->r15;
     ctx.Rip = f->rip;
+    ctx.Rflags = f->rflags;               /* the fault cleared IF; resume with the driver's own flags */
 
     SehRecord rec;
     memset(&rec, 0, sizeof(rec));
@@ -457,6 +467,7 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
     (ctx).Reg[R_RBP] = *(UINT64 *)__builtin_frame_address(0);                               \
     (ctx).Reg[R_RSP] = (UINT64)(uintptr_t)__builtin_frame_address(0) + 16;                  \
     (ctx).Rip = (UINT64)(uintptr_t)__builtin_return_address(0);                             \
+    __asm__ volatile("pushfq\n\t popq %0" : "=r"((ctx).Rflags) : : "memory");               \
 } while (0)
 
 static __attribute__((noreturn)) void raise_from(SehContext *ctx, NTSTATUS code, UINT32 nparams, const UINT64 *params)

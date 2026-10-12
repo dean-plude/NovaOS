@@ -965,6 +965,24 @@ typedef struct __attribute__((packed)) {
     Hdr h; UINT32 x, y, z, w, h2, d; UINT64 offset; UINT32 res, level, stride, layer_stride;
 } Transfer3d;
 
+/* ATTACH_BACKING's entries for @nframes pages at @frames into @ent (16
+ * bytes a page at most): one per run of consecutive pages; how many */
+static UINT32 frame_runs(const PADDR *frames, UINT64 nframes, UINT64 *ent)
+{
+    UINT32 n = 0;
+    for (UINT64 k = 0; k < nframes; k++) {
+        if (n && ent[2 * (n - 1)] + (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) == frames[k] &&
+            (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) < (1u << 30)) {
+            ent[2 * (n - 1) + 1] += PAGE_SIZE;
+            continue;
+        }
+        ent[2 * n] = frames[k];
+        ent[2 * n + 1] = PAGE_SIZE;
+        n++;
+    }
+    return n;
+}
+
 VgpuBlob *VgpuRes3dCreate(VgpuCtx *c, const UINT32 *p, PADDR *frames, UINT64 nframes)
 {
     Vgpu *v = c->v;
@@ -992,19 +1010,9 @@ VgpuBlob *VgpuRes3dCreate(VgpuCtx *c, const UINT32 *p, PADDR *frames, UINT64 nfr
     }
     if (nframes) {
         /* its memory: one entry per run of consecutive pages */
-        UINT32 n = 0;
         ent = kmalloc(nframes * 16);
         if (!ent) goto fail;
-        for (UINT64 k = 0; k < nframes; k++) {
-            if (n && ent[2 * (n - 1)] + (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) == frames[k] &&
-                (ent[2 * (n - 1) + 1] & 0xFFFFFFFF) < (1u << 30)) {
-                ent[2 * (n - 1) + 1] += PAGE_SIZE;
-                continue;
-            }
-            ent[2 * n] = frames[k];
-            ent[2 * n + 1] = PAGE_SIZE;
-            n++;
-        }
+        UINT32 n = frame_runs(frames, nframes, ent);
         size_t pages;
         void *pl = payload(ent, n * 16, &pages);
         kfree(ent);
@@ -1401,6 +1409,69 @@ static UINT32 *copy_region(UINT32 *c, UINT32 dst, int dx, int dy, UINT32 src, in
     return c + COPY_REGION_SIZE + 1;
 }
 
+/* ATTACH_BACKING (ctx 0) of @n entries @pl (payload pages) to @res, not
+ * waited for */
+static void post_attach(Vgpu *v, UINT32 res, void *pl, size_t pages, UINT32 n)
+{
+    int i = slot3d(v, CMD_ATTACH_BACKING, 0, sizeof(Attach));
+    Attach *a = (Attach *)v->slot[i].page;
+    a->id = res;
+    a->n = n;
+    v->slot[i].ext = pl;
+    v->slot[i].ext_pages = pages;
+    post3d(v, i, sizeof(Hdr) + 8, n * 16);
+}
+
+static void post_detach(Vgpu *v, UINT32 res)
+{
+    int i = slot3d(v, CMD_DETACH_BACKING, 0, sizeof(Unref));
+    ((Unref *)v->slot[i].page)->id = res;
+    post3d(v, i, sizeof(Unref), 0);
+}
+
+/* The frame read back straight into the screen: for the transfer, the
+ * program's resource gets the screen's rows as its memory, then its own
+ * back (the host's only copy, as the GDI's read-back is; the program does
+ * not touch a buffer it showed until its next frame).  @src's bytes must
+ * be the screen's (B, G, R, then alpha or nothing) */
+static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
+                         int first, int last)
+{
+    UINT64 *ent = kmalloc(src->nframes * 16);
+    if (!ent) return false;
+    size_t opages;
+    UINT32 nown = frame_runs(src->frames, src->nframes, ent);
+    void *own = payload(ent, nown * 16, &opages);
+    kfree(ent);
+    if (!own) return false;
+    void *rows[2] = { NULL, NULL };
+    size_t rpages[2] = { 0, 0 };
+    UINT64 off[2] = { 0, 0 };
+    for (int pg = first; pg <= last; pg++) {
+        UINT64 start = s->phys + ((UINT64)(dy + pg * s->lines) * s->stride + dx) * 4;
+        UINT64 end = s->phys + ((UINT64)(dy + pg * s->lines + h - 1) * s->stride + dx + w) * 4;
+        UINT64 base = start & ~(UINT64)(PAGE_SIZE - 1);
+        UINT64 e[2] = { base, (end - base + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1) };
+        off[pg] = start - base;
+        if (!(rows[pg] = payload(e, 16, &rpages[pg]))) {
+            for (int k = first; k < pg; k++) kernel_free_pages(rows[k], rpages[k]);
+            kernel_free_pages(own, opages);
+            return false;
+        }
+    }
+    present_attach(v, src->res);
+    for (int pg = first; pg <= last; pg++) {
+        post_detach(v, src->res);
+        post_attach(v, src->res, rows[pg], rpages[pg], 1);
+        UINT32 box[6] = { (UINT32)x, (UINT32)y, 0, (UINT32)w, (UINT32)h, 1 };
+        VgpuTransfer3dEx(g_pctx, src, false, box, off[pg], 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
+                         pg == last ? g_pseq + 1 : 0, false);
+    }
+    post_detach(v, src->res);
+    post_attach(v, src->res, own, opages, nown);
+    return true;
+}
+
 /* Copy (x, y, w, h) of @o's frame to (dx, dy) of the screen's pages (all,
  * or s->only) and write it into the screen's memory: done when this returns, or (with
  * @shown) once the host reaches shown->seq, the part of the screen in
@@ -1408,8 +1479,10 @@ static UINT32 *copy_region(UINT32 *c, UINT32 dst, int dx, int dy, UINT32 src, in
 static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
                           VgpuShown *shown)
 {
-    VgpuBlob *scr = o->src ? screen_res(v, s, o->src->format) : NULL;
-    if (!scr) return false;
+    if (!o->src) return false;
+    bool read = o->src->frames && (o->src->format == FORMAT_B8G8R8A8 || o->src->format == FORMAT_B8G8R8X8);
+    VgpuBlob *scr = read ? NULL : screen_res(v, s, o->src->format);
+    if (!read && !scr) return false;
     if (dx < 0) { x -= dx; w += dx; dx = 0; }
     if (dy < 0) { y -= dy; h += dy; dy = 0; }
     if (dx + w > s->stride) w = s->stride - dx;
@@ -1424,6 +1497,10 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
             last = pg;
         }
     if (first < 0) return true;
+    if (read) {
+        if (!overlay_read(v, o->src, s, x, y, dx, dy, w, h, first, last)) return false;
+        goto done;
+    }
     for (int pg = first; pg <= last; pg++)
         end = g_pfmt == o->src->format
                   ? copy_region(end, scr->res, dx, dy + pg * s->lines, o->src->res, x, y, w, h)
@@ -1436,6 +1513,7 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
                               pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, false))
             return false;
     }
+done:;
     UINT64 want = ++g_pseq;
     DisplayStatAdd(DISPLAY_STAT_DIRECT_BYTES, (UINT64)w * h * 4 * (last - first + 1));
     if (shown) {

@@ -10489,14 +10489,15 @@ straight into the screen's memory: no pixel is copied by the guest.
   it is on screen) once the host has drawn the frame; when
   the kernel says no it reads the frame back as before.
   `NOVA_PRESENT=gdi` always takes the old way.
-- **Kernel**: a virgl context of the kernel's own copies the program's
-  frame on the host straight into a texture whose guest memory is the
-  primary's screen (the VGA framebuffer, both pages when it flips, or a
-  virtio output's picture), in the frame's own format so that the copy
-  is a plain one, and a transfer writes that part into it.  The host
-  draws most of a frame, so it copies each frame once, into the page on
-  screen only when the display flips (the other page gets the window's
-  last frame just before it is shown); the window keeps
+- **Kernel**: a virgl context of the kernel's own reads the program's
+  frame back on the host straight into the primary's screen (the VGA
+  framebuffer, or a virtio output's picture): for that one transfer the
+  program's buffer gets the screen's rows as its guest memory, then its
+  own back, so the host copies each frame once, as the GDI's read-back
+  does (frames in another layout than the screen's are copied into a
+  texture over the screen's memory first).  When the display flips, a
+  frame goes into the page on screen only (the other page gets the
+  window's last frame just before it is shown).  The window keeps
   the program's last shown buffer (it draws the next frame into the
   other one) to write it there again.  The program goes on to its next
   frame as soon as the copy is asked for: a kernel thread waits for the
@@ -10521,13 +10522,14 @@ straight into the screen's memory: no pixel is copied by the guest.
   per second and move fewer bytes through guest memory a frame
   (read-backs, window bitmaps drawn, the desktop's back buffer copied to
   the screen, transfers to a virtio output).  In the QEMU VM without
-  KVM: 27.0 against 20.5 frames a second (37.1 against 48.7 ms a frame),
-  18 KiB against 3542 KiB a frame through guest memory.  It also prints
+  KVM: 25.6 against 19.9 frames a second (39.1 against 50.3 ms a frame),
+  19 KiB against 3540 KiB a frame through guest memory.  It also prints
   how much of a frame goes to SwapBuffers and to asking the kernel.  A first version
   copied each frame on the host twice (into the window's own texture,
   then onto the screen), and into both pages of a flipping display, and
-  was slower than the GDI under KVM, where the
-  guest's copies cost little and the host's time is all; it also asked
+  was slower than the GDI under KVM, where the guest's copies cost
+  little and the host's time is all (even one copy into a texture over
+  the screen and a transfer from it lost by 1 ms a frame); it also asked
   the kernel before the host had drawn the frame, so the desktop stayed
   held while the host drew, and then waited for the host's copy and
   touched the screen's pages itself (6.6 ms a frame under KVM).

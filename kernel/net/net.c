@@ -566,10 +566,11 @@ static void check_timeouts(void)
 #define NET_POLL_100NS 10000                /* 1 ms: a program waits for data */
 #define NET_BUSY_100NS 2000                 /* 0.2 ms: busy, programs waiting for the CPU */
 
+static bool g_announced;            /* the lease was logged (again for a new adapter's) */
+
 static void net_thread(void *arg)
 {
     (void)arg;
-    bool announced = false;
     for (;;) {
         net_lock();
         bool link = g_nic->link_up();
@@ -586,13 +587,13 @@ static void net_thread(void *arg)
         sys_check_timeouts();
         check_timeouts();
         http_poll();
-        if (!announced && dhcp_supplied_address(&g_netif)) {
+        if (!g_announced && dhcp_supplied_address(&g_netif)) {
             char ip[16], gw[16], dns[16];
             NetFormatIp(ip4_addr_get_u32(netif_ip4_addr(&g_netif)), ip, sizeof(ip));
             NetFormatIp(ip4_addr_get_u32(netif_ip4_gw(&g_netif)), gw, sizeof(gw));
             NetFormatIp(ip4_addr_get_u32(ip_2_ip4(dns_getserver(0))), dns, sizeof(dns));
             kprintf("[NET] DHCP: address %s, gateway %s, DNS %s\n", ip, gw, dns);
-            announced = true;
+            g_announced = true;
         }
         for (int i = 1; i < LWIP_IPV6_NUM_ADDRESSES; i++) {     /* SLAAC addresses, once each */
             static UINT8 told[LWIP_IPV6_NUM_ADDRESSES][16];
@@ -634,6 +635,7 @@ static void net_thread(void *arg)
  * address goes, the link is looked at afresh, and DHCP asks again */
 static void adapter_changed(void)
 {
+    g_announced = false;
     dhcp_release_and_stop(&g_netif);
     ip4_addr_t zero;
     ip4_addr_set_zero(&zero);

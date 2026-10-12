@@ -146,6 +146,8 @@ typedef struct NdisAdapter {
     TxSlot               tx[TX_SLOTS];
     UINT32               tx_next;
     UINT64               rx_frames, tx_frames, rx_dropped;
+    UINT64               tx_done, isrs, dpcs;    /* (for the log when sending stalls) */
+    bool                 tx_told;
 } NdisAdapter;
 
 /* A control device (NdisRegisterDeviceEx): the miniport's own dispatch
@@ -248,7 +250,16 @@ static bool net_transmit(const void *frame, UINT16 len)
         TxSlot *t = &a->tx[(a->tx_next + (UINT32)i) % TX_SLOTS];
         if (!__atomic_exchange_n(&t->busy, 1, __ATOMIC_ACQUIRE)) s = t;
     }
-    if (!s) return false;
+    if (!s) {
+        if (!a->tx_told) {
+            a->tx_told = true;
+            kprintf("[NDIS] %s: every send slot is waiting for the miniport (%llu sent, %llu completed; "
+                    "%llu interrupts, %llu DPCs, %llu frames received)\n", a->drv->service,
+                    (unsigned long long)a->tx_frames, (unsigned long long)a->tx_done, (unsigned long long)a->isrs,
+                    (unsigned long long)a->dpcs, (unsigned long long)a->rx_frames);
+        }
+        return false;
+    }
     a->tx_next = (UINT32)(s - a->tx + 1) % TX_SLOTS;
     memcpy(s->buf, frame, len);
     s->mdl->ByteCount = len;
@@ -787,6 +798,7 @@ static NT_API UINT8 isr(void *obj, void *ctx)
     UINT8 queue = 0;
     UINT32 target = 0;
     UINT8 mine = ((ISR)a->intr.InterruptHandler)(a->intr_ctx, &queue, &target);
+    a->isrs++;
     if (queue) nt_KeInsertQueueDpc(&a->dpc, NULL, NULL);
     return mine;
 }
@@ -796,6 +808,7 @@ static NT_API void dpc(NT_KDPC *k, void *ctx, void *dpc_ctx, void *unused)
     (void)k; (void)unused;
     NdisAdapter *a = ctx;
     NDIS_RECEIVE_THROTTLE_PARAMETERS t = { NDIS_INDICATE_ALL_NBLS, 0 };
+    a->dpcs++;
     ((ISR_DPC)a->intr.InterruptDpcHandler)(a->intr_ctx, dpc_ctx, &t, NULL);
     return_pending(a);
     if (t.MoreNblsPending) nt_KeInsertQueueDpc(&a->dpc, dpc_ctx, NULL);
@@ -1097,7 +1110,8 @@ NT_API void nt_NdisMIndicateReceiveNetBufferLists(void *h, NET_BUFFER_LIST *list
 
 NT_API void nt_NdisMSendNetBufferListsComplete(void *h, NET_BUFFER_LIST *list, UINT32 flags)
 {
-    (void)h; (void)flags;
+    (void)flags;
+    NdisAdapter *a = adapter_of(h);
     for (NET_BUFFER_LIST *nbl = list, *next; nbl; nbl = next) {
         next = nbl->Next;
         nbl->Next = NULL;
@@ -1106,7 +1120,10 @@ NT_API void nt_NdisMSendNetBufferListsComplete(void *h, NET_BUFFER_LIST *list, U
             static int told;
             if (told++ < 4) kprintf("[NDIS] a frame was not sent (0x%08x)\n", (UINT32)nbl->Status);
         }
-        if (s) __atomic_store_n(&s->busy, 0, __ATOMIC_RELEASE);
+        if (s) {
+            if (a) a->tx_done++;
+            __atomic_store_n(&s->busy, 0, __ATOMIC_RELEASE);
+        }
     }
 }
 

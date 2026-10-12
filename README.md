@@ -509,18 +509,19 @@ To make the ISO yourself from a fresh build, run
   need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello, the
   process DACL), `battery` (against the battery in
   `tests/acpi/battery.asl`), `soundtest` (the recorded WAV must hold the
-  tones played), `soundtest record`, `capture` and `volume` (`waveIn`
-  and WASAPI capture must record the tone the microphone hears, and a
-  quarter of the endpoint volume must sound 12 dB quieter), `soundtest
-  dsound` and `dscapture` (DirectSound playback with notifications,
-  frequency and volume, and DirectSoundCapture recording the
-  microphone), `sleeptest timer` (`Sleep(1)`, 1 ms wait timeouts and
-  waitable timers (periodic ones, their completion routines and timer
-  queue timers too) end within a millisecond with every CPU busy),
-  `soundtest mme` (`waveIn` recorded as PortAudio's MME host does, the
-  program held up 250 ms a second: no input overflow, and no frame
-  missing from the recorded tone), `savetest` (while NovaOS saves 32 MiB
-  of drive C: to its disk, calls behind the kernel, desktop and
+  tones played), `soundtest godot` (WASAPI through IAudioClient3 as
+  Godot plays, 64-bit and 32-bit), `soundtest record`, `capture` and
+  `volume` (`waveIn` and WASAPI capture must record the tone the
+  microphone hears, and a quarter of the endpoint volume must sound 12
+  dB quieter), `soundtest dsound` and `dscapture` (DirectSound playback
+  with notifications, frequency and volume, and DirectSoundCapture
+  recording the microphone), `sleeptest timer` (`Sleep(1)`, 1 ms wait
+  timeouts and waitable timers (periodic ones, their completion routines
+  and timer queue timers too) end within a millisecond with every CPU
+  busy), `soundtest mme` (`waveIn` recorded as PortAudio's MME host
+  does, the program held up 250 ms a second: no input overflow, and no
+  frame missing from the recorded tone), `savetest` (while NovaOS saves
+  32 MiB of drive C: to its disk, calls behind the kernel, desktop and
   file-system locks keep answering, the file-system one within 100 ms;
   the save holds the file-system lock under 20 ms), `xa2test` (XAudio2
   2.9 and 2.7 voices, callbacks and effects, and X3DAudio panning),

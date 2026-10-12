@@ -15,7 +15,10 @@
 # pipelines, which the game draws without (see docs/compatibility).  Godot's
 # log (--log-file) must then name the Direct3D 12 driver, so a fall back
 # to Vulkan (rendering/rendering_device/fallback_to_vulkan) fails the
-# test.  Takes the keyboard.
+# test.  The game's music (an autoloaded player) must be heard: NovaOS
+# boots with a sound card, which Godot's WASAPI driver opens through
+# IAudioClient3 (without one it finds no endpoint and plays nothing, as on
+# Windows).  Takes the keyboard.
 import os
 import shutil
 import zipfile
@@ -73,4 +76,4 @@ APP = App('Squash the Creeps', '4.7',
            Test('back to Documents', r'cd C:\Documents', builtin=True)],
           unpack=unpack, gui=True, runtimes=['Mesa 3D', 'DXVK', 'VKD3D-Proton'], interact=drawn,
           extra=['https://github.com/godotengine/godot-demo-projects/releases/download/4.7-6ad6167/3d_squash_the_creeps.zip'],
-          reference=False, close_wait=600)
+          sound=(None, 5000), reference=False, close_wait=600)

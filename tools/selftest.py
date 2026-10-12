@@ -83,7 +83,10 @@ order; --list prints them):
             and kmdftest talks to it; "edu", QEMU's edu PCI device, on
             which pnputil installs a Plug and Play driver (edutest.sys)
             that gets its memory, interrupt and DMA from the PnP manager,
-            and which pnputil disables and enables
+            and which pnputil disables and enables; "vioser", QEMU's
+            virtio-serial controller, on which pnputil installs
+            virtio-win's signed vioser.sys (KMDF): its port, a child
+            device, carries bytes to the host and back
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -310,6 +313,7 @@ PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
+VIOSER = load_suite('devices/vioser')
 
 
 def net4_boot(work):
@@ -443,6 +447,26 @@ def edu_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
     edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
     return ['-device', 'edu'], []
+
+
+def vioser_boot(work):
+    """QEMU's virtio-serial controller with one port, org.novaos.test.0,
+    whose host end is tools/drivertest/serialpeer.py (port 10720), and
+    virtio-win's signed vioser package (tools/drivertest/vioser.py) in
+    C:\\Tests\\Vioser: pnputil installs it (tests/selftest/devices/vioser)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import vioser
+    pkg = os.path.join(work, 'vioser')
+    vioser.fetch(pkg)
+    log = os.path.join(work, 'serialpeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'drivertest', 'serialpeer.py'), '10720'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-chardev', 'socket,id=vs,host=127.0.0.1,port=10720', '-device', 'virtio-serial-pci',
+            '-device', 'virtserialport,chardev=vs,name=org.novaos.test.0'], [p], dict(puts=[(pkg, r'C:\Tests\Vioser')])
 
 
 def ntfs_boot(work):
@@ -589,7 +613,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot)],
 }
 
 
@@ -691,7 +715,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10713)]:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10713)] + ['serialpeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

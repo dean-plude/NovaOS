@@ -178,6 +178,16 @@ void um_registry_set_value(const char *path, const char *name, UINT32 type, cons
 bool um_registry_delete_value(const char *path, const char *name);
 bool um_registry_create_key(const char *path);
 bool um_registry_key_exists(const char *path);
+/* Enumeration for kernel-mode ZwQueryKey / ZwEnumerateKey / ZwEnumerateValueKey */
+typedef struct {
+    UINT64 wtime;                                  /* last write, 100 ns since 1601 */
+    UINT32 subkeys, max_name;                      /* lengths in bytes */
+    UINT32 values, max_value_name, max_data;
+} UmRegKeyInfo;
+bool um_registry_query_key(const char *path, UmRegKeyInfo *info);
+int  um_registry_enum_key(const char *path, UINT32 index, UINT16 *name, int cap, UINT64 *wtime);
+int  um_registry_enum_value(const char *path, UINT32 index, UINT16 *name, int ncap, int *nlen,
+                            UINT32 *type, void *out, int cap);
 /* The first-boot setup's answers (apps/welcome.c): UserName, FirstBootDone */
 #define UM_SETUP_KEY "Machine\\SOFTWARE\\NovaOS\\Setup"
 /* The user's SID: HKEY_CURRENT_USER is "User\\" UM_USER_SID */

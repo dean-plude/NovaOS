@@ -273,3 +273,6 @@ NT_API void nt_IoBuildPartialMdl(NT_MDL *src, NT_MDL *dst, void *va, UINT32 len)
     unsigned long long *s = NtMdlPfns(src), *d = NtMdlPfns(dst);
     for (UINT32 i = 0; i < pages; i++) d[i] = s[first + i];
 }
+
+/* MmQuerySystemSize: MmLargeSystem (2), which every machine NovaOS runs on is */
+NT_API int nt_MmQuerySystemSize(void) { return 2; }

@@ -546,6 +546,10 @@ named program or test demonstrates it.
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
   the tests); line-based interrupts only, MSI comes later.
+  Step 30.8 is in: a vendor's Windows USB client driver runs a USB device
+  through NovaOS's own USB bus interface (URBs over its USB core): FTDI's
+  driver, downloaded by hardware ID, makes QEMU's `usb-serial` converter
+  COM3, which programs open with the communications functions.
 
 <!-- END generated:next-hardware -->
 

@@ -25,6 +25,9 @@
 #include "../ke/kpcr.h"
 
 #define KERNEL_IMAGE_BASE  UINT64_C(0xFFFFFFFF80200000)
+#define NT_STATUS_KEY_DELETED  ((NT_STATUS)0xC000017C)   /* the handle's key is gone */
+
+bool NtZwKeyPath(void *handle, char *out, int cap);   /* (ntoskrnl.c's RtlQueryRegistryValues) */
 
 /* OBJECT_ATTRIBUTES, as far as a driver fills it */
 typedef struct {
@@ -71,7 +74,7 @@ static bool oa_reg_path(const NtObjectAttributes *oa, char *out, int cap)
     const char *p = name;
     static const char pre[] = "\\registry\\";
     bool same = true;
-    for (int i = 0; pre[i] && same; i++) same = (p[i] | 0x20) == pre[i];
+    for (int i = 0; pre[i] && same; i++) same = (pre[i] == '\\' ? p[i] : p[i] | 0x20) == pre[i];
     if (same) p += 10;
     else if (*p == '\\') p++;
     ksnprintf(out, cap, "%s", p);
@@ -135,52 +138,209 @@ NT_API NTSTATUS nt_ZwSetValueKey(ZwObject *key, NT_UNICODE_STRING *name, UINT32 
     return NT_STATUS_SUCCESS;
 }
 
-/* KEY_VALUE_{BASIC 0, FULL 1, PARTIAL 2}_INFORMATION */
-NT_API NTSTATUS nt_ZwQueryValueKey(ZwObject *key, NT_UNICODE_STRING *name, UINT32 cls, void *out,
-                                   UINT32 cap, UINT32 *result_len)
+static bool is_key(const ZwObject *key)
 {
-    if (!key || key->magic != ZW_MAGIC || key->kind != ZW_KEY) return NT_STATUS_INVALID_HANDLE;
-    char nm[128];
-    ustr_ascii(name, nm, sizeof(nm));
-    UINT8 data[1024];
-    UINT32 type = 0;
-    int len = um_registry_get_value(key->path, nm, &type, data, sizeof(data));
-    if (len < 0) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-    UINT32 dlen = (UINT32)len, need, fixed;
-    UINT8 info[1024 + 32];
-    if (cls == 2) {                                   /* PARTIAL: TitleIndex, Type, DataLength, Data[] */
-        fixed = 12;
-        need = fixed + dlen;
-        memset(info, 0, 12);
-        memcpy(info + 4, &type, 4);
-        memcpy(info + 8, &dlen, 4);
-        if (dlen) memcpy(info + 12, data, dlen);
-    } else if (cls == 1) {                            /* FULL: + DataOffset, NameLength, Name[] */
-        UINT32 nlen = 0; for (const char *c = nm; *c; c++) nlen += 2;
-        UINT32 doff = (20 + nlen + 7) & ~7u;
-        fixed = 20;
-        need = doff + dlen;
-        memset(info, 0, need < sizeof(info) ? need : sizeof(info));
-        memcpy(info + 4, &type, 4);
+    return key && key->magic == ZW_MAGIC && key->kind == ZW_KEY;
+}
+
+/* Hand an information record built in @info (@need bytes, of which the
+ * first @fixed are its fixed part) to a caller's buffer, as the registry
+ * does on Windows: *ResultLength is always the full size; a buffer shorter
+ * than the fixed part gets nothing (BUFFER_TOO_SMALL); one that holds the
+ * fixed part but not the rest gets as much as fits (BUFFER_OVERFLOW). */
+static NTSTATUS give_info(const UINT8 *info, UINT32 need, UINT32 fixed, void *out, UINT32 cap, UINT32 *result_len)
+{
+    if (result_len) *result_len = need;
+    if (cap < fixed) return NT_STATUS_BUFFER_TOO_SMALL;
+    if (!out) return NT_STATUS_ACCESS_VIOLATION;
+    memcpy(out, info, cap < need ? cap : need);
+    return cap < need ? NT_STATUS_BUFFER_OVERFLOW : NT_STATUS_SUCCESS;
+}
+
+/* KEY_VALUE_{BASIC 0, FULL 1, PARTIAL 2}_INFORMATION for one value (its
+ * name UTF-16, @nchars characters), shared by ZwQueryValueKey and
+ * ZwEnumerateValueKey */
+static NTSTATUS value_info(const UINT16 *name, UINT32 nchars, UINT32 type, const void *data, UINT32 dlen,
+                           UINT32 cls, void *out, UINT32 cap, UINT32 *result_len)
+{
+    UINT32 nlen = 2 * nchars, need, fixed, doff = 0;
+    switch (cls) {
+    case 0: fixed = 12; need = fixed + nlen; break;               /* TitleIndex, Type, NameLength, Name[] */
+    case 1: fixed = 20; doff = (fixed + nlen + 7) & ~7u; need = doff + dlen; break;
+                                                                  /* + DataOffset, DataLength; data 8-aligned */
+    case 2: fixed = 12; need = fixed + dlen; break;               /* TitleIndex, Type, DataLength, Data[] */
+    default: return STATUS_INVALID_INFO_CLASS;
+    }
+    UINT8 *info = kzalloc(need);
+    if (!info) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    memcpy(info + 4, &type, 4);
+    if (cls == 0) {
+        memcpy(info + 8, &nlen, 4);
+        memcpy(info + 12, name, nlen);
+    } else if (cls == 1) {
         memcpy(info + 8, &doff, 4);
         memcpy(info + 12, &dlen, 4);
         memcpy(info + 16, &nlen, 4);
-        for (UINT32 i = 0; i * 2 < nlen; i++) *(UINT16 *)(info + 20 + 2 * i) = (UINT8)nm[i];
-        if (dlen && doff + dlen <= sizeof(info)) memcpy(info + doff, data, dlen);
-    } else {                                          /* BASIC: TitleIndex, Type, NameLength, Name[] */
-        UINT32 nlen = 0; for (const char *c = nm; *c; c++) nlen += 2;
-        fixed = 12;
-        need = fixed + nlen;
-        memset(info, 0, 12);
-        memcpy(info + 4, &type, 4);
-        memcpy(info + 8, &nlen, 4);
-        for (UINT32 i = 0; i * 2 < nlen; i++) *(UINT16 *)(info + 12 + 2 * i) = (UINT8)nm[i];
+        memcpy(info + 20, name, nlen);
+        if (dlen) memcpy(info + doff, data, dlen);
+    } else {
+        memcpy(info + 8, &dlen, 4);
+        if (dlen) memcpy(info + 12, data, dlen);
     }
-    if (result_len) *result_len = need;
-    if (cap < fixed) return NT_STATUS_BUFFER_TOO_SMALL;
-    UINT32 k = cap < need ? cap : need;
-    memcpy(out, info, k);
-    return cap < need ? NT_STATUS_BUFFER_OVERFLOW : NT_STATUS_SUCCESS;
+    NTSTATUS st = give_info(info, need, fixed, out, cap, result_len);
+    kfree(info);
+    return st;
+}
+
+NT_API NTSTATUS nt_ZwQueryValueKey(ZwObject *key, NT_UNICODE_STRING *name, UINT32 cls, void *out,
+                                   UINT32 cap, UINT32 *result_len)
+{
+    if (!is_key(key)) return NT_STATUS_INVALID_HANDLE;
+    char nm[128];
+    ustr_ascii(name, nm, sizeof(nm));
+    UINT32 type = 0;
+    int len = um_registry_get_value(key->path, nm, &type, NULL, 0);
+    if (len < 0) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    UINT8 *data = kmalloc((UINT32)len + 1);
+    if (!data) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    int got = um_registry_get_value(key->path, nm, &type, data, len);
+    if (got < 0) { kfree(data); return NT_STATUS_OBJECT_NAME_NOT_FOUND; }
+    if (got > len) got = len;                         /* (grew in between: what was read) */
+    UINT16 wn[128];
+    UINT32 n = 0;
+    for (; nm[n]; n++) wn[n] = (UINT8)nm[n];
+    NTSTATUS st = value_info(wn, n, type, data, (UINT32)got, cls, out, cap, result_len);
+    kfree(data);
+    return st;
+}
+
+/* ZwEnumerateValueKey: the @index'th value, as ZwQueryValueKey gives it */
+NT_API NTSTATUS nt_ZwEnumerateValueKey(ZwObject *key, UINT32 index, UINT32 cls, void *out,
+                                       UINT32 cap, UINT32 *result_len)
+{
+    if (!is_key(key)) return NT_STATUS_INVALID_HANDLE;
+    UINT16 name[256];
+    int nlen = 0;
+    UINT32 type = 0;
+    int len = um_registry_enum_value(key->path, index, name, 256, &nlen, &type, NULL, 0);
+    if (len == -2) return NT_STATUS_KEY_DELETED;
+    if (len < 0) return STATUS_NO_MORE_ENTRIES;
+    UINT8 *data = kmalloc((UINT32)len + 1);
+    if (!data) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    int got = um_registry_enum_value(key->path, index, name, 256, &nlen, &type, data, len);
+    if (got < 0) { kfree(data); return STATUS_NO_MORE_ENTRIES; }
+    if (got > len) got = len;
+    if (nlen > 256) nlen = 256;
+    NTSTATUS st = value_info(name, (UINT32)nlen, type, data, (UINT32)got, cls, out, cap, result_len);
+    kfree(data);
+    return st;
+}
+
+/* KEY_{BASIC 0, NODE 1, FULL 2, NAME 3}_INFORMATION for the key at @path
+ * (named @name, @nchars UTF-16 characters), shared by ZwQueryKey and
+ * ZwEnumerateKey.  NovaOS keys have no class, so ClassOffset is -1 and
+ * ClassLength 0. */
+static NTSTATUS key_info(const char *path, const UINT16 *name, UINT32 nchars, UINT32 cls,
+                         void *out, UINT32 cap, UINT32 *result_len)
+{
+    UmRegKeyInfo ki;
+    if (!um_registry_query_key(path, &ki)) return NT_STATUS_KEY_DELETED;
+    UINT32 nlen = 2 * nchars, need, fixed, no_class = 0xFFFFFFFFu;
+    UINT8 *info;
+    switch (cls) {
+    case 0:                                               /* LastWriteTime, TitleIndex, NameLength, Name[] */
+        fixed = 16; need = fixed + nlen;
+        if (!(info = kzalloc(need))) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        memcpy(info, &ki.wtime, 8);
+        memcpy(info + 12, &nlen, 4);
+        memcpy(info + 16, name, nlen);
+        break;
+    case 1:                                               /* + ClassOffset, ClassLength before NameLength */
+        fixed = 24; need = fixed + nlen;
+        if (!(info = kzalloc(need))) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        memcpy(info, &ki.wtime, 8);
+        memcpy(info + 12, &no_class, 4);
+        memcpy(info + 20, &nlen, 4);
+        memcpy(info + 24, name, nlen);
+        break;
+    case 2:                                               /* the counts; Class[] (none) */
+        fixed = 44; need = fixed;
+        if (!(info = kzalloc(need))) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        memcpy(info, &ki.wtime, 8);
+        memcpy(info + 12, &no_class, 4);
+        memcpy(info + 20, &ki.subkeys, 4);
+        memcpy(info + 24, &ki.max_name, 4);
+        memcpy(info + 32, &ki.values, 4);
+        memcpy(info + 36, &ki.max_value_name, 4);
+        memcpy(info + 40, &ki.max_data, 4);
+        break;
+    case 3: {                                             /* NameLength, Name[]: the full "\REGISTRY\..." */
+        char full[300];
+        ksnprintf(full, sizeof(full), "\\REGISTRY\\%s", path);
+        UINT32 n = (UINT32)strlen(full);
+        fixed = 4; need = fixed + 2 * n;
+        if (!(info = kzalloc(need))) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        UINT32 fl = 2 * n;
+        memcpy(info, &fl, 4);
+        for (UINT32 i = 0; i < n; i++) { UINT16 c = (UINT8)full[i]; memcpy(info + 4 + 2 * i, &c, 2); }
+        break;
+    }
+    default:
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    NTSTATUS st = give_info(info, need, fixed, out, cap, result_len);
+    kfree(info);
+    return st;
+}
+
+NT_API NTSTATUS nt_ZwQueryKey(ZwObject *key, UINT32 cls, void *out, UINT32 cap, UINT32 *result_len)
+{
+    if (!is_key(key)) return NT_STATUS_INVALID_HANDLE;
+    const char *leaf = key->path;                         /* the key's own name: its last component */
+    for (const char *c = key->path; *c; c++) if (*c == '\\') leaf = c + 1;
+    UINT16 name[256];
+    UINT32 n = 0;
+    for (; leaf[n] && n < 255; n++) name[n] = (UINT8)leaf[n];
+    return key_info(key->path, name, n, cls, out, cap, result_len);
+}
+
+/* ZwEnumerateKey: the @index'th subkey, as ZwQueryKey would describe it */
+NT_API NTSTATUS nt_ZwEnumerateKey(ZwObject *key, UINT32 index, UINT32 cls, void *out,
+                                  UINT32 cap, UINT32 *result_len)
+{
+    if (!is_key(key)) return NT_STATUS_INVALID_HANDLE;
+    if (cls > 2) return STATUS_INVALID_INFO_CLASS;        /* (KeyNameInformation is ZwQueryKey's) */
+    UINT16 name[256];
+    int n = um_registry_enum_key(key->path, index, name, 255, NULL);
+    if (n == -2) return NT_STATUS_KEY_DELETED;
+    if (n < 0) return STATUS_NO_MORE_ENTRIES;
+    if (n > 255) n = 255;
+    char sub[300];
+    int at = ksnprintf(sub, sizeof(sub), "%s\\", key->path);
+    if (at < 0 || at >= (int)sizeof(sub)) return NT_STATUS_OBJECT_NAME_INVALID;
+    for (int i = 0; i < n && at < (int)sizeof(sub) - 1; i++) sub[at++] = name[i] && name[i] < 0x80 ? (char)name[i] : '?';
+    sub[at] = 0;
+    return key_info(sub, name, (UINT32)n, cls, out, cap, result_len);
+}
+
+/* NovaOS's registry keeps no security descriptors (no ACLs on keys), so
+ * there is nothing to change: accepted, as a driver setting its key's
+ * ACL expects */
+NT_API NTSTATUS nt_ZwSetSecurityObject(void *handle, UINT32 info, void *sd)
+{
+    (void)info; (void)sd;
+    if (!handle) return NT_STATUS_INVALID_HANDLE;
+    return NT_STATUS_SUCCESS;
+}
+
+/* The registry path a Zw key handle stands for (without "\Registry\"), for
+ * RtlQueryRegistryValues' RTL_REGISTRY_HANDLE (ntoskrnl.c) */
+bool NtZwKeyPath(void *handle, char *out, int cap)
+{
+    const ZwObject *key = handle;
+    if (!is_key(key) || cap <= 0) return false;
+    ksnprintf(out, cap, "%s", key->path);
+    return true;
 }
 
 NT_API NTSTATUS nt_ZwDeleteValueKey(ZwObject *key, NT_UNICODE_STRING *name)

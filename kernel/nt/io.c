@@ -300,6 +300,35 @@ NT_API NT_STATUS nt_IoDeleteSymbolicLink(NT_UNICODE_STRING *link)
     return found ? NT_STATUS_SUCCESS : NT_STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
+bool NtIoDeviceName(NT_DEVICE_OBJECT *d, char *out, int cap)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    bool found = false;
+    for (NtName *n = g_names; n && !found; n = n->next)
+        if (n->dev == d) {
+            ksnprintf(out, (size_t)cap, "%s", n->name);
+            found = true;
+        }
+    spin_unlock_irqrestore(&g_lock, s);
+    return found;
+}
+
+NTSTATUS NtIoNameDevice(NT_DEVICE_OBJECT *d)
+{
+    static unsigned seq;
+    char nm[NAME_MAX_];
+    if (NtIoDeviceName(d, nm, sizeof(nm))) return STATUS_SUCCESS;
+    NtName *n = kzalloc(sizeof(*n));
+    if (!n) return STATUS_INSUFFICIENT_RESOURCES;
+    IrqState s = spin_lock_irqsave(&g_lock);
+    ksnprintf(n->name, sizeof(n->name), "\\Device\\NTPNP_%08u", ++seq);
+    n->dev = d;
+    n->next = g_names;
+    g_names = n;
+    spin_unlock_irqrestore(&g_lock, s);
+    return STATUS_SUCCESS;
+}
+
 void NtIoDropDevices(NtDriver *drv)
 {
     /* links to its devices, then the devices themselves */
@@ -1013,11 +1042,6 @@ NT_API NTSTATUS nt_IoRegisterPlugPlayNotification(int cat, UINT32 flags, void *d
     return NT_STATUS_SUCCESS;
 }
 NT_API NTSTATUS nt_IoUnregisterPlugPlayNotification(void *handle) { (void)handle; return NT_STATUS_SUCCESS; }
-NT_API NTSTATUS nt_IoOpenDeviceRegistryKey(NT_DEVICE_OBJECT *dev, UINT32 type, UINT32 access, void **handle)
-{
-    (void)dev; (void)type; (void)access; (void)handle;
-    return NT_STATUS_NOT_IMPLEMENTED;                 /* the device's instance key: step 30.3 (PnP) */
-}
 
 NT_API UINT32 nt_PoSetPowerState(NT_DEVICE_OBJECT *dev, int type, UINT32 state) { (void)dev; (void)type; (void)state; return 0; }
 NT_API NTSTATUS nt_PoRequestPowerIrp(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 state, void *cb, void *ctx, NT_IRP **irp)
@@ -1038,3 +1062,26 @@ NT_API NTSTATUS nt_IoGetDeviceObjectPointer(NT_UNICODE_STRING *name, UINT32 acce
     if (dev) *dev = NULL;
     return STATUS_OBJECT_NAME_NOT_FOUND;
 }
+
+/* =======================================================================
+ * Step 30.8: what FTDI's USB serial drivers add
+ * ======================================================================= */
+
+/* IoDeviceObjectType: a data export, like IoFileObjectType */
+static struct { short Type; } g_device_object_type = { 3 };
+void *nt_IoDeviceObjectType = &g_device_object_type;
+
+/* The WDM version NovaOS offers is Windows 10's (6.0x40 and every earlier one) */
+NT_API UINT8 nt_IoIsWdmVersionAvailable(UINT8 major, UINT8 minor) { return major < 6 || (major == 6 && minor <= 0x40); }
+
+/* CONFIGURATION_INFORMATION: the counts of each kind of device; a serial
+ * driver bumps SerialCount for each port it creates */
+typedef struct {
+    UINT32 DiskCount, FloppyCount, CdRomCount, TapeCount, ScsiPortCount, SerialCount, ParallelCount;
+    UINT8  AtDiskPrimaryAddressClaimed, AtDiskSecondaryAddressClaimed;
+    UINT32 Version;
+    UINT32 MediumChangerCount;
+} NtConfigurationInformation;
+static NtConfigurationInformation g_config_info = { .Version = sizeof(NtConfigurationInformation) };
+
+NT_API NtConfigurationInformation *nt_IoGetConfigurationInformation(void) { return &g_config_info; }

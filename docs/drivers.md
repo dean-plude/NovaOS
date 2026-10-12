@@ -65,6 +65,35 @@ has its own driver for keeps it.  KMDF drivers and the rest follow in
 later steps; until then the default set is the built-in drivers and the
 firmware below.
 
+Since step 30.8 a Windows **USB client driver** runs a USB device that
+has no NovaOS driver, the way a vendor's driver runs it on Windows.
+NovaOS's USB core (`kernel/drivers/usb.c`, on xHCI, EHCI, UHCI or OHCI)
+gives the device a physical device object that answers as Windows' USB
+hub driver does (`kernel/nt/usbd.c`): the URBs a driver sends with
+`IOCTL_INTERNAL_USB_SUBMIT_URB` (selecting a configuration and interface,
+control, bulk and interrupt transfers, aborting and resetting pipes;
+isochronous transfers are not there yet), the port requests, the USB bus
+interface (`USB_BUS_INTERFACE_USBDI`, versions 0 to 3), selective-suspend
+requests (held until cancelled: NovaOS does not suspend a device) and
+`usbd.sys`'s exports.  Each pipe's transfers run in order on a thread of
+its own, so a read waiting for data does not hold up a write.  A driver
+that is a bus (FTDI's `ftdibus.sys` reports a COM port) has its children
+added to the device tree, and their drivers start once installed.
+Unplugging the device sends its drivers `IRP_MN_SURPRISE_REMOVAL` and
+`IRP_MN_REMOVE_DEVICE`, children first.  A port (class Ports) is named
+when its driver is installed, as Windows' ports installer names it: the
+first free `COMn` from `COM3` (the COM name arbiter's `ComDB`), in the
+device's `PortName` and its friendly name.  Programs open it as `COM3` or
+`\\.\COM3` and set it up with the communications functions
+(`SetCommState`, `SetCommTimeouts`, `WaitCommEvent`, `PurgeComm` and the
+rest), which send the driver the `IOCTL_SERIAL_*` requests Windows sends.
+
+    pnputil /scan-devices /search-online /install
+
+downloads, installs and starts FTDI's driver for an FTDI USB serial
+converter, then finds and installs the port driver for the COM port it
+reports.
+
 ### Driver signing
 
 A kernel driver loads only if it is signed the way Windows 11 requires
@@ -186,7 +215,7 @@ hardware ID, through Windows Update, which offers the packages the
 serves.  NovaOS asks the same Catalog (roadmap step 30.6), when the user
 asks it to:
 
-    pnputil /scan-devices /search-online [/instanceid <device instance ID>]
+    pnputil /scan-devices /search-online [/instanceid <device instance ID>] [/install]
 
 For each device with problem code 28 (no driver), or the one named,
 `pnputil`:
@@ -218,7 +247,11 @@ again.  `pnputil /enum-drivers` shows a downloaded package's source, and
 `pnputil /enum-devices /drivers` lists it as matching the device.  The
 package is staged, not started, so the device keeps problem code 28 until
 `pnputil /add-driver x.inf /install` installs it on the device (roadmap
-step 30.3, above).
+step 30.3, above), unless the search was given `/install`: then each
+package found is installed on its device at once, as Windows Update
+installs it, and the search goes round again for the devices the drivers
+it started bring (a USB serial converter's COM port, step 30.8), until a
+round installs nothing new.
 
 Nothing Microsoft or a vendor publishes is put in the NovaOS image: the
 package comes from its publisher to the user's own machine, as on
@@ -227,6 +260,11 @@ as the Catalog does; the `driversearch` self-test uses that with
 [`tools/drivertest/catalog_fixture.py`](../tools/drivertest/catalog_fixture.py),
 which serves pages recorded from the Catalog
 (`tests/selftest/devices/driversearch/catalog/`) so CI needs no network.
+The `usbserial` self-test does the same with
+[`tools/drivertest/ftdi_catalog.py`](../tools/drivertest/ftdi_catalog.py)
+and FTDI's real cabinet, which it downloads once from the Catalog's
+address (checked against the Catalog's SHA-256; `NOVA_DRIVER_CACHE` names
+a folder to keep it in) and never puts in the repository or the image.
 Vendor feeds for packages published outside the Catalog
 (`userland/drivers/feeds.json` in the design) and Device Manager's
 "Search automatically for drivers" are still to come.

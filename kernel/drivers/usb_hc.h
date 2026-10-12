@@ -64,6 +64,7 @@ struct UsbPipe {
     UINT32           iso_psize;
     UINT16          *iso_len;
     volatile bool    dead;         /* the device left: never touched again */
+    volatile bool    patient;      /* bulk waits may sleep between polls (Windows clients' pipes, nt/usbd.c) */
     void            *hcd;          /* the controller driver's own state */
 };
 
@@ -161,6 +162,7 @@ struct UsbHc {
     UINT8           addr_used[16]; /* USB addresses in use (bit per address) */
     volatile bool   rescan;        /* treat every root port as changed (after S3) */
     UINT32          pnp;           /* its root hub's device node (io/pnp.h) */
+    PciDevice       pci;           /* its PCI function */
 };
 
 extern KSpinLock g_usb_lock;

@@ -14,6 +14,7 @@
 
 #include "usb_hc.h"
 #include "../io/pnp.h"
+#include "../nt/nt.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../ke/printf.h"
@@ -57,6 +58,7 @@ void UsbPnpController(UsbHc *hc, const PciDevice *pci)
     put(n->mfg, sizeof(n->mfg), "(Standard USB HUBs)");
     put(n->service, sizeof(n->service), "usb");
     n->flags = PNP_STARTED;
+    hc->pci = *pci;
     hc->pnp = PnpAdd(PnpPciNode(pci->bus, pci->dev, pci->func), n);
     kfree(n);
 }
@@ -189,6 +191,7 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
         UsbPnpFn one = f[0];
         for (int i = 1; i < n && !one.driver; i++) if (f[i].driver) one = f[i];
         d->pnp = add_function(d, &one, -1, parent, suffix, product);
+        if (d->pnp && !one.driver) NtPnpUsbArrived(d->pnp);    /* (a Windows driver may be installed on it) */
         return;
     }
     PnpNode *c = kzalloc(sizeof(PnpNode));

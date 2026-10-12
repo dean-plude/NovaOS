@@ -27,7 +27,7 @@ IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports
 
 # Modules NovaOS itself provides (its export tables); every import from one
 # of these must appear in exports.h.
-PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll"}
+PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "usbd.sys", "wmilib.sys"}
 # Modules a driver package brings with it (provided by a later driver step),
 # so their imports are not NovaOS exports.
 ALLOWLISTED_MODULES = {"wdfldr.sys"}

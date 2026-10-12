@@ -785,6 +785,10 @@ static void kusd_init(void)
     if (!g_kusd) return;
     memset(g_kusd, 0, PAGE_SIZE);
     g_kusd_pa = (PADDR)((uintptr_t)g_kusd - PHYSMAP_BASE);
+    /* and at KI_USER_SHARED_DATA for kernel mode, where Windows drivers'
+     * inline KeQuerySystemTime/KeQueryTickCount read it (FTDI's ftser2k.sys);
+     * at boot, before any address space copies the kernel's half */
+    paging_map(UINT64_C(0xFFFFF78000000000), g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC);
     *(UINT32 *)(g_kusd + 0x04) = 10u << 24;               /* TickCountMultiplier: 10 ms per tick */
     *(UINT16 *)(g_kusd + 0x2C) = 0x8664;                  /* ImageNumberLow/High: x64 */
     *(UINT16 *)(g_kusd + 0x2E) = 0x8664;

@@ -20,10 +20,22 @@
  *     memory and I/O BAR, and its interrupt line (a GSI from ACPI's _PRT,
  *     routed to a vector of its own, intr.c), raw and translated.
  *
+ * A USB device no NovaOS driver took gets the same, its PDO from the USB
+ * bus interface (usbd.c), with no resources: its driver reaches the
+ * device through URBs.  A started device's stack is then asked for its
+ * children (IRP_MN_QUERY_DEVICE_RELATIONS, BusRelations), as Windows asks
+ * every bus: each PDO a bus driver reports (FTDI's ftdibus.sys reports a
+ * COM port) becomes a node under it, named by what the PDO answers to
+ * IRP_MN_QUERY_ID, and is started like any device once a driver is
+ * installed on it.  IoInvalidateDeviceRelations asks again; a child no
+ * longer reported is removed.
+ *
  * NtPnpStop takes a started device away again the way Windows disables
  * one: IRP_MN_QUERY_REMOVE_DEVICE (a driver may veto it), then
- * IRP_MN_REMOVE_DEVICE; the device's interfaces are turned off, and a
- * driver left with no device is unloaded.
+ * IRP_MN_REMOVE_DEVICE, its children first; the device's interfaces are
+ * turned off, and a driver left with no device is unloaded.  A device
+ * that is unplugged gets IRP_MN_SURPRISE_REMOVAL and then
+ * IRP_MN_REMOVE_DEVICE (NtPnpSurpriseRemoval).
  *
  * Device interfaces: IoRegisterDeviceInterface names one
  * \??\<instance with '#' for '\'>#{class GUID}, and IoSetDeviceInterfaceState
@@ -38,6 +50,7 @@
 #include "../io/pnp.h"
 #include "../hal/pci.h"
 #include "../hal/aml.h"
+#include "../drivers/usb.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
 #include "../lib/string.h"
@@ -45,7 +58,7 @@
 #include "../um/um.h"
 
 #define ENUM_KEY "Machine\\SYSTEM\\CurrentControlSet\\Enum"
-#define MAX_PDOS 64
+#define MAX_PDOS 128
 
 /* CM_PROB_* (problem codes Device Manager shows) */
 #define PROB_NO_DRIVER       28
@@ -66,10 +79,16 @@ typedef struct NtIface {
     bool            on;
 } NtIface;
 
-typedef struct {
-    NT_DEVICE_OBJECT    *pdo;
+enum { BUS_PCI, BUS_USB, BUS_CHILD };
+
+typedef struct NtPdo {
+    NT_DEVICE_OBJECT    *pdo;           /* NULL once the device is gone for good */
     UINT32               node;
-    PciDevice            pci;
+    int                  bus;           /* BUS_*: whose PDO it is */
+    PciDevice            pci;           /* BUS_PCI */
+    struct NtPdo        *parent;        /* BUS_CHILD: the device whose bus driver reported it */
+    bool                 reported;      /* BUS_CHILD: in the parent's last BusRelations */
+    UINT32               address;       /* BUS_CHILD: DEVICE_CAPABILITIES.Address */
     char                 instance[128];
     char                 service[64];   /* the driver running it ("" when none) */
     NT_CM_RESOURCE_LIST *raw, *xlat;
@@ -79,14 +98,15 @@ typedef struct {
     NtIface             *ifaces;
 } NtPdo;
 
-static NT_DRIVER_OBJECT g_pci;          /* the PCI bus driver: owns the PDOs */
+static NT_DRIVER_OBJECT g_pci;          /* the PCI bus driver: owns the PCI PDOs */
 static NtPdo           *g_pdo[MAX_PDOS];
 static int              g_npdo;
 static KSpinLock        g_lock = KSPINLOCK_INIT;
 
 static NtPdo *pdo_of(NT_DEVICE_OBJECT *d)
 {
-    return d && d->DriverObject == &g_pci ? (NtPdo *)d->DeviceExtension : NULL;
+    for (int i = 0; d && i < g_npdo; i++) if (g_pdo[i]->pdo == d) return g_pdo[i];
+    return NULL;
 }
 
 bool NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql)
@@ -409,8 +429,22 @@ static NtPdo *pdo_new(UINT32 node, const PciDevice *pci, const char *instance)
 
 static NtPdo *pdo_by_node(UINT32 node)
 {
-    for (int i = 0; i < g_npdo; i++) if (g_pdo[i]->node == node) return g_pdo[i];
+    for (int i = 0; i < g_npdo; i++) if (g_pdo[i]->node == node && g_pdo[i]->pdo) return g_pdo[i];
     return NULL;
+}
+
+/* A record for a PDO another driver made (a USB device's, a bus driver's child) */
+static NtPdo *pdo_record(NT_DEVICE_OBJECT *d, UINT32 node, int bus, const char *instance)
+{
+    if (g_npdo >= MAX_PDOS) return NULL;
+    NtPdo *p = kzalloc(sizeof(*p));
+    if (!p) return NULL;
+    p->pdo = d;
+    p->node = node;
+    p->bus = bus;
+    strncpy(p->instance, instance, sizeof(p->instance) - 1);
+    g_pdo[g_npdo++] = p;
+    return p;
 }
 
 /* ---- PnP requests to a device's stack ---- */
@@ -493,6 +527,8 @@ static void unload_if_idle(NtDriver *drv)
     if (drv->obj->DriverUnload) NtDrvUnload(service);
 }
 
+static void enumerate(NtPdo *b);
+
 UINT32 NtPnpStart(UINT32 node)
 {
     PnpNode *n = kmalloc(sizeof(PnpNode));
@@ -500,17 +536,28 @@ UINT32 NtPnpStart(UINT32 node)
     UINT32 prob = 0;
     PciDevice pci;
     char key[200], service[64] = "";
-    if (!PnpGet(node, n) || !(n->flags & PNP_PRESENT) || strncmp(n->instance, "PCI\\", 4) || !pci_of(node, &pci)) {
-        prob = PROB_NO_DRIVER;
+    NtPdo *p = NULL;
+    if (!PnpGet(node, n) || !(n->flags & PNP_PRESENT)) { prob = PROB_NO_DRIVER; goto out; }
+    p = pdo_by_node(node);
+    bool is_pci = !strncmp(n->instance, "PCI\\", 4), is_usb = !strncmp(n->instance, "USB\\", 4);
+    if (!p && !(is_pci && pci_of(node, &pci)) && !(is_usb && UsbDevByPnp(node))) {
+        prob = PROB_NO_DRIVER;                               /* (no bus here offers it to Windows drivers) */
         goto out;
     }
-    NtPdo *p = pdo_by_node(node);
     if (p && p->started) goto out;                           /* (already running) */
     if ((n->flags & PNP_STARTED) && !p) { prob = PROB_FAILED_START; goto out; }   /* (a NovaOS driver has it) */
     ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
     if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0]) { prob = PROB_NO_DRIVER; goto out; }
+    char cls[32] = "", friendly[96] = "";                    /* (as its install wrote them: Ports, "... (COM3)") */
+    um_registry_get_sz(key, "Class", cls, sizeof(cls));
+    um_registry_get_sz(key, "FriendlyName", friendly, sizeof(friendly));
+    PnpSetNames(node, cls, friendly);
 
-    if (!p) p = pdo_new(node, &pci, n->instance);
+    if (!p && is_pci) p = pdo_new(node, &pci, n->instance);
+    else if (!p) {
+        NT_DEVICE_OBJECT *usb = NtUsbPdo(node);
+        if (usb) p = pdo_record(usb, node, BUS_USB, n->instance);
+    }
     if (!p) { prob = PROB_FAILED_START; goto out; }
     NtDriver *drv = NtDrvFind(service);
     if (!drv) {
@@ -549,8 +596,12 @@ UINT32 NtPnpStart(UINT32 node)
     caps.Address = caps.UINumber = 0xFFFFFFFFu;
     send_pnp(p->pdo, NT_IRP_MN_QUERY_CAPABILITIES, &caps, NULL, NULL);
 
-    kprintf("[PNP] %s: starting %s with its resources\n", n->instance, service);
-    log_resources(p);
+    if (p->raw) {
+        kprintf("[PNP] %s: starting %s with its resources\n", n->instance, service);
+        log_resources(p);
+    } else {
+        kprintf("[PNP] %s: starting %s\n", n->instance, service);
+    }
     st = send_pnp(p->pdo, NT_IRP_MN_START_DEVICE, p->raw, p->xlat, NULL);
     if (!NT_SUCCESS(st)) {
         kprintf("[PNP] %s: IRP_MN_START_DEVICE failed (0x%08x)\n", n->instance, (UINT32)st);
@@ -563,10 +614,13 @@ UINT32 NtPnpStart(UINT32 node)
     strncpy(p->service, service, sizeof(p->service) - 1);
     p->started = true;
     PnpSetDriver(node, p->service);
-    PciClaim(&p->pci, p->service);
+    if (p->bus == BUS_PCI) PciClaim(&p->pci, p->service);
     kprintf("[PNP] %s: started (driver %s)\n", n->instance, service);
+    kfree(n);
+    n = NULL;
+    enumerate(p);                                            /* (its children, if it is a bus) */
 out:
-    if (prob && prob != PROB_NO_DRIVER && !((n->flags & PNP_STARTED) && !pdo_by_node(node)))   /* (not a NovaOS driver's) */
+    if (n && prob && prob != PROB_NO_DRIVER && !((n->flags & PNP_STARTED) && !pdo_by_node(node)))   /* (not a NovaOS driver's) */
         PnpSetProblem(node, prob);
     kfree(n);
     return prob;
@@ -574,17 +628,21 @@ out:
 
 static void ifaces_off(NtPdo *p);
 
-NTSTATUS NtPnpStop(UINT32 node)
+/* Take @p's driver away: IRP_MN_REMOVE_DEVICE (after
+ * IRP_MN_SURPRISE_REMOVAL when the hardware is gone), its children's
+ * first; @problem its node's problem afterwards (0: it left the tree) */
+static void remove_tree(NtPdo *p, bool surprise, UINT32 problem)
 {
-    NtPdo *p = pdo_by_node(node);
-    if (!p || !p->started) return ST_INVALID_DEVICE_STATE;
-    NT_STATUS st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
-    if (!NT_SUCCESS(st)) {
-        kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
-        send_pnp(p->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
-        return st;
-    }
+    for (int i = 0; i < g_npdo; i++)
+        if (g_pdo[i]->parent == p && g_pdo[i]->pdo) {
+            NtPdo *c = g_pdo[i];
+            remove_tree(c, surprise, 0);
+            PnpRemove(c->node);                              /* (it stays a phantom, as on Windows) */
+            c->pdo = NULL;                                   /* (its bus driver deletes the PDO) */
+        }
+    if (!p->started) return;
     NtDriver *drv = NtDrvFind(p->service);
+    if (surprise) send_pnp(p->pdo, NT_IRP_MN_SURPRISE_REMOVAL, NULL, NULL, NULL);
     send_pnp(p->pdo, NT_IRP_MN_REMOVE_DEVICE, NULL, NULL, NULL);
     if (p->pdo->AttachedDevice) {
         kprintf("[PNP] %s: %s left its device attached after IRP_MN_REMOVE_DEVICE\n", p->instance, p->service);
@@ -592,12 +650,210 @@ NTSTATUS NtPnpStop(UINT32 node)
     }
     ifaces_off(p);
     p->started = false;
-    PciClaim(&p->pci, NULL);
-    PnpSetProblem(node, PROB_DISABLED);
+    if (p->bus == BUS_PCI) PciClaim(&p->pci, NULL);
+    if (problem) PnpSetProblem(p->node, problem);
     kprintf("[PNP] %s: removed (driver %s)\n", p->instance, p->service);
     p->service[0] = 0;
     unload_if_idle(drv);
+}
+
+/* IRP_MN_QUERY_REMOVE_DEVICE to @p's started children and then to @p:
+ * the first veto, after IRP_MN_CANCEL_REMOVE_DEVICE to those that agreed */
+static NT_STATUS query_remove(NtPdo *p)
+{
+    NtPdo *asked[MAX_PDOS];
+    int n = 0;
+    NT_STATUS st = NT_STATUS_SUCCESS;
+    for (int i = 0; i < g_npdo && NT_SUCCESS(st); i++)
+        if (g_pdo[i]->parent == p && g_pdo[i]->pdo && g_pdo[i]->started) {
+            st = query_remove(g_pdo[i]);
+            if (NT_SUCCESS(st)) asked[n++] = g_pdo[i];
+        }
+    if (NT_SUCCESS(st)) {
+        st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
+        if (!NT_SUCCESS(st)) {
+            kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
+            send_pnp(p->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
+        }
+    }
+    if (!NT_SUCCESS(st))
+        for (int i = 0; i < n; i++) send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
+    return st;
+}
+
+NTSTATUS NtPnpStop(UINT32 node)
+{
+    NtPdo *p = pdo_by_node(node);
+    if (!p || !p->started) return ST_INVALID_DEVICE_STATE;
+    NT_STATUS st = query_remove(p);
+    if (!NT_SUCCESS(st)) return st;
+    remove_tree(p, false, PROB_DISABLED);
     return STATUS_SUCCESS;
+}
+
+/* ---- children: the PDOs a bus driver reports ---- */
+
+/* An ID or text a PDO answers (IRP_MN_QUERY_ID @type, or
+ * IRP_MN_QUERY_DEVICE_TEXT @type with @text) as ASCII; a list (hardware
+ * and compatible IDs) keeps its NULs and ends with an empty string */
+static bool query_string(NT_DEVICE_OBJECT *pdo, bool text, int type, char *out, int cap)
+{
+    NT_ULONG_PTR info = 0;
+    out[0] = out[1] = 0;
+    NT_STATUS st = send_pnp(pdo, text ? NT_IRP_MN_QUERY_DEVICE_TEXT : NT_IRP_MN_QUERY_ID,
+                            (void *)(UINT64)type, text ? (void *)(UINT64)0x409 : NULL, &info);
+    NT_WCHAR *w = (NT_WCHAR *)info;
+    if (!NT_SUCCESS(st) || !w) return false;
+    bool multi = !text && (type == 1 || type == 2);
+    int k = 0;
+    for (int i = 0; k < cap - 2; i++) {
+        NT_WCHAR c = w[i];
+        out[k++] = c && c < 0x80 ? (char)c : c ? '?' : 0;
+        if (!c && (!multi || !w[i + 1] || k >= cap - 2)) break;
+    }
+    out[k] = out[k + 1 < cap ? k + 1 : k] = 0;
+    nt_ExFreePool(w);
+    return true;
+}
+
+/* A PDO @b's bus driver reported: its node and record, and its driver
+ * started if one is installed */
+static void child_found(NtPdo *b, NT_DEVICE_OBJECT *d)
+{
+    NtPdo *c = pdo_of(d);
+    if (c) { c->reported = true; return; }
+    d->Flags &= ~NT_DO_DEVICE_INITIALIZING;
+    NtIoNameDevice(d);
+    PnpNode *n = kzalloc(sizeof(PnpNode));
+    char *dev = kmalloc(256), *inst = kmalloc(128);
+    if (!n || !dev || !inst) goto out;
+    if (!query_string(d, false, 0, dev, 200) || !dev[0]) {
+        kprintf("[PNP] %s: its bus driver reported a child with no device ID\n", b->instance);
+        goto out;
+    }
+    if (!query_string(d, false, 3, inst, 64)) inst[0] = 0;
+    NT_DEVICE_CAPABILITIES caps;
+    memset(&caps, 0, sizeof(caps));
+    caps.Size = sizeof(caps);
+    caps.Version = 1;
+    caps.Address = caps.UINumber = 0xFFFFFFFFu;
+    send_pnp(d, NT_IRP_MN_QUERY_CAPABILITIES, &caps, NULL, NULL);
+    /* An instance ID that is not unique (UniqueID clear) gets the
+     * parent's prefix, so two buses' children do not collide */
+    UINT32 h = 2166136261u;
+    for (const char *s = b->instance; *s; s++) h = (h ^ (UINT8)*s) * 16777619u;
+    if (caps.Flags & 0x40) ksnprintf(n->instance, sizeof(n->instance), "%s\\%s", dev, inst[0] ? inst : "0000");
+    else ksnprintf(n->instance, sizeof(n->instance), "%s\\8&%x&0&%s", dev, h, inst[0] ? inst : "0000");
+    if (!query_string(d, false, 1, n->hwids, sizeof(n->hwids))) { strcpy(n->hwids, dev); n->hwids[strlen(dev) + 1] = 0; }
+    query_string(d, false, 2, n->compat, sizeof(n->compat));
+    query_string(d, true, 0, n->desc, sizeof(n->desc));
+    query_string(d, true, 1, n->location, sizeof(n->location));
+    char key[200];
+    ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
+    um_registry_get_sz(key, "Class", n->cls, sizeof(n->cls));
+    if (!um_registry_get_sz(key, "FriendlyName", n->friendly, sizeof(n->friendly))) n->friendly[0] = 0;
+    UINT32 id = PnpAdd(b->node, n);
+    if (!id) goto out;
+    c = pdo_record(d, id, BUS_CHILD, n->instance);
+    if (!c) goto out;
+    c->parent = b;
+    c->reported = true;
+    c->address = caps.Address;
+    kprintf("[PNP] %s: reported by %s's bus driver\n", n->instance, b->instance);
+    char service[64];
+    if (um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) {
+        UINT32 disabled = 0;
+        if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(id, PROB_DISABLED);
+        else NtPnpStart(id);
+    }
+out:
+    kfree(inst);
+    kfree(dev);
+    kfree(n);
+}
+
+/* Ask started device @b's stack for its children (BusRelations): new
+ * ones are added, those no longer reported are removed */
+static void enumerate(NtPdo *b)
+{
+    if (!b->started || !b->pdo) return;
+    NT_ULONG_PTR info = 0;
+    NT_STATUS st = send_pnp(b->pdo, NT_IRP_MN_QUERY_DEVICE_RELATIONS, (void *)0 /* BusRelations */, NULL, &info);
+    struct { unsigned int Count; NT_DEVICE_OBJECT *Objects[1]; } *r = NT_SUCCESS(st) ? (void *)info : NULL;
+    for (int i = 0; i < g_npdo; i++) if (g_pdo[i]->parent == b) g_pdo[i]->reported = false;
+    for (unsigned k = 0; r && k < r->Count; k++) child_found(b, r->Objects[k]);
+    if (r) nt_ExFreePool(r);
+    for (int i = 0; i < g_npdo; i++) {
+        NtPdo *c = g_pdo[i];
+        if (c->parent != b || c->reported || !c->pdo) continue;
+        kprintf("[PNP] %s: no longer reported by its bus driver\n", c->instance);
+        remove_tree(c, true, 0);
+        PnpRemove(c->node);
+        c->pdo = NULL;
+    }
+}
+
+/* ---- deferred work: arrivals, removals, re-enumeration ---- */
+
+NT_API NT_IO_WORKITEM *nt_IoAllocateWorkItem(NT_DEVICE_OBJECT *dev);
+NT_API void nt_IoFreeWorkItem(NT_IO_WORKITEM *w);
+NT_API void nt_IoQueueWorkItem(NT_IO_WORKITEM *w, NT_IO_WORKITEM_ROUTINE routine, int queue_type, void *ctx);
+
+enum { WORK_USB_ARRIVED, WORK_SURPRISE, WORK_RELATIONS };
+typedef struct { NT_IO_WORKITEM *w; int what; UINT32 node; NT_DEVICE_OBJECT *pdo; } PnpWork;
+
+static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
+{
+    (void)dev;
+    PnpWork *k = ctx;
+    if (k->what == WORK_USB_ARRIVED) {
+        char key[200], service[64];
+        PnpNode *n = kmalloc(sizeof(PnpNode));
+        if (n && PnpGet(k->node, n) && (n->flags & PNP_PRESENT) && !(n->flags & PNP_STARTED)) {
+            ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
+            UINT32 disabled = 0;
+            if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(k->node, PROB_DISABLED);
+            else if (um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) NtPnpStart(k->node);
+        }
+        kfree(n);
+    } else if (k->what == WORK_SURPRISE) {
+        NtPdo *p = pdo_by_node(k->node);
+        if (p) {
+            kprintf("[PNP] %s: the device is gone (surprise removal)\n", p->instance);
+            remove_tree(p, true, 0);
+            p->pdo = NULL;                                   /* (it comes back with a new PDO) */
+        }
+    } else {
+        NtPdo *p = pdo_of(k->pdo);
+        if (p) enumerate(p);
+    }
+    nt_IoFreeWorkItem(k->w);
+    kfree(k);
+}
+
+static void defer(int what, UINT32 node, NT_DEVICE_OBJECT *pdo)
+{
+    PnpWork *k = kzalloc(sizeof(*k));
+    if (!k) return;
+    k->w = nt_IoAllocateWorkItem(NULL);
+    if (!k->w) { kfree(k); return; }
+    k->what = what;
+    k->node = node;
+    k->pdo = pdo;
+    nt_IoQueueWorkItem(k->w, work_routine, 1 /* DelayedWorkQueue */, k);
+}
+
+/* Set once NtPnpBoot ran: the registry is loaded and the work-item thread
+ * is up.  A USB device enumerated before that is started by NtPnpBoot. */
+static volatile bool g_booted;
+
+void NtPnpUsbArrived(UINT32 node) { if (g_booted) defer(WORK_USB_ARRIVED, node, NULL); }
+void NtPnpSurpriseRemoval(UINT32 node) { if (g_booted) defer(WORK_SURPRISE, node, NULL); }
+
+/* A bus driver's children changed: ask it again (BusRelations), later */
+NT_API void nt_IoInvalidateDeviceRelations(NT_DEVICE_OBJECT *pdo, int type)
+{
+    if (type == 0 && pdo_of(pdo)) defer(WORK_RELATIONS, 0, pdo);
 }
 
 void NtPnpBoot(void)
@@ -606,9 +862,14 @@ void NtPnpBoot(void)
     PnpNode *n = kmalloc(sizeof(PnpNode));
     if (!n) return;
     char key[200], service[64];
+    g_booted = true;
     for (UINT32 id = 1; id <= count; id++) {
-        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || (n->flags & PNP_STARTED) || strncmp(n->instance, "PCI\\", 4))
+        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || (n->flags & PNP_STARTED)) continue;
+        if (!strncmp(n->instance, "USB\\", 4)) {             /* (on the work-item thread, with later arrivals) */
+            if (UsbDevByPnp(id)) defer(WORK_USB_ARRIVED, id, NULL);
             continue;
+        }
+        if (strncmp(n->instance, "PCI\\", 4)) continue;
         ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
         UINT32 disabled = 0;
         if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) {   /* CONFIGFLAG_DISABLED */
@@ -660,8 +921,7 @@ static NT_STATUS link_set(NtPdo *p, NtIface *f, bool on)
 {
     char a[220], b[48];
     ksnprintf(a, sizeof(a), "\\??\\%s", f->link);
-    ksnprintf(b, sizeof(b), "\\Device\\NTPNP_PCI%04u", 0);
-    for (int i = 0; i < g_npdo; i++) if (g_pdo[i] == p) ksnprintf(b, sizeof(b), "\\Device\\NTPNP_PCI%04u", (unsigned)i + 1);
+    if (!NtIoDeviceName(p->pdo, b, sizeof(b))) return NT_STATUS_INVALID_DEVICE_REQUEST;
     NT_WCHAR wa[220], wb[48];
     size_t na = strlen(a), nb = strlen(b);
     for (size_t i = 0; i <= na; i++) wa[i] = (UINT8)a[i];
@@ -755,13 +1015,24 @@ NT_API NT_STATUS nt_IoGetDeviceProperty(NT_DEVICE_OBJECT *pdo, int prop, UINT32 
     case 8: s = n->mfg; break;                                   /* Manufacturer */
     case 9: if (um_registry_get_sz(key, "FriendlyName", tmp, sizeof(tmp))) s = tmp; break;
     case 10: s = n->location; break;                             /* LocationInformation */
-    case 11: ksnprintf(tmp, sizeof(tmp), "\\Device\\NTPNP_PCI%04u", 0);
-             for (int i = 0; i < g_npdo; i++) if (g_pdo[i] == p) ksnprintf(tmp, sizeof(tmp), "\\Device\\NTPNP_PCI%04u", (unsigned)i + 1);
-             s = tmp; break;
-    case 13: num = NT_PCIBus; is_num = true; break;              /* LegacyBusType */
-    case 14: num = p->pci.bus; is_num = true; break;             /* BusNumber */
-    case 15: s = "PCI"; break;                                   /* EnumeratorName */
-    case 16: num = (UINT32)p->pci.dev << 16 | p->pci.func; is_num = true; break;   /* Address */
+    case 11: if (NtIoDeviceName(p->pdo, tmp, sizeof(tmp))) s = tmp; break;   /* PhysicalDeviceObjectName */
+    case 13: if (p->bus == BUS_PCI) { num = NT_PCIBus; is_num = true; } break;   /* LegacyBusType */
+    case 14:                                                     /* BusNumber */
+        if (p->bus == BUS_PCI) { num = p->pci.bus; is_num = true; }
+        else if (p->bus == BUS_USB) is_num = NtUsbPdoProperty(pdo, 14, &num);
+        break;
+    case 15: {                                                   /* EnumeratorName: the instance's first part */
+        int k = 0;
+        while (n->instance[k] && n->instance[k] != '\\' && k < (int)sizeof(tmp) - 1) { tmp[k] = n->instance[k]; k++; }
+        tmp[k] = 0;
+        s = tmp;
+        break;
+    }
+    case 16:                                                     /* Address */
+        if (p->bus == BUS_PCI) { num = (UINT32)p->pci.dev << 16 | p->pci.func; is_num = true; }
+        else if (p->bus == BUS_USB) is_num = NtUsbPdoProperty(pdo, 16, &num);
+        else if (p->address != 0xFFFFFFFFu) { num = p->address; is_num = true; }
+        break;
     }
     NT_STATUS st;
     if (is_num) {
@@ -781,9 +1052,79 @@ NT_API NT_STATUS nt_IoGetDeviceProperty(NT_DEVICE_OBJECT *pdo, int prop, UINT32 
     return st;
 }
 
-/* ---- what WDM drivers' PnP code calls besides ---- */
+/* ---- the device's registry keys ---- */
 
-NT_API void nt_IoInvalidateDeviceRelations(NT_DEVICE_OBJECT *pdo, int type) { (void)pdo; (void)type; }
+typedef struct {
+    UINT32 Length, pad;
+    void *RootDirectory;
+    NT_UNICODE_STRING *ObjectName;
+    UINT32 Attributes;
+    void *SecurityDescriptor, *SecurityQualityOfService;
+} PnpObjectAttributes;
+
+NT_API NTSTATUS nt_ZwCreateKey(void *handle, UINT32 access, PnpObjectAttributes *oa, UINT32 title,
+                               NT_UNICODE_STRING *cls, UINT32 options, UINT32 *disposition);
+
+/* PLUGPLAY_REGKEY_DEVICE (1): the instance key's Device Parameters, where
+ * an INF's HW AddReg puts a driver's settings; PLUGPLAY_REGKEY_DRIVER
+ * (2): its software key under Control\Class */
+NT_API NTSTATUS nt_IoOpenDeviceRegistryKey(NT_DEVICE_OBJECT *dev, UINT32 type, UINT32 access, void **handle)
+{
+    NtPdo *p = pdo_of(dev);
+    if (!p || !handle) return NT_STATUS_INVALID_DEVICE_REQUEST;
+    char path[260], drv[80];
+    if (type & 1) {
+        ksnprintf(path, sizeof(path), "\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Enum\\%s\\Device Parameters",
+                  p->instance);
+    } else if (type & 2) {
+        char key[200];
+        ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", p->instance);
+        if (!um_registry_get_sz(key, "Driver", drv, sizeof(drv)) || !drv[0]) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+        ksnprintf(path, sizeof(path), "\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Class\\%s", drv);
+    } else {
+        return ST_INVALID_PARAMETER_2;
+    }
+    NT_WCHAR w[260];
+    size_t n = strlen(path);
+    for (size_t i = 0; i <= n; i++) w[i] = (UINT8)path[i];
+    NT_UNICODE_STRING u = { (unsigned short)(2 * n), (unsigned short)(2 * n + 2), w };
+    PnpObjectAttributes oa = { sizeof(oa), 0, NULL, &u, 0x240 /* OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE */, NULL, NULL };
+    return nt_ZwCreateKey(handle, access, &oa, 0, NULL, 0, NULL);
+}
+
+/* The symbolic links of the interfaces of class @guid that are on (of
+ * @pdo's device only, when given): a MULTI_SZ in pool the caller frees */
+NT_API NTSTATUS nt_IoGetDeviceInterfaces(const NT_GUID *guid, NT_DEVICE_OBJECT *pdo, UINT32 flags, NT_WCHAR **out)
+{
+    (void)flags;                                             /* (DEVICE_INTERFACE_INCLUDE_NONACTIVE: only active ones kept) */
+    if (!guid || !out) return NT_STATUS_INVALID_PARAMETER;
+    size_t total = 1;
+    IrqState s = spin_lock_irqsave(&g_lock);
+    for (int i = 0; i < g_npdo; i++)
+        for (NtIface *f = g_pdo[i]->ifaces; f; f = f->next)
+            if (f->on && !memcmp(&f->guid, guid, sizeof(*guid)) && (!pdo || g_pdo[i]->pdo == pdo))
+                total += strlen(f->link) + 5;
+    spin_unlock_irqrestore(&g_lock, s);
+    NT_WCHAR *w = nt_ExAllocatePoolWithTag(1, 2 * total + 64, 0x20706E50);
+    if (!w) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    size_t k = 0;
+    s = spin_lock_irqsave(&g_lock);
+    for (int i = 0; i < g_npdo; i++)
+        for (NtIface *f = g_pdo[i]->ifaces; f; f = f->next)
+            if (f->on && !memcmp(&f->guid, guid, sizeof(*guid)) && (!pdo || g_pdo[i]->pdo == pdo) &&
+                k + strlen(f->link) + 5 < total) {
+                const char *pre = "\\??\\";
+                for (const char *c = pre; *c; c++) w[k++] = (UINT8)*c;
+                for (const char *c = f->link; *c; c++) w[k++] = (UINT8)*c;
+                w[k++] = 0;
+            }
+    spin_unlock_irqrestore(&g_lock, s);
+    w[k] = 0;
+    *out = w;
+    return NT_STATUS_SUCCESS;
+}
+
+/* ---- what WDM drivers' PnP code calls besides ---- */
 
 NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp) { (void)irp; }
 

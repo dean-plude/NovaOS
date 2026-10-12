@@ -26,6 +26,8 @@
   (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces, clips),
   the DXVK adapter's factory making the swap chains, `IDXGISwapChain3`, so
   Chromium turns the path on~~ Done (`dcomptest dxvk`; WebView2's GPU
-  process composites the page through a swap chain on Venus).  Next:
-  presenting without the CPU readback and GDI copy (direct virtio GPU
-  scan-out).
+  process composites the page through a swap chain on Venus); ~~that
+  path through resizes, teardown while frames are presented, and the GPU
+  process's window inside the browser's, 64- and 32-bit~~ Done
+  (`dcomptest life`).  Next: presenting without the CPU readback and GDI
+  copy (direct virtio GPU scan-out).

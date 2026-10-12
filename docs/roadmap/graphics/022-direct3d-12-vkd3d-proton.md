@@ -4,4 +4,7 @@
   `d3d12test` draws, reads back and presents a triangle on lavapipe,
   64- and 32-bit ([Direct3D 12](HISTORY.md#direct3d-12-through-vkd3d-proton),
   [32-bit present](HISTORY.md#direct3d-12-presents-in-32-bit-programs)).
-  Still to do: one Direct3D 12 game that renders.
+  ~~One Direct3D 12 game renders~~ Done: Squash the Creeps on Godot 4.7's
+  Forward+ renderer ([A Direct3D 12 game](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot)).
+  Still to do: two of Godot's compute pipelines lavapipe refuses
+  (`VK_ERROR_UNKNOWN`), and sound in Godot (WASAPI).

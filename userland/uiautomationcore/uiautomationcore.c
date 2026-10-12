@@ -24,3 +24,35 @@ static const IUnknownVtbl g_sentinel_vtbl = { s_qi, s_ref, s_ref };
 static IUnknown g_not_supported = { &g_sentinel_vtbl }, g_mixed = { &g_sentinel_vtbl };
 UIAAPI HRESULT WINAPI UiaGetReservedNotSupportedValue(IUnknown **out) { if (!out) return E_INVALIDARG; *out = &g_not_supported; return S_OK; }
 UIAAPI HRESULT WINAPI UiaGetReservedMixedAttributeValue(IUnknown **out) { if (!out) return E_INVALIDARG; *out = &g_mixed; return S_OK; }
+
+/* The number standing for a property, pattern, event, control type, text
+ * attribute or landmark GUID (Godot's AccessKit looks up the newer ones).
+ * NovaOS has no UI Automation clients to read them back, so each GUID gets
+ * its own number the first time it is asked for, the same one after. */
+static struct { int type; GUID g; int id; } g_ids[256];
+static int g_nids;
+static SRWLOCK g_ids_lock = SRWLOCK_INIT;
+
+static BOOL same_guid(const GUID *a, const GUID *b)
+{
+    const BYTE *x = (const BYTE *)a, *y = (const BYTE *)b;
+    for (int i = 0; i < (int)sizeof(GUID); i++) if (x[i] != y[i]) return FALSE;
+    return TRUE;
+}
+
+UIAAPI int WINAPI UiaLookupId(int type, const GUID *g)
+{
+    if (!g) return 0;
+    int id = 0;
+    AcquireSRWLockExclusive(&g_ids_lock);
+    for (int i = 0; i < g_nids && !id; i++)
+        if (g_ids[i].type == type && same_guid(&g_ids[i].g, g)) id = g_ids[i].id;
+    if (!id && g_nids < 256) {
+        g_ids[g_nids].type = type;
+        g_ids[g_nids].g = *g;
+        id = g_ids[g_nids].id = 0x10000 + g_nids;
+        g_nids++;
+    }
+    ReleaseSRWLockExclusive(&g_ids_lock);
+    return id;
+}

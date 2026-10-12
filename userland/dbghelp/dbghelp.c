@@ -146,3 +146,50 @@ DBGHELPAPI BOOL WINAPI EnumerateLoadedModules64(HANDLE p, PVOID cb, PVOID ctx)
     (void)p; (void)cb; (void)ctx;
     return TRUE;                                    /* (listed nothing) */
 }
+
+/* A loaded image's data directory @dir (IMAGE_DIRECTORY_ENTRY_*): where it
+ * is and its size, and the section holding it (Ex) */
+DBGHELPAPI PVOID WINAPI ImageDirectoryEntryToDataEx(PVOID base, BOOLEAN mapped, USHORT dir, PULONG size, PIMAGE_SECTION_HEADER *sec)
+{
+    if (size) *size = 0;
+    if (sec) *sec = 0;
+    IMAGE_DOS_HEADER *dos = base;
+    if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((BYTE *)base + dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY *dd;
+    DWORD count;
+    if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        IMAGE_OPTIONAL_HEADER64 *o = (IMAGE_OPTIONAL_HEADER64 *)&nt->OptionalHeader;
+        dd = o->DataDirectory; count = o->NumberOfRvaAndSizes;
+    } else {
+        IMAGE_OPTIONAL_HEADER32 *o = (IMAGE_OPTIONAL_HEADER32 *)&nt->OptionalHeader;
+        dd = o->DataDirectory; count = o->NumberOfRvaAndSizes;
+    }
+    if (dir >= count || !dd[dir].VirtualAddress) return 0;
+    DWORD rva = dd[dir].VirtualAddress;
+    if (size) *size = dd[dir].Size;
+    IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, s++)
+        if (rva >= s->VirtualAddress && rva < s->VirtualAddress + s->Misc.VirtualSize) {
+            if (sec) *sec = s;
+            return (BYTE *)base + (mapped ? rva : rva - s->VirtualAddress + s->PointerToRawData);
+        }
+    return mapped ? (BYTE *)base + rva : 0;
+}
+
+DBGHELPAPI PVOID WINAPI ImageDirectoryEntryToData(PVOID base, BOOLEAN mapped, USHORT dir, PULONG size)
+{
+    return ImageDirectoryEntryToDataEx(base, mapped, dir, size, 0);
+}
+
+/* @rva in an image read as a file (not mapped): where its bytes are */
+DBGHELPAPI PVOID WINAPI ImageRvaToVa(PIMAGE_NT_HEADERS nt, PVOID base, ULONG rva, PIMAGE_SECTION_HEADER *last)
+{
+    IMAGE_SECTION_HEADER *s = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, s++)
+        if (rva >= s->VirtualAddress && rva < s->VirtualAddress + s->SizeOfRawData) {
+            if (last) *last = s;
+            return (BYTE *)base + rva - s->VirtualAddress + s->PointerToRawData;
+        }
+    return 0;
+}

@@ -2,29 +2,44 @@
  * crypt32.dll — encoding helpers, names, messages.  Certificates, stores
  * and chains are in certs.c.
  */
+#include <string.h>
 #include <windows.h>
 
 #define CRYPT32API __declspec(dllexport)
 #define CRYPT_E_NOT_FOUND_ 0x80092004L
 
-/* Base64 and binary encoding helpers */
+/* Base64 and binary encoding helpers: CRYPT_STRING_BASE64 and
+ * CRYPT_STRING_BASE64HEADER (between "-----BEGIN CERTIFICATE-----" and
+ * "-----END CERTIFICATE-----" lines, as Godot exports the root store),
+ * lines of 64 characters ending CR LF, LF alone with CRYPT_STRING_NOCR,
+ * none with CRYPT_STRING_NOCRLF */
 CRYPT32API BOOL WINAPI CryptBinaryToStringA(const BYTE *b, DWORD n, DWORD flags, LPSTR out, DWORD *len)
 {
     static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    if ((flags & 0xFFFF) != 1 /* CRYPT_STRING_BASE64 */) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
-    BOOL nocrlf = (flags & 0x40000000) != 0;
-    DWORD body = (n + 2) / 3 * 4, need = body + (nocrlf ? 0 : 2 * ((body + 63) / 64)) + 1;
+    static const char begin[] = "-----BEGIN CERTIFICATE-----", end[] = "-----END CERTIFICATE-----";
+    DWORD fmt = flags & 0xFFFF;
+    if (fmt != 1 /* CRYPT_STRING_BASE64 */ && fmt != 0 /* CRYPT_STRING_BASE64HEADER */) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    BOOL nocrlf = (flags & 0x40000000) != 0, nocr = (flags & 0x80000000) != 0;
+    const char *eol = nocrlf ? "" : nocr ? "\n" : "\r\n";
+    DWORD el = (DWORD)strlen(eol);
+    DWORD body = (n + 2) / 3 * 4, need = body + el * ((body + 63) / 64) + 1;
+    if (fmt == 0) need += (DWORD)(sizeof(begin) - 1 + sizeof(end) - 1) + 2 * el;
     if (!out) { *len = need; return TRUE; }
     if (*len < need) { *len = need; SetLastError(ERROR_MORE_DATA); return FALSE; }
     DWORD o = 0, col = 0;
+    if (fmt == 0) { memcpy(out, begin, sizeof(begin) - 1); o = sizeof(begin) - 1; memcpy(out + o, eol, el); o += el; }
     for (DWORD i = 0; i < n; i += 3) {
         DWORD v = (DWORD)b[i] << 16 | (i + 1 < n ? (DWORD)b[i + 1] << 8 : 0) | (i + 2 < n ? b[i + 2] : 0);
         out[o++] = t[v >> 18 & 63]; out[o++] = t[v >> 12 & 63];
         out[o++] = i + 1 < n ? t[v >> 6 & 63] : '=';
         out[o++] = i + 2 < n ? t[v & 63] : '=';
-        if (!nocrlf && (col += 4) == 64) { out[o++] = '\r'; out[o++] = '\n'; col = 0; }
+        if ((col += 4) == 64) { memcpy(out + o, eol, el); o += el; col = 0; }
     }
-    if (!nocrlf && col) { out[o++] = '\r'; out[o++] = '\n'; }
+    if (col) { memcpy(out + o, eol, el); o += el; }
+    if (fmt == 0) { memcpy(out + o, end, sizeof(end) - 1); o += sizeof(end) - 1; memcpy(out + o, eol, el); o += el; }
     out[o] = 0;
     *len = o;
     return TRUE;

@@ -95,10 +95,12 @@ class App:
     pad("buttons=0x1000 lx=32767") (padpeer's control lines).  @reference:
     False for a program whose screen differs from run to run (a game in
     play), so its interaction alone decides and its screenshot is only
-    kept in --out."""
+    kept in --out.  @close_wait: seconds a windowed program may take to end
+    after its Alt+F4 (Godot needs minutes without KVM)."""
     def __init__(self, name, version, url, dir, tests, unpack='zip', strip=0, extra=(),
                  gui=False, net=False, interact=None, https=False, store=None, processes=False,
-                 mic=False, sound=None, runtimes=(), pad=None, mutable=False, online=False, reference=True):
+                 mic=False, sound=None, runtimes=(), pad=None, mutable=False, online=False, reference=True,
+                 close_wait=120):
         self.name, self.version, self.url, self.dir, self.tests = name, version, url, dir, tests
         self.unpack, self.strip, self.extra = unpack, strip, list(extra)
         self.gui, self.net, self.interact = gui, net, interact
@@ -106,6 +108,7 @@ class App:
         self.mic, self.sound = mic, sound
         self.runtimes = list(runtimes)
         self.pad, self.mutable, self.online, self.reference = pad, mutable, online, reference
+        self.close_wait = close_wait
 
 
 def pad(line):
@@ -711,7 +714,7 @@ def gui(nova, t, a, app, echo, close):
     w = w or visual  # retain the semantic failure while always keeping a capture
     if close:
         nova.keys('alt-f4')
-        out, why = settle(nova, out)
+        out, why = settle(nova, out, getattr(app, 'close_wait', 120))
         w = w or why
     return out, w
 

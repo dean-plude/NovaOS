@@ -14,7 +14,9 @@
  * Store's Mesa 3D).  There are no layers, and one driver at a time.
  * For a driver without VK_KHR_external_memory_win32 that can use host
  * memory (lavapipe), the loader provides that extension itself
- * (shared.c), so Direct3D textures can be shared between devices.
+ * (shared.c), so Direct3D textures can be shared between devices, and
+ * hides the surface formats a CPU driver would show with red and blue
+ * swapped.
  *
  * The exports are the Khronos loader's (vk_exports.h): each is a jump
  * through a pointer filled from the driver when the program creates its
@@ -53,6 +55,7 @@ typedef struct {                       /* VkInstanceCreateInfo */
 static PFN_gipa  g_gipa;               /* the driver's vk_icdGetInstanceProcAddr */
 static void     *g_instance;           /* the instance the exports were filled from */
 static PFN_vkVoidFunction g_gdpa;      /* the driver's vkGetDeviceProcAddr */
+static int       g_cpu;                /* the driver draws on the CPU (lavapipe) */
 
 /* shared.c */
 void shared_init(void *instance, PFN_gipa gipa);
@@ -167,6 +170,7 @@ static int try_manifest(const char *path, int pass)
         return 0;
     }
     g_gipa = gipa;
+    g_cpu = software(lib);
     return 1;
 }
 
@@ -209,6 +213,89 @@ static int driver(void)
     return g_gipa != NULL;
 }
 
+/* ---- surface formats a CPU driver can present -------------------------- */
+/* Mesa's Windows swap chain without DXGI (lavapipe's) copies each image's
+ * bytes as they are into a 32-bit DIB, which is blue-green-red, yet newer
+ * releases (26.2, unlike 24.2) offer R8G8B8A8 surfaces too: a program that
+ * picks one (DXVK does for Direct3D 9's X8R8G8B8) is shown with red and
+ * blue swapped, on Windows as here.  For such a driver the loader leaves
+ * those formats out, as Mesa 24 did */
+#define VK_INCOMPLETE               5
+#define VK_FORMAT_R8G8B8A8_UNORM    37
+#define VK_FORMAT_R8G8B8A8_SRGB     43
+#define ST_SURFACE_FORMAT_2         1000119002
+
+typedef struct { int format, color_space; } SurfaceFormat;                      /* VkSurfaceFormatKHR */
+typedef struct { int sType; void *pNext; SurfaceFormat f; } SurfaceFormat2;    /* VkSurfaceFormat2KHR */
+typedef VkResult (WINAPI *PFN_formats)(void *physical, UINT64 surface, UINT32 *count, SurfaceFormat *out);
+typedef VkResult (WINAPI *PFN_formats2)(void *physical, const void *info, UINT32 *count, SurfaceFormat2 *out);
+static PFN_formats  r_formats;
+static PFN_formats2 r_formats2;
+
+static int bgr_only(int format)
+{
+    return format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB;
+}
+
+/* Hand the @n formats in @all that the swap chain shows right to the
+ * program's @count/@out (NULL @out: the count) */
+static VkResult give_formats(SurfaceFormat *all, UINT32 n, UINT32 *count, SurfaceFormat2 *out2, SurfaceFormat *out)
+{
+    UINT32 kept = 0, room = *count;
+    for (UINT32 i = 0; i < n; i++) {
+        if (!bgr_only(all[i].format)) continue;
+        if (out || out2) {
+            if (kept == room) { *count = kept; return VK_INCOMPLETE; }
+            if (out) out[kept] = all[i];
+            else out2[kept].f = all[i];
+        }
+        kept++;
+    }
+    *count = kept;
+    return VK_SUCCESS;
+}
+
+static VkResult WINAPI x_formats(void *physical, UINT64 surface, UINT32 *count, SurfaceFormat *out)
+{
+    UINT32 n = 0;
+    VkResult r = r_formats(physical, surface, &n, NULL);
+    if (r != VK_SUCCESS) return r;
+    SurfaceFormat *all = HeapAlloc(GetProcessHeap(), 0, (n ? n : 1) * sizeof(*all));
+    if (!all) return -1;                                    /* VK_ERROR_OUT_OF_HOST_MEMORY */
+    r = r_formats(physical, surface, &n, all);
+    if (r >= 0) r = give_formats(all, n, count, NULL, out);
+    HeapFree(GetProcessHeap(), 0, all);
+    return r;
+}
+
+static VkResult WINAPI x_formats2(void *physical, const void *info, UINT32 *count, SurfaceFormat2 *out)
+{
+    UINT32 n = 0;
+    VkResult r = r_formats2(physical, info, &n, NULL);
+    if (r != VK_SUCCESS) return r;
+    SurfaceFormat2 *all2 = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n ? n : 1) * sizeof(*all2));
+    SurfaceFormat *all = HeapAlloc(GetProcessHeap(), 0, (n ? n : 1) * sizeof(*all));
+    if (!all2 || !all) r = -1;
+    else {
+        for (UINT32 i = 0; i < n; i++) all2[i].sType = ST_SURFACE_FORMAT_2;
+        r = r_formats2(physical, info, &n, all2);
+        for (UINT32 i = 0; i < n; i++) all[i] = all2[i].f;
+        if (r >= 0) r = give_formats(all, n, count, out, NULL);
+    }
+    HeapFree(GetProcessHeap(), 0, all2);
+    HeapFree(GetProcessHeap(), 0, all);
+    return r;
+}
+
+/* The loader's own command for @name in place of the driver's, else NULL */
+static PFN_vkVoidFunction surface_proc(const char *name)
+{
+    if (!g_cpu) return NULL;
+    if (r_formats && streq(name, "vkGetPhysicalDeviceSurfaceFormatsKHR")) return (PFN_vkVoidFunction)x_formats;
+    if (r_formats2 && streq(name, "vkGetPhysicalDeviceSurfaceFormats2KHR")) return (PFN_vkVoidFunction)x_formats2;
+    return NULL;
+}
+
 /* ---- the commands the loader itself answers ----------------------------- */
 VKAPI PFN_vkVoidFunction WINAPI vkGetInstanceProcAddr(void *instance, const char *name);
 
@@ -226,6 +313,12 @@ VKAPI VkResult WINAPI vkCreateInstance(const InstanceInfo *info, const void *all
             *g_slots[i].slot = (void *)g_gipa(*instance, g_slots[i].name);
         g_gdpa = g_gipa(*instance, "vkGetDeviceProcAddr");
         shared_init(*instance, g_gipa);
+        if (g_cpu) {
+            r_formats = (PFN_formats)p_vkGetPhysicalDeviceSurfaceFormatsKHR;
+            r_formats2 = (PFN_formats2)p_vkGetPhysicalDeviceSurfaceFormats2KHR;
+            if (r_formats) p_vkGetPhysicalDeviceSurfaceFormatsKHR = (void *)x_formats;
+            if (r_formats2) p_vkGetPhysicalDeviceSurfaceFormats2KHR = (void *)x_formats2;
+        }
         g_instance = *instance;
     }
     return r;
@@ -295,5 +388,6 @@ VKAPI PFN_vkVoidFunction WINAPI vkGetInstanceProcAddr(void *instance, const char
     if (!driver()) return NULL;
     PFN_vkVoidFunction fn = g_gipa(instance, name);
     PFN_vkVoidFunction loader = instance ? shared_proc(name) : NULL;
+    if (instance && !loader) loader = surface_proc(name);
     return loader ? loader : fn;
 }

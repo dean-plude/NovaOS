@@ -10486,7 +10486,7 @@ straight into the screen's memory: no pixel is copied by the guest.
 
 - **virgl's winsys** (`third_party/mesa-venus/virgl_nova_winsys.c`): a
   present asks the kernel first (`NtNovaGpuCtl` 13, the window and where
-  it is on screen) once the host has drawn the frame; when
+  it is on screen) without waiting for the host to draw the frame; when
   the kernel says no it reads the frame back as before.
   `NOVA_PRESENT=gdi` always takes the old way.
 - **Kernel**: a virgl context of the kernel's own reads the program's
@@ -10531,10 +10531,11 @@ straight into the screen's memory: no pixel is copied by the guest.
   then onto the screen), and into both pages of a flipping display, and
   was slower than the GDI under KVM, where the guest's copies cost
   little and the host's time is all (even one copy into a texture over
-  the screen and a transfer from it lost by 1 ms a frame); it also asked
-  the kernel before the host had drawn the frame, so the desktop stayed
-  held while the host drew, and then waited for the host's copy and
-  touched the screen's pages itself (6.6 ms a frame under KVM).
+  the screen and a transfer from it lost by 1 ms a frame); it also waited
+  for the host's copy with the desktop held and touched the screen's
+  pages itself (6.6 ms a frame under KVM), and later waited for the host
+  to draw the frame before asking, which left the host idle until the
+  ask came.
 - Vulkan's frames (Venus: DXVK and VKD3D-Proton) still come back through
   the GDI; they are the next step.
 

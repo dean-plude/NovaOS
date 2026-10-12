@@ -655,10 +655,9 @@ nova_present(struct nova_winsys *nws, struct virgl_hw_res *res, HDC dc)
        cr.bottom - cr.top != (LONG)res->height || !ClientToScreen(hwnd, &o))
       return false;
    HWND root = GetAncestor(hwnd, GA_ROOT);
-   /* The host finishes drawing the frame first, here, as the read-back
-    * would wait for it: the kernel copies it with the desktop held, which
-    * then has to wait for nothing more than the copy */
-   nova_wait_seq(nws, p_atomic_read(&nws->seq), OS_TIMEOUT_INFINITE);
+   /* No waiting for the host to draw the frame: the kernel only queues
+    * its read into the screen behind it (its "present" thread waits), so
+    * the host goes from drawing straight on to that */
    struct gpu_present a = {
       .hwnd = (uint32_t)(uintptr_t)(root ? root : hwnd),
       .x = o.x, .y = o.y, .w = (int32_t)res->width, .h = (int32_t)res->height,

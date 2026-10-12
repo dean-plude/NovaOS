@@ -812,8 +812,12 @@ static UINT32 rx_room(NdisAdapter *a)
 static void hold_dpc(NdisAdapter *a, void *dpc_ctx)
 {
     UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&a->rx_lock);
-    a->dpc_held_ctx = dpc_ctx;
-    a->dpc_held = true;
+    if (rx_room(a)) {                     /* (the stack took frames meanwhile: nothing would wake it) */
+        nt_KeInsertQueueDpc(&a->dpc, dpc_ctx, NULL);
+    } else {
+        a->dpc_held_ctx = dpc_ctx;
+        a->dpc_held = true;
+    }
     nt_KeReleaseSpinLock(&a->rx_lock, old);
 }
 
@@ -847,8 +851,8 @@ static NT_API void dpc(NT_KDPC *k, void *ctx, void *dpc_ctx, void *unused)
     UINT32 room = rx_room(a);
     if (!room) { hold_dpc(a, dpc_ctx); return; }
     NDIS_RECEIVE_THROTTLE_PARAMETERS t = { room, 0 };
-    if (++a->dpcs >= a->dpc_log) {
-        a->dpc_log = a->dpc_log ? a->dpc_log * 4 : 4096;
+    if (++a->dpcs >= 4096 && a->dpcs >= a->dpc_log) {
+        a->dpc_log = a->dpcs * 4;
         kprintf("[NDIS] %s: %llu interrupts, %llu DPCs, %llu frames received (%llu dropped), %llu sent (%llu completed)\n",
                 a->drv->service, (unsigned long long)a->isrs, (unsigned long long)a->dpcs,
                 (unsigned long long)a->rx_frames, (unsigned long long)a->rx_dropped,

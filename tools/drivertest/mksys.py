@@ -24,8 +24,8 @@ policy's other cases are made from it:
     wdmbad\\            the same package with wdmbad.sys changed after the catalog
                         was made: pnputil refuses to stage it
 
-edutest.sys is test-signed the same way, and its package (edutest.inf,
-from tools/drivertest) gets a test-signed catalog, edutest.cat.
+edutest.sys's package (edutest.inf, from tools/drivertest) is signed as
+wdmcat's is: a test-signed catalog, edutest.cat, lists the INF and the .sys.
 """
 import os, re, struct, subprocess, sys
 
@@ -106,11 +106,10 @@ def test_signer():
 
 
 def signed_package(out, name):
-    """@name.sys test-signed, its INF beside it and a test-signed catalog of both"""
+    """@name.sys with its INF beside it and a test-signed catalog of both (the
+    .sys signed by the catalog, as wdmcat's is)"""
     signer, root = test_signer()
-    path = os.path.join(out, name + '.sys')
-    pe = sign(open(path, 'rb').read(), signer, [root], 'sha256')
-    write(path, pe)
+    pe = open(os.path.join(out, name + '.sys'), 'rb').read()
     inf = open(os.path.join(HERE, name + '.inf'), 'rb').read()
     write(os.path.join(out, name + '.inf'), inf)
     write(os.path.join(out, name + '.cat'), catalog([(name + '.inf', inf), (name + '.sys', pe)], signer, [root]))

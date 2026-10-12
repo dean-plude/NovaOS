@@ -27,7 +27,7 @@ TESTS = [
           r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)',
           r'\[DbgPrint\] edutest: started, interrupt vector \d+ at IRQL \d+, \d+ map registers']),
     Test('edu devices', 'pnputil /enum-devices /deviceid ' + EDU_ID,
-         [r'Status: +Started', r'Driver Name: +EduTest\r?\n']),
+         [r'Status: +Started', r'Driver Name: +EduTest(?! \(a NovaOS)']),
     Test('edu driver', 'edutest', [r'factorial 12 = 479001600', r'dma 4096 bytes: .* ok, .* ok',
                                    r'edutest: \d+ passed, 0 failed']),
     Test('edu removal vetoed', 'edutest veto',

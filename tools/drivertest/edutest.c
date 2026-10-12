@@ -449,7 +449,7 @@ static NT_STATUS dma(Ext *x, const unsigned char *in, unsigned int len, EDUTEST_
     unsigned char *dst = ExAllocatePoolWithTag(NonPagedPoolNx, len, TAG_EDU);
     NT_MDL *m1 = src ? IoAllocateMdl(src, len, 0, 0, 0) : 0, *m2 = dst ? IoAllocateMdl(dst, len, 0, 0, 0) : 0;
     NT_STATUS st = NT_STATUS_INSUFFICIENT_RESOURCES;
-    if (!m1 || !m2) goto out;
+    if (!m1 || !m2) { DbgPrint("edutest: dma: no buffers or MDLs"); goto out; }
     mcopy(src, in, len);
     mzero(dst, len);
     MmBuildMdlForNonPagedPool(m1);
@@ -458,9 +458,9 @@ static NT_STATUS dma(Ext *x, const unsigned char *in, unsigned int len, EDUTEST_
 
     /* 1. to the device, through GetScatterGatherList's list */
     x->sg = 0;
-    if (!NT_SUCCESS_(ops->GetScatterGatherList(x->dma, x->self, m1, src, len, sg_ready, x, 1))) goto out;
+    NT_STATUS sgst = ops->GetScatterGatherList(x->dma, x->self, m1, src, len, sg_ready, x, 1);
     KeWaitForSingleObject(&x->ready, 0, 0, 0, &zero);
-    if (!x->sg) goto out;
+    if (!NT_SUCCESS_(sgst) || !x->sg) { DbgPrint("edutest: dma: GetScatterGatherList failed (%08x)", sgst); goto out; }
     r->sg_elements = x->sg->NumberOfElements;
     r->sg_address = x->sg->Elements[0].Address;
     unsigned int off = 0;
@@ -470,7 +470,7 @@ static NT_STATUS dma(Ext *x, const unsigned char *in, unsigned int len, EDUTEST_
         off += x->sg->Elements[i].Length;
     }
     ops->PutScatterGatherList(x->dma, x->sg, 1);
-    if (!ok || off != len) goto out;
+    if (!ok || off != len) { DbgPrint("edutest: dma: the transfer to the device failed (%u of %u bytes)", off, len); goto out; }
 
     /* 2. back into a common buffer */
     long long logical = 0;

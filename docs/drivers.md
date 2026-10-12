@@ -216,8 +216,9 @@ For each device with problem code 28 (no driver), or the one named,
 A device whose package is already in the driver store is not searched
 again.  `pnputil /enum-drivers` shows a downloaded package's source, and
 `pnputil /enum-devices /drivers` lists it as matching the device.  The
-package is staged, not started: starting Windows drivers on devices comes
-with roadmap step 30.3, so for now the device keeps problem code 28.
+package is staged, not started, so the device keeps problem code 28 until
+`pnputil /add-driver x.inf /install` installs it on the device (roadmap
+step 30.3, above).
 
 Nothing Microsoft or a vendor publishes is put in the NovaOS image: the
 package comes from its publisher to the user's own machine, as on

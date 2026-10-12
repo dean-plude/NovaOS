@@ -11547,7 +11547,9 @@ device's memory, interrupt and DMA handed to it the way Windows hands them.
   contiguous memory, and DMA adapters (`IoGetDmaAdapter`, version 3):
   common buffers, `AllocateAdapterChannel` with `MapTransfer`, and
   scatter/gather lists, through bounce buffers below the device's address
-  width when the memory is out of its reach.
+  width when the memory is out of its reach.  The physical page allocator
+  keeps the first 16 MiB for such buffers (as Windows and Linux keep low
+  memory), handing them out elsewhere only when everything above is used.
 - **Device interfaces**: `IoRegisterDeviceInterface` and
   `IoSetDeviceInterfaceState`; the interface's `\\?\` path opens the driver's
   device and `CM_Get_Device_Interface_List` lists it.

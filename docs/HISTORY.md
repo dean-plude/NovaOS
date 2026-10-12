@@ -11636,8 +11636,9 @@ device's memory, interrupt and DMA handed to it the way Windows hands them.
   common buffers, `AllocateAdapterChannel` with `MapTransfer`, and
   scatter/gather lists, through bounce buffers below the device's address
   width when the memory is out of its reach.  The physical page allocator
-  keeps the first 16 MiB for such buffers (as Windows and Linux keep low
-  memory), handing them out elsewhere only when everything above is used.
+  sets aside 2 MiB just below 16 MiB at boot for such buffers, used only
+  when nothing free lies under the device's limit, so short-reach devices
+  still get memory after the low pages are taken.
 - **Device interfaces**: `IoRegisterDeviceInterface` and
   `IoSetDeviceInterfaceState`; the interface's `\\?\` path opens the driver's
   device and `CM_Get_Device_Interface_List` lists it.

@@ -93,7 +93,7 @@ typedef struct NtPdo {
     NtIface             *ifaces;
     struct NtPdo        *parent;        /* a bus driver's child: its parent (NULL: a PCI function) */
     bool                 seen;          /* (in the parent's last BusRelations) */
-    bool                 raw;           /* (started with no function driver) */
+    bool                 rawpdo;        /* (started with no function driver) */
     unsigned int         caps;          /* DEVICE_CAPABILITIES.Flags (children) */
 } NtPdo;
 
@@ -809,10 +809,10 @@ static void child_start(NtPdo *c)
     if (!service[0] && !(c->caps & CAP_RAW_DEVICE_OK)) { PnpSetProblem(c->node, PROB_NO_DRIVER); return; }
     UINT32 prob = start_stack(c, service);
     if (prob) { PnpSetProblem(c->node, prob); return; }
-    c->raw = !service[0];
-    strncpy(c->service, c->raw ? c->parent->service : service, sizeof(c->service) - 1);
+    c->rawpdo = !service[0];
+    strncpy(c->service, c->rawpdo ? c->parent->service : service, sizeof(c->service) - 1);
     PnpSetWindowsDriver(c->node, c->service);
-    kprintf("[PNP] %s: started (%s %s)\n", c->instance, c->raw ? "raw, bus driver" : "driver", c->service);
+    kprintf("[PNP] %s: started (%s %s)\n", c->instance, c->rawpdo ? "raw, bus driver" : "driver", c->service);
     enumerate(c);
 }
 
@@ -822,7 +822,7 @@ static void child_start(NtPdo *c)
 static void child_remove(NtPdo *c, bool missing)
 {
     for (NtPdo *g; (g = child_of(c));) child_remove(g, missing);
-    NtDriver *drv = c->started && !c->raw ? NtDrvFind(c->service) : NULL;
+    NtDriver *drv = c->started && !c->rawpdo ? NtDrvFind(c->service) : NULL;
     if (missing && c->started) send_pnp(c->pdo, NT_IRP_MN_SURPRISE_REMOVAL, NULL, NULL, NULL);
     ifaces_off(c);
     send_pnp(c->pdo, NT_IRP_MN_REMOVE_DEVICE, NULL, NULL, NULL);

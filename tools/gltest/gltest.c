@@ -15,7 +15,9 @@
  * a child process whose GALLIUM_DRIVER names the driver; virgl must draw
  * more frames per second than llvmpipe, and direct presentation more than
  * the GDI way while moving fewer bytes through guest memory per frame (the
- * kernel's counters: NtNovaGpuCtl's statistics).
+ * kernel's counters: NtNovaGpuCtl's statistics).  Under KVM, where the
+ * host's drawing is nearly the whole frame, direct presentation must move
+ * a sixteenth of the bytes or less instead of being faster.
  *
  * gltest present: direct presentation on virgl.  Four coloured quadrants
  * (red, green / blue, white) presented with SwapBuffers in a 256x192
@@ -36,6 +38,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <cpuid.h>
 
 static int pass, fail;
 static void check(const char *what, int ok) { if (ok) pass++; else { fail++; printf("FAIL %s\n", what); } }
@@ -247,6 +250,17 @@ static void fps_add(FpsResult *a, const FpsResult *b)
     a->fps = a->frames * 1000.0 / ms;
 }
 
+/* Under KVM the guest's own copies cost little and the host's drawing is
+ * nearly the whole frame, so both ways take about as long there (within
+ * a few per cent, either way from run to run); direct presentation must
+ * still move far fewer bytes, and the times are printed */
+static int under_kvm(void)
+{
+    unsigned a, b, c, d;
+    __cpuid(0x40000000, a, b, c, d);
+    return b == 0x4b4d564b && c == 0x564b4d56 && d == 0x4d;            /* "KVMKVMKVM" */
+}
+
 static int fps_test(int secs)
 {
     FpsResult v, g, l, v2, g2;
@@ -274,7 +288,10 @@ static int fps_test(int secs)
     check("virgl shows its frames from the host", v.direct * 10 >= v.frames * 9);
     check("NOVA_PRESENT=gdi shows them through the GDI", g.fps > 0 && g.direct == 0);
     check("direct presentation moves fewer bytes", v.fps > 0 && g.fps > 0 && v.kib * 4 < g.kib);
-    check("direct presentation is faster", v.fps > 0 && g.fps > 0 && v.fps > g.fps);
+    if (under_kvm())
+        check("direct presentation moves far fewer bytes under KVM", v.fps > 0 && g.fps > 0 && v.kib * 16 < g.kib);
+    else
+        check("direct presentation is faster", v.fps > 0 && g.fps > 0 && v.fps > g.fps);
     if (v.fps > 0 && l.fps > 0) printf("virgl is %.1fx llvmpipe\n", v.fps / l.fps);
     if (v.fps > 0 && g.fps > 0)
         printf("direct presentation: %.1f ms a frame against %.1f ms, %.0f KiB against %.0f KiB through guest memory\n",

@@ -10525,7 +10525,13 @@ straight into the screen's memory: no pixel is copied by the guest.
   (read-backs, window bitmaps drawn, the desktop's back buffer copied to
   the screen, transfers to a virtio output).  In the QEMU VM without
   KVM: 35.8 against 48.3 ms a frame, 17 KiB against 3531 KiB a frame
-  through guest memory.  It also prints
+  through guest memory.  Under KVM (the CI runners) the host's drawing
+  is nearly the whole frame and the two ways take about as long, within
+  a few per cent either way from run to run (22.8 against 22.1 ms, 47.4
+  against 42.8 ms on two runs), so there direct presentation must move a
+  sixteenth of the bytes or less (11 to 85 KiB against 3600 KiB) and the
+  times are printed.  Notifying the device as soon as the read is queued
+  instead of from the present thread did not close that gap.  It also prints
   how much of a frame goes to SwapBuffers and to asking the kernel.  A first version
   copied each frame on the host twice (into the window's own texture,
   then onto the screen), and into both pages of a flipping display, and

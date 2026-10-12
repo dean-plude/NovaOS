@@ -11,9 +11,11 @@
  * are named in the log.
  */
 #include "nt.h"
+#include "ntapi.h"
 #include "../ke/irql.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
+#include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 
@@ -155,4 +157,216 @@ void NtPoolDriverGone(NtDriver *drv)
     if (blocks)
         kprintf("[NT] %s: %llu pool block%s (%llu bytes, tags %s) never freed\n", drv->image, (unsigned long long)blocks,
                 blocks == 1 ? "" : "s", (unsigned long long)bytes, tags);
+}
+
+/* -----------------------------------------------------------------------
+ * Step 30.2 part 2: interlocked S-lists
+ *
+ * Windows' S-lists are lock-free (a 128-bit compare-and-swap on the
+ * header); NovaOS guards them with one spin lock, which a driver cannot
+ * tell apart through the Exp* entry points it calls.
+ * ----------------------------------------------------------------------- */
+static KSpinLock g_slist_lock = KSPINLOCK_INIT;
+
+NT_API void nt_ExInitializeSListHead(NT_SLIST_HEADER *h) { memset(h, 0, sizeof(*h)); }
+NT_API void nt_InitializeSListHead(NT_SLIST_HEADER *h) { memset(h, 0, sizeof(*h)); }
+
+NT_API NT_SLIST_ENTRY *nt_ExpInterlockedPushEntrySList(NT_SLIST_HEADER *h, NT_SLIST_ENTRY *e)
+{
+    IrqState s = spin_lock_irqsave(&g_slist_lock);
+    NT_SLIST_ENTRY *first = h->Next;
+    e->Next = first;
+    h->Next = e;
+    h->Depth++;
+    h->Sequence++;
+    spin_unlock_irqrestore(&g_slist_lock, s);
+    return first;
+}
+
+NT_API NT_SLIST_ENTRY *nt_ExpInterlockedPopEntrySList(NT_SLIST_HEADER *h)
+{
+    IrqState s = spin_lock_irqsave(&g_slist_lock);
+    NT_SLIST_ENTRY *e = h->Next;
+    if (e) { h->Next = e->Next; h->Depth--; h->Sequence++; }
+    spin_unlock_irqrestore(&g_slist_lock, s);
+    return e;
+}
+
+NT_API NT_SLIST_ENTRY *nt_InterlockedPushEntrySList(NT_SLIST_HEADER *h, NT_SLIST_ENTRY *e)
+{
+    return nt_ExpInterlockedPushEntrySList(h, e);
+}
+NT_API NT_SLIST_ENTRY *nt_InterlockedPopEntrySList(NT_SLIST_HEADER *h) { return nt_ExpInterlockedPopEntrySList(h); }
+
+NT_API UINT16 nt_ExQueryDepthSList(NT_SLIST_HEADER *h) { return h->Depth; }
+
+/* -----------------------------------------------------------------------
+ * Lookaside lists: a cache of fixed-size blocks over the pool
+ * ----------------------------------------------------------------------- */
+typedef void *(NT_API *NT_ALLOCATE_FUNCTION)(int pool, UINT64 size, UINT32 tag);
+typedef void  (NT_API *NT_FREE_FUNCTION)(void *p);
+
+static void lookaside_init(NT_LOOKASIDE_LIST *l, void *allocate, void *free, UINT64 size, UINT32 tag, UINT16 depth)
+{
+    memset(l, 0, sizeof(*l));
+    l->Depth = depth ? depth : 4;
+    l->MaximumDepth = 256;
+    l->Size = (UINT32)size;
+    l->Tag = tag ? tag : 0x6B414C6Cu;                /* 'lLAk' */
+    l->Allocate = allocate;
+    l->Free = free;
+}
+
+NT_API void nt_ExInitializeNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,
+                                               UINT64 flags, UINT64 size, UINT32 tag, UINT16 depth)
+{
+    (void)flags;
+    lookaside_init(l, allocate, free, size, tag, depth);
+    l->Type = 0;                                     /* NonPagedPool */
+}
+
+NT_API void nt_ExInitializePagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,
+                                              UINT64 flags, UINT64 size, UINT32 tag, UINT16 depth)
+{
+    (void)flags;
+    lookaside_init(l, allocate, free, size, tag, depth);
+    l->Type = 1;                                     /* PagedPool */
+}
+
+static void lookaside_drain(NT_LOOKASIDE_LIST *l)
+{
+    NT_SLIST_ENTRY *e;
+    while ((e = nt_ExpInterlockedPopEntrySList(&l->ListHead))) {
+        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(e);
+        else nt_ExFreePoolWithTag(e, l->Tag);
+    }
+}
+
+NT_API void nt_ExDeleteNPagedLookasideList(NT_LOOKASIDE_LIST *l) { lookaside_drain(l); }
+NT_API void nt_ExDeletePagedLookasideList(NT_LOOKASIDE_LIST *l) { lookaside_drain(l); }
+
+NT_API void *nt_ExAllocateFromNPagedLookasideList(NT_LOOKASIDE_LIST *l)
+{
+    NT_SLIST_ENTRY *e = nt_ExpInterlockedPopEntrySList(&l->ListHead);
+    if (e) return e;
+    if (l->Allocate) return ((NT_ALLOCATE_FUNCTION)l->Allocate)(l->Type, l->Size, l->Tag);
+    return nt_ExAllocatePoolWithTag(l->Type, l->Size, l->Tag);
+}
+NT_API void *nt_ExAllocateFromPagedLookasideList(NT_LOOKASIDE_LIST *l) { return nt_ExAllocateFromNPagedLookasideList(l); }
+
+NT_API void nt_ExFreeToNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *p)
+{
+    if (l->ListHead.Depth >= l->MaximumDepth) {
+        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(p); else nt_ExFreePoolWithTag(p, l->Tag);
+        return;
+    }
+    nt_ExpInterlockedPushEntrySList(&l->ListHead, (NT_SLIST_ENTRY *)p);
+}
+NT_API void nt_ExFreeToPagedLookasideList(NT_LOOKASIDE_LIST *l, void *p) { nt_ExFreeToNPagedLookasideList(l, p); }
+
+/* -----------------------------------------------------------------------
+ * ERESOURCE: a reader/writer lock
+ * ----------------------------------------------------------------------- */
+static KSpinLock g_eres_lock = KSPINLOCK_INIT;
+
+NT_API NTSTATUS nt_ExInitializeResourceLite(NT_ERESOURCE *r)
+{
+    memset(r, 0, sizeof(*r));
+    nt_KeInitializeEvent(&r->Event, 1 /* SynchronizationEvent */, 0);
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API UINT8 nt_ExAcquireResourceExclusiveLite(NT_ERESOURCE *r, UINT8 wait)
+{
+    void *me = (void *)sched_current();
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_eres_lock);
+        if (r->OwnerThread == me) { r->ExclusiveCount++; spin_unlock_irqrestore(&g_eres_lock, s); return 1; }
+        if (!r->OwnerThread && r->SharedCount == 0) {
+            r->OwnerThread = me;
+            r->ExclusiveCount = 1;
+            spin_unlock_irqrestore(&g_eres_lock, s);
+            return 1;
+        }
+        spin_unlock_irqrestore(&g_eres_lock, s);
+        if (!wait) return 0;
+        nt_KeWaitForSingleObject(&r->Event, 0, 0, 0, NULL);
+    }
+}
+
+NT_API UINT8 nt_ExAcquireResourceSharedLite(NT_ERESOURCE *r, UINT8 wait)
+{
+    void *me = (void *)sched_current();
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_eres_lock);
+        if (!r->OwnerThread || r->OwnerThread == me) {
+            r->SharedCount++;
+            spin_unlock_irqrestore(&g_eres_lock, s);
+            return 1;
+        }
+        spin_unlock_irqrestore(&g_eres_lock, s);
+        if (!wait) return 0;
+        nt_KeWaitForSingleObject(&r->Event, 0, 0, 0, NULL);
+    }
+}
+
+NT_API void nt_ExReleaseResourceLite(NT_ERESOURCE *r)
+{
+    IrqState s = spin_lock_irqsave(&g_eres_lock);
+    if (r->OwnerThread && r->ExclusiveCount > 0) {
+        if (--r->ExclusiveCount == 0) r->OwnerThread = NULL;
+    } else if (r->SharedCount > 0) {
+        r->SharedCount--;
+    }
+    spin_unlock_irqrestore(&g_eres_lock, s);
+    nt_KeSetEvent(&r->Event, 0, 0);
+}
+
+NT_API void nt_ExReleaseResourceForThreadLite(NT_ERESOURCE *r, UINT64 thread) { (void)thread; nt_ExReleaseResourceLite(r); }
+
+NT_API NTSTATUS nt_ExDeleteResourceLite(NT_ERESOURCE *r) { (void)r; return NT_STATUS_SUCCESS; }
+
+/* -----------------------------------------------------------------------
+ * Callback objects (\Callback\...): a driver registers a routine; NovaOS
+ * holds the registrations but has no producer firing the system callbacks
+ * yet, so a registered routine simply never runs (as on a system where
+ * nothing raises that callback).
+ * ----------------------------------------------------------------------- */
+typedef void (NT_API *NT_CALLBACK_FUNCTION)(void *ctx, void *a1, void *a2);
+
+typedef struct NtCallback {
+    UINT32               magic;
+    NT_CALLBACK_FUNCTION fn[8];
+    void                *ctx[8];
+    int                  count;
+} NtCallback;
+#define CALLBACK_MAGIC 0x6243624Eu                   /* 'NbCb' */
+
+NT_API NTSTATUS nt_ExCreateCallback(void **out, void *attr, UINT8 create, UINT8 allow_multiple)
+{
+    (void)attr; (void)create; (void)allow_multiple;
+    NtCallback *c = kzalloc(sizeof(*c));
+    if (!c) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    c->magic = CALLBACK_MAGIC;
+    *out = c;
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API void *nt_ExRegisterCallback(void *callback, void *fn, void *ctx)
+{
+    NtCallback *c = callback;
+    if (!c || c->magic != CALLBACK_MAGIC || c->count >= 8) return NULL;
+    c->fn[c->count] = (NT_CALLBACK_FUNCTION)fn;
+    c->ctx[c->count] = ctx;
+    c->count++;
+    return (void *)c;                                /* the registration handle: the object itself */
+}
+
+NT_API void nt_ExUnregisterCallback(void *registration) { (void)registration; }
+
+NT_API void nt_ExNotifyCallback(void *callback, void *a1, void *a2)
+{
+    NtCallback *c = callback;
+    if (!c || c->magic != CALLBACK_MAGIC) return;
+    for (int i = 0; i < c->count; i++) c->fn[i](c->ctx[i], a1, a2);
 }

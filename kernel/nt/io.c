@@ -692,3 +692,349 @@ void NtIoClose(NT_FILE_OBJECT *fo)
     }
     release(fo);
 }
+
+/* =======================================================================
+ * Step 30.2 part 2
+ * ======================================================================= */
+
+/* IoFileObjectType: a data export; drivers compare a referenced object's
+ * type against it.  NovaOS has one file-object type for Windows devices. */
+static struct { short Type; } g_file_object_type = { 5 };
+void *nt_IoFileObjectType = &g_file_object_type;
+
+/* -----------------------------------------------------------------------
+ * Allocating and reusing IRPs; building a device-control IRP a driver
+ * sends down its own stack
+ * ----------------------------------------------------------------------- */
+NT_API NT_IRP *nt_IoAllocateIrp(char stack_size, UINT8 charge_quota)
+{
+    (void)charge_quota;
+    int n = stack_size > 0 ? stack_size : 1;
+    NT_IRP *irp = kzalloc(sizeof(NT_IRP) + (size_t)n * sizeof(NT_IO_STACK_LOCATION));
+    if (!irp) return NULL;
+    irp->Type = 6;
+    irp->Size = (unsigned short)(sizeof(NT_IRP) + (size_t)n * sizeof(NT_IO_STACK_LOCATION));
+    irp->StackCount = (char)n;
+    irp->CurrentLocation = (char)(n + 1);
+    irp->Tail.Overlay.CurrentStackLocation = (NT_IO_STACK_LOCATION *)(irp + 1) + n;
+    irp->ThreadListEntry.Flink = irp->ThreadListEntry.Blink = &irp->ThreadListEntry;
+    return irp;
+}
+
+NT_API void nt_IoFreeIrp(NT_IRP *irp) { kfree(irp); }
+
+NT_API void nt_IoReuseIrp(NT_IRP *irp, NT_STATUS status)
+{
+    int n = irp->StackCount;
+    unsigned short size = irp->Size;
+    memset(irp, 0, sizeof(NT_IRP) + (size_t)n * sizeof(NT_IO_STACK_LOCATION));
+    irp->Type = 6;
+    irp->Size = size;
+    irp->StackCount = (char)n;
+    irp->CurrentLocation = (char)(n + 1);
+    irp->Tail.Overlay.CurrentStackLocation = (NT_IO_STACK_LOCATION *)(irp + 1) + n;
+    irp->ThreadListEntry.Flink = irp->ThreadListEntry.Blink = &irp->ThreadListEntry;
+    irp->IoStatus.Status = status;
+}
+
+NT_API void nt_IoInitializeIrp(NT_IRP *irp, unsigned short size, char stack_size)
+{
+    memset(irp, 0, size);
+    irp->Type = 6;
+    irp->Size = size;
+    irp->StackCount = stack_size;
+    irp->CurrentLocation = (char)(stack_size + 1);
+    irp->Tail.Overlay.CurrentStackLocation = (NT_IO_STACK_LOCATION *)(irp + 1) + stack_size;
+    irp->ThreadListEntry.Flink = irp->ThreadListEntry.Blink = &irp->ThreadListEntry;
+}
+
+/* IoBuildDeviceIoControlRequest: an IRP a driver sends down with
+ * IoCallDriver (METHOD_BUFFERED and the direct methods; the caller's
+ * event is signalled on completion). */
+NT_API NT_IRP *nt_IoBuildDeviceIoControlRequest(UINT32 code, NT_DEVICE_OBJECT *dev, void *in, UINT32 in_len,
+                                                void *out, UINT32 out_len, UINT8 internal, NT_KEVENT *event,
+                                                NT_IO_STATUS_BLOCK *iosb)
+{
+    NT_IRP *irp = nt_IoAllocateIrp(dev->StackSize, 0);
+    if (!irp) return NULL;
+    UINT32 method = code & 3;
+    NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
+    sl->MajorFunction = internal ? 0x0F /* INTERNAL_DEVICE_CONTROL */ : NT_IRP_MJ_DEVICE_CONTROL;
+    sl->Parameters.DeviceIoControl.IoControlCode = code;
+    sl->Parameters.DeviceIoControl.InputBufferLength = in_len;
+    sl->Parameters.DeviceIoControl.OutputBufferLength = out_len;
+    irp->UserEvent = event;
+    irp->UserIosb = iosb;
+    irp->Flags = IRP_SYNCHRONOUS_API;
+    if (method == NT_METHOD_BUFFERED) {
+        UINT32 n = in_len > out_len ? in_len : out_len;
+        if (n) {
+            irp->AssociatedIrp.SystemBuffer = kzalloc(n);
+            if (!irp->AssociatedIrp.SystemBuffer) { kfree(irp); return NULL; }
+            if (in && in_len) memcpy(irp->AssociatedIrp.SystemBuffer, in, in_len);
+            irp->Flags |= IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
+        }
+        irp->UserBuffer = out;
+    } else if (method == NT_METHOD_IN_DIRECT || method == NT_METHOD_OUT_DIRECT) {
+        sl->Parameters.DeviceIoControl.Type3InputBuffer = in;
+        if (out && out_len) {
+            NT_MDL *m = nt_IoAllocateMdl(out, out_len, 0, 0, irp);
+            if (m) NtMdlLock(m, false, method == NT_METHOD_IN_DIRECT ? 0 : 1);
+        }
+    } else {                                          /* METHOD_NEITHER */
+        sl->Parameters.DeviceIoControl.Type3InputBuffer = in;
+        irp->UserBuffer = out;
+    }
+    return irp;
+}
+
+/* IoSetCompletionRoutineEx: set the next stack location's completion
+ * routine (what the WDK's inline IoSetCompletionRoutine does; the Ex form
+ * is a tracked export). */
+NT_API NTSTATUS nt_IoSetCompletionRoutineEx(NT_DEVICE_OBJECT *dev, NT_IRP *irp, NT_IO_COMPLETION_ROUTINE routine,
+                                            void *ctx, UINT8 on_success, UINT8 on_error, UINT8 on_cancel)
+{
+    (void)dev;
+    NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
+    sl->CompletionRoutine = routine;
+    sl->Context = ctx;
+    sl->Control = (unsigned char)((on_success ? NT_SL_INVOKE_ON_SUCCESS : 0) |
+                                  (on_error ? NT_SL_INVOKE_ON_ERROR : 0) |
+                                  (on_cancel ? NT_SL_INVOKE_ON_CANCEL : 0));
+    return NT_STATUS_SUCCESS;
+}
+
+/* -----------------------------------------------------------------------
+ * Work items: a driver's routine run at PASSIVE_LEVEL on a system worker
+ * thread (so it can do what a DPC cannot: wait, touch paged data, call
+ * the registry)
+ * ----------------------------------------------------------------------- */
+struct _NT_IO_WORKITEM {
+    NT_LIST_ENTRY             link;
+    NT_DEVICE_OBJECT         *dev;
+    NT_IO_WORKITEM_ROUTINE    routine;
+    NT_IO_WORKITEM_ROUTINE_EX routine_ex;
+    void                     *ctx;
+    volatile int              queued;
+};
+
+static NT_LIST_ENTRY g_work = { &g_work, &g_work };
+static KSpinLock     g_work_lock = KSPINLOCK_INIT;
+static NT_KEVENT     g_work_event;
+static bool          g_worker_started;
+
+static void work_list_init(NT_LIST_ENTRY *h) { h->Flink = h->Blink = h; }
+
+static void worker_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        nt_KeWaitForSingleObject(&g_work_event, 0, 0, 0, NULL);
+        for (;;) {
+            IrqState s = spin_lock_irqsave(&g_work_lock);
+            if (g_work.Flink == &g_work) { spin_unlock_irqrestore(&g_work_lock, s); break; }
+            NT_IO_WORKITEM *w = (NT_IO_WORKITEM *)g_work.Flink;
+            w->link.Blink->Flink = w->link.Flink;
+            w->link.Flink->Blink = w->link.Blink;
+            w->queued = 0;
+            spin_unlock_irqrestore(&g_work_lock, s);
+            if (w->routine_ex) w->routine_ex(w->dev, w->ctx, w);
+            else if (w->routine) w->routine(w->dev, w->ctx);
+        }
+    }
+}
+
+void NtIoWorkerInit(void)
+{
+    work_list_init(&g_work);
+    nt_KeInitializeEvent(&g_work_event, NT_SynchronizationEvent, 0);
+    if (sched_create_thread("nt-workitem", worker_thread, NULL, 9)) g_worker_started = true;
+}
+
+NT_API NT_IO_WORKITEM *nt_IoAllocateWorkItem(NT_DEVICE_OBJECT *dev)
+{
+    NT_IO_WORKITEM *w = kzalloc(sizeof(*w));
+    if (w) w->dev = dev;
+    return w;
+}
+
+NT_API UINT64 nt_IoSizeofWorkItem(void) { return sizeof(NT_IO_WORKITEM); }
+
+NT_API void nt_IoInitializeWorkItem(NT_DEVICE_OBJECT *dev, NT_IO_WORKITEM *w)
+{
+    memset(w, 0, sizeof(*w));
+    w->dev = dev;
+}
+
+NT_API void nt_IoFreeWorkItem(NT_IO_WORKITEM *w) { kfree(w); }
+NT_API void nt_IoUninitializeWorkItem(NT_IO_WORKITEM *w) { (void)w; }
+
+static void work_queue(NT_IO_WORKITEM *w)
+{
+    IrqState s = spin_lock_irqsave(&g_work_lock);
+    if (!w->queued) {
+        w->queued = 1;
+        NT_LIST_ENTRY *last = g_work.Blink;
+        w->link.Flink = &g_work;
+        w->link.Blink = last;
+        last->Flink = &w->link;
+        g_work.Blink = &w->link;
+    }
+    spin_unlock_irqrestore(&g_work_lock, s);
+    nt_KeSetEvent(&g_work_event, 0, 0);
+}
+
+NT_API void nt_IoQueueWorkItem(NT_IO_WORKITEM *w, NT_IO_WORKITEM_ROUTINE routine, int queue_type, void *ctx)
+{
+    (void)queue_type;
+    w->routine = routine;
+    w->routine_ex = NULL;
+    w->ctx = ctx;
+    work_queue(w);
+}
+
+NT_API void nt_IoQueueWorkItemEx(NT_IO_WORKITEM *w, NT_IO_WORKITEM_ROUTINE_EX routine, int queue_type, void *ctx)
+{
+    (void)queue_type;
+    w->routine = NULL;
+    w->routine_ex = routine;
+    w->ctx = ctx;
+    work_queue(w);
+}
+
+/* -----------------------------------------------------------------------
+ * Remove locks: hold off a device's removal while I/O is in flight
+ * ----------------------------------------------------------------------- */
+
+
+
+
+/* -----------------------------------------------------------------------
+ * Driver-object extensions: per-driver client data keyed by a client id
+ * ----------------------------------------------------------------------- */
+typedef struct DrvExt {
+    struct DrvExt    *next;
+    NT_DRIVER_OBJECT *drv;
+    void             *client_id;
+    void             *data;
+} DrvExt;
+static DrvExt   *g_drvext;
+static KSpinLock g_drvext_lock = KSPINLOCK_INIT;
+
+NT_API NTSTATUS nt_IoAllocateDriverObjectExtension(NT_DRIVER_OBJECT *drv, void *client_id, UINT32 size, void **out)
+{
+    void *data = kzalloc(size);
+    DrvExt *e = kzalloc(sizeof(*e));
+    if (!data || !e) { kfree(data); kfree(e); return NT_STATUS_INSUFFICIENT_RESOURCES; }
+    e->drv = drv; e->client_id = client_id; e->data = data;
+    IrqState s = spin_lock_irqsave(&g_drvext_lock);
+    for (DrvExt *p = g_drvext; p; p = p->next)
+        if (p->drv == drv && p->client_id == client_id) {
+            spin_unlock_irqrestore(&g_drvext_lock, s);
+            kfree(data); kfree(e);
+            return NT_STATUS_OBJECT_NAME_COLLISION;
+        }
+    e->next = g_drvext;
+    g_drvext = e;
+    spin_unlock_irqrestore(&g_drvext_lock, s);
+    *out = data;
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API void *nt_IoGetDriverObjectExtension(NT_DRIVER_OBJECT *drv, void *client_id)
+{
+    IrqState s = spin_lock_irqsave(&g_drvext_lock);
+    void *data = NULL;
+    for (DrvExt *p = g_drvext; p; p = p->next)
+        if (p->drv == drv && p->client_id == client_id) { data = p->data; break; }
+    spin_unlock_irqrestore(&g_drvext_lock, s);
+    return data;
+}
+
+/* -----------------------------------------------------------------------
+ * Error log and WMI: a driver records events; NovaOS writes error-log
+ * entries to the kernel log and has no WMI consumer yet
+ * ----------------------------------------------------------------------- */
+NT_API void *nt_IoAllocateErrorLogEntry(void *io_object, UINT8 size)
+{
+    (void)io_object;
+    return kzalloc(size < 16 ? 16 : size);
+}
+
+NT_API void nt_IoWriteErrorLogEntry(void *entry)
+{
+    if (!entry) return;
+    kprintf("[NT] driver error-log entry\n");
+    kfree(entry);
+}
+
+NT_API NTSTATUS nt_IoWMIRegistrationControl(NT_DEVICE_OBJECT *dev, UINT32 action) { (void)dev; (void)action; return NT_STATUS_SUCCESS; }
+NT_API NTSTATUS nt_IoWMIWriteEvent(void *event) { kfree(event); return NT_STATUS_SUCCESS; }
+NT_API NTSTATUS nt_IoWMIDeviceObjectToProviderId(NT_DEVICE_OBJECT *dev, UINT32 *id) { (void)dev; if (id) *id = 0; return NT_STATUS_SUCCESS; }
+
+/* IoGetStackLimits: the current kernel stack's bounds */
+NT_API void nt_IoGetStackLimits(UINT64 *low, UINT64 *high)
+{
+    Thread *t = sched_current();
+    UINT64 base = (UINT64)(uintptr_t)t->kernel_stack;
+    if (low) *low = base;
+    if (high) *high = base + t->stack_size;
+}
+
+/* Shutdown notifications: NovaOS has no orderly-shutdown path yet, so the
+ * device is noted and the notification simply never fires (documented;
+ * a driver tolerates not being called at shutdown). */
+NT_API NTSTATUS nt_IoRegisterShutdownNotification(NT_DEVICE_OBJECT *dev) { (void)dev; return NT_STATUS_SUCCESS; }
+NT_API NTSTATUS nt_IoRegisterLastChanceShutdownNotification(NT_DEVICE_OBJECT *dev) { (void)dev; return NT_STATUS_SUCCESS; }
+NT_API void nt_IoUnregisterShutdownNotification(NT_DEVICE_OBJECT *dev) { (void)dev; }
+
+/* =======================================================================
+ * Documented stubs for the Plug and Play and power exports.  Step 30.3
+ * (PnP with real interrupts, memory and DMA) replaces these bodies with
+ * working ones; they live here, not in kernel/io/pnp.c, so step 30.3 owns
+ * that file.  Each returns the benign result that lets a driver's
+ * DriverEntry and AddDevice run to the point where PnP would take over.
+ * ======================================================================= */
+
+NT_API NT_DEVICE_OBJECT *nt_IoGetRelatedDeviceObject(NT_FILE_OBJECT *fo) { return fo ? fo->DeviceObject : NULL; }
+
+NT_API void nt_IoInvalidateDeviceState(NT_DEVICE_OBJECT *dev) { (void)dev; }
+NT_API void nt_IoRequestDeviceEject(NT_DEVICE_OBJECT *pdo) { (void)pdo; }
+NT_API NTSTATUS nt_IoReportTargetDeviceChangeAsynchronous(NT_DEVICE_OBJECT *pdo, void *notif, void *cb, void *ctx)
+{
+    (void)pdo; (void)notif; (void)cb; (void)ctx;
+    return NT_STATUS_SUCCESS;
+}
+NT_API NTSTATUS nt_IoRegisterPlugPlayNotification(int cat, UINT32 flags, void *data, NT_DRIVER_OBJECT *drv,
+                                                 void *cb, void *ctx, void **handle)
+{
+    (void)cat; (void)flags; (void)data; (void)drv; (void)cb; (void)ctx;
+    if (handle) *handle = (void *)(uintptr_t)1;
+    return NT_STATUS_SUCCESS;
+}
+NT_API NTSTATUS nt_IoUnregisterPlugPlayNotification(void *handle) { (void)handle; return NT_STATUS_SUCCESS; }
+NT_API NTSTATUS nt_IoOpenDeviceRegistryKey(NT_DEVICE_OBJECT *dev, UINT32 type, UINT32 access, void **handle)
+{
+    (void)dev; (void)type; (void)access; (void)handle;
+    return NT_STATUS_NOT_IMPLEMENTED;                 /* the device's instance key: step 30.3 (PnP) */
+}
+
+NT_API UINT32 nt_PoSetPowerState(NT_DEVICE_OBJECT *dev, int type, UINT32 state) { (void)dev; (void)type; (void)state; return 0; }
+NT_API NTSTATUS nt_PoRequestPowerIrp(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 state, void *cb, void *ctx, NT_IRP **irp)
+{
+    (void)dev; (void)minor; (void)state; (void)cb; (void)ctx; (void)irp;
+    return NT_STATUS_NOT_IMPLEMENTED;                 /* power IRPs: step 30.3 */
+}
+
+/* IoGetDeviceObjectPointer opens a named device and returns its device and
+ * file objects.  Opening another driver's device by name across the Zw
+ * layer arrives with the object manager in a later driver step; until then
+ * it reports the device was not found. */
+NT_API NTSTATUS nt_IoGetDeviceObjectPointer(NT_UNICODE_STRING *name, UINT32 access,
+                                            NT_FILE_OBJECT **file, NT_DEVICE_OBJECT **dev)
+{
+    (void)name; (void)access;
+    if (file) *file = NULL;
+    if (dev) *dev = NULL;
+    return STATUS_OBJECT_NAME_NOT_FOUND;
+}

@@ -789,10 +789,6 @@ NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp) { (void)irp; }
 
 NT_API NT_STATUS nt_PoCallDriver(NT_DEVICE_OBJECT *dev, NT_IRP *irp) { return nt_IofCallDriver(dev, irp); }
 
-/* Object references: NovaOS frees device objects itself (IoDeleteDevice) */
-NT_API INT64 nt_ObfReferenceObject(void *obj) { (void)obj; return 1; }
-NT_API INT64 nt_ObfDereferenceObject(void *obj) { (void)obj; return 0; }
-
 /* Remove locks: requests in flight on a device, which IRP_MN_REMOVE_DEVICE waits out */
 NT_API void nt_IoInitializeRemoveLockEx(NT_IO_REMOVE_LOCK *l, UINT32 tag, UINT32 max_min, UINT32 high, UINT32 size)
 {
@@ -826,10 +822,3 @@ NT_API void nt_IoReleaseRemoveLockAndWaitEx(NT_IO_REMOVE_LOCK *l, void *tag, UIN
         nt_KeWaitForSingleObject(&l->RemoveEvent, 0, 0, 0, NULL);
 }
 
-NT_API void nt_RtlFreeUnicodeString(NT_UNICODE_STRING *u)
-{
-    if (!u || !u->Buffer) return;
-    nt_ExFreePool(u->Buffer);
-    u->Buffer = NULL;
-    u->Length = u->MaximumLength = 0;
-}

@@ -141,6 +141,12 @@ int main(int argc, char **argv)
     check(k.timer, "a 20 ms timer");
     check(k.fast_mutex, "fast mutex at APC_LEVEL");
     check(k.routine, "MmGetSystemRoutineAddress");
+    printf("  part 2: exception %u (code %#x), work item %u, system thread %u, Zw registry %u\n",
+           k.exception, k.exception_code, k.work_item, k.system_thread, k.zw_registry);
+    check(k.exception && k.irql_after_seh, "an access violation caught by __try/__except (kernel SEH)");
+    check(k.work_item, "a work item ran on a worker thread");
+    check(k.system_thread, "a system thread ran, referenced by handle and waited on");
+    check(k.zw_registry, "a registry value round-tripped through Zw");
 
     /* STATUS_PENDING, completed from a timer's DPC */
     WDMTEST_PENDING pd;

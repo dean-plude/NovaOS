@@ -65,7 +65,13 @@ typedef struct {
     unsigned char  routine;                      /* MmGetSystemRoutineAddress("KeSetEvent") is the import */
     unsigned char  semaphore;                    /* KeReleaseSemaphore by 2: two waits succeed, a third times out */
     unsigned char  queued_lock;                  /* an in-stack queued spin lock raises to DISPATCH_LEVEL and back */
+    unsigned char  exception;                    /* a null write in kernel mode caught by __try/__except (SEH) */
+    unsigned char  irql_after_seh;               /* back at PASSIVE_LEVEL after the handler unwound */
+    unsigned char  work_item;                    /* IoQueueWorkItem ran on a worker thread at PASSIVE_LEVEL */
+    unsigned char  system_thread;                /* PsCreateSystemThread ran, referenced by handle and waited on */
+    unsigned char  zw_registry;                  /* ZwCreateKey/SetValueKey/QueryValueKey round-trip a REG_DWORD */
     unsigned int   timer_ms;                     /* how long the 20 ms timer took */
+    unsigned int   exception_code;               /* the code __except saw (STATUS_ACCESS_VIOLATION) */
 } WDMTEST_KERNEL;
 
 typedef struct {

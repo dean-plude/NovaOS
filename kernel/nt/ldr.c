@@ -112,6 +112,8 @@ void NtDrvInit(void)
 {
     g_ready = NT_SUCCESS(paging_prepare(DRV_BASE, DRV_SIZE));
     NtIoInit();
+    NtKeInit();
+    NtIoWorkerInit();
 }
 
 static NtDriver *find(const char *service)

@@ -401,8 +401,13 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
 {
     if (!NtDrvByAddress(f->rip)) return false;        /* not in driver code */
     SehContext ctx;
+    /* A fault taken in ring 0 does not change rings, so the CPU pushed only
+     * RIP/CS/RFLAGS (and the error code): InterruptFrame.rsp holds the
+     * interrupted code's stack data, not the faulting RSP.  The real one is
+     * where the CPU frame sits, i.e. the address of that rsp field. */
+    UINT64 fault_rsp = (UINT64)(uintptr_t)&f->rsp;
     ctx.Reg[R_RAX] = f->rax; ctx.Reg[R_RCX] = f->rcx; ctx.Reg[R_RDX] = f->rdx; ctx.Reg[R_RBX] = f->rbx;
-    ctx.Reg[R_RSP] = f->rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
+    ctx.Reg[R_RSP] = fault_rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
     ctx.Reg[R_R8] = f->r8; ctx.Reg[R_R9] = f->r9; ctx.Reg[R_R10] = f->r10; ctx.Reg[R_R11] = f->r11;
     ctx.Reg[R_R12] = f->r12; ctx.Reg[R_R13] = f->r13; ctx.Reg[R_R14] = f->r14; ctx.Reg[R_R15] = f->r15;
     ctx.Rip = f->rip;

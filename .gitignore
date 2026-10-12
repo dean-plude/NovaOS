@@ -9,3 +9,5 @@ selftest-out/
 /selftest-out/
 # The audio DSP firmware tools/fetch_sof_firmware.py downloads
 /third_party/sof-bin/
+# The default firmware set tools/fetch_firmware.py downloads (tools/firmware.json)
+/third_party/firmware/

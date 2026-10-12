@@ -637,6 +637,17 @@ if os.path.isdir(SOF):
         built.append((f'\\Windows\\Firmware\\Intel\\sof-ipc4\\{plat}\\sof-{plat}.ri',
                       os.path.join(SOF, 'sof-ipc4', plat, f'sof-{plat}.ri')))
 
+# 3a5. the default firmware set (tools/firmware.json: linux-firmware files for
+# graphics, Wi-Fi and Bluetooth), the files tools/fetch_firmware.py fetched,
+# in linux-firmware's layout under \Windows\Firmware (docs/drivers.md)
+FIRMWARE = os.path.join(TP, 'firmware')
+with open(os.path.join(os.path.dirname(HERE), 'tools', 'firmware.json')) as f:
+    _fw = json.load(f)
+for item in [x for s in _fw['sets'] for x in s['files']] + _fw['licences']:
+    src = os.path.join(FIRMWARE, *item['path'].split('/'))
+    if os.path.isfile(src) and os.path.getsize(src) == item['size']:
+        built.append(('\\Windows\\Firmware\\' + item['path'].replace('/', '\\'), src))
+
 # 3a. sample files for the user's folders (tools/make_icons.py draws the icons)
 samples = os.path.join(HERE, 'samples')
 for n in sorted(os.listdir(samples)):

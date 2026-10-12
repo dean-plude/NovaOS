@@ -4,7 +4,8 @@
 #   1. The tag must name the version the kernel carries (NOVA_VERSION in
 #      kernel/ke/version.h): v0.1.0 for "0.1.0".
 #   2. The whole CI workflow (ci.yml) runs on the tagged commit with
-#      release: true, so the audio DSP firmware is fetched before the build
+#      release: true, so the default firmware set and the audio DSP firmware
+#      are fetched before the build (tools/fetch_firmware.py)
 #      and every suite (core, network, devices, graphics) tests the image
 #      the release ships; the devices suite also starts NovaOS from the ISO.
 #   3. Only when all of that passes, the GitHub release for the tag is made

@@ -277,7 +277,9 @@ a real T14 yet):
 
 ## Devices NovaOS drives
 
-For reference, every driver NovaOS has, by device:
+For reference, every driver NovaOS has, by device (all built into the
+kernel; the firmware some of them need is the default firmware set in
+[drivers.md](drivers.md)):
 
 | Kind | Devices |
 |---|---|

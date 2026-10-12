@@ -75,6 +75,21 @@ so a KMDF driver needs test signing on (below) until NovaOS trusts its own
 system files; class-extension drivers (those that bind with
 `WdfVersionBindClass`) do not load yet.
 
+The first third-party driver that runs unchanged is virtio-win's
+**`vioser.sys`** (step 30.5), the Red Hat serial driver Microsoft signed,
+for QEMU's `virtio-serial-pci`: `pnputil /add-driver vioser.inf /install`
+starts it on the device, and each port the host offers becomes a child
+device (`{6FDE7547-1B65-48ae-B628-80BE62016026}\VIOSerialPort\...`) that
+programs open as `\\.\Global\<port name>`, or through its
+`GUID_VIOSERIAL_PORT` interface, to exchange bytes with the host.  For
+this NovaOS's PnP manager now enumerates **bus drivers**' children, as
+Windows does: a driver that calls `IoInvalidateDeviceRelations` is asked
+for its `BusRelations`, each new child gets a device node from its
+`IRP_MN_QUERY_ID` answers and starts with its own driver, or raw (with the
+bus driver alone) when it says it may, and a child no longer reported is
+removed.  `vioser.sys` itself is Microsoft-signed, but it runs on the
+KMDF framework above, so it too needs test signing on for now.
+
 ### Driver signing
 
 A kernel driver loads only if it is signed the way Windows 11 requires

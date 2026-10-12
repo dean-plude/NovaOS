@@ -27,3 +27,6 @@
   and NovaOS's `WdfLdr.sys` load KMDF drivers
   (a test driver's control device and queue); the KMDF version of the
   `edu` PnP test driver, which finishes the step, follows 30.3.
+  Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
+  runs on KMDF, reports its serial ports as child devices, and a program
+  exchanges bytes with the host through `\\.\Global\<port name>`.

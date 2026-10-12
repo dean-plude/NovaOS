@@ -34,6 +34,7 @@
 #include "../arch/x86_64/gdt.h"
 #include "../arch/x86_64/paging.h"
 #include "../arch/x86_64/apic.h"
+#include "../arch/x86_64/xstate.h"
 
 /* -----------------------------------------------------------------------
  * Globals
@@ -729,16 +730,16 @@ static void switch_locked(RunQueue *rq)
     uint64_t cr3 = next->cr3 ? next->cr3 : paging_get_kernel_cr3();
     if (read_cr3() != cr3) paging_load_cr3((uintptr_t)cr3);
 
-    /* User threads: SSE state and the user GS base (the TEB, kept in
+    /* User threads: SSE and AVX state (xstate.h) and the user GS base (the TEB, kept in
      * MSR_KERNEL_GS_BASE while in the kernel: GS itself is this CPU's
      * KPCR) are per thread.  Kernel code never uses SSE, so kernel
      * threads need neither saved. */
     if (prev->um) {
-        __asm__ volatile ("fxsave64 (%0)" : : "r"(prev->fpu) : "memory");
+        xstate_save(prev->fpu);
         prev->gs_base = rdmsr(MSR_IA32_KERNEL_GSBASE);
     }
     if (next->um) {
-        __asm__ volatile ("fxrstor64 (%0)" : : "r"(next->fpu) : "memory");
+        xstate_restore(next->fpu);
         wrmsr(MSR_IA32_KERNEL_GSBASE, next->gs_base);
         wrmsr(MSR_IA32_FSBASE, next->fs_base);       /* 32-bit programs: fs:0 is the TEB */
         gdt_set_teb32((uint32_t)next->fs_base);      /* and FS reloaded (0x53) finds it too */

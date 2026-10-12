@@ -1386,8 +1386,8 @@ WINBASEAPI BOOL WINAPI IsProcessorFeaturePresent(DWORD f)
     case 36: return (c >> 9) & 1;           /* PF_SSSE3 */
     case 37: return (c >> 19) & 1;          /* PF_SSE4_1 */
     case 38: return (c >> 20) & 1;          /* PF_SSE4_2 */
-    case 39: return 0;                      /* PF_AVX: the kernel saves SSE state only */
-    case 40: return 0;                      /* PF_AVX2 */
+    case 39:                                /* PF_AVX, PF_AVX2: KUSER_SHARED_DATA's, the */
+    case 40: return ((volatile BYTE *)(ULONG_PTR)0x7FFE0274)[f];   /* kernel saving the YMM state (XCR0) */
     case 41: return 0;                      /* PF_AVX512F */
     case 28: return (c >> 30) & 1 ? TRUE : FALSE; /* PF_RDRAND */
     case 29: return 0;                      /* PF_ARM_* and others */

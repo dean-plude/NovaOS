@@ -152,7 +152,8 @@ NEWDEV BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid,
     for (DWORD id = 1, count = nova_pnp_count(); id <= count; id++) {
         if (!nova_pnp_node(id, &n) || !(n.flags & NOVA_PNP_PRESENT) || !nova_pnp_prefix(n.instance, "PCI\\")) continue;
         if (!multi_has(n.hwids, hwid) && !multi_has(n.compat, hwid)) continue;
-        BOOL windows = n.service[0] && windows_driven(&n);
+        /* (an inbox driver is NovaOS's own, though the Enum key names it too) */
+        BOOL windows = n.service[0] && !(n.flags & NOVA_PNP_INBOX) && windows_driven(&n);
         /* (a NovaOS driver runs it: only an inbox one steps aside, at start) */
         if ((n.flags & NOVA_PNP_STARTED) && !windows && !(n.flags & NOVA_PNP_INBOX)) continue;
         if ((n.flags & NOVA_PNP_STARTED) && windows && nova_pnp_stop(id) < 0) { err = ERROR_DEVICE_IN_USE; continue; }

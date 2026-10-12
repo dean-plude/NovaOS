@@ -22,6 +22,10 @@
   and DirectComposition instead of restarting until the browser crashed)~~
   Done (`dcomptest dxvk`).  Still to do: the GPU-composited output path
   (DirectComposition on the GPU): ~~composition swap chains on the GPU
-  device~~ Done (`dcomptest dxvk`); next `DCompositionCreateDevice3`
-  (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces) and the
-  DXVK adapter's factory making them, so Chromium turns the path on.
+  device~~ Done (`dcomptest dxvk`); ~~`DCompositionCreateDevice3`
+  (`IDCompositionDesktopDevice`, `IDCompositionDevice3`, surfaces, clips),
+  the DXVK adapter's factory making the swap chains, `IDXGISwapChain3`, so
+  Chromium turns the path on~~ Done (`dcomptest dxvk`; WebView2's GPU
+  process composites the page through a swap chain on Venus).  Next:
+  presenting without the CPU readback and GDI copy (direct virtio GPU
+  scan-out).

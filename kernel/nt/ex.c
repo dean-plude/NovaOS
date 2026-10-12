@@ -18,6 +18,7 @@
 #include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
+#include "../net/tls.h"
 
 /* ExAllocatePool2's POOL_FLAGS */
 #define POOL_FLAG_UNINITIALIZED   0x0002ull
@@ -213,8 +214,10 @@ static void lookaside_init(NT_LOOKASIDE_LIST *l, void *allocate, void *free, UIN
     l->MaximumDepth = 256;
     l->Size = (UINT32)size;
     l->Tag = tag ? tag : 0x6B414C6Cu;                /* 'lLAk' */
-    l->Allocate = allocate;
-    l->Free = free;
+    /* as on Windows, no routine means the pool's own: the WDK's inline
+     * ExAllocateFromNPagedLookasideList calls Allocate without a check */
+    l->Allocate = allocate ? allocate : (void *)nt_ExAllocatePoolWithTag;
+    l->Free = free ? free : (void *)nt_ExFreePool;
 }
 
 NT_API void nt_ExInitializeNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,
@@ -370,3 +373,17 @@ NT_API void nt_ExNotifyCallback(void *callback, void *a1, void *a2)
     if (!c || c->magic != CALLBACK_MAGIC) return;
     for (int i = 0; i < c->count; i++) c->fn[i](c->ctx[i], a1, a2);
 }
+
+/* -----------------------------------------------------------------------
+ * UUIDs: random ones (version 4, RFC 4122 variant) from the kernel's
+ * entropy pool
+ * ----------------------------------------------------------------------- */
+NTSTATUS NtExUuid(UINT8 out[16])
+{
+    TlsEntropyOutput(out, 16);
+    out[7] = (UINT8)((out[7] & 0x0F) | 0x40);        /* (GUID's Data3 is little-endian: its top nibble is in byte 7) */
+    out[8] = (UINT8)((out[8] & 0x3F) | 0x80);
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_ExUuidCreate(UINT8 *uuid) { return uuid ? NtExUuid(uuid) : NT_STATUS_INVALID_PARAMETER; }

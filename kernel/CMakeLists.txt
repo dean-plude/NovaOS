@@ -227,6 +227,7 @@ set(KERNEL_C_SOURCES
     nt/ntoskrnl.c
     nt/ps.c
     nt/seh.c
+    nt/win10.c
     nt/zw.c
     io/pnp.c
     mm/vma.c

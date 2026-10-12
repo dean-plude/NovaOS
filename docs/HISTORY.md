@@ -11446,6 +11446,54 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
   every millisecond and writes one engine period at a time; the recording
   must hold its tones.  Nothing tested the `IAudioClient3` calls before.
 
+## KMDF: Microsoft's driver framework, built from its own source
+
+Step 30.4 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): most Windows
+drivers written since Windows 8 are KMDF drivers, which call Microsoft's
+framework (`Wdf01000.sys`) rather than the kernel.  NovaOS now has that
+framework, built from Microsoft's MIT-licensed
+[Windows-Driver-Frameworks](https://github.com/microsoft/Windows-Driver-Frameworks)
+source, and runs KMDF drivers on it.
+
+- **`Wdf01000.sys`** (`tools/kmdf/build_kmdf.py`): the build fetches the
+  pinned source commit, applies five small patches that restore what the
+  published tree lost (each in `tools/kmdf/patches` with its reason),
+  compiles the 178 kernel-mode framework files with clang against
+  mingw-w64's WDK headers plus what they lack (`tools/kmdf/inc`), and links
+  them with the WDK libraries the framework expects (`tools/kmdf/rt`:
+  `wdmsec.lib`'s secure device creation, the USB helpers, the
+  Driver-Verifier queries, the trace messages, which reach the log through
+  `DbgPrintEx`).
+- **`WdfLdr.sys`** (`tools/kmdf/wdfldr.c`): NovaOS's own KMDF loader,
+  exporting what a KMDF driver imports (`WdfVersionBind`,
+  `WdfVersionUnbind`, `WdfLdrQueryInterface`, ...) and what the framework
+  registers with (`WdfRegisterLibrary`).  A driver's bind starts
+  `Wdf01000.sys` when it is not running yet.  Class extensions
+  (`WdfVersionBindClass`) are refused for now.
+- **Export drivers** (`kernel/nt/ldr.c`): an import from a `.sys` module
+  (`WDFLDR.SYS`) loads that module from `System32\drivers` the way Windows
+  does, without a driver object, and calls its `DllInitialize`; a
+  driver's `DriverEntry` may start another driver (`ZwLoadDriver`), so
+  loads nest.
+- **The kernel routines the framework imports** that NovaOS lacked
+  (`kernel/nt/win10.c` and others): the Windows 8.1 high-resolution
+  timers (`ExAllocateTimer`, `ExSetTimer`, ...), the power framework
+  (`PoFxRegisterDevice` and the rest; components are kept active), a real
+  `RtlQueryRegistryValues(Ex)` (the framework reads its settings with it),
+  `IoOpenDriverRegistryKey`, `IoQueryFullDriverPath`, `ExUuidCreate`,
+  activity IDs and the C run-time string routines.  The import-coverage
+  check now holds the framework's own imports, and the KMDF loader's
+  exports, against what NovaOS provides.
+
+`kmdftest.sys`, a non-PnP KMDF driver with a control device and a default
+queue, loads with `sc start`, binds to KMDF 1.33 and serves `kmdftest`'s
+reads, writes and control codes through its queue callbacks in the
+devices suite's "wdm" boot.  The framework and its loader are test-signed
+for now, so KMDF drivers need test signing on; a KMDF version of the
+Plug and Play `edu` test driver, which is this step's "done when", follows
+step 30.3.
+
 ## PhotoCraft makes documents; why it composites on the CPU
 
 PhotoCraft (App Store, ArtCraft) closed itself the moment a document

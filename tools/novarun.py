@@ -200,7 +200,7 @@ class Nova:
                      '-device', 'intel-hda', '-device', 'hda-output,audiodev=snd0']
         else:
             audio = []
-        self.q = subprocess.Popen([qemu_binary(), '-machine', 'q35'] + accel_args() + ['-cpu', 'qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+popcnt',
+        self.q = subprocess.Popen([qemu_binary(), '-machine', 'q35'] + accel_args() + ['-cpu', 'qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,+avx,+f16c',
                                    '-m', str(mem), '-smp', str(smp),
                                    '-drive', f'if=pflash,format=raw,readonly=on,file={OVMF}',
                                    *([] if img is False else      # img=False: no boot disk (the boot device is in extra_args)

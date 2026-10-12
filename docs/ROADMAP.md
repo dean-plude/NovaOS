@@ -157,7 +157,11 @@ named program or test demonstrates it.
   the frame into whichever monitor's screen the window is on, twice as
   wide and high on a monitor at scale 2 (`gltest monitors`); see
   [the other monitors](HISTORY.md#direct-presentation-on-every-monitor-and-at-scale-2).
-  Still to do: DirectComposition's swap chains (WebView2's GPU process).
+  ~~DirectComposition's swap chains (WebView2's GPU process)~~ Done: a
+  target showing only swap chains of one GPU device is composited on that
+  GPU into a swap chain of its own on the window, whose frames the host
+  writes into the screen, embedded windows included (`dcomptest direct`);
+  see [DirectComposition on the GPU](HISTORY.md#directcomposition-composited-on-the-gpu).
 - ~~NetSurf: SVG; redrawing pages a script changes after layout.~~ Done
   (Phase 19.8): SVG images (`<img>`, `<object>`, CSS backgrounds, `.svg`
   pages) and `<svg>` elements written inline in HTML drawn anti-aliased,

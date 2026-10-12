@@ -11148,6 +11148,53 @@ turn, and gltest's own figures echoed into the CI log) shows why:
   compiling the scene's shaders is not what slows a turn.
 - `gltest fps` prints every turn's frame rate (`fps: turns:`).
 
+## DirectComposition composited on the GPU
+
+The Phase 25 step after [the other monitors](#direct-presentation-on-every-monitor-and-at-scale-2).
+WebView2's GPU process renders its page on Venus into a DirectComposition
+swap chain, but every present then copied the changed part into a staging
+texture, read it back into guest memory and drew it into the window with
+the GDI.  Now `dcomp.dll` composites such a target on the GPU, and the
+frame never comes back to the guest:
+
+- **GPU composition**: a target whose visible tree shows only swap chains
+  of one GPU device (BGRA or RGBA ones) gets a picture of its window's
+  size on that device and a swap chain of the device's own on the window
+  (made by the device adapter's factory, DXVK's).  Each present copies
+  the part that changed into the picture on the GPU, a Commit after a
+  change to the tree copies all of it, and the picture is copied into the
+  window's swap chain and presented.  DXVK's frame goes through Mesa's
+  Win32 swapchain, so the kernel writes it straight into the screen while
+  the window is alone ([Vulkan's frames](#direct-presentation-of-vulkans-frames)),
+  and Mesa draws it in with the GDI while something covers it.  Parts of
+  the window no visual covers show black.
+- **Read-back only when asked for**: `dxgi.dll`'s GPU composition swap
+  chains no longer read each present back; the parts presented since are
+  read back when `dcomp.dll` asks for the frame (the GDI way).
+- **Back to the GDI way**: once the tree no longer qualifies (a
+  DirectComposition surface, a software swap chain, a second device), the
+  target is drawn with the GDI again and tells the kernel
+  (`NtNovaGpuCtl` 15), which stops showing the window's last frame from
+  the host and redraws the window's own pixels.  `NOVA_PRESENT=gdi` keeps
+  every target on the GDI way.
+- **Mesa's GDI way for RGBA swapchains**: DXVK picks an RGBA Vulkan
+  swapchain for an 8-bit DXGI one, and Mesa's Win32 swapchain copied its
+  frames into a BGRA bitmap as they were, red and blue swapped; it now
+  swaps them back (the frames shown from the host were already right).
+- **Embedded windows**: the kernel now shows direct frames for a window
+  embedded in another process's (the window WebView2's GPU process
+  composites into, inside the host's), by the part of it that shows.
+- **dcomptest direct** (graphics suite, 64- and 32-bit): the quadrants
+  from the host while the window is alone (a screenshot of the screen
+  must show them), through the GDI while another window covers it, from
+  the host again, then the GDI way once a swap chain of another device
+  joins the tree (the screen must show the frame drawn that way), and the
+  GPU process's embedded window shown from the host.  `dcomptest dxvk`
+  and `dcomptest life` keep the GDI way, since they check frames with
+  `GetPixel`.
+- Not covered: DirectComposition surfaces still go the GDI way (each
+  `EndDraw` reads back), and WebView2 itself was not rerun for this step.
+
 ## DirectComposition on the GPU through resizes, teardown and other processes
 
 The last part of WebView2's GPU-composited output (roadmap 25.1): the path
@@ -11238,6 +11285,30 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
   `GetCurrentSharedModeEnginePeriod`, then a thread that polls the padding
   every millisecond and writes one engine period at a time; the recording
   must hold its tones.  Nothing tested the `IAudioClient3` calls before.
+
+## PhotoCraft makes documents; why it composites on the CPU
+
+PhotoCraft (App Store, ArtCraft) closed itself the moment a document
+opened: over the canvas it sets a custom brush cursor, whose bitmap it
+writes with `SetBitmapBits`, and `gdi32` had no such export, so the
+program ended with "entry point not found".  `gdi32` now has
+`SetBitmapBits`, and `GetBitmapBits` returns the bits as Windows does
+(blue, green, red, then alpha, rows top-down) instead of NovaOS's own
+pixel order.
+
+Its "Switched to CPU rendering" box is PhotoCraft's own rule, not a
+failure on NovaOS: when the graphics adapter wgpu gives it is a CPU one
+(llvmpipe and lavapipe, as Windows' Basic Render Driver), PhotoCraft
+never starts its GPU image compositor and says it uses the CPU.  A test
+build that gave llvmpipe another name in `GL_RENDERER` showed the GPU
+compositor running on NovaOS's OpenGL (the start page without the box,
+then a 1920x1080 document on the GPU canvas), so on a machine with a
+hardware adapter, such as QEMU's virgl or Venus on a host GPU, it should
+start on the GPU; that has not been checked yet.
+
+- **PhotoCraft** (app corpus, `886-photocraft.py`): it keeps the CPU,
+  makes a new 1920x1080 document and must show its white canvas
+  (`tests/reference/photocraft.png`).
 
 ## README without "What runs today"
 

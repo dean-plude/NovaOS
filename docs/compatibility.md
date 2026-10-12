@@ -51,8 +51,8 @@ nightly results; until then they are kept by hand.
 |---|---:|---:|---:|---:|---:|
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
-| Silver | 2 | 1 | 0 | 1 | 4 |
-| Bronze | 3 | 2 | 0 | 1 | 6 |
+| Silver | 3 | 1 | 0 | 1 | 5 |
+| Bronze | 2 | 2 | 0 | 1 | 5 |
 | Borked | 0 | 1 | 0 | 0 | 1 |
 | Untested | 8 | 0 | 1 | 3 | 12 |
 | **All** | 20 | 13 | 10 | 12 | 55 |
@@ -70,9 +70,9 @@ nightly results; until then they are kept by hand.
 | **Firefox 157** and **Floorp 12.19** | Platinum | Installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms | A publicly trusted HTTPS site not checked (the test network is offline) | nightly corpus ([`890-firefox.py`](../tests/appcorpus/890-firefox.py)) |
 | **SumatraPDF 3.4.6** (x86 portable) | Silver | Opens a PDF and renders its pages | Printing finds no printer (NovaOS has no printers yet) | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
 | **KeePassXC 2.7.12** (Qt 5) | Silver | Opens and unlocks a KDBX 4 database and shows its entries | Windows Hello unlock reports "not supported" | nightly corpus ([`870-keepassxc.py`](../tests/appcorpus/870-keepassxc.py)) |
+| **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Silver | Installs from the App Store, opens its editor window on the built-in OpenGL (llvmpipe) and makes a new document | On software graphics (llvmpipe) it composites on the CPU by its own design and says so in a box at start; its GPU compositor ran on NovaOS's OpenGL in a test, but no hardware adapter has been tried. Editing not checked. The other eleven ArtCraft apps and the ArtCraft Launcher (App Store) share its toolkit and are untested | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |
 | **PuTTY 0.81** | Bronze | Raw connections | SSH not checked | nightly corpus ([`950-putty.py`](../tests/appcorpus/950-putty.py)) |
 | **Krita 5.3.4** (Qt 5) | Bronze | Starts and opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing to install) | Painting and saving not checked | nightly corpus ([`885-krita.py`](../tests/appcorpus/885-krita.py)) |
-| **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens its editor window on the built-in OpenGL (llvmpipe) | Its image compositor falls back to the CPU; editing not checked. The other eleven ArtCraft apps and the ArtCraft Launcher (App Store) share its toolkit and are untested | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |
 | **Thunderbird** (App Store) | Untested | — | Not checked yet; it uses the same engine as Firefox, which works | — |
 | **GIMP** (App Store) | Untested | — | — | — |
 | **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |

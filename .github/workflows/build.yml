@@ -42,8 +42,8 @@ jobs:
       with:
         path: ~/.cache/novaos/mesa
         key: mesa-${{ runner.os }}-${{ hashFiles('tools/bundle_mesa.py') }}
-    - name: Fetch release DSP firmware
-      run: python3 tools/fetch_sof_firmware.py --all
+    - name: Fetch release firmware (default firmware set and DSP firmware)
+      run: python3 tools/fetch_firmware.py
       if: inputs.release
     - name: Build NovaOS
       run: |-

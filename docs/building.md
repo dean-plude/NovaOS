@@ -320,7 +320,10 @@ Lake to Raptor Lake, as on the reference ThinkPad) need the DSP's Sound
 Open Firmware built in; `python3 tools/fetch_sof_firmware.py` before the
 build downloads it into `third_party/sof-bin`, which is not committed
 ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
-QEMU has no such DSP, so nothing here needs it.
+QEMU has no such DSP, so nothing here needs it.  `python3
+tools/fetch_firmware.py` fetches it together with the rest of the default
+firmware set (Intel graphics, Wi-Fi and Bluetooth;
+[drivers.md](drivers.md)), which release builds carry.
 
 More monitors: each further display adapter is one (`-device
 secondary-vga`), and so is each output of a virtio GPU with a monitor on

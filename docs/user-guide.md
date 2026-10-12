@@ -178,7 +178,8 @@ lists the packages installed and `pnputil /delete-driver oemN.inf` removes
 one.  The package is kept in the driver store as on Windows, but NovaOS
 runs its devices with its own drivers and does not load Windows
 kernel-mode drivers, so the driver itself does not start: `pnputil`
-reports that no device took it.
+reports that no device took it.  The firmware NovaOS's own drivers load
+into devices comes with release images ([drivers.md](drivers.md)).
 
 ## Your files
 

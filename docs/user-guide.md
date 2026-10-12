@@ -184,6 +184,15 @@ start NAME`), when it is signed as Windows 11 requires: by Microsoft, or with a 
 while test signing is on ([drivers.md](drivers.md#driver-signing)).  The firmware NovaOS's own drivers load
 into devices comes with release images ([drivers.md](drivers.md)).
 
+**Finding a driver online.**  For a device that has no driver (problem
+code 28 in `pnputil /enum-devices`), run
+`pnputil /scan-devices /search-online` in the Terminal: NovaOS searches
+the Microsoft Update Catalog by the device's hardware IDs, as Windows
+Update does, downloads the package that matches, checks it against the
+Catalog's SHA-256 and adds it to the driver store
+([drivers.md](drivers.md#downloading-drivers-by-hardware-id)).  Nothing is
+downloaded unless you ask.
+
 ## Your files
 
 Drive C: holds your files and the programs you install.  On an installed

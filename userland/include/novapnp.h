@@ -18,6 +18,7 @@
 #define NOVA_PNP_PRESENT    0x01
 #define NOVA_PNP_STARTED    0x02
 #define NOVA_PNP_REMOVABLE  0x04
+#define NOVA_PNP_WINDOWS    0x08    /* the driver running it is a Windows driver */
 
 typedef struct {
     DWORD id, parent, flags, problem, seq, reserved;

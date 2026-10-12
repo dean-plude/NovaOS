@@ -120,22 +120,6 @@ static BOOL multi_has(const char *m, const WCHAR *id)
     return FALSE;
 }
 
-/* Whether node @n's driver is the Windows service its Enum key names (so
- * a new package may replace it), rather than one of NovaOS's own */
-static BOOL windows_driven(const NovaPnpNode *n)
-{
-    char k[300], v[64];
-    lstrcpyA(k, "SYSTEM\\CurrentControlSet\\Enum\\");
-    lstrcatA(k, n->instance);
-    HKEY h;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h)) return FALSE;
-    DWORD type, len = sizeof(v) - 1;
-    LONG e = RegQueryValueExA(h, "Service", NULL, &type, (BYTE *)v, &len);
-    RegCloseKey(h);
-    v[e ? 0 : len] = 0;
-    return !e && type == REG_SZ && !lstrcmpiA(v, n->service);
-}
-
 NEWDEV BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid, LPCWSTR inf, DWORD flags, PBOOL reboot)
 {
     (void)parent; (void)flags;
@@ -152,7 +136,7 @@ NEWDEV BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid,
     for (DWORD id = 1, count = nova_pnp_count(); id <= count; id++) {
         if (!nova_pnp_node(id, &n) || !(n.flags & NOVA_PNP_PRESENT) || !nova_pnp_prefix(n.instance, "PCI\\")) continue;
         if (!multi_has(n.hwids, hwid) && !multi_has(n.compat, hwid)) continue;
-        BOOL windows = n.service[0] && windows_driven(&n);
+        BOOL windows = (n.flags & NOVA_PNP_WINDOWS) != 0;
         if ((n.flags & NOVA_PNP_STARTED) && !windows) continue;       /* (a NovaOS driver runs it) */
         if ((n.flags & NOVA_PNP_STARTED) && nova_pnp_stop(id) < 0) { err = ERROR_DEVICE_IN_USE; continue; }
         WCHAR inst[128];

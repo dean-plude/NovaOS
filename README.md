@@ -276,7 +276,10 @@ The full list, with the reasons, is in
   has.
 - [docs/drivers.md](docs/drivers.md): the default driver and firmware
   set (firmware downloaded from linux-firmware), and why Windows `.sys`
-  drivers do not load.
+  drivers do not load yet.
+- [docs/design/windows-drivers.md](docs/design/windows-drivers.md): the
+  plan to run Windows driver packages the way Windows 11 does (NT
+  kernel-mode driver interface, KMDF/UMDF, download by hardware ID).
 - [docs/hyperv.md](docs/hyperv.md): running NovaOS in a Hyper-V VM (the
   keyboard and mouse over VMBus) and what does not work there yet.
 - [docs/ethernet.md](docs/ethernet.md): the Intel Ethernet driver, the

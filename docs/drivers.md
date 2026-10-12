@@ -16,7 +16,7 @@ of how its kernel is built:
   unchanged.  NovaOS downloads its default firmware set from the same
   place (below).
 
-## Why Windows driver packages are not the default set
+## Windows driver packages
 
 A Windows driver package (an `.inf` with `.sys` and `.cat` files)
 installs on NovaOS as on Windows ([user-guide.md](user-guide.md#installing-programs)):
@@ -24,12 +24,16 @@ installs on NovaOS as on Windows ([user-guide.md](user-guide.md#installing-progr
 the `.sys` is a Windows kernel-mode driver: it calls `ntoskrnl.exe`'s
 kernel API (the I/O manager, IRPs, WDF through `Wdf01000.sys`, NDIS for
 network cards, the WDDM `dxgkrnl.sys` interface for GPUs), which NovaOS's
-kernel does not offer.  NovaOS runs Windows programs, not Windows kernel
-code, so it never starts a downloaded `.sys`, and downloading Windows
-drivers (Intel's graphics driver, the Fedora project's VirtIO drivers,
-Intel's Wi-Fi driver) would give nothing that runs.  Hosting them would
-mean a Windows kernel-driver layer inside NovaOS's kernel, as ReactOS has;
-that is a design decision of its own, not part of the default set.
+kernel does not offer yet, so today a staged package is not started.
+
+That is changing: NovaOS will run Windows drivers the way Windows 11 does,
+through the NT kernel-mode driver interface, with KMDF and UMDF from
+Microsoft's own MIT-licensed source, packages matched by hardware ID from
+the driver store and downloaded by hardware ID when none is there.  The
+design and its steps (roadmap Phase 30) are in
+[design/windows-drivers.md](design/windows-drivers.md).  Until those
+steps land, the default set is the built-in drivers and the firmware
+below.
 
 ## The default firmware set
 

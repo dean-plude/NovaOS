@@ -46,3 +46,9 @@ The short list is in the [README](../../README.md#key-design-decisions).
   shows where the CPUs spend their time).
 - **Kernel-helper syscalls (0x01F0–0x01FF)** are private to NovaOS's own
   DLLs and invisible to Windows programs.
+- **Windows drivers the Windows 11 way (planned)**: NovaOS's own drivers are
+  built into the kernel; Windows driver packages will run unchanged on an
+  NT kernel-mode driver interface (a kernel PE loader, `ntoskrnl.exe` and
+  `hal.dll` exports in the Microsoft x64 ABI, KMDF and UMDF built from
+  Microsoft's MIT source), matched by hardware ID from the driver store and
+  downloaded by hardware ID.  See [windows-drivers.md](windows-drivers.md).

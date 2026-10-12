@@ -18,15 +18,33 @@ class CacheTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.now = 100000
         self.calls = 0
+        self.pauses = []
         self.payload = b'installer one'
         self.cache = DownloadCache(self.tmp.name, clock=lambda: self.now,
-                                   journal=Path(self.tmp.name) / 'downloads.json')
+                                   journal=Path(self.tmp.name) / 'downloads.json',
+                                   sleep=self.pauses.append)
         def download(args, **kwargs):
             self.calls += 1
             Path(args[args.index('-o') + 1]).write_bytes(self.payload)
             return SimpleNamespace(stdout='https://cdn.example/154.0.4258.53/setup.exe')
         self.mock = patch('download_cache.subprocess.run', side_effect=download).start()
         self.addCleanup(patch.stopall)
+
+    def test_download_retries_http_errors_with_growing_pauses(self):
+        real = self.mock.side_effect
+        failures = [subprocess.CalledProcessError(22, 'curl')] * 3
+        def flaky(args, **kwargs):
+            if failures:
+                raise failures.pop()
+            return real(args, **kwargs)
+        self.mock.side_effect = flaky
+        self.cache.fetch('https://github.com/x/releases/download/1.0.0/a.exe')
+        self.assertEqual(self.pauses, [10, 30, 60])
+        self.assertIn('--retry-all-errors', self.mock.call_args.args[0])
+        self.mock.side_effect = subprocess.CalledProcessError(22, 'curl')
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.cache.fetch('https://github.com/x/releases/download/1.0.0/b.exe')
+        self.assertEqual(self.pauses[3:], [10, 30, 60, 120])
 
     def test_url_identity_includes_host_path_and_query(self):
         urls = ['https://a.example/setup.exe', 'https://b.example/setup.exe',

@@ -32,12 +32,15 @@ def atomic_json(path, value):
             os.unlink(tmp)
 
 
+DOWNLOAD_PAUSES = (10, 30, 60, 120)   # seconds between attempts at one download
+
+
 class DownloadCache:
-    def __init__(self, root, mutable_max_age=86400, lock=None, journal=None, clock=time.time):
+    def __init__(self, root, mutable_max_age=86400, lock=None, journal=None, clock=time.time, sleep=time.sleep):
         if mutable_max_age < 0:
             raise ValueError('mutable max age must be nonnegative')
         self.root = Path(root)
-        self.max_age, self.journal, self.clock = mutable_max_age, journal, clock
+        self.max_age, self.journal, self.clock, self.sleep = mutable_max_age, journal, clock, sleep
         self.records = {}
         self.lock = None
         if lock:
@@ -54,6 +57,20 @@ class DownloadCache:
                                      version_evidence=evidence)
             if self.journal:
                 atomic_json(self.journal, dict(schema=1, downloads=list(self.records.values())))
+
+    def _download(self, tmp, url):
+        """curl retries only transient answers; a hosted runner also gets 403/404 from
+        github.com release downloads for a moment (the 7-Zip and MinGit shard failures
+        of 2026-10-12), so retry every failure with a growing pause before giving up."""
+        for attempt, pause in enumerate(DOWNLOAD_PAUSES + (None,)):
+            try:
+                return subprocess.run(['curl', '-sSLf', '--retry', '4', '--retry-all-errors', '--connect-timeout', '30',
+                                       '--max-time', '600', '-o', tmp, '-w', '%{url_effective}', url],
+                                      check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError:
+                if pause is None:
+                    raise
+                self.sleep(pause)
 
     def fetch(self, url, mutable=False, version=None):
         if not url:
@@ -74,9 +91,7 @@ class DownloadCache:
             fd, tmp = tempfile.mkstemp(dir=self.root, prefix='.download-')
             os.close(fd)
             try:
-                response = subprocess.run(['curl', '-sSLf', '--retry', '4', '--connect-timeout', '30',
-                                           '--max-time', '600', '-o', tmp, '-w', '%{url_effective}', url],
-                                          check=True, capture_output=True, text=True)
+                response = self._download(tmp, url)
                 if not os.path.getsize(tmp):
                     raise ValueError(f'empty download: {url}')
                 digest = sha256(tmp)

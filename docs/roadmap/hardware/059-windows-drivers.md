@@ -18,7 +18,11 @@
   signing policy is in: a kernel driver loads only with a Microsoft driver
   signature (embedded or in its installed catalog), a test-signed one only
   with test signing on, an unsigned or tampered one never, and a package
-  whose files do not match its catalog is not staged.  Step 30.4's
+  whose files do not match its catalog is not staged.
+  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
+  driver on a PCI device with no NovaOS driver, and the PnP manager starts
+  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
+  the tests); line-based interrupts only, MSI comes later.  Step 30.4's
   framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
   and NovaOS's `WdfLdr.sys` load KMDF drivers
   (a test driver's control device and queue); the KMDF version of the

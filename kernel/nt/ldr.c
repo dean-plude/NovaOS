@@ -158,6 +158,8 @@ static bool loading_push(NtDriver *drv)
 
 static void loading_pop(void) { g_loading[--g_nloading] = NULL; }
 
+NtDriver *NtDrvFind(const char *service) { return find(service); }
+
 static NT_WCHAR *wide(const char *s, NT_UNICODE_STRING *u)
 {
     size_t n = strlen(s);

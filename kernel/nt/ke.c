@@ -773,32 +773,6 @@ NT_API UINT8 nt_KdRefreshDebuggerNotPresent(void) { return nt_KdDebuggerNotPrese
  * which a driver's bug-check callback reads.  Set by KeBugCheckEx. */
 UINT64 nt_KiBugCheckData[5];
 
-/* KINTERRUPT is the I/O manager's (step 30.3, real interrupts).  Until
- * then KeSynchronizeExecution runs the routine at DISPATCH_LEVEL (where a
- * driver's ISR and its synchronized code cannot be preempted on this CPU),
- * which is how a driver with no live interrupt object expects it to behave. */
-typedef UINT8 (NT_API *NT_SYNC_ROUTINE)(void *ctx);
-
-NT_API UINT8 nt_KeSynchronizeExecution(void *interrupt, NT_SYNC_ROUTINE routine, void *ctx)
-{
-    (void)interrupt;
-    UINT8 old = KeIrql();
-    if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
-    UINT8 r = routine(ctx);
-    KeIrqlSet(old);
-    return r;
-}
-
-NT_API UINT8 nt_KeAcquireInterruptSpinLock(void *interrupt)
-{
-    (void)interrupt;
-    UINT8 old = KeIrql();
-    if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
-    return old;
-}
-
-NT_API void nt_KeReleaseInterruptSpinLock(void *interrupt, UINT8 old) { (void)interrupt; KeIrqlSet(old); }
-
 /* Called from NtDrvInit once the CPUs are up */
 void NtKeInit(void)
 {

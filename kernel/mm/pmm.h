@@ -55,6 +55,13 @@ uintptr_t pmm_alloc_page(void);
 uintptr_t pmm_alloc_pages(size_t count);
 
 /*
+ * The same, every page below physical address @limit (0: anywhere): for a
+ * device that reaches only the low part of memory by DMA.  0 when there
+ * is no such run.
+ */
+uintptr_t pmm_alloc_pages_below(size_t count, uintptr_t limit);
+
+/*
  * Take the `count` pages starting at @pa, when every one of them is free.
  * False (and nothing taken) otherwise.
  */

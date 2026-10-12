@@ -280,6 +280,7 @@ void UmInit(void)
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
+    NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */
     AudioLoadSettings();                            /* the sound devices' saved volumes and default */
     um_registry_pending_renames();                  /* before any program runs */

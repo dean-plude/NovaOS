@@ -366,7 +366,14 @@ downloaded by the test as NovaOS's other tests download apps.
    matching devices with no built-in driver.  Done when: a NovaOS WDM test
    driver installed from its `.inf` drives QEMU's `edu` PCI device
    (MMIO, an MSI interrupt and a DMA transfer) and shows as started in
-   Device Manager.
+   Device Manager.  As built: the PDOs are PCI devices only (the bus
+   NovaOS's own drivers leave free), interrupts are line-based (a
+   message-based connect falls back to the line, as Windows does when MSI
+   is off; MSI for Windows drivers comes with 30.9's NDIS), DMA goes
+   through bounce buffers when memory is beyond the device's address
+   width (the page allocator keeps the low 16 MiB for them), and removal is tested through `pnputil /disable-device` (query-
+   remove, remove), since NovaOS has no PCI hot-unplug for QEMU's
+   `device_del`: surprise removal is handled but untested.
 4. **30.4 KMDF.** `Wdf01000.sys` and `WdfLdr.sys` built from Microsoft's
    MIT WDF source and loaded on the export layer.  Done when: a KMDF
    version of the `edu` test driver passes the same test.  The framework, the

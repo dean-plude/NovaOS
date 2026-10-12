@@ -120,6 +120,28 @@ static UINT64 sys_unload_driver(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     return st ? st : (UINT32)NtDrvUnload(name);
 }
 
+/* CTL_PNP's operations on Windows drivers (um_gui.c's pnp_ctl hands them
+ * here), what cfgmgr32's CM_Setup_DevNode, CM_Disable_DevNode and
+ * CM_Get_Device_Interface_List do on Windows:
+ *   3  the interfaces device node @id's driver turned on: GUIDs to @ptr
+ *      (8 at most), how many
+ *   4  start the driver installed on node @id: 0, or its problem code
+ *   5  remove its driver (query-remove, remove): the NTSTATUS
+ * 4 and 5 need SeLoadDriverPrivilege (an administrator), as on Windows. */
+UINT64 UmPnpDriverCtl(UINT32 op, UINT32 id, UINT64 ptr)
+{
+    if (op == 3) {
+        NT_GUID g[8];
+        int n = NtPnpInterfaces(id, g, 8);
+        if (n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, g, sizeof(NT_GUID) * (size_t)n))) return 0;
+        return (UINT64)n;
+    }
+    if (!um_privilege_held(SE_LOAD_DRIVER_PRIVILEGE)) return op == 4 ? (UINT64)-1 : STATUS_PRIVILEGE_NOT_HELD;
+    if (op == 4) return NtPnpStart(id);
+    if (op == 5) return (UINT32)NtPnpStop(id);
+    return 0;
+}
+
 void um_driver_syscalls_init(void)
 {
     NtDrvInit();

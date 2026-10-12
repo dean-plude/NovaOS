@@ -45,8 +45,23 @@ freed`).  Only part of `ntoskrnl.exe` is there yet (the list is
 `kernel/nt/exports.h`); a driver that imports anything else does not load,
 and the log names what it missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not
 implemented`).  `tools/sys_imports.py x.sys` lists, before trying, the
-imports of a driver that NovaOS does not have yet.  Plug and Play
-drivers for real devices and the rest follow in later steps; until
+imports of a driver that NovaOS does not have yet.
+
+Since step 30.3 a Windows **Plug and Play driver** runs a PCI device that
+has no NovaOS driver.  `pnputil /add-driver x.inf /install` (or a setup
+program's `UpdateDriverForPlugAndPlayDevices`) installs the package on
+each such device one of its models names, and the driver starts at once
+and at every boot after: NovaOS calls its `AddDevice` and gives it the
+device's memory, I/O ports and interrupt with `IRP_MN_START_DEVICE`, as
+Windows does, and the driver can map the memory (`MmMapIoSpace`), connect
+the interrupt (`IoConnectInterruptEx`; NovaOS gives Windows drivers no
+MSI yet, so it is the line-based interrupt), use DMA (`IoGetDmaAdapter`)
+and register a device interface that programs open.  `pnputil
+/enum-devices /deviceid ID` shows the device started with its driver,
+`pnputil /disable-device /deviceid ID` takes the driver away (it may
+refuse while a program has the device open) and keeps the device off
+across restarts, and `/enable-device` starts it again.  A device NovaOS
+has its own driver for keeps it.  The rest follow in later steps; until
 then the default set is the built-in drivers and the firmware below.
 
 KMDF drivers run too (step 30.4): NovaOS ships Microsoft's framework,
@@ -211,8 +226,9 @@ For each device with problem code 28 (no driver), or the one named,
 A device whose package is already in the driver store is not searched
 again.  `pnputil /enum-drivers` shows a downloaded package's source, and
 `pnputil /enum-devices /drivers` lists it as matching the device.  The
-package is staged, not started: starting Windows drivers on devices comes
-with roadmap step 30.3, so for now the device keeps problem code 28.
+package is staged, not started, so the device keeps problem code 28 until
+`pnputil /add-driver x.inf /install` installs it on the device (roadmap
+step 30.3, above).
 
 Nothing Microsoft or a vendor publishes is put in the NovaOS image: the
 package comes from its publisher to the user's own machine, as on

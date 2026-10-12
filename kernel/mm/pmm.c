@@ -46,6 +46,7 @@ static struct {
     size_t    bitmap_words;   /* Number of uint64_t words in bitmap */
     uintptr_t highest_phys;   /* Highest physical address + 1 */
     size_t    hint;           /* No free page in the words below this one */
+    size_t    hint_high;      /* nor in the words from the DMA zone's end to this one */
     KSpinLock lock;
 } pmm;
 
@@ -62,6 +63,7 @@ static void bitmap_clear(size_t page_idx) /* mark free */
 {
     pmm.bitmap[page_idx / 64] &= ~(UINT64_C(1) << (page_idx % 64));
     if (page_idx / 64 < pmm.hint) pmm.hint = page_idx / 64;
+    if (page_idx / 64 < pmm.hint_high) pmm.hint_high = page_idx / 64;
 }
 
 static bool bitmap_test(size_t page_idx)  /* 1 = used */
@@ -238,6 +240,35 @@ static void out_of_memory(size_t count)
             count, (pmm.free_pages * PAGE_SIZE) >> 20, (unsigned long)(n + 1));
 }
 
+/* The first 16 MiB are kept for what must sit low: a device that reaches
+ * only part of memory by DMA (pmm_alloc_pages_below), as Windows and Linux
+ * keep their low memory for it.  Other allocations take them only when
+ * everything above is used. */
+#define DMA_ZONE_WORDS ((16u << 20) / PAGE_SIZE / 64)
+
+/* The lowest free page in bitmap words [@from, @to), taken; 0 if none.
+ * @hint (pmm.hint or pmm.hint_high, the scan's start) moves up past the
+ * full words. */
+static uintptr_t take_page(size_t *hint, size_t from, size_t to)
+{
+    for (size_t w = from; w < to; w++) {
+        if (pmm.bitmap[w] == UINT64_C(0xFFFFFFFFFFFFFFFF))
+            continue;  /* all used in this group */
+        if (*hint < w) *hint = w;
+
+        /* Find the lowest clear bit using compiler builtin */
+        int bit = __builtin_ctzll(~pmm.bitmap[w]);
+        size_t page_idx = w * 64 + (size_t)bit;
+
+        if (page_idx >= pmm.total_pages) break;
+
+        bitmap_set(page_idx);
+        pmm.free_pages--;
+        return (uintptr_t)(page_idx * PAGE_SIZE);
+    }
+    return 0;
+}
+
 uintptr_t pmm_alloc_page(void)
 {
     lock_acquire(&pmm.lock);
@@ -248,28 +279,16 @@ uintptr_t pmm_alloc_page(void)
         return 0;
     }
 
-    /* Walk bitmap words looking for a word with a clear bit (free page) */
-    for (size_t w = pmm.hint; w < pmm.bitmap_words; w++) {
-        if (pmm.bitmap[w] == UINT64_C(0xFFFFFFFFFFFFFFFF))
-            continue;  /* all used in this group */
-        pmm.hint = w;
-
-        /* Find the lowest clear bit using compiler builtin */
-        int bit = __builtin_ctzll(~pmm.bitmap[w]);
-        size_t page_idx = w * 64 + (size_t)bit;
-
-        if (page_idx >= pmm.total_pages) break;
-
-        bitmap_set(page_idx);
-        pmm.free_pages--;
-
-        lock_release(&pmm.lock);
-        return (uintptr_t)(page_idx * PAGE_SIZE);
-    }
-
+    /* Walk bitmap words looking for a word with a clear bit (free page),
+     * above the DMA zone first */
+    size_t zone = DMA_ZONE_WORDS < pmm.bitmap_words ? DMA_ZONE_WORDS : pmm.bitmap_words;
+    if (pmm.hint_high < zone) pmm.hint_high = zone;
+    if (pmm.hint_high < pmm.hint) pmm.hint_high = pmm.hint;
+    uintptr_t pa = take_page(&pmm.hint_high, pmm.hint_high, pmm.bitmap_words);
+    if (!pa && pmm.hint < zone) pa = take_page(&pmm.hint, pmm.hint, zone);
     lock_release(&pmm.lock);
-    out_of_memory(1);
-    return 0;
+    if (!pa) out_of_memory(1);
+    return pa;
 }
 
 /* -----------------------------------------------------------------------
@@ -277,17 +296,28 @@ uintptr_t pmm_alloc_page(void)
  * ----------------------------------------------------------------------- */
 uintptr_t pmm_alloc_pages(size_t count)
 {
-    if (count == 0) return 0;
     if (count == 1) return pmm_alloc_page();
+    return pmm_alloc_pages_below(count, 0);
+}
+
+uintptr_t pmm_alloc_pages_below(size_t count, uintptr_t limit)
+{
+    if (count == 0) return 0;
 
     lock_acquire(&pmm.lock);
+    size_t end = limit && limit / PAGE_SIZE < pmm.total_pages ? limit / PAGE_SIZE : pmm.total_pages;
+    size_t zone = (size_t)DMA_ZONE_WORDS * 64;
 
     /* Linear scan for `count` consecutive free pages, from the lowest free
-     * one, a whole word of used pages at a time */
+     * one (above the DMA zone first unless @limit asks for low memory), a
+     * whole word of used pages at a time */
     size_t run = 0;
     size_t run_start = 0;
+    size_t start = pmm.hint * 64;
+    if (!limit && start < zone && zone < end) start = pmm.hint_high * 64 > zone ? pmm.hint_high * 64 : zone;
 
-    for (size_t i = pmm.hint * 64; i < pmm.total_pages; i++) {
+again:
+    for (size_t i = start; i < end; i++) {
         if (!(i & 63) && pmm.bitmap[i / 64] == UINT64_C(0xFFFFFFFFFFFFFFFF)) {
             run = 0;
             i += 63;
@@ -309,9 +339,15 @@ uintptr_t pmm_alloc_pages(size_t count)
             run = 0;
         }
     }
+    if (start > pmm.hint * 64) {                /* nothing above: the DMA zone after all */
+        end = start < zone ? start : zone;
+        start = pmm.hint * 64;
+        run = 0;
+        goto again;
+    }
 
     lock_release(&pmm.lock);
-    out_of_memory(count);
+    if (!limit) out_of_memory(count);
     return 0;
 }
 

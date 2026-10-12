@@ -28,4 +28,5 @@
   Chromium turns the path on~~ Done (`dcomptest dxvk`; WebView2's GPU
   process composites the page through a swap chain on Venus).  Next:
   presenting without the CPU readback and GDI copy (direct virtio GPU
-  scan-out).
+  scan-out): done for OpenGL's frames (direct presentation), still to do
+  for Venus's Vulkan frames, which WebView2's are.

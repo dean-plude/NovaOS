@@ -9,11 +9,114 @@ clang for x86_64-pc-windows-msvc, linked by lld-link /driver against an
 import library for ntoskrnl.exe and hal.dll.  The import libraries are made
 here from the functions NovaOS's kernel exports to drivers
 (kernel/nt/exports.h), so the WDK is not needed.
+
+Then it is signed as a driver developer signs one for test signing, by a
+test certificate ("NovaOS Test Driver Signer" under "NovaOS Driver Test
+Root", made here from fixed seeds and trusted by nobody), and the signing
+policy's other cases are made from it:
+
+    wdmtest.sys         an embedded test signature: loads only with test signing on
+    wdmunsigned.sys     no signature: never loads
+    wdmtampered.sys     wdmtest.sys with a code byte changed after signing: never loads
+    wdmcat\\            a package signed by its catalog: wdmcat.inf, wdmcat.sys
+                        (unsigned itself), wdmcat.cat (test-signed, listing both)
+    wdmbad\\            the same package with wdmbad.sys changed after the catalog
+                        was made: pnputil refuses to stage it
 """
-import os, re, subprocess, sys
+import os, re, struct, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
+from pki import Cert, Key                                       # noqa: E402
+from sign import sign                                           # noqa: E402
+from catalog import catalog                                     # noqa: E402
+
+LONG = ((2020, 1, 1, 0, 0, 0), (2049, 12, 31, 23, 59, 59))
+
+INF = r'''; {name}.inf - a test-signed kernel driver package (tools/drivertest/mksys.py)
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {{4d36e97d-e325-11ce-bfc1-08002be10318}}
+Provider    = %ProviderName%
+DriverVer   = 10/12/2026,1.0.0.0
+CatalogFile = {name}.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+{name}.sys = 1,,
+
+[Manufacturer]
+%ProviderName% = NovaTest,NTamd64
+
+[NovaTest.NTamd64]
+%DeviceDesc% = Wdm_Install, ROOT\{upper}
+
+[Wdm_Install.NT]
+CopyFiles = Wdm_Files
+
+[Wdm_Files]
+{name}.sys
+
+[Wdm_Install.NT.Services]
+AddService = {upper}, 0x00000002, Wdm_Service
+
+[Wdm_Service]
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1
+ServiceBinary = %13%\{name}.sys
+
+[Strings]
+ProviderName = "NovaOS Test"
+DiskName     = "NovaOS driver test disk"
+DeviceDesc   = "NovaOS catalog-signed test driver"
+'''
+
+
+def restamp(pe, delta):
+    """@pe with its TimeDateStamp moved: a different image (another hash)"""
+    b = bytearray(pe)
+    e = struct.unpack_from('<I', b, 60)[0]
+    struct.pack_into('<I', b, e + 8, (struct.unpack_from('<I', b, e + 8)[0] + delta) & 0xFFFFFFFF)
+    return bytes(b)
+
+
+def write(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'wb') as f:
+        f.write(data)
+
+
+def signed_variants(out):
+    root_key, signer_key = Key('novaos-driver-test-root'), Key('novaos-driver-test-signer')
+    root = Cert('NovaOS Driver Test Root', root_key, 1, LONG, ca=True)
+    signer = Cert('NovaOS Test Driver Signer', signer_key, 2, LONG, root, root_key, usage='codesign')
+    path = os.path.join(out, 'wdmtest.sys')
+    pe = open(path, 'rb').read()
+    good = sign(pe, signer, [root], 'sha256')
+    write(path, good)
+    write(os.path.join(out, 'wdmunsigned.sys'), restamp(pe, 1))
+    t = bytearray(good)
+    e = struct.unpack_from('<I', t, 60)[0]
+    sec = e + 24 + struct.unpack_from('<H', t, e + 20)[0]         # (the first section's raw data)
+    text = struct.unpack_from('<I', t, sec + 20)[0]
+    t[text + 16] ^= 0x01
+    write(os.path.join(out, 'wdmtampered.sys'), bytes(t))
+    for name, changed in (('wdmcat', False), ('wdmbad', True)):
+        inf = INF.format(name=name, upper=name.upper()).replace('\n', '\r\n').encode()
+        sys_ = restamp(pe, 2)
+        cat = catalog([(name + '.inf', inf), (name + '.sys', sys_)], signer, [root])
+        write(os.path.join(out, name, name + '.inf'), inf)
+        write(os.path.join(out, name, name + '.sys'), restamp(sys_, 1) if changed else sys_)
+        write(os.path.join(out, name, name + '.cat'), cat)
 
 
 def run(cmd):
@@ -29,25 +132,33 @@ def main():
     work = os.path.join(out, 'obj')
     os.makedirs(work, exist_ok=True)
     mods = {}
-    for m in re.finditer(r'^\s*NT_EXPORT\(\s*([\w.]+)\s*,\s*(\w+)\s*\)', open(os.path.join(ROOT, 'kernel', 'nt', 'exports.h')).read(), re.M):
-        mods.setdefault(m.group(1), []).append(m.group(2))
+    src = open(os.path.join(ROOT, 'kernel', 'nt', 'exports.h')).read()
+    for m in re.finditer(r'^\s*NT_EXPORT(_DATA)?\(\s*([\w.]+)\s*,\s*(\w+)\s*\)', src, re.M):
+        # data exports are imported by address: the .def marks them DATA
+        mods.setdefault(m.group(2), []).append((m.group(3), bool(m.group(1))))
     libs = []
     for mod, names in sorted(mods.items()):
         stem = os.path.splitext(mod)[0]
         d = os.path.join(work, stem + '.def')
         with open(d, 'w') as f:
-            f.write(f'LIBRARY {mod}\nEXPORTS\n' + ''.join(f'    {n}\n' for n in names))
+            f.write(f'LIBRARY {mod}\nEXPORTS\n' + ''.join(f'    {n}{" DATA" if data else ""}\n' for n, data in names))
         lib = os.path.join(work, stem + '.lib')
         run(['llvm-lib', f'/def:{d}', '/machine:x64', f'/out:{lib}'])
         libs.append(lib)
     obj = os.path.join(work, 'wdmtest.obj')
+    # -fasync-exceptions (MSVC's /EHa for the kernel): without it the
+    # optimizer assumes a memory access never faults and deletes a
+    # __try/__except around one, dropping the .pdata/.xdata and the
+    # __C_specific_handler import the kernel's SEH (kernel/nt/seh.c) walks.
     run(['clang', '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-stack-protector',
-         '-mno-stack-arg-probe', '-fno-builtin', '-Wall', '-c', os.path.join(HERE, 'wdmtest.c'), '-o', obj])
+         '-mno-stack-arg-probe', '-fno-builtin', '-fasync-exceptions', '-Wall', '-c',
+         os.path.join(HERE, 'wdmtest.c'), '-o', obj])
     run(['lld-link', '/driver', '/subsystem:native', '/entry:DriverEntry', '/nodefaultlib', '/machine:x64',
          '/base:0x140000000', obj] + libs + [f'/out:{os.path.join(out, "wdmtest.sys")}'])
     for n in os.listdir(work):
         os.remove(os.path.join(work, n))
     os.rmdir(work)
+    signed_variants(out)
 
 
 if __name__ == '__main__':

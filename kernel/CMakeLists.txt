@@ -215,6 +215,9 @@ set(KERNEL_C_SOURCES
     cm/cm.c
     se/se.c
     io/io.c
+    nt/ci.c
+    nt/ci_roots.c
+    nt/etw.c
     nt/ex.c
     nt/exports.c
     nt/io.c
@@ -222,6 +225,9 @@ set(KERNEL_C_SOURCES
     nt/ldr.c
     nt/mm.c
     nt/ntoskrnl.c
+    nt/ps.c
+    nt/seh.c
+    nt/zw.c
     io/pnp.c
     mm/vma.c
     mm/section.c

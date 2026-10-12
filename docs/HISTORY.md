@@ -11003,6 +11003,32 @@ DXVK's factory.  The GPU-composited path, DirectComposition on the GPU
 (`DCompositionCreateDevice3`, which NovaOS's `dcomp.dll` does not export),
 is the next step.
 
+## The other ArtCraft apps tried on NovaOS
+
+Each of the eleven ArtCraft apps besides PhotoCraft, and the ArtCraft
+Launcher, was installed from the App Store and started once.  None needs
+a function NovaOS lacks (`tools/pe_imports.py`), and they split by the
+graphics they ask wgpu for:
+
+- **VectorCraft, EffectCraft, PdfCraft, WordCraft and the ArtCraft
+  Launcher** draw with OpenGL and open their windows on NovaOS's built-in
+  llvmpipe: welcome pages, WordCraft's blank document, the launcher's list
+  of apps (shown offline without the internet).  The first four join the
+  app corpus (`887-vectorcraft.py`, `888-effectcraft.py`,
+  `889-pdfcraft.py`, `889-wordcraft.py`).
+- **FilmCraft, LightCraft, DesignCraft, SoundCraft, DeckCraft, CADCraft
+  and GridCraft** ask only for Direct3D 12 on Windows (FilmCraft also
+  Vulkan), where every PC has a Direct3D 12 adapter, Microsoft's software
+  one at least.  On NovaOS that adapter comes from "Mesa 3D", "DXVK" and
+  "VKD3D-Proton" in the App Store; without them the apps exit with "No
+  suitable graphics adapter found".  With them they get a Direct3D 12
+  device, then stop: wgpu compiles their shaders with `D3DCompile`, and
+  NovaOS's `d3dcompiler_47` (vkd3d-shader 1.19) cannot yet compile the
+  shader model 5.1 sampler arrays wgpu's HLSL uses.  That compiler feature
+  is the next fix for all seven.
+
+Their ratings are in [compatibility.md](../compatibility.md).
+
 ## The ArtCraft apps in the App Store
 
 The App Store lists the thirteen downloads on
@@ -11114,6 +11140,27 @@ a moment gave up at once.
   bytes that finally arrive.
 - **`tests/tools/test_download_cache.py`** covers the retry pauses and the
   final failure.
+
+## A late present no longer puts a stale frame over DirectComposition's GDI frame
+
+A CI flake in `dcomptest direct`: after a swap chain of another device
+joined the tree, dcomp.dll went back to the GDI way and told the kernel
+(`NtNovaGpuCtl` op 15) to stop showing its last frame from the host.  The
+program's own checks passed (the window's bitmap was yellow) but the
+harness's screenshot showed the quadrants of the last frame from the host,
+for the whole 7 seconds.  Three times in a dozen graphics runs.
+
+- **Cause**: DXVK finishes a present on its queue thread, after `Present`
+  has returned, so a present dcomp.dll made just before stopping could
+  reach the kernel just after it.  `UmGuiGpuPresent` found the window alone
+  again and put that older frame back on the screen; from then on
+  `gui_damage` laid it over every redraw of the desktop, and nothing drew
+  over it.
+- **Fix**: stopping now also refuses direct presentation for the window
+  (`GuiWin.ovl_off`: such a present goes the GDI way, and the next frame
+  drawn over it corrects the window) until the program says otherwise with
+  the new `NtNovaGpuCtl` op 16, which dcomp.dll sends right before it
+  presents a composited frame again.
 
 ## A default set of drivers and firmware
 
@@ -11300,6 +11347,44 @@ ID and three updates for the next, the first-ranked update's cabinet
 fails its SHA-256 and is refused, and the next one is downloaded, checked
 and staged; a second search finds the package already in the store.
 
+## Windows' driver signing policy
+
+Step 30.7 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): the interim
+"test signing or nothing" gate of step 30.1 is replaced by the policy
+Windows 11 enforces, at load and at install, with nothing bypassed.
+
+- **Code integrity at load** (`kernel/nt/ci.c`, with the kernel's Mbed
+  TLS): the image's Authenticode digest is recomputed and must match an
+  embedded signature or a catalog in `CatRoot` that lists it.  Without
+  test signing the signer must chain to a Microsoft product root
+  (`kernel/nt/ci_roots.c`, the public Root Certificate Authority 2010 and
+  2001 certificates, written by `tools/gen_ci_roots.py`) through a
+  certificate for drivers (WHQL, attestation, Windows components); with
+  it any intact signature loads; unsigned or changed images never do.
+  Refusals are Windows' 577 (`STATUS_INVALID_IMAGE_HASH`) with the reason
+  in the kernel log.  Checked against Red Hat's WHQL-signed `vioser.sys`
+  and its catalog from the Microsoft Update Catalog: both signatures are
+  accepted as Microsoft's, and the package's Red Hat-signed test program
+  is not.
+- **Catalogs at install**: wintrust verifies catalogs
+  (`WinVerifyTrust` with `WTD_CHOICE_CATALOG`; the driver action does not
+  expire certificates) and installs them in `CatRoot`
+  (`CryptCATAdminAddCatalog`, `CryptCATAdminRemoveCatalog`).  setupapi
+  checks every staged file against its package's catalog: a file the
+  catalog does not list refuses the package with
+  `ERROR_FILE_HASH_NOT_IN_CATALOG`; an intact catalog becomes `oemN.cat`
+  and the package's `SignerName` (`pnputil /enum-drivers` shows it); a
+  package without a trusted signature is staged as unsigned.  Packages
+  downloaded from the Update Catalog (step 30.6) pass the same check.
+- **Test-signed test drivers**: `tools/drivertest/mksys.py` signs
+  `wdmtest.sys` with a test certificate and makes an unsigned, a tampered
+  and two catalog-signed packages (`tools/authenticode/catalog.py` writes
+  catalogs); the devices suite's "wdm" boot checks each case before and
+  after test signing is turned on.
+- Still to come: the desktop's "Test Mode" mark, and problem code 52 on a
+  device once Plug and Play installs drivers on devices (step 30.3).
+
 ## Godot's compute pipelines on lavapipe
 
 Every pipeline Squash the Creeps asks for now builds (a leftover of
@@ -11448,6 +11533,54 @@ copies no pixel.
 - Still to do: windows on the other monitors and at scale 2 (the kernel
   refuses both, so they go through the GDI), and the composition swap
   chains (DirectComposition) that WebView2's GPU process presents into.
+
+## The kernel API Windows drivers live on, completed
+
+Step 30.2 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)), second part:
+the rest of what a real Windows driver imports, so a `.sys` file links and
+runs rather than failing to load on a missing export.
+
+- **Kernel-mode SEH** (`kernel/nt/seh.c`): a driver's `__try`/`__except`
+  works in kernel mode.  A fault in ring 0 inside a driver (the page-fault
+  and general-protection handlers call `NtKernelException`) is dispatched
+  by walking the driver's own `.pdata`/`.xdata` through
+  `__C_specific_handler`, running the `__except` filter and unwinding to
+  its handler; `ExRaiseStatus`, `RtlRaiseException`, `ProbeForRead`/`Write`
+  and `RtlUnwindEx` raise and unwind the same way.  A driver built for this
+  needs `clang -fasync-exceptions` (MSVC's `/EHa`), or the optimizer drops
+  the handler.
+- **Work items and system threads** (`kernel/nt/io.c`, `ps.c`):
+  `IoAllocateWorkItem`/`IoQueueWorkItem` run a routine on a kernel worker
+  thread at `PASSIVE_LEVEL`; `PsCreateSystemThread`/`PsTerminateSystemThread`
+  give a driver a real NovaOS kernel thread, its handle an object a driver
+  can wait on, reference by handle (`ObReferenceObjectByHandle`) and let go
+  of (`ObfDereferenceObject`).
+- **`Zw*`** (`kernel/nt/zw.c`): registry (`ZwCreateKey`, `ZwOpenKey`,
+  `ZwSetValueKey`, `ZwQueryValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`),
+  files on the RAM file system (`ZwCreateFile`, `ZwClose`), driver loading
+  for the KMDF loader (`ZwLoadDriver`/`ZwUnloadDriver`), and
+  `ZwQuerySystemInformation`'s module list, which a driver reads to find
+  its own image base.
+- **ERESOURCEs, lookaside lists, SLists, KMUTEXes and
+  `KeWaitForMultipleObjects`** (`kernel/nt/ex.c`, `ke.c`), the fast
+  allocators and locks the KMDF runtime leans on.
+- **`MmMapIoSpaceEx`/`MmUnmapIoSpace`** (`kernel/nt/mm.c`) map a device's
+  registers; the pageable-section and Driver-Verifier calls are honest
+  no-ops (a NovaOS driver is never paged out and verification is a later
+  step), and the string, bitmap and version run-time library and the
+  compiler's own `_vsnprintf`/`_purecall` round it out.
+- **ETW/WMI** (`kernel/nt/etw.c`): `EtwRegister`/`EtwWrite` and the WMI
+  registration calls succeed and record nothing yet.
+- **Import coverage** (`tools/ci/check-driver-imports.py`): a CI check that
+  every symbol the drivers we target first — the VirtIO serial driver and
+  the KMDF runtime and loader (`vioser.sys`, `Wdf01000.sys`, `wdfldr.sys`) —
+  import from `ntoskrnl.exe` and `hal.dll` is an export `kernel/nt/exports.h`
+  provides, against import lists kept beside the wdm self-test.
+
+`wdmtest.sys` now also catches an access violation with `__try`/`__except`,
+runs a work item, starts and joins a system thread and round-trips a
+registry value through `Zw`, all checked in the devices suite's "wdm" boot.
 
 ## The kernel API Windows drivers live on
 

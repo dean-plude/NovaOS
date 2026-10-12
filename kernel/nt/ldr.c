@@ -3,8 +3,11 @@
  *
  * NtLoadDriver names a service key (HKLM\SYSTEM\CurrentControlSet\
  * Services\<name>, Type 1: a kernel driver) whose ImagePath is the
- * driver's file.  The image is a PE32+ file with subsystem native.  It is
- * laid out in memory as Windows lays it out, relocated to its place in the
+ * driver's file.  The image is a PE32+ file with subsystem native, signed
+ * as Windows' kernel-mode signing policy requires (ci.c checks that before
+ * anything else, so an unsigned image is refused with
+ * STATUS_INVALID_IMAGE_HASH and the reason logged).  It is laid out in
+ * memory as Windows lays it out, relocated to its place in the
  * driver window (DRV_BASE: next to the kernel image, in the top-level page
  * table entry every address space shares, so a driver runs in whichever
  * process calls it), its imports bound against the export tables
@@ -21,6 +24,7 @@
  * Loads and unloads run under the big kernel lock.
  */
 #include "nt.h"
+#include "ci.h"
 #include "../ldr/ldr.h"
 #include "../ke/printf.h"
 #include "../lib/string.h"
@@ -45,7 +49,6 @@
 #define ST_PROCEDURE_NOT_FOUND      ((NTSTATUS)0xC000007A)
 #define ST_DRIVER_UNLOAD_FAILED     ((NTSTATUS)0xC0000010)   /* (STATUS_INVALID_DEVICE_REQUEST, as Windows) */
 
-#define ST_INVALID_IMAGE_HASH      ((NTSTATUS)0xC0000428)
 #define CONTROL_KEY "Machine\\SYSTEM\\CurrentControlSet\\Control"
 
 static NtDriver *g_drivers;
@@ -54,26 +57,63 @@ static bool      g_ready;
 static bool      g_test_signing;
 static NtDriver *g_loading;           /* the driver whose DriverEntry runs */
 
-/* The signing policy (step 30.7 checks signatures as Windows does).  Until
- * NovaOS verifies a driver's catalog, no driver is known to be signed, so
- * kernel drivers load only with test signing on, as on Windows an
- * unsigned driver loads only in test mode.  Test signing is NovaOS's
- * stand-in for "bcdedit /set testsigning on": HKLM\SYSTEM\CurrentControlSet\
- * Control\NovaOS TestSigning = 1, read when NovaOS starts (a change takes a
- * restart), and shown to programs in Control's SystemStartOptions as on
- * Windows. */
+/* The signing policy is Windows' (ci.c): a driver loads only with a
+ * Microsoft driver signature, or with any intact signature when test
+ * signing is on.  Test signing is NovaOS's "bcdedit /set testsigning on":
+ * HKLM\SYSTEM\CurrentControlSet\Control\NovaOS TestSigning = 1, read when
+ * NovaOS starts (a change takes a restart), and shown to programs in
+ * Control's SystemStartOptions as on Windows. */
 void NtDrvBootOptions(void)
 {
     UINT32 v = 0;
     g_test_signing = um_registry_get_dword(CONTROL_KEY "\\NovaOS", "TestSigning", &v) && v;
     um_registry_set_sz(CONTROL_KEY, "SystemStartOptions", g_test_signing ? " TESTSIGNING" : "");
-    if (g_test_signing) kprintf("[NT] Test signing on: kernel drivers load without a signature check\n");
+    if (g_test_signing) kprintf("[NT] Test signing on: drivers with a test signature load too (unsigned ones still do not)\n");
+}
+
+/* ci.c's catalogs: the .cat files setupapi installed in CatRoot, each
+ * pinned while ci.c reads it */
+static RamNode *g_cat;
+
+static bool is_cat(const char *n)
+{
+    size_t k = strlen(n);
+    return k > 4 && n[k - 4] == '.' && (n[k - 3] | 0x20) == 'c' && (n[k - 2] | 0x20) == 'a' && (n[k - 1] | 0x20) == 't';
+}
+
+bool CiCatalog(int i, const UINT8 **data, UINT32 *size, char *name, int cap)
+{
+    RamNode *f = NULL;
+    FsLock();
+    RamNode *dir = RamfsResolve(NULL, CI_CATROOT);
+    if (dir && dir->dir && RamfsLoad(dir))
+        for (RamNode *c = dir->child; c && !f; c = c->next)
+            if (!c->dir && is_cat(c->name) && i-- == 0) f = c;
+    if (f) RamfsPin(f);
+    FsUnlock();
+    if (!f) return false;
+    g_cat = f;
+    *data = (const UINT8 *)f->data;
+    *size = f->data ? f->size : 0;
+    ksnprintf(name, cap, "%s", f->name);
+    return true;
+}
+
+void CiCatalogDone(int i)
+{
+    (void)i;
+    FsLock();
+    RamfsUnpin(g_cat);
+    FsUnlock();
+    g_cat = NULL;
 }
 
 void NtDrvInit(void)
 {
     g_ready = NT_SUCCESS(paging_prepare(DRV_BASE, DRV_SIZE));
     NtIoInit();
+    NtKeInit();
+    NtIoWorkerInit();
 }
 
 static NtDriver *find(const char *service)
@@ -236,12 +276,10 @@ NTSTATUS NtDrvLoad(const char *service)
     NTSTATUS st = STATUS_INVALID_IMAGE_FORMAT;
     UINT8 *img = NULL;
     NtDriver *drv = NULL;
-    if (!g_test_signing) {
-        kprintf("[NT] %s: not loaded: NovaOS does not check driver signatures yet, so kernel drivers load only "
-                "with test signing on\n", image);
-        st = ST_INVALID_IMAGE_HASH;
-        goto out;
-    }
+    CiResult signer;
+    st = CiValidateImage(image, (const UINT8 *)f->data, f->data ? f->size : 0, g_test_signing, &signer);
+    if (!NT_SUCCESS(st)) goto out;
+    st = STATUS_INVALID_IMAGE_FORMAT;
     const UINT8 *file = (const UINT8 *)f->data;
     UINT32 fsize = f->size;
     const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)file;

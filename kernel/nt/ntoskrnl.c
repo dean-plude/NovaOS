@@ -8,6 +8,7 @@
 #include "nt.h"
 #include "../ke/printf.h"
 #include "../lib/string.h"
+#include "../mm/vmm.h"
 #include "../arch/x86_64/apic.h"
 
 /* -----------------------------------------------------------------------
@@ -181,4 +182,237 @@ NT_API UINT64 nt_wcslen(const NT_WCHAR *s)
 NT_API void nt_KeStallExecutionProcessor(UINT32 us)
 {
     udelay(us);
+}
+
+/* -----------------------------------------------------------------------
+ * ANSI and Unicode strings (drivers convert between the two)
+ * ----------------------------------------------------------------------- */
+typedef struct _NT_ANSI_STRING {
+    unsigned short Length;
+    unsigned short MaximumLength;
+    char          *Buffer;
+} NT_ANSI_STRING;
+
+NT_API void nt_RtlInitAnsiString(NT_ANSI_STRING *a, const char *s)
+{
+    UINT32 n = 0;
+    if (s) while (s[n]) n++;
+    if (n > 0xFFFE) n = 0xFFFE;
+    a->Buffer = (char *)s;
+    a->Length = (unsigned short)n;
+    a->MaximumLength = s ? (unsigned short)(n + 1) : 0;
+}
+
+NT_API NTSTATUS nt_RtlAnsiStringToUnicodeString(NT_UNICODE_STRING *u, const NT_ANSI_STRING *a, UINT8 alloc)
+{
+    unsigned short need = (unsigned short)(a->Length * 2);
+    if (alloc) {
+        u->Buffer = kmalloc((UINT32)need + 2);
+        if (!u->Buffer) return STATUS_NO_MEMORY;
+        u->MaximumLength = (unsigned short)(need + 2);
+    } else if (need + 2 > u->MaximumLength) {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+    for (int i = 0; i < a->Length; i++) u->Buffer[i] = (unsigned char)a->Buffer[i];
+    u->Buffer[a->Length] = 0;
+    u->Length = need;
+    return STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_RtlUnicodeStringToAnsiString(NT_ANSI_STRING *a, const NT_UNICODE_STRING *u, UINT8 alloc)
+{
+    unsigned short chars = u->Length / 2;
+    if (alloc) {
+        a->Buffer = kmalloc((UINT32)chars + 1);
+        if (!a->Buffer) return STATUS_NO_MEMORY;
+        a->MaximumLength = (unsigned short)(chars + 1);
+    } else if (chars + 1 > a->MaximumLength) {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+    for (int i = 0; i < chars; i++) a->Buffer[i] = u->Buffer[i] < 0x80 ? (char)u->Buffer[i] : '?';
+    a->Buffer[chars] = 0;
+    a->Length = chars;
+    return STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_RtlAnsiCharToUnicodeChar(UINT8 **src)
+{
+    UINT8 c = **src;
+    (*src)++;
+    return c;                                   /* returned in RAX as a WCHAR */
+}
+
+NT_API void nt_RtlFreeUnicodeString(NT_UNICODE_STRING *u)
+{
+    if (u && u->Buffer) kfree(u->Buffer);
+    if (u) { u->Buffer = NULL; u->Length = u->MaximumLength = 0; }
+}
+
+NT_API void nt_RtlFreeAnsiString(NT_ANSI_STRING *a)
+{
+    if (a && a->Buffer) kfree(a->Buffer);
+    if (a) { a->Buffer = NULL; a->Length = a->MaximumLength = 0; }
+}
+
+NT_API NTSTATUS nt_RtlAppendUnicodeStringToString(NT_UNICODE_STRING *dst, const NT_UNICODE_STRING *src)
+{
+    if (!src->Length) return STATUS_SUCCESS;
+    if (dst->Length + src->Length > dst->MaximumLength) return STATUS_BUFFER_TOO_SMALL;
+    memmove((UINT8 *)dst->Buffer + dst->Length, src->Buffer, src->Length);
+    dst->Length = (unsigned short)(dst->Length + src->Length);
+    if (dst->Length + 2 <= dst->MaximumLength) dst->Buffer[dst->Length / 2] = 0;
+    return STATUS_SUCCESS;
+}
+
+static int ustr_cmp(const NT_UNICODE_STRING *a, const NT_UNICODE_STRING *b, bool ci)
+{
+    int na = a->Length / 2, nb = b->Length / 2, n = na < nb ? na : nb;
+    for (int i = 0; i < n; i++) {
+        NT_WCHAR ca = a->Buffer[i], cb = b->Buffer[i];
+        if (ci) { if (ca >= 'a' && ca <= 'z') ca -= 32; if (cb >= 'a' && cb <= 'z') cb -= 32; }
+        if (ca != cb) return ca < cb ? -1 : 1;
+    }
+    return na == nb ? 0 : na < nb ? -1 : 1;
+}
+
+NT_API INT32 nt_RtlCompareUnicodeString(const NT_UNICODE_STRING *a, const NT_UNICODE_STRING *b, UINT8 ci)
+{
+    return ustr_cmp(a, b, ci != 0);
+}
+
+NT_API UINT8 nt_RtlEqualUnicodeString(const NT_UNICODE_STRING *a, const NT_UNICODE_STRING *b, UINT8 ci)
+{
+    return a->Length == b->Length && ustr_cmp(a, b, ci != 0) == 0;
+}
+
+NT_API NTSTATUS nt_RtlIntegerToUnicodeString(UINT32 value, UINT32 base, NT_UNICODE_STRING *dst)
+{
+    char tmp[36];
+    int n = 0;
+    if (!base) base = 10;
+    do { int d = value % base; tmp[n++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); value /= base; } while (value);
+    if ((n + 1) * 2 > dst->MaximumLength) return STATUS_BUFFER_OVERFLOW;
+    for (int i = 0; i < n; i++) dst->Buffer[i] = (NT_WCHAR)(unsigned char)tmp[n - 1 - i];
+    dst->Buffer[n] = 0;
+    dst->Length = (unsigned short)(n * 2);
+    return STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_RtlUnicodeToMultiByteN(char *dst, UINT32 dstmax, UINT32 *written, const NT_WCHAR *src, UINT32 srcbytes)
+{
+    UINT32 chars = srcbytes / 2, n = chars < dstmax ? chars : dstmax;
+    for (UINT32 i = 0; i < n; i++) dst[i] = src[i] < 0x80 ? (char)src[i] : '?';
+    if (written) *written = n;
+    return STATUS_SUCCESS;
+}
+
+/* -----------------------------------------------------------------------
+ * Version (KMDF checks the OS version it binds against): report the
+ * Windows build NovaOS presents as, Windows 10 2004 (10.0.19041)
+ * ----------------------------------------------------------------------- */
+NT_API NTSTATUS nt_RtlGetVersion(void *info)
+{
+    UINT32 *v = info;                            /* RTL_OSVERSIONINFOW: size, major, minor, build, platform */
+    if (!v || v[0] < 5 * 4) return STATUS_INVALID_PARAMETER;
+    v[1] = 10;                                   /* dwMajorVersion */
+    v[2] = 0;                                    /* dwMinorVersion */
+    v[3] = 19041;                                /* dwBuildNumber */
+    v[4] = 2;                                    /* VER_PLATFORM_WIN32_NT */
+    return STATUS_SUCCESS;
+}
+
+/* The debugger is not attached, so no frames are captured */
+NT_API UINT16 nt_RtlCaptureStackBackTrace(UINT32 skip, UINT32 count, void **frames, UINT32 *hash)
+{
+    (void)skip; (void)count; (void)frames;
+    if (hash) *hash = 0;
+    return 0;
+}
+
+/* RtlQueryRegistryValues reads a driver's registry values through a table
+ * of query routines and defaults.  The registry-backed driver store it
+ * drives (per-value callbacks and defaults) arrives with the PnP driver
+ * steps; until then it reports that it found nothing to query. */
+NT_API NTSTATUS nt_RtlQueryRegistryValues(UINT32 relative, const NT_WCHAR *path, void *table,
+                                          void *context, void *environment)
+{
+    (void)relative; (void)path; (void)table; (void)context; (void)environment;
+    static bool told;
+    if (!told) { told = true; kprintf("[NT] RtlQueryRegistryValues: driver registry queries are stubbed\n"); }
+    return STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
+/* -----------------------------------------------------------------------
+ * Bitmaps (RTL_BITMAP: ULONG SizeOfBitMap; ULONG *Buffer)
+ * ----------------------------------------------------------------------- */
+typedef struct _NT_RTL_BITMAP { UINT32 Size; UINT32 *Buffer; } NT_RTL_BITMAP;
+
+NT_API void nt_RtlInitializeBitMap(NT_RTL_BITMAP *bm, UINT32 *buf, UINT32 size)
+{
+    bm->Size = size;
+    bm->Buffer = buf;
+}
+
+NT_API void nt_RtlClearBit(NT_RTL_BITMAP *bm, UINT32 i)
+{
+    if (i < bm->Size) bm->Buffer[i >> 5] &= ~(1u << (i & 31));
+}
+
+NT_API void nt_RtlSetBit(NT_RTL_BITMAP *bm, UINT32 i)
+{
+    if (i < bm->Size) bm->Buffer[i >> 5] |= 1u << (i & 31);
+}
+
+NT_API UINT8 nt_RtlTestBit(NT_RTL_BITMAP *bm, UINT32 i)
+{
+    return i < bm->Size && (bm->Buffer[i >> 5] & (1u << (i & 31))) ? 1 : 0;
+}
+
+NT_API UINT32 nt_RtlFindClearBitsAndSet(NT_RTL_BITMAP *bm, UINT32 count, UINT32 hint)
+{
+    if (!count || count > bm->Size) return 0xFFFFFFFFu;
+    for (UINT32 pass = 0; pass < 2; pass++) {
+        UINT32 start = pass ? 0 : (hint < bm->Size ? hint : 0);
+        UINT32 end = pass ? (hint < bm->Size ? hint : bm->Size) : bm->Size;
+        UINT32 run = 0;
+        for (UINT32 i = start; i < end; i++) {
+            if (bm->Buffer[i >> 5] & (1u << (i & 31))) { run = 0; continue; }
+            if (++run == count) {
+                UINT32 begin = i - count + 1;
+                for (UINT32 j = begin; j <= i; j++) bm->Buffer[j >> 5] |= 1u << (j & 31);
+                return begin;
+            }
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+/* -----------------------------------------------------------------------
+ * C run-time the compiler's own output and drivers call
+ * ----------------------------------------------------------------------- */
+NT_API int nt__vsnprintf(char *buf, UINT64 count, const char *fmt, __builtin_ms_va_list ap)
+{
+    if (!count) return 0;
+    format(buf, (int)(count > 0x7FFFFFFF ? 0x7FFFFFFF : count), fmt, ap);
+    return (int)strlen(buf);
+}
+
+NT_API int nt__vsnwprintf(NT_WCHAR *buf, UINT64 count, const NT_WCHAR *fmt, __builtin_ms_va_list ap)
+{
+    char nfmt[512], out[512];
+    int i = 0;
+    for (; fmt[i] && i < (int)sizeof(nfmt) - 1; i++) nfmt[i] = fmt[i] < 0x80 ? (char)fmt[i] : '?';
+    nfmt[i] = 0;
+    format(out, sizeof(out), nfmt, ap);
+    int n = (int)strlen(out), max = count ? (int)(count - 1) : 0;
+    if (n > max) n = max;
+    for (int j = 0; j < n; j++) buf[j] = (unsigned char)out[j];
+    if (count) buf[n] = 0;
+    return n;
+}
+
+/* A call through an uninitialised C++ virtual table: a fatal driver bug */
+NT_API void nt__purecall(void)
+{
+    KPANIC("*** STOP: pure virtual function call in a driver");
 }

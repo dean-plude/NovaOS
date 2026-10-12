@@ -61,6 +61,7 @@ typedef struct _NT_KEVENT {
 /* The dispatcher objects drivers wait on (DISPATCHER_HEADER.Type) */
 #define NT_NotificationEvent         0
 #define NT_SynchronizationEvent      1
+#define NT_MutantObject              2
 #define NT_SemaphoreObject           5
 #define NT_TimerNotificationObject   8
 #define NT_TimerSynchronizationObject 9
@@ -356,6 +357,16 @@ struct _NT_FILE_OBJECT {
 #define NT_STATUS_OBJECT_NAME_COLLISION    ((NT_STATUS)0xC0000035)
 #define NT_STATUS_NOT_SUPPORTED            ((NT_STATUS)0xC00000BB)
 #define NT_STATUS_INSUFFICIENT_RESOURCES   ((NT_STATUS)0xC000009A)
+#define NT_STATUS_UNSUCCESSFUL             ((NT_STATUS)0xC0000001)
+#define NT_STATUS_NOT_IMPLEMENTED          ((NT_STATUS)0xC0000002)
+#define NT_STATUS_INVALID_HANDLE           ((NT_STATUS)0xC0000008)
+#define NT_STATUS_DATATYPE_MISALIGNMENT    ((NT_STATUS)0x80000002)
+#define NT_STATUS_BUFFER_OVERFLOW          ((NT_STATUS)0x80000005)
+#define NT_STATUS_OBJECT_PATH_NOT_FOUND    ((NT_STATUS)0xC000003A)
+#define NT_STATUS_RESOURCE_NOT_OWNED       ((NT_STATUS)0xC0000264)
+#define NT_STATUS_INFO_LENGTH_MISMATCH     ((NT_STATUS)0xC0000004)
+/* KeWaitForMultipleObjects: WAIT_OBJECT_0 + index, or STATUS_TIMEOUT */
+#define NT_STATUS_WAIT_0                   ((NT_STATUS)0x00000000)
 
 /* CTL_CODE and the transfer methods */
 #define NT_CTL_CODE(type, fn, method, access) (((type) << 16) | ((access) << 14) | ((fn) << 2) | (method))
@@ -380,8 +391,86 @@ static inline void NtIrpMarkPending(NT_IRP *irp)
     NtIrpCurrentStack(irp)->Control |= NT_SL_PENDING_RETURNED;
 }
 
+/* -----------------------------------------------------------------------
+ * Step 30.2 part 2: the objects drivers embed by value, in Windows' x64
+ * layout.  A driver puts these in its device extension, so the size must
+ * match Windows' even where NovaOS keeps less state in them: the fields
+ * NovaOS uses are at the front and the rest is reserved to the full size.
+ * ----------------------------------------------------------------------- */
+
+/* KMUTANT / KMUTEX: a recursive mutex.  SignalState 1 free, <= 0 the
+ * negative of the recursion depth held by OwnerThread. */
+typedef struct _NT_KMUTANT {
+    NT_DISPATCHER_HEADER Header;
+    NT_LIST_ENTRY        MutantListEntry;
+    void                *OwnerThread;
+} NT_KMUTEX, NT_KMUTANT;
+
+/* SLIST_HEADER: a sequenced singly linked list head (16-byte aligned).
+ * NovaOS guards the list with a lock rather than a 128-bit compare-and-
+ * swap; Next is the list head, Depth the count. */
+typedef struct __attribute__((aligned(16))) _NT_SLIST_HEADER {
+    void              *Next;
+    unsigned short     Depth;
+    unsigned short     Sequence;
+    unsigned int       Reserved;
+} NT_SLIST_HEADER;
+
+typedef struct _NT_SLIST_ENTRY { struct _NT_SLIST_ENTRY *Next; } NT_SLIST_ENTRY;
+
+/* ERESOURCE: a reader/writer lock.  NovaOS keeps the owner, the recursion
+ * and reader counts and one wait event; the rest is Windows' padding. */
+typedef struct _NT_ERESOURCE {
+    void      *OwnerThread;        /* the exclusive owner, or NULL */
+    int        ExclusiveCount;     /* its recursion */
+    int        SharedCount;        /* readers holding it */
+    NT_KEVENT  Event;              /* waiters wait here */
+    unsigned char Reserved[0x68 - 0x28];
+} NT_ERESOURCE;
+
+/* (N)PAGED_LOOKASIDE_LIST: a free list of fixed-size blocks. */
+typedef struct __attribute__((aligned(16))) _NT_LOOKASIDE_LIST {
+    NT_SLIST_HEADER ListHead;
+    unsigned short  Depth, MaximumDepth;
+    unsigned int    Size;
+    unsigned int    Tag;
+    int             Type;          /* POOL_TYPE */
+    void           *Allocate;      /* a driver's own, or NULL for the pool */
+    void           *Free;
+    unsigned char   Reserved[0x80 - 0x30];
+} NT_LOOKASIDE_LIST, NT_PAGED_LOOKASIDE_LIST, NT_NPAGED_LOOKASIDE_LIST;
+
+/* IO_REMOVE_LOCK: holds off a device's removal while I/O is in flight. */
+typedef struct _NT_IO_REMOVE_LOCK {
+    unsigned char  Removed;
+    unsigned char  Reserved[3];
+    int            IoCount;
+    NT_KEVENT      RemoveEvent;
+} NT_IO_REMOVE_LOCK;
+
+/* An I/O work item is opaque to the driver: IoAllocateWorkItem returns a
+ * pointer it keeps and passes back; its body lives in the kernel. */
+typedef struct _NT_IO_WORKITEM NT_IO_WORKITEM;
+typedef void (NT_API *NT_IO_WORKITEM_ROUTINE)(NT_DEVICE_OBJECT *, void *Context);
+typedef void (NT_API *NT_IO_WORKITEM_ROUTINE_EX)(void *IoObject, void *Context, NT_IO_WORKITEM *);
+#define NT_CriticalWorkQueue       0
+#define NT_DelayedWorkQueue        1
+#define NT_HyperCriticalWorkQueue  2
+
+/* KWAIT_BLOCK: the caller of KeWaitForMultipleObjects supplies an array
+ * of these, one per object (its layout is opaque to NovaOS, which keeps
+ * its own wait state). */
+typedef struct _NT_KWAIT_BLOCK { unsigned char Opaque[0x30]; } NT_KWAIT_BLOCK;
+#define NT_WaitAll  0
+#define NT_WaitAny  1
+
 /* The layouts as Windows x64 has them (offsets from the WDK's wdm.h) */
 #define NT_OFFSET(t, m) __builtin_offsetof(t, m)
+_Static_assert(sizeof(NT_KMUTEX) == 0x30 && NT_OFFSET(NT_KMUTANT, OwnerThread) == 0x28, "KMUTANT");
+_Static_assert(sizeof(NT_SLIST_HEADER) == 0x10 && sizeof(NT_ERESOURCE) == 0x68, "SLIST_HEADER, ERESOURCE");
+_Static_assert(sizeof(NT_PAGED_LOOKASIDE_LIST) == 0x80 && NT_OFFSET(NT_LOOKASIDE_LIST, Size) == 0x14, "LOOKASIDE_LIST");
+_Static_assert(sizeof(NT_IO_REMOVE_LOCK) == 0x20 && NT_OFFSET(NT_IO_REMOVE_LOCK, RemoveEvent) == 0x08, "IO_REMOVE_LOCK");
+
 _Static_assert(sizeof(NT_UNICODE_STRING) == 0x10 && sizeof(NT_IO_STATUS_BLOCK) == 0x10, "UNICODE_STRING, IO_STATUS_BLOCK");
 _Static_assert(sizeof(NT_KEVENT) == 0x18 && sizeof(NT_KDEVICE_QUEUE) == 0x28 && sizeof(NT_KDPC) == 0x40, "KEVENT, KDEVICE_QUEUE, KDPC");
 _Static_assert(sizeof(NT_WAIT_CONTEXT_BLOCK) == 0x48, "WAIT_CONTEXT_BLOCK");

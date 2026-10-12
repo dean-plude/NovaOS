@@ -13,10 +13,21 @@
  * missing is refused, and one already published is found again (the same
  * INF bytes) instead of being published twice.
  *
- * NovaOS's devices have NovaOS's own kernel drivers, and NovaOS does not
- * load Windows kernel-mode drivers (.sys files), so a staged package is
- * not started on a device: newdev's UpdateDriverForPlugAndPlayDevices finds
- * no device for its hardware IDs, as on a PC without the device.
+ * Before a package is published its signature is checked as Windows
+ * checks it: every staged file must be listed in the package's catalog
+ * (WinVerifyTrust with the driver action), else it is refused with
+ * ERROR_FILE_HASH_NOT_IN_CATALOG and nothing is left behind.  A package
+ * whose catalog is intact is published with its signer's name
+ * (DriverPackages\<folder> SignerName) and its catalog installed in
+ * CatRoot as oemN.cat, where the kernel's driver signature check finds
+ * it.  A package with no signed catalog, or one whose signer chains to no
+ * trusted root, is staged as unsigned, as Windows stages one once the
+ * user accepts its "can't verify the publisher" warning (NovaOS asks
+ * nothing yet); the kernel never loads its drivers (kernel/nt/ci.c).
+ *
+ * NovaOS's devices have NovaOS's own kernel drivers, so a staged package
+ * is not started on a device: newdev's UpdateDriverForPlugAndPlayDevices
+ * finds no device for its hardware IDs, as on a PC without the device.
  */
 #include "inf.h"
 
@@ -223,6 +234,104 @@ static BOOL stage(const Inf *inf, const WCHAR *dst)
     return TRUE;
 }
 
+/* -----------------------------------------------------------------------
+ * Signatures: the package's catalog, as Windows checks it when staging
+ * ----------------------------------------------------------------------- */
+__declspec(dllimport) LONG WINAPI WinVerifyTrust(HWND w, GUID *action, LPVOID data);
+__declspec(dllimport) PVOID WINAPI WTHelperProvDataFromStateData(HANDLE h);
+__declspec(dllimport) PVOID WINAPI WTHelperGetProvSignerFromChain(PVOID prov, DWORD signer, BOOL counter, DWORD idx);
+__declspec(dllimport) PVOID WINAPI WTHelperGetProvCertFromChain(PVOID sgnr, DWORD idx);
+__declspec(dllimport) BOOL WINAPI CryptCATAdminAcquireContext(HANDLE *h, const GUID *sub, DWORD flags);
+__declspec(dllimport) BOOL WINAPI CryptCATAdminReleaseContext(HANDLE h, DWORD flags);
+__declspec(dllimport) HANDLE WINAPI CryptCATAdminAddCatalog(HANDLE h, PWSTR file, PWSTR name, DWORD flags);
+__declspec(dllimport) BOOL WINAPI CryptCATAdminRemoveCatalog(HANDLE h, LPCWSTR name, DWORD flags);
+__declspec(dllimport) BOOL WINAPI CryptCATAdminReleaseCatalogContext(HANDLE h, HANDLE ctx, DWORD flags);
+__declspec(dllimport) DWORD WINAPI CertGetNameStringW(const void *cert, DWORD type, DWORD flags, void *para, LPWSTR s, DWORD n);
+
+#define ERROR_FILE_HASH_NOT_IN_CATALOG_ 0xE000024B
+#define TRUST_E_NOSIGNATURE_            ((LONG)0x800B0100L)
+#define CRYPT_E_NOT_FOUND_              ((LONG)0x80092004L)
+#define TRUST_E_BAD_DIGEST_             ((LONG)0x80096010L)
+
+static GUID g_driver_action = { 0xF750E6C3, 0x38EE, 0x11D1, { 0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE } };
+
+typedef struct {
+    DWORD cbStruct, dwCatalogVersion;
+    LPCWSTR pcwszCatalogFilePath, pcwszMemberTag, pcwszMemberFilePath;
+    HANDLE hMemberFile;
+    BYTE *pbCalculatedFileHash;
+    DWORD cbCalculatedFileHash;
+    const void *pcCatalogContext;
+    HANDLE hCatAdmin;
+} CatalogInfo;
+typedef struct {
+    DWORD cbStruct;
+    LPVOID pPolicyCallbackData, pSIPClientData;
+    DWORD dwUIChoice, fdwRevocationChecks, dwUnionChoice;
+    void *pInfo;
+    DWORD dwStateAction;
+    HANDLE hWVTStateData;
+    WCHAR *pwszURLReference;
+    DWORD dwProvFlags, dwUIContext;
+    void *pSignatureSettings;
+} TrustData;
+
+typedef enum { SIG_UNSIGNED, SIG_UNTRUSTED, SIG_SIGNED } SigState;
+typedef struct { SigState state; DWORD err; WCHAR cat[MAX_PATH], signer[128], bad[MAX_PATH]; } PkgSig;
+
+/* WinVerifyTrust on one member of the catalog; the signer's name on success */
+static LONG verify_member(const WCHAR *cat, const WCHAR *file, WCHAR *signer)
+{
+    CatalogInfo ci = { sizeof(ci), 0, cat, base_name(file), file, NULL, NULL, 0, NULL, NULL };
+    TrustData td = { sizeof(td), NULL, NULL, 2 /* WTD_UI_NONE */, 0, 2 /* WTD_CHOICE_CATALOG */, &ci,
+                     1 /* WTD_STATEACTION_VERIFY */, NULL, NULL, 0, 0, NULL };
+    LONG r = WinVerifyTrust(NULL, &g_driver_action, &td);
+    if (signer && td.hWVTStateData) {
+        void *sg = WTHelperGetProvSignerFromChain(WTHelperProvDataFromStateData(td.hWVTStateData), 0, FALSE, 0);
+        struct { DWORD cbStruct; const void *pCert; } *pc = sg ? WTHelperGetProvCertFromChain(sg, 0) : NULL;
+        if (pc && pc->pCert) CertGetNameStringW(pc->pCert, 4 /* CERT_NAME_SIMPLE_DISPLAY_TYPE */, 0, NULL, signer, 128);
+    }
+    td.dwStateAction = 2;                               /* WTD_STATEACTION_CLOSE */
+    WinVerifyTrust(NULL, &g_driver_action, &td);
+    return r;
+}
+
+/* Every file in the store folder @dir (but the catalog) against it */
+static void verify_tree(PkgSig *ps, const WCHAR *dir)
+{
+    WCHAR pat[MAX_PATH], p[MAX_PATH];
+    join(pat, dir, L"*");
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!lstrcmpW(fd.cFileName, L".") || !lstrcmpW(fd.cFileName, L"..")) continue;
+        join(p, dir, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { verify_tree(ps, p); continue; }
+        if (!lstrcmpiW(p, ps->cat)) continue;
+        LONG r = verify_member(ps->cat, p, ps->signer[0] ? NULL : ps->signer);
+        if (r == CRYPT_E_NOT_FOUND_ || r == TRUST_E_BAD_DIGEST_) {
+            ps->err = ERROR_FILE_HASH_NOT_IN_CATALOG_;
+            lstrcpynW(ps->bad, p, MAX_PATH);
+        } else if (r == TRUST_E_NOSIGNATURE_) ps->state = SIG_UNSIGNED;
+        else if (r && ps->state == SIG_SIGNED) ps->state = SIG_UNTRUSTED;
+    } while (!ps->err && ps->state != SIG_UNSIGNED && FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+/* The staged package's signature (@store: its store folder) */
+static void verify_package(const Inf *inf, const WCHAR *store, PkgSig *ps)
+{
+    WCHAR cat[MAX_PATH], key[64];
+    ZeroMemory(ps, sizeof(*ps));
+    decorated(key, L"CatalogFile", decor());
+    if (!inf_get(inf, L"Version", key, cat, MAX_PATH) && !inf_get(inf, L"Version", L"CatalogFile", cat, MAX_PATH)) return;
+    join(ps->cat, store, cat);
+    ps->state = SIG_SIGNED;
+    verify_tree(ps, store);
+    if (ps->state == SIG_UNSIGNED) ps->signer[0] = 0;
+}
+
 static void remove_tree(const WCHAR *dir)
 {
     WCHAR pat[MAX_PATH], p[MAX_PATH];
@@ -302,11 +411,19 @@ SETUPAPI BOOL WINAPI SetupCopyOEMInfW(PCWSTR src, PCWSTR media_loc, DWORD media_
     pkg[k] = 0;
     windir(store, L"\\System32\\DriverStore\\FileRepository\\");
     lstrcatW(store, pkg);
+    PkgSig sig;
     if (!stage(inf, store)) {
         DWORD e = GetLastError();
         remove_tree(store);
         SetupCloseInfFile(h);
         SetLastError(e ? e : ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
+    verify_package(inf, store, &sig);
+    if (sig.err) {
+        remove_tree(store);
+        SetupCloseInfFile(h);
+        SetLastError(sig.err);
         return FALSE;
     }
 
@@ -333,6 +450,19 @@ SETUPAPI BOOL WINAPI SetupCopyOEMInfW(PCWSTR src, PCWSTR media_loc, DWORD media_
     if (inf_get(inf, L"Version", L"Class", v, 256)) db_set(sub, L"Class", v);
     if (inf_get(inf, L"Version", L"ClassGuid", v, 256)) db_set(sub, L"ClassGuid", v);
     if (inf_get(inf, L"Version", L"DriverVer", v, 256)) db_set(sub, L"Version", v);
+    db_set(sub, L"SignerName", sig.state != SIG_UNSIGNED && sig.signer[0] ? sig.signer : L"");
+    db_set(sub, L"Signature", sig.state == SIG_SIGNED ? L"Signed" : sig.state == SIG_UNTRUSTED ? L"Untrusted" : L"Unsigned");
+    if (sig.state != SIG_UNSIGNED) {                    /* the catalog, where the kernel looks: oemN.cat */
+        HANDLE ca;
+        WCHAR catname[32];
+        lstrcpyW(catname, name);
+        lstrcpyW(catname + lstrlenW(catname) - 4, L".cat");
+        if (CryptCATAdminAcquireContext(&ca, NULL, 0)) {
+            HANDLE ctx = CryptCATAdminAddCatalog(ca, sig.cat, catname, 0);
+            if (ctx) { CryptCATAdminReleaseCatalogContext(ca, ctx, 0); db_set(sub, L"Catalog", catname); }
+            CryptCATAdminReleaseContext(ca, 0);
+        }
+    }
     if (style & SP_COPY_DELETESOURCE) DeleteFileW(inf->path);
     SetupCloseInfFile(h);
     if (!give_name(path, dest, size, need, component)) return FALSE;
@@ -379,8 +509,13 @@ SETUPAPI BOOL WINAPI SetupUninstallOEMInfW(PCWSTR inf_name, DWORD flags, PVOID r
         windir(store, L"\\System32\\DriverStore\\FileRepository\\");
         lstrcatW(store, pkg);
         remove_tree(store);
-        WCHAR psub[MAX_PATH];
+        WCHAR psub[MAX_PATH], cat[32];
         join(psub, L"DriverPackages", pkg);
+        HANDLE ca;
+        if (db_get(psub, L"Catalog", cat, 32) && cat[0] && CryptCATAdminAcquireContext(&ca, NULL, 0)) {
+            CryptCATAdminRemoveCatalog(ca, cat, 0);
+            CryptCATAdminReleaseContext(ca, 0);
+        }
         db_delete(psub);
     }
     db_delete(sub);

@@ -562,8 +562,8 @@ UINT32 NtPnpStart(UINT32 node)
     }
     strncpy(p->service, service, sizeof(p->service) - 1);
     p->started = true;
-    PnpSetDriver(node, p->service);
     PciClaim(&p->pci, p->service);
+    PnpSetWindowsDriver(node, p->service);              /* (after PciClaim's PnpSetDriver) */
     kprintf("[PNP] %s: started (driver %s)\n", n->instance, service);
 out:
     if (prob && prob != PROB_NO_DRIVER && !((n->flags & PNP_STARTED) && !pdo_by_node(node)))   /* (not a NovaOS driver's) */

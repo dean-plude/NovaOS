@@ -8,7 +8,11 @@
   kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
   driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
   kernel-mode test driver loads with `sc start`, serves a program's
-  `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.  Step 30.7's
+  `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.
+  Step 30.2's first part is in: the IRQL in `CR8`, DPCs, spin locks,
+  events, semaphores, timers, fast mutexes, the pool, MDLs and direct I/O,
+  and IRPs completed later from a DPC; kernel-mode SEH, work items and
+  system threads, `Zw*` registry and file calls and ETW stubs are next.  Step 30.7's
   signing policy is in: a kernel driver loads only with a Microsoft driver
   signature (embedded or in its installed catalog), a test-signed one only
   with test signing on, an unsigned or tampered one never, and a package

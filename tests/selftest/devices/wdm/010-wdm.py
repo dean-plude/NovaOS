@@ -11,12 +11,17 @@
 # TestSigning set and a restart, an unsigned copy and a copy changed after
 # signing are still refused, while sc start loads wdmtest.sys (DriverEntry
 # creates \Device\WdmTest and \DosDevices\WdmTest), wdmtest.exe's ReadFile,
-# WriteFile and DeviceIoControl round-trip through it as IRPs, sc stop
-# unloads it, and the catalog-signed wdmcat.sys then loads in its place.
+# WriteFile and DeviceIoControl round-trip through it as IRPs (step 30.2:
+# direct I/O through MDLs, the driver's checks of the IRQL, DPCs, spin
+# locks, pool, events, semaphores, timers and fast mutexes, and an IRP the
+# driver pends and completes from a timer's DPC), sc stop unloads it,
+# naming the pool block the driver left, and the catalog-signed wdmcat.sys
+# then loads in its place.
 DOC = ('a Windows kernel-mode driver (wdmtest.sys, clang and lld-link /driver) under Windows\' signing policy: '
        'test-signed and catalog-signed copies refused before test signing is on, an unsigned and a tampered copy '
        'refused even with it, a package whose file does not match its catalog refused by `pnputil`; then installed '
-       'with `sc create type= kernel`, started, driven by `wdmtest` and unloaded with `sc stop`')
+       'with `sc create type= kernel`, started, driven by `wdmtest` (buffered, neither and direct I/O, the IRQL, DPCs, '
+       'spin locks, pool, events, timers, a pending IRP completed from a DPC) and unloaded with `sc stop`')
 TESTS = [
     Test('wdm create', r'sc create WdmTest type= kernel binPath= C:\Tests\Wdm\wdmtest.sys',
          [r'\[SC\] CreateService SUCCESS']),
@@ -54,9 +59,12 @@ TESTS = [
           r'\[NT\] wdmtest\.sys: signed by NovaOS Test Driver Signer \(embedded signature\): a test signature',
           r'\[DbgPrint\] wdmtest: DriverEntry \\Registry\\Machine\\System\\CurrentControlSet\\Services\\WdmTest',
           r'\[NT\] wdmtest\.sys loaded at 0x[0-9a-f]+ \(service WdmTest\): DriverEntry returned 0x00000000']),
-    Test('wdm round trip', 'wdmtest', [r'read back: "hello from user mode"', r'wdmtest: \d+ passed, 0 failed']),
+    Test('wdm round trip', 'wdmtest', [r'read back: "hello from user mode"', r'pending: \d+ ms, DPC at IRQL 2',
+                                       r'wdmtest: \d+ passed, 0 failed']),
     Test('wdm stop', 'sc stop WdmTest',
-         [r'STATE\s+: 1  STOPPED', r'\[DbgPrint\] wdmtest: unloaded', r'\[NT\] wdmtest\.sys unloaded \(service WdmTest\)']),
+         [r'STATE\s+: 1  STOPPED', r'\[DbgPrint\] wdmtest: unloaded',
+          r"\[NT\] wdmtest\.sys: 1 pool block \(32 bytes, tags 'Leak'\) never freed",
+          r'\[NT\] wdmtest\.sys unloaded \(service WdmTest\)']),
     Test('wdm device gone', 'wdmtest absent', [r'wdmtest absent: 1 passed, 0 failed']),
     Test('wdm catalog-signed start', 'sc start WdmCat',
          [r'STATE\s+: 4  RUNNING', r'\[NT\] wdmcat\.sys: signed by NovaOS Test Driver Signer \(oem\d+\.cat\): a test signature']),

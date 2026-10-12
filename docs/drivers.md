@@ -34,10 +34,18 @@ What runs today (step 30.1): a kernel driver installed as a service
 `.sys` into kernel memory and calls its `DriverEntry`; the devices and
 `\DosDevices` links it creates open from programs (`\\.\NAME`), whose
 `ReadFile`, `WriteFile` and `DeviceIoControl` reach the driver's dispatch
-routines as Windows IRPs.  Only the small part of `ntoskrnl.exe` such a
-driver needs is there yet (the list is `kernel/nt/exports.h`); a driver
-that imports anything else does not load, and the log names what it
-missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not implemented`).  Plug and Play
+routines as Windows IRPs.  Since step 30.2 the driver can also use the
+kernel API most drivers are written against: the IRQL (kept in `CR8`, as
+on Windows x64), spin locks, DPCs, timers, events, semaphores, fast
+mutexes, the pool (`ExAllocatePool2`, `ExAllocatePoolWithTag`) and MDLs
+with direct I/O, and it may return `STATUS_PENDING` and complete a request
+later, from a DPC.  Pool blocks a driver never frees are named in the log
+when it unloads (`[NT] x.sys: 2 pool blocks (96 bytes, tags 'Abcd') never
+freed`).  Only part of `ntoskrnl.exe` is there yet (the list is
+`kernel/nt/exports.h`); a driver that imports anything else does not load,
+and the log names what it missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not
+implemented`).  `tools/sys_imports.py x.sys` lists, before trying, the
+imports of a driver that NovaOS does not have yet.  Plug and Play
 drivers for real devices, KMDF and the rest follow in later steps; until
 then the default set is the built-in drivers and the firmware below.
 

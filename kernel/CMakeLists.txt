@@ -216,9 +216,12 @@ set(KERNEL_C_SOURCES
     io/io.c
     nt/ci.c
     nt/ci_roots.c
+    nt/ex.c
     nt/exports.c
     nt/io.c
+    nt/ke.c
     nt/ldr.c
+    nt/mm.c
     nt/ntoskrnl.c
     io/pnp.c
     mm/vma.c

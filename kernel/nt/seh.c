@@ -403,7 +403,10 @@ static NTSTATUS status_for_vector(UINT64 vector)
  * it, and the caller bug-checks. */
 bool NtKernelException(InterruptFrame *f, UINT64 cr2)
 {
-    if (!NtDrvByAddress(f->rip)) return false;        /* not in driver code */
+    NtDriver *drv = NtDrvByAddress(f->rip);
+    if (!drv) return false;                           /* not in driver code */
+    kprintf("[NT] %s+0x%llx: exception %u (address 0x%llx), looking for its handler\n", drv->image,
+            (unsigned long long)(f->rip - drv->base), (unsigned)f->vector, (unsigned long long)cr2);
     SehContext ctx;
     /* A fault taken in ring 0 does not change rings, so the CPU pushed only
      * RIP/CS/RFLAGS (and the error code): InterruptFrame.rsp holds the

@@ -762,10 +762,11 @@ bool um_read(UmProcess *p, UINT64 va, void *dst, UINT64 n)        { return copy_
 /* Free every user page and page table, then the PML4 itself. */
 /* -----------------------------------------------------------------------
  * KUSER_SHARED_DATA: one page, mapped read-only at 0x7FFE0000 in every
- * program, with the clocks programs read without a system call (the Go
+ * program (and at 0xFFFFF78000000000 for Windows drivers), with the clocks programs read without a system call (the Go
  * runtime's nanotime, GetTickCount in some CRTs) and the version fields.
  * ----------------------------------------------------------------------- */
 #define UM_KUSD_VA UINT64_C(0x7FFE0000)
+#define UM_KUSD_KERNEL_VA UINT64_C(0xFFFFF78000000000)
 
 static void kusd_time(UINT32 off, UINT64 v)       /* KSYSTEM_TIME: High2, Low, then High1 */
 {
@@ -785,6 +786,13 @@ static void kusd_init(void)
     if (!g_kusd) return;
     memset(g_kusd, 0, PAGE_SIZE);
     g_kusd_pa = (PADDR)((uintptr_t)g_kusd - PHYSMAP_BASE);
+    /* the same page read-only at Windows' kernel address for it
+     * (KI_USER_SHARED_DATA), where kernel-mode drivers read the clocks
+     * (KeQuerySystemTime, KeQueryTickCount and KeQueryInterruptTime are
+     * macros that do); made before any program, so every address space's
+     * copy of the kernel half has it */
+    if (!NT_SUCCESS(paging_map(UM_KUSD_KERNEL_VA, g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC | MAP_GLOBAL)))
+        kprintf("[UM] KUSER_SHARED_DATA could not be mapped for drivers\n");
     *(UINT32 *)(g_kusd + 0x04) = 10u << 24;               /* TickCountMultiplier: 10 ms per tick */
     *(UINT16 *)(g_kusd + 0x2C) = 0x8664;                  /* ImageNumberLow/High: x64 */
     *(UINT16 *)(g_kusd + 0x2E) = 0x8664;

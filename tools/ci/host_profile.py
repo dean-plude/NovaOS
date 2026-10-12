@@ -3,8 +3,8 @@
 
     tools/ci/host_profile.py OUT_DIR &
 
-gltest fps runs each of its turns (a virgl warm-up, virgl direct, virgl
-through the GDI, the GDI again, direct again, then llvmpipe) as a child "gltest.exe
+gltest fps runs each of its turns (virgl direct, virgl through the GDI,
+the GDI again, direct again, then llvmpipe) as a child "gltest.exe
 fpsrun".  This follows the guest's serial log and, for each such child,
 adds up the CPU time QEMU's threads used between the kernel's "Started"
 and "exited" lines, grouped by thread name (QEMU's main thread, where
@@ -15,7 +15,7 @@ frame rates and timings are echoed to stdout as they appear.
 """
 import glob, os, re, sys, time
 
-TURNS = ['virgl warm-up', 'virgl direct', 'virgl GDI', 'virgl GDI', 'virgl direct', 'llvmpipe']
+TURNS = ['virgl direct', 'virgl GDI', 'virgl GDI', 'virgl direct', 'llvmpipe']
 HZ = os.sysconf('SC_CLK_TCK')
 
 

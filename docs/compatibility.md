@@ -1,84 +1,136 @@
 # Program compatibility
 <!-- The regions between "BEGIN generated" and "END generated" markers are built from fragment files by tools/docgen.py: edit those files, not the regions (CONTRIBUTING.md). -->
 
-Which Windows programs run on NovaOS, how well, and how that was
-checked.  Every program here is the official, unmodified release; when one
-fails, NovaOS is what gets fixed.  All of it was checked in QEMU: nothing
-has been run on a real PC yet ([hardware.md](hardware.md)).
+Which Windows programs and games run on NovaOS, how well, and how that
+was checked: NovaOS's answer to Wine's AppDB and ProtonDB.  Every program
+here is the official, unmodified release; when one fails, NovaOS is what
+gets fixed.  All of it was checked in QEMU: nothing has been run on a real
+PC yet ([hardware.md](hardware.md)).
 
-What the columns mean:
+Each program gets one rating, the way ProtonDB rates games:
 
-- **Status**: *Works* (does what the "What works" column says, which
-  covers what most people use it for), *Partly* (starts and does some of
-  it, with a known problem or a large part unchecked), *Untested* (in the
-  App Store, but nobody has checked it yet; expect it to fail).
-- **Checked by**: *nightly corpus* is a script in `tests/appcorpus/` that
-  downloads the program, runs it in QEMU and checks its output or a
-  screenshot (`tools/appcorpus.py`, run by the "Nightly app corpus" workflow);
-  *CI graphics tests* run on every pull request; *core self-tests* run on
-  every pull request too; *by hand* means someone ran it in QEMU and it
-  is not re-checked automatically, so it can break unnoticed.
+- **Platinum**: works out of the box.  What the "What works" column says
+  covers what most people use it for, and nothing known is broken.
+- **Gold**: works as well as Platinum after a step the row names, such as
+  installing "Mesa 3D" and "DXVK" from the App Store first.
+- **Silver**: works, with a minor known problem (the "Problems and gaps"
+  column says which).
+- **Bronze**: starts and does some of its job, but a major part fails or
+  has not been checked, so it is not yet usable for what it is for.
+- **Borked**: does not start, or stops before it is usable.
+- **Untested**: in the App Store, but nobody has checked it yet; expect it
+  to fail.
 
-Each row is a file in `docs/compatibility/`; change a program's row there
-when its status changes (CONTRIBUTING.md).  Roadmap step 20.7 will have
-CI keep the statuses and the App Store's notes in step with the nightly
-results; until then they are kept by hand.
+The other columns:
+
+- **Problems and gaps**: what is known not to work, and what has not been
+  checked yet.  A rating counts only what was checked; an unchecked
+  feature lowers it only when it is the program's main use.
+- **Checked by**: *nightly corpus* is a script in `tests/appcorpus/`
+  (linked) that downloads the program, runs it in QEMU, one program per
+  virtual machine, and checks its output or a screenshot
+  (`tools/appcorpus.py`, run by the "Nightly app corpus" workflow, which
+  posts each night's pass/fail table on issue
+  [#210](https://github.com/dean-plude/os/issues/210)); *CI graphics
+  tests* and *core self-tests* run on every pull request; *by hand* means
+  someone ran it in QEMU and it is not re-checked automatically, so it can
+  break unnoticed.  The version in the "Program" column is the one
+  checked.
+
+Each row is a file in `docs/compatibility/`, one `field: value` line per
+column (`program`, `kind`, `rating`, `works`, `problems`, `checked`; `kind`
+is `program`, `game`, `tool` or `runtime`).  Change a program's file when
+its rating changes; `tools/docgen.py` builds the tables below from them and
+refuses an unknown rating or kind (CONTRIBUTING.md).  Roadmap step 20.7
+will have CI keep the ratings and the App Store's notes in step with the
+nightly results; until then they are kept by hand.
 
 <!-- BEGIN generated:compat-table -->
 
-| Program | Status | What works | Checked by |
-|---|---|---|---|
-| **7-Zip 26.03** (x64) | Works | Installs from its own setup; the file manager, the add and extract dialogs, dragging files out of archives; `7z.exe` packs and tests archives | nightly corpus |
-| **MinGit 2.47** (Git for Windows) | Works | `clone`, `commit`, `log`, `diff`, `merge`, `fetch` and `push` between local repositories, paged by `less` | nightly corpus |
-| **ripgrep 14.1, fd 10.2, jq 1.7** | Works | Searching, walking folders and filtering JSON from the Terminal | nightly corpus |
-| **bat, fzf** | Works | Printing files with highlighting, fuzzy finding | by hand in QEMU |
-| **Python 3.14** (NuGet package) and **NumPy 2.5.3** | Works | Scripts with hashlib, JSON, regular expressions, threads and subprocesses; NumPy gives the same results as on Linux | nightly corpus (Python), by hand (NumPy) |
-| **Node.js 24** (`.msi` and `.zip`) | Works | `node`, `npm`, crypto, files and timers; the `.msi` installs and uninstalls | nightly corpus |
-| **.NET 10** | Works | Console programs and the C# compiler; German and Japanese dates and numbers format as on Windows | nightly corpus |
-| **Eclipse Temurin 21** (`.msi` JRE, `.zip` JDK) | Works | `java`, `javac`, threads, exceptions and files | by hand in QEMU |
-| **ffmpeg 7.1.1** | Works | Converts an H.264 MP4 to WebM | nightly corpus |
-| **Neovim 0.10 and 0.11**, **MSYS2 `sh`** (from MinGit) | Works | Neovim opens, edits and saves a file; interactive `sh` sessions with pipes, subshells and globbing | by hand in QEMU |
-| **Windows Installer (`.msi`) and NSIS setup programs** | Works | 7-Zip, CMake, Node.js, Temurin and KeePassXC packages install, make shortcuts and uninstall, custom actions included; 32-bit packages put their system files in `SysWOW64`; bootstrappers such as WiX Burn query products, patches and source lists; NSIS installers and their uninstallers run | core self-tests (`msitest`, `msiscript`, `msiqtest`), by hand |
-| **Notepad++ 8.8.3** (x64 portable) | Works | Opens, edits and saves files through the Open and Save As dialogs | nightly corpus |
-| **SumatraPDF 3.4.6** (x86 portable) | Works | Opens a PDF and renders its pages; printing finds no printer | nightly corpus |
-| **WinMerge 2.16.50** | Works | Compares two files side by side | nightly corpus |
-| **PuTTY 0.81** | Partly | Raw connections work; SSH is untested | nightly corpus |
-| **KeePassXC 2.7.12** (Qt 5) | Works | Opens and unlocks a KDBX 4 database and shows its entries; Windows Hello unlock reports "not supported" | nightly corpus |
-| **VLC 3.0.21** (Qt 5) | Partly | Plays an H.264 and AAC MP4 with sound in its window; closing VLC can freeze NovaOS (being fixed) | nightly corpus |
-| **Audacity 3.7.4** (wxWidgets) | Partly | Records from the microphone, draws the waveform and saves an `.aup3` project | nightly corpus |
-| **Inkscape 0.91** (GTK 2) | Works | Opens, edits and saves an SVG; Inkscape 1.x is untested | nightly corpus |
-| **Krita 5.3.4** (Qt 5) | Partly | Starts and opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing to install); painting and saving are not checked yet | nightly corpus |
-| **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Partly | Installs from the App Store and opens its editor window on the built-in OpenGL (llvmpipe); its image compositor falls back to the CPU there. The other eleven ArtCraft apps and the ArtCraft Launcher (App Store) share its toolkit and are untested | nightly corpus |
-| **Firefox 157** and **Floorp 12.19** | Works | Installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms; a publicly trusted HTTPS site is untested (the test network is offline) | nightly corpus |
-| **Roblox** (App Store, the current client) | Partly | Its installer runs: it fetches Roblox's settings and packages over HTTPS and installs the client; its Hyperion anti-cheat now passes the system-call, alignment-fixup, 32-bit-code and thread-context checks and then reports "Virtual Machine detected" under QEMU, as Roblox does in any virtual machine (untested on a real PC) ([Roblox and anti-cheat](#roblox-and-anti-cheat)); the WebView2 runtime it sets up for logging in does not install yet ([WebView2](#webview2)) | nightly corpus (the installer) |
-| **Microsoft Edge WebView2 runtime** (the evergreen offline installer) | Partly | Its installer, Microsoft Edge Update, installs itself, accepts Microsoft's signature on the runtime's package and starts the runtime's own setup, which installs the runtime; a WebView2 host starts the runtime's browser process (`msedgewebview2.exe`) and its GPU, network and storage processes and gets a WebView2 environment; the host puts the browser's window inside its own, a page loads, a script runs in it and the page is drawn (Chromium's software compositor, through the Basic Render Driver, a WARP device and DirectComposition), also with DXVK installed and Venus the GPU, where the GPU process keeps ANGLE's Direct3D 11 device on the GPU and composites the page through DirectComposition on it ([WebView2](#webview2)) | nightly corpus (the installer, `wv2host`) |
-| **Mesa 3D** (OpenGL 24.2.4 built in; Vulkan 26.2.0 from the App Store, Runtimes) | Works | OpenGL 4.5 on the CPU (llvmpipe, on drive C: from the start) and Vulkan (lavapipe), 64- and 32-bit | core self-test `gl2test`, CI graphics tests (`gltest`) |
-| **DXVK 2.5.3** (App Store, Runtimes) | Works | Direct3D 8 to 11 on Vulkan, 64- and 32-bit; ANGLE's Direct3D 11 back end (Chromium's GPU process: Steam's browser, WebView2, Qt WebEngine) starts on it | CI graphics tests (`d3dtest`, `d3dtest angle`) |
-| **VKD3D-Proton 3.0.1** (App Store, Runtimes; built by `tools/build_vkd3d_proton.py` with a newer dxil-spirv) | Partly | Direct3D 12 on Vulkan (install "Mesa 3D" and "DXVK" first): devices, root signatures, pipelines, drawing, read-back and fences, 64- and 32-bit programs, both presenting through DXVK's swap chains. Godot 4.7's Forward+ renderer plays Squash the Creeps on it with every pipeline built (nightly corpus), and a compute pipeline from Godot's SDFGI shader builds (`d3d12test compute`) | CI graphics tests (`d3d12test`), nightly corpus |
-| **Venus** (App Store, Runtimes) | Works in QEMU | Vulkan, and Direct3D through DXVK, on the host GPU when QEMU gives NovaOS a 3D virtio-gpu | CI graphics tests |
-| **.NET Desktop Runtime 8** (App Store) | Partly | Console programs run; WinForms and WPF programs are untested | by hand |
-| **Thunderbird** (App Store) | Untested | Uses the same engine as Firefox | — |
-| **GIMP** (App Store) | Untested | | — |
-| **HandBrake** (App Store) | Untested | Needs the .NET Desktop Runtime | — |
-| **OBS Studio** (App Store) | Untested | | — |
-| **LibreOffice** (App Store) | Untested | | — |
-| **qBittorrent** (App Store) | Untested | | — |
-| **WinSCP** (App Store) | Untested | | — |
-| **ShareX** (App Store) | Untested | Needs the .NET Desktop Runtime | — |
-| **Visual C++ Redistributable** (App Store) | Works | NovaOS has its own `vcruntime140` and `msvcp140`, so most programs do not need it, but GOG GALAXY needs its MFC.  Its installer (WiX Burn) installs the Minimum and Additional Runtimes, the 32-bit one into `SysWOW64` and the 64-bit one into `System32` (14.44 x86 and 14.51 x64 checked), replacing NovaOS's own copies there | by hand |
-| **Microsoft Build of OpenJDK 21** (App Store) | Untested | Temurin 21 (above) works | — |
-| **OpenTTD 15.3** (App Store; free on GOG; the corpus installs OpenTTD's own Windows installer, as GOG's copy needs an account to download) | Works | Its setup program installs it silently (run as administrator, as its manifest asks); with the OpenGFX graphics it reaches its main menu, and its animated title game plays, drawn in software (no hardware acceleration yet) | nightly corpus |
-| **GOG GALAXY 2.1** (offline installer, Inno Setup 6) | Partly | Its setup program runs elevated, through its wizard or silently (`/VERYSILENT`), installs the Visual C++ runtimes it carries (x86 and x64), copies GOG GALAXY's files and makes its shortcuts; the client starts (`GalaxyClient.exe`, 64-bit, Qt 6 WebEngine: every import resolves, 89 modules, and the Windows Runtime `UISettings` its Qt plugin reads the theme from), installs and starts its service (`GalaxyClientService.exe`, which trusts the client and answers its requests over 127.0.0.1:9978), opens its window and warns that drive C: is not NTFS; past that warning it finishes initialising, opens its sign-in window and starts its first Chromium renderer (`QtWebEngineProcess.exe`), which needs Mesa's OpenGL (built in; Qt then draws with it; without it Qt ends the client: "Could not get handle for shared context") and DXVK (Chromium's Direct3D 11, through ANGLE); with both, Chromium shares its Direct3D 11 textures and fences with Qt (on lavapipe NovaOS's Vulkan loader provides the sharing), ANGLE compiles its shaders with NovaOS's HLSL compiler, and the sign-in window loads GOG's sign-in page (`login.gog.com`) over HTTPS, its certificate checked against the Windows root stores as Chromium reads them; the page draws, then shows "Oops! Something went wrong" with a Log in button.  The client's own requests through Qt's network (its configuration, metrics and problem reports, over Schannel's TLS 1.2) get their answers; past the drive warning the client keeps running (Qt's `sscanf_s` calls get their buffer sizes honoured) and its sign-in window waits on its Log in button, and pressing it loads GOG's sign-in form again (email, password, Google, Steam, Discord and Xbox); its service runs elevated, as `LocalSystem` services do, and writes the client's Vulkan registry keys. Under QEMU without KVM the sign-in page does not always finish loading in time and shows the "Oops" page again; signing in with an account is not yet checked. Setup warns that drive C: is not NTFS (answer Yes) | by hand |
-| **Steam** (App Store, the current client) | Partly | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes and Steam accepts its UI connection; the "Sign in to Steam" window opens and draws its form (account name, password, Remember me, Sign in) ([Steam](#steam)). Signing in and games are unchecked | nightly corpus (install and update) |
-| **Chocolate Doom 3.1.0** (32-bit, SDL2) with **Freedoom** | Works | Plays in a window on the built-in OpenGL (Mesa's llvmpipe) in the right colours; an Xbox or HID game pad walks, turns and fires | by hand in QEMU; graphics self-test `gltest colors` |
-| **Beneath a Steel Sky** on **ScummVM 2026.3** (App Store; free on GOG, which ships it with ScummVM; the corpus takes the freeware floppy release Revolution and ScummVM publish, as GOG's copy needs an account to download) | Works | ScummVM's setup program (Inno Setup, 32-bit, installing the 64-bit ScummVM) installs it silently or through its wizard; the game starts, Esc skips the intro and a click walks Robert Foster along the first scene's gantry. ScummVM draws with OpenGL 1.1, NovaOS's own when no OpenGL driver is installed; sound not checked yet (the corpus runs without a sound card) | nightly corpus |
-| **Teeworlds 0.7.5** (App Store; free and open source, SDL2) | Partly | Installs from the App Store and starts in full screen on the built-in OpenGL (Mesa's llvmpipe; it needs OpenGL 1.2), plays its menu music through the sound card and goes through its first-start questions to its start menu with the keyboard, and its menus follow the mouse with its default settings (SDL reads the pointer's moves and recentres it with `SetCursorPos`; with `inp_grab 1` it reads Raw Input instead; the corpus opens Settings with a click). Joining a game on its own server times out without KVM, while Mesa compiles its shaders | nightly corpus |
-| **OpenTyrian 2.1.20260913** (App Store; Tyrian 2.1, freeware since 2004, on the free and open-source OpenTyrian engine; SDL2) | Works | Installs from the App Store (the official 64-bit zip, which carries the freeware game data) and draws with Direct3D 9, SDL's first choice on Windows, through DXVK on Mesa 3D's Vulkan (install "Mesa 3D" and "DXVK" first). Its demo plays in a window, Alt+Enter switches it to full screen (the Direct3D 9 device is reset at the display's size), its music plays through the sound card, and the keyboard takes it through its menus into a new game. Full screen is SDL's desktop full screen, so the display mode does not change | nightly corpus |
-| **Blobby Volley 2 1.1.1** (App Store; free and open source, GPL; 32-bit, SDL2) | Works | Installs from the App Store (the official zip) and plays in an 800x600 window. Its Fullscreen option is a real display-mode switch: SDL changes the display to 800x600 (`ChangeDisplaySettingsEx`) and draws with Direct3D 9 in exclusive full screen through DXVK on Mesa 3D's Vulkan (install "Mesa 3D" and "DXVK" first; without them it draws with SDL's software renderer); the display goes back to its own mode when the game ends | nightly corpus |
-| **LBreakout2 2.6.5** (App Store; free and open source, GPL; 64-bit, SDL 1.2) | Works | Installs from the App Store (the official zip) and plays in a 640x480 window, drawn with GDI (SDL 1.2's `windib` driver: a 16-bit DIB section blitted with `BitBlt`). Its full screen ('f' anywhere) switches the display to 640x480 with `ChangeDisplaySettings` and takes the frame off its window (`WS_POPUP`); 'f' again, or ending the game, puts the display and the frame back | nightly corpus |
-| **Cave Story 1.0.0.6** (App Store; freeware, Aeon Genesis' English translation; 32-bit, DirectDraw) | Works | Installs from the App Store (the translation's zip) and plays in full screen: the game asks DirectDraw for 640x480 at 16 bits, and NovaOS's `ddraw.dll` (cnc-ddraw) switches the display to 640x480 and draws its surfaces with Direct3D 9 (with DXVK installed), OpenGL or GDI. Keyboard (Z, X, arrows), a game pad (an Xbox 360 controller through DirectInput 7: B jumps and says OK, the stick walks) and its text (GDI on DirectDraw surfaces) work; the display goes back to its own mode when the game ends. Its DoConfig.exe (32-bit) sets windowed modes and keys | nightly corpus |
-| **SuperTux 0.1.3** (App Store; GPL; 32-bit, SDL 1.2, Inno Setup 4 installer) | Works | Installs from the App Store (its Inno Setup installer, silently or through its wizard) and plays in full screen at 640x480 with the keyboard or a game pad: SDL 1.2 reads the pad through winmm's joystick functions (`joyGetPosEx`), which NovaOS answers from its game controllers (Xbox 360 and other XInput pads, HID pads). No sound was checked (the test machine has no sound card) | nightly corpus |
-| **Squash the Creeps** on **Godot 4.7** (MIT; the official 64-bit Windows build running the game from Godot's demo projects) | Partly | Godot imports the game's assets (`--headless --import`) and plays it with its default Forward+ renderer on Direct3D 12 (`--rendering-driver d3d12`, through VKD3D-Proton on lavapipe from the App Store's Mesa 3D 26.2.0; install "Mesa 3D", "DXVK" and "VKD3D-Proton" first). Every pipeline Godot asks for builds, its SDFGI compute shaders included (VKD3D-Proton 3.0.1 as NovaOS builds it). Its music plays through WASAPI (Godot's `IAudioClient3` path) | nightly corpus |
+| Rating | Programs | Games and game stores | Command-line and developer tools | Runtimes, graphics drivers and installers | All |
+|---|---:|---:|---:|---:|---:|
+| Platinum | 7 | 6 | 9 | 6 | 28 |
+| Gold | 0 | 3 | 0 | 1 | 4 |
+| Silver | 2 | 1 | 0 | 1 | 4 |
+| Bronze | 3 | 2 | 0 | 1 | 6 |
+| Borked | 0 | 1 | 0 | 0 | 1 |
+| Untested | 8 | 0 | 1 | 3 | 12 |
+| **All** | 20 | 13 | 10 | 12 | 55 |
+
+### Programs
+
+| Program | Rating | What works | Problems and gaps | Checked by |
+|---|---|---|---|---|
+| **7-Zip 26.03** (x64) | Platinum | Installs from its own setup; the file manager, the add and extract dialogs, dragging files out of archives; `7z.exe` packs and tests archives | — | nightly corpus ([`040-7zip.py`](../tests/appcorpus/040-7zip.py)) |
+| **Notepad++ 8.8.3** (x64 portable) | Platinum | Opens, edits and saves files through the Open and Save As dialogs | — | nightly corpus ([`900-notepad++.py`](../tests/appcorpus/900-notepad++.py)) |
+| **WinMerge 2.16.50** | Platinum | Compares two files side by side | Folder compare and plugins not checked | nightly corpus ([`860-winmerge.py`](../tests/appcorpus/860-winmerge.py)) |
+| **VLC 3.0.21** (Qt 5) | Platinum | Plays an H.264 and AAC MP4 with sound in its window and closes cleanly | Other formats and streaming not checked | nightly corpus ([`870-vlc.py`](../tests/appcorpus/870-vlc.py)) |
+| **Audacity 3.7.4** (wxWidgets) | Platinum | Records from the microphone without dropouts, draws the waveform and saves an `.aup3` project | Effects and export not checked | nightly corpus ([`880-audacity.py`](../tests/appcorpus/880-audacity.py)) |
+| **Inkscape 0.91** (GTK 2) | Platinum | Opens, edits and saves an SVG | Inkscape 1.x not checked (its downloads are out of the test network's reach) | nightly corpus ([`880-inkscape.py`](../tests/appcorpus/880-inkscape.py)) |
+| **Firefox 157** and **Floorp 12.19** | Platinum | Installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms | A publicly trusted HTTPS site not checked (the test network is offline) | nightly corpus ([`890-firefox.py`](../tests/appcorpus/890-firefox.py)) |
+| **SumatraPDF 3.4.6** (x86 portable) | Silver | Opens a PDF and renders its pages | Printing finds no printer (NovaOS has no printers yet) | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
+| **KeePassXC 2.7.12** (Qt 5) | Silver | Opens and unlocks a KDBX 4 database and shows its entries | Windows Hello unlock reports "not supported" | nightly corpus ([`870-keepassxc.py`](../tests/appcorpus/870-keepassxc.py)) |
+| **PuTTY 0.81** | Bronze | Raw connections | SSH not checked | nightly corpus ([`950-putty.py`](../tests/appcorpus/950-putty.py)) |
+| **Krita 5.3.4** (Qt 5) | Bronze | Starts and opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing to install) | Painting and saving not checked | nightly corpus ([`885-krita.py`](../tests/appcorpus/885-krita.py)) |
+| **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens its editor window on the built-in OpenGL (llvmpipe) | Its image compositor falls back to the CPU; editing not checked. The other eleven ArtCraft apps and the ArtCraft Launcher (App Store) share its toolkit and are untested | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |
+| **Thunderbird** (App Store) | Untested | — | Not checked yet; it uses the same engine as Firefox, which works | — |
+| **GIMP** (App Store) | Untested | — | — | — |
+| **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
+| **OBS Studio** (App Store) | Untested | — | — | — |
+| **LibreOffice** (App Store) | Untested | — | — | — |
+| **qBittorrent** (App Store) | Untested | — | — | — |
+| **WinSCP** (App Store) | Untested | — | — | — |
+| **ShareX** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
+
+### Games and game stores
+
+| Program | Rating | What works | Problems and gaps | Checked by |
+|---|---|---|---|---|
+| **OpenTTD 15.3** (App Store; free on GOG; the corpus installs OpenTTD's own Windows installer, as GOG's copy needs an account to download) | Platinum | Its setup program installs it silently (run as administrator, as its manifest asks); with the OpenGFX graphics it reaches its main menu, and its animated title game plays | Drawn in software (no hardware acceleration yet) | nightly corpus ([`910-gog-openttd.py`](../tests/appcorpus/910-gog-openttd.py)) |
+| **Chocolate Doom 3.1.0** (32-bit, SDL2) with **Freedoom** | Platinum | Plays in a window on the built-in OpenGL (Mesa's llvmpipe) in the right colours; an Xbox or HID game pad walks, turns and fires | — | by hand in QEMU; graphics self-test `gltest colors` |
+| **Beneath a Steel Sky** on **ScummVM 2026.3** (App Store; free on GOG, which ships it with ScummVM; the corpus takes the freeware floppy release Revolution and ScummVM publish, as GOG's copy needs an account to download) | Platinum | ScummVM's setup program (Inno Setup, 32-bit, installing the 64-bit ScummVM) installs it silently or through its wizard; the game starts, Esc skips the intro and a click walks Robert Foster along the first scene's gantry. ScummVM draws with OpenGL 1.1, NovaOS's own when no OpenGL driver is installed | Sound not checked (the corpus runs without a sound card) | nightly corpus ([`920-gog-beneath-a-steel-sky.py`](../tests/appcorpus/920-gog-beneath-a-steel-sky.py)) |
+| **LBreakout2 2.6.5** (App Store; free and open source, GPL; 64-bit, SDL 1.2) | Platinum | Installs from the App Store (the official zip) and plays in a 640x480 window, drawn with GDI (SDL 1.2's `windib` driver: a 16-bit DIB section blitted with `BitBlt`). Its full screen ('f' anywhere) switches the display to 640x480 with `ChangeDisplaySettings` and takes the frame off its window (`WS_POPUP`); 'f' again, or ending the game, puts the display and the frame back | — | nightly corpus ([`940-lbreakout2.py`](../tests/appcorpus/940-lbreakout2.py)) |
+| **Cave Story 1.0.0.6** (App Store; freeware, Aeon Genesis' English translation; 32-bit, DirectDraw) | Platinum | Installs from the App Store (the translation's zip) and plays in full screen: the game asks DirectDraw for 640x480 at 16 bits, and NovaOS's `ddraw.dll` (cnc-ddraw) switches the display to 640x480 and draws its surfaces with Direct3D 9 (with DXVK installed), OpenGL or GDI. Keyboard (Z, X, arrows), a game pad (an Xbox 360 controller through DirectInput 7: B jumps and says OK, the stick walks) and its text (GDI on DirectDraw surfaces) work; the display goes back to its own mode when the game ends. Its DoConfig.exe (32-bit) sets windowed modes and keys | — | nightly corpus ([`945-cave-story.py`](../tests/appcorpus/945-cave-story.py), [`946-cave-story-pad.py`](../tests/appcorpus/946-cave-story-pad.py)) |
+| **SuperTux 0.1.3** (App Store; GPL; 32-bit, SDL 1.2, Inno Setup 4 installer) | Platinum | Installs from the App Store (its Inno Setup installer, silently or through its wizard) and plays in full screen at 640x480 with the keyboard or a game pad: SDL 1.2 reads the pad through winmm's joystick functions (`joyGetPosEx`), which NovaOS answers from its game controllers (Xbox 360 and other XInput pads, HID pads) | Sound not checked (the test machine has no sound card) | nightly corpus ([`947-supertux.py`](../tests/appcorpus/947-supertux.py)) |
+| **OpenTyrian 2.1.20260913** (App Store; Tyrian 2.1, freeware since 2004, on the free and open-source OpenTyrian engine; SDL2) | Gold | Installs from the App Store (the official 64-bit zip, which carries the freeware game data) and draws with Direct3D 9, SDL's first choice on Windows, through DXVK on Mesa 3D's Vulkan (install "Mesa 3D" and "DXVK" first). Its demo plays in a window, Alt+Enter switches it to full screen (the Direct3D 9 device is reset at the display's size), its music plays through the sound card, and the keyboard takes it through its menus into a new game. Full screen is SDL's desktop full screen, so the display mode does not change | Needs "Mesa 3D" and "DXVK" from the App Store first. Full screen is SDL's desktop full screen, so the display mode does not change | nightly corpus ([`930-opentyrian.py`](../tests/appcorpus/930-opentyrian.py)) |
+| **Blobby Volley 2 1.1.1** (App Store; free and open source, GPL; 32-bit, SDL2) | Gold | Installs from the App Store (the official zip) and plays in an 800x600 window. Its Fullscreen option is a real display-mode switch: SDL changes the display to 800x600 (`ChangeDisplaySettingsEx`) and draws with Direct3D 9 in exclusive full screen through DXVK on Mesa 3D's Vulkan (install "Mesa 3D" and "DXVK" first; without them it draws with SDL's software renderer); the display goes back to its own mode when the game ends | Full screen needs "Mesa 3D" and "DXVK" from the App Store first (without them it draws with SDL's software renderer) | nightly corpus ([`935-blobby-volley.py`](../tests/appcorpus/935-blobby-volley.py)) |
+| **Squash the Creeps** on **Godot 4.7** (MIT; the official 64-bit Windows build running the game from Godot's demo projects) | Gold | Godot imports the game's assets (`--headless --import`) and plays it with its default Forward+ renderer on Direct3D 12 (`--rendering-driver d3d12`, through VKD3D-Proton on lavapipe from the App Store's Mesa 3D 26.2.0), every pipeline it asks for built, its SDFGI compute shaders included (VKD3D-Proton 3.0.1 as NovaOS builds it); its music plays through WASAPI (Godot's `IAudioClient3` path) | Needs "Mesa 3D", "DXVK" and "VKD3D-Proton" from the App Store first | nightly corpus ([`955-squash-the-creeps.py`](../tests/appcorpus/955-squash-the-creeps.py)) |
+| **Teeworlds 0.7.5** (App Store; free and open source, SDL2) | Silver | Installs from the App Store and starts in full screen on the built-in OpenGL (Mesa's llvmpipe; it needs OpenGL 1.2), plays its menu music through the sound card and goes through its first-start questions to its start menu with the keyboard, and its menus follow the mouse with its default settings (SDL reads the pointer's moves and recentres it with `SetCursorPos`; with `inp_grab 1` it reads Raw Input instead); joins a game on its own server and stays in it | Joining a game times out under QEMU without KVM, while Mesa compiles its shaders; internet servers not checked (the test network is offline) | nightly corpus ([`925-teeworlds.py`](../tests/appcorpus/925-teeworlds.py), [`926-teeworlds-join.py`](../tests/appcorpus/926-teeworlds-join.py)) |
+| **GOG GALAXY 2.1** (offline installer, Inno Setup 6) | Bronze | Its setup program runs elevated, through its wizard or silently (`/VERYSILENT`), installs the Visual C++ runtimes it carries (x86 and x64), copies GOG GALAXY's files and makes its shortcuts; the client starts (`GalaxyClient.exe`, 64-bit, Qt 6 WebEngine: every import resolves, 89 modules, and the Windows Runtime `UISettings` its Qt plugin reads the theme from), installs and starts its service (`GalaxyClientService.exe`, which trusts the client and answers its requests over 127.0.0.1:9978), opens its window and warns that drive C: is not NTFS; past that warning it finishes initialising, opens its sign-in window and starts its first Chromium renderer (`QtWebEngineProcess.exe`), which needs Mesa's OpenGL (built in; Qt then draws with it; without it Qt ends the client: "Could not get handle for shared context") and DXVK (Chromium's Direct3D 11, through ANGLE); with both, Chromium shares its Direct3D 11 textures and fences with Qt (on lavapipe NovaOS's Vulkan loader provides the sharing), ANGLE compiles its shaders with NovaOS's HLSL compiler, and the sign-in window loads GOG's sign-in page (`login.gog.com`) over HTTPS, its certificate checked against the Windows root stores as Chromium reads them; the page draws, then shows "Oops! Something went wrong" with a Log in button.  The client's own requests through Qt's network (its configuration, metrics and problem reports, over Schannel's TLS 1.2) get their answers; past the drive warning the client keeps running (Qt's `sscanf_s` calls get their buffer sizes honoured) and its sign-in window waits on its Log in button, and pressing it loads GOG's sign-in form again (email, password, Google, Steam, Discord and Xbox); its service runs elevated, as `LocalSystem` services do, and writes the client's Vulkan registry keys | Under QEMU without KVM the sign-in page does not always finish loading in time and shows the "Oops" page again; signing in with an account is not yet checked. Setup warns that drive C: is not NTFS (answer Yes) | by hand |
+| **Steam** (App Store, the current client) | Bronze | Its installer runs and installs the bootstrapper; on first start Steam downloads its client over HTTPS, updates itself to the 64-bit client, verifies it and starts it with `SteamService` (which runs as a real service) and its browser, `steamwebhelper.exe` (Chromium); the browser starts its GPU, network, storage and page processes and Steam accepts its UI connection; the "Sign in to Steam" window opens and draws its form (account name, password, Remember me, Sign in) ([Steam](#steam)). Signing in and games are unchecked | Signing in and games not checked | nightly corpus (install and update, [`092-steam.py`](../tests/appcorpus/092-steam.py)) |
+| **Roblox** (App Store, the current client) | Borked | Its installer runs: it fetches Roblox's settings and packages over HTTPS and installs the client; its Hyperion anti-cheat passes the system-call, alignment-fixup, 32-bit-code and thread-context checks ([Roblox and anti-cheat](#roblox-and-anti-cheat)) | Hyperion then reports "Virtual Machine detected" under QEMU, as Roblox does in any virtual machine, so no game starts; untested on a real PC | nightly corpus (the installer, [`090-roblox.py`](../tests/appcorpus/090-roblox.py)) |
+
+### Command-line and developer tools
+
+| Program | Rating | What works | Problems and gaps | Checked by |
+|---|---|---|---|---|
+| **MinGit 2.47** (Git for Windows) | Platinum | `clone`, `commit`, `log`, `diff`, `merge`, `fetch` and `push` between local repositories, paged by `less` | — | nightly corpus ([`050-mingit.py`](../tests/appcorpus/050-mingit.py)) |
+| **ripgrep 14.1, fd 10.2, jq 1.7** | Platinum | Searching, walking folders and filtering JSON from the Terminal | — | nightly corpus ([`010-ripgrep.py`](../tests/appcorpus/010-ripgrep.py), [`020-fd.py`](../tests/appcorpus/020-fd.py), [`030-jq.py`](../tests/appcorpus/030-jq.py)) |
+| **bat, fzf** | Platinum | Printing files with highlighting, fuzzy finding | — | by hand in QEMU |
+| **Python 3.14** (NuGet package) and **NumPy 2.5.3** | Platinum | Scripts with hashlib, JSON, regular expressions, threads and subprocesses; NumPy gives the same results as on Linux | — | nightly corpus ([`060-python.py`](../tests/appcorpus/060-python.py)), by hand (NumPy) |
+| **Node.js 24** (`.msi` and `.zip`) | Platinum | `node`, `npm`, crypto, files and timers; the `.msi` installs and uninstalls | — | nightly corpus ([`070-nodejs.py`](../tests/appcorpus/070-nodejs.py)) |
+| **.NET 10** | Platinum | Console programs and the C# compiler; German and Japanese dates and numbers format as on Windows | — | nightly corpus ([`075-dotnet.py`](../tests/appcorpus/075-dotnet.py)) |
+| **Eclipse Temurin 21** (`.msi` JRE, `.zip` JDK) | Platinum | `java`, `javac`, threads, exceptions and files | — | by hand in QEMU |
+| **ffmpeg 7.1.1** | Platinum | Converts an H.264 MP4 to WebM | Only conversion to WebM is checked | nightly corpus ([`080-ffmpeg.py`](../tests/appcorpus/080-ffmpeg.py)) |
+| **Neovim 0.10 and 0.11**, **MSYS2 `sh`** (from MinGit) | Platinum | Neovim opens, edits and saves a file; interactive `sh` sessions with pipes, subshells and globbing | — | by hand in QEMU |
+| **Microsoft Build of OpenJDK 21** (App Store) | Untested | — | Not checked yet; Eclipse Temurin 21 works | — |
+
+### Runtimes, graphics drivers and installers
+
+| Program | Rating | What works | Problems and gaps | Checked by |
+|---|---|---|---|---|
+| **Windows Installer (`.msi`) and NSIS setup programs** | Platinum | 7-Zip, CMake, Node.js, Temurin and KeePassXC packages install, make shortcuts and uninstall, custom actions included; 32-bit packages put their system files in `SysWOW64`; bootstrappers such as WiX Burn query products, patches and source lists; NSIS installers and their uninstallers run | — | core self-tests (`msitest`, `msiscript`, `msiqtest`), by hand |
+| **Mesa 3D** (OpenGL 24.2.4 built in; Vulkan 26.2.0 from the App Store, Runtimes) | Platinum | OpenGL 4.5 on the CPU (llvmpipe, on drive C: from the start) and Vulkan (lavapipe), 64- and 32-bit | CPU only (llvmpipe, lavapipe) unless Venus is installed | core self-test `gl2test`, CI graphics tests (`gltest`) |
+| **DXVK 2.5.3** (App Store, Runtimes) | Platinum | Direct3D 8 to 11 on Vulkan, 64- and 32-bit; ANGLE's Direct3D 11 back end (Chromium's GPU process: Steam's browser, WebView2, Qt WebEngine) starts on it | Needs Mesa 3D's Vulkan (App Store) first | CI graphics tests (`d3dtest`, `d3dtest angle`, `d3dtest present`: frames shown straight from the host's GPU on Venus) |
+| **Venus** (App Store, Runtimes) | Platinum | Vulkan, and Direct3D through DXVK, on the host GPU when QEMU gives NovaOS a 3D virtio-gpu | Only in QEMU with a 3D virtio-gpu; real GPUs need their own driver | CI graphics tests |
+| **cnc-ddraw** (built in as NovaOS's `ddraw.dll`; also in the App Store, Runtimes) | Platinum | DirectDraw games in full screen or a window, drawing with Direct3D 9 (with DXVK installed), OpenGL or GDI; display-mode switches and back | — | nightly corpus ([`945-cave-story.py`](../tests/appcorpus/945-cave-story.py)) |
+| **Visual C++ Redistributable** (App Store) | Platinum | NovaOS has its own `vcruntime140` and `msvcp140`, so most programs do not need it, but GOG GALAXY needs its MFC.  Its installer (WiX Burn) installs the Minimum and Additional Runtimes, the 32-bit one into `SysWOW64` and the 64-bit one into `System32` (14.44 x86 and 14.51 x64 checked), replacing NovaOS's own copies there | — | by hand |
+| **VKD3D-Proton 3.0.1** (App Store, Runtimes; built by `tools/build_vkd3d_proton.py` with a newer dxil-spirv) | Gold | Direct3D 12 on Vulkan (install "Mesa 3D" and "DXVK" first): devices, root signatures, pipelines, drawing, read-back and fences, 64- and 32-bit programs, both presenting through DXVK's swap chains; Godot 4.7's Forward+ renderer plays Squash the Creeps on it with every pipeline built, and a compute pipeline from Godot's SDFGI shader builds (`d3d12test compute`) | — | CI graphics tests (`d3d12test`), nightly corpus ([`955-squash-the-creeps.py`](../tests/appcorpus/955-squash-the-creeps.py)) |
+| **Microsoft Edge WebView2 runtime** (the evergreen offline installer) | Silver | Its installer, Microsoft Edge Update, installs itself, accepts Microsoft's signature on the runtime's package and starts the runtime's own setup, which installs the runtime; a WebView2 host starts the runtime's browser process (`msedgewebview2.exe`) and its GPU, network and storage processes and gets a WebView2 environment; the host puts the browser's window inside its own, a page loads, a script runs in it and the page is drawn (Chromium's software compositor, through the Basic Render Driver, a WARP device and DirectComposition), also with DXVK installed and Venus the GPU, where the GPU process keeps ANGLE's Direct3D 11 device on the GPU and composites the page through DirectComposition on it ([WebView2](#webview2)) | Programs that host it (Roblox's and Steam's sign-in) not checked end to end | nightly corpus (the installer, `wv2host`, [`095-webview2.py`](../tests/appcorpus/095-webview2.py)) |
+| **.NET Desktop Runtime 8** (App Store) | Bronze | Console programs run | WinForms and WPF programs not checked | by hand |
+| **Wine Mono 9.4** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: The .NET Framework 2.0 to 4.8 programs it is for) | — |
+| **DirectX End-User Runtimes (June 2010)** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: Its D3DX, XInput and XAudio2 libraries for older games) | — |
+| **OpenAL Soft 1.23.1** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: Sound for games that use OpenAL) | — |
 
 <!-- END generated:compat-table -->
 

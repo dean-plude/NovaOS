@@ -96,3 +96,36 @@ own networking independently of echo/HTTPS fixtures. VLC stages its own
 30-second H.264/AAC color-bar clip instead of relying on another app's output.
 WebView2 installation accepts the updater's bracketed success log format and
 still requires a zero result and every WebView2 host milestone.
+
+## What the network and graphics suites run
+
+Moved from the README; the core suite is listed there.
+
+- **Network** (in the boot-test job): two boots with a virtio-net card.
+  On QEMU's user network, `ipconfig`, `ping`, Winsock over IPv4 and
+  `httptest suite` (winhttp with HTTP/2 by ALPN) against
+  `tools/h2server.js`, and `looptest` (Winsock over 127.0.0.1 and ::1);
+  on an IPv6-only network that is `tools/v6peer.py`,
+  SLAAC and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6.  A third
+  boot has an Intel e1000e instead: its PHY and link, the link pulled
+  and plugged back, sleep and wake, and the IPv4 tests again.
+- **Graphics tests**: `tools/d2dtest` (Direct2D geometry answers, and a
+  scene that must match the reference `tools/d2dtest/reference.py` draws
+  with Skia), then installs Mesa 3D, DXVK and Venus with the App Store
+  (`store install NAME` in the Terminal; `tools/ci/stage-graphics.sh`
+  stages the downloads) and runs `tools/gltest` (15 tests, on virgl and
+  on llvmpipe) and `tools/d3dtest` (17 tests, on Venus: the first monitor
+  is a QEMU 3D virtio-gpu, `virtio-vga-gl,venus=on`, whose Vulkan and
+  OpenGL are the runner's lavapipe and llvmpipe); each 64- and 32-bit,
+  with a screenshot of each while it draws; `gltest present` (virgl's
+  frames shown straight from the host's GPU while the window is alone,
+  checked on the screen itself, and through the GDI while a window covers
+  it) and `d3dtest present` (the same for Direct3D 9 on Venus, whose
+  Vulkan swapchain's frames the host copies into the screen); then
+  `gltest fps` and
+  `d3dtest fps`, which draw the same OpenGL scene on virgl (shown
+  directly and through the GDI) and on
+  llvmpipe, and the same Direct3D 9 scene on Venus (shown directly and
+  through the GDI) and on lavapipe,
+  inside NovaOS and need the GPU to be faster, and direct presentation
+  faster than the GDI way.

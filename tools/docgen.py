@@ -16,11 +16,10 @@ Parallel pull requests used to collide on the same lines of these files
 
   docs/history/*.md            HISTORY.md's sections, one per feature
   docs/roadmap/<area>/*.md     ROADMAP.md's "What comes next" items
-  docs/readme/programs/*.md    README's "Unmodified Windows programs" rows
   docs/readme/inside/*.md      README's "What is inside" items
   docs/readme/licenses/*.md    README's list of bundled licences
   docs/selftests/*.md          docs/building.md's self-test program table
-  docs/compatibility/*.md      docs/compatibility.md's program table
+  docs/compatibility/*.md      docs/compatibility.md's rating tables
   tests/selftest/core/*.py     README's core self-test list (their DOC)
   tests/appcorpus/*.py         README's nightly app list (their DOC)
   userland/programs/*.json     README's self-test programs ("selftest")
@@ -78,6 +77,45 @@ def table(head, d):
     return framed(cols + ''.join(read(f).strip('\n') + '\n' for f in fragments(d)))
 
 
+RATINGS = ['Platinum', 'Gold', 'Silver', 'Bronze', 'Borked', 'Untested']
+KINDS = {'program': 'Programs', 'game': 'Games and game stores', 'tool': 'Command-line and developer tools',
+         'runtime': 'Runtimes, graphics drivers and installers'}
+COMPAT_FIELDS = ['program', 'kind', 'rating', 'works', 'problems', 'checked']
+
+
+def compat_entry(f):
+    """one docs/compatibility fragment: a "field: value" line per field"""
+    e = {}
+    for line in read(f).splitlines():
+        if line.strip():
+            key, _, value = line.partition(':')
+            e[key.strip()] = value.strip()
+    name = os.path.relpath(f, ROOT)
+    if sorted(e) != sorted(COMPAT_FIELDS):
+        sys.exit(f'{name}: needs exactly the fields {", ".join(COMPAT_FIELDS)}')
+    if e['rating'] not in RATINGS:
+        sys.exit(f'{name}: rating "{e["rating"]}" is not one of {", ".join(RATINGS)}')
+    if e['kind'] not in KINDS:
+        sys.exit(f'{name}: kind "{e["kind"]}" is not one of {", ".join(KINDS)}')
+    return e
+
+
+def compat_table():
+    """docs/compatibility.md's ratings: a count per rating and kind, then a
+    table per kind, best rating first (file-name order within a rating)"""
+    entries = [compat_entry(f) for f in fragments('docs/compatibility')]
+    count = lambda r, k=None: sum(e['rating'] == r and k in (None, e['kind']) for e in entries)
+    out = '| Rating | ' + ' | '.join(KINDS.values()) + ' | All |\n|---|' + '---:|' * (len(KINDS) + 1) + '\n'
+    for r in RATINGS:
+        out += f'| {r} | ' + ' | '.join(str(count(r, k)) for k in KINDS) + f' | {count(r)} |\n'
+    out += '| **All** | ' + ' | '.join(str(sum(e['kind'] == k for e in entries)) for k in KINDS) + f' | {len(entries)} |\n'
+    for k, title in KINDS.items():
+        rows = sorted((e for e in entries if e['kind'] == k), key=lambda e: RATINGS.index(e['rating']))
+        out += f'\n### {title}\n\n| Program | Rating | What works | Problems and gaps | Checked by |\n|---|---|---|---|---|\n'
+        out += ''.join(f"| {e['program']} | {e['rating']} | {e['works']} | {e['problems']} | {e['checked']} |\n" for e in rows)
+    return framed(out.rstrip('\n') + '\n')
+
+
 def core_tests():
     """the core suite in order, as one sentence (it sits inside a list item:
     continuation lines are indented)"""
@@ -104,8 +142,6 @@ ROADMAP_AREAS = {'next-graphics': 'graphics', 'next-apps': 'apps', 'next-kernel'
 
 REGIONS = {
     'README.md': {
-        'programs': (lambda: table(['Program', 'Kind', 'Tested on NovaOS'], 'docs/readme/programs'),
-                     'docs/readme/programs/*.md'),
         'inside': (lambda: blocks('docs/readme/inside', ''), 'docs/readme/inside/*.md'),
         'core-tests': (core_tests, 'tests/selftest/core/*.py (DOC)'),
         'selftest-programs': (selftest_programs, 'userland/programs/*.json ("selftest": true)'),
@@ -120,8 +156,7 @@ REGIONS = {
         'selftest-table': (lambda: table(['Program', 'Covers'], 'docs/selftests'), 'docs/selftests/*.md'),
     },
     'docs/compatibility.md': {
-        'compat-table': (lambda: table(['Program', 'Status', 'What works', 'Checked by'], 'docs/compatibility'),
-                         'docs/compatibility/*.md'),
+        'compat-table': (compat_table, 'docs/compatibility/*.md'),
     },
     'docs/HISTORY.md': {
         'history': (lambda: blocks('docs/history'), 'docs/history/*.md'),

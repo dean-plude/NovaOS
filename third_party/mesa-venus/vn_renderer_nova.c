@@ -8,7 +8,10 @@
  * context per handle, its blobs (numbered from 1) and its timelines; a
  * mappable blob comes back as a section, mapped with NtMapViewOfSection.
  * There are no dma-bufs or sync files, so external memory and fences
- * stay inside the process.
+ * stay inside the process.  A swapchain's frames are shown straight from
+ * the host when the kernel can (vn_renderer_nova_show: direct
+ * presentation, kernel/um/um_gui.c); otherwise, and with NOVA_PRESENT=gdi,
+ * Mesa's Win32 WSI copies them to the window through the GDI.
  */
 
 #include <windows.h>
@@ -17,6 +20,8 @@
 
 #include "util/sparse_array.h"
 
+#include "vn_device.h"
+#include "vn_device_memory.h"
 #include "vn_renderer_internal.h"
 
 #define NOVA_CAPSET_VENUS 4
@@ -37,6 +42,7 @@ enum {
    GPU_SYNC_DESTROY = 8,
    GPU_SYNC_OP = 9,
    GPU_WAIT = 10,
+   GPU_PRESENT = 13,
 };
 struct gpu_info { uint32_t present, pad; uint64_t host_visible; };
 struct gpu_capset { uint32_t id, version, size, pad; uint64_t out; };
@@ -44,6 +50,11 @@ struct gpu_submit { uint64_t cs; uint32_t size, ring; uint32_t nsync, pad; uint6
 struct gpu_blob_create { uint32_t blob_mem, flags; uint64_t blob_id, size, cs; uint32_t cs_size, res; };
 struct gpu_sync_op { uint32_t id, op; uint64_t value; };
 struct gpu_wait { uint32_t n, any; uint64_t timeout_ns, ids, values; };
+/* (flags 1: the frame is in the blob's memory, @format (virgl's), rows of @stride bytes from @offset) */
+struct gpu_present { uint32_t hwnd, flags; int32_t x, y, w, h; uint32_t format, stride; uint64_t offset; };
+#define PRESENT_IN_BLOB 1
+#define VIRGL_FORMAT_B8G8R8A8_UNORM 1
+#define VIRGL_FORMAT_R8G8B8A8_UNORM 67
 
 typedef LONG_PTR(NTAPI *PFN_NtNovaGpuCtl)(INT_PTR h, ULONG op, ULONG_PTR arg, void *ptr);
 typedef LONG(NTAPI *PFN_NtMapViewOfSection)(HANDLE, HANDLE, PVOID *, ULONG_PTR, SIZE_T,
@@ -599,6 +610,67 @@ vn_renderer_nova_present(void)
 {
    struct gpu_info gi = { 0 };
    return nova_load() && !gpu_ctl(0, GPU_INFO, 0, &gi) && gi.present;
+}
+
+/* Show the CPU image of a swapchain (@memory, rows of @row_pitch bytes from
+ * @offset, already drawn) in window @hwnd straight from the host: the
+ * kernel copies it onto the screen there when nothing covers the window
+ * and its client area is the image's size (false: show it through the
+ * GDI) */
+bool
+vn_renderer_nova_show(VkDevice device,
+                      VkDeviceMemory memory,
+                      uint64_t offset,
+                      uint32_t row_pitch,
+                      uint32_t width,
+                      uint32_t height,
+                      VkFormat format,
+                      void *hwnd)
+{
+   static int direct = -1;
+   if (direct < 0) {
+      char how[8] = "";
+      GetEnvironmentVariableA("NOVA_PRESENT", how, sizeof(how));
+      direct = _stricmp(how, "gdi") != 0;
+   }
+   uint32_t virgl_format;
+   switch (format) {
+   case VK_FORMAT_B8G8R8A8_UNORM:
+   case VK_FORMAT_B8G8R8A8_SRGB:
+      virgl_format = VIRGL_FORMAT_B8G8R8A8_UNORM;
+      break;
+   case VK_FORMAT_R8G8B8A8_UNORM:
+   case VK_FORMAT_R8G8B8A8_SRGB:
+      virgl_format = VIRGL_FORMAT_R8G8B8A8_UNORM;   /* (the host's blit puts the bytes in the screen's order) */
+      break;
+   default:
+      return false;
+   }
+   if (!direct)
+      return false;
+   struct vn_device *dev = vn_device_from_handle(device);
+   struct vn_device_memory *mem = vn_device_memory_from_handle(memory);
+   if (!dev || !mem || !mem->base_bo)
+      return false;
+   struct nova *gpu = (struct nova *)dev->renderer;
+   const struct nova_bo *bo = (const struct nova_bo *)mem->base_bo;
+
+   HWND wnd = (HWND)hwnd;
+   RECT cr;
+   POINT o = { 0, 0 };
+   if (!wnd || !GetClientRect(wnd, &cr) || cr.right - cr.left != (LONG)width ||
+       cr.bottom - cr.top != (LONG)height || !ClientToScreen(wnd, &o))
+      return false;
+   HWND root = GetAncestor(wnd, GA_ROOT);
+   struct gpu_present a = {
+      .hwnd = (uint32_t)(uintptr_t)(root ? root : wnd),
+      .flags = PRESENT_IN_BLOB,
+      .x = o.x, .y = o.y, .w = (int32_t)width, .h = (int32_t)height,
+      .format = virgl_format,
+      .stride = row_pitch,
+      .offset = offset,
+   };
+   return gpu_ctl(gpu->h, GPU_PRESENT, bo->blob, &a) == 0;
 }
 
 /* vk_util.c's vk_spec_info_to_nir_spirv refers to the SPIR-V front end,

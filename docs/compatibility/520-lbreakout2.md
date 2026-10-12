@@ -1,1 +1,6 @@
-| **LBreakout2 2.6.5** (App Store; free and open source, GPL; 64-bit, SDL 1.2) | Works | Installs from the App Store (the official zip) and plays in a 640x480 window, drawn with GDI (SDL 1.2's `windib` driver: a 16-bit DIB section blitted with `BitBlt`). Its full screen ('f' anywhere) switches the display to 640x480 with `ChangeDisplaySettings` and takes the frame off its window (`WS_POPUP`); 'f' again, or ending the game, puts the display and the frame back | nightly corpus |
+program: **LBreakout2 2.6.5** (App Store; free and open source, GPL; 64-bit, SDL 1.2)
+kind: game
+rating: Platinum
+works: Installs from the App Store (the official zip) and plays in a 640x480 window, drawn with GDI (SDL 1.2's `windib` driver: a 16-bit DIB section blitted with `BitBlt`). Its full screen ('f' anywhere) switches the display to 640x480 with `ChangeDisplaySettings` and takes the frame off its window (`WS_POPUP`); 'f' again, or ending the game, puts the display and the frame back
+problems: —
+checked: nightly corpus ([`940-lbreakout2.py`](../tests/appcorpus/940-lbreakout2.py))

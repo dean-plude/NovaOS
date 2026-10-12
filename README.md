@@ -19,10 +19,9 @@ their own dialogs, custom actions, shortcuts and services), the Java,
 programs through Mesa and DXVK.  It can install itself on a disk from its
 live ISO.  New to NovaOS?  Start with the
 [user guide](docs/user-guide.md); [docs/compatibility.md](docs/compatibility.md)
-lists the programs that run.
+rates each program and game that has been tried, ProtonDB-style.
 
 - [Screenshots](#screenshots)
-- [What runs today](#what-runs-today)
 - [What is inside](#what-is-inside)
 - [Quick start](#quick-start)
 - [Testing](#testing)
@@ -54,83 +53,6 @@ each one was taken.
 | Blobby Volley 2 in full screen: the display switched to 800x600, drawn with Direct3D 9 in exclusive full screen through DXVK | LBreakout2 (SDL 1.2) in full screen: the display switched to 640x480, drawn with GDI |
 | ![Cave Story's First Cave in full screen at 640x480](docs/screenshots/cave-story.png) | ![SuperTux's first level, played with a game pad](docs/screenshots/supertux.png) |
 | Cave Story (freeware) in full screen: DirectDraw through cnc-ddraw, the display switched to 640x480 | SuperTux (SDL 1.2) played with an Xbox 360 game pad through winmm's joystick functions |
-
-## What runs today
-
-### Unmodified Windows programs
-
-These are official release builds, run as shipped; every fix that made them
-work is in NovaOS.  "Tested" is what has been checked in QEMU.
-
-<!-- BEGIN generated:programs -->
-
-| Program | Kind | Tested on NovaOS |
-|---|---|---|
-| **7-Zip 26.03** (x64) | GUI installer, file manager, `7zG`, `7z.exe` | Installs; the file manager browses, opens archives, adds and extracts with the full dialogs, and drags files out of archives and folders onto other programs; Options has all six pages.  The App Store uses `7z.exe` to unpack downloads. |
-| **7-Zip self-extractors** (x86) | 32-bit console and GUI SFX | Unpack an archive. |
-| **NSIS installers** (x86, Modern UI) | 32-bit setup programs | Welcome, folder, progress and finish pages; files, registry, desktop and Start menu shortcuts; the uninstaller removes it all. |
-| **MinGit 2.47** | Git for Windows (console) | `init`, `add`, `commit`, `log` and `diff` (paged by NovaOS's `less`), `status`, `checkout -b`, `merge`, `gc`, `fsck`, and `clone`/`fetch`/`push` between local repositories. |
-| **MSYS2 runtime** (MinGit's `usr\bin`) | `sh.exe` (bash), `ls`, `cat`, `wc`… | Interactive `sh --login -i` sessions in the Terminal (prompt, line editing, colours); `sh -c` with pipes, `$(...)`, subshells, globbing, `fork`, `/dev/null`. |
-| **Neovim 0.10 and 0.11** (x64 `.zip`) | Full-screen terminal editor (libuv, LuaJIT) | Opens a file, edits it, `:wq` saves it and exits with code 0; `nvim -l` scripts, `vim.system`, `jobstart` and RPC to an embedded `nvim`. |
-| **Eclipse Temurin 21** | Java JRE `.msi`, JDK `.zip` | `java -version`, a threads/exceptions/files stress test, `javac` compiling a program that then runs. |
-| **.NET 10** | Runtime and host from NuGet, Roslyn | `dotnet --info`, `dotnet hello.dll`, `dotnet csc.dll` compiling a C# test that passes; globalization through ICU, so German and Japanese numbers, dates, names and sorting come out as on Windows (`tests/dotnet/culturetest.cs`). |
-| **Node.js 24** | `.msi`, `.zip` | `node -v`, `-e`, `npm -v`, a crypto/fs/JSON/timers test script; the `.msi` runs its 64-bit and 32-bit custom actions, makes its Start menu shortcuts and uninstalls. |
-| **Windows Installer packages** | 7-Zip, CMake, Node.js, Temurin, KeePassXC `.msi` | 7-Zip and CMake install through their own wizards (licence, options, feature tree, progress), CMake's dialogs running its DLL custom actions; custom-action DLLs run in 64-bit and 32-bit custom-action servers; shortcuts and a test service are created and removed again by `msiexec /x`; transforms (`TRANSFORMS=`), whole-file patches (`msiexec /p`, `/uninstall`) and rollback of a failed install; automatic services start at boot; JScript and VBScript custom actions run on `msiscript.dll`. A 32-bit package's system files go to `SysWOW64`, a 64-bit one's to `System32`, whichever process installs it. |
-| **Python 3.14** | NuGet package | `-c`, a hashlib/JSON/regex/threads/subprocess test script. |
-| **NumPy 2.5.3** | The Windows wheel (`cp314`) in Python 3.14, on NovaOS's own `vcruntime140`, `msvcp140` and UCRT | `import numpy`, complex `exp`/`sqrt`/`log`/`sin`/`tanh`/`power`, `linalg.inv`, `fft`, `eigvals`: the same output as NumPy on Linux. |
-| **Mesa 3D** (mesa-dist-win; OpenGL 24.2.4 built in, Vulkan 26.2.0 from the App Store) | `opengl32.dll` (llvmpipe; on drive C: from the start as `opengl32_mesa.dll`, which NovaOS's `opengl32.dll` loads, staged by `tools/bundle_mesa.py`) and the Vulkan driver (lavapipe, from the App Store), x64 and x86 | OpenGL 4.5: `tools/gltest` (pixel formats, immediate mode, GLSL, read-back, animated `SwapBuffers`) passes as a 64-bit and a 32-bit program, and the core self-test `gl2test` draws with GLSL shaders on it with nothing installed. Vulkan: Godot 4.7 draws Squash the Creeps on it through VKD3D-Proton. |
-| **DXVK 2.5.3** | `d3d8`, `d3d9` and `d3d11` (as `d3d9_dxvk` and `d3d11_dxvk`, behind NovaOS's own `d3d9` and `d3d11`), `d3d10core`, `dxgi`, x64 and x86, from the App Store, on Mesa's Vulkan and NovaOS's own `vulkan-1.dll` | Direct3D 9 and 11: `tools/d3dtest` (device creation, a D3D9 triangle, D3D11 clear, read-back, animated `Present` in a window) passes as a 64-bit and a 32-bit program, `d3dtest angle` brings Direct3D 11 up the way ANGLE (Chromium's GPU process) does, `d3dtest shared` shares a Direct3D 11 texture by NT handle between two devices and with a second process, and a fence between two devices (on lavapipe NovaOS's `vulkan-1.dll` provides `VK_KHR_external_memory_win32` and `VK_KHR_external_semaphore_win32`), and `d3d9test` checks NovaOS's `d3d9.dll` with and without DXVK. |
-| **VKD3D-Proton 3.0.1** (built by `tools/build_vkd3d_proton.py`) | `d3d12` (as `d3d12_vkd3d`, behind NovaOS's own `d3d12`) and `d3d12core`, x64 and x86, from the App Store, on Mesa's Vulkan and NovaOS's own `vulkan-1.dll`; DXVK's `dxgi` makes its swap chains | Direct3D 12: `tools/d3d12test` (a device on lavapipe, a root signature and pipeline from HLSL compiled by NovaOS's `d3dcompiler_47`, a triangle drawn and read back, a fence) passes as a 64-bit and a 32-bit program, and the 64-bit one presents the triangle in a window through a flip-model swap chain on its command queue; `d3d12test compute` builds a compute pipeline from Godot's SDFGI shader, 64- and 32-bit. |
-| **Venus** (Mesa 26.2.4, built by `tools/build_venus.py`) | `vulkan_virtio.dll` and Mesa's virgl (`opengl32_virgl.dll`, `libgallium_virgl.dll`), x64 and x86, from the App Store: Vulkan and OpenGL on the host's GPU through a QEMU 3D virtio-gpu (`virtio-vga-gl,venus=on`); the Vulkan loader prefers Venus to lavapipe and NovaOS's `opengl32.dll` virgl to llvmpipe | `tools/d3dtest` (DXVK) and `tools/gltest` pass on it as 64-bit and 32-bit programs, and `d3dtest fps` and `gltest fps` draw faster on it than on lavapipe and llvmpipe. |
-| **Notepad++ 8.8.3** (x64 portable) | Scintilla editor, static MSVC C++ runtime | Opens with its menus, toolbar, tab bar, editor and status bar, takes typing, and opens and saves files through the common file dialogs. |
-| **SumatraPDF 3.4.6** (x86 portable) | PDF reader on MuPDF; GDI+ toolbar, tabs and caption | Opens a PDF and renders its pages; the toolbar, tabs and menus draw; printing reports no printer. |
-| **WinMerge 2.16.50** (x64) | MFC application: MDI frame, docking bars, rebars, toolbars with 24-bit image strips | Compares two files side by side with the differences highlighted, location pane and status bars. |
-| **PuTTY 0.81** (x64, built from source with MinGW) | Terminal emulator on `WSAAsyncSelect` networking | A raw connection to a host: the server's greeting shows, typed lines go out and the echo comes back. |
-| **ripgrep, fd, bat, jq, fzf** | Rust (MSVC), C (MinGW), Go | Searching, walking folders, printing files, filtering, from the Terminal. |
-| **Floorp 12.19** (Firefox 157 engine, x64) | Gecko browser | Starts, creates its profile, and draws the full browser window (toolbar, address bar, sidebar) with DirectWrite text through its GPU process, and takes keyboard input.  Its sandboxed child processes (tab, extension, GPU, network, media) start and talk to the main process.  It fetches and shows pages over HTTP and HTTPS, scrolls and takes typing in forms.  See [Firefox](docs/HISTORY.md#firefox-floorp). |
-| **Firefox 157.0** | Mozilla's full installer (x64), from the App Store | The App Store's Install button unpacks it with 7-Zip into `C:\Programs\Mozilla Firefox`; Firefox starts unmodified (its launcher process sets up the browser process with its DLL blocklist hooks), draws its whole window through its GPU process, and loads and shows a page over HTTPS (a test CA trusted through `distribution\policies.json`); in the nightly corpus.  Window titles show their dashes as `-`. |
-| **KeePassXC 2.7.12** | Portable zip (Qt 5, x64) | Opens and unlocks a KDBX 4 password database (Argon2d) and shows its groups, entries and an entry's details, Qt's widget text drawn through `GetGlyphOutline`; in the nightly corpus.  Windows Hello quick unlock reports "not supported". |
-| **Inkscape 0.91** | conda-forge's win-64 package (GTK 2, MinGW, x64) | Starts with a new document: menus, tool bars, toolbox, rulers, canvas, palette and status bar, drawn by GTK 2 through cairo and pango on gdi32, with its tools' own pointers; in the nightly corpus.  Inkscape 1.x (GTK 3) is not tested yet: its downloads are not reachable from CI. |
-| **Krita 5.3.4** | Portable zip (Qt 5, LLVM MinGW build, x64) | Starts, opens a new image with Ctrl+N on its OpenGL canvas (Mesa's llvmpipe, built in) with the toolbox, colour selector, layers and brush presets and paints a stroke, its C++ exceptions unwinding through libunwind on NovaOS's SEH; in the nightly corpus.  Its Python scripter imports `asyncio`. |
-| **PhotoCraft 0.7.0** (ArtCraft) | Portable zip (Rust: egui on wgpu, x64), from the App Store | The App Store's Install button unpacks it with 7-Zip into `C:\Programs\PhotoCraft`; it opens its editor window (menus, toolbox, Color, Properties and Layers panels) drawn through wgpu's OpenGL back end on the built-in llvmpipe, and says its image compositor switched to the CPU; in the nightly corpus.  The other eleven ArtCraft apps and the ArtCraft Launcher are in the Store too, untested. |
-| **VLC 3.0.21** (x86, the PortableApps package) | Qt 5 media player | Plays an H.264 and AAC MP4 with its Qt interface, the video in its window (GDI output) and the sound through WASAPI; part of the nightly app corpus. |
-| **Audacity 3.7.4** (x64 zip) | wxWidgets audio editor | Records from the microphone (WASAPI capture), draws the waveform, stops and saves the project as an `.aup3` (SQLite) through its save dialog; part of the nightly app corpus. |
-
-<!-- END generated:programs -->
-
-### Built in
-
-- **Desktop**: a Windows 11-style shell with a Start menu (live search over
-  apps, settings and files), dock, tray, snapping and resizing windows,
-  Alt+Tab, right-click menus, three wallpapers.
-- **Apps**: Terminal, File Explorer, Notepad, Settings (its Sound page
-  chooses the output and input and sets each device's volume, kept across
-  restarts), Calendar, Photos, the **App Store**, **Install NovaOS**
-  (Setup) and **Welcome to NovaOS**, the first-boot setup of an installed
-  system (your name, time zone, keyboard layout and the display resolution).
-- **Web browser**: NetSurf 3.11, built from source as a Windows program,
-  with HTTPS (TLS 1.3/1.2), JavaScript (pages a script changes are laid
-  out again) and SVG (image files and `<svg>` written inline in a page),
-  in a window you can resize, maximize or snap (the page is laid out
-  again to fit).
-- **Command line**: the Terminal (command lines of up to 8,191
-  characters, wrapped at the window's width; programs get up to 32,766
-  through `CreateProcess`, as on Windows), its own commands (`dir`, `copy`, `ping`,
-  `curl`, `wget`, `certutil`, `tasklist`, `trace NAME`, `vol`, `sync`,
-  `devices`, `crashes`…)
-  and NovaOS's `cmd.exe` with batch files, plus `find`, `findstr`, `sort`,
-  `more`, `less` (git's pager), `timeout`, `taskkill`, `whoami`, `tzutil`, `reg`, `regsvr32`, `msiexec` and
-  `intl` (the user's regional format).
-
-### The App Store
-
-The dock's App Store downloads the official 64-bit packages of 21 open-source
-programs (Firefox, VLC, LibreOffice, GIMP, Notepad++, PuTTY…) and six
-runtimes, and installs them with 7-Zip, NovaOS's Windows Installer or the
-program's own setup.  `store install NAME` in the Terminal does what the
-row's button does (CI installs Mesa 3D, DXVK and Venus that way), and `store open` opens it.  Its list scrolls with the same scroll bar as File Explorer's.  Most of those programs still need more of Windows than
-NovaOS has (more of the GUI); the ones in the table
-above are the ones verified.  See [the App Store](docs/HISTORY.md#the-app-store).
 
 ## What is inside
 
@@ -216,9 +138,10 @@ without being copied, relocated or hashed again), I/O,
   monitors on one card, plugged in and unplugged while NovaOS runs, and
   which on a 3D one (`virtio-vga-gl`) gives Mesa's Venus and virgl (App
   Store) their contexts, host-visible blobs, 3D resources, transfers and
-  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and OpenGL's
-  frames are written into the screen there while their window is alone
-  on it (direct presentation); ACPI power-off, reset, power buttons,
+  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and their
+  frames (OpenGL's, and Vulkan's swapchains, so DXVK's and VKD3D-Proton's)
+  are written into the screen there while their window is alone on it
+  (direct presentation); ACPI power-off, reset, power buttons,
   sleep (S3, or low-power S0 idle on firmware without it), batteries and
   AC adapters, the lid, thermal zones, wake devices and PCI interrupt
   routing (AML interpreted by uACPI, with the SCI a real interrupt
@@ -670,31 +593,12 @@ To make the ISO yourself from a fresh build, run
   serial log must show a backtrace with function names, and last the
   kernel crash report: after `crash kernel` and a reset, `crashes last`
   shows the fault's backtrace.<!-- END generated:core-tests -->
-- **Network** (in the boot-test job): two boots with a virtio-net card.
-  On QEMU's user network, `ipconfig`, `ping`, Winsock over IPv4 and
-  `httptest suite` (winhttp with HTTP/2 by ALPN) against
-  `tools/h2server.js`, and `looptest` (Winsock over 127.0.0.1 and ::1);
-  on an IPv6-only network that is `tools/v6peer.py`,
-  SLAAC and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6.  A third
-  boot has an Intel e1000e instead: its PHY and link, the link pulled
-  and plugged back, sleep and wake, and the IPv4 tests again.
-- **Graphics tests**: `tools/d2dtest` (Direct2D geometry answers, and a
-  scene that must match the reference `tools/d2dtest/reference.py` draws
-  with Skia), then installs Mesa 3D, DXVK and Venus with the App Store
-  (`store install NAME` in the Terminal; `tools/ci/stage-graphics.sh`
-  stages the downloads) and runs `tools/gltest` (15 tests, on virgl and
-  on llvmpipe) and `tools/d3dtest` (17 tests, on Venus: the first monitor
-  is a QEMU 3D virtio-gpu, `virtio-vga-gl,venus=on`, whose Vulkan and
-  OpenGL are the runner's lavapipe and llvmpipe); each 64- and 32-bit,
-  with a screenshot of each while it draws; `gltest present` (virgl's
-  frames shown straight from the host's GPU while the window is alone,
-  checked on the screen itself, and through the GDI while a window covers
-  it); then `gltest fps` and
-  `d3dtest fps`, which draw the same OpenGL scene on virgl (shown
-  directly and through the GDI) and on
-  llvmpipe, and the same Direct3D 9 scene on Venus and on lavapipe,
-  inside NovaOS and need the GPU to be faster, and direct presentation
-  faster than the GDI way.
+- **Network** (in the boot-test job): two boots with a virtio-net card: IPv4,
+  IPv6 (SLAAC, RDNSS), HTTP/2 and loopback tests, then an Intel e1000e.
+- **Graphics tests**: Direct2D, then OpenGL, Vulkan and Direct3D 9/11 on Mesa,
+  DXVK and Venus, each 64- and 32-bit with screenshots, and the frame-rate
+  checks for direct presentation.  What each one runs:
+  [docs/ci.md](docs/ci.md#what-the-network-and-graphics-suites-run).
 
 The build compiles through ccache, and the boot-test job saves the cache
 after each build, so a pull request recompiles only what it changed.  A pull
@@ -826,50 +730,21 @@ os/
 
 ## Key design decisions
 
-- **Clean-room, ABI-faithful (the "hybrid" path)**: every DLL and service is
-  written from scratch, but syscall numbers, `NTSTATUS` codes and structure
-  layouts (PEB, TEB, loader data, `CONTEXT`…) follow Windows 10 1903 x64, so
-  unmodified binaries find what they expect.  See
-  [docs/ROADMAP.md](docs/ROADMAP.md#the-pivotal-decision-how-to-get-the-win32-api-surface).
-- **Native execution, both bitnesses**: x64 code runs in long mode; x86 code
-  runs in compatibility mode with a 32-bit `ntdll` that converts each system
-  call to the kernel's 64-bit form, the way Windows' WoW64 does.
-- **The window system lives in the program**: `user32` keeps each program's
-  window tree; the kernel's window manager composites only top-level
-  windows, drawn from bitmaps the programs own.  The kernel also draws the
-  pointer: a program's `SetCursor` shape (animated .ani cursors included)
-  over its own windows, the desktop's arrow elsewhere, and the system
-  pointers (I-beam, busy ring, resize arrows on window edges, hand, cross,
-  "no" and the rest of `IDC_*`) from vector outlines, sharp at 200 %.
-- **Software rendering**: GDI is a CPU rasterizer drawing into a back
-  buffer in RAM at integer HiDPI scale.  On QEMU's standard VGA, QXL,
-  virtio-vga and VMware adapters (and Bochs, VirtualBox's VBoxVGA) a VBE
-  "DISPI" driver sets the resolution at run time (Settings > Display,
-  `ChangeDisplaySettings`) and flips between two pages of video memory
-  when both fit; Cirrus gets 800x600 and 640x480; elsewhere frames are
-  copied to the UEFI framebuffer in the boot mode.  There is no 3D GPU driver.
-- **Drive C: in memory, saved to FAT**: the RAM disk is saved to a FAT32
-  volume a second after each change and restored at boot.  A file takes
-  the memory its contents need (one written by appending gives back the
-  rest of the buffer it grew into when it is closed; `mem` in the Terminal
-  shows what C: takes).  When memory runs short, the contents of saved
-  files nothing holds are let go of, those unused longest first, and read
-  back from the volume when wanted, as Windows drops cached file pages;
-  at boot the large files are restored without being read until then
-  (`cachetest`).  System files
-  come from the kernel image, so a new build always brings its own.  The
-  save runs on its own thread and holds no lock while the disk is written
-  (`savetest`), and a crash during a FAT save leaves each file old or new.
-- **SMP with fine-grained locks**: the scheduler, memory,
-  synchronization, sockets, the GUI, the program loader, files, the
-  registry, the console and starting processes have their own locks, and
-  file and registry throughput scale about 3x from one CPU to four
-  (`smpstress scaling 3`); the SATA, NVMe and USB disk drivers take a lock
-  per disk; the rest of the kernel keeps a big lock (rules
-  and lock order in `kernel/ke/smp.h`; the Terminal's `profile` command
-  shows where the CPUs spend their time).
-- **Kernel-helper syscalls (0x01F0–0x01FF)** are private to NovaOS's own
-  DLLs and invisible to Windows programs.
+The full list, with the reasons, is in
+[docs/design/architecture.md](docs/design/architecture.md).
+
+- **Clean-room and ABI-faithful**: every DLL and service is written from
+  scratch, but syscall numbers, `NTSTATUS` codes and structure layouts
+  follow Windows 10 1903 x64, so unmodified binaries find what they expect.
+- **Native execution, both bitnesses**: x64 in long mode, x86 in compatibility
+  mode through a 32-bit `ntdll`, the way WoW64 does.
+- **The window system lives in the program**: `user32` keeps the window tree;
+  the kernel composites top-level windows from bitmaps the programs own.
+- **Software rendering**: GDI is a CPU rasterizer at integer HiDPI scale;
+  the QEMU 3D virtio-gpu (Venus, virgl) is the only GPU path so far.
+- **Drive C: in memory, saved to FAT**, with its files read back on demand.
+- **SMP with fine-grained locks**, and a big lock for the rest of the kernel.
+- **Kernel-helper syscalls (0x01F0–0x01FF)** are private to NovaOS's own DLLs.
 
 ## Documentation
 
@@ -877,12 +752,16 @@ os/
   virtual machine, installing it, the desktop and its apps, installing
   programs.
 - [docs/compatibility.md](docs/compatibility.md): which Windows programs
-  run, how well, and how each was checked.
+  run, rated Platinum to Borked as ProtonDB does, and how each was checked.
 - [CONTRIBUTING.md](CONTRIBUTING.md): where a change goes (one file per
   DLL, test and doc item, so parallel pull requests do not conflict) and
   how to merge main into a branch.
 - [docs/building.md](docs/building.md): building, running, the data disk,
   tests, debugging.
+- [docs/ci.md](docs/ci.md): how CI is organised, and what its network and
+  graphics suites run.
+- [docs/design/architecture.md](docs/design/architecture.md): the key design
+  decisions in full.
 - [docs/macos.md](docs/macos.md): running and building on a Mac (Apple
   Silicon and Intel).
 - [docs/ROADMAP.md](docs/ROADMAP.md): the compatibility strategy and what

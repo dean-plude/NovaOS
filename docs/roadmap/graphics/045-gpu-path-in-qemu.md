@@ -13,5 +13,9 @@
   window is alone there, instead of being read back and drawn through the
   GDI (`gltest present`, and `gltest fps` against the GDI way); see
   [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
-  Still to do: the same for Vulkan's frames (Venus, DXVK, VKD3D-Proton)
-  and for windows on the other monitors.
+  ~~The same for Vulkan's frames (Venus, DXVK, VKD3D-Proton)~~ Done:
+  a swapchain's frames are copied by the host from Venus's memory into
+  the screen while the window is alone (`d3dtest present`, and
+  `d3dtest fps` against the GDI way); see
+  [Vulkan's frames](HISTORY.md#direct-presentation-of-vulkans-frames).
+  Still to do: windows on the other monitors and at scale 2.

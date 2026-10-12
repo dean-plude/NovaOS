@@ -11575,22 +11575,31 @@ the calls nearly every Windows driver makes besides its I/O.
 Still to come in 30.2: kernel-mode SEH (`__try` in drivers), work items
 and system threads, `Zw*` registry and file calls, ETW/WMI stubs.
 
-## A driver exception no longer leaks the kernel lock
+## A driver's caught exception resumes cleanly
 
-A follow-up to the kernel API Windows drivers link against (Phase 30.2): a
-ring-0 fault inside a driver that its `__try`/`__except` catches left the
-big kernel lock held one level too deep.
+A follow-up to the kernel API Windows drivers link against (Phase 30.2):
+when a driver's `__try`/`__except` caught a ring-0 fault, the resume left
+the driver in a bad state, and the `wdm` self-test's full round trip
+kernel-panicked.
 
-`interrupt_dispatch` takes the big kernel lock for the exception and lets
-it go when dispatch returns, but a handled `__except` resumes straight into
-the handler and never returns there, so the release was skipped. The driver
-ran on holding the lock for good; the other CPUs starved on it (the watchdog
-reported it held for seconds while another thread waited), and the forced
-release corrupted the kernel into a page fault. `NtKernelException`
-(`kernel/nt/seh.c`) now drops that one lock level before a resume and takes
-it back only if nothing handles the fault, so the `wdm` self-test's full
-driver round trip — an access violation caught, a work item, a system
-thread and a `Zw` registry value — completes instead of panicking.
+Two things were wrong in `NtKernelException` (`kernel/nt/seh.c`):
+
+- **The stack pointer it resumed with was 16 bytes low.** In 64-bit mode
+  the CPU pushes SS:RSP on every interrupt, a ring-0 fault included, so the
+  interrupt frame's RSP is the faulting one; the code took the address of
+  that field instead (an old comment in `arch/x86_64/idt.h` said RSP was
+  pushed only on a ring change, now corrected). The `__except` body ran
+  fine on its frame pointer, but the function's epilogue then popped its
+  saved registers two slots off and returned into the caller's file object
+  as if it were code.
+- **It leaked a big-kernel-lock level.** `interrupt_dispatch` takes the
+  lock for the exception and lets it go when dispatch returns, but a handled
+  `__except` resumes straight into the handler and never returns there. The
+  driver now drops that level before the resume and takes it back only if
+  nothing handles the fault.
+
+The whole driver round trip — an access violation caught, a work item, a
+system thread and a `Zw` registry value — now completes.
 
 ## The first Windows kernel-mode driver
 

@@ -16,7 +16,8 @@ Parallel pull requests used to collide on the same lines of these files
 
   docs/history/*.md            HISTORY.md's sections, one per feature
   docs/roadmap/<area>/*.md     ROADMAP.md's "What comes next" items
-  docs/readme/inside/*.md      README's "What is inside" items
+  docs/readme/inside/*.md      README's "What is inside" summary items
+  docs/inside/*.md             docs/inside.md's full "What is inside" items
   docs/readme/licenses/*.md    README's list of bundled licences
   docs/selftests/*.md          docs/building.md's self-test program table
   docs/compatibility/*.md      docs/compatibility.md's rating tables
@@ -147,6 +148,9 @@ REGIONS = {
         'selftest-programs': (selftest_programs, 'userland/programs/*.json ("selftest": true)'),
         'corpus': (corpus_apps, 'tests/appcorpus/*.py (DOC)'),
         'licenses': (lambda: inline('docs/readme/licenses', '; '), 'docs/readme/licenses/*.md'),
+    },
+    'docs/inside.md': {
+        'inside': (lambda: blocks('docs/inside', ''), 'docs/inside/*.md'),
     },
     'docs/ROADMAP.md': {
         name: ((lambda a=area: blocks(f'docs/roadmap/{a}', '')), f'docs/roadmap/{area}/*.md')

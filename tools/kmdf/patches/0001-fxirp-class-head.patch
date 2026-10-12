@@ -1,0 +1,85 @@
+fxirp.hpp: restore the head of class FxIrp
+
+Microsoft's published fxirp.hpp has lines 22-86 blanked: the comment end,
+the include guard and the start of class FxIrp (its member m_Irp and
+constructors).  This restores them as the rest of the framework uses them.
+
+diff --git a/src/framework/shared/inc/private/common/fxirp.hpp b/src/framework/shared/inc/private/common/fxirp.hpp
+index 1c16fb5..f666478 100644
+--- a/src/framework/shared/inc/private/common/fxirp.hpp
++++ b/src/framework/shared/inc/private/common/fxirp.hpp
+@@ -19,43 +19,43 @@ Environment:
+     Both kernel and user mode
+ 
+ Revision History:
++--*/
+ 
++#ifndef _FXIRP_H_
++#define _FXIRP_H_
+ 
++//
++// NovaOS: this class head is blank in Microsoft's published source
++// (lines 22-86 are empty there); restored from how the framework uses it.
++//
++class FxIrp {
+ 
++public:
++    MdIrp m_Irp;        // (public: the triage table records its offset)
+ 
++public:
++    FxIrp(
++        VOID
++        ) : m_Irp(NULL)
++    {
++    }
+ 
++    FxIrp(
++        __in_opt MdIrp Irp
++        ) : m_Irp(Irp)
++    {
++    }
+ 
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
++    __inline
++    MdIrp
++    SetIrp(
++        __in_opt MdIrp Irp
++        )
++    {
++        MdIrp old = m_Irp;
++        m_Irp = Irp;
++        return old;
++    }
+ 
+ 
+ 

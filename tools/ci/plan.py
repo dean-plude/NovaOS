@@ -22,7 +22,7 @@ def scope(event, paths):
                       'tools/ci/', '.github/')) or
         p in {'tools/appcorpus.py', 'tools/download_cache.py', 'tools/novarun.py',
               'kernel/apps/store.c', 'kernel/apps/store_catalog.h', 'tools/bundle_firefox.py',
-              'tools/bundle_mesa.py'} for p in paths))
+              'tools/bundle_mesa.py', 'tools/build_vkd3d_proton.py'} for p in paths))
     return {'code': code, 'corpus': corpus}
 
 

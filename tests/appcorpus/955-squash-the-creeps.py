@@ -11,14 +11,15 @@
 # and, once Godot has built its pipelines behind its boot splash, draws the
 # field (its light ground fills the window) and plays its first seconds
 # (creeps walk across it): the screenshot is kept but not compared (the
-# creeps are random); lavapipe refuses two of Forward+'s compute
-# pipelines, which the game draws without (see docs/compatibility).  Godot's
-# log (--log-file) must then name the Direct3D 12 driver, so a fall back
-# to Vulkan (rendering/rendering_device/fallback_to_vulkan) fails the
-# test.  The game's music (an autoloaded player) must be heard: NovaOS
-# boots with a sound card, which Godot's WASAPI driver opens through
-# IAudioClient3 (without one it finds no endpoint and plays nothing, as on
-# Windows).  Takes the keyboard.
+# creeps are random).  Godot's log (--log-file) must then name the
+# Direct3D 12 driver, so a fall back to Vulkan
+# (rendering/rendering_device/fallback_to_vulkan) fails the test, and must
+# not report a pipeline Direct3D 12 refused (VKD3D-Proton 3.0.1's own
+# translator made SPIR-V Mesa refuses from two of Forward+'s SDFGI compute
+# shaders: tools/build_vkd3d_proton.py).  The game's music (an autoloaded
+# player) must be heard: NovaOS boots with a sound card, which Godot's
+# WASAPI driver opens through IAudioClient3 (without one it finds no
+# endpoint and plays nothing, as on Windows).  Takes the keyboard.
 import os
 import shutil
 import zipfile
@@ -72,7 +73,8 @@ APP = App('Squash the Creeps', '4.7',
            Test('import its assets', f'{GODOT}_console.exe --headless --path game --import', timeout=1800),
            Test('plays on Direct3D 12', f'start {GODOT}.exe --path game --rendering-driver d3d12 '
                                         f'--log-file "{LOG}"', timeout=60),
-           Test('Godot used Direct3D 12', f'type "{LOG}"', expect=[r'D3D12|Direct3D 12'], builtin=True),
+           Test('Godot used Direct3D 12', f'type "{LOG}"',
+                expect=[r'D3D12|Direct3D 12', r'\A(?![\s\S]*PipelineState failed)'], builtin=True),
            Test('back to Documents', r'cd C:\Documents', builtin=True)],
           unpack=unpack, gui=True, runtimes=['Mesa 3D', 'DXVK', 'VKD3D-Proton'], interact=drawn,
           extra=['https://github.com/godotengine/godot-demo-projects/releases/download/4.7-6ad6167/3d_squash_the_creeps.zip'],

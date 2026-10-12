@@ -89,7 +89,27 @@ jobs:
           }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: appcorpus-v3-${{ matrix.id }}-${{ hashFiles('tools/download_cache.py', 'tools/appcorpus.py',
           'tests/appcorpus/**') }}-
+    - name: Does the program need VKD3D-Proton (built by NovaOS)
+      id: vkd3d
+      run: python3 -c "import sys; sys.path.insert(0, 'tools'); import appcorpus; print('need=' + str(any('VKD3D-Proton'
+        in a.runtimes for a in appcorpus.selected_apps(appcorpus.APPS, sys.argv[1]))).lower())" "$CORPUS_APP" >>
+        "$GITHUB_OUTPUT"
+    - name: Cache VKD3D-Proton
+      id: vkd3d-cache
+      if: steps.vkd3d.outputs.need == 'true'
+      uses: actions/cache@v4
+      with:
+        path: corpus-local/vkd3d-proton.7z
+        key: vkd3d-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/build_vkd3d_proton.py') }}
+    - name: Install the VKD3D-Proton build dependencies
+      if: steps.vkd3d.outputs.need == 'true' && steps.vkd3d-cache.outputs.cache-hit != 'true'
+      run: tools/ci/install.sh vkd3d
+    - name: Build VKD3D-Proton
+      if: steps.vkd3d.outputs.need == 'true' && steps.vkd3d-cache.outputs.cache-hit != 'true'
+      run: python3 tools/build_vkd3d_proton.py corpus-local --work "$RUNNER_TEMP/vkd3d-work"
     - name: Run the programs
+      env:
+        CORPUS_LOCAL_DOWNLOADS: corpus-local
       run: python3 tools/appcorpus.py --img build/nova.img --only "$CORPUS_APP" --cache appcorpus-cache --out appcorpus-out
         --summary appcorpus-out/table.md
     - name: Show program outcome

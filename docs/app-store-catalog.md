@@ -99,6 +99,9 @@ Store applications and runtimes. It requires a unique matching entry and the
 fixture's exact download URL; catalog and parser edits select the native corpus
 checks. It no longer attempts to extract catalog rows from the Store C source.
 
-Graphics staging resolves Mesa, DXVK and VKD3D-Proton downloads through the same JSON catalog
-lookup as compatibility fixtures. The graphics download cache includes the
+Graphics staging resolves Mesa and DXVK downloads through the same JSON catalog
+lookup as compatibility fixtures; Venus and VKD3D-Proton, which NovaOS builds
+itself and publishes on the "latest" release, are built (or taken from
+`VENUS_7Z` and `VKD3D_7Z`) instead, and the app corpus takes VKD3D-Proton from
+`CORPUS_LOCAL_DOWNLOADS` when the nightly job has built it. The graphics download cache includes the
 catalog hash so catalog changes also refresh its cache identity.

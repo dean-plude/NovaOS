@@ -65,16 +65,21 @@ with open(os.environ['FIXTURE_DOWNLOAD_LOG'], 'a') as f:
                 stub.chmod(0o755)
             venus = work / 'venus.7z'
             venus.write_bytes(b'venus fixture')
+            vkd3d = work / 'vkd3d-proton.7z'
+            vkd3d.write_bytes(b'vkd3d fixture')
             log = work / 'downloads.log'
             out, cache = work / 'gfx', work / 'cache'
             env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
-                       VENUS_7Z=str(venus), FIXTURE_DOWNLOAD_LOG=str(log))
+                       VENUS_7Z=str(venus), VKD3D_7Z=str(vkd3d), FIXTURE_DOWNLOAD_LOG=str(log))
             subprocess.run(['bash', str(root / 'tools/ci/stage-graphics.sh'), str(out), str(cache)],
                            env=env, check=True, stdout=subprocess.DEVNULL)
             urls = log.read_text().splitlines()
-            for name in ('Mesa 3D', 'DXVK', 'VKD3D-Proton'):
+            for name in ('Mesa 3D', 'DXVK'):
                 url, file = appcorpus.catalog_entry(name)
                 self.assertIn(url, urls)
                 self.assertTrue((out / 'downloads' / url.rsplit('/', 1)[-1]).is_file())
-            self.assertEqual(len(urls), 4)
+            self.assertEqual(len(urls), 3)
             self.assertTrue((out / 'downloads/venus.7z').is_file())
+            # NovaOS builds VKD3D-Proton itself (tools/build_vkd3d_proton.py)
+            self.assertEqual(appcorpus.catalog_entry('VKD3D-Proton')[1], 'vkd3d-proton.7z')
+            self.assertEqual((out / 'downloads/vkd3d-proton.7z').read_bytes(), b'vkd3d fixture')

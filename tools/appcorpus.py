@@ -247,12 +247,17 @@ def stage_store(app, files, work):
 
 def stage_runtimes(app, cache, work):
     """The downloads of @app.runtimes in Downloads and 7-Zip, so the Store
-    can install them without a network"""
+    can install them without a network.  A runtime NovaOS builds itself
+    (VKD3D-Proton: tools/build_vkd3d_proton.py) is taken from the folder
+    $CORPUS_LOCAL_DOWNLOADS when it is there, so a change to it is tested
+    before the "latest" release carries it"""
     downloads = os.path.join(work, 'Downloads')
     os.makedirs(downloads, exist_ok=True)
+    local = os.environ.get('CORPUS_LOCAL_DOWNLOADS')
     for name in app.runtimes:
         url, file = catalog_entry(name)
-        shutil.copy(fetch(url, cache), os.path.join(downloads, file))
+        built = os.path.join(local, file) if local else None
+        shutil.copy(built if built and os.path.isfile(built) else fetch(url, cache), os.path.join(downloads, file))
     stage_7zip(work, fetch(SEVENZIP, cache))
 
 

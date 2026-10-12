@@ -676,6 +676,11 @@ struct VgpuBlob {
     PADDR  *frames;                       /* a virgl resource's guest memory (NULL: a blob) */
     UINT64  nframes;
     UINT32  format, width, height;        /* a virgl resource's (0: a blob) */
+    /* Direct presentation lends a resource the screen's rows as its memory
+     * (overlay_read) and leaves them until something else reads it back
+     * (lent_len 0: its own pages); lending held while changed */
+    UINT64  lent_at, lent_len;
+    volatile int lending;
 };
 
 #define XFER_COUNT  1                     /* a read-back of a program's (DISPLAY_STAT_FROM_HOST) */
@@ -1058,10 +1063,19 @@ bool VgpuBlobFrames(VgpuBlob *b, const PADDR **frames, UINT64 *n)
     return true;
 }
 
+static void blob_lend_lock(VgpuBlob *b) { while (__atomic_exchange_n(&b->lending, 1, __ATOMIC_ACQUIRE)) sched_yield(); }
+static void blob_lend_unlock(VgpuBlob *b) { __atomic_store_n(&b->lending, 0, __ATOMIC_RELEASE); }
+static bool blob_restore(VgpuBlob *b);
+
 bool VgpuTransfer3d(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32 *box, UINT64 offset, UINT32 level,
                     UINT32 stride, UINT32 layer_stride, UINT32 sync, UINT64 value)
 {
-    return VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
+    if (!b->frames) return VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
+    blob_lend_lock(b);
+    bool ok = blob_restore(b) &&
+              VgpuTransfer3dEx(c, b, to_host, box, offset, level, stride, layer_stride, sync, value, XFER_COUNT);
+    blob_lend_unlock(b);
+    return ok;
 }
 
 /* The same; @how: XFER_* */
@@ -1435,48 +1449,56 @@ static void post_detach(Vgpu *v, UINT32 res)
     post3d_ex(v, i, sizeof(Unref), 0, true);
 }
 
-/* The frame read back straight into the screen: for the transfer, the
- * program's resource gets the screen's rows as its memory, then its own
- * back (the host's only copy, as the GDI's read-back is; the program does
- * not touch a buffer it showed until its next frame).  @src's bytes must
- * be the screen's (B, G, R, then alpha or nothing).  The device is not
- * notified: VgpuPresentWait does that, from the "present" thread (a
+/* @b's own pages back as its memory (lent_len 0 already: nothing to do);
+ * lending held */
+static bool blob_restore(VgpuBlob *b)
+{
+    if (!b->lent_len) return true;
+    UINT64 *ent = kmalloc(b->nframes * 16);
+    if (!ent) return false;
+    size_t pages;
+    UINT32 n = frame_runs(b->frames, b->nframes, ent);
+    void *pl = payload(ent, n * 16, &pages);
+    kfree(ent);
+    if (!pl) return false;
+    post_detach(b->v, b->res);
+    post_attach(b->v, b->res, pl, pages, n);
+    b->lent_at = b->lent_len = 0;
+    return true;
+}
+
+/* The frame read back straight into the screen: the program's resource
+ * gets the screen's rows as its memory for the transfer (the host's only
+ * copy, as the GDI's read-back is) and keeps them while the window stays
+ * where it is, until it is read back otherwise (blob_restore; the program
+ * does not touch a buffer it showed until its next frame).  @src's bytes
+ * must be the screen's (B, G, R, then alpha or nothing).  The device is
+ * not notified: VgpuPresentWait does that, from the "present" thread (a
  * notification waits while QEMU's main thread draws) */
 static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
                          int first, int last)
 {
-    UINT64 *ent = kmalloc(src->nframes * 16);
-    if (!ent) return false;
-    size_t opages;
-    UINT32 nown = frame_runs(src->frames, src->nframes, ent);
-    void *own = payload(ent, nown * 16, &opages);
-    kfree(ent);
-    if (!own) return false;
-    void *rows[2] = { NULL, NULL };
-    size_t rpages[2] = { 0, 0 };
-    UINT64 off[2] = { 0, 0 };
+    present_attach(v, src->res);
+    blob_lend_lock(src);
     for (int pg = first; pg <= last; pg++) {
         UINT64 start = s->phys + ((UINT64)(dy + pg * s->lines) * s->stride + dx) * 4;
         UINT64 end = s->phys + ((UINT64)(dy + pg * s->lines + h - 1) * s->stride + dx + w) * 4;
         UINT64 base = start & ~(UINT64)(PAGE_SIZE - 1);
         UINT64 e[2] = { base, (end - base + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1) };
-        off[pg] = start - base;
-        if (!(rows[pg] = payload(e, 16, &rpages[pg]))) {
-            for (int k = first; k < pg; k++) kernel_free_pages(rows[k], rpages[k]);
-            kernel_free_pages(own, opages);
-            return false;
+        if (src->lent_at != e[0] || src->lent_len != e[1]) {
+            size_t pages;
+            void *pl = payload(e, 16, &pages);
+            if (!pl) { blob_lend_unlock(src); return false; }
+            post_detach(v, src->res);
+            post_attach(v, src->res, pl, pages, 1);
+            src->lent_at = e[0];
+            src->lent_len = e[1];
         }
-    }
-    present_attach(v, src->res);
-    for (int pg = first; pg <= last; pg++) {
-        post_detach(v, src->res);
-        post_attach(v, src->res, rows[pg], rpages[pg], 1);
         UINT32 box[6] = { (UINT32)x, (UINT32)y, 0, (UINT32)w, (UINT32)h, 1 };
-        VgpuTransfer3dEx(g_pctx, src, false, box, off[pg], 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
+        VgpuTransfer3dEx(g_pctx, src, false, box, start - base, 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
                          pg == last ? g_pseq + 1 : 0, XFER_QUIET);
     }
-    post_detach(v, src->res);
-    post_attach(v, src->res, own, opages, nown);
+    blob_lend_unlock(src);
     return true;
 }
 

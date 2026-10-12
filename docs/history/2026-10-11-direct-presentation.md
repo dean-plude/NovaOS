@@ -15,10 +15,11 @@ straight into the screen's memory: no pixel is copied by the guest.
   `NOVA_PRESENT=gdi` always takes the old way.
 - **Kernel**: a virgl context of the kernel's own reads the program's
   frame back on the host straight into the primary's screen (the VGA
-  framebuffer, or a virtio output's picture): for that one transfer the
-  program's buffer gets the screen's rows as its guest memory, then its
-  own back, so the host copies each frame once, as the GDI's read-back
-  does (frames in another layout than the screen's are copied into a
+  framebuffer, or a virtio output's picture): the program's buffer gets
+  the screen's rows as its guest memory, and keeps them while the window
+  stays where it is (its own pages come back before anything else reads
+  it back), so the host copies each frame once, as the GDI's read-back
+  does, and maps no memory anew (frames in another layout than the screen's are copied into a
   texture over the screen's memory first).  When the display flips, a
   frame goes into the page on screen only (the other page gets the
   window's last frame just before it is shown).  The window keeps

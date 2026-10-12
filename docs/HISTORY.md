@@ -11003,25 +11003,23 @@ DXVK's factory.  The GPU-composited path, DirectComposition on the GPU
 (`DCompositionCreateDevice3`, which NovaOS's `dcomp.dll` does not export),
 is the next step.
 
-## Direct presentation measured fairly under KVM
+## Direct presentation under KVM, measured from the host
 
-Direct presentation (roadmap 25.2) looked a few per cent slower than the
-GDI way on the CI runners, where QEMU uses KVM.  A host-side profile of
-each turn of `gltest fps` (`tools/ci/host_profile.py`, CPU time of QEMU's
-threads per turn) showed why: the first virgl program after boot waits
-while the host compiles the scene's shaders, leaving the host idle for
-part of its turn, and later programs find them in the host's cache.
-Direct presentation always went first, so it carried that wait; its
-second turn used the host's CPU as fully as the GDI turns and drew more
-frames.
+Direct presentation (roadmap 25.2) takes about as long a frame as the GDI
+way on the CI runners, where QEMU uses KVM, so `gltest fps` there still
+checks the bytes moved rather than the frame time.  A host-side profile of
+each turn (`tools/ci/host_profile.py`: CPU time of QEMU's threads per
+turn, and gltest's own figures echoed into the CI log) shows why:
 
-- **gltest fps** now starts with a short virgl turn that is not counted,
-  prints every turn's frame rate, and again requires direct presentation
-  to be faster under KVM as well as without it (the check that only
-  compared bytes under KVM is gone).
-- `tools/ci/host_profile.py` also echoes gltest's own figures into the CI
-  log, which otherwise shows a passing test's output only in the
-  `graphics-out` artifact.
+- The runner's CPUs are nearly all busy drawing: llvmpipe's threads take
+  about 3 of its 4 CPUs in every virgl turn, QEMU's own threads 0.4 to
+  0.6.  Direct presentation saves QEMU about 0.1 CPU, but the frame waits
+  on llvmpipe either way.
+- The turns vary more than the two ways differ: on one run direct drew
+  29.1 and 33.7 frames a second, the GDI 31.7 and 31.0 (31.4 against 31.3
+  in all).  A virgl turn run first and not counted drew 31.1, so the host
+  compiling the scene's shaders is not what slows a turn.
+- `gltest fps` prints every turn's frame rate (`fps: turns:`).
 
 ## DirectComposition on the GPU through resizes, teardown and other processes
 

@@ -98,6 +98,9 @@ bool      NtPsHandleClose(void *handle);
 
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
+/* exports.c: whether the kernel itself provides @module's exports
+ * (ntoskrnl.exe, hal.dll, and usbd.sys and wmilib.sys, which NovaOS writes) */
+bool      NtExportModule(const char *module);
 
 /* io.c */
 void      NtIoInit(void);

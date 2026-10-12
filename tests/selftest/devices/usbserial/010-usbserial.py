@@ -29,7 +29,7 @@ TESTS = [
           r'Matching Device ID: +' + FT232,
           r'Driver package installed on device: ' + FT232,
           r'\[PNP\] ' + FT232 + r'\S*: started \(driver FTDIBUS\)',
-          r'\[PNP\] ' + PORT_DEV + r'\S*: reported by',
+          r'\[PNP\] ' + FT232 + r'\S*: child ' + PORT_DEV,
           r'Searching for: +' + PORT,
           r'Driver package installed on device: ' + PORT_DEV,
           r'\[PNP\] ' + PORT_DEV + r'\S*: started \(driver FTSER2K\)'], timeout=600),

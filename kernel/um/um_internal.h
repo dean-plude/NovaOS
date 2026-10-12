@@ -541,6 +541,7 @@ struct VgpuFrame;
 int        UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struct VgpuFrame *fr, int x, int y, int w,
                            int h);
 void       UmGuiGpuStop(UmProcess *p, UINT32 hwnd);
+void       UmGuiGpuStart(UmProcess *p, UINT32 hwnd);
 /* Wait until @o is signaled (acquiring it), @timeout_100ns passes (-1:
  * forever) or the process is being killed. */
 UINT32     um_wait_one(UmObject *o, INT64 timeout_100ns);

@@ -146,7 +146,7 @@ typedef struct NdisAdapter {
     TxSlot               tx[TX_SLOTS];
     UINT32               tx_next;
     UINT64               rx_frames, tx_frames, rx_dropped;
-    UINT64               tx_done, isrs, dpcs;    /* (for the log when sending stalls) */
+    UINT64               tx_done, isrs, dpcs, sgs, sgs_freed;   /* (for the log when sending stalls) */
     bool                 tx_told;
 } NdisAdapter;
 
@@ -254,9 +254,10 @@ static bool net_transmit(const void *frame, UINT16 len)
         if (!a->tx_told) {
             a->tx_told = true;
             kprintf("[NDIS] %s: every send slot is waiting for the miniport (%llu sent, %llu completed; "
-                    "%llu interrupts, %llu DPCs, %llu frames received)\n", a->drv->service,
+                    "%llu interrupts, %llu DPCs, %llu frames received, %llu of %llu S/G lists freed)\n", a->drv->service,
                     (unsigned long long)a->tx_frames, (unsigned long long)a->tx_done, (unsigned long long)a->isrs,
-                    (unsigned long long)a->dpcs, (unsigned long long)a->rx_frames);
+                    (unsigned long long)a->dpcs, (unsigned long long)a->rx_frames,
+                    (unsigned long long)a->sgs_freed, (unsigned long long)a->sgs);
         }
         return false;
     }
@@ -910,6 +911,7 @@ NT_API NDIS_STATUS nt_NdisMAllocateNetBufferSGList(void *h, NET_BUFFER *nb, void
 {
     NdisAdapter *a = adapter_of(h);
     if (!a || !a->dma || !nb || !nb->CurrentMdl) return NDIS_STATUS_INVALID_PARAMETER;
+    a->sgs++;
     NT_MDL *m = nb->CurrentMdl;
     void *va = (UINT8 *)m->StartVa + m->ByteOffset + nb->CurrentMdlOffset;
     UINT8 write = (flags & NDIS_SG_LIST_WRITE_TO_DEVICE) != 0;
@@ -925,6 +927,7 @@ NT_API void nt_NdisMFreeNetBufferSGList(void *h, NT_SCATTER_GATHER_LIST *list, N
 {
     (void)nb;
     NdisAdapter *a = adapter_of(h);
+    if (a) a->sgs_freed++;
     if (a && a->dma && list) a->dma->DmaOperations->PutScatterGatherList(a->dma, list, 1);
 }
 

@@ -240,26 +240,35 @@ by Microsoft (WHQL or attestation signing), or when test signing is turned
 on.  NovaOS follows the same policy and does not bypass it:
 
 - At install, setupapi verifies the package's `.cat` with `WinVerifyTrust`
-  against Microsoft's root certificates and checks each file's hash
-  against the catalog, as Windows does.  A package that fails is refused
-  with Windows' error (`ERROR_INVALID_IMAGE_HASH` / problem code 52).
-- At load, the kernel checks the image's hash against the catalog the
-  install recorded, so a `.sys` changed on disk after install does not
-  start (the job Windows' code integrity does).
-- Test signing is a NovaOS boot option, shown on the desktop as Windows
-  shows "Test Mode".  NovaOS's own test drivers (`tests/selftest/devices/`)
-  are signed with a NovaOS test certificate and load only there; CI boots
-  the devices suite with it on.
-- Until 30.7 lands NovaOS checks no driver signatures, so it loads kernel
-  drivers only with test signing on: the DWORD `TestSigning` = 1 under
+  (the driver action) and checks each staged file's hash against it, as
+  Windows does.  A file the catalog does not list refuses the package
+  (`ERROR_FILE_HASH_NOT_IN_CATALOG`); an intact catalog is installed in
+  `CatRoot` as `oemN.cat`; a package without a trusted signature is
+  staged as unsigned, as after Windows' "can't verify the publisher"
+  warning, and its drivers do not load (problem code 52 once Plug and
+  Play installs drivers on devices, step 30.3).
+- At load, the kernel (`kernel/nt/ci.c`, Mbed TLS for the X.509 and RSA
+  work) recomputes the image's Authenticode digest and accepts an
+  embedded signature or a `CatRoot` catalog listing it, so a `.sys`
+  changed on disk after install does not start (the job Windows' code
+  integrity does).  Without test signing the signature must chain to a
+  Microsoft product root (`kernel/nt/ci_roots.c`: Root Certificate
+  Authority 2010 and the 2001 root, the public certificates from
+  `userland/crypt32/roots/`) through a signing certificate with a driver
+  usage (WHQL, attestation, Windows component); certificate validity
+  periods are not checked, as Windows does not for drivers.  That is
+  Windows 11's policy with Secure Boot on, so cross-signed drivers (a
+  vendor certificate under Microsoft's old cross-signing roots) are
+  refused too.
+- Test signing is a NovaOS boot option: the DWORD `TestSigning` = 1 under
   `HKLM\SYSTEM\CurrentControlSet\Control\NovaOS`, NovaOS's
   `bcdedit /set testsigning on`, read at boot (so it takes a restart) and
   shown in `Control\SystemStartOptions` as ` TESTSIGNING`, as Windows
-  shows it.  With it off, `NtLoadDriver` fails with
-  `STATUS_INVALID_IMAGE_HASH` (Win32 577) and the log says why.  Without
-  this gate, any program that can start a service could load an
-  arbitrary vendor or anti-cheat `.sys` before the signature checks
-  exist.
+  shows it.  It lets any intact signature load (a test certificate whose
+  root nobody trusts, as `makecert`'s are), never an unsigned image.
+  NovaOS's own test drivers (`tools/drivertest/mksys.py`) carry such test
+  signatures and load only there; the devices suite turns it on.  The
+  desktop's "Test Mode" mark is not drawn yet.
 - What does not work, and stays so: drivers that need Secure Boot's
   measured state, HVCI/memory integrity guarantees or a TPM-backed
   attestation (anti-cheat and DRM drivers among them) are documented as

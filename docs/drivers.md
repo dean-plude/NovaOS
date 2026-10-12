@@ -41,16 +41,52 @@ missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not implemented`).  Plug and Play
 drivers for real devices, KMDF and the rest follow in later steps; until
 then the default set is the built-in drivers and the firmware below.
 
-NovaOS does not check driver signatures yet (step 30.7), so it loads
-kernel drivers only with **test signing** on, as Windows does for drivers
-not signed by Microsoft.  Turn it on, as an administrator, and restart:
+### Driver signing
 
-    reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f
+A kernel driver loads only if it is signed the way Windows 11 requires
+(step 30.7, `kernel/nt/ci.c`), checked every time it starts:
 
-With it off, starting a kernel driver fails with Windows' error 577
-(`ERROR_INVALID_IMAGE_HASH`), as an unsigned driver does on Windows.  A
-kernel driver runs with full access to the machine, so only turn it on
-for drivers you trust.
+- **Signed by Microsoft**: an Authenticode signature, embedded in the
+  `.sys` or in the package's catalog (`.cat`) that `pnputil` installed,
+  whose certificates chain to a Microsoft product root (Microsoft Root
+  Certificate Authority 2010, or the 2001 root for older WHQL packages)
+  and whose signing certificate is one for drivers: WHQL, attestation or
+  Windows component signing.  That is what the packages on the Microsoft
+  Update Catalog carry, so they load as they come (checked on Red Hat's
+  WHQL-signed `vioser.sys`).  Certificate expiry does not count, as on
+  Windows.
+- **Test-signed**: any other intact signature (a developer's or a test
+  certificate) loads only with **test signing** on, NovaOS's
+  `bcdedit /set testsigning on`.  Turn it on, as an administrator, and
+  restart:
+
+      reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f
+
+  `Control\SystemStartOptions` then shows ` TESTSIGNING`, as on Windows.
+- **Unsigned**, or changed after it was signed or installed: never, test
+  signing or not.
+
+A driver that fails starts with Windows' error 577
+(`ERROR_INVALID_IMAGE_HASH`, `STATUS_INVALID_IMAGE_HASH`), and the kernel
+log says why: `[NT] x.sys: not loaded: it is not signed`, `... signed by
+NAME (oem3.cat), which is not a Microsoft driver signature; it loads only
+with test signing on`, or `... the image does not match its signature`.
+Nothing is bypassed: a driver that needs more than this (Secure Boot's
+measured state, HVCI, TPM attestation, as anti-cheat and DRM drivers do)
+does not load.
+
+When a package is staged (`pnputil /add-driver`, `DiInstallDriver`, a
+setup program or a download from the Update Catalog), setupapi checks
+every file against the package's catalog with `WinVerifyTrust`, as
+Windows does.  A file whose hash the catalog does not list is refused
+("The hash for the file is not present in the specified catalog file",
+`ERROR_FILE_HASH_NOT_IN_CATALOG`) and nothing is staged.  An intact
+catalog is installed in `C:\Windows\System32\CatRoot` as `oemN.cat`,
+where the kernel looks for it, and `pnputil /enum-drivers` shows its
+signer.  A package with no signed catalog, or one signed under a root
+nobody trusts, is staged as unsigned, as Windows stages one after its
+"Windows can't verify the publisher" warning (NovaOS does not ask yet),
+and its drivers do not load.
 
 ## The default firmware set
 

@@ -70,8 +70,10 @@ order; --list prints them):
             USB stick and takes them out again: pnptest follows the
             Plug and Play device tree; "wdm", the machine as the core
             boot has it, where sc installs a Windows kernel-mode test
-            driver (wdmtest.sys), which loads once test signing is on
-            and a restart later, and wdmtest talks to it
+            driver (wdmtest.sys, test-signed), which loads once test
+            signing is on and a restart later (unsigned and tampered
+            copies never; pnputil refuses a package whose file does not
+            match its catalog), and wdmtest talks to it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -420,7 +422,8 @@ def pnp_boot(work):
 
 def wdm_boot(work):
     """Nothing beyond the core boot's machine: sc loads a Windows kernel-mode
-    driver, wdmtest.sys, once test signing is on (tests/selftest/devices/wdm)"""
+    driver, wdmtest.sys, once test signing is on, under Windows' signing
+    policy (tests/selftest/devices/wdm)"""
     return [], []
 
 

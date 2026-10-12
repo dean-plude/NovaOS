@@ -9,15 +9,10 @@
  *     #0 ffffffff80267434  KeCrashTestFault+0x4
  *     #1 ffffffff8026744b  KeCrashTest+0xa
  *
- * walking the RBP chain (the kernel is built with frame pointers).  An
- * address in a Windows driver is shown as its image and offset
- * (netkvm.sys+0x1a2b), and a call through a null or wild pointer (the
- * fault's RIP outside the kernel and the drivers) shows the return
- * address the call left at RSP.
+ * walking the RBP chain (the kernel is built with frame pointers).
  */
 #include "ksym.h"
 #include "printf.h"
-#include "../nt/nt.h"
 
 typedef struct { UINT64 addr; UINT32 name, size; } KsymEntry;
 
@@ -49,25 +44,52 @@ const char *KsymLookup(UINT64 addr, UINT64 *offset)
     return names + e[lo].name;
 }
 
+/* A loaded Windows driver's name for addresses in it (kernel/nt/ldr.c) */
+const char *NtDrvNameOf(UINT64 addr, UINT64 *offset);
+
+static bool code_address(UINT64 a)
+{
+    UINT64 off;
+    return (a >= (UINT64)__text_start && a < (UINT64)__text_end) || NtDrvNameOf(a, &off);
+}
+
 static void frame_line(int i, UINT64 pc)
 {
     UINT64 off = 0;
     const char *name = KsymLookup(pc, &off);
-    NtDriver *drv = name ? NULL : NtDrvByAddress(pc);
-    if (name)     kprintf("  #%d %016lx  %s+0x%lx\n", i, (unsigned long)pc, name, (unsigned long)off);
-    else if (drv) kprintf("  #%d %016lx  %s+0x%lx\n", i, (unsigned long)pc, drv->image, (unsigned long)(pc - drv->base));
-    else          kprintf("  #%d %016lx  ?\n", i, (unsigned long)pc);
+    if (!name) name = NtDrvNameOf(pc, &off);
+    if (name) kprintf("  #%d %016lx  %s+0x%lx\n", i, (unsigned long)pc, name, (unsigned long)off);
+    else      kprintf("  #%d %016lx  ?\n", i, (unsigned long)pc);
 }
 
 void KsymBacktrace(UINT64 rip, UINT64 rbp, UINT64 rsp)
 {
     kprintf("Backtrace:\n");
     int i = 0;
+    /* outside the kernel (a driver, or a call through a null pointer) the
+     * frames have no frame pointer: the top of the stack holds the return
+     * address, so show it raw */
+    if (rip < (UINT64)__text_start || rip >= (UINT64)__text_end) {
+        const UINT64 *sp = (const UINT64 *)rsp;
+        kprintf("  stack at %016lx:", (unsigned long)rsp);
+        for (int k = 0; k < 8 && !(rsp & 7); k++) kprintf(" %016lx", (unsigned long)sp[k]);
+        kprintf("\n");
+    }
     frame_line(i++, rip);
-    /* (a call to a bad address: where it was called from, if that is code) */
-    if ((rip < (UINT64)__text_start || rip >= (UINT64)__text_end) && !NtDrvByAddress(rip) && !(rsp & 7)) {
-        UINT64 ret = *(const UINT64 *)rsp;
-        if ((ret >= (UINT64)__text_start && ret < (UINT64)__text_end) || NtDrvByAddress(ret)) frame_line(i++, ret - 1);
+    /* Outside the kernel (a Windows driver, which keeps no frame chain, or
+     * a call through a null pointer): the code addresses near the top of
+     * the stack, the first usually the caller */
+    if (!KsymLookup(rip, NULL) && !(rsp & 7)) {
+        const UINT64 *w = (const UINT64 *)rsp;
+        int words = (int)((((rsp | 0xFFF) + 1) - rsp) / 8);   /* (only this stack page: it is mapped) */
+        for (int k = 0, shown = 0; k < words && k < 64 && shown < 8; k++)
+            if (code_address(w[k])) {
+                UINT64 off = 0;
+                const char *name = KsymLookup(w[k], &off);
+                if (!name) name = NtDrvNameOf(w[k], &off);
+                kprintf("  [rsp+0x%x] %016lx  %s+0x%lx\n", k * 8, (unsigned long)w[k], name, (unsigned long)off);
+                shown++;
+            }
     }
     /* each frame: [rbp] = the caller's rbp, [rbp + 8] = the return address;
      * only frames on this stack (from @rsp up 128 KiB) are read, so a
@@ -76,7 +98,7 @@ void KsymBacktrace(UINT64 rip, UINT64 rbp, UINT64 rsp)
         if (rbp < rsp || rbp + 16 > rsp + 0x20000 || (rbp & 7)) break;
         const UINT64 *f = (const UINT64 *)rbp;
         UINT64 ret = f[1], next = f[0];
-        if ((ret < (UINT64)__text_start || ret >= (UINT64)__text_end) && !NtDrvByAddress(ret)) break;
+        if (ret < (UINT64)__text_start || ret >= (UINT64)__text_end) break;
         frame_line(i, ret - 1);                  /* (inside the call instruction) */
         if (next <= rbp) break;
         rbp = next;

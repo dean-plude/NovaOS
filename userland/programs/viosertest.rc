@@ -1,0 +1,2 @@
+/* viosertest: its manifest asks for the highest rights the user has (highestAvailable) */
+1 24 "viosertest.manifest"

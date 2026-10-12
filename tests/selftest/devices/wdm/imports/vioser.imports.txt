@@ -1,9 +1,8 @@
 # Import list of vioser.sys, extracted from the real signed driver with
 # tools/ci/check-driver-imports.py --dump (do not edit by hand).  The
-# import-coverage check (the same tool) verifies every ntoskrnl.exe,
-# hal.dll and ndis.sys import below is provided by kernel/nt/exports.h; wdfldr.sys
-# imports are the KMDF loader's own exports, provided by a later driver
-# step (30.4/30.5), and are allow-listed there.
+# import-coverage check (the same tool) verifies every ntoskrnl.exe and
+# hal.dll import below is provided by kernel/nt/exports.h, and every
+# wdfldr.sys import by NovaOS's WdfLdr.sys (tools/kmdf/wdfldr.c).
 hal.dll	KeStallExecutionProcessor
 ntoskrnl.exe	DbgPrintEx
 ntoskrnl.exe	ExAllocatePoolWithTag

@@ -62,8 +62,51 @@ and register a device interface that programs open.  `pnputil
 refuse while a program has the device open) and keeps the device off
 across restarts, and `/enable-device` starts it again.  A device NovaOS
 has its own driver for keeps it, except where that driver can step aside
-(below).  KMDF drivers and the rest follow in later steps; until then the
-default set is the built-in drivers and the firmware below.
+(below).  The rest follow in later steps; until
+then the default set is the built-in drivers and the firmware below.
+
+KMDF drivers run too (step 30.4): NovaOS ships Microsoft's framework,
+`Wdf01000.sys`, built from Microsoft's MIT-licensed source, and its own
+KMDF loader, `WdfLdr.sys`, both in `C:\Windows\System32\drivers` as on
+Windows (`tools/kmdf/build_kmdf.py`).  A KMDF driver starting imports
+`WdfLdr.sys`, which loads `Wdf01000.sys` and binds the driver to KMDF
+1.33; the framework's error messages go to the log as `[DbgPrint]
+Wdf01000: ...` lines.  For now the framework is test-signed,
+so a KMDF driver needs test signing on (below) until NovaOS trusts its own
+system files; class-extension drivers (those that bind with
+`WdfVersionBindClass`) do not load yet.
+
+The first third-party driver that runs unchanged is virtio-win's
+**`vioser.sys`** (step 30.5), the Red Hat serial driver Microsoft signed,
+for QEMU's `virtio-serial-pci`: `pnputil /add-driver vioser.inf /install`
+starts it on the device, and each port the host offers becomes a child
+device (`{6FDE7547-1B65-48ae-B628-80BE62016026}\VIOSerialPort\...`) that
+programs open as `\\.\Global\<port name>`, or through its
+`GUID_VIOSERIAL_PORT` interface, to exchange bytes with the host.  For
+this NovaOS's PnP manager now enumerates **bus drivers**' children, as
+Windows does: a driver that calls `IoInvalidateDeviceRelations` is asked
+for its `BusRelations`, each new child gets a device node from its
+`IRP_MN_QUERY_ID` answers and starts with its own driver, or raw (with the
+bus driver alone) when it says it may, and a child no longer reported is
+removed.  `vioser.sys` itself is Microsoft-signed, but it runs on the
+KMDF framework above, so it too needs test signing on for now.
+
+Since step 30.11 a Windows **storage driver** (a Storport miniport) runs a
+disk controller, on NovaOS's own Storport host (`kernel/nt/storport.c`,
+the `storport.sys` exports; Microsoft's `storport.sys` is never shipped).
+The miniport registers with `StorPortInitialize`; NovaOS starts the
+adapter as Windows does (`HwFindAdapter` with the controller's resources
+in its `PORT_CONFIGURATION_INFORMATION`, `HwInitialize`, the passive
+initialization routine), sends it SCSI requests as `STORAGE_REQUEST_BLOCK`s
+through `HwBuildIo` and `HwStartIo` with a scatter/gather list, and takes
+completions from `StorPortNotification(RequestComplete)` in the
+miniport's interrupt and DPCs.  Each disk it finds (INQUIRY, READ
+CAPACITY) joins the block layer as `storN`, and its volumes mount like any
+other disk's (`[DRIVES] D: is NTFS volume "..." on stor0`).  virtio-win's
+`viostor.sys` on QEMU's virtio-blk card is the first.  For now the host
+sends one request at a time through a 64 KiB bounce buffer, interrupts
+are line-based (no MSI-X), and a started adapter cannot be removed yet;
+deeper queues, MSI-X and removal come later.
 
 Since step 30.9 a Windows **network driver** (an NDIS 6 miniport) runs a
 network card, on NovaOS's own NDIS host (`kernel/nt/ndis.c`, the
@@ -80,8 +123,9 @@ link state, the adapter's MAC address and OID requests work.  virtio-win's
 `netkvm.sys` on QEMU's virtio-net card is the first: NovaOS has its own
 virtio-net driver, which steps aside when a Windows driver is installed on
 the card (`[PCI] 00:03.0: virtio-net steps aside for an installed Windows
-driver`), and the card keeps the Windows driver at every boot after.  Wi-Fi drivers (WDI) and NDIS filter and protocol drivers
-are not hosted yet.
+driver`), and the card keeps the Windows driver at every boot after.
+Wi-Fi drivers (WDI) and NDIS filter and protocol drivers are not hosted
+yet.
 
 ### Driver signing
 

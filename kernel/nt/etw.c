@@ -10,6 +10,7 @@
  * does reach the NovaOS console.
  */
 #include "nt.h"
+#include "../lib/string.h"
 
 typedef UINT64 NT_REGHANDLE;
 
@@ -52,10 +53,32 @@ NT_API NTSTATUS nt_WmiTraceMessage(UINT64 logger, UINT32 flags, void *guid, UINT
     return NT_STATUS_SUCCESS;
 }
 
-/* WmiQueryTraceInformation: no trace session to tell about */
-NT_API NTSTATUS nt_WmiQueryTraceInformation(UINT32 cls, void *info, UINT32 len, UINT32 *ret, void *buf)
+/* WmiTraceMessageVa: the va_list form, dropped the same way */
+NT_API NTSTATUS nt_WmiTraceMessageVa(UINT64 logger, UINT32 flags, void *guid, UINT16 num, __builtin_ms_va_list ap)
 {
-    (void)cls; (void)info; (void)len; (void)buf;
-    if (ret) *ret = 0;
+    (void)logger; (void)flags; (void)guid; (void)num; (void)ap;
+    return NT_STATUS_SUCCESS;
+}
+
+/* WmiQueryTraceInformation: no trace session to describe (KMDF then
+ * uses its own no-op performance-trace routines) */
+NT_API NTSTATUS nt_WmiQueryTraceInformation(int cls, void *info, UINT32 len, UINT32 *ret_len, void *buffer)
+{
+    (void)cls; (void)info; (void)len; (void)buffer;
+    if (ret_len) *ret_len = 0;
     return NT_STATUS_NOT_SUPPORTED;
+}
+
+/* EtwActivityIdControl: no thread carries an activity ID (GET and
+ * GET_SET give the zero GUID); CREATE gives a new random one */
+NT_API NTSTATUS nt_EtwActivityIdControl(UINT32 code, UINT8 *guid)
+{
+    enum { GET_ID = 1, SET_ID, CREATE_ID, GET_SET_ID, CREATE_SET_ID };
+    if (!guid) return NT_STATUS_INVALID_PARAMETER;
+    switch (code) {
+    case GET_ID: case GET_SET_ID: memset(guid, 0, 16); return NT_STATUS_SUCCESS;
+    case SET_ID: return NT_STATUS_SUCCESS;
+    case CREATE_ID: case CREATE_SET_ID: return NtExUuid(guid);
+    default: return NT_STATUS_INVALID_PARAMETER;
+    }
 }

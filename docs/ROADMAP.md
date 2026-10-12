@@ -545,7 +545,17 @@ named program or test demonstrates it.
   Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts only, MSI comes later.
+  the tests); line-based interrupts only, MSI comes later.  Step 30.4's
+  framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
+  and NovaOS's `WdfLdr.sys` load KMDF drivers
+  (a test driver's control device and queue); the KMDF version of the
+  `edu` PnP test driver, which finishes the step, follows 30.3.
+  Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
+  runs on KMDF, reports its serial ports as child devices, and a program
+  exchanges bytes with the host through `\\.\Global\<port name>`.
+  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
+  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
+  the NTFS volume on its disk.
   Step 30.9's first half is in: NovaOS's own NDIS host (`ndis.sys`) runs
   virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
   built-in driver, and the network stack uses it for DHCP, ping and

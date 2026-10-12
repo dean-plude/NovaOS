@@ -1,36 +1,19 @@
-# Import list of wdfldr.sys, extracted from the real signed driver with
+# Import list of wdfldr.sys, extracted from NovaOS's build of Microsoft's KMDF source (tools/kmdf/build_kmdf.py) with
 # tools/ci/check-driver-imports.py --dump (do not edit by hand).  The
-# import-coverage check (the same tool) verifies every ntoskrnl.exe,
-# hal.dll and ndis.sys import below is provided by kernel/nt/exports.h; wdfldr.sys
-# imports are the KMDF loader's own exports, provided by a later driver
-# step (30.4/30.5), and are allow-listed there.
-ntoskrnl.exe	DbgPrint
+# import-coverage check (the same tool) verifies every ntoskrnl.exe and
+# hal.dll import below is provided by kernel/nt/exports.h, and every
+# wdfldr.sys import by NovaOS's WdfLdr.sys (tools/kmdf/wdfldr.c).
 ntoskrnl.exe	DbgPrintEx
-ntoskrnl.exe	ExAcquireResourceExclusiveLite
-ntoskrnl.exe	ExAllocatePoolWithQuotaTag
-ntoskrnl.exe	ExAllocatePoolWithTag
-ntoskrnl.exe	ExDeleteResourceLite
+ntoskrnl.exe	ExAcquireFastMutex
+ntoskrnl.exe	ExAllocatePool2
 ntoskrnl.exe	ExFreePoolWithTag
-ntoskrnl.exe	ExInitializeResourceLite
-ntoskrnl.exe	ExReleaseResourceLite
-ntoskrnl.exe	IoGetDeviceObjectPointer
-ntoskrnl.exe	KeEnterCriticalRegion
+ntoskrnl.exe	ExReleaseFastMutex
 ntoskrnl.exe	KeInitializeEvent
-ntoskrnl.exe	KeLeaveCriticalRegion
-ntoskrnl.exe	MmGetSystemRoutineAddress
-ntoskrnl.exe	ObfDereferenceObject
-ntoskrnl.exe	RtlAnsiCharToUnicodeChar
-ntoskrnl.exe	RtlCopyUnicodeString
 ntoskrnl.exe	RtlEqualUnicodeString
-ntoskrnl.exe	RtlFreeAnsiString
-ntoskrnl.exe	RtlFreeUnicodeString
-ntoskrnl.exe	RtlGetVersion
-ntoskrnl.exe	RtlIntegerToUnicodeString
-ntoskrnl.exe	RtlUnicodeStringToAnsiString
-ntoskrnl.exe	RtlUnwindEx
 ntoskrnl.exe	ZwClose
 ntoskrnl.exe	ZwLoadDriver
 ntoskrnl.exe	ZwOpenKey
-ntoskrnl.exe	ZwQuerySystemInformation
 ntoskrnl.exe	ZwQueryValueKey
-ntoskrnl.exe	ZwUnloadDriver
+ntoskrnl.exe	_vsnwprintf
+ntoskrnl.exe	memcmp
+ntoskrnl.exe	memcpy

@@ -100,9 +100,11 @@ def write(path, data):
 
 
 def test_signer():
+    """The test certificate NovaOS's test drivers are signed with, and its root"""
     root_key, signer_key = Key('novaos-driver-test-root'), Key('novaos-driver-test-signer')
     root = Cert('NovaOS Driver Test Root', root_key, 1, LONG, ca=True)
-    return Cert('NovaOS Test Driver Signer', signer_key, 2, LONG, root, root_key, usage='codesign'), root
+    signer = Cert('NovaOS Test Driver Signer', signer_key, 2, LONG, root, root_key, usage='codesign')
+    return signer, root
 
 
 def signed_package(out, name):
@@ -144,12 +146,9 @@ def run(cmd):
         sys.exit(1)
 
 
-def main():
-    out = sys.argv[1]
-    name = sys.argv[2] if len(sys.argv) > 2 else 'wdmtest'
-    os.makedirs(out, exist_ok=True)
-    work = os.path.join(out, 'obj')
-    os.makedirs(work, exist_ok=True)
+def import_libs(work):
+    """Import libraries for ntoskrnl.exe and hal.dll in @work, made from the
+    export list (kernel/nt/exports.h); returns their paths"""
     mods = {}
     src = open(os.path.join(ROOT, 'kernel', 'nt', 'exports.h')).read()
     for m in re.finditer(r'^\s*NT_EXPORT(_DATA)?\(\s*([\w.]+)\s*,\s*(\w+)\s*\)', src, re.M):
@@ -164,6 +163,16 @@ def main():
         lib = os.path.join(work, stem + '.lib')
         run(['llvm-lib', f'/def:{d}', '/machine:x64', f'/out:{lib}'])
         libs.append(lib)
+    return libs
+
+
+def main():
+    out = sys.argv[1]
+    name = sys.argv[2] if len(sys.argv) > 2 else 'wdmtest'
+    os.makedirs(out, exist_ok=True)
+    work = os.path.join(out, 'obj')
+    os.makedirs(work, exist_ok=True)
+    libs = import_libs(work)
     obj = os.path.join(work, name + '.obj')
     # -fasync-exceptions (MSVC's /EHa for the kernel): without it the
     # optimizer assumes a memory access never faults and deletes a

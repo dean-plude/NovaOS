@@ -351,7 +351,7 @@ Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features
  
  #include <dcomp.h>
  
-@@ -820,6 +820,26 @@
+@@ -820,11 +820,41 @@
     if (chain->dxgi)
        return wsi_win32_queue_present_dxgi(chain, image, damage);
  
@@ -378,3 +378,19 @@ Binary files mesa-26.2.4/src/vulkan/util/__pycache__/vk_physical_device_features
     char *ptr = (char *)image->base.cpu_map;
     char *dptr = (char *)image->sw.ppvBits;
  
++   /* (NovaOS: the bitmap is BGRA; an RGBA image, which DXVK picks first
++    * for an 8-bit swap chain, has its red and blue swapped into it) */
++   VkFormat fmt = chain->base.image_info.create.format;
++   bool rgba = fmt == VK_FORMAT_R8G8B8A8_UNORM || fmt == VK_FORMAT_R8G8B8A8_SRGB;
+    for (unsigned h = 0; h < chain->extent.height; h++) {
+-      memcpy(dptr, ptr, chain->extent.width * 4);
++      if (rgba) {
++         const uint32_t *s = (const uint32_t *)ptr;
++         uint32_t *d = (uint32_t *)dptr;
++         for (unsigned x = 0; x < chain->extent.width; x++)
++            d[x] = (s[x] & 0xff00ff00u) | (s[x] >> 16 & 0xffu) | (s[x] & 0xffu) << 16;
++      } else
++         memcpy(dptr, ptr, chain->extent.width * 4);
+       dptr += image->sw.bmp_row_pitch;
+       ptr += image->base.row_pitches[0];
+    }

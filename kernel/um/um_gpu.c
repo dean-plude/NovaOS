@@ -239,6 +239,8 @@ static UINT64 do_wait(Gpu *g, UINT64 ptr)
  *     top-level handle, and where on screen; with flags bit 0, blob @arg's memory holds the frame:
  *     Venus's): 0 shown, 1 not now (present it through the GDI)
  *  14 statistics (h unused): DISPLAY_STATS counters (hal/display.h) at @ptr
+ *  15 (h unused) stop showing window @arg's frames straight from the host (user32's top-level handle):
+ *     the program draws it through the GDI again
  * Returns 0 (or as said), or -1 for a bad handle or argument. */
 static UINT64 sys_gpu(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
@@ -250,6 +252,10 @@ static UINT64 sys_gpu(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT64 st[DISPLAY_STATS];
         DisplayStats(st);
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, st, sizeof(st))) ? 0 : FAIL;
+    }
+    if (a2 == 15) {
+        UmGuiGpuStop(UmCurrent(), (UINT32)a3);
+        return 0;
     }
     if (a2 == 1) {
         GpuCapset c;

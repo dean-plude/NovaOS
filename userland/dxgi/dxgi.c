@@ -24,9 +24,11 @@
  *
  * DirectComposition swap chains on a GPU device (DXVK's) come from here
  * too: their buffer is a texture on that device, which the program renders
- * into on the GPU; each present copies the part that changed into a staging
- * texture and reads it back, and dcomp.dll draws that frame into the
- * target's window as it does a software device's.  DXVK's adapters, as the
+ * into on the GPU.  dcomp.dll composites them on the GPU into a swap chain
+ * of the device's on the target's window (shown straight from the host
+ * when nothing covers it); when it cannot, it asks for the frame, and the
+ * parts presented since the last time are copied into a staging texture
+ * and read back, and drawn into the window as a software device's are.  DXVK's adapters, as the
  * wrapped factory hands them out, are wrapped too, so that a device's
  * adapter's GetParent is that factory: Chromium takes its DirectComposition
  * swap chains from there, and asks them for IDXGISwapChain3.
@@ -247,8 +249,8 @@ typedef struct {
 /* One buffer: what GetBuffer(0) gives is what the next present shows, and
  * it keeps the last frame, so a present with dirty rectangles shows the
  * rest unchanged, as a flip-model chain's runtime-copied back buffer does.
- * On a GPU device (composition only) the buffer is the device's texture and
- * each present reads the part that changed back into @frame. */
+ * On a GPU device (composition only) the buffer is the device's texture,
+ * read back into @frame when the frame is asked for. */
 struct Chain {
     const ChainVtbl *vtbl;
     INovaSwapChain nova;
@@ -260,7 +262,9 @@ struct Chain {
     INovaSoftTexture *bits;             /* (the software device's) */
     IUnknown *ctx;                      /* (a GPU's) its immediate context, */
     IUnknown *staging;                  /*   a texture the CPU reads, */
-    BYTE *frame;                        /*   and the frame read back: BGRA, Width * 4 bytes a row */
+    BYTE *frame;                        /*   and the frame read back: BGRA, Width * 4 bytes a row, */
+    RECT unread;                        /*   less the part presented since (Frame reads it back) */
+    CRITICAL_SECTION rb_lock;           /*   (reading back and remaking the buffers; takes no other lock) */
     NovaPresentSink sink;
     void *sink_ctx;
     CRITICAL_SECTION lock;              /* (presents, resizes and the sink: a visual's teardown waits for a present
@@ -311,11 +315,14 @@ static void chain_hold(Chain *c)
 
 static void chain_drop_buffer(Chain *c)
 {
+    EnterCriticalSection(&c->rb_lock);
+    SetRectEmpty(&c->unread);
     if (c->bits) { c->bits->lpVtbl->Release(c->bits); c->bits = NULL; }
     if (c->buffer) { c->buffer->lpVtbl->Release(c->buffer); c->buffer = NULL; }
     if (c->staging) { c->staging->lpVtbl->Release(c->staging); c->staging = NULL; }
     HeapFree(GetProcessHeap(), 0, c->frame);
     c->frame = NULL;
+    LeaveCriticalSection(&c->rb_lock);
 }
 
 static HRESULT chain_make_buffer(Chain *c)
@@ -351,17 +358,30 @@ static HRESULT chain_make_buffer(Chain *c)
     return S_OK;
 }
 
-/* A GPU's present: the part @dirty (NULL: all) of the buffer, copied on the
- * GPU into the staging texture, read back into the frame */
-static void chain_read_back(Chain *c, const RECT *dirty)
+/* A GPU's present: the part @dirty (NULL: all) of the buffer is to be read
+ * back when the frame is asked for */
+static void chain_presented(Chain *c, const RECT *dirty)
 {
-    novadx_read_back(c->ctx, c->staging, c->buffer, c->desc.Format, c->desc.Width, c->desc.Height, c->frame, dirty);
+    RECT all = { 0, 0, (LONG)c->desc.Width, (LONG)c->desc.Height };
+    EnterCriticalSection(&c->rb_lock);
+    UnionRect(&c->unread, &c->unread, dirty ? dirty : &all);
+    LeaveCriticalSection(&c->rb_lock);
 }
 
-/* The buffer's pixels as BGRA */
+/* The buffer's pixels as BGRA (a GPU's: the parts presented since the last
+ * time copied on the GPU into the staging texture and read back) */
 static BYTE *chain_frame(Chain *c, UINT *pitch)
 {
-    if (c->ctx) { *pitch = c->desc.Width * 4; return c->frame; }
+    if (c->ctx) {
+        EnterCriticalSection(&c->rb_lock);
+        if (!IsRectEmpty(&c->unread) && c->staging) {
+            novadx_read_back(c->ctx, c->staging, c->buffer, c->desc.Format, c->desc.Width, c->desc.Height, c->frame, &c->unread);
+            SetRectEmpty(&c->unread);
+        }
+        LeaveCriticalSection(&c->rb_lock);
+        *pitch = c->desc.Width * 4;
+        return c->frame;
+    }
     if (!c->bits) return NULL;
     ND3D11_TEXTURE2D_DESC td;
     BYTE *p = c->bits->lpVtbl->Bits(c->bits, pitch, &td);
@@ -406,6 +426,7 @@ static ULONG STDMETHODCALLTYPE c_release(Chain *c)
         chain_drop_buffer(c);
         chain_drop_held(c);
         DeleteCriticalSection(&c->lock);
+        DeleteCriticalSection(&c->rb_lock);
         if (c->ctx) c->ctx->lpVtbl->Release(c->ctx);
         if (c->device) c->device->lpVtbl->Release(c->device);
         HeapFree(GetProcessHeap(), 0, c->rgba_tmp);
@@ -429,8 +450,8 @@ static HRESULT chain_present(Chain *c, UINT flags, const RECT *dirty)
     if (flags & DXGI_PRESENT_TEST_) return S_OK;
     EnterCriticalSection(&c->lock);
     c->presents++;
-    if (c->ctx) chain_read_back(c, dirty);
     if (!c->shown) dirty = NULL;                            /* (the first frame since the buffers were made: all of it) */
+    if (c->ctx) chain_presented(c, dirty);
     c->shown = TRUE;
     chain_drop_held(c);
     if (c->sink) c->sink(c->sink_ctx, dirty);
@@ -635,7 +656,17 @@ static BYTE *STDMETHODCALLTYPE n_frame(INovaSwapChain *n, UINT *pitch, UINT *w, 
     if (h) *h = c->desc.Height;
     return bits;
 }
-static const INovaSwapChainVtbl g_nova_chain_vtbl = { n_qi, n_addref, n_release, n_setsink, n_frame };
+static IUnknown *STDMETHODCALLTYPE n_texture(INovaSwapChain *n, IUnknown **device, UINT *format, UINT *w, UINT *h, BOOL *shown)
+{
+    Chain *c = CHAIN_OF_NOVA(n);
+    if (!c->ctx) return NULL;
+    *device = c->device;
+    *format = c->desc.Format;
+    *w = c->desc.Width; *h = c->desc.Height;
+    *shown = c->shown;
+    return c->buffer;
+}
+static const INovaSwapChainVtbl g_nova_chain_vtbl = { n_qi, n_addref, n_release, n_setsink, n_frame, n_texture };
 
 static HRESULT make_chain(IUnknown *device, HWND hwnd, const NDXGI_SWAP_CHAIN_DESC1 *desc, void **out)
 {
@@ -655,6 +686,7 @@ static HRESULT make_chain(IUnknown *device, HWND hwnd, const NDXGI_SWAP_CHAIN_DE
     c->nova.lpVtbl = &g_nova_chain_vtbl;
     c->refs = 1;
     InitializeCriticalSection(&c->lock);
+    InitializeCriticalSection(&c->rb_lock);
     c->device = gpu ? gpu : device;
     c->device->lpVtbl->AddRef(c->device);
     if (gpu)

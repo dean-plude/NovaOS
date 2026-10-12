@@ -24,10 +24,25 @@
  *                        are presented on another thread, and the GPU
  *                        process's window composited on the GPU, resized
  *                        and its process killed while presenting
- *   dcomptest gpu HWND [life]  the "GPU process": makes the child window,
- *                        posts it to HWND, and draws into it once it is
- *                        parented (life: on the GPU, through a visual)
+ *   dcomptest direct     with DXVK on Venus: a composition swap chain on
+ *                        the GPU device composited on the GPU, its frames
+ *                        shown straight from the host while the window is
+ *                        alone ("dcomp: quadrants at X Y W H": the
+ *                        self-test checks the screen), through the GDI
+ *                        while another window covers it, the GDI way again
+ *                        once a swap chain of another device joins the tree
+ *                        ("dcomp: yellow at X Y W H": the screen shows that
+ *                        frame, not the last one from the host), and the
+ *                        GPU process's window, embedded in the browser's,
+ *                        shown straight from the host too
+ *   dcomptest gpu HWND [life|direct]  the "GPU process": makes the child
+ *                        window, posts it to HWND, and draws into it once
+ *                        it is parented (life, direct: on the GPU, through
+ *                        a visual)
  *
+ * dxvk and life check the frames GDI's way (GetPixel on the window), so
+ * they keep every frame on the GDI way (NOVA_PRESENT=gdi): one shown
+ * straight from the host is on the screen only, not in the window's pixels.
  * The software device is 64-bit only; the 32-bit run checks the factory,
  * the adapter and the cross-process parenting (drawing with GDI). */
 #include <stdio.h>
@@ -57,11 +72,12 @@ static const char *g_step = "start";
 static HMODULE g_dxgi, g_d3d11, g_dcomp;
 static int g_dxvk;                  /* "dcomptest dxvk": DXVK is installed */
 static int g_life;                  /* "dcomptest life" (DXVK installed too) */
+static int g_direct;                /* "dcomptest direct" (DXVK and Venus) */
 
 static DWORD WINAPI watchdog(void *arg)
 {
     (void)arg;
-    Sleep(g_life ? 300000 : 120000);
+    Sleep(g_life || g_direct ? 300000 : 120000);
     printf("FAIL: hung at: %s\n", g_step);
     fflush(stdout);
     ExitProcess(3);
@@ -84,6 +100,21 @@ static COLORREF pixel(HWND h, int x, int y)
     ReleaseDC(h, dc);
     return c;
 }
+
+/* The kernel's display counters (NtNovaGpuCtl 14); [4]: frames shown by
+ * direct presentation */
+#define ST_DIRECT 4
+typedef LONG_PTR (WINAPI *NtNovaGpuCtl_t)(INT_PTR, ULONG, ULONG_PTR, void *);
+static int gpu_stats(unsigned long long st[8])
+{
+    static NtNovaGpuCtl_t ctl;
+    memset(st, 0, 8 * sizeof(st[0]));
+    if (!ctl) ctl = (NtNovaGpuCtl_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtNovaGpuCtl");
+    return ctl && ctl(0, 14, 0, st) == 0;
+}
+
+/* The pointer out of the way (over a window it stops direct presentation) */
+static void pointer_away(void) { SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 1, 0); }
 
 /* until @cond, pumping messages, at most @ms */
 #define WAIT_FOR(cond, ms) do { for (int w_ = 0; w_ < (ms) / 20 && !(cond); w_++) pump(20); } while (0)
@@ -559,11 +590,116 @@ static int gpu_frame(Gpu *g, void *ctx, const float *rgba)
 
 static const float c_red[4] = { 1, 0, 0, 1 }, c_green[4] = { 0, 1, 0, 1 }, c_blue[4] = { 0, 0, 1, 1 };
 static const float c_magenta[4] = { 1, 0, 1, 1 }, c_cyan[4] = { 0, 1, 1, 1 }, c_yellow[4] = { 1, 1, 0, 1 };
+static const float c_white[4] = { 1, 1, 1, 1 };
 
 static void size_window(HWND h, int w, int ht)
 {
     SetWindowPos(h, NULL, 0, 0, w, ht, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOCOPYBITS);
     pump(50);
+}
+
+/* ---- Composited on the GPU (dcomptest direct, both widths) ----------------- */
+/* @g's buffer as four quadrants, red, green / blue, white (@part: a texture
+ * a quarter of its size, @prtv its view), presented */
+static int quad_frame(Gpu *g, void *part, void *prtv, UINT w, UINT h)
+{
+    static const float *const c[4] = { c_red, c_green, c_blue, c_white };
+    void *buf = NULL;
+    if (FAILED(VT(g->chain, 9, GetBuffer_t)(g->chain, 0, &NIID_ID3D11Texture2D, &buf))) return 0;
+    for (int i = 0; i < 4; i++) {
+        VT(g->ctx, 50, Clear_t)(g->ctx, prtv, c[i]);
+        VT(g->ctx, 46, CopyRegion_t)(g->ctx, buf, 0, (i & 1) * w / 2, (i >> 1) * h / 2, 0, part, 0, NULL);
+    }
+    RELEASE(buf);
+    return SUCCEEDED(VT(g->chain, 8, Present_t)(g->chain, 0, 0));
+}
+
+/* Frames presented for @ms (the quadrants, or all @rgba); the frames, and
+ * in *@direct those shown straight from the host */
+static unsigned long present_for(Gpu *g, void *part, void *prtv, UINT w, UINT h, const float *rgba, DWORD ms, unsigned long *direct)
+{
+    unsigned long long a[8], b[8];
+    unsigned long frames = 0;
+    gpu_stats(a);
+    for (DWORD t0 = GetTickCount(); GetTickCount() - t0 < ms; frames++) {
+        pump(0);
+        if (!(rgba ? gpu_frame(g, NULL, rgba) : quad_frame(g, part, prtv, w, h))) break;
+    }
+    gpu_stats(b);
+    *direct = (unsigned long)(b[ST_DIRECT] - a[ST_DIRECT]);
+    return frames;
+}
+
+/* What Chromium's GPU DirectComposition output does, composited on the
+ * GPU: a composition swap chain on the GPU device, the window's only
+ * content, shown from the host, then through the GDI while a window covers
+ * it, then from the host again; then the GDI way (the kernel shows the
+ * window's own pixels again) once a swap chain of another device joins the
+ * tree */
+static void check_direct(HWND top, HWND child)
+{
+    enum { W = 200, H = 120 };
+    g_step = "composited on the GPU";
+    unsigned long long st[8];
+    CHECK("the kernel's counters", gpu_stats(st));
+    Gpu g;
+    void *part = NULL, *prtv = NULL;
+    int ok = gpu_make(&g, child, W, H);
+    CHECK("a composition swap chain on the GPU device, the window's only content", ok);
+    ND3D11_TEXTURE2D_DESC td = { W / 2, H / 2, 1, 1, NDXGI_FORMAT_B8G8R8A8_UNORM, { 1, 0 }, 0, 0x20 /* RENDER_TARGET */, 0, 0 };
+    ok = ok && SUCCEEDED(VT(g.dev, 5, Tex2D_t)(g.dev, &td, NULL, &part)) && SUCCEEDED(VT(g.dev, 9, RTV_t)(g.dev, part, NULL, &prtv));
+    if (!ok) { RELEASE(prtv); RELEASE(part); gpu_free(&g); return; }
+    POINT o = { 0, 0 };
+    ClientToScreen(child, &o);
+    unsigned long d = 0, f;
+    pointer_away();
+    present_for(&g, part, prtv, W, H, NULL, 1000, &d);      /* (the window is shown and active) */
+    printf("dcomp: quadrants at %ld %ld %d %d\n", o.x, o.y, W, H);
+    fflush(stdout);
+    f = present_for(&g, part, prtv, W, H, NULL, 6000, &d);
+    printf("alone: %lu of %lu frames shown from the host\n", d, f);
+    CHECK("frames shown from the host while the window is alone", f > 0 && d * 10 >= f * 9);
+
+    g_step = "composited on the GPU, covered";
+    HWND cover = CreateWindowExW(0, L"dcomptest", L"Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, o.x + W / 2, o.y + H / 2, 200, 150,
+                                 NULL, NULL, GetModuleHandleW(NULL), NULL);
+    present_for(&g, part, prtv, W, H, NULL, 1000, &d);      /* (the window is drawn) */
+    f = present_for(&g, part, prtv, W, H, NULL, 3000, &d);
+    printf("covered: %lu of %lu frames shown from the host\n", d, f);
+    CHECK("frames go through the GDI while a window covers it", cover && f > 0 && d == 0);
+    COLORREF p1 = pixel(child, 10, 10), p2 = pixel(child, 150, 10), p3 = pixel(child, 10, 100);
+    CHECK("... into the window's pixels", p1 == RGB(255, 0, 0) && p2 == RGB(0, 255, 0) && p3 == RGB(0, 0, 255));
+    if (p1 != RGB(255, 0, 0) || p2 != RGB(0, 255, 0) || p3 != RGB(0, 0, 255))
+        printf("pixels %06lx %06lx %06lx\n", (unsigned long)p1, (unsigned long)p2, (unsigned long)p3);
+    DestroyWindow(cover);
+    SetForegroundWindow(top);
+    pointer_away();
+    present_for(&g, part, prtv, W, H, NULL, 1000, &d);
+    f = present_for(&g, part, prtv, W, H, NULL, 3000, &d);
+    printf("uncovered: %lu of %lu frames shown from the host\n", d, f);
+    CHECK("frames shown from the host again once it has gone", f > 0 && d * 10 >= f * 9);
+
+    g_step = "composited on the GPU, then the GDI way";
+    CreateDevice_t cd = (CreateDevice_t)GetProcAddress(g_d3d11, "D3D11CreateDevice");
+    void *dev2 = NULL, *chain2 = NULL, *kid = NULL;
+    NDXGI_SWAP_CHAIN_DESC1 d2 = { 20, 20, NDXGI_FORMAT_B8G8R8A8_UNORM, FALSE, { 1, 0 }, 0x20, 2, 0, 3, 1, 0 };
+    ok = SUCCEEDED(cd(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &dev2, NULL, NULL)) &&
+         SUCCEEDED(VT(g.f, 24, HRESULT (STDMETHODCALLTYPE *)(void *, void *, const void *, void *, void **))(g.f, dev2, &d2, NULL, &chain2)) &&
+         SUCCEEDED(VT(g.dc, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(g.dc, &kid)) &&
+         SUCCEEDED(VT(kid, 15, HRESULT (STDMETHODCALLTYPE *)(void *, void *))(kid, chain2)) &&
+         SUCCEEDED(VT(g.visual, 16, HRESULT (STDMETHODCALLTYPE *)(void *, void *, BOOL, void *))(g.visual, kid, TRUE, NULL)) &&
+         SUCCEEDED(VT(g.dc, 3, Commit_t)(g.dc));
+    CHECK("a swap chain of another device joins the tree", ok);
+    present_for(&g, part, prtv, W, H, c_yellow, 1000, &d);
+    printf("dcomp: yellow at %ld %ld %d %d\n", o.x, o.y, W, H);
+    fflush(stdout);
+    f = present_for(&g, part, prtv, W, H, c_yellow, 6000, &d);
+    printf("the GDI way: %lu of %lu frames shown from the host\n", d, f);
+    CHECK("frames go through the GDI again", f > 0 && d == 0);
+    CHECK("... into the window's pixels", pixel(child, 100, 60) == RGB(255, 255, 0));
+    RELEASE(kid); RELEASE(chain2); RELEASE(dev2);
+    RELEASE(prtv); RELEASE(part);
+    gpu_free(&g);
 }
 
 /* Chromium on a resize of its window: the window sized, ResizeBuffers on
@@ -775,7 +911,7 @@ static LRESULT CALLBACK gpu_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 #ifdef _WIN64
     Out o;
 #endif
-    if (g_life) C(gpu_make(&g_gpu, h, 200, 120) && gpu_frame(&g_gpu, NULL, c_red));   /* bit 5: composited on the GPU, red */
+    if (g_life || g_direct) C(gpu_make(&g_gpu, h, 200, 120) && gpu_frame(&g_gpu, NULL, c_red));   /* bit 5: composited on the GPU, red */
     else {
 #ifdef _WIN64
         C(out_make(&o, h, 200, 120, 0) && out_frame(&o, all, 0xFFFF0000));      /* bit 5: composited, red */
@@ -787,11 +923,19 @@ static LRESULT CALLBACK gpu_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         ReleaseDC(h, dc);
 #endif
     }
-    C(pixel(h, 100, 60) == RGB(255, 0, 0));                 /* bit 6 */
+    if (g_direct) {                                         /* bit 6: shown straight from the host, embedded as it is */
+        unsigned long long a[8], b[8];
+        pointer_away();
+        gpu_stats(a);
+        for (DWORD t0 = GetTickCount(); GetTickCount() - t0 < 2000;) gpu_frame(&g_gpu, NULL, c_red);
+        gpu_stats(b);
+        C(b[ST_DIRECT] > a[ST_DIRECT]);
+    } else
+        C(pixel(h, 100, 60) == RGB(255, 0, 0));             /* bit 6 */
 #undef C
     PostMessageW(g_host, DC_RESULT, (WPARAM)ok, (LPARAM)bad);
 #ifdef _WIN64
-    if (!g_life) out_free(&o);
+    if (!g_life && !g_direct) out_free(&o);
 #endif
     return 0;
 }
@@ -887,7 +1031,8 @@ static void check_cross_process(HWND browser)
     g_step = "starting the GPU process";
     char self[MAX_PATH], cl[MAX_PATH + 64];
     GetModuleFileNameA(NULL, self, MAX_PATH);
-    snprintf(cl, sizeof(cl), "\"%s\" gpu %llx%s", self, (unsigned long long)(ULONG_PTR)browser, g_life ? " life" : "");
+    snprintf(cl, sizeof(cl), "\"%s\" gpu %llx%s", self, (unsigned long long)(ULONG_PTR)browser,
+             g_life ? " life" : g_direct ? " direct" : "");
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
     if (!CreateProcessA(self, cl, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CHECK("CreateProcess", 0); return; }
@@ -924,15 +1069,18 @@ int main(int argc, char **argv)
     g_dcomp = LoadLibraryW(L"dcomp.dll");
     if (argc >= 3 && !strcmp(argv[1], "gpu")) {
         g_life = argc >= 4 && !strcmp(argv[3], "life");
+        g_direct = argc >= 4 && !strcmp(argv[3], "direct");
         return gpu_main((HWND)(ULONG_PTR)strtoull(argv[2], NULL, 16));
     }
     g_life = argc >= 2 && !strcmp(argv[1], "life");
+    g_direct = argc >= 2 && !strcmp(argv[1], "direct");
+    if (!g_direct) SetEnvironmentVariableA("NOVA_PRESENT", "gdi");   /* (GetPixel sees the frames: see the top) */
     CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
     CHECK("dxgi.dll, d3d11.dll and dcomp.dll load", g_dxgi && g_d3d11 && g_dcomp);
     if (!g_dxgi || !g_d3d11) { printf("dcomptest: %d passed, %d failed\n", pass, fail); return 1; }
-    g_dxvk = g_life || (argc >= 2 && !strcmp(argv[1], "dxvk"));
-    if (!g_life && g_dxvk) check_dxvk();
-    else if (!g_life) check_adapter();
+    g_dxvk = g_life || g_direct || (argc >= 2 && !strcmp(argv[1], "dxvk"));
+    if (!g_life && !g_direct && g_dxvk) check_dxvk();
+    else if (!g_life && !g_direct) check_adapter();
 
     WNDCLASSW wc = { 0 };
     wc.lpfnWndProc = host_proc;
@@ -949,7 +1097,9 @@ int main(int argc, char **argv)
     RegisterClassW(&bc);
     HWND child = CreateWindowExW(0, L"dcomptest_bare", L"", WS_CHILD | WS_VISIBLE, 0, 0, 200, 120, top, NULL, wc.hInstance, NULL);
     pump(200);
-    if (g_life) {
+    if (g_direct)
+        check_direct(top, child);
+    else if (g_life) {
         check_resize(child);
         check_teardown(top, child);
     } else {

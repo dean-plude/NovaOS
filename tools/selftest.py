@@ -86,7 +86,10 @@ order; --list prints them):
             and which pnputil disables and enables; "vioser", QEMU's
             virtio-serial controller, on which pnputil installs
             virtio-win's signed vioser.sys (KMDF): its port, a child
-            device, carries bytes to the host and back
+            device, carries bytes to the host and back; "umdf", the edu
+            device again, on which pnputil installs a UMDF 2 driver
+            (umdftest.dll) that runs in a driver host (WUDFHost.exe) on
+            Microsoft's user-mode framework
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -314,6 +317,7 @@ NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
 VIOSER = load_suite('devices/vioser')
+UMDF = load_suite('devices/umdf')
 
 
 def net4_boot(work):
@@ -446,6 +450,13 @@ def wdm_boot(work):
 def edu_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
     edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
+    return ['-device', 'edu'], []
+
+
+def umdf_boot(work):
+    """QEMU's edu device (PCI 1234:11e8): a UMDF 2 driver for it,
+    umdftest.dll, is installed with pnputil and runs in a driver host
+    (tests/selftest/devices/umdf)"""
     return ['-device', 'edu'], []
 
 
@@ -613,7 +624,8 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
+                ('umdf', UMDF, umdf_boot)],
 }
 
 

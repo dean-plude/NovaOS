@@ -790,6 +790,16 @@ static void defaults(void)
     kset_dword(pnp, "Type", 0x10);                         /* SERVICE_WIN32_OWN_PROCESS */
     kset_dword(pnp, "ErrorControl", 1);
     if (!has_value(pnp, "Start")) kset_dword(pnp, "Start", 2);   /* (automatic; a choice made since is kept) */
+    /* The UMDF service (wudfsvc.exe): starts a driver host (WUDFHost.exe)
+     * for each started device the reflector, WUDFRd.sys, runs */
+    RegKey *wudf = kpath("Machine\\SYSTEM\\CurrentControlSet\\Services\\wudfsvc", false);
+    kset_sz(wudf, "ImagePath", "C:\\Windows\\System32\\wudfsvc.exe", 2);
+    kset_sz(wudf, "DisplayName", "Windows Driver Foundation - User-mode Driver Framework", 1);
+    kset_sz(wudf, "Description", "Creates and manages user-mode driver processes.", 1);
+    kset_sz(wudf, "ObjectName", "LocalSystem", 1);
+    kset_dword(wudf, "Type", 0x10);                        /* SERVICE_WIN32_OWN_PROCESS */
+    kset_dword(wudf, "ErrorControl", 1);
+    if (!has_value(wudf, "Start")) kset_dword(wudf, "Start", 2);
 
     /* HKLM\HARDWARE: rebuilt every boot */
     add_cpus(1);                           /* the others once they start */

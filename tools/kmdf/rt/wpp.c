@@ -8,14 +8,22 @@
  * level, flags and format.  Errors and warnings go to the kernel log as
  * DbgPrintEx text, as the framework's messages read in a debugger; WPP's
  * own format extensions (%!STATUS!, %!FUNC!, ...) are rewritten to plain
- * printf conversions first.
+ * printf conversions first.  The user-mode framework (tools/umdf/rt/wpp.c)
+ * builds this file with NOVA_UMDF defined: its messages go to the debug
+ * output as "Wudfx02000: ...".
  */
+#ifdef NOVA_UMDF
+#include <windows.h>
+#include <stdio.h>
+#define FX_NAME "Wudfx02000"
+#else
 #include <ntddk.h>
-#include <stdarg.h>
-#include "novaos_wpp.h"
-
+#define FX_NAME "Wdf01000"
 /* ntoskrnl.exe exports it; the WDK has it in stdio.h, which a driver does not get here */
 int __cdecl _vsnprintf(char *buf, size_t count, const char *fmt, va_list ap);
+#endif
+#include <stdarg.h>
+#include "novaos_wpp.h"
 
 #define DPFLTR_IHVDRIVER_ID 77
 
@@ -66,6 +74,13 @@ void __cdecl NovaOSWdfTrace(unsigned long Level, unsigned long Flags, const char
     _vsnprintf(msg, sizeof(msg) - 1, fmt, ap);
     va_end(ap);
     msg[sizeof(msg) - 1] = 0;
+#ifdef NOVA_UMDF
+    char line[400];
+    _snprintf(line, sizeof(line) - 1, FX_NAME ": %s\n", msg);
+    line[sizeof(line) - 1] = 0;
+    OutputDebugStringA(line);
+#else
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, Level == TRACE_LEVEL_WARNING ? DPFLTR_WARNING_LEVEL : DPFLTR_ERROR_LEVEL,
-               "Wdf01000: %s\n", msg);
+               FX_NAME ": %s\n", msg);
+#endif
 }

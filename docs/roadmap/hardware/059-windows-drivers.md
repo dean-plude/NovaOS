@@ -30,3 +30,8 @@
   Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
   runs on KMDF, reports its serial ports as child devices, and a program
   exchanges bytes with the host through `\\.\Global\<port name>`.
+  Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
+  reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
+  on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's
+  reads, writes and device controls reach its queues (QEMU's `edu` device
+  in the tests).

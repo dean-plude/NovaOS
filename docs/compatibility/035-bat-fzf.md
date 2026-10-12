@@ -1,1 +1,6 @@
-| **bat, fzf** | Works | Printing files with highlighting, fuzzy finding | by hand in QEMU |
+program: **bat, fzf**
+kind: tool
+rating: Platinum
+works: Printing files with highlighting, fuzzy finding
+problems: —
+checked: by hand in QEMU

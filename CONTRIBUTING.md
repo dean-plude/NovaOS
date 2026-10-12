@@ -22,7 +22,7 @@ and merge cleanly in either order.
 | a "What is inside" item, or extending one | `docs/readme/inside/NNN-slug.md` | the list in `README.md` |
 | a bundled licence | `docs/readme/licenses/NNN-slug.md` (one "Name: licence" line) | the licence sentence in `README.md` |
 | a row in building.md's self-test program table | `docs/selftests/NNN-name.md` | the table in `docs/building.md` |
-| a program in the compatibility list, or a change to its status | `docs/compatibility/NNN-slug.md` | the table in `docs/compatibility.md` |
+| a program in the compatibility list, or a change to its rating | `docs/compatibility/NNN-slug.md` (`field: value` lines) | the rating tables in `docs/compatibility.md` |
 
 Files are taken in name order, so the prefix places the item: pick a number
 between its neighbours (`045` between `040` and `050`).  Two changes that

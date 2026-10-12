@@ -1,1 +1,6 @@
-| **WinSCP** (App Store) | Untested | | — |
+program: **WinSCP** (App Store)
+kind: program
+rating: Untested
+works: —
+problems: —
+checked: —

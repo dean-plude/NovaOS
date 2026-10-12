@@ -1,1 +1,6 @@
-| **.NET Desktop Runtime 8** (App Store) | Partly | Console programs run; WinForms and WPF programs are untested | by hand |
+program: **.NET Desktop Runtime 8** (App Store)
+kind: runtime
+rating: Bronze
+works: Console programs run
+problems: WinForms and WPF programs not checked
+checked: by hand

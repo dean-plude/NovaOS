@@ -19,7 +19,7 @@ their own dialogs, custom actions, shortcuts and services), the Java,
 programs through Mesa and DXVK.  It can install itself on a disk from its
 live ISO.  New to NovaOS?  Start with the
 [user guide](docs/user-guide.md); [docs/compatibility.md](docs/compatibility.md)
-lists the programs that run.
+rates each program and game that has been tried, ProtonDB-style.
 
 - [Screenshots](#screenshots)
 - [What runs today](#what-runs-today)
@@ -881,7 +881,7 @@ os/
   virtual machine, installing it, the desktop and its apps, installing
   programs.
 - [docs/compatibility.md](docs/compatibility.md): which Windows programs
-  run, how well, and how each was checked.
+  run, rated Platinum to Borked as ProtonDB does, and how each was checked.
 - [CONTRIBUTING.md](CONTRIBUTING.md): where a change goes (one file per
   DLL, test and doc item, so parallel pull requests do not conflict) and
   how to merge main into a branch.

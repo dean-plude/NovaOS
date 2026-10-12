@@ -48,6 +48,11 @@ struct NtDriver {
     bool              started;          /* DriverEntry succeeded */
 };
 
+/* ke.c: set the processor-count and debugger data exports once the CPUs
+ * are up; io.c: start the driver work-item worker */
+void      NtKeInit(void);
+void      NtIoWorkerInit(void);
+
 /* ldr.c */
 void      NtDrvInit(void);
 /* Read the boot options (test signing) once the registry is loaded */
@@ -72,6 +77,10 @@ NtDriver *NtDrvByAddress(UINT64 addr);
 
 /* ex.c: @drv unloads: log the pool blocks it never freed */
 void      NtPoolDriverGone(NtDriver *drv);
+
+/* ps.c: ZwClose of a system-thread handle drops its reference (true when
+ * @handle was one) */
+bool      NtPsHandleClose(void *handle);
 
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);

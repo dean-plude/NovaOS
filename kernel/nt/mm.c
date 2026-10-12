@@ -236,3 +236,70 @@ NT_API void *nt_MmGetSystemRoutineAddress(NT_UNICODE_STRING *name)
     if (!fn) fn = NtExport("hal.dll", n);
     return (void *)(uintptr_t)fn;
 }
+
+/* -----------------------------------------------------------------------
+ * MMIO: map a device's physical register space into kernel virtual memory
+ * so a driver can reach it (always non-cached, as device memory must be)
+ * ----------------------------------------------------------------------- */
+NT_API void *nt_MmMapIoSpaceEx(UINT64 phys, UINT64 len, UINT32 protect)
+{
+    (void)protect;
+    if (!len) return NULL;
+    UINT64 base = phys & ~(UINT64)(PAGE_SIZE - 1);
+    UINT32 pages = span_pages(phys, len);
+    uintptr_t stack_pa[16], *pa = pages <= 16 ? stack_pa : kmalloc(sizeof(uintptr_t) * pages);
+    if (!pa) return NULL;
+    for (UINT32 i = 0; i < pages; i++) pa[i] = base + (UINT64)i * PAGE_SIZE;
+    void *va = kernel_map_frames(pa, pages, true);
+    if (pa != stack_pa) kfree(pa);
+    return va ? (UINT8 *)va + (phys & (PAGE_SIZE - 1)) : NULL;
+}
+
+/* MmMapIoSpace (the older name) always maps non-cached (MmNonCached) */
+NT_API void *nt_MmMapIoSpace(UINT64 phys, UINT64 len, int cache)
+{
+    (void)cache;
+    return nt_MmMapIoSpaceEx(phys, len, 0);
+}
+
+NT_API void nt_MmUnmapIoSpace(void *va, UINT64 len)
+{
+    if (!va) return;
+    kernel_unmap_frames((void *)((uintptr_t)va & ~(uintptr_t)(PAGE_SIZE - 1)),
+                        span_pages((UINT64)(uintptr_t)va, len));
+}
+
+/* -----------------------------------------------------------------------
+ * Pageable code and data sections.  A NovaOS driver's image and the pool
+ * are never paged out, so locking one in memory is nothing to do: the
+ * handle a driver passes to MmUnlockPagableImageSection is just the
+ * address it locked.
+ * ----------------------------------------------------------------------- */
+NT_API void *nt_MmLockPagableDataSection(void *addr) { return addr; }
+NT_API void *nt_MmLockPagableCodeSection(void *addr) { return addr; }
+NT_API void  nt_MmLockPagableSectionByHandle(void *handle) { (void)handle; }
+NT_API void  nt_MmUnlockPagableImageSection(void *handle) { (void)handle; }
+
+/* Driver Verifier is not implemented, so no driver is being verified */
+NT_API UINT8 nt_MmIsDriverVerifying(void *driver) { (void)driver; return 0; }
+
+/* -----------------------------------------------------------------------
+ * IoBuildPartialMdl: describe a subrange [va, va+len) of @src's buffer in
+ * @dst (already allocated for the range), copying the frames under it
+ * ----------------------------------------------------------------------- */
+NT_API void nt_IoBuildPartialMdl(NT_MDL *src, NT_MDL *dst, void *va, UINT32 len)
+{
+    UINT64 src_base = (UINT64)(uintptr_t)src->StartVa + src->ByteOffset;
+    UINT64 want = (UINT64)(uintptr_t)va;
+    if (want < src_base) want = src_base;
+    UINT64 src_end = src_base + src->ByteCount;
+    if (!len || want + len > src_end) len = (UINT32)(src_end > want ? src_end - want : 0);
+    dst->StartVa    = (void *)(uintptr_t)(want & ~(UINT64)(PAGE_SIZE - 1));
+    dst->ByteOffset = (UINT32)(want & (PAGE_SIZE - 1));
+    dst->ByteCount  = len;
+    dst->MdlFlags  |= NT_MDL_PARTIAL | (src->MdlFlags & NT_MDL_PAGES_LOCKED);
+    UINT32 first = (UINT32)((want >> 12) - ((UINT64)(uintptr_t)src->StartVa >> 12));
+    UINT32 pages = span_pages(want, len);
+    unsigned long long *s = NtMdlPfns(src), *d = NtMdlPfns(dst);
+    for (UINT32 i = 0; i < pages; i++) d[i] = s[first + i];
+}

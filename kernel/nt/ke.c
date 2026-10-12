@@ -318,9 +318,19 @@ static void header_init(NT_DISPATCHER_HEADER *h, UINT8 type, UINT8 size_dwords, 
     list_init(&h->WaitListHead);
 }
 
-/* Take the object for one waiter if it is signalled (g_disp held) */
+/* KMUTANT.OwnerThread: past the dispatcher header and MutantListEntry */
+static void **mutant_owner(NT_DISPATCHER_HEADER *h) { return (void **)((UINT8 *)h + 0x28); }
+
+/* Take the object for the calling thread if it is available (g_disp held) */
 static bool take(NT_DISPATCHER_HEADER *h)
 {
+    if (h->Type == NT_MutantObject) {                /* 1 free, <= 0 held (the negative recursion) */
+        void **owner = mutant_owner(h);
+        void *me = (void *)sched_current();
+        if (h->SignalState == 1) { h->SignalState = 0; *owner = me; return true; }
+        if (h->SignalState <= 0 && *owner == me) { h->SignalState--; return true; }   /* recursion */
+        return false;
+    }
     if (h->SignalState <= 0) return false;
     if (h->Type == NT_SynchronizationEvent || h->Type == NT_TimerSynchronizationObject) h->SignalState = 0;
     else if (h->Type == NT_SemaphoreObject) h->SignalState--;
@@ -332,6 +342,19 @@ static bool take(NT_DISPATCHER_HEADER *h)
 static void satisfy(NT_DISPATCHER_HEADER *h)
 {
     if (!h->WaitListHead.Flink) list_init(&h->WaitListHead);   /* (a header a driver zeroed itself) */
+    if (h->Type == NT_MutantObject) {
+        /* Ownership passes to the woken waiter, not to whoever released it,
+         * so take() cannot run in the releaser's context: hand it over here. */
+        while (h->WaitListHead.Flink != &h->WaitListHead && h->SignalState == 1) {
+            Waiter *w = (Waiter *)h->WaitListHead.Flink;
+            list_remove(&w->link);
+            h->SignalState = 0;
+            *mutant_owner(h) = w->thread;
+            __atomic_store_n(&w->done, 1, __ATOMIC_RELEASE);
+            sched_unblock(w->thread);
+        }
+        return;
+    }
     while (h->WaitListHead.Flink != &h->WaitListHead && take(h)) {
         Waiter *w = (Waiter *)h->WaitListHead.Flink;
         list_remove(&w->link);
@@ -640,9 +663,145 @@ NT_API UINT32 nt_KeQueryActiveProcessorCountEx(UINT16 group)
  * ----------------------------------------------------------------------- */
 NT_API void nt_KeBugCheckEx(UINT32 code, UINT64 p1, UINT64 p2, UINT64 p3, UINT64 p4)
 {
+    extern UINT64 nt_KiBugCheckData[5];
+    nt_KiBugCheckData[0] = code; nt_KiBugCheckData[1] = p1; nt_KiBugCheckData[2] = p2;
+    nt_KiBugCheckData[3] = p3; nt_KiBugCheckData[4] = p4;
     KPANIC("*** STOP: 0x%08x (0x%016llx, 0x%016llx, 0x%016llx, 0x%016llx) from a driver (return address %p)",
            code, (unsigned long long)p1, (unsigned long long)p2, (unsigned long long)p3, (unsigned long long)p4,
            __builtin_return_address(0));
 }
 
 NT_API void nt_KeBugCheck(UINT32 code) { nt_KeBugCheckEx(code, 0, 0, 0, 0); }
+
+/* -----------------------------------------------------------------------
+ * Step 30.2 part 2: mutexes (KMUTEX), multi-object waits, processor
+ * count, interrupt synchronization, the debugger flags and the bug-check
+ * data a driver reads
+ * ----------------------------------------------------------------------- */
+
+/* KMUTEX / KMUTANT: a recursive mutex.  Acquire is through
+ * KeWaitForSingleObject (wait_one, which take() handles for a mutant);
+ * release gives it back, and satisfy() hands ownership to a waiter. */
+NT_API void nt_KeInitializeMutex(NT_KMUTEX *m, UINT32 level)
+{
+    (void)level;
+    header_init(&m->Header, NT_MutantObject, sizeof(*m) / 4, 1);     /* 1 = free */
+    m->MutantListEntry.Flink = m->MutantListEntry.Blink = &m->MutantListEntry;
+    m->OwnerThread = NULL;
+}
+
+NT_API int nt_KeReadStateMutex(NT_KMUTEX *m) { return m->Header.SignalState; }
+NT_API int nt_KeReadStateMutant(NT_KMUTEX *m) { return m->Header.SignalState; }
+
+NT_API int nt_KeReleaseMutex(NT_KMUTEX *m, UINT8 wait)
+{
+    (void)wait;
+    IrqState s = spin_lock_irqsave(&g_disp);
+    int prev = m->Header.SignalState;
+    if (m->OwnerThread != (void *)sched_current()) {
+        spin_unlock_irqrestore(&g_disp, s);
+        kprintf("[NT] KeReleaseMutex: not held by the calling thread (STATUS_MUTANT_NOT_OWNED)\n");
+        return prev;
+    }
+    if (++m->Header.SignalState == 1) {              /* fully released: free, then a waiter may take it */
+        m->OwnerThread = NULL;
+        satisfy(&m->Header);
+    }
+    spin_unlock_irqrestore(&g_disp, s);
+    return prev;
+}
+
+/* Is @h available to the calling thread, without taking it (g_disp held) */
+static bool peek(NT_DISPATCHER_HEADER *h)
+{
+    if (h->Type == NT_MutantObject) {
+        void *me = (void *)sched_current();
+        return h->SignalState == 1 || (h->SignalState <= 0 && *mutant_owner(h) == me);
+    }
+    return h->SignalState > 0;
+}
+
+/* KeWaitForMultipleObjects: WaitAny returns WAIT_OBJECT_0 + the index
+ * taken; WaitAll takes them all once every one is available.  NovaOS
+ * polls under the dispatcher lock with a short sleep between tries rather
+ * than chaining a wait block onto every object, which a driver cannot
+ * tell apart from the outside. */
+NT_API NT_STATUS nt_KeWaitForMultipleObjects(UINT32 count, void **objs, int type, int reason, char mode,
+                                             UINT8 alertable, const INT64 *timeout, NT_KWAIT_BLOCK *blocks)
+{
+    (void)reason; (void)mode; (void)alertable; (void)blocks;
+    if (count == 0 || count > 64) return NT_STATUS_INVALID_PARAMETER;
+    UINT64 until = deadline(timeout);
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_disp);
+        if (type == NT_WaitAny) {
+            for (UINT32 i = 0; i < count; i++) {
+                NT_DISPATCHER_HEADER *h = objs[i];
+                if (peek(h) && take(h)) { spin_unlock_irqrestore(&g_disp, s); return NT_STATUS_WAIT_0 + (NT_STATUS)i; }
+            }
+        } else {                                     /* WaitAll */
+            bool all = true;
+            for (UINT32 i = 0; i < count && all; i++) all = peek(objs[i]);
+            if (all) {
+                for (UINT32 i = 0; i < count; i++) take(objs[i]);
+                spin_unlock_irqrestore(&g_disp, s);
+                return NT_STATUS_WAIT_0;
+            }
+        }
+        spin_unlock_irqrestore(&g_disp, s);
+        if (!until) return NT_STATUS_TIMEOUT;
+        if (KeIrql() >= DISPATCH_LEVEL) {
+            kprintf("[NT] IRQL_NOT_LESS_OR_EQUAL: KeWaitForMultipleObjects at IRQL %u\n", KeIrql());
+            return NT_STATUS_TIMEOUT;
+        }
+        if (until != UINT64_MAX && rdtsc() >= until) return NT_STATUS_TIMEOUT;
+        UINT64 slice = sched_tsc_after(10000);       /* poll about every 1 ms */
+        sched_sleep_until_tsc(NULL, until != UINT64_MAX && until < slice ? until : slice);
+    }
+}
+
+/* KeNumberProcessors: a data export (the active CPU count, as a CCHAR),
+ * kept current by NtKeInit and when a CPU comes online. */
+char nt_KeNumberProcessors = 1;
+
+/* The debugger flags a driver reads: no kernel debugger is attached. */
+UINT8  nt_KdDebuggerEnabled = 0;
+UINT8  nt_KdDebuggerNotPresent = 1;
+NT_API UINT8 nt_KdRefreshDebuggerNotPresent(void) { return nt_KdDebuggerNotPresent; }
+
+/* KiBugCheckData[5]: the bug-check code and parameters of the last stop,
+ * which a driver's bug-check callback reads.  Set by KeBugCheckEx. */
+UINT64 nt_KiBugCheckData[5];
+
+/* KINTERRUPT is the I/O manager's (step 30.3, real interrupts).  Until
+ * then KeSynchronizeExecution runs the routine at DISPATCH_LEVEL (where a
+ * driver's ISR and its synchronized code cannot be preempted on this CPU),
+ * which is how a driver with no live interrupt object expects it to behave. */
+typedef UINT8 (NT_API *NT_SYNC_ROUTINE)(void *ctx);
+
+NT_API UINT8 nt_KeSynchronizeExecution(void *interrupt, NT_SYNC_ROUTINE routine, void *ctx)
+{
+    (void)interrupt;
+    UINT8 old = KeIrql();
+    if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
+    UINT8 r = routine(ctx);
+    KeIrqlSet(old);
+    return r;
+}
+
+NT_API UINT8 nt_KeAcquireInterruptSpinLock(void *interrupt)
+{
+    (void)interrupt;
+    UINT8 old = KeIrql();
+    if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
+    return old;
+}
+
+NT_API void nt_KeReleaseInterruptSpinLock(void *interrupt, UINT8 old) { (void)interrupt; KeIrqlSet(old); }
+
+/* Called from NtDrvInit once the CPUs are up */
+void NtKeInit(void)
+{
+    nt_KeNumberProcessors = (char)(g_cpu_count ? g_cpu_count : 1);
+    for (int i = 0; i < 5; i++) nt_KiBugCheckData[i] = 0;
+}

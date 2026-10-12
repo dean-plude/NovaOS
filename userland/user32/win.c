@@ -1384,7 +1384,12 @@ USERAPI BOOL EnableWindow(HWND h, BOOL on)
  * each of its top-level windows hears so (before WM_NCACTIVATE), as on
  * Windows.  Qt keeps its application state by it: without it a Qt
  * program stays "inactive" and ignores its keyboard shortcuts (Ctrl+N
- * in Krita) until a click gives a widget the focus. */
+ * in Krita) until a click gives a widget the focus.  Only the windows of
+ * the thread doing the activating are sent it and waited for; those of
+ * the program's other threads get it without a wait, as Windows does not
+ * hold activation on them: wgpu's OpenGL back end keeps a hidden window on
+ * a thread that never reads its messages (ArtCraft's apps waited on it
+ * forever with a black window). */
 static int g_app_active;
 static void app_activated(int on)
 {
@@ -1395,7 +1400,9 @@ static void app_activated(int on)
     for (Wnd *c = desktop()->child; c && n < 512; c = c->next) list[n++] = c->h;
     for (int i = 0; i < n; i++) {
         Wnd *w = W_quiet(list[i]);
-        if (w) send_msg(w, WM_ACTIVATEAPP, (WPARAM)on, 0);
+        if (!w) continue;
+        if (w->tid && w->tid != GetCurrentThreadId()) SendNotifyMessageW(list[i], WM_ACTIVATEAPP, (WPARAM)on, 0);
+        else send_msg(w, WM_ACTIVATEAPP, (WPARAM)on, 0);
     }
 }
 

@@ -1,0 +1,1 @@
+| **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Partly | Installs from the App Store and opens its editor window on the built-in OpenGL (llvmpipe); its image compositor falls back to the CPU there. The other eleven ArtCraft apps and the ArtCraft Launcher (App Store) share its toolkit and are untested | nightly corpus |

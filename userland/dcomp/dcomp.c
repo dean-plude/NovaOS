@@ -7,11 +7,25 @@
  * a GPU: devices, a target on a window, visuals with offsets, translations,
  * rectangle clips and children, and a visual's content, which is either a
  * composition swap chain of dxgi.dll's (novadx.h; on the software device,
- * or on a GPU device, DXVK's, whose frames dxgi.dll reads back from the
- * GPU) or a surface of this dll's.  Each present of such a swap chain draws
- * its frame into the target's window with GDI, at the visual's place and
- * inside its clips; each Commit draws what changed since the last one: the
- * whole tree after a change to it, else the parts of surfaces drawn since.
+ * or on a GPU device, DXVK's) or a surface of this dll's.  Each present of
+ * such a swap chain draws its frame into the target's window with GDI, at
+ * the visual's place and inside its clips; each Commit draws what changed
+ * since the last one: the whole tree after a change to it, else the parts
+ * of surfaces drawn since.
+ *
+ * A target whose tree shows only swap chains of one GPU device (Chromium's
+ * GPU DirectComposition output, WebView2's on Venus) is composited on that
+ * GPU instead: the parts that change are copied on the GPU into a picture
+ * of the window's size (a texture of the device), which a swap chain of
+ * the device's own on the window (DXVK's, through Mesa's Vulkan) shows.
+ * Nothing is read back: the kernel shows that swap chain's frames straight
+ * from the host while nothing covers the window (direct presentation,
+ * kernel/um/um_gui.c), else Mesa draws them in with the GDI.  The parts of
+ * the window no visual covers show black there.  When the tree no longer
+ * qualifies (a surface, a software swap chain, another device), the
+ * target goes back to the GDI way, and the kernel is told to show the
+ * window's own pixels again.  NOVA_PRESENT=gdi keeps every target on the
+ * GDI way.
  *
  * A surface (IDCompositionSurface) is a texture on the rendering device
  * the DirectComposition device was made with (DCompositionCreateDevice2 or
@@ -103,6 +117,13 @@ struct Target {
     LONG refs;
     HWND hwnd;
     Visual *root;                       /* (counted) */
+    /* Composited on the GPU (counted; NULL until then) */
+    IUnknown *gdev, *gctx;              /* the device of its swap chains and its immediate context */
+    IUnknown *pres;                     /* a swap chain of the device on the window */
+    IUnknown *pic;                      /* the window's picture: a texture of the device, gw x gh, gfmt */
+    UINT gw, gh, gfmt;
+    BOOL gpu;                           /* its last frame went the GPU way (the kernel may show it) */
+    BOOL gpu_bad;                       /* the device made no swap chain for the window: the GDI way only */
 };
 
 /* The targets of every device, for Commit (a visual tree is the same
@@ -192,6 +213,178 @@ static void draw_tree(Visual *v, Target *t, float fx, float fy, RECT clip, int a
     for (int i = 0; i < v->nkids; i++) draw_tree(v->kids[i], t, fx, fy, clip, all, depth + 1);
 }
 
+/* ---- Compositing on the GPU ----------------------------------------------- */
+typedef void    (STDMETHODCALLTYPE *CopyRegion_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, UINT, IUnknown *, UINT, const ND3D11_BOX *);
+typedef void    (STDMETHODCALLTYPE *CopyResource_t)(IUnknown *, IUnknown *, IUnknown *);
+typedef HRESULT (STDMETHODCALLTYPE *GetBuffer_t)(IUnknown *, UINT, const GUID *, void **);
+typedef HRESULT (STDMETHODCALLTYPE *Present_t)(IUnknown *, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *ResizeBuffers_t)(IUnknown *, UINT, UINT, UINT, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *GetParent_t)(IUnknown *, const GUID *, void **);
+typedef HRESULT (STDMETHODCALLTYPE *ForHwnd_t)(IUnknown *, IUnknown *, HWND, const NDXGI_SWAP_CHAIN_DESC1 *, const void *, void *,
+                                               IUnknown **);
+typedef HRESULT (STDMETHODCALLTYPE *CreateTexture2D_t)(IUnknown *, const ND3D11_TEXTURE2D_DESC *, const void *, IUnknown **);
+typedef LONG_PTR (WINAPI *NtNovaGpuCtl_t)(INT_PTR, ULONG, ULONG_PTR, void *);
+#define GPU_STOP_PRESENT 15             /* NtNovaGpuCtl: the window's frames go through the GDI again (kernel/um/um_gpu.c) */
+
+static int g_gdi_only = -1;             /* NOVA_PRESENT=gdi */
+
+/* The family a format copies within: 1 BGRA, 2 RGBA, 0 neither (a picture
+ * and a swap chain of the window's are made in its UNORM format) */
+static int family(UINT f)
+{
+    if (f == NDXGI_FORMAT_B8G8R8A8_UNORM || f == NDXGI_FORMAT_B8G8R8A8_UNORM_SRGB) return 1;
+    if (f == NDXGI_FORMAT_R8G8B8A8_UNORM || f == NDXGI_FORMAT_R8G8B8A8_UNORM_SRGB) return 2;
+    return 0;
+}
+
+/* @v's tree shows only swap chains of one GPU device (*@dev), of one
+ * format family (*@fam); *@n counts them */
+static BOOL tree_on_gpu(Visual *v, IUnknown **dev, int *fam, int *n, int depth)
+{
+    if (!v || depth > MAX_DEPTH) return TRUE;
+    if (v->hidden || v->opacity <= 0.0f || (v->effect && v->effect->opacity <= 0.0f)) return TRUE;
+    if (v->surface) return FALSE;
+    if (v->chain) {
+        IUnknown *d = NULL;
+        UINT f = 0, w = 0, h = 0;
+        BOOL shown = FALSE;
+        if (!v->chain->lpVtbl->Texture(v->chain, &d, &f, &w, &h, &shown) || !family(f)) return FALSE;
+        if ((*dev && *dev != d) || (*fam && *fam != family(f))) return FALSE;
+        *dev = d; *fam = family(f);
+        ++*n;
+    }
+    for (int i = 0; i < v->nkids; i++) if (!tree_on_gpu(v->kids[i], dev, fam, n, depth + 1)) return FALSE;
+    return TRUE;
+}
+
+static void target_drop_gpu(Target *t)
+{
+    if (t->pic) { t->pic->lpVtbl->Release(t->pic); t->pic = NULL; }
+    if (t->pres) { t->pres->lpVtbl->Release(t->pres); t->pres = NULL; }
+    if (t->gctx) { t->gctx->lpVtbl->Release(t->gctx); t->gctx = NULL; }
+    if (t->gdev) { t->gdev->lpVtbl->Release(t->gdev); t->gdev = NULL; }
+    t->gw = t->gh = 0;
+}
+
+/* @t's swap chain and picture on @dev, of @fam, the window's size; *@fresh:
+ * the picture is new (all of the tree to be drawn into it).  FALSE: the
+ * GDI way */
+static BOOL target_gpu_ready(Target *t, IUnknown *dev, int fam, BOOL *fresh)
+{
+    RECT cr;
+    *fresh = FALSE;
+    if (t->gpu_bad || !GetClientRect(t->hwnd, &cr) || cr.right <= 0 || cr.bottom <= 0) return FALSE;
+    UINT w = (UINT)cr.right, h = (UINT)cr.bottom, fmt = fam == 1 ? NDXGI_FORMAT_B8G8R8A8_UNORM : NDXGI_FORMAT_R8G8B8A8_UNORM;
+    if (t->gdev != dev || (t->pres && t->gfmt != fmt)) target_drop_gpu(t);
+    if (!t->pres) {
+        /* the factory of the device's adapter (as Chromium takes it): DXVK's
+         * makes the window's swap chain */
+        IUnknown *dxgi = NULL, *adapter = NULL, *factory = NULL, *pres = NULL;
+        NDXGI_SWAP_CHAIN_DESC1 d = { w, h, fmt, FALSE, { 1, 0 }, 0x20 /* RENDER_TARGET_OUTPUT */, 2, 0 /* STRETCH */,
+                                     4 /* FLIP_DISCARD */, 0 /* UNSPECIFIED */, 0 };
+        if (SUCCEEDED(dev->lpVtbl->QueryInterface(dev, &NIID_IDXGIDevice, (void **)&dxgi)) &&
+            SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)dxgi)[7])(dxgi, &adapter)) &&
+            SUCCEEDED(((GetParent_t)((void **)*(void **)adapter)[6])(adapter, &NIID_IDXGIFactory2, (void **)&factory)))
+            ((ForHwnd_t)((void **)*(void **)factory)[15])(factory, dev, t->hwnd, &d, NULL, NULL, &pres);
+        if (factory) factory->lpVtbl->Release(factory);
+        if (adapter) adapter->lpVtbl->Release(adapter);
+        if (dxgi) dxgi->lpVtbl->Release(dxgi);
+        if (!pres) { t->gpu_bad = TRUE; return FALSE; }
+        t->pres = pres;
+        t->gdev = dev; dev->lpVtbl->AddRef(dev);
+        ((void (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)dev)[40])(dev, &t->gctx);   /* GetImmediateContext */
+        t->gfmt = fmt;
+        t->gw = w; t->gh = h;
+    } else if (t->gw != w || t->gh != h) {
+        if (t->pic) { t->pic->lpVtbl->Release(t->pic); t->pic = NULL; }
+        if (FAILED(((ResizeBuffers_t)((void **)*(void **)t->pres)[13])(t->pres, 0, w, h, 0, 0))) {
+            target_drop_gpu(t);
+            t->gpu_bad = TRUE;
+            return FALSE;
+        }
+        t->gw = w; t->gh = h;
+    }
+    if (!t->pic) {
+        ND3D11_TEXTURE2D_DESC td;
+        __builtin_memset(&td, 0, sizeof(td));
+        td.Width = w; td.Height = h;
+        td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = fmt;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE_;
+        if (!t->gctx || FAILED(((CreateTexture2D_t)((void **)*(void **)dev)[5])(dev, &td, NULL, &t->pic))) {
+            t->pic = NULL;
+            target_drop_gpu(t);
+            t->gpu_bad = TRUE;
+            return FALSE;
+        }
+        *fresh = TRUE;
+    }
+    return TRUE;
+}
+
+/* @t composited on the GPU from now (its device and picture ready, and
+ * *@fresh as target_gpu_ready says), or FALSE: the GDI way */
+static BOOL target_on_gpu(Target *t, BOOL *fresh)
+{
+    if (g_gdi_only < 0) {
+        char how[8] = "";
+        GetEnvironmentVariableA("NOVA_PRESENT", how, sizeof(how));
+        g_gdi_only = (how[0] | 0x20) == 'g' && (how[1] | 0x20) == 'd' && (how[2] | 0x20) == 'i' && !how[3];
+    }
+    IUnknown *dev = NULL;
+    int fam = 0, n = 0;
+    return !g_gdi_only && tree_on_gpu(t->root, &dev, &fam, &n, 0) && n && target_gpu_ready(t, dev, fam, fresh);
+}
+
+/* The part @dirty (content coordinates; NULL: all) of @v's swap chain into
+ * @t's picture at (@x, @y), inside @clip; TRUE if anything was copied */
+static BOOL gpu_content(Visual *v, Target *t, int x, int y, const RECT *clip, const RECT *dirty)
+{
+    IUnknown *d = NULL;
+    UINT f = 0, w = 0, h = 0;
+    BOOL shown = FALSE;
+    IUnknown *tex = v->chain ? v->chain->lpVtbl->Texture(v->chain, &d, &f, &w, &h, &shown) : NULL;
+    if (!tex || !shown) return FALSE;                       /* (made since its last present: the picture keeps what was there) */
+    RECT part = { clip->left - x, clip->top - y, clip->right - x, clip->bottom - y }, all = { 0, 0, (LONG)w, (LONG)h };
+    RECT win = { -x, -y, (LONG)t->gw - x, (LONG)t->gh - y };
+    if (!IntersectRect(&part, &part, &all) || !IntersectRect(&part, &part, &win)) return FALSE;
+    if (dirty && !IntersectRect(&part, &part, dirty)) return FALSE;
+    ND3D11_BOX box = { (UINT)part.left, (UINT)part.top, 0, (UINT)part.right, (UINT)part.bottom, 1 };
+    ((CopyRegion_t)((void **)*(void **)t->gctx)[46])(t->gctx, t->pic, 0, (UINT)(x + part.left), (UINT)(y + part.top), 0, tex, 0, &box);
+    return TRUE;
+}
+
+static BOOL gpu_tree(Visual *v, Target *t, float fx, float fy, RECT clip, int depth)
+{
+    if (!v || depth > MAX_DEPTH || !visual_step(v, &fx, &fy, &clip) || IsRectEmpty(&clip)) return FALSE;
+    BOOL drew = gpu_content(v, t, to_px(fx), to_px(fy), &clip, NULL);
+    for (int i = 0; i < v->nkids; i++) drew |= gpu_tree(v->kids[i], t, fx, fy, clip, depth + 1);
+    return drew;
+}
+
+/* @t's picture shown: copied into its swap chain's buffer and presented */
+static void gpu_show(Target *t)
+{
+    IUnknown *buf = NULL;
+    if (FAILED(((GetBuffer_t)((void **)*(void **)t->pres)[9])(t->pres, 0, &NIID_ID3D11Texture2D, (void **)&buf)) || !buf) return;
+    ((CopyResource_t)((void **)*(void **)t->gctx)[47])(t->gctx, buf, t->pic);
+    buf->lpVtbl->Release(buf);
+    ((Present_t)((void **)*(void **)t->pres)[8])(t->pres, 0, 0);
+    t->gpu = TRUE;
+}
+
+/* @t goes (back) the GDI way: the kernel stops showing its last GPU frame */
+static void gpu_stop(Target *t)
+{
+    static NtNovaGpuCtl_t ctl;
+    if (!t->gpu) return;
+    t->gpu = FALSE;
+    if (!ctl) ctl = (NtNovaGpuCtl_t)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtNovaGpuCtl");
+    HWND root = GetAncestor(t->hwnd, GA_ROOT);
+    if (ctl) ctl(0, GPU_STOP_PRESENT, (ULONG_PTR)(root ? root : t->hwnd), NULL);
+}
+
 static void clear_dirty(Visual *v, int depth)
 {
     if (!v || depth > MAX_DEPTH) return;
@@ -202,8 +395,18 @@ static void clear_dirty(Visual *v, int depth)
 static void commit(void)
 {
     EnterCriticalSection(&g_lock);
-    for (int i = 0; i < MAX_TARGETS; i++)
-        if (g_targets[i]) draw_tree(g_targets[i]->root, g_targets[i], 0, 0, g_everywhere, g_changed, 0);
+    for (int i = 0; i < MAX_TARGETS; i++) {
+        Target *t = g_targets[i];
+        if (!t) continue;
+        BOOL fresh = FALSE;
+        if (target_on_gpu(t, &fresh)) {                     /* (swap chains only: their presents drew the rest) */
+            if ((g_changed || fresh) && gpu_tree(t->root, t, 0, 0, g_everywhere, 0)) gpu_show(t);
+            continue;
+        }
+        int all = g_changed || t->gpu;
+        gpu_stop(t);
+        draw_tree(t->root, t, 0, 0, g_everywhere, all, 0);
+    }
     for (int i = 0; i < MAX_TARGETS; i++) if (g_targets[i]) clear_dirty(g_targets[i]->root, 0);
     g_changed = 0;
     LeaveCriticalSection(&g_lock);
@@ -217,12 +420,18 @@ static void STDMETHODCALLTYPE visual_sink(void *ctx, const RECT *dirty)
     int x = 0, y = 0;
     RECT clip;
     Target *t = visual_place(v, &x, &y, &clip);
-    if (t) draw_content(v, t, x, y, &clip, dirty);
+    BOOL fresh = FALSE;
+    if (t && target_on_gpu(t, &fresh)) {
+        if (fresh ? gpu_tree(t->root, t, 0, 0, g_everywhere, 0) : gpu_content(v, t, x, y, &clip, dirty)) gpu_show(t);
+    } else if (t && t->gpu) {                               /* (back from the GPU way: all of it) */
+        gpu_stop(t);
+        draw_tree(t->root, t, 0, 0, g_everywhere, 1, 0);
+    } else if (t)
+        draw_content(v, t, x, y, &clip, dirty);
     LeaveCriticalSection(&g_lock);
 }
 
 /* ---- Surfaces ------------------------------------------------------------ */
-typedef HRESULT (STDMETHODCALLTYPE *CreateTexture2D_t)(IUnknown *, const ND3D11_TEXTURE2D_DESC *, const void *, IUnknown **);
 
 static int surface_format(UINT f)
 {
@@ -323,7 +532,6 @@ static HRESULT STDMETHODCALLTYPE s_scroll(Surface *s, const RECT *scroll, const 
  * the device and as read back */
 static HRESULT STDMETHODCALLTYPE s_resize(Surface *s, UINT w, UINT h)
 {
-    typedef void (STDMETHODCALLTYPE *CopyRegion_t)(IUnknown *, IUnknown *, UINT, UINT, UINT, UINT, IUnknown *, UINT, const ND3D11_BOX *);
     if (s->drawing) return DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED_;
     if (!w || !h) return E_INVALIDARG;
     if (w == s->w && h == s->h && s->tex) return S_OK;
@@ -608,6 +816,8 @@ static ULONG STDMETHODCALLTYPE t_release(Target *t)
         t_setroot(t, NULL);
         EnterCriticalSection(&g_lock);
         for (int i = 0; i < MAX_TARGETS; i++) if (g_targets[i] == t) g_targets[i] = NULL;
+        if (IsWindow(t->hwnd)) gpu_stop(t);                 /* (the window shows its own pixels again) */
+        target_drop_gpu(t);
         LeaveCriticalSection(&g_lock);
         HeapFree(GetProcessHeap(), 0, t);
     }

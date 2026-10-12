@@ -121,7 +121,11 @@ Moved from the README; the core suite is listed there.
   frames shown straight from the host's GPU while the window is alone,
   checked on the screen itself, and through the GDI while a window covers
   it) and `d3dtest present` (the same for Direct3D 9 on Venus, whose
-  Vulkan swapchain's frames the host copies into the screen); then
+  Vulkan swapchain's frames the host copies into the screen) and
+  `dcomptest direct` (a DirectComposition swap chain on Venus composited
+  on the GPU and shown the same way, also from the GPU process's window
+  embedded in another process's, and the GDI way again, on the screen
+  too, once the tree no longer qualifies); then
   `gltest fps` and
   `d3dtest fps`, which draw the same OpenGL scene on virgl (shown
   directly and through the GDI) and on

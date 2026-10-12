@@ -2564,7 +2564,9 @@ void um_gui_process_gone(UmProcess *p)
  * bitmap with the GDI.  The kernel says yes only when nothing else is
  * drawn over that part of the screen: the window is on one monitor (any
  * of them), and no window, popup, shadow, menu, the dock or the pointer
- * is over it.  The host then writes the frame into that monitor's screen
+ * is over it.  A window embedded in another process's (CTL_EMBED: the
+ * window WebView2's GPU process composites into, through dcomp.dll and
+ * DXVK's Vulkan) counts by the part of it that shows.  The host then writes the frame into that monitor's screen
  * memory (VgpuOverlayPresent; the "present" thread finishes that while the
  * program draws on), the window's bitmap keeping its last GDI frame.  A
  * monitor at scale 2 shows a frame of logical pixels (a program that is
@@ -2575,7 +2577,8 @@ void um_gui_process_gone(UmProcess *p)
  * the pointer moving), gui_damage puts the overlays there back over it,
  * or, when one is no longer alone there, stops showing it and asks the
  * program to draw again (WM_PAINT), which then goes the GDI way until the
- * window is clear again.  Desktop lock throughout.
+ * window is clear again; UmGuiGpuStop does that at the program's word.
+ * Desktop lock throughout.
  * ----------------------------------------------------------------------- */
 static bool rect_meets(GdiRect a, GdiRect b)
 {
@@ -2601,7 +2604,7 @@ static bool overlay_place(GdiRect r, int *head, GdiRect *sr)
  * on the screens in *head and *sr */
 static bool overlay_alone(GuiWin *g, GdiRect r, int *head, GdiRect *sr)
 {
-    if (!g->wnd || g->host || !g->proc || g->proc->exited) return false;
+    if (!g->wnd || !g->proc || g->proc->exited) return false;
     GdiRect cr = WmClientRect(g->wnd), cur;
     if (r.x < cr.x || r.y < cr.y || r.x + r.w > cr.x + (cr.w < g->cw ? cr.w : g->cw) ||
         r.y + r.h > cr.y + (cr.h < g->ch ? cr.h : g->ch))
@@ -2780,6 +2783,21 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struc
     DisplayStatAdd(DISPLAY_STAT_DIRECT_US, (rdtsc() - t0) / per_us);
     DisplayStatAdd(DISPLAY_STAT_DIRECT_LOCK_US, (t1 - t0) / per_us);
     return r;
+}
+
+/* The program shows window @hwnd's frames through the GDI again (dcomp.dll
+ * when a DirectComposition target stops being composited on the GPU): its
+ * bitmap is current, so the desktop shows that instead of the last frame
+ * shown straight from the host */
+void UmGuiGpuStop(UmProcess *p, UINT32 hwnd)
+{
+    DesktopLockAlone();
+    GuiWin *g = win_by_hwnd(hwnd);
+    if (g && g->proc == p && g->ovl_on) {
+        g->ovl_on = false;
+        WmInvalidateRect(g->ovl_r);
+    }
+    DesktopUnlockAlone();
 }
 
 void um_gui_syscalls_init(void)

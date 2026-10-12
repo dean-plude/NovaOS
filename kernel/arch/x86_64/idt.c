@@ -26,6 +26,10 @@
 #include "../../ke/ksym.h"
 #include "../../fs/bootlog.h"
 
+/* nt/seh.c: offer a ring-0 fault in a loaded Windows driver to its
+ * __try/__except handlers; true (and does not return) when one resumes. */
+bool NtKernelException(InterruptFrame *frame, uint64_t cr2);
+
 /* Assembly stub address table (defined in isr_stubs.asm) */
 extern uintptr_t isr_stub_table[IDT_ENTRIES];
 
@@ -205,6 +209,12 @@ static void handle_page_fault(InterruptFrame *f)
     if (user && sched_current()->um)          /* program bug: no kernel dump */
         terminate_faulting_user_thread(STATUS_ACCESS_VIOLATION, f, cr2);
 
+    /* A kernel-mode fault in a loaded Windows driver may be inside a
+     * __try/__except: offer it to the driver's handlers first.  A handled
+     * one resumes in the __except body and never returns here. */
+    if (!user && NtKernelException(f, cr2))
+        return;
+
     kprintf("\n=== PAGE FAULT ===\n");
     kprintf("  Fault address (CR2): 0x%016lx\n", cr2);
     kprintf("  Access: %s %s %s%s%s\n",
@@ -257,6 +267,12 @@ static void dispatch(InterruptFrame *frame)
             handle_page_fault(frame);
             return;
         }
+
+        /* A non-page-fault exception in a loaded Windows driver (a divide
+         * by zero, a #GP, an illegal instruction): let the driver's
+         * __try/__except handle it before the kernel treats it as fatal. */
+        if (!(frame->cs & 3) && NtKernelException(frame, 0))
+            return;
 
         if (vector == EXC_BREAKPOINT || vector == EXC_DEBUG) {
             kprintf("[DBG] Breakpoint/debug trap at RIP=0x%016lx\n", frame->rip);

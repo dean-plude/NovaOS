@@ -717,8 +717,9 @@ compiles the scene's shaders), then for 10 s with its frames shown
 directly and 10 s through the GDI (`NOVA_PRESENT=gdi`), and 10 s on
 lavapipe, each in a child process whose `VK_DRIVER_FILES` names the
 driver, and passes when Venus draws more frames per second (under TCG:
-14 to 17 against about 0.13) and direct presentation beats the GDI way
-as `gltest fps`'s does.  The
+14 to 17 against about 0.13) and direct presentation moves fewer bytes
+through guest memory a frame than the GDI way and, without KVM, draws
+faster (under KVM: a sixteenth of the bytes or less).  The
 graphics boot has a second monitor (a QEMU
 `secondary-vga`): between the installs and `gltest` it runs `montest 2`,
 which checks the monitor calls and layout changes; when it asks, the test

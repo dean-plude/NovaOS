@@ -11135,8 +11135,9 @@ copies no pixel.
   direct), after a turn that is not counted (the host compiles the
   scene's shaders for the first program), and needs direct presentation
   to move fewer bytes through guest memory a frame and, without KVM, to
-  be faster (under KVM, a sixteenth of the bytes or less, as `gltest
-  fps`).  In the QEMU VM without KVM (lavapipe on the host): 47.9 against
+  be faster; under KVM, where the guest's copies cost little and the
+  host makes three copies of its own, it must move a sixteenth of the
+  bytes or less, and the times are printed.  In the QEMU VM without KVM (lavapipe on the host): 47.9 against
   59.1 ms a frame (20.9 against 16.9 frames a second), 173 KiB against
   2259 KiB a frame through guest memory; another run 61.2 against 66.8 ms,
   162 against 2184 KiB.

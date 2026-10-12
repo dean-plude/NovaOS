@@ -238,6 +238,18 @@ void VirtioNetResume(void)
     else kprintf("[VIRTIO] The network adapter didn't come back after sleep\n");
 }
 
+const PciDevice *VirtioNetPci(void) { return &g.pci; }
+
+void VirtioNetStop(void)
+{
+    if (!g.present) return;
+    g.present = false;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    c8(C_STATUS, 0);                                        /* reset: the queues are the device's no more */
+    for (int i = 0; i < 100000 && r8(C_STATUS); i++) pause_cpu();
+    kprintf("[VIRTIO] Network adapter at %02x:%02x.%x stopped\n", g.pci.bus, g.pci.dev, g.pci.func);
+}
+
 bool        VirtioNetPresent(void) { return g.present; }
 const char *VirtioNetName(void)    { return "Virtio network adapter"; }
 void        VirtioNetMac(UINT8 mac[6]) { memcpy(mac, g.mac, 6); }

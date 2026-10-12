@@ -98,6 +98,12 @@ bool NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql)
     return true;
 }
 
+const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo)
+{
+    NtPdo *p = pdo_of(pdo);
+    return p ? p->instance : NULL;
+}
+
 /* ---- strings for the driver: wide, in pool it frees with ExFreePool ---- */
 
 static NT_WCHAR *pool_wide(const char *s, size_t n)
@@ -219,6 +225,12 @@ static UINT32 config(NtPdo *p, bool write, UINT8 *buf, UINT32 off, UINT32 len)
         else buf[i] = (UINT8)(v >> sh);
     }
     return len;
+}
+
+UINT32 NtPnpConfig(NT_DEVICE_OBJECT *pdo, bool write, void *buf, UINT32 off, UINT32 len)
+{
+    NtPdo *p = pdo_of(pdo);
+    return p ? config(p, write, buf, off, len) : 0;
 }
 
 static NT_API void bus_ref(void *ctx) { (void)ctx; }
@@ -506,7 +518,8 @@ UINT32 NtPnpStart(UINT32 node)
     }
     NtPdo *p = pdo_by_node(node);
     if (p && p->started) goto out;                           /* (already running) */
-    if ((n->flags & PNP_STARTED) && !p) { prob = PROB_FAILED_START; goto out; }   /* (a NovaOS driver has it) */
+    bool inbox = (n->flags & PNP_STARTED) && !p;             /* (a NovaOS driver has it) */
+    if (inbox && !(n->flags & PNP_INBOX)) { prob = PROB_FAILED_START; goto out; }
     ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
     if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0]) { prob = PROB_NO_DRIVER; goto out; }
 
@@ -527,6 +540,17 @@ UINT32 NtPnpStart(UINT32 node)
         prob = PROB_FAILED_ADD;
         unload_if_idle(drv);
         goto out;
+    }
+    /* NovaOS's own driver steps aside for the installed one, as Windows
+     * replaces an inbox driver with a vendor's */
+    if (inbox) {
+        if (!PciSetAside(&pci)) {
+            kprintf("[PNP] %s: its NovaOS driver did not step aside for %s\n", n->instance, service);
+            prob = PROB_FAILED_START;
+            unload_if_idle(drv);
+            goto out;
+        }
+        n->flags &= ~(UINT32)PNP_STARTED;
     }
     NTSTATUS st = drv->ext.AddDevice(drv->obj, p->pdo);
     NT_DEVICE_OBJECT *top = nt_IoGetAttachedDevice(p->pdo);
@@ -566,7 +590,7 @@ UINT32 NtPnpStart(UINT32 node)
     PciClaim(&p->pci, p->service);
     kprintf("[PNP] %s: started (driver %s)\n", n->instance, service);
 out:
-    if (prob && prob != PROB_NO_DRIVER && !((n->flags & PNP_STARTED) && !pdo_by_node(node)))   /* (not a NovaOS driver's) */
+    if (prob && prob != PROB_NO_DRIVER && !(n->flags & PNP_STARTED))   /* (not while a NovaOS driver runs it) */
         PnpSetProblem(node, prob);
     kfree(n);
     return prob;
@@ -607,7 +631,8 @@ void NtPnpBoot(void)
     if (!n) return;
     char key[200], service[64];
     for (UINT32 id = 1; id <= count; id++) {
-        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || (n->flags & PNP_STARTED) || strncmp(n->instance, "PCI\\", 4))
+        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || strncmp(n->instance, "PCI\\", 4) ||
+            ((n->flags & PNP_STARTED) && !(n->flags & PNP_INBOX)))
             continue;
         ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
         UINT32 disabled = 0;

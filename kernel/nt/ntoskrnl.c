@@ -391,6 +391,21 @@ NT_API int nt__vsnprintf(char *buf, UINT64 count, const char *fmt, __builtin_ms_
     return (int)strlen(buf);
 }
 
+/* The secure form: at most @count characters (_TRUNCATE, ~0: as many as
+ * fit) into @size bytes; -1 when the output was cut short */
+NT_API int nt__vsnprintf_s(char *buf, UINT64 size, UINT64 count, const char *fmt, __builtin_ms_va_list ap)
+{
+    if (!buf || !size) return -1;
+    UINT64 cap = count < size ? count + 1 : size;
+    char tmp[1024];
+    format(tmp, sizeof(tmp), fmt, ap);
+    UINT64 n = strlen(tmp);
+    UINT64 put = n < cap ? n : cap - 1;
+    memcpy(buf, tmp, put);
+    buf[put] = 0;
+    return put < n ? -1 : (int)n;
+}
+
 NT_API int nt__vsnwprintf(NT_WCHAR *buf, UINT64 count, const NT_WCHAR *fmt, __builtin_ms_va_list ap)
 {
     char nfmt[512], out[512];

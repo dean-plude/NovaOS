@@ -54,6 +54,16 @@ void PciEnableDevice(const PciDevice *d);
  * drivers.  A later claim replaces an earlier one. */
 void PciClaim(const PciDevice *d, const char *driver);
 
+/* Inbox drivers: the claiming driver can hand the function over to a
+ * Windows driver installed on it, as Windows replaces an inbox driver with
+ * a vendor's (docs/design/windows-drivers.md).  @set_aside stops the
+ * driver using the device and returns true once it has let go;
+ * PciSetAside calls it, and the function is then unclaimed with no driver
+ * (problem 28) for the PnP manager to start the Windows one.  False when
+ * the function's driver cannot step aside. */
+void PciAllowSetAside(const PciDevice *d, bool (*set_aside)(void));
+bool PciSetAside(const PciDevice *d);
+
 /* The @index'th function found at boot (0 = first) and the driver that
  * claimed it (NULL: none); false past the last */
 bool PciAt(int index, PciDevice *out, const char **driver);

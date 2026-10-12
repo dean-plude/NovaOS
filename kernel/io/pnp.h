@@ -32,6 +32,7 @@
 #define PNP_PRESENT       0x01      /* plugged in (clear: a phantom) */
 #define PNP_STARTED       0x02      /* a NovaOS driver runs it */
 #define PNP_REMOVABLE     0x04      /* can be unplugged (USB) */
+#define PNP_INBOX         0x08      /* its NovaOS driver steps aside for an installed Windows driver */
 
 /* What a program gets (NovaPnpNode in userland/include/novapnp.h).  The
  * ID lists are several NUL-terminated strings ended by an empty one
@@ -80,6 +81,9 @@ void PnpSetDriver(UINT32 id, const char *service);
 /* The node's driver stopped, or did not start: not started, with
  * @problem (CM_PROB_*: 10 failed to start, 22 disabled...) */
 void PnpSetProblem(UINT32 id, UINT32 problem);
+/* Whether the node's NovaOS driver would step aside for an installed
+ * Windows driver (PNP_INBOX) */
+void PnpSetInbox(UINT32 id, bool on);
 /* The node of PCI function bus:dev.func, or 0 */
 UINT32 PnpPciNode(UINT8 bus, UINT8 dev, UINT8 func);
 

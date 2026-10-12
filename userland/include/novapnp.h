@@ -18,6 +18,7 @@
 #define NOVA_PNP_PRESENT    0x01
 #define NOVA_PNP_STARTED    0x02
 #define NOVA_PNP_REMOVABLE  0x04
+#define NOVA_PNP_INBOX      0x08    /* NovaOS's driver steps aside for an installed Windows one */
 
 typedef struct {
     DWORD id, parent, flags, problem, seq, reserved;

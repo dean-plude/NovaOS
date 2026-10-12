@@ -17,6 +17,20 @@ bool NetInitialize(void);
 bool NetAvailable(void);
 void NetResume(void);                     /* after S3: the adapter */
 
+/* A network adapter another driver runs: a Windows miniport through
+ * NovaOS's NDIS host (kernel/nt/ndis.c).  NetAttach makes it the adapter
+ * the stack uses (DHCP starts again on it); NetDetach gives it up, leaving
+ * loopback only until another attaches. */
+typedef struct {
+    const char *(*name)(void);
+    void        (*mac)(UINT8 mac[6]);
+    bool        (*link_up)(void);
+    bool        (*transmit)(const void *frame, UINT16 len);   /* false: no room now */
+    int         (*receive)(void *buf, int cap);               /* a frame's length, or 0 */
+} NetAdapter;
+void NetAttach(const NetAdapter *a);
+void NetDetach(const NetAdapter *a);
+
 /* An IPv4 or IPv6 address: IPv4 in a[0..3], both in network byte order */
 typedef struct {
     bool   v6;

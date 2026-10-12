@@ -10,6 +10,8 @@
  *                  System32\drivers, or 13: run from the driver store, no copy)
  *   .Services      AddService: the service key (CreateService); the one
  *                  flagged SPSVCINST_ASSOCSERVICE (2) runs the device
+ *   AddReg         HKR lines into the device's driver key (an NDIS
+ *                  miniport's parameters: NdisReadConfiguration reads them)
  *   .HW AddReg     HKR lines into the device's Device Parameters key
  *
  * and the device's keys are written as Windows writes them:
@@ -247,7 +249,7 @@ static BOOL service_line(const WCHAR *key, const WCHAR *value, void *ctx)
 }
 
 typedef struct {
-    HKEY key;                                   /* HKR: the device's Device Parameters */
+    HKEY key;                                   /* HKR: the device's Device Parameters, or its driver key */
     const Inf *inf;
 } Reg;
 
@@ -451,6 +453,8 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         inf_field(ver, 1, version, 64);
         set_sz(dk, L"DriverDate", date);
         set_sz(dk, L"DriverVersion", version);
+        Reg r = { dk, inf };                                /* DDInstall's AddReg: HKR is the driver key */
+        inf_lines(inf, ddi, hw_line, &r);
         RegCloseKey(dk);
     }
     inf_close(inf);

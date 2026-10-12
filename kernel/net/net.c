@@ -14,6 +14,7 @@
 #include "tls.h"
 #include "../drivers/e1000.h"
 #include "../drivers/virtio_net.h"
+#include "../hal/pci.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
 #include "../mm/vmm.h"
@@ -79,6 +80,16 @@ static int         none_receive(void *buf, int cap) { (void)buf; (void)cap; retu
 static void        none_resume(void) {}
 static const Nic g_none = { none_present, none_name, none_mac, none_link_up, none_transmit, none_receive, none_resume };
 static const Nic *g_nic = &g_e1000;
+
+/* An adapter another driver runs (NetAttach) */
+static const NetAdapter *g_ext;
+static bool        ext_present(void) { return g_ext != NULL; }
+static const char *ext_name(void) { return g_ext ? g_ext->name() : "none"; }
+static void        ext_mac(UINT8 mac[6]) { if (g_ext) g_ext->mac(mac); }
+static bool        ext_link_up(void) { return g_ext && g_ext->link_up(); }
+static bool        ext_transmit(const void *frame, UINT16 len) { return g_ext && g_ext->transmit(frame, len); }
+static int         ext_receive(void *buf, int cap) { return g_ext ? g_ext->receive(buf, cap) : 0; }
+static const Nic g_external = { ext_present, ext_name, ext_mac, ext_link_up, ext_transmit, ext_receive, none_resume };
 
 /* -----------------------------------------------------------------------
  * Platform hooks for lwIP (port/arch/cc.h)
@@ -619,12 +630,67 @@ static void net_thread(void *arg)
     }
 }
 
+/* The adapter changes under the stack (called with the lock held): the
+ * address goes, the link is looked at afresh, and DHCP asks again */
+static void adapter_changed(void)
+{
+    dhcp_release_and_stop(&g_netif);
+    ip4_addr_t zero;
+    ip4_addr_set_zero(&zero);
+    netif_set_addr(&g_netif, &zero, &zero, &zero);
+    g_nic->mac(g_netif.hwaddr);
+    g_link = false;
+    netif_set_link_down(&g_netif);
+    if (g_nic != &g_none && !g_cfg.manual_ip && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");
+}
+
+/* The built-in virtio driver steps aside for a Windows driver installed on
+ * its device (PciSetAside, from kernel/nt/pnp.c) */
+static bool virtio_set_aside(void)
+{
+    net_lock();
+    if (g_nic == &g_virtio) {
+        g_nic = &g_none;
+        adapter_changed();
+    }
+    net_unlock();
+    VirtioNetStop();
+    return true;
+}
+
+void NetAttach(const NetAdapter *a)
+{
+    net_lock();
+    g_ext = a;
+    g_nic = &g_external;
+    UINT8 mac[6];
+    a->mac(mac);
+    kprintf("[NET] Adapter: %s, MAC %02x:%02x:%02x:%02x:%02x:%02x\n", a->name(), mac[0], mac[1], mac[2], mac[3],
+            mac[4], mac[5]);
+    adapter_changed();
+    net_unlock();
+}
+
+void NetDetach(const NetAdapter *a)
+{
+    net_lock();
+    if (g_ext == a) {
+        g_nic = &g_none;
+        adapter_changed();
+        g_ext = NULL;
+        kprintf("[NET] Adapter %s gone: loopback only\n", a->name());
+    }
+    net_unlock();
+}
+
 bool NetInitialize(void)
 {
     TlsInit();                          /* (root store works without a NIC) */
     if (E1000Init()) g_nic = &g_e1000;
-    else if (VirtioNetInit()) g_nic = &g_virtio;
-    else g_nic = &g_none;                /* loopback only */
+    else if (VirtioNetInit()) {
+        g_nic = &g_virtio;
+        PciAllowSetAside(VirtioNetPci(), virtio_set_aside);
+    } else g_nic = &g_none;              /* loopback only */
 
     UINT8 mac[6];
     g_nic->mac(mac);

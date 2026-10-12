@@ -18,6 +18,7 @@ static PciDevice g_devices[PCI_MAX_DEVICES];
 static int       g_count;
 static UINT32    g_saved[PCI_MAX_DEVICES][16];   /* configuration headers over S3 */
 static const char *g_driver[PCI_MAX_DEVICES];    /* who claimed each function (PciClaim) */
+static bool (*g_set_aside[PCI_MAX_DEVICES])(void);   /* how its inbox driver lets go (PciAllowSetAside) */
 
 static UINT32 cfg_addr(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off)
 {
@@ -245,6 +246,36 @@ void PciClaim(const PciDevice *d, const char *driver)
             PnpSetDriver(PnpPciNode(d->bus, d->dev, d->func), driver);   /* (its device node: started) */
             return;
         }
+}
+
+static int index_of(const PciDevice *d)
+{
+    for (int i = 0; i < g_count; i++)
+        if (g_devices[i].bus == d->bus && g_devices[i].dev == d->dev && g_devices[i].func == d->func) return i;
+    return -1;
+}
+
+void PciAllowSetAside(const PciDevice *d, bool (*set_aside)(void))
+{
+    int i = index_of(d);
+    if (i < 0) return;
+    g_set_aside[i] = set_aside;
+    PnpSetInbox(PnpPciNode(d->bus, d->dev, d->func), set_aside != NULL);
+}
+
+bool PciSetAside(const PciDevice *d)
+{
+    int i = index_of(d);
+    if (i < 0 || !g_set_aside[i]) return false;
+    kprintf("[PCI] %02x:%02x.%x: %s steps aside for an installed Windows driver\n", d->bus, d->dev, d->func,
+            g_driver[i] ? g_driver[i] : "its driver");
+    if (!g_set_aside[i]()) return false;
+    UINT32 node = PnpPciNode(d->bus, d->dev, d->func);
+    g_set_aside[i] = NULL;
+    g_driver[i] = NULL;
+    PnpSetInbox(node, false);
+    PnpSetProblem(node, 28);                                  /* (no driver, until the PnP manager starts one) */
+    return true;
 }
 
 bool PciAt(int index, PciDevice *out, const char **driver)

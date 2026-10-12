@@ -658,6 +658,23 @@ NT_API UINT32 nt_KeQueryActiveProcessorCountEx(UINT16 group)
     return group == 0 || group == 0xFFFF ? g_cpu_count : 0;
 }
 
+/* PROCESSOR_NUMBER (Group, Number, Reserved) <-> a system-wide index: one
+ * group, so the index is the number */
+NT_API UINT32 nt_KeGetProcessorIndexFromNumber(const void *number)
+{
+    const UINT8 *n = number;
+    return n && !*(const UINT16 *)n && n[2] < g_cpu_count ? n[2] : 0xFFFFFFFFu;    /* (INVALID_PROCESSOR_INDEX) */
+}
+
+NT_API NT_STATUS nt_KeGetProcessorNumberFromIndex(UINT32 index, void *number)
+{
+    if (!number || index >= g_cpu_count) return NT_STATUS_INVALID_PARAMETER;
+    *(UINT16 *)number = 0;
+    ((UINT8 *)number)[2] = (UINT8)index;
+    ((UINT8 *)number)[3] = 0;
+    return NT_STATUS_SUCCESS;
+}
+
 /* -----------------------------------------------------------------------
  * KeBugCheckEx: a driver found the system in a state it cannot go on in
  * ----------------------------------------------------------------------- */

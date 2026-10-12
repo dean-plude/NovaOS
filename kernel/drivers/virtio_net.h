@@ -10,9 +10,14 @@
 #pragma once
 
 #include "../include/types.h"
+#include "../hal/pci.h"
 
 bool        VirtioNetInit(void);
 void        VirtioNetResume(void);    /* after S3 */
+/* Its PCI function; and stop using the device (reset, left for a Windows
+ * driver installed on it: net.c's PciAllowSetAside) */
+const PciDevice *VirtioNetPci(void);
+void        VirtioNetStop(void);
 bool        VirtioNetPresent(void);
 const char *VirtioNetName(void);
 void        VirtioNetMac(UINT8 mac[6]);

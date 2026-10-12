@@ -594,6 +594,9 @@ bool DisplayPoll(UINT32 *removed)
 }
 
 static void (*g_damage_hook)(int x, int y, int w, int h);
+static void (*g_flip_hook)(int page);
+
+void DisplaySetFlipHook(void (*fn)(int page)) { g_flip_hook = fn; }
 static UINT64 g_stat[DISPLAY_STATS];
 
 void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h)) { g_damage_hook = fn; }
@@ -612,6 +615,8 @@ bool DisplayPrimaryScreen(VgpuScreen *s)
     s->stride = d.stride;
     s->lines = d.cur.h;
     s->pages = d.kind == DRV_BOCHS && d.flip ? 2 : 1;
+    s->front = s->pages > 1 ? d.page : 0;
+    s->only = -1;
     return true;
 }
 
@@ -890,6 +895,7 @@ UINT32 *DisplayBackPage(void)
 void DisplayFlip(void)
 {
     if (!DisplayCanFlip()) return;
+    if (g_flip_hook) g_flip_hook(d.page ^ 1);
     d.page ^= 1;
     vbe_write(VBE_Y_OFFSET, (UINT16)(d.page * d.cur.h));
     publish_surface();

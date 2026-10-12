@@ -111,6 +111,8 @@ void DisplayPrimaryShow(int x, int y, int w, int h);
 /* Called with each rectangle of the primary that was drawn, before it is
  * shown (the overlays go back over it) */
 void DisplaySetDamageHook(void (*fn)(int x, int y, int w, int h));
+/* Called with the page about to be shown, before each flip */
+void DisplaySetFlipHook(void (*fn)(int page));
 
 /* Bytes moved to show frames, since boot (gltest fps compares the GDI way
  * of presenting with direct presentation) */

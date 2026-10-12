@@ -153,6 +153,7 @@ typedef struct {
     bool        ovl_on;
     GdiRect     ovl_r;              /* where on screen (logical = the primary's pixels) */
     int         ovl_dx, ovl_dy;     /* ... from the client area's top left */
+    UINT8       ovl_stale;          /* pages of the screen still showing an older frame there */
 } GuiWin;
 
 /* The table's slots (used, proc, id), the message queues, the quit flags
@@ -2610,6 +2611,28 @@ static void gui_damage(int x, int y, int w, int h)
     }
 }
 
+/* A frame goes only to the page on screen (half the host's work when the
+ * display flips): before the other page is shown, the overlays still
+ * older there are written into it */
+static void gui_flip(int page)
+{
+    if (DesktopLockOwner() != sched_current()) return;
+    VgpuScreen scr;
+    if (!DisplayPrimaryScreen(&scr)) return;
+    scr.only = page;
+    for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
+        GuiWin *g = &g_win[i];
+        if (!g->used || !g->ovl_on || !(g->ovl_stale & (1u << page))) continue;
+        g->ovl_stale &= (UINT8)~(1u << page);
+        if (!overlay_alone(g, g->ovl_r)) {
+            g->ovl_on = false;
+            enqueue(g, WM_PAINT, 0, 0, 0, 0);
+            continue;
+        }
+        VgpuOverlayShow(g->ovl, &scr, 0, 0, g->ovl_r.x, g->ovl_r.y, g->ovl_r.w, g->ovl_r.h);
+    }
+}
+
 /* What the host is still writing into the screen for direct presentation:
  * the "present" thread waits for it, then (desktop lock) touches that part
  * and shows it, so that the program goes on to its next frame meanwhile */
@@ -2654,7 +2677,7 @@ static void shown_add(const VgpuScreen *scr, const VgpuShown *sh)
     }
     IrqState st = spin_lock_irqsave(&g_shown_lock);
     if (g_shown.w && g_shown_scr.phys == scr->phys && g_shown_scr.stride == scr->stride &&
-        g_shown_scr.lines == scr->lines && g_shown_scr.pages == scr->pages) {
+        g_shown_scr.lines == scr->lines && g_shown_scr.pages == scr->pages && g_shown_scr.only == scr->only) {
         int x0 = g_shown.x < sh->x ? g_shown.x : sh->x, y0 = g_shown.y < sh->y ? g_shown.y : sh->y;
         int x1 = g_shown.x + g_shown.w, y1 = g_shown.y + g_shown.h;
         if (sh->x + sh->w > x1) x1 = sh->x + sh->w;
@@ -2684,12 +2707,14 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
         } else {
             if (!g->ovl) g->ovl = VgpuOverlayCreate();
             VgpuShown sh;
+            scr.only = scr.front;                 /* (the other page: gui_flip) */
             if (g->ovl && VgpuOverlayPresent(g->ovl, src, w, h, &scr, x, y, &sh)) {
                 GdiRect cr = WmClientRect(g->wnd);
                 shown_add(&scr, &sh);
                 g->ovl_on = true;
                 g->ovl_r = rr;
                 g->ovl_dx = x - cr.x; g->ovl_dy = y - cr.y;
+                g->ovl_stale = (UINT8)(((1u << scr.pages) - 1) & ~(1u << scr.front));
                 r = 0;
             } else
                 g->ovl_on = false;
@@ -2706,6 +2731,7 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, int x, int 
 void um_gui_syscalls_init(void)
 {
     DisplaySetDamageHook(gui_damage);
+    DisplaySetFlipHook(gui_flip);
     um_install(SYSCALL_NtNovaGuiCreate,      sys_gui_create);
     um_install(SYSCALL_NtNovaGuiGetMessage,  sys_gui_getmessage);
     um_install(SYSCALL_NtNovaGuiInvalidate,  sys_gui_invalidate);

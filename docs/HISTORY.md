@@ -10494,7 +10494,9 @@ straight into the screen's memory: no pixel is copied by the guest.
   primary's screen (the VGA framebuffer, both pages when it flips, or a
   virtio output's picture), in the frame's own format so that the copy
   is a plain one, and a transfer writes that part into it.  The host
-  draws most of a frame, so it copies each frame once; the window keeps
+  draws most of a frame, so it copies each frame once, into the page on
+  screen only when the display flips (the other page gets the window's
+  last frame just before it is shown); the window keeps
   the program's last shown buffer (it draws the next frame into the
   other one) to write it there again.  The program goes on to its next
   frame as soon as the copy is asked for: a kernel thread waits for the
@@ -10523,7 +10525,8 @@ straight into the screen's memory: no pixel is copied by the guest.
   18 KiB against 3542 KiB a frame through guest memory.  It also prints
   how much of a frame goes to SwapBuffers and to asking the kernel.  A first version
   copied each frame on the host twice (into the window's own texture,
-  then onto the screen) and was slower than the GDI under KVM, where the
+  then onto the screen), and into both pages of a flipping display, and
+  was slower than the GDI under KVM, where the
   guest's copies cost little and the host's time is all; it also asked
   the kernel before the host had drawn the frame, so the desktop stayed
   held while the host drew, and then waited for the host's copy and

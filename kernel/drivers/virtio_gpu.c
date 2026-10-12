@@ -1382,7 +1382,7 @@ void VgpuScreenTouch(const VgpuScreen *s, int x, int y, int w, int h)
 {
     if (w <= 0 || h <= 0) return;
     for (int pg = 0; pg < s->pages; pg++)
-        for (int r = 0; r < h; r++) {
+        for (int r = 0; r < h && (s->only < 0 || pg == s->only); r++) {
             volatile UINT32 *row = (volatile UINT32 *)(PHYSMAP_BASE + s->phys) +
                                    (UINT64)(y + pg * s->lines + r) * s->stride + x;
             for (int c = 0; c < w; c += 1024) row[c] = row[c];
@@ -1401,8 +1401,8 @@ static UINT32 *copy_region(UINT32 *c, UINT32 dst, int dx, int dy, UINT32 src, in
     return c + COPY_REGION_SIZE + 1;
 }
 
-/* Copy (x, y, w, h) of @o's frame to (dx, dy) of every page of the screen
- * and write it into the screen's memory: done when this returns, or (with
+/* Copy (x, y, w, h) of @o's frame to (dx, dy) of the screen's pages (all,
+ * or s->only) and write it into the screen's memory: done when this returns, or (with
  * @shown) once the host reaches shown->seq, the part of the screen in
  * @shown to be touched then (VgpuPresentWait, VgpuScreenTouch) */
 static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
@@ -1417,21 +1417,27 @@ static bool overlay_write(Vgpu *v, VgpuOverlay *o, const VgpuScreen *s, int x, i
     if (shown) *shown = (VgpuShown){ g_pseq, dx, dy, 0, 0 };
     if (w <= 0 || h <= 0) return true;
     UINT32 cs[2 * (BLIT_SIZE + 1)], *end = cs;
+    int first = -1, last = 0;
     for (int pg = 0; pg < s->pages && pg < 2; pg++)
+        if (s->only < 0 || pg == s->only) {
+            if (first < 0) first = pg;
+            last = pg;
+        }
+    if (first < 0) return true;
+    for (int pg = first; pg <= last; pg++)
         end = g_pfmt == o->src->format
                   ? copy_region(end, scr->res, dx, dy + pg * s->lines, o->src->res, x, y, w, h)
                   : blit(end, scr->res, g_pfmt, dx, dy + pg * s->lines, o->src->res, o->src->format, x, y, w, h);
     if (!VgpuCtxSubmit(g_pctx, cs, (UINT32)((end - cs) * 4), 0, 0, NULL, NULL)) return false;
-    for (int pg = 0; pg < s->pages; pg++) {
+    for (int pg = first; pg <= last; pg++) {
         UINT32 row = (UINT32)(dy + pg * s->lines);
         UINT32 box[6] = { (UINT32)dx, row, 0, (UINT32)w, (UINT32)h, 1 };
-        bool last = pg == s->pages - 1;
         if (!VgpuTransfer3dEx(g_pctx, scr, false, box, ((UINT64)row * s->stride + dx) * 4, 0, (UINT32)s->stride * 4, 0,
-                              last ? g_psync : 0, last ? g_pseq + 1 : 0, false))
+                              pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, false))
             return false;
     }
     UINT64 want = ++g_pseq;
-    DisplayStatAdd(DISPLAY_STAT_DIRECT_BYTES, (UINT64)w * h * 4 * s->pages);
+    DisplayStatAdd(DISPLAY_STAT_DIRECT_BYTES, (UINT64)w * h * 4 * (last - first + 1));
     if (shown) {
         *shown = (VgpuShown){ want, dx, dy, w, h };
         return true;

@@ -34,6 +34,10 @@ import argparse, concurrent.futures, os, re, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
+from mksys import import_libs, test_signer                     # noqa: E402
+from sign import sign                                           # noqa: E402
 
 WDF_REPO = 'https://github.com/microsoft/Windows-Driver-Frameworks.git'
 WDF_COMMIT = 'b6191d9543441329154da32f7ab9bdd97228dd3c'
@@ -66,8 +70,10 @@ WDM_EDITS = [
 ]
 
 
-# compiled without -fasync-exceptions: clang 18 crashes on them with it (none has a __try)
-ASYNC_EH_CRASHES = {'kmdf/src/core/tracing.cpp'}
+# What WdfLdr.sys exports (wdfldr.c; fxldr.h declares them)
+WDFLDR_EXPORTS = ['WdfLdrDiagnosticsValueByNameAsULONG', 'WdfLdrQueryInterface', 'WdfRegisterClassLibrary',
+                  'WdfRegisterLibrary', 'WdfVersionBind', 'WdfVersionBindClass', 'WdfVersionUnbind',
+                  'WdfVersionUnbindClass', 'DllInitialize', 'DllUnload']
 
 
 def run(cmd, **kw):
@@ -161,6 +167,20 @@ def case_overlay(case, files, dirs):
             os.symlink(target, link)
 
 
+def struct_list(pub, dest):
+    """gen/wdfstructs.inc: WDF_STRUCT(name) for each public structure, in
+    WDFSTRUCTENUM order (the INDEX_ names of wdffuncenum.h), for the
+    structure-size table WdfBindClientHelper hands newer clients
+    (rt/bindhelper.cpp)"""
+    text = open(os.path.join(pub, 'wdffuncenum.h')).read()
+    names = sorted((int(i), n) for n, i in re.findall(r'^\s*INDEX_(\w+)\s*=\s*(\d+),', text, re.M))
+    if [i for i, _ in names] != list(range(len(names))):
+        sys.exit('build_kmdf: wdffuncenum.h: WDFSTRUCTENUM is not 0..n-1')
+    os.makedirs(dest, exist_ok=True)
+    with open(os.path.join(dest, 'wdfstructs.inc'), 'w') as f:
+        f.write(''.join(f'WDF_STRUCT({n})\n' for _, n in names))
+
+
 def mingw_wdm(dest):
     """mingw-w64's wdm.h with WDM_EDITS applied, written under @dest"""
     text = open(os.path.join(MINGW, 'ddk', 'wdm.h'), encoding='latin-1').read()
@@ -230,31 +250,80 @@ def main():
     cxx = ['-std=c++17', '-fno-exceptions', '-fno-rtti', '-fno-threadsafe-statics', '-fno-sized-deallocation',
            '-fms-compatibility']
 
-    def compile_one(path):
-        rel = os.path.relpath(path, fw)
-        obj = os.path.join(work, rel.replace(os.sep, '_') + '.o')
-        # -fasync-exceptions (MSVC's /EHa, as the WDK builds the framework):
-        # without it the optimizer may assume a memory access inside
-        # __try never faults and drop the handler.  clang 18 crashes on one
-        # file with it, a file with no __try in it.
-        eh = [] if rel.replace(os.sep, '/') in ASYNC_EH_CRASHES else ['-fasync-exceptions']
+    gen = os.path.join(work, 'gen')
+    struct_list(pub, gen)
+    common += ['-I', gen]
+
+    def compile_one(job):
+        path, obj = job
+        # -fasync-exceptions (MSVC's /EHa) for the C files, whose try/except
+        # blocks guard the probes of user buffers: without it the optimizer
+        # may assume a memory access inside __try never faults and drop the
+        # handler.  (No C++ file has a __try; clang 18 hangs or crashes on
+        # two of them with the option.)
+        eh = [] if path.endswith('.cpp') else ['-fasync-exceptions']
         cmd = ['clang++' if path.endswith('.cpp') else 'clang'] + common + eh + (cxx if path.endswith('.cpp') else []) + \
               ['-c', path, '-o', obj]
         r = subprocess.run(cmd, capture_output=True, text=True)
         return path, obj, r.returncode, r.stderr
 
-    objs, failed = [], []
-    with concurrent.futures.ThreadPoolExecutor(args.jobs) as ex:
-        for path, obj, rc, err in ex.map(compile_one, files):
-            if rc:
-                failed.append(path)
-                sys.stderr.write(f'--- {os.path.relpath(path, fw)}\n{err}')
-                if not args.keep_going:
-                    sys.exit(1)
-            objs.append(obj)
-    if failed:
-        sys.exit(f'build_kmdf: {len(failed)} of {len(files)} files failed')
-    print(f'build_kmdf: compiled {len(objs)} files')
+    def compile_all(paths, base):
+        jobs = [(p, os.path.join(work, os.path.relpath(p, base).replace(os.sep, '_') + '.o')) for p in paths]
+        objs, failed = [], []
+        with concurrent.futures.ThreadPoolExecutor(args.jobs) as ex:
+            for path, obj, rc, err in ex.map(compile_one, jobs):
+                if rc:
+                    failed.append(path)
+                    sys.stderr.write(f'--- {os.path.relpath(path, base)}\n{err}')
+                    if not args.keep_going:
+                        sys.exit(1)
+                objs.append(obj)
+        if failed:
+            sys.exit(f'build_kmdf: {len(failed)} of {len(paths)} files failed')
+        return objs
+
+    fx = compile_all(files, fw)
+    rt = compile_all(sorted(os.path.join(HERE, 'rt', n) for n in os.listdir(os.path.join(HERE, 'rt'))
+                            if n.endswith(('.c', '.cpp'))), HERE)
+    ldr, = compile_all([os.path.join(HERE, 'wdfldr.c')], ROOT)
+    # a client driver is built with the WDK's public headers only (and the
+    # stub with fxldr.h, the loader interface it calls)
+    client = ['--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-stack-protector',
+              '-mno-stack-arg-probe', '-fms-extensions', '-fgnuc-version=13.2', '-fasync-exceptions', '-nostdinc', '-w',
+              '-isystem', os.path.join(resdir, 'include'), '-I', os.path.join(HERE, 'inc'), '-I', case, '-I', pub,
+              '-I', os.path.join(fw, 'shared', 'inc', 'private', 'common'),
+              '-isystem', os.path.join(work, 'ddk'), '-isystem', os.path.join(MINGW, 'ddk'), '-isystem', MINGW,
+              '-include', os.path.join(HERE, 'inc', 'novaos_client.h')]
+    stub, test = os.path.join(work, 'stub.o'), os.path.join(work, 'kmdftest.o')
+    run(['clang'] + client + ['-c', os.path.join(HERE, 'stub.c'), '-o', stub])
+    run(['clang'] + client + ['-Wall', '-c', os.path.join(ROOT, 'tools', 'drivertest', 'kmdftest.c'), '-o', test])
+    print(f'build_kmdf: compiled {len(fx)} framework files')
+
+    # import libraries: the kernel's (mksys.py, from kernel/nt/exports.h) and WdfLdr.sys's
+    libs = import_libs(work)
+    wdfldr_def = os.path.join(work, 'wdfldr.def')
+    with open(wdfldr_def, 'w') as f:
+        f.write('LIBRARY WDFLDR.SYS\nEXPORTS\n' + ''.join(f'    {n}\n' for n in WDFLDR_EXPORTS))
+    wdfldr_lib = os.path.join(work, 'wdfldr.lib')
+    run(['llvm-lib', f'/def:{wdfldr_def}', '/machine:x64', f'/out:{wdfldr_lib}'])
+
+    def link(name, objs, extra):
+        run(['lld-link', '/driver', '/subsystem:native', '/nodefaultlib', '/machine:x64', '/base:0x140000000',
+             '/opt:ref', '/opt:icf', '/errorlimit:0'] + extra + objs + libs + [f'/out:{os.path.join(out, name)}'])
+
+    link('Wdf01000.sys', fx + rt, ['/entry:DriverEntry', wdfldr_lib])
+    link('WdfLdr.sys', [ldr], ['/entry:DriverEntry', f'/def:{wdfldr_def}', f'/implib:{os.path.join(work, "WdfLdr-self.lib")}'])
+    link('kmdftest.sys', [test, stub], ['/entry:FxDriverEntry', wdfldr_lib])
+
+    # signed as NovaOS's other test drivers are (mksys.py): they load with
+    # test signing on (docs/drivers.md says why the framework does too)
+    signer, root = test_signer()
+    for name in ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys'):
+        path = os.path.join(out, name)
+        data = open(path, 'rb').read()
+        with open(path, 'wb') as f:
+            f.write(sign(data, signer, [root], 'sha256'))
+    print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys and kmdftest.sys in {out}')
 
 
 if __name__ == '__main__':

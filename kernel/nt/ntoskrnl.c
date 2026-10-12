@@ -176,6 +176,33 @@ NT_API UINT64 nt_wcslen(const NT_WCHAR *s)
     return n;
 }
 
+NT_API int nt_strncmp(const char *a, const char *b, UINT64 n)
+{
+    for (; n; n--, a++, b++) {
+        if (*a != *b) return (UINT8)*a - (UINT8)*b;
+        if (!*a) break;
+    }
+    return 0;
+}
+
+/* (ASCII case folding, as the C runtime's in the "C" locale) */
+NT_API int nt__stricmp(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : (UINT8)*a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : (UINT8)*b;
+        if (x != y || !x) return x - y;
+    }
+}
+
+NT_API NT_WCHAR *nt_wcsrchr(const NT_WCHAR *s, NT_WCHAR c)
+{
+    const NT_WCHAR *last = NULL;
+    for (;; s++) {
+        if (*s == c) last = s;
+        if (!*s) return (NT_WCHAR *)last;
+    }
+}
+
 /* -----------------------------------------------------------------------
  * hal.dll
  * ----------------------------------------------------------------------- */
@@ -327,19 +354,6 @@ NT_API UINT16 nt_RtlCaptureStackBackTrace(UINT32 skip, UINT32 count, void **fram
     (void)skip; (void)count; (void)frames;
     if (hash) *hash = 0;
     return 0;
-}
-
-/* RtlQueryRegistryValues reads a driver's registry values through a table
- * of query routines and defaults.  The registry-backed driver store it
- * drives (per-value callbacks and defaults) arrives with the PnP driver
- * steps; until then it reports that it found nothing to query. */
-NT_API NTSTATUS nt_RtlQueryRegistryValues(UINT32 relative, const NT_WCHAR *path, void *table,
-                                          void *context, void *environment)
-{
-    (void)relative; (void)path; (void)table; (void)context; (void)environment;
-    static bool told;
-    if (!told) { told = true; kprintf("[NT] RtlQueryRegistryValues: driver registry queries are stubbed\n"); }
-    return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
 /* -----------------------------------------------------------------------

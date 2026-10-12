@@ -217,6 +217,8 @@ WdfVersionBind(
     }
     BindInfo->Module = (PLIBRARY_MODULE)lib;
     InterlockedIncrement(&lib->Clients);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "WdfLdr: %wZ bound to %wZ (KMDF %u.%u)\n", RegistryPath,
+               &lib->Service, BindInfo->Version.Major, BindInfo->Version.Minor);
     return STATUS_SUCCESS;
 }
 

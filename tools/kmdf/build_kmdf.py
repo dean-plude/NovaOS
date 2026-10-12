@@ -5,16 +5,24 @@
 
 KMDF is Microsoft's Windows Driver Frameworks, published under the MIT
 licence at github.com/microsoft/Windows-Driver-Frameworks.  NovaOS runs that
-code unchanged: this script fetches the pinned commit (WDF_COMMIT; a git
-commit id names its content, so the fetch is verified by git itself) into
-~/.cache/novaos/wdf, compiles the kernel-mode framework (framework/kmdf and
-the kernel-mode half of framework/shared) with clang, and links
-Wdf01000.sys with lld-link /driver against import libraries for
-ntoskrnl.exe, hal.dll (kernel/nt/exports.h) and WdfLdr.sys.
+code unchanged but for the patches in tools/kmdf/patches (each says what
+it restores and why): this script fetches the pinned commit (WDF_COMMIT; a
+git commit id names its content, so the fetch is verified by git itself)
+into ~/.cache/novaos/wdf, applies the patches, compiles the kernel-mode
+framework (framework/kmdf and the kernel-mode half of framework/shared)
+with clang, and links Wdf01000.sys with lld-link /driver against import
+libraries for ntoskrnl.exe, hal.dll (kernel/nt/exports.h) and WdfLdr.sys.
+It also links WdfLdr.sys, the KMDF loader, and kmdftest.sys, a KMDF driver
+built as the WDK builds one (the client stub tools/kmdf/stub.c, which binds
+it to the framework, and tools/drivertest/kmdftest.c), and test-signs all
+three with tools/drivertest/mksys.py's certificate.  OUTDIR gets the three
+.sys files; the result is kept in ~/.cache/novaos/wdf/out-<hash of the
+inputs> and copied from there while nothing it is made from changed.
 
 The published source is the framework only, not the build around it: the
 WDK headers it was built with, a few framework-private headers, the WPP
-trace headers (.tmh) the WDK's preprocessor writes, and the loader
+trace headers (.tmh) the WDK's preprocessor writes, the WDK's static
+libraries (wdmsec.lib, the USB and aux_klib helpers) and the loader
 (WdfLdr.sys, with the WdfBindClientHelper routine the framework links
 from it).  NovaOS supplies those:
 
@@ -22,15 +30,16 @@ from it).  NovaOS supplies those:
     which adds what they lack (tools/kmdf/inc/README.md lists each file);
   * the framework-private headers (wdfldr.h, wdfcx.h, ...): NovaOS's own,
     written from the declarations the source uses, in tools/kmdf/inc;
-  * the .tmh files: empty (built with tracing through DoTraceLevelMessage,
-    the source's own non-WPP path);
-  * WdfLdr.sys and WdfBindClientHelper: NovaOS's own (tools/kmdf/wdfldr.c).
+  * the .tmh files: NovaOS's trace macros (tools/kmdf/inc/novaos_wpp.h:
+    warnings and errors go to DbgPrintEx);
+  * the libraries and WdfBindClientHelper: tools/kmdf/rt;
+  * WdfLdr.sys: NovaOS's own (tools/kmdf/wdfldr.c).
 
 The source tree is case-insensitive on Windows and includes "FxDevice.tmh"
 for fxdevice.tmh; an overlay of links under OUTDIR/obj/case gives every
 spelling the source uses.
 """
-import argparse, concurrent.futures, os, re, shutil, subprocess, sys
+import argparse, concurrent.futures, hashlib, os, re, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -79,7 +88,8 @@ WDFLDR_EXPORTS = ['WdfLdrDiagnosticsValueByNameAsULONG', 'WdfLdrQueryInterface',
 def run(cmd, **kw):
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
     if r.returncode:
-        sys.stderr.write(' '.join(cmd) + '\n' + r.stdout + r.stderr)
+        line = ' '.join(cmd)
+        sys.stderr.write((line if len(line) < 2000 else line[:2000] + ' ...') + '\n' + r.stdout + r.stderr)
         sys.exit(1)
     return r.stdout
 
@@ -208,6 +218,24 @@ def patched_tree(src, dest):
     return dest
 
 
+OUTPUTS = ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys')
+CACHE = os.path.join(os.path.expanduser('~'), '.cache', 'novaos', 'wdf')
+
+
+def inputs_hash():
+    """A hash of everything the outputs are made from (with the compiler's version)"""
+    h = hashlib.sha256(WDF_COMMIT.encode())
+    files = [os.path.join(d, n) for d, _, ns in os.walk(HERE) if '__pycache__' not in d for n in ns]
+    files += [os.path.join(ROOT, *p.split('/')) for p in (
+        'tools/drivertest/kmdftest.c', 'tools/drivertest/kmdftest.h', 'tools/drivertest/mksys.py',
+        'kernel/nt/exports.h', 'tools/authenticode/sign.py')]
+    for path in sorted(files):
+        h.update(os.path.relpath(path, ROOT).encode() + b'\0' + open(path, 'rb').read())
+    for tool in ('clang', 'lld-link'):
+        h.update(subprocess.run([tool, '--version'], capture_output=True).stdout)
+    return h.hexdigest()[:16]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out')
@@ -217,6 +245,13 @@ def main():
     args = ap.parse_args()
 
     out = os.path.abspath(args.out)
+    os.makedirs(out, exist_ok=True)
+    kept = None if args.src else os.path.join(CACHE, 'out-' + inputs_hash())
+    if kept and all(os.path.isfile(os.path.join(kept, n)) for n in OUTPUTS):
+        for n in OUTPUTS:
+            shutil.copy(os.path.join(kept, n), os.path.join(out, n))
+        print(f'build_kmdf: {", ".join(OUTPUTS)} unchanged (from {kept})')
+        return
     work = os.path.join(out, 'obj')
     os.makedirs(work, exist_ok=True)
     src = args.src or patched_tree(fetch(os.path.join(os.path.expanduser('~'), '.cache', 'novaos', 'wdf')),
@@ -309,11 +344,14 @@ def main():
 
     def link(name, objs, extra):
         run(['lld-link', '/driver', '/subsystem:native', '/nodefaultlib', '/machine:x64', '/base:0x140000000',
-             '/opt:ref', '/opt:icf', '/errorlimit:0'] + extra + objs + libs + [f'/out:{os.path.join(out, name)}'])
+             '/opt:ref', '/opt:icf', '/errorlimit:0', '/Brepro'] + extra + objs + libs + [f'/out:{os.path.join(out, name)}'])
 
     link('Wdf01000.sys', fx + rt, ['/entry:DriverEntry', wdfldr_lib])
     link('WdfLdr.sys', [ldr], ['/entry:DriverEntry', f'/def:{wdfldr_def}', f'/implib:{os.path.join(work, "WdfLdr-self.lib")}'])
-    link('kmdftest.sys', [test, stub], ['/entry:FxDriverEntry', wdfldr_lib])
+    # (a client driver links the WDK's wdmsec.lib and has the compiler's
+    # CR8 intrinsic: the same stand-ins Wdf01000.sys links)
+    client_rt = [o for o in rt if os.path.basename(o) in ('rt_crt.c.o', 'rt_wdmsec.c.o')]
+    link('kmdftest.sys', [test, stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
 
     # signed as NovaOS's other test drivers are (mksys.py): they load with
     # test signing on (docs/drivers.md says why the framework does too)
@@ -324,6 +362,13 @@ def main():
         with open(path, 'wb') as f:
             f.write(sign(data, signer, [root], 'sha256'))
     print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys and kmdftest.sys in {out}')
+    if kept:                                       # (the last build only)
+        for old in os.listdir(CACHE):
+            if old.startswith('out-'):
+                shutil.rmtree(os.path.join(CACHE, old), ignore_errors=True)
+        os.makedirs(kept)
+        for n in OUTPUTS:
+            shutil.copy(os.path.join(out, n), os.path.join(kept, n))
 
 
 if __name__ == '__main__':

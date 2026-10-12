@@ -252,6 +252,11 @@ is that step's decision, recorded there.
   It stages the package with `pnputil` and installs it.  Nothing is
   downloaded without the user asking, nothing Microsoft or a vendor ships
   is put in the NovaOS image, and the downloaded `.sys` runs unchanged.
+  Step 30.6 put the Catalog source in place as `pnputil /scan-devices
+  /search-online`, which stages the package and records the update it
+  came from and its SHA-256 for the signing checks
+  ([drivers.md](../drivers.md#downloading-drivers-by-hardware-id)); the
+  vendor feeds and Device Manager's button come later.
 - **Redistribution**: Microsoft's inbox `.sys` files and vendor drivers
   are never shipped with NovaOS; they come to the user's own machine from
   their publisher, as on Windows.  The "default set" stays NovaOS's

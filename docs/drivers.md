@@ -125,3 +125,55 @@ not, as with the DSP firmware before.
 
 Moving to a newer linux-firmware tag is changing `tag` and every hash
 together.
+
+## Downloading drivers by hardware ID
+
+Windows 11 finds a driver for a device it has none for by the device's
+hardware ID, through Windows Update, which offers the packages the
+[Microsoft Update Catalog](https://www.catalog.update.microsoft.com)
+serves.  NovaOS asks the same Catalog (roadmap step 30.6), when the user
+asks it to:
+
+    pnputil /scan-devices /search-online [/instanceid <device instance ID>]
+
+For each device with problem code 28 (no driver), or the one named,
+`pnputil`:
+
+1. searches the Catalog (`Search.aspx?q=`) for the device's hardware IDs,
+   most specific first, then its compatible IDs, until one has driver
+   updates;
+2. ranks them as a 64-bit Windows 11 PC would take them: Windows 11 client
+   before Windows 10, client before server, never ARM64, newest first;
+3. asks the Catalog for the update's files (`DownloadDialog.aspx`, which
+   gives each file's address, SHA-1 and SHA-256), downloads the cabinet to
+   `C:\Windows\SoftwareDistribution\Download\Drivers\<update ID>\`,
+   and refuses it unless its SHA-256 is the Catalog's;
+4. expands it with `cabinet.dll` and looks for an INF with an x64 model
+   (`[Models.NTamd64...]`) for one of the device's IDs, going on to the
+   next update when there is none (up to three per ID);
+5. stages the package in the driver store as `pnputil /add-driver` does
+   (`oemN.inf`), and records where it came from in its
+   `HKLM\SYSTEM\DriverDatabase\DriverPackages\<package>` key:
+   `SourceName` ("Microsoft Update Catalog"), `SourceServer`,
+   `SourceUpdateId`, `SourceTitle`, `SourceProducts`, `SourceVersion`,
+   `SourceDate`, `SourceUrl`, `SourceSha256` (hex, checked),
+   `SourceSha1` (base64, as the Catalog gives it), `SourceCabinet` (the
+   kept cabinet, whose signature the signing checks of step 30.7 will
+   verify) and `SourceHardwareId`.
+
+A device whose package is already in the driver store is not searched
+again.  `pnputil /enum-drivers` shows a downloaded package's source, and
+`pnputil /enum-devices /drivers` lists it as matching the device.  The
+package is staged, not started: starting Windows drivers on devices comes
+with roadmap step 30.3, so for now the device keeps problem code 28.
+
+Nothing Microsoft or a vendor publishes is put in the NovaOS image: the
+package comes from its publisher to the user's own machine, as on
+Windows.  `/source <url>` points the search at another server that answers
+as the Catalog does; the `driversearch` self-test uses that with
+[`tools/drivertest/catalog_fixture.py`](../tools/drivertest/catalog_fixture.py),
+which serves pages recorded from the Catalog
+(`tests/selftest/devices/driversearch/catalog/`) so CI needs no network.
+Vendor feeds for packages published outside the Catalog
+(`userland/drivers/feeds.json` in the design) and Device Manager's
+"Search automatically for drivers" are still to come.

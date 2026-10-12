@@ -61,7 +61,12 @@ order; --list prints them):
             or changed after signing, then updates itself from a signed
             one to a newer test build of this kernel, restarts
             into it twice, and goes back to it when the next update is
-            reset while it first starts; "gamepad", a wired Xbox 360, an
+            reset while it first starts; "driversearch", QEMU's
+            virtio-serial port, which has no NovaOS driver, on a network
+            answering as the Microsoft Update Catalog does from recorded
+            pages (tools/drivertest/catalog_fixture.py): pnputil
+            downloads its driver package by hardware ID and stages it;
+            "gamepad", a wired Xbox 360, an
             Xbox One and a HID game pad on xHCI (tools/padpeer.py behind
             usb-redir devices): padtest reads their buttons and sticks
             through XInput and DirectInput 8 while the test moves them,
@@ -292,6 +297,7 @@ USBBOOT = load_suite('devices/usbboot')
 CDBOOT = load_suite('devices/cdboot')
 LAPTOP = load_suite('devices/laptop')
 UPDATE = load_suite('devices/update')
+DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
@@ -547,12 +553,24 @@ def update_boot(work):
     return ['-nic', 'user,model=virtio-net-pci', '-fw_cfg', f'name=opt/novaos/update-key,string={public}'], [srv]
 
 
+def driversearch_boot(work):
+    """QEMU's virtio-serial port, which has no NovaOS driver, on a user-mode
+    network where 10.0.2.2:18091 answers as the Microsoft Update Catalog
+    does (tools/drivertest/catalog_fixture.py, from recorded pages): pnputil
+    downloads its driver package by hardware ID (tests/selftest/devices/driversearch)"""
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tools', 'drivertest', 'catalog_fixture.py'), '18091', work])
+    time.sleep(1)
+    if srv.poll() is not None:
+        raise RuntimeError('the recorded Update Catalog did not start (is port 18091 in use?)')
+    return ['-nic', 'user,model=virtio-net-pci', '-device', 'virtio-serial-pci'], [srv]
+
+
 # The suites that boot once per entry: (label, tests, setup(work) -> (QEMU arguments, processes[,
 # more Nova arguments]))
 BOOTS = {
     'network': [('ipv4', NET4, net4_boot), ('ipv6', NET6, net6_boot)],
     'devices': [('touch', TOUCH, touch_boot), ('usbaudio', USBAUDIO, usbaudio_boot),
-                ('usbheadset', USBHEADSET, usbheadset_boot),
+                ('usbheadset', USBHEADSET, usbheadset_boot), ('driversearch', DRIVERSEARCH, driversearch_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),

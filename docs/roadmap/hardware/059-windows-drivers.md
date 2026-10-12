@@ -4,7 +4,9 @@
   kernel PE loader and `ntoskrnl.exe`/`hal.dll` exports, KMDF and UMDF
   built from Microsoft's MIT source, then USB, NDIS and Storport hosts),
   install them on devices matched by hardware ID from the driver store,
-  download them by hardware ID when none is there, and enforce Windows'
+  download them by hardware ID when none is there (step 30.6 is in:
+  `pnputil /scan-devices /search-online` downloads a device's package from
+  the Microsoft Update Catalog and stages it), and enforce Windows'
   kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
   driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
   kernel-mode test driver loads with `sc start`, serves a program's

@@ -18,9 +18,15 @@
  *               timers, fast mutexes, time, KeBugCheckEx
  *   ex.c        the pool (ExAllocatePool*)
  *   mm.c        MDLs, physical addresses, MmGetSystemRoutineAddress
- *   io.c        Windows devices and their names, IRPs: what a program's
- *               NtCreateFile, NtReadFile, NtWriteFile, NtDeviceIoControlFile
- *               and NtClose on a Windows device turn into
+ *   io.c        Windows devices and their names, device stacks, IRPs: what
+ *               a program's NtCreateFile, NtReadFile, NtWriteFile,
+ *               NtDeviceIoControlFile and NtClose on a Windows device turn into
+ *   pnp.c       the Plug and Play manager: a PCI function's PDO, the
+ *               driver installed on it (AddDevice, IRP_MN_START_DEVICE with
+ *               its resources, removal), device interfaces and properties
+ *   intr.c      device interrupts (IoConnectInterrupt(Ex)) at DIRQL
+ *   dma.c       device registers (MmMapIoSpace), contiguous memory and DMA
+ *               adapters (IoGetDmaAdapter)
  *   wdm.h       the structures drivers see, in Windows' x64 layout
  *
  * Program-facing glue (the system calls and handles) is in um/um_driver.c.
@@ -56,6 +62,8 @@ void      NtIoWorkerInit(void);
 
 /* ldr.c */
 void      NtDrvInit(void);
+/* The loaded driver of service @service, or NULL */
+NtDriver *NtDrvFind(const char *service);
 /* Read the boot options (test signing) once the registry is loaded */
 void      NtDrvBootOptions(void);
 /* Load the driver whose service key is @service (its name) and call its
@@ -98,6 +106,8 @@ void      NtIoRemoveDriver(NtDriver *drv);
  * Windows device: \Device\<name>[\...], or a link a driver made in
  * \DosDevices (<link>[\...]) */
 bool      NtIoIsDevice(const char *path);
+/* The name in \Device of @d ("\Device\0000004a"); false if it has none */
+bool      NtIoDeviceName(NT_DEVICE_OBJECT *d, char *out, int cap);
 /* Open it: IRP_MJ_CREATE; *@out the file object */
 NTSTATUS  NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options,
                    NT_FILE_OBJECT **out);
@@ -111,6 +121,24 @@ NTSTATUS  NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len,
 void      NtIoClose(NT_FILE_OBJECT *fo);
 /* Remove @drv's devices and links that its DriverUnload left behind */
 void      NtIoDropDevices(NtDriver *drv);
+
+/* pnp.c: start the Windows driver installed on device node @node (its
+ * Enum key's Service): 0, or the CM_PROB_* problem it has now (28: no
+ * driver installed) */
+UINT32    NtPnpStart(UINT32 node);
+/* Remove a started device's driver (query-remove, remove): it is disabled
+ * (problem 22) until NtPnpStart; a driver's veto comes back as its status */
+NTSTATUS  NtPnpStop(UINT32 node);
+/* At boot, once the registry is loaded: start the installed drivers */
+void      NtPnpBoot(void);
+/* The interfaces node @node's driver turned on (at most @max) */
+int       NtPnpInterfaces(UINT32 node, NT_GUID *out, int max);
+/* The translated interrupt the PnP manager gave PDO @pdo */
+bool      NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql);
+
+/* intr.c: a vector of its own for GSI @gsi, routed (masked until a driver
+ * connects to it) to the boot CPU; 0 if it cannot be routed */
+UINT8     NtIntrVector(UINT32 gsi, bool level, bool low);
 
 /* mm.c: describe @m's pages (of the calling program's buffer when @user)
  * for an access by a driver (@op IoReadAccess 0, IoWriteAccess 1,

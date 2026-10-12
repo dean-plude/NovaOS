@@ -575,6 +575,69 @@ CFGMGR32 CONFIGRET WINAPI CM_Get_Device_Interface_ListA(LPGUID cls, LPCSTR id, c
     return CR_SUCCESS;
 }
 
+/* ---- starting and disabling a device's Windows driver ----
+ * (kernel/nt/pnp.c: the PnP manager starts the driver a device install
+ * named in the device's Enum key, and takes it away with
+ * IRP_MN_QUERY_REMOVE_DEVICE and IRP_MN_REMOVE_DEVICE.)  A device a NovaOS
+ * driver runs cannot be disabled. */
+#define CR_REMOVE_VETOED    0x17
+#define CR_NOT_DISABLEABLE  0x21
+#define CR_ACCESS_DENIED    0x33
+#define CONFIGFLAG_DISABLED 0x1
+
+/* Set or clear CONFIGFLAG_DISABLED in the device's Enum key */
+static BOOL config_disabled(const NovaPnpNode *n, BOOL on)
+{
+    char k[300];
+    lstrcpyA(k, "SYSTEM\\CurrentControlSet\\Enum\\");
+    lstrcatA(k, n->instance);
+    HKEY h;
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, k, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &h, NULL)) return FALSE;
+    DWORD v = 0, type, len = sizeof(v);
+    if (RegQueryValueExA(h, "ConfigFlags", NULL, &type, (BYTE *)&v, &len) || type != REG_DWORD) v = 0;
+    v = on ? v | CONFIGFLAG_DISABLED : v & ~(DWORD)CONFIGFLAG_DISABLED;
+    BOOL ok = !RegSetValueExA(h, "ConfigFlags", 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(h);
+    return ok;
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Disable_DevNode(DEVINST dn, ULONG flags)
+{
+    (void)flags;
+    NovaPnpNode n;
+    if (dn >= PAD_BASE || !get(dn, &n)) return CR_NO_SUCH_DEVNODE;
+    if (!nova_pnp_prefix(n.instance, "PCI\\")) return CR_NOT_DISABLEABLE;
+    if (n.flags & NOVA_PNP_STARTED) {
+        NTSTATUS st = nova_pnp_stop(dn);
+        if (st == (NTSTATUS)0xC0000061) return CR_ACCESS_DENIED;           /* (STATUS_PRIVILEGE_NOT_HELD) */
+        if (st == (NTSTATUS)0xC0000184) return CR_NOT_DISABLEABLE;         /* (a NovaOS driver's) */
+        if (st < 0) return CR_REMOVE_VETOED;
+    }
+    return config_disabled(&n, TRUE) ? CR_SUCCESS : CR_ACCESS_DENIED;
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Enable_DevNode(DEVINST dn, ULONG flags)
+{
+    (void)flags;
+    NovaPnpNode n;
+    if (dn >= PAD_BASE || !get(dn, &n)) return CR_NO_SUCH_DEVNODE;
+    if (!config_disabled(&n, FALSE)) return CR_ACCESS_DENIED;
+    if (nova_pnp_start(dn) == (DWORD)-1) return CR_ACCESS_DENIED;
+    return CR_SUCCESS;                          /* (a driver that fails leaves its problem code) */
+}
+
+/* CM_SETUP_DEVNODE_READY (0): start the device's driver again */
+CFGMGR32 CONFIGRET WINAPI CM_Setup_DevNode(DEVINST dn, ULONG flags)
+{
+    (void)flags;
+    NovaPnpNode n;
+    if (dn >= PAD_BASE || !get(dn, &n)) return CR_NO_SUCH_DEVNODE;
+    return nova_pnp_start(dn) == (DWORD)-1 ? CR_ACCESS_DENIED : CR_SUCCESS;
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Disable_DevNode_Ex(DEVINST dn, ULONG f, HANDLE m) { (void)m; return CM_Disable_DevNode(dn, f); }
+CFGMGR32 CONFIGRET WINAPI CM_Enable_DevNode_Ex(DEVINST dn, ULONG f, HANDLE m) { (void)m; return CM_Enable_DevNode(dn, f); }
+
 CFGMGR32 DWORD WINAPI CM_MapCrToWin32Err(CONFIGRET cr, DWORD dflt)
 {
     switch (cr) {

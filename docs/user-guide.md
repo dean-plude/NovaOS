@@ -175,13 +175,15 @@ Windows programs use is there yet, so many programs still fail:
 `.msi`, or unzip it and, in the Terminal, run
 `pnputil /add-driver <folder>\*.inf /install`.  `pnputil /enum-drivers`
 lists the packages installed and `pnputil /delete-driver oemN.inf` removes
-one.  The package is kept in the driver store as on Windows, but NovaOS
-runs its devices with its own drivers and does not yet start a Windows
-driver on a device, so `pnputil` reports that no device took it.  A
-simple kernel-mode driver that is not tied to a device can already run as
-a kernel service (`sc create NAME type= kernel binPath= ...`, then `sc
-start NAME`), when it is signed as Windows 11 requires: by Microsoft, or with a test signature
-while test signing is on ([drivers.md](drivers.md#driver-signing)).  The firmware NovaOS's own drivers load
+one.  The package is kept in the driver store as on Windows, and `/install`
+also starts the driver on each PCI device it is for that NovaOS has no
+driver of its own for (a device NovaOS drives keeps its NovaOS driver, and
+`pnputil` says no device took the package); `pnputil /disable-device
+/deviceid <ID>` and `/enable-device` turn such a device off and on.  A
+kernel-mode driver that is not tied to a device runs as a kernel service
+(`sc create NAME type= kernel binPath= ...`, then `sc start NAME`).  Either
+loads only when it is signed as Windows 11 requires: by Microsoft, or with
+a test signature while test signing is on ([drivers.md](drivers.md#driver-signing)).  The firmware NovaOS's own drivers load
 into devices comes with release images ([drivers.md](drivers.md)).
 
 **Finding a driver online.**  For a device that has no driver (problem

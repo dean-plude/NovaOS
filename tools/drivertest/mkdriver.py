@@ -6,8 +6,9 @@
 tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Driver:
 novadrv.inf (a root-enumerated "System" class device, ROOT\\NOVADRV, with a
 kernel service), novadrv.sys and novadrv.cat.  The .sys and .cat are
-placeholders: NovaOS stages a package in its driver store but never loads a
-Windows kernel-mode driver, and does not check driver catalogs.
+placeholders: NovaOS stages a package in its driver store but does not yet
+start a Windows driver on a device, and does not check driver catalogs (the
+driver NovaOS does load, as a kernel service, is mksys.py's wdmtest.sys).
 tools/msitest/mkpkg.py packs the same files into driver.msi.
 
 With --pnp it writes the Plug and Play self-test's package instead (for

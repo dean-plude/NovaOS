@@ -11099,6 +11099,37 @@ vendors in linux-firmware.  NovaOS now does the same
   that NovaOS's kernel does not host, so downloading Windows drivers would
   give nothing that runs; drivers.md says why.
 
+## Direct presentation on every monitor and at scale 2
+
+The Phase 25 step after [Vulkan's frames](#direct-presentation-of-vulkans-frames).
+Direct presentation (the host writing a program's OpenGL or Vulkan frame
+straight into the screen) only worked for a window on the primary monitor
+while the desktop drew at scale 1; on a second monitor, or once any
+monitor was at scale 2, every frame went the GDI way again.  Now the
+kernel shows it on whichever monitor the window is wholly on:
+
+- **Any monitor**: `DisplayHeadScreen` says where a head's pixels are
+  (the primary's VGA framebuffer or virtio output as before, a further
+  `secondary-vga`'s video memory, or another virtio output's picture), and
+  the kernel's virgl context keeps a texture over each screen it writes
+  (the last four).  The display's damage hook now reports which head was
+  drawn, so the overlays on that screen go back over what the desktop
+  drew there, and the pointer only stops a window's direct frames when it
+  is over that window on the same screen.  A window across two monitors
+  still goes the GDI way.  The dock only covers windows on the primary.
+- **Scale 2**: a window's frame is placed in that monitor's own pixels.
+  On a monitor at scale 2 a frame of logical pixels (a program that is not
+  DPI-aware) is blitted by the host with each pixel twice as wide and
+  high, as the GDI shows it; a frame drawn for scale 2 on a monitor at
+  scale 1 is blitted at half its size (each 2x2 block averaged, as the GDI
+  shows a monitor at half the desktop's scale).  Otherwise frames are
+  copied as before.
+- **gltest monitors** (graphics suite, 64-bit): the four quadrants on the
+  second monitor, again with that monitor in 2560x1600 (scale 2), and on
+  the primary beside it; each screen's screenshot must show them where
+  the program says, and nine frames in ten must come from the host.
+- Still to do: DirectComposition's swap chains (WebView2's GPU process).
+
 ## Direct presentation under KVM, measured from the host
 
 Direct presentation (roadmap 25.2) takes about as long a frame as the GDI
@@ -11271,6 +11302,46 @@ copies no pixel.
 - Still to do: windows on the other monitors and at scale 2 (the kernel
   refuses both, so they go through the GDI), and the composition swap
   chains (DirectComposition) that WebView2's GPU process presents into.
+
+## The first Windows kernel-mode driver
+
+Step 30.1 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): NovaOS loads a
+real Windows `.sys` file into its kernel, runs its `DriverEntry`, and lets
+programs talk to it through Windows IRPs.
+
+- **Kernel PE loader** (`kernel/nt/ldr.c`): a native-subsystem PE32+
+  image from the service's `ImagePath`, mapped section by section with
+  W^X protections into a 1 GiB driver range every process shares,
+  relocated, bound to the kernel's exports, `/GS` cookie set.  A missing
+  import is logged by name and the load fails.
+- **`ntoskrnl.exe` and `hal.dll` exports** (`kernel/nt/exports.h`,
+  `ntoskrnl.c`): the device, symbolic-link and IRP calls a first WDM driver
+  makes, `DbgPrint` into the kernel log and the string helpers, all
+  `ms_abi`, on Windows' exact x64 `DRIVER_OBJECT`, `DEVICE_OBJECT`, `IRP`,
+  `IO_STACK_LOCATION` and `FILE_OBJECT` layouts (`kernel/nt/wdm.h`).
+- **I/O manager** (`kernel/nt/io.c`): `\Device` names and `\DosDevices`
+  links; `CreateFile("\\.\NAME")`, `ReadFile`, `WriteFile`,
+  `DeviceIoControl` and `CloseHandle` become `IRP_MJ_CREATE`, `READ`,
+  `WRITE`, `DEVICE_CONTROL`, `CLEANUP` and `CLOSE`, buffered and neither
+  I/O, with completion routines.
+- **`NtLoadDriver` and `NtUnloadDriver`**, behind `SeLoadDriverPrivilege`,
+  and advapi32's service manager starting and stopping
+  `SERVICE_KERNEL_DRIVER` services with them; a new **`sc`** (`create`,
+  `start`, `stop`, `query`, `delete`).
+- **kernel32 `\\.\NAME` and `DeviceIoControl`**: a `CreateFile` name such as `\\.\WdmTest` (no
+  drive, volume or UNC path after the prefix) now reaches the kernel as
+  `\??\WdmTest`, as on Windows, instead of a file in the current folder;
+  `DeviceIoControl` passes every control code to the kernel, where it
+  passed only video ones.
+- **Test signing only, for now**: NovaOS checks no driver signatures until
+  step 30.7, so drivers load only with `TestSigning` set under
+  `HKLM\SYSTEM\CurrentControlSet\Control\NovaOS` and a restart; otherwise
+  Windows' error 577.
+- **`wdmtest.sys`** (`tools/drivertest/wdmtest.c`, clang and lld-link
+  `/driver`, no WDK) and the devices suite's "wdm" boot: refused before
+  test signing, then `sc create type= kernel`, `sc start`, `wdmtest`'s
+  round trips and `sc stop`.
 
 ## The stack probe and half-float helpers in 32-bit ntdll
 

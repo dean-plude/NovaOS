@@ -2337,13 +2337,53 @@ K32 BOOL WINAPI ProcessIdToSessionId(DWORD pid, DWORD *session) { (void)pid; if 
 /* -----------------------------------------------------------------------
  * For the .NET runtime (CoreCLR)
  * ----------------------------------------------------------------------- */
-/* Extended processor state: the legacy x87 and SSE state only (no AVX
- * area in CONTEXT) */
-K32 DWORD64 WINAPI GetEnabledXStateFeatures(void) { return 3; }
-K32 BOOL WINAPI SetXStateFeaturesMask(PCONTEXT ctx, DWORD64 mask) { (void)ctx; return (mask & ~3ULL) == 0; }
-K32 BOOL WINAPI GetXStateFeaturesMask(PCONTEXT ctx, PDWORD64 mask) { (void)ctx; *mask = 3; return TRUE; }
+/* Extended processor state: ntdll's extended contexts (a CONTEXT, its
+ * CONTEXT_EX and an XSAVE area), with the features KUSER_SHARED_DATA's
+ * XState names: x87, SSE and, where the CPU has it, AVX */
+typedef struct { LONG Offset; ULONG Length; } XS_CHUNK;
+typedef struct { XS_CHUNK All, Legacy, XState; } XS_CONTEXT_EX;
+NTSYSAPI ULONG64  NTAPI RtlGetEnabledExtendedFeatures(ULONG64 mask);
+NTSYSAPI NTSTATUS NTAPI RtlGetExtendedContextLength2(ULONG flags, PULONG length, ULONG64 compaction);
+NTSYSAPI NTSTATUS NTAPI RtlInitializeExtendedContext2(PVOID buf, ULONG flags, XS_CONTEXT_EX **ex, ULONG64 compaction);
+NTSYSAPI PVOID    NTAPI RtlLocateExtendedFeature(XS_CONTEXT_EX *ex, ULONG id, PULONG length);
+NTSYSAPI ULONG64  NTAPI RtlGetExtendedFeaturesMask(XS_CONTEXT_EX *ex);
+NTSYSAPI VOID     NTAPI RtlSetExtendedFeaturesMask(XS_CONTEXT_EX *ex, ULONG64 mask);
+#ifdef _WIN64
+#define XS_ARCH 0x00100000u
+#else
+#define XS_ARCH 0x00010000u
+#endif
+#define XS_XSTATE (XS_ARCH | 0x40u)
+#define XS_FLOAT  (XS_ARCH | 0x08u)
+static XS_CONTEXT_EX *xs_ex(PCONTEXT ctx)
+{
+    return (ctx->ContextFlags & XS_XSTATE) == XS_XSTATE ? (XS_CONTEXT_EX *)(ctx + 1) : 0;
+}
+K32 DWORD64 WINAPI GetEnabledXStateFeatures(void) { return RtlGetEnabledExtendedFeatures(~0ull); }
+K32 BOOL WINAPI SetXStateFeaturesMask(PCONTEXT ctx, DWORD64 mask)
+{
+    if (!(ctx->ContextFlags & XS_ARCH)) return FALSE;
+    if (mask & 3) ctx->ContextFlags |= XS_FLOAT;
+    XS_CONTEXT_EX *ex = xs_ex(ctx);
+    if (!ex) return (mask & ~3ull) == 0;
+    RtlSetExtendedFeaturesMask(ex, mask);
+    return TRUE;
+}
+K32 BOOL WINAPI GetXStateFeaturesMask(PCONTEXT ctx, PDWORD64 mask)
+{
+    if (!(ctx->ContextFlags & XS_ARCH)) return FALSE;
+    *mask = (ctx->ContextFlags & XS_FLOAT) == XS_FLOAT ? 3 : 0;
+    XS_CONTEXT_EX *ex = xs_ex(ctx);
+    if (ex) *mask |= RtlGetExtendedFeaturesMask(ex);
+    return TRUE;
+}
 K32 PVOID WINAPI LocateXStateFeature(PCONTEXT ctx, DWORD id, PDWORD len)
 {
+    if (id >= 2) {
+        XS_CONTEXT_EX *ex = xs_ex(ctx);
+        if (len) *len = 0;
+        return ex ? RtlLocateExtendedFeature(ex, id, len) : 0;
+    }
 #ifdef _WIN64
     if (id <= 1) { if (len) *len = 512; return (BYTE *)ctx + 0x100; }   /* FltSave (XSAVE_FORMAT) */
 #else
@@ -2354,17 +2394,19 @@ K32 PVOID WINAPI LocateXStateFeature(PCONTEXT ctx, DWORD id, PDWORD len)
 }
 K32 BOOL WINAPI InitializeContext2(PVOID buf, DWORD flags, PCONTEXT *ctx, PDWORD len, ULONG64 compaction)
 {
-    (void)compaction;
-    DWORD need = (DWORD)sizeof(CONTEXT) + 15;
-    if (!buf || !len || *len < need) {
-        if (len) *len = need;
+    ULONG need = 0;
+    if (!len || RtlGetExtendedContextLength2(flags, &need, compaction)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!buf || *len < need) {
+        *len = need;
         SetLastError(ERROR_INSUFFICIENT_BUFFER);
         return FALSE;
     }
-    CONTEXT *c = (CONTEXT *)(((ULONG_PTR)buf + 15) & ~(ULONG_PTR)15);
-    memset(c, 0, sizeof(*c));
-    c->ContextFlags = flags;
-    *ctx = c;
+    XS_CONTEXT_EX *ex;
+    RtlInitializeExtendedContext2(buf, flags, &ex, compaction);
+    *ctx = (PCONTEXT)((BYTE *)ex + ex->Legacy.Offset);
     return TRUE;
 }
 K32 BOOL WINAPI InitializeContext(PVOID buf, DWORD flags, PCONTEXT *ctx, PDWORD len)
@@ -2374,8 +2416,13 @@ K32 BOOL WINAPI InitializeContext(PVOID buf, DWORD flags, PCONTEXT *ctx, PDWORD 
 K32 BOOL WINAPI CopyContext(PCONTEXT dst, DWORD flags, PCONTEXT src)
 {
     if (!dst || !src) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
-    memcpy(dst, src, sizeof(CONTEXT));
-    dst->ContextFlags = flags & src->ContextFlags;
+    XS_CONTEXT_EX *dex = xs_ex(dst), *sex = (flags & 0x40) ? xs_ex(src) : 0;
+    memcpy(dst, src, sizeof(CONTEXT));              /* (dst's own XSAVE area stays where it is) */
+    dst->ContextFlags = (flags & src->ContextFlags & ~0x40u) | (dex && sex ? 0x40u : 0);
+    if (dex && sex) {                               /* the extended features too */
+        ULONG n = dex->XState.Length < sex->XState.Length ? dex->XState.Length : sex->XState.Length;
+        memcpy((BYTE *)dex + dex->XState.Offset, (BYTE *)sex + sex->XState.Offset, n);
+    }
     return TRUE;
 }
 

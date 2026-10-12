@@ -11059,6 +11059,52 @@ a wait.
   llvmpipe, so it composites on the CPU while the window keeps OpenGL.
 - The other apps share PhotoCraft's toolkit and are untested.
 
+## AVX and F16C for programs: XSAVE and the YMM state
+
+The last leftover of the gaming phase (After 0.1, Phase 24).  The kernel
+saved each thread's legacy x87 and SSE state only (FXSAVE) and never set
+`CR4.OSXSAVE`, so CPUID showed programs no OSXSAVE and XGETBV did not
+say the YMM registers were saved: every program, Mesa's LLVM JIT among
+them, took its SSE paths, and half-precision conversions were calls into
+ntdll instead of F16C instructions.  On a PC with AVX (the T14's Tiger
+Lake has AVX2, FMA and F16C) programs now take their AVX code.
+
+- **XSAVE at boot** (`kernel/arch/x86_64/xstate.c`): when the CPU has
+  XSAVE, CPU 0 sets `CR4.OSXSAVE` and XCR0 to x87, SSE and AVX (the other
+  CPUs copy both, and sleep keeps them), and the scheduler saves and
+  loads each thread's state with XSAVE and XRSTOR into its page (sized
+  from CPUID leaf 0xD).  A CPU without XSAVE keeps FXSAVE.
+- **KUSER_SHARED_DATA**: XState's EnabledFeatures, Size and Features[2]
+  name the AVX state (832 bytes in all), and the processor-feature flags
+  `PF_XSAVE_ENABLED`, `PF_AVX_INSTRUCTIONS_AVAILABLE` and
+  `PF_AVX2_INSTRUCTIONS_AVAILABLE` are set from it; kernel32's
+  `IsProcessorFeaturePresent` and `GetEnabledXStateFeatures` read them.
+- **Exceptions**: a 64-bit program's exception `CONTEXT` is a
+  `CONTEXT_XSTATE` one, as on Windows: a `CONTEXT_EX` and an XSAVE area
+  with the YMM upper halves follow it on the stack, so a handler that
+  uses AVX itself no longer loses the interrupted code's registers;
+  `NtContinue`, `NtRaiseException` and `SetThreadContext` load them back.
+- **GetThreadContext with `CONTEXT_XSTATE`**: the calling thread's own
+  YMM registers, and a suspended thread's x87, SSE and AVX state from what
+  the switch away from it saved (before, another thread's floating-point
+  state came back empty).  ntdll's `RtlLocateExtendedFeature` and
+  kernel32's `InitializeContext`, `LocateXStateFeature`,
+  `Get/SetXStateFeaturesMask` and `CopyContext` lay the XSAVE area out as
+  Windows does.
+- **Large heap blocks are 64-byte aligned** (`userland/ntdll/ntdll.c`),
+  as on Windows, whose x64 heap puts a 0x40-byte entry before a block it
+  maps on its own: NovaOS put a 16-byte header there.  Mesa's lavapipe
+  keeps Vulkan memory in such malloc blocks, and with AVX its shaders
+  load a 64-bit depth buffer's rows with 32-byte aligned loads, so Squash
+  the Creeps (Godot on Direct3D 12) crashed on its first frame.
+- **The test machines**: `tools/novarun.py` (the self-tests and the app
+  corpus) and `scripts/run-qemu.sh` give QEMU's `qemu64` CPU XSAVE,
+  XSAVEOPT, AVX and F16C (QEMU 8.2's TCG hangs on the `CR4.OSXSAVE` write
+  when `qemu64` has XSAVE without XSAVEOPT; every real CPU with AVX has
+  both).  New core self-test `avxtest`.
+
+Not yet run on real hardware.
+
 ## Compatibility ratings, ProtonDB-style
 
 [docs/compatibility.md](../compatibility.md) now rates every program and

@@ -263,6 +263,11 @@ struct Chain {
     BYTE *frame;                        /*   and the frame read back: BGRA, Width * 4 bytes a row */
     NovaPresentSink sink;
     void *sink_ctx;
+    CRITICAL_SECTION lock;              /* (presents, resizes and the sink: a visual's teardown waits for a present
+                                           calling its sink on another thread) */
+    BOOL shown;                         /* presented since the buffers were made (else Frame gives @held) */
+    BYTE *held;                         /* (the last frame before a resize, shown until the next present: BGRA, */
+    UINT held_w, held_h;                /*   held_w * 4 bytes a row) */
     UINT presents, rotation;
     UINT src_w, src_h, latency;         /* (IDXGISwapChain2's source size, 0: the buffer's) */
     BYTE *rgba_tmp;                     /* (R8G8B8A8 buffers: the BGRA copy shown) */
@@ -276,6 +281,32 @@ static int chain_format(UINT f)
 {
     return f == NDXGI_FORMAT_B8G8R8A8_UNORM || f == NDXGI_FORMAT_B8G8R8A8_UNORM_SRGB || f == NDXGI_FORMAT_B8G8R8X8_UNORM ||
            f == NDXGI_FORMAT_R8G8B8A8_UNORM || f == NDXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+}
+
+static void chain_drop_held(Chain *c)
+{
+    HeapFree(GetProcessHeap(), 0, c->held);
+    c->held = NULL;
+}
+
+static BYTE *chain_frame(Chain *c, UINT *pitch);
+
+/* (ResizeBuffers) the frame shown now, kept to show until the next present,
+ * as the compositor keeps showing a swap chain's last frame */
+static void chain_hold(Chain *c)
+{
+    if (!c->shown) return;                                  /* (still the frame held at an earlier resize, or none) */
+    chain_drop_held(c);
+    UINT pitch = 0, w = c->desc.Width, h = c->desc.Height;
+    BYTE *p = chain_frame(c, &pitch);
+    if (!p) return;
+    if (c->ctx && pitch == w * 4) { c->held = c->frame; c->frame = NULL; }   /* (a GPU's: its read-back frame itself) */
+    else {
+        c->held = HeapAlloc(GetProcessHeap(), 0, (size_t)w * 4 * h);
+        if (!c->held) return;
+        for (UINT y = 0; y < h; y++) __builtin_memcpy(c->held + (size_t)y * w * 4, p + (size_t)y * pitch, (size_t)w * 4);
+    }
+    c->held_w = w; c->held_h = h;
 }
 
 static void chain_drop_buffer(Chain *c)
@@ -373,6 +404,8 @@ static ULONG STDMETHODCALLTYPE c_release(Chain *c)
     LONG r = InterlockedDecrement(&c->refs);
     if (!r) {
         chain_drop_buffer(c);
+        chain_drop_held(c);
+        DeleteCriticalSection(&c->lock);
         if (c->ctx) c->ctx->lpVtbl->Release(c->ctx);
         if (c->device) c->device->lpVtbl->Release(c->device);
         HeapFree(GetProcessHeap(), 0, c->rgba_tmp);
@@ -394,10 +427,15 @@ static HRESULT STDMETHODCALLTYPE c_getdevice(Chain *c, const GUID *iid, void **o
 static HRESULT chain_present(Chain *c, UINT flags, const RECT *dirty)
 {
     if (flags & DXGI_PRESENT_TEST_) return S_OK;
+    EnterCriticalSection(&c->lock);
     c->presents++;
     if (c->ctx) chain_read_back(c, dirty);
-    if (c->sink) { c->sink(c->sink_ctx, dirty); return S_OK; }
-    if (!c->hwnd) return S_OK;                              /* (a composition chain no visual shows yet) */
+    if (!c->shown) dirty = NULL;                            /* (the first frame since the buffers were made: all of it) */
+    c->shown = TRUE;
+    chain_drop_held(c);
+    if (c->sink) c->sink(c->sink_ctx, dirty);
+    LeaveCriticalSection(&c->lock);
+    if (c->sink || !c->hwnd) return S_OK;                   /* (a visual's; or a composition chain no visual shows yet) */
     if (!IsWindow(c->hwnd)) return NDXGI_ERROR_INVALID_CALL;
     UINT pitch = 0;
     BYTE *p = chain_frame(c, &pitch);
@@ -467,17 +505,22 @@ static void client_size(HWND h, UINT *w, UINT *ht)
 static HRESULT STDMETHODCALLTYPE c_resize(Chain *c, UINT count, UINT w, UINT h, UINT fmt, UINT flags)
 {
     if (fmt && !chain_format(fmt)) return NDXGI_ERROR_INVALID_CALL;
+    if (!c->hwnd && (!w || !h)) return NDXGI_ERROR_INVALID_CALL;   /* (composition: no window to size it from) */
     client_size(c->hwnd, &w, &h);
     NDXGI_SWAP_CHAIN_DESC1 old = c->desc;
     if (count) c->desc.BufferCount = count;
     if (fmt) c->desc.Format = fmt;
     c->desc.Width = w; c->desc.Height = h;
     c->desc.Flags = flags;
+    EnterCriticalSection(&c->lock);
+    chain_hold(c);                                          /* (a visual shows the last frame until the next present) */
     chain_drop_buffer(c);
+    c->shown = FALSE;
     HRESULT hr = chain_make_buffer(c);
-    if (FAILED(hr)) { c->desc = old; if (FAILED(chain_make_buffer(c))) return hr; return hr; }
-    c->src_w = c->src_h = 0;
-    return S_OK;
+    if (FAILED(hr)) { c->desc = old; chain_make_buffer(c); }
+    else c->src_w = c->src_h = 0;
+    LeaveCriticalSection(&c->lock);
+    return hr;
 }
 static HRESULT STDMETHODCALLTYPE c_resizetarget(Chain *c, const NDXGI_MODE_DESC *m) { (void)c; return m ? S_OK : E_INVALIDARG; }
 static HRESULT STDMETHODCALLTYPE c_getoutput(Chain *c, void **out) { (void)c; if (out) *out = NULL; return NDXGI_ERROR_UNSUPPORTED; }
@@ -564,21 +607,33 @@ static const ChainVtbl g_chain_vtbl = {
 static HRESULT STDMETHODCALLTYPE n_qi(INovaSwapChain *n, const GUID *iid, void **out) { return c_qi(CHAIN_OF_NOVA(n), iid, out); }
 static ULONG STDMETHODCALLTYPE n_addref(INovaSwapChain *n) { return c_addref(CHAIN_OF_NOVA(n)); }
 static ULONG STDMETHODCALLTYPE n_release(INovaSwapChain *n) { return c_release(CHAIN_OF_NOVA(n)); }
+/* (NULL: @ctx lets go, unless another visual set its sink since; it
+ * returns once a present calling @ctx's sink has finished) */
 static void STDMETHODCALLTYPE n_setsink(INovaSwapChain *n, NovaPresentSink sink, void *ctx)
 {
     Chain *c = CHAIN_OF_NOVA(n);
-    c->sink = sink;
-    c->sink_ctx = ctx;
+    EnterCriticalSection(&c->lock);
+    if (sink || c->sink_ctx == ctx) {
+        c->sink = sink;
+        c->sink_ctx = sink ? ctx : NULL;
+    }
+    LeaveCriticalSection(&c->lock);
 }
 static BYTE *STDMETHODCALLTYPE n_frame(INovaSwapChain *n, UINT *pitch, UINT *w, UINT *h)
 {
     Chain *c = CHAIN_OF_NOVA(n);
+    if (!c->shown) {                                        /* (nothing before the first present; after a resize, the last frame) */
+        if (pitch) *pitch = c->held_w * 4;
+        if (w) *w = c->held_w;
+        if (h) *h = c->held_h;
+        return c->held;
+    }
     UINT p = 0;
     BYTE *bits = chain_frame(c, &p);
     if (pitch) *pitch = p;
     if (w) *w = c->desc.Width;
     if (h) *h = c->desc.Height;
-    return c->presents ? bits : NULL;                       /* (nothing to show before the first present) */
+    return bits;
 }
 static const INovaSwapChainVtbl g_nova_chain_vtbl = { n_qi, n_addref, n_release, n_setsink, n_frame };
 
@@ -599,6 +654,7 @@ static HRESULT make_chain(IUnknown *device, HWND hwnd, const NDXGI_SWAP_CHAIN_DE
     c->vtbl = &g_chain_vtbl;
     c->nova.lpVtbl = &g_nova_chain_vtbl;
     c->refs = 1;
+    InitializeCriticalSection(&c->lock);
     c->device = gpu ? gpu : device;
     c->device->lpVtbl->AddRef(c->device);
     if (gpu)

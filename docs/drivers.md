@@ -46,8 +46,19 @@ freed`).  Only part of `ntoskrnl.exe` is there yet (the list is
 and the log names what it missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not
 implemented`).  `tools/sys_imports.py x.sys` lists, before trying, the
 imports of a driver that NovaOS does not have yet.  Plug and Play
-drivers for real devices, KMDF and the rest follow in later steps; until
+drivers for real devices and the rest follow in later steps; until
 then the default set is the built-in drivers and the firmware below.
+
+KMDF drivers run too (step 30.4): NovaOS ships Microsoft's framework,
+`Wdf01000.sys`, built from Microsoft's MIT-licensed source, and its own
+KMDF loader, `WdfLdr.sys`, both in `C:\Windows\System32\drivers` as on
+Windows (`tools/kmdf/build_kmdf.py`).  A KMDF driver starting imports
+`WdfLdr.sys`, which loads `Wdf01000.sys` and binds the driver to KMDF
+1.33; the framework's error messages go to the log as `[DbgPrint]
+Wdf01000: ...` lines.  For now the framework is test-signed,
+so a KMDF driver needs test signing on (below) until NovaOS trusts its own
+system files; class-extension drivers (those that bind with
+`WdfVersionBindClass`) do not load yet.
 
 ### Driver signing
 

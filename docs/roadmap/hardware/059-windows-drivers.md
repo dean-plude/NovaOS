@@ -18,4 +18,8 @@
   signing policy is in: a kernel driver loads only with a Microsoft driver
   signature (embedded or in its installed catalog), a test-signed one only
   with test signing on, an unsigned or tampered one never, and a package
-  whose files do not match its catalog is not staged.
+  whose files do not match its catalog is not staged.  Step 30.4's
+  framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
+  and NovaOS's `WdfLdr.sys` load KMDF drivers
+  (a test driver's control device and queue); the KMDF version of the
+  `edu` PnP test driver, which finishes the step, follows 30.3.

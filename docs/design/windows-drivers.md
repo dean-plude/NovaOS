@@ -195,10 +195,27 @@ same clang and lld-link it builds userland with, and runs it as any other
 `.sys` on the export layer.  This is the "don't reinvent the wheel" part:
 the framework drivers call is Microsoft's own code.  Microsoft's
 NetAdapterCx (the network class extension, also MIT) can be reused the
-same way when a target needs it.  The published source is an older minor
-version than the KMDF 1.33 Windows 11 ships; a driver that asks
-`WdfVersionBind` for a newer minor is refused as Windows 10 would refuse
-it, and the step that meets one adds the newer DDIs.
+same way when a target needs it.  The published source implements KMDF
+1.33, the version Windows 11 ships; a driver built for a newer minor binds
+as on Windows (`WdfClientVersionHigherThanFramework`: it sees the 1.33
+function table and checks `WdfDriverIsVersionAvailable` before newer
+calls), and one built for another major is refused.
+
+How it is built (step 30.4, `tools/kmdf/build_kmdf.py`): the published
+tree is the framework without the build around it, so NovaOS adds what
+was left out and changes nothing else.  Five patches restore what the
+published tree lost (a class head, a few return types, two enums, one
+alignment; each in `tools/kmdf/patches` with its reason); mingw-w64's WDK
+headers, completed by `tools/kmdf/inc` where they predate Windows 10,
+stand in for the WDK's; `tools/kmdf/rt` stands in for the WDK libraries
+the framework links (`wdmsec.lib`, the USB and `aux_klib` helpers, the
+Verifier queries, WPP trace output as `DbgPrintEx`); and `WdfLdr.sys`,
+which Microsoft did not publish, is NovaOS's own (`tools/kmdf/wdfldr.c`),
+written to the loader interface the source's `fxldr.h` defines.  The
+kernel loads `WdfLdr.sys` as Windows loads an export driver, for the
+first driver that imports it.  Until NovaOS has a trust anchor for its own
+system files, the framework and loader carry a test signature and KMDF
+drivers need test signing on.
 
 UMDF 2 drivers (sensors, many fingerprint readers, some HID and USB
 devices) run in a host process (`WUDFHost.exe`) from the same source, with
@@ -352,7 +369,9 @@ downloaded by the test as NovaOS's other tests download apps.
    Device Manager.
 4. **30.4 KMDF.** `Wdf01000.sys` and `WdfLdr.sys` built from Microsoft's
    MIT WDF source and loaded on the export layer.  Done when: a KMDF
-   version of the `edu` test driver passes the same test.
+   version of the `edu` test driver passes the same test.  The framework, the
+   loader and a non-PnP KMDF test driver (`kmdftest.sys`, a control device
+   and a queue) are in; the KMDF `edu` driver follows step 30.3.
 5. **30.5 The first third-party driver.** virtio-win's serial driver
    (`vioser.sys`, KMDF; virtio-win is BSD-licensed), on a device NovaOS has
    no built-in driver for.  Done when: on QEMU with a virtio-serial port,

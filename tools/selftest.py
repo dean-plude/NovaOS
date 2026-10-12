@@ -78,7 +78,9 @@ order; --list prints them):
             driver (wdmtest.sys, test-signed), which loads once test
             signing is on and a restart later (unsigned and tampered
             copies never; pnputil refuses a package whose file does not
-            match its catalog), and wdmtest talks to it
+            match its catalog), and wdmtest talks to it; then a KMDF
+            driver (kmdftest.sys) starts on Wdf01000.sys and WdfLdr.sys
+            and kmdftest talks to it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -429,7 +431,7 @@ def pnp_boot(work):
 def wdm_boot(work):
     """Nothing beyond the core boot's machine: sc loads a Windows kernel-mode
     driver, wdmtest.sys, once test signing is on, under Windows' signing
-    policy (tests/selftest/devices/wdm)"""
+    policy, then a KMDF driver, kmdftest.sys (tests/selftest/devices/wdm)"""
     return [], []
 
 

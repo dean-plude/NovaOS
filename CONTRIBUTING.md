@@ -18,7 +18,6 @@ and merge cleanly in either order.
 | a nightly app-corpus program | `tests/appcorpus/NNN-name.py` | `APPS` in `tools/appcorpus.py` |
 | a HISTORY section | `docs/history/YYYY-MM-DD-slug.md` (starts with `## Title`) | `docs/HISTORY.md` |
 | a roadmap item, or ticking one off | `docs/roadmap/{graphics,apps,kernel,hardware}/NNN-slug.md` (edit the item's own file to tick it) | `docs/ROADMAP.md`'s "What comes next" |
-| a row in README's program table | `docs/readme/programs/NNN-slug.md` | the table in `README.md` |
 | a "What is inside" item, or extending one | `docs/readme/inside/NNN-slug.md` | the list in `README.md` |
 | a bundled licence | `docs/readme/licenses/NNN-slug.md` (one "Name: licence" line) | the licence sentence in `README.md` |
 | a row in building.md's self-test program table | `docs/selftests/NNN-name.md` | the table in `docs/building.md` |

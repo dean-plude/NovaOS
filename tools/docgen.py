@@ -16,7 +16,6 @@ Parallel pull requests used to collide on the same lines of these files
 
   docs/history/*.md            HISTORY.md's sections, one per feature
   docs/roadmap/<area>/*.md     ROADMAP.md's "What comes next" items
-  docs/readme/programs/*.md    README's "Unmodified Windows programs" rows
   docs/readme/inside/*.md      README's "What is inside" items
   docs/readme/licenses/*.md    README's list of bundled licences
   docs/selftests/*.md          docs/building.md's self-test program table
@@ -143,8 +142,6 @@ ROADMAP_AREAS = {'next-graphics': 'graphics', 'next-apps': 'apps', 'next-kernel'
 
 REGIONS = {
     'README.md': {
-        'programs': (lambda: table(['Program', 'Kind', 'Tested on NovaOS'], 'docs/readme/programs'),
-                     'docs/readme/programs/*.md'),
         'inside': (lambda: blocks('docs/readme/inside', ''), 'docs/readme/inside/*.md'),
         'core-tests': (core_tests, 'tests/selftest/core/*.py (DOC)'),
         'selftest-programs': (selftest_programs, 'userland/programs/*.json ("selftest": true)'),

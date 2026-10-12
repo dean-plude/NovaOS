@@ -11138,6 +11138,15 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
   every millisecond and writes one engine period at a time; the recording
   must hold its tones.  Nothing tested the `IAudioClient3` calls before.
 
+## README without "What runs today"
+
+README's "What runs today" section (the program table built from
+`docs/readme/programs/`, the built-in apps and the App Store) is gone now
+that [docs/compatibility.md](../compatibility.md) rates every program and
+game tried; README's opening paragraph links that page, and the
+[user guide](../user-guide.md) describes the built-in apps and the App
+Store.  The `programs` region and its fragment directory went with it.
+
 ## Direct presentation of Vulkan's frames
 
 The Phase 25 step after 25.2.  OpenGL's frames on virgl were already

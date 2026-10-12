@@ -1491,9 +1491,8 @@ static bool blob_restore(VgpuBlob *b)
  * where it is, until it is read back otherwise (blob_restore; the program
  * does not touch a buffer it showed until its next frame).  @src's bytes
  * must be the screen's (B, G, R, then alpha or nothing).  The device is
- * notified once at the end, not for each command (without KVM a
- * notification waits while QEMU's main thread draws; and left to the
- * "present" thread, the host sat idle until that thread came round) */
+ * not notified: VgpuPresentWait does that, from the "present" thread (a
+ * notification waits while QEMU's main thread draws) */
 static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int y, int dx, int dy, int w, int h,
                          int first, int last)
 {
@@ -1518,7 +1517,6 @@ static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int
                          pg == last ? g_pseq + 1 : 0, XFER_QUIET);
     }
     blob_lend_unlock(src);
-    kick(v);                                      /* (once, for all of them) */
     return true;
 }
 

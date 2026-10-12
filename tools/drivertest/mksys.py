@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""mksys.py — builds wdmtest.sys, the Windows kernel-mode test driver
+"""mksys.py — builds a Windows kernel-mode test driver: wdmtest.sys, or
+edutest.sys (step 30.3's Plug and Play driver for QEMU's edu device)
 
-    mksys.py OUTDIR
+    mksys.py OUTDIR [NAME]
 
-tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Wdm.
-The driver (tools/drivertest/wdmtest.c) is built as a Windows driver is:
+tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Wdm
+and C:\\Tests\\Edu.  The driver (tools/drivertest/NAME.c) is built as a Windows driver is:
 clang for x86_64-pc-windows-msvc, linked by lld-link /driver against an
 import library for ntoskrnl.exe and hal.dll.  The import libraries are made
 here from the functions NovaOS's kernel exports to drivers
@@ -22,6 +23,9 @@ policy's other cases are made from it:
                         (unsigned itself), wdmcat.cat (test-signed, listing both)
     wdmbad\\            the same package with wdmbad.sys changed after the catalog
                         was made: pnputil refuses to stage it
+
+edutest.sys's package (edutest.inf, from tools/drivertest) is signed as
+wdmcat's is: a test-signed catalog, edutest.cat, lists the INF and the .sys.
 """
 import os, re, struct, subprocess, sys
 
@@ -95,10 +99,26 @@ def write(path, data):
         f.write(data)
 
 
-def signed_variants(out):
+def test_signer():
+    """The test certificate NovaOS's test drivers are signed with, and its root"""
     root_key, signer_key = Key('novaos-driver-test-root'), Key('novaos-driver-test-signer')
     root = Cert('NovaOS Driver Test Root', root_key, 1, LONG, ca=True)
     signer = Cert('NovaOS Test Driver Signer', signer_key, 2, LONG, root, root_key, usage='codesign')
+    return signer, root
+
+
+def signed_package(out, name):
+    """@name.sys with its INF beside it and a test-signed catalog of both (the
+    .sys signed by the catalog, as wdmcat's is)"""
+    signer, root = test_signer()
+    pe = open(os.path.join(out, name + '.sys'), 'rb').read()
+    inf = open(os.path.join(HERE, name + '.inf'), 'rb').read()
+    write(os.path.join(out, name + '.inf'), inf)
+    write(os.path.join(out, name + '.cat'), catalog([(name + '.inf', inf), (name + '.sys', pe)], signer, [root]))
+
+
+def signed_variants(out):
+    signer, root = test_signer()
     path = os.path.join(out, 'wdmtest.sys')
     pe = open(path, 'rb').read()
     good = sign(pe, signer, [root], 'sha256')
@@ -126,11 +146,9 @@ def run(cmd):
         sys.exit(1)
 
 
-def main():
-    out = sys.argv[1]
-    os.makedirs(out, exist_ok=True)
-    work = os.path.join(out, 'obj')
-    os.makedirs(work, exist_ok=True)
+def import_libs(work):
+    """Import libraries for ntoskrnl.exe and hal.dll in @work, made from the
+    export list (kernel/nt/exports.h); returns their paths"""
     mods = {}
     src = open(os.path.join(ROOT, 'kernel', 'nt', 'exports.h')).read()
     for m in re.finditer(r'^\s*NT_EXPORT(_DATA)?\(\s*([\w.]+)\s*,\s*(\w+)\s*\)', src, re.M):
@@ -145,20 +163,33 @@ def main():
         lib = os.path.join(work, stem + '.lib')
         run(['llvm-lib', f'/def:{d}', '/machine:x64', f'/out:{lib}'])
         libs.append(lib)
-    obj = os.path.join(work, 'wdmtest.obj')
+    return libs
+
+
+def main():
+    out = sys.argv[1]
+    name = sys.argv[2] if len(sys.argv) > 2 else 'wdmtest'
+    os.makedirs(out, exist_ok=True)
+    work = os.path.join(out, 'obj')
+    os.makedirs(work, exist_ok=True)
+    libs = import_libs(work)
+    obj = os.path.join(work, name + '.obj')
     # -fasync-exceptions (MSVC's /EHa for the kernel): without it the
     # optimizer assumes a memory access never faults and deletes a
     # __try/__except around one, dropping the .pdata/.xdata and the
     # __C_specific_handler import the kernel's SEH (kernel/nt/seh.c) walks.
     run(['clang', '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-stack-protector',
          '-mno-stack-arg-probe', '-fno-builtin', '-fasync-exceptions', '-Wall', '-c',
-         os.path.join(HERE, 'wdmtest.c'), '-o', obj])
+         os.path.join(HERE, name + '.c'), '-o', obj])
     run(['lld-link', '/driver', '/subsystem:native', '/entry:DriverEntry', '/nodefaultlib', '/machine:x64',
-         '/base:0x140000000', obj] + libs + [f'/out:{os.path.join(out, "wdmtest.sys")}'])
+         '/base:0x140000000', obj] + libs + [f'/out:{os.path.join(out, name + ".sys")}'])
     for n in os.listdir(work):
         os.remove(os.path.join(work, n))
     os.rmdir(work)
-    signed_variants(out)
+    if name == 'wdmtest':
+        signed_variants(out)
+    else:
+        signed_package(out, name)
 
 
 if __name__ == '__main__':

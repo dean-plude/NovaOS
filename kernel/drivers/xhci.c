@@ -545,7 +545,7 @@ static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
     doorbell(x, XD(d)->slot, p->idx);
     spin_unlock_irqrestore(&g_usb_lock, s);
 
-    UINT64 deadline = rdtsc() + g_tsc_per_tick * (UINT64)timeout_ms / 10;
+    UINT64 start = rdtsc(), deadline = start + g_tsc_per_tick * (UINT64)timeout_ms / 10;
     for (;;) {
         events_once(x);
         if (xp->done) {
@@ -553,11 +553,24 @@ static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
             if (xp->code == CC_STALL) *stalled = true;
             return -1;
         }
-        if (d->gone || rdtsc() > deadline) {
-            if (!d->gone) kprintf("[USB] %s: bulk transfer timed out\n", d->name);
-            return -1;
+        if (d->gone) return -1;
+        if (rdtsc() > deadline) {
+            /* Take the TD back: Stop Endpoint, then move the dequeue
+             * pointer past it, so a later completion cannot land in the
+             * next transfer */
+            command(x, 0, TRB_TYPE(TRB_STOP_EP) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
+            s = spin_lock_irqsave(&g_usb_lock);
+            bool done = xp->done;
+            UINT64 deq = phys(&xp->ring.trbs[xp->ring.enq]) | xp->ring.cycle;
+            spin_unlock_irqrestore(&g_usb_lock, s);
+            command(x, deq, TRB_TYPE(TRB_SET_DEQ) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
+            if (done && (xp->code == CC_SUCCESS || xp->code == CC_SHORT_PACKET)) return (int)xp->moved;
+            return USB_TIMED_OUT;
         }
-        pause_cpu();
+        /* A pipe that may wait long sleeps a tick between polls once a
+         * millisecond has gone by, rather than spin */
+        if (p->patient && rdtsc() - start > g_tsc_per_tick / 10) UsbDelay(1);
+        else pause_cpu();
     }
 }
 

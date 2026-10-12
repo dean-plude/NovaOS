@@ -558,6 +558,7 @@ bool       um_pe_wants_admin(RamNode *f);              /* its manifest asks to r
 void       um_thread_drop_token(UmThread *t);          /* stop impersonating (the thread ended) */
 UINT32     um_set_thread_token(UmThread *t, UINT64 buf, UINT32 len);   /* ThreadImpersonationToken */
 bool       um_privilege_held(UINT32 luid);    /* the caller's token holds privilege @luid */
+UINT64     UmPnpDriverCtl(UINT32 op, UINT32 id, UINT64 ptr);   /* CTL_PNP 3-5: Windows drivers on devices (um_driver.c) */
 UINT32     um_check_object(UmObject *o, UINT32 want);  /* opening @o for @want: STATUS_SUCCESS or ACCESS_DENIED */
 /* @want with its generic rights mapped for an object of @type (MAXIMUM_ALLOWED:
  * all of them); false when handles to that type do not track their rights */

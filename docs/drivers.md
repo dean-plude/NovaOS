@@ -45,9 +45,98 @@ freed`).  Only part of `ntoskrnl.exe` is there yet (the list is
 `kernel/nt/exports.h`); a driver that imports anything else does not load,
 and the log names what it missed (`[NT] x.sys: ntoskrnl.exe!KeFoo not
 implemented`).  `tools/sys_imports.py x.sys` lists, before trying, the
-imports of a driver that NovaOS does not have yet.  Plug and Play
-drivers for real devices, KMDF and the rest follow in later steps; until
-then the default set is the built-in drivers and the firmware below.
+imports of a driver that NovaOS does not have yet.
+
+Since step 30.3 a Windows **Plug and Play driver** runs a PCI device that
+has no NovaOS driver.  `pnputil /add-driver x.inf /install` (or a setup
+program's `UpdateDriverForPlugAndPlayDevices`) installs the package on
+each such device one of its models names, and the driver starts at once
+and at every boot after: NovaOS calls its `AddDevice` and gives it the
+device's memory, I/O ports and interrupt with `IRP_MN_START_DEVICE`, as
+Windows does, and the driver can map the memory (`MmMapIoSpace`), connect
+the interrupt (`IoConnectInterruptEx`; NovaOS gives Windows drivers no
+MSI yet, so it is the line-based interrupt), use DMA (`IoGetDmaAdapter`)
+and register a device interface that programs open.  `pnputil
+/enum-devices /deviceid ID` shows the device started with its driver,
+`pnputil /disable-device /deviceid ID` takes the driver away (it may
+refuse while a program has the device open) and keeps the device off
+across restarts, and `/enable-device` starts it again.  A device NovaOS
+has its own driver for keeps it.  Since step 30.4 KMDF drivers load
+too, on `Wdf01000.sys` and `WdfLdr.sys`; the rest follow in later steps,
+and until then the default set is the built-in drivers and the firmware
+below.
+
+Since step 30.8 a Windows **USB client driver** runs a USB device that
+has no NovaOS driver, the way a vendor's driver runs it on Windows.
+NovaOS's USB core (`kernel/drivers/usb.c`, on xHCI, EHCI, UHCI or OHCI)
+gives the device a physical device object that answers as Windows' USB
+hub driver does (`kernel/nt/usbd.c`): the URBs a driver sends with
+`IOCTL_INTERNAL_USB_SUBMIT_URB` (selecting a configuration and interface,
+control, bulk and interrupt transfers, aborting and resetting pipes;
+isochronous transfers are not there yet), the port requests, the USB bus
+interface (`USB_BUS_INTERFACE_USBDI`, versions 0 to 3), selective-suspend
+requests (held until cancelled: NovaOS does not suspend a device) and
+`usbd.sys`'s exports.  Each pipe's transfers run in order on a thread of
+its own, so a read waiting for data does not hold up a write.  A driver
+that is a bus (FTDI's `ftdibus.sys` reports a COM port) has its children
+added to the device tree, and their drivers start once installed.
+Unplugging the device sends its drivers `IRP_MN_SURPRISE_REMOVAL` and
+`IRP_MN_REMOVE_DEVICE`, children first.  A port (class Ports) is named
+when its driver is installed, as Windows' ports installer names it: the
+first free `COMn` from `COM3` (the COM name arbiter's `ComDB`), in the
+device's `PortName` and its friendly name.  Programs open it as `COM3` or
+`\\.\COM3` and set it up with the communications functions
+(`SetCommState`, `SetCommTimeouts`, `WaitCommEvent`, `PurgeComm` and the
+rest), which send the driver the `IOCTL_SERIAL_*` requests Windows sends.
+
+    pnputil /scan-devices /search-online /install
+
+downloads, installs and starts FTDI's driver for an FTDI USB serial
+converter, then finds and installs the port driver for the COM port it
+reports.
+
+KMDF drivers run too (step 30.4): NovaOS ships Microsoft's framework,
+`Wdf01000.sys`, built from Microsoft's MIT-licensed source, and its own
+KMDF loader, `WdfLdr.sys`, both in `C:\Windows\System32\drivers` as on
+Windows (`tools/kmdf/build_kmdf.py`).  A KMDF driver starting imports
+`WdfLdr.sys`, which loads `Wdf01000.sys` and binds the driver to KMDF
+1.33; the framework's error messages go to the log as `[DbgPrint]
+Wdf01000: ...` lines.  For now the framework is test-signed,
+so a KMDF driver needs test signing on (below) until NovaOS trusts its own
+system files; class-extension drivers (those that bind with
+`WdfVersionBindClass`) do not load yet.
+
+The first third-party driver that runs unchanged is virtio-win's
+**`vioser.sys`** (step 30.5), the Red Hat serial driver Microsoft signed,
+for QEMU's `virtio-serial-pci`: `pnputil /add-driver vioser.inf /install`
+starts it on the device, and each port the host offers becomes a child
+device (`{6FDE7547-1B65-48ae-B628-80BE62016026}\VIOSerialPort\...`) that
+programs open as `\\.\Global\<port name>`, or through its
+`GUID_VIOSERIAL_PORT` interface, to exchange bytes with the host.  For
+this NovaOS's PnP manager now enumerates **bus drivers**' children, as
+Windows does: a driver that calls `IoInvalidateDeviceRelations` is asked
+for its `BusRelations`, each new child gets a device node from its
+`IRP_MN_QUERY_ID` answers and starts with its own driver, or raw (with the
+bus driver alone) when it says it may, and a child no longer reported is
+removed.  `vioser.sys` itself is Microsoft-signed, but it runs on the
+KMDF framework above, so it too needs test signing on for now.
+
+Since step 30.11 a Windows **storage driver** (a Storport miniport) runs a
+disk controller, on NovaOS's own Storport host (`kernel/nt/storport.c`,
+the `storport.sys` exports; Microsoft's `storport.sys` is never shipped).
+The miniport registers with `StorPortInitialize`; NovaOS starts the
+adapter as Windows does (`HwFindAdapter` with the controller's resources
+in its `PORT_CONFIGURATION_INFORMATION`, `HwInitialize`, the passive
+initialization routine), sends it SCSI requests as `STORAGE_REQUEST_BLOCK`s
+through `HwBuildIo` and `HwStartIo` with a scatter/gather list, and takes
+completions from `StorPortNotification(RequestComplete)` in the
+miniport's interrupt and DPCs.  Each disk it finds (INQUIRY, READ
+CAPACITY) joins the block layer as `storN`, and its volumes mount like any
+other disk's (`[DRIVES] D: is NTFS volume "..." on stor0`).  virtio-win's
+`viostor.sys` on QEMU's virtio-blk card is the first.  For now the host
+sends one request at a time through a 64 KiB bounce buffer, interrupts
+are line-based (no MSI-X), and a started adapter cannot be removed yet;
+deeper queues, MSI-X and removal come later.
 
 ### Driver signing
 
@@ -170,7 +259,7 @@ hardware ID, through Windows Update, which offers the packages the
 serves.  NovaOS asks the same Catalog (roadmap step 30.6), when the user
 asks it to:
 
-    pnputil /scan-devices /search-online [/instanceid <device instance ID>]
+    pnputil /scan-devices /search-online [/instanceid <device instance ID>] [/install]
 
 For each device with problem code 28 (no driver), or the one named,
 `pnputil`:
@@ -200,8 +289,13 @@ For each device with problem code 28 (no driver), or the one named,
 A device whose package is already in the driver store is not searched
 again.  `pnputil /enum-drivers` shows a downloaded package's source, and
 `pnputil /enum-devices /drivers` lists it as matching the device.  The
-package is staged, not started: starting Windows drivers on devices comes
-with roadmap step 30.3, so for now the device keeps problem code 28.
+package is staged, not started, so the device keeps problem code 28 until
+`pnputil /add-driver x.inf /install` installs it on the device (roadmap
+step 30.3, above), unless the search was given `/install`: then each
+package found is installed on its device at once, as Windows Update
+installs it, and the search goes round again for the devices the drivers
+it started bring (a USB serial converter's COM port, step 30.8), until a
+round installs nothing new.
 
 Nothing Microsoft or a vendor publishes is put in the NovaOS image: the
 package comes from its publisher to the user's own machine, as on
@@ -210,6 +304,11 @@ as the Catalog does; the `driversearch` self-test uses that with
 [`tools/drivertest/catalog_fixture.py`](../tools/drivertest/catalog_fixture.py),
 which serves pages recorded from the Catalog
 (`tests/selftest/devices/driversearch/catalog/`) so CI needs no network.
+The `usbserial` self-test does the same with
+[`tools/drivertest/ftdi_catalog.py`](../tools/drivertest/ftdi_catalog.py)
+and FTDI's real cabinet, which it downloads once from the Catalog's
+address (checked against the Catalog's SHA-256; `NOVA_DRIVER_CACHE` names
+a folder to keep it in) and never puts in the repository or the image.
 Vendor feeds for packages published outside the Catalog
 (`userland/drivers/feeds.json` in the design) and Device Manager's
 "Search automatically for drivers" are still to come.

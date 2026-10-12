@@ -1,0 +1,118 @@
+Define the verifier's state-separation option
+
+The source reads and uses FxStateSeparationDetectionOption, the
+StateSeparationDetection member, FxVerifierQueryStateSeparationDetection
+and FxRegKey::VerifyStateSeparationRegistryPolicy, but the published files
+leave their definitions blank.  NovaOS defines the option as the source
+uses it; the registry-policy check has nothing to report on NovaOS.
+
+diff --git a/src/framework/shared/inc/private/common/fxglobals.h b/src/framework/shared/inc/private/common/fxglobals.h
+index 30c1fd6..ba03eaf 100644
+--- a/src/framework/shared/inc/private/common/fxglobals.h
++++ b/src/framework/shared/inc/private/common/fxglobals.h
+@@ -82,6 +82,18 @@ typedef enum FxTrackPowerOption : UCHAR {
+     FxTrackPowerMaxValue
+ } FxTrackPowerOption;
+ 
++//
++// NovaOS: the published source names this verifier option but Microsoft
++// left its definition out.  "State separation" checks that a driver
++// writes only the registry locations Windows' driver isolation allows;
++// the option is read from the driver's Parameters\Wdf key.
++//
++typedef enum FxStateSeparationDetectionOption : UCHAR {
++    FxStateSeparationDetectionNone = 0,
++    FxStateSeparationDetectionLog,
++    FxStateSeparationDetectionMaxValue
++} FxStateSeparationDetectionOption;
++
+ typedef enum FxVerifierDownlevelOption {
+     NotOkForDownLevel = 0,
+     OkForDownLevel = 1,
+@@ -190,6 +202,10 @@ struct FxDriverGlobalsDebugExtension {
+     //
+     FxTrackPowerOption TrackPower;
+ 
++    //
++    // NovaOS: verifier check of registry writes (see the enum above)
++    //
++    FxStateSeparationDetectionOption StateSeparationDetection;
+ 
+ 
+ 
+diff --git a/src/framework/shared/inc/private/common/fxregkey.hpp b/src/framework/shared/inc/private/common/fxregkey.hpp
+index 3568cd0..b23df4e 100644
+--- a/src/framework/shared/inc/private/common/fxregkey.hpp
++++ b/src/framework/shared/inc/private/common/fxregkey.hpp
+@@ -316,6 +316,19 @@ public:
+         __in ULONG DataLength
+         );
+ 
++    //
++    // NovaOS: Microsoft left this verifier check out of the published
++    // source.  On Windows it logs a driver's write outside the registry
++    // locations driver isolation allows when the driver's
++    // StateSeparationDetection verifier option is on; NovaOS does not
++    // enforce driver isolation, so there is nothing to report.
++    //
++    VOID
++    VerifyStateSeparationRegistryPolicy(
++        VOID
++        )
++    {
++    }
+ 
+ 
+ 
+diff --git a/src/framework/shared/object/globals.cpp b/src/framework/shared/object/globals.cpp
+index f4e3c11..6248153 100644
+--- a/src/framework/shared/object/globals.cpp
++++ b/src/framework/shared/object/globals.cpp
+@@ -1396,26 +1396,28 @@ FxVerifierQueryTrackPower(
+     }
+ }
+ 
++//
++// NovaOS: Microsoft left this routine out of the published source; it
++// reads the option the same way FxVerifierQueryTrackPower does.
++//
++VOID
++FxVerifierQueryStateSeparationDetection(
++    _In_ HANDLE Key,
++    _Out_ FxStateSeparationDetectionOption* StateSeparationDetection
++    )
++{
++    NTSTATUS status;
++    ULONG value = 0;
++    DECLARE_CONST_UNICODE_STRING(valueName, L"StateSeparationDetection");
+ 
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
++    status = FxRegKey::_QueryULong(Key, &valueName, &value);
++    if (NT_SUCCESS(status) && value < FxStateSeparationDetectionMaxValue) {
++        *StateSeparationDetection = (FxStateSeparationDetectionOption)value;
++    }
++    else {
++        *StateSeparationDetection = FxStateSeparationDetectionNone;
++    }
++}
+ 
+ VOID
+ FxOverrideDefaultVerifierSettings(

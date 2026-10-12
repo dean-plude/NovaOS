@@ -78,7 +78,21 @@ order; --list prints them):
             driver (wdmtest.sys, test-signed), which loads once test
             signing is on and a restart later (unsigned and tampered
             copies never; pnputil refuses a package whose file does not
-            match its catalog), and wdmtest talks to it
+            match its catalog), and wdmtest talks to it; then a KMDF
+            driver (kmdftest.sys) starts on Wdf01000.sys and WdfLdr.sys
+            and kmdftest talks to it; "edu", QEMU's edu PCI device, on
+            which pnputil installs a Plug and Play driver (edutest.sys)
+            that gets its memory, interrupt and DMA from the PnP manager,
+            and which pnputil disables and enables; "vioser", QEMU's
+            virtio-serial controller, on which pnputil installs
+            virtio-win's signed vioser.sys (KMDF): its port, a child
+            device, carries bytes to the host and back; "viostor", a
+            second disk on QEMU's virtio-blk card with an NTFS volume, on
+            which pnputil installs virtio-win's signed viostor.sys: it runs
+            on NovaOS's Storport host and the volume mounts as D:;
+            "usbserial", QEMU's usb-serial converter (an FTDI FT232) on
+            xHCI, which gets FTDI's own driver by hardware ID and becomes
+            COM3, which serialtest loops data through
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -92,7 +106,7 @@ failed and the rest run).
 The exit status is the number of failed tests (0: all passed), so CI can
 gate on it.  --summary appends a Markdown table (GitHub's step summary).
 """
-import argparse, copy, os, re, shutil, struct, subprocess, sys, tempfile, time
+import argparse, copy, os, re, shutil, socket, struct, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, qemu_binary
@@ -304,6 +318,10 @@ GAMEPAD = load_suite('devices/gamepad')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
+EDU = load_suite('devices/edu')
+USBSERIAL = load_suite('devices/usbserial')
+VIOSER = load_suite('devices/vioser')
+VIOSTOR = load_suite('devices/viostor')
 
 
 def net4_boot(work):
@@ -429,31 +447,88 @@ def pnp_boot(work):
 def wdm_boot(work):
     """Nothing beyond the core boot's machine: sc loads a Windows kernel-mode
     driver, wdmtest.sys, once test signing is on, under Windows' signing
-    policy (tests/selftest/devices/wdm)"""
+    policy, then a KMDF driver, kmdftest.sys (tests/selftest/devices/wdm)"""
     return [], []
+
+
+def edu_boot(work):
+    """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
+    edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
+    return ['-device', 'edu'], []
+
+
+def vioser_boot(work):
+    """QEMU's virtio-serial controller with one port, org.novaos.test.0,
+    whose host end is tools/drivertest/serialpeer.py (port 10720), and
+    virtio-win's signed vioser package (tools/drivertest/vioser.py) in
+    C:\\Tests\\Vioser: pnputil installs it (tests/selftest/devices/vioser)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import vioser
+    pkg = os.path.join(work, 'vioser')
+    vioser.fetch(pkg)
+    log = os.path.join(work, 'serialpeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'drivertest', 'serialpeer.py'), '10720'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-chardev', 'socket,id=vs,host=127.0.0.1,port=10720', '-device', 'virtio-serial-pci',
+            '-device', 'virtserialport,chardev=vs,name=org.novaos.test.0'], [p], dict(puts=[(pkg, r'C:\Tests\Vioser')])
+
+
+def ntfs_disk(path, label, mb=128, files=()):
+    """A disk image at @path with one fresh NTFS volume from 1 MiB labelled
+    @label (mkntfs, from the ntfs-3g package), holding @files ((name, text)
+    pairs, written with ntfscp)"""
+    mkntfs = shutil.which('mkntfs') or ('/usr/sbin/mkntfs' if os.path.exists('/usr/sbin/mkntfs') else None)
+    if not mkntfs:
+        raise RuntimeError('mkntfs is not installed (the ntfs-3g package)')
+    vol = path + '.vol'
+    with open(vol, 'wb') as f:
+        f.truncate((mb - 1) << 20)
+    subprocess.run([mkntfs, '-F', '-Q', '-L', label, '-p', '2048', '-H', '255', '-S', '63', vol],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name, text in files:
+        src = vol + '.file'
+        with open(src, 'w', newline='\r\n') as f:
+            f.write(text)
+        ntfscp = shutil.which('ntfscp') or '/usr/bin/ntfscp'
+        subprocess.run([ntfscp, '-f', vol, src, name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.unlink(src)
+    mbr = bytearray(512)                                    # one NTFS partition (type 7) from LBA 2048
+    mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\xfe\xff\xff', 0x07, b'\xfe\xff\xff', 2048, (mb - 1) * 2048)
+    mbr[510:512] = b'\x55\xaa'
+    with open(path, 'wb') as out, open(vol, 'rb') as src:
+        out.write(mbr + bytes((1 << 20) - 512))
+        shutil.copyfileobj(src, out)
+    os.unlink(vol)
 
 
 def ntfs_boot(work):
     """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
-    NOVATEST (mkntfs, from the ntfs-3g package): drive D:, read-write.  It
-    stays in work/ntfs.img for the tests' check once QEMU has quit
-    (tests/selftest/devices/ntfs)"""
-    mkntfs = shutil.which('mkntfs') or ('/usr/sbin/mkntfs' if os.path.exists('/usr/sbin/mkntfs') else None)
-    if not mkntfs:
-        raise RuntimeError('mkntfs is not installed (the ntfs-3g package)')
-    disk, vol, mb = os.path.join(work, 'ntfs.img'), os.path.join(work, 'ntfs.vol'), 128
-    with open(vol, 'wb') as f:
-        f.truncate((mb - 1) << 20)
-    subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVATEST', '-p', '2048', '-H', '255', '-S', '63', vol],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    mbr = bytearray(512)                                    # one NTFS partition (type 7) from LBA 2048
-    mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\xfe\xff\xff', 0x07, b'\xfe\xff\xff', 2048, (mb - 1) * 2048)
-    mbr[510:512] = b'\x55\xaa'
-    with open(disk, 'wb') as out, open(vol, 'rb') as src:
-        out.write(mbr + bytes((1 << 20) - 512))
-        shutil.copyfileobj(src, out)
-    os.unlink(vol)
+    NOVATEST (ntfs_disk): drive D:, read-write.  It stays in work/ntfs.img
+    for the tests' check once QEMU has quit (tests/selftest/devices/ntfs)"""
+    disk = os.path.join(work, 'ntfs.img')
+    ntfs_disk(disk, 'NOVATEST')
     return ['-drive', f'format=raw,file={disk}'], []
+
+
+def viostor_boot(work):
+    """A second disk on QEMU's virtio-blk card (PCI 1af4:1001), which no
+    NovaOS driver runs, with an NTFS volume labelled VIOSTOR holding
+    viostor.txt (ntfs_disk), and virtio-win's signed viostor package
+    (tools/drivertest/viostor.py) in C:\\Tests\\VioStor: pnputil installs it
+    on the card, which then runs on NovaOS's Storport host, and the volume
+    mounts as D: (tests/selftest/devices/viostor)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import viostor
+    pkg = os.path.join(work, 'viostor')
+    viostor.fetch(pkg)
+    disk = os.path.join(work, 'viostor.img')
+    ntfs_disk(disk, 'VIOSTOR', 64, [('viostor.txt', 'NovaOS reads this file through viostor.sys\n')])
+    return ['-drive', f'if=none,id=vd0,format=raw,file={disk}', '-device', 'virtio-blk-pci,drive=vd0'], [], \
+        dict(puts=[(pkg, r'C:\Tests\VioStor')])
 
 
 def monitors_boot(work):
@@ -568,6 +643,57 @@ def driversearch_boot(work):
     return ['-nic', 'user,model=virtio-net-pci', '-device', 'virtio-serial-pci'], [srv]
 
 
+def usbserial_boot(work):
+    """QEMU's usb-serial device (an FTDI FT232, USB\\VID_0403&PID_6001) on an
+    xHCI controller, its serial line looped back by a socket that returns
+    what it is sent, on a user-mode network where 10.0.2.2:18092
+    answers as the Microsoft Update Catalog does with FTDI's own driver
+    (tools/drivertest/ftdi_catalog.py): pnputil downloads and installs it
+    by hardware ID and serialtest loops data through the COM port
+    (tests/selftest/devices/usbserial)"""
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tools', 'drivertest', 'ftdi_catalog.py'), '18092', work])
+    end = time.time() + 900                   # (the first run downloads FTDI's cabinet)
+    while time.time() < end and srv.poll() is None:
+        try:
+            socket.create_connection(('127.0.0.1', 18092), 1).close()
+            break
+        except OSError:
+            time.sleep(1)
+    if srv.poll() is not None or time.time() >= end:
+        raise RuntimeError('the recorded Update Catalog for FTDI did not start (see catalog.log; is port 18092 in use?)')
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    # (QEMU attaches a usb-serial device once its chardev is connected: the
+    # line's far end is a socket that sends back what it is sent)
+    echo = subprocess.Popen([sys.executable, '-c', ECHO, str(port)])
+    for _ in range(50):
+        try:
+            socket.create_connection(('127.0.0.1', port), 1).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    return ['-nic', 'user,model=virtio-net-pci', '-device', 'qemu-xhci,id=usbserial-xhci',
+            '-chardev', f'socket,id=ftdi,host=127.0.0.1,port={port}',
+            '-device', 'usb-serial,bus=usbserial-xhci.0,chardev=ftdi'], [srv, echo]
+
+
+ECHO = """import socket, sys
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('127.0.0.1', int(sys.argv[1])))
+srv.listen(4)
+while True:
+    c, _ = srv.accept()
+    while True:
+        d = c.recv(65536)
+        if not d:
+            break
+        c.sendall(d)
+    c.close()
+"""
+
+
 # The suites that boot once per entry: (label, tests, setup(work) -> (QEMU arguments, processes[,
 # more Nova arguments]))
 BOOTS = {
@@ -577,7 +703,9 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
+                ('usbserial', USBSERIAL, usbserial_boot),
+                ('viostor', VIOSTOR, viostor_boot)],
 }
 
 
@@ -679,7 +807,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10713)]:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10713)] + ['serialpeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

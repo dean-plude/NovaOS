@@ -18,6 +18,7 @@
 #define NOVA_PNP_PRESENT    0x01
 #define NOVA_PNP_STARTED    0x02
 #define NOVA_PNP_REMOVABLE  0x04
+#define NOVA_PNP_WINDOWS    0x08    /* the driver running it is a Windows driver */
 
 typedef struct {
     DWORD id, parent, flags, problem, seq, reserved;
@@ -89,6 +90,7 @@ static inline BOOL nova_pnp_class_guid(const char *cls, GUID *g)
         { "System",       { 0x4d36e97d, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
         { "USB",          { 0x36fc9e60, 0xc465, 0x11cf, { 0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } } },
         { "HIDClass",     { 0x745a17a0, 0x74d3, 0x11d0, { 0xb6, 0xfe, 0x00, 0xa0, 0xc9, 0x0f, 0x57, 0xda } } },
+        { "Ports",        { 0x4d36e978, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
         { "Keyboard",     { 0x4d36e96b, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
         { "Mouse",        { 0x4d36e96f, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
         { "DiskDrive",    { 0x4d36e967, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
@@ -139,7 +141,30 @@ static inline int nova_pnp_interfaces(const NovaPnpNode *n, GUID *g)
     if (!lstrcmpiA(n->cls, "MEDIA")) g[k++] = audio;
     if (!lstrcmpiA(n->cls, "Net")) g[k++] = net;
     if (!lstrcmpiA(n->cls, "Display")) g[k++] = disp;
+    /* and those a Windows driver on it turned on (IoSetDeviceInterfaceState):
+     * a PCI device's, or a child device's its bus driver reported */
+    if (!nova_pnp_prefix(n->instance, "USB\\") && !nova_pnp_prefix(n->instance, "HID\\")) {
+        GUID w[8];
+        int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
+        for (int i = 0; i < m && k < 4; i++) g[k++] = w[i];
+    }
     return k;
+}
+
+/* Start the Windows driver installed on node @id (its Enum key's Service,
+ * as a device install writes it): 0, the problem code it has now (28: no
+ * driver installed, 10: it failed to start...), or (DWORD)-1 without
+ * SeLoadDriverPrivilege */
+static inline DWORD nova_pnp_start(DWORD id)
+{
+    return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 4 | (ULONG_PTR)id << 8, NULL);
+}
+
+/* Take node @id's Windows driver away (IRP_MN_QUERY_REMOVE_DEVICE, then
+ * IRP_MN_REMOVE_DEVICE): the NTSTATUS, a driver's veto among them */
+static inline NTSTATUS nova_pnp_stop(DWORD id)
+{
+    return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 5 | (ULONG_PTR)id << 8, NULL);
 }
 
 /* A device interface's symbolic link: "\\?\" + the instance ID with each

@@ -114,7 +114,7 @@ typedef struct Thread {
      * scheduler swaps for them.  NULL/0 for kernel threads. */
     void           *um;             /* UmThread */
     void           *um_proc;        /* its UmProcess (sched_set_foreground compares it) */
-    uint8_t        *fpu;            /* 512-byte FXSAVE area, 16-byte aligned */
+    uint8_t        *fpu;            /* XSAVE (or FXSAVE) area: a page (xstate.h) */
     uint64_t        gs_base;        /* user GS (the TEB): MSR_KERNEL_GS_BASE while in the kernel */
     uint64_t        fs_base;        /* user FS: the 32-bit TEB of a 32-bit program's thread */
     uint64_t        user_rsp;       /* user RSP at the last syscall (stack args) */

@@ -53,6 +53,20 @@ static struct {
  * Bitmap helpers (page index → bit position)
  * ----------------------------------------------------------------------- */
 
+/* A pool of low pages kept for devices that reach only part of memory by
+ * DMA (pmm_alloc_pages_below), as Windows and Linux keep low memory for
+ * them: up to 2 MiB of the pages free at boot just below 16 MiB.  They
+ * count as used; pool_free marks the ones handed back. */
+#define DMA_POOL_TOP   (16u << 20)
+#define DMA_POOL_PAGES 512u
+#define POOL_WORDS     (DMA_POOL_TOP / PAGE_SIZE / 64)
+static uint64_t pool_member[POOL_WORDS], pool_free[POOL_WORDS];
+
+static bool in_pool(size_t idx)
+{
+    return idx < POOL_WORDS * 64 && (pool_member[idx / 64] >> (idx % 64) & 1);
+}
+
 static void bitmap_set(size_t page_idx)   /* mark used */
 {
     pmm.bitmap[page_idx / 64] |= (UINT64_C(1) << (page_idx % 64));
@@ -218,6 +232,17 @@ void pmm_init(const BootInfo *info)
         }
     }
 
+    /* 8. The DMA pool: free pages just below 16 MiB, top down */
+    size_t pooled = 0;
+    for (size_t idx = DMA_POOL_TOP / PAGE_SIZE; idx-- > 0x100000 / PAGE_SIZE && pooled < DMA_POOL_PAGES;) {
+        if (idx >= pmm.total_pages || bitmap_test(idx)) continue;
+        bitmap_set(idx);
+        pmm.free_pages--;
+        pool_member[idx / 64] |= UINT64_C(1) << (idx % 64);
+        pool_free[idx / 64] |= UINT64_C(1) << (idx % 64);
+        pooled++;
+    }
+
     kprintf("[PMM] Free: %zu MiB / %zu MiB\n",
             (pmm.free_pages * PAGE_SIZE) / (1024 * 1024),
             (pmm.total_pages * PAGE_SIZE) / (1024 * 1024));
@@ -315,6 +340,56 @@ uintptr_t pmm_alloc_pages(size_t count)
     return 0;
 }
 
+/* @count consecutive pool pages below page @end, taken; 0 if none */
+static uintptr_t take_pool(size_t count, size_t end)
+{
+    size_t run = 0;
+    if (end > POOL_WORDS * 64) end = POOL_WORDS * 64;
+    for (size_t i = 0; i < end; i++) {
+        if (!(pool_free[i / 64] >> (i % 64) & 1)) { run = 0; continue; }
+        if (++run < count) continue;
+        for (size_t j = i + 1 - count; j <= i; j++) pool_free[j / 64] &= ~(UINT64_C(1) << (j % 64));
+        return (uintptr_t)((i + 1 - count) * PAGE_SIZE);
+    }
+    return 0;
+}
+
+uintptr_t pmm_alloc_pages_below(size_t count, uintptr_t limit)
+{
+    if (count == 0) return 0;
+    if (!limit) return pmm_alloc_pages(count);
+
+    lock_acquire(&pmm.lock);
+    size_t end = limit / PAGE_SIZE < pmm.total_pages ? limit / PAGE_SIZE : pmm.total_pages;
+
+    /* the lowest free run below @limit, else the DMA pool's */
+    size_t run = 0;
+    size_t run_start = 0;
+    for (size_t i = pmm.hint * 64; i < end; i++) {
+        if (!(i & 63) && pmm.bitmap[i / 64] == UINT64_C(0xFFFFFFFFFFFFFFFF)) {
+            run = 0;
+            i += 63;
+            continue;
+        }
+        if (!bitmap_test(i)) {
+            if (run == 0) run_start = i;
+            if (++run == count) {
+                for (size_t j = run_start; j < run_start + count; j++) {
+                    bitmap_set(j);
+                    pmm.free_pages--;
+                }
+                lock_release(&pmm.lock);
+                return (uintptr_t)(run_start * PAGE_SIZE);
+            }
+        } else {
+            run = 0;
+        }
+    }
+    uintptr_t pa = take_pool(count, end);
+    lock_release(&pmm.lock);
+    return pa;
+}
+
 /* -----------------------------------------------------------------------
  * pmm_claim_pages — the free pages at @pa, if all of them are free
  * (a contiguous block grows where it is: kresize)
@@ -350,12 +425,17 @@ void pmm_free_page(uintptr_t pa)
 
     lock_acquire(&pmm.lock);
 
-    if (!bitmap_test(idx)) {
+    if (!bitmap_test(idx) || (in_pool(idx) && (pool_free[idx / 64] >> (idx % 64) & 1))) {
         kprintf("[PMM] BUG: double free of page 0x%lx!\n", pa);
         lock_release(&pmm.lock);
         return;
     }
 
+    if (in_pool(idx)) {                         /* (back to the DMA pool) */
+        pool_free[idx / 64] |= UINT64_C(1) << (idx % 64);
+        lock_release(&pmm.lock);
+        return;
+    }
     bitmap_clear(idx);
     pmm.free_pages++;
     lock_release(&pmm.lock);
@@ -373,10 +453,11 @@ void pmm_free_pages(uintptr_t pa, size_t count)
     }
     lock_acquire(&pmm.lock);
     for (size_t i = idx; i < idx + count; i++) {
-        if (!bitmap_test(i)) {
+        if (!bitmap_test(i) || (in_pool(i) && (pool_free[i / 64] >> (i % 64) & 1))) {
             kprintf("[PMM] BUG: double free of page 0x%lx!\n", i * PAGE_SIZE);
             continue;
         }
+        if (in_pool(i)) { pool_free[i / 64] |= UINT64_C(1) << (i % 64); continue; }   /* (back to the DMA pool) */
         bitmap_clear(i);
         pmm.free_pages++;
     }

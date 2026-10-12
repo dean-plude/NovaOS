@@ -1680,6 +1680,8 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
                   (!n || NT_SUCCESS(CopyToUser((void *)(uintptr_t)(ptr + sizeof(q)), e, sizeof(PnpEvent) * (size_t)n)));
         return ok ? (UINT64)n : 0;
     }
+    case 3: case 4: case 5:                     /* (Windows drivers on the nodes: um_driver.c) */
+        return UmPnpDriverCtl((UINT32)(arg & 0xFF), (UINT32)(arg >> 8), ptr);
     }
     return 0;
 }

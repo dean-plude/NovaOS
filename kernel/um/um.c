@@ -44,6 +44,7 @@
 #include "../arch/x86_64/cpu.h"
 #include "../arch/x86_64/gdt.h"
 #include "../arch/x86_64/paging.h"
+#include "../arch/x86_64/xstate.h"
 #include "userland_files.h"
 #include "../gdi/png.h"
 #include "../drivers/virtio_gpu.h"
@@ -232,6 +233,7 @@ void UmInit(void)
      * SSE exceptions enabled.  The kernel itself is built without SSE. */
     write_cr0((read_cr0() & ~CR0_EM & ~CR0_TS) | CR0_MP);
     write_cr4(read_cr4() | (1u << 9) /* OSFXSR */ | (1u << 10) /* OSXMMEXCPT */);
+    xstate_init();                                  /* XSAVE and AVX, where the CPU has them */
     __asm__ volatile ("fninit");
     um_syscall_init();
     kusd_init();
@@ -280,6 +282,7 @@ void UmInit(void)
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
+    NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */
     AudioLoadSettings();                            /* the sound devices' saved volumes and default */
     um_registry_pending_renames();                  /* before any program runs */
@@ -761,10 +764,12 @@ bool um_read(UmProcess *p, UINT64 va, void *dst, UINT64 n)        { return copy_
 /* Free every user page and page table, then the PML4 itself. */
 /* -----------------------------------------------------------------------
  * KUSER_SHARED_DATA: one page, mapped read-only at 0x7FFE0000 in every
- * program, with the clocks programs read without a system call (the Go
- * runtime's nanotime, GetTickCount in some CRTs) and the version fields.
+ * program (and at 0xFFFFF78000000000 for drivers), with the clocks programs
+ * read without a system call (the Go runtime's nanotime, GetTickCount in
+ * some CRTs) and the version fields.
  * ----------------------------------------------------------------------- */
 #define UM_KUSD_VA UINT64_C(0x7FFE0000)
+#define UM_KI_USER_SHARED_DATA UINT64_C(0xFFFFF78000000000)
 
 static void kusd_time(UINT32 off, UINT64 v)       /* KSYSTEM_TIME: High2, Low, then High1 */
 {
@@ -797,18 +802,37 @@ static void kusd_init(void)
     static const int features[] = { 2, 6, 8, 10, 12, 13, 14 };   /* cmpxchg8b/16b, SSE, SSE2, SSE3, RDTSC, NX */
     for (unsigned i = 0; i < sizeof(features) / sizeof(features[0]); i++) g_kusd[0x274 + features[i]] = 1;
     *(UINT32 *)(g_kusd + 0x2E8) = (UINT32)pmm_ram_pages();   /* NumberOfPhysicalPages */
-    /* XState (XSTATE_CONFIGURATION): the legacy x87 and SSE state only, kept
-     * in a CONTEXT's FltSave, as kernel32's GetEnabledXStateFeatures says */
-    *(UINT64 *)(g_kusd + 0x3D8) = 3;                      /* EnabledFeatures */
-    *(UINT32 *)(g_kusd + 0x3E8) = 512 + 64;               /* Size: legacy area + XSAVE header */
+    /* XState (XSTATE_CONFIGURATION): the x87 and SSE state (a CONTEXT's
+     * FltSave) and, with AVX on (xstate.h), the YMM upper halves a
+     * CONTEXT_XSTATE CONTEXT carries after its CONTEXT_EX; ntdll's
+     * RtlGetEnabledExtendedFeatures and kernel32's XState functions read it */
+    bool avx = g_xstate_mask & XSTATE_AVX;
+    UINT32 xsize = avx ? 576 + 256 : 512 + 64;            /* legacy area + XSAVE header (+ AVX) */
+    *(UINT64 *)(g_kusd + 0x3D8) = avx ? 7 : 3;            /* EnabledFeatures */
+    *(UINT64 *)(g_kusd + 0x3E0) = avx ? 7 : 3;            /* EnabledVolatileFeatures */
+    *(UINT32 *)(g_kusd + 0x3E8) = xsize;                  /* Size */
     *(UINT32 *)(g_kusd + 0x3F0) = 0;   *(UINT32 *)(g_kusd + 0x3F4) = 160;   /* Features[0]: x87 */
     *(UINT32 *)(g_kusd + 0x3F8) = 160; *(UINT32 *)(g_kusd + 0x3FC) = 256;   /* Features[1]: SSE */
-    *(UINT32 *)(g_kusd + 0x3D8 + 0x228) = 512 + 64;       /* AllFeatureSize */
-    *(UINT32 *)(g_kusd + 0x3D8 + 0x22C) = 160;            /* AllFeatures[0], [1] */
+    if (avx) { *(UINT32 *)(g_kusd + 0x400) = 576; *(UINT32 *)(g_kusd + 0x404) = 256; }   /* Features[2]: AVX */
+    *(UINT32 *)(g_kusd + 0x3D8 + 0x228) = xsize;          /* AllFeatureSize */
+    *(UINT32 *)(g_kusd + 0x3D8 + 0x22C) = 160;            /* AllFeatures[0], [1], [2] */
     *(UINT32 *)(g_kusd + 0x3D8 + 0x230) = 256;
+    if (avx) *(UINT32 *)(g_kusd + 0x3D8 + 0x234) = 256;
+    if (g_xstate_mask) g_kusd[0x274 + 17] = 1;            /* PF_XSAVE_ENABLED */
+    if (avx) {
+        g_kusd[0x274 + 39] = 1;                           /* PF_AVX_INSTRUCTIONS_AVAILABLE */
+        if (cpuid(7, 0).ebx & (1u << 5)) g_kusd[0x274 + 40] = 1;   /* PF_AVX2_INSTRUCTIONS_AVAILABLE */
+    }
     UmCpuCountChanged();
     UmSharedKeyboard(g_kbd_hkl);
     UmTimerTick(sched_ticks());
+    /* The same page at KI_USER_SHARED_DATA in kernel space, read-only, as on
+     * Windows x64: a driver's KeQueryTickCount, KeQuerySystemTime and
+     * KeQueryInterruptTime are WDK macros that read it there.  (Before any
+     * program starts, so every address space's copy of the kernel's
+     * top-level entries has it.) */
+    if (NT_SUCCESS(paging_prepare(UM_KI_USER_SHARED_DATA, PAGE_SIZE)))
+        paging_map(UM_KI_USER_SHARED_DATA, g_kusd_pa, PAGE_SIZE, MAP_NO_EXEC | MAP_GLOBAL);
 }
 
 void UmSharedKeyboard(UINT32 hkl)
@@ -2498,6 +2522,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
     memset(fpu, 0, PAGE_SIZE);
     fpu[0] = 0x7F; fpu[1] = 0x02;                          /* FCW = 0x027F (53-bit precision), as on Windows */
     put_u32(fpu + 24, 0x1F80);                             /* MXCSR default */
+    fpu[XSTATE_LEGACY] = 3;                                /* XSAVE header: XRSTOR takes the x87 and SSE parts above */
     t->ob.type = UO_THREAD;
     t->ob.refs = 1;                                        /* the process's thread table */
     t->proc = p;

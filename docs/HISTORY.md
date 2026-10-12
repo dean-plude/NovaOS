@@ -11059,6 +11059,52 @@ a wait.
   llvmpipe, so it composites on the CPU while the window keeps OpenGL.
 - The other apps share PhotoCraft's toolkit and are untested.
 
+## AVX and F16C for programs: XSAVE and the YMM state
+
+The last leftover of the gaming phase (After 0.1, Phase 24).  The kernel
+saved each thread's legacy x87 and SSE state only (FXSAVE) and never set
+`CR4.OSXSAVE`, so CPUID showed programs no OSXSAVE and XGETBV did not
+say the YMM registers were saved: every program, Mesa's LLVM JIT among
+them, took its SSE paths, and half-precision conversions were calls into
+ntdll instead of F16C instructions.  On a PC with AVX (the T14's Tiger
+Lake has AVX2, FMA and F16C) programs now take their AVX code.
+
+- **XSAVE at boot** (`kernel/arch/x86_64/xstate.c`): when the CPU has
+  XSAVE, CPU 0 sets `CR4.OSXSAVE` and XCR0 to x87, SSE and AVX (the other
+  CPUs copy both, and sleep keeps them), and the scheduler saves and
+  loads each thread's state with XSAVE and XRSTOR into its page (sized
+  from CPUID leaf 0xD).  A CPU without XSAVE keeps FXSAVE.
+- **KUSER_SHARED_DATA**: XState's EnabledFeatures, Size and Features[2]
+  name the AVX state (832 bytes in all), and the processor-feature flags
+  `PF_XSAVE_ENABLED`, `PF_AVX_INSTRUCTIONS_AVAILABLE` and
+  `PF_AVX2_INSTRUCTIONS_AVAILABLE` are set from it; kernel32's
+  `IsProcessorFeaturePresent` and `GetEnabledXStateFeatures` read them.
+- **Exceptions**: a 64-bit program's exception `CONTEXT` is a
+  `CONTEXT_XSTATE` one, as on Windows: a `CONTEXT_EX` and an XSAVE area
+  with the YMM upper halves follow it on the stack, so a handler that
+  uses AVX itself no longer loses the interrupted code's registers;
+  `NtContinue`, `NtRaiseException` and `SetThreadContext` load them back.
+- **GetThreadContext with `CONTEXT_XSTATE`**: the calling thread's own
+  YMM registers, and a suspended thread's x87, SSE and AVX state from what
+  the switch away from it saved (before, another thread's floating-point
+  state came back empty).  ntdll's `RtlLocateExtendedFeature` and
+  kernel32's `InitializeContext`, `LocateXStateFeature`,
+  `Get/SetXStateFeaturesMask` and `CopyContext` lay the XSAVE area out as
+  Windows does.
+- **Large heap blocks are 64-byte aligned** (`userland/ntdll/ntdll.c`),
+  as on Windows, whose x64 heap puts a 0x40-byte entry before a block it
+  maps on its own: NovaOS put a 16-byte header there.  Mesa's lavapipe
+  keeps Vulkan memory in such malloc blocks, and with AVX its shaders
+  load a 64-bit depth buffer's rows with 32-byte aligned loads, so Squash
+  the Creeps (Godot on Direct3D 12) crashed on its first frame.
+- **The test machines**: `tools/novarun.py` (the self-tests and the app
+  corpus) and `scripts/run-qemu.sh` give QEMU's `qemu64` CPU XSAVE,
+  XSAVEOPT, AVX and F16C (QEMU 8.2's TCG hangs on the `CR4.OSXSAVE` write
+  when `qemu64` has XSAVE without XSAVEOPT; every real CPU with AVX has
+  both).  New core self-test `avxtest`.
+
+Not yet run on real hardware.
+
 ## Compatibility ratings, ProtonDB-style
 
 [docs/compatibility.md](../compatibility.md) now rates every program and
@@ -11400,6 +11446,54 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
   every millisecond and writes one engine period at a time; the recording
   must hold its tones.  Nothing tested the `IAudioClient3` calls before.
 
+## KMDF: Microsoft's driver framework, built from its own source
+
+Step 30.4 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): most Windows
+drivers written since Windows 8 are KMDF drivers, which call Microsoft's
+framework (`Wdf01000.sys`) rather than the kernel.  NovaOS now has that
+framework, built from Microsoft's MIT-licensed
+[Windows-Driver-Frameworks](https://github.com/microsoft/Windows-Driver-Frameworks)
+source, and runs KMDF drivers on it.
+
+- **`Wdf01000.sys`** (`tools/kmdf/build_kmdf.py`): the build fetches the
+  pinned source commit, applies five small patches that restore what the
+  published tree lost (each in `tools/kmdf/patches` with its reason),
+  compiles the 178 kernel-mode framework files with clang against
+  mingw-w64's WDK headers plus what they lack (`tools/kmdf/inc`), and links
+  them with the WDK libraries the framework expects (`tools/kmdf/rt`:
+  `wdmsec.lib`'s secure device creation, the USB helpers, the
+  Driver-Verifier queries, the trace messages, which reach the log through
+  `DbgPrintEx`).
+- **`WdfLdr.sys`** (`tools/kmdf/wdfldr.c`): NovaOS's own KMDF loader,
+  exporting what a KMDF driver imports (`WdfVersionBind`,
+  `WdfVersionUnbind`, `WdfLdrQueryInterface`, ...) and what the framework
+  registers with (`WdfRegisterLibrary`).  A driver's bind starts
+  `Wdf01000.sys` when it is not running yet.  Class extensions
+  (`WdfVersionBindClass`) are refused for now.
+- **Export drivers** (`kernel/nt/ldr.c`): an import from a `.sys` module
+  (`WDFLDR.SYS`) loads that module from `System32\drivers` the way Windows
+  does, without a driver object, and calls its `DllInitialize`; a
+  driver's `DriverEntry` may start another driver (`ZwLoadDriver`), so
+  loads nest.
+- **The kernel routines the framework imports** that NovaOS lacked
+  (`kernel/nt/win10.c` and others): the Windows 8.1 high-resolution
+  timers (`ExAllocateTimer`, `ExSetTimer`, ...), the power framework
+  (`PoFxRegisterDevice` and the rest; components are kept active), a real
+  `RtlQueryRegistryValues(Ex)` (the framework reads its settings with it),
+  `IoOpenDriverRegistryKey`, `IoQueryFullDriverPath`, `ExUuidCreate`,
+  activity IDs and the C run-time string routines.  The import-coverage
+  check now holds the framework's own imports, and the KMDF loader's
+  exports, against what NovaOS provides.
+
+`kmdftest.sys`, a non-PnP KMDF driver with a control device and a default
+queue, loads with `sc start`, binds to KMDF 1.33 and serves `kmdftest`'s
+reads, writes and control codes through its queue callbacks in the
+devices suite's "wdm" boot.  The framework and its loader are test-signed
+for now, so KMDF drivers need test signing on; a KMDF version of the
+Plug and Play `edu` test driver, which is this step's "done when", follows
+step 30.3.
+
 ## PhotoCraft makes documents; why it composites on the CPU
 
 PhotoCraft (App Store, ArtCraft) closed itself the moment a document
@@ -11432,6 +11526,45 @@ that [docs/compatibility.md](../compatibility.md) rates every program and
 game tried; README's opening paragraph links that page, and the
 [user guide](../user-guide.md) describes the built-in apps and the App
 Store.  The `programs` region and its fragment directory went with it.
+
+## virtio-win's serial driver: the first third-party driver, and bus drivers
+
+Step 30.5 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): virtio-win's
+`vioser.sys`, the Microsoft-signed package from the virtio-win release,
+runs unchanged on QEMU's virtio-serial device, and a program exchanges
+bytes with the host through `\\.\Global\<port name>`.
+
+- **Child devices** (`kernel/nt/pnp.c`): `vioser.sys` is a bus driver;
+  each port is a child device it reports.  `IoInvalidateDeviceRelations`
+  queues the bus for the PnP manager's own thread ("nt-pnp"), which asks
+  for `IRP_MN_QUERY_DEVICE_RELATIONS` `BusRelations`; each new child gets
+  a device node under its parent from its `IRP_MN_QUERY_ID` and
+  `QUERY_DEVICE_TEXT` answers and capabilities, is asked its resource
+  requirements as Windows asks them (KMDF registers a raw child's
+  interfaces only then), and starts with its own driver, or raw when it
+  reports `RawDeviceOK` and has none.  A child no longer reported is
+  removed (`IRP_MN_SURPRISE_REMOVAL` if it ran, then
+  `IRP_MN_REMOVE_DEVICE`), and children go before their parent.
+- **Named device objects**: `FILE_AUTOGENERATED_DEVICE_NAME` gives a device
+  `\Device\nnnnnnnn` as on Windows, and a `\\.\Global\X` path opens `X`.
+- **What the WDK's inline functions read directly**: the current thread
+  and processor number at `gs:[0x188]` and `gs:[0x184]`, which the
+  framework's lock checks rely on.
+- **Small fixes found by a real driver**: `GetBusData` with
+  `PCI_WHICHSPACE_CONFIG`, and `IoConnectInterruptEx` with
+  `CONNECT_FULLY_SPECIFIED_GROUP` (what KMDF sends).  cfgmgr32 lists
+  the interfaces of child devices too.
+- **Kernel backtraces through drivers**: a fault outside the kernel (in a
+  Windows driver, or a call through a null pointer) also prints the code
+  addresses near the top of the stack, a driver's as `Wdf01000.sys+0x1b069`.
+- **The test**: the devices suite's "vioser" boot downloads the package
+  (`tools/drivertest/vioser.py`), runs QEMU with `virtio-serial-pci` and a
+  port backed by a host echo program (`tools/drivertest/serialpeer.py`),
+  installs it with `pnputil`, checks its Microsoft signer, and
+  `viosertest` sends a line and 64 KiB through the port and back, before
+  and after a restart.  The KMDF framework under it is still test-signed,
+  so the boot turns test signing on.
 
 ## Direct presentation of Vulkan's frames
 
@@ -11640,6 +11773,144 @@ programs talk to it through Windows IRPs.
   `/driver`, no WDK) and the devices suite's "wdm" boot: refused before
   test signing, then `sc create type= kernel`, `sc start`, `wdmtest`'s
   round trips and `sc stop`.
+
+## Plug and Play drivers on real hardware resources
+
+Step 30.3 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): a Windows
+function driver installed from its `.inf` drives a PCI device, with the
+device's memory, interrupt and DMA handed to it the way Windows hands them.
+
+- **The PnP manager** (`kernel/nt/pnp.c`): a physical device object (PDO)
+  for each PCI device a Windows driver is installed on, answering the bus
+  driver's IRPs (`QUERY_ID`, `QUERY_CAPABILITIES`, `QUERY_INTERFACE` with
+  the PCI bus interface, config space reads and writes).  It loads the
+  driver the device's `Enum` key names, calls `AddDevice`, and sends
+  `IRP_MN_START_DEVICE` with the device's `CM_RESOURCE_LIST`, raw and
+  translated: the memory and I/O BARs and the interrupt (the ACPI `_PRT`
+  routing, a vector from 0x60 and its IRQL).  Removal is
+  `IRP_MN_QUERY_REMOVE_DEVICE` (a driver may veto it), then
+  `IRP_MN_REMOVE_DEVICE`; the driver unloads when its last device goes.
+  A driver that fails shows Windows' problem codes (28, 10, 31, 39, 52).
+- **Interrupts** (`kernel/nt/intr.c`): `IoConnectInterrupt` and
+  `IoConnectInterruptEx` (fully specified, line-based, and message-based
+  falling back to line-based, since NovaOS gives Windows drivers no MSI
+  yet), the ISR at the interrupt's IRQL under its spin lock,
+  `KeSynchronizeExecution`.
+- **Device memory and DMA** (`kernel/nt/dma.c`): `MmMapIoSpace(Ex)`,
+  contiguous memory, and DMA adapters (`IoGetDmaAdapter`, version 3):
+  common buffers, `AllocateAdapterChannel` with `MapTransfer`, and
+  scatter/gather lists, through bounce buffers below the device's address
+  width when the memory is out of its reach.  The physical page allocator
+  sets aside 2 MiB just below 16 MiB at boot for such buffers, used only
+  when nothing free lies under the device's limit, so short-reach devices
+  still get memory after the low pages are taken.
+- **Device interfaces**: `IoRegisterDeviceInterface` and
+  `IoSetDeviceInterfaceState`; the interface's `\\?\` path opens the driver's
+  device and `CM_Get_Device_Interface_List` lists it.
+- **Installing on devices**: `pnputil /add-driver x.inf /install` and
+  newdev's `UpdateDriverForPlugAndPlayDevices` install a package on each
+  device one of its models names that no NovaOS driver runs (setupapi
+  carries out the model's install section: files, services, `.HW` registry
+  lines, the device's `Enum` and driver keys) and start it at once; it
+  starts again at every boot.  `pnputil /disable-device`, `/enable-device`
+  and `/restart-device` (with `/deviceid`), and cfgmgr32's
+  `CM_Disable_DevNode` and `CM_Enable_DevNode`.
+- **`edutest.sys`**, a WDM driver for QEMU's `edu` device, exercises it in
+  the devices suite's new "edu" boot: a factorial through the device's
+  interrupt, ISR and DPC, DMA three ways within the device's 28 bits, a
+  removal vetoed while a program has it open, disable, enable and a start
+  at boot.  NovaOS has no PCI hot-unplug yet, so surprise removal is
+  handled but not tested.
+
+## Windows storage drivers on NovaOS's Storport host
+
+Step 30.11 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): a real Windows
+storage driver, virtio-win's signed `viostor.sys`, drives QEMU's
+virtio-blk card, and NovaOS mounts the volume on its disk.
+
+- **NovaOS's own Storport host** (`kernel/nt/storport.c`,
+  `kernel/nt/storport.h`): the `storport.sys` exports a Storport miniport
+  links against (Microsoft's `storport.sys` is never shipped).
+  `StorPortInitialize` makes Storport the driver's `AddDevice` and
+  dispatch, as on Windows; the adapter starts with `HwFindAdapter` on a
+  `PORT_CONFIGURATION_INFORMATION` filled from the controller's
+  translated resources (its access ranges, mapped with
+  `StorPortGetDeviceBase`), `HwInitialize` under the interrupt lock and
+  the miniport's passive initialization routine.  Requests are
+  `STORAGE_REQUEST_BLOCK`s with a 16-byte CDB, sent through `HwBuildIo`
+  and `HwStartIo` with a scatter/gather list; the miniport's line-based
+  interrupt, its DPCs (`StorPortNotification` codes for DPCs, spin locks
+  and request completion) and `StorPortGetUncachedExtension`,
+  `StorPortGetPhysicalAddress` and `StorPortGetBusData` work as on
+  Windows.  One request at a time, through a 64 KiB bounce buffer.
+- **The block layer's disk**: the host asks the adapter's LUN 0 for its
+  INQUIRY and READ CAPACITY and hands the disk to the block layer as
+  `stor0` (reads and writes become READ/WRITE(10), or (16) past 2 TiB),
+  so its volumes mount as drive letters like any disk's.
+- **The PnP manager** answers a PDO's PCI configuration space and device
+  instance for the host (`NtPnpConfig`, `NtPnpInstanceOf`).
+- **The import check** (`tools/ci/check-driver-imports.py`) covers
+  `storport.sys` imports, with `viostor.sys`'s list as a fixture.
+- **The devices suite's "viostor" boot** has a second disk on a virtio-blk
+  card with an NTFS volume labelled VIOSTOR, installs the package
+  (`tools/drivertest/viostor.py` takes it from virtio-win 0.1.302's guest
+  tools installer) with `pnputil`, reads a known file from D:, writes a
+  new one, and after a restart finds viostor started at boot and both
+  files there.
+
+## Windows USB client drivers: FTDI's serial driver as COM3
+
+Step 30.8 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): a vendor's
+Windows driver runs a USB device, through a USB host interface NovaOS
+writes itself (Microsoft's `usbhub3.sys` and `usbccgp.sys` are never
+shipped).
+
+- **The USB bus interface** (`kernel/nt/usbd.c`): a USB device no NovaOS
+  driver takes gets a physical device object that answers as Windows' hub
+  driver does: the URBs of `IOCTL_INTERNAL_USB_SUBMIT_URB` (select
+  configuration and interface, control, bulk and interrupt transfers,
+  abort and reset pipe, frame number), the port requests, selective
+  suspend (held until cancelled), `USB_BUS_INTERFACE_USBDI` versions 0-3
+  and `usbd.sys`'s exports.  Transfers run in order on a thread per pipe
+  over NovaOS's USB core; a bulk read waits for data a millisecond at a
+  time, and on xHCI a timed-out transfer is stopped and its ring moved on.
+- **Bus drivers' children** (`kernel/nt/pnp.c`): a started device is asked
+  for its children (`IRP_MN_QUERY_DEVICE_RELATIONS`); each becomes a node
+  named by its IDs and starts once a driver is installed on it.
+  `IoInvalidateDeviceRelations` asks again; unplugging sends
+  `IRP_MN_SURPRISE_REMOVAL`.  `IoOpenDeviceRegistryKey` opens the device's
+  `Device Parameters` and driver keys.
+- **The rest of the kernel API FTDI's drivers import**: the power
+  framework (`PoFx*`, `kernel/nt/po.c`), security descriptors and
+  `SeExports` (`kernel/nt/se.c`), `ZwEnumerateKey`, `ZwEnumerateValueKey`,
+  `ZwQueryKey`, a real `RtlQueryRegistryValues`, `RtlWriteRegistryValue`,
+  WMILIB, `KeWaitForMultipleObjects`, mutexes and string routines;
+  `tools/ci/check-driver-imports.py` now checks `ftdibus.sys` and
+  `ftser2k.sys` too.
+- **COM ports**: setupapi names a Ports-class device `COMn` (first free
+  from COM3, the `ComDB` arbiter) when its driver is installed;
+  kernel32 opens `COM3` as the driver's `\DosDevices\COM3` and its
+  communications functions (`comm.c`) send the `IOCTL_SERIAL_*` requests.
+- **`pnputil /scan-devices /search-online /install`** installs what it
+  finds and searches again for the devices the new drivers bring.
+- **Fixed on the way**: setupapi copied none of a `CopyFiles` section's
+  plain file lines (no `=`) and now takes each file from the store
+  subfolder its `SourceDisksFiles` line names; kernel `Zw*` and
+  `RtlQueryRegistryValues` paths starting `\Registry\` never matched the
+  prefix (a case fold turned its `\` into `|`); `KUSER_SHARED_DATA` is
+  also mapped at its kernel address, where drivers' inline
+  `KeQuerySystemTime` reads it; `ExFreePoolWithTag(p, 0)` is not checked,
+  as on Windows; a device's class and friendly name are read again when
+  its driver starts.
+
+The new `usbserial` devices boot puts QEMU's `usb-serial` (an FTDI FT232)
+on xHCI with its line looped back: pnputil downloads FTDI's
+Microsoft-signed package by hardware ID (recorded Catalog pages, the real
+cabinet), `ftdibus.sys` starts and reports the COM port, `ftser2k.sys`
+makes it COM3, and `serialtest COM3` loops 4 KiB through it at 115200 8N1.
 
 ## The stack probe and half-float helpers in 32-bit ntdll
 

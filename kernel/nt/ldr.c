@@ -21,6 +21,18 @@
  * (devices, links) and unmaps the image; with files still open on its
  * devices that waits until the last one closes, as on Windows.
  *
+ * An import from a module other than the kernel's own (ntoskrnl.exe,
+ * hal.dll, usbd.sys, wmilib.sys and storport.sys: NtExportModule) is an
+ * export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
+ * already loaded, or System32\drivers\<module> loaded for it: mapped the
+ * same way (signature checked, its own imports bound), no driver object
+ * and no DriverEntry, its DllInitialize called with its service key.
+ * NovaOS keeps an export driver loaded once it is (Windows unloads one
+ * when its last importer goes, calling DllUnload; the ones in use, the
+ * KMDF loader, are never unloaded there either).  A DriverEntry may load
+ * another driver (ZwLoadDriver: WdfLdr.sys loads Wdf01000.sys from the
+ * KMDF driver's DriverEntry), so loads nest.
+ *
  * Loads and unloads run under the big kernel lock.
  */
 #include "nt.h"
@@ -55,7 +67,9 @@ static NtDriver *g_drivers;
 static bool      g_slot_used[DRV_SLOTS];
 static bool      g_ready;
 static bool      g_test_signing;
-static NtDriver *g_loading;           /* the driver whose DriverEntry runs */
+#define LOAD_DEPTH 4
+static NtDriver *g_loading[LOAD_DEPTH];   /* the drivers whose DriverEntry or DllInitialize runs, outermost first */
+static int       g_nloading;
 
 /* The signing policy is Windows' (ci.c): a driver loads only with a
  * Microsoft driver signature, or with any intact signature when test
@@ -116,15 +130,36 @@ void NtDrvInit(void)
     NtIoWorkerInit();
 }
 
+static bool same_ci(const char *a, const char *b)
+{
+    while (*a && *b && ((*a | 0x20) == (*b | 0x20) || *a == *b)) { a++; b++; }
+    return !*a && !*b;
+}
+
 static NtDriver *find(const char *service)
 {
-    for (NtDriver *d = g_drivers; d; d = d->next) {
-        const char *a = d->service, *b = service;
-        while (*a && *b && ((*a | 0x20) == (*b | 0x20) || *a == *b)) { a++; b++; }
-        if (!*a && !*b) return d;
-    }
+    for (NtDriver *d = g_drivers; d; d = d->next)
+        if (same_ci(d->service, service)) return d;
     return NULL;
 }
+
+NtDriver *NtDrvFind(const char *service) { return find(service); }
+static NtDriver *find_image(const char *image)
+{
+    for (NtDriver *d = g_drivers; d; d = d->next)
+        if (same_ci(d->image, image)) return d;
+    return NULL;
+}
+
+static bool loading_push(NtDriver *drv)
+{
+    if (g_nloading == LOAD_DEPTH) return false;
+    g_loading[g_nloading++] = drv;
+    return true;
+}
+
+static void loading_pop(void) { g_loading[--g_nloading] = NULL; }
+
 
 static NT_WCHAR *wide(const char *s, NT_UNICODE_STRING *u)
 {
@@ -208,6 +243,31 @@ static bool relocate(UINT8 *img, UINT32 size, UINT32 rva, UINT32 len, INT64 delt
     return true;
 }
 
+/* The export @name (or ordinal @ord when @name is NULL) of the image
+ * mapped at @base, or 0 (a forwarded export is not followed: none of the
+ * export drivers NovaOS loads has one) */
+static UINT64 image_export(UINT64 base, UINT32 size, const char *name, UINT32 ord)
+{
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)(uintptr_t)base;
+    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(uintptr_t)(base + dos->e_lfanew);
+    const IMAGE_DATA_DIRECTORY *d = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!d->VirtualAddress || d->Size < sizeof(IMAGE_EXPORT_DIRECTORY) || (UINT64)d->VirtualAddress + d->Size > size) return 0;
+    const IMAGE_EXPORT_DIRECTORY *e = (const IMAGE_EXPORT_DIRECTORY *)(uintptr_t)(base + d->VirtualAddress);
+    const UINT32 *fns = (const UINT32 *)(uintptr_t)(base + e->AddressOfFunctions);
+    const UINT32 *names = (const UINT32 *)(uintptr_t)(base + e->AddressOfNames);
+    const UINT16 *ords = (const UINT16 *)(uintptr_t)(base + e->AddressOfNameOrdinals);
+    UINT32 index = (UINT32)-1;
+    if (!name) index = ord - e->Base;
+    else
+        for (UINT32 i = 0; i < e->NumberOfNames; i++)
+            if (names[i] < size && !strcmp((const char *)(uintptr_t)(base + names[i]), name)) { index = ords[i]; break; }
+    if (index >= e->NumberOfFunctions || !fns[index] || fns[index] >= size) return 0;
+    if (fns[index] - d->VirtualAddress < d->Size) return 0;             /* (forwarded) */
+    return base + fns[index];
+}
+
+static NtDriver *load_export_driver(const char *image);
+
 /* Bind the imports: false (each missing one logged) when any is missing */
 static bool bind_imports(const char *image, UINT8 *img, UINT32 size, UINT32 rva, UINT32 len)
 {
@@ -218,6 +278,16 @@ static bool bind_imports(const char *image, UINT8 *img, UINT32 size, UINT32 rva,
         if (!d->Name && !d->FirstThunk) break;
         if (d->Name >= size || d->FirstThunk >= size) return false;
         const char *mod = (const char *)(img + d->Name);
+        NtDriver *exp = NULL;                     /* (an export driver's import) */
+        if (!NtExportModule(mod)) {
+            exp = find_image(mod);
+            if (!exp) exp = load_export_driver(mod);
+            if (!exp) {
+                kprintf("[NT] %s: imports from %s, which did not load\n", image, mod);
+                ok = false;
+                continue;
+            }
+        }
         UINT32 lookup = d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk;
         for (UINT32 i = 0;; i++) {
             if ((UINT64)lookup + 8 * (i + 1) > size || (UINT64)d->FirstThunk + 8 * (i + 1) > size) return false;
@@ -228,7 +298,8 @@ static bool bind_imports(const char *image, UINT8 *img, UINT32 size, UINT32 rva,
             if (t >> 63) ksnprintf(name, sizeof(name), "#%u", (UINT32)(t & 0xFFFF));
             else if ((t & 0x7FFFFFFF) + 2 < size) ksnprintf(name, sizeof(name), "%s", (const char *)(img + (t & 0x7FFFFFFF) + 2));
             else return false;
-            if (!(t >> 63)) fn = NtExport(mod, name);
+            if (exp) fn = image_export(exp->base, exp->size, t >> 63 ? NULL : name, (UINT32)(t & 0xFFFF));
+            else if (!(t >> 63)) fn = NtExport(mod, name);
             if (!fn) {
                 kprintf("[NT] %s: %s!%s not implemented\n", image, mod, name);
                 ok = false;
@@ -254,28 +325,31 @@ static void set_cookie(UINT8 *img, UINT32 size, UINT32 rva, UINT32 len, UINT64 b
     *(UINT64 *)(img + at) = c;
 }
 
-NTSTATUS NtDrvLoad(const char *service)
+/* A mapped image */
+typedef struct {
+    UINT64 base;
+    UINT32 size, pages;
+    int    slot, nslots;
+    UINT32 entry;                                  /* AddressOfEntryPoint */
+} Mapped;
+
+/* Map driver file @path (@image its file name) into the driver window:
+ * signature checked, laid out, relocated, imports bound (which may load an
+ * export driver), each section mapped with its protection */
+static NTSTATUS map_image(const char *path, const char *image, Mapped *m)
 {
-    if (!g_ready) return STATUS_INSUFFICIENT_RESOURCES;
-    if (find(service)) return ST_IMAGE_ALREADY_LOADED;
-
-    char path[260];
-    image_path(service, path, sizeof(path));
-    const char *image = path;
-    for (const char *c = path; *c; c++) if (*c == '\\') image = c + 1;
-
     FsLock();
     RamNode *f = RamfsResolve(NULL, path);
     if (f && !f->dir) RamfsPin(f);
     FsUnlock();
     if (!f || f->dir) {
-        kprintf("[NT] %s: no driver file %s\n", service, path);
+        kprintf("[NT] %s: no driver file %s\n", image, path);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
-    NTSTATUS st = STATUS_INVALID_IMAGE_FORMAT;
+    NTSTATUS st;
     UINT8 *img = NULL;
-    NtDriver *drv = NULL;
+    int nslots = 0, slot = -1;
     CiResult signer;
     st = CiValidateImage(image, (const UINT8 *)f->data, f->data ? f->size : 0, g_test_signing, &signer);
     if (!NT_SUCCESS(st)) goto out;
@@ -311,20 +385,21 @@ NTSTATUS NtDrvLoad(const char *service)
     }
 
     /* Its place in the driver window */
-    int nslots = (int)((size + DRV_SLOT - 1) / DRV_SLOT), slot = slots_take(nslots);
+    nslots = (int)((size + DRV_SLOT - 1) / DRV_SLOT);
+    slot = slots_take(nslots);
     if (slot < 0) { st = STATUS_INSUFFICIENT_RESOURCES; goto out; }
     UINT64 base = DRV_BASE + (UINT64)slot * DRV_SLOT;
     const IMAGE_DATA_DIRECTORY *dir = opt->DataDirectory;
     if (base != opt->ImageBase && (nt->FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED)) {
         kprintf("[NT] %s: has no relocations\n", image);
-        goto free_slots;
+        goto out;
     }
     if (!relocate(img, size, dir[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress, dir[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size,
                   (INT64)(base - opt->ImageBase)))
-        goto free_slots;
+        goto out;
     if (!bind_imports(image, img, size, dir[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress, dir[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)) {
         st = ST_PROCEDURE_NOT_FOUND;
-        goto free_slots;
+        goto out;
     }
     set_cookie(img, size, dir[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress, dir[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size,
                base, opt->ImageBase);
@@ -338,83 +413,160 @@ NTSTATUS NtDrvLoad(const char *service)
             if (rva + PAGE_SIZE > sec[i].VirtualAddress && rva < sec[i].VirtualAddress + vs) ch |= sec[i].Characteristics;
         }
         uintptr_t pa = pmm_alloc_page();
-        if (!pa) { unmap_image(base, p); st = STATUS_INSUFFICIENT_RESOURCES; goto free_slots; }
+        if (!pa) { unmap_image(base, p); st = STATUS_INSUFFICIENT_RESOURCES; goto out; }
         memcpy((void *)(uintptr_t)(PHYSMAP_BASE + pa), img + rva, PAGE_SIZE);
         MapFlags mf = (ch & IMAGE_SCN_MEM_WRITE ? MAP_WRITABLE : 0) | (ch & IMAGE_SCN_MEM_EXECUTE ? 0 : MAP_NO_EXEC);
         if (!NT_SUCCESS(paging_map(base + rva, pa, PAGE_SIZE, mf))) {
             pmm_free_page(pa);
             unmap_image(base, p);
             st = STATUS_INSUFFICIENT_RESOURCES;
-            goto free_slots;
+            goto out;
         }
     }
+    m->base = base;
+    m->size = size;
+    m->pages = pages;
+    m->slot = slot;
+    m->nslots = nslots;
+    m->entry = opt->AddressOfEntryPoint;
+    slot = -1;
+    st = STATUS_SUCCESS;
+out:
+    if (slot >= 0)
+        for (int k = 0; k < nslots; k++) g_slot_used[slot + k] = false;
     kfree(img);
-    img = NULL;
+    FsLock();
+    RamfsUnpin(f);
+    FsUnlock();
+    return st;
+}
 
-    /* The driver object, as the I/O manager gives it to DriverEntry */
-    drv = kzalloc(sizeof(*drv));
-    NT_DRIVER_OBJECT *obj = kzalloc(sizeof(*obj));
-    char name[96];
+static void unmap(const Mapped *m)
+{
+    unmap_image(m->base, m->pages);
+    for (int k = 0; k < m->nslots; k++) g_slot_used[m->slot + k] = false;
+}
+
+static NtDriver *new_driver(const char *service, const char *image, const char *path, const Mapped *m)
+{
+    NtDriver *drv = kzalloc(sizeof(*drv));
+    char name[128];
     ksnprintf(name, sizeof(name), "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\%s", service);
-    if (!drv || !obj || !wide(name, &drv->reg_path) || !wide(service, &drv->ext.ServiceKeyName)) {
-        unmap_image(base, pages);
-        st = STATUS_INSUFFICIENT_RESOURCES;
-        goto free_drv;
-    }
-    ksnprintf(name, sizeof(name), "\\Driver\\%s", service);
-    if (!wide(name, &obj->DriverName)) {
-        unmap_image(base, pages);
-        st = STATUS_INSUFFICIENT_RESOURCES;
-        goto free_drv;
+    if (!drv || !wide(name, &drv->reg_path) || !wide(service, &drv->ext.ServiceKeyName)) {
+        if (drv) { kfree(drv->reg_path.Buffer); kfree(drv); }
+        return NULL;
     }
     strncpy(drv->service, service, sizeof(drv->service) - 1);
     strncpy(drv->image, image, sizeof(drv->image) - 1);
     strncpy(drv->path, path, sizeof(drv->path) - 1);
-    drv->base = base;
-    drv->size = size;
-    drv->slot = slot;
-    drv->slots = nslots;
-    drv->obj = obj;
+    drv->base = m->base;
+    drv->size = m->size;
+    drv->slot = m->slot;
+    drv->slots = m->nslots;
+    return drv;
+}
+
+static void free_driver(NtDriver *drv)
+{
+    if (drv->obj) kfree(drv->obj->DriverName.Buffer);
+    kfree(drv->obj);
+    kfree(drv->reg_path.Buffer);
+    kfree(drv->ext.ServiceKeyName.Buffer);
+    kfree(drv);
+}
+
+/* An export driver an image imports from (@image: "WDFLDR.SYS"), loaded
+ * from System32\drivers for it; NULL when it cannot be */
+typedef NTSTATUS (NT_API *DllInitializeFn)(NT_UNICODE_STRING *registry_path);
+
+static NtDriver *load_export_driver(const char *image)
+{
+    char path[260], service[64];
+    ksnprintf(path, sizeof(path), "C:\\Windows\\System32\\drivers\\%s", image);
+    ksnprintf(service, sizeof(service), "%s", image);
+    char *dot = NULL;
+    for (char *c = service; *c; c++) if (*c == '.') dot = c;
+    if (dot) *dot = 0;
+    Mapped m;
+    NTSTATUS st = map_image(path, image, &m);
+    if (!NT_SUCCESS(st)) return NULL;
+    NtDriver *drv = new_driver(service, image, path, &m);
+    if (!drv) { unmap(&m); return NULL; }
+    drv->dll = true;
+    DllInitializeFn init = (DllInitializeFn)(uintptr_t)image_export(m.base, m.size, "DllInitialize", 0);
+    if (init) {
+        if (!loading_push(drv)) { free_driver(drv); unmap(&m); return NULL; }
+        st = init(&drv->reg_path);
+        loading_pop();
+    }
+    kprintf("[NT] %s loaded at 0x%llx as an export driver: DllInitialize %s 0x%08x\n", image,
+            (unsigned long long)m.base, init ? "returned" : "absent,", (UINT32)(init ? st : 0));
+    if (!NT_SUCCESS(st)) {
+        NtPoolDriverGone(drv);
+        unmap(&m);
+        free_driver(drv);
+        return NULL;
+    }
+    drv->started = true;
+    drv->next = g_drivers;
+    g_drivers = drv;
+    return drv;
+}
+
+NTSTATUS NtDrvLoad(const char *service)
+{
+    if (!g_ready) return STATUS_INSUFFICIENT_RESOURCES;
+    if (find(service)) return ST_IMAGE_ALREADY_LOADED;
+    if (g_nloading == LOAD_DEPTH) return STATUS_INSUFFICIENT_RESOURCES;
+
+    char path[260];
+    image_path(service, path, sizeof(path));
+    const char *image = path;
+    for (const char *c = path; *c; c++) if (*c == '\\') image = c + 1;
+    if (find_image(image)) return ST_IMAGE_ALREADY_LOADED;      /* (loaded as an export driver) */
+
+    Mapped m;
+    NTSTATUS st = map_image(path, image, &m);
+    if (!NT_SUCCESS(st)) return st;
+
+    /* The driver object, as the I/O manager gives it to DriverEntry */
+    NtDriver *drv = new_driver(service, image, path, &m);
+    NT_DRIVER_OBJECT *obj = drv ? kzalloc(sizeof(*obj)) : NULL;
+    char name[96];
+    ksnprintf(name, sizeof(name), "\\Driver\\%s", service);
+    if (obj) drv->obj = obj;
+    if (!obj || !wide(name, &obj->DriverName)) {
+        if (drv) free_driver(drv);
+        unmap(&m);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     obj->Type = 4;
     obj->Size = (short)sizeof(*obj);
-    obj->DriverStart = (void *)(uintptr_t)base;
-    obj->DriverSize = size;
+    obj->DriverStart = (void *)(uintptr_t)m.base;
+    obj->DriverSize = m.size;
     obj->DriverSection = drv;
     obj->DriverExtension = &drv->ext;
-    obj->DriverInit = (NT_DRIVER_INITIALIZE)(uintptr_t)(base + opt->AddressOfEntryPoint);
+    obj->DriverInit = (NT_DRIVER_INITIALIZE)(uintptr_t)(m.base + m.entry);
     drv->ext.DriverObject = obj;
     NtIoAddDriver(drv);                            /* (fills MajorFunction with the default) */
 
-    g_loading = drv;
+    loading_push(drv);
     st = obj->DriverInit(obj, &drv->reg_path);
-    g_loading = NULL;
-    kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image, (unsigned long long)base,
+    loading_pop();
+    kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image, (unsigned long long)m.base,
             service, (UINT32)st);
     if (!NT_SUCCESS(st)) {
         NtIoDropDevices(drv);
         NtIoRemoveDriver(drv);
         NtPoolDriverGone(drv);
-        unmap_image(base, pages);
-        goto free_drv;
+        unmap(&m);
+        free_driver(drv);
+        return st;
     }
     for (NT_DEVICE_OBJECT *d = obj->DeviceObject; d; d = d->NextDevice) d->Flags &= ~NT_DO_DEVICE_INITIALIZING;
     drv->started = true;
     drv->next = g_drivers;
     g_drivers = drv;
-    drv = NULL;
-    goto out;
-
-free_drv:
-    if (obj) kfree(obj->DriverName.Buffer);
-    kfree(obj);
-    if (drv) { kfree(drv->reg_path.Buffer); kfree(drv->ext.ServiceKeyName.Buffer); kfree(drv); }
-free_slots:
-    for (int k = 0; k < nslots; k++) g_slot_used[slot + k] = false;
-out:
-    kfree(img);
-    FsLock();
-    RamfsUnpin(f);
-    FsUnlock();
     return st;
 }
 
@@ -430,18 +582,14 @@ static void unload(NtDriver *drv)
     unmap_image(drv->base, drv->size / PAGE_SIZE);
     for (int k = 0; k < drv->slots; k++) g_slot_used[drv->slot + k] = false;
     kprintf("[NT] %s unloaded (service %s)\n", drv->image, drv->service);
-    kfree(drv->obj->DriverName.Buffer);
-    kfree(drv->obj);
-    kfree(drv->reg_path.Buffer);
-    kfree(drv->ext.ServiceKeyName.Buffer);
-    kfree(drv);
+    free_driver(drv);
 }
 
 NTSTATUS NtDrvUnload(const char *service)
 {
     NtDriver *drv = find(service);
     if (!drv || drv->unload_pending) return STATUS_OBJECT_NAME_NOT_FOUND;
-    if (!drv->obj->DriverUnload) return ST_DRIVER_UNLOAD_FAILED;
+    if (drv->dll || !drv->obj->DriverUnload) return ST_DRIVER_UNLOAD_FAILED;
     if (drv->opens) {
         drv->unload_pending = true;
         kprintf("[NT] %s: unloads when its %d open file%s close\n", drv->image, drv->opens, drv->opens == 1 ? "" : "s");
@@ -467,11 +615,23 @@ int NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max)
     return n;
 }
 
+/* For backtraces (kernel/ke/ksym.c): the image's file name and the offset
+ * in it, or NULL */
+const char *NtDrvNameOf(UINT64 addr, UINT64 *offset)
+{
+    NtDriver *d = NtDrvByAddress(addr);
+    if (!d) return NULL;
+    *offset = addr - d->base;
+    return d->image;
+}
+
 NtDriver *NtDrvByAddress(UINT64 addr)
 {
     if (addr < DRV_BASE || addr >= DRV_BASE + DRV_SIZE) return NULL;
     for (NtDriver *d = g_drivers; d; d = d->next)
         if (addr - d->base < d->size) return d;
-    /* (DriverEntry is running: not on the list yet) */
-    return g_loading && addr - g_loading->base < g_loading->size ? g_loading : NULL;
+    /* (DriverEntry or DllInitialize is running: not on the list yet) */
+    for (int i = 0; i < g_nloading; i++)
+        if (addr - g_loading[i]->base < g_loading[i]->size) return g_loading[i];
+    return NULL;
 }

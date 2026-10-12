@@ -18,6 +18,7 @@
 #include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
+#include "../net/tls.h"
 
 /* ExAllocatePool2's POOL_FLAGS */
 #define POOL_FLAG_UNINITIALIZED   0x0002ull
@@ -85,7 +86,9 @@ static void pool_free(void *p, UINT32 tag, bool check_tag, void *caller)
         kprintf("[NT] BAD_POOL_CALLER (0xC2): %p freed from %p is not a pool block (freed twice?)\n", p, caller);
         return;
     }
-    if (check_tag && (tag & 0x7FFFFFFF) != (b->tag & 0x7FFFFFFF)) {   /* (bit 31: PROTECTED_POOL) */
+    /* (bit 31: PROTECTED_POOL; tag 0 is ExFreePool's, unchecked, as
+     * FTDI's ftser2k.sys frees with on Windows) */
+    if (check_tag && tag && (tag & 0x7FFFFFFF) != (b->tag & 0x7FFFFFFF)) {
         char want[5], got[5];
         tag_str(b->tag, want);
         tag_str(tag, got);
@@ -213,8 +216,10 @@ static void lookaside_init(NT_LOOKASIDE_LIST *l, void *allocate, void *free, UIN
     l->MaximumDepth = 256;
     l->Size = (UINT32)size;
     l->Tag = tag ? tag : 0x6B414C6Cu;                /* 'lLAk' */
-    l->Allocate = allocate;
-    l->Free = free;
+    /* as on Windows, no routine means the pool's own: the WDK's inline
+     * ExAllocateFromNPagedLookasideList calls Allocate without a check */
+    l->Allocate = allocate ? allocate : (void *)nt_ExAllocatePoolWithTag;
+    l->Free = free ? free : (void *)nt_ExFreePool;
 }
 
 NT_API void nt_ExInitializeNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *allocate, void *free,
@@ -237,8 +242,7 @@ static void lookaside_drain(NT_LOOKASIDE_LIST *l)
 {
     NT_SLIST_ENTRY *e;
     while ((e = nt_ExpInterlockedPopEntrySList(&l->ListHead))) {
-        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(e);
-        else nt_ExFreePoolWithTag(e, l->Tag);
+        ((NT_FREE_FUNCTION)l->Free)(e);
     }
 }
 
@@ -247,17 +251,20 @@ NT_API void nt_ExDeletePagedLookasideList(NT_LOOKASIDE_LIST *l) { lookaside_drai
 
 NT_API void *nt_ExAllocateFromNPagedLookasideList(NT_LOOKASIDE_LIST *l)
 {
+    l->TotalAllocates++;
     NT_SLIST_ENTRY *e = nt_ExpInterlockedPopEntrySList(&l->ListHead);
     if (e) return e;
-    if (l->Allocate) return ((NT_ALLOCATE_FUNCTION)l->Allocate)(l->Type, l->Size, l->Tag);
-    return nt_ExAllocatePoolWithTag(l->Type, l->Size, l->Tag);
+    l->AllocateMisses++;
+    return ((NT_ALLOCATE_FUNCTION)l->Allocate)(l->Type, l->Size, l->Tag);
 }
 NT_API void *nt_ExAllocateFromPagedLookasideList(NT_LOOKASIDE_LIST *l) { return nt_ExAllocateFromNPagedLookasideList(l); }
 
 NT_API void nt_ExFreeToNPagedLookasideList(NT_LOOKASIDE_LIST *l, void *p)
 {
-    if (l->ListHead.Depth >= l->MaximumDepth) {
-        if (l->Free) ((NT_FREE_FUNCTION)l->Free)(p); else nt_ExFreePoolWithTag(p, l->Tag);
+    l->TotalFrees++;
+    if (l->ListHead.Depth >= l->Depth) {
+        l->FreeMisses++;
+        ((NT_FREE_FUNCTION)l->Free)(p);
         return;
     }
     nt_ExpInterlockedPushEntrySList(&l->ListHead, (NT_SLIST_ENTRY *)p);
@@ -370,3 +377,17 @@ NT_API void nt_ExNotifyCallback(void *callback, void *a1, void *a2)
     if (!c || c->magic != CALLBACK_MAGIC) return;
     for (int i = 0; i < c->count; i++) c->fn[i](c->ctx[i], a1, a2);
 }
+
+/* -----------------------------------------------------------------------
+ * UUIDs: random ones (version 4, RFC 4122 variant) from the kernel's
+ * entropy pool
+ * ----------------------------------------------------------------------- */
+NTSTATUS NtExUuid(UINT8 out[16])
+{
+    TlsEntropyOutput(out, 16);
+    out[7] = (UINT8)((out[7] & 0x0F) | 0x40);        /* (GUID's Data3 is little-endian: its top nibble is in byte 7) */
+    out[8] = (UINT8)((out[8] & 0x3F) | 0x80);
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_ExUuidCreate(UINT8 *uuid) { return uuid ? NtExUuid(uuid) : NT_STATUS_INVALID_PARAMETER; }

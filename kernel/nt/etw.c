@@ -10,6 +10,7 @@
  * does reach the NovaOS console.
  */
 #include "nt.h"
+#include "../lib/string.h"
 
 typedef UINT64 NT_REGHANDLE;
 
@@ -50,4 +51,61 @@ NT_API NTSTATUS nt_WmiTraceMessage(UINT64 logger, UINT32 flags, void *guid, UINT
 {
     (void)logger; (void)flags; (void)guid; (void)num;
     return NT_STATUS_SUCCESS;
+}
+
+/* -----------------------------------------------------------------------
+ * wmilib.sys: the WMI library a WDM driver hands its IRP_MJ_SYSTEM_CONTROL
+ * requests to.  Nothing on NovaOS sends WMI requests yet (no WMI service;
+ * IoWMIRegistrationControl registers nothing), so a request that does
+ * reach a driver is not one of its registered blocks: WmiSystemControl
+ * says to pass it down its stack, as Windows does for another provider's.
+ * ----------------------------------------------------------------------- */
+enum { IrpProcessed, IrpNotCompleted, IrpNotWmi, IrpForward };
+
+NT_API NTSTATUS nt_WmiSystemControl(void *wmi_context, NT_DEVICE_OBJECT *dev, NT_IRP *irp, int *disposition)
+{
+    (void)wmi_context; (void)dev;
+    if (disposition) *disposition = IrpForward;
+    return irp ? irp->IoStatus.Status : NT_STATUS_SUCCESS;
+}
+
+NT_API void nt_IofCompleteRequest(NT_IRP *irp, char boost);
+
+NT_API NTSTATUS nt_WmiCompleteRequest(NT_DEVICE_OBJECT *dev, NT_IRP *irp, NTSTATUS status, UINT32 used, char boost)
+{
+    (void)dev;
+    irp->IoStatus.Status = status;
+    irp->IoStatus.Information = used;
+    nt_IofCompleteRequest(irp, boost);
+    return status;
+}
+
+/* WmiTraceMessageVa: the va_list form, dropped the same way */
+NT_API NTSTATUS nt_WmiTraceMessageVa(UINT64 logger, UINT32 flags, void *guid, UINT16 num, __builtin_ms_va_list ap)
+{
+    (void)logger; (void)flags; (void)guid; (void)num; (void)ap;
+    return NT_STATUS_SUCCESS;
+}
+
+/* WmiQueryTraceInformation: no trace session to describe (KMDF then
+ * uses its own no-op performance-trace routines) */
+NT_API NTSTATUS nt_WmiQueryTraceInformation(int cls, void *info, UINT32 len, UINT32 *ret_len, void *buffer)
+{
+    (void)cls; (void)info; (void)len; (void)buffer;
+    if (ret_len) *ret_len = 0;
+    return NT_STATUS_NOT_SUPPORTED;
+}
+
+/* EtwActivityIdControl: no thread carries an activity ID (GET and
+ * GET_SET give the zero GUID); CREATE gives a new random one */
+NT_API NTSTATUS nt_EtwActivityIdControl(UINT32 code, UINT8 *guid)
+{
+    enum { GET_ID = 1, SET_ID, CREATE_ID, GET_SET_ID, CREATE_SET_ID };
+    if (!guid) return NT_STATUS_INVALID_PARAMETER;
+    switch (code) {
+    case GET_ID: case GET_SET_ID: memset(guid, 0, 16); return NT_STATUS_SUCCESS;
+    case SET_ID: return NT_STATUS_SUCCESS;
+    case CREATE_ID: case CREATE_SET_ID: return NtExUuid(guid);
+    default: return NT_STATUS_INVALID_PARAMETER;
+    }
 }

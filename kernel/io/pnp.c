@@ -89,7 +89,7 @@ static void remove_locked(UINT32 id, int depth)
         if (g_node[i] && g_node[i]->parent == id && (g_node[i]->flags & PNP_PRESENT)) remove_locked(i, depth + 1);
     PnpNode *n = g_node[id];
     if (!(n->flags & PNP_PRESENT)) return;
-    n->flags &= ~(UINT32)(PNP_PRESENT | PNP_STARTED);
+    n->flags &= ~(UINT32)(PNP_PRESENT | PNP_STARTED | PNP_WINDOWS);
     n->problem = 0;
     event_locked(PNP_REMOVAL, n);
 }
@@ -107,14 +107,46 @@ void PnpRemove(UINT32 id)
     if (g_seq != after) UmGuiDevicesChanged(after);
 }
 
-void PnpSetDriver(UINT32 id, const char *service)
+static void set_driver(UINT32 id, const char *service, UINT32 flags)
 {
     IrqState s = spin_lock_irqsave(&g_lock);
     if (id && id <= g_count && g_node[id]) {
         PnpNode *n = g_node[id];
         copy_str(n->service, sizeof(n->service), service);
-        n->flags |= PNP_STARTED;
+        n->flags = (n->flags & ~(UINT32)PNP_WINDOWS) | PNP_STARTED | flags;
         n->problem = 0;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+void PnpSetDriver(UINT32 id, const char *service)
+{
+    set_driver(id, service, 0);
+}
+
+void PnpSetWindowsDriver(UINT32 id, const char *service)
+{
+    set_driver(id, service, PNP_WINDOWS);
+}
+
+void PnpSetNames(UINT32 id, const char *cls, const char *friendly)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (id && id <= g_count && g_node[id]) {
+        PnpNode *n = g_node[id];
+        if (cls && cls[0]) copy_str(n->cls, sizeof(n->cls), cls);
+        if (friendly && friendly[0]) copy_str(n->friendly, sizeof(n->friendly), friendly);
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+void PnpSetProblem(UINT32 id, UINT32 problem)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (id && id <= g_count && g_node[id]) {
+        g_node[id]->flags &= ~(UINT32)(PNP_STARTED | PNP_WINDOWS);
+        g_node[id]->problem = problem;
+        g_node[id]->service[0] = 0;
     }
     spin_unlock_irqrestore(&g_lock, s);
 }

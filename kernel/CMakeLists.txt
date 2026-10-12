@@ -124,6 +124,7 @@ set(KERNEL_C_SOURCES
     arch/x86_64/idt.c
     arch/x86_64/apic.c
     arch/x86_64/paging.c
+    arch/x86_64/xstate.c
     mm/pmm.c
     mm/vmm.c
     hal/serial.c
@@ -216,16 +217,24 @@ set(KERNEL_C_SOURCES
     io/io.c
     nt/ci.c
     nt/ci_roots.c
+    nt/dma.c
     nt/etw.c
     nt/ex.c
     nt/exports.c
+    nt/intr.c
     nt/io.c
     nt/ke.c
     nt/ldr.c
     nt/mm.c
     nt/ntoskrnl.c
+    nt/pnp.c
+    nt/po.c
     nt/ps.c
+    nt/se.c
     nt/seh.c
+    nt/storport.c
+    nt/usbd.c
+    nt/win10.c
     nt/zw.c
     io/pnp.c
     mm/vma.c
@@ -315,6 +324,7 @@ file(GLOB_RECURSE USERLAND_DEPS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*/build.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tools/drivertest/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/netsurf/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/netsurf/*.h")
 set(USERLAND_C "${CMAKE_CURRENT_BINARY_DIR}/userland_files.c")

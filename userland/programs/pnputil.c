@@ -7,26 +7,35 @@
  *                          the devices they match)
  *   pnputil /delete-driver <oemN.inf> [/uninstall] [/force]
  *   pnputil /enum-drivers  the published packages
+ *   pnputil /disable-device | /enable-device | /restart-device <instance ID | /deviceid <ID>>
+ *                          take a device's Windows driver away (query-remove,
+ *                          remove; it stays disabled across boots), start it
+ *                          again, or both
  *   pnputil /enum-devices [/connected | /disconnected] [/class <name | GUID>]
  *                         [/instanceid <id>] [/deviceid <id>] [/ids] [/drivers]
  *                          the devices of the Plug and Play tree (cfgmgr32),
  *                          with their hardware and compatible IDs (/ids) and
  *                          the published packages whose models match them
  *                          (/drivers)
- *   pnputil /scan-devices [/instanceid <id>] [/search-online [/source <url>]]
+ *   pnputil /scan-devices [/instanceid <id>] [/search-online [/source <url>] [/install]]
  *                          rescan the devices; /search-online (NovaOS's):
  *                          then download a driver package by hardware ID
  *                          from the Microsoft Update Catalog for each device
  *                          with no driver (or the one named) and stage it in
  *                          the driver store (/source: another server that
- *                          answers as the Catalog does)
+ *                          answers as the Catalog does; /install: install
+ *                          it on the device too, and search again for the
+ *                          devices the drivers started bring)
  *
  * (and Windows 7's -a, -i -a, -d and -e).  setupapi (driver.c) keeps the
- * store; newdev installs on devices, and on NovaOS no device takes a
- * Windows driver package (NovaOS's own drivers run its devices, and it
- * loads no kernel-mode .sys driver), so /install reports that no device
- * matched and /enum-devices /drivers shows a matching package as outranked
- * by the NovaOS driver.
+ * store; newdev installs on devices: /install puts a package on each
+ * connected device one of its models names that no NovaOS driver runs,
+ * and the kernel's PnP manager starts its driver (kernel/nt/pnp.c).
+ * /enum-devices /drivers shows a package matching a device a NovaOS
+ * driver runs as outranked by it.  cfgmgr32 disables and enables devices.
+ * Installing, disabling and enabling need SeLoadDriverPrivilege (an
+ * administrator's elevated token), so the manifest asks for
+ * highestAvailable, as sc's does (pnputil.manifest).
  */
 #include <windows.h>
 #include <stdio.h>
@@ -35,6 +44,7 @@
 #include <wchar.h>
 #include <winhttp.h>
 #include <fdi.h>
+#include "novapnp.h"
 
 __declspec(dllimport) BOOL WINAPI SetupCopyOEMInfW(PCWSTR src, PCWSTR media_loc, DWORD media_type, DWORD style,
                                                    PWSTR dest, DWORD size, PDWORD need, PWSTR *component);
@@ -44,6 +54,9 @@ __declspec(dllimport) void WINAPI SetupCloseInfFile(HANDLE h);
 __declspec(dllimport) BOOL WINAPI SetupGetLineTextW(PVOID ctx, HANDLE h, LPCWSTR section, LPCWSTR key,
                                                     LPWSTR buf, DWORD size, PDWORD need);
 
+__declspec(dllimport) BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid, LPCWSTR inf, DWORD flags,
+                                                                      PBOOL reboot);
+
 typedef DWORD CONFIGRET;
 __declspec(dllimport) CONFIGRET WINAPI CM_Get_Device_ID_List_SizeW(PULONG len, LPCWSTR filter, ULONG flags);
 __declspec(dllimport) CONFIGRET WINAPI CM_Get_Device_ID_ListW(LPCWSTR filter, WCHAR *buf, ULONG len, ULONG flags);
@@ -51,12 +64,16 @@ __declspec(dllimport) CONFIGRET WINAPI CM_Locate_DevNodeW(PDWORD dn, LPCWSTR id,
 __declspec(dllimport) CONFIGRET WINAPI CM_Get_DevNode_Status(PULONG status, PULONG problem, DWORD dn, ULONG flags);
 __declspec(dllimport) CONFIGRET WINAPI CM_Get_DevNode_Registry_PropertyW(DWORD dn, ULONG prop, PULONG type, PVOID buf, PULONG len,
                                                                         ULONG flags);
+__declspec(dllimport) CONFIGRET WINAPI CM_Disable_DevNode(DWORD dn, ULONG flags);
+__declspec(dllimport) CONFIGRET WINAPI CM_Enable_DevNode(DWORD dn, ULONG flags);
 
 #define DB_KEY L"SYSTEM\\DriverDatabase"
 #define SPOST_PATH 1
 #define SP_COPY_NOOVERWRITE 0x8
 
 static int g_total, g_added, g_failed;
+
+static int install_on_devices(const WCHAR *inf);
 
 static void message(DWORD e)
 {
@@ -98,7 +115,7 @@ static void add_one(const WCHAR *path, BOOL install)
         g_added++;
     }
     printf("Published Name:         %ls\n", comp ? comp : dest);
-    if (install) printf("Driver package is not installed on any device: no device on this PC matches it.\n");
+    if (install && !install_on_devices(full)) printf("Driver package is not installed on any device: no device on this PC matches it.\n");
     printf("\n");
 }
 
@@ -349,6 +366,39 @@ static BOOL rank_inf(const WCHAR *path, const WCHAR *hwids, const WCHAR *compat,
     return m->rank != ~0u;
 }
 
+/* /add-driver /install: install package @inf on each connected device one
+ * of its models names (newdev); how many took it */
+static int install_on_devices(const WCHAR *inf)
+{
+    ULONG len = 0;
+    CM_Get_Device_ID_List_SizeW(&len, NULL, 0x100 /* CM_GETIDLIST_FILTER_PRESENT */);
+    WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
+    int n = 0;
+    if (ids && !CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0x100)) {
+        for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
+            DWORD dn;
+            WCHAR hw[256], compat[256];
+            if (CM_Locate_DevNodeW(&dn, id, 0)) continue;
+            prop(dn, CM_DRP_HARDWAREID, hw, 256);
+            prop(dn, CM_DRP_COMPATIBLEIDS, compat, 256);
+            Match m;
+            if (!rank_inf(inf, hw, compat, TRUE, &m)) continue;
+            if (UpdateDriverForPlugAndPlayDevicesW(NULL, m.id, inf, 0, NULL)) {
+                ULONG status = 0, problem = 0;
+                CM_Get_DevNode_Status(&status, &problem, dn, 0);
+                printf("Driver package installed on device: %ls\n", id);
+                if (problem) printf("    The device has a problem: code %lu (its driver did not start).\n", (unsigned long)problem);
+                n++;
+            } else if (GetLastError() != 0xE000020B /* ERROR_NO_SUCH_DEVINST */) {
+                printf("Failed to install the driver package on device %ls: ", id);
+                message(GetLastError());
+            }
+        }
+    }
+    free(ids);
+    return n;
+}
+
 static void print_list(const char *label, const WCHAR *m)
 {
     printf("%s\n", label);
@@ -356,7 +406,7 @@ static void print_list(const char *label, const WCHAR *m)
 }
 
 /* The published packages whose models name one of the device's IDs */
-static void matching_drivers(const WCHAR *hwids, const WCHAR *compat, const WCHAR *service)
+static void matching_drivers(const WCHAR *hwids, const WCHAR *compat, const WCHAR *service, BOOL windows)
 {
     WCHAR dir[MAX_PATH], pat[MAX_PATH], path[MAX_PATH], sub[MAX_PATH], pkg[MAX_PATH], v[256];
     GetWindowsDirectoryW(dir, MAX_PATH);
@@ -385,8 +435,9 @@ static void matching_drivers(const WCHAR *hwids, const WCHAR *compat, const WCHA
         printf("    Driver Version:         %ls\n", v);
         printf("    Matching Device ID:     %ls\n", m.id);
         printf("    Driver Rank:            %08lX\n", (unsigned long)(0x00FF0000u | m.rank));   /* (unsigned) */
-        if (service[0]) printf("    Driver Status:          Outranked by the NovaOS driver %ls (NovaOS loads no kernel-mode driver)\n", service);
-        else printf("    Driver Status:          Not installed (NovaOS loads no kernel-mode driver)\n");
+        if (windows) printf("    Driver Status:          Installed (driver %ls)\n", service);
+        else if (service[0]) printf("    Driver Status:          Outranked by the NovaOS driver %ls\n", service);
+        else printf("    Driver Status:          Not installed (pnputil /add-driver <inf> /install installs it)\n");
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 }
@@ -409,10 +460,81 @@ typedef struct {
     BOOL ids, drivers;
 } EnumOpts;
 
+/* Whether @service, of device @id (node @dn), is a Windows driver: the
+ * kernel says so of a running one; one not running is the driver a device
+ * install named in its Enum key */
+static BOOL windows_driver(DWORD dn, const WCHAR *id, const WCHAR *service)
+{
+    NovaPnpNode node;
+    if (nova_pnp_node(dn, &node) && (node.flags & NOVA_PNP_STARTED)) return (node.flags & NOVA_PNP_WINDOWS) != 0;
+    WCHAR k[300], v[64];
+    swprintf(k, 300, L"SYSTEM\\CurrentControlSet\\Enum\\%ls", id);
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h)) return FALSE;
+    DWORD type, n = sizeof(v) - sizeof(WCHAR);
+    LONG e = RegQueryValueExW(h, L"Service", NULL, &type, (BYTE *)v, &n);
+    RegCloseKey(h);
+    if (e || type != REG_SZ) return FALSE;
+    v[n / sizeof(WCHAR)] = 0;
+    return !_wcsicmp(v, service);
+}
+
 static BOOL in_multi(const WCHAR *m, const WCHAR *id)
 {
     for (; *m; m += wcslen(m) + 1) if (!_wcsicmp(m, id)) return TRUE;
     return FALSE;
+}
+
+/* /disable-device, /enable-device, /restart-device on one device */
+static int device_op(const char *op, DWORD dn, const WCHAR *id)
+{
+    BOOL off = !_stricmp(op, "/disable-device"), on = !_stricmp(op, "/enable-device");
+    printf("%s device:          %ls\n", off ? "Disabling" : on ? "Enabling" : "Restarting", id);
+    CONFIGRET cr = on ? 0 : CM_Disable_DevNode(dn, 0);
+    if (!cr && !off) cr = CM_Enable_DevNode(dn, 0);
+    if (cr) {
+        printf("Failed to %s device: %s\n\n", off ? "disable" : on ? "enable" : "restart",
+               cr == 0x17 ? "its driver vetoed the removal." : cr == 0x21 ? "a NovaOS driver runs it." :
+               cr == 0x33 ? "access is denied." : "the device could not be changed.");
+        return 1;
+    }
+    ULONG status = 0, problem = 0;
+    CM_Get_DevNode_Status(&status, &problem, dn, 0);
+    if (!off && problem) { printf("Device has a problem: code %lu.\n\n", (unsigned long)problem); return 1; }
+    printf("Device %s successfully.\n\n", off ? "disabled" : on ? "enabled" : "restarted");
+    return 0;
+}
+
+/* ... on <instance ID>, or (/deviceid <ID>) each connected device with that
+ * hardware or compatible ID */
+static int devices_op(const char *op, const char *arg, BOOL by_device_id)
+{
+    WCHAR want[200];
+    MultiByteToWideChar(CP_ACP, 0, arg, -1, want, 200);
+    DWORD dn;
+    if (!by_device_id) {
+        if (!CM_Locate_DevNodeW(&dn, want, 0)) return device_op(op, dn, want);
+        printf("Failed to %s device %ls: no such device is connected.\n", op + 1, want);
+        return 1;
+    }
+    ULONG len = 0;
+    CM_Get_Device_ID_List_SizeW(&len, NULL, 0x100 /* CM_GETIDLIST_FILTER_PRESENT */);
+    WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
+    int n = 0, bad = 0;
+    if (ids && !CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0x100)) {
+        for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
+            WCHAR hw[256], compat[256];
+            if (CM_Locate_DevNodeW(&dn, id, 0)) continue;
+            prop(dn, CM_DRP_HARDWAREID, hw, 256);
+            prop(dn, CM_DRP_COMPATIBLEIDS, compat, 256);
+            if (!in_multi(hw, want) && !in_multi(compat, want)) continue;
+            bad += device_op(op, dn, id);
+            n++;
+        }
+    }
+    free(ids);
+    if (!n) { printf("No devices were found with device ID %ls.\n", want); return 1; }
+    return bad ? 1 : 0;
 }
 
 static int enum_devices(const EnumOpts *o)
@@ -449,12 +571,13 @@ static int enum_devices(const EnumOpts *o)
             printf("Status:                     Problem\n");
             printf("Problem Code:               %lu (0x%lX) [%s]\n", (unsigned long)problem, (unsigned long)problem, problem_name(problem));
         } else printf("Status:                     %s\n", status & 0x8 /* DN_STARTED */ ? "Started" : "Stopped");
-        if (service[0]) printf("Driver Name:                %ls (a NovaOS driver)\n", service);
+        BOOL windows = service[0] && windows_driver(dn, id, service);
+        if (service[0]) printf("Driver Name:                %ls%s\n", service, windows ? "" : " (a NovaOS driver)");
         if (o->ids) {
             if (hw[0]) print_list("Hardware IDs:", hw);
             if (compat[0]) print_list("Compatible IDs:", compat);
         }
-        if (o->drivers) matching_drivers(hw, compat, service);
+        if (o->drivers) matching_drivers(hw, compat, service, windows);
         printf("\n");
         n++;
     }
@@ -842,6 +965,8 @@ static BOOL in_store(const WCHAR *hw, const WCHAR *compat, WCHAR *name)
     return found;
 }
 
+static WCHAR g_found_inf[MAX_PATH];       /* the INF of the package found for the device */
+
 /* Download update @u, check it, and stage its package if it has one for the
  * device: TRUE once a package is published */
 static BOOL try_update(const WCHAR *source, const Update *u, const WCHAR *hw, const WCHAR *compat)
@@ -969,7 +1094,8 @@ static BOOL try_update(const WCHAR *source, const Update *u, const WCHAR *hw, co
     }
     printf("Driver package added successfully.\n");
     printf("Published Name:             %ls\n", published);
-    printf("Driver Status:              Staged (NovaOS does not start Windows drivers on devices yet)\n");
+    printf("Driver Status:              Staged (pnputil /add-driver %ls /install installs it on the device)\n", published);
+    lstrcpynW(g_found_inf, inf, MAX_PATH);
     return TRUE;
 }
 
@@ -1007,38 +1133,55 @@ static BOOL search_device(const WCHAR *source, const WCHAR *hw, const WCHAR *com
     return FALSE;
 }
 
-static int scan_devices(const WCHAR *instance, BOOL online, const WCHAR *source)
+static int scan_devices(const WCHAR *instance, BOOL online, BOOL install, const WCHAR *source)
 {
     printf("Scanning for device hardware changes...\nScan complete.\n");
     if (!online) return 0;
     printf("\nSearching for drivers online: %ls\n\n", source);
-    ULONG len = 0;
-    CM_Get_Device_ID_List_SizeW(&len, NULL, 0);
-    WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
-    if (!ids || CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0)) { printf("Failed to enumerate devices.\n"); return 1; }
-    int searched = 0, found = 0;
-    for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
-        DWORD dn;
-        ULONG status = 0, problem = 0;
-        if (instance && _wcsicmp(instance, id)) continue;
-        if (CM_Locate_DevNodeW(&dn, id, 0) || CM_Get_DevNode_Status(&status, &problem, dn, 0)) continue;
-        if (problem != 28 && !instance) continue;
-        WCHAR desc[256], hw[1024], compat[1024], have[MAX_PATH];
-        prop(dn, CM_DRP_DEVICEDESC, desc, 256);
-        prop(dn, CM_DRP_HARDWAREID, hw, 1024);
-        prop(dn, CM_DRP_COMPATIBLEIDS, compat, 1024);
-        printf("Instance ID:                %ls\n", id);
-        printf("Device Description:         %ls\n", desc);
-        searched++;
-        if (!hw[0] && !compat[0]) printf("Not searched:               the device has no hardware IDs\n");
-        else if (in_store(hw, compat, have)) {
-            printf("Driver package already in the driver store: %ls\n", have);
-            found++;
-        } else if (search_device(source, hw, compat)) found++;
-        else printf("No driver was found for this device.\n");
-        printf("\n");
+    /* With /install a driver found is installed on the device at once, as
+     * Windows Update does; a device it starts may be a bus with children of
+     * its own (a USB serial converter's COM port), so the tree is searched
+     * again until a pass installs nothing new */
+    static WCHAR tried[64][200];
+    int ntried = 0, searched = 0, found = 0;
+    for (int pass = 0, more = 1; more && pass < 4; pass++) {
+        more = 0;
+        ULONG len = 0;
+        CM_Get_Device_ID_List_SizeW(&len, NULL, 0);
+        WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
+        if (!ids || CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0)) { printf("Failed to enumerate devices.\n"); free(ids); return 1; }
+        for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
+            DWORD dn;
+            ULONG status = 0, problem = 0;
+            if (instance && _wcsicmp(instance, id)) continue;
+            if (CM_Locate_DevNodeW(&dn, id, 0) || CM_Get_DevNode_Status(&status, &problem, dn, 0)) continue;
+            if (problem != 28 && !instance) continue;
+            BOOL seen = FALSE;
+            for (int i = 0; i < ntried && !seen; i++) seen = !_wcsicmp(tried[i], id);
+            if (seen || ntried >= 64) continue;
+            lstrcpynW(tried[ntried++], id, 200);
+            WCHAR desc[256], hw[1024], compat[1024], have[MAX_PATH];
+            prop(dn, CM_DRP_DEVICEDESC, desc, 256);
+            prop(dn, CM_DRP_HARDWAREID, hw, 1024);
+            prop(dn, CM_DRP_COMPATIBLEIDS, compat, 1024);
+            printf("Instance ID:                %ls\n", id);
+            printf("Device Description:         %ls\n", desc);
+            searched++;
+            g_found_inf[0] = 0;
+            if (!hw[0] && !compat[0]) printf("Not searched:               the device has no hardware IDs\n");
+            else if (in_store(hw, compat, have)) {
+                printf("Driver package already in the driver store: %ls\n", have);
+                GetWindowsDirectoryW(g_found_inf, MAX_PATH);
+                lstrcatW(g_found_inf, L"\\INF\\");
+                lstrcatW(g_found_inf, have);
+                found++;
+            } else if (search_device(source, hw, compat)) found++;
+            else printf("No driver was found for this device.\n");
+            if (install && g_found_inf[0] && install_on_devices(g_found_inf)) more = 1;
+            printf("\n");
+        }
+        free(ids);
     }
-    free(ids);
     if (!searched) printf("%s\n", instance ? "No such device is on the system." : "No device is missing a driver.");
     else printf("Devices searched:           %d\nDrivers found:              %d\n", searched, found);
     return g_unreachable ? 1 : 0;
@@ -1051,8 +1194,9 @@ static int usage(void)
     printf("PNPUTIL [/add-driver <filename.inf | *.inf> [/subdirs] [/install]]\n"
            "        [/delete-driver <oem#.inf> [/uninstall] [/force]]\n"
            "        [/enum-drivers]\n"
-           "        [/enum-devices [/connected | /disconnected] [/class <name>] [/ids] [/drivers]]\n"
-           "        [/scan-devices [/instanceid <id>] [/search-online [/source <url>]]]\n");
+           "        [/disable-device | /enable-device | /restart-device <instance ID | /deviceid <ID>>]\n"
+           "        [/enum-devices [/connected | /disconnected] [/class <name>] [/instanceid <id>] [/ids] [/drivers]]\n"
+           "        [/scan-devices [/instanceid <id>] [/search-online [/source <url>] [/install]]]\n");
     return 1;
 }
 
@@ -1093,9 +1237,10 @@ int main(int argc, char **argv)
     if (is(op, "/enum-drivers") || is(op, "-e")) { enum_drivers(); return 0; }
     if (is(op, "/scan-devices")) {
         static WCHAR inst[200], source[512] = CATALOG;
-        BOOL online = FALSE, one = FALSE;
+        BOOL online = FALSE, one = FALSE, install = FALSE;
         for (int i = 2; i < argc; i++) {
             if (is(argv[i], "/search-online")) online = TRUE;
+            else if (is(argv[i], "/install")) install = TRUE;
             else if ((is(argv[i], "/instanceid") || is(argv[i], "/source")) && i + 1 < argc) {
                 BOOL src = is(argv[i], "/source");
                 MultiByteToWideChar(CP_ACP, 0, argv[++i], -1, src ? source : inst, src ? 512 : 200);
@@ -1105,8 +1250,11 @@ int main(int argc, char **argv)
         }
         size_t n = wcslen(source);
         while (n && source[n - 1] == '/') source[--n] = 0;
-        return scan_devices(one ? inst : NULL, online, source);
+        return scan_devices(one ? inst : NULL, online, install, source);
     }
+    if (is(op, "/disable-device") || is(op, "/enable-device") || is(op, "/restart-device"))
+        return argc == 3 ? devices_op(op, argv[2], FALSE) : argc == 4 && is(argv[2], "/deviceid") ? devices_op(op, argv[3], TRUE)
+                                                                                                    : usage();
     if (is(op, "/enum-devices")) {
         static WCHAR cls[64], inst[200], devid[200];
         EnumOpts o = { 0 };

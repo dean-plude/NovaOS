@@ -1,0 +1,20 @@
+Align a stack buffer without an over-aligned element typedef
+
+clang rejects an array whose element type is a 16-byte-aligned UCHAR
+typedef (UCHAR_MEMORY_ALIGNED); the same alignment on the array itself is
+what MSVC produced.
+
+diff --git a/src/framework/kmdf/src/dma/base/fxdmatransactionpacket.cpp b/src/framework/kmdf/src/dma/base/fxdmatransactionpacket.cpp
+index e32063f..8efcd4d 100644
+--- a/src/framework/kmdf/src/dma/base/fxdmatransactionpacket.cpp
++++ b/src/framework/kmdf/src/dma/base/fxdmatransactionpacket.cpp
+@@ -665,7 +665,8 @@ FxDmaPacketTransaction::StageTransfer(
+     PSCATTER_GATHER_LIST sgList;
+ 
+     PFX_DRIVER_GLOBALS pFxDriverGlobals;
+-    UCHAR_MEMORY_ALIGNED sgListBuffer[sizeof(SCATTER_GATHER_LIST)
++    // NovaOS: clang rejects an array of an over-aligned UCHAR typedef
++    DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) UCHAR sgListBuffer[sizeof(SCATTER_GATHER_LIST)
+                             + sizeof(SCATTER_GATHER_ELEMENT)];
+     WDFDMATRANSACTION dmaTransaction;
+ 

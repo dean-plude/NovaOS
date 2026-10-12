@@ -60,7 +60,7 @@ fi
 
 QEMU_ARGS=(
     -machine q35
-    -cpu qemu64,+rdtscp
+    -cpu qemu64,+rdtscp,+xsave,+xsaveopt,+avx,+f16c
     -m 256M
     -smp 4
     -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}"

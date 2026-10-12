@@ -661,7 +661,7 @@
       "exe": "ArtCraft Launcher\\**\\artcraft-launcher.exe",
       "kind": "archive",
       "size_mb": 9,
-      "note": "Untested; installs and updates the other ArtCraft apps from GitHub. Same toolkit as PhotoCraft (egui on wgpu). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: opens and lists the ArtCraft apps on the built-in OpenGL; installing and updating them needs the internet (not checked). Closing the window keeps it in the tray, its default. MIT or Apache-2.0",
       "label": "AC",
       "color": "#1F1F24"
     },
@@ -691,7 +691,7 @@
       "exe": "VectorCraft\\**\\vectorcraft.exe",
       "kind": "archive",
       "size_mb": 80,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: installs and opens its welcome page on the built-in OpenGL (llvmpipe); drawing not checked yet. MIT or Apache-2.0",
       "label": "Vc",
       "color": "#F28C28"
     },
@@ -706,7 +706,7 @@
       "exe": "FilmCraft\\**\\filmcraft.exe",
       "kind": "archive",
       "size_mb": 65,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Fm",
       "color": "#7B4DFF"
     },
@@ -721,7 +721,7 @@
       "exe": "LightCraft\\**\\lightcraft.exe",
       "kind": "archive",
       "size_mb": 94,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Lt",
       "color": "#3C8DBC"
     },
@@ -736,7 +736,7 @@
       "exe": "PdfCraft\\**\\pdfcraft.exe",
       "kind": "archive",
       "size_mb": 78,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: installs and opens its tool list on the built-in OpenGL (llvmpipe); opening PDFs not checked yet. MIT or Apache-2.0",
       "label": "Pd",
       "color": "#D9363E"
     },
@@ -751,7 +751,7 @@
       "exe": "EffectCraft\\**\\effectcraft.exe",
       "kind": "archive",
       "size_mb": 61,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: installs and opens its welcome page on the built-in OpenGL (llvmpipe); compositions not checked yet. MIT or Apache-2.0",
       "label": "Fx",
       "color": "#8E44AD"
     },
@@ -766,7 +766,7 @@
       "exe": "DesignCraft\\**\\designcraft.exe",
       "kind": "archive",
       "size_mb": 66,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Ds",
       "color": "#E5487B"
     },
@@ -781,7 +781,7 @@
       "exe": "WordCraft\\**\\wordcraft.exe",
       "kind": "archive",
       "size_mb": 85,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: installs and opens a blank document on the built-in OpenGL (llvmpipe); typing not checked yet. MIT or Apache-2.0",
       "label": "Wd",
       "color": "#2B579A"
     },
@@ -796,7 +796,7 @@
       "exe": "SoundCraft\\**\\soundcraft.exe",
       "kind": "archive",
       "size_mb": 13,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Sd",
       "color": "#16A085"
     },
@@ -811,7 +811,7 @@
       "exe": "DeckCraft\\**\\deckcraft.exe",
       "kind": "archive",
       "size_mb": 71,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Dk",
       "color": "#C0504D"
     },
@@ -826,7 +826,7 @@
       "exe": "CADCraft\\**\\cadcraft.exe",
       "kind": "archive",
       "size_mb": 21,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "CAD",
       "color": "#4A6572"
     },
@@ -841,7 +841,7 @@
       "exe": "GridCraft\\**\\gridcraft.exe",
       "kind": "archive",
       "size_mb": 15,
-      "note": "Untested; same toolkit as PhotoCraft (egui on wgpu, drawn with the built-in OpenGL), which works. MIT or Apache-2.0",
+      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
       "label": "Gr",
       "color": "#217346"
     }

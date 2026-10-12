@@ -19,12 +19,22 @@
 #include "../arch/x86_64/cpu.h"
 #include "../arch/x86_64/gdt.h"
 #include "../arch/x86_64/idt.h"
+#include "../arch/x86_64/xstate.h"
 #include "../ke/smp.h"
 #include "../ke/kpcr.h"
 
 #define CONTEXT_SIZE      0x4D0
 #define RECORD_SIZE       0x98
 #define FRAME_SIZE        0x570        /* CONTEXT + EXCEPTION_RECORD, 16-byte multiple */
+#define CONTEXT_XSTATE    0x00100040u  /* AMD64 | XSTATE: a CONTEXT_EX and an XSAVE area follow */
+/* With the AVX state on (xstate.h), as on Windows: the CONTEXT, its
+ * CONTEXT_EX, the EXCEPTION_RECORD, then the 64-byte-aligned XSAVE area
+ * (header and YMM upper halves; the legacy part is the CONTEXT's FltSave) */
+#define XF_CONTEXT_EX     0x4D0
+#define XF_RECORD         0x4F0
+#define XF_XSTATE         0x5C0
+#define XS_LEN            (XSTATE_HEADER + 256)        /* header + YMM_Hi128 */
+#define XFRAME_SIZE       (XF_XSTATE + XS_LEN)         /* 0x700, a 64-byte multiple */
 #define CONTEXT_ALL       0x0010001Fu  /* AMD64 | CONTROL | INTEGER | SEGMENTS | FLOATING_POINT | DEBUG */
 #define USER_TOP          UINT64_C(0x00007FFFFFFFFFFF)
 #define USER_FLAGS        0x00250FD5ULL /* CF PF AF ZF SF TF DF OF, AC, ID (+ IF, bit 1 set below) */
@@ -92,19 +102,87 @@ static void build_context(UINT8 *c, const Regs *r)
     memcpy(c + C_MXCSR, g_fx + 24, 4);
 }
 
+/* CONTEXT_EX: where a CONTEXT's parts are, as offsets from itself */
+typedef struct { INT32 off; UINT32 len; } Chunk;
+typedef struct { Chunk all, legacy, xstate; } ContextEx;
+
+/* Does this process's CONTEXT carry the AVX state? */
+static bool avx_context(const UmProcess *p)
+{
+    return (g_xstate_mask & XSTATE_AVX) && p && !p->wow;
+}
+
+/* The calling thread's AVX state as a CONTEXT's XSAVE area holds it:
+ * the header (Mask: AVX) and the YMM upper halves */
+static void xstate_get(UINT8 *xs)
+{
+    UINT8 xa[XSTATE_LEGACY + XS_LEN] __attribute__((aligned(64)));
+    memset(xa + XSTATE_LEGACY, 0, XSTATE_HEADER);
+    __asm__ volatile ("xsave64 %0" : "=m"(xa) : "a"((UINT32)XSTATE_AVX), "d"(0) : "memory");
+    memset(xs, 0, XS_LEN);
+    xs[0] = XSTATE_AVX;
+    if (xa[XSTATE_LEGACY] & XSTATE_AVX)                          /* (else the init state: 0) */
+        memcpy(xs + XSTATE_HEADER, xa + g_xstate_avx_offset, 256);
+}
+
+/* Load the YMM upper halves from a CONTEXT's XSAVE area (Mask without AVX:
+ * their init state, zero) */
+static void xstate_set(const UINT8 *xs)
+{
+    UINT8 xa[XSTATE_LEGACY + XS_LEN] __attribute__((aligned(64)));
+    memset(xa + XSTATE_LEGACY, 0, XSTATE_HEADER);
+    xa[XSTATE_LEGACY] = xs[0] & XSTATE_AVX;
+    memcpy(xa + g_xstate_avx_offset, xs + XSTATE_HEADER, 256);
+    IrqState s = irq_save();                                     /* (the thread's own MXCSR: no switch between) */
+    __asm__ volatile ("stmxcsr %0" : "=m"(*(UINT32 *)(xa + 24)));  /* (XRSTOR of AVX loads MXCSR too) */
+    __asm__ volatile ("xrstor64 %0" : : "m"(xa), "a"((UINT32)XSTATE_AVX), "d"(0) : "memory");
+    irq_restore(s);
+}
+
+/* The user address of the XSAVE area a CONTEXT at @uctx says follows it
+ * (CONTEXT_XSTATE, and a CONTEXT_EX laid out as Windows' Rtl functions do
+ * it), or 0: a CONTEXT copied without its extension, whose flags still
+ * say XSTATE, has none */
+static UINT64 user_xstate(UINT64 uctx, UINT32 flags)
+{
+    if ((flags & CONTEXT_XSTATE) != CONTEXT_XSTATE || !uctx) return 0;
+    ContextEx ex;
+    if (!NT_SUCCESS(CopyFromUser(&ex, (const void *)(uintptr_t)(uctx + CONTEXT_SIZE), sizeof(ex)))) return 0;
+    if (ex.legacy.off != -CONTEXT_SIZE || ex.legacy.len != CONTEXT_SIZE || ex.all.off != -CONTEXT_SIZE ||
+        ex.xstate.off < (INT32)sizeof(ex) || ex.xstate.off > 0x10000 || ex.xstate.len < XS_LEN)
+        return 0;
+    return uctx + CONTEXT_SIZE + (UINT64)ex.xstate.off;
+}
+
 /* Push CONTEXT + EXCEPTION_RECORD below @r->rsp and point the registers
  * at KiUserExceptionDispatcher.  False if they don't fit on the stack. */
 static bool push_exception(UmProcess *p, Regs *r, const UINT8 *ctx, const UINT8 *rec)
 {
     if (!p->exc_dispatcher) return false;
-    UINT64 sp = ((r->rsp - 0x80) & ~0xFULL) - FRAME_SIZE;       /* keep clear of the old frame */
+    bool xs = avx_context(p);                                    /* the YMM upper halves go too */
+    UINT64 sp = xs ? ((r->rsp - 0x80) & ~0x3FULL) - XFRAME_SIZE  /* keep clear of the old frame */
+                   : ((r->rsp - 0x80) & ~0xFULL) - FRAME_SIZE;
+    UINT64 at_rec = sp + (xs ? XF_RECORD : CONTEXT_SIZE);
     if (r->rsp > USER_TOP || sp < 0x10000) return false;
     if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)sp, ctx, CONTEXT_SIZE)) ||
-        !NT_SUCCESS(CopyToUser((void *)(uintptr_t)(sp + CONTEXT_SIZE), rec, RECORD_SIZE)))
+        !NT_SUCCESS(CopyToUser((void *)(uintptr_t)at_rec, rec, RECORD_SIZE)))
         return false;
+    if (xs) {
+        UINT32 flags;
+        memcpy(&flags, ctx + C_FLAGS, 4);
+        flags |= CONTEXT_XSTATE;
+        ContextEx ex = { { -CONTEXT_SIZE, XFRAME_SIZE }, { -CONTEXT_SIZE, CONTEXT_SIZE },
+                         { XF_XSTATE - XF_CONTEXT_EX, XS_LEN } };
+        UINT8 area[XS_LEN];
+        xstate_get(area);
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(sp + C_FLAGS), &flags, 4)) ||
+            !NT_SUCCESS(CopyToUser((void *)(uintptr_t)(sp + XF_CONTEXT_EX), &ex, sizeof(ex))) ||
+            !NT_SUCCESS(CopyToUser((void *)(uintptr_t)(sp + XF_XSTATE), area, XS_LEN)))
+            return false;
+    }
     r->rsp = sp;
     r->rcx = sp;
-    r->rdx = sp + CONTEXT_SIZE;
+    r->rdx = at_rec;
     r->rip = p->exc_dispatcher;
     r->rflags &= ~0x100ULL;                                      /* TF: no single-stepping */
     return true;
@@ -271,8 +349,9 @@ static void __attribute__((naked, noreturn)) iret_to(const Regs *r __attribute__
         : : [ss] "i"(GDT_USER_DATA | 3));
 }
 
-/* Registers (and FPU state) from a user CONTEXT, made safe to IRET to */
-static bool load_context(const UINT8 *c, Regs *r)
+/* Registers (and FPU state) from a user CONTEXT, made safe to IRET to;
+ * @uctx: where the program keeps it, for the AVX state after it */
+static bool load_context(const UINT8 *c, Regs *r, UINT64 uctx)
 {
     UINT64 *g = &r->rax;
     for (int i = 0; i < 16; i++) g[i] = get64(c + C_RAX + 8 * i);
@@ -303,6 +382,9 @@ static bool load_context(const UINT8 *c, Regs *r)
         __asm__ volatile ("fxrstor64 %0" : : "m"(g_fx));
         irq_restore(s);
     }
+    UINT64 uxs = avx_context(UmCurrent()) ? user_xstate(uctx, cflags) : 0;
+    UINT8 area[XS_LEN];
+    if (uxs && NT_SUCCESS(CopyFromUser(area, (const void *)(uintptr_t)uxs, XS_LEN))) xstate_set(area);
     return true;
 }
 
@@ -313,7 +395,7 @@ static UINT64 sys_continue(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UINT8 buf[CONTEXT_SIZE];
     if (!NT_SUCCESS(CopyFromUser(buf, (const void *)(uintptr_t)a1, CONTEXT_SIZE))) return UM_STATUS_ACCESS_VIOLATION;
     Regs r;
-    if (!load_context(buf, &r)) return 0xC000000Du;              /* INVALID_PARAMETER */
+    if (!load_context(buf, &r, a1)) return 0xC000000Du;          /* INVALID_PARAMETER */
     cli();
     UmReturnToUser();                                            /* killed meanwhile? */
     bkl_leave_kernel();                                               /* back to user mode */
@@ -335,7 +417,7 @@ static UINT64 sys_raise_exception(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (!(a3 & 0xFF))                                            /* unhandled: the end */
         UmFaultAt(code, addr, np >= 2 ? get64(rec + 40) : 0, get64(ctx + C_RAX + 0x20));
     Regs r;
-    if (!load_context(ctx, &r)) return 0xC000000Du;
+    if (!load_context(ctx, &r, a2)) return 0xC000000Du;
     if (!push_exception(UmCurrent(), &r, ctx, rec)) UmFault(code, addr, 0);
     cli();
     UmReturnToUser();
@@ -414,12 +496,32 @@ static UINT64 sys_get_context_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT8 out[CONTEXT_SIZE];
         memcpy(out, c, CONTEXT_SIZE);
         irq_restore(s);
-        return NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a2 + 0x30), out + 0x30, CONTEXT_SIZE - 0x30))
-               ? 0 : UM_STATUS_ACCESS_VIOLATION;
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a2 + 0x30), out + 0x30, CONTEXT_SIZE - 0x30)))
+            return UM_STATUS_ACCESS_VIOLATION;
+        UINT64 uxs = avx_context(UmCurrent()) ? user_xstate(a2, want) : 0;   /* CONTEXT_XSTATE: the YMM upper halves */
+        if (uxs) {
+            UINT8 area[XS_LEN];
+            xstate_get(area);
+            if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)uxs, area, XS_LEN))) return UM_STATUS_ACCESS_VIOLATION;
+        }
+        return 0;
     }
+    UINT32 want;
+    if (!NT_SUCCESS(CopyFromUser(&want, (const void *)(uintptr_t)(a2 + C_FLAGS), 4)))
+        return UM_STATUS_ACCESS_VIOLATION;
     UmObject *o;
     UmThread *t = stopped_thread(a1, &o);
     if (!t) return 0xC0000001u;                                  /* STATUS_UNSUCCESSFUL */
+    /* its x87, SSE and AVX state: as the switch away from it saved them */
+    UINT8 legacy[XSTATE_LEGACY], area[XS_LEN];
+    bool fp = t->kt && t->kt->fpu, xs = fp && !t->proc->wow && avx_context(UmCurrent());
+    if (fp) memcpy(legacy, t->kt->fpu, XSTATE_LEGACY);
+    if (xs) {
+        memset(area, 0, XS_LEN);
+        area[0] = XSTATE_AVX;
+        if (t->kt->fpu[XSTATE_LEGACY] & XSTATE_AVX)
+            memcpy(area + XSTATE_HEADER, t->kt->fpu + g_xstate_avx_offset, 256);
+    }
     Regs r;
     memset(&r, 0, sizeof(r));
     /* at an interrupt, or (32-bit programs, which enter through int 0x2E)
@@ -446,18 +548,27 @@ static UINT64 sys_get_context_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         }
     }
     um_ob_unref(o);
+    UINT64 uxs = xs ? user_xstate(a2, want) : 0;
     static UINT8 c[CONTEXT_SIZE];                                /* build_context: interrupts off */
     IrqState s = irq_save();
     build_context(c, &r);
-    put32(c + C_FLAGS, CONTEXT_CIS);                             /* not this thread's FPU state */
-    memset(c + C_FLT, 0, 512);
-    put32(c + C_MXCSR, 0x1F80);
+    fp = fp && (want & 0x8);
+    put32(c + C_FLAGS, CONTEXT_CIS | (fp ? 0x8 : 0) | (uxs ? 0x40 : 0));
+    if (fp) {                                                    /* (not this CPU's: the target's own) */
+        memcpy(c + C_FLT, legacy, XSTATE_LEGACY);
+        memcpy(c + C_MXCSR, legacy + 24, 4);
+    } else {
+        memset(c + C_FLT, 0, 512);
+        put32(c + C_MXCSR, 0x1F80);
+    }
     UINT8 out[CONTEXT_SIZE];
     memcpy(out, c, CONTEXT_SIZE);
     irq_restore(s);
     /* keep the caller's P1Home..P6Home (the first 0x30 bytes) */
-    return NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a2 + 0x30), out + 0x30, CONTEXT_SIZE - 0x30))
-           ? 0 : UM_STATUS_ACCESS_VIOLATION;
+    if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(a2 + 0x30), out + 0x30, CONTEXT_SIZE - 0x30)) ||
+        (uxs && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)uxs, area, XS_LEN))))
+        return UM_STATUS_ACCESS_VIOLATION;
+    return 0;
 }
 
 /* NtSetContextThread(HANDLE Thread, PCONTEXT): integer and control registers
@@ -485,7 +596,7 @@ static UINT64 sys_set_context_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         if (cflags & 0x2)                                        /* CONTEXT_INTEGER, Rsp/Rbp aside */
             for (int i = 0; i < 16; i++)
                 if (i != 4 && i != 5) memcpy(cur + C_RAX + 8 * i, c + C_RAX + 8 * i, 8);
-        put32(cur + C_FLAGS, cflags & 0x8 ? 0x0010000Fu : 0x00100007u);
+        put32(cur + C_FLAGS, (cflags & 0x8 ? 0x0010000Fu : 0x00100007u) | (cflags & 0x40));   /* (+ XSTATE: load_context) */
         if (cflags & 0x8) {                                      /* CONTEXT_FLOATING_POINT */
             memcpy(cur + C_FLT, c + C_FLT, 512);
             memcpy(cur + C_MXCSR, c + C_MXCSR, 4);
@@ -493,7 +604,7 @@ static UINT64 sys_set_context_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT8 in[CONTEXT_SIZE];
         memcpy(in, cur, CONTEXT_SIZE);
         irq_restore(s);
-        if (!load_context(in, &r)) return 0xC000000Du;
+        if (!load_context(in, &r, a2)) return 0xC000000Du;
         r.rax = 0;                                               /* STATUS_SUCCESS */
         cli();
         UmReturnToUser();

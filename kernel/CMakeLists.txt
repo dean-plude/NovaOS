@@ -124,6 +124,7 @@ set(KERNEL_C_SOURCES
     arch/x86_64/idt.c
     arch/x86_64/apic.c
     arch/x86_64/paging.c
+    arch/x86_64/xstate.c
     mm/pmm.c
     mm/vmm.c
     hal/serial.c

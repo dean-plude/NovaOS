@@ -622,8 +622,11 @@ NT_API NDIS_STATUS nt_NdisSetOptionalHandlers(void *h, NDIS_OBJECT_HEADER *chars
 {
     NdisDriver *d = h;
     if (!d || d->magic != M_DRIVER || !chars) return NDIS_STATUS_INVALID_PARAMETER;
-    if (chars->Type == NDIS_OBJECT_TYPE_MINIPORT_PNP_CHARACTERISTICS && chars->Size >= sizeof(d->pnp)) {
-        memcpy(&d->pnp, chars, sizeof(d->pnp));
+    /* (revision 1's size runs through Flags, short of the structure's padding) */
+    if (chars->Type == NDIS_OBJECT_TYPE_MINIPORT_PNP_CHARACTERISTICS &&
+        chars->Size >= NDIS_OFFSET(NDIS_MINIPORT_PNP_CHARACTERISTICS, Flags)) {
+        memset(&d->pnp, 0, sizeof(d->pnp));
+        memcpy(&d->pnp, chars, chars->Size < sizeof(d->pnp) ? chars->Size : sizeof(d->pnp));
         d->has_pnp = true;
         return NDIS_STATUS_SUCCESS;
     }

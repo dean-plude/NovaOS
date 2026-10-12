@@ -151,6 +151,7 @@ typedef struct {
      * on the host, shown over part of the client area while ovl_on */
     VgpuOverlay *ovl;
     bool        ovl_on;
+    bool        ovl_off;            /* the program said (UmGuiGpuStop) its frames go the GDI way until it says otherwise */
     GdiRect     ovl_r;              /* where on the desktop (logical) */
     int         ovl_dx, ovl_dy;     /* ... from the client area's top left */
     int         ovl_head;           /* the monitor it is on */
@@ -2759,7 +2760,7 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struc
         int k = g->scale > 1 ? g->scale : 1, head;
         GdiRect cr = WmClientRect(g->wnd), sr;
         GdiRect rr = k == 1 ? RECT(x, y, w, h) : RECT(cr.x, cr.y, w / k, h / k);
-        if ((k > 1 && (w != g->cw * k || h != g->ch * k)) || !overlay_alone(g, rr, &head, &sr) ||
+        if (g->ovl_off || (k > 1 && (w != g->cw * k || h != g->ch * k)) || !overlay_alone(g, rr, &head, &sr) ||
             !DisplayHeadScreen(head, &scr)) {
             g->ovl_on = false;                    /* (the GDI way from now: its bitmap is current again) */
         } else {
@@ -2790,15 +2791,31 @@ int UmGuiGpuPresent(UmProcess *p, UINT32 hwnd, struct VgpuBlob *src, const struc
 /* The program shows window @hwnd's frames through the GDI again (dcomp.dll
  * when a DirectComposition target stops being composited on the GPU): its
  * bitmap is current, so the desktop shows that instead of the last frame
- * shown straight from the host */
+ * shown straight from the host.  Presents the program made before that may
+ * still be on their way (DXVK finishes a present on its queue thread, after
+ * Present has returned): one arriving now would put its older frame back
+ * over the desktop's, with nothing left to draw over it, so none is shown
+ * straight from the host until UmGuiGpuStart */
 void UmGuiGpuStop(UmProcess *p, UINT32 hwnd)
 {
     DesktopLockAlone();
     GuiWin *g = win_by_hwnd(hwnd);
-    if (g && g->proc == p && g->ovl_on) {
-        g->ovl_on = false;
-        WmInvalidateRect(g->ovl_r);
+    if (g && g->proc == p) {
+        g->ovl_off = true;
+        if (g->ovl_on) {
+            g->ovl_on = false;
+            WmInvalidateRect(g->ovl_r);
+        }
     }
+    DesktopUnlockAlone();
+}
+
+/* The program is about to present frames meant to be shown from the host again */
+void UmGuiGpuStart(UmProcess *p, UINT32 hwnd)
+{
+    DesktopLockAlone();
+    GuiWin *g = win_by_hwnd(hwnd);
+    if (g && g->proc == p) g->ovl_off = false;
     DesktopUnlockAlone();
 }
 

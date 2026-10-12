@@ -497,6 +497,11 @@ typedef struct Block {
 #define HEAP_LARGE   ((SIZE_T)0x4E4F56414C415247ULL)   /* "NOVALARG" */
 #define NCLASSES     48
 #define LARGE_MIN    (256 * 1024)
+/* A large block's data starts this far into its pages, as on Windows (whose
+ * x64 heap puts a 0x40-byte entry before it): 64-byte aligned.  Mesa's
+ * lavapipe keeps Vulkan memory in plain malloc blocks, and with AVX its
+ * shaders load 64-bit depth rows with 32-byte aligned loads (vmovaps). */
+#define LARGE_DATA   64
 #ifdef _WIN64
 #define RESERVE_SIZE ((SIZE_T)1024 * 1024 * 1024)   /* 1 GiB of address space */
 #else
@@ -604,11 +609,11 @@ NTSYSAPI PVOID NTAPI RtlAllocateHeap(PVOID heap, ULONG flags, SIZE_T n)
     Block *b;
     if (n >= LARGE_MIN - sizeof(Block)) {
         PVOID base = 0;
-        SIZE_T size = n + sizeof(Block);
+        SIZE_T size = n + LARGE_DATA;
         if (!NT_SUCCESS(NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size,
                                                 MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)))
             return 0;
-        b = base;
+        b = (Block *)((UCHAR *)base + LARGE_DATA) - 1;
         b->size = n;
         b->tag = HEAP_LARGE;
         return b + 1;                               /* fresh pages are zeroed */
@@ -639,7 +644,7 @@ NTSYSAPI BOOLEAN NTAPI RtlFreeHeap(PVOID heap, ULONG flags, PVOID p)
     if (!p) return TRUE;
     Block *b = (Block *)p - 1;
     if (b->tag == HEAP_LARGE) {
-        PVOID base = b;
+        PVOID base = (UCHAR *)(b + 1) - LARGE_DATA;
         SIZE_T size = 0;
         return NT_SUCCESS(NtFreeVirtualMemory(NtCurrentProcess(), &base, &size, MEM_RELEASE));
     }

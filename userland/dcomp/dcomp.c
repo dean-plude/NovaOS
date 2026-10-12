@@ -124,6 +124,7 @@ struct Target {
     UINT gw, gh, gfmt;
     BOOL gpu;                           /* its last frame went the GPU way (the kernel may show it) */
     BOOL gpu_bad;                       /* the device made no swap chain for the window: the GDI way only */
+    BOOL stopped;                       /* the kernel was told to stop showing its frames from the host (GPU_START_PRESENT undoes it) */
 };
 
 /* The targets of every device, for Commit (a visual tree is the same
@@ -225,6 +226,7 @@ typedef HRESULT (STDMETHODCALLTYPE *ForHwnd_t)(IUnknown *, IUnknown *, HWND, con
 typedef HRESULT (STDMETHODCALLTYPE *CreateTexture2D_t)(IUnknown *, const ND3D11_TEXTURE2D_DESC *, const void *, IUnknown **);
 typedef LONG_PTR (WINAPI *NtNovaGpuCtl_t)(INT_PTR, ULONG, ULONG_PTR, void *);
 #define GPU_STOP_PRESENT 15             /* NtNovaGpuCtl: the window's frames go through the GDI again (kernel/um/um_gpu.c) */
+#define GPU_START_PRESENT 16            /* ... may be shown from the host again */
 
 static int g_gdi_only = -1;             /* NOVA_PRESENT=gdi */
 
@@ -363,6 +365,16 @@ static BOOL gpu_tree(Visual *v, Target *t, float fx, float fy, RECT clip, int de
     return drew;
 }
 
+/* NtNovaGpuCtl @op on @t's window (the kernel knows it by its top-level window) */
+static void gpu_ctl(Target *t, ULONG op)
+{
+    static NtNovaGpuCtl_t ctl;
+    if (!t->stopped && op == GPU_START_PRESENT) return;
+    if (!ctl) ctl = (NtNovaGpuCtl_t)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtNovaGpuCtl");
+    HWND root = GetAncestor(t->hwnd, GA_ROOT);
+    if (ctl) ctl(0, op, (ULONG_PTR)(root ? root : t->hwnd), NULL);
+}
+
 /* @t's picture shown: copied into its swap chain's buffer and presented */
 static void gpu_show(Target *t)
 {
@@ -370,19 +382,20 @@ static void gpu_show(Target *t)
     if (FAILED(((GetBuffer_t)((void **)*(void **)t->pres)[9])(t->pres, 0, &NIID_ID3D11Texture2D, (void **)&buf)) || !buf) return;
     ((CopyResource_t)((void **)*(void **)t->gctx)[47])(t->gctx, buf, t->pic);
     buf->lpVtbl->Release(buf);
+    gpu_ctl(t, GPU_START_PRESENT);                          /* (before this present, not an older one still on DXVK's queue) */
+    t->stopped = FALSE;
     ((Present_t)((void **)*(void **)t->pres)[8])(t->pres, 0, 0);
     t->gpu = TRUE;
 }
 
-/* @t goes (back) the GDI way: the kernel stops showing its last GPU frame */
+/* @t goes (back) the GDI way: the kernel stops showing its last GPU frame,
+ * and any older present of the window DXVK has yet to make */
 static void gpu_stop(Target *t)
 {
-    static NtNovaGpuCtl_t ctl;
     if (!t->gpu) return;
     t->gpu = FALSE;
-    if (!ctl) ctl = (NtNovaGpuCtl_t)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtNovaGpuCtl");
-    HWND root = GetAncestor(t->hwnd, GA_ROOT);
-    if (ctl) ctl(0, GPU_STOP_PRESENT, (ULONG_PTR)(root ? root : t->hwnd), NULL);
+    t->stopped = TRUE;
+    gpu_ctl(t, GPU_STOP_PRESENT);
 }
 
 static void clear_dirty(Visual *v, int depth)

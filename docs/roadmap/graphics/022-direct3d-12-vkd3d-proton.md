@@ -6,5 +6,7 @@
   [32-bit present](HISTORY.md#direct3d-12-presents-in-32-bit-programs)).
   ~~One Direct3D 12 game renders~~ Done: Squash the Creeps on Godot 4.7's
   Forward+ renderer ([A Direct3D 12 game](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot)).
+  ~~Sound in Godot (WASAPI)~~ Done: the game's music plays
+  ([Godot's sound](HISTORY.md#godots-sound-through-wasapi)).
   Still to do: two of Godot's compute pipelines lavapipe refuses
-  (`VK_ERROR_UNKNOWN`), and sound in Godot (WASAPI).
+  (`VK_ERROR_UNKNOWN`).

@@ -13,6 +13,14 @@
  *   soundtest ding              PlaySound(SystemAsterisk) (the default sound)
  *   soundtest msgbeep           MessageBeep(MB_ICONASTERISK) (asynchronous)
  *   soundtest wasapi [HZ] [MS]  a sine through IAudioClient/IAudioRenderClient
+ *   soundtest godot [HZ] [MS]   a sine the way Godot's WASAPI driver plays
+ *                               (drivers/wasapi/audio_driver_wasapi.cpp):
+ *                               an endpoint notification callback,
+ *                               IAudioClient3 (SetClientProperties, the
+ *                               engine period, InitializeSharedAudioStream
+ *                               without an event) and a thread that polls
+ *                               the padding every millisecond, writing one
+ *                               period at a time
  *   soundtest beep [HZ] [MS]    kernel32 Beep
  *   soundtest both [HZ] [MS]    WASAPI at HZ and waveOut at 1.5 x HZ at once
  *                               (the kernel mixer adds them)
@@ -321,6 +329,9 @@ typedef struct {
     ULONG (STDMETHODCALLTYPE *Release)(void *);
     HRESULT (STDMETHODCALLTYPE *EnumAudioEndpoints)(void *, int, DWORD, void **);
     HRESULT (STDMETHODCALLTYPE *GetDefaultAudioEndpoint)(void *, int, int, void **);
+    HRESULT (STDMETHODCALLTYPE *GetDevice)(void *, LPCWSTR, void **);
+    HRESULT (STDMETHODCALLTYPE *RegisterEndpointNotificationCallback)(void *, void *);
+    HRESULT (STDMETHODCALLTYPE *UnregisterEndpointNotificationCallback)(void *, void *);
 } EnumVtbl;
 typedef struct {
     void *qi, *addref;
@@ -360,6 +371,13 @@ typedef struct {
     HRESULT (STDMETHODCALLTYPE *Reset)(void *);
     HRESULT (STDMETHODCALLTYPE *SetEventHandle)(void *, HANDLE);
     HRESULT (STDMETHODCALLTYPE *GetService)(void *, const GUID *, void **);
+    void *IsOffloadCapable;                                                     /* IAudioClient2 */
+    HRESULT (STDMETHODCALLTYPE *SetClientProperties)(void *, const void *);
+    void *GetBufferSizeLimits;
+    HRESULT (STDMETHODCALLTYPE *GetSharedModeEnginePeriod)(void *, const WAVEFORMATEX *, UINT32 *, UINT32 *,
+                                                           UINT32 *, UINT32 *);   /* IAudioClient3 */
+    HRESULT (STDMETHODCALLTYPE *GetCurrentSharedModeEnginePeriod)(void *, WAVEFORMATEX **, UINT32 *);
+    HRESULT (STDMETHODCALLTYPE *InitializeSharedAudioStream)(void *, DWORD, UINT32, const WAVEFORMATEX *, const GUID *);
 } ClientVtbl;
 typedef struct {
     void *qi, *addref;
@@ -551,6 +569,122 @@ static int wasapi(double hz, DWORD ms)
     ((IUnk *)dev)->v->Release(dev);
     ((IUnk *)en)->v->Release(en);
     return 0;
+}
+
+/* -----------------------------------------------------------------------
+ * Godot's WASAPI output (drivers/wasapi/audio_driver_wasapi.cpp, MIT):
+ * the same calls in the same order, so a regression shows here rather
+ * than as a silent game
+ * ----------------------------------------------------------------------- */
+static const GUID IID_IAudioClient3 = { 0x7ED4EE07, 0x8E67, 0x4CD4, { 0x8C, 0x1A, 0x2B, 0x7A, 0x59, 0x87, 0xAD, 0x42 } };
+
+/* IMMNotificationClient: Godot registers one and reacts to a new default */
+static LONG g_notifications;
+static HRESULT STDMETHODCALLTYPE nc_qi(void *t, const GUID *r, void **o) { (void)r; *o = t; return S_OK; }
+static ULONG STDMETHODCALLTYPE nc_ref(void *t) { (void)t; return 1; }
+static HRESULT STDMETHODCALLTYPE nc_state(void *t, LPCWSTR id, DWORD st) { (void)t; (void)id; (void)st; InterlockedIncrement(&g_notifications); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_id(void *t, LPCWSTR id) { (void)t; (void)id; InterlockedIncrement(&g_notifications); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_default(void *t, int flow, int role, LPCWSTR id) { (void)t; (void)flow; (void)role; (void)id; InterlockedIncrement(&g_notifications); return S_OK; }
+static HRESULT STDMETHODCALLTYPE nc_prop(void *t, LPCWSTR id, PROPERTYKEY k) { (void)t; (void)id; (void)k; return S_OK; }
+static const struct { void *qi, *addref, *release, *state, *added, *removed, *def, *prop; } g_nc_vtbl =
+    { nc_qi, nc_ref, nc_ref, nc_state, nc_id, nc_id, nc_default, nc_prop };
+static struct { const void *v; } g_nc = { &g_nc_vtbl };
+
+typedef struct {
+    void *ac, *rc;
+    UINT32 period, channels, rate;
+    double hz;
+    UINT32 total, written, gets;
+} Godot;
+
+static DWORD WINAPI godot_thread(LPVOID p)
+{
+    Godot *g = p;
+    CoInitializeEx(0, COINIT_APARTMENTTHREADED);
+    UINT32 avail = 0, made = 0;
+    while (g->written < g->total) {
+        UINT32 wrote = 0;
+        if (!avail) avail = g->period;                 /* (Godot mixes one period here) */
+        UINT32 size, pad;
+        if (FAILED(CALL(g->ac, ClientVtbl, GetBufferSize, &size))) { printf("GetBufferSize failed\n"); return 1; }
+        if (CALL(g->ac, ClientVtbl, GetCurrentPadding, &pad) == S_OK) {
+            UINT32 n = size - pad < avail ? size - pad : avail;
+            if (n) {
+                BYTE *buf;
+                HRESULT hr = CALL(g->rc, RenderVtbl, GetBuffer, n, &buf);
+                if (hr != S_OK) { printf("GetBuffer: %08lx\n", hr); return 1; }
+                float *f = (float *)buf;
+                for (UINT32 k = 0; k < n; k++, made++)
+                    for (UINT32 c = 0; c < g->channels; c++)
+                        f[k * g->channels + c] = (float)(0.5 * sin(2 * PI * g->hz * made / g->rate));
+                if ((hr = CALL(g->rc, RenderVtbl, ReleaseBuffer, n, 0)) != S_OK) { printf("ReleaseBuffer: %08lx\n", hr); return 1; }
+                avail -= n;
+                wrote = n;
+                g->written += n;
+                g->gets++;
+            }
+        } else {
+            printf("GetCurrentPadding failed\n");
+            return 1;
+        }
+        if (!wrote) Sleep(1);                          /* (OS::delay_usec(1000)) */
+    }
+    for (UINT32 pad = 1; pad; Sleep(5)) CALL(g->ac, ClientVtbl, GetCurrentPadding, &pad);
+    CoUninitialize();
+    return 0;
+}
+
+static int godot(double hz, DWORD ms)
+{
+    CoInitializeEx(0, COINIT_APARTMENTTHREADED);
+    void *en = 0, *dev = 0, *ac = 0, *rc = 0;
+    HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, 0, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &en);
+    if (hr != S_OK) { printf("CoCreateInstance(MMDeviceEnumerator): %08lx\n", hr); return 1; }
+    if ((hr = pick_endpoint(en, 0 /* eRender */, &dev)) != S_OK) { printf("FAIL render endpoint: %08lx\n", hr); return 1; }
+    if ((hr = CALL(en, EnumVtbl, RegisterEndpointNotificationCallback, &g_nc)) != S_OK)
+        { printf("RegisterEndpointNotificationCallback: %08lx\n", hr); return 1; }
+    if ((hr = CALL(dev, DeviceVtbl, Activate, &IID_IAudioClient3, CLSCTX_ALL, 0, &ac)) != S_OK)
+        { printf("Activate(IAudioClient3): %08lx\n", hr); return 1; }
+    struct { UINT32 cbSize; BOOL bIsOffload; int eCategory, Options; } props = { sizeof(props), FALSE, 6 /* AudioCategory_GameEffects */, 0 };
+    if ((hr = CALL(ac, ClientVtbl, SetClientProperties, &props)) != S_OK) { printf("SetClientProperties: %08lx\n", hr); return 1; }
+    WAVEFORMATEX *mix, *closest = 0;
+    if ((hr = CALL(ac, ClientVtbl, GetMixFormat, &mix)) != S_OK) { printf("GetMixFormat: %08lx\n", hr); return 1; }
+    hr = CALL(ac, ClientVtbl, IsFormatSupported, 0 /* shared */, mix, &closest);
+    if (hr != S_OK) { printf("IsFormatSupported(mix format): %08lx\n", hr); return 1; }
+    if (mix->wFormatTag != 0xFFFE || mix->wBitsPerSample != 32) { printf("mix format is not extensible float\n"); return 1; }
+    UINT32 def, fund, mn, mx;
+    hr = CALL(ac, ClientVtbl, GetSharedModeEnginePeriod, mix, &def, &fund, &mn, &mx);
+    if (hr != S_OK || !fund || mn > mx) { printf("GetSharedModeEnginePeriod: %08lx\n", hr); return 1; }
+    UINT32 want = 15 * mix->nSamplesPerSec / 1000, period = want / fund * fund;   /* Godot's 15 ms default */
+    if ((LONG)(want - period) > (LONG)(period + fund - want)) period += fund;
+    period = period < mn ? mn : period > mx ? mx : period;
+    if ((hr = CALL(ac, ClientVtbl, InitializeSharedAudioStream, 0, period, mix, 0)) != S_OK)
+        { printf("InitializeSharedAudioStream: %08lx\n", hr); return 1; }
+    WAVEFORMATEX *cur;
+    UINT32 latency;
+    if ((hr = CALL(ac, ClientVtbl, GetCurrentSharedModeEnginePeriod, &cur, &latency)) != S_OK)
+        { printf("GetCurrentSharedModeEnginePeriod: %08lx\n", hr); return 1; }
+    CoTaskMemFree(cur);
+    if ((hr = CALL(ac, ClientVtbl, GetService, &IID_IAudioRenderClient, &rc)) != S_OK)
+        { printf("GetService(IAudioRenderClient): %08lx\n", hr); return 1; }
+    Godot g = { ac, rc, period, mix->nChannels, mix->nSamplesPerSec, hz, mix->nSamplesPerSec * ms / 1000, 0, 0 };
+    if ((hr = CALL(ac, ClientVtbl, Start)) != S_OK) { printf("Start: %08lx\n", hr); return 1; }
+    DWORD t0 = GetTickCount();
+    HANDLE t = CreateThread(0, 0, godot_thread, &g, 0, 0);
+    DWORD r = 1;
+    WaitForSingleObject(t, INFINITE);
+    GetExitCodeThread(t, &r);
+    CALL(ac, ClientVtbl, Stop);
+    CALL(en, EnumVtbl, UnregisterEndpointNotificationCallback, &g_nc);
+    printf("engine period %u frames (fundamental %u, %u-%u), latency %u frames; period %u frames; "
+           "played %u frames in %u writes, %lu ms\n", def, fund, mn, mx, latency, period, g.written, g.gets,
+           GetTickCount() - t0);
+    CoTaskMemFree(mix);
+    ((IUnk *)rc)->v->Release(rc);
+    ((IUnk *)ac)->v->Release(ac);
+    ((IUnk *)dev)->v->Release(dev);
+    ((IUnk *)en)->v->Release(en);
+    return (int)r;
 }
 
 /* The default endpoint of @flow (0 render, 1 capture) and its volume control */
@@ -1093,6 +1227,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "tone")) return tone(hz, ms, FALSE);
     if (!strcmp(cmd, "float")) return tone(hz, ms, TRUE);
     if (!strcmp(cmd, "wasapi")) return wasapi(hz, ms);
+    if (!strcmp(cmd, "godot")) return godot(hz, ms);
     if (!strcmp(cmd, "record") && argc > 2) return record(argv[2], argc > 3 ? (DWORD)atoi(argv[3]) : 2000);
     if (!strcmp(cmd, "mme") && argc > 2)
         return mme(argv[2], argc > 3 ? (DWORD)atoi(argv[3]) : 3000, argc > 4 ? (DWORD)atoi(argv[4]) : 0);
@@ -1141,7 +1276,7 @@ int main(int argc, char **argv)
         printf("PlaySound: %d (%lu ms)\n", ok, GetTickCount() - t0);
         return !ok;
     }
-    printf("usage: soundtest info | tone [HZ] [MS] | float [HZ] [MS] | play FILE | ding | wasapi [HZ] [MS] | beep [HZ] [MS]\n"
+    printf("usage: soundtest info | tone [HZ] [MS] | float [HZ] [MS] | play FILE | ding | wasapi [HZ] [MS] | godot [HZ] [MS] | beep [HZ] [MS]\n"
            "       | record FILE [MS] | mme FILE [MS] [STALL] | capture FILE [MS] | volume | dsound [HZ] [MS] | dscapture FILE [MS]\n"
            "       | endpoints | default out|in NAME | level out|in [LEVEL] | wovolume | dsenum\n"
            "       (dev=NAME: use that device; rate=N: tone at N Hz)\n");

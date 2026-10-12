@@ -14,7 +14,7 @@
  * Every function pointer a driver hands in, and every export it calls, is
  * NT_API: the Microsoft x64 calling convention.
  *
- * Only what the drivers of roadmap steps 30.1 and 30.2 use is complete; the rest is
+ * Only what the drivers of roadmap steps 30.1 to 30.3 use is complete; the rest is
  * there for the layout (opaque members, reserved space) and is filled in
  * by the steps that need it.
  */
@@ -166,6 +166,9 @@ typedef NT_STATUS (NT_API *NT_IO_COMPLETION_ROUTINE)(NT_DEVICE_OBJECT *, NT_IRP 
 #define NT_IRP_MJ_WRITE                 0x04
 #define NT_IRP_MJ_DEVICE_CONTROL        0x0E
 #define NT_IRP_MJ_CLEANUP               0x12
+#define NT_IRP_MJ_POWER                 0x16
+#define NT_IRP_MJ_SYSTEM_CONTROL        0x17
+#define NT_IRP_MJ_PNP                   0x1B
 #define NT_IRP_MJ_MAXIMUM_FUNCTION      0x1B
 
 typedef struct _NT_DRIVER_EXTENSION {
@@ -198,6 +201,8 @@ struct _NT_DRIVER_OBJECT {
 #define NT_DO_EXCLUSIVE             0x00000008
 #define NT_DO_DIRECT_IO             0x00000010
 #define NT_DO_DEVICE_INITIALIZING   0x00000080
+#define NT_DO_POWER_PAGABLE         0x00002000
+#define NT_DO_BUS_ENUMERATED_DEVICE 0x00001000
 
 struct _NT_DEVICE_OBJECT {
     short                Type;          /* 3 */
@@ -250,6 +255,21 @@ typedef struct _NT_IO_STACK_LOCATION {
             unsigned int   IoControlCode __attribute__((aligned(8)));
             void          *Type3InputBuffer;
         } DeviceIoControl;
+        struct {                        /* IRP_MN_START_DEVICE */
+            struct _NT_CM_RESOURCE_LIST *AllocatedResources, *AllocatedResourcesTranslated;
+        } StartDevice;
+        struct {                        /* IRP_MN_QUERY_INTERFACE */
+            const struct _NT_GUID *InterfaceType;
+            unsigned short Size, Version;
+            struct _NT_INTERFACE *Interface;
+            void          *InterfaceSpecificData;
+        } QueryInterface;
+        struct {                        /* IRP_MN_READ_CONFIG, IRP_MN_WRITE_CONFIG */
+            unsigned int   WhichSpace;
+            void          *Buffer;
+            unsigned int   Offset;
+            unsigned int   Length __attribute__((aligned(8)));
+        } ReadWriteConfig;
         struct {
             void *Argument1, *Argument2, *Argument3, *Argument4;
         } Others;
@@ -339,6 +359,252 @@ struct _NT_FILE_OBJECT {
 /* FILE_OBJECT.Flags */
 #define NT_FO_SYNCHRONOUS_IO     0x00000002
 
+
+/* -----------------------------------------------------------------------
+ * Plug and Play (step 30.3)
+ * ----------------------------------------------------------------------- */
+typedef struct _NT_GUID {
+    unsigned int   Data1;
+    unsigned short Data2, Data3;
+    unsigned char  Data4[8];
+} NT_GUID;
+
+/* IRP_MJ_PNP's minor functions */
+#define NT_IRP_MN_START_DEVICE                 0x00
+#define NT_IRP_MN_QUERY_REMOVE_DEVICE          0x01
+#define NT_IRP_MN_REMOVE_DEVICE                0x02
+#define NT_IRP_MN_CANCEL_REMOVE_DEVICE         0x03
+#define NT_IRP_MN_STOP_DEVICE                  0x04
+#define NT_IRP_MN_QUERY_STOP_DEVICE            0x05
+#define NT_IRP_MN_CANCEL_STOP_DEVICE           0x06
+#define NT_IRP_MN_QUERY_DEVICE_RELATIONS       0x07
+#define NT_IRP_MN_QUERY_INTERFACE              0x08
+#define NT_IRP_MN_QUERY_CAPABILITIES           0x09
+#define NT_IRP_MN_QUERY_RESOURCES              0x0A
+#define NT_IRP_MN_QUERY_RESOURCE_REQUIREMENTS  0x0B
+#define NT_IRP_MN_QUERY_DEVICE_TEXT            0x0C
+#define NT_IRP_MN_FILTER_RESOURCE_REQUIREMENTS 0x0D
+#define NT_IRP_MN_READ_CONFIG                  0x0F
+#define NT_IRP_MN_WRITE_CONFIG                 0x10
+#define NT_IRP_MN_QUERY_ID                     0x13
+#define NT_IRP_MN_QUERY_PNP_DEVICE_STATE       0x14
+#define NT_IRP_MN_QUERY_BUS_INFORMATION        0x15
+#define NT_IRP_MN_DEVICE_USAGE_NOTIFICATION    0x16
+#define NT_IRP_MN_SURPRISE_REMOVAL             0x17
+
+/* CM_RESOURCE_LIST: what IRP_MN_START_DEVICE hands the driver, raw (as the
+ * bus sees it) and translated (as the CPU sees it).  The descriptors are
+ * packed to 4 bytes, as the WDK packs them. */
+#pragma pack(push, 4)
+typedef struct _NT_CM_PARTIAL_RESOURCE_DESCRIPTOR {
+    unsigned char  Type;                /* CmResourceType* */
+    unsigned char  ShareDisposition;
+    unsigned short Flags;
+    union {
+        struct { long long Start; unsigned int Length; } Generic, Port, Memory;
+        struct { unsigned short Level, Group; unsigned int Vector; unsigned long long Affinity; } Interrupt;
+        struct { unsigned int Channel, Port, Reserved1; } Dma;
+        struct { unsigned int Data[3]; } DeviceSpecificData;
+    } u;
+} NT_CM_PARTIAL_RESOURCE_DESCRIPTOR;
+#pragma pack(pop)
+
+typedef struct _NT_CM_PARTIAL_RESOURCE_LIST {
+    unsigned short Version, Revision;
+    unsigned int   Count;
+    NT_CM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptors[1];
+} NT_CM_PARTIAL_RESOURCE_LIST;
+
+typedef struct _NT_CM_FULL_RESOURCE_DESCRIPTOR {
+    int            InterfaceType;       /* PCIBus 5 */
+    unsigned int   BusNumber;
+    NT_CM_PARTIAL_RESOURCE_LIST PartialResourceList;
+} NT_CM_FULL_RESOURCE_DESCRIPTOR;
+
+typedef struct _NT_CM_RESOURCE_LIST {
+    unsigned int   Count;
+    NT_CM_FULL_RESOURCE_DESCRIPTOR List[1];
+} NT_CM_RESOURCE_LIST;
+
+#define NT_CmResourceTypePort        1
+#define NT_CmResourceTypeInterrupt   2
+#define NT_CmResourceTypeMemory      3
+#define NT_CmResourceShareDeviceExclusive 1
+#define NT_CmResourceShareShared     3
+#define NT_CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE 0x0000
+#define NT_CM_RESOURCE_INTERRUPT_LATCHED         0x0001
+#define NT_CM_RESOURCE_MEMORY_READ_WRITE         0x0000
+#define NT_CM_RESOURCE_PORT_IO                   0x0001
+#define NT_PCIBus                    5
+
+/* INTERFACE, and the PCI bus's BUS_INTERFACE_STANDARD (IRP_MN_QUERY_INTERFACE) */
+struct _NT_DMA_ADAPTER;
+struct _NT_DEVICE_DESCRIPTION;
+
+typedef struct _NT_INTERFACE {
+    unsigned short Size, Version;
+    void          *Context;
+    void (NT_API  *InterfaceReference)(void *Context);
+    void (NT_API  *InterfaceDereference)(void *Context);
+} NT_INTERFACE;
+
+typedef struct _NT_BUS_INTERFACE_STANDARD {
+    NT_INTERFACE   Header;
+    unsigned char (NT_API *TranslateBusAddress)(void *Context, long long BusAddress, unsigned int Length,
+                                                unsigned int *AddressSpace, long long *Translated);
+    struct _NT_DMA_ADAPTER *(NT_API *GetDmaAdapter)(void *Context, struct _NT_DEVICE_DESCRIPTION *Desc,
+                                                    unsigned int *MapRegisters);
+    unsigned int  (NT_API *SetBusData)(void *Context, unsigned int DataType, void *Buffer, unsigned int Offset,
+                                       unsigned int Length);
+    unsigned int  (NT_API *GetBusData)(void *Context, unsigned int DataType, void *Buffer, unsigned int Offset,
+                                       unsigned int Length);
+} NT_BUS_INTERFACE_STANDARD;
+
+#define NT_PCI_WHICHSPACE_CONFIG     0
+#define NT_PCI_CONFIG_DATA           4  /* (BUS_DATA_TYPE PCIConfiguration) */
+
+/* DEVICE_CAPABILITIES (IRP_MN_QUERY_CAPABILITIES) */
+typedef struct _NT_DEVICE_CAPABILITIES {
+    unsigned short Size, Version;       /* 0x40, 1 */
+    unsigned int   Flags;               /* DeviceD1:1 DeviceD2:1 LockSupported:1 EjectSupported:1 Removable:1 ... */
+    unsigned int   Address;             /* PCI: device << 16 | function */
+    unsigned int   UINumber;
+    int            DeviceState[7];      /* by SYSTEM_POWER_STATE */
+    int            SystemWake, DeviceWake;
+    unsigned int   D1Latency, D2Latency, D3Latency;
+} NT_DEVICE_CAPABILITIES;
+
+/* IO_REMOVE_LOCK (a free build's: the common block only) */
+typedef struct _NT_IO_REMOVE_LOCK {
+    unsigned char  Removed, Reserved[3];
+    int            IoCount;
+    NT_KEVENT      RemoveEvent;
+} NT_IO_REMOVE_LOCK;
+
+/* IoConnectInterruptEx's parameters */
+#define NT_CONNECT_FULLY_SPECIFIED   1
+#define NT_CONNECT_LINE_BASED        2
+#define NT_CONNECT_MESSAGE_BASED     3
+typedef unsigned char (NT_API *NT_KSERVICE_ROUTINE)(void *Interrupt, void *Context);
+typedef unsigned char (NT_API *NT_KSYNCHRONIZE_ROUTINE)(void *Context);
+
+typedef struct _NT_IO_CONNECT_INTERRUPT_PARAMETERS {
+    unsigned int Version;
+    union {
+        struct {
+            NT_DEVICE_OBJECT   *PhysicalDeviceObject;
+            void              **InterruptObject;
+            NT_KSERVICE_ROUTINE ServiceRoutine;
+            void               *ServiceContext;
+            NT_KSPIN_LOCK      *SpinLock;
+            unsigned char       SynchronizeIrql, FloatingSave, ShareVector;
+            unsigned int        Vector;
+            unsigned char       Irql;
+            int                 InterruptMode;      /* LevelSensitive 0, Latched 1 */
+            unsigned long long  ProcessorEnableMask;
+            unsigned short      Group;
+        } FullySpecified;
+        struct {
+            NT_DEVICE_OBJECT   *PhysicalDeviceObject;
+            void              **InterruptObject;
+            NT_KSERVICE_ROUTINE ServiceRoutine;
+            void               *ServiceContext;
+            NT_KSPIN_LOCK      *SpinLock;
+            unsigned char       SynchronizeIrql, FloatingSave;
+        } LineBased;
+        struct {
+            NT_DEVICE_OBJECT   *PhysicalDeviceObject;
+            void              **ConnectionContext;
+            void               *MessageServiceRoutine;
+            void               *ServiceContext;
+            NT_KSPIN_LOCK      *SpinLock;
+            unsigned char       SynchronizeIrql, FloatingSave;
+            NT_KSERVICE_ROUTINE FallBackServiceRoutine;
+        } MessageBased;
+    };
+} NT_IO_CONNECT_INTERRUPT_PARAMETERS;
+
+typedef struct _NT_IO_DISCONNECT_INTERRUPT_PARAMETERS {
+    unsigned int Version;
+    void        *ConnectionContext;
+} NT_IO_DISCONNECT_INTERRUPT_PARAMETERS;
+
+/* DMA: DEVICE_DESCRIPTION (IoGetDmaAdapter), the adapter and its operations */
+typedef struct _NT_DEVICE_DESCRIPTION {
+    unsigned int   Version;             /* 0 to 3 */
+    unsigned char  Master, ScatterGather, DemandMode, AutoInitialize, Dma32BitAddresses, IgnoreCount, Reserved1,
+                   Dma64BitAddresses;
+    unsigned int   BusNumber, DmaChannel;
+    int            InterfaceType, DmaWidth, DmaSpeed;
+    unsigned int   MaximumLength, DmaPort;
+    unsigned int   DmaAddressWidth;     /* (version 3) */
+    unsigned int   DmaControllerInstance, DmaRequestLine;
+    long long      DeviceAddress;
+} NT_DEVICE_DESCRIPTION;
+
+typedef struct _NT_SCATTER_GATHER_ELEMENT {
+    long long          Address;
+    unsigned int       Length;
+    unsigned long long Reserved;
+} NT_SCATTER_GATHER_ELEMENT;
+
+typedef struct _NT_SCATTER_GATHER_LIST {
+    unsigned int       NumberOfElements;
+    unsigned long long Reserved;
+    NT_SCATTER_GATHER_ELEMENT Elements[];
+} NT_SCATTER_GATHER_LIST;
+
+/* IO_ALLOCATION_ACTION, what an adapter channel's execution routine returns */
+#define NT_KeepObject                     1
+#define NT_DeallocateObject               2
+#define NT_DeallocateObjectKeepRegisters  3
+typedef int (NT_API *NT_DRIVER_CONTROL)(NT_DEVICE_OBJECT *, NT_IRP *, void *MapRegisterBase, void *Context);
+typedef void (NT_API *NT_DRIVER_LIST_CONTROL)(NT_DEVICE_OBJECT *, NT_IRP *, NT_SCATTER_GATHER_LIST *, void *Context);
+
+typedef struct _NT_DMA_ADAPTER NT_DMA_ADAPTER;
+/* DMA_OPERATIONS: the version 1 to 3 functions, in Windows' order */
+typedef struct _NT_DMA_OPERATIONS {
+    unsigned int Size;
+    void (NT_API *PutDmaAdapter)(NT_DMA_ADAPTER *);
+    void *(NT_API *AllocateCommonBuffer)(NT_DMA_ADAPTER *, unsigned int Length, long long *Logical, unsigned char Cached);
+    void (NT_API *FreeCommonBuffer)(NT_DMA_ADAPTER *, unsigned int Length, long long Logical, void *Va, unsigned char Cached);
+    NT_STATUS (NT_API *AllocateAdapterChannel)(NT_DMA_ADAPTER *, NT_DEVICE_OBJECT *, unsigned int MapRegisters,
+                                               NT_DRIVER_CONTROL Execution, void *Context);
+    unsigned char (NT_API *FlushAdapterBuffers)(NT_DMA_ADAPTER *, NT_MDL *, void *MapRegisterBase, void *CurrentVa,
+                                                unsigned int Length, unsigned char WriteToDevice);
+    void (NT_API *FreeAdapterChannel)(NT_DMA_ADAPTER *);
+    void (NT_API *FreeMapRegisters)(NT_DMA_ADAPTER *, void *MapRegisterBase, unsigned int Count);
+    long long (NT_API *MapTransfer)(NT_DMA_ADAPTER *, NT_MDL *, void *MapRegisterBase, void *CurrentVa,
+                                    unsigned int *Length, unsigned char WriteToDevice);
+    unsigned int (NT_API *GetDmaAlignment)(NT_DMA_ADAPTER *);
+    unsigned int (NT_API *ReadDmaCounter)(NT_DMA_ADAPTER *);
+    NT_STATUS (NT_API *GetScatterGatherList)(NT_DMA_ADAPTER *, NT_DEVICE_OBJECT *, NT_MDL *, void *CurrentVa,
+                                             unsigned int Length, NT_DRIVER_LIST_CONTROL Execution, void *Context,
+                                             unsigned char WriteToDevice);
+    void (NT_API *PutScatterGatherList)(NT_DMA_ADAPTER *, NT_SCATTER_GATHER_LIST *, unsigned char WriteToDevice);
+    NT_STATUS (NT_API *CalculateScatterGatherList)(NT_DMA_ADAPTER *, NT_MDL *, void *CurrentVa, unsigned int Length,
+                                                   unsigned int *ListSize, unsigned int *MapRegisters);
+    NT_STATUS (NT_API *BuildScatterGatherList)(NT_DMA_ADAPTER *, NT_DEVICE_OBJECT *, NT_MDL *, void *CurrentVa,
+                                               unsigned int Length, NT_DRIVER_LIST_CONTROL Execution, void *Context,
+                                               unsigned char WriteToDevice, void *Buffer, unsigned int BufferLength);
+    void *BuildMdlFromScatterGatherList;
+    /* version 2 */
+    void *GetDmaAdapterInfo, *GetDmaTransferInfo;
+    /* version 3 */
+    void *InitializeDmaTransferContext;
+    void *(NT_API *AllocateCommonBufferEx)(NT_DMA_ADAPTER *, long long *MaximumAddress, unsigned int Length,
+                                           long long *Logical, unsigned char Cached, unsigned int Node);
+    void *AllocateAdapterChannelEx, *ConfigureAdapterChannel, *CancelAdapterChannel, *MapTransferEx,
+         *GetScatterGatherListEx, *BuildScatterGatherListEx, *FlushAdapterBuffersEx, *FreeAdapterObject,
+         *CancelMappedTransfer, *AllocateDomainCommonBuffer, *FlushDmaBuffer, *JoinDmaDomain, *LeaveDmaDomain,
+         *GetDmaDomain;
+} NT_DMA_OPERATIONS;
+
+struct _NT_DMA_ADAPTER {
+    unsigned short     Version, Size;
+    NT_DMA_OPERATIONS *DmaOperations;
+};
+
 /* Status codes the export layer and the test drivers use */
 #define NT_STATUS_SUCCESS                  ((NT_STATUS)0x00000000)
 #define NT_STATUS_TIMEOUT                  ((NT_STATUS)0x00000102)
@@ -356,6 +622,9 @@ struct _NT_FILE_OBJECT {
 #define NT_STATUS_OBJECT_NAME_COLLISION    ((NT_STATUS)0xC0000035)
 #define NT_STATUS_NOT_SUPPORTED            ((NT_STATUS)0xC00000BB)
 #define NT_STATUS_INSUFFICIENT_RESOURCES   ((NT_STATUS)0xC000009A)
+#define NT_STATUS_DELETE_PENDING           ((NT_STATUS)0xC0000056)
+#define NT_STATUS_DEVICE_NOT_READY         ((NT_STATUS)0xC00000A3)
+#define NT_STATUS_UNSUCCESSFUL             ((NT_STATUS)0xC0000001)
 
 /* CTL_CODE and the transfer methods */
 #define NT_CTL_CODE(type, fn, method, access) (((type) << 16) | ((access) << 14) | ((fn) << 2) | (method))
@@ -413,6 +682,25 @@ _Static_assert(NT_OFFSET(NT_IRP, MdlAddress) == 0x08 && NT_OFFSET(NT_IRP, Associ
                NT_OFFSET(NT_IRP, UserBuffer) == 0x70 && NT_OFFSET(NT_IRP, Tail.Overlay.Thread) == 0x98 &&
                NT_OFFSET(NT_IRP, Tail.Overlay.CurrentStackLocation) == 0xB8 &&
                NT_OFFSET(NT_IRP, Tail.Overlay.OriginalFileObject) == 0xC0 && sizeof(NT_IRP) == 0xD0, "IRP");
+_Static_assert(sizeof(NT_CM_PARTIAL_RESOURCE_DESCRIPTOR) == 0x14 && NT_OFFSET(NT_CM_PARTIAL_RESOURCE_LIST, PartialDescriptors) == 8 &&
+               NT_OFFSET(NT_CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList) == 8 && NT_OFFSET(NT_CM_RESOURCE_LIST, List) == 4,
+               "CM_RESOURCE_LIST");
+_Static_assert(sizeof(NT_BUS_INTERFACE_STANDARD) == 0x40 && sizeof(NT_DEVICE_CAPABILITIES) == 0x40 &&
+               sizeof(NT_IO_REMOVE_LOCK) == 0x20, "BUS_INTERFACE_STANDARD, DEVICE_CAPABILITIES, IO_REMOVE_LOCK");
+_Static_assert(NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.SynchronizeIrql) == 0x30 &&
+               NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.Vector) == 0x34 &&
+               NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.InterruptMode) == 0x3C &&
+               NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.ProcessorEnableMask) == 0x40 &&
+               NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, MessageBased.FallBackServiceRoutine) == 0x38,
+               "IO_CONNECT_INTERRUPT_PARAMETERS");
+_Static_assert(NT_OFFSET(NT_DEVICE_DESCRIPTION, BusNumber) == 12 && NT_OFFSET(NT_DEVICE_DESCRIPTION, MaximumLength) == 32 &&
+               NT_OFFSET(NT_DEVICE_DESCRIPTION, DmaAddressWidth) == 40 && sizeof(NT_DEVICE_DESCRIPTION) == 64,
+               "DEVICE_DESCRIPTION");
+_Static_assert(sizeof(NT_SCATTER_GATHER_ELEMENT) == 24 && NT_OFFSET(NT_SCATTER_GATHER_LIST, Elements) == 16 &&
+               NT_OFFSET(NT_DMA_OPERATIONS, MapTransfer) == 0x40 && NT_OFFSET(NT_DMA_OPERATIONS, GetScatterGatherList) == 0x58 &&
+               NT_OFFSET(NT_DMA_OPERATIONS, AllocateCommonBufferEx) == 0x98, "DMA");
+_Static_assert(NT_OFFSET(NT_IO_STACK_LOCATION, Parameters.QueryInterface.Interface) == 0x18 &&
+               NT_OFFSET(NT_IO_STACK_LOCATION, Parameters.ReadWriteConfig.Length) == 0x20, "IO_STACK_LOCATION (PnP)");
 _Static_assert(NT_OFFSET(NT_FILE_OBJECT, FsContext) == 0x18 && NT_OFFSET(NT_FILE_OBJECT, FinalStatus) == 0x38 &&
                NT_OFFSET(NT_FILE_OBJECT, Flags) == 0x50 && NT_OFFSET(NT_FILE_OBJECT, FileName) == 0x58 &&
                NT_OFFSET(NT_FILE_OBJECT, CurrentByteOffset) == 0x68 && NT_OFFSET(NT_FILE_OBJECT, Event) == 0x98 &&

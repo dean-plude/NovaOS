@@ -139,7 +139,29 @@ static inline int nova_pnp_interfaces(const NovaPnpNode *n, GUID *g)
     if (!lstrcmpiA(n->cls, "MEDIA")) g[k++] = audio;
     if (!lstrcmpiA(n->cls, "Net")) g[k++] = net;
     if (!lstrcmpiA(n->cls, "Display")) g[k++] = disp;
+    /* and those a Windows driver on it turned on (IoSetDeviceInterfaceState) */
+    if (nova_pnp_prefix(n->instance, "PCI\\")) {
+        GUID w[8];
+        int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
+        for (int i = 0; i < m && k < 4; i++) g[k++] = w[i];
+    }
     return k;
+}
+
+/* Start the Windows driver installed on node @id (its Enum key's Service,
+ * as a device install writes it): 0, the problem code it has now (28: no
+ * driver installed, 10: it failed to start...), or (DWORD)-1 without
+ * SeLoadDriverPrivilege */
+static inline DWORD nova_pnp_start(DWORD id)
+{
+    return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 4 | (ULONG_PTR)id << 8, NULL);
+}
+
+/* Take node @id's Windows driver away (IRP_MN_QUERY_REMOVE_DEVICE, then
+ * IRP_MN_REMOVE_DEVICE): the NTSTATUS, a driver's veto among them */
+static inline NTSTATUS nova_pnp_stop(DWORD id)
+{
+    return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 5 | (ULONG_PTR)id << 8, NULL);
 }
 
 /* A device interface's symbolic link: "\\?\" + the instance ID with each

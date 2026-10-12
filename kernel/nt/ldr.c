@@ -124,6 +124,8 @@ static NtDriver *find(const char *service)
     return NULL;
 }
 
+NtDriver *NtDrvFind(const char *service) { return find(service); }
+
 static NT_WCHAR *wide(const char *s, NT_UNICODE_STRING *u)
 {
     size_t n = strlen(s);

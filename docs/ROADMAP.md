@@ -542,6 +542,10 @@ named program or test demonstrates it.
   signature (embedded or in its installed catalog), a test-signed one only
   with test signing on, an unsigned or tampered one never, and a package
   whose files do not match its catalog is not staged.
+  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
+  driver on a PCI device with no NovaOS driver, and the PnP manager starts
+  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
+  the tests); line-based interrupts only, MSI comes later.
 
 <!-- END generated:next-hardware -->
 

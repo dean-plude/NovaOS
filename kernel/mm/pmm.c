@@ -277,17 +277,23 @@ uintptr_t pmm_alloc_page(void)
  * ----------------------------------------------------------------------- */
 uintptr_t pmm_alloc_pages(size_t count)
 {
-    if (count == 0) return 0;
     if (count == 1) return pmm_alloc_page();
+    return pmm_alloc_pages_below(count, 0);
+}
+
+uintptr_t pmm_alloc_pages_below(size_t count, uintptr_t limit)
+{
+    if (count == 0) return 0;
 
     lock_acquire(&pmm.lock);
+    size_t end = limit && limit / PAGE_SIZE < pmm.total_pages ? limit / PAGE_SIZE : pmm.total_pages;
 
     /* Linear scan for `count` consecutive free pages, from the lowest free
      * one, a whole word of used pages at a time */
     size_t run = 0;
     size_t run_start = 0;
 
-    for (size_t i = pmm.hint * 64; i < pmm.total_pages; i++) {
+    for (size_t i = pmm.hint * 64; i < end; i++) {
         if (!(i & 63) && pmm.bitmap[i / 64] == UINT64_C(0xFFFFFFFFFFFFFFFF)) {
             run = 0;
             i += 63;
@@ -311,7 +317,7 @@ uintptr_t pmm_alloc_pages(size_t count)
     }
 
     lock_release(&pmm.lock);
-    out_of_memory(count);
+    if (end == pmm.total_pages) out_of_memory(count);
     return 0;
 }
 

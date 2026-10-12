@@ -119,6 +119,17 @@ void PnpSetDriver(UINT32 id, const char *service)
     spin_unlock_irqrestore(&g_lock, s);
 }
 
+void PnpSetProblem(UINT32 id, UINT32 problem)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (id && id <= g_count && g_node[id]) {
+        g_node[id]->flags &= ~(UINT32)PNP_STARTED;
+        g_node[id]->problem = problem;
+        g_node[id]->service[0] = 0;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
 bool PnpGet(UINT32 id, PnpNode *out)
 {
     bool ok = false;

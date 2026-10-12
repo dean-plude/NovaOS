@@ -77,6 +77,9 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *n);
 void PnpRemove(UINT32 id);
 /* A driver took the node: its service, and started */
 void PnpSetDriver(UINT32 id, const char *service);
+/* The node's driver stopped, or did not start: not started, with
+ * @problem (CM_PROB_*: 10 failed to start, 22 disabled...) */
+void PnpSetProblem(UINT32 id, UINT32 problem);
 /* The node of PCI function bus:dev.func, or 0 */
 UINT32 PnpPciNode(UINT8 bus, UINT8 dev, UINT8 func);
 

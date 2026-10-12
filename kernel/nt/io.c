@@ -321,6 +321,50 @@ void NtIoDropDevices(NtDriver *drv)
 }
 
 /* -----------------------------------------------------------------------
+ * Device stacks: a driver's device attached on top of another (a function
+ * driver's FDO on the bus driver's PDO); requests go to the top
+ * ----------------------------------------------------------------------- */
+NT_API NT_DEVICE_OBJECT *nt_IoGetAttachedDevice(NT_DEVICE_OBJECT *d)
+{
+    while (d && d->AttachedDevice) d = d->AttachedDevice;
+    return d;
+}
+
+NT_API NT_DEVICE_OBJECT *nt_IoGetAttachedDeviceReference(NT_DEVICE_OBJECT *d) { return nt_IoGetAttachedDevice(d); }
+
+NT_API NT_DEVICE_OBJECT *nt_IoAttachDeviceToDeviceStack(NT_DEVICE_OBJECT *src, NT_DEVICE_OBJECT *target)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    NT_DEVICE_OBJECT *top = nt_IoGetAttachedDevice(target);
+    bool gone = top && (((NtDevObjExt *)top->DeviceObjectExtension)->ExtensionFlags & DOE_DELETE_PENDING);
+    if (top && !gone) {
+        top->AttachedDevice = src;
+        src->StackSize = (char)(top->StackSize + 1);
+        if (top->AlignmentRequirement > src->AlignmentRequirement) src->AlignmentRequirement = top->AlignmentRequirement;
+        src->SectorSize = top->SectorSize;
+        ((NtDevObjExt *)src->DeviceObjectExtension)->AttachedTo = top;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+    return gone ? NULL : top;
+}
+
+NT_API NT_STATUS nt_IoAttachDeviceToDeviceStackSafe(NT_DEVICE_OBJECT *src, NT_DEVICE_OBJECT *target,
+                                                    NT_DEVICE_OBJECT **attached)
+{
+    *attached = nt_IoAttachDeviceToDeviceStack(src, target);
+    return *attached ? NT_STATUS_SUCCESS : ST_NO_SUCH_DEVICE;
+}
+
+NT_API void nt_IoDetachDevice(NT_DEVICE_OBJECT *target)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    NT_DEVICE_OBJECT *above = target->AttachedDevice;
+    if (above) ((NtDevObjExt *)above->DeviceObjectExtension)->AttachedTo = NULL;
+    target->AttachedDevice = NULL;
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+/* -----------------------------------------------------------------------
  * IRPs (exports)
  * ----------------------------------------------------------------------- */
 
@@ -502,7 +546,7 @@ NTSTATUS NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposit
 {
     const char *rest = "";
     IrqState s = spin_lock_irqsave(&g_lock);
-    NT_DEVICE_OBJECT *d = resolve(path, &rest);
+    NT_DEVICE_OBJECT *d = nt_IoGetAttachedDevice(resolve(path, &rest));   /* (a PDO's name: its stack's top) */
     NtDriver *drv = d ? NtIoDriverOf(d->DriverObject) : NULL;
     NTSTATUS st = !d ? STATUS_OBJECT_NAME_NOT_FOUND : !drv || !drv->started ? ST_NO_SUCH_DEVICE :
                   drv->unload_pending || (((NtDevObjExt *)d->DeviceObjectExtension)->ExtensionFlags & DOE_DELETE_PENDING) ?

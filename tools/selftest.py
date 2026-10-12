@@ -78,7 +78,10 @@ order; --list prints them):
             driver (wdmtest.sys, test-signed), which loads once test
             signing is on and a restart later (unsigned and tampered
             copies never; pnputil refuses a package whose file does not
-            match its catalog), and wdmtest talks to it
+            match its catalog), and wdmtest talks to it; "edu", QEMU's
+            edu PCI device, on which pnputil installs a Plug and Play
+            driver (edutest.sys) that gets its memory, interrupt and DMA
+            from the PnP manager, and which pnputil disables and enables
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -304,6 +307,7 @@ GAMEPAD = load_suite('devices/gamepad')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
+EDU = load_suite('devices/edu')
 
 
 def net4_boot(work):
@@ -431,6 +435,12 @@ def wdm_boot(work):
     driver, wdmtest.sys, once test signing is on, under Windows' signing
     policy (tests/selftest/devices/wdm)"""
     return [], []
+
+
+def edu_boot(work):
+    """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
+    edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
+    return ['-device', 'edu'], []
 
 
 def ntfs_boot(work):
@@ -577,7 +587,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
-                ('wdm', WDM, wdm_boot)],
+                ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot)],
 }
 
 

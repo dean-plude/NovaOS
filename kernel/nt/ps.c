@@ -153,8 +153,11 @@ NT_API NTSTATUS nt_ObReferenceObjectByHandle(void *Handle, UINT32 DesiredAccess,
 /* zw.c calls this first in ZwClose: a driver closes a system-thread handle
  * (PsCreateSystemThread) with ZwClose like any other.  It drops the
  * handle's own reference; true means the handle was one of ours. */
+bool NtObHandleClose(void *handle);
+
 bool NtPsHandleClose(void *Handle)
 {
+    if (NtObHandleClose(Handle)) return true;                /* (ObOpenObjectByPointer's) */
     NtSysThread *st = as_systhread(Handle);
     if (!st) return false;
     IrqState s = spin_lock_irqsave(&g_sys_lock);
@@ -182,3 +185,64 @@ NT_API void nt_ObfDereferenceObject(void *Object)
     maybe_free_locked(st);
     spin_unlock_irqrestore(&g_sys_lock, s);
 }
+
+/* -----------------------------------------------------------------------
+ * Step 30.8: what FTDI's USB serial drivers add
+ * ----------------------------------------------------------------------- */
+
+/* KeSetPriorityThread: the old priority.  A driver raises its own worker
+ * thread (a system thread it referenced, or the calling thread); NovaOS
+ * applies it when that thread is the caller and the scheduler's range
+ * (0-31) allows it, and otherwise only reports the old one. */
+NT_API int nt_KeSetPriorityThread(void *thread, int priority)
+{
+    Thread *cur = sched_current();
+    NtSysThread *st = as_systhread(thread);
+    int old = cur ? cur->base_priority : 8;
+    if (!cur || priority < 0 || priority > 31) return old;
+    if (!st || st->tid == cur->tid) sched_set_base_priority(cur, (uint8_t)priority);
+    return old;
+}
+
+/* A kernel handle to an object a driver has by pointer (a device object,
+ * to set its security with ZwSetSecurityObject): it holds a reference
+ * until ZwClose (NtPsHandleClose) */
+#define NT_OBHANDLE_MAGIC 0x6E486F62u     /* 'boHn' */
+typedef struct { UINT32 magic; void *object; } NtObHandle;
+
+bool NtObHandleClose(void *handle)
+{
+    NtObHandle *h = handle;
+    if (!h || h->magic != NT_OBHANDLE_MAGIC) return false;
+    nt_ObfDereferenceObject(h->object);
+    h->magic = 0;
+    kfree(h);
+    return true;
+}
+
+NT_API NTSTATUS nt_ObOpenObjectByPointer(void *object, UINT32 attributes, void *access_state, UINT32 access,
+                                         void *type, char mode, void **handle)
+{
+    (void)attributes; (void)access_state; (void)access; (void)type; (void)mode;
+    if (!object || !handle) return STATUS_INVALID_PARAMETER;
+    NtObHandle *h = kzalloc(sizeof(*h));
+    if (!h) return STATUS_INSUFFICIENT_RESOURCES;
+    h->magic = NT_OBHANDLE_MAGIC;
+    h->object = object;
+    nt_ObfReferenceObject(object);
+    *handle = h;
+    return STATUS_SUCCESS;
+}
+
+NT_API NTSTATUS nt_ObReferenceObjectByPointer(void *object, UINT32 access, void *type, char mode)
+{
+    (void)access; (void)type; (void)mode;
+    if (!object) return STATUS_INVALID_PARAMETER;
+    nt_ObfReferenceObject(object);
+    return STATUS_SUCCESS;
+}
+
+/* ExEventObjectType: a data export drivers pass to
+ * ObReferenceObjectByHandle for an event handle */
+static struct { short Type; } g_event_object_type = { 1 };
+void *nt_ExEventObjectType = &g_event_object_type;

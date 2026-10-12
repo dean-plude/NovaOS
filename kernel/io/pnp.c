@@ -129,6 +129,17 @@ void PnpSetWindowsDriver(UINT32 id, const char *service)
     set_driver(id, service, PNP_WINDOWS);
 }
 
+void PnpSetNames(UINT32 id, const char *cls, const char *friendly)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (id && id <= g_count && g_node[id]) {
+        PnpNode *n = g_node[id];
+        if (cls && cls[0]) copy_str(n->cls, sizeof(n->cls), cls);
+        if (friendly && friendly[0]) copy_str(n->friendly, sizeof(n->friendly), friendly);
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
 void PnpSetProblem(UINT32 id, UINT32 problem)
 {
     IrqState s = spin_lock_irqsave(&g_lock);

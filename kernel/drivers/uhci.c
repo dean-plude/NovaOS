@@ -491,11 +491,10 @@ static int uhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
             return -1;
         }
         if (d->gone || UsbPast(until)) {
-            if (!d->gone) kprintf("[USB] %s: bulk transfer timed out\n", d->name);
             queue_stop(uq);
             queue_state(uq, 0, n, &moved, &last);
             if (last >= 0) uq->toggle = toggle_after(uq, last);
-            return -1;
+            return d->gone ? -1 : USB_TIMED_OUT;
         }
         pause_cpu();
     }

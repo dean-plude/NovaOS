@@ -120,6 +120,13 @@ UINT16 UsbDevProduct(const UsbDev *d) { return d->pid; }
 bool   UsbDevGone(const UsbDev *d)    { return d->gone; }
 const char *UsbDevName(const UsbDev *d) { return d->name; }
 
+UsbDev *UsbDevByPnp(UINT32 node)
+{
+    for (int i = 0; node && i < MAX_DEVS; i++)
+        if (g_devs[i] && g_devs[i]->pnp == node && !g_devs[i]->gone) return g_devs[i];
+    return NULL;
+}
+
 bool UsbDevProductName(UsbDev *d, char *out, int cap)
 {
     UINT8 s[128];
@@ -314,6 +321,16 @@ void UsbIsoStop(UsbPipe *p)
 }
 
 int UsbBulk(UsbPipe *p, void *buf, UINT32 len, UINT32 timeout_ms, bool *stalled)
+{
+    int n = UsbBulkPoll(p, buf, len, timeout_ms, stalled);
+    if (n == USB_TIMED_OUT) {
+        kprintf("[USB] %s: bulk transfer timed out\n", p->dev->name);
+        n = -1;
+    }
+    return n;
+}
+
+int UsbBulkPoll(UsbPipe *p, void *buf, UINT32 len, UINT32 timeout_ms, bool *stalled)
 {
     if (stalled) *stalled = false;
     if (p->dead) return -1;

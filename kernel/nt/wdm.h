@@ -475,17 +475,11 @@ typedef struct _NT_DEVICE_CAPABILITIES {
     unsigned int   D1Latency, D2Latency, D3Latency;
 } NT_DEVICE_CAPABILITIES;
 
-/* IO_REMOVE_LOCK (a free build's: the common block only) */
-typedef struct _NT_IO_REMOVE_LOCK {
-    unsigned char  Removed, Reserved[3];
-    int            IoCount;
-    NT_KEVENT      RemoveEvent;
-} NT_IO_REMOVE_LOCK;
-
 /* IoConnectInterruptEx's parameters */
 #define NT_CONNECT_FULLY_SPECIFIED   1
 #define NT_CONNECT_LINE_BASED        2
 #define NT_CONNECT_MESSAGE_BASED     3
+#define NT_CONNECT_FULLY_SPECIFIED_GROUP 4   /* (KMDF's: FullySpecified with its Group) */
 typedef unsigned char (NT_API *NT_KSERVICE_ROUTINE)(void *Interrupt, void *Context);
 typedef unsigned char (NT_API *NT_KSYNCHRONIZE_ROUTINE)(void *Context);
 
@@ -623,8 +617,6 @@ struct _NT_DMA_ADAPTER {
 #define NT_STATUS_OBJECT_NAME_COLLISION    ((NT_STATUS)0xC0000035)
 #define NT_STATUS_NOT_SUPPORTED            ((NT_STATUS)0xC00000BB)
 #define NT_STATUS_INSUFFICIENT_RESOURCES   ((NT_STATUS)0xC000009A)
-#define NT_STATUS_DELETE_PENDING           ((NT_STATUS)0xC0000056)
-#define NT_STATUS_DEVICE_NOT_READY         ((NT_STATUS)0xC00000A3)
 #define NT_STATUS_UNSUCCESSFUL             ((NT_STATUS)0xC0000001)
 #define NT_STATUS_NOT_IMPLEMENTED          ((NT_STATUS)0xC0000002)
 #define NT_STATUS_INVALID_HANDLE           ((NT_STATUS)0xC0000008)
@@ -635,6 +627,8 @@ struct _NT_DMA_ADAPTER {
 #define NT_STATUS_INFO_LENGTH_MISMATCH     ((NT_STATUS)0xC0000004)
 /* KeWaitForMultipleObjects: WAIT_OBJECT_0 + index, or STATUS_TIMEOUT */
 #define NT_STATUS_WAIT_0                   ((NT_STATUS)0x00000000)
+#define NT_STATUS_DELETE_PENDING           ((NT_STATUS)0xC0000056)
+#define NT_STATUS_DEVICE_NOT_READY         ((NT_STATUS)0xC00000A3)
 
 /* CTL_CODE and the transfer methods */
 #define NT_CTL_CODE(type, fn, method, access) (((type) << 16) | ((access) << 14) | ((fn) << 2) | (method))
@@ -696,17 +690,29 @@ typedef struct _NT_ERESOURCE {
     unsigned char Reserved[0x68 - 0x28];
 } NT_ERESOURCE;
 
-/* (N)PAGED_LOOKASIDE_LIST: a free list of fixed-size blocks. */
+/* (N)PAGED_LOOKASIDE_LIST: a free list of fixed-size blocks, laid out as
+ * Windows x64's GENERAL_LOOKASIDE: the WDK's inline
+ * ExAllocateFromNPagedLookasideList and ExFreeToNPagedLookasideList (which
+ * KMDF uses) read and count in it directly. */
 typedef struct __attribute__((aligned(16))) _NT_LOOKASIDE_LIST {
     NT_SLIST_HEADER ListHead;
     unsigned short  Depth, MaximumDepth;
-    unsigned int    Size;
-    unsigned int    Tag;
+    unsigned int    TotalAllocates, AllocateMisses, TotalFrees, FreeMisses;
     int             Type;          /* POOL_TYPE */
-    void           *Allocate;      /* a driver's own, or NULL for the pool */
+    unsigned int    Tag;
+    unsigned int    Size;
+    void           *Allocate;      /* the driver's own, or the pool's */
     void           *Free;
-    unsigned char   Reserved[0x80 - 0x30];
+    unsigned char   Reserved[0x80 - 0x40];
 } NT_LOOKASIDE_LIST, NT_PAGED_LOOKASIDE_LIST, NT_NPAGED_LOOKASIDE_LIST;
+
+/* IO_REMOVE_LOCK: holds off a device's removal while I/O is in flight. */
+typedef struct _NT_IO_REMOVE_LOCK {
+    unsigned char  Removed;
+    unsigned char  Reserved[3];
+    int            IoCount;
+    NT_KEVENT      RemoveEvent;
+} NT_IO_REMOVE_LOCK;
 
 /* An I/O work item is opaque to the driver: IoAllocateWorkItem returns a
  * pointer it keeps and passes back; its body lives in the kernel. */
@@ -728,7 +734,8 @@ typedef struct _NT_KWAIT_BLOCK { unsigned char Opaque[0x30]; } NT_KWAIT_BLOCK;
 #define NT_OFFSET(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(NT_KMUTEX) == 0x30 && NT_OFFSET(NT_KMUTANT, OwnerThread) == 0x28, "KMUTANT");
 _Static_assert(sizeof(NT_SLIST_HEADER) == 0x10 && sizeof(NT_ERESOURCE) == 0x68, "SLIST_HEADER, ERESOURCE");
-_Static_assert(sizeof(NT_PAGED_LOOKASIDE_LIST) == 0x80 && NT_OFFSET(NT_LOOKASIDE_LIST, Size) == 0x14, "LOOKASIDE_LIST");
+_Static_assert(sizeof(NT_PAGED_LOOKASIDE_LIST) == 0x80 && NT_OFFSET(NT_LOOKASIDE_LIST, Size) == 0x2C &&
+               NT_OFFSET(NT_LOOKASIDE_LIST, Allocate) == 0x30, "LOOKASIDE_LIST");
 _Static_assert(sizeof(NT_IO_REMOVE_LOCK) == 0x20 && NT_OFFSET(NT_IO_REMOVE_LOCK, RemoveEvent) == 0x08, "IO_REMOVE_LOCK");
 
 _Static_assert(sizeof(NT_UNICODE_STRING) == 0x10 && sizeof(NT_IO_STATUS_BLOCK) == 0x10, "UNICODE_STRING, IO_STATUS_BLOCK");

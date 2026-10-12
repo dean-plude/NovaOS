@@ -8,18 +8,19 @@ NovaOS loads real signed Windows driver packages unchanged (step 30, the
 Windows driver model), so every symbol they import from ntoskrnl.exe and
 hal.dll must be an export kernel/nt/exports.h lists (step 30.2 completes the
 kernel API for exactly this reason).  This compares the import lists of the
-drivers we target first — the VirtIO serial driver (vioser.sys), the
-KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) and the VirtIO block
-miniport (viostor.sys, whose storport.sys imports NovaOS's own Storport
-host provides) — against exports.h and fails naming any import that is
-neither provided nor allow-listed.
+drivers we target first — the VirtIO serial driver (vioser.sys) and the
+KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) — against exports.h and
+fails naming any import that is neither provided nor allow-listed.
 
 The import lists live beside the wdm self-test
-(tests/selftest/devices/wdm/imports/*.txt), extracted from the signed
-binaries with `--dump` (maintainers run it; the binaries are not in the
-repo).  Imports from wdfldr.sys are the KMDF loader's own exports, provided
-by the KMDF step (30.4/30.5), so they are allow-listed here rather than in
-exports.h.  CI runs the check on every pull request.
+(tests/selftest/devices/wdm/imports/*.txt), extracted with `--dump`:
+vioser.sys's from the signed driver (maintainers run it; the binary is not
+in the repo), Wdf01000.sys's and WdfLdr.sys's from NovaOS's own build of
+Microsoft's KMDF source (tools/kmdf/build_kmdf.py; `--dump --from DESC`
+says where a list came from).  Imports from wdfldr.sys are the KMDF
+loader's exports, which NovaOS's WdfLdr.sys provides (step 30.4): each must
+be one tools/kmdf/build_kmdf.py lists in WDFLDR_EXPORTS.  CI runs the
+check on every pull request.
 """
 import os, re, struct, sys
 
@@ -30,9 +31,17 @@ IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports
 # Modules NovaOS itself provides (its export tables); every import from one
 # of these must appear in exports.h.
 PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "storport.sys"}
-# Modules a driver package brings with it (provided by a later driver step),
-# so their imports are not NovaOS exports.
-ALLOWLISTED_MODULES = {"wdfldr.sys"}
+# The KMDF loader NovaOS ships (tools/kmdf/wdfldr.c): its exports are the
+# WDFLDR_EXPORTS list of tools/kmdf/build_kmdf.py, which its .def is made from.
+KMDF_BUILD = os.path.join(ROOT, "tools", "kmdf", "build_kmdf.py")
+WDFLDR = "wdfldr.sys"
+
+
+def wdfldr_exports(path):
+    """The names in build_kmdf.py's WDFLDR_EXPORTS list."""
+    with open(path) as f:
+        m = re.search(r"^WDFLDR_EXPORTS\s*=\s*\[(.*?)\]", f.read(), re.S | re.M)
+    return set(re.findall(r"'([A-Za-z_0-9]+)'", m.group(1))) if m else set()
 
 
 def exports_from_header(path):
@@ -66,22 +75,22 @@ def check():
         print("no import fixtures at %s" % IMPORTS_DIR, file=sys.stderr)
         return 1
     provided = {(m.lower(), n) for m, n in exports_from_header(EXPORTS_H)}
+    provided |= {(WDFLDR, n) for n in wdfldr_exports(KMDF_BUILD)}
     missing = []
     files = sorted(f for f in os.listdir(IMPORTS_DIR) if f.endswith(".txt"))
     total = 0
     for fn in files:
         for mod, name in imports_from_fixture(os.path.join(IMPORTS_DIR, fn)):
             total += 1
-            if mod in ALLOWLISTED_MODULES:
-                continue
-            if mod in PROVIDED_MODULES and (mod, name) not in provided:
+            if (mod in PROVIDED_MODULES or mod == WDFLDR) and (mod, name) not in provided:
                 missing.append((fn, mod, name))
     if missing:
-        print("Driver imports NovaOS does not provide (add to kernel/nt/exports.h):")
+        print("Driver imports NovaOS does not provide (add to kernel/nt/exports.h, or for"
+              " wdfldr.sys to tools/kmdf/wdfldr.c and WDFLDR_EXPORTS):")
         for fn, mod, name in missing:
             print("  %-24s %s!%s" % (fn, mod, name))
         return 1
-    print("driver imports: %d imports across %d driver(s) all provided or allow-listed"
+    print("driver imports: %d imports across %d driver(s) all provided"
           % (total, len(files)))
     return 0
 
@@ -132,13 +141,12 @@ def pe_imports(path):
     return out
 
 
-def dump(paths):
-    hdr = ("# Import list of %s, extracted from the real signed driver with\n"
+def dump(paths, source="the real signed driver"):
+    hdr = ("# Import list of %s, extracted from " + source + " with\n"
            "# tools/ci/check-driver-imports.py --dump (do not edit by hand).  The\n"
            "# import-coverage check (the same tool) verifies every ntoskrnl.exe and\n"
-           "# hal.dll import below is provided by kernel/nt/exports.h; wdfldr.sys\n"
-           "# imports are the KMDF loader's own exports, provided by a later driver\n"
-           "# step (30.4/30.5), and are allow-listed there.\n")
+           "# hal.dll import below is provided by kernel/nt/exports.h, and every\n"
+           "# wdfldr.sys import by NovaOS's WdfLdr.sys (tools/kmdf/wdfldr.c).\n")
     os.makedirs(IMPORTS_DIR, exist_ok=True)
     for p in paths:
         name = os.path.basename(p).lower()
@@ -153,5 +161,8 @@ def dump(paths):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--dump":
-        sys.exit(dump(sys.argv[2:]))
+        args = sys.argv[2:]
+        if len(args) > 1 and args[0] == "--from":
+            sys.exit(dump(args[2:], args[1]))
+        sys.exit(dump(args))
     sys.exit(check())

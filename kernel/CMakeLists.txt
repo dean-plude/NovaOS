@@ -231,6 +231,7 @@ set(KERNEL_C_SOURCES
     nt/ps.c
     nt/storport.c
     nt/seh.c
+    nt/win10.c
     nt/zw.c
     io/pnp.c
     mm/vma.c

@@ -1,0 +1,25 @@
+Define enum FxWmiInstanceAction
+
+fxforward.hpp declares it and the PnP package passes AddInstance and
+RemoveInstance, but no published file defines it.
+
+diff --git a/src/framework/shared/inc/private/common/fxforward.hpp b/src/framework/shared/inc/private/common/fxforward.hpp
+index b61d032..fe808cf 100644
+--- a/src/framework/shared/inc/private/common/fxforward.hpp
++++ b/src/framework/shared/inc/private/common/fxforward.hpp
+@@ -119,7 +119,14 @@ class  IFxHasCallbacks;
+ class  IFxMemory;
+ 
+ enum FxObjectType;
+-enum FxWmiInstanceAction;
++//
++// NovaOS: the published source declares this enum here but defines it
++// nowhere; its two values are the ones the PnP package passes.
++//
++enum FxWmiInstanceAction {
++    AddInstance,
++    RemoveInstance
++};
+ enum FxDriverObjectUmFlags : USHORT;
+ 
+ PVOID

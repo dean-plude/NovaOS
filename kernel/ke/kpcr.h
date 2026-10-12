@@ -63,7 +63,17 @@ typedef struct _KPCR {
     volatile UINT32 Online;      /* +0x48 running the scheduler */
     volatile UINT32 LockWait;    /* +0x4C halted waiting for the kernel lock */
     void         *PrevThread;    /* +0x50 the thread a switch in progress left */
+    UINT8         Reserved[0x184 - 0x58];
+    /* Where Windows drivers look (the WDK inlines read them through GS):
+     * KeGetCurrentProcessorNumber gs:0x184, KeGetCurrentThread gs:0x188
+     * (KPRCB.Number and KPRCB.CurrentThread in Windows' KPCR) */
+    UINT16        WinNumber;     /* +0x184 = CpuNumber */
+    UINT16        WinPad;
+    void         *WinCurrentThread;  /* +0x188 = CurrentThread */
 } KPCR, *PKPCR;
+
+_Static_assert(__builtin_offsetof(KPCR, WinNumber) == 0x184 && __builtin_offsetof(KPCR, WinCurrentThread) == 0x188,
+               "KPCR: Windows drivers' fields");
 
 #define MAX_CPUS 16
 

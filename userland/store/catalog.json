@@ -676,7 +676,7 @@
       "exe": "PhotoCraft\\**\\photocraft.exe",
       "kind": "archive",
       "size_mb": 73,
-      "note": "Tested on NovaOS: installs and opens its editor window on the built-in OpenGL (llvmpipe); its image compositor falls back to the CPU there. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: installs, opens its editor window on the built-in OpenGL (llvmpipe) and makes documents; without a hardware graphics adapter it composites on the CPU by design and says so at start. MIT or Apache-2.0",
       "label": "Ph",
       "color": "#2F7BF5"
     },

@@ -11069,6 +11069,36 @@ a moment gave up at once.
 - **`tests/tools/test_download_cache.py`** covers the retry pauses and the
   final failure.
 
+## A default set of drivers and firmware
+
+Windows and Linux ship a default set of drivers.  NovaOS's drivers are
+its own, built into the kernel as Linux's in-tree drivers are, so every
+one was already on the image; what a Linux distribution downloads on top
+is firmware, the code a driver loads into the device, published by the
+vendors in linux-firmware.  NovaOS now does the same
+([drivers.md](drivers.md)).
+
+- **`tools/firmware.json`** names the default firmware set, grouped by
+  device: Intel Raptor Lake-P graphics (`i915` DMC, GuC and HuC), Intel
+  AX211 Wi-Fi and Bluetooth, Qualcomm WCN6855 (NFA725A) Wi-Fi and
+  Bluetooth, the reference ThinkPad's devices whose NovaOS drivers come
+  next.  Each file is pinned to linux-firmware tag `20260916` and its
+  SHA-256, with its vendor's licence, all of which allow redistributing
+  the files unchanged.
+- **`tools/fetch_firmware.py`** downloads them (git.kernel.org, then the
+  GitLab mirror, with retries), checks every hash, keeps files it already
+  has and runs `tools/fetch_sof_firmware.py --all` for the audio DSP;
+  `--set`, `--list` and `--from` (a local checkout) choose and inspect.
+- **The build** puts the files in `C:\Windows\Firmware` in
+  linux-firmware's layout (`C:\Windows\Firmware\i915\adlp_dmc.bin`), with
+  the licences in `C:\Windows\Firmware\LICENSES`; only files the manifest
+  names, at their size, go in.  Release builds fetch the set before
+  building; pull requests do not.
+- **Windows driver packages** stay what they were: they install into the
+  driver store, but their `.sys` files are Windows kernel-mode drivers
+  that NovaOS's kernel does not host, so downloading Windows drivers would
+  give nothing that runs; drivers.md says why.
+
 ## Direct presentation on every monitor and at scale 2
 
 The Phase 25 step after [Vulkan's frames](#direct-presentation-of-vulkans-frames).
@@ -11255,6 +11285,30 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
   `GetCurrentSharedModeEnginePeriod`, then a thread that polls the padding
   every millisecond and writes one engine period at a time; the recording
   must hold its tones.  Nothing tested the `IAudioClient3` calls before.
+
+## PhotoCraft makes documents; why it composites on the CPU
+
+PhotoCraft (App Store, ArtCraft) closed itself the moment a document
+opened: over the canvas it sets a custom brush cursor, whose bitmap it
+writes with `SetBitmapBits`, and `gdi32` had no such export, so the
+program ended with "entry point not found".  `gdi32` now has
+`SetBitmapBits`, and `GetBitmapBits` returns the bits as Windows does
+(blue, green, red, then alpha, rows top-down) instead of NovaOS's own
+pixel order.
+
+Its "Switched to CPU rendering" box is PhotoCraft's own rule, not a
+failure on NovaOS: when the graphics adapter wgpu gives it is a CPU one
+(llvmpipe and lavapipe, as Windows' Basic Render Driver), PhotoCraft
+never starts its GPU image compositor and says it uses the CPU.  A test
+build that gave llvmpipe another name in `GL_RENDERER` showed the GPU
+compositor running on NovaOS's OpenGL (the start page without the box,
+then a 1920x1080 document on the GPU canvas), so on a machine with a
+hardware adapter, such as QEMU's virgl or Venus on a host GPU, it should
+start on the GPU; that has not been checked yet.
+
+- **PhotoCraft** (app corpus, `886-photocraft.py`): it keeps the CPU,
+  makes a new 1920x1080 document and must show its white canvas
+  (`tests/reference/photocraft.png`).
 
 ## README without "What runs today"
 

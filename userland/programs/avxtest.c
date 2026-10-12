@@ -214,6 +214,15 @@ int main(void)
                      : "=r"(half), "=m"(back) : "m"(f) : "xmm0", "xmm1", "xmm2");
     check((half & 0xFFFF) == 0x3E00 && back == 1.5f, "F16C: 1.5 to half (0x3E00) and back");
 
+    /* A large heap block is 64-byte aligned, as on Windows: lavapipe keeps
+     * Vulkan memory in malloc blocks and loads them with vmovaps ymm */
+    char *big = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 8 << 20);
+    check(big && !((ULONG_PTR)big & 63), "an 8 MiB HeapAlloc block is 64-byte aligned");
+    if (big && !((ULONG_PTR)big & 31)) {
+        __asm__ volatile("vmovaps (%0), %%ymm0\n\tvmovaps %%ymm0, 32(%0)" : : "r"(big) : "xmm0", "memory");
+        HeapFree(GetProcessHeap(), 0, big);
+    }
+
 #ifdef _WIN64
     HANDLE t[4];
     for (int i = 0; i < 4; i++) t[i] = CreateThread(NULL, 0, switch_thread, (void *)(ULONG_PTR)i, 0, NULL);

@@ -11560,6 +11560,10 @@ MIT-licensed Windows-Driver-Frameworks source.
 - **Installing**: setupapi reads an INF's `.Wdf` section (`UmdfService`,
   `UmdfServiceOrder`, `UmdfLibraryVersion`, the UMDF policies) into the
   registry where Windows keeps them.
+- **Thread-pool waits** (`kernel32`): `SetThreadpoolWait` no longer waits
+  for a running callback of the same wait, as on Windows; the framework's
+  work items set their wait from a thread holding the lock the callback
+  takes, which deadlocked the device's start.  `tpwaittest` checks it.
 - **The test**: `umdftest.dll` (`tools/drivertest/umdftest.c`), a UMDF
   driver for QEMU's `edu` device written against the WDK's UMDF 2.33
   headers; the devices suite's "umdf" boot installs it, and `umdftest`

@@ -295,7 +295,7 @@ static void host_gone(Ext *x, NT_FILE_OBJECT *fo)
     KeReleaseSpinLock(&x->lock, irql);
     for (NT_LIST_ENTRY *e; (e = list_pop(&recs));) {
         Rec *r = REC(e);
-        complete(r->irp, STATUS_DEVICE_NOT_CONNECTED, 0);
+        if (r->irp) complete(r->irp, STATUS_DEVICE_NOT_CONNECTED, 0);
         ExFreePoolWithTag(r, TAG);
     }
     for (NT_LIST_ENTRY *e; (e = list_pop(&gets));) complete(IRP_OF(e), NT_STATUS_CANCELLED, 0);
@@ -378,6 +378,11 @@ static NT_STATUS host_control(Ext *x, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
             }
         }
         KeReleaseSpinLock(&x->lock, irql);
+        if (r && !r->irp) {                     /* (START, which nobody waits for) */
+            if (!NT_SUCCESS_(rp->status)) DbgPrint("WUDFRd: the UMDF driver failed to start (%08x)", rp->status);
+            ExFreePoolWithTag(r, TAG);
+            r = 0;
+        }
         if (r) {
             NT_IRP *app = r->irp;
             NT_IO_STACK_LOCATION *asl = NtIrpCurrentStack(app);

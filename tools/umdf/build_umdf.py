@@ -195,7 +195,8 @@ def main():
         return [os.path.join(userland, n + '.lib') for n in names]
     common_link = ['/nodefaultlib', '/machine:x64', '/opt:ref', '/opt:icf', '/errorlimit:0', '/Brepro']
     run(['lld-link', '/dll', '/entry:DllMain', '/base:0x7ff7a0000000', '/export:FxFrameworkEntryUm'] + common_link + fx + rt + libs(FX_LIBS) +
-        [f'/out:{os.path.join(out, "Wudfx02000.dll")}', f'/implib:{os.path.join(work, "Wudfx02000.lib")}'])
+        [f'/out:{os.path.join(out, "Wudfx02000.dll")}', f'/implib:{os.path.join(work, "Wudfx02000.lib")}',
+         f'/map:{os.path.join(work, "Wudfx02000.map")}'])
     crt = [o for o in rt if os.path.basename(o) in ('rt_crt.cpp.o', 'rt_uuid.c.o')]
     run(['lld-link', '/subsystem:console', '/entry:mainCRTStartup'] + common_link +
         [os.path.join(userland, 'crt0.obj'), os.path.join(userland, 'tlssup.obj')] + hostobjs + crt +

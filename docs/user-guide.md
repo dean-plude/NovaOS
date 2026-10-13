@@ -161,6 +161,9 @@ installed programs also appear in Start.  Some programs need a runtime
 first, as their notes in the App Store say: Direct3D programs and games
 need **Mesa 3D** (its Vulkan) and **DXVK** (both under Runtimes), and
 Direct3D 12 ones **VKD3D-Proton** too.
+A program started from Start, the App Store, File Explorer or a shortcut
+opens on its own, as on Windows; only a console (command-line) program
+gets a Terminal window, its console.
 OpenGL needs nothing: Mesa's llvmpipe is built in, so Krita and other
 OpenGL 2 and later programs run as they are.
 

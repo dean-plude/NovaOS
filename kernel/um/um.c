@@ -3205,6 +3205,11 @@ static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, 
     return j;
 }
 
+bool UmIsGuiProgram(RamNode *exe)
+{
+    return exe && !exe->dir && um_pe_subsystem(exe) == 2;
+}
+
 UmSpawnJob *UmSpawnStart(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con)
 {
     return spawn_start(exe, cmdline, cwd, con, false);

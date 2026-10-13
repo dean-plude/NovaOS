@@ -105,6 +105,8 @@ def cflags():
 #   selftest  true: a self-test program README lists
 #   msstl     true: a C++ program on the C++ standard library (msvcp140.dll,
 #             Microsoft's STL headers; see userland/msvcp140/build.py)
+#   gui       true: a GUI program (/subsystem:windows): the shell starts it
+#             with no console window, as Windows does
 import json
 SLOT = 0x01000000
 AUTO_X64 = (0x7FFD00000000, 0x7FFE00000000)
@@ -502,7 +504,8 @@ def build_pass(arch, all_tasks):
         stl = (stlobjs + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
             if src.endswith('.cpp') and prog.get('msstl') else []
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS]
-        run(['lld-link', '/subsystem:console', '/entry:mainCRTStartup', '/nodefaultlib'] +
+        run(['lld-link', '/subsystem:' + ('windows' if prog.get('gui') else 'console'),
+             '/entry:mainCRTStartup', '/nodefaultlib'] +
             (['/safeseh:no', '/machine:x86'] if arch == 'x86' else []) +
             [f'/out:{exe}'] + crt0_objs + [tlssup, obj] + stl + res + [os.path.join(odir, l + '.lib') for l in libs])
         if arch == 'x86':

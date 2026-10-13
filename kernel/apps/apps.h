@@ -55,8 +55,10 @@ bool AppByName(const char *name, AppId *out);
 /* The app a Windows program's windows belong to (e.g. "netsurf.exe" ->
  * APP_NETSURF), or -1 for programs without a dock entry. */
 int  AppForProgram(const char *exe_name);
-/* Run a program found by UmFindProgram: GUI programs directly, console
- * programs in a new Terminal window.  @cmdline includes the program name. */
+/* Run a program found by UmFindProgram: GUI programs (PE subsystem 2)
+ * on their own with no console window, by their full path; console
+ * programs in a new Terminal window.  @cmdline (the Terminal's) includes
+ * the program name. */
 void AppRunProgram(RamNode *exe, const char *cmdline);
 /* Install a .msi package with Windows Installer (msiexec /i); false if
  * msiexec.exe is missing */

@@ -148,6 +148,11 @@ UINT32     UmConsoleOutputMode(UmConsole *c);
 /* The Terminal's size in character cells */
 UINT32     UmConsoleCursorStyle(UmConsole *c);
 void       UmConsoleSetSize(UmConsole *c, int cols, int rows);
+/* A pseudo console: what its host writes (keys, VT key sequences) as key
+ * records, echoed while the program reads lines; a new size, the screen
+ * drawn again for the host */
+void       UmConsolePseudoInput(UmConsole *c, const char *data, int len);
+void       UmConsolePseudoResize(UmConsole *c, int cols, int rows);
 /* Windows virtual-key code for a set-1 scan code (E0-prefixed: @ext) */
 UINT32     UmScancodeToVk(UINT8 sc, bool ext);
 

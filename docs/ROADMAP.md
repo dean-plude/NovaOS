@@ -321,10 +321,14 @@ named program or test demonstrates it.
   Windows Terminal-style hosts): a child started with
   `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` gets a console of its own whose
   input and output travel over the host's pipes, and
-  `ResizePseudoConsole` sets its size (`pipetest`); its host gets line
-  feeds as CR LF, as from conhost, and draws the same cells as the
-  console holds (`ptyscreentest`).  Still to do: run
-  Neovim's `:terminal` on it.
+  `ResizePseudoConsole` sets its size and draws the screen again for the
+  host (`pipetest`); its host gets line feeds as CR LF, as from conhost,
+  and draws the same cells as the console holds (`ptyscreentest`).  Keys
+  arrive as a terminal sends them (VT sequences for arrows, Delete and
+  F-keys, win32-input-mode records too) and become key records; while a
+  program reads lines the console echoes and edits them, so a terminal
+  host types into, resizes and exits an interactive `cmd.exe`
+  (`conptytest`).  Still to do: run Neovim's `:terminal` on it.
 - ~~Move files, the registry, process creation and the console off the
   big kernel lock~~ Done (Phase 17.7): file and registry throughput scale
   about 3x from one CPU to four (`smpstress scaling 3`, run nightly).
@@ -667,9 +671,13 @@ measured frame-time gain over the CPU path.
   cells, and `ptyscreentest` compares a full-screen program's cells in a
   console window, under a pseudo console and as the pseudo console's host
   draws them.
-- [ ] **26.2 ConPTY end to end.** Complete process attachment, pipe lifetime,
+- [x] **26.2 ConPTY end to end.** Complete process attachment, pipe lifetime,
   resize and VT output together. Done when a terminal app runs and resizes
-  an interactive `cmd.exe` through `CreatePseudoConsole`.
+  an interactive `cmd.exe` through `CreatePseudoConsole`.  The pseudo
+  console turns the host's keys (VT sequences included) into key records,
+  echoes and edits lines as conhost does, and draws its screen again on
+  `ResizePseudoConsole`; `conptytest` types into, resizes and exits
+  `cmd.exe` as a terminal host and draws the same cells.
 - [ ] **26.3 NTFS robustness.** Verify interrupted writes and a full disk:
   after a power cut during writes, `chkdsk` reports no errors; a full disk
   returns `ERROR_DISK_FULL` without corruption. Existing tests cover

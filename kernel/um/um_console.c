@@ -74,6 +74,10 @@ struct UmConsole {
     UmObject       *out_ob;                  /* a pseudo console's object (not referenced): signaled
                                                 while output waits to be read or the console has ended */
     volatile bool   out_ended;               /* ClosePseudoConsole: its reader stops */
+    char            vt_in[32];               /* a pseudo console's host: an unfinished key sequence */
+    UINT8           vt_in_n;
+    bool            vt_in_cr;                /* (its last byte was CR: a LF after it is not another Enter) */
+    bool            out_cr;                  /* the last byte written out was CR */
 };
 
 static int console_write_locked(UmConsole *c, const char *data, int len);
@@ -335,12 +339,15 @@ static int screen_feed(UmConsole *c, UmConsoleScreen *s, const char *data, int l
         }
         if (i < len) {
             UmVtermWrite(s->vt, s->pend, &s->pend_n, "\r\n", 2);
-            if (active && console_write_locked(c, pseudo ? "\r\n" : "\n", pseudo ? 2 : 1) != (pseudo ? 2 : 1))
+            bool returned = i ? data[i - 1] == '\r' : c->out_cr;   /* (a CR LF from the program stays one) */
+            int n = pseudo && !returned ? 2 : 1;
+            if (active && console_write_locked(c, n == 2 ? "\r\n" : "\n", n) != n)
                 return done;
             done++;
         }
         from = i + 1;
     }
+    if (active && len) c->out_cr = data[len - 1] == '\r';
     return done;
 }
 
@@ -641,6 +648,227 @@ void UmConsoleEof(UmConsole *c)
     c->in_eof = true;
     in_changed(c);
     spin_unlock_irqrestore(&c->in_lock, s);
+}
+
+/* -----------------------------------------------------------------------
+ * A pseudo console's input.  Its host writes keys as a terminal sends them:
+ * characters, control characters and VT sequences for the keys without
+ * one (arrows, Home, F1...; win32-input-mode records too).  As conhost
+ * does, the console turns them into key records, and while the program
+ * reads lines with echo it echoes what is typed and edits the line
+ * (Backspace; Ctrl+C drops it).
+ * ----------------------------------------------------------------------- */
+#define CON_ENHANCED_KEY 0x0100
+
+static UINT16 char_vk(UINT32 ch)
+{
+    if (ch == '\r') return 0x0D;
+    if (ch == 8) return 0x08;
+    if (ch == 9) return 0x09;
+    if (ch == 0x1B) return 0x1B;
+    if (ch >= 'a' && ch <= 'z') return (UINT16)(ch - 32);
+    if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == ' ') return (UINT16)ch;
+    return 0;
+}
+
+/* Under in_lock: record @i taken out of the queue */
+static void in_remove(UmConsole *c, UINT32 i)
+{
+    for (UINT32 j = i; j + 1 != c->in_head; j++) c->in[j % IN_RECS] = c->in[(j + 1) % IN_RECS];
+    c->in_head--;
+}
+
+/* The last character typed on the unfinished line, taken back (with its
+ * key release); false when the line is empty */
+static bool pseudo_rubout(UmConsole *c)
+{
+    IrqState s = spin_lock_irqsave(&c->in_lock);
+    bool done = false;
+    for (UINT32 i = c->in_head; i != c->in_tail && !done;) {
+        i--;
+        UmConInput *r = &c->in[i % IN_RECS];
+        if (!is_key(r) || !key_down(r) || !r->key.ch) continue;
+        if (r->key.ch == '\r') break;
+        UINT16 ch = r->key.ch;
+        in_remove(c, i);
+        r = &c->in[i % IN_RECS];
+        if (i != c->in_head && is_key(r) && !key_down(r) && r->key.ch == ch) in_remove(c, i);
+        done = true;
+    }
+    in_changed(c);
+    spin_unlock_irqrestore(&c->in_lock, s);
+    return done;
+}
+
+/* Echo: drawn on the active screen and sent to the host */
+static void pseudo_echo(UmConsole *c, const char *data, int len)
+{
+    um_lock(&c->out_lock);
+    screen0_follow(c);
+    screen_feed(c, &c->screen[c->active_screen], data, len);
+    um_unlock(&c->out_lock);
+}
+
+/* A key pressed and released (@ch: its character or 0) */
+static void pseudo_press(UmConsole *c, UINT16 vk, UINT16 ch, UINT32 ctrl)
+{
+    UINT32 mode = c->in_mode;
+    bool line = mode & CON_ENABLE_LINE_INPUT, echo = line && (mode & CON_ENABLE_ECHO_INPUT);
+    if (line && ch == 8) {
+        if (pseudo_rubout(c) && echo) pseudo_echo(c, "\b \b", 3);
+        return;
+    }
+    if (line && ch == 3 && (mode & CON_ENABLE_PROCESSED_INPUT)) {   /* Ctrl+C: the line is dropped */
+        while (pseudo_rubout(c)) {}
+        if (echo) pseudo_echo(c, "^C\n", 3);
+        ch = '\r';
+        vk = 0x0D;
+        ctrl = 0;
+    }
+    UmConsoleKey(c, vk, 0, ch, ctrl, true);
+    UmConsoleKey(c, vk, 0, ch, ctrl, false);
+    if (!echo || !ch) return;
+    if (ch == '\r') { pseudo_echo(c, "\n", 1); return; }
+    if (ch < ' ' && ch != '\t') return;
+    char u[3];
+    int n = 0;
+    if (ch < 0x80) u[n++] = (char)ch;
+    else if (ch < 0x800) { u[n++] = (char)(0xC0 | ch >> 6); u[n++] = (char)(0x80 | (ch & 0x3F)); }
+    else { u[n++] = (char)(0xE0 | ch >> 12); u[n++] = (char)(0x80 | ((ch >> 6) & 0x3F)); u[n++] = (char)(0x80 | (ch & 0x3F)); }
+    pseudo_echo(c, u, n);
+}
+
+/* A character the host sent (a control character: its Ctrl+key) */
+static void pseudo_char(UmConsole *c, UINT32 ch, UINT32 ctrl)
+{
+    if (ch >= 0x10000) ch = '?';
+    if (ch == 0x7F || ch == 8) { pseudo_press(c, 0x08, 8, ctrl); return; }
+    if (ch == '\r' || ch == '\t' || ch == 0x1B) { pseudo_press(c, char_vk(ch), (UINT16)ch, ctrl); return; }
+    if (ch == 0) { pseudo_press(c, ' ', 0, ctrl | CON_LEFT_CTRL); return; }      /* Ctrl+Space */
+    if (ch < 0x20) {
+        UINT16 vk = ch <= 26 ? (UINT16)('A' + ch - 1) : (UINT16)0;
+        pseudo_press(c, vk, (UINT16)ch, ctrl | CON_LEFT_CTRL);
+        return;
+    }
+    if (ch >= 'A' && ch <= 'Z') ctrl |= CON_SHIFT;
+    pseudo_press(c, char_vk(ch), (UINT16)ch, ctrl);
+}
+
+/* A complete escape sequence in vt_in */
+static void pseudo_sequence(UmConsole *c)
+{
+    const char *q = c->vt_in;
+    int n = c->vt_in_n;
+    if (n == 2 && q[1] != '[' && q[1] != 'O') {         /* ESC + a character: Alt+it */
+        pseudo_char(c, (UINT8)q[1], CON_LEFT_ALT);
+        return;
+    }
+    UINT32 p[8] = { 0 };
+    int np = 0;
+    bool any = false;
+    for (int i = 2; i < n - 1; i++) {
+        if (q[i] >= '0' && q[i] <= '9') { if (np < 8) p[np] = p[np] * 10 + (UINT32)(q[i] - '0'); any = true; }
+        else if (q[i] == ';') { if (np < 8) np++; any = true; }
+        else return;                                    /* (private sequences: none sent as keys) */
+    }
+    if (any && np < 8) np++;
+    char f = q[n - 1];
+    if (q[1] == '[' && f == '_') {                      /* win32-input-mode: Vk;Sc;Uc;Kd;Cs;Rc */
+        UINT32 repeat = np >= 6 && p[5] ? p[5] : 1;
+        if (!p[3]) return;                              /* (the release comes with each press) */
+        for (UINT32 r = 0; r < repeat && r < 64; r++) {
+            if (p[2] == 8 || p[2] == 3 || p[2] == '\r') pseudo_char(c, p[2], 0);
+            else pseudo_press(c, (UINT16)p[0], (UINT16)p[2], p[4]);
+        }
+        return;
+    }
+    UINT32 mod = np >= 2 && p[1] >= 2 ? p[1] - 1 : 0, ctrl = CON_ENHANCED_KEY;
+    if (mod & 1) ctrl |= CON_SHIFT;
+    if (mod & 2) ctrl |= CON_LEFT_ALT;
+    if (mod & 4) ctrl |= CON_LEFT_CTRL;
+    UINT16 vk = 0;
+    switch (f) {
+    case 'A': vk = 0x26; break;                         /* up */
+    case 'B': vk = 0x28; break;                         /* down */
+    case 'C': vk = 0x27; break;                         /* right */
+    case 'D': vk = 0x25; break;                         /* left */
+    case 'H': vk = 0x24; break;                         /* Home */
+    case 'F': vk = 0x23; break;                         /* End */
+    case 'Z': vk = 0x09; ctrl = CON_SHIFT; break;       /* Shift+Tab */
+    case 'P': case 'Q': case 'R': case 'S':             /* F1-F4 (SS3, or CSI with modifiers) */
+        if (q[1] == 'O' || np >= 2) { vk = (UINT16)(0x70 + f - 'P'); ctrl &= ~(UINT32)CON_ENHANCED_KEY; }
+        break;
+    case '~': {
+        static const UINT8 tilde[25] = { 0, 0x24, 0x2D, 0x2E, 0x23, 0x21, 0x22, 0x24, 0x23, 0, 0,
+                                         0x70, 0x71, 0x72, 0x73, 0x74, 0, 0x75, 0x76, 0x77, 0x78, 0x79, 0, 0x7A, 0x7B };
+        if (np && p[0] < 25) vk = tilde[p[0]];
+        if (vk >= 0x70) ctrl &= ~(UINT32)CON_ENHANCED_KEY;
+        break;
+    }
+    default: break;                                     /* (focus, cursor reports...: not keys) */
+    }
+    if (q[1] == 'O' && f != 'P' && f != 'Q' && f != 'R' && f != 'S' && vk == 0) return;
+    if (vk == 0x09) { pseudo_press(c, vk, 9, ctrl); return; }
+    if (vk) pseudo_press(c, vk, 0, ctrl);
+}
+
+static bool pseudo_sequence_done(const UmConsole *c)
+{
+    const char *q = c->vt_in;
+    int n = c->vt_in_n;
+    if (n < 2) return false;
+    if (q[1] == 'O') return n >= 3;
+    if (q[1] != '[') return true;
+    return n >= 3 && (UINT8)q[n - 1] >= 0x40 && (UINT8)q[n - 1] <= 0x7E;
+}
+
+void UmConsolePseudoInput(UmConsole *c, const char *data, int len)
+{
+    for (int i = 0; i < len; i++) {
+        UINT8 b = (UINT8)data[i];
+        bool cr = c->vt_in_cr;
+        c->vt_in_cr = false;
+        if (c->vt_in_n) {
+            if (b == 0x1B && c->vt_in_n == 1) { pseudo_char(c, 0x1B, 0); continue; }   /* Esc, then another */
+            if (c->vt_in_n < sizeof(c->vt_in)) c->vt_in[c->vt_in_n++] = (char)b;
+            if (pseudo_sequence_done(c)) {
+                pseudo_sequence(c);
+                c->vt_in_n = 0;
+            } else if (c->vt_in_n == sizeof(c->vt_in)) {
+                c->vt_in_n = 0;                         /* (too long to be a key) */
+            }
+            continue;
+        }
+        if (b == 0x1B) { c->vt_in[0] = (char)b; c->vt_in_n = 1; continue; }
+        if (b == '\n') {
+            if (!cr) pseudo_char(c, '\r', 0);
+            continue;
+        }
+        UINT32 ch = b;
+        if (b >= 0xC0) {                                /* UTF-8 */
+            int k = b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : 1;
+            ch &= 0x3F >> k;
+            for (int j = 0; j < k && i + 1 < len; j++) ch = ch << 6 | ((UINT8)data[++i] & 0x3F);
+        }
+        pseudo_char(c, ch, 0);
+        c->vt_in_cr = b == '\r';
+    }
+    if (c->vt_in_n == 1) {                              /* a lone Esc at the end of a write: the Esc key */
+        c->vt_in_n = 0;
+        pseudo_char(c, 0x1B, 0);
+    }
+}
+
+/* ResizePseudoConsole: the new size, and the active screen drawn again
+ * for the host, as conhost does */
+void UmConsolePseudoResize(UmConsole *c, int cols, int rows)
+{
+    if (cols == c->cols && rows == c->rows) return;
+    UmConsoleSetSize(c, cols, rows);
+    um_lock(&c->out_lock);
+    screen0_follow(c);
+    screen_render(c, &c->screen[c->active_screen]);
+    um_unlock(&c->out_lock);
 }
 
 bool   UmConsoleWantsInput(UmConsole *c)  { return c->waiting; }

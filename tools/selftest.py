@@ -95,7 +95,11 @@ order; --list prints them):
             COM3, which serialtest loops data through; "umdf", the edu
             device again, on which pnputil installs a UMDF 2 driver
             (umdftest.dll) that runs in a driver host (WUDFHost.exe) on
-            Microsoft's user-mode framework
+            Microsoft's user-mode framework;
+            "netkvm", QEMU's virtio-net card, on which pnputil installs
+            virtio-win's signed netkvm.sys in place of the built-in
+            driver: it runs on NovaOS's own NDIS host while DHCP, a ping
+            and a download go through it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -326,6 +330,7 @@ USBSERIAL = load_suite('devices/usbserial')
 VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
+NETKVM = load_suite('devices/netkvm')
 
 
 def net4_boot(work):
@@ -466,6 +471,19 @@ def umdf_boot(work):
     umdftest.dll, is installed with pnputil and runs in a driver host
     (tests/selftest/devices/umdf)"""
     return ['-device', 'edu'], []
+
+
+def netkvm_boot(work):
+    """QEMU's virtio-net card on its user-mode network with tools/h2server.js
+    as for the IPv4 boot, and virtio-win's signed netkvm package
+    (tools/drivertest/netkvm.py) in C:\\Tests\\NetKVM: pnputil installs it on the
+    card, which then runs on NovaOS's NDIS host (tests/selftest/devices/netkvm)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import netkvm
+    pkg = os.path.join(work, 'netkvm')
+    netkvm.fetch(pkg)
+    args, procs = net4_boot(work)
+    return args, procs, dict(puts=[(pkg, r'C:\Tests\NetKVM')])
 
 
 def vioser_boot(work):
@@ -716,7 +734,8 @@ BOOTS = {
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot),
-                ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot)],
+                ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
+                ('netkvm', NETKVM, netkvm_boot)],
 }
 
 

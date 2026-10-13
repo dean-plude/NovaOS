@@ -6479,7 +6479,7 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
     const struct hlsl_type *object_type = object->data_type;
-    bool uint_resinfo, has_uint_arg, has_float_arg;
+    bool uint_resinfo, has_uint_arg, has_float_arg, is_buffer;
     struct hlsl_resource_load_params load_params;
     struct hlsl_ir_node *sample_info, *res_info;
     struct hlsl_type *uint_type, *float_type;
@@ -6500,19 +6500,21 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         enum hlsl_sampler_dim sampler_dim;
         unsigned int args_count;
         enum func_argument args[ARG_MAX_ARGS];
+        /* NovaOS: from upstream vkd3d master: no mip level argument on UAVs. */
+        bool srv_only;
     }
     overloads[] =
     {
         { HLSL_SAMPLER_DIM_1D, 1, { ARG_WIDTH } },
-        { HLSL_SAMPLER_DIM_1D, 3, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_1D, 3, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_1DARRAY, 2, { ARG_WIDTH, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_1DARRAY, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_1DARRAY, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_2D, 2, { ARG_WIDTH, ARG_HEIGHT } },
-        { HLSL_SAMPLER_DIM_2D, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_2D, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_2DARRAY, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_2DARRAY, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_2DARRAY, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_3D, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_3D, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_3D, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_CUBE, 2, { ARG_WIDTH, ARG_HEIGHT } },
         { HLSL_SAMPLER_DIM_CUBE, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT } },
         { HLSL_SAMPLER_DIM_CUBEARRAY, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
@@ -6520,6 +6522,8 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         { HLSL_SAMPLER_DIM_2DMS, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_SAMPLE_COUNT } },
         { HLSL_SAMPLER_DIM_2DMSARRAY, 4, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_SAMPLE_COUNT } },
         { HLSL_SAMPLER_DIM_BUFFER, 1, { ARG_WIDTH} },
+        /* NovaOS: ByteAddressBuffer and RWByteAddressBuffer (size in bytes). */
+        { HLSL_SAMPLER_DIM_RAW_BUFFER, 1, { ARG_WIDTH} },
     };
     const struct overload *o = NULL;
 
@@ -6535,6 +6539,9 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
     for (i = 0; i < ARRAY_SIZE(overloads); ++i)
     {
         const struct overload *iter = &overloads[i];
+
+        if (object_type->class == HLSL_CLASS_UAV && iter->srv_only)
+            continue;
 
         if (iter->sampler_dim == object_type->sampler_dim && iter->args_count == params->args_count)
         {
@@ -6564,6 +6571,12 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         }
     }
     uint_resinfo = !has_float_arg && has_uint_arg;
+    /* NovaOS: a buffer's size comes from bufinfo, which returns one uint. */
+    is_buffer = object_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
+            || object_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER;
+    if (is_buffer && hlsl_version_lt(ctx, 5, 0))
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INCOMPATIBLE_PROFILE,
+                "%s() on buffers can only be used in shader model 5.0 or higher.", name);
 
     if (!o)
     {
@@ -6584,7 +6597,10 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
     load_params.type = HLSL_RESOURCE_RESINFO;
     load_params.resource = object;
     load_params.lod = args[ARG_MIP_LEVEL];
-    load_params.format = hlsl_get_vector_type(ctx, uint_resinfo ? HLSL_TYPE_UINT : HLSL_TYPE_FLOAT, 4);
+    if (is_buffer)
+        load_params.format = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+    else
+        load_params.format = hlsl_get_vector_type(ctx, uint_resinfo ? HLSL_TYPE_UINT : HLSL_TYPE_FLOAT, 4);
     res_info = hlsl_block_add_resource_load(ctx, block, &load_params, loc);
 
     if (!add_assignment_from_component(ctx, block, args[ARG_WIDTH], res_info, 0, loc))
@@ -6767,6 +6783,107 @@ static bool add_store_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block
     return true;
 }
 
+/* NovaOS: RWByteAddressBuffer's Interlocked*() methods (dest is a byte
+ * offset), which wgpu's naga writes for WGSL atomics in storage buffers. */
+static bool add_interlocked_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
+        const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    static const struct
+    {
+        const char *name;
+        enum hlsl_interlocked_op op;
+        unsigned int min_args, max_args;
+    }
+    ops[] =
+    {
+        {"InterlockedAdd",             HLSL_INTERLOCKED_ADD,      2, 3},
+        {"InterlockedAnd",             HLSL_INTERLOCKED_AND,      2, 3},
+        {"InterlockedCompareExchange", HLSL_INTERLOCKED_CMP_EXCH, 4, 4},
+        {"InterlockedCompareStore",    HLSL_INTERLOCKED_CMP_EXCH, 3, 3},
+        {"InterlockedExchange",        HLSL_INTERLOCKED_EXCH,     3, 3},
+        {"InterlockedMax",             HLSL_INTERLOCKED_MAX,      2, 3},
+        {"InterlockedMin",             HLSL_INTERLOCKED_MIN,      2, 3},
+        {"InterlockedOr",              HLSL_INTERLOCKED_OR,       2, 3},
+        {"InterlockedXor",             HLSL_INTERLOCKED_XOR,      2, 3},
+    };
+    struct hlsl_ir_node *interlocked, *offset, *val, *cmp_val = NULL, *orig_val = NULL;
+    struct hlsl_type *val_type;
+    struct hlsl_deref dst_deref;
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(ops); ++i)
+    {
+        if (!strcmp(name, ops[i].name))
+            break;
+    }
+    VKD3D_ASSERT(i < ARRAY_SIZE(ops));
+
+    if (hlsl_version_lt(ctx, 5, 0))
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INCOMPATIBLE_PROFILE,
+                "Interlocked functions can only be used in shader model 5.0 or higher.");
+
+    if (params->args_count < ops[i].min_args || params->args_count > ops[i].max_args)
+    {
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
+                "Wrong number of arguments to method '%s': expected between %u and %u, but got %u.",
+                name, ops[i].min_args, ops[i].max_args, params->args_count);
+        return false;
+    }
+
+    if (ops[i].op == HLSL_INTERLOCKED_CMP_EXCH)
+    {
+        cmp_val = params->args[1];
+        val = params->args[2];
+        if (params->args_count == 4)
+            orig_val = params->args[3];
+    }
+    else
+    {
+        val = params->args[1];
+        if (params->args_count == 3)
+            orig_val = params->args[2];
+    }
+
+    /* As for the Interlocked*() functions: uint values, except that
+     * InterlockedMax()/InterlockedMin() also take int. */
+    val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+    if ((ops[i].op == HLSL_INTERLOCKED_MAX || ops[i].op == HLSL_INTERLOCKED_MIN)
+            && hlsl_is_numeric_type(val->data_type) && val->data_type->e.numeric.type != HLSL_TYPE_UINT
+            && val->data_type->e.numeric.type != HLSL_TYPE_BOOL)
+        val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
+
+    if (!(offset = add_implicit_conversion(ctx, block, params->args[0],
+            hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), loc)))
+        return false;
+    if (cmp_val && !(cmp_val = add_implicit_conversion(ctx, block, cmp_val, val_type, loc)))
+        return false;
+    if (!(val = add_implicit_conversion(ctx, block, val, val_type, loc)))
+        return false;
+
+    if (!hlsl_init_deref_from_index_chain(ctx, &dst_deref, object))
+        return false;
+
+    interlocked = hlsl_new_interlocked(ctx, ops[i].op, orig_val ? val_type : NULL,
+            &dst_deref, offset, cmp_val, val, loc);
+    hlsl_cleanup_deref(&dst_deref);
+    if (!interlocked)
+        return false;
+    hlsl_block_add_instr(block, interlocked);
+
+    if (orig_val)
+    {
+        if (orig_val->data_type->modifiers & HLSL_MODIFIER_CONST)
+            hlsl_error(ctx, &orig_val->loc, VKD3D_SHADER_ERROR_HLSL_MODIFIES_CONST,
+                    "Output argument to '%s' is const.", name);
+
+        if (!add_assignment(ctx, block, orig_val, ASSIGN_OP_ASSIGN, interlocked, true))
+            return false;
+    }
+
+    add_void_expr(ctx, block, loc);
+    return true;
+}
+
 static bool add_so_append_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
@@ -6833,7 +6950,7 @@ texture_methods[] =
     { "GatherGreen",        add_gather_method_call,        "00010101001000" },
     { "GatherRed",          add_gather_method_call,        "00010101001000" },
 
-    { "GetDimensions",      add_getdimensions_method_call, "00111111111110" },
+    { "GetDimensions",      add_getdimensions_method_call, "00111111111111" },
 
     { "Load",               add_load_method_call,          "00111011110111" },
     { "Load2",              add_raw_load_method_call,      "00000000000001" },
@@ -6848,12 +6965,28 @@ texture_methods[] =
     { "SampleLevel",        add_sample_lod_method_call,    "00111111001000" },
 };
 
+/* NovaOS: GetDimensions, Load*() and Interlocked*() added; upstream 1.19 has
+ * only Store*().  Keep sorted (bsearch). */
 static const struct method_function uav_methods[] =
 {
-    { "Store",  add_store_method_call, "00000000000001" },
-    { "Store2", add_store_method_call, "00000000000001" },
-    { "Store3", add_store_method_call, "00000000000001" },
-    { "Store4", add_store_method_call, "00000000000001" },
+    { "GetDimensions",              add_getdimensions_method_call, "00111001100101" },
+    { "InterlockedAdd",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedAnd",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedCompareExchange", add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedCompareStore",    add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedExchange",        add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedMax",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedMin",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedOr",              add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedXor",             add_interlocked_method_call,   "00000000000001" },
+    { "Load",                       add_raw_load_method_call,      "00000000000001" },
+    { "Load2",                      add_raw_load_method_call,      "00000000000001" },
+    { "Load3",                      add_raw_load_method_call,      "00000000000001" },
+    { "Load4",                      add_raw_load_method_call,      "00000000000001" },
+    { "Store",                      add_store_method_call,         "00000000000001" },
+    { "Store2",                     add_store_method_call,         "00000000000001" },
+    { "Store3",                     add_store_method_call,         "00000000000001" },
+    { "Store4",                     add_store_method_call,         "00000000000001" },
 };
 
 static const struct method_function so_methods[] =

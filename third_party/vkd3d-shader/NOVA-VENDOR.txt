@@ -34,6 +34,21 @@ such arrays through; hlsl_codegen.c accepts a non-constant index for them
 resource arrays, and arrays inside structs, still stop with the upstream
 message.
 
+RWByteAddressBuffer's methods besides Store*(), which upstream 1.19 (and
+master as of 2026-10, which adds only GetDimensions on UAV textures) report
+as "Method 'Load' is not defined on type 'RWByteAddressBuffer'": Load,
+Load2, Load3 and Load4 (ld_raw on the UAV), GetDimensions (bufinfo, the
+size in bytes; also on ByteAddressBuffer, Buffer and RWBuffer, shader model
+5.0 and later) and the Interlocked*() methods (InterlockedAdd, And,
+CompareExchange, CompareStore, Exchange, Max, Min, Or, Xor, with a byte
+offset), as wgpu's naga writes WGSL storage buffers.  GetDimensions on UAV
+textures (no mip level argument) comes too, as upstream master has it.
+libs/vkd3d-shader/hlsl.y (uav_methods, add_interlocked_method_call,
+add_getdimensions_method_call), hlsl_codegen.c (sm4_generate_vsir_instr_ld,
+sm4_generate_vsir_instr_resinfo) and tpf.c (bufinfo written out).  Stores to
+indexed groupshared arrays ("Store to indexed TGSM") still stop as upstream
+1.19 does (upstream master has them, after a larger rework).
+
 Generated files, made from the tarball (and the change above) as its
 Makefile does, and committed so the build needs neither tool:
   libs/vkd3d-shader/hlsl.tab.c, hlsl.tab.h      bison 3.8.2 -d hlsl.y

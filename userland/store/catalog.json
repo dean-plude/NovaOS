@@ -721,7 +721,7 @@
       "exe": "LightCraft\\**\\lightcraft.exe",
       "kind": "archive",
       "size_mb": 94,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Does not work on NovaOS yet: it draws with Direct3D 12 (the Store's Mesa 3D, DXVK and VKD3D-Proton), its shaders now compile, but its window stays black. MIT or Apache-2.0",
       "label": "Lt",
       "color": "#3C8DBC"
     },

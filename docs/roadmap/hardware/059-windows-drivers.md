@@ -22,11 +22,12 @@
   Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4's
-  framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
-  and NovaOS's `WdfLdr.sys` load KMDF drivers
-  (a test driver's control device and queue); the KMDF version of the
-  `edu` PnP test driver, which finishes the step, follows 30.3.
+  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4 is in:
+  `Wdf01000.sys`, built from Microsoft's MIT WDF source, and NovaOS's
+  `WdfLdr.sys` load KMDF drivers: a test driver's control device and
+  queue, and a KMDF Plug and Play driver for the `edu` device whose
+  interrupt object (line or MSI), DMA transactions and common buffer pass
+  the same checks as the WDM one.
   Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
   runs on KMDF, reports its serial ports as child devices, and a program
   exchanges bytes with the host through `\\.\Global\<port name>`.

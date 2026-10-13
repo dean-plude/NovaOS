@@ -640,19 +640,17 @@ for n in sorted(os.listdir(edudir)):
 # 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
 # MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
 # that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in
-# System32\drivers as on Windows, and the KMDF test driver kmdftest.sys
+# System32\drivers as on Windows, the KMDF test driver kmdftest.sys and the
+# package of kmdfedu.sys, the KMDF driver for QEMU's edu device the kmdfedu
+# self-test installs with pnputil
 kmdfdir = os.path.join(out, 'kmdf')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'kmdf', 'build_kmdf.py'), kmdfdir])
 for n in ('Wdf01000.sys', 'WdfLdr.sys'):
     built.append((f'\\Windows\\System32\\drivers\\{n}', os.path.join(kmdfdir, n)))
 built.append(('\\Tests\\Kmdf\\kmdftest.sys', os.path.join(kmdfdir, 'kmdftest.sys')))
-# 3a2e. edutest.sys and its package (INF, catalog), the Plug and Play driver
-# for QEMU's edu device the edu self-test installs with pnputil (step 30.3)
-edudir = os.path.join(out, 'edutest')
-run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), edudir, 'edutest'])
-for n in sorted(os.listdir(edudir)):
-    built.append((f'\\Tests\\Edu\\{n}', os.path.join(edudir, n)))
-# 3a2f. UMDF 2 (step 30.10): Wudfx02000.dll, the user-mode framework, built
+for n in ('kmdfedu.sys', 'kmdfedu.inf', 'kmdfedu.cat'):
+    built.append((f'\\Tests\\KmdfEdu\\{n}', os.path.join(kmdfdir, n)))
+# 3a2e. UMDF 2 (step 30.10): Wudfx02000.dll, the user-mode framework, built
 # from the same Windows-Driver-Frameworks source, the driver host
 # WUDFHost.exe and the reflector WUDFRd.sys (tools/umdf/build_umdf.py), where
 # Windows keeps them, and the UMDF test driver's package (umdftest.dll, INF,

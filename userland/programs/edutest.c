@@ -1,6 +1,8 @@
 /* edutest.exe — a program using a Plug and Play driver's device: edutest.sys
- * (tools/drivertest/edutest.c), the driver for QEMU's edu device, which the
- * edu self-test installs with "pnputil /add-driver edutest.inf /install".
+ * (tools/drivertest/edutest.c), the WDM driver for QEMU's edu device, which
+ * the edu self-test installs with "pnputil /add-driver edutest.inf /install",
+ * or kmdfedu.sys (tools/drivertest/kmdfedu.c), its KMDF counterpart, which
+ * the kmdfedu self-test installs (the driver says which it is).
  * Finds the device through the interface the driver registered
  * (CM_Get_Device_Interface_List, as Windows programs do), opens it, asks
  * the driver what IRP_MN_START_DEVICE gave it (the memory BAR, the
@@ -158,6 +160,8 @@ int main(int argc, char **argv)
            info.ident, (unsigned long long)info.bar_raw, info.bar_length, info.vector, info.irql, info.raw_level,
            info.latched ? "edge" : "level", info.connect_version, info.dma_version, info.dma_registers);
     printf("location: %ls\n", (const WCHAR *)info.location);
+    if (info.kmdf_minor) printf("edu: a KMDF 1.%u driver, its interrupt object %s\n", info.kmdf_minor,
+                                info.wdf_message ? "message-signalled" : "on the line");
     check(info.ident == 0x010000ed, "edu's identification register");
     check(info.liveness == ~0x12345678u, "edu's liveness register inverts what was written");
     check(info.memory == 1 && info.interrupts == 1, "one memory BAR and one interrupt in the resources");
@@ -166,7 +170,19 @@ int main(int argc, char **argv)
     if (argc > 1) {
         check(!strcmp(argv[1], "message") ? info.message : !info.message, "the interrupt came in the mode asked for");
     }
-    if (info.message) {
+    if (info.kmdf_minor) {
+        /* (the framework connects the interrupt itself: what WdfInterruptGetInfo says of it) */
+        check(info.wdf_message == info.message, "the interrupt object is message-signalled exactly when the resources say so");
+        check(info.message_vector == info.vector && info.message_irql == info.irql,
+              "WdfInterruptGetInfo agrees with the translated resources");
+        if (info.message) {
+            printf("edu: MSI: %u message(s) from vector %u (IRQL %u)\n", info.message_count, info.message_vector,
+                   info.message_irql);
+            check(info.message_count == 1, "edu's one message in the raw descriptor");
+        } else {
+            check(!info.latched, "a PCI INTx interrupt is level-triggered");
+        }
+    } else if (info.message) {
         printf("edu: MSI: %u message(s) from vector %u (IRQL %u, table says %u), address %llx data %x\n", info.message_count,
                info.message_vector, info.message_irql, info.irql, (unsigned long long)info.message_address, info.message_data);
         check(info.connect_version == 3, "IoConnectInterruptEx connected message-based");

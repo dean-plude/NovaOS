@@ -95,7 +95,10 @@ order; --list prints them):
             COM3, which serialtest loops data through; "umdf", the edu
             device again, on which pnputil installs a UMDF 2 driver
             (umdftest.dll) that runs in a driver host (WUDFHost.exe) on
-            Microsoft's user-mode framework;
+            Microsoft's user-mode framework; "kmdfedu", the edu device
+            once more, on which pnputil installs a KMDF driver
+            (kmdfedu.sys) that runs on Wdf01000.sys with the device's
+            memory, interrupt (line, then MSI) and DMA;
             "netkvm", QEMU's virtio-net card, on which pnputil installs
             virtio-win's signed netkvm.sys in place of the built-in
             driver: it runs on NovaOS's own NDIS host while DHCP, a ping
@@ -331,6 +334,7 @@ AX211 = load_suite('devices/ax211')
 VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
+KMDFEDU = load_suite('devices/kmdfedu')
 NETKVM = load_suite('devices/netkvm')
 
 
@@ -471,6 +475,13 @@ def umdf_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a UMDF 2 driver for it,
     umdftest.dll, is installed with pnputil and runs in a driver host
     (tests/selftest/devices/umdf)"""
+    return ['-device', 'edu'], []
+
+
+def kmdfedu_boot(work):
+    """QEMU's edu device (PCI 1234:11e8): a KMDF driver for it, kmdfedu.sys,
+    is installed with pnputil and runs on Wdf01000.sys
+    (tests/selftest/devices/kmdfedu)"""
     return ['-device', 'edu'], []
 
 
@@ -756,7 +767,7 @@ BOOTS = {
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
-                ('netkvm', NETKVM, netkvm_boot)],
+                ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot)],
 }
 
 

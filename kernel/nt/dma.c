@@ -12,7 +12,11 @@
  * and the physical addresses of a request's buffer, its MDL's pages: as a
  * scatter/gather list (GetScatterGatherList, BuildScatterGatherList), or
  * piece by piece through map registers (AllocateAdapterChannel,
- * MapTransfer, FlushAdapterBuffers).  Where a page lies beyond the
+ * MapTransfer, FlushAdapterBuffers), and the same through the version 3
+ * calls KMDF's DMA transactions use (GetDmaTransferInfo,
+ * Get/BuildScatterGatherListEx, AllocateAdapterChannelEx, MapTransferEx,
+ * FlushAdapterBuffersEx), which name the transfer by its offset in the
+ * MDL's buffer.  Where a page lies beyond the
  * device's reach the transfer goes through a bounce buffer below the
  * limit, copied before a write to the device and after a read from it,
  * which is what Windows' map registers are on such a machine.
@@ -258,6 +262,11 @@ static NT_API NT_STATUS alloc_channel(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, 
     if (count > ad->regs) return NT_STATUS_INSUFFICIENT_RESOURCES;
     MapRegs *r = regs_new(ad, count);
     if (!r) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    if (!fn) {                                   /* (AllocateAdapterChannelEx without a routine: they are the caller's) */
+        if (!ctx) { regs_free(r); return NT_STATUS_INVALID_PARAMETER; }
+        *(void **)ctx = r;
+        return NT_STATUS_SUCCESS;
+    }
     UINT8 old = KeIrql();
     if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
     int action = fn(dev, dev->CurrentIrp, r, ctx);
@@ -363,13 +372,39 @@ static NT_API NT_STATUS calc_sg(NT_DMA_ADAPTER *a, NT_MDL *m, void *va, UINT32 l
     return NT_STATUS_SUCCESS;
 }
 
-/* Fill @list for @len bytes from @va, through a bounce buffer when a page
- * is out of the device's reach; call @fn with it */
-static NT_STATUS build_sg(Adapter *ad, NT_DEVICE_OBJECT *dev, NT_MDL *m, void *va, UINT32 len, NT_DRIVER_LIST_CONTROL fn,
-                          void *ctx, UINT8 write, NT_SCATTER_GATHER_LIST *list, UINT32 cap, bool owned)
+/* The elements for @len bytes at @off in @m's buffer, a run of
+ * physically contiguous bytes each, into @list (@max at most): how many
+ * bytes they cover */
+static UINT32 fill_direct(NT_MDL *m, UINT64 off, UINT32 len, NT_SCATTER_GATHER_LIST *list, UINT32 max)
 {
-    if (!m || !len) return NT_STATUS_INVALID_PARAMETER;
-    UINT64 off = mdl_offset(m, va);
+    UINT32 k = 0, done = 0;
+    UINT64 last_end = ~0ull;
+    while (done < len) {
+        UINT32 run;
+        UINT8 *p = mdl_byte(m, off + done, &run);
+        if (!p) break;
+        if (run > len - done) run = len - done;
+        UINT64 pa = (UINT64)(uintptr_t)p - PHYSMAP_BASE;
+        if (pa == last_end) list->Elements[k - 1].Length += run;
+        else if (k == max) break;
+        else { list->Elements[k].Address = (INT64)pa; list->Elements[k].Length = run; k++; }
+        last_end = pa + run;
+        done += run;
+    }
+    list->NumberOfElements = k;
+    list->Reserved = 0;
+    return done;
+}
+
+/* Fill @list for @len bytes at @off in @m's buffer, through a bounce
+ * buffer when a page is out of the device's reach; call @fn with it, or
+ * (the version 3 calls without an execution routine) hand it back in
+ * *@out */
+static NT_STATUS build_sg(Adapter *ad, NT_DEVICE_OBJECT *dev, NT_MDL *m, UINT64 off, UINT32 len, NT_DRIVER_LIST_CONTROL fn,
+                          void *ctx, UINT8 write, NT_SCATTER_GATHER_LIST *list, UINT32 cap, bool owned,
+                          NT_SCATTER_GATHER_LIST **out)
+{
+    if (!m || !len || (!fn && !out)) return NT_STATUS_INVALID_PARAMETER;
     bool reachable;
     UINT32 n = sg_count(m, off, len, ad->limit, &reachable);
     Sg *rec = kzalloc(sizeof(*rec));
@@ -401,25 +436,16 @@ static NT_STATUS build_sg(Adapter *ad, NT_DEVICE_OBJECT *dev, NT_MDL *m, void *v
         list->Elements[0].Address = (INT64)rec->bounce_pa;
         list->Elements[0].Length = len;
     } else {
-        UINT32 k = 0;
-        UINT64 last_end = ~0ull;
-        for (UINT32 done = 0; done < len;) {
-            UINT32 run;
-            UINT8 *p = mdl_byte(m, off + done, &run);
-            if (!p) break;
-            if (run > len - done) run = len - done;
-            UINT64 pa = (UINT64)(uintptr_t)p - PHYSMAP_BASE;
-            if (pa == last_end) list->Elements[k - 1].Length += run;
-            else { list->Elements[k].Address = (INT64)pa; list->Elements[k].Length = run; k++; }
-            last_end = pa + run;
-            done += run;
-        }
-        list->NumberOfElements = k;
+        fill_direct(m, off, len, list, n);
     }
     IrqState s = spin_lock_irqsave(&g_lock);
     rec->next = g_sg;
     g_sg = rec;
     spin_unlock_irqrestore(&g_lock, s);
+    if (!fn) {
+        *out = list;
+        return NT_STATUS_SUCCESS;
+    }
     UINT8 old = KeIrql();
     if (old < DISPATCH_LEVEL) KeIrqlSet(DISPATCH_LEVEL);
     fn(dev, dev->CurrentIrp, list, ctx);
@@ -430,14 +456,14 @@ static NT_STATUS build_sg(Adapter *ad, NT_DEVICE_OBJECT *dev, NT_MDL *m, void *v
 static NT_API NT_STATUS get_sg(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, NT_MDL *m, void *va, UINT32 len,
                                NT_DRIVER_LIST_CONTROL fn, void *ctx, UINT8 write)
 {
-    return build_sg((Adapter *)a, dev, m, va, len, fn, ctx, write, NULL, 0, true);
+    return build_sg((Adapter *)a, dev, m, mdl_offset(m, va), len, fn, ctx, write, NULL, 0, true, NULL);
 }
 
 static NT_API NT_STATUS build_sg_into(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, NT_MDL *m, void *va, UINT32 len,
                                       NT_DRIVER_LIST_CONTROL fn, void *ctx, UINT8 write, void *buf, UINT32 cap)
 {
     if (!buf) return NT_STATUS_INVALID_PARAMETER;
-    return build_sg((Adapter *)a, dev, m, va, len, fn, ctx, write, buf, cap, false);
+    return build_sg((Adapter *)a, dev, m, mdl_offset(m, va), len, fn, ctx, write, buf, cap, false, NULL);
 }
 
 static NT_API void put_sg(NT_DMA_ADAPTER *a, NT_SCATTER_GATHER_LIST *list, UINT8 write)
@@ -457,8 +483,126 @@ static NT_API void put_sg(NT_DMA_ADAPTER *a, NT_SCATTER_GATHER_LIST *list, UINT8
     kfree(rec);
 }
 
+/* ---- version 3: the same operations with the transfer given as an
+ * offset into the MDL's buffer and a transfer context (what KMDF's DMA
+ * transactions call when the adapter is version 3) ---- */
+
+/* DMA_TRANSFER_INFO, version 1 */
+typedef struct {
+    UINT32 Version;
+    UINT32 MapRegisterCount, ScatterGatherElementCount, ScatterGatherListSize;
+} TransferInfo;
+
+/* The pages @len bytes at @off in @m's buffer touch */
+static UINT32 pages_of(NT_MDL *m, UINT64 off, UINT32 len)
+{
+    UINT32 n = 0;
+    for (UINT32 done = 0; done < len; n++) {
+        UINT32 run;
+        if (!mdl_byte(m, off + done, &run)) break;
+        done += run;
+    }
+    return n;
+}
+
+static NT_API NT_STATUS init_transfer_context(NT_DMA_ADAPTER *a, void *ctx)
+{
+    (void)a; (void)ctx;                          /* (NovaOS keeps no state in it: every call completes at once) */
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API NT_STATUS transfer_info(NT_DMA_ADAPTER *a, NT_MDL *m, UINT64 off, UINT32 len, UINT8 write, TransferInfo *info)
+{
+    (void)a; (void)write;
+    /* (version 1, or 0: KMDF asks with a zeroed structure when it counts a transaction's map registers) */
+    if (!m || !info || info->Version > 1) return NT_STATUS_INVALID_PARAMETER;
+    UINT32 pages = pages_of(m, off, len);
+    info->MapRegisterCount = pages;
+    info->ScatterGatherElementCount = pages;
+    info->ScatterGatherListSize = (UINT32)(sizeof(NT_SCATTER_GATHER_LIST) + pages * sizeof(NT_SCATTER_GATHER_ELEMENT));
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API NT_STATUS get_sg_ex(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, void *tctx, NT_MDL *m, UINT64 off, UINT32 len,
+                                  UINT32 flags, NT_DRIVER_LIST_CONTROL fn, void *ctx, UINT8 write, void *done_fn,
+                                  void *done_ctx, NT_SCATTER_GATHER_LIST **out)
+{
+    (void)tctx; (void)flags; (void)done_fn; (void)done_ctx;
+    return build_sg((Adapter *)a, dev, m, off, len, fn, ctx, write, NULL, 0, true, out);
+}
+
+static NT_API NT_STATUS build_sg_ex(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, void *tctx, NT_MDL *m, UINT64 off, UINT32 len,
+                                    UINT32 flags, NT_DRIVER_LIST_CONTROL fn, void *ctx, UINT8 write, void *buf, UINT32 cap,
+                                    void *done_fn, void *done_ctx, NT_SCATTER_GATHER_LIST **out)
+{
+    (void)tctx; (void)flags; (void)done_fn; (void)done_ctx;
+    if (!buf) return NT_STATUS_INVALID_PARAMETER;
+    return build_sg((Adapter *)a, dev, m, off, len, fn, ctx, write, buf, cap, false, out);
+}
+
+static NT_API NT_STATUS alloc_channel_ex(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, void *tctx, UINT32 count, UINT32 flags,
+                                         NT_DRIVER_CONTROL fn, void *ctx, void **base)
+{
+    (void)tctx; (void)flags;
+    return alloc_channel(a, dev, count, fn, fn ? ctx : (void *)base);
+}
+
+static NT_API UINT8 cancel_channel(NT_DMA_ADAPTER *a, NT_DEVICE_OBJECT *dev, void *tctx)
+{
+    (void)a; (void)dev; (void)tctx;
+    return 0;                                    /* (nothing waits: every allocation completes at once) */
+}
+
+/* MapTransferEx: the device's addresses for *@len bytes at @off as a
+ * scatter/gather list in @list, the pages themselves when the device
+ * reaches them all, else the map registers' bounce buffer (filled now for
+ * a write to the device) */
+static NT_API NT_STATUS map_transfer_ex(NT_DMA_ADAPTER *a, NT_MDL *m, void *base, UINT64 off, UINT32 dev_off, UINT32 *len,
+                                        UINT8 write, NT_SCATTER_GATHER_LIST *list, UINT32 cap, void *done_fn, void *done_ctx)
+{
+    Adapter *ad = (Adapter *)a;
+    MapRegs *r = base;
+    (void)dev_off; (void)done_fn; (void)done_ctx;
+    if (!m || !len || !*len || !list || cap < sizeof(NT_SCATTER_GATHER_LIST) + sizeof(NT_SCATTER_GATHER_ELEMENT))
+        return NT_STATUS_INVALID_PARAMETER;
+    bool reachable;
+    sg_count(m, off, *len, ad->limit, &reachable);
+    if (reachable) {
+        *len = fill_direct(m, off, *len, list,
+                           (UINT32)((cap - sizeof(NT_SCATTER_GATHER_LIST)) / sizeof(NT_SCATTER_GATHER_ELEMENT)));
+        return *len ? NT_STATUS_SUCCESS : NT_STATUS_INVALID_PARAMETER;
+    }
+    UINT32 room = r ? r->count * PAGE_SIZE : 0;
+    if (!room) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    if (*len > room) *len = room;
+    if (write) mdl_copy(m, off, r->va, *len, false);
+    list->NumberOfElements = 1;
+    list->Reserved = 0;
+    list->Elements[0].Address = (INT64)r->pa;
+    list->Elements[0].Length = *len;
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API NT_STATUS flush_buffers_ex(NT_DMA_ADAPTER *a, NT_MDL *m, void *base, UINT64 off, UINT32 len, UINT8 write)
+{
+    Adapter *ad = (Adapter *)a;
+    MapRegs *r = base;
+    if (!m || !r || write) return NT_STATUS_SUCCESS;
+    /* a read from the device that went through the bounce buffer: copy it out */
+    bool reachable;
+    sg_count(m, off, len, ad->limit, &reachable);
+    if (!reachable) mdl_copy(m, off, r->va, len > r->count * PAGE_SIZE ? r->count * PAGE_SIZE : len, true);
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API void free_adapter_object(NT_DMA_ADAPTER *a, int action)
+{
+    (void)action;                                /* (the channel: map registers kept are freed by FreeMapRegisters) */
+    (void)a;
+}
+
 /* What NovaOS does not have yet (DMA version 2 and 3 functions beyond
- * AllocateCommonBufferEx): logged, and refused */
+ * the ones above): logged, and refused */
 static NT_API NT_STATUS dma_missing(void)
 {
     kprintf("[NT] DMA: a version 2 or 3 DMA operation NovaOS does not implement yet was called\n");
@@ -488,13 +632,19 @@ NT_API NT_DMA_ADAPTER *nt_IoGetDmaAdapter(NT_DEVICE_OBJECT *pdo, NT_DEVICE_DESCR
 {
     static bool filled;
     if (!filled) {                                   /* (the operations NovaOS lacks) */
-        void **slot[] = { &g_ops.BuildMdlFromScatterGatherList, &g_ops.GetDmaAdapterInfo, &g_ops.GetDmaTransferInfo,
-                          &g_ops.InitializeDmaTransferContext, &g_ops.AllocateAdapterChannelEx,
-                          &g_ops.ConfigureAdapterChannel, &g_ops.CancelAdapterChannel, &g_ops.MapTransferEx,
-                          &g_ops.GetScatterGatherListEx, &g_ops.BuildScatterGatherListEx, &g_ops.FlushAdapterBuffersEx,
-                          &g_ops.FreeAdapterObject, &g_ops.CancelMappedTransfer, &g_ops.AllocateDomainCommonBuffer,
+        void **slot[] = { &g_ops.BuildMdlFromScatterGatherList, &g_ops.GetDmaAdapterInfo,
+                          &g_ops.ConfigureAdapterChannel, &g_ops.CancelMappedTransfer, &g_ops.AllocateDomainCommonBuffer,
                           &g_ops.FlushDmaBuffer, &g_ops.JoinDmaDomain, &g_ops.LeaveDmaDomain, &g_ops.GetDmaDomain };
         for (unsigned i = 0; i < sizeof(slot) / sizeof(slot[0]); i++) *slot[i] = (void *)dma_missing;
+        g_ops.GetDmaTransferInfo = (void *)transfer_info;
+        g_ops.InitializeDmaTransferContext = (void *)init_transfer_context;
+        g_ops.AllocateAdapterChannelEx = (void *)alloc_channel_ex;
+        g_ops.CancelAdapterChannel = (void *)cancel_channel;
+        g_ops.MapTransferEx = (void *)map_transfer_ex;
+        g_ops.GetScatterGatherListEx = (void *)get_sg_ex;
+        g_ops.BuildScatterGatherListEx = (void *)build_sg_ex;
+        g_ops.FlushAdapterBuffersEx = (void *)flush_buffers_ex;
+        g_ops.FreeAdapterObject = (void *)free_adapter_object;
         filled = true;
     }
     (void)pdo;

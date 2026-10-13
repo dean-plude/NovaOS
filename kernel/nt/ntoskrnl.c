@@ -353,6 +353,16 @@ NT_API NTSTATUS nt_RtlGetVersion(void *info)
     return STATUS_SUCCESS;
 }
 
+/* PsGetVersion: the version RtlGetVersion reports (FALSE: a free build, not a checked one) */
+NT_API UINT8 nt_PsGetVersion(UINT32 *major, UINT32 *minor, UINT32 *build, NT_UNICODE_STRING *csd)
+{
+    if (major) *major = 10;
+    if (minor) *minor = 0;
+    if (build) *build = 19041;
+    if (csd && csd->Buffer && csd->MaximumLength >= 2) { csd->Length = 0; csd->Buffer[0] = 0; }
+    return 0;
+}
+
 /* The debugger is not attached, so no frames are captured */
 NT_API UINT16 nt_RtlCaptureStackBackTrace(UINT32 skip, UINT32 count, void **frames, UINT32 *hash)
 {
@@ -770,6 +780,21 @@ NT_API int nt__vsnprintf(char *buf, UINT64 count, const char *fmt, __builtin_ms_
     if (!count) return 0;
     format(buf, (int)(count > 0x7FFFFFFF ? 0x7FFFFFFF : count), fmt, ap);
     return (int)strlen(buf);
+}
+
+/* The secure form: at most @count characters (_TRUNCATE, ~0: as many as
+ * fit) into @size bytes; -1 when the output was cut short */
+NT_API int nt__vsnprintf_s(char *buf, UINT64 size, UINT64 count, const char *fmt, __builtin_ms_va_list ap)
+{
+    if (!buf || !size) return -1;
+    UINT64 cap = count < size ? count + 1 : size;
+    char tmp[1024];
+    format(tmp, sizeof(tmp), fmt, ap);
+    UINT64 n = strlen(tmp);
+    UINT64 put = n < cap ? n : cap - 1;
+    memcpy(buf, tmp, put);
+    buf[put] = 0;
+    return put < n ? -1 : (int)n;
 }
 
 NT_API int nt__vsnwprintf(NT_WCHAR *buf, UINT64 count, const NT_WCHAR *fmt, __builtin_ms_va_list ap)

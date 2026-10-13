@@ -92,7 +92,11 @@ order; --list prints them):
             on NovaOS's Storport host and the volume mounts as D:;
             "usbserial", QEMU's usb-serial converter (an FTDI FT232) on
             xHCI, which gets FTDI's own driver by hardware ID and becomes
-            COM3, which serialtest loops data through
+            COM3, which serialtest loops data through;
+            "netkvm", QEMU's virtio-net card, on which pnputil installs
+            virtio-win's signed netkvm.sys in place of the built-in
+            driver: it runs on NovaOS's own NDIS host while DHCP, a ping
+            and a download go through it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -322,6 +326,7 @@ EDU = load_suite('devices/edu')
 USBSERIAL = load_suite('devices/usbserial')
 VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
+NETKVM = load_suite('devices/netkvm')
 
 
 def net4_boot(work):
@@ -455,6 +460,19 @@ def edu_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
     edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
     return ['-device', 'edu'], []
+
+
+def netkvm_boot(work):
+    """QEMU's virtio-net card on its user-mode network with tools/h2server.js
+    as for the IPv4 boot, and virtio-win's signed netkvm package
+    (tools/drivertest/netkvm.py) in C:\\Tests\\NetKVM: pnputil installs it on the
+    card, which then runs on NovaOS's NDIS host (tests/selftest/devices/netkvm)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import netkvm
+    pkg = os.path.join(work, 'netkvm')
+    netkvm.fetch(pkg)
+    args, procs = net4_boot(work)
+    return args, procs, dict(puts=[(pkg, r'C:\Tests\NetKVM')])
 
 
 def vioser_boot(work):
@@ -705,7 +723,7 @@ BOOTS = {
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot),
-                ('viostor', VIOSTOR, viostor_boot)],
+                ('viostor', VIOSTOR, viostor_boot), ('netkvm', NETKVM, netkvm_boot)],
 }
 
 

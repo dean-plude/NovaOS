@@ -663,7 +663,8 @@ UINT32 NtPnpStart(UINT32 node)
         pnp_unlock();
         return prob;
     }
-    if ((n->flags & PNP_STARTED) && !p) { prob = PROB_FAILED_START; goto out; }   /* (a NovaOS driver has it) */
+    bool inbox = (n->flags & PNP_STARTED) && !p;             /* (a NovaOS driver has it) */
+    if (inbox && !(is_pci && (n->flags & PNP_INBOX))) { prob = PROB_FAILED_START; goto out; }
     ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
     if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0]) { prob = PROB_NO_DRIVER; goto out; }
 
@@ -674,6 +675,22 @@ UINT32 NtPnpStart(UINT32 node)
 
     if (!p) p = is_pci ? pdo_new(node, &pci, n->instance) : usb_record(node, n->instance);
     if (!p) { prob = PROB_FAILED_START; goto out; }
+    /* NovaOS's own driver steps aside for the installed one, as Windows
+     * replaces an inbox driver with a vendor's (once that one has loaded) */
+    if (inbox) {
+        if (!NtDrvFind(service)) NtDrvLoad(service);
+        if (!NtDrvFind(service)) {
+            kprintf("[PNP] %s: driver %s did not load\n", n->instance, service);
+            prob = PROB_DRIVER_FAILED_LOAD;
+            goto out;
+        }
+        if (!PciSetAside(&pci)) {
+            kprintf("[PNP] %s: its NovaOS driver did not step aside for %s\n", n->instance, service);
+            prob = PROB_FAILED_START;
+            goto out;
+        }
+        n->flags &= ~(UINT32)PNP_STARTED;
+    }
     prob = start_stack(p, service);
     if (prob) goto out;
     strncpy(p->service, service, sizeof(p->service) - 1);
@@ -682,7 +699,7 @@ UINT32 NtPnpStart(UINT32 node)
     kprintf("[PNP] %s: started (driver %s)\n", n->instance, service);
     enumerate(p);                                        /* (its children, if it is a bus) */
 out:
-    if (prob && prob != PROB_NO_DRIVER && !((n->flags & PNP_STARTED) && !pdo_by_node(node)))   /* (not a NovaOS driver's) */
+    if (prob && prob != PROB_NO_DRIVER && !(n->flags & PNP_STARTED))   /* (not while a NovaOS driver runs it) */
         PnpSetProblem(node, prob);
     pnp_unlock();
     kfree(n);
@@ -838,7 +855,7 @@ void NtPnpBoot(void)
     char key[200], service[64];
     g_booted = true;
     for (UINT32 id = 1; id <= count; id++) {
-        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || (n->flags & PNP_STARTED)) continue;
+        if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || ((n->flags & PNP_STARTED) && !(n->flags & PNP_INBOX))) continue;
         if (!strncmp(n->instance, "USB\\", 4)) {             /* (on the work-item thread, with later arrivals) */
             if (UsbDevByPnp(id)) defer(WORK_USB_ARRIVED, id);
             continue;

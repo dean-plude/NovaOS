@@ -61,7 +61,8 @@ and register a device interface that programs open.  `pnputil
 `pnputil /disable-device /deviceid ID` takes the driver away (it may
 refuse while a program has the device open) and keeps the device off
 across restarts, and `/enable-device` starts it again.  A device NovaOS
-has its own driver for keeps it.  Since step 30.4 KMDF drivers load
+has its own driver for keeps it, except where that driver can step aside
+(below).  Since step 30.4 KMDF drivers load
 too, on `Wdf01000.sys` and `WdfLdr.sys`; the rest follow in later steps,
 and until then the default set is the built-in drivers and the firmware
 below.
@@ -137,6 +138,25 @@ other disk's (`[DRIVES] D: is NTFS volume "..." on stor0`).  virtio-win's
 sends one request at a time through a 64 KiB bounce buffer, interrupts
 are line-based (no MSI-X), and a started adapter cannot be removed yet;
 deeper queues, MSI-X and removal come later.
+
+Since step 30.9 a Windows **network driver** (an NDIS 6 miniport) runs a
+network card, on NovaOS's own NDIS host (`kernel/nt/ndis.c`, the
+`ndis.sys` exports; Microsoft's `ndis.sys` is never shipped).  The
+miniport registers with `NdisMRegisterMiniportDriver`; NovaOS starts the
+card as Windows does (its PnP handlers, `MiniportInitializeEx` with the
+card's resources, `MiniportRestart`, the packet filter) and hands the
+running adapter to its network stack, so DHCP, DNS and every program's
+sockets go through the Windows driver: frames to send become
+`NET_BUFFER_LIST`s for `MiniportSendNetBufferLists`, and the frames the
+miniport indicates are copied to the stack.  Interrupts are line-based
+(the ISR and DPC run as Windows runs them), DMA is scatter/gather, and the
+link state, the adapter's MAC address and OID requests work.  virtio-win's
+`netkvm.sys` on QEMU's virtio-net card is the first: NovaOS has its own
+virtio-net driver, which steps aside when a Windows driver is installed on
+the card (`[PCI] 00:03.0: virtio-net steps aside for an installed Windows
+driver`), and the card keeps the Windows driver at every boot after.
+Wi-Fi drivers (WDI) and NDIS filter and protocol drivers are not hosted
+yet.
 
 ### Driver signing
 

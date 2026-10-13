@@ -138,8 +138,9 @@ NEWDEV BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid,
         if (!nova_pnp_node(id, &n) || !(n.flags & NOVA_PNP_PRESENT)) continue;
         if (!multi_has(n.hwids, hwid) && !multi_has(n.compat, hwid)) continue;
         BOOL windows = (n.flags & NOVA_PNP_WINDOWS) != 0;
-        if ((n.flags & NOVA_PNP_STARTED) && !windows) continue;       /* (a NovaOS driver runs it) */
-        if ((n.flags & NOVA_PNP_STARTED) && nova_pnp_stop(id) < 0) { err = ERROR_DEVICE_IN_USE; continue; }
+        /* (a NovaOS driver runs it: only an inbox one steps aside, at start) */
+        if ((n.flags & NOVA_PNP_STARTED) && !windows && !(n.flags & NOVA_PNP_INBOX)) continue;
+        if ((n.flags & NOVA_PNP_STARTED) && windows && nova_pnp_stop(id) < 0) { err = ERROR_DEVICE_IN_USE; continue; }
         WCHAR inst[128];
         wide(n.instance, inst, 128);
         if (!NovaInstallDeviceDriverW(published, inst, hwid)) { err = GetLastError(); continue; }

@@ -560,6 +560,10 @@ named program or test demonstrates it.
   Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
   virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
   the NTFS volume on its disk.
+  Step 30.9's first half is in: NovaOS's own NDIS host (`ndis.sys`) runs
+  virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
+  built-in driver, and the network stack uses it for DHCP, ping and
+  downloads; Intel AX211 Wi-Fi (WDI) is the second half.
 
 <!-- END generated:next-hardware -->
 

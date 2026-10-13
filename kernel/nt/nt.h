@@ -30,6 +30,9 @@
  *   intr.c      device interrupts (IoConnectInterrupt(Ex)) at DIRQL
  *   dma.c       device registers (MmMapIoSpace), contiguous memory and DMA
  *               adapters (IoGetDmaAdapter)
+ *   ndis.c      ndis.sys: the NDIS 6 host network miniports run on, its
+ *               running adapter handed to the network stack (ndis.h: the
+ *               NDIS structures)
  *   storport.c  storport.sys: the Storport host storage miniports run on,
  *               each disk it finds handed to the block layer (storport.h:
  *               the Storport structures)
@@ -102,8 +105,8 @@ bool      NtPsHandleClose(void *handle);
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
 /* exports.c: whether the kernel itself provides @module's exports
- * (ntoskrnl.exe, hal.dll, and the usbd.sys, wmilib.sys and storport.sys
- * NovaOS writes) */
+ * (ntoskrnl.exe, hal.dll, and the usbd.sys, wmilib.sys, storport.sys and
+ * ndis.sys NovaOS writes) */
 bool      NtExportModule(const char *module);
 
 /* io.c */

@@ -977,8 +977,9 @@ NT_API void nt_IoReleaseRemoveLockAndWaitEx(NT_IO_REMOVE_LOCK *l, void *tag, UIN
 {
     (void)tag; (void)size;
     __atomic_store_n(&l->Removed, 1, __ATOMIC_RELEASE);
-    if (__atomic_sub_fetch(&l->IoCount, 1, __ATOMIC_ACQ_REL) == 0) nt_KeSetEvent(&l->RemoveEvent, 0, 0);
-    nt_KeWaitForSingleObject(&l->RemoveEvent, 0, 0, 0, NULL);
+    /* the caller's own acquisition and the count the device held from the start */
+    if (__atomic_sub_fetch(&l->IoCount, 2, __ATOMIC_ACQ_REL) > 0)
+        nt_KeWaitForSingleObject(&l->RemoveEvent, 0, 0, 0, NULL);
 }
 
 /* -----------------------------------------------------------------------

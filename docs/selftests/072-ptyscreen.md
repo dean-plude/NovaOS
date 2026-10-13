@@ -1,0 +1,1 @@
+| `ptyscreentest` | A full-screen program (alternate screen, colours, wide characters, erasing, scroll regions, inserted and deleted lines, wrapping, cell writes, fills and scrolling) drawn in a console window and through a pseudo console: both runs read back the same cells, and the pseudo console's output drawn by a host gives them too. |

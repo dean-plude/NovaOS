@@ -29,6 +29,7 @@
  */
 #include "ntapi.h"
 #include "../ke/irql.h"
+#include "../ke/kpcr.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
 #include "../lib/string.h"
@@ -150,6 +151,8 @@ static void dispatch(void *arg)
     UINT8 old = KeIrql();
     UINT8 fx[512] __attribute__((aligned(16)));
     __asm__ volatile ("fxsave64 (%0)" : : "r"(fx) : "memory");   /* (driver code may use SSE) */
+    PKPCR k = KiGetCurrentKpcr();
+    k->InIsr++;                                     /* (DPCs they queue: ke.c) */
     for (NtInterrupt *in = l->list; in; in = in->next) {
         KeIrqlSet(in->sync_irql);
         nt_KeAcquireSpinLockAtDpcLevel(in->lock);
@@ -159,6 +162,10 @@ static void dispatch(void *arg)
     }
     __asm__ volatile ("fxrstor64 (%0)" : : "r"(fx) : "memory");
     KeIrqlSet(old);
+    if (!--k->InIsr && k->DpcPending) {
+        k->DpcPending = 0;
+        KiRequestDispatchInterrupt();
+    }
 }
 
 static NTSTATUS connect(NtInterrupt **out, NT_KSERVICE_ROUTINE isr, void *ctx, NT_KSPIN_LOCK *lock, UINT32 vector,

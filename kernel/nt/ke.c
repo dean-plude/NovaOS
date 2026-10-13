@@ -66,7 +66,13 @@ static DpcQueue g_dpcq[MAX_CPUS];
 
 void KiRequestDispatchInterrupt(void)
 {
-    apic_send_ipi(KiGetCurrentKpcr()->ApicId, APIC_IPI_FIXED | VECTOR_DPC);
+    PKPCR k = KiGetCurrentKpcr();
+    /* (from a driver's interrupt routine: sent once the IRQL is back down,
+     * intr.c, so that no interrupt is pending below the raised IRQL when it
+     * drops with interrupts off; KVM nested on some hosts fails the VM entry
+     * after that CR8 write, "KVM: entry failed, hardware error 0x0") */
+    if (k->InIsr) { k->DpcPending = 1; return; }
+    apic_send_ipi(k->ApicId, APIC_IPI_FIXED | VECTOR_DPC);
 }
 
 NT_API void nt_KeInitializeDpc(NT_KDPC *dpc, NT_KDEFERRED_ROUTINE routine, void *ctx)

@@ -327,6 +327,7 @@ NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
 USBSERIAL = load_suite('devices/usbserial')
+AX211 = load_suite('devices/ax211')
 VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
@@ -707,6 +708,26 @@ def usbserial_boot(work):
             '-device', 'usb-serial,bus=usbserial-xhci.0,chardev=ftdi'], [srv, echo]
 
 
+def ax211_boot(work):
+    """QEMU's edu card standing in for an Intel AX211 Wi-Fi card
+    (opt/novaos/pci-standin; QEMU has no Intel Wi-Fi) on a user-mode network
+    where 10.0.2.2:18093 answers as the Microsoft Update Catalog does with
+    Intel's own driver (tools/drivertest/ax211_catalog.py): pnputil
+    downloads and installs it by hardware ID (tests/selftest/devices/ax211)"""
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tools', 'drivertest', 'ax211_catalog.py'), '18093', work])
+    end = time.time() + 900                   # (the first run downloads Intel's cabinet, 24 MB)
+    while time.time() < end and srv.poll() is None:
+        try:
+            socket.create_connection(('127.0.0.1', 18093), 1).close()
+            break
+        except OSError:
+            time.sleep(1)
+    if srv.poll() is not None or time.time() >= end:
+        raise RuntimeError('the recorded Update Catalog for the AX211 did not start (see catalog.log; is port 18093 in use?)')
+    return ['-nic', 'user,model=virtio-net-pci', '-device', 'edu',
+            '-fw_cfg', 'name=opt/novaos/pci-standin,string=1234:11e8 8086:51f1 8086:0094 0280'], [srv]
+
+
 ECHO = """import socket, sys
 srv = socket.socket()
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -733,7 +754,7 @@ BOOTS = {
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
-                ('usbserial', USBSERIAL, usbserial_boot),
+                ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('netkvm', NETKVM, netkvm_boot)],
 }
@@ -837,7 +858,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10713)] + ['serialpeer.log']:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10713)] + ['serialpeer.log', 'catalog.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

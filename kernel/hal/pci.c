@@ -9,6 +9,7 @@
 #include "../arch/x86_64/paging.h"
 #include "../lib/string.h"
 #include "../io/pnp.h"
+#include "fwcfg.h"
 
 #define PCI_ADDR  0xCF8
 #define PCI_DATA  0xCFC
@@ -30,13 +31,74 @@ static UINT32 cfg_addr(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off)
  * access at a time, from any CPU */
 static KSpinLock g_cfg_lock = KSPINLOCK_INIT;
 
+/* A stand-in (self-tests only): one function presents another device's
+ * identity (its vendor and device, subsystem and class), so a Windows
+ * driver for hardware QEMU does not have (Intel's AX211 Wi-Fi card,
+ * step 30.9) installs, loads and probes on a device QEMU has (its edu
+ * card).  Only QEMU's host can ask for it, with the firmware configuration
+ * file opt/novaos/pci-standin, "VVVV:DDDD VVVV:DDDD SSSS:ssss CCSS": the
+ * function to present, the identity it presents (vendor:device), its
+ * subsystem (vendor:device) and its class and subclass, in hex.  Reads of
+ * those registers return the stand-in's; everything else is the real
+ * device's. */
+static struct {
+    bool   on;
+    UINT8  bus, dev, func;
+    UINT32 from, id, sub, cls;
+} g_standin;
+
+static bool hex_field(const char **pp, int digits, UINT32 *out)
+{
+    UINT32 v = 0;
+    for (int i = 0; i < digits; i++) {
+        char c = (*pp)[i];
+        int d = c >= '0' && c <= '9' ? c - '0' : (c | 0x20) >= 'a' && (c | 0x20) <= 'f' ? (c | 0x20) - 'a' + 10 : -1;
+        if (d < 0) return false;
+        v = v << 4 | (UINT32)d;
+    }
+    *pp += digits;
+    *out = v;
+    return true;
+}
+
+static void standin_read_config(void)
+{
+    char buf[64];
+    int n = FwCfgFile("opt/novaos/pci-standin", buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    buf[n] = 0;
+    const char *p = buf;
+    UINT32 fv, fd, tv, td, sv, sd, cls;
+    if (!hex_field(&p, 4, &fv) || *p++ != ':' || !hex_field(&p, 4, &fd) || *p++ != ' ' ||
+        !hex_field(&p, 4, &tv) || *p++ != ':' || !hex_field(&p, 4, &td) || *p++ != ' ' ||
+        !hex_field(&p, 4, &sv) || *p++ != ':' || !hex_field(&p, 4, &sd) || *p++ != ' ' || !hex_field(&p, 4, &cls)) {
+        kprintf("[PCI] opt/novaos/pci-standin: not \"VVVV:DDDD VVVV:DDDD SSSS:ssss CCSS\"\n");
+        return;
+    }
+    g_standin.from = fd << 16 | fv;
+    g_standin.id = td << 16 | tv;
+    g_standin.sub = sd << 16 | sv;
+    g_standin.cls = cls;
+}
+
+static UINT32 standin(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off, UINT32 v)
+{
+    if (!g_standin.on || bus != g_standin.bus || dev != g_standin.dev || func != g_standin.func) return v;
+    switch (off & 0xFC) {
+    case 0x00: return g_standin.id;
+    case 0x08: return g_standin.cls << 16 | (v & 0xFF);          /* (programming interface 0, the real revision) */
+    case 0x2C: return g_standin.sub;
+    default:   return v;
+    }
+}
+
 UINT32 PciRead32(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off)
 {
     IrqState s = spin_lock_irqsave(&g_cfg_lock);
     outl(PCI_ADDR, cfg_addr(bus, dev, func, off));
     UINT32 v = inl(PCI_DATA);
     spin_unlock_irqrestore(&g_cfg_lock, s);
-    return v;
+    return standin(bus, dev, func, off, v);
 }
 
 void PciWrite32(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off, UINT32 val)
@@ -64,6 +126,14 @@ static void probe(UINT8 bus, UINT8 dev, UINT8 func)
 {
     UINT32 id = PciRead32(bus, dev, func, 0x00);
     if ((id & 0xFFFF) == 0xFFFF) return;
+    if (g_standin.from && !g_standin.on && id == g_standin.from) {
+        g_standin.on = true;
+        g_standin.bus = bus; g_standin.dev = dev; g_standin.func = func;
+        id = PciRead32(bus, dev, func, 0x00);
+        kprintf("[PCI] %02x:%02x.%x %04x:%04x stands in for %04x:%04x, subsystem %08x (opt/novaos/pci-standin)\n", bus,
+                dev, func, g_standin.from & 0xFFFF, g_standin.from >> 16, id & 0xFFFF, id >> 16,
+                g_standin.sub);
+    }
     if (g_count >= PCI_MAX_DEVICES) {
         kprintf("[PCI] %02x:%02x.%x %04x:%04x: more than %d functions, not listed\n", bus, dev, func,
                 id & 0xFFFF, id >> 16, PCI_MAX_DEVICES);
@@ -86,6 +156,7 @@ void PciInitialize(void)
 {
     g_count = 0;
     memset(g_driver, 0, sizeof(g_driver));
+    standin_read_config();
     for (int bus = 0; bus < 256; bus++) {
         for (int dev = 0; dev < 32; dev++) {
             if ((PciRead32((UINT8)bus, (UINT8)dev, 0, 0) & 0xFFFF) == 0xFFFF) continue;

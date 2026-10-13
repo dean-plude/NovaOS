@@ -180,6 +180,32 @@ typedef struct {
     unsigned int       Flags;
 } NDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES;
 
+/* WDI (dot11wdi.h): a Wi-Fi miniport's lower edge.  NdisMRegisterWdiMiniportDriver
+ * takes these handlers beside an NDIS_MINIPORT_DRIVER_CHARACTERISTICS that
+ * has no initialize, halt, pause, restart or send handlers: on Windows the
+ * WDI upper edge (wdiwifi.sys) is the NDIS miniport and drives the IHV's
+ * through these.  (The header types are what Intel's AX211 driver fills
+ * in and what NovaOS hands it.) */
+#define NDIS_OBJECT_TYPE_MINIPORT_WDI_CHARACTERISTICS 0xC0
+#define NDIS_OBJECT_TYPE_WDI_INIT_PARAMETERS          0xC1
+typedef struct {
+    NDIS_OBJECT_HEADER Header;
+    unsigned int       WdiVersion;
+    void              *AllocateAdapterHandler, *FreeAdapterHandler, *OpenAdapterHandler, *CloseAdapterHandler,
+                      *StartOperationHandler, *StopOperationHandler, *PostPauseHandler, *PostRestartHandler,
+                      *HangDiagnoseHandler, *TalTxRxInitializeHandler, *TalTxRxDeinitializeHandler,
+                      *LeIdleNotificationHandler, *LeCancelIdleNotificationHandler;
+} NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS;
+
+/* What the upper edge gives the IHV driver's MiniportWdiAllocateAdapter:
+ * the routines it completes its open and close with */
+typedef struct {
+    NDIS_OBJECT_HEADER Header;
+    unsigned int       WdiVersion;
+    void              *OpenAdapterCompleteHandler, *CloseAdapterCompleteHandler, *UeIdleNotificationConfirm,
+                      *UeIdleNotificationComplete;
+} NDIS_WDI_INIT_PARAMETERS;
+
 #define NdisMediaStateUnknown   0
 #define MediaConnectStateConnected    1
 #define MediaConnectStateDisconnected 2
@@ -352,3 +378,5 @@ _Static_assert(sizeof(NDIS_STATUS_INDICATION) == 112 && NDIS_OFFSET(NDIS_STATUS_
                NDIS_OFFSET(NDIS_STATUS_INDICATION, Guid) == 60, "STATUS_INDICATION");
 _Static_assert(sizeof(NDIS_CONFIGURATION_OBJECT) == 24 && sizeof(NDIS_CONFIGURATION_PARAMETER) == 24 &&
                sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES) == 56, "CONFIGURATION, DEVICE_OBJECT_ATTRIBUTES");
+_Static_assert(sizeof(NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS) == 0x70 && sizeof(NDIS_WDI_INIT_PARAMETERS) == 40,
+               "WDI_CHARACTERISTICS, WDI_INIT_PARAMETERS");

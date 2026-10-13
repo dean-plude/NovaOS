@@ -409,6 +409,9 @@ downloaded by the test as NovaOS's other tests download apps.
    download over it succeeds.  Wi-Fi (WDI/WiFiCx, for Intel's AX211
    driver on the T14) follows as its own step once this works, and is
    where roadmap step 28.1 chooses between it and a native driver.
+   Since 10-13 Intel's `Netwtw14.sys` (a WDI miniport) installs,
+   registers and has its adapter opened on a stand-in device; the WDI
+   command layer that scans and connects is 28.1's.
 10. **30.10 UMDF 2.** `WUDFHost.exe` and the reflector from the same WDF
     source.  Done when: a NovaOS UMDF test driver on a QEMU device starts
     in its host process and serves a test program's I/O.

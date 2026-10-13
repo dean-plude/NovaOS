@@ -132,6 +132,7 @@ set(KERNEL_C_SOURCES
     hal/rtc.c
     hal/ps2.c
     hal/pci.c
+    hal/fwcfg.c
     hal/acpi.c
     hal/aml.c
     hal/ec.c
@@ -216,6 +217,7 @@ set(KERNEL_C_SOURCES
     se/se.c
     io/io.c
     nt/ci.c
+    nt/cng.c
     nt/ci_roots.c
     nt/dma.c
     nt/etw.c
@@ -236,6 +238,7 @@ set(KERNEL_C_SOURCES
     nt/storport.c
     nt/usbd.c
     nt/win10.c
+    nt/win11.c
     nt/zw.c
     io/pnp.c
     mm/vma.c

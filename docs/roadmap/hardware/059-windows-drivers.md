@@ -37,10 +37,13 @@
   Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
   virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
   the NTFS volume on its disk.
-  Step 30.9's first half is in: NovaOS's own NDIS host (`ndis.sys`) runs
+  Step 30.9 is done: NovaOS's own NDIS host (`ndis.sys`) runs
   virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
   built-in driver, and the network stack uses it for DHCP, ping and
-  downloads; Intel AX211 Wi-Fi (WDI) is the second half.
+  downloads.  Intel's own AX211 Wi-Fi driver (`Netwtw14.sys`, a WDI
+  miniport) now downloads by hardware ID, installs, registers with the
+  NDIS host and reaches its hardware probe on a stand-in device in QEMU;
+  scanning and joining a network on the T14's real card is step 28.1.
   Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
   reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
   on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's

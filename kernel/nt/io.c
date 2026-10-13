@@ -822,6 +822,40 @@ NT_API NT_IRP *nt_IoBuildDeviceIoControlRequest(UINT32 code, NT_DEVICE_OBJECT *d
     return irp;
 }
 
+/* IoBuildSynchronousFsdRequest: a read, write, flush, shutdown or PnP
+ * IRP for @dev, which the caller sends and waits for on @event.  A read
+ * or write uses the device's buffering: a system buffer (copied back by
+ * completion for a read), an MDL, or the caller's buffer as it is. */
+NT_API NT_IRP *nt_IoBuildSynchronousFsdRequest(UINT32 major, NT_DEVICE_OBJECT *dev, void *buf, UINT32 len,
+                                               INT64 *offset, NT_KEVENT *event, NT_IO_STATUS_BLOCK *iosb)
+{
+    NT_IRP *irp = nt_IoAllocateIrp(dev->StackSize, 0);
+    if (!irp) return NULL;
+    NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
+    sl->MajorFunction = (unsigned char)major;
+    irp->UserEvent = event;
+    irp->UserIosb = iosb;
+    irp->Flags = IRP_SYNCHRONOUS_API;
+    irp->IoStatus.Status = NT_STATUS_NOT_SUPPORTED;          /* (what a PnP IRP must start with) */
+    if (major == NT_IRP_MJ_READ || major == NT_IRP_MJ_WRITE) {
+        sl->Parameters.Read.Length = len;
+        sl->Parameters.Read.ByteOffset = offset ? *offset : 0;
+        if (dev->Flags & NT_DO_BUFFERED_IO) {
+            irp->AssociatedIrp.SystemBuffer = kzalloc(len ? len : 1);
+            if (!irp->AssociatedIrp.SystemBuffer) { kfree(irp); return NULL; }
+            if (major == NT_IRP_MJ_WRITE && len) memcpy(irp->AssociatedIrp.SystemBuffer, buf, len);
+            irp->Flags |= IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER | (major == NT_IRP_MJ_READ ? IRP_INPUT_OPERATION : 0);
+            irp->UserBuffer = buf;
+        } else if (dev->Flags & NT_DO_DIRECT_IO) {
+            NT_MDL *m = len ? nt_IoAllocateMdl(buf, len, 0, 0, irp) : NULL;
+            if (m) NtMdlLock(m, false, major == NT_IRP_MJ_READ ? 1 : 0);
+        } else {
+            irp->UserBuffer = buf;
+        }
+    }
+    return irp;
+}
+
 /* IoSetCompletionRoutineEx: set the next stack location's completion
  * routine (what the WDK's inline IoSetCompletionRoutine does; the Ex form
  * is a tracked export). */

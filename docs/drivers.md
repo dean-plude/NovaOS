@@ -181,8 +181,49 @@ link state, the adapter's MAC address and OID requests work.  virtio-win's
 virtio-net driver, which steps aside when a Windows driver is installed on
 the card (`[PCI] 00:03.0: virtio-net steps aside for an installed Windows
 driver`), and the card keeps the Windows driver at every boot after.
-Wi-Fi drivers (WDI) and NDIS filter and protocol drivers are not hosted
-yet.
+NDIS filter and protocol drivers are not hosted yet.
+
+**Wi-Fi: Intel's AX211 driver.**  Intel's own Windows Wi-Fi driver,
+`Netwtw14.sys` (package `Netwtw6e.inf`, 24.40.0.4, the one Windows Update
+gives a ThinkPad T14 Gen 4's AX211, `PCI\VEN_8086&DEV_51F1&SUBSYS_00948086`),
+downloads from the Update Catalog by hardware ID, passes the signing
+policy (its catalog is Microsoft's WHQL signature) and installs unchanged.
+It is a **WDI** miniport: it registers with
+`NdisMRegisterWdiMiniportDriver`, and NDIS rather than the driver owns
+the Wi-Fi state machine.  NovaOS's NDIS host now has the WDI driver's
+upper edge: it calls `MiniportWdiAllocateAdapter` (the driver's adapter
+context and attributes) and `MiniportWdiOpenAdapter`, where the driver
+reads its firmware (`netwfw14.dat`, through `IoGetDriverDirectory` and
+`ZwOpenFile`/`ZwReadFile`), checks its signature (ECDSA P-384 and
+SHA-384 through `cng.sys`, NovaOS's `BCrypt*` exports over Mbed TLS) and
+probes its hardware, then waits for `NdisWdiOpenAdapterComplete`; a
+failed open frees the adapter, and the device is reported failed.
+
+QEMU has no Intel Wi-Fi card, so the self-test
+(`tests/selftest/devices/ax211`) uses a **PCI stand-in**: the firmware
+config file `opt/novaos/pci-standin` (`VVVV:DDDD VVVV:DDDD SSSS:ssss
+CCSS`, here `1234:11e8 8086:51f1 8086:0094 0280`) makes the PCI layer
+(`kernel/hal/pci.c`) present QEMU's `edu` card with the AX211's vendor,
+device, subsystem and class (`[PCI] 00:03.0 1234:11e8 stands in for
+8086:51f1, subsystem 00948086`).  The test downloads Intel's package from
+the recorded Catalog (`tools/drivertest/ax211_catalog.py`; the cabinet is
+Intel's real one), installs it with test signing on (the driver is also
+a KMDF client, and NovaOS's own `WdfLdr.sys` is test-signed by its build;
+`Netwtw14.sys` itself still needs, and has, Microsoft's signature), and
+checks that the driver registers, reads its firmware, has
+its adapter allocated and opened and reaches its hardware probe.  `edu`
+is not an AX211, so the probe fails there, and that is where the
+stand-in stops.
+
+**What needs the T14 (the real AX211)**: the probe and firmware load
+succeeding on the real card (CNVi, its MSI-X interrupts); everything after
+the open, which NovaOS does not have yet: the **WDI command layer**
+(NDIS's `WDI_TASK_*`/`WDI_SET_*` messages to the driver through
+`MiniportWdiStartOperation` and the TAL transmit/receive path), scanning,
+connecting, WPA2/WPA3 (a supplicant), and the adapter as the network
+stack's.  That is roadmap step 28.1, checked on the T14 by hand; the
+`edu` stand-in keeps the install, signing and driver start path tested in
+CI.
 
 ### Driver signing
 

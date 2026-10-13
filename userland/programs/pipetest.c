@@ -408,7 +408,7 @@ static void pseudo_console(void)
     char buf[128];
     read_all(out_read, buf, sizeof(buf));
     CloseHandle(out_read);
-    check(started && !strcmp(buf, "pseudo-console-ok\n"), "pseudo-console output reaches its host pipe");
+    check(started && !strcmp(buf, "pseudo-console-ok\r\n"), "pseudo-console output reaches its host pipe, line feeds as CR LF");
     DeleteProcThreadAttributeList(attrs);
     HeapFree(GetProcessHeap(), 0, attrs);
 }

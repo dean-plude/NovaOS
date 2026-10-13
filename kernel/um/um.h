@@ -124,6 +124,12 @@ typedef struct {
 #define CON_OUT_DEFAULT  0x0007  /* processed, wrap at end of line, VT processing */
 
 UmConsole *UmConsoleNew(void);
+/* Program output into a libvterm emulator.  libvterm drops a character whose
+ * first byte ends one write and whose others start the next, so the
+ * unfinished UTF-8 character at the end of a write waits in @pend (4 bytes,
+ * @pend_n of them used) for the rest. */
+struct VTerm;
+void       UmVtermWrite(struct VTerm *vt, char *pend, UINT8 *pend_n, const char *data, size_t len);
 void       UmConsoleRelease(UmConsole *c);
 /* Drain program output (Terminal side).  Returns bytes copied. */
 int        UmConsoleRead(UmConsole *c, char *buf, int cap);

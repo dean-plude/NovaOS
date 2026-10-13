@@ -93,6 +93,8 @@ typedef struct {
      * join the scrollback, and its screen does when it ends */
     VTerm       *vt;
     VTermScreen *vs;
+    char    vt_pend[4];        /* an unfinished UTF-8 character (UmVtermWrite) */
+    UINT8   vt_pend_n;
     int     vt_rows, vt_cols;
     bool    vt_alt;            /* on the alternate screen */
     bool    vt_cursor;         /* the cursor is shown */
@@ -1511,6 +1513,7 @@ static bool screen_enter(Term *t)
     if (!vt) return false;
     vterm_set_utf8(vt, 1);
     j->vt = vt;
+    j->vt_pend_n = 0;
     j->vs = vterm_obtain_screen(vt);
     j->vt_rows = rows;
     j->vt_cols = cols;
@@ -1594,15 +1597,18 @@ static bool screen_csi(const char *p, int n, char final)
  * also returns the carriage unless the program set DISABLE_NEWLINE_AUTO_RETURN. */
 static void vt_write(Job *j, const char *s, size_t n)
 {
-    if (j->con && (UmConsoleOutputMode(j->con) & 0x0008)) { vterm_input_write(j->vt, s, n); return; }
+    if (j->con && (UmConsoleOutputMode(j->con) & 0x0008)) {
+        UmVtermWrite(j->vt, j->vt_pend, &j->vt_pend_n, s, n);
+        return;
+    }
     size_t from = 0;
     for (size_t i = 0; i < n; i++) {
         if (s[i] != '\n') continue;
-        if (i > from) vterm_input_write(j->vt, s + from, i - from);
-        vterm_input_write(j->vt, "\r\n", 2);
+        if (i > from) UmVtermWrite(j->vt, j->vt_pend, &j->vt_pend_n, s + from, i - from);
+        UmVtermWrite(j->vt, j->vt_pend, &j->vt_pend_n, "\r\n", 2);
         from = i + 1;
     }
-    if (n > from) vterm_input_write(j->vt, s + from, n - from);
+    if (n > from) UmVtermWrite(j->vt, j->vt_pend, &j->vt_pend_n, s + from, n - from);
 }
 
 static void proc_output(Term *t, const char *s, int n)

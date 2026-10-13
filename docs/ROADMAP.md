@@ -312,15 +312,18 @@ named program or test demonstrates it.
   cursor and text attributes, so `GetConsoleScreenBufferInfo` reports the
   cursor, and cell reads and writes, fills, scrolling, colours and
   independent buffers work (`consolecursortest`, x64 and x86); the first
-  buffer follows the Terminal's size.  Still to do: verify a real
-  console-screen API application, and read the cells from the Terminal's
-  own libvterm screen instead of a copy kept by the console; Git still
-  uses NovaOS's own `less`.
+  buffer follows the Terminal's size.  libvterm, the Terminal's own VT
+  emulator, edits the cells from what programs write, so a full-screen
+  program leaves the same cells in a console window and through a pseudo
+  console (`ptyscreentest`).  Still to do: verify a real console-screen
+  API application; Git still uses NovaOS's own `less`.
 - Pseudo consoles (`CreatePseudoConsole`, for Neovim's `:terminal` and
   Windows Terminal-style hosts): a child started with
   `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` gets a console of its own whose
   input and output travel over the host's pipes, and
-  `ResizePseudoConsole` sets its size (`pipetest`).  Still to do: run
+  `ResizePseudoConsole` sets its size (`pipetest`); its host gets line
+  feeds as CR LF, as from conhost, and draws the same cells as the
+  console holds (`ptyscreentest`).  Still to do: run
   Neovim's `:terminal` on it.
 - ~~Move files, the registry, process creation and the console off the
   big kernel lock~~ Done (Phase 17.7): file and registry throughput scale
@@ -657,9 +660,13 @@ measured frame-time gain over the CPU path.
 **Goal:** close the remaining API gaps. **Gate:** a terminal app hosts
 `cmd.exe` through ConPTY, and NTFS C: survives a power cut.
 
-- [ ] **26.1 Console cells on libvterm.** Make console screen buffers and
+- [x] **26.1 Console cells on libvterm.** Make console screen buffers and
   pseudo consoles share one cell model. Done when a full-screen program
   draws the same in a console window and through a pseudo console.
+  libvterm, the Terminal's emulator, now edits every screen buffer's
+  cells, and `ptyscreentest` compares a full-screen program's cells in a
+  console window, under a pseudo console and as the pseudo console's host
+  draws them.
 - [ ] **26.2 ConPTY end to end.** Complete process attachment, pipe lifetime,
   resize and VT output together. Done when a terminal app runs and resizes
   an interactive `cmd.exe` through `CreatePseudoConsole`.

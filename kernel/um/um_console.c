@@ -13,27 +13,43 @@
  * there; ReadConsoleInput takes the records themselves.  The console's
  * object (UO_CONSOLE) is signaled while records are queued, so programs
  * can wait on their input handle.
+ *
+ * Each screen buffer keeps its cells, which libvterm (the Terminal's VT
+ * emulator) edits from what programs write, so a full-screen program
+ * leaves the same cells whether a Terminal or a pseudo console's host
+ * draws its output.
  */
 
 #include "um_internal.h"
 #include "../ke/printf.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
+#include "vterm.h"
 
 #define OUT_SIZE  (64 * 1024)
 #define IN_RECS   16384                         /* two lines of 8,191 characters (the Terminal's longest) */
 #define CON_SCREENS 8
 #define CON_MAX_CELLS (1024u * 1024u)
+#define CON_NEWLINE_NO_RETURN 0x0008     /* DISABLE_NEWLINE_AUTO_RETURN */
+#define CELL_LEADING   0x0100            /* COMMON_LVB_LEADING_BYTE: the left half of a wide character */
+#define CELL_TRAILING  0x0200            /* COMMON_LVB_TRAILING_BYTE: its right half */
+#define CELL_REVERSE   0x4000            /* COMMON_LVB_REVERSE_VIDEO */
+#define CELL_UNDERLINE 0x8000            /* COMMON_LVB_UNDERSCORE */
 
+/* A screen buffer's cells.  libvterm's parser and state (the emulator the
+ * Terminal uses) interpret what programs write and edit the cells through
+ * the callbacks below, so the cells match what the Terminal or a pseudo
+ * console's host draws from the same output. */
 typedef struct {
     UmConsoleCell *cells;
+    UmConsoleCell *main_cells;     /* the main screen's cells while the alternate screen is up */
     UINT16 cols, rows, cursor_x, cursor_y, attr;
-    UINT32 utf8_char;
-    UINT8 utf8_need;
     UINT32 refs;
-    UINT8 esc_state, csi_n;
+    VTerm *vt;
+    char pend[4];                  /* an unfinished UTF-8 character (UmVtermWrite) */
+    UINT8 pend_n;
+    struct UmConsole *con;
     bool sized;                    /* SetConsoleScreenBufferSize chose its size */
-    char csi[32];
     bool used;
 } UmConsoleScreen;
 
@@ -67,13 +83,19 @@ static UmConsoleScreen *console_screen(UmConsole *c, UINT32 id)
     return c && id < CON_SCREENS && c->screen[id].used ? &c->screen[id] : NULL;
 }
 
+static void screen_free(UmConsoleScreen *s)
+{
+    if (s->vt) vterm_free(s->vt);
+    kfree(s->cells);
+    kfree(s->main_cells);
+    memset(s, 0, sizeof(*s));
+}
+
 static void screen_release_locked(UmConsole *c, UINT32 id)
 {
     if (id && id < CON_SCREENS && id != c->active_screen &&
-        c->screen[id].used && !c->screen[id].refs) {
-        kfree(c->screen[id].cells);
-        memset(&c->screen[id], 0, sizeof(c->screen[id]));
-    }
+        c->screen[id].used && !c->screen[id].refs)
+        screen_free(&c->screen[id]);
 }
 
 static void screen_blank(UmConsoleScreen *s, UmConsoleCell cell)
@@ -85,32 +107,266 @@ static void screen_blank(UmConsoleScreen *s, UmConsoleCell cell)
 static int screen_sgr(char *seq, size_t cap, UINT16 attr)
 {
     static const UINT8 map[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
-    return ksnprintf(seq, cap, "\x1b[0;%u;%um",
+    return ksnprintf(seq, cap, "\x1b[0;%u;%u%s%sm",
                      30 + map[attr & 7] + ((attr & 8) ? 60 : 0),
-                     40 + map[(attr >> 4) & 7] + ((attr & 0x80) ? 60 : 0));
+                     40 + map[(attr >> 4) & 7] + ((attr & 0x80) ? 60 : 0),
+                     (attr & CELL_UNDERLINE) ? ";4" : "", (attr & CELL_REVERSE) ? ";7" : "");
+}
+
+/* A Windows colour (0-15) for a libvterm colour: the 16 ANSI colours map
+ * across, others to the nearest of them */
+static UINT16 vt_color_attr(VTermState *st, VTermColor col, bool fg)
+{
+    static const UINT8 map[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+    if (fg ? VTERM_COLOR_IS_DEFAULT_FG(&col) : VTERM_COLOR_IS_DEFAULT_BG(&col)) return fg ? 7 : 0;
+    int idx = VTERM_COLOR_IS_INDEXED(&col) ? col.indexed.idx : 16;
+    if (idx >= 16) {
+        vterm_state_convert_color_to_rgb(st, &col);
+        int best = 1 << 30;
+        for (int i = 0; i < 16; i++) {
+            VTermColor p;
+            vterm_state_get_palette_color(st, i, &p);
+            int dr = p.rgb.red - col.rgb.red, dg = p.rgb.green - col.rgb.green, db = p.rgb.blue - col.rgb.blue;
+            int d = dr * dr + dg * dg + db * db;
+            if (d < best) { best = d; idx = i; }
+        }
+    }
+    return (UINT16)(map[idx & 7] | (idx & 8));
+}
+
+/* The screen's attributes follow libvterm's pen */
+static int vt_setpenattr(VTermAttr which, VTermValue *val, void *user)
+{
+    (void)which; (void)val;
+    UmConsoleScreen *s = user;
+    VTermState *st = vterm_obtain_state(s->vt);
+    VTermValue v;
+    vterm_state_get_penattr(st, VTERM_ATTR_FOREGROUND, &v);
+    UINT16 attr = vt_color_attr(st, v.color, true);
+    vterm_state_get_penattr(st, VTERM_ATTR_BACKGROUND, &v);
+    attr |= (UINT16)(vt_color_attr(st, v.color, false) << 4);
+    vterm_state_get_penattr(st, VTERM_ATTR_BOLD, &v);
+    if (v.boolean) attr |= 8;                           /* SGR 1: FOREGROUND_INTENSITY, as in conhost */
+    vterm_state_get_penattr(st, VTERM_ATTR_REVERSE, &v);
+    if (v.boolean) attr |= CELL_REVERSE;
+    vterm_state_get_penattr(st, VTERM_ATTR_UNDERLINE, &v);
+    if (v.number) attr |= CELL_UNDERLINE;
+    s->attr = attr;
+    return 1;
+}
+
+static int vt_putglyph(VTermGlyphInfo *info, VTermPos pos, void *user)
+{
+    UmConsoleScreen *s = user;
+    if (pos.row < 0 || pos.row >= s->rows || pos.col < 0 || pos.col >= s->cols) return 1;
+    UINT32 ch = info->chars[0];
+    UINT16 c16 = ch && ch < 0x10000 && (ch < 0xD800 || ch >= 0xE000) ? (UINT16)ch : '?';
+    UmConsoleCell *cell = &s->cells[pos.row * s->cols + pos.col];
+    if (info->width == 2 && pos.col + 1 < s->cols) {     /* as conhost: the character in both cells */
+        cell[0] = (UmConsoleCell){ c16, (UINT16)(s->attr | CELL_LEADING) };
+        cell[1] = (UmConsoleCell){ c16, (UINT16)(s->attr | CELL_TRAILING) };
+    } else cell[0] = (UmConsoleCell){ c16, s->attr };
+    return 1;
+}
+
+static int vt_movecursor(VTermPos pos, VTermPos oldpos, int visible, void *user)
+{
+    (void)oldpos; (void)visible;
+    UmConsoleScreen *s = user;
+    s->cursor_x = (UINT16)pos.col;
+    s->cursor_y = (UINT16)pos.row;
+    return 1;
+}
+
+/* (scrolling: libvterm moves the rows and erases what scrolled in) */
+static int vt_moverect(VTermRect dest, VTermRect src, void *user)
+{
+    UmConsoleScreen *s = user;
+    int h = src.end_row - src.start_row, w = src.end_col - src.start_col;
+    if (h <= 0 || w <= 0) return 1;
+    bool up = dest.start_row <= src.start_row;
+    for (int i = 0; i < h; i++) {
+        int k = up ? i : h - 1 - i;
+        memmove(&s->cells[(dest.start_row + k) * s->cols + dest.start_col],
+                &s->cells[(src.start_row + k) * s->cols + src.start_col], (size_t)w * sizeof(UmConsoleCell));
+    }
+    return 1;
+}
+
+static int vt_erase(VTermRect rect, int selective, void *user)
+{
+    (void)selective;
+    UmConsoleScreen *s = user;
+    UmConsoleCell blank = { ' ', (UINT16)(s->attr & 0xFF) };
+    for (int y = rect.start_row; y < rect.end_row; y++)
+        for (int x = rect.start_col; x < rect.end_col; x++) s->cells[y * s->cols + x] = blank;
+    return 1;
+}
+
+static int vt_settermprop(VTermProp prop, VTermValue *val, void *user)
+{
+    UmConsoleScreen *s = user;
+    size_t bytes = (size_t)s->cols * s->rows * sizeof(UmConsoleCell);
+    if (prop == VTERM_PROP_ALTSCREEN) {                 /* ?1049h: libvterm erases the alternate screen */
+        if (val->boolean && !s->main_cells) {
+            s->main_cells = kmalloc(bytes);
+            if (!s->main_cells) return 0;
+            memcpy(s->main_cells, s->cells, bytes);
+        } else if (!val->boolean && s->main_cells) {
+            memcpy(s->cells, s->main_cells, bytes);
+            kfree(s->main_cells);
+            s->main_cells = NULL;
+        }
+    } else if (prop == VTERM_PROP_CURSORVISIBLE && s == &s->con->screen[s->con->active_screen]) {
+        UINT32 style = s->con->cursor_style;
+        __atomic_store_n(&s->con->cursor_style, val->boolean ? style | 0x100 : style & ~0x100u, __ATOMIC_RELEASE);
+    }
+    return 1;
+}
+
+static const VTermStateCallbacks g_screen_cbs = {
+    .putglyph = vt_putglyph, .movecursor = vt_movecursor, .moverect = vt_moverect,
+    .erase = vt_erase, .setpenattr = vt_setpenattr, .settermprop = vt_settermprop,
+};
+
+/* (answers to queries such as DSR come from the Terminal's own libvterm) */
+static void vt_discard(const char *s, size_t len, void *user) { (void)s; (void)len; (void)user; }
+
+/* A new screen buffer of @cols by @rows blank cells in attributes 7 */
+static bool screen_init(UmConsole *c, UmConsoleScreen *s, UINT32 cols, UINT32 rows)
+{
+    memset(s, 0, sizeof(*s));
+    s->cells = kmalloc((size_t)cols * rows * sizeof(*s->cells));
+    s->vt = s->cells ? vterm_new((int)rows, (int)cols) : NULL;
+    if (!s->vt) { kfree(s->cells); s->cells = NULL; return false; }
+    s->con = c;
+    s->cols = (UINT16)cols;
+    s->rows = (UINT16)rows;
+    s->attr = 7;
+    s->used = true;
+    screen_blank(s, (UmConsoleCell){ ' ', 7 });
+    vterm_set_utf8(s->vt, 1);
+    vterm_output_set_callback(s->vt, vt_discard, NULL);
+    VTermState *st = vterm_obtain_state(s->vt);
+    vterm_state_set_callbacks(st, &g_screen_cbs, s);
+    vterm_state_reset(st, 1);
+    return true;
+}
+
+static UmConsoleCell *cells_resized(const UmConsoleCell *old, UINT32 old_cols, UINT32 old_rows,
+                                    UINT32 cols, UINT32 rows, UINT16 attr)
+{
+    UmConsoleCell *cells = kmalloc((size_t)cols * rows * sizeof(*cells));
+    if (!cells) return NULL;
+    for (UINT32 i = 0; i < cols * rows; i++) cells[i] = (UmConsoleCell){ ' ', attr };
+    UINT32 copy_cols = cols < old_cols ? cols : old_cols;
+    UINT32 copy_rows = rows < old_rows ? rows : old_rows;
+    for (UINT32 y = 0; y < copy_rows; y++)
+        memcpy(cells + y * cols, old + y * old_cols, copy_cols * sizeof(*cells));
+    return cells;
 }
 
 static bool screen_resize(UmConsoleScreen *s, UINT32 cols, UINT32 rows)
 {
     if (!cols || !rows || cols > 32767 || rows > 32767 || cols * (UINT64)rows > CON_MAX_CELLS)
         return false;
-    UmConsoleCell *cells = kmalloc((size_t)cols * rows * sizeof(*cells));
-    if (!cells) return false;
-    for (UINT32 i = 0; i < cols * rows; i++) {
-        cells[i].ch = ' ';
-        cells[i].attr = s->attr;
-    }
-    UINT32 copy_cols = cols < s->cols ? cols : s->cols;
-    UINT32 copy_rows = rows < s->rows ? rows : s->rows;
-    for (UINT32 y = 0; y < copy_rows; y++)
-        memcpy(cells + y * cols, s->cells + y * s->cols, copy_cols * sizeof(*cells));
+    UINT16 attr = (UINT16)(s->attr & 0xFF);
+    UmConsoleCell *cells = cells_resized(s->cells, s->cols, s->rows, cols, rows, attr);
+    UmConsoleCell *main_cells = s->main_cells ? cells_resized(s->main_cells, s->cols, s->rows, cols, rows, attr) : NULL;
+    if (!cells || (s->main_cells && !main_cells)) { kfree(cells); kfree(main_cells); return false; }
     kfree(s->cells);
+    kfree(s->main_cells);
     s->cells = cells;
+    s->main_cells = main_cells;
     s->cols = (UINT16)cols;
     s->rows = (UINT16)rows;
-    if (s->cursor_x >= cols) s->cursor_x = (UINT16)(cols - 1);
-    if (s->cursor_y >= rows) s->cursor_y = (UINT16)(rows - 1);
+    vterm_set_size(s->vt, (int)rows, (int)cols);
+    VTermPos pos;
+    vterm_state_get_cursorpos(vterm_obtain_state(s->vt), &pos);
+    s->cursor_x = (UINT16)pos.col;
+    s->cursor_y = (UINT16)pos.row;
     return true;
+}
+
+static int utf8_len(UINT8 b) { return b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1; }
+
+void UmVtermWrite(struct VTerm *vt, char *pend, UINT8 *pend_n, const char *data, size_t len)
+{
+    if (*pend_n) {
+        int need = utf8_len((UINT8)pend[0]);
+        while (len && *pend_n < need && ((UINT8)*data & 0xC0) == 0x80) {
+            pend[(*pend_n)++] = *data++;
+            len--;
+        }
+        if (*pend_n < need && !len) return;            /* still unfinished */
+        vterm_input_write(vt, pend, *pend_n);
+        *pend_n = 0;
+    }
+    size_t keep = 0;
+    for (size_t k = 1; k <= 3 && k <= len; k++) {
+        UINT8 b = (UINT8)data[len - k];
+        if ((b & 0xC0) == 0x80) continue;
+        if (b >= 0xC0 && utf8_len(b) > (int)k) keep = k;
+        break;
+    }
+    if (len > keep) vterm_input_write(vt, data, len - keep);
+    memcpy(pend, data + len - keep, keep);
+    *pend_n = (UINT8)keep;
+}
+
+/* Caller holds out_lock: @data through @s's emulator, and on to the
+ * Terminal or a pseudo console's host when @s is the active screen.  As in
+ * a Windows console, a line feed also returns the carriage unless the
+ * program set DISABLE_NEWLINE_AUTO_RETURN; a pseudo console's host gets the
+ * carriage return written out, as from conhost (the Terminal adds its own). */
+static int screen_feed(UmConsole *c, UmConsoleScreen *s, const char *data, int len)
+{
+    bool active = s == &c->screen[c->active_screen];
+    bool cr = !(c->out_mode & CON_NEWLINE_NO_RETURN);
+    bool pseudo = __atomic_load_n(&c->out_ob, __ATOMIC_ACQUIRE) != NULL;
+    int from = 0, done = 0;
+    for (int i = 0; i <= len; i++) {
+        if (i < len && (data[i] != '\n' || !cr)) continue;
+        if (i > from) {
+            UmVtermWrite(s->vt, s->pend, &s->pend_n, data + from, (size_t)(i - from));
+            int n = active ? console_write_locked(c, data + from, i - from) : i - from;
+            done += n;
+            if (n < i - from) return done;
+        }
+        if (i < len) {
+            UmVtermWrite(s->vt, s->pend, &s->pend_n, "\r\n", 2);
+            if (active && console_write_locked(c, pseudo ? "\r\n" : "\n", pseudo ? 2 : 1) != (pseudo ? 2 : 1))
+                return done;
+            done++;
+        }
+        from = i + 1;
+    }
+    return done;
+}
+
+/* A cell as the Terminal or a pseudo console's host draws it: UTF-8, the
+ * right half of a wide character left out */
+static int cell_utf8(const UmConsoleCell *row, UINT32 x, UINT32 cols, char *out)
+{
+    const UmConsoleCell *cell = &row[x];
+    UINT16 ch = cell->ch;
+    if (cell->attr & CELL_TRAILING) {
+        if (x && (row[x - 1].attr & CELL_LEADING) && row[x - 1].ch == ch) return 0;
+        ch = ' ';
+    } else if ((cell->attr & CELL_LEADING) &&
+               (x + 1 >= cols || !(cell[1].attr & CELL_TRAILING) || cell[1].ch != ch)) ch = ' ';
+    if (ch < 0x20 || ch == 0x7F) ch = ' ';
+    if (ch < 0x80) { out[0] = (char)ch; return 1; }
+    if (ch < 0x800) {
+        out[0] = (char)(0xC0 | (ch >> 6));
+        out[1] = (char)(0x80 | (ch & 0x3F));
+        return 2;
+    }
+    if (ch >= 0xD800 && ch < 0xE000) { out[0] = '?'; return 1; }
+    out[0] = (char)(0xE0 | (ch >> 12));
+    out[1] = (char)(0x80 | ((ch >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (ch & 0x3F));
+    return 3;
 }
 
 /* Caller holds out_lock: rows @top..@bottom of @s drawn again on the
@@ -128,35 +384,26 @@ static void screen_render_rows(UmConsole *c, UmConsoleScreen *s, UINT32 top, UIN
     for (UINT32 y = top; y <= bottom && y < s->rows; y++) {
         n = ksnprintf(seq, sizeof(seq), "\x1b[%u;1H", y + 1);
         console_write_locked(c, seq, n);
+        const UmConsoleCell *row = &s->cells[y * s->cols];
         for (UINT32 x = 0; x < s->cols; x++) {
-            UmConsoleCell *cell = &s->cells[y * s->cols + x];
-            if (cell->attr != old_attr) {
-                n = screen_sgr(seq, sizeof(seq), cell->attr);
+            UINT16 attr = row[x].attr & (0xFF | CELL_REVERSE | CELL_UNDERLINE);
+            if (attr != old_attr) {
+                n = screen_sgr(seq, sizeof(seq), attr);
                 console_write_locked(c, seq, n);
-                old_attr = cell->attr;
+                old_attr = attr;
             }
             char ch[3];
-            int count;
-            if (cell->ch < 0x80) { ch[0] = (char)cell->ch; count = 1; }
-            else if (cell->ch < 0x800) {
-                ch[0] = (char)(0xC0 | (cell->ch >> 6));
-                ch[1] = (char)(0x80 | (cell->ch & 0x3F));
-                count = 2;
-            } else if (cell->ch >= 0xD800 && cell->ch < 0xE000) {
-                ch[0] = '?'; count = 1;
-            } else {
-                ch[0] = (char)(0xE0 | (cell->ch >> 12));
-                ch[1] = (char)(0x80 | ((cell->ch >> 6) & 0x3F));
-                ch[2] = (char)(0x80 | (cell->ch & 0x3F));
-                count = 3;
-            }
-            console_write_locked(c, ch, count);
+            int count = cell_utf8(row, x, s->cols, ch);
+            if (count) console_write_locked(c, ch, count);
         }
     }
-    n = screen_sgr(seq, sizeof(seq), s->attr);
-    console_write_locked(c, seq, n);
-    n = ksnprintf(seq, sizeof(seq), "\x1b[%u;%uH", s->cursor_y + 1, s->cursor_x + 1);
-    console_write_locked(c, seq, n);
+    /* (through the emulator too: a cursor waiting to wrap at the end of a
+     * line stops waiting on both sides) */
+    UINT16 attr = s->attr;
+    n = screen_sgr(seq, sizeof(seq), attr);
+    n += ksnprintf(seq + n, sizeof(seq) - (size_t)n, "\x1b[%u;%uH", s->cursor_y + 1, s->cursor_x + 1);
+    screen_feed(c, s, seq, n);
+    s->attr = attr;
 }
 
 static void screen_render(UmConsole *c, UmConsoleScreen *s)
@@ -189,18 +436,11 @@ UmConsole *UmConsoleNew(void)
     c->cols = 80;
     c->rows = 25;
     c->cursor_style = 25 | 0x100;
-    UmConsoleScreen *s = &c->screen[0];
-    s->cells = kmalloc(80 * 25 * sizeof(*s->cells));
-    if (!s->cells) {
+    if (!screen_init(c, &c->screen[0], 80, 25)) {
         um_ob_unref(c->ob);
         kfree(c);
         return NULL;
     }
-    s->cols = 80;
-    s->rows = 25;
-    s->attr = 7;
-    s->used = true;
-    screen_blank(s, (UmConsoleCell){ ' ', 7 });
     return c;
 }
 
@@ -216,7 +456,7 @@ void UmConsoleRelease(UmConsole *c)
         IrqState s = ob_lock();
         c->ob->ptr = NULL;                      /* waiters may still hold it */
         ob_unlock(s);
-        for (int i = 0; i < CON_SCREENS; i++) kfree(c->screen[i].cells);
+        for (int i = 0; i < CON_SCREENS; i++) screen_free(&c->screen[i]);
         um_ob_unref(c->ob);
         kfree(c);
     }
@@ -307,67 +547,6 @@ int um_console_write(UmConsole *c, const char *data, int len)
     return um_console_write_screen(c, 0, data, len);
 }
 
-static void screen_advance(UmConsoleScreen *s)
-{
-    s->cursor_x = 0;
-    if (++s->cursor_y < s->rows) return;
-    memmove(s->cells, s->cells + s->cols,
-            (size_t)(s->rows - 1) * s->cols * sizeof(*s->cells));
-    for (UINT32 x = 0; x < s->cols; x++) {
-        s->cells[(s->rows - 1) * s->cols + x].ch = ' ';
-        s->cells[(s->rows - 1) * s->cols + x].attr = s->attr;
-    }
-    s->cursor_y = s->rows - 1;
-}
-
-static void screen_put(UmConsoleScreen *s, UINT16 ch)
-{
-    s->cells[s->cursor_y * s->cols + s->cursor_x] = (UmConsoleCell){ ch, s->attr };
-    if (++s->cursor_x >= s->cols) screen_advance(s);
-}
-
-static void screen_csi_apply(UmConsoleScreen *s, char final)
-{
-    int args[4] = { 0, 0, 0, 0 }, n = 0;
-    for (int i = 0; i < s->csi_n; i++) {
-        char c = s->csi[i];
-        if (c >= '0' && c <= '9') args[n] = args[n] * 10 + c - '0';
-        else if (c == ';' && n < 3) n++;
-    }
-    switch (final) {
-    case 'H': case 'f':
-        s->cursor_y = (UINT16)(args[0] > 0 && args[0] <= s->rows ? args[0] - 1 : 0);
-        s->cursor_x = (UINT16)(args[1] > 0 && args[1] <= s->cols ? args[1] - 1 : 0);
-        break;
-    case 'A': s->cursor_y = args[0] >= s->cursor_y ? 0 : (UINT16)(s->cursor_y - (args[0] ? args[0] : 1)); break;
-    case 'B': s->cursor_y = (UINT16)(s->cursor_y + (args[0] ? args[0] : 1) < s->rows ? s->cursor_y + (args[0] ? args[0] : 1) : s->rows - 1); break;
-    case 'C': s->cursor_x = (UINT16)(s->cursor_x + (args[0] ? args[0] : 1) < s->cols ? s->cursor_x + (args[0] ? args[0] : 1) : s->cols - 1); break;
-    case 'D': s->cursor_x = args[0] >= s->cursor_x ? 0 : (UINT16)(s->cursor_x - (args[0] ? args[0] : 1)); break;
-    case 'J':
-        if (args[0] == 2) screen_blank(s, (UmConsoleCell){ ' ', s->attr });
-        break;
-    case 'K':
-        if (!args[0]) for (UINT32 x = s->cursor_x; x < s->cols; x++)
-            s->cells[s->cursor_y * s->cols + x] = (UmConsoleCell){ ' ', s->attr };
-        break;
-    case 'm':
-        {
-        static const UINT8 map[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
-        for (int i = 0; i <= n; i++) {
-            int v = args[i];
-            if (!v) s->attr = 7;
-            else if (v >= 30 && v <= 37) s->attr = (UINT16)((s->attr & 0xF8) | map[v - 30]);
-            else if (v >= 90 && v <= 97) s->attr = (UINT16)((s->attr & 0xF0) | map[v - 90] | 8);
-            else if (v >= 40 && v <= 47) s->attr = (UINT16)((s->attr & 0x8F) | (map[v - 40] << 4));
-            else if (v >= 100 && v <= 107) s->attr = (UINT16)((s->attr & 0x0F) | (map[v - 100] << 4) | 0x80);
-            else if (v == 1) s->attr |= 8;
-            else if (v == 22) s->attr &= ~8;
-        }
-        break;
-        }
-    }
-}
-
 int um_console_write_screen(UmConsole *c, UINT32 id, const char *data, int len)
 {
     if (!c) return um_console_write(NULL, data, len);
@@ -375,45 +554,7 @@ int um_console_write_screen(UmConsole *c, UINT32 id, const char *data, int len)
     screen0_follow(c);
     UmConsoleScreen *s = console_screen(c, id);
     if (!s) { um_unlock(&c->out_lock); return 0; }
-    for (int i = 0; i < len; i++) {
-        UINT8 ch = (UINT8)data[i];
-        if (s->esc_state == 1) {
-            s->esc_state = ch == '[' ? 2 : 0;
-            s->csi_n = 0;
-            continue;
-        }
-        if (s->esc_state == 2) {
-            if (ch >= 0x40 && ch <= 0x7E) {
-                screen_csi_apply(s, (char)ch);
-                s->esc_state = 0;
-            } else if (ch >= 0x20 && ch <= 0x3F && s->csi_n < sizeof(s->csi)) {
-                s->csi[s->csi_n++] = (char)ch;
-            } else s->esc_state = 0;
-            continue;
-        }
-        if (ch == 0x1B) { s->esc_state = 1; continue; }
-        if (ch == '\r') { s->cursor_x = 0; continue; }
-        if (ch == '\n') { screen_advance(s); continue; }
-        if (ch == '\b') { if (s->cursor_x) s->cursor_x--; continue; }
-        if (ch == '\t') {
-            UINT32 next = ((UINT32)s->cursor_x + 8) & ~7u;
-            s->cursor_x = (UINT16)(next < s->cols ? next : s->cols - 1);
-            continue;
-        }
-        if (s->utf8_need) {
-            if ((ch & 0xC0) == 0x80) {
-                s->utf8_char = (s->utf8_char << 6) | (ch & 0x3F);
-                if (!--s->utf8_need) screen_put(s, s->utf8_char < 0x10000 ? (UINT16)s->utf8_char : '?');
-            } else s->utf8_need = 0;
-            continue;
-        }
-        if (ch >= 0xC2 && ch <= 0xDF) { s->utf8_char = ch & 0x1F; s->utf8_need = 1; continue; }
-        if (ch >= 0xE0 && ch <= 0xEF) { s->utf8_char = ch & 0x0F; s->utf8_need = 2; continue; }
-        if (ch >= 0xF0 && ch <= 0xF4) { s->utf8_char = ch & 7; s->utf8_need = 3; continue; }
-        if (ch < 0x20 || ch >= 0x80) continue;
-        screen_put(s, ch);
-    }
-    int done = id == c->active_screen ? console_write_locked(c, data, len) : len;
+    int done = screen_feed(c, s, data, len);
     um_unlock(&c->out_lock);
     return done;
 }
@@ -682,8 +823,7 @@ UINT32 um_console_cursor(UmConsole *c, UINT32 op, UINT32 value, UINT32 *result)
         if (um_stopping()) { um_unlock(&c->out_lock); return 0xC0000120u; }
         sched_wait();
     }
-    int done = console_write_locked(c, seq, n);
-    if (done == n && op == 9) { screen->cursor_x = (UINT16)(value & 0xFFFF); screen->cursor_y = (UINT16)(value >> 16); }
+    int done = screen_feed(c, screen, seq, n);
     if (done == n && op == 11) __atomic_store_n(&c->cursor_style, value, __ATOMIC_RELEASE);
     um_unlock(&c->out_lock);
     return done == n ? 0 : 0xC0000120u;
@@ -697,15 +837,8 @@ UINT32 um_console_screen_create(UmConsole *c, UINT32 *id)
     for (i = 1; i < CON_SCREENS && c->screen[i].used; i++) {}
     if (i == CON_SCREENS) { um_unlock(&c->out_lock); return 0xC000009Au; }
     UmConsoleScreen *s = &c->screen[i];
-    memset(s, 0, sizeof(*s));
-    s->cols = c->cols;
-    s->rows = c->rows;
-    s->attr = 7;
-    s->cells = kmalloc((size_t)s->cols * s->rows * sizeof(*s->cells));
-    if (!s->cells) { um_unlock(&c->out_lock); return 0xC0000017u; }
-    s->used = true;
+    if (!screen_init(c, s, c->cols, c->rows)) { um_unlock(&c->out_lock); return 0xC0000017u; }
     s->refs = 1;
-    screen_blank(s, (UmConsoleCell){ ' ', 7 });
     *id = i;
     um_unlock(&c->out_lock);
     return 0;
@@ -777,20 +910,16 @@ UINT32 um_console_screen_call(UmConsole *c, UINT32 id, UINT32 op, void *data, UI
             UmConsoleScreenRequest *r = data;
             UINT32 total = (UINT32)s->cols * s->rows;
             if (op == CON_SCREEN_SET_ATTR) {
+                char seq[32];                           /* what is written next: in these colours */
+                int n = screen_sgr(seq, sizeof(seq), r->value);
+                screen_feed(c, s, seq, n);
                 s->attr = r->value;
-                if (id == c->active_screen) {           /* what is written next: in these colours */
-                    char seq[32];
-                    int n = screen_sgr(seq, sizeof(seq), s->attr);
-                    console_write_locked(c, seq, n);
-                }
             } else if (op == CON_SCREEN_SET_CURSOR) {
                 if (!screen_coord(s, r->x, r->y)) status = 0xC000000Du;
                 else {
                     char seq[32];
                     int n = ksnprintf(seq, sizeof(seq), "\x1b[%d;%dH", r->y + 1, r->x + 1);
-                    int done = id == c->active_screen ? console_write_locked(c, seq, n) : n;
-                    if (done != n) status = 0xC0000120u;
-                    else { s->cursor_x = (UINT16)r->x; s->cursor_y = (UINT16)r->y; }
+                    if (screen_feed(c, s, seq, n) != n) status = 0xC0000120u;
                 }
             } else if (op == CON_SCREEN_SET_SIZE) {
                 if (r->width <= 0 || r->height <= 0) status = 0xC000000Du;

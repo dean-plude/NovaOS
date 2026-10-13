@@ -24,6 +24,7 @@ int ksnprintf(char *b, size_t n, const char *f, ...) {
 int main(void) {
     static UmConsole c;
     c.cols=80; c.rows=25; c.cursor_style=25|0x100; drain=&c;
+    assert(screen_init(&c,&c.screen[0],80,25));          /* (libvterm keeps the cells, as in UmConsoleNew) */
     UINT32 r=0;
     assert(um_console_cursor(NULL,9,0,&r)==0xC0000008u);
     assert(!um_console_cursor(&c,9,79|(24<<16),&r));
@@ -46,9 +47,6 @@ int main(void) {
     assert(!um_console_cursor(&c,11,1|0x100,&r) && waits==1);
     n=UmConsoleRead(&c,b,sizeof(b)); b[n]=0; assert(!strcmp(b,"\x1b[?25h"));
     assert(UmConsoleCursorStyle(&c)==(1|0x100));
-    c.screen[0].used=true; c.screen[0].cols=80; c.screen[0].rows=25; c.screen[0].attr=7;
-    c.screen[0].cells=kmalloc(80*25*sizeof(*c.screen[0].cells)); assert(c.screen[0].cells);
-    for (int i=0;i<80*25;i++) c.screen[0].cells[i]=(UmConsoleCell){' ',7};
     UmConsoleScreenInfo info;
     assert(!um_console_screen_call(&c,0,CON_SCREEN_INFO,&info,sizeof(info),&r));
     assert(info.cols==80 && info.rows==25 && info.cursor_x==79 && info.cursor_y==24);
@@ -92,6 +90,6 @@ int main(void) {
     um_console_screen_unref(&c, second);
     assert(c.screen[1].used);
     assert(!um_console_screen_call(&c,0,CON_SCREEN_ACTIVATE,NULL,0,&r) && !c.screen[1].used);
-    free(c.screen[0].cells);
+    screen_free(&c.screen[0]);
     puts("console queue and screen-buffer APIs: cursor, cells, fills, scroll, independent buffers, cleanup and backpressure passed");
 }

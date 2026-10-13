@@ -841,6 +841,7 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 | `posixtest` | The POSIX layer in msvcrt |
 | `apitest` | kernel32, advapi32, bcrypt, shell32, shlwapi, psapi, user32/gdi32, the registry |
 | `consolecursortest` | Classic console screen buffers: cursor position and visibility, cell reads/writes, fills, scrolling, attributes, resizing, independent buffers, and invalid handles/coordinates; x64 and x86. |
+| `ptyscreentest` | A full-screen program (alternate screen, colours, wide characters, erasing, scroll regions, inserted and deleted lines, wrapping, cell writes, fills and scrolling) drawn in a console window and through a pseudo console: both runs read back the same cells, and the pseudo console's output drawn by a host gives them too. |
 | `abitest` (x64) | The binary interface against Windows 10 1903 x64: TEB, PEB, process parameters, loader lists, `KUSER_SHARED_DATA`, `CONTEXT` and `EXCEPTION_RECORD` offsets, ntdll's stub bytes and every system-call number (`nt1903_services.h`), raw `syscall`s |
 | `syscalltest` (x64) | The system-call table as code that calls the kernel without ntdll sees it (Roblox's Hyperion): ntdll's `Zw` exports ranked by address give each service its Windows 10 1903 number, and the kernel answers that number (and `STATUS_INVALID_SYSTEM_SERVICE`, not the wrong service, for one it lacks) |
 | `comtest` | ole32/oleaut32, `IShellLink` |

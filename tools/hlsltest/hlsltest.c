@@ -1,7 +1,8 @@
 /* hlsltest — NovaOS's HLSL compiler (d3dcompiler_47.dll, on vkd3d-shader)
  * the way Chromium's ANGLE and games use it: HLSL compiled to Direct3D
  * bytecode with D3DCompile (vs/ps 4_0 and 5_0, as ANGLE asks for them, and
- * ps_3_0), errors, the preprocessor and #include, reflection, the
+ * ps_3_0), shader model 5.1 descriptor arrays indexed at run time (wgpu's
+ * sampler heap), errors, the preprocessor and #include, reflection, the
  * disassembler and the container parts, then the shaders drawn with
  * Direct3D 11 (DXVK): a triangle whose colour comes from a texture, a
  * constant buffer, a function with an out parameter and a loop, read back.
@@ -209,6 +210,48 @@ static void test_compiler(void)
     ID3D10Blob_Release(vs);
 }
 
+/* shader model 5.1 descriptor arrays indexed at run time, as wgpu's naga
+ * writes them for Direct3D 12 (a heap of samplers picked through a
+ * structured buffer of indices, and a texture array indexed by a constant) */
+static const char heap_shader[] =
+    "SamplerState nagaSamplerHeap[2048]: register(s0, space0);\n"
+    "SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s0, space1);\n"
+    "StructuredBuffer<uint> nagaGroup0SamplerIndexArray : register(t0, space255);\n"
+    "static const SamplerState r_sampler = nagaSamplerHeap[nagaGroup0SamplerIndexArray[1]];\n"
+    "Texture2D<float4> r_tex[4] : register(t0, space0);\n"
+    "cbuffer Params : register(b0) { uint which; };\n"
+    "float4 ps_main(float4 pos : SV_Position, float2 uv : LOC0) : SV_Target0\n"
+    "{\n"
+    "    return r_tex[which].Sample(r_sampler, uv);\n"
+    "}\n";
+
+static void test_descriptor_arrays(void)
+{
+    HRESULT hr;
+    ID3DBlob *ps = compile(heap_shader, "ps_main", "ps_5_1", &hr, NULL);
+    check("D3DCompile ps_5_1 with descriptor arrays", SUCCEEDED(hr) && is_dxbc(ps));
+    if (!ps) return;
+    ID3DBlob *text = NULL;
+    hr = D3DDisassemble(ID3D10Blob_GetBufferPointer(ps), ID3D10Blob_GetBufferSize(ps), 0, NULL, &text);
+    const char *asm_text = SUCCEEDED(hr) && text ? (const char *)ID3D10Blob_GetBufferPointer(text) : "";
+    check("ps_5_1: the sampler heap is one range indexed at run time",
+          strstr(asm_text, "s0[0:2047]") && strstr(asm_text, "s0[r") && strstr(asm_text, "t1[r"));
+    if (!strstr(asm_text, "s0[r")) printf("disassembly  %s\n", asm_text);
+    if (text) ID3D10Blob_Release(text);
+    ID3D11ShaderReflection *r = NULL;
+    hr = D3DReflect(ID3D10Blob_GetBufferPointer(ps), ID3D10Blob_GetBufferSize(ps), &IID_ID3D11ShaderReflection_47, (void **)&r);
+    if (SUCCEEDED(hr) && r) {
+        D3D11_SHADER_INPUT_BIND_DESC bd;
+        check("ps_5_1 reflection: the sampler heap's 2048 bindings",
+              SUCCEEDED(CALL(r, GetResourceBindingDescByName, "nagaSamplerHeap", &bd)) && bd.BindCount == 2048 &&
+              bd.Type == D3D_SIT_SAMPLER);
+        CALL(r, Release);
+    } else {
+        check("D3DReflect (ps_5_1)", 0);
+    }
+    ID3D10Blob_Release(ps);
+}
+
 /* ---- the shaders on Direct3D 11 ---- */
 static int px_near(const BYTE *p, int r, int g, int b)          /* p: R8G8B8A8 */
 {
@@ -341,6 +384,7 @@ int main(int argc, char **argv)
 {
     (void)argv;
     test_compiler();
+    test_descriptor_arrays();
     if (argc < 2) test_d3d11();                         /* hlsltest nodevice: the compiler only */
     printf("hlsltest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

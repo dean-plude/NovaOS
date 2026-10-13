@@ -3655,6 +3655,17 @@ static enum validation_result validate_component_index_range_from_deref(struct h
     return DEREF_VALIDATION_OK;
 }
 
+/* NovaOS: in shader model 5.1 a one-dimensional uniform array of resources
+ * is a single descriptor range, and its index may be any expression. */
+static bool deref_is_descriptor_array_element(struct hlsl_ctx *ctx, const struct hlsl_deref *deref)
+{
+    const struct hlsl_type *type = deref->var->data_type;
+
+    return hlsl_version_ge(ctx, 5, 1) && deref->var->is_uniform && deref->path_len == 1
+            && type->class == HLSL_CLASS_ARRAY && type->e.array.type->class != HLSL_CLASS_ARRAY
+            && hlsl_type_is_resource(type->e.array.type);
+}
+
 static void note_non_static_deref_expressions(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
         const char *usage)
 {
@@ -3686,7 +3697,8 @@ static bool validate_dereferences(struct hlsl_ctx *ctx, struct hlsl_ir_node *ins
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Loaded resource must have a single uniform or groupshared source.");
             }
-            else if (validate_component_index_range_from_deref(ctx, &load->resource) == DEREF_VALIDATION_NOT_CONSTANT)
+            else if (validate_component_index_range_from_deref(ctx, &load->resource) == DEREF_VALIDATION_NOT_CONSTANT
+                    && !deref_is_descriptor_array_element(ctx, &load->resource))
             {
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Loaded resource from \"%s\" must be determinable at compile time.",
@@ -3701,7 +3713,8 @@ static bool validate_dereferences(struct hlsl_ctx *ctx, struct hlsl_ir_node *ins
                     hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                             "Resource load sampler must have a single uniform source.");
                 }
-                else if (validate_component_index_range_from_deref(ctx, &load->sampler) == DEREF_VALIDATION_NOT_CONSTANT)
+                else if (validate_component_index_range_from_deref(ctx, &load->sampler) == DEREF_VALIDATION_NOT_CONSTANT
+                        && !deref_is_descriptor_array_element(ctx, &load->sampler))
                 {
                     hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                             "Resource load sampler from \"%s\" must be determinable at compile time.",
@@ -3720,7 +3733,8 @@ static bool validate_dereferences(struct hlsl_ctx *ctx, struct hlsl_ir_node *ins
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Accessed resource must have a single uniform or groupshared source.");
             }
-            else if (validate_component_index_range_from_deref(ctx, &store->resource) == DEREF_VALIDATION_NOT_CONSTANT)
+            else if (validate_component_index_range_from_deref(ctx, &store->resource) == DEREF_VALIDATION_NOT_CONSTANT
+                    && !deref_is_descriptor_array_element(ctx, &store->resource))
             {
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Accessed resource from \"%s\" must be determinable at compile time.",
@@ -3750,7 +3764,8 @@ static bool validate_dereferences(struct hlsl_ctx *ctx, struct hlsl_ir_node *ins
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Accessed resource must have a single uniform or groupshared source.");
             }
-            else if (validate_component_index_range_from_deref(ctx, &interlocked->dst) == DEREF_VALIDATION_NOT_CONSTANT)
+            else if (validate_component_index_range_from_deref(ctx, &interlocked->dst) == DEREF_VALIDATION_NOT_CONSTANT
+                    && !deref_is_descriptor_array_element(ctx, &interlocked->dst))
             {
                 hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_NON_STATIC_OBJECT_REF,
                         "Accessed resource from \"%s\" must be determinable at compile time.",
@@ -9634,6 +9649,32 @@ static bool sm4_generate_vsir_numeric_reg_from_deref(struct hlsl_ctx *ctx, struc
     return true;
 }
 
+/* NovaOS: the element of a resource array a deref names.  Before shader
+ * model 5.1 each element has its own register (idx[0]); from 5.1 idx[0] is
+ * the range's id and idx[1] the register in the range, which may be relative
+ * to an index expression (a descriptor array indexed dynamically). */
+static bool sm4_generate_vsir_object_reg_index(struct hlsl_ctx *ctx, struct vsir_program *program,
+        struct vkd3d_shader_register *reg, const struct hlsl_deref *deref)
+{
+    if (vkd3d_shader_ver_le(&program->shader_version, 5, 0))
+    {
+        unsigned int offset = hlsl_offset_from_deref_safe(ctx, deref);
+
+        reg->idx[0].offset += offset;
+        reg->idx[1].offset += offset;
+        return true;
+    }
+
+    if (!deref->rel_offset.node)
+    {
+        reg->idx[1].offset += hlsl_offset_from_deref_safe(ctx, deref);
+        return true;
+    }
+
+    reg->idx[1].offset += deref->const_offset;
+    return !!(reg->idx[1].rel_addr = sm4_generate_vsir_new_idx_src(ctx, program, deref->rel_offset.node));
+}
+
 static bool sm4_generate_vsir_reg_from_deref(struct hlsl_ctx *ctx, struct vsir_program *program,
         struct vkd3d_shader_register *reg, uint32_t *writemask, const struct hlsl_deref *deref)
 {
@@ -9652,10 +9693,9 @@ static bool sm4_generate_vsir_reg_from_deref(struct hlsl_ctx *ctx, struct vsir_p
             reg->type = VKD3DSPR_RESOURCE;
             reg->dimension = VSIR_DIMENSION_VEC4;
             reg->idx[0].offset = var->regs[HLSL_REGSET_TEXTURES].id;
-            if (vkd3d_shader_ver_le(version, 5, 0))
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
             reg->idx[1].offset = var->regs[HLSL_REGSET_TEXTURES].index;
-            reg->idx[1].offset += hlsl_offset_from_deref_safe(ctx, deref);
+            if (!sm4_generate_vsir_object_reg_index(ctx, program, reg, deref))
+                return false;
             reg->idx_count = 2;
             VKD3D_ASSERT(regset == HLSL_REGSET_TEXTURES);
             *writemask = VKD3DSP_WRITEMASK_ALL;
@@ -9665,10 +9705,9 @@ static bool sm4_generate_vsir_reg_from_deref(struct hlsl_ctx *ctx, struct vsir_p
             reg->type = VKD3DSPR_UAV;
             reg->dimension = VSIR_DIMENSION_VEC4;
             reg->idx[0].offset = var->regs[HLSL_REGSET_UAVS].id;
-            if (vkd3d_shader_ver_le(version, 5, 0))
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
             reg->idx[1].offset = var->regs[HLSL_REGSET_UAVS].index;
-            reg->idx[1].offset += hlsl_offset_from_deref_safe(ctx, deref);
+            if (!sm4_generate_vsir_object_reg_index(ctx, program, reg, deref))
+                return false;
             reg->idx_count = 2;
             VKD3D_ASSERT(regset == HLSL_REGSET_UAVS);
             *writemask = VKD3DSP_WRITEMASK_ALL;
@@ -9678,10 +9717,9 @@ static bool sm4_generate_vsir_reg_from_deref(struct hlsl_ctx *ctx, struct vsir_p
             reg->type = VKD3DSPR_SAMPLER;
             reg->dimension = VSIR_DIMENSION_NONE;
             reg->idx[0].offset = var->regs[HLSL_REGSET_SAMPLERS].id;
-            if (vkd3d_shader_ver_le(version, 5, 0))
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
             reg->idx[1].offset = var->regs[HLSL_REGSET_SAMPLERS].index;
-            reg->idx[1].offset += hlsl_offset_from_deref_safe(ctx, deref);
+            if (!sm4_generate_vsir_object_reg_index(ctx, program, reg, deref))
+                return false;
             reg->idx_count = 2;
             VKD3D_ASSERT(regset == HLSL_REGSET_SAMPLERS);
             *writemask = VKD3DSP_WRITEMASK_ALL;
@@ -13305,6 +13343,37 @@ static void sm4_generate_vsir_add_dcl_constant_buffer(struct hlsl_ctx *ctx,
     src->swizzle = VKD3D_SHADER_NO_SWIZZLE;
 }
 
+/* NovaOS: how many declarations a resource takes, and its register range.
+ * Before shader model 5.1 each array element is declared on its own; from
+ * 5.1 an array is one descriptor range, declared when any element is used. */
+static unsigned int sm4_resource_dcl_count(struct hlsl_ctx *ctx, const struct extern_resource *resource)
+{
+    return hlsl_version_lt(ctx, 5, 1) ? resource->bind_count : !!resource->bind_count;
+}
+
+static bool sm4_resource_dcl_range(struct hlsl_ctx *ctx, const struct extern_resource *resource,
+        enum hlsl_regset regset, unsigned int i, unsigned int *first, unsigned int *last)
+{
+    unsigned int j;
+
+    if (hlsl_version_lt(ctx, 5, 1))
+    {
+        *first = *last = resource->index + i;
+        return !resource->var || resource->var->objects_usage[regset][i].used;
+    }
+
+    *first = resource->index;
+    *last = resource->index + resource->bind_count - 1;
+    if (!resource->var)
+        return true;
+    for (j = 0; j < resource->bind_count; ++j)
+    {
+        if (resource->var->objects_usage[regset][j].used)
+            return true;
+    }
+    return false;
+}
+
 static void sm4_generate_vsir_add_dcl_sampler(struct hlsl_ctx *ctx,
         struct vsir_program *program, const struct extern_resource *resource)
 {
@@ -13313,14 +13382,12 @@ static void sm4_generate_vsir_add_dcl_sampler(struct hlsl_ctx *ctx,
     unsigned int i;
 
     VKD3D_ASSERT(resource->regset == HLSL_REGSET_SAMPLERS);
-    VKD3D_ASSERT(hlsl_version_lt(ctx, 5, 1) || resource->bind_count == 1);
 
-    for (i = 0; i < resource->bind_count; ++i)
+    for (i = 0; i < sm4_resource_dcl_count(ctx, resource); ++i)
     {
-        unsigned int array_first = resource->index + i;
-        unsigned int array_last = resource->index + i; /* FIXME: array end. */
+        unsigned int array_first, array_last;
 
-        if (resource->var && !resource->var->objects_usage[HLSL_REGSET_SAMPLERS][i].used)
+        if (!sm4_resource_dcl_range(ctx, resource, HLSL_REGSET_SAMPLERS, i, &array_first, &array_last))
             continue;
 
         if (!(ins = generate_vsir_add_program_instruction(ctx, program, &resource->loc, VSIR_OP_DCL_SAMPLER, 0, 0)))
@@ -13419,17 +13486,15 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
     unsigned int i;
 
     VKD3D_ASSERT(resource->regset == regset);
-    VKD3D_ASSERT(hlsl_version_lt(ctx, 5, 1) || resource->bind_count == 1);
 
     component_type = resource->component_type;
 
-    for (i = 0; i < resource->bind_count; ++i)
+    for (i = 0; i < sm4_resource_dcl_count(ctx, resource); ++i)
     {
-        unsigned int array_first = resource->index + i;
-        unsigned int array_last = resource->index + i; /* FIXME: array end. */
         struct vkd3d_shader_resource *vsir_resource;
+        unsigned int array_first, array_last;
 
-        if (resource->var && !resource->var->objects_usage[regset][i].used)
+        if (!sm4_resource_dcl_range(ctx, resource, regset, i, &array_first, &array_last))
             continue;
 
         if (uav)

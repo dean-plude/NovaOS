@@ -624,8 +624,9 @@ static const char *g_pinned_cap[N_PINNED] = {
     "Terminal", "Files", "Notepad", "Settings", "Calendar", "Firefox", "Store",
 };
 
-/* Programs installed in C:\Programs (rescanned when the menu opens) */
-#define MAX_PROGS 64
+/* Programs installed in C:\Programs (rescanned when the menu opens); room
+ * for every one a full C:\Programs holds, so search finds the last ones too */
+#define MAX_PROGS 256
 static struct { char name[32]; char path[RAMFS_PATH_MAX]; bool hidden, link; } g_progs[MAX_PROGS];
 static int g_nprogs;
 

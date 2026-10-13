@@ -326,6 +326,20 @@ RamNode *AppLinkTarget(const RamNode *lnk)
     return AppLinkRead(lnk, &l) ? resolve_win_path(l.target) : NULL;
 }
 
+/* A GUI program (PE subsystem 2) starts on its own, as Explorer starts
+ * it on Windows: no Terminal window opens beside it (only console
+ * programs get one).  False if @exe is not a GUI program or did not start */
+static bool run_gui_program(RamNode *exe, const char *cmd, RamNode *cwd)
+{
+    if (!UmIsGuiProgram(exe)) return false;
+    if (!UmSpawnDetached(exe, cmd, cwd)) {
+        kprintf("[APPS] %s: not enough memory to start it\n", exe->name);
+        return false;
+    }
+    kprintf("[APPS] %s: a GUI program, started without a console\n", exe->name);
+    return true;
+}
+
 /* Open what a shortcut points at: a program runs with the shortcut's
  * arguments in its working folder; a folder or document opens */
 static void open_link(RamNode *lnk)
@@ -341,6 +355,7 @@ static void open_link(RamNode *lnk)
     char cmd[RAMFS_PATH_MAX + sizeof(l.args) + 8];
     ksnprintf(cmd, sizeof(cmd), "\"%s\"%s%s", l.target, l.args[0] ? " " : "", l.args);
     RamNode *dir = resolve_win_path(l.workdir);
+    if (run_gui_program(t, cmd, dir && dir->dir ? dir : t->parent)) return;
     TerminalRun(cmd, dir && dir->dir ? dir : t->parent);
 }
 
@@ -505,8 +520,13 @@ void AppRunProgram(RamNode *exe, const char *cmdline)
     if (!exe) return;
     int app = AppForProgram(exe->name);
     if (app >= 0 && app != APP_FIREFOX) { AppLaunch((AppId)app); return; }
-    /* In a Terminal: console programs need one, and GUI programs report
-     * their exit status there */
+    /* A GUI program on its own, by its full path, in its own folder (as
+     * Explorer starts it); a console program in a Terminal, its console */
+    char path[RAMFS_PATH_MAX], cmd[RAMFS_PATH_MAX + 4];
+    RamfsPath(exe, path, sizeof(path));
+    ksnprintf(cmd, sizeof(cmd), "\"%s\"", path);
+    if (run_gui_program(exe, cmd, exe->parent)) return;
+    kprintf("[APPS] %s: a console program, in a Terminal\n", exe->name);
     TerminalRun(cmdline && *cmdline ? cmdline : exe->name, in_programs(exe) ? NULL : exe->parent);
 }
 

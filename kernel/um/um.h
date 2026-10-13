@@ -62,6 +62,9 @@ void        UmSpawnAbandon(UmSpawnJob *j);
 /* Start a program to run on its own (UmSpawn + UmDetach) without waiting
  * for it to load; a failure is logged.  False if out of memory. */
 bool        UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd);
+/* Whether @exe is a Windows GUI program (PE subsystem 2, 32- or 64-bit):
+ * one the shell starts on its own, with no console window */
+bool        UmIsGuiProgram(RamNode *exe);
 /* Ask the process to end with @status (it stops at its next kernel exit). */
 void       UmKill(UmProcess *p, UINT32 status);
 /* True once the process has exited; *status gets its exit code and

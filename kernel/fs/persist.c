@@ -251,11 +251,14 @@ static FatVol *format_blank(BlockDev *d)
     return FatFormat(d, 2048, size, DATA_LABEL);
 }
 
-/* Take NTFS volume @v for C: (it must be writable) */
+/* Take NTFS volume @v for C: (it must be writable).  It is marked dirty
+ * while a save writes to it (vol_sync clears the mark), so a save cut off
+ * half-way is checked and repaired when C: is mounted next (ntfs.c) */
 static bool use_ntfs(NtfsVol *v, BlockDev *d)
 {
     NtfsSetClock(RamfsNow);
     if (!NtfsEnableWrite(v)) return false;
+    NtfsMarkWhileWriting(v);
     g_ntfs = v;
     g_ntfs_dev = d;
     return true;
@@ -759,7 +762,8 @@ static bool vol_write_meta(UINT64 dir, const char *name, const void *data, UINT3
     return NtfsWriteFile(g_ntfs, ref, data, len);
 }
 
-static bool vol_sync(void) { return g_vol ? FatSync(g_vol) : NtfsSync(g_ntfs); }
+/* The end of a save: on the disk, and an NTFS volume marked clean */
+static bool vol_sync(void) { return g_vol ? FatSync(g_vol) : NtfsSync(g_ntfs) && NtfsMarkClean(g_ntfs); }
 
 /* ---------------------------------------------------------------------------
  * Contents let go of (see ramfs.h, RamfsLetGo): read back from where the

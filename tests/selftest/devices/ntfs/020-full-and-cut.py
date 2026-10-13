@@ -4,12 +4,12 @@
 # again once it is deleted.  `ntfstest churn` leaves kept.txt and then
 # rewrites four 4 MB files without end; the machine is reset while it
 # does.  NovaOS marks the volume dirty while it writes to it, so the next
-# boot mounts D: read-only, and `ntfstest cut` finds kept.txt whole and
-# each file one whole generation, old or new.  Offline: the disk copied
-# once NovaOS had marked it clean after filling it must pass
-# scripts/ntfs-check.py as it is; the disk after the cut must be marked
-# dirty and pass it with --after-cut (nothing lost; only what chkdsk
-# mends without loss), and ntfs-3g must read kept.txt.
+# boot finds it cut off, checks and repairs it (as chkdsk would) and mounts
+# D: read-write, and `ntfstest cut` finds kept.txt whole, each file one
+# whole generation, old or new, and D: taking new files.  Offline: the
+# disk copied once NovaOS had marked it clean after filling it, and again
+# after the cut, must pass scripts/ntfs-check.py with no errors, and
+# ntfs-3g must read kept.txt.
 import os
 import shutil
 import subprocess
@@ -29,17 +29,24 @@ def _volume(nova, name):
     return vol
 
 
+def _clean(nova):
+    """Wait until NovaOS has marked D: clean (it does a second after the
+    last change)"""
+    disk = os.path.join(nova.work, 'ntfs.img')
+    for _ in range(30):
+        if subprocess.run([sys.executable, os.path.join(SCRIPTS, 'ntfs-dirty.py'), disk, str(1 << 20)],
+                          capture_output=True).returncode == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def _snapshot(name):
-    """Before the next test: once NovaOS has marked D: clean (it does a
-    second after the last change), a copy of the disk as work/ntfs-NAME.img"""
+    """Before the next test: once NovaOS has marked D: clean, a copy of
+    the disk as work/ntfs-NAME.img"""
     def take(nova):
-        disk = os.path.join(nova.work, 'ntfs.img')
-        for _ in range(30):
-            if subprocess.run([sys.executable, os.path.join(SCRIPTS, 'ntfs-dirty.py'), disk, str(1 << 20)],
-                              capture_output=True).returncode == 0:
-                break
-            time.sleep(0.5)
-        shutil.copy(disk, os.path.join(nova.work, f'ntfs-{name}.img'))
+        _clean(nova)
+        shutil.copy(os.path.join(nova.work, 'ntfs.img'), os.path.join(nova.work, f'ntfs-{name}.img'))
     return take
 
 
@@ -58,16 +65,16 @@ def _full_ok(nova):
 
 
 def _cut_ok(nova):
-    vol = _volume(nova, 'ntfs')
-    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, 'ntfs-dirty.py'), vol], capture_output=True, text=True)
-    if r.returncode != 1:
-        return f'the volume is not marked dirty after the cut ({r.stdout.strip() or r.stderr.strip()})'
-    why = _check(vol, '--after-cut')
+    if not _clean(nova):
+        return 'D: is still marked dirty after the cut, the repair and ntfstest cut'
+    _snapshot('cut')(nova)
+    vol = _volume(nova, 'ntfs-cut')
+    why = _check(vol)
     if why:
         return why
     ntfscat = shutil.which('ntfscat') or '/usr/bin/ntfscat'
     if os.path.exists(ntfscat):
-        r = subprocess.run([ntfscat, '-f', vol, 'Churn/kept.txt'], capture_output=True)    # (-f: dirty as it is)
+        r = subprocess.run([ntfscat, vol, 'Churn/kept.txt'], capture_output=True)
         if r.returncode or r.stdout != KEPT:
             return f'ntfscat Churn/kept.txt read {r.stdout[:80]!r} {r.stderr[:200]!r}'
     return None
@@ -76,8 +83,8 @@ def _cut_ok(nova):
 TESTS = [
     Test('ntfs full', r'ntfstest fill D:\Full', [r'ntfstest fill: \d+ passed, 0 failed'], timeout=300, settle=3,
          before=_snapshot('links'), check=_full_ok),
-    Test('ntfs cut', r'ntfstest churn D:\Churn', [r'\[NTFS\] \S+: "NOVATEST" stays read-only: marked dirty',
-                                                  r'\[DRIVES\] D: is NTFS volume "NOVATEST" on \S+ \(read-only\)'],
+    Test('ntfs cut', r'ntfstest churn D:\Churn', [r'\[NTFS\] \S+: "NOVATEST" was cut off while being written: checked',
+                                                  r'\[DRIVES\] D: is NTFS volume "NOVATEST" on \S+ \(read-write\)'],
          cut=r'ntfstest churn: writing', before=_snapshot('full')),
     Test('ntfs after cut', r'ntfstest cut D:\Churn', [r'ntfstest cut: \d+ passed, 0 failed'], check=_cut_ok),
 ]

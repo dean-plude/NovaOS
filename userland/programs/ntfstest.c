@@ -7,17 +7,14 @@
  *   ntfstest churn DIR   leaves DIR\kept.txt, then rewrites DIR\c0.bin .. c3.bin
  *                        (4 MB each) without end, for the test to reset the
  *                        machine meanwhile
- *   ntfstest cut DIR     after that reset: the volume is read-only (NovaOS
- *                        marks it dirty while writing), kept.txt is whole and
- *                        each c*.bin holds one whole generation, old or new
+ *   ntfstest cut DIR     after that reset (NovaOS found the volume it had
+ *                        marked dirty while writing, checked and repaired it):
+ *                        kept.txt is whole, each c*.bin holds one whole
+ *                        generation, old or new, and new files can be written
  */
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
-
-#ifndef ERROR_WRITE_PROTECT
-#define ERROR_WRITE_PROTECT 19
-#endif
 
 static int pass, fail;
 #define CHECK(cond) do { if (cond) pass++; else { fail++; printf("FAIL line %d: %s (error %lu)\n", __LINE__, #cond, GetLastError()); } } while (0)
@@ -157,9 +154,6 @@ static int cut(const char *dir)
     char text[64];
     CHECK(read_file(at(dir, "kept.txt"), text, sizeof(text)) == (int)sizeof(KEPT_TEXT) - 1 &&
           !memcmp(text, KEPT_TEXT, sizeof(KEPT_TEXT) - 1));
-    HANDLE h = CreateFileA(at(dir, "new.txt"), GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
-    CHECK(h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_WRITE_PROTECT);
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     DWORD *buf = VirtualAlloc(0, CHURN_BYTES, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     DWORD *want = VirtualAlloc(0, CHURN_BYTES, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!buf || !want) return 1;
@@ -177,6 +171,9 @@ static int cut(const char *dir)
         CHECK(n == (int)CHURN_BYTES && g % 4 == (DWORD)i && !memcmp(buf, want, CHURN_BYTES));
     }
     CHECK(found == 4);
+    /* and the repaired volume takes changes again */
+    CHECK(write_file(at(dir, "after-cut.txt"), "written after the cut\r\n", 23));
+    CHECK(read_file(at(dir, "after-cut.txt"), text, sizeof(text)) == 23 && !memcmp(text, "written after the cut", 21));
     printf("ntfstest cut: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

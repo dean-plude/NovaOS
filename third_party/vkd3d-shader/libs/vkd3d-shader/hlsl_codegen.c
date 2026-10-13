@@ -12356,12 +12356,13 @@ static bool sm4_generate_vsir_instr_ld(struct hlsl_ctx *ctx,
 
     VKD3D_ASSERT(!(structured && multisampled));
 
+    /* NovaOS: raw UAVs (RWByteAddressBuffer.Load*()) use ld_raw too. */
     if (structured)
         opcode = VSIR_OP_LD_STRUCTURED;
-    else if (uav)
-        opcode = VSIR_OP_LD_UAV_TYPED;
     else if (raw)
         opcode = VSIR_OP_LD_RAW;
+    else if (uav)
+        opcode = VSIR_OP_LD_UAV_TYPED;
     else
         opcode = multisampled ? VSIR_OP_LD2DMS : VSIR_OP_LD;
 
@@ -12602,11 +12603,24 @@ static bool sm4_generate_vsir_instr_resinfo(struct hlsl_ctx *ctx,
     struct hlsl_type *type = instr->data_type;
     struct vkd3d_shader_instruction *ins;
 
-    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
-            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
     {
         hlsl_fixme(ctx, &load->node.loc, "resinfo for buffers.");
         return false;
+    }
+
+    /* NovaOS: GetDimensions() on (RW)Buffer and (RW)ByteAddressBuffer is
+     * bufinfo: the element count, or the size in bytes for raw buffers. */
+    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
+            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)
+    {
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VSIR_OP_BUFINFO, 1, 1)))
+            return false;
+
+        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+        return sm4_generate_vsir_init_src_operand_from_deref(ctx, program,
+                &ins->src[0], resource, ins->dst[0].write_mask, &instr->loc);
     }
 
     VKD3D_ASSERT(type->e.numeric.type == HLSL_TYPE_UINT || type->e.numeric.type == HLSL_TYPE_FLOAT);

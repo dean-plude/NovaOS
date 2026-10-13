@@ -54,7 +54,9 @@
   `SHGetFolderPath` DLL setup programs look for), `crtdll` (the NT 3
   C runtime, forwarding to `msvcrt`), `d3dcompiler_47` (the HLSL compiler: Wine's vkd3d-shader,
   LGPL-2.1, turns HLSL into Direct3D 9, 10, 11 and 12 (shader model 5.1, with
-  descriptor arrays indexed at run time as wgpu's sampler heap needs) bytecode
+  descriptor arrays indexed at run time as wgpu's sampler heap needs, and
+  RWByteAddressBuffer's Load, GetDimensions and Interlocked methods for its
+  storage buffers) bytecode
   for Chromium's ANGLE, wgpu and games, with `D3DReflect`, `D3DDisassemble` and the shader
   container parts), `dxgi`, `d3d11` and `dcomp` without a GPU (Windows'
   Microsoft Basic Render Driver adapter, a WARP device whose textures

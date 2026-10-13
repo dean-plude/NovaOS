@@ -6728,7 +6728,7 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
     const struct hlsl_type *object_type = object->data_type;
-    bool uint_resinfo, has_uint_arg, has_float_arg;
+    bool uint_resinfo, has_uint_arg, has_float_arg, is_buffer;
     struct hlsl_resource_load_params load_params;
     struct hlsl_ir_node *sample_info, *res_info;
     struct hlsl_type *uint_type, *float_type;
@@ -6749,19 +6749,21 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         enum hlsl_sampler_dim sampler_dim;
         unsigned int args_count;
         enum func_argument args[ARG_MAX_ARGS];
+        /* NovaOS: from upstream vkd3d master: no mip level argument on UAVs. */
+        bool srv_only;
     }
     overloads[] =
     {
         { HLSL_SAMPLER_DIM_1D, 1, { ARG_WIDTH } },
-        { HLSL_SAMPLER_DIM_1D, 3, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_1D, 3, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_1DARRAY, 2, { ARG_WIDTH, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_1DARRAY, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_1DARRAY, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_2D, 2, { ARG_WIDTH, ARG_HEIGHT } },
-        { HLSL_SAMPLER_DIM_2D, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_2D, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_2DARRAY, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_2DARRAY, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_2DARRAY, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_3D, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
-        { HLSL_SAMPLER_DIM_3D, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+        { HLSL_SAMPLER_DIM_3D, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT }, true },
         { HLSL_SAMPLER_DIM_CUBE, 2, { ARG_WIDTH, ARG_HEIGHT } },
         { HLSL_SAMPLER_DIM_CUBE, 4, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_LEVEL_COUNT } },
         { HLSL_SAMPLER_DIM_CUBEARRAY, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT } },
@@ -6769,6 +6771,8 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         { HLSL_SAMPLER_DIM_2DMS, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_SAMPLE_COUNT } },
         { HLSL_SAMPLER_DIM_2DMSARRAY, 4, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_SAMPLE_COUNT } },
         { HLSL_SAMPLER_DIM_BUFFER, 1, { ARG_WIDTH} },
+        /* NovaOS: ByteAddressBuffer and RWByteAddressBuffer (size in bytes). */
+        { HLSL_SAMPLER_DIM_RAW_BUFFER, 1, { ARG_WIDTH} },
     };
     const struct overload *o = NULL;
 
@@ -6784,6 +6788,9 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
     for (i = 0; i < ARRAY_SIZE(overloads); ++i)
     {
         const struct overload *iter = &overloads[i];
+
+        if (object_type->class == HLSL_CLASS_UAV && iter->srv_only)
+            continue;
 
         if (iter->sampler_dim == object_type->sampler_dim && iter->args_count == params->args_count)
         {
@@ -6813,6 +6820,12 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
         }
     }
     uint_resinfo = !has_float_arg && has_uint_arg;
+    /* NovaOS: a buffer's size comes from bufinfo, which returns one uint. */
+    is_buffer = object_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
+            || object_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER;
+    if (is_buffer && hlsl_version_lt(ctx, 5, 0))
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INCOMPATIBLE_PROFILE,
+                "%s() on buffers can only be used in shader model 5.0 or higher.", name);
 
     if (!o)
     {
@@ -6833,7 +6846,10 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
     load_params.type = HLSL_RESOURCE_RESINFO;
     load_params.resource = object;
     load_params.lod = args[ARG_MIP_LEVEL];
-    load_params.format = hlsl_get_vector_type(ctx, uint_resinfo ? HLSL_TYPE_UINT : HLSL_TYPE_FLOAT, 4);
+    if (is_buffer)
+        load_params.format = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+    else
+        load_params.format = hlsl_get_vector_type(ctx, uint_resinfo ? HLSL_TYPE_UINT : HLSL_TYPE_FLOAT, 4);
     res_info = hlsl_block_add_resource_load(ctx, block, &load_params, loc);
 
     if (!add_assignment_from_component(ctx, block, args[ARG_WIDTH], res_info, 0, loc))
@@ -7016,6 +7032,107 @@ static bool add_store_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block
     return true;
 }
 
+/* NovaOS: RWByteAddressBuffer's Interlocked*() methods (dest is a byte
+ * offset), which wgpu's naga writes for WGSL atomics in storage buffers. */
+static bool add_interlocked_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
+        const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    static const struct
+    {
+        const char *name;
+        enum hlsl_interlocked_op op;
+        unsigned int min_args, max_args;
+    }
+    ops[] =
+    {
+        {"InterlockedAdd",             HLSL_INTERLOCKED_ADD,      2, 3},
+        {"InterlockedAnd",             HLSL_INTERLOCKED_AND,      2, 3},
+        {"InterlockedCompareExchange", HLSL_INTERLOCKED_CMP_EXCH, 4, 4},
+        {"InterlockedCompareStore",    HLSL_INTERLOCKED_CMP_EXCH, 3, 3},
+        {"InterlockedExchange",        HLSL_INTERLOCKED_EXCH,     3, 3},
+        {"InterlockedMax",             HLSL_INTERLOCKED_MAX,      2, 3},
+        {"InterlockedMin",             HLSL_INTERLOCKED_MIN,      2, 3},
+        {"InterlockedOr",              HLSL_INTERLOCKED_OR,       2, 3},
+        {"InterlockedXor",             HLSL_INTERLOCKED_XOR,      2, 3},
+    };
+    struct hlsl_ir_node *interlocked, *offset, *val, *cmp_val = NULL, *orig_val = NULL;
+    struct hlsl_type *val_type;
+    struct hlsl_deref dst_deref;
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(ops); ++i)
+    {
+        if (!strcmp(name, ops[i].name))
+            break;
+    }
+    VKD3D_ASSERT(i < ARRAY_SIZE(ops));
+
+    if (hlsl_version_lt(ctx, 5, 0))
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INCOMPATIBLE_PROFILE,
+                "Interlocked functions can only be used in shader model 5.0 or higher.");
+
+    if (params->args_count < ops[i].min_args || params->args_count > ops[i].max_args)
+    {
+        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
+                "Wrong number of arguments to method '%s': expected between %u and %u, but got %u.",
+                name, ops[i].min_args, ops[i].max_args, params->args_count);
+        return false;
+    }
+
+    if (ops[i].op == HLSL_INTERLOCKED_CMP_EXCH)
+    {
+        cmp_val = params->args[1];
+        val = params->args[2];
+        if (params->args_count == 4)
+            orig_val = params->args[3];
+    }
+    else
+    {
+        val = params->args[1];
+        if (params->args_count == 3)
+            orig_val = params->args[2];
+    }
+
+    /* As for the Interlocked*() functions: uint values, except that
+     * InterlockedMax()/InterlockedMin() also take int. */
+    val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+    if ((ops[i].op == HLSL_INTERLOCKED_MAX || ops[i].op == HLSL_INTERLOCKED_MIN)
+            && hlsl_is_numeric_type(val->data_type) && val->data_type->e.numeric.type != HLSL_TYPE_UINT
+            && val->data_type->e.numeric.type != HLSL_TYPE_BOOL)
+        val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
+
+    if (!(offset = add_implicit_conversion(ctx, block, params->args[0],
+            hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), loc)))
+        return false;
+    if (cmp_val && !(cmp_val = add_implicit_conversion(ctx, block, cmp_val, val_type, loc)))
+        return false;
+    if (!(val = add_implicit_conversion(ctx, block, val, val_type, loc)))
+        return false;
+
+    if (!hlsl_init_deref_from_index_chain(ctx, &dst_deref, object))
+        return false;
+
+    interlocked = hlsl_new_interlocked(ctx, ops[i].op, orig_val ? val_type : NULL,
+            &dst_deref, offset, cmp_val, val, loc);
+    hlsl_cleanup_deref(&dst_deref);
+    if (!interlocked)
+        return false;
+    hlsl_block_add_instr(block, interlocked);
+
+    if (orig_val)
+    {
+        if (orig_val->data_type->modifiers & HLSL_MODIFIER_CONST)
+            hlsl_error(ctx, &orig_val->loc, VKD3D_SHADER_ERROR_HLSL_MODIFIES_CONST,
+                    "Output argument to '%s' is const.", name);
+
+        if (!add_assignment(ctx, block, orig_val, ASSIGN_OP_ASSIGN, interlocked, true))
+            return false;
+    }
+
+    add_void_expr(ctx, block, loc);
+    return true;
+}
+
 static bool add_so_append_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
@@ -7082,7 +7199,7 @@ texture_methods[] =
     { "GatherGreen",        add_gather_method_call,        "00010101001000" },
     { "GatherRed",          add_gather_method_call,        "00010101001000" },
 
-    { "GetDimensions",      add_getdimensions_method_call, "00111111111110" },
+    { "GetDimensions",      add_getdimensions_method_call, "00111111111111" },
 
     { "Load",               add_load_method_call,          "00111011110111" },
     { "Load2",              add_raw_load_method_call,      "00000000000001" },
@@ -7097,12 +7214,28 @@ texture_methods[] =
     { "SampleLevel",        add_sample_lod_method_call,    "00111111001000" },
 };
 
+/* NovaOS: GetDimensions, Load*() and Interlocked*() added; upstream 1.19 has
+ * only Store*().  Keep sorted (bsearch). */
 static const struct method_function uav_methods[] =
 {
-    { "Store",  add_store_method_call, "00000000000001" },
-    { "Store2", add_store_method_call, "00000000000001" },
-    { "Store3", add_store_method_call, "00000000000001" },
-    { "Store4", add_store_method_call, "00000000000001" },
+    { "GetDimensions",              add_getdimensions_method_call, "00111001100101" },
+    { "InterlockedAdd",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedAnd",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedCompareExchange", add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedCompareStore",    add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedExchange",        add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedMax",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedMin",             add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedOr",              add_interlocked_method_call,   "00000000000001" },
+    { "InterlockedXor",             add_interlocked_method_call,   "00000000000001" },
+    { "Load",                       add_raw_load_method_call,      "00000000000001" },
+    { "Load2",                      add_raw_load_method_call,      "00000000000001" },
+    { "Load3",                      add_raw_load_method_call,      "00000000000001" },
+    { "Load4",                      add_raw_load_method_call,      "00000000000001" },
+    { "Store",                      add_store_method_call,         "00000000000001" },
+    { "Store2",                     add_store_method_call,         "00000000000001" },
+    { "Store3",                     add_store_method_call,         "00000000000001" },
+    { "Store4",                     add_store_method_call,         "00000000000001" },
 };
 
 static const struct method_function so_methods[] =
@@ -7394,7 +7527,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
 }
 
 
-#line 7398 "hlsl.tab.c"
+#line 7531 "hlsl.tab.c"
 
 #ifdef short
 # undef short
@@ -7792,41 +7925,41 @@ static const yytype_uint8 yytranslate[] =
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
 static const yytype_int16 yyrline[] =
 {
-       0,  7462,  7462,  7463,  7464,  7465,  7470,  7471,  7472,  7473,
-    7476,  7480,  7483,  7489,  7496,  7505,  7509,  7514,  7523,  7524,
-    7527,  7528,  7531,  7540,  7549,  7562,  7563,  7564,  7567,  7568,
-    7571,  7572,  7575,  7583,  7593,  7599,  7603,  7609,  7610,  7616,
-    7634,  7646,  7647,  7650,  7688,  7694,  7695,  7696,  7700,  7704,
-    7717,  7723,  7751,  7752,  7755,  7776,  7788,  7809,  7819,  7834,
-    7839,  7842,  7895,  7904,  8028,  8029,  8046,  8051,  8057,  8063,
-    8070,  8077,  8084,  8085,  8088,  8094,  8099,  8108,  8123,  8155,
-    8164,  8176,  8198,  8216,  8231,  8248,  8270,  8276,  8285,  8289,
-    8293,  8299,  8308,  8316,  8317,  8324,  8381,  8385,  8389,  8393,
-    8397,  8401,  8405,  8409,  8413,  8419,  8423,  8429,  8433,  8437,
-    8441,  8445,  8449,  8453,  8459,  8463,  8467,  8471,  8475,  8479,
-    8483,  8489,  8493,  8497,  8503,  8512,  8516,  8522,  8545,  8549,
-    8578,  8582,  8586,  8590,  8594,  8598,  8602,  8606,  8610,  8617,
-    8622,  8628,  8644,  8648,  8653,  8658,  8662,  8676,  8680,  8684,
-    8701,  8723,  8730,  8734,  8738,  8742,  8746,  8750,  8754,  8758,
-    8762,  8766,  8773,  8777,  8783,  8784,  8790,  8791,  8796,  8803,
-    8804,  8807,  8827,  8833,  8840,  8849,  8856,  8862,  8869,  8877,
-    8896,  8908,  8914,  8918,  8923,  8928,  8933,  8940,  8945,  8958,
-    8963,  8987,  9007,  9037,  9047,  9058,  9059,  9064,  9074,  9089,
-    9104,  9121,  9125,  9146,  9151,  9168,  9172,  9176,  9180,  9184,
-    9188,  9192,  9196,  9200,  9204,  9208,  9212,  9216,  9220,  9224,
-    9228,  9232,  9236,  9240,  9244,  9248,  9252,  9256,  9260,  9264,
-    9268,  9272,  9287,  9300,  9305,  9312,  9313,  9334,  9337,  9350,
-    9368,  9372,  9378,  9379,  9387,  9388,  9389,  9394,  9395,  9396,
-    9397,  9400,  9412,  9420,  9426,  9436,  9447,  9499,  9504,  9511,
-    9517,  9523,  9529,  9537,  9546,  9562,  9577,  9589,  9599,  9609,
-    9617,  9622,  9625,  9631,  9640,  9643,  9649,  9655,  9661,  9673,
-    9690,  9702,  9724,  9729,  9740,  9751,  9756,  9775,  9800,  9801,
-    9810,  9819,  9852,  9868,  9880,  9900,  9901,  9910,  9919,  9923,
-    9928,  9933,  9939,  9951,  9952,  9956,  9960,  9966,  9967,  9971,
-    9981,  9982,  9986,  9992,  9993,  9997, 10001, 10005, 10011, 10012,
-   10016, 10022, 10023, 10029, 10030, 10036, 10037, 10043, 10044, 10050,
-   10051, 10057, 10058, 10079, 10080, 10097, 10101, 10105, 10109, 10113,
-   10117, 10121, 10125, 10129, 10133, 10137, 10143, 10144
+       0,  7595,  7595,  7596,  7597,  7598,  7603,  7604,  7605,  7606,
+    7609,  7613,  7616,  7622,  7629,  7638,  7642,  7647,  7656,  7657,
+    7660,  7661,  7664,  7673,  7682,  7695,  7696,  7697,  7700,  7701,
+    7704,  7705,  7708,  7716,  7726,  7732,  7736,  7742,  7743,  7749,
+    7767,  7779,  7780,  7783,  7821,  7827,  7828,  7829,  7833,  7837,
+    7850,  7856,  7884,  7885,  7888,  7909,  7921,  7942,  7952,  7967,
+    7972,  7975,  8028,  8037,  8161,  8162,  8179,  8184,  8190,  8196,
+    8203,  8210,  8217,  8218,  8221,  8227,  8232,  8241,  8256,  8288,
+    8297,  8309,  8331,  8349,  8364,  8381,  8403,  8409,  8418,  8422,
+    8426,  8432,  8441,  8449,  8450,  8457,  8514,  8518,  8522,  8526,
+    8530,  8534,  8538,  8542,  8546,  8552,  8556,  8562,  8566,  8570,
+    8574,  8578,  8582,  8586,  8592,  8596,  8600,  8604,  8608,  8612,
+    8616,  8622,  8626,  8630,  8636,  8645,  8649,  8655,  8678,  8682,
+    8711,  8715,  8719,  8723,  8727,  8731,  8735,  8739,  8743,  8750,
+    8755,  8761,  8777,  8781,  8786,  8791,  8795,  8809,  8813,  8817,
+    8834,  8856,  8863,  8867,  8871,  8875,  8879,  8883,  8887,  8891,
+    8895,  8899,  8906,  8910,  8916,  8917,  8923,  8924,  8929,  8936,
+    8937,  8940,  8960,  8966,  8973,  8982,  8989,  8995,  9002,  9010,
+    9029,  9041,  9047,  9051,  9056,  9061,  9066,  9073,  9078,  9091,
+    9096,  9120,  9140,  9170,  9180,  9191,  9192,  9197,  9207,  9222,
+    9237,  9254,  9258,  9279,  9284,  9301,  9305,  9309,  9313,  9317,
+    9321,  9325,  9329,  9333,  9337,  9341,  9345,  9349,  9353,  9357,
+    9361,  9365,  9369,  9373,  9377,  9381,  9385,  9389,  9393,  9397,
+    9401,  9405,  9420,  9433,  9438,  9445,  9446,  9467,  9470,  9483,
+    9501,  9505,  9511,  9512,  9520,  9521,  9522,  9527,  9528,  9529,
+    9530,  9533,  9545,  9553,  9559,  9569,  9580,  9632,  9637,  9644,
+    9650,  9656,  9662,  9670,  9679,  9695,  9710,  9722,  9732,  9742,
+    9750,  9755,  9758,  9764,  9773,  9776,  9782,  9788,  9794,  9806,
+    9823,  9835,  9857,  9862,  9873,  9884,  9889,  9908,  9933,  9934,
+    9943,  9952,  9985, 10001, 10013, 10033, 10034, 10043, 10052, 10056,
+   10061, 10066, 10072, 10084, 10085, 10089, 10093, 10099, 10100, 10104,
+   10114, 10115, 10119, 10125, 10126, 10130, 10134, 10138, 10144, 10145,
+   10149, 10155, 10156, 10162, 10163, 10169, 10170, 10176, 10177, 10183,
+   10184, 10190, 10191, 10212, 10213, 10230, 10234, 10238, 10242, 10246,
+   10250, 10254, 10258, 10262, 10266, 10270, 10276, 10277
 };
 #endif
 
@@ -9734,333 +9867,333 @@ yydestruct (const char *yymsg,
   switch (yykind)
     {
     case YYSYMBOL_VAR_IDENTIFIER: /* VAR_IDENTIFIER  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9740 "hlsl.tab.c"
+#line 9873 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_NEW_IDENTIFIER: /* NEW_IDENTIFIER  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9746 "hlsl.tab.c"
+#line 9879 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_STRING: /* STRING  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9752 "hlsl.tab.c"
+#line 9885 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_TYPE_IDENTIFIER: /* TYPE_IDENTIFIER  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9758 "hlsl.tab.c"
+#line 9891 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_name_opt: /* name_opt  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9764 "hlsl.tab.c"
+#line 9897 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_any_identifier: /* any_identifier  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9770 "hlsl.tab.c"
+#line 9903 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_attribute_list: /* attribute_list  */
-#line 7355 "hlsl.y"
+#line 7488 "hlsl.y"
             { cleanup_parse_attribute_list(&((*yyvaluep).attr_list)); }
-#line 9776 "hlsl.tab.c"
+#line 9909 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_attribute_list_optional: /* attribute_list_optional  */
-#line 7355 "hlsl.y"
+#line 7488 "hlsl.y"
             { cleanup_parse_attribute_list(&((*yyvaluep).attr_list)); }
-#line 9782 "hlsl.tab.c"
+#line 9915 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_compound_statement: /* compound_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9788 "hlsl.tab.c"
+#line 9921 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_var_identifier: /* var_identifier  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9794 "hlsl.tab.c"
+#line 9927 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_parameters: /* parameters  */
-#line 7422 "hlsl.y"
+#line 7555 "hlsl.y"
             { hlsl_func_parameters_cleanup(&((*yyvaluep).parameters)); }
-#line 9800 "hlsl.tab.c"
+#line 9933 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_param_list: /* param_list  */
-#line 7422 "hlsl.y"
+#line 7555 "hlsl.y"
             { hlsl_func_parameters_cleanup(&((*yyvaluep).parameters)); }
-#line 9806 "hlsl.tab.c"
+#line 9939 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_declaration_statement: /* declaration_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9812 "hlsl.tab.c"
+#line 9945 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_type_specs: /* type_specs  */
-#line 7337 "hlsl.y"
+#line 7470 "hlsl.y"
             { destroy_parse_variable_defs(((*yyvaluep).list)); }
-#line 9818 "hlsl.tab.c"
+#line 9951 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_type_spec: /* type_spec  */
-#line 7457 "hlsl.y"
+#line 7590 "hlsl.y"
             { free_parse_variable_def(((*yyvaluep).variable_def)); }
-#line 9824 "hlsl.tab.c"
+#line 9957 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_declaration: /* declaration  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9830 "hlsl.tab.c"
+#line 9963 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_variables_def: /* variables_def  */
-#line 7337 "hlsl.y"
+#line 7470 "hlsl.y"
             { destroy_parse_variable_defs(((*yyvaluep).list)); }
-#line 9836 "hlsl.tab.c"
+#line 9969 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_variables_def_typed: /* variables_def_typed  */
-#line 7337 "hlsl.y"
+#line 7470 "hlsl.y"
             { destroy_parse_variable_defs(((*yyvaluep).list)); }
-#line 9842 "hlsl.tab.c"
+#line 9975 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_variable_decl: /* variable_decl  */
-#line 7457 "hlsl.y"
+#line 7590 "hlsl.y"
             { free_parse_variable_def(((*yyvaluep).variable_def)); }
-#line 9848 "hlsl.tab.c"
+#line 9981 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_stateblock_lhs_identifier: /* stateblock_lhs_identifier  */
-#line 7415 "hlsl.y"
+#line 7548 "hlsl.y"
             { vkd3d_free(((*yyvaluep).name)); }
-#line 9854 "hlsl.tab.c"
+#line 9987 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_state_block: /* state_block  */
-#line 7435 "hlsl.y"
+#line 7568 "hlsl.y"
             { hlsl_free_state_block(((*yyvaluep).state_block)); }
-#line 9860 "hlsl.tab.c"
+#line 9993 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_state_block_list: /* state_block_list  */
-#line 7457 "hlsl.y"
+#line 7590 "hlsl.y"
             { free_parse_variable_def(((*yyvaluep).variable_def)); }
-#line 9866 "hlsl.tab.c"
+#line 9999 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_variable_def: /* variable_def  */
-#line 7457 "hlsl.y"
+#line 7590 "hlsl.y"
             { free_parse_variable_def(((*yyvaluep).variable_def)); }
-#line 9872 "hlsl.tab.c"
+#line 10005 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_variable_def_typed: /* variable_def_typed  */
-#line 7457 "hlsl.y"
+#line 7590 "hlsl.y"
             { free_parse_variable_def(((*yyvaluep).variable_def)); }
-#line 9878 "hlsl.tab.c"
+#line 10011 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_complex_initializer: /* complex_initializer  */
-#line 7403 "hlsl.y"
+#line 7536 "hlsl.y"
             { cleanup_parse_initializer(&((*yyvaluep).initializer)); }
-#line 9884 "hlsl.tab.c"
+#line 10017 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_complex_initializer_list: /* complex_initializer_list  */
-#line 7403 "hlsl.y"
+#line 7536 "hlsl.y"
             { cleanup_parse_initializer(&((*yyvaluep).initializer)); }
-#line 9890 "hlsl.tab.c"
+#line 10023 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_initializer_expr: /* initializer_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9896 "hlsl.tab.c"
+#line 10029 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_initializer_expr_list: /* initializer_expr_list  */
-#line 7403 "hlsl.y"
+#line 7536 "hlsl.y"
             { cleanup_parse_initializer(&((*yyvaluep).initializer)); }
-#line 9902 "hlsl.tab.c"
+#line 10035 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_statement_list: /* statement_list  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9908 "hlsl.tab.c"
+#line 10041 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_statement: /* statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9914 "hlsl.tab.c"
+#line 10047 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_jump_statement: /* jump_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9920 "hlsl.tab.c"
+#line 10053 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_selection_statement: /* selection_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9926 "hlsl.tab.c"
+#line 10059 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_loop_statement: /* loop_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9932 "hlsl.tab.c"
+#line 10065 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_switch_statement: /* switch_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9938 "hlsl.tab.c"
+#line 10071 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_switch_case: /* switch_case  */
-#line 7440 "hlsl.y"
+#line 7573 "hlsl.y"
             { hlsl_free_ir_switch_case(((*yyvaluep).switch_case)); }
-#line 9944 "hlsl.tab.c"
+#line 10077 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_switch_cases: /* switch_cases  */
-#line 7338 "hlsl.y"
+#line 7471 "hlsl.y"
             { destroy_switch_cases(((*yyvaluep).list)); }
-#line 9950 "hlsl.tab.c"
+#line 10083 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_expr_optional: /* expr_optional  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9956 "hlsl.tab.c"
+#line 10089 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_expr_statement: /* expr_statement  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9962 "hlsl.tab.c"
+#line 10095 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_func_arguments: /* func_arguments  */
-#line 7403 "hlsl.y"
+#line 7536 "hlsl.y"
             { cleanup_parse_initializer(&((*yyvaluep).initializer)); }
-#line 9968 "hlsl.tab.c"
+#line 10101 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_primary_expr: /* primary_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9974 "hlsl.tab.c"
+#line 10107 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_postfix_expr: /* postfix_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9980 "hlsl.tab.c"
+#line 10113 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_unary_expr: /* unary_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9986 "hlsl.tab.c"
+#line 10119 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_mul_expr: /* mul_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9992 "hlsl.tab.c"
+#line 10125 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_add_expr: /* add_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 9998 "hlsl.tab.c"
+#line 10131 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_shift_expr: /* shift_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10004 "hlsl.tab.c"
+#line 10137 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_relational_expr: /* relational_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10010 "hlsl.tab.c"
+#line 10143 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_equality_expr: /* equality_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10016 "hlsl.tab.c"
+#line 10149 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_bitand_expr: /* bitand_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10022 "hlsl.tab.c"
+#line 10155 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_bitxor_expr: /* bitxor_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10028 "hlsl.tab.c"
+#line 10161 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_bitor_expr: /* bitor_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10034 "hlsl.tab.c"
+#line 10167 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_logicand_expr: /* logicand_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10040 "hlsl.tab.c"
+#line 10173 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_logicor_expr: /* logicor_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10046 "hlsl.tab.c"
+#line 10179 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_conditional_expr: /* conditional_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10052 "hlsl.tab.c"
+#line 10185 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_assignment_expr: /* assignment_expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10058 "hlsl.tab.c"
+#line 10191 "hlsl.tab.c"
         break;
 
     case YYSYMBOL_expr: /* expr  */
-#line 7385 "hlsl.y"
+#line 7518 "hlsl.y"
             { destroy_block(((*yyvaluep).block)); }
-#line 10064 "hlsl.tab.c"
+#line 10197 "hlsl.tab.c"
         break;
 
       default:
@@ -10364,104 +10497,104 @@ yyreduce:
   switch (yyn)
     {
   case 5: /* hlsl_prog: hlsl_prog declaration_statement  */
-#line 7466 "hlsl.y"
+#line 7599 "hlsl.y"
         {
             hlsl_block_add_block(&ctx->static_initializers, (yyvsp[0].block));
             destroy_block((yyvsp[0].block));
         }
-#line 10373 "hlsl.tab.c"
+#line 10506 "hlsl.tab.c"
     break;
 
   case 10: /* name_opt: %empty  */
-#line 7477 "hlsl.y"
+#line 7610 "hlsl.y"
         {
             (yyval.name) = NULL;
         }
-#line 10381 "hlsl.tab.c"
+#line 10514 "hlsl.tab.c"
     break;
 
   case 12: /* pass: KW_PASS name_opt annotations_opt '{' state_block_start state_block '}'  */
-#line 7484 "hlsl.y"
+#line 7617 "hlsl.y"
         {
             add_pass(ctx, (yyvsp[-5].name), (yyvsp[-4].scope), (yyvsp[-1].state_block), &(yylsp[-6]));
         }
-#line 10389 "hlsl.tab.c"
+#line 10522 "hlsl.tab.c"
     break;
 
   case 13: /* annotations_list: variables_def_typed ';'  */
-#line 7490 "hlsl.y"
+#line 7623 "hlsl.y"
         {
             struct hlsl_block *block;
 
             block = initialize_vars(ctx, (yyvsp[-1].list));
             destroy_block(block);
         }
-#line 10400 "hlsl.tab.c"
+#line 10533 "hlsl.tab.c"
     break;
 
   case 14: /* annotations_list: annotations_list variables_def_typed ';'  */
-#line 7497 "hlsl.y"
+#line 7630 "hlsl.y"
         {
             struct hlsl_block *block;
 
             block = initialize_vars(ctx, (yyvsp[-1].list));
             destroy_block(block);
         }
-#line 10411 "hlsl.tab.c"
+#line 10544 "hlsl.tab.c"
     break;
 
   case 15: /* annotations_opt: %empty  */
-#line 7506 "hlsl.y"
+#line 7639 "hlsl.y"
         {
             (yyval.scope) = NULL;
         }
-#line 10419 "hlsl.tab.c"
+#line 10552 "hlsl.tab.c"
     break;
 
   case 16: /* annotations_opt: '<' annotations_scope_start '>'  */
-#line 7510 "hlsl.y"
+#line 7643 "hlsl.y"
         {
             hlsl_pop_scope(ctx);
             (yyval.scope) = NULL;
         }
-#line 10428 "hlsl.tab.c"
+#line 10561 "hlsl.tab.c"
     break;
 
   case 17: /* annotations_opt: '<' annotations_scope_start annotations_list '>'  */
-#line 7515 "hlsl.y"
+#line 7648 "hlsl.y"
         {
             struct hlsl_scope *scope = ctx->cur_scope;
 
             hlsl_pop_scope(ctx);
             (yyval.scope) = scope;
         }
-#line 10439 "hlsl.tab.c"
+#line 10572 "hlsl.tab.c"
     break;
 
   case 22: /* technique9: KW_TECHNIQUE name_opt annotations_opt '{' passes '}'  */
-#line 7532 "hlsl.y"
+#line 7665 "hlsl.y"
         {
             struct hlsl_scope *scope = ctx->cur_scope;
             hlsl_pop_scope(ctx);
 
             add_technique(ctx, (yyvsp[-4].name), scope, (yyvsp[-3].scope), "technique", &(yylsp[-5]));
         }
-#line 10450 "hlsl.tab.c"
+#line 10583 "hlsl.tab.c"
     break;
 
   case 23: /* technique10: KW_TECHNIQUE10 name_opt annotations_opt '{' passes '}'  */
-#line 7541 "hlsl.y"
+#line 7674 "hlsl.y"
         {
             struct hlsl_scope *scope = ctx->cur_scope;
             hlsl_pop_scope(ctx);
 
             add_technique(ctx, (yyvsp[-4].name), scope, (yyvsp[-3].scope), "technique10", &(yylsp[-5]));
         }
-#line 10461 "hlsl.tab.c"
+#line 10594 "hlsl.tab.c"
     break;
 
   case 24: /* technique11: KW_TECHNIQUE11 name_opt annotations_opt '{' passes '}'  */
-#line 7550 "hlsl.y"
+#line 7683 "hlsl.y"
         {
             struct hlsl_scope *scope = ctx->cur_scope;
             hlsl_pop_scope(ctx);
@@ -10472,21 +10605,21 @@ yyreduce:
 
             add_technique(ctx, (yyvsp[-4].name), scope, (yyvsp[-3].scope), "technique11", &(yylsp[-5]));
         }
-#line 10476 "hlsl.tab.c"
+#line 10609 "hlsl.tab.c"
     break;
 
   case 32: /* effect_group: KW_FXGROUP any_identifier annotations_opt '{' scope_start group_techniques '}'  */
-#line 7576 "hlsl.y"
+#line 7709 "hlsl.y"
         {
             struct hlsl_scope *scope = ctx->cur_scope;
             hlsl_pop_scope(ctx);
             add_effect_group(ctx, (yyvsp[-5].name), scope, (yyvsp[-4].scope), &(yylsp[-5]));
         }
-#line 10486 "hlsl.tab.c"
+#line 10619 "hlsl.tab.c"
     break;
 
   case 33: /* buffer_declaration: var_modifiers buffer_type any_identifier colon_attributes annotations_opt  */
-#line 7584 "hlsl.y"
+#line 7717 "hlsl.y"
         {
             if ((yyvsp[-1].colon_attributes).semantic.name)
                 hlsl_error(ctx, &(yylsp[-1]), VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC, "Semantics are not allowed on buffers.");
@@ -10494,43 +10627,43 @@ yyreduce:
             if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, (yyvsp[-3].buffer_type), (yyvsp[-2].name), (yyvsp[-4].modifiers), &(yyvsp[-1].colon_attributes).reg_reservation, (yyvsp[0].scope), &(yylsp[-2]))))
                 YYABORT;
         }
-#line 10498 "hlsl.tab.c"
+#line 10631 "hlsl.tab.c"
     break;
 
   case 34: /* buffer_body: '{' declaration_statement_list '}'  */
-#line 7594 "hlsl.y"
+#line 7727 "hlsl.y"
         {
             ctx->cur_buffer = ctx->globals_buffer;
         }
-#line 10506 "hlsl.tab.c"
+#line 10639 "hlsl.tab.c"
     break;
 
   case 35: /* buffer_type: KW_CBUFFER  */
-#line 7600 "hlsl.y"
+#line 7733 "hlsl.y"
         {
             (yyval.buffer_type) = HLSL_BUFFER_CONSTANT;
         }
-#line 10514 "hlsl.tab.c"
+#line 10647 "hlsl.tab.c"
     break;
 
   case 36: /* buffer_type: KW_TBUFFER  */
-#line 7604 "hlsl.y"
+#line 7737 "hlsl.y"
         {
             (yyval.buffer_type) = HLSL_BUFFER_TEXTURE;
         }
-#line 10522 "hlsl.tab.c"
+#line 10655 "hlsl.tab.c"
     break;
 
   case 38: /* declaration_statement_list: declaration_statement_list declaration_statement  */
-#line 7611 "hlsl.y"
+#line 7744 "hlsl.y"
         {
             destroy_block((yyvsp[0].block));
         }
-#line 10530 "hlsl.tab.c"
+#line 10663 "hlsl.tab.c"
     break;
 
   case 39: /* preproc_directive: PRE_LINE STRING  */
-#line 7617 "hlsl.y"
+#line 7750 "hlsl.y"
         {
             if (strcmp((yyvsp[0].name), ctx->location.source_name))
             {
@@ -10546,11 +10679,11 @@ yyreduce:
             }
             vkd3d_free((yyvsp[0].name));
         }
-#line 10550 "hlsl.tab.c"
+#line 10683 "hlsl.tab.c"
     break;
 
   case 40: /* struct_declaration_without_vars: var_modifiers struct_spec ';'  */
-#line 7635 "hlsl.y"
+#line 7768 "hlsl.y"
         {
             if (!(yyvsp[-1].type)->name)
                 hlsl_error(ctx, &(yylsp[-1]), VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
@@ -10560,11 +10693,11 @@ yyreduce:
                 hlsl_error(ctx, &(yylsp[-2]), VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on struct type declarations.");
         }
-#line 10564 "hlsl.tab.c"
+#line 10697 "hlsl.tab.c"
     break;
 
   case 43: /* named_struct_spec: KW_STRUCT any_identifier base_optional '{' fields_list '}'  */
-#line 7651 "hlsl.y"
+#line 7784 "hlsl.y"
         {
             bool ret;
 
@@ -10600,27 +10733,27 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 10604 "hlsl.tab.c"
+#line 10737 "hlsl.tab.c"
     break;
 
   case 44: /* unnamed_struct_spec: KW_STRUCT '{' fields_list '}'  */
-#line 7689 "hlsl.y"
+#line 7822 "hlsl.y"
         {
             (yyval.type) = hlsl_new_struct_type(ctx, NULL, (yyvsp[-1].fields).fields, (yyvsp[-1].fields).count);
         }
-#line 10612 "hlsl.tab.c"
+#line 10745 "hlsl.tab.c"
     break;
 
   case 48: /* base_optional: %empty  */
-#line 7701 "hlsl.y"
+#line 7834 "hlsl.y"
         {
             (yyval.type) = NULL;
         }
-#line 10620 "hlsl.tab.c"
+#line 10753 "hlsl.tab.c"
     break;
 
   case 49: /* base_optional: ':' TYPE_IDENTIFIER  */
-#line 7705 "hlsl.y"
+#line 7838 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, (yyvsp[0].name), true, true);
             if ((yyval.type)->class != HLSL_CLASS_STRUCT)
@@ -10631,21 +10764,21 @@ yyreduce:
             }
             vkd3d_free((yyvsp[0].name));
         }
-#line 10635 "hlsl.tab.c"
+#line 10768 "hlsl.tab.c"
     break;
 
   case 50: /* fields_list: %empty  */
-#line 7718 "hlsl.y"
+#line 7851 "hlsl.y"
         {
             (yyval.fields).fields = NULL;
             (yyval.fields).count = 0;
             (yyval.fields).capacity = 0;
         }
-#line 10645 "hlsl.tab.c"
+#line 10778 "hlsl.tab.c"
     break;
 
   case 51: /* fields_list: fields_list field  */
-#line 7724 "hlsl.y"
+#line 7857 "hlsl.y"
         {
             size_t i;
 
@@ -10671,11 +10804,11 @@ yyreduce:
 
             (yyval.fields) = (yyvsp[-1].fields);
         }
-#line 10675 "hlsl.tab.c"
+#line 10808 "hlsl.tab.c"
     break;
 
   case 54: /* field: var_modifiers field_type variables_def ';'  */
-#line 7756 "hlsl.y"
+#line 7889 "hlsl.y"
         {
             struct hlsl_type *type;
             uint32_t modifiers = (yyvsp[-3].modifiers);
@@ -10694,11 +10827,11 @@ yyreduce:
             if (!gen_struct_fields(ctx, &(yyval.fields), type, modifiers, (yyvsp[-1].list)))
                 YYABORT;
         }
-#line 10698 "hlsl.tab.c"
+#line 10831 "hlsl.tab.c"
     break;
 
   case 55: /* attribute: '[' any_identifier ']'  */
-#line 7777 "hlsl.y"
+#line 7910 "hlsl.y"
         {
             if (!((yyval.attr) = hlsl_alloc(ctx, offsetof(struct hlsl_attribute, args[0]))))
             {
@@ -10710,11 +10843,11 @@ yyreduce:
             (yyval.attr)->loc = (yyloc);
             (yyval.attr)->args_count = 0;
         }
-#line 10714 "hlsl.tab.c"
+#line 10847 "hlsl.tab.c"
     break;
 
   case 56: /* attribute: '[' any_identifier '(' initializer_expr_list ')' ']'  */
-#line 7789 "hlsl.y"
+#line 7922 "hlsl.y"
         {
             unsigned int i;
 
@@ -10733,11 +10866,11 @@ yyreduce:
                 hlsl_src_from_node(&(yyval.attr)->args[i], (yyvsp[-2].initializer).args[i]);
             cleanup_parse_initializer(&(yyvsp[-2].initializer));
         }
-#line 10737 "hlsl.tab.c"
+#line 10870 "hlsl.tab.c"
     break;
 
   case 57: /* attribute_list: attribute  */
-#line 7810 "hlsl.y"
+#line 7943 "hlsl.y"
         {
             (yyval.attr_list).count = 1;
             if (!((yyval.attr_list).attrs = hlsl_alloc(ctx, sizeof(*(yyval.attr_list).attrs))))
@@ -10747,11 +10880,11 @@ yyreduce:
             }
             (yyval.attr_list).attrs[0] = (yyvsp[0].attr);
         }
-#line 10751 "hlsl.tab.c"
+#line 10884 "hlsl.tab.c"
     break;
 
   case 58: /* attribute_list: attribute_list attribute  */
-#line 7820 "hlsl.y"
+#line 7953 "hlsl.y"
         {
             const struct hlsl_attribute **new_array;
 
@@ -10764,20 +10897,20 @@ yyreduce:
             (yyval.attr_list).attrs = new_array;
             (yyval.attr_list).attrs[(yyval.attr_list).count++] = (yyvsp[0].attr);
         }
-#line 10768 "hlsl.tab.c"
+#line 10901 "hlsl.tab.c"
     break;
 
   case 59: /* attribute_list_optional: %empty  */
-#line 7835 "hlsl.y"
+#line 7968 "hlsl.y"
         {
             (yyval.attr_list).count = 0;
             (yyval.attr_list).attrs = NULL;
         }
-#line 10777 "hlsl.tab.c"
+#line 10910 "hlsl.tab.c"
     break;
 
   case 61: /* func_declaration: func_prototype compound_statement  */
-#line 7843 "hlsl.y"
+#line 7976 "hlsl.y"
         {
             struct hlsl_ir_function_decl *decl = (yyvsp[-1].function).decl;
 
@@ -10830,21 +10963,21 @@ yyreduce:
             if (!(yyvsp[-1].function).first)
                 parse_function_cleanup(&(yyvsp[-1].function));
         }
-#line 10834 "hlsl.tab.c"
+#line 10967 "hlsl.tab.c"
     break;
 
   case 62: /* func_declaration: func_prototype ';'  */
-#line 7896 "hlsl.y"
+#line 8029 "hlsl.y"
         {
             hlsl_pop_scope(ctx);
             if (!(yyvsp[-1].function).first)
                 parse_function_cleanup(&(yyvsp[-1].function));
         }
-#line 10844 "hlsl.tab.c"
+#line 10977 "hlsl.tab.c"
     break;
 
   case 63: /* func_prototype_no_attrs: var_modifiers type var_identifier '(' parameters ')' colon_attributes  */
-#line 7905 "hlsl.y"
+#line 8038 "hlsl.y"
         {
             uint32_t modifiers = (yyvsp[-6].modifiers);
             struct hlsl_ir_var *var;
@@ -10966,11 +11099,11 @@ yyreduce:
 
             ctx->cur_function = (yyval.function).decl;
         }
-#line 10970 "hlsl.tab.c"
+#line 11103 "hlsl.tab.c"
     break;
 
   case 65: /* func_prototype: attribute_list func_prototype_no_attrs  */
-#line 8030 "hlsl.y"
+#line 8163 "hlsl.y"
         {
             check_attribute_list_for_duplicates(ctx, &(yyvsp[-1].attr_list));
 
@@ -10985,82 +11118,82 @@ yyreduce:
             }
             (yyval.function) = (yyvsp[0].function);
         }
-#line 10989 "hlsl.tab.c"
+#line 11122 "hlsl.tab.c"
     break;
 
   case 66: /* compound_statement: '{' '}'  */
-#line 8047 "hlsl.y"
+#line 8180 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
         }
-#line 10998 "hlsl.tab.c"
+#line 11131 "hlsl.tab.c"
     break;
 
   case 67: /* compound_statement: '{' statement_list '}'  */
-#line 8052 "hlsl.y"
+#line 8185 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 11006 "hlsl.tab.c"
+#line 11139 "hlsl.tab.c"
     break;
 
   case 68: /* scope_start: %empty  */
-#line 8058 "hlsl.y"
+#line 8191 "hlsl.y"
         {
             hlsl_push_scope(ctx);
         }
-#line 11014 "hlsl.tab.c"
+#line 11147 "hlsl.tab.c"
     break;
 
   case 69: /* loop_scope_start: %empty  */
-#line 8064 "hlsl.y"
+#line 8197 "hlsl.y"
         {
             hlsl_push_scope(ctx);
             ctx->cur_scope->loop = true;
         }
-#line 11023 "hlsl.tab.c"
+#line 11156 "hlsl.tab.c"
     break;
 
   case 70: /* switch_scope_start: %empty  */
-#line 8071 "hlsl.y"
+#line 8204 "hlsl.y"
         {
             hlsl_push_scope(ctx);
             ctx->cur_scope->_switch = true;
         }
-#line 11032 "hlsl.tab.c"
+#line 11165 "hlsl.tab.c"
     break;
 
   case 71: /* annotations_scope_start: %empty  */
-#line 8078 "hlsl.y"
+#line 8211 "hlsl.y"
         {
             hlsl_push_scope(ctx);
             ctx->cur_scope->annotations = true;
         }
-#line 11041 "hlsl.tab.c"
+#line 11174 "hlsl.tab.c"
     break;
 
   case 74: /* colon_attributes: %empty  */
-#line 8089 "hlsl.y"
+#line 8222 "hlsl.y"
         {
             (yyval.colon_attributes).semantic = (struct hlsl_semantic){0};
             (yyval.colon_attributes).reg_reservation.reg_type = 0;
             (yyval.colon_attributes).reg_reservation.offset_type = 0;
         }
-#line 11051 "hlsl.tab.c"
+#line 11184 "hlsl.tab.c"
     break;
 
   case 75: /* colon_attributes: colon_attributes semantic  */
-#line 8095 "hlsl.y"
+#line 8228 "hlsl.y"
         {
             hlsl_cleanup_semantic(&(yyval.colon_attributes).semantic);
             (yyval.colon_attributes).semantic = (yyvsp[0].semantic);
         }
-#line 11060 "hlsl.tab.c"
+#line 11193 "hlsl.tab.c"
     break;
 
   case 76: /* colon_attributes: colon_attributes register_reservation  */
-#line 8100 "hlsl.y"
+#line 8233 "hlsl.y"
         {
             if ((yyval.colon_attributes).reg_reservation.reg_type)
                 hlsl_fixme(ctx, &(yylsp[0]), "Multiple register() reservations.");
@@ -11069,11 +11202,11 @@ yyreduce:
             (yyval.colon_attributes).reg_reservation.reg_index = (yyvsp[0].reg_reservation).reg_index;
             (yyval.colon_attributes).reg_reservation.reg_space = (yyvsp[0].reg_reservation).reg_space;
         }
-#line 11073 "hlsl.tab.c"
+#line 11206 "hlsl.tab.c"
     break;
 
   case 77: /* colon_attributes: colon_attributes packoffset_reservation  */
-#line 8109 "hlsl.y"
+#line 8242 "hlsl.y"
         {
             if (ctx->cur_buffer == ctx->globals_buffer)
             {
@@ -11086,11 +11219,11 @@ yyreduce:
                 (yyval.colon_attributes).reg_reservation.offset_index = (yyvsp[0].reg_reservation).offset_index;
             }
         }
-#line 11090 "hlsl.tab.c"
+#line 11223 "hlsl.tab.c"
     break;
 
   case 78: /* semantic: ':' any_identifier  */
-#line 8124 "hlsl.y"
+#line 8257 "hlsl.y"
         {
             static const char *centroid_suffix = "_centroid";
             uint32_t modifiers = 0;
@@ -11119,11 +11252,11 @@ yyreduce:
             (yyval.semantic).reported_duplicated_input_incompatible_next_index = 0;
             *p = 0;
         }
-#line 11123 "hlsl.tab.c"
+#line 11256 "hlsl.tab.c"
     break;
 
   case 79: /* register_reservation: ':' KW_REGISTER '(' any_identifier ')'  */
-#line 8156 "hlsl.y"
+#line 8289 "hlsl.y"
         {
             memset(&(yyval.reg_reservation), 0, sizeof((yyval.reg_reservation)));
             if (!parse_reservation_index(ctx, (yyvsp[-1].name), 0, &(yyval.reg_reservation)))
@@ -11132,11 +11265,11 @@ yyreduce:
 
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11136 "hlsl.tab.c"
+#line 11269 "hlsl.tab.c"
     break;
 
   case 80: /* register_reservation: ':' KW_REGISTER '(' any_identifier '[' expr ']' ')'  */
-#line 8165 "hlsl.y"
+#line 8298 "hlsl.y"
         {
             memset(&(yyval.reg_reservation), 0, sizeof((yyval.reg_reservation)));
             if (!parse_reservation_index(ctx, (yyvsp[-4].name), evaluate_static_expression_as_uint(ctx, (yyvsp[-2].block), &(yylsp[-2])), &(yyval.reg_reservation)))
@@ -11148,11 +11281,11 @@ yyreduce:
             vkd3d_free((yyvsp[-4].name));
             vkd3d_free((yyvsp[-2].block));
         }
-#line 11152 "hlsl.tab.c"
+#line 11285 "hlsl.tab.c"
     break;
 
   case 81: /* register_reservation: ':' KW_REGISTER '(' any_identifier ',' any_identifier ')'  */
-#line 8177 "hlsl.y"
+#line 8310 "hlsl.y"
         {
             memset(&(yyval.reg_reservation), 0, sizeof((yyval.reg_reservation)));
             if (parse_reservation_index(ctx, (yyvsp[-1].name), 0, &(yyval.reg_reservation)))
@@ -11174,11 +11307,11 @@ yyreduce:
             vkd3d_free((yyvsp[-3].name));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11178 "hlsl.tab.c"
+#line 11311 "hlsl.tab.c"
     break;
 
   case 82: /* register_reservation: ':' KW_REGISTER '(' any_identifier '[' expr ']' ',' any_identifier ')'  */
-#line 8199 "hlsl.y"
+#line 8332 "hlsl.y"
         {
             memset(&(yyval.reg_reservation), 0, sizeof((yyval.reg_reservation)));
 
@@ -11196,11 +11329,11 @@ yyreduce:
             vkd3d_free((yyvsp[-4].block));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11200 "hlsl.tab.c"
+#line 11333 "hlsl.tab.c"
     break;
 
   case 83: /* register_reservation: ':' KW_REGISTER '(' any_identifier ',' any_identifier '[' expr ']' ')'  */
-#line 8217 "hlsl.y"
+#line 8350 "hlsl.y"
         {
             hlsl_fixme(ctx, &(yylsp[-6]), "Reservation shader target %s.", (yyvsp[-6].name));
 
@@ -11215,11 +11348,11 @@ yyreduce:
             vkd3d_free((yyvsp[-4].name));
             vkd3d_free((yyvsp[-2].block));
         }
-#line 11219 "hlsl.tab.c"
+#line 11352 "hlsl.tab.c"
     break;
 
   case 84: /* register_reservation: ':' KW_REGISTER '(' any_identifier ',' any_identifier ',' any_identifier ')'  */
-#line 8232 "hlsl.y"
+#line 8365 "hlsl.y"
         {
             hlsl_fixme(ctx, &(yylsp[-5]), "Reservation shader target %s.", (yyvsp[-5].name));
 
@@ -11236,11 +11369,11 @@ yyreduce:
             vkd3d_free((yyvsp[-3].name));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11240 "hlsl.tab.c"
+#line 11373 "hlsl.tab.c"
     break;
 
   case 85: /* register_reservation: ':' KW_REGISTER '(' any_identifier ',' any_identifier '[' expr ']' ',' any_identifier ')'  */
-#line 8249 "hlsl.y"
+#line 8382 "hlsl.y"
         {
             hlsl_fixme(ctx, &(yylsp[-8]), "Reservation shader target %s.", (yyvsp[-8].name));
 
@@ -11260,56 +11393,56 @@ yyreduce:
             vkd3d_free((yyvsp[-4].block));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11264 "hlsl.tab.c"
+#line 11397 "hlsl.tab.c"
     break;
 
   case 86: /* packoffset_reservation: ':' KW_PACKOFFSET '(' any_identifier ')'  */
-#line 8271 "hlsl.y"
+#line 8404 "hlsl.y"
         {
             (yyval.reg_reservation) = parse_packoffset(ctx, (yyvsp[-1].name), NULL, &(yyloc));
 
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11274 "hlsl.tab.c"
+#line 11407 "hlsl.tab.c"
     break;
 
   case 87: /* packoffset_reservation: ':' KW_PACKOFFSET '(' any_identifier '.' any_identifier ')'  */
-#line 8277 "hlsl.y"
+#line 8410 "hlsl.y"
         {
             (yyval.reg_reservation) = parse_packoffset(ctx, (yyvsp[-3].name), (yyvsp[-1].name), &(yyloc));
 
             vkd3d_free((yyvsp[-3].name));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 11285 "hlsl.tab.c"
+#line 11418 "hlsl.tab.c"
     break;
 
   case 88: /* parameters: scope_start  */
-#line 8286 "hlsl.y"
+#line 8419 "hlsl.y"
         {
             memset(&(yyval.parameters), 0, sizeof((yyval.parameters)));
         }
-#line 11293 "hlsl.tab.c"
+#line 11426 "hlsl.tab.c"
     break;
 
   case 89: /* parameters: scope_start KW_VOID  */
-#line 8290 "hlsl.y"
+#line 8423 "hlsl.y"
         {
             memset(&(yyval.parameters), 0, sizeof((yyval.parameters)));
         }
-#line 11301 "hlsl.tab.c"
+#line 11434 "hlsl.tab.c"
     break;
 
   case 90: /* parameters: scope_start param_list  */
-#line 8294 "hlsl.y"
+#line 8427 "hlsl.y"
         {
             (yyval.parameters) = (yyvsp[0].parameters);
         }
-#line 11309 "hlsl.tab.c"
+#line 11442 "hlsl.tab.c"
     break;
 
   case 91: /* param_list: parameter  */
-#line 8300 "hlsl.y"
+#line 8433 "hlsl.y"
         {
             memset(&(yyval.parameters), 0, sizeof((yyval.parameters)));
             if (!add_func_parameter(ctx, &(yyval.parameters), &(yyvsp[0].parameter), &(yylsp[0])))
@@ -11318,30 +11451,30 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 11322 "hlsl.tab.c"
+#line 11455 "hlsl.tab.c"
     break;
 
   case 92: /* param_list: param_list ',' parameter  */
-#line 8309 "hlsl.y"
+#line 8442 "hlsl.y"
         {
             (yyval.parameters) = (yyvsp[-2].parameters);
             if (!add_func_parameter(ctx, &(yyval.parameters), &(yyvsp[0].parameter), &(yylsp[0])))
                 YYABORT;
         }
-#line 11332 "hlsl.tab.c"
+#line 11465 "hlsl.tab.c"
     break;
 
   case 94: /* parameter: parameter_decl '=' complex_initializer  */
-#line 8318 "hlsl.y"
+#line 8451 "hlsl.y"
         {
             (yyval.parameter) = (yyvsp[-2].parameter);
             (yyval.parameter).initializer = (yyvsp[0].initializer);
         }
-#line 11341 "hlsl.tab.c"
+#line 11474 "hlsl.tab.c"
     break;
 
   case 95: /* parameter_decl: var_modifiers type_no_void any_identifier arrays colon_attributes  */
-#line 8325 "hlsl.y"
+#line 8458 "hlsl.y"
         {
             uint32_t prim_modifiers = (yyvsp[-4].modifiers) & HLSL_PRIMITIVE_MODIFIERS_MASK;
             uint32_t modifiers = (yyvsp[-4].modifiers) & ~HLSL_PRIMITIVE_MODIFIERS_MASK;
@@ -11396,262 +11529,262 @@ yyreduce:
 
             memset(&(yyval.parameter).initializer, 0, sizeof((yyval.parameter).initializer));
         }
-#line 11400 "hlsl.tab.c"
+#line 11533 "hlsl.tab.c"
     break;
 
   case 96: /* texture_type: KW_BUFFER  */
-#line 8382 "hlsl.y"
+#line 8515 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_BUFFER;
         }
-#line 11408 "hlsl.tab.c"
+#line 11541 "hlsl.tab.c"
     break;
 
   case 97: /* texture_type: KW_STRUCTUREDBUFFER  */
-#line 8386 "hlsl.y"
+#line 8519 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_STRUCTURED_BUFFER;
         }
-#line 11416 "hlsl.tab.c"
+#line 11549 "hlsl.tab.c"
     break;
 
   case 98: /* texture_type: KW_TEXTURE1D  */
-#line 8390 "hlsl.y"
+#line 8523 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1D;
         }
-#line 11424 "hlsl.tab.c"
+#line 11557 "hlsl.tab.c"
     break;
 
   case 99: /* texture_type: KW_TEXTURE2D  */
-#line 8394 "hlsl.y"
+#line 8527 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2D;
         }
-#line 11432 "hlsl.tab.c"
+#line 11565 "hlsl.tab.c"
     break;
 
   case 100: /* texture_type: KW_TEXTURE3D  */
-#line 8398 "hlsl.y"
+#line 8531 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_3D;
         }
-#line 11440 "hlsl.tab.c"
+#line 11573 "hlsl.tab.c"
     break;
 
   case 101: /* texture_type: KW_TEXTURECUBE  */
-#line 8402 "hlsl.y"
+#line 8535 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_CUBE;
         }
-#line 11448 "hlsl.tab.c"
+#line 11581 "hlsl.tab.c"
     break;
 
   case 102: /* texture_type: KW_TEXTURE1DARRAY  */
-#line 8406 "hlsl.y"
+#line 8539 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1DARRAY;
         }
-#line 11456 "hlsl.tab.c"
+#line 11589 "hlsl.tab.c"
     break;
 
   case 103: /* texture_type: KW_TEXTURE2DARRAY  */
-#line 8410 "hlsl.y"
+#line 8543 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2DARRAY;
         }
-#line 11464 "hlsl.tab.c"
+#line 11597 "hlsl.tab.c"
     break;
 
   case 104: /* texture_type: KW_TEXTURECUBEARRAY  */
-#line 8414 "hlsl.y"
+#line 8547 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_CUBEARRAY;
         }
-#line 11472 "hlsl.tab.c"
+#line 11605 "hlsl.tab.c"
     break;
 
   case 105: /* texture_ms_type: KW_TEXTURE2DMS  */
-#line 8420 "hlsl.y"
+#line 8553 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2DMS;
         }
-#line 11480 "hlsl.tab.c"
+#line 11613 "hlsl.tab.c"
     break;
 
   case 106: /* texture_ms_type: KW_TEXTURE2DMSARRAY  */
-#line 8424 "hlsl.y"
+#line 8557 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2DMSARRAY;
         }
-#line 11488 "hlsl.tab.c"
+#line 11621 "hlsl.tab.c"
     break;
 
   case 107: /* uav_type: KW_RWBUFFER  */
-#line 8430 "hlsl.y"
+#line 8563 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_BUFFER;
         }
-#line 11496 "hlsl.tab.c"
+#line 11629 "hlsl.tab.c"
     break;
 
   case 108: /* uav_type: KW_RWSTRUCTUREDBUFFER  */
-#line 8434 "hlsl.y"
+#line 8567 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_STRUCTURED_BUFFER;
         }
-#line 11504 "hlsl.tab.c"
+#line 11637 "hlsl.tab.c"
     break;
 
   case 109: /* uav_type: KW_RWTEXTURE1D  */
-#line 8438 "hlsl.y"
+#line 8571 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1D;
         }
-#line 11512 "hlsl.tab.c"
+#line 11645 "hlsl.tab.c"
     break;
 
   case 110: /* uav_type: KW_RWTEXTURE1DARRAY  */
-#line 8442 "hlsl.y"
+#line 8575 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1DARRAY;
         }
-#line 11520 "hlsl.tab.c"
+#line 11653 "hlsl.tab.c"
     break;
 
   case 111: /* uav_type: KW_RWTEXTURE2D  */
-#line 8446 "hlsl.y"
+#line 8579 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2D;
         }
-#line 11528 "hlsl.tab.c"
+#line 11661 "hlsl.tab.c"
     break;
 
   case 112: /* uav_type: KW_RWTEXTURE2DARRAY  */
-#line 8450 "hlsl.y"
+#line 8583 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2DARRAY;
         }
-#line 11536 "hlsl.tab.c"
+#line 11669 "hlsl.tab.c"
     break;
 
   case 113: /* uav_type: KW_RWTEXTURE3D  */
-#line 8454 "hlsl.y"
+#line 8587 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_3D;
         }
-#line 11544 "hlsl.tab.c"
+#line 11677 "hlsl.tab.c"
     break;
 
   case 114: /* rov_type: KW_RASTERIZERORDEREDBUFFER  */
-#line 8460 "hlsl.y"
+#line 8593 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_BUFFER;
         }
-#line 11552 "hlsl.tab.c"
+#line 11685 "hlsl.tab.c"
     break;
 
   case 115: /* rov_type: KW_RASTERIZERORDEREDSTRUCTUREDBUFFER  */
-#line 8464 "hlsl.y"
+#line 8597 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_STRUCTURED_BUFFER;
         }
-#line 11560 "hlsl.tab.c"
+#line 11693 "hlsl.tab.c"
     break;
 
   case 116: /* rov_type: KW_RASTERIZERORDEREDTEXTURE1D  */
-#line 8468 "hlsl.y"
+#line 8601 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1D;
         }
-#line 11568 "hlsl.tab.c"
+#line 11701 "hlsl.tab.c"
     break;
 
   case 117: /* rov_type: KW_RASTERIZERORDEREDTEXTURE1DARRAY  */
-#line 8472 "hlsl.y"
+#line 8605 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_1DARRAY;
         }
-#line 11576 "hlsl.tab.c"
+#line 11709 "hlsl.tab.c"
     break;
 
   case 118: /* rov_type: KW_RASTERIZERORDEREDTEXTURE2D  */
-#line 8476 "hlsl.y"
+#line 8609 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2D;
         }
-#line 11584 "hlsl.tab.c"
+#line 11717 "hlsl.tab.c"
     break;
 
   case 119: /* rov_type: KW_RASTERIZERORDEREDTEXTURE2DARRAY  */
-#line 8480 "hlsl.y"
+#line 8613 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_2DARRAY;
         }
-#line 11592 "hlsl.tab.c"
+#line 11725 "hlsl.tab.c"
     break;
 
   case 120: /* rov_type: KW_RASTERIZERORDEREDTEXTURE3D  */
-#line 8484 "hlsl.y"
+#line 8617 "hlsl.y"
         {
             (yyval.sampler_dim) = HLSL_SAMPLER_DIM_3D;
         }
-#line 11600 "hlsl.tab.c"
+#line 11733 "hlsl.tab.c"
     break;
 
   case 121: /* so_type: KW_POINTSTREAM  */
-#line 8490 "hlsl.y"
+#line 8623 "hlsl.y"
         {
             (yyval.so_type) = HLSL_STREAM_OUTPUT_POINT_STREAM;
         }
-#line 11608 "hlsl.tab.c"
+#line 11741 "hlsl.tab.c"
     break;
 
   case 122: /* so_type: KW_LINESTREAM  */
-#line 8494 "hlsl.y"
+#line 8627 "hlsl.y"
         {
             (yyval.so_type) = HLSL_STREAM_OUTPUT_LINE_STREAM;
         }
-#line 11616 "hlsl.tab.c"
+#line 11749 "hlsl.tab.c"
     break;
 
   case 123: /* so_type: KW_TRIANGLESTREAM  */
-#line 8498 "hlsl.y"
+#line 8631 "hlsl.y"
         {
             (yyval.so_type) = HLSL_STREAM_OUTPUT_TRIANGLE_STREAM;
         }
-#line 11624 "hlsl.tab.c"
+#line 11757 "hlsl.tab.c"
     break;
 
   case 124: /* resource_format: var_modifiers type  */
-#line 8504 "hlsl.y"
+#line 8637 "hlsl.y"
         {
             uint32_t modifiers = (yyvsp[-1].modifiers);
 
             if (!((yyval.type) = apply_type_modifiers(ctx, (yyvsp[0].type), &modifiers, true, &(yylsp[-1]))))
                 YYABORT;
         }
-#line 11635 "hlsl.tab.c"
+#line 11768 "hlsl.tab.c"
     break;
 
   case 125: /* patch_type: KW_INPUTPATCH  */
-#line 8513 "hlsl.y"
+#line 8646 "hlsl.y"
         {
             (yyval.patch_type) = HLSL_ARRAY_PATCH_INPUT;
         }
-#line 11643 "hlsl.tab.c"
+#line 11776 "hlsl.tab.c"
     break;
 
   case 126: /* patch_type: KW_OUTPUTPATCH  */
-#line 8517 "hlsl.y"
+#line 8650 "hlsl.y"
         {
             (yyval.patch_type) = HLSL_ARRAY_PATCH_OUTPUT;
         }
-#line 11651 "hlsl.tab.c"
+#line 11784 "hlsl.tab.c"
     break;
 
   case 127: /* type_no_void: KW_VECTOR '<' type ',' C_INTEGER '>'  */
-#line 8523 "hlsl.y"
+#line 8656 "hlsl.y"
         {
             if ((yyvsp[-3].type)->class != HLSL_CLASS_SCALAR)
             {
@@ -11674,19 +11807,19 @@ yyreduce:
             (yyval.type) = hlsl_type_clone(ctx, hlsl_get_vector_type(ctx, (yyvsp[-3].type)->e.numeric.type, (yyvsp[-1].intval)), 0, 0);
             (yyval.type)->is_minimum_precision = (yyvsp[-3].type)->is_minimum_precision;
         }
-#line 11678 "hlsl.tab.c"
+#line 11811 "hlsl.tab.c"
     break;
 
   case 128: /* type_no_void: KW_VECTOR  */
-#line 8546 "hlsl.y"
+#line 8679 "hlsl.y"
         {
             (yyval.type) = hlsl_get_vector_type(ctx, HLSL_TYPE_FLOAT, 4);
         }
-#line 11686 "hlsl.tab.c"
+#line 11819 "hlsl.tab.c"
     break;
 
   case 129: /* type_no_void: KW_MATRIX '<' type ',' C_INTEGER ',' C_INTEGER '>'  */
-#line 8550 "hlsl.y"
+#line 8683 "hlsl.y"
         {
             if ((yyvsp[-5].type)->class != HLSL_CLASS_SCALAR)
             {
@@ -11715,105 +11848,105 @@ yyreduce:
             (yyval.type) = hlsl_type_clone(ctx, hlsl_get_matrix_type(ctx, (yyvsp[-5].type)->e.numeric.type, (yyvsp[-1].intval), (yyvsp[-3].intval)), 0, 0);
             (yyval.type)->is_minimum_precision = (yyvsp[-5].type)->is_minimum_precision;
         }
-#line 11719 "hlsl.tab.c"
+#line 11852 "hlsl.tab.c"
     break;
 
   case 130: /* type_no_void: KW_MATRIX  */
-#line 8579 "hlsl.y"
+#line 8712 "hlsl.y"
         {
             (yyval.type) = hlsl_get_matrix_type(ctx, HLSL_TYPE_FLOAT, 4, 4);
         }
-#line 11727 "hlsl.tab.c"
+#line 11860 "hlsl.tab.c"
     break;
 
   case 131: /* type_no_void: KW_SAMPLER  */
-#line 8583 "hlsl.y"
+#line 8716 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_GENERIC];
         }
-#line 11735 "hlsl.tab.c"
+#line 11868 "hlsl.tab.c"
     break;
 
   case 132: /* type_no_void: KW_SAMPLERCOMPARISONSTATE  */
-#line 8587 "hlsl.y"
+#line 8720 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_COMPARISON];
         }
-#line 11743 "hlsl.tab.c"
+#line 11876 "hlsl.tab.c"
     break;
 
   case 133: /* type_no_void: KW_SAMPLER1D  */
-#line 8591 "hlsl.y"
+#line 8724 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_1D];
         }
-#line 11751 "hlsl.tab.c"
+#line 11884 "hlsl.tab.c"
     break;
 
   case 134: /* type_no_void: KW_SAMPLER2D  */
-#line 8595 "hlsl.y"
+#line 8728 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_2D];
         }
-#line 11759 "hlsl.tab.c"
+#line 11892 "hlsl.tab.c"
     break;
 
   case 135: /* type_no_void: KW_SAMPLER3D  */
-#line 8599 "hlsl.y"
+#line 8732 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_3D];
         }
-#line 11767 "hlsl.tab.c"
+#line 11900 "hlsl.tab.c"
     break;
 
   case 136: /* type_no_void: KW_SAMPLERCUBE  */
-#line 8603 "hlsl.y"
+#line 8736 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.sampler[HLSL_SAMPLER_DIM_CUBE];
         }
-#line 11775 "hlsl.tab.c"
+#line 11908 "hlsl.tab.c"
     break;
 
   case 137: /* type_no_void: KW_TEXTURE  */
-#line 8607 "hlsl.y"
+#line 8740 "hlsl.y"
         {
             (yyval.type) = hlsl_new_texture_type(ctx, HLSL_SAMPLER_DIM_GENERIC, NULL, 0);
         }
-#line 11783 "hlsl.tab.c"
+#line 11916 "hlsl.tab.c"
     break;
 
   case 138: /* type_no_void: texture_type  */
-#line 8611 "hlsl.y"
+#line 8744 "hlsl.y"
         {
             if ((yyvsp[0].sampler_dim) == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
                 hlsl_error(ctx, &(yylsp[0]), VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                         "Structured buffer type requires an explicit format.");
             (yyval.type) = hlsl_new_texture_type(ctx, (yyvsp[0].sampler_dim), hlsl_get_vector_type(ctx, HLSL_TYPE_FLOAT, 4), 0);
         }
-#line 11794 "hlsl.tab.c"
+#line 11927 "hlsl.tab.c"
     break;
 
   case 139: /* type_no_void: texture_type '<' resource_format '>'  */
-#line 8618 "hlsl.y"
+#line 8751 "hlsl.y"
         {
             validate_texture_format_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), &(yylsp[-1]));
             (yyval.type) = hlsl_new_texture_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), 0);
         }
-#line 11803 "hlsl.tab.c"
+#line 11936 "hlsl.tab.c"
     break;
 
   case 140: /* type_no_void: texture_ms_type '<' resource_format '>'  */
-#line 8623 "hlsl.y"
+#line 8756 "hlsl.y"
         {
             validate_texture_format_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), &(yylsp[-1]));
 
             (yyval.type) = hlsl_new_texture_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), 0);
         }
-#line 11813 "hlsl.tab.c"
+#line 11946 "hlsl.tab.c"
     break;
 
   case 141: /* type_no_void: texture_ms_type '<' resource_format ',' shift_expr '>'  */
-#line 8629 "hlsl.y"
+#line 8762 "hlsl.y"
         {
             unsigned int sample_count;
             struct hlsl_block block;
@@ -11829,45 +11962,45 @@ yyreduce:
 
             (yyval.type) = hlsl_new_texture_type(ctx, (yyvsp[-5].sampler_dim), (yyvsp[-3].type), sample_count);
         }
-#line 11833 "hlsl.tab.c"
+#line 11966 "hlsl.tab.c"
     break;
 
   case 142: /* type_no_void: KW_BYTEADDRESSBUFFER  */
-#line 8645 "hlsl.y"
+#line 8778 "hlsl.y"
         {
             (yyval.type) = hlsl_new_texture_type(ctx, HLSL_SAMPLER_DIM_RAW_BUFFER, hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), 0);
         }
-#line 11841 "hlsl.tab.c"
+#line 11974 "hlsl.tab.c"
     break;
 
   case 143: /* type_no_void: uav_type '<' resource_format '>'  */
-#line 8649 "hlsl.y"
+#line 8782 "hlsl.y"
         {
             validate_uav_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), &(yylsp[-1]));
             (yyval.type) = hlsl_new_uav_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), false);
         }
-#line 11850 "hlsl.tab.c"
+#line 11983 "hlsl.tab.c"
     break;
 
   case 144: /* type_no_void: rov_type '<' resource_format '>'  */
-#line 8654 "hlsl.y"
+#line 8787 "hlsl.y"
         {
             validate_uav_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), &(yylsp[0]));
             (yyval.type) = hlsl_new_uav_type(ctx, (yyvsp[-3].sampler_dim), (yyvsp[-1].type), true);
         }
-#line 11859 "hlsl.tab.c"
+#line 11992 "hlsl.tab.c"
     break;
 
   case 145: /* type_no_void: so_type '<' type '>'  */
-#line 8659 "hlsl.y"
+#line 8792 "hlsl.y"
         {
             (yyval.type) = hlsl_new_stream_output_type(ctx, (yyvsp[-3].so_type), (yyvsp[-1].type));
         }
-#line 11867 "hlsl.tab.c"
+#line 12000 "hlsl.tab.c"
     break;
 
   case 146: /* type_no_void: patch_type '<' type ',' C_INTEGER '>'  */
-#line 8663 "hlsl.y"
+#line 8796 "hlsl.y"
         {
             struct hlsl_type *type;
 
@@ -11881,27 +12014,27 @@ yyreduce:
             type = hlsl_new_array_type(ctx, (yyvsp[-3].type), (yyvsp[-1].intval), (yyvsp[-5].patch_type));
             (yyval.type) = hlsl_type_clone(ctx, type, 0, HLSL_MODIFIER_CONST);
         }
-#line 11885 "hlsl.tab.c"
+#line 12018 "hlsl.tab.c"
     break;
 
   case 147: /* type_no_void: KW_RWBYTEADDRESSBUFFER  */
-#line 8677 "hlsl.y"
+#line 8810 "hlsl.y"
         {
             (yyval.type) = hlsl_new_uav_type(ctx, HLSL_SAMPLER_DIM_RAW_BUFFER, hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), false);
         }
-#line 11893 "hlsl.tab.c"
+#line 12026 "hlsl.tab.c"
     break;
 
   case 148: /* type_no_void: KW_STRING  */
-#line 8681 "hlsl.y"
+#line 8814 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.string;
         }
-#line 11901 "hlsl.tab.c"
+#line 12034 "hlsl.tab.c"
     break;
 
   case 149: /* type_no_void: TYPE_IDENTIFIER  */
-#line 8685 "hlsl.y"
+#line 8818 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, (yyvsp[0].name), true, true);
             if ((yyval.type)->is_minimum_precision || hlsl_type_is_minimum_precision((yyval.type)))
@@ -11918,11 +12051,11 @@ yyreduce:
             }
             vkd3d_free((yyvsp[0].name));
         }
-#line 11922 "hlsl.tab.c"
+#line 12055 "hlsl.tab.c"
     break;
 
   case 150: /* type_no_void: KW_UNSIGNED TYPE_IDENTIFIER  */
-#line 8702 "hlsl.y"
+#line 8835 "hlsl.y"
         {
             struct hlsl_type *type = hlsl_get_type(ctx->cur_scope, (yyvsp[0].name), true, true);
 
@@ -11944,147 +12077,147 @@ yyreduce:
 
             (yyval.type) = type;
         }
-#line 11948 "hlsl.tab.c"
+#line 12081 "hlsl.tab.c"
     break;
 
   case 151: /* type_no_void: KW_STRUCT TYPE_IDENTIFIER  */
-#line 8724 "hlsl.y"
+#line 8857 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, (yyvsp[0].name), true, true);
             if ((yyval.type)->class != HLSL_CLASS_STRUCT || (yyval.type)->is_typedef)
                 hlsl_error(ctx, &(yylsp[-1]), VKD3D_SHADER_ERROR_HLSL_REDEFINED, "\"%s\" is not a structure.", (yyvsp[0].name));
             vkd3d_free((yyvsp[0].name));
         }
-#line 11959 "hlsl.tab.c"
+#line 12092 "hlsl.tab.c"
     break;
 
   case 152: /* type_no_void: KW_RENDERTARGETVIEW  */
-#line 8731 "hlsl.y"
+#line 8864 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "RenderTargetView", true, true);
         }
-#line 11967 "hlsl.tab.c"
+#line 12100 "hlsl.tab.c"
     break;
 
   case 153: /* type_no_void: KW_DEPTHSTENCILSTATE  */
-#line 8735 "hlsl.y"
+#line 8868 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "DepthStencilState", true, true);
         }
-#line 11975 "hlsl.tab.c"
+#line 12108 "hlsl.tab.c"
     break;
 
   case 154: /* type_no_void: KW_DEPTHSTENCILVIEW  */
-#line 8739 "hlsl.y"
+#line 8872 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "DepthStencilView", true, true);
         }
-#line 11983 "hlsl.tab.c"
+#line 12116 "hlsl.tab.c"
     break;
 
   case 155: /* type_no_void: KW_VERTEXSHADER  */
-#line 8743 "hlsl.y"
+#line 8876 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "VertexShader", true, true);
         }
-#line 11991 "hlsl.tab.c"
+#line 12124 "hlsl.tab.c"
     break;
 
   case 156: /* type_no_void: KW_PIXELSHADER  */
-#line 8747 "hlsl.y"
+#line 8880 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "PixelShader", true, true);
         }
-#line 11999 "hlsl.tab.c"
+#line 12132 "hlsl.tab.c"
     break;
 
   case 157: /* type_no_void: KW_COMPUTESHADER  */
-#line 8751 "hlsl.y"
+#line 8884 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "ComputeShader", true, true);
         }
-#line 12007 "hlsl.tab.c"
+#line 12140 "hlsl.tab.c"
     break;
 
   case 158: /* type_no_void: KW_DOMAINSHADER  */
-#line 8755 "hlsl.y"
+#line 8888 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "DomainShader", true, true);
         }
-#line 12015 "hlsl.tab.c"
+#line 12148 "hlsl.tab.c"
     break;
 
   case 159: /* type_no_void: KW_HULLSHADER  */
-#line 8759 "hlsl.y"
+#line 8892 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "HullShader", true, true);
         }
-#line 12023 "hlsl.tab.c"
+#line 12156 "hlsl.tab.c"
     break;
 
   case 160: /* type_no_void: KW_GEOMETRYSHADER  */
-#line 8763 "hlsl.y"
+#line 8896 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "GeometryShader", true, true);
         }
-#line 12031 "hlsl.tab.c"
+#line 12164 "hlsl.tab.c"
     break;
 
   case 161: /* type_no_void: KW_CONSTANTBUFFER '<' type '>'  */
-#line 8767 "hlsl.y"
+#line 8900 "hlsl.y"
         {
             if ((yyvsp[-1].type)->class != HLSL_CLASS_STRUCT)
                 hlsl_error(ctx, &(yylsp[-3]), VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                         "ConstantBuffer<...> requires user-defined structure type.");
             (yyval.type) = hlsl_new_cb_type(ctx, (yyvsp[-1].type));
         }
-#line 12042 "hlsl.tab.c"
+#line 12175 "hlsl.tab.c"
     break;
 
   case 162: /* type_no_void: KW_RASTERIZERSTATE  */
-#line 8774 "hlsl.y"
+#line 8907 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "RasterizerState", true, true);
         }
-#line 12050 "hlsl.tab.c"
+#line 12183 "hlsl.tab.c"
     break;
 
   case 163: /* type_no_void: KW_BLENDSTATE  */
-#line 8778 "hlsl.y"
+#line 8911 "hlsl.y"
         {
             (yyval.type) = hlsl_get_type(ctx->cur_scope, "BlendState", true, true);
         }
-#line 12058 "hlsl.tab.c"
+#line 12191 "hlsl.tab.c"
     break;
 
   case 165: /* type: KW_VOID  */
-#line 8785 "hlsl.y"
+#line 8918 "hlsl.y"
         {
             (yyval.type) = ctx->builtin_types.Void;
         }
-#line 12066 "hlsl.tab.c"
+#line 12199 "hlsl.tab.c"
     break;
 
   case 167: /* declaration_statement: struct_declaration_without_vars  */
-#line 8792 "hlsl.y"
+#line 8925 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
         }
-#line 12075 "hlsl.tab.c"
+#line 12208 "hlsl.tab.c"
     break;
 
   case 168: /* declaration_statement: typedef  */
-#line 8797 "hlsl.y"
+#line 8930 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
         }
-#line 12084 "hlsl.tab.c"
+#line 12217 "hlsl.tab.c"
     break;
 
   case 171: /* typedef: KW_TYPEDEF var_modifiers typedef_type type_specs ';'  */
-#line 8808 "hlsl.y"
+#line 8941 "hlsl.y"
         {
             uint32_t modifiers = (yyvsp[-3].modifiers);
             struct hlsl_type *type;
@@ -12102,69 +12235,69 @@ yyreduce:
             if (!add_typedef(ctx, type, (yyvsp[-1].list)))
                 YYABORT;
         }
-#line 12106 "hlsl.tab.c"
+#line 12239 "hlsl.tab.c"
     break;
 
   case 172: /* type_specs: type_spec  */
-#line 8828 "hlsl.y"
+#line 8961 "hlsl.y"
         {
             if (!((yyval.list) = make_empty_list(ctx)))
                 YYABORT;
             list_add_head((yyval.list), &(yyvsp[0].variable_def)->entry);
         }
-#line 12116 "hlsl.tab.c"
+#line 12249 "hlsl.tab.c"
     break;
 
   case 173: /* type_specs: type_specs ',' type_spec  */
-#line 8834 "hlsl.y"
+#line 8967 "hlsl.y"
         {
             (yyval.list) = (yyvsp[-2].list);
             list_add_tail((yyval.list), &(yyvsp[0].variable_def)->entry);
         }
-#line 12125 "hlsl.tab.c"
+#line 12258 "hlsl.tab.c"
     break;
 
   case 174: /* type_spec: any_identifier arrays  */
-#line 8841 "hlsl.y"
+#line 8974 "hlsl.y"
         {
             (yyval.variable_def) = hlsl_alloc(ctx, sizeof(*(yyval.variable_def)));
             (yyval.variable_def)->loc = (yylsp[-1]);
             (yyval.variable_def)->name = (yyvsp[-1].name);
             (yyval.variable_def)->arrays = (yyvsp[0].arrays);
         }
-#line 12136 "hlsl.tab.c"
+#line 12269 "hlsl.tab.c"
     break;
 
   case 175: /* declaration: variables_def_typed ';'  */
-#line 8850 "hlsl.y"
+#line 8983 "hlsl.y"
         {
             if (!((yyval.block) = initialize_vars(ctx, (yyvsp[-1].list))))
                 YYABORT;
         }
-#line 12145 "hlsl.tab.c"
+#line 12278 "hlsl.tab.c"
     break;
 
   case 176: /* variables_def: variable_def  */
-#line 8857 "hlsl.y"
+#line 8990 "hlsl.y"
         {
             if (!((yyval.list) = make_empty_list(ctx)))
                 YYABORT;
             list_add_head((yyval.list), &(yyvsp[0].variable_def)->entry);
         }
-#line 12155 "hlsl.tab.c"
+#line 12288 "hlsl.tab.c"
     break;
 
   case 177: /* variables_def: variables_def ',' variable_def  */
-#line 8863 "hlsl.y"
+#line 8996 "hlsl.y"
         {
             (yyval.list) = (yyvsp[-2].list);
             list_add_tail((yyval.list), &(yyvsp[0].variable_def)->entry);
         }
-#line 12164 "hlsl.tab.c"
+#line 12297 "hlsl.tab.c"
     break;
 
   case 178: /* variables_def_typed: variable_def_typed  */
-#line 8870 "hlsl.y"
+#line 9003 "hlsl.y"
         {
             if (!((yyval.list) = make_empty_list(ctx)))
                 YYABORT;
@@ -12172,11 +12305,11 @@ yyreduce:
 
             declare_var(ctx, (yyvsp[0].variable_def));
         }
-#line 12176 "hlsl.tab.c"
+#line 12309 "hlsl.tab.c"
     break;
 
   case 179: /* variables_def_typed: variables_def_typed ',' variable_def  */
-#line 8878 "hlsl.y"
+#line 9011 "hlsl.y"
         {
             struct parse_variable_def *head_def;
 
@@ -12193,11 +12326,11 @@ yyreduce:
             (yyval.list) = (yyvsp[-2].list);
             list_add_tail((yyval.list), &(yyvsp[0].variable_def)->entry);
         }
-#line 12197 "hlsl.tab.c"
+#line 12330 "hlsl.tab.c"
     break;
 
   case 180: /* variable_decl: any_identifier arrays colon_attributes annotations_opt  */
-#line 8897 "hlsl.y"
+#line 9030 "hlsl.y"
         {
             (yyval.variable_def) = hlsl_alloc(ctx, sizeof(*(yyval.variable_def)));
             (yyval.variable_def)->loc = (yylsp[-3]);
@@ -12207,72 +12340,72 @@ yyreduce:
             (yyval.variable_def)->reg_reservation = (yyvsp[-1].colon_attributes).reg_reservation;
             (yyval.variable_def)->annotations = (yyvsp[0].scope);
         }
-#line 12211 "hlsl.tab.c"
+#line 12344 "hlsl.tab.c"
     break;
 
   case 181: /* state_block_start: %empty  */
-#line 8909 "hlsl.y"
+#line 9042 "hlsl.y"
         {
             ctx->in_state_block = 1;
         }
-#line 12219 "hlsl.tab.c"
+#line 12352 "hlsl.tab.c"
     break;
 
   case 182: /* stateblock_lhs_identifier: any_identifier  */
-#line 8915 "hlsl.y"
+#line 9048 "hlsl.y"
         {
             (yyval.name) = (yyvsp[0].name);
         }
-#line 12227 "hlsl.tab.c"
+#line 12360 "hlsl.tab.c"
     break;
 
   case 183: /* stateblock_lhs_identifier: KW_PIXELSHADER  */
-#line 8919 "hlsl.y"
+#line 9052 "hlsl.y"
         {
             if (!((yyval.name) = hlsl_strdup(ctx, "pixelshader")))
                 YYABORT;
         }
-#line 12236 "hlsl.tab.c"
+#line 12369 "hlsl.tab.c"
     break;
 
   case 184: /* stateblock_lhs_identifier: KW_TEXTURE  */
-#line 8924 "hlsl.y"
+#line 9057 "hlsl.y"
         {
             if (!((yyval.name) = hlsl_strdup(ctx, "texture")))
                 YYABORT;
         }
-#line 12245 "hlsl.tab.c"
+#line 12378 "hlsl.tab.c"
     break;
 
   case 185: /* stateblock_lhs_identifier: KW_VERTEXSHADER  */
-#line 8929 "hlsl.y"
+#line 9062 "hlsl.y"
         {
             if (!((yyval.name) = hlsl_strdup(ctx, "vertexshader")))
                 YYABORT;
         }
-#line 12254 "hlsl.tab.c"
+#line 12387 "hlsl.tab.c"
     break;
 
   case 186: /* stateblock_lhs_identifier: KW_GEOMETRYSHADER  */
-#line 8934 "hlsl.y"
+#line 9067 "hlsl.y"
         {
             if (!((yyval.name) = hlsl_strdup(ctx, "geometryshader")))
                 YYABORT;
         }
-#line 12263 "hlsl.tab.c"
+#line 12396 "hlsl.tab.c"
     break;
 
   case 187: /* state_block_index_opt: %empty  */
-#line 8941 "hlsl.y"
+#line 9074 "hlsl.y"
         {
             (yyval.state_block_index).has_index = false;
             (yyval.state_block_index).index = 0;
         }
-#line 12272 "hlsl.tab.c"
+#line 12405 "hlsl.tab.c"
     break;
 
   case 188: /* state_block_index_opt: '[' C_INTEGER ']'  */
-#line 8946 "hlsl.y"
+#line 9079 "hlsl.y"
        {
             if ((yyvsp[-1].intval) < 0)
             {
@@ -12283,20 +12416,20 @@ yyreduce:
             (yyval.state_block_index).has_index = true;
             (yyval.state_block_index).index = (yyvsp[-1].intval);
        }
-#line 12287 "hlsl.tab.c"
+#line 12420 "hlsl.tab.c"
     break;
 
   case 189: /* state_block: %empty  */
-#line 8959 "hlsl.y"
+#line 9092 "hlsl.y"
         {
             if (!((yyval.state_block) = hlsl_alloc(ctx, sizeof(*(yyval.state_block)))))
                 YYABORT;
         }
-#line 12296 "hlsl.tab.c"
+#line 12429 "hlsl.tab.c"
     break;
 
   case 190: /* state_block: state_block stateblock_lhs_identifier state_block_index_opt '=' complex_initializer ';'  */
-#line 8964 "hlsl.y"
+#line 9097 "hlsl.y"
         {
             struct hlsl_state_block_entry *entry;
             unsigned int i;
@@ -12320,11 +12453,11 @@ yyreduce:
             (yyval.state_block) = (yyvsp[-5].state_block);
             hlsl_state_block_add_entry((yyval.state_block), entry);
         }
-#line 12324 "hlsl.tab.c"
+#line 12457 "hlsl.tab.c"
     break;
 
   case 191: /* state_block: state_block stateblock_lhs_identifier state_block_index_opt '=' '<' primary_expr '>' ';'  */
-#line 8988 "hlsl.y"
+#line 9121 "hlsl.y"
         {
             struct hlsl_state_block_entry *entry;
 
@@ -12344,11 +12477,11 @@ yyreduce:
             (yyval.state_block) = (yyvsp[-7].state_block);
             hlsl_state_block_add_entry((yyval.state_block), entry);
         }
-#line 12348 "hlsl.tab.c"
+#line 12481 "hlsl.tab.c"
     break;
 
   case 192: /* state_block: state_block any_identifier '(' func_arguments ')' ';'  */
-#line 9008 "hlsl.y"
+#line 9141 "hlsl.y"
         {
             struct hlsl_state_block_entry *entry;
             unsigned int i;
@@ -12376,11 +12509,11 @@ yyreduce:
             (yyval.state_block) = (yyvsp[-5].state_block);
             hlsl_state_block_add_entry((yyval.state_block), entry);
         }
-#line 12380 "hlsl.tab.c"
+#line 12513 "hlsl.tab.c"
     break;
 
   case 193: /* state_block_list: '{' state_block '}'  */
-#line 9038 "hlsl.y"
+#line 9171 "hlsl.y"
         {
             if (!((yyval.variable_def) = hlsl_alloc(ctx, sizeof(*(yyval.variable_def)))))
                 YYABORT;
@@ -12390,11 +12523,11 @@ yyreduce:
                 YYABORT;
             (yyval.variable_def)->state_blocks[(yyval.variable_def)->state_block_count++] = (yyvsp[-1].state_block);
         }
-#line 12394 "hlsl.tab.c"
+#line 12527 "hlsl.tab.c"
     break;
 
   case 194: /* state_block_list: state_block_list ',' '{' state_block '}'  */
-#line 9048 "hlsl.y"
+#line 9181 "hlsl.y"
         {
             (yyval.variable_def) = (yyvsp[-4].variable_def);
 
@@ -12403,20 +12536,20 @@ yyreduce:
                 YYABORT;
             (yyval.variable_def)->state_blocks[(yyval.variable_def)->state_block_count++] = (yyvsp[-1].state_block);
         }
-#line 12407 "hlsl.tab.c"
+#line 12540 "hlsl.tab.c"
     break;
 
   case 196: /* variable_def: variable_decl '=' complex_initializer  */
-#line 9060 "hlsl.y"
+#line 9193 "hlsl.y"
         {
             (yyval.variable_def) = (yyvsp[-2].variable_def);
             (yyval.variable_def)->initializer = (yyvsp[0].initializer);
         }
-#line 12416 "hlsl.tab.c"
+#line 12549 "hlsl.tab.c"
     break;
 
   case 197: /* variable_def: variable_decl '{' state_block_start state_block '}'  */
-#line 9065 "hlsl.y"
+#line 9198 "hlsl.y"
         {
             (yyval.variable_def) = (yyvsp[-4].variable_def);
             ctx->in_state_block = 0;
@@ -12426,11 +12559,11 @@ yyreduce:
                 YYABORT;
             (yyval.variable_def)->state_blocks[(yyval.variable_def)->state_block_count++] = (yyvsp[-1].state_block);
         }
-#line 12430 "hlsl.tab.c"
+#line 12563 "hlsl.tab.c"
     break;
 
   case 198: /* variable_def: variable_decl '{' state_block_start state_block_list '}'  */
-#line 9075 "hlsl.y"
+#line 9208 "hlsl.y"
         {
             (yyval.variable_def) = (yyvsp[-4].variable_def);
             ctx->in_state_block = 0;
@@ -12443,11 +12576,11 @@ yyreduce:
             (yyvsp[-1].variable_def)->state_block_capacity = 0;
             free_parse_variable_def((yyvsp[-1].variable_def));
         }
-#line 12447 "hlsl.tab.c"
+#line 12580 "hlsl.tab.c"
     break;
 
   case 199: /* variable_def_typed: var_modifiers struct_spec variable_def  */
-#line 9090 "hlsl.y"
+#line 9223 "hlsl.y"
         {
             uint32_t modifiers = (yyvsp[-2].modifiers);
             struct hlsl_type *type;
@@ -12462,11 +12595,11 @@ yyreduce:
             (yyval.variable_def)->modifiers = modifiers;
             (yyval.variable_def)->modifiers_loc = (yylsp[-2]);
         }
-#line 12466 "hlsl.tab.c"
+#line 12599 "hlsl.tab.c"
     break;
 
   case 200: /* variable_def_typed: var_modifiers type variable_def  */
-#line 9105 "hlsl.y"
+#line 9238 "hlsl.y"
         {
             uint32_t modifiers = (yyvsp[-2].modifiers);
             struct hlsl_type *type;
@@ -12481,19 +12614,19 @@ yyreduce:
             (yyval.variable_def)->modifiers = modifiers;
             (yyval.variable_def)->modifiers_loc = (yylsp[-2]);
         }
-#line 12485 "hlsl.tab.c"
+#line 12618 "hlsl.tab.c"
     break;
 
   case 201: /* array: '[' ']'  */
-#line 9122 "hlsl.y"
+#line 9255 "hlsl.y"
         {
             (yyval.intval) = HLSL_ARRAY_ELEMENTS_COUNT_IMPLICIT;
         }
-#line 12493 "hlsl.tab.c"
+#line 12626 "hlsl.tab.c"
     break;
 
   case 202: /* array: '[' expr ']'  */
-#line 9126 "hlsl.y"
+#line 9259 "hlsl.y"
         {
             (yyval.intval) = evaluate_static_expression_as_uint(ctx, (yyvsp[-1].block), &(yylsp[-1]));
             destroy_block((yyvsp[-1].block));
@@ -12512,20 +12645,20 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 12516 "hlsl.tab.c"
+#line 12649 "hlsl.tab.c"
     break;
 
   case 203: /* arrays: %empty  */
-#line 9147 "hlsl.y"
+#line 9280 "hlsl.y"
         {
             (yyval.arrays).sizes = NULL;
             (yyval.arrays).count = 0;
         }
-#line 12525 "hlsl.tab.c"
+#line 12658 "hlsl.tab.c"
     break;
 
   case 204: /* arrays: array arrays  */
-#line 9152 "hlsl.y"
+#line 9285 "hlsl.y"
         {
             uint32_t *new_array;
 
@@ -12540,219 +12673,219 @@ yyreduce:
             (yyval.arrays).sizes = new_array;
             (yyval.arrays).sizes[(yyval.arrays).count++] = (yyvsp[-1].intval);
         }
-#line 12544 "hlsl.tab.c"
+#line 12677 "hlsl.tab.c"
     break;
 
   case 205: /* var_modifiers: %empty  */
-#line 9169 "hlsl.y"
+#line 9302 "hlsl.y"
         {
             (yyval.modifiers) = 0;
         }
-#line 12552 "hlsl.tab.c"
+#line 12685 "hlsl.tab.c"
     break;
 
   case 206: /* var_modifiers: KW_EXTERN var_modifiers  */
-#line 9173 "hlsl.y"
+#line 9306 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_EXTERN, &(yylsp[-1]));
         }
-#line 12560 "hlsl.tab.c"
+#line 12693 "hlsl.tab.c"
     break;
 
   case 207: /* var_modifiers: KW_NOINTERPOLATION var_modifiers  */
-#line 9177 "hlsl.y"
+#line 9310 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_NOINTERPOLATION, &(yylsp[-1]));
         }
-#line 12568 "hlsl.tab.c"
+#line 12701 "hlsl.tab.c"
     break;
 
   case 208: /* var_modifiers: KW_CENTROID var_modifiers  */
-#line 9181 "hlsl.y"
+#line 9314 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_CENTROID, &(yylsp[-1]));
         }
-#line 12576 "hlsl.tab.c"
+#line 12709 "hlsl.tab.c"
     break;
 
   case 209: /* var_modifiers: KW_LINEAR var_modifiers  */
-#line 9185 "hlsl.y"
+#line 9318 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_LINEAR, &(yylsp[-1]));
         }
-#line 12584 "hlsl.tab.c"
+#line 12717 "hlsl.tab.c"
     break;
 
   case 210: /* var_modifiers: KW_NOPERSPECTIVE var_modifiers  */
-#line 9189 "hlsl.y"
+#line 9322 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_NOPERSPECTIVE, &(yylsp[-1]));
         }
-#line 12592 "hlsl.tab.c"
+#line 12725 "hlsl.tab.c"
     break;
 
   case 211: /* var_modifiers: KW_SHARED var_modifiers  */
-#line 9193 "hlsl.y"
+#line 9326 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_SHARED, &(yylsp[-1]));
         }
-#line 12600 "hlsl.tab.c"
+#line 12733 "hlsl.tab.c"
     break;
 
   case 212: /* var_modifiers: KW_GROUPSHARED var_modifiers  */
-#line 9197 "hlsl.y"
+#line 9330 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_GROUPSHARED, &(yylsp[-1]));
         }
-#line 12608 "hlsl.tab.c"
+#line 12741 "hlsl.tab.c"
     break;
 
   case 213: /* var_modifiers: KW_STATIC var_modifiers  */
-#line 9201 "hlsl.y"
+#line 9334 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_STATIC, &(yylsp[-1]));
         }
-#line 12616 "hlsl.tab.c"
+#line 12749 "hlsl.tab.c"
     break;
 
   case 214: /* var_modifiers: KW_UNIFORM var_modifiers  */
-#line 9205 "hlsl.y"
+#line 9338 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_UNIFORM, &(yylsp[-1]));
         }
-#line 12624 "hlsl.tab.c"
+#line 12757 "hlsl.tab.c"
     break;
 
   case 215: /* var_modifiers: KW_VOLATILE var_modifiers  */
-#line 9209 "hlsl.y"
+#line 9342 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_VOLATILE, &(yylsp[-1]));
         }
-#line 12632 "hlsl.tab.c"
+#line 12765 "hlsl.tab.c"
     break;
 
   case 216: /* var_modifiers: KW_CONST var_modifiers  */
-#line 9213 "hlsl.y"
+#line 9346 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_CONST, &(yylsp[-1]));
         }
-#line 12640 "hlsl.tab.c"
+#line 12773 "hlsl.tab.c"
     break;
 
   case 217: /* var_modifiers: KW_ROW_MAJOR var_modifiers  */
-#line 9217 "hlsl.y"
+#line 9350 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_ROW_MAJOR, &(yylsp[-1]));
         }
-#line 12648 "hlsl.tab.c"
+#line 12781 "hlsl.tab.c"
     break;
 
   case 218: /* var_modifiers: KW_COLUMN_MAJOR var_modifiers  */
-#line 9221 "hlsl.y"
+#line 9354 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_COLUMN_MAJOR, &(yylsp[-1]));
         }
-#line 12656 "hlsl.tab.c"
+#line 12789 "hlsl.tab.c"
     break;
 
   case 219: /* var_modifiers: KW_IN var_modifiers  */
-#line 9225 "hlsl.y"
+#line 9358 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_IN, &(yylsp[-1]));
         }
-#line 12664 "hlsl.tab.c"
+#line 12797 "hlsl.tab.c"
     break;
 
   case 220: /* var_modifiers: KW_OUT var_modifiers  */
-#line 9229 "hlsl.y"
+#line 9362 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_OUT, &(yylsp[-1]));
         }
-#line 12672 "hlsl.tab.c"
+#line 12805 "hlsl.tab.c"
     break;
 
   case 221: /* var_modifiers: KW_INOUT var_modifiers  */
-#line 9233 "hlsl.y"
+#line 9366 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_IN | HLSL_STORAGE_OUT, &(yylsp[-1]));
         }
-#line 12680 "hlsl.tab.c"
+#line 12813 "hlsl.tab.c"
     break;
 
   case 222: /* var_modifiers: KW_INLINE var_modifiers  */
-#line 9237 "hlsl.y"
+#line 9370 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_INLINE, &(yylsp[-1]));
         }
-#line 12688 "hlsl.tab.c"
+#line 12821 "hlsl.tab.c"
     break;
 
   case 223: /* var_modifiers: KW_EXPORT var_modifiers  */
-#line 9241 "hlsl.y"
+#line 9374 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_STORAGE_EXPORT, &(yylsp[-1]));
         }
-#line 12696 "hlsl.tab.c"
+#line 12829 "hlsl.tab.c"
     break;
 
   case 224: /* var_modifiers: KW_UNORM var_modifiers  */
-#line 9245 "hlsl.y"
+#line 9378 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_UNORM, &(yylsp[-1]));
         }
-#line 12704 "hlsl.tab.c"
+#line 12837 "hlsl.tab.c"
     break;
 
   case 225: /* var_modifiers: KW_SNORM var_modifiers  */
-#line 9249 "hlsl.y"
+#line 9382 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_MODIFIER_SNORM, &(yylsp[-1]));
         }
-#line 12712 "hlsl.tab.c"
+#line 12845 "hlsl.tab.c"
     break;
 
   case 226: /* var_modifiers: KW_LINE var_modifiers  */
-#line 9253 "hlsl.y"
+#line 9386 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_PRIMITIVE_LINE, &(yylsp[-1]));
         }
-#line 12720 "hlsl.tab.c"
+#line 12853 "hlsl.tab.c"
     break;
 
   case 227: /* var_modifiers: KW_LINEADJ var_modifiers  */
-#line 9257 "hlsl.y"
+#line 9390 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_PRIMITIVE_LINEADJ, &(yylsp[-1]));
         }
-#line 12728 "hlsl.tab.c"
+#line 12861 "hlsl.tab.c"
     break;
 
   case 228: /* var_modifiers: KW_POINT var_modifiers  */
-#line 9261 "hlsl.y"
+#line 9394 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_PRIMITIVE_POINT, &(yylsp[-1]));
         }
-#line 12736 "hlsl.tab.c"
+#line 12869 "hlsl.tab.c"
     break;
 
   case 229: /* var_modifiers: KW_TRIANGLE var_modifiers  */
-#line 9265 "hlsl.y"
+#line 9398 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_PRIMITIVE_TRIANGLE, &(yylsp[-1]));
         }
-#line 12744 "hlsl.tab.c"
+#line 12877 "hlsl.tab.c"
     break;
 
   case 230: /* var_modifiers: KW_TRIANGLEADJ var_modifiers  */
-#line 9269 "hlsl.y"
+#line 9402 "hlsl.y"
         {
             (yyval.modifiers) = add_modifiers(ctx, (yyvsp[0].modifiers), HLSL_PRIMITIVE_TRIANGLEADJ, &(yylsp[-1]));
         }
-#line 12752 "hlsl.tab.c"
+#line 12885 "hlsl.tab.c"
     break;
 
   case 231: /* var_modifiers: var_identifier var_modifiers  */
-#line 9273 "hlsl.y"
+#line 9406 "hlsl.y"
         {
             (yyval.modifiers) = (yyvsp[0].modifiers);
 
@@ -12765,11 +12898,11 @@ yyreduce:
                         "Unknown modifier %s.", debugstr_a((yyvsp[-1].name)));
             vkd3d_free((yyvsp[-1].name));
         }
-#line 12769 "hlsl.tab.c"
+#line 12902 "hlsl.tab.c"
     break;
 
   case 232: /* complex_initializer: initializer_expr  */
-#line 9288 "hlsl.y"
+#line 9421 "hlsl.y"
         {
             (yyval.initializer).args_count = 1;
             if (!((yyval.initializer).args = hlsl_alloc(ctx, sizeof(*(yyval.initializer).args))))
@@ -12782,29 +12915,29 @@ yyreduce:
             (yyval.initializer).braces = false;
             (yyval.initializer).loc = (yyloc);
         }
-#line 12786 "hlsl.tab.c"
+#line 12919 "hlsl.tab.c"
     break;
 
   case 233: /* complex_initializer: '{' complex_initializer_list '}'  */
-#line 9301 "hlsl.y"
+#line 9434 "hlsl.y"
         {
             (yyval.initializer) = (yyvsp[-1].initializer);
             (yyval.initializer).braces = true;
         }
-#line 12795 "hlsl.tab.c"
+#line 12928 "hlsl.tab.c"
     break;
 
   case 234: /* complex_initializer: '{' complex_initializer_list ',' '}'  */
-#line 9306 "hlsl.y"
+#line 9439 "hlsl.y"
         {
             (yyval.initializer) = (yyvsp[-2].initializer);
             (yyval.initializer).braces = true;
         }
-#line 12804 "hlsl.tab.c"
+#line 12937 "hlsl.tab.c"
     break;
 
   case 236: /* complex_initializer_list: complex_initializer_list ',' complex_initializer  */
-#line 9314 "hlsl.y"
+#line 9447 "hlsl.y"
         {
             struct hlsl_ir_node **new_args;
             unsigned int i;
@@ -12823,11 +12956,11 @@ yyreduce:
             cleanup_parse_initializer(&(yyvsp[0].initializer));
             (yyval.initializer).loc = (yyloc);
         }
-#line 12827 "hlsl.tab.c"
+#line 12960 "hlsl.tab.c"
     break;
 
   case 238: /* initializer_expr_list: initializer_expr  */
-#line 9338 "hlsl.y"
+#line 9471 "hlsl.y"
         {
             (yyval.initializer).args_count = 1;
             if (!((yyval.initializer).args = hlsl_alloc(ctx, sizeof(*(yyval.initializer).args))))
@@ -12840,11 +12973,11 @@ yyreduce:
             (yyval.initializer).braces = false;
             (yyval.initializer).loc = (yyloc);
         }
-#line 12844 "hlsl.tab.c"
+#line 12977 "hlsl.tab.c"
     break;
 
   case 239: /* initializer_expr_list: initializer_expr_list ',' initializer_expr  */
-#line 9351 "hlsl.y"
+#line 9484 "hlsl.y"
         {
             struct hlsl_ir_node **new_args;
 
@@ -12860,46 +12993,46 @@ yyreduce:
             hlsl_block_add_block((yyval.initializer).instrs, (yyvsp[0].block));
             destroy_block((yyvsp[0].block));
         }
-#line 12864 "hlsl.tab.c"
+#line 12997 "hlsl.tab.c"
     break;
 
   case 240: /* boolean: KW_TRUE  */
-#line 9369 "hlsl.y"
+#line 9502 "hlsl.y"
         {
             (yyval.boolval) = true;
         }
-#line 12872 "hlsl.tab.c"
+#line 13005 "hlsl.tab.c"
     break;
 
   case 241: /* boolean: KW_FALSE  */
-#line 9373 "hlsl.y"
+#line 9506 "hlsl.y"
         {
             (yyval.boolval) = false;
         }
-#line 12880 "hlsl.tab.c"
+#line 13013 "hlsl.tab.c"
     break;
 
   case 243: /* statement_list: statement_list statement  */
-#line 9380 "hlsl.y"
+#line 9513 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-1].block);
             hlsl_block_add_block((yyval.block), (yyvsp[0].block));
             destroy_block((yyvsp[0].block));
         }
-#line 12890 "hlsl.tab.c"
+#line 13023 "hlsl.tab.c"
     break;
 
   case 246: /* statement: scope_start compound_statement  */
-#line 9390 "hlsl.y"
+#line 9523 "hlsl.y"
         {
             hlsl_pop_scope(ctx);
             (yyval.block) = (yyvsp[0].block);
         }
-#line 12899 "hlsl.tab.c"
+#line 13032 "hlsl.tab.c"
     break;
 
   case 251: /* jump_statement: KW_BREAK ';'  */
-#line 9401 "hlsl.y"
+#line 9534 "hlsl.y"
         {
             if (!is_break_allowed(ctx->cur_scope))
             {
@@ -12911,11 +13044,11 @@ yyreduce:
                 YYABORT;
             hlsl_block_add_jump(ctx, (yyval.block), HLSL_IR_JUMP_BREAK, NULL, &(yylsp[-1]));
         }
-#line 12915 "hlsl.tab.c"
+#line 13048 "hlsl.tab.c"
     break;
 
   case 252: /* jump_statement: KW_CONTINUE ';'  */
-#line 9413 "hlsl.y"
+#line 9546 "hlsl.y"
         {
             check_continue(ctx, ctx->cur_scope, &(yylsp[-1]));
 
@@ -12923,21 +13056,21 @@ yyreduce:
                 YYABORT;
             hlsl_block_add_jump(ctx, (yyval.block), HLSL_IR_JUMP_UNRESOLVED_CONTINUE, NULL, &(yylsp[-1]));
         }
-#line 12927 "hlsl.tab.c"
+#line 13060 "hlsl.tab.c"
     break;
 
   case 253: /* jump_statement: KW_RETURN expr ';'  */
-#line 9421 "hlsl.y"
+#line 9554 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-1].block);
             if (!add_return(ctx, (yyval.block), node_from_block((yyval.block)), &(yylsp[-2])))
                 YYABORT;
         }
-#line 12937 "hlsl.tab.c"
+#line 13070 "hlsl.tab.c"
     break;
 
   case 254: /* jump_statement: KW_RETURN ';'  */
-#line 9427 "hlsl.y"
+#line 9560 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
@@ -12947,11 +13080,11 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 12951 "hlsl.tab.c"
+#line 13084 "hlsl.tab.c"
     break;
 
   case 255: /* jump_statement: KW_DISCARD ';'  */
-#line 9437 "hlsl.y"
+#line 9570 "hlsl.y"
         {
             struct hlsl_ir_node *c;
 
@@ -12960,11 +13093,11 @@ yyreduce:
             c = hlsl_block_add_uint_constant(ctx, (yyval.block), ~0u, &(yylsp[-1]));
             hlsl_block_add_jump(ctx, (yyval.block), HLSL_IR_JUMP_DISCARD_NZ, c, &(yylsp[-1]));
         }
-#line 12964 "hlsl.tab.c"
+#line 13097 "hlsl.tab.c"
     break;
 
   case 256: /* selection_statement: attribute_list_optional KW_IF '(' expr ')' if_body  */
-#line 9448 "hlsl.y"
+#line 9581 "hlsl.y"
         {
             struct hlsl_ir_node *condition = node_from_block((yyvsp[-2].block));
             const struct parse_attribute_list *attributes = &(yyvsp[-5].attr_list);
@@ -13014,80 +13147,80 @@ yyreduce:
 
             (yyval.block) = (yyvsp[-2].block);
         }
-#line 13018 "hlsl.tab.c"
+#line 13151 "hlsl.tab.c"
     break;
 
   case 257: /* if_body: statement  */
-#line 9500 "hlsl.y"
+#line 9633 "hlsl.y"
         {
             (yyval.if_body).then_block = (yyvsp[0].block);
             (yyval.if_body).else_block = NULL;
         }
-#line 13027 "hlsl.tab.c"
+#line 13160 "hlsl.tab.c"
     break;
 
   case 258: /* if_body: statement KW_ELSE statement  */
-#line 9505 "hlsl.y"
+#line 9638 "hlsl.y"
         {
             (yyval.if_body).then_block = (yyvsp[-2].block);
             (yyval.if_body).else_block = (yyvsp[0].block);
         }
-#line 13036 "hlsl.tab.c"
+#line 13169 "hlsl.tab.c"
     break;
 
   case 259: /* loop_statement: attribute_list_optional loop_scope_start KW_WHILE '(' expr ')' statement  */
-#line 9512 "hlsl.y"
+#line 9645 "hlsl.y"
         {
             (yyval.block) = create_loop(ctx, HLSL_LOOP_WHILE, &(yyvsp[-6].attr_list), NULL, (yyvsp[-2].block), NULL, (yyvsp[0].block), &(yylsp[-4]));
             hlsl_pop_scope(ctx);
             cleanup_parse_attribute_list(&(yyvsp[-6].attr_list));
         }
-#line 13046 "hlsl.tab.c"
+#line 13179 "hlsl.tab.c"
     break;
 
   case 260: /* loop_statement: attribute_list_optional loop_scope_start KW_DO statement KW_WHILE '(' expr ')' ';'  */
-#line 9518 "hlsl.y"
+#line 9651 "hlsl.y"
         {
             (yyval.block) = create_loop(ctx, HLSL_LOOP_DO_WHILE, &(yyvsp[-8].attr_list), NULL, (yyvsp[-2].block), NULL, (yyvsp[-5].block), &(yylsp[-6]));
             hlsl_pop_scope(ctx);
             cleanup_parse_attribute_list(&(yyvsp[-8].attr_list));
         }
-#line 13056 "hlsl.tab.c"
+#line 13189 "hlsl.tab.c"
     break;
 
   case 261: /* loop_statement: attribute_list_optional loop_scope_start KW_FOR '(' expr_statement expr_statement expr_optional ')' statement  */
-#line 9524 "hlsl.y"
+#line 9657 "hlsl.y"
         {
             (yyval.block) = create_loop(ctx, HLSL_LOOP_FOR, &(yyvsp[-8].attr_list), (yyvsp[-4].block), (yyvsp[-3].block), (yyvsp[-2].block), (yyvsp[0].block), &(yylsp[-6]));
             hlsl_pop_scope(ctx);
             cleanup_parse_attribute_list(&(yyvsp[-8].attr_list));
         }
-#line 13066 "hlsl.tab.c"
+#line 13199 "hlsl.tab.c"
     break;
 
   case 262: /* loop_statement: attribute_list_optional loop_scope_start KW_FOR '(' declaration expr_statement expr_optional ')' statement  */
-#line 9530 "hlsl.y"
+#line 9663 "hlsl.y"
         {
             (yyval.block) = create_loop(ctx, HLSL_LOOP_FOR, &(yyvsp[-8].attr_list), (yyvsp[-4].block), (yyvsp[-3].block), (yyvsp[-2].block), (yyvsp[0].block), &(yylsp[-6]));
             hlsl_pop_scope(ctx);
             cleanup_parse_attribute_list(&(yyvsp[-8].attr_list));
         }
-#line 13076 "hlsl.tab.c"
+#line 13209 "hlsl.tab.c"
     break;
 
   case 263: /* switch_statement: attribute_list_optional switch_scope_start KW_SWITCH '(' expr ')' '{' switch_cases '}'  */
-#line 9538 "hlsl.y"
+#line 9671 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-4].block);
             if (!add_switch(ctx, (yyval.block), &(yyvsp[-8].attr_list), (yyvsp[-1].list), &(yylsp[-6])))
                 YYABORT;
             hlsl_pop_scope(ctx);
         }
-#line 13087 "hlsl.tab.c"
+#line 13220 "hlsl.tab.c"
     break;
 
   case 264: /* switch_case: KW_CASE expr ':' statement_list  */
-#line 9547 "hlsl.y"
+#line 9680 "hlsl.y"
         {
             struct hlsl_ir_switch_case *c;
             unsigned int value;
@@ -13103,11 +13236,11 @@ yyreduce:
                 YYABORT;
             (yyval.switch_case) = c;
         }
-#line 13107 "hlsl.tab.c"
+#line 13240 "hlsl.tab.c"
     break;
 
   case 265: /* switch_case: KW_CASE expr ':'  */
-#line 9563 "hlsl.y"
+#line 9696 "hlsl.y"
         {
             struct hlsl_ir_switch_case *c;
             unsigned int value;
@@ -13122,11 +13255,11 @@ yyreduce:
                 YYABORT;
             (yyval.switch_case) = c;
         }
-#line 13126 "hlsl.tab.c"
+#line 13259 "hlsl.tab.c"
     break;
 
   case 266: /* switch_case: KW_DEFAULT ':' statement_list  */
-#line 9578 "hlsl.y"
+#line 9711 "hlsl.y"
         {
             struct hlsl_ir_switch_case *c;
 
@@ -13138,11 +13271,11 @@ yyreduce:
                 YYABORT;
             (yyval.switch_case) = c;
         }
-#line 13142 "hlsl.tab.c"
+#line 13275 "hlsl.tab.c"
     break;
 
   case 267: /* switch_case: KW_DEFAULT ':'  */
-#line 9590 "hlsl.y"
+#line 9723 "hlsl.y"
         {
             struct hlsl_ir_switch_case *c;
 
@@ -13150,11 +13283,11 @@ yyreduce:
                 YYABORT;
             (yyval.switch_case) = c;
         }
-#line 13154 "hlsl.tab.c"
+#line 13287 "hlsl.tab.c"
     break;
 
   case 268: /* switch_cases: switch_case  */
-#line 9600 "hlsl.y"
+#line 9733 "hlsl.y"
         {
             struct hlsl_ir_switch_case *c = LIST_ENTRY((yyvsp[0].switch_case), struct hlsl_ir_switch_case, entry);
             if (!((yyval.list) = make_empty_list(ctx)))
@@ -13164,38 +13297,38 @@ yyreduce:
             }
             list_add_head((yyval.list), &(yyvsp[0].switch_case)->entry);
         }
-#line 13168 "hlsl.tab.c"
+#line 13301 "hlsl.tab.c"
     break;
 
   case 269: /* switch_cases: switch_cases switch_case  */
-#line 9610 "hlsl.y"
+#line 9743 "hlsl.y"
         {
             (yyval.list) = (yyvsp[-1].list);
             check_duplicated_switch_cases(ctx, (yyvsp[0].switch_case), (yyval.list));
             list_add_tail((yyval.list), &(yyvsp[0].switch_case)->entry);
         }
-#line 13178 "hlsl.tab.c"
+#line 13311 "hlsl.tab.c"
     break;
 
   case 270: /* expr_optional: %empty  */
-#line 9618 "hlsl.y"
+#line 9751 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
         }
-#line 13187 "hlsl.tab.c"
+#line 13320 "hlsl.tab.c"
     break;
 
   case 272: /* expr_statement: expr_optional ';'  */
-#line 9626 "hlsl.y"
+#line 9759 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 13195 "hlsl.tab.c"
+#line 13328 "hlsl.tab.c"
     break;
 
   case 273: /* func_arguments: %empty  */
-#line 9632 "hlsl.y"
+#line 9765 "hlsl.y"
         {
             (yyval.initializer).args = NULL;
             (yyval.initializer).args_count = 0;
@@ -13204,41 +13337,41 @@ yyreduce:
             (yyval.initializer).braces = false;
             (yyval.initializer).loc = (yyloc);
         }
-#line 13208 "hlsl.tab.c"
+#line 13341 "hlsl.tab.c"
     break;
 
   case 275: /* primary_expr: C_FLOAT  */
-#line 9644 "hlsl.y"
+#line 9777 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
             hlsl_block_add_float_constant(ctx, (yyval.block), (yyvsp[0].floatval), &(yylsp[0]));
         }
-#line 13218 "hlsl.tab.c"
+#line 13351 "hlsl.tab.c"
     break;
 
   case 276: /* primary_expr: C_INTEGER  */
-#line 9650 "hlsl.y"
+#line 9783 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
             hlsl_block_add_int_constant(ctx, (yyval.block), (yyvsp[0].intval), &(yylsp[0]));
         }
-#line 13228 "hlsl.tab.c"
+#line 13361 "hlsl.tab.c"
     break;
 
   case 277: /* primary_expr: C_UNSIGNED  */
-#line 9656 "hlsl.y"
+#line 9789 "hlsl.y"
         {
             if (!((yyval.block) = make_empty_block(ctx)))
                 YYABORT;
             hlsl_block_add_uint_constant(ctx, (yyval.block), (yyvsp[0].intval), &(yylsp[0]));
         }
-#line 13238 "hlsl.tab.c"
+#line 13371 "hlsl.tab.c"
     break;
 
   case 278: /* primary_expr: boolean  */
-#line 9662 "hlsl.y"
+#line 9795 "hlsl.y"
         {
             struct hlsl_ir_node *c;
 
@@ -13250,11 +13383,11 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 13254 "hlsl.tab.c"
+#line 13387 "hlsl.tab.c"
     break;
 
   case 279: /* primary_expr: STRING  */
-#line 9674 "hlsl.y"
+#line 9807 "hlsl.y"
         {
             struct hlsl_ir_node *c;
 
@@ -13271,11 +13404,11 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 13275 "hlsl.tab.c"
+#line 13408 "hlsl.tab.c"
     break;
 
   case 280: /* primary_expr: KW_NULL  */
-#line 9691 "hlsl.y"
+#line 9824 "hlsl.y"
         {
             struct hlsl_ir_node *c;
 
@@ -13287,11 +13420,11 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 13291 "hlsl.tab.c"
+#line 13424 "hlsl.tab.c"
     break;
 
   case 281: /* primary_expr: VAR_IDENTIFIER  */
-#line 9703 "hlsl.y"
+#line 9836 "hlsl.y"
         {
             struct hlsl_ir_var *var;
 
@@ -13313,19 +13446,19 @@ yyreduce:
                 (yyval.block)->value = ctx->error_instr;
             }
         }
-#line 13317 "hlsl.tab.c"
+#line 13450 "hlsl.tab.c"
     break;
 
   case 282: /* primary_expr: '(' expr ')'  */
-#line 9725 "hlsl.y"
+#line 9858 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 13325 "hlsl.tab.c"
+#line 13458 "hlsl.tab.c"
     break;
 
   case 283: /* primary_expr: KW_COMPILE any_identifier var_identifier '(' func_arguments ')'  */
-#line 9730 "hlsl.y"
+#line 9863 "hlsl.y"
         {
             if (!((yyval.block) = add_shader_compilation(ctx, (yyvsp[-4].name), (yyvsp[-3].name), &(yyvsp[-1].initializer), &(yylsp[-5]))))
             {
@@ -13336,11 +13469,11 @@ yyreduce:
             vkd3d_free((yyvsp[-4].name));
             vkd3d_free((yyvsp[-3].name));
         }
-#line 13340 "hlsl.tab.c"
+#line 13473 "hlsl.tab.c"
     break;
 
   case 284: /* primary_expr: KW_COMPILESHADER '(' any_identifier ',' var_identifier '(' func_arguments ')' ')'  */
-#line 9741 "hlsl.y"
+#line 9874 "hlsl.y"
         {
             if (!((yyval.block) = add_shader_compilation(ctx, (yyvsp[-6].name), (yyvsp[-4].name), &(yyvsp[-2].initializer), &(yylsp[-8]))))
             {
@@ -13351,20 +13484,20 @@ yyreduce:
             vkd3d_free((yyvsp[-6].name));
             vkd3d_free((yyvsp[-4].name));
         }
-#line 13355 "hlsl.tab.c"
+#line 13488 "hlsl.tab.c"
     break;
 
   case 285: /* primary_expr: var_identifier '(' func_arguments ')'  */
-#line 9752 "hlsl.y"
+#line 9885 "hlsl.y"
         {
             (yyval.block) = add_call(ctx, (yyvsp[-3].name), &(yyvsp[-1].initializer), &(yylsp[-3]));
             vkd3d_free((yyvsp[-3].name));
         }
-#line 13364 "hlsl.tab.c"
+#line 13497 "hlsl.tab.c"
     break;
 
   case 286: /* primary_expr: KW_SAMPLER_STATE '{' state_block_start state_block '}'  */
-#line 9757 "hlsl.y"
+#line 9890 "hlsl.y"
         {
             struct hlsl_ir_node *sampler_state;
             ctx->in_state_block = 0;
@@ -13383,11 +13516,11 @@ yyreduce:
             if (!((yyval.block) = make_block(ctx, sampler_state)))
                 YYABORT;
         }
-#line 13387 "hlsl.tab.c"
+#line 13520 "hlsl.tab.c"
     break;
 
   case 287: /* primary_expr: NEW_IDENTIFIER  */
-#line 9776 "hlsl.y"
+#line 9909 "hlsl.y"
         {
             if (ctx->in_state_block)
             {
@@ -13410,11 +13543,11 @@ yyreduce:
                 (yyval.block)->value = ctx->error_instr;
             }
         }
-#line 13414 "hlsl.tab.c"
+#line 13547 "hlsl.tab.c"
     break;
 
   case 289: /* postfix_expr: postfix_expr OP_INC  */
-#line 9802 "hlsl.y"
+#line 9935 "hlsl.y"
         {
             if (!add_increment(ctx, (yyvsp[-1].block), false, true, &(yylsp[0])))
             {
@@ -13423,11 +13556,11 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 13427 "hlsl.tab.c"
+#line 13560 "hlsl.tab.c"
     break;
 
   case 290: /* postfix_expr: postfix_expr OP_DEC  */
-#line 9811 "hlsl.y"
+#line 9944 "hlsl.y"
         {
             if (!add_increment(ctx, (yyvsp[-1].block), true, true, &(yylsp[0])))
             {
@@ -13436,11 +13569,11 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 13440 "hlsl.tab.c"
+#line 13573 "hlsl.tab.c"
     break;
 
   case 291: /* postfix_expr: postfix_expr '.' any_identifier  */
-#line 9820 "hlsl.y"
+#line 9953 "hlsl.y"
         {
             struct hlsl_ir_node *node = node_from_block((yyvsp[-2].block));
 
@@ -13473,11 +13606,11 @@ yyreduce:
             vkd3d_free((yyvsp[0].name));
             (yyval.block) = (yyvsp[-2].block);
         }
-#line 13477 "hlsl.tab.c"
+#line 13610 "hlsl.tab.c"
     break;
 
   case 292: /* postfix_expr: postfix_expr '[' expr ']'  */
-#line 9853 "hlsl.y"
+#line 9986 "hlsl.y"
         {
             struct hlsl_ir_node *array = node_from_block((yyvsp[-3].block)), *index = node_from_block((yyvsp[-1].block));
 
@@ -13491,11 +13624,11 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[-1].block);
         }
-#line 13495 "hlsl.tab.c"
+#line 13628 "hlsl.tab.c"
     break;
 
   case 293: /* postfix_expr: var_modifiers type '(' initializer_expr_list ')'  */
-#line 9869 "hlsl.y"
+#line 10002 "hlsl.y"
         {
             if ((yyvsp[-4].modifiers))
                 hlsl_error(ctx, &(yylsp[-4]), VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
@@ -13507,11 +13640,11 @@ yyreduce:
                 YYABORT;
             }
         }
-#line 13511 "hlsl.tab.c"
+#line 13644 "hlsl.tab.c"
     break;
 
   case 294: /* postfix_expr: postfix_expr '.' any_identifier '(' func_arguments ')'  */
-#line 9881 "hlsl.y"
+#line 10014 "hlsl.y"
         {
             struct hlsl_ir_node *object = node_from_block((yyvsp[-5].block));
 
@@ -13529,11 +13662,11 @@ yyreduce:
             vkd3d_free((yyvsp[-1].initializer).args);
             (yyval.block) = (yyvsp[-5].block);
         }
-#line 13533 "hlsl.tab.c"
+#line 13666 "hlsl.tab.c"
     break;
 
   case 296: /* unary_expr: OP_INC unary_expr  */
-#line 9902 "hlsl.y"
+#line 10035 "hlsl.y"
         {
             if (!add_increment(ctx, (yyvsp[0].block), false, false, &(yylsp[-1])))
             {
@@ -13542,11 +13675,11 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13546 "hlsl.tab.c"
+#line 13679 "hlsl.tab.c"
     break;
 
   case 297: /* unary_expr: OP_DEC unary_expr  */
-#line 9911 "hlsl.y"
+#line 10044 "hlsl.y"
         {
             if (!add_increment(ctx, (yyvsp[0].block), true, false, &(yylsp[-1])))
             {
@@ -13555,46 +13688,46 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13559 "hlsl.tab.c"
+#line 13692 "hlsl.tab.c"
     break;
 
   case 298: /* unary_expr: '+' unary_expr  */
-#line 9920 "hlsl.y"
+#line 10053 "hlsl.y"
         {
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13567 "hlsl.tab.c"
+#line 13700 "hlsl.tab.c"
     break;
 
   case 299: /* unary_expr: '-' unary_expr  */
-#line 9924 "hlsl.y"
+#line 10057 "hlsl.y"
         {
             add_unary_arithmetic_expr(ctx, (yyvsp[0].block), HLSL_OP1_NEG, node_from_block((yyvsp[0].block)), &(yylsp[-1]));
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13576 "hlsl.tab.c"
+#line 13709 "hlsl.tab.c"
     break;
 
   case 300: /* unary_expr: '~' unary_expr  */
-#line 9929 "hlsl.y"
+#line 10062 "hlsl.y"
         {
             add_unary_bitwise_expr(ctx, (yyvsp[0].block), HLSL_OP1_BIT_NOT, node_from_block((yyvsp[0].block)), &(yylsp[-1]));
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13585 "hlsl.tab.c"
+#line 13718 "hlsl.tab.c"
     break;
 
   case 301: /* unary_expr: '!' unary_expr  */
-#line 9934 "hlsl.y"
+#line 10067 "hlsl.y"
         {
             add_unary_logical_expr(ctx, (yyvsp[0].block), HLSL_OP1_LOGIC_NOT, node_from_block((yyvsp[0].block)), &(yylsp[-1]));
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13594 "hlsl.tab.c"
+#line 13727 "hlsl.tab.c"
     break;
 
   case 302: /* unary_expr: '(' var_modifiers type arrays ')' unary_expr  */
-#line 9940 "hlsl.y"
+#line 10073 "hlsl.y"
         {
             if ((yyvsp[-4].modifiers))
                 hlsl_error(ctx, &(yylsp[-4]), VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
@@ -13604,43 +13737,43 @@ yyreduce:
             vkd3d_free((yyvsp[-2].arrays).sizes);
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13608 "hlsl.tab.c"
+#line 13741 "hlsl.tab.c"
     break;
 
   case 304: /* mul_expr: mul_expr '*' unary_expr  */
-#line 9953 "hlsl.y"
+#line 10086 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_MUL, &(yylsp[-1]));
         }
-#line 13616 "hlsl.tab.c"
+#line 13749 "hlsl.tab.c"
     break;
 
   case 305: /* mul_expr: mul_expr '/' unary_expr  */
-#line 9957 "hlsl.y"
+#line 10090 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_DIV, &(yylsp[-1]));
         }
-#line 13624 "hlsl.tab.c"
+#line 13757 "hlsl.tab.c"
     break;
 
   case 306: /* mul_expr: mul_expr '%' unary_expr  */
-#line 9961 "hlsl.y"
+#line 10094 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_MOD, &(yylsp[-1]));
         }
-#line 13632 "hlsl.tab.c"
+#line 13765 "hlsl.tab.c"
     break;
 
   case 308: /* add_expr: add_expr '+' mul_expr  */
-#line 9968 "hlsl.y"
+#line 10101 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_ADD, &(yylsp[-1]));
         }
-#line 13640 "hlsl.tab.c"
+#line 13773 "hlsl.tab.c"
     break;
 
   case 309: /* add_expr: add_expr '-' mul_expr  */
-#line 9972 "hlsl.y"
+#line 10105 "hlsl.y"
         {
             struct hlsl_ir_node *neg;
 
@@ -13648,115 +13781,115 @@ yyreduce:
                 YYABORT;
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_ADD, &(yylsp[-1]));
         }
-#line 13652 "hlsl.tab.c"
+#line 13785 "hlsl.tab.c"
     break;
 
   case 311: /* shift_expr: shift_expr OP_LEFTSHIFT add_expr  */
-#line 9983 "hlsl.y"
+#line 10116 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_LSHIFT, &(yylsp[-1]));
         }
-#line 13660 "hlsl.tab.c"
+#line 13793 "hlsl.tab.c"
     break;
 
   case 312: /* shift_expr: shift_expr OP_RIGHTSHIFT add_expr  */
-#line 9987 "hlsl.y"
+#line 10120 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_RSHIFT, &(yylsp[-1]));
         }
-#line 13668 "hlsl.tab.c"
+#line 13801 "hlsl.tab.c"
     break;
 
   case 314: /* relational_expr: relational_expr '<' shift_expr  */
-#line 9994 "hlsl.y"
+#line 10127 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_LESS, &(yylsp[-1]));
         }
-#line 13676 "hlsl.tab.c"
+#line 13809 "hlsl.tab.c"
     break;
 
   case 315: /* relational_expr: relational_expr '>' shift_expr  */
-#line 9998 "hlsl.y"
+#line 10131 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[0].block), (yyvsp[-2].block), HLSL_OP2_LESS, &(yylsp[-1]));
         }
-#line 13684 "hlsl.tab.c"
+#line 13817 "hlsl.tab.c"
     break;
 
   case 316: /* relational_expr: relational_expr OP_LE shift_expr  */
-#line 10002 "hlsl.y"
+#line 10135 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[0].block), (yyvsp[-2].block), HLSL_OP2_GEQUAL, &(yylsp[-1]));
         }
-#line 13692 "hlsl.tab.c"
+#line 13825 "hlsl.tab.c"
     break;
 
   case 317: /* relational_expr: relational_expr OP_GE shift_expr  */
-#line 10006 "hlsl.y"
+#line 10139 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_GEQUAL, &(yylsp[-1]));
         }
-#line 13700 "hlsl.tab.c"
+#line 13833 "hlsl.tab.c"
     break;
 
   case 319: /* equality_expr: equality_expr OP_EQ relational_expr  */
-#line 10013 "hlsl.y"
+#line 10146 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_EQUAL, &(yylsp[-1]));
         }
-#line 13708 "hlsl.tab.c"
+#line 13841 "hlsl.tab.c"
     break;
 
   case 320: /* equality_expr: equality_expr OP_NE relational_expr  */
-#line 10017 "hlsl.y"
+#line 10150 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_NEQUAL, &(yylsp[-1]));
         }
-#line 13716 "hlsl.tab.c"
+#line 13849 "hlsl.tab.c"
     break;
 
   case 322: /* bitand_expr: bitand_expr '&' equality_expr  */
-#line 10024 "hlsl.y"
+#line 10157 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_BIT_AND, &(yylsp[-1]));
         }
-#line 13724 "hlsl.tab.c"
+#line 13857 "hlsl.tab.c"
     break;
 
   case 324: /* bitxor_expr: bitxor_expr '^' bitand_expr  */
-#line 10031 "hlsl.y"
+#line 10164 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_BIT_XOR, &(yylsp[-1]));
         }
-#line 13732 "hlsl.tab.c"
+#line 13865 "hlsl.tab.c"
     break;
 
   case 326: /* bitor_expr: bitor_expr '|' bitxor_expr  */
-#line 10038 "hlsl.y"
+#line 10171 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_BIT_OR, &(yylsp[-1]));
         }
-#line 13740 "hlsl.tab.c"
+#line 13873 "hlsl.tab.c"
     break;
 
   case 328: /* logicand_expr: logicand_expr OP_AND bitor_expr  */
-#line 10045 "hlsl.y"
+#line 10178 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_LOGIC_AND, &(yylsp[-1]));
         }
-#line 13748 "hlsl.tab.c"
+#line 13881 "hlsl.tab.c"
     break;
 
   case 330: /* logicor_expr: logicor_expr OP_OR logicand_expr  */
-#line 10052 "hlsl.y"
+#line 10185 "hlsl.y"
         {
             (yyval.block) = add_binary_expr_merge(ctx, (yyvsp[-2].block), (yyvsp[0].block), HLSL_OP2_LOGIC_OR, &(yylsp[-1]));
         }
-#line 13756 "hlsl.tab.c"
+#line 13889 "hlsl.tab.c"
     break;
 
   case 332: /* conditional_expr: logicor_expr '?' expr ':' assignment_expr  */
-#line 10059 "hlsl.y"
+#line 10192 "hlsl.y"
         {
             struct hlsl_ir_node *cond = node_from_block((yyvsp[-4].block));
             struct hlsl_ir_node *first = node_from_block((yyvsp[-2].block));
@@ -13774,11 +13907,11 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[-4].block);
         }
-#line 13778 "hlsl.tab.c"
+#line 13911 "hlsl.tab.c"
     break;
 
   case 334: /* assignment_expr: unary_expr assign_op assignment_expr  */
-#line 10081 "hlsl.y"
+#line 10214 "hlsl.y"
         {
             struct hlsl_ir_node *lhs = node_from_block((yyvsp[-2].block)), *rhs = node_from_block((yyvsp[0].block));
 
@@ -13793,109 +13926,109 @@ yyreduce:
             }
             (yyval.block) = (yyvsp[0].block);
         }
-#line 13797 "hlsl.tab.c"
+#line 13930 "hlsl.tab.c"
     break;
 
   case 335: /* assign_op: '='  */
-#line 10098 "hlsl.y"
+#line 10231 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_ASSIGN;
         }
-#line 13805 "hlsl.tab.c"
+#line 13938 "hlsl.tab.c"
     break;
 
   case 336: /* assign_op: OP_ADDASSIGN  */
-#line 10102 "hlsl.y"
+#line 10235 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_ADD;
         }
-#line 13813 "hlsl.tab.c"
+#line 13946 "hlsl.tab.c"
     break;
 
   case 337: /* assign_op: OP_SUBASSIGN  */
-#line 10106 "hlsl.y"
+#line 10239 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_SUB;
         }
-#line 13821 "hlsl.tab.c"
+#line 13954 "hlsl.tab.c"
     break;
 
   case 338: /* assign_op: OP_MULASSIGN  */
-#line 10110 "hlsl.y"
+#line 10243 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_MUL;
         }
-#line 13829 "hlsl.tab.c"
+#line 13962 "hlsl.tab.c"
     break;
 
   case 339: /* assign_op: OP_DIVASSIGN  */
-#line 10114 "hlsl.y"
+#line 10247 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_DIV;
         }
-#line 13837 "hlsl.tab.c"
+#line 13970 "hlsl.tab.c"
     break;
 
   case 340: /* assign_op: OP_MODASSIGN  */
-#line 10118 "hlsl.y"
+#line 10251 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_MOD;
         }
-#line 13845 "hlsl.tab.c"
+#line 13978 "hlsl.tab.c"
     break;
 
   case 341: /* assign_op: OP_LEFTSHIFTASSIGN  */
-#line 10122 "hlsl.y"
+#line 10255 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_LSHIFT;
         }
-#line 13853 "hlsl.tab.c"
+#line 13986 "hlsl.tab.c"
     break;
 
   case 342: /* assign_op: OP_RIGHTSHIFTASSIGN  */
-#line 10126 "hlsl.y"
+#line 10259 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_RSHIFT;
         }
-#line 13861 "hlsl.tab.c"
+#line 13994 "hlsl.tab.c"
     break;
 
   case 343: /* assign_op: OP_ANDASSIGN  */
-#line 10130 "hlsl.y"
+#line 10263 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_AND;
         }
-#line 13869 "hlsl.tab.c"
+#line 14002 "hlsl.tab.c"
     break;
 
   case 344: /* assign_op: OP_ORASSIGN  */
-#line 10134 "hlsl.y"
+#line 10267 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_OR;
         }
-#line 13877 "hlsl.tab.c"
+#line 14010 "hlsl.tab.c"
     break;
 
   case 345: /* assign_op: OP_XORASSIGN  */
-#line 10138 "hlsl.y"
+#line 10271 "hlsl.y"
         {
             (yyval.assign_op) = ASSIGN_OP_XOR;
         }
-#line 13885 "hlsl.tab.c"
+#line 14018 "hlsl.tab.c"
     break;
 
   case 347: /* expr: expr ',' assignment_expr  */
-#line 10145 "hlsl.y"
+#line 10278 "hlsl.y"
         {
             (yyval.block) = (yyvsp[-2].block);
             hlsl_block_add_block((yyval.block), (yyvsp[0].block));
             destroy_block((yyvsp[0].block));
         }
-#line 13895 "hlsl.tab.c"
+#line 14028 "hlsl.tab.c"
     break;
 
 
-#line 13899 "hlsl.tab.c"
+#line 14032 "hlsl.tab.c"
 
       default: break;
     }

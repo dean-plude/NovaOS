@@ -4265,6 +4265,7 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vkd3d_
         case VSIR_OP_ATOMIC_XOR:
         case VSIR_OP_AND:
         case VSIR_OP_BREAK:
+        case VSIR_OP_BUFINFO: /* NovaOS: GetDimensions() on buffers */
         case VSIR_OP_CASE:
         case VSIR_OP_CONTINUE:
         case VSIR_OP_COUNTBITS:

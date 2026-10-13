@@ -2,10 +2,12 @@
  * the way Chromium's ANGLE and games use it: HLSL compiled to Direct3D
  * bytecode with D3DCompile (vs/ps 4_0 and 5_0, as ANGLE asks for them, and
  * ps_3_0), shader model 5.1 descriptor arrays indexed at run time (wgpu's
- * sampler heap), errors, the preprocessor and #include, reflection, the
- * disassembler and the container parts, then the shaders drawn with
- * Direct3D 11 (DXVK): a triangle whose colour comes from a texture, a
- * constant buffer, a function with an out parameter and a loop, read back.
+ * sampler heap), RWByteAddressBuffer's Load*(), GetDimensions() and
+ * Interlocked*() methods (wgpu's storage buffers), errors, the preprocessor
+ * and #include, reflection, the disassembler and the container parts, then
+ * the shaders run with Direct3D 11 (DXVK): a triangle whose colour comes from
+ * a texture, a constant buffer, a function with an out parameter and a loop,
+ * read back, and the raw buffer compute shader dispatched and read back.
  * Build: x86_64-w64-mingw32-gcc -O2 -o hlsltest.exe hlsltest.c -ld3dcompiler_47 -ld3d11 -ldxguid
  *        (i686-w64-mingw32-gcc for the 32-bit one).  Usage: hlsltest */
 #define COBJMACROS
@@ -252,6 +254,42 @@ static void test_descriptor_arrays(void)
     ID3D10Blob_Release(ps);
 }
 
+/* RWByteAddressBuffer's Load*(), GetDimensions() and Interlocked*() methods,
+ * as wgpu's naga writes WGSL storage buffers (LightCraft's compute shaders).
+ * The buffer holds 8 uints: 7, 35, 0, 0, 100, 0, 3, 0. */
+static const char raw_uav_shader[] =
+    "RWByteAddressBuffer data : register(u0);\n"
+    "[numthreads(1, 1, 1)]\n"
+    "void cs_main(uint3 id : SV_DispatchThreadID)\n"
+    "{\n"
+    "    uint size, old;\n"
+    "    data.GetDimensions(size);\n"
+    "    uint2 ab = data.Load2(0);\n"
+    "    data.Store(8, ab.x + ab.y);\n"                  /* 42 */
+    "    data.Store(12, size);\n"                        /* 32 */
+    "    data.InterlockedAdd(16, 5u, old);\n"            /* 105 */
+    "    data.Store(20, old);\n"                          /* 100 */
+    "    data.InterlockedMax(24, 9u);\n"                 /* 9 */
+    "    data.Store(28, data.Load(4) + 1u);\n"           /* 36 */
+    "}\n";
+
+static void test_raw_uav_methods(void)
+{
+    HRESULT hr;
+    ID3DBlob *cs = compile(raw_uav_shader, "cs_main", "cs_5_0", &hr, NULL);
+    check("D3DCompile cs_5_0 with RWByteAddressBuffer Load/GetDimensions/Interlocked*", SUCCEEDED(hr) && is_dxbc(cs));
+    if (!cs) return;
+    ID3DBlob *text = NULL;
+    hr = D3DDisassemble(ID3D10Blob_GetBufferPointer(cs), ID3D10Blob_GetBufferSize(cs), 0, NULL, &text);
+    const char *asm_text = SUCCEEDED(hr) && text ? (const char *)ID3D10Blob_GetBufferPointer(text) : "";
+    check("cs_5_0: ld_raw, bufinfo and atomics on the raw UAV",
+          strstr(asm_text, "ld_raw") && strstr(asm_text, "bufinfo") && strstr(asm_text, "imm_atomic_iadd") &&
+          strstr(asm_text, "atomic_umax"));
+    if (!strstr(asm_text, "bufinfo")) printf("disassembly  %s\n", asm_text);
+    if (text) ID3D10Blob_Release(text);
+    ID3D10Blob_Release(cs);
+}
+
 /* ---- the shaders on Direct3D 11 ---- */
 static int px_near(const BYTE *p, int r, int g, int b)          /* p: R8G8B8A8 */
 {
@@ -365,6 +403,55 @@ done:
     ID3D10Blob_Release(psb);
 }
 
+/* raw_uav_shader dispatched once, the buffer read back */
+static void dispatch_raw_uav(ID3D11Device *dev, ID3D11DeviceContext *ctx)
+{
+    static const UINT init[8] = { 7, 35, 0, 0, 100, 0, 3, 0 }, want[8] = { 7, 35, 42, 32, 105, 100, 9, 36 };
+    ID3DBlob *csb = compile(raw_uav_shader, "cs_main", "cs_5_0", NULL, NULL);
+    ID3D11ComputeShader *cs = NULL;
+    ID3D11Buffer *buf = NULL, *staging = NULL;
+    ID3D11UnorderedAccessView *uav = NULL;
+    if (!csb) { check("cs_5_0 compiled", 0); return; }
+    HRESULT hr = ID3D11Device_CreateComputeShader(dev, ID3D10Blob_GetBufferPointer(csb), ID3D10Blob_GetBufferSize(csb), NULL, &cs);
+    check("CreateComputeShader (raw UAV methods)", SUCCEEDED(hr));
+    D3D11_BUFFER_DESC bd = { sizeof(init), D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
+                             D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0 };
+    D3D11_BUFFER_DESC sd = { sizeof(init), D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0 };
+    D3D11_SUBRESOURCE_DATA binit = { init, 0, 0 };
+    ID3D11Device_CreateBuffer(dev, &bd, &binit, &buf);
+    ID3D11Device_CreateBuffer(dev, &sd, NULL, &staging);
+    D3D11_UNORDERED_ACCESS_VIEW_DESC ud;
+    memset(&ud, 0, sizeof(ud));
+    ud.Format = DXGI_FORMAT_R32_TYPELESS;
+    ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    ud.Buffer.NumElements = 8;
+    ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    if (buf) ID3D11Device_CreateUnorderedAccessView(dev, (ID3D11Resource *)buf, &ud, &uav);
+    check("raw buffer UAV", buf && staging && uav);
+    if (!cs || !uav || !staging) goto done;
+    ID3D11DeviceContext_CSSetShader(ctx, cs, NULL, 0);
+    ID3D11DeviceContext_CSSetUnorderedAccessViews(ctx, 0, 1, &uav, NULL);
+    ID3D11DeviceContext_Dispatch(ctx, 1, 1, 1);
+    ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)staging, (ID3D11Resource *)buf);
+    D3D11_MAPPED_SUBRESOURCE m;
+    hr = ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &m);
+    check("read back (raw UAV)", SUCCEEDED(hr));
+    if (SUCCEEDED(hr)) {
+        const UINT *v = (const UINT *)m.pData;
+        printf("D3D11 raw UAV  %u %u %u %u %u %u %u %u\n", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+        check("cs_5_0 RWByteAddressBuffer Load, Load2, GetDimensions, InterlockedAdd and InterlockedMax results",
+              !memcmp(v, want, sizeof(want)));
+        ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)staging, 0);
+    }
+done:
+    ID3D11DeviceContext_ClearState(ctx);
+    if (uav) ID3D11UnorderedAccessView_Release(uav);
+    if (staging) ID3D11Buffer_Release(staging);
+    if (buf) ID3D11Buffer_Release(buf);
+    if (cs) ID3D11ComputeShader_Release(cs);
+    ID3D10Blob_Release(csb);
+}
+
 static void test_d3d11(void)
 {
     D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 }, got = 0;
@@ -376,6 +463,7 @@ static void test_d3d11(void)
     printf("D3D11 feature level %#x\n", got);
     draw(dev, ctx, "vs_4_0", "ps_4_0");
     if (got >= D3D_FEATURE_LEVEL_11_0) draw(dev, ctx, "vs_5_0", "ps_5_0");
+    if (got >= D3D_FEATURE_LEVEL_11_0) dispatch_raw_uav(dev, ctx);
     ID3D11DeviceContext_Release(ctx);
     ID3D11Device_Release(dev);
 }
@@ -385,6 +473,7 @@ int main(int argc, char **argv)
     (void)argv;
     test_compiler();
     test_descriptor_arrays();
+    test_raw_uav_methods();
     if (argc < 2) test_d3d11();                         /* hlsltest nodevice: the compiler only */
     printf("hlsltest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

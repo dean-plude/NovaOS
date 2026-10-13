@@ -1,7 +1,8 @@
 # d3dcompiler_47.dll's build hooks (tools/build_userland.py calls them with
 # itself as b).  The HLSL compiler is vkd3d-shader (third_party/vkd3d-shader,
-# LGPL-2.1, Wine's; NovaOS's changes, shader model 5.1 descriptor arrays and
-# RWByteAddressBuffer's methods, are described in its NOVA-VENDOR.txt),
+# LGPL-2.1, Wine's; NovaOS's changes, shader model 5.1 descriptor arrays,
+# RWByteAddressBuffer's methods and upstream's fix for const locals copied
+# from other locals, are described in its NOVA-VENDOR.txt),
 # compiled into this DLL with the config.h and header shim in vkd3d/; the
 # SPIR-V headers its SPIR-V back end includes come from
 # third_party/spirv-headers (MIT).  d3dcompiler_47's own sources (MIT)

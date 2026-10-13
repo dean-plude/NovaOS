@@ -49,6 +49,16 @@ sm4_generate_vsir_instr_resinfo) and tpf.c (bufinfo written out).  Stores to
 indexed groupshared arrays ("Store to indexed TGSM") still stop as upstream
 1.19 does (upstream master has them, after a larger rework).
 
+A fix taken from upstream (vkd3d master's is_compile_time_const): a const
+local whose initializer loads another local (naga writes every `let` this
+way, as in `const VertexOutput o = _e9;`) was moved into the static
+initializers, which run before the function body, so it read the local
+before anything was stored in it and the shader output garbage.  hlsl.y's
+declare_vars now moves an initializer there only when it is a compile-time
+constant (is_compile_time_const: literals, operators, and loads of synthetic
+variables or of variables the static initializers set, which hlsl.h's new
+hlsl_ir_var.is_compile_time_const marks).
+
 Generated files, made from the tarball (and the change above) as its
 Makefile does, and committed so the build needs neither tool:
   libs/vkd3d-shader/hlsl.tab.c, hlsl.tab.h      bison 3.8.2 -d hlsl.y

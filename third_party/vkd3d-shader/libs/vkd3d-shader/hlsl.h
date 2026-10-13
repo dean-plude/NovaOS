@@ -562,6 +562,10 @@ struct hlsl_ir_var
     uint32_t is_synthetic : 1;
     uint32_t is_tgsm : 1;
     uint32_t has_explicit_bind_point : 1;
+    /* NovaOS (upstream's fix): whether the variable's value is set by the static initializers (a static
+     * variable, or a const one initialized by a compile-time constant), so a
+     * load from it is itself a compile-time constant. */
+    uint32_t is_compile_time_const : 1;
 };
 
 /* This struct is used to represent assignments in state block entries:

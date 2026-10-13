@@ -3,7 +3,8 @@
  * bytecode with D3DCompile (vs/ps 4_0 and 5_0, as ANGLE asks for them, and
  * ps_3_0), shader model 5.1 descriptor arrays indexed at run time (wgpu's
  * sampler heap), RWByteAddressBuffer's Load*(), GetDimensions() and
- * Interlocked*() methods (wgpu's storage buffers), errors, the preprocessor
+ * Interlocked*() methods (wgpu's storage buffers), const locals copied from
+ * other locals (as naga writes every `let`), errors, the preprocessor
  * and #include, reflection, the disassembler and the container parts, then
  * the shaders run with Direct3D 11 (DXVK): a triangle whose colour comes from
  * a texture, a constant buffer, a function with an out parameter and a loop,
@@ -290,6 +291,39 @@ static void test_raw_uav_methods(void)
     ID3D10Blob_Release(cs);
 }
 
+/* naga writes each WGSL `let` as a const local, copied from a local the
+ * function has just written (egui's vertex shader, through wgpu): the copy is
+ * of the value at that point, so both inputs reach the outputs.  vkd3d-shader
+ * ran such a copy with the static initializers, before the function, and the
+ * outputs were left unwritten. */
+static const char const_copy_shader[] =
+    "struct VO { float2 tc : LOC0; float4 pos : SV_Position; };\n"
+    "VO vs_main(float2 a_pos : LOC0, float2 a_tc : LOC1)\n"
+    "{\n"
+    "    VO o = (VO)0;\n"
+    "    o.tc = a_tc;\n"
+    "    o.pos = float4(a_pos, 0.0, 1.0);\n"
+    "    const VO copy = o;\n"
+    "    return copy;\n"
+    "}\n";
+
+static void test_const_copies(void)
+{
+    static const char *const profiles[] = { "vs_5_0", "vs_5_1" };
+    for (int i = 0; i < 2; i++) {
+        char what[96];
+        HRESULT hr;
+        ID3DBlob *vs = compile(const_copy_shader, "vs_main", profiles[i], &hr, NULL), *text = NULL;
+        if (vs) hr = D3DDisassemble(ID3D10Blob_GetBufferPointer(vs), ID3D10Blob_GetBufferSize(vs), 0, NULL, &text);
+        const char *asm_text = vs && SUCCEEDED(hr) && text ? (const char *)ID3D10Blob_GetBufferPointer(text) : "";
+        snprintf(what, sizeof(what), "%s: a const struct copied from a local keeps its value", profiles[i]);
+        check(what, strstr(asm_text, "dcl_input v0.xy") && strstr(asm_text, "dcl_input v1.xy"));
+        if (!strstr(asm_text, "dcl_input v1.xy")) printf("disassembly  %s\n", asm_text);
+        if (text) ID3D10Blob_Release(text);
+        if (vs) ID3D10Blob_Release(vs);
+    }
+}
+
 /* ---- the shaders on Direct3D 11 ---- */
 static int px_near(const BYTE *p, int r, int g, int b)          /* p: R8G8B8A8 */
 {
@@ -473,6 +507,7 @@ int main(int argc, char **argv)
     (void)argv;
     test_compiler();
     test_descriptor_arrays();
+    test_const_copies();
     test_raw_uav_methods();
     if (argc < 2) test_d3d11();                         /* hlsltest nodevice: the compiler only */
     printf("hlsltest: %d passed, %d failed\n", pass, fail);

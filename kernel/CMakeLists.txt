@@ -333,7 +333,9 @@ file(GLOB_RECURSE USERLAND_DEPS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../tools/kmdf/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/../tools/umdf/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/netsurf/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/netsurf/*.h")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/netsurf/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vkd3d-shader/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vkd3d-shader/*.h")
 set(USERLAND_C "${CMAKE_CURRENT_BINARY_DIR}/userland_files.c")
 add_custom_command(
     OUTPUT  "${USERLAND_C}"

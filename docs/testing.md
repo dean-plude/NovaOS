@@ -25,17 +25,18 @@ The README has the short version; [building.md](building.md#tests) says how to r
   `consolecursortest` (classic console screen buffers: cursor, cell I/O,
   fills, scrolling, attributes and independent buffers; 64- and 32-bit),
   `ptyscreentest` (a full-screen program drawn in a console window and
-  through a pseudo console gives the same cells), `guitest auto`,
-  `inputtest` (side buttons, horizontal wheel, volume keys), `usbcheck`
-  (media keys, AC Pan, pen pressure, tilt and twist, virtio pens and
-  tablets), `anitest` (animated cursors and program pointers),
-  `cursortest` (system pointers, SetSystemCursor, cursors at the display
-  scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections, cursors from
-  bitmaps with alpha or monochrome masks), `pentest` (a pen as
-  WM_POINTER* messages: enter, down, update, up, leave;
-  GetPointerPenInfo pressure, tilt, rotation, barrel and eraser;
-  DefWindowProc promotion to mouse with the pen signature in
-  GetMessageExtraInfo; WM_NCPOINTER* over a title bar and
+  through a pseudo console gives the same cells), `conptytest` (a
+  terminal host types into, resizes and exits an interactive `cmd.exe`
+  through `CreatePseudoConsole`), `guitest auto`, `inputtest` (side
+  buttons, horizontal wheel, volume keys), `usbcheck` (media keys, AC
+  Pan, pen pressure, tilt and twist, virtio pens and tablets), `anitest`
+  (animated cursors and program pointers), `cursortest` (system
+  pointers, SetSystemCursor, cursors at the display scale), `bmpcurtest`
+  (1-, 4-, 8- and 16-bit DIB sections, cursors from bitmaps with alpha
+  or monochrome masks), `pentest` (a pen as WM_POINTER* messages: enter,
+  down, update, up, leave; GetPointerPenInfo pressure, tilt, rotation,
+  barrel and eraser; DefWindowProc promotion to mouse with the pen
+  signature in GetMessageExtraInfo; WM_NCPOINTER* over a title bar and
   WM_POINTERACTIVATE; the mouse as a pointer, entering and leaving
   windows; 64- and 32-bit), `wintabtest` (wintab32 with no pen and with
   a synthetic one: contexts, packets, pressure, tilt and rotation),
@@ -266,7 +267,7 @@ It posts a pass/fail table per program to the "Nightly app corpus" issue.
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`).  Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.  `soundtest`
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.  `soundtest`
   plays tones through `waveOut`, WASAPI, `PlaySound` and `Beep`, records
   through `waveIn` and WASAPI capture, and lists the sound devices,
   chooses the default and sets each device's own volume;

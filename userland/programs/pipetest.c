@@ -405,10 +405,15 @@ static void pseudo_console(void)
         CloseHandle(in_write);
     }
     ClosePseudoConsole(pc);
-    char buf[128];
-    read_all(out_read, buf, sizeof(buf));
+    static char buf[16384];
+    int len = read_all(out_read, buf, sizeof(buf));
     CloseHandle(out_read);
-    check(started && !strcmp(buf, "pseudo-console-ok\r\n"), "pseudo-console output reaches its host pipe, line feeds as CR LF");
+    const char *ok = "pseudo-console-ok\r\n", *typed = strstr(buf, "payload\r\n");
+    check(started && strstr(buf, "\x1b[2J") && (!typed || strstr(buf, "\x1b[2J") < typed),
+          "ResizePseudoConsole draws the screen again for the host");
+    check(started && typed, "pseudo-console input is echoed while the program reads a line");
+    check(started && len >= 19 && !strcmp(buf + len - 19, ok) && (!typed || buf + len - 19 > typed),
+          "pseudo-console output reaches its host pipe, line feeds as CR LF");
     DeleteProcThreadAttributeList(attrs);
     HeapFree(GetProcessHeap(), 0, attrs);
 }

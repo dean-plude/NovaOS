@@ -3088,7 +3088,7 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         if ((UINT32)a2 == CON_PSEUDO_RESIZE) {
             INT16 cols = (INT16)(UINT16)a4, rows = (INT16)(UINT16)(a4 >> 16);
             if (cols <= 0 || rows <= 0) { um_ob_unref(o); return ST_INVALID_PARAMETER; }
-            UmConsoleSetSize(c, cols, rows);
+            UmConsolePseudoResize(c, cols, rows);
         } else if ((UINT32)a2 == CON_PSEUDO_EOF) {
             UmConsoleEof(c);
             if (a4) um_console_end_output(c);              /* ClosePseudoConsole: the output reader stops too */
@@ -3102,7 +3102,7 @@ static UINT64 sys_nova_console(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
                     um_ob_unref(o);
                     return UM_STATUS_ACCESS_VIOLATION;
                 }
-                UmConsoleWrite(c, buf, (int)n);
+                UmConsolePseudoInput(c, buf, (int)n);
                 src += n;
                 left -= n;
             }

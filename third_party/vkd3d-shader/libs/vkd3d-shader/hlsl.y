@@ -582,6 +582,55 @@ static bool is_static_expression(const struct hlsl_block *block)
     return true;
 }
 
+/* NovaOS: upstream's fix (vkd3d master).  Whether @block, a const variable's
+ * initializer, is known at compile time,
+ * so it can run with the static initializers: unlike is_static_expression(),
+ * a load must be from a variable that is itself such a constant (a const
+ * local initialized from another local holds that local's value at that
+ * point of the function, not at its start). */
+static bool is_compile_time_const(const struct hlsl_block *block)
+{
+    struct hlsl_ir_node *node;
+    struct hlsl_ir_var *var;
+
+    LIST_FOR_EACH_ENTRY(node, &block->instrs, struct hlsl_ir_node, entry)
+    {
+        switch (node->type)
+        {
+            case HLSL_IR_COMPILE:
+            case HLSL_IR_CONSTANT:
+            case HLSL_IR_EXPR:
+            case HLSL_IR_SAMPLER_STATE:
+            case HLSL_IR_STRING_CONSTANT:
+            case HLSL_IR_SWIZZLE:
+            case HLSL_IR_INDEX:
+                break;
+            case HLSL_IR_LOAD:
+                var = hlsl_ir_load(node)->src.var;
+                if (var->is_synthetic || var->is_compile_time_const)
+                    break;
+                return false;
+            case HLSL_IR_STORE:
+                if (hlsl_ir_store(node)->lhs.var->is_synthetic)
+                    break;
+                return false;
+            case HLSL_IR_CALL:
+            case HLSL_IR_IF:
+            case HLSL_IR_INTERLOCKED:
+            case HLSL_IR_LOOP:
+            case HLSL_IR_JUMP:
+            case HLSL_IR_RESOURCE_LOAD:
+            case HLSL_IR_RESOURCE_STORE:
+            case HLSL_IR_SWITCH:
+            case HLSL_IR_STATEBLOCK_CONSTANT:
+            case HLSL_IR_SYNC:
+                return false;
+        }
+    }
+
+    return true;
+}
+
 static struct hlsl_default_value evaluate_static_expression(struct hlsl_ctx *ctx,
         struct hlsl_block *block, struct hlsl_type *dst_type, const struct vkd3d_shader_location *loc)
 {
@@ -2866,7 +2915,7 @@ static struct hlsl_block *initialize_vars(struct hlsl_ctx *ctx, struct list *var
 
             static_initialization = var->storage_modifiers & HLSL_STORAGE_STATIC
                     || (var->data_type->modifiers & HLSL_MODIFIER_CONST
-                    && is_static_expression(v->initializer.instrs));
+                    && is_compile_time_const(v->initializer.instrs));  /* NovaOS: was is_static_expression() */
 
             if (is_default_values_initializer)
             {
@@ -2899,6 +2948,7 @@ static struct hlsl_block *initialize_vars(struct hlsl_ctx *ctx, struct list *var
             else if (static_initialization)
             {
                 hlsl_block_add_block(&ctx->static_initializers, v->initializer.instrs);
+                var->is_compile_time_const = true;  /* NovaOS */
             }
             else
             {
@@ -2923,6 +2973,7 @@ static struct hlsl_block *initialize_vars(struct hlsl_ctx *ctx, struct list *var
             zero = hlsl_block_add_uint_constant(ctx, &ctx->static_initializers, 0, &var->loc);
             cast = add_cast(ctx, &ctx->static_initializers, zero, var->data_type, &var->loc);
             hlsl_block_add_simple_store(ctx, &ctx->static_initializers, var, cast);
+            var->is_compile_time_const = true;  /* NovaOS */
         }
         free_parse_variable_def(v);
     }

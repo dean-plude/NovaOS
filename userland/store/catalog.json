@@ -706,7 +706,7 @@
       "exe": "FilmCraft\\**\\filmcraft.exe",
       "kind": "archive",
       "size_mb": 65,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Fm",
       "color": "#7B4DFF"
     },
@@ -721,7 +721,7 @@
       "exe": "LightCraft\\**\\lightcraft.exe",
       "kind": "archive",
       "size_mb": 94,
-      "note": "Does not work on NovaOS yet: it draws with Direct3D 12 (the Store's Mesa 3D, DXVK and VKD3D-Proton), its shaders now compile, but its window stays black. MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Lt",
       "color": "#3C8DBC"
     },
@@ -766,7 +766,7 @@
       "exe": "DesignCraft\\**\\designcraft.exe",
       "kind": "archive",
       "size_mb": 66,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Ds",
       "color": "#E5487B"
     },
@@ -796,7 +796,7 @@
       "exe": "SoundCraft\\**\\soundcraft.exe",
       "kind": "archive",
       "size_mb": 13,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Sd",
       "color": "#16A085"
     },
@@ -811,7 +811,7 @@
       "exe": "DeckCraft\\**\\deckcraft.exe",
       "kind": "archive",
       "size_mb": 71,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Dk",
       "color": "#C0504D"
     },
@@ -826,7 +826,7 @@
       "exe": "CADCraft\\**\\cadcraft.exe",
       "kind": "archive",
       "size_mb": 21,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "CAD",
       "color": "#4A6572"
     },
@@ -841,7 +841,7 @@
       "exe": "GridCraft\\**\\gridcraft.exe",
       "kind": "archive",
       "size_mb": 15,
-      "note": "Does not start on NovaOS yet: it draws with Direct3D 12, and NovaOS's shader compiler cannot yet build its shaders (shader model 5.1 sampler arrays). MIT or Apache-2.0",
+      "note": "Tested on NovaOS: draws with Direct3D 12, so install Mesa 3D, DXVK and VKD3D-Proton from the App Store first; then it opens and shows its window (slowly without a GPU). MIT or Apache-2.0",
       "label": "Gr",
       "color": "#217346"
     }

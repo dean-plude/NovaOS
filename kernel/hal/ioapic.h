@@ -21,6 +21,10 @@ bool IoApicPresent(void);
  * override says, else as @level / @low say.  False if no I/O APIC has it. */
 bool IoApicRouteIrq(UINT32 irq, bool level, bool low, UINT8 vector, UINT32 *gsi);
 
+/* The address and data a PCI function writes to raise @vector on the boot
+ * CPU as a message-signalled interrupt (MSI and MSI-X) */
+void IoApicMsiMessage(UINT8 vector, UINT64 *address, UINT32 *data);
+
 /* Mask or unmask a routed input */
 void IoApicMask(UINT32 gsi, bool mask);
 

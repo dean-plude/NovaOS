@@ -57,6 +57,7 @@
 #include "../hal/pci.h"
 #include "../hal/aml.h"
 #include "../drivers/usb.h"
+#include "../hal/ioapic.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
 #include "../lib/string.h"
@@ -94,8 +95,18 @@ typedef struct NtPdo {
     char                 service[64];   /* the driver running it ("" when none) */
     char                 devname[48];   /* the PDO's name in \Device */
     NT_CM_RESOURCE_LIST *raw, *xlat;
-    UINT32               vector;        /* translated interrupt (0: none) */
+    UINT32               vector;        /* translated line-based interrupt (0: none) */
     UINT8                irql;
+    UINT32               gsi;           /* (its raw GSI) */
+    bool                 level;
+    unsigned             nbase;         /* descriptors before the interrupt's */
+    UINT8                msi_kind;      /* 5: MSI, 0x11: MSI-X (the capability granted) */
+    UINT8                msi_cap;       /* its capability's offset in configuration space */
+    UINT8                msi_first;     /* the block of message vectors reserved for it */
+    UINT8                msi_n;         /* (0: none; messages not granted) */
+    bool                 msi_on;
+    bool                 line_only;     /* its driver takes no messages */
+    volatile UINT32     *msix_tab;      /* MSI-X's table, mapped */
     bool                 started;
     NtIface             *ifaces;
     struct NtPdo        *parent;        /* a bus driver's child: its parent (NULL: a PCI function) */
@@ -183,6 +194,8 @@ static NT_CM_PARTIAL_RESOURCE_DESCRIPTOR *desc_add(NT_CM_RESOURCE_LIST *l)
     return &l->List[0].PartialResourceList.PartialDescriptors[l->List[0].PartialResourceList.Count++];
 }
 
+static void set_interrupt(NtPdo *p, bool msg);
+
 /* The raw and translated lists of @p's BARs and interrupt */
 static bool build_resources(NtPdo *p)
 {
@@ -234,6 +247,7 @@ static bool build_resources(NtPdo *p)
     }
     PciWrite16(d->bus, d->dev, d->func, 0x04, cmd);
 
+    p->nbase = l[0]->List[0].PartialResourceList.Count;
     UINT32 r3c = PciRead32(d->bus, d->dev, d->func, 0x3C);
     UINT8 pin = (UINT8)(r3c >> 8);
     UINT32 gsi = 0;
@@ -246,17 +260,42 @@ static bool build_resources(NtPdo *p)
     if (vector) {
         p->vector = vector;
         p->irql = (UINT8)(vector >> 4);
-        for (int k = 0; k < 2; k++) {
-            NT_CM_PARTIAL_RESOURCE_DESCRIPTOR *r = desc_add(l[k]);
-            r->Type = NT_CmResourceTypeInterrupt;
-            r->ShareDisposition = level ? NT_CmResourceShareShared : NT_CmResourceShareDeviceExclusive;
-            r->Flags = level ? NT_CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE : NT_CM_RESOURCE_INTERRUPT_LATCHED;
-            r->u.Interrupt.Level = (unsigned short)(k ? p->irql : gsi);
-            r->u.Interrupt.Vector = k ? vector : gsi;
+        p->gsi = gsi;
+        p->level = level;
+    }
+    set_interrupt(p, false);
+    return true;
+}
+
+/* The function's interrupt descriptor in both lists (after its BARs): the
+ * line-based one, or, with @msg, the message one for the block reserved */
+static void set_interrupt(NtPdo *p, bool msg)
+{
+    NT_CM_RESOURCE_LIST *l[2] = { p->raw, p->xlat };
+    for (int k = 0; k < 2; k++) l[k]->List[0].PartialResourceList.Count = p->nbase;
+    if (!msg && !p->vector) return;
+    for (int k = 0; k < 2; k++) {
+        NT_CM_PARTIAL_RESOURCE_DESCRIPTOR *r = desc_add(l[k]);
+        r->Type = NT_CmResourceTypeInterrupt;
+        if (msg) {
+            r->ShareDisposition = NT_CmResourceShareDeviceExclusive;
+            r->Flags = NT_CM_RESOURCE_INTERRUPT_MESSAGE;
+            if (!k) {
+                r->u.MessageInterrupt.Raw.MessageCount = p->msi_n;
+                r->u.MessageInterrupt.Raw.Affinity = ~0ull;
+            } else {
+                r->u.MessageInterrupt.Translated.Level = (unsigned short)(p->msi_first >> 4);
+                r->u.MessageInterrupt.Translated.Vector = p->msi_first;
+                r->u.MessageInterrupt.Translated.Affinity = 1;      /* (the boot CPU) */
+            }
+        } else {
+            r->ShareDisposition = p->level ? NT_CmResourceShareShared : NT_CmResourceShareDeviceExclusive;
+            r->Flags = p->level ? NT_CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE : NT_CM_RESOURCE_INTERRUPT_LATCHED;
+            r->u.Interrupt.Level = (unsigned short)(k ? p->irql : p->gsi);
+            r->u.Interrupt.Vector = k ? p->vector : p->gsi;
             r->u.Interrupt.Affinity = k ? 1 : ~0ull;          /* (routed to the boot CPU) */
         }
     }
-    return true;
 }
 
 /* ---- the PCI bus driver's PDOs ---- */
@@ -319,11 +358,13 @@ static NT_STATUS pdo_pnp(NtPdo *p, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
         cmd |= 7;                                       /* I/O and memory decoding, bus mastering */
         if (p->vector) cmd &= (UINT16)~(1u << 10);      /* its interrupt line on */
         PciWrite16(d->bus, d->dev, d->func, 0x04, cmd);
+        NtPnpMsiEnable(p->pdo, true);                   /* (its messages, if it was given them) */
         st = NT_STATUS_SUCCESS;
         break;
     }
     case NT_IRP_MN_REMOVE_DEVICE:
     case NT_IRP_MN_SURPRISE_REMOVAL: {
+        NtPnpMsiEnable(p->pdo, false);
         UINT16 cmd = PciRead16(d->bus, d->dev, d->func, 0x04);
         PciWrite16(d->bus, d->dev, d->func, 0x04, (UINT16)((cmd & ~7u) | (1u << 10)));
         st = NT_STATUS_SUCCESS;
@@ -544,6 +585,130 @@ static void ascii_guid(const NT_GUID *g, char *out)
               g->Data4[1], g->Data4[2], g->Data4[3], g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
 }
 
+/* ---- message-signalled interrupts ---- */
+
+/* The offset of PCI capability @id in @d's configuration space, 0 if none */
+static UINT8 pci_cap(const PciDevice *d, UINT8 id)
+{
+    if (!(PciRead16(d->bus, d->dev, d->func, 0x06) & 0x10)) return 0;       /* (no capability list) */
+    UINT8 off = (UINT8)(PciRead32(d->bus, d->dev, d->func, 0x34) & 0xFC);
+    for (int i = 0; off && i < 48; i++) {
+        UINT32 hdr = PciRead32(d->bus, d->dev, d->func, off);
+        if ((UINT8)hdr == id) return off;
+        off = (UINT8)((hdr >> 8) & 0xFC);
+    }
+    return 0;
+}
+
+#define MSI_KEY "\\Device Parameters\\Interrupt Management\\MessageSignaledInterruptProperties"
+
+/* As Windows does: a device gets message-signalled interrupts when it has an MSI or MSI-X
+ * capability and its driver's INF opted in (HKR, "Interrupt Management\MessageSignaledInterruptProperties",
+ * MSISupported, 0x00010001, 1; MessageNumberLimit, if there, caps the count).  MSI-X is
+ * preferred; the count is a power of two (at most 16) of the vectors NtIntrMsiAlloc has.
+ * Sets the descriptor in p's lists either way. */
+static void msi_prepare(NtPdo *p)
+{
+    const PciDevice *d = &p->pci;
+    char key[240];
+    UINT32 on = 0, limit = 16;
+    ksnprintf(key, sizeof(key), ENUM_KEY "\\%s" MSI_KEY, p->instance);
+    if (p->line_only || !um_registry_get_dword(key, "MSISupported", &on) || on != 1) { set_interrupt(p, false); return; }
+    if (um_registry_get_dword(key, "MessageNumberLimit", &limit) && limit > 16) limit = 16;
+    UINT8 x = pci_cap(d, 0x11), m = x ? 0 : pci_cap(d, 0x05);
+    UINT32 n = 0;
+    if (x) n = (PciRead16(d->bus, d->dev, d->func, (UINT8)(x + 2)) & 0x7FF) + 1u;
+    else if (m) n = 1u << ((PciRead16(d->bus, d->dev, d->func, (UINT8)(m + 2)) >> 1) & 7);
+    if (n > limit) n = limit;
+    while (n & (n - 1)) n &= n - 1;                      /* (down to a power of two) */
+    UINT8 first = 0;
+    for (; n && !(first = NtIntrMsiAlloc(n)); n >>= 1) { }
+    if (!first) { set_interrupt(p, false); return; }
+    p->msi_kind = x ? 0x11 : 5;
+    p->msi_cap = x ? x : m;
+    p->msi_first = first;
+    p->msi_n = (UINT8)n;
+    set_interrupt(p, true);
+    kprintf("[PNP] %s: %s, %u message(s) from vector 0x%x at IRQL %u\n", p->instance, x ? "MSI-X" : "MSI", n, first,
+            first >> 4);
+}
+
+/* Give the vectors back (the device stopped) and fall back to the line */
+static void msi_release(NtPdo *p)
+{
+    if (!p->msi_n) return;
+    if (p->msi_on) NtPnpMsiEnable(p->pdo, false);
+    NtIntrMsiFree(p->msi_first, p->msi_n);
+    p->msi_n = 0;
+    set_interrupt(p, false);
+}
+
+void NtPnpLineOnly(NT_DEVICE_OBJECT *pdo)
+{
+    NtPdo *p = pdo_of(pdo);
+    if (p) p->line_only = true;
+}
+
+bool NtPnpMessagesOf(NT_DEVICE_OBJECT *pdo, UINT8 *first, UINT32 *count, UINT8 *irql)
+{
+    NtPdo *p = pdo_of(pdo);
+    if (!p || !p->msi_n) return false;
+    *first = p->msi_first;
+    *count = p->msi_n;
+    *irql = (UINT8)(p->msi_first >> 4);
+    return true;
+}
+
+/* Program the function's MSI or MSI-X capability with the block's messages and turn it on
+ * (when the device starts, as Windows' PCI driver does when it assigns the resources; a
+ * KMDF driver connects each message as a fully specified vector and never asks), or turn it off */
+void NtPnpMsiEnable(NT_DEVICE_OBJECT *pdo, bool on)
+{
+    NtPdo *p = pdo_of(pdo);
+    if (!p || !p->msi_n || on == p->msi_on) return;
+    const PciDevice *d = &p->pci;
+    UINT8 cap = p->msi_cap, ctl_off = (UINT8)(cap + 2);
+    UINT16 ctl = PciRead16(d->bus, d->dev, d->func, ctl_off), cmd = PciRead16(d->bus, d->dev, d->func, 0x04);
+    UINT64 addr;
+    UINT32 data;
+    if (!on) {
+        PciWrite16(d->bus, d->dev, d->func, ctl_off, (UINT16)(ctl & ~(p->msi_kind == 0x11 ? 0x8000u : 1u)));
+        if (p->vector) PciWrite16(d->bus, d->dev, d->func, 0x04, (UINT16)(cmd & ~(1u << 10)));   /* (its line on again) */
+        p->msi_on = false;
+        return;
+    }
+    IoApicMsiMessage(p->msi_first, &addr, &data);
+    if (p->msi_kind == 0x11) {
+        UINT32 tab = PciRead32(d->bus, d->dev, d->func, (UINT8)(cap + 4));
+        if (!p->msix_tab) {
+            UINT64 bar = PciBarAddress(d, tab & 7);
+            p->msix_tab = bar ? (volatile UINT32 *)PciMapPhysical(bar + (tab & ~7u), 16u * 16) : NULL;
+        }
+        if (!p->msix_tab) return;
+        for (unsigned i = 0; i < p->msi_n; i++) {
+            volatile UINT32 *e = p->msix_tab + 4 * i;
+            e[3] = 1;                                           /* (masked while it changes) */
+            e[0] = (UINT32)addr;
+            e[1] = (UINT32)(addr >> 32);
+            e[2] = data + i;
+            e[3] = 0;
+        }
+        ctl = (UINT16)((ctl | 0x8000u) & ~0x4000u);              /* enabled, function not masked */
+    } else {
+        bool is64 = ctl & 0x80;
+        PciWrite32(d->bus, d->dev, d->func, (UINT8)(cap + 4), (UINT32)addr);
+        if (is64) PciWrite32(d->bus, d->dev, d->func, (UINT8)(cap + 8), (UINT32)(addr >> 32));
+        PciWrite16(d->bus, d->dev, d->func, (UINT8)(cap + (is64 ? 12 : 8)), (UINT16)data);
+        if (ctl & 0x100) PciWrite32(d->bus, d->dev, d->func, (UINT8)(cap + (is64 ? 16 : 12)), 0);   /* (no vector masked) */
+        unsigned log2 = 0;
+        while ((1u << log2) < p->msi_n) log2++;
+        ctl = (UINT16)((ctl & ~0x70u) | (log2 << 4) | 1u);
+    }
+    PciWrite16(d->bus, d->dev, d->func, 0x04, (UINT16)(cmd | (1u << 10)));      /* (no INTx while messages are on) */
+    PciWrite16(d->bus, d->dev, d->func, ctl_off, ctl);
+    p->msi_on = true;
+}
+
 static void log_resources(NtPdo *p)
 {
     NT_CM_PARTIAL_RESOURCE_LIST *l = &p->xlat->List[0].PartialResourceList;
@@ -553,6 +718,10 @@ static void log_resources(NtPdo *p)
             kprintf("[PNP]   memory 0x%llx, %u bytes\n", (unsigned long long)r->u.Memory.Start, r->u.Memory.Length);
         else if (r->Type == NT_CmResourceTypePort)
             kprintf("[PNP]   I/O ports 0x%llx, %u\n", (unsigned long long)r->u.Port.Start, r->u.Port.Length);
+        else if (r->Type == NT_CmResourceTypeInterrupt && (r->Flags & NT_CM_RESOURCE_INTERRUPT_MESSAGE))
+            kprintf("[PNP]   interrupt: %u message(s) from vector 0x%x at IRQL %u\n",
+                    p->raw->List[0].PartialResourceList.PartialDescriptors[i].u.MessageInterrupt.Raw.MessageCount,
+                    r->u.MessageInterrupt.Translated.Vector, r->u.MessageInterrupt.Translated.Level);
         else if (r->Type == NT_CmResourceTypeInterrupt)
             kprintf("[PNP]   interrupt: GSI %u, vector 0x%x at IRQL %u\n",
                     p->raw->List[0].PartialResourceList.PartialDescriptors[i].u.Interrupt.Vector, r->u.Interrupt.Vector,
@@ -620,6 +789,7 @@ static UINT32 start_stack(NtPdo *p, const char *service)
     caps.Address = caps.UINumber = 0xFFFFFFFFu;
     send_pnp(p->pdo, NT_IRP_MN_QUERY_CAPABILITIES, &caps, NULL, NULL);
 
+    if (p->xlat && !p->parent) msi_prepare(p);
     kprintf("[PNP] %s: starting %s%s\n", p->instance, service[0] ? service : "it raw",
             p->xlat ? " with its resources" : "");
     if (p->xlat) log_resources(p);
@@ -627,6 +797,7 @@ static UINT32 start_stack(NtPdo *p, const char *service)
     if (!NT_SUCCESS(st)) {
         kprintf("[PNP] %s: IRP_MN_START_DEVICE failed (0x%08x)\n", p->instance, (UINT32)st);
         send_pnp(p->pdo, NT_IRP_MN_REMOVE_DEVICE, NULL, NULL, NULL);
+        msi_release(p);
         if (drv && p->pdo->AttachedDevice) nt_IoDetachDevice(p->pdo);
         unload_if_idle(drv);
         return PROB_FAILED_START;
@@ -757,6 +928,7 @@ NTSTATUS NtPnpStop(UINT32 node)
         nt_IoDetachDevice(p->pdo);
     }
     ifaces_off(p);
+    msi_release(p);
     p->started = false;
     if (!p->usb) PciClaim(&p->pci, NULL);
     PnpSetProblem(node, PROB_DISABLED);

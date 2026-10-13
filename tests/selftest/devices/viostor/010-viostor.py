@@ -29,8 +29,9 @@ TESTS = [
     Test('viostor write', r'cmd.exe /c "echo written through Storport> D:\written.txt & type D:\written.txt"',
          [r'written through Storport']),
     Test('viostor start at boot', 'shutdown /r /t 0',
-         [r'\[PNP\] PCI\\VEN_1AF4&DEV_1001\S*: started \(driver viostor\)', r'\[STOR\] viostor: adapter running', VOLUME],
+         [r'\[PNP\] PCI\\VEN_1AF4&DEV_1001\S*: started \(driver viostor\)', r'\[STOR\] viostor: adapter running'],
          reboot=True),
     Test('viostor after boot', r'cmd.exe /c "type D:\viostor.txt & type D:\written.txt"',
-         [r'NovaOS reads this file through viostor\.sys', r'written through Storport']),
+         [r'NovaOS reads this file through viostor\.sys', r'written through Storport'],
+         boot_expect=[VOLUME]),     # (the mount finishes after the boot log the reboot returns ends)
 ]

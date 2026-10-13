@@ -15,9 +15,18 @@
  *                    needs SeLoadDriverPrivilege: edutest.manifest asks
  *                    for highestAvailable)
  *   edutest absent   no device has the interface (after pnputil
- *                    /disable-device), and the old path no longer opens */
+ *                    /disable-device), and the old path no longer opens
+ *   edutest message  as edutest, and the interrupt must have come as an MSI message
+ *   edutest line     as edutest, and as the device's line (INTx)
+ *   edutest msi 1|0  turn MSISupported (HKLM\...\Enum\<device>\Device Parameters\Interrupt
+ *                    Management\MessageSignaledInterruptProperties) on or off; the device
+ *                    takes it when it starts next
+ *
+ * Without "message" or "line" either is accepted: the driver's INF does not set
+ * MSISupported, so the device starts on its line until "msi 1". */
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include "../../tools/drivertest/edutest.h"
@@ -82,10 +91,32 @@ static int done(const char *what)
     return failed;
 }
 
+/* MSISupported of the device whose interface path (or former path) is @path */
+static BOOL set_msi(const WCHAR *path, DWORD on)
+{
+    WCHAR inst[256], key[512];
+    instance_of(path, inst, 256);
+    swprintf(key, 512, L"SYSTEM\\CurrentControlSet\\Enum\\%ls\\Device Parameters\\Interrupt Management\\"
+                       L"MessageSignaledInterruptProperties", inst);
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return FALSE;
+    LONG e = RegSetValueExW(k, L"MSISupported", 0, REG_DWORD, (const BYTE *)&on, sizeof(on));
+    RegCloseKey(k);
+    return !e;
+}
+
 int main(int argc, char **argv)
 {
     WCHAR path[512];
     interface_path(path, 512);
+    if (argc > 2 && !strcmp(argv[1], "msi")) {
+        WCHAR old[512];
+        const WCHAR *where = path[0] ? path : (former_path(old, 512) ? old : NULL);
+        check(where != NULL, "the edu device is in the device tree");
+        check(where && set_msi(where, (DWORD)atoi(argv[2])), "set MSISupported");
+        printf("edu: MSISupported = %s\n", argv[2]);
+        return done("edutest msi");
+    }
     if (argc > 1 && !strcmp(argv[1], "absent")) {
         check(!path[0], "no device has edutest's interface after it was disabled");
         WCHAR old[512];
@@ -132,8 +163,21 @@ int main(int argc, char **argv)
     check(info.memory == 1 && info.interrupts == 1, "one memory BAR and one interrupt in the resources");
     check(info.bar_length == 0x100000, "the BAR is 1 MiB");
     check(info.vector >= 0x30 && info.vector < 0xF0 && info.irql == info.vector >> 4, "the translated interrupt's vector and IRQL");
-    check(!info.latched, "a PCI INTx interrupt is level-triggered");
-    check(info.connect_version == 2, "IoConnectInterruptEx fell back to line-based (no MSI)");
+    if (argc > 1) {
+        check(!strcmp(argv[1], "message") ? info.message : !info.message, "the interrupt came in the mode asked for");
+    }
+    if (info.message) {
+        printf("edu: MSI: %u message(s) from vector %u (IRQL %u, table says %u), address %llx data %x\n", info.message_count,
+               info.message_vector, info.message_irql, info.irql, (unsigned long long)info.message_address, info.message_data);
+        check(info.connect_version == 3, "IoConnectInterruptEx connected message-based");
+        check(info.message_count == 1, "edu's one message, in the raw descriptor and the table");
+        check(info.message_vector == info.vector && info.message_irql == info.irql, "the table agrees with the translated list");
+        check((info.message_address & ~0xFF000ull) == 0xFEE00000ull && info.message_data == info.message_vector,
+              "the message is a write to the local APIC for the vector");
+    } else {
+        check(!info.latched, "a PCI INTx interrupt is level-triggered");
+        check(info.connect_version == 2, "IoConnectInterruptEx fell back to line-based (no MSI)");
+    }
     check(info.dma_version == 3 && info.dma_registers > 0, "a version 3 DMA adapter with map registers");
     check(info.starts >= 1, "IRP_MN_START_DEVICE reached the driver");
 
@@ -154,6 +198,8 @@ int main(int argc, char **argv)
     check(f.isr_irql == info.irql, "the ISR ran at the interrupt's IRQL");
     check(f.dpc_irql == 2, "its DPC ran at DISPATCH_LEVEL");
     check(f.interrupts == before + 1, "one interrupt per factorial");
+    check(info.message ? f.message_interrupts == f.interrupts : f.message_interrupts == 0,
+          "the interrupts came through the routine the mode calls for");
 
     static unsigned char buf[sizeof(EDUTEST_DMA) + 4096], data[4096];
     static const unsigned int sizes[] = { 4096, 1500 };

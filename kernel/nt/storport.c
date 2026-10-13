@@ -17,8 +17,8 @@
  *   START_DEVICE         passed down to the PDO first; then
  *                        PORT_CONFIGURATION_INFORMATION from the resources
  *                        (access ranges, the interrupt), HwFindAdapter,
- *                        the interrupt connected (line-based: intr.c offers
- *                        no MSI yet), HwInitialize under the interrupt
+ *                        the interrupt connected (line-based: this host does
+ *                        not take MSI yet, so the PnP manager keeps the line on), HwInitialize under the interrupt
  *                        lock, the passive-level initialize routine
  *   requests             STORAGE_REQUEST_BLOCKs (SRB_EX, as miniports
  *                        that ask for them with SrbTypeFlags get them):
@@ -572,6 +572,7 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 
 static NT_API NT_STATUS add_device(NT_DRIVER_OBJECT *obj, NT_DEVICE_OBJECT *pdo)
 {
+    NtPnpLineOnly(pdo);                                   /* (this host connects the line: no MSI-X yet) */
     StorDriver *d = driver_of(obj);
     if (!d) return NT_STATUS_INVALID_DEVICE_REQUEST;
     StorAdapter *a = kzalloc(sizeof(*a));

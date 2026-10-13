@@ -9,7 +9,9 @@
  * device's resources (CM_RESOURCE_LIST, raw and translated), from which it
  * maps the memory BAR (MmMapIoSpace), connects its interrupt
  * (IoConnectInterruptEx, message-based with the line-based fallback, as
- * KMDF asks), gets a DMA adapter for the device's 28-bit DMA
+ * KMDF asks: with MSISupported set in the device's Interrupt Management
+ * key the resources carry an MSI message and the connect returns the
+ * message table, otherwise the line), gets a DMA adapter for the device's 28-bit DMA
  * (IoGetDmaAdapter) and turns the interface on.  The ISR runs at the
  * interrupt's IRQL, acknowledges the device and queues a DPC that wakes
  * the waiting request.
@@ -104,7 +106,7 @@ typedef struct {
     NT_KEVENT         ready;                     /* an adapter channel or scatter/gather list arrived */
     void             *map_base;
     NT_SCATTER_GATHER_LIST *sg;
-    volatile unsigned int isr_status, isr_irql, dpc_irql, interrupts, dma_interrupts;
+    volatile unsigned int isr_status, isr_irql, dpc_irql, interrupts, dma_interrupts, message_interrupts, bad_message_id;
     EDUTEST_INFO      info;
     int               started, removed, opens;
 } Ext;
@@ -197,6 +199,16 @@ static NT_API unsigned char isr(void *interrupt, void *ctx)
     return 1;
 }
 
+/* The same interrupt as a message: MessageId says which of the device's messages (edu has one) */
+static NT_API unsigned char message_isr(void *interrupt, void *ctx, unsigned int message_id)
+{
+    Ext *x = ctx;
+    unsigned char mine = isr(interrupt, ctx);
+    if (mine) x->message_interrupts++;
+    if (message_id) x->bad_message_id++;
+    return mine;
+}
+
 static NT_API void dpc(NT_KDPC *d, void *ctx, void *a1, void *a2)
 {
     (void)d; (void)a1; (void)a2;
@@ -233,6 +245,12 @@ static NT_STATUS start_hardware(Ext *x, NT_CM_RESOURCE_LIST *raw, NT_CM_RESOURCE
             in->irql = d->u.Interrupt.Level;
             in->raw_level = r->u.Interrupt.Level;
             in->latched = (d->Flags & NT_CM_RESOURCE_INTERRUPT_LATCHED) != 0;
+            if (d->Flags & NT_CM_RESOURCE_INTERRUPT_MESSAGE) {
+                in->message = 1;
+                in->vector = d->u.MessageInterrupt.Translated.Vector;
+                in->irql = d->u.MessageInterrupt.Translated.Level;
+                in->message_count = r->u.MessageInterrupt.Raw.MessageCount;
+            }
             break;
         }
     }
@@ -251,7 +269,7 @@ static NT_STATUS start_hardware(Ext *x, NT_CM_RESOURCE_LIST *raw, NT_CM_RESOURCE
     p.Version = NT_CONNECT_MESSAGE_BASED;                    /* (the line-based fallback when MSI is off) */
     p.MessageBased.PhysicalDeviceObject = x->pdo;
     p.MessageBased.ConnectionContext = &x->interrupt;
-    p.MessageBased.MessageServiceRoutine = 0;
+    p.MessageBased.MessageServiceRoutine = message_isr;
     p.MessageBased.ServiceContext = x;
     p.MessageBased.FallBackServiceRoutine = isr;
     NT_STATUS st = IoConnectInterruptEx(&p);
@@ -262,6 +280,14 @@ static NT_STATUS start_hardware(Ext *x, NT_CM_RESOURCE_LIST *raw, NT_CM_RESOURCE
         return st;
     }
     x->connect_version = in->connect_version = p.Version;
+    if (p.Version == NT_CONNECT_MESSAGE_BASED && x->interrupt) {
+        NT_IO_INTERRUPT_MESSAGE_INFO *t = x->interrupt;
+        in->message_irql = t->UnifiedIrql;
+        in->message_vector = t->MessageInfo[0].Vector;
+        in->message_data = t->MessageInfo[0].MessageData;
+        in->message_address = t->MessageInfo[0].MessageAddress;
+        if (t->MessageCount != in->message_count) in->message_count = 0xFFFF;        /* (disagrees with the raw list) */
+    }
 
     NT_DEVICE_DESCRIPTION dd;
     mzero(&dd, sizeof(dd));
@@ -409,6 +435,7 @@ static NT_STATUS factorial(Ext *x, unsigned int n, EDUTEST_FACT *out)
     out->isr_irql = x->isr_irql;
     out->dpc_irql = x->dpc_irql;
     out->interrupts = x->interrupts;
+    out->message_interrupts = x->message_interrupts;
     return NT_STATUS_SUCCESS;
 }
 

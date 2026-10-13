@@ -11,6 +11,13 @@
 # vetoes removal; pnputil /disable-device then removes it (query-remove,
 # remove; the driver unloads), /enable-device starts it again, a restart
 # starts it at boot, and a device left disabled stays so across a restart.
+# Message-signalled interrupts (step 30.3's last part): the INF does not opt in, so the device
+# starts on its line; "edutest msi 1" sets MSISupported (the key a Windows INF writes with
+# HKR, "Interrupt Management\\MessageSignaledInterruptProperties"), and the next start
+# gives the driver a CM_RESOURCE_INTERRUPT_MESSAGE descriptor and, from
+# IoConnectInterruptEx(MESSAGE_BASED), the message table: the interrupts of the
+# factorial and DMA tests then arrive as MSI writes through the message routine,
+# also after a restart; "msi 0" puts it back on its line.
 # (NovaOS has no PCI hot-unplug yet, so surprise removal is not exercised.)
 DOC = ('QEMU\'s edu PCI device: a Plug and Play driver (edutest.sys) installed with `pnputil /add-driver /install`, '
        'started by the PnP manager with the device\'s memory BAR and interrupt, driven by `edutest` (a factorial '
@@ -40,9 +47,20 @@ TESTS = [
     Test('edu enable', 'pnputil /enable-device /deviceid ' + EDU_ID,
          [r'Device enabled successfully', r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)']),
     Test('edu after enable', 'edutest', [r'edutest: \d+ passed, 0 failed']),
+    Test('edu msi on', 'edutest msi 1', [r'edu: MSISupported = 1', r'edutest msi: \d+ passed, 0 failed']),
+    Test('edu msi restart', 'pnputil /restart-device /deviceid ' + EDU_ID,
+         [r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: MSI, 1 message\(s\) from vector 0x[0-9a-f]+ at IRQL \d+',
+          r'\[PNP\]   interrupt: 1 message\(s\) from vector 0x[0-9a-f]+ at IRQL \d+',
+          r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)']),
+    Test('edu msi driver', 'edutest message', [r'edu: MSI: 1 message\(s\) from vector \d+', r'factorial 12 = 479001600',
+                                               r'dma 4096 bytes: .* ok, .* ok', r'edutest: \d+ passed, 0 failed']),
     Test('edu start at boot', 'shutdown /r /t 0',
          [r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)'], reboot=True),
-    Test('edu after boot', 'edutest', [r'edutest: \d+ passed, 0 failed']),
+    Test('edu after boot', 'edutest message', [r'edutest: \d+ passed, 0 failed']),
+    Test('edu msi off', 'edutest msi 0', [r'edu: MSISupported = 0', r'edutest msi: \d+ passed, 0 failed']),
+    Test('edu line restart', 'pnputil /restart-device /deviceid ' + EDU_ID,
+         [r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)']),
+    Test('edu line driver', 'edutest line', [r'edutest: \d+ passed, 0 failed']),
     Test('edu disable again', 'pnputil /disable-device /deviceid ' + EDU_ID, [r'Device disabled successfully']),
     Test('edu stays disabled', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('edu still disabled', 'pnputil /enum-devices /deviceid ' + EDU_ID, [r'Problem Code: +22 ']),

@@ -265,8 +265,8 @@ static BOOL addreg_line(const WCHAR *key, const WCHAR *value, void *ctx)
 {
     Reg *r = ctx;
     WCHAR line[512], root[16], sub[256], name[128], fl[32], data[256];
-    lstrcpynW(line, key, 512);
-    if (value[0]) { lstrcatW(line, L","); lstrcatW(line, value); }
+    lstrcpynW(line, key, 512);                               /* (a line without '=' comes whole as the value) */
+    if (value[0]) { if (line[0]) lstrcatW(line, L","); lstrcatW(line, value); }
     inf_field(line, 0, root, 16);
     if (!ieq_w(root, L"HKR")) return TRUE;
     inf_field(line, 1, sub, 256);

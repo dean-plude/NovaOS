@@ -46,3 +46,23 @@ device's memory, interrupt and DMA handed to it the way Windows hands them.
   removal vetoed while a program has it open, disable, enable and a start
   at boot.  NovaOS has no PCI hot-unplug yet, so surprise removal is
   handled but not tested.
+- **Message-signalled interrupts** (`kernel/nt/intr.c`, `pnp.c`): a driver
+  whose INF sets `MSISupported` under `Interrupt Management\MessageSignaledInterruptProperties`
+  (as virtio-win's do; `MessageNumberLimit` caps the count) on a device
+  with an MSI or MSI-X capability is started with a message interrupt
+  descriptor (raw: the message count; translated: the first vector of an
+  aligned block reserved from the 0x60 to 0xBF vectors) in place of the
+  line.  As Windows' PCI driver does, starting the device writes the
+  capability (address and data of a write to the boot CPU's local APIC;
+  MSI-X also fills the table) and turns it on; a driver connects with
+  `IoConnectInterruptEx` message-based (the `IO_INTERRUPT_MESSAGE_INFO`
+  table and a message routine per vector) or, as KMDF does, each vector
+  fully specified.  Without the opt-in, or on a device without the
+  capability, the connect falls back to the line; the Storport host keeps
+  the line.  The edu test shows both modes (`edutest msi 1`, restart,
+  `edutest message`), and virtio-win's `vioser.sys` now runs on MSI-X.
+  Two bugs found on the way: `HKR` lines of an INF's AddReg were never
+  applied (setupapi read a line without `=` as an empty key), and
+  `IoReleaseRemoveLockAndWait` released the lock once, not twice, so
+  removing a device whose driver used it (`pnputil /disable-device` on the edu device)
+  hung.

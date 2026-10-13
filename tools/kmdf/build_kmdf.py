@@ -12,11 +12,13 @@ into ~/.cache/novaos/wdf, applies the patches, compiles the kernel-mode
 framework (framework/kmdf and the kernel-mode half of framework/shared)
 with clang, and links Wdf01000.sys with lld-link /driver against import
 libraries for ntoskrnl.exe, hal.dll (kernel/nt/exports.h) and WdfLdr.sys.
-It also links WdfLdr.sys, the KMDF loader, and kmdftest.sys, a KMDF driver
-built as the WDK builds one (the client stub tools/kmdf/stub.c, which binds
-it to the framework, and tools/drivertest/kmdftest.c), and test-signs all
-three with tools/drivertest/mksys.py's certificate.  OUTDIR gets the three
-.sys files; the result is kept in ~/.cache/novaos/wdf/out-<hash of the
+It also links WdfLdr.sys, the KMDF loader, and two KMDF drivers built as
+the WDK builds one (the client stub tools/kmdf/stub.c, which binds them to
+the framework): kmdftest.sys (tools/drivertest/kmdftest.c) and kmdfedu.sys,
+the Plug and Play driver for QEMU's edu device (tools/drivertest/kmdfedu.c).
+It test-signs the first three with tools/drivertest/mksys.py's certificate;
+kmdfedu.sys comes as a package, as edutest.sys does: kmdfedu.inf and a
+test-signed catalog of both.  OUTDIR gets those files; the result is kept in ~/.cache/novaos/wdf/out-<hash of the
 inputs> and copied from there while nothing it is made from changed.
 
 The published source is the framework only, not the build around it: the
@@ -45,7 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
-from mksys import import_libs, test_signer                     # noqa: E402
+from mksys import import_libs, signed_package, test_signer                     # noqa: E402
 from sign import sign                                           # noqa: E402
 
 WDF_REPO = 'https://github.com/microsoft/Windows-Driver-Frameworks.git'
@@ -221,7 +223,7 @@ def patched_tree(src, dest):
     return dest
 
 
-OUTPUTS = ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys')
+OUTPUTS = ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys', 'kmdfedu.sys', 'kmdfedu.inf', 'kmdfedu.cat')
 CACHE = os.path.join(os.path.expanduser('~'), '.cache', 'novaos', 'wdf')
 
 
@@ -231,7 +233,8 @@ def inputs_hash():
     files = [os.path.join(d, n) for d, _, ns in os.walk(HERE) if '__pycache__' not in d for n in ns]
     files += [os.path.join(ROOT, *p.split('/')) for p in (
         'tools/drivertest/kmdftest.c', 'tools/drivertest/kmdftest.h', 'tools/drivertest/mksys.py',
-        'kernel/nt/exports.h', 'tools/authenticode/sign.py')]
+        'tools/drivertest/kmdfedu.c', 'tools/drivertest/kmdfedu.inf', 'tools/drivertest/edutest.h',
+        'kernel/nt/exports.h', 'tools/authenticode/sign.py', 'tools/authenticode/catalog.py')]
     for path in sorted(files):
         h.update(os.path.relpath(path, ROOT).encode() + b'\0' + open(path, 'rb').read())
     for tool in ('clang', 'lld-link'):
@@ -332,9 +335,10 @@ def main():
               '-I', os.path.join(fw, 'shared', 'inc', 'private', 'common'),
               '-isystem', os.path.join(work, 'ddk'), '-isystem', os.path.join(MINGW, 'ddk'), '-isystem', MINGW,
               '-include', os.path.join(HERE, 'inc', 'novaos_client.h')]
-    stub, test = os.path.join(work, 'stub.o'), os.path.join(work, 'kmdftest.o')
+    stub, test, edu = (os.path.join(work, n) for n in ('stub.o', 'kmdftest.o', 'kmdfedu.o'))
     run(['clang'] + client + ['-c', os.path.join(HERE, 'stub.c'), '-o', stub])
     run(['clang'] + client + ['-Wall', '-c', os.path.join(ROOT, 'tools', 'drivertest', 'kmdftest.c'), '-o', test])
+    run(['clang'] + client + ['-Wall', '-c', os.path.join(ROOT, 'tools', 'drivertest', 'kmdfedu.c'), '-o', edu])
     print(f'build_kmdf: compiled {len(fx)} framework files')
 
     # import libraries: the kernel's (mksys.py, from kernel/nt/exports.h) and WdfLdr.sys's
@@ -355,6 +359,9 @@ def main():
     # CR8 intrinsic: the same stand-ins Wdf01000.sys links)
     client_rt = [o for o in rt if os.path.basename(o) in ('rt_crt.c.o', 'rt_wdmsec.c.o')]
     link('kmdftest.sys', [test, stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
+    link('kmdfedu.sys', [edu, stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
+    # (signed by its catalog only: the .sys must be unsigned when the catalog is made)
+    signed_package(out, 'kmdfedu')
 
     # signed as NovaOS's other test drivers are (mksys.py): they load with
     # test signing on (docs/drivers.md says why the framework does too)
@@ -364,7 +371,7 @@ def main():
         data = open(path, 'rb').read()
         with open(path, 'wb') as f:
             f.write(sign(data, signer, [root], 'sha256'))
-    print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys and kmdftest.sys in {out}')
+    print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys, kmdftest.sys and kmdfedu.sys in {out}')
     if kept:                                       # (the last build only)
         for old in os.listdir(CACHE):
             if old.startswith('out-'):

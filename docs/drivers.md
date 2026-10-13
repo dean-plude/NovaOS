@@ -108,7 +108,17 @@ Windows (`tools/kmdf/build_kmdf.py`).  A KMDF driver starting imports
 Wdf01000: ...` lines.  For now the framework is test-signed,
 so a KMDF driver needs test signing on (below) until NovaOS trusts its own
 system files; class-extension drivers (those that bind with
-`WdfVersionBindClass`) do not load yet.
+`WdfVersionBindClass`) do not load yet.  A KMDF Plug and Play driver gets
+its hardware from the framework as on Windows: `kmdfedu.sys`
+(`tools/drivertest/kmdfedu.c`, the devices suite's "kmdfedu" boot), a
+KMDF driver for QEMU's `edu` device installed with `pnputil`, maps its
+BAR in `EvtDevicePrepareHardware`, has its interrupt object
+(`WdfInterruptCreate`) connected by the framework, on the line or on an
+MSI message when the device opts in, and moves buffers through
+scatter/gather and packet DMA transactions and a common buffer limited to
+the device's 28 address bits (the framework uses the DMA adapter's
+version 3 calls, `GetScatterGatherListEx`, `MapTransferEx` and the rest,
+which NovaOS's adapter answers as it does the older ones).
 
 The first third-party driver that runs unchanged is virtio-win's
 **`vioser.sys`** (step 30.5), the Red Hat serial driver Microsoft signed,

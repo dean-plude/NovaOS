@@ -1,7 +1,8 @@
 /*
- * edutest.h — what edutest.sys (tools/drivertest/edutest.c), the driver
- * for QEMU's edu device, and its test program (userland/programs/edutest.c)
- * agree on
+ * edutest.h — what the drivers for QEMU's edu device, edutest.sys (WDM,
+ * tools/drivertest/edutest.c) and kmdfedu.sys (KMDF,
+ * tools/drivertest/kmdfedu.c), and their test program
+ * (userland/programs/edutest.c) agree on
  */
 #pragma once
 
@@ -42,6 +43,8 @@ typedef struct {
     unsigned int       message_data;       /* its MessageData */
     long long          message_address;    /* its MessageAddress (0xFEExxxxx) */
     unsigned short     location[64];       /* IoGetDeviceProperty(DevicePropertyLocationInformation) */
+    unsigned int       kmdf_minor;         /* kmdfedu.sys: the KMDF 1.x it runs on (0: edutest.sys, WDM) */
+    unsigned int       wdf_message;        /* kmdfedu.sys: WdfInterruptGetInfo's MessageSignaled */
 } EDUTEST_INFO;
 
 typedef struct {

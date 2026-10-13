@@ -8,7 +8,8 @@
   `FindFirstFileNameW` and an offline volume check, in the devices
   suite's "ntfs" boot).  ~~Interrupted writes and a full volume~~ Done:
   a volume NovaOS is writing to is marked dirty until the changes are on
-  the disk, so after a power cut it mounts read-only (`ntfstest churn`,
-  the machine reset, `ntfstest cut`); a write past the free space fails
+  the disk, and after a power cut NovaOS checks and repairs it as chkdsk
+  would, leaving it clean (`ntfstest churn`, the machine reset, `ntfstest
+  cut`; every cut point on the host, `tests/tools/test_ntfs_cut.py`); a write past the free space fails
   with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
   disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.

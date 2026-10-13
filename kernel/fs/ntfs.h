@@ -12,7 +12,7 @@
  * $LogFile is marked clean when writing is enabled, and every change is
  * written through before its call returns, so the volume is consistent
  * between calls (a call cut off half-way is what NtfsMarkWhileWriting
- * is for).  Files kept in an attribute list, and compressed, sparse
+ * is for: NtfsEnableWrite repairs what it leaves).  Files kept in an attribute list, and compressed, sparse
  * or encrypted files, can't be rewritten.
  */
 
@@ -55,7 +55,12 @@ bool NtfsRead(NtfsVol *v, UINT64 mft, UINT64 off, void *buf, UINT64 len);
 /* Where new timestamps come from (100 ns units since 1601, UTC). */
 void   NtfsSetClock(UINT64 (*now)(void));
 /* Make the volume writable: loads the allocation bitmaps and $UpCase and
- * marks $LogFile clean.  False (and still read-only) if it can't. */
+ * marks $LogFile clean.  A volume marked dirty with an empty $LogFile (NovaOS
+ * was cut off writing to it) is checked first, and what a cut leaves
+ * (clusters and records marked wrongly in the bitmaps, directory indexes
+ * behind their files) repaired from the MFT records, as chkdsk would; one
+ * with anything else wrong, or that Windows marked, stays read-only.
+ * False (and still read-only) if it can't. */
 bool   NtfsEnableWrite(NtfsVol *v);
 bool   NtfsWritable(const NtfsVol *v);
 UINT64 NtfsFreeBytes(NtfsVol *v);
@@ -63,9 +68,9 @@ UINT64 NtfsFreeBytes(NtfsVol *v);
 bool   NtfsSync(NtfsVol *v);
 /* Mark the volume dirty while changes are being written to it: set before
  * the first change, cleared by NtfsMarkClean once the changes are on the
- * disk (and by NtfsUnmount), so a volume cut off mid-change mounts
- * read-only next time and Windows checks it (chkdsk).  For the volumes
- * mounted as drives D:, E:, ... */
+ * disk (and by NtfsUnmount), so a volume cut off mid-change is checked
+ * and repaired when it is made writable next time.  For drive C: and the
+ * volumes mounted as drives D:, E:, ... */
 void   NtfsMarkWhileWriting(NtfsVol *v);
 bool   NtfsMarkClean(NtfsVol *v);
 bool   NtfsMarked(const NtfsVol *v);

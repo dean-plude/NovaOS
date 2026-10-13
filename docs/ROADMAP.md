@@ -397,8 +397,9 @@ named program or test demonstrates it.
   `FindFirstFileNameW` and an offline volume check, in the devices
   suite's "ntfs" boot).  ~~Interrupted writes and a full volume~~ Done:
   a volume NovaOS is writing to is marked dirty until the changes are on
-  the disk, so after a power cut it mounts read-only (`ntfstest churn`,
-  the machine reset, `ntfstest cut`); a write past the free space fails
+  the disk, and after a power cut NovaOS checks and repairs it as chkdsk
+  would, leaving it clean (`ntfstest churn`, the machine reset, `ntfstest
+  cut`; every cut point on the host, `tests/tools/test_ntfs_cut.py`); a write past the free space fails
   with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
   disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
@@ -678,10 +679,14 @@ measured frame-time gain over the CPU path.
   echoes and edits lines as conhost does, and draws its screen again on
   `ResizePseudoConsole`; `conptytest` types into, resizes and exits
   `cmd.exe` as a terminal host and draws the same cells.
-- [ ] **26.3 NTFS robustness.** Verify interrupted writes and a full disk:
+- [x] **26.3 NTFS robustness.** Verify interrupted writes and a full disk:
   after a power cut during writes, `chkdsk` reports no errors; a full disk
-  returns `ERROR_DISK_FULL` without corruption. Existing tests cover
-  interrupted writes and full-disk behavior; the clean `chkdsk` gate remains.
+  returns `ERROR_DISK_FULL` without corruption.  A volume NovaOS was cut
+  off writing to (drive C: included) is checked and repaired from its MFT
+  records at the next mount, as chkdsk would; cut off after each of a
+  churn's 800-odd disk writes in turn (`tests/tools/test_ntfs_cut.py`)
+  and after a machine reset (`ntfstest cut`), it comes back with every
+  file whole and passes `scripts/ntfs-check.py` with no errors.
 - [ ] **26.4 Performance budget.** Build on the lock and redraw work in
   PRs #297–#306. CI should report boot time, Firefox start time and
   `smpstress` scaling on every run and fail on a large regression.

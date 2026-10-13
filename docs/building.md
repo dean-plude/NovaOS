@@ -413,16 +413,24 @@ each change is complete on disk when it returns, so Windows and
 `ntfsfix` find the volume clean.  While changes are being written, the
 volume is marked dirty (`$Volume`'s flag, set and on the disk before the
 first change, cleared a quiet second after the last one and at
-shutdown), so a volume cut off half-way (the power went, the machine was
-reset) is found dirty: NovaOS then mounts it read-only and Windows runs
-chkdsk on it (`ntfsfix -d` on Linux clears the mark).  A file rewritten
+shutdown; on an NTFS drive C:, while a save writes to it), so a volume
+cut off half-way (the power went, the machine was reset) is found dirty.
+NovaOS then checks it, as chkdsk would, before writing to it again: each
+change is written in an order that loses nothing, so a cut leaves only
+what the MFT records can put right (clusters or records marked taken
+that nothing uses, or used and marked free; a directory index behind
+its files, or half rewritten), and NovaOS rebuilds those from the
+records, clears the mark and mounts the volume read-write ("was cut off
+while being written: checked, ..." in the log).  Anything else (a record
+half written, a cluster two files claim) keeps the volume read-only for
+chkdsk on Windows.  A file rewritten
 on disk gets new clusters before it lets go of its old ones, so a cut
 leaves it whole, old or new.  A file may grow only as far as the
 volume's free clusters reach: a write past that fails with
 `ERROR_DISK_FULL` (nothing of it written) and the file keeps what it
 had.  A volume Windows left hibernated (Fast Startup included), with a
-chkdsk pending or with transactions in its `$LogFile` is mounted
-read-only, as ntfs-3g does.  `scripts/ntfs-dirty.py image [offset]`
+chkdsk pending (marked dirty, with Windows's own `$LogFile`) or with
+transactions in its `$LogFile` is mounted read-only, as ntfs-3g does.  `scripts/ntfs-dirty.py image [offset]`
 tells whether a volume is marked dirty.
 
 For a test disk (needs `ntfs-3g`):
@@ -639,14 +647,18 @@ quit `scripts/ntfs-check.py` must find the volume consistent and
 `ntfscat` must read the file by its third name.  Then `ntfstest fill
 D:\Full` fills the volume until a write fails with `ERROR_DISK_FULL`,
 and `ntfstest churn D:\Churn` rewrites four 4 MB files without end
-until the test resets the machine; the next boot must mount D:
-read-only because NovaOS left it marked dirty, and `ntfstest cut
-D:\Churn` must find each file whole (old or new).  Offline, the disk as
-it was after filling (copied once NovaOS had marked it clean) must pass
-`scripts/ntfs-check.py`, and the disk after the reset must be marked
-dirty and pass `scripts/ntfs-check.py --after-cut` (only what chkdsk
-mends without losing anything: the mark, clusters no file owns, stale
-sizes in a directory).  To run the suite:
+until the test resets the machine; the next boot must find D: cut off,
+check and repair it and mount it read-write, and `ntfstest cut
+D:\Churn` must find each file whole (old or new) and write a new one.
+Offline, the disk as it was after filling and again after the cut
+(each copied once NovaOS had marked it clean) must pass
+`scripts/ntfs-check.py` with no errors.  On the host,
+`tests/tools/test_ntfs_cut.py` runs the real `kernel/fs/ntfs.c` on a RAM
+disk (`tests/host/ntfs_cut.c`) through a churn of rewrites, creates,
+renames, links and deletes, cuts it off after each of its 800-odd disk
+writes in turn, and requires every cut disk to come back writable with
+every file whole and to pass `scripts/ntfs-check.py` once NovaOS has
+repaired it.  To run the suite:
 
 ```bash
 python3 tools/selftest.py --suite devices
@@ -946,7 +958,7 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 | `devnotifytest` | Devices arriving and leaving as Windows programs hear of it (the devices suite's "pnp" boot, after `pnptest`): the PlugPlay service running and its `HKLM\SYSTEM\CurrentControlSet\Enum` keys; `RegisterDeviceNotificationW` on a message-only window for `GUID_DEVINTERFACE_USB_DEVICE` and `RegisterDeviceNotificationA` on a hidden window for all interface classes, `DBT_DEVICEARRIVAL`/`DBT_DEVICEREMOVECOMPLETE` with `DEV_BROADCAST_DEVICEINTERFACE` (wide and ANSI names), a USB stick's drive letter as `DEV_BROADCAST_VOLUME`, `DBT_DEVNODES_CHANGED`; `CM_Register_Notification` for an interface class and for every device instance, as the test plugs in and takes out a USB keyboard and a FAT USB stick |
 | `devenumtest` | The device tree as Windows programs walk it (the devices suite's "pnp" boot, after `devnotifytest`), with a USB keyboard the test plugs in: cfgmgr32's `CM_Locate_DevNode`, `CM_Get_Child`/`Sibling`/`Parent`/`Depth`, `CM_Get_DevNode_Status`, registry and `DEVPKEY` properties, device ID lists filtered by enumerator, service, class, bus relations and presence, a phantom found only with `CM_LOCATE_DEVNODE_PHANTOM`, the keyboard interface list and `CM_Open_DevNode_Key`; setupapi's `SetupDiGetClassDevs` by setup class, enumerator and interface class, `SetupDiOpenDeviceInfo`/`SetupDiOpenDeviceInterface` by name and `SetupDiOpenDevRegKey` |
 | `imgsharetest` | The image cache, 64- and 32-bit: a program changes its writable data, makes a read-only page writable and changes it, loads `advapi32.dll`, then starts a copy of itself while it runs.  The copy's pages come from the cache: its data, zeroed data and read-only page are as the file has them, its imports work, and `LoadLibrary` of a DLL the first process holds works too.  The 64-bit build also commits fifteen sixteenths of the RAM at once (past the old 7/8 cap) and is refused more than the RAM.  `mem` then counts the loads that reused a kept image |
-| `ntfstest` | An NTFS drive D: full and cut off (the devices suite's "ntfs" boot, after `linktest restarted`): `ntfstest fill DIR` grows a file until `WriteFile` fails with `ERROR_DISK_FULL`, reads back what was written, finds the free space under 2 MB, a second file refused by `WriteFile` and `SetEndOfFile` alike, and the space back once the file is deleted; `ntfstest churn DIR` leaves `kept.txt` and rewrites four 4 MB files without end while the test resets the machine; `ntfstest cut DIR` in the next boot finds D: read-only (`ERROR_WRITE_PROTECT`: NovaOS left it marked dirty), `kept.txt` whole and each file one whole generation, old or new.  Offline, `scripts/ntfs-check.py` passes the disk after filling, and with `--after-cut` the disk after the reset (marked dirty, `scripts/ntfs-dirty.py`) |
+| `ntfstest` | An NTFS drive D: full and cut off (the devices suite's "ntfs" boot, after `linktest restarted`): `ntfstest fill DIR` grows a file until `WriteFile` fails with `ERROR_DISK_FULL`, reads back what was written, finds the free space under 2 MB, a second file refused by `WriteFile` and `SetEndOfFile` alike, and the space back once the file is deleted; `ntfstest churn DIR` leaves `kept.txt` and rewrites four 4 MB files without end while the test resets the machine; `ntfstest cut DIR` in the next boot (NovaOS found D: marked dirty, checked and repaired it) finds `kept.txt` whole, each file one whole generation, old or new, and D: taking a new file.  Offline, `scripts/ntfs-check.py` passes the disk after filling and after the cut with no errors |
 | `chkstktest` | ntdll's helpers for code built without a C runtime, 64- and 32-bit: the stack probe (`__chkstk` on x64, which leaves RSP alone; `_chkstk` on x86, which returns with ESP lowered by EAX, as MSVC's) on a thread of its own with a 1 MB stack, for sizes from 100 bytes to 256 KB, keeping the registers it must; the half-precision conversions LLVM's JIT calls (`__extendhfsf2`, `__extendhfdf2`, `__truncsfhf2`, `__truncdfhf2`) on normals, subnormals, infinities, NaN, ties to even and a double that must round once |
 | `wdmtest` | A Windows kernel-mode driver, `wdmtest.sys` (`tools/drivertest/wdmtest.c`, built by `tools/drivertest/mksys.py` with clang and lld-link `/driver`), test-signed by `mksys.py`'s test certificate, which the devices suite's "wdm" boot loads with `sc create WdmTest type= kernel` and `sc start` once test signing is on (before that it is refused with 577, as are an unsigned and a tampered copy even with it; `pnputil` stages the catalog-signed `wdmcat` package and refuses `wdmbad`, whose `.sys` its catalog does not list, and `wdmcat.sys` loads by its installed catalog): `\\.\WdmTest` opens, `WriteFile` and `ReadFile` round-trip bytes the driver keeps (end of file before any write), a buffered control code reverses bytes (too small an output buffer: `ERROR_INSUFFICIENT_BUFFER`), a neither-I/O one works on the program's own buffers, an unknown one fails, direct-I/O ones read and fill a buffer over four pages (committed, never touched) through its MDL and fail on a bad buffer, the driver's own checks of the kernel API pass (the IRQL in `CR8` and the exports, a DPC queued under a spin lock running when it is let go, an in-stack queued spin lock, `ExAllocatePoolWithTag` and `ExAllocatePool2`, an MDL for pool, an event, a semaphore, a 20 ms timer, a fast mutex, `MmGetSystemRoutineAddress`), a request the driver returns `STATUS_PENDING` for completes from a timer's DPC at `DISPATCH_LEVEL`, and the driver reports the `DRIVER_OBJECT`, `DEVICE_OBJECT`, `IRP` and `FILE_OBJECT` it sees (Windows' types and sizes, `UserMode`, its `DriverName`, `RegistryPath` and `ServiceKeyName`, the `FileName` of `\\.\WdmTest\sub`); `wdmtest absent`, after `sc stop`, finds the device gone, and the unload log names the pool block the driver left |
 | `avxtest` | The AVX state the kernel saves (64-bit): CPUID's OSXSAVE, AVX and F16C and XCR0's x87, SSE and AVX bits as a program sees them, `GetEnabledXStateFeatures` and `IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE)`; an F16C round trip; an 8 MiB `HeapAlloc` block 64-byte aligned and loaded with `vmovaps`; four threads on two CPUs each holding its own values in YMM0-15 across time slices; a `ud2` whose vectored handler finds YMM0-15 in its `CONTEXT_XSTATE` CONTEXT (FltSave and `LocateXStateFeature`), clobbers them, and gets them back through `NtContinue`; `GetThreadContext` with `CONTEXT_XSTATE` on a suspended thread |

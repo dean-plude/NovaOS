@@ -19,7 +19,9 @@
  * collation), which keeps the B+ tree valid without node-by-node
  * rebalancing.  There is no journalling: when writing starts, $LogFile is
  * reset (filled with 0xFF, as an empty log), so Windows finds a clean
- * volume and starts a new log.  Files with an $ATTRIBUTE_LIST, compressed,
+ * volume and starts a new log; a volume NovaOS was cut off writing to is
+ * checked and repaired from its MFT records when it is next made writable
+ * (repair()).  Files with an $ATTRIBUTE_LIST, compressed,
  * sparse or encrypted data are left alone.
  */
 
@@ -1414,13 +1416,18 @@ static bool hiber_one(const NtfsEntry *e, void *ctx)
     return false;
 }
 
-static const char *unclean(NtfsVol *v)
+/* Marked dirty with an empty $LogFile (as NovaOS leaves it, where
+ * Windows keeps its own log) is NovaOS cut off writing to it: @cut, and
+ * NtfsEnableWrite checks and repairs it.  Marked dirty otherwise is a
+ * chkdsk Windows has pending. */
+static const char *unclean(NtfsVol *v, bool *cut)
 {
     Stream st;
+    bool dirty = false;
+    *cut = false;
     if (open_stream(v, 3, AT_VOLUME_INFORMATION, NULL, 0, &st)) {
-        bool dirty = st.resident && st.size >= 12 && (rd16((const UINT8 *)st.value + 10) & 0x0001);
+        dirty = st.resident && st.size >= 12 && (rd16((const UINT8 *)st.value + 10) & 0x0001);
         stream_free(&st);
-        if (dirty) return "marked dirty (chkdsk is pending)";
     }
     if (!open_stream(v, 2, AT_DATA, NULL, 0, &st)) return "no $LogFile";
     UINT8 *p = kmalloc(512);
@@ -1432,9 +1439,11 @@ static const char *unclean(NtfsVol *v)
         if (ra + 0x10 > 512) why = "$LogFile unreadable";
         else if (rd16(p + ra + 0x0C) != 0xFFFF && !(rd16(p + ra + 0x0E) & 0x0002))
             why = "$LogFile has transactions Windows has not finished";
+        else if (dirty) why = "marked dirty (chkdsk is pending)";
     } else if (ok) {
         for (int i = 0; i < 512 && !why; i++)                 /* all 0xFF: an emptied log */
             if (p[i] != 0xFF) why = "$LogFile not recognised";
+        *cut = dirty && !why;
     }
     kfree(p);
     if (why) return why;
@@ -1448,10 +1457,15 @@ static const char *unclean(NtfsVol *v)
     return NULL;
 }
 
+struct Repairs { UINT64 lost, claimed, records, dirs; };     /* what repair() put right */
+static const char *repair(NtfsVol *v, struct Repairs *fix);
+static bool set_dirty(NtfsVol *v, bool dirty);
+
 bool NtfsEnableWrite(NtfsVol *v)
 {
     if (v->rw) return true;
-    const char *why = unclean(v);
+    bool cut;
+    const char *why = unclean(v, &cut);
     if (why) {
         kprintf("[NTFS] %s: \"%s\" stays read-only: %s\n", v->dev->name, v->label, why);
         return false;
@@ -1498,6 +1512,19 @@ bool NtfsEnableWrite(NtfsVol *v)
     v->hint = 0;
     v->nfree = 0;
     for (UINT64 c = 0; c < v->clusters; c++) if (!bit(v->cmap, c)) v->nfree++;
+    if (cut) {                                                   /* NovaOS was cut off writing to it */
+        struct Repairs fix;
+        why = repair(v, &fix);
+        if (why || !set_dirty(v, false)) {
+            kprintf("[NTFS] %s: \"%s\" stays read-only: marked dirty, and %s\n", v->dev->name, v->label,
+                    why ? why : "the mark can't be cleared");
+            goto fail_quiet;
+        }
+        kprintf("[NTFS] %s: \"%s\" was cut off while being written: checked, %llu lost clusters freed, "
+                "%llu clusters claimed, %llu MFT records put right, %llu directory indexes rebuilt\n",
+                v->dev->name, v->label, (unsigned long long)fix.lost, (unsigned long long)fix.claimed,
+                (unsigned long long)fix.records, (unsigned long long)fix.dirs);
+    }
     v->rw = true;
     kprintf("[NTFS] %s: \"%s\" is writable (%llu of %llu clusters free)\n", v->dev->name, v->label,
             (unsigned long long)NtfsFreeBytes(v) / v->cluster, (unsigned long long)v->clusters);
@@ -1505,6 +1532,7 @@ bool NtfsEnableWrite(NtfsVol *v)
 fail:
     kprintf("[NTFS] %s: \"%s\" stays read-only (its metadata could not be set up for writing)\n",
             v->dev->name, v->label);
+fail_quiet:
     stream_free(&v->cbm); stream_free(&v->mbm);
     kfree(v->cmap); kfree(v->mmap); kfree(v->upcase);
     v->cmap = v->mmap = NULL; v->upcase = NULL;
@@ -1525,8 +1553,9 @@ bool NtfsSync(NtfsVol *v)
  * is reset) can leave the volume inconsistent.  On a volume NovaOS marks
  * while writing, $Volume's dirty flag is set and on the disk before the
  * first change, and cleared once the changes are on the disk and nothing
- * is being written: a volume cut off mid-change is found dirty, so NovaOS
- * mounts it read-only and Windows runs chkdsk on it, as after a crash. */
+ * is being written: a volume cut off mid-change is found dirty, and
+ * NtfsEnableWrite checks and repairs it (repair(), below) before it is
+ * written to again, as chkdsk does after a crash. */
 static bool flush_dev(NtfsVol *v) { return !v->dev->flush || v->dev->flush(v->dev); }
 
 static bool set_dirty(NtfsVol *v, bool dirty)
@@ -1749,22 +1778,40 @@ static void touch_si(UINT8 *rec, UINT32 size, UINT64 t, bool data)
     wr64(val + 0x18, t);
 }
 
+/* What a directory entry copies from its file's record: sizes, times and
+ * attributes */
+typedef struct { UINT64 alloc, size, ct, mt; UINT32 attrs; bool dir; } FnInfo;
+
+static void fn_info(NtfsVol *v, const UINT8 *rec, FnInfo *f)
+{
+    memset(f, 0, sizeof(*f));
+    f->dir = rd16(rec + 0x16) & REC_IS_DIR;
+    const UINT8 *si = next_attr(rec, v->rec_size, NULL, AT_STANDARD_INFO);
+    if (si && !si[8] && rd32(si + 0x10) >= 0x30) {
+        const UINT8 *val = si + rd16(si + 0x14);
+        f->ct = rd64(val); f->mt = rd64(val + 8);
+        f->attrs = rd32(val + 0x20);
+    }
+    const UINT8 *da = f->dir ? NULL : find_attr((UINT8 *)rec, v->rec_size, AT_DATA, NULL, 0);
+    if (da && da[8]) { f->alloc = rd64(da + 0x28); f->size = rd64(da + 0x30); }
+    else if (da) { f->size = rd32(da + 0x10); f->alloc = align8((UINT32)f->size); }
+}
+
+/* Put @f into the $FILE_NAME key @k of a directory entry */
+static void fn_put(UINT8 *k, const FnInfo *f)
+{
+    wr64(k + 0x08, f->ct); wr64(k + 0x10, f->mt); wr64(k + 0x18, f->mt); wr64(k + 0x20, f->mt);
+    wr64(k + 0x28, f->alloc);
+    wr64(k + 0x30, f->size);
+    wr32(k + 0x38, (f->attrs & 0x37FFu & ~0x10u) | (f->dir ? FN_DIR_FLAG : 0));
+}
+
 /* Refresh the copy of record @rec's (@mft's) sizes, times and attributes
  * in the entries its directories hold for it */
 static bool update_dir_entries(NtfsVol *v, UINT64 mft, const UINT8 *rec)
 {
-    UINT64 alloc = 0, size = 0, ct = 0, mt = 0;
-    UINT32 attrs = 0;
-    bool is_dir = rd16(rec + 0x16) & REC_IS_DIR;
-    const UINT8 *si = next_attr(rec, v->rec_size, NULL, AT_STANDARD_INFO);
-    if (si && !si[8] && rd32(si + 0x10) >= 0x30) {
-        const UINT8 *val = si + rd16(si + 0x14);
-        ct = rd64(val); mt = rd64(val + 8);
-        attrs = rd32(val + 0x20);
-    }
-    const UINT8 *da = is_dir ? NULL : find_attr((UINT8 *)rec, v->rec_size, AT_DATA, NULL, 0);
-    if (da && da[8]) { alloc = rd64(da + 0x28); size = rd64(da + 0x30); }
-    else if (da) { size = rd32(da + 0x10); alloc = align8((UINT32)size); }
+    FnInfo f;
+    fn_info(v, rec, &f);
     bool ok = true;
     for (const UINT8 *fa = NULL; (fa = next_attr(rec, v->rec_size, fa, AT_FILE_NAME)); ) {
         UINT64 dir = rd64(fa + rd16(fa + 0x14)) & REF_MASK;
@@ -1774,11 +1821,7 @@ static bool update_dir_entries(NtfsVol *v, UINT64 mft, const UINT8 *rec)
         bool good = drec && read_record(v, dir, drec) && load_index(v, dir, drec, &ents, &n), any = false;
         for (UINT32 i = 0; good && i < n; i++) {
             if ((rd64(ents[i].e) & REF_MASK) != mft) continue;
-            UINT8 *k = ents[i].e + 0x10;
-            wr64(k + 0x08, ct); wr64(k + 0x10, mt); wr64(k + 0x18, mt); wr64(k + 0x20, mt);
-            wr64(k + 0x28, alloc);
-            wr64(k + 0x30, size);
-            wr32(k + 0x38, (attrs & 0x37FFu & ~0x10u) | (is_dir ? FN_DIR_FLAG : 0));
+            fn_put(ents[i].e + 0x10, &f);
             any = true;
         }
         if (good && any) good = write_index(v, dir, drec, ents, n);
@@ -2207,6 +2250,215 @@ bool NtfsNames(NtfsVol *v, UINT64 mft, bool (*add)(const char *path, void *ctx),
     }
     kfree(rec); kfree(up); kfree(path); kfree(part);
     return ok;
+}
+
+/* ---------------------------------------------------------------------------
+ * Checking a volume NovaOS was cut off writing to
+ *
+ * Each change is written in an order that loses nothing already on the
+ * disk: clusters and records are taken before they are used, and given back
+ * after the record stops using them; a record is written whole before the
+ * directories that list it.  So a change cut off half-way (the power went)
+ * leaves only what the records can put right: clusters or records marked
+ * taken that nothing uses, or used and already marked free; a directory
+ * index behind its files (a name not listed yet or still listed, a stale
+ * size), or half rewritten.  NtfsEnableWrite has repair() put those right
+ * as chkdsk would, from the MFT records, before the volume is written to
+ * again.  Anything else (a record that can't be read, a cluster two files
+ * claim, a name in no directory) is not NovaOS's doing, and the volume
+ * stays read-only for chkdsk on Windows.
+ * ------------------------------------------------------------------------- */
+
+typedef struct { UINT64 parent; Ent e; } Name;            /* a $FILE_NAME, as its directory's entry */
+
+static void names_sort(Name *a, Name *tmp, UINT32 n)       /* by directory; merge sort */
+{
+    if (n < 2) return;
+    UINT32 h = n / 2;
+    names_sort(a, tmp, h);
+    names_sort(a + h, tmp, n - h);
+    UINT32 i = 0, j = h, k = 0;
+    while (i < h && j < n) tmp[k++] = a[j].parent < a[i].parent ? a[j++] : a[i++];
+    while (i < h) tmp[k++] = a[i++];
+    while (j < n) tmp[k++] = a[j++];
+    memcpy(a, tmp, n * sizeof(Name));
+}
+
+/* The entry @have lists under @want's name (same file, same namespace), or NULL */
+static const Ent *ents_find(NtfsVol *v, const Ent *have, UINT32 n, const Ent *want)
+{
+    UINT32 lo = 0, hi = n;
+    while (lo < hi) {
+        UINT32 mid = (lo + hi) / 2;
+        int c = collate(v, have[mid].e + 0x10, want->e + 0x10);
+        if (!c) {
+            const UINT8 *a = have[mid].e, *b = want->e;
+            return rd64(a) == rd64(b) && a[0x10 + 0x41] == b[0x10 + 0x41] ? &have[mid] : NULL;
+        }
+        if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    return NULL;
+}
+
+/* Does @have list what @want does (sizes too, for files)? */
+static bool ents_same(const Ent *have, UINT32 hn, const Ent *want, UINT32 n)
+{
+    if (hn != n) return false;
+    for (UINT32 i = 0; i < n; i++) {
+        const UINT8 *a = have[i].e, *b = want[i].e, *ka = a + 0x10, *kb = b + 0x10;
+        if (rd64(a) != rd64(b) || ka[0x40] != kb[0x40] || ka[0x41] != kb[0x41] ||
+            memcmp(ka + 0x42, kb + 0x42, 2u * ka[0x40]) || (rd32(ka + 0x38) ^ rd32(kb + 0x38)) & FN_DIR_FLAG)
+            return false;
+        if ((rd64(a) & REF_MASK) >= MFT_FIRST_USER && !(rd32(kb + 0x38) & FN_DIR_FLAG) && rd64(ka + 0x30) != rd64(kb + 0x30))
+            return false;
+    }
+    return true;
+}
+
+static const char *repair(NtfsVol *v, struct Repairs *fix)
+{
+    const char *why = NULL;
+    UINT64 nrec = v->mft.size / v->rec_size;
+    if (nrec > v->mmap_bytes * 8) nrec = v->mmap_bytes * 8;
+    UINT32 chunk = BOUNCE / v->rec_size;
+    UINT8 *own = kzalloc(v->cbm.size), *buf = kmalloc(BOUNCE), *rec = kmalloc(v->rec_size);
+    UINT64 *dirs = NULL;
+    UINT32 ndirs = 0, dcap = 0, nnames = 0, ncap = 0;
+    Name *names = NULL;
+    memset(fix, 0, sizeof(*fix));
+    if (!own || !buf || !rec) { why = "out of memory"; goto out; }
+
+    /* Every record: what it uses, its names, whether it is a directory */
+    UINT64 mlo = ~0ull, mhi = 0;
+    for (UINT64 r0 = 0; r0 < nrec && !why; r0 += chunk) {
+        UINT32 k = nrec - r0 < chunk ? (UINT32)(nrec - r0) : chunk;
+        if (!stream_read(v, &v->mft, r0 * v->rec_size, buf, (UINT64)k * v->rec_size)) { why = "the MFT can't be read"; break; }
+        for (UINT32 i = 0; i < k && !why; i++) {
+            UINT64 r = r0 + i;
+            memcpy(rec, buf + (UINT64)i * v->rec_size, v->rec_size);
+            bool formatted = !memcmp(rec, "FILE", 4);
+            bool inuse = formatted && (rd16(rec + 0x16) & REC_IN_USE);
+            if (inuse && !fixup(rec, v->rec_size, "FILE")) { why = "a record can't be read (torn)"; break; }
+            if (inuse != bit(v->mmap, r) && (inuse || r >= FIRST_FREE_REC)) {
+                set_bit(v->mmap, r, inuse);                      /* (taken, not yet used; or freed, not yet given back) */
+                fix->records++;
+                if (r < mlo) mlo = r;
+                mhi = r;
+            }
+            if (!inuse) continue;
+            if (rd16(rec + 0x14) < 0x18 || rd16(rec + 0x14) >= v->rec_size || rec_used(rec) > v->rec_size) {
+                why = "a record's header is damaged";
+                break;
+            }
+            bool list = next_attr(rec, v->rec_size, NULL, AT_ATTRIBUTE_LIST) != NULL;
+            for (const UINT8 *a = NULL; !why && (a = next_attr(rec, v->rec_size, a, 0)); ) {
+                if (rd32(a) == AT_FILE_NAME && !a[8] && rd64(rec + 0x20) == 0) {
+                    UINT32 fl = rd32(a + 0x10);
+                    const UINT8 *val = a + rd16(a + 0x14);
+                    if (fl < 0x42 || fl < 0x42u + 2u * val[0x40]) { why = "a $FILE_NAME is damaged"; break; }
+                    Ent e = make_entry(seq_ref(rec, r), val, fl);
+                    if (!e.e) { why = "out of memory"; break; }
+                    if (r >= MFT_FIRST_USER && !list) {          /* (as update_dir_entries keeps it) */
+                        FnInfo f;
+                        fn_info(v, rec, &f);
+                        fn_put(e.e + 0x10, &f);
+                    }
+                    if (nnames == ncap) {
+                        ncap = ncap ? ncap * 2 : 256;
+                        Name *nn = kmalloc(ncap * sizeof(Name));
+                        if (!nn) { kfree(e.e); why = "out of memory"; break; }
+                        if (nnames) memcpy(nn, names, nnames * sizeof(Name));
+                        kfree(names);
+                        names = nn;
+                    }
+                    names[nnames++] = (Name){ rd64(val) & REF_MASK, e };
+                }
+                if (rd32(a) == AT_INDEX_ROOT && !a[8] && name_eq(a, I30, 4)) {
+                    if (ndirs == dcap) {
+                        dcap = dcap ? dcap * 2 : 64;
+                        UINT64 *nd = kmalloc(dcap * sizeof(UINT64));
+                        if (!nd) { why = "out of memory"; break; }
+                        if (ndirs) memcpy(nd, dirs, ndirs * sizeof(UINT64));
+                        kfree(dirs);
+                        dirs = nd;
+                    }
+                    dirs[ndirs++] = r;
+                }
+                if (!a[8]) continue;
+                Stream s;
+                memset(&s, 0, sizeof(s));
+                if (!decode_runs(v, &s, a)) why = "a record's runs are damaged";
+                for (UINT32 j = 0; !why && j < s.nruns; j++) {
+                    if (s.runs[j].lcn == SPARSE) continue;
+                    for (UINT64 c = s.runs[j].lcn; c < s.runs[j].lcn + s.runs[j].len; c++) {
+                        if (bit(own, c)) { why = "a cluster is claimed twice"; break; }
+                        set_bit(own, c, true);
+                    }
+                }
+                stream_free(&s);
+            }
+        }
+    }
+    if (why) goto out;
+
+    /* $Bitmap as the records use it, and the MFT's bitmap as they are */
+    UINT64 clo = ~0ull, chi = 0;
+    for (UINT64 c = 0; c < v->clusters; c++) {
+        if (bit(own, c) == bit(v->cmap, c)) continue;
+        if (bit(own, c)) fix->claimed++; else fix->lost++;
+        set_bit(v->cmap, c, bit(own, c));
+        if (c < clo) clo = c;
+        chi = c;
+    }
+    if (clo <= chi && !flush_bits(v, &v->cbm, v->cmap, v->cbm.size, clo, chi)) { why = "$Bitmap can't be written"; goto out; }
+    if (mlo <= mhi && !flush_bits(v, &v->mbm, v->mmap, v->mmap_bytes, mlo, mhi)) { why = "the MFT bitmap can't be written"; goto out; }
+    v->nfree = 0;
+    for (UINT64 c = 0; c < v->clusters; c++) if (!bit(v->cmap, c)) v->nfree++;
+
+    /* Each directory's index as its files' names have it */
+    if (nnames) {
+        Name *tmp = kmalloc(nnames * sizeof(Name));
+        if (!tmp) { why = "out of memory"; goto out; }
+        names_sort(names, tmp, nnames);
+        kfree(tmp);
+    }
+    UINT32 at = 0;
+    for (UINT32 i = 1; i < ndirs; i++)                           /* (dirs are in record order) */
+        if (dirs[i] <= dirs[i - 1]) { why = "the MFT lists a directory twice"; goto out; }
+    for (UINT32 d = 0; d < ndirs && !why; d++) {
+        UINT64 dir = dirs[d];
+        while (at < nnames && names[at].parent < dir) {           /* (in no directory) */
+            why = "a file is in no directory";
+            goto out;
+        }
+        Ent *want = NULL, *have = NULL;
+        UINT32 n = 0, hn = 0;
+        for (; at < nnames && names[at].parent == dir; at++) {
+            if (!ents_insert(v, &want, &n, names[at].e)) { why = "a directory lists one name twice"; break; }
+            names[at].e.e = NULL;
+        }
+        bool loaded = !why && read_record(v, dir, rec) && load_index(v, dir, rec, &have, &hn);
+        if (!why && loaded)
+            for (UINT32 i = 0; i < n; i++) {                     /* (a system file's entry stays as it is) */
+                const Ent *h = (rd64(want[i].e) & REF_MASK) < MFT_FIRST_USER ? ents_find(v, have, hn, &want[i]) : NULL;
+                if (h && h->len == want[i].len) memcpy(want[i].e, h->e, h->len);
+            }
+        if (!why && !(loaded && ents_same(have, hn, want, n))) {
+            if (!read_record(v, dir, rec) || !write_index(v, dir, rec, want, n)) why = "a directory index can't be written";
+            else fix->dirs++;
+        }
+        if (want) ents_free(want, n);
+        if (have) ents_free(have, hn);
+    }
+    if (!why && at < nnames) why = "a file is in no directory";
+out:
+    for (UINT32 i = 0; i < nnames; i++) kfree(names[i].e.e);
+    kfree(names);
+    kfree(dirs);
+    kfree(own);
+    kfree(buf);
+    kfree(rec);
+    return why;
 }
 
 /* ---------------------------------------------------------------------------

@@ -45,8 +45,6 @@ bool NtExportModule(const char *module)
 {
     for (unsigned i = 0; i < sizeof(g_exports) / sizeof(g_exports[0]); i++)
         if (same_ci(g_exports[i].module, module)) return true;
-    for (unsigned i = 0; i < sizeof(g_data) / sizeof(g_data[0]); i++)
-        if (same_ci(g_data[i].module, module)) return true;
     return false;
 }
 

@@ -522,6 +522,94 @@ bool um_registry_key_exists(const char *path)
     return yes;
 }
 
+/* Kernel-mode ZwQueryKey (nt/zw.c): a key's last-write time and counts
+ * (lengths in bytes, as KEY_FULL_INFORMATION has them); false when the key
+ * is missing.  @path is ASCII, without "\Registry\". */
+bool um_registry_query_key(const char *path, UmRegKeyInfo *info)
+{
+    UINT16 w[256];
+    UINT32 n = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    memset(info, 0, sizeof(*info));
+    um_lock_shared(&g_reg);
+    RegKey *k = NULL;
+    bool yes = walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k;
+    if (yes) {
+        um_lock(key_lock(k));
+        info->wtime = k->wtime;
+        for (RegKey *c = k->child; c; c = c->next) {
+            info->subkeys++;
+            if (2 * c->nlen > info->max_name) info->max_name = 2 * c->nlen;
+        }
+        for (RegValue *v = k->values; v; v = v->next) {
+            info->values++;
+            if (2 * v->nlen > info->max_value_name) info->max_value_name = 2 * v->nlen;
+            if (v->len > info->max_data) info->max_data = v->len;
+        }
+        um_unlock(key_lock(k));
+    }
+    um_unlock_shared(&g_reg);
+    return yes;
+}
+
+/* Kernel-mode ZwEnumerateKey (nt/zw.c): subkey @index of @path, its name
+ * (UTF-16, at most @cap characters copied) and last-write time.  Returns
+ * the name's length in characters, -1 past the last subkey, -2 when the
+ * key itself is missing. */
+int um_registry_enum_key(const char *path, UINT32 index, UINT16 *name, int cap, UINT64 *wtime)
+{
+    UINT16 w[256];
+    UINT32 n = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    int len = -2;
+    um_lock_shared(&g_reg);
+    RegKey *k = NULL;
+    if (walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k) {
+        RegKey *c = k->child;
+        for (UINT32 i = 0; c && i < index; i++) c = c->next;
+        len = -1;
+        if (c) {
+            len = (int)c->nlen;
+            if (cap > 0) memcpy(name, c->name, 2 * (size_t)(len < cap ? len : cap));
+            if (wtime) *wtime = c->wtime;
+        }
+    }
+    um_unlock_shared(&g_reg);
+    return len;
+}
+
+/* Kernel-mode ZwEnumerateValueKey (nt/zw.c): value @index of @path, its
+ * name (UTF-16, at most @ncap characters copied; *@nlen its length), type
+ * and data (at most @cap bytes copied).  Returns the data's length, -1
+ * past the last value, -2 when the key is missing. */
+int um_registry_enum_value(const char *path, UINT32 index, UINT16 *name, int ncap, int *nlen,
+                           UINT32 *type, void *out, int cap)
+{
+    UINT16 w[256];
+    UINT32 n = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    int len = -2;
+    um_lock_shared(&g_reg);
+    RegKey *k = NULL;
+    if (walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k) {
+        um_lock(key_lock(k));
+        RegValue *v = k->values;
+        for (UINT32 i = 0; v && i < index; i++) v = v->next;
+        len = -1;
+        if (v) {
+            int nl = (int)v->nlen;
+            if (nlen) *nlen = nl;
+            if (ncap > 0) memcpy(name, v->name, 2 * (size_t)(nl < ncap ? nl : ncap));
+            if (type) *type = v->type;
+            len = (int)v->len;
+            if (cap > 0) memcpy(out, v->data, (size_t)(len < cap ? len : cap));
+        }
+        um_unlock(key_lock(k));
+    }
+    um_unlock_shared(&g_reg);
+    return len;
+}
+
 /* HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Time Zones: one key
  * per zone NovaOS knows (ke/timezone.c), as Windows has them; rebuilt
  * every boot (volatile), so the hive on drive C: does not carry them */

@@ -86,7 +86,9 @@ static void pool_free(void *p, UINT32 tag, bool check_tag, void *caller)
         kprintf("[NT] BAD_POOL_CALLER (0xC2): %p freed from %p is not a pool block (freed twice?)\n", p, caller);
         return;
     }
-    if (check_tag && (tag & 0x7FFFFFFF) != (b->tag & 0x7FFFFFFF)) {   /* (bit 31: PROTECTED_POOL) */
+    /* (bit 31: PROTECTED_POOL; tag 0 is ExFreePool's, unchecked, as
+     * FTDI's ftser2k.sys frees with on Windows) */
+    if (check_tag && tag && (tag & 0x7FFFFFFF) != (b->tag & 0x7FFFFFFF)) {
         char want[5], got[5];
         tag_str(b->tag, want);
         tag_str(tag, got);

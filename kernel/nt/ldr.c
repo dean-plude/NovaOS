@@ -21,9 +21,10 @@
  * (devices, links) and unmaps the image; with files still open on its
  * devices that waits until the last one closes, as on Windows.
  *
- * An import from a module other than those NovaOS provides itself
- * (ntoskrnl.exe, hal.dll, and its own NDIS and Storport hosts, ndis.sys
- * and storport.sys: NtExportModule) is an export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
+ * An import from a module other than the kernel's own (ntoskrnl.exe,
+ * hal.dll, usbd.sys, wmilib.sys, storport.sys and ndis.sys:
+ * NtExportModule) is an
+ * export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
  * already loaded, or System32\drivers\<module> loaded for it: mapped the
  * same way (signature checked, its own imports bound), no driver object
  * and no DriverEntry, its DllInitialize called with its service key.
@@ -143,6 +144,7 @@ static NtDriver *find(const char *service)
     return NULL;
 }
 
+NtDriver *NtDrvFind(const char *service) { return find(service); }
 static NtDriver *find_image(const char *image)
 {
     for (NtDriver *d = g_drivers; d; d = d->next)
@@ -159,7 +161,6 @@ static bool loading_push(NtDriver *drv)
 
 static void loading_pop(void) { g_loading[--g_nloading] = NULL; }
 
-NtDriver *NtDrvFind(const char *service) { return find(service); }
 
 static NT_WCHAR *wide(const char *s, NT_UNICODE_STRING *u)
 {

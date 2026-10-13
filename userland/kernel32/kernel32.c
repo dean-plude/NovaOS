@@ -223,6 +223,7 @@ BOOL nt_path(const char *name, NtPath *p)
     /* devices pass through by name; so do the HID device interface paths
      * (\\?\HID#VID_...#{...}) setupapi and Raw Input hand out */
     const char *dev = 0;
+    char port[5];
     if (name != orig && (name[0] | 0x20) == 'h' && (name[1] | 0x20) == 'i' && (name[2] | 0x20) == 'd' && name[3] == '#') {
         int k = u2w(name, -1, p->buf + 4, MAX_PATH - 4);
         if (k < 0) { SetLastError(ERROR_INVALID_NAME); return FALSE; }
@@ -236,6 +237,14 @@ BOOL nt_path(const char *name, NtPath *p)
     for (const char *c = name; *c; c++) if (*c == '\\' || *c == '/' || *c == ':') base = c + 1;
     if ((base[0] | 0x20) == 'n' && (base[1] | 0x20) == 'u' && (base[2] | 0x20) == 'l' && (!base[3] || base[3] == '.')) dev = "NUL";
     if (ieq(name, "NUL:") || ieq(name, "nul:")) dev = "NUL";
+    /* COM1-COM9 and LPT1-LPT9 (a colon after is allowed) are the DOS device
+     * names a serial or parallel port driver links in \DosDevices */
+    if (name == orig && (iprefix(name, "COM") || iprefix(name, "LPT")) && name[3] >= '1' && name[3] <= '9' &&
+        (!name[4] || (name[4] == ':' && !name[5]))) {
+        for (int i = 0; i < 4; i++) port[i] = name[i] >= 'a' && name[i] <= 'z' ? (char)(name[i] - 32) : name[i];
+        port[4] = 0;
+        dev = port;
+    }
     /* \\.\NAME and \\?\NAME, where NAME is no drive, volume or UNC path,
      * is the object \??\NAME as given: a device's link, such as a
      * Windows driver's \DosDevices\NAME */

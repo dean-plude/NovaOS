@@ -90,6 +90,9 @@ order; --list prints them):
             second disk on QEMU's virtio-blk card with an NTFS volume, on
             which pnputil installs virtio-win's signed viostor.sys: it runs
             on NovaOS's Storport host and the volume mounts as D:;
+            "usbserial", QEMU's usb-serial converter (an FTDI FT232) on
+            xHCI, which gets FTDI's own driver by hardware ID and becomes
+            COM3, which serialtest loops data through;
             "netkvm", QEMU's virtio-net card, on which pnputil installs
             virtio-win's signed netkvm.sys in place of the built-in
             driver: it runs on NovaOS's own NDIS host while DHCP, a ping
@@ -107,7 +110,7 @@ failed and the rest run).
 The exit status is the number of failed tests (0: all passed), so CI can
 gate on it.  --summary appends a Markdown table (GitHub's step summary).
 """
-import argparse, copy, os, re, shutil, struct, subprocess, sys, tempfile, time
+import argparse, copy, os, re, shutil, socket, struct, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, qemu_binary
@@ -320,6 +323,7 @@ PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
+USBSERIAL = load_suite('devices/usbserial')
 VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
 NETKVM = load_suite('devices/netkvm')
@@ -657,6 +661,57 @@ def driversearch_boot(work):
     return ['-nic', 'user,model=virtio-net-pci', '-device', 'virtio-serial-pci'], [srv]
 
 
+def usbserial_boot(work):
+    """QEMU's usb-serial device (an FTDI FT232, USB\\VID_0403&PID_6001) on an
+    xHCI controller, its serial line looped back by a socket that returns
+    what it is sent, on a user-mode network where 10.0.2.2:18092
+    answers as the Microsoft Update Catalog does with FTDI's own driver
+    (tools/drivertest/ftdi_catalog.py): pnputil downloads and installs it
+    by hardware ID and serialtest loops data through the COM port
+    (tests/selftest/devices/usbserial)"""
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tools', 'drivertest', 'ftdi_catalog.py'), '18092', work])
+    end = time.time() + 900                   # (the first run downloads FTDI's cabinet)
+    while time.time() < end and srv.poll() is None:
+        try:
+            socket.create_connection(('127.0.0.1', 18092), 1).close()
+            break
+        except OSError:
+            time.sleep(1)
+    if srv.poll() is not None or time.time() >= end:
+        raise RuntimeError('the recorded Update Catalog for FTDI did not start (see catalog.log; is port 18092 in use?)')
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    # (QEMU attaches a usb-serial device once its chardev is connected: the
+    # line's far end is a socket that sends back what it is sent)
+    echo = subprocess.Popen([sys.executable, '-c', ECHO, str(port)])
+    for _ in range(50):
+        try:
+            socket.create_connection(('127.0.0.1', port), 1).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    return ['-nic', 'user,model=virtio-net-pci', '-device', 'qemu-xhci,id=usbserial-xhci',
+            '-chardev', f'socket,id=ftdi,host=127.0.0.1,port={port}',
+            '-device', 'usb-serial,bus=usbserial-xhci.0,chardev=ftdi'], [srv, echo]
+
+
+ECHO = """import socket, sys
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('127.0.0.1', int(sys.argv[1])))
+srv.listen(4)
+while True:
+    c, _ = srv.accept()
+    while True:
+        d = c.recv(65536)
+        if not d:
+            break
+        c.sendall(d)
+    c.close()
+"""
+
+
 # The suites that boot once per entry: (label, tests, setup(work) -> (QEMU arguments, processes[,
 # more Nova arguments]))
 BOOTS = {
@@ -667,6 +722,7 @@ BOOTS = {
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
+                ('usbserial', USBSERIAL, usbserial_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('netkvm', NETKVM, netkvm_boot)],
 }
 

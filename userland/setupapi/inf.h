@@ -27,8 +27,9 @@ void inf_close(Inf *inf);
 /* The value of @key in @section (sections of one name are one), quotes
  * taken off and %strkey% replaced from [Strings]; FALSE: no such line */
 BOOL inf_get(const Inf *inf, const WCHAR *section, const WCHAR *key, WCHAR *out, int cap);
-/* Call @fn for each line of @section: its key (the whole line when it has
- * no '=') and its value (as inf_get gives it); stops when @fn returns FALSE */
+/* Call @fn for each line of @section: its key ("" when it has no '=') and
+ * its value (the whole line then, as inf_get gives it); stops when @fn
+ * returns FALSE */
 typedef BOOL (*inf_line_fn)(const WCHAR *key, const WCHAR *value, void *ctx);
 void inf_lines(const Inf *inf, const WCHAR *section, inf_line_fn fn, void *ctx);
 /* Field @n (0-based) of a comma-separated value */

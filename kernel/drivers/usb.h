@@ -68,6 +68,9 @@ UINT16 UsbDevVendor(const UsbDev *d);
 UINT16 UsbDevProduct(const UsbDev *d);
 /* The device was unplugged: transfers to it fail at once */
 bool   UsbDevGone(const UsbDev *d);
+/* The device whose node in the Plug and Play tree is @node (a whole
+ * device's node, not one of a composite device's functions), or NULL */
+UsbDev *UsbDevByPnp(UINT32 node);
 /* A short name for logs, e.g. "port 3.2" */
 const char *UsbDevName(const UsbDev *d);
 /* The device's product name (its iProduct string, in ASCII) into @out;
@@ -103,6 +106,12 @@ bool UsbPipeListen(UsbPipe *p, int len, UsbInCallback cb, void *ctx);
  * bytes moved, or -1 on an error (*stalled: the endpoint halted, see
  * UsbPipeReset). */
 int  UsbBulk(UsbPipe *p, void *buf, UINT32 len, UINT32 timeout_ms, bool *stalled);
+/* The same for a transfer that may wait long (an IN pipe the device has
+ * no data for yet): when @timeout_ms runs out the transfer is taken back
+ * and USB_TIMED_OUT returned, nothing logged, so the caller can try
+ * again.  A pipe marked patient (usb_hc.h) sleeps between polls. */
+#define USB_TIMED_OUT (-2)
+int  UsbBulkPoll(UsbPipe *p, void *buf, UINT32 len, UINT32 timeout_ms, bool *stalled);
 /* SET_INTERFACE: switch interface @iface to alternate setting @alt.  The
  * pipes of its old setting close (stop their streams first; don't use
  * them again) and those of the new one can be opened. */

@@ -7,9 +7,11 @@
 NovaOS loads real signed Windows driver packages unchanged (step 30, the
 Windows driver model), so every symbol they import from ntoskrnl.exe and
 hal.dll must be an export kernel/nt/exports.h lists (step 30.2 completes the
-kernel API for exactly this reason).  This compares the import lists of the
-drivers we target first — the VirtIO serial driver (vioser.sys) and the
-KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) — against exports.h and
+kernel API for exactly this reason), as must those from usbd.sys and
+wmilib.sys, which NovaOS's kernel also provides (step 30.8).  This compares
+the import lists of the drivers we target first — the VirtIO serial driver
+(vioser.sys), the KMDF runtime and loader (Wdf01000.sys, wdfldr.sys) and
+FTDI's USB serial drivers (ftdibus.sys, ftser2k.sys) — against exports.h and
 fails naming any import that is neither provided nor allow-listed.
 
 The import lists live beside the wdm self-test
@@ -31,7 +33,7 @@ IMPORTS_DIR = os.path.join(ROOT, "tests", "selftest", "devices", "wdm", "imports
 # Modules NovaOS itself provides (its export tables; ndis.sys and storport.sys
 # are NovaOS's own NDIS and Storport hosts, kernel/nt/ndis.c and storport.c);
 # every import from one of these must appear in exports.h.
-PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "ndis.sys", "storport.sys"}
+PROVIDED_MODULES = {"ntoskrnl.exe", "hal.dll", "usbd.sys", "wmilib.sys", "ndis.sys", "storport.sys"}
 # The KMDF loader NovaOS ships (tools/kmdf/wdfldr.c): its exports are the
 # WDFLDR_EXPORTS list of tools/kmdf/build_kmdf.py, which its .def is made from.
 KMDF_BUILD = os.path.join(ROOT, "tools", "kmdf", "build_kmdf.py")

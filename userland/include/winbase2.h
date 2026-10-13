@@ -694,3 +694,96 @@ WINBASEAPI WORD WINAPI GlobalDeleteAtom(WORD a);
 #define ERROR_MENU_ITEM_NOT_FOUND 1456
 #define ERROR_RESOURCE_NAME_NOT_FOUND 1814
 #define ERROR_RESOURCE_TYPE_NOT_FOUND 1813
+
+/* Serial ports (the communications functions) */
+typedef struct _DCB {
+    DWORD DCBlength, BaudRate;
+    DWORD fBinary : 1, fParity : 1, fOutxCtsFlow : 1, fOutxDsrFlow : 1, fDtrControl : 2, fDsrSensitivity : 1,
+          fTXContinueOnXoff : 1, fOutX : 1, fInX : 1, fErrorChar : 1, fNull : 1, fRtsControl : 2, fAbortOnError : 1,
+          fDummy2 : 17;
+    WORD wReserved, XonLim, XoffLim;
+    BYTE ByteSize, Parity, StopBits;
+    char XonChar, XoffChar, ErrorChar, EofChar, EvtChar;
+    WORD wReserved1;
+} DCB, *LPDCB;
+typedef struct _COMMTIMEOUTS {
+    DWORD ReadIntervalTimeout, ReadTotalTimeoutMultiplier, ReadTotalTimeoutConstant, WriteTotalTimeoutMultiplier,
+          WriteTotalTimeoutConstant;
+} COMMTIMEOUTS, *LPCOMMTIMEOUTS;
+typedef struct _COMSTAT {
+    DWORD fCtsHold : 1, fDsrHold : 1, fRlsdHold : 1, fXoffHold : 1, fXoffSent : 1, fEof : 1, fTxim : 1, fReserved : 25;
+    DWORD cbInQue, cbOutQue;
+} COMSTAT, *LPCOMSTAT;
+typedef struct _COMMPROP {
+    WORD wPacketLength, wPacketVersion;
+    DWORD dwServiceMask, dwReserved1, dwMaxTxQueue, dwMaxRxQueue, dwMaxBaud, dwProvSubType, dwProvCapabilities,
+          dwSettableParams, dwSettableBaud;
+    WORD wSettableData, wSettableStopParity;
+    DWORD dwCurrentTxQueue, dwCurrentRxQueue, dwProvSpec1, dwProvSpec2;
+    WCHAR wcProvChar[1];
+} COMMPROP, *LPCOMMPROP;
+#define NOPARITY 0
+#define ODDPARITY 1
+#define EVENPARITY 2
+#define MARKPARITY 3
+#define SPACEPARITY 4
+#define ONESTOPBIT 0
+#define ONE5STOPBITS 1
+#define TWOSTOPBITS 2
+#define CBR_9600 9600
+#define CBR_19200 19200
+#define CBR_38400 38400
+#define CBR_57600 57600
+#define CBR_115200 115200
+#define DTR_CONTROL_DISABLE 0
+#define DTR_CONTROL_ENABLE 1
+#define DTR_CONTROL_HANDSHAKE 2
+#define RTS_CONTROL_DISABLE 0
+#define RTS_CONTROL_ENABLE 1
+#define RTS_CONTROL_HANDSHAKE 2
+#define RTS_CONTROL_TOGGLE 3
+#define CE_RXOVER 0x0001
+#define CE_OVERRUN 0x0002
+#define CE_RXPARITY 0x0004
+#define CE_FRAME 0x0008
+#define CE_BREAK 0x0010
+#define EV_RXCHAR 0x0001
+#define EV_RXFLAG 0x0002
+#define EV_TXEMPTY 0x0004
+#define EV_CTS 0x0008
+#define EV_DSR 0x0010
+#define EV_RLSD 0x0020
+#define EV_BREAK 0x0040
+#define EV_ERR 0x0080
+#define EV_RING 0x0100
+#define PURGE_TXABORT 0x0001
+#define PURGE_RXABORT 0x0002
+#define PURGE_TXCLEAR 0x0004
+#define PURGE_RXCLEAR 0x0008
+#define SETXOFF 1
+#define SETXON 2
+#define SETRTS 3
+#define CLRRTS 4
+#define SETDTR 5
+#define CLRDTR 6
+#define RESETDEV 7
+#define SETBREAK 8
+#define CLRBREAK 9
+#define MS_CTS_ON 0x0010
+#define MS_DSR_ON 0x0020
+#define MS_RING_ON 0x0040
+#define MS_RLSD_ON 0x0080
+WINBASEAPI BOOL WINAPI GetCommState(HANDLE h, LPDCB dcb);
+WINBASEAPI BOOL WINAPI SetCommState(HANDLE h, LPDCB dcb);
+WINBASEAPI BOOL WINAPI GetCommTimeouts(HANDLE h, LPCOMMTIMEOUTS t);
+WINBASEAPI BOOL WINAPI SetCommTimeouts(HANDLE h, LPCOMMTIMEOUTS t);
+WINBASEAPI BOOL WINAPI SetupComm(HANDLE h, DWORD in, DWORD out);
+WINBASEAPI BOOL WINAPI SetCommMask(HANDLE h, DWORD m);
+WINBASEAPI BOOL WINAPI GetCommMask(HANDLE h, LPDWORD m);
+WINBASEAPI BOOL WINAPI WaitCommEvent(HANDLE h, LPDWORD m, LPOVERLAPPED o);
+WINBASEAPI BOOL WINAPI ClearCommError(HANDLE h, LPDWORD errors, LPCOMSTAT st);
+WINBASEAPI BOOL WINAPI PurgeComm(HANDLE h, DWORD f);
+WINBASEAPI BOOL WINAPI EscapeCommFunction(HANDLE h, DWORD f);
+WINBASEAPI BOOL WINAPI GetCommModemStatus(HANDLE h, LPDWORD s);
+WINBASEAPI BOOL WINAPI GetCommProperties(HANDLE h, LPCOMMPROP p);
+WINBASEAPI BOOL WINAPI BuildCommDCBA(LPCSTR def, LPDCB dcb);

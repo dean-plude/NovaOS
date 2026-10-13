@@ -437,9 +437,8 @@ static int ehci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
         if (st == Q_STALLED) { *stalled = true; return -1; }
         if (st == Q_FAILED) return -1;
         if (p->dev->gone || UsbPast(until)) {
-            if (!p->dev->gone) kprintf("[USB] %s: bulk transfer timed out\n", p->dev->name);
             queue_cancel(e, eq, n);
-            return -1;
+            return p->dev->gone ? -1 : USB_TIMED_OUT;
         }
         pause_cpu();
     }

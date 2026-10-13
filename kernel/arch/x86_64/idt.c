@@ -361,7 +361,9 @@ static void dispatch(InterruptFrame *frame)
          * read on the timer tick, and the other drivers mask theirs and
          * poll).  The handler quiets a level-triggered source before the EOI. */
         IrqDispatch((UINT8)vector);
-        apic_eoi();
+        PKPCR k = KiGetCurrentKpcr();
+        if (!k->EoiSent) apic_eoi();                /* (Windows drivers' interrupts end themselves: nt/intr.c) */
+        k->EoiSent = 0;
         return;
     }
 

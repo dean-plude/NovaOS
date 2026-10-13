@@ -65,10 +65,12 @@ def _full_ok(nova):
 
 
 def _cut_ok(nova):
-    if not _clean(nova):
-        return 'D: is still marked dirty after the cut, the repair and ntfstest cut'
-    _snapshot('cut')(nova)
-    vol = _volume(nova, 'ntfs-cut')
+    """(Once QEMU has quit: the settle after ntfstest cut let NovaOS mark D:
+    clean first)"""
+    vol = _volume(nova, 'ntfs')
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, 'ntfs-dirty.py'), vol], capture_output=True, text=True)
+    if r.returncode:
+        return f'D: is still marked dirty after the repair and ntfstest cut ({r.stdout.strip() or r.stderr.strip()})'
     why = _check(vol)
     if why:
         return why
@@ -86,5 +88,6 @@ TESTS = [
     Test('ntfs cut', r'ntfstest churn D:\Churn', [r'\[NTFS\] \S+: "NOVATEST" was cut off while being written: checked',
                                                   r'\[DRIVES\] D: is NTFS volume "NOVATEST" on \S+ \(read-write\)'],
          cut=r'ntfstest churn: writing', before=_snapshot('full')),
-    Test('ntfs after cut', r'ntfstest cut D:\Churn', [r'ntfstest cut: \d+ passed, 0 failed'], check=_cut_ok),
+    Test('ntfs after cut', r'ntfstest cut D:\Churn', [r'ntfstest cut: \d+ passed, 0 failed'], settle=4,
+         check=_cut_ok),
 ]

@@ -14,9 +14,10 @@
  * 3. APIC timer calibration: The APIC timer's frequency is derived from
  *    the internal bus clock.  We calibrate it, and the TSC, against the
  *    HPET's main counter (hpet.c).  Where the firmware hides the HPET (and
- *    may gate the 8254's clock too, as recent Intel laptops do), the CPU
- *    reports both clocks in CPUID leaf 0x15 (or 0x16); the PIT (8254
- *    timer) is the last resort, with a time limit.
+ *    may gate the 8254's clock too, as recent Intel laptops do), Hyper-V
+ *    gives both clocks in its frequency MSRs and the CPU reports them in
+ *    CPUID leaf 0x15 (or 0x16); the PIT (8254 timer) is the last resort,
+ *    with a time limit.
  *
  * 4. The timer is one-shot: the scheduler arms it for the next 10 ms tick
  *    or the earliest timed sleeper on this CPU, whichever comes first
@@ -216,6 +217,27 @@ static uint32_t calibrate_from_cpuid(uint64_t *crystal_hz)
     return (uint32_t)(crystal / 100 / 16);         /* the APIC timer at div/16 */
 }
 
+/* Hyper-V, which has no HPET and may hide CPUID 0x15 and the PIT's gate: it
+ * gives the TSC's and the local APIC timer's frequencies in two MSRs
+ * (where CPUID 0x40000003 says so: EAX bit 11 and EDX bit 8, as Linux's
+ * ms_hyperv_init_platform reads them).  0: not Hyper-V, or not given. */
+#define HV_MSR_TSC_FREQUENCY  0x40000022
+#define HV_MSR_APIC_FREQUENCY 0x40000023
+
+static uint32_t calibrate_from_hyperv(void)
+{
+    if (!(cpuid(1, 0).ecx & (1u << 31))) return 0;
+    CpuidResult id = cpuid(0x40000000, 0);
+    if (id.ebx != 0x7263694D || id.ecx != 0x666F736F || id.edx != 0x76482074 || id.eax < 0x40000003)
+        return 0;                                  /* not "Microsoft Hv" */
+    CpuidResult f = cpuid(0x40000003, 0);
+    if (!(f.eax & (1u << 11)) || !(f.edx & (1u << 8))) return 0;
+    uint64_t tsc_hz = rdmsr(HV_MSR_TSC_FREQUENCY), apic_hz = rdmsr(HV_MSR_APIC_FREQUENCY);
+    if (tsc_hz < 1000000 || apic_hz < 1600) return 0;
+    g_tsc_per_tick = tsc_hz / 100;
+    return (uint32_t)(apic_hz / 100 / 16);         /* the APIC timer at div/16 */
+}
+
 /* -----------------------------------------------------------------------
  * The timer: one-shot or TSC-deadline, armed for a TSC value
  * ----------------------------------------------------------------------- */
@@ -280,13 +302,15 @@ void apic_init(void)
             lapic_read(LAPIC_ID) >> 24);
 
     /* 7. Calibrate the APIC timer and the TSC against the HPET, else take
-     *    them from CPUID, else measure them against the PIT */
+     *    them from Hyper-V's MSRs or CPUID, else measure them against the PIT */
     uint64_t crystal = 0;
     uint32_t ticks_10ms;
     const char *source;
     if (HpetPresent()) {
         ticks_10ms = calibrate_apic_timer_hpet();
         source = "calibrated against the HPET";
+    } else if ((ticks_10ms = calibrate_from_hyperv()) != 0) {
+        source = "from Hyper-V's frequency MSRs (no HPET)";
     } else if ((ticks_10ms = calibrate_from_cpuid(&crystal)) != 0) {
         source = "from CPUID 0x15 (no HPET)";
     } else if ((ticks_10ms = calibrate_apic_timer()) != 0) {

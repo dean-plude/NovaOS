@@ -113,11 +113,11 @@ static void mouse_checks(void)
     HvMouseDriver.packet(ctx, resp, sizeof(resp));
 
     UINT8 info[256] = { 0 };
-    UINT32 body = 8 + 30 + 9 + sizeof(rdesc);
+    UINT32 body = 8 + 32 + 9 + sizeof(rdesc);
     info[0] = 1; info[4] = (UINT8)body;                      /* pipe: data, size */
     info[8] = 2; info[12] = (UINT8)(body - 8);               /* INITIAL_DEVICE_INFO */
-    info[16] = 30; info[18] = 0x5E; info[19] = 0x04; info[20] = 0x21; info[21] = 0x06;   /* 045e:0621 */
-    UINT8 *hd = info + 16 + 30;
+    info[16] = 32; info[20] = 0x5E; info[21] = 0x04; info[22] = 0x21; info[23] = 0x06;   /* 045e:0621 */
+    UINT8 *hd = info + 16 + 32;
     hd[0] = 9; hd[1] = 0x21; hd[2] = 0x01; hd[3] = 0x01; hd[5] = 1; hd[6] = 0x22;
     hd[7] = sizeof(rdesc); hd[8] = 0;
     memcpy(hd + 9, rdesc, sizeof(rdesc));

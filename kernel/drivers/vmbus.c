@@ -76,6 +76,20 @@
 #define CHMSG_GPADL_CREATED      10
 #define CHMSG_INITIATE_CONTACT   14
 #define CHMSG_VERSION_RESPONSE   15
+#define CHMSG_UNLOAD             16
+#define CHMSG_UNLOAD_RESPONSE    17
+
+/* The reserved bits of the SynIC MSRs, which a write keeps as they are
+ * (the specification's rule, as Linux and FreeBSD do) */
+#define HV_SIMP_RSVD         0xFFEull     /* SIMP, SIEFP: bit 0 enable, bits 12-63 the page */
+#define HV_SINT_RSVD         (~0x300FFull) /* vector, masked (16), auto-EOI (17) */
+#define HV_SCONTROL_RSVD     (~1ull)
+
+/* How long the host gets to answer one message.  It answers in
+ * microseconds, but the delay loop counts the TSC, whose rate came from a
+ * calibration that may be off under a hypervisor: generous, so a slow
+ * clock never cuts the handshake short */
+#define REPLY_MS             5000
 
 #define RING_PAGES   10                   /* each way, as Linux's input drivers */
 #define MAX_OFFERS   32
@@ -274,8 +288,8 @@ static bool connect(void)
         c.monitor_page1 = phys(mon);
         c.monitor_page2 = phys(mon) + VMBUS_PAGE;
         UINT64 st = post_message(&c, sizeof(c));
-        UINT32 got = st ? 0 : wait_message(msg, 1000);
-        while (got && got != CHMSG_VERSION_RESPONSE) got = wait_message(msg, 1000);
+        UINT32 got = st ? 0 : wait_message(msg, REPLY_MS);
+        while (got && got != CHMSG_VERSION_RESPONSE) got = wait_message(msg, REPLY_MS);
         ChVersionResponse *r = (ChVersionResponse *)msg;
         if (got && r->supported) {
             if (v >= 0x50000 && r->msg_conn_id) g_msg_conn = r->msg_conn_id;
@@ -283,6 +297,9 @@ static bool connect(void)
             return true;
         }
         kernel_free_pages(mon, 2);
+        kprintf("[VMBUS] VMBus %u.%u: %s\n", v >> 16, v & 0xFFFF,
+                st ? "cannot post the message" : got ? "not taken" : "no answer");
+        if (!st && !got) return false;    /* (the host answers even a version it refuses) */
         if (st && v < 0x50000) {          /* (an older host has no connection 4: tried on) */
             kprintf("[VMBUS] Cannot post messages (hypercall status 0x%lx)\n", st);
             return false;
@@ -316,9 +333,9 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     g.byte_count = 2 * RING_PAGES * VMBUS_PAGE;
     for (int i = 0; i < 2 * RING_PAGES; i++) g.pfn[i] = (phys(rings) >> 12) + i;
     UINT64 st = post_message(&g, sizeof(g));
-    UINT32 got = st ? 0 : wait_message(msg, 1000);
+    UINT32 got = st ? 0 : wait_message(msg, REPLY_MS);
     while (got && !(got == CHMSG_GPADL_CREATED && ((ChGpadlCreated *)msg)->gpadl == g.gpadl))
-        got = wait_message(msg, 1000);
+        got = wait_message(msg, REPLY_MS);
     if (!got || ((ChGpadlCreated *)msg)->status) {
         kprintf("[VMBUS] %s: the host did not take its rings (status 0x%lx/%u)\n", drv->name,
                 st, got ? ((ChGpadlCreated *)msg)->status : 0);
@@ -334,9 +351,9 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     op.target_vp = g_vp;
     op.downstream_offset = RING_PAGES;
     st = post_message(&op, sizeof(op));
-    got = st ? 0 : wait_message(msg, 1000);
+    got = st ? 0 : wait_message(msg, REPLY_MS);
     while (got && !(got == CHMSG_OPENCHANNEL_RESULT && ((ChOpenResult *)msg)->openid == op.openid))
-        got = wait_message(msg, 1000);
+        got = wait_message(msg, REPLY_MS);
     if (!got || ((ChOpenResult *)msg)->status) {
         kprintf("[VMBUS] %s: the host did not open it (status 0x%lx/%u)\n", drv->name,
                 st, got ? ((ChOpenResult *)msg)->status : 0);
@@ -351,6 +368,19 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
 
 static void irq_ignored(void *ctx) { (void)ctx; }
 
+/* Drop a connection someone before NovaOS made (the firmware, or a NovaOS
+ * that restarted without a reset), so INITIATE_CONTACT starts afresh */
+static void unload(void)
+{
+    UINT8 msg[240];
+    ChHeader u = { CHMSG_UNLOAD, 0 };
+    g_msg_conn = VMBUS_CONN_MESSAGE;
+    if (post_message(&u, sizeof(u))) { g_msg_conn = VMBUS_CONN_MESSAGE_5; post_message(&u, sizeof(u)); }
+    UINT32 got;
+    while ((got = wait_message(msg, REPLY_MS)) && got != CHMSG_UNLOAD_RESPONSE) {}
+    kprintf("[VMBUS] Unload: %s\n", got ? "done" : "no answer");
+}
+
 bool VmbusInit(void)
 {
     if (!(cpuid(1, 0).ecx & (1u << 31))) return false;            /* no hypervisor */
@@ -360,9 +390,11 @@ bool VmbusInit(void)
     CpuidResult f = cpuid(0x40000003, 0);
     if (!(f.eax & HV_FEAT_SYNIC) || !(f.eax & HV_FEAT_HYPERCALL) ||
         !(f.ebx & HV_PRIV_POST_MESSAGE) || !(f.ebx & HV_PRIV_SIGNAL_EVENT)) {
-        kprintf("[VMBUS] Hyper-V without the SynIC or its hypercalls: no VMBus\n");
+        kprintf("[VMBUS] Hyper-V without the SynIC or its hypercalls (features 0x%x, privileges 0x%x): no VMBus\n",
+                f.eax, f.ebx);
         return false;
     }
+    kprintf("[VMBUS] Hyper-V found (features 0x%x, privileges 0x%x)\n", f.eax, f.ebx);
 
     g_hypercall_page = kernel_alloc_pages(1);
     g_simp = kernel_alloc_pages(1);
@@ -383,19 +415,25 @@ bool VmbusInit(void)
     g_vp = (f.eax & HV_FEAT_VP_INDEX) ? (UINT32)rdmsr(HV_MSR_VP_INDEX) : 0;
 
     IrqInstall(IRQ_VMBUS, irq_ignored, NULL);   /* (the slot is polled; the interrupt only needs its EOI) */
-    wrmsr(HV_MSR_SIMP, phys(g_simp) | 1);
-    wrmsr(HV_MSR_SIEFP, phys(siefp) | 1);
-    wrmsr(HV_MSR_SINT0 + VMBUS_SINT, IRQ_VMBUS);
-    wrmsr(HV_MSR_SCONTROL, 1);
+    wrmsr(HV_MSR_SIMP, (rdmsr(HV_MSR_SIMP) & HV_SIMP_RSVD) | phys(g_simp) | 1);
+    wrmsr(HV_MSR_SIEFP, (rdmsr(HV_MSR_SIEFP) & HV_SIMP_RSVD) | phys(siefp) | 1);
+    wrmsr(HV_MSR_SINT0 + VMBUS_SINT, (rdmsr(HV_MSR_SINT0 + VMBUS_SINT) & HV_SINT_RSVD) | IRQ_VMBUS);
+    wrmsr(HV_MSR_SCONTROL, (rdmsr(HV_MSR_SCONTROL) & HV_SCONTROL_RSVD) | 1);
 
-    if (!connect()) return false;
+    if (!connect()) {                     /* (a connection left over: drop it, then once more) */
+        unload();
+        if (!connect()) return false;
+    }
 
     UINT8 msg[240];
     ChHeader req = { CHMSG_REQUESTOFFERS, 0 };
     if (post_message(&req, sizeof(req))) { kprintf("[VMBUS] Cannot ask for the devices\n"); return false; }
     for (;;) {
         UINT32 got = wait_message(msg, 2000);
-        if (!got || got == CHMSG_ALLOFFERS_DELIVERED) break;
+        if (!got || got == CHMSG_ALLOFFERS_DELIVERED) {
+            kprintf("[VMBUS] %d devices offered%s\n", g_noffers, got ? "" : " (the list never ended)");
+            break;
+        }
         if (got != CHMSG_OFFERCHANNEL) continue;
         ChOffer *o = (ChOffer *)msg;
         char g[40];
@@ -417,6 +455,7 @@ bool VmbusInit(void)
         for (UINT32 d = 0; d < sizeof(g_drivers) / sizeof(g_drivers[0]); d++)
             if (!memcmp(g_offers[i].type, g_drivers[d]->type, 16) && g_nch < MAX_CHANNELS)
                 open_channel(&g_offers[i], g_drivers[d]);
+    if (!g_nch) kprintf("[VMBUS] No keyboard or mouse channel open\n");
     __atomic_store_n(&g_ready, true, __ATOMIC_RELEASE);
     return g_nch > 0;
 }

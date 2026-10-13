@@ -1870,19 +1870,6 @@ K32 BOOL WINAPI GetVolumePathNamesForVolumeNameW(LPCWSTR vol, LPWSTR buf, DWORD 
 }
 K32 BOOL WINAPI SetComputerNameExW(int type, LPCWSTR name) { (void)type; (void)name; SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
 
-#define NO_DEVICE() do { SetLastError(ERROR_INVALID_HANDLE); return FALSE; } while (0)
-K32 BOOL WINAPI GetCommState(HANDLE h, PVOID dcb) { (void)h; (void)dcb; NO_DEVICE(); }
-K32 BOOL WINAPI SetCommState(HANDLE h, PVOID dcb) { (void)h; (void)dcb; NO_DEVICE(); }
-K32 BOOL WINAPI SetCommTimeouts(HANDLE h, PVOID t) { (void)h; (void)t; NO_DEVICE(); }
-K32 BOOL WINAPI SetCommMask(HANDLE h, DWORD m) { (void)h; (void)m; NO_DEVICE(); }
-K32 BOOL WINAPI WaitCommEvent(HANDLE h, LPDWORD m, LPOVERLAPPED o) { (void)h; (void)m; (void)o; NO_DEVICE(); }
-K32 BOOL WINAPI ClearCommError(HANDLE h, LPDWORD e, PVOID st) { (void)h; (void)e; (void)st; NO_DEVICE(); }
-K32 BOOL WINAPI ClearCommBreak(HANDLE h) { (void)h; NO_DEVICE(); }
-K32 BOOL WINAPI SetCommBreak(HANDLE h) { (void)h; NO_DEVICE(); }
-K32 BOOL WINAPI EscapeCommFunction(HANDLE h, DWORD f) { (void)h; (void)f; NO_DEVICE(); }
-K32 BOOL WINAPI GetCommModemStatus(HANDLE h, LPDWORD s) { (void)h; (void)s; NO_DEVICE(); }
-K32 BOOL WINAPI PurgeComm(HANDLE h, DWORD f) { (void)h; (void)f; NO_DEVICE(); }
-K32 BOOL WINAPI TransmitCommChar(HANDLE h, char c) { (void)h; (void)c; NO_DEVICE(); }
 K32 DWORD WINAPI GetTapeParameters(HANDLE h, DWORD op, LPDWORD n, LPVOID info) { (void)h; (void)op; (void)n; (void)info; return ERROR_INVALID_HANDLE; }
 K32 DWORD WINAPI SetTapeParameters(HANDLE h, DWORD op, LPVOID info) { (void)h; (void)op; (void)info; return ERROR_INVALID_HANDLE; }
 K32 DWORD WINAPI GetTapePosition(HANDLE h, DWORD t, LPDWORD p, LPDWORD lo, LPDWORD hi) { (void)h; (void)t; (void)p; (void)lo; (void)hi; return ERROR_INVALID_HANDLE; }

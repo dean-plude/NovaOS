@@ -23,10 +23,16 @@
  *               NtDeviceIoControlFile and NtClose on a Windows device turn into
  *   pnp.c       the Plug and Play manager: a PCI function's PDO, the
  *               driver installed on it (AddDevice, IRP_MN_START_DEVICE with
- *               its resources, removal), device interfaces and properties
+ *               its resources, removal), the children a bus driver
+ *               reports, device interfaces, properties and registry keys
+ *   usbd.c      the USB bus interface: a USB device's PDO, the URBs a USB
+ *               client driver sends it, usbd.sys's exports
  *   intr.c      device interrupts (IoConnectInterrupt(Ex)) at DIRQL
  *   dma.c       device registers (MmMapIoSpace), contiguous memory and DMA
  *               adapters (IoGetDmaAdapter)
+ *   storport.c  storport.sys: the Storport host storage miniports run on,
+ *               each disk it finds handed to the block layer (storport.h:
+ *               the Storport structures)
  *   wdm.h       the structures drivers see, in Windows' x64 layout
  *
  * Program-facing glue (the system calls and handles) is in um/um_driver.c.
@@ -95,6 +101,10 @@ bool      NtPsHandleClose(void *handle);
 
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
+/* exports.c: whether the kernel itself provides @module's exports
+ * (ntoskrnl.exe, hal.dll, and the usbd.sys, wmilib.sys and storport.sys
+ * NovaOS writes) */
+bool      NtExportModule(const char *module);
 
 /* io.c */
 void      NtIoInit(void);
@@ -135,6 +145,29 @@ void      NtPnpBoot(void);
 int       NtPnpInterfaces(UINT32 node, NT_GUID *out, int max);
 /* The translated interrupt the PnP manager gave PDO @pdo */
 bool      NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql);
+/* A USB device (node @node) was plugged in or enumerated at boot with no
+ * NovaOS driver: start the Windows driver installed on it, if any (later,
+ * on a worker thread; any thread may call this) */
+void      NtPnpUsbArrived(UINT32 node);
+/* Device node @node's hardware left (unplugged): IRP_MN_SURPRISE_REMOVAL
+ * and IRP_MN_REMOVE_DEVICE to its stack and its children's, later, on a
+ * worker thread */
+void      NtPnpSurpriseRemoval(UINT32 node);
+
+/* usbd.c: the USB bus interface for Windows USB client drivers.  The PDO
+ * of the USB device whose node is @node (made the first time), or NULL */
+NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node);
+/* A USB PDO's DevicePropertyAddress (16: its port) or BusNumber (14) */
+bool      NtUsbPdoProperty(NT_DEVICE_OBJECT *pdo, int prop, UINT32 *num);
+
+/* io.c: give unnamed device @d a name, as Windows names a PDO a bus driver left
+ * unnamed (\Device\NTPNP_nnnnnnnn) */
+NTSTATUS  NtIoNameDevice(NT_DEVICE_OBJECT *d);
+
+/* PDO @pdo's PCI configuration space (bytes read or written), and its
+ * device instance (PCI\VEN_...), for ndis.c and storport.c */
+UINT32    NtPnpConfig(NT_DEVICE_OBJECT *pdo, bool write, void *buf, UINT32 off, UINT32 len);
+const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo);
 
 /* intr.c: a vector of its own for GSI @gsi, routed (masked until a driver
  * connects to it) to the boot CPU; 0 if it cannot be routed */

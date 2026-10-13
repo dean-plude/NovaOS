@@ -53,6 +53,33 @@ NT_API NTSTATUS nt_WmiTraceMessage(UINT64 logger, UINT32 flags, void *guid, UINT
     return NT_STATUS_SUCCESS;
 }
 
+/* -----------------------------------------------------------------------
+ * wmilib.sys: the WMI library a WDM driver hands its IRP_MJ_SYSTEM_CONTROL
+ * requests to.  Nothing on NovaOS sends WMI requests yet (no WMI service;
+ * IoWMIRegistrationControl registers nothing), so a request that does
+ * reach a driver is not one of its registered blocks: WmiSystemControl
+ * says to pass it down its stack, as Windows does for another provider's.
+ * ----------------------------------------------------------------------- */
+enum { IrpProcessed, IrpNotCompleted, IrpNotWmi, IrpForward };
+
+NT_API NTSTATUS nt_WmiSystemControl(void *wmi_context, NT_DEVICE_OBJECT *dev, NT_IRP *irp, int *disposition)
+{
+    (void)wmi_context; (void)dev;
+    if (disposition) *disposition = IrpForward;
+    return irp ? irp->IoStatus.Status : NT_STATUS_SUCCESS;
+}
+
+NT_API void nt_IofCompleteRequest(NT_IRP *irp, char boost);
+
+NT_API NTSTATUS nt_WmiCompleteRequest(NT_DEVICE_OBJECT *dev, NT_IRP *irp, NTSTATUS status, UINT32 used, char boost)
+{
+    (void)dev;
+    irp->IoStatus.Status = status;
+    irp->IoStatus.Information = used;
+    nt_IofCompleteRequest(irp, boost);
+    return status;
+}
+
 /* WmiTraceMessageVa: the va_list form, dropped the same way */
 NT_API NTSTATUS nt_WmiTraceMessageVa(UINT64 logger, UINT32 flags, void *guid, UINT16 num, __builtin_ms_va_list ap)
 {

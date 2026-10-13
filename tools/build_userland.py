@@ -631,6 +631,12 @@ for d, _, names in sorted(os.walk(wdmdir)):
     for n in sorted(names):
         rel = os.path.relpath(os.path.join(d, n), wdmdir).replace(os.sep, '\\')
         built.append((f'\\Tests\\Wdm\\{rel}', os.path.join(d, n)))
+# 3a2d. edutest.sys and its package (INF, catalog), the Plug and Play driver
+# for QEMU's edu device the edu self-test installs with pnputil (step 30.3)
+edudir = os.path.join(out, 'edutest')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), edudir, 'edutest'])
+for n in sorted(os.listdir(edudir)):
+    built.append((f'\\Tests\\Edu\\{n}', os.path.join(edudir, n)))
 # 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
 # MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
 # that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in

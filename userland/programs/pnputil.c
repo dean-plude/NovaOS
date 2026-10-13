@@ -17,13 +17,15 @@
  *                          with their hardware and compatible IDs (/ids) and
  *                          the published packages whose models match them
  *                          (/drivers)
- *   pnputil /scan-devices [/instanceid <id>] [/search-online [/source <url>]]
+ *   pnputil /scan-devices [/instanceid <id>] [/search-online [/source <url>] [/install]]
  *                          rescan the devices; /search-online (NovaOS's):
  *                          then download a driver package by hardware ID
  *                          from the Microsoft Update Catalog for each device
  *                          with no driver (or the one named) and stage it in
  *                          the driver store (/source: another server that
- *                          answers as the Catalog does)
+ *                          answers as the Catalog does; /install: install
+ *                          it on the device too, and search again for the
+ *                          devices the drivers started bring)
  *
  * (and Windows 7's -a, -i -a, -d and -e).  setupapi (driver.c) keeps the
  * store; newdev installs on devices: /install puts a package on each
@@ -963,6 +965,8 @@ static BOOL in_store(const WCHAR *hw, const WCHAR *compat, WCHAR *name)
     return found;
 }
 
+static WCHAR g_found_inf[MAX_PATH];       /* the INF of the package found for the device */
+
 /* Download update @u, check it, and stage its package if it has one for the
  * device: TRUE once a package is published */
 static BOOL try_update(const WCHAR *source, const Update *u, const WCHAR *hw, const WCHAR *compat)
@@ -1091,6 +1095,7 @@ static BOOL try_update(const WCHAR *source, const Update *u, const WCHAR *hw, co
     printf("Driver package added successfully.\n");
     printf("Published Name:             %ls\n", published);
     printf("Driver Status:              Staged (pnputil /add-driver %ls /install installs it on the device)\n", published);
+    lstrcpynW(g_found_inf, inf, MAX_PATH);
     return TRUE;
 }
 
@@ -1128,38 +1133,55 @@ static BOOL search_device(const WCHAR *source, const WCHAR *hw, const WCHAR *com
     return FALSE;
 }
 
-static int scan_devices(const WCHAR *instance, BOOL online, const WCHAR *source)
+static int scan_devices(const WCHAR *instance, BOOL online, BOOL install, const WCHAR *source)
 {
     printf("Scanning for device hardware changes...\nScan complete.\n");
     if (!online) return 0;
     printf("\nSearching for drivers online: %ls\n\n", source);
-    ULONG len = 0;
-    CM_Get_Device_ID_List_SizeW(&len, NULL, 0);
-    WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
-    if (!ids || CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0)) { printf("Failed to enumerate devices.\n"); return 1; }
-    int searched = 0, found = 0;
-    for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
-        DWORD dn;
-        ULONG status = 0, problem = 0;
-        if (instance && _wcsicmp(instance, id)) continue;
-        if (CM_Locate_DevNodeW(&dn, id, 0) || CM_Get_DevNode_Status(&status, &problem, dn, 0)) continue;
-        if (problem != 28 && !instance) continue;
-        WCHAR desc[256], hw[1024], compat[1024], have[MAX_PATH];
-        prop(dn, CM_DRP_DEVICEDESC, desc, 256);
-        prop(dn, CM_DRP_HARDWAREID, hw, 1024);
-        prop(dn, CM_DRP_COMPATIBLEIDS, compat, 1024);
-        printf("Instance ID:                %ls\n", id);
-        printf("Device Description:         %ls\n", desc);
-        searched++;
-        if (!hw[0] && !compat[0]) printf("Not searched:               the device has no hardware IDs\n");
-        else if (in_store(hw, compat, have)) {
-            printf("Driver package already in the driver store: %ls\n", have);
-            found++;
-        } else if (search_device(source, hw, compat)) found++;
-        else printf("No driver was found for this device.\n");
-        printf("\n");
+    /* With /install a driver found is installed on the device at once, as
+     * Windows Update does; a device it starts may be a bus with children of
+     * its own (a USB serial converter's COM port), so the tree is searched
+     * again until a pass installs nothing new */
+    static WCHAR tried[64][200];
+    int ntried = 0, searched = 0, found = 0;
+    for (int pass = 0, more = 1; more && pass < 4; pass++) {
+        more = 0;
+        ULONG len = 0;
+        CM_Get_Device_ID_List_SizeW(&len, NULL, 0);
+        WCHAR *ids = malloc((len + 1) * sizeof(WCHAR));
+        if (!ids || CM_Get_Device_ID_ListW(NULL, ids, len + 1, 0)) { printf("Failed to enumerate devices.\n"); free(ids); return 1; }
+        for (WCHAR *id = ids; *id; id += wcslen(id) + 1) {
+            DWORD dn;
+            ULONG status = 0, problem = 0;
+            if (instance && _wcsicmp(instance, id)) continue;
+            if (CM_Locate_DevNodeW(&dn, id, 0) || CM_Get_DevNode_Status(&status, &problem, dn, 0)) continue;
+            if (problem != 28 && !instance) continue;
+            BOOL seen = FALSE;
+            for (int i = 0; i < ntried && !seen; i++) seen = !_wcsicmp(tried[i], id);
+            if (seen || ntried >= 64) continue;
+            lstrcpynW(tried[ntried++], id, 200);
+            WCHAR desc[256], hw[1024], compat[1024], have[MAX_PATH];
+            prop(dn, CM_DRP_DEVICEDESC, desc, 256);
+            prop(dn, CM_DRP_HARDWAREID, hw, 1024);
+            prop(dn, CM_DRP_COMPATIBLEIDS, compat, 1024);
+            printf("Instance ID:                %ls\n", id);
+            printf("Device Description:         %ls\n", desc);
+            searched++;
+            g_found_inf[0] = 0;
+            if (!hw[0] && !compat[0]) printf("Not searched:               the device has no hardware IDs\n");
+            else if (in_store(hw, compat, have)) {
+                printf("Driver package already in the driver store: %ls\n", have);
+                GetWindowsDirectoryW(g_found_inf, MAX_PATH);
+                lstrcatW(g_found_inf, L"\\INF\\");
+                lstrcatW(g_found_inf, have);
+                found++;
+            } else if (search_device(source, hw, compat)) found++;
+            else printf("No driver was found for this device.\n");
+            if (install && g_found_inf[0] && install_on_devices(g_found_inf)) more = 1;
+            printf("\n");
+        }
+        free(ids);
     }
-    free(ids);
     if (!searched) printf("%s\n", instance ? "No such device is on the system." : "No device is missing a driver.");
     else printf("Devices searched:           %d\nDrivers found:              %d\n", searched, found);
     return g_unreachable ? 1 : 0;
@@ -1174,7 +1196,7 @@ static int usage(void)
            "        [/enum-drivers]\n"
            "        [/disable-device | /enable-device | /restart-device <instance ID | /deviceid <ID>>]\n"
            "        [/enum-devices [/connected | /disconnected] [/class <name>] [/instanceid <id>] [/ids] [/drivers]]\n"
-           "        [/scan-devices [/instanceid <id>] [/search-online [/source <url>]]]\n");
+           "        [/scan-devices [/instanceid <id>] [/search-online [/source <url>] [/install]]]\n");
     return 1;
 }
 
@@ -1215,9 +1237,10 @@ int main(int argc, char **argv)
     if (is(op, "/enum-drivers") || is(op, "-e")) { enum_drivers(); return 0; }
     if (is(op, "/scan-devices")) {
         static WCHAR inst[200], source[512] = CATALOG;
-        BOOL online = FALSE, one = FALSE;
+        BOOL online = FALSE, one = FALSE, install = FALSE;
         for (int i = 2; i < argc; i++) {
             if (is(argv[i], "/search-online")) online = TRUE;
+            else if (is(argv[i], "/install")) install = TRUE;
             else if ((is(argv[i], "/instanceid") || is(argv[i], "/source")) && i + 1 < argc) {
                 BOOL src = is(argv[i], "/source");
                 MultiByteToWideChar(CP_ACP, 0, argv[++i], -1, src ? source : inst, src ? 512 : 200);
@@ -1227,7 +1250,7 @@ int main(int argc, char **argv)
         }
         size_t n = wcslen(source);
         while (n && source[n - 1] == '/') source[--n] = 0;
-        return scan_devices(one ? inst : NULL, online, source);
+        return scan_devices(one ? inst : NULL, online, install, source);
     }
     if (is(op, "/disable-device") || is(op, "/enable-device") || is(op, "/restart-device"))
         return argc == 3 ? devices_op(op, argv[2], FALSE) : argc == 4 && is(argv[2], "/deviceid") ? devices_op(op, argv[3], TRUE)

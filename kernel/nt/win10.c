@@ -210,52 +210,9 @@ NT_API NTSTATUS nt_IoUnregisterPlugPlayNotificationEx(void *handle) { return nt_
 /* -----------------------------------------------------------------------
  * Po: the power framework
  * ----------------------------------------------------------------------- */
-typedef void (NT_API *PoFxComponentCallback)(void *ctx, UINT32 component);
-
-typedef struct {
-    PoFxComponentCallback active, idle;
-    void *ctx;
-} PoFxHandle;
-
-/* PO_FX_DEVICE: V1 (Version 1) has the callbacks at 8 and the context at
- * 56; V2 and V3 have a ULONGLONG Flags first (callbacks at 16, the context
- * at 64 and, after the directed power callbacks, 88) */
-NT_API NTSTATUS nt_PoFxRegisterDevice(NT_DEVICE_OBJECT *pdo, const UINT8 *device, PoFxHandle **out)
-{
-    (void)pdo;
-    UINT32 version = *(const UINT32 *)device;
-    UINT32 cb = version == 1 ? 8 : 16, ctx = version == 1 ? 56 : version == 2 ? 64 : 88;
-    if (version < 1 || version > 3) return NT_STATUS_INVALID_PARAMETER;
-    PoFxHandle *h = kzalloc(sizeof(*h));
-    if (!h) return STATUS_INSUFFICIENT_RESOURCES;
-    h->active = *(PoFxComponentCallback const *)(device + cb);
-    h->idle = *(PoFxComponentCallback const *)(device + cb + 8);
-    h->ctx = *(void *const *)(device + ctx);
-    *out = h;
-    return NT_STATUS_SUCCESS;
-}
-
-NT_API void nt_PoFxUnregisterDevice(PoFxHandle *h) { kfree(h); }
-NT_API void nt_PoFxStartDevicePowerManagement(PoFxHandle *h) { (void)h; }
-
-NT_API void nt_PoFxActivateComponent(PoFxHandle *h, UINT32 component, UINT32 flags)
-{
-    (void)flags;
-    if (h->active) h->active(h->ctx, component);
-}
-
-NT_API void nt_PoFxIdleComponent(PoFxHandle *h, UINT32 component, UINT32 flags)
-{
-    (void)flags;
-    if (h->idle) h->idle(h->ctx, component);
-}
-
-NT_API void nt_PoFxCompleteIdleCondition(PoFxHandle *h, UINT32 component) { (void)h; (void)component; }
-NT_API void nt_PoFxCompleteIdleState(PoFxHandle *h, UINT32 component) { (void)h; (void)component; }
-NT_API void nt_PoFxCompleteDevicePowerNotRequired(PoFxHandle *h) { (void)h; }
-NT_API void nt_PoFxCompleteDirectedPowerDown(PoFxHandle *h) { (void)h; }
-NT_API void nt_PoFxReportDevicePoweredOn(PoFxHandle *h) { (void)h; }
-NT_API void nt_PoFxSetDeviceIdleTimeout(PoFxHandle *h, UINT64 timeout) { (void)h; (void)timeout; }
+/* (PoFxRegisterDevice, the activation calls and the completions are po.c's) */
+NT_API void nt_PoFxCompleteDevicePowerNotRequired(void *h) { (void)h; }
+NT_API void nt_PoFxSetDeviceIdleTimeout(void *h, UINT64 timeout) { (void)h; (void)timeout; }
 
 /* Whether the IRP's system wake (a wait/wake IRP's) was the system's wake
  * source: NovaOS does not sleep */

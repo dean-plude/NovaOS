@@ -10,6 +10,11 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../arch/x86_64/apic.h"
+#include "../um/um.h"
+#include "ntapi.h"
+
+/* zw.c: the registry path (without "\Registry\") a Zw key handle names */
+bool NtZwKeyPath(void *handle, char *out, int cap);
 
 /* -----------------------------------------------------------------------
  * Debug output: DbgPrint goes to the kernel log, as it goes to the
@@ -357,6 +362,362 @@ NT_API UINT16 nt_RtlCaptureStackBackTrace(UINT32 skip, UINT32 count, void **fram
 }
 
 /* -----------------------------------------------------------------------
+ * Registry run-time library: RtlQueryRegistryValues, RtlWriteRegistryValue,
+ * RtlDeleteRegistryValue, over the kernel registry (um/um_registry.c)
+ * ----------------------------------------------------------------------- */
+#define RTL_REGISTRY_ABSOLUTE    0
+#define RTL_REGISTRY_SERVICES    1
+#define RTL_REGISTRY_CONTROL     2
+#define RTL_REGISTRY_WINDOWS_NT  3
+#define RTL_REGISTRY_DEVICEMAP   4
+#define RTL_REGISTRY_USER        5
+#define RTL_REGISTRY_MAXIMUM     6
+#define RTL_REGISTRY_HANDLE      0x40000000u
+#define RTL_REGISTRY_OPTIONAL    0x80000000u
+
+#define RTL_QUERY_REGISTRY_SUBKEY     0x00000001u
+#define RTL_QUERY_REGISTRY_TOPKEY     0x00000002u
+#define RTL_QUERY_REGISTRY_REQUIRED   0x00000004u
+#define RTL_QUERY_REGISTRY_NOVALUE    0x00000008u
+#define RTL_QUERY_REGISTRY_NOEXPAND   0x00000010u
+#define RTL_QUERY_REGISTRY_DIRECT     0x00000020u
+#define RTL_QUERY_REGISTRY_DELETE     0x00000040u
+#define RTL_QUERY_REGISTRY_TYPECHECK  0x00000100u
+#define RTL_QUERY_REGISTRY_TYPECHECK_SHIFT 24
+
+#define REG_NONE       0
+#define REG_SZ         1
+#define REG_EXPAND_SZ  2
+#define REG_MULTI_SZ   7
+
+#define STATUS_OBJECT_TYPE_MISMATCH ((NTSTATUS)0xC0000024)
+
+typedef NT_API NTSTATUS (*RtlQueryRoutine)(NT_WCHAR *name, UINT32 type, void *data, UINT32 len,
+                                           void *context, void *entry_context);
+
+/* RTL_QUERY_REGISTRY_TABLE (x64) */
+typedef struct {
+    RtlQueryRoutine QueryRoutine;
+    UINT32          Flags;
+    NT_WCHAR       *Name;
+    void           *EntryContext;
+    UINT32          DefaultType;
+    void           *DefaultData;
+    UINT32          DefaultLength;
+} RtlQueryRegistryTable;
+_Static_assert(sizeof(RtlQueryRegistryTable) == 56, "RTL_QUERY_REGISTRY_TABLE is 56 bytes on x64");
+
+/* A NUL-terminated wide string as ASCII (truncated to fit) */
+static void wide_ascii(const NT_WCHAR *w, char *out, int cap)
+{
+    int n = 0;
+    for (; w && w[n] && n < cap - 1; n++) out[n] = w[n] < 0x80 ? (char)w[n] : '?';
+    out[n] = 0;
+}
+
+/* The key RelativeTo and Path name, as a path without "\Registry\" */
+static NTSTATUS rtl_reg_path(UINT32 relative, const NT_WCHAR *path, char *out, int cap)
+{
+    if (relative & RTL_REGISTRY_HANDLE)
+        return NtZwKeyPath((void *)path, out, cap) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
+    static const char *const base[RTL_REGISTRY_MAXIMUM] = {
+        [RTL_REGISTRY_SERVICES]   = "Machine\\System\\CurrentControlSet\\Services",
+        [RTL_REGISTRY_CONTROL]    = "Machine\\System\\CurrentControlSet\\Control",
+        [RTL_REGISTRY_WINDOWS_NT] = "Machine\\Software\\Microsoft\\Windows NT\\CurrentVersion",
+        [RTL_REGISTRY_DEVICEMAP]  = "Machine\\Hardware\\DeviceMap",
+        [RTL_REGISTRY_USER]       = "User\\" UM_USER_SID,
+    };
+    UINT32 rel = relative & ~RTL_REGISTRY_OPTIONAL;
+    if (rel >= RTL_REGISTRY_MAXIMUM) return STATUS_INVALID_PARAMETER;
+    char p[256];
+    wide_ascii(path, p, sizeof(p));
+    if (rel == RTL_REGISTRY_ABSOLUTE) {
+        static const char pre[] = "\\registry\\";
+        bool same = true;
+        for (int i = 0; pre[i] && same; i++) same = (pre[i] == '\\' ? p[i] : p[i] | 0x20) == pre[i];
+        if (!same) return STATUS_OBJECT_NAME_NOT_FOUND;   /* (OBJECT_PATH_SYNTAX_BAD on Windows) */
+        ksnprintf(out, cap, "%s", p + 10);
+    } else {
+        const char *rest = p;
+        while (*rest == '\\') rest++;
+        ksnprintf(out, cap, "%s%s%s", base[rel], rest[0] ? "\\" : "", rest);
+    }
+    int n = (int)strlen(out);
+    while (n && out[n - 1] == '\\') out[--n] = 0;
+    return out[0] ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+}
+
+static UINT32 wstr_bytes(const NT_WCHAR *w)                     /* with the terminator */
+{
+    UINT32 n = 0;
+    while (w[n]) n++;
+    return 2 * (n + 1);
+}
+
+static UINT32 multi_sz_bytes(const NT_WCHAR *w)                 /* through the final empty string */
+{
+    UINT32 n = 0;
+    while (w[n]) { while (w[n]) n++; n++; }
+    return 2 * (n + 1);
+}
+
+/* REG_EXPAND_SZ: %SystemRoot% and %windir% expanded (the variables a
+ * kernel-mode value uses); other %names% are left as they are.  A new
+ * pool buffer, terminated; *@len its size in bytes. */
+static NT_WCHAR *expand_sz(const NT_WCHAR *s, UINT32 slen, UINT32 *len)
+{
+    static const char root[] = "C:\\Windows";
+    UINT32 n = slen / 2, cap = n + 1, o = 0;
+    for (UINT32 i = 0; i < n; i++) if (s[i] == '%') cap += sizeof(root);
+    NT_WCHAR *d = kmalloc(2 * (size_t)cap);
+    if (!d) return NULL;
+    for (UINT32 i = 0; i < n && s[i]; ) {
+        if (s[i] == '%') {
+            UINT32 j = i + 1;
+            while (j < n && s[j] && s[j] != '%') j++;
+            if (j < n && s[j] == '%') {
+                char var[16];
+                UINT32 vl = j - i - 1, k = 0;
+                for (; k < vl && k < sizeof(var) - 1; k++) var[k] = (char)(s[i + 1 + k] | 0x20);
+                var[k] = 0;
+                if (vl == k && (!strcmp(var, "systemroot") || !strcmp(var, "windir"))) {
+                    for (const char *c = root; *c; c++) d[o++] = (UINT8)*c;
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        d[o++] = s[i++];
+    }
+    d[o++] = 0;
+    *len = 2 * o;
+    return d;
+}
+
+/* RTL_QUERY_REGISTRY_DIRECT: store one value where EntryContext points */
+static NTSTATUS store_direct(void *ec, UINT32 type, const void *data, UINT32 len)
+{
+    if (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ) {
+        NT_UNICODE_STRING *us = ec;
+        const NT_WCHAR *w = data;
+        UINT32 chars = len / 2;
+        if (type == REG_MULTI_SZ) { if (chars && !w[chars - 1]) chars--; }   /* all but the final NUL */
+        else { UINT32 c = 0; while (c < chars && w[c]) c++; chars = c; }
+        UINT32 bytes = 2 * chars, need = bytes + 2;
+        if (need > 0xFFFF) return STATUS_BUFFER_TOO_SMALL;
+        if (!us->Buffer) {
+            us->Buffer = nt_ExAllocatePoolWithTag(1 /* PagedPool */, need, 0x20206C74 /* 'tl  ' */);
+            if (!us->Buffer) return STATUS_NO_MEMORY;
+            us->MaximumLength = (unsigned short)need;
+        } else if (need > us->MaximumLength) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        memcpy(us->Buffer, w, bytes);
+        us->Buffer[chars] = 0;
+        us->Length = (unsigned short)bytes;
+        return STATUS_SUCCESS;
+    }
+    if (len <= sizeof(UINT32)) {                       /* small non-string data: stored in place */
+        memcpy(ec, data, len);
+        return STATUS_SUCCESS;
+    }
+    /* Larger: EntryContext starts with a LONG giving the buffer's size; a
+     * negative one wants the data alone, a positive one length and type
+     * first (two ULONGs), then the data */
+    INT32 size;
+    memcpy(&size, ec, 4);
+    if (size < 0) {
+        if (len > (UINT32)-(INT64)size) return STATUS_BUFFER_TOO_SMALL;
+        memcpy(ec, data, len);
+    } else {
+        if ((UINT64)len + 8 > (UINT64)size) return STATUS_BUFFER_TOO_SMALL;
+        UINT32 *u = ec;
+        u[0] = len;
+        u[1] = type;
+        memcpy(u + 2, data, len);
+    }
+    return STATUS_SUCCESS;
+}
+
+/* One value for a table entry: type-checked, expanded, then stored
+ * (DIRECT) or handed to the query routine (a REG_MULTI_SZ one string at a
+ * time, unless NOEXPAND) */
+static NTSTATUS query_one(const RtlQueryRegistryTable *e, NT_WCHAR *name, UINT32 type, const void *data,
+                          UINT32 len, void *context)
+{
+    if ((e->Flags & (RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK))
+            == (RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK)
+        && type != e->DefaultType >> RTL_QUERY_REGISTRY_TYPECHECK_SHIFT)
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    NT_WCHAR *exp = NULL;
+    if (type == REG_EXPAND_SZ && !(e->Flags & RTL_QUERY_REGISTRY_NOEXPAND)) {
+        exp = expand_sz(data, len, &len);
+        if (!exp) return STATUS_NO_MEMORY;
+        data = exp;
+        type = REG_SZ;
+    }
+    NTSTATUS st;
+    if (e->Flags & RTL_QUERY_REGISTRY_DIRECT) {
+        st = store_direct(e->EntryContext, type, data, len);
+    } else if (type == REG_MULTI_SZ && !(e->Flags & RTL_QUERY_REGISTRY_NOEXPAND)) {
+        st = STATUS_SUCCESS;
+        NT_WCHAR *w = (NT_WCHAR *)data;
+        UINT32 n = len / 2, i = 0;
+        while (i < n && w[i] && NT_SUCCESS(st)) {
+            UINT32 s = i;
+            while (i < n && w[i]) i++;
+            if (i >= n) break;                         /* (an unterminated last string: dropped) */
+            st = e->QueryRoutine(name, REG_SZ, w + s, 2 * (i - s + 1), context, e->EntryContext);
+            i++;
+        }
+    } else {
+        st = e->QueryRoutine(name, type, (void *)data, len, context, e->EntryContext);
+    }
+    if (exp) kfree(exp);
+    return st;
+}
+
+/* The entry's default, when its value is missing */
+static NTSTATUS query_default(const RtlQueryRegistryTable *e, void *context)
+{
+    UINT32 type = e->DefaultType;
+    if (e->Flags & RTL_QUERY_REGISTRY_TYPECHECK) type &= (1u << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) - 1;
+    if (type == REG_NONE) return STATUS_SUCCESS;
+    UINT32 len = e->DefaultLength;
+    if (!len && e->DefaultData) {
+        if (type == REG_SZ || type == REG_EXPAND_SZ) len = wstr_bytes(e->DefaultData);
+        else if (type == REG_MULTI_SZ) len = multi_sz_bytes(e->DefaultData);
+    }
+    RtlQueryRegistryTable d = *e;                      /* (the default is not type-checked) */
+    d.Flags &= ~RTL_QUERY_REGISTRY_TYPECHECK;
+    return query_one(&d, e->Name, type, e->DefaultData, len, context);
+}
+
+/* Read value @name of @path for an entry: missing -> REQUIRED fails, else
+ * the default */
+static NTSTATUS query_named(const RtlQueryRegistryTable *e, const char *path, bool have_key, void *context)
+{
+    char nm[128];
+    wide_ascii(e->Name, nm, sizeof(nm));
+    UINT32 type = 0;
+    int len = have_key ? um_registry_get_value(path, nm, &type, NULL, 0) : -1;
+    UINT8 *data = NULL;
+    if (len >= 0) {
+        data = kzalloc((size_t)len + 4);               /* (terminated, for a string missing its NUL) */
+        if (!data) return STATUS_NO_MEMORY;
+        int got = um_registry_get_value(path, nm, &type, data, len);
+        if (got < 0) { kfree(data); data = NULL; len = -1; }
+        else if (got < len) len = got;
+    }
+    if (len < 0) {
+        if (e->Flags & RTL_QUERY_REGISTRY_REQUIRED) return STATUS_OBJECT_NAME_NOT_FOUND;
+        return query_default(e, context);
+    }
+    NTSTATUS st = query_one(e, e->Name, type, data, (UINT32)len, context);
+    kfree(data);
+    if (NT_SUCCESS(st) && (e->Flags & RTL_QUERY_REGISTRY_DELETE)) um_registry_delete_value(path, nm);
+    return st;
+}
+
+/* Every value of @path to the entry's routine (none: REQUIRED fails, else
+ * the default) */
+static NTSTATUS query_all(const RtlQueryRegistryTable *e, const char *path, bool have_key, void *context)
+{
+    NT_WCHAR name[257];
+    UINT32 i = 0;
+    for (;; i++) {
+        int nlen = 0;
+        UINT32 type = 0;
+        int len = have_key ? um_registry_enum_value(path, i, name, 256, &nlen, &type, NULL, 0) : -1;
+        if (len < 0) break;
+        UINT8 *data = kzalloc((size_t)len + 4);
+        if (!data) return STATUS_NO_MEMORY;
+        int got = um_registry_enum_value(path, i, name, 256, &nlen, &type, data, len);
+        if (got < 0) { kfree(data); break; }
+        name[nlen < 256 ? nlen : 256] = 0;
+        NTSTATUS st = query_one(e, name, type, data, (UINT32)(got < len ? got : len), context);
+        kfree(data);
+        if (!NT_SUCCESS(st)) return st;
+    }
+    if (i) return STATUS_SUCCESS;
+    if (e->Flags & RTL_QUERY_REGISTRY_REQUIRED) return STATUS_OBJECT_NAME_NOT_FOUND;
+    return query_default(e, context);
+}
+
+/* RtlQueryRegistryValues(RelativeTo, Path, QueryTable, Context, Environment):
+ * each entry of the table (to one whose QueryRoutine and Name are both
+ * NULL) reads one value, every value, or moves to a subkey; values go to
+ * the entry's QueryRoutine or, with DIRECT, straight to EntryContext */
+NT_API NTSTATUS nt_RtlQueryRegistryValues(UINT32 relative, const NT_WCHAR *path, RtlQueryRegistryTable *table,
+                                          void *context, void *environment)
+{
+    (void)environment;                               /* (%SystemRoot% is all NovaOS expands) */
+    if (!table) return STATUS_INVALID_PARAMETER;
+    char top[256], cur[256];
+    NTSTATUS st = rtl_reg_path(relative, path, top, sizeof(top));
+    if (!NT_SUCCESS(st)) return st;
+    bool top_exists = um_registry_key_exists(top);
+    if (!top_exists && !(relative & RTL_REGISTRY_OPTIONAL)) return STATUS_OBJECT_NAME_NOT_FOUND;
+    ksnprintf(cur, sizeof(cur), "%s", top);
+    bool have = top_exists;
+    for (RtlQueryRegistryTable *e = table; e->QueryRoutine || e->Name; e++) {
+        if ((e->Flags & RTL_QUERY_REGISTRY_DIRECT)
+            && (!e->Name || !e->EntryContext || (e->Flags & RTL_QUERY_REGISTRY_SUBKEY)))
+            return STATUS_INVALID_PARAMETER;
+        if (e->Flags & (RTL_QUERY_REGISTRY_TOPKEY | RTL_QUERY_REGISTRY_SUBKEY)) {
+            ksnprintf(cur, sizeof(cur), "%s", top);
+            have = top_exists;
+        }
+        if (e->Flags & RTL_QUERY_REGISTRY_SUBKEY) {
+            char sub[128];
+            wide_ascii(e->Name, sub, sizeof(sub));
+            const char *s = sub;
+            while (*s == '\\') s++;
+            ksnprintf(cur, sizeof(cur), "%s\\%s", top, s);
+            have = um_registry_key_exists(cur);
+            if (!have) return STATUS_OBJECT_NAME_NOT_FOUND;
+            if (!e->QueryRoutine) continue;            /* only the focus moves */
+            st = (e->Flags & RTL_QUERY_REGISTRY_NOVALUE)
+                 ? e->QueryRoutine(NULL, REG_NONE, NULL, 0, context, e->EntryContext)
+                 : query_all(e, cur, have, context);
+        } else if (e->Name) {
+            st = query_named(e, cur, have, context);
+        } else if (e->Flags & RTL_QUERY_REGISTRY_NOVALUE) {
+            st = e->QueryRoutine(NULL, REG_NONE, NULL, 0, context, e->EntryContext);
+        } else {
+            st = query_all(e, cur, have, context);
+        }
+        if (!NT_SUCCESS(st)) return st;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* RtlWriteRegistryValue: the key is created if need be */
+NT_API NTSTATUS nt_RtlWriteRegistryValue(UINT32 relative, const NT_WCHAR *path, const NT_WCHAR *name,
+                                         UINT32 type, void *data, UINT32 len)
+{
+    char p[256], nm[128];
+    NTSTATUS st = rtl_reg_path(relative, path, p, sizeof(p));
+    if (!NT_SUCCESS(st)) return st;
+    if (len && !data) return STATUS_INVALID_PARAMETER;
+    wide_ascii(name, nm, sizeof(nm));
+    if (!um_registry_create_key(p)) return STATUS_INSUFFICIENT_RESOURCES;
+    um_registry_set_value(p, nm, type, data, len);
+    return STATUS_SUCCESS;
+}
+
+/* RtlDeleteRegistryValue: the key must exist, and so must the value */
+NT_API NTSTATUS nt_RtlDeleteRegistryValue(UINT32 relative, const NT_WCHAR *path, const NT_WCHAR *name)
+{
+    char p[256], nm[128];
+    NTSTATUS st = rtl_reg_path(relative, path, p, sizeof(p));
+    if (!NT_SUCCESS(st)) return st;
+    if (!um_registry_key_exists(p)) return STATUS_OBJECT_NAME_NOT_FOUND;
+    wide_ascii(name, nm, sizeof(nm));
+    return um_registry_delete_value(p, nm) ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
+/* -----------------------------------------------------------------------
  * Bitmaps (RTL_BITMAP: ULONG SizeOfBitMap; ULONG *Buffer)
  * ----------------------------------------------------------------------- */
 typedef struct _NT_RTL_BITMAP { UINT32 Size; UINT32 *Buffer; } NT_RTL_BITMAP;
@@ -414,9 +775,22 @@ NT_API int nt__vsnprintf(char *buf, UINT64 count, const char *fmt, __builtin_ms_
 NT_API int nt__vsnwprintf(NT_WCHAR *buf, UINT64 count, const NT_WCHAR *fmt, __builtin_ms_va_list ap)
 {
     char nfmt[512], out[512];
-    int i = 0;
-    for (; fmt[i] && i < (int)sizeof(nfmt) - 1; i++) nfmt[i] = fmt[i] < 0x80 ? (char)fmt[i] : '?';
-    nfmt[i] = 0;
+    /* In a wide format %s and %c are wide and %S narrow: say so to format() */
+    int k = 0;
+    bool spec = false, h = false, l = false;
+    for (int i = 0; fmt[i] && k < (int)sizeof(nfmt) - 3; i++) {
+        char c = fmt[i] < 0x80 ? (char)fmt[i] : '?';
+        if (!spec) { nfmt[k++] = c; if (c == '%') { spec = true; h = l = false; } continue; }
+        if (c == 'h') { h = true; nfmt[k++] = c; continue; }
+        if (c == 'l' || c == 'w') { l = true; nfmt[k++] = c; continue; }
+        if (c == 's' && !h) nfmt[k++] = 'w';                 /* (%s, %ls, %ws: wide) */
+        if (c == 'S') { nfmt[k++] = 'h'; c = 's'; }
+        nfmt[k++] = c;
+        if ((c >= 'a' && c <= 'z' && c != 'h' && c != 'l' && c != 'w' && c != 'z' && c != 'j' && c != 't') ||
+            (c >= 'A' && c <= 'Z' && c != 'I') || c == '%')
+            spec = false;
+    }
+    nfmt[k] = 0;
     format(out, sizeof(out), nfmt, ap);
     int n = (int)strlen(out), max = count ? (int)(count - 1) : 0;
     if (n > max) n = max;
@@ -430,3 +804,95 @@ NT_API void nt__purecall(void)
 {
     KPANIC("*** STOP: pure virtual function call in a driver");
 }
+
+/* -----------------------------------------------------------------------
+ * Step 30.8: strings FTDI's USB serial drivers use
+ * ----------------------------------------------------------------------- */
+NT_API int nt__snwprintf(NT_WCHAR *buf, UINT64 count, const NT_WCHAR *fmt, ...)
+{
+    __builtin_ms_va_list ap;
+    __builtin_ms_va_start(ap, fmt);
+    int n = nt__vsnwprintf(buf, count, fmt, ap);
+    __builtin_ms_va_end(ap);
+    return n;
+}
+
+static NT_WCHAR wupper(NT_WCHAR c) { return c >= 'a' && c <= 'z' ? (NT_WCHAR)(c - 32) : c; }
+
+NT_API int nt__wcsnicmp(const NT_WCHAR *a, const NT_WCHAR *b, UINT64 n)
+{
+    for (; n; n--, a++, b++) {
+        NT_WCHAR x = wupper(*a), y = wupper(*b);
+        if (x != y) return x < y ? -1 : 1;
+        if (!x) break;
+    }
+    return 0;
+}
+
+NT_API NT_WCHAR *nt_wcschr(const NT_WCHAR *s, NT_WCHAR c)
+{
+    for (;; s++) {
+        if (*s == c) return (NT_WCHAR *)s;
+        if (!*s) return NULL;
+    }
+}
+
+NT_API NTSTATUS nt_RtlAppendUnicodeToString(NT_UNICODE_STRING *dst, const NT_WCHAR *src)
+{
+    if (!src) return STATUS_SUCCESS;
+    UINT64 n = 2 * nt_wcslen(src);
+    if (dst->Length + n > dst->MaximumLength) return STATUS_BUFFER_TOO_SMALL;
+    memmove((UINT8 *)dst->Buffer + dst->Length, src, n);
+    dst->Length = (unsigned short)(dst->Length + n);
+    if (dst->Length + 2 <= dst->MaximumLength) dst->Buffer[dst->Length / 2] = 0;
+    return STATUS_SUCCESS;
+}
+
+/* "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}" in pool the caller frees with
+ * RtlFreeUnicodeString */
+NT_API NTSTATUS nt_RtlStringFromGUID(const NT_GUID *g, NT_UNICODE_STRING *out)
+{
+    char a[40];
+    ksnprintf(a, sizeof(a), "{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}", g->Data1, g->Data2, g->Data3,
+              g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3], g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+    NT_WCHAR *w = kmalloc(39 * 2);
+    if (!w) return STATUS_INSUFFICIENT_RESOURCES;
+    for (int i = 0; i < 39; i++) w[i] = (unsigned char)a[i];
+    out->Buffer = w;
+    out->Length = 38 * 2;
+    out->MaximumLength = 39 * 2;
+    return STATUS_SUCCESS;
+}
+
+/* Leading blanks, a sign, then digits in @base (0: a 0x, 0o or 0b prefix
+ * picks it, else 10) up to the first that is not one */
+NT_API NTSTATUS nt_RtlUnicodeStringToInteger(const NT_UNICODE_STRING *s, UINT32 base, UINT32 *value)
+{
+    if (!s || !value) return STATUS_INVALID_PARAMETER;
+    const NT_WCHAR *p = s->Buffer;
+    int n = s->Buffer ? s->Length / 2 : 0, i = 0;
+    while (i < n && p[i] <= ' ') i++;
+    bool neg = false;
+    if (i < n && (p[i] == '-' || p[i] == '+')) neg = p[i++] == '-';
+    if (!base) {
+        base = 10;
+        if (i + 1 < n && p[i] == '0') {
+            NT_WCHAR c = (NT_WCHAR)(p[i + 1] | 0x20);
+            if (c == 'x') { base = 16; i += 2; } else if (c == 'o') { base = 8; i += 2; } else if (c == 'b') { base = 2; i += 2; }
+        }
+    } else if (base != 2 && base != 8 && base != 10 && base != 16) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    UINT32 v = 0;
+    for (; i < n; i++) {
+        NT_WCHAR c = p[i];
+        UINT32 d = c >= '0' && c <= '9' ? (UINT32)(c - '0') : (c | 0x20) >= 'a' && (c | 0x20) <= 'f' ? (UINT32)((c | 0x20) - 'a' + 10) : 99;
+        if (d >= base) break;
+        v = v * base + d;
+    }
+    *value = neg ? (UINT32)-(INT32)v : v;
+    return STATUS_SUCCESS;
+}
+
+/* NovaOS presents as Windows 10 2004 (RtlGetVersion): NTDDI_WIN10_VB */
+NT_API UINT8 nt_RtlIsNtDdiVersionAvailable(UINT32 version) { return version <= 0x0A000008u; }

@@ -187,10 +187,10 @@ static BOOL copy_line(const WCHAR *key, const WCHAR *value, void *ctx)
 {
     Copy *c = ctx;
     WCHAR dst_name[MAX_PATH], src_name[MAX_PATH], dirv[64], dir[MAX_PATH], from[MAX_PATH], to[MAX_PATH];
-    /* "file" or "dest, src, ...": the line's first field is the key when it has no '=' */
-    inf_field(key, 0, dst_name, MAX_PATH);
-    inf_field(key, 1, src_name, MAX_PATH);
-    (void)value;
+    /* "file" or "dest, src, ...": a line with no '=' comes as its value */
+    const WCHAR *line = key[0] ? key : value;
+    inf_field(line, 0, dst_name, MAX_PATH);
+    inf_field(line, 1, src_name, MAX_PATH);
     if (!src_name[0]) lstrcpyW(src_name, dst_name);
     if (!dst_name[0]) return TRUE;
     if (!inf_get(c->inf, L"DestinationDirs", c->section, dirv, 64) &&
@@ -203,8 +203,15 @@ static BOOL copy_line(const WCHAR *key, const WCHAR *value, void *ctx)
     WCHAR sub[MAX_PATH];
     inf_field(dirv, 1, sub, MAX_PATH);
     if (sub[0]) { lstrcatW(dir, L"\\"); lstrcatW(dir, sub); CreateDirectoryW(dir, NULL); }
+    /* the file's place in the store: the subfolder its SourceDisksFiles
+     * line names (FTDI's amd64\ftdibus.sys), as staging kept it (driver.c) */
+    WCHAR src_line[MAX_PATH], src_sub[MAX_PATH] = L"";
+    if (inf_get(c->inf, L"SourceDisksFiles.amd64", src_name, src_line, MAX_PATH) ||
+        inf_get(c->inf, L"SourceDisksFiles", src_name, src_line, MAX_PATH))
+        inf_field(src_line, 1, src_sub, MAX_PATH);
     lstrcpyW(from, c->store);
     lstrcatW(from, L"\\");
+    if (src_sub[0]) { lstrcatW(from, src_sub); lstrcatW(from, L"\\"); }
     lstrcatW(from, src_name);
     lstrcpyW(to, dir);
     lstrcatW(to, L"\\");
@@ -418,6 +425,47 @@ static void set_sz(HKEY k, const WCHAR *name, const WCHAR *v)
     RegSetValueExW(k, name, 0, REG_SZ, (const BYTE *)v, (DWORD)((lstrlenW(v) + 1) * sizeof(WCHAR)));
 }
 
+/* A port (class Ports) gets its COM name the way Windows' ports class
+ * installer gives it one: the lowest number the COM name arbiter's ComDB
+ * (a bitmap, bit n-1 for COMn) does not have taken, from COM3 (COM1 and
+ * COM2 are the PC's own serial ports), kept in the device's Device
+ * Parameters as PortName, where its serial driver reads the name of the
+ * link it makes (\DosDevices\COMn); the device's FriendlyName names it
+ * too.  A device that already has a PortName keeps it. */
+#define PORTS_GUID L"{4d36e978-e325-11ce-bfc1-08002be10318}"
+#define COMDB_KEY L"SYSTEM\\CurrentControlSet\\Control\\COM Name Arbiter"
+
+static void com_name(HKEY dev, HKEY params, const WCHAR *desc)
+{
+    WCHAR port[16], friendly[300];
+    if (!get_sz(params, NULL, L"PortName", port, 16) || !port[0]) {
+        BYTE db[32];
+        DWORD type = 0, size = sizeof(db);
+        for (int i = 0; i < (int)sizeof(db); i++) db[i] = 0;
+        HKEY arb;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, COMDB_KEY, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &arb, NULL)) return;
+        if (RegQueryValueExW(arb, L"ComDB", NULL, &type, db, &size) || type != REG_BINARY) size = sizeof(db);
+        int n = 3;
+        while (n <= 256 && (db[(n - 1) / 8] >> ((n - 1) % 8) & 1)) n++;
+        if (n > 256) { RegCloseKey(arb); return; }
+        db[(n - 1) / 8] |= (BYTE)(1 << ((n - 1) % 8));
+        RegSetValueExW(arb, L"ComDB", 0, REG_BINARY, db, sizeof(db));
+        RegCloseKey(arb);
+        port[0] = 'C'; port[1] = 'O'; port[2] = 'M';
+        int k = 3;
+        if (n >= 100) port[k++] = (WCHAR)('0' + n / 100);
+        if (n >= 10) port[k++] = (WCHAR)('0' + n / 10 % 10);
+        port[k++] = (WCHAR)('0' + n % 10);
+        port[k] = 0;
+        set_sz(params, L"PortName", port);
+    }
+    lstrcpynW(friendly, desc, 280);
+    lstrcatW(friendly, L" (");
+    lstrcatW(friendly, port);
+    lstrcatW(friendly, L")");
+    set_sz(dev, L"FriendlyName", friendly);
+}
+
 /*
  * Install published package @inf (C:\Windows\INF\oemN.inf) on device
  * @instance, through the model matching @hwid.  FALSE with the last error
@@ -512,6 +560,7 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         lstrcpyW(sect, ddi);
         lstrcatW(sect, L".HW");
         inf_lines(inf, sect, hw_line, &r);
+        if (ieq_w(guid, PORTS_GUID)) com_name(dev, params, m.desc);
         lstrcpyW(sect, ddi);
         lstrcatW(sect, L".Wdf");
         Wdf w = { inf, store, params, TRUE };

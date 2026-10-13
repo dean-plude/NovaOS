@@ -41,6 +41,13 @@ static bool same_ci(const char *a, const char *b)
     return *a == *b;
 }
 
+bool NtExportModule(const char *module)
+{
+    for (unsigned i = 0; i < sizeof(g_exports) / sizeof(g_exports[0]); i++)
+        if (same_ci(g_exports[i].module, module)) return true;
+    return false;
+}
+
 UINT64 NtExport(const char *module, const char *name)
 {
     for (unsigned i = 0; i < sizeof(g_exports) / sizeof(g_exports[0]); i++)

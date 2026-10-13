@@ -228,8 +228,12 @@ set(KERNEL_C_SOURCES
     nt/mm.c
     nt/ntoskrnl.c
     nt/pnp.c
+    nt/po.c
     nt/ps.c
+    nt/se.c
     nt/seh.c
+    nt/storport.c
+    nt/usbd.c
     nt/win10.c
     nt/zw.c
     io/pnp.c

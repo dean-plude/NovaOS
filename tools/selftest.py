@@ -86,7 +86,13 @@ order; --list prints them):
             and which pnputil disables and enables; "vioser", QEMU's
             virtio-serial controller, on which pnputil installs
             virtio-win's signed vioser.sys (KMDF): its port, a child
-            device, carries bytes to the host and back; "umdf", the edu
+            device, carries bytes to the host and back; "viostor", a
+            second disk on QEMU's virtio-blk card with an NTFS volume, on
+            which pnputil installs virtio-win's signed viostor.sys: it runs
+            on NovaOS's Storport host and the volume mounts as D:;
+            "usbserial", QEMU's usb-serial converter (an FTDI FT232) on
+            xHCI, which gets FTDI's own driver by hardware ID and becomes
+            COM3, which serialtest loops data through; "umdf", the edu
             device again, on which pnputil installs a UMDF 2 driver
             (umdftest.dll) that runs in a driver host (WUDFHost.exe) on
             Microsoft's user-mode framework
@@ -103,7 +109,7 @@ failed and the rest run).
 The exit status is the number of failed tests (0: all passed), so CI can
 gate on it.  --summary appends a Markdown table (GitHub's step summary).
 """
-import argparse, copy, os, re, shutil, struct, subprocess, sys, tempfile, time
+import argparse, copy, os, re, shutil, socket, struct, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, qemu_binary
@@ -316,7 +322,9 @@ PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
 EDU = load_suite('devices/edu')
+USBSERIAL = load_suite('devices/usbserial')
 VIOSER = load_suite('devices/vioser')
+VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
 
 
@@ -480,27 +488,58 @@ def vioser_boot(work):
             '-device', 'virtserialport,chardev=vs,name=org.novaos.test.0'], [p], dict(puts=[(pkg, r'C:\Tests\Vioser')])
 
 
-def ntfs_boot(work):
-    """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
-    NOVATEST (mkntfs, from the ntfs-3g package): drive D:, read-write.  It
-    stays in work/ntfs.img for the tests' check once QEMU has quit
-    (tests/selftest/devices/ntfs)"""
+def ntfs_disk(path, label, mb=128, files=()):
+    """A disk image at @path with one fresh NTFS volume from 1 MiB labelled
+    @label (mkntfs, from the ntfs-3g package), holding @files ((name, text)
+    pairs, written with ntfscp)"""
     mkntfs = shutil.which('mkntfs') or ('/usr/sbin/mkntfs' if os.path.exists('/usr/sbin/mkntfs') else None)
     if not mkntfs:
         raise RuntimeError('mkntfs is not installed (the ntfs-3g package)')
-    disk, vol, mb = os.path.join(work, 'ntfs.img'), os.path.join(work, 'ntfs.vol'), 128
+    vol = path + '.vol'
     with open(vol, 'wb') as f:
         f.truncate((mb - 1) << 20)
-    subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVATEST', '-p', '2048', '-H', '255', '-S', '63', vol],
+    subprocess.run([mkntfs, '-F', '-Q', '-L', label, '-p', '2048', '-H', '255', '-S', '63', vol],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name, text in files:
+        src = vol + '.file'
+        with open(src, 'w', newline='\r\n') as f:
+            f.write(text)
+        ntfscp = shutil.which('ntfscp') or '/usr/bin/ntfscp'
+        subprocess.run([ntfscp, '-f', vol, src, name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.unlink(src)
     mbr = bytearray(512)                                    # one NTFS partition (type 7) from LBA 2048
     mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\xfe\xff\xff', 0x07, b'\xfe\xff\xff', 2048, (mb - 1) * 2048)
     mbr[510:512] = b'\x55\xaa'
-    with open(disk, 'wb') as out, open(vol, 'rb') as src:
+    with open(path, 'wb') as out, open(vol, 'rb') as src:
         out.write(mbr + bytes((1 << 20) - 512))
         shutil.copyfileobj(src, out)
     os.unlink(vol)
+
+
+def ntfs_boot(work):
+    """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
+    NOVATEST (ntfs_disk): drive D:, read-write.  It stays in work/ntfs.img
+    for the tests' check once QEMU has quit (tests/selftest/devices/ntfs)"""
+    disk = os.path.join(work, 'ntfs.img')
+    ntfs_disk(disk, 'NOVATEST')
     return ['-drive', f'format=raw,file={disk}'], []
+
+
+def viostor_boot(work):
+    """A second disk on QEMU's virtio-blk card (PCI 1af4:1001), which no
+    NovaOS driver runs, with an NTFS volume labelled VIOSTOR holding
+    viostor.txt (ntfs_disk), and virtio-win's signed viostor package
+    (tools/drivertest/viostor.py) in C:\\Tests\\VioStor: pnputil installs it
+    on the card, which then runs on NovaOS's Storport host, and the volume
+    mounts as D: (tests/selftest/devices/viostor)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import viostor
+    pkg = os.path.join(work, 'viostor')
+    viostor.fetch(pkg)
+    disk = os.path.join(work, 'viostor.img')
+    ntfs_disk(disk, 'VIOSTOR', 64, [('viostor.txt', 'NovaOS reads this file through viostor.sys\n')])
+    return ['-drive', f'if=none,id=vd0,format=raw,file={disk}', '-device', 'virtio-blk-pci,drive=vd0'], [], \
+        dict(puts=[(pkg, r'C:\Tests\VioStor')])
 
 
 def monitors_boot(work):
@@ -615,6 +654,57 @@ def driversearch_boot(work):
     return ['-nic', 'user,model=virtio-net-pci', '-device', 'virtio-serial-pci'], [srv]
 
 
+def usbserial_boot(work):
+    """QEMU's usb-serial device (an FTDI FT232, USB\\VID_0403&PID_6001) on an
+    xHCI controller, its serial line looped back by a socket that returns
+    what it is sent, on a user-mode network where 10.0.2.2:18092
+    answers as the Microsoft Update Catalog does with FTDI's own driver
+    (tools/drivertest/ftdi_catalog.py): pnputil downloads and installs it
+    by hardware ID and serialtest loops data through the COM port
+    (tests/selftest/devices/usbserial)"""
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, 'tools', 'drivertest', 'ftdi_catalog.py'), '18092', work])
+    end = time.time() + 900                   # (the first run downloads FTDI's cabinet)
+    while time.time() < end and srv.poll() is None:
+        try:
+            socket.create_connection(('127.0.0.1', 18092), 1).close()
+            break
+        except OSError:
+            time.sleep(1)
+    if srv.poll() is not None or time.time() >= end:
+        raise RuntimeError('the recorded Update Catalog for FTDI did not start (see catalog.log; is port 18092 in use?)')
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    # (QEMU attaches a usb-serial device once its chardev is connected: the
+    # line's far end is a socket that sends back what it is sent)
+    echo = subprocess.Popen([sys.executable, '-c', ECHO, str(port)])
+    for _ in range(50):
+        try:
+            socket.create_connection(('127.0.0.1', port), 1).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    return ['-nic', 'user,model=virtio-net-pci', '-device', 'qemu-xhci,id=usbserial-xhci',
+            '-chardev', f'socket,id=ftdi,host=127.0.0.1,port={port}',
+            '-device', 'usb-serial,bus=usbserial-xhci.0,chardev=ftdi'], [srv, echo]
+
+
+ECHO = """import socket, sys
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('127.0.0.1', int(sys.argv[1])))
+srv.listen(4)
+while True:
+    c, _ = srv.accept()
+    while True:
+        d = c.recv(65536)
+        if not d:
+            break
+        c.sendall(d)
+    c.close()
+"""
+
+
 # The suites that boot once per entry: (label, tests, setup(work) -> (QEMU arguments, processes[,
 # more Nova arguments]))
 BOOTS = {
@@ -625,7 +715,8 @@ BOOTS = {
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
-                ('umdf', UMDF, umdf_boot)],
+                ('usbserial', USBSERIAL, usbserial_boot),
+                ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot)],
 }
 
 

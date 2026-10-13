@@ -5,7 +5,8 @@
  * The package is staged in the driver store and published as an oemN.inf
  * by setupapi (driver.c).  DiInstallDriver only stages it (as Windows does
  * when no device it matches is plugged in).  UpdateDriverForPlugAndPlay-
- * Devices also installs it on each present PCI device whose hardware or
+ * Devices also installs it on each present device (PCI, USB, or a bus
+ * driver's child such as a USB serial converter's COM port) whose hardware or
  * compatible IDs hold the given ID and that no NovaOS driver runs
  * (setupapi's NovaInstallDeviceDriverW writes the device's keys and the
  * service), then has the kernel's PnP manager start it (kernel/nt/pnp.c:
@@ -134,7 +135,7 @@ NEWDEV BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid,
     DWORD err = ERROR_NO_SUCH_DEVINST_;
     NovaPnpNode n;
     for (DWORD id = 1, count = nova_pnp_count(); id <= count; id++) {
-        if (!nova_pnp_node(id, &n) || !(n.flags & NOVA_PNP_PRESENT) || !nova_pnp_prefix(n.instance, "PCI\\")) continue;
+        if (!nova_pnp_node(id, &n) || !(n.flags & NOVA_PNP_PRESENT)) continue;
         if (!multi_has(n.hwids, hwid) && !multi_has(n.compat, hwid)) continue;
         BOOL windows = (n.flags & NOVA_PNP_WINDOWS) != 0;
         if ((n.flags & NOVA_PNP_STARTED) && !windows) continue;       /* (a NovaOS driver runs it) */

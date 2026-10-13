@@ -80,6 +80,9 @@ void PnpRemove(UINT32 id);
 void PnpSetDriver(UINT32 id, const char *service);
 /* The same, for a Windows driver (PNP_WINDOWS) */
 void PnpSetWindowsDriver(UINT32 id, const char *service);
+/* Its setup class and friendly name, as its driver's install wrote them
+ * (each left as it was when NULL or "") */
+void PnpSetNames(UINT32 id, const char *cls, const char *friendly);
 /* The node's driver stopped, or did not start: not started, with
  * @problem (CM_PROB_*: 10 failed to start, 22 disabled...) */
 void PnpSetProblem(UINT32 id, UINT32 problem);

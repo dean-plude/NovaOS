@@ -67,10 +67,9 @@ static DpcQueue g_dpcq[MAX_CPUS];
 void KiRequestDispatchInterrupt(void)
 {
     PKPCR k = KiGetCurrentKpcr();
-    /* (from a driver's interrupt routine: sent once the IRQL is back down,
-     * intr.c, so that no interrupt is pending below the raised IRQL when it
-     * drops with interrupts off; KVM nested on some hosts fails the VM entry
-     * after that CR8 write, "KVM: entry failed, hardware error 0x0") */
+    /* (from a driver's interrupt routine: sent once the routines are done
+     * and the interrupt has ended, intr.c, where the IRQL goes back down
+     * with interrupts on and this one is taken) */
     if (k->InIsr) { k->DpcPending = 1; return; }
     apic_send_ipi(k->ApicId, APIC_IPI_FIXED | VECTOR_DPC);
 }

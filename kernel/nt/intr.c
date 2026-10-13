@@ -35,6 +35,8 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../hal/ioapic.h"
+#include "../arch/x86_64/apic.h"
+#include "../arch/x86_64/cpu.h"
 
 #define VEC_FIRST   0x60            /* IRQL 6 */
 #define VEC_LAST    0xBF            /* IRQL 11, the highest device IRQL */
@@ -144,7 +146,8 @@ static Line *line_of(UINT8 vector)
 }
 
 /* The vector's interrupt: each connected routine at its IRQL, under its
- * lock, until one claims it (interrupt context, interrupts off) */
+ * lock, until one claims it (interrupt context, interrupts off until the
+ * IRQL goes back down at the end) */
 static void dispatch(void *arg)
 {
     Line *l = arg;
@@ -161,11 +164,21 @@ static void dispatch(void *arg)
         if (mine) { in->count++; break; }
     }
     __asm__ volatile ("fxrstor64 (%0)" : : "r"(fx) : "memory");
-    KeIrqlSet(old);
+    /* The IRQL goes back down after the end of interrupt and with
+     * interrupts on, as KeLowerIrql does anywhere else: an interrupt that
+     * arrived meanwhile is taken at once, here.  Lowering CR8 below one that
+     * is waiting while this one is still in service and interrupts are off
+     * makes KVM nested on some hosts fail the next VM entry ("KVM: entry
+     * failed, hardware error 0x0", at the CR8 write). */
+    apic_eoi();
     if (!--k->InIsr && k->DpcPending) {
         k->DpcPending = 0;
         KiRequestDispatchInterrupt();
     }
+    sti();
+    KeIrqlSet(old);
+    cli();
+    KiGetCurrentKpcr()->EoiSent = 1;                /* (idt.c sends none; a switch meanwhile may have moved the thread) */
 }
 
 static NTSTATUS connect(NtInterrupt **out, NT_KSERVICE_ROUTINE isr, void *ctx, NT_KSPIN_LOCK *lock, UINT32 vector,

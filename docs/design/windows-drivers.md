@@ -121,7 +121,11 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   the switch.  A dispatch routine that returns above `PASSIVE_LEVEL` is
   logged (`IRQL_GT_ZERO_AT_SYSTEM_SERVICE`) and its IRQL put back.  Device interrupts
   for a Windows driver run at the vector's IRQL (`vector / 16`, as on
-  Windows), so NovaOS's own interrupt vectors have to be placed so they
+  Windows) with interrupts off; once the routines are done the interrupt
+  is ended and the IRQL goes back down with interrupts on, so whatever
+  arrived meanwhile is taken then (lowering `CR8` below a waiting
+  interrupt with interrupts off makes KVM nested on some hosts fail the
+  VM entry).  So NovaOS's own interrupt vectors have to be placed so they
   are not masked by a raised IRQL they must still serve.
 - **DPCs and work items**: a per-CPU DPC queue drained when IRQL drops
   below `DISPATCH_LEVEL` (step 30.2: by the DPC interrupt, at

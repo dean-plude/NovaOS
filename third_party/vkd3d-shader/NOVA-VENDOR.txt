@@ -19,7 +19,22 @@ list.h, rbtree.h, spirv_grammar.h and spirv.core.grammar.json.  Left out:
 libvkd3d (Direct3D 12 on Vulkan), libvkd3d-utils, the programs, demos and
 tests.
 
-No source file is changed.  Generated files, made from the tarball as its
+NovaOS changes (each marked "NovaOS:" in the source): shader model 5.1
+descriptor arrays, which upstream 1.19 (and master as of 2026-10) stops at
+with "Shader model 5.1+ resource array".  A one-dimensional uniform array of
+samplers, textures or UAVs without an initializer is declared as one
+descriptor range (dcl_sampler s0[0:2047], space=0) and may be indexed by any
+expression (s0[r0.x + 0]), the way wgpu's naga writes its sampler heap for
+Direct3D 12 (SamplerState nagaSamplerHeap[2048] picked through a
+StructuredBuffer of indices).  libs/vkd3d-shader/hlsl.y (declare_var) lets
+such arrays through; hlsl_codegen.c accepts a non-constant index for them
+(validate_dereferences), puts it in the register's relative address
+(sm4_generate_vsir_object_reg_index) and declares the whole range once
+(sm4_resource_dcl_range).  Multi-dimensional, unbounded and initialized
+resource arrays, and arrays inside structs, still stop with the upstream
+message.
+
+Generated files, made from the tarball (and the change above) as its
 Makefile does, and committed so the build needs neither tool:
   libs/vkd3d-shader/hlsl.tab.c, hlsl.tab.h      bison 3.8.2 -d hlsl.y
   libs/vkd3d-shader/preproc.tab.c, preproc.tab.h  bison 3.8.2 -d preproc.y

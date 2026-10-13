@@ -15,6 +15,9 @@ program got a Terminal, which only waited for it to exit.
 - **`winhello` is a GUI program** (`"gui": true` in its
   `userland/programs/winhello.json` links it `/subsystem:windows`), so the
   self-test image has one.
+- **Start menu search finds every program**: the menu kept only the first
+  64 programs of `C:\Programs` (and the Start menu's shortcuts), so
+  search missed the rest; it now keeps 256.
 - **Test**: `tests/selftest/core/890-startmenu-launch.py` starts
   `winhello` and `hello` from the Start menu (Win+S, the name, Enter):
   the first with no Terminal, the second in one.

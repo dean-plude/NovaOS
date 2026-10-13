@@ -30,17 +30,30 @@ def _start(nova, name):
     nova.qmp.key('ret')
 
 
+def _close_menu(nova):
+    """Nothing started: Esc clears the search, Esc again closes the menu
+    (the keys must reach the Terminal again for the tests after this one)"""
+    nova.qmp.key('esc')
+    time.sleep(0.5)
+    nova.qmp.key('esc')
+    time.sleep(1)
+
+
 def launch(nova):
     _start(nova, 'winhello')
     if _wait(nova, r'\[UM\] Started winhello\.exe'):
         time.sleep(4)                                   # (its window up and focused)
         nova.qmp.key('alt', 'f4')
         _wait(nova, r'\[UM\] winhello\.exe \(PID \d+\) exited', 30)
+    else:
+        _close_menu(nova)
     time.sleep(2)
     _start(nova, 'hello')
     if _wait(nova, r'\[UM\] hello\.exe \(PID \d+\) exited'):
         time.sleep(2)
         nova.qmp.key('alt', 'f4')                       # (its Terminal)
+    else:
+        _close_menu(nova)
     time.sleep(2)
 
 

@@ -101,6 +101,9 @@ bool      NtPsHandleClose(void *handle);
 
 /* exports.c: an export by module and name, or 0 */
 UINT64    NtExport(const char *module, const char *name);
+/* Whether NovaOS itself provides @module (ntoskrnl.exe, hal.dll, ndis.sys,
+ * storport.sys): its imports bind to exports.h, not to an export driver */
+bool      NtExportModule(const char *module);
 
 /* io.c */
 void      NtIoInit(void);

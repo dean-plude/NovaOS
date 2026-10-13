@@ -11811,6 +11811,11 @@ virtio-net card, and NovaOS's network stack uses it as its adapter.
   messages); and `KUSER_SHARED_DATA` at `0xFFFFF78000000000`, where a
   driver reads the clocks (`KeQuerySystemTime` and `KeQueryTickCount` are
   macros that do).
+- **Imports from NovaOS's own driver hosts**: a driver's imports from
+  `ndis.sys` and `storport.sys` bind to NovaOS's export table, as those
+  from `ntoskrnl.exe` and `hal.dll` do, instead of being taken for an
+  export driver to load from `System32\drivers` (which stopped
+  `viostor.sys` loading once KMDF's export drivers came in).
 - **Driver spin locks and the big kernel lock**: a thread waiting for a
   driver's spin lock lets go of the big kernel lock while it waits (a
   download through `netkvm.sys` stopped the machine: one processor held

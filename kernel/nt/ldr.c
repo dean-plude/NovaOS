@@ -21,8 +21,9 @@
  * (devices, links) and unmaps the image; with files still open on its
  * devices that waits until the last one closes, as on Windows.
  *
- * An import from a module other than ntoskrnl.exe and hal.dll is an
- * export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
+ * An import from a module other than those NovaOS provides itself
+ * (ntoskrnl.exe, hal.dll, and its own NDIS and Storport hosts, ndis.sys
+ * and storport.sys: NtExportModule) is an export driver's, as on Windows (WDFLDR.SYS for a KMDF driver): the one
  * already loaded, or System32\drivers\<module> loaded for it: mapped the
  * same way (signature checked, its own imports bound), no driver object
  * and no DriverEntry, its DllInitialize called with its service key.
@@ -278,7 +279,7 @@ static bool bind_imports(const char *image, UINT8 *img, UINT32 size, UINT32 rva,
         if (d->Name >= size || d->FirstThunk >= size) return false;
         const char *mod = (const char *)(img + d->Name);
         NtDriver *exp = NULL;                     /* (an export driver's import) */
-        if (!same_ci(mod, "ntoskrnl.exe") && !same_ci(mod, "hal.dll")) {
+        if (!NtExportModule(mod)) {
             exp = find_image(mod);
             if (!exp) exp = load_export_driver(mod);
             if (!exp) {

@@ -638,10 +638,13 @@ measured frame-time gain over the CPU path.
   the display without CPU readback or GDI copies; `gltest present` and
   `gltest fps` compare the direct and fallback paths. See
   [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
-- [ ] **25.3 Intel GPU design.** Design a native driver for the T14's Intel
-  Iris Xe, covering kernel display and memory management under Mesa's iris
-  and anv. Done when the design is merged and display modes change on the
-  T14's panel.
+- [ ] **25.3 Intel GPU design.** Design the driver for the T14's Intel Iris
+  Xe, covering kernel display and memory management. Done when the design
+  is merged and display modes change on the T14's panel. The design is in
+  [design/intel-gpu.md](design/intel-gpu.md): Intel's own Windows driver,
+  unchanged, through a WDDM host (a `dxgkrnl.sys` stand-in), with Intel's
+  Vulkan driver under DXVK and VKD3D-Proton; a native driver under Mesa's
+  iris and anv is the fallback. Modes changing on the panel is its step 2.
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

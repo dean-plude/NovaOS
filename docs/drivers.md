@@ -296,7 +296,7 @@ for.  Each set's licence file goes beside it under
 
 | Set | Device | Linux driver | Files | NovaOS driver |
 |---|---|---|---|---|
-| `intel-graphics` | Intel Iris Xe and UHD graphics, Alder Lake-P and Raptor Lake-P (the ThinkPad T14 Gen 4) | `i915` | display microcontroller (DMC) `adlp_dmc.bin`, GuC `adlp_guc_70.bin`, HuC `tgl_huc.bin`; 1 MB | not yet: the native Intel GPU driver is roadmap step 25.3 |
+| `intel-graphics` | Intel Iris Xe and UHD graphics, Alder Lake-P and Raptor Lake-P (the ThinkPad T14 Gen 4) | `i915` | display microcontroller (DMC) `adlp_dmc.bin`, GuC `adlp_guc_70.bin`, HuC `tgl_huc.bin`; 1 MB | not yet, and not needed by the chosen design: Intel's Windows driver carries its own firmware ([design/intel-gpu.md](design/intel-gpu.md)); kept for the native fallback |
 | `intel-wifi` | Intel Wi-Fi 6E AX211 (Alder Lake and Raptor Lake laptops, one of the T14 Gen 4's two cards) | `iwlwifi` | `intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode` and its `.pnvm`; 1.7 MB | not yet (Wi-Fi is "missing" in [hardware.md](hardware.md#devices)) |
 | `intel-bluetooth` | Intel AX211 Bluetooth | `btintel` | `intel/ibt-0040-0041.sfi` and `.ddc`; 0.7 MB | not yet |
 | `qualcomm-wifi` | Qualcomm WCN6855 Wi-Fi 6E (NFA725A, the T14 Gen 4's other card) | `ath11k` | `ath11k/WCN6855/hw2.0/` `amss.bin`, `m3.bin`, `board-2.bin`, `regdb.bin`; 12 MB | not yet |

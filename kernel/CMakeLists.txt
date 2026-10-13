@@ -220,6 +220,7 @@ set(KERNEL_C_SOURCES
     nt/cng.c
     nt/ci_roots.c
     nt/dma.c
+    nt/dxgkrnl.c
     nt/etw.c
     nt/ex.c
     nt/exports.c

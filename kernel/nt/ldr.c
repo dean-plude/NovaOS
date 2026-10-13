@@ -130,6 +130,7 @@ void NtDrvInit(void)
     NtIoInit();
     NtKeInit();
     NtIoWorkerInit();
+    NtDxgkInit();
 }
 
 static bool same_ci(const char *a, const char *b)

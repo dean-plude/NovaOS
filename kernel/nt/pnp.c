@@ -844,8 +844,6 @@ UINT32 NtPnpStart(UINT32 node)
     um_registry_get_sz(key, "FriendlyName", friendly, sizeof(friendly));
     PnpSetNames(node, cls, friendly);
 
-    if (!p) p = is_pci ? pdo_new(node, &pci, n->instance) : usb_record(node, n->instance);
-    if (!p) { prob = PROB_FAILED_START; goto out; }
     /* NovaOS's own driver steps aside for the installed one, as Windows
      * replaces an inbox driver with a vendor's (once that one has loaded) */
     if (inbox) {
@@ -862,6 +860,9 @@ UINT32 NtPnpStart(UINT32 node)
         }
         n->flags &= ~(UINT32)PNP_STARTED;
     }
+    /* (made after that: a service that did not load leaves the inbox driver's device as it was) */
+    if (!p) p = is_pci ? pdo_new(node, &pci, n->instance) : usb_record(node, n->instance);
+    if (!p) { prob = PROB_FAILED_START; goto out; }
     prob = start_stack(p, service);
     if (prob) goto out;
     strncpy(p->service, service, sizeof(p->service) - 1);
@@ -1039,7 +1040,10 @@ void NtPnpBoot(void)
             PnpSetProblem(id, PROB_DISABLED);
             continue;
         }
-        if (um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) NtPnpStart(id);
+        /* (an inbox driver's own name, as plugplay recorded it, is not an installed service) */
+        if (um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0] &&
+            !((n->flags & PNP_STARTED) && !strcmp(service, n->service)))
+            NtPnpStart(id);
     }
     kfree(n);
 }

@@ -645,6 +645,8 @@ measured frame-time gain over the CPU path.
   unchanged, through a WDDM host (a `dxgkrnl.sys` stand-in), with Intel's
   Vulkan driver under DXVK and VKD3D-Proton; a native driver under Mesa's
   iris and anv is the fallback. Modes changing on the panel is its step 2.
+  Step 1 is in: the display-only WDDM host, with `wddmdod.sys` driving
+  QEMU's standard VGA in the devices suite ([history](HISTORY.md#a-windows-display-driver-on-the-boot-display)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

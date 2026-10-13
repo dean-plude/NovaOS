@@ -27,6 +27,14 @@
  * again on wake (no GOP then), so DisplayResume() puts the current mode
  * back from what the driver knows.  An adapter with no driver here keeps
  * whatever the firmware's wake path does.
+ *
+ * A Windows display driver installed on the boot display (a WDDM miniport
+ * on kernel/nt/dxgkrnl.c) takes the screen over from this driver as it
+ * takes it from Windows' Basic Display Driver: the desktop then draws into
+ * a picture in memory and each drawn rectangle goes to the driver
+ * (DxgkDdiPresentDisplayOnly), whose modes are the ones offered; when the
+ * driver is removed it hands the screen back in the mode it left, and the
+ * built-in driver carries on from there (DisplayWddmOffer/Withdraw).
  */
 
 #include "display.h"
@@ -36,6 +44,7 @@
 #include "../arch/x86_64/cpu.h"
 #include "../ke/printf.h"
 #include "../lib/string.h"
+#include "../mm/vmm.h"
 
 /* DISPI registers */
 #define VBE_INDEX_PORT   0x01CE
@@ -65,7 +74,7 @@ enum {
 #define VGA_CRTC          0x3D4
 #define VGA_STATUS        0x3DA           /* read: resets the attribute flip-flop */
 
-typedef enum { DRV_NONE, DRV_GOP, DRV_BOCHS, DRV_CIRRUS, DRV_VIRTIO } DrvKind;
+typedef enum { DRV_NONE, DRV_GOP, DRV_BOCHS, DRV_CIRRUS, DRV_VIRTIO, DRV_WDDM } DrvKind;
 
 static struct {
     DrvKind      kind;
@@ -87,6 +96,7 @@ static struct {
     bool         flip;                    /* two pages fit */
     int          page;                    /* the page on screen: 0 or 1 */
     int          vdev;                    /* DRV_VIRTIO: the virtio GPU (output 0) */
+    PciDevice    pci;                     /* DRV_BOCHS: the adapter */
 } d;
 
 static UINT16 vbe_read(int reg)
@@ -232,6 +242,7 @@ static bool bochs_probe(const BootFramebuffer *boot)
 
     d.bgr = true;                          /* little-endian XRGB: byte0 = blue */
     d.kind = DRV_BOCHS;
+    d.pci = pci;
     if (d.vga) vga_unblank(false);
 
     kprintf("[DISPLAY] %s: VBE %04x (%04x:%04x) at %02x:%02x.%x, %llu MB video memory, "
@@ -565,10 +576,143 @@ static void vheads_probe(void)
     }
 }
 
+
+/* -----------------------------------------------------------------------
+ * A Windows display driver on the boot display (kernel/nt/dxgkrnl.c)
+ *
+ * Offered from the thread that started the driver; taken up by the
+ * desktop loop (DisplayPoll, under the desktop lock), so the screen
+ * changes hands between two frames.  The desktop draws into g_wddm.shadow
+ * (sized for the driver's largest mode, kept for good: a frame drawn
+ * just as the driver goes may still land in it), and DisplayHeadDamage
+ * hands each drawn rectangle to the driver.  Withdrawn by the host with
+ * the desktop lock held and the driver stopped.
+ * ----------------------------------------------------------------------- */
+static struct {
+    const DisplayWddm *drv, *offer;
+    DisplayMode  modes[DISPLAY_MAX_MODES];
+    int          nmodes;
+    DisplayMode  cur;
+    UINT32      *shadow;
+    size_t       pages;
+    __typeof__(d) builtin;                /* the built-in driver's state, for the way back */
+    bool         changed;                 /* head 0 changed hands: DisplayPoll says so */
+} g_wddm;
+
+/* The built-in driver of a DISPI adapter lets a Windows driver have it
+ * (PciSetAside): it keeps drawing until the driver starts and offers itself */
+static bool bochs_set_aside(void) { return true; }
+
+void DisplayWddmOffer(const DisplayWddm *drv, const DisplayMode *modes, int n, DisplayMode cur)
+{
+    if (n > DISPLAY_MAX_MODES) n = DISPLAY_MAX_MODES;
+    memcpy(g_wddm.modes, modes, (size_t)n * sizeof(*modes));
+    g_wddm.nmodes = n;
+    g_wddm.cur = cur;
+    __atomic_store_n(&g_wddm.offer, drv, __ATOMIC_RELEASE);
+}
+
+static bool wddm_attach(void)
+{
+    const DisplayWddm *drv = __atomic_exchange_n(&g_wddm.offer, NULL, __ATOMIC_ACQ_REL);
+    if (!drv || g_wddm.drv || !g_wddm.nmodes) return false;
+    if (d.kind != DRV_BOCHS && d.kind != DRV_GOP) {
+        kprintf("[DISPLAY] %s: the screen is not the boot display's; not taking it over\n", drv->name);
+        return false;
+    }
+    UINT64 most = 0;
+    for (int i = 0; i < g_wddm.nmodes; i++)
+        if ((UINT64)g_wddm.modes[i].w * g_wddm.modes[i].h > most) most = (UINT64)g_wddm.modes[i].w * g_wddm.modes[i].h;
+    size_t pages = (size_t)((most * 4 + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (pages > g_wddm.pages) {
+        UINT32 *px = kernel_alloc_pages(pages);
+        if (!px) {
+            kprintf("[DISPLAY] %s: no memory for the desktop's picture\n", drv->name);
+            return false;
+        }
+        g_wddm.shadow = px;                       /* (an older, smaller one stays: it may still be drawn on) */
+        g_wddm.pages = pages;
+    }
+    DisplayMode c = g_wddm.cur;
+    for (int i = 0; i < g_wddm.nmodes; i++)           /* (the screen's mode now, if the driver has it: at boot the */
+        if (g_wddm.modes[i].w == d.cur.w && g_wddm.modes[i].h == d.cur.h) c = d.cur;   /* saved one came since) */
+    const UINT32 *old = (const UINT32 *)(PHYSMAP_BASE + d.vram_phys + (UINT64)d.page * d.cur.h * d.stride * 4);
+    for (int y = 0; y < c.h; y++)                     /* (what the screen shows, until the desktop redraws) */
+        for (int x = 0; x < c.w; x++)
+            g_wddm.shadow[(size_t)y * c.w + x] = y < d.cur.h && x < d.cur.w ? old[(size_t)y * d.stride + x] : 0;
+    g_wddm.builtin = d;
+    d.kind = DRV_WDDM;
+    d.cur = c;
+    d.stride = c.w;
+    d.vram_phys = (UINT64)(uintptr_t)g_wddm.shadow - PHYSMAP_BASE;
+    d.flip = false;
+    d.page = 0;
+    d.bgr = true;
+    d.nmodes = 0;
+    for (int i = 0; i < g_wddm.nmodes; i++) add_mode(g_wddm.modes[i].w, g_wddm.modes[i].h);
+    if (!DisplayModeSupported(d.def.w, d.def.h)) d.def = c;
+    if (!drv->set_mode(drv->ctx, c.w, c.h)) {        /* (its first VidPN: the mode on the screen) */
+        kprintf("[DISPLAY] %s refused %dx%d; the built-in driver keeps the screen\n", drv->name, c.w, c.h);
+        d = g_wddm.builtin;
+        return false;
+    }
+    g_wddm.drv = drv;
+    publish_surface();
+    drv->present(drv->ctx, g_wddm.shadow, c.w, 0, 0, c.w, c.h);
+    kprintf("[DISPLAY] %s (a Windows display-only driver) drives %s: %dx%d, %d mode(s)\n", drv->name,
+            d.name ? d.name : "the boot display", c.w, c.h, d.nmodes);
+    return true;
+}
+
+/* What the built-in driver shows now, for a Windows driver taking over
+ * (DxgkCbAcquirePostDisplayOwnership): the on-screen page, 32 bpp */
+bool DisplayPostInfo(UINT64 *phys, int *w, int *h, int *pitch_bytes)
+{
+    if (d.kind != DRV_BOCHS && d.kind != DRV_GOP) return false;
+    *phys = d.vram_phys + (UINT64)d.page * d.cur.h * d.stride * 4;
+    *w = d.cur.w;
+    *h = d.cur.h;
+    *pitch_bytes = d.stride * 4;
+    return true;
+}
+
+void DisplayWddmWithdraw(const DisplayWddm *drv, DisplayMode left)
+{
+    const DisplayWddm *pending = drv;
+    if (__atomic_compare_exchange_n(&g_wddm.offer, &pending, NULL, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return;                                       /* (offered, never taken up) */
+    if (g_wddm.drv != drv) return;
+    DisplayMode def = d.def;
+    d = g_wddm.builtin;
+    g_wddm.drv = NULL;
+    if (d.kind == DRV_BOCHS) {
+        /* (the PCI bus turned its decoding off when the driver's device went) */
+        UINT16 cmd = PciRead16(d.pci.bus, d.pci.dev, d.pci.func, 0x04);
+        PciWrite16(d.pci.bus, d.pci.dev, d.pci.func, 0x04, (UINT16)(cmd | 3));
+        bochs_read_mode();                            /* the mode the driver left the adapter in */
+        if (d.cur.w != left.w || d.cur.h != left.h)
+            kprintf("[DISPLAY] The driver said it left %dx%d; the adapter shows %dx%d\n", left.w, left.h,
+                    d.cur.w, d.cur.h);
+        add_mode(d.cur.w, d.cur.h);
+        UINT32 *vram = (UINT32 *)(PHYSMAP_BASE + d.vram_phys);
+        for (int y = 0; y < d.cur.h && y < left.h; y++)
+            memcpy(vram + (size_t)y * d.stride, g_wddm.shadow + (size_t)y * left.w,
+                   (size_t)(d.cur.w < left.w ? d.cur.w : left.w) * 4);
+    } else {
+        d.cur = d.boot;                               /* (the GOP framebuffer: its one mode) */
+    }
+    d.def = DisplayModeSupported(def.w, def.h) ? def : d.cur;
+    publish_surface();
+    if (d.kind == DRV_BOCHS) PciAllowSetAside(&d.pci, bochs_set_aside);
+    __atomic_store_n(&g_wddm.changed, true, __ATOMIC_RELEASE);
+    kprintf("[DISPLAY] %s gave the screen back: %s at %dx%d\n", drv->name, DisplayDriverName(), d.cur.w, d.cur.h);
+}
+
 bool DisplayPoll(UINT32 *removed)
 {
-    bool changed = false;
+    bool changed = __atomic_exchange_n(&g_wddm.changed, false, __ATOMIC_ACQ_REL);
     *removed = 0;
+    if (__atomic_load_n(&g_wddm.offer, __ATOMIC_ACQUIRE) && wddm_attach()) changed = true;
     for (int dev = 0; dev < VgpuCount(); dev++) {
         if (!vgpu_usable(dev) || !VgpuChanged(dev)) continue;
         int w[VGPU_MAX_SCANOUTS], h[VGPU_MAX_SCANOUTS];
@@ -650,6 +794,8 @@ void DisplayHeadDamage(int head, int x, int y, int w, int ht)
     if (g_damage_hook) g_damage_hook(head, x, y, w, ht);   /* (the overlays go back over it first) */
     if (head == 0) {
         if (d.kind == DRV_VIRTIO) VgpuFlush(d.vdev, 0, x, y, w, ht);
+        else if (d.kind == DRV_WDDM && g_wddm.drv && w > 0 && ht > 0)
+            g_wddm.drv->present(g_wddm.drv->ctx, g_wddm.shadow, d.stride, x, y, w, ht);
         return;
     }
     if (head < 1 || head > g_nheads || g_head[head - 1].regs) return;
@@ -821,6 +967,7 @@ void DisplayInit(const BootFramebuffer *boot)
     }
     g_boot_fb = boot->base;
     claim_boot_display(boot->base);
+    if (d.kind == DRV_BOCHS) PciAllowSetAside(&d.pci, bochs_set_aside);   /* (for a Windows display driver) */
     VgpuInit();
     if (d.kind == DRV_BOCHS) virtio_takeover();
     kprintf("[DISPLAY] %s: %dx%d, %d mode(s), %s\n", DisplayDriverName(), d.cur.w, d.cur.h,
@@ -835,6 +982,7 @@ const char *DisplayDriverName(void)
     case DRV_BOCHS:  return "Bochs VBE";
     case DRV_CIRRUS: return "Cirrus Logic";
     case DRV_VIRTIO: return "virtio GPU";
+    case DRV_WDDM:   return "Windows display driver (WDDM)";
     case DRV_GOP:    return "UEFI GOP framebuffer";
     default:        return "None";
     }
@@ -889,6 +1037,18 @@ bool DisplaySetMode(int w, int h)
         kprintf("[DISPLAY] Mode %dx%d (virtio GPU output 1)\n", w, h);
         return true;
     }
+    if (d.kind == DRV_WDDM) {
+        if (!g_wddm.drv || !g_wddm.drv->set_mode(g_wddm.drv->ctx, w, h)) {
+            kprintf("[DISPLAY] %dx%d refused by %s; staying at %dx%d\n", w, h, g_wddm.drv ? g_wddm.drv->name : "the driver",
+                    d.cur.w, d.cur.h);
+            return false;
+        }
+        d.cur = (DisplayMode){ w, h };
+        d.stride = w;
+        publish_surface();
+        kprintf("[DISPLAY] Mode %dx%d (Windows display driver %s)\n", w, h, g_wddm.drv->name);
+        return true;
+    }
     if (d.kind != DRV_BOCHS) return false;
     DisplayMode old = d.cur;
     if (!bochs_set_mode(w, h)) {
@@ -933,6 +1093,11 @@ void DisplayResume(void)
         kprintf("[DISPLAY] Head %d: %dx%d set again after sleep\n", i + 1, h->cur.w, h->cur.h);
     }
     switch (d.kind) {
+    case DRV_WDDM:                            /* (the driver sets its mode again) */
+        if (!g_wddm.drv || !g_wddm.drv->set_mode(g_wddm.drv->ctx, d.cur.w, d.cur.h)) return;
+        g_wddm.drv->present(g_wddm.drv->ctx, g_wddm.shadow, d.stride, 0, 0, d.cur.w, d.cur.h);
+        kprintf("[DISPLAY] %s: %dx%d set again after sleep\n", g_wddm.drv->name, d.cur.w, d.cur.h);
+        return;
     case DRV_BOCHS:  bochs_restore(); break;
     case DRV_CIRRUS: cirrus_set_mode(d.cur.w, d.cur.h); break;
     default:         return;              /* the GOP's mode: what the firmware's wake path does */

@@ -54,8 +54,11 @@ each such device one of its models names, and the driver starts at once
 and at every boot after: NovaOS calls its `AddDevice` and gives it the
 device's memory, I/O ports and interrupt with `IRP_MN_START_DEVICE`, as
 Windows does, and the driver can map the memory (`MmMapIoSpace`), connect
-the interrupt (`IoConnectInterruptEx`; NovaOS gives Windows drivers no
-MSI yet, so it is the line-based interrupt), use DMA (`IoGetDmaAdapter`)
+the interrupt (`IoConnectInterruptEx`: the device's line, or, when the
+driver's INF sets `MSISupported` and the device has an MSI or MSI-X
+capability, message-signalled interrupts as Windows hands them: a
+message descriptor in the start resources and the message table from the
+connect), use DMA (`IoGetDmaAdapter`)
 and register a device interface that programs open.  `pnputil
 /enum-devices /deviceid ID` shows the device started with its driver,
 `pnputil /disable-device /deviceid ID` takes the driver away (it may

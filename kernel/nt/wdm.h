@@ -404,6 +404,11 @@ typedef struct _NT_CM_PARTIAL_RESOURCE_DESCRIPTOR {
     union {
         struct { long long Start; unsigned int Length; } Generic, Port, Memory;
         struct { unsigned short Level, Group; unsigned int Vector; unsigned long long Affinity; } Interrupt;
+        /* CM_RESOURCE_INTERRUPT_MESSAGE: raw gives the count of messages, translated the first vector */
+        union {
+            struct { unsigned short Reserved, MessageCount; unsigned int Vector; unsigned long long Affinity; } Raw;
+            struct { unsigned short Level, Group; unsigned int Vector; unsigned long long Affinity; } Translated;
+        } MessageInterrupt;
         struct { unsigned int Channel, Port, Reserved1; } Dma;
         struct { unsigned int Data[3]; } DeviceSpecificData;
     } u;
@@ -434,6 +439,7 @@ typedef struct _NT_CM_RESOURCE_LIST {
 #define NT_CmResourceShareShared     3
 #define NT_CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE 0x0000
 #define NT_CM_RESOURCE_INTERRUPT_LATCHED         0x0001
+#define NT_CM_RESOURCE_INTERRUPT_MESSAGE         0x0002
 #define NT_CM_RESOURCE_MEMORY_READ_WRITE         0x0000
 #define NT_CM_RESOURCE_PORT_IO                   0x0001
 #define NT_PCIBus                    5
@@ -482,6 +488,26 @@ typedef struct _NT_DEVICE_CAPABILITIES {
 #define NT_CONNECT_FULLY_SPECIFIED_GROUP 4   /* (KMDF's: FullySpecified with its Group) */
 typedef unsigned char (NT_API *NT_KSERVICE_ROUTINE)(void *Interrupt, void *Context);
 typedef unsigned char (NT_API *NT_KSYNCHRONIZE_ROUTINE)(void *Context);
+typedef unsigned char (NT_API *NT_KMESSAGE_SERVICE_ROUTINE)(void *Interrupt, void *Context, unsigned int MessageId);
+
+/* IO_INTERRUPT_MESSAGE_INFO: what a message-based IoConnectInterruptEx hands back
+ * (ConnectionContext points at it): where the device writes, and the data, per message */
+typedef struct _NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY {
+    long long          MessageAddress;
+    unsigned long long TargetProcessorSet;
+    void              *InterruptObject;
+    unsigned int       MessageData;
+    unsigned int       Vector;
+    unsigned char      Irql;
+    int                Mode;            /* LevelSensitive 0, Latched 1 */
+    int                Polarity;        /* InterruptPolarityUnknown 0 */
+} NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY;
+
+typedef struct _NT_IO_INTERRUPT_MESSAGE_INFO {
+    unsigned char UnifiedIrql;
+    unsigned int  MessageCount;
+    NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY MessageInfo[1];
+} NT_IO_INTERRUPT_MESSAGE_INFO;
 
 typedef struct _NT_IO_CONNECT_INTERRUPT_PARAMETERS {
     unsigned int Version;
@@ -783,6 +809,9 @@ _Static_assert(NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.Sync
                NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, FullySpecified.ProcessorEnableMask) == 0x40 &&
                NT_OFFSET(NT_IO_CONNECT_INTERRUPT_PARAMETERS, MessageBased.FallBackServiceRoutine) == 0x38,
                "IO_CONNECT_INTERRUPT_PARAMETERS");
+_Static_assert(sizeof(NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY) == 48 && NT_OFFSET(NT_IO_INTERRUPT_MESSAGE_INFO, MessageInfo) == 8 &&
+               NT_OFFSET(NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY, MessageData) == 24 &&
+               NT_OFFSET(NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY, Mode) == 36, "IO_INTERRUPT_MESSAGE_INFO");
 _Static_assert(NT_OFFSET(NT_DEVICE_DESCRIPTION, BusNumber) == 12 && NT_OFFSET(NT_DEVICE_DESCRIPTION, MaximumLength) == 32 &&
                NT_OFFSET(NT_DEVICE_DESCRIPTION, DmaAddressWidth) == 40 && sizeof(NT_DEVICE_DESCRIPTION) == 64,
                "DEVICE_DESCRIPTION");

@@ -103,6 +103,12 @@ bool IoApicRouteIrq(UINT32 irq, bool level, bool low, UINT8 vector, UINT32 *gsi_
     return true;
 }
 
+void IoApicMsiMessage(UINT8 vector, UINT64 *address, UINT32 *data)
+{
+    *address = 0xFEE00000ull | ((UINT64)g_kpcr[0].ApicId << 12);     /* (physical destination: the boot CPU) */
+    *data = vector;                                                  /* (fixed delivery, edge-triggered) */
+}
+
 void IoApicMask(UINT32 gsi, bool mask)
 {
     for (int i = 0; i < g_nroute; i++)

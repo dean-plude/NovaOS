@@ -172,6 +172,12 @@ const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo);
 /* intr.c: a vector of its own for GSI @gsi, routed (masked until a driver
  * connects to it) to the boot CPU; 0 if it cannot be routed */
 UINT8     NtIntrVector(UINT32 gsi, bool level, bool low);
+UINT8     NtIntrMsiAlloc(unsigned count);                 /* an aligned block of message vectors (first, or 0) */
+void      NtIntrMsiFree(UINT8 first, unsigned count);
+/* A function driver that only connects the line (the Storport host) says so in AddDevice: no messages for it */
+void      NtPnpLineOnly(NT_DEVICE_OBJECT *pdo);
+bool      NtPnpMessagesOf(NT_DEVICE_OBJECT *pdo, UINT8 *first, UINT32 *count, UINT8 *irql);
+void      NtPnpMsiEnable(NT_DEVICE_OBJECT *pdo, bool on);
 
 /* mm.c: describe @m's pages (of the calling program's buffer when @user)
  * for an access by a driver (@op IoReadAccess 0, IoWriteAccess 1,

@@ -35,6 +35,12 @@ typedef struct {
     unsigned int       dma_version;
     unsigned int       starts, opens;
     unsigned int       capabilities_address;   /* IRP_MN_QUERY_CAPABILITIES' Address: device << 16 | function */
+    unsigned int       message;            /* the interrupt came as CM_RESOURCE_INTERRUPT_MESSAGE (MSI) */
+    unsigned int       message_count;      /* the raw descriptor's MessageCount */
+    unsigned int       message_irql;       /* IO_INTERRUPT_MESSAGE_INFO.UnifiedIrql */
+    unsigned int       message_vector;     /* the table's first Vector */
+    unsigned int       message_data;       /* its MessageData */
+    long long          message_address;    /* its MessageAddress (0xFEExxxxx) */
     unsigned short     location[64];       /* IoGetDeviceProperty(DevicePropertyLocationInformation) */
 } EDUTEST_INFO;
 
@@ -44,6 +50,7 @@ typedef struct {
     unsigned int       isr_irql;           /* the IRQL the ISR ran at */
     unsigned int       dpc_irql;           /* and its DPC */
     unsigned int       interrupts;         /* the ISR's count so far */
+    unsigned int       message_interrupts; /* of them, through the message routine (with MessageId 0) */
 } EDUTEST_FACT;
 
 typedef struct {

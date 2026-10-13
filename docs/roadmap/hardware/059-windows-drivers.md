@@ -22,7 +22,7 @@
   Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts only, MSI comes later.  Step 30.4's
+  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4's
   framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
   and NovaOS's `WdfLdr.sys` load KMDF drivers
   (a test driver's control device and queue); the KMDF version of the

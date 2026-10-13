@@ -102,7 +102,11 @@ order; --list prints them):
             "netkvm", QEMU's virtio-net card, on which pnputil installs
             virtio-win's signed netkvm.sys in place of the built-in
             driver: it runs on NovaOS's own NDIS host while DHCP, a ping
-            and a download go through it
+            and a download go through it; "wddm", the standard VGA, on
+            which pnputil installs a WDDM display-only driver
+            (wddmdod.sys) that takes the desktop over from the built-in
+            driver through NovaOS's dxgkrnl host, changes mode as
+            Settings asks and gives the screen back when disabled
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -335,6 +339,7 @@ VIOSER = load_suite('devices/vioser')
 VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
 KMDFEDU = load_suite('devices/kmdfedu')
+WDDM = load_suite('devices/wddm')
 NETKVM = load_suite('devices/netkvm')
 
 
@@ -476,6 +481,12 @@ def umdf_boot(work):
     umdftest.dll, is installed with pnputil and runs in a driver host
     (tests/selftest/devices/umdf)"""
     return ['-device', 'edu'], []
+
+
+def wddm_boot(work):
+    """The device boots' own standard VGA (PCI 1234:1111), on which pnputil
+    installs a WDDM display-only driver, wddmdod.sys (tests/selftest/devices/wddm)"""
+    return [], []
 
 
 def kmdfedu_boot(work):
@@ -767,7 +778,8 @@ BOOTS = {
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
-                ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot)],
+                ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
+                ('wddm', WDDM, wddm_boot)],
 }
 
 

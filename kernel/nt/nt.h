@@ -68,6 +68,8 @@ struct NtDriver {
  * are up; io.c: start the driver work-item worker */
 void      NtKeInit(void);
 void      NtIoWorkerInit(void);
+/* dxgkrnl.c: \Device\DxgKrnl, the WDDM host display-only drivers register with */
+void      NtDxgkInit(void);
 
 /* ldr.c */
 void      NtDrvInit(void);

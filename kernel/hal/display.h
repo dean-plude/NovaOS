@@ -1,7 +1,7 @@
 /*
  * display.h — display adapter driver: modes and page flipping
  *
- * Three back ends:
+ * The back ends:
  *   - Bochs/QEMU VBE "DISPI" (QEMU -vga std, qxl, virtio and vmware,
  *     -device bochs-display, VirtualBox's VBoxVGA): any resolution the
  *     adapter's video memory holds, set at run time, and two pages of
@@ -10,6 +10,9 @@
  *   - Cirrus Logic GD5446 (QEMU -vga cirrus): 800x600 and 640x480.
  *   - The UEFI GOP framebuffer the bootloader handed over: the boot mode
  *     only, no flipping (every other adapter).
+ *   - A Windows display driver (WDDM, display-only) installed on the boot
+ *     display takes over from the first or the last (DisplayWddmOffer,
+ *     below): its modes, through NovaOS's dxgkrnl host.
  *
  * The driver keeps the framebuffer console (framebuffer.h) pointed at the
  * page on screen; the GDI reads its geometry from there.
@@ -135,3 +138,24 @@ void DisplayStats(UINT64 *out);
  * head N (by its number before the call) that went, the later heads
  * moving up a place each. */
 bool DisplayPoll(UINT32 *removed);
+
+/* -----------------------------------------------------------------------
+ * A Windows display driver on the boot display (kernel/nt/dxgkrnl.c, the
+ * WDDM host).  Its host offers it once the driver has started, with the
+ * modes the driver's source mode set holds and the mode it shows; the
+ * desktop loop hands it the screen (DisplayPoll says the display changed)
+ * and from then on head 0 is a picture in memory whose drawn rectangles
+ * go to @present, and DisplaySetMode asks @set_mode.  Withdraw (with the
+ * desktop lock held, the driver no longer presenting) gives the screen
+ * back to the built-in driver in the mode the driver left, @left.
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    const char *name;                     /* the driver's service ("WddmDod") */
+    void       *ctx;
+    bool (*set_mode)(void *ctx, int w, int h);
+    void (*present)(void *ctx, const UINT32 *px, int stride, int x, int y, int w, int h);
+} DisplayWddm;
+
+void DisplayWddmOffer(const DisplayWddm *drv, const DisplayMode *modes, int n, DisplayMode cur);
+void DisplayWddmWithdraw(const DisplayWddm *drv, DisplayMode left);
+bool DisplayPostInfo(UINT64 *phys, int *w, int *h, int *pitch_bytes);

@@ -1126,17 +1126,33 @@ NT_API NTSTATUS nt_PoRequestPowerIrp(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 
     return NT_STATUS_NOT_IMPLEMENTED;                 /* power IRPs: step 30.3 */
 }
 
-/* IoGetDeviceObjectPointer opens a named device and returns its device and
- * file objects.  Opening another driver's device by name across the Zw
- * layer arrives with the object manager in a later driver step; until then
- * it reports the device was not found. */
+/* IoGetDeviceObjectPointer opens a named device (\Device\X or a link's
+ * name) and returns it with a file object for it; dereferencing the file
+ * object closes nothing (no IRP_MJ_CLOSE reaches the device).  Used by
+ * display-only drivers to find \Device\DxgKrnl (kernel/nt/dxgkrnl.c). */
 NT_API NTSTATUS nt_IoGetDeviceObjectPointer(NT_UNICODE_STRING *name, UINT32 access,
                                             NT_FILE_OBJECT **file, NT_DEVICE_OBJECT **dev)
 {
-    (void)name; (void)access;
+    (void)access;
     if (file) *file = NULL;
     if (dev) *dev = NULL;
-    return STATUS_OBJECT_NAME_NOT_FOUND;
+    char nm[2 * NAME_MAX_];
+    if (!ascii(name, nm, sizeof(nm))) return NT_STATUS_OBJECT_NAME_INVALID;
+    const char *path = link_name(nm);
+    const char *rest = NULL;
+    IrqState s = spin_lock_irqsave(&g_lock);
+    NT_DEVICE_OBJECT *d = resolve(path ? path : nm, &rest);
+    spin_unlock_irqrestore(&g_lock, s);
+    if (!d || (rest && *rest)) return STATUS_OBJECT_NAME_NOT_FOUND;
+    NT_FILE_OBJECT *f = kzalloc(sizeof(*f));
+    if (!f) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    f->Type = 5;
+    f->Size = (short)sizeof(*f);
+    f->DeviceObject = d;
+    if (file) *file = f;
+    else kfree(f);
+    if (dev) *dev = d;
+    return NT_STATUS_SUCCESS;
 }
 
 /* =======================================================================

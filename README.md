@@ -313,8 +313,9 @@ Build with `NOVA_NO_NETSURF=1` for an image without it.
 licensed under the **GNU LGPL version 2.1** (or later).  It is compiled
 into `d3dcompiler_47.dll` alone, a separate DLL whose own sources
 (`userland/d3dcompiler_47`, MIT) call it only through its public API; its
-complete source is in this repository, and a changed copy can be rebuilt
-into that DLL and put in its place (see
+complete source is in this repository, with NovaOS's one change to it
+(shader model 5.1 descriptor arrays, which wgpu's Direct3D 12 shaders use),
+and a changed copy can be rebuilt into that DLL and put in its place (see
 `third_party/vkd3d-shader/NOVA-VENDOR.txt`).
 
 **7-Zip** (`third_party/7z2603-x64.exe`) is Igor Pavlov's unmodified

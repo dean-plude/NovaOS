@@ -30,6 +30,7 @@
 #include "../ldr/ldr.h"
 #include "../ke/printf.h"
 #include "../ke/irql.h"
+#include "../ke/smp.h"
 #include "../lib/string.h"
 #include "../arch/x86_64/idt.h"
 
@@ -414,13 +415,10 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
 {
     if (!NtDrvByAddress(f->rip)) return false;        /* not in driver code */
     SehContext ctx;
-    /* A fault taken in ring 0 does not change rings, so the CPU pushed only
-     * RIP/CS/RFLAGS (and the error code): InterruptFrame.rsp holds the
-     * interrupted code's stack data, not the faulting RSP.  The real one is
-     * where the CPU frame sits, i.e. the address of that rsp field. */
-    UINT64 fault_rsp = (UINT64)(uintptr_t)&f->rsp;
+    /* In 64-bit mode the CPU pushes SS:RSP on every interrupt, a ring-0
+     * fault included, so InterruptFrame.rsp is the faulting RSP. */
     ctx.Reg[R_RAX] = f->rax; ctx.Reg[R_RCX] = f->rcx; ctx.Reg[R_RDX] = f->rdx; ctx.Reg[R_RBX] = f->rbx;
-    ctx.Reg[R_RSP] = fault_rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
+    ctx.Reg[R_RSP] = f->rsp; ctx.Reg[R_RBP] = f->rbp; ctx.Reg[R_RSI] = f->rsi; ctx.Reg[R_RDI] = f->rdi;
     ctx.Reg[R_R8] = f->r8; ctx.Reg[R_R9] = f->r9; ctx.Reg[R_R10] = f->r10; ctx.Reg[R_R11] = f->r11;
     ctx.Reg[R_R12] = f->r12; ctx.Reg[R_R13] = f->r13; ctx.Reg[R_R14] = f->r14; ctx.Reg[R_R15] = f->r15;
     ctx.Rip = f->rip;
@@ -435,10 +433,23 @@ bool NtKernelException(InterruptFrame *f, UINT64 cr2)
         rec.ExceptionInformation[0] = (f->error_code & 2) ? 1 : 0;   /* write */
         rec.ExceptionInformation[1] = cr2;
     }
+    /* interrupt_dispatch (arch/x86_64/idt.c) took the big kernel lock once
+     * for this exception and lets it go when dispatch() returns.  A handled
+     * __except resumes through seh_resume and never returns there, so that
+     * release would be skipped and the driver would run one lock level too
+     * deep for good — stalling the other CPUs until the watchdog force-frees
+     * the lock and the kernel corrupts.  Drop that level here before a resume
+     * can happen; take it back if nothing handles the fault, so the caller's
+     * own release still balances on the way to the bug check.  The driver
+     * normally faults while already holding the lock (depth >= 1 from its
+     * dispatch), so this only decrements the count and keeps the lock held
+     * across the unwind — the concurrency during unwinding is unchanged. */
+    bkl_release();
     /* dispatch() resumes through seh_resume on a handled __except, which
      * loads the unwound registers and jumps — it never returns here.  If
      * it returns, nothing handled the fault. */
     dispatch(&rec, &ctx, NULL);
+    bkl_acquire();
     return false;
 }
 

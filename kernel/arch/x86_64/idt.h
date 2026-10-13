@@ -11,8 +11,8 @@
  *
  * Exception frame layout on the stack when an ISR is invoked:
  *
- *   [RSP+40] SS        (only pushed on ring change)
- *   [RSP+32] RSP_user  (only pushed on ring change)
+ *   [RSP+40] SS        (64-bit mode pushes SS:RSP on every interrupt,
+ *   [RSP+32] RSP        ring change or not: RSP is the interrupted one)
  *   [RSP+24] RFLAGS
  *   [RSP+16] CS
  *   [RSP+8]  RIP
@@ -115,8 +115,8 @@ typedef struct __packed {
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
-    uint64_t rsp;      /* Only valid on ring-change (ring 3 → ring 0) */
-    uint64_t ss;       /* Only valid on ring-change */
+    uint64_t rsp;      /* the interrupted RSP (always pushed in 64-bit mode) */
+    uint64_t ss;
 } InterruptFrame;
 
 /* Initialize the IDT and load IDTR. */

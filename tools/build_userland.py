@@ -652,6 +652,18 @@ edudir = os.path.join(out, 'edutest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), edudir, 'edutest'])
 for n in sorted(os.listdir(edudir)):
     built.append((f'\\Tests\\Edu\\{n}', os.path.join(edudir, n)))
+# 3a2f. UMDF 2 (step 30.10): Wudfx02000.dll, the user-mode framework, built
+# from the same Windows-Driver-Frameworks source, the driver host
+# WUDFHost.exe and the reflector WUDFRd.sys (tools/umdf/build_umdf.py), where
+# Windows keeps them, and the UMDF test driver's package (umdftest.dll, INF,
+# catalog) the umdf self-test installs with pnputil
+umdfdir = os.path.join(out, 'umdf')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'umdf', 'build_umdf.py'), umdfdir, out])
+built.append(('\\Windows\\System32\\drivers\\WUDFRd.sys', os.path.join(umdfdir, 'WUDFRd.sys')))
+for n in ('Wudfx02000.dll', 'WUDFHost.exe'):
+    built.append((f'\\Windows\\System32\\{n}', os.path.join(umdfdir, n)))
+for n in sorted(os.listdir(os.path.join(umdfdir, 'umdftest'))):
+    built.append((f'\\Tests\\Umdf\\{n}', os.path.join(umdfdir, 'umdftest', n)))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)
 sf2 = os.path.join(out, 'gm.sf2')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'make_gm_soundfont.py'), sf2])

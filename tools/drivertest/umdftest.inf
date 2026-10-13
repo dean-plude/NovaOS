@@ -1,0 +1,68 @@
+; umdftest.inf - the package of umdftest.dll, a UMDF 2 driver for QEMU's edu
+; device (tools/drivertest/umdftest.c; the umdf self-test installs it with
+; pnputil /add-driver /install).  As every UMDF driver's INF does, it makes
+; the reflector, WUDFRd.sys, the device's function driver and names the
+; UMDF driver in the .Wdf section; the driver host runs the DLL from the
+; driver store.
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 10/12/2026,1.0.0.0
+CatalogFile = umdftest.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+umdftest.dll = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Edu,NTamd64
+
+[Edu.NTamd64]
+%DeviceDesc% = UmdfTest_Install, PCI\VEN_1234&DEV_11E8
+
+[UmdfTest_Install.NT]
+CopyFiles = UmdfTest_Files
+
+[UmdfTest_Files]
+umdftest.dll
+
+[UmdfTest_Install.NT.HW]
+AddReg = UmdfTest_HwReg
+
+[UmdfTest_HwReg]
+HKR,,UmdfTestSetting,0x00010001,1
+
+[UmdfTest_Install.NT.Services]
+AddService = WUDFRd, 0x000001fa, WUDFRD_ServiceInstall
+
+[WUDFRD_ServiceInstall]
+DisplayName   = %WudfRdDisplayName%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1
+ServiceBinary = %12%\WUDFRd.sys
+
+[UmdfTest_Install.NT.Wdf]
+UmdfService              = UmdfTest, UmdfTest_UmdfInstall
+UmdfServiceOrder         = UmdfTest
+UmdfDirectHardwareAccess = RejectDirectHardwareAccess
+UmdfFileObjectPolicy     = RejectNullAndUnknownFileObjects
+
+[UmdfTest_UmdfInstall]
+UmdfLibraryVersion = 2.33.0
+ServiceBinary      = %13%\umdftest.dll
+
+[Strings]
+ProviderName      = "NovaOS Test"
+ManufacturerName  = "QEMU"
+DiskName          = "NovaOS UMDF driver test"
+DeviceDesc        = "QEMU edu device (NovaOS UMDF test driver)"
+WudfRdDisplayName = "Windows Driver Foundation - User-mode Driver Framework Reflector"

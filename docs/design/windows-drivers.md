@@ -367,9 +367,13 @@ downloaded by the test as NovaOS's other tests download apps.
    driver installed from its `.inf` drives QEMU's `edu` PCI device
    (MMIO, an MSI interrupt and a DMA transfer) and shows as started in
    Device Manager.  As built: the PDOs are PCI devices only (the bus
-   NovaOS's own drivers leave free), interrupts are line-based (a
-   message-based connect falls back to the line, as Windows does when MSI
-   is off; MSI for Windows drivers comes with 30.9's NDIS), DMA goes
+   NovaOS's own drivers leave free), interrupts are the device's line or,
+   for a driver whose INF sets `MSISupported` (Windows' own opt-in) on a
+   device with an MSI or MSI-X capability, a `CM_RESOURCE_INTERRUPT_MESSAGE`
+   descriptor (the kernel programs the capability when the device starts, as
+   Windows' PCI driver does) and a message-based `IoConnectInterruptEx` returns the
+   `IO_INTERRUPT_MESSAGE_INFO` table (KMDF connects each vector fully specified);
+   the connect falls back to the line when the device was not given messages, DMA goes
    through bounce buffers when memory is beyond the device's address
    width (the page allocator sets aside 2 MiB below 16 MiB for them), and removal is tested through `pnputil /disable-device` (query-
    remove, remove), since NovaOS has no PCI hot-unplug for QEMU's

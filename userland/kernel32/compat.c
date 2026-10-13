@@ -919,44 +919,130 @@ K32 BOOL WINAPI UnregisterWaitEx(HANDLE h, HANDLE done)
 
 K32 BOOL WINAPI UnregisterWait(HANDLE h) { return UnregisterWaitEx(h, 0); }
 
-/* Thread-pool waits and timers (CreateThreadpoolWait / Timer) */
+/* Thread-pool waits (CreateThreadpoolWait): a thread per wait object, made
+ * when it is first set, waits for the object it is set to and calls back
+ * once.  As on Windows, setting (or clearing) the wait never waits for a
+ * callback, so a callback may set its own wait again, and a thread that
+ * holds a lock the callback takes may set it too; closing it frees it
+ * once a running callback has returned. */
 typedef VOID (WINAPI *TpWaitFn)(PVOID instance, PVOID ctx, PVOID wait, DWORD result);
-typedef struct { DWORD magic; TpWaitFn fn; PVOID ctx; HANDLE reg; } TpWait;
+typedef struct {
+    DWORD magic;
+    TpWaitFn fn;
+    PVOID ctx;
+    SRWLOCK lock;                   /* the fields below */
+    HANDLE obj;                     /* what it waits for; NULL: not set */
+    ULONGLONG until;                /* GetTickCount64 deadline, ~0: none */
+    LONG gen;                       /* bumped by every set, clear and close */
+    BOOL closing, started;
+    HANDLE kick;                    /* auto-reset: the fields changed */
+    HANDLE idle;                    /* manual-reset: no callback running */
+    DWORD tid;                      /* its thread */
+} TpWait;
 
 K32 PVOID WINAPI CreateThreadpoolWait(TpWaitFn fn, PVOID ctx, PVOID env)
 {
     (void)env;
     TpWait *w = zalloc(sizeof(*w));
-    if (!w) return 0;
+    if (!w) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return 0; }
+    w->kick = CreateEventW(0, FALSE, FALSE, 0);
+    w->idle = CreateEventW(0, TRUE, TRUE, 0);
+    if (!w->kick || !w->idle) {
+        if (w->kick) CloseHandle(w->kick);
+        if (w->idle) CloseHandle(w->idle);
+        zfree(w);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
     w->magic = 0x54505754; w->fn = fn; w->ctx = ctx;
     return w;
 }
 
-static VOID CALLBACK tp_wait_cb(PVOID p, BOOLEAN timed_out)
+static DWORD WINAPI tp_wait_thread(LPVOID p)
 {
     TpWait *w = p;
-    w->fn(0, w->ctx, w, timed_out ? WAIT_TIMEOUT : WAIT_OBJECT_0);
+    for (;;) {
+        AcquireSRWLockExclusive(&w->lock);
+        BOOL closing = w->closing;
+        HANDLE obj = w->obj;
+        ULONGLONG until = w->until;
+        LONG gen = w->gen;
+        ReleaseSRWLockExclusive(&w->lock);
+        if (closing) break;
+        if (!obj) { WaitForSingleObject(w->kick, INFINITE); continue; }
+        DWORD ms = INFINITE;
+        if (until != ~0ULL) { ULONGLONG now = GetTickCount64(); ms = until > now ? (DWORD)(until - now) : 0; }
+        HANDLE hs[2] = { w->kick, obj };
+        DWORD r = WaitForMultipleObjects(2, hs, FALSE, ms);
+        if (r == WAIT_OBJECT_0) continue;                   /* (set again, cleared or closed) */
+        if (r == WAIT_FAILED) r = WAIT_ABANDONED_0;         /* (the object was closed) */
+        else if (r == WAIT_OBJECT_0 + 1) r = WAIT_OBJECT_0;
+        AcquireSRWLockExclusive(&w->lock);
+        BOOL current = w->gen == gen && !w->closing;
+        if (current) { w->obj = 0; ResetEvent(w->idle); }
+        ReleaseSRWLockExclusive(&w->lock);
+        if (!current) continue;
+        w->fn(0, w->ctx, w, r);
+        SetEvent(w->idle);
+    }
+    CloseHandle(w->kick);
+    CloseHandle(w->idle);
+    w->magic = 0;
+    zfree(w);
+    return 0;
 }
 
 K32 VOID WINAPI SetThreadpoolWait(PVOID p, HANDLE obj, PFILETIME timeout)
 {
     TpWait *w = p;
-    if (w->reg) { UnregisterWaitEx(w->reg, INVALID_HANDLE_VALUE); w->reg = 0; }
-    if (!obj) return;
-    DWORD ms = INFINITE;
-    if (timeout) {
+    ULONGLONG until = ~0ULL;
+    if (obj && timeout) {
         LONGLONG t = ft(timeout);
-        if (t < 0) ms = (DWORD)(-t / 10000);
-        else { FILETIME now; GetSystemTimeAsFileTime(&now); LONGLONG d = t - ft(&now); ms = d > 0 ? (DWORD)(d / 10000) : 0; }
+        ULONGLONG ms;
+        if (t <= 0) ms = (ULONGLONG)(-t / 10000);
+        else { FILETIME now; GetSystemTimeAsFileTime(&now); LONGLONG d = t - ft(&now); ms = d > 0 ? (ULONGLONG)(d / 10000) : 0; }
+        until = GetTickCount64() + ms;
     }
-    RegisterWaitForSingleObject(&w->reg, obj, tp_wait_cb, w, ms, 8 /* once */);
+    AcquireSRWLockExclusive(&w->lock);
+    w->obj = obj;
+    w->until = until;
+    w->gen++;
+    BOOL start = obj && !w->started;
+    if (start) w->started = TRUE;
+    ReleaseSRWLockExclusive(&w->lock);
+    if (start) {
+        HANDLE t = CreateThread(0, 0, tp_wait_thread, w, 0, &w->tid);
+        if (t) CloseHandle(t);
+        else { AcquireSRWLockExclusive(&w->lock); w->started = FALSE; w->obj = 0; ReleaseSRWLockExclusive(&w->lock); }
+    }
+    SetEvent(w->kick);
 }
 
-K32 VOID WINAPI WaitForThreadpoolWaitCallbacks(PVOID p, BOOL cancel) { (void)p; (void)cancel; }
+K32 VOID WINAPI WaitForThreadpoolWaitCallbacks(PVOID p, BOOL cancel)
+{
+    TpWait *w = p;
+    if (cancel) {
+        AcquireSRWLockExclusive(&w->lock);
+        w->obj = 0;
+        w->gen++;
+        ReleaseSRWLockExclusive(&w->lock);
+        SetEvent(w->kick);
+    }
+    if (w->started && w->tid != GetCurrentThreadId()) WaitForSingleObject(w->idle, INFINITE);
+}
+
 K32 VOID WINAPI CloseThreadpoolWait(PVOID p)
 {
     TpWait *w = p;
-    if (w->reg) UnregisterWaitEx(w->reg, INVALID_HANDLE_VALUE);
+    AcquireSRWLockExclusive(&w->lock);
+    w->closing = TRUE;
+    w->obj = 0;
+    w->gen++;
+    BOOL started = w->started;
+    ReleaseSRWLockExclusive(&w->lock);
+    if (started) { SetEvent(w->kick); return; }          /* (its thread frees it) */
+    CloseHandle(w->kick);
+    CloseHandle(w->idle);
     w->magic = 0;
     zfree(w);
 }

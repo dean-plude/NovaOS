@@ -54,8 +54,11 @@ each such device one of its models names, and the driver starts at once
 and at every boot after: NovaOS calls its `AddDevice` and gives it the
 device's memory, I/O ports and interrupt with `IRP_MN_START_DEVICE`, as
 Windows does, and the driver can map the memory (`MmMapIoSpace`), connect
-the interrupt (`IoConnectInterruptEx`; NovaOS gives Windows drivers no
-MSI yet, so it is the line-based interrupt), use DMA (`IoGetDmaAdapter`)
+the interrupt (`IoConnectInterruptEx`: the device's line, or, when the
+driver's INF sets `MSISupported` and the device has an MSI or MSI-X
+capability, message-signalled interrupts as Windows hands them: a
+message descriptor in the start resources and the message table from the
+connect), use DMA (`IoGetDmaAdapter`)
 and register a device interface that programs open.  `pnputil
 /enum-devices /deviceid ID` shows the device started with its driver,
 `pnputil /disable-device /deviceid ID` takes the driver away (it may
@@ -138,6 +141,29 @@ other disk's (`[DRIVES] D: is NTFS volume "..." on stor0`).  virtio-win's
 sends one request at a time through a 64 KiB bounce buffer, interrupts
 are line-based (no MSI-X), and a started adapter cannot be removed yet;
 deeper queues, MSI-X and removal come later.
+
+**UMDF 2 drivers** run too (step 30.10): user-mode drivers, a DLL a
+package's INF installs with a `.Wdf` section (`UmdfService`,
+`UmdfServiceOrder`, `UmdfLibraryVersion`) and the reflector, `WUDFRd.sys`,
+as the device's function driver.  NovaOS ships Microsoft's user-mode
+framework, `Wudfx02000.dll`, built from the same MIT-licensed source, its
+own driver host, `WUDFHost.exe`, and its own reflector
+(`tools/umdf/build_umdf.py`), where Windows keeps them.  When the PnP
+manager starts such a device, the UMDF service (`wudfsvc`, started at
+boot) starts a host for it, which loads the framework and the driver and
+runs its `DriverEntry`, `EvtDriverDeviceAdd`, `EvtDevicePrepareHardware`
+(with the device's resources) and `EvtDeviceD0Entry`; programs open the
+interface the driver registers, and their `ReadFile`, `WriteFile` and
+`DeviceIoControl` travel through the reflector to the driver's queues in
+the host and back.  Disabling the device removes it in the host, which
+exits; the next start gets a new one.  What is missing for now: UMDF
+drivers built with Microsoft's WDK link Microsoft's UMDF stub, which binds
+through an interface Microsoft does not publish, so a driver runs only
+when built with NovaOS's stub (`tools/umdf/stub.c`); I/O is buffered and
+at most 64 KiB a request; the host gives drivers no direct hardware
+access, interrupts, USB I/O targets, remote I/O targets or impersonation
+yet; and one UMDF driver per device stack.  The reflector is test-signed,
+so UMDF drivers need test signing on (below), as KMDF ones do.
 
 Since step 30.9 a Windows **network driver** (an NDIS 6 miniport) runs a
 network card, on NovaOS's own NDIS host (`kernel/nt/ndis.c`, the

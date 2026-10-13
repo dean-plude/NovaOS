@@ -22,7 +22,7 @@
   Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
   driver on a PCI device with no NovaOS driver, and the PnP manager starts
   it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts only, MSI comes later.  Step 30.4's
+  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4's
   framework is in: `Wdf01000.sys`, built from Microsoft's MIT WDF source,
   and NovaOS's `WdfLdr.sys` load KMDF drivers
   (a test driver's control device and queue); the KMDF version of the
@@ -44,3 +44,8 @@
   miniport) now downloads by hardware ID, installs, registers with the
   NDIS host and reaches its hardware probe on a stand-in device in QEMU;
   scanning and joining a network on the T14's real card is step 28.1.
+  Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
+  reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
+  on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's
+  reads, writes and device controls reach its queues (QEMU's `edu` device
+  in the tests).

@@ -15,9 +15,17 @@
  * KeAcquireInterruptSpinLock take the same lock at the same IRQL, so a
  * driver's code and its service routine never run at once.
  *
- * Message-signalled interrupts (MSI) are not offered yet: a driver that
- * asks for them with a fallback (CONNECT_MESSAGE_BASED) gets its line-based
- * routine connected, as Windows does on a device without MSI.
+ * Message-signalled interrupts: a device whose driver opted in (INF:
+ * MessageSignaledInterruptProperties\MSISupported) and that has an MSI or
+ * MSI-X capability is started with a message interrupt descriptor instead
+ * (pnp.c reserves an aligned block of vectors here, NtIntrMsiAlloc).  The
+ * driver's IoConnectInterruptEx(CONNECT_MESSAGE_BASED) connects its
+ * message routine to each vector in the block, programs the device
+ * (NtPnpMsiEnable writes the capability's address and data) and returns the
+ * IO_INTERRUPT_MESSAGE_INFO table, as Windows does; no I/O APIC is involved.
+ * A driver that asks for messages with a fallback on a device that was not
+ * given them gets its line-based routine connected, as Windows does on a
+ * device without MSI.
  */
 #include "ntapi.h"
 #include "../ke/irql.h"
@@ -29,13 +37,15 @@
 
 #define VEC_FIRST   0x60            /* IRQL 6 */
 #define VEC_LAST    0xBF            /* IRQL 11, the highest device IRQL */
-#define MAX_LINES   16
+#define MAX_LINES   96              /* (a line per vector at most) */
 
 /* KINTERRUPT, as far as NovaOS needs it (drivers only pass it back) */
 typedef struct NtInterrupt {
     short                Type, Size;            /* 22 (InterruptObject) */
     struct NtInterrupt  *next;                  /* on its vector */
-    NT_KSERVICE_ROUTINE  isr;
+    NT_KSERVICE_ROUTINE  isr;                   /* (a NT_KMESSAGE_SERVICE_ROUTINE when msg) */
+    bool                 msg;                   /* message-signalled: isr gets msg_id */
+    UINT32               msg_id;
     void                *ctx;
     NT_KSPIN_LOCK       *lock;                  /* the driver's, or own_lock */
     NT_KSPIN_LOCK        own_lock;
@@ -46,33 +56,84 @@ typedef struct NtInterrupt {
 
 typedef struct {
     UINT32       gsi;
-    UINT8        vector;
+    UINT8        vector;                        /* (0: the slot is free) */
     bool         level, low;
+    bool         msi;                           /* a message vector: no I/O APIC input */
     NtInterrupt *list;                          /* the routines connected to it */
 } Line;
 
 static KSpinLock g_lock = KSPINLOCK_INIT;
 static Line      g_line[MAX_LINES];
 static int       g_lines;
-static UINT8     g_next = VEC_FIRST;
+static bool      g_used[256];                   /* vectors handed out (lines never give theirs back) */
+
+/* @count vectors in a row from a multiple of @count (a power of two, at
+ * most 16, so they share an IRQL), marked used; the first, or 0.  g_lock held. */
+static UINT8 vec_alloc(unsigned count)
+{
+    for (unsigned v = (VEC_FIRST + count - 1) & ~(count - 1); v + count - 1 <= VEC_LAST; v += count) {
+        bool free_ = true;
+        for (unsigned i = 0; i < count; i++) if (g_used[v + i]) { free_ = false; break; }
+        if (!free_) continue;
+        for (unsigned i = 0; i < count; i++) g_used[v + i] = true;
+        return (UINT8)v;
+    }
+    return 0;
+}
+
+static Line *line_slot(void)
+{
+    for (int i = 0; i < g_lines; i++) if (!g_line[i].vector) return &g_line[i];
+    return g_lines < MAX_LINES ? &g_line[g_lines++] : NULL;
+}
 
 UINT8 NtIntrVector(UINT32 gsi, bool level, bool low)
 {
     IrqState s = spin_lock_irqsave(&g_lock);
     UINT8 v = 0;
-    for (int i = 0; i < g_lines && !v; i++) if (g_line[i].gsi == gsi) v = g_line[i].vector;
-    if (!v && g_lines < MAX_LINES && g_next <= VEC_LAST) {
+    for (int i = 0; i < g_lines && !v; i++) if (g_line[i].vector && !g_line[i].msi && g_line[i].gsi == gsi) v = g_line[i].vector;
+    Line *l = v ? NULL : line_slot();
+    if (l) {
+        UINT8 want = vec_alloc(1);
         UINT32 routed;
-        if (IoApicRouteIrq(gsi, level, low, g_next, &routed)) {
+        if (want && IoApicRouteIrq(gsi, level, low, want, &routed)) {
             IoApicMask(routed, true);                         /* (until a driver connects) */
-            g_line[g_lines++] = (Line){ routed, g_next, level, low, NULL };
-            v = g_next;
-            g_next++;
+            *l = (Line){ routed, want, level, low, false, NULL };
+            v = want;
+        } else if (want) {
+            g_used[want] = false;
         }
     }
     spin_unlock_irqrestore(&g_lock, s);
     if (!v) kprintf("[NT] interrupt: GSI %u cannot be routed\n", gsi);
     return v;
+}
+
+UINT8 NtIntrMsiAlloc(unsigned count)
+{
+    if (!count || count > 16 || (count & (count - 1))) return 0;
+    IrqState s = spin_lock_irqsave(&g_lock);
+    UINT8 first = 0;
+    int slots = 0;
+    for (int i = 0; i < g_lines; i++) if (!g_line[i].vector) slots++;
+    if (slots + (MAX_LINES - g_lines) >= (int)count) first = vec_alloc(count);
+    for (unsigned i = 0; first && i < count; i++) {
+        Line *l = line_slot();
+        *l = (Line){ 0, (UINT8)(first + i), false, false, true, NULL };
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+    return first;
+}
+
+void NtIntrMsiFree(UINT8 first, unsigned count)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    for (unsigned i = 0; i < count; i++) {
+        for (int k = 0; k < g_lines; k++)
+            if (g_line[k].vector == first + i && g_line[k].msi) g_line[k].vector = 0;
+        g_used[first + i] = false;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
 }
 
 static Line *line_of(UINT8 vector)
@@ -92,7 +153,7 @@ static void dispatch(void *arg)
     for (NtInterrupt *in = l->list; in; in = in->next) {
         KeIrqlSet(in->sync_irql);
         nt_KeAcquireSpinLockAtDpcLevel(in->lock);
-        UINT8 mine = in->isr(in, in->ctx);
+        UINT8 mine = in->msg ? ((NT_KMESSAGE_SERVICE_ROUTINE)(void *)in->isr)(in, in->ctx, in->msg_id) : in->isr(in, in->ctx);
         nt_KeReleaseSpinLockFromDpcLevel(in->lock);
         if (mine) { in->count++; break; }
     }
@@ -125,9 +186,62 @@ static NTSTATUS connect(NtInterrupt **out, NT_KSERVICE_ROUTINE isr, void *ctx, N
     spin_unlock_irqrestore(&g_lock, s);
     if (first) {
         IrqInstall(l->vector, dispatch, l);
-        IoApicMask(l->gsi, false);
+        if (!l->msi) IoApicMask(l->gsi, false);
     }
     *out = in;
+    return NT_STATUS_SUCCESS;
+}
+
+NT_API void nt_IoDisconnectInterrupt(void *obj);
+
+#define MSG_NOT_OFFERED ((NTSTATUS)0xC0000225)    /* STATUS_NOT_FOUND: the device has no messages */
+
+/* The header before a message-based connection's IO_INTERRUPT_MESSAGE_INFO */
+typedef struct {
+    NT_DEVICE_OBJECT *pdo;
+    NT_KSPIN_LOCK     lock;             /* (the messages' lock, unless the driver gave one) */
+} MsgConn;
+
+static NTSTATUS connect_messages(NT_IO_CONNECT_INTERRUPT_PARAMETERS *p)
+{
+    UINT8 first, irql;
+    UINT32 n;
+    if (!NtPnpMessagesOf(p->MessageBased.PhysicalDeviceObject, &first, &n, &irql)) return MSG_NOT_OFFERED;
+    if (!p->MessageBased.MessageServiceRoutine) return NT_STATUS_INVALID_PARAMETER;
+    size_t size = sizeof(MsgConn) + sizeof(NT_IO_INTERRUPT_MESSAGE_INFO) + (n - 1) * sizeof(NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY);
+    MsgConn *c = kzalloc(size);
+    if (!c) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    c->pdo = p->MessageBased.PhysicalDeviceObject;
+    NT_IO_INTERRUPT_MESSAGE_INFO *t = (NT_IO_INTERRUPT_MESSAGE_INFO *)(c + 1);
+    t->UnifiedIrql = irql;
+    t->MessageCount = n;
+    NT_KSPIN_LOCK *lock = p->MessageBased.SpinLock ? p->MessageBased.SpinLock : &c->lock;
+    UINT8 sync = p->MessageBased.SynchronizeIrql > irql ? p->MessageBased.SynchronizeIrql : irql;
+    for (UINT32 i = 0; i < n; i++) {
+        NtInterrupt *in;
+        NTSTATUS st = connect(&in, (NT_KSERVICE_ROUTINE)p->MessageBased.MessageServiceRoutine, p->MessageBased.ServiceContext,
+                              lock, (UINT32)first + i, irql, sync);
+        if (!NT_SUCCESS(st)) {
+            for (UINT32 k = 0; k < i; k++) nt_IoDisconnectInterrupt(t->MessageInfo[k].InterruptObject);
+            kfree(c);
+            return st;
+        }
+        in->msg = true;
+        in->msg_id = i;
+        NT_IO_INTERRUPT_MESSAGE_INFO_ENTRY *e = &t->MessageInfo[i];
+        UINT64 addr;
+        UINT32 data;
+        IoApicMsiMessage((UINT8)(first + i), &addr, &data);
+        e->MessageAddress = (long long)addr;
+        e->TargetProcessorSet = 1;
+        e->InterruptObject = in;
+        e->MessageData = data;
+        e->Vector = first + i;
+        e->Irql = irql;
+        e->Mode = 1;                                    /* Latched */
+    }
+    NtPnpMsiEnable(c->pdo, true);                       /* (already on, since it started) */
+    *p->MessageBased.ConnectionContext = t;
     return NT_STATUS_SUCCESS;
 }
 
@@ -150,7 +264,9 @@ NT_API NT_STATUS nt_IoConnectInterruptEx(NT_IO_CONNECT_INTERRUPT_PARAMETERS *p)
     }
     NT_KSERVICE_ROUTINE isr = p->LineBased.ServiceRoutine;
     if (p->Version == NT_CONNECT_MESSAGE_BASED) {
-        if (!p->MessageBased.FallBackServiceRoutine) return NT_STATUS_INVALID_PARAMETER;   /* (no MSI yet) */
+        NTSTATUS st = connect_messages(p);              /* (the device got messages, or the fallback) */
+        if (st != MSG_NOT_OFFERED) return st;
+        if (!p->MessageBased.FallBackServiceRoutine) return NT_STATUS_INVALID_PARAMETER;
         isr = p->MessageBased.FallBackServiceRoutine;
     } else if (p->Version != NT_CONNECT_LINE_BASED) {
         return NT_STATUS_INVALID_PARAMETER;
@@ -178,7 +294,7 @@ NT_API void nt_IoDisconnectInterrupt(void *obj)
     bool last = !l->list;
     spin_unlock_irqrestore(&g_lock, s);
     if (last) {
-        IoApicMask(l->gsi, true);
+        if (!l->msi) IoApicMask(l->gsi, true);
         IrqInstall(l->vector, NULL, NULL);
     }
     kfree(in);
@@ -186,7 +302,16 @@ NT_API void nt_IoDisconnectInterrupt(void *obj)
 
 NT_API void nt_IoDisconnectInterruptEx(NT_IO_DISCONNECT_INTERRUPT_PARAMETERS *p)
 {
-    if (p) nt_IoDisconnectInterrupt(p->ConnectionContext);
+    if (!p) return;
+    if (p->Version != NT_CONNECT_MESSAGE_BASED) {
+        nt_IoDisconnectInterrupt(p->ConnectionContext);
+        return;
+    }
+    NT_IO_INTERRUPT_MESSAGE_INFO *t = p->ConnectionContext;
+    if (!t) return;
+    MsgConn *c = (MsgConn *)t - 1;
+    for (UINT32 i = 0; i < t->MessageCount; i++) nt_IoDisconnectInterrupt(t->MessageInfo[i].InterruptObject);
+    kfree(c);
 }
 
 NT_API UINT8 nt_KeSynchronizeExecution(void *obj, NT_KSYNCHRONIZE_ROUTINE fn, void *ctx)

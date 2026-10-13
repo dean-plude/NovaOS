@@ -11527,6 +11527,55 @@ game tried; README's opening paragraph links that page, and the
 [user guide](../user-guide.md) describes the built-in apps and the App
 Store.  The `programs` region and its fragment directory went with it.
 
+## UMDF 2: user-mode drivers in a driver host
+
+Step 30.10 of the Windows driver model (roadmap Phase 30,
+[design/windows-drivers.md](../design/windows-drivers.md)): a UMDF 2
+driver installs with `pnputil`, starts in its own host process and serves
+a program's I/O, on Microsoft's user-mode framework built from its
+MIT-licensed Windows-Driver-Frameworks source.
+
+- **The framework** (`tools/umdf/build_umdf.py`): `Wudfx02000.dll`, the
+  UMDF 2.33 framework, compiled with clang from the same pinned source and
+  patches as KMDF (step 30.4), with NovaOS's small runtime for what the
+  source expects from Windows' build (`tools/umdf/rt`).
+- **The reflector** (`tools/umdf/wudfrd.c`): `WUDFRd.sys`, a WDM driver on
+  NovaOS's kernel driver interface, is the device's function driver.  It
+  gives the device's host a channel (a device interface the host opens)
+  and turns Plug and Play IRPs (start with the device's resources,
+  query-remove, remove) and programs' create, read, write, device control,
+  cleanup and close into messages the host answers; it registers and
+  enables the device interfaces the driver asks for.
+- **The host** (`tools/umdf/host`): `WUDFHost.exe` implements the
+  interfaces the framework expects of Windows' host (the device stack,
+  devices, IRPs and their stack locations, files, the registry and
+  property stores, power requests), loads the framework, then the driver
+  the device's `UmdfServiceOrder` names, and calls `DriverEntry` and
+  `EvtDriverDeviceAdd`; worker threads take the reflector's messages and
+  dispatch them into the framework.
+- **The UMDF service** (`wudfsvc`, `userland/programs/wudfsvc.c`):
+  started at boot, it watches the device tree and starts a host for each
+  started device the reflector runs, and starts another when the device
+  restarts.
+- **Installing**: setupapi reads an INF's `.Wdf` section (`UmdfService`,
+  `UmdfServiceOrder`, `UmdfLibraryVersion`, the UMDF policies) into the
+  registry where Windows keeps them.
+- **Thread-pool waits** (`kernel32`): `SetThreadpoolWait` no longer waits
+  for a running callback of the same wait, as on Windows; the framework's
+  work items set their wait from a thread holding the lock the callback
+  takes, which deadlocked the device's start.  `tpwaittest` checks it.
+- **The test**: `umdftest.dll` (`tools/drivertest/umdftest.c`), a UMDF
+  driver for QEMU's `edu` device written against the WDK's UMDF 2.33
+  headers; the devices suite's "umdf" boot installs it, and `umdftest`
+  writes, reads and sends device controls to it and checks it runs in its
+  own host with the device's resources; the device is disabled, enabled
+  and started at boot.
+- **Not yet**: drivers must link NovaOS's UMDF stub (Microsoft's binds
+  through an unpublished interface), buffered I/O of up to 64 KiB a
+  request, no direct hardware access, interrupts, USB or remote I/O
+  targets, one UMDF driver per device stack, and the test-signed reflector
+  needs test signing on.
+
 ## virtio-win's serial driver: the first third-party driver, and bus drivers
 
 Step 30.5 of the Windows driver model (roadmap Phase 30,
@@ -11883,6 +11932,26 @@ device's memory, interrupt and DMA handed to it the way Windows hands them.
   removal vetoed while a program has it open, disable, enable and a start
   at boot.  NovaOS has no PCI hot-unplug yet, so surprise removal is
   handled but not tested.
+- **Message-signalled interrupts** (`kernel/nt/intr.c`, `pnp.c`): a driver
+  whose INF sets `MSISupported` under `Interrupt Management\MessageSignaledInterruptProperties`
+  (as virtio-win's do; `MessageNumberLimit` caps the count) on a device
+  with an MSI or MSI-X capability is started with a message interrupt
+  descriptor (raw: the message count; translated: the first vector of an
+  aligned block reserved from the 0x60 to 0xBF vectors) in place of the
+  line.  As Windows' PCI driver does, starting the device writes the
+  capability (address and data of a write to the boot CPU's local APIC;
+  MSI-X also fills the table) and turns it on; a driver connects with
+  `IoConnectInterruptEx` message-based (the `IO_INTERRUPT_MESSAGE_INFO`
+  table and a message routine per vector) or, as KMDF does, each vector
+  fully specified.  Without the opt-in, or on a device without the
+  capability, the connect falls back to the line; the Storport host keeps
+  the line.  The edu test shows both modes (`edutest msi 1`, restart,
+  `edutest message`), and virtio-win's `vioser.sys` now runs on MSI-X.
+  Two bugs found on the way: `HKR` lines of an INF's AddReg were never
+  applied (setupapi read a line without `=` as an empty key), and
+  `IoReleaseRemoveLockAndWait` released the lock once, not twice, so
+  removing a device whose driver used it (`pnputil /disable-device` on the edu device)
+  hung.
 
 ## Windows storage drivers on NovaOS's Storport host
 

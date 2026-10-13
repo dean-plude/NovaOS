@@ -1,0 +1,29 @@
+# Import list of wudfrd.sys, extracted from NovaOS's build of its UMDF reflector (tools/umdf/build_umdf.py) with
+# tools/ci/check-driver-imports.py --dump (do not edit by hand).  The
+# import-coverage check (the same tool) verifies every ntoskrnl.exe and
+# hal.dll import below is provided by kernel/nt/exports.h, and every
+# wdfldr.sys import by NovaOS's WdfLdr.sys (tools/kmdf/wdfldr.c).
+ntoskrnl.exe	DbgPrint
+ntoskrnl.exe	ExAllocatePoolWithTag
+ntoskrnl.exe	ExFreePoolWithTag
+ntoskrnl.exe	IoAttachDeviceToDeviceStack
+ntoskrnl.exe	IoCreateDevice
+ntoskrnl.exe	IoDeleteDevice
+ntoskrnl.exe	IoDetachDevice
+ntoskrnl.exe	IoGetRequestorProcessId
+ntoskrnl.exe	IoRegisterDeviceInterface
+ntoskrnl.exe	IoSetDeviceInterfaceState
+ntoskrnl.exe	IofCallDriver
+ntoskrnl.exe	IofCompleteRequest
+ntoskrnl.exe	KeAcquireSpinLockRaiseToDpc
+ntoskrnl.exe	KeInitializeEvent
+ntoskrnl.exe	KeInitializeSpinLock
+ntoskrnl.exe	KeReleaseSpinLock
+ntoskrnl.exe	KeSetEvent
+ntoskrnl.exe	KeWaitForSingleObject
+ntoskrnl.exe	PoCallDriver
+ntoskrnl.exe	PoStartNextPowerIrp
+ntoskrnl.exe	RtlFreeUnicodeString
+ntoskrnl.exe	memcmp
+ntoskrnl.exe	memcpy
+ntoskrnl.exe	memset

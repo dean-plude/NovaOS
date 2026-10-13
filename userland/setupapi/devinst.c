@@ -13,6 +13,12 @@
  *   AddReg         HKR lines into the device's driver key (an NDIS
  *                  miniport's parameters: NdisReadConfiguration reads them)
  *   .HW AddReg     HKR lines into the device's Device Parameters key
+ *   .Wdf           a UMDF driver's services: UmdfService = name, section
+ *                  (the section's ServiceBinary and UmdfLibraryVersion,
+ *                  under Services\WUDF\Services\<name>), UmdfServiceOrder
+ *                  (the device's Device Parameters) and the Umdf* policy
+ *                  directives (Device Parameters\WUDF), which the UMDF
+ *                  driver host (tools/umdf/host) reads
  *
  * and the device's keys are written as Windows writes them:
  * HKLM\SYSTEM\CurrentControlSet\Enum\<instance> (Service, ClassGUID, Class,
@@ -265,8 +271,8 @@ static BOOL addreg_line(const WCHAR *key, const WCHAR *value, void *ctx)
 {
     Reg *r = ctx;
     WCHAR line[512], root[16], sub[256], name[128], fl[32], data[256];
-    lstrcpynW(line, key, 512);
-    if (value[0]) { lstrcatW(line, L","); lstrcatW(line, value); }
+    lstrcpynW(line, key, 512);                               /* (a line without '=' comes whole as the value) */
+    if (value[0]) { if (line[0]) lstrcatW(line, L","); lstrcatW(line, value); }
     inf_field(line, 0, root, 16);
     if (!ieq_w(root, L"HKR")) return TRUE;
     inf_field(line, 1, sub, 256);
@@ -295,6 +301,80 @@ typedef struct {
     const WCHAR *store;
     BOOL ok;
 } Dir;
+
+typedef struct {
+    const Inf *inf;
+    const WCHAR *store;
+    HKEY params;                                /* the device's Device Parameters */
+    BOOL ok;
+} Wdf;
+
+static void set_sz(HKEY k, const WCHAR *name, const WCHAR *v);
+
+#define WUDF_SERVICES_KEY L"SYSTEM\\CurrentControlSet\\Services\\WUDF\\Services\\"
+
+/* The .Wdf directives that set a device policy (Device Parameters\WUDF):
+ * the directive, the value the framework reads, and the policy names in
+ * the order of their numbers */
+static const struct {
+    const WCHAR *directive, *value, *names[3];
+} wdf_policies[] = {
+    { L"UmdfDirectHardwareAccess", L"DirectHardwareAccess", { L"RejectDirectHardwareAccess", L"AllowDirectHardwareAccess" } },
+    { L"UmdfRegisterAccessMode", L"RegisterAccessMode", { L"RegisterAccessUsingSystemCall", L"RegisterAccessUsingUserModeMapping" } },
+    { L"UmdfFileObjectPolicy", L"FileObjectPolicy", { L"RejectNullAndUnknownFileObjects", L"AllowNullAndUnknownFileObjects" } },
+    { L"UmdfFsContextUsePolicy", L"FsContextUsePolicy", { L"DefaultFsContextUsePolicy", L"CanUseFsContext2", L"CannotUseFsContexts" } },
+    { L"UmdfKernelModeClientPolicy", L"KernelModeClientPolicy", { L"RejectKernelModeClients", L"AllowKernelModeClients" } },
+    { L"UmdfMethodNeitherAction", L"MethodNeitherAction", { L"UmdfMethodNeitherActionFail", L"UmdfMethodNeitherActionCopy" } },
+};
+
+static BOOL wdf_line(const WCHAR *key, const WCHAR *value, void *ctx)
+{
+    Wdf *w = ctx;
+    if (ieq_w(key, L"UmdfService")) {
+        /* "UmdfService = name, section": the service's DLL and the version it was built for */
+        WCHAR name[64], sect[128], v[MAX_PATH], bin[MAX_PATH], k[200];
+        inf_field(value, 0, name, 64);
+        inf_field(value, 1, sect, 128);
+        if (!name[0] || !sect[0] || !inf_get(w->inf, sect, L"ServiceBinary", v, MAX_PATH)) { w->ok = FALSE; return FALSE; }
+        expand_dirids(v, w->store, bin, MAX_PATH);
+        lstrcpyW(k, WUDF_SERVICES_KEY);
+        lstrcatW(k, name);
+        HKEY sk;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, k, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &sk, NULL)) { w->ok = FALSE; return FALSE; }
+        RegSetValueExW(sk, L"ImagePath", 0, REG_EXPAND_SZ, (const BYTE *)bin, (DWORD)((lstrlenW(bin) + 1) * sizeof(WCHAR)));
+        if (inf_get(w->inf, sect, L"UmdfLibraryVersion", v, 64)) set_sz(sk, L"UmdfLibraryVersion", v);
+        RegCloseKey(sk);
+        return TRUE;
+    }
+    if (ieq_w(key, L"UmdfServiceOrder")) {
+        /* "UmdfServiceOrder = name[, name...]": the stack's drivers, bottom first */
+        WCHAR list[512], f[64];
+        int n = 0;
+        for (int i = 0; i < 8; i++) {
+            inf_field(value, i, f, 64);
+            if (!f[0]) break;
+            lstrcpyW(list + n, f);
+            n += lstrlenW(f) + 1;
+        }
+        list[n++] = 0;
+        RegSetValueExW(w->params, L"UmdfServiceOrder", 0, REG_MULTI_SZ, (const BYTE *)list, (DWORD)(n * sizeof(WCHAR)));
+        return TRUE;
+    }
+    for (int i = 0; i < (int)(sizeof(wdf_policies) / sizeof(wdf_policies[0])); i++) {
+        if (!ieq_w(key, wdf_policies[i].directive)) continue;
+        WCHAR f[64];
+        inf_field(value, 0, f, 64);
+        for (DWORD d = 0; d < 3 && wdf_policies[i].names[d]; d++) {
+            if (!ieq_w(f, wdf_policies[i].names[d])) continue;
+            HKEY wk;
+            if (!RegCreateKeyExW(w->params, L"WUDF", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &wk, NULL)) {
+                RegSetValueExW(wk, wdf_policies[i].value, 0, REG_DWORD, (const BYTE *)&d, sizeof(d));
+                RegCloseKey(wk);
+            }
+        }
+    }
+    return TRUE;
+}
 
 /* "CopyFiles = Section[, Section...]" and "AddReg = ..." lines of DDInstall */
 static BOOL install_line(const WCHAR *key, const WCHAR *value, void *ctx)
@@ -483,7 +563,17 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         lstrcatW(sect, L".HW");
         inf_lines(inf, sect, hw_line, &r);
         if (ieq_w(guid, PORTS_GUID)) com_name(dev, params, m.desc);
+        lstrcpyW(sect, ddi);
+        lstrcatW(sect, L".Wdf");
+        Wdf w = { inf, store, params, TRUE };
+        inf_lines(inf, sect, wdf_line, &w);
         RegCloseKey(params);
+        if (!w.ok) {
+            RegCloseKey(dev);
+            inf_close(inf);
+            SetLastError(13);                   /* ERROR_INVALID_DATA */
+            return FALSE;
+        }
     }
     RegCloseKey(dev);
 

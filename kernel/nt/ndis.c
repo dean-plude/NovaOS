@@ -44,6 +44,7 @@
 #include "../hal/pci.h"
 #include "../ke/irql.h"
 #include "../ke/printf.h"
+#include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../um/um.h"
@@ -100,6 +101,8 @@ typedef struct NdisDriver {
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS ch;
     NDIS_MINIPORT_PNP_CHARACTERISTICS    pnp;
     bool                 has_pnp;
+    bool                 wdi;           /* a WDI (Wi-Fi) miniport: NovaOS is its upper edge */
+    NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS wdi_ch;
     char                 service[64];
     NT_DRIVER_UNLOAD     unload;        /* (NDIS's, calling the miniport's) */
 } NdisDriver;
@@ -151,6 +154,12 @@ typedef struct NdisAdapter {
     bool                 dpc_held;      /* the receive copies are full: the DPC waits for the stack */
     void                *dpc_held_ctx;
     UINT64               dpc_log;       /* (the DPC count of the next progress line) */
+    /* a WDI miniport's adapter (wdi_start): what its allocate and open were given */
+    NDIS_MINIPORT_INIT_PARAMETERS init;
+    NDIS_WDI_INIT_PARAMETERS      wdi_init;
+    bool                 wdi_allocated, wdi_open;
+    NT_KEVENT            wdi_done;
+    NDIS_STATUS          wdi_status;
 } NdisAdapter;
 
 /* A control device (NdisRegisterDeviceEx): the miniport's own dispatch
@@ -405,8 +414,106 @@ static bool tx_setup(NdisAdapter *a)
     return true;
 }
 
+/* -----------------------------------------------------------------------
+ * WDI: a Wi-Fi miniport's adapter.  On Windows the WDI upper edge
+ * (wdiwifi.sys) is the NDIS miniport for it and drives the IHV driver's
+ * lower edge: MiniportWdiAllocateAdapter, then MiniportWdiOpenAdapter,
+ * the IHV's "open task" (its hardware start: registers, firmware), which
+ * completes through NdisWdiOpenAdapterComplete; then WDI commands (TLV
+ * messages through MiniportDirectOidRequest: adapter capabilities, scans,
+ * connections).  NovaOS is that upper edge as far as the open; the WDI
+ * command layer, and with it scanning and joining a network, is roadmap
+ * step 28.1's (docs/drivers.md).
+ * ----------------------------------------------------------------------- */
+typedef NDIS_STATUS (NT_API *WDI_ALLOCATE)(void *adapter_handle, void *driver_ctx, NDIS_MINIPORT_INIT_PARAMETERS *,
+                                          NDIS_WDI_INIT_PARAMETERS *, NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES *);
+typedef void        (NT_API *WDI_FREE)(void *ctx);
+typedef NDIS_STATUS (NT_API *WDI_OPEN)(void *ctx, NDIS_MINIPORT_INIT_PARAMETERS *);
+typedef NDIS_STATUS (NT_API *WDI_CLOSE)(void *ctx);
+
+#define WDI_OPEN_WAIT_S 60
+
+static NT_API void wdi_complete(void *h, NDIS_STATUS st)
+{
+    NdisAdapter *a = adapter_of(h);
+    if (!a) return;
+    a->wdi_status = st;
+    nt_KeSetEvent(&a->wdi_done, 0, 0);
+}
+
+static NT_API void wdi_idle(void *h, UINT32 state) { (void)h; (void)state; }   /* (NovaOS never idles the adapter) */
+
+/* Run a lower-edge call that completes through wdi_complete; its status */
+static NDIS_STATUS wdi_wait(NdisAdapter *a, NDIS_STATUS st, const char *what)
+{
+    if (st != NDIS_STATUS_SUCCESS && st != NDIS_STATUS_PENDING) return st;
+    INT64 t = -(INT64)WDI_OPEN_WAIT_S * 10000000;
+    if (nt_KeWaitForSingleObject(&a->wdi_done, 0, 0, 0, &t) != NT_STATUS_SUCCESS) {
+        kprintf("[NDIS] %s: WDI: %s did not complete in %d s\n", a->drv->service, what, WDI_OPEN_WAIT_S);
+        return NDIS_STATUS_FAILURE;
+    }
+    return a->wdi_status;
+}
+
+static NT_STATUS wdi_start(NdisAdapter *a)
+{
+    NdisDriver *d = a->drv;
+    NDIS_WDI_INIT_PARAMETERS *w = &a->wdi_init;
+    memset(w, 0, sizeof(*w));
+    w->Header.Type = NDIS_OBJECT_TYPE_WDI_INIT_PARAMETERS;
+    w->Header.Revision = 1;
+    w->Header.Size = sizeof(*w);
+    w->WdiVersion = d->wdi_ch.WdiVersion;
+    w->OpenAdapterCompleteHandler = (void *)wdi_complete;
+    w->CloseAdapterCompleteHandler = (void *)wdi_complete;
+    w->UeIdleNotificationConfirm = (void *)wdi_idle;
+    w->UeIdleNotificationComplete = (void *)wdi_idle;
+    NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES ra;
+    memset(&ra, 0, sizeof(ra));
+    ra.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES;
+    ra.Header.Revision = 2;
+    ra.Header.Size = sizeof(ra);
+    kprintf("[NDIS] %s: WDI: MiniportWdiAllocateAdapter\n", d->service);
+    NDIS_STATUS ns = ((WDI_ALLOCATE)d->wdi_ch.AllocateAdapterHandler)(a, d->ctx, &a->init, w, &ra);
+    if (ns != NDIS_STATUS_SUCCESS) {
+        kprintf("[NDIS] %s: WDI: MiniportWdiAllocateAdapter failed (0x%08x)\n", d->service, (UINT32)ns);
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    a->ctx = ra.MiniportAdapterContext;
+    a->wdi_allocated = true;
+    nt_KeInitializeEvent(&a->wdi_done, NT_NotificationEvent, 0);
+    kprintf("[NDIS] %s: WDI: MiniportWdiOpenAdapter (the driver starts its hardware)\n", d->service);
+    ns = wdi_wait(a, ((WDI_OPEN)d->wdi_ch.OpenAdapterHandler)(a->ctx, &a->init), "MiniportWdiOpenAdapter");
+    kprintf("[NDIS] %s: WDI: open adapter completed (0x%08x)\n", d->service, (UINT32)ns);
+    if (ns != NDIS_STATUS_SUCCESS) {
+        ((WDI_FREE)d->wdi_ch.FreeAdapterHandler)(a->ctx);
+        a->wdi_allocated = false;
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    a->wdi_open = true;
+    a->initialized = true;
+    kprintf("[NDIS] %s: WDI: adapter open; NovaOS has no WDI command layer yet, so it scans and joins nothing "
+            "(roadmap step 28.1)\n", d->service);
+    return NT_STATUS_SUCCESS;
+}
+
+static void wdi_stop(NdisAdapter *a)
+{
+    NdisDriver *d = a->drv;
+    if (a->wdi_open && d->wdi_ch.CloseAdapterHandler) {
+        nt_KeClearEvent(&a->wdi_done);
+        NDIS_STATUS ns = wdi_wait(a, ((WDI_CLOSE)d->wdi_ch.CloseAdapterHandler)(a->ctx), "MiniportWdiCloseAdapter");
+        kprintf("[NDIS] %s: WDI: adapter closed (0x%08x)\n", d->service, (UINT32)ns);
+    }
+    a->wdi_open = false;
+    if (a->wdi_allocated) ((WDI_FREE)d->wdi_ch.FreeAdapterHandler)(a->ctx);
+    a->wdi_allocated = false;
+    a->initialized = false;
+}
+
 static void halt(NdisAdapter *a, bool surprise)
 {
+    if (a->drv->wdi) { wdi_stop(a); return; }
     if (!a->initialized) return;
     if (g_net == a) {
         NetDetach(&g_adapter_ops);
@@ -440,19 +547,20 @@ static NT_STATUS start(NdisAdapter *a, NT_IRP *irp)
             return NT_STATUS_UNSUCCESSFUL;
         }
     }
+    NDIS_MINIPORT_INIT_PARAMETERS *ip = &a->init;
+    memset(ip, 0, sizeof(*ip));
+    ip->Header.Type = NDIS_OBJECT_TYPE_MINIPORT_INIT_PARAMETERS;
+    ip->Header.Revision = 1;
+    ip->Header.Size = sizeof(*ip);
+    ip->AllocatedResources = a->xlat ? &a->xlat->List[0].PartialResourceList : NULL;
+    ip->MiniportAddDeviceContext = a->add_ctx;
+    ip->IfIndex = 1;
+    ip->NetLuid = (a->drv->wdi ? 71ull : 6ull) << 48 | 1ull << 24;  /* (IF_TYPE_IEEE80211 or _ETHERNET_CSMACD, index 1) */
+    if (a->drv->wdi) return wdi_start(a);
     if (!tx_setup(a)) { tx_free(a); return NT_STATUS_INSUFFICIENT_RESOURCES; }
 
-    NDIS_MINIPORT_INIT_PARAMETERS ip;
-    memset(&ip, 0, sizeof(ip));
-    ip.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_INIT_PARAMETERS;
-    ip.Header.Revision = 1;
-    ip.Header.Size = sizeof(ip);
-    ip.AllocatedResources = a->xlat ? &a->xlat->List[0].PartialResourceList : NULL;
-    ip.MiniportAddDeviceContext = a->add_ctx;
-    ip.IfIndex = 1;
-    ip.NetLuid = 6ull << 48 | 1ull << 24;               /* (IF_TYPE_ETHERNET_CSMACD, index 1) */
     kprintf("[NDIS] %s: MiniportInitializeEx\n", a->drv->service);
-    NDIS_STATUS ns = ((INITIALIZE)a->drv->ch.InitializeHandlerEx)(a, a->drv->ctx, &ip);
+    NDIS_STATUS ns = ((INITIALIZE)a->drv->ch.InitializeHandlerEx)(a, a->drv->ctx, ip);
     if (ns != NDIS_STATUS_SUCCESS) {
         kprintf("[NDIS] %s: MiniportInitializeEx failed (0x%08x)\n", a->drv->service, (UINT32)ns);
         tx_free(a);
@@ -590,15 +698,9 @@ static NT_API void driver_unload(NT_DRIVER_OBJECT *obj)
  * ----------------------------------------------------------------------- */
 NT_API UINT32 nt_NdisGetVersion(void) { return NDIS_VERSION; }
 
-NT_API NDIS_STATUS nt_NdisMRegisterMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *ctx,
-                                                  NDIS_MINIPORT_DRIVER_CHARACTERISTICS *ch, void **out)
+static NDIS_STATUS register_driver(NT_DRIVER_OBJECT *obj, void *ctx, NDIS_MINIPORT_DRIVER_CHARACTERISTICS *ch,
+                                   NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS *wdi, void **out)
 {
-    (void)reg;
-    if (!obj || !ch || !out || ch->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
-        return NDIS_STATUS_INVALID_PARAMETER;
-    if (!ch->InitializeHandlerEx || !ch->HaltHandlerEx || !ch->PauseHandler || !ch->RestartHandler ||
-        !ch->OidRequestHandler || !ch->SendNetBufferListsHandler || !ch->ReturnNetBufferListsHandler)
-        return NDIS_STATUS_INVALID_PARAMETER;
     NdisDriver *d = pool_alloc(sizeof(*d));
     if (!d) return NDIS_STATUS_RESOURCES;
     d->magic = M_DRIVER;
@@ -606,6 +708,11 @@ NT_API NDIS_STATUS nt_NdisMRegisterMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNIC
     d->ctx = ctx;
     UINT32 n = ch->Header.Size < sizeof(d->ch) ? ch->Header.Size : sizeof(d->ch);
     memcpy(&d->ch, ch, n);
+    if (wdi) {
+        d->wdi = true;
+        n = wdi->Header.Size < sizeof(d->wdi_ch) ? wdi->Header.Size : sizeof(d->wdi_ch);
+        memcpy(&d->wdi_ch, wdi, n);
+    }
     NtDriver *nd = NtIoDriverOf(obj);
     strncpy(d->service, nd ? nd->service : "miniport", sizeof(d->service) - 1);
     UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&g_lock);
@@ -615,7 +722,11 @@ NT_API NDIS_STATUS nt_NdisMRegisterMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNIC
     obj->DriverExtension->AddDevice = add_device;
     for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) obj->MajorFunction[i] = dispatch;
     obj->DriverUnload = driver_unload;
-    kprintf("[NDIS] %s: NDIS %u.%u miniport registered\n", d->service, ch->MajorNdisVersion, ch->MinorNdisVersion);
+    if (wdi)
+        kprintf("[NDIS] %s: WDI miniport registered (NDIS %u.%u, WDI version 0x%x)\n", d->service, ch->MajorNdisVersion,
+                ch->MinorNdisVersion, wdi->WdiVersion);
+    else
+        kprintf("[NDIS] %s: NDIS %u.%u miniport registered\n", d->service, ch->MajorNdisVersion, ch->MinorNdisVersion);
     if (ch->SetOptionsHandler) {
         NDIS_STATUS st = ((SET_OPTIONS)ch->SetOptionsHandler)(d, ctx);
         if (st != NDIS_STATUS_SUCCESS) {
@@ -625,6 +736,34 @@ NT_API NDIS_STATUS nt_NdisMRegisterMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNIC
     }
     *out = d;
     return NDIS_STATUS_SUCCESS;
+}
+
+NT_API NDIS_STATUS nt_NdisMRegisterMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *ctx,
+                                                  NDIS_MINIPORT_DRIVER_CHARACTERISTICS *ch, void **out)
+{
+    (void)reg;
+    if (!obj || !ch || !out || ch->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    if (!ch->InitializeHandlerEx || !ch->HaltHandlerEx || !ch->PauseHandler || !ch->RestartHandler ||
+        !ch->OidRequestHandler || !ch->SendNetBufferListsHandler || !ch->ReturnNetBufferListsHandler)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    return register_driver(obj, ctx, ch, NULL, out);
+}
+
+/* A WDI miniport (Intel's Netwtw*.sys): the lower edge's handlers, which
+ * NovaOS's upper edge (wdi_start) drives in place of the NDIS ones */
+NT_API NDIS_STATUS nt_NdisMRegisterWdiMiniportDriver(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *ctx,
+                                                     NDIS_MINIPORT_DRIVER_CHARACTERISTICS *ch,
+                                                     NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS *wdi, void **out)
+{
+    (void)reg;
+    if (!obj || !ch || !wdi || !out || ch->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS ||
+        wdi->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_WDI_CHARACTERISTICS)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    if (!wdi->AllocateAdapterHandler || !wdi->FreeAdapterHandler || !wdi->OpenAdapterHandler ||
+        !ch->OidRequestHandler)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    return register_driver(obj, ctx, ch, wdi, out);
 }
 
 NT_API void nt_NdisMDeregisterMiniportDriver(void *h)
@@ -640,6 +779,8 @@ NT_API void nt_NdisMDeregisterMiniportDriver(void *h)
 }
 
 /* MiniportSetOptions' call: the PnP handlers (by their header) */
+NT_API void nt_NdisMDeregisterWdiMiniportDriver(void *h) { nt_NdisMDeregisterMiniportDriver(h); }
+
 NT_API NDIS_STATUS nt_NdisSetOptionalHandlers(void *h, NDIS_OBJECT_HEADER *chars)
 {
     NdisDriver *d = h;
@@ -1576,4 +1717,164 @@ NT_API void nt_NdisWriteErrorLogEntry(void *h, UINT32 code, UINT32 count, UINT64
     kprintf("[NDIS] %s: error log entry 0x%08x (%u values%s 0x%llx)\n", a ? a->drv->service : "miniport", code, count,
             count ? ", first" : "", (unsigned long long)(count ? v1 : 0));
     (void)v2;
+}
+
+/* -----------------------------------------------------------------------
+ * Step 30.9, Intel's AX211 driver: direct OID completion, configuration
+ * written back, bus data written, contiguous packet data, the uptime,
+ * timer objects, the event log
+ * ----------------------------------------------------------------------- */
+NT_API UINT8     nt_KeSetTimerEx(NT_KTIMER *t, INT64 due, int period_ms, NT_KDPC *dpc);
+NT_API UINT8     nt_KeCancelTimer(NT_KTIMER *t);
+NT_API void      nt_KeInitializeTimerEx(NT_KTIMER *t, int type);
+
+NT_API void nt_NdisMDirectOidRequestComplete(void *h, NDIS_OID_REQUEST *r, NDIS_STATUS st)
+{
+    nt_NdisMOidRequestComplete(h, r, st);
+}
+
+NT_API void nt_NdisMResetComplete(void *h, NDIS_STATUS st, UINT8 addressing_reset)
+{
+    NdisAdapter *a = adapter_of(h);
+    (void)addressing_reset;
+    if (a) kprintf("[NDIS] %s: reset complete (0x%08x)\n", a->drv->service, (UINT32)st);
+}
+
+NT_API UINT32 nt_NdisMSetBusData(void *h, UINT32 space, UINT32 off, void *buf, UINT32 len)
+{
+    NdisAdapter *a = adapter_of(h);
+    if (!a || space != NT_PCI_WHICHSPACE_CONFIG) return 0;
+    return NtPnpConfig(a->pdo, true, buf, off, len);
+}
+
+/* A value into the key the configuration handle reads (the adapter's
+ * driver key), as NdisReadConfiguration would read it back */
+NT_API void nt_NdisWriteConfiguration(NDIS_STATUS *st, void *h, NT_UNICODE_STRING *keyword,
+                                      NDIS_CONFIGURATION_PARAMETER *v)
+{
+    NdisConfig *c = h;
+    *st = NDIS_STATUS_INVALID_PARAMETER;
+    if (!c || c->magic != M_CONFIG || !v) return;
+    char name[128];
+    unicode_ascii(keyword, name, sizeof(name));
+    switch (v->ParameterType) {
+    case NdisParameterInteger:
+    case NdisParameterHexInteger:
+        um_registry_set_dword(c->key, name, v->ParameterData.IntegerData);
+        break;
+    case NdisParameterString:
+    case NdisParameterMultiString: {
+        UINT32 n = v->ParameterData.StringData.Length;
+        UINT8 *buf = pool_alloc((UINT64)n + 4);
+        if (!buf) { *st = NDIS_STATUS_RESOURCES; return; }
+        memcpy(buf, v->ParameterData.StringData.Buffer, n);
+        um_registry_set_value(c->key, name, v->ParameterType == NdisParameterString ? 1 : 7, buf,
+                              n + (v->ParameterType == NdisParameterString ? 2 : 4));
+        pool_free(buf);
+        break;
+    }
+    case NdisParameterBinary:
+        um_registry_set_bin(c->key, name, v->ParameterData.BinaryData.Buffer, v->ParameterData.BinaryData.Length);
+        break;
+    default:
+        return;
+    }
+    *st = NDIS_STATUS_SUCCESS;
+}
+
+NT_API NDIS_STATUS nt_NdisWriteEventLogEntry(void *source, UINT32 code, UINT32 unique, UINT16 strings, void *string_list,
+                                             UINT32 data_size, void *data)
+{
+    (void)source; (void)unique; (void)strings; (void)string_list; (void)data;
+    kprintf("[NDIS] event log entry 0x%08x (%u bytes of data)\n", code, data_size);
+    return NDIS_STATUS_SUCCESS;
+}
+
+/* @n bytes at the net buffer's data: in place when its current MDL holds
+ * them (and @align allows), else copied into @storage, else NULL */
+NT_API void *nt_NdisGetDataBuffer(NET_BUFFER *nb, UINT32 n, void *storage, UINT32 align, UINT32 align_off)
+{
+    if (!nb || n > nb->DataLength || !nb->CurrentMdl) return NULL;
+    UINT8 *p = mdl_va(nb->CurrentMdl) + nb->CurrentMdlOffset;
+    if (nb->CurrentMdl->ByteCount - nb->CurrentMdlOffset >= n &&
+        (align <= 1 || ((UINT64)p % align) == align_off))
+        return p;
+    if (!storage) return NULL;
+    UINT8 *out = storage;
+    UINT32 off = nb->CurrentMdlOffset, got = 0;
+    for (NT_MDL *m = nb->CurrentMdl; m && got < n; m = m->Next, off = 0) {
+        UINT32 take = m->ByteCount - off;
+        if (take > n - got) take = n - got;
+        memcpy(out + got, mdl_va(m) + off, take);
+        got += take;
+    }
+    return got == n ? storage : NULL;
+}
+
+NT_API void nt_NdisGetSystemUpTimeEx(INT64 *ms) { if (ms) *ms = (INT64)(sched_ticks() * 10); }
+
+/* Timer objects: a kernel timer whose DPC calls the miniport's function */
+typedef void (NT_API *NDIS_TIMER_FUNCTION)(void *ss1, void *ctx, void *ss2, void *ss3);
+typedef struct {
+    NDIS_OBJECT_HEADER  Header;
+    UINT32              AllocationTag;
+    NDIS_TIMER_FUNCTION TimerFunction;
+    void               *FunctionContext;
+} NDIS_TIMER_CHARACTERISTICS;
+
+#define M_TIMER 0x6D54444Eu
+typedef struct {
+    UINT32              magic;
+    NT_KTIMER           timer;
+    NT_KDPC             dpc;
+    NDIS_TIMER_FUNCTION fn;
+    void               *ctx;
+} NdisTimer;
+
+static NT_API void timer_dpc(NT_KDPC *k, void *ctx, void *a1, void *a2)
+{
+    (void)k; (void)a1; (void)a2;
+    NdisTimer *t = ctx;
+    if (t->magic == M_TIMER) t->fn(NULL, t->ctx, NULL, NULL);
+}
+
+NT_API NDIS_STATUS nt_NdisAllocateTimerObject(void *h, NDIS_TIMER_CHARACTERISTICS *ch, void **out)
+{
+    (void)h;
+    if (!ch || !ch->TimerFunction || !out) return NDIS_STATUS_INVALID_PARAMETER;
+    NdisTimer *t = pool_alloc(sizeof(*t));
+    if (!t) return NDIS_STATUS_RESOURCES;
+    t->magic = M_TIMER;
+    t->fn = ch->TimerFunction;
+    t->ctx = ch->FunctionContext;
+    nt_KeInitializeTimerEx(&t->timer, 0);
+    nt_KeInitializeDpc(&t->dpc, timer_dpc, t);
+    *out = t;
+    return NDIS_STATUS_SUCCESS;
+}
+
+NT_API UINT8 nt_NdisSetTimerObject(NdisTimer *t, INT64 due, UINT32 period_ms, void *ctx)
+{
+    if (!t || t->magic != M_TIMER) return 0;
+    if (ctx) t->ctx = ctx;
+    return nt_KeSetTimerEx(&t->timer, due, (int)period_ms, &t->dpc);
+}
+
+NT_API UINT8 nt_NdisSetCoalescableTimerObject(NdisTimer *t, INT64 due, UINT32 period_ms, void *ctx, UINT32 tolerance)
+{
+    (void)tolerance;
+    return nt_NdisSetTimerObject(t, due, period_ms, ctx);
+}
+
+NT_API UINT8 nt_NdisCancelTimerObject(NdisTimer *t)
+{
+    return t && t->magic == M_TIMER ? nt_KeCancelTimer(&t->timer) : 0;
+}
+
+NT_API void nt_NdisFreeTimerObject(NdisTimer *t)
+{
+    if (!t || t->magic != M_TIMER) return;
+    nt_KeCancelTimer(&t->timer);
+    t->magic = 0;
+    pool_free(t);
 }

@@ -44,7 +44,7 @@ PAUSES = (10, 30, 60, 120)                                  # seconds between at
 
 
 def cabinet(work):
-    """FTDI's cabinet, downloaded once and checked"""
+    """The driver's cabinet, downloaded once and checked"""
     cache = os.environ.get('NOVA_DRIVER_CACHE') or work
     os.makedirs(cache, exist_ok=True)
     path = os.path.join(cache, CAB_NAME)
@@ -66,7 +66,7 @@ def cabinet(work):
         if pause is None:
             break
         time.sleep(pause)
-    raise SystemExit('FTDI driver cabinet unavailable: ' + CAB_URL)
+    raise SystemExit('driver cabinet unavailable: ' + CAB_URL)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

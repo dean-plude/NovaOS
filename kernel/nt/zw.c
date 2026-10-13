@@ -361,28 +361,246 @@ NT_API NTSTATUS nt_ZwDeleteKey(ZwObject *key)
 /* -----------------------------------------------------------------------
  * Files
  * ----------------------------------------------------------------------- */
+/* IO_STATUS_BLOCK */
+typedef struct {
+    NT_STATUS Status;
+    UINT32    pad;
+    UINT64    Information;
+} NtIoStatus;
+
+#define FILE_DIRECTORY_FILE     0x00000001
+#define FILE_NON_DIRECTORY_FILE 0x00000040
+#define FILE_OPEN               1
+#define FILE_CREATE             2
+#define FILE_OPEN_IF            3
+#define FILE_OVERWRITE          4
+#define FILE_OVERWRITE_IF       5
+#define FILE_OPENED             1
+#define FILE_CREATED            2
+#define FILE_OVERWRITTEN        3
+#define ST_OBJECT_NAME_COLLISION ((NT_STATUS)0xC0000035)
+#define ST_FILE_IS_A_DIRECTORY   ((NT_STATUS)0xC00000BA)
+#define ST_NOT_A_DIRECTORY       ((NT_STATUS)0xC0000103)
+#define ST_END_OF_FILE           ((NT_STATUS)0xC0000011)
+#define ST_DISK_FULL             ((NT_STATUS)0xC000007F)
+
+static void iosb_set(void *iosb, NT_STATUS st, UINT64 info)
+{
+    if (!iosb) return;
+    ((NtIoStatus *)iosb)->Status = st;
+    ((NtIoStatus *)iosb)->Information = info;
+}
+
+/* The file OBJECT_ATTRIBUTES names, as a NovaOS path: \??\C:\... and
+ * \DosDevices\C:\... are the drive-letter path, \SystemRoot\... is
+ * C:\Windows\...; a name relative to a RootDirectory file handle (a
+ * directory) is resolved from it.  *@dir the directory to start from
+ * (NULL: the root). */
+static bool oa_file_path(const NtObjectAttributes *oa, char *out, int cap, RamNode **dir)
+{
+    char name[256];
+    ustr_ascii(oa->ObjectName, name, sizeof(name));
+    *dir = NULL;
+    const ZwObject *root = oa->RootDirectory;
+    if (root) {
+        if (root->magic != ZW_MAGIC || root->kind != ZW_FILE || !root->node || !root->node->dir) return false;
+        *dir = root->node;
+        ksnprintf(out, cap, "%s", name);
+        return true;
+    }
+    const char *p = name;
+    if (!strncmp(p, "\\??\\", 4)) p += 4;
+    else if (!strncmp(p, "\\DosDevices\\", 12)) p += 12;
+    else {
+        static const char sr[] = "\\systemroot\\";
+        bool same = true;
+        for (int i = 0; sr[i] && same; i++) same = (sr[i] == '\\' ? p[i] : p[i] | 0x20) == sr[i];
+        if (same) { ksnprintf(out, cap, "C:\\Windows\\%s", p + 12); return true; }
+    }
+    ksnprintf(out, cap, "%s", p);
+    return true;
+}
+
+/* A file handle on @n (pinned while open, so a read needs no lock) */
+static NT_STATUS file_handle(void *handle, RamNode *n)
+{
+    ZwObject *o = zw_new(ZW_FILE);
+    if (!o) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    o->node = n;
+    if (!put_handle(handle, o)) { kfree(o); return NT_STATUS_ACCESS_VIOLATION; }
+    return NT_STATUS_SUCCESS;
+}
+
+/* ZwCreateFile / ZwOpenFile on drive paths: files and directories (a
+ * directory handle is a RootDirectory for relative opens), created as
+ * the disposition says */
 NT_API NTSTATUS nt_ZwCreateFile(void *handle, UINT32 access, NtObjectAttributes *oa, void *iosb,
                                 void *alloc, UINT32 attribs, UINT32 share, UINT32 disposition,
                                 UINT32 options, void *ea, UINT32 ea_len)
 {
-    (void)access; (void)iosb; (void)alloc; (void)attribs; (void)share; (void)disposition; (void)options; (void)ea; (void)ea_len;
-    char name[256];
-    if (!oa) return NT_STATUS_INVALID_PARAMETER;
-    ustr_ascii(oa->ObjectName, name, sizeof(name));
-    /* \??\C:\... or \DosDevices\C:\...: the drive-letter path */
-    const char *p = name;
-    if (!strncmp(p, "\\??\\", 4)) p += 4;
-    else if (!strncmp(p, "\\DosDevices\\", 12)) p += 12;
+    (void)access; (void)alloc; (void)attribs; (void)share; (void)ea; (void)ea_len;
+    char path[260];
+    RamNode *dir;
+    if (!oa || !oa_file_path(oa, path, sizeof(path), &dir)) return NT_STATUS_INVALID_PARAMETER;
+    UINT32 result = FILE_OPENED;
     FsLock();
-    RamNode *n = RamfsResolve(NULL, p);
-    if (n && !n->dir) RamfsPin(n);
+    RamNode *n = path[0] ? RamfsResolve(dir, path) : dir;
+    NT_STATUS st = NT_STATUS_SUCCESS;
+    if (n && disposition == FILE_CREATE) st = ST_OBJECT_NAME_COLLISION;
+    else if (!n && (disposition == FILE_OPEN || disposition == FILE_OVERWRITE)) st = NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    else if (!n) {                                          /* (create it, in its parent) */
+        char *leaf = path;
+        for (char *c = path; *c; c++) if (*c == '\\') leaf = c + 1;
+        RamNode *parent = dir;
+        if (leaf != path) {
+            leaf[-1] = 0;
+            parent = RamfsResolve(dir, path[0] ? path : "\\");
+        }
+        n = parent && parent->dir ? RamfsCreate(parent, leaf, (options & FILE_DIRECTORY_FILE) != 0) : NULL;
+        if (!n) st = NT_STATUS_OBJECT_NAME_NOT_FOUND;
+        result = FILE_CREATED;
+    } else if ((options & FILE_DIRECTORY_FILE) && !n->dir) st = ST_NOT_A_DIRECTORY;
+    else if ((options & FILE_NON_DIRECTORY_FILE) && n->dir) st = ST_FILE_IS_A_DIRECTORY;
+    else if (!n->dir && disposition >= FILE_OVERWRITE) {
+        if (!RamfsResize(n, 0)) st = ST_DISK_FULL;
+        result = FILE_OVERWRITTEN;
+    }
+    if (NT_SUCCESS_(st) && n->dir) RamfsLoad(n);
+    if (NT_SUCCESS_(st)) RamfsPin(n);
     FsUnlock();
-    if (!n || n->dir) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
-    ZwObject *o = zw_new(ZW_FILE);
-    if (!o) { FsLock(); RamfsUnpin(n); FsUnlock(); return NT_STATUS_INSUFFICIENT_RESOURCES; }
-    o->node = n;
-    if (!put_handle(handle, o)) { kfree(o); FsLock(); RamfsUnpin(n); FsUnlock(); return NT_STATUS_ACCESS_VIOLATION; }
+    if (NT_SUCCESS_(st)) {
+        st = file_handle(handle, n);
+        if (!NT_SUCCESS_(st)) { FsLock(); RamfsUnpin(n); FsUnlock(); }
+    }
+    iosb_set(iosb, st, NT_SUCCESS_(st) ? result : 0);
+    return st;
+}
+
+NT_API NTSTATUS nt_ZwOpenFile(void *handle, UINT32 access, NtObjectAttributes *oa, void *iosb, UINT32 share,
+                              UINT32 options)
+{
+    return nt_ZwCreateFile(handle, access, oa, iosb, NULL, 0, share, FILE_OPEN, options, NULL, 0);
+}
+
+static ZwObject *file_of(void *h)
+{
+    ZwObject *o = h;
+    return o && o->magic == ZW_MAGIC && o->kind == ZW_FILE && o->node ? o : NULL;
+}
+
+/* At @offset (NULL: where the last read or write ended), synchronously */
+NT_API NTSTATUS nt_ZwReadFile(void *h, void *event, void *apc, void *apc_ctx, void *iosb, void *buf, UINT32 len,
+                              INT64 *offset, UINT32 *key)
+{
+    (void)event; (void)apc; (void)apc_ctx; (void)key;
+    ZwObject *o = file_of(h);
+    if (!o) return NT_STATUS_INVALID_HANDLE;
+    if (o->node->dir) { iosb_set(iosb, ST_FILE_IS_A_DIRECTORY, 0); return ST_FILE_IS_A_DIRECTORY; }
+    UINT64 at = offset && *offset >= 0 ? (UINT64)*offset : o->offset;
+    FsLock();
+    UINT32 size = o->node->size, n = 0;
+    if (at < size) {
+        n = size - (UINT32)at < len ? size - (UINT32)at : len;
+        memcpy(buf, o->node->data + at, n);
+    }
+    FsUnlock();
+    o->offset = at + n;
+    NT_STATUS st = n || !len ? NT_STATUS_SUCCESS : ST_END_OF_FILE;
+    iosb_set(iosb, st, n);
+    return st;
+}
+
+NT_API NTSTATUS nt_ZwWriteFile(void *h, void *event, void *apc, void *apc_ctx, void *iosb, const void *buf, UINT32 len,
+                               INT64 *offset, UINT32 *key)
+{
+    (void)event; (void)apc; (void)apc_ctx; (void)key;
+    ZwObject *o = file_of(h);
+    if (!o) return NT_STATUS_INVALID_HANDLE;
+    if (o->node->dir) { iosb_set(iosb, ST_FILE_IS_A_DIRECTORY, 0); return ST_FILE_IS_A_DIRECTORY; }
+    FsLock();
+    UINT64 at = offset && *offset >= 0 ? (UINT64)*offset : offset && *offset == -1 ? o->node->size : o->offset;
+    bool ok = at <= 0xFFFFFFFFu && RamfsWriteAt(o->node, (UINT32)at, buf, len);
+    FsUnlock();
+    NT_STATUS st = ok ? NT_STATUS_SUCCESS : ST_DISK_FULL;
+    if (ok) o->offset = at + len;
+    iosb_set(iosb, st, ok ? len : 0);
+    return st;
+}
+
+/* FileBasicInformation, FileStandardInformation, FilePositionInformation */
+NT_API NTSTATUS nt_ZwQueryInformationFile(void *h, void *iosb, void *info, UINT32 len, int cls)
+{
+    ZwObject *o = file_of(h);
+    if (!o) return NT_STATUS_INVALID_HANDLE;
+    RamNode *n = o->node;
+    UINT32 need;
+    switch (cls) {
+    case 4: {                                           /* FileBasicInformation */
+        need = 40;
+        if (len < need) break;
+        INT64 *t = info;
+        t[0] = (INT64)n->ctime; t[1] = t[2] = t[3] = (INT64)n->mtime;
+        ((UINT32 *)info)[8] = n->dir ? 0x10 : (n->attrs ? n->attrs : 0x80);
+        ((UINT32 *)info)[9] = 0;
+        break;
+    }
+    case 5: {                                           /* FileStandardInformation */
+        need = 24;
+        if (len < need) break;
+        INT64 *v = info;
+        v[0] = (INT64)((n->size + 4095ull) & ~4095ull);  /* AllocationSize */
+        v[1] = (INT64)n->size;                          /* EndOfFile */
+        ((UINT32 *)info)[4] = (UINT32)RamfsLinks(n);
+        ((UINT8 *)info)[20] = 0;                        /* DeletePending */
+        ((UINT8 *)info)[21] = n->dir ? 1 : 0;           /* Directory */
+        break;
+    }
+    case 14:                                            /* FilePositionInformation */
+        need = 8;
+        if (len >= need) *(INT64 *)info = (INT64)o->offset;
+        break;
+    default:
+        iosb_set(iosb, STATUS_INVALID_INFO_CLASS, 0);
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    if (len < need) { iosb_set(iosb, NT_STATUS_INFO_LENGTH_MISMATCH, 0); return NT_STATUS_INFO_LENGTH_MISMATCH; }
+    iosb_set(iosb, NT_STATUS_SUCCESS, need);
     return NT_STATUS_SUCCESS;
+}
+
+/* IoGetDriverDirectory: a handle on the directory the driver's image was
+ * loaded from (DriverDirectoryImage: its driver-store folder, where its
+ * package keeps firmware beside it), or on its own data directory
+ * (DriverDirectoryData, C:\Windows\System32\DriverData\<service>, made
+ * when missing) */
+NT_API NTSTATUS nt_IoGetDriverDirectory(NT_DRIVER_OBJECT *obj, int type, UINT32 flags, void *handle)
+{
+    (void)flags;
+    NtDriver *drv = NtIoDriverOf(obj);
+    if (!drv || !handle || (type != 0 && type != 1)) return NT_STATUS_INVALID_PARAMETER;
+    char path[260];
+    if (type == 0) {
+        ksnprintf(path, sizeof(path), "%s", drv->path);
+        char *leaf = NULL;
+        for (char *c = path; *c; c++) if (*c == '\\') leaf = c;
+        if (!leaf) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+        *leaf = 0;
+    } else {
+        ksnprintf(path, sizeof(path), "C:\\Windows\\System32\\DriverData\\%s", drv->service);
+    }
+    FsLock();
+    RamNode *n = RamfsResolve(NULL, path);
+    if (!n && type == 1) {
+        RamNode *dd = RamfsResolve(NULL, "C:\\Windows\\System32\\DriverData");
+        if (!dd) dd = RamfsCreate(RamfsResolve(NULL, "C:\\Windows\\System32"), "DriverData", true);
+        n = dd ? RamfsCreate(dd, drv->service, true) : NULL;
+    }
+    if (n && n->dir) { RamfsLoad(n); RamfsPin(n); }
+    FsUnlock();
+    if (!n || !n->dir) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    NT_STATUS st = file_handle(handle, n);
+    if (!NT_SUCCESS_(st)) { FsLock(); RamfsUnpin(n); FsUnlock(); }
+    return st;
 }
 
 NT_API NTSTATUS nt_ZwClose(ZwObject *o)

@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def exported():
     text = open(os.path.join(ROOT, 'kernel', 'nt', 'exports.h')).read()
     have = {}
-    for m in re.finditer(r'^\s*NT_EXPORT\(\s*([\w.]+)\s*,\s*(\w+)\s*\)', text, re.M):
+    for m in re.finditer(r'^\s*NT_EXPORT(?:_DATA)?\(\s*([\w.-]+)\s*,\s*(\w+)\s*\)', text, re.M):
         have.setdefault(m.group(1).lower(), set()).add(m.group(2))
     return have
 

@@ -241,10 +241,10 @@ step and only when a target driver needs it:
 | PortCls / AVStream | `portcls.sys`, `ks.sys` | audio and camera drivers | NovaOS's audio and capture paths |
 | WDDM | `dxgkrnl.sys` | display miniports and their user-mode D3D/Vulkan drivers | `gdi32`'s `D3DKMT*` calls and the compositor |
 
-WDDM is the largest by far and is not planned as a step: the Intel Iris Xe
-choice in roadmap step 25.3 (a native driver with Mesa's MIT-licensed Intel
-Vulkan and OpenGL drivers, or Intel's own WDDM driver through a WDDM host)
-is that step's decision, recorded there.
+WDDM is the largest by far and is not a Phase 30 step: roadmap step 25.3
+chose Intel's own WDDM driver through a WDDM host for the T14's Iris Xe,
+with a native driver under Mesa as the fallback; the host's design and
+steps are in [intel-gpu.md](intel-gpu.md).
 
 ## Getting drivers: the driver store and on-demand download
 
@@ -425,4 +425,4 @@ downloaded by the test as NovaOS's other tests download apps.
 
 Later steps, each only when a target device needs it: HID class, PortCls
 and AVStream (for the T14's audio and camera if their built-in drivers
-fall short), and WDDM (see step 25.3).
+fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3).

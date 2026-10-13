@@ -80,8 +80,8 @@ vendors' drivers.  The decision is recorded in this file either way.
 ### Loading: `DxgkInitialize`
 
 A display miniport's `DriverEntry` calls `DxgkInitialize` (or
-`DxgkInitializeDisplayOnlyDriver`), an inline from the WDK's
-`dispmprt.h` that opens `\Device\DxgKrnl`, asks it for its
+`DxgkInitializeDisplayOnlyDriver`), from the WDK's static `displib.lib`
+linked into the driver, which opens `\Device\DxgKrnl`, asks it for its
 initialisation function with `IOCTL_VIDEO_DDI_FUNC_REGISTER`, and hands it
 the driver's `DRIVER_INITIALIZATION_DATA` (the `DxgkDdi*` table).  The
 host creates that device at boot, answers the IOCTL, and fills the
@@ -234,7 +234,11 @@ Each is one pull request off main.
    `DxgkInitializeDisplayOnlyDriver`, the display-only DDIs and the
    VidPN, the display layer's WDDM back end.  Done when `wddmdod.sys`
    drives QEMU's Bochs adapter, Settings changes its mode, and removing
-   the driver returns the screen to the built-in one.
+   the driver returns the screen to the built-in one.  **Done**:
+   `kernel/nt/dxgkrnl.c` and `kernel/nt/dxgk.h`, the `DRV_WDDM` back end
+   in `kernel/hal/display.c`, `tools/drivertest/wddmdod.c`, tested by the
+   devices suite's "wddm" boot (`tests/selftest/devices/wddm`; see
+   [HISTORY](../HISTORY.md#a-windows-display-driver-on-the-boot-display)).
 2. **Intel's driver starts on the T14 and changes the panel's mode.**  The
    full `DxgkInitialize` path, `DxgkDdiStartDevice` with the
    `DXGKRNL_INTERFACE` callbacks, adapter queries, VidMm's segments and

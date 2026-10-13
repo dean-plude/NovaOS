@@ -235,6 +235,22 @@ stack's.  That is roadmap step 28.1, checked on the T14 by hand; the
 `edu` stand-in keeps the install, signing and driver start path tested in
 CI.
 
+Windows **display drivers** (WDDM) are miniports of `dxgkrnl.sys`, and
+NovaOS has its display-only half (`kernel/nt/dxgkrnl.c`, step 1 of
+[design/intel-gpu.md](design/intel-gpu.md)): a driver's
+`DxgkInitializeDisplayOnlyDriver` finds `\Device\DxgKrnl` and registers
+its `KMDDOD_INITIALIZATION_DATA`, the PnP manager starts it on its
+adapter, and the host reads its outputs and modes through a VidPN.  The
+desktop then moves to it: what the desktop draws goes to the driver's
+`DxgkDdiPresentDisplayOnly`, and Settings' mode changes become VidPNs the
+driver checks and commits.  The built-in driver of the boot display (the
+Bochs VBE one, on QEMU's standard VGA) steps aside for it, and takes the
+screen back, in the mode the driver left, when the driver is disabled or
+removed.  The test driver is `wddmdod.sys` (`tools/drivertest/wddmdod.c`,
+the devices suite's "wddm" boot), a display-only driver for QEMU's
+standard VGA modelled on Microsoft's KMDOD sample.  Render drivers (the
+full `DxgkInitialize`, Intel's on the T14) are the design's next steps.
+
 ### Driver signing
 
 A kernel driver loads only if it is signed the way Windows 11 requires

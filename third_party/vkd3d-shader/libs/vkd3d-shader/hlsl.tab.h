@@ -321,7 +321,7 @@ struct state_block_index
 #if ! defined HLSL_YYSTYPE && ! defined HLSL_YYSTYPE_IS_DECLARED
 union HLSL_YYSTYPE
 {
-#line 7155 "hlsl.y"
+#line 7159 "hlsl.y"
 
     struct hlsl_type *type;
     INT intval;

@@ -2669,12 +2669,16 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
         }
     }
 
-    if (hlsl_version_ge(ctx, 5, 1) && type->class == HLSL_CLASS_ARRAY && hlsl_type_is_resource(type))
+    if (hlsl_version_ge(ctx, 5, 1) && type->class == HLSL_CLASS_ARRAY && hlsl_type_is_resource(type)
+            && (type->e.array.type->class == HLSL_CLASS_ARRAY || v->initializer.args_count))
     {
         /* SM 5.1/6.x descriptor arrays act differently from previous versions.
          * Not only are they treated as a single object in reflection, but they
          * act as a single component for the purposes of assignment and
-         * initialization. */
+         * initialization.
+         * NovaOS: one-dimensional uniform descriptor arrays without an
+         * initializer are supported, indexed by constants or by any
+         * expression (a single descriptor range in the bytecode). */
         hlsl_fixme(ctx, &v->loc, "Shader model 5.1+ resource array.");
     }
 

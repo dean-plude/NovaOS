@@ -637,6 +637,12 @@ edudir = os.path.join(out, 'edutest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), edudir, 'edutest'])
 for n in sorted(os.listdir(edudir)):
     built.append((f'\\Tests\\Edu\\{n}', os.path.join(edudir, n)))
+# 3a2d. wddmdod.sys and its package, the WDDM display-only driver for QEMU's
+# standard VGA the wddm self-test installs with pnputil (Phase 25.3, step 1)
+wddmdir = os.path.join(out, 'wddmdod')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), wddmdir, 'wddmdod'])
+for n in sorted(os.listdir(wddmdir)):
+    built.append((f'\\Tests\\Wddm\\{n}', os.path.join(wddmdir, n)))
 # 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
 # MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
 # that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in

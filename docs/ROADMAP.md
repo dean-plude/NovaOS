@@ -564,6 +564,11 @@ named program or test demonstrates it.
   virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
   built-in driver, and the network stack uses it for DHCP, ping and
   downloads; Intel AX211 Wi-Fi (WDI) is the second half.
+  Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
+  reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
+  on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's
+  reads, writes and device controls reach its queues (QEMU's `edu` device
+  in the tests).
 
 <!-- END generated:next-hardware -->
 

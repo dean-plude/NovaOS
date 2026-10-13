@@ -11,12 +11,23 @@
  * so (ClientVersionHigherThanFramework), its function count is cut to this
  * framework's, and it is given this framework's structure sizes, which is
  * what its WDF_IS_FUNCTION_AVAILABLE and WDF_STRUCTURE_SIZE read.
+ *
+ * The user-mode framework (tools/umdf/rt/bindhelper.cpp) builds this file
+ * with NOVA_UMDF defined: there the helper has C++ linkage, as UMDF's
+ * fxldr.h declares it.
  */
+#ifdef NOVA_UMDF
+#include "fxmin.hpp"
+#include <fxldr.h>
+#define BIND_LINKAGE
+#else
 extern "C" {
 #include <ntddk.h>
 }
 #include "fx.hpp"
 #include <fxldr.h>
+#define BIND_LINKAGE extern "C"
+#endif
 
 /* sizeof each public structure, indexed by WDFSTRUCTENUM (wdffuncenum.h);
  * build_kmdf.py writes the list from that header */
@@ -27,7 +38,7 @@ static size_t g_StructSizes[] = {
 };
 C_ASSERT(RTL_NUMBER_OF(g_StructSizes) == WDF_STRUCTURE_TABLE_NUM_ENTRIES);
 
-extern "C"
+BIND_LINKAGE
 NTSTATUS
 WdfBindClientHelper(
     _Inout_ PWDF_BIND_INFO BindInfo,

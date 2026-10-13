@@ -64,7 +64,7 @@ driver that runs the same device there.
 | Device | On the T14 Gen 4 (Intel) | Linux driver | NovaOS | Notes |
 |---|---|---|---|---|
 | **Firmware** | UEFI, Secure Boot | — | supported | NovaOS boots from UEFI with Secure Boot off (21.2) |
-| **Display** | Intel Iris Xe (Raptor Lake-P), 14" 1920x1200 panel | `i915` | partial | the UEFI GOP framebuffer in the firmware's mode: one mode, no mode changes, no second monitor, no 3D on the GPU (3D runs on the CPU through llvmpipe and lavapipe) |
+| **Display** | Intel Iris Xe (Raptor Lake-P), 14" 1920x1200 panel | `i915` | partial | the UEFI GOP framebuffer in the firmware's mode: one mode, no mode changes, no second monitor, no 3D on the GPU (3D runs on the CPU through llvmpipe and lavapipe); the plan, Intel's Windows driver through a WDDM host, is [design/intel-gpu.md](design/intel-gpu.md) |
 | **Storage** | M.2 2280 NVMe SSD, PCIe 4.0 x4 | `nvme` | supported | NVMe driver by class 01.08.02 (Phase 18.3); the Terminal's `install` copies NovaOS to it and adds a firmware boot entry (step 21.5, [install-and-power.md](install-and-power.md)); the BIOS's Intel VMD option must be off or the disk is hidden (NovaOS logs it); install checked in QEMU only |
 | **Ethernet** | Intel I219-V or I219-LM (vPro) | `e1000e` | supported, unverified on hardware | the I219 is the chipset's built-in MAC with its PHY on a separate bus; NovaOS's `e1000e` drives it since step 21.3 (PR #136), tested only on QEMU's 82574L, not yet run on the machine |
 | **Wi-Fi + Bluetooth** | Intel AX211 or Qualcomm NFA725A | `iwlwifi` / `ath11k` | missing | not needed for Phase 21: the gate goes online over Ethernet |

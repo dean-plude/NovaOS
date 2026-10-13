@@ -91,7 +91,7 @@ const VmbusDriver HvKeyboardDriver = {
 #define HID_INITIAL_DEVICE_INFO_ACK 3
 #define HID_INPUT_REPORT          4
 #define HID_VERSION               0x00020000u
-#define DEV_INFO_SIZE             30   /* size, vendor, product, version, 11 reserved (16 bits each) */
+#define DEV_INFO_SIZE             32   /* size (32 bits), vendor, product, version, 11 reserved (16 bits each) */
 
 typedef struct {
     VmbusChannel *ch;
@@ -146,7 +146,7 @@ static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len)
         const char *kind = NULL;
         m->hid = rd ? HidAttach(rd, rlen, &kind) : NULL;
         kprintf("[HVINPUT] mouse: %04x:%04x, %d-byte report descriptor: %s\n",
-                psize - 8 >= 6 ? rd16(body + 2) : 0, psize - 8 >= 6 ? rd16(body + 4) : 0, rlen,
+                psize - 8 >= 8 ? rd16(body + 4) : 0, psize - 8 >= 8 ? rd16(body + 6) : 0, rlen,
                 m->hid ? kind : "nothing NovaOS uses");
         if (m->hid) HidStart(m->hid);
         break;

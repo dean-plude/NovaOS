@@ -83,7 +83,22 @@ as the serial line) after starting the VM.  A working start shows:
 
 (The device numbers, the version and the descriptor's size depend on the
 host.)  Every device the host offers is listed, with a name for the common
-ones.
+ones.  Earlier lines say what went wrong when something does:
+
+| Line | Meaning |
+|---|---|
+| no `[VMBUS]` line at all | NovaOS did not see Hyper-V (CPUID): not a Hyper-V VM |
+| `Hyper-V found (features ..., privileges ...)` | Hyper-V seen; the numbers are CPUID 0x40000003 EAX and EBX |
+| `VMBus 5.3: not taken` | the host refused that version; NovaOS tries the next one |
+| `VMBus 5.3: no answer` | the host did not answer; NovaOS drops any older connection (`Unload:`) and tries once more |
+| `... devices offered` | the host's device list ended |
+| `the host did not take its rings` / `did not open it` | a channel failed to open (with the host's status) |
+| `No keyboard or mouse channel open` | no input device was offered, or none opened |
+
+A start under Hyper-V also says where the timer's rate came from:
+`[APIC] Timer: ... from Hyper-V's frequency MSRs (no HPET)`.  Hyper-V has
+no HPET, so NovaOS takes the TSC's and the local APIC timer's
+frequencies from the MSRs Hyper-V offers for them, as Linux does.
 
 ## What does not work yet
 
@@ -100,6 +115,9 @@ ones.
 
 `tests/host/hv_input.c` (run by `tests/tools/test_hv_input.py`) runs the
 ring buffer (wrapping, a full ring, the signalling hints) and both
-protocols on the host, without a VM.  QEMU's CI machines cannot offer the
+protocols on the host, without a VM; its mouse case uses the device
+information layout Hyper-V sends (a 32-byte block: a 32-bit size, vendor,
+product, version and eleven reserved 16-bit words, then the HID
+descriptor), checked against FreeBSD's `hv_hid.c`.  QEMU's CI machines cannot offer the
 Hyper-V devices, so the VMBus connection itself is checked by hand in
 Hyper-V.

@@ -281,6 +281,9 @@ The full list, with the reasons, is in
 - [docs/design/windows-drivers.md](docs/design/windows-drivers.md): the
   plan to run Windows driver packages the way Windows 11 does (NT
   kernel-mode driver interface, KMDF/UMDF, download by hardware ID).
+- [docs/design/intel-gpu.md](docs/design/intel-gpu.md): the plan for the
+  reference laptop's Intel Iris Xe (Intel's Windows driver through a WDDM
+  host, its Vulkan driver under DXVK and VKD3D-Proton).
 - [docs/hyperv.md](docs/hyperv.md): running NovaOS in a Hyper-V VM (the
   keyboard and mouse over VMBus) and what does not work there yet.
 - [docs/ethernet.md](docs/ethernet.md): the Intel Ethernet driver, the

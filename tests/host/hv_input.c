@@ -77,17 +77,17 @@ static void keyboard_checks(void)
     UINT32 n = sent(b, &fl);
     assert(n == 8 && rd32(b) == 1 && rd32(b + 4) == 0x10000 && (fl & VM_PKT_FLAG_COMPLETION_REQUESTED));
     UINT8 resp[8] = { 2, 0, 0, 0, 1, 0, 0, 0 };
-    HvKeyboardDriver.packet(ctx, resp, 8);
+    HvKeyboardDriver.packet(ctx, resp, 8, 0);
     UINT8 a_down[16] = { 3, 0, 0, 0, 0x1E, 0, 0, 0, 0, 0, 0, 0 };
     UINT8 a_up[16]   = { 3, 0, 0, 0, 0x1E, 0, 0, 0, 2, 0, 0, 0 };
     UINT8 up_e0[16]  = { 3, 0, 0, 0, 0x48, 0, 0, 0, 4, 0, 0, 0 };
     UINT8 text[16]   = { 3, 0, 0, 0, 'x', 0, 0, 0, 1, 0, 0, 0 };
     UINT8 pause[16]  = { 3, 0, 0, 0, 0x1D, 0, 0, 0, 8, 0, 0, 0 };
-    HvKeyboardDriver.packet(ctx, a_down, 16);
-    HvKeyboardDriver.packet(ctx, a_up, 16);
-    HvKeyboardDriver.packet(ctx, up_e0, 16);
-    HvKeyboardDriver.packet(ctx, text, 16);
-    HvKeyboardDriver.packet(ctx, pause, 16);
+    HvKeyboardDriver.packet(ctx, a_down, 16, 0);
+    HvKeyboardDriver.packet(ctx, a_up, 16, 0);
+    HvKeyboardDriver.packet(ctx, up_e0, 16, 0);
+    HvKeyboardDriver.packet(ctx, text, 16, 0);
+    HvKeyboardDriver.packet(ctx, pause, 16, 0);
     assert(nposted == 3);
     assert(posted[0].type == INPUT_KEY && posted[0].scancode == 0x1E && posted[0].pressed && !posted[0].extended);
     assert(posted[1].scancode == 0x1E && !posted[1].pressed);
@@ -110,7 +110,7 @@ static void mouse_checks(void)
            rd32(b + 16) == 0x20000 && (fl & VM_PKT_FLAG_COMPLETION_REQUESTED));
 
     UINT8 resp[24] = { 1, 0, 0, 0, 13, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 0, 1 };
-    HvMouseDriver.packet(ctx, resp, sizeof(resp));
+    HvMouseDriver.packet(ctx, resp, sizeof(resp), 0);
 
     UINT8 info[256] = { 0 };
     UINT32 body = 8 + 32 + 9 + sizeof(rdesc);
@@ -121,16 +121,16 @@ static void mouse_checks(void)
     hd[0] = 9; hd[1] = 0x21; hd[2] = 0x01; hd[3] = 0x01; hd[5] = 1; hd[6] = 0x22;
     hd[7] = sizeof(rdesc); hd[8] = 0;
     memcpy(hd + 9, rdesc, sizeof(rdesc));
-    HvMouseDriver.packet(ctx, info, 8 + body);
+    HvMouseDriver.packet(ctx, info, 8 + body, 0);
     assert(attached_len == (int)sizeof(rdesc) && !memcmp(attached, rdesc, sizeof(rdesc)) && started == 1);
     n = sent(b, &fl);
     assert(n == 24 && rd32(b) == 1 && rd32(b + 4) == 9 && rd32(b + 8) == 3 && rd32(b + 12) == 1 && b[16] == 0);
 
     UINT8 rep[24] = { 1, 0, 0, 0, 14, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, 0x01, 0xFF, 0x3F, 0x00, 0x40, 0xFF };
-    HvMouseDriver.packet(ctx, rep, sizeof(rep));
+    HvMouseDriver.packet(ctx, rep, sizeof(rep), 0);
     assert(reports == 1 && !memcmp(last_report, rep + 16, 6));
     UINT8 bad[24] = { 2, 0, 0, 0, 14, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0 };   /* not a data pipe message */
-    HvMouseDriver.packet(ctx, bad, sizeof(bad));
+    HvMouseDriver.packet(ctx, bad, sizeof(bad), 0);
     assert(reports == 1);
     puts("mouse passed");
 }

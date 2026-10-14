@@ -31,6 +31,7 @@
 #include "vmbus.h"
 #include "vmbus_ring.h"
 #include "hv_input.h"
+#include "hv_util.h"
 #include "../hal/ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/apic.h"
@@ -42,13 +43,15 @@
 #define HV_MSR_GUEST_OS_ID   0x40000000
 #define HV_MSR_HYPERCALL     0x40000001
 #define HV_MSR_VP_INDEX      0x40000002
+#define HV_MSR_TIME_REF_COUNT 0x40000020
 #define HV_MSR_SCONTROL      0x40000080
 #define HV_MSR_SIEFP         0x40000082
 #define HV_MSR_SIMP          0x40000083
 #define HV_MSR_EOM           0x40000084
 #define HV_MSR_SINT0         0x40000090
 
-#define HV_FEAT_SYNIC        (1u << 2)    /* CPUID 0x40000003 EAX */
+#define HV_FEAT_REF_COUNT    (1u << 1)    /* CPUID 0x40000003 EAX */
+#define HV_FEAT_SYNIC        (1u << 2)
 #define HV_FEAT_HYPERCALL    (1u << 5)
 #define HV_FEAT_VP_INDEX     (1u << 6)
 #define HV_PRIV_POST_MESSAGE (1u << 4)    /* ... EBX */
@@ -93,8 +96,8 @@
 
 #define RING_PAGES   10                   /* each way, as Linux's input drivers */
 #define MAX_OFFERS   32
-#define MAX_CHANNELS 4
-#define PKT_MAX      2048
+#define MAX_CHANNELS 16
+#define PKT_MAX      4096                 /* (a shutdown request is 2088 bytes) */
 
 /* A message slot of the SynIC message page */
 typedef struct {
@@ -177,7 +180,7 @@ struct VmbusChannel {
     VmRing  out, in;
     UINT32  relid, conn_id;
     bool    dedicated;
-    UINT8   pkt[PKT_MAX];
+    UINT8  *pkt;                         /* PKT_MAX */
 };
 
 typedef struct {
@@ -186,7 +189,9 @@ typedef struct {
     bool   dedicated;
 } Offer;
 
-static const VmbusDriver *const g_drivers[] = { &HvKeyboardDriver, &HvMouseDriver };
+static const VmbusDriver *const g_drivers[] = {
+    &HvKeyboardDriver, &HvMouseDriver, &HvShutdownDriver, &HvTimeSyncDriver, &HvHeartbeatDriver,
+};
 
 static void         *g_hypercall_page;
 static HvMessage    *g_simp;
@@ -194,6 +199,7 @@ static UINT8        *g_post;              /* the PostMessage input */
 static UINT8        *g_int_page;          /* before 5.0: the interrupt bits (send half second) */
 static UINT32        g_msg_conn;
 static UINT32        g_vp;
+static bool          g_ref_count;         /* HV_MSR_TIME_REF_COUNT reads */
 static Offer         g_offers[MAX_OFFERS];
 static int           g_noffers;
 static VmbusChannel *g_ch[MAX_CHANNELS];
@@ -255,16 +261,17 @@ static void guid_text(const UINT8 *g, char *s, size_t cap)
               g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]);
 }
 
-/* Devices worth a name in the log (NovaOS drives the keyboard and the mouse) */
+/* Devices worth a name in the log (NovaOS drives the keyboard, the mouse,
+ * shutdown, time sync and heartbeat) */
 static const struct { const char *guid, *name; } g_known[] = {
     { "f912ad6d-2b17-48ea-bd65-f927a61c7684", "keyboard" },
     { "cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a", "mouse" },
     { "da0a7802-e377-4aac-8e77-0558eb1073f8", "video (no driver: the firmware's frame buffer is used)" },
     { "ba6163d9-04a1-4d29-b605-72e2ffb1dc7f", "SCSI storage (no driver)" },
     { "f8615163-df3e-46c5-913f-f2d2f965ed0e", "network (no driver)" },
-    { "0e0b6031-5213-4934-818b-38d90ced39db", "shutdown (no driver)" },
-    { "9527e630-d0ae-497b-adce-e80ab0175caf", "time sync (no driver)" },
-    { "57164f39-9115-4e78-ab55-382f3bd5422d", "heartbeat (no driver)" },
+    { "0e0b6031-5213-4934-818b-38d90ced39db", "shutdown" },
+    { "9527e630-d0ae-497b-adce-e80ab0175caf", "time sync" },
+    { "57164f39-9115-4e78-ab55-382f3bd5422d", "heartbeat" },
     { "a9a0f4e7-5a45-4d96-b827-8a841e8c03e6", "key-value exchange (no driver)" },
     { "525074dc-8985-46e2-8057-a307dc18a502", "dynamic memory (no driver)" },
 };
@@ -314,7 +321,8 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     UINT8 msg[240];
     VmbusChannel *ch = kzalloc(sizeof(VmbusChannel));
     UINT8 *rings = kernel_alloc_pages(2 * RING_PAGES);
-    if (!ch || !rings) { kprintf("[VMBUS] %s: out of memory\n", drv->name); return false; }
+    if (ch) ch->pkt = kzalloc(PKT_MAX);
+    if (!ch || !rings || !ch->pkt) { kprintf("[VMBUS] %s: out of memory\n", drv->name); return false; }
     vm_ring_init(&ch->out, rings, RING_PAGES);
     vm_ring_init(&ch->in, rings + RING_PAGES * VMBUS_PAGE, RING_PAGES);
     ch->drv = drv;
@@ -413,6 +421,7 @@ bool VmbusInit(void)
         return false;
     }
     g_vp = (f.eax & HV_FEAT_VP_INDEX) ? (UINT32)rdmsr(HV_MSR_VP_INDEX) : 0;
+    g_ref_count = f.eax & HV_FEAT_REF_COUNT;
 
     IrqInstall(IRQ_VMBUS, irq_ignored, NULL);   /* (the slot is polled; the interrupt only needs its EOI) */
     wrmsr(HV_MSR_SIMP, (rdmsr(HV_MSR_SIMP) & HV_SIMP_RSVD) | phys(g_simp) | 1);
@@ -455,9 +464,16 @@ bool VmbusInit(void)
         for (UINT32 d = 0; d < sizeof(g_drivers) / sizeof(g_drivers[0]); d++)
             if (!memcmp(g_offers[i].type, g_drivers[d]->type, 16) && g_nch < MAX_CHANNELS)
                 open_channel(&g_offers[i], g_drivers[d]);
-    if (!g_nch) kprintf("[VMBUS] No keyboard or mouse channel open\n");
+    if (!g_nch) kprintf("[VMBUS] No channel open\n");
     __atomic_store_n(&g_ready, true, __ATOMIC_RELEASE);
     return g_nch > 0;
+}
+
+bool VmbusReferenceTime(UINT64 *t)
+{
+    if (!g_ref_count) return false;
+    *t = rdmsr(HV_MSR_TIME_REF_COUNT);
+    return true;
 }
 
 static void signal_host(VmbusChannel *ch)
@@ -489,7 +505,7 @@ void VmbusPoll(void)
         for (int n = 0; n < 64 && vm_ring_read(&ch->in, &d, ch->pkt, PKT_MAX, &len, &sig); n++) {
             any |= sig;
             if (d.type == VM_PKT_DATA_INBAND)
-                ch->drv->packet(ch->ctx, ch->pkt, len < PKT_MAX ? len : PKT_MAX);
+                ch->drv->packet(ch->ctx, ch->pkt, len < PKT_MAX ? len : PKT_MAX, d.trans_id);
         }
         if (any) signal_host(ch);
     }

@@ -12700,6 +12700,7 @@ processor), memory, disk and Ethernet; Details is the classic table; and
 Services lists the Service Control Manager's services.  The OS test
 `taskmgr` starts `winhello`, finds it in Task Manager, ends it and checks
 it is gone.
+
 ## Thunderbird opens an e-mail message
 
 Roadmap step 27.1 (grow the corpus), its second app: Thunderbird 158,

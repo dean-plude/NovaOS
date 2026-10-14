@@ -60,9 +60,9 @@ least 2 GB of memory: drive C: is held in memory while NovaOS runs (see
 
 **Hyper-V**: make a Generation 2 VM with Secure Boot off and start it from
 the ISO.  NovaOS has drivers for Hyper-V's keyboard, mouse, virtual
-hard disks (so it installs to a VHDX) and video (so the resolution can be
-changed in Settings), and the host's Shut Down and Restart work, but there is no driver yet for its network adapter
-([hyperv.md](hyperv.md)).
+hard disks (so it installs to a VHDX), video (so the resolution can be
+changed in Settings) and network adapter (the Default Switch works), and
+the host's Shut Down and Restart work ([hyperv.md](hyperv.md)).
 
 **VirtualBox, VMware and others** are untested.  The closest match to
 what NovaOS drives is a machine set to "Other 64-bit" with EFI on, a SATA

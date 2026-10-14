@@ -324,7 +324,8 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   buffers) runs Hyper-V's synthetic keyboard and mouse and answers its
   shutdown, heartbeat and time sync integration services (the host's Shut
   Down and Restart work). Its synthetic SCSI controller's disks are block
-  devices, so NovaOS installs to a VHDX, and its synthetic video changes
-  resolution. Its synthetic network has no driver yet ([hyperv.md](hyperv.md)).
+  devices, so NovaOS installs to a VHDX, its synthetic video changes
+  resolution, and its synthetic network adapter (NVSP and RNDIS) is the
+  network stack's adapter ([hyperv.md](hyperv.md)).
 
 <!-- END generated:inside -->

@@ -117,8 +117,8 @@ boots the tested image once, on four CPUs with 4 GB, and measures:
 The numbers, the budget and each verdict go to the job summary and to
 `perf.json` in the `perf-out` artifact (with the serial log, the smpstress
 log and a screenshot of Firefox).  A time over its budget in
-`tools/ci/perf-budget.json` (about twice what the runners take, so only a
-large regression fails), smpstress failing or scaling too little, or
+`tools/ci/perf-budget.json` (20 s to boot and 10 s for Firefox, against
+9.8 s and 3.4 s on the first runner, so only a large regression fails), smpstress failing or scaling too little, or
 Firefox never drawing its page fails the job and with it **Build and
 boot-test**.  Times are judged only under KVM; when a runner falls back to
 TCG they are recorded, not judged.  A change that makes something slower on

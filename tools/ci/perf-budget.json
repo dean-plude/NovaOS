@@ -1,4 +1,4 @@
 {
-  "boot_seconds": 60,
-  "firefox_seconds": 90
+  "boot_seconds": 20,
+  "firefox_seconds": 10
 }

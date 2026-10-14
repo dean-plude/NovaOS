@@ -42,7 +42,7 @@ installs each one, drives it and compares a screenshot against a reference.
 |---|---|
 | **Developer tools** | 7-Zip, Git for Windows, ripgrep, fd, jq, bat, fzf, Neovim, ffmpeg |
 | **Runtimes** | Python with NumPy, Node.js, .NET, Java (Temurin), the Visual C++ runtime |
-| **Desktop apps** | Firefox, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, Krita, KeePassXC, SumatraPDF |
+| **Desktop apps** | Firefox, Thunderbird, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, Krita, KeePassXC, SumatraPDF |
 | **Games** | OpenTTD, Beneath a Steel Sky on ScummVM, Teeworlds, OpenTyrian, Cave Story, SuperTux, Chocolate Doom, Squash the Creeps (Godot 4, Direct3D 12) |
 | **Graphics** | OpenGL through Mesa; Vulkan through Mesa or Venus; Direct3D 9 to 11 through DXVK; Direct3D 12 through VKD3D-Proton; DirectDraw through cnc-ddraw |
 | **Installers** | `.msi` packages (with their dialogs, custom actions and services), NSIS and Inno Setup |
@@ -68,6 +68,8 @@ says how each one was made.
 | Beneath a Steel Sky on ScummVM, installed with its own installer | Teeworlds in full screen, with music | Tyrian on OpenTyrian, Direct3D 9 through DXVK |
 | ![Blobby Volley 2](docs/screenshots/blobby-volley-2.png) | ![Cave Story](docs/screenshots/cave-story.png) | ![SuperTux](docs/screenshots/supertux.png) |
 | Blobby Volley 2, exclusive full screen at 800x600 | Cave Story, DirectDraw at 640x480 | SuperTux, played with an Xbox 360 pad |
+| ![Device Manager](docs/screenshots/device-manager.png) | | |
+| Device Manager: devices by type, with each one's driver, IDs and resources | | |
 
 ## Try it
 

@@ -9,6 +9,7 @@
 
 #include "pnp.h"
 #include "../hal/pci.h"
+#include "../hal/aml.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../ke/printf.h"
@@ -206,6 +207,39 @@ UINT32 PnpPciNode(UINT8 bus, UINT8 dev, UINT8 func)
     }
     spin_unlock_irqrestore(&g_lock, s);
     return id;
+}
+
+int PnpResources(UINT32 id, PnpResource *out, int max)
+{
+    PciDevice d;
+    bool found = false;
+    for (int i = 0; !found && PciAt(i, &d, NULL); i++) found = PnpPciNode(d.bus, d.dev, d.func) == id;
+    if (!found || max <= 0) return 0;
+    PciRange r[6];
+    int n = PciRanges(&d, r, 6), k = 0;
+    for (int i = 0; i < n && k < max; i++, k++) {
+        out[k].type = r[i].io ? PNP_RES_PORT : PNP_RES_MEMORY;
+        out[k].flags = r[i].prefetch ? 1 : 0;
+        out[k].start = r[i].base;
+        out[k].length = r[i].size;
+    }
+    /* the interrupt line, routed as kernel/nt/pnp.c routes it (_PRT on bus 0) */
+    UINT32 r3c = PciRead32(d.bus, d.dev, d.func, 0x3C);
+    UINT8 pin = (UINT8)(r3c >> 8);
+    UINT32 gsi = 0;
+    bool level = true, low = true, have = false;
+    if (pin >= 1 && pin <= 4) {
+        have = d.bus == 0 && AmlPciIrq(d.dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = true; }
+    }
+    if (have && k < max) {
+        out[k].type = PNP_RES_INTERRUPT;
+        out[k].flags = level ? 1 : 0;
+        out[k].start = gsi;
+        out[k].length = 0;
+        k++;
+    }
+    return k;
 }
 
 static const char *vendor_of(UINT16 v)

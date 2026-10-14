@@ -12444,6 +12444,43 @@ firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
 the T14 (see [drivers.md](drivers.md)).
 
+## Device Manager
+
+Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
+manager and an event manager"), the Device Manager part: `devmgmt.exe`,
+"Device Manager" in Start.
+
+- **The app.**  The PC's devices by type (class nodes such as "Display
+  adapters", the devices under them) or by connection, with View > Show
+  hidden devices for unplugged ones.  The pane beside the tree shows
+  what Windows' Properties dialog shows for the selected device: status
+  and problem code in Windows' words, driver provider, version, date and
+  INF, the instance path, hardware and compatible IDs, and resources.
+  F5 and any `WM_DEVICECHANGE` list the devices again.
+- **Only public APIs.**  setupapi (`SetupDiGetClassDevs`, the new
+  `SetupDiGetClassDescription` and `SetupDiClassNameFromGuid`, registry
+  and `DEVPKEY` properties) and cfgmgr32 (status, `CM_Get_Child`/`Sibling`
+  and the new `CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des`,
+  `CM_Get_Res_Des_Data(_Size)` and `CM_Free_*_Handle`), so programs that
+  read devices the same way now get the same answers.
+- **Driver properties.**  `DEVPKEY_Device_DriverDate`, `DriverVersion`,
+  `DriverDesc`, `DriverInfPath`, `DriverInfSection` and `DriverProvider`
+  come from the software key a device install wrote; a device on a
+  NovaOS driver has NovaOS as provider and the system version.
+- **Resources.**  The kernel sizes every PCI function's BARs once at boot,
+  before any driver runs (`PciRanges`), and gives a node's ranges and its
+  ACPI-routed interrupt to programs (`PnpResources`, CTL_PNP operation 6,
+  `nova_pnp_resources`).
+- **Test.**  The devices suite's new "devmgr" boot (an e1000e card, a USB
+  keyboard and tablet, the driverless edu device) opens Device Manager
+  from the Start menu, then `devmgmt --check` checks setupapi's list
+  against a walk of cfgmgr32's tree, logs every device's class and
+  status and each PCI device's resources, and takes the reference
+  screenshot (`docs/screenshots/device-manager.png`).
+
+Not yet: device icons, the Properties dialog with its Driver tab buttons
+(update, disable, uninstall), and Events (Event Viewer is its own step).
+
 ## The HID class driver
 
 Dean's ask "work on HID Classes": the first step of a Windows HID stack,
@@ -12663,6 +12700,34 @@ processor), memory, disk and Ethernet; Details is the classic table; and
 Services lists the Service Control Manager's services.  The OS test
 `taskmgr` starts `winhello`, finds it in Task Manager, ends it and checks
 it is gone.
+## Thunderbird opens an e-mail message
+
+Roadmap step 27.1 (grow the corpus), its second app: Thunderbird 158,
+Mozilla's mail client, which the App Store lists and which runs on the
+same engine as Firefox.  The nightly corpus now installs it with the
+Store's own button from the Store's download (Mozilla's full installer,
+which the Store unpacks into `C:\Programs\Mozilla Thunderbird`) and opens
+`C:\Apps\data\hello.eml`, a plain-text message the corpus makes, in
+Thunderbird's message window (`tests/appcorpus/954-thunderbird.py`).  The
+sender, recipient, date, subject and text must match
+`tests/reference/thunderbird.png`.  It needed no change to NovaOS:
+
+- **A pinned download.**  The catalog listed Mozilla's "latest" link,
+  whose file changes with every release; it now lists Thunderbird 158.0
+  from Mozilla's release archive, the same file the corpus tests, so the
+  Store installs what was checked.
+- **Deployment settings.**  A `policies.json` in Thunderbird's
+  `distribution` folder (Mozilla's documented way to configure a
+  deployment) turns off update checks, telemetry, the default mail
+  client question, the start page and the account setup Thunderbird
+  offers when no account exists.
+- **Two windows.**  Opening a message also opens Thunderbird's main
+  window behind it, so the test closes both (`App(closes=2)`).
+
+Under QEMU without KVM the Store installs it in about 25 seconds and the
+message shows within six minutes of starting it.  Still open: no mail
+account, sending or receiving is checked (there is no mail server in the
+test), and the main window stays empty without an account.
 
 ## WinSCP: a Delphi program from the App Store
 

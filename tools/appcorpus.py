@@ -432,7 +432,8 @@ def make_xlsx(path, numbers):
 
 def make_data(d):
     """C:\\Apps\\data: text to search, a PDF, a Word document and an Excel
-    workbook, two files to compare and a git repository to clone"""
+    workbook, an e-mail message, two files to compare and a git repository
+    to clone"""
     os.makedirs(d)
     with open(os.path.join(d, 'hello.txt'), 'w', newline='\n') as f:
         f.write(SAMPLE)
@@ -443,6 +444,11 @@ def make_data(d):
     make_xlsx(os.path.join(d, 'sums.xlsx'), [40, 2])
     with open(os.path.join(d, 'notes.txt'), 'w', newline='\n') as f:
         f.write('more text\n')
+    with open(os.path.join(d, 'hello.eml'), 'w', newline='\r\n') as f:
+        f.write('From: NovaOS <corpus@novaos.invalid>\nTo: Dean <dean@novaos.invalid>\n'
+                'Subject: Hello from the NovaOS app corpus\nDate: Thu, 01 Jan 2026 12:00:00 +0000\n'
+                'Message-ID: <corpus-1@novaos.invalid>\nMIME-Version: 1.0\n'
+                'Content-Type: text/plain; charset=utf-8\n\n' + SAMPLE)
     with open(os.path.join(d, 'ab.json'), 'w') as f:
         f.write('{"a": 40, "b": 2}\n')
     work = tempfile.mkdtemp(prefix='corpus-git')

@@ -23,6 +23,7 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 | `blobby-volley-2.png` | 800x600 | The full-screen screenshot of `tests/appcorpus/935-blobby-volley.py`, at the display's 800x600, reduced to 256 colours. |
 | `lbreakout2.png` | 640x480 | LBreakout2's first level in full screen: the steps of `tests/appcorpus/940-lbreakout2.py`, then Local Game, Start Original Set; reduced to 256 colours. |
 | `cave-story.png` | 640x480 | Cave Story's First Cave in full screen: the steps of `tests/appcorpus/945-cave-story.py`, then Z held through the opening lines; reduced to 256 colours. |
+| `device-manager.png` | 1280x800 | A copy of the devices suite's "devmgr" screenshot (`tests/selftest/devices/devmgr/010-devmgr.py`): `devmgmt --check` with every class open and the display adapter selected, resized from 2560x1600. |
 | `supertux.png` | 640x480 | SuperTux's first level, "Welcome to Antarctica", in full screen, with Tux walked right using the game pad (the steps of `tests/appcorpus/947-supertux.py`); reduced to 256 colours. |
 
 `aurora-preview.png` (1672x941) is not in the README.  It is a preview of

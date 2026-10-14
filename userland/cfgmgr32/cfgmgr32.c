@@ -19,6 +19,15 @@
  * interface on as Windows' does); a HID keyboard or mouse NovaOS's own
  * drivers run is not opened through hid.dll.  Every other interface class
  * lists the tree's nodes that expose it (nova_pnp_interfaces).
+ *
+ * A device's allocated (and boot) configuration is the resources the
+ * kernel reads for its node (nova_pnp_resources: a PCI function's memory
+ * and I/O ranges and its interrupt), as CM_Get_First_Log_Conf and
+ * CM_Get_Next_Res_Des hand them to Device Manager's Resources tab.  The
+ * driver properties (DEVPKEY_Device_DriverVersion, ...) are the software
+ * key's values a device install wrote; a device a NovaOS driver runs has
+ * NovaOS as its provider and the system's version, as Windows' inbox
+ * drivers do.
  */
 #include <windows.h>
 #include <novapad.h>
@@ -425,6 +434,85 @@ static CONFIGRET put_value(ULONG t, const void *v, ULONG size, PULONG type, PBYT
     return CR_SUCCESS;
 }
 
+/* The driver properties ({a8b865dd-...}: DriverDate 2, DriverVersion 3,
+ * DriverDesc 4, DriverInfPath 5, DriverInfSection 6, DriverProvider 9) */
+static const GUID k_driver = { 0xa8b865dd, 0x2e3d, 0x4094, { 0xad, 0x97, 0xe5, 0x93, 0xa7, 0x0c, 0x75, 0xd6 } };
+#define DEVPROP_TYPE_FILETIME 0x10
+
+/* The software key a device install named in the device's Enum key
+ * (Driver: "{class}\NNNN"), or FALSE */
+static BOOL software_key(const NovaPnpNode *n, HKEY *key)
+{
+    char path[260], v[80];
+    lstrcpyA(path, ENUM_KEY);
+    lstrcatA(path, n->instance);
+    HKEY e;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &e)) return FALSE;
+    DWORD t, l = sizeof(v) - 1;
+    LONG r = RegQueryValueExA(e, "Driver", NULL, &t, (BYTE *)v, &l);
+    RegCloseKey(e);
+    if (r || t != REG_SZ || !l) return FALSE;
+    v[l] = 0;
+    lstrcpyA(path, CLASS_KEY);
+    lstrcatA(path, v);
+    return !RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, key);
+}
+
+/* "m-d-yyyy" (an INF's DriverVer date) as a FILETIME */
+static BOOL inf_date(const char *s, FILETIME *ft)
+{
+    WORD part[3] = { 0, 0, 0 };
+    int k = 0;
+    for (; *s && k < 3; s++) {
+        if (*s >= '0' && *s <= '9') part[k] = (WORD)(part[k] * 10 + (*s - '0'));
+        else if (*s == '-' || *s == '/') k++;
+        else break;
+    }
+    SYSTEMTIME st = { 0 };
+    st.wMonth = part[0]; st.wDay = part[1]; st.wYear = part[2];
+    return k == 2 && st.wMonth >= 1 && st.wMonth <= 12 && st.wDay >= 1 && st.wYear >= 1601 && SystemTimeToFileTime(&st, ft);
+}
+
+static CONFIGRET driver_property(const NovaPnpNode *n, ULONG pid, PULONG type, PBYTE buf, PULONG len)
+{
+    static const char *const names[] = { NULL, NULL, "DriverDate", "DriverVersion", "DriverDesc", "InfPath", "InfSection",
+                                         NULL, NULL, "ProviderName" };
+    if (pid >= sizeof(names) / sizeof(names[0]) || !names[pid]) { *len = 0; return CR_NO_SUCH_VALUE; }
+    char v[200];
+    v[0] = 0;
+    HKEY key;
+    if (software_key(n, &key)) {
+        DWORD t, l = sizeof(v) - 1;
+        if (RegQueryValueExA(key, names[pid], NULL, &t, (BYTE *)v, &l) || t != REG_SZ) l = 0;
+        v[l] = 0;
+        RegCloseKey(key);
+    } else if (n->service[0]) {                         /* a NovaOS driver: an inbox one */
+        OSVERSIONINFOA os = { sizeof(os) };
+        if (pid == 3 && GetVersionExA(&os)) {
+            DWORD part[4] = { os.dwMajorVersion, os.dwMinorVersion, os.dwBuildNumber, 0 };
+            char *e = v;
+            for (int i = 0; i < 4; i++) {
+                char d[12];
+                int k = 0;
+                do d[k++] = (char)('0' + part[i] % 10); while (part[i] /= 10);
+                while (k) *e++ = d[--k];
+                *e++ = i < 3 ? '.' : 0;
+            }
+        }
+        if (pid == 4) lstrcpynA(v, n->desc, sizeof(v));
+        if (pid == 9) lstrcpyA(v, "NovaOS");
+    }
+    if (!v[0]) { *len = 0; return CR_NO_SUCH_VALUE; }
+    if (pid == 2) {
+        FILETIME ft;
+        if (!inf_date(v, &ft)) { *len = 0; return CR_NO_SUCH_VALUE; }
+        return put_value(DEVPROP_TYPE_FILETIME, &ft, sizeof(ft), type, buf, len);
+    }
+    WCHAR w[200];
+    int size = MultiByteToWideChar(CP_ACP, 0, v, -1, w, 200);
+    return put_value(DEVPROP_TYPE_STRING, w, (ULONG)size * sizeof(WCHAR), type, buf, len);
+}
+
 CFGMGR32 CONFIGRET WINAPI CM_Get_DevNode_PropertyW(DEVINST dn, const void *key, PULONG type, PBYTE buf, PULONG len, ULONG flags)
 {
     (void)flags;
@@ -472,6 +560,8 @@ CFGMGR32 CONFIGRET WINAPI CM_Get_DevNode_PropertyW(DEVINST dn, const void *key, 
         BYTE b = present(&n) ? 0xFF : 0;
         return put_value(DEVPROP_TYPE_BOOLEAN, &b, 1, type, buf, len);
     }
+    if (!memcmp(&k->fmtid, &k_driver, sizeof(GUID)))
+        return driver_property(&n, k->pid, type, buf, len);
     *len = 0;
     return CR_NO_SUCH_VALUE;
 }
@@ -594,6 +684,155 @@ CFGMGR32 CONFIGRET WINAPI CM_Get_Device_Interface_ListA(LPGUID cls, LPCSTR id, c
     HeapFree(GetProcessHeap(), 0, w);
     return CR_SUCCESS;
 }
+
+/* ---- logical configurations and resource descriptors ----
+ * A device's allocated and boot configurations are the same one: the
+ * resources its node decodes.  A LOG_CONF and a RES_DES are small heap
+ * blocks; a RES_DES is one of the resources by its index. */
+#define CR_INVALID_LOG_CONF 0x07
+#define CR_INVALID_RES_DES  0x08
+#define CR_NO_MORE_LOG_CONF 0x0E
+#define CR_NO_MORE_RES_DES  0x0F
+#define ALLOC_LOG_CONF      0x2
+#define BOOT_LOG_CONF       0x3
+#define ResType_All         0
+#define ResType_Mem         1
+#define ResType_IO          2
+#define ResType_IRQ         4
+#define LC_MAGIC            0x464E434Cu           /* "LCNF" */
+#define RD_MAGIC            0x53444552u           /* "REDS" */
+
+typedef struct { DWORD magic; DEVINST dn; int index; ULONG type; } ConfHandle;
+
+#pragma pack(push, 1)
+typedef struct { DWORD Count, Type; ULONGLONG Base, End; DWORD Flags, Reserved; } MemDes;
+typedef struct { DWORD Count, Type; ULONGLONG Base, End; DWORD Flags; } IoDes;
+typedef struct { DWORD Count, Type, Flags; ULONG Num; ULONG_PTR Affinity; } IrqDes;
+#pragma pack(pop)
+
+static ULONG res_type(const NovaPnpResource *r)
+{
+    return r->type == NOVA_PNP_RES_MEMORY ? ResType_Mem : r->type == NOVA_PNP_RES_PORT ? ResType_IO : ResType_IRQ;
+}
+
+static ConfHandle *conf_new(DWORD magic, DEVINST dn, int index, ULONG type)
+{
+    ConfHandle *h = HeapAlloc(GetProcessHeap(), 0, sizeof(ConfHandle));
+    if (h) { h->magic = magic; h->dn = dn; h->index = index; h->type = type; }
+    return h;
+}
+
+static ConfHandle *conf_of(ULONG_PTR handle, DWORD magic)
+{
+    ConfHandle *h = (ConfHandle *)handle;
+    return h && h->magic == magic ? h : NULL;
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Get_First_Log_Conf(ULONG_PTR *lc, DEVINST dn, ULONG flags)
+{
+    if (lc) *lc = 0;
+    if (flags > 5) return CR_INVALID_FLAG;
+    NovaPnpNode n;
+    if (!get(dn, &n)) return CR_INVALID_DEVNODE;
+    NovaPnpResource r[8];
+    if ((flags != ALLOC_LOG_CONF && flags != BOOT_LOG_CONF) || dn >= PAD_BASE || !present(&n) ||
+        nova_pnp_resources(dn, r) <= 0)
+        return CR_NO_MORE_LOG_CONF;
+    if (!lc) return CR_SUCCESS;
+    ConfHandle *h = conf_new(LC_MAGIC, dn, -1, 0);
+    if (!h) return 0x02;                                     /* CR_OUT_OF_MEMORY */
+    *lc = (ULONG_PTR)h;
+    return CR_SUCCESS;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Get_First_Log_Conf_Ex(ULONG_PTR *lc, DEVINST dn, ULONG flags, HANDLE m)
+{ (void)m; return CM_Get_First_Log_Conf(lc, dn, flags); }
+
+/* The descriptor after @from (a LOG_CONF: the first) of type @want
+ * (ResType_All: any); *@type gets its type */
+CFGMGR32 CONFIGRET WINAPI CM_Get_Next_Res_Des(ULONG_PTR *rd, ULONG_PTR from, ULONG want, PULONG type, ULONG flags)
+{
+    (void)flags;
+    if (!rd) return CR_INVALID_POINTER;
+    *rd = 0;
+    ConfHandle *h = conf_of(from, LC_MAGIC);
+    if (!h) h = conf_of(from, RD_MAGIC);
+    if (!h) return CR_INVALID_RES_DES;
+    NovaPnpResource r[8];
+    int n = nova_pnp_resources(h->dn, r);
+    for (int i = h->index + 1; i < n; i++) {
+        ULONG t = res_type(&r[i]);
+        if (want != ResType_All && want != t) continue;
+        ConfHandle *d = conf_new(RD_MAGIC, h->dn, i, t);
+        if (!d) return 0x02;
+        if (type) *type = t;
+        *rd = (ULONG_PTR)d;
+        return CR_SUCCESS;
+    }
+    return CR_NO_MORE_RES_DES;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Get_Next_Res_Des_Ex(ULONG_PTR *rd, ULONG_PTR from, ULONG want, PULONG type, ULONG flags, HANDLE m)
+{ (void)m; return CM_Get_Next_Res_Des(rd, from, want, type, flags); }
+
+/* The descriptor's data: MEM_DES, IO_DES or IRQ_DES (no ranges: an
+ * allocated configuration's), as cfgmgr32.h packs them */
+static ULONG res_data(ConfHandle *h, void *out, ULONG cap)
+{
+    NovaPnpResource r[8];
+    int n = nova_pnp_resources(h->dn, r);
+    if (h->index >= n) return 0;
+    const NovaPnpResource *x = &r[h->index];
+    if (x->type == NOVA_PNP_RES_MEMORY) {
+        MemDes d = { 0, 40, x->start, x->start + x->length - 1, 0x80 | 0x2 | (x->flags & 1 ? 0x4 : 0), 0 };  /* MEMORY_BAR, 32, Prefetchable */
+        if (out && cap >= sizeof(d)) memcpy(out, &d, sizeof(d));
+        return sizeof(d);
+    }
+    if (x->type == NOVA_PNP_RES_PORT) {
+        IoDes d = { 0, 40, x->start, x->start + x->length - 1, 0x1 | 0x100 };       /* fIOD_IO | fIOD_PORT_BAR */
+        if (out && cap >= sizeof(d)) memcpy(out, &d, sizeof(d));
+        return sizeof(d);
+    }
+    IrqDes d = { 0, 12, x->flags & 1 ? 0x1 : 0x2, (ULONG)x->start, 1 };  /* level: shared; edge: fIRQD_Edge */
+    if (out && cap >= sizeof(d)) memcpy(out, &d, sizeof(d));
+    return sizeof(d);
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Get_Res_Des_Data_Size(PULONG size, ULONG_PTR rd, ULONG flags)
+{
+    (void)flags;
+    if (!size) return CR_INVALID_POINTER;
+    ConfHandle *h = conf_of(rd, RD_MAGIC);
+    if (!h) return CR_INVALID_RES_DES;
+    *size = res_data(h, NULL, 0);
+    return *size ? CR_SUCCESS : CR_NO_SUCH_VALUE;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Get_Res_Des_Data_Size_Ex(PULONG size, ULONG_PTR rd, ULONG flags, HANDLE m)
+{ (void)m; return CM_Get_Res_Des_Data_Size(size, rd, flags); }
+
+CFGMGR32 CONFIGRET WINAPI CM_Get_Res_Des_Data(ULONG_PTR rd, PVOID buf, ULONG len, ULONG flags)
+{
+    (void)flags;
+    if (!buf) return CR_INVALID_POINTER;
+    ConfHandle *h = conf_of(rd, RD_MAGIC);
+    if (!h) return CR_INVALID_RES_DES;
+    ULONG need = res_data(h, NULL, 0);
+    if (!need) return CR_NO_SUCH_VALUE;
+    if (len < need) return CR_BUFFER_SMALL;
+    res_data(h, buf, len);
+    return CR_SUCCESS;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Get_Res_Des_Data_Ex(ULONG_PTR rd, PVOID buf, ULONG len, ULONG flags, HANDLE m)
+{ (void)m; return CM_Get_Res_Des_Data(rd, buf, len, flags); }
+
+static CONFIGRET conf_free(ULONG_PTR handle, DWORD magic, CONFIGRET bad)
+{
+    ConfHandle *h = conf_of(handle, magic);
+    if (!h) return bad;
+    h->magic = 0;
+    HeapFree(GetProcessHeap(), 0, h);
+    return CR_SUCCESS;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Free_Log_Conf_Handle(ULONG_PTR lc) { return conf_free(lc, LC_MAGIC, CR_INVALID_LOG_CONF); }
+CFGMGR32 CONFIGRET WINAPI CM_Free_Res_Des_Handle(ULONG_PTR rd) { return conf_free(rd, RD_MAGIC, CR_INVALID_RES_DES); }
 
 /* ---- starting and disabling a device's Windows driver ----
  * (kernel/nt/pnp.c: the PnP manager starts the driver a device install

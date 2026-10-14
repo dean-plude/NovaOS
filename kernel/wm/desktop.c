@@ -657,10 +657,25 @@ static void draw_prog_icon(int i, int x, int y, int s)
     else AppDrawProgramIcon(g_progs[i].name, x, y, s);
 }
 
+/* System tools in C:\Windows\System32 the Start menu lists by name, as
+ * Windows lists its Windows Tools */
+static const struct { const char *name, *path; } g_tools[] = {
+    { "Device Manager", "\\Windows\\System32\\devmgmt.exe" },
+};
+
 static void scan_programs(void)
 {
     g_nprogs = 0;
     scan_links(RamfsResolve(NULL, START_MENU_PROGRAMS), 0);  /* installed apps first */
+    for (unsigned i = 0; i < sizeof(g_tools) / sizeof(g_tools[0]) && g_nprogs < MAX_PROGS; i++) {
+        if (!RamfsResolve(NULL, g_tools[i].path)) continue;
+        strncpy(g_progs[g_nprogs].name, g_tools[i].name, sizeof(g_progs[0].name) - 1);
+        g_progs[g_nprogs].name[sizeof(g_progs[0].name) - 1] = '\0';
+        strncpy(g_progs[g_nprogs].path, g_tools[i].path, sizeof(g_progs[0].path) - 1);
+        g_progs[g_nprogs].path[sizeof(g_progs[0].path) - 1] = '\0';
+        g_progs[g_nprogs].link = g_progs[g_nprogs].hidden = false;
+        g_nprogs++;
+    }
     RamNode *pd = RamfsResolve(NULL, "\\Programs");
     for (RamNode *c = pd ? pd->child : NULL; c && g_nprogs < MAX_PROGS; c = c->next) {
         char exe[RAMFS_NAME_MAX + 8];

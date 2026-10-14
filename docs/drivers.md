@@ -37,6 +37,23 @@ and functions, and the child devices a Windows bus driver reports
 (`IoInvalidateDeviceRelations`). A non-Plug-and-Play kernel driver can
 also be installed as a service and started by hand (below).
 
+### Device Manager
+
+Device Manager (`devmgmt.exe`, "Device Manager" in Start) shows the same
+device tree the way Windows' does: devices by type or by connection,
+phantoms with View > Show hidden devices, and for the selected device its
+status and problem code, driver (provider, version, date, INF), hardware
+and compatible IDs and resources.  It reads them only through the public
+APIs: `SetupDiGetClassDevs`, `SetupDiGetClassDescription`,
+`SetupDiGetDeviceRegistryProperty`, `SetupDiGetDeviceProperty`
+(`DEVPKEY_Device_Driver*`, from the software key a device install
+writes; a NovaOS driver shows NovaOS as its provider and the system
+version, as Windows' inbox drivers do), `CM_Get_DevNode_Status`,
+`CM_Get_Child`/`CM_Get_Sibling` and `CM_Get_First_Log_Conf`,
+`CM_Get_Next_Res_Des`, `CM_Get_Res_Des_Data`.  A PCI device's resources
+are its BARs, sized once at boot before any driver runs, and its
+interrupt line as routed by ACPI.
+
 ### pnputil
 
 `pnputil` is Windows' driver package tool, with one NovaOS addition

@@ -68,6 +68,8 @@ says how each one was made.
 | Beneath a Steel Sky on ScummVM, installed with its own installer | Teeworlds in full screen, with music | Tyrian on OpenTyrian, Direct3D 9 through DXVK |
 | ![Blobby Volley 2](docs/screenshots/blobby-volley-2.png) | ![Cave Story](docs/screenshots/cave-story.png) | ![SuperTux](docs/screenshots/supertux.png) |
 | Blobby Volley 2, exclusive full screen at 800x600 | Cave Story, DirectDraw at 640x480 | SuperTux, played with an Xbox 360 pad |
+| ![Device Manager](docs/screenshots/device-manager.png) | | |
+| Device Manager: devices by type, with each one's driver, IDs and resources | | |
 
 ## Try it
 

@@ -146,6 +146,7 @@ set(KERNEL_C_SOURCES
     drivers/virtio_input.c
     drivers/vmbus.c
     drivers/hv_input.c
+    drivers/hv_util.c
     drivers/gamepad.c
     drivers/xpad.c
     drivers/virtio_gpu.c

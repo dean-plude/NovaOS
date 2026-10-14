@@ -66,9 +66,9 @@ static bool kbd_event(const UINT8 *d, UINT32 len, InputEvent *ev)
     return true;
 }
 
-static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len)
+static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 {
-    (void)ctx;
+    (void)ctx; (void)trans_id;
     if (len >= 8 && rd32(d) == KBD_PROTOCOL_RESPONSE) {
         kprintf("[HVINPUT] keyboard: protocol 1.0 %s\n", (rd32(d + 4) & 1) ? "accepted" : "refused");
         return;
@@ -121,8 +121,9 @@ static const UINT8 *mouse_report_desc(const UINT8 *body, UINT32 n, int *len)
     return hd + hlen;
 }
 
-static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len)
+static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 {
+    (void)trans_id;
     HvMouse *m = ctx;
     if (!m || len < 16 || rd32(d) != PIPE_DATA) return;
     UINT32 psize = rd32(d + 4);

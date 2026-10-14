@@ -1,7 +1,8 @@
 # NovaOS in Hyper-V
 
 **Status: untested.** NovaOS has drivers for Hyper-V's synthetic keyboard
-and mouse, but it has never been run on a real Hyper-V host. The drivers
+and mouse and for its shutdown, heartbeat and time sync integration
+services, but it has never been run on a real Hyper-V host. The drivers
 were written from Linux's and FreeBSD's, and their protocol code is
 tested on the build machine without a VM ([below](#tests)). Checking them
 in a Hyper-V VM is roadmap step 23.4. Reports are welcome as issues, with
@@ -11,9 +12,12 @@ NovaOS starts only from UEFI, so in Hyper-V it needs a **Generation 2**
 virtual machine (Generation 1 has BIOS firmware only). A Generation 2 VM
 has no PS/2 controller, no USB controller and no emulated PCI devices:
 its keyboard, mouse, disks, network adapter and video are *synthetic
-devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard and
-the mouse; the rest is listed under
-[What does not work yet](#what-does-not-work-yet).
+devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
+mouse and the integration services ([below](#integration-services)); the
+rest is listed under [What does not work yet](#what-does-not-work-yet).
+Full Gen 2 support is a roadmap item ([ROADMAP.md](ROADMAP.md)), one
+device per step: disks (storvsc), video, network (netvsc), Hyper-V's own
+clock and timers, key-value exchange.
 
 ## Making the VM
 
@@ -74,12 +78,35 @@ inside the guest that NovaOS does not have.
 
 The device poll thread reads both rings every 10 ms timer tick.
 
+## Integration services
+
+`kernel/drivers/hv_util.c` answers three of the integration services
+Hyper-V Manager lists under the VM's Settings (all on by default):
+
+- **Operating system shutdown**: the host's Shut Down (Hyper-V Manager,
+  `Stop-VM`) and Restart (`Restart-VM`) shut NovaOS down or restart it as
+  the Start menu does, saving drive C: first.  NovaOS refuses Hibernate.
+- **Heartbeat**: Hyper-V Manager's Summary tab shows "Heartbeat: OK"
+  while NovaOS answers.
+- **Time synchronization**: at start, after a resume and whenever the
+  clock drifts more than a second from the host's, the system time
+  Windows programs read (`GetSystemTime`, `NtQuerySystemTime`) is set
+  from the host's clock.  The taskbar clock still reads the VM's CMOS
+  clock, which Hyper-V keeps from the host's too.
+
+Each service first agrees on a version with the host: the newest of
+framework 3.0 or 1.0, and shutdown 3.1, 3.0 or 1.0, time sync 4.0
+(with the partition reference counter, so the time the message spent on
+the way is added), 3.0 or 1.0, heartbeat 3.0 or 1.0.
+
+## The clock
+
 Hyper-V has no HPET, so NovaOS takes the TSC's and the local APIC
 timer's frequencies from the MSRs Hyper-V offers for them, as Linux
 does. The log says `[APIC] Timer: ... from Hyper-V's frequency MSRs (no
 HPET)`.
 
-### What the log says
+## What the log says
 
 NovaOS writes its log to COM1. To read it from a Generation 2 VM, give the
 VM a named pipe for COM1 (with the VM off):
@@ -106,11 +133,16 @@ version and the descriptor's size depend on the host):
 [HVINPUT] keyboard: protocol 1.0 accepted
 [HVINPUT] mouse: protocol 2.0 approved
 [HVINPUT] mouse: 045e:0621, 67-byte report descriptor: absolute pointer
+[VMBUS] Hyper-V shutdown: channel 3 open
+[HVUTIL] shutdown: framework 3.0, messages 3.1
+[HVUTIL] time sync: framework 3.0, messages 4.0
+[HVUTIL] time sync: clock set from the host's (moved +0.012 s)
+[HVUTIL] heartbeat: framework 3.0, messages 3.0
 ```
 
 Every device the host offers is listed, with a name for the common ones
-(video, SCSI storage, network, shutdown, time sync, heartbeat, key-value
-exchange and dynamic memory are named and marked "no driver"). Other
+(video, SCSI storage, network, key-value exchange and dynamic memory are
+named and marked "no driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -123,8 +155,10 @@ lines say what went wrong:
 | `The host took no VMBus version NovaOS speaks` | every version was refused |
 | `N devices offered` | the host's device list ended (`(the list never ended)` if it timed out) |
 | `... the host did not take its rings` / `... the host did not open it` | a channel failed to open, with the host's status |
-| `No keyboard or mouse channel open` | no input device was offered, or none opened |
+| `No channel open` | no device NovaOS drives was offered, or none opened |
 | `[HVINPUT] ... refused` | the device refused the protocol version NovaOS asked for |
+| `[HVUTIL] ...: no version in common with the host` | that integration service stays off |
+| `[HVUTIL] shutdown: the host asks to shut down` | Shut Down from the host; `[SHELL] Shutting down` follows |
 
 ## What does not work yet
 
@@ -135,7 +169,8 @@ lines say what went wrong:
 | Disks | No driver for Hyper-V's SCSI controller (storvsc): NovaOS runs live from the ISO and cannot be installed |
 | Network | No driver for Hyper-V's network adapter (netvsc) |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
-| Shutdown, time sync, heartbeat | No integration-service drivers: the host's "Shut Down" does nothing; shut down from NovaOS or turn the VM off |
+| Shutdown, time sync, heartbeat | Drivers exist ([above](#integration-services)); not yet checked on a real host |
+| Key-value exchange, guest services, VSS backup, dynamic memory | No drivers: Hyper-V Manager shows no addresses for the VM, and memory stays as it started |
 
 ## Tests
 
@@ -143,7 +178,12 @@ lines say what went wrong:
 (part of the host tool tests CI runs with `python3 -m unittest discover -s
 tests/tools`), checks the ring buffer (wrapping, a full ring, the
 signalling hints) and both input protocols on the build machine, without
-a VM. Its mouse case uses the device information layout Hyper-V sends (a
+a VM.  `tests/host/hv_util.c` (`tests/tools/test_hv_util.py`) does the same
+for the integration services: the version each picks from the host's
+lists (and none when nothing matches), answers carrying the host's
+transaction ID, the heartbeat's sequence number, each shutdown flag, and
+time sync's SYNC, SAMPLE and probe messages with and without version 4's
+reference counter. Its mouse case uses the device information layout Hyper-V sends (a
 32-byte block: a 32-bit size, vendor, product, version and eleven
 reserved 16-bit words, then the HID descriptor), checked against
 FreeBSD's `hv_hid.c`.

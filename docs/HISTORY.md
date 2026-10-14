@@ -12714,6 +12714,20 @@ indexed TGSM", so this last of LightCraft's 27 kernels did not compile.
   components, checked in its disassembly and dispatched on Direct3D 11
   (DXVK) with the results read back.
 
+## Hyper-V integration services
+
+The first step of full Hyper-V Generation 2 support (a new roadmap item,
+one synthetic device per step).  NovaOS now answers three of Hyper-V's
+integration services over VMBus: **shutdown** (the host's Shut Down and
+Restart save drive C: and power off or restart NovaOS, as the Start menu
+does), **heartbeat** (Hyper-V Manager shows "Heartbeat: OK") and **time
+sync** (the system time Windows programs read is set from the host's
+clock at start and whenever it drifts more than a second).  Each agrees
+on a version with the host first, as Linux's and FreeBSD's drivers do.
+VMBus drivers now get each packet's transaction ID, so they can answer
+the host's requests, and up to sixteen channels open.  A host test checks
+all three protocols ([hyperv.md](hyperv.md)).
+
 ## Krita draws and saves an image
 
 Roadmap step 27.3: Krita, installed from the App Store, draws and saves
@@ -13031,6 +13045,46 @@ through Media Foundation, 32- and 64-bit, and the Camera app shows it
   camera controls, still images, the media session and source events,
   audio capture sources, file and URL source readers, and AVStream for
   vendor camera drivers.
+
+## A third-party KMDF HID minidriver: Microsoft's vhidmini2
+
+The third HID step: a HID driver written on KMDF, as most vendors'
+touchpad, sensor and dock drivers are, now installs and runs the way
+Windows 11 runs it. The test driver is Microsoft's own `vhidmini2` sample
+(Windows-driver-samples `hid/vhidmini2`, KMDF), fetched at a pinned
+commit and built unchanged by `tools/kmdf/build_kmdf.py` with NovaOS's
+own `hidclass.h` and `hidport.h`; it is MS-PL licensed and its licence
+ships beside it in `C:\Tests\VhidMini`.
+
+- **mshidkmdf** (`kernel/nt/mshidkmdf.c`): Windows' pass-through HID
+  minidriver for KMDF drivers, built into the kernel. A KMDF HID
+  driver's INF says `Include = MsHidKmdf.inf`, `Needs =
+  MsHidKmdf.NT.Services`; NovaOS's own `MsHidKmdf.inf` is in
+  `C:\Windows\INF`, so `mshidkmdf` becomes the function driver and
+  hands every request to the KMDF driver below it.
+- **Filter drivers** (`kernel/nt/pnp.c`, setupapi): a package's
+  `.Filters` section writes `LowerFilters`/`UpperFilters`, and the
+  stack is built lower filters first, then the function driver, then
+  upper filters (the device's, then the class key's). setupapi follows
+  an INF's `Include`/`Needs`.
+- **Root-enumerated devices**: `SetupDiCreateDeviceInfo` with
+  `DICD_GENERATE_ID`, `SetupDiSetDeviceRegistryProperty` and
+  `DIF_REGISTERDEVICE` make `ROOT\HIDCLASS\0000` as `devcon install`
+  does; the PnP manager gives it a PDO under the root, makes it again
+  from its `Enum\ROOT` key at boot, and `pnputil /remove-device` (or
+  `DIF_REMOVE`) deletes it, leaving no phantom.
+- **Raw children across a restart**: a child started raw (a HID
+  collection) no longer has its bus driver saved as its service, which
+  made it start under that driver, and fail, at the next boot.
+- **hidclass**: `HID_XFER_PACKET` requests carry the buffer lengths
+  Windows gives them (the KMDF sample checks them).
+
+New devices-suite boot `vhidmini`: `vhidtest create` registers the
+device, `pnputil /add-driver vhidmini.inf /install` installs the
+sample, and `vhidtest` (x86 and x64) checks its attributes, strings,
+caps and every kind of report through `hid.dll` and Raw Input; Device
+Manager lists it, it starts at boot, and it is removed. Not checked
+yet: class-key filters, and removing a device that is not root-enumerated.
 
 ## Wallpapers and icon sets are files, chosen and added in Settings
 

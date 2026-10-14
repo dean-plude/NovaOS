@@ -5,8 +5,8 @@
  * input devices: its keyboard and mouse (and disks, network, video) are
  * channels on VMBus, offered by the host through messages and run over
  * shared-memory rings.  vmbus.c finds Hyper-V, connects, opens the
- * channels a NovaOS driver wants (hv_input.c: the keyboard and the mouse)
- * and polls them.
+ * channels a NovaOS driver wants (hv_input.c: the keyboard and the mouse;
+ * hv_util.c: the integration services) and polls them.
  */
 
 #pragma once
@@ -17,12 +17,13 @@ typedef struct VmbusChannel VmbusChannel;
 
 /* A channel driver: the device type it takes (the offer's GUID, as its 16
  * bytes go on the wire), opened() once the channel is open (its context
- * back), packet() for each in-band packet the host sends on it */
+ * back), packet() for each in-band packet the host sends on it, with the
+ * packet's transaction ID (an answer the host waits for carries it back) */
 typedef struct {
     UINT8       type[16];
     const char *name;
     void      *(*opened)(VmbusChannel *ch);
-    void       (*packet)(void *ctx, const UINT8 *data, UINT32 len);
+    void       (*packet)(void *ctx, const UINT8 *data, UINT32 len, UINT64 trans_id);
 } VmbusDriver;
 
 /* On CPU 0 with interrupts still off (the SynIC registers are per CPU):
@@ -34,3 +35,7 @@ void VmbusPoll(void);
 
 /* A driver sends an in-band packet on its channel; false when its ring is full */
 bool VmbusSend(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id, bool want_completion);
+
+/* The partition reference counter (100 ns since the VM started), which
+ * time sync's messages carry; false when the hypervisor offers none */
+bool VmbusReferenceTime(UINT64 *t);

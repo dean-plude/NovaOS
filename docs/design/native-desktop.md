@@ -12,7 +12,7 @@ images or API calls are loaded.
 
 | Prototype feature | What NovaOS does |
 |---|---|
-| City wallpaper | `C:\Pictures\Aurora-Sunrise.png` (from `userland/samples/`), decoded once; a procedural sunrise (`kernel/wm/aurora.h`) if the file is missing |
+| City wallpaper | `C:\Windows\Web\Wallpaper\Aurora-Sunrise.png` (a file beside the kernel, from `userland/files/`), or the picture chosen in Settings > Personalization, decoded off the desktop thread (`kernel/wm/wallpaper.c`); a procedural sunrise (`kernel/wm/aurora.h`) if there is none |
 | Translucent surfaces | Blurred, tinted "glass" panels and window frames with rounded corners and drop shadows |
 | Home / Apps / Create / Explore | File Explorer / the Start menu / Notepad / Firefox |
 | Pinned apps | Notes (Notepad), Calendar, Photos, Terminal; then Settings, and Install NovaOS on the live media |
@@ -33,8 +33,11 @@ are shown anywhere in the OS.
 ## Brand
 
 The logo, icon set, brand colours and wallpapers that the desktop is moving
-to are in [brand/README.md](brand/README.md). The wallpapers already ship in
-`C:\Pictures`; the icons and logo are drawn natively in a later change.
+to are in [brand/README.md](brand/README.md). The wallpapers ship in
+`C:\Windows\Web\Wallpaper` and the icons as the **Beam** icon set in
+`C:\Windows\Web\Icons\Beam`, both as files beside the kernel, and Settings
+> Personalization chooses them; the built-in drawings stay the default
+icons, and the logo is drawn natively in a later change.
 
 ## Layout rules
 

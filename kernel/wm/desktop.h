@@ -86,5 +86,8 @@ const char *DesktopThemeName(int i);
 int         DesktopTheme(void);
 bool        DesktopAurora(void);          /* native apps may adapt to the Aurora palette */
 void        DesktopSetTheme(int i);
+/* Draw the picture at C: path @path (a PNG, wallpaper.h) as the wallpaper:
+ * the Aurora theme with it in place of the city */
+void        DesktopSetPicture(const char *path);
 /* A miniature of theme @i's wallpaper in @r */
 void        DesktopDrawThemePreview(int i, GdiRect r);

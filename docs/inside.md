@@ -28,6 +28,11 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     ([updates.md](updates.md)).
   - It hands the kernel the memory map, the GOP framebuffer, the ACPI RSDP
     and a copy of the SMBIOS tables ([phase1-architecture.md](phase1-architecture.md)).
+  - It also reads every file under `\EFI\NOVA\Files` (wallpapers, icon
+    sets, sample pictures: content kept out of `kernel.elf`) and lists them
+    for the kernel (boot protocol version 5), which installs
+    `\EFI\NOVA\Files\X` at `C:\X` (`kernel/fs/bootfiles.c`) and gives
+    the memory back; the installer copies them to the disk it installs on.
 - **Kernel** (`kernel/`): an NT-style executive written from scratch.
   - Object manager and handles, processes and threads, an I/O manager, the
     registry (saved to disk), security tokens (restricted tokens,
@@ -145,6 +150,16 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     menu that searches apps, programs, settings pages and files, Alt+Tab,
     snapping, desktop icons and context menus, the Aurora workspace or the
     classic wallpaper themes, and several monitors arranged in Settings.
+  - Wallpapers and icon sets are files on drive C:, never part of the
+    kernel image: PNG pictures in `C:\Windows\Web\Wallpaper`
+    (`kernel/wm/wallpaper.c`: the Aurora theme draws the chosen one,
+    filling the screen, decoded and thumbnailed on a thread of its own;
+    `HKCU\Control Panel\Desktop\Wallpaper` keeps it) and folders of
+    `.ico`/`.png` files in `C:\Windows\Web\Icons` named after the icons
+    they replace (`kernel/apps/iconset.c`; the built-in drawings stand in
+    for any it lacks).  Settings > Personalization picks them and adds
+    more from the user's folders; `HKCU\Software\NovaOS\Personalization`
+    keeps the theme and the icon set.
   - Built-in apps: File Explorer, Notepad, Terminal (a command shell over
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows

@@ -8,6 +8,9 @@
 #include "persist.h"
 #include "drives.h"
 #include "bootlog.h"
+#include "bootfiles.h"
+#include "ramfs.h"
+#include "../um/um.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../ke/printf.h"
@@ -189,12 +192,14 @@ static void put_name(UINT8 *e, const char *name)
 #define GPT_ESIZE     128
 #define GPT_TABLE_SEC (GPT_ENTRIES * GPT_ESIZE / BLOCK_SECTOR)      /* 32 */
 
-/* Reserve the installed payload and a complete staged update, plus FAT
- * metadata/configuration. Match the installation image's 32 MiB rounding. */
-static UINT64 setup_esp_sectors(UINT32 kernel_size, UINT32 loader_size)
+/* Reserve the installed payload and a complete staged update, the files
+ * beside the kernel, plus FAT metadata/configuration. Match the
+ * installation image's 32 MiB rounding. */
+static UINT64 setup_esp_sectors(UINT32 kernel_size, UINT32 loader_size, UINT64 files_size)
 {
     UINT64 payload_mb = ((UINT64)kernel_size + loader_size + 1048575) >> 20;
-    UINT64 mb = ((2 * payload_mb + 32 + 31) / 32) * 32;
+    UINT64 files_mb = (files_size + 1048575) >> 20;       /* \EFI\NOVA\Files: not staged twice */
+    UINT64 mb = ((2 * payload_mb + files_mb + 32 + 31) / 32) * 32;
     if (mb < 128) mb = 128;
     return mb * 2048;
 }
@@ -304,6 +309,36 @@ static bool wipe(BlockDev *d, UINT64 esp_lba, UINT64 data_lba)
     return ok;
 }
 
+/* The files beside the kernel (fs/bootfiles.h), from drive C:, to
+ * \EFI\NOVA\Files on the new ESP */
+static bool copy_files(FatVol *esp)
+{
+    for (int i = 0; i < BootFilesCount(); i++) {
+        const char *path = BootFilesPath(i);
+        char dir[RAMFS_PATH_MAX + 16];
+        ksnprintf(dir, sizeof(dir), "%s%s", BOOT_FILES_DIR, path);
+        char *slash = strrchr(dir, '\\');
+        if (!slash) continue;
+        *slash = '\0';
+        FsLock();
+        RamNode *f = RamfsResolve(NULL, path);
+        char *data = NULL;
+        UINT32 len = 0;
+        if (f && !f->dir && RamfsLoad(f) && (f->data || !f->size)) {
+            len = f->size;
+            data = kmalloc(len ? len : 1);
+            if (data && len) memcpy(data, f->data, len);
+        }
+        FsUnlock();
+        if (!data) continue;                    /* (deleted since boot: not copied) */
+        UINT32 d;
+        bool ok = FatMkdirPath(esp, dir, &d) && FatWriteFile(esp, d, slash + 1, data, len);
+        kfree(data);
+        if (!ok) return false;
+    }
+    return true;
+}
+
 static void setup_thread(void *arg)
 {
     (void)arg;
@@ -321,7 +356,7 @@ static void setup_thread(void *arg)
         return;
     }
 
-    UINT64 esp_lba, esp_sec = setup_esp_sectors(ksize, lsize), data_lba, data_sec;
+    UINT64 esp_lba, esp_sec = setup_esp_sectors(ksize, lsize, BootFilesBytes()), data_lba, data_sec;
     if (!setup_layout(d->sectors, esp_sec, &esp_lba, &data_lba, &data_sec)) {
         failed("The disk is too small for NovaOS and a staged update.");
         return;
@@ -358,6 +393,12 @@ static void setup_thread(void *arg)
         !FatWriteFile(esp, dir, "kernel.elf", kernel, ksize)) {
         FatUnmount(esp);
         failed("Could not copy the NovaOS system files (is the disk big enough?).");
+        return;
+    }
+    step(52, "Copying the wallpapers, icons and pictures");
+    if (!copy_files(esp)) {
+        FatUnmount(esp);
+        failed("Could not copy the wallpapers, icons and pictures (is the disk big enough?).");
         return;
     }
     step(70, "Checking the copied files");

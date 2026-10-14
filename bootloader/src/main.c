@@ -329,6 +329,91 @@ static void boot_file_delete(CHAR16 *path)
         f->Delete(f);
 }
 
+/* -----------------------------------------------------------------------
+ * The files beside the kernel: everything under \EFI\NOVA\Files (the
+ * wallpapers, icon sets and sample pictures, which are not built into
+ * kernel.elf), read into memory and listed for the kernel (BootInfo
+ * version 5), which installs \EFI\NOVA\Files\X at C:\X
+ * ----------------------------------------------------------------------- */
+#define FILES_DEPTH 8
+static CHAR16 FILES_PATH[] = { '\\','E','F','I','\\','N','O','V','A','\\','F','i','l','e','s', 0 };
+
+typedef struct {
+    BootFile *table;
+    UINT64    count, bytes;
+    BOOLEAN   full;
+} FileList;
+
+/* Read the files in open directory @dir, whose path below \EFI\NOVA\Files
+ * is @path (ASCII, @len characters, "" for the top) */
+static void list_files(EFI_FILE_PROTOCOL *dir, char *path, UINTN len, int depth, FileList *fl)
+{
+    UINT8 buf[sizeof(EFI_FILE_INFO) + 512 * sizeof(CHAR16)];
+    for (;;) {
+        UINTN size = sizeof(buf);
+        if (EFI_ERROR(dir->Read(dir, &size, buf)) || size == 0) return;
+        EFI_FILE_INFO *fi = (EFI_FILE_INFO *)buf;
+        CHAR16 *name = fi->FileName;
+        if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+        /* the name in ASCII after "\" (others are skipped: C:'s names here are ASCII) */
+        UINTN n = 0;
+        BOOLEAN ascii = TRUE;
+        while (name[n]) { if (name[n] < 0x20 || name[n] > 0x7E || name[n] == '\\') ascii = FALSE; n++; }
+        if (!ascii || len + 1 + n + 1 > BOOT_FILE_PATH_MAX) continue;
+        path[len] = '\\';
+        for (UINTN i = 0; i < n; i++) path[len + 1 + i] = (char)name[i];
+        path[len + 1 + n] = 0;
+        BOOLEAN is_dir = (fi->Attribute & 0x10) != 0;            /* EFI_FILE_DIRECTORY */
+        if (is_dir && depth >= FILES_DEPTH) continue;
+        if (!is_dir && fl->count >= BOOT_FILES_MAX) { fl->full = TRUE; continue; }
+        EFI_FILE_PROTOCOL *f;
+        if (EFI_ERROR(dir->Open(dir, &f, name, EFI_FILE_MODE_READ, 0))) continue;
+        if (is_dir) {
+            list_files(f, path, len + 1 + n, depth + 1, fl);
+        } else {
+            UINT64 fsize = fi->FileSize, pages = (fsize + 4095) / 4096, phys = 0;
+            if (!pages) pages = 1;
+            UINTN got = (UINTN)fsize;
+            if (!EFI_ERROR(g_bs->AllocatePages(AllocateAnyPages, EfiLoaderData, pages, &phys))) {
+                if (!EFI_ERROR(f->Read(f, &got, (VOID *)(UINTN)phys)) && got == fsize) {
+                    BootFile *b = &fl->table[fl->count++];
+                    b->base = phys;
+                    b->size = fsize;
+                    mem_copy(b->path, path, len + 1 + n + 1);
+                    fl->bytes += fsize;
+                } else {
+                    g_bs->FreePages(phys, pages);
+                }
+            }
+        }
+        f->Close(f);
+    }
+}
+
+/* The files under \EFI\NOVA\Files: the table's physical address (0 when
+ * there are none) and how many */
+static UINT64 load_files(UINT64 *count)
+{
+    *count = 0;
+    EFI_FILE_PROTOCOL *dir;
+    if (EFI_ERROR(open_boot_file(FILES_PATH, EFI_FILE_MODE_READ, &dir))) return 0;
+    UINT64 table = 0, pages = (BOOT_FILES_MAX * sizeof(BootFile) + 4095) / 4096;
+    if (EFI_ERROR(g_bs->AllocatePages(AllocateAnyPages, EfiLoaderData, pages, &table))) {
+        dir->Close(dir);
+        return 0;
+    }
+    FileList fl = { (BootFile *)(UINTN)table, 0, 0, FALSE };
+    char path[BOOT_FILE_PATH_MAX];
+    path[0] = 0;
+    list_files(dir, path, 0, 1, &fl);
+    dir->Close(dir);
+    console_printf("Files beside the kernel: %u (%u KB)%s\r\n", fl.count, fl.bytes >> 10,
+                   fl.full ? ", more than the most that fit" : "");
+    if (!fl.count) { g_bs->FreePages(table, pages); return 0; }
+    *count = fl.count;
+    return table;
+}
+
 /* Whether @path starts as an x86-64 ELF executable would (the updater
  * checked the whole file's SHA-256 before staging it; this catches a file
  * that is not a kernel at all, before the old one is given up on) */
@@ -801,6 +886,7 @@ EFI_STATUS __attribute__((ms_abi)) efi_main(
     else {
         boot_flags |= ensure_boot_entry();   /* an installed disk */
     }
+    UINT64 files_count, files = load_files(&files_count);
 
     /* 3. Find ACPI RSDP ----------------------------------------------- */
     UINT64 rsdp = find_rsdp();
@@ -853,6 +939,8 @@ EFI_STATUS __attribute__((ms_abi)) efi_main(
     bi->media_loader_size    = media_loader_size;
     bi->smbios_base          = smbios;
     bi->smbios_size          = smbios_size;
+    bi->files_base           = files;
+    bi->files_count          = files_count;
 
     /* 9. The kernel entry expects the PHYSICAL address of BootInfo and
      *    derefs it through the physmap itself (PHYSMAP_BASE + phys).  All

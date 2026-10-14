@@ -130,6 +130,23 @@ Terminal, `tzutil /s "NAME"` sets a time zone by its Windows name and
   (Ctrl+K), your name, a calendar and shortcuts to File Explorer, Notepad
   and Firefox.  Settings > Personalization switches to the Sunset, Ocean
   or Twilight theme, which show plain desktop icons instead.
+- **Wallpapers and icons** are files, not part of NovaOS's kernel:
+  wallpapers are the PNG pictures in `C:\Windows\Web\Wallpaper` (Beam,
+  Nova Night, Horizon, Glass Dawn, Aurora Lights, the three Waves and the
+  Aurora city), and icon sets are folders of `.ico` files in
+  `C:\Windows\Web\Icons` (NovaOS comes with **Beam**).  In Settings >
+  Personalization, **Background** picks a theme or a picture and **Icons**
+  picks an icon set or the built-in icons; your choice is kept.
+  - To add a wallpaper, save a PNG picture in Downloads, Pictures,
+    Documents or Desktop (or a folder in one of them): it is listed under
+    **Add a picture**, and **Add** copies it to the wallpaper folder and
+    shows it.
+  - To add an icon set, save a folder of icons there named as NovaOS's
+    are (`terminal.ico`, `file-explorer.ico`, `folder.ico`,
+    `folder-documents.ico`, `this-pc.ico`, ...;
+    [design/brand/README.md](design/brand/README.md#icon-sets) lists them):
+    it is listed under **Add an icon set**.  Icons a set has no file for
+    stay as they are.
 - **Windows** move by their title bar and resize from any edge.  Drag one
   to the side of the screen to snap it to that half.
 - **Right-click** the desktop, an icon, the dock or a title bar for a
@@ -157,7 +174,7 @@ Keyboard shortcuts:
 |---|---|
 | **File Explorer** | Shows This PC (every drive and its free space) and the folders Documents, Downloads, Pictures, Personal, Projects and Windows.  Double-click a program (`.exe`) to run it, a Windows Installer package (`.msi`) to install it, a picture (`.png`, `.ico`, `.cur`) to see it in Photos, a shortcut (`.lnk`) to open its target, and anything else to read it in Notepad.  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also to and from Windows programs; Delete deletes. |
 | **Terminal** | The command line (below). |
-| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme and wallpaper), Storage, Network, Time & language, and About. |
+| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Time & language, and About. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |

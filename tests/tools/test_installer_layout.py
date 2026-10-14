@@ -23,9 +23,12 @@ static bool g_ntfs;
 '''+source[start:end]+r'''
 int main(void) {
     UINT64 esp, data, size;
-    UINT64 sectors = setup_esp_sectors(189u<<20, 84u<<10);
+    UINT64 sectors = setup_esp_sectors(189u<<20, 84u<<10, 0);
     assert(sectors == 416ull*2048);
-    assert(setup_esp_sectors(1u<<20, 84u<<10) == 128ull*2048);
+    assert(setup_esp_sectors(1u<<20, 84u<<10, 0) == 128ull*2048);
+    /* the files beside the kernel once, not twice: 2*190 + 14 + 32 MiB, rounded up */
+    assert(setup_esp_sectors(189u<<20, 84u<<10, 13ull<<20) == 448ull*2048);
+    assert(setup_esp_sectors(189u<<20, 84u<<10, 1) == 416ull*2048);
     assert(setup_layout(2ull*1024*1024*1024/512, sectors, &esp, &data, &size));
     assert(esp==2048 && data==2048+sectors && data%2048==0 && size%2048==0);
     assert((sectors*512) > 2ull*((189ull<<20)+(84ull<<10))+(32ull<<20));
@@ -38,7 +41,7 @@ int main(void) {
     assert(setup_layout(4ull<<32, sectors, &esp, &data, &size) && size==(1ull<<31));
     g_ntfs=true;
     assert(setup_layout(4ull<<32, sectors, &esp, &data, &size) && size>(1ull<<31));
-    assert(setup_esp_sectors(UINT32_MAX, UINT32_MAX) > 2ull*UINT32_MAX/512);
+    assert(setup_esp_sectors(UINT32_MAX, UINT32_MAX, 0) > 2ull*UINT32_MAX/512);
 }
 '''
         with tempfile.TemporaryDirectory() as d:

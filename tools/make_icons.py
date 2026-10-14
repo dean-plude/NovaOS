@@ -144,12 +144,12 @@ def png_rect(w, h, img):
             ch(b'IDAT', zlib.compress(bytes(raw), 9)) + ch(b'IEND', b''))
 
 PICTURES = {
-    'userland/samples/Sunset.png': (sunset, 640, 400),
+    'userland/files/Pictures/Sunset.png': (sunset, 640, 400),
 }
 
 ICONS = {
     'userland/programs/winhello.ico': winhello,
-    'userland/samples/Nova.ico': nova,
+    'userland/files/Pictures/Nova.ico': nova,
 }
 
 if __name__ == '__main__':

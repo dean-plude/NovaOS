@@ -26,6 +26,7 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 | `device-manager.png` | 1280x800 | A copy of the devices suite's "devmgr" screenshot (`tests/selftest/devices/devmgr/010-devmgr.py`): `devmgmt --check` with every class open and the display adapter selected, resized from 2560x1600. |
 | `event-viewer.png` | 1280x800 | The "event viewer start menu" core self-test's screenshot (`tests/selftest/core/167-eventlog.py`): `eventvwr --check` with `evtlogtest`'s event selected in the Application log, resized from 2560x1600. |
 | `supertux.png` | 640x480 | SuperTux's first level, "Welcome to Antarctica", in full screen, with Tux walked right using the game pad (the steps of `tests/appcorpus/947-supertux.py`); reduced to 256 colours. |
+| `disk-management.png` | 1280x800 | The devices suite's `diskmgr` boot (`tests/selftest/devices/diskmgr`): Disk Management after `diskmgmt --test` has made an NTFS and a FAT32 volume on the blank 256 MB Disk 2 and moved the FAT32 one to T:, resized from the test's 2560x1600 screendump. |
 
 `camera.png` (1280x800) is not in the README either.  It is the devices
 suite's `camera` boot's screenshot of the Camera app showing the fake UVC

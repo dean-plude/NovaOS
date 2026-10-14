@@ -23,3 +23,11 @@
     End task, Performance (each logical processor, memory, disk and
     Ethernet over 60 seconds), Details and Services, read through the same
     APIs Windows' Task Manager uses.
+  - Disk Management (`diskmgmt.exe`, a Windows program in System32; Start
+    menu search): the volumes with their letters, file systems, capacity
+    and free space above, each disk and its partitions drawn below;
+    Initialize Disk (GPT or MBR), New Simple Volume, Format (NTFS or
+    FAT32, through `fmifs.dll`'s `FormatEx`) and Change Drive Letter,
+    done through the same APIs Windows' Disk Management uses
+    (`IOCTL_DISK_*_DRIVE_LAYOUT_EX`, `IOCTL_STORAGE_QUERY_PROPERTY`,
+    `FindFirstVolume`, `GetVolumeInformation`, `SetVolumeMountPoint`).

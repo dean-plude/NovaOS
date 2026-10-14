@@ -295,8 +295,23 @@ to save C:: an empty disk (which it formats as FAT32 and labels
 without installing, give QEMU a second empty disk.
 [building.md](building.md#where-your-files-are-kept) has the details.
 
-Other NTFS disks and USB sticks appear as D:, E: and so on, in File
-Explorer and to programs.
+Other NTFS and FAT32 disks and USB sticks appear as D:, E: and so on, in
+File Explorer and to programs.
+
+**Disk Management** (search the Start menu for it) shows the volumes
+and, below, each disk with its partitions and unallocated space.
+Right-click a disk or a partition to:
+
+- **Initialize Disk** a new, empty disk (GPT, or MBR for older PCs);
+- make a **New Simple Volume** in unallocated space: its size, drive
+  letter, file system (NTFS or FAT32) and label;
+- **Format** a volume as NTFS or FAT32 (everything on it is erased: you
+  are asked first);
+- **Change Drive Letter and Paths**: a new letter, or none.  NovaOS
+  remembers it for that volume.
+
+The volumes NovaOS itself uses (where C: is saved, the boot files) are
+shown but cannot be formatted or given another letter.
 
 ![File Explorer on C:\Windows](screenshots/file-explorer.png)
 

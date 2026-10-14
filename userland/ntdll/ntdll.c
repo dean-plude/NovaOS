@@ -449,6 +449,9 @@ NTSYSAPI ULONG NTAPI RtlNtStatusToDosError(NTSTATUS s)
     case 0xC000010E: return 1056;                         /* STATUS_IMAGE_ALREADY_LOADED: ERROR_SERVICE_ALREADY_RUNNING */
     case 0xC0000428: return 577;                          /* STATUS_INVALID_IMAGE_HASH: ERROR_INVALID_IMAGE_HASH */
     case 0xC000000E: return ERROR_FILE_NOT_FOUND;         /* STATUS_NO_SUCH_DEVICE */
+    case 0xC000014F: return 1005;                         /* ERROR_UNRECOGNIZED_VOLUME: no file system (RAW) */
+    case 0xC0000185: return 1117;                         /* ERROR_IO_DEVICE */
+    case 0xC00000BB: return 50;                           /* ERROR_NOT_SUPPORTED */
     }
     return ERROR_INVALID_FUNCTION;
 }

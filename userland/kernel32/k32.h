@@ -27,6 +27,10 @@ NTSTATUS k32_overlapped_fsctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWO
 void k32_forget_handle(HANDLE h);
 void k32_io_done(HANDLE h, OVERLAPPED *o, NTSTATUS s, DWORD bytes);
 
+/* volume.c */
+BOOL   k32_volume_of(LPCWSTR path, WCHAR *letter, DWORD *flags);   /* a volume name's or drive's letter, NOVA_VOLUME_* flags */
+HANDLE k32_volume_open(LPCWSTR path);                               /* a volume name's volume, for queries */
+
 /* compat.c */
 BOOL k32_close_snapshot(HANDLE h);
 BOOL k32_find_close_stream(HANDLE h);

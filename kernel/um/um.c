@@ -284,6 +284,7 @@ void UmInit(void)
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
     EvLogBoot();                                    /* (the System log's first event of this boot) */
+    DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
     NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */

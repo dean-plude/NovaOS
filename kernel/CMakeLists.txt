@@ -197,6 +197,7 @@ set(KERNEL_C_SOURCES
     um/um_driver.c
     um/um_registry.c
     um/um_crash.c
+    um/um_eventlog.c
     um/um_security.c
     ke/main.c
     ke/version.c

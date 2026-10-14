@@ -386,6 +386,7 @@ UmThread  *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack
 UINT32     um_load_dll(UmProcess *p, const char *name, UINT64 *base, UINT32 flags);
 UINT32     um_dll_directory(UmProcess *p, UINT32 op, const char *path, UINT64 *cookie);
 const UmModule *um_module_at(UmProcess *p, UINT64 va);
+void EvLogCrash(UmProcess *p, UINT32 status, UINT64 rip);   /* Application Error 1000 (um_eventlog.c) */
 /* um_gpfault.c: a #GP at @rip in the current program, looked into as
  * Windows does: 1 if it was fixed up (run the instruction again), else 0
  * with *@code / *@nparams changed when the cause has a status of its own */

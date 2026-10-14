@@ -1,10 +1,9 @@
 /*
- * misc.c — advapi32's event tracing (ETW), event log and a few
- * odds and ends.  NovaOS has no trace sessions or event log service:
- * providers register successfully and are never enabled, controllers
- * are told no session can start (and that the ones they name do not
- * exist), and event-log reports go to the kernel log.  (Services are in
- * service.c.)
+ * misc.c — advapi32's event tracing (ETW) and a few odds and ends.
+ * NovaOS has no trace sessions: providers register successfully and are
+ * never enabled, controllers are told no session can start (and that the
+ * ones they name do not exist).  (Services are in service.c, the event
+ * log in eventlog.c.)
  */
 
 #define NOVA_BUILD_ADVAPI32
@@ -279,49 +278,6 @@ WINADVAPI ULONG WINAPI CloseTrace(TRACEHANDLE h)
     __atomic_store_n(&g_consumer[i], 0, __ATOMIC_RELEASE);
     return ERROR_SUCCESS;
 }
-
-/* -----------------------------------------------------------------------
- * Event log: reports go to the kernel log
- * ----------------------------------------------------------------------- */
-WINADVAPI HANDLE WINAPI RegisterEventSourceW(LPCWSTR server, LPCWSTR source) { (void)server; (void)source; return (HANDLE)(ULONG_PTR)0x4E4F; }
-WINADVAPI HANDLE WINAPI RegisterEventSourceA(LPCSTR server, LPCSTR source) { (void)server; (void)source; return (HANDLE)(ULONG_PTR)0x4E4F; }
-WINADVAPI BOOL WINAPI DeregisterEventSource(HANDLE h) { (void)h; return TRUE; }
-
-WINADVAPI BOOL WINAPI ReportEventW(HANDLE h, WORD type, WORD cat, DWORD id, PSID sid, WORD n, DWORD size, LPCWSTR *strings, LPVOID data)
-{
-    (void)h; (void)cat; (void)sid;
-    char line[256];
-    int o = 0;
-    const char *kind = type == 1 ? "error" : type == 2 ? "warning" : "event";
-    while (*kind && o < 40) line[o++] = *kind++;
-    line[o++] = ' ';
-    static const char hex[] = "0123456789abcdef";      /* the event ID (often an HRESULT) */
-    for (int k = 28; k >= 0; k -= 4) line[o++] = hex[(id >> k) & 15];
-    line[o++] = ':';
-    for (WORD i = 0; i < n && strings && o < 250; i++) {
-        line[o++] = ' ';
-        for (const WCHAR *s = strings[i]; s && *s && o < 250; s++) line[o++] = *s < 0x80 ? (char)*s : '?';
-    }
-    if (data && size) {                    /* binary data (Firefox's launcher: HRESULT, line, source file) */
-        const BYTE *d = data;
-        line[o++] = ' ';
-        line[o++] = '[';
-        for (DWORD i = 0; i < size && o < 250; i++) line[o++] = d[i] >= 0x20 && d[i] < 0x7F ? (char)d[i] : '.';
-        line[o++] = ']';
-    }
-    NtNovaDebugPrint(line, (ULONG)o);
-    return TRUE;
-}
-
-WINADVAPI BOOL WINAPI ReportEventA(HANDLE h, WORD type, WORD cat, DWORD id, PSID sid, WORD n, DWORD size, LPCSTR *strings, LPVOID data)
-{
-    (void)h; (void)type; (void)cat; (void)id; (void)sid; (void)size; (void)data;
-    for (WORD i = 0; i < n && strings; i++) NtNovaDebugPrint(strings[i], (ULONG)strlen_(strings[i]));
-    return TRUE;
-}
-
-WINADVAPI HANDLE WINAPI OpenEventLogW(LPCWSTR server, LPCWSTR source) { (void)server; (void)source; return (HANDLE)(ULONG_PTR)0x4E4F; }
-WINADVAPI BOOL WINAPI CloseEventLog(HANDLE h) { (void)h; return TRUE; }
 
 /* -----------------------------------------------------------------------
  * Odds and ends

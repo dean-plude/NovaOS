@@ -186,6 +186,12 @@ bool um_registry_get_sz(const char *path, const char *name, char *out, int cap);
 UINT32 um_registry_generation(void);
 void um_registry_set_bin(const char *path, const char *name, const void *data, UINT32 len);
 int  um_registry_get_bin(const char *path, const char *name, void *out, int cap);   /* its length, or -1 */
+/* The event log (um_eventlog.c): an event from the kernel, an EVENTLOGRECORD
+ * of @type (1 error, 2 warning, 4 information) from @source for the log
+ * @log, which the EventLog service writes down; and CTL_EVENTLOG */
+void   EvLogReport(const char *log, UINT16 type, const char *source, UINT32 id, int n, const char *const *strings);
+UINT64 UmEventLogCtl(UINT64 arg, UINT64 ptr);
+void   EvLogBoot(void);                      /* Kernel-General 12, once the registry is up */
 /* Any-type value access, for kernel-mode Zw* registry calls (nt/zw.c) */
 int  um_registry_get_value(const char *path, const char *name, UINT32 *type, void *out, int cap);
 void um_registry_set_value(const char *path, const char *name, UINT32 type, const void *data, UINT32 len);

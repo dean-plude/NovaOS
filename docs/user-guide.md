@@ -155,6 +155,7 @@ Keyboard shortcuts:
 | **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme and wallpaper), Storage, Network, Time & language, and About. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
+| **Event Viewer** | Type "Event Viewer" in Start.  Shows the Application, System and Security logs as Windows' Event Viewer does: each event's level, date, source, event ID and task category, and below the list its message (General) and its XML (Details).  The Action menu filters by level, clears a log and saves its events as `.evtx` or `.xml`.  NovaOS logs each start, services starting and stopping, drivers that fail to load and programs that crash; programs add their own events. |
 | **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
 | **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
 
@@ -323,7 +324,9 @@ support it.  NovaOS saves drive C: before it restarts or shuts down.
 - **A program crashes**: NovaOS writes a crash report (the exception,
   where it happened, the stack and the loaded modules) to
   `C:\NovaOS\Crashes`.  `crashes` lists them and `crashes last` shows the
-  newest.
+  newest.  Event Viewer's Application log lists every crash too
+  (Application Error, event 1000), and its System log lists services
+  that stopped unexpectedly and drivers that failed to load.
 - **The log**: NovaOS writes what it does to the serial port (QEMU's
   `-serial stdio` shows it in your terminal).  Started from a USB stick,
   it also writes it to `EFI\NOVA\bootlog.txt` on the stick.  `dmesg` in

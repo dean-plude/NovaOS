@@ -109,7 +109,7 @@ class BundleTests(unittest.TestCase):
                 with kernel.open('wb') as f:
                     f.truncate(payload_mb * 1048576)
                 subprocess.run(['bash', str(ROOT / 'scripts/create-disk.sh'),
-                                str(image), str(boot), str(kernel)],
+                                str(image), str(boot), str(kernel), str(root / 'no-files')],
                                env=env, check=True, stdout=subprocess.DEVNULL)
                 self.assertEqual(image.stat().st_size, expected_mb * 1048576)
                 installed = kernel.stat().st_size + boot.stat().st_size

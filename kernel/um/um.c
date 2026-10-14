@@ -29,6 +29,7 @@
 #include "../drivers/audio.h"
 #include "../wm/kbdlayout.h"
 #include "../fs/bootlog.h"
+#include "../fs/bootfiles.h"
 #include "../arch/x86_64/idt.h"
 #include "um_internal.h"
 #include "../ke/syscall.h"
@@ -278,6 +279,7 @@ void UmInit(void)
     }
     kprintf("[UM] User-mode subsystem ready: %d system files installed (C:\\Windows\\System32, C:\\Programs)\n",
             installed);
+    BootFilesInstall();                             /* wallpapers, icon sets, pictures: beside the kernel */
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();

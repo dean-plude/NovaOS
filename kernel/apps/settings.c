@@ -17,9 +17,22 @@
 #include "../hal/display.h"
 #include "../um/um.h"
 #include "../drivers/audio.h"
+#include "../wm/wallpaper.h"
+#include "iconset.h"
 
 #define SIDE_W 200
 #define ITEM_H 36
+
+/* Personalization's clickable parts, recorded as they are drawn (client
+ * coordinates) */
+typedef enum { PH_TAB, PH_THEME, PH_PICTURE, PH_ADD_PICTURE, PH_ICONSET, PH_ADD_ICONSET } PHitKind;
+typedef struct {
+    GdiRect  r;
+    PHitKind kind;
+    int      i;                      /* the tab or theme */
+    char     path[RAMFS_PATH_MAX];   /* the picture, folder or set (C: path without "C:") */
+} PHit;
+#define PHITS_MAX 48
 
 typedef struct {
     int page; UINT32 net_sig;
@@ -35,6 +48,11 @@ typedef struct {
     int net_focus;                   /* ... the field typed into */
     char net_text[5][16];            /* ... address, mask, gateway, two DNS servers */
     char net_err[96];                /* ... why Save was refused */
+    int ptab;                        /* Personalization: Background (0) or Icons (1) */
+    int pscroll, pheight;            /* ... scrolled by, and the height of what it shows */
+    UINT32 thumbs_gen;               /* ... the wallpaper thumbnails shown (repainted when more are ready) */
+    int nhits;                       /* ... what a click there does (set_paint records it) */
+    PHit hits[PHITS_MAX];
 } Settings;
 
 static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Time & language", "About" };
@@ -581,6 +599,12 @@ static bool set_tick(WND *w)
         st->kbd = kbd;
         return true;
     }
+    if (st && st->page == SETTINGS_PERSONALIZE) {             /* wallpaper thumbnails made */
+        UINT32 g = WallpaperThumbsGen();
+        if (g == st->thumbs_gen) return false;
+        st->thumbs_gen = g;
+        return true;
+    }
     if (st && st->page == SETTINGS_SOUND) {                   /* a device plugged in or out */
         SoundDevs d;
         sound_devs(&d);
@@ -595,33 +619,209 @@ static bool set_tick(WND *w)
     return true;
 }
 
-/* Personalization: one card per wallpaper theme; click to apply */
-#define THEME_CARD_H 150
-static int theme_card_w(int w)
+/* Personalization, in two tabs:
+ *   Background: one card per wallpaper theme, the pictures in
+ *     C:\Windows\Web\Wallpaper (choosing one draws it in the Aurora theme),
+ *     and PNG pictures in the user's folders to add to them;
+ *   Icons: the built-in icons and the icon sets in C:\Windows\Web\Icons,
+ *     and folders of icons in the user's folders to add as sets.
+ * The page scrolls with the wheel below its tabs; clicks go by st->hits. */
+#define THEME_CARD_H 96
+#define PIC_COLS     4             /* (at least; more on a wide window) */
+#define ADD_ROW_H    44
+#define SET_CARD_H   76
+static const AppId g_preview_apps[] = { APP_EXPLORER, APP_TERMINAL, APP_SETTINGS, APP_FIREFOX, APP_PHOTOS, APP_NOTEPAD };
+
+static void hit(Settings *st, GdiRect r, GdiRect c, PHitKind kind, int i, RamNode *node)
 {
-    int n = DesktopThemeCount();
-    return (w - (n - 1) * 16) / n;
+    if (st->nhits >= PHITS_MAX) return;
+    PHit *h = &st->hits[st->nhits++];
+    h->r = RECT(r.x - c.x, r.y - c.y, r.w, r.h);
+    h->kind = kind;
+    h->i = i;
+    h->path[0] = '\0';
+    if (node) {
+        char p[RAMFS_PATH_MAX];
+        RamfsPath(node, p, sizeof(p));
+        strncpy(h->path, p[1] == ':' ? p + 2 : p, sizeof(h->path) - 1);
+        h->path[sizeof(h->path) - 1] = '\0';
+    }
 }
 
-static void page_personalize(int x, int y, int w)
+/* A card's frame: the active one outlined in the accent colour */
+static void card(GdiRect r, bool active)
 {
-    GdiTextT(x, y, "Background and colours", UI_TEXT2);
-    y += 30;
-    int n = DesktopThemeCount(), cw = theme_card_w(w);
+    GdiRoundRect(r, 8, UI_CARD, active ? UI_ACCENT : GDI_TRANSPARENT);
+    if (active) GdiRoundRect(RECT(r.x + 1, r.y + 1, r.w - 2, r.h - 2), 7, GDI_TRANSPARENT, UI_ACCENT);
+}
+
+/* "name ...... in Downloads  [Add]" */
+static void add_row(Settings *st, GdiRect c, int x, int y, int w, RamNode *n, PHitKind kind)
+{
+    GdiRoundRect(RECT(x, y, w, ADD_ROW_H - 6), 6, UI_CARD, GDI_TRANSPARENT);
+    char where[RAMFS_PATH_MAX];
+    RamfsPath(n->parent, where, sizeof(where));
+    GdiTextT(x + 16, y + 11, n->name, UI_TEXT);
+    GdiRect b = RECT(x + w - 8 - 80, y + 4, 80, ADD_ROW_H - 14);
+    int ww = GdiTextW(where);
+    if (x + 16 + GdiTextW(n->name) + 24 < b.x - 16 - ww) GdiTextT(b.x - 16 - ww, y + 11, where, UI_TEXT2);
+    UiButton(b, "Add", true);
+    hit(st, b, c, kind, 0, n);
+}
+
+static int background_tab(Settings *st, GdiRect c, int x, int y, int w)
+{
+    int top = y;
+    GdiTextBold(x, y, "Theme", UI_TEXT);
+    y += 26;
+    int n = DesktopThemeCount(), cw = (w - (n - 1) * 12) / n;
+    const char *cur = WallpaperCurrent();
     for (int i = 0; i < n; i++) {
-        int cx = x + i * (cw + 16);
-        bool sel = i == DesktopTheme();
-        GdiRoundRect(RECT(cx, y, cw, THEME_CARD_H + 40), 8, UI_CARD,
-                     sel ? UI_ACCENT : GDI_TRANSPARENT);
-        if (sel) GdiRoundRect(RECT(cx + 1, y + 1, cw - 2, THEME_CARD_H + 38), 7,
-                              GDI_TRANSPARENT, UI_ACCENT);
-        DesktopDrawThemePreview(i, RECT(cx + 8, y + 8, cw - 16, THEME_CARD_H - 16));
-        GdiTextT(cx + 12, y + THEME_CARD_H + 4, DesktopThemeName(i), UI_TEXT);
-        if (sel) GdiTextT(cx + cw - 12 - GdiTextW("Active"), y + THEME_CARD_H + 4,
-                          "Active", UI_ACCENT);
+        GdiRect r = RECT(x + i * (cw + 12), y, cw, THEME_CARD_H + 30);
+        card(r, i == DesktopTheme());
+        DesktopDrawThemePreview(i, RECT(r.x + 6, r.y + 6, cw - 12, THEME_CARD_H - 12));
+        GdiTextT(r.x + 10, r.y + THEME_CARD_H + 2, DesktopThemeName(i), UI_TEXT);
+        hit(st, r, c, PH_THEME, i, NULL);
     }
-    y += THEME_CARD_H + 60;
-    row(x, y, w, "Accent colour", "Follows the theme");
+    y += THEME_CARD_H + 30 + 22;
+
+    GdiTextBold(x, y, "Picture", UI_TEXT);
+    GdiTextT(x + 80, y, "The Aurora theme with your picture  -  C:\\Windows\\Web\\Wallpaper", UI_TEXT2);
+    y += 26;
+    RamNode *pics[64];
+    int np = WallpaperList(pics, 64);
+    int cols = w / 180 > PIC_COLS ? w / 180 : PIC_COLS;
+    int pw = (w - (cols - 1) * 12) / cols, ph = pw * 9 / 16;
+    for (int i = 0; i < np; i++) {
+        GdiRect r = RECT(x + (i % cols) * (pw + 12), y + (i / cols) * (ph + 42), pw, ph + 30);
+        char path[RAMFS_PATH_MAX];
+        RamfsPath(pics[i], path, sizeof(path));
+        bool active = DesktopAurora() && !strcmp(path + 2, cur);
+        card(r, active);
+        GdiRect t = RECT(r.x + 5, r.y + 5, pw - 10, ph - 6);
+        if (!WallpaperDrawThumb(pics[i], t)) {
+            GdiRoundRect(t, 4, UI_HOVER, GDI_TRANSPARENT);
+            GdiTextCenter(t.x, t.y + t.h / 2 - 8, t.w, "...", UI_TEXT2);
+        }
+        char label[48];
+        strncpy(label, pics[i]->name, sizeof(label) - 1);
+        label[sizeof(label) - 1] = '\0';
+        char *dot = strrchr(label, '.');
+        if (dot) *dot = '\0';
+        GdiTextT(r.x + 10, r.y + ph + 4, label, active ? UI_ACCENT : UI_TEXT);
+        hit(st, r, c, PH_PICTURE, 0, pics[i]);
+    }
+    if (!np) {
+        GdiTextT(x, y, "No pictures in C:\\Windows\\Web\\Wallpaper.", UI_TEXT2);
+        y += 26;
+    }
+    y += ((np + cols - 1) / cols) * (ph + 42) + 10;
+
+    GdiTextBold(x, y, "Add a picture", UI_TEXT);
+    y += 26;
+    RamNode *cand[16];
+    int nc = WallpaperCandidates(cand, 16);
+    for (int i = 0; i < nc; i++, y += ADD_ROW_H) add_row(st, c, x, y, w, cand[i], PH_ADD_PICTURE);
+    if (!nc) {
+        GdiTextT(x, y, "Save a PNG picture in Downloads, Pictures, Documents or Desktop to add it here.", UI_TEXT2);
+        y += 26;
+    }
+    return y - top;
+}
+
+static int icons_tab(Settings *st, GdiRect c, int x, int y, int w)
+{
+    int top = y;
+    GdiTextBold(x, y, "Icon set", UI_TEXT);
+    GdiTextT(x + 80, y, "Apps, folders and files  -  C:\\Windows\\Web\\Icons", UI_TEXT2);
+    y += 26;
+    RamNode *sets[ICONSET_MAX];
+    int ns = IconSetList(sets, ICONSET_MAX);
+    int napps = (int)(sizeof(g_preview_apps) / sizeof(g_preview_apps[0]));
+    for (int i = -1; i < ns; i++, y += SET_CARD_H + 10) {
+        RamNode *d = i < 0 ? NULL : sets[i];
+        const char *name = d ? d->name : "Built-in";
+        bool active = d ? !strcmp(IconSetCurrent(), d->name) : !IconSetCurrent()[0];
+        GdiRect r = RECT(x, y, w, SET_CARD_H);
+        card(r, active);
+        GdiTextBold(r.x + 16, r.y + 12, name, UI_TEXT);
+        if (active) GdiTextT(r.x + 16, r.y + 36, "Active", UI_ACCENT);
+        for (int k = 0; k < napps; k++)
+            IconSetDrawPreview(d, g_preview_apps[k], r.x + 160 + k * 56, r.y + 14, 48);
+        hit(st, r, c, PH_ICONSET, 0, d);
+    }
+    y += 12;
+    GdiTextBold(x, y, "Add an icon set", UI_TEXT);
+    y += 26;
+    RamNode *cand[12];
+    int nc = IconSetCandidates(cand, 12);
+    for (int i = 0; i < nc; i++, y += ADD_ROW_H) add_row(st, c, x, y, w, cand[i], PH_ADD_ICONSET);
+    if (!nc) {
+        GdiTextT(x, y, "Save a folder of icons (terminal.ico, folder.ico, this-pc.ico, ...) in Downloads,", UI_TEXT2);
+        GdiTextT(x, y + 20, "Documents, Desktop or Pictures to add it here.  docs/design/brand lists the names.", UI_TEXT2);
+        y += 46;
+    }
+    return y - top;
+}
+
+static void page_personalize(Settings *st, GdiRect c, int x, int y, int w)
+{
+    st->nhits = 0;
+    static const char *const tabs[] = { "Background", "Icons" };
+    for (int i = 0; i < 2; i++) {
+        GdiRect r = RECT(x + i * 128, y, 120, CHIP_H);
+        GdiRoundRect(r, 6, i == st->ptab ? UI_ACCENT : UI_CARD, GDI_TRANSPARENT);
+        GdiTextCenter(r.x, r.y + 8, r.w, tabs[i], i == st->ptab ? GDI_WHITE : UI_TEXT);
+        hit(st, r, c, PH_TAB, i, NULL);
+    }
+    y += CHIP_H + 16;
+    /* the rest scrolls, clipped below the tabs */
+    int view = c.y + c.h - y;
+    GdiRect old = GdiClipRect();
+    int y0 = y > old.y ? y : old.y, y1 = c.y + c.h < old.y + old.h ? c.y + c.h : old.y + old.h;
+    if (y1 <= y0) return;
+    GdiSetClip(RECT(old.x, y0, old.w, y1 - y0));
+    int first = st->nhits;
+    st->pheight = st->ptab ? icons_tab(st, c, x, y - st->pscroll, w)
+                           : background_tab(st, c, x, y - st->pscroll, w);
+    GdiSetClip(old);
+    /* (parts scrolled out of view are not clickable) */
+    int n = first;
+    for (int i = first; i < st->nhits; i++) {
+        PHit *h = &st->hits[i];
+        if (h->r.y + c.y < y0 || h->r.y + h->r.h + c.y > y1) {
+            int vy = h->r.y + c.y, vb = vy + h->r.h;
+            if (vb <= y0 || vy >= y1) continue;
+            if (vy < y0) { h->r.h -= y0 - vy; h->r.y += y0 - vy; }
+            if (vb > y1) h->r.h -= vb - y1;
+        }
+        if (n != i) st->hits[n] = *h;
+        n++;
+    }
+    st->nhits = n;
+    int max = st->pheight - view + 16;
+    if (st->pscroll > (max > 0 ? max : 0)) st->pscroll = max > 0 ? max : 0;
+}
+
+static void personalize_click(Settings *st, int x, int y)
+{
+    for (int i = 0; i < st->nhits; i++) {
+        PHit *h = &st->hits[i];
+        if (!UiHit(h->r, x, y)) continue;
+        RamNode *n = h->path[0] ? RamfsResolve(NULL, h->path) : NULL;
+        switch (h->kind) {
+        case PH_TAB:         if (st->ptab != h->i) { st->ptab = h->i; st->pscroll = 0; } break;
+        case PH_THEME:       DesktopSetTheme(h->i); break;
+        case PH_PICTURE:     DesktopSetPicture(h->path); break;
+        case PH_ADD_PICTURE: {
+            char path[RAMFS_PATH_MAX];
+            if (n && WallpaperInstall(n, path, sizeof(path))) DesktopSetPicture(path);
+            break; }
+        case PH_ICONSET:     IconSetChoose(n ? n->name : ""); break;
+        case PH_ADD_ICONSET: if (n) IconSetInstall(n); break;
+        }
+        return;
+    }
 }
 
 /* Time & language: the user's regional format (the user locale).  A
@@ -747,7 +947,7 @@ static void set_paint(WND *w)
     case SETTINGS_SYSTEM:      page_system(x, y, w2);     break;
     case SETTINGS_DISPLAY:     page_display(st, x, y, w2); break;
     case SETTINGS_SOUND:       page_sound(st, x, y, w2);   break;
-    case SETTINGS_PERSONALIZE: page_personalize(x, y, w2); break;
+    case SETTINGS_PERSONALIZE: page_personalize(st, c, x, y, w2); break;
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
     case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
@@ -787,6 +987,11 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
             if (mx != m.x || my != m.y) DesktopSetMonitorOrigin(st->mon, mx, my, true);
             return;
         }
+    }
+    if (msg == WM_MOUSE_WHEEL && st->page == SETTINGS_PERSONALIZE) {
+        st->pscroll -= WmWheelDelta() * 48;                    /* (page_personalize keeps it in range) */
+        if (st->pscroll < 0) st->pscroll = 0;
+        return;
     }
     if (msg != WM_MOUSE_DOWN) return;
     if (x >= SIDE_W && st->page == SETTINGS_NETWORK) {
@@ -832,13 +1037,7 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
             set_locale(g_formats[i].name);
             return;
         }
-        /* theme cards (layout matches set_paint + page_personalize) */
-        if (st->page != SETTINGS_PERSONALIZE) return;
-        int px = SIDE_W + 28, py = 20 + 52 + 30, pw = c.w - SIDE_W - 56;
-        int cw = theme_card_w(pw);
-        if (y < py || y >= py + THEME_CARD_H + 40 || x < px) return;
-        int i = (x - px) / (cw + 16);
-        if (i < DesktopThemeCount() && (x - px) % (cw + 16) < cw) DesktopSetTheme(i);
+        if (st->page == SETTINGS_PERSONALIZE) personalize_click(st, x, y);
         return;
     }
     int i = (y - 64) / ITEM_H;
@@ -868,6 +1067,7 @@ void SettingsOpen(void)
     w->on_key   = set_key;
     w->on_close = set_close;
     w->on_tick  = set_tick;
+    w->rbutton  = true;                       /* (the wheel scrolls Personalization) */
 }
 
 void SettingsOpenPage(int page)

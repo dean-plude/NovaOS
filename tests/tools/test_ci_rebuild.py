@@ -177,7 +177,7 @@ class CIRebuildTests(unittest.TestCase):
     def test_graph_builds_once_shares_verified_image_and_never_masks_failures(self):
         workflows = {p.stem: yaml.safe_load(p.read_text()) for p in (ROOT / '.github/workflows').glob('*.yml')}
         ci, nightly, build = (workflows[n] for n in ('ci', 'nightly', 'build'))
-        for workflow, result, prerequisites in ((ci, 'ci-result', ['checks','build','compatibility','boot-test','graphics-test','boot-result']),
+        for workflow, result, prerequisites in ((ci, 'ci-result', ['checks','build','compatibility','boot-test','perf','graphics-test','boot-result']),
                                                (nightly, 'corpus-result', ['gate','build','app-corpus','smp'])):
             jobs = workflow['jobs']
             self.assertEqual(jobs[result]['needs'], prerequisites)
@@ -193,7 +193,7 @@ class CIRebuildTests(unittest.TestCase):
         self.assertEqual(nightly['jobs']['app-corpus']['strategy']['max-parallel'], 4)
         self.assertEqual(ci['jobs']['publish-iso']['needs'], ['ci-result'])
         self.assertEqual(ci['jobs']['boot-result']['name'], 'Build and boot-test')
-        self.assertEqual(ci['jobs']['boot-result']['needs'], ['checks', 'build', 'boot-test'])
+        self.assertEqual(ci['jobs']['boot-result']['needs'], ['checks', 'build', 'boot-test', 'perf'])
         artifacts = [s['with']['name'] for s in build['jobs']['image']['steps'] if s.get('uses') == 'actions/upload-artifact@v4']
         self.assertIn('nova-iso', artifacts); self.assertIn('nova-boot', artifacts)
         self.assertIn('merge_group', ci['on']); self.assertIn('workflow_call', ci['on'])

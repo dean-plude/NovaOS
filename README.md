@@ -157,7 +157,8 @@ To make the ISO yourself from a fresh build, run
 **Every pull request is boot-tested.**  GitHub Actions builds the kernel,
 bootloader, userland and `build/nova.img`, boots it in QEMU with OVMF and
 runs the core, network and graphics suites with `tools/selftest.py`; a
-failing test fails its check.  **Every night**, `tools/appcorpus.py` runs the
+failing test fails its check.  It also times the boot, Firefox's start and `smpstress`
+scaling and fails on a large regression (the performance budget).  **Every night**, `tools/appcorpus.py` runs the
 official Windows releases of ripgrep, 7-Zip, Python, .NET, Firefox, VLC,
 Notepad++, Krita, games and many more, each one's screenshot compared with
 a reference.  A push to `main` that passes publishes the `latest` ISO.
@@ -317,8 +318,9 @@ licensed under the **GNU LGPL version 2.1** (or later).  It is compiled
 into `d3dcompiler_47.dll` alone, a separate DLL whose own sources
 (`userland/d3dcompiler_47`, MIT) call it only through its public API; its
 complete source is in this repository, with NovaOS's changes to it
-(shader model 5.1 descriptor arrays and RWByteAddressBuffer's Load,
-GetDimensions and Interlocked methods, which wgpu's Direct3D 12 shaders use),
+(shader model 5.1 descriptor arrays, RWByteAddressBuffer's Load,
+GetDimensions and Interlocked methods and stores to indexed groupshared
+arrays, which wgpu's Direct3D 12 shaders use),
 and a changed copy can be rebuilt into that DLL and put in its place (see
 `third_party/vkd3d-shader/NOVA-VENDOR.txt`).
 

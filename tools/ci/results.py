@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-JOBS = {'ci': ('checks', 'code', ('build', 'compatibility', 'boot-test', 'graphics-test', 'boot-result')),
-        'boot': ('checks', 'code', ('build', 'boot-test')),
+JOBS = {'ci': ('checks', 'code', ('build', 'compatibility', 'boot-test', 'perf', 'graphics-test', 'boot-result')),
+        'boot': ('checks', 'code', ('build', 'boot-test', 'perf')),
         'corpus': ('gate', 'run', ('build', 'app-corpus', 'smp'))}
 
 

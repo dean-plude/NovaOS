@@ -687,9 +687,16 @@ measured frame-time gain over the CPU path.
   churn's 800-odd disk writes in turn (`tests/tools/test_ntfs_cut.py`)
   and after a machine reset (`ntfstest cut`), it comes back with every
   file whole and passes `scripts/ntfs-check.py` with no errors.
-- [ ] **26.4 Performance budget.** Build on the lock and redraw work in
+- [x] **26.4 Performance budget.** Build on the lock and redraw work in
   PRs #297–#306. CI should report boot time, Firefox start time and
   `smpstress` scaling on every run and fail on a large regression.
+  CI's **Performance budget** job (`tools/ci/perf.py`, part of the
+  "Build and boot-test" check) boots NovaOS once, times the boot to the
+  desktop and the bundled Firefox from `start` to its first page on the
+  screen, and runs `smpstress scaling 0` on four CPUs; a time over its
+  budget (`tools/ci/perf-budget.json`, about twice what the runners take)
+  or files and the registry scaling under half as well as bare system
+  calls fails the check, and every run's numbers are in its summary.
 
 ### Phase 27: Apps for everyday use
 

@@ -1676,7 +1676,7 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
     case 0: return PnpCount();
     case 1: {
         PnpNode *n = kmalloc(sizeof(PnpNode));
-        bool ok = n && PnpGet((UINT32)(arg >> 8), n) && NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, n, sizeof(*n)));
+        bool ok = n && PnpGet((UINT32)(arg >> 8), n) && !(n->flags & PNP_DELETED) && NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, n, sizeof(*n)));
         kfree(n);
         return ok ? 1 : 0;
     }

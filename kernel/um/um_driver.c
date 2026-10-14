@@ -151,7 +151,8 @@ UINT64 UmPnpDriverCtl(UINT32 op, UINT32 id, UINT64 ptr)
             n->instance[sizeof(n->instance) - 1] = n->desc[sizeof(n->desc) - 1] = 0;
             n->hwids[sizeof(n->hwids) - 2] = n->hwids[sizeof(n->hwids) - 1] = 0;
             n->compat[sizeof(n->compat) - 2] = n->compat[sizeof(n->compat) - 1] = 0;
-            r = NtPnpRootAdd(n->instance, n->hwids, n->compat, n->desc);
+            n->cls[sizeof(n->cls) - 1] = 0;
+            r = NtPnpRootAdd(n->instance, n->cls, n->hwids, n->compat, n->desc);
         }
         kfree(n);
         return r;

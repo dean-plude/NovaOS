@@ -147,8 +147,8 @@ UINT32    NtPnpStart(UINT32 node);
 NTSTATUS  NtPnpStop(UINT32 node);
 /* A root-enumerated device (instance ROOT\<class>\NNNN, a virtual one no
  * bus finds), as setupapi's DIF_REGISTERDEVICE makes it: its node (an
- * arrival; @hwids and @compat REG_MULTI_SZ), or 0 */
-UINT32    NtPnpRootAdd(const char *instance, const char *hwids, const char *compat, const char *desc);
+ * arrival; @cls its setup class, @hwids and @compat REG_MULTI_SZ), or 0 */
+UINT32    NtPnpRootAdd(const char *instance, const char *cls, const char *hwids, const char *compat, const char *desc);
 /* Remove root-enumerated device @node (DIF_REMOVE): its driver taken away
  * as by NtPnpStop (a veto comes back as its status), then its node */
 NTSTATUS  NtPnpRootRemove(UINT32 node);

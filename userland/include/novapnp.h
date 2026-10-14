@@ -20,6 +20,7 @@
 #define NOVA_PNP_REMOVABLE  0x04
 #define NOVA_PNP_WINDOWS    0x08    /* the driver running it is a Windows driver */
 #define NOVA_PNP_INBOX      0x10    /* NovaOS's driver steps aside for an installed Windows one */
+#define NOVA_PNP_RAW        0x20    /* started raw: its driver is its bus driver, not an installed service */
 
 typedef struct {
     DWORD id, parent, flags, problem, seq, reserved;

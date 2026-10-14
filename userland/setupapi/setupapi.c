@@ -748,6 +748,7 @@ static BOOL register_device(Set *s, int i)
     nova_pnp_guid_str(&p->cls, a);
     MultiByteToWideChar(CP_ACP, 0, a, -1, gs, 40);
     RegSetValueExW(h, L"ClassGUID", 0, REG_SZ, (const BYTE *)gs, (DWORD)((lstrlenW(gs) + 1) * sizeof(WCHAR)));
+    cls[0] = 0;
     if (SetupDiClassNameFromGuidW(&p->cls, cls, 64, NULL))
         RegSetValueExW(h, L"Class", 0, REG_SZ, (const BYTE *)cls, (DWORD)((lstrlenW(cls) + 1) * sizeof(WCHAR)));
     if (p->desc[0]) RegSetValueExW(h, L"DeviceDesc", 0, REG_SZ, (const BYTE *)p->desc, (DWORD)((lstrlenW(p->desc) + 1) * sizeof(WCHAR)));
@@ -759,6 +760,7 @@ static BOOL register_device(Set *s, int i)
     WideCharToMultiByte(CP_ACP, 0, p->hwids, multi_chars(p->hwids, 160), n.hwids, sizeof(n.hwids) - 1, NULL, NULL);
     if (p->compat[0]) WideCharToMultiByte(CP_ACP, 0, p->compat, multi_chars(p->compat, 160), n.compat, sizeof(n.compat) - 1, NULL, NULL);
     WideCharToMultiByte(CP_ACP, 0, p->desc[0] ? p->desc : p->hwids, -1, n.desc, sizeof(n.desc) - 1, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, cls, -1, n.cls, sizeof(n.cls) - 1, NULL, NULL);
     DWORD dn = nova_pnp_root_add(&n);
     if (!dn || dn == (DWORD)-1) {
         RegDeleteTreeW(HKEY_LOCAL_MACHINE, k);

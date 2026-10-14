@@ -1246,7 +1246,7 @@ void NtPnpSurpriseRemoval(UINT32 node) { if (g_booted) defer(WORK_SURPRISE, node
 
 /* ---- root-enumerated devices ---- */
 
-UINT32 NtPnpRootAdd(const char *instance, const char *hwids, const char *compat, const char *desc)
+UINT32 NtPnpRootAdd(const char *instance, const char *cls, const char *hwids, const char *compat, const char *desc)
 {
     if (strncmp(instance, "ROOT\\", 5) || !strchr(instance + 5, '\\') || !hwids[0]) return 0;
     PnpNode *n = kzalloc(sizeof(PnpNode));
@@ -1255,6 +1255,7 @@ UINT32 NtPnpRootAdd(const char *instance, const char *hwids, const char *compat,
     memcpy(n->hwids, hwids, (size_t)(multi_len(hwids) < sizeof(n->hwids) - 1 ? multi_len(hwids) : sizeof(n->hwids) - 2));
     if (compat) memcpy(n->compat, compat, (size_t)(multi_len(compat) < sizeof(n->compat) - 1 ? multi_len(compat) : sizeof(n->compat) - 2));
     strncpy(n->desc, desc && desc[0] ? desc : instance, sizeof(n->desc) - 1);
+    if (cls) strncpy(n->cls, cls, sizeof(n->cls) - 1);
     n->flags = PNP_PRESENT;
     UINT32 id = PnpAdd(PNP_ROOT, n);
     kfree(n);
@@ -1293,7 +1294,7 @@ NTSTATUS NtPnpRootRemove(UINT32 node)
         for (NtIface *f = p->ifaces, *next; f; f = next) { next = f->next; kfree(f); }
         nt_IoDeleteDevice(p->pdo);                           /* (p is its extension: last) */
     }
-    PnpRemove(node);
+    PnpDelete(node);
     kprintf("[PNP] %s: device removed\n", n.instance);
     pnp_unlock();
     return STATUS_SUCCESS;
@@ -1303,7 +1304,7 @@ NTSTATUS NtPnpRootRemove(UINT32 node)
  * with a HardwareID) come back */
 static void root_boot(void)
 {
-    char key[200], cls[64], inst[64], instance[128], desc[96];
+    char key[200], cls[64], inst[64], instance[128], desc[96], setup[32];
     char *hw = kmalloc(160), *compat = kmalloc(160);
     NT_WCHAR w[64];
     for (UINT32 i = 0; hw && compat; i++) {
@@ -1320,7 +1321,8 @@ static void root_boot(void)
             multi_get(key, "HardwareID", hw, 0, 160);
             multi_get(key, "CompatibleIDs", compat, 0, 160);
             if (!um_registry_get_sz(key, "DeviceDesc", desc, sizeof(desc))) desc[0] = 0;
-            if (hw[0]) NtPnpRootAdd(instance, hw, compat, desc);
+            if (!um_registry_get_sz(key, "Class", setup, sizeof(setup))) setup[0] = 0;
+            if (hw[0]) NtPnpRootAdd(instance, setup, hw, compat, desc);
         }
     }
     kfree(hw);
@@ -1468,7 +1470,8 @@ static void child_start(NtPdo *c)
     if (prob) { PnpSetProblem(c->node, prob); return; }
     c->rawpdo = !service[0];
     strncpy(c->service, c->rawpdo ? c->parent->service : service, sizeof(c->service) - 1);
-    PnpSetWindowsDriver(c->node, c->service);
+    if (c->rawpdo) PnpSetRawDriver(c->node, c->service);
+    else PnpSetWindowsDriver(c->node, c->service);
     kprintf("[PNP] %s: started (%s %s)\n", c->instance, c->rawpdo ? "raw, bus driver" : "driver", c->service);
     enumerate(c);
 }

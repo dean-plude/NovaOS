@@ -150,7 +150,10 @@ device such as Microsoft's `vhidmini2` HID sample), is made as
 that answers `IRP_MN_QUERY_ID` with those IDs; it shows problem code 28
 until `pnputil /add-driver x.inf /install` installs a package on it, is
 made again from its `Enum\ROOT` key at every boot, and goes with
-`pnputil /remove-device` (`DIF_REMOVE`).
+`pnputil /remove-device` (`DIF_REMOVE`), which deletes it rather than
+leaving a phantom. A child started raw (a HID collection, with no
+function driver of its own) records no service in its Enum key, so it
+starts raw again at the next boot.
 
 Filter drivers are loaded as Windows loads them: a package's
 `.Filters` section (`AddFilter = service,,section` with

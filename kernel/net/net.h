@@ -54,6 +54,7 @@ typedef struct {
     bool   ip6_preferred[NET_IP6_MAX];   /* else still tentative or deprecated */
     UINT32 if_index;         /* the interface's number (IPv6 zone) */
     NetIp  dns_all[3];       /* every DNS server, IPv4 and IPv6 (v6 false, zero: none) */
+    UINT64 in_octets, out_octets, in_frames, out_frames;   /* what the adapter moved since boot */
 } NetStatus;
 
 void NetGetStatus(NetStatus *st);

@@ -155,7 +155,7 @@ A short tour; [docs/inside.md](docs/inside.md) has the full one, and
 - **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.
 - **Windows drivers** (`kernel/nt/`): unmodified Windows `.inf`/`.sys` packages on an NT driver interface (WDM, KMDF, UMDF, NDIS, Storport, USB, display-only WDDM), matched and downloaded by hardware ID and checked against Windows' signing policy.
 - **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2.
-- **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings and the App Store.
+- **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings, Task Manager and the App Store.
 - **Windows userland** (`userland/`): about 115 system DLLs written for NovaOS, 64- and 32-bit, from `ntdll`, `kernel32`, `user32` and `gdi32` to COM, the C and C++ runtimes, Windows Installer, Schannel, DirectWrite, Direct2D and ICU.
 - **Graphics**: a CPU-rendered GDI and desktop, OpenGL 4.5 on Mesa's llvmpipe built in, and Vulkan, DXVK and VKD3D-Proton from the App Store, on the CPU or, under QEMU, on the host's GPU through virtio-gpu.
 - **Program support**: the PE loader, 32-bit programs through a WoW64-style `ntdll`, x64 and x86 structured exceptions, consoles and ConPTY, COM between processes, Windows Installer, services and scheduled tasks.

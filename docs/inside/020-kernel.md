@@ -23,5 +23,11 @@
     audio threads at real-time priority 18, capped at 80% of a CPU as on
     Windows. NovaOS's own sound threads (waveOut, waveIn, DirectSound,
     WASAPI) use it too.
+  - CPU time is measured with the TSC: each switch and each timer tick
+    charges the running thread, its process and its CPU (idle, user
+    programs or the kernel), which `NtQuerySystemInformation`
+    (`SystemProcessInformation`, `SystemProcessorPerformanceInformation`),
+    `GetSystemTimes`, `GetProcessTimes` and `GetThreadTimes` report and
+    Task Manager graphs.
   - Drive C: is a RAM disk, saved to an NTFS or FAT32 volume once it has
     been quiet for a second and restored at boot.

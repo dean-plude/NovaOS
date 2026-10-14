@@ -1,1 +1,1 @@
-- **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings and the App Store.
+- **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings, Disk Management and the App Store.

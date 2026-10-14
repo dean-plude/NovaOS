@@ -23,6 +23,7 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 | `lbreakout2.png` | 640x480 | LBreakout2's first level in full screen: the steps of `tests/appcorpus/940-lbreakout2.py`, then Local Game, Start Original Set; reduced to 256 colours. |
 | `cave-story.png` | 640x480 | Cave Story's First Cave in full screen: the steps of `tests/appcorpus/945-cave-story.py`, then Z held through the opening lines; reduced to 256 colours. |
 | `supertux.png` | 640x480 | SuperTux's first level, "Welcome to Antarctica", in full screen, with Tux walked right using the game pad (the steps of `tests/appcorpus/947-supertux.py`); reduced to 256 colours. |
+| `disk-management.png` | 1280x800 | The devices suite's `diskmgr` boot (`tests/selftest/devices/diskmgr`): Disk Management after `diskmgmt --test` has made an NTFS and a FAT32 volume on the blank 256 MB Disk 2 and moved the FAT32 one to T:, resized from the test's 2560x1600 screendump. |
 
 `aurora-preview.png` (1672x941) is not in the README.  It is a preview of
 the Aurora desktop rendered on a Linux host with NovaOS's own drawing code

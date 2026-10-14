@@ -431,6 +431,20 @@ static UINT64 sys_device_io_control(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT64 b[2] = { st, info };
         return put(io, b, sizeof(b)) ? st : ST_ACCESS_VIOLATION;
     }
+    UmObject *dk = um_handle_object(UmCurrent(), a1, UO_DISK);        /* a disk or volume (um_disk.c) */
+    if (dk) {
+        UINT64 info = 0;
+        UINT32 st = um_disk_ioctl(dk, (UINT32)um_stack_arg(6), um_stack_arg(7), (UINT32)um_stack_arg(8),
+                                  um_stack_arg(9), (UINT32)um_stack_arg(10), &info);
+        um_ob_unref(dk);
+        if (a2) call(SYSCALL_NtSetEvent, a2, 0, 0, 0);          /* (finished already) */
+        if (io >> 63) {
+            UINT32 b[2] = { st, (UINT32)info };
+            return put(io & ~(UINT64_C(1) << 63), b, sizeof(b)) ? st : ST_ACCESS_VIOLATION;
+        }
+        UINT64 b[2] = { st, info };
+        return put(io, b, sizeof(b)) ? st : ST_ACCESS_VIOLATION;
+    }
     UmObject *sec = um_handle_object(UmCurrent(), a1, UO_SECTION);   /* shared GPU resources (um_thread.c) */
     if (sec) {
         UINT32 info = 0;

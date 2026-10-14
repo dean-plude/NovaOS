@@ -111,7 +111,11 @@ order; --list prints them):
             (tools/padpeer.py --kind vendor): the kernel's HID class
             driver runs it on its USB minidriver, and hidclasstest opens
             its collection through hid.dll, writes and reads input,
-            output and feature reports and sees it unplugged
+            output and feature reports and sees it unplugged; "diskmgr",
+            a blank second disk: Disk Management (diskmgmt.exe) is opened
+            from the Start menu, then initializes the disk, makes an NTFS
+            and a FAT32 volume on it, moves one to drive T: (still T:
+            after a restart), and the host checks both volumes
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -347,6 +351,7 @@ UMDF = load_suite('devices/umdf')
 KMDFEDU = load_suite('devices/kmdfedu')
 WDDM = load_suite('devices/wddm')
 NETKVM = load_suite('devices/netkvm')
+DISKMGR = load_suite('devices/diskmgr')
 
 
 def net4_boot(work):
@@ -588,6 +593,16 @@ def ntfs_boot(work):
     return ['-drive', f'format=raw,file={disk}'], []
 
 
+def diskmgr_boot(work):
+    """A second disk, 256 MB of zeros: Disk Management initializes it and
+    makes volumes on it.  It stays in work/blank.img for the tests' check
+    once QEMU has quit (tests/selftest/devices/diskmgr)"""
+    disk = os.path.join(work, 'blank.img')
+    with open(disk, 'wb') as f:
+        f.truncate(256 << 20)
+    return ['-drive', f'format=raw,file={disk}'], []
+
+
 def viostor_boot(work):
     """A second disk on QEMU's virtio-blk card (PCI 1af4:1001), which no
     NovaOS driver runs, with an NTFS volume labelled VIOSTOR holding
@@ -801,7 +816,7 @@ BOOTS = {
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
-                ('wddm', WDDM, wddm_boot)],
+                ('wddm', WDDM, wddm_boot), ('diskmgr', DISKMGR, diskmgr_boot)],
 }
 
 

@@ -281,6 +281,7 @@ void UmInit(void)
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
+    DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
     NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */

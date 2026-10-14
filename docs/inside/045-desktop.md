@@ -8,3 +8,11 @@
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows
     programs and NovaOS updates) and, on the live media, Install NovaOS.
+  - Disk Management (`diskmgmt.exe`, a Windows program in System32; Start
+    menu search): the volumes with their letters, file systems, capacity
+    and free space above, each disk and its partitions drawn below;
+    Initialize Disk (GPT or MBR), New Simple Volume, Format (NTFS or
+    FAT32, through `fmifs.dll`'s `FormatEx`) and Change Drive Letter,
+    done through the same APIs Windows' Disk Management uses
+    (`IOCTL_DISK_*_DRIVE_LAYOUT_EX`, `IOCTL_STORAGE_QUERY_PROPERTY`,
+    `FindFirstVolume`, `GetVolumeInformation`, `SetVolumeMountPoint`).

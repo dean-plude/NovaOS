@@ -2,9 +2,12 @@
   NovaOS's own drivers, compiled into the kernel; they play the part of
   Windows' inbox drivers ([drivers.md](drivers.md), [hardware.md](hardware.md)).
   - **Storage**: AHCI SATA and NVMe disks (NovaOS installs to and boots
-    from either); GPT; FAT16/FAT32; NTFS with read, write and format (drive
-    C: with file ACLs and hard links, and other drives as D:, E:, ...),
-    repaired by NovaOS itself after a power cut.
+    from either); MBR and GPT partition tables, read and written; every partition a
+    volume with a `\\?\Volume{GUID}\` name, as on Windows, its drive
+    letter kept in `HKLM\SYSTEM\MountedDevices`; FAT16/FAT32 (writable on
+    fixed disks); NTFS with read, write and format (drive C: with file
+    ACLs and hard links, and other drives as D:, E:, ...), repaired by
+    NovaOS itself after a power cut.
   - **Network**: Intel e1000/e1000e (82540EM, 82574L and the I219 built
     into Intel PCs) and virtio-net.
   - **Sound**: Intel High Definition Audio, playback and recording, with

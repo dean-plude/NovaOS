@@ -89,6 +89,8 @@ installation.  In the Terminal, `install` lists the disks and
 The first time an installed NovaOS starts, **Welcome to NovaOS** opens
 before the desktop.  It asks, one page at a time:
 
+![Welcome to NovaOS asking for the time zone](screenshots/first-start-setup.png)
+
 1. **Your name.**  It is shown on the Start menu and on the desktop, and
    programs get it as the user name.
 2. **Your time zone.**  Type a city (Berlin, Tokyo, New York...) or pick
@@ -133,6 +135,8 @@ Terminal, `tzutil /s "NAME"` sets a time zone by its Windows name and
 - **Right-click** the desktop, an icon, the dock or a title bar for a
   menu.
 
+![The Start menu](screenshots/start-menu.png)
+
 Keyboard shortcuts:
 
 | Keys | Does |
@@ -164,6 +168,8 @@ Keyboard shortcuts:
 | **Camera** | Shows a USB camera's picture; type `camera` in the Terminal or find it with Windows+S.  The camera must stream on a bulk endpoint for now: most built-in webcams do not yet work (see [drivers.md](drivers.md#cameras-usb-video-class)). |
 
 ### The Terminal
+
+![The Terminal running sysinfo and devices](screenshots/terminal.png)
 
 The Terminal has its own commands; `help` lists them.  The most useful:
 
@@ -275,6 +281,8 @@ without installing, give QEMU a second empty disk.
 Other NTFS disks and USB sticks appear as D:, E: and so on, in File
 Explorer and to programs.
 
+![File Explorer on C:\Windows](screenshots/file-explorer.png)
+
 ## Network and sound
 
 **Wired networking** starts by itself: NovaOS gets an address from the
@@ -293,6 +301,8 @@ netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
 netsh interface ipv4 set address name=Ethernet source=dhcp
 netsh interface ipv4 show config
 ```
+
+![Settings > Network](screenshots/settings-network.png)
 
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.

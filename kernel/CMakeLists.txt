@@ -224,6 +224,8 @@ set(KERNEL_C_SOURCES
     nt/etw.c
     nt/ex.c
     nt/exports.c
+    nt/hidclass.c
+    nt/hidusb.c
     nt/intr.c
     nt/io.c
     nt/ke.c

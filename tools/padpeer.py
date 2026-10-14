@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A USB game controller for testing NovaOS, as a QEMU usb-redir device.
 
-    tools/padpeer.py --port 10710 --kind xbox360|xboxone|hid [--ctl PORT]
+    tools/padpeer.py --port 10710 --kind xbox360|xboxone|hid|vendor [--ctl PORT]
 
 QEMU has no gamepad of its own, so this program is one, behind QEMU's
 usb-redir device (the usbredir protocol, as tools/usbredirpeer.py speaks
@@ -22,7 +22,15 @@ It listens on --port for QEMU and is, at full speed, one of:
            the Guide button) on 0x81;
   hid      a HID game pad (1209:0007, "NovaOS Test Gamepad"): sixteen
            buttons, a hat switch with a null state, and X, Y, Z and Rz of
-           8 bits.
+           8 bits;
+  vendor   a vendor-defined HID device (1209:0008, "NovaOS Test HID
+           Device", serial NOVA0002), the kind a program opens through
+           hid.dll: one collection, usage page FF00 usage 1, with an input
+           (ID 1), an output (ID 2) and a feature report (ID 3) of 8 bytes
+           each, interrupt IN 0x81 and OUT 0x01.  It sends nothing of its
+           own: an output report (on 0x01, or SET_REPORT) comes back as
+           input report 1 with the same bytes, and the feature report
+           reads back what SET_REPORT last wrote.
 
 The test drives it through --ctl (default --port + 100), a TCP port that
 takes lines of name=value pairs and answers "ok" once the report is sent:
@@ -31,6 +39,7 @@ takes lines of name=value pairs and answers "ok" once the report is sent:
            Guide button), lt, rt (0-255), lx, ly, rx, ry (-32768..32767)
   hid:     buttons (bit n: button n + 1), hat (0-7, 8 centred), x, y, z,
            rz (0-255)
+  vendor:  in (eight bytes, as hex: sent as input report 1)
 
 What the host sends the controller is printed: "rumble LEFT RIGHT" (the
 motor bytes as sent), "led N", "power on", "set_report HEX".
@@ -60,6 +69,16 @@ HID_REPORT = bytes([
     0xC0,
 ])
 
+# The vendor device's: input report 1, output report 2, feature report 3,
+# 8 bytes each
+VENDOR_REPORT = bytes([
+    0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01,
+    0x85, 0x01, 0x09, 0x02, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x08, 0x81, 0x02,
+    0x85, 0x02, 0x09, 0x03, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x08, 0x91, 0x02,
+    0x85, 0x03, 0x09, 0x04, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x08, 0xB1, 0x02,
+    0xC0,
+])
+
 
 def le16(v):
     return struct.pack('<H', v)
@@ -78,6 +97,11 @@ class Pad:
             self.state = {'buttons': 0, 'hat': 8, 'x': 128, 'y': 128, 'z': 128, 'rz': 128}
             self.ifaces = [(0, 3, 0, 0)]
             self.mps, self.interval = 8, 10
+        elif kind == 'vendor':
+            self.vid, self.pid, self.product = 0x1209, 0x0008, 'NovaOS Test HID Device'
+            self.state = {'in': None, 'feature': bytes(8)}
+            self.ifaces = [(0, 3, 0, 0)]
+            self.mps, self.interval = 16, 4
         else:
             self.vid, self.pid = (0x045E, 0x028E) if kind == 'xbox360' else (0x045E, 0x02EA)
             self.product = 'Controller'
@@ -86,13 +110,24 @@ class Pad:
             self.mps, self.interval = (32, 4) if kind == 'xbox360' else (64, 4)
 
     def device(self):
-        cls = bytes([0, 0, 0]) if self.kind == 'hid' else bytes([0xFF, 0xFF, 0xFF])
-        return bytes([18, 1]) + le16(0x0200) + cls + bytes([64 if self.kind == 'hid' else 8]) + le16(self.vid) + \
+        cls = bytes([0, 0, 0]) if self.is_hid() else bytes([0xFF, 0xFF, 0xFF])
+        return bytes([18, 1]) + le16(0x0200) + cls + bytes([64 if self.is_hid() else 8]) + le16(self.vid) + \
             le16(self.pid) + le16(0x0114) + bytes([1, 2, 3, 1])
+
+    def is_hid(self):
+        return self.kind in ('hid', 'vendor')
+
+    def report_desc(self):
+        return VENDOR_REPORT if self.kind == 'vendor' else HID_REPORT
 
     def config_desc(self):
         f = self.ifaces[0]
-        if self.kind == 'hid':
+        if self.kind == 'vendor':
+            d = bytes([9, 4, 0, 0, 2, 3, 0, 0, 0])
+            d += bytes([9, 0x21]) + le16(0x0111) + bytes([0, 1, 0x22]) + le16(len(VENDOR_REPORT))
+            d += bytes([7, 5, EP_IN, 3]) + le16(self.mps) + bytes([self.interval])
+            d += bytes([7, 5, EP_OUT, 3]) + le16(self.mps) + bytes([self.interval])
+        elif self.kind == 'hid':
             d = bytes([9, 4, 0, 0, 1, 3, 0, 0, 0])
             d += bytes([9, 0x21]) + le16(0x0111) + bytes([0, 1, 0x22]) + le16(len(HID_REPORT))
             d += bytes([7, 5, EP_IN, 3]) + le16(self.mps) + bytes([self.interval])
@@ -107,7 +142,8 @@ class Pad:
     def string(self, i):
         if i == 0:
             return bytes([4, 3]) + le16(0x0409)
-        s = {1: 'NovaOS' if self.kind == 'hid' else 'Microsoft', 2: self.product, 3: 'NOVA0001'}.get(i)
+        s = {1: 'NovaOS' if self.is_hid() else 'Microsoft', 2: self.product,
+             3: 'NOVA0002' if self.kind == 'vendor' else 'NOVA0001'}.get(i)
         if s is None:
             return None
         u = s.encode('utf-16-le')
@@ -117,13 +153,17 @@ class Pad:
         eps = [(0x00, 0, 0, 0, 64), (0x80, 0, 0, 0, 64)]
         if self.config:
             eps.append((EP_IN, 3, self.interval, 0, self.mps))
-            if self.kind != 'hid':
+            if self.kind == 'vendor':
+                eps.append((EP_OUT, 3, self.interval, 0, self.mps))
+            elif self.kind != 'hid':
                 eps.append((EP_OUT, 3, 8 if self.kind == 'xbox360' else 4, 0, self.mps))
         return eps
 
     def report(self):
         """The input report for the current state (None: nothing to send yet)"""
         s = self.state
+        if self.kind == 'vendor':
+            return None if s['in'] is None else bytes([1]) + s['in']
         if self.kind == 'hid':
             return struct.pack('<HBBBBB', s['buttons'] & 0xFFFF, s['hat'] & 0x0F, s['x'], s['y'], s['z'], s['rz'])
         if self.kind == 'xbox360':
@@ -152,6 +192,7 @@ class Conn:
         self.wlock = threading.Lock()
         self.ids64 = False
         self.listening = False
+        self.held = []
 
     def send(self, ptype, hdr=b'', data=b'', pid=0):
         h = struct.pack('<II', ptype, len(hdr) + len(data)) + struct.pack('<Q' if self.ids64 else '<I', pid)
@@ -179,10 +220,15 @@ class Conn:
         self.send(EP_INFO, bytes(types) + bytes(intervals) + bytes(ifs) + struct.pack('<32H', *mps))
 
     def send_report(self, guide=False):
-        """The current state on the IN endpoint (if the host listens)"""
+        """The current state on the IN endpoint (if the host listens; the
+        vendor device keeps its reports until the host listens again, as a
+        device's endpoint holds them until polled)"""
+        r = self.pad.guide_report() if guide else self.pad.report()
+        if self.pad.kind == 'vendor' and r is not None and not self.listening:
+            self.held.append(r)
+            return
         if not self.listening:
             return
-        r = self.pad.guide_report() if guide else self.pad.report()
         if r is not None:
             self.send(INTERRUPT_PACKET, struct.pack('<BBH', EP_IN, OK, len(r)), r)
 
@@ -198,27 +244,51 @@ class Conn:
                 reply = p.config_desc()
             elif kind == 3:
                 reply = p.string(i)
-            elif kind == 0x22 and p.kind == 'hid':
-                reply = HID_REPORT
+            elif kind == 0x22 and p.is_hid():
+                reply = p.report_desc()
             else:
                 reply = None
             if reply is None:
                 reply, status = b'', STALL
         elif rtype & 0x80 and req == 0:                    # GET_STATUS
             reply = b'\0\0'
+        elif rtype == 0xA1 and req == 1 and p.kind == 'vendor':   # GET_REPORT
+            if value == 0x0303:
+                reply = bytes([3]) + p.state['feature']
+            elif value == 0x0101:
+                reply = bytes([1]) + (p.state['in'] or bytes(8))
+            else:
+                reply, status = b'', STALL
         elif rtype == 0xA1 and req == 1 and p.kind == 'hid':   # GET_REPORT
             reply = p.report()
         elif rtype & 0x80:
             reply = bytes(length)
         elif rtype == 0x21 and req == 9:                   # SET_REPORT
             print('padpeer: set_report ' + data.hex(), flush=True)
+            if p.kind == 'vendor':
+                self.vendor_report(value, data)
         if rtype & 0x80:
             reply = reply[:length]
         self.send(CONTROL_PACKET, struct.pack('<BBBBHHH', ep, req, rtype, status, value, index,
                                               len(reply) if rtype & 0x80 else length), reply, pid)
 
+    def vendor_report(self, value, data):
+        """The vendor device: an output report comes back as input report 1;
+        a feature report is kept"""
+        p = self.pad
+        if value == 0x0303 and len(data) == 9 and data[0] == 3:
+            p.state['feature'] = data[1:]
+        elif (value >> 8) == 2 and len(data) == 9 and data[0] == 2:
+            p.state['in'] = data[1:]
+            self.send_report()
+
     def interrupt_out(self, pid, ep, data):
         p = self.pad
+        if p.kind == 'vendor':
+            print('padpeer: out ' + data.hex(), flush=True)
+            self.send(INTERRUPT_PACKET, struct.pack('<BBH', ep, OK, len(data)), pid=pid)
+            self.vendor_report(0x0202, data)
+            return
         if p.kind == 'xbox360' and len(data) >= 5 and data[0] == 0x00 and data[1] == 0x08:
             print(f'padpeer: rumble {data[3]} {data[4]}', flush=True)
         elif p.kind == 'xbox360' and len(data) >= 3 and data[0] == 0x01 and data[1] == 0x03:
@@ -268,10 +338,18 @@ class Conn:
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
                 if body[0] == EP_IN and not self.listening:
                     self.listening = True
-                    self.send_report()
+                    if self.pad.kind != 'vendor':     # (the vendor device only answers what it is sent)
+                        self.send_report()
+                    else:
+                        print(f'padpeer: listening ({len(self.held)} held)', flush=True)
+                        for r in self.held:
+                            self.send(INTERRUPT_PACKET, struct.pack('<BBH', EP_IN, OK, len(r)), r)
+                        self.held = []
             elif ptype == STOP_INTERRUPT_RECEIVING:
                 if body[0] == EP_IN:
                     self.listening = False
+                    if self.pad.kind == 'vendor':
+                        print('padpeer: not listening', flush=True)
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
             elif ptype == INTERRUPT_PACKET:
                 ep, st, n = struct.unpack('<BBH', body[:4])
@@ -294,7 +372,7 @@ def ctl_loop(port, pad, conns):
                     k, v = kv.split('=')
                     if k == 'buttons' and pad.kind == 'xboxone' and (int(v, 0) ^ pad.state['buttons']) & 0x0400:
                         guide = True
-                    pad.state[k] = int(v, 0)
+                    pad.state[k] = bytes.fromhex(v) if pad.kind == 'vendor' else int(v, 0)
                 for conn in list(conns):
                     conn.send_report()
                     if guide:
@@ -309,7 +387,7 @@ def ctl_loop(port, pad, conns):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
-    ap.add_argument('--kind', choices=('xbox360', 'xboxone', 'hid'), required=True)
+    ap.add_argument('--kind', choices=('xbox360', 'xboxone', 'hid', 'vendor'), required=True)
     ap.add_argument('--ctl', type=int)
     a = ap.parse_args()
     pad = Pad(a.kind)

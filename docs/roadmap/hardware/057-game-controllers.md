@@ -6,7 +6,10 @@
   Input (`WM_INPUT` with each controller's HID reports) and `hid.dll`
   (`HidD_*` on a controller's HID path, `HidP_*` on its report
   descriptor; an Xbox controller has the one Windows' Xbox driver
-  gives).  Still to do: raw keyboard and mouse input, HID output and
-  feature reports, `IOCTL_HID_*` through `DeviceIoControl`, the Xbox
+  gives).  A vendor's USB HID device runs on the HID class driver, where
+  `hid.dll` has output and feature reports and `IOCTL_HID_*` through
+  `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  Still to do: raw keyboard and mouse input, Raw Input for class-driver
+  devices, the Xbox
   360 wireless receiver, Bluetooth controllers, force feedback through
   DirectInput, and virtio game pads (QEMU has none).

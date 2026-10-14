@@ -659,6 +659,14 @@ for n in ('Wdf01000.sys', 'WdfLdr.sys'):
 built.append(('\\Tests\\Kmdf\\kmdftest.sys', os.path.join(kmdfdir, 'kmdftest.sys')))
 for n in ('kmdfedu.sys', 'kmdfedu.inf', 'kmdfedu.cat'):
     built.append((f'\\Tests\\KmdfEdu\\{n}', os.path.join(kmdfdir, n)))
+# and the package of vhidmini.sys, Microsoft's virtual HID minidriver sample
+# (vhidmini2, KMDF, MS-PL: its LICENSE.txt beside it) built unchanged, the
+# vhidmini self-test installs with
+# pnputil, with MsHidKmdf.inf, the inbox INF its own includes (mshidkmdf
+# is built into the kernel: kernel/nt/mshidkmdf.c)
+for n in ('vhidmini.sys', 'vhidmini.inf', 'wudf.cat', 'LICENSE.txt'):
+    built.append((f'\\Tests\\VhidMini\\{n}', os.path.join(kmdfdir, 'vhidmini', n)))
+built.append(('\\Windows\\INF\\MsHidKmdf.inf', os.path.join(os.path.dirname(HERE), 'kernel', 'nt', 'MsHidKmdf.inf')))
 # 3a2e. UMDF 2 (step 30.10): Wudfx02000.dll, the user-mode framework, built
 # from the same Windows-Driver-Frameworks source, the driver host
 # WUDFHost.exe and the reflector WUDFRd.sys (tools/umdf/build_umdf.py), where

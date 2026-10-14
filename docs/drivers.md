@@ -68,9 +68,10 @@ administrator (`SeLoadDriverPrivilege`).
 | `pnputil /enum-devices [/connected \| /disconnected] [/class C] [/instanceid ID] [/deviceid ID] [/ids] [/drivers]` | the Plug and Play device tree, with each device's status and driver, its hardware and compatible IDs (`/ids`) and the staged packages that match it (`/drivers`) |
 | `pnputil /disable-device`, `/enable-device`, `/restart-device` (an instance ID, or `/deviceid ID`) | take a device's Windows driver away (query-remove, then remove; a driver may refuse while a program has the device open), start it again, or both; a disabled device stays off across restarts |
 | `pnputil /scan-devices [/instanceid ID] [/search-online [/source URL] [/install]]` | rescan; `/search-online` downloads packages by hardware ID ([below](#downloading-drivers-by-hardware-id)) |
+| `pnputil /remove-device` (an instance ID, or `/deviceid ID`) | removes a device and its driver from the tree; NovaOS removes only root-enumerated devices (`ROOT\...`), the ones a program made |
 
-There is no Device Manager app yet; `pnputil` and programs that call
-setupapi, newdev and cfgmgr32 do its work.
+Device Manager ([above](#device-manager)) shows the same tree;
+programs that call setupapi, newdev and cfgmgr32 do the same work.
 
 ### Kernel drivers as services
 
@@ -139,6 +140,27 @@ they allow it; a child no longer reported is removed. Unplugging a USB
 device sends `IRP_MN_SURPRISE_REMOVAL` and `IRP_MN_REMOVE_DEVICE`,
 children first. A driver that fails to load shows problem code 39, one
 whose signature fails problem code 52.
+
+A root-enumerated device, one with no hardware under it (a virtual
+device such as Microsoft's `vhidmini2` HID sample), is made as
+`devcon install` makes it: `SetupDiCreateDeviceInfo` with
+`DICD_GENERATE_ID` (`ROOT\HIDCLASS\0000`), its hardware ID with
+`SetupDiSetDeviceRegistryProperty`, and `SetupDiCallClassInstaller
+(DIF_REGISTERDEVICE)`. The PnP manager gives it a PDO under the root
+that answers `IRP_MN_QUERY_ID` with those IDs; it shows problem code 28
+until `pnputil /add-driver x.inf /install` installs a package on it, is
+made again from its `Enum\ROOT` key at every boot, and goes with
+`pnputil /remove-device` (`DIF_REMOVE`).
+
+Filter drivers are loaded as Windows loads them: a package's
+`.Filters` section (`AddFilter = service,,section` with
+`FilterPosition = Upper` or `Lower`) writes the device's `UpperFilters`
+or `LowerFilters`, and the stack is built from the bottom: the lower
+filters' `AddDevice`, then the function driver's, then the upper
+filters'. The class key's filters (`Control\Class\{GUID}`) come after the
+device's, as on Windows. An INF's `Include = x.inf` and `Needs =
+section` pull another INF's sections in (from `C:\Windows\INF`, or beside
+the INF).
 
 `pnputil /enum-devices /deviceid ID` shows the device started with its
 driver.
@@ -273,6 +295,21 @@ its own (see [USB client drivers](#usb-client-drivers)). Not done yet:
 `ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
 device wait). NovaOS's own keyboards, mice and game controllers keep
 their built-in drivers.
+
+A KMDF HID driver cannot call `HidRegisterMinidriver` itself (the
+framework owns its dispatch table), so on Windows it sits as a lower
+filter under `mshidkmdf.sys`, a pass-through minidriver: its INF says
+`Include = MsHidKmdf.inf`, `Needs = MsHidKmdf.NT.Services`, which makes
+`mshidkmdf` the function driver, and adds its own driver as a lower
+filter. NovaOS does the same: `mshidkmdf` is built into the kernel
+(`kernel/nt/mshidkmdf.c`), registers with the HID class driver and
+passes every request to the KMDF driver's queues, and NovaOS's own
+`MsHidKmdf.inf` is in `C:\Windows\INF`. Microsoft's `vhidmini2` sample
+(Windows-driver-samples `hid/vhidmini2`, KMDF), built unchanged, installs
+this way on a root-enumerated device and runs through `hid.dll` (the
+devices suite's `vhidmini` boot). The class driver hands the
+minidriver its `HID_XFER_PACKET` with the buffer lengths Windows
+gives: the input length for a set or write, the output length for a get.
 
 ### Cameras: USB Video Class
 
@@ -531,6 +568,7 @@ kept in the repository or the image.
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | NovaOS's keyboard driver, and the HID class driver with `HidUsb` on each other function | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
+| `vhidmini` | Microsoft's `vhidmini2` sample (`vhidmini.sys`, KMDF 1.33, built unchanged) under NovaOS's `mshidkmdf` | none: a root-enumerated device (`ROOT\HIDCLASS\0000`, hardware ID `root\vhidmini`) | `SetupDiCreateDeviceInfo` and `DIF_REGISTERDEVICE`, `Include`/`Needs` and a lower filter, `hid.dll` on it: attributes, strings, caps, feature, input and output reports, `ReadFile`/`WriteFile`, Raw Input, Device Manager, start at boot, `pnputil /remove-device` |
 | `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |
 
 To run one boot's tests, pass their names to `--only` (`python3

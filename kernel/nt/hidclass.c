@@ -572,7 +572,10 @@ static NT_STATUS report_ioctl(Coll *c, NT_IRP *irp, UINT32 code, UINT32 in_len, 
     if (!has_report(c, type, id)) return NT_STATUS_INVALID_PARAMETER;
     HidXferPacket pk = { buf, set ? need : len, id };
     NT_ULONG_PTR n = 0;
-    NT_STATUS st = mini_ioctl(c->f, code, NULL, 0, &pk, sizeof(pk), NULL, &n);
+    /* (the packet in UserBuffer; its size the input length of a report to
+     * the device, the output length of one from it, as hidclass.sys sets
+     * them: KMDF minidrivers such as vhidmini2 check those) */
+    NT_STATUS st = mini_ioctl(c->f, code, NULL, set ? sizeof(pk) : 0, &pk, set ? 0 : sizeof(pk), NULL, &n);
     if (NT_SUCCESS(st)) *info = set ? need : n > len ? len : n;
     return st;
 }
@@ -762,7 +765,7 @@ static NT_STATUS coll_write(Coll *c, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
     if (!c->out_len || len != c->out_len || !buf) return ST_INVALID_BUFFER_SIZE;
     if (!has_report(c, 1, buf[0])) return NT_STATUS_INVALID_PARAMETER;
     HidXferPacket pk = { buf, len, buf[0] };
-    NT_STATUS st = mini_ioctl(c->f, IOCTL_HID_WRITE_REPORT, NULL, 0, &pk, sizeof(pk), NULL, NULL);
+    NT_STATUS st = mini_ioctl(c->f, IOCTL_HID_WRITE_REPORT, NULL, sizeof(pk), &pk, 0, NULL, NULL);
     if (NT_SUCCESS(st)) irp->IoStatus.Information = len;
     return st;
 }

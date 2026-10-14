@@ -145,6 +145,13 @@ UINT32    NtPnpStart(UINT32 node);
 /* Remove a started device's driver (query-remove, remove): it is disabled
  * (problem 22) until NtPnpStart; a driver's veto comes back as its status */
 NTSTATUS  NtPnpStop(UINT32 node);
+/* A root-enumerated device (instance ROOT\<class>\NNNN, a virtual one no
+ * bus finds), as setupapi's DIF_REGISTERDEVICE makes it: its node (an
+ * arrival; @hwids and @compat REG_MULTI_SZ), or 0 */
+UINT32    NtPnpRootAdd(const char *instance, const char *hwids, const char *compat, const char *desc);
+/* Remove root-enumerated device @node (DIF_REMOVE): its driver taken away
+ * as by NtPnpStop (a veto comes back as its status), then its node */
+NTSTATUS  NtPnpRootRemove(UINT32 node);
 /* At boot, once the registry is loaded: start the installed drivers */
 void      NtPnpBoot(void);
 /* The interfaces node @node's driver turned on (at most @max) */

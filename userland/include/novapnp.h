@@ -173,6 +173,21 @@ static inline NTSTATUS nova_pnp_stop(DWORD id)
     return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 5 | (ULONG_PTR)id << 8, NULL);
 }
 
+/* Register a root-enumerated device (setupapi's DIF_REGISTERDEVICE): @n
+ * names it (instance ROOT\<class>\NNNN, hwids, compat, desc); its node ID,
+ * 0, or (DWORD)-1 without SeLoadDriverPrivilege */
+static inline DWORD nova_pnp_root_add(const NovaPnpNode *n)
+{
+    return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 7, (void *)n);
+}
+
+/* Remove root-enumerated device @id (DIF_REMOVE): its driver goes as by
+ * nova_pnp_stop (a veto comes back), then its node; the NTSTATUS */
+static inline NTSTATUS nova_pnp_root_remove(DWORD id)
+{
+    return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 8 | (ULONG_PTR)id << 8, NULL);
+}
+
 /* A resource a node's device decodes (kernel/io/pnp.h's PnpResource):
  * its memory and I/O ranges and its interrupt (a PCI function's) */
 #define NOVA_PNP_RES_MEMORY    1

@@ -15,6 +15,7 @@
  */
 #include "um_internal.h"
 #include "../nt/nt.h"
+#include "../io/pnp.h"
 #include "../ke/probe.h"
 #include "../ke/printf.h"
 #include "../lib/string.h"
@@ -127,7 +128,11 @@ static UINT64 sys_unload_driver(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  *      (8 at most), how many
  *   4  start the driver installed on node @id: 0, or its problem code
  *   5  remove its driver (query-remove, remove): the NTSTATUS
- * 4 and 5 need SeLoadDriverPrivilege (an administrator), as on Windows. */
+ *   7  register a root-enumerated device (setupapi's DIF_REGISTERDEVICE):
+ *      @ptr a node (its instance ROOT\<class>\NNNN, hardware and compatible
+ *      IDs, description); its node ID, 0, or -1 without the privilege
+ *   8  remove root-enumerated device @id (DIF_REMOVE): the NTSTATUS
+ * 4, 5, 7 and 8 need SeLoadDriverPrivilege (an administrator), as on Windows. */
 UINT64 UmPnpDriverCtl(UINT32 op, UINT32 id, UINT64 ptr)
 {
     if (op == 3) {
@@ -136,9 +141,22 @@ UINT64 UmPnpDriverCtl(UINT32 op, UINT32 id, UINT64 ptr)
         if (n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, g, sizeof(NT_GUID) * (size_t)n))) return 0;
         return (UINT64)n;
     }
-    if (!um_privilege_held(SE_LOAD_DRIVER_PRIVILEGE)) return op == 4 ? (UINT64)-1 : STATUS_PRIVILEGE_NOT_HELD;
+    if (!um_privilege_held(SE_LOAD_DRIVER_PRIVILEGE)) return op == 4 || op == 7 ? (UINT64)-1 : STATUS_PRIVILEGE_NOT_HELD;
     if (op == 4) return NtPnpStart(id);
     if (op == 5) return (UINT32)NtPnpStop(id);
+    if (op == 7) {
+        PnpNode *n = kmalloc(sizeof(PnpNode));
+        UINT32 r = 0;
+        if (n && NT_SUCCESS(CopyFromUser(n, (const void *)(uintptr_t)ptr, sizeof(*n)))) {
+            n->instance[sizeof(n->instance) - 1] = n->desc[sizeof(n->desc) - 1] = 0;
+            n->hwids[sizeof(n->hwids) - 2] = n->hwids[sizeof(n->hwids) - 1] = 0;
+            n->compat[sizeof(n->compat) - 2] = n->compat[sizeof(n->compat) - 1] = 0;
+            r = NtPnpRootAdd(n->instance, n->hwids, n->compat, n->desc);
+        }
+        kfree(n);
+        return r;
+    }
+    if (op == 8) return (UINT32)NtPnpRootRemove(id);
     return 0;
 }
 

@@ -39,7 +39,7 @@ The exit status counts failed and unrun programs; skips do not fail the run.  --
 a Markdown pass/fail table, one row per program (the nightly workflow,
 .github/workflows/nightly.yml, posts it).
 """
-import argparse, json, http.server, math, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, zipfile
+import argparse, hashlib, json, http.server, math, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, accel_args
@@ -430,10 +430,32 @@ def make_xlsx(path, numbers):
                                                f'<worksheet xmlns="{s}"><sheetData>{rows}</sheetData></worksheet>')
 
 
+def bencode(v):
+    """@v (bytes, str, int, list or dict) in BitTorrent's encoding"""
+    if isinstance(v, int):
+        return b'i%de' % v
+    if isinstance(v, str):
+        v = v.encode()
+    if isinstance(v, bytes):
+        return b'%d:%s' % (len(v), v)
+    if isinstance(v, list):
+        return b'l' + b''.join(map(bencode, v)) + b'e'
+    return b'd' + b''.join(bencode(k) + bencode(v[k]) for k in sorted(v)) + b'e'
+
+
+def make_torrent(name, data):
+    """A .torrent of one file, @name holding @data (no tracker: nothing to
+    reach from the corpus VM)"""
+    piece = 16384
+    pieces = b''.join(hashlib.sha1(data[i:i + piece]).digest() for i in range(0, len(data), piece))
+    return bencode({'created by': 'NovaOS app corpus', 'creation date': 1767268800,
+                    'info': {'name': name, 'length': len(data), 'piece length': piece, 'pieces': pieces}})
+
+
 def make_data(d):
     """C:\\Apps\\data: text to search, a PDF, a Word document and an Excel
-    workbook, an e-mail message, two files to compare and a git repository
-    to clone"""
+    workbook, an e-mail message, a .torrent, two files to compare and a git
+    repository to clone"""
     os.makedirs(d)
     with open(os.path.join(d, 'hello.txt'), 'w', newline='\n') as f:
         f.write(SAMPLE)
@@ -451,6 +473,8 @@ def make_data(d):
                 'Content-Type: text/plain; charset=utf-8\n\n' + SAMPLE)
     with open(os.path.join(d, 'ab.json'), 'w') as f:
         f.write('{"a": 40, "b": 2}\n')
+    with open(os.path.join(d, 'corpus.torrent'), 'wb') as f:
+        f.write(make_torrent('hello.txt', SAMPLE.encode()))
     work = tempfile.mkdtemp(prefix='corpus-git')
     env = dict(os.environ, GIT_AUTHOR_NAME='NovaOS', GIT_AUTHOR_EMAIL='ci@novaos.invalid',
                GIT_COMMITTER_NAME='NovaOS', GIT_COMMITTER_EMAIL='ci@novaos.invalid',

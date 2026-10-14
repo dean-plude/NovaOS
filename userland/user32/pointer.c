@@ -819,6 +819,13 @@ USERAPI BOOL GetPointerFramePenInfo(UINT32 id, UINT32 *n, void *info)
 /* History: the message's own entry */
 USERAPI BOOL GetPointerPenInfoHistory(UINT32 id, UINT32 *n, void *info) { return GetPointerFramePenInfo(id, n, info); }
 USERAPI BOOL GetPointerInfoHistory(UINT32 id, UINT32 *n, void *info) { return GetPointerFrameInfo(id, n, info); }
+USERAPI BOOL GetPointerFrameTouchInfoHistory(UINT32 id, UINT32 *entries, UINT32 *count, void *info)
+{
+    if (!entries || !count) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    if (info && *entries < 1) { *entries = 1; SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+    *entries = 1;
+    return frame_of(id, count, info, 1);
+}
 USERAPI BOOL GetPointerFramePenInfoHistory(UINT32 id, UINT32 *entries, UINT32 *count, void *info)
 {
     if (!entries || !count) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }

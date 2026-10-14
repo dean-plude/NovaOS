@@ -219,10 +219,10 @@
       "url": "https://sourceforge.net/projects/qbittorrent/files/qbittorrent-win32/qbittorrent-5.0.2/qbittorrent_5.0.2_x64_setup.exe/download",
       "file": "qbittorrent_5.0.2_x64_setup.exe",
       "dest": null,
-      "exe": null,
+      "exe": "qBittorrent\\qbittorrent.exe",
       "kind": "setup",
       "size_mb": 40,
-      "note": "32-bit installer (NSIS); Qt application, untested",
+      "note": "64-bit Qt program, NSIS installer; opens .torrent files on NovaOS (nightly corpus)",
       "label": "qB",
       "color": "#2E7AC8"
     },

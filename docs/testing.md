@@ -209,87 +209,87 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   in GetLocalTime and localtime; Berlin, Sydney and Los Angeles rules)
   and `tzutil /s UTC`, `edgeupdtest` (Task Scheduler 2.0, DPAPI,
   UrlCombine and the other APIs Microsoft Edge Update needs, 64- and
-  32-bit), `setuptest` (run as administrator, Rich Edit with RTF,
-  variant arithmetic, a 300 MB file on C:, 64- and 32-bit), `msxmltest`
-  (MSXML 6 DOM, XPath, XSL Patterns, SAX2 and registration, 64- and
-  32-bit), `cabtest` (cabinet.dll: MSZIP and LZX cabinets, an attached
-  container, a cabinet set; 64- and 32-bit), `authtest` (Authenticode:
-  WinVerifyTrust, signer chains and timestamps, CryptQueryObject; 64-
-  and 32-bit), `ndrtest` (rpcrt4's NDR engine: stubless proxies,
-  NdrStubCall2, CStdStubBuffer and the NdrDll* entry points, 64- and
-  32-bit), `regtest` (isolated 32- and 64-bit machine registry views,
-  shared keys, and registry keys and values changed concurrently),
-  `msiqtest` (Windows Installer: 32-bit packages into SysWOW64, product
-  information by context, source lists, patch applicability; 64- and
-  32-bit), `chrometest` (Chromium start-up: read-only shared memory,
-  handle lists, ordinal exports; 64- and 32-bit), `svctest` (a real
-  service: start with arguments, status handshake, controls, stop and
-  delete; a LocalSystem service runs elevated; CopyFile keeps file
-  times; 64- and 32-bit), `comoop` (cross-process COM: LocalServer32
-  activation, the standard marshaler and RPC channel, the IDispatch
-  proxy/stub, BSTR/VARIANT marshalling; 64- and 32-bit clients and
-  servers), `etwtest` (event-tracing controllers with no sessions:
-  StartTrace, StopTrace, ControlTrace, EnableTrace, QueryAllTraces,
-  OpenTrace, ProcessTrace, CloseTrace; 64- and 32-bit), `qtwebtest` (the
-  calls Qt WebEngine imports: Bluetooth and SDP records, Direct3D 12,
-  WinUSB, AppContainer profiles, proxy resolver, security zones and
-  more; 64- and 32-bit), `cachetest` (saved files of drive C: let go of
-  and read back from the data disk: memory, ReadFile, a mapped view,
-  renamed, hard-linked and emptied files, `shutdown /r`, `cachetest
-  after`), `qtthemetest` (Windows.UI.ViewManagement UISettings and
-  UIViewSettings as Qt reads them, ColorValuesChanged, Schannel's cipher
-  suites; 64- and 32-bit), `samplertest` (a sampling profiler:
-  GetThreadContext of a waiting thread, unwound with RtlVirtualUnwind),
-  `hwcheck` touchpad interrupt: a modelled Intel GPIO controller from
-  the ACPI tables, its interrupt routed, the touchpad's GpioInt pin set
-  up and its reports read on the interrupt instead of polling,
-  `proclisttest` (another program's image name, user and command line,
-  as Edge Update looks for its install worker; 64- and 32-bit),
-  `rawtest` (the mouse and the keyboard through Raw Input: device list,
-  names and info; WM_INPUT with relative motion, button flags and the
-  wheel; keys through GetRawInputBuffer with RIDEV_NOLEGACY; 64- and
-  32-bit), `libmtest` (the 32-bit C runtime's `_libm_sse2_*` and `_CI*`
-  math, which MSVC-built SDL2 imports), `warptest` (SetCursorPos and
-  ClipCursor: the pointer moved and confined by the window in front,
-  WM_MOUSEMOVE but no WM_INPUT for a warp, the mouse kept in the
-  rectangle, a background process refused; 64- and 32-bit),
-  `wvsetuptest` (a 300 MB file mapped whole, wer.dll's report API and
-  FlsGetValue2, as the WebView2 runtime's setup needs; 64- and 32-bit),
-  `wvstarttest` (COM's apartment in the TEB, TerminateProcess on itself,
-  FLS slots and the functions the WebView2 runtime's browser process
-  calls), `xpwin` (windows of different processes: SetParent,
-  SetWindowPos, ShowWindow and messages across processes, GetDC on
-  another process's window; 64- and 32-bit), `dcomptest` (Direct3D
-  without a GPU as Chromium's software compositor uses it: the Basic
-  Render Driver adapter, a WARP device, DirectComposition showing a swap
-  chain, dirty-rectangle presents, a GPU process's window parented in
-  another process's; 64- and 32-bit), `schanneltest stores` (a
-  certificate found through a collection of collections, a root's
-  extended key usages, and `InternetGetConnectedState` offline without a
-  network; 64- and 32-bit), driver packages staged in the driver store
-  and published as oemN.inf from a program (`DiInstallDriver`,
-  `SetupCopyOEMInf`), with `pnputil` and from an MSI (`drvtest exe`,
-  `zip`, `msi`), `imgsharetest` (a second process of a running program
-  shares its image pages from the image cache; 64- and 32-bit; a commit
-  of 15/16 of the RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on
-  x64 and `_chkstk` on x86, and its half-precision conversions, which
-  LLVM's JIT in Mesa looks up), `avxtest` (the AVX state: CPUID's
-  OSXSAVE, AVX and F16C and XCR0 as the kernel sets them, YMM0-15 kept
-  across context switches, in an exception's `CONTEXT_XSTATE` and
-  through `NtContinue`, and read from a suspended thread by
-  `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
-  back once per signal or on its timeout, a callback sets its own wait
-  again, setting a wait never waits for a running callback, cancelling
-  and closing from a callback; 64- and 32-bit), Task Manager opened with
-  Ctrl+Shift+Esc: `winhello` listed, selected by typing its name and
-  ended with Delete; the Performance, Details and Services views,
-  `evtlogtest` (ReportEvent, ReadEventLog,
-  EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot, service,
-  driver-failure and crash events) and Event Viewer from the Start menu
-  finding its event, programs started from the Start menu (Win+S, the
-  name, Enter): `winhello`, a GUI program, with no Terminal window, and
-  `hello`, a console program, in a Terminal, `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
+  32-bit), `setuptest` (UAC on, run as administrator, Rich Edit with
+  RTF, variant arithmetic, a 300 MB file on C:, 64- and 32-bit),
+  `msxmltest` (MSXML 6 DOM, XPath, XSL Patterns, SAX2 and registration,
+  64- and 32-bit), `cabtest` (cabinet.dll: MSZIP and LZX cabinets, an
+  attached container, a cabinet set; 64- and 32-bit), `authtest`
+  (Authenticode: WinVerifyTrust, signer chains and timestamps,
+  CryptQueryObject; 64- and 32-bit), `ndrtest` (rpcrt4's NDR engine:
+  stubless proxies, NdrStubCall2, CStdStubBuffer and the NdrDll* entry
+  points, 64- and 32-bit), `regtest` (isolated 32- and 64-bit machine
+  registry views, shared keys, and registry keys and values changed
+  concurrently), `msiqtest` (Windows Installer: 32-bit packages into
+  SysWOW64, product information by context, source lists, patch
+  applicability; 64- and 32-bit), `chrometest` (Chromium start-up:
+  read-only shared memory, handle lists, ordinal exports; 64- and
+  32-bit), `svctest` (a real service: start with arguments, status
+  handshake, controls, stop and delete; a LocalSystem service runs
+  elevated; CopyFile keeps file times; 64- and 32-bit), `comoop`
+  (cross-process COM: LocalServer32 activation, the standard marshaler
+  and RPC channel, the IDispatch proxy/stub, BSTR/VARIANT marshalling;
+  64- and 32-bit clients and servers), `etwtest` (event-tracing
+  controllers with no sessions: StartTrace, StopTrace, ControlTrace,
+  EnableTrace, QueryAllTraces, OpenTrace, ProcessTrace, CloseTrace; 64-
+  and 32-bit), `qtwebtest` (the calls Qt WebEngine imports: Bluetooth
+  and SDP records, Direct3D 12, WinUSB, AppContainer profiles, proxy
+  resolver, security zones and more; 64- and 32-bit), `cachetest` (saved
+  files of drive C: let go of and read back from the data disk: memory,
+  ReadFile, a mapped view, renamed, hard-linked and emptied files,
+  `shutdown /r`, `cachetest after`), `qtthemetest`
+  (Windows.UI.ViewManagement UISettings and UIViewSettings as Qt reads
+  them, ColorValuesChanged, Schannel's cipher suites; 64- and 32-bit),
+  `samplertest` (a sampling profiler: GetThreadContext of a waiting
+  thread, unwound with RtlVirtualUnwind), `hwcheck` touchpad interrupt:
+  a modelled Intel GPIO controller from the ACPI tables, its interrupt
+  routed, the touchpad's GpioInt pin set up and its reports read on the
+  interrupt instead of polling, `proclisttest` (another program's image
+  name, user and command line, as Edge Update looks for its install
+  worker; 64- and 32-bit), `rawtest` (the mouse and the keyboard through
+  Raw Input: device list, names and info; WM_INPUT with relative motion,
+  button flags and the wheel; keys through GetRawInputBuffer with
+  RIDEV_NOLEGACY; 64- and 32-bit), `libmtest` (the 32-bit C runtime's
+  `_libm_sse2_*` and `_CI*` math, which MSVC-built SDL2 imports),
+  `warptest` (SetCursorPos and ClipCursor: the pointer moved and
+  confined by the window in front, WM_MOUSEMOVE but no WM_INPUT for a
+  warp, the mouse kept in the rectangle, a background process refused;
+  64- and 32-bit), `wvsetuptest` (a 300 MB file mapped whole, wer.dll's
+  report API and FlsGetValue2, as the WebView2 runtime's setup needs;
+  64- and 32-bit), `wvstarttest` (COM's apartment in the TEB,
+  TerminateProcess on itself, FLS slots and the functions the WebView2
+  runtime's browser process calls), `xpwin` (windows of different
+  processes: SetParent, SetWindowPos, ShowWindow and messages across
+  processes, GetDC on another process's window; 64- and 32-bit),
+  `dcomptest` (Direct3D without a GPU as Chromium's software compositor
+  uses it: the Basic Render Driver adapter, a WARP device,
+  DirectComposition showing a swap chain, dirty-rectangle presents, a
+  GPU process's window parented in another process's; 64- and 32-bit),
+  `schanneltest stores` (a certificate found through a collection of
+  collections, a root's extended key usages, and
+  `InternetGetConnectedState` offline without a network; 64- and
+  32-bit), driver packages staged in the driver store and published as
+  oemN.inf from a program (`DiInstallDriver`, `SetupCopyOEMInf`), with
+  `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`),
+  `imgsharetest` (a second process of a running program shares its image
+  pages from the image cache; 64- and 32-bit; a commit of 15/16 of the
+  RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on x64 and
+  `_chkstk` on x86, and its half-precision conversions, which LLVM's JIT
+  in Mesa looks up), `avxtest` (the AVX state: CPUID's OSXSAVE, AVX and
+  F16C and XCR0 as the kernel sets them, YMM0-15 kept across context
+  switches, in an exception's `CONTEXT_XSTATE` and through `NtContinue`,
+  and read from a suspended thread by `GetThreadContext`), `tpwaittest`
+  (thread-pool waits: a wait calls back once per signal or on its
+  timeout, a callback sets its own wait again, setting a wait never
+  waits for a running callback, cancelling and closing from a callback;
+  64- and 32-bit), Task Manager opened with Ctrl+Shift+Esc: `winhello`
+  listed, selected by typing its name and ended with Delete; the
+  Performance, Details and Services views, `evtlogtest` (ReportEvent,
+  ReadEventLog, EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot,
+  service, driver-failure and crash events) and Event Viewer from the
+  Start menu finding its event, programs started from the Start menu
+  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
+  window, and `hello`, a console program, in a Terminal, `crash kernel`,
+  a deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
@@ -366,7 +366,7 @@ input ring, NTFS power-cut recovery).
 
 `.github/workflows/nightly.yml` builds `main` and runs `tools/appcorpus.py`,
 one VM and one job per program: the official Windows x64 releases of
-<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita (draws a stroke and saves the image), PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY, WinSCP (a Delphi VCL program: its Login dialog), LibreOffice (Writer and Calc open, edit and save a .docx and an .xlsx), Thunderbird (opens an e-mail message) and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
+<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita (draws a stroke and saves the image), PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY, WinSCP (a Delphi VCL program: its Login dialog), LibreOffice (Writer and Calc open, edit and save a .docx and an .xlsx), Thunderbird (opens an e-mail message), Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton) and qBittorrent (a Qt 6 program: opens a .torrent)<!-- END generated:corpus -->.
 Each program is downloaded (and cached), unpacked onto drive C: or
 installed with its own installer or the App Store, and driven by typed
 commands, clicks and keys. The windowed programs' screenshots must match

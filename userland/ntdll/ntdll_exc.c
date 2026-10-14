@@ -736,6 +736,11 @@ VOID NTAPI RtlUnwindEx(PVOID target_frame, PVOID target_ip, PEXCEPTION_RECORD re
     ExcState **h = exc_live(&cur);
     ExcState *in = *h;
     if (in && !in->dispatch && !in->frame_ctx) in = 0;              /* (in a catch block) */
+    /* A local unwind from inside a handler (MSVC's C++ runtime leaving a
+     * __try in its own frame handler with _local_unwind): the target frame
+     * is below the frame being handled, so the walk starts at the caller,
+     * as for an unwind from no handler, not at that frame */
+    if (in && target_frame && (DWORD64)target_frame < (in->frame_ctx ? in->frame_ctx : in->dispatch)->Rsp) in = 0;
     if (in && in->frame_ctx) {
         cur = *in->frame_ctx;
     } else if (in) {

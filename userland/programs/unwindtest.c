@@ -5,7 +5,9 @@
  * starts a second, "collided" unwind to the landing pad with a CONTEXT it
  * never filled in (only scratch space on Windows).  A landing pad that
  * ends in _Unwind_Resume calls RtlUnwindEx from no handler at all, again
- * with an empty CONTEXT.
+ * with an empty CONTEXT.  An unwind started inside a frame handler to a
+ * frame below the one being unwound (MSVC's _local_unwind in its own
+ * frame handler: qBittorrent) starts from its caller.
  *
  * Also the consolidating unwind of Microsoft's own C++ runtime
  * (vcruntime140, which programs built with MSVC may carry or install):
@@ -58,11 +60,20 @@ EXCEPTION_DISPOSITION catch_handler(EXCEPTION_RECORD *rec, void *frame, CONTEXT 
     return ExceptionContinueSearch;
 }
 
-/* A frame between the thrower and the catcher with a cleanup */
+UINT64 resumer(void);
+static int local_unwind;
+static UINT64 local_result;
+
+/* A frame between the thrower and the catcher with a cleanup; with
+ * @local_unwind the cleanup unwinds within its own frames (MSVC's C++
+ * runtime leaves a __try in its frame handler with _local_unwind) */
 EXCEPTION_DISPOSITION cleanup_handler(EXCEPTION_RECORD *rec, void *frame, CONTEXT *ctx, DISPATCHER_CONTEXT *dc)
 {
     (void)frame; (void)ctx; (void)dc;
-    if ((rec->ExceptionFlags & EXCEPTION_UNWINDING) && rec->ExceptionCode == STATUS_GCC_THROW) cleanups++;
+    if ((rec->ExceptionFlags & EXCEPTION_UNWINDING) && rec->ExceptionCode == STATUS_GCC_THROW) {
+        cleanups++;
+        if (local_unwind) local_result = resumer();
+    }
     return ExceptionContinueSearch;
 }
 
@@ -218,7 +229,6 @@ __asm__(
     ".seh_endproc\n");
 
 UINT64 catcher(void);
-UINT64 resumer(void);
 UINT64 msvc_catcher(void);
 
 /* A frame above the catching one, with an __except for what its catch
@@ -287,6 +297,16 @@ int main(void)
     CHECK("unwind from no handler resumes in the target frame", r == 0x99);
     CHECK("its RAX is RtlUnwindEx's return value", resumed_rax == 0x4321);
     CHECK("no trap flag there either", !(resumed_flags & 0x100));
+
+    /* an unwind inside a frame handler, to a frame below the one being
+     * unwound: it lands there, and the outer unwind carries on */
+    target_calls = cleanups = 0;
+    landed_rax = landed_rdx = resumed_rax = 0;
+    local_unwind = 1;
+    r = catcher();
+    local_unwind = 0;
+    CHECK("a local unwind in a frame handler resumes in its own target frame", local_result == 0x99 && resumed_rax == 0x4321);
+    CHECK("the outer unwind still lands with the frame's registers", r == 0x77 && landed_rax == 0x1234 && cleanups == 1);
 
     /* MSVC-style catch block run by a consolidating unwind */
     r = outer_try();

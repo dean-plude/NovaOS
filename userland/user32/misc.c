@@ -735,6 +735,43 @@ USERAPI BOOL ExitWindowsEx(UINT flags, DWORD reason)
     return FALSE;
 }
 USERAPI BOOL LockWorkStation(void) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+/* A program's reason to hold a shutdown back ("Saving torrent
+ * progress..."), kept on its window (a copy of the text) until it is
+ * destroyed; NovaOS's shut down waits for no program, so nothing shows
+ * it yet */
+#define BLOCK_REASON L"NovaShutdownBlockReason"
+USERAPI BOOL ShutdownBlockReasonDestroy(HWND h)
+{
+    if (!IsWindow(h)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    WCHAR *old = RemovePropW(h, BLOCK_REASON);
+    if (old) HeapFree(GetProcessHeap(), 0, old);
+    return TRUE;
+}
+USERAPI BOOL ShutdownBlockReasonCreate(HWND h, LPCWSTR reason)
+{
+    if (!IsWindow(h) || !reason) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    size_t n = (lstrlenW(reason) + 1) * sizeof(WCHAR);
+    WCHAR *copy = HeapAlloc(GetProcessHeap(), 0, n);
+    if (!copy) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+    memcpy(copy, reason, n);
+    ShutdownBlockReasonDestroy(h);
+    if (SetPropW(h, BLOCK_REASON, copy)) return TRUE;
+    HeapFree(GetProcessHeap(), 0, copy);
+    return FALSE;
+}
+USERAPI BOOL ShutdownBlockReasonQuery(HWND h, LPWSTR buf, DWORD *n)
+{
+    if (!IsWindow(h) || !n) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    const WCHAR *r = GetPropW(h, BLOCK_REASON);
+    if (!r) { SetLastError(ERROR_NOT_FOUND); return FALSE; }
+    DWORD need = (DWORD)lstrlenW(r) + 1;
+    if (buf) {
+        if (*n < need) { *n = need; SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+        memcpy(buf, r, need * sizeof(WCHAR));
+    }
+    *n = need;
+    return TRUE;
+}
 
 USERAPI BOOL ChangeWindowMessageFilterEx(HWND h, UINT msg, DWORD action, void *cf) { (void)h; (void)msg; (void)action; (void)cf; return TRUE; }
 USERAPI BOOL ChangeWindowMessageFilter(UINT msg, DWORD f) { (void)msg; (void)f; return TRUE; }

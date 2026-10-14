@@ -2,7 +2,8 @@
  * GOG's, NSIS's), 64- and 32-bit.
  *
  * Elevation: the desktop user's token is the limited half of an
- * administrator's (TokenElevationType limited, IsUserAnAdmin false);
+ * administrator's (TokenElevationType limited, IsUserAnAdmin false) and
+ * UAC is on (CheckElevationEnabled, EnableLUA);
  * ShellExecuteEx's "runas" starts a program elevated (TokenElevation,
  * Administrators enabled, high integrity), a program whose manifest asks
  * for administrator starts elevated (setupadmin.exe), and a plain
@@ -112,6 +113,16 @@ static void elevation(void)
     CHECK("not elevated: IsUserAnAdmin", !IsUserAnAdmin());
     CHECK("not elevated: Administrators deny-only", !in_admins());
     CHECK("not elevated: medium integrity", integrity() == 0x2000);
+    {   /* UAC is on: the NSIS UAC plug-in's test before it uses "runas" */
+        DWORD (WINAPI *check)(BOOL *) = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CheckElevationEnabled");
+        BOOL on = FALSE;
+        HKEY k;
+        DWORD lua = 0, n = sizeof(lua);
+        CHECK("CheckElevationEnabled: UAC on", check && check(&on) == 0 && on);
+        CHECK("EnableLUA 1", !RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                                            0, KEY_READ, &k) &&
+                             !RegQueryValueExW(k, L"EnableLUA", NULL, NULL, (BYTE *)&lua, &n) && lua == 1);
+    }
 
     SEI sei;
     memset(&sei, 0, sizeof(sei));

@@ -373,6 +373,9 @@ NT_EXPORT_DATA(ntoskrnl.exe, KeNumberProcessors)
 NT_EXPORT_DATA(ntoskrnl.exe, KiBugCheckData)
 NT_EXPORT_DATA(ntoskrnl.exe, NtBuildNumber)
 NT_EXPORT_DATA(ntoskrnl.exe, SeExports)
+/* hidclass.sys */
+NT_EXPORT(hidclass.sys, HidNotifyPresence)
+NT_EXPORT(hidclass.sys, HidRegisterMinidriver)
 /* usbd.sys */
 NT_EXPORT(usbd.sys, USBD_CreateConfigurationRequest)
 NT_EXPORT(usbd.sys, USBD_CreateConfigurationRequestEx)

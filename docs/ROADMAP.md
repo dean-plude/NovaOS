@@ -542,8 +542,11 @@ item ends when a named program or test demonstrates it.
   Input (`WM_INPUT` with each controller's HID reports) and `hid.dll`
   (`HidD_*` on a controller's HID path, `HidP_*` on its report
   descriptor; an Xbox controller has the one Windows' Xbox driver
-  gives).  Still to do: raw keyboard and mouse input, HID output and
-  feature reports, `IOCTL_HID_*` through `DeviceIoControl`, the Xbox
+  gives).  A vendor's USB HID device runs on the HID class driver, where
+  `hid.dll` has output and feature reports and `IOCTL_HID_*` through
+  `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  Still to do: raw keyboard and mouse input, Raw Input for class-driver
+  devices, the Xbox
   360 wireless receiver, Bluetooth controllers, force feedback through
   DirectInput, and virtio game pads (QEMU has none).
 - Plug and Play: a device tree the Windows way.  Devices plugged in or
@@ -815,8 +818,9 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
   Storport host runs virtio-win's `viostor.sys` on a QEMU virtio-blk disk,
   and NovaOS mounts the NTFS volume on it.
 
-Later, only when a target device needs them: HID class, PortCls and
-AVStream drivers, and the full WDDM render path (step 25.3 onwards).
+The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
+minidriver) is built; test `hid`.  Later, only when a target device
+needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
 
 ---
 

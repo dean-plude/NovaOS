@@ -14,8 +14,10 @@
  * device DEVINST 0x10000 + its slot, a child of its USB device's node, with
  * the HID instance ID and interface path hid.dll opens; the tree's own
  * node for a USB game controller's HID function is left out in its
- * favour.  GUID_DEVINTERFACE_HID lists only them (a HID keyboard or mouse
- * is not opened through hid.dll on NovaOS); every other interface class
+ * favour.  GUID_DEVINTERFACE_HID lists them and the collections the
+ * kernel's HID class driver runs (kernel/nt/hidclass.c, which turns the
+ * interface on as Windows' does); a HID keyboard or mouse NovaOS's own
+ * drivers run is not opened through hid.dll.  Every other interface class
  * lists the tree's nodes that expose it (nova_pnp_interfaces).
  */
 #include <windows.h>
@@ -517,6 +519,24 @@ static ULONG iface_list(const GUID *cls, const char *id, ULONG flags, WCHAR *out
             if (id && id[0] && !(pad_node(slot, &node) && ieq(node.instance, id))) continue;
             int len = nova_pad_path(&i, path, TRUE) + 1;
             for (int k = 0; k < len; k++, n++) if (out && n < cap) out[n] = path[k];
+        }
+        /* and the collections the HID class driver runs (the interfaces it
+         * turned on: a USB HID device on hidusb, a vendor's minidriver) */
+        NovaPnpNode node;
+        DWORD count = nova_pnp_count();
+        for (DWORD dn = 1; dn <= count; dn++) {
+            if (!nova_pnp_node(dn, &node) || !nova_pnp_prefix(node.instance, "HID\\")) continue;
+            if (!present(&node) && !(flags & CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES)) continue;
+            if (id && id[0] && !ieq(node.instance, id)) continue;
+            GUID w[8];
+            int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)node.id << 8, w);
+            for (int j = 0; j < m && j < 8; j++) {
+                if (memcmp(&w[j], cls, sizeof(GUID))) continue;
+                nova_pnp_iface_path(&node, cls, path, 200);
+                int len = lstrlenW(path) + 1;
+                for (int c = 0; c < len; c++, n++) if (out && n < cap) out[n] = path[c];
+                break;
+            }
         }
     } else if (cls) {
         NovaPnpNode node;

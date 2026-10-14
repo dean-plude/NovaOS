@@ -35,10 +35,16 @@
  * another driver (ZwLoadDriver: WdfLdr.sys loads Wdf01000.sys from the
  * KMDF driver's DriverEntry), so loads nest.
  *
+ * A few services are drivers built into the kernel rather than files
+ * (hidusb.c's "HidUsb", which Windows' input.inf runs from hidusb.sys):
+ * NtDrvLoad gives them a driver object and calls their DriverEntry the
+ * same way, with no image to map or check; they are never unloaded.
+ *
  * Loads and unloads run under the big kernel lock.
  */
 #include "nt.h"
 #include "ci.h"
+#include "hidclass.h"
 #include "../ldr/ldr.h"
 #include "../ke/printf.h"
 #include "../lib/string.h"
@@ -516,6 +522,11 @@ static NtDriver *load_export_driver(const char *image)
     return drv;
 }
 
+/* The drivers built into the kernel, by service name */
+static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; } g_builtin[] = {
+    { "HidUsb", "hidusb.sys", HidUsbDriverEntry },
+};
+
 NTSTATUS NtDrvLoad(const char *service)
 {
     if (!g_ready) return STATUS_INSUFFICIENT_RESOURCES;
@@ -523,14 +534,24 @@ NTSTATUS NtDrvLoad(const char *service)
     if (g_nloading == LOAD_DEPTH) return STATUS_INSUFFICIENT_RESOURCES;
 
     char path[260];
-    image_path(service, path, sizeof(path));
     const char *image = path;
-    for (const char *c = path; *c; c++) if (*c == '\\') image = c + 1;
-    if (find_image(image)) return ST_IMAGE_ALREADY_LOADED;      /* (loaded as an export driver) */
-
     Mapped m;
-    NTSTATUS st = map_image(path, image, &m);
-    if (!NT_SUCCESS(st)) return st;
+    NTSTATUS st;
+    NT_DRIVER_INITIALIZE builtin = NULL;
+    for (unsigned i = 0; i < sizeof(g_builtin) / sizeof(g_builtin[0]); i++)
+        if (same_ci(g_builtin[i].service, service)) {
+            builtin = g_builtin[i].entry;
+            ksnprintf(path, sizeof(path), "C:\\Windows\\System32\\drivers\\%s", g_builtin[i].image);
+            image = path + strlen("C:\\Windows\\System32\\drivers\\");
+            memset(&m, 0, sizeof(m));
+        }
+    if (!builtin) {
+        image_path(service, path, sizeof(path));
+        for (const char *c = path; *c; c++) if (*c == '\\') image = c + 1;
+        if (find_image(image)) return ST_IMAGE_ALREADY_LOADED;      /* (loaded as an export driver) */
+        st = map_image(path, image, &m);
+        if (!NT_SUCCESS(st)) return st;
+    }
 
     /* The driver object, as the I/O manager gives it to DriverEntry */
     NtDriver *drv = new_driver(service, image, path, &m);
@@ -540,7 +561,7 @@ NTSTATUS NtDrvLoad(const char *service)
     if (obj) drv->obj = obj;
     if (!obj || !wide(name, &obj->DriverName)) {
         if (drv) free_driver(drv);
-        unmap(&m);
+        if (!builtin) unmap(&m);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     obj->Type = 4;
@@ -549,20 +570,21 @@ NTSTATUS NtDrvLoad(const char *service)
     obj->DriverSize = m.size;
     obj->DriverSection = drv;
     obj->DriverExtension = &drv->ext;
-    obj->DriverInit = (NT_DRIVER_INITIALIZE)(uintptr_t)(m.base + m.entry);
+    obj->DriverInit = builtin ? builtin : (NT_DRIVER_INITIALIZE)(uintptr_t)(m.base + m.entry);
     drv->ext.DriverObject = obj;
     NtIoAddDriver(drv);                            /* (fills MajorFunction with the default) */
 
     loading_push(drv);
     st = obj->DriverInit(obj, &drv->reg_path);
     loading_pop();
-    kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image, (unsigned long long)m.base,
-            service, (UINT32)st);
+    if (builtin) kprintf("[NT] %s (built in, service %s): DriverEntry returned 0x%08x\n", image, service, (UINT32)st);
+    else kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image,
+                 (unsigned long long)m.base, service, (UINT32)st);
     if (!NT_SUCCESS(st)) {
         NtIoDropDevices(drv);
         NtIoRemoveDriver(drv);
         NtPoolDriverGone(drv);
-        unmap(&m);
+        if (!builtin) unmap(&m);
         free_driver(drv);
         return st;
     }
@@ -582,7 +604,7 @@ static void unload(NtDriver *drv)
     NtIoDropDevices(drv);
     NtIoRemoveDriver(drv);
     NtPoolDriverGone(drv);
-    unmap_image(drv->base, drv->size / PAGE_SIZE);
+    if (drv->base) unmap_image(drv->base, drv->size / PAGE_SIZE);
     for (int k = 0; k < drv->slots; k++) g_slot_used[drv->slot + k] = false;
     kprintf("[NT] %s unloaded (service %s)\n", drv->image, drv->service);
     free_driver(drv);
@@ -610,10 +632,12 @@ void NtDrvLastClose(NtDriver *drv)
 int NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max)
 {
     int n = 0;
-    for (NtDriver *d = g_drivers; d && n < max; d = d->next, n++) {
+    for (NtDriver *d = g_drivers; d && n < max; d = d->next) {
+        if (!d->base) continue;                                  /* (built in: part of the kernel's image) */
         base[n] = d->base;
         size[n] = d->size;
         memcpy(path[n], d->path, sizeof(d->path));
+        n++;
     }
     return n;
 }

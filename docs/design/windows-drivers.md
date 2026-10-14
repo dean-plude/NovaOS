@@ -241,7 +241,7 @@ step and only when a target driver needs it:
 | USB bus interface | `usbhub3.sys`, `ucx01000.sys` (URBs, `IOCTL_INTERNAL_USB_SUBMIT_URB`) | USB client drivers (USB serial, vendor devices) | NovaOS's USB core (`kernel/drivers/usb.c`) |
 | NDIS | `ndis.sys` (NDIS 6.x miniports), then WDI/WiFiCx for Wi-Fi | Ethernet and Wi-Fi cards (`netkvm.sys`, Intel `Netwtw*.sys`) | lwIP and NovaOS's network interfaces |
 | Storport | `storport.sys` | storage miniports (`viostor.sys`, `vioscsi.sys`, Intel VMD) | NovaOS's disk layer |
-| HID class | `hidclass.sys` | HID minidrivers (vendor touchpads, pens) | NovaOS's HID code |
+| HID class | `hidclass.sys` (`kernel/nt/hidclass.c`, built) | HID minidrivers (vendor touchpads, pens), and NovaOS's USB one (`hidusb.c`) | `hid.dll` and setupapi (one device per top-level collection) |
 | PortCls / AVStream | `portcls.sys`, `ks.sys` | audio and camera drivers | NovaOS's audio and capture paths |
 | WDDM | `dxgkrnl.sys` | display miniports and their user-mode D3D/Vulkan drivers | `gdi32`'s `D3DKMT*` calls and the compositor |
 
@@ -455,7 +455,9 @@ downloaded by the test as NovaOS's other tests download apps.
     a volume on it.  **Done.** Test: `viostor`.  As built: one request at a
     time through a bounce buffer, line interrupts, no adapter removal.
 
-Later steps, each only when a target device needs it: HID class, PortCls
+The HID class host is built (Dean's ask, 2026-10-14; see
+[drivers.md](../drivers.md#hid-the-class-driver-and-minidrivers)).
+Later steps, each only when a target device needs it: PortCls
 and AVStream (for the T14's audio and camera if their built-in drivers
 fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3,
 whose first step, the display-only host with `wddmdod.sys`, is merged).

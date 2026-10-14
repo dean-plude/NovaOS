@@ -265,6 +265,27 @@ void exit(int code)
 }
 
 void _exit(int code) { ExitProcess((UINT)code); }
+__declspec(dllexport) void _Exit(int code) { ExitProcess((UINT)code); }
+
+/* A thread's stack guard page is put back as Windows' does after a stack
+ * overflow is handled; NovaOS grows stacks without one, so nothing is lost */
+__declspec(dllexport) int _resetstkoflw(void) { return 1; }
+
+/* _byteswap_* are compiler intrinsics in C, so the exported functions are
+ * built under other names */
+unsigned short nova_byteswap_ushort(unsigned short v) { return (unsigned short)(v << 8 | v >> 8); }
+unsigned long nova_byteswap_ulong(unsigned long v) { return __builtin_bswap32(v); }
+unsigned long long nova_byteswap_uint64(unsigned long long v) { return __builtin_bswap64(v); }
+#ifdef _WIN64
+#define BSWAP_SYM ""
+#else
+#define BSWAP_SYM "_"           /* (32-bit C names start with _, and the linker takes one off exports) */
+#endif
+__asm__(".section .drectve\n\t"
+        ".ascii \" /export:" BSWAP_SYM "_byteswap_ushort=" BSWAP_SYM "nova_byteswap_ushort\"\n\t"
+        ".ascii \" /export:" BSWAP_SYM "_byteswap_ulong=" BSWAP_SYM "nova_byteswap_ulong\"\n\t"
+        ".ascii \" /export:" BSWAP_SYM "_byteswap_uint64=" BSWAP_SYM "nova_byteswap_uint64\"\n\t"
+        ".text");
 
 void abort(void)
 {

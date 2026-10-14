@@ -157,7 +157,10 @@ static ULONG STDMETHODCALLTYPE fd_release(Face *f)
     return (ULONG)r;
 }
 
-/* IFileDialogEvents: 3 OnFileOk, 4 OnFolderChanging, 5 OnFolderChange, 6 OnSelectionChange, 8 OnTypeChange */
+/* IFileDialogEvents: 3 OnFileOk, 4 OnFolderChanging, 5 OnFolderChange, 6 OnSelectionChange, 8 OnTypeChange.
+ * Only S_FALSE from OnFileOk keeps the dialog open, as on Windows: a
+ * handler that leaves it unimplemented (E_NOTIMPL, as LibreOffice's does)
+ * accepts the choice */
 static HRESULT notify(Dlg *o, int slot)
 {
     HRESULT result = S_OK_;
@@ -165,7 +168,7 @@ static HRESULT notify(Dlg *o, int slot)
         void *s = o->sinks[i];
         if (!s) continue;
         HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void *))(*(void ***)s)[slot])(s, &o->fd);
-        if (slot == 3 && hr != S_OK_) result = hr;
+        if (slot == 3 && hr == S_FALSE_) result = hr;
     }
     return result;
 }

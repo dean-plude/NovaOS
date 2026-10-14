@@ -87,6 +87,13 @@ USERAPI HANDLE DdeClientTransaction(LPBYTE data, DWORD n, HANDLE conv, HANDLE it
     return NULL;
 }
 USERAPI HANDLE DdeNameService(DWORD inst, HANDLE s1, HANDLE s2, UINT cmd) { (void)inst; (void)s1; (void)s2; (void)cmd; return (HANDLE)1; }
+/* (there is never a conversation, so nothing to abandon, advise, describe or reconnect) */
+USERAPI BOOL DdeAbandonTransaction(DWORD inst, HANDLE conv, DWORD id)
+{ (void)inst; (void)conv; (void)id; g_dde_error = DMLERR_NO_CONV_ESTABLISHED; return FALSE; }
+USERAPI BOOL DdePostAdvise(DWORD inst, HANDLE topic, HANDLE item) { (void)inst; (void)topic; (void)item; return TRUE; }
+USERAPI UINT DdeQueryConvInfo(HANDLE conv, DWORD id, void *info)
+{ (void)conv; (void)id; (void)info; g_dde_error = DMLERR_NO_CONV_ESTABLISHED; return 0; }
+USERAPI HANDLE DdeReconnect(HANDLE conv) { (void)conv; g_dde_error = DMLERR_NO_CONV_ESTABLISHED; return NULL; }
 
 /* data handles: a length and the bytes */
 typedef struct { DWORD n; BYTE d[1]; } DdeData;

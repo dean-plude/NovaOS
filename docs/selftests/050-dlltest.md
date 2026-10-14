@@ -1,1 +1,1 @@
-| `dlltest` | DLL loading, TLS, `DllMain`; a DLL whose `DllMain` returns FALSE stops the program at start with 0xC0000142 |
+| `dlltest` | DLL loading, TLS, `DllMain`; a DLL whose `DllMain` returns FALSE stops the program at start with 0xC0000142; exports Windows numbers (uxtheme, d2d1) and what LibreOffice imports at start |

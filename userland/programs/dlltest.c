@@ -1,8 +1,10 @@
 /* dlltest.exe — DllMain, exported calls, static TLS, LoadLibrary,
  * GetModuleFileName with more than 64 modules loaded, exports found by
- * ordinal alone, and system DLL calls Delphi programs make at start */
+ * ordinal alone, and system DLL calls Delphi programs and LibreOffice
+ * make at start */
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 #include <windows.h>
 #include <objbase.h>
 #include <commctrl.h>
@@ -209,6 +211,38 @@ static void many_modules(void)
     CHECK(k > 0 && base && !_strnicmp(base + 1, last_name, strlen(last_name)));
 }
 
+/* What LibreOffice imports at start: d2d1's D2D1CreateFactory by ordinal 1
+ * (and D2D1MakeRotateMatrix by 2), oledlg.dll and fontsub.dll, the
+ * clipboard's format list and the C runtime's _s path functions */
+static void libreoffice(void)
+{
+    HMODULE d2 = LoadLibraryA("d2d1.dll");
+    CHECK(d2 != NULL);
+    CHECK(d2 && GetProcAddress(d2, MAKEINTRESOURCEA(1)) == GetProcAddress(d2, "D2D1CreateFactory"));
+    CHECK(d2 && GetProcAddress(d2, MAKEINTRESOURCEA(2)) == GetProcAddress(d2, "D2D1MakeRotateMatrix"));
+    HMODULE ole = LoadLibraryA("oledlg.dll"), fs = LoadLibraryA("fontsub.dll");
+    typedef UINT (WINAPI *InsertFn)(void *);
+    InsertFn ins = ole ? (InsertFn)GetProcAddress(ole, "OleUIInsertObjectW") : NULL;
+    CHECK(ins && ins(NULL) == 2);                        /* OLEUI_CANCEL */
+    CHECK(fs && GetProcAddress(fs, "CreateFontPackage") != NULL);
+    typedef BOOL (WINAPI *FormatsFn)(UINT *, UINT, UINT *);
+    FormatsFn formats = (FormatsFn)GetProcAddress(GetModuleHandleA("user32.dll"), "GetUpdatedClipboardFormats");
+    UINT list[64], n = 99;
+    CHECK(formats && formats(list, 64, &n) && n <= 64);
+    HMODULE crt = LoadLibraryA("ucrtbase.dll");
+    typedef int (__cdecl *SplitFn)(const wchar_t *, wchar_t *, size_t, wchar_t *, size_t, wchar_t *, size_t,
+                                   wchar_t *, size_t);
+    typedef int (__cdecl *MakeFn)(wchar_t *, size_t, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *);
+    SplitFn split = crt ? (SplitFn)GetProcAddress(crt, "_wsplitpath_s") : NULL;
+    MakeFn make = crt ? (MakeFn)GetProcAddress(crt, "_wmakepath_s") : NULL;
+    wchar_t drv[4], dir[64], name[16], ext[8], path[64], tiny[4];
+    CHECK(split && split(L"C:\\Apps\\data\\letter.docx", drv, 4, dir, 64, name, 16, ext, 8) == 0 &&
+          !wcscmp(drv, L"C:") && !wcscmp(dir, L"\\Apps\\data\\") && !wcscmp(name, L"letter") && !wcscmp(ext, L".docx"));
+    CHECK(split && split(L"C:\\Apps\\letter.docx", NULL, 0, NULL, 0, tiny, 4, NULL, 0) == 34 && !tiny[0]);
+    CHECK(make && make(path, 64, L"C:", L"\\Apps", L"sums", L"xlsx") == 0 && !wcscmp(path, L"C:\\Apps\\sums.xlsx"));
+    CHECK(make && make(tiny, 4, L"C:", L"\\Apps", L"sums", L"xlsx") == 34);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "child")) {
@@ -253,6 +287,7 @@ int main(int argc, char **argv)
     imagelist_stream();
     shell_folders();
     refused_start();
+    libreoffice();
 
     printf("DLL/TLS self-test: %d passed, %d failed\n", pass, fail);
     return fail;

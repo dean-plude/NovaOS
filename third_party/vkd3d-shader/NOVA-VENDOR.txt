@@ -46,8 +46,7 @@ textures (no mip level argument) comes too, as upstream master has it.
 libs/vkd3d-shader/hlsl.y (uav_methods, add_interlocked_method_call,
 add_getdimensions_method_call), hlsl_codegen.c (sm4_generate_vsir_instr_ld,
 sm4_generate_vsir_instr_resinfo) and tpf.c (bufinfo written out).  Stores to
-indexed groupshared arrays ("Store to indexed TGSM") still stop as upstream
-1.19 does (upstream master has them, after a larger rework).
+indexed groupshared arrays ("Store to indexed TGSM") came later, below.
 
 A fix taken from upstream (vkd3d master's is_compile_time_const): a const
 local whose initializer loads another local (naga writes every `let` this
@@ -58,6 +57,23 @@ declare_vars now moves an initializer there only when it is a compile-time
 constant (is_compile_time_const: literals, operators, and loads of synthetic
 variables or of variables the static initializers set, which hlsl.h's new
 hlsl_ir_var.is_compile_time_const marks).
+
+Stores to indexed groupshared arrays, written by NovaOS (vkd3d-shader 1.19
+stopped at "Store to indexed TGSM"; upstream master has them after a larger
+rework of its resource lowering, not taken): naga writes WGSL workgroup
+arrays as groupshared arrays, zero-initialises them whole and stores to
+their elements, as LightCraft's denoise convolution does.  hlsl_codegen.c's
+lower_tgsm_stores lowers a store with a deref path the way the loads already
+were: a groupshared array is a structured TGSM, its first index the
+structure index and the rest of the path a byte offset into the structure
+(store_structured); any other groupshared variable is raw, the whole path a
+byte address (store_raw).  Arrays and structs stored whole are written
+element by element, and a writemask that is not .x, .xy, .xyz or .xyzw is
+split into one store per component (both instructions write consecutive
+dwords).  hlsl.c lets a structured TGSM store carry a byte offset.  Loads of
+a second index (a[i][j]) also used the inner index as the structure index;
+lower_index_load and split_resource_load now take only the outermost index
+as the structure index.
 
 Generated files, made from the tarball (and the change above) as its
 Makefile does, and committed so the build needs neither tool:

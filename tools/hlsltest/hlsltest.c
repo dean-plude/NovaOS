@@ -4,11 +4,13 @@
  * ps_3_0), shader model 5.1 descriptor arrays indexed at run time (wgpu's
  * sampler heap), RWByteAddressBuffer's Load*(), GetDimensions() and
  * Interlocked*() methods (wgpu's storage buffers), const locals copied from
- * other locals (as naga writes every `let`), errors, the preprocessor
+ * other locals (as naga writes every `let`), stores to indexed groupshared
+ * arrays (naga's workgroup arrays), errors, the preprocessor
  * and #include, reflection, the disassembler and the container parts, then
  * the shaders run with Direct3D 11 (DXVK): a triangle whose colour comes from
  * a texture, a constant buffer, a function with an out parameter and a loop,
- * read back, and the raw buffer compute shader dispatched and read back.
+ * read back, and the raw buffer and groupshared compute shaders dispatched
+ * and read back.
  * Build: x86_64-w64-mingw32-gcc -O2 -o hlsltest.exe hlsltest.c -ld3dcompiler_47 -ld3d11 -ldxguid
  *        (i686-w64-mingw32-gcc for the 32-bit one).  Usage: hlsltest */
 #define COBJMACROS
@@ -324,6 +326,49 @@ static void test_const_copies(void)
     }
 }
 
+/* naga's workgroup arrays (LightCraft's denoise kernels): stores to an
+ * element of a groupshared array, a field of a groupshared struct array, one
+ * element of a two-dimensional array and a component of a groupshared
+ * vector, with the zero-initialisation naga writes first. */
+static const char tgsm_shader[] =
+    "RWByteAddressBuffer data : register(u0);\n"
+    "struct Pair { uint a; uint4 b; };\n"
+    "groupshared uint As[64];\n"
+    "groupshared uint2 Bs[8][4];\n"
+    "groupshared Pair Ps[8];\n"
+    "groupshared uint4 V;\n"
+    "[numthreads(8, 1, 1)]\n"
+    "void cs_main(uint3 lid : SV_GroupThreadID)\n"
+    "{\n"
+    "    uint i = lid.x;\n"
+    "    if (i == 0u) { As = (uint[64])0; V = (uint4)0; }\n"
+    "    GroupMemoryBarrierWithGroupSync();\n"
+    "    As[i * 8u] = i + 1u;\n"
+    "    Bs[i][i & 3u] = uint2(i, 10u * i);\n"
+    "    Bs[i][i & 3u].y += 1u;\n"
+    "    Ps[i].a = 100u + i;\n"
+    "    Ps[i].b.zw = uint2(i, 2u * i);\n"
+    "    if (i < 4u) V[i] = 1000u + i;\n"
+    "    GroupMemoryBarrierWithGroupSync();\n"
+    "    uint j = (i + 1u) & 7u;\n"
+    "    data.Store(i * 4u, As[j * 8u] + As[j * 8u + 1u] + Bs[j][j & 3u].y + Ps[j].a + Ps[j].b.w + V[j & 3u]);\n"
+    "}\n";
+
+static void test_tgsm_stores(void)
+{
+    HRESULT hr;
+    ID3DBlob *cs = compile(tgsm_shader, "cs_main", "cs_5_0", &hr, NULL), *text = NULL;
+    check("D3DCompile cs_5_0 with stores to indexed groupshared arrays", SUCCEEDED(hr) && is_dxbc(cs));
+    if (!cs) return;
+    hr = D3DDisassemble(ID3D10Blob_GetBufferPointer(cs), ID3D10Blob_GetBufferSize(cs), 0, NULL, &text);
+    const char *asm_text = SUCCEEDED(hr) && text ? (const char *)ID3D10Blob_GetBufferPointer(text) : "";
+    check("cs_5_0: store_structured to the groupshared arrays, store_raw to the vector",
+          strstr(asm_text, "store_structured g1.xy") && strstr(asm_text, "store_raw g3.x,"));
+    if (!strstr(asm_text, "store_structured g1.xy")) printf("disassembly  %s\n", asm_text);
+    if (text) ID3D10Blob_Release(text);
+    ID3D10Blob_Release(cs);
+}
+
 /* ---- the shaders on Direct3D 11 ---- */
 static int px_near(const BYTE *p, int r, int g, int b)          /* p: R8G8B8A8 */
 {
@@ -437,21 +482,24 @@ done:
     ID3D10Blob_Release(psb);
 }
 
-/* raw_uav_shader dispatched once, the buffer read back */
-static void dispatch_raw_uav(ID3D11Device *dev, ID3D11DeviceContext *ctx)
+/* a compute shader dispatched once on a raw buffer of eight uints, the
+ * buffer read back */
+static void dispatch_raw(ID3D11Device *dev, ID3D11DeviceContext *ctx, const char *src, const char *name,
+                         const UINT init[8], const UINT want[8], const char *what_ok)
 {
-    static const UINT init[8] = { 7, 35, 0, 0, 100, 0, 3, 0 }, want[8] = { 7, 35, 42, 32, 105, 100, 9, 36 };
-    ID3DBlob *csb = compile(raw_uav_shader, "cs_main", "cs_5_0", NULL, NULL);
+    char what[96];
+    ID3DBlob *csb = compile(src, "cs_main", "cs_5_0", NULL, NULL);
     ID3D11ComputeShader *cs = NULL;
     ID3D11Buffer *buf = NULL, *staging = NULL;
     ID3D11UnorderedAccessView *uav = NULL;
     if (!csb) { check("cs_5_0 compiled", 0); return; }
     HRESULT hr = ID3D11Device_CreateComputeShader(dev, ID3D10Blob_GetBufferPointer(csb), ID3D10Blob_GetBufferSize(csb), NULL, &cs);
-    check("CreateComputeShader (raw UAV methods)", SUCCEEDED(hr));
-    D3D11_BUFFER_DESC bd = { sizeof(init), D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
+    snprintf(what, sizeof(what), "CreateComputeShader (%s)", name);
+    check(what, SUCCEEDED(hr));
+    D3D11_BUFFER_DESC bd = { 8 * sizeof(UINT), D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0,
                              D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0 };
-    D3D11_BUFFER_DESC sd = { sizeof(init), D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0 };
-    D3D11_SUBRESOURCE_DATA binit = { init, 0, 0 };
+    D3D11_BUFFER_DESC sd = { 8 * sizeof(UINT), D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0 };
+    D3D11_SUBRESOURCE_DATA binit = { (const void *)init, 0, 0 };
     ID3D11Device_CreateBuffer(dev, &bd, &binit, &buf);
     ID3D11Device_CreateBuffer(dev, &sd, NULL, &staging);
     D3D11_UNORDERED_ACCESS_VIEW_DESC ud;
@@ -469,12 +517,12 @@ static void dispatch_raw_uav(ID3D11Device *dev, ID3D11DeviceContext *ctx)
     ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)staging, (ID3D11Resource *)buf);
     D3D11_MAPPED_SUBRESOURCE m;
     hr = ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &m);
-    check("read back (raw UAV)", SUCCEEDED(hr));
+    snprintf(what, sizeof(what), "read back (%s)", name);
+    check(what, SUCCEEDED(hr));
     if (SUCCEEDED(hr)) {
         const UINT *v = (const UINT *)m.pData;
-        printf("D3D11 raw UAV  %u %u %u %u %u %u %u %u\n", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
-        check("cs_5_0 RWByteAddressBuffer Load, Load2, GetDimensions, InterlockedAdd and InterlockedMax results",
-              !memcmp(v, want, sizeof(want)));
+        printf("D3D11 %s  %u %u %u %u %u %u %u %u\n", name, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+        check(what_ok, !memcmp(v, want, 8 * sizeof(UINT)));
         ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)staging, 0);
     }
 done:
@@ -497,7 +545,14 @@ static void test_d3d11(void)
     printf("D3D11 feature level %#x\n", got);
     draw(dev, ctx, "vs_4_0", "ps_4_0");
     if (got >= D3D_FEATURE_LEVEL_11_0) draw(dev, ctx, "vs_5_0", "ps_5_0");
-    if (got >= D3D_FEATURE_LEVEL_11_0) dispatch_raw_uav(dev, ctx);
+    if (got >= D3D_FEATURE_LEVEL_11_0) {
+        static const UINT raw_init[8] = { 7, 35, 0, 0, 100, 0, 3, 0 }, raw_want[8] = { 7, 35, 42, 32, 105, 100, 9, 36 };
+        static const UINT tgsm_init[8] = { 0 }, tgsm_want[8] = { 1117, 1132, 1147, 1158, 1173, 1188, 1203, 1102 };
+        dispatch_raw(dev, ctx, raw_uav_shader, "raw UAV", raw_init, raw_want,
+                     "cs_5_0 RWByteAddressBuffer Load, Load2, GetDimensions, InterlockedAdd and InterlockedMax results");
+        dispatch_raw(dev, ctx, tgsm_shader, "groupshared", tgsm_init, tgsm_want,
+                     "cs_5_0 stores to indexed groupshared arrays, struct fields and vector components read back");
+    }
     ID3D11DeviceContext_Release(ctx);
     ID3D11Device_Release(dev);
 }
@@ -509,6 +564,7 @@ int main(int argc, char **argv)
     test_descriptor_arrays();
     test_const_copies();
     test_raw_uav_methods();
+    test_tgsm_stores();
     if (argc < 2) test_d3d11();                         /* hlsltest nodevice: the compiler only */
     printf("hlsltest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

@@ -4,7 +4,9 @@
 # D3DDisassemble and the container parts, then the shaders drawn with
 # Direct3D 11 on DXVK (a textured, constant-buffer-tinted triangle read
 # back) and a cs_5_0 compute shader using RWByteAddressBuffer's Load,
-# GetDimensions and Interlocked methods dispatched and read back, 64- and
+# GetDimensions and Interlocked methods dispatched and read back, and one
+# storing to indexed groupshared arrays, struct fields and vector
+# components (naga's workgroup arrays) dispatched and read back, 64- and
 # 32-bit (C:\Tests)
 TESTS = [
     Test('hlsltest x64', r'C:\Tests\hlsltest.exe', [r'D3D11 pixels \(vs_4_0/ps_4_0\)', r'hlsltest: \d+ passed, 0 failed'], timeout=600),

@@ -2239,8 +2239,10 @@ static struct hlsl_ir_node *hlsl_new_resource_store(struct hlsl_ctx *ctx, enum h
 {
     struct hlsl_ir_resource_store *store;
 
+    /* NovaOS: structured (array) TGSM stores carry a byte offset too. */
     if (type != HLSL_RESOURCE_STORE
-            || hlsl_deref_get_type(ctx, resource)->sampler_dim != HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+            || (hlsl_deref_get_type(ctx, resource)->sampler_dim != HLSL_SAMPLER_DIM_STRUCTURED_BUFFER
+            && !(resource->var->is_tgsm && resource->var->data_type->class == HLSL_CLASS_ARRAY)))
         VKD3D_ASSERT(!byte_offset);
 
     if (!(store = hlsl_alloc(ctx, sizeof(*store))))

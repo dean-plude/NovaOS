@@ -12106,6 +12106,30 @@ hold such a character back until the rest arrives (`UmVtermWrite`).
 output into a screen buffer of its own: all three give the same cells and
 cursor (roadmap step 26.1).
 
+## GUI programs start without a Terminal window
+
+Dean's report from a real boot: starting a program from the Start menu
+opened a Terminal window beside it.  Every program the shell started
+(the Start menu, the App Store's **Open** and **Run**, File Explorer,
+the desktop and shortcuts) ran through `TerminalRun`, so even a GUI
+program got a Terminal, which only waited for it to exit.
+
+- **The shell reads the PE subsystem** (`kernel/apps/apps.c`,
+  `UmIsGuiProgram` in `kernel/um/um.c`): a GUI program (subsystem 2,
+  64- or 32-bit) starts on its own (`UmSpawnDetached`) by its full path in
+  its own folder, as Explorer starts it, and logs
+  `[APPS] NAME: a GUI program, started without a console`.  A console
+  program still opens in a Terminal, its console.
+- **`winhello` is a GUI program** (`"gui": true` in its
+  `userland/programs/winhello.json` links it `/subsystem:windows`), so the
+  self-test image has one.
+- **Start menu search finds every program**: the menu kept only the first
+  64 programs of `C:\Programs` (and the Start menu's shortcuts), so
+  search missed the rest; it now keeps 256.
+- **Test**: `tests/selftest/core/890-startmenu-launch.py` starts
+  `winhello` and `hello` from the Start menu (Win+S, the name, Enter):
+  the first with no Terminal, the second in one.
+
 ## The ArtCraft apps draw their windows (HLSL const copies)
 
 After the shader model 5.1 descriptor arrays, the seven Direct3D 12 ArtCraft
@@ -12396,5 +12420,31 @@ test signing is on for NovaOS's own `WdfLdr.sys`), reads and checks its
 firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
 the T14 (see [drivers.md](../drivers.md)).
+
+## Stores to indexed groupshared arrays in the HLSL compiler
+
+LightCraft's denoise network runs as a wgpu compute shader, a convolution
+that stages its inputs in workgroup memory.  naga writes WGSL workgroup
+arrays as HLSL `groupshared` arrays, zero-initialises them whole and stores
+to their elements (`As[i] = v`), but vkd3d-shader 1.19 stopped at "Store to
+indexed TGSM", so this last of LightCraft's 27 kernels did not compile.
+
+- **`third_party/vkd3d-shader`** (listed in its `NOVA-VENDOR.txt`, NovaOS's
+  own code): a store to an element of a `groupshared` array becomes
+  `store_structured` (the first index is the structure index, the rest of
+  the path a byte offset into it), a store into any other `groupshared`
+  variable `store_raw` at a byte address; arrays and structs stored whole
+  are written element by element, and writes to some components of a
+  vector are split so each store writes consecutive dwords.  Loads of a
+  second index (`a[i][j]`) read the wrong element before (the inner index
+  was taken as the structure index) and are fixed too.  Of vkd3d 1.19's
+  own HLSL test shaders, five groupshared tests that stopped now compile
+  and every other shader compiles exactly as before.  LightCraft's 27
+  compute kernels (from its program, turned into HLSL with naga 30) now
+  all compile.
+- **`tools/hlsltest`**: a `cs_5_0` shader storing to a groupshared array,
+  a two-dimensional one, a struct array's fields and a vector's
+  components, checked in its disassembly and dispatched on Direct3D 11
+  (DXVK) with the results read back.
 
 <!-- END generated:history -->

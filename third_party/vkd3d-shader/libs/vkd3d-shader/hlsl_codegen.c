@@ -1525,8 +1525,11 @@ static struct hlsl_ir_node *lower_index_load(struct hlsl_ctx *ctx, struct hlsl_i
     {
         const struct hlsl_deref *resource = &hlsl_ir_resource_load(val)->resource;
 
-        /* Structured (i.e. arrayed) TGSM access. */
-        if (resource->var->is_tgsm && !resource->path_len)
+        /* Structured (i.e. arrayed) TGSM access.
+         * NovaOS: only the first index of the array; a second index (as in
+         * a[i][j]) indexes into the structure and becomes a byte offset
+         * below. */
+        if (resource->var->is_tgsm && !resource->path_len && !hlsl_ir_resource_load(val)->coords.node)
         {
             struct hlsl_ir_node *coords = index->idx.node;
             struct hlsl_resource_load_params params = {0};
@@ -1814,14 +1817,108 @@ static struct hlsl_ir_node *lower_tgsm_loads(struct hlsl_ctx *ctx, struct hlsl_i
     return hlsl_block_add_resource_load(ctx, block, &params, loc);
 }
 
-/* Lowers stores to TGSMs to resource stores. */
+/* NovaOS: emits the resource stores that write @rhs to the TGSM element
+ * @type at address @coords (the structured index, or the byte address of a
+ * raw TGSM) and @byte_offset (structured TGSMs only).  Arrays and structs are
+ * written element by element.  store_raw and store_structured write
+ * consecutive dwords, so a writemask that is not .x, .xy, .xyz or .xyzw is
+ * split into one store per component. */
+static struct hlsl_ir_node *add_tgsm_store(struct hlsl_ctx *ctx, struct hlsl_block *block,
+        const struct hlsl_deref *res_deref, bool structured, struct hlsl_ir_node *coords,
+        struct hlsl_ir_node *byte_offset, struct hlsl_type *type, struct hlsl_ir_node *rhs,
+        unsigned int writemask, const struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_node *ret = NULL;
+    unsigned int i, k, count;
+
+    if (type->class == HLSL_CLASS_ARRAY || type->class == HLSL_CLASS_STRUCT)
+    {
+        struct hlsl_ir_var *tmp;
+        struct hlsl_deref tmp_deref;
+
+        count = type->class == HLSL_CLASS_ARRAY ? type->e.array.elements_count : type->e.record.field_count;
+
+        if (!(tmp = hlsl_new_synthetic_var(ctx, "tgsm-store", type, loc)))
+            return NULL;
+        hlsl_block_add_simple_store(ctx, block, tmp, rhs);
+        hlsl_init_simple_deref_from_var(&tmp_deref, tmp);
+
+        for (i = 0; i < count; ++i)
+        {
+            struct hlsl_ir_node *c, *elem, *elem_coords = coords, *elem_offset = byte_offset;
+            struct hlsl_type *elem_type;
+
+            c = hlsl_block_add_uint_constant(ctx, block, i, loc);
+            elem_type = hlsl_get_element_type_from_path_index(ctx, type, c);
+            elem = hlsl_block_add_load_index(ctx, block, &tmp_deref, c, loc);
+
+            if (structured && !byte_offset)
+                /* The outermost array: its index is the structure index. */
+                elem_coords = hlsl_block_add_binary_expr(ctx, block, HLSL_OP2_ADD, coords, c);
+            else if (structured)
+                elem_offset = hlsl_block_add_packed_index_offset_append(ctx, block, byte_offset, c, type, loc);
+            else
+                elem_coords = hlsl_block_add_packed_index_offset_append(ctx, block, coords, c, type, loc);
+
+            if (structured && !elem_offset)
+                elem_offset = hlsl_block_add_uint_constant(ctx, block, 0, loc);
+
+            if (!(ret = add_tgsm_store(ctx, block, res_deref, structured, elem_coords, elem_offset,
+                    elem_type, elem, hlsl_is_numeric_type(elem_type)
+                    ? (1u << hlsl_type_component_count(elem_type)) - 1 : 0, loc)))
+                return NULL;
+        }
+        return ret;
+    }
+
+    if (type->class != HLSL_CLASS_SCALAR && type->class != HLSL_CLASS_VECTOR)
+    {
+        hlsl_fixme(ctx, loc, "Store of type class %u to TGSM.", type->class);
+        return NULL;
+    }
+
+    if (writemask == 0x1 || writemask == 0x3 || writemask == 0x7 || writemask == 0xf)
+        return hlsl_block_add_resource_store(ctx, block, HLSL_RESOURCE_STORE, res_deref,
+                byte_offset, coords, rhs, writemask, loc);
+
+    for (i = 0, k = 0; i < 4; ++i)
+    {
+        struct hlsl_ir_node *c, *value, *comp_coords = coords, *comp_offset = byte_offset;
+
+        if (!(writemask & (1u << i)))
+            continue;
+
+        value = hlsl_block_add_swizzle(ctx, block, hlsl_swizzle_from_writemask(1u << k++), 1, rhs, loc);
+        if (i)
+        {
+            c = hlsl_block_add_uint_constant(ctx, block, 4 * i, loc);
+            if (structured)
+                comp_offset = hlsl_block_add_binary_expr(ctx, block, HLSL_OP2_ADD, byte_offset, c);
+            else
+                comp_coords = hlsl_block_add_binary_expr(ctx, block, HLSL_OP2_ADD, coords, c);
+        }
+        ret = hlsl_block_add_resource_store(ctx, block, HLSL_RESOURCE_STORE, res_deref,
+                comp_offset, comp_coords, value, VKD3DSP_WRITEMASK_0, loc);
+    }
+    return ret;
+}
+
+/* Lowers stores to TGSMs to resource stores.
+ * NovaOS: stores to indexed TGSMs (an element of a groupshared array, a
+ * struct field or a vector component) are lowered too.  An array TGSM is
+ * declared structured: its first index is the structure index and the rest
+ * of the path is a byte offset into the structure.  Any other TGSM is raw:
+ * the whole path is a byte address. */
 static struct hlsl_ir_node *lower_tgsm_stores(struct hlsl_ctx *ctx,
         struct hlsl_ir_node *instr, struct hlsl_block *block)
 {
+    struct hlsl_ir_node *coords, *byte_offset = NULL;
+    struct hlsl_type *type, *var_type;
     struct hlsl_ir_store *store;
-    struct hlsl_ir_node *coords;
     struct hlsl_deref res_deref;
     struct hlsl_deref *deref;
+    unsigned int i = 0;
+    bool structured;
 
     if (instr->type != HLSL_IR_STORE)
         return NULL;
@@ -1831,17 +1928,35 @@ static struct hlsl_ir_node *lower_tgsm_stores(struct hlsl_ctx *ctx,
     if (!deref->var->is_tgsm)
         return NULL;
 
-    if (deref->path_len)
+    hlsl_init_simple_deref_from_var(&res_deref, deref->var);
+    type = var_type = deref->var->data_type;
+    structured = var_type->class == HLSL_CLASS_ARRAY;
+
+    if (structured && deref->path_len)
     {
-        hlsl_fixme(ctx, &instr->loc, "Store to indexed TGSM.");
-        return NULL;
+        coords = deref->path[0].node;
+        type = hlsl_get_element_type_from_path_index(ctx, type, coords);
+        byte_offset = hlsl_block_add_uint_constant(ctx, block, 0, &instr->loc);
+        i = 1;
+    }
+    else
+    {
+        coords = hlsl_block_add_uint_constant(ctx, block, 0, &instr->loc);
     }
 
-    hlsl_init_simple_deref_from_var(&res_deref, deref->var);
-    coords = hlsl_block_add_uint_constant(ctx, block, 0, &instr->loc);
+    for (; i < deref->path_len; ++i)
+    {
+        struct hlsl_ir_node *idx = deref->path[i].node;
 
-    return hlsl_block_add_resource_store(ctx, block, HLSL_RESOURCE_STORE, &res_deref,
-            NULL, coords, store->rhs.node, store->writemask, &instr->loc);
+        if (structured)
+            byte_offset = hlsl_block_add_packed_index_offset_append(ctx, block, byte_offset, idx, type, &instr->loc);
+        else
+            coords = hlsl_block_add_packed_index_offset_append(ctx, block, coords, idx, type, &instr->loc);
+        type = hlsl_get_element_type_from_path_index(ctx, type, idx);
+    }
+
+    return add_tgsm_store(ctx, block, &res_deref, structured, coords, byte_offset,
+            type, store->rhs.node, store->writemask, &instr->loc);
 }
 
 /* Allocate a unique, ordered index to each instruction, which will be used for
@@ -3838,7 +3953,8 @@ static void split_resource_load(struct hlsl_ctx *ctx, struct hlsl_ir_store *stor
     c = hlsl_block_add_uint_constant(ctx, &block, idx, &store->node.loc);
 
     /* Structured (i.e. arrayed) TGSM load. */
-    if (load->resource.var->is_tgsm && !load->resource.path_len && load->node.data_type->class == HLSL_CLASS_ARRAY)
+    if (load->resource.var->is_tgsm && !load->resource.path_len && !load->coords.node
+            && load->node.data_type->class == HLSL_CLASS_ARRAY)
     {
         struct hlsl_resource_load_params params = {0};
 
@@ -12247,13 +12363,10 @@ static bool sm4_generate_vsir_instr_resource_store(struct hlsl_ctx *ctx,
         return false;
     }
 
-    if (tgsm && !hlsl_is_numeric_type(resource_type))
-    {
-        hlsl_fixme(ctx, &store->node.loc, "Store to structured TGSM.");
-        return false;
-    }
-
-    if ((structured = resource_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER))
+    /* NovaOS: a groupshared array is a structured TGSM (store_structured);
+     * any other groupshared variable is raw (store_raw at a byte address). */
+    if ((structured = resource_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER
+            || (tgsm && resource_type->class == HLSL_CLASS_ARRAY)))
     {
         if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VSIR_OP_STORE_STRUCTURED, 1, 3)))
             return false;

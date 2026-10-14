@@ -317,8 +317,9 @@ licensed under the **GNU LGPL version 2.1** (or later).  It is compiled
 into `d3dcompiler_47.dll` alone, a separate DLL whose own sources
 (`userland/d3dcompiler_47`, MIT) call it only through its public API; its
 complete source is in this repository, with NovaOS's changes to it
-(shader model 5.1 descriptor arrays and RWByteAddressBuffer's Load,
-GetDimensions and Interlocked methods, which wgpu's Direct3D 12 shaders use),
+(shader model 5.1 descriptor arrays, RWByteAddressBuffer's Load,
+GetDimensions and Interlocked methods and stores to indexed groupshared
+arrays, which wgpu's Direct3D 12 shaders use),
 and a changed copy can be rebuilt into that DLL and put in its place (see
 `third_party/vkd3d-shader/NOVA-VENDOR.txt`).
 

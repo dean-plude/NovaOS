@@ -12645,3 +12645,39 @@ items but draw none of them, its port number box is blank, and no
 transfer is checked yet.
 
 <!-- END generated:history -->
+
+## Raw Input for the HID class driver's devices
+
+The second step of Dean's "work on HID Classes": a program using Raw
+Input sees the collections the HID class driver runs, as win32k shows
+them on Windows, not only NovaOS's own mice, keyboards and game
+controllers.
+
+- **user32** (`userland/user32/rawinput.c`): every device node `HID\...`
+  whose driver turned the HID interface on is a `RIM_TYPEHID` device in
+  `GetRawInputDeviceList`.  `GetRawInputDeviceInfo` gives its interface
+  path (`RIDI_DEVICENAME`), its vendor, product, version and top-level
+  usage (`RIDI_DEVICEINFO`, from `IOCTL_HID_GET_COLLECTION_INFORMATION`
+  and the preparsed data) and the class driver's preparsed data
+  (`RIDI_PREPARSEDDATA`, which `HidP_*` read).  Once the process
+  registers for Raw Input, a thread per collection holds a handle of its
+  own (the class driver queues every input report for each handle) and
+  posts each report as `WM_INPUT`; the reader looks the device tree over
+  again when Plug and Play reports a change and sends
+  `WM_INPUT_DEVICE_CHANGE` for arrivals and removals.
+- **xHCI** (`kernel/drivers/xhci.c`): a Windows driver's interrupt IN
+  transfer that waits a second without a report now stays queued for
+  the next request instead of being taken back with Stop Endpoint, as
+  Windows keeps one pending.  QEMU's usb-redir drops a report that
+  arrives while the endpoint is stopped, so the HID device's echoes
+  were sometimes lost.
+- **I/O manager** (`kernel/nt/io.c`): a program thread that is ending
+  has its pending driver request cancelled, as Windows'
+  `IoCancelThreadIo` does, so Raw Input's thread waiting in `ReadFile`
+  no longer keeps the process from exiting.
+- **Test**: `hidclasstest` in the devices suite's `hid` boot now also
+  finds the test device in Raw Input's list under its interface path,
+  checks its device information and preparsed data, registers for usage
+  FF00:1 and gets the device's echo of an output report as `WM_INPUT`;
+  the 64-bit run sees `GIDC_REMOVAL` and the device leave the list when
+  the test unplugs it.

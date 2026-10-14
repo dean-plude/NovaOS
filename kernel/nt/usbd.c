@@ -431,6 +431,7 @@ static UINT32 fill_iface(UsbdDev *v, UsbdIfaceInfo *info)
         UsbPipe *up = UsbOpenPipe(d, e, PIPE_BUF);
         if (!up) return USBD_STATUS_NOT_SUPPORTED;
         up->patient = true;
+        up->keep = up->xfer == 3;                                /* interrupt: as on Windows, a transfer stays queued */
         UsbdPipe *p = v->pipes[idx];
         if (!p) {
             p = kzalloc(sizeof(*p));

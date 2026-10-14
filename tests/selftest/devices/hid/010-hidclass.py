@@ -6,9 +6,10 @@
 # collection.  hidclasstest opens the collection through setupapi and
 # hid.dll as a Windows program does and checks its attributes, strings,
 # preparsed data and reports (the peer echoes each output report as input
-# report 1 and keeps the feature report), 32-bit first; then the 64-bit
-# run says "[HID] step 1", the test unplugs the device, and its handle's
-# reads must fail.
+# report 1 and keeps the feature report) and through Raw Input (its
+# device list, WM_INPUT for an echoed report), 32-bit first; then the
+# 64-bit run says "[HID] step 1", the test unplugs the device, its
+# handle's reads must fail and Raw Input must announce the removal.
 
 
 def _unplug(nova):

@@ -222,7 +222,12 @@ handle. Programs use the collection as on Windows: setupapi and cfgmgr32
 list its interface, and `hid.dll`'s `HidD_*` send it the `IOCTL_HID_*`
 requests (attributes, preparsed data, feature, input and output reports,
 strings, the queue's size and flushing it); `ReadFile` takes input
-reports and `WriteFile` sends an output report.
+reports and `WriteFile` sends an output report. Raw Input lists each
+collection as a `RIM_TYPEHID` device named by its interface path, with
+its attributes, usage and preparsed data, and a program that registers
+for its usage gets every input report as `WM_INPUT` (and
+`WM_INPUT_DEVICE_CHANGE` as it comes and goes), as win32k does on
+Windows.
 
 A USB HID device that no NovaOS driver takes (a vendor-defined device,
 not a keyboard, mouse, touch screen or game controller) gets NovaOS's
@@ -230,7 +235,7 @@ own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
 kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
 interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
 feature and input reports. Not done yet: composite USB devices (one HID
-interface per device), the collections in Raw Input's device list, and
+interface per device) and
 `ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
 device wait). NovaOS's own keyboards, mice and game controllers keep
 their built-in drivers.
@@ -464,7 +469,7 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
-| `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, unplugging |
+| `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 
 To run one boot's tests, pass their names to `--only` (`python3
 tools/selftest.py --suite devices --list` prints them).

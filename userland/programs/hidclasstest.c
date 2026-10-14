@@ -19,8 +19,14 @@
  *    by ReadFile as the input report the device echoes, on two handles
  *    at once; HidD_GetInputReport;
  *  - the input queue: HidD_Get/SetNumInputBuffers, HidD_FlushQueue;
+ *  - Raw Input: GetRawInputDeviceList holds the collection as a
+ *    RIM_TYPEHID device named by the same path, RIDI_DEVICEINFO and
+ *    RIDI_PREPARSEDDATA describe it, RegisterRawInputDevices for usage
+ *    FF00:1 with RIDEV_DEVNOTIFY announces it, and an output report's echo
+ *    comes as WM_INPUT (GetRawInputData: one 9-byte report);
  *  - with "unplug": at "[HID] step 1" the test unplugs the device; a
- *    read then fails and the interface leaves the lists.
+ *    read then fails, the interface leaves the lists, and Raw Input sends
+ *    GIDC_REMOVAL and drops it from its list.
  */
 #include <windows.h>
 #include <stdio.h>
@@ -147,6 +153,101 @@ static BOOL read_echo(HANDLE h, UCHAR fill)
     return ReadFile(h, r, sizeof(r), &n, NULL) && n == sizeof(r) && is_echo(r, fill);
 }
 
+/* ---- Raw Input ---- */
+
+static HANDLE g_raw_dev;               /* the collection's Raw Input handle */
+static int    g_arrived, g_removed, g_inputs, g_bad_input;
+static UCHAR  g_last[REPORT_LEN];
+
+static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
+{
+    if (m == WM_INPUT_DEVICE_CHANGE) {
+        if ((HANDLE)lp == g_raw_dev && wp == GIDC_ARRIVAL) g_arrived++;
+        if ((HANDLE)lp == g_raw_dev && wp == GIDC_REMOVAL) g_removed++;
+        return 0;
+    }
+    if (m == WM_INPUT) {
+        union { RAWINPUT ri; BYTE b[256]; } u;
+        UINT sz = 0;
+        GetRawInputData((HRAWINPUT)lp, RID_INPUT, NULL, &sz, sizeof(RAWINPUTHEADER));
+        UINT got = sz <= sizeof(u) ? sz : 0;
+        if (got) got = GetRawInputData((HRAWINPUT)lp, RID_INPUT, &u, &got, sizeof(RAWINPUTHEADER));
+        if (got != sz || u.ri.header.dwType != RIM_TYPEHID || u.ri.header.hDevice != g_raw_dev ||
+            u.ri.data.hid.dwSizeHid != REPORT_LEN || u.ri.data.hid.dwCount != 1) {
+            g_bad_input++;
+        } else {
+            memcpy(g_last, u.ri.data.hid.bRawData, REPORT_LEN);
+            g_inputs++;
+        }
+    }
+    return DefWindowProcW(w, m, wp, lp);
+}
+
+/* Pump messages until @cond or 5 s */
+#define PUMP_UNTIL(cond) do { \
+    for (int t_ = 0; t_ < 250 && !(cond); t_++) { \
+        MSG msg_; \
+        while (PeekMessageW(&msg_, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg_); DispatchMessageW(&msg_); } \
+        if (!(cond)) Sleep(20); \
+    } } while (0)
+
+/* The Raw Input device named @path, or NULL */
+static HANDLE raw_find(const WCHAR *path)
+{
+    RAWINPUTDEVICELIST l[32];
+    UINT n = 32;
+    UINT got = GetRawInputDeviceList(l, &n, sizeof(l[0]));
+    if (got == (UINT)-1) return NULL;
+    for (UINT i = 0; i < got; i++) {
+        if (l[i].dwType != RIM_TYPEHID) continue;
+        WCHAR name[300];
+        UINT len = 300;
+        if (GetRawInputDeviceInfoW(l[i].hDevice, RIDI_DEVICENAME, name, &len) == (UINT)-1) continue;
+        if (!lstrcmpiW(name, path)) return l[i].hDevice;
+    }
+    return NULL;
+}
+
+/* Raw Input on the collection: its device, then WM_INPUT for an echo
+ * (window @w registered for it) */
+static void raw_checks(const WCHAR *path, HANDLE h, HWND w)
+{
+    g_raw_dev = raw_find(path);
+    check(g_raw_dev != NULL, "GetRawInputDeviceList: a RIM_TYPEHID device named by the interface path");
+    if (!g_raw_dev) return;
+    RID_DEVICE_INFO ri;
+    UINT len = sizeof(ri);
+    memset(&ri, 0, sizeof(ri));
+    ri.cbSize = sizeof(ri);
+    UINT got = GetRawInputDeviceInfoW(g_raw_dev, RIDI_DEVICEINFO, &ri, &len);
+    check(got == sizeof(ri) && ri.dwType == RIM_TYPEHID && ri.hid.dwVendorId == VID && ri.hid.dwProductId == PID &&
+          ri.hid.dwVersionNumber == 0x0114 && ri.hid.usUsagePage == 0xFF00 && ri.hid.usUsage == 1,
+          "RIDI_DEVICEINFO: %04lx:%04lx version %04lx, usage %04x:%04x", ri.hid.dwVendorId, ri.hid.dwProductId,
+          ri.hid.dwVersionNumber, ri.hid.usUsagePage, ri.hid.usUsage);
+    UINT pl = 0;
+    GetRawInputDeviceInfoW(g_raw_dev, RIDI_PREPARSEDDATA, NULL, &pl);
+    BYTE *pp = pl ? HeapAlloc(GetProcessHeap(), 0, pl) : NULL;
+    HIDP_CAPS caps;
+    memset(&caps, 0, sizeof(caps));
+    BOOL ok = pp && GetRawInputDeviceInfoW(g_raw_dev, RIDI_PREPARSEDDATA, pp, &pl) == pl &&
+              HidP_GetCaps((PHIDP_PREPARSED_DATA)pp, &caps) == HIDP_STATUS_SUCCESS;
+    check(ok && caps.UsagePage == 0xFF00 && caps.Usage == 1 && caps.InputReportByteLength == REPORT_LEN,
+          "RIDI_PREPARSEDDATA (%u bytes) read by HidP_GetCaps: input report %u bytes", pl, caps.InputReportByteLength);
+    if (pp) HeapFree(GetProcessHeap(), 0, pp);
+
+    RAWINPUTDEVICE rid = { 0xFF00, 1, RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, w };
+    check(RegisterRawInputDevices(&rid, 1, sizeof(rid)), "RegisterRawInputDevices for usage FF00:1");
+    PUMP_UNTIL(g_arrived);
+    check(g_arrived == 1, "WM_INPUT_DEVICE_CHANGE: GIDC_ARRIVAL for the collection (%d)", g_arrived);
+    Sleep(300);                                        /* (Raw Input's handle is open) */
+    send_output(h, 0x60, TRUE);
+    PUMP_UNTIL(g_inputs || g_bad_input);
+    check(g_inputs == 1 && !g_bad_input && is_echo(g_last, 0x60),
+          "WM_INPUT: the echo as one %d-byte RIM_TYPEHID report (%d, %d bad)", REPORT_LEN, g_inputs, g_bad_input);
+    Sleep(200);
+    HidD_FlushQueue(h);                                /* (the test's own handle got it too) */
+}
+
 int main(int argc, char **argv)
 {
     BOOL unplug = argc > 1 && !strcmp(argv[1], "unplug");
@@ -251,6 +352,15 @@ int main(int argc, char **argv)
         CloseHandle(h2);
     }
 
+    WNDCLASSW wc = { 0 };
+    wc.lpfnWndProc = wndproc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = L"hidclasstest";
+    RegisterClassW(&wc);
+    HWND win = CreateWindowExW(0, L"hidclasstest", L"HID class test", WS_OVERLAPPEDWINDOW, 20, 20, 300, 200,
+                               NULL, NULL, wc.hInstance, NULL);
+    raw_checks(path, h, win);
+
     if (unplug) {
         printf("[HID] step 1: unplug the device\n");
         fflush(stdout);
@@ -264,6 +374,15 @@ int main(int argc, char **argv)
         check(!listed, "setupapi no longer lists the device");
         check(!cm_lists(path), "nor does cfgmgr32");
         check(!HidD_GetAttributes(h, &a) || !HidD_GetFeature(h, g, sizeof(g)), "the old handle's requests fail");
+        if (g_raw_dev) {
+            PUMP_UNTIL(g_removed);
+            check(g_removed == 1, "WM_INPUT_DEVICE_CHANGE: GIDC_REMOVAL (%d)", g_removed);
+            check(!raw_find(path), "GetRawInputDeviceList no longer lists it");
+            RID_DEVICE_INFO ri = { sizeof(ri) };
+            UINT len = sizeof(ri);
+            check(GetRawInputDeviceInfoW(g_raw_dev, RIDI_DEVICEINFO, &ri, &len) == (UINT)-1 &&
+                  GetLastError() == ERROR_INVALID_HANDLE, "its old handle is refused (ERROR_INVALID_HANDLE)");
+        }
     }
     CloseHandle(h);
 

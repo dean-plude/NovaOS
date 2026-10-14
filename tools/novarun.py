@@ -192,6 +192,7 @@ class Nova:
         self.extra = list(extra_args)
         self.qmp = None
         self.wedged = False                 # set by run(): a program hung and the machine did not answer the keys
+        self.stuck = False                  # set by run(): a program hung and Ctrl+C did not bring the Terminal back
         env = None
         if rec:
             audio, env = self.pulse_input(rec)
@@ -289,7 +290,10 @@ class Nova:
             # No dump (the desktop thread answers the key) and Ctrl+C did nothing either:
             # the machine is stuck, not the program.  Every test after this one would only
             # wait out its own limit (the graphics job burned its hour that way)
-            self.wedged = not dump.strip() and '[TERM-DONE]' not in more
+            self.stuck = '[TERM-DONE]' not in more
+            self.wedged = self.stuck and not dump.strip()
+        else:
+            self.stuck = self.wedged = False
         return got.replace('\n[TERM-DONE]\n', '').rstrip(), ok
 
     def pulse_input(self, rec):

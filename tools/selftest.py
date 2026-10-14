@@ -1091,6 +1091,20 @@ def run_boot(a, tests, work, label, **nova_args):
                     print(f'    did not start again after the crash: {str(e).splitlines()[0]}', flush=True)
             if why == 'kernel panic' or t.crash or nova.q.poll() is not None or nova.wedged:
                 break
+            if nova.stuck:
+                # A program the Terminal cannot stop (a Venus fence that never signals, say) holds it
+                # for good: every test after it would only wait out its own limit (the graphics job
+                # burned its hour that way).  Reset the machine, as for a crash, and go on
+                try:
+                    nova.qmp.cmd('system_reset')
+                    nova.start()
+                    full_log += nova.boot_log
+                    nova.stuck = False
+                    print('    reset NovaOS: the program above did not stop', flush=True)
+                except RuntimeError as e:
+                    print(f'    did not start again after the hang: {str(e).splitlines()[0]}', flush=True)
+                    nova.wedged = True
+                    break
     finally:
         nova.close()
         with open(os.path.join(a.out, log_name), 'w') as f:

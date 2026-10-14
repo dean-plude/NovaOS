@@ -45,6 +45,13 @@ WAV, or restart or reset the machine and check the next boot. The suites
 are one file per test in `tests/selftest/SUITE/`, run in file-name order;
 `python3 tools/selftest.py --suite SUITE --list` prints them.
 
+A program that outlives its limit is asked to stop (Ctrl+Alt+F12 logs where
+every thread is, then Ctrl+C). If the Terminal still does not come back, the
+machine is reset and the tests after it run on the fresh boot, so one hung
+program fails one test instead of every later test waiting out its own limit
+(one stalled graphics job burned its whole hour that way). Give a test a limit
+a few times its normal run on a loaded runner, not a generous one.
+
 ### The core suite
 
 The core suite boots once with an HD Audio card whose microphone hears a
@@ -397,6 +404,11 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
   `C:\Tests` by the graphics suite: `d2dtest` (Direct2D), `dwtest` and
   `dw3test` (DirectWrite), `gltest` (OpenGL), `d3dtest` (Direct3D 9/11),
   `d3d12test` (Direct3D 12) and `hlsltest` (the HLSL compiler).
+  `gltest fps` and `d3dtest fps` compare direct presentation with the GDI
+  way; under KVM they check bytes, not time. Frames the host did not show go
+  through the GDI like the other way's, so their share is taken out before
+  the "far fewer bytes" check (a slow runner shows more of them; the "frames
+  shown from the host" check limits them separately).
 - **Drivers**: the devices suite's test drivers (`wdmtest`, `edutest`,
   `kmdftest`, `kmdfedu`, `umdftest`) and its recorded catalog servers are
   in `tools/drivertest/`. `tools/authenticode/` makes the files

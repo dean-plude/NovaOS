@@ -13,6 +13,7 @@ passes and the publishing commit is still the current main head.
 | Build | Kernel, bootloader, userland, disk image and ISO; release builds include DSP firmware |
 | Compatibility smoke | Seven existing bounded x64/x86 loader, synchronization, Chromium, unwind and WebView2 startup assertions |
 | OS tests | Separate core, network and devices jobs, with sibling jobs continuing after a failure |
+| Performance budget | Boot time, Firefox start time and `smpstress` scaling against `tools/ci/perf-budget.json` (see below) |
 | Graphics tests | Existing full Mesa, DXVK, Venus and browser regression suite |
 | CI result | Requires every selected job to succeed; rejects failed, cancelled, missing and unexpected skipped jobs |
 | Corpus result | Same completion rule for the nightly build, all app matrix jobs and SMP; validates and combines every selected program's report |
@@ -20,8 +21,8 @@ passes and the publishing commit is still the current main head.
 Use **CI result** and **Corpus result** as the required checks when configuring
 repository rules. They always exist, including for documentation-only PRs.
 This change does not edit repository protection rules. The existing
-**Build and boot-test** check is retained as an aggregate of the build and all
-three OS suites; **Graphics tests (OpenGL, Direct3D)** keeps its existing name.
+**Build and boot-test** check is retained as an aggregate of the build, all
+three OS suites and the performance budget; **Graphics tests (OpenGL, Direct3D)** keeps its existing name.
 Existing protections can therefore continue to require those checks while
 CI result covers compatibility and complete workflow execution as well.
 
@@ -96,6 +97,32 @@ own networking independently of echo/HTTPS fixtures. VLC stages its own
 30-second H.264/AAC color-bar clip instead of relying on another app's output.
 WebView2 installation accepts the updater's bracketed success log format and
 still requires a zero result and every WebView2 host milestone.
+
+## The performance budget
+
+Roadmap step 26.4.  The **Performance budget** job (`tools/ci/perf.py`)
+boots the tested image once, on four CPUs with 4 GB, and measures:
+
+- **Boot time**: QEMU started to the kernel's main loop (the desktop is up).
+- **Firefox start**: Enter on `start firefox.exe` to its first page on the
+  screen.  The bundled Firefox opens a local page whose whole background is
+  one colour (`C:\Perf\perf.html`) with a fresh profile whose `user.js`
+  turns off the welcome, terms-of-use and default-browser pages; QEMU
+  screenshots are taken twice a second until a fifth of the screen shows
+  that colour.
+- **smpstress scaling**: `smpstress scaling 0`; files and the registry must
+  scale at least half as well as bare system calls do in the same run
+  (`tools/ci/check-smpstress.py`, the nightly SMP job's rule).
+
+The numbers, the budget and each verdict go to the job summary and to
+`perf.json` in the `perf-out` artifact (with the serial log, the smpstress
+log and a screenshot of Firefox).  A time over its budget in
+`tools/ci/perf-budget.json` (about twice what the runners take, so only a
+large regression fails), smpstress failing or scaling too little, or
+Firefox never drawing its page fails the job and with it **Build and
+boot-test**.  Times are judged only under KVM; when a runner falls back to
+TCG they are recorded, not judged.  A change that makes something slower on
+purpose raises the budget in the same pull request, saying why.
 
 ## What the network and graphics suites run
 

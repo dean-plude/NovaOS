@@ -198,7 +198,8 @@ OHCI) gives the device a PDO that answers as Windows' USB hub driver does
 
 - URBs sent with `IOCTL_INTERNAL_USB_SUBMIT_URB`: selecting a
   configuration and interface, control, bulk and interrupt transfers,
-  aborting and resetting pipes. Isochronous transfers are not there yet.
+  aborting and resetting pipes. Isochronous transfers are not there yet
+  (webcams need them; see [Cameras](#cameras-usb-video-class)).
 - The port requests, the USB bus interface (`USB_BUS_INTERFACE_USBDI`,
   versions 0 to 3) and `usbd.sys`'s exports.
 - Selective-suspend requests are accepted and held until cancelled;
@@ -256,6 +257,32 @@ interface per device) and
 `ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
 device wait). NovaOS's own keyboards, mice and game controllers keep
 their built-in drivers.
+
+### Cameras: USB Video Class
+
+A USB camera (a device with a USB Video Class interface, `USB\Class_0E`)
+gets NovaOS's UVC class driver, `usbvideo` (`kernel/nt/usbvideo.c`,
+built into the kernel in place of Windows' `usbvideo.sys`). Its video
+control and video streaming interfaces form one function, as Windows'
+USB driver groups them. The driver reads the class descriptors, lists the
+camera's modes (YUY2, NV12 and MJPEG frame sizes with their frame
+rates), negotiates a mode with the UVC probe and commit requests, and
+puts the frames together from the stream's payloads. It turns on the
+`KSCATEGORY_VIDEO_CAMERA` interface. Programs get the frames through
+Media Foundation (`MFEnumDeviceSources`, the camera media source and the
+source reader, in `mfplat.dll`, `mf.dll` and `mfreadwrite.dll`), which
+reads the driver through private device controls
+(`userland/include/novacam.h`) instead of Kernel Streaming. The source
+reader converts YUY2 and NV12 to RGB32 and to each other. The Camera app
+(`camera.exe`) shows the first camera's picture; one program streams a
+camera at a time, and a second gets `MF_E_HW_MFT_FAILED_START_STREAMING`.
+
+Not done yet: isochronous streaming endpoints (most webcams use them,
+the T14's included; `usbd.c` has no isochronous URBs, so the driver logs
+that it cannot run such a camera), composite cameras with a microphone,
+MJPEG decoding, camera controls (brightness, focus), still images, Media
+Foundation's media session and source events, and AVStream (`ks.sys`)
+for a vendor's own camera driver.
 
 ### Network drivers (NDIS)
 
@@ -487,6 +514,7 @@ kept in the repository or the image.
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
+| `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |
 
 To run one boot's tests, pass their names to `--only` (`python3
 tools/selftest.py --suite devices --list` prints them).

@@ -240,6 +240,7 @@ set(KERNEL_C_SOURCES
     nt/seh.c
     nt/storport.c
     nt/usbd.c
+    nt/usbvideo.c
     nt/win10.c
     nt/win11.c
     nt/zw.c

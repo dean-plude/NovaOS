@@ -77,7 +77,7 @@ static void function_kind(const UsbPnpFn *f, PnpNode *n)
     default:
         cls = "";
         desc = f->cls == 3 ? "USB Input Device" : f->cls == 8 ? "USB Mass Storage Device" :
-               f->cls == 1 ? "USB Audio Device" : f->cls == 0xE0 ? "Bluetooth Radio" : "USB Device";
+               f->cls == 1 ? "USB Audio Device" : f->cls == 0x0E ? "USB Video Device" : f->cls == 0xE0 ? "Bluetooth Radio" : "USB Device";
         break;
     }
     put(n->cls, sizeof(n->cls), cls);
@@ -175,8 +175,10 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
               d->parent ? d->parent_port : d->root_port);
 
     /* Functions: the interfaces, a run of audio interfaces counting as
-     * one (its control interface and streams); a vendor or hub device
-     * is one function whatever its interfaces */
+     * one (its control interface and streams), and a camera's video
+     * control interface with the streaming ones after it as one (its
+     * interface association); a vendor or hub device is one function
+     * whatever its interfaces */
     UsbPnpFn f[USBPNP_MAX_FN];
     int n = 0;
     for (int i = 0; i < nfn; i++) {
@@ -184,6 +186,7 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
             if (!f[n - 1].driver) f[n - 1] = fn[i];
             continue;
         }
+        if (n && fn[i].cls == 0x0E && fn[i].sub == 2 && f[n - 1].cls == 0x0E) continue;
         if (n < USBPNP_MAX_FN) f[n++] = fn[i];
     }
     bool composite = n > 1 && dev_class != 0xFF && dev_class != 0x09;

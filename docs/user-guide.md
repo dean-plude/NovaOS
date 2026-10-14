@@ -160,6 +160,7 @@ Keyboard shortcuts:
 | **Device Manager** | Type "Device Manager" in Start.  Lists the PC's devices by type (or by connection, View menu), as Windows' Device Manager does; select one to see its status and problem code, driver (provider, version, date), hardware and compatible IDs and resources (memory and I/O ranges, IRQ).  F5 scans for hardware changes; it also refreshes when a device is plugged in or removed. |
 | **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
 | **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
+| **Camera** | Shows a USB camera's picture; type `camera` in the Terminal or find it with Windows+S.  The camera must stream on a bulk endpoint for now: most built-in webcams do not yet work (see [drivers.md](drivers.md#cameras-usb-video-class)). |
 
 ### The Terminal
 

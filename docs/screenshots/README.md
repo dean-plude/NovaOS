@@ -26,6 +26,11 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 | `device-manager.png` | 1280x800 | A copy of the devices suite's "devmgr" screenshot (`tests/selftest/devices/devmgr/010-devmgr.py`): `devmgmt --check` with every class open and the display adapter selected, resized from 2560x1600. |
 | `supertux.png` | 640x480 | SuperTux's first level, "Welcome to Antarctica", in full screen, with Tux walked right using the game pad (the steps of `tests/appcorpus/947-supertux.py`); reduced to 256 colours. |
 
+`camera.png` (1280x800) is not in the README either.  It is the devices
+suite's `camera` boot's screenshot of the Camera app showing the fake UVC
+camera's test card (`tests/selftest/devices/camera/010-camera.py`, resized
+to 1280x800), the reference picture for roadmap step 28.3.
+
 `aurora-preview.png` (1672x941) is not in the README.  It is a preview of
 the Aurora desktop rendered on a Linux host with NovaOS's own drawing code
 (see [history/2026-10-05-aurora-desktop.md](../history/2026-10-05-aurora-desktop.md)),

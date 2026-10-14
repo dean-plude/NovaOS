@@ -598,8 +598,8 @@ item ends when a named program or test demonstrates it.
   CI has no Hyper-V.  Done when a Gen 2 VM installs NovaOS to its virtual
   disk, reaches the network and changes resolution.
   - [x] Keyboard and mouse over VMBus (#255, #367)
-  - [ ] Integration services: the host's Shut Down and Restart, heartbeat,
-    time sync
+  - [x] Integration services: the host's Shut Down and Restart, heartbeat,
+    time sync (#401)
   - [ ] storvsc: SCSI disks and DVD, so NovaOS installs to a VHDX and keeps
     drive C:
   - [ ] Synthetic video: a resolution chosen in Settings

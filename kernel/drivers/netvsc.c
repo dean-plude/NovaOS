@@ -308,8 +308,13 @@ static void nv_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 tid)
 
 /* ---- the NetAdapter ---- */
 static const char *nv_name(void) { return "Hyper-V network adapter"; }
-static void nv_mac(UINT8 mac[6]) { memcpy(mac, g_nv->mac, 6); }
-static bool nv_link_up(void) { return __atomic_load_n(&g_nv->link, __ATOMIC_ACQUIRE); }
+static void nv_mac(UINT8 mac[6])
+{
+    Netvsc *n = g_nv;
+    if (n) memcpy(mac, n->mac, 6);
+    else memset(mac, 0, 6);
+}
+static bool nv_link_up(void) { Netvsc *n = g_nv; return n && __atomic_load_n(&n->link, __ATOMIC_ACQUIRE); }
 
 static int free_slot(Netvsc *n)
 {
@@ -324,7 +329,7 @@ static int free_slot(Netvsc *n)
 static bool nv_transmit(const void *frame, UINT16 len)
 {
     Netvsc *n = g_nv;
-    if (!len || len > FRAME_MAX - RNDIS_PACKET_HDR) return false;
+    if (!n || !len || len > FRAME_MAX - RNDIS_PACKET_HDR) return false;
     int s = free_slot(n);
     if (s < 0) {                                 /* the host may have answered already */
         VmbusPollChannel(n->ch);
@@ -349,6 +354,7 @@ static bool nv_transmit(const void *frame, UINT16 len)
 static int nv_receive(void *buf, int cap)
 {
     Netvsc *n = g_nv;
+    if (!n) return 0;
     UINT32 tail = n->rx_tail;
     if (tail == __atomic_load_n(&n->rx_head, __ATOMIC_ACQUIRE)) return 0;
     int len = n->rx_len[tail % RXQ];
@@ -454,10 +460,21 @@ static void nv_started(void *ctx)
     UINT32 v = n->nvs_version == 0x00002 ? 1 : n->nvs_version == 0x30002 ? 2 : n->nvs_version >> 16;
     kprintf("[NETVSC] NVSP %u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %s\n", v, n->mac[0], n->mac[1], n->mac[2], n->mac[3],
             n->mac[4], n->mac[5], n->link ? "up" : "down");
+    if (NetAvailable()) NetAttach(&g_adapter);   /* (added while NovaOS runs: NetInitialize has been) */
+}
+
+/* The adapter was taken away (removed from the VM's settings) */
+static void nv_removed(void *ctx)
+{
+    Netvsc *n = ctx;
+    if (g_nv != n) return;
+    NetDetach(&g_adapter);
+    n->up = false;
+    __atomic_store_n(&g_nv, NULL, __ATOMIC_RELEASE);
 }
 
 /* {f8615163-df3e-46c5-913f-f2d2f965ed0e} */
 const VmbusDriver HvNetworkDriver = {
     { 0x63, 0x51, 0x61, 0xf8, 0x3e, 0xdf, 0xc5, 0x46, 0x91, 0x3f, 0xf2, 0xd2, 0xf9, 0x65, 0xed, 0x0e },
-    "Hyper-V network", nv_opened, nv_packet, nv_completion, nv_started, NULL, nv_xfer,
+    "Hyper-V network", nv_opened, nv_packet, nv_completion, nv_started, NULL, nv_xfer, nv_removed,
 };

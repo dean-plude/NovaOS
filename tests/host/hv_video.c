@@ -179,6 +179,13 @@ static void windows10_checks(void)
     HvVideoDriver.tick(ctx);
     assert(counts[SV_DIRT] == d + 3);
     puts("dirt passed");
+
+    HvVideoDriver.removed(ctx);                             /* taken away: no more mode changes or dirt */
+    d = counts[SV_DIRT];
+    ticks += 100;
+    HvVideoDriver.tick(ctx);
+    assert(!g_video && !attach_set(1024, 768) && counts[SV_DIRT] == d);
+    puts("removal passed");
 }
 
 static void older_host_checks(void)

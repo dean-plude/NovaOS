@@ -219,6 +219,14 @@ int main(void)
     int n = srbs;
     assert(!d->read(d, 0, 1, back) && srbs == n);           /* nothing more is sent */
     puts("a silent host passed");
+
+    ctx->dead = false;                                      /* the controller taken away */
+    silent = false;
+    assert(d->read(d, 0, 1, back));
+    HvStorageDriver.removed(ctx);
+    n = srbs;
+    assert(!d->read(d, 0, 1, back) && !d->write(d, 0, 1, data) && srbs == n);
+    puts("removal passed");
     puts("hv_storvsc: all passed");
     return 0;
 }

@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: read
+      contents: write
       actions: read
       issues: write
     steps:
@@ -212,3 +212,15 @@ jobs:
         GITHUB_REF_NAME: ${{ github.ref_name }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_RUN_ID: ${{ github.run_id }}
+    - name: Publish App Store badges
+      if: always() && github.event_name == 'schedule' && needs.gate.outputs.run == 'true'
+      continue-on-error: true
+      env:
+        CORPUS_MATRIX: ${{ needs.gate.outputs.matrix }}
+      run: |-
+        python3 tools/ci/store_badges.py corpus-reports "$RUNNER_TEMP/store-badges.json"
+        blob=$(git hash-object -w "$RUNNER_TEMP/store-badges.json")
+        tree=$(printf '100644 blob %s\tstore-badges.json\n' "$blob" | git mktree)
+        commit=$(git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+          commit-tree "$tree" -m "App Store badges from nightly run $GITHUB_RUN_ID at ${GITHUB_SHA::7}")
+        git push --force origin "$commit:refs/heads/store-badges" || { echo "::warning::could not push the App Store badges"; exit 1; }

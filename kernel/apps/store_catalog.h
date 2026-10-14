@@ -7,6 +7,11 @@
 #define STORE_DEFAULT_PATH "\\Windows\\AppStore\\default-catalog.json"
 #define STORE_CHANNEL_PATH "\\Windows\\AppStore\\catalog-url.txt"
 #define STORE_CHANNEL "https://raw.githubusercontent.com/dean-plude/os/main/userland/store/catalog.json"
+/* The nightly app corpus's verdicts (tools/ci/store_badges.py), fetched after
+ * each catalog refresh and kept for offline use */
+#define STORE_BADGES_MAX (64u * 1024u)
+#define STORE_BADGES_PATH "\\Windows\\AppStore\\badges.json"
+#define STORE_BADGES_URL "https://raw.githubusercontent.com/dean-plude/os/store-badges/store-badges.json"
 
 typedef struct {
     int count;
@@ -285,4 +290,104 @@ static StoreCatalog *store_catalog_parse(const char *data, UINT32 len)
     return c;
 bad:
     kfree(c); return NULL;
+}
+
+/* -----------------------------------------------------------------------
+ * Nightly badges: { "schema_version": 1, "date": "...", "commit": "...",
+ * "apps": [ { "name": "...", "result": "passed"|"failed", "rating": "..." } ] }
+ * ----------------------------------------------------------------------- */
+enum { BADGE_PASSED, BADGE_FAILED };
+
+typedef struct {
+    const char *name;          /* the program's App Store name */
+    int         result;        /* BADGE_* in the latest nightly corpus run */
+    const char *rating;        /* docs/compatibility.md's rating, or NULL */
+} StoreBadge;
+
+typedef struct {
+    int count;
+    const char *date;          /* the nightly run's day, YYYY-MM-DD */
+    const char *commit;        /* the commit it tested */
+    StoreBadge badges[STORE_MAX_APPS];
+    char text[];
+} StoreBadges;
+
+static bool sb_rating(const char *r)
+{
+    static const char *ratings[] = { "Platinum", "Gold", "Silver", "Bronze", "Borked" };
+    for (int i = 0; i < 5; i++) if (!strcmp(r, ratings[i])) return true;
+    return false;
+}
+static bool sb_badge(StoreJson *j, StoreBadge *b)
+{
+    const char *result = NULL; unsigned seen = 0;
+    b->rating = NULL;
+    if (!sj_take(j, '{')) return false;
+    do {
+        char *key = sj_string(j); if (!key || !sj_take(j, ':')) return false;
+        int k = !strcmp(key, "name") ? 0 : !strcmp(key, "result") ? 1 : !strcmp(key, "rating") ? 2 : 3;
+        if (k == 3) { if (!sj_skip(j, 0)) return false; }
+        else {
+            if (seen & (1u << k)) return false;
+            seen |= 1u << k;
+            if (k == 2 && sj_literal(j, "null")) b->rating = NULL;
+            else {
+                char *v = sj_string(j); if (!v) return false;
+                if (k == 0) b->name = v; else if (k == 1) result = v; else b->rating = v;
+            }
+        }
+        if (sj_take(j, '}')) break;
+        if (!sj_take(j, ',')) return false;
+    } while (true);
+    if ((seen & 3) != 3 || !sc_text(b->name, 80) || (b->rating && !sb_rating(b->rating))) return false;
+    if (!strcmp(result, "passed")) b->result = BADGE_PASSED;
+    else if (!strcmp(result, "failed")) b->result = BADGE_FAILED;
+    else return false;
+    return true;
+}
+static StoreBadges *store_badges_parse(const char *data, UINT32 len)
+{
+    if (!data || !len || len > STORE_BADGES_MAX || memchr(data, 0, len)) return NULL;
+    StoreBadges *c = kzalloc(sizeof(*c) + len + 1); if (!c) return NULL;
+    memcpy(c->text, data, len);
+    StoreJson j = { c->text, c->text + len }; unsigned seen = 0, version = 0;
+    if (!sj_take(&j, '{')) goto bad;
+    do {
+        char *key = sj_string(&j); if (!key || !sj_take(&j, ':')) goto bad;
+        if (!strcmp(key, "schema_version")) {
+            if ((seen & 1) || !sj_uint(&j, &version) || version != 1) goto bad;
+            seen |= 1;
+        } else if (!strcmp(key, "date") || !strcmp(key, "commit")) {
+            unsigned bit = key[0] == 'd' ? 2 : 4;
+            char *v = sj_string(&j);
+            if ((seen & bit) || !sc_text(v, 40)) goto bad;
+            seen |= bit;
+            if (bit == 2) c->date = v; else c->commit = v;
+        } else if (!strcmp(key, "apps")) {
+            if ((seen & 8) || !sj_take(&j, '[')) goto bad;
+            seen |= 8;
+            if (!sj_take(&j, ']')) do {
+                if (c->count == STORE_MAX_APPS || !sb_badge(&j, &c->badges[c->count])) goto bad;
+                for (int i = 0; i < c->count; i++)
+                    if (sc_equal(c->badges[i].name, c->badges[c->count].name)) goto bad;
+                c->count++;
+                if (sj_take(&j, ']')) break;
+                if (!sj_take(&j, ',')) goto bad;
+            } while (true);
+        } else if (!sj_skip(&j, 0)) goto bad;
+        if (sj_take(&j, '}')) break;
+        if (!sj_take(&j, ',')) goto bad;
+    } while (true);
+    sj_space(&j);
+    if (seen != 15 || j.p != j.end) goto bad;
+    return c;
+bad:
+    kfree(c); return NULL;
+}
+/* @name's badge, or NULL when the nightly corpus does not test it */
+static const StoreBadge *store_badge(const StoreBadges *c, const char *name)
+{
+    for (int i = 0; c && i < c->count; i++)
+        if (sc_equal(c->badges[i].name, name)) return &c->badges[i];
+    return NULL;
 }

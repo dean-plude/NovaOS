@@ -21,6 +21,7 @@ The ISO also carries the catalog as it was at build time, as a fallback.
 | `C:\Windows\AppStore\catalog.json` | The last catalog downloaded by a refresh.  Read first. |
 | `C:\Windows\AppStore\default-catalog.json` | The catalog built into the image.  Used when `catalog.json` is missing or invalid. |
 | `C:\Windows\AppStore\catalog-url.txt` | Optional.  One HTTPS URL to refresh from instead of the default. |
+| `C:\Windows\AppStore\badges.json` | The nightly app corpus's badges, saved by the last refresh ([below](#nightly-badges)). |
 
 The default refresh URL is
 `https://raw.githubusercontent.com/dean-plude/os/main/userland/store/catalog.json`.
@@ -46,6 +47,51 @@ Only use a catalog source you trust: its URLs and install instructions
 decide what the App Store downloads and runs.  The download is checked by
 NovaOS's normal HTTPS certificate validation; the catalog itself is not
 signed.
+
+## Nightly badges
+
+Each program that the nightly app corpus tests with the App Store's own
+download shows a badge next to its name: **Verified** (with its rating
+from [compatibility.md](compatibility.md), such as "Verified: Silver")
+when every one of its corpus tests passed in the latest scheduled run,
+or **Failed last nightly** when one failed.  The sidebar says which
+night's results it shows.  Programs the corpus does not test, or tests
+with a different download than the catalog's, have no badge.
+
+- After a scheduled nightly run that ran the corpus, the **Corpus result**
+  job writes `store-badges.json` (`tools/ci/store_badges.py`) and
+  force-pushes it as the only file of the `store-badges` branch, so the
+  branch is one commit and is replaced every night.  Do not delete that
+  branch.
+- A catalog refresh then also downloads
+  `https://raw.githubusercontent.com/dean-plude/os/store-badges/store-badges.json`,
+  validates it and saves it as `C:\Windows\AppStore\badges.json`.  If
+  that download fails the catalog is still updated and the old badges
+  stay ("Catalog updated; badges kept").
+- Offline, the App Store shows the badges the last refresh saved.  A
+  fresh install has none until its first refresh.
+
+```json
+{
+  "schema_version": 1,
+  "date": "2026-10-14",
+  "commit": "549c6c7",
+  "run": "https://github.com/dean-plude/os/actions/runs/1",
+  "apps": [
+    { "name": "Krita", "result": "passed", "rating": "Silver" },
+    { "name": "WinSCP", "result": "failed", "rating": null }
+  ]
+}
+```
+
+`name` is the program's catalog name (case-insensitive, unique);
+`result` is `passed` or `failed`; `rating` is `Platinum`, `Gold`,
+`Silver`, `Bronze`, `Borked` or `null`.  `schema_version`, `date` and
+`commit` are required, unknown fields are ignored, and the file is at
+most 64 KiB.  `store-badges.py` matches a corpus test to its catalog
+entry by the test's `store=` name, else by an identical download URL,
+and takes the rating from the `docs/compatibility/` file whose
+`checked:` line links the test.
 
 The App Store's **Updates** page updates NovaOS itself
 ([updates.md](updates.md)); that has nothing to do with refreshing the
@@ -111,6 +157,7 @@ Run the host tests before publishing a change:
 ```bash
 python3 -m unittest discover -s tests/tools -p test_store_catalog.py -v
 python3 -m unittest discover -s tests/tools -p test_corpus_store_catalog.py -v
+python3 -m unittest discover -s tests/tools -p test_store_badges.py -v
 ```
 
 `test_store_catalog.py` compiles NovaOS's own catalog parser

@@ -11,8 +11,8 @@ void kfree(void *p) { free(p); }
 void kprintf(const char *fmt, ...) { (void)fmt; }
 void UmDetach(UmProcess *p) { (void)p; }
 void UiScrollTo(UiScroll *s, int p) { s->pos = p; }
-static RamNode windows, dir, offline, saved, temporary, channel;
-static bool have_cache, write_ok = true, rename_ok = true, available = true, have_channel;
+static RamNode windows, dir, offline, saved, temporary, channel, badges;
+static bool have_badges, have_cache, write_ok = true, rename_ok = true, available = true, have_channel;
 static NetOp operation;
 static int releases, requests, response_status = 200;
 static const char *response, *redirect = "";
@@ -24,6 +24,7 @@ RamNode *RamfsResolve(RamNode *cwd, const char *path)
     if (!strcmp(path, STORE_DEFAULT_PATH)) return &offline;
     if (!strcmp(path, STORE_CATALOG_PATH)) return have_cache ? &saved : NULL;
     if (!strcmp(path, STORE_CHANNEL_PATH)) return have_channel ? &channel : NULL;
+    if (!strcmp(path, STORE_BADGES_PATH)) return have_badges ? &badges : NULL;
     return NULL;
 }
 bool RamfsLoad(RamNode *f) { return f->data != NULL; }
@@ -40,8 +41,13 @@ bool RamfsWrite(RamNode *f, const char *data, UINT32 len)
 }
 bool RamfsRename(RamNode *n, RamNode *parent, const char *name, bool replace)
 {
-    (void)parent; (void)name; (void)replace;
+    (void)parent; (void)replace;
     if (!rename_ok) return false;
+    if (!strcmp(name, "badges.json")) {
+        free(badges.data); badges.data = n->data; badges.size = n->size;
+        n->data = NULL; n->size = 0; have_badges = true; return true;
+    }
+    assert(!strcmp(name, "catalog.json"));
     free(saved.data); saved.data = n->data; saved.size = n->size;
     n->data = NULL; n->size = 0; have_cache = true; return true;
 }
@@ -71,11 +77,34 @@ static void complete(Store *s, const char *body, UINT32 len)
     catalog_refresh(s); assert(s->catalog_op);
     operation.state = NET_DONE; assert(catalog_tick(s)); assert(s->catalog_phase == DL_FETCH);
     response = body; response_len = len; operation.state = NET_DONE;
+    assert(catalog_tick(s));
+    if (s->catalog_op) {        /* the catalog was taken: the badges fetch fails, keeping the old ones */
+        assert(s->catalog_badges && s->catalog_phase == DL_RESOLVE);
+        operation.state = NET_FAILED; assert(catalog_tick(s));
+    }
+    assert(!s->catalog_op);
+}
+/* A refresh whose catalog and badges downloads both succeed */
+static void complete_badges(Store *s, const char *catalog, UINT32 clen, const char *body)
+{
+    catalog_refresh(s); operation.state = NET_DONE; assert(catalog_tick(s));
+    response = catalog; response_len = clen; operation.state = NET_DONE; assert(catalog_tick(s));
+    assert(s->catalog_badges && s->catalog_op && !strcmp(s->catalog_host, "raw.githubusercontent.com"));
+    operation.state = NET_DONE; assert(catalog_tick(s)); assert(s->catalog_phase == DL_FETCH);
+    response = body; response_len = (UINT32)strlen(body); operation.state = NET_DONE;
     assert(catalog_tick(s)); assert(!s->catalog_op);
 }
 int main(int argc, char **argv)
 {
     assert(argc >= 2); UINT32 len; char *body = read_file(argv[1], &len);
+    if (argc == 3 && !strcmp(argv[2], "badges")) {
+        StoreBadges *b = store_badges_parse(body, len);
+        if (!b) { free(body); return 1; }
+        printf("%d %s %s\n", b->count, b->date, b->commit);
+        for (int i = 0; i < b->count; i++)
+            printf("%s|%d|%s\n", b->badges[i].name, b->badges[i].result, b->badges[i].rating ? b->badges[i].rating : "");
+        kfree(b); free(body); return 0;
+    }
     StoreCatalog *c = store_catalog_parse(body, len);
     if (argc == 2) {
         if (!c) { free(body); return 1; }
@@ -121,7 +150,20 @@ int main(int argc, char **argv)
     assert(!strcmp(s.catalog_path, redirect));
     operation.state = NET_DONE; catalog_tick(&s);
     response_status = 200; redirect = ""; response = body; response_len = len;
-    operation.state = NET_DONE; assert(catalog_tick(&s)); assert(!s.catalog_op);
+    operation.state = NET_DONE; assert(catalog_tick(&s)); assert(s.catalog_badges && s.catalog_op);
+    operation.state = NET_FAILED; assert(catalog_tick(&s)); assert(!s.catalog_op);
+    /* badges: fetched after the catalog, kept when that fetch fails, read back offline */
+    const char *nightly = "{\"schema_version\":1,\"date\":\"2026-10-14\",\"commit\":\"549c6c7\","
+                          "\"apps\":[{\"name\":\"7-zip\",\"result\":\"passed\",\"rating\":\"Gold\"}]}";
+    complete_badges(&s, body, len, nightly);
+    assert(have_badges && g_store_badges && g_store_badges->count == 1);
+    assert(store_badge(g_store_badges, "7-Zip") && !store_badge(g_store_badges, "Krita"));
+    StoreBadges *kept = g_store_badges;
+    complete_badges(&s, body, len, "{\"schema_version\":1,\"apps\":[]}");   /* invalid: no date */
+    assert(g_store_badges == kept && !strcmp(s.catalog_msg, "Catalog updated; badges kept"));
+    kfree(g_store_badges); g_store_badges = NULL;
+    assert(catalog_load(&s)); assert(g_store_badges && g_store_badges->count == 1);
+    kfree(g_store_badges); g_store_badges = NULL; free(badges.data);
     Store *closing = kzalloc(sizeof(*closing)); closing->dl = closing->unpack_i = -1;
     catalog_refresh(closing); assert(closing->catalog_op);
     WND window = {0}; window.user = closing; g_store = &window;

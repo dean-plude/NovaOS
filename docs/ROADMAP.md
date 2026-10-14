@@ -738,8 +738,12 @@ apps from the App Store catalog pass their nightly scripts.
   `.kra` ([history](history/2026-10-14-krita-saves.md)).
 - [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
   from the T14 over its own network.
-- [ ] **27.5 App Store badges from CI.** Show each app's verified badge from
-  the latest nightly run (completing 20.7).
+- [x] **27.5 App Store badges from CI.** Show each app's verified badge from
+  the latest nightly run (completing 20.7).  Each scheduled nightly run
+  pushes its verdicts to the `store-badges` branch; a catalog refresh
+  fetches them, and the App Store shows "Verified: Silver" or "Failed
+  last nightly" beside each program the corpus tests with the Store's
+  own download, offline too ([history](history/2026-10-14-store-badges.md)).
 
 ### Phase 28: Laptop hardware
 

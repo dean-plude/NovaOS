@@ -497,8 +497,13 @@ bool       um_pipe_device_open(UmObject *srv);
 void       um_driver_syscalls_init(void);
 bool       um_driver_name(const char *path);
 UINT32     um_driver_open(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options, UmObject **out);
-UINT32     um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offset_ptr, UINT64 *info);
-UINT32     um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info);
+/* (@event, @iosb: the caller's; STATUS_PENDING on an overlapped handle: they are finished later) */
+UINT32     um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offset_ptr, UINT64 event, UINT64 iosb,
+                        UINT64 *info);
+UINT32     um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 event,
+                           UINT64 iosb, UINT64 *info);
+UINT32     um_driver_cancel(UmObject *o, UINT64 iosb);
+void       um_driver_process_gone(UmProcess *p);
 
 /* um_disk.c: disk and volume handles (\\.\PhysicalDriveN, \\.\X:, \\?\Volume{...}) */
 bool       um_disk_name(const char *path);

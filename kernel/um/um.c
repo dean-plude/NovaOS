@@ -3362,6 +3362,7 @@ void UmPoll(void)
             release_images(p);
             imgc_release(p);
             um_pipe_process_gone(p);            /* before its memory goes */
+            um_driver_process_gone(p);
             um_close_all_handles(p);
             free_address_space(p->pml4);
             um_release_views(p);

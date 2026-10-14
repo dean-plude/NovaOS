@@ -107,7 +107,13 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   the caller's buffer in `MdlAddress`, a control code's input still
   buffered), dispatch routines returning `STATUS_PENDING` (the requesting
   thread sleeps on the IRP's event until the driver completes it, from a
-  DPC or another thread), the cancel spin lock and `IoCancelIrp`.
+  DPC or another thread), the cancel spin lock and `IoCancelIrp`.  On a
+  handle opened for overlapped I/O a pending IRP returns
+  `STATUS_PENDING` to the program instead: an I/O completion thread
+  finishes it into the caller's `OVERLAPPED` (buffered data copied back,
+  the status block written, the event set) when the driver completes
+  it, `NtCancelIoFile(Ex)` cancels it, and the handle's `IRP_MJ_CLOSE`
+  waits for the last pending one, as on Windows.
 
 ### What a driver expects of the kernel
 

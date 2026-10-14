@@ -24,6 +24,7 @@ void       *k32_env_block(int wide, SIZE_T *bytes);   /* the environment (heap b
 BOOL k32_overlapped(HANDLE h, OVERLAPPED *o, int op, PVOID buf, DWORD n, LPDWORD done, PVOID apc);
 /* NtFsControlFile with an OVERLAPPED (ConnectNamedPipe...) likewise */
 NTSTATUS k32_overlapped_fsctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWORD in_len, PVOID out, DWORD out_len);
+NTSTATUS k32_overlapped_ioctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWORD in_len, PVOID out, DWORD out_len);
 void k32_forget_handle(HANDLE h);
 void k32_io_done(HANDLE h, OVERLAPPED *o, NTSTATUS s, DWORD bytes);
 

@@ -544,7 +544,9 @@ item ends when a named program or test demonstrates it.
   descriptor; an Xbox controller has the one Windows' Xbox driver
   gives).  A vendor's USB HID device runs on the HID class driver, where
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
-  `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  `DeviceIoControl`, and overlapped `ReadFile`, `WriteFile` and
+  `DeviceIoControl` with `CancelIo` work as hidapi uses them
+  ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
   Raw Input lists the class driver's collections too and sends their
   reports as `WM_INPUT`.
   Still to do: raw keyboard and mouse input, the Xbox

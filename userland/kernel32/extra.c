@@ -2405,6 +2405,7 @@ static const struct { DWORD code; const char *text; } g_msgs[] = {
     { 996, "Overlapped I/O event is not in a signaled state." },
     { 997, "Overlapped I/O operation is in progress." },
     { 1168, "Element not found." },
+    { 1314, "A required privilege is not held by the client." },
     { 1460, "This operation returned because the timeout period expired." },
     { 10013, "An attempt was made to access a socket in a way forbidden by its access permissions." },
     { 10035, "A non-blocking socket operation could not be completed immediately." },
@@ -2481,6 +2482,42 @@ static void wb_insert(WBuf *b, const WCHAR *fmt, int flen, ULONG_PTR arg, BOOL w
     }
 }
 
+/* Message @id from @m's message table (RT_MESSAGETABLE 1, what an
+ * event source's EventMessageFile has): a heap copy, or 0.  The table is
+ * MESSAGE_RESOURCE_DATA: blocks of IDs { low, high, offset }, each
+ * offset leading to entries { length, flags (1: UTF-16), text } */
+static WCHAR *module_message(HMODULE m, DWORD id)
+{
+    HANDLE r = m ? FindResourceW(m, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(11)) : 0;
+    const BYTE *t = r ? LockResource(LoadResource(m, r)) : 0;
+    DWORD size = r ? SizeofResource(m, r) : 0, nblocks;
+    if (!t || size < 4) return 0;
+    memcpy(&nblocks, t, 4);
+    for (DWORD b = 0; b < nblocks && 4 + 12 * (b + 1) <= size; b++) {
+        DWORD lo, hi, off;
+        memcpy(&lo, t + 4 + 12 * b, 4);
+        memcpy(&hi, t + 8 + 12 * b, 4);
+        memcpy(&off, t + 12 + 12 * b, 4);
+        if (id < lo || id > hi) continue;
+        for (DWORD k = lo; off + 4 <= size; k++) {
+            WORD len, fl;
+            memcpy(&len, t + off, 2);
+            memcpy(&fl, t + off + 2, 2);
+            if (len < 4 || off + len > size) return 0;
+            if (k == id) {
+                DWORD n = len - 4u;
+                WCHAR *w = zalloc(2 * ((SIZE_T)n + 1));
+                if (!w) return 0;
+                if (fl & 1) memcpy(w, t + off + 4, n & ~1u);
+                else MultiByteToWideChar(CP_ACP, 0, (const char *)t + off + 4, (int)n, w, (int)n);
+                return w;
+            }
+            off += len;
+        }
+    }
+    return 0;
+}
+
 /* The message as UTF-16 in a heap buffer, or 0 (last error set) */
 static WCHAR *format_message(DWORD flags, LPCVOID src, DWORD id, va_list *args, BOOL wide, DWORD *len)
 {
@@ -2495,10 +2532,12 @@ static WCHAR *format_message(DWORD flags, LPCVOID src, DWORD id, va_list *args, 
             pattern = zalloc(2 * ((SIZE_T)n + 1));
             if (pattern) u2w(src, -1, pattern, n);
         }
+    } else if ((flags & FORMAT_MESSAGE_FROM_HMODULE) &&
+               (pattern = module_message(src ? (HMODULE)src : GetModuleHandleW(0), id)) != 0) {
+        /* (a module's message table: inserts as the flags say) */
     } else if (flags & FORMAT_MESSAGE_FROM_SYSTEM) {
         const char *t = 0;
         for (unsigned i = 0; i < sizeof(g_msgs) / sizeof(g_msgs[0]); i++) if (g_msgs[i].code == id) { t = g_msgs[i].text; break; }
-        if (!t && (flags & FORMAT_MESSAGE_FROM_HMODULE)) t = 0;
         if (!t) { SetLastError(317 /* ERROR_MR_MID_NOT_FOUND */); return 0; }
         int n = u2w(t, -1, 0, 0);
         pattern = zalloc(2 * ((SIZE_T)n + 3));

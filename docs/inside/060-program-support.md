@@ -19,3 +19,12 @@
     Scheduler 2.0, kept in `C:\Windows\System32\Tasks`), the Data
     Protection API, and event tracing that answers as Windows does with no
     logging session running.
+  - The event log: an EventLog service keeps the Application, System and
+    Security logs in `C:\Windows\System32\winevt\Logs` (classic `.evt`
+    files), fed through a kernel queue, so the kernel's boot, driver-load
+    and crash events and the service control manager's start and stop
+    events are kept even before the service runs.  Programs use
+    `advapi32`'s classic functions (`ReportEvent`, `ReadEventLog`,
+    `ClearEventLog`...) or `wevtapi` (`EvtQuery` with XPath filters,
+    `EvtRender`, `EvtSubscribe`, `EvtExportLog` writing `.evtx`); Event
+    Viewer (`eventvwr.exe`) shows them.

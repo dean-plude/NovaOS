@@ -158,6 +158,7 @@ Keyboard shortcuts:
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
 | **Device Manager** | Type "Device Manager" in Start.  Lists the PC's devices by type (or by connection, View menu), as Windows' Device Manager does; select one to see its status and problem code, driver (provider, version, date), hardware and compatible IDs and resources (memory and I/O ranges, IRQ).  F5 scans for hardware changes; it also refreshes when a device is plugged in or removed. |
+| **Event Viewer** | Type "Event Viewer" in Start.  Shows the Application, System and Security logs as Windows' Event Viewer does: each event's level, date, source, event ID and task category, and below the list its message (General) and its XML (Details).  The Action menu filters by level, clears a log and saves its events as `.evtx` or `.xml`.  NovaOS logs each start, services starting and stopping, drivers that fail to load and programs that crash; programs add their own events. |
 | **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
 | **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
 | **Camera** | Shows a USB camera's picture; type `camera` in the Terminal or find it with Windows+S.  The camera must stream on a bulk endpoint for now: most built-in webcams do not yet work (see [drivers.md](drivers.md#cameras-usb-video-class)). |
@@ -327,7 +328,9 @@ support it.  NovaOS saves drive C: before it restarts or shuts down.
 - **A program crashes**: NovaOS writes a crash report (the exception,
   where it happened, the stack and the loaded modules) to
   `C:\NovaOS\Crashes`.  `crashes` lists them and `crashes last` shows the
-  newest.
+  newest.  Event Viewer's Application log lists every crash too
+  (Application Error, event 1000), and its System log lists services
+  that stopped unexpectedly and drivers that failed to load.
 - **The log**: NovaOS writes what it does to the serial port (QEMU's
   `-serial stdio` shows it in your terminal).  Started from a USB stick,
   it also writes it to `EFI\NOVA\bootlog.txt` on the stick.  `dmesg` in

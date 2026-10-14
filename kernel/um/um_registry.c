@@ -878,6 +878,17 @@ static void defaults(void)
     kset_dword(pnp, "Type", 0x10);                         /* SERVICE_WIN32_OWN_PROCESS */
     kset_dword(pnp, "ErrorControl", 1);
     if (!has_value(pnp, "Start")) kset_dword(pnp, "Start", 2);   /* (automatic; a choice made since is kept) */
+    /* The event log service (eventlog.exe): keeps the Application, System
+     * and Security logs in C:\Windows\System32\winevt\Logs */
+    RegKey *evl = kpath("Machine\\SYSTEM\\CurrentControlSet\\Services\\EventLog", false);
+    kset_sz(evl, "ImagePath", "C:\\Windows\\System32\\eventlog.exe", 2);
+    kset_sz(evl, "DisplayName", "Windows Event Log", 1);
+    kset_sz(evl, "Description", "This service manages events and event logs. It supports logging events, querying events, "
+            "subscribing to events, archiving event logs, and managing event metadata.", 1);
+    kset_sz(evl, "ObjectName", "LocalSystem", 1);
+    kset_dword(evl, "Type", 0x10);                         /* SERVICE_WIN32_OWN_PROCESS */
+    kset_dword(evl, "ErrorControl", 1);
+    if (!has_value(evl, "Start")) kset_dword(evl, "Start", 2);
     /* The UMDF service (wudfsvc.exe): starts a driver host (WUDFHost.exe)
      * for each started device the reflector, WUDFRd.sys, runs */
     RegKey *wudf = kpath("Machine\\SYSTEM\\CurrentControlSet\\Services\\wudfsvc", false);

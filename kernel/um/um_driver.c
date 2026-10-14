@@ -107,7 +107,7 @@ static UINT64 sys_load_driver(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (!um_privilege_held(SE_LOAD_DRIVER_PRIVILEGE)) return STATUS_PRIVILEGE_NOT_HELD;
     char name[64];
     UINT32 st = service_of(a1, name, sizeof(name));
-    return st ? st : (UINT32)NtDrvLoad(name);
+    return st ? st : (UINT32)NtDrvLoadQuiet(name);
 }
 
 /* NtUnloadDriver(PUNICODE_STRING DriverServiceName) */

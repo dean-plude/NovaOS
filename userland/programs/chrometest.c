@@ -273,7 +273,7 @@ static void imports(void)
     HANDLE q = evq ? evq(0, L"System", L"*[System[Provider[@Name='eventlog'] and (EventID=6008)]]", 1) : 0;
     HANDLE got[4]; DWORD ng = 9;
     check(q && !evn(q, 4, got, INFINITE, 0, &ng) && GetLastError() == 259 && ng == 0 && evc(q),
-          "wevtapi: the System log has no events to return");
+          "wevtapi: the System log has no unexpected-shutdown event");
     HANDLE (WINAPI *evbm)(LPCWSTR) = (void *)GetProcAddress(ev, "EvtCreateBookmark");
     HANDLE (WINAPI *evsub)(HANDLE, HANDLE, LPCWSTR, LPCWSTR, HANDLE, void *, void *, DWORD) = (void *)GetProcAddress(ev, "EvtSubscribe");
     HANDLE (WINAPI *evlog)(HANDLE, LPCWSTR, DWORD) = (void *)GetProcAddress(ev, "EvtOpenLog");
@@ -287,10 +287,10 @@ static void imports(void)
     struct { ULONGLONG v; DWORD count, type; } var = { 7, 1, 99 };
     DWORD need = 0;
     HANDLE lg = evlog ? evlog(0, L"System", 1) : 0;
-    check(lg && evinfo(lg, 5, sizeof(var), &var, &need) && var.v == 0 && var.type == 10 && need == 16 && evc(lg),
-          "wevtapi: the System log has no records");
-    check(evpub && !evpub(0, L"Microsoft-Windows-Kernel-General", NULL, 0, 0) && GetLastError() == 15002,
-          "wevtapi: no publisher metadata");
+    check(lg && evinfo(lg, 5, sizeof(var), &var, &need) && var.type == 10 && need == 16 && evc(lg),
+          "wevtapi: the System log's record count");
+    check(evpub && !evpub(0, L"Contoso-NoSuchPublisher", NULL, 0, 0) && GetLastError() == 15002,
+          "wevtapi: no metadata for an unknown publisher");
 
     HMODULE w = LoadLibraryA("winhttp.dll");
     void *(WINAPI *wopen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD) = (void *)GetProcAddress(w, "WinHttpOpen");

@@ -23,7 +23,8 @@ typedef struct VmbusChannel VmbusChannel;
  * Optional: completion() for each completion packet (the host's answer to
  * a packet sent with want_completion, with that packet's transaction ID),
  * started() right after opened(), once the context is the channel's (a
- * driver that talks to its device before it is used: storvsc.c) */
+ * driver that talks to its device before it is used: storvsc.c), tick()
+ * on every VmbusPoll (the device poll thread, every 10 ms timer tick) */
 typedef struct {
     UINT8       type[16];
     const char *name;
@@ -31,6 +32,7 @@ typedef struct {
     void       (*packet)(void *ctx, const UINT8 *data, UINT32 len, UINT64 trans_id);
     void       (*completion)(void *ctx, const UINT8 *data, UINT32 len, UINT64 trans_id);
     void       (*started)(void *ctx);
+    void       (*tick)(void *ctx);
 } VmbusDriver;
 
 /* On CPU 0 with interrupts still off (the SynIC registers are per CPU):
@@ -51,6 +53,9 @@ bool VmbusSendGpa(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_i
  * an answer calls this itself, from any thread; VmbusPoll skips a channel
  * someone is reading) */
 void VmbusPollChannel(VmbusChannel *ch);
+/* The MMIO space the host's offer gives the device, in MiB (synthetic
+ * video: the size of its video memory) */
+UINT32 VmbusChannelMmioMegabytes(const VmbusChannel *ch);
 
 /* The partition reference counter (100 ns since the VM started), which
  * time sync's messages carry; false when the hypervisor offers none */

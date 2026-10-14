@@ -1,8 +1,8 @@
 # NovaOS in Hyper-V
 
 **Status: untested.** NovaOS has drivers for Hyper-V's synthetic keyboard
-and mouse for its SCSI disks, and for its shutdown, heartbeat and time sync
-integration services, but it has never been run on a real Hyper-V host. The drivers
+and mouse, for its SCSI disks and synthetic video, and for its shutdown,
+heartbeat and time sync integration services, but it has never been run on a real Hyper-V host. The drivers
 were written from Linux's and FreeBSD's, and their protocol code is
 tested on the build machine without a VM ([below](#tests)). Checking them
 in a Hyper-V VM is roadmap step 23.4. Reports are welcome as issues, with
@@ -13,11 +13,10 @@ virtual machine (Generation 1 has BIOS firmware only). A Generation 2 VM
 has no PS/2 controller, no USB controller and no emulated PCI devices:
 its keyboard, mouse, disks, network adapter and video are *synthetic
 devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
-mouse, the SCSI disks ([below](#disks)) and the integration services
-([below](#integration-services)); the rest is listed under
+mouse, the SCSI disks ([below](#disks)), the video ([below](#display))
+and the integration services ([below](#integration-services)); the rest is listed under
 [What does not work yet](#what-does-not-work-yet). Full Gen 2 support is
-a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: video,
-network (netvsc), Hyper-V's own clock and timers, key-value exchange.
+a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: network (netvsc), Hyper-V's own clock and timers, key-value exchange.
 
 ## Making the VM
 
@@ -105,6 +104,27 @@ are disks added or removed while NovaOS runs (they are seen at the next
 start).  Disks on a VM's second, third or fourth SCSI controller work
 too.
 
+## Display
+
+`kernel/drivers/hv_video.c` drives Hyper-V's synthetic video device, so
+the resolution can be changed in Settings > Display like on a PC.  NovaOS
+starts on the firmware's frame buffer, then the driver agrees on a
+protocol version with the host (3.5, as Windows 10 speaks it, else 3.2 or
+3.0), tells the host that the frame buffer is the video memory, and lists
+the modes that fit in it: with 3.5 the ones the host offers, otherwise
+the common ones from 640x480 up.  A mode larger than the video memory the
+host gives the VM (its size is in the log line below) is not listed; to
+allow a larger screen, raise the VM's maximum resolution from PowerShell
+with the VM off:
+
+```powershell
+Set-VMVideo -VMName NovaOS -HorizontalResolution 2560 -VerticalResolution 1600 -ResolutionType Maximum
+```
+
+Hyper-V shows the video memory only where the guest says it changed, so
+the driver reports the whole screen 20 times a second while the host
+asks for it.  NovaOS draws its own pointer (the host's is hidden).
+
 ## Integration services
 
 `kernel/drivers/hv_util.c` answers three of the integration services
@@ -169,11 +189,14 @@ version and the descriptor's size depend on the host):
 [STORVSC] controller 0: protocol 6.2, transfers up to 128 KiB
 [STORVSC] controller 0, location 0: hv0 "Msft     Virtual Disk", 130048 MiB
 [STORVSC] controller 0, location 1: Msft     Virtual DVD-ROM (DVD drive; NovaOS started from it already): not used
+[VMBUS] Hyper-V video: channel 7 open
+[HVVIDEO] Synthetic video 3.5: 8 MiB of video memory at 0xf8000000, 9 mode(s)
+[DISPLAY] Hyper-V synthetic video: 1024x768, 9 mode(s)
 ```
 
 Every device the host offers is listed, with a name for the common ones
-(video, network, key-value exchange and dynamic memory are named and
-marked "no driver"). Other
+(network, key-value exchange and dynamic memory are named and marked
+"no driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -194,13 +217,15 @@ lines say what went wrong:
 | `[STORVSC] controller N: no disks` | the controller has no virtual hard disk attached |
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
+| `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
+| `[DISPLAY] 1920x1080 refused by Hyper-V` | the host did not take the mode change; the screen stays as it was |
 
 ## What does not work yet
 
 | Device | State |
 |---|---|
 | Keyboard, mouse | Drivers exist (VMBus); not yet checked on a real host |
-| Display | The firmware's frame buffer, at the resolution the firmware chose; no driver for the synthetic video device, so no resolution changes |
+| Display | Driver exists ([above](#display)); not yet checked on a real host. One screen only |
 | Disks | Driver exists ([above](#disks)); not yet checked on a real host. 4 KiB-sector VHDX files and disks added while running are not used |
 | Network | No driver for Hyper-V's network adapter (netvsc) |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
@@ -224,7 +249,11 @@ bring-up with a refused protocol version, the scan (a disk, the DVD drive,
 a 4 KiB-sector disk, an 8 TiB disk that needs READ CAPACITY(16), empty
 locations answered both ways Hyper-V does), a unit attention, reads and
 writes split at the host's largest transfer, flush, and a host that stops
-answering. Its mouse case uses the device information layout Hyper-V sends (a
+answering.  `tests/host/hv_video.c` (`tests/tools/test_hv_video.py`) runs
+the video driver against a fake host: each message's size, the version
+fallback from 3.5 to 3.0, the host's mode list filtered to what fits,
+the video memory's location, mode changes, the dirty-rectangle timing and
+the host turning it off, and a host that refuses or never answers. Its mouse case uses the device information layout Hyper-V sends (a
 32-byte block: a 32-bit size, vendor, product, version and eleven
 reserved 16-bit words, then the HID descriptor), checked against
 FreeBSD's `hv_hid.c`.

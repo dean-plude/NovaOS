@@ -332,7 +332,8 @@ class Conn:
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
                 if body[0] == EP_IN and not self.listening:
                     self.listening = True
-                    self.send_report()
+                    if self.pad.kind != 'vendor':     # (the vendor device only answers what it is sent)
+                        self.send_report()
             elif ptype == STOP_INTERRUPT_RECEIVING:
                 if body[0] == EP_IN:
                     self.listening = False

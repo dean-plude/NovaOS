@@ -218,6 +218,8 @@ int main(int argc, char **argv)
     /* output reports and the input reports they come back as, on two handles */
     HANDLE h2 = open_dev(path);
     check(h2 != INVALID_HANDLE_VALUE, "a second handle");
+    HidD_FlushQueue(h);                      /* (nothing from before this run) */
+    if (h2 != INVALID_HANDLE_VALUE) HidD_FlushQueue(h2);
     check(send_output(h, 0x10, TRUE), "WriteFile: output report 2 (error %lu)", GetLastError());
     check(read_echo(h, 0x10), "ReadFile: the echo as input report 1");
     if (h2 != INVALID_HANDLE_VALUE) check(read_echo(h2, 0x10), "ReadFile on the second handle: the same report");
@@ -239,7 +241,8 @@ int main(int argc, char **argv)
     send_output(h, 0x30, TRUE);
     send_output(h, 0x40, TRUE);
     Sleep(500);
-    check(HidD_FlushQueue(h), "HidD_FlushQueue (error %lu)", GetLastError());
+    ok = HidD_FlushQueue(h);
+    check(ok, "HidD_FlushQueue (error %lu)", ok ? 0 : GetLastError());
     send_output(h, 0x50, TRUE);
     check(read_echo(h, 0x50), "after the flush ReadFile gets the next report, not the flushed ones");
     if (h2 != INVALID_HANDLE_VALUE) {

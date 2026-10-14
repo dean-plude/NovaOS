@@ -30,6 +30,12 @@ images or API calls are loaded.
 No mock conversations, made-up usage figures or invented update notices
 are shown anywhere in the OS.
 
+## Brand
+
+The logo, icon set, brand colours and wallpapers that the desktop is moving
+to are in [brand/README.md](brand/README.md). The wallpapers already ship in
+`C:\Pictures`; the icons and logo are drawn natively in a later change.
+
 ## Layout rules
 
 - The Aurora workspace (sidebar, search bar, calendar and workspace cards)

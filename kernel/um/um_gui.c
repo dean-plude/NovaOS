@@ -1693,6 +1693,12 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
     }
     case 3: case 4: case 5:                     /* (Windows drivers on the nodes: um_driver.c) */
         return UmPnpDriverCtl((UINT32)(arg & 0xFF), (UINT32)(arg >> 8), ptr);
+    case 6: {                                   /* a node's resources: up to 8 */
+        PnpResource r[8];
+        int n = PnpResources((UINT32)(arg >> 8), r, 8);
+        if (n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, r, sizeof(PnpResource) * (size_t)n))) return 0;
+        return (UINT64)n;
+    }
     }
     return 0;
 }

@@ -75,6 +75,9 @@ typedef struct Thread {
     /* Timing */
     uint64_t        ticks_total;   /* Total ticks consumed */
     uint64_t        ticks_slice;   /* Ticks used in current time slice */
+    uint64_t        run_tsc;       /* TSC cycles it has run, up to its last switch out */
+    uint64_t        on_tsc;        /* the TSC when it was last charged (switched in, or a tick) */
+    uint64_t       *acct_tsc;      /* also charged there: its process's total (UmProcess.cpu_tsc), or NULL */
 
     /* Scheduling priority (0 = lowest, 31 = highest in NT model): the
      * current (dynamic) one, which a wake-up raises above the base by the
@@ -290,6 +293,15 @@ void sched_wait(void);
  * Must be called with interrupts DISABLED (we're in an IRQ handler).
  */
 void sched_tick(void);
+
+/* CPU time (100 ns units, as Windows counts it), measured with the TSC
+ * at each switch: what @t has run, the running stretch included */
+uint64_t sched_thread_time(const Thread *t);
+uint64_t sched_tsc_100ns(uint64_t tsc);         /* TSC cycles as 100 ns units */
+/* CPU @cpu since it started: its idle thread's time, the time it ran user
+ * programs' threads (in user mode or in system calls for them) and the
+ * whole (idle, kernel threads and user threads together) */
+void sched_cpu_times(uint32_t cpu, uint64_t *idle, uint64_t *user, uint64_t *total);
 
 /* Timer ticks since boot (100 Hz, i.e. 10 ms each) */
 uint64_t sched_ticks(void);

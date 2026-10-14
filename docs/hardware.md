@@ -86,7 +86,7 @@ names the driver that runs the same device on Linux.
 | **Lid** | ACPI lid switch | `acpi button` | supported | lid device `PNP0C0D`; closing it sleeps, which on the T14 is low-power S0 idle with the LPS0 calls, not S3. Tested with a custom ACPI table in QEMU |
 | **Timers** | TSC with TSC-deadline, HPET (may be off in the firmware) | — | supported | TSC-deadline APIC timer, calibrated by the HPET; without one, from CPUID leaf 0x15 (0x16 when the crystal is not reported), then the 8254 PIT ([install-and-power.md](install-and-power.md#timers-without-an-hpet)); QEMU's usual CPU models do not report leaf 0x15, so that path has had little testing |
 | **Serial console** | none on the machine; Intel AMT serial-over-LAN on vPro models (a PCI 16550 UART) | `8250_pci` | missing | not needed: NovaOS logs to COM1 at I/O port 0x3F8 only, which the machine lacks; started from a USB stick it writes its log into `EFI\NOVA\bootlog.txt` on the stick instead |
-| **Camera** | 720p or 1080p+IR, USB | `uvcvideo` | missing | roadmap step 28.3 |
+| **Camera** | 720p or 1080p+IR, USB | `uvcvideo` | partial | the UVC class driver and Media Foundation capture run a camera with a bulk streaming endpoint (tested with a fake camera in QEMU); the T14's webcam streams isochronously, which NovaOS's Windows USB interface lacks yet (roadmap step 28.3). The IR camera (Windows Hello) is not supported |
 | **Fingerprint reader** | in the power button, USB | `libfprint` | missing | |
 | **Smart card reader, NFC, WWAN** | optional | — | missing | |
 | **TPM** | discrete TPM 2.0 | `tpm_tis` | missing | |

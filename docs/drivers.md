@@ -37,6 +37,23 @@ and functions, and the child devices a Windows bus driver reports
 (`IoInvalidateDeviceRelations`). A non-Plug-and-Play kernel driver can
 also be installed as a service and started by hand (below).
 
+### Device Manager
+
+Device Manager (`devmgmt.exe`, "Device Manager" in Start) shows the same
+device tree the way Windows' does: devices by type or by connection,
+phantoms with View > Show hidden devices, and for the selected device its
+status and problem code, driver (provider, version, date, INF), hardware
+and compatible IDs and resources.  It reads them only through the public
+APIs: `SetupDiGetClassDevs`, `SetupDiGetClassDescription`,
+`SetupDiGetDeviceRegistryProperty`, `SetupDiGetDeviceProperty`
+(`DEVPKEY_Device_Driver*`, from the software key a device install
+writes; a NovaOS driver shows NovaOS as its provider and the system
+version, as Windows' inbox drivers do), `CM_Get_DevNode_Status`,
+`CM_Get_Child`/`CM_Get_Sibling` and `CM_Get_First_Log_Conf`,
+`CM_Get_Next_Res_Des`, `CM_Get_Res_Des_Data`.  A PCI device's resources
+are its BARs, sized once at boot before any driver runs, and its
+interrupt line as routed by ACPI.
+
 ### pnputil
 
 `pnputil` is Windows' driver package tool, with one NovaOS addition
@@ -181,7 +198,8 @@ OHCI) gives the device a PDO that answers as Windows' USB hub driver does
 
 - URBs sent with `IOCTL_INTERNAL_USB_SUBMIT_URB`: selecting a
   configuration and interface, control, bulk and interrupt transfers,
-  aborting and resetting pipes. Isochronous transfers are not there yet.
+  aborting and resetting pipes. Isochronous transfers are not there yet
+  (webcams need them; see [Cameras](#cameras-usb-video-class)).
 - The port requests, the USB bus interface (`USB_BUS_INTERFACE_USBDI`,
   versions 0 to 3) and `usbd.sys`'s exports.
 - Selective-suspend requests are accepted and held until cancelled;
@@ -222,7 +240,12 @@ handle. Programs use the collection as on Windows: setupapi and cfgmgr32
 list its interface, and `hid.dll`'s `HidD_*` send it the `IOCTL_HID_*`
 requests (attributes, preparsed data, feature, input and output reports,
 strings, the queue's size and flushing it); `ReadFile` takes input
-reports and `WriteFile` sends an output report.
+reports and `WriteFile` sends an output report. Raw Input lists each
+collection as a `RIM_TYPEHID` device named by its interface path, with
+its attributes, usage and preparsed data, and a program that registers
+for its usage gets every input report as `WM_INPUT` (and
+`WM_INPUT_DEVICE_CHANGE` as it comes and goes), as win32k does on
+Windows.
 
 A USB HID device that no NovaOS driver takes (a vendor-defined device,
 not a keyboard, mouse, touch screen or game controller) gets NovaOS's
@@ -230,10 +253,36 @@ own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
 kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
 interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
 feature and input reports. Not done yet: composite USB devices (one HID
-interface per device), the collections in Raw Input's device list, and
+interface per device) and
 `ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
 device wait). NovaOS's own keyboards, mice and game controllers keep
 their built-in drivers.
+
+### Cameras: USB Video Class
+
+A USB camera (a device with a USB Video Class interface, `USB\Class_0E`)
+gets NovaOS's UVC class driver, `usbvideo` (`kernel/nt/usbvideo.c`,
+built into the kernel in place of Windows' `usbvideo.sys`). Its video
+control and video streaming interfaces form one function, as Windows'
+USB driver groups them. The driver reads the class descriptors, lists the
+camera's modes (YUY2, NV12 and MJPEG frame sizes with their frame
+rates), negotiates a mode with the UVC probe and commit requests, and
+puts the frames together from the stream's payloads. It turns on the
+`KSCATEGORY_VIDEO_CAMERA` interface. Programs get the frames through
+Media Foundation (`MFEnumDeviceSources`, the camera media source and the
+source reader, in `mfplat.dll`, `mf.dll` and `mfreadwrite.dll`), which
+reads the driver through private device controls
+(`userland/include/novacam.h`) instead of Kernel Streaming. The source
+reader converts YUY2 and NV12 to RGB32 and to each other. The Camera app
+(`camera.exe`) shows the first camera's picture; one program streams a
+camera at a time, and a second gets `MF_E_HW_MFT_FAILED_START_STREAMING`.
+
+Not done yet: isochronous streaming endpoints (most webcams use them,
+the T14's included; `usbd.c` has no isochronous URBs, so the driver logs
+that it cannot run such a camera), composite cameras with a microphone,
+MJPEG decoding, camera controls (brightness, focus), still images, Media
+Foundation's media session and source events, and AVStream (`ks.sys`)
+for a vendor's own camera driver.
 
 ### Network drivers (NDIS)
 
@@ -464,7 +513,8 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
-| `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, unplugging |
+| `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
+| `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |
 
 To run one boot's tests, pass their names to `--only` (`python3
 tools/selftest.py --suite devices --list` prints them).

@@ -153,6 +153,8 @@ typedef struct {
     UINT64            trb_at[MAX_TD_TRBS];      /* its TRBs' physical addresses */
     UINT32            trb_off[MAX_TD_TRBS + 1]; /* and where each one's data starts */
     int               ntrb;
+    bool              held;               /* still queued after its caller timed out (UsbPipe.keep) */
+    UINT32            held_len;
     volatile bool     done;
     volatile UINT8    code;
     volatile UINT32   moved;
@@ -516,15 +518,40 @@ static bool xhci_listen(UsbHc *hc, UsbPipe *p)
     return true;
 }
 
+/* Take a queued TD back: Stop Endpoint, then move the dequeue pointer
+ * past it, so a later completion cannot land in the next transfer.
+ * Whether it had finished after all */
+static bool take_back(Xhci *x, UsbDev *d, UsbPipe *p, XPipe *xp)
+{
+    command(x, 0, TRB_TYPE(TRB_STOP_EP) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
+    IrqState s = spin_lock_irqsave(&g_usb_lock);
+    bool done = xp->done;
+    UINT64 deq = phys(&xp->ring.trbs[xp->ring.enq]) | xp->ring.cycle;
+    spin_unlock_irqrestore(&g_usb_lock, s);
+    command(x, deq, TRB_TYPE(TRB_SET_DEQ) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
+    xp->held = false;
+    return done;
+}
+
 static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool *stalled)
 {
     Xhci *x = X(hc);
     UsbDev *d = p->dev;
     XPipe *xp = XP(p);
     if (!xp || !XD(d)->slot) return -1;
+    IrqState s;
+
+    /* An interrupt IN transfer still queued from the last call goes on
+     * waiting (a device's report is never caught between a Stop Endpoint
+     * and the next transfer) */
+    if (xp->held && xp->held_len == len && p->keep) {
+        xp->held = false;
+        goto wait;
+    }
+    if (xp->held) take_back(x, d, p, xp);              /* (another length: its report, if any, dropped) */
 
     /* One TD: a TRB per 64 KiB boundary crossed */
-    IrqState s = spin_lock_irqsave(&g_usb_lock);
+    s = spin_lock_irqsave(&g_usb_lock);
     xp->done = false;
     UINT32 off = 0;
     int n = 0;
@@ -545,6 +572,7 @@ static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
     doorbell(x, XD(d)->slot, p->idx);
     spin_unlock_irqrestore(&g_usb_lock, s);
 
+wait:;
     UINT64 start = rdtsc(), deadline = start + g_tsc_per_tick * (UINT64)timeout_ms / 10;
     for (;;) {
         events_once(x);
@@ -555,15 +583,12 @@ static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
         }
         if (d->gone) return -1;
         if (rdtsc() > deadline) {
-            /* Take the TD back: Stop Endpoint, then move the dequeue
-             * pointer past it, so a later completion cannot land in the
-             * next transfer */
-            command(x, 0, TRB_TYPE(TRB_STOP_EP) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
-            s = spin_lock_irqsave(&g_usb_lock);
-            bool done = xp->done;
-            UINT64 deq = phys(&xp->ring.trbs[xp->ring.enq]) | xp->ring.cycle;
-            spin_unlock_irqrestore(&g_usb_lock, s);
-            command(x, deq, TRB_TYPE(TRB_SET_DEQ) | TRB_SLOT(XD(d)->slot) | TRB_EP(p->idx), NULL);
+            if (p->keep && p->in) {                    /* (left queued for the next call) */
+                xp->held = true;
+                xp->held_len = len;
+                return USB_TIMED_OUT;
+            }
+            bool done = take_back(x, d, p, xp);
             if (done && (xp->code == CC_SUCCESS || xp->code == CC_SHORT_PACKET)) return (int)xp->moved;
             return USB_TIMED_OUT;
         }
@@ -580,6 +605,7 @@ static bool xhci_pipe_reset(UsbHc *hc, UsbPipe *p)
     XDev *xd = XD(p->dev);
     XPipe *xp = XP(p);
     if (!xp || !xd->slot) return false;
+    if (xp->held) take_back(x, p->dev, p, xp);
     if (command(x, 0, TRB_TYPE(TRB_RESET_EP) | TRB_SLOT(xd->slot) | TRB_EP(p->idx), NULL) != CC_SUCCESS)
         return false;
     IrqState s = spin_lock_irqsave(&g_usb_lock);

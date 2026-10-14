@@ -265,6 +265,7 @@ struct UmProcess {
     UINT32      pid;
     UINT32      parent_pid;     /* the process that started it (0: the system) */
     UINT64      create_time;    /* 100 ns units since 1601 */
+    UINT64      exit_time;      /* when its last thread ended (the same units) */
     bool        wow;            /* a 32-bit (x86) program: compatibility mode, SysWOW64 DLLs */
     bool        dep_off;        /* data pages run as code: a 32-bit program not marked NX-compatible (UmDepFault) */
     UmLayout    lay;            /* where its system areas and allocations go */
@@ -300,6 +301,7 @@ struct UmProcess {
 
     UmThread   *threads[UM_MAX_THREADS];
     int         live_threads;
+    UINT64      cpu_tsc;        /* TSC cycles its threads have run, ended ones too (the scheduler adds) */
     UINT64      thread_start;   /* ntdll!RtlUserThreadStart */
     UINT64      exc_dispatcher; /* ntdll!KiUserExceptionDispatcher */
     UINT32      stack_reserve;  /* from the image header */

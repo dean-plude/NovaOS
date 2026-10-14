@@ -88,8 +88,20 @@ void        um_image_cache_stats(UINT32 *files, UINT64 *bytes, UINT64 *reused);
 const char *UmName(const UmProcess *p);
 
 /* Process list, for tasklist: fills up to @max entries. */
-typedef struct { UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; UINT32 parent_pid; } UmProcInfo;
+typedef struct {
+    UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; UINT32 parent_pid;
+    UINT64 cpu_time;        /* CPU time its threads ran, ended ones too (100 ns) */
+    UINT64 create_time;     /* 100 ns since 1601 */
+    UINT32 handles;         /* open handles */
+    UINT32 commit_kb;       /* committed memory (resident or not) */
+    UINT8  base_priority;   /* its priority class's base (8: NORMAL) */
+} UmProcInfo;
 int  UmList(UmProcInfo *out, int max);
+/* The threads of process @pid (SystemProcessInformation's thread records) */
+typedef struct {
+    UINT32 tid; UINT64 cpu_time, start; UINT8 priority, base_priority, state;   /* state: ThreadState */
+} UmThreadInfo;
+int  UmThreadList(UINT32 pid, UmThreadInfo *out, int max);
 /* taskkill: false if no running process has @pid. */
 bool UmKillPid(UINT32 pid);
 void UmKillConsole(UmConsole *con, UINT32 status);   /* every program on @con */

@@ -1073,9 +1073,10 @@ NTSYSAPI NTSTATUS NTAPI NtQuerySystemInformation(ULONG cls, PVOID buf, ULONG len
         memset(p, 0, sizeof(p));
         ULONG total = phys_pages(), avail = *(volatile ULONG *)(ULONG_PTR)0x7FFE0F08;
         if (avail > total) avail = total;
-        *(ULONG *)(p + 0x3C) = avail;                               /* AvailablePages */
-        *(ULONG *)(p + 0x40) = total - avail;                       /* CommittedPages */
-        *(ULONG *)(p + 0x44) = total;                               /* CommitLimit (no page file) */
+        *(ULONG *)(p + 0x2C) = avail;                               /* AvailablePages */
+        *(ULONG *)(p + 0x30) = total - avail;                       /* CommittedPages */
+        *(ULONG *)(p + 0x34) = total;                               /* CommitLimit (no page file) */
+        *(ULONG *)(p + 0x38) = total - avail;                       /* PeakCommitment */
         if (ret) *ret = sizeof(p);
         if (len < sizeof(p)) return ST_INFO_LENGTH_MISMATCH;
         memcpy(buf, p, sizeof(p));

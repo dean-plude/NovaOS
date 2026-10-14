@@ -8,3 +8,8 @@
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows
     programs and NovaOS updates) and, on the live media, Install NovaOS.
+  - Task Manager (`taskmgr.exe`, a Windows program in System32;
+    Ctrl+Shift+Esc, Start's right-click menu or search): Processes with
+    End task, Performance (each logical processor, memory, disk and
+    Ethernet over 60 seconds), Details and Services, read through the same
+    APIs Windows' Task Manager uses.

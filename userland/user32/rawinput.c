@@ -34,10 +34,26 @@
  * which share their bits with RIDEV_EXCLUDE 0x10 and RIDEV_PAGEONLY 0x20:
  * the three are a mode) stops the process's legacy mouse or keyboard
  * messages (msg.c asks raw_nolegacy).
+ *
+ * The HID collections the kernel's HID class driver runs (kernel/nt/
+ * hidclass.c: a USB HID device on its HidUsb minidriver, or a vendor's
+ * minidriver) are Raw Input's devices too, as win32k makes them on
+ * Windows: each device node HID\... whose driver turned the HID interface
+ * on is a RIM_TYPEHID device, its name the interface path, its
+ * RIDI_DEVICEINFO and RIDI_PREPARSEDDATA what IOCTL_HID_GET_COLLECTION_
+ * INFORMATION and _DESCRIPTOR say.  While the process has registrations a
+ * thread per collection holds a handle of its own (the class driver queues
+ * every input report for each open handle) and posts each report ReadFile
+ * gives as WM_INPUT; the reader looks the device tree over again when
+ * Plug and Play reports a change, and announces arrivals and removals.
  */
 #include "u32.h"
 #include <novapad.h>
 #include <novahidp.h>
+#include <novapnp.h>
+
+WINBASEAPI BOOL WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPVOID out, DWORD out_n,
+                                       LPDWORD ret, LPOVERLAPPED ov);
 
 #define MAX_REG   32
 #define HELD      256                 /* raw input handles kept for GetRawInputData */
@@ -47,6 +63,9 @@
 #define USAGE_MOUSE    0x00010002     /* usage page << 16 | usage */
 #define USAGE_KEYBOARD 0x00010006
 #define MODE(f)   ((f) & 0x30)        /* RIDEV_EXCLUDE, RIDEV_PAGEONLY, RIDEV_NOLEGACY */
+#define REPORT_MAX 256                /* longest input report kept for WM_INPUT */
+#define MAX_CLASS  16                 /* class-driver collections */
+#define DEV_CLASS  0x20000000         /* their device handles: DEV_CLASS + a number never reused */
 
 typedef struct {
     DWORD id;                         /* HRAWINPUT value (0: free) */
@@ -54,7 +73,7 @@ typedef struct {
     HANDLE dev;
     WPARAM code;
     DWORD len;
-    union { BYTE data[NOVA_PAD_REPORT_MAX]; RAWMOUSE mouse; RAWKEYBOARD keyboard; };
+    union { BYTE data[REPORT_MAX]; RAWMOUSE mouse; RAWKEYBOARD keyboard; };
 } Held;
 
 static SRWLOCK        g_lock = SRWLOCK_INIT;
@@ -88,6 +107,133 @@ static int dev_slot(HANDLE h, NovaPadInfo *info)
 static DWORD dev_usage(const NovaPadInfo *i)
 {
     return (DWORD)(i->usage >> 8) << 16 | (i->usage & 0xFF);
+}
+
+/* ---------------------------------------------------------------------------
+ * The HID class driver's collections (under g_class_lock)
+ * ------------------------------------------------------------------------- */
+
+/* The HID class driver's requests (hidclass.h) */
+#define HID_CTL(fn, method)         ((0x0B << 16) | ((fn) << 2) | (method))
+#define IOCTL_COLLECTION_INFO       HID_CTL(106, 0)
+#define IOCTL_COLLECTION_DESC       HID_CTL(100, 3)
+
+typedef struct {                       /* HID_COLLECTION_INFORMATION */
+    ULONG  DescriptorSize;
+    BOOLEAN Polled;
+    UCHAR  Reserved1[1];
+    USHORT VendorID, ProductID, VersionNumber;
+} CollectionInfo;
+
+typedef struct {
+    HANDLE dev;                        /* its Raw Input handle (NULL: a free entry) */
+    DWORD  node;                       /* its device node */
+    WCHAR  path[200];                  /* the HID interface path */
+    USHORT vid, pid, version;
+    DWORD  usage;                      /* usage page << 16 | usage */
+    UINT   in_len;                     /* input report length (ID byte included) */
+    BYTE  *pp;                         /* preparsed data */
+    UINT   pp_len;
+    BOOL   reading;                    /* its reading thread runs */
+} ClassDev;
+
+static SRWLOCK  g_class_lock = SRWLOCK_INIT;
+static ClassDev g_class[MAX_CLASS];
+static DWORD    g_class_next;
+
+/* The entry of class device handle @h (under g_class_lock), or NULL */
+static ClassDev *class_dev(HANDLE h)
+{
+    if (!h) return NULL;
+    for (int i = 0; i < MAX_CLASS; i++) if (g_class[i].dev == h) return &g_class[i];
+    return NULL;
+}
+
+/* Whether node @n is a collection the HID class driver runs: HID\..., there,
+ * its HID interface turned on by its driver */
+static BOOL class_node(const NovaPnpNode *n)
+{
+    static const GUID hid = NOVA_IF_HID;
+    if (!nova_pnp_prefix(n->instance, "HID\\") || !(n->flags & NOVA_PNP_PRESENT)) return FALSE;
+    GUID w[8];
+    int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
+    for (int j = 0; j < m && j < 8; j++) if (!memcmp(&w[j], &hid, sizeof(GUID))) return TRUE;
+    return FALSE;
+}
+
+/* What the collection at @path is (into @d): its attributes and preparsed data */
+static BOOL class_query(ClassDev *d)
+{
+    HANDLE h = CreateFileW(d->path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return FALSE;
+    CollectionInfo ci;
+    DWORD n = 0;
+    BOOL ok = DeviceIoControl(h, IOCTL_COLLECTION_INFO, NULL, 0, &ci, sizeof(ci), &n, NULL) && ci.DescriptorSize;
+    BYTE *pp = ok ? HeapAlloc(GetProcessHeap(), 0, ci.DescriptorSize) : NULL;
+    ok = pp && DeviceIoControl(h, IOCTL_COLLECTION_DESC, NULL, 0, pp, ci.DescriptorSize, &n, NULL);
+    CloseHandle(h);
+    const NovaHidP *hp = ok ? nova_hidp_check(pp) : NULL;
+    if (!hp) { if (pp) HeapFree(GetProcessHeap(), 0, pp); return FALSE; }
+    d->vid = ci.VendorID;
+    d->pid = ci.ProductID;
+    d->version = ci.VersionNumber;
+    d->usage = (DWORD)hp->page << 16 | hp->usage;
+    d->in_len = hp->rlen[0];
+    d->pp = pp;
+    d->pp_len = ci.DescriptorSize;
+    return TRUE;
+}
+
+static void notify(DWORD usage, HANDLE dev, BOOL arrived);
+static void class_start(ClassDev *d);
+
+/* Look the device tree over: collections that came get an entry (and,
+ * once the reader runs, an announcement and a reading thread), those that
+ * went lose theirs */
+static void class_refresh(void)
+{
+    struct { DWORD usage; HANDLE dev; BOOL arrived; } ev[2 * MAX_CLASS];
+    int nev = 0;
+    BOOL seen[MAX_CLASS] = { 0 };
+    static const GUID hid = NOVA_IF_HID;
+    DWORD count = nova_pnp_count();
+    NovaPnpNode node;
+    AcquireSRWLockExclusive(&g_class_lock);
+    for (DWORD id = 1; id <= count; id++) {
+        if (!nova_pnp_node(id, &node) || !class_node(&node)) continue;
+        int at = -1, free_at = -1;
+        for (int i = 0; i < MAX_CLASS; i++) {
+            if (g_class[i].dev && g_class[i].node == id) at = i;
+            else if (!g_class[i].dev && free_at < 0) free_at = i;
+        }
+        if (at >= 0) {
+            seen[at] = TRUE;
+            if (g_thread) class_start(&g_class[at]);   /* (its thread gave up: again) */
+            continue;
+        }
+        if (free_at < 0) continue;
+        ClassDev *d = &g_class[free_at];
+        memset(d, 0, sizeof(*d));
+        d->node = id;
+        nova_pnp_iface_path(&node, &hid, d->path, 200);
+        if (!class_query(d)) continue;                 /* (not ready yet: the next look) */
+        d->dev = (HANDLE)(ULONG_PTR)(DEV_CLASS + ++g_class_next);
+        seen[free_at] = TRUE;
+        if (g_thread) {
+            ev[nev].usage = d->usage; ev[nev].dev = d->dev; ev[nev++].arrived = TRUE;
+            class_start(d);
+        }
+    }
+    for (int i = 0; i < MAX_CLASS; i++) {
+        ClassDev *d = &g_class[i];
+        if (!d->dev || seen[i]) continue;
+        if (g_thread) { ev[nev].usage = d->usage; ev[nev].dev = d->dev; ev[nev++].arrived = FALSE; }
+        HeapFree(GetProcessHeap(), 0, d->pp);
+        d->dev = NULL;                                 /* (its reading thread sees it go) */
+        d->pp = NULL;
+    }
+    ReleaseSRWLockExclusive(&g_class_lock);
+    for (int i = 0; i < nev; i++) notify(ev[i].usage, ev[i].dev, ev[i].arrived);
 }
 
 /* ---------------------------------------------------------------------------
@@ -164,6 +310,72 @@ static void from_ring(const NovaPadRaw *r, Held *h)
     }
 }
 
+/* An input report of class device @dev (whose collection is @usage) */
+static void deliver_class(HANDLE dev, DWORD usage, const BYTE *data, UINT len)
+{
+    if (len > REPORT_MAX) len = REPORT_MAX;
+    AcquireSRWLockExclusive(&g_lock);
+    RAWINPUTDEVICE *reg = reg_for(usage);
+    WPARAM code = 0;
+    HWND to = reg ? target_of(reg, &code) : NULL;
+    DWORD id = 0;
+    if (to) {
+        if (!++g_next_id) g_next_id = 1;
+        id = g_next_id;
+        Held *h = &g_held[id % HELD];
+        h->id = id;
+        h->code = code;
+        h->type = RIM_TYPEHID;
+        h->dev = dev;
+        h->len = len;
+        memcpy(h->data, data, len);
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    if (to) PostMessageW(to, WM_INPUT, code, (LPARAM)id);
+}
+
+/* A class device's reading thread: its own handle, a report per ReadFile,
+ * until the device goes */
+static DWORD WINAPI class_reader(LPVOID arg)
+{
+    HANDLE dev = arg, h = INVALID_HANDLE_VALUE;
+    WCHAR path[200];
+    DWORD usage = 0;
+    UINT len = 0;
+    AcquireSRWLockShared(&g_class_lock);
+    ClassDev *d = class_dev(dev);
+    if (d) { lstrcpynW(path, d->path, 200); usage = d->usage; len = d->in_len; }
+    ReleaseSRWLockShared(&g_class_lock);
+    if (d && len) h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    BYTE *buf = h != INVALID_HANDLE_VALUE ? HeapAlloc(GetProcessHeap(), 0, len) : NULL;
+    for (int fails = 0; buf && fails < 50;) {
+        DWORD n = 0;
+        if (ReadFile(h, buf, len, &n, NULL) && n) { fails = 0; deliver_class(dev, usage, buf, n); continue; }
+        AcquireSRWLockShared(&g_class_lock);           /* (gone: stop; else try again) */
+        BOOL there = class_dev(dev) != NULL;
+        ReleaseSRWLockShared(&g_class_lock);
+        if (!there) break;
+        fails++;
+        Sleep(100);
+    }
+    if (buf) HeapFree(GetProcessHeap(), 0, buf);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    AcquireSRWLockExclusive(&g_class_lock);
+    if ((d = class_dev(dev))) d->reading = FALSE;
+    ReleaseSRWLockExclusive(&g_class_lock);
+    return 0;
+}
+
+/* Start @d's reading thread (under g_class_lock) */
+static void class_start(ClassDev *d)
+{
+    if (d->reading) return;
+    HANDLE t = CreateThread(NULL, 0, class_reader, d->dev, 0, NULL);
+    if (!t) return;
+    d->reading = TRUE;
+    CloseHandle(t);
+}
+
 static void deliver(const NovaPadRaw *r)
 {
     NovaPadInfo info;
@@ -229,6 +441,11 @@ static DWORD WINAPI reader(LPVOID arg)
     memset(&q, 0, sizeof(q));
     nova_pad_read(&q);                                 /* (max 0: where the ring is now) */
     DWORD after = q.newest, known = q.changes;
+    NovaPnpRead pr;                                    /* Plug and Play's changes, for the class devices */
+    memset(&pr, 0, sizeof(pr));
+    nova_pnp_events(&pr);                              /* (max 0: just the newest) */
+    DWORD pnp_after = pr.newest;
+    int looks = 0;
     for (;;) {
         q.after = after;
         q.known_changes = known;
@@ -236,6 +453,15 @@ static DWORD WINAPI reader(LPVOID arg)
         q.max = 32;
         int n = nova_pad_read(&q);
         if (q.changes != known) { known = q.changes; changes(); }
+        pr.after = pnp_after;
+        pr.wait_ms = 0;
+        pr.max = 32;
+        if (nova_pnp_events(&pr) > 0 || pr.newest != pnp_after) {
+            pnp_after = pr.newest;
+            looks = 8;                                 /* (a driver turns the interface on after the
+                                                          node arrives: look for 2 s) */
+        }
+        if (looks) { looks--; class_refresh(); }
         for (int i = 0; i < n; i++) deliver(&q.r[i]);
         after = n ? q.r[n - 1].seq : q.newest > after ? q.newest : after;
     }
@@ -244,7 +470,11 @@ static DWORD WINAPI reader(LPVOID arg)
 
 static void start_reader(void)
 {
+    class_refresh();                                   /* (before the reader: no announcements) */
     if (InterlockedCompareExchange(&g_thread, 1, 0)) return;
+    AcquireSRWLockExclusive(&g_class_lock);           /* a reading thread for each class device */
+    for (int i = 0; i < MAX_CLASS; i++) if (g_class[i].dev) class_start(&g_class[i]);
+    ReleaseSRWLockExclusive(&g_class_lock);
     for (int s = 0; s < NOVA_PAD_SLOTS; s++) {         /* what is there now counts as announced */
         NovaPadInfo i;
         g_known[s] = nova_pad_info(s, &i) ? i.serial : 0;
@@ -299,6 +529,18 @@ USERAPI BOOL RegisterRawInputDevices(PCRAWINPUTDEVICE d, UINT n, UINT cb)
             if (!page_only && (USHORT)u != d[i].usUsage) continue;
             notify(u, dev_handle(s, info.serial), TRUE);
         }
+        struct { DWORD usage; HANDLE dev; } cd[MAX_CLASS];
+        int ncd = 0;
+        AcquireSRWLockShared(&g_class_lock);
+        for (int k = 0; k < MAX_CLASS; k++) {
+            ClassDev *c = &g_class[k];
+            if (!c->dev || (USHORT)(c->usage >> 16) != d[i].usUsagePage) continue;
+            if (!page_only && (USHORT)c->usage != d[i].usUsage) continue;
+            cd[ncd].usage = c->usage;
+            cd[ncd++].dev = c->dev;
+        }
+        ReleaseSRWLockShared(&g_class_lock);
+        for (int k = 0; k < ncd; k++) notify(cd[k].usage, cd[k].dev, TRUE);
     }
     return TRUE;
 }
@@ -318,7 +560,7 @@ USERAPI UINT GetRegisteredRawInputDevices(PRAWINPUTDEVICE d, PUINT n, UINT cb)
 USERAPI UINT GetRawInputDeviceList(PRAWINPUTDEVICELIST list, PUINT n, UINT cb)
 {
     if (!n || cb != sizeof(RAWINPUTDEVICELIST)) { SetLastError(ERROR_INVALID_PARAMETER); return (UINT)-1; }
-    RAWINPUTDEVICELIST all[2 + NOVA_PAD_SLOTS];
+    RAWINPUTDEVICELIST all[2 + NOVA_PAD_SLOTS + MAX_CLASS];
     UINT have = 0;
     all[have].hDevice = DEV_MOUSE;
     all[have++].dwType = RIM_TYPEMOUSE;
@@ -331,6 +573,14 @@ USERAPI UINT GetRawInputDeviceList(PRAWINPUTDEVICELIST list, PUINT n, UINT cb)
         all[have].dwType = RIM_TYPEHID;
         have++;
     }
+    if (!g_thread) class_refresh();                    /* (the reader keeps it current once it runs) */
+    AcquireSRWLockShared(&g_class_lock);
+    for (int i = 0; i < MAX_CLASS; i++) {
+        if (!g_class[i].dev) continue;
+        all[have].hDevice = g_class[i].dev;
+        all[have++].dwType = RIM_TYPEHID;
+    }
+    ReleaseSRWLockShared(&g_class_lock);
     if (!list) { *n = have; return 0; }
     if (*n < have) { *n = have; SetLastError(ERROR_INSUFFICIENT_BUFFER); return (UINT)-1; }
     memcpy(list, all, have * sizeof(*list));
@@ -386,8 +636,57 @@ static UINT input_device_info(BOOL mouse, UINT cmd, LPVOID data, PUINT size, BOO
     return (UINT)-1;
 }
 
+/* A class device's: its interface path, attributes and collection, the
+ * class driver's preparsed data */
+static UINT class_device_info(const ClassDev *d, UINT cmd, LPVOID data, PUINT size, BOOL wide)
+{
+    switch (cmd) {
+    case RIDI_DEVICENAME: {                            /* *size in characters */
+        UINT len = (UINT)lstrlenW(d->path) + 1;
+        if (!data) { *size = len; return 0; }
+        if (*size < len) { *size = len; SetLastError(ERROR_INSUFFICIENT_BUFFER); return (UINT)-1; }
+        for (UINT i = 0; i < len; i++) {
+            if (wide) ((WCHAR *)data)[i] = d->path[i];
+            else ((char *)data)[i] = (char)d->path[i];
+        }
+        return len;
+    }
+    case RIDI_DEVICEINFO: {
+        UINT len = sizeof(RID_DEVICE_INFO);
+        if (!data) { *size = len; return 0; }
+        if (*size < len) { *size = len; SetLastError(ERROR_INSUFFICIENT_BUFFER); return (UINT)-1; }
+        RID_DEVICE_INFO *ri = data;
+        memset(ri, 0, len);
+        ri->cbSize = len;
+        ri->dwType = RIM_TYPEHID;
+        ri->hid.dwVendorId = d->vid;
+        ri->hid.dwProductId = d->pid;
+        ri->hid.dwVersionNumber = d->version;
+        ri->hid.usUsagePage = (USHORT)(d->usage >> 16);
+        ri->hid.usUsage = (USHORT)d->usage;
+        return len;
+    }
+    case RIDI_PREPARSEDDATA:
+        if (!data) { *size = d->pp_len; return 0; }
+        if (*size < d->pp_len) { *size = d->pp_len; SetLastError(ERROR_INSUFFICIENT_BUFFER); return (UINT)-1; }
+        memcpy(data, d->pp, d->pp_len);
+        return d->pp_len;
+    }
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return (UINT)-1;
+}
+
 static UINT device_info(HANDLE dev, UINT cmd, LPVOID data, PUINT size, BOOL wide)
 {
+    if ((ULONG_PTR)dev > DEV_CLASS) {
+        AcquireSRWLockShared(&g_class_lock);
+        ClassDev *d = class_dev(dev);
+        UINT r = d && size ? class_device_info(d, cmd, data, size, wide) : (UINT)-1;
+        ReleaseSRWLockShared(&g_class_lock);
+        if (!d) SetLastError(ERROR_INVALID_HANDLE);
+        else if (!size) SetLastError(998 /* ERROR_NOACCESS */);
+        return r;
+    }
     if ((dev == DEV_MOUSE || dev == DEV_KEYBOARD) && !size) { SetLastError(998 /* ERROR_NOACCESS */); return (UINT)-1; }
     if (dev == DEV_MOUSE || dev == DEV_KEYBOARD) return input_device_info(dev == DEV_MOUSE, cmd, data, size, wide);
     NovaPadInfo info;

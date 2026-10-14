@@ -15,36 +15,37 @@ RATIO = 0.5           # of the system calls' scaling
 PARALLEL = 2.0        # system calls scaling at least this: the CPUs ran side by side
 
 
-def main(path):
-    log = open(path, errors='replace').read()
+def judge(log):
+    """(passed, [lines saying why], {test: scaling}) for a smpstress log"""
     if 'TIMEOUT' in log:
-        print('smpstress hung (TIMEOUT)')
-        return 1
+        return False, ['smpstress hung (TIMEOUT)'], {}
     m = re.search(r'smpstress: (\d+) passed, (\d+) failed', log)
     if not m or m.group(2) != '0':
-        print('smpstress: ' + (m.group(0) if m else 'no result line'))
-        return 1
+        return False, ['smpstress: ' + (m.group(0) if m else 'no result line')], {}
     x = {name.strip(): float(v) for name, v in
          re.findall(r'^  ([a-z() ]+?)\s+1 thread .*: ([0-9.]+)x$', log, re.M)}
     calls = x.get('(system calls)')
     if not calls:
-        print('no system call yardstick in the log')
-        return 1
+        return False, ['no system call yardstick in the log'], x
     cpus = re.search(r'smpstress: (\d+) CPUs', log)
     if cpus:                            # (a slow one-thread sample can make it look better than possible)
         calls = min(calls, float(cpus.group(1)))
     if calls < PARALLEL:
-        print(f'bare system calls scaled {calls}x: the CPUs did not run side by side here, '
-              'so scaling is recorded, not judged')
-        return 0
-    bad = 0
+        return True, [f'bare system calls scaled {calls}x: the CPUs did not run side by side here, '
+                      'so scaling is recorded, not judged'], x
+    ok, why = True, []
     for name in ('files', 'registry'):
         got = x.get(name)
-        ok = got is not None and got >= RATIO * calls
-        print(f'{name}: {got}x against bare system calls {calls}x: {"ok" if ok else "too low"}')
-        bad += not ok
-    return 1 if bad else 0
+        good = got is not None and got >= RATIO * calls
+        why.append(f'{name}: {got}x against bare system calls {calls}x: {"ok" if good else "too low"}')
+        ok = ok and good
+    return ok, why, x
 
+
+def main(path):
+    ok, why, _ = judge(open(path, errors='replace').read())
+    print('\n'.join(why))
+    return 0 if ok else 1
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1]))

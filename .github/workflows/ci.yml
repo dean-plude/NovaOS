@@ -137,6 +137,41 @@ jobs:
         - devices
     env:
       SUITE: ${{ matrix.suite }}
+  perf:
+    name: Performance budget
+    needs:
+    - checks
+    - build
+    if: needs.checks.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install runtime dependencies
+      run: tools/ci/install.sh runtime
+    - name: Select accelerator
+      run: tools/ci/enable-kvm.sh optional
+      env:
+        NOVARUN_ALLOW_TCG: ${{ inputs.allow_tcg || false }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: nova-image
+        path: build
+    - name: Verify tested image
+      run: python3 tools/ci/image_manifest.py verify --sha "$GITHUB_SHA"
+    - name: Measure boot time, Firefox start and smpstress scaling against the budget
+      run: python3 tools/ci/perf.py --img build/nova.img --out perf-out --summary "$GITHUB_STEP_SUMMARY"
+    - name: Keep perf-out
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: perf-out
+        path: |-
+          perf-out/*.json
+          perf-out/*.log
+          perf-out/*.png
+        if-no-files-found: ignore
+        retention-days: 14
   graphics-test:
     name: Graphics tests (OpenGL, Direct3D)
     needs:
@@ -234,6 +269,7 @@ jobs:
     - build
     - compatibility
     - boot-test
+    - perf
     - graphics-test
     - boot-result
     if: always()
@@ -323,12 +359,13 @@ jobs:
     - checks
     - build
     - boot-test
+    - perf
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
     - uses: actions/checkout@v4
-    - name: Require build and every OS suite
+    - name: Require build, every OS suite and the performance budget
       env:
         NEEDS_JSON: ${{ toJSON(needs) }}
       run: python3 tools/ci/results.py boot

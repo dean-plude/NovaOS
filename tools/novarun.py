@@ -200,6 +200,7 @@ class Nova:
                      '-device', 'intel-hda', '-device', 'hda-output,audiodev=snd0']
         else:
             audio = []
+        self.launched = time.time()
         self.q = subprocess.Popen([qemu_binary(), '-machine', 'q35'] + accel_args() + ['-cpu', 'qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,+avx,+f16c',
                                    '-m', str(mem), '-smp', str(smp),
                                    '-drive', f'if=pflash,format=raw,readonly=on,file={OVMF}',
@@ -224,6 +225,7 @@ class Nova:
     def start(self, boot_timeout=300):
         """Wait for the desktop, then open the Terminal mirrored to serial"""
         out, ok = self.sr.wait('Entering kernel main loop', boot_timeout)
+        self.booted = time.time()           # (the desktop is up: tools/ci/perf.py times the boot to here)
         self.boot_log = out
         if not ok:
             raise RuntimeError('NovaOS did not boot:\n' + out[-3000:])

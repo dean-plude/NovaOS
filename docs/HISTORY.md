@@ -12106,6 +12106,30 @@ hold such a character back until the rest arrives (`UmVtermWrite`).
 output into a screen buffer of its own: all three give the same cells and
 cursor (roadmap step 26.1).
 
+## GUI programs start without a Terminal window
+
+Dean's report from a real boot: starting a program from the Start menu
+opened a Terminal window beside it.  Every program the shell started
+(the Start menu, the App Store's **Open** and **Run**, File Explorer,
+the desktop and shortcuts) ran through `TerminalRun`, so even a GUI
+program got a Terminal, which only waited for it to exit.
+
+- **The shell reads the PE subsystem** (`kernel/apps/apps.c`,
+  `UmIsGuiProgram` in `kernel/um/um.c`): a GUI program (subsystem 2,
+  64- or 32-bit) starts on its own (`UmSpawnDetached`) by its full path in
+  its own folder, as Explorer starts it, and logs
+  `[APPS] NAME: a GUI program, started without a console`.  A console
+  program still opens in a Terminal, its console.
+- **`winhello` is a GUI program** (`"gui": true` in its
+  `userland/programs/winhello.json` links it `/subsystem:windows`), so the
+  self-test image has one.
+- **Start menu search finds every program**: the menu kept only the first
+  64 programs of `C:\Programs` (and the Start menu's shortcuts), so
+  search missed the rest; it now keeps 256.
+- **Test**: `tests/selftest/core/890-startmenu-launch.py` starts
+  `winhello` and `hello` from the Start menu (Win+S, the name, Enter):
+  the first with no Terminal, the second in one.
+
 ## The ArtCraft apps draw their windows (HLSL const copies)
 
 After the shader model 5.1 descriptor arrays, the seven Direct3D 12 ArtCraft
@@ -12396,5 +12420,28 @@ test signing is on for NovaOS's own `WdfLdr.sys`), reads and checks its
 firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
 the T14 (see [drivers.md](../drivers.md)).
+
+## A performance budget in CI
+
+Roadmap step 26.4.  Every CI run now times the boot, Firefox's start and
+`smpstress` scaling, and fails on a large regression, so the lock and
+redraw work of PRs #297–#306 cannot quietly slip back.
+
+- **The job**: CI's "Performance budget" (`tools/ci/perf.py`) boots the
+  tested image once on four CPUs and measures the boot (QEMU started to
+  the kernel's main loop), the bundled Firefox from `start` to its first
+  page on the screen (a local page of one colour, a fresh profile, QEMU
+  screenshots twice a second until a fifth of the screen shows it) and
+  `smpstress scaling 0`.
+- **The budget**: `tools/ci/perf-budget.json` holds 20 s to boot and
+  10 s for Firefox (the first KVM runner took 9.8 s and 3.4 s, and
+  smpstress scaled 2.4x, files 2.0x and the registry 2.1x); a time over it fails, as do files or the registry scaling
+  under half as well as bare system calls (`tools/ci/check-smpstress.py`,
+  now also used as a module) and Firefox never drawing its page.  Under
+  TCG times are recorded, not judged.  The job is part of the
+  "Build and boot-test" check; its numbers are in the run's summary and
+  `perf-out/perf.json`.
+- **Tests**: `tests/tools/test_perf_budget.py` checks the screen-colour
+  measure, the verdicts and the budget file without a VM.
 
 <!-- END generated:history -->

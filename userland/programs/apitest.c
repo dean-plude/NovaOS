@@ -1,5 +1,6 @@
 /* apitest.exe — the standard DLLs: kernel32 extras, advapi32, bcrypt,
- * shlwapi, shell32, psapi, version, user32/gdi32 helpers */
+ * shlwapi, shell32, psapi, version, user32/gdi32 helpers, the ntdll and
+ * memory calls .NET 8 makes */
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -119,6 +120,84 @@ int main(int argc, char **argv)
     WIN32_FILE_ATTRIBUTE_DATA fad;
     CHECK("GetFileAttributesEx", GetFileAttributesExA("C:\\Temp\\map2.bin", GetFileExInfoStandard, &fad) && fad.nFileSizeLow == 13);
     DeleteFileA("C:\\Temp\\map2.bin");
+
+#ifdef _WIN64
+    /* ---- placeholders (VirtualAlloc2, MapViewOfFile3): how coreclr maps a
+     * single-file .NET program's assemblies, a view per section at page
+     * (not 64 KiB) offsets, write-copy views private ---- */
+    {
+        PVOID (WINAPI *alloc2)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, PVOID, ULONG) = (void *)fn("kernelbase.dll", "VirtualAlloc2");
+        PVOID (WINAPI *map3)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG, PVOID, ULONG) =
+            (void *)fn("kernelbase.dll", "MapViewOfFile3");
+        HANDLE pf = CreateFileA("C:\\Temp\\ph.bin", GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+        static char page[4096];
+        DWORD w2;
+        for (int i = 0; i < 3; i++) { memset(page, 'a' + i, sizeof(page)); WriteFile(pf, page, sizeof(page), &w2, 0); }
+        HANDLE sec = CreateFileMappingA(pf, 0, PAGE_READONLY, 0, 0, 0);
+        char *ph = alloc2 && sec ? alloc2(GetCurrentProcess(), 0, 3 * 4096, MEM_RESERVE | 0x40000 /* MEM_RESERVE_PLACEHOLDER */,
+                                         PAGE_NOACCESS, 0, 0) : 0;
+        CHECK("VirtualAlloc2 placeholder", ph != 0);
+        BOOL split = ph && VirtualFree(ph, 4096, MEM_RELEASE | 0x2 /* MEM_PRESERVE_PLACEHOLDER */) &&
+                     VirtualFree(ph + 4096, 4096, MEM_RELEASE | 0x2);
+        CHECK("split placeholder", split);
+        char *v1 = split ? map3(sec, GetCurrentProcess(), ph, 2 * 4096, 4096, 0x4000 /* MEM_REPLACE_PLACEHOLDER */,
+                                PAGE_READONLY, 0, 0) : 0;
+        char *v2 = split ? map3(sec, GetCurrentProcess(), ph + 4096, 4096, 4096, 0x4000, 0x08 /* PAGE_WRITECOPY */, 0, 0) : 0;
+        CHECK("MapViewOfFile3 into placeholder", v1 == ph && v2 == ph + 4096 && v1[0] == 'c' && v2[4095] == 'b');
+        if (v2) v2[0] = 'X';
+        char *c3 = split ? alloc2(GetCurrentProcess(), ph + 8192, 4096, MEM_RESERVE | MEM_COMMIT | 0x4000, PAGE_READWRITE, 0, 0) : 0;
+        CHECK("commit into placeholder", c3 == ph + 8192 && (c3[0] = 7) == 7);
+        if (v1) UnmapViewOfFile(v1);
+        if (v2) UnmapViewOfFile(v2);
+        if (c3) VirtualFree(c3, 0, MEM_RELEASE);
+        CloseHandle(sec);
+        SetFilePointer(pf, 4096, 0, FILE_BEGIN);
+        char rb2 = 0;
+        ReadFile(pf, &rb2, 1, &w2, 0);
+        CHECK("write-copy view kept off the file", v2 && rb2 == 'b');
+        CloseHandle(pf);
+        DeleteFileA("C:\\Temp\\ph.bin");
+    }
+#endif
+    /* ---- ntdll: interlocked lists shared with kernel32, bit maps ---- */
+    {
+        static SLIST_HEADER head;
+        static SLIST_ENTRY e1, e2;
+        InitializeSListHead(&head);
+        PSLIST_ENTRY (WINAPI *rtl_push)(PSLIST_HEADER, PSLIST_ENTRY) = (void *)fn("ntdll.dll", "RtlInterlockedPushEntrySList");
+        PSLIST_ENTRY (WINAPI *rtl_flush)(PSLIST_HEADER) = (void *)fn("ntdll.dll", "RtlInterlockedFlushSList");
+        InterlockedPushEntrySList(&head, &e1);
+        if (rtl_push) rtl_push(&head, &e2);
+        CHECK("SList kernel32 + ntdll", rtl_push && rtl_flush && QueryDepthSList(&head) == 2 && rtl_flush(&head) == &e2 &&
+                                        e2.Next == &e1 && QueryDepthSList(&head) == 0);
+        struct { ULONG size; ULONG *buf; } bm;
+        ULONG bits[2] = { 0 };
+        VOID (WINAPI *init_bm)(void *, ULONG *, ULONG) = (void *)fn("ntdll.dll", "RtlInitializeBitMap");
+        ULONG (WINAPI *find_set)(void *, ULONG, ULONG) = (void *)fn("ntdll.dll", "RtlFindClearBitsAndSet");
+        VOID (WINAPI *clear_bits)(void *, ULONG, ULONG) = (void *)fn("ntdll.dll", "RtlClearBits");
+        if (init_bm) init_bm(&bm, bits, 40);
+        CHECK("RtlFindClearBitsAndSet", init_bm && find_set && clear_bits && find_set(&bm, 30, 0) == 0 &&
+                                        find_set(&bm, 8, 0) == 30 && find_set(&bm, 4, 0) == 0xFFFFFFFF &&
+                                        (clear_bits(&bm, 10, 5), find_set(&bm, 5, 0)) == 10 && bits[0] == 0xFFFFFFFF);
+    }
+    /* ---- code pages: bad arguments are errors, not faults (.NET 8's JIT) ---- */
+    SetLastError(0);
+    CHECK("WideCharToMultiByte(NULL)", !WideCharToMultiByte(CP_UTF8, 0, 0, -1, 0, 0, 0, 0) && GetLastError() == ERROR_INVALID_PARAMETER);
+    CHECK("MultiByteToWideChar(NULL)", !MultiByteToWideChar(CP_UTF8, 0, 0, -1, 0, 0) && GetLastError() == ERROR_INVALID_PARAMETER);
+    /* ---- the UCRT's float helpers (.NET 8's clrjit), urlmon's MIME sniffing (WPF) ---- */
+    {
+        float (__cdecl *copysignf_)(float, float) = (void *)fn("ucrtbase.dll", "_copysignf");
+        int (__cdecl *isnanf_)(float) = (void *)fn("ucrtbase.dll", "_isnanf");
+        volatile float zero = 0.0f;
+        CHECK("_copysignf/_isnanf", copysignf_ && isnanf_ && copysignf_(2.0f, -1.0f) == -2.0f && isnanf_(zero / zero) && !isnanf_(1.0f));
+        HRESULT (WINAPI *mime)(void *, LPCWSTR, void *, DWORD, LPCWSTR, DWORD, LPWSTR *, DWORD) = (void *)fn("urlmon.dll", "FindMimeFromData");
+        void (WINAPI *task_free)(void *) = (void *)fn("ole32.dll", "CoTaskMemFree");
+        LPWSTR m1 = 0, m2 = 0;
+        CHECK("FindMimeFromData", mime && task_free && !mime(0, L"pack://application:,,,/Icons/logo.PNG", 0, 0, 0, 0, &m1, 0) &&
+                                  !wcscmp(m1, L"image/png") &&
+                                  !mime(0, 0, (void *)"GIF89a....", 10, 0, 0, &m2, 0) && !wcscmp(m2, L"image/gif"));
+        if (task_free) { task_free(m1); task_free(m2); }
+    }
 
     /* ---- completion ports, WaitOnAddress, timers ---- */
     HANDLE port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 1);

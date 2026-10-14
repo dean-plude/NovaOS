@@ -1362,6 +1362,9 @@ static int sb_from_wide(UINT cp, WCHAR w)        /* -1: not in the code page */
 WINBASEAPI int WINAPI MultiByteToWideChar(UINT cp, DWORD flags, LPCSTR s, int n, LPWSTR out, int cap)
 {
     (void)flags;
+    /* Windows checks its arguments: no string, an empty one or no buffer
+     * for a size is an error, not a fault (.NET 8's JIT hands it NULL) */
+    if (!s || !n || cap < 0 || (cap && !out)) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
     int len = n < 0 ? (int)strlen(s) + 1 : n;
     if (single_byte_cp(cp)) {
         if (cap && cap < len) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return 0; }
@@ -1377,6 +1380,7 @@ WINBASEAPI int WINAPI WideCharToMultiByte(UINT cp, DWORD flags, LPCWSTR s, int n
                                           LPCSTR defchar, LPBOOL used)
 {
     (void)flags;
+    if (!s || !n || cap < 0 || (cap && !out)) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
     if (used) *used = FALSE;
     int len = n;
     if (n < 0) { len = 0; while (s[len]) len++; len++; }

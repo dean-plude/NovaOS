@@ -1690,7 +1690,7 @@ static UINT64 sys_open_section(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4) { (vo
  * shares a section with the browser process it starts suspended, writes
  * its DLL blocklist hooks' trampolines through its own view and maps the
  * section into the child near ntdll. */
-static UINT64 map_view(UmProcess *p, UINT64 a1, UINT64 a3, UINT64 off_ptr, UINT64 size_ptr, UINT32 prot,
+static UINT64 map_view(UmProcess *p, UINT64 a1, UINT64 a3, UINT64 off_ptr, UINT64 size_ptr, UINT32 type, UINT32 prot,
                        UINT64 lo, UINT64 hi, UINT64 align);
 
 static UINT64 sys_map_view(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
@@ -1699,7 +1699,7 @@ static UINT64 sys_map_view(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *ob;
     UmProcess *p = um_proc_of(UmCurrent(), a2, &ob);
     if (!p) return ST_INVALID_HANDLE;
-    UINT64 r = map_view(p, a1, a3, um_stack_arg(6), um_stack_arg(7), (UINT32)um_stack_arg(10),
+    UINT64 r = map_view(p, a1, a3, um_stack_arg(6), um_stack_arg(7), (UINT32)um_stack_arg(9), (UINT32)um_stack_arg(10),
                         p->lay.alloc_min, p->lay.alloc_max, 0);
     if (ob) um_ob_unref(ob);
     return r;
@@ -1715,13 +1715,13 @@ static UINT64 sys_map_view_ex(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (!p) return ST_INVALID_HANDLE;
     UINT64 lo = p->lay.alloc_min, hi = p->lay.alloc_max, align = 0, r;
     if (!um_addr_requirements(um_stack_arg(8), (UINT32)um_stack_arg(9), &lo, &hi, &align)) r = ST_ACCESS_VIOLATION;
-    else r = map_view(p, a1, a3, a4, um_stack_arg(5), (UINT32)um_stack_arg(7), lo, hi, align);
+    else r = map_view(p, a1, a3, a4, um_stack_arg(5), (UINT32)um_stack_arg(6), (UINT32)um_stack_arg(7), lo, hi, align);
     if (ob) um_ob_unref(ob);
     return r;
 }
 
 /* Map section @a1 (the caller's handle) into process @p; the pointers are the caller's */
-static UINT64 map_view(UmProcess *p, UINT64 a1, UINT64 a3, UINT64 off_ptr, UINT64 size_ptr, UINT32 prot,
+static UINT64 map_view(UmProcess *p, UINT64 a1, UINT64 a3, UINT64 off_ptr, UINT64 size_ptr, UINT32 type, UINT32 prot,
                        UINT64 lo, UINT64 hi, UINT64 align)
 {
     UINT64 base = 0, off = 0, view = 0;
@@ -1739,20 +1739,37 @@ static UINT64 map_view(UmProcess *p, UINT64 a1, UINT64 a3, UINT64 off_ptr, UINT6
     if ((prot & 0xFF) == 0) prot = 0x04;
     um_lock_excl(&p->lock);
     UINT64 r = ST_SUCCESS;
-    if (base) {
+    UmRegion *reg = NULL;
+    if (type & MEM_REPLACE_PLACEHOLDER) {
+        /* In place of a whole placeholder, at a page (not 64 KiB) boundary:
+         * coreclr maps a single-file bundle's assemblies section by section */
+        reg = um_region_find(p, base);
+        if (!reg || !reg->placeholder || reg->base != base || reg->size != bytes) r = ST_INVALID_PARAMETER;
+        else { reg->placeholder = false; reg->protect = prot; }
+    } else if (base) {
         base &= ~0xFFFFULL;
         if (!um_is_free(p, base, bytes)) r = ST_CONFLICTING_ADDRESSES_;
     } else {
         base = um_find_free_aligned(p, bytes, lo, hi, align);
         if (!base) r = ST_NO_MEMORY;
     }
-    UmRegion *reg = NULL;
-    if (r == ST_SUCCESS) {
+    if (r == ST_SUCCESS && !reg) {
         reg = um_region_add(p, base, bytes, prot, false);
         if (!reg) r = ST_NO_MEMORY;
     }
     if (r == ST_SUCCESS && !um_map_frames(p, base, sec->frames + off / PAGE_SIZE, npages, prot)) {
-        um_region_remove(p, reg);
+        if (type & MEM_REPLACE_PLACEHOLDER) reg->placeholder = true;
+        else um_region_remove(p, reg);
+        r = ST_NO_MEMORY;
+    }
+    /* PAGE_WRITECOPY (PAGE_EXECUTE_WRITECOPY): the view's pages are its own
+     * copies, so writes reach neither the section nor its file */
+    if (r == ST_SUCCESS && ((prot & 0xFF) == 0x08 || (prot & 0xFF) == 0x80) &&
+        !um_commit(p, base, bytes, prot)) {
+        um_decommit(p, base, bytes);
+        um_unmap_frames(p, base, npages);
+        if (type & MEM_REPLACE_PLACEHOLDER) reg->placeholder = true;
+        else um_region_remove(p, reg);
         r = ST_NO_MEMORY;
     }
     if (r == ST_SUCCESS) reg->section = o;                  /* the view keeps the reference */
@@ -1775,6 +1792,7 @@ static UINT64 sys_unmap_view(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (!r || !r->section) { um_unlock_excl(&p->lock); if (ob) um_ob_unref(ob); return ST_NOT_MAPPED_VIEW; }
     UmObject *o = r->section;
     um_unmap_frames(p, r->base, r->size / PAGE_SIZE);
+    um_decommit(p, r->base, r->size);                       /* a write-copy view's own pages */
     um_region_remove(p, r);
     um_unlock_excl(&p->lock);
     if (ob) um_ob_unref(ob);

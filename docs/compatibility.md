@@ -67,10 +67,10 @@ planned (roadmap item 27.5).
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
 | Silver | 5 | 1 | 0 | 1 | 7 |
-| Bronze | 15 | 2 | 1 | 1 | 19 |
-| Borked | 0 | 1 | 0 | 0 | 1 |
-| Untested | 4 | 0 | 1 | 3 | 8 |
-| **All** | 31 | 13 | 11 | 12 | 67 |
+| Bronze | 15 | 2 | 1 | 2 | 20 |
+| Borked | 1 | 1 | 0 | 0 | 2 |
+| Untested | 3 | 0 | 1 | 3 | 7 |
+| **All** | 31 | 13 | 11 | 13 | 68 |
 
 ### Programs
 
@@ -103,8 +103,8 @@ planned (roadmap item 27.5).
 | **Thunderbird 158** (App Store; 64-bit, Mozilla's Gecko) | Bronze | Installs from the App Store (Mozilla's full installer, unpacked) and opens an e-mail message (`.eml`) in its own window: sender, recipient, date, subject and text ([history](history/2026-10-14-thunderbird.md)) | No mail account, sending or receiving checked (no mail server in the test); its main window stays empty without an account | nightly corpus ([`954-thunderbird.py`](../tests/appcorpus/954-thunderbird.py)) |
 | **qBittorrent 5.0.2** (App Store; 64-bit, Qt 6, NSIS installer) | Bronze | Installs from the App Store (its NSIS installer, silently, which elevates itself through UAC) and opens a `.torrent`: the Legal Notice on first start, then the Add torrent dialog over the main window with the torrent's name, size, date, info hash and file list ([history](history/2026-10-14-qbittorrent.md)) | Nothing downloaded or seeded (the test has no peers or tracker); its crash handler's stack trace has no symbols (NovaOS has no debugger engine behind `dbgeng.dll`) | nightly corpus ([`956-qbittorrent.py`](../tests/appcorpus/956-qbittorrent.py)) |
 | **WinSCP 6.3.5** (App Store; 32-bit, C++Builder VCL, Inno Setup installer) | Bronze | Installs from the App Store (its Inno Setup installer, silently, registering its 64-bit shell extension through `regsvr32`) and opens its Login dialog over its main window, whose two panels open on local folders ([history](history/2026-10-14-winscp.md)) | The Login dialog's site tree and the file panels list their items but draw none of them, and the port number box is blank; no connection or transfer checked | nightly corpus ([`952-winscp.py`](../tests/appcorpus/952-winscp.py)) |
+| **HandBrake** (App Store) | Borked | Installs; starts on .NET 8, loads libhb and its video engines | Its WPF main window never shows: WPF decodes its icons with the Windows Imaging Component (WindowsCodecs.dll), which NovaOS does not have yet | by hand |
 | **GIMP** (App Store) | Untested | — | — | — |
-| **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 | **OBS Studio** (App Store) | Untested | — | — | — |
 | **ShareX** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 
@@ -154,7 +154,8 @@ planned (roadmap item 27.5).
 | **Visual C++ Redistributable** (App Store) | Platinum | NovaOS has its own `vcruntime140` and `msvcp140`, so most programs do not need it, but GOG GALAXY needs its MFC.  Its installer (WiX Burn) installs the Minimum and Additional Runtimes, the 32-bit one into `SysWOW64` and the 64-bit one into `System32` (14.44 x86 and 14.51 x64 checked), replacing NovaOS's own copies there | — | by hand |
 | **VKD3D-Proton 3.0.1** (App Store, Runtimes; built by `tools/build_vkd3d_proton.py` with a newer dxil-spirv) | Gold | Direct3D 12 on Vulkan (install "Mesa 3D" and "DXVK" first): devices, root signatures, pipelines, drawing, read-back and fences, 64- and 32-bit programs, both presenting through DXVK's swap chains; Godot 4.7's Forward+ renderer plays Squash the Creeps on it with every pipeline built, and a compute pipeline from Godot's SDFGI shader builds (`d3d12test compute`) | — | CI graphics tests (`d3d12test`), nightly corpus ([`955-squash-the-creeps.py`](../tests/appcorpus/955-squash-the-creeps.py)) |
 | **Microsoft Edge WebView2 runtime** (the evergreen offline installer) | Silver | Its installer, Microsoft Edge Update, installs itself, accepts Microsoft's signature on the runtime's package and starts the runtime's own setup, which installs the runtime; a WebView2 host starts the runtime's browser process (`msedgewebview2.exe`) and its GPU, network and storage processes and gets a WebView2 environment; the host puts the browser's window inside its own, a page loads, a script runs in it and the page is drawn (Chromium's software compositor, through the Basic Render Driver, a WARP device and DirectComposition), also with DXVK installed and Venus the GPU, where the GPU process keeps ANGLE's Direct3D 11 device on the GPU and composites the page through DirectComposition on it ([WebView2](#webview2)) | Programs that host it (Roblox's and Steam's sign-in) not checked end to end | nightly corpus (the installer, `wv2host`, [`095-webview2.py`](../tests/appcorpus/095-webview2.py)) |
-| **.NET Desktop Runtime 8** (App Store) | Bronze | Console programs run | WinForms and WPF programs not checked | by hand |
+| **.NET Runtime 8** (App Store) | Bronze | .NET 8's runtime and JIT start; console programs and the managed part of desktop programs run | Checked only through HandBrake, not in the nightly corpus | by hand |
+| **.NET Desktop Runtime 8** (App Store) | Bronze | With the App Store's .NET Runtime 8: .NET 8 programs start, single-file ones too, and run their managed code (HandBrake reaches its window) | WPF windows need the Windows Imaging Component, which NovaOS does not have yet; WinForms not checked | by hand |
 | **Wine Mono 9.4** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: The .NET Framework 2.0 to 4.8 programs it is for) | — |
 | **DirectX End-User Runtimes (June 2010)** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: Its D3DX, XInput and XAudio2 libraries for older games) | — |
 | **OpenAL Soft 1.23.1** (App Store, Runtimes) | Untested | — | Not checked yet (it is for: Sound for games that use OpenAL) | — |

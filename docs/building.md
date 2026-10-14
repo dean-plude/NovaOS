@@ -758,7 +758,7 @@ file in `docs/selftests/`.
 | `threads` | Threads, synchronization, SEH |
 | `dlltest` | DLL loading, TLS, `DllMain`; a DLL whose `DllMain` returns FALSE stops the program at start with 0xC0000142; exports Windows numbers (uxtheme, d2d1) and what LibreOffice imports at start |
 | `posixtest` | The POSIX layer in msvcrt |
-| `apitest` | kernel32, advapi32, bcrypt, shell32, shlwapi, psapi, user32/gdi32, the registry |
+| `apitest` | kernel32, advapi32, bcrypt, shell32, shlwapi, psapi, user32/gdi32, the registry; placeholders and write-copy views, ntdll lists and bit maps, urlmon MIME sniffing |
 | `consolecursortest` | Classic console screen buffers: cursor position and visibility, cell reads/writes, fills, scrolling, attributes, resizing, independent buffers, and invalid handles/coordinates; x64 and x86. |
 | `ptyscreentest` | A full-screen program (alternate screen, colours, wide characters, erasing, scroll regions, inserted and deleted lines, wrapping, cell writes, fills and scrolling) drawn in a console window and through a pseudo console: both runs read back the same cells, and the pseudo console's output drawn by a host gives them too. |
 | `conptytest` | A terminal host runs an interactive `cmd.exe` through `CreatePseudoConsole`: typed commands are echoed and edited with Backspace, Ctrl+C drops a line, VT key sequences (arrows, Delete, F-keys) reach a raw-input program as keys, `ResizePseudoConsole` while `cmd.exe` runs gives programs the new size and draws the screen again, the host's drawing matches the pseudo console's cells, and `exit` ends `cmd.exe` and the output pipe. |

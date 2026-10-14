@@ -2084,6 +2084,28 @@ static UINT64 alloc_vm(UmProcess *p, UINT64 a2, UINT64 a4, UINT32 type, UINT32 p
         return ST_SUCCESS;
     }
     if (!size || !(type & (MEM_COMMIT | MEM_RESERVE)) || !valid_protect(prot)) return ST_INVALID_PARAMETER;
+    if ((type & MEM_RESERVE_PLACEHOLDER) && ((type & MEM_COMMIT) || (prot & 0xFF) != 0x01))
+        return ST_INVALID_PARAMETER;                            /* a placeholder is only reserved, PAGE_NOACCESS */
+    if (type & MEM_REPLACE_PLACEHOLDER) {
+        /* Memory in place of a whole placeholder (VirtualAlloc2: coreclr
+         * maps a single-file bundle's assemblies this way) */
+        UmRegion *r = um_region_find(p, base);
+        if (!r || !r->placeholder || base != r->base || ((size + 0xFFF) & ~0xFFFULL) != r->size)
+            return ST_INVALID_PARAMETER;
+        r->placeholder = false;
+        r->protect = prot;
+        size = r->size;
+        if (type & MEM_COMMIT) {
+            if (p->commit + size / PAGE_SIZE > PROC_MEM_LIMIT_PAGES || !um_commit(p, base, size, prot)) {
+                um_decommit(p, base, size);
+                r->placeholder = true;
+                return ST_NO_MEMORY;
+            }
+        }
+        put_u64(a2, base);
+        put_u64(a4, size);
+        return ST_SUCCESS;
+    }
     if (!base) type |= MEM_RESERVE;                             /* committing at no address reserves too */
     UINT64 end = (base + size + 0xFFF) & ~0xFFFULL;
 
@@ -2096,7 +2118,9 @@ static UINT64 alloc_vm(UmProcess *p, UINT64 a2, UINT64 a4, UINT32 type, UINT32 p
         } else if (!um_is_free(p, base, size)) {
             return ST_CONFLICTING_ADDRESSES;
         }
-        if (!um_region_add(p, base, size, prot, false)) return ST_NO_MEMORY;
+        UmRegion *nr = um_region_add(p, base, size, prot, false);
+        if (!nr) return ST_NO_MEMORY;
+        nr->placeholder = (type & MEM_RESERVE_PLACEHOLDER) != 0;
     } else {
         base &= ~0xFFFULL;
         size = end - base;
@@ -2132,6 +2156,23 @@ static UINT64 sys_free_vm_locked(UmProcess *p, UINT64 a2, UINT64 a3, UINT64 a4)
     UmRegion *r = um_region_find(p, base);
     if (!r || r->image) return ST_MEMORY_NOT_ALLOCATED;
     if (r->section) return 0xC000001Bu;                     /* STATUS_UNABLE_TO_DELETE_SECTION: a mapped view */
+    if ((a4 & MEM_RELEASE) && (a4 & MEM_PRESERVE_PLACEHOLDER)) {
+        /* Split a placeholder: [base, base + size) becomes one of its own,
+         * the rest another */
+        size = (size + 0xFFF) & ~0xFFFULL;
+        if (!r->placeholder || base != r->base || !size || size > r->size) return ST_INVALID_PARAMETER;
+        if (size < r->size) {
+            UINT64 rest = r->base + size, rest_size = r->size - size;
+            UINT32 prot = r->protect;
+            r->size = size;
+            UmRegion *n = um_region_add(p, rest, rest_size, prot, false);
+            if (!n) { um_region_find(p, base)->size += rest_size; return ST_NO_MEMORY; }
+            n->placeholder = true;
+        }
+        put_u64(a2, base);
+        put_u64(a3, size);
+        return ST_SUCCESS;
+    }
     if (a4 & MEM_RELEASE) {
         if (base != r->base || size) return ST_INVALID_PARAMETER;
         size = r->size;

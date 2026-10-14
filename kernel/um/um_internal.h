@@ -250,8 +250,14 @@ typedef struct {
     UINT64 base, size;          /* reserved range (page aligned) */
     UINT32 protect;             /* PAGE_* of committed pages */
     bool   image;               /* part of a loaded module */
+    bool   placeholder;         /* MEM_RESERVE_PLACEHOLDER: reserved, to be split and replaced by a view or memory */
     struct UmObject *section;   /* a view of this section (referenced), or NULL */
 } UmRegion;
+
+/* Placeholder flags (VirtualAlloc2, MapViewOfFile3, VirtualFree) */
+#define MEM_PRESERVE_PLACEHOLDER 0x00000002u   /* NtFreeVirtualMemory: split a placeholder */
+#define MEM_REPLACE_PLACEHOLDER  0x00004000u   /* NtAllocateVirtualMemoryEx, NtMapViewOfSectionEx */
+#define MEM_RESERVE_PLACEHOLDER  0x00040000u   /* NtAllocateVirtualMemoryEx */
 
 typedef struct {
     char   name[64];            /* lower case, e.g. "kernel32.dll" */

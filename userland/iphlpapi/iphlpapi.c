@@ -516,6 +516,7 @@ IPHLPAPI DWORD WINAPI GetTcpTable(PVOID t, PULONG size, BOOL order) { return tcp
 IPHLPAPI DWORD WINAPI GetTcp6Table(PVOID t, PULONG size, BOOL order) { return tcp_table(t, size, order, AF_INET6_, -1); }
 
 IPHLPAPI DWORD WINAPI GetBestInterface(DWORD addr, PDWORD index) { (void)addr; (void)index; return ERROR_NO_DATA_; }
+IPHLPAPI DWORD WINAPI GetBestRoute(DWORD dst, DWORD src, PVOID row) { (void)dst; (void)src; (void)row; return ERROR_NO_DATA_; }
 IPHLPAPI DWORD WINAPI NotifyAddrChange(PHANDLE h, LPOVERLAPPED o) { (void)h; (void)o; return ERROR_NOT_SUPPORTED; }
 
 /* Interface names and indexes: the one interface is "eth0", index 1 */

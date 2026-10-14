@@ -42,7 +42,7 @@ installs each one, drives it and compares a screenshot against a reference.
 |---|---|
 | **Developer tools** | 7-Zip, Git for Windows, ripgrep, fd, jq, bat, fzf, Neovim, ffmpeg |
 | **Runtimes** | Python with NumPy, Node.js, .NET, Java (Temurin), the Visual C++ runtime |
-| **Desktop apps** | Firefox, Thunderbird, qBittorrent, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, Krita, KeePassXC, SumatraPDF |
+| **Desktop apps** | Firefox, Thunderbird, qBittorrent, OBS Studio, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, Krita, KeePassXC, SumatraPDF |
 | **Games** | OpenTTD, Beneath a Steel Sky on ScummVM, Teeworlds, OpenTyrian, Cave Story, SuperTux, Chocolate Doom, Squash the Creeps (Godot 4, Direct3D 12) |
 | **Graphics** | OpenGL through Mesa; Vulkan through Mesa or Venus; Direct3D 9 to 11 through DXVK; Direct3D 12 through VKD3D-Proton; DirectDraw through cnc-ddraw |
 | **Installers** | `.msi` packages (with their dialogs, custom actions and services), NSIS and Inno Setup |

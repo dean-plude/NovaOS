@@ -560,6 +560,20 @@ CRTEXP int __stdio_common_vfscanf(unsigned long long opt, FILE *f, const char *f
     (void)loc;
     return __nova_vfscanf(f, fmt, ap, (opt & SCANF_SECURECRT) != 0);
 }
+/* Wide scanf from a stream: the format narrowed to UTF-8, the stream read
+ * as bytes (what a text-mode file holds) */
+CRTEXP int __stdio_common_vfwscanf(unsigned long long opt, FILE *f, const wchar_t *fmt, void *loc, va_list ap)
+{
+    (void)loc;
+    size_t nf = wcstombs(NULL, fmt, 0);
+    if (nf == (size_t)-1) return EOF;
+    char *n = malloc(nf + 1);
+    if (!n) return EOF;
+    wcstombs(n, fmt, nf + 1);
+    int r = __nova_vfscanf(f, n, ap, (opt & SCANF_SECURECRT) != 0);
+    free(n);
+    return r;
+}
 /* Wide scanf: numbers and wide/narrow strings, via the narrow scanner on a
  * UTF-8 copy (targets of %s/%c/%[ in wide mode are narrowed back) */
 CRTEXP int __stdio_common_vswscanf(unsigned long long opt, const wchar_t *buf, size_t count, const wchar_t *fmt, void *loc, va_list ap)

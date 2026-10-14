@@ -32,3 +32,24 @@ KMT(D3DKMTOpenSyncObjectFromNtHandle)
 KMT(D3DKMTQueryResourceInfo)
 KMT(D3DKMTQueryResourceInfoFromNtHandle)
 KMT(D3DKMTShareObjects)
+
+/* A process's GPU scheduling priority (OBS raises its own to keep encoding
+ * while a game loads the GPU): with no GPU scheduler there is nothing to
+ * reorder, so the class is kept and reported back and the call succeeds */
+static LONG g_sched_class;
+
+GDIAPI LONG D3DKMTSetProcessSchedulingPriorityClass(HANDLE process, LONG cls)
+{
+    (void)process;
+    if (cls < 0 || cls > 5) return (LONG)0xC000000D;    /* STATUS_INVALID_PARAMETER */
+    g_sched_class = cls;
+    return 0;
+}
+
+GDIAPI LONG D3DKMTGetProcessSchedulingPriorityClass(HANDLE process, LONG *cls)
+{
+    (void)process;
+    if (!cls) return (LONG)0xC000000D;
+    *cls = g_sched_class;
+    return 0;
+}

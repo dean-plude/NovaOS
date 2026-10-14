@@ -200,6 +200,19 @@ static int dev_index(Set *s, const void *info, BOOL iface)
     return (int)r - 1;
 }
 
+/* Takes the device out of the set (not off the system); the devices after
+ * it move up one, as SetupDiEnumDeviceInfo then lists them */
+SETUPAPI BOOL WINAPI SetupDiDeleteDeviceInfo(HANDLE set, PVOID info)
+{
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    int i = dev_index(s, info, FALSE);
+    if (i < 0) return FALSE;
+    memmove(&s->dev[i], &s->dev[i + 1], (size_t)(s->n - i - 1) * sizeof(s->dev[0]));
+    s->n--;
+    return TRUE;
+}
+
 /* (each device has one interface of a class at most) */
 SETUPAPI BOOL WINAPI SetupDiEnumDeviceInterfaces(HANDLE set, PVOID dev, const GUID *cls, DWORD i, PVOID info)
 {
@@ -584,4 +597,10 @@ SETUPAPI DWORD WINAPI CM_Get_Device_IDW(DWORD dn, WCHAR *buf, ULONG len, ULONG f
 {
     cm_id_fn f = (cm_id_fn)cfgmgr("CM_Get_Device_IDW");
     return f ? f(dn, buf, len, flags) : 0x0D /* CR_NO_SUCH_DEVNODE */;
+}
+typedef DWORD (WINAPI *cm_id_size_fn)(PULONG, DWORD, ULONG);
+SETUPAPI DWORD WINAPI CM_Get_Device_ID_Size(PULONG len, DWORD dn, ULONG flags)
+{
+    cm_id_size_fn f = (cm_id_size_fn)cfgmgr("CM_Get_Device_ID_Size");
+    return f ? f(len, dn, flags) : 0x0D /* CR_NO_SUCH_DEVNODE */;
 }

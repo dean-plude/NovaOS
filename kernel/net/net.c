@@ -147,13 +147,21 @@ void   net_wait(UINT32 gen)                       { waitq_wait(&g_netq, gen, 10)
 /* -----------------------------------------------------------------------
  * Network interface ↔ the adapter
  * ----------------------------------------------------------------------- */
+/* What the adapter moved (frames, as Windows counts an interface's
+ * octets), under the network lock: NetGetStatus, Task Manager's graph */
+static UINT64 g_in_octets, g_out_octets, g_in_frames, g_out_frames;
+
 static err_t link_output(struct netif *n, struct pbuf *p)
 {
     (void)n;
     static UINT8 frame[E1000_MTU_FRAME + 16];
     UINT16 len = pbuf_copy_partial(p, frame, sizeof(frame), 0);
     for (int i = 0; i < 1000; i++) {
-        if (g_nic->transmit(frame, len)) return ERR_OK;
+        if (g_nic->transmit(frame, len)) {
+            g_out_octets += len;
+            g_out_frames++;
+            return ERR_OK;
+        }
         pause_cpu();
     }
     return ERR_IF;
@@ -182,6 +190,8 @@ static int poll_input(void)
         int n = g_nic->receive(buf, sizeof(buf));
         if (n <= 0) break;
         got++;
+        g_in_octets += (UINT64)n;
+        g_in_frames++;
         UINT64 t = rdtsc();                       /* arrival timing: entropy */
         TlsStirEntropy(&t, sizeof(t));
         struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)n, PBUF_POOL);
@@ -522,6 +532,10 @@ void NetGetStatus(NetStatus *st)
     st->adapter = g_nic->name();
     if (!st->present) return;
     net_lock();
+    st->in_octets = g_in_octets;
+    st->out_octets = g_out_octets;
+    st->in_frames = g_in_frames;
+    st->out_frames = g_out_frames;
     g_nic->mac(st->mac);
     st->link = g_link;
     st->configured = g_up && (g_cfg.manual_ip ? g_link : dhcp_supplied_address(&g_netif));

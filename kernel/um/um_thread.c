@@ -953,6 +953,22 @@ static UINT64 sys_query_info_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         UINT64 ret = um_stack_arg(5);
         return !ret || put_u32(ret, 1) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
     }
+    if (a2 == 1) {                                             /* ThreadTimes: KERNEL_USER_TIMES */
+        if (a4 < 32) return ST_INFO_LENGTH_MISMATCH;
+        UmObject *o = um_handle_object(p, a1, UO_THREAD);
+        if (!o) return ST_INVALID_HANDLE;
+        UmThread *t = (UmThread *)o;
+        UINT64 b[4] = { t->proc->create_time, 0, 0, 0 };       /* Create, Exit, Kernel, User (system calls included) */
+        if (!t->exited) {
+            um_lock_shared(&t->proc->lock);
+            if (!t->exited && t->kt) b[3] = sched_thread_time(t->kt);
+            um_unlock_shared(&t->proc->lock);
+        }
+        um_ob_unref(o);
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, b, sizeof(b)))) return ST_ACCESS_VIOLATION;
+        UINT64 ret = um_stack_arg(5);
+        return !ret || put_u32(ret, 32) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    }
     if (a2 != 0) return ST_INVALID_INFO_CLASS;                 /* ThreadBasicInformation */
     if (a4 < 48) return ST_INFO_LENGTH_MISMATCH;
     UmObject *o = um_handle_object(p, a1, UO_THREAD);
@@ -1191,6 +1207,14 @@ static UINT64 query_info_process(UmProcess *p, UINT64 a2, UINT64 a3, UINT64 a4)
         if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, v, need))) return ST_ACCESS_VIOLATION;
         UINT64 ret = um_stack_arg(5);
         return !ret || put_u32(ret, need) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    }
+    if (a2 == 4) {                                             /* ProcessTimes: KERNEL_USER_TIMES */
+        if (a4 < 32) return ST_INFO_LENGTH_MISMATCH;
+        UINT64 b[4] = { p->create_time, p->exited ? p->exit_time : 0, 0,   /* Create, Exit, Kernel, User */
+                        sched_tsc_100ns(__atomic_load_n(&p->cpu_tsc, __ATOMIC_RELAXED)) };
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, b, sizeof(b)))) return ST_ACCESS_VIOLATION;
+        UINT64 ret = um_stack_arg(5);
+        return !ret || put_u32(ret, 32) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
     }
     if (a2 != 0) return ST_INVALID_INFO_CLASS;                 /* ProcessBasicInformation */
     if (a4 < 48) return ST_INFO_LENGTH_MISMATCH;

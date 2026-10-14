@@ -273,13 +273,15 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
   back once per signal or on its timeout, a callback sets its own wait
   again, setting a wait never waits for a running callback, cancelling
-  and closing from a callback; 64- and 32-bit), programs started from
-  the Start menu (Win+S, the name, Enter): `winhello`, a GUI program,
-  with no Terminal window, and `hello`, a console program, in a
-  Terminal, `crash kernel`, a deliberate kernel fault whose serial log
-  must show a backtrace with function names, and last the kernel crash
-  report: after `crash kernel` and a reset, `crashes last` shows the
-  fault's backtrace.<!-- END generated:core-tests -->
+  and closing from a callback; 64- and 32-bit), Task Manager opened with
+  Ctrl+Shift+Esc: `winhello` listed, selected by typing its name and
+  ended with Delete; the Performance, Details and Services views,
+  programs started from the Start menu (Win+S, the name, Enter):
+  `winhello`, a GUI program, with no Terminal window, and `hello`, a
+  console program, in a Terminal, `crash kernel`, a deliberate kernel
+  fault whose serial log must show a backtrace with function names, and
+  last the kernel crash report: after `crash kernel` and a reset,
+  `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 

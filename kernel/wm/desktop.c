@@ -1617,6 +1617,7 @@ static void menu_for_dock(const Hot *h, int x, int y)
         menu_add("Terminal", MA_APP, APP_TERMINAL, NULL, false);
         menu_add("File Explorer", MA_APP, APP_EXPLORER, NULL, false);
         menu_add("Settings", MA_APP, APP_SETTINGS, NULL, false);
+        menu_add("Task Manager", MA_APP, APP_TASKMGR, NULL, false);
         menu_add("Show desktop", MA_SHOW_DESKTOP, 0, NULL, true);
         if (SleepSupported()) menu_add("Sleep", MA_SLEEP, 0, NULL, true);
         menu_add("Restart", MA_RESTART, 0, NULL, !SleepSupported());
@@ -1940,6 +1941,15 @@ static void desktop_key(const KeyEvent *k)
     }
     if (g_switch.on) {
         if (k->scancode == KEY_ESC) switch_end(false);
+        return;
+    }
+
+    /* Ctrl+Shift+Esc: Task Manager, as on Windows (open already: to the front) */
+    if (k->ctrl && k->shift && !k->alt && k->scancode == KEY_ESC && !k->extended) {
+        close_popups();
+        start_open(false);
+        kprintf("[APPS] Ctrl+Shift+Esc: Task Manager\n");
+        AppLaunch(APP_TASKMGR);
         return;
     }
 

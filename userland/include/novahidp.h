@@ -10,8 +10,9 @@
  * self-contained block a program may copy: a header ("HidP KDR", as
  * Windows' starts), the capabilities and the link collections.
  *
- * Each main item (Input, Output, Feature) of the first top-level
- * collection becomes capabilities the way Windows' parser makes them:
+ * Each main item (Input, Output, Feature) of one top-level collection
+ * (the first, or the one nova_hidp_build_tlc names: Windows makes each
+ * top-level collection a device of its own) becomes capabilities the way Windows' parser makes them:
  * a variable item with one-bit fields is buttons, other variable items
  * are values, an array item is buttons whose fields hold indices; a usage
  * range gives one capability (IsRange) and a list of usages one per
@@ -21,9 +22,29 @@
  * its children are linked newest first, as Windows links them.
  */
 #pragma once
+#ifdef NOVA_HIDP_KERNEL
+/* (the kernel's HID class driver, kernel/nt/hidclass.c, builds the same
+ * block for IOCTL_HID_GET_COLLECTION_DESCRIPTOR; it holds its own lock
+ * around nova_hidp_build_tlc) */
+typedef UINT8  BYTE;
+typedef UINT16 WORD;
+typedef UINT32 DWORD;
+typedef INT32  LONG;
+typedef UINT32 UINT;
+typedef int    BOOL;
+#ifndef TRUE
+#define TRUE  1
+#define FALSE 0
+#endif
+#define NOVA_HIDP_LOCK()
+#define NOVA_HIDP_UNLOCK()
+#else
 #include <windows.h>
 #include <string.h>
 #include <novapad.h>
+#define NOVA_HIDP_LOCK()   static SRWLOCK lock = SRWLOCK_INIT; AcquireSRWLockExclusive(&lock)
+#define NOVA_HIDP_UNLOCK() ReleaseSRWLockExclusive(&lock)
+#endif
 
 #define NOVA_HIDP_MAX_CAPS  256
 #define NOVA_HIDP_MAX_LINKS 64
@@ -76,21 +97,21 @@ static inline LONG nova_hidp_s(const BYTE *v, int n)
     return (LONG)r;
 }
 
-/* Build the preparsed data of descriptor @d (@len bytes) into @out (@cap
- * bytes, may be 0): the size it takes, 0 if @d holds no top-level
- * collection */
-static UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
+/* Build the preparsed data of top-level collection @tlc (0 the first) of
+ * descriptor @d (@len bytes) into @out (@cap bytes, may be 0): the size it
+ * takes, 0 if @d has no such collection */
+static UINT nova_hidp_build_tlc(const BYTE *d, int len, int tlc, void *out, UINT cap)
 {
     typedef struct { WORD page; LONG lmin, lmax, pmin, pmax; DWORD units, uexp; WORD size, count; BYTE id; } Glob;
     static NovaHidCap caps[NOVA_HIDP_MAX_CAPS];
     static NovaHidLink links[NOVA_HIDP_MAX_LINKS];
     static WORD bits[3][256];
-    static SRWLOCK lock = SRWLOCK_INIT;            /* (the tables above are shared) */
-    AcquireSRWLockExclusive(&lock);
+    NOVA_HIDP_LOCK();                              /* (the tables above are shared) */
     memset(bits, 0, sizeof(bits));
     Glob g, stack[8];
     memset(&g, 0, sizeof(g));
-    int sp = 0, depth = 0, ncaps = 0, nlinks = 0, cur = -1;
+    int sp = 0, depth = 0, ncaps = 0, nlinks = 0, cur = -1, top = -1;
+    BOOL skip = FALSE;                             /* (inside a top-level collection before @tlc) */
     DWORD usages[64], umin = 0, umax = 0;
     int nusage = 0;
     BOOL have_min = FALSE, have_max = FALSE, done = FALSE;
@@ -110,6 +131,7 @@ static UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
             DWORD flags = nova_hidp_u(v, n);
             WORD *pos = &bits[t][g.id];
             clear_locals = TRUE;
+            if (skip) break;
             if (cur < 0 || !g.size || !g.count) { *pos = (WORD)(*pos + g.size * g.count); break; }
             BOOL range = have_min && have_max && !nusage;
             if (!range && !nusage) { *pos = (WORD)(*pos + g.size * g.count); break; }   /* padding */
@@ -162,8 +184,11 @@ static UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
             break;
         }
         case 0xA0: {                                               /* Collection */
-            if (depth == 0 && nlinks) { done = TRUE; break; }     /* (a second top-level collection) */
-            if (nlinks < NOVA_HIDP_MAX_LINKS) {
+            if (depth == 0) {
+                if (++top > tlc) { done = TRUE; break; }           /* (past the one asked for) */
+                skip = top < tlc;
+            }
+            if (!skip && nlinks < NOVA_HIDP_MAX_LINKS) {
                 NovaHidLink *l = &links[nlinks];
                 memset(l, 0, sizeof(*l));
                 DWORD u = nusage ? usages[0] : have_min ? umin : 0;
@@ -184,8 +209,9 @@ static UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
         }
         case 0xC0:                                                 /* End Collection */
             if (depth) depth--;
-            if (cur >= 0) cur = depth ? links[cur].parent : cur;
+            if (!skip && cur >= 0) cur = depth ? links[cur].parent : cur;
             if (!depth && nlinks) done = TRUE;
+            if (!depth) skip = FALSE;
             clear_locals = TRUE;
             break;
         case 0x04: g.page = (WORD)nova_hidp_u(v, n); break;
@@ -230,8 +256,29 @@ static UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
             memcpy(nova_hidp_links(p), links, nlinks * sizeof(NovaHidLink));
         }
     }
-    ReleaseSRWLockExclusive(&lock);
+    NOVA_HIDP_UNLOCK();
     return need;
+}
+
+/* The first top-level collection's preparsed data (as above) */
+static inline UINT nova_hidp_build(const BYTE *d, int len, void *out, UINT cap)
+{
+    return nova_hidp_build_tlc(d, len, 0, out, cap);
+}
+
+/* How many top-level collections descriptor @d (@len bytes) has */
+static inline int nova_hidp_collections(const BYTE *d, int len)
+{
+    int depth = 0, n = 0;
+    for (int i = 0; i < len;) {
+        BYTE b = d[i];
+        if (b == 0xFE) { if (i + 1 >= len) break; i += 3 + d[i + 1]; continue; }
+        int k = (b & 3) == 3 ? 4 : (b & 3);
+        i += 1 + k;
+        if ((b & 0xFC) == 0xA0) { if (!depth++) n++; }
+        else if ((b & 0xFC) == 0xC0 && depth) depth--;
+    }
+    return n;
 }
 
 /* @p if it is preparsed data, else NULL */
@@ -242,6 +289,7 @@ static inline const NovaHidP *nova_hidp_check(const void *p)
     return h;
 }
 
+#ifndef NOVA_HIDP_KERNEL
 /* A controller's preparsed data into @buf (@cap bytes; may be 0): the
  * bytes it takes, 0 if the slot is empty */
 static inline UINT nova_pad_preparsed(int slot, void *buf, UINT cap)
@@ -250,3 +298,4 @@ static inline UINT nova_pad_preparsed(int slot, void *buf, UINT cap)
     int n = nova_pad_descriptor(slot, d, NULL);
     return n > 0 ? nova_hidp_build(d, n, buf, cap) : 0;
 }
+#endif

@@ -542,8 +542,11 @@ item ends when a named program or test demonstrates it.
   Input (`WM_INPUT` with each controller's HID reports) and `hid.dll`
   (`HidD_*` on a controller's HID path, `HidP_*` on its report
   descriptor; an Xbox controller has the one Windows' Xbox driver
-  gives).  Still to do: raw keyboard and mouse input, HID output and
-  feature reports, `IOCTL_HID_*` through `DeviceIoControl`, the Xbox
+  gives).  A vendor's USB HID device runs on the HID class driver, where
+  `hid.dll` has output and feature reports and `IOCTL_HID_*` through
+  `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  Still to do: raw keyboard and mouse input, Raw Input for class-driver
+  devices, the Xbox
   360 wireless receiver, Bluetooth controllers, force feedback through
   DirectInput, and virtio game pads (QEMU has none).
 - Plug and Play: a device tree the Windows way.  Devices plugged in or
@@ -723,8 +726,12 @@ apps from the App Store catalog pass their nightly scripts.
   The corpus had no failures left (39 of 39 on 2026-10-13), so it starts
   from the Store's untested apps: WinSCP (installs and opens its Login
   dialog; [history](history/2026-10-14-winscp.md)).
-- [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
-  and save `.docx` and `.xlsx` files.
+- [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
+  and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
+  from the Store's Windows Installer package; the nightly corpus types a
+  line into a `.docx` in Writer and a formula into an `.xlsx` in Calc,
+  saves both in their own formats and reads the edits back out of the
+  saved files ([history](history/2026-10-14-libreoffice.md)).
 - [x] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
   OpenGL is built in (Mesa's llvmpipe, OpenGL 4.5); the corpus test
   installs Krita from the App Store, draws a stroke and saves it as a
@@ -815,8 +822,9 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
   Storport host runs virtio-win's `viostor.sys` on a QEMU virtio-blk disk,
   and NovaOS mounts the NTFS volume on it.
 
-Later, only when a target device needs them: HID class, PortCls and
-AVStream drivers, and the full WDDM render path (step 25.3 onwards).
+The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
+minidriver) is built; test `hid`.  Later, only when a target device
+needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
 
 ---
 

@@ -2,14 +2,21 @@
  * hid.dll — Human Interface Device class support: HID device handles
  * (HidD_*) and report parsing (HidP_*)
  *
- * NovaOS's HID devices are its game controllers (novapad.h), listed by
- * setupapi and cfgmgr32 under the HID interface class and by Raw Input,
- * and opened with CreateFile on their paths (kernel/um/um_hid.c): a read
- * gets the next input report.  HidD_* ask the kernel which controller a
- * handle reads for its attributes, strings, report descriptor (as
- * preparsed data, novahidp.h) and latest input report.  Output and
- * feature reports are not supported (none of the controllers has any
- * the kernel would send): those calls fail.
+ * A HID collection a Windows HID minidriver runs under the kernel's HID
+ * class driver (kernel/nt/hidclass.c: a USB HID device on NovaOS's
+ * hidusb, a vendor's minidriver) is opened by its interface path as on
+ * Windows, and HidD_* are what Windows' are: the IOCTL_HID_* requests
+ * (attributes, preparsed data, feature, input and output reports,
+ * strings, the input queue), through DeviceIoControl.
+ *
+ * NovaOS's game controllers (novapad.h) have HID paths of their own
+ * (kernel/um/um_hid.c), listed by setupapi and cfgmgr32 under the HID
+ * interface class and by Raw Input: a read gets the next input report,
+ * and HidD_* ask the kernel which controller a handle reads for its
+ * attributes, product string, report descriptor (as preparsed data,
+ * novahidp.h) and latest input report.  Output and feature reports and
+ * the other strings are not supported there (none of the controllers has
+ * any the kernel would send): those calls fail.
  *
  * HidP_* read the preparsed data, from here or from Raw Input's
  * RIDI_PREPARSEDDATA alike, and a report: the capabilities, the buttons
@@ -27,6 +34,40 @@
 #define ERROR_INVALID_USER_BUFFER 1784
 #endif
 
+WINBASEAPI BOOL WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPVOID out, DWORD out_n,
+                                       LPDWORD ret, LPOVERLAPPED ov);
+
+/* The HID class driver's requests (hidclass.h): FILE_DEVICE_KEYBOARD,
+ * function, method, FILE_ANY_ACCESS */
+#define METHOD_BUFFERED   0
+#define METHOD_IN_DIRECT  1
+#define METHOD_OUT_DIRECT 2
+#define METHOD_NEITHER    3
+#define HID_CTL(fn, method) ((0x0B << 16) | ((fn) << 2) | (method))
+#define NOVA_IOCTL_GET_NUM_BUFFERS     HID_CTL(104, METHOD_BUFFERED)
+#define NOVA_IOCTL_SET_NUM_BUFFERS     HID_CTL(105, METHOD_BUFFERED)
+#define NOVA_IOCTL_COLLECTION_INFO     HID_CTL(106, METHOD_BUFFERED)
+#define NOVA_IOCTL_GET_DRIVER_CONFIG   HID_CTL(100, METHOD_BUFFERED)
+#define NOVA_IOCTL_SET_DRIVER_CONFIG   HID_CTL(101, METHOD_BUFFERED)
+#define NOVA_IOCTL_COLLECTION_DESC     HID_CTL(100, METHOD_NEITHER)
+#define NOVA_IOCTL_FLUSH_QUEUE         HID_CTL(101, METHOD_NEITHER)
+#define NOVA_IOCTL_SET_FEATURE         HID_CTL(100, METHOD_IN_DIRECT)
+#define NOVA_IOCTL_SET_OUTPUT_REPORT   HID_CTL(101, METHOD_IN_DIRECT)
+#define NOVA_IOCTL_GET_FEATURE         HID_CTL(100, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_PHYSICAL_DESC   HID_CTL(102, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_INPUT_REPORT    HID_CTL(104, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_MANUFACTURER    HID_CTL(110, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_PRODUCT         HID_CTL(111, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_SERIAL          HID_CTL(112, METHOD_OUT_DIRECT)
+#define NOVA_IOCTL_GET_INDEXED_STRING  HID_CTL(120, METHOD_OUT_DIRECT)
+
+typedef struct {                       /* HID_COLLECTION_INFORMATION */
+    ULONG  DescriptorSize;
+    BOOLEAN Polled;
+    UCHAR  Reserved1[1];
+    USHORT VendorID, ProductID, VersionNumber;
+} NovaHidCollectionInfo;
+
 /* ---------------------------------------------------------------------------
  * HidD_*: devices
  * ------------------------------------------------------------------------- */
@@ -35,6 +76,24 @@ HIDAPI_ void WINAPI HidD_GetHidGuid(LPGUID g)
 {
     static const GUID hid = { 0x4d1e55b2, 0xf16f, 0x11cf, { 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };
     if (g) *g = hid;
+}
+
+/* A request to a HID collection's handle (one a HID class driver runs);
+ * DeviceIoControl without an OVERLAPPED waits for it */
+static BOOLEAN hid_ioctl(HANDLE dev, DWORD code, void *in, DWORD in_len, void *out, DWORD out_len, DWORD *got)
+{
+    if (!dev || dev == INVALID_HANDLE_VALUE) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
+    DWORD n = 0;
+    BOOL ok = DeviceIoControl(dev, code, in, in_len, out, out_len, &n, NULL);
+    if (got) *got = n;
+    return ok != 0;
+}
+
+/* Whether @dev is one of NovaOS's game controllers (not a HID class
+ * driver's collection) */
+static BOOL is_pad(HANDLE dev)
+{
+    return dev && dev != INVALID_HANDLE_VALUE && nova_pad_handle_slot(dev) >= 0;
 }
 
 /* The controller @dev reads (its slot), or -1 with the error set */
@@ -51,6 +110,16 @@ static int dev_slot(HANDLE dev, NovaPadInfo *info)
 HIDAPI_ BOOLEAN WINAPI HidD_GetAttributes(HANDLE dev, PHIDD_ATTRIBUTES a)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) {
+        NovaHidCollectionInfo ci;
+        if (!a) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        if (!hid_ioctl(dev, NOVA_IOCTL_COLLECTION_INFO, NULL, 0, &ci, sizeof(ci), NULL)) return FALSE;
+        a->Size = sizeof(*a);
+        a->VendorID = ci.VendorID;
+        a->ProductID = ci.ProductID;
+        a->VersionNumber = ci.VersionNumber;
+        return TRUE;
+    }
     if (dev_slot(dev, &i) < 0) return FALSE;
     if (!a) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     a->Size = sizeof(*a);
@@ -63,8 +132,23 @@ HIDAPI_ BOOLEAN WINAPI HidD_GetAttributes(HANDLE dev, PHIDD_ATTRIBUTES a)
 HIDAPI_ BOOLEAN WINAPI HidD_GetPreparsedData(HANDLE dev, PHIDP_PREPARSED_DATA *p)
 {
     NovaPadInfo i;
-    int slot = dev_slot(dev, &i);
     if (p) *p = NULL;
+    if (!is_pad(dev)) {                                /* the collection's, from the class driver */
+        NovaHidCollectionInfo ci;
+        if (!p) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        if (!hid_ioctl(dev, NOVA_IOCTL_COLLECTION_INFO, NULL, 0, &ci, sizeof(ci), NULL)) return FALSE;
+        void *b = ci.DescriptorSize ? LocalAlloc(LMEM_FIXED, ci.DescriptorSize) : NULL;
+        if (!b) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+        if (!hid_ioctl(dev, NOVA_IOCTL_COLLECTION_DESC, NULL, 0, b, ci.DescriptorSize, NULL)) {
+            DWORD e = GetLastError();
+            LocalFree(b);
+            SetLastError(e);
+            return FALSE;
+        }
+        *p = b;
+        return TRUE;
+    }
+    int slot = dev_slot(dev, &i);
     if (slot < 0) return FALSE;
     if (!p) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     UINT n = nova_pad_preparsed(slot, NULL, 0);
@@ -88,14 +172,20 @@ HIDAPI_ BOOLEAN WINAPI HidD_FreePreparsedData(PHIDP_PREPARSED_DATA p)
 HIDAPI_ BOOLEAN WINAPI HidD_FlushQueue(HANDLE dev)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) return hid_ioctl(dev, NOVA_IOCTL_FLUSH_QUEUE, NULL, 0, NULL, 0, NULL);
     if (dev_slot(dev, &i) < 0) return FALSE;
     return nova_pad_flush(dev);
 }
 
-/* Input buffers: the kernel keeps 32 reports per handle */
+/* Input buffers: the kernel keeps 32 reports per handle (a game
+ * controller's whatever is asked) */
 HIDAPI_ BOOLEAN WINAPI HidD_GetNumInputBuffers(HANDLE dev, PULONG n)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) {
+        if (!n) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        return hid_ioctl(dev, NOVA_IOCTL_GET_NUM_BUFFERS, NULL, 0, n, sizeof(*n), NULL);
+    }
     if (dev_slot(dev, &i) < 0) return FALSE;
     if (!n) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     *n = 32;
@@ -105,6 +195,7 @@ HIDAPI_ BOOLEAN WINAPI HidD_GetNumInputBuffers(HANDLE dev, PULONG n)
 HIDAPI_ BOOLEAN WINAPI HidD_SetNumInputBuffers(HANDLE dev, ULONG n)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) return hid_ioctl(dev, NOVA_IOCTL_SET_NUM_BUFFERS, &n, sizeof(n), NULL, 0, NULL);
     if (dev_slot(dev, &i) < 0) return FALSE;
     if (n < 2 || n > 512) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     return TRUE;                                       /* (the kernel keeps 32 whatever is asked) */
@@ -114,6 +205,7 @@ HIDAPI_ BOOLEAN WINAPI HidD_SetNumInputBuffers(HANDLE dev, ULONG n)
 HIDAPI_ BOOLEAN WINAPI HidD_GetInputReport(HANDLE dev, PVOID buf, ULONG len)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) return hid_ioctl(dev, NOVA_IOCTL_GET_INPUT_REPORT, NULL, 0, buf, len, NULL);
     int slot = dev_slot(dev, &i);
     if (slot < 0) return FALSE;
     if (!buf || !len) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
@@ -140,12 +232,21 @@ static BOOLEAN no_report(HANDLE dev, PVOID buf, ULONG len)
     return FALSE;
 }
 
-HIDAPI_ BOOLEAN WINAPI HidD_SetOutputReport(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_GetFeature(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_SetFeature(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_GetPhysicalDescriptor(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_GetConfiguration(HANDLE dev, PVOID cfg, ULONG len) { return no_report(dev, cfg, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_SetConfiguration(HANDLE dev, PVOID cfg, ULONG len) { return no_report(dev, cfg, len); }
+/* A report or descriptor through the class driver (@set: @buf is the
+ * request's input), or a game controller's refusal */
+static BOOLEAN class_report(HANDLE dev, DWORD code, BOOL set, PVOID buf, ULONG len)
+{
+    if (is_pad(dev)) return no_report(dev, buf, len);
+    if (!buf || !len) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    return set ? hid_ioctl(dev, code, buf, len, NULL, 0, NULL) : hid_ioctl(dev, code, NULL, 0, buf, len, NULL);
+}
+
+HIDAPI_ BOOLEAN WINAPI HidD_SetOutputReport(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_SET_OUTPUT_REPORT, TRUE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_GetFeature(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_GET_FEATURE, FALSE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_SetFeature(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_SET_FEATURE, TRUE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_GetPhysicalDescriptor(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_GET_PHYSICAL_DESC, FALSE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_GetConfiguration(HANDLE dev, PVOID cfg, ULONG len) { return class_report(dev, NOVA_IOCTL_GET_DRIVER_CONFIG, FALSE, cfg, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_SetConfiguration(HANDLE dev, PVOID cfg, ULONG len) { return class_report(dev, NOVA_IOCTL_SET_DRIVER_CONFIG, TRUE, cfg, len); }
 
 /* A string into @buf (@len bytes, UTF-16 with its NUL) */
 static BOOLEAN put_string(PVOID buf, ULONG len, const char *s)
@@ -162,15 +263,21 @@ static BOOLEAN put_string(PVOID buf, ULONG len, const char *s)
 HIDAPI_ BOOLEAN WINAPI HidD_GetProductString(HANDLE dev, PVOID buf, ULONG len)
 {
     NovaPadInfo i;
+    if (!is_pad(dev)) return class_report(dev, NOVA_IOCTL_GET_PRODUCT, FALSE, buf, len);
     if (dev_slot(dev, &i) < 0) return FALSE;
     return put_string(buf, len, i.kind == NOVA_PAD_XBOX360 ? "Controller (XBOX 360 For Windows)" :
                                 i.kind == NOVA_PAD_XBOXONE ? "Controller (Xbox One For Windows)" : i.name);
 }
 
-/* The kernel keeps no manufacturer or serial number strings */
-HIDAPI_ BOOLEAN WINAPI HidD_GetManufacturerString(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_GetSerialNumberString(HANDLE dev, PVOID buf, ULONG len) { return no_report(dev, buf, len); }
-HIDAPI_ BOOLEAN WINAPI HidD_GetIndexedString(HANDLE dev, ULONG index, PVOID buf, ULONG len) { (void)index; return no_report(dev, buf, len); }
+/* (the kernel keeps no manufacturer or serial number strings for a game controller) */
+HIDAPI_ BOOLEAN WINAPI HidD_GetManufacturerString(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_GET_MANUFACTURER, FALSE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_GetSerialNumberString(HANDLE dev, PVOID buf, ULONG len) { return class_report(dev, NOVA_IOCTL_GET_SERIAL, FALSE, buf, len); }
+HIDAPI_ BOOLEAN WINAPI HidD_GetIndexedString(HANDLE dev, ULONG index, PVOID buf, ULONG len)
+{
+    if (is_pad(dev)) return no_report(dev, buf, len);
+    if (!buf || !len) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    return hid_ioctl(dev, NOVA_IOCTL_GET_INDEXED_STRING, &index, sizeof(index), buf, len, NULL);
+}
 
 /* ---------------------------------------------------------------------------
  * HidP_*: capabilities

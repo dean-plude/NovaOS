@@ -977,6 +977,21 @@ static void usb_remove(NtPdo *p)
     unload_if_idle(drv);
 }
 
+/* A USB HID device no NovaOS driver took and nothing was installed on
+ * (a vendor-defined one): NovaOS's own HID minidriver (hidusb.c) as its
+ * driver, written in its Enum key @key as Windows' input.inf installs
+ * hidusb.sys on USB\Class_03 */
+static bool inbox_hid(const PnpNode *n, const char *key)
+{
+    bool hid = false;
+    for (const char *c = n->compat; *c && !hid; c += strlen(c) + 1) hid = !strcmp(c, "USB\\Class_03");
+    if (!hid) return false;
+    um_registry_set_sz(key, "Service", "HidUsb");
+    um_registry_set_sz(key, "Class", "HIDClass");
+    um_registry_set_sz(key, "ClassGUID", "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}");
+    return true;
+}
+
 static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
 {
     (void)dev;
@@ -988,7 +1003,8 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
             ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
             UINT32 disabled = 0;
             if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(k->node, PROB_DISABLED);
-            else if (um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) NtPnpStart(k->node);
+            else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) || inbox_hid(n, key))
+                NtPnpStart(k->node);
         }
         kfree(n);
     } else {
@@ -1117,6 +1133,7 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
     strcpy(n->instance, c->instance);
     if (!n->hwids[0]) strncpy(n->hwids, dev, sizeof(n->hwids) - 2);
     if (!n->desc[0]) strncpy(n->desc, dev, sizeof(n->desc) - 1);
+    if (!strncmp(dev, "HID\\", 4)) strcpy(n->cls, "HIDClass");   /* (a HID collection, as input.inf files it) */
     n->flags = PNP_PRESENT;
     c->node = PnpAdd(bus->node, n);
     if (!c->node) goto fail;

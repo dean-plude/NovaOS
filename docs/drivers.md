@@ -80,8 +80,8 @@ one without a `DriverUnload` routine cannot be stopped.
 NovaOS's kernel exports what drivers import from `ntoskrnl.exe`,
 `hal.dll` and the port drivers below. The list is one file,
 [`kernel/nt/exports.h`](../kernel/nt/exports.h) (about 480 exports:
-`ntoskrnl.exe`, `hal.dll`, `ndis.sys`, `storport.sys`, `usbd.sys`,
-`cng.sys`, `wmilib.sys`). The main groups:
+`ntoskrnl.exe`, `hal.dll`, `ndis.sys`, `storport.sys`, `hidclass.sys`,
+`usbd.sys`, `cng.sys`, `wmilib.sys`). The main groups:
 
 - IRQL kept in `CR8`, as on Windows x64; spin locks, DPCs, timers,
   events, semaphores, mutexes, fast mutexes and executive resources;
@@ -206,6 +206,34 @@ pnputil /scan-devices /search-online /install
 
 downloads, installs and starts FTDI's bus driver, then finds and installs
 the port driver for the COM port it reports.
+
+### HID: the class driver and minidrivers
+
+NovaOS's HID class driver (`kernel/nt/hidclass.c`) is what Windows'
+`hidclass.sys` is to a HID minidriver: the minidriver calls
+`HidRegisterMinidriver` from its `DriverEntry`, and the class driver
+takes over its `AddDevice` and dispatch table. It asks the minidriver
+for the HID descriptor, report descriptor and attributes with the
+internal `IOCTL_HID_*` requests, makes a child device for each top-level
+collection (`HID\VID_1209&PID_0008`, `...&Col01` when there are several)
+with the HID interface (`GUID_DEVINTERFACE_HID`) turned on, and keeps an
+`IOCTL_HID_READ_REPORT` going to queue each input report for every open
+handle. Programs use the collection as on Windows: setupapi and cfgmgr32
+list its interface, and `hid.dll`'s `HidD_*` send it the `IOCTL_HID_*`
+requests (attributes, preparsed data, feature, input and output reports,
+strings, the queue's size and flushing it); `ReadFile` takes input
+reports and `WriteFile` sends an output report.
+
+A USB HID device that no NovaOS driver takes (a vendor-defined device,
+not a keyboard, mouse, touch screen or game controller) gets NovaOS's
+own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
+kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
+interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
+feature and input reports. Not done yet: composite USB devices (one HID
+interface per device), the collections in Raw Input's device list, and
+`ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
+device wait). NovaOS's own keyboards, mice and game controllers keep
+their built-in drivers.
 
 ### Network drivers (NDIS)
 
@@ -436,6 +464,7 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
+| `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, unplugging |
 
 To run one boot's tests, pass their names to `--only` (`python3
 tools/selftest.py --suite devices --list` prints them).

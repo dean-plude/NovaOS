@@ -376,15 +376,70 @@ class EchoServer:
         self.sock.close()
 
 
+OOXML_RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
+              'officeDocument" Target="{}"/></Relationships>')
+
+
+def make_docx(path, lines):
+    """A Word document (.docx) with a paragraph for each of @lines (for
+    LibreOffice Writer to open, edit and save)"""
+    w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    body = ''.join(f'<w:p><w:r><w:t>{l}</w:t></w:r></w:p>' for l in lines)
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/>'
+                   '<Override PartName="/word/document.xml" ContentType="application/'
+                   'vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        z.writestr('_rels/.rels', OOXML_RELS.format('word/document.xml'))
+        z.writestr('word/document.xml', f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                                        f'<w:document xmlns:w="{w}"><w:body>{body}</w:body></w:document>')
+
+
+def make_xlsx(path, numbers):
+    """An Excel workbook (.xlsx): one sheet with @numbers down column A
+    (for LibreOffice Calc to open, edit and save)"""
+    s = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    r = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    rows = ''.join(f'<row r="{i}"><c r="A{i}"><v>{n}</v></c></row>' for i, n in enumerate(numbers, 1))
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/>'
+                   '<Override PartName="/xl/workbook.xml" ContentType="application/'
+                   'vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                   '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/'
+                   'vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        z.writestr('_rels/.rels', OOXML_RELS.format('xl/workbook.xml'))
+        z.writestr('xl/workbook.xml', f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                                      f'<workbook xmlns="{s}" xmlns:r="{r}"><sheets>'
+                                      f'<sheet name="Sums" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr('xl/_rels/workbook.xml.rels',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                   'relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        z.writestr('xl/worksheets/sheet1.xml', f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                                               f'<worksheet xmlns="{s}"><sheetData>{rows}</sheetData></worksheet>')
+
+
 def make_data(d):
-    """C:\\Apps\\data: text to search, a PDF, two files to compare and a git
-    repository to clone"""
+    """C:\\Apps\\data: text to search, a PDF, a Word document and an Excel
+    workbook, two files to compare and a git repository to clone"""
     os.makedirs(d)
     with open(os.path.join(d, 'hello.txt'), 'w', newline='\n') as f:
         f.write(SAMPLE)
     with open(os.path.join(d, 'hello2.txt'), 'w', newline='\n') as f:
         f.write(SAMPLE.replace('a needle', 'no needle') + 'one more line\n')
     make_pdf(os.path.join(d, 'corpus.pdf'), SAMPLE.splitlines())
+    make_docx(os.path.join(d, 'letter.docx'), SAMPLE.splitlines())
+    make_xlsx(os.path.join(d, 'sums.xlsx'), [40, 2])
     with open(os.path.join(d, 'notes.txt'), 'w', newline='\n') as f:
         f.write('more text\n')
     with open(os.path.join(d, 'ab.json'), 'w') as f:

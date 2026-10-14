@@ -637,6 +637,16 @@ USERAPI BOOL IsClipboardFormatAvailable(UINT fmt)
     return FALSE;
 }
 USERAPI int CountClipboardFormats(void) { UINT f[40]; return list_formats(f, 40); }
+USERAPI BOOL GetUpdatedClipboardFormats(UINT *out, UINT max, UINT *count)
+{
+    UINT f[40];
+    int n = list_formats(f, 40);
+    if (!count) { SetLastError(998 /* ERROR_NOACCESS */); return FALSE; }
+    *count = (UINT)n;
+    if ((UINT)n > max || (n && !out)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+    for (int i = 0; i < n; i++) out[i] = f[i];
+    return TRUE;
+}
 USERAPI UINT EnumClipboardFormats(UINT fmt)
 {
     UINT f[40];

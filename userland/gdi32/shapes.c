@@ -138,6 +138,30 @@ GDIAPI BOOL PolyBezierTo(HDC h, const POINT *p, DWORD n)
     return TRUE;
 }
 
+/* Lines and curves from a list of points, each with what to do there
+ * (PT_MOVETO, PT_LINETO, PT_BEZIERTO, the last two with PT_CLOSEFIGURE) */
+GDIAPI BOOL PolyDraw(HDC h, const POINT *p, const BYTE *types, int n)
+{
+    enum { CLOSE = 1, LINETO = 2, BEZIERTO = 4, MOVETO = 6 };
+    NOVA_DC *d = dc_of(h); if (!d || !p || !types || n < 0) return FALSE;
+    for (int i = 0; i < n; i++) {                       /* the whole list is checked first, as Windows does */
+        BYTE t = types[i] & ~CLOSE;
+        if (t == BEZIERTO) {
+            if (i + 2 >= n || (types[i + 1] & ~CLOSE) != BEZIERTO || (types[i + 2] & ~CLOSE) != BEZIERTO) return FALSE;
+            i += 2;
+        } else if (t != LINETO && t != MOVETO) return FALSE;
+    }
+    int sx = d->cx, sy = d->cy;                          /* the figure's start, for PT_CLOSEFIGURE */
+    for (int i = 0; i < n; i++) {
+        BYTE t = types[i] & ~CLOSE;
+        if (t == MOVETO) { MoveToEx(h, p[i].x, p[i].y, NULL); sx = p[i].x; sy = p[i].y; continue; }
+        if (t == LINETO) LineTo(h, p[i].x, p[i].y);
+        else { PolyBezierTo(h, p + i, 3); i += 2; }
+        if (types[i] & CLOSE) { LineTo(h, sx, sy); }
+    }
+    return TRUE;
+}
+
 GDIAPI BOOL PolyPolygon(HDC h, const POINT *pt, const INT *counts, int n)
 {
     NOVA_DC *d = dc_of(h); if (!d || !pt || !counts) return FALSE;

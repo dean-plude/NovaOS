@@ -82,6 +82,31 @@ GDIAPI HBRUSH CreateDIBPatternBrushPt(const void *packed, UINT usage)
     return br;
 }
 
+/* The same from a global memory block holding the packed DIB */
+GDIAPI HBRUSH CreateDIBPatternBrush(HGLOBAL packed, UINT usage)
+{
+    const void *p = GlobalLock(packed);
+    if (!p) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+    HBRUSH br = CreateDIBPatternBrushPt(p, usage);
+    GlobalUnlock(packed);
+    return br;
+}
+
+/* A .fot file naming a TrueType font is a Windows 3.1 relic; fonts are
+ * added from their own files (AddFontResourceEx) instead */
+GDIAPI BOOL CreateScalableFontResourceW(DWORD hidden, LPCWSTR fot, LPCWSTR ttf, LPCWSTR path)
+{
+    (void)hidden; (void)fot; (void)ttf; (void)path;
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+GDIAPI BOOL CreateScalableFontResourceA(DWORD hidden, LPCSTR fot, LPCSTR ttf, LPCSTR path)
+{
+    (void)hidden; (void)fot; (void)ttf; (void)path;
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+
 /* -----------------------------------------------------------------------
  * GradientFill (GRADIENT_FILL_RECT_H / _V and triangles)
  * ----------------------------------------------------------------------- */

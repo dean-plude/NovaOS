@@ -69,6 +69,15 @@ PSAPI_ HRESULT WINAPI PropVariantToString(const PROPVARIANT *pv, PWSTR out, UINT
     return S_OK;
 }
 
+/* The string a PROPVARIANT holds (VT_LPWSTR or VT_BSTR) without copying it,
+ * or @def for anything else */
+PSAPI_ PCWSTR WINAPI PropVariantToStringWithDefault(const PROPVARIANT *pv, LPCWSTR def)
+{
+    if (pv && pv->vt == VT_LPWSTR && pv->pwszVal) return pv->pwszVal;
+    if (pv && pv->vt == VT_BSTR) return pv->pwszVal ? pv->pwszVal : L"";
+    return def;
+}
+
 /* VariantCompare: VARIANTs of the same kind, by value (strings ordinally) */
 typedef struct { WORD vt, r1, r2, r3; union { LONGLONG hVal; LPWSTR bstrVal; double dblVal; }; } VARIANT_;
 PSAPI_ int WINAPI VariantCompare(const VARIANT_ *a, const VARIANT_ *b)

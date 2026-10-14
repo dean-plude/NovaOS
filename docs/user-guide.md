@@ -187,6 +187,10 @@ The **App Store** in the dock lists programs by category.  For each one,
 running its setup program or Windows Installer package, or by unpacking
 its archive with 7-Zip), and **Open** starts it.  Installed programs also
 appear in Start.  In the Terminal, `store install <name>` does the same.
+A **Verified** badge next to a program's name means the nightly tests
+installed that same download and it passed last night (with its rating
+from [compatibility.md](compatibility.md)); **Failed last nightly**
+means it did not.
 
 Some programs need a runtime from the App Store's **Runtimes** category
 first; the program's note in the App Store says which:

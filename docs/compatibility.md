@@ -13,6 +13,10 @@ was checked: NovaOS's answer to Wine's AppDB and ProtonDB.
   ([hardware.md](hardware.md)).
 - The version in the "Program" column is the one that was checked.  The
   App Store may offer a different version.
+- The App Store shows each rating on a badge for the programs the
+  nightly corpus tests with the Store's own download, with whether they
+  passed the latest nightly run
+  ([app-store-catalog.md](app-store-catalog.md#nightly-badges)).
 
 ## Ratings
 

@@ -230,6 +230,7 @@ set(KERNEL_C_SOURCES
     nt/exports.c
     nt/hidclass.c
     nt/hidusb.c
+    nt/mshidkmdf.c
     nt/intr.c
     nt/io.c
     nt/ke.c

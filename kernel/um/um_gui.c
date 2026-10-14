@@ -1676,7 +1676,7 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
     case 0: return PnpCount();
     case 1: {
         PnpNode *n = kmalloc(sizeof(PnpNode));
-        bool ok = n && PnpGet((UINT32)(arg >> 8), n) && NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, n, sizeof(*n)));
+        bool ok = n && PnpGet((UINT32)(arg >> 8), n) && !(n->flags & PNP_DELETED) && NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, n, sizeof(*n)));
         kfree(n);
         return ok ? 1 : 0;
     }
@@ -1691,7 +1691,7 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
                   (!n || NT_SUCCESS(CopyToUser((void *)(uintptr_t)(ptr + sizeof(q)), e, sizeof(PnpEvent) * (size_t)n)));
         return ok ? (UINT64)n : 0;
     }
-    case 3: case 4: case 5:                     /* (Windows drivers on the nodes: um_driver.c) */
+    case 3: case 4: case 5: case 7: case 8:     /* (Windows drivers on the nodes: um_driver.c) */
         return UmPnpDriverCtl((UINT32)(arg & 0xFF), (UINT32)(arg >> 8), ptr);
     case 6: {                                   /* a node's resources: up to 8 */
         PnpResource r[8];

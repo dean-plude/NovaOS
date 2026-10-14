@@ -37,7 +37,8 @@
  *
  * A few services are drivers built into the kernel rather than files
  * (hidusb.c's "HidUsb", which Windows' input.inf runs from hidusb.sys,
- * and usbvideo.c's "usbvideo", usbvideo.inf's usbvideo.sys):
+ * usbvideo.c's "usbvideo", usbvideo.inf's usbvideo.sys, and mshidkmdf.c's
+ * "mshidkmdf", the minidriver under a KMDF HID driver):
  * NtDrvLoad gives them a driver object and calls their DriverEntry the
  * same way, with no image to map or check; they are never unloaded.
  *
@@ -528,6 +529,7 @@ static NtDriver *load_export_driver(const char *image)
 static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; } g_builtin[] = {
     { "HidUsb", "hidusb.sys", HidUsbDriverEntry },
     { "usbvideo", "usbvideo.sys", UsbVideoDriverEntry },
+    { "mshidkmdf", "mshidkmdf.sys", MsHidKmdfDriverEntry },
 };
 
 static NTSTATUS drv_load(const char *service)

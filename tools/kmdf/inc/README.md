@@ -31,6 +31,7 @@ brought up to Windows 10 (its `WDM_EDITS`).
 | `usbdlib.h`, `usbdrivr.h` | The Windows 8 USBD handle API (`USBD_CreateHandle`, ...); `usbdrivr.h` so mingw-w64's includes this `usbdlib.h` |
 | `aux_klib.h` | `aux_klib.lib`'s module list (`tools/kmdf/rt/auxklib.c`) |
 | `procgrp.h` | `procgrp.lib`'s initialisation (nothing to do on Windows 10) |
+| `hidclass.h`, `hidport.h` | The HID minidriver interface (`IOCTL_HID_*` with the WDK's values, `HID_XFER_PACKET`, `HID_DESCRIPTOR`, `HID_DEVICE_ATTRIBUTES`, `HidRegisterMinidriver`); replace mingw-w64's `hidclass.h`, whose IOCTL values are placeholders, for Microsoft's `vhidmini2` sample |
 
 ## Internal headers, as far as the framework uses them
 

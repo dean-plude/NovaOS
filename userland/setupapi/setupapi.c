@@ -10,9 +10,20 @@
  * registry keys and interface paths are cfgmgr32's (CM_DRP_* is SPDRP_* +
  * 1).  Under GUID_DEVINTERFACE_HID (HidD_GetHidGuid) the game controllers
  * are listed, with the paths CreateFile opens for hid.dll.
+ *
+ * A root-enumerated device (a virtual one no bus finds) is made the way
+ * devcon install and devgen make one: SetupDiCreateDeviceInfo (an instance
+ * ROOT\<class>\NNNN of its own), SetupDiSetDeviceRegistryProperty for its
+ * hardware IDs, then DIF_REGISTERDEVICE (SetupDiCallClassInstaller or
+ * SetupDiRegisterDeviceInfo): its Enum key is written and the kernel's PnP
+ * manager adds its node (it comes back at every boot), where a driver
+ * package can be installed on it (UpdateDriverForPlugAndPlayDevices,
+ * pnputil /add-driver /install).  DIF_REMOVE (SetupDiRemoveDevice, pnputil
+ * /remove-device) takes it away again.
  */
 #include <windows.h>
 #include <string.h>
+#include "novapnp.h"
 
 #define SETUPAPI __declspec(dllexport)
 #define ERROR_NO_MORE_ITEMS_ 259
@@ -52,10 +63,19 @@ typedef struct { DWORD cbSize; CHAR DevicePath[1]; } IfaceDetailA;
 
 /* A device information set: the devices picked when it was made, and
  * those opened into it since */
+/* A device SetupDiCreateDeviceInfo made, until DIF_REGISTERDEVICE */
+typedef struct {
+    WCHAR instance[128];
+    GUID  cls;
+    WCHAR desc[96];
+    WCHAR hwids[160], compat[160];              /* REG_MULTI_SZ */
+} Pending;
+
 typedef struct {
     DWORD magic;
     int n;
-    DWORD dev[MAX_DEVS];
+    DWORD dev[MAX_DEVS];                        /* (0 while pend[i] is not yet registered) */
+    Pending *pend[MAX_DEVS];
 } Set;
 
 static Set *set_of(HANDLE h)
@@ -168,6 +188,7 @@ SETUPAPI BOOL WINAPI SetupDiDestroyDeviceInfoList(HANDLE set)
     Set *s = set_of(set);
     if (!s) return FALSE;
     s->magic = 0;
+    for (int i = 0; i < s->n; i++) if (s->pend[i]) HeapFree(GetProcessHeap(), 0, s->pend[i]);
     HeapFree(GetProcessHeap(), 0, s);
     return TRUE;
 }
@@ -176,7 +197,7 @@ static BOOL no_more(void) { SetLastError(ERROR_NO_MORE_ITEMS_); return FALSE; }
 
 static void dev_data(Set *s, int i, DevData *d)
 {
-    d->ClassGuid = class_of(s->dev[i]);
+    d->ClassGuid = s->pend[i] ? s->pend[i]->cls : class_of(s->dev[i]);
     d->DevInst = s->dev[i];
     d->Reserved = (ULONG_PTR)i + 1;
 }
@@ -584,4 +605,226 @@ SETUPAPI DWORD WINAPI CM_Get_Device_IDW(DWORD dn, WCHAR *buf, ULONG len, ULONG f
 {
     cm_id_fn f = (cm_id_fn)cfgmgr("CM_Get_Device_IDW");
     return f ? f(dn, buf, len, flags) : 0x0D /* CR_NO_SUCH_DEVNODE */;
+}
+
+/* ---- root-enumerated devices ---- */
+
+#define DICD_GENERATE_ID       0x01
+#define DIF_REMOVE             0x05
+#define DIF_REGISTERDEVICE     0x19
+#define SPDRP_DEVICEDESC       0x00
+#define SPDRP_HARDWAREID       0x01
+#define SPDRP_COMPATIBLEIDS    0x02
+#define ERROR_DEVINST_ALREADY_EXISTS_ 0xE0000207
+#define ENUM_KEY_ L"SYSTEM\\CurrentControlSet\\Enum\\"
+
+static BOOL enum_key_exists(const WCHAR *instance)
+{
+    WCHAR k[300];
+    HKEY h;
+    lstrcpyW(k, ENUM_KEY_);
+    lstrcatW(k, instance);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h)) return FALSE;
+    RegCloseKey(h);
+    return TRUE;
+}
+
+/* A new device in @set: @name a whole instance ID, or with
+ * DICD_GENERATE_ID the class-like name an instance ROOT\<NAME>\NNNN is
+ * made from (the first number free) */
+static BOOL create_info(HANDLE set, const WCHAR *name, const GUID *cls, const WCHAR *desc, DWORD flags, PVOID dev)
+{
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    if (!name || !name[0] || !cls) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    if (dev && ((DevData *)dev)->cbSize != sizeof(DevData)) { SetLastError(ERROR_INVALID_USER_BUFFER); return FALSE; }
+    if (s->n >= MAX_DEVS) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+    Pending *p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Pending));
+    if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+    if (flags & DICD_GENERATE_ID) {
+        for (const WCHAR *c = name; *c; c++)
+            if (*c == L'\\' || *c == L' ') { HeapFree(GetProcessHeap(), 0, p); SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        if (lstrlenW(name) > 100) { HeapFree(GetProcessHeap(), 0, p); SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+        for (int k = 0; k < 10000; k++) {
+            WCHAR num[6] = { (WCHAR)('0' + k / 1000), (WCHAR)('0' + k / 100 % 10), (WCHAR)('0' + k / 10 % 10),
+                             (WCHAR)('0' + k % 10), 0 };
+            DWORD dn;
+            lstrcpyW(p->instance, L"ROOT\\");
+            lstrcatW(p->instance, name);
+            for (WCHAR *c = p->instance; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+            lstrcatW(p->instance, L"\\");
+            lstrcatW(p->instance, num);
+            if (!enum_key_exists(p->instance) && CM_Locate_DevNodeW(&dn, p->instance, CM_LOCATE_DEVNODE_PHANTOM)) break;
+        }
+    } else {
+        DWORD dn;
+        lstrcpynW(p->instance, name, 128);
+        if (enum_key_exists(p->instance) || !CM_Locate_DevNodeW(&dn, p->instance, CM_LOCATE_DEVNODE_PHANTOM)) {
+            HeapFree(GetProcessHeap(), 0, p);
+            SetLastError(ERROR_DEVINST_ALREADY_EXISTS_);
+            return FALSE;
+        }
+    }
+    p->cls = *cls;
+    if (desc) lstrcpynW(p->desc, desc, 96);
+    int i = s->n++;
+    s->dev[i] = 0;
+    s->pend[i] = p;
+    if (dev) dev_data(s, i, dev);
+    return TRUE;
+}
+
+SETUPAPI BOOL WINAPI SetupDiCreateDeviceInfoW(HANDLE set, LPCWSTR name, const GUID *cls, LPCWSTR desc, HWND parent,
+                                              DWORD flags, PVOID dev)
+{ (void)parent; return create_info(set, name, cls, desc, flags, dev); }
+SETUPAPI BOOL WINAPI SetupDiCreateDeviceInfoA(HANDLE set, LPCSTR name, const GUID *cls, LPCSTR desc, HWND parent,
+                                              DWORD flags, PVOID dev)
+{
+    (void)parent;
+    WCHAR wn[200], wd[96];
+    if (name) MultiByteToWideChar(CP_ACP, 0, name, -1, wn, 200);
+    if (desc) MultiByteToWideChar(CP_ACP, 0, desc, -1, wd, 96);
+    return create_info(set, name ? wn : NULL, cls, desc ? wd : NULL, flags, dev);
+}
+
+/* (a REG_MULTI_SZ's size in characters with its final NUL) */
+static int multi_chars(const WCHAR *m, int cap)
+{
+    int n = 0;
+    while (n < cap - 1 && m[n]) n += lstrlenW(m + n) + 1;
+    return n + 1;
+}
+
+/* Its hardware IDs, compatible IDs or description: kept until the device
+ * is registered, written to its Enum key after */
+SETUPAPI BOOL WINAPI SetupDiSetDeviceRegistryPropertyW(HANDLE set, PVOID dev, DWORD prop, const BYTE *buf, DWORD size)
+{
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    int i = dev_index(s, dev, FALSE);
+    if (i < 0) return FALSE;
+    const WCHAR *v = (const WCHAR *)buf;
+    DWORD chars = buf ? size / sizeof(WCHAR) : 0;
+    const WCHAR *name = prop == SPDRP_HARDWAREID ? L"HardwareID" : prop == SPDRP_COMPATIBLEIDS ? L"CompatibleIDs" :
+                        prop == SPDRP_DEVICEDESC ? L"DeviceDesc" : NULL;
+    if (!name) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    Pending *p = s->pend[i];
+    if (p) {
+        WCHAR *to = prop == SPDRP_HARDWAREID ? p->hwids : prop == SPDRP_COMPATIBLEIDS ? p->compat : p->desc;
+        DWORD cap = prop == SPDRP_DEVICEDESC ? 96 : 160;
+        DWORD n = chars < cap - 2 ? chars : cap - 2;
+        memset(to, 0, cap * sizeof(WCHAR));
+        if (v) memcpy(to, v, n * sizeof(WCHAR));
+        return TRUE;
+    }
+    WCHAR k[300], id[200];
+    HKEY h;
+    if (!instance_of(s->dev[i], id)) { SetLastError(ERROR_NO_SUCH_DEVINST_); return FALSE; }
+    lstrcpyW(k, ENUM_KEY_);
+    lstrcatW(k, id);
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, k, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &h, NULL)) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+    LONG e = RegSetValueExW(h, name, 0, prop == SPDRP_DEVICEDESC ? REG_SZ : REG_MULTI_SZ, buf, size);
+    RegCloseKey(h);
+    if (e) { SetLastError((DWORD)e); return FALSE; }
+    return TRUE;
+}
+
+/* DIF_REGISTERDEVICE: the pending device's Enum key, then its node */
+static BOOL register_device(Set *s, int i)
+{
+    Pending *p = s->pend[i];
+    if (!p) return TRUE;                                    /* (registered already) */
+    if (!p->hwids[0]) { SetLastError(ERROR_INVALID_DATA_); return FALSE; }
+    WCHAR k[300], gs[40], cls[64] = L"";
+    HKEY h;
+    lstrcpyW(k, ENUM_KEY_);
+    lstrcatW(k, p->instance);
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, k, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &h, NULL)) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+    RegSetValueExW(h, L"HardwareID", 0, REG_MULTI_SZ, (const BYTE *)p->hwids, (DWORD)(multi_chars(p->hwids, 160) * sizeof(WCHAR)));
+    if (p->compat[0])
+        RegSetValueExW(h, L"CompatibleIDs", 0, REG_MULTI_SZ, (const BYTE *)p->compat,
+                       (DWORD)(multi_chars(p->compat, 160) * sizeof(WCHAR)));
+    char a[40];
+    nova_pnp_guid_str(&p->cls, a);
+    MultiByteToWideChar(CP_ACP, 0, a, -1, gs, 40);
+    RegSetValueExW(h, L"ClassGUID", 0, REG_SZ, (const BYTE *)gs, (DWORD)((lstrlenW(gs) + 1) * sizeof(WCHAR)));
+    cls[0] = 0;
+    if (SetupDiClassNameFromGuidW(&p->cls, cls, 64, NULL))
+        RegSetValueExW(h, L"Class", 0, REG_SZ, (const BYTE *)cls, (DWORD)((lstrlenW(cls) + 1) * sizeof(WCHAR)));
+    if (p->desc[0]) RegSetValueExW(h, L"DeviceDesc", 0, REG_SZ, (const BYTE *)p->desc, (DWORD)((lstrlenW(p->desc) + 1) * sizeof(WCHAR)));
+    RegCloseKey(h);
+
+    NovaPnpNode n;
+    memset(&n, 0, sizeof(n));
+    WideCharToMultiByte(CP_ACP, 0, p->instance, -1, n.instance, sizeof(n.instance), NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, p->hwids, multi_chars(p->hwids, 160), n.hwids, sizeof(n.hwids) - 1, NULL, NULL);
+    if (p->compat[0]) WideCharToMultiByte(CP_ACP, 0, p->compat, multi_chars(p->compat, 160), n.compat, sizeof(n.compat) - 1, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, p->desc[0] ? p->desc : p->hwids, -1, n.desc, sizeof(n.desc) - 1, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, cls, -1, n.cls, sizeof(n.cls) - 1, NULL, NULL);
+    DWORD dn = nova_pnp_root_add(&n);
+    if (!dn || dn == (DWORD)-1) {
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, k);
+        SetLastError(dn ? ERROR_ACCESS_DENIED : ERROR_INVALID_DATA_);
+        return FALSE;
+    }
+    s->dev[i] = dn;
+    s->pend[i] = NULL;
+    HeapFree(GetProcessHeap(), 0, p);
+    return TRUE;
+}
+
+/* DIF_REMOVE: a root-enumerated device's driver and node go, and its keys */
+static BOOL remove_device(Set *s, int i)
+{
+    if (s->pend[i]) { HeapFree(GetProcessHeap(), 0, s->pend[i]); s->pend[i] = NULL; return TRUE; }
+    WCHAR id[200], k[300];
+    if (!instance_of(s->dev[i], id)) { SetLastError(ERROR_NO_SUCH_DEVINST_); return FALSE; }
+    if (!under(id, L"ROOT")) {
+        SetLastError(ERROR_NOT_SUPPORTED);                  /* (only a root-enumerated device goes for good) */
+        return FALSE;
+    }
+    NTSTATUS st = nova_pnp_root_remove(s->dev[i]);
+    if (st < 0) {
+        SetLastError(st == (NTSTATUS)0xC0000061 ? ERROR_ACCESS_DENIED : ERROR_DEVICE_IN_USE);
+        return FALSE;
+    }
+    lstrcpyW(k, ENUM_KEY_);
+    lstrcatW(k, id);
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, k);
+    return TRUE;
+}
+
+SETUPAPI BOOL WINAPI SetupDiRegisterDeviceInfo(HANDLE set, PVOID dev, DWORD flags, PVOID compare, PVOID ctx, PVOID dup)
+{
+    (void)flags; (void)compare; (void)ctx; (void)dup;
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    int i = dev_index(s, dev, FALSE);
+    if (i < 0) return FALSE;
+    if (!register_device(s, i)) return FALSE;
+    dev_data(s, i, dev);
+    return TRUE;
+}
+
+SETUPAPI BOOL WINAPI SetupDiRemoveDevice(HANDLE set, PVOID dev)
+{
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    int i = dev_index(s, dev, FALSE);
+    return i >= 0 && remove_device(s, i);
+}
+
+/* The class installer's default actions for the requests NovaOS carries
+ * out (registering and removing a device); the others need nothing here */
+SETUPAPI BOOL WINAPI SetupDiCallClassInstaller(DWORD dif, HANDLE set, PVOID dev)
+{
+    Set *s = set_of(set);
+    if (!s) return FALSE;
+    if (dif != DIF_REGISTERDEVICE && dif != DIF_REMOVE) return TRUE;
+    int i = dev_index(s, dev, FALSE);
+    if (i < 0) return FALSE;
+    if (dif == DIF_REMOVE) return remove_device(s, i);
+    if (!register_device(s, i)) return FALSE;
+    dev_data(s, i, dev);
+    return TRUE;
 }

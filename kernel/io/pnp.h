@@ -34,6 +34,8 @@
 #define PNP_REMOVABLE     0x04      /* can be unplugged (USB) */
 #define PNP_WINDOWS       0x08      /* the driver running it is a Windows driver (kernel/nt/pnp.c) */
 #define PNP_INBOX         0x10      /* its NovaOS driver steps aside for an installed Windows driver */
+#define PNP_RAW           0x20      /* started raw: its service is its bus driver's, not one installed for it */
+#define PNP_DELETED       0x40      /* uninstalled (DIF_REMOVE): not even a phantom; programs no longer see it */
 
 /* What a program gets (NovaPnpNode in userland/include/novapnp.h).  The
  * ID lists are several NUL-terminated strings ended by an empty one
@@ -77,10 +79,15 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *n);
 /* The node and everything under it left (a removal event for each, the
  * deepest first); they stay as phantoms */
 void PnpRemove(UINT32 id);
+/* Remove node @id and delete it (PNP_DELETED), as uninstalling a device
+ * does: a later PnpAdd of its instance brings it back */
+void PnpDelete(UINT32 id);
 /* A driver took the node: its service, and started */
 void PnpSetDriver(UINT32 id, const char *service);
 /* The same, for a Windows driver (PNP_WINDOWS) */
 void PnpSetWindowsDriver(UINT32 id, const char *service);
+/* Started raw (PNP_RAW), its bus driver @service named as its driver */
+void PnpSetRawDriver(UINT32 id, const char *service);
 /* Its setup class and friendly name, as its driver's install wrote them
  * (each left as it was when NULL or "") */
 void PnpSetNames(UINT32 id, const char *cls, const char *friendly);

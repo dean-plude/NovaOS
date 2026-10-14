@@ -1,0 +1,1 @@
+Microsoft's vhidmini2 driver sample (`C:\Tests\VhidMini\vhidmini.sys`, a test fixture fetched from Windows-driver-samples at a pinned commit and built unchanged by `tools/kmdf/build_kmdf.py`): Microsoft Public License (MS-PL), its text in `C:\Tests\VhidMini\LICENSE.txt`

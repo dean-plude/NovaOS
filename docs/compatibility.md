@@ -67,9 +67,9 @@ planned (roadmap item 27.5).
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
 | Silver | 5 | 1 | 0 | 1 | 7 |
-| Bronze | 14 | 2 | 1 | 1 | 18 |
+| Bronze | 15 | 2 | 1 | 1 | 19 |
 | Borked | 0 | 1 | 0 | 0 | 1 |
-| Untested | 5 | 0 | 1 | 3 | 9 |
+| Untested | 4 | 0 | 1 | 3 | 8 |
 | **All** | 31 | 13 | 11 | 12 | 67 |
 
 ### Programs
@@ -101,11 +101,11 @@ planned (roadmap item 27.5).
 | **VectorCraft 0.9.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens full screen on its welcome page, drawn with the built-in OpenGL (llvmpipe) | Drawing and saving not checked; the desktop's title bar sits above the app's own (it draws its own buttons too) | nightly corpus ([`887-vectorcraft.py`](../tests/appcorpus/887-vectorcraft.py)) |
 | **WordCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens a blank document under its ribbon, drawn with the built-in OpenGL (llvmpipe) | Typing and saving not checked; its window starts wider than a 1280x800 screen | nightly corpus ([`889-wordcraft.py`](../tests/appcorpus/889-wordcraft.py)) |
 | **Thunderbird 158** (App Store; 64-bit, Mozilla's Gecko) | Bronze | Installs from the App Store (Mozilla's full installer, unpacked) and opens an e-mail message (`.eml`) in its own window: sender, recipient, date, subject and text ([history](history/2026-10-14-thunderbird.md)) | No mail account, sending or receiving checked (no mail server in the test); its main window stays empty without an account | nightly corpus ([`954-thunderbird.py`](../tests/appcorpus/954-thunderbird.py)) |
+| **qBittorrent 5.0.2** (App Store; 64-bit, Qt 6, NSIS installer) | Bronze | Installs from the App Store (its NSIS installer, silently, which elevates itself through UAC) and opens a `.torrent`: the Legal Notice on first start, then the Add torrent dialog over the main window with the torrent's name, size, date, info hash and file list ([history](history/2026-10-14-qbittorrent.md)) | Nothing downloaded or seeded (the test has no peers or tracker); its crash handler's stack trace has no symbols (NovaOS has no debugger engine behind `dbgeng.dll`) | nightly corpus ([`956-qbittorrent.py`](../tests/appcorpus/956-qbittorrent.py)) |
 | **WinSCP 6.3.5** (App Store; 32-bit, C++Builder VCL, Inno Setup installer) | Bronze | Installs from the App Store (its Inno Setup installer, silently, registering its 64-bit shell extension through `regsvr32`) and opens its Login dialog over its main window, whose two panels open on local folders ([history](history/2026-10-14-winscp.md)) | The Login dialog's site tree and the file panels list their items but draw none of them, and the port number box is blank; no connection or transfer checked | nightly corpus ([`952-winscp.py`](../tests/appcorpus/952-winscp.py)) |
 | **GIMP** (App Store) | Untested | — | — | — |
 | **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 | **OBS Studio** (App Store) | Untested | — | — | — |
-| **qBittorrent** (App Store) | Untested | — | — | — |
 | **ShareX** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 
 ### Games and game stores

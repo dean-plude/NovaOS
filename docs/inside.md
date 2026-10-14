@@ -65,9 +65,12 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   NovaOS's own drivers, compiled into the kernel; they play the part of
   Windows' inbox drivers ([drivers.md](drivers.md), [hardware.md](hardware.md)).
   - **Storage**: AHCI SATA and NVMe disks (NovaOS installs to and boots
-    from either); GPT; FAT16/FAT32; NTFS with read, write and format (drive
-    C: with file ACLs and hard links, and other drives as D:, E:, ...),
-    repaired by NovaOS itself after a power cut.
+    from either); MBR and GPT partition tables, read and written; every partition a
+    volume with a `\\?\Volume{GUID}\` name, as on Windows, its drive
+    letter kept in `HKLM\SYSTEM\MountedDevices`; FAT16/FAT32 (writable on
+    fixed disks); NTFS with read, write and format (drive C: with file
+    ACLs and hard links, and other drives as D:, E:, ...), repaired by
+    NovaOS itself after a power cut.
   - **Network**: Intel e1000/e1000e (82540EM, 82574L and the I219 built
     into Intel PCs) and virtio-net.
   - **Sound**: Intel High Definition Audio, playback and recording, with
@@ -151,6 +154,14 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     End task, Performance (each logical processor, memory, disk and
     Ethernet over 60 seconds), Details and Services, read through the same
     APIs Windows' Task Manager uses.
+  - Disk Management (`diskmgmt.exe`, a Windows program in System32; Start
+    menu search): the volumes with their letters, file systems, capacity
+    and free space above, each disk and its partitions drawn below;
+    Initialize Disk (GPT or MBR), New Simple Volume, Format (NTFS or
+    FAT32, through `fmifs.dll`'s `FormatEx`) and Change Drive Letter,
+    done through the same APIs Windows' Disk Management uses
+    (`IOCTL_DISK_*_DRIVE_LAYOUT_EX`, `IOCTL_STORAGE_QUERY_PROPERTY`,
+    `FindFirstVolume`, `GetVolumeInformation`, `SetVolumeMountPoint`).
 - **Windows userland** (`userland/`): about 115 system DLLs, NovaOS's own
   code apart from the third-party libraries named below, built with clang
   for `x86_64-pc-windows-msvc` into `System32` and again for `i686` into

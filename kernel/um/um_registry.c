@@ -762,6 +762,14 @@ static void defaults(void)
     }
     kpath("Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false);
     kpath("Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", false);
+    /* UAC is on, as on Windows 11 (installers' UAC plug-ins read it; a
+     * shared key, the same in the 32-bit view) */
+    static const char *const lua[] = { "Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                                       "Machine\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" };
+    for (int i = 0; i < 2; i++) {
+        RegKey *pol = kpath(lua[i], false);
+        if (!has_value(pol, "EnableLUA")) kset_dword(pol, "EnableLUA", 1);
+    }
     kpath("Machine\\SOFTWARE\\Classes\\CLSID", false);
     kpath("Machine\\SOFTWARE\\Classes\\Interface", false);
     /* shortcuts: shell32's ShellLink class (a bare DLL name: the 32-bit

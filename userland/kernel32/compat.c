@@ -541,6 +541,15 @@ static BOOL wow64_process(HANDLE h, BOOL *wow)
     return TRUE;
 }
 K32 BOOL WINAPI IsWow64Process(HANDLE h, PBOOL wow) { return wow64_process(h, wow); }
+/* UAC is on (NovaOS's split administrator token, "runas" elevates):
+ * installers' UAC plug-ins ask before choosing "runas" over their own
+ * Windows XP style Run As dialog */
+K32 DWORD WINAPI CheckElevationEnabled(BOOL *enabled)
+{
+    if (!enabled) return ERROR_INVALID_PARAMETER;
+    *enabled = TRUE;
+    return ERROR_SUCCESS;
+}
 /* File system redirection (System32 -> SysWOW64 for 32-bit programs): the
  * kernel reads this thread's switch from its 32-bit TEB */
 #define TEB32_NO_REDIRECT 0xFF8

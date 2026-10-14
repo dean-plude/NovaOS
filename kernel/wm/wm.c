@@ -246,6 +246,16 @@ void WmSetTitle(WND *w, const char *title)
     mark_dirty();
 }
 
+/* The active window (@gone) closed or hid: its owner takes the focus (a
+ * closed dialog gives it back), or else the topmost other window */
+static WND *by_id(int id);
+static void activate_next(const WND *gone, int owner)
+{
+    WND *o = owner ? by_id(owner) : NULL;
+    WND *next = o && o != gone && shown(o) && !o->disabled ? o : topmost(gone);
+    if (next) WmSetActive(next);
+}
+
 void WmDestroyWindow(WND *w)
 {
     if (!w) return;
@@ -264,17 +274,17 @@ void WmDestroyWindow(WND *w)
     if (g_hover_client == w) g_hover_client = NULL;
     g_used[i] = false;
     memset(w, 0, sizeof(*w));
-    if (was_active) {
-        WND *o = owner ? by_id(owner) : NULL;       /* a closed dialog gives the focus back to its owner */
-        WND *next = o && shown(o) && !o->disabled ? o : topmost(NULL);
-        if (next) WmSetActive(next);
-    }
+    if (was_active) activate_next(NULL, owner);
     mark_dirty();
 }
 
 void WmShowWindow(WND *w, bool visible)
 {
-    if (w) { w->visible = visible; mark_dirty(); }
+    if (!w) return;
+    bool hide_active = !visible && w->visible && w->active;
+    w->visible = visible;
+    if (hide_active) activate_next(w, w->owner);    /* as Windows does when the active window hides */
+    mark_dirty();
 }
 
 /* Raise the windows @w owns (and theirs), keeping their order */

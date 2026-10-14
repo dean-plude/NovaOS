@@ -7,7 +7,7 @@ functions its DLLs lacked.  All of them are there now, each answering as
 Windows does on a PC without the hardware it reaches, and the client loads
 (89 modules) and runs until Qt's Windows platform plugin asks for a
 Windows Runtime class NovaOS does not have yet
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **`bthprops.cpl`** (x64 and x86; a DLL with a Control Panel item's
   name, which a DLL's `dll.json` now gives as `"file"`): no Bluetooth

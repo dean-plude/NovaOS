@@ -3,7 +3,7 @@
 The ThinkPad T14 Gen 4's built-in microphones are digital microphones on
 Intel's audio DSP, not on the Realtek codec, so Phase 21.4 left them
 silent.  This is the first of three steps to record from them
-([hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)).
+([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
 
 - **NHLT.**  The ACPI NHLT table describes the microphones: the endpoint
   of link type PDM that records, its microphone array type (two or four

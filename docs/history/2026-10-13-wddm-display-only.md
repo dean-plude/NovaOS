@@ -1,7 +1,7 @@
 ## A Windows display driver on the boot display
 
 Step 1 of the Intel GPU design (roadmap 25.3,
-[design/intel-gpu.md](../design/intel-gpu.md)): Windows display drivers
+[design/intel-gpu.md](design/intel-gpu.md)): Windows display drivers
 are miniports of `dxgkrnl.sys`, and NovaOS now has the display-only half
 of it.  A WDDM display-only driver installed with `pnputil` takes the
 desktop over from the built-in driver, changes mode when Settings asks,

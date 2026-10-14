@@ -1,4 +1,4 @@
-- **Media players and editors**: VLC plays video with sound and Audacity
-  records and saves, on the same WASAPI, GDI and message-loop code paths
-  real Windows programs take (Qt's `WH_GETMESSAGE` hook, wxWidgets'
-  buffered painting).
+- **Media players and editors**: VLC plays an H.264 and AAC video with
+  sound, and Audacity records from the microphone and saves the project,
+  on the same WASAPI, GDI and message-loop paths real Windows programs
+  take (`tests/appcorpus/870-vlc.py`, `880-audacity.py`).

@@ -7,7 +7,7 @@ Mesa 3D, DXVK runs on lavapipe, which has no Windows build of the Vulkan
 extensions DXVK shares textures with, so Chromium's compositor lost its
 context and the client stopped.  NovaOS's Vulkan loader now provides them,
 and the client gets past that point
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **Shared memory** (`userland/vulkan-1/shared.c`): for a driver that can
   use memory it is handed (`VK_EXT_external_memory_host`) but lacks

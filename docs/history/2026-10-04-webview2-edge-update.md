@@ -4,7 +4,7 @@ Roblox's login page needs the Microsoft Edge WebView2 runtime, whose
 installer is Microsoft Edge Update (32-bit).  It used to stop at start on a
 function NovaOS lacked; it now starts, reads its policies and runs its
 install step, which ends at the next missing piece, MSXML 6
-([compatibility.md](../compatibility.md#webview2)).  The nightly corpus runs
+([compatibility.md](compatibility.md#webview2)).  The nightly corpus runs
 the offline installer (`tests/appcorpus/095-webview2.py`).
 
 - **Task Scheduler 2.0** (`taskschd.dll`, the `TaskScheduler` class):

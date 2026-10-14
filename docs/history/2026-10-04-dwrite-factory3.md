@@ -44,4 +44,4 @@ headers.
   Under emulation it starts its GPU, network and storage processes,
   creates Steam's first browser and launches its page process, which is
   as far as the corpus test's time reaches
-  ([compatibility.md](../compatibility.md#steam)).
+  ([compatibility.md](compatibility.md#steam)).

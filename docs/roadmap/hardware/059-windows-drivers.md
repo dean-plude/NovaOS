@@ -1,52 +1,21 @@
-- Windows drivers the Windows 11 way (roadmap Phase 30, design in
-  [design/windows-drivers.md](design/windows-drivers.md)): run Windows
-  driver packages unchanged on an NT kernel-mode driver interface (a
-  kernel PE loader and `ntoskrnl.exe`/`hal.dll` exports, KMDF and UMDF
-  built from Microsoft's MIT source, then USB, NDIS and Storport hosts),
-  install them on devices matched by hardware ID from the driver store,
-  download them by hardware ID when none is there (step 30.6 is in:
-  `pnputil /scan-devices /search-online` downloads a device's package from
-  the Microsoft Update Catalog and stages it), and enforce Windows'
-  kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
-  driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
-  kernel-mode test driver loads with `sc start`, serves a program's
-  `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.
-  Step 30.2's first part is in: the IRQL in `CR8`, DPCs, spin locks,
-  events, semaphores, timers, fast mutexes, the pool, MDLs and direct I/O,
-  and IRPs completed later from a DPC; kernel-mode SEH, work items and
-  system threads, `Zw*` registry and file calls and ETW stubs are next.  Step 30.7's
-  signing policy is in: a kernel driver loads only with a Microsoft driver
-  signature (embedded or in its installed catalog), a test-signed one only
-  with test signing on, an unsigned or tampered one never, and a package
-  whose files do not match its catalog is not staged.
-  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
-  driver on a PCI device with no NovaOS driver, and the PnP manager starts
-  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4 is in:
-  `Wdf01000.sys`, built from Microsoft's MIT WDF source, and NovaOS's
-  `WdfLdr.sys` load KMDF drivers: a test driver's control device and
-  queue, and a KMDF Plug and Play driver for the `edu` device whose
-  interrupt object (line or MSI), DMA transactions and common buffer pass
-  the same checks as the WDM one.
-  Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
-  runs on KMDF, reports its serial ports as child devices, and a program
-  exchanges bytes with the host through `\\.\Global\<port name>`.
-  Step 30.8 is in: a vendor's Windows USB client driver runs a USB device
-  through NovaOS's own USB bus interface (URBs over its USB core): FTDI's
-  driver, downloaded by hardware ID, makes QEMU's `usb-serial` converter
-  COM3, which programs open with the communications functions.
-  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
-  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
-  the NTFS volume on its disk.
-  Step 30.9 is done: NovaOS's own NDIS host (`ndis.sys`) runs
-  virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
-  built-in driver, and the network stack uses it for DHCP, ping and
-  downloads.  Intel's own AX211 Wi-Fi driver (`Netwtw14.sys`, a WDI
-  miniport) now downloads by hardware ID, installs, registers with the
-  NDIS host and reaches its hardware probe on a stand-in device in QEMU;
-  scanning and joining a network on the T14's real card is step 28.1.
-  Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
-  reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
-  on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's
-  reads, writes and device controls reach its queues (QEMU's `edu` device
-  in the tests).
+- Windows drivers the Windows 11 way (Phase 30, complete: all eleven
+  steps are in; design in [design/windows-drivers.md](design/windows-drivers.md),
+  what ships in [drivers.md](drivers.md)): unchanged Windows driver
+  packages run on an NT kernel-mode driver interface, beside NovaOS's own
+  built-in drivers.  A kernel PE loader and `ntoskrnl.exe`/`hal.dll`
+  exports with Windows-exact structures load `.sys` images (30.1, 30.2);
+  `pnputil /add-driver /install` puts a driver on a PCI device with no
+  built-in driver, started with its memory, interrupts (line, MSI or
+  MSI-X) and DMA (30.3); KMDF (`Wdf01000.sys`) and UMDF 2 (`WUDFHost.exe`,
+  `Wudfx02000.dll`) are built from Microsoft's MIT-licensed WDF source
+  (30.4, 30.10); `pnputil /scan-devices /search-online` downloads a
+  device's package from the Microsoft Update Catalog by hardware ID
+  (30.6); Windows' kernel-mode signing policy is enforced (30.7).  Third-
+  party drivers checked in QEMU's devices suite: virtio-win's `vioser.sys`
+  (30.5), `netkvm.sys` on NovaOS's NDIS host (30.9) and `viostor.sys` on
+  its Storport host (30.11), and FTDI's USB serial driver on its USB bus
+  interface (30.8).  Intel's AX211 Wi-Fi driver (`Netwtw14.sys`) installs
+  and registers with the NDIS host on a stand-in device; joining a
+  network on the T14's card is step 28.1.  The display-only half of a
+  WDDM host (`dxgkrnl.sys`'s role) followed as step 1 of the Intel GPU
+  design (step 25.3).

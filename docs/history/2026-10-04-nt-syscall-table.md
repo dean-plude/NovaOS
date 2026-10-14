@@ -6,7 +6,7 @@ code does not trust the stubs: it works out a service's number itself, the
 way the kernel assigns them, and issues its own `syscall` instructions.
 Roblox's Hyperion (`RobloxPlayerBeta.dll`) does this, and on NovaOS every
 number it worked out came out as 0, so the client crashed at start
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).
 
 ntdll now has a stub for every Windows 10 1903 service, laid out in
 service-number order with an unwind entry each, the way Windows' ntdll is

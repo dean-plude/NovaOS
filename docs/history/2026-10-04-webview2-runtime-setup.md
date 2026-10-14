@@ -37,4 +37,4 @@ does.
   `C:\AppData\Local\Microsoft\EdgeWebView\Application`, then cannot make
   the `SetupMetrics` folder there ("Access is denied") and rolls the
   install back (exit code 521)
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).

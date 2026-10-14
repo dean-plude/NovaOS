@@ -11,5 +11,7 @@
   Done (Phase 20, stock Firefox 157 installs from the App Store and loads
   an HTTPS page in the nightly corpus; see
   [Firefox in the App Store](HISTORY.md#firefox-in-the-app-store)).
-  Left from this item: painting strokes in Krita, and a system
-  `opengl32.dll` so Krita runs without Mesa 3D.
+  Krita's corpus test now also draws a stroke on the canvas, and Krita
+  runs on the built-in OpenGL with nothing installed first
+  ([Mesa's OpenGL built in](HISTORY.md#mesas-opengl-built-in)).  The rest
+  of the catalog continues as step 27.1.

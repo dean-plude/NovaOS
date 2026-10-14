@@ -47,4 +47,4 @@ Windows does, and nothing in GOG GALAXY is skipped or changed.
   stops itself after 30 idle seconds, as on Windows.  The client shows its
   NTFS warning; past it, it finishes initialising and then faults inside
   `RtlVirtualUnwind` while a C++ exception is dispatched
-  ([compatibility.md](../compatibility.md)).
+  ([compatibility.md](compatibility.md)).

@@ -1,7 +1,7 @@
 ## Windows storage drivers on NovaOS's Storport host
 
 Step 30.11 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a real Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a real Windows
 storage driver, virtio-win's signed `viostor.sys`, drives QEMU's
 virtio-blk card, and NovaOS mounts the volume on its disk.
 

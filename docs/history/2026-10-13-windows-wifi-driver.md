@@ -1,7 +1,7 @@
 ## Intel's AX211 Wi-Fi driver loads on NovaOS's NDIS host
 
 The Wi-Fi half of step 30.9 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): Intel's own
+[design/windows-drivers.md](design/windows-drivers.md)): Intel's own
 Windows driver for the AX211, `Netwtw14.sys` 24.40.0.4, downloads by
 hardware ID, installs unchanged, registers with NovaOS's NDIS host and
 reaches its hardware probe.
@@ -38,4 +38,4 @@ recorded Catalog pages (the real cabinet), the driver loads (on KMDF, so
 test signing is on for NovaOS's own `WdfLdr.sys`), reads and checks its
 firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
-the T14 (see [drivers.md](../drivers.md)).
+the T14 (see [drivers.md](drivers.md)).

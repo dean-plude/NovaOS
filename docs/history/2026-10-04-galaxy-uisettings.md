@@ -10,7 +10,7 @@ installs GOG GALAXY's service and exits normally, and the client opens its
 own window (its warning that drive C: is not NTFS).  Past that it stops
 because its service, `GalaxyClientService.exe`, ends at start-up
 ("abnormal program termination"), and the client then faults
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **`UISettings`** (`userland/ole32/uisettings.c`): activates through its
   factory's `ActivateInstance` and through `RoActivateInstance`, which now

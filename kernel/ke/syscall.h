@@ -413,7 +413,7 @@ void SyscallInitialize(void);
  *
  * Returns UINT64 (placed in RAX on SYSRET to user mode).
  * NT syscall handlers return NTSTATUS zero-extended to 64 bits.
- * Kernel-helper handlers (0x01F0-0x01FF) may return 64-bit pointers.
+ * NovaOS's own services (0x200-0x2FF) may return 64-bit pointers.
  */
 void SyscallInitCpu(void);
 UINT64 KiSystemCallDispatch(UINT64 num, UINT64 arg1, UINT64 arg2,

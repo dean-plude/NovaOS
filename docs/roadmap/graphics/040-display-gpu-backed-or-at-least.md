@@ -1,4 +1,7 @@
-- Display: GPU-backed or at least faster blits.  ~~Mode changes~~ Done:
+- Display: GPU-backed or at least faster blits.  On QEMU's virtio GPU,
+  frames from OpenGL, Vulkan and DirectComposition go to the screen
+  without CPU copies (see the GPU path item below); physical GPUs wait on
+  step 25.3.  ~~Mode changes~~ Done:
   run-time resolutions (Phase 12 onwards); the chosen one is kept across
   restarts, and windows a smaller mode shrank grow back when it is undone
   (Phase 18.9).  ~~More than one

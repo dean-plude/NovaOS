@@ -8,4 +8,4 @@ sturdier on a real host: the SynIC MSRs keep their reserved bits, each
 message gets five seconds instead of one, a connection left over from the
 firmware is dropped (UNLOAD) and retried, and the log says what each step
 got.  Under Hyper-V, which has no HPET, the TSC and APIC timer rates come
-from Hyper-V's frequency MSRs instead of a guess ([hyperv.md](../hyperv.md)).
+from Hyper-V's frequency MSRs instead of a guess ([hyperv.md](hyperv.md)).

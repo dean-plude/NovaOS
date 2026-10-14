@@ -1,6 +1,6 @@
 ## Compatibility ratings, ProtonDB-style
 
-[docs/compatibility.md](../compatibility.md) now rates every program and
+[docs/compatibility.md](compatibility.md) now rates every program and
 game that has been tried the way Wine's AppDB and ProtonDB do: Platinum
 (works out of the box), Gold (works after a named step, such as installing
 "Mesa 3D" and "DXVK" from the App Store), Silver (a minor known problem),

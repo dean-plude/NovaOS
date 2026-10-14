@@ -1,8 +1,15 @@
 # Windows drivers, the Windows 11 way
 
 Status: design, decided 2026-10-12 (Dean: "Let's do drivers like Windows 11
-does it. Let's not re-invent the wheel.").  Nothing here is built yet; the
-steps at the end are roadmap Phase 30, one pull request each.
+does it. Let's not re-invent the wheel.").  Built: all eleven steps of
+roadmap Phase 30 (30.1 to 30.11, listed at the end) are merged, each
+tested in QEMU in CI's devices suite.  Not built yet: the vendor feeds and
+Device Manager's search button of 30.6, the desktop's test-mode mark of
+30.7, and the later hosts (HID class, PortCls/AVStream, the rest of
+WDDM).  Nothing has run on the reference ThinkPad T14 Gen 4 yet.  This
+file is the design as decided, with notes where the build differs; the
+user-facing description of what works is
+[docs/drivers.md](../drivers.md).
 
 **The decision.**  NovaOS will load real Windows driver packages (an `.inf`
 with its `.sys`, `.cat` and firmware files) and run their kernel-mode
@@ -17,18 +24,15 @@ hardware ID, the way Windows Update offers drivers.  NovaOS's own built-in
 drivers (`kernel/drivers/`) stay and play the part of Windows' inbox
 drivers.
 
-Until then [docs/drivers.md](../drivers.md) describes what ships today:
-the built-in drivers and the downloaded firmware set (#341).
-
 ## How Windows 11 does it
 
-| Piece | Windows 11 | NovaOS today | NovaOS plan |
+| Piece | Windows 11 | NovaOS before Phase 30 | NovaOS plan (built unless noted) |
 |---|---|---|---|
 | Device tree | PnP manager: device nodes with instance, hardware and compatible IDs | `kernel/io/pnp.c` (#300), same IDs, `CTL_PNP`, PlugPlay service (#301) | each node also gets a Windows PDO (`DEVICE_OBJECT`) that a driver stack attaches to |
 | Driver store | `DriverStore\FileRepository`, `oemN.inf`, `HKLM\SYSTEM\DriverDatabase` | same layout; `pnputil`/`SetupCopyOEMInf` stage packages (#295, #302) | unchanged; staging now also installs on matching devices |
 | Matching | hardware ID, then compatible ID, ranked by match and signature | `pnputil /enum-devices` shows matches but installs nothing | setupapi/newdev rank and install as Windows does, writing the service key and the device's `Driver` key |
-| Inbox drivers | ~600 Microsoft-signed `.inf`s in `C:\Windows\INF` | NovaOS's built-in drivers | built-ins keep the role; a vendor package with a better rank can replace one on a device, and rolling back returns the built-in |
-| Getting drivers | Windows Update offers drivers by hardware ID; Microsoft Update Catalog serves the same packages | none | a driver search service queries by hardware ID and stages the package (step 30.6) |
+| Inbox drivers | ~600 Microsoft-signed `.inf`s in `C:\Windows\INF` | NovaOS's built-in drivers | built-ins keep the role; a vendor package with a better rank can replace one on a device, and rolling back returns the built-in (not built: only the virtio-net and Bochs VBE drivers step aside, and only when a package is installed on their device explicitly) |
+| Getting drivers | Windows Update offers drivers by hardware ID; Microsoft Update Catalog serves the same packages | none | a driver search service queries by hardware ID and stages the package (step 30.6; built as `pnputil /scan-devices /search-online`, Catalog only) |
 | Kernel-mode drivers | PE32+ `.sys` images (subsystem native) importing from `ntoskrnl.exe`, `hal.dll`, `Wdf01000.sys` via `WdfLdr`, class drivers | NT-style I/O manager with `DRIVER_OBJECT`/`IRP` for NovaOS's own devices (`kernel/io/io.c`), but ELF, System V ABI, NovaOS layouts | a kernel PE loader and an NT export layer with Windows-exact layouts and the Microsoft x64 ABI |
 | User-mode drivers | UMDF 2 drivers in `WUDFHost.exe` | none | UMDF 2 host from the same open-source WDF code (step 30.10) |
 | Signing | kernel-mode drivers need a Microsoft-signed catalog (WHQL or attestation); test signing is a boot option | `.cat` files are copied, never checked | the same policy, written down below; never bypassed |
@@ -153,8 +157,8 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   a locked page is described, not pinned; and until kernel-mode SEH
   raises, `MmProbeAndLockPages` on a bad buffer logs it and describes the
   bad pages by a spare zeroed frame.  Kernel stacks of threads that call into a
-  driver need Windows' 24 KB (`KERNEL_STACK_SIZE`); NovaOS's are 16 KB
-  today.
+  driver need Windows' 24 KB (`KERNEL_STACK_SIZE`); NovaOS's are still
+  16 KB (`THREAD_STACK_SIZE`).
 - **Threads and processes**: `PsCreateSystemThread`,
   `PsGetCurrentProcess`, `KeStackAttachProcess` (for drivers that touch a
   caller's buffers), `ObReferenceObjectByHandle`.
@@ -185,7 +189,7 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
 
 Which exports to write first is decided by data, not guesswork: a script
 (`tools/sys_imports.py`) lists a `.sys` file's imports against
-`kernel/nt/exports.txt`, so each step implements what its target driver
+`kernel/nt/exports.h`, so each step implements what its target driver
 actually calls.
 
 ### Frameworks: KMDF and UMDF
@@ -258,8 +262,13 @@ steps are in [intel-gpu.md](intel-gpu.md).
   it unless the user picks the package in Device Manager ("Update
   driver"), or the package ranks better by the same rules a Windows inbox
   driver loses to a vendor driver; "Roll back driver" returns the built-in.
-  Early steps only install on devices no built-in driver claims
-  (problem code 28), so nothing that works today can break.
+  As built, packages install only on devices no built-in driver claims
+  (problem code 28), except where the built-in driver can step aside
+  (NovaOS's virtio-net driver for an NDIS miniport, its Bochs VBE display
+  driver for a WDDM one): there `pnputil /add-driver /install` installs
+  the package and the built-in driver gives the device up, and disabling
+  the Windows driver gives it back.  "Update driver" and "Roll back
+  driver" are not built.
 - **Download by hardware ID**: a device left with problem code 28 can be
   searched for ("Search automatically for drivers" in Device Manager,
   "Optional driver updates" in Settings, `pnputil /scan-devices`).  The
@@ -273,11 +282,12 @@ steps are in [intel-gpu.md](intel-gpu.md).
   It stages the package with `pnputil` and installs it.  Nothing is
   downloaded without the user asking, nothing Microsoft or a vendor ships
   is put in the NovaOS image, and the downloaded `.sys` runs unchanged.
-  Step 30.6 put the Catalog source in place as `pnputil /scan-devices
-  /search-online`, which stages the package and records the update it
-  came from and its SHA-256 for the signing checks
-  ([drivers.md](../drivers.md#downloading-drivers-by-hardware-id)); the
-  vendor feeds and Device Manager's button come later.
+  As built (step 30.6): the Catalog source, as `pnputil /scan-devices
+  /search-online [/install]`, which stages (and with `/install` installs)
+  the package and records the update it came from and its SHA-256
+  ([drivers.md](../drivers.md#downloading-drivers-by-hardware-id)).  The
+  vendor feeds, Device Manager (NovaOS has no Device Manager app yet) and
+  Settings' "Optional driver updates" are not built.
 - **Redistribution**: Microsoft's inbox `.sys` files and vendor drivers
   are never shipped with NovaOS; they come to the user's own machine from
   their publisher, as on Windows.  The "default set" stays NovaOS's
@@ -317,8 +327,11 @@ on.  NovaOS follows the same policy and does not bypass it:
   shows it.  It lets any intact signature load (a test certificate whose
   root nobody trusts, as `makecert`'s are), never an unsigned image.
   NovaOS's own test drivers (`tools/drivertest/mksys.py`) carry such test
-  signatures and load only there; the devices suite turns it on.  The
-  desktop's "Test Mode" mark is not drawn yet.
+  signatures and load only there; the devices suite turns it on.  So do
+  NovaOS's own `Wdf01000.sys`, `WdfLdr.sys` and `WUDFRd.sys` for now, so
+  every KMDF and UMDF driver needs test signing on until NovaOS has a
+  trust anchor for its own system files.  The desktop's "Test Mode" mark
+  is not drawn yet.
 - What does not work, and stays so: drivers that need Secure Boot's
   measured state, HVCI/memory integrity guarantees or a TPM-backed
   attestation (anti-cheat and DRM drivers among them) are documented as
@@ -342,8 +355,10 @@ on.  NovaOS follows the same policy and does not bypass it:
 
 ## Steps (roadmap Phase 30)
 
-Each step is one pull request off main, ending in a check anyone can
-repeat on QEMU (or the T14 where it says so).  Test drivers are written
+All eleven steps are merged.  Each was one or more pull requests off
+main, ending in a check anyone can repeat on QEMU; the devices suite boot
+that checks it is named after "Test:".  The "As built" notes say where
+the result differs from the plan.  Test drivers are written
 for NovaOS under `tests/selftest/devices/`, or, for third-party drivers,
 downloaded by the test as NovaOS's other tests download apps.
 
@@ -355,14 +370,14 @@ downloaded by the test as NovaOS's other tests download apps.
    lld-link `/driver`) installed with `sc create type= kernel` starts,
    creates `\Device\WdmTest` and its `\DosDevices` link, and a test
    program's `DeviceIoControl` and `ReadFile` round-trip through it, and
-   `sc stop` unloads it.
+   `sc stop` unloads it.  **Done.** Test: `wdm`.
 2. **30.2 The kernel API a driver lives on.** IRQL in `CR8`, spin locks,
    DPCs, timers, events, work items, system threads, pool, MDLs, `Zw*`
    registry and files, kernel-mode SEH, `/GS`, ETW/WMI stubs, bug checks
    naming the driver; `tools/sys_imports.py`.  Done when: `wdmtest.sys`
    exercises each group in a devices test, and `sys_imports.py` on
    virtio-win's `vioser.sys` and `Wdf01000.sys` lists what is still
-   missing.
+   missing.  **Done.** Test: `wdm`.
 3. **30.3 PnP drivers on real hardware resources.** A PDO per PnP node,
    `AddDevice`, start/stop/remove IRPs with `CM_RESOURCE_LIST`,
    `IoConnectInterruptEx` (INTx and MSI), `MmMapIoSpaceEx`, DMA adapters,
@@ -370,8 +385,11 @@ downloaded by the test as NovaOS's other tests download apps.
    matching devices with no built-in driver.  Done when: a NovaOS WDM test
    driver installed from its `.inf` drives QEMU's `edu` PCI device
    (MMIO, an MSI interrupt and a DMA transfer) and shows as started in
-   Device Manager.  As built: the PDOs are PCI devices only (the bus
-   NovaOS's own drivers leave free), interrupts are the device's line or,
+   Device Manager.  **Done.** Test: `edu` (the device shows as started
+   in `pnputil /enum-devices`; there is no Device Manager app).  As built:
+   the PDOs were PCI devices only at first (the bus NovaOS's own drivers
+   leave free); USB devices (30.8) and bus drivers' children (30.5) came
+   later.  Interrupts are the device's line or,
    for a driver whose INF sets `MSISupported` (Windows' own opt-in) on a
    device with an MSI or MSI-X capability, a `CM_RESOURCE_INTERRUPT_MESSAGE`
    descriptor (the kernel programs the capability when the device starts, as
@@ -384,45 +402,60 @@ downloaded by the test as NovaOS's other tests download apps.
    `device_del`: surprise removal is handled but untested.
 4. **30.4 KMDF.** `Wdf01000.sys` and `WdfLdr.sys` built from Microsoft's
    MIT WDF source and loaded on the export layer.  Done when: a KMDF
-   version of the `edu` test driver passes the same test.  The framework, the
-   loader and a non-PnP KMDF test driver (`kmdftest.sys`, a control device
-   and a queue) are in; the KMDF `edu` driver follows step 30.3.
+   version of the `edu` test driver passes the same test.  **Done.** Tests:
+   `wdm` (`kmdftest.sys`, a control device and a queue) and `kmdfedu`
+   (`kmdfedu.sys` on the `edu` device: interrupt object on the line and on
+   MSI, DMA transactions, a common buffer).  Class-extension drivers
+   (`WdfVersionBindClass`) do not load yet.
 5. **30.5 The first third-party driver.** virtio-win's serial driver
    (`vioser.sys`, KMDF; virtio-win is BSD-licensed), on a device NovaOS has
    no built-in driver for.  Done when: on QEMU with a virtio-serial port,
    the package downloaded from virtio-win's release installs, the driver
    starts, and a test program exchanges bytes with the host through
-   `\\.\Global\<port name>`.
+   `\\.\Global\<port name>`.  **Done.** Test: `vioser` (the package
+   comes from virtio-win's signed guest-tools installer; the PnP manager
+   enumerates the driver's child ports).
 6. **30.6 Downloading drivers by hardware ID.** The driver search
    service, the Update Catalog and vendor-feed sources, Device Manager's
    "Search automatically for drivers", `pnputil /scan-devices`.  Done
    when: on QEMU a device with problem code 28 gets its package found,
    downloaded, staged and started without the test naming the package.
+   **Done** for the Catalog source (tests: `driversearch`, `usbserial`);
+   the vendor feeds and Device Manager's button are not built.
 7. **30.7 Signing policy.** Catalog verification at install, the image
    hash check at load, the test-signing boot option and its desktop mark,
    problem code 52.  Done when: a Microsoft-signed package installs, a
    tampered copy of it is refused with problem code 52, and the test
-   drivers load only with test signing on.
+   drivers load only with test signing on.  **Done**, except the desktop
+   mark.  Test: `wdm`.
 8. **30.8 USB client drivers.** The USB bus interface (URBs, pipes,
    selective suspend) over NovaOS's USB core.  Done when: QEMU's
    `usb-serial` device (an FTDI FT232) works through FTDI's own driver,
    downloaded by hardware ID, as a COM port a terminal program opens.
+   **Done.** Test: `usbserial` (COM3).  Isochronous transfers are not
+   built.
 9. **30.9 Network miniports through NDIS.** An NDIS 6 host connected to
    lwIP.  Done when: virtio-win's `netkvm.sys` drives a QEMU virtio-net
    card (with the built-in driver set aside for that card) and a
    download over it succeeds.  Wi-Fi (WDI/WiFiCx, for Intel's AX211
    driver on the T14) follows as its own step once this works, and is
    where roadmap step 28.1 chooses between it and a native driver.
-   Since 10-13 Intel's `Netwtw14.sys` (a WDI miniport) installs,
-   registers and has its adapter opened on a stand-in device; the WDI
-   command layer that scans and connects is 28.1's.
+   **Done.** Test: `netkvm`.  Beyond it, Intel's `Netwtw14.sys` (a WDI
+   miniport) installs, registers and has its adapter opened on a PCI
+   stand-in for the AX211 (test: `ax211`); the WDI command layer that
+   scans and connects is 28.1's and needs the T14.
 10. **30.10 UMDF 2.** `WUDFHost.exe` and the reflector from the same WDF
     source.  Done when: a NovaOS UMDF test driver on a QEMU device starts
-    in its host process and serves a test program's I/O.
+    in its host process and serves a test program's I/O.  **Done.** Test:
+    `umdf`.  As built, a driver must link NovaOS's UMDF stub (Microsoft's
+    binds through an unpublished interface), I/O is buffered, and the host
+    gives no hardware access yet.
 11. **30.11 Storage miniports through Storport.** Done when: virtio-win's
     `viostor.sys` drives a second QEMU virtio-blk disk and NovaOS mounts
-    a volume on it.
+    a volume on it.  **Done.** Test: `viostor`.  As built: one request at a
+    time through a bounce buffer, line interrupts, no adapter removal.
 
 Later steps, each only when a target device needs it: HID class, PortCls
 and AVStream (for the T14's audio and camera if their built-in drivers
-fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3).
+fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3,
+whose first step, the display-only host with `wddmdod.sys`, is merged).

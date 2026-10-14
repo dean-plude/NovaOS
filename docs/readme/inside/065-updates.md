@@ -1,1 +1,1 @@
-- **Updates and apps**: the App Store installs real Windows programs and, from a signed update channel, newer NovaOS builds; Firefox is bundled and Hyper-V is supported.
+- **Apps and updates**: the App Store downloads open-source Windows programs and runtimes, Firefox is bundled as the default browser, and installed systems update themselves from a signed update channel.

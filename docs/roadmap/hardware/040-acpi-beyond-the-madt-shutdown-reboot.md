@@ -10,5 +10,5 @@
   GPE blocks other than `\_GPE`; routing behind PCI bridges.  (USB wake
   from S3 is confirmed on a real PC; QEMU can't emulate it.)
   (Display modes after S3 are set again on every adapter NovaOS drives:
-  the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Real GPUs have
-  no driver yet.)
+  the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Physical GPUs,
+  such as the T14's Intel Iris Xe, have no driver yet; see step 25.3.)

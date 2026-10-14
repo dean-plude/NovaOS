@@ -2,48 +2,59 @@
 <!-- The regions between "BEGIN generated" and "END generated" markers are built from fragment files by tools/docgen.py: edit those files, not the regions (CONTRIBUTING.md). -->
 
 Which Windows programs and games run on NovaOS, how well, and how that
-was checked: NovaOS's answer to Wine's AppDB and ProtonDB.  Every program
-here is the official, unmodified release; when one fails, NovaOS is what
-gets fixed.  All of it was checked in QEMU: nothing has been run on a real
-PC yet ([hardware.md](hardware.md)).
+was checked: NovaOS's answer to Wine's AppDB and ProtonDB.
+
+- Every program is an unmodified release from its publisher.  The one
+  exception is PuTTY, which the corpus builds from PuTTY's source release
+  with MinGW because PuTTY's download site is not reachable from every
+  network.  When a program fails, NovaOS is what gets fixed, never the
+  program.
+- Everything was checked in QEMU.  Nothing has been run on a real PC yet
+  ([hardware.md](hardware.md)).
+- The version in the "Program" column is the one that was checked.  The
+  App Store may offer a different version.
+
+## Ratings
 
 Each program gets one rating, the way ProtonDB rates games:
 
-- **Platinum**: works out of the box.  What the "What works" column says
-  covers what most people use it for, and nothing known is broken.
-- **Gold**: works as well as Platinum after a step the row names, such as
-  installing "Mesa 3D" and "DXVK" from the App Store first.
-- **Silver**: works, with a minor known problem (the "Problems and gaps"
-  column says which).
-- **Bronze**: starts and does some of its job, but a major part fails or
-  has not been checked, so it is not yet usable for what it is for.
-- **Borked**: does not start, or stops before it is usable.
-- **Untested**: in the App Store, but nobody has checked it yet; expect it
-  to fail.
+| Rating | Meaning |
+|---|---|
+| **Platinum** | Works out of the box.  The "What works" column covers what most people use it for, and nothing known is broken. |
+| **Gold** | Works as well as Platinum after a step the row names, such as installing "Mesa 3D" and "DXVK" from the App Store first. |
+| **Silver** | Works, with a minor known problem (named in "Problems and gaps"). |
+| **Bronze** | Starts and does some of its job, but a major part fails or has not been checked, so it is not yet usable for what it is for. |
+| **Borked** | Does not start, or stops before it is usable. |
+| **Untested** | In the App Store, but nobody has checked it yet.  Expect it to fail. |
 
 The other columns:
 
 - **Problems and gaps**: what is known not to work, and what has not been
-  checked yet.  A rating counts only what was checked; an unchecked
-  feature lowers it only when it is the program's main use.
-- **Checked by**: *nightly corpus* is a script in `tests/appcorpus/`
-  (linked) that downloads the program, runs it in QEMU, one program per
-  virtual machine, and checks its output or a screenshot
-  (`tools/appcorpus.py`, run by the "Nightly app corpus" workflow, which
-  posts each night's pass/fail table on issue
-  [#210](https://github.com/dean-plude/os/issues/210)); *CI graphics
-  tests* and *core self-tests* run on every pull request; *by hand* means
-  someone ran it in QEMU and it is not re-checked automatically, so it can
-  break unnoticed.  The version in the "Program" column is the one
-  checked.
+  checked.  A rating counts only what was checked; an unchecked feature
+  lowers it only when it is the program's main use.
+- **Checked by**:
+  - *nightly corpus*: a script in `tests/appcorpus/` (linked) that
+    downloads the program and runs it in QEMU, one program per virtual
+    machine, checking its output or a screenshot.  `tools/appcorpus.py`
+    runs them in the "Nightly app corpus" workflow, which posts each
+    night's pass/fail table on issue
+    [#210](https://github.com/dean-plude/os/issues/210).
+  - *CI graphics tests* and *core self-tests*: run on every pull request.
+  - *by hand*: someone ran it in QEMU.  It is not re-checked
+    automatically, so it can break unnoticed.
 
-Each row is a file in `docs/compatibility/`, one `field: value` line per
-column (`program`, `kind`, `rating`, `works`, `problems`, `checked`; `kind`
-is `program`, `game`, `tool` or `runtime`).  Change a program's file when
-its rating changes; `tools/docgen.py` builds the tables below from them and
-refuses an unknown rating or kind (CONTRIBUTING.md).  Roadmap step 20.7
-will have CI keep the ratings and the App Store's notes in step with the
-nightly results; until then they are kept by hand.
+## Updating a rating
+
+Each row is a file in `docs/compatibility/` with one `field: value` line
+per column: `program`, `kind`, `rating`, `works`, `problems` and
+`checked`.  `kind` is `program`, `game`, `tool` or `runtime`.  Change a
+program's file when its rating changes; `tools/docgen.py` builds the
+tables below from these files and refuses an unknown rating or kind
+(CONTRIBUTING.md).  Ratings and the App Store's compatibility notes are
+kept up to date by hand.  Having CI set them from the nightly results is
+planned (roadmap item 27.5).
+
+## Ratings by program
 
 <!-- BEGIN generated:compat-table -->
 
@@ -67,11 +78,11 @@ nightly results; until then they are kept by hand.
 | **VLC 3.0.21** (Qt 5) | Platinum | Plays an H.264 and AAC MP4 with sound in its window and closes cleanly | Other formats and streaming not checked | nightly corpus ([`870-vlc.py`](../tests/appcorpus/870-vlc.py)) |
 | **Audacity 3.7.4** (wxWidgets) | Platinum | Records from the microphone without dropouts, draws the waveform and saves an `.aup3` project | Effects and export not checked | nightly corpus ([`880-audacity.py`](../tests/appcorpus/880-audacity.py)) |
 | **Inkscape 0.91** (GTK 2) | Platinum | Opens, edits and saves an SVG | Inkscape 1.x not checked (its downloads are out of the test network's reach) | nightly corpus ([`880-inkscape.py`](../tests/appcorpus/880-inkscape.py)) |
-| **Firefox 157** and **Floorp 12.19** | Platinum | Installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms | A publicly trusted HTTPS site not checked (the test network is offline) | nightly corpus ([`890-firefox.py`](../tests/appcorpus/890-firefox.py)) |
+| **Firefox 157** and **Floorp 12.19** | Platinum | Built into NovaOS as its default browser and also in the App Store; installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms | A publicly trusted HTTPS site not checked (the test network is offline) | nightly corpus (Firefox, [`890-firefox.py`](../tests/appcorpus/890-firefox.py)), by hand in QEMU (Floorp) |
 | **SumatraPDF 3.4.6** (x86 portable) | Silver | Opens a PDF and renders its pages | Printing finds no printer (NovaOS has no printers yet) | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
 | **KeePassXC 2.7.12** (Qt 5) | Silver | Opens and unlocks a KDBX 4 database and shows its entries | Windows Hello unlock reports "not supported" | nightly corpus ([`870-keepassxc.py`](../tests/appcorpus/870-keepassxc.py)) |
 | **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Silver | Installs from the App Store, opens its editor window on the built-in OpenGL (llvmpipe) and makes a new document | On software graphics (llvmpipe) it composites on the CPU by its own design and says so in a box at start; its GPU compositor ran on NovaOS's OpenGL in a test, but no hardware adapter has been tried. Editing not checked | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |
-| **PuTTY 0.81** | Bronze | Raw connections | SSH not checked | nightly corpus ([`950-putty.py`](../tests/appcorpus/950-putty.py)) |
+| **PuTTY 0.81** (built from the source release with MinGW) | Bronze | Raw connections | SSH not checked | nightly corpus ([`950-putty.py`](../tests/appcorpus/950-putty.py)) |
 | **Krita 5.3.4** (Qt 5) | Bronze | Starts and opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing to install) | Painting and saving not checked | nightly corpus ([`885-krita.py`](../tests/appcorpus/885-krita.py)) |
 | **CADCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store; with "Mesa 3D", "DXVK" and "VKD3D-Proton" from the App Store it gets a Direct3D 12 device (VKD3D-Proton on lavapipe) and opens an empty drawing (Drafting tools, view cube, Layers and Properties), about two and a half minutes after start under QEMU without KVM | Only the first window checked; its window starts wider than a 1280x800 screen; without the three App Store runtimes it exits at start, as on Windows it asks only for Direct3D 12 at first and NovaOS has no Direct3D 12 adapter of its own | nightly corpus ([`891-cadcraft.py`](../tests/appcorpus/891-cadcraft.py)) |
 | **DeckCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store; with "Mesa 3D", "DXVK" and "VKD3D-Proton" from the App Store it gets a Direct3D 12 device (VKD3D-Proton on lavapipe) and opens its new presentation page (eight themes), about two and a half minutes after start under QEMU without KVM | Only the first window checked; its window starts wider than a 1280x800 screen; without the three App Store runtimes it exits at start, as on Windows it asks only for Direct3D 12 at first and NovaOS has no Direct3D 12 adapter of its own | nightly corpus ([`891-deckcraft.py`](../tests/appcorpus/891-deckcraft.py)) |
@@ -115,7 +126,7 @@ nightly results; until then they are kept by hand.
 
 | Program | Rating | What works | Problems and gaps | Checked by |
 |---|---|---|---|---|
-| **MinGit 2.47** (Git for Windows) | Platinum | `clone`, `commit`, `log`, `diff`, `merge`, `fetch` and `push` between local repositories, paged by `less` | — | nightly corpus ([`050-mingit.py`](../tests/appcorpus/050-mingit.py)) |
+| **MinGit 2.51** (Git for Windows; 2.47 by hand) | Platinum | `clone`, `commit`, `log`, `diff`, `merge`, `fetch` and `push` between local repositories, paged by `less` | — | nightly corpus (`clone`, `log` and `status` on 2.51, [`050-mingit.py`](../tests/appcorpus/050-mingit.py)), by hand in QEMU (the rest, on 2.47) |
 | **ripgrep 14.1, fd 10.2, jq 1.7** | Platinum | Searching, walking folders and filtering JSON from the Terminal | — | nightly corpus ([`010-ripgrep.py`](../tests/appcorpus/010-ripgrep.py), [`020-fd.py`](../tests/appcorpus/020-fd.py), [`030-jq.py`](../tests/appcorpus/030-jq.py)) |
 | **bat, fzf** | Platinum | Printing files with highlighting, fuzzy finding | — | by hand in QEMU |
 | **Python 3.14** (NuGet package) and **NumPy 2.5.3** | Platinum | Scripts with hashlib, JSON, regular expressions, threads and subprocesses; NumPy gives the same results as on Linux | — | nightly corpus ([`060-python.py`](../tests/appcorpus/060-python.py)), by hand (NumPy) |
@@ -202,9 +213,9 @@ display devices and stops with **"Virtual Machine detected. Roblox can't
 be used in a Virtual Machine or Virtual Desktop."**  That is the right
 answer under QEMU, where NovaOS's tests run: Roblox refuses virtual
 machines on Windows too, and NovaOS reports the machine it runs on
-truthfully.  The next Roblox steps need a real PC (the ThinkPad T14 of
-[Phase 21](hardware.md)); on one, this check should pass, but it is
-untested.  NovaOS does not, and will not, work around anti-cheat checks,
+truthfully.  The next Roblox steps need a real PC (the reference
+ThinkPad T14, [hardware.md](hardware.md)); on one, this check should
+pass, but it is untested (roadmap item 24.5).  NovaOS does not, and will not, work around anti-cheat checks,
 hide the virtual machine or change Roblox itself.  `syscalltest` checks the
 table the way Hyperion reads it, `aligntest` the alignment-fault fixup and
 `gatetest` the segment layout, the 32-bit code, the calling thread's
@@ -301,6 +312,13 @@ covered by `regtest`.  This supplies the registry view used by 64-bit
 programs to discover machine-wide WebView2 installs; per-user installs
 remain registered under `HKEY_CURRENT_USER`.
 
+With DXVK installed and Venus as the GPU, the GPU process keeps ANGLE's
+Direct3D 11 device on the GPU and composites the page through
+DirectComposition on it, across resizing, cross-process parenting and
+teardown, for 64-bit and 32-bit hosts (`dcomptest dxvk`,
+`dcomptest life`; roadmap item 25.1).  Programs that host WebView2, such
+as Roblox's and Steam's sign-in pages, have not been checked end to end.
+
 ## Steam
 
 Steam's installer (`SteamSetup.exe` from steampowered.com, a 32-bit NSIS
@@ -349,10 +367,10 @@ accepts the connection: it checks that the connecting program is its
 browser or one of the browser's child processes through the Tool Help
 snapshot's parent process ids, which NovaOS used to report as 0.  The UI
 now logs "WebUITransportStore: Connection status: connected" and starts
-its login stores within about two minutes of the browser starting.
-Whether the login window itself appears is the next thing to check.
-What is known to be missing on the way, each a NovaOS gap and none a
-reason to change Steam:
+its login stores within about two minutes of the browser starting, and
+the "Sign in to Steam" window opens (see the list below).  Signing in and
+games are not checked yet.  What is known to be missing or was fixed on
+the way, each a NovaOS gap and none a reason to change Steam:
 
 - Media Foundation (`mf.dll`, which Chromium only uses for video).
 - DirectWrite's `IDWriteFactory4` and later (`steam.exe` asks for
@@ -413,13 +431,17 @@ start it to its main menu.
 ## Programs that come with NovaOS
 
 Built in: the Terminal, File Explorer, Notepad, Settings, Calendar,
-Photos, the App Store, Install NovaOS, NovaOS's own `cmd.exe` and its
-command-line tools, and the NetSurf web browser.  The [user guide](user-guide.md) describes
-them.
+Photos, the App Store, Install NovaOS, Welcome to NovaOS, NovaOS's own
+`cmd.exe` and command-line tools, Firefox 157 (Mozilla's unmodified
+Windows build, the default browser) and the NetSurf web browser.  Mesa's
+OpenGL (llvmpipe) and cnc-ddraw (as `ddraw.dll`) are built in too.  The
+[user guide](user-guide.md) describes the apps.
 
 ## Reporting a program
 
 If a program fails, open an issue on
 [GitHub](https://github.com/dean-plude/os/issues) with its name, version
-and download link, what you did and what happened, and the boot log
-(the serial output in QEMU, or `EFI\NOVA\bootlog.txt` on a USB stick).
+and download link, what you did and what happened, the boot log (the
+serial output in QEMU, or `EFI\NOVA\bootlog.txt` on a USB stick) and,
+if it crashed, its crash report from `C:\NovaOS\Crashes` (`crashes last`
+in the Terminal shows the newest).

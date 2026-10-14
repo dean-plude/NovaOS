@@ -5,7 +5,7 @@ The third free game plays, and this time its sound is checked: Teeworlds
 (its official 64-bit zip), starts in full screen on Mesa 3D's OpenGL and
 plays its menu music through NovaOS's sound card while it goes through its
 first-start questions to its start menu
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **The dock steps aside for full-screen programs**: Teeworlds starts in
   full screen, as most games do, and NovaOS's dock and tray were drawn

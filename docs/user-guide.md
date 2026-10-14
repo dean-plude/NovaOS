@@ -1,35 +1,38 @@
 # NovaOS user guide
 
 NovaOS is an operating system that runs Windows programs as they are,
-without Windows.  This guide is for using it: getting it running,
-installing it, finding your way around the desktop, and installing
+without Windows.  This guide covers using it: trying it in a virtual
+machine, installing it, the desktop and the built-in apps, and installing
 programs.  To build NovaOS from source, see [building.md](building.md);
 on a Mac, see [macos.md](macos.md).
 
-> **NovaOS 0.1 is an early release.**  It is developed and tested in the
-> QEMU virtual machine.  It has not yet been checked on a real PC, so run
-> it in a virtual machine, and do not install it on a computer whose disk
-> holds anything you need.  [compatibility.md](compatibility.md) lists
-> which Windows programs run.
+> **NovaOS is early software.**  It is developed and tested in the QEMU
+> virtual machine and has not yet been checked on any real PC
+> ([hardware.md](hardware.md)).  Run it in a virtual machine, and do not
+> install it on a computer whose disk holds anything you need.
+> [compatibility.md](compatibility.md) lists which Windows programs run.
 
 ## Getting NovaOS
 
-NovaOS comes as one file, `nova.iso`, which is both a live system and
-its own installer.  Download it from the
-[newest release](https://github.com/dean-plude/os/releases/latest), with
-`nova.iso.sha256` beside it to check the download (`sha256sum -c
-nova.iso.sha256`; on a Mac `shasum -a 256 -c nova.iso.sha256`).  The ISO
-built from the newest code on `main`, which has had less testing, is the
-[`latest` build](https://github.com/dean-plude/os/releases/download/latest/nova.iso).
+NovaOS comes as one file, `nova.iso`, which is both a live system and its
+own installer.  There are two places to get it:
+
+| Build | Where | What it is |
+|---|---|---|
+| Newest release | [releases/latest](https://github.com/dean-plude/os/releases/latest) | A tagged version (the first was v0.1.0, 2026-10-04) |
+| `latest` | [releases/download/latest/nova.iso](https://github.com/dean-plude/os/releases/download/latest/nova.iso) | Rebuilt from `main` after every push whose CI run passes; newer, less tested |
+
+Each comes with `nova.iso.sha256`.  Check the download with
+`sha256sum -c nova.iso.sha256` (on a Mac, `shasum -a 256 -c nova.iso.sha256`).
 
 ## Trying it in a virtual machine
 
-NovaOS needs a 64-bit x86 PC with UEFI firmware.  QEMU is the virtual
-machine it is tested in:
+NovaOS needs a 64-bit x86 machine with UEFI firmware.  QEMU is the
+virtual machine it is tested in.  Install it:
 
-- **Linux**: `sudo apt install qemu-system-x86 ovmf` (Ubuntu and Debian).
-- **Windows**: in WSL2, as on Linux.
-- **Mac**: `brew install qemu`; [macos.md](macos.md) has the commands
+- **Linux** (Ubuntu, Debian): `sudo apt install qemu-system-x86 ovmf`
+- **Windows**: inside WSL2, as on Linux.
+- **Mac**: `brew install qemu`.  [macos.md](macos.md) has the commands
   for Apple Silicon and Intel Macs, and for UTM.
 
 Then, on Linux, start the ISO with an empty 1 GB disk to install onto:
@@ -43,77 +46,91 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
   -drive file=disk.img,format=raw -cdrom nova.iso
 ```
 
-Add `-enable-kvm -cpu host` when your Linux user may use `/dev/kvm`: it
-makes NovaOS run at close to the computer's own speed instead of being
-emulated.  Add `-device intel-hda -device hda-duplex` for sound and a
-microphone.  QEMU's network works without any options.
+Useful extra options:
 
-In Hyper-V, make a Generation 2 VM with Secure Boot off and start it
-from the ISO: the keyboard and mouse work, but NovaOS cannot see the VM's
-disks or network yet ([hyperv.md](hyperv.md)).
+| Option | Effect |
+|---|---|
+| `-enable-kvm -cpu host` | Runs NovaOS at close to native speed instead of emulating the CPU.  Needs access to `/dev/kvm`. |
+| `-device intel-hda -device hda-duplex` | A sound card with speakers and a microphone. |
+| `-serial stdio` | Shows NovaOS's log in your terminal. |
 
-Other virtual machines (VirtualBox, VMware) are untested.  A
-VirtualBox or VMware machine set to "Other 64-bit", with EFI on, a SATA
-disk and an Intel network card, is the closest match to what NovaOS
-drives.
+QEMU's default network works without any options.  Give the machine at
+least 2 GB of memory: drive C: is held in memory while NovaOS runs (see
+[Your files](#your-files)).
+
+**Hyper-V**: make a Generation 2 VM with Secure Boot off and start it from
+the ISO.  NovaOS has drivers for Hyper-V's keyboard and mouse, but not yet
+for its disks or network adapter, so it can only run live there
+([hyperv.md](hyperv.md)).
+
+**VirtualBox, VMware and others** are untested.  The closest match to
+what NovaOS drives is a machine set to "Other 64-bit" with EFI on, a SATA
+(AHCI) or NVMe disk, and an Intel PRO/1000 (e1000) network card.
 
 ## Installing
 
 Started from the ISO, NovaOS runs live: everything works, but nothing you
-do is kept.  **Install NovaOS** opens by itself:
+do is kept after a restart.  **Install NovaOS** opens by itself, and is
+also on the desktop:
 
-1. Pick the disk to install on.  **Installing erases the whole disk.**
-2. Choose the file system for drive C:: NTFS (the default; it keeps file
-   permissions) or FAT32.
-3. When it has finished, shut down, remove the ISO (in QEMU, start again
-   without `-cdrom nova.iso`), and start from the disk.
+1. Choose the disk to install on.  NovaOS installs on SATA (AHCI), NVMe
+   and USB disks of at least 256 MB.  **The whole disk is erased.**
+2. Choose the file system for drive C:: **NTFS** (the default; keeps file
+   permissions) or **FAT32**.
+3. When it has finished, remove the ISO (in QEMU, start again without
+   `-cdrom nova.iso`) and restart from the disk.
 
-The Terminal's `install` command does the same without the window
-(`install` alone lists the disks).
+Anything you saved on C: during the live session is copied to the new
+installation.  In the Terminal, `install` lists the disks and
+`install <disk> [/fat]` installs without the window.
 
 ## First start
 
-The first time NovaOS starts from the disk it was installed on,
-**Welcome to NovaOS** opens before the desktop and asks, page by page:
+The first time an installed NovaOS starts, **Welcome to NovaOS** opens
+before the desktop.  It asks, one page at a time:
 
-1. **Your name**, shown on the Start menu and given to programs as the
-   user name.
-2. **Your time zone.**  Type a city (Berlin, Tokyo, New York...) to find
-   its zone, or pick one from the list with the arrow keys or the mouse;
-   the page shows the time there now.  The clock, the Terminal's `date`
-   and `time`, Calendar and Windows programs show local time from then on,
-   with daylight saving time where the zone has it.
-3. **Your keyboard layout**: US, UK, US Dvorak, German, Swiss German,
-   French, Swiss French, Canadian French, Spanish, Italian, Portuguese,
-   Brazilian, Swedish, Finnish, Norwegian or Danish.  Picking one switches
-   to it at once; try it in the box under the list.  AltGr (the right Alt
-   key) types the third character printed on a key, and accent keys (´ ^
-   ¨ on a German keyboard) put their accent on the next letter.
-4. **The display resolution.**  Picking one switches to it at once.
+1. **Your name.**  It is shown on the Start menu and on the desktop, and
+   programs get it as the user name.
+2. **Your time zone.**  Type a city (Berlin, Tokyo, New York...) or pick
+   one from the list.  The clock, Calendar, the Terminal's `date` and
+   `time` and Windows programs then show local time, with daylight saving
+   time where the zone has it.
+3. **Your keyboard layout**: English (US, UK or US Dvorak), German, Swiss
+   German, French, Swiss French, Canadian French, Spanish, Italian,
+   Portuguese, Brazilian Portuguese, Swedish, Finnish, Norwegian or
+   Danish.  The layout changes at once; try it in the box under the list.
+   AltGr (right Alt) types the third character on a key, and accent keys
+   put their accent on the next letter.
+4. **The display resolution.**  It changes at once.
 
-Settings changes the time zone and the keyboard layout (Time & language)
-and the resolution later, `tzutil /s "NAME"` in the Terminal sets a zone by its Windows name
-(`tzutil /l` lists them), and `start welcome` goes through all the pages
-again.
+To change these later: Settings > Time & language (time zone, keyboard
+layout and regional format), Settings > Display (resolution), or
+`start welcome` in the Terminal to go through every page again.  In the
+Terminal, `tzutil /s "NAME"` sets a time zone by its Windows name and
+`tzutil /l` lists the names.
 
 ## The desktop
 
-![The desktop with the Terminal and File Explorer side by side](screenshots/desktop.png)
+![The NovaOS desktop](screenshots/desktop.png)
 
-- **The dock** along the bottom holds Start, search, the pinned apps and
-  a button for every open window; a dot under an app means it is
-  running.  The network status and the clock are at the right.  A
-  program in full screen (a game) covers it, as on Windows; the dock comes
-  back when the program goes to a window, you switch away, or you press
-  the Windows key.
-- **Start** (the Windows key, or the first dock button) lists your pinned
-  and installed programs, recent apps and documents, and the power menu
-  (Sleep, Restart, Shut down).  Start typing to search apps, programs,
-  settings pages, folders and files; Enter opens the highlighted one.
+- **The dock** along the bottom holds Start, search, the pinned apps
+  (Terminal, File Explorer, Notepad, Settings, Calendar, Firefox and the
+  App Store) and a button for every open window.  A dot under an app
+  means it is running.  The network status and the clock are on the
+  right.  A full-screen program, such as a game, covers the dock; it comes
+  back when you switch away or press the Windows key.
+- **Start** (the Windows key, or the first dock button) lists pinned apps,
+  installed programs, recent apps and documents, and the power menu.
+  Start typing to search apps, programs, settings pages, folders and
+  files; Enter opens the highlighted result.
+- **The workspace.**  On a display of at least 900x640 with the default
+  Aurora theme, the desktop also shows a sidebar of apps, a search bar
+  (Ctrl+K), your name, a calendar and shortcuts to File Explorer, Notepad
+  and Firefox.  Settings > Personalization switches to the Sunset, Ocean
+  or Twilight theme, which show plain desktop icons instead.
 - **Windows** move by their title bar and resize from any edge.  Drag one
-  to the side of the screen, or press Windows+Left or Right, to snap it
-  to half the screen; Windows+Up maximizes it.
-- **Right-click** the desktop, an icon, the dock or a title bar for its
+  to the side of the screen to snap it to that half.
+- **Right-click** the desktop, an icon, the dock or a title bar for a
   menu.
 
 Keyboard shortcuts:
@@ -121,159 +138,202 @@ Keyboard shortcuts:
 | Keys | Does |
 |---|---|
 | Windows | Open or close Start |
-| Windows+S | Open Start's search |
+| Windows+S, or Ctrl+K on the Aurora desktop | Search |
 | Windows+E | Open File Explorer |
 | Windows+D | Show the desktop (again to bring the windows back) |
-| Windows+Left / Right | Snap the window to the left or right half |
-| Windows+Up / Down | Maximize, or restore and minimize |
-| Alt+Tab | Switch windows (Shift+Alt+Tab goes back) |
+| Windows+Left / Right | Snap the window to the left or right half (again to restore it) |
+| Windows+Up | Maximize the window |
+| Windows+Down | Restore a maximized or snapped window, or minimize it |
+| Alt+Tab | Switch windows (Shift+Alt+Tab goes back, Esc cancels) |
 
 ## The built-in apps
 
-- **File Explorer** shows This PC (every drive with its free space) and
-  the folders on the left (Documents, Downloads, Pictures, Personal,
-  Projects).  Double-click a folder to open it, a picture to see it in
-  Photos, a program (`.exe`) to run it, a Windows Installer package
-  (`.msi`) to install it, and anything else to read it in Notepad.
-  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also into and out of
-  Windows programs; Delete deletes.
-- **Terminal** is the command line.  `help` lists its own commands
-  (`dir`, `copy`, `ping`, `curl`, `wget`, `tasklist`, `devices`,
-  `install`...); any other name runs that program, so Windows
-  command-line programs work as on Windows, and `cmd` starts NovaOS's own
-  `cmd.exe` for batch files.  Up and Down recall earlier commands.
-- **Settings** has the System, Display (resolution, scale, several
-  monitors), Sound (which speakers and microphone, and their volumes),
-  Personalization (wallpaper), Storage, Network, Time & language (the
-  regional format for dates and numbers, the time zone and the keyboard
-  layout) and About pages.
-- **App Store** downloads and installs open-source Windows programs (see
-  below).
-- **Notepad**, **Photos** (pictures and icons), **Calendar**, and
-  **NetSurf**, a small web browser.
+| App | What it does |
+|---|---|
+| **File Explorer** | Shows This PC (every drive and its free space) and the folders Documents, Downloads, Pictures, Personal, Projects and Windows.  Double-click a program (`.exe`) to run it, a Windows Installer package (`.msi`) to install it, a picture (`.png`, `.ico`, `.cur`) to see it in Photos, a shortcut (`.lnk`) to open its target, and anything else to read it in Notepad.  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also to and from Windows programs; Delete deletes. |
+| **Terminal** | The command line (below). |
+| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme and wallpaper), Storage, Network, Time & language, and About. |
+| **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
+| **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
+| **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
+| **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
+
+### The Terminal
+
+The Terminal has its own commands; `help` lists them.  The most useful:
+
+| Command | Does |
+|---|---|
+| `dir`, `cd`, `type`, `copy`, `del`, `mkdir` | Work with files |
+| `start <app> [file]` | Open a built-in app (`notepad`, `explorer`, `settings`, `calendar`, `browser`, `store`, `welcome`) |
+| `store install <name>` | Install a program from the App Store |
+| `ipconfig`, `ping`, `nslookup`, `curl`, `wget` | Network |
+| `tasklist`, `taskkill /PID n` or `/IM name.exe` | List and stop programs |
+| `devices` | PCI devices and the driver each one has |
+| `sysinfo`, `ver`, `dmesg`, `crashes` | About the system, its log and crash reports |
+| `vol`, `sync` | Where drive C: is saved; save it now |
+| `install`, `update` | Install NovaOS on a disk; update it |
+
+Any other name runs that program, so Windows command-line programs work
+as they do on Windows.  NovaOS also includes its own versions of some
+Windows tools, such as `cmd` (runs NovaOS's `cmd.exe`, for batch files),
+`find`, `findstr`, `sort`, `more`, `less`, `sc`, `pnputil`,
+`tzutil`, `msiexec` and `shutdown`.  Up and Down recall earlier commands.
 
 ## Installing programs
 
-The **App Store** in the dock lists programs by category.  **Get**
-downloads one to `C:\Downloads`, **Install** installs it (with 7-Zip, the
-Windows Installer, or the program's own setup), and **Open** starts it;
-installed programs also appear in Start.  Some programs need a runtime
-first, as their notes in the App Store say: Direct3D programs and games
-need **Mesa 3D** (its Vulkan) and **DXVK** (both under Runtimes), and
-Direct3D 12 ones **VKD3D-Proton** too.
-A program started from Start, the App Store, File Explorer or a shortcut
-opens on its own, as on Windows; only a console (command-line) program
-gets a Terminal window, its console.
-OpenGL needs nothing: Mesa's llvmpipe is built in, so Krita and other
-OpenGL 2 and later programs run as they are.
+The **App Store** in the dock lists programs by category.  For each one,
+**Get** downloads it to `C:\Downloads`, **Install** installs it (by
+running its setup program or Windows Installer package, or by unpacking
+its archive with 7-Zip), and **Open** starts it.  Installed programs also
+appear in Start.  In the Terminal, `store install <name>` does the same.
 
-Programs from anywhere else install as on Windows: download the
-installer, `.msi` or `.zip`, then run the installer or unzip it (7-Zip
-from the App Store does that) and run the program.  Only part of what
-Windows programs use is there yet, so many programs still fail:
-[compatibility.md](compatibility.md) lists the ones known to work.
+Some programs need a runtime from the App Store's **Runtimes** category
+first; the program's note in the App Store says which:
 
-**Drivers.**  A Windows driver package (an `.inf` with its `.sys` and
-`.cat` files) installs the same three ways: run its setup `.exe` or
-`.msi`, or unzip it and, in the Terminal, run
-`pnputil /add-driver <folder>\*.inf /install`.  `pnputil /enum-drivers`
-lists the packages installed and `pnputil /delete-driver oemN.inf` removes
-one.  The package is kept in the driver store as on Windows, and `/install`
-also starts the driver on each PCI device it is for that NovaOS has no
-driver of its own for (a device NovaOS drives keeps its NovaOS driver, and
-`pnputil` says no device took the package); `pnputil /disable-device
-/deviceid <ID>` and `/enable-device` turn such a device off and on.  A
-kernel-mode driver that is not tied to a device runs as a kernel service
-(`sc create NAME type= kernel binPath= ...`, then `sc start NAME`).  Either
-loads only when it is signed as Windows 11 requires: by Microsoft, or with
-a test signature while test signing is on ([drivers.md](drivers.md#driver-signing)).  The firmware NovaOS's own drivers load
-into devices comes with release images ([drivers.md](drivers.md)).
+| Program uses | Install first |
+|---|---|
+| OpenGL | Nothing: Mesa's OpenGL (llvmpipe, on the CPU) is built in |
+| Direct3D 8 to 11 | **Mesa 3D** (for its Vulkan) and **DXVK** |
+| Direct3D 12 | **Mesa 3D**, **DXVK** and **VKD3D-Proton** |
+| A program packed as a `.zip` or `.7z` | **7-Zip** (Utilities), which the App Store uses to unpack it |
 
-**Finding a driver online.**  For a device that has no driver (problem
-code 28 in `pnputil /enum-devices`), run
-`pnputil /scan-devices /search-online` in the Terminal: NovaOS searches
-the Microsoft Update Catalog by the device's hardware IDs, as Windows
-Update does, downloads the package that matches, checks it against the
-Catalog's SHA-256 and adds it to the driver store
+A graphical program started from Start, the App Store, File Explorer or a
+shortcut opens in its own window.  Only a console (command-line) program
+gets a Terminal window, as its console.
+
+Programs from anywhere else install as on Windows: download the installer,
+`.msi` or archive, then run the installer, or unpack the archive (with
+7-Zip from the App Store) and run the program.  NovaOS does not yet
+implement everything Windows programs use, so many programs still fail.
+[compatibility.md](compatibility.md) lists the ones that have been
+checked.
+
+The App Store's list of programs is a JSON file that can be updated
+without updating NovaOS (**Refresh** in the App Store, or
+`store refresh`).  [app-store-catalog.md](app-store-catalog.md) explains
+how.
+
+### Drivers
+
+A Windows driver package (an `.inf` file with its `.sys` and `.cat`
+files) installs as on Windows:
+
+- run its setup `.exe` or `.msi`, or
+- unpack it and run `pnputil /add-driver <folder>\*.inf /install` in the
+  Terminal.
+
+| Command | Does |
+|---|---|
+| `pnputil /enum-drivers` | List the installed driver packages |
+| `pnputil /delete-driver oemN.inf` | Remove one |
+| `pnputil /enum-devices` | List devices; problem code 28 means no driver |
+| `pnputil /disable-device /deviceid <ID>`, `/enable-device` | Turn a device off or on |
+| `pnputil /scan-devices /search-online` | Find drivers for devices that have none on the Microsoft Update Catalog |
+
+`/install` starts the driver on each device it is for that NovaOS does
+not already drive itself.  A device NovaOS has its own driver for keeps
+it, and `pnputil` says no device took the package.  A kernel-mode driver
+that is not tied to a device runs as a service: `sc create NAME type=
+kernel binPath= ...`, then `sc start NAME`.  Either kind loads only if
+it is signed the way Windows 11 requires: by Microsoft, or with a test
+signature while test signing is on
+([drivers.md](drivers.md#driver-signing)).
+
+`/search-online` looks up each device's hardware IDs on the Microsoft
+Update Catalog, as Windows Update does, downloads the matching package,
+checks it against the Catalog's SHA-256 and adds it to the driver store
 ([drivers.md](drivers.md#downloading-drivers-by-hardware-id)).  Nothing is
-downloaded unless you ask.
+downloaded unless you run it.
+
+Release builds also carry the device firmware some of NovaOS's own
+drivers load ([drivers.md](drivers.md)).
 
 ## Your files
 
-Drive C: holds your files and the programs you install.  On an installed
-NovaOS it is kept on the disk; NovaOS saves every change a second after
-it happens and again before it restarts or shuts down.  In the Terminal,
-`vol` shows where C: is kept and `sync` saves it at once.  The ISO on its
-own keeps nothing, so install NovaOS, or give QEMU a second empty disk,
-which NovaOS then uses for C:.
+Drive C: holds your files and the programs you install.  While NovaOS
+runs, C: is held in memory.  On an installed NovaOS it is also kept on
+the disk: NovaOS saves changes once C: has been quiet for a second, and
+again before a restart or shutdown.  In the Terminal, `vol` shows where
+C: is saved and `sync` saves it at once.
 
-Other NTFS disks and USB sticks appear as D:, E:, and so on, in File
-Explorer and to programs.  [building.md](building.md#where-your-files-are-kept)
-explains how C: is stored.
+Running live from the ISO, NovaOS keeps nothing unless it finds somewhere
+to save C:: an empty disk (which it formats as FAT32 and labels
+`NOVADATA`) or a volume already labelled `NOVADATA`.  So to keep files
+without installing, give QEMU a second empty disk.
+[building.md](building.md#where-your-files-are-kept) has the details.
+
+Other NTFS disks and USB sticks appear as D:, E: and so on, in File
+Explorer and to programs.
 
 ## Network and sound
 
-Wired networking starts by itself: NovaOS gets an address from the
+**Wired networking** starts by itself: NovaOS gets an address from the
 network's DHCP server.  Settings > Network, or `ipconfig` in the
-Terminal, shows it.  To set the address by hand, choose **Edit** on
-Settings > Network's Ethernet card, pick **Manual** and type the IP
-address, subnet mask, gateway and DNS servers, then **Save**; or keep
-**Automatic (DHCP)** and type only DNS servers to use instead of the ones
-DHCP hands out (blank: DHCP's).  The Terminal does the same the Windows
-way:
+Terminal, shows it.  To set the address by hand, choose **Edit** on the
+Ethernet card in Settings > Network, pick **Manual** and enter the IP
+address, subnet mask, gateway and DNS servers, then **Save**.  With
+**Automatic (DHCP)** you can still enter DNS servers to use instead of
+DHCP's (leave them blank to use DHCP's).  The Terminal does the same the
+Windows way:
 
-    netsh interface ipv4 set address name=Ethernet static 192.168.1.50 255.255.255.0 192.168.1.1
-    netsh interface ipv4 set dnsservers name=Ethernet static 1.1.1.1
-    netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
-    netsh interface ipv4 set address name=Ethernet source=dhcp
-    netsh interface ipv4 show config
+```text
+netsh interface ipv4 set address name=Ethernet static 192.168.1.50 255.255.255.0 192.168.1.1
+netsh interface ipv4 set dnsservers name=Ethernet static 1.1.1.1
+netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
+netsh interface ipv4 set address name=Ethernet source=dhcp
+netsh interface ipv4 show config
+```
 
-The choice takes effect at once and is kept across restarts (in the
-registry, under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`).
-Wi-Fi is not supported.
+Changes take effect at once and are kept across restarts, in the registry
+under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
+**Wi-Fi is not supported yet.**
 
-Sound plays through the newest output device; Settings > Sound picks
-another and sets each device's volume, and the choices are kept across
-restarts.  On a laptop whose built-in microphones sit behind Intel's
-audio DSP (the ThinkPad T14 Gen 4), they are the recording device
-"Microphone Array (DSP)" once the DSP's firmware is built in
+**Sound** plays through the newest output device.  Settings > Sound picks
+another device and sets each device's volume; the choices are kept across
+restarts.  On the reference laptop (ThinkPad T14 Gen 4), the built-in
+microphones sit behind Intel's audio DSP and appear as "Microphone Array
+(DSP)" when the DSP firmware is included in the build
 ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
 
 ## Updating NovaOS
 
-An installed NovaOS updates itself: the App Store's **Updates** page
-(or `update` in the Terminal) checks for a newer version, **Update**
-downloads and checks it, and **Restart** starts it.  If the new version
-does not start, the next start goes back to the one you had and the
-Updates page says so.  NovaOS running from the ISO or a USB stick is not
-updated; download the newer ISO instead.  [updates.md](updates.md) has
-the details.
+An installed NovaOS updates itself.  The App Store's **Updates** page (or
+`update` in the Terminal) checks for a newer version; **Update** downloads
+and checks it, and **Restart** starts it.  If the new version fails to
+start, the next start goes back to the old one and the Updates page says
+so.  NovaOS running live from the ISO or a USB stick does not update;
+download a newer ISO instead.  [updates.md](updates.md) has the details,
+including how to follow the `latest` builds instead of releases.
 
 ## Sleep, restart and shut down
 
-Start's power menu sleeps (where the machine supports it), restarts and
-shuts down.  NovaOS saves drive C: before it restarts or shuts down.
+Start's power menu has Restart and Shut down, and Sleep on machines that
+support it.  NovaOS saves drive C: before it restarts or shuts down.
 
 ## When something goes wrong
 
-- **A program fails**: check its row in
-  [compatibility.md](compatibility.md).  `tasklist` and `taskkill /PID n`
-  (or `taskkill /IM name.exe`, every copy of that program) in the
-  Terminal list and stop running programs.
+- **A program fails**: look it up in [compatibility.md](compatibility.md).
+  `tasklist` lists running programs; `taskkill /PID n` stops one, and
+  `taskkill /IM name.exe` stops every copy of a program.
+- **A program crashes**: NovaOS writes a crash report (the exception,
+  where it happened, the stack and the loaded modules) to
+  `C:\NovaOS\Crashes`.  `crashes` lists them and `crashes last` shows the
+  newest.
 - **The log**: NovaOS writes what it does to the serial port (QEMU's
-  `-serial stdio` shows it in your terminal) and, started from a USB
-  stick, into `EFI\NOVA\bootlog.txt` on the stick.  `dmesg` in the
-  Terminal shows it too.
-- **Reporting**: open an issue on
+  `-serial stdio` shows it in your terminal).  Started from a USB stick,
+  it also writes it to `EFI\NOVA\bootlog.txt` on the stick.  `dmesg` in
+  the Terminal shows it too.
+- **Reporting a problem**: open an issue on
   [GitHub](https://github.com/dean-plude/os/issues) with what you did,
-  what happened, and the log.
+  what happened, and the log or crash report.
 
 ## Real PCs
 
-NovaOS boots on UEFI PCs with Secure Boot turned off, from a USB stick
-made from `nova.iso` (the README says how to write it).  Its reference
-machine is the Lenovo ThinkPad T14 Gen 4 (Intel), but **no real PC has
-been checked yet**: [hardware.md](hardware.md) lists which of its
-devices NovaOS has drivers for and what is still missing, and
+NovaOS should start on a UEFI PC with Secure Boot turned off, from a USB
+stick written from `nova.iso` (the [README](../README.md) says how).  Its
+reference machine is the Lenovo ThinkPad T14 Gen 4 (Intel), but **no real
+PC has been checked yet**.  [hardware.md](hardware.md) lists which of the
+T14's devices NovaOS has drivers for and what is missing, and
 [install-and-power.md](install-and-power.md) the checks still to be done
 on it.

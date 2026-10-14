@@ -52,4 +52,4 @@ needed, each a NovaOS gap:
 
 The new self-test `chrometest` checks each of these on 64- and 32-bit.
 How far Steam's browser gets now is in
-[compatibility.md](../compatibility.md#steam).
+[compatibility.md](compatibility.md#steam).

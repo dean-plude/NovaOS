@@ -23,4 +23,4 @@ process starts, and when that fails watches processes another way.
 
 Steam's service now updates itself once, starts under the control
 manager, installs its helper files and keeps running.  Steam itself still
-stops where its browser does ([compatibility](../compatibility.md#steam)).
+stops where its browser does ([compatibility](compatibility.md#steam)).

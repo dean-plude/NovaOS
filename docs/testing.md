@@ -1,13 +1,58 @@
 # Testing NovaOS
 
-The README has the short version; [building.md](building.md#tests) says how to run the tests.
+NovaOS is tested inside NovaOS: test programs run in a QEMU virtual machine
+booted from the built image, driven by `tools/selftest.py` (the regression
+suites) and `tools/appcorpus.py` (real Windows programs). Every pull request
+runs the suites in CI; the app corpus runs nightly.
+[building.md](building.md#tests) says how to run them yourself, and
+[ci.md](ci.md) how the CI jobs fit together.
 
-**Every pull request is boot-tested.**  GitHub Actions
-(`.github/workflows/ci.yml`) builds the kernel, bootloader, userland and
-`build/nova.img`, boots it in QEMU with OVMF and runs three suites with
-`tools/selftest.py`:
+## What runs on every pull request
 
-- **Build and boot-test** (core): <!-- BEGIN generated:core-tests -->`apitest`, `abitest` (the PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT` and
+`.github/workflows/ci.yml` builds the kernel, boot loader, userland,
+`build/nova.img` and `build/nova.iso` once, then boots that image in QEMU
+with OVMF in separate jobs:
+
+| Job | What it runs |
+|---|---|
+| Checks (conflict markers, manifests, generated docs) | host-side checks and the unit tests in `tests/tools/`; no VM |
+| OS tests (core) | `tools/selftest.py --suite core`: one long boot ([below](#the-core-suite)) |
+| OS tests (network) | `--suite network`: virtio-net on IPv4 and on IPv6, then an Intel e1000e ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
+| OS tests (devices) | `--suite devices`: one boot per device or machine ([below](#the-devices-suite)) |
+| Compatibility smoke | `tools/compat_smoke.py`: seven core tests (loader, wait migration, Chromium start-up, unwinding, WebView2 start-up) in a short boot of their own |
+| Performance budget | `tools/ci/perf.py`: boot time, Firefox start time and SMP scaling against `tools/ci/perf-budget.json` ([ci.md](ci.md#the-performance-budget)) |
+| Graphics tests (OpenGL, Direct3D) | `--suite graphics`: Direct2D, DirectWrite, OpenGL, Direct3D 9/11/12, DirectComposition on Mesa, DXVK, VKD3D-Proton and Venus ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
+
+**Build and boot-test** passes when the build, all three OS test jobs and
+the performance budget passed. **CI result** passes when every job passed.
+A pull request that changes only Markdown, files under `docs/` or `LICENSE`
+runs the Checks job and skips the rest, and both summary checks still pass.
+
+A failing test fails its job. Each job's summary page has a table of
+results, and the serial logs, screenshots and sound recordings are kept as
+artifacts. When a push to `main` passes, CI republishes the rolling
+`latest` release with that build's ISO; a pushed version tag runs the same
+jobs and publishes a release ([releasing.md](releasing.md)).
+
+### How a test passes
+
+Each test is one command typed into the NovaOS Terminal
+(`tools/novarun.py`'s `Nova` class types it). It passes when the program
+exits with code 0 within its time limit, prints no `FAIL` line and no
+"N failed" count above zero, and prints what the test expects. A kernel
+panic fails the run. Some tests also compare a screenshot, check a recorded
+WAV, or restart or reset the machine and check the next boot. The suites
+are one file per test in `tests/selftest/SUITE/`, run in file-name order;
+`python3 tools/selftest.py --suite SUITE --list` prints them.
+
+### The core suite
+
+The core suite boots once with an HD Audio card whose microphone hears a
+523 Hz tone (the host needs PulseAudio; without it the recording tests
+fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
+`iasl`, and a second disk for drive C:'s saved files. It runs, in order:
+
+- **Core suite** (`tests/selftest/core/`): <!-- BEGIN generated:core-tests -->`apitest`, `abitest` (the PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT` and
   loader layouts, ntdll's stubs and the system-call numbers, against
   Windows 10 1903 x64), `syscalltest` (the system-call table reached
   without ntdll: ntdll's Zw exports ranked by address give each service
@@ -233,69 +278,141 @@ The README has the short version; [building.md](building.md#tests) says how to r
   must show a backtrace with function names, and last the kernel crash
   report: after `crash kernel` and a reset, `crashes last` shows the
   fault's backtrace.<!-- END generated:core-tests -->
-- **Network** (in the boot-test job): two boots with a virtio-net card: IPv4,
-  IPv6 (SLAAC, RDNSS), HTTP/2 and loopback tests, then an Intel e1000e.
-- **Graphics tests**: Direct2D, then OpenGL, Vulkan and Direct3D 9/11 on Mesa,
-  DXVK and Venus, each 64- and 32-bit with screenshots, and the frame-rate
-  checks for direct presentation.  What each one runs:
-  [docs/ci.md](ci.md#what-the-network-and-graphics-suites-run).
 
-The build compiles through ccache, and the boot-test job saves the cache
-after each build, so a pull request recompiles only what it changed.  A pull
-request that changes only Markdown, `docs/` or `LICENSE` skips the build and
-boot jobs (GitHub counts a skipped job as passing a required check).
+### The devices suite
 
-A failing test fails its check; each run's summary has a table of results,
-and the serial logs and screenshots are kept as artifacts, along with the
-bootable ISO (`nova-iso`).  When a push to `main` passes both suites, the
-**Publish nova.iso** job puts that ISO on the `latest` build.  Pushing a
-version tag (`v0.1.0`) runs the same suites on the tagged commit and
-publishes a release with that ISO, its checksums, the update channel's
-files and notes from the history ([docs/releasing.md](releasing.md)).  Run the same
-gates locally with `python3 tools/selftest.py` (and `--suite network`, `--suite graphics`)
-after a build.  The core suite compiles its ACPI test tables with `iasl`; install
-it with `sudo apt install acpica-tools` first.
+`--suite devices` boots NovaOS once for each device or machine the core
+boot does not have (`tests/selftest/devices/NAME/`):
 
-**Every night, real programs.**  `.github/workflows/nightly.yml` builds
-main and runs `tools/appcorpus.py`: the official Windows x64 releases of
-<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.  The
-windowed programs run last, one at a time: SumatraPDF opens a PDF,
-WinMerge compares two files, Firefox installs from the App Store and
-loads a page from an HTTPS server on the host, Notepad++ opens a file and PuTTY makes a raw
-connection to an echo server on the host and types a line; each one's
-screenshot must match its `tests/reference/NAME.png`.
-It also checks NovaOS's own screens: `dir` on C: and on an NTFS drive D:
-(each with its own free space) and File Explorer's This PC listing both.
-It posts a pass/fail table per program to the "Nightly app corpus" issue.
+| Boot | What it tests |
+|---|---|
+| `touch` | a virtio multi-touch screen (`touchtest`), and the USB HID parser (`usbcheck`) |
+| `usbaudio` | no HD Audio card, USB speakers on xHCI, OHCI and UHCI: each speaker's WAV must hold its tones; unplugging, default device and volume kept across a restart |
+| `usbheadset` | USB headsets and microphones on EHCI, xHCI, OHCI and UHCI through `tools/usbredirpeer.py` (`soundtest tone`, `record`, `capture`), including a USB Audio 2.0 headset |
+| `driversearch` | `pnputil` downloads a driver package for a device with no driver by hardware ID, from recorded Microsoft Update Catalog pages (`tools/drivertest/catalog_fixture.py`) |
+| `monitors` | one virtio-vga card with three outputs; monitors plugged in and out while NovaOS runs (`montest hotplug`) |
+| `usbboot` | `nova.iso` written to a USB stick, with only the firmware's GOP display: starts live and writes its boot log (and a kernel fault) to the stick |
+| `cdboot` | `nova.iso` as a disc in a SATA DVD drive: starts live |
+| `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there |
+| `update` | an installed NovaOS updating itself from signed test channels, refusing bad ones, and going back after a reset ([updates.md](updates.md#the-self-test)) |
+| `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |
+| `pnp` | a keyboard, a hub and a USB stick plugged into xHCI and removed: `pnptest` follows the Plug and Play device tree |
+| `ntfs` | an NTFS volume as drive D:: hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
+| `wdm` | a Windows kernel-mode test driver (`wdmtest.sys`) under the signing policy (loads only with test signing on; unsigned and tampered copies never), then a KMDF driver (`kmdftest.sys`) on `Wdf01000.sys` |
+| `edu` | QEMU's edu PCI device: a Plug and Play driver (`edutest.sys`) installed with `pnputil`, with its memory, interrupt and DMA from the PnP manager; disabled and enabled again |
+| `vioser` | virtio-win's signed `vioser.sys` (KMDF) on virtio-serial: bytes to the host and back |
+| `usbserial` | QEMU's FTDI FT232 USB serial adapter: FTDI's own driver found by hardware ID, the port becomes COM3 and `serialtest` loops data through it |
+| `ax211` | Intel's AX211 Wi-Fi driver (`Netwtw14.sys`) downloaded by hardware ID and loaded on a stand-in PCI device; it loads its firmware and registers with NDIS, and its hardware probe fails as expected, since the device is not a real AX211 |
+| `viostor` | virtio-win's signed `viostor.sys` on virtio-blk, on NovaOS's Storport host: its NTFS volume mounts as D: |
+| `umdf` | a UMDF 2 driver (`umdftest.dll`) on the edu device, running in `WUDFHost.exe` |
+| `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA |
+| `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
+| `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled |
+
+[drivers.md](drivers.md) has more on the Windows driver model these boots
+exercise.
+
+## Running the suites locally
+
+After a build ([building.md](building.md#building)):
+
+```bash
+sudo apt install acpica-tools
+python3 tools/selftest.py
+python3 tools/selftest.py --suite network
+python3 tools/selftest.py --suite devices
+python3 tools/selftest.py --only apitest,guitest --out /tmp/st
+python3 tools/compat_smoke.py
+python3 tools/ci/perf.py
+```
+
+The core suite is the default. The network suite needs `node` and
+`openssl` on the host. The graphics suite needs a QEMU with Venus and a
+staged download folder; [building.md](building.md#tests) and the docstring
+of `tools/selftest.py` give the details. `--only` takes test names or
+program names, and `--out` keeps the logs and screenshots. The exit status
+is the number of failed tests.
+
+The host-side checks need no VM:
+
+```bash
+python3 -m unittest discover -s tests/tools
+```
+
+These unit tests cover the CI scripts, the corpus and download harness,
+the App Store catalog, and some kernel code compiled for the host
+(`tests/host/` and `tests/unit/`: console cursor handling, the Hyper-V
+input ring, NTFS power-cut recovery).
+
+## The nightly app corpus
+
+`.github/workflows/nightly.yml` builds `main` and runs `tools/appcorpus.py`,
+one VM and one job per program: the official Windows x64 releases of
+<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
+Each program is downloaded (and cached), unpacked onto drive C: or
+installed with its own installer or the App Store, and driven by typed
+commands, clicks and keys. The windowed programs' screenshots must match
+`tests/reference/NAME.png`. Before them, NovaOS's own screens are checked:
+`dir` on C: and on an NTFS drive D:, each with its own free space, and File
+Explorer's This PC listing both.
+
+The same workflow runs an SMP stress test (`smpstress scaling 0` on four
+CPUs). A scheduled run posts each program's result to issue #210. The
+workflow also runs on pull requests that change the corpus or what it
+depends on. [ci.md](ci.md#the-nightly-app-corpus) has the schedule, the
+retry rules and the reports.
+
+To run part of the corpus locally after a build:
+
+```bash
+python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus --out appcorpus-out
+```
+
+## Test programs
 
 - **Self-test programs** in `userland/programs/`, installed in
-  `C:\Programs` (and 32-bit builds in `C:\Programs\x86`).  Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.  `soundtest`
-  plays tones through `waveOut`, WASAPI, `PlaySound` and `Beep`, records
-  through `waveIn` and WASAPI capture, and lists the sound devices,
-  chooses the default and sets each device's own volume;
+  `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
+  [building.md](building.md#self-test-programs) has a table of what each
+  covers.
+- **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,
+  `PlaySound` and `Beep`, records through `waveIn` and WASAPI capture, lists
+  the sound devices, chooses the default and sets each device's volume.
   `tools/novarun.py --wav out.wav` records what NovaOS plays, `--rec in.wav`
-  feeds a WAV to its microphone, and
-  `tools/wavcheck.py out.wav` lists each tone's length and pitch.  `disktest
-  write`, a restart and `disktest verify` check that drive C: survives a
-  reboot.
-- **GUI and interactive checks**: `winhello`, `guitest` (`guitest auto`
-  drives its own menus, dialog, message box and property sheet and
-  reports), `droptest`, `cpus` (SMP speed-up).
-- **Real programs** are tested from a second disk image holding them
-  (not in this repository), driven by a QEMU harness that types, clicks and takes screenshots.
-- **On the host**: `tools/pe_imports.py PROGRAM.exe` lists the imports a
-  Windows program needs that NovaOS's DLLs lack; `tools/msitest/` exercises
-  the Windows Installer's package readers and SQL, and builds test
-  packages (one with a service).  `tools/gltest/`,
-  `tools/d3dtest/` and `tools/d2dtest/` are OpenGL, Direct3D 9/11 and
-  Direct2D test programs, built with MinGW, for checking Mesa, DXVK and
-  `d2d1.dll` on NovaOS.
-- **Debugging**: the serial log (COM1) has every kernel message; the
-  Terminal's `dmesg` shows it, and `trace NAME` logs a program's failing
-  system calls.  A kernel fault, panic or failed assertion prints a
-  backtrace with function names and offsets (the kernel carries its own
-  symbol table); `crash kernel` shows one on purpose.  A crashed program
-  or kernel leaves a text report in `C:\NovaOS\Crashes` to attach to an
-  issue (a kernel fault's at the next start); the Terminal's `crashes`
-  lists them and `crashes last` shows the newest.
+  feeds a WAV to its microphone, and `tools/wavcheck.py out.wav` lists each
+  tone's length and pitch.
+- **Disk**: `disktest write`, a restart and `disktest verify` check that
+  drive C: survives a reboot.
+- **GUI and interactive**: `winhello`, `guitest` (`guitest auto` drives
+  its own menus, dialog, message box and property sheet and reports),
+  `droptest`, `cpus` (SMP speed-up).
+- **Graphics test programs** in `tools/`, built with MinGW and copied to
+  `C:\Tests` by the graphics suite: `d2dtest` (Direct2D), `dwtest` and
+  `dw3test` (DirectWrite), `gltest` (OpenGL), `d3dtest` (Direct3D 9/11),
+  `d3d12test` (Direct3D 12) and `hlsltest` (the HLSL compiler).
+- **Drivers**: the devices suite's test drivers (`wdmtest`, `edutest`,
+  `kmdftest`, `kmdfedu`, `umdftest`) and its recorded catalog servers are
+  in `tools/drivertest/`. `tools/authenticode/` makes the files
+  `authtest` checks.
+
+## On the host
+
+- `tools/pe_imports.py PROGRAM.exe` lists the imports a Windows program
+  needs that NovaOS's DLLs lack.
+- `tools/sys_imports.py` does the same for a driver (`.sys`), and
+  `tools/ci/check-driver-imports.py` checks the drivers NovaOS targets.
+- `tools/msitest/` exercises the Windows Installer's package readers and
+  SQL, and builds test packages.
+
+## Debugging
+
+- The serial log (COM1) has every kernel message. The Terminal's `dmesg`
+  shows it, and `trace NAME` logs a program's failing system calls
+  (`trace off` stops).
+- A kernel fault, panic or failed assertion prints a backtrace with
+  function names and offsets (the kernel carries its own symbol table);
+  `crash kernel` shows one on purpose.
+- A crashed program or kernel leaves a text report in `C:\NovaOS\Crashes`
+  to attach to an issue (a kernel fault's report is written at the next
+  start). The Terminal's `crashes` lists them and `crashes last` shows the
+  newest.

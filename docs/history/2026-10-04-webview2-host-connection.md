@@ -28,4 +28,4 @@ cause (it fails later and the browser falls back to software).
   another process.  NovaOS's windows belong to one process each (user32
   keeps the window tree in the process), so both fail with
   `ERROR_INVALID_WINDOW_HANDLE` and the controller with `0x80070578`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).

@@ -24,7 +24,7 @@ named, so whoever could change the release page could change the update.
   workflow signs with the Actions secret `NOVAOS_UPDATE_SIGNING_KEY`;
   without it the channel is published unsigned with a warning, and a
   secret that does not match the built-in key stops the release
-  ([releasing.md](../releasing.md#the-update-signing-key)).
+  ([releasing.md](releasing.md#the-update-signing-key)).
 - **Test**: the devices suite's update boot signs its channels with a key
   pair kept only for the tests
   (`tests/selftest/devices/update/TEST-ONLY-signing-key.txt`), whose

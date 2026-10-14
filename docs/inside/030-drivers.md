@@ -1,51 +1,37 @@
-- **Drivers**: AHCI SATA and NVMe disks (NovaOS installs to and boots from
-  either), FAT16/FAT32, GPT, NTFS (read, write and format: drive C: with
-  file ACLs and hard links, and other drives); Intel e1000/e1000e network cards (82540EM, 82574L
-  and the I219 that Intel PCs have built in) and virtio-net; Intel High Definition Audio (playback
-  and recording, laptop controllers with the audio DSP on included, the
-  speakers turned off while headphones are plugged in; a laptop's digital
-  microphones through Sound Open Firmware on Intel's audio DSP) with a kernel mixer;
-  PS/2 keyboards and mice; I2C-HID touchpads on Intel's LPSS I2C
-  controllers (found through ACPI; tap to click, two-finger tap for the
-  right button and two-finger scrolling as mouse-wheel input; read when
-  their interrupt pin on Intel's GPIO controller fires); USB (xHCI, EHCI, OHCI and UHCI controllers, any
-  number of each) with hubs and HID keyboards (lock-key LEDs and media
-  keys included), mice (five buttons and both wheels), tablets, pens
-  (pressure, X/Y tilt, barrel rotation, barrel buttons and eraser, for
-  Wintab and as `WM_POINTER` pen messages) and
-  multi-touch screens (report protocol), USB sticks (FAT and NTFS, as
-  the next drive letter, hot-plugged) and USB speakers, headsets and
-  microphones (USB Audio Class 1 and 2 over isochronous transfers, at the
-  device's own sampling rate and channel count, which the mixer runs at,
-  asynchronous devices' rate feedback followed, played on and recorded
-  from as soon as they are plugged in, or chosen in Settings' Sound page,
-  each with its own volume; the choice and the levels are kept across
-  restarts), and game controllers (wired Xbox 360 and Xbox One
-  controllers, with their motors, and HID game pads, for XInput,
-  DirectInput 8, Raw Input and `hid.dll`); a Plug and Play device tree
-  of the PCI and USB devices (Windows instance, hardware and compatible
-  IDs, setup classes and drivers; arrivals and removals as events, an
-  unplugged device kept as not present; walked with cfgmgr32, setupapi
-  and `pnputil /enum-devices`); virtio multi-touch screens,
-  pens (pressure, tilt, rotation) and tablets; CMOS clock; a VBE display
-  driver for QEMU's standard VGA, QXL, virtio-vga and VMware adapters,
-  bochs-display and VirtualBox (resolutions switched at run time, page
-  flipping, the mode set again after sleep and kept across restarts; more
-  adapters, such as QEMU's secondary-vga, are more monitors of one
-  desktop, arranged in Settings, each able to show DPI-aware programs
-  its own DPI) and a Cirrus GD5446 one, with
-  the UEFI framebuffer as the fallback; a virtio GPU driver for
-  QEMU's virtio-vga and virtio-gpu-pci, whose outputs are several
-  monitors on one card, plugged in and unplugged while NovaOS runs, and
-  which on a 3D one (`virtio-vga-gl`) gives Mesa's Venus and virgl (App
-  Store) their contexts, host-visible blobs, 3D resources, transfers and
-  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and their
-  frames (OpenGL's, and Vulkan's swapchains, so DXVK's and VKD3D-Proton's)
-  are written into the screen there, on any monitor and at scale 2 too,
-  while their window is alone on it (direct presentation; DirectComposition's
-  GPU swap chains, WebView2's, go the same way through `dcomp.dll`); ACPI power-off, reset, power buttons,
-  sleep (S3, or low-power S0 idle on firmware without it), batteries and
-  AC adapters, the lid, thermal zones, wake devices and PCI interrupt
-  routing (AML interpreted by uACPI, with the SCI a real interrupt
-  through the I/O APIC), and the embedded controller laptops keep their
-  lid and battery behind.
+- **Built-in drivers** (`kernel/drivers/`, `kernel/hal/`, `kernel/fs/`):
+  NovaOS's own drivers, compiled into the kernel; they play the part of
+  Windows' inbox drivers ([drivers.md](drivers.md), [hardware.md](hardware.md)).
+  - **Storage**: AHCI SATA and NVMe disks (NovaOS installs to and boots
+    from either); GPT; FAT16/FAT32; NTFS with read, write and format (drive
+    C: with file ACLs and hard links, and other drives as D:, E:, ...),
+    repaired by NovaOS itself after a power cut.
+  - **Network**: Intel e1000/e1000e (82540EM, 82574L and the I219 built
+    into Intel PCs) and virtio-net.
+  - **Sound**: Intel High Definition Audio, playback and recording, with
+    headphone detection; a laptop's digital microphones through Sound Open
+    Firmware on Intel's audio DSP; a kernel mixer.
+  - **USB**: xHCI, EHCI, OHCI and UHCI controllers, any number of each,
+    with hubs; HID keyboards, mice, tablets, pens (pressure, tilt, barrel
+    rotation and buttons, eraser) and multi-touch screens; mass storage
+    (FAT and NTFS sticks, hot-plugged as the next drive letter); USB Audio
+    Class 1 and 2 speakers, headsets and microphones; wired Xbox 360 and
+    Xbox One controllers and HID game pads (for XInput, DirectInput 8, Raw
+    Input and `hid.dll`).
+  - **Other input**: PS/2 keyboards and mice; I2C-HID touchpads on Intel's
+    LPSS I2C controllers, found through ACPI and read on their GPIO
+    interrupt (tap to click, two-finger right click and scrolling);
+    virtio multi-touch screens, pens and tablets.
+  - **Display**: a VBE "DISPI" driver for QEMU's standard VGA, QXL,
+    virtio-vga, VMware and bochs-display adapters and VirtualBox's VBoxVGA
+    (modes switched at run time, page flipping, more adapters as more
+    monitors); a Cirrus GD5446 driver; a virtio-gpu driver
+    (see Graphics below); the UEFI framebuffer as the fallback.
+  - **Platform**: ACPI through uACPI's AML interpreter (power-off, reset,
+    power and sleep buttons, S3 sleep or low-power S0 idle, batteries and
+    AC adapters, the lid, thermal zones, wake devices, PCI interrupt
+    routing, the embedded controller), the I/O APIC, the HPET and the CMOS
+    clock.
+  - **Plug and Play**: a device tree of the PCI and USB devices with
+    Windows instance, hardware and compatible IDs, setup classes and
+    drivers, arrivals and removals as events, walked with cfgmgr32,
+    setupapi and `pnputil /enum-devices`.

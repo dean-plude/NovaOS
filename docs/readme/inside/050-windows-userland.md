@@ -1,1 +1,1 @@
-- **Windows userland** (`userland/`): about 35 system DLLs written from scratch, x64 and x86, with `ntdll`, `kernel32`, `user32`, `gdi32`, COM, the Windows Installer and a C runtime; text, 2D drawing, ICU and media support are part of it.
+- **Windows userland** (`userland/`): about 115 system DLLs written for NovaOS, 64- and 32-bit, from `ntdll`, `kernel32`, `user32` and `gdi32` to COM, the C and C++ runtimes, Windows Installer, Schannel, DirectWrite, Direct2D and ICU.

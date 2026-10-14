@@ -1,7 +1,10 @@
 # The Intel GPU, the Windows 11 way
 
-Status: design, decided 2026-10-13 (roadmap step 25.3).  Nothing here is
-built yet; the steps at the end each become one pull request.
+Status: design, decided 2026-10-13 (roadmap step 25.3).  Step 1 of the
+steps at the end, the display-only WDDM host (`\Device\DxgKrnl`, tested
+with NovaOS's `wddmdod.sys` on QEMU's standard VGA), is merged.  Steps 2
+to 5 are not built.  Intel's driver has not been tried: it needs step 2
+and the T14, and nothing has run on the T14 yet.
 
 **The decision.**  NovaOS drives the ThinkPad T14 Gen 4's Intel Iris Xe
 with **Intel's own Windows display driver**, unchanged, through a WDDM
@@ -29,7 +32,7 @@ point at which it would be taken written down below.
 | Memory | unified: the GPU uses system RAM through its own page tables (GGTT, per-process PPGTT); no VRAM |
 | Panel | 14" 1920x1200 eDP; outputs on HDMI 2.0 and two USB-C/Thunderbolt 4 ports (step 25.5) |
 | Firmware the GPU needs | GuC (scheduling), HuC (media), DMC (display power states); Linux's names `adlp_guc_70.bin`, `tgl_huc.bin`, `adlp_dmc.bin` ship in NovaOS's firmware set (#341); Intel's Windows package carries its own copies |
-| Today on NovaOS | the UEFI GOP framebuffer in the firmware's mode: one mode, no flipping, no second monitor; 3D runs on the CPU (llvmpipe, lavapipe) |
+| Today on NovaOS | the UEFI GOP framebuffer in the firmware's mode: one mode, no flipping, no second monitor; 3D runs on the CPU (llvmpipe, lavapipe).  The display-only WDDM host (step 1) exists but no Intel driver runs on it yet |
 
 ## The choices
 
@@ -101,7 +104,8 @@ optional features it uses).
   `DxgkDdiStopDeviceAndReleasePostDisplayOwnership` hands it back on
   failure or removal, so NovaOS always has a screen (Windows' Basic
   Display Driver plays this part; NovaOS's GOP back end does here).
-- **A WDDM back end in `kernel/hal/display.c`**, next to Bochs, Cirrus,
+- **A WDDM back end in `kernel/hal/display.c`** (built in step 1 as
+  `DRV_WDDM`, for one source and one output), next to Bochs, Cirrus,
   virtio-gpu and GOP: heads are the KMD's VidPN targets (from
   `DxgkDdiQueryChildRelations` and `DxgkDdiQueryChildStatus`, with each
   monitor's EDID from `DxgkDdiQueryDeviceDescriptor`), and their modes
@@ -213,12 +217,17 @@ QEMU has no Intel GPU, so the host is tested on QEMU with NovaOS's own
 test miniports, and Intel's driver only on the T14 (Dean's hand checks in
 [hardware.md](../hardware.md)):
 
-- **`wddmdod.sys`**, a display-only miniport for QEMU's Bochs VBE adapter,
+- **`wddmdod.sys`** (built, step 1; `tools/drivertest/wddmdod.c`), a
+  display-only miniport for QEMU's standard VGA (the Bochs VBE adapter),
   modelled on Microsoft's MIT-licensed KMDOD sample
-  (Windows-driver-samples, `video/KMDOD`): takes the display over from the
-  built-in driver, offers several modes, and passes the display layer's
-  mode, flip and multi-monitor checks.
-- **`wddmtest.sys`**, a render miniport whose "GPU" is a kernel thread
+  (Windows-driver-samples, `video/KMDOD`).  The devices suite's `wddm`
+  boot installs it with `pnputil`; it takes the display over from the
+  built-in driver, offers the modes that fit the adapter's memory, has
+  `disptest` change its mode as Settings does, gives the screen back when
+  disabled, and starts again at boot.  It has one output and no
+  interrupts, so flips, vertical blanks and more monitors are not tested
+  by it.
+- **`wddmtest.sys`** (planned, step 3), a render miniport whose "GPU" is a kernel thread
   executing a tiny command format in software: exercises allocations,
   GPU virtual addresses, paging buffers, submission, fences, preemption
   and TDR on QEMU, with a test program driving it through `D3DKMT*`.
@@ -239,6 +248,8 @@ Each is one pull request off main.
    in `kernel/hal/display.c`, `tools/drivertest/wddmdod.c`, tested by the
    devices suite's "wddm" boot (`tests/selftest/devices/wddm`; see
    [HISTORY](../HISTORY.md#a-windows-display-driver-on-the-boot-display)).
+   Not in step 1: the render DDIs, interrupts and vertical blanks, power
+   states, more than one source, and monitor interfaces.
 2. **Intel's driver starts on the T14 and changes the panel's mode.**  The
    full `DxgkInitialize` path, `DxgkDdiStartDevice` with the
    `DXGKRNL_INTERFACE` callbacks, adapter queries, VidMm's segments and

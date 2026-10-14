@@ -1,33 +1,49 @@
 # NovaOS desktop implementation
 
-`novaos-2030-reference.html` preserves the user-supplied prototype as a
-design reference. The operating system renders its desktop through the
-native window manager and GDI; it does not load the prototype's remote
-scripts, fonts, images or API calls.
+The default desktop theme, **Aurora**, adapts a user-supplied HTML
+prototype, kept unchanged as a design reference in
+[novaos-2030-reference.html](novaos-2030-reference.html). NovaOS does not
+run the prototype: the desktop is drawn natively by the kernel's window
+manager and software GDI (`kernel/wm/desktop.c`, `kernel/wm/aurora_workspace.h`,
+`kernel/wm/wm.c`), and none of the prototype's remote scripts, fonts,
+images or API calls are loaded.
 
-| Prototype feature | Native implementation |
+## From prototype to native code
+
+| Prototype feature | What NovaOS does |
 |---|---|
-| City wallpaper and translucent surfaces | Bundled PNG, native blur, dark blue tint, rounded edges and shadows |
-| Home / Apps / Create / Explore | Explorer / Start launcher / Notepad / NetSurf |
-| Pinned app group | Notes, Calendar, Photos, Terminal, Settings; installer on live media |
-| Global search | Actual app, file and settings search, Ctrl+K and Win+S |
-| Clock, date and profile | Local system time and configured user name |
-| Dock hover and running indicators | Raised hover appearance, stable hit targets, real window activation and task indicators |
-| Explorer preview | File thumbnail, real size/type, PNG dimensions, folder item count, Open and Copy path |
-| Calendar | Actual local month and today, leap-year handling, opens native Calendar |
-| Window dragging, resizing and controls | Existing native window manager |
-| AI chat / analysis / automation | Requires an implemented assistant service and account configuration; not supplied by the native shell |
-| Weather, CPU/GPU gauges, music and update notices | Prototype demo values and simulated actions; not displayed as live OS results |
-| Spaces, cloud drives, mail and canvas | Separate features still to implement |
+| City wallpaper | `C:\Pictures\Aurora-Sunrise.png` (from `userland/samples/`), decoded once; a procedural sunrise (`kernel/wm/aurora.h`) if the file is missing |
+| Translucent surfaces | Blurred, tinted "glass" panels and window frames with rounded corners and drop shadows |
+| Home / Apps / Create / Explore | File Explorer / the Start menu / Notepad / Firefox |
+| Pinned apps | Notes (Notepad), Calendar, Photos, Terminal; then Settings, and Install NovaOS on the live media |
+| Global search | The Start menu's search over apps, programs, settings pages, folders and files; Ctrl+K (Aurora only) and Win+S open it |
+| Clock, date and profile | The local time and date, and the configured user name and initials (opens Settings) |
+| Calendar card | The current month with today marked, leap years included; opens the Calendar app |
+| "Your workspace" card | A greeting by time of day and shortcuts to File Explorer, Notepad and Firefox |
+| Dock hover and running indicators | The dock's hover state, pinned apps and running-window indicators |
+| Explorer preview | A preview pane: thumbnail, size and type, PNG dimensions, a folder's item count, **Open** and **Copy path** |
+| Window dragging, resizing and controls | The existing window manager |
+| AI chat, analysis and automation | Not built: needs an assistant service and account set-up that NovaOS does not have |
+| Weather, CPU/GPU gauges, music and update notices | Not shown: the prototype's values are demo data |
+| Spaces, cloud drives, mail and canvas | Not built |
 
-The native code keeps the original themes and uses a compact icon-grid
-layout below 900x640 logical pixels. Explorer hides its preview below a
-902x400 client size. No mock conversations, random utilization values or
-fictional update notifications are injected into the OS.
+No mock conversations, made-up usage figures or invented update notices
+are shown anywhere in the OS.
 
-The rendering preview in `../screenshots/aurora-preview.png` uses the
-native GDI, font, icon, window-frame and Explorer painters on a host
-buffer, with file-system stubs and the actual bundled wallpaper file.
-Local compile, manifest, discovery, documentation and layout/preview
-interaction checks pass. A complete kernel build, QEMU boot and the
-existing graphics self-tests remain necessary before merging.
+## Layout rules
+
+- The Aurora workspace (sidebar, search bar, calendar and workspace cards)
+  appears only with the Aurora theme on a screen of at least 900x640
+  logical pixels. Smaller screens, and the other wallpaper themes (Settings
+  > Personalization), get the classic grid of desktop icons.
+- File Explorer shows its preview pane only with the Aurora theme and a
+  client area at least 902 pixels wide and 400 high.
+
+## Screenshot
+
+[`../screenshots/aurora-preview.png`](../screenshots/aurora-preview.png)
+was rendered when the theme was added, with the native GDI, font, icon,
+window-frame and Explorer painters on a host buffer and the real wallpaper
+file. It is a preview of the design, not a capture of a running system
+([screenshots/README.md](../screenshots/README.md) lists the screenshots
+and how each was taken).

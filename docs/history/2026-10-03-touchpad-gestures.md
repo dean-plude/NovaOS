@@ -28,7 +28,7 @@ Windows precision touchpad does on Windows.
   takes (or, in a first round, refuses) touchpad mode and is fed finger
   reports for each gesture; the core test `touchpad gestures` checks the
   clicks and wheel notches that come out.  The hand check on the T14 is
-  in [hardware.md](../hardware.md).
+  in [hardware.md](hardware.md).
 
 Not yet: tap-and-drag, scrolling that coasts on after the fingers lift,
 three- and four-finger gestures, and wheel deltas finer than a notch.

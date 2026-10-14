@@ -1,15 +1,24 @@
 # NovaOS — Feature History, Phase by Phase
 <!-- The regions between "BEGIN generated" and "END generated" markers are built from fragment files by tools/docgen.py: edit those files, not the regions (CONTRIBUTING.md). -->
 
-This is the detailed record of what each phase of NovaOS added, in the
-order it landed.  The [README](../README.md) has the short version: what
-runs today, how to build it, and where the project is going.
+This is the detailed record of what NovaOS gained, in the order it
+landed. The [README](../README.md) has the short version: what NovaOS is,
+how to try and build it, and where it is going. Open and planned work is
+in [ROADMAP.md](ROADMAP.md).
 
-Each section describes the system as that phase left it.  Where a "Not
-yet" item was done by a later phase, a note says which; everything else
-under "Not yet" is still open (see [ROADMAP.md](ROADMAP.md)).
+**How it is organised.** Each section is one fragment file in
+[`history/`](history/), and `tools/docgen.py` joins them in file-name
+order. The early phases (1 to 17 and the work around them) come first,
+numbered `0010-` to `0420-`; every later entry is named by the date it
+landed (`2026-10-02-` onwards), so the rest reads as a dated log. A new
+entry is a new file; the region below is never edited by hand
+(CONTRIBUTING.md).
 
-Contents:
+**Reading old sections.** Each section describes the system as that
+change left it. Its "Not yet" list was true then; many of those items
+were done later, so check [ROADMAP.md](ROADMAP.md) for what is still open.
+
+Early phases:
 [1 Boot](#phase-1--boot--kernel-foundation) ·
 [2 NT kernel](#phase-2--nt-kernel-personality) ·
 [3 I/O and PE loader](#phase-3--io-sections-and-pe-loader) ·
@@ -35,7 +44,21 @@ Contents:
 [MSYS2](#the-msys2-runtime-shexe-clone-push) ·
 [Runtimes](#language-runtimes-java-net-nodejs-python) ·
 [Installing NovaOS](#installing-novaos-on-a-disk) ·
-[Sound](#sound-intel-hd-audio-winmm-and-wasapi)
+[Sound](#sound-intel-hd-audio-winmm-and-wasapi) ·
+[Boot CI](#regression-gate-boot-ci-on-every-pull-request) ·
+[Nightly corpus](#nightly-app-corpus) ·
+[17 Kernel and API correctness](#phase-17-kernel-and-api-correctness)
+
+Later landmarks:
+[20 Common dialogs](#phase-20-common-dialogs-and-portable-programs) ·
+[21.1 Reference machine](#a-reference-machine-for-real-hardware-phase-211) ·
+[22.5 Releases from a tag](#releases-from-a-version-tag-phase-225) ·
+[Signed update channel](#signed-update-channel) ·
+[Direct3D 12](#direct3d-12-through-vkd3d-proton) ·
+[Direct presentation](#direct-presentation-on-the-virtio-gpu) ·
+[First Windows kernel driver (30.1)](#the-first-windows-kernel-mode-driver) ·
+[WDDM display-only host](#a-windows-display-driver-on-the-boot-display) ·
+[ConPTY end to end (26.2)](#conpty-end-to-end)
 
 <!-- BEGIN generated:history -->
 
@@ -2857,7 +2880,7 @@ built-in apps scroll the same way.
 The ThinkPad T14 Gen 4's built-in microphones are digital microphones on
 Intel's audio DSP, not on the Realtek codec, so Phase 21.4 left them
 silent.  This is the first of three steps to record from them
-([hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)).
+([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
 
 - **NHLT.**  The ACPI NHLT table describes the microphones: the endpoint
   of link type PDM that records, its microphone array type (two or four
@@ -2898,7 +2921,7 @@ silent.  This is the first of three steps to record from them
 
 The second of three steps to the ThinkPad T14 Gen 4's built-in
 microphones ([part 1](#the-audio-dsp-boots-sound-open-firmware-the-t14s-microphones-part-1),
-[hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)):
+[hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)):
 once Sound Open Firmware runs on the audio DSP, NovaOS has it record
 the digital microphones into memory it owns.
 
@@ -2933,7 +2956,7 @@ the digital microphones into memory it owns.
 
 The last of three steps to the ThinkPad T14 Gen 4's built-in
 microphones ([part 2](#the-audio-dsp-records-the-t14s-microphones-part-2),
-[hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)):
+[hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)):
 what the audio DSP records reaches programs.
 
 - **Microphone Array (DSP).**  Once the capture pipeline runs,
@@ -4261,7 +4284,7 @@ shaders), so it still needs the App Store's Mesa 3D.
 Phase 21's fourth step is the ThinkPad T14 Gen 4's sound and touchpad.
 Neither can be emulated by QEMU, so each code path has a QEMU-side check
 against a modelled device, and the machine itself gets a hand check
-([hardware.md](../hardware.md)).
+([hardware.md](hardware.md)).
 
 - **HD Audio controllers with the DSP on.**  Intel's controllers since
   Skylake sit beside an audio DSP; with the DSP enabled in the firmware,
@@ -5635,7 +5658,7 @@ that was tested.
 Dean asked for games, starting with Roblox.  Roblox's own installer
 (`RobloxPlayerInstaller.exe` from roblox.com) now installs the client on
 NovaOS; the client itself does not get past its Hyperion anti-cheat
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).
 Roblox is in the App Store (Media), and the nightly corpus installs it
 (`tests/appcorpus/090-roblox.py`; the installer downloads from Roblox's
 servers, so the corpus needs the internet for it).
@@ -6161,7 +6184,7 @@ Windows precision touchpad does on Windows.
   takes (or, in a first round, refuses) touchpad mode and is fed finger
   reports for each gesture; the core test `touchpad gestures` checks the
   clicks and wheel notches that come out.  The hand check on the T14 is
-  in [hardware.md](../hardware.md).
+  in [hardware.md](hardware.md).
 
 Not yet: tap-and-drag, scrolling that coasts on after the fingers lift,
 three- and four-finger gestures, and wheel deltas finer than a notch.
@@ -6980,7 +7003,7 @@ functions that describe the processor's save state
 
 `aligntest` checks all of it.  With the fixup, Hyperion gets past this
 check and runs further into its start-up before stopping at its next step
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).  NovaOS
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).  NovaOS
 satisfies the check by behaving as Windows does; it does not change Roblox
 or defeat the check.
 
@@ -7039,7 +7062,7 @@ corpus takes ScummVM's Windows installer (Inno Setup: a 32-bit setup
 program that installs the 64-bit ScummVM) and the freeware floppy release
 Revolution and ScummVM publish.  ScummVM installs silently, starts the
 game, Esc skips the intro and a click walks Robert Foster along the
-gantry of the first scene ([compatibility.md](../compatibility.md)).
+gantry of the first scene ([compatibility.md](compatibility.md)).
 
 - **What ScummVM imports**: `wldap32.dll` (new, `userland/wldap32`: LDAP
   sessions made as Windows makes them; binds and searches answer
@@ -7085,7 +7108,7 @@ switches the display to 800x600 with `ChangeDisplaySettingsEx`
 (`CDS_FULLSCREEN`) and draws with Direct3D 9 in exclusive full screen
 (`Windowed = FALSE`), which NovaOS's `d3d9.dll` hands to DXVK on Mesa 3D's
 Vulkan.  When the game ends, the display goes back to its own mode
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 Two NovaOS gaps stopped it:
 
@@ -7556,7 +7579,7 @@ start: Qt WebEngine imports `d3d9.dll`, and NovaOS had one only once DXVK
 was installed from the App Store.  NovaOS now has its own, as it has for
 `d3d11.dll` and `dxgi.dll`.  The client now stops on Qt WebEngine's next
 imports (`bthprops.cpl`, `d3d12.dll`, `winusb.dll`)
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **`d3d9.dll`** (`userland/d3d9`, x64 and x86): every export Windows'
   `d3d9.dll` has.  With DXVK installed, which now installs its `d3d9` as
@@ -7615,7 +7638,7 @@ headers.
   Under emulation it starts its GPU, network and storage processes,
   creates Steam's first browser and launches its page process, which is
   as far as the corpus test's time reaches
-  ([compatibility.md](../compatibility.md#steam)).
+  ([compatibility.md](compatibility.md#steam)).
 
 ## Event tracing: controllers and consumers with no sessions
 
@@ -7642,7 +7665,7 @@ process starts, and when that fails watches processes another way.
 
 Steam's service now updates itself once, starts under the control
 manager, installs its helper files and keeps running.  Steam itself still
-stops where its browser does ([compatibility](../compatibility.md#steam)).
+stops where its browser does ([compatibility](compatibility.md#steam)).
 
 ## A finished program's files are closed before its parent wakes
 
@@ -7672,7 +7695,7 @@ functions its DLLs lacked.  All of them are there now, each answering as
 Windows does on a PC without the hardware it reaches, and the client loads
 (89 modules) and runs until Qt's Windows platform plugin asks for a
 Windows Runtime class NovaOS does not have yet
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **`bthprops.cpl`** (x64 and x86; a DLL with a Control Panel item's
   name, which a DLL's `dll.json` now gives as `"file"`): no Bluetooth
@@ -7761,7 +7784,7 @@ Windows does, and nothing in GOG GALAXY is skipped or changed.
   stops itself after 30 idle seconds, as on Windows.  The client shows its
   NTFS warning; past it, it finishes initialising and then faults inside
   `RtlVirtualUnwind` while a C++ exception is dispatched
-  ([compatibility.md](../compatibility.md)).
+  ([compatibility.md](compatibility.md)).
 
 ## GOG GALAXY: exceptions thrown inside an MSVC catch block
 
@@ -7802,7 +7825,7 @@ faulted inside `RtlVirtualUnwind` (the client, after its NTFS warning).
   with "Could not get handle for shared context" (Qt WebEngine needs a
   shared OpenGL context; NovaOS's `CreateDXGIFactory2` also says
   `E_NOINTERFACE`).  The service still fails the client's "write Vulkan
-  registry keys" request ([compatibility.md](../compatibility.md)).
+  registry keys" request ([compatibility.md](compatibility.md)).
 
 ## Direct3D 11 textures and fences shared between devices, on lavapipe
 
@@ -7813,7 +7836,7 @@ Mesa 3D, DXVK runs on lavapipe, which has no Windows build of the Vulkan
 extensions DXVK shares textures with, so Chromium's compositor lost its
 context and the client stopped.  NovaOS's Vulkan loader now provides them,
 and the client gets past that point
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **Shared memory** (`userland/vulkan-1/shared.c`): for a driver that can
   use memory it is handed (`VK_EXT_external_memory_host`) but lacks
@@ -7886,7 +7909,7 @@ and Qt WebEngine's shared context had no WGL context behind it.
   DXVK, but its compositor shares D3D11 textures between devices, which
   DXVK on lavapipe cannot (`VK_KHR_external_memory_win32`), so its
   context is lost and Chromium stops on a check
-  ([compatibility.md](../compatibility.md)).  Without Mesa 3D, Qt still
+  ([compatibility.md](compatibility.md)).  Without Mesa 3D, Qt still
   finds only OpenGL 1.1, as on a PC with no OpenGL driver.
 
 ## The Windows Runtime's UISettings, for Qt's Windows platform plugin
@@ -7901,7 +7924,7 @@ installs GOG GALAXY's service and exits normally, and the client opens its
 own window (its warning that drive C: is not NTFS).  Past that it stops
 because its service, `GalaxyClientService.exe`, ends at start-up
 ("abnormal program termination"), and the client then faults
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **`UISettings`** (`userland/ole32/uisettings.c`): activates through its
   factory's `ActivateInstance` and through `RoActivateInstance`, which now
@@ -8203,7 +8226,7 @@ official zip).  SDL 1.2 draws with GDI (its `windib` driver blits a 16-bit
 DIB section into the window), and its full screen ('f' anywhere in the
 game) switches the display to 640x480 with `ChangeDisplaySettings`,
 changes the window's style to `WS_POPUP` with `SetWindowLong` and places
-it over the display with `SetWindowPos` ([compatibility.md](../compatibility.md)).
+it over the display with `SetWindowPos` ([compatibility.md](compatibility.md)).
 
 Two NovaOS gaps stopped it:
 
@@ -8384,7 +8407,7 @@ code does not trust the stubs: it works out a service's number itself, the
 way the kernel assigns them, and issues its own `syscall` instructions.
 Roblox's Hyperion (`RobloxPlayerBeta.dll`) does this, and on NovaOS every
 number it worked out came out as 0, so the client crashed at start
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).
 
 ntdll now has a stub for every Windows 10 1903 service, laid out in
 service-number order with an unwind entry each, the way Windows' ntdll is
@@ -8450,7 +8473,7 @@ its free and open-source engine.  It installs from the App Store (the
 official 64-bit zip, which carries the freeware game data) and draws
 through SDL2's Direct3D 9 renderer, SDL's first choice on Windows, which
 NovaOS's `d3d9.dll` hands to DXVK on Mesa 3D's Vulkan (llvmpipe)
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 It needed no NovaOS changes.  What the corpus test now checks, in one run:
 
@@ -8613,7 +8636,7 @@ HID devices in the list now.
 Teeworlds' menus now follow the mouse: with its `inp_grab 1` setting SDL
 2.0.8 reads Raw Input in relative mouse mode, and the app corpus's
 Teeworlds run opens Settings with a click
-([compatibility.md](../compatibility.md)).  Its default, `inp_grab 0`,
+([compatibility.md](compatibility.md)).  Its default, `inp_grab 0`,
 has SDL recentre the pointer with `SetCursorPos` after each move instead,
 which NovaOS does not do yet, so there the menu cursor still sticks at
 the screen's edge.
@@ -8679,7 +8702,7 @@ accepts the `+` part.
 A system follows `main` with `update channel
 https://github.com/dean-plude/os/releases/download/latest/novaos-update.txt`;
 the default channel still follows GitHub's "Latest" mark, which only
-tagged releases carry ([updates.md](../updates.md#the-rolling-builds-channel)).
+tagged releases carry ([updates.md](updates.md#the-rolling-builds-channel)).
 
 The devices suite's `update` boot checks the order first: a channel of the
 build's own version is up to date, a `+dev.` build of it is offered, and
@@ -8808,7 +8831,7 @@ named, so whoever could change the release page could change the update.
   workflow signs with the Actions secret `NOVAOS_UPDATE_SIGNING_KEY`;
   without it the channel is published unsigned with a warning, and a
   secret that does not match the built-in key stops the release
-  ([releasing.md](../releasing.md#the-update-signing-key)).
+  ([releasing.md](releasing.md#the-update-signing-key)).
 - **Test**: the devices suite's update boot signs its channels with a key
   pair kept only for the tests
   (`tests/selftest/devices/update/TEST-ONLY-signing-key.txt`), whose
@@ -8887,7 +8910,7 @@ With the three fixed, the browser no longer stops, and about half an hour
 in Steam opens its first window of its own (an "Unexpected Transport
 Error" dialog whose text is not drawn yet); the browser's network process
 still restarts every minute or two
-([compatibility.md](../compatibility.md#steam)).
+([compatibility.md](compatibility.md#steam)).
 
 The "Thread creation failed" messages seen once in `steam.exe`'s log did
 not come back in about three hours of runs, and NovaOS never logged a
@@ -8952,7 +8975,7 @@ needed, each a NovaOS gap:
 
 The new self-test `chrometest` checks each of these on 64- and 32-bit.
 How far Steam's browser gets now is in
-[compatibility.md](../compatibility.md#steam).
+[compatibility.md](compatibility.md#steam).
 
 ## Services: Steam's service starts under the control manager
 
@@ -8986,7 +9009,7 @@ service updated itself forever.
 
 Steam's service now stops on its next missing piece: `SteamService.dll`
 calls `StopTraceA`, and NovaOS has no event-tracing controller functions
-yet ([compatibility](../compatibility.md#steam)).
+yet ([compatibility](compatibility.md#steam)).
 
 ## Steam: the client no longer stops on wsock32's AcceptEx
 
@@ -9007,7 +9030,7 @@ client was gone and shut down cleanly ("Webhelper closed"), and the next
   Windows' `wsock32` forwards them there.
 - **Steam** now keeps running: the browser starts its first page and
   then stops in DirectWrite, which is the next step
-  ([compatibility.md](../compatibility.md#steam)).
+  ([compatibility.md](compatibility.md#steam)).
 - **Test**: `overlaptest` looks the three up in `wsock32` by ordinal and
   by name and runs its pending `AcceptEx` and `GetAcceptExSockaddrs`
   through `wsock32`'s, in 64 and 32 bits.
@@ -9019,7 +9042,7 @@ installer (`SteamSetup.exe`) now installs on NovaOS, and on its first
 start Steam downloads its client over HTTPS, updates itself to the 64-bit
 client, checks every file and starts it with `SteamService` and its
 Chromium browser, `steamwebhelper.exe`.  The browser does not open the
-login window yet ([compatibility.md](../compatibility.md#steam)).  Steam
+login window yet ([compatibility.md](compatibility.md#steam)).  Steam
 is in the App Store (Media), and the nightly corpus installs it and lets
 it update (`tests/appcorpus/092-steam.py`; it downloads from Valve's
 servers, so the corpus needs the internet for it).
@@ -9071,7 +9094,7 @@ The third free game plays, and this time its sound is checked: Teeworlds
 (its official 64-bit zip), starts in full screen on Mesa 3D's OpenGL and
 plays its menu music through NovaOS's sound card while it goes through its
 first-start questions to its start menu
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 - **The dock steps aside for full-screen programs**: Teeworlds starts in
   full screen, as most games do, and NovaOS's dock and tray were drawn
@@ -9156,7 +9179,7 @@ now, and the touchpad is read when its pin fires.
   checks this and the refusals.
 
 None of this has run on a T14 yet; the hand check is step 5 in
-[hardware.md](../hardware.md#checking-audio-and-the-touchpad-on-the-t14-step-214).
+[hardware.md](hardware.md#checking-audio-and-the-touchpad-on-the-t14-step-214).
 
 ## WebView2: Microsoft Edge Update runs its install step
 
@@ -9164,7 +9187,7 @@ Roblox's login page needs the Microsoft Edge WebView2 runtime, whose
 installer is Microsoft Edge Update (32-bit).  It used to stop at start on a
 function NovaOS lacked; it now starts, reads its policies and runs its
 install step, which ends at the next missing piece, MSXML 6
-([compatibility.md](../compatibility.md#webview2)).  The nightly corpus runs
+([compatibility.md](compatibility.md#webview2)).  The nightly corpus runs
 the offline installer (`tests/appcorpus/095-webview2.py`).
 
 - **Task Scheduler 2.0** (`taskschd.dll`, the `TaskScheduler` class):
@@ -9227,7 +9250,7 @@ cause (it fails later and the browser falls back to software).
   another process.  NovaOS's windows belong to one process each (user32
   keeps the window tree in the process), so both fail with
   `ERROR_INVALID_WINDOW_HANDLE` and the controller with `0x80070578`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).
 
 ## WebView2: the runtime installs (drive C:'s root permissions)
 
@@ -9298,7 +9321,7 @@ Windows does.
   (Chromium's `mini_installer` and `setup.exe`), which cannot map its
   archive into memory ("Can't map file to memory: Incorrect function") and
   then stops on the missing `wer.dll`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).
 
 ## WebView2: the runtime's setup unpacks its archive; wer.dll
 
@@ -9339,7 +9362,7 @@ does.
   `C:\AppData\Local\Microsoft\EdgeWebView\Application`, then cannot make
   the `SetupMetrics` folder there ("Access is denied") and rolls the
   install back (exit code 521)
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).
 
 ## WebView2: the runtime's browser process starts
 
@@ -9398,7 +9421,7 @@ NovaOS lacked; nothing in the runtime is changed.
   Direct3D 11 adapter for ANGLE and exits, the first browser process
   ends and the loader starts another, and `CreateCoreWebView2Controller`
   fails with `RPC_E_DISCONNECTED`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).
 
 ## WebView2: Edge Update accepts Microsoft's signature on the runtime
 
@@ -9433,7 +9456,7 @@ changed: the check now gets Windows' answer.
   fails with `0x80070003` because Edge Update's own background update
   pass, running at the same time, does not see the install worker and
   uninstalls Edge Update under it
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).
 
 ## Built-in windows open in the same place every time
 
@@ -9509,7 +9532,7 @@ not open to programs and became an access violation they could catch.
 With all of this Hyperion goes on to read the firmware's SMBIOS table and
 the display devices and reports "Virtual Machine detected", the right
 answer under QEMU: Roblox refuses virtual machines on Windows too
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).  NovaOS
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).  NovaOS
 behaves as Windows does; it does not change Roblox, defeat its checks or
 hide the virtual machine.  `gatetest` covers the selectors, the far jumps
 to and from 32-bit code, the wrapped fetch and its CONTEXT, the calling
@@ -10066,7 +10089,7 @@ the mouse's HID report descriptor and reports go through the HID decoding
 USB and I2C mice use, as an absolute pointer.  The device poll thread reads
 both channels' rings.  A host test runs the ring buffer and both protocols
 without a VM.  Storage, network and the synthetic video device have no
-driver yet ([hyperv.md](../hyperv.md)).
+driver yet ([hyperv.md](hyperv.md)).
 
 ## USB devices that are slow to answer
 
@@ -11027,7 +11050,7 @@ graphics they ask wgpu for:
   shader model 5.1 sampler arrays wgpu's HLSL uses.  That compiler feature
   is the next fix for all seven.
 
-Their ratings are in [compatibility.md](../compatibility.md).
+Their ratings are in [compatibility.md](compatibility.md).
 
 ## The ArtCraft apps in the App Store
 
@@ -11107,7 +11130,7 @@ Not yet run on real hardware.
 
 ## Compatibility ratings, ProtonDB-style
 
-[docs/compatibility.md](../compatibility.md) now rates every program and
+[docs/compatibility.md](compatibility.md) now rates every program and
 game that has been tried the way Wine's AppDB and ProtonDB do: Platinum
 (works out of the box), Gold (works after a named step, such as installing
 "Mesa 3D" and "DXVK" from the App Store), Silver (a minor known problem),
@@ -11350,7 +11373,7 @@ and staged; a second search finds the package already in the store.
 ## Windows' driver signing policy
 
 Step 30.7 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): the interim
+[design/windows-drivers.md](design/windows-drivers.md)): the interim
 "test signing or nothing" gate of step 30.1 is replaced by the policy
 Windows 11 enforces, at load and at install, with nothing bypassed.
 
@@ -11449,7 +11472,7 @@ NovaOS's `mmdevapi.dll` already answers every call Godot makes.
 ## KMDF: Microsoft's driver framework, built from its own source
 
 Step 30.4 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): most Windows
+[design/windows-drivers.md](design/windows-drivers.md)): most Windows
 drivers written since Windows 8 are KMDF drivers, which call Microsoft's
 framework (`Wdf01000.sys`) rather than the kernel.  NovaOS now has that
 framework, built from Microsoft's MIT-licensed
@@ -11522,15 +11545,15 @@ start on the GPU; that has not been checked yet.
 
 README's "What runs today" section (the program table built from
 `docs/readme/programs/`, the built-in apps and the App Store) is gone now
-that [docs/compatibility.md](../compatibility.md) rates every program and
+that [docs/compatibility.md](compatibility.md) rates every program and
 game tried; README's opening paragraph links that page, and the
-[user guide](../user-guide.md) describes the built-in apps and the App
+[user guide](user-guide.md) describes the built-in apps and the App
 Store.  The `programs` region and its fragment directory went with it.
 
 ## UMDF 2: user-mode drivers in a driver host
 
 Step 30.10 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a UMDF 2
+[design/windows-drivers.md](design/windows-drivers.md)): a UMDF 2
 driver installs with `pnputil`, starts in its own host process and serves
 a program's I/O, on Microsoft's user-mode framework built from its
 MIT-licensed Windows-Driver-Frameworks source.
@@ -11579,7 +11602,7 @@ MIT-licensed Windows-Driver-Frameworks source.
 ## virtio-win's serial driver: the first third-party driver, and bus drivers
 
 Step 30.5 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): virtio-win's
+[design/windows-drivers.md](design/windows-drivers.md)): virtio-win's
 `vioser.sys`, the Microsoft-signed package from the virtio-win release,
 runs unchanged on QEMU's virtio-serial device, and a program exchanges
 bytes with the host through `\\.\Global\<port name>`.
@@ -11673,7 +11696,7 @@ copies no pixel.
 ## The kernel API Windows drivers live on, completed
 
 Step 30.2 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)), second part:
+[design/windows-drivers.md](design/windows-drivers.md)), second part:
 the rest of what a real Windows driver imports, so a `.sys` file links and
 runs rather than failing to load on a missing export.
 
@@ -11721,7 +11744,7 @@ registry value through `Zw`, all checked in the devices suite's "wdm" boot.
 ## The kernel API Windows drivers live on
 
 Step 30.2 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)), first part:
+[design/windows-drivers.md](design/windows-drivers.md)), first part:
 the calls nearly every Windows driver makes besides its I/O.
 
 - **IRQL in `CR8`** (`kernel/ke/irql.h`), as on Windows x64, where the
@@ -11786,7 +11809,7 @@ system thread and a `Zw` registry value — now completes.
 ## The first Windows kernel-mode driver
 
 Step 30.1 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): NovaOS loads a
+[design/windows-drivers.md](design/windows-drivers.md)): NovaOS loads a
 real Windows `.sys` file into its kernel, runs its `DriverEntry`, and lets
 programs talk to it through Windows IRPs.
 
@@ -11826,7 +11849,7 @@ programs talk to it through Windows IRPs.
 ## Windows network drivers on NovaOS's NDIS host
 
 Step 30.9, first half, of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a real Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a real Windows
 network driver, virtio-win's signed `netkvm.sys`, drives QEMU's
 virtio-net card, and NovaOS's network stack uses it as its adapter.
 
@@ -11887,7 +11910,7 @@ virtio-net card, and NovaOS's network stack uses it as its adapter.
 ## Plug and Play drivers on real hardware resources
 
 Step 30.3 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a Windows
 function driver installed from its `.inf` drives a PCI device, with the
 device's memory, interrupt and DMA handed to it the way Windows hands them.
 
@@ -11956,7 +11979,7 @@ device's memory, interrupt and DMA handed to it the way Windows hands them.
 ## Windows storage drivers on NovaOS's Storport host
 
 Step 30.11 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a real Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a real Windows
 storage driver, virtio-win's signed `viostor.sys`, drives QEMU's
 virtio-blk card, and NovaOS mounts the volume on its disk.
 
@@ -11993,7 +12016,7 @@ virtio-blk card, and NovaOS mounts the volume on its disk.
 ## Windows USB client drivers: FTDI's serial driver as COM3
 
 Step 30.8 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a vendor's
+[design/windows-drivers.md](design/windows-drivers.md)): a vendor's
 Windows driver runs a USB device, through a USB host interface NovaOS
 writes itself (Microsoft's `usbhub3.sys` and `usbccgp.sys` are never
 shipped).
@@ -12230,12 +12253,12 @@ sturdier on a real host: the SynIC MSRs keep their reserved bits, each
 message gets five seconds instead of one, a connection left over from the
 firmware is dropped (UNLOAD) and retried, and the log says what each step
 got.  Under Hyper-V, which has no HPET, the TSC and APIC timer rates come
-from Hyper-V's frequency MSRs instead of a guess ([hyperv.md](../hyperv.md)).
+from Hyper-V's frequency MSRs instead of a guess ([hyperv.md](hyperv.md)).
 
 ## A KMDF Plug and Play driver on real resources
 
 The last part of step 30.4 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a KMDF driver
+[design/windows-drivers.md](design/windows-drivers.md)): a KMDF driver
 for QEMU's `edu` PCI device runs on `Wdf01000.sys` with the device's
 memory, interrupt and DMA, and passes the checks the WDM `edu` driver
 (step 30.3) passes.
@@ -12311,7 +12334,7 @@ check with no errors.
 ## A Windows display driver on the boot display
 
 Step 1 of the Intel GPU design (roadmap 25.3,
-[design/intel-gpu.md](../design/intel-gpu.md)): Windows display drivers
+[design/intel-gpu.md](design/intel-gpu.md)): Windows display drivers
 are miniports of `dxgkrnl.sys`, and NovaOS now has the display-only half
 of it.  A WDDM display-only driver installed with `pnputil` takes the
 desktop over from the built-in driver, changes mode when Settings asks,
@@ -12382,7 +12405,7 @@ one source or output, and monitor interfaces.
 ## Intel's AX211 Wi-Fi driver loads on NovaOS's NDIS host
 
 The Wi-Fi half of step 30.9 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): Intel's own
+[design/windows-drivers.md](design/windows-drivers.md)): Intel's own
 Windows driver for the AX211, `Netwtw14.sys` 24.40.0.4, downloads by
 hardware ID, installs unchanged, registers with NovaOS's NDIS host and
 reaches its hardware probe.
@@ -12419,7 +12442,7 @@ recorded Catalog pages (the real cabinet), the driver loads (on KMDF, so
 test signing is on for NovaOS's own `WdfLdr.sys`), reads and checks its
 firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
-the T14 (see [drivers.md](../drivers.md)).
+the T14 (see [drivers.md](drivers.md)).
 
 ## Stores to indexed groupshared arrays in the HLSL compiler
 

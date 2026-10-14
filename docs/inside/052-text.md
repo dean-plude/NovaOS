@@ -1,12 +1,11 @@
-- **Text**: `novatext.dll`, the text core built once and shared, carries
-  HarfBuzz (shaping) and FreeType (fonts).  Uniscribe (`usp10`) itemizes
-  text by script and direction and shapes it with HarfBuzz, and GDI's
-  `ExtTextOut` sends complex scripts through it, as Windows' LPK does, so
-  Arabic, Hebrew and the Indic scripts join, reorder and run right to left.
-  Arabic and Devanagari draw with Noto Sans; GDI falls back to them by
-  script.  DirectWrite (`dwrite`) lays text out on the same core, with
-  font fallback: `tools/dwtest` draws Latin, Arabic and Devanagari in one
-  line from a Latin-only font.  Its factory is an `IDWriteFactory3`, with
-  Windows 10's font sets, font face references and `IDWriteFontFallback`,
-  which Chromium's browsers (Steam's, WebView2) ask for
-  (`tools/dw3test`).
+- **Text**: `novatext.dll`, one shared text core with HarfBuzz (shaping)
+  and FreeType (fonts).
+  - Uniscribe (`usp10`) itemizes text by script and direction and shapes
+    it with HarfBuzz, and GDI's `ExtTextOut` sends complex scripts through
+    it, as Windows' LPK does, so Arabic, Hebrew and the Indic scripts join,
+    reorder and run right to left. GDI falls back to Noto Sans for Arabic
+    and Devanagari.
+  - DirectWrite (`dwrite`) lays text out on the same core, with font
+    fallback, and its factory is an `IDWriteFactory3` with Windows 10's
+    font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
+    for (`tools/dwtest`, `tools/dw3test`).

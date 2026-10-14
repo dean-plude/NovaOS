@@ -1,7 +1,7 @@
 ## The kernel API Windows drivers live on
 
 Step 30.2 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)), first part:
+[design/windows-drivers.md](design/windows-drivers.md)), first part:
 the calls nearly every Windows driver makes besides its I/O.
 
 - **IRQL in `CR8`** (`kernel/ke/irql.h`), as on Windows x64, where the

@@ -1,7 +1,7 @@
 ## The kernel API Windows drivers live on, completed
 
 Step 30.2 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)), second part:
+[design/windows-drivers.md](design/windows-drivers.md)), second part:
 the rest of what a real Windows driver imports, so a `.sys` file links and
 runs rather than failing to load on a missing export.
 

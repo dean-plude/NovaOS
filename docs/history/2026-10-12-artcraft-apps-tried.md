@@ -22,4 +22,4 @@ graphics they ask wgpu for:
   shader model 5.1 sampler arrays wgpu's HLSL uses.  That compiler feature
   is the next fix for all seven.
 
-Their ratings are in [compatibility.md](../compatibility.md).
+Their ratings are in [compatibility.md](compatibility.md).

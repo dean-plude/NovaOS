@@ -30,4 +30,4 @@ service updated itself forever.
 
 Steam's service now stops on its next missing piece: `SteamService.dll`
 calls `StopTraceA`, and NovaOS has no event-tracing controller functions
-yet ([compatibility](../compatibility.md#steam)).
+yet ([compatibility](compatibility.md#steam)).

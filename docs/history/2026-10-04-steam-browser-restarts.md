@@ -26,7 +26,7 @@ With the three fixed, the browser no longer stops, and about half an hour
 in Steam opens its first window of its own (an "Unexpected Transport
 Error" dialog whose text is not drawn yet); the browser's network process
 still restarts every minute or two
-([compatibility.md](../compatibility.md#steam)).
+([compatibility.md](compatibility.md#steam)).
 
 The "Thread creation failed" messages seen once in `steam.exe`'s log did
 not come back in about three hours of runs, and NovaOS never logged a

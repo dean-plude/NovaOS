@@ -29,8 +29,8 @@
   process composites the page through a swap chain on Venus); ~~that
   path through resizes, teardown while frames are presented, and the GPU
   process's window inside the browser's, 64- and 32-bit~~ Done
-  (`dcomptest life`).  Next: presenting without the CPU readback and GDI
-  copy (direct virtio GPU scan-out): done for OpenGL's frames and for
-  Venus's Vulkan swapchains on a window (direct presentation), still to
-  do for the composition swap chains (DirectComposition) WebView2's GPU
-  process presents into.
+  (`dcomptest life`).  Presenting without the CPU readback and GDI copy
+  (direct virtio GPU scan-out) is done for OpenGL's frames, for Venus's
+  Vulkan swapchains and for the DirectComposition targets WebView2's GPU
+  process presents into (`dcomptest direct`; see
+  [DirectComposition on the GPU](HISTORY.md#directcomposition-composited-on-the-gpu)).

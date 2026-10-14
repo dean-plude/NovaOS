@@ -10,4 +10,4 @@ the mouse's HID report descriptor and reports go through the HID decoding
 USB and I2C mice use, as an absolute pointer.  The device poll thread reads
 both channels' rings.  A host test runs the ring buffer and both protocols
 without a VM.  Storage, network and the synthetic video device have no
-driver yet ([hyperv.md](../hyperv.md)).
+driver yet ([hyperv.md](hyperv.md)).

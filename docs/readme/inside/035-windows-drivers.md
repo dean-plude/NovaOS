@@ -1,0 +1,1 @@
+- **Windows drivers** (`kernel/nt/`): unmodified Windows `.inf`/`.sys` packages on an NT driver interface (WDM, KMDF, UMDF, NDIS, Storport, USB, display-only WDDM), matched and downloaded by hardware ID and checked against Windows' signing policy.

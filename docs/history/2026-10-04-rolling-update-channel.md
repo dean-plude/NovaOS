@@ -15,7 +15,7 @@ accepts the `+` part.
 A system follows `main` with `update channel
 https://github.com/dean-plude/os/releases/download/latest/novaos-update.txt`;
 the default channel still follows GitHub's "Latest" mark, which only
-tagged releases carry ([updates.md](../updates.md#the-rolling-builds-channel)).
+tagged releases carry ([updates.md](updates.md#the-rolling-builds-channel)).
 
 The devices suite's `update` boot checks the order first: a channel of the
 build's own version is up to date, a `+dev.` build of it is offered, and

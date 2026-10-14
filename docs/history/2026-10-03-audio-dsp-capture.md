@@ -2,7 +2,7 @@
 
 The second of three steps to the ThinkPad T14 Gen 4's built-in
 microphones ([part 1](#the-audio-dsp-boots-sound-open-firmware-the-t14s-microphones-part-1),
-[hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)):
+[hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)):
 once Sound Open Firmware runs on the audio DSP, NovaOS has it record
 the digital microphones into memory it owns.
 

@@ -1,1 +1,1 @@
-- **Networking**: lwIP over IPv4 and IPv6, DNS, DHCP and SLAAC, TLS 1.3/1.2 on Mbed TLS, HTTP/2 and Winsock.
+- **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2.

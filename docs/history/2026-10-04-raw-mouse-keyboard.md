@@ -36,7 +36,7 @@ HID devices in the list now.
 Teeworlds' menus now follow the mouse: with its `inp_grab 1` setting SDL
 2.0.8 reads Raw Input in relative mouse mode, and the app corpus's
 Teeworlds run opens Settings with a click
-([compatibility.md](../compatibility.md)).  Its default, `inp_grab 0`,
+([compatibility.md](compatibility.md)).  Its default, `inp_grab 0`,
 has SDL recentre the pointer with `SetCursorPos` after each move instead,
 which NovaOS does not do yet, so there the menu cursor still sticks at
 the screen's edge.

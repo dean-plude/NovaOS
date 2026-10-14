@@ -1,7 +1,7 @@
 ## Windows USB client drivers: FTDI's serial driver as COM3
 
 Step 30.8 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a vendor's
+[design/windows-drivers.md](design/windows-drivers.md)): a vendor's
 Windows driver runs a USB device, through a USB host interface NovaOS
 writes itself (Microsoft's `usbhub3.sys` and `usbccgp.sys` are never
 shipped).

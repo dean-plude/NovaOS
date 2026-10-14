@@ -11,6 +11,10 @@ CXX_FROM_VCRUNTIME = ['_CxxThrowException', '__CxxFrameHandler', '__CxxFrameHand
                       '__uncaught_exception', '_set_se_translator', '_is_exception_typeof',
                       '__DestructExceptionObject', '__AdjustPointer']
 
+UCRT_FROM_VCRUNTIME = ['_CxxThrowException', '__CxxFrameHandler3', '_purecall', '__uncaught_exception',
+                       '__std_exception_copy', '__std_exception_destroy', '__std_type_info_destroy_list',
+                       '__std_type_info_name']
+
 
 def flavor_obj(b, odir, legacy):
     """msvcrt.dll and ucrtbase.dll share the C runtime's objects; this one
@@ -41,5 +45,9 @@ def link(b, odir, objs, deps, base):
                                     ['/export:?terminate@@YAXXZ=terminate']))
     b.link_dll(odir, 'msvcrt', objs + [flavor_obj(b, odir, 1)], deps, base, extra + ['@' + rsp2])
     # the Universal C Runtime: the same C runtime under its Windows 10 name
+    # ucrtbase carries the C++ runtime's helpers too (api-ms-win-crt-private,
+    # which Microsoft's own dbghelp.dll imports as _o_ names)
+    rsp3 = os.path.join(odir, 'ucrtbase_cxx.rsp')
+    open(rsp3, 'w').write('\n'.join(f'/export:{n}=vcruntime140.{n}' for n in UCRT_FROM_VCRUNTIME))
     b.link_dll(odir, 'ucrtbase', objs + [flavor_obj(b, odir, 0)], deps,
-               UCRT_BASE if x64 else UCRT_BASE_X86, extra, entry='DllMain')
+               UCRT_BASE if x64 else UCRT_BASE_X86, extra + ['@' + rsp3], entry='DllMain')

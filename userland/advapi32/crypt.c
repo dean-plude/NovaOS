@@ -240,3 +240,6 @@ WINADVAPI BOOL WINAPI CryptEnumProvidersW(DWORD i, DWORD *r, DWORD f, DWORD *typ
     *n = sizeof(pn);
     return TRUE;
 }
+/* No provider parameter can be changed (GnuTLS imports it) */
+WINADVAPI BOOL WINAPI CryptSetProvParam(HCRYPTPROV p, DWORD param, const BYTE *d, DWORD f)
+{ (void)p; (void)param; (void)d; (void)f; SetLastError(NTE_BAD_TYPE_); return FALSE; }

@@ -51,3 +51,44 @@ MSCMSAPI BOOL WINAPI EnumColorProfilesW(LPCWSTR machine, void *record, PBYTE buf
 { (void)machine; (void)record; (void)buf; return no_profiles(size, count); }
 MSCMSAPI BOOL WINAPI EnumColorProfilesA(LPCSTR machine, void *record, PBYTE buf, PDWORD size, PDWORD count)
 { (void)machine; (void)record; (void)buf; return no_profiles(size, count); }
+
+/* No default or standard profiles either: GIMP asks for the monitor's and
+ * falls back to sRGB when there is none */
+MSCMSAPI BOOL WINAPI WcsGetUsePerUserProfiles(LPCWSTR device, DWORD dev_class, PBOOL use)
+{
+    (void)device; (void)dev_class;
+    if (!use) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    *use = FALSE;
+    return TRUE;
+}
+MSCMSAPI BOOL WINAPI WcsGetDefaultColorProfileSize(DWORD scope, LPCWSTR device, DWORD type, DWORD subtype,
+                                                    DWORD id, PDWORD size)
+{
+    (void)scope; (void)device; (void)type; (void)subtype; (void)id;
+    if (!size) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    *size = 0;
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    return FALSE;
+}
+MSCMSAPI BOOL WINAPI WcsGetDefaultColorProfile(DWORD scope, LPCWSTR device, DWORD type, DWORD subtype,
+                                                DWORD id, DWORD size, LPWSTR name)
+{
+    (void)scope; (void)device; (void)type; (void)subtype; (void)id; (void)size;
+    if (name && size >= sizeof(WCHAR)) name[0] = 0;
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    return FALSE;
+}
+MSCMSAPI BOOL WINAPI GetStandardColorSpaceProfileW(LPCWSTR machine, DWORD id, LPWSTR name, PDWORD size)
+{
+    (void)machine; (void)id; (void)name;
+    if (!size) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    return FALSE;
+}
+MSCMSAPI BOOL WINAPI GetStandardColorSpaceProfileA(LPCSTR machine, DWORD id, LPSTR name, PDWORD size)
+{
+    (void)machine; (void)id; (void)name;
+    if (!size) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    SetLastError(ERROR_FILE_NOT_FOUND);
+    return FALSE;
+}

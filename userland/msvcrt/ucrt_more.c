@@ -265,6 +265,8 @@ CRTEXP uc *_mbschr(const uc *s, unsigned c) { return (uc *)strchr((const char *)
 CRTEXP uc *_mbsrchr(const uc *s, unsigned c) { return (uc *)strrchr((const char *)s, (int)c); }
 CRTEXP uc *_mbsstr(const uc *s, const uc *t) { return (uc *)strstr((const char *)s, (const char *)t); }
 CRTEXP size_t _mbslen(const uc *s) { return strlen((const char *)s); }
+/* characters in a multibyte string (single-byte code page: its bytes) */
+CRTEXP size_t _mbstrlen(const char *s) { return strlen(s); }
 CRTEXP size_t _mbsnlen(const uc *s, size_t n) { size_t i = 0; while (i < n && s[i]) i++; return i; }
 CRTEXP int _mbscmp(const uc *a, const uc *b) { return strcmp((const char *)a, (const char *)b); }
 CRTEXP int _mbsncmp(const uc *a, const uc *b, size_t n) { return strncmp((const char *)a, (const char *)b, n); }

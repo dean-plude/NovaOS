@@ -303,6 +303,51 @@ CRTEXP double _difftime32(long a, long b) { return (double)(a - b); }
 CRTEXP char *_ctime64(const time_t *t) { return ctime(t); }
 CRTEXP char *_ctime32(const long *t) { time_t v = *t; return ctime(&v); }
 CRTEXP int _ctime64_s(char *buf, size_t n, const time_t *t) { const char *s = ctime(t); if (!s || strlen(s) >= n) return EINVAL; strcpy(buf, s); return 0; }
+/* the wide forms: ctime's text widened (it is ASCII) */
+static wchar_t *wide_ctime(const char *s)
+{
+    static wchar_t buf[32];                     /* as ctime's own */
+    if (!s) return NULL;
+    size_t i = 0;
+    for (; s[i] && i < 31; i++) buf[i] = (unsigned char)s[i];
+    buf[i] = 0;
+    return buf;
+}
+CRTEXP wchar_t *_wctime64(const time_t *t) { return wide_ctime(ctime(t)); }
+CRTEXP wchar_t *_wctime32(const long *t) { time_t v = *t; return wide_ctime(ctime(&v)); }
+CRTEXP int wmemcpy_s(wchar_t *dst, size_t cap, const wchar_t *src, size_t n)
+{
+    if (!n) return 0;
+    if (!dst || !src || cap < n) { if (dst && cap) wmemset(dst, 0, cap); return dst && src ? ERANGE : EINVAL; }
+    wmemcpy(dst, src, n);
+    return 0;
+}
+CRTEXP int wmemmove_s(wchar_t *dst, size_t cap, const wchar_t *src, size_t n)
+{
+    if (!n) return 0;
+    if (!dst || !src) return EINVAL;
+    if (cap < n) return ERANGE;
+    wmemmove(dst, src, n);
+    return 0;
+}
+/* The C++ name undecorator: no demangler, so the decorated name itself
+ * (dbghelp shows it as it is) */
+CRTEXP char *__unDName(char *buf, const char *name, int len, void *(*alloc)(size_t), void (*release)(void *),
+                       unsigned short flags)
+{
+    (void)release; (void)flags;
+    if (!name) return NULL;
+    size_t n = strlen(name);
+    if (!buf) {
+        if (!alloc || !(buf = alloc(n + 1))) return NULL;
+        len = (int)(n + 1);
+    }
+    if (len <= 0) return NULL;
+    if (n >= (size_t)len) n = (size_t)len - 1;
+    memcpy(buf, name, n);
+    buf[n] = 0;
+    return buf;
+}
 CRTEXP int asctime_s(char *buf, size_t n, const struct tm *tm) { const char *s = asctime(tm); if (!s || strlen(s) >= n) return EINVAL; strcpy(buf, s); return 0; }
 CRTEXP size_t _strftime_l(char *s, size_t n, const char *f, const struct tm *t, void *l) { (void)l; return strftime(s, n, f, t); }
 CRTEXP int timespec_get(struct timespec *ts, int base)

@@ -439,11 +439,15 @@ int _snprintf(char *s, size_t n, const char *fmt, ...) { va_list a; va_start(a, 
 __declspec(dllexport) int _scprintf(const char *fmt, ...)         { va_list a; va_start(a, fmt); int r = _vscprintf(fmt, a); va_end(a); return r; }
 int sprintf_s(char *s, size_t n, const char *fmt, ...) { va_list a; va_start(a, fmt); int r = vsnprintf(s, n, fmt, a); va_end(a); return r; }
 int vsprintf_s(char *s, size_t n, const char *fmt, va_list ap) { return vsnprintf(s, n, fmt, ap); }
-int _snprintf_s(char *s, size_t n, size_t cnt, const char *fmt, ...)
+/* at most @cnt characters (_TRUNCATE: as many as fit), always terminated; -1 when cut short */
+__declspec(dllexport) int _snprintf_s(char *s, size_t n, size_t cnt, const char *fmt, ...)
 {
+    if (!s || !n) return -1;
+    size_t room = cnt < n ? cnt : n - 1;
     va_list a; va_start(a, fmt);
-    int r = _vsnprintf(s, cnt < n ? cnt + 1 : n, fmt, a);
+    int r = vsnprintf(s, room + 1, fmt, a);
     va_end(a);
+    if (r < 0 || (size_t)r > room) { s[room] = 0; return -1; }
     return r;
 }
 

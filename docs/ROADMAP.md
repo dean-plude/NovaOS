@@ -728,8 +728,10 @@ apps from the App Store catalog pass their nightly scripts.
   from the Store's untested apps: WinSCP (installs and opens its Login
   dialog; [history](history/2026-10-14-winscp.md)), Thunderbird (installs
   and opens an e-mail message;
-  [history](history/2026-10-14-thunderbird.md)) and qBittorrent (installs
-  and opens a `.torrent`; [history](history/2026-10-14-qbittorrent.md)).
+  [history](history/2026-10-14-thunderbird.md)), qBittorrent (installs
+  and opens a `.torrent`; [history](history/2026-10-14-qbittorrent.md))
+  and GIMP (installs and opens a picture through its plug-ins;
+  [history](history/2026-10-14-gimp.md)).
 - [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
   from the Store's Windows Installer package; the nightly corpus types a

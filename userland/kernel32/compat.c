@@ -1870,6 +1870,13 @@ K32 BOOL WINAPI GetBinaryTypeW(LPCWSTR name, LPDWORD type)
     return TRUE;
 }
 
+K32 BOOL WINAPI GetBinaryTypeA(LPCSTR name, LPDWORD type)
+{
+    WCHAR w[MAX_PATH];
+    u2w(name, -1, w, MAX_PATH);
+    return GetBinaryTypeW(w, type);
+}
+
 /* National language: only simple folding; IDN names pass through when ASCII */
 K32 int WINAPI FoldStringW(DWORD flags, LPCWSTR src, int n, LPWSTR dst, int cap)
 {

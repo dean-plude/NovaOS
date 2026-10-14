@@ -127,6 +127,18 @@ UsbDev *UsbDevByPnp(UINT32 node)
     return NULL;
 }
 
+UsbDev *UsbFnByPnp(UINT32 node, UINT32 *ifaces)
+{
+    for (int i = 0; node && i < MAX_DEVS; i++) {
+        UsbDev *d = g_devs[i];
+        if (!d || d->gone) continue;
+        if (d->pnp == node && !d->nfn_pnp) { if (ifaces) *ifaces = 0; return d; }
+        for (int k = 0; k < d->nfn_pnp; k++)
+            if (d->fn_pnp[k] == node) { if (ifaces) *ifaces = d->fn_ifaces[k]; return d; }
+    }
+    return NULL;
+}
+
 bool UsbDevProductName(UsbDev *d, char *out, int cap)
 {
     UINT8 s[128];

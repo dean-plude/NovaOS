@@ -93,6 +93,7 @@ typedef struct {
     NT_DEVICE_OBJECT   *fdo;
     Mini               *mini;
     HidDeviceAttributes attr;
+    char                mi[8];          /* "&MI_nn": a composite device's function (its PDO's hardware ID), or "" */
     UINT8              *desc;           /* the report descriptor */
     UINT32              desc_len;
     Coll               *coll[MAX_COLL];
@@ -429,11 +430,12 @@ static NT_WCHAR *pool_wide(const char *s, size_t n)
     return w;
 }
 
-/* The collection's IDs: "HID\VID_v&PID_p[&Colnn]" (@rev: with &REV_r) */
+/* The collection's IDs: "HID\VID_v&PID_p[&MI_nn][&Colnn]" (@rev: with &REV_r) */
 static void coll_id(const Coll *c, const Fdo *f, bool rev, char *out, int cap)
 {
     int n = ksnprintf(out, cap, "HID\\VID_%04X&PID_%04X", f->attr.VendorID, f->attr.ProductID);
     if (rev) n += ksnprintf(out + n, cap - n, "&REV_%04X", f->attr.VersionNumber);
+    n += ksnprintf(out + n, cap - n, "%s", f->mi);
     if (f->ncoll > 1) ksnprintf(out + n, cap - n, "&Col%02d", c->index + 1);
 }
 
@@ -849,6 +851,20 @@ static NT_STATUS fdo_started(Fdo *f)
     f->attr.Size = sizeof(f->attr);
     st = mini_ioctl(f, IOCTL_HID_GET_DEVICE_ATTRIBUTES, NULL, 0, &f->attr, sizeof(f->attr), NULL, &n);
     if (!NT_SUCCESS(st)) { kprintf("[HID] no device attributes (0x%08x)\n", (UINT32)st); return st; }
+
+    /* A composite device's function (its PDO USB\VID_v&PID_p&MI_nn): the
+     * collections' IDs carry its interface, as Windows' hidclass.sys
+     * names them (HID\VID_v&PID_p&MI_nn[&Colnn]) */
+    NT_WCHAR hw[170];                                        /* (PnpNode.hwids: 160 characters) */
+    UINT32 got = 0;
+    f->mi[0] = 0;
+    if (NT_SUCCESS(nt_IoGetDeviceProperty(hdx(f)->PhysicalDeviceObject, 1 /* HardwareID */, sizeof(hw), hw, &got))) {
+        for (UINT32 i = 0; i + 6 <= got / 2 && hw[i]; i++)
+            if (hw[i] == '&' && hw[i + 1] == 'M' && hw[i + 2] == 'I' && hw[i + 3] == '_' && hw[i + 4] && hw[i + 5]) {
+                ksnprintf(f->mi, sizeof(f->mi), "&MI_%c%c", (char)hw[i + 4], (char)hw[i + 5]);
+                break;
+            }
+    }
 
     if (!g_build_init) { nt_KeInitializeMutex(&g_build, 0); g_build_init = true; }
     int ncoll = nova_hidp_collections(f->desc, (int)f->desc_len);

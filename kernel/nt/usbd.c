@@ -14,6 +14,12 @@
  *   - a PDO per USB device (\Device\USBPDO-n) whose node in the device
  *     tree a Windows driver is installed on (pnp.c's NtPnpStart makes it
  *     and hands it to the driver's AddDevice);
+ *   - for a composite device, a PDO per function instead (its
+ *     USB\VID_v&PID_p&MI_nn node), as Windows' usbccgp.sys gives one:
+ *     the function's driver sees a configuration descriptor holding only
+ *     its own interfaces (and their interface association), selects only
+ *     those, and has its own pipes, while the device's other functions
+ *     run under other drivers (NovaOS's or Windows');
  *   - the URBs a client sends: select configuration and interface
  *     (pipe handles for its endpoints), control transfers (standard,
  *     class and vendor requests, descriptors, status, features), bulk and
@@ -90,6 +96,7 @@ struct UsbdDev {
     UsbdPipe         *pipes[32];       /* by the core's pipe index */
     UINT8             config;          /* bConfigurationValue selected (0: none) */
     UINT8             alt[32];         /* each interface's alternate setting */
+    UINT32            ifaces;          /* a composite device's function: its interfaces (bit n: interface n); 0: the whole device */
     NT_IRP           *idle;            /* the held idle notification */
     volatile bool     gone;
 };
@@ -182,6 +189,46 @@ static UINT8 recipient(UINT16 fn)
     return 0;
 }
 
+/* A composite device's function: the configuration descriptor as its
+ * driver sees it (usbccgp.sys's), the header with only the function's
+ * interfaces counted, then each of its interfaces (every alternate
+ * setting) with the descriptors after it, and an interface association
+ * that starts at one of them.  At most @cap bytes into @out (which may
+ * be NULL); returns how many. */
+static UINT32 function_config(UsbdDev *v, UINT8 *out, UINT32 cap)
+{
+    UsbDev *d = v->usb;
+    UINT8 *t = kmalloc((size_t)d->cfg_len);
+    if (!t || d->cfg_len < 9) { kfree(t); return 0; }
+    memcpy(t, d->cfg, 9);
+    UINT32 n = 9;
+    UINT8 count = 0;
+    bool keep = false;
+    for (int off = d->cfg[0]; off + 2 <= d->cfg_len && d->cfg[off] >= 2 && off + d->cfg[off] <= d->cfg_len;
+         off += d->cfg[off]) {
+        const UINT8 *x = d->cfg + off;
+        bool take;
+        if (x[1] == USB_DT_INTERFACE && x[0] >= 9) {
+            keep = x[2] < 32 && (v->ifaces >> x[2] & 1);
+            if (keep && x[3] == 0) count++;
+            take = keep;
+        } else if (x[1] == 0x0B && x[0] >= 8) {                  /* INTERFACE_ASSOCIATION */
+            take = x[2] < 32 && (v->ifaces >> x[2] & 1);
+            keep = false;
+        } else {
+            take = keep;
+        }
+        if (take) { memcpy(t + n, x, x[0]); n += x[0]; }
+    }
+    t[2] = (UINT8)n;
+    t[3] = (UINT8)(n >> 8);
+    t[4] = count;
+    UINT32 m = n < cap ? n : cap;
+    if (out) memcpy(out, t, m);
+    kfree(t);
+    return m;
+}
+
 /* Every control-pipe URB: its SETUP packet from its fields, then the transfer */
 static UINT32 run_control(UsbdDev *v, UrbXfer *u)
 {
@@ -250,6 +297,11 @@ static UINT32 run_control(UsbdDev *v, UrbXfer *u)
     }
     UINT8 *buf = xfer_buf(u);
     UINT32 len = buf ? u->TransferBufferLength : 0, moved = 0;
+    if (v->ifaces && type == 0x80 && req == 6 && value >> 8 == USB_DT_CONFIG) {   /* (a function: its own part) */
+        if (v->gone || v->usb->gone) return USBD_STATUS_DEVICE_GONE;
+        u->TransferBufferLength = function_config(v, buf, len);
+        return USBD_STATUS_SUCCESS;
+    }
     UINT32 st = control(v, type, req, value, index, buf, len, &moved);
     u->TransferBufferLength = in ? moved : (st == USBD_STATUS_SUCCESS ? len : 0);
     return st;
@@ -456,6 +508,12 @@ static UINT32 fill_iface(UsbdDev *v, UsbdIfaceInfo *info)
     return USBD_STATUS_SUCCESS;
 }
 
+/* Whether interface @num is the PDO's to select (a function's own, or any of a whole device) */
+static bool mine(UsbdDev *v, UINT8 num)
+{
+    return !v->ifaces || (num < 32 && (v->ifaces >> num & 1));
+}
+
 static UINT32 select_config(UsbdDev *v, UrbSelectConfig *u)
 {
     UsbDev *d = v->usb;
@@ -468,6 +526,7 @@ static UINT32 select_config(UsbdDev *v, UrbSelectConfig *u)
     UINT8 *end = (UINT8 *)u + u->Hdr.Length;
     for (UsbdIfaceInfo *i = &u->Interface; (UINT8 *)i + 24 <= end && i->Length >= 24;
          i = (UsbdIfaceInfo *)((UINT8 *)i + i->Length)) {
+        if (!mine(v, i->InterfaceNumber)) return USBD_STATUS_INVALID_PARAMETER;   /* (another function's) */
         if (i->AlternateSetting != v->alt[i->InterfaceNumber & 31]) {
             if (!UsbSetInterface(d, i->InterfaceNumber, i->AlternateSetting)) return USBD_STATUS_STALL_PID;
             v->alt[i->InterfaceNumber & 31] = i->AlternateSetting;
@@ -483,6 +542,7 @@ static UINT32 select_config(UsbdDev *v, UrbSelectConfig *u)
 static UINT32 select_iface(UsbdDev *v, UrbSelectIface *u)
 {
     UsbdIfaceInfo *i = &u->Interface;
+    if (!mine(v, i->InterfaceNumber)) return USBD_STATUS_INVALID_PARAMETER;
     if (!UsbSetInterface(v->usb, i->InterfaceNumber, i->AlternateSetting)) return USBD_STATUS_STALL_PID;
     v->alt[i->InterfaceNumber & 31] = i->AlternateSetting;
     return fill_iface(v, i);
@@ -870,11 +930,15 @@ static void usb_gone(void *inst)
 
 NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node)
 {
-    UsbDev *d = UsbDevByPnp(node);
+    UINT32 ifaces = 0;
+    UsbDev *d = UsbFnByPnp(node, &ifaces);
     if (!d || d->gone) return NULL;
     IrqState s = spin_lock_irqsave(&g_lock);
     for (int i = 0; i < 32; i++)
-        if (g_devs[i] && g_devs[i]->usb == d) { spin_unlock_irqrestore(&g_lock, s); return g_devs[i]->pdo; }
+        if (g_devs[i] && g_devs[i]->usb == d && g_devs[i]->node == node) {
+            spin_unlock_irqrestore(&g_lock, s);
+            return g_devs[i]->pdo;
+        }
     int slot = -1;
     for (int i = 0; i < 32 && slot < 0; i++) if (!g_devs[i]) slot = i;
     spin_unlock_irqrestore(&g_lock, s);
@@ -900,10 +964,12 @@ NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node)
     v->pdo = pdo;
     v->usb = d;
     v->node = node;
+    v->ifaces = ifaces;
     pipe_init(&v->ep0, v);
     g_devs[slot] = v;
     UsbBind(d, v, usb_gone);
-    kprintf("[USBD] %s: %s for %04x:%04x\n", d->name, name, d->vid, d->pid);
+    if (ifaces) kprintf("[USBD] %s: %s for %04x:%04x function (interfaces 0x%x)\n", d->name, name, d->vid, d->pid, ifaces);
+    else        kprintf("[USBD] %s: %s for %04x:%04x\n", d->name, name, d->vid, d->pid);
     return pdo;
 }
 

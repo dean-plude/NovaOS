@@ -28,7 +28,8 @@
 #include "../ke/spinlock.h"
 
 #define USB_MAX_PORTS    64        /* root ports per controller */
-#define USB_MAX_BINDS    4
+#define USB_MAX_BINDS    8         /* (a composite device: a NovaOS driver or Windows function per interface) */
+#define USB_MAX_FNS      16        /* a composite device's functions in the device tree */
 #define USB_CTL_BUF      4096      /* bytes of control-transfer data at most */
 
 typedef struct UsbHc UsbHc;
@@ -86,6 +87,10 @@ struct UsbDev {
     UINT8            iproduct;     /* the product's string descriptor (0: none) */
     UINT16           rev;          /* bcdDevice */
     UINT32           pnp;          /* its device node (io/pnp.h), 0 if none */
+    /* a composite device's functions: each one's node under d->pnp and
+     * the interfaces it is made of (bit n: interface n) */
+    UINT32           fn_pnp[USB_MAX_FNS], fn_ifaces[USB_MAX_FNS];
+    int              nfn_pnp;
     UINT16           ep0_mps;
     char             name[32];
     UINT8           *buf;          /* control-transfer data (USB_CTL_BUF bytes, below 4 GiB) */
@@ -172,12 +177,13 @@ extern KSpinLock g_usb_lock;
 /* ---- the Plug and Play device tree (usbpnp.c) ---- */
 
 /* An interface offered to the drivers, and who took it */
-#define USBPNP_MAX_FN   16
+#define USBPNP_MAX_FN   USB_MAX_FNS
 enum { USBPNP_NONE, USBPNP_HUB, USBPNP_HID, USBPNP_PAD, USBPNP_XPAD, USBPNP_MSC, USBPNP_AUDIO };
 typedef struct {
     UINT8       number, cls, sub, proto;
     int         kind;              /* USBPNP_*: the driver that took it */
     const char *driver;            /* its name, or NULL: none did */
+    UINT32      ifaces;            /* (usbpnp.c) the interfaces the function is made of, bit n: interface n */
 } UsbPnpFn;
 /* A controller was started: its root hub's node, under its PCI function's */
 void UsbPnpController(UsbHc *hc, const PciDevice *pci);

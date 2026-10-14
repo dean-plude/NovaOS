@@ -16,7 +16,8 @@
  * input.inf would.
  *
  *   - start: the device's descriptors, its HID interface (the first with
- *     class 3) selected with its interrupt IN pipe and, when it has one,
+ *     class 3: on a composite device's function, whose PDO shows only its
+ *     own interfaces as usbccgp.sys's does, the function's own) selected with its interrupt IN pipe and, when it has one,
  *     interrupt OUT pipe; SET_IDLE(0); the report descriptor;
  *   - IOCTL_HID_READ_REPORT: an interrupt IN transfer, finished when the
  *     device sends a report;
@@ -25,8 +26,7 @@
  *   - GET_REPORT / SET_REPORT for input, output and feature reports;
  *   - strings (manufacturer, product, serial number, by index).
  *
- * Not done yet: a composite device's HID function (NovaOS's USB PDOs are
- * whole devices: one HID interface each), and selective suspend.
+ * Not done yet: selective suspend.
  */
 #include "ntapi.h"
 #include "hidclass.h"

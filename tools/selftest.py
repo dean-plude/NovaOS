@@ -120,7 +120,12 @@ order; --list prints them):
             USB Video Class camera on xHCI (tools/campeer.py): the kernel's
             UVC driver runs it, camtest lists it with Media Foundation and
             reads frames in each of its formats through a source reader,
-            and the Camera app shows it; "diskmgr",
+            and the Camera app shows it; "composite", a composite USB
+            device on xHCI (tools/compositepeer.py: a keyboard and two
+            vendor-defined HID functions): NovaOS's keyboard driver takes
+            one function and the HID class driver each of the others on
+            a PDO of its own, and usbcompositetest checks the device
+            tree, both HID functions' reports and the unplug; "diskmgr",
             a blank second disk: Disk Management (diskmgmt.exe) is opened
             from the Start menu, then initializes the disk, makes an NTFS
             and a FAT32 volume on it, moves one to drive T: (still T:
@@ -349,6 +354,7 @@ DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 HID = load_suite('devices/hid')
 CAMERA = load_suite('devices/camera')
+COMPOSITE = load_suite('devices/composite')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
@@ -508,6 +514,21 @@ def camera_boot(work):
         time.sleep(0.05)
     return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=cam,host=127.0.0.1,port=10714',
             '-device', 'usb-redir,id=cam,chardev=cam,bus=xhci.0'], [p]
+
+
+def composite_boot(work):
+    """A composite USB device on an xHCI controller (a keyboard and two
+    vendor-defined HID functions), tools/compositepeer.py behind a QEMU
+    usb-redir device (port 10715) (tests/selftest/devices/composite)"""
+    log = os.path.join(work, 'compositepeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'compositepeer.py'), '--port', '10715'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=combo,host=127.0.0.1,port=10715',
+            '-device', 'usb-redir,id=combo,chardev=combo,bus=xhci.0'], [p]
 
 
 def pnp_boot(work):
@@ -846,6 +867,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
+                ('composite', COMPOSITE, composite_boot),
                 ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
@@ -954,7 +976,8 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log', 'campeer.log']:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
+                                                                                 'compositepeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

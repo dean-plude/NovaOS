@@ -72,6 +72,7 @@
 #include "../fs/initrd.h"
 #include "../fs/update.h"
 #include "../fs/setup.h"
+#include "../fs/bootfiles.h"
 #include "../fs/ramfs.h"
 #include "../hal/pci.h"
 #include "../hal/firmware.h"
@@ -243,6 +244,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
     smp_early(info);                      /* before the memory map can be reused */
     UINT64 rsdp = info->rsdp_physical;    /* for AcpiInitialize, once paging is up */
     SetupBootInfo(info);                  /* installation media (booted from the disc) */
+    BootFilesInfo(info);                  /* the files beside the kernel (\EFI\NOVA\Files) */
     UpdateBootInfo(info);                 /* an update's first start, or one that failed */
 
     kprintf("=== Phase 1: Paging ===\n");

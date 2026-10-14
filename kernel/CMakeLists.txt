@@ -172,6 +172,7 @@ set(KERNEL_C_SOURCES
     fs/drives.c
     fs/persist.c
     fs/setup.c
+    fs/bootfiles.c
     fs/update.c
     fs/bootlog.c
     net/net.c
@@ -262,6 +263,7 @@ set(KERNEL_C_SOURCES
     gdi/font_inter.c
     wm/wm.c
     wm/desktop.c
+    wm/wallpaper.c
     wm/clipboard.c
     wm/input.c
     wm/kbdlayout.c
@@ -271,6 +273,7 @@ set(KERNEL_C_SOURCES
     apps/explorer.c
     apps/notepad.c
     apps/settings.c
+    apps/iconset.c
     apps/calendar.c
     apps/photos.c
     apps/store.c
@@ -324,7 +327,6 @@ list(APPEND KERNEL_C_SOURCES ${MONOCYPHER_SOURCES})
 # programs built with clang for x86_64-pc-windows-msvc, embedded as data and
 # installed on drive C: at boot.
 file(GLOB_RECURSE USERLAND_DEPS CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../userland/samples/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../userland/*.h"

@@ -11,3 +11,8 @@
     ([updates.md](updates.md)).
   - It hands the kernel the memory map, the GOP framebuffer, the ACPI RSDP
     and a copy of the SMBIOS tables ([phase1-architecture.md](phase1-architecture.md)).
+  - It also reads every file under `\EFI\NOVA\Files` (wallpapers, icon
+    sets, sample pictures: content kept out of `kernel.elf`) and lists them
+    for the kernel (boot protocol version 5), which installs
+    `\EFI\NOVA\Files\X` at `C:\X` (`kernel/fs/bootfiles.c`) and gives
+    the memory back; the installer copies them to the disk it installs on.

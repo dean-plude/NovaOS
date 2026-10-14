@@ -1,8 +1,10 @@
 /*
  * setup.h — installing NovaOS on a disk
  *
- * The installation files are the bootloader (\EFI\BOOT\BOOTX64.EFI) and
- * the kernel (\EFI\NOVA\kernel.elf, which carries the whole userland).
+ * The installation files are the bootloader (\EFI\BOOT\BOOTX64.EFI), the
+ * kernel (\EFI\NOVA\kernel.elf, which carries the programs and DLLs) and
+ * the files beside it (\EFI\NOVA\Files: wallpapers, icon sets, pictures;
+ * fs/bootfiles.h), which are copied from drive C:.
  * Booted from the installation disc, the bootloader hands them over in
  * memory; on an installed system they are read from the disk NovaOS
  * booted from.  Installing erases the chosen disk and gives it a GPT with

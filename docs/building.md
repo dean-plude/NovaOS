@@ -182,6 +182,15 @@ All of it is embedded in `kernel.elf` and placed on drive C: at boot.
 Files of 1 MiB or more are stored zlib-compressed and inflated by the
 kernel.
 
+Wallpapers, icon sets and sample pictures are not: they are files beside
+the kernel.  `userland/files` mirrors drive C: (its
+`Windows/Web/Wallpaper/Beam.png` is `C:\Windows\Web\Wallpaper\Beam.png`);
+`scripts/create-disk.sh` and `scripts/create-iso.sh` copy it to
+`\EFI\NOVA\Files` on the boot volume (a fourth argument names another
+folder), and the bootloader hands those files to the kernel at boot.  The
+Beam icon set there is rendered from the brand guide's SVGs by
+`tools/make_icon_set.py`.
+
 Independent DLLs, programs and objects build concurrently, with at most
 `--jobs N` (or `-j N`) compiler and linker processes at once; the default
 is the CPU count.  A DLL links after the DLLs it depends on, and the

@@ -182,12 +182,15 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
     UsbPnpFn f[USBPNP_MAX_FN];
     int n = 0;
     for (int i = 0; i < nfn; i++) {
+        UINT32 bit = fn[i].number < 32 ? 1u << fn[i].number : 0;
         if (n && fn[i].cls == 1 && f[n - 1].cls == 1) {
+            UINT32 had = f[n - 1].ifaces;
             if (!f[n - 1].driver) f[n - 1] = fn[i];
+            f[n - 1].ifaces = had | bit;
             continue;
         }
-        if (n && fn[i].cls == 0x0E && fn[i].sub == 2 && f[n - 1].cls == 0x0E) continue;
-        if (n < USBPNP_MAX_FN) f[n++] = fn[i];
+        if (n && fn[i].cls == 0x0E && fn[i].sub == 2 && f[n - 1].cls == 0x0E) { f[n - 1].ifaces |= bit; continue; }
+        if (n < USBPNP_MAX_FN) { f[n] = fn[i]; f[n++].ifaces = bit; }
     }
     bool composite = n > 1 && dev_class != 0xFF && dev_class != 0x09;
     if (!composite) {
@@ -216,5 +219,15 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
     c->flags = PNP_STARTED | PNP_REMOVABLE;
     d->pnp = PnpAdd(parent, c);
     kfree(c);
-    for (int i = 0; i < n && d->pnp; i++) add_function(d, &f[i], f[i].number, d->pnp, suffix, product);
+    /* Each function its own node (USB\VID_v&PID_p&MI_nn), as usbccgp.sys
+     * gives each its own PDO: one no NovaOS driver took may have a
+     * Windows driver (nt/usbd.c, nt/pnp.c), with only its own interfaces */
+    d->nfn_pnp = 0;
+    for (int i = 0; i < n && d->pnp; i++) {
+        UINT32 id = add_function(d, &f[i], f[i].number, d->pnp, suffix, product);
+        if (!id || d->nfn_pnp >= USB_MAX_FNS) continue;
+        d->fn_pnp[d->nfn_pnp] = id;
+        d->fn_ifaces[d->nfn_pnp++] = f[i].ifaces;
+        if (!f[i].driver) NtPnpUsbArrived(id);
+    }
 }

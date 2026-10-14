@@ -280,10 +280,12 @@ static void imports(void)
     BOOL (WINAPI *evinfo)(HANDLE, int, DWORD, void *, DWORD *) = (void *)GetProcAddress(ev, "EvtGetLogInfo");
     HANDLE (WINAPI *evpub)(HANDLE, LPCWSTR, LPCWSTR, DWORD, DWORD) = (void *)GetProcAddress(ev, "EvtOpenPublisherMetadata");
     HANDLE bm = evbm ? evbm(NULL) : 0;
-    HANDLE sub = bm && evsub ? evsub(0, 0, L"System", L"*", bm, 0, 0, 3) : 0;   /* after the bookmark */
+    HANDLE signal = CreateEventW(NULL, TRUE, FALSE, NULL);              /* (a pull subscription needs one, as on Windows) */
+    HANDLE sub = bm && evsub ? evsub(0, signal, L"System", L"*", bm, 0, 0, 3) : 0;   /* after the (empty) bookmark */
     ng = 9;
     check(bm && sub && !evn(sub, 4, got, 0, 0, &ng) && ng == 0 && evc(sub) && evc(bm),
           "wevtapi: a bookmark and a subscription that never fires");
+    CloseHandle(signal);
     struct { ULONGLONG v; DWORD count, type; } var = { 7, 1, 99 };
     DWORD need = 0;
     HANDLE lg = evlog ? evlog(0, L"System", 1) : 0;

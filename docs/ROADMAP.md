@@ -545,8 +545,9 @@ item ends when a named program or test demonstrates it.
   gives).  A vendor's USB HID device runs on the HID class driver, where
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
-  Still to do: raw keyboard and mouse input, Raw Input for class-driver
-  devices, the Xbox
+  Raw Input lists the class driver's collections too and sends their
+  reports as `WM_INPUT`.
+  Still to do: raw keyboard and mouse input, the Xbox
   360 wireless receiver, Bluetooth controllers, force feedback through
   DirectInput, and virtio game pads (QEMU has none).
 - Plug and Play: a device tree the Windows way.  Devices plugged in or

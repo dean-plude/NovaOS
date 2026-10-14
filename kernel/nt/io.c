@@ -33,6 +33,8 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 
+bool um_stopping(void);                                         /* um.c: the calling program thread is ending */
+
 #define NAME_MAX_  128
 #define MAX_DRIVERS 32
 
@@ -529,7 +531,13 @@ static NTSTATUS req_send(Req *r, NT_FILE_OBJECT *fo)
         r->irp = NULL;                                           /* (the driver may still hold it) */
         return st;
     }
-    nt_KeWaitForSingleObject(&r->done, 0, 0, 0, NULL);          /* (STATUS_PENDING: completed later) */
+    /* (STATUS_PENDING: completed later).  A program's thread that is
+     * ending has its request cancelled, as Windows' IoCancelThreadIo does,
+     * so a read the device never answers does not keep the process alive */
+    const INT64 poll = -100 * 10000LL;                           /* 100 ms */
+    bool cancelled = false;
+    while (nt_KeWaitForSingleObject(&r->done, 0, 0, 0, &poll) != NT_STATUS_SUCCESS)
+        if (!cancelled && um_stopping()) { nt_IoCancelIrp(r->irp); cancelled = true; }
     return r->iosb.Status;
 }
 

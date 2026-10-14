@@ -310,6 +310,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `umdf` | a UMDF 2 driver (`umdftest.dll`) on the edu device, running in `WUDFHost.exe` |
 | `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA |
 | `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
+| `devmgr` | Device Manager (`devmgmt.exe`) opened from the Start menu, then `devmgmt --check` on an e1000e card, a USB keyboard and tablet and the driverless edu device: setupapi's list against cfgmgr32's tree, classes, status and problem codes, resources (`CM_Get_First_Log_Conf`); its screenshot is `docs/screenshots/device-manager.png` |
 | `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled |
 
 [drivers.md](drivers.md) has more on the Windows driver model these boots

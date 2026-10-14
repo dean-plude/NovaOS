@@ -93,6 +93,20 @@ void PnpSetInbox(UINT32 id, bool on);
 /* The node of PCI function bus:dev.func, or 0 */
 UINT32 PnpPciNode(UINT8 bus, UINT8 dev, UINT8 func);
 
+/* A resource a node's device decodes (NovaPnpResource): what Device
+ * Manager's Resources tab lists, as CM_Get_First_Log_Conf reads it */
+#define PNP_RES_MEMORY    1
+#define PNP_RES_PORT      2
+#define PNP_RES_INTERRUPT 3
+typedef struct {
+    UINT32 type;                    /* PNP_RES_* */
+    UINT32 flags;                   /* memory: 1 prefetchable; interrupt: 1 level-triggered */
+    UINT64 start, length;           /* an interrupt: its GSI (IRQ), length 0 */
+} PnpResource;
+/* Node @id's resources (a PCI function's ranges and interrupt; none for
+ * other nodes): how many, at most @max */
+int PnpResources(UINT32 id, PnpResource *out, int max);
+
 /* A copy of node @id; false when there is none */
 bool PnpGet(UINT32 id, PnpNode *out);
 /* The highest node ID given out (IDs are never reused) */

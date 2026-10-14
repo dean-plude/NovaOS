@@ -111,7 +111,12 @@ order; --list prints them):
             (tools/padpeer.py --kind vendor): the kernel's HID class
             driver runs it on its USB minidriver, and hidclasstest opens
             its collection through hid.dll, writes and reads input,
-            output and feature reports and sees it unplugged; "camera", a
+            output and feature reports and sees it unplugged;
+            "devmgr", an e1000e card, a USB keyboard and tablet on xHCI
+            and the edu device with no driver: Device Manager
+            (devmgmt.exe) is opened from the Start menu, then checks
+            setupapi's device list against cfgmgr32's tree and lists each
+            device's class, status and resources; "camera", a
             USB Video Class camera on xHCI (tools/campeer.py): the kernel's
             UVC driver runs it, camtest lists it with Media Foundation and
             reads frames in each of its formats through a source reader,
@@ -351,6 +356,7 @@ VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
 KMDFEDU = load_suite('devices/kmdfedu')
 WDDM = load_suite('devices/wddm')
+DEVMGR = load_suite('devices/devmgr')
 NETKVM = load_suite('devices/netkvm')
 
 
@@ -529,6 +535,14 @@ def wddm_boot(work):
     """The device boots' own standard VGA (PCI 1234:1111), on which pnputil
     installs a WDDM display-only driver, wddmdod.sys (tests/selftest/devices/wddm)"""
     return [], []
+
+
+def devmgr_boot(work):
+    """An e1000e card, an xHCI controller with a USB keyboard and a USB
+    tablet, and QEMU's edu device with no driver: Device Manager lists them
+    with the rest of the machine (tests/selftest/devices/devmgr)"""
+    return ['-netdev', 'user,id=dm0', '-device', 'e1000e,netdev=dm0', '-device', 'qemu-xhci,id=xhci',
+            '-device', 'usb-kbd,bus=xhci.0', '-device', 'usb-tablet,bus=xhci.0', '-device', 'edu'], []
 
 
 def kmdfedu_boot(work):
@@ -822,7 +836,7 @@ BOOTS = {
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
-                ('wddm', WDDM, wddm_boot)],
+                ('wddm', WDDM, wddm_boot), ('devmgr', DEVMGR, devmgr_boot)],
 }
 
 

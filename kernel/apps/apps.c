@@ -38,6 +38,7 @@ static const AppInfo g_apps[APP_COUNT] = {
     [APP_BING]        = { "Bing Search",            "b",  GDI_C(0x10,0xA0,0x88), false, false },
     [APP_SOLITAIRE]   = { "Solitaire",              "Sol",GDI_C(0x12,0x6A,0x3A), false, false },
     [APP_TODO]        = { "Microsoft To Do",        "",   GDI_C(0x2A,0x6A,0xE0), false, false },
+    [APP_TASKMGR]     = { "Task Manager",           "",   GDI_C(0x1C,0x8C,0x5A), true,  false },
 };
 
 const AppInfo *AppGetInfo(AppId id)
@@ -87,6 +88,14 @@ static void firefox_launch(void)
         kprintf("[APPS] Cannot start Firefox: out of memory\n");
 }
 
+/* Task Manager is a Windows program (userland/programs/taskmgr.c) */
+static void taskmgr_launch(void)
+{
+    RamNode *exe = RamfsResolve(NULL, "\\Windows\\System32\\taskmgr.exe");
+    if (!exe || !UmSpawnDetached(exe, "taskmgr", exe->parent))
+        kprintf("[APPS] Cannot start Task Manager: %s\n", exe ? "out of memory" : "not installed");
+}
+
 void AppLaunch(AppId id)
 {
     const AppInfo *a = AppGetInfo(id);
@@ -107,6 +116,7 @@ void AppLaunch(AppId id)
     case APP_STORE:    StoreOpen(); break;
     case APP_SETUP:    SetupOpen(); break;
     case APP_WELCOME:  WelcomeOpen(); break;
+    case APP_TASKMGR:  taskmgr_launch(); break;
     default:           PlaceholderOpen(id); break;
     }
 }
@@ -132,6 +142,7 @@ bool AppByName(const char *name, AppId *out)
         { "store",    APP_STORE    }, { "appstore", APP_STORE },
         { "setup",    APP_SETUP    }, { "installer", APP_SETUP },
         { "welcome",  APP_WELCOME  }, { "oobe", APP_WELCOME },
+        { "taskmgr",  APP_TASKMGR  }, { "taskmanager", APP_TASKMGR },
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         const char *a = names[i].cmd, *b = name;
@@ -493,6 +504,8 @@ int AppForProgram(const char *exe_name)
         return APP_FIREFOX;
     if (exe_name && (name_is(exe_name, "netsurf.exe") || name_is(exe_name, "netsurf")))
         return APP_NETSURF;
+    if (exe_name && (name_is(exe_name, "taskmgr.exe") || name_is(exe_name, "taskmgr")))
+        return APP_TASKMGR;
     return -1;
 }
 
@@ -1046,6 +1059,14 @@ void AppDrawIcon(AppId id, int x, int y, int s)
         tile(x, y, s, GDI_C(0x5C, 0xD6, 0xA8), GDI_C(0x1E, 0x8A, 0x6A));
         ring(x, y, s, 50, 34, 13, 13, w);
         poly(shoulders, 6, false, x, y, s, w);
+        break; }
+    case APP_TASKMGR: {
+        /* a performance graph in a window */
+        static const P frame[] = { {18,24}, {82,24}, {82,76}, {18,76} };
+        static const P line[] = { {24,62}, {36,62}, {44,40}, {54,58}, {62,34}, {70,52}, {76,52} };
+        tile(x, y, s, GDI_C(0x4E, 0xD0, 0x8E), GDI_C(0x16, 0x84, 0x52));
+        poly(frame, 4, true, x, y, s, w);
+        poly(line, 7, false, x, y, s, w);
         break; }
     case APP_STORE: {
         /* a shopping bag */

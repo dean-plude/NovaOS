@@ -3331,30 +3331,54 @@ WINBASEAPI LONG WINAPI CompareFileTime(const FILETIME *a, const FILETIME *b)
     return x < y ? -1 : x > y;
 }
 
+static void filetime(LPFILETIME f, ULONGLONG v)
+{
+    if (!f) return;
+    f->dwLowDateTime = (DWORD)v;
+    f->dwHighDateTime = (DWORD)(v >> 32);
+}
+
+/* The CPUs' idle, kernel (idle included) and user time, summed over
+ * SystemProcessorPerformanceInformation as Windows does */
 WINBASEAPI BOOL WINAPI GetSystemTimes(LPFILETIME idle, LPFILETIME kernel, LPFILETIME user)
 {
-    if (idle) memset(idle, 0, sizeof(*idle));
-    if (kernel) memset(kernel, 0, sizeof(*kernel));
-    if (user) memset(user, 0, sizeof(*user));
+    ULONGLONG r[64][6], t[3] = { 0, 0, 0 };
+    ULONG got = 0;
+    if (!NT_SUCCESS(NtQuerySystemInformation(8, r, sizeof(r), &got))) got = 0;   /* (32-bit ntdll: none) */
+    for (ULONG i = 0; i < got / 48; i++) { t[0] += r[i][0]; t[1] += r[i][1]; t[2] += r[i][2]; }
+    filetime(idle, t[0]);
+    filetime(kernel, t[1]);
+    filetime(user, t[2]);
     return TRUE;
 }
 
+/* ProcessTimes and ThreadTimes: KERNEL_USER_TIMES { Create, Exit, Kernel, User } */
 WINBASEAPI BOOL WINAPI GetProcessTimes(HANDLE p, LPFILETIME created, LPFILETIME exited, LPFILETIME kernel, LPFILETIME user)
 {
-    (void)p;
-    GetSystemTimeAsFileTime(created);
-    memset(exited, 0, sizeof(*exited));
-    memset(kernel, 0, sizeof(*kernel));
-    ULONGLONG t = GetTickCount64() * 10000;             /* run time as user time: an estimate */
-    user->dwLowDateTime = (DWORD)t;
-    user->dwHighDateTime = (DWORD)(t >> 32);
+    ULONGLONG t[4];
+    if (!NT_SUCCESS(NtQueryInformationProcess(p, 4, t, sizeof(t), NULL))) {
+        FILETIME now;                               /* (no answer: started now, run time as user time) */
+        GetSystemTimeAsFileTime(&now);
+        t[0] = (ULONGLONG)now.dwHighDateTime << 32 | now.dwLowDateTime;
+        t[1] = t[2] = 0;
+        t[3] = GetTickCount64() * 10000;
+    }
+    filetime(created, t[0]);
+    filetime(exited, t[1]);
+    filetime(kernel, t[2]);
+    filetime(user, t[3]);
     return TRUE;
 }
 
-WINBASEAPI BOOL WINAPI GetThreadTimes(HANDLE t, LPFILETIME created, LPFILETIME exited, LPFILETIME kernel, LPFILETIME user)
+WINBASEAPI BOOL WINAPI GetThreadTimes(HANDLE h, LPFILETIME created, LPFILETIME exited, LPFILETIME kernel, LPFILETIME user)
 {
-    (void)t;
-    return GetProcessTimes(0, created, exited, kernel, user);
+    ULONGLONG t[4];
+    if (!NT_SUCCESS(NtQueryInformationThread(h, 1, t, sizeof(t), NULL))) return GetProcessTimes(GetCurrentProcess(), created, exited, kernel, user);
+    filetime(created, t[0]);
+    filetime(exited, t[1]);
+    filetime(kernel, t[2]);
+    filetime(user, t[3]);
+    return TRUE;
 }
 
 WINBASEAPI BOOL WINAPI QueryProcessCycleTime(HANDLE p, PULONG64 cycles) { (void)p; *cycles = __builtin_ia32_rdtsc(); return TRUE; }

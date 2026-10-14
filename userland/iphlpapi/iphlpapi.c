@@ -581,23 +581,96 @@ IPHLPAPI DWORD WINAPI GetBestRoute2(PVOID luid, ULONG index, const void *src, co
     return 1168;                                              /* ERROR_NOT_FOUND */
 }
 
-/* Interface tables (MIB_IF_TABLE2): empty, like the other tables here */
+/* MIB_IF_ROW2 (1352 bytes, x64 and x86 alike): the adapter, with its
+ * counters (NtNovaSockCtl op 17), as Task Manager and Resource Monitor
+ * read an interface's throughput */
+#define IF_ROW2_SIZE 1352
+static void row2_put(BYTE *r, ULONG off, ULONG64 v, int n) { memcpy(r + off, &v, (size_t)n); }
+
+static BOOL if_row2(const KAdapter *k, BYTE *r)
+{
+    ULONG64 c[4] = { 0 };
+    memset(r, 0, IF_ROW2_SIZE);
+    NtNovaSockCtl(0, 17, 0, c);
+    row2_put(r, 0, (6ull << 48) | ((ULONG64)k->if_index << 24), 8);   /* InterfaceLuid */
+    row2_put(r, 8, k->if_index, 4);                                   /* InterfaceIndex */
+    const char *alias = "Ethernet", *desc = k->adapter[0] ? k->adapter : "Ethernet adapter";
+    for (int i = 0; alias[i]; i++) r[28 + 2 * i] = (BYTE)alias[i];    /* Alias */
+    for (int i = 0; desc[i] && i < 256; i++) r[542 + 2 * i] = (BYTE)desc[i];   /* Description */
+    row2_put(r, 1056, 6, 4);                                          /* PhysicalAddressLength */
+    memcpy(r + 1060, k->mac, 6);                                      /* PhysicalAddress */
+    memcpy(r + 1092, k->mac, 6);                                      /* PermanentPhysicalAddress */
+    row2_put(r, 1124, 1500, 4);                                       /* Mtu */
+    row2_put(r, 1128, 6, 4);                                          /* Type: IF_TYPE_ETHERNET_CSMACD */
+    row2_put(r, 1144, 2, 4);                                          /* AccessType: NET_IF_ACCESS_BROADCAST */
+    row2_put(r, 1148, 0, 4);                                          /* DirectionType: send and receive */
+    r[1152] = 0x01;                                                   /* InterfaceAndOperStatusFlags: HardwareInterface */
+    BOOL up = (k->flags & 2) != 0;
+    row2_put(r, 1156, up ? 1 : 2, 4);                                 /* OperStatus: Up, Down */
+    row2_put(r, 1160, 1, 4);                                          /* AdminStatus: Up */
+    row2_put(r, 1164, up ? 1 : 2, 4);                                 /* MediaConnectState: Connected, Disconnected */
+    row2_put(r, 1184, 1, 4);                                          /* ConnectionType: DEDICATED */
+    ULONG64 speed = up ? 1000000000ull : 0;
+    row2_put(r, 1192, speed, 8);                                      /* TransmitLinkSpeed */
+    row2_put(r, 1200, speed, 8);                                      /* ReceiveLinkSpeed */
+    row2_put(r, 1208, c[0], 8);                                       /* InOctets */
+    row2_put(r, 1216, c[2], 8);                                       /* InUcastPkts */
+    row2_put(r, 1256, c[0], 8);                                       /* InUcastOctets */
+    row2_put(r, 1280, c[1], 8);                                       /* OutOctets */
+    row2_put(r, 1288, c[3], 8);                                       /* OutUcastPkts */
+    row2_put(r, 1320, c[1], 8);                                       /* OutUcastOctets */
+    return TRUE;
+}
+
+/* GetIfEntry2: the row asked for by its InterfaceLuid or, with that zero,
+ * its InterfaceIndex */
+IPHLPAPI DWORD WINAPI GetIfEntry2(PVOID row)
+{
+    if (!row) return ERROR_INVALID_PARAMETER;
+    KAdapter k;
+    BYTE *r = row;
+    ULONG64 luid;
+    ULONG index;
+    memcpy(&luid, r, 8);
+    memcpy(&index, r + 8, 4);
+    if (!adapter(&k)) return 2;                                      /* ERROR_FILE_NOT_FOUND */
+    ULONG64 mine = (6ull << 48) | ((ULONG64)k.if_index << 24);
+    if (luid ? luid != mine : index != k.if_index) return 2;
+    if_row2(&k, r);
+    return NO_ERROR;
+}
+IPHLPAPI DWORD WINAPI GetIfEntry2Ex(int level, PVOID row) { (void)level; return GetIfEntry2(row); }
+
+/* MIB_IF_TABLE2: NumEntries, then (8-aligned) the adapter's row */
 IPHLPAPI DWORD WINAPI GetIfTable2Ex(int level, PVOID *table)
 {
     (void)level;
+    if (!table) return ERROR_INVALID_PARAMETER;
+    KAdapter k;
+    BOOL have = adapter(&k);
+    BYTE *t = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 8 + (have ? IF_ROW2_SIZE : 8));
+    if (!t) return ERROR_NOT_ENOUGH_MEMORY;
+    if (have && if_row2(&k, t + 8)) *(ULONG *)t = 1;
+    *table = t;
+    return NO_ERROR;
+}
+IPHLPAPI DWORD WINAPI GetIfTable2(PVOID *table) { return GetIfTable2Ex(0, table); }
+
+/* The other MIB_*_TABLE2s: empty */
+static DWORD empty_table2(PVOID *table)
+{
     if (!table) return ERROR_INVALID_PARAMETER;
     ULONG *t = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 16);
     if (!t) return ERROR_NOT_ENOUGH_MEMORY;
     *table = t;                                       /* NumEntries = 0 */
     return NO_ERROR;
 }
-IPHLPAPI DWORD WINAPI GetIfTable2(PVOID *table) { return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetIpInterfaceTable(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetUnicastIpAddressTable(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetIpForwardTable2(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetIpNetTable2(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetAnycastIpAddressTable(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
-IPHLPAPI DWORD WINAPI GetMulticastIpAddressTable(USHORT family, PVOID *table) { (void)family; return GetIfTable2Ex(0, table); }
+IPHLPAPI DWORD WINAPI GetIpInterfaceTable(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
+IPHLPAPI DWORD WINAPI GetUnicastIpAddressTable(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
+IPHLPAPI DWORD WINAPI GetIpForwardTable2(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
+IPHLPAPI DWORD WINAPI GetIpNetTable2(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
+IPHLPAPI DWORD WINAPI GetAnycastIpAddressTable(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
+IPHLPAPI DWORD WINAPI GetMulticastIpAddressTable(USHORT family, PVOID *table) { (void)family; return empty_table2(table); }
 IPHLPAPI VOID WINAPI FreeMibTable(PVOID table) { if (table) HeapFree(GetProcessHeap(), 0, table); }
 
 /* The interface toward an address (sockaddr form): no route is known */

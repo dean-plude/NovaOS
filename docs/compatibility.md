@@ -67,9 +67,9 @@ planned (roadmap item 27.5).
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
 | Silver | 5 | 1 | 0 | 1 | 7 |
-| Bronze | 13 | 2 | 1 | 1 | 17 |
+| Bronze | 14 | 2 | 1 | 1 | 18 |
 | Borked | 0 | 1 | 0 | 0 | 1 |
-| Untested | 6 | 0 | 1 | 3 | 10 |
+| Untested | 5 | 0 | 1 | 3 | 9 |
 | **All** | 31 | 13 | 11 | 12 | 67 |
 
 ### Programs
@@ -100,8 +100,8 @@ planned (roadmap item 27.5).
 | **SoundCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store; with "Mesa 3D", "DXVK" and "VKD3D-Proton" from the App Store it gets a Direct3D 12 device (VKD3D-Proton on lavapipe) and opens an empty session (tracks, timeline, transport clock), about two and a half minutes after start under QEMU without KVM | Only the first window checked; its window starts wider than a 1280x800 screen; without the three App Store runtimes it exits at start, as on Windows it asks only for Direct3D 12 at first and NovaOS has no Direct3D 12 adapter of its own | nightly corpus ([`891-soundcraft.py`](../tests/appcorpus/891-soundcraft.py)) |
 | **VectorCraft 0.9.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens full screen on its welcome page, drawn with the built-in OpenGL (llvmpipe) | Drawing and saving not checked; the desktop's title bar sits above the app's own (it draws its own buttons too) | nightly corpus ([`887-vectorcraft.py`](../tests/appcorpus/887-vectorcraft.py)) |
 | **WordCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store and opens a blank document under its ribbon, drawn with the built-in OpenGL (llvmpipe) | Typing and saving not checked; its window starts wider than a 1280x800 screen | nightly corpus ([`889-wordcraft.py`](../tests/appcorpus/889-wordcraft.py)) |
+| **Thunderbird 158** (App Store; 64-bit, Mozilla's Gecko) | Bronze | Installs from the App Store (Mozilla's full installer, unpacked) and opens an e-mail message (`.eml`) in its own window: sender, recipient, date, subject and text ([history](history/2026-10-14-thunderbird.md)) | No mail account, sending or receiving checked (no mail server in the test); its main window stays empty without an account | nightly corpus ([`954-thunderbird.py`](../tests/appcorpus/954-thunderbird.py)) |
 | **WinSCP 6.3.5** (App Store; 32-bit, C++Builder VCL, Inno Setup installer) | Bronze | Installs from the App Store (its Inno Setup installer, silently, registering its 64-bit shell extension through `regsvr32`) and opens its Login dialog over its main window, whose two panels open on local folders ([history](history/2026-10-14-winscp.md)) | The Login dialog's site tree and the file panels list their items but draw none of them, and the port number box is blank; no connection or transfer checked | nightly corpus ([`952-winscp.py`](../tests/appcorpus/952-winscp.py)) |
-| **Thunderbird** (App Store) | Untested | — | Not checked yet; it uses the same engine as Firefox, which works | — |
 | **GIMP** (App Store) | Untested | — | — | — |
 | **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 | **OBS Studio** (App Store) | Untested | — | — | — |

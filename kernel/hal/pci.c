@@ -20,6 +20,8 @@ static int       g_count;
 static UINT32    g_saved[PCI_MAX_DEVICES][16];   /* configuration headers over S3 */
 static const char *g_driver[PCI_MAX_DEVICES];    /* who claimed each function (PciClaim) */
 static bool (*g_set_aside[PCI_MAX_DEVICES])(void);   /* how its inbox driver lets go (PciAllowSetAside) */
+static PciRange   g_ranges[PCI_MAX_DEVICES][6];  /* each function's BARs as the firmware set them (PciRanges) */
+static UINT8      g_nranges[PCI_MAX_DEVICES];
 
 static UINT32 cfg_addr(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off)
 {
@@ -122,6 +124,59 @@ void PciWrite16(UINT8 bus, UINT8 dev, UINT8 func, UINT8 off, UINT16 val)
     PciWrite32(bus, dev, func, off, v);
 }
 
+/* The memory and I/O ranges function @i decodes (its BARs, sized with
+ * decoding off), for Device Manager's Resources (PciRanges).  At boot,
+ * before any driver uses the function. */
+static void size_ranges(int i)
+{
+    const PciDevice *d = &g_devices[i];
+    UINT8 type = (UINT8)((PciRead32(d->bus, d->dev, d->func, 0x0C) >> 16) & 0x7F);
+    int bars = type == 0 ? 6 : type == 1 ? 2 : 0;
+    if (!bars) return;
+    UINT16 cmd = PciRead16(d->bus, d->dev, d->func, 0x04);
+    PciWrite16(d->bus, d->dev, d->func, 0x04, (UINT16)(cmd & ~3u));
+    for (int bar = 0; bar < bars; bar++) {
+        UINT8 off = (UINT8)(0x10 + 4 * bar);
+        UINT32 lo = PciRead32(d->bus, d->dev, d->func, off);
+        bool io = lo & 1, is64 = !io && ((lo >> 1) & 3) == 2 && bar + 1 < bars;
+        PciWrite32(d->bus, d->dev, d->func, off, 0xFFFFFFFFu);
+        UINT64 mask = PciRead32(d->bus, d->dev, d->func, off) & (io ? ~3ull : ~0xFull);
+        PciWrite32(d->bus, d->dev, d->func, off, lo);
+        UINT64 base = lo & (io ? ~3u : ~0xFu);
+        if (is64) {
+            UINT8 off2 = (UINT8)(off + 4);
+            UINT32 hi = PciRead32(d->bus, d->dev, d->func, off2);
+            PciWrite32(d->bus, d->dev, d->func, off2, 0xFFFFFFFFu);
+            mask |= (UINT64)PciRead32(d->bus, d->dev, d->func, off2) << 32;
+            PciWrite32(d->bus, d->dev, d->func, off2, hi);
+            base |= (UINT64)hi << 32;
+        } else {
+            mask |= io ? 0xFFFFFFFFFFFF0000ull : 0xFFFFFFFF00000000ull;
+        }
+        UINT64 size = (mask & 0xFFFFFFFFull) ? ~mask + 1 : 0;
+        if (size && base) {
+            PciRange *r = &g_ranges[i][g_nranges[i]++];
+            r->io = io;
+            r->prefetch = !io && (lo & 8);
+            r->base = base;
+            r->size = size;
+        }
+        if (is64) bar++;
+    }
+    PciWrite16(d->bus, d->dev, d->func, 0x04, cmd);
+}
+
+int PciRanges(const PciDevice *d, PciRange *out, int max)
+{
+    for (int i = 0; i < g_count; i++) {
+        if (g_devices[i].bus != d->bus || g_devices[i].dev != d->dev || g_devices[i].func != d->func) continue;
+        int n = g_nranges[i] < max ? g_nranges[i] : max;
+        for (int k = 0; k < n; k++) out[k] = g_ranges[i][k];
+        return n;
+    }
+    return 0;
+}
+
 static void probe(UINT8 bus, UINT8 dev, UINT8 func)
 {
     UINT32 id = PciRead32(bus, dev, func, 0x00);
@@ -150,6 +205,7 @@ static void probe(UINT8 bus, UINT8 dev, UINT8 func)
     d->irq_line   = (UINT8)PciRead32(bus, dev, func, 0x3C);
     kprintf("[PCI] %02x:%02x.%x %04x:%04x class %02x.%02x\n", bus, dev, func,
             d->vendor, d->device, d->class_code, d->subclass);
+    size_ranges(g_count - 1);
 }
 
 void PciInitialize(void)

@@ -11,7 +11,7 @@
   - [x] storvsc: SCSI disks, so NovaOS installs to a VHDX and keeps drive
     C: (#402)
   - [x] Synthetic video: a resolution chosen in Settings (#403)
-  - [x] netvsc: the network adapter (NVSP and RNDIS) (#PR)
+  - [x] netvsc: the network adapter (NVSP and RNDIS) (#404)
   - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),
     the SynIC on every CPU, channel interrupts instead of polling, devices
     added and removed while running

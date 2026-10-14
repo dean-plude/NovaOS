@@ -146,10 +146,11 @@ static void exception_test(void)
 
 /* GetThreadContext: a thread spinning with YMM0-15 loaded, suspended */
 static Ymm g_spin_in[16], g_spin_out[16];
-static volatile LONG g_spin_stop;
+static volatile LONG g_spin_stop, g_spin_started;
 static DWORD WINAPI spin_thread(void *arg)
 {
     (void)arg;
+    g_spin_started = 1;
     hold(g_spin_in, g_spin_out, &g_spin_stop, 0);
     return 0;
 }
@@ -158,7 +159,8 @@ static void thread_context_test(void)
 {
     fill(g_spin_in, 4242);
     HANDLE t = CreateThread(NULL, 0, spin_thread, NULL, 0, NULL);
-    Sleep(300);                                         /* (in its loop) */
+    for (int i = 0; i < 500 && !g_spin_started; i++) Sleep(10);   /* (it may start late on a busy machine) */
+    Sleep(100);                                         /* (in its loop) */
     DWORD len = 0;
     InitializeContext(NULL, CONTEXT_ALL | CONTEXT_XSTATE_, NULL, &len);
     void *buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len);

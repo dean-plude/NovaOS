@@ -325,6 +325,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
 | `devmgr` | Device Manager (`devmgmt.exe`) opened from the Start menu, then `devmgmt --check` on an e1000e card, a USB keyboard and tablet and the driverless edu device: setupapi's list against cfgmgr32's tree, classes, status and problem codes, resources (`CM_Get_First_Log_Conf`); its screenshot is `docs/screenshots/device-manager.png` |
 | `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled |
+| `diskmgr` | a blank second disk: Disk Management (`diskmgmt.exe`), opened from the Start menu, initializes it as GPT, makes an NTFS and a FAT32 volume and moves one to T: (still T: after a restart); `scripts/ntfs-check.py`, `fsck.fat` and the files are checked from the host |
 
 [drivers.md](drivers.md) has more on the Windows driver model these boots
 exercise.

@@ -305,6 +305,25 @@ WINBASEAPI UINT   WINAPI GetDriveTypeW(LPCWSTR root);
 WINBASEAPI DWORD  WINAPI GetLogicalDrives(void);
 WINBASEAPI DWORD  WINAPI GetLogicalDriveStringsW(DWORD n, LPWSTR buf);
 WINBASEAPI DWORD  WINAPI GetLogicalDriveStringsA(DWORD n, LPSTR buf);
+WINBASEAPI UINT   WINAPI GetDriveTypeA(LPCSTR root);
+WINBASEAPI BOOL   WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPVOID out, DWORD out_n, LPDWORD ret,
+                                         LPOVERLAPPED ov);
+#define DRIVE_UNKNOWN     0
+#define DRIVE_NO_ROOT_DIR 1
+#define DRIVE_REMOVABLE   2
+#define DRIVE_FIXED       3
+#define DRIVE_REMOTE      4
+#define DRIVE_CDROM       5
+#define DRIVE_RAMDISK     6
+WINBASEAPI HANDLE WINAPI FindFirstVolumeW(LPWSTR name, DWORD n);
+WINBASEAPI BOOL   WINAPI FindNextVolumeW(HANDLE find, LPWSTR name, DWORD n);
+WINBASEAPI BOOL   WINAPI FindVolumeClose(HANDLE find);
+WINBASEAPI BOOL   WINAPI GetVolumeNameForVolumeMountPointW(LPCWSTR mount, LPWSTR name, DWORD n);
+WINBASEAPI BOOL   WINAPI GetVolumePathNamesForVolumeNameW(LPCWSTR name, LPWSTR paths, DWORD n, PDWORD need);
+WINBASEAPI BOOL   WINAPI GetVolumePathNameW(LPCWSTR path, LPWSTR out, DWORD n);
+WINBASEAPI BOOL   WINAPI SetVolumeMountPointW(LPCWSTR mount, LPCWSTR name);
+WINBASEAPI BOOL   WINAPI DeleteVolumeMountPointW(LPCWSTR mount);
+WINBASEAPI DWORD  WINAPI QueryDosDeviceW(LPCWSTR name, LPWSTR out, DWORD n);
 WINBASEAPI BOOL   WINAPI AreFileApisANSI(void);
 /* modules */
 WINBASEAPI HMODULE WINAPI LoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags);

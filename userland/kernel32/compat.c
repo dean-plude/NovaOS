@@ -1655,24 +1655,7 @@ K32 BOOL WINAPI GetNumaAvailableMemoryNode(UCHAR node, PULONGLONG bytes)
     return TRUE;
 }
 
-static const WCHAR g_volume[] = L"\\\\?\\Volume{4e4f5641-0000-0000-0000-000000000001}\\";
-K32 HANDLE WINAPI FindFirstVolumeW(LPWSTR name, DWORD n)
-{
-    DWORD len = sizeof(g_volume) / sizeof(WCHAR);
-    if (n < len) { SetLastError(206 /* ERROR_FILENAME_EXCED_RANGE */); return INVALID_HANDLE_VALUE; }
-    for (DWORD i = 0; i < len; i++) name[i] = g_volume[i];
-    return (HANDLE)(ULONG_PTR)0x4E56;
-}
-K32 HANDLE WINAPI FindFirstVolumeA(LPSTR name, DWORD n)
-{
-    DWORD len = sizeof(g_volume) / sizeof(WCHAR);
-    if (n < len) { SetLastError(206 /* ERROR_FILENAME_EXCED_RANGE */); return INVALID_HANDLE_VALUE; }
-    for (DWORD i = 0; i < len; i++) name[i] = (char)g_volume[i];
-    return (HANDLE)(ULONG_PTR)0x4E56;
-}
-K32 BOOL WINAPI FindNextVolumeW(HANDLE h, LPWSTR name, DWORD n) { (void)h; (void)name; (void)n; SetLastError(ERROR_NO_MORE_FILES); return FALSE; }
-K32 BOOL WINAPI FindNextVolumeA(HANDLE h, LPSTR name, DWORD n) { (void)h; (void)name; (void)n; SetLastError(ERROR_NO_MORE_FILES); return FALSE; }
-K32 BOOL WINAPI FindVolumeClose(HANDLE h) { (void)h; return TRUE; }
+/* (the volumes: volume.c) */
 
 K32 BOOL WINAPI GetSystemTimeAdjustment(PDWORD adj, PDWORD inc, PBOOL disabled)
 {
@@ -1846,42 +1829,7 @@ K32 BOOL WINAPI GetLogicalProcessorInformationEx(int rel, PVOID buf, PDWORD len)
     return TRUE;
 }
 
-/* Devices and volumes: C: is the one volume; there are no MS-DOS devices
- * but the drive, and no serial ports or tapes */
-K32 DWORD WINAPI QueryDosDeviceW(LPCWSTR name, LPWSTR buf, DWORD n)
-{
-    static const WCHAR c_dev[] = L"\\Device\\HarddiskVolume1";
-    const WCHAR *v = 0;
-    if (!name) {                                                     /* every name: "C:\0\0" */
-        if (n < 4) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return 0; }
-        buf[0] = 'C'; buf[1] = ':'; buf[2] = 0; buf[3] = 0;
-        return 4;
-    }
-    if ((name[0] == 'C' || name[0] == 'c') && name[1] == ':' && !name[2]) v = c_dev;
-    if (!v) { SetLastError(ERROR_FILE_NOT_FOUND); return 0; }
-    DWORD k = (DWORD)wlen(v);
-    if (n < k + 2) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return 0; }
-    memcpy(buf, v, 2 * k);
-    buf[k] = 0; buf[k + 1] = 0;
-    return k + 2;
-}
-K32 BOOL WINAPI GetVolumeNameForVolumeMountPointW(LPCWSTR mount, LPWSTR buf, DWORD n)
-{
-    static const WCHAR vol[] = L"\\\\?\\Volume{4e6f7661-0000-0000-0000-000000000001}\\";
-    if (!mount || (mount[0] != 'C' && mount[0] != 'c') || mount[1] != ':') { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
-    DWORD k = (DWORD)wlen(vol);
-    if (n <= k) { SetLastError(206 /* ERROR_FILENAME_EXCED_RANGE */); return FALSE; }
-    memcpy(buf, vol, 2 * (k + 1));
-    return TRUE;
-}
-K32 BOOL WINAPI GetVolumePathNamesForVolumeNameW(LPCWSTR vol, LPWSTR buf, DWORD n, PDWORD ret)
-{
-    (void)vol;
-    if (ret) *ret = 5;
-    if (n < 5) { SetLastError(ERROR_MORE_DATA); return FALSE; }
-    buf[0] = 'C'; buf[1] = ':'; buf[2] = '\\'; buf[3] = 0; buf[4] = 0;
-    return TRUE;
-}
+/* (QueryDosDevice and the volume names: volume.c) */
 K32 BOOL WINAPI SetComputerNameExW(int type, LPCWSTR name) { (void)type; (void)name; SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
 
 K32 DWORD WINAPI GetTapeParameters(HANDLE h, DWORD op, LPDWORD n, LPVOID info) { (void)h; (void)op; (void)n; (void)info; return ERROR_INVALID_HANDLE; }

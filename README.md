@@ -56,7 +56,8 @@ checked, and Roblox stops at its anti-cheat check.
 ## Screenshots
 
 All taken from NovaOS running in QEMU.  [docs/screenshots/README.md](docs/screenshots/README.md)
-says how each one was made.
+says how each one was made and has more of them: Settings, File
+Explorer, Notepad, Calendar, more programs and the graphics tests.
 
 | | | |
 |---|---|---|
@@ -68,8 +69,12 @@ says how each one was made.
 | Beneath a Steel Sky on ScummVM, installed with its own installer | Teeworlds in full screen, with music | Tyrian on OpenTyrian, Direct3D 9 through DXVK |
 | ![Blobby Volley 2](docs/screenshots/blobby-volley-2.png) | ![Cave Story](docs/screenshots/cave-story.png) | ![SuperTux](docs/screenshots/supertux.png) |
 | Blobby Volley 2, exclusive full screen at 800x600 | Cave Story, DirectDraw at 640x480 | SuperTux, played with an Xbox 360 pad |
-| ![Device Manager](docs/screenshots/device-manager.png) | ![Event Viewer](docs/screenshots/event-viewer.png) | |
-| Device Manager: devices by type, with each one's driver, IDs and resources | Event Viewer: the Application log, with an event's message and details | |
+| ![Krita](docs/screenshots/krita.png) | ![LibreOffice Calc](docs/screenshots/libreoffice-calc.png) | ![Thunderbird](docs/screenshots/thunderbird.png) |
+| Krita with a drawing saved as `.kra` | LibreOffice Calc with an `.xlsx` spreadsheet | Thunderbird reading a mail |
+| ![The Start menu](docs/screenshots/start-menu.png) | ![Settings](docs/screenshots/settings-personalization.png) | ![The Terminal](docs/screenshots/terminal.png) |
+| The Start menu on the Aurora desktop | Settings: the four desktop themes | The Terminal running `sysinfo` and `devices` |
+| ![Device Manager](docs/screenshots/device-manager.png) | ![Event Viewer](docs/screenshots/event-viewer.png) | ![WinSCP](docs/screenshots/winscp.png) |
+| Device Manager: devices by type, with each one's driver, IDs and resources | Event Viewer: the Application log, with an event's message and details | WinSCP's login window |
 
 ## Try it
 

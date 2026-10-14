@@ -610,7 +610,7 @@ item ends when a named program or test demonstrates it.
     local APIC timer already run at the frequencies Hyper-V's MSRs give,
     and every channel interrupts CPU 0
   - [x] Key-value exchange (the VM's name and addresses in Hyper-V
-    Manager) (#406)
+    Manager) (#407)
 
 <!-- END generated:next-hardware -->
 

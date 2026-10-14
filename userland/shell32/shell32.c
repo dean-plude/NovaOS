@@ -185,7 +185,7 @@ typedef struct { WORD cb; BYTE abID[1]; } SHITEMID;
 typedef struct { SHITEMID mkid; } ITEMIDLIST, *LPITEMIDLIST;
 typedef const ITEMIDLIST *LPCITEMIDLIST;
 
-static LPITEMIDLIST pidl_from_path(const WCHAR *path)
+LPITEMIDLIST sh_pidl_from_path(const WCHAR *path)       /* (folder.c's items too) */
 {
     int n = wlen(path);
     WORD cb = (WORD)(2 + 2 * (n + 1));
@@ -220,7 +220,7 @@ SHSTDAPI_(LPITEMIDLIST) ILCreateFromPathW(LPCWSTR path)
 {
     WCHAR full[MAX_PATH];
     if (!GetFullPathNameW(path, MAX_PATH, full, 0)) return 0;
-    return pidl_from_path(full);
+    return sh_pidl_from_path(full);
 }
 
 SHSTDAPI_(LPITEMIDLIST) ILCreateFromPathA(LPCSTR path)
@@ -233,6 +233,8 @@ SHSTDAPI_(LPITEMIDLIST) ILCreateFromPathA(LPCSTR path)
 SHSTDAPI_(BOOL) SHGetPathFromIDListW(LPCITEMIDLIST pidl, LPWSTR path)
 {
     if (!pidl || !pidl->mkid.cb) { path[0] = 0; return FALSE; }
+    /* a folder's list followed by a child's (both full paths): the child */
+    while (*(const WORD *)((const BYTE *)pidl + pidl->mkid.cb)) pidl = (LPCITEMIDLIST)((const BYTE *)pidl + pidl->mkid.cb);
     const WCHAR *s = (const WCHAR *)pidl->mkid.abID;
     int n = wlen(s);
     if (n >= MAX_PATH) { path[0] = 0; return FALSE; }
@@ -262,7 +264,7 @@ SHSTDAPI_(HRESULT) SHGetFolderLocation(HWND hwnd, int csidl, HANDLE token, DWORD
     WCHAR p[MAX_PATH];
     HRESULT hr = SHGetFolderPathW(hwnd, csidl, token, flags, p);
     if (hr) { *out = 0; return hr; }
-    *out = pidl_from_path(p);
+    *out = sh_pidl_from_path(p);
     return *out ? S_OK_ : E_OUTOFMEMORY_;
 }
 
@@ -276,7 +278,7 @@ SHSTDAPI_(HRESULT) SHGetKnownFolderIDList(REFGUID id, DWORD flags, HANDLE token,
     LPWSTR p;
     HRESULT hr = SHGetKnownFolderPath(id, flags, token, &p);
     if (hr) { *out = 0; return hr; }
-    *out = pidl_from_path(p);
+    *out = sh_pidl_from_path(p);
     LocalFree(p);
     return *out ? S_OK_ : E_OUTOFMEMORY_;
 }
@@ -905,7 +907,7 @@ static const struct MallocVtbl g_malloc_vtbl = { m_qi, m_ref, m_ref, m_alloc, m_
 static Malloc g_malloc = { &g_malloc_vtbl };
 
 SHSTDAPI_(HRESULT) SHGetMalloc(void **out) { *out = &g_malloc; return S_OK_; }
-SHSTDAPI_(HRESULT) SHGetDesktopFolder(void **out) { *out = 0; return E_NOTIMPL_; }
+/* SHGetDesktopFolder: folder.c */
 SHSTDAPI_(HRESULT) SHGetStockIconInfo(int id, UINT flags, void *info) { (void)id; (void)flags; (void)info; return E_NOTIMPL_; }
 SHSTDAPI_(HRESULT) SetCurrentProcessExplicitAppUserModelID(LPCWSTR id) { (void)id; return S_OK_; }
 SHSTDAPI_(HRESULT) GetCurrentProcessExplicitAppUserModelID(LPWSTR *id) { *id = 0; return E_FAIL_; }

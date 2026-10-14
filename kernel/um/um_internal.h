@@ -331,6 +331,7 @@ struct UmProcess {
 UmProcess *UmCurrent(void);                    /* NULL for kernel threads */
 void       um_set_layout(UmProcess *p, bool wow);   /* 64-bit or 32-bit (WoW) address layout */
 void       um_wow_path(UmProcess *p, char *path);  /* System32 -> SysWOW64 for 32-bit programs */
+bool       um_sysnative_path(UmProcess *p, char *path);  /* Sysnative -> System32 for 32-bit programs */
 UINT16     um_pe_machine(const RamNode *f);     /* 0x8664, 0x014C, or 0 if not a PE file */
 UINT16     um_pe_subsystem(RamNode *f);   /* IMAGE_SUBSYSTEM_* (2 GUI, 3 console), 0 if not an image */
 UINT16     um_pe_dll_characteristics(RamNode *f);   /* IMAGE_DLLCHARACTERISTICS_* of the optional header */

@@ -12493,4 +12493,48 @@ redraw work of PRs #297–#306 cannot quietly slip back.
 - **Tests**: `tests/tools/test_perf_budget.py` checks the screen-colour
   measure, the verdicts and the budget file without a VM.
 
+## WinSCP: a Delphi program from the App Store
+
+Roadmap step 27.1 (grow the corpus), its first app: WinSCP 6.3.5, the
+SFTP, FTP and SCP client the App Store lists, built with C++Builder's
+VCL.  The nightly corpus now installs it from the Store's download (its
+Inno Setup installer, run silently) and opens it on its Login dialog
+(`tests/appcorpus/952-winscp.py`).  It found five NovaOS gaps:
+
+- **regsvr32 in the system folders**: Inno Setup registers a program's
+  COM servers with `C:\Windows\SysWOW64\regsvr32.exe`, which NovaOS kept
+  only in `C:\Programs`, so the installer stopped ("Unable to register
+  the DLL") and rolled back.  `regsvr32` is now in `System32` and
+  `SysWOW64` as on Windows, and each hands a DLL of the other kind to the
+  other one with the same arguments (WinSCP's `DragExt64.dll` is 64-bit).
+- **`C:\Windows\Sysnative`**: how a 32-bit program reaches the 64-bit
+  `System32`, as WoW64 has it; NovaOS now maps it for 32-bit programs'
+  file names and the programs they start.
+- **uxtheme's dark-mode ordinals**: Windows 10 exports
+  `SetPreferredAppMode`, `AllowDarkModeForWindow`,
+  `ShouldAppsUseDarkMode` and their kin by number alone (104, 106,
+  132-139).  NovaOS's uxtheme gave those numbers to unrelated exports, so
+  WinSCP called `EndBufferedAnimation` with one argument for two and
+  crashed at start.  They are now the real functions (dark when Settings'
+  app mode is dark, `AppsUseLightTheme` 0), and the numbers Windows leaves
+  empty are empty.
+- **Image lists in streams**: `ImageList_Read` and `ImageList_Write` (the
+  "IL" header, then the images four to a row as a BMP and their mask) are
+  real; Delphi keeps every form's image lists that way, and WinSCP stopped
+  at "Failed to read ImageList data from stream".  comctl32 also gained
+  `FlatSB_GetScrollProp`, `FlatSB_GetScrollRange` and
+  `FlatSB_SetScrollRange`.
+- **The shell namespace's folders**: `SHGetDesktopFolder` returned
+  E_NOTIMPL, which WinSCP's drive tree reports as an error.  shell32 now
+  has an `IShellFolder` for the desktop (its children are the drives) and
+  for each directory: parsing names, listing, binding, comparing,
+  attributes and display names over NovaOS's item ID lists (one item
+  holding a full path); `SHBindToParent` uses them.
+
+`dlltest` (core self-tests, 64- and 32-bit) checks the ordinals, an image
+list written to a stream and read back, and the desktop folder listing
+`C:\Windows`.  Still open: WinSCP's site tree and file panels list their
+items but draw none of them, its port number box is blank, and no
+transfer is checked yet.
+
 <!-- END generated:history -->

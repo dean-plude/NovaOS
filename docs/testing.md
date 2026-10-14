@@ -66,22 +66,24 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   code expects), `filetest`, `linktest`, `pipetest`, `proctest`,
   `dlltest` (DllMain, static TLS, and a DllMain returning FALSE stopping
   the program with 0xC0000142, module file names past the 64th module,
-  64- and 32-bit), `sectest`, `acltest` (64- and 32-bit),
-  `consolecursortest` (classic console screen buffers: cursor, cell I/O,
-  fills, scrolling, attributes and independent buffers; 64- and 32-bit),
-  `ptyscreentest` (a full-screen program drawn in a console window and
-  through a pseudo console gives the same cells), `conptytest` (a
-  terminal host types into, resizes and exits an interactive `cmd.exe`
-  through `CreatePseudoConsole`), `guitest auto`, `inputtest` (side
-  buttons, horizontal wheel, volume keys), `usbcheck` (media keys, AC
-  Pan, pen pressure, tilt and twist, virtio pens and tablets), `anitest`
-  (animated cursors and program pointers), `cursortest` (system
-  pointers, SetSystemCursor, cursors at the display scale), `bmpcurtest`
-  (1-, 4-, 8- and 16-bit DIB sections, cursors from bitmaps with alpha
-  or monochrome masks), `pentest` (a pen as WM_POINTER* messages: enter,
-  down, update, up, leave; GetPointerPenInfo pressure, tilt, rotation,
-  barrel and eraser; DefWindowProc promotion to mouse with the pen
-  signature in GetMessageExtraInfo; WM_NCPOINTER* over a title bar and
+  exports by ordinal alone, image lists in streams and the shell's
+  desktop folder, 64- and 32-bit), `sectest`, `acltest` (64- and
+  32-bit), `consolecursortest` (classic console screen buffers: cursor,
+  cell I/O, fills, scrolling, attributes and independent buffers; 64-
+  and 32-bit), `ptyscreentest` (a full-screen program drawn in a console
+  window and through a pseudo console gives the same cells),
+  `conptytest` (a terminal host types into, resizes and exits an
+  interactive `cmd.exe` through `CreatePseudoConsole`), `guitest auto`,
+  `inputtest` (side buttons, horizontal wheel, volume keys), `usbcheck`
+  (media keys, AC Pan, pen pressure, tilt and twist, virtio pens and
+  tablets), `anitest` (animated cursors and program pointers),
+  `cursortest` (system pointers, SetSystemCursor, cursors at the display
+  scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections, cursors from
+  bitmaps with alpha or monochrome masks), `pentest` (a pen as
+  WM_POINTER* messages: enter, down, update, up, leave;
+  GetPointerPenInfo pressure, tilt, rotation, barrel and eraser;
+  DefWindowProc promotion to mouse with the pen signature in
+  GetMessageExtraInfo; WM_NCPOINTER* over a title bar and
   WM_POINTERACTIVATE; the mouse as a pointer, entering and leaving
   windows; 64- and 32-bit), `wintabtest` (wintab32 with no pen and with
   a synthetic one: contexts, packets, pressure, tilt and rotation),
@@ -348,7 +350,7 @@ input ring, NTFS power-cut recovery).
 
 `.github/workflows/nightly.yml` builds `main` and runs `tools/appcorpus.py`,
 one VM and one job per program: the official Windows x64 releases of
-<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
+<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita, PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY, WinSCP (a Delphi VCL program: its Login dialog) and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
 Each program is downloaded (and cached), unpacked onto drive C: or
 installed with its own installer or the App Store, and driven by typed
 commands, clicks and keys. The windowed programs' screenshots must match

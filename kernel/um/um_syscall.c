@@ -644,6 +644,8 @@ static UINT32 get_path(UmProcess *p, UINT64 oa_ptr, char *out, int cap, RamNode 
     char *s = out;
     if (!strncmp(s, "\\??\\", 4) || !strncmp(s, "\\\\?\\", 4) || !strncmp(s, "\\\\.\\", 4)) s += 4;
     if (s != out) memmove(out, s, strlen(s) + 1);
+    UINT32 vst = um_disk_path(out, cap, s != out);      /* \??\X: (a volume), \??\Volume{GUID}\... */
+    if (vst) return vst;
 
     *root = p->cwd;
     if (oa[1]) {                                        /* RootDirectory handle */
@@ -786,12 +788,13 @@ static UINT32 open_other(UmProcess *p, const char *path, UINT32 access, UINT32 d
         if (!put_u64(handle_ptr, hv)) { um_close_handle(hv); return UM_STATUS_ACCESS_VIOLATION; }
         return iosb(iosb_ptr, ST_SUCCESS, 1);
     }
-    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || um_driver_name(path)) {
-        /* a pipe's client end, a HID device, an AFD helper, a Windows driver's device */
+    if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || um_driver_name(path) || um_disk_name(path)) {
+        /* a pipe's client end, a HID device, an AFD helper, a Windows driver's device, a disk or volume */
         UmObject *o;
         bool rd = true, wr = false;
         UINT32 pst;
         if (um_afd_name(path)) { pst = (o = um_afd_open()) ? ST_SUCCESS : ST_NO_MEMORY; wr = true; }
+        else if (um_disk_name(path)) { pst = um_disk_open(path, access, &o); wr = true; }
         else if (um_driver_name(path)) { pst = um_driver_open(path, access, 7, disposition, options, &o); wr = true; }
         else pst = um_hid_name(path) ? um_hid_open(path, options, &o) : um_pipe_open(path, access, options, &o, &rd, &wr);
         if (pst) return iosb(iosb_ptr, pst, 0);
@@ -908,7 +911,7 @@ static UINT32 open_file(UINT64 handle_ptr, UINT32 access, UINT64 oa_ptr, UINT64 
     UmHandleKind ck;
     UmHandle *h;
     if (um_pipe_name(path) || um_hid_name(path) || um_afd_name(path) || is_console_name(path, &ck) ||
-        um_driver_name(path)) {                                 /* not files: under the big lock */
+        um_driver_name(path) || um_disk_name(path)) {           /* not files: under the big lock */
         FsUnlockShared();
         bkl_acquire();
         st = open_other(p, path, access, disposition, options, inherit, handle_ptr, iosb_ptr);
@@ -1880,6 +1883,16 @@ static UINT64 sys_query_volume_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
     UmHandle *h = handle(p, a1);
     if (!h) return ST_INVALID_HANDLE;
     UINT32 cls = (UINT32)um_stack_arg(5);
+    if (h->kind == H_OBJECT && h->obj->type == UO_DISK) {       /* a disk or volume handle (um_disk.c) */
+        UINT8 b[128];
+        UINT32 need = 0;
+        if (a4 < 8) return iosb(a2, ST_INFO_LENGTH_MISMATCH, 0);
+        UINT32 st = um_disk_query_volume(h->obj, cls, b, &need);
+        if (st) return iosb(a2, st, 0);
+        UINT32 n = a4 < need ? (UINT32)a4 : need;
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, b, n))) return UM_STATUS_ACCESS_VIOLATION;
+        return iosb(a2, n < need ? ST_BUFFER_OVERFLOW : ST_SUCCESS, n);
+    }
     if (cls != 4) {
         /* the volume of drive C: (reported as FAT32: no ACLs persist unless it is on NTFS; hard links yes) */
         if (h->kind != H_FILE && h->kind != H_DIR) return iosb(a2, 0xC0000010u /* INVALID_DEVICE_REQUEST */, 0);
@@ -2827,6 +2840,12 @@ static UINT64 sys_fs_control(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UINT64 iosb_ptr = um_stack_arg(5);
     UINT32 code = (UINT32)um_stack_arg(6);
     UmObject *po = a1 ? um_handle_object(p, a1, UO_PIPE) : NULL;
+    UmObject *dk = !po && a1 ? um_handle_object(p, a1, UO_DISK) : NULL;
+    if (dk) {                                                   /* a volume: locking and dismounting it are */
+        um_ob_unref(dk);                                        /*   what formatting does (um_disk.c) */
+        bool lock = code == 0x90018u || code == 0x9001Cu || code == 0x90020u;   /* FSCTL_LOCK/UNLOCK/DISMOUNT_VOLUME */
+        return iosb(iosb_ptr, lock ? ST_SUCCESS : 0xC0000010u, 0);
+    }
     if (!po && code != 0x110018u /* FSCTL_PIPE_WAIT */) {
         if (a1 && !um_handle_object_exists(p, a1)) return ST_INVALID_HANDLE;
         return iosb(iosb_ptr, 0xC0000010u /* STATUS_INVALID_DEVICE_REQUEST */, 0);

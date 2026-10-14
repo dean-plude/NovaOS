@@ -522,13 +522,20 @@ mcopy -i build/nova-data.img@@1M rg.exe ::/NOVA/C/Tools/
 partition table it wrote.  The ISO boots from a read-only CD: attach a
 disk to keep files.
 
-### Other drives (NTFS)
+### Other drives (NTFS and FAT32)
 
-Every NTFS volume on an attached disk (a partition in an MBR or GPT, or a
-whole disk) becomes a drive of its own, D:, E:, and so on in the order
-found.  Programs, the Terminal and File Explorer can list, open, run,
-write, create, rename and delete files there.  FAT volumes on USB sticks
-are mounted too, read-only.
+Every partition of every disk (in an MBR or GPT, or a whole disk) is a
+volume, as on Windows: `\Device\HarddiskVolumeN` (drive C:'s is 1) and
+`\\?\Volume{GUID}\`.  Each NTFS and FAT volume becomes a drive of its
+own, D:, E:, and so on in the order found, unless Disk Management gave
+it another letter or none: the letters chosen are kept in
+`HKLM\SYSTEM\MountedDevices`, as Windows keeps them, and come back at
+the next boot.  Programs, the Terminal and File Explorer can list, open,
+run, write, create, rename and delete files there.  FAT volumes on fixed
+disks are writable; FAT volumes on USB sticks are mounted read-only.
+NovaOS's own volumes (the one C: is saved to, the boot files) are left
+alone: Disk Management shows them but does not format them or change
+their letters.
 
 - Creating, renaming and deleting reach the disk at once; a file's new
   contents when the program closes it, or after a quiet second.

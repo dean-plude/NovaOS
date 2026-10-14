@@ -12509,6 +12509,56 @@ manager and an event manager"), the Device Manager part: `devmgmt.exe`,
 Not yet: device icons, the Properties dialog with its Driver tab buttons
 (update, disable, uninstall), and Events (Event Viewer is its own step).
 
+## Disk Management
+
+Dean asked for a Disk Manager (with a Device Manager, a Task Manager and
+an Event Viewer, built separately).  `diskmgmt.exe` is Windows 11's Disk
+Management layout in `C:\Windows\System32`, found by Start menu search:
+the volumes on top (letter, layout, file system, status, capacity, free
+space) and each disk drawn below as a row of its partitions and
+unallocated space.  It uses only public APIs, so NovaOS grew them:
+
+- **Volumes, Windows' way** (`kernel/fs/drives.c`, `partition.c`): every
+  partition of every disk is a volume with a number
+  (`\Device\HarddiskVolumeN`, drive C: is 1) and a GUID name
+  (`\\?\Volume{...}\`: the GPT partition's own GUID, or one made from an
+  MBR disk's signature and the partition's offset).  Drive letters are
+  kept in `HKLM\SYSTEM\MountedDevices` with Windows' unique IDs
+  (`DMIO:ID:` and the GUID on GPT, signature and offset on MBR) and are
+  given back at the next boot.  FAT volumes on fixed disks are mounted
+  read-write now (sticks stay read-only).  MBR and GPT tables are
+  written as well as read.
+- **Disk and volume handles** (`kernel/um/um_disk.c`): `\\.\PhysicalDriveN`,
+  `\\.\X:` and the volume names open with `CreateFile` and answer
+  `IOCTL_STORAGE_QUERY_PROPERTY`, `IOCTL_STORAGE_GET_DEVICE_NUMBER`,
+  `IOCTL_DISK_GET_DRIVE_GEOMETRY(_EX)`, `IOCTL_DISK_GET_LENGTH_INFO`,
+  `IOCTL_DISK_GET/SET_DRIVE_LAYOUT_EX`, `IOCTL_DISK_CREATE_DISK`,
+  `IOCTL_DISK_GET_PARTITION_INFO(_EX)`,
+  `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` and
+  `IOCTL_MOUNTDEV_QUERY_DEVICE_NAME`; `NtQueryVolumeInformationFile`
+  works on a volume with no letter.  Where Windows uses private
+  interfaces (the mount manager, fmifs's insides), NovaOS has three
+  IOCTLs of its own (`IOCTL_NOVA_VOLUME_*` in `winioctl.h`).
+- **kernel32** (`userland/kernel32/volume.c`): `FindFirstVolume`,
+  `FindNextVolume`, `GetVolumeNameForVolumeMountPoint`,
+  `GetVolumePathNamesForVolumeName`, `SetVolumeMountPoint`,
+  `DeleteVolumeMountPoint` and `QueryDosDevice` are real (they were
+  stubs), and `GetVolumeInformation`, `GetDiskFreeSpaceEx`,
+  `GetVolumePathName` and `GetDriveType` take volume names.
+- **fmifs.dll**: `FormatEx` (NTFS or FAT32, quick) and
+  `QueryAvailableFileSystemFormat`, as format programs call them.
+
+The actions are Initialize Disk, New Simple Volume, Format (with
+Windows' "Formatting this volume will erase all data on it" question)
+and Change Drive Letter and Paths.  NovaOS's own volumes are shown but
+refused.  The OS test `diskmgr` (devices suite) attaches a blank 256 MB
+disk: Disk Management opens from the Start menu, then initializes the
+disk as GPT, makes a 128 MB NTFS volume and a FAT32 volume from the rest,
+writes files on both and moves the FAT32 one to T:, which it still is
+after a restart.  The host then checks the disk's GPT, both volumes
+(`scripts/ntfs-check.py`, `fsck.fat`) and the files on them.  Deleting
+and resizing partitions are left for later.
+
 ## The event log and Event Viewer
 
 Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
@@ -12845,6 +12895,40 @@ message shows within six minutes of starting it.  Still open: no mail
 account, sending or receiving is checked (there is no mail server in the
 test), and the main window stays empty without an account.
 
+## Composite USB devices
+
+The next HID step: a USB device with several functions behind one
+address (a keyboard with a vendor-defined control interface, a headset
+with audio and HID, a webcam with a microphone) now gets a driver per
+function, as Windows' `usbccgp.sys` arranges it.
+
+- **A node and a PDO per function.** The device tree already had a
+  `USB\VID_v&PID_p&MI_nn` child per function under the "USB Composite
+  Device" node; the USB core now remembers which interfaces each child
+  is made of (`UsbFnByPnp`), and a child no NovaOS driver took goes to
+  Plug and Play like a whole device does, so an installed Windows driver
+  or a built-in one (`HidUsb` on `USB\Class_03`, `usbvideo` on
+  `USB\Class_0E`) starts on it.
+- **The function's own view** (`kernel/nt/usbd.c`): its PDO hands the
+  driver a configuration descriptor holding only the function's
+  interfaces (and their interface association), refuses to select
+  another function's interface, and keeps its own pipes, so `hidusb`,
+  which takes the first HID interface it sees, takes the right one
+  unchanged.
+- **HID IDs**: the HID class driver adds the function's interface to
+  its collections' IDs (`HID\VID_1209&PID_000A&MI_01`, then `&Colnn`
+  when there are several), as `hidclass.sys` does.
+
+New devices-suite boot `composite`: `tools/compositepeer.py` is a
+1209:000A device with a boot keyboard and two vendor-defined HID
+functions. NovaOS's keyboard driver takes the first, the HID class
+driver each of the others; `usbcompositetest` checks the tree's IDs,
+services and status, each function's reports and feature report through
+`hid.dll`, Device Manager lists every node as working, and the device is
+unplugged. Not checked yet: a real composite device (the T14's webcam
+also needs isochronous transfers), and a function made of several
+interfaces under a Windows driver.
+
 ## Cameras: USB Video Class through Media Foundation
 
 Roadmap step 28.3, the part QEMU can show: a USB camera's picture in a
@@ -12888,6 +12972,33 @@ through Media Foundation, 32- and 64-bit, and the Camera app shows it
   camera controls, still images, the media session and source events,
   audio capture sources, file and URL source readers, and AVStream for
   vendor camera drivers.
+
+## Wallpapers and icon sets are files, chosen and added in Settings
+
+Wallpapers and icons are no longer built into `kernel.elf`.  They are
+files beside it, in `\EFI\NOVA\Files` on the ISO and on an installed
+disk's EFI System Partition (`userland/files` in the source tree), which
+the bootloader reads and the kernel installs on drive C: at the same path
+(boot protocol version 5, `kernel/fs/bootfiles.c`).  The installer copies
+them to the disk it installs on.
+
+- **Wallpapers** are the PNG pictures in `C:\Windows\Web\Wallpaper`: the
+  eight brand wallpapers and the Aurora city.  The Aurora theme draws the
+  chosen one, filling the screen; it is decoded, and Settings' thumbnails
+  are made, on a thread of its own (`kernel/wm/wallpaper.c`).
+- **Icon sets** are folders of `.ico` (or `.png`) files in
+  `C:\Windows\Web\Icons`, named after the icons they replace.  NovaOS
+  ships **Beam**, the brand guide's app and file icons rendered at ten
+  sizes by `tools/make_icon_set.py`; the built-in drawings stay the default
+  and stand in for any icon a set lacks (`kernel/apps/iconset.c`).
+- **Settings > Personalization** has two tabs.  Background picks a theme
+  or a picture; Icons picks an icon set.  Each lists PNG pictures, or
+  folders of icons, found in Downloads, Pictures, Documents and Desktop,
+  and **Add** copies one in and uses it.  The choices are kept in the
+  registry (`Control Panel\Desktop\Wallpaper`, as on Windows, and
+  `Software\NovaOS\Personalization`).
+- The sample pictures in `C:\Pictures` (`Sunset.png`, `Nova.ico`) are
+  files beside the kernel too.
 
 ## WinSCP: a Delphi program from the App Store
 

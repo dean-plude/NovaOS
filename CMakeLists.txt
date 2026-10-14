@@ -136,6 +136,8 @@ add_custom_target(copy_bootloader ALL DEPENDS "${CMAKE_BINARY_DIR}/bootx64.efi")
 # Directory layout on the ESP:
 #   /EFI/BOOT/BOOTX64.EFI   — the bootloader (standard UEFI boot path)
 #   /EFI/NOVA/kernel.elf    — the kernel ELF
+#   /EFI/NOVA/Files/...     — the files beside the kernel (userland/files:
+#                             wallpapers, icon sets, pictures)
 # -------------------------------------------------------------------------
 
 find_program(DD_BIN dd)
@@ -146,16 +148,19 @@ if(DD_BIN AND MKDOSFS_BIN AND MTOOLS_MCOPY)
     set(DISK_IMG "${CMAKE_BINARY_DIR}/nova.img")
     set(DISK_SIZE_MB 128)
 
+    file(GLOB_RECURSE BOOT_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/userland/files/*")
     add_custom_command(
         OUTPUT  "${DISK_IMG}"
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/create-disk.sh"
                 "${DISK_IMG}"
                 "${CMAKE_BINARY_DIR}/bootx64.efi"
                 "${CMAKE_BINARY_DIR}/kernel.elf"
+                "${CMAKE_SOURCE_DIR}/userland/files"
         DEPENDS
                 "${CMAKE_BINARY_DIR}/bootx64.efi"
                 "${CMAKE_BINARY_DIR}/kernel.elf"
                 "${CMAKE_SOURCE_DIR}/scripts/create-disk.sh"
+                ${BOOT_FILES}
         COMMENT "Creating bootable disk image: nova.img"
     )
 

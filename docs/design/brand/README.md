@@ -84,12 +84,38 @@ Every icon is drawn on a 100-unit grid.
   `program-tint-*` tile with its initial.  NovaOS never draws other
   companies' logos.
 
+## Icon sets
+
+The app and file icons ship as the **Beam** icon set: one Windows `.ico`
+per icon in `userland/files/Windows/Web/Icons/Beam/`, each with PNG images
+at 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 pixels rendered from the
+SVG files above by `tools/make_icon_set.py` (headless Chromium and Pillow;
+run it again after changing an SVG).  Like the wallpapers they are files
+beside the kernel, installed in `C:\Windows\Web\Icons\Beam`.  Settings >
+Personalization > Icons chooses a set (or the built-in drawings, the
+default) and adds a user's own: a folder of `.ico` or `.png` files named as
+below.  An icon a set has no file for is drawn as built in
+(`kernel/apps/iconset.c`).
+
+| File | Replaces |
+|---|---|
+| `terminal`, `file-explorer`, `notepad`, `settings`, `calendar`, `photos`, `app-store`, `install-novaos`, `welcome` | That app's icon |
+| `web` | Firefox and NetSurf |
+| `folder`, `folder-documents`, `folder-downloads`, `folder-pictures`, `folder-projects` | Folders, and Documents, Downloads, Pictures and Projects |
+| `file` | A file without an icon of its own |
+| `this-pc` | This PC |
+
+The glyphs stay drawn by the kernel; their SVGs are the design reference.
+
 ## Wallpapers
 
 ![The wallpapers behind the desktop](preview-wallpapers.png)
 
-All are 2560 x 1440 PNGs in `userland/samples/`, so they are installed in
-`C:\Pictures`:
+All are 2560 x 1440 PNGs in `userland/files/Windows/Web/Wallpaper/`.  They
+are files beside the kernel, not part of it: the image carries them in
+`\EFI\NOVA\Files\Windows\Web\Wallpaper`, and NovaOS installs them in
+`C:\Windows\Web\Wallpaper`, where Settings > Personalization lists them
+(and adds the user's own PNG pictures):
 
 | File | Scene |
 |---|---|

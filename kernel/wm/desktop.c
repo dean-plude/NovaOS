@@ -21,6 +21,8 @@
 
 #include "../um/um.h"
 #include "desktop.h"
+#include "wallpaper.h"
+#include "../apps/iconset.h"
 #include "../hal/display.h"
 #include "../fs/setup.h"
 #include "wm.h"
@@ -175,31 +177,6 @@ static int isin_q16(INT64 mdeg)
  * ----------------------------------------------------------------------- */
 #include "aurora.h"
 
-static UINT32 *g_aurora_pixels;
-static int g_aurora_width, g_aurora_height;
-
-/* Decode once at shell startup, never under the compositing lock. Take a
- * snapshot under FsLock so the decoder does not hold up file operations. */
-static void load_aurora_wallpaper(void)
-{
-    if (g_aurora_pixels) return;
-    char *copy = NULL;
-    UINT32 size = 0;
-    FsLock();
-    RamNode *file = RamfsResolve(NULL, "\\Pictures\\Aurora-Sunrise.png");
-    if (file && !file->dir && RamfsLoad(file) && file->data &&
-        file->size && file->size <= 8 * 1024 * 1024) {
-        size = file->size;
-        copy = kmalloc(size);
-        if (copy) memcpy(copy, file->data, size);
-    }
-    FsUnlock();
-    if (copy) {
-        PngDecode(copy, size, &g_aurora_pixels, &g_aurora_width, &g_aurora_height);
-        kfree(copy);
-    }
-}
-
 typedef struct { int base, amp, phase, period; } Wave;   /* logical px, degrees */
 
 /* y of the wave's top edge at x; both in 1/256 logical px */
@@ -215,8 +192,7 @@ static void draw_wallpaper_in(const Theme *t, GdiRect r)
 {
     if (r.w <= 0 || r.h <= 0) return;
     if (t == &g_themes[THEME_AURORA]) {
-        if (g_aurora_pixels) GdiDrawImage(r, g_aurora_pixels, g_aurora_width, g_aurora_height);
-        else aurora_wallpaper(r);
+        if (!WallpaperDraw(r)) aurora_wallpaper(r);      /* (the picture, wallpaper.c) */
         GdiAlphaFill(r, GDI_C(7, 11, 24), 48);
         return;
     }
@@ -1325,7 +1301,23 @@ void DesktopSetTheme(int i)
 {
     if (i < 0 || i >= N_THEMES || i == g_theme) return;
     g_theme = i;
+    um_registry_set_sz(PERSONALIZE_KEY, "Theme", g_themes[i].name);
     WmInvalidateBackground();
+}
+
+void DesktopSetPicture(const char *path)
+{
+    DesktopSetTheme(THEME_AURORA);              /* (pictures are the Aurora theme's) */
+    WallpaperSet(path);
+}
+
+/* The theme chosen last time (Settings > Personalization) */
+static void load_theme(void)
+{
+    char name[32];
+    if (!um_registry_get_sz(PERSONALIZE_KEY, "Theme", name, sizeof(name))) return;
+    for (int i = 0; i < N_THEMES; i++)
+        if (!strcmp(name, g_themes[i].name)) g_theme = i;
 }
 
 void DesktopDrawThemePreview(int i, GdiRect r)
@@ -1376,7 +1368,9 @@ void DesktopInitialize(void)
     WmSetWorkArea(RECT(0, 0, GdiScreenW(), L_dock.y - 8));
     WmSetDesktop(shell_background, shell_overlay);
     AppInit();
-    load_aurora_wallpaper();
+    load_theme();
+    WallpaperInit();
+    IconSetInit();
     aurora_load_user();
     kprintf("[SHELL] Desktop shell ready (%dx%d)\n", GdiScreenW(), GdiScreenH());
 }
@@ -2129,6 +2123,7 @@ void DesktopRun(void *arg)
             FsUnlock();
             if (sig != desk_sig) { desk_sig = sig; WmInvalidateBackground(); }
         }
+        if (WallpaperChanged()) WmInvalidateBackground();   /* (a picture finished decoding) */
 
         InputEvent ev;
         bool input = InputPoll(&ev), files = input;

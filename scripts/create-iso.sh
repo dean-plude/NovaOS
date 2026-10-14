@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # create-iso.sh — Create a bootable UEFI ISO image for NovaOS
 #
-# Usage: create-iso.sh <output.iso> <bootx64.efi> <kernel.elf>
+# Usage: create-iso.sh <output.iso> <bootx64.efi> <kernel.elf> [files dir]
 #
 # Produces an El Torito (no-emulation) UEFI-bootable ISO whose EFI System
 # Partition is a FAT image laid out as:
 #       /EFI/BOOT/BOOTX64.EFI   — bootloader (auto-discovered by UEFI firmware)
 #       /EFI/NOVA/kernel.elf    — kernel ELF (loaded by the bootloader)
+#       /EFI/NOVA/Files/...     — the files beside the kernel: wallpapers,
+#                                 icon sets, pictures (the files dir, by
+#                                 default userland/files; installed on drive
+#                                 C: at the same path, kernel/fs/bootfiles.h)
 #       /EFI/NOVA/bootlog.txt   — 1 MiB set aside for the boot log: started
 #                                 from the ISO written to a USB stick, NovaOS
 #                                 writes its log into this file on the stick
@@ -29,6 +33,7 @@ set -euo pipefail
 ISO_OUT="${1:-nova.iso}"
 BOOTLOADER="${2:-bootx64.efi}"
 KERNEL="${3:-kernel.elf}"
+FILES="${4:-$(dirname "$0")/../userland/files}"
 
 for bin in dd mformat mmd mcopy xorriso; do
     command -v "$bin" >/dev/null 2>&1 || {
@@ -50,7 +55,13 @@ mkdir -p "$ROOT/EFI/BOOT" "$ROOT/EFI/NOVA"
 # 1. Build the EFI System Partition (FAT) image, sized to fit the payload.
 # -------------------------------------------------------------------------
 BOOTLOG_KB=1024
-PAYLOAD_KB=$(( ( $(stat -c%s "$BOOTLOADER") + $(stat -c%s "$KERNEL") ) / 1024 + BOOTLOG_KB ))
+FILES_KB=0
+if [ -d "$FILES" ]; then
+    # (each file rounded up to 4 KiB clusters, plus room for the directories)
+    FILES_KB=$(find "$FILES" -type f -printf '%s\n' | awk '{s+=int(($1+4095)/4096)*4} END {print s+0}')
+    FILES_KB=$(( FILES_KB + 4 * $(find "$FILES" | wc -l) ))
+fi
+PAYLOAD_KB=$(( ( $(stat -c%s "$BOOTLOADER") + $(stat -c%s "$KERNEL") ) / 1024 + BOOTLOG_KB + FILES_KB ))
 ESP_KB=$(( PAYLOAD_KB + 2048 ))           # payload + ~2 MiB slack
 ESP_KB=$(( (ESP_KB + 1023) / 1024 * 1024 ))   # round up to whole MiB
 
@@ -63,6 +74,10 @@ mformat -i "$ESP" -v NOVA_EFI ::
 mmd     -i "$ESP" ::/EFI ::/EFI/BOOT ::/EFI/NOVA
 mcopy   -i "$ESP" "$BOOTLOADER" ::/EFI/BOOT/BOOTX64.EFI
 mcopy   -i "$ESP" "$KERNEL"     ::/EFI/NOVA/kernel.elf
+if [ -d "$FILES" ] && [ -n "$(ls -A "$FILES")" ]; then
+    mmd     -i "$ESP" ::/EFI/NOVA/Files
+    mcopy   -s -i "$ESP" "$FILES"/* ::/EFI/NOVA/Files/
+fi
 # The boot log's space: one line saying what the file is, then blank lines
 # (written last, into an empty ESP's free space, so its clusters follow one
 # another, which is what the kernel needs to write it in place)

@@ -9,7 +9,8 @@ the --put trees, opens the Terminal (Win, "terminal", Enter), turns on
 mark.  Prints each command's output.  A COMMAND of the form
 "!shot NAME.png" saves a screenshot, "!wait N" waits N seconds and
 "!keys a b ctrl-c" presses QEMU key names, "!click X Y" clicks at a
-logical screen point (1280x800 at the default mode), "!type TEXT" types
+logical screen point (1280x800 at the default mode), "!wheel X Y N" turns
+the wheel N notches there (+ towards the user: scrolls down), "!type TEXT" types
 without waiting (\\n Enter, \\e Esc), "!done N" waits up to N seconds
 for the running command to end and "!reboot" restarts NovaOS
 ("shutdown /r": the data disk keeps drive C:) and opens the Terminal again.
@@ -384,6 +385,14 @@ class Nova:
         hmp('mouse_button 0')
         time.sleep(0.3)
 
+    def wheel(self, x, y, notches):
+        """Turn the wheel @notches at logical screen point (x, y) (+ scrolls down)"""
+        self.move_to(x, y)
+        for _ in range(abs(notches)):
+            self.hmp(f'mouse_move 0 0 {-1 if notches > 0 else 1}')
+            time.sleep(0.15)
+        time.sleep(0.3)
+
     def drag(self, x0, y0, x1, y1, steps=24, button=1):
         """Press @button at (x0, y0), move to (x1, y1) in @steps, release (a stroke)"""
         self.move_to(x0, y0)
@@ -477,6 +486,10 @@ def main():
             if c.startswith('!click '):     # !click X Y: left click at a logical screen point
                 x, y = (int(v) for v in c[7:].split()[:2])
                 nova.click(x, y)
+                continue
+            if c.startswith('!wheel '):     # !wheel X Y N: N notches (+ scrolls down) at a point
+                x, y, n = (int(v) for v in c[7:].split()[:3])
+                nova.wheel(x, y, n)
                 continue
             if c.strip() == '!reboot':
                 print('### !reboot', flush=True)

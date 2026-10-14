@@ -19,7 +19,7 @@
 
 /* Increment BOOT_PROTOCOL_VERSION when the struct layout changes. */
 #define BOOT_MAGIC            UINT64_C(0x4E4F564100424F4F)   /* "NOVA\0BOO" */
-#define BOOT_PROTOCOL_VERSION 4
+#define BOOT_PROTOCOL_VERSION 5
 
 /* -----------------------------------------------------------------------
  * Memory map — mirrors UEFI EFI_MEMORY_DESCRIPTOR, but uses our own
@@ -120,7 +120,27 @@ typedef struct {
      * GetSystemFirmwareTable('RSMB') returns. */
     uint64_t         smbios_base;          /* physical */
     uint64_t         smbios_size;
+
+    /* Version 5: the files beside the kernel.  Everything under
+     * \EFI\NOVA\Files on the boot volume (wallpapers, icon sets, sample
+     * pictures: content that is not built into kernel.elf) is read by the
+     * bootloader, each file into EfiLoaderData pages of its own, and
+     * listed here; the kernel installs file \EFI\NOVA\Files\X\Y at
+     * C:\X\Y and gives the pages back.  0/0 when there are none. */
+    uint64_t         files_base;           /* BootFile[files_count] (physical) */
+    uint64_t         files_count;
 } BootInfo;
+
+#define BOOT_FILE_PATH_MAX 232
+/* One file of BootInfo.files_base: its path below \EFI\NOVA\Files, which
+ * is its path on drive C: ("\Windows\Web\Wallpaper\Beam.png", ASCII),
+ * and its contents in (size + 4095) / 4096 pages (at least one) */
+typedef struct {
+    uint64_t base;                         /* physical */
+    uint64_t size;
+    char     path[BOOT_FILE_PATH_MAX];
+} BootFile;
+#define BOOT_FILES_MAX 1024
 
 #define BOOT_FLAG_LIVE_MEDIA  (1u << 0)    /* booted from the installation media (the ISO, on a CD/DVD or a USB stick) */
 #define BOOT_FLAG_LIVE_USB    (1u << 1)    /* ... and that is a USB device (the ISO written to a stick) */

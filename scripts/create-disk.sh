@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # create-disk.sh — Create a bootable UEFI disk image
 #
-# Usage: create-disk.sh <output.img> <bootx64.efi> <kernel.elf>
+# Usage: create-disk.sh <output.img> <bootx64.efi> <kernel.elf> [files dir]
 #
 # Creates a raw disk image with:
 #   - GPT partition table
@@ -10,6 +10,10 @@
 #   - File layout:
 #       /EFI/BOOT/BOOTX64.EFI   — bootloader (auto-discovered by UEFI firmware)
 #       /EFI/NOVA/kernel.elf    — kernel ELF (loaded by bootloader)
+#       /EFI/NOVA/Files/...     — the files beside the kernel: wallpapers, icon
+#                                 sets, pictures (the files dir, by default
+#                                 userland/files; installed on drive C: at the
+#                                 same path, see kernel/fs/bootfiles.h)
 #
 # Requires: dd, mkdosfs (mkfs.fat), mtools (mformat, mmd, mcopy)
 # Install:  sudo apt install mtools dosfstools
@@ -19,6 +23,7 @@ set -euo pipefail
 DISK_IMG="${1:-nova.img}"
 BOOTLOADER="${2:-bootx64.efi}"
 KERNEL="${3:-kernel.elf}"
+FILES="${4:-$(dirname "$0")/../userland/files}"
 
 DISK_SIZE_MB=128
 
@@ -54,7 +59,11 @@ fi
 # then round up to a 32 MiB boundary with the original minimum size.
 PAYLOAD_BYTES=$(( $(stat -c %s "$KERNEL") + $(stat -c %s "$BOOTLOADER") ))
 PAYLOAD_MB=$(( (PAYLOAD_BYTES + 1048575) / 1048576 ))
-REQUIRED_MB=$(( ((2 * PAYLOAD_MB + 32 + 31) / 32) * 32 ))
+# The files beside the kernel once (an update replaces only the kernel and loader)
+FILES_BYTES=0
+if [ -d "$FILES" ]; then FILES_BYTES=$(find "$FILES" -type f -printf '%s\n' | awk '{s+=$1} END {print s+0}'); fi
+FILES_MB=$(( (FILES_BYTES + 1048575) / 1048576 ))
+REQUIRED_MB=$(( ((2 * PAYLOAD_MB + FILES_MB + 32 + 31) / 32) * 32 ))
 if (( REQUIRED_MB > DISK_SIZE_MB )); then DISK_SIZE_MB=$REQUIRED_MB; fi
 
 echo "Creating ${DISK_SIZE_MB} MiB disk image: $DISK_IMG"
@@ -86,6 +95,12 @@ mcopy -i "$DISK_IMG" "$BOOTLOADER" ::/EFI/BOOT/BOOTX64.EFI
 
 echo "Copying kernel: $KERNEL -> ::/EFI/NOVA/kernel.elf"
 mcopy -i "$DISK_IMG" "$KERNEL" ::/EFI/NOVA/kernel.elf
+
+if [ -d "$FILES" ] && [ -n "$(ls -A "$FILES")" ]; then
+    echo "Copying the files beside the kernel: $FILES -> ::/EFI/NOVA/Files"
+    mmd -i "$DISK_IMG" ::/EFI/NOVA/Files
+    mcopy -s -i "$DISK_IMG" "$FILES"/* ::/EFI/NOVA/Files/
+fi
 
 # -------------------------------------------------------------------------
 # Verify

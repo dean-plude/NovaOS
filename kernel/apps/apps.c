@@ -4,6 +4,7 @@
  */
 
 #include "apps.h"
+#include "iconset.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../mm/pmm.h"
@@ -989,6 +990,7 @@ void AppDrawGlyph(Glyph g, int x, int y, int s, GdiColor c)
 
 void AppDrawIcon(AppId id, int x, int y, int s)
 {
+    if (IconDraw(IconSetApp(id), x, y, s)) return;     /* the chosen icon set's (iconset.c) */
     GdiColor w = GDI_WHITE;
     switch (id) {
     case APP_TERMINAL: {
@@ -1085,6 +1087,7 @@ void AppDrawIcon(AppId id, int x, int y, int s)
 /* Flat folder: a darker back with its tab, a lighter front */
 void AppDrawFolderKindIcon(FolderKind k, int x, int y, int s)
 {
+    if (IconDraw(IconSetFolder(k), x, y, s)) return;
     int r = s * 8 / 100 + 1;
     GdiRoundRect(RECT(x + s * 6 / 100, y + s * 16 / 100, s * 40 / 100, s * 24 / 100), r,
                  GDI_C(0xE3, 0x9E, 0x21), GDI_TRANSPARENT);
@@ -1104,6 +1107,7 @@ void AppDrawFolderIcon(int x, int y, int s) { AppDrawFolderKindIcon(FOLDER_PLAIN
 /* Flat document: a white page with a folded corner */
 void AppDrawFileIcon(int x, int y, int s)
 {
+    if (IconDraw(IconSetFile(), x, y, s)) return;
     GdiPoint page[5] = { pt(x, y, s, 20, 6), pt(x, y, s, 60, 6), pt(x, y, s, 80, 26),
                          pt(x, y, s, 80, 94), pt(x, y, s, 20, 94) };
     GdiFillPolygon(page, 5, GDI_C(0xC4, 0xCA, 0xD4));
@@ -1123,6 +1127,7 @@ void AppDrawFileIcon(int x, int y, int s)
 /* Flat monitor: "This PC" */
 void AppDrawPcIcon(int x, int y, int s)
 {
+    if (IconDraw(IconSetPc(), x, y, s)) return;
     int r = s * 8 / 100 + 1;
     GdiRoundRect(RECT(x + s * 6 / 100, y + s * 12 / 100, s * 88 / 100, s * 60 / 100), r,
                  GDI_C(0x2A, 0x30, 0x3C), GDI_TRANSPARENT);

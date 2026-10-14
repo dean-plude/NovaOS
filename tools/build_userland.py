@@ -17,7 +17,6 @@ Compiles, with clang --target=x86_64-pc-windows-msvc and lld-link:
   ntdll.dll, kernel32.dll, msvcrt.dll, ...  -> C:\\Windows\\System32
   crt/crt0.c (static startup code) + programs/*.c -> C:\\Programs\\*.exe
     (with programs/NAME.rc compiled by llvm-rc: the program's icon)
-  samples/* -> C:\\Pictures
   the NetSurf browser (tools/build_netsurf.py) -> C:\\Programs\\NetSurf
 and writes GENERATED_C: every file pulled in with .incbin plus a table the
 kernel uses to install them on drive C: at boot.  Set NOVA_NO_NETSURF=1 to
@@ -705,10 +704,9 @@ for item in [x for s in _fw['sets'] for x in s['files']] + _fw['licences']:
     if os.path.isfile(src) and os.path.getsize(src) == item['size']:
         built.append(('\\Windows\\Firmware\\' + item['path'].replace('/', '\\'), src))
 
-# 3a. sample files for the user's folders (tools/make_icons.py draws the icons)
-samples = os.path.join(HERE, 'samples')
-for n in sorted(os.listdir(samples)):
-    built.append((f'\\Pictures\\{n}', os.path.join(samples, n)))
+# 3a. (wallpapers, icon sets and sample pictures are not embedded: they are
+# files beside the kernel, userland/files -> \EFI\NOVA\Files on the boot
+# volume, which kernel/fs/bootfiles.c installs on drive C:)
 
 # The Store's offline JSON catalog; refreshed copies persist separately.
 built.append(('\\Windows\\AppStore\\default-catalog.json', os.path.join(HERE, 'store', 'catalog.json')))

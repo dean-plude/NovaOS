@@ -52,7 +52,7 @@ def seen(bits):
 
 TESTS = [
     Test('d3dtest present x64', r'C:\Tests\d3dtest.exe present', [r'd3dtest present: \d+ passed, 0 failed'],
-         timeout=600, acts=[(r'present: quadrants at', look('d3d-x64'))], check=seen('d3d-x64')),
+         timeout=240, acts=[(r'present: quadrants at', look('d3d-x64'))], check=seen('d3d-x64')),
     Test('d3dtest present x86', r'C:\Tests\d3dtest32.exe present', [r'd3dtest present: \d+ passed, 0 failed'],
-         timeout=600, acts=[(r'present: quadrants at', look('d3d-x86'))], check=seen('d3d-x86')),
+         timeout=240, acts=[(r'present: quadrants at', look('d3d-x86'))], check=seen('d3d-x86')),
 ]

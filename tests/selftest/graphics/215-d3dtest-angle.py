@@ -4,7 +4,7 @@
 # a WARP device), on DXVK on Venus, 64- and 32-bit (C:\Tests)
 TESTS = [
     Test('d3dtest angle x64', r'C:\Tests\d3dtest.exe angle', [r'ANGLE adapter  Virtio-GPU Venus', r'ANGLE draw pixel  ff0000',
-                                                               r'd3dtest: \d+ passed, 0 failed'], timeout=600),
+                                                               r'd3dtest: \d+ passed, 0 failed'], timeout=240),
     Test('d3dtest angle x86', r'C:\Tests\d3dtest32.exe angle', [r'ANGLE adapter  Virtio-GPU Venus', r'ANGLE draw pixel  ff0000',
-                                                               r'd3dtest: \d+ passed, 0 failed'], timeout=600),
+                                                               r'd3dtest: \d+ passed, 0 failed'], timeout=240),
 ]

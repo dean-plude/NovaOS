@@ -1,0 +1,31 @@
+; MsHidKmdf.inf - NovaOS's inbox INF for mshidkmdf, the pass-through HID
+; minidriver a KMDF HID driver sits under as a lower filter.  As on Windows,
+; a KMDF HID driver's INF says "Include = MsHidKmdf.inf" and "Needs =
+; MsHidKmdf.NT[.Services]": mshidkmdf becomes the device's function driver.
+; NovaOS builds mshidkmdf.sys into its kernel (kernel/nt/mshidkmdf.c), so
+; there is no file to copy.
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%NovaOS%
+DriverVer=10/14/2026,10.0.0.1
+
+[MsHidKmdf.NT]
+
+[MsHidKmdf.NT.HW]
+
+[MsHidKmdf.NT.Services]
+AddService = mshidkmdf, 0x00000002, MsHidKmdf_Service_Inst
+
+[MsHidKmdf_Service_Inst]
+DisplayName   = %MsHidKmdf.SvcDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\mshidkmdf.sys
+
+[Strings]
+NovaOS = "NovaOS"
+MsHidKmdf.SvcDesc = "Pass-through HID to KMDF Filter Driver"

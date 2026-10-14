@@ -13,6 +13,13 @@
  *   AddReg         HKR lines into the device's driver key (an NDIS
  *                  miniport's parameters: NdisReadConfiguration reads them)
  *   .HW AddReg     HKR lines into the device's Device Parameters key
+ *   .Filters       AddFilter = name, flags, section: a filter driver on the
+ *                  device's stack, below its function driver (the
+ *                  section's FilterPosition = Lower) or above it (Upper),
+ *                  as the device's LowerFilters/UpperFilters
+ *   Include/Needs  in any of these sections: the named sections of another
+ *                  INF (C:\Windows\INF\<name>, an inbox one such as
+ *                  MsHidKmdf.inf) carried out as part of it
  *   .Wdf           a UMDF driver's services: UmdfService = name, section
  *                  (the section's ServiceBinary and UmdfLibraryVersion,
  *                  under Services\WUDF\Services\<name>), UmdfServiceOrder
@@ -376,6 +383,89 @@ static BOOL wdf_line(const WCHAR *key, const WCHAR *value, void *ctx)
     return TRUE;
 }
 
+/* What section @section of @inf brings in by "Include = a.inf[, b.inf]" and
+ * "Needs = section[, section]": each needed section in the first included
+ * INF that has it (C:\Windows\INF\<name>, else beside @inf), into @out
+ * (the INFs opened for them: part_close closes them); how many */
+typedef struct { Inf *inf; WCHAR section[128]; } Part;
+
+static int needs_of(const Inf *inf, const WCHAR *section, Part *out, int max)
+{
+    WCHAR incs[256], needs[256], name[MAX_PATH], path[MAX_PATH], sect[128];
+    if (!inf_get(inf, section, L"Include", incs, 256) || !inf_get(inf, section, L"Needs", needs, 256)) return 0;
+    Inf *open[4];
+    int nopen = 0, n = 0;
+    for (int i = 0; i < 4; i++) {
+        inf_field(incs, i, name, MAX_PATH);
+        if (!name[0]) break;
+        windir_w(path, L"\\INF\\");
+        lstrcatW(path, name);
+        Inf *x = inf_open(path);
+        if (!x) {                                           /* (beside the INF that includes it) */
+            lstrcpyW(path, inf->path);
+            for (int k = lstrlenW(path); k > 0 && path[k - 1] != '\\'; k--) path[k - 1] = 0;
+            lstrcatW(path, name);
+            x = inf_open(path);
+        }
+        if (x) open[nopen++] = x;
+    }
+    for (int j = 0; j < 8 && n < max; j++) {
+        inf_field(needs, j, sect, 128);
+        if (!sect[0]) break;
+        for (int i = 0; i < nopen; i++)
+            if (has_section(open[i], sect)) {
+                out[n].inf = open[i];
+                lstrcpyW(out[n].section, sect);
+                n++;
+                break;
+            }
+    }
+    /* (an INF no part uses is closed now; the rest by part_close) */
+    for (int i = 0; i < nopen; i++) {
+        BOOL used = FALSE;
+        for (int k = 0; k < n; k++) used |= out[k].inf == open[i];
+        if (!used) inf_close(open[i]);
+    }
+    return n;
+}
+
+static void part_close(Part *parts, int n)
+{
+    for (int i = 0; i < n; i++) {
+        BOOL seen = FALSE;
+        for (int k = 0; k < i; k++) seen |= parts[k].inf == parts[i].inf;
+        if (!seen) inf_close(parts[i].inf);
+    }
+}
+
+/* "AddFilter = name, flags, section" lines of DDInstall.Filters: the
+ * section's FilterPosition puts the driver under the function driver
+ * (Lower) or over it (Upper) */
+typedef struct {
+    const Inf *inf;
+    WCHAR lower[256], upper[256];               /* REG_MULTI_SZ */
+    int nl, nu;
+} Filters;
+
+static BOOL filter_line(const WCHAR *key, const WCHAR *value, void *ctx)
+{
+    Filters *f = ctx;
+    if (!ieq_w(key, L"AddFilter")) return TRUE;
+    WCHAR name[64], sect[128], pos[32] = L"";
+    inf_field(value, 0, name, 64);
+    inf_field(value, 2, sect, 128);
+    if (!name[0]) return TRUE;
+    if (sect[0]) inf_get(f->inf, sect, L"FilterPosition", pos, 32);
+    BOOL up = ieq_w(pos, L"Upper");
+    WCHAR *list = up ? f->upper : f->lower;
+    int *n = up ? &f->nu : &f->nl;
+    if (*n + lstrlenW(name) + 2 >= 256) return TRUE;
+    lstrcpyW(list + *n, name);
+    *n += lstrlenW(name) + 1;
+    list[*n] = 0;
+    return TRUE;
+}
+
 /* "CopyFiles = Section[, Section...]" and "AddReg = ..." lines of DDInstall */
 static BOOL install_line(const WCHAR *key, const WCHAR *value, void *ctx)
 {
@@ -505,14 +595,29 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         lstrcatW(ddi, L".NT");
         if (!has_section(inf, ddi)) lstrcpyW(ddi, m.section);
     }
+    Part parts[8];
+    int np = needs_of(inf, ddi, parts, 8);
     Dir d = { inf, store, TRUE };
     inf_lines(inf, ddi, install_line, &d);
+    for (int i = 0; i < np && d.ok; i++) { d.inf = parts[i].inf; inf_lines(parts[i].inf, parts[i].section, install_line, &d); }
     WCHAR sect[200];
     lstrcpyW(sect, ddi);
     lstrcatW(sect, L".Services");
     Svc s = { inf, store, L"", TRUE };
-    if (d.ok) inf_lines(inf, sect, service_line, &s);
-    if (!d.ok || !s.ok) { DWORD e = GetLastError(); inf_close(inf); SetLastError(e ? e : ERROR_FILE_NOT_FOUND); return FALSE; }
+    if (d.ok) {
+        Part sp[8];
+        int ns = needs_of(inf, sect, sp, 8);
+        inf_lines(inf, sect, service_line, &s);
+        for (int i = 0; i < ns && s.ok; i++) { s.inf = sp[i].inf; inf_lines(sp[i].inf, sp[i].section, service_line, &s); }
+        part_close(sp, ns);
+    }
+    if (!d.ok || !s.ok) {
+        DWORD e = GetLastError();
+        part_close(parts, np);
+        inf_close(inf);
+        SetLastError(e ? e : ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
 
     /* the device's keys */
     WCHAR ek[400], cls[64] = L"", guid[64] = L"", prov[128] = L"", ver[128] = L"", mfgname[128] = L"";
@@ -524,6 +629,7 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
     lstrcatW(ek, instance);
     HKEY dev;
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, ek, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &dev, NULL)) {
+        part_close(parts, np);
         inf_close(inf);
         return FALSE;
     }
@@ -556,12 +662,29 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
     set_sz(dev, L"Mfg", mfgname[0] ? mfgname : prov);
     DWORD zero = 0;
     RegSetValueExW(dev, L"ConfigFlags", 0, REG_DWORD, (const BYTE *)&zero, sizeof(zero));
+    /* its filter drivers: this install's (none: an earlier install's go) */
+    Filters fl;
+    fl.inf = inf;
+    fl.nl = fl.nu = 0;
+    fl.lower[0] = fl.upper[0] = 0;
+    lstrcpyW(sect, ddi);
+    lstrcatW(sect, L".Filters");
+    inf_lines(inf, sect, filter_line, &fl);
+    if (fl.nl) RegSetValueExW(dev, L"LowerFilters", 0, REG_MULTI_SZ, (const BYTE *)fl.lower, (DWORD)((fl.nl + 1) * sizeof(WCHAR)));
+    else RegDeleteValueW(dev, L"LowerFilters");
+    if (fl.nu) RegSetValueExW(dev, L"UpperFilters", 0, REG_MULTI_SZ, (const BYTE *)fl.upper, (DWORD)((fl.nu + 1) * sizeof(WCHAR)));
+    else RegDeleteValueW(dev, L"UpperFilters");
     HKEY params;
     if (!RegCreateKeyExW(dev, L"Device Parameters", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &params, NULL)) {
         Reg r = { params, inf };
         lstrcpyW(sect, ddi);
         lstrcatW(sect, L".HW");
+        Part hp[8];
+        int nh = needs_of(inf, sect, hp, 8);
         inf_lines(inf, sect, hw_line, &r);
+        for (int i = 0; i < nh; i++) { r.inf = hp[i].inf; inf_lines(hp[i].inf, hp[i].section, hw_line, &r); }
+        part_close(hp, nh);
+        r.inf = inf;
         if (ieq_w(guid, PORTS_GUID)) com_name(dev, params, m.desc);
         lstrcpyW(sect, ddi);
         lstrcatW(sect, L".Wdf");
@@ -570,6 +693,7 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         RegCloseKey(params);
         if (!w.ok) {
             RegCloseKey(dev);
+            part_close(parts, np);
             inf_close(inf);
             SetLastError(13);                   /* ERROR_INVALID_DATA */
             return FALSE;
@@ -594,8 +718,10 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
         set_sz(dk, L"DriverVersion", version);
         Reg r = { dk, inf };                                /* DDInstall's AddReg: HKR is the driver key */
         inf_lines(inf, ddi, hw_line, &r);
+        for (int i = 0; i < np; i++) { r.inf = parts[i].inf; inf_lines(parts[i].inf, parts[i].section, hw_line, &r); }
         RegCloseKey(dk);
     }
+    part_close(parts, np);
     inf_close(inf);
     SetLastError(0);
     return TRUE;

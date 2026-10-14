@@ -59,9 +59,10 @@ least 2 GB of memory: drive C: is held in memory while NovaOS runs (see
 [Your files](#your-files)).
 
 **Hyper-V**: make a Generation 2 VM with Secure Boot off and start it from
-the ISO.  NovaOS has drivers for Hyper-V's keyboard and mouse, but not yet
-for its disks or network adapter, so it can only run live there
-([hyperv.md](hyperv.md)).
+the ISO.  NovaOS has drivers for Hyper-V's keyboard, mouse, virtual
+hard disks (so it installs to a VHDX), video (so the resolution can be
+changed in Settings) and network adapter (the Default Switch works), and
+the host's Shut Down and Restart work ([hyperv.md](hyperv.md)).
 
 **VirtualBox, VMware and others** are untested.  The closest match to
 what NovaOS drives is a machine set to "Other 64-bit" with EFI on, a SATA

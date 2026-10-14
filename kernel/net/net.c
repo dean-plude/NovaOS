@@ -14,6 +14,7 @@
 #include "tls.h"
 #include "../drivers/e1000.h"
 #include "../drivers/virtio_net.h"
+#include "../drivers/netvsc.h"
 #include "../hal/pci.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
@@ -56,7 +57,8 @@ static NetOp            g_ops[NET_OPS];
 static struct raw_pcb  *g_ping_pcb, *g_ping6_pcb;
 static NetConfig        g_cfg;                 /* manual settings (zero: DHCP for everything) */
 
-/* The adapter: an Intel e1000/e1000e or a virtio one, the first found */
+/* The adapter: an Intel e1000/e1000e or a virtio one, the first found (or
+ * Hyper-V's, run as an external adapter: g_external) */
 typedef struct {
     bool        (*present)(void);
     const char *(*name)(void);
@@ -706,7 +708,8 @@ bool NetInitialize(void)
     else if (VirtioNetInit()) {
         g_nic = &g_virtio;
         PciAllowSetAside(VirtioNetPci(), virtio_set_aside);
-    } else g_nic = &g_none;              /* loopback only */
+    } else if ((g_ext = NetvscAdapter())) g_nic = &g_external;   /* Hyper-V's (VmbusInit found it) */
+    else g_nic = &g_none;                /* loopback only */
 
     UINT8 mac[6];
     g_nic->mac(mac);

@@ -12,8 +12,7 @@ class HvInputTests(unittest.TestCase):
     def test_ring_keyboard_and_mouse(self):
         with tempfile.TemporaryDirectory() as d:
             executable = str(Path(d) / 'hv_input')
-            includes = ['kernel', 'include', 'third_party/lwip/src/include', 'kernel/net/port',
-                        'third_party/mbedtls/include', 'third_party/uacpi/include']
+            includes = ['kernel', 'include']     # (not kernel/net/port: its assert.h checks nothing)
             subprocess.run(['gcc', '-ffunction-sections', '-fdata-sections',
                             *[f'-I{ROOT / x}' for x in includes],
                             str(ROOT / 'tests/host/hv_input.c'), '-Wl,--gc-sections',

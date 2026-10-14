@@ -16,7 +16,7 @@ and wait for someone to do them by hand (roadmap step 23.1).
 | Machine | Status |
 |---|---|
 | **QEMU** (Linux with or without KVM, macOS, Windows through WSL2) | Supported, and tested in CI on every pull request that changes code: a q35 machine with OVMF firmware, started as [building.md](building.md#running-in-qemu) and [macos.md](macos.md) describe |
-| **Hyper-V** | A Generation 2 VM with Secure Boot off. NovaOS has drivers for the VMBus keyboard and mouse, but **has not been run on real Hyper-V yet** (roadmap step 23.4). No driver for its disks or network adapter, so it can only run live from the ISO ([hyperv.md](hyperv.md)) |
+| **Hyper-V** | A Generation 2 VM with Secure Boot off. NovaOS has drivers for the VMBus keyboard and mouse, its SCSI disks (so it installs to a VHDX), its synthetic video (resolution changes), its network adapter and the shutdown, heartbeat, time sync and data exchange services (the VM's addresses in Hyper-V Manager), but **has not been run on real Hyper-V yet** (roadmap step 23.4) ([hyperv.md](hyperv.md)) |
 | **Other virtual machines** (VirtualBox, VMware, UTM) | Untested. UTM is QEMU underneath ([macos.md](macos.md)). NovaOS needs UEFI, an AHCI SATA or NVMe disk for its built-in drivers, and an Intel e1000/e1000e or virtio-net network card |
 | **Real PCs** | **Not yet run on any machine.** NovaOS should start from a USB stick on a UEFI PC with Secure Boot off, on the firmware's framebuffer. The reference machine below is the first one to be checked ([install-and-power.md](install-and-power.md#checks-on-the-t14)) |
 | **Macs** | Intel Macs from a USB stick, untested and with few drivers ([macos.md](macos.md)); Apple Silicon Macs only in QEMU |
@@ -285,9 +285,9 @@ built into the kernel. The firmware some of them need is described in
 
 | Kind | Devices |
 |---|---|
-| Display | UEFI GOP framebuffer (any PC); Bochs VBE "DISPI" adapters: QEMU's standard VGA, `bochs-display` and `secondary-vga`, QXL, virtio-vga, VMware SVGA II and VirtualBox VGA; Cirrus CL-GD5446; virtio-gpu (2D with several monitors, and 3D through Venus and virgl) |
-| Storage | AHCI SATA (class 01.06.01), NVMe (class 01.08.02), USB mass storage; FAT and NTFS volumes |
-| Network | Intel 82540EM, 82544 and 82545EM (`e1000`), Intel 82574L and I219-LM/I219-V (`e1000e`), virtio-net; one adapter at a time |
+| Display | UEFI GOP framebuffer (any PC); Bochs VBE "DISPI" adapters: QEMU's standard VGA, `bochs-display` and `secondary-vga`, QXL, virtio-vga, VMware SVGA II and VirtualBox VGA; Cirrus CL-GD5446; virtio-gpu (2D with several monitors, and 3D through Venus and virgl); Hyper-V's synthetic video ([hyperv.md](hyperv.md)) |
+| Storage | AHCI SATA (class 01.06.01), NVMe (class 01.08.02), USB mass storage, Hyper-V's synthetic SCSI disks ([hyperv.md](hyperv.md)); FAT and NTFS volumes |
+| Network | Intel 82540EM, 82544 and 82545EM (`e1000`), Intel 82574L and I219-LM/I219-V (`e1000e`), virtio-net, Hyper-V's synthetic network adapter ([hyperv.md](hyperv.md#network)); one adapter at a time |
 | Audio | Intel HD Audio (class 04.03, and Intel's class 04.01 controllers with the audio DSP on), with headphone-jack sensing; the audio DSP of Tiger Lake to Raptor Lake (boots Sound Open Firmware and records the digital microphones through it); USB Audio 1.0 and 2.0 |
 | USB | xHCI, EHCI, OHCI and UHCI host controllers; hubs, HID keyboards, mice, tablets, touch screens and pens, mass storage, audio |
 | Game controllers | wired Xbox 360 and Xbox One controllers on USB, and HID game pads and joysticks |

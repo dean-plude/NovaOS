@@ -129,7 +129,12 @@ order; --list prints them):
             a blank second disk: Disk Management (diskmgmt.exe) is opened
             from the Start menu, then initializes the disk, makes an NTFS
             and a FAT32 volume on it, moves one to drive T: (still T:
-            after a restart), and the host checks both volumes
+            after a restart), and the host checks both volumes;
+            "vhidmini", a root-enumerated device (ROOT\\HIDCLASS\\0000) on
+            which pnputil installs Microsoft's vhidmini2 sample, a KMDF HID
+            minidriver, as a lower filter under mshidkmdf: vhidtest opens
+            its collection through hid.dll and moves its reports, Device
+            Manager lists it, it starts at boot and pnputil removes it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -369,6 +374,7 @@ WDDM = load_suite('devices/wddm')
 DEVMGR = load_suite('devices/devmgr')
 NETKVM = load_suite('devices/netkvm')
 DISKMGR = load_suite('devices/diskmgr')
+VHIDMINI = load_suite('devices/vhidmini')
 
 
 def net4_boot(work):
@@ -658,6 +664,13 @@ def diskmgr_boot(work):
     return ['-drive', f'format=raw,file={disk}'], []
 
 
+def vhidmini_boot(work):
+    """Nothing beyond the core boot's machine: the device is root-enumerated,
+    and Microsoft's vhidmini2 sample, a KMDF HID minidriver, is installed on
+    it with pnputil (tests/selftest/devices/vhidmini)"""
+    return [], []
+
+
 def viostor_boot(work):
     """A second disk on QEMU's virtio-blk card (PCI 1af4:1001), which no
     NovaOS driver runs, with an NTFS volume labelled VIOSTOR holding
@@ -874,7 +887,7 @@ BOOTS = {
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
                 ('wddm', WDDM, wddm_boot), ('devmgr', DEVMGR, devmgr_boot),
-                ('diskmgr', DISKMGR, diskmgr_boot)],
+                ('diskmgr', DISKMGR, diskmgr_boot), ('vhidmini', VHIDMINI, vhidmini_boot)],
 }
 
 

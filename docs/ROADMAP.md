@@ -590,6 +590,27 @@ item ends when a named program or test demonstrates it.
   network on the T14's card is step 28.1.  The display-only half of a
   WDDM host (`dxgkrnl.sys`'s role) followed as step 1 of the Intel GPU
   design (step 25.3).
+- [ ] Hyper-V Generation 2: every synthetic device a Gen 2 VM has, one step
+  at a time, each leaving NovaOS bootable ([hyperv.md](hyperv.md)).
+  Microsoft's own VMBus drivers are inbox and not redistributable, so
+  these are NovaOS drivers written from the protocols as FreeBSD's
+  BSD-licensed Hyper-V drivers speak them, each with a host test, since
+  CI has no Hyper-V.  Done when a Gen 2 VM installs NovaOS to its virtual
+  disk, reaches the network and changes resolution.
+  - [x] Keyboard and mouse over VMBus (#255, #367)
+  - [x] Integration services: the host's Shut Down and Restart, heartbeat,
+    time sync (#401)
+  - [x] storvsc: SCSI disks, so NovaOS installs to a VHDX and keeps drive
+    C: (#402)
+  - [x] Synthetic video: a resolution chosen in Settings (#403)
+  - [x] netvsc: the network adapter (NVSP and RNDIS) (#404)
+  - [x] Channel interrupts instead of polling, devices added and removed
+    while running (#405).  The reference TSC page, synthetic timers and
+    the SynIC on every CPU turned out not to be needed: the TSC and the
+    local APIC timer already run at the frequencies Hyper-V's MSRs give,
+    and every channel interrupts CPU 0
+  - [x] Key-value exchange (the VM's name and addresses in Hyper-V
+    Manager) (#407)
 
 <!-- END generated:next-hardware -->
 

@@ -78,7 +78,7 @@ static BOOL write_node(const NovaPnpNode *n)
                  g.Data4[0], g.Data4[1], g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7]);
         sz(k, "ClassGUID", gs);
     }
-    sz(k, "Service", n->service);
+    if (!(n->flags & NOVA_PNP_RAW)) sz(k, "Service", n->service);    /* (a raw PDO has no service of its own) */
     sz(k, "Mfg", n->mfg);
     sz(k, "LocationInformation", n->location);
     sz(k, "FriendlyName", n->friendly);

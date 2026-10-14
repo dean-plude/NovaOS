@@ -16,6 +16,12 @@ It also links WdfLdr.sys, the KMDF loader, and two KMDF drivers built as
 the WDK builds one (the client stub tools/kmdf/stub.c, which binds them to
 the framework): kmdftest.sys (tools/drivertest/kmdftest.c) and kmdfedu.sys,
 the Plug and Play driver for QEMU's edu device (tools/drivertest/kmdfedu.c).
+And it builds a third-party KMDF driver unchanged, as its vendor's build
+would: vhidmini.sys, Microsoft's virtual HID minidriver sample (vhidmini2,
+KMDF version), from the pinned commit of github.com/microsoft/
+Windows-driver-samples (VHID_COMMIT, MS-PL), with its INF stamped as the
+WDK's stampinf does (the .inx's $ARCH$ and $KMDFVERSION$) and a catalog of
+the package named as the INF names it (wudf.cat).
 It test-signs the first three with tools/drivertest/mksys.py's certificate;
 kmdfedu.sys comes as a package, as edutest.sys does: kmdfedu.inf and a
 test-signed catalog of both.  OUTDIR gets those files; the result is kept in ~/.cache/novaos/wdf/out-<hash of the
@@ -48,11 +54,15 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
 from mksys import import_libs, signed_package, test_signer                     # noqa: E402
+from catalog import catalog                                     # noqa: E402
 from sign import sign                                           # noqa: E402
 
 WDF_REPO = 'https://github.com/microsoft/Windows-Driver-Frameworks.git'
 WDF_COMMIT = 'b6191d9543441329154da32f7ab9bdd97228dd3c'
 KMDF_HEADERS = '1.33'          # publicinc/wdf/kmdf/<this>: the DDI list the source implements
+SAMPLES_REPO = 'https://github.com/microsoft/Windows-driver-samples.git'
+VHID_COMMIT = '2dc3fd3a0cc84a2933f2194e7ec0871584979071'
+VHID_DIR = 'hid/vhidmini2'     # (with the samples' LICENSE, all that is fetched)
 MINGW = '/usr/share/mingw-w64/include'
 
 # mingw-w64's wdm.h follows the Windows 7 WDK.  Where the framework needs a
@@ -96,26 +106,44 @@ def run(cmd, **kw):
     return r.stdout
 
 
-def fetch(cache):
-    """The pinned commit's tree, fetched once into @cache"""
-    src = os.path.join(cache, WDF_COMMIT)
-    if os.path.isfile(os.path.join(src, '.complete')):
+def fetch(cache, repo=WDF_REPO, commit=WDF_COMMIT, only=None):
+    """The pinned commit's tree (only the paths @only of it, when given),
+    fetched once into @cache"""
+    src = os.path.join(cache, commit)
+    if os.path.isfile(os.path.join(src, '.complete')) and all(os.path.exists(os.path.join(src, *p.split('/')))
+                                                               for p in only or ()):
         return src
     if os.path.isdir(src):
         shutil.rmtree(src)
     os.makedirs(src)
     run(['git', 'init', '-q', src])
+    if only:
+        run(['git', '-C', src, 'config', 'core.sparseCheckout', 'true'])
+        with open(os.path.join(src, '.git', 'info', 'sparse-checkout'), 'w') as f:
+            f.write(''.join('/' + p + '\n' for p in only))
     for attempt in range(4):
-        r = subprocess.run(['git', '-C', src, 'fetch', '-q', '--depth', '1', WDF_REPO, WDF_COMMIT],
+        r = subprocess.run(['git', '-C', src, 'fetch', '-q', '--depth', '1', repo, commit],
                            capture_output=True, text=True)
         if not r.returncode:
             break
         sys.stderr.write(r.stderr)
     else:
-        sys.exit('build_kmdf: cannot fetch ' + WDF_REPO)
-    run(['git', '-C', src, 'checkout', '-q', WDF_COMMIT])
+        sys.exit('build_kmdf: cannot fetch ' + repo)
+    run(['git', '-C', src, 'checkout', '-q', commit])
     open(os.path.join(src, '.complete'), 'w').close()
     return src
+
+
+def stamp_inf(inx, out):
+    """What the WDK's stampinf does to a driver's .inx: the architecture
+    and KMDF version filled in (the file stays UTF-16, as written)"""
+    raw = open(inx, 'rb').read()
+    enc = 'utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8-sig' if raw[:3] == b'\xef\xbb\xbf' else 'latin-1'
+    text = raw.decode(enc).replace('$ARCH$', 'amd64').replace('$KMDFVERSION$', KMDF_HEADERS)
+    with open(out, 'wb') as f:
+        f.write(text.encode('utf-16') if enc == 'utf-16' else text.encode('utf-8-sig' if enc == 'utf-8-sig' else 'latin-1'))
+    m = re.search(r'^\s*CatalogFile\s*=\s*(\S+)', text, re.M | re.I)
+    return m.group(1) if m else None
 
 
 def sources(fw):
@@ -223,13 +251,14 @@ def patched_tree(src, dest):
     return dest
 
 
-OUTPUTS = ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys', 'kmdfedu.sys', 'kmdfedu.inf', 'kmdfedu.cat')
+OUTPUTS = ('Wdf01000.sys', 'WdfLdr.sys', 'kmdftest.sys', 'kmdfedu.sys', 'kmdfedu.inf', 'kmdfedu.cat',
+           'vhidmini/vhidmini.sys', 'vhidmini/vhidmini.inf', 'vhidmini/wudf.cat', 'vhidmini/LICENSE.txt')
 CACHE = os.path.join(os.path.expanduser('~'), '.cache', 'novaos', 'wdf')
 
 
 def inputs_hash():
     """A hash of everything the outputs are made from (with the compiler's version)"""
-    h = hashlib.sha256(WDF_COMMIT.encode())
+    h = hashlib.sha256((WDF_COMMIT + VHID_COMMIT).encode())
     files = [os.path.join(d, n) for d, _, ns in os.walk(HERE) if '__pycache__' not in d for n in ns]
     files += [os.path.join(ROOT, *p.split('/')) for p in (
         'tools/drivertest/kmdftest.c', 'tools/drivertest/kmdftest.h', 'tools/drivertest/mksys.py',
@@ -255,6 +284,7 @@ def main():
     kept = None if args.src else os.path.join(CACHE, 'out-' + inputs_hash())
     if kept and all(os.path.isfile(os.path.join(kept, n)) for n in OUTPUTS):
         for n in OUTPUTS:
+            os.makedirs(os.path.dirname(os.path.join(out, n)), exist_ok=True)
             shutil.copy(os.path.join(kept, n), os.path.join(out, n))
         print(f'build_kmdf: {", ".join(OUTPUTS)} unchanged (from {kept})')
         return
@@ -339,6 +369,15 @@ def main():
     run(['clang'] + client + ['-c', os.path.join(HERE, 'stub.c'), '-o', stub])
     run(['clang'] + client + ['-Wall', '-c', os.path.join(ROOT, 'tools', 'drivertest', 'kmdftest.c'), '-o', test])
     run(['clang'] + client + ['-Wall', '-c', os.path.join(ROOT, 'tools', 'drivertest', 'kmdfedu.c'), '-o', edu])
+    # Microsoft's vhidmini2 sample, built as its project does (KMDF, kernel mode)
+    vsrc = os.path.join(fetch(os.path.join(os.path.expanduser('~'), '.cache', 'novaos', 'samples'), SAMPLES_REPO,
+                              VHID_COMMIT, (VHID_DIR, 'LICENSE')), *VHID_DIR.split('/'))
+    vobjs = []
+    for f in ('driver/vhidmini.c', 'driver/kmdf/util.c'):
+        o = os.path.join(work, 'vhid_' + os.path.basename(f) + '.o')
+        run(['clang'] + client + ['-D_KERNEL_MODE', '-I', os.path.join(vsrc, 'inc'), '-I', os.path.join(vsrc, 'driver'),
+                                  '-c', os.path.join(vsrc, *f.split('/')), '-o', o])
+        vobjs.append(o)
     print(f'build_kmdf: compiled {len(fx)} framework files')
 
     # import libraries: the kernel's (mksys.py, from kernel/nt/exports.h) and WdfLdr.sys's
@@ -360,8 +399,20 @@ def main():
     client_rt = [o for o in rt if os.path.basename(o) in ('rt_crt.c.o', 'rt_wdmsec.c.o')]
     link('kmdftest.sys', [test, stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
     link('kmdfedu.sys', [edu, stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
+    vdir = os.path.join(out, 'vhidmini')
+    os.makedirs(vdir, exist_ok=True)
+    link(os.path.join('vhidmini', 'vhidmini.sys'), vobjs + [stub] + client_rt, ['/entry:FxDriverEntry', wdfldr_lib])
     # (signed by its catalog only: the .sys must be unsigned when the catalog is made)
     signed_package(out, 'kmdfedu')
+    cat = stamp_inf(os.path.join(vsrc, 'driver', 'kmdf', 'vhidmini.inx'), os.path.join(vdir, 'vhidmini.inf'))
+    if cat != 'wudf.cat':
+        sys.exit(f'build_kmdf: vhidmini.inx names catalog {cat}, not wudf.cat (OUTPUTS)')
+    signer, root = test_signer()
+    files = [(n, open(os.path.join(vdir, n), 'rb').read()) for n in ('vhidmini.inf', 'vhidmini.sys')]
+    with open(os.path.join(vdir, cat), 'wb') as f:
+        f.write(catalog(files, signer, [root]))
+    # (the samples' licence, the MS-PL, goes with the binary)
+    shutil.copy(os.path.join(vsrc, '..', '..', 'LICENSE'), os.path.join(vdir, 'LICENSE.txt'))
 
     # signed as NovaOS's other test drivers are (mksys.py): they load with
     # test signing on (docs/drivers.md says why the framework does too)
@@ -371,13 +422,14 @@ def main():
         data = open(path, 'rb').read()
         with open(path, 'wb') as f:
             f.write(sign(data, signer, [root], 'sha256'))
-    print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys, kmdftest.sys and kmdfedu.sys in {out}')
+    print(f'build_kmdf: linked Wdf01000.sys, WdfLdr.sys, kmdftest.sys, kmdfedu.sys and vhidmini.sys in {out}')
     if kept:                                       # (the last build only)
         for old in os.listdir(CACHE):
             if old.startswith('out-'):
                 shutil.rmtree(os.path.join(CACHE, old), ignore_errors=True)
         os.makedirs(kept)
         for n in OUTPUTS:
+            os.makedirs(os.path.dirname(os.path.join(kept, n)), exist_ok=True)
             shutil.copy(os.path.join(out, n), os.path.join(kept, n))
 
 

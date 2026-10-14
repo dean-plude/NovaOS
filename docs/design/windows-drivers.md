@@ -241,7 +241,7 @@ step and only when a target driver needs it:
 | USB bus interface | `usbhub3.sys`, `ucx01000.sys` (URBs, `IOCTL_INTERNAL_USB_SUBMIT_URB`), and `usbccgp.sys` for composite devices (a PDO per function, `MI_nn`) | USB client drivers (USB serial, vendor devices, each function of a composite device) | NovaOS's USB core (`kernel/drivers/usb.c`) |
 | NDIS | `ndis.sys` (NDIS 6.x miniports), then WDI/WiFiCx for Wi-Fi | Ethernet and Wi-Fi cards (`netkvm.sys`, Intel `Netwtw*.sys`) | lwIP and NovaOS's network interfaces |
 | Storport | `storport.sys` | storage miniports (`viostor.sys`, `vioscsi.sys`, Intel VMD) | NovaOS's disk layer |
-| HID class | `hidclass.sys` (`kernel/nt/hidclass.c`, built) | HID minidrivers (vendor touchpads, pens), and NovaOS's USB one (`hidusb.c`) | `hid.dll` and setupapi (one device per top-level collection) |
+| HID class | `hidclass.sys` (`kernel/nt/hidclass.c`, built) | HID minidrivers (vendor touchpads, pens), and NovaOS's USB one (`hidusb.c`); KMDF HID drivers as lower filters under NovaOS's `mshidkmdf.sys` (`mshidkmdf.c`, Microsoft's `vhidmini2` sample checked in CI) | `hid.dll` and setupapi (one device per top-level collection) |
 | PortCls / AVStream | `portcls.sys`, `ks.sys` | audio and camera drivers | NovaOS's audio and capture paths |
 | WDDM | `dxgkrnl.sys` | display miniports and their user-mode D3D/Vulkan drivers | `gdi32`'s `D3DKMT*` calls and the compositor |
 

@@ -1,0 +1,2 @@
+/* vhidtest: its manifest asks to run as administrator (requireAdministrator), as devcon does: it registers a device */
+1 24 "vhidtest.manifest"

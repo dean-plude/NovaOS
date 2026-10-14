@@ -406,27 +406,119 @@ SETUPAPI BOOL WINAPI SetupDiOpenDeviceInterfaceA(HANDLE set, LPCSTR path, DWORD 
 static BOOL no_device(void) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
 
 /* Device setup classes exist without devices: the class GUIDs Windows
- * defines for the names programs ask about */
-static const struct { const char *name; GUID guid; } g_classes[] = {
-    { "Bluetooth",    { 0xe0cbf06c, 0xcd8b, 0x4647, { 0xbb, 0x8a, 0x26, 0x3b, 0x43, 0xf0, 0xf9, 0x74 } } },
-    { "Display",      { 0x4d36e968, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "HIDClass",     { 0x745a17a0, 0x74d3, 0x11d0, { 0xb6, 0xfe, 0x00, 0xa0, 0xc9, 0x0f, 0x57, 0xda } } },
-    { "Image",        { 0x6bdd1fc6, 0x810f, 0x11d0, { 0xbe, 0xc7, 0x08, 0x00, 0x2b, 0xe2, 0x09, 0x2f } } },
-    { "Keyboard",     { 0x4d36e96b, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "Media",        { 0x4d36e96c, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "Mouse",        { 0x4d36e96f, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "Net",          { 0x4d36e972, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "Ports",        { 0x4d36e978, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "System",       { 0x4d36e97d, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } } },
-    { "USB",          { 0x36fc9e60, 0xc465, 0x11cf, { 0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } } },
-    { "XnaComposite", { 0x05f5cfe2, 0x4733, 0x4950, { 0xa6, 0xbb, 0x07, 0xaa, 0xd0, 0x1a, 0x3a, 0x84 } } },
+ * defines for the names programs ask about, and the descriptions Device
+ * Manager shows for them (SetupDiGetClassDescription) */
+#define SC(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7) { a, b, c, { d0, d1, d2, d3, d4, d5, d6, d7 } }
+#define STD(x) SC(x, 0xe325, 0x11ce, 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18)
+static const struct { const char *name; GUID guid; const char *desc; } g_classes[] = {
+    { "AudioEndpoint", SC(0xc166523c, 0xfe0c, 0x4a94, 0xa5, 0x86, 0xf1, 0xa8, 0x0c, 0xfb, 0xbf, 0x3e), "Audio inputs and outputs" },
+    { "Battery",      SC(0x72631e54, 0x78a4, 0x11d0, 0xbc, 0xf7, 0x00, 0xaa, 0x00, 0xb7, 0xb3, 0x2a), "Batteries" },
+    { "Bluetooth",    SC(0xe0cbf06c, 0xcd8b, 0x4647, 0xbb, 0x8a, 0x26, 0x3b, 0x43, 0xf0, 0xf9, 0x74), "Bluetooth" },
+    { "Camera",       SC(0xca3e7ab9, 0xb4c3, 0x4ae6, 0x82, 0x51, 0x57, 0x9e, 0xf9, 0x33, 0x89, 0x0f), "Cameras" },
+    { "Computer",     STD(0x4d36e966), "Computer" },
+    { "DiskDrive",    STD(0x4d36e967), "Disk drives" },
+    { "Display",      STD(0x4d36e968), "Display adapters" },
+    { "HDC",          STD(0x4d36e96a), "IDE ATA/ATAPI controllers" },
+    { "HIDClass",     SC(0x745a17a0, 0x74d3, 0x11d0, 0xb6, 0xfe, 0x00, 0xa0, 0xc9, 0x0f, 0x57, 0xda), "Human Interface Devices" },
+    { "Image",        SC(0x6bdd1fc6, 0x810f, 0x11d0, 0xbe, 0xc7, 0x08, 0x00, 0x2b, 0xe2, 0x09, 0x2f), "Imaging devices" },
+    { "Keyboard",     STD(0x4d36e96b), "Keyboards" },
+    { "Media",        STD(0x4d36e96c), "Sound, video and game controllers" },
+    { "Monitor",      STD(0x4d36e96e), "Monitors" },
+    { "Mouse",        STD(0x4d36e96f), "Mice and other pointing devices" },
+    { "Net",          STD(0x4d36e972), "Network adapters" },
+    { "Ports",        STD(0x4d36e978), "Ports (COM & LPT)" },
+    { "Processor",    SC(0x50127dc3, 0x0f36, 0x415e, 0xa6, 0xcc, 0x4c, 0xb3, 0xbe, 0x91, 0x0b, 0x65), "Processors" },
+    { "SCSIAdapter",  STD(0x4d36e97b), "Storage controllers" },
+    { "SoftwareDevice", SC(0x62f9c741, 0xb25a, 0x46ce, 0xb5, 0x4c, 0x9b, 0xcc, 0xce, 0x08, 0xb6, 0xf2), "Software devices" },
+    { "System",       STD(0x4d36e97d), "System devices" },
+    { "USB",          SC(0x36fc9e60, 0xc465, 0x11cf, 0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00), "Universal Serial Bus controllers" },
+    { "USBDevice",    SC(0x88bae032, 0x5a81, 0x49f0, 0xbc, 0x3d, 0xa4, 0xff, 0x13, 0x82, 0x16, 0xd6), "Universal Serial Bus devices" },
+    { "Volume",       SC(0x71a27cdd, 0x812a, 0x11d0, 0xbe, 0xc7, 0x08, 0x00, 0x2b, 0xe2, 0x09, 0x2f), "Storage volumes" },
+    { "XnaComposite", SC(0x05f5cfe2, 0x4733, 0x4950, 0xa6, 0xbb, 0x07, 0xaa, 0xd0, 0x1a, 0x3a, 0x84), "Xbox 360 Peripherals" },
 };
+#define N_CLASSES (sizeof(g_classes) / sizeof(g_classes[0]))
+
+static int class_index(const GUID *g)
+{
+    /* (the GUID NovaOS's device tree gives Xbox 360 controllers: novapnp.h) */
+    static const GUID xna = SC(0xd61ca365, 0x5af4, 0x4486, 0x99, 0x8b, 0x9d, 0xb4, 0x73, 0x4c, 0x6c, 0xa3);
+    if (!g) return -1;
+    if (!memcmp(g, &xna, sizeof(GUID))) g = &g_classes[N_CLASSES - 1].guid;
+    for (unsigned i = 0; i < N_CLASSES; i++) if (!memcmp(&g_classes[i].guid, g, sizeof(GUID))) return (int)i;
+    return -1;
+}
+
+/* "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}" (lower case, as the Class key's names) */
+static BOOL StringFromGUID2_(const GUID *g, WCHAR *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    static const signed char order[] = { 3, 2, 1, 0, -1, 5, 4, -1, 7, 6, -1, 8, 9, -1, 10, 11, 12, 13, 14, 15 };
+    const BYTE *b = (const BYTE *)g;
+    int j = 0;
+    out[j++] = L'{';
+    for (unsigned i = 0; i < sizeof(order); i++) {
+        if (order[i] < 0) { out[j++] = L'-'; continue; }
+        out[j++] = (WCHAR)hex[b[order[i]] >> 4];
+        out[j++] = (WCHAR)hex[b[order[i]] & 15];
+    }
+    out[j++] = L'}';
+    out[j] = 0;
+    return TRUE;
+}
+
+/* The class's own key, Control\Class\{guid}: its default value is the
+ * description an installed class gives itself, "Class" its name */
+static BOOL class_value(const GUID *g, const WCHAR *name, WCHAR *out, DWORD cap)
+{
+    WCHAR k[100], gs[40];
+    if (!g || !StringFromGUID2_(g, gs)) return FALSE;
+    lstrcpyW(k, L"SYSTEM\\CurrentControlSet\\Control\\Class\\");
+    lstrcatW(k, gs);
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h)) return FALSE;
+    DWORD t, l = (cap - 1) * sizeof(WCHAR);
+    LONG r = RegQueryValueExW(h, name, NULL, &t, (BYTE *)out, &l);
+    RegCloseKey(h);
+    if (r || t != REG_SZ || l < sizeof(WCHAR)) return FALSE;
+    out[l / sizeof(WCHAR)] = 0;
+    return out[0] != 0;
+}
+
+/* @g's description (@name: its name) into @out */
+static BOOL class_text(const GUID *g, BOOL name, void *out, DWORD n, PDWORD need, BOOL wide)
+{
+    WCHAR v[128];
+    int i = class_index(g);
+    if (!class_value(g, name ? L"Class" : NULL, v, 128)) {
+        if (i < 0) { SetLastError(0xE0000209 /* ERROR_INVALID_CLASS */); return FALSE; }
+        MultiByteToWideChar(CP_ACP, 0, name ? g_classes[i].name : g_classes[i].desc, -1, v, 128);
+    }
+    DWORD len = (DWORD)lstrlenW(v) + 1;
+    if (need) *need = len;
+    if (!out || n < len) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+    if (wide) lstrcpyW(out, v);
+    else WideCharToMultiByte(CP_ACP, 0, v, -1, out, (int)n, NULL, NULL);
+    return TRUE;
+}
+
+SETUPAPI BOOL WINAPI SetupDiGetClassDescriptionW(const GUID *g, PWSTR out, DWORD n, PDWORD need)
+{ return class_text(g, FALSE, out, n, need, TRUE); }
+SETUPAPI BOOL WINAPI SetupDiGetClassDescriptionA(const GUID *g, LPSTR out, DWORD n, PDWORD need)
+{ return class_text(g, FALSE, out, n, need, FALSE); }
+SETUPAPI BOOL WINAPI SetupDiGetClassDescriptionExW(const GUID *g, PWSTR out, DWORD n, PDWORD need, PCWSTR machine, PVOID r)
+{ (void)machine; (void)r; return class_text(g, FALSE, out, n, need, TRUE); }
+SETUPAPI BOOL WINAPI SetupDiClassNameFromGuidW(const GUID *g, PWSTR out, DWORD n, PDWORD need)
+{ return class_text(g, TRUE, out, n, need, TRUE); }
+SETUPAPI BOOL WINAPI SetupDiClassNameFromGuidA(const GUID *g, LPSTR out, DWORD n, PDWORD need)
+{ return class_text(g, TRUE, out, n, need, FALSE); }
+SETUPAPI BOOL WINAPI SetupDiClassNameFromGuidExW(const GUID *g, PWSTR out, DWORD n, PDWORD need, PCWSTR machine, PVOID r)
+{ (void)machine; (void)r; return class_text(g, TRUE, out, n, need, TRUE); }
 
 SETUPAPI BOOL WINAPI SetupDiClassGuidsFromNameA(LPCSTR name, GUID *list, DWORD n, PDWORD need)
 {
     if (!name || !need) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     DWORD k = 0;
-    for (DWORD i = 0; i < sizeof(g_classes) / sizeof(g_classes[0]); i++)
+    for (DWORD i = 0; i < N_CLASSES; i++)
         if (!lstrcmpiA(name, g_classes[i].name)) { if (list && k < n) list[k] = g_classes[i].guid; k++; }
     *need = k;
     if (k > n) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }

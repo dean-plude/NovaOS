@@ -89,6 +89,8 @@ installation.  In the Terminal, `install` lists the disks and
 The first time an installed NovaOS starts, **Welcome to NovaOS** opens
 before the desktop.  It asks, one page at a time:
 
+![Welcome to NovaOS asking for the time zone](screenshots/first-start-setup.png)
+
 1. **Your name.**  It is shown on the Start menu and on the desktop, and
    programs get it as the user name.
 2. **Your time zone.**  Type a city (Berlin, Tokyo, New York...) or pick
@@ -133,6 +135,8 @@ Terminal, `tzutil /s "NAME"` sets a time zone by its Windows name and
 - **Right-click** the desktop, an icon, the dock or a title bar for a
   menu.
 
+![The Start menu](screenshots/start-menu.png)
+
 Keyboard shortcuts:
 
 | Keys | Does |
@@ -145,6 +149,7 @@ Keyboard shortcuts:
 | Windows+Up | Maximize the window |
 | Windows+Down | Restore a maximized or snapped window, or minimize it |
 | Alt+Tab | Switch windows (Shift+Alt+Tab goes back, Esc cancels) |
+| Ctrl+Shift+Esc | Open Task Manager |
 
 ## The built-in apps
 
@@ -155,10 +160,16 @@ Keyboard shortcuts:
 | **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme and wallpaper), Storage, Network, Time & language, and About. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
+| **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
+| **Device Manager** | Type "Device Manager" in Start.  Lists the PC's devices by type (or by connection, View menu), as Windows' Device Manager does; select one to see its status and problem code, driver (provider, version, date), hardware and compatible IDs and resources (memory and I/O ranges, IRQ).  F5 scans for hardware changes; it also refreshes when a device is plugged in or removed. |
+| **Event Viewer** | Type "Event Viewer" in Start.  Shows the Application, System and Security logs as Windows' Event Viewer does: each event's level, date, source, event ID and task category, and below the list its message (General) and its XML (Details).  The Action menu filters by level, clears a log and saves its events as `.evtx` or `.xml`.  NovaOS logs each start, services starting and stopping, drivers that fail to load and programs that crash; programs add their own events. |
 | **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
 | **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
+| **Camera** | Shows a USB camera's picture; type `camera` in the Terminal or find it with Windows+S.  The camera must stream on a bulk endpoint for now: most built-in webcams do not yet work (see [drivers.md](drivers.md#cameras-usb-video-class)). |
 
 ### The Terminal
+
+![The Terminal running sysinfo and devices](screenshots/terminal.png)
 
 The Terminal has its own commands; `help` lists them.  The most useful:
 
@@ -231,7 +242,7 @@ files) installs as on Windows:
 |---|---|
 | `pnputil /enum-drivers` | List the installed driver packages |
 | `pnputil /delete-driver oemN.inf` | Remove one |
-| `pnputil /enum-devices` | List devices; problem code 28 means no driver |
+| `pnputil /enum-devices` | List devices; problem code 28 means no driver (Device Manager shows the same) |
 | `pnputil /disable-device /deviceid <ID>`, `/enable-device` | Turn a device off or on |
 | `pnputil /scan-devices /search-online` | Find drivers for devices that have none on the Microsoft Update Catalog |
 
@@ -285,6 +296,8 @@ Right-click a disk or a partition to:
 The volumes NovaOS itself uses (where C: is saved, the boot files) are
 shown but cannot be formatted or given another letter.
 
+![File Explorer on C:\Windows](screenshots/file-explorer.png)
+
 ## Network and sound
 
 **Wired networking** starts by itself: NovaOS gets an address from the
@@ -303,6 +316,8 @@ netsh interface ipv4 add dnsservers name=Ethernet 8.8.8.8 index=2
 netsh interface ipv4 set address name=Ethernet source=dhcp
 netsh interface ipv4 show config
 ```
+
+![Settings > Network](screenshots/settings-network.png)
 
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
@@ -338,7 +353,9 @@ support it.  NovaOS saves drive C: before it restarts or shuts down.
 - **A program crashes**: NovaOS writes a crash report (the exception,
   where it happened, the stack and the loaded modules) to
   `C:\NovaOS\Crashes`.  `crashes` lists them and `crashes last` shows the
-  newest.
+  newest.  Event Viewer's Application log lists every crash too
+  (Application Error, event 1000), and its System log lists services
+  that stopped unexpectedly and drivers that failed to load.
 - **The log**: NovaOS writes what it does to the serial port (QEMU's
   `-serial stdio` shows it in your terminal).  Started from a USB stick,
   it also writes it to `EFI\NOVA\bootlog.txt` on the stick.  `dmesg` in

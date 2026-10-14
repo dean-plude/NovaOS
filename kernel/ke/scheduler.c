@@ -78,6 +78,7 @@ static uint64_t next_tid = 1;
  * whichever CPU's timer interrupt sees it has moved on */
 static volatile uint64_t tick_count;
 static uint64_t tsc_at_boot;
+static uint64_t g_cpu_user_tsc[MAX_CPUS], g_cpu_start_tsc[MAX_CPUS];   /* (CPU time, see account_switch) */
 
 /* Ticks per time slice before preemption */
 #define TICKS_PER_SLICE  2   /* 2 ticks @ 100Hz = 20ms quantum */
@@ -529,6 +530,7 @@ void sched_init(void)
     KiGetCurrentKpcr()->CurrentThread = idle;
     KiGetCurrentKpcr()->WinCurrentThread = idle;
     tsc_at_boot    = rdtsc();
+    idle->on_tsc   = g_cpu_start_tsc[0] = tsc_at_boot;
 
     kprintf("[SCHED] Scheduler initialized (idle TID=%lu)\n", idle->tid);
 }
@@ -552,6 +554,7 @@ void sched_init_cpu(Thread *idle)
     uintptr_t top = (uintptr_t)idle->kernel_stack + idle->stack_size;
     idle->cpu        = k->CpuNumber;
     idle->on_cpu     = true;
+    idle->on_tsc     = g_cpu_start_tsc[k->CpuNumber] = rdtsc();
     k->IdleThread    = idle;
     k->CurrentThread = idle;
     k->WinCurrentThread = idle;
@@ -650,6 +653,71 @@ Thread *sched_new_thread(const char *name, ThreadEntry entry,
 }
 
 /* -----------------------------------------------------------------------
+ * CPU time: each switch charges the TSC cycles since the previous one to
+ * the thread switched out (and, for a user program's thread, to its CPU's
+ * user time), as Windows charges run time to KTHREAD.KernelTime/UserTime;
+ * what a CPU's idle thread ran is its idle time.  Task Manager, GetSystemTimes
+ * and GetProcessTimes read it (kernel/um/um_services.c, um_thread.c).
+ * ----------------------------------------------------------------------- */
+static uint64_t tsc_to_100ns(uint64_t tsc);
+
+/* Charge @t (running on @cpu) for the time since it was last charged */
+static uint64_t charge(Thread *t, uint32_t cpu)
+{
+    uint64_t now = rdtsc(), on = t->on_tsc;
+    if (on && now > on) {
+        uint64_t d = now - on;
+        t->run_tsc += d;
+        if (t->um) g_cpu_user_tsc[cpu] += d;
+        if (t->acct_tsc) __atomic_fetch_add(t->acct_tsc, d, __ATOMIC_RELAXED);
+    }
+    t->on_tsc = now;
+    return now;
+}
+
+static void account_switch(Thread *prev, Thread *next, uint32_t cpu)
+{
+    next->on_tsc = charge(prev, cpu);
+}
+
+uint64_t sched_tsc_100ns(uint64_t tsc) { return tsc_to_100ns(tsc); }
+
+static uint64_t tsc_to_100ns(uint64_t tsc)
+{
+    if (!g_tsc_per_tick) return 0;
+    return tsc / g_tsc_per_tick * 100000 + tsc % g_tsc_per_tick * 100000 / g_tsc_per_tick;
+}
+
+/* (Read without locks: a stretch being charged at that moment may count
+ * twice for an instant, never forever) */
+static uint64_t live_tsc(const Thread *t, uint64_t now)
+{
+    uint64_t on = __atomic_load_n(&t->on_tsc, __ATOMIC_RELAXED);
+    return __atomic_load_n(&t->on_cpu, __ATOMIC_RELAXED) && on && now > on ? now - on : 0;
+}
+
+uint64_t sched_thread_time(const Thread *t)
+{
+    return t ? tsc_to_100ns(t->run_tsc + live_tsc(t, rdtsc())) : 0;
+}
+
+void sched_cpu_times(uint32_t cpu, uint64_t *idle, uint64_t *user, uint64_t *total)
+{
+    *idle = *user = *total = 0;
+    if (cpu >= MAX_CPUS || !g_cpu_start_tsc[cpu]) return;
+    uint64_t now = rdtsc();
+    Thread *it = g_kpcr[cpu].IdleThread, *cur = g_kpcr[cpu].CurrentThread;
+    uint64_t u = g_cpu_user_tsc[cpu] + (cur && cur->um ? live_tsc(cur, now) : 0);
+    uint64_t i = it ? it->run_tsc + live_tsc(it, now) : 0;
+    uint64_t all = now > g_cpu_start_tsc[cpu] ? now - g_cpu_start_tsc[cpu] : 0;
+    if (i > all) i = all;
+    if (u > all - i) u = all - i;
+    *idle = tsc_to_100ns(i);
+    *user = tsc_to_100ns(u);
+    *total = tsc_to_100ns(all);
+}
+
+/* -----------------------------------------------------------------------
  * switch_locked — pick the next thread and switch to it.  Called with
  * interrupts off and this CPU's queue locked; returns (in the thread that
  * called it, once it runs again) with the lock released, interrupts off.
@@ -705,6 +773,7 @@ static void switch_locked(RunQueue *rq)
         for (;;) { cli(); hlt(); }
     }
     while (__atomic_load_n(&next->on_cpu, __ATOMIC_ACQUIRE)) pause_cpu();
+    account_switch(prev, next, kpcr->CpuNumber);
     next->on_cpu        = true;
     next->cpu           = this_cpu();
     next->state         = THREAD_RUNNING;
@@ -964,6 +1033,7 @@ void sched_tick(void)
     Thread *cur = current_thread;
     bool decayed = false;
     if (tick) {
+        charge(cur, cpu);                   /* (a thread that keeps its CPU is charged as it goes) */
         cur->ticks_total++;
         cur->ticks_slice++;
         /* A boost decays a level per quantum run (see boost) */

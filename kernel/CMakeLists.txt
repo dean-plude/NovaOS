@@ -199,6 +199,7 @@ set(KERNEL_C_SOURCES
     um/um_driver.c
     um/um_registry.c
     um/um_crash.c
+    um/um_eventlog.c
     um/um_security.c
     ke/main.c
     ke/version.c
@@ -242,6 +243,7 @@ set(KERNEL_C_SOURCES
     nt/seh.c
     nt/storport.c
     nt/usbd.c
+    nt/usbvideo.c
     nt/win10.c
     nt/win11.c
     nt/zw.c

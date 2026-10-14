@@ -30,6 +30,8 @@ typedef enum {
     APP_ILLUSTRATOR, APP_CLIPCHAMP, APP_VSTUDIO, APP_PAINT, APP_TIPS,
     APP_POWERPOINT, APP_BLENDER, APP_BING, APP_SOLITAIRE, APP_TODO,
     APP_FIREFOX,
+    /* A Windows program: C:\Windows\System32\taskmgr.exe (Ctrl+Shift+Esc) */
+    APP_TASKMGR,
     APP_COUNT
 } AppId;
 

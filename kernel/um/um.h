@@ -88,8 +88,20 @@ void        um_image_cache_stats(UINT32 *files, UINT64 *bytes, UINT64 *reused);
 const char *UmName(const UmProcess *p);
 
 /* Process list, for tasklist: fills up to @max entries. */
-typedef struct { UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; UINT32 parent_pid; } UmProcInfo;
+typedef struct {
+    UINT32 pid; char name[32]; UINT32 mem_kb; UINT32 threads; bool exited; UINT32 parent_pid;
+    UINT64 cpu_time;        /* CPU time its threads ran, ended ones too (100 ns) */
+    UINT64 create_time;     /* 100 ns since 1601 */
+    UINT32 handles;         /* open handles */
+    UINT32 commit_kb;       /* committed memory (resident or not) */
+    UINT8  base_priority;   /* its priority class's base (8: NORMAL) */
+} UmProcInfo;
 int  UmList(UmProcInfo *out, int max);
+/* The threads of process @pid (SystemProcessInformation's thread records) */
+typedef struct {
+    UINT32 tid; UINT64 cpu_time, start; UINT8 priority, base_priority, state;   /* state: ThreadState */
+} UmThreadInfo;
+int  UmThreadList(UINT32 pid, UmThreadInfo *out, int max);
 /* taskkill: false if no running process has @pid. */
 bool UmKillPid(UINT32 pid);
 void UmKillConsole(UmConsole *con, UINT32 status);   /* every program on @con */
@@ -186,6 +198,12 @@ bool um_registry_get_sz(const char *path, const char *name, char *out, int cap);
 UINT32 um_registry_generation(void);
 void um_registry_set_bin(const char *path, const char *name, const void *data, UINT32 len);
 int  um_registry_get_bin(const char *path, const char *name, void *out, int cap);   /* its length, or -1 */
+/* The event log (um_eventlog.c): an event from the kernel, an EVENTLOGRECORD
+ * of @type (1 error, 2 warning, 4 information) from @source for the log
+ * @log, which the EventLog service writes down; and CTL_EVENTLOG */
+void   EvLogReport(const char *log, UINT16 type, const char *source, UINT32 id, int n, const char *const *strings);
+UINT64 UmEventLogCtl(UINT64 arg, UINT64 ptr);
+void   EvLogBoot(void);                      /* Kernel-General 12, once the registry is up */
 /* Any-type value access, for kernel-mode Zw* registry calls (nt/zw.c) */
 int  um_registry_get_value(const char *path, const char *name, UINT32 *type, void *out, int cap);
 void um_registry_set_value(const char *path, const char *name, UINT32 type, const void *data, UINT32 len);

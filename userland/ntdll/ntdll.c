@@ -390,6 +390,7 @@ NTSYSAPI ULONG NTAPI RtlNtStatusToDosError(NTSTATUS s)
     case 0x00000000: return ERROR_SUCCESS;
     case 0x00000103: return 997;                          /* ERROR_IO_PENDING */
     case 0x80000005: return ERROR_MORE_DATA;
+    case 0x80000011: return 170;                          /* STATUS_DEVICE_BUSY: ERROR_BUSY */
     case 0xC0000010: return 1;                            /* ERROR_INVALID_FUNCTION */
     case 0xC0000023: return ERROR_INSUFFICIENT_BUFFER;
     case 0xC00000AB: case 0xC00000AC: case 0xC00000AE: return 231;   /* ERROR_PIPE_BUSY */

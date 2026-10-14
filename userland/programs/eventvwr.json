@@ -1,0 +1,5 @@
+{
+  "gui": true,
+  "system": true,
+  "libs": ["wevtapi", "comdlg32"]
+}

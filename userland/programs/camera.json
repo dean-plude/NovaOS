@@ -1,0 +1,4 @@
+{
+  "gui": true,
+  "libs": ["mfplat", "mf", "mfreadwrite"]
+}

@@ -253,6 +253,11 @@ GDIAPI BOOL     DeleteObject(HGDIOBJ obj);
 
 
 #define DEFAULT_CHARSET 1
+#ifndef DEFAULT_PITCH
+#define DEFAULT_PITCH 0
+#define FIXED_PITCH 1
+#define VARIABLE_PITCH 2
+#endif
 #define ANSI_CHARSET 0
 #define SYMBOL_CHARSET 2
 #define OEM_CHARSET 255

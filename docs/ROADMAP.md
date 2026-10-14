@@ -545,8 +545,9 @@ item ends when a named program or test demonstrates it.
   gives).  A vendor's USB HID device runs on the HID class driver, where
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl` ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
-  Still to do: raw keyboard and mouse input, Raw Input for class-driver
-  devices, the Xbox
+  Raw Input lists the class driver's collections too and sends their
+  reports as `WM_INPUT`.
+  Still to do: raw keyboard and mouse input, the Xbox
   360 wireless receiver, Bluetooth controllers, force feedback through
   DirectInput, and virtio game pads (QEMU has none).
 - Plug and Play: a device tree the Windows way.  Devices plugged in or
@@ -725,7 +726,9 @@ apps from the App Store catalog pass their nightly scripts.
   starting from failures in the existing corpus, until 40 GUI apps pass.
   The corpus had no failures left (39 of 39 on 2026-10-13), so it starts
   from the Store's untested apps: WinSCP (installs and opens its Login
-  dialog; [history](history/2026-10-14-winscp.md)).
+  dialog; [history](history/2026-10-14-winscp.md)) and Thunderbird (installs
+  and opens an e-mail message;
+  [history](history/2026-10-14-thunderbird.md)).
 - [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
   from the Store's Windows Installer package; the nightly corpus types a
@@ -759,7 +762,16 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
-  show the built-in webcam in a camera app.
+  show the built-in webcam in a camera app. Done in QEMU: the UVC class
+  driver (`kernel/nt/usbvideo.c`), Media Foundation's capture path
+  (`MFEnumDeviceSources`, the camera media source and `IMFSourceReader`
+  with RGB32 conversion) and the Camera app, shown with a fake UVC camera
+  in the devices suite's `camera` boot. Still needed for the T14's
+  built-in webcam: isochronous transfers in `usbd.c` (the fake camera
+  streams on a bulk endpoint; most webcams, the T14's included, use
+  isochronous ones), a function per interface on composite devices (the
+  webcam's microphone), MJPEG decoding for its larger sizes, and a boot
+  of `latest` on the T14 showing its picture in Camera.
 - [ ] **28.4 Battery life.** Add processor idle states and device power
   management; measure idle power within 50% of Windows on the same T14.
 - [ ] **28.5 A second reference PC.** Pick an AMD machine and list its

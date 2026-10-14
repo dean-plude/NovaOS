@@ -53,6 +53,12 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     audio threads at real-time priority 18, capped at 80% of a CPU as on
     Windows. NovaOS's own sound threads (waveOut, waveIn, DirectSound,
     WASAPI) use it too.
+  - CPU time is measured with the TSC: each switch and each timer tick
+    charges the running thread, its process and its CPU (idle, user
+    programs or the kernel), which `NtQuerySystemInformation`
+    (`SystemProcessInformation`, `SystemProcessorPerformanceInformation`),
+    `GetSystemTimes`, `GetProcessTimes` and `GetThreadTimes` report and
+    Task Manager graphs.
   - Drive C: is a RAM disk, saved to an NTFS or FAT32 volume once it has
     been quiet for a second and restored at boot.
 - **Built-in drivers** (`kernel/drivers/`, `kernel/hal/`, `kernel/fs/`):
@@ -140,6 +146,11 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows
     programs and NovaOS updates) and, on the live media, Install NovaOS.
+  - Task Manager (`taskmgr.exe`, a Windows program in System32;
+    Ctrl+Shift+Esc, Start's right-click menu or search): Processes with
+    End task, Performance (each logical processor, memory, disk and
+    Ethernet over 60 seconds), Details and Services, read through the same
+    APIs Windows' Task Manager uses.
 - **Windows userland** (`userland/`): about 115 system DLLs, NovaOS's own
   code apart from the third-party libraries named below, built with clang
   for `x86_64-pc-windows-msvc` into `System32` and again for `i686` into
@@ -259,6 +270,15 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     Scheduler 2.0, kept in `C:\Windows\System32\Tasks`), the Data
     Protection API, and event tracing that answers as Windows does with no
     logging session running.
+  - The event log: an EventLog service keeps the Application, System and
+    Security logs in `C:\Windows\System32\winevt\Logs` (classic `.evt`
+    files), fed through a kernel queue, so the kernel's boot, driver-load
+    and crash events and the service control manager's start and stop
+    events are kept even before the service runs.  Programs use
+    `advapi32`'s classic functions (`ReportEvent`, `ReadEventLog`,
+    `ClearEventLog`...) or `wevtapi` (`EvtQuery` with XPath filters,
+    `EvtRender`, `EvtSubscribe`, `EvtExportLog` writing `.evtx`); Event
+    Viewer (`eventvwr.exe`) shows them.
 - **Updates**: an installed NovaOS updates itself from an update channel
   ([updates.md](updates.md)). The App Store's Updates page (or the
   Terminal's `update`) downloads the new kernel and bootloader, the next

@@ -65,6 +65,8 @@ struct UsbPipe {
     UINT16          *iso_len;
     volatile bool    dead;         /* the device left: never touched again */
     volatile bool    patient;      /* bulk waits may sleep between polls (Windows clients' pipes, nt/usbd.c) */
+    volatile bool    keep;         /* an interrupt IN transfer that timed out stays queued for the
+                                      next one of the same length (xHCI; nt/usbd.c's interrupt pipes) */
     void            *hcd;          /* the controller driver's own state */
 };
 

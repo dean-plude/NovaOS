@@ -45,6 +45,13 @@ WAV, or restart or reset the machine and check the next boot. The suites
 are one file per test in `tests/selftest/SUITE/`, run in file-name order;
 `python3 tools/selftest.py --suite SUITE --list` prints them.
 
+A program that outlives its limit is asked to stop (Ctrl+Alt+F12 logs where
+every thread is, then Ctrl+C). If the Terminal still does not come back, the
+machine is reset and the tests after it run on the fresh boot, so one hung
+program fails one test instead of every later test waiting out its own limit
+(one stalled graphics job burned its whole hour that way). Give a test a limit
+a few times its normal run on a loaded runner, not a generous one.
+
 ### The core suite
 
 The core suite boots once with an HD Audio card whose microphone hears a
@@ -273,13 +280,18 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
   back once per signal or on its timeout, a callback sets its own wait
   again, setting a wait never waits for a running callback, cancelling
-  and closing from a callback; 64- and 32-bit), programs started from
-  the Start menu (Win+S, the name, Enter): `winhello`, a GUI program,
-  with no Terminal window, and `hello`, a console program, in a
-  Terminal, `crash kernel`, a deliberate kernel fault whose serial log
-  must show a backtrace with function names, and last the kernel crash
-  report: after `crash kernel` and a reset, `crashes last` shows the
-  fault's backtrace.<!-- END generated:core-tests -->
+  and closing from a callback; 64- and 32-bit), Task Manager opened with
+  Ctrl+Shift+Esc: `winhello` listed, selected by typing its name and
+  ended with Delete; the Performance, Details and Services views,
+  `evtlogtest` (ReportEvent, ReadEventLog,
+  EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot, service,
+  driver-failure and crash events) and Event Viewer from the Start menu
+  finding its event, programs started from the Start menu (Win+S, the
+  name, Enter): `winhello`, a GUI program, with no Terminal window, and
+  `hello`, a console program, in a Terminal, `crash kernel`, a
+  deliberate kernel fault whose serial log must show a backtrace with
+  function names, and last the kernel crash report: after `crash kernel`
+  and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 
@@ -298,7 +310,8 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there |
 | `update` | an installed NovaOS updating itself from signed test channels, refusing bad ones, and going back after a reset ([updates.md](updates.md#the-self-test)) |
 | `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |
-| `hid` | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`): the HID class driver on its USB minidriver; `hidclasstest` through setupapi and `hid.dll` (strings, preparsed data, feature, input and output reports), unplugging |
+| `hid` | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`): the HID class driver on its USB minidriver; `hidclasstest` through setupapi and `hid.dll` (strings, preparsed data, feature, input and output reports), Raw Input (`WM_INPUT` and the device list), unplugging |
+| `camera` | a fake UVC 1.1 camera (`tools/campeer.py`): the UVC class driver; `camtest` through Media Foundation (`MFEnumDeviceSources`, the source reader in each mode and its converters, the asynchronous reader), then the Camera app's picture (`docs/screenshots/camera.png`) |
 | `pnp` | a keyboard, a hub and a USB stick plugged into xHCI and removed: `pnptest` follows the Plug and Play device tree |
 | `ntfs` | an NTFS volume as drive D:: hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
 | `wdm` | a Windows kernel-mode test driver (`wdmtest.sys`) under the signing policy (loads only with test signing on; unsigned and tampered copies never), then a KMDF driver (`kmdftest.sys`) on `Wdf01000.sys` |
@@ -310,6 +323,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `umdf` | a UMDF 2 driver (`umdftest.dll`) on the edu device, running in `WUDFHost.exe` |
 | `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA |
 | `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
+| `devmgr` | Device Manager (`devmgmt.exe`) opened from the Start menu, then `devmgmt --check` on an e1000e card, a USB keyboard and tablet and the driverless edu device: setupapi's list against cfgmgr32's tree, classes, status and problem codes, resources (`CM_Get_First_Log_Conf`); its screenshot is `docs/screenshots/device-manager.png` |
 | `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled |
 | `diskmgr` | a blank second disk: Disk Management (`diskmgmt.exe`), opened from the Start menu, initializes it as GPT, makes an NTFS and a FAT32 volume and moves one to T: (still T: after a restart); `scripts/ntfs-check.py`, `fsck.fat` and the files are checked from the host |
 
@@ -352,7 +366,7 @@ input ring, NTFS power-cut recovery).
 
 `.github/workflows/nightly.yml` builds `main` and runs `tools/appcorpus.py`,
 one VM and one job per program: the official Windows x64 releases of
-<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita (draws a stroke and saves the image), PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY, WinSCP (a Delphi VCL program: its Login dialog), LibreOffice (Writer and Calc open, edit and save a .docx and an .xlsx) and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
+<!-- BEGIN generated:corpus -->ripgrep, fd, jq, 7-Zip, MinGit (cloning a repository), Python, Node.js, .NET (German and Japanese formatting through ICU), ffmpeg (an MP4 converted to WebM), Roblox (installs; the client stops in its anti-cheat), Steam (installs and updates itself; the login window opens after the test's time), Microsoft Edge WebView2 runtime (installs; a host creates a controller, loads a page and executes JavaScript), SumatraPDF, WinMerge, KeePassXC, VLC (plays an H.264 and AAC MP4 with sound), Audacity (records 10 s from the microphone and saves the project), Inkscape, Krita (draws a stroke and saves the image), PhotoCraft, VectorCraft, EffectCraft, PdfCraft, WordCraft, Firefox, CADCraft, DeckCraft, DesignCraft, FilmCraft, GridCraft, LightCraft, SoundCraft, Notepad++, OpenTTD (free on GOG; installs with its installer and reaches its main menu), Beneath a Steel Sky on ScummVM (free on GOG; installs with its installer, skips the intro and walks), Teeworlds (full screen, through its first-start questions to its start menu, with music; Settings opened with the mouse, SDL recentring the pointer with SetCursorPos), Teeworlds joining a game on its own server (teeworlds_srv.exe on the same machine, over the loopback interface) and staying in it, OpenTyrian (Tyrian 2.1 on Direct3D 9 through DXVK, its demo, menus and full screen, with music), Blobby Volley 2 (its full screen switches the display to 800x600 on Direct3D 9 through DXVK, and back), LBreakout2 (an SDL 1.2 game drawn with GDI; its full screen switches the display to 640x480, and back), Cave Story (a DirectDraw game, on cnc-ddraw: its title screen in full screen at 640x480, then a new game), Cave Story played with a game pad (DirectInput 7 joystick): the opening talk, then Quote walks in the Start Point cave, SuperTux (an SDL 1.2 game played with a game pad, through winmm's joystick functions: its first level), PuTTY, WinSCP (a Delphi VCL program: its Login dialog), LibreOffice (Writer and Calc open, edit and save a .docx and an .xlsx), Thunderbird (opens an e-mail message) and Squash the Creeps (Godot 4.7 drawing with Direct3D 12 through VKD3D-Proton)<!-- END generated:corpus -->.
 Each program is downloaded (and cached), unpacked onto drive C: or
 installed with its own installer or the App Store, and driven by typed
 commands, clicks and keys. The windowed programs' screenshots must match
@@ -376,7 +390,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usptest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,
@@ -394,6 +408,11 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
   `C:\Tests` by the graphics suite: `d2dtest` (Direct2D), `dwtest` and
   `dw3test` (DirectWrite), `gltest` (OpenGL), `d3dtest` (Direct3D 9/11),
   `d3d12test` (Direct3D 12) and `hlsltest` (the HLSL compiler).
+  `gltest fps` and `d3dtest fps` compare direct presentation with the GDI
+  way; under KVM they check bytes, not time. Frames the host did not show go
+  through the GDI like the other way's, so their share is taken out before
+  the "far fewer bytes" check (a slow runner shows more of them; the "frames
+  shown from the host" check limits them separately).
 - **Drivers**: the devices suite's test drivers (`wdmtest`, `edutest`,
   `kmdftest`, `kmdfedu`, `umdftest`) and its recorded catalog servers are
   in `tools/drivertest/`. `tools/authenticode/` makes the files

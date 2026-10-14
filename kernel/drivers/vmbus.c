@@ -221,7 +221,7 @@ typedef struct {
 
 static const VmbusDriver *const g_drivers[] = {
     &HvKeyboardDriver, &HvMouseDriver, &HvShutdownDriver, &HvTimeSyncDriver, &HvHeartbeatDriver,
-    &HvStorageDriver, &HvVideoDriver, &HvNetworkDriver,
+    &HvKvpDriver, &HvStorageDriver, &HvVideoDriver, &HvNetworkDriver,
 };
 
 static void         *g_hypercall_page;
@@ -318,7 +318,8 @@ static void guid_text(const UINT8 *g, char *s, size_t cap)
 }
 
 /* Devices worth a name in the log (NovaOS drives the keyboard, the mouse,
- * shutdown, time sync, heartbeat, SCSI storage, video and network) */
+ * shutdown, time sync, heartbeat, key-value exchange, SCSI storage, video and
+ * network) */
 static const struct { const char *guid, *name; } g_known[] = {
     { "f912ad6d-2b17-48ea-bd65-f927a61c7684", "keyboard" },
     { "cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a", "mouse" },
@@ -329,7 +330,7 @@ static const struct { const char *guid, *name; } g_known[] = {
     { "0e0b6031-5213-4934-818b-38d90ced39db", "shutdown" },
     { "9527e630-d0ae-497b-adce-e80ab0175caf", "time sync" },
     { "57164f39-9115-4e78-ab55-382f3bd5422d", "heartbeat" },
-    { "a9a0f4e7-5a45-4d96-b827-8a841e8c03e6", "key-value exchange (no driver)" },
+    { "a9a0f4e7-5a45-4d96-b827-8a841e8c03e6", "key-value exchange" },
     { "525074dc-8985-46e2-8057-a307dc18a502", "dynamic memory (no driver)" },
 };
 

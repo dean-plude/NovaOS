@@ -1,4 +1,4 @@
-"""Hyper-V's integration services (shutdown, time sync, heartbeat), on the host."""
+"""Hyper-V's integration services (shutdown, time sync, heartbeat, key-value exchange), on the host."""
 from pathlib import Path
 import shutil
 import subprocess

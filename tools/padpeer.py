@@ -192,6 +192,7 @@ class Conn:
         self.wlock = threading.Lock()
         self.ids64 = False
         self.listening = False
+        self.held = []
 
     def send(self, ptype, hdr=b'', data=b'', pid=0):
         h = struct.pack('<II', ptype, len(hdr) + len(data)) + struct.pack('<Q' if self.ids64 else '<I', pid)
@@ -219,10 +220,15 @@ class Conn:
         self.send(EP_INFO, bytes(types) + bytes(intervals) + bytes(ifs) + struct.pack('<32H', *mps))
 
     def send_report(self, guide=False):
-        """The current state on the IN endpoint (if the host listens)"""
+        """The current state on the IN endpoint (if the host listens; the
+        vendor device keeps its reports until the host listens again, as a
+        device's endpoint holds them until polled)"""
+        r = self.pad.guide_report() if guide else self.pad.report()
+        if self.pad.kind == 'vendor' and r is not None and not self.listening:
+            self.held.append(r)
+            return
         if not self.listening:
             return
-        r = self.pad.guide_report() if guide else self.pad.report()
         if r is not None:
             self.send(INTERRUPT_PACKET, struct.pack('<BBH', EP_IN, OK, len(r)), r)
 
@@ -334,9 +340,16 @@ class Conn:
                     self.listening = True
                     if self.pad.kind != 'vendor':     # (the vendor device only answers what it is sent)
                         self.send_report()
+                    else:
+                        print(f'padpeer: listening ({len(self.held)} held)', flush=True)
+                        for r in self.held:
+                            self.send(INTERRUPT_PACKET, struct.pack('<BBH', EP_IN, OK, len(r)), r)
+                        self.held = []
             elif ptype == STOP_INTERRUPT_RECEIVING:
                 if body[0] == EP_IN:
                     self.listening = False
+                    if self.pad.kind == 'vendor':
+                        print('padpeer: not listening', flush=True)
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
             elif ptype == INTERRUPT_PACKET:
                 ep, st, n = struct.unpack('<BBH', body[:4])

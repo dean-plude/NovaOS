@@ -42,7 +42,7 @@ installs each one, drives it and compares a screenshot against a reference.
 |---|---|
 | **Developer tools** | 7-Zip, Git for Windows, ripgrep, fd, jq, bat, fzf, Neovim, ffmpeg |
 | **Runtimes** | Python with NumPy, Node.js, .NET, Java (Temurin), the Visual C++ runtime |
-| **Desktop apps** | Firefox, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, KeePassXC, SumatraPDF |
+| **Desktop apps** | Firefox, LibreOffice (Writer and Calc), VLC, Audacity, Notepad++, WinMerge, Inkscape, Krita, KeePassXC, SumatraPDF |
 | **Games** | OpenTTD, Beneath a Steel Sky on ScummVM, Teeworlds, OpenTyrian, Cave Story, SuperTux, Chocolate Doom, Squash the Creeps (Godot 4, Direct3D 12) |
 | **Graphics** | OpenGL through Mesa; Vulkan through Mesa or Venus; Direct3D 9 to 11 through DXVK; Direct3D 12 through VKD3D-Proton; DirectDraw through cnc-ddraw |
 | **Installers** | `.msi` packages (with their dialogs, custom actions and services), NSIS and Inno Setup |
@@ -50,8 +50,8 @@ installs each one, drives it and compares a screenshot against a reference.
 [docs/compatibility.md](docs/compatibility.md) rates every program that has
 been tried, from Platinum to Borked in the style of ProtonDB, with what works,
 what does not and how it was checked.  Notable gaps: Steam and GOG Galaxy
-install but cannot sign in yet, Krita and most of the ArtCraft apps are only
-partly checked, and Roblox stops at its anti-cheat check.
+install but cannot sign in yet, most of the ArtCraft apps are only partly
+checked, and Roblox stops at its anti-cheat check.
 
 ## Screenshots
 

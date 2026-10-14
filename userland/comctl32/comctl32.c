@@ -590,6 +590,26 @@ CC int WINAPI FlatSB_GetScrollPos(HWND h, int bar) { return GetScrollPos(h, bar)
 CC BOOL WINAPI FlatSB_ShowScrollBar(HWND h, int bar, BOOL show) { return ShowScrollBar(h, bar, show); }
 CC BOOL WINAPI FlatSB_EnableScrollBar(HWND h, int bar, UINT arrows) { return EnableScrollBar(h, (UINT)bar, arrows); }
 CC BOOL WINAPI FlatSB_SetScrollProp(HWND h, UINT i, INT_PTR v, BOOL redraw) { (void)h; (void)i; (void)v; (void)redraw; return TRUE; }
+CC BOOL WINAPI FlatSB_GetScrollRange(HWND h, int bar, LPINT lo, LPINT hi) { return GetScrollRange(h, bar, lo, hi); }
+CC int WINAPI FlatSB_SetScrollRange(HWND h, int bar, int lo, int hi, BOOL redraw) { return SetScrollRange(h, bar, lo, hi, redraw); }
+/* The flat scroll bars' properties: those of the ordinary ones they are
+ * drawn as (sizes from the system metrics, regular style, system colours) */
+CC BOOL WINAPI FlatSB_GetScrollProp(HWND h, UINT i, LPINT v)
+{
+    (void)h;
+    if (!v) return FALSE;
+    switch (i) {
+    case 0x1:  *v = GetSystemMetrics(SM_CYVSCROLL); break;      /* WSB_PROP_CYVSCROLL */
+    case 0x2:  *v = GetSystemMetrics(SM_CXHSCROLL); break;      /* WSB_PROP_CXHSCROLL */
+    case 0x4:  *v = GetSystemMetrics(SM_CYHSCROLL); break;      /* WSB_PROP_CYHSCROLL */
+    case 0x8:  *v = GetSystemMetrics(SM_CXVSCROLL); break;      /* WSB_PROP_CXVSCROLL */
+    case 0x10: *v = GetSystemMetrics(SM_CXHTHUMB); break;       /* WSB_PROP_CXHTHUMB */
+    case 0x20: *v = GetSystemMetrics(SM_CYVTHUMB); break;       /* WSB_PROP_CYVTHUMB */
+    case 0x40: case 0x80: *v = (int)GetSysColor(COLOR_SCROLLBAR); break;   /* WSB_PROP_VBKGCOLOR, _HBKGCOLOR */
+    default:   *v = 0; break;                                    /* FSB_REGULAR_MODE, no flat-bar window style or palette */
+    }
+    return TRUE;
+}
 
 /* Str_SetPtrW: replace a heap string */
 CC BOOL WINAPI Str_SetPtrW(LPWSTR *p, LPCWSTR s)

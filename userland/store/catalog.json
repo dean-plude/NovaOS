@@ -249,10 +249,10 @@
       "url": "https://sourceforge.net/projects/winscp/files/WinSCP/6.3.5/WinSCP-6.3.5-Setup.exe/download",
       "file": "WinSCP-6.3.5-Setup.exe",
       "dest": null,
-      "exe": null,
+      "exe": "WinSCP\\WinSCP.exe",
       "kind": "setup",
       "size_mb": 12,
-      "note": "32-bit program and installer (Inno Setup); untested",
+      "note": "32-bit program and installer (Inno Setup); installs and opens its Login dialog on NovaOS (nightly corpus); its file lists do not draw yet",
       "label": "Ws",
       "color": "#2B903C"
     },

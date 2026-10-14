@@ -1,8 +1,11 @@
-/* dlltest.exe — DllMain, exported calls, static TLS, LoadLibrary, and
- * GetModuleFileName with more than 64 modules loaded */
+/* dlltest.exe — DllMain, exported calls, static TLS, LoadLibrary,
+ * GetModuleFileName with more than 64 modules loaded, exports found by
+ * ordinal alone, and system DLL calls Delphi programs make at start */
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <objbase.h>
+#include <commctrl.h>
 
 /* Statically imported from testdll.dll */
 __declspec(dllimport) int testdll_add(int a, int b);
@@ -23,6 +26,115 @@ static DWORD WINAPI tworker(LPVOID a)
     Sleep(2);
     if (before == 0xABCD && testdll_get_tls() == 0x1234) InterlockedIncrement((LONG*)&tls_ok);
     return 0;
+}
+
+/* Exports Windows has by ordinal alone: uxtheme's dark mode (WinSCP and
+ * Notepad++ call ordinal 135, SetPreferredAppMode, with one argument; an
+ * ordinal Windows leaves empty, such as 134, is NULL, not another export) */
+static void ordinals(void)
+{
+    HMODULE ux = LoadLibraryA("uxtheme.dll");
+    CHECK(ux != NULL);
+    typedef int (WINAPI *ModeFn)(int);
+    typedef BOOL (WINAPI *WndFn)(HWND, BOOL);
+    ModeFn mode = (ModeFn)GetProcAddress(ux, MAKEINTRESOURCEA(135));
+    WndFn allow = (WndFn)GetProcAddress(ux, MAKEINTRESOURCEA(133));
+    CHECK(mode && mode(1) == 0 && mode(0) == 1);
+    CHECK(allow && !allow(NULL, TRUE));
+    CHECK(GetProcAddress(ux, MAKEINTRESOURCEA(104)) != NULL);
+    CHECK(GetProcAddress(ux, MAKEINTRESOURCEA(134)) == NULL);
+}
+
+/* An image list written to a stream and read back (Delphi keeps its forms'
+ * image lists this way): five 16x16 images, four to a row in the stream's
+ * bitmap, the fifth drawn from the second row */
+static void imagelist_stream(void)
+{
+    static const COLORREF colors[5] = { RGB(255, 0, 0), RGB(0, 255, 0), RGB(0, 0, 255), RGB(255, 255, 255), RGB(200, 100, 50) };
+    BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), 80, -16, 1, 32, BI_RGB, 0, 0, 0, 0, 0 } };
+    DWORD *px = NULL;
+    HBITMAP bm = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, (void **)&px, NULL, 0);
+    CHECK(bm && px);
+    if (!bm || !px) return;
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 80; x++) {
+            COLORREF c = colors[x / 16];
+            px[y * 80 + x] = (DWORD)GetRValue(c) << 16 | (DWORD)GetGValue(c) << 8 | GetBValue(c);
+        }
+    HIMAGELIST il = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 5, 2);
+    CHECK(il && ImageList_Add(il, bm, NULL) == 0 && ImageList_GetImageCount(il) == 5);
+    IStream *s = NULL;
+    CHECK(CreateStreamOnHGlobal(NULL, TRUE, &s) == S_OK && s);
+    if (!il || !s) return;
+    CHECK(ImageList_Write(il, s));
+    LARGE_INTEGER zero = { 0 };
+    char magic[2] = { 0 };
+    ULONG got = 0;
+    IStream_Seek(s, zero, STREAM_SEEK_SET, NULL);
+    CHECK(s->lpVtbl->Read(s, magic, 2, &got) == S_OK && got == 2 && magic[0] == 'I' && magic[1] == 'L');
+    IStream_Seek(s, zero, STREAM_SEEK_SET, NULL);
+    HIMAGELIST back = ImageList_Read(s);
+    int cx = 0, cy = 0;
+    CHECK(back && ImageList_GetImageCount(back) == 5 && ImageList_GetIconSize(back, &cx, &cy) && cx == 16 && cy == 16);
+    HDC dc = CreateCompatibleDC(NULL);
+    BITMAPINFO tbi = { { sizeof(BITMAPINFOHEADER), 16, -16, 1, 32, BI_RGB, 0, 0, 0, 0, 0 } };
+    DWORD *tp = NULL;
+    HBITMAP target = CreateDIBSection(NULL, &tbi, DIB_RGB_COLORS, (void **)&tp, NULL, 0);
+    HGDIOBJ old = SelectObject(dc, target);
+    CHECK(back && ImageList_Draw(back, 4, dc, 0, 0, ILD_NORMAL));
+    GdiFlush();
+    CHECK(tp && (tp[8 * 16 + 8] & 0xFFFFFF) == 0xC86432);       /* RGB(200, 100, 50) */
+    SelectObject(dc, old);
+    DeleteObject(target);
+    DeleteDC(dc);
+    if (back) ImageList_Destroy(back);
+    ImageList_Destroy(il);
+    IStream_Release(s);
+    DeleteObject(bm);
+}
+
+/* The shell namespace: the desktop folder parses a path, names it, binds
+ * to it and lists it (WinSCP's drive tree starts from SHGetDesktopFolder);
+ * called through the vtables, as programs see IShellFolder and IEnumIDList */
+typedef HRESULT (WINAPI *DeskFn)(void **);
+typedef HRESULT (WINAPI *ParseFn)(void *, HWND, void *, LPWSTR, ULONG *, void **, ULONG *);
+typedef HRESULT (WINAPI *EnumFn)(void *, HWND, DWORD, void **);
+typedef HRESULT (WINAPI *BindFn)(void *, const void *, void *, REFIID, void **);
+typedef HRESULT (WINAPI *NameFn)(void *, const void *, DWORD, void *);
+typedef HRESULT (WINAPI *NextFn)(void *, ULONG, void **, ULONG *);
+typedef ULONG (WINAPI *RelFn)(void *);
+#define VT(o, i) ((*(void ***)(o))[i])
+static void shell_folders(void)
+{
+    static const GUID iid_folder = { 0x000214E6, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+    DeskFn desk = (DeskFn)GetProcAddress(LoadLibraryA("shell32.dll"), "SHGetDesktopFolder");
+    void *top = NULL, *pidl = NULL, *win = NULL, *en = NULL;
+    CHECK(desk && desk(&top) == S_OK && top);
+    if (!top) return;
+    ULONG eaten = 0, attrs = 0x20000000;                    /* SFGAO_FOLDER */
+    WCHAR name[] = L"C:\\Windows";
+    CHECK(((ParseFn)VT(top, 3))(top, NULL, NULL, name, &eaten, &pidl, &attrs) == S_OK && pidl && attrs == 0x20000000);
+    struct { UINT type; union { LPWSTR w; char c[MAX_PATH]; }; } sr = { 0 };
+    CHECK(pidl && ((NameFn)VT(top, 11))(top, pidl, 1 /* SHGDN_INFOLDER */, &sr) == S_OK && sr.type == 0 && !lstrcmpiW(sr.w, L"Windows"));
+    if (sr.type == 0 && sr.w) CoTaskMemFree(sr.w);
+    CHECK(pidl && ((BindFn)VT(top, 5))(top, pidl, NULL, &iid_folder, &win) == S_OK && win);
+    BOOL system32 = FALSE;
+    if (win && ((EnumFn)VT(win, 4))(win, NULL, 0x20 | 0x40, &en) == S_OK && en) {
+        void *item;
+        ULONG got;
+        while (((NextFn)VT(en, 3))(en, 1, &item, &got) == S_OK && got == 1) {
+            if (((NameFn)VT(win, 11))(win, item, 1, &sr) == S_OK && sr.type == 0) {
+                system32 |= !lstrcmpiW(sr.w, L"System32");
+                CoTaskMemFree(sr.w);
+            }
+            CoTaskMemFree(item);
+        }
+        ((RelFn)VT(en, 2))(en);
+    }
+    CHECK(system32);
+    if (win) ((RelFn)VT(win, 2))(win);
+    CoTaskMemFree(pidl);
+    ((RelFn)VT(top, 2))(top);
 }
 
 /* A DLL the program imports refuses to load (its DllMain returns FALSE):
@@ -137,6 +249,9 @@ int main(int argc, char **argv)
     FreeLibrary(k);
 
     many_modules();
+    ordinals();
+    imagelist_stream();
+    shell_folders();
     refused_start();
 
     printf("DLL/TLS self-test: %d passed, %d failed\n", pass, fail);

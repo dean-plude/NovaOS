@@ -421,7 +421,185 @@ CC BOOL WINAPI ImageList_DragMove(int x, int y) { (void)x; (void)y; return TRUE;
 CC BOOL WINAPI ImageList_DragShowNolock(BOOL show) { (void)show; return TRUE; }
 CC BOOL WINAPI ImageList_SetDragCursorImage(HIMAGELIST h, int i, int dx, int dy) { (void)h; (void)i; (void)dx; (void)dy; return TRUE; }
 CC HIMAGELIST WINAPI ImageList_GetDragImage(POINT *p, POINT *hot) { (void)p; (void)hot; return NULL; }
-CC HIMAGELIST WINAPI ImageList_Read(void *stream) { (void)stream; return NULL; }
-CC BOOL WINAPI ImageList_Write(HIMAGELIST h, void *stream) { (void)h; (void)stream; return FALSE; }
+/* ImageList_Read and ImageList_Write: an image list in a stream, as
+ * Windows writes it (Delphi keeps its forms' image lists this way):
+ *
+ *   ILHEAD     "IL", version 0x101, the image count, capacity and growth,
+ *              the image size, background colour, ILC_* flags and the
+ *              four overlay images (-1: none), 28 bytes
+ *   BMP file   the images, four to a row (cx * 4 by cy * rows)
+ *   BMP file   their mask, laid out the same (1: transparent), when the
+ *              flags have ILC_MASK
+ *
+ * The streams are IStreams; only their Read and Write are used. */
+typedef HRESULT (WINAPI *StmIO)(void *stm, void *buf, ULONG n, ULONG *done);
+#define IL_TILES 4
+
+#pragma pack(push, 2)
+typedef struct { WORD magic, version, cur, max, grow, cx, cy; COLORREF bk; WORD flags; SHORT ovls[4]; } ILHEAD;
+#pragma pack(pop)
+
+static BOOL stm_read(void *stm, void *buf, ULONG n)
+{
+    ULONG done = 0;
+    StmIO rd = (StmIO)(*(void ***)stm)[3];
+    return SUCCEEDED(rd(stm, buf, n, &done)) && done == n;
+}
+
+static BOOL stm_write(void *stm, const void *buf, ULONG n)
+{
+    ULONG done = 0;
+    StmIO wr = (StmIO)(*(void ***)stm)[4];
+    return SUCCEEDED(wr(stm, (void *)buf, n, &done)) && done == n;
+}
+
+/* A BMP file from @stm: its pixels as 0x00RRGGBB (alpha too for 32-bit),
+ * top row first; NULL if it cannot be read */
+static DWORD *read_bmp(void *stm, int *w, int *h, int *bpp)
+{
+    BITMAPFILEHEADER fh;
+    BITMAPINFOHEADER ih;
+    if (!stm_read(stm, &fh, sizeof(fh)) || fh.bfType != 0x4D42 || !stm_read(stm, &ih, sizeof(ih)) ||
+        ih.biSize < sizeof(ih) || ih.biWidth <= 0 || !ih.biHeight || ih.biWidth > 16384 || ABS(ih.biHeight) > 16384 ||
+        (ih.biCompression != BI_RGB && ih.biCompression != BI_BITFIELDS))
+        return NULL;
+    BYTE skip[256];
+    for (ULONG left = ih.biSize - sizeof(ih); left; ) {          /* (a V4/V5 header's rest) */
+        ULONG k = MIN(left, sizeof(skip));
+        if (!stm_read(stm, skip, k)) return NULL;
+        left -= k;
+    }
+    int b = ih.biBitCount, colors = b <= 8 ? (ih.biClrUsed ? (int)ih.biClrUsed : 1 << b) : 0;
+    if (b != 1 && b != 4 && b != 8 && b != 16 && b != 24 && b != 32) return NULL;
+    RGBQUAD pal[256];
+    if (colors > 256 || (colors && !stm_read(stm, pal, 4u * (ULONG)colors))) return NULL;
+    DWORD masks[3];
+    if (ih.biCompression == BI_BITFIELDS && !stm_read(stm, masks, sizeof(masks))) return NULL;
+    /* the bits start where the file header says (any gap is skipped) */
+    LONG at = (LONG)(sizeof(fh) + ih.biSize + 4u * (ULONG)colors + (ih.biCompression == BI_BITFIELDS ? 12 : 0));
+    for (LONG gap = (LONG)fh.bfOffBits - at; gap > 0; ) {
+        ULONG k = MIN((ULONG)gap, sizeof(skip));
+        if (!stm_read(stm, skip, k)) return NULL;
+        gap -= (LONG)k;
+    }
+    int W = ih.biWidth, H = ABS(ih.biHeight);
+    size_t row = ((size_t)W * b + 31) / 32 * 4;
+    BYTE *bits = malloc(row * H);
+    DWORD *px = malloc((size_t)W * H * 4);
+    if (!bits || !px || !stm_read(stm, bits, (ULONG)(row * H))) { free(bits); free(px); return NULL; }
+    for (int y = 0; y < H; y++) {
+        const BYTE *r = bits + row * (ih.biHeight > 0 ? H - 1 - y : y);
+        DWORD *d = px + (size_t)y * W;
+        for (int x = 0; x < W; x++) {
+            DWORD c;
+            if (b == 32) c = ((const DWORD *)r)[x];
+            else if (b == 24) c = (DWORD)r[3 * x] | (DWORD)r[3 * x + 1] << 8 | (DWORD)r[3 * x + 2] << 16;
+            else if (b == 16) { WORD v = ((const WORD *)r)[x]; c = (DWORD)(v & 0x1F) << 3 | (DWORD)(v >> 5 & 0x1F) << 11 | (DWORD)(v >> 10 & 0x1F) << 19; }
+            else {
+                int i = b == 8 ? r[x] : b == 4 ? (r[x / 2] >> (x & 1 ? 0 : 4)) & 15 : (r[x / 8] >> (7 - x % 8)) & 1;
+                RGBQUAD q = i < colors ? pal[i] : (RGBQUAD){ 0, 0, 0, 0 };
+                c = (DWORD)q.rgbBlue | (DWORD)q.rgbGreen << 8 | (DWORD)q.rgbRed << 16;
+            }
+            d[x] = c;
+        }
+    }
+    free(bits);
+    *w = W; *h = H; *bpp = b;
+    return px;
+}
+
+CC HIMAGELIST WINAPI ImageList_Read(struct IStream *stream)
+{
+    ILHEAD hd;
+    if (!stream || !stm_read(stream, &hd, sizeof(hd)) || hd.magic != 0x4C49 || !hd.cx || !hd.cy) return NULL;
+    int w, h, bpp, mw = 0, mh = 0, mbpp;
+    DWORD *p = read_bmp(stream, &w, &h, &bpp), *m = NULL;
+    if (!p) return NULL;
+    if ((hd.flags & ILC_MASK) && !(m = read_bmp(stream, &mw, &mh, &mbpp))) { free(p); return NULL; }
+    HIMAGELIST hl = ImageList_Create(hd.cx, hd.cy, hd.flags, MAX(hd.cur, hd.max), hd.grow);
+    IL *l = il(hl);
+    if (!l || !reserve(l, hd.cur)) { ImageList_Destroy(hl); free(p); free(m); return NULL; }
+    /* an alpha channel counts only when it varies (0 or 255 throughout: a plain bitmap) */
+    int alpha = 0;
+    if (bpp == 32) {
+        int zero = 0, full = 0;
+        for (int i = 0; i < w * h && !alpha; i++) {
+            DWORD a = p[i] >> 24;
+            if (a == 0) zero = 1; else if (a == 255) full = 1; else alpha = 1;
+        }
+        alpha |= zero && full;
+    }
+    for (int k = 0; k < hd.cur; k++) {
+        int ox = k % IL_TILES * hd.cx, oy = k / IL_TILES * hd.cy;
+        DWORD *d = img(l, k);
+        for (int y = 0; y < hd.cy; y++)
+            for (int x = 0; x < hd.cx; x++) {
+                int sx = ox + x, sy = oy + y;
+                DWORD c = sx < w && sy < h ? p[(size_t)sy * w + sx] : 0;
+                if (alpha) {
+                    int a = (int)(c >> 24);                  /* (stored premultiplied, as Windows draws it) */
+                    if (a && a < 255) {
+                        int r = MIN(255, (int)((c >> 16) & 0xFF) * 255 / a), g = MIN(255, (int)((c >> 8) & 0xFF) * 255 / a), b = MIN(255, (int)(c & 0xFF) * 255 / a);
+                        c = (DWORD)a << 24 | (DWORD)r << 16 | (DWORD)g << 8 | (DWORD)b;
+                    }
+                } else {
+                    int clear = m && sx < mw && sy < mh && (m[(size_t)sy * mw + sx] & 0xFFFFFF);
+                    c = clear ? 0 : (c | 0xFF000000u);
+                }
+                d[(size_t)y * hd.cx + x] = c;
+            }
+    }
+    l->count = hd.cur;
+    l->bk = hd.bk;
+    for (int k = 0; k < 4; k++)
+        if (hd.ovls[k] >= 0 && hd.ovls[k] < hd.cur) l->overlay[k + 1] = hd.ovls[k];
+    free(p); free(m);
+    return hl;
+}
+
+/* One BMP file of @w x @h: 32-bit @px (top row first), or the 1-bit mask
+ * of where they are transparent */
+static BOOL write_bmp(void *stm, const DWORD *px, int w, int h, BOOL mask)
+{
+    int b = mask ? 1 : 32, colors = mask ? 2 : 0;
+    size_t row = ((size_t)w * b + 31) / 32 * 4;
+    BITMAPFILEHEADER fh = { 0x4D42, 0, 0, 0, 0 };
+    fh.bfOffBits = (DWORD)(sizeof(fh) + sizeof(BITMAPINFOHEADER) + 4 * colors);
+    fh.bfSize = fh.bfOffBits + (DWORD)(row * h);
+    BITMAPINFOHEADER ih = { sizeof(ih), w, h, 1, (WORD)b, BI_RGB, (DWORD)(row * h), 0, 0, 0, 0 };
+    RGBQUAD pal[2] = { { 0, 0, 0, 0 }, { 255, 255, 255, 0 } };
+    BYTE *bits = calloc(row, h);
+    if (!bits) return FALSE;
+    for (int y = 0; y < h; y++) {
+        BYTE *r = bits + row * (h - 1 - y);                         /* bottom-up */
+        for (int x = 0; x < w; x++) {
+            DWORD c = px[(size_t)y * w + x];
+            if (mask) { if (!(c >> 24)) r[x / 8] |= (BYTE)(0x80 >> (x % 8)); }
+            else ((DWORD *)r)[x] = c;
+        }
+    }
+    BOOL ok = stm_write(stm, &fh, sizeof(fh)) && stm_write(stm, &ih, sizeof(ih)) &&
+              (!colors || stm_write(stm, pal, sizeof(pal))) && stm_write(stm, bits, (ULONG)(row * h));
+    free(bits);
+    return ok;
+}
+
+CC BOOL WINAPI ImageList_Write(HIMAGELIST h, struct IStream *stream)
+{
+    IL *l = il(h);
+    if (!l || !stream) return FALSE;
+    ILHEAD hd = { 0x4C49, 0x101, (WORD)l->count, (WORD)MAX(l->count, l->cap), (WORD)l->grow, (WORD)l->cx, (WORD)l->cy,
+                  l->bk, (WORD)(l->flags | ILC_MASK), { -1, -1, -1, -1 } };
+    for (int k = 0; k < 4; k++) hd.ovls[k] = (SHORT)l->overlay[k + 1];
+    int rows = MAX(1, (l->count + IL_TILES - 1) / IL_TILES), w = l->cx * IL_TILES, ht = l->cy * rows;
+    DWORD *px = calloc((size_t)w * ht, 4);
+    if (!px) return FALSE;
+    for (int k = 0; k < l->count; k++)
+        for (int y = 0; y < l->cy; y++)
+            memcpy(px + (size_t)(k / IL_TILES * l->cy + y) * w + k % IL_TILES * l->cx, img(l, k) + (size_t)y * l->cx, 4 * (size_t)l->cx);
+    BOOL ok = stm_write(stream, &hd, sizeof(hd)) && write_bmp(stream, px, w, ht, FALSE) && write_bmp(stream, px, w, ht, TRUE);
+    free(px);
+    return ok;
+}
 CC HRESULT WINAPI ImageList_CoCreateInstance(const void *clsid, void *outer, const void *iid, void **out) { (void)clsid; (void)outer; (void)iid; if (out) *out = NULL; return 0x80004001L; }
 CC HRESULT WINAPI HIMAGELIST_QueryInterface(HIMAGELIST h, const void *iid, void **out) { (void)h; (void)iid; if (out) *out = NULL; return 0x80004002L; }

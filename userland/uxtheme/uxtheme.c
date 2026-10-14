@@ -237,3 +237,36 @@ UXAPI HRESULT WINAPI BufferedPaintStopAllAnimations(HWND w) { (void)w; return S_
 UXAPI BOOL WINAPI BeginPanningFeedback(HWND h) { (void)h; return TRUE; }
 UXAPI BOOL WINAPI UpdatePanningFeedback(HWND h, LONG x, LONG y, BOOL inertia) { (void)h; (void)x; (void)y; (void)inertia; return TRUE; }
 UXAPI BOOL WINAPI EndPanningFeedback(HWND h, BOOL animate) { (void)h; (void)animate; return TRUE; }
+
+/* The dark mode, exported by ordinal alone (as Windows 10 1809 and later
+ * do; programs such as WinSCP and Notepad++ find them with GetProcAddress
+ * by number): whether the user picked dark apps (Settings' "Choose your
+ * app mode", HKCU\...\Themes\Personalize AppsUseLightTheme 0) or a dark
+ * Windows (SystemUsesLightTheme 0).  NovaOS draws window frames and
+ * menus light whatever a program allows, so only the program's own
+ * drawing follows the answer. */
+#define K_PERSONALIZE_ L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+
+static int g_app_mode;                  /* PreferredAppMode: 0 default, 1 allow dark, 2 force dark, 3 force light */
+
+static BOOL dark(LPCWSTR value)
+{
+    DWORD v = 1, n = sizeof(v);
+    return RegGetValueW(HKEY_CURRENT_USER, K_PERSONALIZE_, value, RRF_RT_REG_DWORD, NULL, &v, &n) == ERROR_SUCCESS && !v;
+}
+
+UXAPI void WINAPI RefreshImmersiveColorPolicyState(void) { }
+UXAPI BOOL WINAPI GetIsImmersiveColorUsingHighContrast(int mode) { (void)mode; return FALSE; }
+UXAPI BOOL WINAPI ShouldAppsUseDarkMode(void) { return dark(L"AppsUseLightTheme"); }
+UXAPI BOOL WINAPI ShouldSystemUseDarkMode(void) { return dark(L"SystemUsesLightTheme"); }
+UXAPI BOOL WINAPI AllowDarkModeForWindow(HWND w, BOOL allow) { (void)allow; return IsWindow(w); }
+UXAPI BOOL WINAPI IsDarkModeAllowedForWindow(HWND w) { (void)w; return FALSE; }
+/* (Windows 10 1809 had AllowDarkModeForApp(BOOL) here, of the same shape) */
+UXAPI int WINAPI SetPreferredAppMode(int mode)
+{
+    int old = g_app_mode;
+    if (mode >= 0 && mode <= 3) g_app_mode = mode;
+    return old;
+}
+UXAPI BOOL WINAPI IsDarkModeAllowedForApp(void) { return g_app_mode == 1 || g_app_mode == 2; }
+UXAPI void WINAPI FlushMenuThemes(void) { }

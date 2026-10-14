@@ -30,10 +30,14 @@ typedef struct {
  * a packet sent with want_completion, with that packet's transaction ID),
  * started() right after opened(), once the context is the channel's (a
  * driver that talks to its device before it is used: storvsc.c), tick()
- * on every VmbusPoll (the device poll thread, every 10 ms timer tick),
- * xfer() for each transfer-page packet (the ranges of the driver's buffer
- * it points at, then its in-band part; the host waits for a completion
- * packet with its transaction ID: VmbusSendCompletion).  The callbacks of
+ * on every VmbusPoll (the "vmbus" thread: each time the host signals,
+ * and every 10 ms timer tick), xfer() for each transfer-page packet (the
+ * ranges of the driver's buffer it points at, then its in-band part; the
+ * host waits for a completion packet with its transaction ID:
+ * VmbusSendCompletion), removed() when the host takes the device away
+ * (removed from the VM's settings while it runs: the channel is closed
+ * after it returns; its sends go nowhere from then on).  A device the
+ * host offers while NovaOS runs is opened as at start.  The callbacks of
  * one channel never run at the same time */
 typedef struct {
     UINT8       type[16];
@@ -45,13 +49,18 @@ typedef struct {
     void       (*tick)(void *ctx);
     void       (*xfer)(void *ctx, const VmbusXferRange *r, UINT32 n, const UINT8 *data, UINT32 len,
                        UINT64 trans_id);
+    void       (*removed)(void *ctx);
 } VmbusDriver;
 
 /* On CPU 0 with interrupts still off (the SynIC registers are per CPU):
  * find Hyper-V, connect to VMBus and open the channels NovaOS drives.
  * False (one log line) when this is not Hyper-V or the host said no */
 bool VmbusInit(void);
-/* The device poll thread: read what came on every open channel */
+/* Start the "vmbus" thread: woken by the host's interrupt (SINT2: a
+ * message, or a channel's bit in the event flags), it reads every open
+ * channel and the host's messages (devices added and removed) */
+void VmbusStart(void);
+/* Read what came on every open channel (the "vmbus" thread) */
 void VmbusPoll(void);
 
 /* A driver sends an in-band packet on its channel; false when its ring is full */
@@ -66,8 +75,9 @@ bool VmbusSendGpa(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_i
 bool VmbusSendCompletion(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id);
 /* Give the host @buf (@len bytes, a multiple of 4096, physically
  * contiguous: kernel_alloc_pages) as a buffer it reads and writes; *gpadl
- * names it in the device's own messages.  Only from started(), during
- * VmbusInit (it waits for the host's answer on the message slot) */
+ * names it in the device's own messages.  Only from started() (during
+ * VmbusInit, or on the "vmbus" thread for a device added later: it waits
+ * for the host's answer on the message slot); at most 4 per channel */
 bool VmbusCreateGpadl(VmbusChannel *ch, void *buf, UINT32 len, UINT32 *gpadl);
 /* Read what came on one channel, calling its driver (a driver waiting for
  * an answer calls this itself, from any thread; VmbusPoll skips a channel

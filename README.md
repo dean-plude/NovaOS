@@ -157,7 +157,8 @@ To make the ISO yourself from a fresh build, run
 **Every pull request is boot-tested.**  GitHub Actions builds the kernel,
 bootloader, userland and `build/nova.img`, boots it in QEMU with OVMF and
 runs the core, network and graphics suites with `tools/selftest.py`; a
-failing test fails its check.  **Every night**, `tools/appcorpus.py` runs the
+failing test fails its check.  It also times the boot, Firefox's start and `smpstress`
+scaling and fails on a large regression (the performance budget).  **Every night**, `tools/appcorpus.py` runs the
 official Windows releases of ripgrep, 7-Zip, Python, .NET, Firefox, VLC,
 Notepad++, Krita, games and many more, each one's screenshot compared with
 a reference.  A push to `main` that passes publishes the `latest` ISO.

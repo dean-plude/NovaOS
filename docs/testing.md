@@ -226,10 +226,13 @@ The README has the short version; [building.md](building.md#tests) says how to r
   `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
   back once per signal or on its timeout, a callback sets its own wait
   again, setting a wait never waits for a running callback, cancelling
-  and closing from a callback; 64- and 32-bit), `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
-  function names, and last the kernel crash report: after `crash kernel`
-  and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
+  and closing from a callback; 64- and 32-bit), programs started from
+  the Start menu (Win+S, the name, Enter): `winhello`, a GUI program,
+  with no Terminal window, and `hello`, a console program, in a
+  Terminal, `crash kernel`, a deliberate kernel fault whose serial log
+  must show a backtrace with function names, and last the kernel crash
+  report: after `crash kernel` and a reset, `crashes last` shows the
+  fault's backtrace.<!-- END generated:core-tests -->
 - **Network** (in the boot-test job): two boots with a virtio-net card: IPv4,
   IPv6 (SLAAC, RDNSS), HTTP/2 and loopback tests, then an Intel e1000e.
 - **Graphics tests**: Direct2D, then OpenGL, Vulkan and Direct3D 9/11 on Mesa,

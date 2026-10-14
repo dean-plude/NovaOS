@@ -9,7 +9,7 @@
   - [x] Integration services: the host's Shut Down and Restart, heartbeat,
     time sync (#401)
   - [x] storvsc: SCSI disks, so NovaOS installs to a VHDX and keeps drive
-    C: (#PRNUM)
+    C: (#402)
   - [ ] Synthetic video: a resolution chosen in Settings
   - [ ] netvsc: the network adapter (NVSP and RNDIS)
   - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),

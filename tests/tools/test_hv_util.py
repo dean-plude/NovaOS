@@ -12,8 +12,7 @@ class HvUtilTests(unittest.TestCase):
     def test_shutdown_timesync_heartbeat(self):
         with tempfile.TemporaryDirectory() as d:
             executable = str(Path(d) / 'hv_util')
-            includes = ['kernel', 'include', 'third_party/lwip/src/include', 'kernel/net/port',
-                        'third_party/mbedtls/include', 'third_party/uacpi/include']
+            includes = ['kernel', 'include']     # (not kernel/net/port: its assert.h checks nothing)
             subprocess.run(['gcc', '-ffunction-sections', '-fdata-sections',
                             *[f'-I{ROOT / x}' for x in includes],
                             str(ROOT / 'tests/host/hv_util.c'), '-Wl,--gc-sections',

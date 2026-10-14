@@ -8,8 +8,8 @@
   - [x] Keyboard and mouse over VMBus (#255, #367)
   - [x] Integration services: the host's Shut Down and Restart, heartbeat,
     time sync (#401)
-  - [ ] storvsc: SCSI disks and DVD, so NovaOS installs to a VHDX and keeps
-    drive C:
+  - [x] storvsc: SCSI disks, so NovaOS installs to a VHDX and keeps drive
+    C: (#402)
   - [ ] Synthetic video: a resolution chosen in Settings
   - [ ] netvsc: the network adapter (NVSP and RNDIS)
   - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),

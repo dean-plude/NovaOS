@@ -323,7 +323,8 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   VMBus, NovaOS's VMBus driver (hypercalls, the SynIC, channel offers, ring
   buffers) runs Hyper-V's synthetic keyboard and mouse and answers its
   shutdown, heartbeat and time sync integration services (the host's Shut
-  Down and Restart work). Its synthetic disks, network and video have no
-  driver yet ([hyperv.md](hyperv.md)).
+  Down and Restart work). Its synthetic SCSI controller's disks are block
+  devices, so NovaOS installs to a VHDX. Its synthetic network and video
+  have no driver yet ([hyperv.md](hyperv.md)).
 
 <!-- END generated:inside -->

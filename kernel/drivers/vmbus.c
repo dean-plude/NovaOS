@@ -26,12 +26,17 @@
  * inbound rings from the device poll thread (the inbound rings say "no
  * signal": interrupt_mask), and VmbusSend writes the outbound one and
  * signals the host with the SignalEvent hypercall, which any CPU may make.
+ * A driver that waits for its answer (storvsc.c's disk reads) reads its
+ * own channel with VmbusPollChannel meanwhile; a flag keeps one reader per
+ * channel at a time.  VmbusInit runs before the disks are looked at
+ * (PersistInit), so Hyper-V's SCSI disks can hold drive C:.
  */
 
 #include "vmbus.h"
 #include "vmbus_ring.h"
 #include "hv_input.h"
 #include "hv_util.h"
+#include "storvsc.h"
 #include "../hal/ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/apic.h"
@@ -181,6 +186,7 @@ struct VmbusChannel {
     UINT32  relid, conn_id;
     bool    dedicated;
     UINT8  *pkt;                         /* PKT_MAX */
+    volatile int reading;                 /* someone reads the inbound ring */
 };
 
 typedef struct {
@@ -191,6 +197,7 @@ typedef struct {
 
 static const VmbusDriver *const g_drivers[] = {
     &HvKeyboardDriver, &HvMouseDriver, &HvShutdownDriver, &HvTimeSyncDriver, &HvHeartbeatDriver,
+    &HvStorageDriver,
 };
 
 static void         *g_hypercall_page;
@@ -262,12 +269,13 @@ static void guid_text(const UINT8 *g, char *s, size_t cap)
 }
 
 /* Devices worth a name in the log (NovaOS drives the keyboard, the mouse,
- * shutdown, time sync and heartbeat) */
+ * shutdown, time sync, heartbeat and SCSI storage) */
 static const struct { const char *guid, *name; } g_known[] = {
     { "f912ad6d-2b17-48ea-bd65-f927a61c7684", "keyboard" },
     { "cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a", "mouse" },
     { "da0a7802-e377-4aac-8e77-0558eb1073f8", "video (no driver: the firmware's frame buffer is used)" },
-    { "ba6163d9-04a1-4d29-b605-72e2ffb1dc7f", "SCSI storage (no driver)" },
+    { "ba6163d9-04a1-4d29-b605-72e2ffb1dc7f", "SCSI storage" },
+    { "32412632-86cb-44a2-9b5c-50d1417354f5", "IDE storage (no driver: a Generation 1 VM's)" },
     { "f8615163-df3e-46c5-913f-f2d2f965ed0e", "network (no driver)" },
     { "0e0b6031-5213-4934-818b-38d90ced39db", "shutdown" },
     { "9527e630-d0ae-497b-adce-e80ab0175caf", "time sync" },
@@ -369,8 +377,9 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     }
     ch->in.hdr->interrupt_mask = 1;       /* polled */
     g_ch[g_nch++] = ch;
-    ch->ctx = drv->opened(ch);
     kprintf("[VMBUS] %s: channel %u open\n", drv->name, o->relid);
+    ch->ctx = drv->opened(ch);
+    if (drv->started && ch->ctx) drv->started(ch->ctx);
     return true;
 }
 
@@ -494,19 +503,58 @@ bool VmbusSend(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id, 
     return true;
 }
 
+bool VmbusSendGpa(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id,
+                  const void *buf, UINT32 buf_len)
+{
+    VmGpaRange g;
+    UINT64 pa = phys(buf);
+    UINT32 off = (UINT32)(pa & (VMBUS_PAGE - 1));
+    UINT32 pages = (off + buf_len + VMBUS_PAGE - 1) / VMBUS_PAGE;
+    if (!buf_len || pages > VM_GPA_MAX_PAGES) return false;
+    g.reserved = 0;
+    g.range_count = 1;
+    g.len = buf_len;
+    g.offset = off;
+    for (UINT32 i = 0; i < pages; i++) g.pfn[i] = (pa >> 12) + i;
+    bool sig = false;
+    if (!vm_ring_write_typed(&ch->out, VM_PKT_GPA_DIRECT, &g, vm_gpa_len(pages), data, len, trans_id,
+                             VM_PKT_FLAG_COMPLETION_REQUESTED, &sig))
+        return false;
+    if (sig) signal_host(ch);
+    return true;
+}
+
+/* Read the channel's inbound ring (@ch->reading held) */
+static void read_channel(VmbusChannel *ch)
+{
+    VmPacketDesc d;
+    UINT32 len;
+    bool sig = false, any = false;
+    for (int n = 0; n < 64 && vm_ring_read(&ch->in, &d, ch->pkt, PKT_MAX, &len, &sig); n++) {
+        any |= sig;
+        UINT32 got = len < PKT_MAX ? len : PKT_MAX;
+        if (d.type == VM_PKT_DATA_INBAND)
+            ch->drv->packet(ch->ctx, ch->pkt, got, d.trans_id);
+        else if (d.type == VM_PKT_COMP && ch->drv->completion)
+            ch->drv->completion(ch->ctx, ch->pkt, got, d.trans_id);
+    }
+    if (any) signal_host(ch);
+}
+
+void VmbusPollChannel(VmbusChannel *ch)
+{
+    while (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) pause_cpu();
+    read_channel(ch);
+    __atomic_store_n(&ch->reading, 0, __ATOMIC_RELEASE);
+}
+
 void VmbusPoll(void)
 {
     if (!__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE)) return;
     for (int i = 0; i < g_nch; i++) {
         VmbusChannel *ch = g_ch[i];
-        VmPacketDesc d;
-        UINT32 len;
-        bool sig = false, any = false;
-        for (int n = 0; n < 64 && vm_ring_read(&ch->in, &d, ch->pkt, PKT_MAX, &len, &sig); n++) {
-            any |= sig;
-            if (d.type == VM_PKT_DATA_INBAND)
-                ch->drv->packet(ch->ctx, ch->pkt, len < PKT_MAX ? len : PKT_MAX, d.trans_id);
-        }
-        if (any) signal_host(ch);
+        if (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) continue;   /* (its driver reads it) */
+        read_channel(ch);
+        __atomic_store_n(&ch->reading, 0, __ATOMIC_RELEASE);
     }
 }

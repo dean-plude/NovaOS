@@ -197,15 +197,15 @@ static void *heartbeat_opened(VmbusChannel *ch) { return util_open(ch, UTIL_HEAR
 /* {0e0b6031-5213-4934-818b-38d90ced39db} */
 const VmbusDriver HvShutdownDriver = {
     { 0x31, 0x60, 0x0b, 0x0e, 0x13, 0x52, 0x34, 0x49, 0x81, 0x8b, 0x38, 0xd9, 0x0c, 0xed, 0x39, 0xdb },
-    "Hyper-V shutdown", shutdown_opened, util_packet,
+    "Hyper-V shutdown", shutdown_opened, util_packet, NULL, NULL,
 };
 /* {9527e630-d0ae-497b-adce-e80ab0175caf} */
 const VmbusDriver HvTimeSyncDriver = {
     { 0x30, 0xe6, 0x27, 0x95, 0xae, 0xd0, 0x7b, 0x49, 0xad, 0xce, 0xe8, 0x0a, 0xb0, 0x17, 0x5c, 0xaf },
-    "Hyper-V time sync", timesync_opened, util_packet,
+    "Hyper-V time sync", timesync_opened, util_packet, NULL, NULL,
 };
 /* {57164f39-9115-4e78-ab55-382f3bd5422d} */
 const VmbusDriver HvHeartbeatDriver = {
     { 0x39, 0x4f, 0x16, 0x57, 0x15, 0x91, 0x78, 0x4e, 0xab, 0x55, 0x38, 0x2f, 0x3b, 0xd5, 0x42, 0x2d },
-    "Hyper-V heartbeat", heartbeat_opened, util_packet,
+    "Hyper-V heartbeat", heartbeat_opened, util_packet, NULL, NULL,
 };

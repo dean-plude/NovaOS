@@ -38,7 +38,8 @@ typedef struct {
 } VmPacketDesc;
 
 #define VM_PKT_DATA_INBAND   6
-#define VM_PKT_GPA_DIRECT    9            /* the descriptor is followed by a page list */
+#define VM_PKT_XFER_PAGES    7            /* ... by ranges of a buffer the guest gave (netvsc's receive buffer) */
+#define VM_PKT_GPA_DIRECT    9            /* ... by a page list */
 #define VM_PKT_COMP          11
 #define VM_PKT_FLAG_COMPLETION_REQUESTED 1
 
@@ -123,11 +124,12 @@ typedef struct {
 static inline UINT32 vm_gpa_len(UINT32 pages) { return 16 + 8 * pages; }
 
 /* Read the next packet: its descriptor and up to @cap bytes of payload
- * (*len: the payload's full length; a longer one is cut to @cap).  False
- * when the ring is empty.  *signal says whether the writer waits for room
- * this read made */
-static inline bool vm_ring_read(VmRing *r, VmPacketDesc *d, void *out, UINT32 cap,
-                                UINT32 *len, bool *signal)
+ * (*len: the payload's full length; a longer one is cut to @cap), and
+ * when @head is given, up to @head_cap bytes of what its type adds after
+ * the descriptor (*head_len: how many came).  False when the ring is
+ * empty.  *signal says whether the writer waits for room this read made */
+static inline bool vm_ring_read_head(VmRing *r, VmPacketDesc *d, void *head, UINT32 head_cap, UINT32 *head_len,
+                                     void *out, UINT32 cap, UINT32 *len, bool *signal)
 {
     UINT32 rd = r->hdr->read_index, wr = r->hdr->write_index;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);               /* the index before the packet */
@@ -142,6 +144,12 @@ static inline bool vm_ring_read(VmRing *r, VmPacketDesc *d, void *out, UINT32 ca
     }
     UINT32 n = total - off;
     *len = n;
+    if (head) {
+        UINT32 h = off - (UINT32)sizeof(*d);
+        if (h > head_cap) h = head_cap;
+        vm_ring_copy_out(r, rd + sizeof(*d), head, h);
+        *head_len = h;
+    }
     vm_ring_copy_out(r, rd + off, out, n < cap ? n : cap);
     __atomic_thread_fence(__ATOMIC_SEQ_CST);               /* copied before the room is given back */
     r->hdr->read_index = (rd + total + 8) % r->size;
@@ -151,4 +159,10 @@ static inline bool vm_ring_read(VmRing *r, VmPacketDesc *d, void *out, UINT32 ca
         *signal = want && r->size - vm_ring_used(r, r->hdr->read_index, r->hdr->write_index) >= want;
     }
     return true;
+}
+
+static inline bool vm_ring_read(VmRing *r, VmPacketDesc *d, void *out, UINT32 cap,
+                                UINT32 *len, bool *signal)
+{
+    return vm_ring_read_head(r, d, NULL, 0, NULL, out, cap, len, signal);
 }

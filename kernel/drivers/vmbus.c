@@ -38,6 +38,7 @@
 #include "hv_util.h"
 #include "storvsc.h"
 #include "hv_video.h"
+#include "netvsc.h"
 #include "../hal/ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/apic.h"
@@ -82,6 +83,7 @@
 #define CHMSG_OPENCHANNEL        5
 #define CHMSG_OPENCHANNEL_RESULT 6
 #define CHMSG_GPADL_HEADER       8
+#define CHMSG_GPADL_BODY         9
 #define CHMSG_GPADL_CREATED      10
 #define CHMSG_INITIATE_CONTACT   14
 #define CHMSG_VERSION_RESPONSE   15
@@ -150,13 +152,22 @@ typedef struct __attribute__((packed)) {
     UINT32   connection_id;
 } ChOffer;
 
+#define GPADL_HEADER_PFNS 26               /* what fits in one message; the rest in GPADL_BODY ones */
+#define GPADL_BODY_PFNS   28
+
 typedef struct __attribute__((packed)) {
     ChHeader h;
     UINT32   child_relid, gpadl;
     UINT16   range_buflen, rangecount;
     UINT32   byte_count, byte_offset;
-    UINT64   pfn[2 * RING_PAGES];
+    UINT64   pfn[GPADL_HEADER_PFNS];
 } ChGpadlHeader;
+
+typedef struct __attribute__((packed)) {
+    ChHeader h;
+    UINT32   msgnum, gpadl;
+    UINT64   pfn[GPADL_BODY_PFNS];
+} ChGpadlBody;
 
 typedef struct __attribute__((packed)) {
     ChHeader h;
@@ -176,8 +187,8 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(ChInitiateContact) == 40, "INITIATE_CONTACT");
 _Static_assert(sizeof(ChOffer) == 196, "OFFERCHANNEL");
-_Static_assert(sizeof(ChGpadlHeader) == 28 + 16 * RING_PAGES, "GPADL_HEADER");
-_Static_assert(sizeof(ChGpadlHeader) <= 240, "a GPADL that needs GPADL_BODY messages");
+_Static_assert(sizeof(ChGpadlHeader) == 28 + 8 * GPADL_HEADER_PFNS && sizeof(ChGpadlHeader) <= 240, "GPADL_HEADER");
+_Static_assert(sizeof(ChGpadlBody) == 240, "GPADL_BODY");
 _Static_assert(sizeof(ChOpenChannel) == 148, "OPENCHANNEL");
 
 struct VmbusChannel {
@@ -187,7 +198,7 @@ struct VmbusChannel {
     UINT32  relid, conn_id;
     bool    dedicated;
     UINT16  mmio_mb;
-    UINT8  *pkt;                         /* PKT_MAX */
+    UINT8  *pkt, *head;                  /* PKT_MAX each */
     volatile int reading;                 /* someone reads the inbound ring */
 };
 
@@ -200,7 +211,7 @@ typedef struct {
 
 static const VmbusDriver *const g_drivers[] = {
     &HvKeyboardDriver, &HvMouseDriver, &HvShutdownDriver, &HvTimeSyncDriver, &HvHeartbeatDriver,
-    &HvStorageDriver, &HvVideoDriver,
+    &HvStorageDriver, &HvVideoDriver, &HvNetworkDriver,
 };
 
 static void         *g_hypercall_page;
@@ -272,14 +283,14 @@ static void guid_text(const UINT8 *g, char *s, size_t cap)
 }
 
 /* Devices worth a name in the log (NovaOS drives the keyboard, the mouse,
- * shutdown, time sync, heartbeat, SCSI storage and video) */
+ * shutdown, time sync, heartbeat, SCSI storage, video and network) */
 static const struct { const char *guid, *name; } g_known[] = {
     { "f912ad6d-2b17-48ea-bd65-f927a61c7684", "keyboard" },
     { "cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a", "mouse" },
     { "da0a7802-e377-4aac-8e77-0558eb1073f8", "video" },
     { "ba6163d9-04a1-4d29-b605-72e2ffb1dc7f", "SCSI storage" },
     { "32412632-86cb-44a2-9b5c-50d1417354f5", "IDE storage (no driver: a Generation 1 VM's)" },
-    { "f8615163-df3e-46c5-913f-f2d2f965ed0e", "network (no driver)" },
+    { "f8615163-df3e-46c5-913f-f2d2f965ed0e", "network" },
     { "0e0b6031-5213-4934-818b-38d90ced39db", "shutdown" },
     { "9527e630-d0ae-497b-adce-e80ab0175caf", "time sync" },
     { "57164f39-9115-4e78-ab55-382f3bd5422d", "heartbeat" },
@@ -327,13 +338,53 @@ static bool connect(void)
     return false;
 }
 
+/* Give the host @pages pages from @pa (contiguous) on channel @relid: the
+ * GPADL's number, 0 when the host did not take them */
+static UINT32 gpadl_create(UINT32 relid, UINT64 pa, UINT32 pages, const char *who)
+{
+    static UINT32 next_gpadl = 0xE1E10;
+    UINT8 msg[240];
+    ChGpadlHeader g;
+    memset(&g, 0, sizeof(g));
+    g.h.msgtype = CHMSG_GPADL_HEADER;
+    g.child_relid = relid;
+    g.gpadl = next_gpadl++;
+    g.range_buflen = (UINT16)(8 + 8 * pages);
+    g.rangecount = 1;
+    g.byte_count = pages * VMBUS_PAGE;
+    UINT32 n = pages < GPADL_HEADER_PFNS ? pages : GPADL_HEADER_PFNS;
+    for (UINT32 i = 0; i < n; i++) g.pfn[i] = (pa >> 12) + i;
+    UINT64 st = post_message(&g, 28 + 8 * n);
+    for (UINT32 done = n, num = 1; !st && done < pages; num++) {     /* the rest of the page list */
+        ChGpadlBody b;
+        memset(&b, 0, sizeof(b));
+        b.h.msgtype = CHMSG_GPADL_BODY;
+        b.msgnum = num;
+        b.gpadl = g.gpadl;
+        UINT32 k = pages - done < GPADL_BODY_PFNS ? pages - done : GPADL_BODY_PFNS;
+        for (UINT32 i = 0; i < k; i++) b.pfn[i] = (pa >> 12) + done + i;
+        st = post_message(&b, 16 + 8 * k);
+        done += k;
+    }
+    UINT32 got = st ? 0 : wait_message(msg, REPLY_MS);
+    while (got && !(got == CHMSG_GPADL_CREATED && ((ChGpadlCreated *)msg)->gpadl == g.gpadl))
+        got = wait_message(msg, REPLY_MS);
+    if (!got || ((ChGpadlCreated *)msg)->status) {
+        kprintf("[VMBUS] %s: the host did not take %u pages (status 0x%lx/%u)\n", who, pages,
+                st, got ? ((ChGpadlCreated *)msg)->status : 0);
+        return 0;
+    }
+    return g.gpadl;
+}
+
 static bool open_channel(const Offer *o, const VmbusDriver *drv)
 {
     UINT8 msg[240];
     VmbusChannel *ch = kzalloc(sizeof(VmbusChannel));
     UINT8 *rings = kernel_alloc_pages(2 * RING_PAGES);
     if (ch) ch->pkt = kzalloc(PKT_MAX);
-    if (!ch || !rings || !ch->pkt) { kprintf("[VMBUS] %s: out of memory\n", drv->name); return false; }
+    if (ch) ch->head = kzalloc(PKT_MAX);
+    if (!ch || !rings || !ch->pkt || !ch->head) { kprintf("[VMBUS] %s: out of memory\n", drv->name); return false; }
     vm_ring_init(&ch->out, rings, RING_PAGES);
     vm_ring_init(&ch->in, rings + RING_PAGES * VMBUS_PAGE, RING_PAGES);
     ch->drv = drv;
@@ -342,36 +393,19 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     ch->dedicated = o->dedicated;
     ch->mmio_mb = o->mmio_mb;
 
-    static UINT32 next_gpadl = 0xE1E10;
-    ChGpadlHeader g;
-    memset(&g, 0, sizeof(g));
-    g.h.msgtype = CHMSG_GPADL_HEADER;
-    g.child_relid = o->relid;
-    g.gpadl = next_gpadl++;
-    g.range_buflen = 8 + 8 * 2 * RING_PAGES;
-    g.rangecount = 1;
-    g.byte_count = 2 * RING_PAGES * VMBUS_PAGE;
-    for (int i = 0; i < 2 * RING_PAGES; i++) g.pfn[i] = (phys(rings) >> 12) + i;
-    UINT64 st = post_message(&g, sizeof(g));
-    UINT32 got = st ? 0 : wait_message(msg, REPLY_MS);
-    while (got && !(got == CHMSG_GPADL_CREATED && ((ChGpadlCreated *)msg)->gpadl == g.gpadl))
-        got = wait_message(msg, REPLY_MS);
-    if (!got || ((ChGpadlCreated *)msg)->status) {
-        kprintf("[VMBUS] %s: the host did not take its rings (status 0x%lx/%u)\n", drv->name,
-                st, got ? ((ChGpadlCreated *)msg)->status : 0);
-        return false;
-    }
+    UINT32 gpadl = gpadl_create(o->relid, phys(rings), 2 * RING_PAGES, drv->name);
+    if (!gpadl) return false;
 
     ChOpenChannel op;
     memset(&op, 0, sizeof(op));
     op.h.msgtype = CHMSG_OPENCHANNEL;
     op.child_relid = o->relid;
     op.openid = o->relid;
-    op.gpadl = g.gpadl;
+    op.gpadl = gpadl;
     op.target_vp = g_vp;
     op.downstream_offset = RING_PAGES;
-    st = post_message(&op, sizeof(op));
-    got = st ? 0 : wait_message(msg, REPLY_MS);
+    UINT64 st = post_message(&op, sizeof(op));
+    UINT32 got = st ? 0 : wait_message(msg, REPLY_MS);
     while (got && !(got == CHMSG_OPENCHANNEL_RESULT && ((ChOpenResult *)msg)->openid == op.openid))
         got = wait_message(msg, REPLY_MS);
     if (!got || ((ChOpenResult *)msg)->status) {
@@ -531,19 +565,41 @@ bool VmbusSendGpa(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_i
     return true;
 }
 
+bool VmbusSendCompletion(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id)
+{
+    bool sig = false;
+    if (!vm_ring_write_typed(&ch->out, VM_PKT_COMP, NULL, 0, data, len, trans_id, 0, &sig)) return false;
+    if (sig) signal_host(ch);
+    return true;
+}
+
+bool VmbusCreateGpadl(VmbusChannel *ch, void *buf, UINT32 len, UINT32 *gpadl)
+{
+    if (__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE) || !len || (len & (VMBUS_PAGE - 1))) return false;
+    *gpadl = gpadl_create(ch->relid, phys(buf), len / VMBUS_PAGE, ch->drv->name);
+    return *gpadl != 0;
+}
+
 /* Read the channel's inbound ring (@ch->reading held) */
 static void read_channel(VmbusChannel *ch)
 {
     VmPacketDesc d;
-    UINT32 len;
+    UINT32 len, hlen = 0;
     bool sig = false, any = false;
-    for (int n = 0; n < 64 && vm_ring_read(&ch->in, &d, ch->pkt, PKT_MAX, &len, &sig); n++) {
+    for (int n = 0; n < 64 && vm_ring_read_head(&ch->in, &d, ch->head, PKT_MAX, &hlen, ch->pkt, PKT_MAX, &len, &sig);
+         n++) {
         any |= sig;
         UINT32 got = len < PKT_MAX ? len : PKT_MAX;
         if (d.type == VM_PKT_DATA_INBAND)
             ch->drv->packet(ch->ctx, ch->pkt, got, d.trans_id);
         else if (d.type == VM_PKT_COMP && ch->drv->completion)
             ch->drv->completion(ch->ctx, ch->pkt, got, d.trans_id);
+        else if (d.type == VM_PKT_XFER_PAGES && ch->drv->xfer && hlen >= 8) {
+            /* the transfer page set's ID (16 bits), whether the sender owns it, a reserved byte, the count */
+            UINT32 count = *(const UINT32 *)(ch->head + 4), fit = (hlen - 8) / sizeof(VmbusXferRange);
+            ch->drv->xfer(ch->ctx, (const VmbusXferRange *)(ch->head + 8), count < fit ? count : fit,
+                          ch->pkt, got, d.trans_id);
+        }
     }
     if (any) signal_host(ch);
 }

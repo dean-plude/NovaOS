@@ -316,5 +316,5 @@ static void video_started(void *ctx)
 /* {da0a7802-e377-4aac-8e77-0558eb1073f8} */
 const VmbusDriver HvVideoDriver = {
     { 0x02, 0x78, 0x0a, 0xda, 0x77, 0xe3, 0xac, 0x4a, 0x8e, 0x77, 0x05, 0x58, 0xeb, 0x10, 0x73, 0xf8 },
-    "Hyper-V video", video_opened, video_packet, NULL, video_started, video_tick,
+    "Hyper-V video", video_opened, video_packet, NULL, video_started, video_tick, NULL,
 };

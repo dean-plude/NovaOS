@@ -1,7 +1,8 @@
 # NovaOS in Hyper-V
 
 **Status: untested.** NovaOS has drivers for Hyper-V's synthetic keyboard
-and mouse, for its SCSI disks and synthetic video, and for its shutdown,
+and mouse, for its SCSI disks, synthetic video and network adapter, and
+for its shutdown,
 heartbeat and time sync integration services, but it has never been run on a real Hyper-V host. The drivers
 were written from Linux's and FreeBSD's, and their protocol code is
 tested on the build machine without a VM ([below](#tests)). Checking them
@@ -13,10 +14,10 @@ virtual machine (Generation 1 has BIOS firmware only). A Generation 2 VM
 has no PS/2 controller, no USB controller and no emulated PCI devices:
 its keyboard, mouse, disks, network adapter and video are *synthetic
 devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
-mouse, the SCSI disks ([below](#disks)), the video ([below](#display))
-and the integration services ([below](#integration-services)); the rest is listed under
+mouse, the SCSI disks ([below](#disks)), the video ([below](#display)), the
+network adapter ([below](#network)) and the integration services ([below](#integration-services)); the rest is listed under
 [What does not work yet](#what-does-not-work-yet). Full Gen 2 support is
-a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: network (netvsc), Hyper-V's own clock and timers, key-value exchange.
+a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: Hyper-V's own clock and timers, then key-value exchange.
 
 ## Making the VM
 
@@ -25,8 +26,8 @@ In Hyper-V Manager: New, Virtual Machine, and
 1. **Generation 2**.
 2. At least 4096 MB of startup memory. Turning off dynamic memory is
    simplest (NovaOS has no balloon driver).
-3. No network connection (NovaOS has no driver for Hyper-V's network
-   adapter).
+3. Any virtual switch for the network connection (the Default Switch
+   gives the VM an address by DHCP and NAT to the host's network).
 4. A virtual hard disk (the wizard's new VHDX is fine) to install NovaOS
    on, or "Attach a virtual hard disk later" to run it live only.
 5. "Install an operating system from a bootable image file": `nova.iso`.
@@ -125,6 +126,23 @@ Hyper-V shows the video memory only where the guest says it changed, so
 the driver reports the whole screen 20 times a second while the host
 asks for it.  NovaOS draws its own pointer (the host's is hidden).
 
+## Network
+
+`kernel/drivers/netvsc.c` drives Hyper-V's synthetic network adapter, the
+one Hyper-V Manager calls "Network Adapter" (not the "Legacy Network
+Adapter" of Generation 1 VMs).  It agrees on a protocol version with the
+host (NVSP 5, 4, 2 or 1), gives the host a 1 MiB buffer for what it
+receives, and then speaks RNDIS inside it: the MAC address and the link
+come from the host, and every frame the host sends lands in the buffer.
+NovaOS's network stack takes it as its adapter when there is no Intel or
+virtio one, so DHCP, IPv6, DNS, the App Store and `ping` work as on a
+PC; Settings > Network and `ipconfig` name it "Hyper-V network adapter".
+
+One adapter is used (the first the host offers), without the host's
+offloads (checksums, segmentation, several queues): the CPU does that
+work, which is plenty for a desktop.  A VLAN ID set on the adapter in
+Hyper-V Manager is handled by the host as usual.
+
 ## Integration services
 
 `kernel/drivers/hv_util.c` answers three of the integration services
@@ -190,13 +208,15 @@ version and the descriptor's size depend on the host):
 [STORVSC] controller 0, location 0: hv0 "Msft     Virtual Disk", 130048 MiB
 [STORVSC] controller 0, location 1: Msft     Virtual DVD-ROM (DVD drive; NovaOS started from it already): not used
 [VMBUS] Hyper-V video: channel 7 open
+[VMBUS] Hyper-V network: channel 8 open
+[NETVSC] NVSP 5, MAC 00:15:5d:01:02:03, link up
 [HVVIDEO] Synthetic video 3.5: 8 MiB of video memory at 0xf8000000, 9 mode(s)
 [DISPLAY] Hyper-V synthetic video: 1024x768, 9 mode(s)
 ```
 
 Every device the host offers is listed, with a name for the common ones
-(network, key-value exchange and dynamic memory are named and marked
-"no driver"). Other
+(key-value exchange and dynamic memory are named and marked "no
+driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -218,6 +238,8 @@ lines say what went wrong:
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
+| `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |
+| `[NETVSC] Link down` | the VM's adapter is not connected to a switch (Settings, Network Adapter, Virtual switch) |
 | `[DISPLAY] 1920x1080 refused by Hyper-V` | the host did not take the mode change; the screen stays as it was |
 
 ## What does not work yet
@@ -227,7 +249,7 @@ lines say what went wrong:
 | Keyboard, mouse | Drivers exist (VMBus); not yet checked on a real host |
 | Display | Driver exists ([above](#display)); not yet checked on a real host. One screen only |
 | Disks | Driver exists ([above](#disks)); not yet checked on a real host. 4 KiB-sector VHDX files and disks added while running are not used |
-| Network | No driver for Hyper-V's network adapter (netvsc) |
+| Network | Driver exists ([above](#network)); not yet checked on a real host. One adapter, no offloads |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
 | Shutdown, time sync, heartbeat | Drivers exist ([above](#integration-services)); not yet checked on a real host |
 | Key-value exchange, guest services, VSS backup, dynamic memory | No drivers: Hyper-V Manager shows no addresses for the VM, and memory stays as it started |
@@ -253,7 +275,15 @@ answering.  `tests/host/hv_video.c` (`tests/tools/test_hv_video.py`) runs
 the video driver against a fake host: each message's size, the version
 fallback from 3.5 to 3.0, the host's mode list filtered to what fits,
 the video memory's location, mode changes, the dirty-rectangle timing and
-the host turning it off, and a host that refuses or never answers. Its mouse case uses the device information layout Hyper-V sends (a
+the host turning it off, and a host that refuses or never answers.
+`tests/host/hv_netvsc.c` (`tests/tools/test_hv_netvsc.py`) runs the network
+driver against a fake host: the transfer-page packet layout, bring-up on
+NVSP 5, 4 and 1 (NDIS 6.30 or 6.1, no NDIS_CONF on 1), the RNDIS
+handshake, frames sent (short ones padded, all 32 send pages in flight,
+one given back), frames received (two in one packet, one after a
+per-packet info block, a bad one and a range outside the buffer dropped
+but given back, a full queue), the link going and coming, the host's
+keepalive, and a host that refuses or never answers. Its mouse case uses the device information layout Hyper-V sends (a
 32-byte block: a 32-bit size, vendor, product, version and eleven
 reserved 16-bit words, then the HID descriptor), checked against
 FreeBSD's `hv_hid.c`.

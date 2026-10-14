@@ -417,5 +417,5 @@ static void stor_started(void *ctx)
 /* {ba6163d9-04a1-4d29-b605-72e2ffb1dc7f} */
 const VmbusDriver HvStorageDriver = {
     { 0xd9, 0x63, 0x61, 0xba, 0xa1, 0x04, 0x29, 0x4d, 0xb6, 0x05, 0x72, 0xe2, 0xff, 0xb1, 0xdc, 0x7f },
-    "Hyper-V SCSI", stor_opened, stor_packet, stor_completion, stor_started, NULL,
+    "Hyper-V SCSI", stor_opened, stor_packet, stor_completion, stor_started, NULL, NULL,
 };

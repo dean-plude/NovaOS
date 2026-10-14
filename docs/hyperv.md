@@ -1,8 +1,8 @@
 # NovaOS in Hyper-V
 
 **Status: untested.** NovaOS has drivers for Hyper-V's synthetic keyboard
-and mouse and for its shutdown, heartbeat and time sync integration
-services, but it has never been run on a real Hyper-V host. The drivers
+and mouse for its SCSI disks, and for its shutdown, heartbeat and time sync
+integration services, but it has never been run on a real Hyper-V host. The drivers
 were written from Linux's and FreeBSD's, and their protocol code is
 tested on the build machine without a VM ([below](#tests)). Checking them
 in a Hyper-V VM is roadmap step 23.4. Reports are welcome as issues, with
@@ -13,11 +13,11 @@ virtual machine (Generation 1 has BIOS firmware only). A Generation 2 VM
 has no PS/2 controller, no USB controller and no emulated PCI devices:
 its keyboard, mouse, disks, network adapter and video are *synthetic
 devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
-mouse and the integration services ([below](#integration-services)); the
-rest is listed under [What does not work yet](#what-does-not-work-yet).
-Full Gen 2 support is a roadmap item ([ROADMAP.md](ROADMAP.md)), one
-device per step: disks (storvsc), video, network (netvsc), Hyper-V's own
-clock and timers, key-value exchange.
+mouse, the SCSI disks ([below](#disks)) and the integration services
+([below](#integration-services)); the rest is listed under
+[What does not work yet](#what-does-not-work-yet). Full Gen 2 support is
+a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: video,
+network (netvsc), Hyper-V's own clock and timers, key-value exchange.
 
 ## Making the VM
 
@@ -28,7 +28,9 @@ In Hyper-V Manager: New, Virtual Machine, and
    simplest (NovaOS has no balloon driver).
 3. No network connection (NovaOS has no driver for Hyper-V's network
    adapter).
-4. "Install an operating system from a bootable image file": `nova.iso`.
+4. A virtual hard disk (the wizard's new VHDX is fine) to install NovaOS
+   on, or "Attach a virtual hard disk later" to run it live only.
+5. "Install an operating system from a bootable image file": `nova.iso`.
 
 Then, in the VM's Settings, before starting it:
 
@@ -77,6 +79,31 @@ inside the guest that NovaOS does not have.
   Ctrl+Alt+Left to release it).
 
 The device poll thread reads both rings every 10 ms timer tick.
+
+## Disks
+
+`kernel/drivers/storvsc.c` drives Hyper-V's synthetic SCSI controller,
+where a Generation 2 VM's virtual hard disks and DVD drive are.  It
+agrees on a protocol version with the host (6.2, 6.0 or 5.1), then asks
+each location of the controller what is there: every virtual hard disk
+with 512-byte sectors (the VHDX default) becomes a disk named `hv0`,
+`hv1`, ... in the order of the controller's locations.  The DVD drive is
+left alone: NovaOS has already started from it.
+
+So in a Hyper-V VM NovaOS can be installed like on a PC: the Setup app
+(Install NovaOS on the desktop) or the Terminal's `install hv0` erases
+the virtual hard disk and installs NovaOS on it
+([install-and-power.md](install-and-power.md)).  Then remove the ISO
+from the DVD drive (or move the hard disk first in the VM's Firmware
+boot order) and restart: NovaOS starts from the virtual hard disk, and
+drive C: is kept there.  A blank virtual hard disk attached to the live
+system holds drive C: too, as a blank SATA disk does.
+
+A VHDX made with 4 KiB logical sectors (`New-VHD -LogicalSectorSizeBytes
+4096`) is not used (NovaOS's disk layer works in 512-byte sectors), nor
+are disks added or removed while NovaOS runs (they are seen at the next
+start).  Disks on a VM's second, third or fourth SCSI controller work
+too.
 
 ## Integration services
 
@@ -138,11 +165,15 @@ version and the descriptor's size depend on the host):
 [HVUTIL] time sync: framework 3.0, messages 4.0
 [HVUTIL] time sync: clock set from the host's (moved +0.012 s)
 [HVUTIL] heartbeat: framework 3.0, messages 3.0
+[VMBUS] Hyper-V SCSI: channel 6 open
+[STORVSC] controller 0: protocol 6.2, transfers up to 128 KiB
+[STORVSC] controller 0, location 0: hv0 "Msft     Virtual Disk", 130048 MiB
+[STORVSC] controller 0, location 1: Msft     Virtual DVD-ROM (DVD drive; NovaOS started from it already): not used
 ```
 
 Every device the host offers is listed, with a name for the common ones
-(video, SCSI storage, network, key-value exchange and dynamic memory are
-named and marked "no driver"). Other
+(video, network, key-value exchange and dynamic memory are named and
+marked "no driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -159,6 +190,10 @@ lines say what went wrong:
 | `[HVINPUT] ... refused` | the device refused the protocol version NovaOS asked for |
 | `[HVUTIL] ...: no version in common with the host` | that integration service stays off |
 | `[HVUTIL] shutdown: the host asks to shut down` | Shut Down from the host; `[SHELL] Shutting down` follows |
+| `[STORVSC] controller N: no answer to BEGIN_INITIALIZATION`, `... the host took no protocol version` | the SCSI controller did not come up: no disks |
+| `[STORVSC] controller N: no disks` | the controller has no virtual hard disk attached |
+| `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
+| `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 
 ## What does not work yet
 
@@ -166,7 +201,7 @@ lines say what went wrong:
 |---|---|
 | Keyboard, mouse | Drivers exist (VMBus); not yet checked on a real host |
 | Display | The firmware's frame buffer, at the resolution the firmware chose; no driver for the synthetic video device, so no resolution changes |
-| Disks | No driver for Hyper-V's SCSI controller (storvsc): NovaOS runs live from the ISO and cannot be installed |
+| Disks | Driver exists ([above](#disks)); not yet checked on a real host. 4 KiB-sector VHDX files and disks added while running are not used |
 | Network | No driver for Hyper-V's network adapter (netvsc) |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
 | Shutdown, time sync, heartbeat | Drivers exist ([above](#integration-services)); not yet checked on a real host |
@@ -183,7 +218,13 @@ for the integration services: the version each picks from the host's
 lists (and none when nothing matches), answers carrying the host's
 transaction ID, the heartbeat's sequence number, each shutdown flag, and
 time sync's SYNC, SAMPLE and probe messages with and without version 4's
-reference counter. Its mouse case uses the device information layout Hyper-V sends (a
+reference counter.  `tests/host/hv_storvsc.c` (`tests/tools/test_hv_storvsc.py`)
+runs the SCSI driver against a fake host: the GPA-direct packet layout,
+bring-up with a refused protocol version, the scan (a disk, the DVD drive,
+a 4 KiB-sector disk, an 8 TiB disk that needs READ CAPACITY(16), empty
+locations answered both ways Hyper-V does), a unit attention, reads and
+writes split at the host's largest transfer, flush, and a host that stops
+answering. Its mouse case uses the device information layout Hyper-V sends (a
 32-byte block: a 32-bit size, vendor, product, version and eleven
 reserved 16-bit words, then the HID descriptor), checked against
 FreeBSD's `hv_hid.c`.

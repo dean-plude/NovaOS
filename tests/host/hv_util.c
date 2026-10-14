@@ -26,6 +26,9 @@ UINT64 um_now_100ns(void) { return now; }
 void kprintf(const char *f, ...) { va_list v; va_start(v, f); vprintf(f, v); va_end(v); }
 void *kzalloc(size_t n) { return calloc(1, n); }
 
+/* The ring pads a packet to 8 bytes: the length the driver reads, and so answers */
+#define P8(n) (((n) + 7) & ~7u)
+
 /* The driver's answer: its payload in @out, its length; 0 when none */
 static UINT32 answer(UINT8 *out, UINT64 *trans)
 {
@@ -68,7 +71,7 @@ static void negotiated(const VmbusDriver *drv, void *ctx, UINT8 *b, UINT32 n, UI
     static UINT8 a[UTIL_BUF]; UINT64 t;
     drv->packet(ctx, b, n, 77);
     UINT32 len = answer(a, &t);
-    assert(len == n && t == 77 && a[25] == (IC_FLAG_TRANSACTION | IC_FLAG_RESPONSE) && rd16(a + 18) == 16);
+    assert(len == P8(n) && t == 77 && a[25] == (IC_FLAG_TRANSACTION | IC_FLAG_RESPONSE) && rd16(a + 18) == 16);
     bool ok = rd16(a + IC_HDR) == 1 && rd16(a + IC_HDR + 2) == 1;
     assert(ok || (!rd16(a + IC_HDR) && !rd16(a + IC_HDR + 2)));
     UINT8 *v = a + IC_HDR + 8;
@@ -110,7 +113,7 @@ static void heartbeat_checks(void)
     n = msg(b, IC_HEARTBEAT, 40);
     wr64(b + IC_HDR, 41);
     HvHeartbeatDriver.packet(ctx, b, n, 9);
-    assert(answer(a, &t) == n && t == 9 && rd64(a + IC_HDR) == 42 && !rd32(a + 20) && a[25] == 5);
+    assert(answer(a, &t) == P8(n) && t == 9 && rd64(a + IC_HDR) == 42 && !rd32(a + 20) && a[25] == 5);
 
     void *old = HvHeartbeatDriver.opened(NULL);             /* a host with nothing in common */
     const UINT32 ofw[] = { V(2, 0) };
@@ -141,7 +144,7 @@ static void shutdown_checks(void)
         wr32(b + IC_HDR + 8, c[i].flags);
         power_req = -1;
         HvShutdownDriver.packet(ctx, b, n, 100 + i);
-        assert(answer(a, &t) == n && t == (UINT64)(100 + i) && a[25] == 5);
+        assert(answer(a, &t) == P8(n) && t == (UINT64)(100 + i) && a[25] == 5);
         assert(rd32(a + 20) == c[i].status && power_req == c[i].power);
     }
     puts("shutdown passed");
@@ -162,18 +165,18 @@ static void timesync_checks(void)
     wr64(b + IC_HDR, host); b[IC_HDR + 24] = TS_SYNC;
     clock_sets = 0;
     HvTimeSyncDriver.packet(ctx, b, n, 1);
-    assert(answer(a, &t) == n && a[25] == 5 && clock_sets == 1 && now == host);
+    assert(answer(a, &t) == P8(n) && a[25] == 5 && clock_sets == 1 && now == host);
 
     wr64(b + IC_HDR, now + 5000000); b[IC_HDR + 24] = TS_SAMPLE;   /* half a second: left alone */
     HvTimeSyncDriver.packet(ctx, b, n, 2);
-    assert(answer(a, &t) == n && clock_sets == 1 && now == host);
+    assert(answer(a, &t) == P8(n) && clock_sets == 1 && now == host);
     wr64(b + IC_HDR, now - 20000000);                       /* two seconds behind: corrected */
     HvTimeSyncDriver.packet(ctx, b, n, 3);
-    assert(answer(a, &t) == n && clock_sets == 2 && now == host - 20000000);
+    assert(answer(a, &t) == P8(n) && clock_sets == 2 && now == host - 20000000);
     b[IC_HDR + 24] = 0;                                     /* a probe: answered, nothing set */
     wr64(b + IC_HDR, 1);
     HvTimeSyncDriver.packet(ctx, b, n, 4);
-    assert(answer(a, &t) == n && clock_sets == 2);
+    assert(answer(a, &t) == P8(n) && clock_sets == 2);
 
     have_ref = true; ref_now = 1500;                        /* version 4: the delay is added */
     ctx = HvTimeSyncDriver.opened(NULL);
@@ -183,7 +186,7 @@ static void timesync_checks(void)
     host = now + 10ull * 10000000;
     wr64(b + IC_HDR, host); wr64(b + IC_HDR + 8, 1000); b[IC_HDR + 16] = TS_SYNC;
     HvTimeSyncDriver.packet(ctx, b, n, 5);
-    assert(answer(a, &t) == n && clock_sets == 3 && now == host + 500);
+    assert(answer(a, &t) == P8(n) && clock_sets == 3 && now == host + 500);
     puts("time sync passed");
 }
 

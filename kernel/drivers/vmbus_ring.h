@@ -38,6 +38,7 @@ typedef struct {
 } VmPacketDesc;
 
 #define VM_PKT_DATA_INBAND   6
+#define VM_PKT_GPA_DIRECT    9            /* the descriptor is followed by a page list */
 #define VM_PKT_COMP          11
 #define VM_PKT_FLAG_COMPLETION_REQUESTED 1
 
@@ -75,20 +76,23 @@ static inline void vm_ring_copy_out(const VmRing *r, UINT32 at, void *dst, UINT3
     for (UINT32 i = 0; i < len; i++) d[i] = r->data[(at + i) % r->size];
 }
 
-/* Write one in-band packet.  False when the ring has no room.  *signal
- * says whether the reader wants to be told (it is not polling) */
-static inline bool vm_ring_write(VmRing *r, const void *payload, UINT32 len,
-                                 UINT64 trans_id, UINT16 flags, bool *signal)
+/* Write one packet of @type: its descriptor, @extra (@extra_len bytes, a
+ * multiple of 8: what that type adds to the descriptor), the payload.
+ * False when the ring has no room.  *signal says whether the reader wants
+ * to be told (it is not polling) */
+static inline bool vm_ring_write_typed(VmRing *r, UINT16 type, const void *extra, UINT32 extra_len,
+                                       const void *payload, UINT32 len,
+                                       UINT64 trans_id, UINT16 flags, bool *signal)
 {
-    UINT32 padded = (len + 7) & ~7u;
-    VmPacketDesc d = { VM_PKT_DATA_INBAND, sizeof(VmPacketDesc) / 8,
-                       (UINT16)((sizeof(VmPacketDesc) + padded) / 8), flags, trans_id };
-    UINT32 total = sizeof(d) + padded + 8;
+    UINT32 padded = (len + 7) & ~7u, head = sizeof(VmPacketDesc) + extra_len;
+    VmPacketDesc d = { type, (UINT16)(head / 8), (UINT16)((head + padded) / 8), flags, trans_id };
+    UINT32 total = head + padded + 8;
     UINT32 wr = r->hdr->write_index, rd = r->hdr->read_index;
     if (r->size - vm_ring_used(r, rd, wr) <= total) return false;
     UINT64 zero = 0, trailer = (UINT64)wr << 32;
     UINT32 at = wr;
     vm_ring_copy_in(r, at, &d, sizeof(d));                 at += sizeof(d);
+    vm_ring_copy_in(r, at, extra, extra_len);              at += extra_len;
     vm_ring_copy_in(r, at, payload, len);                  at += len;
     vm_ring_copy_in(r, at, &zero, padded - len);           at += padded - len;
     vm_ring_copy_in(r, at, &trailer, 8);                   at += 8;
@@ -98,6 +102,25 @@ static inline bool vm_ring_write(VmRing *r, const void *payload, UINT32 len,
     if (signal) *signal = !r->hdr->interrupt_mask;
     return true;
 }
+
+/* Write one in-band packet */
+static inline bool vm_ring_write(VmRing *r, const void *payload, UINT32 len,
+                                 UINT64 trans_id, UINT16 flags, bool *signal)
+{
+    return vm_ring_write_typed(r, VM_PKT_DATA_INBAND, NULL, 0, payload, len, trans_id, flags, signal);
+}
+
+/* A GPA-direct packet's page list: one range of @len bytes starting
+ * @offset bytes into page pfn[0], the pages following one another */
+#define VM_GPA_MAX_PAGES 33
+typedef struct {
+    UINT32 reserved, range_count;          /* (1) */
+    UINT32 len, offset;
+    UINT64 pfn[VM_GPA_MAX_PAGES];
+} VmGpaRange;
+
+/* The bytes of @g that go in the descriptor, for @pages pages */
+static inline UINT32 vm_gpa_len(UINT32 pages) { return 16 + 8 * pages; }
 
 /* Read the next packet: its descriptor and up to @cap bytes of payload
  * (*len: the payload's full length; a longer one is cut to @cap).  False

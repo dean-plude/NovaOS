@@ -657,10 +657,26 @@ static void draw_prog_icon(int i, int x, int y, int s)
     else AppDrawProgramIcon(g_progs[i].name, x, y, s);
 }
 
+/* System tools in C:\Windows\System32 the Start menu lists by name, as
+ * Windows lists its Windows Tools */
+static const struct { const char *name, *path; } g_tools[] = {
+    { "Device Manager", "\\Windows\\System32\\devmgmt.exe" },
+    { "Event Viewer", "\\Windows\\System32\\eventvwr.exe" },
+};
+
 static void scan_programs(void)
 {
     g_nprogs = 0;
     scan_links(RamfsResolve(NULL, START_MENU_PROGRAMS), 0);  /* installed apps first */
+    for (unsigned i = 0; i < sizeof(g_tools) / sizeof(g_tools[0]) && g_nprogs < MAX_PROGS; i++) {
+        if (!RamfsResolve(NULL, g_tools[i].path)) continue;
+        strncpy(g_progs[g_nprogs].name, g_tools[i].name, sizeof(g_progs[0].name) - 1);
+        g_progs[g_nprogs].name[sizeof(g_progs[0].name) - 1] = '\0';
+        strncpy(g_progs[g_nprogs].path, g_tools[i].path, sizeof(g_progs[0].path) - 1);
+        g_progs[g_nprogs].path[sizeof(g_progs[0].path) - 1] = '\0';
+        g_progs[g_nprogs].link = g_progs[g_nprogs].hidden = false;
+        g_nprogs++;
+    }
     RamNode *pd = RamfsResolve(NULL, "\\Programs");
     for (RamNode *c = pd ? pd->child : NULL; c && g_nprogs < MAX_PROGS; c = c->next) {
         char exe[RAMFS_NAME_MAX + 8];
@@ -1617,6 +1633,7 @@ static void menu_for_dock(const Hot *h, int x, int y)
         menu_add("Terminal", MA_APP, APP_TERMINAL, NULL, false);
         menu_add("File Explorer", MA_APP, APP_EXPLORER, NULL, false);
         menu_add("Settings", MA_APP, APP_SETTINGS, NULL, false);
+        menu_add("Task Manager", MA_APP, APP_TASKMGR, NULL, false);
         menu_add("Show desktop", MA_SHOW_DESKTOP, 0, NULL, true);
         if (SleepSupported()) menu_add("Sleep", MA_SLEEP, 0, NULL, true);
         menu_add("Restart", MA_RESTART, 0, NULL, !SleepSupported());
@@ -1940,6 +1957,15 @@ static void desktop_key(const KeyEvent *k)
     }
     if (g_switch.on) {
         if (k->scancode == KEY_ESC) switch_end(false);
+        return;
+    }
+
+    /* Ctrl+Shift+Esc: Task Manager, as on Windows (open already: to the front) */
+    if (k->ctrl && k->shift && !k->alt && k->scancode == KEY_ESC && !k->extended) {
+        close_popups();
+        start_open(false);
+        kprintf("[APPS] Ctrl+Shift+Esc: Task Manager\n");
+        AppLaunch(APP_TASKMGR);
         return;
     }
 

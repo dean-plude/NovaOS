@@ -992,6 +992,20 @@ static bool inbox_hid(const PnpNode *n, const char *key)
     return true;
 }
 
+/* A USB camera (video interfaces) no NovaOS driver took and nothing was
+ * installed on: NovaOS's own UVC driver (usbvideo.c), as Windows'
+ * usbvideo.inf installs usbvideo.sys on USB\Class_0E */
+static bool inbox_video(const PnpNode *n, const char *key)
+{
+    bool video = false;
+    for (const char *c = n->compat; *c && !video; c += strlen(c) + 1) video = !strcmp(c, "USB\\Class_0E");
+    if (!video) return false;
+    um_registry_set_sz(key, "Service", "usbvideo");
+    um_registry_set_sz(key, "Class", "Camera");
+    um_registry_set_sz(key, "ClassGUID", "{ca3e7ab9-b4c3-4ae6-8251-579ef933890f}");
+    return true;
+}
+
 static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
 {
     (void)dev;
@@ -1003,7 +1017,8 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
             ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
             UINT32 disabled = 0;
             if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(k->node, PROB_DISABLED);
-            else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) || inbox_hid(n, key))
+            else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) || inbox_hid(n, key) ||
+                     inbox_video(n, key))
                 NtPnpStart(k->node);
         }
         kfree(n);

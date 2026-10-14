@@ -281,6 +281,7 @@ void UmInit(void)
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
+    EvLogBoot();                                    /* (the System log's first event of this boot) */
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
     NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */
@@ -2626,6 +2627,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
         t->no_boost = kt->no_boost = p->no_boost;      /* (NT: a new thread takes its process's) */
         kt->um = t;
         kt->um_proc = p;
+        kt->acct_tsc = &p->cpu_tsc;
         kt->cr3 = p->pml4;
         kt->fpu = fpu;
         kt->gs_base = t->teb;                              /* user GS = TEB */
@@ -2922,6 +2924,7 @@ void um_exit_thread(UINT32 status)
     um_ob_wake(&t->ob);
     if (--p->live_threads == 0) {
         p->exit_status = p->kill_pending ? p->kill_status : status;
+        p->exit_time = um_now_100ns();
         p->exited = true;
         if (p->exit_ob) { p->exit_ob->signaled = true; um_ob_wake(p->exit_ob); }
     }
@@ -3063,6 +3066,7 @@ void UmFaultAt(UINT32 status, UINT64 rip, UINT64 addr, UINT64 sp)
         }
         um_log_stack(p, sp);                        /* where it came from (serial log only) */
         um_crash_report(p, what, status, rip, addr, sp);    /* and C:\NovaOS\Crashes */
+        EvLogCrash(p, status, rip);                         /* and the Application log */
     }
     um_exit_process(status);
 }
@@ -3443,7 +3447,40 @@ int UmList(UmProcInfo *out, int max)
         out[n].threads = (UINT32)p->live_threads;
         out[n].exited = p->exited;
         out[n].parent_pid = p->parent_pid;
+        out[n].create_time = p->create_time;
+        out[n].commit_kb = p->commit * 4;
+        out[n].base_priority = um_class_base(p);
+        out[n].cpu_time = sched_tsc_100ns(__atomic_load_n(&p->cpu_tsc, __ATOMIC_RELAXED));
+        UINT32 handles = 0;                         /* (no lock: a count, not the handles) */
+        for (int k = 0; k < UM_MAX_HANDLES; k++) if (p->handles[k].kind != H_FREE) handles++;
+        out[n].handles = handles;
         n++;
+    }
+    return n;
+}
+
+int UmThreadList(UINT32 pid, UmThreadInfo *out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < UM_MAX_PROCS; i++) {
+        UmProcess *p = g_procs[i];
+        if (!p || p->reclaimed || p->pid != pid) continue;
+        UINT32 depth = bkl_drop();                  /* (the process lock comes before the big lock) */
+        um_lock_shared(&p->lock);                   /* (threads are reaped under it) */
+        for (int k = 0; k < UM_MAX_THREADS && n < max; k++) {
+            UmThread *t = p->threads[k];
+            if (!t || t->exited || !t->kt) continue;
+            out[n].tid = t->tid;
+            out[n].cpu_time = sched_thread_time(t->kt);
+            out[n].start = t->start;
+            out[n].priority = t->kt->priority;
+            out[n].base_priority = t->kt->base_priority;
+            out[n].state = (UINT8)t->kt->state;
+            n++;
+        }
+        um_unlock_shared(&p->lock);
+        bkl_restore(depth);
+        break;
     }
     return n;
 }

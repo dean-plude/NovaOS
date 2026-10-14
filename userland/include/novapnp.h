@@ -3,9 +3,9 @@
  *
  * NtNovaGuiCtl(0, NOVA_CTL_PNP, op | id << 8, ptr) reads the device nodes
  * of kernel/io/pnp.h (whose PnpNode and PnpEvent these mirror) and waits
- * for devices to arrive and leave: cfgmgr32, setupapi, user32
- * (WM_DEVICECHANGE), the PlugPlay service and the self-test pnptest use
- * it.  A node's ID is its DEVINST; the root is 1.
+ * for devices to arrive and leave, and reads a node's resources:
+ * cfgmgr32, setupapi, user32 (WM_DEVICECHANGE), the PlugPlay service and
+ * the self-test pnptest use it.  A node's ID is its DEVINST; the root is 1.
  */
 #pragma once
 #include <windows.h>
@@ -143,11 +143,16 @@ static inline int nova_pnp_interfaces(const NovaPnpNode *n, GUID *g)
     if (!lstrcmpiA(n->cls, "Net")) g[k++] = net;
     if (!lstrcmpiA(n->cls, "Display")) g[k++] = disp;
     /* and those a Windows driver on it turned on (IoSetDeviceInterfaceState):
-     * a PCI device's, or a child device's its bus driver reported */
-    if (!nova_pnp_prefix(n->instance, "USB\\") && !nova_pnp_prefix(n->instance, "HID\\")) {
+     * a PCI device's, a child device's its bus driver reported, or a USB
+     * device's function driver's (a camera's on usbvideo) */
+    if (!nova_pnp_prefix(n->instance, "HID\\")) {
         GUID w[8];
         int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
-        for (int i = 0; i < m && k < 4; i++) g[k++] = w[i];
+        for (int i = 0; i < m && k < 4; i++) {
+            int dup = 0;
+            for (int j = 0; j < k; j++) dup |= !memcmp(&g[j], &w[i], sizeof(GUID));
+            if (!dup) g[k++] = w[i];
+        }
     }
     return k;
 }
@@ -166,6 +171,23 @@ static inline DWORD nova_pnp_start(DWORD id)
 static inline NTSTATUS nova_pnp_stop(DWORD id)
 {
     return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 5 | (ULONG_PTR)id << 8, NULL);
+}
+
+/* A resource a node's device decodes (kernel/io/pnp.h's PnpResource):
+ * its memory and I/O ranges and its interrupt (a PCI function's) */
+#define NOVA_PNP_RES_MEMORY    1
+#define NOVA_PNP_RES_PORT      2
+#define NOVA_PNP_RES_INTERRUPT 3
+typedef struct {
+    DWORD type;                     /* NOVA_PNP_RES_* */
+    DWORD flags;                    /* memory: 1 prefetchable; interrupt: 1 level-triggered */
+    ULONGLONG start, length;        /* an interrupt: its IRQ (GSI), length 0 */
+} NovaPnpResource;
+
+/* Node @id's resources (8 at most into @r): how many */
+static inline int nova_pnp_resources(DWORD id, NovaPnpResource r[8])
+{
+    return (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 6 | (ULONG_PTR)id << 8, r);
 }
 
 /* A device interface's symbolic link: "\\?\" + the instance ID with each

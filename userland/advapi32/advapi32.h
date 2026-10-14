@@ -20,3 +20,7 @@ const char *user_name(void);        /* %USERNAME%, else "User" */
 BOOL sid_from_string(const char *s, PSID *out);
 int sid_string(PSID sid, char *out, int cap);
 const char *sid_alias(PSID sid);
+
+/* An event of advapi32's own (eventlog.c): @source's event @id with @n
+ * strings in the log @log */
+BOOL nova_report_event(const WCHAR *log, const WCHAR *source, WORD type, DWORD id, WORD n, LPCWSTR *strings);

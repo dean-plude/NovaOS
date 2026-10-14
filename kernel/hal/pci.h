@@ -33,6 +33,16 @@ bool PciFindNth(UINT16 vendor, const UINT16 *ids, int n, int index, PciDevice *o
 /* The @index'th device (0 = first) of a class, e.g. 01/06/01 for AHCI. */
 bool PciFindClass(UINT8 class_code, UINT8 subclass, UINT8 prog_if, int index, PciDevice *out);
 
+/* A memory or I/O range a function decodes (one of its BARs) */
+typedef struct {
+    bool   io;                     /* I/O ports (else memory) */
+    bool   prefetch;               /* prefetchable memory */
+    UINT64 base, size;
+} PciRange;
+/* The ranges of @d as the firmware assigned them, sized at boot before
+ * any driver ran (unassigned BARs left out): how many, at most @max */
+int PciRanges(const PciDevice *d, PciRange *out, int max);
+
 /* Physical base address of a memory BAR (handles 64-bit BARs). */
 UINT64 PciBarAddress(const PciDevice *d, int bar);
 

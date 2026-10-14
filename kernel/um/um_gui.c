@@ -1311,6 +1311,17 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  *            after seq "after", waiting for one up to "wait ms"; returns
  *            how many */
 #define CTL_PNP            56
+/* The event log's post box (um_eventlog.c: advapi32's ReportEvent and
+ * readers, the EventLog service), by arg's low byte:
+ *  60 EVENTLOG  0 ptr <- { size, log name (32 UTF-16 units), EVENTLOGRECORD }:
+ *                 queued; returns its seq (0 refused)
+ *               1 ptr <-> { after, wait ms, room; out: count, dropped, 0 }
+ *                 then room bytes of { seq, size, log name, record }: the
+ *                 queued events after seq "after" (the service); returns count
+ *               2 arg >> 8: every event up to that seq is written down
+ *               3 arg >> 8: wait up to that many ms for the events queued
+ *                 so far to be written: 1 they are, 0 not yet, 2 no service */
+#define CTL_EVENTLOG       60
 #define GUI_TAGS         2048
 #define GUI_TAG_MIN      4               /* keeps every handle above 0xFFFF */
 #define GUI_TAG_SHIFT    14
@@ -1682,6 +1693,12 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
     }
     case 3: case 4: case 5:                     /* (Windows drivers on the nodes: um_driver.c) */
         return UmPnpDriverCtl((UINT32)(arg & 0xFF), (UINT32)(arg >> 8), ptr);
+    case 6: {                                   /* a node's resources: up to 8 */
+        PnpResource r[8];
+        int n = PnpResources((UINT32)(arg >> 8), r, 8);
+        if (n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, r, sizeof(PnpResource) * (size_t)n))) return 0;
+        return (UINT64)n;
+    }
     }
     return 0;
 }
@@ -2334,6 +2351,7 @@ static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (a2 == CTL_TABLET) return tablet_ctl(p, a3, a4);
     if (a2 == CTL_GAMEPAD) return gamepad_ctl(a3, a4);
     if (a2 == CTL_PNP) return pnp_ctl(a3, a4);
+    if (a2 == CTL_EVENTLOG) return UmEventLogCtl(a3, a4);
     if (a2 == CTL_SET_CURSOR_POS) return cursor_set_pos(p, a4);
     if (a2 == CTL_CLIP_CURSOR) return cursor_clip(p, a3, a4);
     if (a2 == CTL_FOREIGN) return hwnd_foreign((UINT32)a3, a4);

@@ -23,6 +23,8 @@
 #include "../mm/pmm.h"
 #include "../lib/string.h"
 #include "../fs/persist.h"
+#include "../fs/block.h"
+#include "../ke/scheduler.h"
 #include "../nt/nt.h"
 
 #define ST_SUCCESS                0x00000000u
@@ -83,41 +85,88 @@ static UINT64 sysinfo_basic(UINT64 buf, UINT32 len, UINT64 ret)
     return put(buf, b, size) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
 }
 
+/* SystemProcessInformation (5): a SYSTEM_PROCESS_INFORMATION per running
+ * program (0x100 bytes on x64), each followed by a SYSTEM_THREAD_INFORMATION
+ * per thread (0x50) and then its name, as Windows lays them out; Task
+ * Manager, Process Explorer and the like read CPU time, memory, handles,
+ * the parent and the threads from here */
+#define SPI_THREADS_MAX 64                        /* thread records per process */
+
+static void put64(UINT8 *p, UINT32 off, UINT64 v) { memcpy(p + off, &v, 8); }
+static void put32(UINT8 *p, UINT32 off, UINT32 v) { memcpy(p + off, &v, 4); }
+
 static UINT64 sysinfo_processes(UINT64 buf, UINT32 len, UINT64 ret)
 {
-    /* SYSTEM_PROCESS_INFORMATION (0x100 bytes on x64), then its name */
-    static UmProcInfo list[UM_MAX_PROCS];        /* under the big lock */
+    /* (UmThreadList lets go of the big lock: nothing here is static) */
+    struct Snap { UmProcInfo list[UM_MAX_PROCS]; UmThreadInfo th[UM_MAX_PROCS][SPI_THREADS_MAX]; int nth[UM_MAX_PROCS]; };
+    struct Snap *sn = kmalloc(sizeof(*sn));
+    if (!sn) return 0xC0000017u;                  /* STATUS_NO_MEMORY */
+    UmProcInfo *list = sn->list;
+    int *nth = sn->nth;
+    UmThreadInfo (*th)[SPI_THREADS_MAX] = sn->th;
     int n = UmList(list, UM_MAX_PROCS);
     UINT32 need = 0;
-    for (int i = 0; i < n; i++) if (!list[i].exited) need += (0x100 + 2 * (UINT32)strlen(list[i].name) + 2 + 7) & ~7u;
+    for (int i = 0; i < n; i++) {
+        if (list[i].exited) continue;
+        nth[i] = UmThreadList(list[i].pid, th[i], SPI_THREADS_MAX);
+        need += (0x100 + 0x50 * (UINT32)nth[i] + 2 * (UINT32)strlen(list[i].name) + 2 + 7) & ~7u;
+    }
     if (!need) need = 0x100;
-    if (!put(ret, &need, 4)) return ST_ACCESS_VIOLATION;
-    if (len < need) return ST_INFO_LENGTH_MISMATCH;
-    UINT8 *k = kzalloc(need);
-    if (!k) return 0xC0000017u;                   /* STATUS_NO_MEMORY */
+    UINT8 *k = NULL;
+    UINT64 r = !put(ret, &need, 4) ? ST_ACCESS_VIOLATION : len < need ? ST_INFO_LENGTH_MISMATCH :
+               !(k = kzalloc(need)) ? 0xC0000017u : ST_SUCCESS;
+    if (r != ST_SUCCESS) { kfree(sn); return r; }
     UINT32 at = 0, last = 0;
     bool first = true;
     for (int i = 0; i < n; i++) {
         if (list[i].exited) continue;
+        UmProcInfo *e = &list[i];
         UINT8 *p = k + at;
-        UINT32 nl = (UINT32)strlen(list[i].name), size = (0x100 + 2 * nl + 2 + 7) & ~7u;
-        memcpy(p + 4, &list[i].threads, 4);                            /* NumberOfThreads */
+        UINT32 nl = (UINT32)strlen(e->name), names = 0x100 + 0x50 * (UINT32)nth[i];
+        UINT32 size = (names + 2 * nl + 2 + 7) & ~7u;
+        UINT64 ws = (UINT64)e->mem_kb * 1024, commit = (UINT64)e->commit_kb * 1024;
+        put32(p, 0x04, (UINT32)nth[i]);                                /* NumberOfThreads */
+        put64(p, 0x08, ws);                                            /* WorkingSetPrivateSize */
+        put32(p, 0x14, (UINT32)nth[i]);                                /* NumberOfThreadsHighWatermark */
+        put64(p, 0x20, e->create_time);                                /* CreateTime */
+        put64(p, 0x28, e->cpu_time);                                   /* UserTime (system calls included) */
         UINT16 l16[2] = { (UINT16)(2 * nl), (UINT16)(2 * nl + 2) };
-        UINT64 name = buf + at + 0x100;
         memcpy(p + 0x38, l16, 4);                                      /* ImageName */
-        memcpy(p + 0x40, &name, 8);
-        for (UINT32 c = 0; c < nl; c++) p[0x100 + 2 * c] = (UINT8)list[i].name[c];
-        UINT64 pid = list[i].pid, mem = (UINT64)list[i].mem_kb * 1024;
-        memcpy(p + 0x50, &pid, 8);                                     /* UniqueProcessId */
-        memcpy(p + 0x68, &mem, 8);                                     /* PeakVirtualSize */
-        memcpy(p + 0x90, &mem, 8);                                     /* WorkingSetSize */
-        if (!first) { UINT32 off = at - last; memcpy(k + last, &off, 4); }   /* NextEntryOffset */
+        put64(p, 0x40, buf + at + names);
+        for (UINT32 c = 0; c < nl; c++) p[names + 2 * c] = (UINT8)e->name[c];
+        put32(p, 0x48, e->base_priority);                              /* BasePriority */
+        put64(p, 0x50, e->pid);                                        /* UniqueProcessId */
+        put64(p, 0x58, e->parent_pid);                                 /* InheritedFromUniqueProcessId */
+        put32(p, 0x60, e->handles);                                    /* HandleCount */
+        put32(p, 0x64, 1);                                             /* SessionId: the user's */
+        put64(p, 0x70, commit);                                        /* PeakVirtualSize */
+        put64(p, 0x78, commit);                                        /* VirtualSize */
+        put64(p, 0x88, ws);                                            /* PeakWorkingSetSize */
+        put64(p, 0x90, ws);                                            /* WorkingSetSize */
+        put64(p, 0xB8, commit);                                        /* PagefileUsage */
+        put64(p, 0xC0, commit);                                        /* PeakPagefileUsage */
+        put64(p, 0xC8, commit);                                        /* PrivatePageCount */
+        for (int t = 0; t < nth[i]; t++) {
+            UINT8 *r = p + 0x100 + 0x50 * t;
+            static const UINT8 kstate[] = { 2, 1, 5, 5, 4 };           /* Running, Ready, Waiting, (Waiting), Terminated */
+            put64(r, 0x08, th[i][t].cpu_time);                         /* UserTime */
+            put64(r, 0x10, e->create_time);                            /* CreateTime (the process's) */
+            put64(r, 0x20, th[i][t].start);                            /* StartAddress */
+            put64(r, 0x28, e->pid);                                    /* ClientId */
+            put64(r, 0x30, th[i][t].tid);
+            put32(r, 0x38, th[i][t].priority);                         /* Priority */
+            put32(r, 0x3C, th[i][t].base_priority);                    /* BasePriority */
+            put32(r, 0x44, th[i][t].state < sizeof(kstate) ? kstate[th[i][t].state] : 5);   /* ThreadState */
+            put32(r, 0x48, th[i][t].state == 3 ? 5 : 6);               /* WaitReason: Suspended, UserRequest */
+        }
+        if (!first) put32(k, last, at - last);                         /* NextEntryOffset */
         first = false;
         last = at;
         at += size;
     }
-    UINT64 r = put(buf, k, need) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    r = put(buf, k, need) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
     kfree(k);
+    kfree(sn);
     return r;
 }
 
@@ -192,9 +241,19 @@ static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT
         UINT32 limit = (UINT32)pmm_ram_pages(), avail = (UINT32)pmm_free_now(), size = sizeof(p);
         if (avail > limit) avail = limit;
         UINT32 committed = limit - avail;                           /* (no page file) */
-        memcpy(p + 0x3C, &avail, 4);
-        memcpy(p + 0x40, &committed, 4);
-        memcpy(p + 0x44, &limit, 4);
+        UINT64 idle = 0, rb, wb;
+        for (UINT32 c = 0; c < cpus(); c++) { UINT64 i, u, t; sched_cpu_times(c, &i, &u, &t); idle += i; }
+        UINT32 rn, wn;
+        BlockTotals(&rb, &wb, &rn, &wn);                            /* (disk transfers: drive C: itself is in memory) */
+        memcpy(p + 0x00, &idle, 8);                                 /* IdleProcessTime */
+        memcpy(p + 0x08, &rb, 8);                                   /* IoReadTransferCount */
+        memcpy(p + 0x10, &wb, 8);                                   /* IoWriteTransferCount */
+        memcpy(p + 0x20, &rn, 4);                                   /* IoReadOperationCount */
+        memcpy(p + 0x24, &wn, 4);                                   /* IoWriteOperationCount */
+        memcpy(p + 0x2C, &avail, 4);                                /* AvailablePages */
+        memcpy(p + 0x30, &committed, 4);                            /* CommittedPages */
+        memcpy(p + 0x34, &limit, 4);                                /* CommitLimit */
+        memcpy(p + 0x38, &committed, 4);                            /* PeakCommitment */
         if (!put(a4, &size, 4)) return ST_ACCESS_VIOLATION;
         if (len < size) return ST_INFO_LENGTH_MISMATCH;
         return put(a2, p, size) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
@@ -208,12 +267,19 @@ static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT
     case 5:                                                         /* SystemProcessInformation */
         return sysinfo_processes(a2, len, a4);
     case 8: {                                                       /* SystemProcessorPerformanceInformation */
+        /* per CPU: IdleTime, KernelTime (idle included, as on Windows),
+         * UserTime, DpcTime, InterruptTime, InterruptCount */
         UINT32 need = 48 * cpus();
         if (!put(a4, &need, 4)) return ST_ACCESS_VIOLATION;
         if (len < need) return ST_INFO_LENGTH_MISMATCH;
-        UINT8 z[48];
-        memset(z, 0, sizeof(z));
-        for (UINT32 i = 0; i < need / 48; i++) if (!put(a2 + 48 * (UINT64)i, z, 48)) return ST_ACCESS_VIOLATION;
+        for (UINT32 i = 0; i < need / 48; i++) {
+            UINT64 r[6] = { 0 }, idle, user, total;
+            sched_cpu_times(i, &idle, &user, &total);
+            r[0] = idle;
+            r[1] = total - user;
+            r[2] = user;
+            if (!put(a2 + 48 * (UINT64)i, r, 48)) return ST_ACCESS_VIOLATION;
+        }
         return ST_SUCCESS;
     }
     case 11:                                                        /* SystemModuleInformation */

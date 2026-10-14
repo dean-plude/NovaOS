@@ -244,3 +244,46 @@ WINADVAPI BOOL  WINAPI CryptCreateHash(HCRYPTPROV p, DWORD alg, HCRYPTKEY key, D
 WINADVAPI BOOL  WINAPI CryptHashData(HCRYPTHASH h, const BYTE *data, DWORD n, DWORD flags);
 WINADVAPI BOOL  WINAPI CryptGetHashParam(HCRYPTHASH h, DWORD param, BYTE *out, DWORD *n, DWORD flags);
 WINADVAPI BOOL  WINAPI CryptDestroyHash(HCRYPTHASH h);
+
+/* ---- The event log (advapi32/eventlog.c; the EventLog service is programs/eventlog.c) ---- */
+#ifndef EVENTLOG_SUCCESS
+#define EVENTLOG_SUCCESS          0x0000
+#define EVENTLOG_ERROR_TYPE       0x0001
+#define EVENTLOG_WARNING_TYPE     0x0002
+#define EVENTLOG_INFORMATION_TYPE 0x0004
+#define EVENTLOG_AUDIT_SUCCESS    0x0008
+#define EVENTLOG_AUDIT_FAILURE    0x0010
+#define EVENTLOG_SEQUENTIAL_READ  0x0001
+#define EVENTLOG_SEEK_READ        0x0002
+#define EVENTLOG_FORWARDS_READ    0x0004
+#define EVENTLOG_BACKWARDS_READ   0x0008
+#define EVENTLOG_FULL_INFO        0
+typedef struct _EVENTLOGRECORD {
+    DWORD Length, Reserved, RecordNumber, TimeGenerated, TimeWritten, EventID;
+    WORD  EventType, NumStrings, EventCategory, ReservedFlags;
+    DWORD ClosingRecordNumber, StringOffset, UserSidLength, UserSidOffset, DataLength, DataOffset;
+} EVENTLOGRECORD, *PEVENTLOGRECORD;
+typedef struct _EVENTLOG_FULL_INFORMATION { DWORD dwFull; } EVENTLOG_FULL_INFORMATION;
+#endif
+WINADVAPI HANDLE WINAPI RegisterEventSourceW(LPCWSTR server, LPCWSTR source);
+WINADVAPI HANDLE WINAPI RegisterEventSourceA(LPCSTR server, LPCSTR source);
+WINADVAPI BOOL   WINAPI DeregisterEventSource(HANDLE h);
+WINADVAPI BOOL   WINAPI ReportEventW(HANDLE h, WORD type, WORD cat, DWORD id, PSID sid, WORD n, DWORD size,
+                                     LPCWSTR *strings, LPVOID data);
+WINADVAPI BOOL   WINAPI ReportEventA(HANDLE h, WORD type, WORD cat, DWORD id, PSID sid, WORD n, DWORD size,
+                                     LPCSTR *strings, LPVOID data);
+WINADVAPI HANDLE WINAPI OpenEventLogW(LPCWSTR server, LPCWSTR log);
+WINADVAPI HANDLE WINAPI OpenEventLogA(LPCSTR server, LPCSTR log);
+WINADVAPI HANDLE WINAPI OpenBackupEventLogW(LPCWSTR server, LPCWSTR file);
+WINADVAPI HANDLE WINAPI OpenBackupEventLogA(LPCSTR server, LPCSTR file);
+WINADVAPI BOOL   WINAPI CloseEventLog(HANDLE h);
+WINADVAPI BOOL   WINAPI ReadEventLogW(HANDLE h, DWORD flags, DWORD offset, LPVOID buf, DWORD size, DWORD *read, DWORD *need);
+WINADVAPI BOOL   WINAPI ReadEventLogA(HANDLE h, DWORD flags, DWORD offset, LPVOID buf, DWORD size, DWORD *read, DWORD *need);
+WINADVAPI BOOL   WINAPI GetNumberOfEventLogRecords(HANDLE h, DWORD *n);
+WINADVAPI BOOL   WINAPI GetOldestEventLogRecord(HANDLE h, DWORD *n);
+WINADVAPI BOOL   WINAPI GetEventLogInformation(HANDLE h, DWORD level, LPVOID buf, DWORD size, DWORD *need);
+WINADVAPI BOOL   WINAPI BackupEventLogW(HANDLE h, LPCWSTR file);
+WINADVAPI BOOL   WINAPI BackupEventLogA(HANDLE h, LPCSTR file);
+WINADVAPI BOOL   WINAPI ClearEventLogW(HANDLE h, LPCWSTR backup);
+WINADVAPI BOOL   WINAPI ClearEventLogA(HANDLE h, LPCSTR backup);
+WINADVAPI BOOL   WINAPI NotifyChangeEventLog(HANDLE h, HANDLE event);

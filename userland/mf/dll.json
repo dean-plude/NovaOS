@@ -1,0 +1,3 @@
+{
+  "deps": ["mfplat", "kernel32", "ntdll"]
+}

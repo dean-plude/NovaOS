@@ -111,7 +111,16 @@ order; --list prints them):
             (tools/padpeer.py --kind vendor): the kernel's HID class
             driver runs it on its USB minidriver, and hidclasstest opens
             its collection through hid.dll, writes and reads input,
-            output and feature reports and sees it unplugged
+            output and feature reports and sees it unplugged;
+            "devmgr", an e1000e card, a USB keyboard and tablet on xHCI
+            and the edu device with no driver: Device Manager
+            (devmgmt.exe) is opened from the Start menu, then checks
+            setupapi's device list against cfgmgr32's tree and lists each
+            device's class, status and resources; "camera", a
+            USB Video Class camera on xHCI (tools/campeer.py): the kernel's
+            UVC driver runs it, camtest lists it with Media Foundation and
+            reads frames in each of its formats through a source reader,
+            and the Camera app shows it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -335,6 +344,7 @@ UPDATE = load_suite('devices/update')
 DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 HID = load_suite('devices/hid')
+CAMERA = load_suite('devices/camera')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
@@ -346,6 +356,7 @@ VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
 KMDFEDU = load_suite('devices/kmdfedu')
 WDDM = load_suite('devices/wddm')
+DEVMGR = load_suite('devices/devmgr')
 NETKVM = load_suite('devices/netkvm')
 
 
@@ -479,6 +490,21 @@ def hid_boot(work):
             '-device', 'usb-redir,id=hiddev,chardev=hiddev,bus=xhci.0'], [p]
 
 
+def camera_boot(work):
+    """A USB Video Class camera on an xHCI controller, tools/campeer.py
+    behind a QEMU usb-redir device (port 10714), streaming a test card
+    (tests/selftest/devices/camera)"""
+    log = os.path.join(work, 'campeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'campeer.py'), '--port', '10714'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=cam,host=127.0.0.1,port=10714',
+            '-device', 'usb-redir,id=cam,chardev=cam,bus=xhci.0'], [p]
+
+
 def pnp_boot(work):
     """An xHCI controller with nothing on it: the tests plug a keyboard, a
     hub and a USB stick in and take them out (tests/selftest/devices/pnp)"""
@@ -509,6 +535,14 @@ def wddm_boot(work):
     """The device boots' own standard VGA (PCI 1234:1111), on which pnputil
     installs a WDDM display-only driver, wddmdod.sys (tests/selftest/devices/wddm)"""
     return [], []
+
+
+def devmgr_boot(work):
+    """An e1000e card, an xHCI controller with a USB keyboard and a USB
+    tablet, and QEMU's edu device with no driver: Device Manager lists them
+    with the rest of the machine (tests/selftest/devices/devmgr)"""
+    return ['-netdev', 'user,id=dm0', '-device', 'e1000e,netdev=dm0', '-device', 'qemu-xhci,id=xhci',
+            '-device', 'usb-kbd,bus=xhci.0', '-device', 'usb-tablet,bus=xhci.0', '-device', 'edu'], []
 
 
 def kmdfedu_boot(work):
@@ -796,12 +830,13 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot), ('driversearch', DRIVERSEARCH, driversearch_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
-                ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
+                ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
+                ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
-                ('wddm', WDDM, wddm_boot)],
+                ('wddm', WDDM, wddm_boot), ('devmgr', DEVMGR, devmgr_boot)],
 }
 
 
@@ -903,7 +938,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log']:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log', 'campeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)
@@ -1056,6 +1091,20 @@ def run_boot(a, tests, work, label, **nova_args):
                     print(f'    did not start again after the crash: {str(e).splitlines()[0]}', flush=True)
             if why == 'kernel panic' or t.crash or nova.q.poll() is not None or nova.wedged:
                 break
+            if nova.stuck:
+                # A program the Terminal cannot stop (a Venus fence that never signals, say) holds it
+                # for good: every test after it would only wait out its own limit (the graphics job
+                # burned its hour that way).  Reset the machine, as for a crash, and go on
+                try:
+                    nova.qmp.cmd('system_reset')
+                    nova.start()
+                    full_log += nova.boot_log
+                    nova.stuck = False
+                    print('    reset NovaOS: the program above did not stop', flush=True)
+                except RuntimeError as e:
+                    print(f'    did not start again after the hang: {str(e).splitlines()[0]}', flush=True)
+                    nova.wedged = True
+                    break
     finally:
         nova.close()
         with open(os.path.join(a.out, log_name), 'w') as f:

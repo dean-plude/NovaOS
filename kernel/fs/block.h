@@ -20,6 +20,10 @@ struct BlockDev {
     void   *ctx;
     bool    removable;          /* USB: may go away at any time */
     volatile bool gone;         /* it went away: every transfer fails */
+    /* (BlockRegister: the driver's own transfer functions, which read and
+     * write call through, counting what moves for BlockTotals) */
+    bool  (*raw_read)(BlockDev *d, UINT64 lba, UINT32 count, void *buf);
+    bool  (*raw_write)(BlockDev *d, UINT64 lba, UINT32 count, const void *buf);
 };
 
 #define BLOCK_SECTOR 512
@@ -29,3 +33,6 @@ void      BlockRegister(BlockDev *d);
 void      BlockUnregister(BlockDev *d);
 int       BlockCount(void);
 BlockDev *BlockGet(int i);
+/* Bytes and transfers read and written on every disk since boot (Task
+ * Manager's disk graph, SystemPerformanceInformation's I/O counts) */
+void      BlockTotals(UINT64 *read_bytes, UINT64 *write_bytes, UINT32 *reads, UINT32 *writes);

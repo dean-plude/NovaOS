@@ -12444,6 +12444,158 @@ firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
 the T14 (see [drivers.md](drivers.md)).
 
+## A brand for NovaOS: the Beam logo, an icon set and eight wallpapers
+
+NovaOS has a brand guide, [docs/design/brand](../design/brand/README.md),
+built from the Aurora desktop's own colours in `kernel/wm/desktop.c` and
+`kernel/apps/apps.h`.  It brings in:
+
+- **A new logo, Beam.**  An N whose two rounded pillars run cyan to blue
+  and whose diagonal is a beam of dawn light ending in a four-pointed
+  star.  It comes as the mark alone and as lockups with the "NovaOS"
+  wordmark for dark and light backgrounds, all as SVG.
+- **An icon set drawn from the logo.**
+  - Ten app icons: free-standing objects with blue bodies and one
+    peach-to-coral accent each.
+  - Seven folder, file and This PC icons.
+  - Twenty line glyphs at the logo's rounded weight, including the logo in
+    one ink.
+- **Brand colour tokens** (`brand-blue-*`, `brand-dawn-*`, `brand-spark`,
+  `brand-navy-*`), alongside every interface value in `tokens.json`.
+- **Eight wallpapers** in `C:\Pictures`, each 2560 x 1440: Beam, Nova
+  Night, Horizon, Glass Dawn, Aurora Lights, and the Sunset, Ocean and
+  Twilight themes redrawn as rolling hills.  Each keeps the sidebar and
+  dock areas quiet so the glass stays readable.  A host test decodes every
+  sample picture with the kernel's own PNG decoder
+  (`tests/tools/test_sample_pictures.py`).
+
+The icons and logo are the design direction.  The desktop still draws the
+older tiles and star until they are redrawn natively.
+
+## Device Manager
+
+Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
+manager and an event manager"), the Device Manager part: `devmgmt.exe`,
+"Device Manager" in Start.
+
+- **The app.**  The PC's devices by type (class nodes such as "Display
+  adapters", the devices under them) or by connection, with View > Show
+  hidden devices for unplugged ones.  The pane beside the tree shows
+  what Windows' Properties dialog shows for the selected device: status
+  and problem code in Windows' words, driver provider, version, date and
+  INF, the instance path, hardware and compatible IDs, and resources.
+  F5 and any `WM_DEVICECHANGE` list the devices again.
+- **Only public APIs.**  setupapi (`SetupDiGetClassDevs`, the new
+  `SetupDiGetClassDescription` and `SetupDiClassNameFromGuid`, registry
+  and `DEVPKEY` properties) and cfgmgr32 (status, `CM_Get_Child`/`Sibling`
+  and the new `CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des`,
+  `CM_Get_Res_Des_Data(_Size)` and `CM_Free_*_Handle`), so programs that
+  read devices the same way now get the same answers.
+- **Driver properties.**  `DEVPKEY_Device_DriverDate`, `DriverVersion`,
+  `DriverDesc`, `DriverInfPath`, `DriverInfSection` and `DriverProvider`
+  come from the software key a device install wrote; a device on a
+  NovaOS driver has NovaOS as provider and the system version.
+- **Resources.**  The kernel sizes every PCI function's BARs once at boot,
+  before any driver runs (`PciRanges`), and gives a node's ranges and its
+  ACPI-routed interrupt to programs (`PnpResources`, CTL_PNP operation 6,
+  `nova_pnp_resources`).
+- **Test.**  The devices suite's new "devmgr" boot (an e1000e card, a USB
+  keyboard and tablet, the driverless edu device) opens Device Manager
+  from the Start menu, then `devmgmt --check` checks setupapi's list
+  against a walk of cfgmgr32's tree, logs every device's class and
+  status and each PCI device's resources, and takes the reference
+  screenshot (`docs/screenshots/device-manager.png`).
+
+Not yet: device icons, the Properties dialog with its Driver tab buttons
+(update, disable, uninstall), and Events (Event Viewer is its own step).
+
+## The event log and Event Viewer
+
+Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
+manager and an event manager"), the event part: Windows' event log and
+`eventvwr.exe`, "Event Viewer" in Start.
+
+- **The EventLog service.**  `eventlog.exe` (service "EventLog",
+  automatic start) keeps the Application, System and Security logs in
+  `C:\Windows\System32\winevt\Logs` as classic `.evt` files (the "LfLe"
+  header, `EVENTLOGRECORD`s, the end record), each with its size limit
+  and sources under `HKLM\SYSTEM\CurrentControlSet\Services\EventLog`.
+  It logs its own start and stop (6005, 6006) and a cleared log (104, or
+  1102 in Security).
+- **A kernel queue in front of it.**  Events go to the kernel
+  (`kernel/um/um_eventlog.c`, `NtNovaGuiCtl` CTL_EVENTLOG) and stay
+  queued until the service has written them, so events from before the
+  service starts are kept.  The kernel logs each boot (Kernel-General
+  12), a driver that fails to load (Service Control Manager 7000) and a
+  program that crashes (Application Error 1000, with the program, its
+  module, the exception code and the address).
+- **The service control manager** logs a service entering the running,
+  stopped or paused state (7036), failing to start (7000), stopping
+  unexpectedly (7034) and being installed (7045).
+- **The classic API** in advapi32 is real: `RegisterEventSource`,
+  `ReportEvent`, `OpenEventLog`, `ReadEventLog` (sequential and seek,
+  both directions, ANSI), `GetNumberOfEventLogRecords`,
+  `GetOldestEventLogRecord`, `GetEventLogInformation`,
+  `BackupEventLog`/`OpenBackupEventLog`, `ClearEventLog` and
+  `NotifyChangeEventLog`.  Messages come from a source's
+  `EventMessageFile` (kernel32's `FormatMessage` now reads a module's
+  message table) or NovaOS's own table for its sources.
+- **The Evt API** (wevtapi) reads the same logs: `EvtQuery` with the
+  XPath filters Event Viewer and programs write (level, event ID,
+  provider, record, keywords, time), `EvtNext`, `EvtSeek`, `EvtRender`
+  (XML and the system values), `EvtFormatMessage`, bookmarks,
+  `EvtSubscribe`, log information, channel and publisher enumeration,
+  `EvtClearLog` and `EvtExportLog`, which writes a real `.evtx` file
+  (ElfFile header, 64 KB chunks with their CRC32s, Binary XML records).
+- **Event Viewer.**  The Windows Logs tree, the list (level, date and
+  time, source, event ID, task category), and General and Details (XML)
+  tabs for the selected event; Filter by level, Clear Log (with a backup
+  offer) and Save All Events As `.evtx` or `.xml`.
+- **Test.**  `evtlogtest` (core self-tests) reports events with
+  `ReportEventW` and `ReportEventA` and reads them back with
+  `ReadEventLog` and `EvtQuery`, and checks the boot, service,
+  driver-failure and crash events; then Event Viewer is opened from the
+  Start menu and `eventvwr --check` finds the test's event, filters,
+  saves both formats and clears the log, taking the reference screenshot
+  (`docs/screenshots/event-viewer.png`).
+
+Not yet: the Applications and Services Logs channels (Microsoft-Windows-*
+operational logs), custom views, event templates in `.evtx` exports
+(each record carries its own XML), the Security log's audit events, and
+reading `.evtx` files back.
+
+## Graphics tests: a miscounted byte check and a hang that ate the hour
+
+Two reds on the Graphics tests job of unrelated pull requests (#373, #376,
+#377, #385):
+
+- **The frame-rate check**: `gltest fps` and `d3dtest fps` compare direct
+  presentation with the GDI way, and under KVM they check that direct
+  presentation moves 16 times fewer bytes through guest memory.  The
+  direct number is an average over every frame, including the few the host
+  did not show (each costs a GDI frame, about 2000 KiB), so a loaded
+  runner that missed four more frames moved it from 101 to 133 KiB and the
+  ratio from 20 to 15.6 although nothing had changed.  The check now takes
+  the frames the host did not show out of the average (they are limited by
+  their own "frames shown from the host" check) and wants the rest, the
+  desktop's traffic and the scene's commands, to be 8 times below the GDI
+  way.  A frame shown from the host that is also read back into guest
+  memory still fails it.
+- **The stalled job**: on #385 `d3dtest present x86` hung right after
+  its "alone" phase (the DXVK queue thread spinning in Venus's wait
+  inside `vulkan_virtio.dll`, QEMU's vCPU 0 at 100%, the host's Venus ring
+  not draining, no serial output).  Ctrl+C did not bring the Terminal
+  back, so each of the six tests after it waited out its own 300 to 600
+  second limit and the job was cancelled at 60 minutes.  `Nova.run` now
+  records that the Terminal stayed blocked, `selftest.py` resets the
+  machine as it does after a crash test and runs the rest on the fresh
+  boot, and the present and ANGLE tests have a 240 second limit (they take
+  4 to 20 seconds).  One hang now fails one test within minutes
+  (`tests/tools/test_selftest_hang.py`).  The hang itself is the third
+  sighting of Venus stopping `d3dtest present x86` at the direct-to-GDI
+  change; its cause is in the host's Venus ring or the guest's wait and
+  is still open.
+
 ## The HID class driver
 
 Dean's ask "work on HID Classes": the first step of a Windows HID stack,
@@ -12632,6 +12784,111 @@ parser and refresh on the host compiler; `test_store_badges.py` builds the
 file from reports) and by booting NovaOS in QEMU with a canned
 `badges.json` on drive C:.
 
+## Task Manager
+
+Dean asked for a Task Manager (with a Device Manager, a Disk Manager and
+an Event Viewer, built separately).  `taskmgr.exe` is a Windows 11-style
+Task Manager in `C:\Windows\System32`, opened with Ctrl+Shift+Esc, from
+the Start button's right-click menu or as `taskmgr` in the Terminal.  It
+uses only public APIs, so making it work meant making those APIs real:
+
+- **CPU time accounting**: the scheduler now charges each thread the
+  TSC cycles it ran, at every switch and every tick, into the thread, its
+  process and the CPU's user or idle total.  `NtQuerySystemInformation`
+  class 8 (per-CPU idle, kernel and user time), `ProcessTimes`,
+  `ThreadTimes`, `GetSystemTimes`, `GetProcessTimes` and `GetThreadTimes`
+  returned zeros or estimates before.
+- **SystemProcessInformation** carries each process's threads, handle
+  count, parent, creation and CPU times, and the right `PeakVirtualSize`
+  offset.
+- **SystemPerformanceInformation** had its offsets after
+  `IoOtherOperationCount` four bytes off (`AvailablePages` is at 0x2C);
+  its I/O counters now come from new counters in the block layer.
+- **Network counters**: the network stack counts bytes and frames in and
+  out, and iphlpapi's `GetIfTable2` and `GetIfEntry2` return a real row
+  for the Ethernet adapter.
+
+Processes lists every process with its CPU and memory and ends the
+selected one with End task or Delete (`OpenProcess` +
+`TerminateProcess`); Performance draws CPU (a graph per logical
+processor), memory, disk and Ethernet; Details is the classic table; and
+Services lists the Service Control Manager's services.  The OS test
+`taskmgr` starts `winhello`, finds it in Task Manager, ends it and checks
+it is gone.
+
+## Thunderbird opens an e-mail message
+
+Roadmap step 27.1 (grow the corpus), its second app: Thunderbird 158,
+Mozilla's mail client, which the App Store lists and which runs on the
+same engine as Firefox.  The nightly corpus now installs it with the
+Store's own button from the Store's download (Mozilla's full installer,
+which the Store unpacks into `C:\Programs\Mozilla Thunderbird`) and opens
+`C:\Apps\data\hello.eml`, a plain-text message the corpus makes, in
+Thunderbird's message window (`tests/appcorpus/954-thunderbird.py`).  The
+sender, recipient, date, subject and text must match
+`tests/reference/thunderbird.png`.  It needed no change to NovaOS:
+
+- **A pinned download.**  The catalog listed Mozilla's "latest" link,
+  whose file changes with every release; it now lists Thunderbird 158.0
+  from Mozilla's release archive, the same file the corpus tests, so the
+  Store installs what was checked.
+- **Deployment settings.**  A `policies.json` in Thunderbird's
+  `distribution` folder (Mozilla's documented way to configure a
+  deployment) turns off update checks, telemetry, the default mail
+  client question, the start page and the account setup Thunderbird
+  offers when no account exists.
+- **Two windows.**  Opening a message also opens Thunderbird's main
+  window behind it, so the test closes both (`App(closes=2)`).
+
+Under QEMU without KVM the Store installs it in about 25 seconds and the
+message shows within six minutes of starting it.  Still open: no mail
+account, sending or receiving is checked (there is no mail server in the
+test), and the main window stays empty without an account.
+
+## Cameras: USB Video Class through Media Foundation
+
+Roadmap step 28.3, the part QEMU can show: a USB camera's picture in a
+Windows program, through the same Media Foundation calls a Windows camera
+app makes.
+
+- **UVC class driver** (`kernel/nt/usbvideo.c`, the service `usbvideo`,
+  built into the kernel): Plug and Play gives it a device with a USB
+  Video Class interface (`USB\Class_0E`); the USB core now keeps a
+  camera's control and streaming interfaces together as one function.
+  It parses the UVC 1.0 to 1.5 descriptors (uncompressed YUY2 and NV12,
+  MJPEG; discrete and continuous frame intervals), negotiates with probe
+  and commit, reads the bulk streaming endpoint and builds frames from
+  the payload headers (frame ID, end of frame, errors), and turns on
+  `KSCATEGORY_VIDEO_CAMERA`.  User mode talks to it with private device
+  controls (`userland/include/novacam.h`); one handle streams at a time.
+- **Media Foundation** (`mfplat.dll`, `mf.dll`, `mfreadwrite.dll`, new):
+  attributes, media types, memory and 2D buffers, samples;
+  `MFEnumDeviceSources` and `MFCreateDeviceSource` for video capture
+  devices; the camera media source with its presentation and stream
+  descriptors and type handler; `MFCreateSourceReaderFromMediaSource`
+  with synchronous and asynchronous reads, `Flush`, and conversion from
+  YUY2 and NV12 to RGB32 and between each other.  `MFTEnumEx` finds no
+  transforms, so browsers that look for Media Foundation's codecs keep
+  their own decoders.
+- **Camera app** (`camera.exe`): the first camera's picture scaled to its
+  window, with the camera's name, frame size and frame rate beneath.
+- cfgmgr32 lists the interfaces a Windows driver turns on for a USB
+  device (before, only a PCI device's or a bus driver's child's), and
+  `STATUS_DEVICE_BUSY` becomes `ERROR_BUSY` as on Windows.
+
+New devices-suite boot `camera`: `tools/campeer.py` is a fake UVC 1.1
+camera (1209:000a, three modes, a test card with colour bars and the
+frame number in blocks) behind QEMU's usb-redir; `camtest` checks it
+through Media Foundation, 32- and 64-bit, and the Camera app shows it
+(`docs/screenshots/camera.png`).
+
+- Not yet (what the T14's webcam needs): isochronous transfers in
+  `usbd.c`, a function per interface on composite devices (the webcam's
+  microphone), MJPEG decoding, then a boot on the T14.  Also missing:
+  camera controls, still images, the media session and source events,
+  audio capture sources, file and URL source readers, and AVStream for
+  vendor camera drivers.
+
 ## WinSCP: a Delphi program from the App Store
 
 Roadmap step 27.1 (grow the corpus), its first app: WinSCP 6.3.5, the
@@ -12677,3 +12934,39 @@ items but draw none of them, its port number box is blank, and no
 transfer is checked yet.
 
 <!-- END generated:history -->
+
+## Raw Input for the HID class driver's devices
+
+The second step of Dean's "work on HID Classes": a program using Raw
+Input sees the collections the HID class driver runs, as win32k shows
+them on Windows, not only NovaOS's own mice, keyboards and game
+controllers.
+
+- **user32** (`userland/user32/rawinput.c`): every device node `HID\...`
+  whose driver turned the HID interface on is a `RIM_TYPEHID` device in
+  `GetRawInputDeviceList`.  `GetRawInputDeviceInfo` gives its interface
+  path (`RIDI_DEVICENAME`), its vendor, product, version and top-level
+  usage (`RIDI_DEVICEINFO`, from `IOCTL_HID_GET_COLLECTION_INFORMATION`
+  and the preparsed data) and the class driver's preparsed data
+  (`RIDI_PREPARSEDDATA`, which `HidP_*` read).  Once the process
+  registers for Raw Input, a thread per collection holds a handle of its
+  own (the class driver queues every input report for each handle) and
+  posts each report as `WM_INPUT`; the reader looks the device tree over
+  again when Plug and Play reports a change and sends
+  `WM_INPUT_DEVICE_CHANGE` for arrivals and removals.
+- **xHCI** (`kernel/drivers/xhci.c`): a Windows driver's interrupt IN
+  transfer that waits a second without a report now stays queued for
+  the next request instead of being taken back with Stop Endpoint, as
+  Windows keeps one pending.  QEMU's usb-redir drops a report that
+  arrives while the endpoint is stopped, so the HID device's echoes
+  were sometimes lost.
+- **I/O manager** (`kernel/nt/io.c`): a program thread that is ending
+  has its pending driver request cancelled, as Windows'
+  `IoCancelThreadIo` does, so Raw Input's thread waiting in `ReadFile`
+  no longer keeps the process from exiting.
+- **Test**: `hidclasstest` in the devices suite's `hid` boot now also
+  finds the test device in Raw Input's list under its interface path,
+  checks its device information and preparsed data, registers for usage
+  FF00:1 and gets the device's echo of an output report as `WM_INPUT`;
+  the 64-bit run sees `GIDC_REMOVAL` and the device leave the list when
+  the test unplugs it.

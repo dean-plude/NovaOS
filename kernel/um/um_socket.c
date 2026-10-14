@@ -208,7 +208,9 @@ static UINT64 tcp_table(UINT64 max, UINT64 out)
  *   15 the network's state (no handle): bit 0 an address is configured
  *   (DHCP), bit 1 the link is up, bit 2 there is an adapter;
  *   16 the adapter's configuration (no handle): a NetAdapterInfo into
- *   outptr (iphlpapi's adapter tables) */
+ *   outptr (iphlpapi's adapter tables);
+ *   17 the adapter's counters (no handle): octets in, octets out, frames
+ *   in, frames out (4 UINT64s) into outptr (iphlpapi's GetIfEntry2) */
 /* NtNovaSockCtl op 16 (userland/iphlpapi/iphlpapi.c reads the same layout) */
 typedef struct {
     UINT32 flags;                       /* bit 0 configured, 1 link, 2 present, 3 IPv4 by DHCP */
@@ -253,6 +255,13 @@ static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (a2 == 6) return net_gen();
     if (a2 == 12 || a2 == 13) return (UINT64)um_afd_ctl(a1, a2, a3, a4);   /* \Device\Afd helpers (um_afd.c) */
     if (a2 == 14) return tcp_table(a3, a4);
+    if (a2 == 17) {
+        NetStatus st;
+        NetGetStatus(&st);
+        UINT64 c[4] = { st.in_octets, st.out_octets, st.in_frames, st.out_frames };
+        if (!a4 || !NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, c, sizeof(c)))) return (UINT64)(INT64)-SOCK_EFAULT;
+        return st.present ? sizeof(c) : 0;
+    }
     if (a2 == 15) {
         NetStatus st;
         NetGetStatus(&st);

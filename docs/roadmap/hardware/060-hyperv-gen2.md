@@ -17,5 +17,5 @@
     the SynIC on every CPU turned out not to be needed: the TSC and the
     local APIC timer already run at the frequencies Hyper-V's MSRs give,
     and every channel interrupts CPU 0
-  - [ ] Key-value exchange (the VM's name and addresses in Hyper-V
-    Manager)
+  - [x] Key-value exchange (the VM's name and addresses in Hyper-V
+    Manager) (#407)

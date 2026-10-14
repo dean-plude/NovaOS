@@ -12743,6 +12743,17 @@ adapter added while running becomes the network stack's adapter.  The
 reference TSC page and synthetic timers turned out not to be needed
 ([hyperv.md](hyperv.md)).
 
+## Hyper-V key-value exchange
+
+The sixth and last step of Hyper-V Generation 2 support.  Hyper-V
+Manager showed no IP addresses for a NovaOS VM, because nothing answered
+the Data Exchange integration service.  `kernel/drivers/hv_util.c` now
+answers it in the kernel (Linux and FreeBSD use a user daemon): the host
+enumerates the guest's own items and gets NovaOS's name, version,
+processor architecture and IPv4 and IPv6 addresses, and the items the
+host sets for the VM are kept in memory and read back.  A host test
+checks every message ([hyperv.md](hyperv.md)).
+
 ## Hyper-V network adapter
 
 The fourth step of Hyper-V Generation 2 support.  A Gen 2 VM's network

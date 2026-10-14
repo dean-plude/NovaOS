@@ -17,7 +17,8 @@ devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
 mouse, the SCSI disks ([below](#disks)), the video ([below](#display)), the
 network adapter ([below](#network)) and the integration services ([below](#integration-services)); the rest is listed under
 [What does not work yet](#what-does-not-work-yet). Full Gen 2 support is
-a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: Hyper-V's own clock and timers, then key-value exchange.
+a roadmap item ([ROADMAP.md](ROADMAP.md)); every step of it is written,
+and what remains is checking each device on a real Hyper-V host.
 
 ## Making the VM
 
@@ -148,7 +149,7 @@ Hyper-V Manager is handled by the host as usual.
 
 ## Integration services
 
-`kernel/drivers/hv_util.c` answers three of the integration services
+`kernel/drivers/hv_util.c` answers four of the integration services
 Hyper-V Manager lists under the VM's Settings (all on by default):
 
 - **Operating system shutdown**: the host's Shut Down (Hyper-V Manager,
@@ -161,11 +162,19 @@ Hyper-V Manager lists under the VM's Settings (all on by default):
   Windows programs read (`GetSystemTime`, `NtQuerySystemTime`) is set
   from the host's clock.  The taskbar clock still reads the VM's CMOS
   clock, which Hyper-V keeps from the host's too.
+- **Data Exchange** (key-value exchange): NovaOS tells the host its name
+  (`nova-pc`), its operating system (NovaOS and its version), its
+  processor architecture and its IPv4 and IPv6 addresses, so Hyper-V
+  Manager's Networking tab and `Get-VMNetworkAdapter NovaOS |
+  Select IPAddresses` show the VM's addresses (once DHCP has given one).
+  Items the host sets for the VM (`Msvm_KvpExchangeComponent`, up to 16)
+  are kept in memory until NovaOS restarts.
 
 Each service first agrees on a version with the host: the newest of
 framework 3.0 or 1.0, and shutdown 3.1, 3.0 or 1.0, time sync 4.0
 (with the partition reference counter, so the time the message spent on
-the way is added), 3.0 or 1.0, heartbeat 3.0 or 1.0.
+the way is added), 3.0 or 1.0, heartbeat 3.0 or 1.0, key-value exchange
+4.0 or 3.0.
 
 ## Devices added and removed while running
 
@@ -224,6 +233,7 @@ version and the descriptor's size depend on the host):
 [HVUTIL] time sync: framework 3.0, messages 4.0
 [HVUTIL] time sync: clock set from the host's (moved +0.012 s)
 [HVUTIL] heartbeat: framework 3.0, messages 3.0
+[HVUTIL] key-value exchange: framework 3.0, messages 4.0
 [VMBUS] Hyper-V SCSI: channel 6 open
 [STORVSC] controller 0: protocol 6.2, transfers up to 128 KiB
 [STORVSC] controller 0, location 0: hv0 "Msft     Virtual Disk", 130048 MiB
@@ -245,8 +255,7 @@ Adding and removing devices while NovaOS runs shows lines like these:
 ```
 
 Every device the host offers is listed, with a name for the common ones
-(key-value exchange and dynamic memory are named and marked "no
-driver"). Other
+(dynamic memory is named and marked "no driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -282,8 +291,8 @@ lines say what went wrong:
 | Disks | Driver exists ([above](#disks)); not yet checked on a real host. 4 KiB-sector VHDX files and disks added while running are not used |
 | Network | Driver exists ([above](#network)); not yet checked on a real host. One adapter, no offloads |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
-| Shutdown, time sync, heartbeat | Drivers exist ([above](#integration-services)); not yet checked on a real host |
-| Key-value exchange, guest services, VSS backup, dynamic memory | No drivers: Hyper-V Manager shows no addresses for the VM, and memory stays as it started |
+| Shutdown, time sync, heartbeat, key-value exchange | Drivers exist ([above](#integration-services)); not yet checked on a real host |
+| Guest services, VSS backup, dynamic memory | No drivers: files cannot be copied in with `Copy-VMFile`, backups are not application-consistent, and memory stays as it started |
 
 ## Tests
 
@@ -296,7 +305,10 @@ for the integration services: the version each picks from the host's
 lists (and none when nothing matches), answers carrying the host's
 transaction ID, the heartbeat's sequence number, each shutdown flag, and
 time sync's SYNC, SAMPLE and probe messages with and without version 4's
-reference counter.  `tests/host/hv_storvsc.c` (`tests/tools/test_hv_storvsc.py`)
+reference counter, and key-value exchange (the guest's items in Hyper-V's
+order, its addresses before and after DHCP, the host's items set,
+replaced, read, listed and deleted, a full table, and the requests it
+refuses).  `tests/host/hv_storvsc.c` (`tests/tools/test_hv_storvsc.py`)
 runs the SCSI driver against a fake host: the GPA-direct packet layout,
 bring-up with a refused protocol version, the scan (a disk, the DVD drive,
 a 4 KiB-sector disk, an 8 TiB disk that needs READ CAPACITY(16), empty

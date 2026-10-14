@@ -1,4 +1,5 @@
-/* Hyper-V's integration services (shutdown, time sync, heartbeat) on the
+/* Hyper-V's integration services (shutdown, time sync, heartbeat, key-value
+ * exchange) on the
  * host (tests/tools/test_hv_util.py): the host's messages are fed to the
  * drivers, and their answers come back through a real VMBus ring */
 #include "../../kernel/drivers/vmbus_ring.h"
@@ -25,6 +26,26 @@ void UmClockSet(UINT64 t) { now = t; clock_sets++; }
 UINT64 um_now_100ns(void) { return now; }
 void kprintf(const char *f, ...) { va_list v; va_start(v, f); vprintf(f, v); va_end(v); }
 void *kzalloc(size_t n) { return calloc(1, n); }
+int ksnprintf(char *b, size_t n, const char *f, ...) { va_list v; va_start(v, f); int r = vsnprintf(b, n, f, v); va_end(v); return r; }
+const char *NovaVersion(void) { return "0.1.0"; }
+static bool net_ip;                         /* an IPv4 address from DHCP */
+void NetGetStatus(NetStatus *st)
+{
+    memset(st, 0, sizeof(*st));
+    st->configured = net_ip;
+    st->ip = net_ip ? 0x0F02000A : 0;       /* 10.0.2.15 */
+    st->ip6_count = 2;
+    st->ip6[0][0] = 0xfe; st->ip6[0][1] = 0x80; st->ip6[0][15] = 1;
+    st->ip6[1][0] = 0xfd; st->ip6[1][15] = 0x15;
+}
+void NetFormatIp(UINT32 ip, char *b, int cap)
+{
+    snprintf(b, cap, "%u.%u.%u.%u", ip & 0xFF, ip >> 8 & 0xFF, ip >> 16 & 0xFF, ip >> 24);
+}
+void NetFormatAddr(const NetIp *ip, char *b, int cap)
+{
+    snprintf(b, cap, "%x%02x::%x", ip->a[0], ip->a[1], ip->a[15]);  /* (enough to tell them apart) */
+}
 
 /* The ring pads a packet to 8 bytes: the length the driver reads, and so answers */
 #define P8(n) (((n) + 7) & ~7u)
@@ -85,8 +106,9 @@ static void guid_checks(void)
         { &HvShutdownDriver,  "0e0b6031-5213-4934-818b-38d90ced39db" },
         { &HvTimeSyncDriver,  "9527e630-d0ae-497b-adce-e80ab0175caf" },
         { &HvHeartbeatDriver, "57164f39-9115-4e78-ab55-382f3bd5422d" },
+        { &HvKvpDriver,       "a9a0f4e7-5a45-4d96-b827-8a841e8c03e6" },
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         const UINT8 *g = k[i].d->type;
         char s[40];
         snprintf(s, sizeof(s), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
@@ -190,6 +212,118 @@ static void timesync_checks(void)
     puts("time sync passed");
 }
 
+/* UTF-16 @p (@size bytes, its NUL counted) as ASCII */
+static const char *ascii(const UINT8 *p, UINT32 size)
+{
+    static char s[1100];
+    UINT32 n = size / 2;
+    assert(size >= 2 && !(size & 1) && !p[2 * n - 2] && !p[2 * n - 1] && n < sizeof(s));
+    for (UINT32 i = 0; i < n; i++) s[i] = (char)p[2 * i];
+    return s;
+}
+
+/* A KVP message: @op on @pool, its body (zeroed) ready at the result + IC_HDR + 4 */
+static UINT32 kvp(UINT8 *b, UINT8 op, UINT8 pool)
+{
+    UINT32 n = msg(b, IC_KVP, 4 + (op == KVP_ENUMERATE ? 4 : 0) + KVP_BLOCK);
+    b[IC_HDR] = op;
+    b[IC_HDR + 1] = pool;
+    return n;
+}
+
+/* Put @key and @value (ASCII) into the value block @v */
+static void block(UINT8 *v, const char *key, const char *value)
+{
+    wr32(v, REG_SZ);
+    wr32(v + 4, utf16(v + 12, KVP_KEY, key));
+    wr32(v + 8, utf16(v + 12 + KVP_KEY, KVP_VALUE, value));
+}
+
+/* Send @n bytes of @b; the answer's status (and its body in @a) */
+static UINT32 kvp_send(void *ctx, UINT8 *b, UINT32 n, UINT8 *a)
+{
+    UINT64 t;
+    HvKvpDriver.packet(ctx, b, n, 31);
+    assert(answer(a, &t) == P8(n) && t == 31 && a[25] == 5);
+    return rd32(a + 20);
+}
+
+static void kvp_checks(void)
+{
+    static UINT8 b[UTIL_BUF], a[UTIL_BUF];
+    UINT32 fw, mv;
+    void *ctx = HvKvpDriver.opened(NULL);
+    const UINT32 hfw[] = { V(1, 0), V(3, 0) }, hmv[] = { V(3, 0), V(4, 0), V(5, 0) };
+    negotiated(&HvKvpDriver, ctx, b, nego(b, hfw, 2, hmv, 3), &fw, &mv);
+    assert(fw == V(3, 0) && mv == V(4, 0));
+
+    /* the auto pool, as Hyper-V Manager enumerates it */
+    static const char *const want[][2] = {
+        { "FullyQualifiedDomainName", "nova-pc" }, { "IntegrationServicesVersion", "0.1.0" },
+        { "NetworkAddressIPv4", "" }, { "NetworkAddressIPv6", "fe80::1;fd00::15" }, { "OSBuildNumber", "0.1.0" },
+        { "OSName", "NovaOS" }, { "OSMajorVersion", "0" }, { "OSMinorVersion", "1" }, { "OSVersion", "0.1.0" },
+        { "ProcessorArchitecture", "x86_64" },
+    };
+    for (UINT32 i = 0; i <= 10; i++) {
+        UINT32 n = kvp(b, KVP_ENUMERATE, KVP_POOL_AUTO);
+        wr32(b + IC_HDR + 4, i);
+        UINT32 st = kvp_send(ctx, b, n, a);
+        if (i == 10) { assert(st == IC_S_CONT); break; }
+        const UINT8 *v = a + IC_HDR + 8;
+        assert(!st && rd32(v) == REG_SZ);
+        assert(!strcmp(ascii(v + 12, rd32(v + 4)), want[i][0]));
+        assert(!strcmp(ascii(v + 12 + KVP_KEY, rd32(v + 8)), want[i][1]));
+    }
+    net_ip = true;                                          /* DHCP gave an address since */
+    UINT32 n = kvp(b, KVP_ENUMERATE, KVP_POOL_AUTO);
+    wr32(b + IC_HDR + 4, 2);
+    assert(!kvp_send(ctx, b, n, a) && !strcmp(ascii(a + IC_HDR + 8 + 12 + KVP_KEY, rd32(a + IC_HDR + 16)), "10.0.2.15"));
+    puts("key-value exchange: the guest's items passed");
+
+    /* the host's own items (pool 0): set, read, replaced, listed, deleted */
+    n = kvp(b, KVP_SET, 0);
+    block(b + IC_HDR + 4, "Site", "Lab 4");
+    assert(!kvp_send(ctx, b, n, a));
+    n = kvp(b, KVP_SET, 0);
+    block(b + IC_HDR + 4, "Owner", "Dean");
+    assert(!kvp_send(ctx, b, n, a));
+    n = kvp(b, KVP_SET, 0);
+    block(b + IC_HDR + 4, "Site", "Lab 5");
+    assert(!kvp_send(ctx, b, n, a));
+    n = kvp(b, KVP_GET, 0);
+    block(b + IC_HDR + 4, "Site", "");
+    assert(!kvp_send(ctx, b, n, a) && !strcmp(ascii(a + IC_HDR + 4 + 12 + KVP_KEY, rd32(a + IC_HDR + 12)), "Lab 5"));
+    n = kvp(b, KVP_GET, 1);                                 /* the same key in another pool */
+    block(b + IC_HDR + 4, "Site", "");
+    assert(kvp_send(ctx, b, n, a) == IC_E_FAIL);
+    int items = 0;
+    for (UINT32 i = 0;; i++, items++) {
+        n = kvp(b, KVP_ENUMERATE, 0);
+        wr32(b + IC_HDR + 4, i);
+        if (kvp_send(ctx, b, n, a) == IC_S_CONT) break;
+    }
+    assert(items == 2);
+    n = kvp(b, KVP_DELETE, 0);
+    wr32(b + IC_HDR + 4, utf16(b + IC_HDR + 8, KVP_KEY, "Owner"));
+    assert(!kvp_send(ctx, b, n, a));
+    assert(kvp_send(ctx, b, n, a) == IC_E_FAIL);            /* (gone already) */
+    n = kvp(b, KVP_SET, KVP_POOL_AUTO);                     /* the guest's own pool is read-only */
+    block(b + IC_HDR + 4, "OSName", "Windows");
+    assert(kvp_send(ctx, b, n, a) == IC_E_FAIL);
+    for (int i = 0; i < KVP_ITEMS; i++) {                   /* (with "Site" kept: the 16th is refused) */
+        char key[8];
+        snprintf(key, sizeof(key), "k%d", i);
+        n = kvp(b, KVP_SET, 1);
+        block(b + IC_HDR + 4, key, "v");
+        assert(kvp_send(ctx, b, n, a) == (i < KVP_ITEMS - 1 ? IC_S_OK : IC_E_FAIL));
+    }
+    n = kvp(b, 4, 0);                                       /* GET_IP_INFO: refused */
+    assert(kvp_send(ctx, b, n, a) == IC_E_FAIL);
+    n = kvp(b, KVP_SET, 7);                                 /* no such pool */
+    assert(kvp_send(ctx, b, n, a) == IC_E_FAIL);
+    puts("key-value exchange: the host's items passed");
+}
+
 int main(void)
 {
     static UINT8 ring[8 * VMBUS_PAGE];
@@ -198,6 +332,7 @@ int main(void)
     heartbeat_checks();
     shutdown_checks();
     timesync_checks();
+    kvp_checks();
     puts("hv_util: all passed");
     return 0;
 }

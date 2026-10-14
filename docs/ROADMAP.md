@@ -725,10 +725,10 @@ apps from the App Store catalog pass their nightly scripts.
   dialog; [history](history/2026-10-14-winscp.md)).
 - [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.
-- [ ] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
-  OpenGL is now built in (Mesa's llvmpipe, OpenGL 4.5), and the corpus
-  test draws a stroke and undoes it with nothing installed first; saving
-  an image is still to do.
+- [x] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
+  OpenGL is built in (Mesa's llvmpipe, OpenGL 4.5); the corpus test
+  installs Krita from the App Store, draws a stroke and saves it as a
+  `.kra` ([history](history/2026-10-14-krita-saves.md)).
 - [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
   from the T14 over its own network.
 - [ ] **27.5 App Store badges from CI.** Show each app's verified badge from

@@ -602,7 +602,7 @@ item ends when a named program or test demonstrates it.
     time sync (#401)
   - [x] storvsc: SCSI disks, so NovaOS installs to a VHDX and keeps drive
     C: (#402)
-  - [ ] Synthetic video: a resolution chosen in Settings
+  - [x] Synthetic video: a resolution chosen in Settings (#PR)
   - [ ] netvsc: the network adapter (NVSP and RNDIS)
   - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),
     the SynIC on every CPU, channel interrupts instead of polling, devices

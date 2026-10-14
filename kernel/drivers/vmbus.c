@@ -37,6 +37,7 @@
 #include "hv_input.h"
 #include "hv_util.h"
 #include "storvsc.h"
+#include "hv_video.h"
 #include "../hal/ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/apic.h"
@@ -185,6 +186,7 @@ struct VmbusChannel {
     VmRing  out, in;
     UINT32  relid, conn_id;
     bool    dedicated;
+    UINT16  mmio_mb;
     UINT8  *pkt;                         /* PKT_MAX */
     volatile int reading;                 /* someone reads the inbound ring */
 };
@@ -193,11 +195,12 @@ typedef struct {
     UINT8  type[16];
     UINT32 relid, conn_id;
     bool   dedicated;
+    UINT16 mmio_mb;
 } Offer;
 
 static const VmbusDriver *const g_drivers[] = {
     &HvKeyboardDriver, &HvMouseDriver, &HvShutdownDriver, &HvTimeSyncDriver, &HvHeartbeatDriver,
-    &HvStorageDriver,
+    &HvStorageDriver, &HvVideoDriver,
 };
 
 static void         *g_hypercall_page;
@@ -269,11 +272,11 @@ static void guid_text(const UINT8 *g, char *s, size_t cap)
 }
 
 /* Devices worth a name in the log (NovaOS drives the keyboard, the mouse,
- * shutdown, time sync, heartbeat and SCSI storage) */
+ * shutdown, time sync, heartbeat, SCSI storage and video) */
 static const struct { const char *guid, *name; } g_known[] = {
     { "f912ad6d-2b17-48ea-bd65-f927a61c7684", "keyboard" },
     { "cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a", "mouse" },
-    { "da0a7802-e377-4aac-8e77-0558eb1073f8", "video (no driver: the firmware's frame buffer is used)" },
+    { "da0a7802-e377-4aac-8e77-0558eb1073f8", "video" },
     { "ba6163d9-04a1-4d29-b605-72e2ffb1dc7f", "SCSI storage" },
     { "32412632-86cb-44a2-9b5c-50d1417354f5", "IDE storage (no driver: a Generation 1 VM's)" },
     { "f8615163-df3e-46c5-913f-f2d2f965ed0e", "network (no driver)" },
@@ -337,6 +340,7 @@ static bool open_channel(const Offer *o, const VmbusDriver *drv)
     ch->relid = o->relid;
     ch->conn_id = o->conn_id;
     ch->dedicated = o->dedicated;
+    ch->mmio_mb = o->mmio_mb;
 
     static UINT32 next_gpadl = 0xE1E10;
     ChGpadlHeader g;
@@ -466,6 +470,7 @@ bool VmbusInit(void)
             s->relid = o->child_relid;
             s->conn_id = o->connection_id;
             s->dedicated = o->is_dedicated_interrupt & 1;
+            s->mmio_mb = o->mmio_megabytes;
         }
     }
 
@@ -477,6 +482,8 @@ bool VmbusInit(void)
     __atomic_store_n(&g_ready, true, __ATOMIC_RELEASE);
     return g_nch > 0;
 }
+
+UINT32 VmbusChannelMmioMegabytes(const VmbusChannel *ch) { return ch->mmio_mb; }
 
 bool VmbusReferenceTime(UINT64 *t)
 {
@@ -556,5 +563,6 @@ void VmbusPoll(void)
         if (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) continue;   /* (its driver reads it) */
         read_channel(ch);
         __atomic_store_n(&ch->reading, 0, __ATOMIC_RELEASE);
+        if (ch->drv->tick && ch->ctx) ch->drv->tick(ch->ctx);
     }
 }

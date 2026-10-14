@@ -79,7 +79,7 @@ static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 
 const VmbusDriver HvKeyboardDriver = {
     { 0x6d, 0xad, 0x12, 0xf9, 0x17, 0x2b, 0xea, 0x48, 0xbd, 0x65, 0xf9, 0x27, 0xa6, 0x1c, 0x76, 0x84 },
-    "Hyper-V keyboard", kbd_opened, kbd_packet, NULL, NULL,
+    "Hyper-V keyboard", kbd_opened, kbd_packet, NULL, NULL, NULL,
 };
 
 /* ---- mouse ---- */
@@ -160,5 +160,5 @@ static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 
 const VmbusDriver HvMouseDriver = {
     { 0x9e, 0xb6, 0xa8, 0xcf, 0x4a, 0x5b, 0xc0, 0x4c, 0xb9, 0x8b, 0x8b, 0xa1, 0xa1, 0xf3, 0xf9, 0x5a },
-    "Hyper-V mouse", mouse_opened, mouse_packet, NULL, NULL,
+    "Hyper-V mouse", mouse_opened, mouse_packet, NULL, NULL, NULL,
 };

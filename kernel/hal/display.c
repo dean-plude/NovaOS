@@ -74,7 +74,7 @@ enum {
 #define VGA_CRTC          0x3D4
 #define VGA_STATUS        0x3DA           /* read: resets the attribute flip-flop */
 
-typedef enum { DRV_NONE, DRV_GOP, DRV_BOCHS, DRV_CIRRUS, DRV_VIRTIO, DRV_WDDM } DrvKind;
+typedef enum { DRV_NONE, DRV_GOP, DRV_BOCHS, DRV_CIRRUS, DRV_VIRTIO, DRV_WDDM, DRV_HYPERV } DrvKind;
 
 static struct {
     DrvKind      kind;
@@ -437,7 +437,8 @@ typedef struct {
 
 static Head g_head[DISPLAY_MAX_HEADS - 1];
 static int  g_nheads;                     /* further heads in g_head */
-static UINT64 g_boot_fb;
+static UINT64 g_boot_fb, g_boot_size;
+static bool (*g_hv_set_mode)(int w, int h);   /* DRV_HYPERV */
 
 static bool head_set_mode(Head *h, int w, int ht, bool clear)
 {
@@ -960,12 +961,17 @@ void DisplayInit(const BootFramebuffer *boot)
     } else {
         d.kind = DRV_GOP;
         d.name = NULL;
+        d.vram_phys = boot->base;
+        d.vram_size = boot->size;
+        d.stride = (int)boot->pixels_per_scanline;
+        d.bgr = boot->pixel_format == 0;
         d.cur = d.boot;
         d.flip = false;
         d.nmodes = 0;
         add_mode(d.boot.w, d.boot.h);
     }
     g_boot_fb = boot->base;
+    g_boot_size = boot->size;
     claim_boot_display(boot->base);
     if (d.kind == DRV_BOCHS) PciAllowSetAside(&d.pci, bochs_set_aside);   /* (for a Windows display driver) */
     VgpuInit();
@@ -984,6 +990,7 @@ const char *DisplayDriverName(void)
     case DRV_VIRTIO: return "virtio GPU";
     case DRV_WDDM:   return "Windows display driver (WDDM)";
     case DRV_GOP:    return "UEFI GOP framebuffer";
+    case DRV_HYPERV: return "Hyper-V synthetic video";
     default:        return "None";
     }
 }
@@ -1037,6 +1044,17 @@ bool DisplaySetMode(int w, int h)
         kprintf("[DISPLAY] Mode %dx%d (virtio GPU output 1)\n", w, h);
         return true;
     }
+    if (d.kind == DRV_HYPERV) {
+        if (!g_hv_set_mode(w, h)) {
+            kprintf("[DISPLAY] %dx%d refused by Hyper-V; staying at %dx%d\n", w, h, d.cur.w, d.cur.h);
+            return false;
+        }
+        d.cur = (DisplayMode){ w, h };
+        d.stride = w;
+        publish_surface();
+        kprintf("[DISPLAY] Mode %dx%d (Hyper-V synthetic video)\n", w, h);
+        return true;
+    }
     if (d.kind == DRV_WDDM) {
         if (!g_wddm.drv || !g_wddm.drv->set_mode(g_wddm.drv->ctx, w, h)) {
             kprintf("[DISPLAY] %dx%d refused by %s; staying at %dx%d\n", w, h, g_wddm.drv ? g_wddm.drv->name : "the driver",
@@ -1083,6 +1101,30 @@ void DisplayFlip(void)
 
 const char *DisplayAdapterName(void) { return d.kind == DRV_GOP ? NULL : d.name; }
 
+bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h)
+{
+    if (d.kind != DRV_GOP && d.kind != DRV_HYPERV) return false;
+    *phys = g_boot_fb;
+    *size = g_boot_size;
+    *w = d.boot.w;
+    *h = d.boot.h;
+    return true;
+}
+
+bool DisplayHyperVAttach(bool (*set_mode)(int w, int h), const DisplayMode *modes, int n)
+{
+    if (d.kind != DRV_GOP || !set_mode || n <= 0) return false;
+    g_hv_set_mode = set_mode;
+    d.kind = DRV_HYPERV;
+    d.name = "Hyper-V synthetic video";
+    d.nmodes = 0;
+    for (int i = 0; i < n; i++) add_mode(modes[i].w, modes[i].h);
+    if (!DisplayModeSupported(d.cur.w, d.cur.h)) add_mode(d.cur.w, d.cur.h);
+    if (!DisplayModeSupported(d.def.w, d.def.h)) d.def = d.cur;
+    kprintf("[DISPLAY] Hyper-V synthetic video: %dx%d, %d mode(s)\n", d.cur.w, d.cur.h, d.nmodes);
+    return true;
+}
+
 void DisplayResume(void)
 {
     VgpuResume();                             /* the virtio GPUs' outputs, head 0's too */
@@ -1100,6 +1142,7 @@ void DisplayResume(void)
         return;
     case DRV_BOCHS:  bochs_restore(); break;
     case DRV_CIRRUS: cirrus_set_mode(d.cur.w, d.cur.h); break;
+    case DRV_HYPERV: if (!g_hv_set_mode(d.cur.w, d.cur.h)) return; break;
     default:         return;              /* the GOP's mode: what the firmware's wake path does */
     }
     kprintf("[DISPLAY] %s: %dx%d set again after sleep\n", d.name, d.cur.w, d.cur.h);

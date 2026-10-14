@@ -20,10 +20,16 @@
  * NtUnloadDriver, as Windows' service control manager starts and stops
  * one: the kernel loads its ImagePath (kernel/nt/). Its state is written
  * here; it has no process.
+ *
+ * What happens goes to the System log as Windows' service control manager
+ * writes it (svc_event): 7036 a service entered the running or stopped
+ * state, 7000 it did not start, 7034 it ended without saying so, 7045 a
+ * service was installed.
  */
 #define NOVA_BUILD_ADVAPI32
 #include <winternl.h>
 #include "advapi32.h"
+#include <novaevt.h>
 #include <stdbool.h>
 
 void *memcpy(void *d, const void *s, size_t n);
@@ -52,6 +58,7 @@ WINADVAPI BOOL WINAPI ConvertStringSidToSidW(LPCWSTR s, PSID *out);
 #define SERVICE_START_PENDING    2
 #define SERVICE_STOP_PENDING     3
 #define SERVICE_RUNNING          4
+#define SERVICE_PAUSED           7
 #define SERVICE_CONTROL_STOP     1
 #define SERVICE_CONTROL_INTERROGATE 4
 #define SERVICE_ACCEPT_STOP      1
@@ -223,6 +230,9 @@ static bool exists(const WCHAR *name)
 }
 
 /* The running state; a service whose process has gone is stopped */
+static void svc_event(const WCHAR *name, WORD type, DWORD id, const WCHAR *s2, const WCHAR *s3, const WCHAR *s4,
+                      const WCHAR *s5);
+
 static void query_status(const WCHAR *name, SERVICE_STATUS_PROCESS *st)
 {
     memset(st, 0, sizeof(*st));
@@ -247,6 +257,8 @@ static void query_status(const WCHAR *name, SERVICE_STATUS_PROCESS *st)
             CloseHandle(p);
         }
         if (!alive) {
+            if (st->dwCurrentState == SERVICE_RUNNING)          /* (it ended without saying so) */
+                svc_event(name, EVENTLOG_ERROR_TYPE, 0xC0001B7A /* 7034 */, NULL, NULL, NULL, NULL);
             st->dwCurrentState = SERVICE_STOPPED;
             st->dwControlsAccepted = 0;
             st->dwProcessId = 0;
@@ -256,6 +268,43 @@ static void query_status(const WCHAR *name, SERVICE_STATUS_PROCESS *st)
     }
     if (st->dwCurrentState == SERVICE_STOPPED) { st->dwControlsAccepted = 0; st->dwProcessId = 0; }
     RegCloseKey(k);
+}
+
+/* The service control manager's events in the System log, as Windows
+ * writes them: 7000 a service did not start, 7034 it ended without
+ * saying so, 7036 it entered the running or stopped state, 7045 it was
+ * installed */
+static void svc_event(const WCHAR *name, WORD type, DWORD id, const WCHAR *s2, const WCHAR *s3, const WCHAR *s4,
+                      const WCHAR *s5)
+{
+    WCHAR disp[260];
+    HKEY k;
+    wcopy(disp, 260, name);
+    if (!open_key(name, false, &k)) {
+        if (!get_str(k, L"DisplayName", disp, 260) || !disp[0]) wcopy(disp, 260, name);
+        RegCloseKey(k);
+    }
+    LPCWSTR s[5] = { disp, s2, s3, s4, s5 };
+    WORD n = 1;
+    while (n < 5 && s[n]) n++;
+    nova_report_event(L"System", L"Service Control Manager", type, id, n, s);
+}
+
+static void svc_failed(const WCHAR *name, DWORD err)
+{
+    WCHAR text[300];
+    DWORD n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0, text, 300, NULL);
+    while (n && (text[n - 1] == '\r' || text[n - 1] == '\n' || text[n - 1] == ' ')) text[--n] = 0;
+    if (!n) {
+        WCHAR num[16];
+        int i = 15;
+        num[i] = 0;
+        DWORD v = err;
+        do { num[--i] = (WCHAR)('0' + v % 10); v /= 10; } while (v);
+        wcopy(text, 300, L"Error ");
+        wcat(text, 300, num + i);
+    }
+    svc_event(name, EVENTLOG_ERROR_TYPE, 0xC0001B58 /* 7000 */, text, NULL, NULL, NULL);
 }
 
 /* -----------------------------------------------------------------------
@@ -318,6 +367,11 @@ WINADVAPI SC_HANDLE WINAPI CreateServiceW(SC_HANDLE scm, LPCWSTR name, LPCWSTR d
     if (deps && deps[0]) set_multi(k, L"DependOnService", deps);
     set_dword(k, L"NovaState", SERVICE_STOPPED);
     RegCloseKey(k);
+    static const WCHAR *const starts[] = { L"boot start", L"system start", L"auto start", L"demand start", L"disabled" };
+    svc_event(name, EVENTLOG_INFORMATION_TYPE, 0x40001B85 /* 7045 */, path,
+              type & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER) ? L"kernel mode driver" : L"user mode service",
+              start < 5 ? starts[start] : L"unknown", type & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER) ? L"" :
+              user && user[0] ? user : L"LocalSystem");
     if (tag) *tag = 0;
     return new_handle(K_SVC, name);
 }
@@ -829,6 +883,7 @@ static BOOL load_driver(HKEY k, const WCHAR *name, bool load)
     if (st < 0) {
         DWORD err = RtlNtStatusToDosError(st);
         if (!load && st == (NTSTATUS)0xC0000010) err = ERROR_INVALID_SERVICE_CONTROL;   /* (no DriverUnload: it cannot stop) */
+        if (load && st != (NTSTATUS)0xC000010E) svc_failed(name, err);   /* (7000; not for STATUS_IMAGE_ALREADY_LOADED) */
         SetLastError(err);
         return FALSE;
     }
@@ -891,7 +946,9 @@ WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
     if (!ok) {
         set_dword(k, L"NovaState", SERVICE_STOPPED);
         RegCloseKey(k);
-        SetLastError(err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? err : ERROR_SERVICE_REQUEST_TIMEOUT);
+        err = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? err : ERROR_SERVICE_REQUEST_TIMEOUT;
+        svc_failed(s->name, err);
+        SetLastError(err);
         return FALSE;
     }
     set_dword(k, L"NovaPid", pi.dwProcessId);
@@ -910,7 +967,10 @@ WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
     }
     CloseHandle(pi.hProcess);
     RegCloseKey(k);
-    if (!started) SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
+    if (!started) {
+        svc_failed(s->name, ERROR_SERVICE_REQUEST_TIMEOUT);
+        SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
+    }
     return started;
 }
 
@@ -1130,7 +1190,9 @@ WINADVAPI BOOL WINAPI SetServiceStatus(SERVICE_STATUS_HANDLE h, SERVICE_STATUS *
     HKEY k;
     if (!s) return FALSE;
     if (!st) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    DWORD was = SERVICE_STOPPED;
     if (!open_key(s->name, true, &k)) {
+        was = get_dword(k, L"NovaState", SERVICE_STOPPED);
         set_dword(k, L"NovaState", st->dwCurrentState);
         set_dword(k, L"NovaControls", st->dwControlsAccepted);
         set_dword(k, L"NovaExitCode", st->dwWin32ExitCode);
@@ -1140,6 +1202,11 @@ WINADVAPI BOOL WINAPI SetServiceStatus(SERVICE_STATUS_HANDLE h, SERVICE_STATUS *
         set_dword(k, L"NovaPid", st->dwCurrentState == SERVICE_STOPPED ? 0 : GetCurrentProcessId());
         RegCloseKey(k);
     }
+    if (was != st->dwCurrentState && (st->dwCurrentState == SERVICE_RUNNING || st->dwCurrentState == SERVICE_STOPPED ||
+                                      st->dwCurrentState == SERVICE_PAUSED))
+        svc_event(s->name, EVENTLOG_INFORMATION_TYPE, 0x40001B7C /* 7036 */,
+                  st->dwCurrentState == SERVICE_RUNNING ? L"running" : st->dwCurrentState == SERVICE_PAUSED ? L"paused" : L"stopped",
+                  NULL, NULL, NULL);
     if (st->dwCurrentState == SERVICE_STOPPED && g_stopped) SetEvent(g_stopped);
     return TRUE;
 }

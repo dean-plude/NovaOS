@@ -83,6 +83,7 @@ void      NtDrvBootOptions(void);
  * STATUS_PROCEDURE_NOT_FOUND (an import NovaOS lacks: logged by name), or
  * what DriverEntry returned */
 NTSTATUS  NtDrvLoad(const char *service);
+NTSTATUS  NtDrvLoadQuiet(const char *service);     /* (no event 7000 when it fails) */
 /* Call its DriverUnload and unmap it (later, when the last file open on
  * its devices closes): STATUS_OBJECT_NAME_NOT_FOUND when it is not loaded,
  * STATUS_INVALID_DEVICE_REQUEST when it has no DriverUnload */

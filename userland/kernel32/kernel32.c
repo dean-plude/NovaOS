@@ -245,11 +245,11 @@ BOOL nt_path(const char *name, NtPath *p)
         port[4] = 0;
         dev = port;
     }
-    /* \\.\NAME and \\?\NAME, where NAME is no drive, volume or UNC path,
-     * is the object \??\NAME as given: a device's link, such as a
-     * Windows driver's \DosDevices\NAME */
-    BOOL device = !dev && name != orig && name[0] && name[1] != ':' && !iprefix(name, "Volume{") &&
-                  !iprefix(name, "UNC\\");
+    /* \\.\NAME and \\?\NAME, where NAME is no drive or UNC path, is the
+     * object \??\NAME as given: a device's link, such as a Windows
+     * driver's \DosDevices\NAME, or a volume (\\?\Volume{GUID}, and paths
+     * on it, which the kernel finds on its drive: kernel/um/um_disk.c) */
+    BOOL device = !dev && name != orig && name[0] && name[1] != ':' && !iprefix(name, "UNC\\");
     if (dev) { int k = 0; while (dev[k] && k < 16) { full[k] = dev[k]; k++; } full[k] = 0; }
     else if (device) { int k = 0; while (name[k] && k < MAX_PATH - 1) { full[k] = name[k] == '/' ? '\\' : name[k]; k++; } full[k] = 0; }
     else if (!full_path(name, full, MAX_PATH)) { SetLastError(ERROR_INVALID_NAME); return FALSE; }

@@ -1955,18 +1955,47 @@ static DWORD drive_map(void)
            ? *(DWORD *)b : 1u << 2;
 }
 
-/* The drive letter a root path ("D:\", "d:"; none: the current
- * directory's) names, 0 for none or C: */
-static WCHAR other_drive(LPCWSTR root)
+/* Where a root path points: 0 drive C: (or no root: the current
+ * directory's drive when that is C:), 1 another drive (*@letter), 2 a
+ * volume with no letter (\\?\Volume{...}\, opened in *@vh), -1 nothing */
+static int root_of(LPCWSTR root, WCHAR *letter, HANDLE *vh)
 {
     WCHAR c;
+    *vh = 0;
     if (!root) c = (WCHAR)(cwd()[0] & ~0x20);
     else if (root[0] && root[1] == ':') c = root[0] & ~0x20;
-    else return 0;
-    return c >= 'A' && c <= 'Z' && c != 'C' ? c : 0;
+    else if (root[0] == '\\' && root[1] == '\\' && root[2] == '?' && root[3] == '\\' && (root[4] | 0x20) == 'v') {
+        WCHAR l = 0;                                        /* a volume name */
+        if (!k32_volume_of(root, &l, 0)) { SetLastError(ERROR_PATH_NOT_FOUND); return -1; }
+        if (!l) { *vh = k32_volume_open(root); return *vh ? 2 : -1; }
+        c = l;
+    } else c = (WCHAR)(cwd()[0] & ~0x20);                   /* (a relative or UNC path: as before, the current drive) */
+    if (c < 'A' || c > 'Z') { SetLastError(ERROR_INVALID_NAME); return -1; }
+    *letter = c;
+    return c == 'C' ? 0 : 1;
 }
 
-/* FS_INFORMATION_CLASS @cls of drive @letter's volume (D:, ...: read-only volumes on disk) */
+/* The drive letter a root path ("D:\", "d:", a volume name; none: the
+ * current directory's) names, 0 for none or C: */
+static WCHAR other_drive(LPCWSTR root)
+{
+    WCHAR c = 0;
+    HANDLE vh;
+    int k = root_of(root, &c, &vh);
+    if (vh) NtClose(vh);
+    return k == 1 ? c : 0;
+}
+
+/* FS_INFORMATION_CLASS @cls of the volume @h is open on */
+static BOOL handle_query(HANDLE h, ULONG cls, void *buf, ULONG len)
+{
+    IO_STATUS_BLOCK io;
+    NTSTATUS st = NtQueryVolumeInformationFile(h, &io, buf, len, cls);
+    if (!NT_SUCCESS(st)) return fail_status(st);
+    return TRUE;
+}
+
+/* FS_INFORMATION_CLASS @cls of drive @letter's volume (D:, ...: volumes on disk) */
 static BOOL volume_query(WCHAR letter, ULONG cls, void *buf, ULONG len)
 {
     WCHAR path[] = { letter, ':', '\\', 0 };
@@ -1979,11 +2008,24 @@ static BOOL volume_query(WCHAR letter, ULONG cls, void *buf, ULONG len)
     return TRUE;
 }
 
+/* @cls of what root_of found: drive @d (C: for 0), or volume @vh (closed after) */
+static BOOL root_query(int kind, WCHAR d, HANDLE vh, ULONG cls, void *buf, ULONG len)
+{
+    if (kind == 2) {
+        BOOL ok = handle_query(vh, cls, buf, len);
+        NtClose(vh);
+        return ok;
+    }
+    return volume_query(kind == 1 ? d : 'C', cls, buf, len);
+}
+
 WINBASEAPI BOOL WINAPI GetDiskFreeSpaceExW(LPCWSTR dir, PULARGE_INTEGER avail, PULARGE_INTEGER total, PULARGE_INTEGER free)
 {
-    WCHAR d = other_drive(dir);             /* FileFsFullSizeInformation: the volume's own (C: lives in RAM) */
+    WCHAR d = 0;                            /* FileFsFullSizeInformation: the volume's own (C: lives in RAM) */
+    HANDLE vh;
+    int kind = root_of(dir, &d, &vh);
     LONGLONG sz[4];                         /* total, caller free, free (in units), sectors/unit | bytes/sector */
-    if (!volume_query(d ? d : 'C', 7, sz, 32)) return FALSE;
+    if (kind < 0 || !root_query(kind, d, vh, 7, sz, 32)) return FALSE;
     ULONGLONG unit = (ULONGLONG)(ULONG)sz[3] * (ULONG)(sz[3] >> 32);
     if (avail) avail->QuadPart = sz[1] * unit;
     if (free) free->QuadPart = sz[2] * unit;
@@ -1991,31 +2033,37 @@ WINBASEAPI BOOL WINAPI GetDiskFreeSpaceExW(LPCWSTR dir, PULARGE_INTEGER avail, P
     return TRUE;
 }
 
-/* A short ANSI root path ("D:\") as UTF-16 */
+/* A short ANSI root path ("D:\") as UTF-16 (a volume name too) */
 static LPCWSTR root_w(LPCSTR root, WCHAR *w)
 {
     if (!root) return 0;
     int i = 0;
-    for (; i < 3 && root[i]; i++) w[i] = (BYTE)root[i];
+    for (; i < 63 && root[i]; i++) w[i] = (BYTE)root[i];
     w[i] = 0;
     return w;
 }
 
 WINBASEAPI BOOL WINAPI GetDiskFreeSpaceExA(LPCSTR dir, PULARGE_INTEGER avail, PULARGE_INTEGER total, PULARGE_INTEGER free)
 {
-    WCHAR w[4];
+    WCHAR w[64];
     return GetDiskFreeSpaceExW(root_w(dir, w), avail, total, free);
 }
 
 WINBASEAPI BOOL WINAPI GetVolumeInformationW(LPCWSTR root, LPWSTR name, DWORD nn, LPDWORD serial, LPDWORD maxlen, LPDWORD flags,
                                              LPWSTR fs, DWORD nfs)
 {
-    WCHAR d = other_drive(root);
-    if (d) {
+    WCHAR d = 0;
+    HANDLE vh;
+    int kind = root_of(root, &d, &vh);
+    if (kind < 0) return FALSE;
+    if (kind) {
         BYTE vi[18 + 2 * 34], ai[12 + 2 * 16];
         memset(vi, 0, sizeof(vi));
         memset(ai, 0, sizeof(ai));
-        if (!volume_query(d, 1, vi, sizeof(vi)) || !volume_query(d, 5, ai, sizeof(ai))) return FALSE;
+        BOOL got = kind == 2 ? handle_query(vh, 1, vi, sizeof(vi)) && handle_query(vh, 5, ai, sizeof(ai))
+                             : volume_query(d, 1, vi, sizeof(vi)) && volume_query(d, 5, ai, sizeof(ai));
+        if (vh) NtClose(vh);
+        if (!got) return FALSE;
         ULONG vl = *(ULONG *)(vi + 12) / 2, al = *(ULONG *)(ai + 8) / 2;
         if (vl > 34) vl = 34;
         if (al > 16) al = 16;
@@ -2037,7 +2085,7 @@ WINBASEAPI BOOL WINAPI GetVolumeInformationW(LPCWSTR root, LPWSTR name, DWORD nn
 WINBASEAPI BOOL WINAPI GetVolumeInformationA(LPCSTR root, LPSTR name, DWORD nn, LPDWORD serial, LPDWORD maxlen, LPDWORD flags,
                                              LPSTR fs, DWORD nfs)
 {
-    WCHAR w[4], wn[64], wf[32];
+    WCHAR w[64], wn[64], wf[32];
     if (!GetVolumeInformationW(root_w(root, w), wn, 64, serial, maxlen, flags, wf, 32)) return FALSE;
     if (name && nn && !WideCharToMultiByte(CP_ACP, 0, wn, -1, name, (int)nn, 0, 0)) return FALSE;
     if (fs && nfs && !WideCharToMultiByte(CP_ACP, 0, wf, -1, fs, (int)nfs, 0, 0)) return FALSE;
@@ -2054,16 +2102,20 @@ WINBASEAPI BOOL WINAPI GetVolumePathNameW(LPCWSTR name, LPWSTR out, DWORD n)
 WINBASEAPI UINT WINAPI GetDriveTypeW(LPCWSTR root)
 {
     if (!root) return 3;                    /* DRIVE_FIXED: the current directory's */
+    WCHAR c = 0;
+    DWORD vf = 0;
     if (root[0] && root[1] == ':') {
-        WCHAR c = root[0] & ~0x20;
-        if (c >= 'A' && c <= 'Z' && (drive_map() & (1u << (c - 'A')))) return 3;
+        c = root[0] & ~0x20;
+        if (c < 'A' || c > 'Z' || !(drive_map() & (1u << (c - 'A')))) return 1;   /* DRIVE_NO_ROOT_DIR */
+        if (c == 'C') return 3;
     }
-    return 1;                               /* DRIVE_NO_ROOT_DIR */
+    if (!k32_volume_of(root, &c, &vf)) return c ? 3 : 1;    /* (a drive the volume list does not know: fixed) */
+    return vf & 0x20 /* NOVA_VOLUME_REMOVABLE */ ? 2 /* DRIVE_REMOVABLE */ : 3;
 }
 
 WINBASEAPI UINT WINAPI GetDriveTypeA(LPCSTR root)
 {
-    WCHAR w[4];
+    WCHAR w[64];
     return GetDriveTypeW(root_w(root, w));
 }
 
@@ -2405,6 +2457,7 @@ static const struct { DWORD code; const char *text; } g_msgs[] = {
     { 996, "Overlapped I/O event is not in a signaled state." },
     { 997, "Overlapped I/O operation is in progress." },
     { 1168, "Element not found." },
+    { 1314, "A required privilege is not held by the client." },
     { 1460, "This operation returned because the timeout period expired." },
     { 10013, "An attempt was made to access a socket in a way forbidden by its access permissions." },
     { 10035, "A non-blocking socket operation could not be completed immediately." },
@@ -2481,6 +2534,42 @@ static void wb_insert(WBuf *b, const WCHAR *fmt, int flen, ULONG_PTR arg, BOOL w
     }
 }
 
+/* Message @id from @m's message table (RT_MESSAGETABLE 1, what an
+ * event source's EventMessageFile has): a heap copy, or 0.  The table is
+ * MESSAGE_RESOURCE_DATA: blocks of IDs { low, high, offset }, each
+ * offset leading to entries { length, flags (1: UTF-16), text } */
+static WCHAR *module_message(HMODULE m, DWORD id)
+{
+    HANDLE r = m ? FindResourceW(m, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(11)) : 0;
+    const BYTE *t = r ? LockResource(LoadResource(m, r)) : 0;
+    DWORD size = r ? SizeofResource(m, r) : 0, nblocks;
+    if (!t || size < 4) return 0;
+    memcpy(&nblocks, t, 4);
+    for (DWORD b = 0; b < nblocks && 4 + 12 * (b + 1) <= size; b++) {
+        DWORD lo, hi, off;
+        memcpy(&lo, t + 4 + 12 * b, 4);
+        memcpy(&hi, t + 8 + 12 * b, 4);
+        memcpy(&off, t + 12 + 12 * b, 4);
+        if (id < lo || id > hi) continue;
+        for (DWORD k = lo; off + 4 <= size; k++) {
+            WORD len, fl;
+            memcpy(&len, t + off, 2);
+            memcpy(&fl, t + off + 2, 2);
+            if (len < 4 || off + len > size) return 0;
+            if (k == id) {
+                DWORD n = len - 4u;
+                WCHAR *w = zalloc(2 * ((SIZE_T)n + 1));
+                if (!w) return 0;
+                if (fl & 1) memcpy(w, t + off + 4, n & ~1u);
+                else MultiByteToWideChar(CP_ACP, 0, (const char *)t + off + 4, (int)n, w, (int)n);
+                return w;
+            }
+            off += len;
+        }
+    }
+    return 0;
+}
+
 /* The message as UTF-16 in a heap buffer, or 0 (last error set) */
 static WCHAR *format_message(DWORD flags, LPCVOID src, DWORD id, va_list *args, BOOL wide, DWORD *len)
 {
@@ -2495,10 +2584,12 @@ static WCHAR *format_message(DWORD flags, LPCVOID src, DWORD id, va_list *args, 
             pattern = zalloc(2 * ((SIZE_T)n + 1));
             if (pattern) u2w(src, -1, pattern, n);
         }
+    } else if ((flags & FORMAT_MESSAGE_FROM_HMODULE) &&
+               (pattern = module_message(src ? (HMODULE)src : GetModuleHandleW(0), id)) != 0) {
+        /* (a module's message table: inserts as the flags say) */
     } else if (flags & FORMAT_MESSAGE_FROM_SYSTEM) {
         const char *t = 0;
         for (unsigned i = 0; i < sizeof(g_msgs) / sizeof(g_msgs[0]); i++) if (g_msgs[i].code == id) { t = g_msgs[i].text; break; }
-        if (!t && (flags & FORMAT_MESSAGE_FROM_HMODULE)) t = 0;
         if (!t) { SetLastError(317 /* ERROR_MR_MID_NOT_FOUND */); return 0; }
         int n = u2w(t, -1, 0, 0);
         pattern = zalloc(2 * ((SIZE_T)n + 3));

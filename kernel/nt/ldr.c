@@ -530,7 +530,7 @@ static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; }
     { "usbvideo", "usbvideo.sys", UsbVideoDriverEntry },
 };
 
-NTSTATUS NtDrvLoad(const char *service)
+static NTSTATUS drv_load(const char *service)
 {
     if (!g_ready) return STATUS_INSUFFICIENT_RESOURCES;
     if (find(service)) return ST_IMAGE_ALREADY_LOADED;
@@ -595,6 +595,32 @@ NTSTATUS NtDrvLoad(const char *service)
     drv->started = true;
     drv->next = g_drivers;
     g_drivers = drv;
+    return st;
+}
+
+/* NtLoadDriver's load: the service control manager logs its own failures */
+NTSTATUS NtDrvLoadQuiet(const char *service)
+{
+    return drv_load(service);
+}
+
+/* Load @service's driver; one that does not load goes to the System log,
+ * as Windows' service control manager reports it (event 7000) */
+
+NTSTATUS NtDrvLoad(const char *service)
+{
+    NTSTATUS st = drv_load(service);
+    if (NT_SUCCESS(st) || st == ST_IMAGE_ALREADY_LOADED || !g_ready) return st;
+    char why[160];
+    if ((UINT32)st == 0xC0000428u)                      /* STATUS_INVALID_IMAGE_HASH */
+        ksnprintf(why, sizeof(why), "Windows cannot verify the digital signature for this file. (0x%08X)", (UINT32)st);
+    else if ((UINT32)st == 0xC0000034u || (UINT32)st == 0xC000003Au || (UINT32)st == 0xC000000Fu)
+        ksnprintf(why, sizeof(why), "The system cannot find the file specified. (0x%08X)", (UINT32)st);
+    else
+        ksnprintf(why, sizeof(why), "The driver did not start (status 0x%08X).", (UINT32)st);
+    const char *s[2] = { service, why };
+    kprintf("[EVT] Service Control Manager event 7000: %s: %s\n", service, why);
+    EvLogReport("System", 1, "Service Control Manager", 0xC0001B58u /* 7000 */, 2, s);
     return st;
 }
 

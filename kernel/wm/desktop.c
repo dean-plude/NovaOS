@@ -661,6 +661,8 @@ static void draw_prog_icon(int i, int x, int y, int s)
  * Windows lists its Windows Tools */
 static const struct { const char *name, *path; } g_tools[] = {
     { "Device Manager", "\\Windows\\System32\\devmgmt.exe" },
+    { "Event Viewer", "\\Windows\\System32\\eventvwr.exe" },
+    { "Disk Management", "\\Windows\\System32\\diskmgmt.exe" },
 };
 
 static void scan_programs(void)

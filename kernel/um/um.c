@@ -281,6 +281,8 @@ void UmInit(void)
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
+    EvLogBoot();                                    /* (the System log's first event of this boot) */
+    DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */
     NtPnpBoot();                                    /* Windows drivers installed on devices (nt/pnp.c) */
     KbdLoad();                                      /* the user's keyboard layout */
@@ -3065,6 +3067,7 @@ void UmFaultAt(UINT32 status, UINT64 rip, UINT64 addr, UINT64 sp)
         }
         um_log_stack(p, sp);                        /* where it came from (serial log only) */
         um_crash_report(p, what, status, rip, addr, sp);    /* and C:\NovaOS\Crashes */
+        EvLogCrash(p, status, rip);                         /* and the Application log */
     }
     um_exit_process(status);
 }

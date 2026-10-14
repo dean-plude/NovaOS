@@ -12444,6 +12444,34 @@ firmware, and its adapter is allocated and opened; the open fails at the
 hardware probe, since `edu` is not an AX211.  The real card is checked on
 the T14 (see [drivers.md](drivers.md)).
 
+## A brand for NovaOS: the Beam logo, an icon set and eight wallpapers
+
+NovaOS has a brand guide, [docs/design/brand](../design/brand/README.md),
+built from the Aurora desktop's own colours in `kernel/wm/desktop.c` and
+`kernel/apps/apps.h`.  It brings in:
+
+- **A new logo, Beam.**  An N whose two rounded pillars run cyan to blue
+  and whose diagonal is a beam of dawn light ending in a four-pointed
+  star.  It comes as the mark alone and as lockups with the "NovaOS"
+  wordmark for dark and light backgrounds, all as SVG.
+- **An icon set drawn from the logo.**
+  - Ten app icons: free-standing objects with blue bodies and one
+    peach-to-coral accent each.
+  - Seven folder, file and This PC icons.
+  - Twenty line glyphs at the logo's rounded weight, including the logo in
+    one ink.
+- **Brand colour tokens** (`brand-blue-*`, `brand-dawn-*`, `brand-spark`,
+  `brand-navy-*`), alongside every interface value in `tokens.json`.
+- **Eight wallpapers** in `C:\Pictures`, each 2560 x 1440: Beam, Nova
+  Night, Horizon, Glass Dawn, Aurora Lights, and the Sunset, Ocean and
+  Twilight themes redrawn as rolling hills.  Each keeps the sidebar and
+  dock areas quiet so the glass stays readable.  A host test decodes every
+  sample picture with the kernel's own PNG decoder
+  (`tests/tools/test_sample_pictures.py`).
+
+The icons and logo are the design direction.  The desktop still draws the
+older tiles and star until they are redrawn natively.
+
 ## Device Manager
 
 Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
@@ -12480,6 +12508,93 @@ manager and an event manager"), the Device Manager part: `devmgmt.exe`,
 
 Not yet: device icons, the Properties dialog with its Driver tab buttons
 (update, disable, uninstall), and Events (Event Viewer is its own step).
+
+## The event log and Event Viewer
+
+Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
+manager and an event manager"), the event part: Windows' event log and
+`eventvwr.exe`, "Event Viewer" in Start.
+
+- **The EventLog service.**  `eventlog.exe` (service "EventLog",
+  automatic start) keeps the Application, System and Security logs in
+  `C:\Windows\System32\winevt\Logs` as classic `.evt` files (the "LfLe"
+  header, `EVENTLOGRECORD`s, the end record), each with its size limit
+  and sources under `HKLM\SYSTEM\CurrentControlSet\Services\EventLog`.
+  It logs its own start and stop (6005, 6006) and a cleared log (104, or
+  1102 in Security).
+- **A kernel queue in front of it.**  Events go to the kernel
+  (`kernel/um/um_eventlog.c`, `NtNovaGuiCtl` CTL_EVENTLOG) and stay
+  queued until the service has written them, so events from before the
+  service starts are kept.  The kernel logs each boot (Kernel-General
+  12), a driver that fails to load (Service Control Manager 7000) and a
+  program that crashes (Application Error 1000, with the program, its
+  module, the exception code and the address).
+- **The service control manager** logs a service entering the running,
+  stopped or paused state (7036), failing to start (7000), stopping
+  unexpectedly (7034) and being installed (7045).
+- **The classic API** in advapi32 is real: `RegisterEventSource`,
+  `ReportEvent`, `OpenEventLog`, `ReadEventLog` (sequential and seek,
+  both directions, ANSI), `GetNumberOfEventLogRecords`,
+  `GetOldestEventLogRecord`, `GetEventLogInformation`,
+  `BackupEventLog`/`OpenBackupEventLog`, `ClearEventLog` and
+  `NotifyChangeEventLog`.  Messages come from a source's
+  `EventMessageFile` (kernel32's `FormatMessage` now reads a module's
+  message table) or NovaOS's own table for its sources.
+- **The Evt API** (wevtapi) reads the same logs: `EvtQuery` with the
+  XPath filters Event Viewer and programs write (level, event ID,
+  provider, record, keywords, time), `EvtNext`, `EvtSeek`, `EvtRender`
+  (XML and the system values), `EvtFormatMessage`, bookmarks,
+  `EvtSubscribe`, log information, channel and publisher enumeration,
+  `EvtClearLog` and `EvtExportLog`, which writes a real `.evtx` file
+  (ElfFile header, 64 KB chunks with their CRC32s, Binary XML records).
+- **Event Viewer.**  The Windows Logs tree, the list (level, date and
+  time, source, event ID, task category), and General and Details (XML)
+  tabs for the selected event; Filter by level, Clear Log (with a backup
+  offer) and Save All Events As `.evtx` or `.xml`.
+- **Test.**  `evtlogtest` (core self-tests) reports events with
+  `ReportEventW` and `ReportEventA` and reads them back with
+  `ReadEventLog` and `EvtQuery`, and checks the boot, service,
+  driver-failure and crash events; then Event Viewer is opened from the
+  Start menu and `eventvwr --check` finds the test's event, filters,
+  saves both formats and clears the log, taking the reference screenshot
+  (`docs/screenshots/event-viewer.png`).
+
+Not yet: the Applications and Services Logs channels (Microsoft-Windows-*
+operational logs), custom views, event templates in `.evtx` exports
+(each record carries its own XML), the Security log's audit events, and
+reading `.evtx` files back.
+
+## Graphics tests: a miscounted byte check and a hang that ate the hour
+
+Two reds on the Graphics tests job of unrelated pull requests (#373, #376,
+#377, #385):
+
+- **The frame-rate check**: `gltest fps` and `d3dtest fps` compare direct
+  presentation with the GDI way, and under KVM they check that direct
+  presentation moves 16 times fewer bytes through guest memory.  The
+  direct number is an average over every frame, including the few the host
+  did not show (each costs a GDI frame, about 2000 KiB), so a loaded
+  runner that missed four more frames moved it from 101 to 133 KiB and the
+  ratio from 20 to 15.6 although nothing had changed.  The check now takes
+  the frames the host did not show out of the average (they are limited by
+  their own "frames shown from the host" check) and wants the rest, the
+  desktop's traffic and the scene's commands, to be 8 times below the GDI
+  way.  A frame shown from the host that is also read back into guest
+  memory still fails it.
+- **The stalled job**: on #385 `d3dtest present x86` hung right after
+  its "alone" phase (the DXVK queue thread spinning in Venus's wait
+  inside `vulkan_virtio.dll`, QEMU's vCPU 0 at 100%, the host's Venus ring
+  not draining, no serial output).  Ctrl+C did not bring the Terminal
+  back, so each of the six tests after it waited out its own 300 to 600
+  second limit and the job was cancelled at 60 minutes.  `Nova.run` now
+  records that the Terminal stayed blocked, `selftest.py` resets the
+  machine as it does after a crash test and runs the rest on the fresh
+  boot, and the present and ANGLE tests have a 240 second limit (they take
+  4 to 20 seconds).  One hang now fails one test within minutes
+  (`tests/tools/test_selftest_hang.py`).  The hang itself is the third
+  sighting of Venus stopping `d3dtest present x86` at the direct-to-GDI
+  change; its cause is in the host's Venus ring or the guest's wait and
+  is still open.
 
 ## The HID class driver
 

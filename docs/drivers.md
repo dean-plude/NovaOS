@@ -206,7 +206,22 @@ OHCI) gives the device a PDO that answers as Windows' USB hub driver does
   NovaOS does not suspend the device.
 
 Each pipe's transfers run in order on their own thread, so a read waiting
-for data does not hold up a write. A bus driver's children (FTDI's
+for data does not hold up a write.
+
+A composite device (several interfaces, device class 0, such as a
+keyboard with a vendor-defined control interface or a headset with audio
+and HID) is split the way Windows' `usbccgp.sys` splits it: under the
+device's node (`USB\VID_v&PID_p`, compatible ID `USB\COMPOSITE`, "USB
+Composite Device") each function is a node of its own,
+`USB\VID_v&PID_p&MI_nn` with `USB\VID_v&PID_p&REV_r&MI_nn` first and
+`USB\Class_cc&SubClass_ss&Prot_pp` compatible IDs. A function made of
+several interfaces (an audio control interface and its streams, a
+camera's video interfaces) is one node. NovaOS's own drivers take the
+functions they know; each other one gets its own PDO, on which a Windows
+driver (or a built-in one such as `HidUsb` or `usbvideo`) sees a
+configuration descriptor with only its own interfaces, can select only
+those, and has its own pipes, while the device's other functions keep
+running under their drivers. A bus driver's children (FTDI's
 `ftdibus.sys` reports a COM port) start with their own drivers once
 installed.
 
@@ -234,7 +249,8 @@ takes over its `AddDevice` and dispatch table. It asks the minidriver
 for the HID descriptor, report descriptor and attributes with the
 internal `IOCTL_HID_*` requests, makes a child device for each top-level
 collection (`HID\VID_1209&PID_0008`, `...&Col01` when there are several)
-with the HID interface (`GUID_DEVINTERFACE_HID`) turned on, and keeps an
+with the HID interface (`GUID_DEVINTERFACE_HID`) turned on (a composite
+device's function adds its interface: `HID\VID_1209&PID_000A&MI_01`), and keeps an
 `IOCTL_HID_READ_REPORT` going to queue each input report for every open
 handle. Programs use the collection as on Windows: setupapi and cfgmgr32
 list its interface, and `hid.dll`'s `HidD_*` send it the `IOCTL_HID_*`
@@ -252,8 +268,8 @@ not a keyboard, mouse, touch screen or game controller) gets NovaOS's
 own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
 kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
 interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
-feature and input reports. Not done yet: composite USB devices (one HID
-interface per device) and
+feature and input reports. On a composite device each HID function gets
+its own (see [USB client drivers](#usb-client-drivers)). Not done yet:
 `ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
 device wait). NovaOS's own keyboards, mice and game controllers keep
 their built-in drivers.
@@ -514,6 +530,7 @@ kept in the repository or the image.
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
+| `composite` | NovaOS's keyboard driver, and the HID class driver with `HidUsb` on each other function | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
 | `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |
 
 To run one boot's tests, pass their names to `--only` (`python3

@@ -27,7 +27,9 @@
  *
  * A USB device no NovaOS driver took gets a PDO from the USB bus
  * interface (usbd.c), with no resources (its driver reaches the device
- * through URBs), and starts the same way; unplugged, it gets
+ * through URBs), and starts the same way; so does each function of a
+ * composite device (its USB\VID_v&PID_p&MI_nn node), as usbccgp.sys
+ * gives each its own PDO; unplugged, it gets
  * IRP_MN_SURPRISE_REMOVAL and IRP_MN_REMOVE_DEVICE, its children first
  * (NtPnpSurpriseRemoval).
  *
@@ -822,7 +824,7 @@ UINT32 NtPnpStart(UINT32 node)
     if (!PnpGet(node, n) || !(n->flags & PNP_PRESENT)) { prob = PROB_NO_DRIVER; goto out; }
     p = pdo_by_node(node);
     bool is_pci = !strncmp(n->instance, "PCI\\", 4), is_usb = !strncmp(n->instance, "USB\\", 4);
-    if (!p && !(is_pci && pci_of(node, &pci)) && !(is_usb && UsbDevByPnp(node))) {
+    if (!p && !(is_pci && pci_of(node, &pci)) && !(is_usb && UsbFnByPnp(node, NULL))) {
         prob = PROB_NO_DRIVER;                               /* (no bus here offers it to Windows drivers) */
         goto out;
     }
@@ -1061,7 +1063,7 @@ void NtPnpBoot(void)
     for (UINT32 id = 1; id <= count; id++) {
         if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || ((n->flags & PNP_STARTED) && !(n->flags & PNP_INBOX))) continue;
         if (!strncmp(n->instance, "USB\\", 4)) {             /* (on the work-item thread, with later arrivals) */
-            if (UsbDevByPnp(id)) defer(WORK_USB_ARRIVED, id);
+            if (UsbFnByPnp(id, NULL)) defer(WORK_USB_ARRIVED, id);
             continue;
         }
         if (strncmp(n->instance, "PCI\\", 4)) continue;

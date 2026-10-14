@@ -71,6 +71,11 @@ bool   UsbDevGone(const UsbDev *d);
 /* The device whose node in the Plug and Play tree is @node (a whole
  * device's node, not one of a composite device's functions), or NULL */
 UsbDev *UsbDevByPnp(UINT32 node);
+/* The device a node in the Plug and Play tree stands for: a whole
+ * device's node (*@ifaces 0), or one of a composite device's functions
+ * (*@ifaces its interfaces, bit n: interface n, as usbccgp.sys gives each
+ * function its own PDO); NULL when neither */
+UsbDev *UsbFnByPnp(UINT32 node, UINT32 *ifaces);
 /* A short name for logs, e.g. "port 3.2" */
 const char *UsbDevName(const UsbDev *d);
 /* The device's product name (its iProduct string, in ASCII) into @out;

@@ -375,7 +375,9 @@ commands, clicks and keys. The windowed programs' screenshots must match
 Explorer's This PC listing both.
 
 The same workflow runs an SMP stress test (`smpstress scaling 0` on four
-CPUs). A scheduled run posts each program's result to issue #210. The
+CPUs; each multi-thread figure is the best of three samples, since a
+shared runner sometimes takes the emulated CPUs away for a moment and only a
+real lock stays near 1x in every sample). A scheduled run posts each program's result to issue #210. The
 workflow also runs on pull requests that change the corpus or what it
 depends on. [ci.md](ci.md#the-nightly-app-corpus) has the schedule, the
 retry rules and the reports.

@@ -143,6 +143,7 @@ def load_apps():
         exec(compile(open(f).read(), f, 'exec'), ns)
         if not isinstance(ns.get('APP'), App):
             sys.exit(f'{f}: APP must be an App')
+        ns['APP'].file = os.path.basename(f)     # tools/ci/store_badges.py matches docs/compatibility by it
         apps.append(ns['APP'])
     return apps
 

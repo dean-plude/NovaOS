@@ -28,7 +28,7 @@ def required(paths):
     return any(p.startswith(('kernel/', 'userland/', 'include/', 'tests/selftest/core/')) or
                p in {'CMakeLists.txt', 'tools/selftest.py', 'tools/novarun.py',
                      'tools/compat_smoke.py', '.github/workflows/ci.yml',
-                     'tests/tools/test_compat_smoke.py'} or p.startswith('cmake/') for p in paths)
+                     'tests/tools/test_compat_smoke.py'} for p in paths)
 
 
 def main():

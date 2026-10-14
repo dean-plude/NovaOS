@@ -125,13 +125,16 @@ class CorpusCommentTests(unittest.TestCase):
         workflow = yaml.safe_load((ROOT / '.github/workflows/nightly.yml').read_text())
         job = workflow['jobs']['corpus-result']
         self.assertEqual(job['permissions'], {
-            'contents': 'read', 'actions': 'read', 'issues': 'write'})
+            'contents': 'write', 'actions': 'read', 'issues': 'write'})   # write: the store-badges push
         comment = next(step for step in job['steps']
                        if step.get('name') == 'Post nightly results to issue')
         self.assertEqual(comment['if'], "always() && github.event_name == 'schedule'")
         self.assertIn('python3 tools/ci/corpus_comment.py', comment['run'])
         self.assertEqual(comment['env']['CORPUS_ISSUE'], '210')
         self.assertTrue(any(step.get('name') == 'Collect SMP log' for step in job['steps']))
+        badges = next(step for step in job['steps'] if step.get('name') == 'Publish App Store badges')
+        self.assertEqual(badges['if'], "always() && github.event_name == 'schedule' && needs.gate.outputs.run == 'true'")
+        self.assertIn('refs/heads/store-badges', badges['run'])
 
 
 if __name__ == '__main__':

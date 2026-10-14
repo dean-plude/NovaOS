@@ -191,7 +191,7 @@ purpose raises the budget in the same pull request and says why.
 | **Build** | `build.yml`, as in CI |
 | **App corpus (NN)** | one job and one VM per program: `tools/appcorpus.py --only NAME`, at most four at once, `fail-fast: false` |
 | **SMP stress** | `smpstress scaling 0` on four CPUs, judged by `tools/ci/check-smpstress.py` |
-| **Corpus result** | validates and combines every program's report (`tools/ci/corpus_report.py`) and requires every selected job (`tools/ci/results.py corpus`) |
+| **Corpus result** | validates and combines every program's report (`tools/ci/corpus_report.py`), requires every selected job (`tools/ci/results.py corpus`) and, on a scheduled run, posts the results to issue #210 and pushes the App Store's badges |
 
 **When it runs.** Three schedules a day (03:17, 06:47 and 10:23 UTC). A
 scheduled run goes ahead unless another scheduled or manual run is still
@@ -214,7 +214,11 @@ fails, times out or produces no report fails **Corpus result**; skipped
 programs (for example a sound test without PulseAudio) do not. A scheduled
 run that ran the corpus posts the results (each program's table, the
 smpstress log and a link to the run) as a comment on issue #210
-(`tools/ci/corpus_comment.py`).
+(`tools/ci/corpus_comment.py`), and pushes each App Store program's
+verdict to the `store-badges` branch for the App Store's badges
+(`tools/ci/store_badges.py`, [app-store-catalog.md](app-store-catalog.md#nightly-badges)).
+This is the only step that writes to the repository (`contents: write`);
+it does not fail the run if the push fails.
 
 **Downloads.** Each app job keeps its downloads in an Actions cache, but
 every file is still checked against the URL, hash and refresh rules in

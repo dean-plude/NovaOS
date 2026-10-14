@@ -65,6 +65,7 @@ typedef struct {
 #include "store_catalog.h"
 
 static StoreCatalog *g_store_catalog;
+static StoreBadges *g_store_badges;        /* the nightly corpus's verdicts, or NULL */
 #define g_catalog (g_store_catalog->apps)
 #define N_APPS (g_store_catalog ? g_store_catalog->count : 0)
 
@@ -102,6 +103,7 @@ typedef struct {
     char    catalog_host[128], catalog_path[512], catalog_msg[96];
     UINT16  catalog_port;
     bool    catalog_pressed;
+    bool    catalog_badges;        /* the refresh is fetching the nightly badges */
 } Store;
 
 #define SIDE_W   180
@@ -113,10 +115,22 @@ typedef struct {
 
 static WND *g_store;               /* the one Store window */
 
+/* The badges the last refresh saved: the App Store shows them offline too */
+static void badges_load(void)
+{
+    RamNode *f = RamfsResolve(NULL, STORE_BADGES_PATH);
+    if (!f || f->dir || f->size > STORE_BADGES_MAX || !RamfsLoad(f)) return;
+    StoreBadges *b = store_badges_parse(f->data, f->size);
+    if (!b) { kprintf("[STORE] Badges: %s is invalid\n", STORE_BADGES_PATH); return; }
+    kfree(g_store_badges); g_store_badges = b;
+    kprintf("[STORE] Badges: %d nightly results of %s (%s)\n", b->count, b->date, b->commit);
+}
+
 /* Read the independently persisted catalog; the image's copy is an offline
  * fallback, not a C table. UI callbacks hold the file-system lock. */
 static bool catalog_load(Store *s)
 {
+    badges_load();
     const char *paths[] = { STORE_CATALOG_PATH, STORE_DEFAULT_PATH };
     for (int i = 0; i < 2; i++) {
         RamNode *f = RamfsResolve(NULL, paths[i]);
@@ -140,6 +154,11 @@ static void catalog_end(Store *s, const char *msg)
     s->catalog_msg[sizeof(s->catalog_msg) - 1] = 0;
     kprintf("[STORE] Catalog: %s\n", s->catalog_msg);
 }
+/* A failed step: during the badges fetch the new catalog is already in use */
+static void catalog_fail(Store *s, const char *msg)
+{
+    catalog_end(s, s->catalog_badges ? "Catalog updated; badges kept" : msg);
+}
 static bool catalog_target(Store *s, const char *url)
 {
     bool https;
@@ -151,7 +170,7 @@ static void catalog_resolve(Store *s)
 {
     s->catalog_phase = DL_RESOLVE;
     s->catalog_op = NetResolve(s->catalog_host);
-    if (!s->catalog_op) catalog_end(s, "Catalog: network busy");
+    if (!s->catalog_op) catalog_fail(s, "Catalog: network busy");
 }
 static void catalog_refresh(Store *s)
 {
@@ -169,20 +188,21 @@ static void catalog_refresh(Store *s)
         while (n && (url[n-1] == '\n' || url[n-1] == '\r' || url[n-1] == ' ')) url[--n] = 0;
     }
     if (!catalog_target(s, url)) { catalog_end(s, "Catalog URL must use HTTPS"); return; }
-    s->catalog_redirects = 0; s->pressed = -1;
+    s->catalog_redirects = 0; s->pressed = -1; s->catalog_badges = false;
     strcpy(s->catalog_msg, "Refreshing catalog...");
     catalog_resolve(s);
 }
 /* Cache a validated response with a same-directory rename. Failed writes or
  * malformed downloads cannot replace the last usable catalog. */
-static bool catalog_save(const char *body, UINT32 len)
+static bool catalog_save(const char *name, const char *body, UINT32 len)
 {
     RamNode *windows = RamfsResolve(NULL, "\\Windows");
     RamNode *dir = windows ? RamfsCreate(windows, "AppStore", true) : NULL;
     if (!dir) return false;
-    RamNode *tmp = RamfsCreate(dir, "catalog.json.tmp", false);
+    char tmpname[32]; strcpy(tmpname, name); strcat(tmpname, ".tmp");
+    RamNode *tmp = RamfsCreate(dir, tmpname, false);
     if (!tmp) return false;
-    if (!RamfsWrite(tmp, body, len) || !RamfsRename(tmp, dir, "catalog.json", true)) {
+    if (!RamfsWrite(tmp, body, len) || !RamfsRename(tmp, dir, name, true)) {
         RamfsDelete(tmp); return false;
     }
     return true;
@@ -191,16 +211,17 @@ static bool catalog_tick(Store *s)
 {
     NetOp *op = s->catalog_op;
     if (!op) return false;
-    if (s->catalog_phase == DL_FETCH && op->len > STORE_JSON_MAX + 65536u) {
-        catalog_end(s, "Catalog too large; kept old list"); return true;
+    UINT32 max = s->catalog_badges ? STORE_BADGES_MAX : STORE_JSON_MAX;
+    if (s->catalog_phase == DL_FETCH && op->len > max + 65536u) {
+        catalog_fail(s, "Catalog too large; kept old list"); return true;
     }
     if (op->state == NET_PENDING) return false;
-    if (op->state == NET_FAILED) { catalog_end(s, "Refresh failed; keeping catalog"); return true; }
+    if (op->state == NET_FAILED) { catalog_fail(s, "Refresh failed; keeping catalog"); return true; }
     if (s->catalog_phase == DL_RESOLVE) {
         NetIp ip = op->addr; NetRelease(op);
         s->catalog_op = NetHttpGetAddr(&ip, s->catalog_port, s->catalog_host, s->catalog_path, true);
         s->catalog_phase = DL_FETCH;
-        if (!s->catalog_op) catalog_end(s, "Catalog: network busy");
+        if (!s->catalog_op) catalog_fail(s, "Catalog: network busy");
         return true;
     }
     const char *body; UINT32 len; char location[512];
@@ -210,18 +231,31 @@ static bool catalog_tick(Store *s)
         if (location[0] == '/' && location[1] != '/' && sc_text(location, 500) && !strchr(location, ' ')) {
             strcpy(s->catalog_path, location); valid = true;
         } else valid = catalog_target(s, location);
-        if (!valid) { catalog_end(s, "Invalid catalog redirect"); return true; }
+        if (!valid) { catalog_fail(s, "Invalid catalog redirect"); return true; }
         NetRelease(op); s->catalog_op = NULL; catalog_resolve(s); return true;
     }
-    if (status != 200) { catalog_end(s, "Refresh failed; keeping catalog"); return true; }
+    if (status != 200) { catalog_fail(s, "Refresh failed; keeping catalog"); return true; }
+    if (s->catalog_badges) {
+        StoreBadges *b = store_badges_parse(body, len);
+        if (!b || !catalog_save("badges.json", body, len)) { kfree(b); catalog_fail(s, NULL); return true; }
+        kfree(g_store_badges); g_store_badges = b;
+        catalog_end(s, "Catalog and badges updated");
+        kprintf("[STORE] Badges: %d nightly results of %s (%s)\n", b->count, b->date, b->commit);
+        return true;
+    }
     StoreCatalog *c = store_catalog_parse(body, len);
     if (!c) { catalog_end(s, "Invalid JSON; keeping catalog"); return true; }
-    if (!catalog_save(body, len)) { kfree(c); catalog_end(s, "Could not save; keeping catalog"); return true; }
+    if (!catalog_save("catalog.json", body, len)) { kfree(c); catalog_end(s, "Could not save; keeping catalog"); return true; }
     kfree(g_store_catalog); g_store_catalog = c;
     memset(s->msg, 0, sizeof(s->msg)); memset(s->bad, 0, sizeof(s->bad));
     s->pressed = -1; UiScrollTo(&s->bar, 0); memset(s->logged, 0xFF, sizeof(s->logged));
-    catalog_end(s, "Catalog updated");
     kprintf("[STORE] Catalog: now %d apps\n", N_APPS);
+    /* then the nightly corpus's badges for it */
+    NetRelease(op); s->catalog_op = NULL;
+    s->catalog_badges = true; s->catalog_redirects = 0;
+    if (!catalog_target(s, STORE_BADGES_URL)) { catalog_fail(s, NULL); return true; }
+    strcpy(s->catalog_msg, "Fetching nightly badges...");
+    catalog_resolve(s);
     return true;
 }
 
@@ -727,6 +761,18 @@ static void log_view(Store *s, GdiRect c)
             c.x + lr.x, c.y + lr.y, lr.w, lr.h);
 }
 
+/* @a's badge from the latest nightly corpus run ("Verified", "Verified:
+ * Silver", "Failed last nightly"); false when the corpus does not test it */
+static bool badge_text(const StoreApp *a, char *out, size_t cap)
+{
+    const StoreBadge *b = store_badge(g_store_badges, a->name);
+    if (!b) return false;
+    if (b->result != BADGE_PASSED) ksnprintf(out, cap, "Failed last nightly");
+    else if (b->rating) ksnprintf(out, cap, "Verified: %s", b->rating);
+    else ksnprintf(out, cap, "Verified");
+    return true;
+}
+
 static void app_tile(const StoreApp *a, int x, int y, int sz)
 {
     GdiRoundGradV(RECT(x, y, sz, sz), sz * 22 / 100, GdiLerp(a->color, GDI_WHITE, 40), a->color);
@@ -854,9 +900,14 @@ static void store_paint(WND *w)
         }
         GdiTextT(r.x + 14, r.y + (r.h - GDI_FONT_H) / 2, g_cat_name[i], i == s->cat ? UI_TEXT : UI_TEXT2);
     }
-    GdiSetClip(RECT(c.x + 8, c.y + c.h - 48, SIDE_W - 16, 48));
-    GdiTextT(c.x + 12, c.y + c.h - 42, "App catalog (F5 refresh)", UI_TEXT3);
-    GdiTextT(c.x + 12, c.y + c.h - 24, s->catalog_msg, UI_TEXT3);
+    GdiSetClip(RECT(c.x + 8, c.y + c.h - 66, SIDE_W - 16, 66));
+    GdiTextT(c.x + 12, c.y + c.h - 60, "App catalog (F5 refresh)", UI_TEXT3);
+    GdiTextT(c.x + 12, c.y + c.h - 42, s->catalog_msg, UI_TEXT3);
+    if (g_store_badges) {
+        char when[64];
+        ksnprintf(when, sizeof(when), "Nightly %s", g_store_badges->date);
+        GdiTextT(c.x + 12, c.y + c.h - 24, when, UI_TEXT3);
+    }
     GdiSetClip(c);
 
     /* Header */
@@ -890,11 +941,20 @@ static void store_paint(WND *w)
         GdiRoundRect(RECT(x, y, lr.w - 40, ROW_H - 8), 6, UI_CARD, GDI_TRANSPARENT);
         app_tile(a, x + 14, y + (ROW_H - 8 - TILE) / 2, TILE);
         int tx = x + 14 + TILE + 16;
-        GdiTextBold(tx, y + 10, a->name, UI_TEXT);
-        int nw = GdiTextBoldW(a->name);
-        GdiTextT(tx + nw + 10, y + 10, a->publisher, UI_TEXT3);
-        /* the description, cut to the room before the button */
+        /* name, badge, publisher and description, cut to the room before the button */
         GdiSetClip(RECT(lr.x, lr.y, lr.w - BTN_W - 32, lr.h));
+        GdiTextBold(tx, y + 10, a->name, UI_TEXT);
+        int nx = tx + GdiTextBoldW(a->name) + 10;
+        char badge[40];
+        if (badge_text(a, badge, sizeof(badge))) {
+            bool ok = store_badge(g_store_badges, a->name)->result == BADGE_PASSED;
+            int bw = GdiTextW(badge) + 16;
+            GdiRoundRect(RECT(nx, y + 7, bw, GDI_FONT_H + 6), (GDI_FONT_H + 6) / 2,
+                         ok ? GDI_C(0x2E, 0x8B, 0x57) : GDI_C(0xB0, 0x4A, 0x40), GDI_TRANSPARENT);
+            GdiTextT(nx + 8, y + 10, badge, GDI_WHITE);
+            nx += bw + 10;
+        }
+        GdiTextT(nx, y + 10, a->publisher, UI_TEXT3);
         GdiTextT(tx, y + 30, a->summary, UI_TEXT2);
         /* status: the download's progress or result, else size + note */
         char line[96];

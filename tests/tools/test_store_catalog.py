@@ -119,6 +119,30 @@ class StoreCatalogTests(unittest.TestCase):
             catalog['apps'].append(app)
         self.run_catalog(catalog, False)
 
+    def run_badges(self, badges, valid=True):
+        p = self.work / 'badges.json'
+        p.write_bytes(badges if isinstance(badges, bytes) else json.dumps(badges).encode())
+        r = subprocess.run([str(self.binary), str(p), 'badges'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0 if valid else 1, r.stderr)
+        return r.stdout.splitlines()
+
+    def test_nightly_badges(self):
+        badges = {'schema_version': 1, 'date': '2026-10-14', 'commit': '549c6c7', 'run': 'https://example.org/1',
+                  'apps': [{'name': 'Krita', 'result': 'passed', 'rating': 'Silver', 'tests': 1},
+                           {'name': 'VLC media player', 'result': 'failed', 'rating': None}]}
+        self.assertEqual(self.run_badges(badges), ['2 2026-10-14 549c6c7', 'Krita|0|Silver', 'VLC media player|1|'])
+        self.run_badges(dict(badges, apps=[]))
+        for change in [{'schema_version': 2}, {'date': ''}, {'commit': None},
+                       {'apps': [{'name': 'Krita', 'result': 'maybe'}]},
+                       {'apps': [{'name': 'Krita', 'result': 'passed', 'rating': 'Excellent'}]},
+                       {'apps': [{'name': 'Krita'}]},
+                       {'apps': [{'name': 'Krita', 'result': 'passed'}, {'name': 'krita', 'result': 'failed'}]}]:
+            with self.subTest(change=change):
+                self.run_badges(dict(badges, **change), False)
+        missing = dict(badges); del missing['date']
+        self.run_badges(missing, False)
+        self.run_badges(b' ' * (64 * 1024 + 1), False)
+
     def test_refresh_failure_atomic_save_busy_and_offline_fallback(self):
         subprocess.run([str(self.binary), str(ROOT / 'userland/store/catalog.json'), 'integration'], check=True)
 

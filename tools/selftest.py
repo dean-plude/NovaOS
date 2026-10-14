@@ -111,7 +111,11 @@ order; --list prints them):
             (tools/padpeer.py --kind vendor): the kernel's HID class
             driver runs it on its USB minidriver, and hidclasstest opens
             its collection through hid.dll, writes and reads input,
-            output and feature reports and sees it unplugged
+            output and feature reports and sees it unplugged; "camera", a
+            USB Video Class camera on xHCI (tools/campeer.py): the kernel's
+            UVC driver runs it, camtest lists it with Media Foundation and
+            reads frames in each of its formats through a source reader,
+            and the Camera app shows it
 
 Each test is one Terminal command (tools/novarun.py's Nova class types it).
 A test passes when the program exits with code 0 inside its time limit, has
@@ -335,6 +339,7 @@ UPDATE = load_suite('devices/update')
 DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 HID = load_suite('devices/hid')
+CAMERA = load_suite('devices/camera')
 PNP = load_suite('devices/pnp')
 NTFS = load_suite('devices/ntfs')
 WDM = load_suite('devices/wdm')
@@ -477,6 +482,21 @@ def hid_boot(work):
         time.sleep(0.05)
     return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=hiddev,host=127.0.0.1,port=10713',
             '-device', 'usb-redir,id=hiddev,chardev=hiddev,bus=xhci.0'], [p]
+
+
+def camera_boot(work):
+    """A USB Video Class camera on an xHCI controller, tools/campeer.py
+    behind a QEMU usb-redir device (port 10714), streaming a test card
+    (tests/selftest/devices/camera)"""
+    log = os.path.join(work, 'campeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'campeer.py'), '--port', '10714'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=cam,host=127.0.0.1,port=10714',
+            '-device', 'usb-redir,id=cam,chardev=cam,bus=xhci.0'], [p]
 
 
 def pnp_boot(work):
@@ -796,7 +816,8 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot), ('driversearch', DRIVERSEARCH, driversearch_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
-                ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
+                ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
+                ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
                 ('usbserial', USBSERIAL, usbserial_boot), ('ax211', AX211, ax211_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
@@ -903,7 +924,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log']:
+                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log', 'campeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

@@ -1,1 +1,1 @@
-- **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.
+- **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers, UVC cameras), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.

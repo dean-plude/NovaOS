@@ -150,7 +150,7 @@ A short tour; [docs/inside.md](docs/inside.md) has the full one, and
 
 - **Boot**: a UEFI bootloader loads the ELF kernel from the EFI System Partition or the ISO; the same ISO runs live and installs NovaOS to a SATA or NVMe disk.
 - **Kernel** (`kernel/`): an NT-style executive with objects and handles, processes and threads, virtual memory, security, a registry, the Windows 10 1903 system-call table and an SMP scheduler with NT's priorities.
-- **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.
+- **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers, UVC cameras), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.
 - **Windows drivers** (`kernel/nt/`): unmodified Windows `.inf`/`.sys` packages on an NT driver interface (WDM, KMDF, UMDF, NDIS, Storport, USB, display-only WDDM), matched and downloaded by hardware ID and checked against Windows' signing policy.
 - **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2.
 - **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings and the App Store.

@@ -372,7 +372,7 @@ the "Sign in to Steam" window opens (see the list below).  Signing in and
 games are not checked yet.  What is known to be missing or was fixed on
 the way, each a NovaOS gap and none a reason to change Steam:
 
-- Media Foundation (`mf.dll`, which Chromium only uses for video).
+- Media Foundation's playback (`mf.dll` has camera capture only; Chromium uses the rest for video).
 - DirectWrite's `IDWriteFactory4` and later (`steam.exe` asks for
   `IDWriteFactory5` and goes on without it).
 - WMI (`WbemLocator`, `{4590F811-1D3A-11D0-891F-00AA004B2E24}`), which

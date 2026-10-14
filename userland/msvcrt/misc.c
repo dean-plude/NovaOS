@@ -5,6 +5,8 @@
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
 
 #ifdef _WIN64
 /* jmp_buf: rbx rbp rdi rsi rsp r12 r13 r14 r15 rip, then xmm6-15 at +80 */
@@ -199,3 +201,50 @@ __declspec(dllexport) void NAME(T *path, const T *drive, const T *dir, const T *
 }
 MAKEPATH(_makepath, char)
 MAKEPATH(_wmakepath, wchar_t)
+
+/* The _s forms: each output has its size in characters; EINVAL without a
+ * path or with an output whose size is 0 (or a size without an output),
+ * ERANGE when a part does not fit (that output emptied) */
+#define SPLITPATH_S(NAME, BASE, T, LEN)                                               \
+__declspec(dllexport) int NAME(const T *path, T *drive, size_t ndrive, T *dir, size_t ndir, \
+                               T *fname, size_t nfname, T *ext, size_t next)          \
+{                                                                                     \
+    if (!path || (!drive) != (!ndrive) || (!dir) != (!ndir) || (!fname) != (!nfname) || (!ext) != (!next)) \
+        return 22;                                                                    \
+    size_t n = LEN(path) + 1;                                                         \
+    T *buf = malloc(4 * n * sizeof(T));                                               \
+    if (!buf) return 12;                                                              \
+    T *parts[4] = { buf, buf + n, buf + 2 * n, buf + 3 * n };                         \
+    BASE(path, parts[0], parts[1], parts[2], parts[3]);                               \
+    T *outs[4] = { drive, dir, fname, ext };                                          \
+    size_t sizes[4] = { ndrive, ndir, nfname, next };                                 \
+    int err = 0;                                                                      \
+    for (int i = 0; i < 4; i++) {                                                     \
+        if (!outs[i]) continue;                                                       \
+        size_t k = LEN(parts[i]);                                                     \
+        if (k >= sizes[i]) { outs[i][0] = 0; err = 34; continue; }                    \
+        memcpy(outs[i], parts[i], (k + 1) * sizeof(T));                               \
+    }                                                                                 \
+    free(buf);                                                                        \
+    return err;                                                                       \
+}
+SPLITPATH_S(_splitpath_s, _splitpath, char, strlen)
+SPLITPATH_S(_wsplitpath_s, _wsplitpath, wchar_t, wcslen)
+
+#define MAKEPATH_S(NAME, BASE, T, LEN)                                                \
+__declspec(dllexport) int NAME(T *path, size_t size, const T *drive, const T *dir, const T *fname, const T *ext) \
+{                                                                                     \
+    if (!path || !size) return 22;                                                    \
+    size_t n = (drive ? LEN(drive) : 0) + (dir ? LEN(dir) : 0) + (fname ? LEN(fname) : 0) + (ext ? LEN(ext) : 0) + 4; \
+    T *buf = malloc(n * sizeof(T));                                                   \
+    if (!buf) return 12;                                                              \
+    BASE(buf, drive, dir, fname, ext);                                                \
+    size_t k = LEN(buf);                                                              \
+    int err = k < size ? 0 : 34;                                                      \
+    if (err) path[0] = 0;                                                             \
+    else memcpy(path, buf, (k + 1) * sizeof(T));                                      \
+    free(buf);                                                                        \
+    return err;                                                                       \
+}
+MAKEPATH_S(_makepath_s, _makepath, char, strlen)
+MAKEPATH_S(_wmakepath_s, _wmakepath, wchar_t, wcslen)

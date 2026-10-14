@@ -221,3 +221,11 @@ static BOOL protect_memory(void *mem, DWORD n, DWORD flags, const char *fn)
 }
 CRYPT32API BOOL WINAPI CryptProtectMemory(void *mem, DWORD n, DWORD flags) { return protect_memory(mem, n, flags, "SystemFunction040"); }
 CRYPT32API BOOL WINAPI CryptUnprotectMemory(void *mem, DWORD n, DWORD flags) { return protect_memory(mem, n, flags, "SystemFunction041"); }
+
+/* The memory crypt32 hands out and programs free (LocalAlloc's, as Windows') */
+CRYPT32API LPVOID WINAPI CryptMemAlloc(ULONG n) { return LocalAlloc(LMEM_FIXED, n); }
+CRYPT32API LPVOID WINAPI CryptMemRealloc(LPVOID p, ULONG n)
+{
+    return p ? LocalReAlloc(p, n, LMEM_MOVEABLE) : LocalAlloc(LMEM_FIXED, n);
+}
+CRYPT32API VOID WINAPI CryptMemFree(LPVOID p) { if (p) LocalFree(p); }

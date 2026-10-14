@@ -600,6 +600,20 @@ K32 VOID WINAPI OutputDebugStringW(LPCWSTR s)
     OutputDebugStringA(buf);
 }
 
+/* A program giving up: it says why on the debug output and ends at once */
+K32 VOID WINAPI FatalAppExitA(UINT action, LPCSTR msg)
+{
+    (void)action;
+    OutputDebugStringA(msg ? msg : "FatalAppExit");
+    TerminateProcess(GetCurrentProcess(), 0xC0000409 /* STATUS_FAIL_FAST_EXCEPTION */);
+}
+K32 VOID WINAPI FatalAppExitW(UINT action, LPCWSTR msg)
+{
+    (void)action;
+    OutputDebugStringW(msg ? msg : L"FatalAppExit");
+    TerminateProcess(GetCurrentProcess(), 0xC0000409);
+}
+
 K32 int WINAPI MulDiv(int a, int b, int c)
 {
     if (!c) return -1;

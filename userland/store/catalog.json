@@ -177,7 +177,7 @@
       "exe": "LibreOffice\\program\\soffice.exe",
       "kind": "setup",
       "size_mb": 350,
-      "note": "64-bit Windows Installer package; untested",
+      "note": "64-bit Windows Installer package; Writer and Calc open, edit and save .docx and .xlsx files on NovaOS (nightly corpus)",
       "label": "Lo",
       "color": "#18A303"
     },

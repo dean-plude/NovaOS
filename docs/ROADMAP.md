@@ -723,8 +723,12 @@ apps from the App Store catalog pass their nightly scripts.
   The corpus had no failures left (39 of 39 on 2026-10-13), so it starts
   from the Store's untested apps: WinSCP (installs and opens its Login
   dialog; [history](history/2026-10-14-winscp.md)).
-- [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
-  and save `.docx` and `.xlsx` files.
+- [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
+  and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
+  from the Store's Windows Installer package; the nightly corpus types a
+  line into a `.docx` in Writer and a formula into an `.xlsx` in Calc,
+  saves both in their own formats and reads the edits back out of the
+  saved files ([history](history/2026-10-14-libreoffice.md)).
 - [ ] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
   OpenGL is now built in (Mesa's llvmpipe, OpenGL 4.5), and the corpus
   test draws a stroke and undoes it with nothing installed first; saving

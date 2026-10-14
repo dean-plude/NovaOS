@@ -62,10 +62,10 @@ planned (roadmap item 27.5).
 |---|---:|---:|---:|---:|---:|
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
-| Silver | 3 | 1 | 0 | 1 | 5 |
+| Silver | 4 | 1 | 0 | 1 | 6 |
 | Bronze | 14 | 2 | 1 | 1 | 18 |
 | Borked | 0 | 1 | 0 | 0 | 1 |
-| Untested | 7 | 0 | 1 | 3 | 11 |
+| Untested | 6 | 0 | 1 | 3 | 10 |
 | **All** | 31 | 13 | 11 | 12 | 67 |
 
 ### Programs
@@ -82,6 +82,7 @@ planned (roadmap item 27.5).
 | **SumatraPDF 3.4.6** (x86 portable) | Silver | Opens a PDF and renders its pages | Printing finds no printer (NovaOS has no printers yet) | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
 | **KeePassXC 2.7.12** (Qt 5) | Silver | Opens and unlocks a KDBX 4 database and shows its entries | Windows Hello unlock reports "not supported" | nightly corpus ([`870-keepassxc.py`](../tests/appcorpus/870-keepassxc.py)) |
 | **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Silver | Installs from the App Store, opens its editor window on the built-in OpenGL (llvmpipe) and makes a new document | On software graphics (llvmpipe) it composites on the CPU by its own design and says so in a box at start; its GPU compositor ran on NovaOS's OpenGL in a test, but no hardware adapter has been tried. Editing not checked | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |
+| **LibreOffice 24.8** (App Store; 64-bit, Windows Installer package) | Silver | Installs silently from the App Store's download (`msiexec /qn`, its DLL custom actions run out of process); Writer opens a `.docx`, takes typing and saves it as Word, and Calc opens an `.xlsx`, takes a formula and saves it as Excel; the saved files keep the edits ([history](history/2026-10-14-libreoffice.md)) | No Insert > OLE Object dialog (oledlg answers Cancel); no font subsetting for PDF export (whole fonts are embedded); Skia falls back from Vulkan to its CPU renderer; Impress, Draw and Base not checked | nightly corpus ([`953-libreoffice.py`](../tests/appcorpus/953-libreoffice.py)) |
 | **PuTTY 0.81** (built from the source release with MinGW) | Bronze | Raw connections | SSH not checked | nightly corpus ([`950-putty.py`](../tests/appcorpus/950-putty.py)) |
 | **Krita 5.3.4** (Qt 5) | Bronze | Starts and opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing to install) | Painting and saving not checked | nightly corpus ([`885-krita.py`](../tests/appcorpus/885-krita.py)) |
 | **CADCraft 0.5.0** (ArtCraft; Rust, egui on wgpu) | Bronze | Installs from the App Store; with "Mesa 3D", "DXVK" and "VKD3D-Proton" from the App Store it gets a Direct3D 12 device (VKD3D-Proton on lavapipe) and opens an empty drawing (Drafting tools, view cube, Layers and Properties), about two and a half minutes after start under QEMU without KVM | Only the first window checked; its window starts wider than a 1280x800 screen; without the three App Store runtimes it exits at start, as on Windows it asks only for Direct3D 12 at first and NovaOS has no Direct3D 12 adapter of its own | nightly corpus ([`891-cadcraft.py`](../tests/appcorpus/891-cadcraft.py)) |
@@ -100,7 +101,6 @@ planned (roadmap item 27.5).
 | **GIMP** (App Store) | Untested | — | — | — |
 | **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 | **OBS Studio** (App Store) | Untested | — | — | — |
-| **LibreOffice** (App Store) | Untested | — | — | — |
 | **qBittorrent** (App Store) | Untested | — | — | — |
 | **ShareX** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 

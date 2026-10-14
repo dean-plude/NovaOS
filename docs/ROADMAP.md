@@ -705,6 +705,9 @@ apps from the App Store catalog pass their nightly scripts.
 
 - [ ] **27.1 Grow the corpus.** Add an App Store app per pull request,
   starting from failures in the existing corpus, until 40 GUI apps pass.
+  The corpus had no failures left (39 of 39 on 2026-10-13), so it starts
+  from the Store's untested apps: WinSCP (installs and opens its Login
+  dialog; [history](history/2026-10-14-winscp.md)).
 - [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.
 - [ ] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.

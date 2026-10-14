@@ -1403,6 +1403,28 @@ static bool wow_sub(const char *s, const char *dir)
     return !s[i] || s[i] == '\\' || s[i] == '/';
 }
 
+/* A 32-bit program's C:\Windows\Sysnative\... is the 64-bit
+ * C:\Windows\System32\... (@path is rewritten in place), as on Windows:
+ * how 32-bit programs reach 64-bit system programs, such as 32-bit
+ * regsvr32 handing a 64-bit DLL to the 64-bit one.  Whether it was one. */
+bool um_sysnative_path(UmProcess *p, char *path)
+{
+    if (!p->wow) return false;
+    char *s = path;
+    if (((s[0] | 0x20) == 'c') && s[1] == ':') s += 2;
+    static const char nat[] = "\\windows\\sysnative";
+    for (int i = 0; nat[i]; i++) {
+        char c = s[i];
+        if (c == '/') c = '\\';
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if (c != nat[i]) return false;
+    }
+    if (s[18] && s[18] != '\\' && s[18] != '/') return false;
+    memcpy(s + 9, "System32", 8);
+    memmove(s + 17, s + 18, strlen(s + 18) + 1);
+    return true;
+}
+
 /* A 32-bit program's C:\Windows\System32\... is C:\Windows\SysWOW64\...
  * (@path is rewritten in place), except the folders Windows shares between
  * the two (catroot, catroot2, driverstore, drivers\etc, logfiles, spool)
@@ -1410,7 +1432,7 @@ static bool wow_sub(const char *s, const char *dir)
  * (Windows keeps them in the registry, which both see) */
 void um_wow_path(UmProcess *p, char *path)
 {
-    if (!p->wow) return;
+    if (!p->wow || um_sysnative_path(p, path)) return;
     char *s = path;
     if (((s[0] | 0x20) == 'c') && s[1] == ':') s += 2;
     static const char sys[] = "\\windows\\system32";

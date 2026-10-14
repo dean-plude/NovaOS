@@ -1133,6 +1133,9 @@ CCAPI_ BOOL WINAPI ImageList_DrawEx(HIMAGELIST h, int i, HDC dc, int x, int y, i
 CCAPI_ HICON WINAPI ImageList_GetIcon(HIMAGELIST h, int i, UINT flags);
 CCAPI_ BOOL WINAPI ImageList_Remove(HIMAGELIST h, int i);
 CCAPI_ COLORREF WINAPI ImageList_SetBkColor(HIMAGELIST h, COLORREF c);
+struct IStream;
+CCAPI_ HIMAGELIST WINAPI ImageList_Read(struct IStream *stream);
+CCAPI_ BOOL WINAPI ImageList_Write(HIMAGELIST h, struct IStream *stream);
 #define ImageList_AddIcon(h, icon) ImageList_ReplaceIcon(h, -1, icon)
 CCAPI_ BOOL WINAPI SetWindowSubclass(HWND h, SUBCLASSPROC fn, UINT_PTR id, DWORD_PTR data);
 CCAPI_ BOOL WINAPI GetWindowSubclass(HWND h, SUBCLASSPROC fn, UINT_PTR id, DWORD_PTR *data);

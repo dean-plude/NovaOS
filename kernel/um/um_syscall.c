@@ -2391,6 +2391,7 @@ static UINT64 sys_nova_create_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
         return ST_INVALID_HANDLE;
     }
 
+    um_sysnative_path(p, image);                    /* (a 32-bit program starting a 64-bit system program) */
     const char *ip = image, *dp = dir;
     if ((ip[0] | 0x20) == 'c' && ip[1] == ':') ip += 2;
     if ((dp[0] | 0x20) == 'c' && dp[1] == ':') dp += 2;

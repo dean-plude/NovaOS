@@ -2,66 +2,89 @@
 <!-- The regions between "BEGIN generated" and "END generated" markers are built from fragment files by tools/docgen.py: edit those files, not the regions (CONTRIBUTING.md). -->
 
 **Goal:** a from-scratch x86-64 OS that runs **native Windows executables
-without emulation**: the binaries run directly on the CPU while NovaOS
-provides the NT system-call ABI, the Win32 API surface, the GUI server,
-loader semantics, and the drivers they expect.
+without emulation**. The programs' own machine code runs directly on the
+CPU; NovaOS provides the NT system-call ABI, the Win32 API, the loader,
+the GUI and the drivers they expect.
 
-> "Without emulation" means no CPU emulation (the code is already native
-> x86-64, or x86 run in compatibility mode).  It does **not** mean "without
-> work": NovaOS has to reproduce the Windows *environment*.  This is the
-> ReactOS problem, a clean-room Windows-compatible OS, and each step below
-> is meant to be concrete and verifiable so progress is real, not
-> aspirational.
+> "Without emulation" means no CPU emulation: the code is already native
+> x86-64, or 32-bit x86 run in compatibility mode through NovaOS's own
+> WoW64. It does **not** mean "without work". NovaOS has to reproduce the
+> Windows *environment*, the problem ReactOS works on. Every step below
+> ends in a check anyone can repeat, so progress is demonstrated rather
+> than claimed.
 
 ---
 
-## Where we are (Phase 22: preparing the first release)
+## Where we are
+
+NovaOS 0.1.0, the first release, was published on 2026-10-04 from the
+`v0.1.0` tag ([release notes](releases/0.1.0.md)). Since then every green
+CI run on a push to `main` republishes a rolling **latest** release with
+that commit's `nova.iso`. The release closed Phase 22 except its checks
+on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
+are complete, and Phases 24 and 25 are partly done.
 
 | Area | Current state | Evidence |
 |------|---------------|----------|
-| System | UEFI boot, x64 and x86 Windows programs, SMP, an interactive desktop, disk installation and live USB boot | QEMU/OVMF CI and self-tests |
-| Applications | Unmodified command-line tools, runtimes, installers, browsers, media apps, Qt/GTK programs and games run to tested milestones | Nightly app corpus and per-app compatibility notes |
-| Graphics and media | Mesa OpenGL/Vulkan with DXVK Direct3D; software rendering and QEMU virtio-GPU acceleration; sound, recording and media playback | `gltest`, `d3dtest`, and the app corpus |
-| Updates and release | Signed update channel and tag-based release workflow are in place | Release checks run on tagged commits |
-| Hardware | ThinkPad T14 Gen 4 is the reference machine; driver status and remaining checks are tracked separately | [Hardware checklist](hardware.md) |
+| System | UEFI boot, 64-bit and 32-bit (WoW64) Windows programs, SMP, an interactive desktop, installation to a disk, live boot from a USB stick | Core, network and devices self-test suites in CI (QEMU with OVMF) |
+| Applications | Unmodified command-line tools, language runtimes, installers (`.msi`, NSIS), Firefox, WebView2, Qt and GTK programs, media apps and games run to tested milestones | Nightly app corpus ([testing.md](testing.md)), [compatibility.md](compatibility.md) |
+| Graphics and media | Mesa's llvmpipe built in as the system OpenGL; Direct3D 8 to 11 through DXVK and Direct3D 12 through VKD3D-Proton (both from the App Store); QEMU virtio-GPU acceleration (virgl, Venus) with direct presentation; sound, recording and media playback | `gltest`, `d3dtest`, `dcomptest` in the graphics suite; the app corpus |
+| Drivers | NovaOS's built-in drivers, plus unchanged Windows driver packages (`.inf`/`.sys`) on an NT kernel-mode driver interface with KMDF, UMDF 2, USB, NDIS and Storport hosts (Phase 30); a display-only WDDM host runs a WDDM display-only test driver (`wddmdod.sys`) on QEMU's standard VGA | Devices suite boots (`wdm`, `edu`, `kmdfedu`, `vioser`, `usbserial`, `netkvm`, `viostor`, `umdf`, `wddm` and others), [drivers.md](drivers.md) |
+| Updates and release | Update channel with Ed25519-signed channel files; tag-triggered release workflow; rolling `latest` build from `main` | [updates.md](updates.md), [releasing.md](releasing.md) |
+| Performance | CI's **Performance budget** job times the boot and Firefox's first page and checks `smpstress` scaling on every code change | `tools/ci/perf.py`, `tools/ci/perf-budget.json` |
+| Hardware | The Lenovo ThinkPad T14 Gen 4 is the reference machine; its drivers are tested only against QEMU and modelled devices | [hardware.md](hardware.md) |
 
-The roadmap below tracks the remaining application, API, graphics and hardware
-work. The details of completed work are in [HISTORY.md](HISTORY.md).
+The details of completed work are in [HISTORY.md](HISTORY.md).
 
-**Current limits:** NovaOS uses its own clean-room Windows-compatible DLLs,
-not Microsoft's. GPU acceleration is through QEMU's virtio-GPU; physical GPU
-drivers are not implemented. Broad Windows application compatibility and
-real-hardware validation remain incomplete. Before 0.1, the release still
-needs its `v0.1.0` tag and a boot of that ISO on the reference PC.
+**Current limits:**
+
+- **No real-hardware check yet.** Nothing has been booted or checked on
+  the reference ThinkPad T14 Gen 4 (or any other PC); step 23.1 is the
+  first such check.
+- **No physical GPU driver.** GPU acceleration exists only through QEMU's
+  virtio-GPU. The Intel GPU work (step 25.3) has its design and the
+  display-only WDDM host, but Intel's own driver has not run yet.
+- **No release signing key built in.** `kernel/fs/update_key.h` is still
+  empty, so an installed NovaOS uses a channel without checking its
+  signature (step 23.5).
+- **Clean-room DLLs.** NovaOS's system DLLs are its own, not Microsoft's;
+  broad compatibility with arbitrary Windows software is a long-term goal,
+  not a current claim.
 
 ---
 
 ## The pivotal decision: how to get the Win32 API surface
 
-- **Path A — Reimplement (Wine-style).** Write our own `ntdll/kernel32/user32/
-  gdi32/…`. Clean-room, no licensing issues, total control; but the API
-  surface is vast and real apps break on missing edge cases.
-- **Path B — Binary compat (ReactOS-style).** Match a *specific* Windows
-  build's NT syscall ABI exactly, then load the **real Microsoft user-mode
-  DLLs**. Instant huge coverage; but brittle to version and constrained by
-  licensing on redistributing Microsoft DLLs.
-- **Path C — Hybrid.** Reimplement clean-room while holding ABI and
-  structure compatibility so real DLLs or drivers *can* be loaded when
-  desired.
+- **Path A — Reimplement (Wine-style).** Write our own `ntdll`, `kernel32`,
+  `user32`, `gdi32` and the rest. Clean-room, no licensing issues, total
+  control; but the API surface is vast and real programs break on missing
+  edge cases.
+- **Path B — Binary compatibility (ReactOS-style).** Match a *specific*
+  Windows build's NT syscall ABI exactly, then load the **real Microsoft
+  user-mode DLLs**. Huge coverage at once; but brittle across versions and
+  constrained by the licensing of Microsoft's DLLs.
+- **Path C — Hybrid.** Reimplement clean-room while keeping ABI and
+  structure compatibility, so real DLLs or drivers *can* be loaded when
+  that is the better choice.
 
 > **DECISION: Path C — Hybrid.** NovaOS's components are clean-room, but
 > structures (PEB/TEB/LDR, `CONTEXT`, `KUSER_SHARED_DATA`) and syscall
-> numbers follow a chosen target build, **Windows 10 1903 x64**.  In
-> practice every DLL so far is NovaOS's own (Path A in effect), and that has
-> been enough for the programs in the README; the ABI fidelity is what lets
-> unmodified binaries, runtimes and JITs find what they expect.
+> numbers follow one target build, **Windows 10 1903 x64**, checked by
+> `abitest`. Every system DLL is NovaOS's own (Path A in practice), with
+> open-source components such as Mesa, DXVK and VKD3D-Proton loaded
+> unchanged behind them. The driver side takes the other half of Path C:
+> since Phase 30, unchanged Windows driver packages (virtio-win's drivers,
+> FTDI's USB driver, Intel's AX211 Wi-Fi driver) load on a kernel-mode
+> interface with Windows-exact structures, with KMDF and UMDF built from
+> Microsoft's MIT-licensed WDF source.
 
 ---
 
 ## What comes next
 
-Ordered by what unblocks the most real programs.  Each item ends when a
-named program or test demonstrates it.
+Feature checklists by area. Struck-through items are done, with a link to
+the history entry or the test that shows it; the rest is still open. Each
+item ends when a named program or test demonstrates it.
 
 ### Graphics, 3D and media
 <!-- BEGIN generated:next-graphics -->
@@ -116,7 +139,10 @@ named program or test demonstrates it.
 - ~~**ffmpeg's imports**~~ Done (19.3): see [ffmpeg](HISTORY.md#ffmpeg).
   `ffmpeg -i in.mp4 out.webm` (H.264 and AAC to VP9 and Opus) completes,
   and the nightly app corpus runs it.
-- Display: GPU-backed or at least faster blits.  ~~Mode changes~~ Done:
+- Display: GPU-backed or at least faster blits.  On QEMU's virtio GPU,
+  frames from OpenGL, Vulkan and DirectComposition go to the screen
+  without CPU copies (see the GPU path item below); physical GPUs wait on
+  step 25.3.  ~~Mode changes~~ Done:
   run-time resolutions (Phase 12 onwards); the chosen one is kept across
   restarts, and windows a smaller mode shrank grow back when it is undone
   (Phase 18.9).  ~~More than one
@@ -187,8 +213,10 @@ named program or test demonstrates it.
   Done (Phase 20, stock Firefox 157 installs from the App Store and loads
   an HTTPS page in the nightly corpus; see
   [Firefox in the App Store](HISTORY.md#firefox-in-the-app-store)).
-  Left from this item: painting strokes in Krita, and a system
-  `opengl32.dll` so Krita runs without Mesa 3D.
+  Krita's corpus test now also draws a stroke on the canvas, and Krita
+  runs on the built-in OpenGL with nothing installed first
+  ([Mesa's OpenGL built in](HISTORY.md#mesas-opengl-built-in)).  The rest
+  of the catalog continues as step 27.1.
 - ~~Common dialogs: `GetOpenFileName`/`GetSaveFileName` and the
   `IFileDialog` interfaces~~ Done (Phase 20.1, `dlgtest`); see
   [Phase 20](HISTORY.md#phase-20-common-dialogs-and-portable-programs).
@@ -233,8 +261,11 @@ named program or test demonstrates it.
   publishes a release (`.github/workflows/release.yml`,
   [releasing.md](releasing.md)): every CI suite on the tagged commit, with
   the audio DSP firmware fetched first, then `nova.iso`, its checksums,
-  the update channel's files and notes from the history.  Still to do:
-  tag `v0.1.0`, and start the release's ISO on the reference PC.
+  the update channel's files and notes from the history.  `v0.1.0` was
+  tagged and published on 2026-10-04 ([release notes](releases/0.1.0.md)),
+  and every green CI run on a push to `main` republishes a rolling
+  `latest` release.  Still to do: start the release's ISO on the
+  reference PC (step 23.1).
 - The WebView2 runtime (Roblox's login page and many other programs show
   web content with it): ~~Edge Update's Windows APIs~~ Done
   (`edgeupdtest`); ~~MSXML 6~~ Done (`msxmltest`); ~~rpcrt4's NDR engine
@@ -266,11 +297,11 @@ named program or test demonstrates it.
   process composites the page through a swap chain on Venus); ~~that
   path through resizes, teardown while frames are presented, and the GPU
   process's window inside the browser's, 64- and 32-bit~~ Done
-  (`dcomptest life`).  Next: presenting without the CPU readback and GDI
-  copy (direct virtio GPU scan-out): done for OpenGL's frames and for
-  Venus's Vulkan swapchains on a window (direct presentation), still to
-  do for the composition swap chains (DirectComposition) WebView2's GPU
-  process presents into.
+  (`dcomptest life`).  Presenting without the CPU readback and GDI copy
+  (direct virtio GPU scan-out) is done for OpenGL's frames, for Venus's
+  Vulkan swapchains and for the DirectComposition targets WebView2's GPU
+  process presents into (`dcomptest direct`; see
+  [DirectComposition on the GPU](HISTORY.md#directcomposition-composited-on-the-gpu)).
 - Games: ~~OpenTTD (free on GOG) to its main menu~~ Done; ~~Beneath a
   Steel Sky (free on GOG) on ScummVM, installed with its installer and
   played~~ Done; ~~Teeworlds in full screen to its start menu, its music
@@ -331,7 +362,10 @@ named program or test demonstrates it.
   (`conptytest`).  Still to do: run Neovim's `:terminal` on it.
 - ~~Move files, the registry, process creation and the console off the
   big kernel lock~~ Done (Phase 17.7): file and registry throughput scale
-  about 3x from one CPU to four (`smpstress scaling 3`, run nightly).
+  about 3x from one CPU to four (`smpstress scaling 3`).  The nightly
+  run and CI's performance budget run `smpstress scaling 0` and fail
+  when files and the registry scale less than half as well as bare
+  system calls.
 - ~~Security: enforce tokens and ACLs on objects~~ Done for named kernel
   objects: real tokens, restricted tokens, impersonation, and descriptors
   checked on open (Phase 17.4, `sectest`, `acltest`).  Files' descriptors
@@ -439,8 +473,8 @@ named program or test demonstrates it.
   GPE blocks other than `\_GPE`; routing behind PCI bridges.  (USB wake
   from S3 is confirmed on a real PC; QEMU can't emulate it.)
   (Display modes after S3 are set again on every adapter NovaOS drives:
-  the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Real GPUs have
-  no driver yet.)
+  the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Physical GPUs,
+  such as the T14's Intel Iris Xe, have no driver yet; see step 25.3.)
 - ~~HPET or TSC-deadline timers~~ Done (Phase 18.7): the HPET calibrates
   the TSC and the APIC timer, which is one-shot (TSC-deadline where the
   CPU has it), armed for the next tick or the earliest `Sleep` or wait
@@ -453,7 +487,9 @@ named program or test demonstrates it.
   supported, partial or missing in [hardware.md](hardware.md); the
   Terminal's `devices` lists a machine's PCI devices and the driver each
   one has.
-- Boot and test on real hardware, not only QEMU.
+- Boot and test on real hardware, not only QEMU.  Not done yet: nothing
+  has been started on the reference ThinkPad T14 Gen 4; the hand checks
+  are step 23.1.
 - ~~Start from a USB stick~~ Done (Phase 21.2): `nova.iso` is a USB stick
   image as well as a disc (its EFI System Partition is a GPT partition
   too), runs live from the stick and offers Install NovaOS, with the
@@ -529,70 +565,39 @@ named program or test demonstrates it.
   matching the driver store.  Still to do: query-remove
   (`DBT_DEVICEQUERYREMOVE`) and handle notifications
   (`DBT_DEVTYP_HANDLE`).
-- Windows drivers the Windows 11 way (roadmap Phase 30, design in
-  [design/windows-drivers.md](design/windows-drivers.md)): run Windows
-  driver packages unchanged on an NT kernel-mode driver interface (a
-  kernel PE loader and `ntoskrnl.exe`/`hal.dll` exports, KMDF and UMDF
-  built from Microsoft's MIT source, then USB, NDIS and Storport hosts),
-  install them on devices matched by hardware ID from the driver store,
-  download them by hardware ID when none is there (step 30.6 is in:
-  `pnputil /scan-devices /search-online` downloads a device's package from
-  the Microsoft Update Catalog and stages it), and enforce Windows'
-  kernel-mode signing policy.  Steps 30.1 to 30.11, from loading a test
-  driver to virtio-win's serial, network and disk drivers.  Step 30.1 is in: a
-  kernel-mode test driver loads with `sc start`, serves a program's
-  `ReadFile` and `DeviceIoControl` as IRPs and unloads with `sc stop`.
-  Step 30.2's first part is in: the IRQL in `CR8`, DPCs, spin locks,
-  events, semaphores, timers, fast mutexes, the pool, MDLs and direct I/O,
-  and IRPs completed later from a DPC; kernel-mode SEH, work items and
-  system threads, `Zw*` registry and file calls and ETW stubs are next.  Step 30.7's
-  signing policy is in: a kernel driver loads only with a Microsoft driver
-  signature (embedded or in its installed catalog), a test-signed one only
-  with test signing on, an unsigned or tampered one never, and a package
-  whose files do not match its catalog is not staged.
-  Step 30.3 is in: `pnputil /add-driver /install` puts a Plug and Play
-  driver on a PCI device with no NovaOS driver, and the PnP manager starts
-  it with the device's memory, interrupt and DMA (QEMU's `edu` device in
-  the tests); line-based interrupts, and message-signalled ones (MSI and MSI-X) for a driver whose INF opts in.  Step 30.4 is in:
-  `Wdf01000.sys`, built from Microsoft's MIT WDF source, and NovaOS's
-  `WdfLdr.sys` load KMDF drivers: a test driver's control device and
-  queue, and a KMDF Plug and Play driver for the `edu` device whose
-  interrupt object (line or MSI), DMA transactions and common buffer pass
-  the same checks as the WDM one.
-  Step 30.5 is in: virtio-win's own `vioser.sys` installs with `pnputil`,
-  runs on KMDF, reports its serial ports as child devices, and a program
-  exchanges bytes with the host through `\\.\Global\<port name>`.
-  Step 30.8 is in: a vendor's Windows USB client driver runs a USB device
-  through NovaOS's own USB bus interface (URBs over its USB core): FTDI's
-  driver, downloaded by hardware ID, makes QEMU's `usb-serial` converter
-  COM3, which programs open with the communications functions.
-  Step 30.11 is in: NovaOS's own Storport host (`storport.sys`) runs
-  virtio-win's `viostor.sys` on QEMU's virtio-blk card, and NovaOS mounts
-  the NTFS volume on its disk.
-  Step 30.9 is done: NovaOS's own NDIS host (`ndis.sys`) runs
-  virtio-win's `netkvm.sys` on QEMU's virtio-net card in place of the
-  built-in driver, and the network stack uses it for DHCP, ping and
-  downloads.  Intel's own AX211 Wi-Fi driver (`Netwtw14.sys`, a WDI
-  miniport) now downloads by hardware ID, installs, registers with the
-  NDIS host and reaches its hardware probe on a stand-in device in QEMU;
-  scanning and joining a network on the T14's real card is step 28.1.
-  Step 30.10 is in: a UMDF 2 driver installs with `pnputil`, the
-  reflector `WUDFRd.sys` starts a driver host (`WUDFHost.exe`) that runs it
-  on Microsoft's user-mode framework (`Wudfx02000.dll`), and a program's
-  reads, writes and device controls reach its queues (QEMU's `edu` device
-  in the tests).
+- Windows drivers the Windows 11 way (Phase 30, complete: all eleven
+  steps are in; design in [design/windows-drivers.md](design/windows-drivers.md),
+  what ships in [drivers.md](drivers.md)): unchanged Windows driver
+  packages run on an NT kernel-mode driver interface, beside NovaOS's own
+  built-in drivers.  A kernel PE loader and `ntoskrnl.exe`/`hal.dll`
+  exports with Windows-exact structures load `.sys` images (30.1, 30.2);
+  `pnputil /add-driver /install` puts a driver on a PCI device with no
+  built-in driver, started with its memory, interrupts (line, MSI or
+  MSI-X) and DMA (30.3); KMDF (`Wdf01000.sys`) and UMDF 2 (`WUDFHost.exe`,
+  `Wudfx02000.dll`) are built from Microsoft's MIT-licensed WDF source
+  (30.4, 30.10); `pnputil /scan-devices /search-online` downloads a
+  device's package from the Microsoft Update Catalog by hardware ID
+  (30.6); Windows' kernel-mode signing policy is enforced (30.7).  Third-
+  party drivers checked in QEMU's devices suite: virtio-win's `vioser.sys`
+  (30.5), `netkvm.sys` on NovaOS's NDIS host (30.9) and `viostor.sys` on
+  its Storport host (30.11), and FTDI's USB serial driver on its USB bus
+  interface (30.8).  Intel's AX211 Wi-Fi driver (`Netwtw14.sys`) installs
+  and registers with the NDIS host on a stand-in device; joining a
+  network on the T14's card is step 28.1.  The display-only half of a
+  WDDM host (`dxgkrnl.sys`'s role) followed as step 1 of the Intel GPU
+  design (step 25.3).
 
 <!-- END generated:next-hardware -->
 
 ---
 
-## After 0.1: what comes next
+## After 0.1: Phases 23 to 30
 
-The following phases extend the roadmap beyond the first release. Keep the
-same rule as Phases 15–22: each step is a focused change with a repeatable
-check. The order is a proposal; Phase 23 comes first because 0.1 is not
-complete until it has been checked on a real PC. The checked items below
-reflect work already demonstrated in this repository.
+These phases follow the first release. They keep the rule of Phases 15 to
+22: each step is one focused change with a check anyone can repeat. A
+ticked step has been demonstrated in this repository; an unticked one is
+open. 0.1.0 passed every CI suite in QEMU before it was published, but it
+has not yet been started on a real PC, so Phase 23 is first in priority.
 
 ### Phase 23: Finish 0.1 on real hardware
 
@@ -604,14 +609,18 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   log and PCI IDs. Mark each device in [hardware.md](hardware.md) verified
   or missing; this settles the real-machine checks in 21.2–21.5 and 22.5.
 - [ ] **23.2 First missing T14 driver.** Use the 23.1 log to choose and fix
-  the first device that does not work, retaining its QEMU regression test.
+  the first device that does not work, keeping a QEMU regression test for
+  it.
 - [ ] **23.3 A clean nightly week.** Fix failures until seven scheduled
   nightly runs in a row pass; this also completes 15.4 and 17.7.
 - [ ] **23.4 Hyper-V.** Check VMBus keyboard and mouse in a Hyper-V
   Generation 2 VM. Done when NovaOS reaches the desktop and accepts input.
+  The synthetic mouse's attach fault and the VMBus handshake were fixed in
+  #367 ([hyperv.md](hyperv.md)); the check on a real Hyper-V host is still
+  to do.
 - [ ] **23.5 Update signing key.** Ship the release public key in
-  `update_key.h`; verify that a 0.1 install accepts a signed 0.1.1 test
-  update and rejects an unsigned one.
+  `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
+  a signed 0.1.1 test update and rejects an unsigned one.
 
 ### Phase 24: Gaming
 
@@ -623,19 +632,19 @@ game with sound and a controller.
 - [ ] **24.2 GOG Galaxy library.** Complete sign-in and show an owned game.
 - [ ] **24.3 Install and play from a store.** Install a DRM-free game through
   Steam or Galaxy and reach gameplay with sound and a controller.
-- [x] **24.4 Direct3D 12.** VKD3D-Proton support renders a D3D12 sample and
+- [x] **24.4 Direct3D 12.** VKD3D-Proton renders a Direct3D 12 sample and
   the Godot 4.7 game Squash the Creeps; see [the D3D12 game
   check](HISTORY.md#a-direct3d-12-game-squash-the-creeps-on-godot).
 - [ ] **24.5 Roblox on the T14.** Check Roblox's VM test on real hardware
   without bypassing it; done when Roblox reaches its home page.
-- [ ] **24.6 Epic Games Launcher.** Start after WebView2's GPU path and
-  sign in to show its library.
+- [ ] **24.6 Epic Games Launcher.** Sign in and show its library. It
+  depends on WebView2's GPU path, which is in (25.1).
 - [ ] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
   what NovaOS lacks and the faithful fix; never bypass or patch them.
 
 ### Phase 25: GPU
 
-**Goal:** fast graphics without CPU copies, retaining CPU rendering when no
+**Goal:** fast graphics without CPU copies, keeping CPU rendering when no
 supported GPU exists. **Gate:** WebView2 and a game render on the GPU with a
 measured frame-time gain over the CPU path.
 
@@ -646,15 +655,19 @@ measured frame-time gain over the CPU path.
   the display without CPU readback or GDI copies; `gltest present` and
   `gltest fps` compare the direct and fallback paths. See
   [direct presentation](HISTORY.md#direct-presentation-on-the-virtio-gpu).
+  Vulkan swapchains and DirectComposition's GPU swap chains followed
+  (`d3dtest present`, `dcomptest direct`).
 - [ ] **25.3 Intel GPU design.** Design the driver for the T14's Intel Iris
   Xe, covering kernel display and memory management. Done when the design
   is merged and display modes change on the T14's panel. The design is in
-  [design/intel-gpu.md](design/intel-gpu.md): Intel's own Windows driver,
-  unchanged, through a WDDM host (a `dxgkrnl.sys` stand-in), with Intel's
-  Vulkan driver under DXVK and VKD3D-Proton; a native driver under Mesa's
-  iris and anv is the fallback. Modes changing on the panel is its step 2.
-  Step 1 is in: the display-only WDDM host, with `wddmdod.sys` driving
-  QEMU's standard VGA in the devices suite ([history](HISTORY.md#a-windows-display-driver-on-the-boot-display)).
+  [design/intel-gpu.md](design/intel-gpu.md) (#366): Intel's own Windows
+  driver, unchanged, through a WDDM host (a `dxgkrnl.sys` stand-in), with
+  Intel's Vulkan driver under DXVK and VKD3D-Proton; a native driver under
+  Mesa's iris and anv is the fallback. Its step 1 is in (#368): the
+  display-only WDDM host, with the test driver `wddmdod.sys` driving
+  QEMU's standard VGA in the devices suite's `wddm` boot
+  ([history](HISTORY.md#a-windows-display-driver-on-the-boot-display)).
+  Modes changing on the panel is its step 2, on the T14.
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or
@@ -663,7 +676,8 @@ measured frame-time gain over the CPU path.
 ### Phase 26: Kernel, console and storage
 
 **Goal:** close the remaining API gaps. **Gate:** a terminal app hosts
-`cmd.exe` through ConPTY, and NTFS C: survives a power cut.
+`cmd.exe` through ConPTY, and NTFS C: survives a power cut. All four steps
+are done (#370, #372, #375, #376).
 
 - [x] **26.1 Console cells on libvterm.** Make console screen buffers and
   pseudo consoles share one cell model. Done when a full-screen program
@@ -674,16 +688,16 @@ measured frame-time gain over the CPU path.
   draws them.
 - [x] **26.2 ConPTY end to end.** Complete process attachment, pipe lifetime,
   resize and VT output together. Done when a terminal app runs and resizes
-  an interactive `cmd.exe` through `CreatePseudoConsole`.  The pseudo
+  an interactive `cmd.exe` through `CreatePseudoConsole`. The pseudo
   console turns the host's keys (VT sequences included) into key records,
   echoes and edits lines as conhost does, and draws its screen again on
   `ResizePseudoConsole`; `conptytest` types into, resizes and exits
   `cmd.exe` as a terminal host and draws the same cells.
 - [x] **26.3 NTFS robustness.** Verify interrupted writes and a full disk:
   after a power cut during writes, `chkdsk` reports no errors; a full disk
-  returns `ERROR_DISK_FULL` without corruption.  A volume NovaOS was cut
+  returns `ERROR_DISK_FULL` without corruption. A volume NovaOS was cut
   off writing to (drive C: included) is checked and repaired from its MFT
-  records at the next mount, as chkdsk would; cut off after each of a
+  records at the next mount, as chkdsk would. Cut off after each of a
   churn's 800-odd disk writes in turn (`tests/tools/test_ntfs_cut.py`)
   and after a machine reset (`ntfstest cut`), it comes back with every
   file whole and passes `scripts/ntfs-check.py` with no errors.
@@ -693,10 +707,11 @@ measured frame-time gain over the CPU path.
   CI's **Performance budget** job (`tools/ci/perf.py`, part of the
   "Build and boot-test" check) boots NovaOS once, times the boot to the
   desktop and the bundled Firefox from `start` to its first page on the
-  screen, and runs `smpstress scaling 0` on four CPUs; a time over its
-  budget (`tools/ci/perf-budget.json`, about twice what the runners take)
-  or files and the registry scaling under half as well as bare system
-  calls fails the check, and every run's numbers are in its summary.
+  screen, and runs `smpstress scaling 0` on four CPUs. A time over its
+  budget (`tools/ci/perf-budget.json`: 20 s to boot, 10 s for Firefox,
+  judged only under KVM), Firefox never drawing its page, or files and
+  the registry scaling less than half as well as bare system calls fails
+  the check; every run's numbers are in its summary.
 
 ### Phase 27: Apps for everyday use
 
@@ -711,6 +726,9 @@ apps from the App Store catalog pass their nightly scripts.
 - [ ] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.
 - [ ] **27.3 Krita.** Provide Mesa OpenGL 2 or later; draw and save an image.
+  OpenGL is now built in (Mesa's llvmpipe, OpenGL 4.5), and the corpus
+  test draws a stroke and undoes it with nothing installed first; saving
+  an image is still to do.
 - [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
   from the T14 over its own network.
 - [ ] **27.5 App Store badges from CI.** Show each app's verified badge from
@@ -722,7 +740,11 @@ apps from the App Store catalog pass their nightly scripts.
 online over Wi-Fi, takes a video call and runs a day on battery with sleep.
 
 - [ ] **28.1 Wi-Fi.** Support the Intel AX211 and its redistributable
-  firmware; join WPA2 and WPA3 networks and fetch HTTPS content.
+  firmware; join WPA2 and WPA3 networks and fetch HTTPS content. Intel's
+  own Windows driver (`Netwtw14.sys`) already downloads by hardware ID,
+  installs and registers with NovaOS's NDIS host on a stand-in device in
+  QEMU (step 30.9); scanning and joining a network on the real card is
+  this step.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
@@ -741,48 +763,109 @@ tagged `v0.2.0` passes the full CI suite and T14 checks.
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
   must boot in QEMU and on both reference PCs.
 
+### Phase 30: Windows drivers
+
+**Goal:** run unchanged Windows driver packages (`.inf` with its `.sys`,
+`.cat` and firmware) the way Windows 11 does, beside NovaOS's own built-in
+drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
+(#343). **Complete:** all eleven steps were merged on 2026-10-12 and
+2026-10-13, each checked by a boot of the devices suite in QEMU.
+[drivers.md](drivers.md) describes what ships.
+
+- [x] **30.1 Load a kernel-mode driver** (#345). A kernel PE loader and
+  the `ntoskrnl.exe`/`hal.dll` export layer (`kernel/nt/`); a test driver
+  (`wdmtest.sys`) starts with `sc start`, serves a program's `ReadFile`
+  and `DeviceIoControl` as IRPs and unloads with `sc stop`.
+- [x] **30.2 The kernel API a driver lives on** (#346, #349). IRQL in
+  `CR8`, DPCs, spin locks, events, timers, the pool, MDLs, kernel-mode
+  SEH, work items, system threads, `Zw*` registry and file calls and
+  ETW/WMI stubs; CI checks that every import of `vioser.sys`,
+  `Wdf01000.sys` and `WdfLdr.sys` is provided
+  (`tools/ci/check-driver-imports.py`).
+- [x] **30.3 PnP drivers on hardware resources** (landed with #357; MSI
+  and MSI-X in #359). `pnputil /add-driver /install` puts a driver on a
+  PCI device with no built-in driver, and the PnP manager starts it with
+  the device's memory, interrupt (line, MSI or MSI-X) and DMA; tested on
+  QEMU's `edu` device.
+- [x] **30.4 KMDF** (#353, #363). `Wdf01000.sys`, built from Microsoft's
+  MIT-licensed WDF source, and NovaOS's `WdfLdr.sys` run a KMDF control
+  device and a KMDF driver for the `edu` device.
+- [x] **30.5 The first third-party driver** (#357). virtio-win's
+  `vioser.sys` installs with `pnputil`, runs on KMDF, and a program
+  exchanges bytes with the host through `\\.\Global\<port name>`.
+- [x] **30.6 Downloading drivers by hardware ID** (#347).
+  `pnputil /scan-devices /search-online` finds a device's package in the
+  Microsoft Update Catalog, downloads it and stages it.
+- [x] **30.7 Signing policy** (#348). A kernel driver loads only with a
+  Microsoft driver signature, a test-signed one only with test signing on,
+  an unsigned or tampered one never; a package whose files do not match
+  its catalog is not staged.
+- [x] **30.8 USB client drivers** (#356). FTDI's own driver, downloaded by
+  hardware ID, runs QEMU's `usb-serial` converter through NovaOS's USB bus
+  interface as a COM port.
+- [x] **30.9 Network miniports through NDIS** (#361; Intel AX211 in #362,
+  #364, #365). NovaOS's NDIS host runs virtio-win's `netkvm.sys` on
+  QEMU's virtio-net card for DHCP, ping and downloads; Intel's AX211
+  Wi-Fi driver loads and registers on a stand-in device (joining a
+  network is step 28.1).
+- [x] **30.10 UMDF 2** (#360). The reflector `WUDFRd.sys` starts
+  `WUDFHost.exe`, which runs a UMDF 2 driver on `Wudfx02000.dll` (built
+  from the same WDF source) and serves a program's I/O.
+- [x] **30.11 Storage miniports through Storport** (#355). NovaOS's
+  Storport host runs virtio-win's `viostor.sys` on a QEMU virtio-blk disk,
+  and NovaOS mounts the NTFS volume on it.
+
+Later, only when a target device needs them: HID class, PortCls and
+AVStream drivers, and the full WDDM render path (step 25.3 onwards).
+
 ---
 
 ## Cross-cutting (maintain throughout)
 
-- **Automated boot CI** (done): every pull request builds NovaOS, boots it
-  under QEMU + OVMF and runs the self-tests and the OpenGL/Direct3D tests
-  (`tools/selftest.py`, `.github/workflows/ci.yml`); a failing test fails
-  the check.
+- **Automated boot CI** (done): every pull request that changes more than
+  documentation (and every push to `main`) builds NovaOS, boots it
+  under QEMU with OVMF and runs the core, network and devices self-test
+  suites, the graphics (OpenGL and Direct3D) tests and the performance
+  budget (`tools/selftest.py`, `tools/ci/perf.py`,
+  `.github/workflows/ci.yml`); a failing test fails the check.
+  [ci.md](ci.md) and [testing.md](testing.md) have the details.
 - **Reproducible build:** CMake drives `nasm`, clang/lld and `lld-link`
-  for the kernel, bootloader and Windows userland; CI builds `nova.iso`
-  with `scripts/create-iso.sh` (a run artifact on every pull request, the
-  `latest` build from `main`, and a release from each version tag through
-  `.github/workflows/release.yml`); the ISO is not committed.
-- **Debugging:** the GDB stub over QEMU (`run-debug`), the serial log,
-  crash reports naming the module and offset, and the Terminal's `trace
-  NAME` for a program's failing system calls, and symbolized kernel
-  backtraces (the kernel embeds its symbol table; faults, panics and
-  failed assertions print function+offset frames).  Crashes leave a
-  report a user can attach to an issue in `C:\NovaOS\Crashes` (a
-  program's exception, place, stack and modules; a kernel fault's log
-  and backtrace, written into `\NOVA\PANIC.TXT` on the disk and moved
-  there at the next start).
-- **ABI conformance tests** (done): `abitest` asserts PEB/TEB/KUSER/CONTEXT
-  offsets, ntdll's stub layout and every syscall number against Windows 10
-  1903 x64, in CI.
+  for the kernel, boot loader and Windows userland; CI builds `nova.iso`
+  with `scripts/create-iso.sh`. The ISO is a run artifact of every CI
+  build, the rolling `latest` release after each green push to `main`,
+  and a versioned release for each `v*` tag
+  (`.github/workflows/release.yml`). The ISO is not committed.
+- **Debugging:** the GDB stub over QEMU (the `run-debug` target), the
+  serial log, the Terminal's `trace NAME` for a program's failing system
+  calls, and symbolized kernel backtraces (faults, panics and failed
+  assertions print function+offset frames). Crash reports a user can
+  attach to an issue go to `C:\NovaOS\Crashes`: a program's exception,
+  place, stack and modules, or a kernel fault's log and backtrace, which
+  is written to `\NOVA\PANIC.TXT` on the disk and moved there at the next
+  start.
+- **ABI conformance tests** (done): `abitest` checks PEB, TEB,
+  `KUSER_SHARED_DATA` and `CONTEXT` offsets, ntdll's stub layout and every
+  syscall number against Windows 10 1903 x64, in CI.
 - **Parallel changes without conflicts** (done): DLLs, programs,
   self-tests, the app corpus and the docs' lists are one file per item
-  (CONTRIBUTING.md), generated doc regions are rebuilt on main by
+  (CONTRIBUTING.md); generated doc regions are rebuilt from fragments by
   `tools/docgen.py`, and CI fails on leftover conflict markers.
 - **Test corpus:** every self-test program in `userland/programs/` is a
-  permanent regression test, built for x64 and x86; `tools/pe_imports.py`
-  shows what a new program needs before it is tried.
-- **Nightly app corpus** (done): `tools/appcorpus.py` runs ripgrep, fd, jq,
-  7-Zip, MinGit, Python, Node.js, .NET, ffmpeg, SumatraPDF, WinMerge, VLC,
-  Audacity, Notepad++ and PuTTY every night, checks
-  NovaOS's own `dir` and This PC screens, and posts a pass/fail table per
-  program.
+  permanent regression test, built for x64 and x86;
+  `tools/pe_imports.py` shows what a new program needs before it is
+  tried, and `tools/sys_imports.py` does the same for a driver.
+- **Nightly app corpus** (done): `tools/appcorpus.py` runs each program in
+  `tests/appcorpus/` (command-line tools, runtimes, GUI apps, installers
+  and games) every night under KVM, with two later scheduled slots that
+  run again only if the night's run failed, checks `smpstress` scaling,
+  and posts a pass/fail table per program. The current list is generated into
+  [testing.md](testing.md).
 
 ## Reality check
 
-This is ReactOS-scale.  NovaOS already runs a meaningful set of real
-command-line programs, runtimes, installers and one large GUI program
-unmodified.  "Runs arbitrary commercial Windows software" remains a
-long-horizon goal; the value of this plan is an ordered path where each
-step produces something demonstrably working.
+This is ReactOS-scale work. NovaOS already runs a meaningful set of real
+command-line programs, runtimes, installers, browsers, creative apps and
+games unmodified, and loads unchanged Windows drivers in QEMU. It has not
+yet run on a real PC, and "runs arbitrary commercial Windows software"
+remains a long-horizon goal. The value of this plan is an ordered path in
+which each step produces something demonstrably working.

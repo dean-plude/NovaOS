@@ -1,243 +1,281 @@
 # What is inside NovaOS
 
-The full tour; the [README](../README.md#what-is-inside) has the short version and [HISTORY.md](HISTORY.md) the details of every phase.
+A tour of NovaOS's parts, from the bootloader to the Windows DLLs. The
+[README](../README.md#what-is-inside) has a one-line summary of each, and
+[HISTORY.md](HISTORY.md) records how and when each part was built.
+
+For how the parts fit together and why, see
+[design/architecture.md](design/architecture.md); for the boot path and
+the kernel's memory layout, [phase1-architecture.md](phase1-architecture.md);
+for which programs run, [compatibility.md](compatibility.md).
+
+Each item below is its own file in `docs/inside/`, and the list is
+rebuilt from those files by `tools/docgen.py`. To change an item, edit its
+file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 <!-- BEGIN generated:inside -->
 
-- **Boot**: a UEFI bootloader (a PE32+ EFI application) loads the ELF kernel
-  from the EFI System Partition, or from the ISO on a CD or written to a
-  USB stick (the installation media, run live; started from a stick,
-  NovaOS writes its log into `\EFI\NOVA\bootlog.txt` on it).
-- **Kernel** (`kernel/`): NT-style executive: object manager and handles,
-  processes and threads, virtual memory with sections and guard pages
-(the read-only pages of loaded DLLs are shared by every process with the
-same bytes, as Windows shares image sections, and a module another
-running process loaded at the same address is mapped from its kept pages
-without being copied, relocated or hashed again), I/O,
-  registry, security tokens (restricted tokens, impersonation) and
-  security descriptors checked when named objects and files on drive C:
-  are opened.  SMP with per-core scheduling and fine-grained
-  locks; wait queues; APCs; pipes; the NT system-call table at Windows 10
-  1903 numbers.  Timers are the local APIC's, one-shot or TSC-deadline and
-  calibrated against the HPET (from CPUID leaf 0x15 where the firmware
-  hides it), so `Sleep(1)`, wait timeouts and waitable
-  timers end within a fraction of a millisecond even with every CPU busy;
-  a thread woken by a timer preempts the running one instead of waiting
-  for its time slice to end.  NT's priority boosts: a thread woken by an
-  event, a lock, I/O, a window message or input runs above its base
-  priority (+1 to +6; +2 for window messages and the input they carry,
-  as win32k gives) and preempts busy threads of that priority, then
-  decays back one level per quantum; a balance set lifts threads that
-  have starved for 3 s.  Priority classes and thread priorities
-  (`SetPriorityClass`, `SetThreadPriority`) set NT's base priorities;
-  every kernel thread (input, audio, the network, USB, the desktop,
-  saving drive C:) stays above anything a program can ask for, and the
-  process whose window is active (or the console program running in the
-  active Terminal) gets NT's foreground boost (+2 after every wait) and
-  three times the time slice (60 ms against 20 ms).  The Multimedia
-  Class Scheduler (`AvSetMmThreadCharacteristics`) runs a program's audio
-  threads at real-time priority 18, above every program thread and the
-  desktop, with Windows' 80% budget so one cannot freeze the machine;
-  NovaOS's own sound threads (waveOut, waveIn, DirectSound, WASAPI) use
-  it too.
-- **Drivers**: AHCI SATA and NVMe disks (NovaOS installs to and boots from
-  either), FAT16/FAT32, GPT, NTFS (read, write and format: drive C: with
-  file ACLs and hard links, and other drives); Intel e1000/e1000e network cards (82540EM, 82574L
-  and the I219 that Intel PCs have built in) and virtio-net; Intel High Definition Audio (playback
-  and recording, laptop controllers with the audio DSP on included, the
-  speakers turned off while headphones are plugged in; a laptop's digital
-  microphones through Sound Open Firmware on Intel's audio DSP) with a kernel mixer;
-  PS/2 keyboards and mice; I2C-HID touchpads on Intel's LPSS I2C
-  controllers (found through ACPI; tap to click, two-finger tap for the
-  right button and two-finger scrolling as mouse-wheel input; read when
-  their interrupt pin on Intel's GPIO controller fires); USB (xHCI, EHCI, OHCI and UHCI controllers, any
-  number of each) with hubs and HID keyboards (lock-key LEDs and media
-  keys included), mice (five buttons and both wheels), tablets, pens
-  (pressure, X/Y tilt, barrel rotation, barrel buttons and eraser, for
-  Wintab and as `WM_POINTER` pen messages) and
-  multi-touch screens (report protocol), USB sticks (FAT and NTFS, as
-  the next drive letter, hot-plugged) and USB speakers, headsets and
-  microphones (USB Audio Class 1 and 2 over isochronous transfers, at the
-  device's own sampling rate and channel count, which the mixer runs at,
-  asynchronous devices' rate feedback followed, played on and recorded
-  from as soon as they are plugged in, or chosen in Settings' Sound page,
-  each with its own volume; the choice and the levels are kept across
-  restarts), and game controllers (wired Xbox 360 and Xbox One
-  controllers, with their motors, and HID game pads, for XInput,
-  DirectInput 8, Raw Input and `hid.dll`); a Plug and Play device tree
-  of the PCI and USB devices (Windows instance, hardware and compatible
-  IDs, setup classes and drivers; arrivals and removals as events, an
-  unplugged device kept as not present; walked with cfgmgr32, setupapi
-  and `pnputil /enum-devices`); virtio multi-touch screens,
-  pens (pressure, tilt, rotation) and tablets; CMOS clock; a VBE display
-  driver for QEMU's standard VGA, QXL, virtio-vga and VMware adapters,
-  bochs-display and VirtualBox (resolutions switched at run time, page
-  flipping, the mode set again after sleep and kept across restarts; more
-  adapters, such as QEMU's secondary-vga, are more monitors of one
-  desktop, arranged in Settings, each able to show DPI-aware programs
-  its own DPI) and a Cirrus GD5446 one, with
-  the UEFI framebuffer as the fallback; a virtio GPU driver for
-  QEMU's virtio-vga and virtio-gpu-pci, whose outputs are several
-  monitors on one card, plugged in and unplugged while NovaOS runs, and
-  which on a 3D one (`virtio-vga-gl`) gives Mesa's Venus and virgl (App
-  Store) their contexts, host-visible blobs, 3D resources, transfers and
-  fences, so Vulkan, DXVK and OpenGL run on the host's GPU, and their
-  frames (OpenGL's, and Vulkan's swapchains, so DXVK's and VKD3D-Proton's)
-  are written into the screen there, on any monitor and at scale 2 too,
-  while their window is alone on it (direct presentation; DirectComposition's
-  GPU swap chains, WebView2's, go the same way through `dcomp.dll`); ACPI power-off, reset, power buttons,
-  sleep (S3, or low-power S0 idle on firmware without it), batteries and
-  AC adapters, the lid, thermal zones, wake devices and PCI interrupt
-  routing (AML interpreted by uACPI, with the SCI a real interrupt
-  through the I/O APIC), and the embedded controller laptops keep their
-  lid and battery behind.
-- **Networking**: lwIP (TCP/IP over IPv4 and IPv6: DHCP, SLAAC, DNS over
-  either, or a static address and DNS servers set in Settings > Network or
-  with `netsh` and kept across restarts), an HTTP/1.1 client, and Mbed TLS with the Mozilla root store.
-  The loopback interface carries 127.0.0.1 and ::1 (and traffic to the
-  machine's own addresses), and `localhost` resolves to both without DNS.
-  Winsock (`ws2_32`, and `wsock32` with Winsock 1.1's ordinals) speaks IPv6
-  and dual-stack sockets with `getaddrinfo`, and its socket options reach
-  the TCP/IP stack (`TCP_NODELAY`, `SO_RCVTIMEO`/`SO_SNDTIMEO`,
-  `SO_LINGER`, `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_BROADCAST`, `IP_TTL`,
-  `SO_RCVBUF`/`SO_SNDBUF`, and `IPV6_V6ONLY`, on by default as on
-  Windows, so `[::]` and `0.0.0.0` can share a port) and read back; a program keeps hundreds of
-  sockets open at once, as a browser does, and `select`, `WSAPoll` and
-  `WSAEventSelect` wait on any number of them; a UDP socket can be
-  connected to a peer, and `WSADuplicateSocket` hands a socket to another
-  process (Chromium's DNS client and its network process use both);
-  overlapped requests that have to wait (an `AcceptEx`, a `ConnectEx`, a
-  `WSARecv` with nothing to read yet) stay pending and complete on an I/O
-  completion port, which proactor event loops such as Python's asyncio need;
-  `winhttp` is a real HTTP client over Schannel TLS, with HTTP/2 by ALPN
-  (nghttp2).
-- **Windows userland** (`userland/`): about 35 system DLLs written from
-  scratch and compiled with clang for `x86_64-pc-windows-msvc`, and again
-  for `i686` in `SysWOW64`: `ntdll`, `kernel32`, `msvcrt`/`ucrtbase` with
-  the `api-ms-win-crt-*` API sets (`errno` and the rest of the C
-  runtime's per-thread state kept per thread, as on Windows, with
-  `_configthreadlocale` per-thread locales and `getenv` results other
-  threads cannot overwrite; `ntdll` gives fiber-local storage its own
-  slots and runs `FlsAlloc` callbacks when a thread or the process ends;
-  `TlsAlloc` has the 1024 expansion slots past the TEB's 64), `vcruntime140`/`vcruntime140_1` (C++
-  exceptions, FH3 and FH4 tables), `msvcp140` and its satellites (the C++
-  standard library: Microsoft's own STL, compiled with clang, with
-  Boost.Math under `msvcp140_2`'s special math functions),
-  `user32`/`gdi32` (a real window system, controls, menus, dialogs, MDI,
-  hooks, per-monitor and per-thread DPI awareness with `WM_DPICHANGED`, controls and fonts at each window's DPI and rescaled when it changes, window coordinates converted between awareness contexts,
-  touch, pens and the mouse as `WM_POINTER` messages with `GetPointerPenInfo`, title bars included, and the pen signature in `GetMessageExtraInfo`; `SetCursorPos` and `ClipCursor` for the window in front, as games recentre and confine the pointer), `gdiplus` (GDI+ on the MIT-licensed plutovg rasteriser),
-  `comdlg32` (the Open and Save As dialogs, classic and `IFileDialog`),
-  `comctl32`, `riched20`/`msftedit` (Rich Edit controls that take RTF,
-  as setup programs' licence pages need), `shell32`, `ole32`/`oleaut32` (COM and OLE Automation with
-  type libraries, and calls between processes over named pipes with the standard marshaler and the `IDispatch` proxy; the Windows Runtime's strings and the few runtime classes Win32 programs ask for, such as `UISettings` for the user's colours), `rpcrt4` (the NDR engine COM proxy/stub DLLs run on:
-  stubless proxies, `NdrStubCall2`, `CStdStubBuffer`, the `NdrDll*` entry points), `advapi32`, `ws2_32`, `oleacc`,
-  `winmm` (joysticks too: `joyGetPosEx` and `joyGetDevCaps` over NovaOS's
-  game controllers, as SDL 1.2 games read pads) and `mmdevapi` (sound: `waveOut`, `waveIn`, `PlaySound`, MIDI,
-  WASAPI playback and capture, a device ID or endpoint for each sound
-  device, device 0 being the default as on Windows, each with its own
-  endpoint volume; sound plays at its own rate and is converted once, by
-  the mixer, to the device's), `dsound` (DirectSound, with
-  every device enumerated and openable by its GUID),
-  `xaudio2_7`/`xaudio2_8`/`xaudio2_9` and `x3daudio1_7` (on FAudio; every
-  output listed and openable by its device ID), `msi`
-  (with `msiscript` running JScript and VBScript custom actions on the
-  ISC-licensed mujs; product, patch and source-list queries by
-  installation context, as bootstrappers such as WiX Burn make them), `msxml6` (MSXML: the XML DOM with XPath, SAX and
-  `XMLHTTP` on the MIT-licensed libxml2, answering the MSXML 3 classes
-  such as `Msxml2.DOMDocument` too),
-  `secur32` with Schannel (TLS 1.3/1.2 for programs, on Mbed TLS),
-  `crypt32` and `wintrust` (certificate stores and chains, signed PKCS #7
-  messages, and Authenticode: `WinVerifyTrust` checks a program's
-  signature, its timestamp and its chain to the trusted roots, and the
-  Microsoft root policy tells Microsoft's own signatures apart),
-  `usp10` (Uniscribe), `normaliz` (IDN), `urlmon` (`CreateUri`, and the
-  Internet security manager's zones),
-  `wintab32` (Wintab pen tablets: pressure, tilt and barrel rotation for GTK,
-  Qt and Krita), `cabinet` (the FDI functions installers extract cabinets
-  with, MSZIP and LZX, on `msi`'s cabinet readers), `wldap32` (LDAP
-  sessions, for programs that link to it; no directory servers yet),
-  `opengl32` (Mesa's llvmpipe, OpenGL 4.5 on the CPU, built in; virgl on a
-  3D virtio-gpu from the App Store; or with no driver NovaOS's own
-  OpenGL 1.1, which draws 2D as ScummVM needs: textures, vertex arrays,
-  blending, scissor), `ddraw` (DirectDraw for 32-bit programs: the
-  MIT-licensed cnc-ddraw, every surface in memory and the screen drawn
-  with Direct3D 9, OpenGL or GDI, in a display mode switched for the
-  program), `dinput` (DirectInput 3 to 7, over the same devices as
-  `dinput8`), `shfolder` (the old
-  `SHGetFolderPath` DLL setup programs look for), `crtdll` (the NT 3
-  C runtime, forwarding to `msvcrt`), `d3dcompiler_47` (the HLSL compiler: Wine's vkd3d-shader,
-  LGPL-2.1, turns HLSL into Direct3D 9, 10, 11 and 12 (shader model 5.1, with
-  descriptor arrays indexed at run time as wgpu's sampler heap needs, and
-  RWByteAddressBuffer's Load, GetDimensions and Interlocked methods for its
-  storage buffers, and stores to indexed groupshared arrays for its workgroup
-  memory) bytecode
-  for Chromium's ANGLE, wgpu and games, with `D3DReflect`, `D3DDisassemble` and the shader
-  container parts), `dxgi`, `d3d11` and `dcomp` without a GPU (Windows'
-  Microsoft Basic Render Driver adapter, a WARP device whose textures
-  the CPU maps and copies, and DirectComposition showing its swap chains:
-  what Chromium's software compositor draws WebView2's pages with, with
-  DXVK installed too; with DXVK, also Chromium's GPU DirectComposition path:
-  `DCompositionCreateDevice3`, surfaces and composition swap chains on the
-  GPU device, read back for DirectComposition, through resizes, teardown
-  and windows of another process), and
-  the DLLs Firefox delay-loads (`d3d11`, `credui`, `winspool.drv`,
-  `dhcpcsvc`), the ones Qt WebEngine imports
-  (`bthprops.cpl`, `d3d12`, `winusb`: no Bluetooth radio, Direct3D 12
-  device (until the App Store's VKD3D-Proton is installed, which `d3d12`
-  then hands every call to) or WinUSB device, as on a PC without them, with Bluetooth's SDP
-  record parsers working in full), and more.
-- **Text**: `novatext.dll`, the text core built once and shared, carries
-  HarfBuzz (shaping) and FreeType (fonts).  Uniscribe (`usp10`) itemizes
-  text by script and direction and shapes it with HarfBuzz, and GDI's
-  `ExtTextOut` sends complex scripts through it, as Windows' LPK does, so
-  Arabic, Hebrew and the Indic scripts join, reorder and run right to left.
-  Arabic and Devanagari draw with Noto Sans; GDI falls back to them by
-  script.  DirectWrite (`dwrite`) lays text out on the same core, with
-  font fallback: `tools/dwtest` draws Latin, Arabic and Devanagari in one
-  line from a Latin-only font.  Its factory is an `IDWriteFactory3`, with
-  Windows 10's font sets, font face references and `IDWriteFontFallback`,
-  which Chromium's browsers (Steam's, WebView2) ask for
-  (`tools/dw3test`).
+- **Boot** (`bootloader/`): a UEFI bootloader (a PE32+ EFI application)
+  loads the ELF kernel, `\EFI\NOVA\kernel.elf`, from the EFI System
+  Partition of an installed disk, or from the ISO on a CD or written to a
+  USB stick.
+  - The ISO is both the live system and the installer. Started from a USB
+    stick, NovaOS also writes its log to `\EFI\NOVA\bootlog.txt` on the
+    stick.
+  - On an installed disk the bootloader adds a "NovaOS" firmware boot
+    entry, and starts a newly downloaded kernel once, falling back to the
+    previous one if the new one never reaches the desktop
+    ([updates.md](updates.md)).
+  - It hands the kernel the memory map, the GOP framebuffer, the ACPI RSDP
+    and a copy of the SMBIOS tables ([phase1-architecture.md](phase1-architecture.md)).
+- **Kernel** (`kernel/`): an NT-style executive written from scratch.
+  - Object manager and handles, processes and threads, an I/O manager, the
+    registry (saved to disk), security tokens (restricted tokens,
+    impersonation) and security descriptors, checked when named objects
+    and files on drive C: are opened.
+  - Virtual memory with sections and guard pages. The read-only pages of a
+    loaded DLL are shared by every process that loads the same bytes, as
+    Windows shares image sections.
+  - The NT system-call table at Windows 10 1903 x64 numbers; NovaOS's own
+    services are numbered from 0x200 up.
+  - SMP: a run queue per CPU, fine-grained locks for the busy paths and a
+    big kernel lock for the rest ([design/architecture.md](design/architecture.md)).
+  - Timers are the local APIC's, one-shot or TSC-deadline, calibrated
+    against the HPET (or CPUID leaf 0x15, or the PIT). `Sleep(1)` and wait
+    timeouts end within a fraction of a millisecond even with every CPU
+    busy.
+  - NT's priorities: base and dynamic priorities, priority classes,
+    wake-up boosts (+1 to +6), the foreground boost and a three times
+    longer time slice (60 ms against 20 ms) for the active window's
+    process, and a balance set that lifts threads starved for 3 s. Kernel
+    threads run at 16 to 19, above anything a program can ask for.
+  - The Multimedia Class Scheduler (`AvSetMmThreadCharacteristics`) runs
+    audio threads at real-time priority 18, capped at 80% of a CPU as on
+    Windows. NovaOS's own sound threads (waveOut, waveIn, DirectSound,
+    WASAPI) use it too.
+  - Drive C: is a RAM disk, saved to an NTFS or FAT32 volume once it has
+    been quiet for a second and restored at boot.
+- **Built-in drivers** (`kernel/drivers/`, `kernel/hal/`, `kernel/fs/`):
+  NovaOS's own drivers, compiled into the kernel; they play the part of
+  Windows' inbox drivers ([drivers.md](drivers.md), [hardware.md](hardware.md)).
+  - **Storage**: AHCI SATA and NVMe disks (NovaOS installs to and boots
+    from either); GPT; FAT16/FAT32; NTFS with read, write and format (drive
+    C: with file ACLs and hard links, and other drives as D:, E:, ...),
+    repaired by NovaOS itself after a power cut.
+  - **Network**: Intel e1000/e1000e (82540EM, 82574L and the I219 built
+    into Intel PCs) and virtio-net.
+  - **Sound**: Intel High Definition Audio, playback and recording, with
+    headphone detection; a laptop's digital microphones through Sound Open
+    Firmware on Intel's audio DSP; a kernel mixer.
+  - **USB**: xHCI, EHCI, OHCI and UHCI controllers, any number of each,
+    with hubs; HID keyboards, mice, tablets, pens (pressure, tilt, barrel
+    rotation and buttons, eraser) and multi-touch screens; mass storage
+    (FAT and NTFS sticks, hot-plugged as the next drive letter); USB Audio
+    Class 1 and 2 speakers, headsets and microphones; wired Xbox 360 and
+    Xbox One controllers and HID game pads (for XInput, DirectInput 8, Raw
+    Input and `hid.dll`).
+  - **Other input**: PS/2 keyboards and mice; I2C-HID touchpads on Intel's
+    LPSS I2C controllers, found through ACPI and read on their GPIO
+    interrupt (tap to click, two-finger right click and scrolling);
+    virtio multi-touch screens, pens and tablets.
+  - **Display**: a VBE "DISPI" driver for QEMU's standard VGA, QXL,
+    virtio-vga, VMware and bochs-display adapters and VirtualBox's VBoxVGA
+    (modes switched at run time, page flipping, more adapters as more
+    monitors); a Cirrus GD5446 driver; a virtio-gpu driver
+    (see Graphics below); the UEFI framebuffer as the fallback.
+  - **Platform**: ACPI through uACPI's AML interpreter (power-off, reset,
+    power and sleep buttons, S3 sleep or low-power S0 idle, batteries and
+    AC adapters, the lid, thermal zones, wake devices, PCI interrupt
+    routing, the embedded controller), the I/O APIC, the HPET and the CMOS
+    clock.
+  - **Plug and Play**: a device tree of the PCI and USB devices with
+    Windows instance, hardware and compatible IDs, setup classes and
+    drivers, arrivals and removals as events, walked with cfgmgr32,
+    setupapi and `pnputil /enum-devices`.
+- **Windows drivers** (`kernel/nt/`): real Windows driver packages (an
+  `.inf` with its `.sys`, `.cat` and firmware files) run unchanged on an
+  NT kernel-mode driver interface ([drivers.md](drivers.md)).
+  - A kernel PE loader and `ntoskrnl.exe`/`hal.dll` exports in the
+    Microsoft x64 ABI, with Windows' own structure layouts: IRQL, DPCs,
+    spin locks, dispatcher objects, the pool, MDLs and DMA, IRPs,
+    kernel-mode SEH, line-based and message-signalled (MSI, MSI-X)
+    interrupts.
+  - KMDF from Microsoft's MIT-licensed Windows Driver Frameworks source
+    (`Wdf01000.sys` with NovaOS's `WdfLdr.sys`), and UMDF 2 drivers in
+    `WUDFHost.exe` behind the `WUDFRd.sys` reflector.
+  - Class hosts that vendor miniports plug into: NDIS (virtio-win's
+    `netkvm.sys`), Storport (virtio-win's `viostor.sys`), the USB bus
+    interface (FTDI's USB serial driver) and a display-only WDDM host in
+    place of `dxgkrnl.sys`.
+  - Drivers are installed with `pnputil` or `sc`, matched to devices by
+    hardware ID from the driver store, downloaded by hardware ID from the
+    Microsoft Update Catalog when none is there, and loaded only under
+    Windows' kernel-mode signing policy.
+- **Networking** (`kernel/net/`): lwIP for TCP/IP over IPv4 and IPv6.
+  - DHCP, SLAAC and DNS over either, or a static address and DNS servers
+    set in Settings > Network or with the Terminal's `netsh`, kept across
+    restarts. A loopback interface carries 127.0.0.1 and ::1, and
+    `localhost` resolves to both without DNS.
+  - An HTTP/1.1 client and Mbed TLS with the Mozilla root store in the
+    kernel, which the App Store and updates download with.
+  - Winsock (`ws2_32`, and `wsock32` with Winsock 1.1's ordinals): IPv6 and
+    dual-stack sockets, `getaddrinfo`, socket options that reach the stack
+    and read back (`TCP_NODELAY`, timeouts, `SO_LINGER`, `SO_REUSEADDR`,
+    `SO_KEEPALIVE`, buffer sizes, `IPV6_V6ONLY` on by default as on
+    Windows), hundreds of sockets per program, `select`, `WSAPoll` and
+    `WSAEventSelect` on any number of them, connected UDP sockets and
+    `WSADuplicateSocket`.
+  - Overlapped `AcceptEx`, `ConnectEx` and `WSARecv` stay pending and
+    complete on an I/O completion port, as proactor event loops such as
+    Python's asyncio need.
+  - `winhttp` is an HTTP client over Schannel TLS, with HTTP/2 through
+    ALPN (nghttp2).
+- **Desktop** (`kernel/wm/`, `kernel/apps/`): a window manager and shell
+  drawn by the kernel's software GDI ([design/native-desktop.md](design/native-desktop.md)).
+  - Windows 11-style frames, a dock with pinned and running apps, a Start
+    menu that searches apps, programs, settings pages and files, Alt+Tab,
+    snapping, desktop icons and context menus, the Aurora workspace or the
+    classic wallpaper themes, and several monitors arranged in Settings.
+  - Built-in apps: File Explorer, Notepad, Terminal (a command shell over
+    drive C:, which also runs Windows console programs), Settings,
+    Calendar, Photos, the App Store (downloads open-source Windows
+    programs and NovaOS updates) and, on the live media, Install NovaOS.
+- **Windows userland** (`userland/`): about 115 system DLLs, NovaOS's own
+  code apart from the third-party libraries named below, built with clang
+  for `x86_64-pc-windows-msvc` into `System32` and again for `i686` into
+  `SysWOW64`.
+  - **Core**: `ntdll` (the user-mode loader, fiber-local storage, and
+    64 + 1024 TLS slots as on Windows), `kernel32`/`kernelbase`, `advapi32` (registry, security,
+    services), `msvcrt`, `ucrtbase` and the `api-ms-win-crt-*` API sets
+    (per-thread `errno` and locales as on Windows), `vcruntime140` and
+    `vcruntime140_1` (C++ exceptions, FH3 and FH4 tables), `msvcp140` and
+    its satellites (Microsoft's own STL, with Boost.Math under
+    `msvcp140_2`), and the NT 3 `crtdll`.
+  - **Windows and controls**: `user32` (the window tree, controls, menus,
+    dialogs, MDI, hooks, per-monitor and per-thread DPI awareness, touch,
+    pens and the mouse as `WM_POINTER` messages), `gdi32`, `gdiplus` (on the
+    plutovg rasteriser), `comctl32`, `comdlg32` (classic and `IFileDialog`
+    Open and Save As dialogs), `riched20`/`msftedit` (Rich Edit with RTF),
+    `shell32`, `oleacc`, `uxtheme`, `dwmapi`.
+  - **COM**: `ole32`/`oleaut32` (in-process and local servers, type
+    libraries, calls between processes with the standard marshaler, the
+    Windows Runtime's strings and the few runtime classes Win32 programs
+    ask for) and `rpcrt4` (the NDR engine proxy/stub DLLs run on).
+  - **Sound and input**: `winmm` (waveOut, waveIn, MIDI, joysticks),
+    `mmdevapi` (WASAPI playback and capture, one endpoint per device),
+    `dsound`, `xaudio2_7`/`_8`/`_9` and `x3daudio1_7` (on FAudio),
+    `dinput` and `dinput8`, XInput, `wintab32` (Wintab pen tablets) and
+    `hid`.
+  - **Installers and files**: `msi` (Windows Installer, with JScript and
+    VBScript custom actions on mujs), `cabinet` (MSZIP and LZX), `msxml6`
+    (on libxml2, also answering MSXML 3's classes), `shfolder`, `setupapi`,
+    `cfgmgr32`, `taskschd`.
+  - **Security and the web**: `secur32` with Schannel (TLS 1.3/1.2 on Mbed
+    TLS), `crypt32` and `wintrust` (certificate stores and chains, PKCS #7,
+    Authenticode with `WinVerifyTrust`), `bcrypt`/`ncrypt`, `ws2_32`,
+    `winhttp`, `wininet`, `urlmon`, `normaliz` (IDN), `wldap32` (no
+    directory servers yet).
+  - **Stand-ins**: DLLs that programs import for hardware NovaOS does not
+    have answer as Windows does on a PC without it, such as `bthprops.cpl`
+    (no Bluetooth radio) and `winusb` (no WinUSB device).
+- **Text**: `novatext.dll`, one shared text core with HarfBuzz (shaping)
+  and FreeType (fonts).
+  - Uniscribe (`usp10`) itemizes text by script and direction and shapes
+    it with HarfBuzz, and GDI's `ExtTextOut` sends complex scripts through
+    it, as Windows' LPK does, so Arabic, Hebrew and the Indic scripts join,
+    reorder and run right to left. GDI falls back to Noto Sans for Arabic
+    and Devanagari.
+  - DirectWrite (`dwrite`) lays text out on the same core, with font
+    fallback, and its factory is an `IDWriteFactory3` with Windows 10's
+    font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
+    for (`tools/dwtest`, `tools/dw3test`).
 - **2D drawing**: Direct2D (`d2d1.dll`) draws in software: geometries
   (rectangles, ellipses, paths with Béziers and arcs, groups, transforms,
   combining, widening, tessellation), strokes with caps, joins and dashes,
   solid, gradient and bitmap brushes, layers and clips, on HWND, DC and
-  bitmap render targets.  Text goes through DirectWrite's text formats and
-  layouts.
-- **Media tools**: a current Windows build of ffmpeg runs unchanged and
-  converts H.264 and AAC to VP9 and Opus with all its threads.
-- **Media players and editors**: VLC plays video with sound and Audacity
-  records and saves, on the same WASAPI, GDI and message-loop code paths
-  real Windows programs take (Qt's `WH_GETMESSAGE` hook, wxWidgets'
-  buffered painting).
-- **ICU** as Windows 10 ships it: `icu.dll` (ICU 77.1, x64 and x86,
+  bitmap render targets, with text through DirectWrite (`tools/d2dtest`).
+- **Graphics**: drawing runs on the CPU by default, and on the host's GPU
+  under QEMU with a 3D virtio-gpu.
+  - **OpenGL**: `opengl32` hands every call to Mesa: llvmpipe (OpenGL 4.5
+    on the CPU) is on drive C: from the start, and virgl (the App Store's
+    "Venus" package) runs OpenGL on the host GPU. With neither, NovaOS's own
+    OpenGL 1.1 draws 2D, as ScummVM needs.
+  - **Vulkan and Direct3D**: `vulkan-1` loads Mesa's drivers from the App
+    Store: lavapipe on the CPU ("Mesa 3D") or Venus on the host GPU. DXVK
+    runs Direct3D 8 to 11 and VKD3D-Proton runs Direct3D 12 on them, with
+    `d3d9`, `d3d11` and `d3d12` handing their calls over once installed.
+  - **Without them**: `d3d9` lists the adapters with no device, so programs
+    take their software paths; `dxgi`, `d3d11` and `dcomp` give Windows'
+    Microsoft Basic Render Driver adapter, a CPU device that Chromium's
+    software compositor draws WebView2 with; `ddraw` is cnc-ddraw for
+    32-bit DirectDraw games.
+  - **Shaders**: `d3dcompiler_47` compiles HLSL to Direct3D 9 to 12
+    bytecode (up to shader model 5.1) on Wine's vkd3d-shader, for ANGLE,
+    wgpu and games, with `D3DReflect` and `D3DDisassemble`.
+  - **virtio-gpu** (`kernel/drivers/virtio_gpu.c`): QEMU's virtio-vga and
+    virtio-gpu-pci with several outputs plugged in and out at run time; on
+    `virtio-vga-gl` it gives Venus and virgl their 3D contexts, blobs and
+    fences, and a window alone on its monitor has its OpenGL or Vulkan
+    frames written to the screen by the host (direct presentation).
+  - Real GPUs: a display-only WDDM host runs Windows display drivers for
+    the screen alone; 3D on Intel's GPU through Intel's own Windows driver
+    is planned ([design/intel-gpu.md](design/intel-gpu.md)).
+- **Media tools**: an unmodified Windows build of ffmpeg 7.1.1 makes an
+  H.264 and AAC MP4 and converts it to VP9 and Opus with all its threads
+  (`tests/appcorpus/080-ffmpeg.py`).
+- **Media players and editors**: VLC plays an H.264 and AAC video with
+  sound, and Audacity records from the microphone and saves the project,
+  on the same WASAPI, GDI and message-loop paths real Windows programs
+  take (`tests/appcorpus/870-vlc.py`, `880-audacity.py`).
+- **ICU**, as Windows 10 ships it: `icu.dll` (ICU 77.1, 64- and 32-bit,
   built by `tools/build_icu.py`) with its data in
-  `C:\Windows\Globalization\ICU`.  .NET does its globalization through
-  it, and kernel32 answers `GetLocaleInfoEx` from it for every one of the
-  864 Windows locales and formats dates, times, numbers and money in them
-  (`GetDateFormat`, `GetTimeFormat`, `GetNumberFormat`,
-  `GetCurrencyFormat`, `GetDurationFormat`) in their calendars (Japanese
-  eras, Thai Buddhist, Hebrew, Hijri, Um Al Qura, Persian...).  The user's
-  regional format is set with `intl NAME` or Settings > Time & language and
-  kept in the registry, with the user's own changes to it
-  (`SetLocaleInfo`).
-- **Program support**: the PE loader with TLS, `DllMain`, forwarders and
-  API sets; x64 and x86 structured exceptions, with Windows'
-  alignment-fault fixup for misaligned SSE moves; Windows' segment
-  selectors, so 64-bit programs can far-jump into 32-bit code; registry saved to disk;
-  COM in-process and local (`LocalServer32`) servers, type libraries,
-  proxy/stub DLLs and calls between processes; drag and drop; a shared clipboard; `.lnk`
-  shortcuts; Windows Installer packages; services (`advapi32`'s service
-  control manager); event tracing as Windows answers with no logging
-  session running (providers register, controllers and consumers find no
-  session); scheduled tasks (Task Scheduler 2.0, kept in
-  `C:\Windows\System32\Tasks`); the Data Protection API.
-- **Updates**: the App Store's Updates page downloads a newer NovaOS from
-  an update channel signed with the release key (Ed25519), and the next
-  restart starts it, going back to the old one if it does not start
-  ([docs/updates.md](docs/updates.md)).
-  Every green build of `main` is also an update, on its own channel.
-- **Firefox**: bundled Mozilla Windows x64 browser, default for web links; NetSurf remains available.
-- **Hyper-V**: a VMBus driver (hypercalls, the SynIC, channel offers, ring buffers) with Hyper-V's synthetic keyboard and mouse, the only input a Generation 2 VM has ([docs/hyperv.md](docs/hyperv.md)).
+  `C:\Windows\Globalization\ICU`.
+  - .NET does its globalization through it.
+  - `kernel32` answers `GetLocaleInfoEx` from it for all 864 Windows
+    locales, and formats dates, times, numbers, currency and durations in
+    their calendars (Japanese eras, Thai Buddhist, Hebrew, Hijri, Um Al
+    Qura, Persian and others).
+  - The user's regional format is set with `intl NAME` or
+    Settings > Time & language, and kept in the registry with the user's
+    own changes (`SetLocaleInfo`).
+- **Program support**: what unmodified Windows programs rely on beyond
+  the DLLs themselves.
+  - The PE loader: imports, forwarders, API sets, TLS callbacks and
+    `DllMain` run in user mode by `ntdll`, in dependency order.
+  - 64- and 32-bit programs side by side: 32-bit code runs in compatibility
+    mode through a 32-bit `ntdll` that converts each system call, as WoW64
+    does, and Windows' segment selectors let 64-bit code far-jump into
+    32-bit code.
+  - x64 and x86 structured exception handling, with `CONTEXT` and the AVX
+    state as Windows lays them out, and Windows' fix-up of misaligned SSE
+    moves.
+  - Consoles: screen buffers on libvterm, and pseudo consoles (ConPTY) for
+    terminal hosts running `cmd.exe`. GUI programs start without a console
+    window.
+  - COM in-process and local (`LocalServer32`) servers, proxy/stub DLLs
+    and calls between processes; drag and drop; a shared clipboard; `.lnk`
+    shortcuts; Windows Installer packages.
+  - Services (`advapi32`'s service control manager), scheduled tasks (Task
+    Scheduler 2.0, kept in `C:\Windows\System32\Tasks`), the Data
+    Protection API, and event tracing that answers as Windows does with no
+    logging session running.
+- **Updates**: an installed NovaOS updates itself from an update channel
+  ([updates.md](updates.md)). The App Store's Updates page (or the
+  Terminal's `update`) downloads the new kernel and bootloader, the next
+  restart starts them, and NovaOS goes back to the old ones if the new
+  kernel does not reach the desktop. A NovaOS built with the release key
+  installs only channels signed with it (Ed25519). The default channel is
+  the newest tagged release; each green CI run on `main` also publishes a
+  channel of its own with the rolling `latest` build.
+- **Firefox**: Mozilla's unmodified Firefox 157.0 for Windows x64 is in the
+  image (`tools/bundle_firefox.py` downloads it and checks it against
+  Mozilla's SHA-512 sums) at `C:\Programs\Mozilla Firefox\core`, and opens
+  web links and local HTML files. NetSurf stays installed and takes over
+  when Firefox is missing. The nightly app corpus loads an HTTPS page in
+  it and compares a screenshot ([building-firefox.md](building-firefox.md)).
+- **Hyper-V**: in a Generation 2 VM, whose only input devices are on
+  VMBus, NovaOS's VMBus driver (hypercalls, the SynIC, channel offers, ring
+  buffers) runs Hyper-V's synthetic keyboard and mouse. Its synthetic
+  disks, network and video have no driver yet ([hyperv.md](hyperv.md)).
 
 <!-- END generated:inside -->

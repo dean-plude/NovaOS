@@ -6,7 +6,7 @@ its free and open-source engine.  It installs from the App Store (the
 official 64-bit zip, which carries the freeware game data) and draws
 through SDL2's Direct3D 9 renderer, SDL's first choice on Windows, which
 NovaOS's `d3d9.dll` hands to DXVK on Mesa 3D's Vulkan (llvmpipe)
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 It needed no NovaOS changes.  What the corpus test now checks, in one run:
 

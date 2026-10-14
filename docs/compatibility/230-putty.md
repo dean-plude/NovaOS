@@ -1,4 +1,4 @@
-program: **PuTTY 0.81**
+program: **PuTTY 0.81** (built from the source release with MinGW)
 kind: program
 rating: Bronze
 works: Raw connections

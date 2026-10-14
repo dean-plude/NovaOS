@@ -1,7 +1,7 @@
 ## Plug and Play drivers on real hardware resources
 
 Step 30.3 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a Windows
 function driver installed from its `.inf` drives a PCI device, with the
 device's memory, interrupt and DMA handed to it the way Windows hands them.
 

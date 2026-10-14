@@ -1,25 +1,36 @@
 # Intel Ethernet: e1000, e1000e and the I219
 
-NovaOS has one driver for Intel's gigabit Ethernet family,
-`kernel/drivers/e1000.c`.  It takes, in this order of preference:
+NovaOS has one built-in driver for Intel's gigabit Ethernet family,
+`kernel/drivers/e1000.c`. It takes the first adapter it finds, in this
+order of preference:
 
 | Adapter | PCI IDs (vendor 8086) | Where you meet it |
 |---|---|---|
-| **I219-LM and I219-V** ("Ethernet Connection (N) I219"), the MAC built into Intel chipsets since 2015 | 55 IDs, below | the wired port of most Intel laptops and desktops, the [reference machine](hardware.md) among them |
-| **82574L** | `10d3` | QEMU's `e1000e` (q35's default NIC) |
+| **I219-LM and I219-V** ("Ethernet Connection (N) I219"), the MAC built into Intel chipsets since 2015 | 55 IDs, [below](#the-i219-ids) | the wired port of most Intel laptops and desktops, the [reference machine](hardware.md) among them |
+| **82574L** | `10d3` | QEMU's `e1000e` device |
 | **82540EM, 82544, 82545EM** | `100e`, `100f`, `1004`, `100c`, `1015` | QEMU's `e1000`, VirtualBox, VMware |
 
-The Terminal's `devices` lists the adapter with the driver `e1000e`
-(the 82574L and the I219) or `e1000`, and `ipconfig` names it: the I219
-by the name Windows gives it, such as "Intel Ethernet Connection (16)
-I219-LM".
+NovaOS's network stack uses one adapter at a time. At boot it takes an
+Intel adapter if there is one, otherwise a virtio-net card
+(`kernel/net/net.c`). A Windows NDIS driver installed on a card can take
+over from the built-in virtio-net driver ([drivers.md](drivers.md#network-drivers-ndis));
+the e1000 driver does not step aside that way.
+
+The Terminal's `devices` lists the adapter with the driver `e1000e` (the
+82574L and the I219) or `e1000`, and `ipconfig` names it: the I219 by the
+name Windows gives it, such as "Intel Ethernet Connection (16) I219-LM".
+
+**Status:** the I219 code has not run on real hardware yet. QEMU has no
+I219, so only the parts it shares with the 82574L are tested
+([below](#testing-it)). The first I219 to be checked is the reference
+ThinkPad T14 Gen 4's.
 
 ## The I219 IDs
 
 Each ID belongs to one chipset (PCH) generation, which decides the errata
-the driver applies.  The ThinkPad T14 Gen 4 (Intel) has a Raptor Lake-P
+the driver applies. The ThinkPad T14 Gen 4 (Intel) has a Raptor Lake-P
 chipset, so its I219 is one of the Alder Lake / Raptor Lake IDs; which one
-shows in `devices` on the machine.
+will show in `devices` on the machine.
 
 | Chipset | I219-LM (vPro) | I219-V |
 |---|---|---|
@@ -34,10 +45,10 @@ shows in `devices` on the machine.
 ## How the I219 differs, and what the driver does
 
 The I219 shares the 82574L's descriptor rings and most registers, which
-is why QEMU's 82574L can test the common path.  What it adds is the PHY:
-a separate chip that the MAC reaches over MDIO, or over SMBus while the
-PHY sleeps, and that the chipset's management engine (ME, on vPro
-models running AMT) shares.  The driver brings it up the way Intel's own
+is why QEMU's 82574L can test the common path. What it adds is the PHY: a
+separate chip that the MAC reaches over MDIO, or over SMBus while the PHY
+sleeps, and that the chipset's management engine (ME, on vPro models
+running AMT) shares. The driver brings it up the way Intel's own
 BSD-licensed driver code (FreeBSD's `e1000_ich8lan.c`) does:
 
 1. Puts the PCI function in D0, if the firmware left it in D3.
@@ -45,7 +56,7 @@ BSD-licensed driver code (FreeBSD's `e1000_ich8lan.c`) does:
    firmware may have left the PHY: asks the ME firmware to do it when
    there is one, otherwise power-cycles the PHY (the LANPHYPC pin) and
    clears its ULP and SMBus settings.
-3. Checks that the PHY answers on MDIO (its ID registers), first as is,
+3. Checks that the PHY answers on MDIO (its ID registers): first as is,
    then with the MAC in SMBus mode, then after a LANPHYPC power cycle,
    unless the ME firmware blocks PHY resets.
 4. Resets the MAC and the PHY together, holding the software semaphore
@@ -57,11 +68,11 @@ BSD-licensed driver code (FreeBSD's `e1000_ich8lan.c`) does:
    then has the PHY auto-negotiate at 10, 100 and 1000 Mb/s.
 6. When the link comes up, sets what the speed needs (the inter-packet
    gap, the PLL clock gate, K1 at gigabit speed, the transmit pointer
-   gap), and logs `[E1000] Link up at 1000 Mb/s, full duplex`.
+   gap) and logs `[E1000] Link up at 1000 Mb/s, full duplex`.
 
-After sleep (S3) it does all of this again.  Every step that can fail
+After sleep (S3) it does all of this again. Every step that can fail
 logs what happened, so the boot log of a machine whose port stays dark
-shows how far it got.  On a working machine it should read like this
+shows how far it got. On a working machine it should read like this
 (the device ID, MAC and PHY revision differ):
 
 ```
@@ -72,26 +83,37 @@ shows how far it got.  On a working machine it should read like this
 [E1000] Link up at 1000 Mb/s, full duplex
 ```
 
-Not done yet: configuring the PHY from the NVM's extended configuration
-region (the driver logs `The NVM asks the driver to configure the PHY`
-when a machine wants it), energy-efficient Ethernet, the power-saving
-latency settings (LTR, OBFF), Wake-on-LAN, jumbo frames, checksum and
-segmentation offload, and interrupts (the network thread polls, as for
-every adapter).
+The first line's PHY state can also be `answering in SMBus mode`,
+`answering after a LANPHYPC power cycle`, `not answering (the ME firmware
+blocks its power cycle)` or `not answering after a LANPHYPC power cycle`.
+
+Not done yet:
+
+- configuring the PHY from the NVM's extended configuration region (the
+  driver logs `The NVM asks the driver to configure the PHY (not done)`
+  when a machine wants it);
+- energy-efficient Ethernet and the power-saving latency settings (LTR,
+  OBFF);
+- Wake-on-LAN, jumbo frames, checksum and segmentation offload;
+- interrupts: the network thread polls the adapter, as it does for every
+  adapter;
+- more than one adapter.
 
 ## Testing it
 
-QEMU has no I219, so the self-tests run the shared path on the 82574L:
-the network suite's third boot (`tests/selftest/network-e1000e`) checks
-the PHY's ID and auto-negotiation in the boot log, pulls the link and
-plugs it back (QEMU's `set_link`), sleeps and wakes the machine, and runs
-the IPv4 tests (`ping`, Winsock, winhttp's HTTP/2, `looptest`) on it:
+QEMU has no I219, so the self-tests run the shared path on the 82574L.
+The network suite's e1000e boot (`tests/selftest/network-e1000e`) checks
+the adapter, the PHY's ID and auto-negotiation in the boot log, pulls the
+link and plugs it back (QEMU's `set_link`), sleeps and wakes the machine,
+and then runs the IPv4 boot's tests on it (Winsock, WinHTTP, Schannel,
+loopback, downloads, `netsh` and the rest, all but its `ipconfig` and
+`ping` checks, which the e1000e boot has its own of):
 
 ```bash
 python3 tools/selftest.py --suite network
 ```
 
-The I219's own steps run only on a real machine.  To check one, start
+The I219's own steps can only run on a real machine. To check one, start
 NovaOS on it with an Ethernet cable plugged into a network with DHCP,
 open the Terminal and run:
 
@@ -103,5 +125,6 @@ curl https://example.com/
 ```
 
 `devices` should show the I219 with the driver `e1000e`, `ipconfig` an
-IPv4 address, and `ping` and `curl` answers.  If not, the `[E1000]` lines
-of the boot log say which step stopped.
+IPv4 address, and `ping` and `curl` answers. If not, the `[E1000]` lines
+of the boot log say which step stopped. Nobody has done this yet on any
+machine.

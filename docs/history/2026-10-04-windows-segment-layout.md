@@ -50,7 +50,7 @@ not open to programs and became an access violation they could catch.
 With all of this Hyperion goes on to read the firmware's SMBIOS table and
 the display devices and reports "Virtual Machine detected", the right
 answer under QEMU: Roblox refuses virtual machines on Windows too
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).  NovaOS
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).  NovaOS
 behaves as Windows does; it does not change Roblox, defeat its checks or
 hide the virtual machine.  `gatetest` covers the selectors, the far jumps
 to and from 32-bit code, the wrapped fetch and its CONTEXT, the calling

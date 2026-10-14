@@ -1,1 +1,1 @@
-- **Kernel** (`kernel/`): an NT-style executive with objects and handles, processes and threads, virtual memory, an SMP scheduler and a registry.
+- **Kernel** (`kernel/`): an NT-style executive with objects and handles, processes and threads, virtual memory, security, a registry, the Windows 10 1903 system-call table and an SMP scheduler with NT's priorities.

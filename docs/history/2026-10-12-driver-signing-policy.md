@@ -1,7 +1,7 @@
 ## Windows' driver signing policy
 
 Step 30.7 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): the interim
+[design/windows-drivers.md](design/windows-drivers.md)): the interim
 "test signing or nothing" gate of step 30.1 is replaced by the policy
 Windows 11 enforces, at load and at install, with nothing bypassed.
 

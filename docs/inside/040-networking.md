@@ -1,20 +1,19 @@
-- **Networking**: lwIP (TCP/IP over IPv4 and IPv6: DHCP, SLAAC, DNS over
-  either, or a static address and DNS servers set in Settings > Network or
-  with `netsh` and kept across restarts), an HTTP/1.1 client, and Mbed TLS with the Mozilla root store.
-  The loopback interface carries 127.0.0.1 and ::1 (and traffic to the
-  machine's own addresses), and `localhost` resolves to both without DNS.
-  Winsock (`ws2_32`, and `wsock32` with Winsock 1.1's ordinals) speaks IPv6
-  and dual-stack sockets with `getaddrinfo`, and its socket options reach
-  the TCP/IP stack (`TCP_NODELAY`, `SO_RCVTIMEO`/`SO_SNDTIMEO`,
-  `SO_LINGER`, `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_BROADCAST`, `IP_TTL`,
-  `SO_RCVBUF`/`SO_SNDBUF`, and `IPV6_V6ONLY`, on by default as on
-  Windows, so `[::]` and `0.0.0.0` can share a port) and read back; a program keeps hundreds of
-  sockets open at once, as a browser does, and `select`, `WSAPoll` and
-  `WSAEventSelect` wait on any number of them; a UDP socket can be
-  connected to a peer, and `WSADuplicateSocket` hands a socket to another
-  process (Chromium's DNS client and its network process use both);
-  overlapped requests that have to wait (an `AcceptEx`, a `ConnectEx`, a
-  `WSARecv` with nothing to read yet) stay pending and complete on an I/O
-  completion port, which proactor event loops such as Python's asyncio need;
-  `winhttp` is a real HTTP client over Schannel TLS, with HTTP/2 by ALPN
-  (nghttp2).
+- **Networking** (`kernel/net/`): lwIP for TCP/IP over IPv4 and IPv6.
+  - DHCP, SLAAC and DNS over either, or a static address and DNS servers
+    set in Settings > Network or with the Terminal's `netsh`, kept across
+    restarts. A loopback interface carries 127.0.0.1 and ::1, and
+    `localhost` resolves to both without DNS.
+  - An HTTP/1.1 client and Mbed TLS with the Mozilla root store in the
+    kernel, which the App Store and updates download with.
+  - Winsock (`ws2_32`, and `wsock32` with Winsock 1.1's ordinals): IPv6 and
+    dual-stack sockets, `getaddrinfo`, socket options that reach the stack
+    and read back (`TCP_NODELAY`, timeouts, `SO_LINGER`, `SO_REUSEADDR`,
+    `SO_KEEPALIVE`, buffer sizes, `IPV6_V6ONLY` on by default as on
+    Windows), hundreds of sockets per program, `select`, `WSAPoll` and
+    `WSAEventSelect` on any number of them, connected UDP sockets and
+    `WSADuplicateSocket`.
+  - Overlapped `AcceptEx`, `ConnectEx` and `WSARecv` stay pending and
+    complete on an I/O completion port, as proactor event loops such as
+    Python's asyncio need.
+  - `winhttp` is an HTTP client over Schannel TLS, with HTTP/2 through
+    ALPN (nghttp2).

@@ -41,6 +41,6 @@ functions that describe the processor's save state
 
 `aligntest` checks all of it.  With the fixup, Hyperion gets past this
 check and runs further into its start-up before stopping at its next step
-([compatibility.md](../compatibility.md#roblox-and-anti-cheat)).  NovaOS
+([compatibility.md](compatibility.md#roblox-and-anti-cheat)).  NovaOS
 satisfies the check by behaving as Windows does; it does not change Roblox
 or defeat the check.

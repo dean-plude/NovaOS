@@ -1,0 +1,1 @@
+- **Graphics**: a CPU-rendered GDI and desktop, OpenGL 4.5 on Mesa's llvmpipe built in, and Vulkan, DXVK and VKD3D-Proton from the App Store, on the CPU or, under QEMU, on the host's GPU through virtio-gpu.

@@ -6,7 +6,7 @@ corpus takes ScummVM's Windows installer (Inno Setup: a 32-bit setup
 program that installs the 64-bit ScummVM) and the freeware floppy release
 Revolution and ScummVM publish.  ScummVM installs silently, starts the
 game, Esc skips the intro and a click walks Robert Foster along the
-gantry of the first scene ([compatibility.md](../compatibility.md)).
+gantry of the first scene ([compatibility.md](compatibility.md)).
 
 - **What ScummVM imports**: `wldap32.dll` (new, `userland/wldap32`: LDAP
   sessions made as Windows makes them; binds and searches answer

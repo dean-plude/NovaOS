@@ -1,471 +1,340 @@
-# NovaOS — Phase 1 Architecture Document
+# Boot flow, address space and the early kernel
 
-> **Historical document.**  This describes the kernel as Phase 1 left it:
-> the boot flow and address-space layout are still accurate, but much else
-> has changed since (SMP with per-core run queues, a 32-bit user code
-> segment for WoW64, the user-mode loader in `kernel/um/`).  For the
-> current system see the [README](../README.md),
-> [HISTORY.md](HISTORY.md) and [building.md](building.md).
+How NovaOS gets from the UEFI firmware to a running kernel: the
+bootloader, the virtual address layout, the kernel's start-up sequence,
+memory management, interrupts, timers and the scheduler. Phase 1 of the
+roadmap built this layer; it has grown since, and this page describes it
+as the code has it now. For the rest of the system see
+[inside.md](inside.md) and [design/architecture.md](design/architecture.md).
 
-## Overview
+## Boot flow
 
-Phase 1 implements the foundational layer: UEFI boot, physical and virtual
-memory management, interrupt handling, and a preemptive kernel scheduler.
-After Phase 1 boots successfully in QEMU, you have a running kernel with
-multiple threads, serial + framebuffer output, and a working interrupt
-infrastructure ready for NT personality layering.
-
----
-
-## System Boot Flow
+The bootloader is a PE32+ EFI application (`bootloader/src/main.c`). The
+firmware starts it as `\EFI\BOOT\BOOTX64.EFI` from the EFI System
+Partition (ESP), or from the ISO on a CD or a USB stick.
 
 ```
-Power on
-  └─> UEFI Firmware (OVMF)
-        └─> Loads /EFI/BOOT/BOOTX64.EFI from ESP
-              └─> Bootloader (bootx64.efi)
-                    1. Locates kernel.elf on the ESP
-                    2. Parses ELF64, allocates physical pages at LMA
-                    3. Queries GOP for framebuffer
-                    4. Finds ACPI RSDP in EFI config table
-                    5. Builds 4-level page tables:
-                       - Identity map: [0..4GiB) → [0..4GiB)
-                       - Physmap:    [PHYSMAP_BASE..+64GiB) → [0..64GiB)
-                       - Kernel:     [KERN_VIRT..+size) → [KERN_PHYS..+size)
-                    6. Allocates boot stack (16 KiB)
-                    7. Gets UEFI memory map
-                    8. Calls ExitBootServices()
-                    9. Loads new CR3 (paging active)
-                   10. Jumps to kernel virtual entry
-              └─> Kernel (kernel.elf)
-                    entry.asm (_start):
-                      - Sets static BSS stack
-                      - Zeroes .bss
-                      - Calls KiSystemStartup(BootInfo*)
-                    ke/main.c (KiSystemStartup):
-                      - Serial init
-                      - Framebuffer init
-                      - PMM init (bitmap from memory map)
-                      - Paging init (take ownership, enable NX)
-                      - VMM init (slab heap)
-                      - GDT reload (TSS + IST stacks)
-                      - IDT init (256 gates, exception handlers)
-                      - APIC init (disable 8259A, start timer)
-                      - Scheduler init + test threads
-                      - STI (interrupts live)
-                      - Main idle loop
+UEFI firmware (OVMF in QEMU)
+ └─ \EFI\BOOT\BOOTX64.EFI  (bootloader/src/main.c)
+     1. Load the kernel ELF: \EFI\NOVA\kernel.elf, or on an installed disk
+        a pending update's kernel.new (choose_kernel)
+     2. Set up the GOP framebuffer
+     3. Live media (CD, or the ISO on a USB stick): read kernel.elf and
+        BOOTX64.EFI into memory for the installer; installed disk: make
+        sure the firmware has a "NovaOS" boot entry
+     4. Find the ACPI 2.0 RSDP; copy the SMBIOS tables
+     5. Build the page tables (below)
+     6. Allocate a 16 KiB boot stack and the BootInfo page
+     7. Get the memory map and call ExitBootServices
+     8. Fill BootInfo, load CR3, jump to the kernel's entry point
+ └─ kernel.elf
+     entry.asm (_start): switch to the 16 KiB stack at the end of .bss,
+        zero .bss, call KiSystemStartup(BootInfo physical address)
+     ke/main.c (KiSystemStartup): see "Kernel start-up" below
 ```
 
----
+The handoff structure, `BootInfo`, is defined in
+[`include/boot_protocol.h`](../include/boot_protocol.h) (protocol version
+4). It carries the memory map, the framebuffer, the RSDP, where the kernel
+was loaded, boot flags (live media, live USB, boot entry added, an update
+being tried or one that failed), the installation files on live media and
+the SMBIOS copy. Every address in it is physical; the kernel reads it
+through the physmap. There is no initial ramdisk: the bootloader leaves
+the `initrd` fields zero, and drive C:'s system files come from the kernel
+image itself.
 
-## Virtual Address Space Layout
+### Page tables the bootloader builds
 
-```
-0x0000000000000000  ┌─────────────────────────────────┐
-                    │         User Space               │
-                    │     (128 TiB — Phase 4+)         │
-0x00007FFFFFFFFFFF  └─────────────────────────────────┘
-0x0000800000000000  ┌─────────────────────────────────┐  ← Canonical hole
-                    │    Non-canonical address gap     │
-0xFFFF7FFFFFFFFFFF  └─────────────────────────────────┘
-0xFFFF800000000000  ┌─────────────────────────────────┐  ← PHYSMAP_BASE
-                    │   Direct Physical Map (64 GiB)   │
-                    │   phys[0..64GiB) → virt here     │
-0xFFFF87FFFFFFFFFF  └─────────────────────────────────┘
-                    (gap)
-0xFFFFFFFF80000000  ┌─────────────────────────────────┐  ← KERNEL_VIRT_BASE
-                    │  .text.entry  (entry.asm)        │  0xFFFFFFFF80200000
-                    │  .text        (all kernel code)  │
-                    │  .rodata                         │
-                    │  .data                           │
-                    │  .bss + stack                    │
-0xFFFFFFFFFFFFFFFF  └─────────────────────────────────┘
-```
+`bootloader/src/paging.c` builds a 4-level page table with:
 
-The physmap window lets the kernel access any physical address as
-`PHYSMAP_BASE + phys_addr` without needing to set up new page table entries.
-This is the same design used by Linux (`PAGE_OFFSET`) and is critical for
-performance (no TLB misses for common kernel data access patterns).
+| Mapping | Virtual | Physical | Page size |
+|---|---|---|---|
+| Identity map | `0` to 64 GiB | `0` to 64 GiB | 2 MiB below 4 GiB, 1 GiB above |
+| Physmap | `0xFFFF800000000000` + 64 GiB | `0` to 64 GiB | 1 GiB |
+| Kernel image | `0xFFFFFFFF80200000` and up | `0x200000` and up | 4 KiB |
 
----
+The identity map keeps the bootloader's own code and stack valid after
+the CR3 switch (with more than 4 GiB of RAM the firmware may load it
+above 4 GiB). The kernel's linker script (`kernel/linker.ld`) links it at
+`KERNEL_VIRT_BASE + 0x200000` = `0xFFFFFFFF80200000` and loads it at
+physical 2 MiB.
 
-## Memory Manager
+## Virtual address layout
 
-### Physical Memory Manager (PMM)
-
-**Algorithm**: Two-level bitmap allocator
+Each process has its own PML4. The lower half (entries 0 to 255) is the
+process's; the upper half (256 to 511) is copied from the kernel's, so
+every kernel mapping is in every address space
+(`paging_create_process_pt` in `kernel/arch/x86_64/paging.c`). A process
+does not inherit the bootloader's identity map.
 
 ```
-Bitmap: 1 bit per 4KiB page (1=used, 0=free)
-        64 pages per uint64_t word
-        Walking: skip fully-allocated words with a single compare
+0x0000000000000000  ┌──────────────────────────────────┐
+                    │ User space (128 TiB)             │
+0x00007FFFFFFFFFFF  └──────────────────────────────────┘
+                      non-canonical hole
+0xFFFF800000000000  ┌──────────────────────────────────┐  PHYSMAP_BASE
+                    │ Physmap: physical 0 to 64 GiB    │
+0xFFFF801000000000  ├──────────────────────────────────┤
+                      (unused)
+0xFFFF806000000000  ├──────────────────────────────────┤  physmap + 384 GiB
+                    │ Mapped heap blocks (128 GiB)     │
+0xFFFF808000000000  └──────────────────────────────────┘
+                      ...
+0xFFFFF78000000000    KUSER_SHARED_DATA, for drivers (one page)
+                      ...
+0xFFFFFFFF00000000  ┌──────────────────────────────────┐
+                    │ Windows driver images (1 GiB)    │
+0xFFFFFFFF40000000  └──────────────────────────────────┘
+0xFFFFFFFF80000000  ┌──────────────────────────────────┐  KERNEL_VIRT_BASE
+0xFFFFFFFF80200000  │ Kernel: .text.entry, .text,      │
+                    │ .rodata, .data, .bss and the     │
+                    │ boot stack                       │
+0xFFFFFFFFFFFFFFFF  └──────────────────────────────────┘
 ```
 
-**Initialization**:
-1. Find highest physical address from boot memory map
-2. Allocate bitmap at first suitable conventional memory region
-3. Mark everything used
-4. Mark CONVENTIONAL regions free
-5. Re-mark: kernel image, bitmap itself, first 1 MiB as used
+The constants are `PHYSMAP_BASE`, `PHYSMAP_SIZE` and `KERNEL_VIRT_BASE` in
+`kernel/include/types.h`, `MAPPED_BASE` in `kernel/mm/vmm.c`, `DRV_BASE`
+in `kernel/nt/ldr.c` and `UM_KI_USER_SHARED_DATA` in `kernel/um/um.c`.
 
-**Performance**: O(N/64) allocation worst case. Acceptable for Phase 1.
-Phase 2 replaces with a buddy allocator for O(log N) contiguous allocations.
+The physmap lets the kernel reach any physical address below 64 GiB as
+`PHYSMAP_BASE + phys` without making new page-table entries.
 
-### Virtual Memory Manager (VMM)
+### A program's half
 
-**Kernel heap**: Slab allocator
+The fixed user-mode addresses are in `kernel/um/um_internal.h`:
 
-```
-Slab sizes: 8, 16, 32, 64, 128, 256, 512, 1024, 2048 bytes
-Each slab:  One 4KiB page, header at page start, objects following
-Free list:  Embedded in free objects (first 8 bytes = next pointer)
-Large (>2KB): Direct PMM allocation + header page for size tracking
-Mapped (>=4MB, or any large block when no run of pages is free):
-              single pages from anywhere, mapped one after another
-              (header page first) into 2 MiB slots of a kernel window
-```
+| | 64-bit process | 32-bit process |
+|---|---|---|
+| `KUSER_SHARED_DATA` (read-only) | `0x7FFE0000` | `0x7FFE0000` |
+| PEB, loader data, parameters, TEBs | from `0x7FFDF0000000` | from `0x7FEE0000` |
+| First thread's stack top | `0x7FFDE0000000` (1 MiB) | `0x7FE00000` |
+| `NtAllocateVirtualMemory` range | `0x10000000` to `0x7FFD00000000` | `0x110000` to `0x7FD00000` |
+| Relocated DLLs | `0x180000000` to `0x7FF000000000` | `0x10000000` to `0x7F000000` |
 
-Slabs and large blocks live in the physmap window — no new page table
-entries needed.  A large block there is one physically contiguous run,
-which a machine whose memory is in use in small pieces may lack even with
-hundreds of megabytes free, so big blocks (drive C:'s files, a DLL's image
-while it loads) are mapped blocks instead: they live at physmap + 384 GiB
-(128 GiB, in the top-level entry every address space shares), take whole
-2 MiB slots (one page table each), and grow in place into the slots after
-them.  Freed slots are reused only after one TLB shootdown for all of them.
-Kernel data isn't protected from accidental overwrites; Phase 2 will add
-guard pages.
+System DLLs have fixed preferred bases, set in each DLL's
+`userland/<name>/dll.json` (`base` for 64-bit, `base_x86` for 32-bit).
 
----
+## Kernel start-up
 
-## Interrupt Architecture
+`KiSystemStartup` (`kernel/ke/main.c`) brings the kernel up in this
+order:
 
-### GDT Layout
+1. **Serial** (COM1) for the log, then the **framebuffer**.
+2. **PMM** from the memory map; the firmware's SMBIOS copy; a check that
+   the low pages the other CPUs' start-up trampoline needs (at `0x8000`)
+   are free, made before the memory map can be reused; the
+   installation-media and update flags.
+3. **Paging**: take over the bootloader's tables and enable NX. **VMM**:
+   the kernel heap.
+4. **GDT and TSS**, CPU 0's KPCR (GS points at it in kernel mode), the
+   **IDT**, the **HPET**, and the **local APIC** timer, calibrated.
+5. **Scheduler**; from here boot runs under the big kernel lock.
+6. The NT executive: **object manager**, **security reference monitor**
+   and the system token, **process manager**, **registry**, the
+   **system-call dispatcher** (`int 0x2E` and `SYSCALL`), **I/O manager**,
+   **section objects**, the **PE loader** and its user-mode stub pages,
+   the **VFS**, and **CSRSS**'s kernel half.
+7. Self-tests of user-pointer probing and the process manager, and three
+   boot test threads (`thread_a`, `thread_b`, `mem_test`).
+8. **Devices**: drive C:'s RAM disk, PCI, the Plug and Play tree, ACPI,
+   the I/O APIC, the AML interpreter, the display, disks and the volume
+   that keeps drive C:, other drives, the network, audio, then the Windows
+   program environment (`UmInit`).
+9. **The other CPUs** start (`smp_start`).
+10. **The desktop**: GDI, the window manager and shell, input (PS/2, USB,
+    I2C-HID touchpads, Hyper-V's VMBus), the device-poll thread and the
+    desktop thread. With no framebuffer NovaOS runs headless.
+11. Interrupts on, any pending update finished or undone, the big kernel
+    lock released, and CPU 0 becomes its idle thread.
 
-| Selector | Description                                   | DPL |
-|----------|-----------------------------------------------|-----|
-| 0x00     | Null                                          | —   |
-| 0x10     | Kernel Code (64-bit)                          | 0   |
-| 0x18     | Kernel Data                                   | 0   |
-| 0x20     | User Code (32-bit, compatibility mode): 0x23  | 3   |
-| 0x28     | User Data and stack: 0x2B                     | 3   |
-| 0x30     | User Code (64-bit): 0x33                      | 3   |
-| 0x40     | TSS (16-byte entry)                           | 0   |
-| 0x50     | The 32-bit TEB, FS in 32-bit code: 0x53       | 3   |
+## Memory management
 
-This is Windows' own x64 layout (`KGDT64_*`), and programs see it: a
-64-bit program's CS is 0x33, its stack and data 0x2B, FS 0x53, and a far
-jump to 0x23 runs 32-bit code in it (Roblox's Hyperion does).  The
-SYSCALL/SYSRET instructions read the STAR MSR for their selectors and need
-this order: kernel code with its data 8 above, and user 32-bit code with
-the data 8 above and 64-bit code 16 above (STAR = 0x0023_0010_0000_0000,
-as on Windows).  0x08 and 0x60-0x68 are empty, for Windows' GDT limit of
-0x6F.
+### Physical memory (`kernel/mm/pmm.c`)
 
-### IDT Gate Assignments
+A bitmap with one bit per 4 KiB page (1 = used), one 64-bit word per 64
+pages, so a scan skips a full word with one compare. It is built from the
+memory map: everything marked used, conventional memory freed, then the
+kernel image, the bitmap itself and the first 1 MiB marked used again.
+512 free pages just below 16 MiB are set aside as a pool for devices that
+need low memory.
 
-| Vectors   | Purpose                              |
-|-----------|--------------------------------------|
-| 0–31      | CPU exceptions (#DE, #PF, #GP, etc.) |
-| 32–47     | APIC hardware IRQs (remapped PIC)    |
-| 0x30      | APIC timer (tick and sleep deadlines)|
-| 0x32      | ACPI SCI, routed through the I/O APIC (the only device interrupt; the other drivers poll) |
-| 0x29      | `__fastfail` (DPL 3): the program ends with STATUS_STACK_BUFFER_OVERRUN |
-| 0x2E      | NT syscall (int 0x2E)                |
-| 0xFF      | APIC spurious interrupt              |
+### Kernel heap (`kernel/mm/vmm.c`)
 
-**IST (Interrupt Stack Table)** entries:
-- IST1: Double fault (#DF) — dedicated stack so stack overflow doesn't compound
-- IST2: NMI — guaranteed clean stack
-- IST3: Machine check (#MC)
-- IST4: Debug (#DB)
+- **Slabs** for 8 to 2048 bytes (powers of two): one 4 KiB page per slab,
+  the free list kept inside the free objects. Each CPU keeps a small
+  magazine of freed objects of each size, so most `kmalloc`/`kfree` pairs
+  take no shared lock.
+- **Large blocks** (over 2 KiB): a physically contiguous run from the PMM
+  with a header page, addressed through the physmap.
+- **Mapped blocks**: blocks of 4 MiB or more, and any large block when no
+  contiguous run is free, are built from single pages mapped one after
+  another into 2 MiB slots of the 128 GiB window at physmap + 384 GiB.
+  That window is inside the same top-level entry as the physmap, so every
+  address space sees it. Blocks grow in place into the slots after them,
+  and freed slots are reused only after one TLB shootdown covers them all.
 
-### Exception Dispatch
+## Segments and interrupts
 
-The assembly stubs in `isr_stubs.asm` use a macro-generated approach:
-256 stubs, each pushing a dummy error code (for exceptions without one) and
-the vector number, then jumping to the common handler which saves all GPRs
-and calls `interrupt_dispatch()`.
+### GDT (`kernel/arch/x86_64/gdt.h`)
 
-A Windows program's own faults go to its SEH handlers instead
-(`UmUserException` in `kernel/um/um_exception.c`): the kernel builds a
-`CONTEXT` (registers plus the `fxsave` image) and an `EXCEPTION_RECORD`
-on the user stack and points the thread at ntdll's
-`KiUserExceptionDispatcher`.  With AVX on, the `CONTEXT` is a
-`CONTEXT_XSTATE` one, as on Windows: a `CONTEXT_EX` and an XSAVE area with
-the YMM upper halves follow it, and `NtContinue` and `SetThreadContext`
-load them back.  A floating-point fault is named from the
-flags that are both raised and unmasked: x87 errors (#MF) from the x87
-status and control words, SSE errors (#XM) from MXCSR, so a divide by
-zero is `STATUS_FLOAT_DIVIDE_BY_ZERO`, an inexact result
-`STATUS_FLOAT_INEXACT_RESULT`, and so on.  The `CONTEXT` keeps those
-flags; the handlers run with them cleared, as on Windows, so their own
-floating-point code does not fault again.  Every program thread starts
-with Windows' floating-point state, every exception masked: x87 control
-word `0x27F` (round to nearest, 53-bit precision) and MXCSR `0x1F80`.
-The scheduler saves and restores each thread's state when it switches
-threads: with XSAVE and XRSTOR into a page per thread when the CPU has
-XSAVE (`kernel/arch/x86_64/xstate.c` sets `CR4.OSXSAVE` and XCR0 to the
-x87, SSE and, where the CPU has it, AVX state at boot, so CPUID shows
-programs OSXSAVE and their AVX, AVX2, FMA and F16C code runs), with
-`fxsave`/`fxrstor` otherwise.  `KUSER_SHARED_DATA`'s XState and
-`IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE)` say which.  QEMU's TCG never raises SSE exceptions, so a
-wrong MXCSR shows only under KVM or on real hardware.
+NovaOS uses Windows' own x64 layout (`KGDT64_*`), because programs see it:
 
----
+| Slot | Descriptor | Selector programs see |
+|---|---|---|
+| 0x00 | Null | |
+| 0x10 | Kernel code (64-bit) | |
+| 0x18 | Kernel data | |
+| 0x20 | User code, 32-bit (compatibility mode) | 0x23 |
+| 0x28 | User data and stack | 0x2B |
+| 0x30 | User code, 64-bit | 0x33 |
+| 0x40 | TSS (16-byte descriptor) | |
+| 0x50 | The 32-bit TEB, FS in 32-bit code | 0x53 |
 
-## APIC Timer and Scheduler
+A far jump to 0x23 runs 32-bit code inside a 64-bit program, as on
+Windows. `SYSCALL`/`SYSRET` take their selectors from the STAR MSR and
+need this order (STAR = `0x0023_0010_0000_0000`, as on Windows). 0x08 and
+0x60-0x68 are left empty, for Windows' GDT limit of 0x6F.
 
-### APIC Timer Calibration
+### IDT vectors (`kernel/arch/x86_64/idt.h`)
 
-The APIC timer frequency is proportional to the CPU bus clock, which varies
-by CPU model. We calibrate it, and the TSC, against the HPET's main
-counter (`kernel/hal/hpet.c`, found through the ACPI `HPET` table before
-the rest of ACPI starts), or against the PIT (8254 timer) channel 2 where
-there is no HPET:
+All 256 vectors have interrupt gates (interrupts off on entry).
 
-1. Start APIC timer counting down from 0xFFFFFFFF
-2. Wait 10 ms on the HPET counter (or a 10 ms one-shot PIT count)
-3. APIC ticks and TSC ticks counted in those 10 ms = calibration values
+| Vector | Use |
+|---|---|
+| 0x00-0x1F | CPU exceptions; #DF, NMI, #MC and #DB on IST stacks 1-4 |
+| 0x03 | Breakpoint, callable from user mode |
+| 0x29 | `__fastfail` (user mode): the process ends with `STATUS_STACK_BUFFER_OVERRUN` |
+| 0x2E | NT system call (`int 0x2E`, user mode); 32-bit programs' only way in |
+| 0x2F | DPCs (Windows drivers) |
+| 0x30 | Local APIC timer |
+| 0x32 | ACPI SCI, through the I/O APIC |
+| 0x33-0x34 | GPIO controllers (touchpad interrupts) |
+| 0x35 | An I2C-HID device's own interrupt line |
+| 0x36 | Hyper-V SynIC (VMBus) |
+| 0x60-0xBF | Windows drivers' interrupts, line-based or MSI/MSI-X (IRQL 6-11) |
+| 0xF0 | IPI: wake a halted CPU or switch to a woken thread |
+| 0xF1 | IPI: TLB shootdown |
+| 0xFF | APIC spurious interrupt |
 
-### One-shot and TSC-deadline timer (Phase 18.7)
+Most of NovaOS's own drivers poll from the device-poll thread or their own
+threads rather than taking interrupts.
 
-Each CPU's APIC timer is one-shot: in TSC-deadline mode where CPUID.1:ECX
-bit 24 says the CPU has it (writing `IA32_TSC_DEADLINE` arms it for a TSC
-value), else counting down from a count worked out from the calibration.
-At every timer interrupt the scheduler re-arms it for whichever comes
-first: the CPU's next 10 ms tick (on one grid shared by all CPUs) or the
-earliest TSC deadline among the threads sleeping on that CPU
-(`sched_sleep_until_tsc`, used by `NtDelayExecution` and timed waits).
-A new sleep only ever arms the timer sooner, never later: a deadline
-that has gone by may not have fired yet (the one-shot count runs a
-little off the TSC, and a virtual CPU's timer fires late), so it is armed
-for that deadline again and fires at once.
-A thread woken by its TSC deadline goes to the front of the run queue and
-preempts the running thread when its priority is at least as high, so
+### Exceptions in programs
+
+A program's own faults go to its SEH handlers (`UmUserException` in
+`kernel/um/um_exception.c`): the kernel builds a `CONTEXT` (with an XSAVE
+area holding the AVX state when AVX is on, as `CONTEXT_XSTATE` on Windows)
+and an `EXCEPTION_RECORD` on the user stack and points the thread at
+`ntdll!KiUserExceptionDispatcher`. Floating-point faults are named from
+the flags that are both raised and unmasked (x87 status word for #MF,
+MXCSR for #XM). Program threads start with Windows' floating-point state:
+x87 control word `0x27F` and MXCSR `0x1F80`. The scheduler saves each
+thread's FPU state with `XSAVE`/`XRSTOR` where the CPU has them
+(`kernel/arch/x86_64/xstate.c` enables x87, SSE and AVX state in XCR0),
+otherwise with `fxsave`/`fxrstor`. QEMU's TCG never raises SSE
+exceptions, so MXCSR mistakes show only under KVM or on real hardware.
+
+## Timers
+
+`kernel/arch/x86_64/apic.c` calibrates the local APIC timer and the TSC
+over 10 ms against the HPET's main counter (`kernel/hal/hpet.c`, found
+through the ACPI `HPET` table). Where the firmware hides the HPET, the
+frequencies come from Hyper-V's frequency MSRs or CPUID leaf 0x15 (or
+0x16), and the PIT's channel 2 is the last resort.
+
+Each CPU's APIC timer is one-shot: in TSC-deadline mode where the CPU has
+it (CPUID.1:ECX bit 24), otherwise counting down. At each interrupt the
+scheduler arms it for whichever comes first: the next 10 ms tick (one grid
+for all CPUs) or the earliest TSC deadline among the threads sleeping on
+that CPU (`sched_sleep_until_tsc`, used by `NtDelayExecution` and timed
+waits). A thread woken by its deadline goes to the front of the run queue
+and preempts the running thread when its priority is at least as high, so
 `Sleep(1)` ends within a fraction of a millisecond even with every CPU
-busy (`sleeptest timer`).  Tick work (the tick count, input polling, time
-slices) still happens once per 10 ms.
+busy (`sleeptest timer`). Tick work (the tick count, time slices) still
+happens every 10 ms.
 
-A thread woken from a wait by another thread (`sched_unblock`) preempts
-the running thread when its priority is higher, or the same and a timer
-woke it (`sched_unblock_timer`: the waitable timer it waits on was set).
-It goes first in its CPU's run queue; a halted CPU takes it if one is
-free, otherwise the waker sends the thread's CPU `IPI_WAKE` with a
-reschedule flag set, and that CPU switches in the interrupt (unless it is
-halted waiting for the kernel lock: then its next timer tick switches).
-A thread a timer woke (its deadline or its timer) goes first in the queue
-even when a thread of higher priority runs just then, so it runs as soon
-as that one is done.  The thread preempted for a woken one, at a timer
-tick or an `IPI_WAKE`, goes back after the woken threads but ahead of the
-rest, and keeps what it has used of its slice.  A wake with no priority
-difference and no timer (a kernel wait queue's, which carries no boost)
-queues the thread after the others of its priority.
+## Scheduler (`kernel/ke/scheduler.c`)
 
-Priorities are NT's: a thread has a base priority and a current (dynamic)
-one, 1-15 dynamic and 16-31 real-time.  Each run queue runs from the
-highest current priority down, threads of one priority taking turns.  A
-thread woken from a wait gets NT's boost: its current priority rises to
-its base plus the waker's increment (`sched_unblock_boost`, `BOOST_*` in
-`scheduler.h`): +1 for an event, a semaphore, a mutex, an alert (SRW
-locks, condition variables, critical sections, APCs) or a timed wait's
-deadline, +1 for file I/O, +2 for a named pipe, the network or a window
-message (keyboard and mouse input to a window included: win32k's
-windowing boost), +6 for console input, up to 15 and never for a
-real-time thread.  (NT's +6 for keyboard and mouse is what a driver
-gives the thread reading the device, the device poll thread here; given
-to a window's thread with the foreground boost on top it lifted a
-NORMAL thread to 15, level with the sound threads.)  So it preempts a busy thread of its
-base priority instead of waiting out that thread's 20 ms slice
-(`boosttest`: about 19 ms before, see HISTORY).  The boost decays one
-level per quantum the thread runs (two ticks, counted across its waits),
-back to its base; a thread whose slice ends goes on running while every
-queued foreground thread has a lower priority.  Once a second the balance
-set raises a thread that has been ready for 3 s without running to 15 for
-one quantum.
+### Run queues and context switches
 
-A program thread's base priority is NT's (`kernel/um/um_thread.c`): its
-process's priority class base (IDLE 4, BELOW_NORMAL 6, NORMAL 8,
-ABOVE_NORMAL 10, HIGH 13, REALTIME 24) plus the thread's increment from
-`SetThreadPriority` (-2 to 2), kept within 1-15, with
-`THREAD_PRIORITY_IDLE` and `TIME_CRITICAL` saturating at 1 and 15 (16
-and 31 for REALTIME).  `SetPriorityClass` and `SetThreadPriority` go
-through `NtSetInformationProcess(ProcessPriorityClass)` and
-`NtSetInformationThread(ThreadBasePriority)`; a new base takes effect at
-once (`sched_set_base_priority`: the thread is requeued, preempts or
-gives way) and ends any boost, which from then on decays back to the new
-base.  REALTIME and absolute priorities of 16 and up need
-SeIncreaseBasePriorityPrivilege, which only an administrator's token
-holds; kernel32 gives HIGH instead, as Windows does, so a program never
-gets above 15.  `SetThreadPriorityBoost` and `SetProcessPriorityBoost`
-switch wake-up boosts off.  A new process is NORMAL, or IDLE or
-BELOW_NORMAL when its creator is, unless `CreateProcess` names a class.
-`THREAD_BASIC_INFORMATION.BasePriority` is the increment, as on NT.
+Each CPU has its own run queue (a circular list of ready threads, highest
+current priority first) and its own list of timed sleepers, under the
+queue's spinlock. A CPU with nothing to run steals a ready thread from
+another CPU's queue; a thread that becomes ready wakes an idle CPU with
+`IPI_WAKE`. The scheduler itself never takes the big kernel lock.
 
-The kernel's own threads all run in the real-time range, above anything
-a program can ask for, as Windows runs its system threads, so a busy
-`HIGH_PRIORITY_CLASS` program can't hold up what programs wait on.  The
-shorter and more urgent the work, the higher (`ke/scheduler.h`): the
-device poll and audio mixer threads at 19 (a key press or a sound buffer
-never waits), the network stack and the USB thread at 18, the desktop
-(input, window management, drawing; a redraw can take 50-100 ms without
-KVM) and the threads that start programs at 17, and bulk work at 16:
-saving drive C:, ACPI, Setup.  None of them spins: each blocks or sleeps
-when it has nothing to do, and gives way to any thread while it waits for
-a device.  (The network thread, polling the adapter while a program waits
-for data, wakes every millisecond rather than yielding round and round:
-above programs, a yield hands the CPU to a busy one for its whole slice.
-While data is moving and programs wait for its CPU, it lets them run for
-0.2 ms at a time, `sched_yield_goes_lower`.)
+Thread states are `RUNNING`, `READY`, `WAITING`, `SUSPENDED` and `DEAD`. A
+context switch saves the callee-saved registers and RFLAGS
+(`ThreadContext`), switches stacks and updates the TSS's RSP0 and the
+KPCR. A new thread's stack "returns" into `thread_trampoline`, which calls
+the entry function (kept in R12, its argument in R13) and then
+`sched_exit`. Kernel threads get 16 KiB stacks by default.
 
-The process whose window is active is the foreground process
-(`UmUpdateForeground`, from the desktop loop each tick), and so is the
-console program running in a Terminal while that Terminal is active (as
-Windows treats a console's programs while their console window is):
-its threads get NT's foreground boost, PsPrioritySeparation (2 on client
-Windows), on top of every wake-up boost, still never above 15, so they
-run ahead of the background processes' threads of the same class.
-`ProcessPriorityClass` reports it in `Foreground`.  They also get
-Windows' other foreground mechanism, quantum stretching ("Programs" in
-System Properties): a time slice three times as long, 6 ticks (60 ms)
-against the background's 2 (20 ms), as client Windows gives 6 clock
-intervals against 2.  The boost decay stays one level per 20 ms.
+### Time slices
 
-The Multimedia Class Scheduler (MMCSS) puts registered threads in the
-real-time range without SeIncreaseBasePriorityPrivilege, as MMCSS's
-service does on Windows (`userland/avrt/avrt.c`, NovaOS's
-`NtSetInformationThread` class `ThreadNovaMmcss`, `sched_set_mmcss`).
-`AvSetMmThreadCharacteristics` with an audio task ("Pro Audio", "Audio",
-"Capture", "Playback", "Low Latency") gives 18: above every program
-thread however boosted and above the desktop (17), with the network and
-USB threads, below device polling and the mixer (19), which feed it.
-Any other task ("Games", "Distribution", "Window Manager"...), and an
-audio task at `AVRT_PRIORITY_LOW` or `VERYLOW`, gives 16; a task Windows
-does not list fails with `ERROR_INVALID_TASK_NAME`.
-`AvRevertMmThreadCharacteristics` gives back the priority
-`SetThreadPriority` set.  As on Windows (SystemResponsiveness 20), such a
-thread gets at most 80% of a CPU: found running at 8 of the 10 ticks of a
-100 ms period, it runs at its own base priority until the period ends, so
-a program spinning in one cannot freeze the desktop (`mmcsstest`).  It
-gets its priority back at its first tick or wake-up in a new period; an
-exhausted thread that keeps spinning behind busier ones waits for the
-balance set like any other.  NovaOS's own sound threads register this
-way: winmm's `waveOut` ("Playback") and `waveIn` ("Capture") threads and
-its MIDI synthesizer, DirectSound's mixer and capture threads, and
-WASAPI's event thread ("Audio").  (Windows' MMCSS has wider bands, 16-22
-and 23-26; NovaOS's kernel threads fill 16-19, so it uses two levels.)
+The quantum is 2 ticks (20 ms), and 6 ticks (60 ms) for the foreground
+process: the process whose window is active, or the console program
+running in the active Terminal (`UmUpdateForeground`). This is Windows'
+quantum stretching for client systems.
 
-A CPU halted waiting for the kernel lock wakes none of its sleepers.  The
-timer interrupt it takes meanwhile (`sched_timer_rearm`) hands a due
-TSC-deadline sleeper that doesn't hold the lock to another CPU, as a
-timer wake: the device poll thread then keeps draining the keyboard while
-another CPU holds the lock for long.  (Saving drive C: used to hold it for
-seconds; it now runs on its own thread without it, see `fs/persist.c`.)
+### Priorities and boosts
 
-### Scheduler Design
+Priorities are NT's: a base and a current priority, 1-15 dynamic and
+16-31 real-time.
 
-**Algorithm**: Priority round-robin with a 20ms time quantum (60 ms for
-the foreground process) and NT's wake-up boosts (see above)
+- **Wake-up boosts** (`BOOST_*` in `kernel/ke/scheduler.h`): a thread
+  woken from a wait runs at its base plus the waker's increment, never
+  above 15 and never for a real-time thread: +1 for an event, semaphore,
+  mutex, alert or timed wait, +1 for file I/O, +2 for a named pipe, the
+  network or a window message (keyboard and mouse input to a window
+  included), +6 for console input. The boost decays one level per quantum
+  the thread runs.
+- **Foreground boost**: the foreground process's threads get +2 more on
+  every wake-up (Windows' `PsPrioritySeparation`), still never above 15.
+- **Preemption**: a woken thread preempts the running one when its
+  priority is higher, or equal and a timer woke it. It goes first in its
+  CPU's queue, and the CPU is told with `IPI_WAKE` if it is busy.
+- **Balance set**: once a second, a thread ready for 3 s without running
+  is raised to 15 for one quantum.
+- **Program priorities** (`kernel/um/um_thread.c`): a thread's base is its
+  process's priority class (IDLE 4, BELOW_NORMAL 6, NORMAL 8,
+  ABOVE_NORMAL 10, HIGH 13, REALTIME 24) plus its `SetThreadPriority`
+  increment (-2 to +2), with `THREAD_PRIORITY_IDLE` and `TIME_CRITICAL`
+  saturating at 1 and 15 (16 and 31 for REALTIME). REALTIME and absolute
+  priorities of 16 and up need `SeIncreaseBasePriorityPrivilege`;
+  `kernel32` gives HIGH instead, as Windows does.
+  `SetThreadPriorityBoost` and `SetProcessPriorityBoost` turn boosts off.
+- **Kernel threads** run in the real-time range, above anything a program
+  can ask for: 19 for the device-poll thread and the audio mixer, 18 for
+  the network stack and the USB thread, 17 for the desktop and starting
+  programs, 16 for bulk work (saving drive C:, ACPI, Setup). Each blocks or
+  sleeps when it has nothing to do.
+- **MMCSS** (`userland/avrt/avrt.c`, `sched_set_mmcss`):
+  `AvSetMmThreadCharacteristics` puts a thread in the real-time range
+  without the privilege. Audio tasks ("Pro Audio", "Audio", "Capture",
+  "Playback", "Low Latency") run at 18; other tasks, and audio tasks at
+  low priority, at 16. A thread found running 8 of the 10 ticks of a
+  100 ms period drops to its own base until the period ends, Windows' 80%
+  limit (`mmcsstest`). NovaOS's own sound threads in `winmm`, `dsound` and
+  WASAPI register this way.
 
-```
-Ready queue: Circular doubly-linked list
-Thread states: RUNNING, READY, WAITING, SUSPENDED, DEAD
-Context switch: Save callee-saved GPRs + RFLAGS to ThreadContext
-                Load next thread's ThreadContext
-                Update TSS.RSP0 for next thread
-```
+## Debugging with GDB
 
-**Initial thread setup** (for newly created threads):
-The initial stack has the thread_trampoline address as a "return address".
-When `context_switch()` does its `ret`, it jumps to `thread_trampoline`.
-The entry function pointer is in R12 (callee-saved), and the argument in R13.
-
----
-
-## Key Data Structures
-
-### BootInfo (boot_protocol.h)
-Passed from bootloader to kernel. Contains memory map, framebuffer
-descriptor, ACPI RSDP pointer, and kernel placement information.
-
-### Thread (ke/scheduler.h)
-```c
-typedef struct Thread {
-    struct Thread  *next, *prev;  // Ready queue linkage
-    uint64_t        tid;          // Thread ID
-    ThreadState     state;
-    ThreadContext   context;      // Saved registers (for context switch)
-    void           *kernel_stack; // Stack base
-    uint8_t         priority;     // 0-31 (NT-compatible): current, boosted
-    uint8_t         base_priority;// what the boost decays back to
-    void           *process;      // Owner process (Phase 2)
-} Thread;
-```
-
-### InterruptFrame (arch/x86_64/idt.h)
-Complete saved register state at interrupt entry. Laid out to match
-the CPU's automatic push + our assembly stub's pushes.
-
----
-
-## Build System
-
-The build uses CMake with two separate sub-builds (via ExternalProject):
-
-```
-Root CMakeLists.txt
-├── ExternalProject: kernel_build
-│   └── kernel/CMakeLists.txt
-│       ├── C compiler: x86_64-elf-gcc OR clang -target x86_64-unknown-none-elf
-│       ├── ASM: NASM (elf64 format)
-│       └── Linker: custom linker.ld
-└── ExternalProject: bootloader_build
-    └── bootloader/CMakeLists.txt
-        ├── C compiler: x86_64-w64-mingw32-gcc OR clang -target x86_64-windows
-        └── Produces: PE32+ EFI application
-```
-
----
-
-## Testing
-
-### Phase 1 Smoke Tests
-
-After boot, the kernel creates three test threads:
-1. `thread_a` — 5 yield cycles, tests scheduler interleaving
-2. `thread_b` — 5 yield cycles, runs concurrently with thread_a
-3. `mem_test` — allocates/verifies/frees 16 objects of various sizes
-
-Expected serial output:
-```
-NovaOS Bootloader v0.1
-...
-[NovaOS] Serial console active
-[PMM] Memory map: N entries
-[PMM] Free: X MiB / 256 MiB
-[PAGING] NX enabled
-[GDT] GDT/TSS initialized
-[IDT] Initialized: 256 gates
-[HPET] At 0xfed00000: 100000000 Hz, 64-bit main counter, 3 comparators
-[APIC] Timer: 628349 ticks/10ms = ~62834900 Hz (div/16), calibrated against the HPET
-[APIC] One-shot timer started (vector 0x30), TSC 20989080 per 10 ms
-[SCHED] Scheduler initialized
-[Thread A] iteration 0 (TID=2)
-[Thread B] iteration 0 (TID=3)
-[Thread A] iteration 1 (TID=2)
-...
-[MemTest] All allocations OK
-```
-
-### QEMU GDB Debugging
-
-In one terminal, start QEMU in debug mode:
+Build NovaOS ([building.md](building.md)), then start QEMU with its GDB
+stub on port 1234, waiting for the debugger:
 
 ```bash
-./scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE.fd --gdb
+cmake --build build --target run-debug
 ```
 
-In a second, connect GDB:
+or, calling the script directly (the third argument, the OVMF variables
+file, must be given before `--gdb`):
+
+```bash
+./scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF_VARS.fd --gdb
+```
+
+In a second terminal:
 
 ```bash
 gdb build/kernel.elf \
@@ -474,22 +343,38 @@ gdb build/kernel.elf \
     -ex 'continue'
 ```
 
----
+The kernel log goes to the serial port, which `run-qemu.sh` connects to
+the terminal QEMU runs in. Early in boot it looks like this (addresses and
+counts vary):
 
-## Known Limitations (Phase 1)
+```
+NovaOS Bootloader v0.1
+...
+[NovaOS] Serial console active
+...
+[PMM] Free: X MiB / Y MiB
+[IDT] Initialized: 256 gates, IDTR base=0x...
+[HPET] At 0xfed00000: 100000000 Hz, 64-bit main counter, 3 comparators
+...
+[Thread A] iteration 0 (TID=...)
+[Thread B] iteration 0 (TID=...)
+...
+[MemTest] All allocations OK
+```
 
-Everything Phase 1 left out has since been built:
+## Build layout
 
-| Component | At Phase 1 | Landed in |
-|-----------|------------|-----------|
-| Object Manager | Not implemented | Phase 2 |
-| NT syscall dispatcher | Stub only | Phase 2 (table), Phase 9 (real services) |
-| Registry | Not implemented | Phase 2 (bootstrap), Phase 10 (real, saved to disk) |
-| IRP-based I/O | Not implemented | Phase 3 |
-| NTFS driver | Not implemented | Phase 18 (read, write and format; drive C: on NTFS with file ACLs, and other drives) |
-| PE loader | Not implemented | Phase 3, ring 3 in Phase 9 |
-| Win32 API (kernel32, ntdll) | Not implemented | Phase 9 onward |
-| Window Manager / GDI | Not implemented | Phase 7, Win32 window system in Phase 12 |
-| Winsock / TCP stack | Not implemented | Phase 8 (lwIP), Phase 9 (ws2_32) |
-| SMP (multi-core) | Single CPU only | Phase 11 |
-| 32-bit WoW64 | Not planned | Phase 13 |
+The root `CMakeLists.txt` builds the two halves as separate CMake
+projects with `ExternalProject_Add`, because they use different
+toolchains:
+
+- `kernel_build` (`kernel/CMakeLists.txt`): freestanding C with
+  `x86_64-elf-gcc` if installed, otherwise clang; NASM for the assembly
+  (elf64); linked with `kernel/linker.ld`. The Windows userland is built by
+  `tools/build_userland.py` and embedded in the kernel image.
+- `bootloader_build` (`bootloader/CMakeLists.txt`): MinGW-w64 GCC or
+  clang with lld-link, producing a PE32+ EFI application.
+
+The `disk_image` target puts both on a FAT disk image (`nova.img`) with
+`scripts/create-disk.sh`; `run` and `run-debug` start it in QEMU.
+[building.md](building.md) has the full build instructions.

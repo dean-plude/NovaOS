@@ -33,5 +33,5 @@ and Qt WebEngine's shared context had no WGL context behind it.
   DXVK, but its compositor shares D3D11 textures between devices, which
   DXVK on lavapipe cannot (`VK_KHR_external_memory_win32`), so its
   context is lost and Chromium stops on a check
-  ([compatibility.md](../compatibility.md)).  Without Mesa 3D, Qt still
+  ([compatibility.md](compatibility.md)).  Without Mesa 3D, Qt still
   finds only OpenGL 1.1, as on a PC with no OpenGL driver.

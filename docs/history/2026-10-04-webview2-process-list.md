@@ -39,4 +39,4 @@ Windows does.
   (Chromium's `mini_installer` and `setup.exe`), which cannot map its
   archive into memory ("Can't map file to memory: Incorrect function") and
   then stops on the missing `wer.dll`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).

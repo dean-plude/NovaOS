@@ -3,7 +3,7 @@
 Phase 21's fourth step is the ThinkPad T14 Gen 4's sound and touchpad.
 Neither can be emulated by QEMU, so each code path has a QEMU-side check
 against a modelled device, and the machine itself gets a hand check
-([hardware.md](../hardware.md)).
+([hardware.md](hardware.md)).
 
 - **HD Audio controllers with the DSP on.**  Intel's controllers since
   Skylake sit beside an audio DSP; with the DSP enabled in the firmware,

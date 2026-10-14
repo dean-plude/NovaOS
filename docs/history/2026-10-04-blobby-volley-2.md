@@ -8,7 +8,7 @@ switches the display to 800x600 with `ChangeDisplaySettingsEx`
 (`CDS_FULLSCREEN`) and draws with Direct3D 9 in exclusive full screen
 (`Windowed = FALSE`), which NovaOS's `d3d9.dll` hands to DXVK on Mesa 3D's
 Vulkan.  When the game ends, the display goes back to its own mode
-([compatibility.md](../compatibility.md)).
+([compatibility.md](compatibility.md)).
 
 Two NovaOS gaps stopped it:
 

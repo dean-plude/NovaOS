@@ -1,34 +1,55 @@
 # App Store catalog
 
-NovaOS reads its app list from JSON. Updating the list does not require updating
-or restarting the OS once a build with the JSON Store is installed.
+The App Store reads its list of programs from a JSON file,
+`userland/store/catalog.json`.  The list can change without a new NovaOS
+build: an installed NovaOS downloads the current file from GitHub when the
+user refreshes the App Store.
 
-Edit `userland/store/catalog.json` through a pull request. After the JSON reaches
-`main`, users select **Refresh** in the Store, press **F5**, or run:
+## Changing the catalog
 
-```text
-store refresh
-```
+1. Edit `userland/store/catalog.json` in a pull request.
+2. Run the host tests (below) before you push.
+3. Once the change is on `main`, users get it with **Refresh** in the
+   App Store, F5, or `store refresh` in the Terminal.
 
-Refresh downloads the current catalog over HTTPS, validates it, and saves it to
-`C:\Windows\AppStore\catalog.json`. The Store replaces its displayed list and
-clears per-row status messages after the save succeeds. Installed programs and
-downloads are detected from their files as before. Removed entries disappear
-from the Store but their downloaded or installed files remain on disk.
+The ISO also carries the catalog as it was at build time, as a fallback.
 
-Opening the Store loads the saved file first. If it is missing or invalid, the
-Store loads `C:\Windows\AppStore\default-catalog.json`, bundled with the OS.
-To update a disconnected machine, copy a valid catalog into
-`C:\Windows\AppStore\catalog.json` and close/reopen the Store. The bundled
-fallback is kept separate from the independently maintained catalog.
+## How NovaOS loads it
 
-The default refresh endpoint is:
+| File on drive C: | What it is |
+|---|---|
+| `C:\Windows\AppStore\catalog.json` | The last catalog downloaded by a refresh.  Read first. |
+| `C:\Windows\AppStore\default-catalog.json` | The catalog built into the image.  Used when `catalog.json` is missing or invalid. |
+| `C:\Windows\AppStore\catalog-url.txt` | Optional.  One HTTPS URL to refresh from instead of the default. |
+
+The default refresh URL is
 `https://raw.githubusercontent.com/dean-plude/os/main/userland/store/catalog.json`.
-To use your own source, put a complete HTTPS URL on one line in
-`C:\Windows\AppStore\catalog-url.txt`. Remove that file to restore the default.
-Only use a source you trust: its URLs and install instructions determine which
-packages the Store downloads and installs. HTTPS uses NovaOS's existing
-certificate validation; catalogs do not currently have a separate signature.
+
+A refresh downloads the catalog over HTTPS (following up to eight
+redirects), parses and validates the whole document, saves it to
+`catalog.json` through a temporary file and a rename, and only then
+replaces the list on screen and clears each row's status message.  If
+anything fails (no network, a non-HTTPS URL, a download error, invalid
+JSON, an unsupported version, an unsafe path, a write error) the App
+Store keeps the list it has and says why.
+
+- Downloaded and installed programs are found from their files, as
+  before.  A program removed from the catalog disappears from the App
+  Store, but its downloaded and installed files stay on disk.
+- A refresh waits for a download or unpack in progress to finish, and new
+  actions wait for the refresh.
+- To update a machine without a network, copy a valid catalog to
+  `C:\Windows\AppStore\catalog.json` and reopen the App Store.
+- Delete `catalog-url.txt` to go back to the default URL.
+
+Only use a catalog source you trust: its URLs and install instructions
+decide what the App Store downloads and runs.  The download is checked by
+NovaOS's normal HTTPS certificate validation; the catalog itself is not
+signed.
+
+The App Store's **Updates** page updates NovaOS itself
+([updates.md](updates.md)); that has nothing to do with refreshing the
+catalog.
 
 ## Format
 
@@ -55,53 +76,63 @@ certificate validation; catalogs do not currently have a separate signature.
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `schema_version` | Required integer `1`. |
-| `apps` | Required array, at most 256 entries; an empty list is valid. |
-| `name`, `publisher`, `summary` | Required display strings, at most 80, 100, and 320 UTF-8 bytes respectively. |
-| `category` | `utilities`, `internet`, `media`, `graphics`, `office`, `developer`, or `runtimes`. |
-| `url` | Required HTTPS download URL, at most 500 bytes. |
-| `file` | Required unique filename under `C:\Downloads`, at most 180 bytes. |
-| `kind` | `setup` runs an EXE/MSI installer; `portable` runs the downloaded executable; `archive` uses installed 7-Zip. |
-| `dest` | Required for archives: a single directory name under `C:\Programs`. Optional/null otherwise. |
-| `exe` | Optional/null installed executable path, relative to `C:\Programs` or beginning with `\` for a root-relative path. Existing `**` folder matching is supported. |
-| `size_mb` | Required estimated download size: integer 0–4096. Downloads still obey the network subsystem's actual size limit. |
-| `note`, `label`, `color` | Required compatibility note (512 bytes), tile label (4 bytes), and `#RRGGBB` tile color. |
-| `system` | Optional archive-only list of files to install in System32/SysWOW64. Existing `x64\file.dll>renamed.dll` syntax is supported. |
+| Field | Required | Meaning |
+|---|---|---|
+| `schema_version` | yes | The integer `1`. |
+| `apps` | yes | Array of at most 256 programs.  An empty array is valid. |
+| `name` | yes | Display name, at most 80 bytes of UTF-8.  Unique (case-insensitive). |
+| `publisher` | yes | At most 100 bytes. |
+| `summary` | yes | One line, at most 320 bytes. |
+| `category` | yes | `utilities`, `internet`, `media`, `graphics`, `office`, `developer` or `runtimes`. |
+| `url` | yes | `https://` download URL, at most 500 bytes, no spaces. |
+| `file` | yes | File name the download is saved as in `C:\Downloads`, at most 180 bytes.  One path component, unique (case-insensitive). |
+| `kind` | yes | `setup`: the download is an `.exe` installer or `.msi` package that **Install** runs.  `portable`: the download is the program itself.  `archive`: a `.zip`, `.7z`, `.tar.gz`, `.tar.zst` or 7-Zip self-extractor that 7-Zip (installed from the App Store) unpacks. |
+| `dest` | for `archive` | The folder under `C:\Programs` to unpack into: one path component.  Optional or `null` otherwise. |
+| `exe` | no | The installed program, relative to `C:\Programs`, or starting with `\` for a path from the root of C:.  A `**` component matches any folders (for archives with a versioned top folder).  **Open** appears when this file exists. |
+| `size_mb` | yes | Approximate download size, an integer from 0 to 4096.  Downloads are still limited by what the network stack allows. |
+| `note` | yes | Compatibility note shown with the program, at most 512 bytes. |
+| `label` | yes | Tile label, at most 4 bytes. |
+| `color` | yes | Tile colour, `#RRGGBB`. |
+| `system` | no | `archive` only: a space-separated list of files in the archive to install into the system folders instead of `dest` (files from an `x86` or `x32` folder go to `SysWOW64`, others to `System32`).  `path>name` renames a file, as in `x64\file.dll>renamed.dll`.  Vulkan driver manifests among them are registered. |
 
-The complete document must fit in 512 KiB. Display strings must be nonempty and
-contain no control characters. Names and download filenames must be unique
-(case insensitive). Install paths cannot traverse `..` or inject quoted command
-arguments. `dest` and `file` must be single components. System-file selectors
-are restricted to safe relative archive paths and optional single-component
-renames. Unknown metadata fields are skipped; changing required behavior needs
-a new schema version and corresponding OS support.
+Other rules:
 
-A refresh fails safely on invalid JSON, an unsupported version, download errors,
-unsafe paths, or write/rename failures. The current list remains available.
-Refresh waits for any app download/unpack to finish, and new app actions wait
-until refresh finishes. The **Updates** category continues to update NovaOS;
-catalog Refresh is a separate operation.
+- The whole document is at most 512 KiB.
+- Display strings must not be empty or contain control characters.
+- Paths may not contain `..` or characters that could break a quoted
+  command line.
+- Unknown fields are ignored.  A change in what a required field means
+  needs a new `schema_version` and matching NovaOS support.
 
-Run the native host tests before publishing changes:
+## Tests
+
+Run the host tests before publishing a change:
 
 ```bash
 python3 -m unittest discover -s tests/tools -p test_store_catalog.py -v
+python3 -m unittest discover -s tests/tools -p test_corpus_store_catalog.py -v
 ```
 
-The first test parses the repository catalog using the actual native reader.
-It rejects a catalog that would fail to load in NovaOS. Full install/HTTPS tests
-still run through the boot-test suites in CI.
+`test_store_catalog.py` compiles NovaOS's own catalog parser
+(`kernel/apps/store_catalog.h`) with the host C compiler and runs it on
+the repository's catalog, so a catalog NovaOS would refuse fails the
+test.  It also tests refresh and validation edge cases.  Real downloads
+and installs are tested by the boot-test suites and the nightly app
+corpus.
 
-The host compatibility harness reads this same bundled JSON file when staging
-Store applications and runtimes. It requires a unique matching entry and the
-fixture's exact download URL; catalog and parser edits select the native corpus
-checks. It no longer attempts to extract catalog rows from the Store C source.
+## Other users of the catalog
 
-Graphics staging resolves Mesa and DXVK downloads through the same JSON catalog
-lookup as compatibility fixtures; Venus and VKD3D-Proton, which NovaOS builds
-itself and publishes on the "latest" release, are built (or taken from
-`VENUS_7Z` and `VKD3D_7Z`) instead, and the app corpus takes VKD3D-Proton from
-`CORPUS_LOCAL_DOWNLOADS` when the nightly job has built it. The graphics download cache includes the
-catalog hash so catalog changes also refresh its cache identity.
+The catalog is also the source of download URLs for the test tools:
+
+- `tools/appcorpus.py` (the nightly app corpus) looks up each App Store
+  program it tests by name.  The entry must be unique and its `url` must
+  match the test's download exactly.
+- `tools/ci/stage-graphics.sh` takes the Mesa 3D and DXVK downloads for
+  the CI graphics tests from the catalog.  Venus and VKD3D-Proton, which
+  NovaOS builds itself and publishes on the `latest` release, are built by
+  `tools/build_venus.py` and `tools/build_vkd3d_proton.py` instead (or
+  taken from `VENUS_7Z` and `VKD3D_7Z`).  The nightly corpus takes
+  VKD3D-Proton from `CORPUS_LOCAL_DOWNLOADS` when the nightly job has
+  built it.
+- CI's cache key for the graphics downloads includes the catalog's hash,
+  so changing the catalog refreshes that cache.

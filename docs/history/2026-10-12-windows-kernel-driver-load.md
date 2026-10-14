@@ -1,7 +1,7 @@
 ## The first Windows kernel-mode driver
 
 Step 30.1 of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): NovaOS loads a
+[design/windows-drivers.md](design/windows-drivers.md)): NovaOS loads a
 real Windows `.sys` file into its kernel, runs its `DriverEntry`, and lets
 programs talk to it through Windows IRPs.
 

@@ -31,4 +31,4 @@ changed: the check now gets Windows' answer.
   fails with `0x80070003` because Edge Update's own background update
   pass, running at the same time, does not see the install worker and
   uninstalls Edge Update under it
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).

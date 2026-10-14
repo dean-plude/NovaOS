@@ -1,7 +1,7 @@
 ## Windows network drivers on NovaOS's NDIS host
 
 Step 30.9, first half, of the Windows driver model (roadmap Phase 30,
-[design/windows-drivers.md](../design/windows-drivers.md)): a real Windows
+[design/windows-drivers.md](design/windows-drivers.md)): a real Windows
 network driver, virtio-win's signed `netkvm.sys`, drives QEMU's
 virtio-net card, and NovaOS's network stack uses it as its adapter.
 

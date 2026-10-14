@@ -55,4 +55,4 @@ NovaOS lacked; nothing in the runtime is changed.
   Direct3D 11 adapter for ANGLE and exits, the first browser process
   ends and the loader starts another, and `CreateCoreWebView2Controller`
   fails with `RPC_E_DISCONNECTED`
-  ([compatibility.md](../compatibility.md#webview2)).
+  ([compatibility.md](compatibility.md#webview2)).

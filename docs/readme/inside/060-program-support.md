@@ -1,1 +1,1 @@
-- **Program support**: the PE loader, x64 and x86 structured exceptions, WoW64, services, and the compatibility shims real programs need.
+- **Program support**: the PE loader, 32-bit programs through a WoW64-style `ntdll`, x64 and x86 structured exceptions, consoles and ConPTY, COM between processes, Windows Installer, services and scheduled tasks.

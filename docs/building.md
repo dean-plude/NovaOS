@@ -1,45 +1,67 @@
 # Building NovaOS
 <!-- The regions between "BEGIN generated" and "END generated" markers are built from fragment files by tools/docgen.py: edit those files, not the regions (CONTRIBUTING.md). -->
 
-## Prerequisites
+This page covers building NovaOS from source, running it in QEMU, the test
+suites and the debugging tools.  The build host is Linux; CI builds on
+Ubuntu 24.04.  On Windows, use WSL2 or a Linux VM.  On a Mac, see
+[macos.md](macos.md).
 
-The build host is Linux (Ubuntu/Debian here); on Windows use WSL2 or a
-Linux VM.  On a Mac, see [macos.md](macos.md).
+If you only want to try NovaOS, you do not need to build it: the README
+links the ready-made `nova.iso`.
+
+## Prerequisites
 
 ```bash
 sudo apt update
 sudo apt install -y \
-    cmake ninja-build nasm python3 \
+    git cmake ninja-build make nasm python3 \
     clang lld llvm libc++-dev gcc-mingw-w64-x86-64 \
-    mtools dosfstools xorriso \
+    mtools dosfstools xorriso p7zip-full \
     qemu-system-x86 ovmf acpica-tools
 ```
 
-That is everything the build, `cmake --build . --target run` and the
-self-tests need; it was last checked on Ubuntu 24.04 (October 2026) by
-following this page from the top.
+This is the package set CI's build job installs (`tools/ci/install.sh
+build`), plus QEMU, OVMF and `iasl` for running and testing.
 
-What each part is for:
-
-| Tool | Used for |
-|------|----------|
-| `cmake`, `ninja-build` (or make) | The build |
-| `nasm` | Kernel assembly (entry, interrupt stubs, SMP trampoline, syscall entry) |
-| `libc++-dev` | libc++'s C++ headers, for HarfBuzz in `novatext.dll` (nothing of libc++ is linked; set `NOVA_LIBCXX` to use headers elsewhere) |
-| `clang`, `lld` (`lld-link`) | **Required.** The Windows userland (`--target=x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`), NetSurf, and the kernel and bootloader unless the alternatives below are installed |
-| `llvm` (`llvm-rc`) | Compiling programs' resource scripts (icons, dialogs) |
-| `python3` | `tools/build_userland.py`, `tools/build_netsurf.py` |
-| `mingw-w64-common` (comes with `gcc-mingw-w64-x86-64`) | **Required.** MinGW-w64's C and Windows headers, which `msvcp140.dll` (Microsoft's STL, `userland/msvcp140/build.py`) compiles against; set `NOVA_MINGW_INCLUDE` to use headers elsewhere |
-| `g++-mingw-w64-x86-64`, `g++-mingw-w64-i686` | Only for `tools/build_icu.py` (rebuilding `icu.dll`) |
-| `mtools`, `dosfstools` | `nova.img` and putting files on the data disk |
+| Package | Used for |
+|---------|----------|
+| `cmake`, `ninja-build` or `make` | The build.  CI uses Unix Makefiles; `scripts/build.sh` always does |
+| `nasm` | Kernel assembly (entry, interrupt stubs, SMP trampoline, system-call entry) |
+| `clang`, `lld` | **Required.** The Windows userland (`--target=x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`, linked with `lld-link`), NetSurf, the test drivers, KMDF and UMDF, and the kernel and boot loader unless the compilers below are installed |
+| `llvm` | `llvm-rc` (resource scripts: icons, dialogs), `llvm-lib`, `llvm-nm` and `llvm-readobj` |
+| `libc++-dev` | libc++'s C++ headers, for HarfBuzz in `novatext.dll`.  Nothing of libc++ is linked.  `NOVA_LIBCXX=DIR` points at headers elsewhere |
+| `gcc-mingw-w64-x86-64` | **Required** for the MinGW-w64 headers it pulls in (`mingw-w64-common`): `msvcp140.dll` compiles against them (`NOVA_MINGW_INCLUDE=DIR` to use others), and KMDF and UMDF compile against its WDK headers in `/usr/share/mingw-w64/include`.  Its `x86_64-w64-mingw32-gcc` also builds the boot loader |
+| `python3` | The userland build (`tools/build_userland.py` and the scripts it calls) |
+| `git` | Fetching Microsoft's Windows-Driver-Frameworks source (see below) |
+| `p7zip-full` | **Required.** Unpacking the bundled Firefox installer and Mesa archive (`7z`, or `7zz` from the `7zip` package) |
+| `mtools`, `dosfstools` | `nova.img`, and copying files onto data disks |
 | `xorriso` | `scripts/create-iso.sh` |
 | `qemu-system-x86`, `ovmf` | Running NovaOS |
-| `acpica-tools` (`iasl`) | Only for the core self-tests, which compile the ACPI tables in `tests/acpi/` |
+| `acpica-tools` | `iasl`, which the core self-tests use to compile the ACPI tables in `tests/acpi/` |
+
+`ccache` is optional; CI puts `/usr/lib/ccache` first on `PATH` to speed
+up rebuilds.
+
+### Network access during the build
+
+The build downloads three things.  Each is pinned and checked, and kept
+in a cache under `~/.cache/novaos`:
+
+| What | From | Cache | Checked by |
+|------|------|-------|------------|
+| Firefox 157.0 installer (`tools/bundle_firefox.py`) | `archive.mozilla.org` | `~/.cache/novaos/firefox`, or `NOVA_FIREFOX_CACHE` | Mozilla's `SHA512SUMS` |
+| Mesa 24.2.4 llvmpipe, mesa-dist-win (`tools/bundle_mesa.py`) | GitHub releases | `~/.cache/novaos/mesa`, or `NOVA_MESA_CACHE` | a SHA-256 in the script |
+| Windows-Driver-Frameworks at a pinned commit (`tools/kmdf/build_kmdf.py`) | GitHub, with `git fetch` | `~/.cache/novaos/wdf` | the commit id |
+
+Firefox's `SHA512SUMS` is fetched again on every build, so even a build
+with a full cache needs to reach `archive.mozilla.org`.  Firefox and
+Mesa are part of every build; there is no switch to leave them out.
+[building-firefox.md](building-firefox.md) has the details for Firefox.
 
 ### Optional compilers
 
-- **Kernel**: CMake prefers an `x86_64-elf-gcc` cross-compiler when one is on
-  `PATH` and otherwise uses clang.  To build one with crosstool-ng (it
+- **Kernel**: CMake uses an `x86_64-elf-gcc` cross compiler when one is
+  on `PATH`, and clang otherwise.  To build one with crosstool-ng (it
   installs into `~/x-tools/x86_64-unknown-elf`):
 
   ```bash
@@ -50,67 +72,133 @@ What each part is for:
   export PATH="$HOME/x-tools/x86_64-unknown-elf/bin:$PATH"
   ```
 
-- **Bootloader**: `x86_64-w64-mingw32-gcc` (`gcc-mingw-w64-x86-64`) is
-  used when present; otherwise clang with `lld-link`.
+  The toolchain's compiler is `x86_64-unknown-elf-gcc`; CMake looks for
+  `x86_64-elf-gcc`, so add a link with that name if you want it used.
+
+- **Boot loader**: `x86_64-w64-mingw32-gcc` (from `gcc-mingw-w64-x86-64`)
+  is used when present, otherwise clang with `lld-link`.
 
 ---
 
 ## Building
 
-This uses Ninja; without it, run `cmake ..` (Unix Makefiles) and then
-`make -j$(nproc)` instead of the last two lines.
-
 ```bash
 git clone https://github.com/dean-plude/os
 cd os
-mkdir build && cd build
-cmake .. -G Ninja
-ninja
+cmake -S . -B build -G Ninja
+cmake --build build
 ```
 
-`scripts/build.sh` does the same in one step (`--clean`, `--release`,
-`--jobs N`, `--no-disk`).
+Without Ninja, leave out `-G Ninja` and CMake writes Makefiles
+(`make -C build -j"$(nproc)"`).  CI runs
+`cmake -S . -B build -G "Unix Makefiles"` and `make -C build -j"$(nproc)"`.
 
-The build produces:
+The root `CMakeLists.txt` builds the kernel and the boot loader as two
+separate CMake projects (ExternalProject), each with its own compiler,
+then makes the disk image.  Their output goes to log files, not the
+terminal.  When a sub-build fails, look in:
+
+```
+build/kernel_build-prefix/src/kernel_build-stamp/kernel_build-build-err.log
+build/bootloader_build-prefix/src/bootloader_build-stamp/bootloader_build-build-err.log
+```
+
+(and the `-configure-err.log` files beside them when configuring fails).
+The userland is built inside the kernel sub-build, so its errors are in
+the first file.
+
+### scripts/build.sh
+
+`scripts/build.sh` checks for the compilers, configures `build/` with
+Unix Makefiles and builds.  Options:
+
+| Option | Effect |
+|--------|--------|
+| `--clean` | Delete `build/` first |
+| `--jobs N` | Run `make -j N` (default: the CPU count) |
+| `--no-disk` | Build only the kernel and boot loader sub-builds, not `nova.img`.  The results stay in `build/kernel_build/kernel.elf` and `build/bootloader_build/bootx64.efi` |
+| `--release`, `--debug` | Set the build type passed to the sub-builds (default Debug).  This changes little: the kernel and boot loader always compile with `-O2 -g` |
+| `--verbose` | `make --verbose` |
+
+Do not mix it with a `build/` directory configured for Ninja: CMake
+refuses to change the generator of an existing build directory.  Use
+`--clean`, or the plain CMake commands above.
+
+### What the build produces
 
 ```
 build/
-├── bootx64.efi     # UEFI bootloader
-├── kernel.elf      # Kernel ELF with debug symbols; carries drive C:'s system files
-├── nova.img        # Bootable FAT32 disk image (128 MiB, sparse)
-└── kernel_build/userland/   # The built DLLs and programs (x64; x86 under x86/)
+├── bootx64.efi                 # the UEFI boot loader
+├── kernel.elf                  # the kernel, with debug symbols; it also carries drive C:'s system files
+├── nova.img                    # a bootable FAT32 disk image (label NOVA_EFI, no partition table)
+└── kernel_build/userland/      # the built DLLs and programs (x64; x86 under x86/)
 ```
+
+`nova.img` (`scripts/create-disk.sh`) holds `\EFI\BOOT\BOOTX64.EFI` and
+`\EFI\NOVA\kernel.elf`.  It is a sparse file of at least 128 MiB, sized
+to hold the kernel and boot loader twice (room for a staged update) plus
+32 MiB, rounded up to a multiple of 32 MiB.
+
+### CMake targets
+
+| Target | What it does |
+|--------|--------------|
+| (default, `all`) | `kernel.elf`, `bootx64.efi` and `nova.img` |
+| `kernel_build`, `bootloader_build` | One sub-build only |
+| `disk_image` | `nova.img` |
+| `run` | Boot `nova.img` in QEMU with `scripts/run-qemu.sh` ([below](#running-in-qemu)) |
+| `run-debug` | The same, with QEMU's GDB stub on port 1234, stopped at the first instruction |
+
+`run` and `run-debug` exist only when CMake found `qemu-system-x86_64`
+and OVMF.  CMake looks for `OVMF_CODE.fd` or `OVMF.fd` in
+`/usr/share/OVMF`, `/usr/share/ovmf`, `/usr/share/qemu` and
+`/usr/local/share/OVMF`, and for `OVMF_VARS.fd`.  On Ubuntu 24.04 it finds
+`/usr/share/ovmf/OVMF.fd` and no separate variable store.  Set them by
+hand with `-DOVMF_CODE=...` and `-DOVMF_VARS=...`.
 
 ### The Windows userland
 
-`userland/` (the system DLLs, the C runtimes, `cmd.exe`, `msiexec` and the
-sample and test programs) is compiled by `tools/build_userland.py` with clang
-and `lld-link`, twice: once for x64 into `C:\Windows\System32` and
-`C:\Programs`, and once for x86 into `C:\Windows\SysWOW64` and
-`C:\Programs\x86`.  The files, with the fonts, the sample pictures and the
-NetSurf browser, are embedded in `kernel.elf` and placed on drive C: at
-boot.
+`userland/` holds the system DLLs, the C runtimes, `cmd.exe`, `msiexec`
+and the sample and test programs.  `tools/build_userland.py` compiles it
+with clang and `lld-link` twice: once for x64 into `C:\Windows\System32`
+and `C:\Programs`, and once for x86 into `C:\Windows\SysWOW64` and
+`C:\Programs\x86`.  The same run also builds or stages:
+
+- the NetSurf browser (`tools/build_netsurf.py`, `C:\Programs\NetSurf`);
+- Firefox 157.0 (`C:\Programs\Mozilla Firefox`) and Mesa's llvmpipe
+  OpenGL (`opengl32_mesa.dll` with `libgallium_wgl.dll` and
+  `libglapi.dll`, in System32 and SysWOW64);
+- the fonts, ICU, the trusted root certificates and the General MIDI
+  sound font;
+- KMDF (`Wdf01000.sys`, `WdfLdr.sys`) and UMDF (`Wudfx02000.dll`,
+  `WUDFHost.exe`, `WUDFRd.sys`), built from Microsoft's MIT-licensed
+  Windows-Driver-Frameworks source;
+- the test packages under `C:\Tests` (Windows Installer packages, test
+  drivers and their signed packages, Authenticode test files);
+- firmware, when `tools/fetch_sof_firmware.py` or
+  `tools/fetch_firmware.py` has fetched it (see below).
+
+All of it is embedded in `kernel.elf` and placed on drive C: at boot.
+Files of 1 MiB or more are stored zlib-compressed and inflated by the
+kernel.
 
 Independent DLLs, programs and objects build concurrently, with at most
-`--jobs N` (or `-j N`) compiler and linker processes running at once; the
-default is the number of CPUs and `--jobs 1` builds one step at a time.  A
-DLL still links after the DLLs it depends on, and the files and their order
-in the image are the same whatever `N` is.  The 64-bit pass, the 32-bit
-pass and NetSurf's objects run side by side on that one budget (NetSurf links
-once the 64-bit import libraries it needs exist), so none of them waits for
-another to finish.  A failed command's output is printed in one piece, headed
-by its pass: `[x64]`, `[x86]` or `[netsurf]`.  CMake runs the script without
-the flag, so the kernel build uses every core.
+`--jobs N` (or `-j N`) compiler and linker processes at once; the default
+is the CPU count.  A DLL links after the DLLs it depends on, and the
+output is the same whatever `N` is.  The x64 pass, the x86 pass and
+NetSurf share that budget and run side by side.  A failed command's
+output is printed in one piece, headed `[x64]`, `[x86]` or `[netsurf]`.
+CMake runs the script without `--jobs`, so it uses every core.
 
-Environment variables:
-
-| Variable | Effect |
+| Environment variable | Effect |
 |----------|--------|
-| `NOVA_NO_NETSURF=1` | Leave the NetSurf browser out (the first build otherwise compiles about 800 files of it; later builds reuse them) |
-| `NOVA_NO_WOW64=1` | Skip the 32-bit (x86) pass: no `SysWOW64`, no `C:\Programs\x86` |
+| `NOVA_NO_NETSURF=1` | Leave NetSurf out (its first build compiles about 800 files; later builds reuse them) |
+| `NOVA_NO_WOW64=1` | Skip the x86 pass: no `SysWOW64`, no `C:\Programs\x86` |
+| `NOVA_FIREFOX_CACHE`, `NOVA_MESA_CACHE` | Where the Firefox and Mesa downloads are kept |
+| `NOVA_LIBCXX`, `NOVA_MINGW_INCLUDE` | Header locations, as in the table above |
 
-To rebuild only the userland, for a quick check of a DLL (the second
-command only loads the manifests, as CI does):
+To rebuild only the userland, for a quick check of a DLL (`--check` only
+loads the DLL and program manifests, as CI's first job does):
 
 ```bash
 NOVA_NO_NETSURF=1 python3 tools/build_userland.py --jobs 4 /tmp/ul /tmp/ul/gen.c kernel/ke/syscall.h
@@ -119,105 +207,112 @@ python3 tools/build_userland.py --check
 
 ### Adding a DLL or program
 
-There is no central list to edit: each DLL registers itself, so changes
-made in parallel add files rather than collide on the same lines.
+There is no central list to edit: each DLL and program registers itself,
+so parallel changes add files instead of editing the same lines.
 
-- **A DLL** is a directory `userland/NAME/` with its `.c` files and a
-  `dll.json`:
+**A DLL** is a directory `userland/NAME/` with its `.c` files and a
+`dll.json`:
 
-  ```json
-  {
-    "deps": ["user32", "kernel32", "ntdll"],
-    "tlssup": true
-  }
-  ```
+```json
+{
+  "deps": ["user32", "kernel32", "ntdll"],
+  "tlssup": true
+}
+```
 
-  `deps` are the DLLs it links against (they are built first; a cycle or a
-  missing one stops the build).  Leave `base` and `base_x86` out: a new
-  DLL gets the first free 16 MiB slot at 0x7FFD00000000 (x64) and
-  0x97000000 (x86), and the build checks that no two DLLs overlap.  The
-  older DLLs keep the fixed addresses written in their `dll.json`.  Other
-  keys: `sources` (directories its `.c` files come from, default its own),
-  `entry` (`"DllMain"`), `x64_only`, `x86_only` (built for SysWOW64 alone), `ordinals` (`{"Name": 12}`, for
-  DLLs programs import from by number), and `file` for a DLL whose file
-  name is not `NAME.dll` (`"bthprops.cpl"`, a Control Panel item).
-- **When a DLL needs more** (a third-party library, extra flags, a
-  special link), put the code in `userland/NAME/build.py`, not in
-  `tools/build_userland.py`: it may define `cflags(b)` (flags for the
-  DLL's own sources), `objs(b, odir)` (extra objects; `b.compile_many`
-  compiles a library in parallel and reuses fresh objects) and `link(b,
-  odir, objs, deps, base)` (replaces the link; `b` is
-  `tools/build_userland.py` itself, with `b.ARCH`, `b.cflags()`, `b.cc`,
-  `b.run`, `b.link_dll`).  `userland/secur32/build.py` (Mbed TLS) and
-  `userland/msvcrt/build.py` (msvcrt.dll and ucrtbase.dll) are examples.
-- **A program** is `userland/programs/NAME.c` (or `.cpp`, and `NAME.rc`
-  for resources).  It goes to `C:\Programs`, 64-bit only, unless
-  `NAME.json` says otherwise: `{"x86": true}` builds it for 32 bits as
-  well, `"system": true` installs it in `C:\Windows\System32`, `"libs":
-  ["usp10"]` links more DLLs, `"msstl": true` builds a `.cpp` against
-  Microsoft's STL headers and `msvcp140.dll`, as Visual Studio builds a
-  program (`userland/programs/stltest.cpp`), and `"selftest": true` lists
-  it among the README's self-test programs.
+| Key | Meaning |
+|-----|---------|
+| `deps` | The DLLs it links against.  They are built first; a cycle or a missing one stops the build |
+| `base`, `base_x86` | Fixed load addresses.  Leave them out: a new DLL gets the first free 16 MiB slot from 0x7FFD00000000 (x64) and 0x97000000 (x86), and the build checks that no two DLLs overlap.  Older DLLs keep the fixed addresses in their `dll.json` |
+| `sources` | Directories its `.c` files come from (default: its own) |
+| `entry` | `"DllMain"` for a DLL with an entry point (a `NAME.rc` in its directory is linked in too) |
+| `tlssup` | `true`: link implicit TLS support (`lib/tlssup.c`) |
+| `x64_only`, `x86_only` | Build it for one architecture only |
+| `ordinals` | `{"Name": 12}`: export ordinals, for DLLs programs import from by number |
+| `file` | The file name when it is not `NAME.dll` (`"bthprops.cpl"`) |
 
-Two pieces are built by their own tools and committed, so the normal build
-needs neither:
+When a DLL needs more (a third-party library, extra flags, a special
+link), put the code in `userland/NAME/build.py`, not in
+`tools/build_userland.py`.  It may define `cflags(b)` (flags for the
+DLL's own sources), `objs(b, odir)` (extra objects; `b.compile_many`
+compiles a library in parallel and reuses fresh objects) and
+`link(b, odir, objs, deps, base)` (replaces the link).  `b` is
+`tools/build_userland.py` itself, with `b.ARCH`, `b.cflags()`, `b.cc`,
+`b.run` and `b.link_dll`.  `userland/secur32/build.py` (Mbed TLS) and
+`userland/msvcrt/build.py` (`msvcrt.dll` and `ucrtbase.dll`) are
+examples.
 
-- **ICU** (`third_party/icu`): `icu.dll` for x64 and x86, one DLL holding
-  ICU's C API under unversioned names as Windows 10's does, and the ICU
-  data both read from `C:\Windows\Globalization\ICU\icudt77l.dat`.
-  `tools/build_icu.py` downloads the ICU4C 77.1 source (checking its
-  SHA-256), builds ICU's host tools, cross-compiles ICU with MinGW-w64
-  (`sudo apt install g++-mingw-w64-x86-64 g++-mingw-w64-i686`) and trims the
-  data (legacy code-page converters, word-break dictionaries,
-  transliteration, unit names and character names: 18 MB instead of 31;
-  .NET's answers for all its cultures are the same with either).  Run it
-  again only to move to another ICU release.  `build_userland.py` embeds
-  files of 1 MiB or more (ICU's, NetSurf) zlib-compressed; the kernel
-  inflates them onto drive C: at boot.
-- **kernel32's locale table** (`userland/kernel32/locale_data.h`):
-  `tools/gen_locales.py` generates it from .NET's `IcuLocaleData.cs` (MIT),
-  .NET's record of the names, LCIDs, code pages and GEOIDs of the 864
-  locales Windows knows.
-- **The time zone table** (`kernel/ke/tzdata.inc`):
-  `tools/gen_timezones.py` generates it from Unicode CLDR's
-  `windowsZones.xml` (the Windows zone names and their cities) and the
-  IANA tz database through Python's `zoneinfo` (`pip install tzdata` has
-  the old zone names CLDR uses).  Run it again when a country changes its
-  rules.
-- **The keyboard layouts** (`userland/include/kbdlayouts.h`, read by the
-  kernel and user32): `tools/gen_keyboards.py` generates them from
-  xkeyboard-config (MIT/X11) through libxkbcommon
-  (`sudo apt install xkb-data libxkbcommon0`).
+**A program** is `userland/programs/NAME.c` (or `.cpp`, with `NAME.rc`
+for resources).  It is built 64-bit only into `C:\Programs` unless a
+`NAME.json` beside it says otherwise:
+
+| Key | Meaning |
+|-----|---------|
+| `x86` | `true`: also build it for 32 bits (`C:\Programs\x86`) |
+| `system` | `true`: install it in `C:\Windows\System32` (and SysWOW64) |
+| `libs` | More DLLs to link against, e.g. `["usp10"]` |
+| `gui` | `true`: a GUI program (`/subsystem:windows`), which the shell starts without a console window |
+| `msstl` | `true`: build a `.cpp` against Microsoft's STL and `msvcp140.dll`, as Visual Studio does (`userland/programs/stltest.cpp`) |
+| `selftest` | `true`: list it among the self-test programs in [testing.md](testing.md) |
+
+### Generated and prebuilt files
+
+These are made by their own tools and committed, so the normal build
+needs none of the tools' extra dependencies:
+
+| File | Tool | Source |
+|------|------|--------|
+| `third_party/icu/` (`icu.dll` x64 and x86, `icudt77l.dat`) | `tools/build_icu.py` | ICU4C 77.1 (SHA-256 checked), cross-compiled with MinGW-w64 (`g++-mingw-w64-x86-64 g++-mingw-w64-i686`).  One DLL with ICU's C API under unversioned names, as Windows 10 ships it; the data is trimmed (no legacy code-page converters, word-break dictionaries, transliteration, unit or character names).  Rerun it only to move to another ICU release |
+| `userland/kernel32/locale_data.h` | `tools/gen_locales.py` | .NET's `IcuLocaleData.cs` (MIT): the names, LCIDs, code pages and GEOIDs of the 864 locales Windows knows |
+| `kernel/ke/tzdata.inc` | `tools/gen_timezones.py` | Unicode CLDR's `windowsZones.xml` and the IANA tz database through Python's `zoneinfo` (`pip install tzdata` for the old zone names CLDR uses).  Rerun it when a country changes its rules |
+| `userland/include/kbdlayouts.h` | `tools/gen_keyboards.py` | xkeyboard-config through libxkbcommon (`sudo apt install xkb-data libxkbcommon0`) |
+
+### Firmware
+
+Release builds carry device firmware; pull requests and the rolling
+`latest` build do not.  Run one of these before building to include it:
+
+```bash
+python3 tools/fetch_firmware.py        # the default firmware set (Intel graphics, Wi-Fi, Bluetooth) and the audio DSP's
+python3 tools/fetch_sof_firmware.py    # only the audio DSP's Sound Open Firmware
+```
+
+The files go to `third_party/firmware` and `third_party/sof-bin`, which
+are not committed.  QEMU emulates none of these devices, so nothing here
+needs them.  [drivers.md](drivers.md#the-default-firmware-set) and
+[hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)
+explain what they are for.
 
 ### The ISO
 
 ```bash
-scripts/create-iso.sh nova.iso build/bootx64.efi build/kernel.elf
+scripts/create-iso.sh build/nova.iso build/bootx64.efi build/kernel.elf
 ```
 
 The ISO is not committed (`*.iso` is in `.gitignore`).  CI builds it on
-every pull request and keeps it as the run's `nova-iso` artifact, and each
-push to `main` that passes CI replaces `nova.iso` on the `latest` build
+every run and keeps it as the `nova-iso` artifact.  Each push to `main`
+that passes CI replaces `nova.iso` on the rolling `latest` pre-release
 (<https://github.com/dean-plude/os/releases/download/latest/nova.iso>).
 A version tag makes a release with the tested ISO, its checksums and the
-update files ([releasing.md](releasing.md)); the newest one is always at
+update files ([releasing.md](releasing.md)); the newest one is at
 <https://github.com/dean-plude/os/releases/latest/download/nova.iso>.
 
-The ISO is El Torito UEFI, no emulation: its EFI System Partition holds
-`\EFI\BOOT\BOOTX64.EFI`, `\EFI\NOVA\kernel.elf` and `\EFI\NOVA\bootlog.txt`
-(1 MiB set aside for the boot log).  The same ESP is partition 2 of a GPT
-behind a protective MBR, so the ISO written to a USB stick starts too.
-Booted from either, NovaOS runs live and opens Install NovaOS (see the
-README); the bootloader tells the installation media from an installed
-disk by `bootlog.txt`, which the installer does not copy.  Started from a
-stick, the kernel writes its log into `bootlog.txt` in place
-(`kernel/fs/bootlog.c`): what was logged since boot when the stick
-appears, then the rest at most once a second, before a restart and after
-a kernel fault.  To try the stick in QEMU, with only the firmware's
-framebuffer for a display as on a laptop:
+The ISO boots by UEFI only (El Torito, no emulation).  Its EFI System
+Partition holds `\EFI\BOOT\BOOTX64.EFI`, `\EFI\NOVA\kernel.elf` and
+`\EFI\NOVA\bootlog.txt` (1 MiB set aside for the boot log).  The same
+partition is partition 2 of a GPT behind a protective MBR, so the ISO
+written to a USB stick boots too.  Booted from either, NovaOS runs live
+and opens Install NovaOS.  The boot loader tells installation media from
+an installed disk by `bootlog.txt`, which the installer does not copy.
+
+Started from a stick, the kernel writes its log into `bootlog.txt` in
+place (`kernel/fs/bootlog.c`): what was logged before the stick
+appeared, then the rest at most once a second, before a restart and
+after a kernel fault.  To try a stick in QEMU, with only the firmware's
+framebuffer for a display, as on a laptop:
 
 ```bash
-cp nova.iso stick.img
+cp build/nova.iso stick.img
 truncate -s 2G stick.img
 qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/ovmf/OVMF.fd \
@@ -226,32 +321,31 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
   -device usb-storage,bus=xhci.0,drive=stick -serial stdio
 ```
 
-The devices suite's `usbboot` boot does this and reads the log back
-from the stick image with mtools; `cdboot` starts from the ISO as a
-disc.
+The devices suite's `usbboot` boot does this and reads the log back from
+the stick image with mtools; its `cdboot` boot starts the ISO as a disc.
 
 ---
 
 ## Running in QEMU
 
-From the build directory (`--target run-debug` instead also starts the GDB
-stub on port 1234):
+The quickest way, from the build directory:
 
 ```bash
-cd build
-cmake --build . --target run
+cmake --build build --target run
 ```
 
-or by hand, from the top of the repository:
+This runs `scripts/run-qemu.sh`, which starts:
 
-```bash
-./scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE.fd
-```
+- a q35 machine with 4 CPUs (`-cpu qemu64` with RDTSCP, XSAVE, XSAVEOPT,
+  AVX and F16C) and **256 MiB** of memory;
+- `nova.img` as the boot disk and `build/nova-data.img` as a data disk
+  (an empty 256 MiB file made on the first run);
+- the standard VGA adapter, no network card, an Intel HD Audio card, and
+  COM1 on your terminal.
 
-`run-qemu.sh` starts a q35 machine with 4 CPUs and 256 MiB of memory, no
-network card, the serial port (COM1) on your terminal, `nova.img` as the
-boot disk and `build/nova-data.img` as the data disk.  For the network, the
-App Store or large programs, run QEMU yourself with more memory and a NIC:
+256 MiB is well below the 2 GB the [user guide](user-guide.md) asks for,
+now that drive C: (held in memory) carries Firefox and Mesa.  For normal
+use, the network or the App Store, run QEMU yourself:
 
 ```bash
 cp /usr/share/OVMF/OVMF_VARS_4M.fd /tmp/OVMF_VARS.fd
@@ -263,236 +357,304 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
   -serial stdio
 ```
 
-QEMU's default user-mode network (an e1000e on q35, the 82574L) works out of the box;
-add `-nic user,model=e1000` to test the older card or
-`-nic user,model=virtio-net-pci` for virtio-net.  `-smp N` sets the core
-count (up to 16).
+Add `-accel kvm` on a Linux host with KVM.  `run-qemu.sh` can also be
+called directly: `scripts/run-qemu.sh IMAGE OVMF_CODE [OVMF_VARS] [--gdb]`,
+e.g. `scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE_4M.fd
+/usr/share/OVMF/OVMF_VARS_4M.fd`.  `NOVA_AUDIO` picks its sound backend
+(`pa`, `pipewire`, `alsa`, `coreaudio`, `none`, or `wav,path=out.wav`);
+by default it uses PulseAudio or PipeWire when it finds one, Core Audio
+on macOS, and otherwise a silent card.
 
-USB devices need a controller: `-device qemu-xhci` (USB 3), `-device
-usb-ehci` (USB 2), `-device pci-ohci` or `-device piix3-usb-uhci` (USB
-1.1), or an ICH9 EHCI with UHCI companions (`ich9-usb-ehci1` plus
-`ich9-usb-uhci1..3` with `masterbus=`), then e.g. `-device usb-kbd
--device usb-tablet`.  With `-machine q35,i8042=off` there is no PS/2
-keyboard, so typing goes over USB.  QEMU has no game controller of its
-own: pass the host's through (`-device
-usb-host,vendorid=0x045e,productid=0x028e` for a wired Xbox 360
-controller), or run `tools/padpeer.py --port 10710 --kind xbox360`
-(or `xboxone`, `hid`) and add `-chardev
-socket,id=pad,host=127.0.0.1,port=10710 -device
-usb-redir,chardev=pad`; the peer takes lines such as `buttons=0x1000
-lx=20000` on port 10810 and moves the controller.
+The sections below list QEMU options for the devices NovaOS drives.
 
-For sound add `-device intel-hda -device hda-output` (or `hda-duplex` or
-`hda-micro`, which add a line in or a microphone to record from);
+### Network
+
+QEMU's default user-mode network on q35 is an e1000e (the Intel 82574L),
+and it works as is.  `-nic user,model=e1000` gives the older Intel card
+and `-nic user,model=virtio-net-pci` virtio-net.
+
+### CPUs
+
+`-smp N` sets the core count; NovaOS uses up to 16.
+
+### USB, keyboards and game controllers
+
+USB devices need a controller: `-device qemu-xhci` (USB 3),
+`-device usb-ehci` (USB 2), `-device pci-ohci` or
+`-device piix3-usb-uhci` (USB 1.1), or an ICH9 EHCI with UHCI companions
+(`ich9-usb-ehci1` plus `ich9-usb-uhci1` to `3` with `masterbus=`).  Then
+add devices, e.g. `-device usb-kbd -device usb-tablet`.  With
+`-machine q35,i8042=off` there is no PS/2 keyboard, so typing goes over
+USB.
+
+QEMU has no game controller of its own.  Pass the host's through
+(`-device usb-host,vendorid=0x045e,productid=0x028e` for a wired Xbox 360
+controller), or run a simulated one:
+
+```bash
+python3 tools/padpeer.py --port 10710 --kind xbox360 &    # or xboxone, hid
+```
+
+and add `-chardev socket,id=pad,host=127.0.0.1,port=10710 -device
+usb-redir,chardev=pad` (with an xHCI controller).  The peer's control
+port (the port plus 100, here 10810) takes lines such as
+`buttons=0x1000 lx=20000` and moves the controller.
+
+### Sound
+
+Add `-device intel-hda -device hda-output` (or `hda-duplex` or
+`hda-micro`, which add a line in or a microphone).  To record what
+NovaOS plays instead of hearing it, use
 `-audiodev wav,id=snd0,path=out.wav,out.frequency=48000` with
-`-device hda-output,audiodev=snd0` records it instead of playing it.
-`cmake --build . --target run` adds the card, playing through the host's
-PulseAudio or PipeWire when it finds one; set `NOVA_AUDIO` (`pa`,
-`pipewire`, `alsa`, `none`, `wav,path=out.wav`) to pick QEMU's backend.
-USB speakers work too: `-audiodev wav,id=usbsnd,path=usb.wav
--device qemu-xhci -device usb-audio,audiodev=usbsnd` (or on `pci-ohci` or
-`piix3-usb-uhci`; QEMU's `usb-audio` is full speed only, so not on a
-plain `usb-ehci`).  The newest sound output and input are the defaults
-(Settings' Sound page chooses others and sets each device's volume, and
-programs can pick a device); the chosen default and the volumes are kept
-in the registry on drive C:, so they hold after a restart.  QEMU has no USB microphone and no high-speed audio device:
-`tools/usbredirpeer.py` is one (a USB Audio Class 1 headset or microphone
-behind a `usb-redir` device, or with `--uac2` a USB Audio Class 2.0 one:
-a programmable clock behind a clock selector, 24-bit samples and, at
-high speed, a packet every microframe; `--rates`, `--channels`,
-`--mic-channels` and `--product` give it other sampling rates, channel
-counts and a name, and `--feedback HZ` makes its speaker asynchronous,
-on its own clock, saying through a feedback endpoint that it plays HZ
-frames a second), e.g. a high-speed headset on EHCI whose
-microphone hears 523 Hz:
+`-device hda-output,audiodev=snd0`.
+
+USB speakers work too: `-audiodev wav,id=usbsnd,path=usb.wav -device
+qemu-xhci -device usb-audio,audiodev=usbsnd` (or on `pci-ohci` or
+`piix3-usb-uhci`; QEMU's `usb-audio` is full speed only, so it does not
+work on a plain `usb-ehci`).
+
+QEMU has no USB microphone and no high-speed audio device.
+`tools/usbredirpeer.py` simulates one behind a `usb-redir` device: a USB
+Audio Class 1 headset or microphone, or with `--uac2` a USB Audio Class
+2.0 one.  Its options:
+
+| Option | Meaning |
+|--------|---------|
+| `--port N` | The TCP port QEMU connects to (required) |
+| `--speed high\|full` | Default `high` |
+| `--speaker FILE.wav` | Write what the speaker plays |
+| `--mic HZ` | The tone the microphone hears |
+| `--uac2` | USB Audio Class 2.0 |
+| `--rates`, `--channels`, `--mic-channels`, `--product` | Sampling rates, channel counts, product name |
+| `--feedback HZ` | An asynchronous speaker that reports, through a feedback endpoint, that it plays HZ frames a second |
+| `--slow-control MS` | Answer the first control request MS late |
+| `--log-times` | Log the connection's events with times |
+
+For example, a high-speed headset on EHCI whose microphone hears 523 Hz:
 
 ```bash
 python3 tools/usbredirpeer.py --port 10700 --speaker headset.wav --mic 523 &
 ```
 
 then `-chardev socket,id=ur,host=127.0.0.1,port=10700 -device
-usb-ehci,id=ehci -device usb-redir,chardev=ur,bus=ehci.0` (`--speed full`
-for a full-speed one on the other controllers; the speaker's sound goes
-to `headset.wav`).
+usb-ehci,id=ehci -device usb-redir,chardev=ur,bus=ehci.0`.  Use
+`--speed full` for the other controllers.
 
-Laptops whose built-in microphones sit behind Intel's audio DSP (Tiger
-Lake to Raptor Lake, as on the reference ThinkPad) need the DSP's Sound
-Open Firmware built in; `python3 tools/fetch_sof_firmware.py` before the
-build downloads it into `third_party/sof-bin`, which is not committed
-([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
-QEMU has no such DSP, so nothing here needs it.  `python3
-tools/fetch_firmware.py` fetches it together with the rest of the default
-firmware set (Intel graphics, Wi-Fi and Bluetooth;
-[drivers.md](drivers.md)), which release builds carry.
+The newest sound output and input are the defaults.  Settings' Sound
+page chooses others and sets each device's volume; both are kept in the
+registry on drive C:, so they survive a restart.
 
-More monitors: each further display adapter is one (`-device
+### More monitors
+
+Each further display adapter is one more monitor (`-device
 secondary-vga`), and so is each output of a virtio GPU with a monitor on
 it, e.g. `-vga none -device virtio-vga,max_outputs=2,id=gpu`.  QEMU
-connects an output when its display window or a VNC client on it
-(`-vnc :1,display=gpu,head=1`) asks for a size, and a VNC client asking
-for 0 x 0 disconnects it, while NovaOS runs.
+connects an output when its display window, or a VNC client on it
+(`-vnc :1,display=gpu,head=1`), asks for a size.  A VNC client asking for
+0 x 0 disconnects it.  Both work while NovaOS runs.
 
-A 3D GPU: with QEMU 9.2 or newer and a virglrenderer built with Venus,
+### A 3D GPU (Venus and virgl)
+
+With QEMU 9.2 or newer and a virglrenderer built with Venus,
 `-vga none -device virtio-vga-gl,venus=on,blob=on,hostmem=1G` and an
 OpenGL display (`-display sdl,gl=on` or `gtk,gl=on`) give NovaOS a
-virtio-gpu whose Vulkan and OpenGL run on the host's GPU.  Install
-**Venus** from the App Store (Runtimes), next to Mesa 3D and DXVK: Vulkan
-programs, Direct3D ones through DXVK, and OpenGL ones then run there
-(`d3dtest` prints `D3D9 adapter  Virtio-GPU Venus (...)`, `gltest`
-`GL_RENDERER virgl (...)`), and without such a GPU they keep using
-lavapipe and llvmpipe.  NovaOS's `opengl32.dll` picks Mesa's virgl
-(`opengl32_virgl.dll`, from Venus) on that GPU and Mesa 3D's llvmpipe
-(`opengl32_mesa.dll`) otherwise; `GALLIUM_DRIVER=virgl` or
-`GALLIUM_DRIVER=llvmpipe` chooses one.  `tools/ci/build-qemu-venus.sh
-PREFIX` builds such a QEMU (Ubuntu 24.04's has no Venus), and
+virtio-gpu whose Vulkan and OpenGL run on the host's GPU.  Ubuntu 24.04's
+QEMU (8.2) has no Venus; `tools/ci/build-qemu-venus.sh PREFIX` builds
+QEMU 10.2 and virglrenderer with it, as CI does.
+
+Then install **Venus** from the App Store (Runtimes).  Vulkan programs,
+Direct3D programs through DXVK, and OpenGL programs run on the host's GPU;
+without such a GPU they use lavapipe and llvmpipe on the CPU.  NovaOS's
+`opengl32.dll` picks Mesa's virgl (`opengl32_virgl.dll`, from Venus) on
+that GPU and the built-in llvmpipe (`opengl32_mesa.dll`) otherwise;
+`GALLIUM_DRIVER=virgl` or `GALLIUM_DRIVER=llvmpipe` chooses one.
 `tools/build_venus.py OUT` builds the App Store's `venus.7z` (Mesa's
 Venus and virgl with NovaOS's back ends, `third_party/mesa-venus`) with
 MinGW-w64.
 
 ### Where your files are kept
 
-Drive C: lives in memory, and NovaOS saves every change to an NTFS or FAT
-volume a second later (and before Restart / Shut down), restoring it at
-the next boot.  The files installed from the OS image (`C:\Windows\System32`,
-`C:\Windows\SysWOW64`, `C:\Programs`) are never saved, so a newer image
-always brings its own.  It uses the first of:
+Drive C: lives in memory.  NovaOS saves every change to an NTFS or FAT
+volume a second later (and before Restart and Shut down) and restores it
+at the next boot.  The files installed from the OS image
+(`C:\Windows\System32`, `C:\Windows\SysWOW64`, `C:\Programs`) are never
+saved, so a newer image always brings its own.  NovaOS uses the first of:
 
-1. an NTFS or FAT16/FAT32 volume labelled `NOVADATA` (on any SATA or NVMe
-   disk, including the data partition Install NovaOS creates);
-2. an empty disk (all zeros at the start), which it formats as FAT32 `NOVADATA`;
-3. the boot disk itself, under `\NOVA\C`.
+1. an NTFS or FAT volume labelled `NOVADATA` on any SATA or NVMe disk
+   (including the data partition Install NovaOS creates);
+2. an empty disk (all zeros at the start), which it partitions (MBR, one
+   partition from 1 MiB) and formats as FAT32 `NOVADATA`;
+3. the FAT volume it booted from (the one holding
+   `\EFI\NOVA\kernel.elf`), under `\NOVA\C`.
 
 Install NovaOS asks which file system drive C: gets: NTFS (the default)
-or FAT32.  On NTFS, C: is the whole volume, and it keeps creation times
-and each file's security descriptor too, so ACLs set with
-`SetFileSecurity` or `SetNamedSecurityInfo` (or given to `CreateFile`) are
-enforced when files are opened, deleted and renamed, and survive a
-restart.  A file without a descriptor of its own inherits from its
-folders, as on Windows; the new volume's root gives the user full control
-of what they create.  On FAT, C: is the folder `\NOVA\C`, and ACLs last
-only until restart; its root has the same permissions as a new NTFS
-volume's (Windows' for `C:\`), which folders without their own inherit.  Files from the OS image keep no descriptor across a
-restart either way.
+or FAT32.
 
-Saving runs on its own kernel thread and keeps no lock while the disk is
-written: it notes what changed under the file-system lock (well under a
-millisecond; a changed file's contents are lent to the save, and a program
-writing to the file meanwhile gets its own copy), then writes it out while
-programs, the desktop and the keyboard carry on.  On FAT, a crash or power
-cut during a save leaves each file either as it was or as it was saved,
-never half of each: a file's data and its cluster chain reach the disk
-before its directory entry, and the clusters of a replaced or deleted file
-are freed only after the entries that no longer use them are on the disk.
+- **On NTFS**, C: is the whole volume.  It also keeps creation times and
+  each file's security descriptor, so ACLs set with `SetFileSecurity` or
+  `SetNamedSecurityInfo` (or given to `CreateFile`) are enforced and
+  survive a restart.  A file without a descriptor of its own inherits
+  from its folders, as on Windows.
+- **On FAT**, C: is the folder `\NOVA\C`.  ACLs last only until restart.
+  Hard links are saved as copies and joined again at the next boot
+  (`\NOVA\LINKS.TXT`).
 
-`scripts/run-qemu.sh` attaches `build/nova-data.img` (256 MiB, created on
-first run), so your files survive rebuilds of `nova.img`.  In the Terminal,
-`vol` shows where C: is saved and `sync` saves it now.  Programs can be put
-on the disk from the host with mtools, e.g.:
+Saving runs on its own kernel thread and holds no lock while the disk is
+written: it notes what changed under the file-system lock, then writes it
+out while programs carry on.  On FAT, a crash or power cut during a save
+leaves each file either as it was or as it was saved, never a mix: a
+file's data and cluster chain reach the disk before its directory entry,
+and the clusters of a replaced or deleted file are freed only afterwards.
+Clusters a cut-off save left marked as used are reclaimed at the next
+boot.
+
+`run-qemu.sh` attaches `build/nova-data.img`, so your files survive
+rebuilds of `nova.img`.  In the Terminal, `vol` shows where C: is saved
+and `sync` saves it now.  To put programs on the data disk from the host,
+use mtools:
 
 ```bash
 mmd   -i build/nova-data.img@@1M ::/NOVA/C/Tools
 mcopy -i build/nova-data.img@@1M rg.exe ::/NOVA/C/Tools/
 ```
 
-(`@@1M`: the volume starts 1 MiB in, after the partition table.)  The ISO
-boots from a CD, which is read-only: attach a disk to keep files.
+`@@1M` is needed because NovaOS put the volume 1 MiB in, after the
+partition table it wrote.  The ISO boots from a read-only CD: attach a
+disk to keep files.
 
 ### Other drives (NTFS)
 
 Every NTFS volume on an attached disk (a partition in an MBR or GPT, or a
-whole disk) becomes a drive of its own, D:, E:, ... in the order found.
-Programs, the Terminal and File Explorer list, open, run, write, create,
-rename and delete files there.  Creating, renaming and deleting reach the
-disk at once; a file's new contents when the program closes it, or after
-a quiet second.  Compressed and sparse files are read but not rewritten
-(they show as read-only); encrypted files are not read.  A file is read
-into memory when it is opened, so the largest one that opens is 256 MiB.
+whole disk) becomes a drive of its own, D:, E:, and so on in the order
+found.  Programs, the Terminal and File Explorer can list, open, run,
+write, create, rename and delete files there.  FAT volumes on USB sticks
+are mounted too, read-only.
 
-There is no journal: `$LogFile` is emptied when a volume is mounted and
-each change is complete on disk when it returns, so Windows and
-`ntfsfix` find the volume clean.  While changes are being written, the
-volume is marked dirty (`$Volume`'s flag, set and on the disk before the
-first change, cleared a quiet second after the last one and at
-shutdown; on an NTFS drive C:, while a save writes to it), so a volume
-cut off half-way (the power went, the machine was reset) is found dirty.
-NovaOS then checks it, as chkdsk would, before writing to it again: each
-change is written in an order that loses nothing, so a cut leaves only
-what the MFT records can put right (clusters or records marked taken
-that nothing uses, or used and marked free; a directory index behind
-its files, or half rewritten), and NovaOS rebuilds those from the
-records, clears the mark and mounts the volume read-write ("was cut off
-while being written: checked, ..." in the log).  Anything else (a record
-half written, a cluster two files claim) keeps the volume read-only for
-chkdsk on Windows.  A file rewritten
-on disk gets new clusters before it lets go of its old ones, so a cut
-leaves it whole, old or new.  A file may grow only as far as the
-volume's free clusters reach: a write past that fails with
-`ERROR_DISK_FULL` (nothing of it written) and the file keeps what it
-had.  A volume Windows left hibernated (Fast Startup included), with a
-chkdsk pending (marked dirty, with Windows's own `$LogFile`) or with
-transactions in its `$LogFile` is mounted read-only, as ntfs-3g does.  `scripts/ntfs-dirty.py image [offset]`
-tells whether a volume is marked dirty.
+- Creating, renaming and deleting reach the disk at once; a file's new
+  contents when the program closes it, or after a quiet second.
+- Compressed and sparse files are read but not rewritten (they show as
+  read-only).  Encrypted files are not read.
+- A write that would need more clusters than the volume has free fails
+  with `ERROR_DISK_FULL`, and the file keeps what it had.
+- A volume Windows left hibernated (Fast Startup included), with a chkdsk
+  pending, or with transactions in its `$LogFile` is mounted read-only,
+  as ntfs-3g does.
 
-For a test disk (needs `ntfs-3g`):
+There is no journal.  `$LogFile` is emptied when a volume is mounted,
+and each change is complete on disk when it returns, so Windows and
+`ntfsfix` find the volume clean.  While changes are being written the
+volume is marked dirty (`$Volume`'s flag, cleared a quiet second after
+the last change and at shutdown).  A volume cut off half-way (power
+loss, reset) is therefore found dirty at the next mount.  NovaOS writes
+each change in an order that a cut can only leave in states the MFT
+records can repair (allocation bitmaps out of step with the records, a
+directory index behind its files).  It repairs those, clears the mark and
+mounts the volume read-write ("was cut off while being written: checked,
+..." in the log).  Anything else, such as a half-written record or a
+cluster two files claim, keeps the volume read-only for chkdsk on
+Windows.  A rewritten file gets new clusters before it frees its old
+ones, so a cut leaves it whole, old or new.
+
+`scripts/ntfs-dirty.py IMAGE [OFFSET_BYTES]` says whether a volume is
+marked dirty.
+
+To make and check a test disk (needs `ntfs-3g`):
 
 ```bash
 scripts/make-ntfs-disk.sh build/nova-ntfs.img build
 qemu-system-x86_64 ... -drive format=raw,file=build/nova-ntfs.img
 ```
 
-then run `drivetest` (and `linktest D:\LinkTest`, which leaves two names
-of one file) in the Terminal, shut down, and check the disk on the host:
+`make-ntfs-disk.sh` makes a 128 MiB disk with one NTFS partition labelled
+`NOVATEST`, holding what `drivetest` checks (and `hello.exe` and
+`testdll.dll` from the build).  Run `drivetest` in the Terminal (and
+`linktest D:\LinkTest`, which leaves two names of one file), shut down,
+and check the disk on the host:
 
 ```bash
 scripts/check-ntfs-disk.sh build/nova-ntfs.img
 ```
 
-which runs `ntfsfix -n`, `ntfssecaudit -a` and `scripts/ntfs-check.py` (a
+It runs `ntfsfix -n`, `ntfssecaudit -a` and `scripts/ntfs-check.py` (a
 chkdsk-style check of the bitmaps, MFT records, directory indexes, link
-counts and `$Secure`) and checks the files drivetest left behind.
+counts and `$Secure`), and checks the files `drivetest` left behind.
 
 ---
 
 ## Tests
 
-Tests run inside NovaOS under QEMU.  `tools/selftest.py` boots
-`build/nova.img` and runs the regression gate, the same one CI runs on every
-pull request (`.github/workflows/ci.yml`).  The core suite needs `iasl`
-(from `acpica-tools`) for the tables in `tests/acpi/`; its exit status is the
-number of failures:
+Tests run inside NovaOS under QEMU.  [testing.md](testing.md) says what
+each suite and program covers, and [ci.md](ci.md) how CI runs them.  This
+section says how to run them yourself.
+
+### Running the self-tests
+
+`tools/selftest.py` boots `build/nova.img`, types each test into the
+Terminal and checks the output.  Its exit status is the number of failed
+tests.
 
 ```bash
-sudo apt install acpica-tools
-python3 tools/selftest.py
+python3 tools/selftest.py                                  # the core suite
 python3 tools/selftest.py --only apitest,guitest --out /tmp/st
+python3 tools/selftest.py --suite devices --list           # print a suite's tests
 ```
 
-`tools/novarun.py` (and so `tools/selftest.py`) starts QEMU with `-accel kvm`
-when `/dev/kvm` is readable and writable, and with TCG otherwise.  Set
-`NOVARUN_ACCEL=tcg` or `NOVARUN_ACCEL=kvm` to force one.  The CPU model stays
-`qemu64` with the same feature flags under both (SSSE3 to SSE4.2,
-POPCNT, RDTSCP, and XSAVE, XSAVEOPT, AVX and F16C, so the kernel's AVX state is
-tested too).  CI runs the test VMs under
-KVM: each job's `tools/ci/enable-kvm.sh` step opens `/dev/kvm` to the runner
-user and sets `NOVARUN_ACCEL=kvm` (history entry "Kernel under KVM" has the
-timings).  The app corpus job fails at that step, with a message, when the runner has no
-usable `/dev/kvm` (start the workflow by hand with the `allow_tcg` input for a
-deliberate TCG run); the boot-test and graphics jobs, which are required
-checks, fall back to TCG with a warning on every event so main and pull
-requests never go red on the runner alone.  Every job's summary and the corpus table say which accelerator
-the test VMs used.
+| Option | Meaning |
+|--------|---------|
+| `--suite core\|graphics\|network\|devices` | The suite (default `core`) |
+| `--only NAME,...` | Only these tests, by test name or by the command's first word.  In the network and devices suites, a boot with none of them chosen is skipped |
+| `--img PATH` | The image (default `build/nova.img`) |
+| `--out DIR` | Where the serial log, a screenshot after each test and the sound recordings go (default `selftest-out/`) |
+| `--summary FILE` | Append a Markdown table |
+| `--junit FILE` | Write JUnit XML |
+| `--gfx DIR` | The graphics suite's files (below) |
+| `--list` | Print the suite's tests and exit |
 
-The graphics suite downloads 7-Zip, Mesa and DXVK, builds Venus
-(`tools/build_venus.py`), VKD3D-Proton (`tools/build_vkd3d_proton.py`, which
-also needs `mingw-w64-tools` for `widl`) and gltest/d3dtest/d3d12test/d2dtest/dwtest/dw3test, and runs on a
-QEMU with Venus (`tools/ci/build-qemu-venus.sh`; without one the first
-monitor is a standard VGA and the Venus tests fail) with an OpenGL display,
-so on a machine without a screen it runs under `xvfb-run`:
+A test passes when the program exits with code 0 within its time limit,
+prints no `FAIL` line and no non-zero "N failed" count, and prints what
+the test expects.  A kernel panic stops the run.
+
+| Suite | Boots | Needs on the host |
+|-------|-------|-------------------|
+| `core` | One (and the restarts some tests ask for), with an HD Audio card whose microphone hears 523 Hz, the ACPI tables in `tests/acpi/` and a USB keyboard on xHCI | `iasl` (`acpica-tools`); for the recording tests, `pulseaudio`, `pulseaudio-utils` and QEMU's PulseAudio backend (`qemu-system-gui` on Ubuntu).  Without PulseAudio the recording tests fail and the rest run |
+| `network` | Three: virtio-net on QEMU's user network (IPv4), virtio-net on an IPv6-only network made by `tools/v6peer.py`, and an Intel e1000e | `node` and `openssl` (for `tools/h2server.js`) |
+| `devices` | One per device the core boot does not have (`tests/selftest/devices/NAME/`) | `ntfs-3g` (`mkntfs`, `ntfscat`), `mtools`, `p7zip-full`, and network access: some boots download the Windows driver packages they install (virtio-win, FTDI, Intel Wi-Fi) |
+| `graphics` | One, with a 3D virtio-gpu (Venus) and a second monitor | A QEMU with Venus and an OpenGL display, and the staged files (below) |
+
+The devices suite's boots are `touch`, `usbaudio`, `usbheadset`,
+`driversearch`, `monitors`, `usbboot`, `cdboot`, `laptop`, `update`,
+`gamepad`, `pnp`, `ntfs`, `wdm`, `edu`, `vioser`, `usbserial`, `ax211`,
+`viostor`, `umdf`, `kmdfedu`, `netkvm` and `wddm`.  The docstring at the
+top of `tools/selftest.py` describes each one.
+
+### Accelerator: KVM or TCG
+
+`tools/novarun.py` (and so `tools/selftest.py` and `tools/appcorpus.py`)
+starts QEMU with `-accel kvm` when `/dev/kvm` is readable and writable,
+and with TCG otherwise.  `NOVARUN_ACCEL=tcg` or `NOVARUN_ACCEL=kvm`
+forces one.  The CPU model is `qemu64` with the same features under both
+(SSSE3 to SSE4.2, POPCNT, RDTSCP, XSAVE, XSAVEOPT, AVX and F16C), so the
+kernel's AVX state handling is tested either way.
+
+In CI, `tools/ci/enable-kvm.sh` opens `/dev/kvm` to the runner and sets
+`NOVARUN_ACCEL`.  The CI workflow's test jobs fall back to TCG with a
+warning when KVM is not usable; the nightly app corpus and SMP stress
+jobs require KVM unless started by hand with `allow_tcg`.  Each job's summary says which accelerator its VMs used.
+
+### The graphics suite
+
+The graphics suite needs a QEMU with Venus, an OpenGL display and a
+directory of staged files: 7-Zip, the Mesa 3D and DXVK archives the App
+Store lists, `venus.7z` and `vkd3d-proton.7z`, and the test programs
+(`gltest`, `d3dtest`, `d3d12test`, `hlsltest`, `d2dtest`, `dwtest`,
+`dw3test`).  On a machine without a screen, run it under `xvfb-run`:
 
 ```bash
-sudo apt install p7zip-full gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
-  ninja-build pkg-config libglib2.0-dev libpixman-1-dev libsdl2-dev libepoxy-dev libgbm-dev libdrm-dev \
-  libvulkan-dev libpng-dev glslang-tools bison flex python3-mako python3-yaml mesa-vulkan-drivers seabios ipxe-qemu xvfb mingw-w64-tools
+sudo apt install p7zip-full gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+  g++-mingw-w64-x86-64 g++-mingw-w64-i686 mingw-w64-tools \
+  ninja-build pkg-config libglib2.0-dev libpixman-1-dev libsdl2-dev libepoxy-dev \
+  libgbm-dev libdrm-dev libvulkan-dev libpng-dev glslang-tools bison flex \
+  python3-mako python3-yaml mesa-vulkan-drivers seabios ipxe-qemu xvfb xauth
 pip install --user 'meson>=1.5' pycotap
 sudo install -d -o "$USER" /opt/qv
 tools/ci/build-qemu-venus.sh /opt/qv
@@ -501,344 +663,73 @@ NOVARUN_QEMU=/opt/qv/bin/qemu-system-x86_64 LD_LIBRARY_PATH=/opt/qv/lib/x86_64-l
   xvfb-run -a -s '-screen 0 1280x1024x24' python3 tools/selftest.py --suite graphics --gfx /tmp/gfx
 ```
 
-Beside it runs `tools/ci/host_profile.py graphics-out &`: for each turn of
-`gltest fps` (direct presentation, the GDI way, the GDI way, direct, then
-llvmpipe) it prints one `host profile:` line, also kept in
-`host-profile.log`, with the turn's wall time and the CPU milliseconds a second
-used by each group of QEMU's threads (the main thread, where virglrenderer
-draws and copies, the vCPUs, llvmpipe's workers, ...), and echoes gltest's own
-frame rates as `host profile: guest:` lines.
+`stage-graphics.sh` builds Venus (`tools/build_venus.py`) and
+VKD3D-Proton (`tools/build_vkd3d_proton.py`, which needs `widl` from
+`mingw-w64-tools`) unless `VENUS_7Z` and `VKD3D_7Z` name archives already
+built.  Its second argument (default `DIR/cache`) keeps the downloads.
 
-When a graphics test hangs, the guest can only say that it waits for the
-host, so CI's graphics job runs `tools/ci/host_watch.py graphics-out &` beside
-the suite (needs `gdb` and `sudo`) and sets `VIRGL_LOG_LEVEL=debug` and
-`VIRGL_LOG_FILE=graphics-out/virglrenderer-%PID%.log`.  The `graphics-out`
-artifact then holds `host-watch.log` (every 15 s: the guest's serial log size,
-and the CPU time and thread count of QEMU and of virglrenderer's render server
-processes), `virglrenderer-PID.log` (one per render process), and, once the
-guest's serial log has been silent for six minutes, `host-hang-N.txt`: every
-host thread's state, wait channel and CPU use over five seconds, and gdb's
-backtrace of QEMU and of each render process, then what QEMU's monitor says
-about the guest itself: every CPU's registers (with the kernel function its RIP
-is in, named from `build/kernel.elf`), its local APIC timer, and the kernel's
-big lock (`g_bkl`); `serial-hang-N.log` is the whole serial log so far (a job
-cut off by its time limit never reaches the end of the suite, where it is
-normally kept).  A QEMU whose threads all wait and whose CPU time stands still
-has lost a wake-up; one that spins is busy.  Two CPUs that both sit in HLT with
-their timers ticking, the serial log silent and no answer to Ctrl+Alt+F12, are
-waiting for the kernel lock: the kernel then logs `[WATCHDOG] the kernel lock
-has been held for ...` itself after three seconds (who holds it, what each CPU
-runs) and lets go of a lock whose holder no CPU runs (`[SMP] Bug: ...`).  The
-self-tests stop at the first test after which the machine answers neither
-Ctrl+Alt+F12 nor Ctrl+C, instead of waiting out every later test's limit.
-A program stuck in a GPU wait (the host never answered a fenced request) can be
-stopped like any other: the wait checks every 50 ms.  Ctrl+Alt+F12 also logs
-the virtio-gpu control queue (`[VGPU]` lines: requests taken and answered,
-fenced requests still out and the timeline value each sets), and
-`host-hang-N.txt` lists the render server's processes (the Venus worker of the
-running test is one; none means it died), the host kernel's messages about
-crashed or killed processes, and QEMU's own view of the queues
-(`info virtio-queue-status`): a request the guest sent that QEMU's used index
-has not caught up with was taken and never answered by virglrenderer.
+`NOVARUN_QEMU` names the QEMU `tools/novarun.py` runs (default
+`qemu-system-x86_64` from `PATH`).  When a `virtio-vga-gl` or
+`virtio-gpu-gl-pci` is among its devices it opens an SDL window with
+OpenGL (`NOVARUN_GL_DISPLAY` changes the display option), and no window
+otherwise.
 
-`NOVARUN_QEMU` names the QEMU that `tools/novarun.py` runs (default
-`qemu-system-x86_64` from `PATH`); it opens an SDL window with OpenGL
-(`NOVARUN_GL_DISPLAY` to change it) when a `virtio-vga-gl` or
-`virtio-gpu-gl-pci` is among its devices, and no window otherwise.
+**When a graphics test hangs.**  CI's graphics job runs two helpers
+beside the suite, and they work locally too:
 
-The network suite tests IPv4, IPv6 and winhttp's HTTP/2 on virtio-net,
-then IPv4 again on an Intel e1000e, and needs `node` and `openssl`:
+- `tools/ci/host_watch.py OUTDIR &` (needs `gdb` and `sudo`) writes
+  `host-watch.log` every 15 s: the serial log's size and the CPU time and
+  thread count of QEMU and of virglrenderer's render server processes.
+  When the serial log has been silent for six minutes it writes
+  `host-hang-N.txt` (each host thread's state, wait channel and CPU use,
+  gdb backtraces of QEMU and each render process, the guest's CPU
+  registers with the kernel function each RIP is in, its local APIC timer
+  and the kernel lock `g_bkl`, the render server's processes, the host
+  kernel's messages about crashed or killed processes, and
+  `info virtio-queue-status`) and `serial-hang-N.log`.
+- `tools/ci/host_profile.py OUTDIR &` prints a `host profile:` line for
+  each turn of `gltest fps` (also kept in `host-profile.log`): the turn's
+  wall time and the CPU time per second of each group of QEMU's threads.
 
-```bash
-python3 tools/selftest.py --suite network
-```
+Set `VIRGL_LOG_LEVEL=debug` and
+`VIRGL_LOG_FILE=OUTDIR/virglrenderer-%PID%.log` for virglrenderer's own
+logs.  How to read them: a QEMU whose threads all wait while its CPU
+time stands still has lost a wake-up; one that spins is busy.  A request
+the guest sent that QEMU's used index has not caught up with was taken
+and never answered by virglrenderer.  In the guest, Ctrl+Alt+F12 logs the
+virtio-gpu control queue (`[VGPU]` lines), and the kernel logs
+`[WATCHDOG] the kernel lock has been held for ...` by itself after three
+seconds.  The self-tests stop at the first test after which the machine
+answers neither Ctrl+Alt+F12 nor Ctrl+C, instead of waiting out every
+later test's time limit.
 
-The devices suite boots once for each device that would get in the core
-boot's way (a touch screen takes QEMU's mouse buttons from the PS/2
-mouse, and USB speakers are heard instead of the HD Audio card): a
-virtio multi-touch screen for `touchtest`, which QEMU's
-`input-send-event` touches where the program asks; and, with no HD Audio
-card, QEMU `usb-audio` speakers, each recorded to its own WAV (kept in
-`--out` as `usb1.wav` to `usb3.wav`).  The first is on an xHCI controller
-from boot; the test plugs the second into an OHCI and the third into a
-UHCI controller while NovaOS runs, plays `soundtest tone` after each, then
-unplugs the third and plays again, which the second must hear.  Each
-speaker's WAV must hold its tones and nothing else: a speaker another one
-took over from has to go quiet.  Then the first speaker is made the
-default and set to half volume (the second stays at full), and after
-`shutdown /r` it must be the default again, although both attach at
-boot, and still play at half volume.  A third boot has no HD Audio card and a
-high-speed USB headset on an EHCI controller (`tools/usbredirpeer.py`
-behind a `usb-redir` device; its speaker writes `headset.wav`, its
-microphone hears 523 Hz): `soundtest tone` must sound in `headset.wav`
-alone, and `soundtest record` and `capture` must record the microphone's
-tone.  The test then plugs full-speed USB microphones (more
-`usbredirpeer.py`s, each hearing its own tone) into an xHCI, an OHCI and
-a UHCI controller, records after each (the newest microphone must be
-heard), unplugs the UHCI one and records the OHCI one again.  Then it
-plugs a high-speed USB Audio 2.0 headset (`usbredirpeer.py --uac2`,
-writing `uac2.wav`, its microphone hearing 988 Hz) into the xHCI
-controller: `soundtest tone` must sound in `uac2.wav` alone, `soundtest
-record` and `capture` must hear 988 Hz, and once it is unplugged
-recording must go back to the OHCI microphone.  Then a USB Audio 2.0
-surround headset whose clock offers only 44.1 kHz (`usbredirpeer.py
---rates 44100 --channels 6 --mic-channels 4`, writing `surround.wav`):
-the tone must sound at its pitch in its front two channels with the
-other four silent, and its microphone's 1175 Hz must be recorded at its
-pitch.  Last for sound, a full-speed USB speaker (`spk.wav`) for the
-device picker: with it the default, `soundtest ... dev=NAME` must play
-on (or record from) the named device through `waveOut`, `waveIn` and
-WASAPI, and `soundtest default out|in NAME` (what Settings' Sound page
-does) must move the default.  Then each device's own volume (`soundtest
-level`: a quarter on the surround headset leaves the others at full, and
-its tone must sound a quarter as loud; `soundtest wovolume`: a program's
-`waveOutSetVolume` on one device ID), DirectSound's device list
-(`soundtest dsenum`) and playing and recording on a device named by its
-GUID, XAudio2's device list and a mastering voice on a named device
-(`xa2test devices`), and, after `shutdown /r`, the surround headset
-still the default output (although the speaker attaches again too) and
-still at a quarter.  Before the restart a 44.1 kHz tone (`soundtest tone
-... rate=44100`) on the 44.1 kHz surround headset must arrive sample for
-sample (nothing converted: the mixer runs at the device's rate); after
-it, the default output and input must be `waveOut` and `waveIn` device
-0, with `DRVM_MAPPER_PREFERRED_GET` naming device 0, and device 0 must
-follow the default when it moves.  Then two asynchronous speakers
-(`usbredirpeer.py --feedback`): a full-speed USB Audio 1.0 one saying it
-plays 48,500 frames a second (10.14 feedback) and a high-speed USB Audio
-2.0 one saying 47,600 (16.16): NovaOS must send 48.5 frames a packet to
-the first and 5.95 to the second on average, not the nominal 48 and 6.
-Then a full-speed speaker that takes three seconds to answer its first
-request (`usbredirpeer.py --slow-control 3000`), plugged into the xHCI
-controller: NovaOS must wait for the answer (a control transfer gets five
-seconds, counted in time as EHCI's always was) and play a tone on it.
-`usbredirpeer.py --log-times` (the tests' peers) logs the connection's
-events with times and, every five seconds, the packets it took and sent.
-Last, one
-`virtio-vga` card with three outputs and a monitor only on the first, for `montest hotplug`: the test
-connects a monitor to the second and third outputs and disconnects them
-again while NovaOS runs, through a VNC server QEMU has on each (an RFB
-`SetDesktopSize` asks for a monitor of that size there; 0 x 0 takes it
-away).  The "laptop" boot stands in for the reference ThinkPad: QEMU
-without `\_S3` (`ICH9-LPC.disable_s3=1`), `tests/acpi/laptop.asl` (an
-embedded controller holding the lid, a battery and the AC adapter, which
-NovaOS serves with its model of one because QEMU emulates none, and an
-LPS0 device), the ISO on a USB stick, an empty NVMe disk and only the
-firmware's GOP.  `battery` must read the battery through the controller;
-the test closes the lid (pc-testdev port `0xE8`), NovaOS must sleep in
-low-power S0 idle, and opening it must wake it; then `install nvme0n1`
-installs NovaOS on the NVMe disk, and after `shutdown /r` it must start
-from that disk and add its firmware boot entry
-([install-and-power.md](install-and-power.md)).  The "gamepad" boot has
-three USB game controllers on an xHCI controller, each
-`tools/padpeer.py` behind a `usb-redir` device: a wired Xbox 360
-controller, an Xbox One controller and a HID game pad.  `padtest`
-checks what XInput and DirectInput 8 list; at each step it prints, the
-test sets a controller's buttons, triggers, sticks and hat through the
-peer's control port, and `padtest` must read them through both APIs
-(and DirectInput's buffered events); the motors it sets must reach the
-two Xbox controllers (the peers' logs), and the Xbox 360 one is
-unplugged while it runs.  The 32-bit `padtest still` then reads the two
-left.  The "ntfs" boot has a second disk with a fresh, empty NTFS volume
-(`mkntfs`, from the ntfs-3g package): `linktest D:\LinkTest` runs the
-hard-link checks there, NovaOS restarts, `linktest restarted
-D:\LinkTest` must find the file it left under three names (one in a
-folder the new boot has not read yet) still one file, and once QEMU has
-quit `scripts/ntfs-check.py` must find the volume consistent and
-`ntfscat` must read the file by its third name.  Then `ntfstest fill
-D:\Full` fills the volume until a write fails with `ERROR_DISK_FULL`,
-and `ntfstest churn D:\Churn` rewrites four 4 MB files without end
-until the test resets the machine; the next boot must find D: cut off,
-check and repair it and mount it read-write, and `ntfstest cut
-D:\Churn` must find each file whole (old or new) and write a new one.
-Offline, the disk as it was after filling and again after the cut
-(each copied once NovaOS had marked it clean) must pass
-`scripts/ntfs-check.py` with no errors.  On the host,
-`tests/tools/test_ntfs_cut.py` runs the real `kernel/fs/ntfs.c` on a RAM
-disk (`tests/host/ntfs_cut.c`) through a churn of rewrites, creates,
-renames, links and deletes, cuts it off after each of its 800-odd disk
-writes in turn, and requires every cut disk to come back writable with
-every file whole and to pass `scripts/ntfs-check.py` once NovaOS has
-repaired it.  To run the suite:
+### Adding a self-test
 
-```bash
-python3 tools/selftest.py --suite devices
-```
-
-The core suite is `apitest`, `abitest`, `filetest`, `pipetest`, `proctest`,
-`sectest`, `acltest` (x64 and x86), `guitest auto`, `disptest`, `dpitest` (per-monitor DPI), `icutest` (x64 and x86), `comtest`,
-`tlbtest` (x64 and x86), `usptest` (x64 and x86), `delaytest` (x64 and x86), `cppeh`, `battery`, `soundtest tone`,
-`soundtest wasapi`, `soundtest record`, `soundtest capture`, `soundtest volume`,
-`sleeptest timer`, `powertest`, `disptest 1024 768` (saves the mode),
-`filetest install` (an installer that must replace a running program
-schedules it for the next boot), a restart that must report `Pending file
-operations at boot: 2 done, 0 failed` and come up in the saved mode
-(`disptest saved 1024 768`), `filetest installed`, and
-`crash kernel`, which halts the kernel on purpose and passes when the
-serial log shows a symbolized backtrace (`KeCrashTestFault`,
-`KeCrashTest`, `sys_nova_bugcheck`, ...); the machine is then reset, and
-last the next start must have moved the fault's report into
-`C:\NovaOS\Crashes` (`crashes last` shows the backtrace).  The graphics suite first runs
-`d2dtest`, x64 and x86: it checks geometry computations, draws a scene into
-a DC render target and compares it with `d2dref.bmp`, the image
-`tools/d2dtest/reference.py` draws with Skia (`pip install skia-python`;
-re-run it when the scene changes), then shows the scene in a window.  Next
-`dwtest`, x64 and x86, lays out Latin, Arabic and Devanagari in one line
-with DirectWrite from a Latin-only font and checks the fallback fonts, the
-shaping, the direction and the drawing, and shows the line in a window.
-`dw3test`, x64 and x86, goes through DirectWrite's Windows 10 font model
-as Chromium and Skia use it: `IDWriteFactory2` and `IDWriteFactory3`, the
-system font set and face references, matching by full and PostScript
-name, set builders and collections made from sets, `IDWriteFont3` and
-`IDWriteFontFace3`, the system font fallback and a built one, grayscale
-glyph run analysis and rendering params.  It then types `store
-install Mesa 3D`, `store install DXVK`, `store install VKD3D-Proton` and
-`store install Venus` (the
-archives are already in `C:\Downloads`, so the App Store installs without
-a network) and then runs `gltest` (on virgl and, with
-`GALLIUM_DRIVER=llvmpipe`, on llvmpipe) and `d3dtest` (on Venus:
-the first monitor is a 3D virtio-gpu, `virtio-vga-gl,venus=on`, and the
-test expects the Venus adapter), x64 and x86, from `C:\Tests`, taking a
-screenshot of each while it draws, and `d3dtest angle`, which brings
-Direct3D 11 up the way ANGLE (Chromium's GPU process) does: the screen's DC
-as the EGL display (`WindowFromDC` must find the desktop window), the first
-adapter that is not Microsoft's, a device from feature levels 11.1 to 9.3,
-`IDXGIDevice2`, the adapter's description, factory and driver version, the
-feature and format queries, a DXGI 1.2 swap chain and a WARP device.  `d3dtest shared` (on lavapipe, which its `VK_DRIVER_FILES` picks)
-shares a Direct3D 11 texture by NT handle as Chromium shares its frames
-with Qt WebEngine: one device clears it, a second opens the handle
-(`OpenSharedResource1`) and reads the colour, the first reads the second's
-write, a child process opens an inherited copy of the handle and
-reads it too, and a shared fence (`ID3D11Fence`) signalled on either
-device completes on the other.  `d3d12test` (on lavapipe, which its
-`VK_DRIVER_FILES` picks) brings Direct3D 12 up through NovaOS's
-`d3d12.dll` and VKD3D-Proton: a device, a root signature and pipeline
-from HLSL, a triangle drawn and read back, a fence, and three seconds of
-the triangle presented in a window through a flip-model swap chain on the
-command queue, 64- and 32-bit; `d3d12test compute` builds a compute
-pipeline from a real game's shader (Godot's SDFGI direct light, whose
-branches VKD3D-Proton 3.0.1's own translator got wrong), 64- and 32-bit.  `gltest present` shows four coloured
-quadrants on virgl: from the host's GPU while its window is alone on the
-screen (the test takes a screenshot and checks the quadrants are there,
-the right way up), through the GDI while another window covers part of
-it, and from the host again once that window has gone; 64- and 32-bit.
-`gltest monitors` shows them on the second monitor, again once that
-monitor is in 2560x1600 (scale 2, where its screen shows each of the
-window's pixels twice as wide and high), and on the primary beside it
-(now shown at half the desktop's scale), checking a screenshot of each
-screen and that most frames came from the host each time; 64-bit.
-`gltest fps 10` draws an OpenGL
-scene that keeps the rasterizer busy (64 blended quads over a 640x480
-window) for 10 s on virgl with its frames shown directly, 10 s on virgl
-through the GDI (`NOVA_PRESENT=gdi`) and 10 s on llvmpipe, each in a child process
-whose `GALLIUM_DRIVER` names the driver, and passes when virgl draws more
-frames per second (under TCG: 12.6 to 15.9 against 0.24), and direct
-presentation draws more than the GDI way while moving fewer bytes through
-guest memory a frame (the kernel's counters).  `d3dtest present` does
-what `gltest present` does with Direct3D 9 on Venus (DXVK through Mesa's
-Win32 swapchain), 64- and 32-bit.  Last, `d3dtest fps 10` draws a
-Direct3D 9 scene that keeps the rasterizer busy (64 blended quads over a
-640x480 window) on Venus, first for 1 s that is not counted (the host
-compiles the scene's shaders), then for 10 s with its frames shown
-directly and 10 s through the GDI (`NOVA_PRESENT=gdi`), and 10 s on
-lavapipe, each in a child process whose `VK_DRIVER_FILES` names the
-driver, and passes when Venus draws more frames per second (under TCG:
-14 to 17 against about 0.13) and direct presentation moves fewer bytes
-through guest memory a frame than the GDI way and, without KVM, draws
-faster (under KVM: a sixteenth of the bytes or less).  The
-graphics boot has a second monitor (a QEMU
-`secondary-vga`): between the installs and `gltest` it runs `montest 2`,
-which checks the monitor calls and layout changes; when it asks, the test
-pushes the pointer across onto the second monitor, and the screenshot is
-one PNG per monitor (`montest.png`, `montest-2.png`).  Then `nstest`
-starts NetSurf on a page with an SVG image, an inline `<svg>`, a list a
-script builds, an SVG without a size and an iframe holding a frameset
-page: the test checks the SVGs' colours and sizes (the unsized one at the
-default 300 x 150), the list items and both frames on the screen, clicks the page's box (a script changes it) and
-checks the page was redrawn with it changed and the rest still there (`nstest-before.png`,
-`nstest-after.png`), then closes NetSurf with Alt+F4.  `nstest` then
-opens four pages a script changes twelve times (a long page, iframes,
-positioned boxes, floats), each twice: laid out from the changed box, and
-with `NETSURF_LAYOUT_CHECK=1` comparing every third such layout box by box
-with a full one; the test compares the two runs' screenshots
-(`nstest-PAGE-incremental.png`, `nstest-PAGE-check.png`) above NetSurf's
-status bar.  Then `store scroll
-bar` runs `store open` and checks, from the `[STORE] view:` lines the App
-Store logs when its view changes, that All apps has a vertical scroll bar
-and that the wheel, Home, Page Down, End, a click on the bar's down arrow,
-one in its trough and a drag of its thumb each scroll the list, then
-closes the Store with Esc.  Last, `explorer
-scroll bars` opens File Explorer on `C:\Windows\System32` (more files than
-fit) and checks, from the `[EXPLORER]` lines it logs when its view
-changes, that the list has a vertical scroll bar and that the wheel, Page
-Down, End, Home, a click on the bar's down arrow and one in its trough
-each scroll the list.  The network suite (`tests/selftest/network4` and
-`network6`) boots twice with a virtio-net
-card: on QEMU's user network it runs `ipconfig`, `ping 10.0.2.2`, `netcat`
-(Winsock over IPv4) and `httptest suite` (winhttp: HTTP/2 by ALPN, large
-bodies, POST, redirects, certificate checks, chunked HTTP/1.1, the
-asynchronous API) against `tools/h2server.js` with a throwaway self-signed
-certificate, then `looptest` (socket pairs over 127.0.0.1 and ::1,
-`localhost`), `loadtest` (hundreds of sockets open at once, parallel
-downloads) and `dltest -w` (eight 32 MB downloads at once from
-`tools/h2server.js`'s `/stream` while the files are written and mapped,
-as an installer does; it fails if the transfer stops for 5 s), then `netsh`
-gives the adapter the static address 10.0.2.16 and DNS server 10.0.2.3
-(`netsh interface ipv4 show config`), `ping 10.0.2.2` runs on it, and
-`source=dhcp` hands the address back to DHCP; on an IPv6-only network made by `tools/v6peer.py` it checks
-SLAAC and RDNSS (`ipconfig`), `ping -6`, `curl -6` and `netcat` over IPv6.
-A third boot (`tests/selftest/network-e1000e`) has QEMU's e1000e (the
-82574L) instead of virtio-net: the boot log must show the PHY's ID, its
-auto-negotiation and the link up at 1000 Mb/s; the test pulls the link
-and plugs it back with QEMU's `set_link` (`ipconfig` shows the media
-disconnected, then the address again), runs `ping`, sleeps and wakes the
-machine with `sleeptest` and `ping`s again, then runs the IPv4 tests
-above on it.  [ethernet.md](ethernet.md) says what this covers of the
-I219 that real PCs have.
-
-It boots once (about 20 s under TCG) with an HD Audio card recorded to a WAV
-whose microphone hears a 523 Hz tone (through a private PulseAudio server,
-so the host needs `pulseaudio`, `pulseaudio-utils` and QEMU's PulseAudio
-backend, `qemu-system-gui` on Ubuntu; without them the recording tests
-fail and the rest run), the battery from `tests/acpi/battery.asl`, the
-lid and thermal zone from `tests/acpi/lid-thermal.asl` (QEMU's `pc-testdev`
-stands in for the embedded controller: the test writes the lid and
-temperature to ports 0xE8 and 0xE9 through the QEMU monitor) and a USB
-keyboard on an xHCI controller at 00:05.0, then types each test into the
-Terminal.  `powertest` asks the test to close the lid; once NovaOS has gone
-to sleep the test opens it, presses a key on the USB keyboard and wakes the
-machine (`system_wakeup`, as QEMU has no USB-to-platform wake), then heats
-and cools the thermal zone.  A test passes when the program exits with code 0, prints no
-`FAIL` line or non-zero "failed" count, and prints what the test expects;
-a kernel panic stops the run.  `--out` (default `selftest-out/`) keeps the
-serial log, a screenshot after each test, `sound.wav` and the two
-recordings (`rec.wav`, `cap.wav`); `--summary FILE`
-appends a Markdown table and `--junit FILE` writes JUnit XML.
-
-To add a test, add a file to `tests/selftest/core/` (or `graphics/`):
-tests run in file-name order, so the number prefix places it (the restart
-is at 130; `crash kernel`, which halts NovaOS, is at 900 with `restart=True`,
-which resets the machine, and only tests that check what the crash left
-come after it, at 905).
+Add a file to `tests/selftest/core/` (or `graphics/`, `network4/`,
+`devices/NAME/`, ...).  Tests run in file-name order, so the number
+prefix places it.  In the core suite the restart is at 130, and
+`crash kernel`, which halts the kernel on purpose, is at 900 with
+`restart=True` (the machine is then reset); only tests that check what
+the crash left come after it, at 905.
 
 ```python
-# tests/selftest/core/140-mytest.py
-DOC = '`mytest` (what it covers)'      # its entry in README's core-suite list
+# tests/selftest/core/166-mytest.py
+DOC = '`mytest` (what it covers)'      # its entry in testing.md's core-suite list
 TESTS = [
     Test('mytest', 'mytest', [r'mytest: \d+ passed, 0 failed']),
 ]
 ```
 
-`python3 tools/selftest.py --list` prints the suite.  The nightly app
-corpus works the same way: one file per program in `tests/appcorpus/`
-defining `APP = App(...)` and `DOC` (the windowed programs, `gui=True`,
-stay last, from 850).
+A new self-test program also adds a row to the table below: one file in
+`docs/selftests/` ([CONTRIBUTING.md](../CONTRIBUTING.md)).  Run
+`python3 tools/selftest.py --list` to check the suite loads.
 
 ### Self-test programs
 
-In `userland/programs/`, installed in `C:\Programs` and, as 32-bit builds,
-in `C:\Programs\x86`.  Type the name in the Terminal; each prints "N passed,
-0 failed".  Each row of this table is a file in `docs/selftests/` (a new
-program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+These are in `userland/programs/`, installed in `C:\Programs` and, for
+those built for 32 bits too, in `C:\Programs\x86`.  Type the name in the
+Terminal; each prints "N passed, 0 failed".  Each row of this table is a
+file in `docs/selftests/`.
 
 <!-- BEGIN generated:selftest-table -->
 
@@ -970,139 +861,118 @@ program adds one; see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 <!-- END generated:selftest-table -->
 
-`crash` writes through a NULL pointer (only it dies, and it leaves a
-report in `C:\NovaOS\Crashes`); `crash kernel` crashes the kernel on
+`crash` writes through a NULL pointer: only it dies, and it leaves a
+report in `C:\NovaOS\Crashes`.  `crash kernel` crashes the kernel on
 purpose (`NtNovaBugCheck`) to show the backtrace.
 
-Interactive ones: `winhello` and `guitest` (windows, menus, dialogs,
-property sheets; `guitest auto` drives them itself and reports, as CI runs it), `droptest` (drag and drop; its targets list each dropped file's size, or "missing"), `cpus` (SMP speed-up), and
-`hello`, `mandel`, `primes`, `wc`, `guess`.
+Interactive programs: `winhello` and `guitest` (windows, menus, dialogs,
+property sheets; `guitest auto` drives them itself and reports, as CI
+runs it), `droptest` (drag and drop; its targets list each dropped
+file's size, or "missing"), `cpus` (SMP speed-up), and `hello`, `mandel`,
+`primes`, `wc` and `guess`.
 
 ### Boot-time self-tests
 
-The kernel tests itself while it boots and prints the results to the serial
-log: `[PROBE]` (user-pointer validation) and `[PSTEST]`
+The kernel tests itself while it boots and prints the results to the
+serial log: `[PROBE]` (user-pointer validation) and `[PSTEST]`
 (`PsGetCurrentThread` on bare kernel threads).  `grep -a 'passed,'
 serial.log` lists them; each should end "0 failed".
 
-### Real programs
+### Real programs: the app corpus
 
-`tools/appcorpus.py` is the nightly app corpus
-(`.github/workflows/nightly.yml`, which also runs on pull requests that
-change it): it downloads the official Windows x64 releases into a cache,
-unpacks them into `C:\Apps`, boots once and runs each one's commands.
-The same run then boots on 4 CPUs for `smpstress scaling 0` and records
-each scaling figure in the night's table.  A shared runner may not run the
-emulated CPUs side by side at all, so rather than the 3x target
-`tools/ci/check-smpstress.py` fails the run on a hang or a failed test,
-and, when bare system calls scale 2x or more in the same run, on files or
-the registry scaling less than half as well (what work under one big lock
-would do).
+`tools/appcorpus.py` runs unmodified Windows programs, one file per
+program in `tests/appcorpus/` ([testing.md](testing.md) lists them).  It
+downloads each program's official release into a cache
+(`build/appcorpus-cache` by default, kept between runs), unpacks it into
+`C:\Apps`, boots NovaOS once (6 GB of memory, a 12 GB data disk) and types
+each program's commands.  A command passes as a self-test does: exit code
+0 and the expected output.  Windowed programs run last, one at a time,
+and their screenshots must match `tests/reference/NAME.png` (at most 3% of
+pixels may differ).  The exit status counts failed and unrun programs.
 
-| Program | Checks |
-|---|---|
-| ripgrep 14.1.1 | `--version`, a search |
-| fd 10.2.0 | `--version`, finding `*.txt` |
-| jq 1.7.1 | `--version`, a filter over a JSON file |
-| 7-Zip 26.03 | `7z a`, `7z t` |
-| MinGit 2.51.0 | `git clone` of a bare repository, `log` (through the `less` pager), `status` |
-| Python 3.14.0 (NuGet package) | `-c` with `json` and `sys` |
-| Node.js 24.9.0 | `-v`, `-e` |
-| .NET 10.0.12 (runtime from NuGet, with the 8.0 host) | `--list-runtimes`; `tests/dotnet/culturetest.dll` formats German and Japanese through ICU |
-| NovaOS's own screens | `dir C:\` and `dir D:\` (an empty NTFS disk made with `mkntfs`) name their drive and give its own free space (`dir.png`); `start explorer` shows This PC with both drives, matching `tests/reference/this-pc.png` |
-| SumatraPDF 3.4.6 (the official 32-bit build, from the npm package `pdf-to-printer`) | opens a PDF the script generates; the screenshot must match `tests/reference/sumatrapdf.png` (at most 3% of pixels differ, for every screenshot) |
-| WinMerge 2.16.50 | compares `hello.txt` with `hello2.txt`; the screenshot must match `tests/reference/winmerge.png` |
-| VLC 3.0.21 (the 32-bit PortableApps package, unpacked with 7-Zip) | loops the MP4 the ffmpeg test made (30 s of SMPTE colour bars with a 440 Hz tone) with its Qt interface, screenshot once the colour bars show in its window; the screenshot must match `tests/reference/vlc.png`, and the sound NovaOS played (`sound.wav` in `--out`) must hold the tone |
-| Audacity 3.7.4 (the official 64-bit zip) | through its first-run dialogs, records 10 s of the microphone's 523 Hz tone, stops and saves the project; the screenshot must match `tests/reference/audacity.png` and `C:\Apps\rec10.aup3` must exist |
-| Firefox 157.0 (Mozilla's full installer, the App Store's download) | `store install Firefox`: the Store unpacks the installer from `C:\Downloads` with 7-Zip (staged in `C:\Programs\7-Zip`), as its Install button does; then Firefox loads a page from an HTTPS server the script runs on the host (https://10.0.2.2:8443/, a certificate from a CA made for the run with `openssl` and trusted through Firefox's `distribution\policies.json`); the screenshot must match `tests/reference/firefox.png` |
-| Teeworlds 0.7.5 (the official 64-bit zip, the App Store's download) | `store install Mesa 3D` and `store install Teeworlds`; the game starts in full screen, Enter answers its two first-start questions, and its start menu must match `tests/reference/teeworlds.png`; the sound NovaOS played while it ran must hold at least 5 s of sound (`App(sound=(None, 5000))`: any sound, here its menu music, counted between its first test starting and its last one ending) |
-| OpenTyrian 2.1.20260913 (the official 64-bit zip with the freeware Tyrian 2.1 data, the App Store's download) | `store install Mesa 3D`, `store install DXVK` and `store install OpenTyrian`; the game draws with Direct3D 9 (SDL2's renderer) through DXVK, its demo plays in a window, Alt+Enter switches it to full screen, and Enter goes through its menus (one-player game, episode 1, normal), pressed only once the screen stands still (the game fades between menus and takes no keys meanwhile), to its game menu, which must match `tests/reference/opentyrian.png`; the sound NovaOS played while it ran must hold at least 5 s of sound (its music) |
-| Blobby Volley 2 1.1.1 (the official 32-bit zip, the App Store's download) | `store install Mesa 3D`, `store install DXVK` and `store install Blobby Volley 2`; started from its folder, the game opens in an 800x600 window and the keyboard goes Options, Graphic Options, Fullscreen Mode, OK: SDL switches the display to 800x600 and draws with Direct3D 9 in exclusive full screen through DXVK; the screenshot must be 800x600 and, back in the main menu, match `tests/reference/blobby volley 2.png`; after Alt+F4 ends the game, `sysinfo` must report the display back at 2560x1600 |
-| LBreakout2 2.6.5 (the official 64-bit zip, the App Store's download) | `store install LBreakout2`; started from its folder, the game (SDL 1.2, drawn with GDI) opens in a 640x480 window and 'f' switches it to full screen: SDL changes the display to 640x480 and the window to `WS_POPUP`, so the desktop's frame goes; the screenshot must be 640x480 and match `tests/reference/lbreakout2.png`; after Alt+F4 ends the game, `sysinfo` must report the display back at 2560x1600 |
-| Cave Story 1.0.0.6 (Aeon Genesis' English translation, 32-bit, the App Store's download) | `store install Cave Story`; started from its folder, the game asks DirectDraw for 640x480 at 16 bits and NovaOS's `ddraw.dll` (cnc-ddraw) switches the display to 640x480; the title screen must show at 640x480, Z (held) starts a new game, and once its opening line is written the screenshot must match `tests/reference/cave story.png`; after Alt+F4 ends the game, `sysinfo` must report the display back at 2560x1600 |
-| Cave Story with a game pad (the same download) | `store install Cave Story`; NovaOS boots with an Xbox 360 game pad (`App(pad='xbox360')`), which the game finds through DirectInput 7 (`dinput.dll`); B (the game's button 2) starts a new game from the title screen and must bring up the opening line, more presses take the opening talk to the Start Point cave (Quote's health bar shows), and the stick must walk Quote right; the cave must then match `tests/reference/cave story (game pad).png`; after Alt+F4 ends the game, `sysinfo` must report the display back at 2560x1600 |
-| SuperTux 0.1.3 (the official 32-bit Inno Setup installer, the App Store's download) | the installer runs silently (`/VERYSILENT`) into `C:\Programs\SuperTux`; started from its folder, the game (SDL 1.2) switches the display to 640x480 and is played with an Xbox 360 game pad (`App(pad='xbox360')`: `tools/padpeer.py` behind QEMU's `usb-redir`, its buttons and sticks set by the test's `pad()` lines), which SDL reads through winmm's joystick functions: A picks Start Game and a slot, the stick walks Tux to the first level on the world map and B enters it, the stick must move Tux in the level, and Start, the stick and A abort it; the world map with Tux on the first level must match `tests/reference/supertux.png`; after Alt+F4 ends the game, `sysinfo` must report the display back at 2560x1600 |
-| WinSCP 6.3.5 (the official 32-bit Inno Setup installer, the App Store's download) | the installer runs silently for all users (`/VERYSILENT /ALLUSERS`) into `C:\Programs\WinSCP`, registering its 64-bit shell extension through `SysWOW64\regsvr32.exe`; started from its folder, WinSCP opens its Login dialog over its main window, which must match `tests/reference/winscp.png`; Alt+F4 closes the dialog and a second one WinSCP (`App(closes=2)`) |
-| Notepad++ 8.8.3 (portable) | opens a file; the screenshot (tab bar and status bar drawn) must match `tests/reference/notepad++.png` |
-| PuTTY 0.81 (built from the source release with MinGW, kept in the cache) | a raw connection to an echo server the script runs on the host (10.0.2.2:2323); the line typed must reach the server, and the screenshot must match `tests/reference/putty.png` |
-
-The windowed programs run last, one at a time (each takes the keyboard and
-is closed with Alt+F4 before the next).  The next one starts only once
-every process the last one started has ended (any still running after
-two minutes is stopped with `taskkill`) and the Terminal answers again.
-When it does not (a program that failed keeps the keyboard, as VLC does
-with its error box when its file is missing), the script opens a new
-Terminal from Start, stops the program from there and carries on, so one
-failure does not fail every program after it.  After Firefox, `store close` closes the App Store window its install
-opened.  After each program the script types `mem` and prints the
-machine's free memory and what drive C: takes: how many files and bytes
-it holds, how much of that is in memory, and how much has been let go of
-so far.  C: lives in memory, but the contents of its saved files are let
-go of when memory runs short and read back from the data disk when
-wanted, and the 2.3 GB of programs copied to `C:\Apps` before the first
-one starts are restored without being read.  The machine has 6 GB of
-memory and a 12 GB data disk: Roblox, Steam and WebView2 install about
-2.7 GB more, and the data disk saves all of drive C:.  Building PuTTY needs `cmake` and
-`gcc-mingw-w64-x86-64`.
-
-It needs 7-Zip's installer, Pillow, `openssl` (for Firefox's test
-server), `mkntfs` (for drive D:) and, for the two programs that need
-sound, PulseAudio and QEMU's PulseAudio backend, `qemu-system-gui` on
-Ubuntu (NovaOS then boots with a microphone that hears a tone and its
-output recorded, as the core self-tests do; without PulseAudio the
-programs that need sound are skipped, not failed).  The exit
-status is the number of programs that failed; `--update-reference` rewrites
-the reference screenshots after an intended change:
+It needs on the host: `p7zip-full`, `python3-pil` (Pillow), `openssl`
+(the HTTPS server Firefox loads a page from), `ntfs-3g` (`mkntfs`, for
+drive D:), `ffmpeg` (VLC's test video), `cmake` and
+`gcc-mingw-w64-x86-64` (to build PuTTY), and, for the programs that need
+sound, `pulseaudio`, `pulseaudio-utils` and `qemu-system-gui`.  Without
+PulseAudio those programs are skipped, which is not a failure.
 
 ```bash
-sudo apt install p7zip-full python3-pil ntfs-3g pulseaudio pulseaudio-utils qemu-system-gui
+sudo apt install p7zip-full python3-pil ntfs-3g ffmpeg cmake gcc-mingw-w64-x86-64 \
+  pulseaudio pulseaudio-utils qemu-system-gui
 python3 tools/appcorpus.py
 python3 tools/appcorpus.py --only ripgrep,jq --out /tmp/ac
-python3 tools/appcorpus.py --only NovaOS,SumatraPDF,WinMerge,VLC,Audacity,Notepad++,PuTTY --update-reference
+python3 tools/appcorpus.py --only NovaOS,SumatraPDF,WinMerge --update-reference
 ```
 
-A command passes as a self-test does (exit code 0, the output expected).
-To add a program, add a file to `tests/appcorpus/`.  Other third-party programs (the
-installers, Java, Roslyn) and test scripts such as `cmdtest.bat` for
-`cmd.exe` are tried by hand with `tools/novarun.py`: copy a program onto
-the data disk with `--put` and type its commands.
+`--only` takes the names the files give their `App(...)` (`ripgrep`,
+`7-Zip`, `Notepad++`, `Cave Story (game pad)`, ...).  `--update-reference`
+rewrites the reference screenshots after an intended change.  To add a
+program, add a file to `tests/appcorpus/` that defines `APP = App(...)`
+and `DOC`; windowed programs (`gui=True`) are numbered from 850 so they
+run last.
 
-Full-screen and interactive programs (Neovim, an MSYS2 `sh` session) are
-driven with `!type`, which types without waiting for the command to end
-(`\n` is Enter, `\e` Esc), and `!done N`, which waits up to N seconds for
-it to end:
+The nightly workflow (`.github/workflows/nightly.yml`) runs each program
+in its own job, plus `smpstress scaling 0` on 4 CPUs, checked by
+`tools/ci/check-smpstress.py` (see [ci.md](ci.md)).
+
+### Trying things by hand: novarun.py
+
+`tools/novarun.py` boots a throwaway snapshot of `build/nova.img` with a
+fresh FAT32 data disk, opens the Terminal and types each command,
+printing its output:
 
 ```bash
+python3 tools/novarun.py ver 'dir C:\Programs'
 python3 tools/novarun.py --put 'nvim-win64=C:\Apps\nvim' 'cd C:\Apps\nvim\bin' \
     '!type nvim --clean t.txt\n' '!wait 40' '!type ihello\e:wq\n' '!done 60' 'type t.txt'
-```
-
-`!reboot` restarts NovaOS (`shutdown /r`; drive C: on the data disk is
-kept) and opens the Terminal again, for what must survive a restart:
-
-```bash
 python3 tools/novarun.py 'filetest install' '!reboot' 'filetest installed'
 ```
 
-### Sound
+| Option | Meaning |
+|--------|---------|
+| `--put HOSTDIR=C:\Dir` | Copy a host file or folder onto drive C: (repeatable) |
+| `--mem MiB`, `--smp N` | Memory (2048) and CPUs (2) |
+| `--timeout S` | Time limit per command (120) |
+| `--data-mb N` | Data disk size (1024) |
+| `--keep DIR` | Keep the serial log, data disk (`data.img`) and screenshots |
+| `--img PATH` | The boot image |
+| `--wav PATH` | An HD Audio card whose output is recorded to PATH |
+| `--rec PATH` | An HD Audio card whose microphone hears PATH over and over (needs PulseAudio) |
+| `--net` | An e1000e on QEMU's user network; the host is `10.0.2.2` |
+| `--display NAME` | The display adapter (`std`, `cirrus`, `vmware`, `qxl`, `virtio`, or a device such as `bochs-display`) |
+| `--monitors N` | N - 1 more monitors (`secondary-vga`) |
+| `--extra 'ARGS'` | More QEMU arguments |
+
+Special commands:
+
+| Command | Effect |
+|---------|--------|
+| `!type TEXT` | Type without waiting for a command to end (`\n` Enter, `\e` Esc), for full-screen and interactive programs |
+| `!done N` | Wait up to N seconds for the running command to end |
+| `!wait N` | Wait N seconds |
+| `!bg CMD` | Type a command and leave it running |
+| `!keys a b ctrl-c` | Press QEMU key names |
+| `!click X Y` | Left click at a logical screen point |
+| `!shot NAME.png` | Save a screenshot (one per monitor) |
+| `!reboot` | `shutdown /r` (the data disk keeps drive C:) and open the Terminal again |
+
+`NOVARUN_GDB=1` starts QEMU's GDB stub on port 1234.
+
+### Testing sound by hand
 
 `soundtest` plays sine tones through each path.  To check what came out,
-record it and measure it (`wavcheck.py` prints each tone's start, length,
-level and pitch):
+record it and measure it; `tools/wavcheck.py` prints each tone's start,
+length, level and pitch:
 
 ```bash
-python3 tools/novarun.py --wav /tmp/out.wav 'C:\Programs\soundtest.exe tone 440 1000' \
-    'C:\Programs\soundtest.exe wasapi 523 800'
+python3 tools/novarun.py --wav /tmp/out.wav 'soundtest tone 440 1000' 'soundtest wasapi 523 800'
 python3 tools/wavcheck.py /tmp/out.wav
 ```
 
-To test recording, `--rec FILE.wav` gives the card a microphone that hears
-FILE over and over (a private PulseAudio server with two null sinks, so the
-guest records and plays in real time; with `--wav` too, the playback is
-saved from the second sink).  Copy the recording off the data disk and
-check it (`wavcheck.py` exits 0 when the tone is there; `--sound MS`
-instead exits 0 when the file holds MS milliseconds of any sound, such
-as a game's music):
+To test recording, `--rec FILE.wav` gives the card a microphone that
+hears FILE over and over, through a private PulseAudio server.  Copy the
+recording off the data disk and check it:
 
 ```bash
 python3 tools/novarun.py --keep /tmp/rec --rec tone523.wav 'soundtest record C:\rec.wav 3000'
@@ -1110,10 +980,14 @@ mcopy -i /tmp/rec/data.img ::/NOVA/C/rec.wav /tmp/
 python3 tools/wavcheck.py /tmp/rec.wav --tone 523 2500
 ```
 
-### Network
+`wavcheck.py --tone HZ MS` exits 0 when the file holds that tone for that
+long, `--sound MS` when it holds that much sound of any kind (a game's
+music), and `--gaps HZ` lists places where a steady tone jumps.
 
-`--net` gives the guest an e1000e card on QEMU's user network; the host is
-`10.0.2.2`, so a test server on the host is reachable from programs:
+### Testing the network by hand
+
+`--net` gives the guest an e1000e on QEMU's user network.  The host is
+`10.0.2.2`, so programs can reach a test server on the host:
 
 ```bash
 python3 tools/novarun.py --net --put 'DIR=C:\Apps\x' 'cd C:\Apps\x' \
@@ -1130,92 +1004,94 @@ python3 tools/novarun.py --extra '-netdev dgram,id=v6,local.type=inet,local.host
     ipconfig 'ping -6 nova6.test' 'curl -6 http://nova6.test/'
 ```
 
-`tools/h2server.js CERT KEY` (Node) serves HTTPS with HTTP/2 on port 8443
-and plain HTTP on 8080 for `httptest` (`httptest -2 -k https://10.0.2.2:8443/hello`)
-and `dltest` (`dltest -n 8 -w 10.0.2.2 8080 33554432`: eight 32 MB downloads
-at once from `/stream/BYTES/SEED`).
+`node tools/h2server.js CERT KEY` serves HTTPS with HTTP/2 on port 8443
+and plain HTTP on 8080, for `httptest` (`httptest -2 -k
+https://10.0.2.2:8443/hello`) and `dltest` (`dltest -n 8 -w 10.0.2.2 8080
+33554432`: eight 32 MB downloads at once from `/stream/BYTES/SEED`).
 
-### On the host
+### Host-side tools
 
 - `tools/pe_imports.py PROGRAM.exe ...` lists every DLL and function a
-  Windows program imports that NovaOS's DLLs do not provide (by default it
-  reads the DLLs in `build/kernel_build/userland`), mapping API sets as the
-  kernel's loader does (`api-ms-win-core-synch-*` to `kernelbase`, with
-  `kernel32` and `kernelbase` standing in for each other;
-  `api-ms-win-power-*` to `powrprof`).
+  Windows program imports that NovaOS's DLLs do not provide (by default
+  it reads the DLLs in `build/kernel_build/userland`), mapping API sets
+  as the kernel's loader does.  `--exports DLL` prints a DLL's exports.
+- `tools/sys_imports.py DRIVER.sys` does the same for a kernel-mode
+  driver's imports ([drivers.md](drivers.md)).
 - `tools/msitest/hosttest.c` dumps a Windows Installer package's tables
-  and cabinets with the same readers `msi.dll` uses (build instructions in
-  the file); `tools/msitest/make_package.sh` builds a test package with
-  msitools.
+  and cabinets with the same readers `msi.dll` uses (build instructions
+  in the file); `tools/msitest/make_package.sh` builds a test package
+  with msitools.
 - `tools/make_cabtest_data.py` writes `userland/programs/cabtest_data.h`,
-  the MSZIP, LZX and two-cabinet set `cabtest` extracts (it has a small LZX
-  encoder of its own); `--write-cabs DIR` writes them as files, to check
-  with `cabextract -t` or `7z t` after a change.
+  the MSZIP, LZX and two-cabinet set `cabtest` extracts;
+  `--write-cabs DIR` writes them as files, to check with
+  `cabextract -t` or `7z t` after a change.
 - `tools/authenticode/mktests.py OUT PE64 PE32` makes `authtest`'s signed
-  files (`C:\Tests\Authenticode`; the build runs it on `hello.exe`): a test
-  certificate authority from fixed seeds, in plain Python
-  (`tools/authenticode/pki.py`), signs copies of the programs the ways
-  `WinVerifyTrust` must accept or refuse (`tools/authenticode/sign.py`
-  writes Authenticode signatures, PKCS #9 and RFC 3161 timestamps and
-  nested signatures).  `osslsigncode verify -CAfile root.pem -TSA-CAfile
-  root.pem -in OUT/signed.exe` checks them on the host, with the root from
-  `openssl x509 -inform der -in OUT/testroot.cer -out root.pem`.
-  It also copies Microsoft's code signing CA 2024
-  (`tools/authenticode/mspca2024.cer`, a public certificate) for
-  `authtest`'s check of the Microsoft root chain policy.
+  files (the build runs it on `hello.exe`; they go to
+  `C:\Tests\Authenticode`).  A test certificate authority from fixed
+  seeds, in plain Python (`tools/authenticode/pki.py`), signs copies of
+  the programs the ways `WinVerifyTrust` must accept or refuse.  To check
+  them on the host: `openssl x509 -inform der -in OUT/testroot.cer -out
+  root.pem`, then `osslsigncode verify -CAfile root.pem -TSA-CAfile
+  root.pem -in OUT/signed.exe`.
+- `tools/d2dtest/reference.py` draws `d2dtest`'s reference image with
+  Skia (`pip install skia-python`); rerun it when the scene changes.
+- `tests/tools/` holds host-side unit tests, run in CI with
+  `python3 -m unittest discover -s tests/tools -v`.  One of them,
+  `tests/tools/test_ntfs_cut.py`, runs the real `kernel/fs/ntfs.c` on a
+  RAM disk (`tests/host/ntfs_cut.c`), cuts it off after each disk write
+  in turn, and requires every cut disk to come back writable, with every
+  file whole, and to pass `scripts/ntfs-check.py`.
 
 ---
 
 ## Debugging
 
 - **Serial log**: every kernel message goes to COM1 (your terminal under
-  `run`).  In NovaOS, the Terminal's `dmesg` shows it.
-- **`devices`** in the Terminal lists the PCI devices and the driver
-  each one has (missing drivers in red); on a real PC this is the first
-  thing to check ([hardware.md](hardware.md)).
+  `run`, or `serial.log` in a test's `--out` or `--keep` directory).  In
+  NovaOS, the Terminal's `dmesg` shows it.
+- **`devices`** in the Terminal lists the PCI devices and the driver each
+  one has (missing drivers in red).  On a real PC this is the first thing
+  to check ([hardware.md](hardware.md)).
 - **Program crashes** are logged with the faulting module and offset, the
   process's exit code, and `OutputDebugString` output.
 - **Crash reports**: a program that crashes leaves
-  `C:\NovaOS\Crashes\NAME-YYYYMMDD-HHMMSS-PID.txt` (the exception, the
-  module and offset, the address it touched, the return addresses on its
-  stack, its modules and the end of the kernel's log), and the Terminal
-  names the file under the crash line.  A kernel fault writes its log and
-  backtrace into `\NOVA\PANIC.TXT` on the disk that keeps drive C: (FAT;
-  64 KiB set aside at boot, written with the disk driver alone), and the
-  next start moves it to `C:\NovaOS\Crashes\kernel-YYYYMMDD-HHMMSS.txt`.
-  The Terminal's `crashes` lists the reports and `crashes last` shows the
-  newest; attach the file to an issue.  At most 100 are kept: delete old
-  ones to make room.
-- **`trace NAME`** in the Terminal logs the failing system calls (with file
-  names) of the program called NAME, each with its process id; `trace
-  +NAME` logs every call, not only the failing ones; `trace off` stops it.
-- **`profile on [DELAY LENGTH]`** in the Terminal samples every CPU at each
-  timer tick (from DELAY ticks on, for LENGTH ticks; 100 a second), and
-  **`profile`** prints the result: how the time split between programs, the
-  kernel, waiting for the big kernel lock and idle; the busiest kernel
-  functions and their callers; the busiest 64-byte lines of program code
-  (look the address up in a DLL's `.map` next to it in the build); and the
-  system calls made (3xx: an interrupt under the big lock); and the
-  desktop's frames: how many, how many redrew the whole screen rather than
-  the part that changed, the time spent drawing and the longest frame.  For example
+  `C:\NovaOS\Crashes\NAME-YYYYMMDD-HHMMSS-PID.txt` (the exception, module
+  and offset, the address it touched, the return addresses on its stack,
+  its modules and the end of the kernel's log), and the Terminal names
+  the file under the crash line.  A kernel fault writes its log and
+  backtrace into `\NOVA\PANIC.TXT` on the FAT disk that keeps drive C:
+  (64 KiB set aside at boot), and the next start moves it to
+  `C:\NovaOS\Crashes\kernel-YYYYMMDD-HHMMSS.txt`.  The Terminal's
+  `crashes` lists the reports and `crashes last` shows the newest.  At
+  most 100 are kept; delete old ones to make room.
+- **`trace NAME`** in the Terminal logs the failing system calls (with
+  file names) of the program called NAME, each with its process id.
+  `trace +NAME` logs every call; `trace off` stops it.
+- **`profile on [DELAY LENGTH]`** samples every CPU at each timer tick (100
+  a second; from DELAY ticks on, for LENGTH ticks), and **`profile`**
+  prints the result: how time split between programs, the kernel,
+  waiting for the big kernel lock and idle; the busiest kernel functions
+  and their callers; the busiest 64-byte lines of program code (look the
+  address up in the DLL's `.map` file in the build); the system calls
+  made; and the desktop's frames.  For example:
   `tools/novarun.py --smp 4 "profile on 550 100" "smpstress throughput 0
-  files many" profile`.  With a LENGTH the report also goes to the serial
-  log on its own when the window closes, so a program that takes the
-  keyboard (a browser starting) needs no `profile`: `tools/novarun.py
-  --keep out "profile on 50 6000" "start browser" "!wait 100"`, then
+  files many" profile`.  With a LENGTH, the report also goes to the
+  serial log when the window closes, so a program that takes the
+  keyboard needs no `profile` command: `tools/novarun.py --keep out
+  "profile on 50 6000" "start browser" "!wait 100"`, then
   `grep PROF out/serial.log`.
 
 ### GDB
 
-In one terminal, start QEMU with the GDB stub (it waits for GDB):
+Start QEMU with the GDB stub; it waits for GDB before running anything:
 
 ```bash
-./scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE.fd \
-    /usr/share/OVMF/OVMF_VARS.fd --gdb
+cmake --build build --target run-debug
+# or: scripts/run-qemu.sh build/nova.img /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd --gdb
 ```
 
-In a second, attach GDB and set a hardware breakpoint at the kernel's C
-entry:
+In a second terminal, attach GDB and set a hardware breakpoint at the
+kernel's C entry point:
 
 ```bash
 gdb build/kernel.elf
@@ -1230,26 +1106,43 @@ gdb build/kernel.elf
 
 ### "No suitable kernel compiler found"
 
-Install clang: `sudo apt install clang lld llvm`, or build x86_64-elf-gcc as
-described above.
+CMake found neither `x86_64-elf-gcc` nor `clang`.  Install clang
+(`sudo apt install clang lld llvm`), or build a cross compiler as
+described under [Optional compilers](#optional-compilers).
 
-### "OVMF not found"
+### The build fails with no useful message
+
+The kernel and boot loader sub-builds log to files.  Look at the end of
+`build/kernel_build-prefix/src/kernel_build-stamp/kernel_build-build-err.log`
+(CI prints its last 100 lines when the build fails).  Common causes:
+
+- `7z` not found: install `p7zip-full`.
+- A download failed (Firefox, Mesa, or the Windows-Driver-Frameworks
+  fetch): check that the machine can reach `archive.mozilla.org` and
+  `github.com`.
+- `libc++'s headers not found` or `MinGW-w64's headers not found`:
+  install `libc++-dev` and `gcc-mingw-w64-x86-64`.
+
+### No `run` target, or "OVMF not found"
 
 ```bash
 sudo apt install ovmf
 ls /usr/share/OVMF/ /usr/share/ovmf/
-cmake -DOVMF_CODE=/path/to/OVMF_CODE.fd ..
+cmake -S . -B build -DOVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd -DOVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
 ```
 
-Newer distributions name the files `OVMF_CODE_4M.fd` and `OVMF_VARS_4M.fd`.
+Ubuntu 24.04 names the split files `OVMF_CODE_4M.fd` and
+`OVMF_VARS_4M.fd`; `/usr/share/ovmf/OVMF.fd` is the combined image.
 
-### Kernel crashes on boot
+### NovaOS does not boot, or stops early
 
-Break at `KiSystemStartup` in GDB and check:
-1. Is the BootInfo magic correct? (`0x4E4F564100424F4F`)
-2. Is the physmap VA correct? (`0xFFFF800000000000`)
-3. Is the CR3 value reasonable? (a physical address below 4 GiB)
+Give it at least 2 GB of memory (`run-qemu.sh` gives 256 MiB).  Read the
+serial log: the kernel logs its start-up to COM1.  To step
+through the start, break at `KiSystemStartup` in GDB and check that the
+boot information's magic is `0x4E4F564100424F4F` ("NOVA\0BOO",
+`include/boot_protocol.h`) and that physical memory is mapped at
+`0xFFFF800000000000`.
 
-### Serial output not appearing in QEMU
+### No serial output in QEMU
 
 Use `-serial stdio`, not `-serial null`.  `run-qemu.sh` does this.

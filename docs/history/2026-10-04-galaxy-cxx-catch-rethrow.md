@@ -37,4 +37,4 @@ faulted inside `RtlVirtualUnwind` (the client, after its NTFS warning).
   with "Could not get handle for shared context" (Qt WebEngine needs a
   shared OpenGL context; NovaOS's `CreateDXGIFactory2` also says
   `E_NOINTERFACE`).  The service still fails the client's "write Vulkan
-  registry keys" request ([compatibility.md](../compatibility.md)).
+  registry keys" request ([compatibility.md](compatibility.md)).

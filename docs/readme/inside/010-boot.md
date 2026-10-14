@@ -1,1 +1,1 @@
-- **Boot**: a UEFI bootloader loads the ELF kernel from the EFI System Partition or the ISO; the same ISO runs live and installs to a disk.
+- **Boot**: a UEFI bootloader loads the ELF kernel from the EFI System Partition or the ISO; the same ISO runs live and installs NovaOS to a SATA or NVMe disk.

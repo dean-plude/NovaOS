@@ -2,7 +2,7 @@
 
 The last of three steps to the ThinkPad T14 Gen 4's built-in
 microphones ([part 2](#the-audio-dsp-records-the-t14s-microphones-part-2),
-[hardware.md](../hardware.md#the-digital-microphones-behind-the-audio-dsp)):
+[hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)):
 what the audio DSP records reaches programs.
 
 - **Microphone Array (DSP).**  Once the capture pipeline runs,

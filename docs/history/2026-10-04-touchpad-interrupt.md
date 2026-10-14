@@ -41,4 +41,4 @@ now, and the touchpad is read when its pin fires.
   checks this and the refusals.
 
 None of this has run on a T14 yet; the hand check is step 5 in
-[hardware.md](../hardware.md#checking-audio-and-the-touchpad-on-the-t14-step-214).
+[hardware.md](hardware.md#checking-audio-and-the-touchpad-on-the-t14-step-214).

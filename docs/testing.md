@@ -286,10 +286,13 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   Performance, Details and Services views, `evtlogtest` (ReportEvent,
   ReadEventLog, EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot,
   service, driver-failure and crash events) and Event Viewer from the
-  Start menu finding its event, programs started from the Start menu
-  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
-  window, and `hello`, a console program, in a Terminal, `crash kernel`,
-  a deliberate kernel fault whose serial log must show a backtrace with
+  Start menu finding its event, Calculator (Windows Calculator's
+  CalcManager engine) from the Start menu: Standard, Scientific
+  (precedence, x^y, 25!) and Programmer (hexadecimal, AND) answers to
+  typed expressions, programs started from the Start menu (Win+S, the
+  name, Enter): `winhello`, a GUI program, with no Terminal window, and
+  `hello`, a console program, in a Terminal, `crash kernel`, a
+  deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 

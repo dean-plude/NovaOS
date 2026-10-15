@@ -16,6 +16,7 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 | `notepad++.png` | 1280x800 | Notepad++ 8.8.3 portable (the app corpus's download) staged with `--put DIR=C:\Apps\npp`, opened on `kernel/ke/scheduler.c` staged in `C:\Projects\src`. |
 | `app-store.png` | 1280x800 | The App Store opened from the dock, with the Terminal minimized. |
 | `task-manager.png`, `task-manager-performance.png` | 1280x800 | Task Manager opened with Ctrl+Shift+Esc over `winhello`, on Processes with `winhello.exe` selected and then on Performance: the screenshots `tests/selftest/core/166-taskmgr.py` takes (`tools/selftest.py --suite core --only taskmgr`), QEMU with 2 CPUs. |
+| `calculator.png`, `calculator-scientific.png`, `calculator-programmer.png` | 1280x800 (taken at 2560x1600) | Calculator started from the Start menu: Standard after 1 ÷ 7, Scientific after 25!, Programmer with 255 in hexadecimal: the screenshots `tests/selftest/core/168-calc.py` takes (`tools/selftest.py --suite core --only calc`), scaled down. |
 | `firefox.png`, `vlc.png`, `keepassxc.png`, `inkscape.png` | 1280x800 | Copies of the `tests/reference/` screenshots that `tools/appcorpus.py` takes of those programs. |
 | `teeworlds.png` | 1280x800 | A copy of `tests/reference/teeworlds.png`: the corpus starts Teeworlds in full screen on the built-in OpenGL and answers its first-start questions with Enter. |
 | `beneath-a-steel-sky.png` | 1280x800 | A copy of `tests/reference/beneath a steel sky.png`: the corpus installs ScummVM, starts the game, skips the intro and walks Foster with a click. |

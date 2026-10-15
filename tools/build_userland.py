@@ -22,7 +22,7 @@ and writes GENERATED_C: every file pulled in with .incbin plus a table the
 kernel uses to install them on drive C: at boot.  Set NOVA_NO_NETSURF=1 to
 leave the browser out (it is most of the build time and image size).
 """
-import os, re, subprocess, sys, threading, types
+import glob, os, re, subprocess, sys, threading, types
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_netsurf
@@ -106,6 +106,11 @@ def cflags():
 #             Microsoft's STL headers; see userland/msvcp140/build.py)
 #   gui       true: a GUI program (/subsystem:windows): the shell starts it
 #             with no console window, as Windows does
+#   sources   more C++ files compiled into it with its own flags (paths
+#             or globs from the repository root, e.g. a vendored library's
+#             under third_party/); with "include" (directories searched)
+#             and "force_include" (headers each file starts with, as
+#             Visual Studio's /FI), also from the repository root
 import json
 SLOT = 0x01000000
 AUTO_X64 = (0x7FFD00000000, 0x7FFE00000000)
@@ -484,8 +489,17 @@ def build_pass(arch, all_tasks):
         task('stlprog', [], lambda: stlobjs.extend(HOOKS['msvcp140'].program_objs(me, odir)))
     def compile_prog(src, name, prog):
         obj = os.path.join(odir, f'prog_{name}.obj')
+        objs = [obj]
         if src.endswith('.cpp') and prog.get('msstl'):  # C++ on the standard library (msvcp140)
-            run(['clang++'] + HOOKS['msvcp140'].program_flags(me) + ['-c', os.path.join(progdir, src), '-o', obj])
+            top = os.path.dirname(HERE)
+            flags = HOOKS['msvcp140'].program_flags(me) + \
+                [f for d in prog.get('include', []) for f in ('-I', os.path.join(top, d))] + \
+                [f for h in prog.get('force_include', []) for f in ('-include', os.path.join(top, h))]
+            run(['clang++'] + flags + ['-c', os.path.join(progdir, src), '-o', obj])
+            srcs = [f for g in prog.get('sources', [])  # (a vendored library beside it)
+                    for f in sorted(glob.glob(os.path.join(top, g), recursive=True))]
+            if srcs:
+                objs += compile_many(srcs, odir, f'prog_{name}_', flags, compiler='clang++')
         elif src.endswith('.cpp'):                # C++ (exceptions, RTTI): vcruntime140
             run(['clang++'] + cflags() + ['-fcxx-exceptions', '-fexceptions', '-std=c++17',
                  '-c', os.path.join(progdir, src), '-o', obj])
@@ -496,17 +510,17 @@ def build_pass(arch, all_tasks):
         if os.path.exists(rc):
             res = [os.path.join(odir, f'prog_{name}.res')]
             run([build_netsurf.llvm_rc(), '/FO', res[0], rc])
-        compiled[name] = obj, res
+        compiled[name] = objs, res
     def link_prog(src, name, prog):
         exe = os.path.join(odir, f'{name}.exe')
-        obj, res = compiled[name]
+        objs, res = compiled[name]
         stl = (stlobjs + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
             if src.endswith('.cpp') and prog.get('msstl') else []
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS]
         run(['lld-link', '/subsystem:' + ('windows' if prog.get('gui') else 'console'),
              '/entry:mainCRTStartup', '/nodefaultlib'] +
             (['/safeseh:no', '/machine:x86'] if arch == 'x86' else []) +
-            [f'/out:{exe}'] + crt0_objs + [tlssup, obj] + stl + res + [os.path.join(odir, l + '.lib') for l in libs])
+            [f'/out:{exe}'] + crt0_objs + [tlssup] + objs + stl + res + [os.path.join(odir, l + '.lib') for l in libs])
         if arch == 'x86':
             folder = '\\Windows\\SysWOW64' if prog.get('system') else '\\Programs\\x86'
         else:

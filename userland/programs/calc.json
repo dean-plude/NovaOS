@@ -1,0 +1,12 @@
+{
+  "gui": true,
+  "system": true,
+  "msstl": true,
+  "sources": ["third_party/calcmanager/CalcManager/CEngine/*.cpp",
+              "third_party/calcmanager/CalcManager/Ratpack/*.cpp",
+              "third_party/calcmanager/CalcManager/CalculatorHistory.cpp",
+              "third_party/calcmanager/CalcManager/CalculatorManager.cpp",
+              "third_party/calcmanager/CalcManager/ExpressionCommand.cpp"],
+  "include": ["third_party/calcmanager", "third_party/calcmanager/CalcManager"],
+  "force_include": ["third_party/calcmanager/CalcManager/pch.h"]
+}

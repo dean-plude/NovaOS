@@ -263,6 +263,8 @@ for resources).  It is built 64-bit only into `C:\Programs` unless a
 | `gui` | `true`: a GUI program (`/subsystem:windows`), which the shell starts without a console window |
 | `msstl` | `true`: build a `.cpp` against Microsoft's STL and `msvcp140.dll`, as Visual Studio does (`userland/programs/stltest.cpp`) |
 | `selftest` | `true`: list it among the self-test programs in [testing.md](testing.md) |
+| `sources` | With `msstl`: more `.cpp` files compiled into it with its flags, as paths or globs from the repository root, e.g. a vendored library's (`calc.json` builds Windows Calculator's CalcManager) |
+| `include`, `force_include` | With `sources`: directories searched for headers, and headers every file starts with (Visual Studio's `/FI`, for a project's forced precompiled header), from the repository root |
 
 ### Generated and prebuilt files
 

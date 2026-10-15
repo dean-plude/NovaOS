@@ -15,7 +15,7 @@ boot-tested by CI ([docs/ci.md](docs/ci.md)).
 | You are adding... | Add this file | Not this |
 |---|---|---|
 | a system DLL | `userland/NAME/dll.json` (+ `userland/NAME/build.py` if it needs a library or flags) | a list in `tools/build_userland.py` |
-| a program, or making one 32-bit or a System32 one | `userland/programs/NAME.json` (keys `x86`, `system`, `gui`, `libs`, `msstl`, `selftest`) | a list in `tools/build_userland.py` |
+| a program, or making one 32-bit or a System32 one | `userland/programs/NAME.json` (keys `x86`, `system`, `gui`, `libs`, `msstl`, `sources`, `selftest`) | a list in `tools/build_userland.py` |
 | export ordinals for a DLL | `"ordinals"` in its `dll.json` | |
 | a CI self-test | `tests/selftest/core/NNN-name.py` (or under `graphics/`, `network4/`, `network6/`, `network-e1000e/`, or an existing `devices/NAME/` boot); a new device boot also needs its QEMU setup in `BOOTS` in `tools/selftest.py` | a list in `tools/selftest.py` |
 | a nightly app-corpus program | `tests/appcorpus/NNN-name.py` | a list in `tools/appcorpus.py` |

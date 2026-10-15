@@ -32,36 +32,6 @@ static const char *g_cat_name[CAT_COUNT] = {
     "Runtimes", "Installed", "Updates",
 };
 
-/* What the downloaded file is, and how it is installed */
-enum {
-    KIND_SETUP,        /* a 64-bit installer (.exe) or a Windows Installer package (.msi) */
-    KIND_PORTABLE,     /* the 64-bit program itself: Run it from Downloads */
-    KIND_ARCHIVE,      /* a .zip, .7z, .tar.gz, .tar.zst or 7-Zip self-extractor: 7-Zip unpacks it into C:\Programs\<dest> */
-};
-
-typedef struct {
-    const char *name;
-    const char *publisher;
-    const char *summary;       /* one line */
-    int         category;
-    const char *url;           /* the download (the official 64-bit package where there is one) */
-    const char *file;          /* saved as C:\Downloads\<file> */
-    const char *dest;          /* KIND_ARCHIVE: unpacked into C:\Programs\<dest> */
-    const char *exe;           /* installed: C:\Programs\<exe>, or an absolute path
-                                * starting with '\'; a "**" component stands for
-                                * any folders (archives with a versioned top folder) */
-    int         kind;          /* KIND_* */
-    unsigned    size_mb;       /* approximate download size */
-    const char *note;          /* NovaOS compatibility note */
-    const char *label;         /* 1-3 letter tile label */
-    GdiColor    color;         /* tile colour */
-    const char *system;        /* KIND_ARCHIVE: only these files (space-separated) are
-                                * unpacked, and they go into the system folders:
-                                * from an x86 or x32 folder to SysWOW64, others to
-                                * System32; "path>name" renames.  Vulkan driver
-                                * manifests (*_icd.*.json) among them are registered */
-} StoreApp;
-
 #include "store_catalog.h"
 
 static StoreCatalog *g_store_catalog;

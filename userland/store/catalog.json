@@ -14,7 +14,9 @@
       "size_mb": 2,
       "note": "Tested on NovaOS; the Store uses it to unpack downloads",
       "label": "7z",
-      "color": "#256EB8"
+      "color": "#256EB8",
+      "id": "7zip.7zip",
+      "version": "24.08"
     },
     {
       "name": "VLC media player",
@@ -29,7 +31,9 @@
       "size_mb": 60,
       "note": "64-bit zip; plays video and audio on NovaOS (nightly corpus)",
       "label": "VLC",
-      "color": "#F07E1A"
+      "color": "#F07E1A",
+      "id": "VideoLAN.VLC",
+      "version": "3.0.21"
     },
     {
       "name": "Firefox",
@@ -44,7 +48,9 @@
       "size_mb": 80,
       "note": "Unpacked from the full installer; loads HTTPS pages on NovaOS (nightly corpus)",
       "label": "Fx",
-      "color": "#E65A1C"
+      "color": "#E65A1C",
+      "id": "Mozilla.Firefox",
+      "version": "157.0"
     },
     {
       "name": "Thunderbird",
@@ -59,7 +65,9 @@
       "size_mb": 75,
       "note": "Unpacked from the full installer; opens e-mail messages on NovaOS (nightly corpus)",
       "label": "Tb",
-      "color": "#1D66B4"
+      "color": "#1D66B4",
+      "id": "Mozilla.Thunderbird",
+      "version": "158.0"
     },
     {
       "name": "Notepad++",
@@ -74,7 +82,9 @@
       "size_mb": 7,
       "note": "64-bit portable zip; opens and edits",
       "label": "N++",
-      "color": "#8CC044"
+      "color": "#8CC044",
+      "id": "Notepad++.Notepad++",
+      "version": "8.7"
     },
     {
       "name": "GIMP",
@@ -89,7 +99,9 @@
       "size_mb": 330,
       "note": "64-bit GIMP 2.10 (GTK 2) from its Inno Setup installer; opens pictures on NovaOS (nightly corpus)",
       "label": "G",
-      "color": "#5C4A36"
+      "color": "#5C4A36",
+      "id": "GIMP.GIMP.2",
+      "version": "2.10.38"
     },
     {
       "name": "Inkscape",
@@ -104,7 +116,9 @@
       "size_mb": 110,
       "note": "64-bit 7z archive; GTK application, untested",
       "label": "Ik",
-      "color": "#2A2A2A"
+      "color": "#2A2A2A",
+      "id": "Inkscape.Inkscape",
+      "version": "1.4"
     },
     {
       "name": "Krita",
@@ -119,7 +133,9 @@
       "size_mb": 220,
       "note": "64-bit portable zip; draws and saves an image on NovaOS (nightly corpus)",
       "label": "Kr",
-      "color": "#9C3A8A"
+      "color": "#9C3A8A",
+      "id": "KDE.Krita",
+      "version": "5.3.4"
     },
     {
       "name": "Audacity",
@@ -134,7 +150,9 @@
       "size_mb": 20,
       "note": "64-bit zip; records, edits and saves audio on NovaOS (nightly corpus)",
       "label": "Au",
-      "color": "#1C1C60"
+      "color": "#1C1C60",
+      "id": "Audacity.Audacity",
+      "version": "3.7.1"
     },
     {
       "name": "HandBrake",
@@ -149,7 +167,9 @@
       "size_mb": 25,
       "note": "64-bit zip; needs the .NET 8 desktop runtime (see Runtimes)",
       "label": "HB",
-      "color": "#B83A2E"
+      "color": "#B83A2E",
+      "id": "HandBrake.HandBrake",
+      "version": "1.9.0"
     },
     {
       "name": "OBS Studio",
@@ -164,7 +184,9 @@
       "size_mb": 152,
       "note": "64-bit Qt program on Direct3D 11: install Mesa 3D and DXVK first; adds scenes on NovaOS (nightly corpus)",
       "label": "OBS",
-      "color": "#303030"
+      "color": "#303030",
+      "id": "OBSProject.OBSStudio",
+      "version": "30.2.3"
     },
     {
       "name": "LibreOffice",
@@ -179,7 +201,9 @@
       "size_mb": 350,
       "note": "64-bit Windows Installer package; Writer and Calc open, edit and save .docx and .xlsx files on NovaOS (nightly corpus)",
       "label": "Lo",
-      "color": "#18A303"
+      "color": "#18A303",
+      "id": "TheDocumentFoundation.LibreOffice",
+      "version": "24.8.4.2"
     },
     {
       "name": "SumatraPDF",
@@ -194,7 +218,9 @@
       "size_mb": 8,
       "note": "64-bit portable program: runs straight from Downloads; 3.4.6 opens and renders PDFs on NovaOS (nightly corpus)",
       "label": "Su",
-      "color": "#E8B022"
+      "color": "#E8B022",
+      "id": "SumatraPDF.SumatraPDF",
+      "version": "3.5.2"
     },
     {
       "name": "KeePassXC",
@@ -209,7 +235,9 @@
       "size_mb": 40,
       "note": "64-bit portable zip; Qt application, untested",
       "label": "Kp",
-      "color": "#2C9A4C"
+      "color": "#2C9A4C",
+      "id": "KeePassXCTeam.KeePassXC",
+      "version": "2.7.9"
     },
     {
       "name": "qBittorrent",
@@ -224,7 +252,9 @@
       "size_mb": 40,
       "note": "64-bit Qt program, NSIS installer; opens .torrent files on NovaOS (nightly corpus)",
       "label": "qB",
-      "color": "#2E7AC8"
+      "color": "#2E7AC8",
+      "id": "qBittorrent.qBittorrent",
+      "version": "5.0.2"
     },
     {
       "name": "PuTTY",
@@ -239,7 +269,8 @@
       "size_mb": 2,
       "note": "64-bit portable program: runs straight from Downloads; raw connections work on NovaOS (nightly corpus), SSH untested",
       "label": "Pu",
-      "color": "#1F1F1F"
+      "color": "#1F1F1F",
+      "id": "PuTTY.PuTTY"
     },
     {
       "name": "WinSCP",
@@ -254,7 +285,9 @@
       "size_mb": 12,
       "note": "32-bit program and installer (Inno Setup); installs and opens its Login dialog on NovaOS (nightly corpus); its file lists do not draw yet",
       "label": "Ws",
-      "color": "#2B903C"
+      "color": "#2B903C",
+      "id": "WinSCP.WinSCP",
+      "version": "6.3.5"
     },
     {
       "name": "Git",
@@ -284,7 +317,9 @@
       "size_mb": 11,
       "note": "64-bit zip; opens in a Terminal; Python runs on NovaOS",
       "label": "Py",
-      "color": "#3671A6"
+      "color": "#3671A6",
+      "id": "Python.Python.3.13",
+      "version": "3.13.1"
     },
     {
       "name": "WinMerge",
@@ -299,7 +334,9 @@
       "size_mb": 12,
       "note": "64-bit portable zip; compares files on NovaOS (nightly corpus)",
       "label": "WM",
-      "color": "#E0B830"
+      "color": "#E0B830",
+      "id": "WinMerge.WinMerge",
+      "version": "2.16.44"
     },
     {
       "name": "ShareX",
@@ -314,7 +351,9 @@
       "size_mb": 161,
       "note": "64-bit portable zip; brings its own .NET 9, takes screenshots on NovaOS (nightly corpus)",
       "label": "Sx",
-      "color": "#209060"
+      "color": "#209060",
+      "id": "ShareX.ShareX",
+      "version": "16.1.0"
     },
     {
       "name": "Roblox",
@@ -344,7 +383,9 @@
       "size_mb": 15,
       "note": "64-bit installer (NSIS); installs and reaches its main menu on NovaOS with the free OpenGFX graphics (nightly corpus)",
       "label": "TT",
-      "color": "#2E6B3A"
+      "color": "#2E6B3A",
+      "id": "OpenTTD.OpenTTD",
+      "version": "14.1"
     },
     {
       "name": "ScummVM",
@@ -359,7 +400,9 @@
       "size_mb": 130,
       "note": "32-bit installer (Inno Setup) for 64-bit ScummVM; plays the freeware Beneath a Steel Sky on NovaOS (nightly corpus)",
       "label": "SV",
-      "color": "#1E8C2E"
+      "color": "#1E8C2E",
+      "id": "ScummVM.ScummVM",
+      "version": "2.8.1"
     },
     {
       "name": "Steam",
@@ -374,7 +417,8 @@
       "size_mb": 3,
       "note": "32-bit installer (NSIS); installs and updates itself on NovaOS, but its browser does not open the login window yet (docs/compatibility.md)",
       "label": "St",
-      "color": "#171A21"
+      "color": "#171A21",
+      "id": "Valve.Steam"
     },
     {
       "name": "Teeworlds",
@@ -464,7 +508,9 @@
       "size_mb": 8,
       "note": "32-bit installer (Inno Setup); an SDL 1.2 game that plays on NovaOS with a game pad (winmm joystick) or the keyboard (nightly corpus)",
       "label": "ST",
-      "color": "#2060C0"
+      "color": "#2060C0",
+      "id": "SuperTux.SuperTux",
+      "version": "0.1.3"
     },
     {
       "name": ".NET Runtime 8",
@@ -479,7 +525,9 @@
       "size_mb": 32,
       "note": "64-bit portable zip (dotnet.exe, host and Microsoft.NETCore.App 8.0.32) into C:\\Programs\\dotnet, where .NET programs look for it",
       "label": ".NET",
-      "color": "#512BD4"
+      "color": "#512BD4",
+      "id": "Microsoft.DotNet.Runtime.8",
+      "version": "8.0.32"
     },
     {
       "name": ".NET Desktop Runtime 8",
@@ -494,7 +542,9 @@
       "size_mb": 36,
       "note": "64-bit portable zip of Microsoft.WindowsDesktop.App 8.0.32 only: install .NET Runtime 8 too",
       "label": ".NET",
-      "color": "#512BD4"
+      "color": "#512BD4",
+      "id": "Microsoft.DotNet.DesktopRuntime.8",
+      "version": "8.0.32"
     },
     {
       "name": "Wine Mono",
@@ -524,7 +574,8 @@
       "size_mb": 25,
       "note": "32-bit installer; NovaOS also has its own vcruntime140",
       "label": "VC",
-      "color": "#68217A"
+      "color": "#68217A",
+      "id": "Microsoft.VCRedist.2015+.x64"
     },
     {
       "name": "OpenJDK 21",
@@ -539,7 +590,8 @@
       "size_mb": 190,
       "note": "64-bit zip; Java (Temurin 21) runs on NovaOS; this build is untested",
       "label": "Jv",
-      "color": "#E76F00"
+      "color": "#E76F00",
+      "id": "Microsoft.OpenJDK.21"
     },
     {
       "name": "Mesa 3D",
@@ -663,7 +715,9 @@
       "size_mb": 35,
       "note": "Portable 64-bit Node.js and npm for running terminal utilities and servers",
       "label": "JS",
-      "color": "#339933"
+      "color": "#339933",
+      "id": "OpenJS.NodeJS.LTS",
+      "version": "22.12.0"
     },
     {
       "name": "ArtCraft Launcher",

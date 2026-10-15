@@ -13399,6 +13399,53 @@ list written to a stream and read back, and the desktop folder listing
 items but draw none of them, its port number box is blank, and no
 transfer is checked yet.
 
+## Calculator
+
+Dean asked for Windows Calculator (github.com/microsoft/calculator).  The
+app Microsoft ships from that repository is a UWP package (C# view models
+and XAML on WinUI 2) that NovaOS cannot run yet, but its calculation
+engine, CalcManager, is portable C++ under the MIT licence.  It is now
+vendored unchanged in `third_party/calcmanager` and built into
+`calc.exe`, a Windows program in `C:\Windows\System32` that draws the
+Standard, Scientific and Programmer calculators of Windows 11 with the
+GDI.  So the answers are Windows Calculator's own: Ratpack's
+arbitrary-precision rational arithmetic, its operator precedence and
+error messages, the expression line, memory, the four radixes and word
+sizes.  It is in the Start menu as "Calculator" and runs as `calc`.
+
+- **Programs from several files**: a program's `NAME.json` takes
+  `sources` (more `.cpp` files, e.g. a vendored library), `include` and
+  `force_include` (the forced precompiled header Visual Studio projects
+  use), so CalcManager compiles as its `.vcxproj` builds it.
+- **Windows SDK headers**: NovaOS's C++ headers gained what CalcManager's
+  precompiled header needs and MinGW-w64's lack: `E_BOUNDS`,
+  `_Frees_ptr_opt_`, and an `<intsafe.h>` that brings only the base
+  types (MinGW-w64's includes all of `<windows.h>` and OLE, whose
+  `DECIMAL` type collided with Ratpack's `DECIMAL` constant).
+
+The OS test `calc` starts Calculator from the Start menu and types
+expressions into each calculator: 2+3*4 is 20 in Standard and 14 in
+Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
+do: the converters (CalcManager's unit converter needs the Concurrency
+Runtime's tasks) and the real UWP package (WinRT activation and XAML).
+
+## MS-DOS 4.0 built from Microsoft's source
+
+Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran
+them).  `tools/msdos/build_msdos.py` builds MS-DOS 4.00 from the source
+Microsoft published under the MIT licence (github.com/microsoft/MS-DOS,
+`v4.0/src`, pinned commit) with the tree's own MASM, C compiler, LINK and
+NMAKE, run in a headless DOSBox, in under two minutes.  The only changes to
+the source are DOS line ends (EXE2BIN waited forever for the carriage
+return of its answer file `BIOS\LOCSCR`) and one byte for each UTF-8
+replacement character the publication left where code page 437 bytes were
+(one comment line in `MAPPER\GETMSG.ASM` had grown past MASM's line
+limit).  `tools/msdos/boot_test.py` boots the result from a floppy image in
+QEMU, and `COMMAND.COM` runs `VER`, `DIR` and `MEM.EXE`.  A new CI job, MS-DOS
+4.0, runs both and keeps the 63 built files.  [dos.md](dos.md) has the
+details and the next steps: a real-mode CPU and BIOS (31.2), starting DOS
+programs from `cmd.exe` and Explorer (31.3).
+
 ## ShareX captures the screen
 
 Roadmap step 27.1 (grow the corpus), its fortieth GUI app: ShareX 19.0.1,

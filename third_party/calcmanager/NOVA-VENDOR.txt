@@ -1,0 +1,24 @@
+Windows Calculator's CalcManager, vendored for NovaOS
+=====================================================
+
+Source: https://github.com/microsoft/calculator, commit
+d125246a4e19842ce1332e6c7839cf0e110027d8 (2026-09-28).
+Kept, unchanged: src/CalcManager (the calculation engine: Ratpack's
+rational arithmetic, CCalcEngine, CalculatorManager, history and the
+unit converter, without ratpak.natvis) as CalcManager/, the en-US engine
+strings src/Calculator/Resources/en-US/CEngineStrings.resw as
+Resources/en-US/, and LICENSE.
+
+userland/programs/calc.cpp (calc.exe) compiles CEngine/, Ratpack/,
+CalculatorHistory.cpp, CalculatorManager.cpp and ExpressionCommand.cpp
+into itself with Microsoft's STL, as CalcManager.vcxproj does (pch.h
+forced in, src/ on the include path); see "sources" in
+userland/programs/calc.json.  Its string table is the en-US .resw's.
+UnitConverter.cpp is not built yet: it needs the Concurrency Runtime's
+task<> (<ppltasks.h>) beyond NovaOS's stand-in, and its unit data lives in
+the app's C# view models.
+
+To update: copy src/CalcManager and the .resw from a newer commit, then
+rebuild calc.exe.
+
+Licence: MIT (LICENSE).

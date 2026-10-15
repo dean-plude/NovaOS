@@ -1,6 +1,41 @@
 /* Bounded JSON catalog reader. A candidate owns its decoded strings and is
  * published only after the entire document and every install path validate. */
 #pragma once
+/* The includer defines GdiColor and GDI_C (the kernel: gdi.h); winget.exe
+ * (userland/programs/winget.c) reads the same catalog with this parser.
+ *
+ * What the downloaded file is, and how it is installed */
+enum {
+    KIND_SETUP,        /* a 64-bit installer (.exe) or a Windows Installer package (.msi) */
+    KIND_PORTABLE,     /* the 64-bit program itself: Run it from Downloads */
+    KIND_ARCHIVE,      /* a .zip, .7z, .tar.gz, .tar.zst or 7-Zip self-extractor: 7-Zip unpacks it into C:\Programs\<dest> */
+};
+
+typedef struct {
+    const char *name;
+    const char *publisher;
+    const char *summary;       /* one line */
+    int         category;
+    const char *url;           /* the download (the official 64-bit package where there is one) */
+    const char *file;          /* saved as C:\Downloads\<file> */
+    const char *dest;          /* KIND_ARCHIVE: unpacked into C:\Programs\<dest> */
+    const char *exe;           /* installed: C:\Programs\<exe>, or an absolute path
+                                * starting with '\'; a "**" component stands for
+                                * any folders (archives with a versioned top folder) */
+    int         kind;          /* KIND_* */
+    unsigned    size_mb;       /* approximate download size */
+    const char *note;          /* NovaOS compatibility note */
+    const char *label;         /* 1-3 letter tile label */
+    GdiColor    color;         /* tile colour */
+    const char *system;        /* KIND_ARCHIVE: only these files (space-separated) are
+                                * unpacked, and they go into the system folders:
+                                * from an x86 or x32 folder to SysWOW64, others to
+                                * System32; "path>name" renames.  Vulkan driver
+                                * manifests (*_icd.*.json) among them are registered */
+    const char *id;            /* winget's package identifier (winget.exe), or NULL */
+    const char *version;       /* the version the download installs, or NULL */
+} StoreApp;
+
 #define STORE_MAX_APPS 256
 #define STORE_JSON_MAX (512u * 1024u)
 #define STORE_CATALOG_PATH "\\Windows\\AppStore\\catalog.json"
@@ -207,6 +242,18 @@ static bool sc_system(const char *s, const char *dest)
     }
     return true;
 }
+/* A winget package identifier: two to eight dot-separated parts of up to
+ * 32 characters, none of them blank, a path or wildcard character */
+static bool sc_id(const char *s)
+{
+    if (!sc_text(s, 128)) return false;
+    int parts = 1, len = 0;
+    for (; *s; s++) {
+        if (*s == '.') { if (!len) return false; parts++; len = 0; continue; }
+        if (strchr(" \\/:*?\"<>|", *s) || ++len > 32) return false;
+    }
+    return len && parts >= 2 && parts <= 8;
+}
 static bool sc_equal(const char *a, const char *b)
 {
     while (*a && (*a | 0x20) == (*b | 0x20)) { a++; b++; }
@@ -215,18 +262,18 @@ static bool sc_equal(const char *a, const char *b)
 static bool sc_app(StoreJson *j, StoreApp *a)
 {
     static const char *keys[] = { "name", "publisher", "summary", "category", "url", "file", "dest", "exe",
-                                 "kind", "size_mb", "note", "label", "color", "system" };
-    const char *values[14] = {0}; unsigned seen = 0;
+                                 "kind", "size_mb", "note", "label", "color", "system", "id", "version" };
+    const char *values[16] = {0}; unsigned seen = 0;
     if (!sj_take(j, '{')) return false;
     do {
         char *key = sj_string(j); if (!key || !sj_take(j, ':')) return false;
-        int k = 0; while (k < 14 && strcmp(key, keys[k])) k++;
-        if (k == 14) { if (!sj_skip(j, 0)) return false; }
+        int k = 0; while (k < 16 && strcmp(key, keys[k])) k++;
+        if (k == 16) { if (!sj_skip(j, 0)) return false; }
         else {
             if (seen & (1u << k)) return false;
             seen |= 1u << k;
             if (k == 9) { if (!sj_uint(j, &a->size_mb) || a->size_mb > 4096) return false; }
-            else if ((k == 6 || k == 7 || k == 13) && sj_literal(j, "null")) values[k] = NULL;
+            else if ((k == 6 || k == 7 || k >= 13) && sj_literal(j, "null")) values[k] = NULL;
             else if (!(values[k] = sj_string(j))) return false;
         }
         if (sj_take(j, '}')) break;
@@ -236,6 +283,7 @@ static bool sc_app(StoreJson *j, StoreApp *a)
     if ((seen & required) != required) return false;
     a->name=values[0]; a->publisher=values[1]; a->summary=values[2]; a->url=values[4];
     a->file=values[5]; a->dest=values[6]; a->exe=values[7]; a->note=values[10]; a->label=values[11]; a->system=values[13];
+    a->id=values[14]; a->version=values[15];
     static const char *categories[] = { "", "utilities", "internet", "media", "graphics", "office", "developer", "runtimes" };
     a->category = 1;
     while (a->category < 8 && strcmp(values[3], categories[a->category])) a->category++;
@@ -249,6 +297,7 @@ static bool sc_app(StoreJson *j, StoreApp *a)
         !sc_path(a->file, true, false) || strchr(a->file, '*') || strchr(a->file, '?') ||
         (a->dest && (!sc_path(a->dest, true, false) || strchr(a->dest, '*') || strchr(a->dest, '?'))) ||
         (a->exe && !sc_path(a->exe, false, true)) ||
+        (a->id && !sc_id(a->id)) || (a->version && !sc_text(a->version, 64)) ||
         (a->kind == KIND_ARCHIVE && !a->dest) || (a->system && a->kind != KIND_ARCHIVE) || !sc_system(a->system, a->dest)) return false;
     const char *color = values[12];
     if (strlen(color) != 7 || color[0] != '#') return false;
@@ -276,7 +325,9 @@ static StoreCatalog *store_catalog_parse(const char *data, UINT32 len)
                 if (c->count == STORE_MAX_APPS || !sc_app(&j, &c->apps[c->count])) goto bad;
                 for (int i = 0; i < c->count; i++)
                     if (sc_equal(c->apps[i].name, c->apps[c->count].name) ||
-                        sc_equal(c->apps[i].file, c->apps[c->count].file)) goto bad;
+                        sc_equal(c->apps[i].file, c->apps[c->count].file) ||
+                        (c->apps[i].id && c->apps[c->count].id &&
+                         sc_equal(c->apps[i].id, c->apps[c->count].id))) goto bad;
                 c->count++;
                 if (sj_take(&j, ']')) break;
                 if (!sj_take(&j, ',')) goto bad;

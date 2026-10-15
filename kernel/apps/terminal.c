@@ -258,6 +258,7 @@ static void cmd_help(Term *t)
         "  store refresh       update the JSON app catalog\n"
         "  store close         close the App Store window\n"
         "  store updates       open the App Store's updates for NovaOS\n"
+        "  winget search|install|list|upgrade|uninstall  the Windows Package Manager\n"
         "  mem  uptime  date  time  ver  whoami  sysinfo  dmesg\n"
         "  devices             the PCI devices and the driver each one has (also: lspci)\n"
         "  hwcheck             test the laptop drivers on modelled devices (codec, DSP, touchpad)\n"

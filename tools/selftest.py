@@ -27,7 +27,8 @@ order; --list prints them):
   network   two boots with a virtio-net adapter (tests/selftest/network4
             and network6).  IPv4 on QEMU's user-mode network: ipconfig, ping,
             Winsock (netcat), winhttp's HTTP/2 (httptest suite) and eight
-            long downloads at once (dltest -w) against tools/h2server.js
+            long downloads at once (dltest -w) and winget against its REST
+            source, all against tools/h2server.js
             (needs node and openssl).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
             ping -6, curl -6 and Winsock over IPv6 (netcat).  Then a third
@@ -343,7 +344,7 @@ def renamed(t, suffix):
 
 # The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping')]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith('winget')]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)

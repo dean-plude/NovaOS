@@ -23,6 +23,14 @@
     End task, Performance (each logical processor, memory, disk and
     Ethernet over 60 seconds), Details and Services, read through the same
     APIs Windows' Task Manager uses.
+  - Calculator (`calc.exe`, a Windows program in System32; Start menu
+    search or `calc` in the Terminal): Windows Calculator's own engine,
+    CalcManager from github.com/microsoft/calculator (MIT, vendored
+    unchanged in `third_party/calcmanager`: arbitrary-precision rational
+    arithmetic, operator precedence, the expression line, memory), drawn
+    with the GDI in the layouts of Windows 11's Standard, Scientific and
+    Programmer calculators, with their keyboard shortcuts.  The shipped
+    app is a UWP (XAML) package, which NovaOS cannot run yet.
   - Disk Management (`diskmgmt.exe`, a Windows program in System32; Start
     menu search): the volumes with their letters, file systems, capacity
     and free space above, each disk and its partitions drawn below;

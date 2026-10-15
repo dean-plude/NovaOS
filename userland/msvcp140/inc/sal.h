@@ -16,6 +16,9 @@
 #ifndef _Field_z_
 #define _Field_z_
 #endif
+#ifndef _Frees_ptr_opt_
+#define _Frees_ptr_opt_
+#endif
 #ifndef _In_
 #define _In_
 #endif

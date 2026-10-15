@@ -181,6 +181,7 @@ Keyboard shortcuts:
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
 | **Device Manager** | Type "Device Manager" in Start.  Lists the PC's devices by type (or by connection, View menu), as Windows' Device Manager does; select one to see its status and problem code, driver (provider, version, date), hardware and compatible IDs and resources (memory and I/O ranges, IRQ).  F5 scans for hardware changes; it also refreshes when a device is plugged in or removed. |
 | **Event Viewer** | Type "Event Viewer" in Start.  Shows the Application, System and Security logs as Windows' Event Viewer does: each event's level, date, source, event ID and task category, and below the list its message (General) and its XML (Details).  The Action menu filters by level, clears a log and saves its events as `.evtx` or `.xml`.  NovaOS logs each start, services starting and stopping, drivers that fail to load and programs that crash; programs add their own events. |
+| **Calculator** | Type "Calculator" in Start, or `calc` in the Terminal.  Windows Calculator's own engine, so its answers match Windows': **Standard** works each operator at once, **Scientific** keeps precedence and adds powers, roots, logarithms, trigonometry (DEG, RAD, GRAD) and factorials, and **Programmer** shows the value in hexadecimal, decimal, octal and binary with the bitwise operators and word sizes.  Alt+1, Alt+2 and Alt+4 change calculator; type the expression on the keyboard (Esc clears, Ctrl+C copies the result, Ctrl+V pastes); MS, MR, M+ and M− keep a number in memory. |
 | **Notepad**, **Photos**, **Calendar** | A text editor, a picture viewer (PNG and icons) and a calendar. |
 | **NetSurf** | A small web browser; type `netsurf [url]` in the Terminal. |
 | **Camera** | Shows a USB camera's picture; type `camera` in the Terminal or find it with Windows+S.  The camera must stream on a bulk endpoint for now: most built-in webcams do not yet work (see [drivers.md](drivers.md#cameras-usb-video-class)). |
@@ -196,6 +197,7 @@ The Terminal has its own commands; `help` lists them.  The most useful:
 | `dir`, `cd`, `type`, `copy`, `del`, `mkdir` | Work with files |
 | `start <app> [file]` | Open a built-in app (`notepad`, `explorer`, `settings`, `calendar`, `browser`, `store`, `welcome`) |
 | `store install <name>` | Install a program from the App Store |
+| `winget search`, `install`, `list`, `upgrade`, `uninstall` | The Windows Package Manager ([below](#winget)) |
 | `ipconfig`, `ping`, `nslookup`, `curl`, `wget` | Network |
 | `tasklist`, `taskkill /PID n` or `/IM name.exe` | List and stop programs |
 | `devices` | PCI devices and the driver each one has |
@@ -246,6 +248,50 @@ The App Store's list of programs is a JSON file that can be updated
 without updating NovaOS (**Refresh** in the App Store, or
 `store refresh`).  [app-store-catalog.md](app-store-catalog.md) explains
 how.
+
+### winget
+
+`winget`, the Windows Package Manager's command, works in the Terminal and
+in `cmd` with Windows' commands and options:
+
+| Command | Does |
+|---|---|
+| `winget search <words>` | Find packages (by name, identifier or moniker) |
+| `winget show <package>` | A package's details and the installer NovaOS would use |
+| `winget install <package>` | Download, check and install it (`-v` a version, `-s` a source, `-i` with the installer's own questions) |
+| `winget install -m <manifest>` | Install from a manifest file or folder on disk |
+| `winget list` | Installed programs, with newer versions where a source has one |
+| `winget upgrade` | What can be upgraded; `winget upgrade --all` or `winget upgrade <package>` upgrades |
+| `winget uninstall <package>` | Remove a program |
+| `winget source list`, `add`, `remove`, `update`, `reset --force` | Package sources |
+| `winget hash <file>` | A file's SHA-256, as manifests give it |
+
+It has three kinds of source:
+
+- **novaos**: the App Store's catalog, installed exactly as the App Store
+  does (so `winget install 7-Zip` and **Get**, **Install** in the App Store
+  are the same).  Programs NovaOS has been tested with come from here
+  first, under their winget identifiers where they have one
+  (`winget install 7zip.7zip`).
+- **winget**: the community repository Microsoft's winget uses,
+  [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
+  NovaOS reads its manifests from GitHub, so it finds a package by its
+  exact identifier, as written there (`winget install Mozilla.Firefox`,
+  `winget search Gyan.FFmpeg`); searching it by words needs Microsoft's
+  index, which NovaOS does not read yet.  Its programs have not
+  necessarily been tested on NovaOS.
+- **REST sources** your organization runs (`winget source add <name>
+  <url>`), as on Windows.
+
+The download's SHA-256 must match the manifest's.  Setup programs run
+silently with the switches the manifest gives (or winget's usual ones for
+Inno Setup, NSIS, WiX Burn and Windows Installer); a portable program is
+copied to `C:\Programs\<command>\<command>.exe`, so typing its command
+runs it; `.zip` packages need **7-Zip** (`winget install 7zip.7zip`).
+MSIX and Microsoft Store packages cannot be installed: they need Windows'
+package deployment, which NovaOS does not have.  `winget list` shows what
+winget and the App Store installed and every program with an entry in
+Windows' installed programs list.
 
 ### Drivers
 

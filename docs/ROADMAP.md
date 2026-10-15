@@ -322,6 +322,13 @@ item ends when a named program or test demonstrates it.
   shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
   to do: GOG GALAXY's client, signing in to Steam (its login window opens
   and draws), Roblox's player (its anti-cheat refuses virtual machines).
+- Windows Calculator (github.com/microsoft/calculator): ~~its engine,
+  CalcManager, in a Win32 `calc.exe` with the Standard, Scientific and
+  Programmer calculators~~ Done (`calc`); the converters (CalcManager's
+  `UnitConverter` needs the Concurrency Runtime's `task<>`, and the unit
+  and currency data comes from the app's C# view models); then the
+  shipped UWP package itself, which needs MSIX deployment, WinRT
+  activation, `Windows.UI.Xaml` with WinUI 2 and the UWP .NET runtime.
 
 <!-- END generated:next-apps -->
 
@@ -618,7 +625,7 @@ item ends when a named program or test demonstrates it.
 
 ---
 
-## After 0.1: Phases 23 to 30
+## After 0.1: Phases 23 to 31
 
 These phases follow the first release. They keep the rule of Phases 15 to
 22: each step is one focused change with a check anyone can repeat. A
@@ -870,6 +877,33 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
 The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
 minidriver) is built; test `hid`.  Later, only when a target device
 needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
+
+### Phase 31: DOS programs
+
+**Goal:** 16-bit DOS programs (`.COM` and `.EXE`) run in a NovaOS console
+window, started from `cmd.exe` or Explorer, as they did on Windows through
+NTVDM. The DOS is MS-DOS 4.00 built from Microsoft's MIT-licensed source
+([github.com/microsoft/MS-DOS](https://github.com/microsoft/MS-DOS)),
+unchanged; since x86-64 long mode has no virtual-8086 mode, it runs on a
+small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
+
+- [ ] **31.1 Build MS-DOS 4.0 from source.** CI builds `v4.0/src` with
+  the tree's own MASM, C compiler, LINK and NMAKE
+  (`tools/msdos/build_msdos.py`) and boots the result from a floppy image
+  in QEMU (`tools/msdos/boot_test.py`): `COMMAND.COM` reports
+  "MS-DOS Version 4.00" and `MEM.EXE` runs.
+- [ ] **31.2 A real-mode CPU and a PC BIOS for it.** An 8086/80286
+  interpreter (MIT/zlib/BSD code, no GPL) with the BIOS services DOS uses
+  (video text mode, keyboard, disk, clock) on a NovaOS console window;
+  the built `IO.SYS` and `MSDOS.SYS` boot on it to the `COMMAND.COM`
+  prompt.
+- [ ] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
+  on a 16-bit image starts the DOS host (as Windows starts `ntvdm.exe`),
+  so a `.COM` or `.EXE` runs from `cmd.exe`, the Terminal and Explorer,
+  with the NovaOS drives visible to DOS.
+- [ ] **31.4 Programs and documentation.** A DOS utility and a freeware
+  DOS game bundled for CI, their compatibility entries, a screenshot,
+  and the user guide.
 
 ---
 

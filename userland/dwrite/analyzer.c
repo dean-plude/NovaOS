@@ -6,9 +6,15 @@
 DEFINE_GUID(IID_IDWriteTextAnalyzer, 0xb7e6163e, 0x7f46, 0x43b4, 0x84,0xb3, 0xe4,0xe6,0x24,0x9c,0x36,0x5d);
 
 typedef struct { UINT16 script, shapes; } ScriptAnalysis;
+typedef struct {
+    BYTE break_before : 2;
+    BYTE break_after : 2;
+    BYTE whitespace : 1;
+    BYTE soft_hyphen : 1;
+    BYTE padding : 2;
+} LineBreakpoint;
 typedef struct { UINT16 bits; } ShapingTextProperties;
 typedef struct { UINT16 bits; } ShapingGlyphProperties;
-typedef struct { UINT32 isoScriptCode, isoScriptNumber, clusterLookahead, justificationCharacter, flags; } ScriptProperties;
 typedef struct { INT32 x_advance, y_advance, x_offset, y_offset, var; } HbPosition;
 typedef struct { UINT32 codepoint, mask, cluster, var1, var2; } HbInfo;
 
@@ -61,6 +67,7 @@ static BOOL hb_load(void)
             g_hb.module = module;
             g_hb_state = 1;
         } else {
+            if (module) FreeLibrary(module);
             g_hb_state = -1;
             dw_log("novatext.dll unavailable to DirectWrite text analyzer");
         }
@@ -86,8 +93,9 @@ static HRESULT shape_text(const WCHAR *text, UINT32 length, FontFace *face, BOOL
 {
     memset(shaped, 0, sizeof(*shaped));
     if (!text || !face || !face->face || !face->face->file || !face->face->file->bytes ||
-        length > 0x7fffffff || !hb_load())
+        length > 0x7fffffff)
         return E_INVALIDARG;
+    if (!hb_load()) return E_FAIL;
 
     FaceData *fd = face->face;
     void *blob = g_hb.blob_create((const char *)fd->file->bytes, fd->file->size, 1, NULL, NULL);
@@ -199,6 +207,7 @@ static UINT16 script_of(UINT32 c)
 }
 
 typedef HRESULT (STDMETHODCALLTYPE *SetScriptAnalysis)(void *, UINT32, UINT32, const ScriptAnalysis *);
+typedef HRESULT (STDMETHODCALLTYPE *SetLineBreakpoints)(void *, UINT32, UINT32, const LineBreakpoint *);
 typedef HRESULT (STDMETHODCALLTYPE *SetBidiLevel)(void *, UINT32, UINT32, BYTE, BYTE);
 typedef UINT32 (STDMETHODCALLTYPE *GetParagraphReadingDirection)(void *);
 
@@ -229,6 +238,39 @@ static HRESULT STDMETHODCALLTYPE analyzer_script(TextAnalyzer *analyzer, void *s
         ScriptAnalysis analysis = { script, 0 };
         hr = ((SetScriptAnalysis)VT(sink)[3])(sink, position + run, length - run, &analysis);
     }
+    dw_free(text);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE analyzer_linebreaks(TextAnalyzer *analyzer, void *source, UINT32 position, UINT32 length, void *sink)
+{
+    (void)analyzer;
+    if (!source || !sink) return E_INVALIDARG;
+    WCHAR *text = NULL;
+    HRESULT hr = source_copy(source, position, length, &text);
+    if (FAILED(hr) || !length) { dw_free(text); return hr; }
+    LineBreakpoint *breaks = dw_zalloc((SIZE_T)length * sizeof(*breaks));
+    if (!breaks) { dw_free(text); return E_OUTOFMEMORY; }
+    for (UINT32 i = 0; i < length; i++) {
+        UINT32 c = text[i];
+        if (c == '\r' || c == '\n' || c == 0x2028 || c == 0x2029) {
+            breaks[i].break_after = 3;
+        } else if (c == ' ' || c == '\t' || c == 0x3000 || c == 0x00a0 ||
+                   (c >= 0x2000 && c <= 0x200a)) {
+            breaks[i].break_after = 1;
+            breaks[i].whitespace = 1;
+        } else if (c == '-' || c == 0x2010 || c == 0x2013) {
+            breaks[i].break_after = 1;
+        } else if (c == 0x00ad) {
+            breaks[i].break_after = 1;
+            breaks[i].soft_hyphen = 1;
+        }
+        if (i && (text[i - 1] == ' ' || text[i - 1] == '\t' || text[i - 1] == '-' ||
+                  text[i - 1] == 0x2010 || text[i - 1] == 0x2013 || text[i - 1] == 0x00ad))
+            breaks[i].break_before = 1;
+    }
+    hr = ((SetLineBreakpoints)VT(sink)[4])(sink, position, length, breaks);
+    dw_free(breaks);
     dw_free(text);
     return hr;
 }
@@ -393,63 +435,10 @@ static HRESULT STDMETHODCALLTYPE analyzer_gdi_placements(TextAnalyzer *analyzer,
                                features, feature_lengths, feature_ranges, advances, offsets);
 }
 
-static HRESULT STDMETHODCALLTYPE analyzer_complexity(TextAnalyzer *analyzer, const WCHAR *text, UINT32 length, void *font_face,
-                                                       BOOL *simple, UINT32 *text_length, UINT16 *glyph_indices)
-{
-    (void)analyzer;
-    if (!simple || !text_length || (length && (!text || !font_face || !glyph_indices))) return E_INVALIDARG;
-    *simple = TRUE;
-    *text_length = length;
-    typedef HRESULT (STDMETHODCALLTYPE *GetGlyphIndices)(void *, const UINT32 *, UINT32, UINT16 *);
-    GetGlyphIndices get_indices = (GetGlyphIndices)VT(font_face)[11];
-    for (UINT32 i = 0; i < length; i++) {
-        UINT32 c = text[i];
-        if (c >= 0xd800 && c <= 0xdbff && i + 1 < length && text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) {
-            *simple = FALSE;
-            i++;
-            continue;
-        }
-        if ((c >= 0xd800 && c <= 0xdfff) || (c >= 0x0300 && c <= 0x036f)) *simple = FALSE;
-        HRESULT hr = get_indices(font_face, &c, 1, &glyph_indices[i]);
-        if (FAILED(hr)) return hr;
-        if (!glyph_indices[i]) *simple = FALSE;
-    }
-    return S_OK;
-}
-
-static HRESULT STDMETHODCALLTYPE analyzer_orientation(TextAnalyzer *analyzer, UINT32 angle, BOOL sideways, FLOAT x, FLOAT y, DW_MATRIX *matrix)
-{
-    (void)analyzer; (void)sideways;
-    if (!matrix || angle > 3) return E_INVALIDARG;
-    *matrix = (DW_MATRIX){0};
-    if (angle == 0) matrix->m11 = matrix->m22 = 1;
-    else if (angle == 1) { matrix->m12 = 1; matrix->m21 = -1; }
-    else if (angle == 2) matrix->m11 = matrix->m22 = -1;
-    else { matrix->m12 = -1; matrix->m21 = 1; }
-    matrix->dx = x;
-    matrix->dy = y;
-    return S_OK;
-}
-
-static HRESULT STDMETHODCALLTYPE analyzer_script_properties(TextAnalyzer *analyzer, ScriptAnalysis script, ScriptProperties *properties)
-{
-    (void)analyzer; (void)script;
-    if (!properties) return E_INVALIDARG;
-    memset(properties, 0, sizeof(*properties));
-    return S_OK;
-}
-
-static HRESULT STDMETHODCALLTYPE analyzer_unimplemented(void *self, ...)
-{
-    (void)self;
-    return E_NOTIMPL;
-}
-
 static const void *const analyzer_vtbl[] = {
     analyzer_qi, analyzer_addref, analyzer_release,
-    analyzer_script, analyzer_bidi, analyzer_numbers, analyzer_glyphs, analyzer_placements,
-    analyzer_gdi_placements, analyzer_unimplemented, analyzer_unimplemented, analyzer_unimplemented,
-    analyzer_orientation, analyzer_script_properties, analyzer_complexity
+    analyzer_script, analyzer_bidi, analyzer_numbers, analyzer_linebreaks, analyzer_glyphs, analyzer_placements,
+    analyzer_gdi_placements
 };
 
 HRESULT text_analyzer_create(void **out)

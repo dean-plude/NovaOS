@@ -68,7 +68,7 @@ static HRESULT STDMETHODCALLTYPE src_subst(IDWriteTextAnalysisSource *s, UINT32 
 }
 static IDWriteTextAnalysisSourceVtbl src_vtbl = { src_qi, src_addref, src_release, src_text, src_before, src_dir, src_locale, src_subst };
 
-typedef struct { IDWriteTextAnalysisSink iface; UINT32 scripts, bidi; } Sink;
+typedef struct { IDWriteTextAnalysisSink iface; UINT32 scripts, breaks, bidi; } Sink;
 static HRESULT STDMETHODCALLTYPE sink_qi(IDWriteTextAnalysisSink *s, REFIID iid, void **out) { (void)iid; *out = s; return S_OK; }
 static ULONG STDMETHODCALLTYPE sink_addref(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
 static ULONG STDMETHODCALLTYPE sink_release(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
@@ -80,7 +80,12 @@ static HRESULT STDMETHODCALLTYPE sink_script(IDWriteTextAnalysisSink *s, UINT32 
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE sink_breaks(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, const DWRITE_LINE_BREAKPOINT *b)
-{ (void)s; (void)pos; (void)len; (void)b; return S_OK; }
+{
+    Sink *sink = (Sink *)s;
+    (void)pos; (void)b;
+    if (len) sink->breaks++;
+    return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE sink_bidi(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, UINT8 explicit_level, UINT8 resolved_level)
 {
     Sink *sink = (Sink *)s;
@@ -166,9 +171,11 @@ int main(void)
     if (analyzer) {
         const WCHAR analysis_text[] = L"Latin العربية";
         Source source = { { &src_vtbl }, analysis_text, (UINT32)wcslen(analysis_text) };
-        Sink sink = { { &sink_vtbl }, 0, 0 };
+        Sink sink = { { &sink_vtbl }, 0, 0, 0 };
         CHECK("IDWriteTextAnalyzer AnalyzeScript", SUCCEEDED(V(analyzer, AnalyzeScript)(analyzer, &source.iface, 0,
               source.len, &sink.iface)) && sink.scripts >= 2);
+        CHECK("IDWriteTextAnalyzer AnalyzeLineBreakpoints", SUCCEEDED(V(analyzer, AnalyzeLineBreakpoints)(analyzer,
+              &source.iface, 0, source.len, &sink.iface)) && sink.breaks > 0);
         CHECK("IDWriteTextAnalyzer AnalyzeBidi", SUCCEEDED(V(analyzer, AnalyzeBidi)(analyzer, &source.iface, 0,
               source.len, &sink.iface)) && sink.bidi > 0);
     }

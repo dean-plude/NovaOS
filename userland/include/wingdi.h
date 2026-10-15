@@ -47,6 +47,7 @@ typedef struct NOVA_DC {
     int      nclip_rects;  /* > 1: the clip region is these rectangles (device pixels, not overlapping) */
     RECT     clip_rects[NOVA_DC_CLIP_RECTS];
     int      arc_dir;      /* AD_CLOCKWISE (2), or 0 for counterclockwise */
+    int      screen;       /* the screen's DC (GetDC(NULL)): BitBlt from it reads what the screen shows */
 } NOVA_DC;
 
 #define TRANSPARENT 1

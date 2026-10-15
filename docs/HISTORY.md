@@ -13429,6 +13429,73 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## MS-DOS 4.0 built from Microsoft's source
+
+Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran
+them).  `tools/msdos/build_msdos.py` builds MS-DOS 4.00 from the source
+Microsoft published under the MIT licence (github.com/microsoft/MS-DOS,
+`v4.0/src`, pinned commit) with the tree's own MASM, C compiler, LINK and
+NMAKE, run in a headless DOSBox, in under two minutes.  The only changes to
+the source are DOS line ends (EXE2BIN waited forever for the carriage
+return of its answer file `BIOS\LOCSCR`) and one byte for each UTF-8
+replacement character the publication left where code page 437 bytes were
+(one comment line in `MAPPER\GETMSG.ASM` had grown past MASM's line
+limit).  `tools/msdos/boot_test.py` boots the result from a floppy image in
+QEMU, and `COMMAND.COM` runs `VER`, `DIR` and `MEM.EXE`.  A new CI job, MS-DOS
+4.0, runs both and keeps the 63 built files.  [dos.md](dos.md) has the
+details and the next steps: a real-mode CPU and BIOS (31.2), starting DOS
+programs from `cmd.exe` and Explorer (31.3).
+
+## ShareX captures the screen
+
+Roadmap step 27.1 (grow the corpus), its fortieth GUI app: ShareX 19.0.1,
+the screenshot tool the App Store lists.  It is not a .NET 8 program as the
+catalog said: ShareX 18 and later ship as a portable zip with their own
+.NET 9 runtime (Windows Forms), so the Store entry now points at that zip
+and needs no runtime of its own.  The nightly corpus installs it, starts
+`C:\Programs\ShareX\ShareX.exe`, presses Print Screen (ShareX's "capture
+entire screen" hot key) and checks that a PNG lands in ShareX's
+`Screenshots` folder (`tests/appcorpus/960-sharex.py`); the main window
+must match `tests/reference/sharex.png`.  It needed these NovaOS fixes:
+
+- **SendMessageCallback returns at once.**  To another thread's window it
+  now queues the message and calls the callback in the sending thread
+  once the window answered, as Windows does.  WinForms sends its system
+  events window a colour change this way and pumps messages until the
+  callback runs; the old send waited for the answer and ShareX never
+  showed its window.
+- **Hot keys.**  `RegisterHotKey` and `UnregisterHotKey` are real: the
+  desktop turns a registered key press into `WM_HOTKEY` for the window
+  that registered it (a new GUI control, `CTL_HOTKEY`).
+- **Screen capture.**  `BitBlt` and `StretchBlt` from the screen DC
+  (`GetDC(NULL)`) read the composed desktop through a new GUI control,
+  `CTL_SCREEN_READ`; they used to copy black.
+- **SHGetFileInfoW writes only what it is given.**  ShareX passes the size
+  of the ANSI structure; NovaOS wrote the whole wide one past the end of
+  the caller's buffer, which .NET reported as a stack overflow.
+- **Image lists are COM objects.**  An `HIMAGELIST` is now also an
+  `IImageList`/`IImageList2` (its vtable comes first, as on Windows), and
+  `SHGetImageList` hands out that interface; ShareX calls it through COM.
+- **TaskbarList.**  `shell32` provides the TaskbarList class
+  (`ITaskbarList` to `ITaskbarList4`, registered under its CLSID); every
+  call succeeds and changes nothing yet.  Without it ShareX showed an
+  error box after each capture.  `comtest` (64- and now 32-bit) calls
+  every method and checks that each leaves a 32-bit caller's stack as it
+  was.
+- **One COM context per apartment thread.**  `CoGetContextToken` gave all
+  single-threaded apartments the same token, and .NET, which keys its COM
+  wrappers by that token, released the UI thread's wrappers when a worker
+  thread ended ("COM object that has been separated from its underlying
+  RCW").
+- **GDI+ GetHdc on a bitmap.**  `GdipGetDC` on a bitmap's graphics now
+  gives a memory DC on a copy of its pixels, copied back on release (it
+  returned "Not implemented"); WinForms' `TextRenderer` draws ShareX's
+  notification text this way.
+- **Smaller fixes.**  `SetWindowPos` with `SWP_HIDEWINDOW` hides a
+  top-level window (WinForms' `Hide`), `GetFullPathName` keeps
+  `\\.\pipe\` names as they are (ShareX's single-instance pipe), and
+  `CoWaitForMultipleHandles` returns `RPC_S_CALLPENDING` on a timeout.
+
 ## The Windows Imaging Component
 
 NovaOS's `windowscodecs.dll` was four stubs, so a WPF program stopped at

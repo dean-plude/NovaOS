@@ -158,6 +158,7 @@ typedef int (*GdiCurveFn)(int x_256, void *ctx);
 void GdiFillUnderCurve(GdiRect r, GdiCurveFn fn, void *ctx, GdiColor c);
 
 void GdiPutPixel(int x, int y, GdiColor c);
+void GdiReadScreen(int x, int y, int w, int h, UINT32 *out);   /* logical px as 0x00RRGGBB */
 
 /* Blit a user window bitmap (GdiColor/COLORREF pixels) into a logical rect. */
 void GdiBlitBGRA(GdiRect dst, const UINT32 *src, int src_stride);

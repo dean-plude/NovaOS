@@ -41,6 +41,8 @@ GDIPAPI GpStatus GDIPCALL GdipCreateFromHWND(HWND w, GpGraphics **out)
 }
 GDIPAPI GpStatus GDIPCALL GdipCreateFromHWNDICM(HWND w, GpGraphics **out) { return GdipCreateFromHWND(w, out); }
 
+GDIPAPI GpStatus GDIPCALL GdipReleaseDC(GpGraphics *g, HDC hdc);
+
 GDIPAPI GpStatus GDIPCALL GdipGetImageGraphicsContext(GpImage *i, GpGraphics **out)
 {
     if (!i || !out) return InvalidParameter;
@@ -56,6 +58,7 @@ GDIPAPI GpStatus GDIPCALL GdipGetImageGraphicsContext(GpImage *i, GpGraphics **o
 GDIPAPI GpStatus GDIPCALL GdipDeleteGraphics(GpGraphics *g)
 {
     if (!g) return InvalidParameter;
+    if (g->dib_dc) GdipReleaseDC(g, g->dib_dc);
     if (g->c) plutovg_canvas_destroy(g->c);
     if (g->hwnd) ReleaseDC(g->hwnd, g->hdc);
     gdip_region_reset(&g->clip);
@@ -63,14 +66,69 @@ GDIPAPI GpStatus GDIPCALL GdipDeleteGraphics(GpGraphics *g)
     return Ok;
 }
 
+/* On a bitmap, as GDI+ does: a memory DC on a 32-bit DIB holding the
+ * bitmap's pixels (both premultiplied BGRA), copied back on release.  GDI
+ * leaves alpha 0 where it draws, so a pixel GDI changed becomes opaque
+ * (WinForms' TextRenderer draws ShareX's notification text this way). */
 GDIPAPI GpStatus GDIPCALL GdipGetDC(GpGraphics *g, HDC *hdc)
 {
     if (!g || !hdc) return InvalidParameter;
-    if (!g->hdc) return NotImplemented;
-    *hdc = g->hdc;
+    if (g->hdc) { *hdc = g->hdc; return Ok; }
+    if (!g->img || !g->img->s) return NotImplemented;
+    if (g->dib_dc) return ObjectBusy;
+    plutovg_surface_t *s = g->img->s;
+    int w = plutovg_surface_get_width(s), h = plutovg_surface_get_height(s), st = plutovg_surface_get_stride(s);
+    BITMAPINFO bi = { 0 };
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HDC dc = CreateCompatibleDC(NULL);
+    HBITMAP bmp = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0) : NULL;
+    UINT32 *snap = bmp ? xalloc((size_t)w * h * 4) : NULL;
+    if (!snap) {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        return OutOfMemory;
+    }
+    const BYTE *src = plutovg_surface_get_data(s);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            snap[y * w + x] = ((UINT32 *)bits)[y * w + x] = ((const UINT32 *)(src + y * st))[x];
+    g->dib_dc = dc;
+    g->dib = bmp;
+    g->dib_old = SelectObject(dc, bmp);
+    g->dib_bits = bits;
+    g->dib_snap = snap;
+    *hdc = dc;
     return Ok;
 }
-GDIPAPI GpStatus GDIPCALL GdipReleaseDC(GpGraphics *g, HDC hdc) { return g && hdc == g->hdc ? Ok : InvalidParameter; }
+GDIPAPI GpStatus GDIPCALL GdipReleaseDC(GpGraphics *g, HDC hdc)
+{
+    if (!g || !hdc) return InvalidParameter;
+    if (g->hdc) return hdc == g->hdc ? Ok : InvalidParameter;
+    if (!g->dib_dc || hdc != g->dib_dc) return InvalidParameter;
+    GdiFlush();
+    plutovg_surface_t *s = g->img->s;
+    int w = plutovg_surface_get_width(s), h = plutovg_surface_get_height(s), st = plutovg_surface_get_stride(s);
+    BYTE *dst = plutovg_surface_get_data(s);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            UINT32 p = g->dib_bits[y * w + x];
+            if (p != g->dib_snap[y * w + x]) ((UINT32 *)(dst + y * st))[x] = p | 0xFF000000u;
+        }
+    SelectObject(g->dib_dc, g->dib_old);
+    DeleteObject(g->dib);
+    DeleteDC(g->dib_dc);
+    xfree(g->dib_snap);
+    g->dib_dc = NULL;
+    g->dib = g->dib_old = NULL;
+    g->dib_bits = g->dib_snap = NULL;
+    return Ok;
+}
 
 #define STATE_PAIR(Name, field, type)                                                              \
     GDIPAPI GpStatus GDIPCALL GdipSet##Name(GpGraphics *g, type v) { if (!g) return InvalidParameter; g->field = (int)v; return Ok; } \

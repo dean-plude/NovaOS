@@ -22,6 +22,9 @@ typedef struct Sent {
     int notify;                     /* SendNotifyMessage: nobody waits */
     void (*fn)(void *);             /* x_send_queue: run this instead (another process's call) */
     void *arg;
+    void (CALLBACK *cb)(HWND, UINT, ULONG_PTR, LRESULT);   /* SendMessageCallback: called in the sender's thread */
+    ULONG_PTR cb_data;
+    DWORD from;                     /* (its thread) */
 } Sent;
 
 /* A queued message and its extra information (GetMessageExtraInfo) */
@@ -316,6 +319,14 @@ static LRESULT send_cross(Wnd *w, UINT msg, WPARAM wp, LPARAM lp, int wide, DWOR
     return r;
 }
 
+/* A SendMessageCallback message's answer, back in the thread that sent it */
+static void answer_callback(void *arg)
+{
+    Sent *s = arg;
+    s->cb(s->h, s->msg, s->cb_data, s->result);
+    free(s);
+}
+
 void process_sent(void)
 {
     TQ *q = tq_for(GetCurrentThreadId(), 0);
@@ -337,6 +348,7 @@ void process_sent(void)
         q->in_send++;
         LRESULT r = w ? call_proc(w, w->proc, w->wide, s->h, s->msg, s->wp, s->lp, s->wide) : 0;
         q->in_send--;
+        if (s->cb) { s->result = r; x_send_queue(s->from, answer_callback, s); continue; }
         if (s->notify) { if (s->ev) CloseHandle(s->ev); free(s); continue; }
         s->result = r;
         InterlockedExchange(&s->done, 1);
@@ -438,17 +450,40 @@ USERAPI BOOL SendNotifyMessageW(HWND h, UINT msg, WPARAM wp, LPARAM lp) { return
 USERAPI BOOL SendNotifyMessageA(HWND h, UINT msg, WPARAM wp, LPARAM lp) { return send_notify(h, msg, wp, lp, 0); }
 
 typedef VOID (CALLBACK *SENDASYNCPROC_)(HWND, UINT, ULONG_PTR, LRESULT);
-USERAPI BOOL SendMessageCallbackW(HWND h, UINT msg, WPARAM wp, LPARAM lp, SENDASYNCPROC_ fn, ULONG_PTR data)
+/* To another thread's window it returns at once, as on Windows: the window
+ * procedure runs in that thread and @fn in this one once it answered, when
+ * this thread next looks at its messages.  WinForms sends the system events
+ * window a colour change this way and pumps messages until @fn ran, while
+ * that window's thread passes the change back to it (a wait for ever when
+ * the send waited for the answer: ShareX never showed its window) */
+static BOOL send_callback(HWND h, UINT msg, WPARAM wp, LPARAM lp, SENDASYNCPROC_ fn, ULONG_PTR data, int wide)
 {
-    LRESULT r = SendMessageW(h, msg, wp, lp);
+    Wnd *w = W_quiet(h);
+    if (w && w->tid && w->tid != GetCurrentThreadId() && fn) {
+        TQ *q = tq_for(w->tid, 1);
+        Sent *s = calloc(1, sizeof(Sent));
+        if (!q || !s) { free(s); return FALSE; }
+        s->h = h; s->msg = msg; s->wp = wp; s->lp = lp; s->wide = wide; s->notify = 1;
+        s->cb = fn; s->cb_data = data; s->from = GetCurrentThreadId();
+        LOCK();
+        Sent **pp = &q->sent;
+        while (*pp) pp = &(*pp)->next;
+        *pp = s;
+        UNLOCK();
+        wake(w->tid);
+        return TRUE;
+    }
+    LRESULT r = send_any(h, msg, wp, lp, wide);
     if (fn) fn(h, msg, data, r);
     return TRUE;
 }
+USERAPI BOOL SendMessageCallbackW(HWND h, UINT msg, WPARAM wp, LPARAM lp, SENDASYNCPROC_ fn, ULONG_PTR data)
+{
+    return send_callback(h, msg, wp, lp, fn, data, 1);
+}
 USERAPI BOOL SendMessageCallbackA(HWND h, UINT msg, WPARAM wp, LPARAM lp, SENDASYNCPROC_ fn, ULONG_PTR data)
 {
-    LRESULT r = SendMessageA(h, msg, wp, lp);
-    if (fn) fn(h, msg, data, r);
-    return TRUE;
+    return send_callback(h, msg, wp, lp, fn, data, 0);
 }
 
 USERAPI BOOL InSendMessage(void) { TQ *q = tq_for(GetCurrentThreadId(), 0); return q && q->in_send; }
@@ -889,6 +924,11 @@ static void from_kernel_(Wnd *top, const MSG *kmsg, UINT32 pen)
     case WM_NOVA_DPI: dpi_monitors_changed(top); break;
     case WM_DEVICECHANGE: devnotify_kernel((DWORD)km->lParam); break;   /* (devnotify.c sends the messages) */
     case WM_CHAR: case WM_SYSCHAR: break;                  /* TranslateMessage makes these, as on Windows */
+    case 0x0312: {                                          /* WM_HOTKEY: to the window that registered it */
+        HWND hk = hotkey_window(top->kid, (int)km->wParam);
+        if (hk) PostMessageW(hk, 0x0312, km->wParam, km->lParam);
+        break;
+    }
     case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
         if (!raw_nolegacy(TRUE)) route_key(top, km);         /* (RIDEV_NOLEGACY: raw input only) */
         break;

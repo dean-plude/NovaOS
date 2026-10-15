@@ -170,6 +170,9 @@ static KSpinLock g_gui_lock = KSPINLOCK_INIT;
 static WaitQueue g_guiq = WAITQ_INIT;
 static UINT8 g_keydown[256];        /* keys held (auto-repeat sets lParam bit 30) */
 
+#define GUI_HOTKEYS 64
+static struct { bool used; UmProcess *proc; UINT32 win; INT32 id; UINT32 mods, vk; } g_hotkey[GUI_HOTKEYS];
+
 static GuiWin *win_of_handle(UmProcess *p, UINT64 h)
 {
     for (int i = 0; i < GUI_MAX_WINDOWS; i++)
@@ -1322,6 +1325,19 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  *               3 arg >> 8: wait up to that many ms for the events queued
  *                 so far to be written: 1 they are, 0 not yet, 2 no service */
 #define CTL_EVENTLOG       60
+/* RegisterHotKey (user32): a key combination taken for a window from
+ * every program, as on Windows; the desktop's key handling gives it
+ * WM_HOTKEY (wParam the id, lParam MAKELPARAM(MOD_* held, vk)) instead
+ * of the window with the keyboard (UmGuiHotkey).  By arg's low byte:
+ *  61 HOTKEY  0 hwnd: the caller's window; ptr -> { id, MOD_* (MOD_NOREPEAT
+ *               too), vk }: 1 taken, 2 another window has that combination,
+ *               0 no such window or the table is full
+ *             1 hwnd, ptr -> { id }: 1 let go of, 0 none */
+#define CTL_HOTKEY         61
+/* CTL_SCREEN_READ: a4 -> { INT32 x, y, w, h; UINT64 pixels }: what the
+ * screen shows there (logical pixels, 0x00RRGGBB, w per row); gdi32's
+ * BitBlt from the screen's DC (ShareX's captures) */
+#define CTL_SCREEN_READ    62
 #define GUI_TAGS         2048
 #define GUI_TAG_MIN      4               /* keeps every handle above 0xFFFF */
 #define GUI_TAG_SHIFT    14
@@ -2201,6 +2217,64 @@ static void present_damage(UINT32 id, UINT64 ptr)
     if (x1 > x0 && y1 > y0) WmInvalidateRect(RECT(cr.x + x0, cr.y + y0, x1 - x0, y1 - y0));
 }
 
+/* CTL_HOTKEY: RegisterHotKey and UnregisterHotKey for window @h */
+static UINT64 hotkey_ctl(UmProcess *p, UINT64 h, UINT64 arg, UINT64 ptr)
+{
+    INT32 in[3] = { 0, 0, 0 };
+    if (!NT_SUCCESS(CopyFromUser(in, (const void *)(uintptr_t)ptr, (arg & 0xFF) == 0 ? sizeof(in) : sizeof(INT32)))) return 0;
+    UINT64 rv = 0;
+    IrqState s = spin_lock_irqsave(&g_gui_lock);
+    if ((arg & 0xFF) == 1) {
+        for (int i = 0; i < GUI_HOTKEYS; i++)
+            if (g_hotkey[i].used && g_hotkey[i].proc == p && g_hotkey[i].win == (UINT32)h && g_hotkey[i].id == in[0]) {
+                g_hotkey[i].used = false;
+                rv = 1;
+            }
+    } else if (win_of_handle(p, h)) {
+        UINT32 mods = (UINT32)in[1] & 0x400F, vk = (UINT32)in[2] & 0xFF;
+        int slot = -1;
+        rv = 1;
+        for (int i = 0; i < GUI_HOTKEYS && rv == 1; i++) {
+            if (!g_hotkey[i].used) { if (slot < 0) slot = i; continue; }
+            bool same = g_hotkey[i].proc == p && g_hotkey[i].win == (UINT32)h && g_hotkey[i].id == in[0];
+            if (same) slot = i;              /* (registered again: replaced, as on Windows) */
+            else if (g_hotkey[i].vk == vk && (g_hotkey[i].mods & 0xF) == (mods & 0xF)) rv = 2;
+        }
+        if (rv == 1 && slot < 0) rv = 0;
+        if (rv == 1) {
+            g_hotkey[slot].used = true; g_hotkey[slot].proc = p; g_hotkey[slot].win = (UINT32)h;
+            g_hotkey[slot].id = in[0]; g_hotkey[slot].mods = mods; g_hotkey[slot].vk = vk;
+        }
+    }
+    spin_unlock_irqrestore(&g_gui_lock, s);
+    return rv;
+}
+
+/* A key went down (the desktop's key handling, before the window with the
+ * keyboard sees it): WM_HOTKEY to the window that registered it, which
+ * then takes the key; @mods MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN held,
+ * @repeat: auto-repeat (not for MOD_NOREPEAT) */
+bool UmGuiHotkey(UINT8 sc, bool ext, UINT32 mods, bool repeat)
+{
+    UINT32 vk = UmScancodeToVk(sc, ext) & 0xFF;
+    if (!vk) return false;
+    bool hit = false;
+    UINT32 tid = 0;
+    IrqState s = spin_lock_irqsave(&g_gui_lock);
+    for (int i = 0; i < GUI_HOTKEYS && !hit; i++) {
+        if (!g_hotkey[i].used || g_hotkey[i].vk != vk || (g_hotkey[i].mods & 0xF) != mods) continue;
+        GuiWin *g = win_of_handle(g_hotkey[i].proc, g_hotkey[i].win);
+        if (!g) { g_hotkey[i].used = false; continue; }      /* its window is gone */
+        hit = true;
+        if (repeat && (g_hotkey[i].mods & 0x4000)) break;    /* MOD_NOREPEAT: taken, not sent again */
+        enqueue_locked(g, 0x0312 /* WM_HOTKEY */, (UINT64)(INT64)g_hotkey[i].id, (UINT64)(mods | vk << 16), 0, 0);
+        tid = g->tid;
+    }
+    spin_unlock_irqrestore(&g_gui_lock, s);
+    if (tid) gui_wake(tid, 0x0312);
+    return hit;
+}
+
 static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     UmProcess *p = UmCurrent();
@@ -2249,6 +2323,24 @@ static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         }
         DesktopUnlock();
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, out, sizeof(out))) ? 1 : 0;
+    }
+    if (a2 == CTL_HOTKEY) return hotkey_ctl(p, a1, a3, a4);
+    if (a2 == CTL_SCREEN_READ) {
+        struct { INT32 x, y, w, h; UINT64 out; } q;
+        if (!NT_SUCCESS(CopyFromUser(&q, (const void *)(uintptr_t)a4, sizeof(q))) || q.w <= 0 || q.h <= 0 || q.w > 16384 || q.h > 16384)
+            return 0;
+        UINT32 *row = kmalloc((size_t)q.w * 4 * 16);
+        if (!row) return 0;
+        UINT64 ok = 1;
+        for (int y = 0; y < q.h && ok; y += 16) {
+            int n = q.h - y < 16 ? q.h - y : 16;
+            DesktopLock();
+            GdiReadScreen(q.x, q.y + y, q.w, n, row);
+            DesktopUnlock();
+            if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)(q.out + (UINT64)y * q.w * 4), row, (size_t)q.w * 4 * n))) ok = 0;
+        }
+        kfree(row);
+        return ok;
     }
     if (a2 == CTL_ACCEPT_DROPS) {
         IrqState s = spin_lock_irqsave(&g_gui_lock);
@@ -2560,6 +2652,7 @@ void um_gui_process_gone(UmProcess *p)
     }
     xmsg_process_gone(p);
     IrqState ts = spin_lock_irqsave(&g_gui_lock);
+    for (int i = 0; i < GUI_HOTKEYS; i++) if (g_hotkey[i].proc == p) g_hotkey[i].used = false;
     for (int i = GUI_TAG_MIN; i < GUI_TAGS; i++) if (g_tag_proc[i] == p) g_tag_proc[i] = NULL;
     spin_unlock_irqrestore(&g_gui_lock, ts);
     WmInvalidate();

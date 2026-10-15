@@ -1134,6 +1134,7 @@ CCAPI_ BOOL WINAPI ImageList_GetIconSize(HIMAGELIST h, int *cx, int *cy);
 CCAPI_ BOOL WINAPI ImageList_Draw(HIMAGELIST h, int i, HDC dc, int x, int y, UINT style);
 CCAPI_ BOOL WINAPI ImageList_DrawEx(HIMAGELIST h, int i, HDC dc, int x, int y, int cx, int cy, COLORREF bk, COLORREF fg, UINT style);
 CCAPI_ HICON WINAPI ImageList_GetIcon(HIMAGELIST h, int i, UINT flags);
+CCAPI_ HRESULT WINAPI HIMAGELIST_QueryInterface(HIMAGELIST h, REFIID iid, void **out);
 CCAPI_ BOOL WINAPI ImageList_Remove(HIMAGELIST h, int i);
 CCAPI_ COLORREF WINAPI ImageList_SetBkColor(HIMAGELIST h, COLORREF c);
 struct IStream;

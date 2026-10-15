@@ -856,6 +856,22 @@ static int can_fast(NOVA_DC *dd, int w, int h, NOVA_DC *sd, int sw, int sh, DWOR
     return sd && dd->bits && sd->bits && sd->bits != dd->bits && w > 0 && h > 0 && w == sw && h == sh && rop == SRCCOPY && !dd->rop2;
 }
 
+/* A copy of what the screen shows from (@sx, @sy), @w * @h pixels, as a
+ * DC to copy from (the kernel's desktop; the screen's own DC is only a
+ * small scratch bitmap).  Screen capture programs (ShareX) BitBlt from
+ * GetDC(NULL) or the desktop window's DC.  Free its bits after. */
+static int screen_copy(NOVA_DC *t, int sx, int sy, int w, int h)
+{
+    memset(t, 0, sizeof(*t));
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return 0;
+    DWORD *px = VirtualAlloc(NULL, (SIZE_T)w * h * 4, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!px) return 0;
+    struct { INT32 x, y, w, h; UINT64 out; } q = { sx, sy, w, h, (UINT64)(ULONG_PTR)px };
+    if (!NtNovaGuiCtl(0, 62 /* CTL_SCREEN_READ */, 0, &q)) { VirtualFree(px, 0, MEM_RELEASE); return 0; }
+    t->bits = px; t->stride = w; t->w = w; t->h = h; t->fmt = 1;
+    return 1;
+}
+
 GDIAPI BOOL BitBlt(HDC dst, int x, int y, int w, int hh, HDC src, int sx, int sy, DWORD rop)
 {
     NOVA_DC *dd = dc_of(dst);
@@ -867,6 +883,15 @@ GDIAPI BOOL BitBlt(HDC dst, int x, int y, int w, int hh, HDC src, int sx, int sy
         return TRUE;
     }
     NOVA_DC *sd = dc_of(src);
+    NOVA_DC shot;
+    if (sd && sd->screen && screen_copy(&shot, sx, sy, w < 0 ? -w : w, hh < 0 ? -hh : hh)) {
+        if (can_fast(dd, w, hh, &shot, w, hh, rop & ~0x40000000u /* CAPTUREBLT */)) blit_fast(dd, x, y, w, hh, &shot, 0, 0);
+        else blit(dd, x, y, w, hh, &shot, 0, 0, w, hh);
+        VirtualFree(shot.bits, 0, MEM_RELEASE);
+        flush_window(dd, x, y, w, hh);
+        dc_sync(dd);
+        return TRUE;
+    }
     dc_sync(sd);
     if (can_fast(dd, w, hh, sd, w, hh, rop)) {
         blit_fast(dd, x, y, w, hh, sd, sx, sy);
@@ -886,6 +911,14 @@ GDIAPI BOOL StretchBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int
     if (!src) return PatBlt(dst, x, y, w, h, rop);
     NOVA_DC *sd = dc_of(src);
     dc_sync(dd);
+    NOVA_DC shot;
+    if (sd && sd->screen && screen_copy(&shot, sx, sy, sw < 0 ? -sw : sw, sh < 0 ? -sh : sh)) {
+        blit(dd, x, y, w, h, &shot, 0, 0, sw, sh);
+        VirtualFree(shot.bits, 0, MEM_RELEASE);
+        flush_window(dd, x, y, w, h);
+        dc_sync(dd);
+        return TRUE;
+    }
     dc_sync(sd);
     if (can_fast(dd, w, h, sd, sw, sh, rop)) blit_fast(dd, x, y, w, h, sd, sx, sy);
     else blit(dd, x, y, w, h, sd, sx, sy, sw, sh);

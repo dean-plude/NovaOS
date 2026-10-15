@@ -149,7 +149,7 @@ WINOLEAPI_(HRESULT) CoGetCallerTID(LPDWORD tid) { if (tid) *tid = GetCurrentThre
  * ----------------------------------------------------------------------- */
 static const IID IID_IContextCallback_ = { 0x000001da, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const IID IID_IComThreadingInfo_ = { 0x000001ce, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
-typedef struct { const void *vtbl; APTTYPE type; } ObjCtx;
+typedef struct ObjCtx { const void *vtbl; APTTYPE type; struct ObjCtx *pair; } ObjCtx;   /* pair: [object, threading view] */
 typedef HRESULT (__stdcall *PFNCONTEXTCALL_)(void *data);
 
 static HRESULT __stdcall ctx_qi(ObjCtx *This, REFIID riid, void **ppv);
@@ -169,24 +169,39 @@ static const void *const g_ctx_callback_vtbl[] = { (void *)ctx_qi, (void *)ctx_a
 static const void *const g_ctx_threading_vtbl[] = { (void *)ctx_qi, (void *)ctx_addref, (void *)ctx_release,
                                                     (void *)cti_apt_type, (void *)cti_thread_type,
                                                     (void *)cti_get_logical, (void *)cti_set_logical };
-/* per apartment kind: the object (IUnknown/IContextCallback) and its threading-info view */
-static ObjCtx g_ctx_sta = { g_ctx_callback_vtbl, APTTYPE_STA }, g_ctx_mta = { g_ctx_callback_vtbl, APTTYPE_MTA };
-static ObjCtx g_cti_sta = { g_ctx_threading_vtbl, APTTYPE_STA }, g_cti_mta = { g_ctx_threading_vtbl, APTTYPE_MTA };
+/* The context: the object (IUnknown/IContextCallback) and its threading-info
+ * view.  The MTA has one; each single-threaded apartment (a thread) has
+ * its own, as on Windows: the .NET runtime keys the COM objects it wraps by
+ * this context and lets them go when the thread that owns it ends, so one
+ * shared by every STA thread cut ShareX's UI thread off from its
+ * TaskbarList when a worker thread ended ("COM object that has been
+ * separated from its underlying RCW").  A thread's context is never freed,
+ * so no later thread gets the same address as its token. */
+static ObjCtx g_mta_pair[2] = { { g_ctx_callback_vtbl, APTTYPE_MTA, g_mta_pair }, { g_ctx_threading_vtbl, APTTYPE_MTA, g_mta_pair } };
+static __declspec(thread) ObjCtx *t_sta_pair;
 
 static HRESULT __stdcall ctx_qi(ObjCtx *This, REFIID riid, void **ppv)
 {
     if (!ppv) return E_POINTER;
-    int sta = This->type == APTTYPE_STA;
-    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IContextCallback_)) { *ppv = sta ? &g_ctx_sta : &g_ctx_mta; return S_OK; }
-    if (IsEqualIID(riid, &IID_IComThreadingInfo_)) { *ppv = sta ? &g_cti_sta : &g_cti_mta; return S_OK; }
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IContextCallback_)) { *ppv = &This->pair[0]; return S_OK; }
+    if (IsEqualIID(riid, &IID_IComThreadingInfo_)) { *ppv = &This->pair[1]; return S_OK; }
     *ppv = 0;
     return E_NOINTERFACE;
 }
 
 static ObjCtx *current_ctx(void)
 {
-    if (t_inits > 0) return t_model == COINIT_APARTMENTTHREADED ? &g_ctx_sta : &g_ctx_mta;
-    return g_mta_usage > 0 ? &g_ctx_mta : 0;
+    if (t_inits > 0 && t_model == COINIT_APARTMENTTHREADED) {
+        if (!t_sta_pair) {
+            ObjCtx *p = HeapAlloc(GetProcessHeap(), 0, 2 * sizeof(ObjCtx));
+            if (!p) return 0;
+            p[0].vtbl = g_ctx_callback_vtbl; p[0].type = APTTYPE_STA; p[0].pair = p;
+            p[1].vtbl = g_ctx_threading_vtbl; p[1].type = APTTYPE_STA; p[1].pair = p;
+            t_sta_pair = p;
+        }
+        return t_sta_pair;
+    }
+    return t_inits > 0 || g_mta_usage > 0 ? g_mta_pair : 0;
 }
 
 WINOLEAPI_(HRESULT) CoGetContextToken(ULONG_PTR *token)
@@ -201,8 +216,11 @@ WINOLEAPI_(HRESULT) CoGetContextToken(ULONG_PTR *token)
 WINOLEAPI_(HRESULT) CoWaitForMultipleHandles(DWORD flags, DWORD ms, ULONG n, LPHANDLE h, LPDWORD index)
 {
     if (!h || !index || !n) return E_INVALIDARG;
-    DWORD r = WaitForMultipleObjectsEx(n, h, (flags & 1) != 0 /* COWAIT_WAITALL */, ms, (flags & 8) != 0 /* ALERTABLE */);
-    if (r == WAIT_TIMEOUT) return (HRESULT)0x8001011FL;       /* RPC_S_CALLPENDING */
+    /* a timeout is RPC_S_CALLPENDING (0x80010115), which .NET's waits on
+     * an STA thread take for "not signalled"; anything else was a failure
+     * to them (ShareX's capture: WaitOne(0) on a process threw E_FAIL) */
+    DWORD r = WaitForMultipleObjectsEx(n, h, (flags & 1) != 0 /* COWAIT_WAITALL */, ms, (flags & 2) != 0 /* COWAIT_ALERTABLE */);
+    if (r == WAIT_TIMEOUT) return (HRESULT)0x80010115L;       /* RPC_S_CALLPENDING */
     if (r == WAIT_FAILED) return HRESULT_FROM_WIN32(GetLastError());
     *index = r == WAIT_IO_COMPLETION ? 0 : r - WAIT_OBJECT_0;
     return r == WAIT_IO_COMPLETION ? (HRESULT)0x000400C0L : S_OK;

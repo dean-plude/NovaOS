@@ -1079,33 +1079,33 @@ static NtPdo *child_of(NtPdo *bus)
     return NULL;
 }
 
-/* IRP_MN_QUERY_REMOVE_DEVICE to @p and everything under it, children
- * first; on a veto, IRP_MN_CANCEL_REMOVE_DEVICE to those that agreed */
+/* Query the started descendants before @p. */
+static NT_STATUS query_remove_tree(NtPdo *p, NtPdo **asked, int *n)
+{
+    for (int i = 0; i < g_npdo; i++) {
+        NtPdo *c = g_pdo[i];
+        if (c->parent != p || !c->started) continue;
+        NT_STATUS st = query_remove_tree(c, asked, n);
+        if (!NT_SUCCESS(st)) return st;
+    }
+    PnpNotify(PNP_QUERY_REMOVE, p->node);
+    NT_STATUS st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
+    if (NT_SUCCESS(st)) {
+        asked[(*n)++] = p;
+    } else {
+        PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
+        kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
+    }
+    return st;
+}
+
+/* IRP_MN_QUERY_REMOVE_DEVICE to @p and its descendants; on a veto, cancel
+ * the devices that agreed and tell their registrations the query failed. */
 static NT_STATUS query_remove(NtPdo *p)
 {
     NtPdo *asked[MAX_PDOS];
     int n = 0;
-    NT_STATUS st = NT_STATUS_SUCCESS;
-    for (int i = 0; i < g_npdo && NT_SUCCESS(st); i++) {
-        NtPdo *c = g_pdo[i];
-        if (c->parent != p || !c->started) continue;
-        PnpNotify(PNP_QUERY_REMOVE, c->node);
-        st = send_pnp(c->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
-        if (NT_SUCCESS(st)) asked[n++] = c;
-        else {
-            PnpNotify(PNP_QUERY_REMOVE_FAILED, c->node);
-            kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", c->instance, (UINT32)st);
-        }
-    }
-    if (NT_SUCCESS(st)) {
-        PnpNotify(PNP_QUERY_REMOVE, p->node);
-        st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
-        if (!NT_SUCCESS(st)) {
-            PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
-            kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
-            send_pnp(p->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
-        }
-    }
+    NT_STATUS st = query_remove_tree(p, asked, &n);
     if (!NT_SUCCESS(st)) {
         for (int i = 0; i < n; i++) {
             PnpNotify(PNP_QUERY_REMOVE_FAILED, asked[i]->node);

@@ -4,20 +4,32 @@
  * process, its text screen in this console window.
  *
  *     ntvdm [IMAGE]
+ *     ntvdm -run PROGRAM [ARGUMENTS]
  *
  * boots IMAGE, a floppy disk image (default: DOS\MSDOS.IMG beside
  * ntvdm.exe, the MS-DOS 4.00 boot disk the build makes), as drive A:.
  * What DOS writes to the disk stays in memory: the image file is not
- * changed.  The screen is drawn on the console's alternate screen, so the
- * Terminal's own text comes back when DOS ends; F12 ends it (the shell DOS
- * boots to has no EXIT, as on a PC). */
+ * changed.  Drive C: in DOS is NovaOS's (ntvdm/redir.h), with this
+ * process's current directory as DOS's there.  The screen is drawn on the
+ * console's alternate screen, so the Terminal's own text comes back when
+ * DOS ends; F12 ends it (the shell DOS boots to has no EXIT, as on a PC).
+ *
+ * -run is how NovaOS starts a DOS program, as Windows started ntvdm.exe
+ * for one: CreateProcess, the Terminal and Explorer, given a 16-bit .COM
+ * or .EXE, start "ntvdm.exe -run PROGRAM ARGUMENTS" instead (the kernel's
+ * process start does it, kernel/um/um.c).  REDIR.COM runs PROGRAM (a path
+ * on C:) with ARGUMENTS as its command tail; when it ends, so does
+ * ntvdm.exe, with its exit code, and what it left on the screen stays in
+ * the console. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "ntvdm/pcbios.h"
 
 BOOL WINAPI SetConsoleCursorPosition(HANDLE h, COORD at);
+WINBASEAPI BOOL WINAPI FileTimeToDosDateTime(const FILETIME *ft, LPWORD date, LPWORD time);
 typedef struct { DWORD dwSize; BOOL bVisible; } CURSOR_INFO;
 BOOL WINAPI SetConsoleCursorInfo(HANDLE h, const CURSOR_INFO *info);
 BOOL WINAPI GetConsoleCursorInfo(HANDLE h, CURSOR_INFO *info);
@@ -70,6 +82,176 @@ static int to_cp437(WCHAR w)
     if (w < 0x80) return w;
     for (int i = 0; i < 128; i++) if (cp437_high[i] == w) return 0x80 + i;
     return -1;
+}
+
+/* ---- drive C: (ntvdm/redir.h): NovaOS's C:\ ---- */
+
+static void host_path(const char *path, WCHAR *out)
+{
+    char full[VDM_PATH + 4] = "C:\\";
+    strncat(full, path, VDM_PATH - 1);
+    if (!MultiByteToWideChar(CP_UTF8, 0, full, -1, out, VDM_PATH + 4)) out[0] = 0;
+}
+
+static int dos_error(void)
+{
+    DWORD e = GetLastError();
+    if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND || e == ERROR_TOO_MANY_OPEN_FILES) return (int)e;
+    return e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS ? 0x50 : 5;
+}
+
+static void file_info(const WCHAR *name, DWORD attrs, FILETIME mtime, DWORD size, VdmFile *f)
+{
+    memset(f, 0, sizeof(*f));
+    WideCharToMultiByte(CP_UTF8, 0, name, -1, f->name, (int)sizeof(f->name), NULL, NULL);
+    f->attr = (uint8_t)(attrs & 0x37);          /* (read-only, hidden, system, directory, archive: DOS's bits) */
+    f->size = attrs & FILE_ATTRIBUTE_DIRECTORY ? 0 : size;
+    FILETIME local;
+    WORD date = 0, time = 0;
+    if (FileTimeToLocalFileTime(&mtime, &local) && FileTimeToDosDateTime(&local, &date, &time)) {
+        f->date = date;
+        f->time = time;
+    }
+}
+
+static int fs_list(void *ctx, const char *dir, int (*fn)(void *arg, const VdmFile *f), void *arg)
+{
+    (void)ctx;
+    WCHAR pat[VDM_PATH + 8];
+    host_path(dir, pat);
+    size_t n = wcslen(pat);
+    if (n && pat[n - 1] != L'\\') pat[n++] = L'\\';
+    pat[n++] = L'*';
+    pat[n] = 0;
+    WIN32_FIND_DATAW d;
+    HANDLE h = FindFirstFileW(pat, &d);
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : 3;
+    do {
+        if (!wcscmp(d.cFileName, L".") || !wcscmp(d.cFileName, L"..")) continue;
+        VdmFile f;
+        file_info(d.cFileName, d.dwFileAttributes, d.ftLastWriteTime, d.nFileSizeHigh ? 0xFFFFFFFF : d.nFileSizeLow, &f);
+        if (fn(arg, &f)) break;
+    } while (FindNextFileW(h, &d));
+    FindClose(h);
+    return 0;
+}
+
+static int fs_stat(void *ctx, const char *path, VdmFile *f)
+{
+    (void)ctx;
+    WCHAR p[VDM_PATH + 4];
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    host_path(path, p);
+    if (!GetFileAttributesExW(p, GetFileExInfoStandard, &a)) return dos_error();
+    const WCHAR *base = wcsrchr(p, L'\\');
+    file_info(base ? base + 1 : p, a.dwFileAttributes, a.ftLastWriteTime, a.nFileSizeHigh ? 0xFFFFFFFF : a.nFileSizeLow, f);
+    return 0;
+}
+
+static int fs_open(void *ctx, const char *path, int how, void **file)
+{
+    (void)ctx;
+    WCHAR p[VDM_PATH + 4];
+    host_path(path, p);
+    DWORD access = (how & 3) == VDMFS_READ ? GENERIC_READ : (how & 3) == VDMFS_WRITE ? GENERIC_WRITE
+                                                                                   : GENERIC_READ | GENERIC_WRITE;
+    DWORD disp = how & VDMFS_NEW ? CREATE_NEW : how & VDMFS_CREATE ? CREATE_ALWAYS : OPEN_EXISTING;
+    HANDLE h = CreateFileW(p, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disp,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return dos_error();
+    *file = h;
+    return 0;
+}
+
+static void fs_close(void *ctx, void *file) { (void)ctx; CloseHandle(file); }
+
+static int fs_read(void *ctx, void *file, uint32_t pos, void *buf, uint32_t n, uint32_t *got)
+{
+    (void)ctx;
+    DWORD k = 0;
+    if (SetFilePointer(file, (LONG)pos, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER || !ReadFile(file, buf, n, &k, NULL))
+        return 5;
+    *got = k;
+    return 0;
+}
+
+static int fs_write(void *ctx, void *file, uint32_t pos, const void *buf, uint32_t n)
+{
+    (void)ctx;
+    DWORD k = 0;
+    if (SetFilePointer(file, (LONG)pos, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) return 5;
+    if (!n) return SetEndOfFile(file) ? 0 : 5;
+    return WriteFile(file, buf, n, &k, NULL) && k == n ? 0 : 5;
+}
+
+static int fs_remove(void *ctx, const char *path)
+{
+    (void)ctx;
+    WCHAR p[VDM_PATH + 4];
+    host_path(path, p);
+    return DeleteFileW(p) ? 0 : dos_error();
+}
+
+static int fs_rename(void *ctx, const char *from, const char *to)
+{
+    (void)ctx;
+    WCHAR a[VDM_PATH + 4], b[VDM_PATH + 4];
+    host_path(from, a);
+    host_path(to, b);
+    return MoveFileW(a, b) ? 0 : dos_error();
+}
+
+static int fs_mkdir(void *ctx, const char *path)
+{
+    (void)ctx;
+    WCHAR p[VDM_PATH + 4];
+    host_path(path, p);
+    return CreateDirectoryW(p, NULL) ? 0 : dos_error();
+}
+
+static int fs_rmdir(void *ctx, const char *path)
+{
+    (void)ctx;
+    WCHAR p[VDM_PATH + 4];
+    host_path(path, p);
+    return RemoveDirectoryW(p) ? 0 : dos_error();
+}
+
+static void fs_space(void *ctx, uint64_t *total, uint64_t *avail)
+{
+    (void)ctx;
+    ULARGE_INTEGER a, t, f;
+    if (!GetDiskFreeSpaceExW(L"C:\\", &a, &t, &f)) { *total = *avail = 0; return; }
+    *total = t.QuadPart;
+    *avail = a.QuadPart;
+}
+
+static const VdmFs drive_c = { NULL, fs_list, fs_stat, fs_open, fs_close, fs_read, fs_write,
+                               fs_remove, fs_rename, fs_mkdir, fs_rmdir, fs_space };
+
+/* a path on drive C: as one under its root ("C:\Users\x" is "Users\x");
+ * NULL if it is on another drive */
+static const char *on_c(const char *path)
+{
+    if ((path[0] | 0x20) != 'c' || path[1] != ':') return NULL;
+    path += 2;
+    while (*path == '\\' || *path == '/') path++;
+    return path;
+}
+
+/* ---- the command line: ntvdm -run PROGRAM ARGUMENTS ---- */
+
+static const char *skip_arg(const char *s, char *out, int cap)
+{
+    int n = 0, q = 0;
+    while (*s == ' ' || *s == '\t') s++;
+    for (; *s && (q || (*s != ' ' && *s != '\t')); s++) {
+        if (*s == '"') { q = !q; continue; }
+        if (out && n < cap - 1) out[n++] = *s;
+    }
+    if (out) out[n] = 0;
+    while (*s == ' ' || *s == '\t') s++;
+    return s;
 }
 
 static uint64_t host_ms(void *ctx) { (void)ctx; return GetTickCount64(); }
@@ -211,7 +393,7 @@ static int keys(Vdm *v)
 
 static int image_path(int argc, char **argv, WCHAR *path, DWORD cap)
 {
-    if (argc > 1) return MultiByteToWideChar(CP_ACP, 0, argv[1], -1, path, (int)cap) > 0;
+    if (argc > 1 && strcmp(argv[1], "-run")) return MultiByteToWideChar(CP_ACP, 0, argv[1], -1, path, (int)cap) > 0;
     DWORD n = GetModuleFileNameW(NULL, path, cap);
     while (n && path[n - 1] != L'\\') n--;
     static const WCHAR rel[] = L"DOS\\MSDOS.IMG";
@@ -241,6 +423,18 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    char cwd[MAX_PATH * 3], program[MAX_PATH * 3] = "";
+    const char *args = "";
+    if (!GetCurrentDirectoryA(sizeof(cwd), cwd)) cwd[0] = 0;
+    vdm_drive_c(&vdm, &drive_c, on_c(cwd) ? on_c(cwd) : "");
+    if (argc > 1 && !strcmp(argv[1], "-run")) {
+        args = skip_arg(skip_arg(skip_arg(GetCommandLineA(), NULL, 0), NULL, 0), program, (int)sizeof(program));
+        if (!on_c(program) || !vdm_run_program(&vdm, on_c(program), args)) {
+            printf("ntvdm: DOS sees drive C: only, by 8.3 names; it cannot run %s\n", program);
+            return 1;
+        }
+    }
+
     out = GetStdHandle(STD_OUTPUT_HANDLE);
     in = GetStdHandle(STD_INPUT_HANDLE);
     DWORD in_mode = 0, out_mode = 0, n;
@@ -251,12 +445,13 @@ int main(int argc, char **argv)
     CURSOR_INFO old_cursor = { 25, TRUE };
     GetConsoleCursorInfo(out, &old_cursor);
     WriteConsoleA(out, "\x1b[?1049h\x1b[H\x1b[2J", 16, &n, NULL);   /* the alternate screen */
-    SetConsoleTitleW(L"MS-DOS 4.00 (F12 returns to NovaOS)");
+    SetConsoleTitleW(program[0] ? L"MS-DOS 4.00" : L"MS-DOS 4.00 (F12 returns to NovaOS)");
     OutputDebugStringA("ntvdm: booting MS-DOS\n");
 
     uint64_t drawn_at = 0;
     for (;;) {
         int r = vdm_run(&vdm, 100000);
+        if (r == VDM_ENDED) break;
         uint64_t now = GetTickCount64();
         if (r != VDM_RAN || now - drawn_at >= 40) {
             draw(&vdm);
@@ -275,6 +470,37 @@ int main(int argc, char **argv)
     SetConsoleCursorInfo(out, &old_cursor);
     SetConsoleMode(in, in_mode);
     SetConsoleMode(out, out_mode);
-    OutputDebugStringA("ntvdm: MS-DOS ended (F12)\n");
-    return 0;
+    if (!vdm.redir.ended) {
+        OutputDebugStringA("ntvdm: MS-DOS ended (F12)\n");
+        return 0;
+    }
+    /* the program ended: what it left on the screen stays in the console,
+     * as when it ran in Windows' console window */
+    int cols, rows, cx, cy, vis;
+    const uint8_t *t = vdm_text(&vdm, &cols, &rows);
+    vdm_cursor(&vdm, &cx, &cy, &vis);
+    int last = cx ? cy : cy - 1;
+    while (last >= 0) {
+        int blank = 1;
+        for (int x = 0; x < cols && blank; x++) blank = t[(last * cols + x) * 2] == ' ' || !t[(last * cols + x) * 2];
+        if (!blank) break;
+        last--;
+    }
+    for (int y = 0; y <= last && y < rows; y++) {
+        WCHAR line[82];
+        int len = 0;
+        for (int x = 0; x < cols && x < 80; x++) line[len++] = cp437(t[(y * cols + x) * 2]);
+        while (len && line[len - 1] == L' ') len--;
+        line[len++] = L'\r';
+        line[len++] = L'\n';
+        WriteConsoleW(out, line, (DWORD)len, &n, NULL);
+    }
+    char msg[MAX_PATH * 3 + 64];
+    if (vdm.redir.exec_error) {
+        printf("ntvdm: DOS could not start %s (error %d)\n", program, vdm.redir.exec_error);
+        return 1;
+    }
+    snprintf(msg, sizeof(msg), "ntvdm: %s ended with exit code %d\n", program, vdm.redir.exit_code);
+    OutputDebugStringA(msg);
+    return vdm.redir.exit_code;
 }

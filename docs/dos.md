@@ -73,7 +73,7 @@ build's packages, [building.md](building.md)) and `tools/msdos/mkdisk.py`
 makes a 1.44 MB boot disk of the result: the boot sector, `IO.SYS` and
 `MSDOS.SYS` first as `SYS` puts them, then `COMMAND.COM` and the other 59
 files, all of MS-DOS 4.00 (1.1 MB), and an `AUTOEXEC.BAT` that sets the
-prompt (`PROMPT $P$G`).  NovaOS keeps it as
+prompt (`PROMPT $P$G`) and runs `REDIR.COM` (step 31.3).  NovaOS keeps it as
 `C:\Windows\System32\DOS\MSDOS.IMG`, beside `LICENSE.TXT`, Microsoft's
 MIT licence.  `ntvdm.exe` reads the image into memory; what DOS writes to
 the disk stays there and the file is not changed.
@@ -128,11 +128,72 @@ boots the disk in seconds (`tools/msdos/vdm_test.py`): `VER`, `DIR`,
 `MEM`, `CHKDSK`, a `COPY` and `TYPE`, and a `DEBUG` session that assembles
 and runs a `MUL` and checks its 32-bit product and flags.
 
+## Step 31.3: DOS programs as Windows programs
+
+A DOS program starts the way a Windows program does: type `prog` or
+`prog.exe` in `cmd` or the Terminal, double-click it in File Explorer, or
+call `CreateProcess` on it.  It runs in the console window with drive C:
+as NovaOS has it and its current folder as DOS's, and when it ends the
+console is Windows' again: what it printed stays on the screen and its
+exit code is the process's (`%ERRORLEVEL%` in `cmd`).
+
+**Starting it.**  As Windows starts `ntvdm.exe` for a 16-bit image, the
+kernel's process start (`UmDosHost` in `kernel/um/um.c`, which
+`CreateProcess`, the Terminal and Explorer all go through) sees a DOS
+program and starts `C:\Windows\System32\ntvdm.exe -run "PATH" ARGUMENTS`
+instead.  A DOS program is an `MZ` image with no Windows header after the
+DOS one (no `PE`, `NE`, `LE` or `LX` signature at `e_lfanew`), or a `.COM`
+file that does not start with `MZ` (Windows' own `.com` programs are PE
+images and run as themselves).  The Terminal looks for `NAME.com` before
+`NAME.exe`, as `cmd`'s `PATHEXT` does, and Explorer opens a `.com` file as
+a program.
+
+**Drive C:.**  DOS reaches C: through its own network redirector
+interface, as NTVDM's `REDIR` did, rather than through a disk image of
+NovaOS's files: a drive whose current directory structure (CDS) is marked
+"network" sends every operation (open, create, read, write, find first and
+next, make and remove directory, rename, delete, attributes, free space) to
+`INT 2Fh` with `AH=11h`, and the BIOS's handler answers them from NovaOS's
+files (`userland/programs/ntvdm/redir.c`).  Nothing is copied, so what DOS
+writes is on C: at once and what NovaOS changes DOS sees at once.  The
+layouts it reads and fills (the swappable data area, the system file table
+entry, the CDS) are MS-DOS 4.00's, from its source and the build's
+`MSDOS.MAP`.
+
+DOS sees 8.3 names.  A NovaOS name that fits is shown in capitals
+(`readme.txt` is `README.TXT`); one that does not gets an alias as
+Windows makes them: six characters of the name, `~` and a number in the
+order the folder lists them, and three of the extension (`My DOS
+programs` is `MYDOSP~1`).  The other drives are not shown to DOS; a
+program on one does not start.
+
+**REDIR.COM.**  The boot disk's `AUTOEXEC.BAT` runs `REDIR.COM`, a small
+program `tools/msdos/mkdisk.py --novaos` assembles onto the disk.  It
+hands the BIOS DOS's list of lists and swappable data area (`BOP 60h`);
+the BIOS marks C: as a network drive with NovaOS's current folder as its
+directory and puts its `INT 2Fh` handler in front of DOS's.  Started with
+`-run`, the BIOS also gives REDIR the program, its command tail and C: as
+the current drive, and REDIR runs it with `EXEC` (`INT 21h AX=4B00h`, the
+command tail's file names parsed into the FCBs as `COMMAND.COM` does),
+reads its exit code (`AX=4D00h`) and tells the BIOS it ended (`BOP 61h`).
+`ntvdm.exe` then leaves the alternate screen, writes the lines the program
+left on the DOS screen into the console and exits with the program's exit
+code.  Running the program itself rather than `COMMAND /C` keeps its exit
+code: `COMMAND.COM` 4.00 does not pass a child's on.  Typed `ntvdm`
+without `-run` still boots to `A:\>`, now with C: there too.
+
+**Tests.**  `dostest` writes `DOSRW` (`userland/programs/ntvdm/dosrw.h`), a
+small program that reads `IN.TXT`, writes `OUT.TXT` and ends with exit code
+42, into a folder with a long name as `dosrw.com` and `dosrwexe.exe`;
+`cmd /c dosrw IN.TXT` must run the `.COM` by name and return 42 with
+`OUT.TXT` written and the message left on the screen, and `CreateProcess`
+the same for the `.EXE`.  CI's MS-DOS job runs both on the CPU and BIOS
+built for Linux with a directory as drive C:, then types `C:`, `CD` into
+the folder by its alias, `DIR`, `TYPE`, `COPY`, `MD`, `RD`, `REN`, `DEL`
+and `MEM` from C: at the prompt (`tools/msdos/vdm_test.py`).
+
 ## What comes next
 
-- **31.3** `CreateProcess` on a 16-bit program starts that DOS host, as
-  Windows starts `ntvdm.exe`, so `.COM` and `.EXE` files run from `cmd.exe`,
-  the Terminal and Explorer, with NovaOS's drives visible to DOS;
 - **31.4** a bundled DOS utility and freeware game in CI, their
   compatibility entries and a screenshot.
 

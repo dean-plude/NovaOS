@@ -42,6 +42,8 @@ static void ret_flag(Vdm *v, uint16_t f, int on)
     cpu86_wr16(c, c->sreg[CPU86_SS], sp, fl);
 }
 
+void vdm_iret_flag(Vdm *v, uint16_t f, int on) { ret_flag(v, f, on); }
+
 static uint8_t bcd(int x) { return (uint8_t)(((x / 10) % 10) << 4 | (x % 10)); }
 
 /* ---- video (INT 10h): colour text, 80 x 25, 8 pages at B800:0 ---- */
@@ -399,6 +401,47 @@ static void boot(Vdm *v)
     c->flags = 0xF202;
 }
 
+/* ---- REDIR.COM (AUTOEXEC.BAT runs it) ---- */
+
+static void rom(Vdm *v, uint16_t off, const uint8_t *code, int n);
+static void vector(Vdm *v, int n, uint16_t off);
+
+/* BOP 60h: ES:BX is DOS's list of lists, DS:SI its swappable data area,
+ * CS REDIR.COM's own segment (1 KB).  Drive C: becomes the host's and
+ * INT 2Fh comes here first; AL = 1 when REDIR.COM is to run a program, its
+ * EXEC parameter block filled in at 200h: the command tail at 210h (it
+ * parses the file names in it into the FCBs at 2A0h and 2C0h), the
+ * program's name at 2E0h */
+static void redir_com(Vdm *v)
+{
+    Cpu86 *c = &v->cpu;
+    AL = 0;
+    if (!vdm_redir_install(v)) return;
+    uint8_t *ivt = c->mem + 0x2F * 4;
+    if (ivt[0] != (uint8_t)VDM_REDIR_AT || ivt[1] != (uint8_t)(VDM_REDIR_AT >> 8) || ivt[2] != (uint8_t)ROM ||
+        ivt[3] != (uint8_t)(ROM >> 8)) {
+        rom(v, VDM_REDIR_AT + 8, ivt, 4);       /* (DOS's handler, where ours goes on to) */
+        vector(v, 0x2F, VDM_REDIR_AT);
+    }
+    if (!v->redir.run[0]) return;
+    uint16_t cs = c->sreg[CPU86_CS];
+    static const uint16_t block[7] = { 0, 0x210, 0, 0x2A0, 0, 0x2C0, 0 };
+    for (int i = 0; i < 7; i++) cpu86_wr16(c, cs, (uint16_t)(0x200 + i * 2), i && !(i & 1) ? cs : block[i]);
+    int n = (int)strlen(v->redir.args);
+    if (n > 125) n = 125;
+    cpu86_wr8(c, cs, 0x210, (uint8_t)(n ? n + 1 : 0));
+    uint16_t at = 0x211;
+    if (n) cpu86_wr8(c, cs, at++, ' ');
+    for (int i = 0; i < n; i++) cpu86_wr8(c, cs, at++, (uint8_t)v->redir.args[i]);
+    cpu86_wr8(c, cs, at, '\r');
+    for (int i = 0; i < 0x40; i++) cpu86_wr8(c, cs, (uint16_t)(0x2A0 + i), 0);
+    for (int i = 0; i < 0x80; i++)
+        cpu86_wr8(c, cs, (uint16_t)(0x2E0 + i), (uint8_t)(i < 79 ? v->redir.run[i] : 0));
+    cpu86_wr8(c, v->redir.sda_seg, (uint16_t)(v->redir.sda_off + 0x16), 2);   /* (the current drive: C:) */
+    set_mode(v, 3);                             /* (the program starts on a clear screen) */
+    AL = 1;
+}
+
 static void bop(void *machine, uint8_t n)
 {
     Vdm *v = machine;
@@ -429,6 +472,17 @@ static void bop(void *machine, uint8_t n)
     case 0x17: AH = 0x90; break;                /* printer: ready, selected */
     case 0x19: boot(v); break;
     case 0x1A: int1a(v); break;
+    case 0x2F:                                  /* (in front of DOS's INT 2Fh: drive C:) */
+        if (AH == 0x11 && vdm_redir_call(v)) c->ip = IRET_AT;
+        break;
+    case 0x60: redir_com(v); break;
+    case 0x61:                                  /* REDIR.COM: the program ended (CF: EXEC failed, AX why) */
+        v->redir.ended = 1;
+        if (c->flags & CPU86_CF) { v->redir.exec_error = AX ? AX : 1; v->redir.exit_code = 1; }
+        else v->redir.exit_code = AL;
+        c->ip -= 3;
+        v->wait = VDM_ENDED;
+        break;
     default: break;
     }
 }
@@ -574,6 +628,14 @@ int vdm_init(Vdm *v, uint8_t *mem, uint8_t *disk, uint32_t size, const VdmHost *
     rom(v, 0xFFFE, model, 2);
     static const uint8_t reset[] = { 0xCD, 0x19 };   /* (F000:FFF0: INT 19h) */
     rom(v, 0xFFF0, reset, 2);
+    /* drive C:'s INT 2Fh: BOP 2Fh; JMP FAR CS:[DOS's handler] (REDIR.COM
+     * points the vector here) */
+    static const uint8_t int2f[] = { 0xC4, 0xC4, 0x2F, 0x2E, 0xFF, 0x2E, (VDM_REDIR_AT + 8) & 0xFF, (VDM_REDIR_AT + 8) >> 8 };
+    rom(v, VDM_REDIR_AT, int2f, sizeof(int2f));
+    /* and the installable file system header DOS 4 looks at for it: a
+     * remote disk file system named NOVAOS */
+    static const uint8_t ifs[22] = { 0xFF, 0xFF, 0xFF, 0xFF, 'N', 'O', 'V', 'A', 'O', 'S', ' ', ' ', 0x00, 0x48 };
+    rom(v, VDM_IFS_AT, ifs, sizeof(ifs));
 
     set_bda16(v, 0x10, 0x0021);                 /* one floppy drive, colour 80 x 25 */
     set_bda16(v, 0x13, 640);
@@ -595,6 +657,7 @@ double vdm_next_tick(Vdm *v) { return v->next_tick; }
 
 int vdm_run(Vdm *v, uint32_t n)
 {
+    if (v->redir.ended) return VDM_ENDED;
     uint64_t end = v->cpu.count + n;
     while (v->cpu.count < end) {
         double now = (double)v->host.ms(v->host.ctx);

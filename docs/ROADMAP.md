@@ -493,9 +493,9 @@ item ends when a named program or test demonstrates it.
   supported, partial or missing in [hardware.md](hardware.md); the
   Terminal's `devices` lists a machine's PCI devices and the driver each
   one has.
-- Boot and test on real hardware, not only QEMU.  The hand checks
-  on the reference ThinkPad T14 Gen 4 (step 23.1) were confirmed done by
-  Dean on 2026-10-15.
+- Boot and test on real hardware, not only QEMU.  Not done yet: nothing
+  has been started on the reference ThinkPad T14 Gen 4; the hand checks
+  are step 23.1.
 - ~~Start from a USB stick~~ Done (Phase 21.2): `nova.iso` is a USB stick
   image as well as a disc (its EFI System Partition is a GPT partition
   too), runs live from the stick and offers Install NovaOS, with the
@@ -908,10 +908,16 @@ small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
   (`C:\Windows\System32\DOS\MSDOS.IMG`) to `A:\>` in the console
   window; `dostest` types `VER` and `DIR` there, and CI's MS-DOS job runs
   the same CPU and BIOS on Linux through `MEM`, `CHKDSK` and `DEBUG`.
-- [ ] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
+- [x] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
   on a 16-bit image starts the DOS host (as Windows starts `ntvdm.exe`),
   so a `.COM` or `.EXE` runs from `cmd.exe`, the Terminal and Explorer,
-  with the NovaOS drives visible to DOS.
+  with the NovaOS drives visible to DOS.  The kernel's process start runs
+  a DOS `MZ` or `.COM` image as `ntvdm.exe -run`; DOS sees NovaOS's C:
+  through its own network redirector interface (`INT 2Fh AH=11h`, 8.3
+  aliases for long names), `REDIR.COM` runs the program and the console
+  returns with its exit code; `dostest` runs a `.COM` from `cmd` by name
+  and an `.EXE` from `CreateProcess`, each reading and writing a file on
+  C:.
 - [ ] **31.4 Programs and documentation.** A DOS utility and a freeware
   DOS game bundled for CI, their compatibility entries, a screenshot,
   and the user guide.

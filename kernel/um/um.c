@@ -1334,6 +1334,46 @@ UINT16 um_pe_machine(const RamNode *f)
     return rd16(d + nt + 4);
 }
 
+bool UmIsDosProgram(RamNode *f)
+{
+    if (!f || f->dir || !f->size || !RamfsLoad(f) || !f->data) return false;
+    const UINT8 *d = (const UINT8 *)f->data;
+    if (f->size >= 2 && rd16(d) == 0x5A4D) {
+        if (f->size < 0x40) return true;
+        UINT32 nt = rd32(d + 0x3C);
+        if (nt <= f->size - 2) {
+            UINT16 sig = rd16(d + nt);
+            if (sig == 0x4550 || sig == 0x454E || sig == 0x454C || sig == 0x584C) return false;   /* PE, NE, LE, LX */
+        }
+        return true;
+    }
+    size_t n = strlen(f->name);
+    return n > 4 && f->name[n - 4] == '.' && (f->name[n - 3] | 0x20) == 'c' && (f->name[n - 2] | 0x20) == 'o' &&
+           (f->name[n - 1] | 0x20) == 'm' && f->size <= 0xFF00;
+}
+
+RamNode *UmDosHost(RamNode *exe, const char *cmdline, char **host_cmd)
+{
+    *host_cmd = NULL;
+    if (!UmIsDosProgram(exe)) return exe;
+    RamNode *vdm = RamfsResolve(NULL, "\\Windows\\System32\\ntvdm.exe");
+    if (!vdm || vdm->dir) return exe;
+    /* the arguments: the command line after the program's name */
+    const char *a = cmdline ? cmdline : "";
+    while (*a == ' ' || *a == '\t') a++;
+    for (bool q = false; *a && (q || (*a != ' ' && *a != '\t')); a++) if (*a == '"') q = !q;
+    while (*a == ' ' || *a == '\t') a++;
+    char path[RAMFS_PATH_MAX];
+    RamfsPath(exe, path, sizeof(path));
+    size_t n = strlen(path) + strlen(a) + 64;
+    char *c = kmalloc(n);
+    if (!c) return exe;
+    ksnprintf(c, n, "\"C:\\Windows\\System32\\ntvdm.exe\" -run \"%s\"%s%s", path, *a ? " " : "", a);
+    *host_cmd = c;
+    kprintf("[UM] %s is a DOS program: ntvdm.exe runs it\n", exe->name);
+    return vdm;
+}
+
 /* IMAGE_SUBSYSTEM_*: 2 GUI, 3 console (0: not a PE image) */
 UINT16 um_pe_subsystem(RamNode *f)
 {
@@ -2730,9 +2770,9 @@ RamNode *UmFindProgram(RamNode *cwd, const char *name)
     bool path = strchr(name, '\\') || strchr(name, ':');
     for (int d = 0; d < 3; d++) {
         if (path && d) break;
-        for (int e = 0; e < 2; e++) {
+        for (int e = 0; e < 3; e++) {
             if (e && has_ext) break;
-            ksnprintf(buf, sizeof(buf), "%s%s", name, e ? ".exe" : "");
+            ksnprintf(buf, sizeof(buf), "%s%s", name, e == 1 ? ".com" : e == 2 ? ".exe" : "");
             RamNode *base = d ? RamfsResolve(NULL, dirs[d]) : cwd;
             if (!base && d) continue;
             RamNode *n = RamfsResolve(base, buf);
@@ -2775,8 +2815,12 @@ UmProcess *UmSpawn(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *c
 UmProcess *um_spawn_ex(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
                        const UmSpawnOpts *o, char *err, int err_cap)
 {
+    char *dos;
+    exe = UmDosHost(exe, cmdline, &dos);
     UmProcess *p = um_spawn_image(exe, cwd, con, false, err, err_cap);
-    return p ? um_spawn_finish(p, exe, cmdline, o, err, err_cap) : NULL;
+    p = p ? um_spawn_finish(p, exe, dos ? dos : cmdline, o, err, err_cap) : NULL;
+    kfree(dos);
+    return p;
 }
 
 /* A new process with its program and DLLs mapped (not yet running).
@@ -3235,9 +3279,11 @@ static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, 
 {
     UmSpawnJob *j = kzalloc(sizeof(*j));
     if (!j) return NULL;
-    j->cmdline = kmalloc(strlen(cmdline) + 1);
+    char *dos;
+    exe = UmDosHost(exe, cmdline, &dos);
+    if (dos) j->cmdline = dos;
+    else if ((j->cmdline = kmalloc(strlen(cmdline) + 1))) strcpy(j->cmdline, cmdline);
     if (!j->cmdline) { kfree(j); return NULL; }
-    strcpy(j->cmdline, cmdline);
     j->exe = exe;
     j->cwd = cwd ? cwd : RamfsRoot();
     j->con = um_console_ref(con);

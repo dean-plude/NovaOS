@@ -15,7 +15,7 @@
  * - only start requests if a valid local address is available on the netif
  * - only start information requests if required (not for every RA)
  *
- * dhcp6_enable_stateful() enables stateful DHCPv6 for a netif (stateless disabled)<br>
+ * dhcp6_enable_stateful() enables address assignment, plus information requests if needed<br>
  * dhcp6_enable_stateless() enables stateless DHCPv6 for a netif (stateful disabled)<br>
  * dhcp6_disable() disable DHCPv6 for a netif
  *
@@ -278,7 +278,7 @@ dhcp6_stateless_enabled(struct dhcp6 *dhcp6)
 {
 #if LWIP_IPV6_DHCP6_STATEFUL
   if (dhcp6->stateful_enabled) {
-    return (offset == start + len);
+    return 0;
   }
 #endif /* LWIP_IPV6_DHCP6_STATEFUL */
   if ((dhcp6->state == DHCP6_STATE_STATELESS_IDLE) ||
@@ -317,9 +317,9 @@ dhcp6_stateful_clear_lease(struct netif *netif, struct dhcp6 *dhcp6)
 
 /**
  * @ingroup dhcp6
- * Enable stateful DHCPv6 on this netif
- * Requests are sent on receipt of an RA message with the
- * ND6_RA_FLAG_MANAGED_ADDR_CONFIG flag set.
+ * Enable stateful DHCPv6 on this netif. Solicitations are sent on receipt of
+ * an RA with the managed-address flag; Information-requests are also sent when
+ * an RA requests other configuration without managed addressing.
  *
  * A struct dhcp6 will be allocated for this netif if not
  * set via @ref dhcp6_set_struct before.
@@ -597,15 +597,21 @@ dhcp6_stateful_send(struct netif *netif, struct dhcp6 *dhcp6)
         ia_na_len = dhcp6_option_long(ia_na_len, ia_na, dhcp6->offered_preferred_time);
         ia_na_len = dhcp6_option_long(ia_na_len, ia_na, dhcp6->offered_valid_time);
       } else {
+#if LWIP_IPV6_ADDRESS_LIFETIMES
         ia_na_len = dhcp6_option_long(ia_na_len, ia_na,
                                       netif_ip6_addr_pref_life(netif, dhcp6->address_idx));
-        ia_na_len = dhcp6_option_long(ia_na, ia_na, netif_ip6_addr_valid_life(netif, dhcp6->address_idx));
+        ia_na_len = dhcp6_option_long(ia_na_len, ia_na,
+                                      netif_ip6_addr_valid_life(netif, dhcp6->address_idx));
+#else
+        ia_na_len = dhcp6_option_long(ia_na_len, ia_na, 0);
+        ia_na_len = dhcp6_option_long(ia_na_len, ia_na, dhcp6->valid_time);
+#endif /* LWIP_IPV6_ADDRESS_LIFETIMES */
       }
     }
   }
   p_out = dhcp6_create_msg(netif, dhcp6, (u8_t)message_type, 256, &options_out_len);
   if (p_out == NULL) {
-    dhcp6_stateful_schedule(dhcp6);
+    dhcp6->request_timeout = 2;
     return;
   }
   msg_out = (struct dhcp6_msg *)p_out->payload;
@@ -649,6 +655,7 @@ dhcp6_stateful_client_id_matches(struct netif *netif, struct dhcp6 *dhcp6, struc
 {
   u8_t client_id[4 + NETIF_MAX_HWADDR_LEN];
   u16_t len;
+  LWIP_UNUSED_ARG(dhcp6);
   if (!dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_CLI_ID)) {
     return 0;
   }

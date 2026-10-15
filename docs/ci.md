@@ -290,8 +290,9 @@ The core and devices suites are described in [testing.md](testing.md).
     source in `tools/h2server.js` (source add, search, install of an older
     version, list, upgrade, uninstall, a download whose SHA-256 is wrong
     refused) and the App Store's catalog as a source.
-  - virtio-net on an IPv6-only network served by `tools/v6peer.py`: SLAAC
-    and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6.
+  - virtio-net on an IPv6-only network served by `tools/v6peer.py`: SLAAC,
+    stateful DHCPv6 address assignment and DNS, `ping -6`, `curl -6` and
+    Winsock over IPv6.
   - an Intel e1000e (82574L): its PHY and link, the link pulled and plugged
     back, sleep and wake, then the IPv4 tests above again on it.
 - **Graphics** (the **Graphics tests (OpenGL, Direct3D)** job): two

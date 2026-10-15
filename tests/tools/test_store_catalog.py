@@ -119,6 +119,24 @@ class StoreCatalogTests(unittest.TestCase):
             catalog['apps'].append(app)
         self.run_catalog(catalog, False)
 
+    def test_winget_id_and_version(self):
+        catalog = copy.deepcopy(self.catalog)
+        catalog['apps'][0].update(id='7zip.7zip', version='24.08')
+        catalog['apps'][1].update(id=None, version=None)
+        self.run_catalog(catalog)
+        for value in ['7zip', '.7zip', '7zip.', '7zip..x', 'a b.c', 'a\\b.c', 'a*.b', 'a.' + 'x' * 33,
+                      '.'.join(['a'] * 9), '', 7]:
+            with self.subTest(id=value):
+                bad = copy.deepcopy(catalog)
+                bad['apps'][1]['id'] = value
+                self.run_catalog(bad, False)
+        bad = copy.deepcopy(catalog)
+        bad['apps'][1]['id'] = '7ZIP.7zip'               # (unique, ignoring case)
+        self.run_catalog(bad, False)
+        bad = copy.deepcopy(catalog)
+        bad['apps'][1]['version'] = 'x' * 65
+        self.run_catalog(bad, False)
+
     def run_badges(self, badges, valid=True):
         p = self.work / 'badges.json'
         p.write_bytes(badges if isinstance(badges, bytes) else json.dumps(badges).encode())

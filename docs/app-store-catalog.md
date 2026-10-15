@@ -139,6 +139,8 @@ catalog.
 | `note` | yes | Compatibility note shown with the program, at most 512 bytes. |
 | `label` | yes | Tile label, at most 4 bytes. |
 | `color` | yes | Tile colour, `#RRGGBB`. |
+| `id` | no | The program's winget package identifier (`7zip.7zip`), so `winget install <id>` finds it in the catalog first.  Two to eight dot-separated parts, unique.  Without one, winget calls it `Store.<name>`. |
+| `version` | no | The version `url` downloads, at most 64 bytes: `winget list` and `winget upgrade` compare it with what is installed. |
 | `system` | no | `archive` only: a space-separated list of files in the archive to install into the system folders instead of `dest` (files from an `x86` or `x32` folder go to `SysWOW64`, others to `System32`).  `path>name` renames a file, as in `x64\file.dll>renamed.dll`.  Vulkan driver manifests among them are registered. |
 
 Other rules:
@@ -168,6 +170,12 @@ and installs are tested by the boot-test suites and the nightly app
 corpus.
 
 ## Other users of the catalog
+
+`winget` reads the same catalog as its `novaos` source, with the same
+parser (`userland/programs/winget.c` includes `kernel/apps/store_catalog.h`),
+and installs its programs the App Store's way; `winget source update`
+refreshes it as **Refresh** does.  See
+[user-guide.md](user-guide.md#winget).
 
 The catalog is also the source of download URLs for the test tools:
 

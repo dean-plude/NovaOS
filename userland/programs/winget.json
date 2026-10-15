@@ -1,0 +1,4 @@
+{
+  "system": true,
+  "libs": ["winhttp"]
+}

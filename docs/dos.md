@@ -224,7 +224,13 @@ tests read).
 Making the game run also found a bug in step 31.3's drive C:: the alias
 for a long name with a six-character stem and an extension
 (`ROGUE-LICENSE.TXT`, `ROGUE-~1.TXT`) overran a ten-byte buffer in
-`redir.c`, and DOS could not find anything in that folder.
+`redir.c`, and DOS could not find anything in that folder.  And
+`ntvdm.exe` wrote a NUL after the sequence that opens the alternate
+screen; the Terminal's copy of program output on the serial port (what
+the self-tests read) stopped at it, so on fast runs everything read in the
+same chunk after it, `dostest`'s summary included, went missing.  The
+sequence is written without it, and that copy now skips a NUL instead of
+stopping.
 
 **Tests.**  `dostest` starts `ROGUE.COM` with `CreateProcess`, waits for
 the hero (U+263A in the console, code page 437's `01h`) and the HP, plays

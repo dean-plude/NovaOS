@@ -451,7 +451,7 @@ int main(int argc, char **argv)
     SetConsoleMode(out, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     CURSOR_INFO old_cursor = { 25, TRUE };
     GetConsoleCursorInfo(out, &old_cursor);
-    WriteConsoleA(out, "\x1b[?1049h\x1b[H\x1b[2J", 16, &n, NULL);   /* the alternate screen */
+    WriteConsoleA(out, "\x1b[?1049h\x1b[H\x1b[2J", 15, &n, NULL);   /* the alternate screen */
     SetConsoleTitleW(program[0] ? L"MS-DOS 4.00" : L"MS-DOS 4.00 (F12 returns to NovaOS)");
     OutputDebugStringA("ntvdm: booting MS-DOS\n");
 

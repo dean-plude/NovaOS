@@ -294,10 +294,22 @@ own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
 kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
 interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
 feature and input reports. On a composite device each HID function gets
-its own (see [USB client drivers](#usb-client-drivers)). Not done yet:
-`ReadFile` with a timeout through an `OVERLAPPED` (reads on a driver's
-device wait). NovaOS's own keyboards, mice and game controllers keep
-their built-in drivers.
+its own (see [USB client drivers](#usb-client-drivers)). NovaOS's own
+keyboards, mice and game controllers keep their built-in drivers.
+
+A handle opened with `FILE_FLAG_OVERLAPPED` does overlapped I/O, as
+hidapi and most HID tools use it: `ReadFile` with no report waiting
+fails with `ERROR_IO_PENDING`, the program waits on the `OVERLAPPED`'s
+event with a timeout (`WaitForSingleObject`, `GetOverlappedResult`), and
+the read completes when the next report comes; `CancelIo`,
+`CancelIoEx` and closing the handle end it with
+`ERROR_OPERATION_ABORTED`. This is the I/O manager's, not the HID class
+driver's: an IRP any Windows driver leaves pending on an overlapped
+handle (`ReadFile`, `WriteFile`, `DeviceIoControl`) lets the system
+call return `STATUS_PENDING`, and the kernel's I/O completion thread
+later copies the data back, writes the `OVERLAPPED`'s status and sets
+its event (or posts to the handle's completion port), as Windows'
+completion APC does (`kernel/nt/io.c`, `kernel/um/um_driver.c`).
 
 A KMDF HID driver cannot call `HidRegisterMinidriver` itself (the
 framework owns its dispatch table), so on Windows it sits as a lower

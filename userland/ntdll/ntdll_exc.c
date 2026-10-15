@@ -618,7 +618,13 @@ static void exc_pop(ExcState *e) { *exc_head() = e->prev; e->check = 0; }
 static ExcState **exc_live(void *sp)
 {
     ExcState **h = exc_head();
-    while (*h && (DWORD64)*h < (DWORD64)sp) *h = (*h)->prev;
+    /* (an entry below @sp is checked before its link is followed: its
+     * frame may have been reused, its link with it; coreclr's managed
+     * exceptions leave such entries and then run deep on that stack) */
+    while (*h && (DWORD64)*h < (DWORD64)sp) {
+        if (((DWORD64)*h & 7) || (*h)->check != ((DWORD64)*h ^ EXC_STATE_MAGIC)) { *h = 0; break; }
+        *h = (*h)->prev;
+    }
     for (ExcState **p = h; *p; p = &(*p)->prev)
         if ((*p)->check != ((DWORD64)*p ^ EXC_STATE_MAGIC)) { *p = 0; break; }
     return h;

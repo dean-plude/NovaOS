@@ -1157,8 +1157,9 @@ static UINT64 sys_read_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
     if (dv) {                               /* a Windows driver's device: an IRP */
         UINT64 info;
-        UINT32 st = um_driver_rw(dv, false, buf, len, um_stack_arg(8), &info);
+        UINT32 st = um_driver_rw(dv, false, buf, len, um_stack_arg(8), a2, iosb_ptr, &info);
         um_ob_unref(dv);
+        if (st == ST_PENDING) return st;    /* (overlapped: finished later) */
         set_io_event(a2);
         return iosb(iosb_ptr, st, info);
     }
@@ -1220,8 +1221,9 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
     if (dv) {                               /* a Windows driver's device: an IRP */
         UINT64 info;
-        UINT32 st = um_driver_rw(dv, true, buf, len, um_stack_arg(8), &info);
+        UINT32 st = um_driver_rw(dv, true, buf, len, um_stack_arg(8), a2, iosb_ptr, &info);
         um_ob_unref(dv);
+        if (st == ST_PENDING) return st;    /* (overlapped: finished later) */
         set_io_event(a2);
         return iosb(iosb_ptr, st, info);
     }
@@ -2084,6 +2086,28 @@ static UINT64 alloc_vm(UmProcess *p, UINT64 a2, UINT64 a4, UINT32 type, UINT32 p
         return ST_SUCCESS;
     }
     if (!size || !(type & (MEM_COMMIT | MEM_RESERVE)) || !valid_protect(prot)) return ST_INVALID_PARAMETER;
+    if ((type & MEM_RESERVE_PLACEHOLDER) && ((type & MEM_COMMIT) || (prot & 0xFF) != 0x01))
+        return ST_INVALID_PARAMETER;                            /* a placeholder is only reserved, PAGE_NOACCESS */
+    if (type & MEM_REPLACE_PLACEHOLDER) {
+        /* Memory in place of a whole placeholder (VirtualAlloc2: coreclr
+         * maps a single-file bundle's assemblies this way) */
+        UmRegion *r = um_region_find(p, base);
+        if (!r || !r->placeholder || base != r->base || ((size + 0xFFF) & ~0xFFFULL) != r->size)
+            return ST_INVALID_PARAMETER;
+        r->placeholder = false;
+        r->protect = prot;
+        size = r->size;
+        if (type & MEM_COMMIT) {
+            if (p->commit + size / PAGE_SIZE > PROC_MEM_LIMIT_PAGES || !um_commit(p, base, size, prot)) {
+                um_decommit(p, base, size);
+                r->placeholder = true;
+                return ST_NO_MEMORY;
+            }
+        }
+        put_u64(a2, base);
+        put_u64(a4, size);
+        return ST_SUCCESS;
+    }
     if (!base) type |= MEM_RESERVE;                             /* committing at no address reserves too */
     UINT64 end = (base + size + 0xFFF) & ~0xFFFULL;
 
@@ -2096,7 +2120,9 @@ static UINT64 alloc_vm(UmProcess *p, UINT64 a2, UINT64 a4, UINT32 type, UINT32 p
         } else if (!um_is_free(p, base, size)) {
             return ST_CONFLICTING_ADDRESSES;
         }
-        if (!um_region_add(p, base, size, prot, false)) return ST_NO_MEMORY;
+        UmRegion *nr = um_region_add(p, base, size, prot, false);
+        if (!nr) return ST_NO_MEMORY;
+        nr->placeholder = (type & MEM_RESERVE_PLACEHOLDER) != 0;
     } else {
         base &= ~0xFFFULL;
         size = end - base;
@@ -2132,6 +2158,23 @@ static UINT64 sys_free_vm_locked(UmProcess *p, UINT64 a2, UINT64 a3, UINT64 a4)
     UmRegion *r = um_region_find(p, base);
     if (!r || r->image) return ST_MEMORY_NOT_ALLOCATED;
     if (r->section) return 0xC000001Bu;                     /* STATUS_UNABLE_TO_DELETE_SECTION: a mapped view */
+    if ((a4 & MEM_RELEASE) && (a4 & MEM_PRESERVE_PLACEHOLDER)) {
+        /* Split a placeholder: [base, base + size) becomes one of its own,
+         * the rest another */
+        size = (size + 0xFFF) & ~0xFFFULL;
+        if (!r->placeholder || base != r->base || !size || size > r->size) return ST_INVALID_PARAMETER;
+        if (size < r->size) {
+            UINT64 rest = r->base + size, rest_size = r->size - size;
+            UINT32 prot = r->protect;
+            r->size = size;
+            UmRegion *n = um_region_add(p, rest, rest_size, prot, false);
+            if (!n) { um_region_find(p, base)->size += rest_size; return ST_NO_MEMORY; }
+            n->placeholder = true;
+        }
+        put_u64(a2, base);
+        put_u64(a3, size);
+        return ST_SUCCESS;
+    }
     if (a4 & MEM_RELEASE) {
         if (base != r->base || size) return ST_INVALID_PARAMETER;
         size = r->size;
@@ -2869,9 +2912,11 @@ static UINT64 sys_cancel_io(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a3; (void)a4;
     UmObject *po = um_handle_object(UmCurrent(), a1, UO_PIPE), *ao = po ? NULL : um_handle_object(UmCurrent(), a1, UO_AFD);
-    UINT32 st = po ? um_pipe_cancel(po, 0) : ao ? um_afd_cancel(ao, 0) : ST_SUCCESS;
+    UmObject *dv = po || ao ? NULL : um_handle_object(UmCurrent(), a1, UO_DEVICE);
+    UINT32 st = po ? um_pipe_cancel(po, 0) : ao ? um_afd_cancel(ao, 0) : dv ? um_driver_cancel(dv, 0) : ST_SUCCESS;
     if (po) um_ob_unref(po);
     if (ao) um_ob_unref(ao);
+    if (dv) um_ob_unref(dv);
     return iosb(a2, st, 0);
 }
 
@@ -2880,9 +2925,12 @@ static UINT64 sys_cancel_io_ex(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
     UmObject *po = um_handle_object(UmCurrent(), a1, UO_PIPE), *ao = po ? NULL : um_handle_object(UmCurrent(), a1, UO_AFD);
-    UINT32 st = po ? um_pipe_cancel(po, a2) : ao ? um_afd_cancel(ao, a2) : 0xC0000225u;    /* STATUS_NOT_FOUND */
+    UmObject *dv = po || ao ? NULL : um_handle_object(UmCurrent(), a1, UO_DEVICE);
+    UINT32 st = po ? um_pipe_cancel(po, a2) : ao ? um_afd_cancel(ao, a2) : dv ? um_driver_cancel(dv, a2) :
+                0xC0000225u;                                                                  /* STATUS_NOT_FOUND */
     if (po) um_ob_unref(po);
     if (ao) um_ob_unref(ao);
+    if (dv) um_ob_unref(dv);
     return iosb(a3, st, 0);
 }
 

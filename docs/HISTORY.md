@@ -12559,6 +12559,53 @@ after a restart.  The host then checks the disk's GPT, both volumes
 (`scripts/ntfs-check.py`, `fsck.fat`) and the files on them.  Deleting
 and resizing partitions are left for later.
 
+## .NET 8 desktop programs start
+
+Roadmap step 27.1 (grow the corpus) tried HandBrake 1.9.0, the App
+Store's video transcoder, a single-file WPF program on .NET 8.  It does
+not reach its window yet, but the way there fixed .NET 8 itself:
+
+- **The App Store's .NET 8.**  Microsoft's Desktop Runtime zip holds only
+  `Microsoft.WindowsDesktop.App`: no `dotnet.exe`, host or base runtime,
+  so the Store's ".NET Desktop Runtime 8" installed a runtime nothing could
+  start (and its install check, `dotnet\dotnet.exe`, never matched).  A new
+  ".NET Runtime 8" entry brings the base runtime; both unpack into
+  `C:\Programs\dotnet`, where a .NET program's launcher looks, and both are
+  pinned to 8.0.32 instead of the moving `aka.ms` link.
+- **The JIT starts.**  .NET 8's `clrjit.dll` imports the UCRT's
+  `_copysignf` and `_isnanf`, now exported, and hands
+  `WideCharToMultiByte` a NULL string; `WideCharToMultiByte` and
+  `MultiByteToWideChar` now check their arguments as Windows does
+  (`ERROR_INVALID_PARAMETER`) instead of faulting.
+- **Placeholders.**  A single-file program's assemblies sit inside its
+  `.exe`; coreclr maps each one section by section into a reserved range:
+  `VirtualAlloc2` with `MEM_RESERVE_PLACEHOLDER`, `VirtualFree` with
+  `MEM_PRESERVE_PLACEHOLDER` to split it, `MapViewOfFile3` and
+  `VirtualAlloc2` with `MEM_REPLACE_PLACEHOLDER` to fill each piece at a
+  page (not 64 KiB) boundary.  The kernel now keeps placeholder regions,
+  and a `PAGE_WRITECOPY` view (or `VirtualProtect` to write-copy) gives the
+  process its own copies of the pages, so writes reach neither the section
+  nor the file.
+- **The exception chain.**  ntdll's dispatcher keeps a chain of the
+  exceptions being handled on the stack; coreclr's managed exceptions leave
+  entries behind and reuse their stack, and the dispatcher followed a
+  stale entry's link into garbage, faulting again on every exception.  An
+  entry is now checked before its link is followed.
+- **What WPF imports.**  `ntdll` gains the interlocked list functions
+  (`RtlInterlockedPushEntrySList` and the rest; `kernel32`'s now call
+  them, so a list one DLL pushes and another flushes shares one lock), bit
+  maps (`RtlInitializeBitMap`, `RtlFindClearBitsAndSet`, ...) and
+  `DbgPrint`/`DbgPrintEx`/`DbgPrompt`/`DbgBreakPoint`; `advapi32` gains
+  `TraceMessage`, `gdi32` `GdiEntry13` (the display settings uniqueness
+  that `wpfgfx` calls unchecked) and `urlmon` `FindMimeFromData`.
+
+`apitest` checks the placeholders, write-copy views, the lists, bit maps,
+the code page checks, the UCRT helpers and MIME sniffing.  HandBrake now
+runs its managed start-up and loads `hb.dll`, then stops where WPF loads
+its first image: NovaOS has no Windows Imaging Component
+(`WindowsCodecs.dll` exports only stubs), so HandBrake is rated Borked
+until WIC exists.
+
 ## The event log and Event Viewer
 
 Dean's ask of 2026-10-14 ("a device manager, a task manager, a disk
@@ -12732,6 +12779,35 @@ it through setupapi and `hid.dll` on two handles, then the test unplugs
 it.  Next steps (Raw Input for these devices, composite USB devices, a
 third-party minidriver, timed overlapped reads for hidapi) are in
 [drivers.md](drivers.md#hid-the-class-driver-and-minidrivers).
+
+## Overlapped I/O on Windows drivers' devices (hidapi)
+
+The fourth HID step: hidapi, and most programs that talk to a HID
+device, open it with `FILE_FLAG_OVERLAPPED` and read with a timeout:
+`ReadFile` with an `OVERLAPPED`, `WaitForSingleObject` on its event,
+`GetOverlappedResult`, and `CancelIo` when they give up. Until now every
+request on a Windows driver's device finished before the system call
+returned, so such a read blocked until a report came.
+
+- **The I/O manager** (`kernel/nt/io.c`): on a handle opened for
+  overlapped I/O, an IRP the driver leaves pending makes `NtReadFile`,
+  `NtWriteFile` and `NtDeviceIoControlFile` return `STATUS_PENDING`.
+  When the driver completes it, a kernel I/O completion thread copies
+  buffered data back to the program, writes the `OVERLAPPED`'s status
+  and sets its event, as Windows' completion APC does.
+  `NtCancelIoFile` and `NtCancelIoFileEx` cancel such requests (and wait
+  for them to finish); closing the handle cancels them and sends
+  `IRP_MJ_CLOSE` after the last; a process that exits leaves none behind.
+  This holds for every Windows driver, not only HID.
+- **kernel32**: `DeviceIoControl` with an `OVERLAPPED` can now be left
+  pending (`ERROR_IO_PENDING`), and finishes into a bound completion
+  port like `ReadFile` and `WriteFile`.
+
+`hidclasstest` checks it in the devices suite's "hid" boot, 32-bit and
+64-bit: a pending read whose event times out and then completes with
+the next report, `CancelIo` and `CancelIoEx`, an overlapped `WriteFile`
+and `DeviceIoControl(IOCTL_HID_GET_FEATURE)`, and `CloseHandle` ending
+a pending read.
 
 ## Stores to indexed groupshared arrays in the HLSL compiler
 

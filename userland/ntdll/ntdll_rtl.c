@@ -1590,3 +1590,100 @@ __declspec(dllexport) _Float16 __truncdfhf2(double x)
     return as_half((unsigned short)(sign | h));
 }
 #endif
+
+/* -----------------------------------------------------------------------
+ * Bit maps (RTL_BITMAP: a size in bits and a ULONG buffer), which WPF's
+ * wpfgfx keeps its handle tables in
+ * ----------------------------------------------------------------------- */
+typedef struct { ULONG SizeOfBitMap; ULONG *Buffer; } NOVA_RTL_BITMAP;
+
+static BOOLEAN bit_set(const NOVA_RTL_BITMAP *m, ULONG i) { return (m->Buffer[i >> 5] >> (i & 31)) & 1; }
+
+NTSYSAPI VOID NTAPI RtlInitializeBitMap(NOVA_RTL_BITMAP *m, ULONG *buf, ULONG bits)
+{
+    m->SizeOfBitMap = bits;
+    m->Buffer = buf;
+}
+
+NTSYSAPI VOID NTAPI RtlSetBits(NOVA_RTL_BITMAP *m, ULONG start, ULONG n)
+{
+    for (ULONG i = start; i < start + n && i < m->SizeOfBitMap; i++) m->Buffer[i >> 5] |= 1u << (i & 31);
+}
+
+NTSYSAPI VOID NTAPI RtlClearBits(NOVA_RTL_BITMAP *m, ULONG start, ULONG n)
+{
+    for (ULONG i = start; i < start + n && i < m->SizeOfBitMap; i++) m->Buffer[i >> 5] &= ~(1u << (i & 31));
+}
+
+NTSYSAPI VOID NTAPI RtlSetAllBits(NOVA_RTL_BITMAP *m) { RtlSetBits(m, 0, m->SizeOfBitMap); }
+NTSYSAPI VOID NTAPI RtlClearAllBits(NOVA_RTL_BITMAP *m) { RtlClearBits(m, 0, m->SizeOfBitMap); }
+
+static BOOLEAN bits_are(const NOVA_RTL_BITMAP *m, ULONG start, ULONG n, BOOLEAN set)
+{
+    if (!n || start + n < start || start + n > m->SizeOfBitMap) return FALSE;
+    for (ULONG i = start; i < start + n; i++)
+        if (bit_set(m, i) != set) return FALSE;
+    return TRUE;
+}
+NTSYSAPI BOOLEAN NTAPI RtlAreBitsSet(const NOVA_RTL_BITMAP *m, ULONG start, ULONG n) { return bits_are(m, start, n, TRUE); }
+NTSYSAPI BOOLEAN NTAPI RtlAreBitsClear(const NOVA_RTL_BITMAP *m, ULONG start, ULONG n) { return bits_are(m, start, n, FALSE); }
+
+/* The first run of @n clear bits at or after @hint (wrapping round to the
+ * start), or 0xFFFFFFFF */
+NTSYSAPI ULONG NTAPI RtlFindClearBits(const NOVA_RTL_BITMAP *m, ULONG n, ULONG hint)
+{
+    ULONG size = m->SizeOfBitMap;
+    if (!n) return hint < size ? hint : 0;
+    if (n > size) return 0xFFFFFFFF;
+    if (hint >= size) hint = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        ULONG from = pass ? 0 : hint, to = pass ? hint + n - 1 : size;
+        if (to > size) to = size;
+        for (ULONG i = from, run = 0; i < to; i++) {
+            run = bit_set(m, i) ? 0 : run + 1;
+            if (run == n) return i + 1 - n;
+        }
+    }
+    return 0xFFFFFFFF;
+}
+
+NTSYSAPI ULONG NTAPI RtlFindClearBitsAndSet(NOVA_RTL_BITMAP *m, ULONG n, ULONG hint)
+{
+    ULONG i = RtlFindClearBits(m, n, hint);
+    if (i != 0xFFFFFFFF) RtlSetBits(m, i, n);
+    return i;
+}
+
+NTSYSAPI ULONG NTAPI RtlNumberOfSetBits(const NOVA_RTL_BITMAP *m)
+{
+    ULONG c = 0;
+    for (ULONG i = 0; i < m->SizeOfBitMap; i++) c += bit_set(m, i);
+    return c;
+}
+
+/* -----------------------------------------------------------------------
+ * Debugger output: no debugger is attached, so the message (its format,
+ * unformatted: ntdll has no printf) goes to the kernel log, as NovaOS's
+ * OutputDebugString does; a breakpoint with no debugger is a no-op
+ * ----------------------------------------------------------------------- */
+static ULONG dbg_out(const char *fmt)
+{
+    SIZE_T n = 0;
+    while (fmt && fmt[n] && n < 512) n++;
+    if (n) NtNovaDebugPrint(fmt, (ULONG)n);
+    return 0;                                       /* STATUS_SUCCESS */
+}
+NTSYSAPI ULONG __cdecl DbgPrint(const char *fmt, ...) { return dbg_out(fmt); }
+NTSYSAPI ULONG __cdecl DbgPrintEx(ULONG component, ULONG level, const char *fmt, ...)
+{
+    (void)component;
+    return level == 0 /* DPFLTR_ERROR_LEVEL */ ? dbg_out(fmt) : 0;
+}
+NTSYSAPI ULONG NTAPI DbgPrompt(const char *prompt, char *reply, ULONG len)
+{
+    dbg_out(prompt);
+    if (reply && len) reply[0] = '\0';
+    return 0;                                       /* no characters read */
+}
+NTSYSAPI VOID NTAPI DbgBreakPoint(void) { }
+NTSYSAPI VOID NTAPI DbgUserBreakPoint(void) { }

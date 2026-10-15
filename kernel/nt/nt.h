@@ -127,13 +127,36 @@ bool      NtIoDeviceName(NT_DEVICE_OBJECT *d, char *out, int cap);
 /* Open it: IRP_MJ_CREATE; *@out the file object */
 NTSTATUS  NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options,
                    NT_FILE_OBJECT **out);
+/* An overlapped request (a handle opened without FILE_SYNCHRONOUS_IO_*):
+ * one the driver leaves pending makes NtIoRead/Write/Control return
+ * STATUS_PENDING, and the I/O completion thread later copies its data to
+ * the caller's buffer with @copy (false: the address is bad), then calls
+ * @done once with its status and bytes.  @gone: its owner went away
+ * (NtIoOwnerGone), so nothing was copied.  @owner and @key name it for
+ * NtIoCancel (the process, its I/O status block). */
+typedef struct {
+    bool  (*copy)(void *ctx, UINT64 dst, const void *src, UINT64 n);
+    void  (*done)(void *ctx, NTSTATUS st, UINT64 info, bool gone);
+    void   *ctx;
+    void   *owner;
+    UINT64  key;
+} NtIoAsync;
 /* Read, write or send a control code: the caller's buffers are user
- * addresses of the current process.  *@info the bytes transferred. */
-NTSTATUS  NtIoRead(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info);
-NTSTATUS  NtIoWrite(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info);
+ * addresses of the current process.  *@info the bytes transferred.
+ * @as: NULL waits for the request; else as above. */
+NTSTATUS  NtIoRead(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info, const NtIoAsync *as);
+NTSTATUS  NtIoWrite(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info, const NtIoAsync *as);
 NTSTATUS  NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len,
-                      UINT64 *info);
-/* The handle's last close: IRP_MJ_CLEANUP, IRP_MJ_CLOSE, and the file object goes */
+                      UINT64 *info, const NtIoAsync *as);
+/* NtCancelIoFile(Ex): cancel @fo's pending overlapped requests of @owner
+ * (@key nonzero: only that one) and wait (briefly) for them to finish;
+ * how many */
+int       NtIoCancel(NT_FILE_OBJECT *fo, void *owner, UINT64 key);
+/* @owner is going away: its pending requests are cancelled and finish
+ * without touching it */
+void      NtIoOwnerGone(void *owner);
+/* The handle's last close: IRP_MJ_CLEANUP, its pending requests
+ * cancelled, IRP_MJ_CLOSE once they finish, and the file object goes */
 void      NtIoClose(NT_FILE_OBJECT *fo);
 /* Remove @drv's devices and links that its DriverUnload left behind */
 void      NtIoDropDevices(NtDriver *drv);

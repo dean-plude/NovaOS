@@ -165,19 +165,23 @@ K32 BOOL WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPV
                                 LPDWORD ret, LPOVERLAPPED ov)
 {
     if (ret) *ret = 0;
+    if (ov) {                                       /* (pending: ERROR_IO_PENDING, finished into @ov later) */
+        NTSTATUS s = k32_overlapped_ioctl(h, ov, code, in, in_n, out, out_n);
+        if (s == STATUS_PENDING) { SetLastError(ERROR_IO_PENDING); return FALSE; }
+        if (ret) *ret = NT_SUCCESS(s) ? (DWORD)ov->InternalHigh : 0;
+        if (!NT_SUCCESS(s)) { SetLastError(RtlNtStatusToDosError(s)); return FALSE; }
+        return TRUE;
+    }
     IO_STATUS_BLOCK io = { 0 };
+    io.Status = STATUS_PENDING;
     NTSTATUS s = NtDeviceIoControlFile(h, 0, 0, 0, &io, code, in, in_n, out, out_n);
-    if (s == STATUS_PENDING && !ov) {               /* (a synchronous caller waits for it) */
+    if (s == STATUS_PENDING) {                      /* (a synchronous caller waits for it, even on an overlapped handle) */
         NtWaitForSingleObject(h, FALSE, NULL);
+        while (*(volatile NTSTATUS *)&io.Status == STATUS_PENDING) Sleep(1);
         s = io.Status;
     }
     DWORD n = NT_SUCCESS(s) ? (DWORD)io.Information : 0;
     if (ret) *ret = n;
-    if (ov) {                                       /* (finished at once) */
-        ov->Internal = (ULONG_PTR)s;
-        ov->InternalHigh = n;
-        if (ov->hEvent) SetEvent((HANDLE)((ULONG_PTR)ov->hEvent & ~(ULONG_PTR)1));
-    }
     if (!NT_SUCCESS(s)) { SetLastError(RtlNtStatusToDosError(s)); return FALSE; }
     return TRUE;
 }

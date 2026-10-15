@@ -10,8 +10,12 @@
  * \Device\<name>, kernel/nt/io.c) is a UO_DEVICE object holding the
  * driver's FILE_OBJECT; NtReadFile, NtWriteFile and NtDeviceIoControlFile
  * on it become IRPs, and its last close IRP_MJ_CLEANUP and IRP_MJ_CLOSE.
- * The requests finish before the call returns (overlapped handles too,
- * whose event is then set at once).
+ * On a handle opened for synchronous I/O the call waits for its IRP.  On
+ * an overlapped one (CreateFile's FILE_FLAG_OVERLAPPED) an IRP the
+ * driver leaves pending makes the call return STATUS_PENDING, as on
+ * Windows: when it completes, the kernel's I/O completion thread writes
+ * the data, the I/O status block (the OVERLAPPED's Internal and
+ * InternalHigh) and sets the event, and NtCancelIoFile(Ex) cancels it.
  */
 #include "um_internal.h"
 #include "../nt/nt.h"
@@ -55,9 +59,70 @@ UINT32 um_driver_open(const char *path, UINT32 access, UINT32 share, UINT32 disp
     return 0;
 }
 
+/* An overlapped request left pending: who finishes it, and where */
+typedef struct {
+    UmProcess *proc;
+    UINT64     iosb;                    /* bit 63: the 32-bit layout */
+    UmObject  *event;                   /* referenced, or NULL */
+} Pending;
+
+static bool pending_copy(void *ctx, UINT64 dst, const void *src, UINT64 n)
+{
+    return um_write(((Pending *)ctx)->proc, dst, src, n);
+}
+
+static void pending_done(void *ctx, NTSTATUS st, UINT64 info, bool gone)
+{
+    Pending *pd = ctx;
+    if (!gone && pd->iosb) {
+        if (pd->iosb >> 63) {
+            UINT32 b[2] = { (UINT32)st, (UINT32)info };
+            um_write(pd->proc, pd->iosb & ~(UINT64_C(1) << 63), b, sizeof(b));
+        } else {
+            UINT64 b[2] = { (UINT32)st, info };
+            um_write(pd->proc, pd->iosb, b, sizeof(b));
+        }
+    }
+    if (pd->event) {
+        if (!gone) {
+            IrqState s = ob_lock();
+            pd->event->signaled = true;
+            um_ob_wake_boost(pd->event, BOOST_DISK);
+            ob_unlock(s);
+        }
+        um_ob_unref(pd->event);
+    }
+    kfree(pd);
+}
+
+/* What an overlapped request on @o needs, or NULL (a synchronous handle,
+ * or no memory: then it waits); the event is reset, as NtReadFile does */
+static Pending *pending_new(UmObject *o, UINT64 event, UINT64 iosb, NtIoAsync *as)
+{
+    if (((DeviceFile *)o)->fo->Flags & NT_FO_SYNCHRONOUS_IO) return NULL;
+    Pending *pd = kzalloc(sizeof(*pd));
+    if (!pd) return NULL;
+    pd->proc = UmCurrent();
+    pd->iosb = iosb;
+    pd->event = event ? um_handle_object(pd->proc, event, UO_EVENT) : NULL;
+    if (pd->event) { IrqState s = ob_lock(); pd->event->signaled = false; ob_unlock(s); }
+    *as = (NtIoAsync){ pending_copy, pending_done, pd, pd->proc, iosb & ~(UINT64_C(1) << 63) };
+    return pd;
+}
+
+/* (finished at once: the caller sets the event and the status block) */
+static UINT32 pending_end(Pending *pd, NTSTATUS st)
+{
+    if (st == STATUS_PENDING || !pd) return (UINT32)st;
+    if (pd->event) um_ob_unref(pd->event);
+    kfree(pd);
+    return (UINT32)st;
+}
+
 /* NtReadFile / NtWriteFile on a device handle; @offset_ptr the caller's
- * PLARGE_INTEGER ByteOffset (or 0) */
-UINT32 um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offset_ptr, UINT64 *info)
+ * PLARGE_INTEGER ByteOffset (or 0); STATUS_PENDING: see above */
+UINT32 um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offset_ptr, UINT64 event, UINT64 iosb,
+                    UINT64 *info)
 {
     NT_FILE_OBJECT *fo = ((DeviceFile *)o)->fo;
     INT64 off;
@@ -67,12 +132,32 @@ UINT32 um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 offs
         if (!NT_SUCCESS(CopyFromUser(&off, (const void *)(uintptr_t)offset_ptr, 8))) return ST_ACCESS_VIOLATION;
         if (off != -2 && off != -1) at = &off;           /* (FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_TO_END_OF_FILE) */
     }
-    return (UINT32)(write ? NtIoWrite(fo, buf, len, at, info) : NtIoRead(fo, buf, len, at, info));
+    NtIoAsync as;
+    Pending *pd = pending_new(o, event, iosb, &as);
+    NTSTATUS st = write ? NtIoWrite(fo, buf, len, at, info, pd ? &as : NULL) : NtIoRead(fo, buf, len, at, info, pd ? &as : NULL);
+    return pending_end(pd, st);
 }
 
-UINT32 um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info)
+UINT32 um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 event,
+                       UINT64 iosb, UINT64 *info)
 {
-    return (UINT32)NtIoControl(((DeviceFile *)o)->fo, code, in, in_len, out, out_len, info);
+    NtIoAsync as;
+    Pending *pd = pending_new(o, event, iosb, &as);
+    return pending_end(pd, NtIoControl(((DeviceFile *)o)->fo, code, in, in_len, out, out_len, info, pd ? &as : NULL));
+}
+
+/* NtCancelIoFile(Ex): the calling process's pending requests on the
+ * handle (@iosb: only that one) */
+UINT32 um_driver_cancel(UmObject *o, UINT64 iosb)
+{
+    int n = NtIoCancel(((DeviceFile *)o)->fo, UmCurrent(), iosb & ~(UINT64_C(1) << 63));
+    return n || !iosb ? 0 : 0xC0000225u;                  /* STATUS_NOT_FOUND */
+}
+
+/* A process is going away: its pending requests finish without it */
+void um_driver_process_gone(UmProcess *p)
+{
+    NtIoOwnerGone(p);
 }
 
 /* The service name in a driver's registry path (a user UNICODE_STRING) */

@@ -380,3 +380,69 @@ NTSYSAPI NTSTATUS NTAPI RtlRunOnceExecuteOnce(PRTL_RUN_ONCE once, PRTL_RUN_ONCE_
     RtlRunOnceComplete(once, ok ? 0 : 4, ctx ? *ctx : 0);
     return ok ? STATUS_SUCCESS : (NTSTATUS)0xC0000001;   /* STATUS_UNSUCCESSFUL */
 }
+
+/* -----------------------------------------------------------------------
+ * Interlocked singly linked lists (a spin lock keeps them simple); kernel32's
+ * InterlockedPushEntrySList and friends call these, as on Windows, so a list
+ * one DLL pushes and another flushes (WPF's wpfgfx) shares the one lock.
+ * The header holds the first entry, and the depth and a sequence (x64:
+ * Alignment and the low and high bits of Region; x86: one 8-byte header)
+ * ----------------------------------------------------------------------- */
+static volatile LONG g_slist_lock;
+static void sl_lock(void)   { while (__atomic_exchange_n(&g_slist_lock, 1, __ATOMIC_ACQUIRE)) __builtin_ia32_pause(); }
+static void sl_unlock(void) { __atomic_store_n(&g_slist_lock, 0, __ATOMIC_RELEASE); }
+
+#ifdef _WIN64
+#define SL_FIRST(h)      ((PSLIST_ENTRY)(h)->Alignment)
+#define SL_SET_FIRST(h, e) ((h)->Alignment = (ULONGLONG)(e))
+#define SL_DEPTH(h)      ((USHORT)((h)->Region & 0xFFFF))
+#define SL_BUMP(h, d)    ((h)->Region = (((h)->Region + (d)) & 0xFFFF) | (((h)->Region + 0x10000) & ~0xFFFFULL))
+#else
+#define SL_FIRST(h)      ((h)->Next.Next)
+#define SL_SET_FIRST(h, e) ((h)->Next.Next = (e))
+#define SL_DEPTH(h)      ((h)->Depth)
+#define SL_BUMP(h, d)    ((h)->Depth += (d), (h)->Sequence++)
+#endif
+
+NTSYSAPI VOID NTAPI RtlInitializeSListHead(PSLIST_HEADER h)
+{
+    BYTE *b = (BYTE *)h;
+    for (SIZE_T i = 0; i < sizeof(*h); i++) b[i] = 0;
+}
+
+NTSYSAPI PSLIST_ENTRY NTAPI RtlFirstEntrySList(const SLIST_HEADER *h) { return SL_FIRST(h); }
+
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedPushEntrySList(PSLIST_HEADER h, PSLIST_ENTRY e)
+{
+    sl_lock();
+    PSLIST_ENTRY old = SL_FIRST(h);
+    e->Next = old;
+    SL_SET_FIRST(h, e);
+    SL_BUMP(h, 1);
+    sl_unlock();
+    return old;
+}
+
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedPopEntrySList(PSLIST_HEADER h)
+{
+    sl_lock();
+    PSLIST_ENTRY e = SL_FIRST(h);
+    if (e) {
+        SL_SET_FIRST(h, e->Next);
+        SL_BUMP(h, -1);
+    }
+    sl_unlock();
+    return e;
+}
+
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedFlushSList(PSLIST_HEADER h)
+{
+    sl_lock();
+    PSLIST_ENTRY e = SL_FIRST(h);
+    SL_SET_FIRST(h, NULL);
+    SL_BUMP(h, -(int)SL_DEPTH(h));
+    sl_unlock();
+    return e;
+}
+
+NTSYSAPI USHORT NTAPI RtlQueryDepthSList(PSLIST_HEADER h) { return SL_DEPTH(h); }

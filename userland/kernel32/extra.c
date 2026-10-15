@@ -481,6 +481,22 @@ NTSTATUS k32_overlapped_fsctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWO
     return s;
 }
 
+/* DeviceIoControl with an OVERLAPPED: a Windows driver's device may leave
+ * it pending (kernel/um/um_driver.c) */
+NTSTATUS k32_overlapped_ioctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWORD in_len, PVOID out, DWORD out_len)
+{
+    Watch *w = watch_new(h, o, 0);
+    HANDLE ev = w ? w->ev : (HANDLE)((ULONG_PTR)o->hEvent & ~(ULONG_PTR)1);
+    o->Internal = STATUS_PENDING;
+    o->InternalHigh = 0;
+    NTSTATUS s = NtDeviceIoControlFile(h, ev, 0, 0, (PIO_STATUS_BLOCK)o, code, in, in_len, out, out_len);
+    if (s == STATUS_PENDING) { if (w) watch_start(w); return s; }
+    o->Internal = (ULONG_PTR)s;
+    if (!NT_SUCCESS(s) && s != STATUS_BUFFER_OVERFLOW) o->InternalHigh = 0;
+    finished_now(h, o, w, 0, s);
+    return s;
+}
+
 WINBASEAPI BOOL WINAPI GetOverlappedResultEx(HANDLE h, LPOVERLAPPED ov, LPDWORD bytes, DWORD ms, BOOL alertable)
 {
     (void)h;
@@ -821,62 +837,20 @@ void k32_forget_handle(HANDLE h)
 }
 
 /* -----------------------------------------------------------------------
- * Interlocked singly linked lists (a spin lock keeps them simple)
+ * Interlocked singly linked lists: ntdll's (RtlInterlocked*SList), as on
+ * Windows, so a list one DLL pushes and another flushes shares one lock
  * ----------------------------------------------------------------------- */
-static volatile LONG g_slist_lock;
-static void sl_lock(void)   { while (__atomic_exchange_n(&g_slist_lock, 1, __ATOMIC_ACQUIRE)) __builtin_ia32_pause(); }
-static void sl_unlock(void) { __atomic_store_n(&g_slist_lock, 0, __ATOMIC_RELEASE); }
+NTSYSAPI VOID NTAPI RtlInitializeSListHead(PSLIST_HEADER h);
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedPushEntrySList(PSLIST_HEADER h, PSLIST_ENTRY e);
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedPopEntrySList(PSLIST_HEADER h);
+NTSYSAPI PSLIST_ENTRY NTAPI RtlInterlockedFlushSList(PSLIST_HEADER h);
+NTSYSAPI USHORT NTAPI RtlQueryDepthSList(PSLIST_HEADER h);
 
-/* The list's first entry, and its depth and sequence (x64: Alignment and
- * the low and high bits of Region; x86: one 8-byte header) */
-#ifdef _WIN64
-#define SL_FIRST(h)      ((PSLIST_ENTRY)(h)->Alignment)
-#define SL_SET_FIRST(h, e) ((h)->Alignment = (ULONGLONG)(e))
-#define SL_DEPTH(h)      ((USHORT)((h)->Region & 0xFFFF))
-#define SL_BUMP(h, d)    ((h)->Region = (((h)->Region + (d)) & 0xFFFF) | (((h)->Region + 0x10000) & ~0xFFFFULL))
-#else
-#define SL_FIRST(h)      ((h)->Next.Next)
-#define SL_SET_FIRST(h, e) ((h)->Next.Next = (e))
-#define SL_DEPTH(h)      ((h)->Depth)
-#define SL_BUMP(h, d)    ((h)->Depth += (d), (h)->Sequence++)
-#endif
-
-WINBASEAPI VOID WINAPI InitializeSListHead(PSLIST_HEADER h) { memset(h, 0, sizeof(*h)); }
-
-WINBASEAPI PSLIST_ENTRY WINAPI InterlockedPushEntrySList(PSLIST_HEADER h, PSLIST_ENTRY e)
-{
-    sl_lock();
-    PSLIST_ENTRY old = SL_FIRST(h);
-    e->Next = old;
-    SL_SET_FIRST(h, e);
-    SL_BUMP(h, 1);
-    sl_unlock();
-    return old;
-}
-
-WINBASEAPI PSLIST_ENTRY WINAPI InterlockedPopEntrySList(PSLIST_HEADER h)
-{
-    sl_lock();
-    PSLIST_ENTRY e = SL_FIRST(h);
-    if (e) {
-        SL_SET_FIRST(h, e->Next);
-        SL_BUMP(h, -1);
-    }
-    sl_unlock();
-    return e;
-}
-
-WINBASEAPI PSLIST_ENTRY WINAPI InterlockedFlushSList(PSLIST_HEADER h)
-{
-    sl_lock();
-    PSLIST_ENTRY e = SL_FIRST(h);
-    SL_SET_FIRST(h, NULL);
-    SL_BUMP(h, -(int)SL_DEPTH(h));
-    sl_unlock();
-    return e;
-}
-
-WINBASEAPI USHORT WINAPI QueryDepthSList(PSLIST_HEADER h) { return SL_DEPTH(h); }
+WINBASEAPI VOID WINAPI InitializeSListHead(PSLIST_HEADER h) { RtlInitializeSListHead(h); }
+WINBASEAPI PSLIST_ENTRY WINAPI InterlockedPushEntrySList(PSLIST_HEADER h, PSLIST_ENTRY e) { return RtlInterlockedPushEntrySList(h, e); }
+WINBASEAPI PSLIST_ENTRY WINAPI InterlockedPopEntrySList(PSLIST_HEADER h) { return RtlInterlockedPopEntrySList(h); }
+WINBASEAPI PSLIST_ENTRY WINAPI InterlockedFlushSList(PSLIST_HEADER h) { return RtlInterlockedFlushSList(h); }
+WINBASEAPI USHORT WINAPI QueryDepthSList(PSLIST_HEADER h) { return RtlQueryDepthSList(h); }
 
 #ifndef _WIN64
 /* x86: the Interlocked functions are kernel32 exports there (x64 code has

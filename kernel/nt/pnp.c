@@ -1089,20 +1089,45 @@ static NT_STATUS query_remove(NtPdo *p)
     for (int i = 0; i < g_npdo && NT_SUCCESS(st); i++) {
         NtPdo *c = g_pdo[i];
         if (c->parent != p || !c->started) continue;
+        PnpNotify(PNP_QUERY_REMOVE, c->node);
         st = send_pnp(c->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
         if (NT_SUCCESS(st)) asked[n++] = c;
-        else kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", c->instance, (UINT32)st);
+        else {
+            PnpNotify(PNP_QUERY_REMOVE_FAILED, c->node);
+            kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", c->instance, (UINT32)st);
+        }
     }
     if (NT_SUCCESS(st)) {
+        PnpNotify(PNP_QUERY_REMOVE, p->node);
         st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
         if (!NT_SUCCESS(st)) {
+            PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
             kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
             send_pnp(p->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
         }
     }
-    if (!NT_SUCCESS(st))
-        for (int i = 0; i < n; i++) send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
+    if (!NT_SUCCESS(st)) {
+        for (int i = 0; i < n; i++) {
+            PnpNotify(PNP_QUERY_REMOVE_FAILED, asked[i]->node);
+            send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
+        }
+    }
     return st;
+}
+
+UINT32 NtPnpNodeForFile(NT_FILE_OBJECT *file)
+{
+    if (!file || !file->DeviceObject) return 0;
+    pnp_init();
+    pnp_lock();
+    UINT32 node = 0;
+    for (int i = 0; i < g_npdo && !node; i++) {
+        NtPdo *p = g_pdo[i];
+        for (NT_DEVICE_OBJECT *d = p->pdo; d; d = d->AttachedDevice)
+            if (d == file->DeviceObject) { node = p->node; break; }
+    }
+    pnp_unlock();
+    return node;
 }
 
 NTSTATUS NtPnpStop(UINT32 node)
@@ -1872,4 +1897,3 @@ NT_API void nt_IoInvalidateDeviceRelations(NT_DEVICE_OBJECT *pdo, int type)
 NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp) { (void)irp; }
 
 NT_API NT_STATUS nt_PoCallDriver(NT_DEVICE_OBJECT *dev, NT_IRP *irp) { return nt_IofCallDriver(dev, irp); }
-

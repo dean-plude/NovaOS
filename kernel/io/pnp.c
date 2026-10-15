@@ -108,6 +108,17 @@ void PnpRemove(UINT32 id)
     if (g_seq != after) UmGuiDevicesChanged(after);
 }
 
+void PnpNotify(UINT32 kind, UINT32 id)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    UINT32 after = g_seq;
+    if (id && id <= g_count && g_node[id] && (g_node[id]->flags & PNP_PRESENT))
+        event_locked(kind, g_node[id]);
+    bool changed = g_seq != after;
+    spin_unlock_irqrestore(&g_lock, s);
+    if (changed) UmGuiDevicesChanged(after);
+}
+
 void PnpDelete(UINT32 id)
 {
     PnpRemove(id);

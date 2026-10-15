@@ -168,6 +168,7 @@ UINT32    NtPnpStart(UINT32 node);
 /* Remove a started device's driver (query-remove, remove): it is disabled
  * (problem 22) until NtPnpStart; a driver's veto comes back as its status */
 NTSTATUS  NtPnpStop(UINT32 node);
+UINT32    NtPnpNodeForFile(NT_FILE_OBJECT *file);
 /* A root-enumerated device (instance ROOT\<class>\NNNN, a virtual one no
  * bus finds), as setupapi's DIF_REGISTERDEVICE makes it: its node (an
  * arrival; @cls its setup class, @hwids and @compat REG_MULTI_SZ), or 0 */

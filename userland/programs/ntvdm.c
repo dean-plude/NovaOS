@@ -293,6 +293,13 @@ static void draw(Vdm *v)
     if (cols > 80) cols = 80;
     if (rows > 50) rows = 50;
     size_t n = (size_t)cols * rows * 2;
+    CONSOLE_SCREEN_BUFFER_INFO info;            /* (the window grew to fit 25 rows: all of it again) */
+    static COORD shown_size;
+    if (GetConsoleScreenBufferInfo(out, &info) &&
+        (info.dwSize.X != shown_size.X || info.dwSize.Y != shown_size.Y)) {
+        shown_size = info.dwSize;
+        drawn = 0;
+    }
     int top = 0, bottom = rows - 1;             /* (the rows that changed: the console redraws them) */
     if (drawn && cols == shown_cols && rows == shown_rows) {
         size_t row = (size_t)cols * 2;

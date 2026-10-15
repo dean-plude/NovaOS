@@ -210,6 +210,22 @@ the smiling face (light shows the room you are in), walking into a letter
 fights a monster, the numbers at the bottom right are level, weapon,
 armour and HP, and Esc gives the Terminal back.
 
+**The window.**  A DOS screen is 80 x 25, and the Terminal's window had
+21 rows, so a program's last rows (bootRogue's status line) were cut off.
+When a program takes the whole console (it reads keys one at a time, as
+`ntvdm.exe` does), the Terminal now grows its window to at least 80 x 25,
+as a Windows console window is, and `ntvdm.exe` draws the whole screen
+again when the console's size changes.  The Terminal draws characters
+from the monospace font's ASCII: box drawing as lines and corners, the
+smiling faces as `@` and other picture characters as stand-ins, while the
+console itself keeps the real characters (what `ReadConsoleOutput` and the
+tests read).
+
+Making the game run also found a bug in step 31.3's drive C:: the alias
+for a long name with a six-character stem and an extension
+(`ROGUE-LICENSE.TXT`, `ROGUE-~1.TXT`) overran a ten-byte buffer in
+`redir.c`, and DOS could not find anything in that folder.
+
 **Tests.**  `dostest` starts `ROGUE.COM` with `CreateProcess`, waits for
 the hero (U+263A in the console, code page 437's `01h`) and the HP, plays
 eight moves with the arrow keys and presses Esc, which must end it with

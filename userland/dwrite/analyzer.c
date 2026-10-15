@@ -93,7 +93,7 @@ static HRESULT shape_text(const WCHAR *text, UINT32 length, FontFace *face, BOOL
 {
     memset(shaped, 0, sizeof(*shaped));
     if (!text || !face || !face->face || !face->face->file || !face->face->file->bytes ||
-        length > 0x7fffffff)
+        length > 0x7fffffff / sizeof(WCHAR) || !face->face->upem)
         return E_INVALIDARG;
     if (!hb_load()) return E_FAIL;
 
@@ -163,7 +163,7 @@ typedef HRESULT (STDMETHODCALLTYPE *GetTextAtPosition)(void *, UINT32, const WCH
 static HRESULT source_copy(void *source, UINT32 position, UINT32 length, WCHAR **out)
 {
     *out = NULL;
-    if (length > 0x7fffffff / sizeof(WCHAR)) return E_INVALIDARG;
+    if (length > 0x7fffffff / sizeof(WCHAR) || length > 0xffffffffu - position) return E_INVALIDARG;
     WCHAR *copy = dw_alloc((SIZE_T)(length ? length : 1) * sizeof(WCHAR));
     if (!copy) return E_OUTOFMEMORY;
     UINT32 copied = 0;
@@ -398,7 +398,9 @@ static HRESULT STDMETHODCALLTYPE analyzer_placements(TextAnalyzer *analyzer, con
 {
     (void)analyzer; (void)cluster_map; (void)text_props; (void)glyph_indices; (void)glyph_props;
     (void)sideways; (void)script; (void)locale; (void)features; (void)feature_lengths; (void)feature_ranges;
-    if ((length && !text) || (glyph_count && (!font_face || !advances || !offsets)) || em_size < 0) return E_INVALIDARG;
+    if ((length && (!text || !cluster_map || !text_props)) ||
+        (glyph_count && (!glyph_indices || !glyph_props || !font_face || !advances || !offsets)) ||
+        em_size <= 0 || em_size > 1.0e7f || em_size != em_size) return E_INVALIDARG;
     if (!glyph_count) return S_OK;
     FontFace *face = font_face_from(font_face);
     if (!face) return E_INVALIDARG;

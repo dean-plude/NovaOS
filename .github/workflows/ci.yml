@@ -262,6 +262,37 @@ jobs:
         name: graphics-out
         path: graphics-out
         if-no-files-found: ignore
+  msdos:
+    name: MS-DOS 4.0 (built from source, booted in QEMU)
+    needs: checks
+    if: needs.checks.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install DOSBox, mtools and QEMU
+      run: |-
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dosbox mtools qemu-system-x86
+    - name: Cache the MS-DOS build
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/novaos/msdos
+        key: msdos-v1-${{ hashFiles('tools/msdos/build_msdos.py') }}
+    - name: Build MS-DOS 4.0 with its own MASM, C compiler, LINK and NMAKE
+      run: python3 tools/msdos/build_msdos.py msdos-out
+    - name: Boot it from a floppy image and run COMMAND.COM and MEM.EXE
+      run: python3 tools/msdos/boot_test.py msdos-out --work msdos-boot
+    - name: Keep the MS-DOS files and the boot log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: msdos
+        path: |-
+          msdos-out
+          msdos-boot/com1.log
+        if-no-files-found: ignore
+        retention-days: 14
   ci-result:
     name: CI result
     needs:

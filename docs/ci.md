@@ -26,6 +26,7 @@ failure.
 | **OS tests (core)**, **(network)**, **(devices)** | Build | `tools/selftest.py --suite SUITE`, one job per suite, `fail-fast: false` |
 | **Performance budget** | Build | `tools/ci/perf.py` ([below](#the-performance-budget)) |
 | **Graphics tests (OpenGL, Direct3D)** | Build | builds or restores Venus, VKD3D-Proton and a QEMU with Venus, then `tools/selftest.py --suite graphics` |
+| **MS-DOS 4.0 (built from source, booted in QEMU)** | Checks | builds MS-DOS 4.0 from Microsoft's source with its own tools in DOSBox (`tools/msdos/build_msdos.py`) and boots it from a floppy image (`tools/msdos/boot_test.py`); not part of the required checks ([dos.md](dos.md)) |
 | **Build and boot-test** | Build, the three OS test jobs, Performance budget | summary: passes only if all of those passed (`tools/ci/results.py boot`) |
 | **CI result** | every job above | summary: passes only if every selected job passed (`tools/ci/results.py ci`) |
 | **Publish nova.iso** | CI result | push to `main` only: republishes the `latest` release ([below](#the-rolling-latest-release)) |
@@ -103,12 +104,15 @@ and SMP jobs) it fails the job unless the run was started by hand with
   (`tools/build_venus.py`), VKD3D-Proton (`tools/build_vkd3d_proton.py`)
   and QEMU 10.2 with virglrenderer and Venus
   (`tools/ci/build-qemu-venus.sh`), each keyed on the script that builds it.
+- **MS-DOS job**: the MS-DOS source checkout and its build
+  (`~/.cache/novaos/msdos`), keyed on `tools/msdos/build_msdos.py`.
 
 ### Artifacts
 
 Each test job uploads its output even when it fails, kept for 14 days:
 `selftest-core`, `selftest-network`, `selftest-devices`, `graphics-out`,
-`compat-smoke-out` and `perf-out`. They hold the serial logs, a screenshot
+`compat-smoke-out`, `perf-out` and `msdos` (the built MS-DOS files, NMAKE's
+`BUILD.LOG` and the boot test's serial log). They hold the serial logs, a screenshot
 after each test, sound recordings and a JUnit file where the suite writes
 one. Each job's summary page has a table of results. The graphics job also
 uploads `venus` and `vkd3d-proton` for the publish job, and writes

@@ -61,13 +61,75 @@ python3 tools/msdos/build_msdos.py build/msdos
 python3 tools/msdos/boot_test.py build/msdos
 ```
 
+## Step 31.2: DOS in a console window
+
+Type `ntvdm` in the Terminal and MS-DOS boots in the window to `A:\>`;
+**F12** ends it and gives the Terminal back (the `COMMAND.COM` DOS boots
+to is its primary shell, which has no `EXIT`, as on a PC).  `ntvdm IMAGE`
+boots another floppy image instead.
+
+**The disk.**  The build runs `build_msdos.py` (so `dosbox` is one of the
+build's packages, [building.md](building.md)) and `tools/msdos/mkdisk.py`
+makes a 1.44 MB boot disk of the result: the boot sector, `IO.SYS` and
+`MSDOS.SYS` first as `SYS` puts them, then `COMMAND.COM` and the other 59
+files, all of MS-DOS 4.00 (1.1 MB), and an `AUTOEXEC.BAT` that sets the
+prompt (`PROMPT $P$G`).  NovaOS keeps it as
+`C:\Windows\System32\DOS\MSDOS.IMG`, beside `LICENSE.TXT`, Microsoft's
+MIT licence.  `ntvdm.exe` reads the image into memory; what DOS writes to
+the disk stays there and the file is not changed.
+
+**The CPU.**  `userland/programs/ntvdm/cpu86.c` interprets the 8086's
+instruction set with the 80186's additions (`PUSHA`, `PUSH` immediate,
+three-operand `IMUL`, shifts by an immediate count, `ENTER`/`LEAVE`,
+`BOUND`, `INS`/`OUTS`), in real mode with 1 MB of memory (addresses wrap
+at 1 MB, A20 off).  Its flags read as an 8086's, so programs that look for
+a 286 find an 8086 and do not try protected mode; there is no 8087 (ESC
+instructions do nothing, and the equipment word says so).  It is NovaOS's
+own code under the repository's MIT licence: the free interpreters are
+GPL (DOSBox, 86Box, emu2), and Microsoft publishes no real-mode CPU under
+the MIT licence (OpenVMM's `x86emu`, in Rust, emulates single instructions
+for a hypervisor's exits rather than running a CPU).
+
+**The BIOS.**  `pcbios.c` is the PC around the CPU: 640 KB, the interrupt
+controller, timer, CMOS clock and keyboard controller ports, and a BIOS
+written in C.  As in NTVDM, the ROM's interrupt vectors point at stubs
+`BOP nn; IRET` (BOP is `C4 C4 nn`, an `LES` with a register operand that no
+program uses), and the CPU calls into C for them:
+
+| Interrupt | What it does |
+|-----------|--------------|
+| 10h | Colour text mode, 80 x 25, eight pages at B800:0: cursor, scrolling, characters and attributes, teletype output, write string |
+| 11h, 12h | One floppy drive, colour 80 x 25, no 8087; 640 KB |
+| 13h | Drive A: is the image (160 KB to 2.88 MB, geometry from its size): read, write, verify, drive parameters (and the diskette parameter table, INT 1Eh) |
+| 14h | COM1 out: `ntvdm` writes what DOS sends to `AUX` to the debug log |
+| 15h | No extended memory; the rest "not supported" |
+| 16h | The keyboard buffer at 40:1E: read (waiting), peek, shift state, the 101-key calls |
+| 17h | A printer that is always ready |
+| 19h | Boot: the image's boot sector to 0:7C00 |
+| 1Ah | The tick count, and the date and time from NovaOS's clock |
+
+The timer interrupt (IRQ 0, 18.2 times a second) keeps DOS's clock and
+`INT 1Ch` going.  When DOS waits for a key the CPU stops and `ntvdm.exe`
+sleeps until a key or the next tick, so an idle DOS prompt costs nothing.
+
+**The console.**  `ntvdm.exe` draws the text screen on the console's
+alternate screen with `WriteConsoleOutputW`, code page 437 turned into
+Unicode (box drawing, accented letters) and the colour attributes kept as
+they are (the CGA's colour bits are the console's).  Keys come from
+`ReadConsoleInputW` with the console's processing off, so Ctrl+C reaches
+DOS; each becomes the scan code and character a PC keyboard gives (US
+layout), and arrows, Home, End and the function keys their extended codes.
+
+**Tests.**  The `dostest` self-test (core boot) starts `ntvdm.exe` in the
+Terminal, waits for the prompt, types `VER` and `DIR` and reads the
+answers off the console, then presses F12.  CI's MS-DOS job builds the
+same CPU and BIOS for Linux with `tools/msdos/vdm_test.c` as the host and
+boots the disk in seconds (`tools/msdos/vdm_test.py`): `VER`, `DIR`,
+`MEM`, `CHKDSK`, a `COPY` and `TYPE`, and a `DEBUG` session that assembles
+and runs a `MUL` and checks its 32-bit product and flags.
+
 ## What comes next
 
-- **31.2** a real-mode CPU (an 8086/80286 interpreter under the MIT, zlib or
-  BSD licence; DOSBox and other GPL emulators are not used in NovaOS) and
-  the BIOS services DOS needs (text-mode video, keyboard, disk, clock) on a
-  NovaOS console window, booting the built `IO.SYS` and `MSDOS.SYS` to the
-  `COMMAND.COM` prompt;
 - **31.3** `CreateProcess` on a 16-bit program starts that DOS host, as
   Windows starts `ntvdm.exe`, so `.COM` and `.EXE` files run from `cmd.exe`,
   the Terminal and Explorer, with NovaOS's drives visible to DOS;

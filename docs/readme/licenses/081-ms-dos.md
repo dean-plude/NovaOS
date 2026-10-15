@@ -1,0 +1,1 @@
+MS-DOS 4.00 (`C:\Windows\System32\DOS\MSDOS.IMG`, built from Microsoft's source at github.com/microsoft/MS-DOS by `tools/msdos/build_msdos.py` and booted by `ntvdm.exe`): MIT, its text in `C:\Windows\System32\DOS\LICENSE.TXT`

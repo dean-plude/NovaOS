@@ -5,7 +5,7 @@ profile=${1:-runtime}
 base=(qemu-system-x86 qemu-system-gui ovmf mtools dosfstools acpica-tools
       pulseaudio pulseaudio-utils python3-pil ntfs-3g curl p7zip-full ffmpeg)
 case "$profile" in
-    build) base+=(cmake make nasm clang lld llvm libc++-dev gcc-mingw-w64-x86-64 xorriso ccache) ;;
+    build) base+=(cmake make nasm clang lld llvm libc++-dev gcc-mingw-w64-x86-64 xorriso ccache dosbox) ;;
     graphics) base+=(gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64
         g++-mingw-w64-i686 xvfb xauth mesa-vulkan-drivers libgl1-mesa-dri libegl1
         seabios ipxe-qemu ninja-build pkg-config libglib2.0-dev libpixman-1-dev

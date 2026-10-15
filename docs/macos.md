@@ -162,7 +162,7 @@ Install the Xcode command line tools (`xcode-select --install`) and
 brew install cmake ninja nasm python git \
              llvm lld \
              x86_64-elf-gcc mingw-w64 \
-             mtools dosfstools xorriso coreutils p7zip \
+             mtools dosfstools xorriso coreutils p7zip dosbox-staging \
              qemu
 ```
 
@@ -174,7 +174,8 @@ brew install cmake ninja nasm python git \
 | `nasm` | Kernel assembly |
 | `p7zip` | `7z`, which unpacks the bundled Firefox installer and Mesa archive |
 | `git` | Fetching the Windows-Driver-Frameworks source |
-| `mtools`, `dosfstools` | `nova.img` (`mkfs.fat`, `mformat`, `mcopy`) |
+| `mtools`, `dosfstools` | `nova.img` (`mkfs.fat`, `mformat`, `mcopy`) and MS-DOS's boot disk |
+| `dosbox-staging` | The MS-DOS build (`tools/msdos/build_msdos.py` runs a `dosbox` command headless); not tried on a Mac yet |
 | `xorriso` | `scripts/create-iso.sh` |
 | `coreutils` | GNU `truncate`, `stat -c` and `nproc`, which the scripts use and macOS lacks |
 | `qemu` | Running NovaOS, and its UEFI firmware |

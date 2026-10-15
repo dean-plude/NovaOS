@@ -21,10 +21,13 @@
     found through the registry's `ActivatableClassId` keys) and `rpcrt4`
     (the NDR engine proxy/stub DLLs run on).
   - **UWP app model**: `twinapi.appcore` (`CoreApplication.Run` driving an
-    app's `IFrameworkView`, its `CoreWindow` with keyboard, size,
-    visibility and close events, and the `CoreDispatcher`; DXGI swap
-    chains present into a CoreWindow), the first step towards
-    `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
+    app's `IFrameworkView`, its `CoreWindow` with keyboard, pointer
+    (`PointerPoint`), size, visibility and close events, and the
+    `CoreDispatcher`; DXGI swap chains present into a CoreWindow) and
+    `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
+    sprite visuals, colour and surface brushes, drawing surfaces on
+    Direct3D 11, targets on a window or a CoreWindow), the first steps
+    towards `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
   - **Sound and input**: `winmm` (waveOut, waveIn, MIDI, joysticks),
     `mmdevapi` (WASAPI playback and capture, one endpoint per device),
     `dsound`, `xaudio2_7`/`_8`/`_9` and `x3daudio1_7` (on FAudio),

@@ -1043,9 +1043,11 @@ DCOMPAPI HRESULT WINAPI DCompositionCreateDevice(IUnknown *dxgi, const GUID *iid
 DCOMPAPI HRESULT WINAPI DCompositionCreateDevice2(IUnknown *rendering, const GUID *iid, void **out) { return create(2, rendering, iid, out); }
 DCOMPAPI HRESULT WINAPI DCompositionCreateDevice3(IUnknown *rendering, const GUID *iid, void **out) { return create(3, rendering, iid, out); }
 
+void composition_init(void);            /* (composition.c: Windows.UI.Composition) */
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     (void)inst; (void)reserved;
-    if (reason == DLL_PROCESS_ATTACH) InitializeCriticalSection(&g_lock);
+    if (reason == DLL_PROCESS_ATTACH) { InitializeCriticalSection(&g_lock); composition_init(); }
     return TRUE;
 }

@@ -66,9 +66,9 @@ static bool kbd_event(const UINT8 *d, UINT32 len, InputEvent *ev)
     return true;
 }
 
-static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len)
+static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 {
-    (void)ctx;
+    (void)ctx; (void)trans_id;
     if (len >= 8 && rd32(d) == KBD_PROTOCOL_RESPONSE) {
         kprintf("[HVINPUT] keyboard: protocol 1.0 %s\n", (rd32(d + 4) & 1) ? "accepted" : "refused");
         return;
@@ -79,7 +79,7 @@ static void kbd_packet(void *ctx, const UINT8 *d, UINT32 len)
 
 const VmbusDriver HvKeyboardDriver = {
     { 0x6d, 0xad, 0x12, 0xf9, 0x17, 0x2b, 0xea, 0x48, 0xbd, 0x65, 0xf9, 0x27, 0xa6, 0x1c, 0x76, 0x84 },
-    "Hyper-V keyboard", kbd_opened, kbd_packet,
+    "Hyper-V keyboard", kbd_opened, kbd_packet, NULL, NULL, NULL, NULL, NULL,
 };
 
 /* ---- mouse ---- */
@@ -121,8 +121,9 @@ static const UINT8 *mouse_report_desc(const UINT8 *body, UINT32 n, int *len)
     return hd + hlen;
 }
 
-static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len)
+static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
 {
+    (void)trans_id;
     HvMouse *m = ctx;
     if (!m || len < 16 || rd32(d) != PIPE_DATA) return;
     UINT32 psize = rd32(d + 4);
@@ -159,5 +160,5 @@ static void mouse_packet(void *ctx, const UINT8 *d, UINT32 len)
 
 const VmbusDriver HvMouseDriver = {
     { 0x9e, 0xb6, 0xa8, 0xcf, 0x4a, 0x5b, 0xc0, 0x4c, 0xb9, 0x8b, 0x8b, 0xa1, 0xa1, 0xf3, 0xf9, 0x5a },
-    "Hyper-V mouse", mouse_opened, mouse_packet,
+    "Hyper-V mouse", mouse_opened, mouse_packet, NULL, NULL, NULL, NULL, NULL,
 };

@@ -10,6 +10,10 @@
  *   - Cirrus Logic GD5446 (QEMU -vga cirrus): 800x600 and 640x480.
  *   - The UEFI GOP framebuffer the bootloader handed over: the boot mode
  *     only, no flipping (every other adapter).
+ *   - Hyper-V's synthetic video (drivers/hv_video.c), which takes over the
+ *     GOP framebuffer of a Generation 2 VM: the firmware's frame buffer is
+ *     the start of its video memory, and any mode the host lists that fits
+ *     there is set by a VMBus message (DisplayHyperVAttach, below).
  *   - A Windows display driver (WDDM, display-only) installed on the boot
  *     display takes over from the first or the last (DisplayWddmOffer,
  *     below): its modes, through NovaOS's dxgkrnl host.
@@ -159,3 +163,13 @@ typedef struct {
 void DisplayWddmOffer(const DisplayWddm *drv, const DisplayMode *modes, int n, DisplayMode cur);
 void DisplayWddmWithdraw(const DisplayWddm *drv, DisplayMode left);
 bool DisplayPostInfo(UINT64 *phys, int *w, int *h, int *pitch_bytes);
+
+/* -----------------------------------------------------------------------
+ * Hyper-V's synthetic video (drivers/hv_video.c), once the host took its
+ * video memory: the GOP framebuffer becomes a display with @modes (@n),
+ * each set by @set_mode, which shows w x h, 32 bpp, w * 4 bytes a row, from
+ * the frame buffer's start.  False (nothing changes) when the screen is
+ * not the GOP framebuffer.  DisplayBootFramebuffer: where it is.
+ * ----------------------------------------------------------------------- */
+bool DisplayHyperVAttach(bool (*set_mode)(int w, int h), const DisplayMode *modes, int n);
+bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h);

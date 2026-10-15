@@ -108,13 +108,21 @@ void PnpRemove(UINT32 id)
     if (g_seq != after) UmGuiDevicesChanged(after);
 }
 
+void PnpDelete(UINT32 id)
+{
+    PnpRemove(id);
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (id && id != PNP_ROOT && id <= g_count && g_node[id]) g_node[id]->flags |= PNP_DELETED;
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
 static void set_driver(UINT32 id, const char *service, UINT32 flags)
 {
     IrqState s = spin_lock_irqsave(&g_lock);
     if (id && id <= g_count && g_node[id]) {
         PnpNode *n = g_node[id];
         copy_str(n->service, sizeof(n->service), service);
-        n->flags = (n->flags & ~(UINT32)PNP_WINDOWS) | PNP_STARTED | flags;
+        n->flags = (n->flags & ~(UINT32)(PNP_WINDOWS | PNP_RAW)) | PNP_STARTED | flags;
         n->problem = 0;
     }
     spin_unlock_irqrestore(&g_lock, s);
@@ -128,6 +136,11 @@ void PnpSetDriver(UINT32 id, const char *service)
 void PnpSetWindowsDriver(UINT32 id, const char *service)
 {
     set_driver(id, service, PNP_WINDOWS);
+}
+
+void PnpSetRawDriver(UINT32 id, const char *service)
+{
+    set_driver(id, service, PNP_WINDOWS | PNP_RAW);
 }
 
 void PnpSetInbox(UINT32 id, bool on)

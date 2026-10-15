@@ -11,6 +11,12 @@
  *                          take a device's Windows driver away (query-remove,
  *                          remove; it stays disabled across boots), start it
  *                          again, or both
+ *   pnputil /remove-device <instance ID | /deviceid <ID>>
+ *                          remove a device (setupapi's DIF_REMOVE): its
+ *                          driver goes as on /disable-device, then the
+ *                          device; NovaOS removes root-enumerated
+ *                          (virtual, ROOT\...) devices this way, the ones
+ *                          a program registered (devcon install, devgen)
  *   pnputil /enum-devices [/connected | /disconnected] [/class <name | GUID>]
  *                         [/instanceid <id>] [/deviceid <id>] [/ids] [/drivers]
  *                          the devices of the Plug and Play tree (cfgmgr32),
@@ -54,6 +60,10 @@ __declspec(dllimport) void WINAPI SetupCloseInfFile(HANDLE h);
 __declspec(dllimport) BOOL WINAPI SetupGetLineTextW(PVOID ctx, HANDLE h, LPCWSTR section, LPCWSTR key,
                                                     LPWSTR buf, DWORD size, PDWORD need);
 
+__declspec(dllimport) HANDLE WINAPI SetupDiCreateDeviceInfoList(const GUID *cls, HWND parent);
+__declspec(dllimport) BOOL WINAPI SetupDiOpenDeviceInfoW(HANDLE set, LPCWSTR id, HWND parent, DWORD flags, PVOID dev);
+__declspec(dllimport) BOOL WINAPI SetupDiRemoveDevice(HANDLE set, PVOID dev);
+__declspec(dllimport) BOOL WINAPI SetupDiDestroyDeviceInfoList(HANDLE set);
 __declspec(dllimport) BOOL WINAPI UpdateDriverForPlugAndPlayDevicesW(HWND parent, LPCWSTR hwid, LPCWSTR inf, DWORD flags,
                                                                       PBOOL reboot);
 
@@ -485,9 +495,30 @@ static BOOL in_multi(const WCHAR *m, const WCHAR *id)
     return FALSE;
 }
 
+/* /remove-device on one device: setupapi's DIF_REMOVE */
+static int remove_device(const WCHAR *id)
+{
+    struct { DWORD cbSize; GUID ClassGuid; DWORD DevInst; ULONG_PTR Reserved; } d = { sizeof(d) };
+    printf("Removing device:            %ls\n", id);
+    HANDLE set = SetupDiCreateDeviceInfoList(NULL, NULL);
+    BOOL ok = set != INVALID_HANDLE_VALUE && SetupDiOpenDeviceInfoW(set, id, NULL, 0, &d) && SetupDiRemoveDevice(set, &d);
+    DWORD e = GetLastError();
+    if (set != INVALID_HANDLE_VALUE) SetupDiDestroyDeviceInfoList(set);
+    if (!ok) {
+        printf("Failed to remove device: %s\n\n",
+               e == ERROR_NOT_SUPPORTED ? "NovaOS removes root-enumerated devices only." :
+               e == ERROR_DEVICE_IN_USE ? "its driver vetoed the removal." :
+               e == ERROR_ACCESS_DENIED ? "access is denied." : "the device could not be removed.");
+        return 1;
+    }
+    printf("Device removed successfully.\n\n");
+    return 0;
+}
+
 /* /disable-device, /enable-device, /restart-device on one device */
 static int device_op(const char *op, DWORD dn, const WCHAR *id)
 {
+    if (!_stricmp(op, "/remove-device")) { (void)dn; return remove_device(id); }
     BOOL off = !_stricmp(op, "/disable-device"), on = !_stricmp(op, "/enable-device");
     printf("%s device:          %ls\n", off ? "Disabling" : on ? "Enabling" : "Restarting", id);
     CONFIGRET cr = on ? 0 : CM_Disable_DevNode(dn, 0);
@@ -1194,7 +1225,7 @@ static int usage(void)
     printf("PNPUTIL [/add-driver <filename.inf | *.inf> [/subdirs] [/install]]\n"
            "        [/delete-driver <oem#.inf> [/uninstall] [/force]]\n"
            "        [/enum-drivers]\n"
-           "        [/disable-device | /enable-device | /restart-device <instance ID | /deviceid <ID>>]\n"
+           "        [/disable-device | /enable-device | /restart-device | /remove-device <instance ID | /deviceid <ID>>]\n"
            "        [/enum-devices [/connected | /disconnected] [/class <name>] [/instanceid <id>] [/ids] [/drivers]]\n"
            "        [/scan-devices [/instanceid <id>] [/search-online [/source <url>] [/install]]]\n");
     return 1;
@@ -1252,7 +1283,7 @@ int main(int argc, char **argv)
         while (n && source[n - 1] == '/') source[--n] = 0;
         return scan_devices(one ? inst : NULL, online, install, source);
     }
-    if (is(op, "/disable-device") || is(op, "/enable-device") || is(op, "/restart-device"))
+    if (is(op, "/disable-device") || is(op, "/enable-device") || is(op, "/restart-device") || is(op, "/remove-device"))
         return argc == 3 ? devices_op(op, argv[2], FALSE) : argc == 4 && is(argv[2], "/deviceid") ? devices_op(op, argv[3], TRUE)
                                                                                                     : usage();
     if (is(op, "/enum-devices")) {

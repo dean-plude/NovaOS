@@ -11,7 +11,8 @@ order of preference:
 | **82540EM, 82544, 82545EM** | `100e`, `100f`, `1004`, `100c`, `1015` | QEMU's `e1000`, VirtualBox, VMware |
 
 NovaOS's network stack uses one adapter at a time. At boot it takes an
-Intel adapter if there is one, otherwise a virtio-net card
+Intel adapter if there is one, otherwise a virtio-net card (or in a
+Hyper-V VM, its synthetic adapter: [hyperv.md](hyperv.md#network))
 (`kernel/net/net.c`). A Windows NDIS driver installed on a card can take
 over from the built-in virtio-net driver ([drivers.md](drivers.md#network-drivers-ndis));
 the e1000 driver does not step aside that way.

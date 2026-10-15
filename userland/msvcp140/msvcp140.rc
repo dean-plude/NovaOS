@@ -1,0 +1,28 @@
+// msvcp140.dll's version: the Visual C++ runtime its STL sources come from
+// (third_party/msstl, _MSVC_STL_UPDATE 202411: Visual Studio 2022 17.12's
+// 14.42).  Programs check it before they start: OBS Studio refuses a
+// msvcp140.dll older than 14.40, or one with no version at all
+1 VERSIONINFO
+FILEVERSION 14,42,34433,0
+PRODUCTVERSION 14,42,34433,0
+FILEOS 0x40004
+FILETYPE 2
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "NovaOS"
+            VALUE "FileDescription", "C++ standard library"
+            VALUE "FileVersion", "14.42.34433.0"
+            VALUE "InternalName", "msvcp140.dll"
+            VALUE "OriginalFilename", "msvcp140.dll"
+            VALUE "ProductName", "NovaOS"
+            VALUE "ProductVersion", "14.42.34433.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

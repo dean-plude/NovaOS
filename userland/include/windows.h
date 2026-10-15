@@ -265,6 +265,7 @@ typedef struct _STARTUPINFOA {
 #define ERROR_ENVVAR_NOT_FOUND   203
 #define ERROR_MORE_DATA          234
 #define ERROR_INVALID_ADDRESS    487
+#define ERROR_DEVICE_IN_USE      2404
 
 #define LOWORD(l) ((WORD)((DWORD_PTR)(l) & 0xFFFF))
 #define HIWORD(l) ((WORD)(((DWORD_PTR)(l) >> 16) & 0xFFFF))

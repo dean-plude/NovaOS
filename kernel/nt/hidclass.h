@@ -111,4 +111,7 @@ _Static_assert(sizeof(HidMinidriverRegistration) == 32 && sizeof(HidDescriptor) 
 /* hidusb.c: NovaOS's USB HID minidriver, built into the kernel (the
  * service "HidUsb", as input.inf names Windows' hidusb.sys) */
 NTSTATUS NT_API HidUsbDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
+/* mshidkmdf.c: the pass-through minidriver a KMDF HID driver is a lower
+ * filter of (the service "mshidkmdf", MsHidKmdf.inf's mshidkmdf.sys) */
+NTSTATUS NT_API MsHidKmdfDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
 NT_API NT_STATUS nt_HidRegisterMinidriver(HidMinidriverRegistration *r);

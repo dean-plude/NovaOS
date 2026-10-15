@@ -2629,6 +2629,13 @@ void UmClockAdvance(UINT64 delta_100ns)
     g_boot_time += delta_100ns;
 }
 
+/* The system time is @now_100ns from now on (Hyper-V's time sync,
+ * drivers/hv_util.c: the host's clock, at start and when it drifted) */
+void UmClockSet(UINT64 now_100ns)
+{
+    g_boot_time = now_100ns - (sched_ticks() - g_boot_ticks) * 100000ULL;
+}
+
 /* NtShutdownSystem(SHUTDOWN_ACTION Action): ShutdownNoReboot (0) and
  * ShutdownPowerOff (2) power off, ShutdownReboot (1) restarts.  The
  * desktop loop saves drive C: and does it, so this returns. */

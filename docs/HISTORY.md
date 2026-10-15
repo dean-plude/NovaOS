@@ -12759,6 +12759,95 @@ indexed TGSM", so this last of LightCraft's 27 kernels did not compile.
   components, checked in its disassembly and dispatched on Direct3D 11
   (DXVK) with the results read back.
 
+## Hyper-V integration services
+
+The first step of full Hyper-V Generation 2 support (a new roadmap item,
+one synthetic device per step).  NovaOS now answers three of Hyper-V's
+integration services over VMBus: **shutdown** (the host's Shut Down and
+Restart save drive C: and power off or restart NovaOS, as the Start menu
+does), **heartbeat** (Hyper-V Manager shows "Heartbeat: OK") and **time
+sync** (the system time Windows programs read is set from the host's
+clock at start and whenever it drifts more than a second).  Each agrees
+on a version with the host first, as Linux's and FreeBSD's drivers do.
+VMBus drivers now get each packet's transaction ID, so they can answer
+the host's requests, and up to sixteen channels open.  A host test checks
+all three protocols ([hyperv.md](hyperv.md)).
+
+## Hyper-V channel interrupts and devices added or removed
+
+The fifth step of Hyper-V Generation 2 support.  VMBus channels were read
+every 10 ms by the device poll thread, and a device the host added or
+removed after start went unnoticed.  The host's interrupt (the SynIC's
+SINT2, with the channel's bit in the event flags) now wakes a `vmbus`
+thread that reads the channel at once, and that thread also handles the
+host's later messages: a device added (a network adapter, an integration
+service ticked in Hyper-V Manager) is opened as at start, and one removed
+is let go by its driver, closed, its memory handed back and its number
+released, as FreeBSD's BSD-licensed `vmbus` driver does.  A network
+adapter added while running becomes the network stack's adapter.  The
+reference TSC page and synthetic timers turned out not to be needed
+([hyperv.md](hyperv.md)).
+
+## Hyper-V key-value exchange
+
+The sixth and last step of Hyper-V Generation 2 support.  Hyper-V
+Manager showed no IP addresses for a NovaOS VM, because nothing answered
+the Data Exchange integration service.  `kernel/drivers/hv_util.c` now
+answers it in the kernel (Linux and FreeBSD use a user daemon): the host
+enumerates the guest's own items and gets NovaOS's name, version,
+processor architecture and IPv4 and IPv6 addresses, and the items the
+host sets for the VM are kept in memory and read back.  A host test
+checks every message ([hyperv.md](hyperv.md)).
+
+## Hyper-V network adapter
+
+The fourth step of Hyper-V Generation 2 support.  A Gen 2 VM's network
+adapter is a VMBus channel, so NovaOS had no network there.  NovaOS now
+drives it (`kernel/drivers/netvsc.c`, NVSP and RNDIS as FreeBSD's
+BSD-licensed `hn` driver speaks them): it agrees on an NVSP version (5,
+4, 2 or 1), gives the host a receive buffer, reads the MAC address and
+the link through RNDIS, sends frames in GPA-direct packets and takes the
+host's from the receive buffer.  The network stack uses it when there is
+no Intel or virtio adapter, so DHCP, DNS and the App Store work in a
+Hyper-V VM.  VMBus can now give the host buffers larger than one message
+lists (GPADL_BODY), deliver transfer-page packets to a driver and send
+completion packets.  A fake Hyper-V host in a host test checks the
+driver ([hyperv.md](hyperv.md)).
+
+## Hyper-V SCSI disks
+
+The second step of Hyper-V Generation 2 support.  A Gen 2 VM's virtual
+hard disks sit on a synthetic SCSI controller on VMBus; NovaOS now drives
+it (`kernel/drivers/storvsc.c`, the protocol as FreeBSD's BSD-licensed
+`hv_storvsc` speaks it): it agrees on a protocol version, asks each of the
+controller's locations what is there, and makes every virtual hard disk a
+block device (`hv0`, `hv1`, ...), read and written through GPA-direct
+packets that list a bounce buffer's pages.  So NovaOS installs to a VHDX
+(`install hv0`, or the Setup app) and keeps drive C: there.  VMBus now
+comes up before the disks are looked for, delivers completion packets to
+its drivers, and lets a driver read its own channel while it waits for an
+answer.  A fake Hyper-V host in a host test checks the driver.  The host
+tests for the VMBus input and integration-service drivers were checking
+nothing (the lwIP port's `assert.h` was on their include path); they
+check again, and the integration-service test's expected lengths now
+allow for the ring's 8-byte padding ([hyperv.md](hyperv.md)).
+
+## Hyper-V synthetic video
+
+The third step of Hyper-V Generation 2 support.  A Gen 2 VM starts on
+the firmware's frame buffer, whose mode cannot be changed without a
+driver for Hyper-V's synthetic video device on VMBus.  NovaOS now drives
+it (`kernel/drivers/hv_video.c`, the synthvid protocol as Linux's and
+FreeBSD's drivers speak it): it agrees on a protocol version (3.5, 3.2
+or 3.0), tells the host the frame buffer is the video memory, lists the
+modes the host offers that fit in it, and reports the whole screen as
+changed 20 times a second while the host asks for that.  The display
+layer takes it over from the GOP frame buffer, so Settings > Display
+changes the resolution in a Hyper-V VM.  VMBus drivers can now ask to be
+called on each poll, and see how much MMIO space the host gave their
+device.  A fake Hyper-V host in a host test checks the driver
+([hyperv.md](hyperv.md)).
+
 ## Krita draws and saves an image
 
 Roadmap step 27.3: Krita, installed from the App Store, draws and saves
@@ -12823,6 +12912,52 @@ was; starting LibreOffice found these gaps:
 two new DLLs, the clipboard's format list and the `_s` path functions.
 Still open: Impress, Draw and Base are not checked, and PDF export embeds
 whole fonts.
+
+## OBS Studio adds a scene
+
+Roadmap step 27.1 (grow the corpus), its fifth app: OBS Studio 30.2.3,
+the screen recording and streaming program the App Store lists, a 64-bit
+Qt 6 program that draws with Direct3D 11.  The nightly corpus now installs
+the Store's Mesa 3D and DXVK, as a user without a GPU driver would, then
+OBS from the Store (the official zip), and starts it from its own folder,
+as the Store does (OBS finds its data from there).  Esc cancels the
+Auto-Configuration Wizard of its first start, the Scenes dock's + button
+adds a scene under the name OBS offers ("Scene 2"), and the main window
+must match
+`tests/reference/obs studio.png`; once OBS is closed its scene collection
+must hold the new scene (`tests/appcorpus/958-obs-studio.py`).  Nothing is
+captured, recorded or streamed.  It needed these NovaOS fixes:
+
+- **The Store's download link.**  The catalog named
+  `OBS-Studio-30.2.3-Windows-x64.zip`, which the release does not have
+  (404); the download is `OBS-Studio-30.2.3-Windows.zip`, and the program
+  is `obs-studio\bin\64bit\obs64.exe` in it.
+- **`msvcp140.dll`'s version.**  OBS reads the version of the Visual C++
+  runtime's `msvcp140.dll` before anything else and quits (exit code 1)
+  when it is older than 14.40 or has none; NovaOS's had no version
+  resource.  It now carries 14.42.34433, the runtime its STL sources come
+  from (`stltest` checks it).
+- **`wldap32.dll` by ordinal.**  OBS's `libcurl.dll`, which `obs64.exe`
+  imports, imports eight LDAP functions by number, so OBS could not load.
+  `wldap32.dll` now exports its functions on Windows' ordinals.
+- **Missing imports.**  `gdi32`'s `D3DKMTSetProcessSchedulingPriorityClass`
+  (and `Get...`), which `libobs-d3d11.dll` imports to raise its GPU
+  priority; the UCRT's `_mbsnbcpy`, `_mbsnbcmp` (libcurl) and
+  `__stdio_common_vfwscanf` (LuaJIT, for scripts); `setupapi`'s
+  `CM_Get_Device_ID_Size` and `SetupDiDeleteDeviceInfo` (the AJA and
+  DirectShow capture plug-ins); `iphlpapi`'s `GetBestRoute` (the RTMP
+  output).
+
+Still open: a name typed into the Add Scene box is lost.  The dialog
+gets Enter (so it takes the offered name), but not the letters: Qt's
+line edit never has the keyboard.  A trace of user32 shows the dialog
+shown, activated and given the focus (`WM_ACTIVATE`, `WM_SETFOCUS`) in
+Windows' order, so the cause is somewhere else; the test does not type.
+
+Without DXVK OBS stops with "Failed to initialize video": NovaOS has no
+Direct3D 11 device of its own (`d3d11.dll` hands hardware devices to
+DXVK).  Under QEMU without KVM OBS shows its main window about four
+minutes after it starts.
 
 ## A performance budget in CI
 
@@ -13076,6 +13211,46 @@ through Media Foundation, 32- and 64-bit, and the Camera app shows it
   camera controls, still images, the media session and source events,
   audio capture sources, file and URL source readers, and AVStream for
   vendor camera drivers.
+
+## A third-party KMDF HID minidriver: Microsoft's vhidmini2
+
+The third HID step: a HID driver written on KMDF, as most vendors'
+touchpad, sensor and dock drivers are, now installs and runs the way
+Windows 11 runs it. The test driver is Microsoft's own `vhidmini2` sample
+(Windows-driver-samples `hid/vhidmini2`, KMDF), fetched at a pinned
+commit and built unchanged by `tools/kmdf/build_kmdf.py` with NovaOS's
+own `hidclass.h` and `hidport.h`; it is MS-PL licensed and its licence
+ships beside it in `C:\Tests\VhidMini`.
+
+- **mshidkmdf** (`kernel/nt/mshidkmdf.c`): Windows' pass-through HID
+  minidriver for KMDF drivers, built into the kernel. A KMDF HID
+  driver's INF says `Include = MsHidKmdf.inf`, `Needs =
+  MsHidKmdf.NT.Services`; NovaOS's own `MsHidKmdf.inf` is in
+  `C:\Windows\INF`, so `mshidkmdf` becomes the function driver and
+  hands every request to the KMDF driver below it.
+- **Filter drivers** (`kernel/nt/pnp.c`, setupapi): a package's
+  `.Filters` section writes `LowerFilters`/`UpperFilters`, and the
+  stack is built lower filters first, then the function driver, then
+  upper filters (the device's, then the class key's). setupapi follows
+  an INF's `Include`/`Needs`.
+- **Root-enumerated devices**: `SetupDiCreateDeviceInfo` with
+  `DICD_GENERATE_ID`, `SetupDiSetDeviceRegistryProperty` and
+  `DIF_REGISTERDEVICE` make `ROOT\HIDCLASS\0000` as `devcon install`
+  does; the PnP manager gives it a PDO under the root, makes it again
+  from its `Enum\ROOT` key at boot, and `pnputil /remove-device` (or
+  `DIF_REMOVE`) deletes it, leaving no phantom.
+- **Raw children across a restart**: a child started raw (a HID
+  collection) no longer has its bus driver saved as its service, which
+  made it start under that driver, and fail, at the next boot.
+- **hidclass**: `HID_XFER_PACKET` requests carry the buffer lengths
+  Windows gives them (the KMDF sample checks them).
+
+New devices-suite boot `vhidmini`: `vhidtest create` registers the
+device, `pnputil /add-driver vhidmini.inf /install` installs the
+sample, and `vhidtest` (x86 and x64) checks its attributes, strings,
+caps and every kind of report through `hid.dll` and Raw Input; Device
+Manager lists it, it starts at boot, and it is removed. Not checked
+yet: class-key filters, and removing a device that is not root-enumerated.
 
 ## Wallpapers and icon sets are files, chosen and added in Settings
 

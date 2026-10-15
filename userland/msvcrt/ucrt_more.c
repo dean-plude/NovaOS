@@ -270,6 +270,7 @@ CRTEXP size_t _mbstrlen(const char *s) { return strlen(s); }
 CRTEXP size_t _mbsnlen(const uc *s, size_t n) { size_t i = 0; while (i < n && s[i]) i++; return i; }
 CRTEXP int _mbscmp(const uc *a, const uc *b) { return strcmp((const char *)a, (const char *)b); }
 CRTEXP int _mbsncmp(const uc *a, const uc *b, size_t n) { return strncmp((const char *)a, (const char *)b, n); }
+CRTEXP int _mbsnbcmp(const uc *a, const uc *b, size_t n) { return strncmp((const char *)a, (const char *)b, n); }
 CRTEXP int _mbsicmp(const uc *a, const uc *b)
 {
     for (;; a++, b++) {
@@ -288,6 +289,7 @@ CRTEXP int _mbsnicmp(const uc *a, const uc *b, size_t n)
 CRTEXP uc *_mbsinc(const uc *s) { return (uc *)s + 1; }
 CRTEXP uc *_mbsdec(const uc *start, const uc *s) { return s > start ? (uc *)s - 1 : 0; }
 CRTEXP uc *_mbscpy(uc *d, const uc *s) { return (uc *)strcpy((char *)d, (const char *)s); }
+CRTEXP uc *_mbsnbcpy(uc *d, const uc *s, size_t n) { return (uc *)strncpy((char *)d, (const char *)s, n); }
 CRTEXP uc *_mbscat(uc *d, const uc *s) { return (uc *)strcat((char *)d, (const char *)s); }
 CRTEXP uc *_mbsdup(const uc *s) { return (uc *)_strdup((const char *)s); }
 CRTEXP uc *_mbslwr(uc *s) { for (uc *p = s; *p; p++) *p = (uc)tolower(*p); return s; }

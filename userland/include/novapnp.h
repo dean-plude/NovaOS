@@ -20,6 +20,7 @@
 #define NOVA_PNP_REMOVABLE  0x04
 #define NOVA_PNP_WINDOWS    0x08    /* the driver running it is a Windows driver */
 #define NOVA_PNP_INBOX      0x10    /* NovaOS's driver steps aside for an installed Windows one */
+#define NOVA_PNP_RAW        0x20    /* started raw: its driver is its bus driver, not an installed service */
 
 typedef struct {
     DWORD id, parent, flags, problem, seq, reserved;
@@ -171,6 +172,21 @@ static inline DWORD nova_pnp_start(DWORD id)
 static inline NTSTATUS nova_pnp_stop(DWORD id)
 {
     return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 5 | (ULONG_PTR)id << 8, NULL);
+}
+
+/* Register a root-enumerated device (setupapi's DIF_REGISTERDEVICE): @n
+ * names it (instance ROOT\<class>\NNNN, hwids, compat, desc); its node ID,
+ * 0, or (DWORD)-1 without SeLoadDriverPrivilege */
+static inline DWORD nova_pnp_root_add(const NovaPnpNode *n)
+{
+    return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 7, (void *)n);
+}
+
+/* Remove root-enumerated device @id (DIF_REMOVE): its driver goes as by
+ * nova_pnp_stop (a veto comes back), then its node; the NTSTATUS */
+static inline NTSTATUS nova_pnp_root_remove(DWORD id)
+{
+    return (NTSTATUS)NtNovaGuiCtl(0, NOVA_CTL_PNP, 8 | (ULONG_PTR)id << 8, NULL);
 }
 
 /* A resource a node's device decodes (kernel/io/pnp.h's PnpResource):

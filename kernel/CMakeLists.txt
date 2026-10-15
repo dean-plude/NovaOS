@@ -146,6 +146,10 @@ set(KERNEL_C_SOURCES
     drivers/virtio_input.c
     drivers/vmbus.c
     drivers/hv_input.c
+    drivers/hv_util.c
+    drivers/storvsc.c
+    drivers/hv_video.c
+    drivers/netvsc.c
     drivers/gamepad.c
     drivers/xpad.c
     drivers/virtio_gpu.c
@@ -230,6 +234,7 @@ set(KERNEL_C_SOURCES
     nt/exports.c
     nt/hidclass.c
     nt/hidusb.c
+    nt/mshidkmdf.c
     nt/intr.c
     nt/io.c
     nt/ke.c

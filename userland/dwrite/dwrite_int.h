@@ -103,6 +103,7 @@ typedef struct { float advanceOffset, ascenderOffset; } DW_GLYPH_OFFSET;
 typedef struct { float m11, m12, m21, m22, dx, dy; } DW_MATRIX;
 typedef struct { INT16 slopeRise, slopeRun, offset; } DW_CARET_METRICS;
 typedef struct { UINT32 first, last; } DW_UNICODE_RANGE;
+typedef struct { UINT16 glyph, reserved; UINT32 cluster; float advance; DW_GLYPH_OFFSET offset; } DW_SHAPED_GLYPH;
 
 typedef struct {
     void                  *fontFace;      /* IDWriteFontFace */
@@ -261,6 +262,8 @@ HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, c
 HRESULT text_format_create(const WCHAR *family, void *coll, UINT32 weight, UINT32 style, UINT32 stretch, float size,
                            const WCHAR *locale, void **out);
 HRESULT text_layout_create(const WCHAR *s, UINT32 n, void *fmt, float w, float h, void **out);
+HRESULT dw_shape_text(FaceData *face, const WCHAR *text, UINT32 text_length, UINT32 start, UINT32 length,
+                      BOOL rtl, float em_size, DW_SHAPED_GLYPH **glyphs, UINT32 *count);
 /* bitmap.c: IDWriteBitmapRenderTarget1 on a memory DC compatible with dc */
 HRESULT bitmap_target_create(HDC dc, UINT32 w, UINT32 h, void **out);
 /* aa: AA_GRAYSCALE puts gray coverage in the ALIASED_1x1 texture, AA_CLEARTYPE in CLEARTYPE_3x1 */

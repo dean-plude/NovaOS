@@ -8,4 +8,6 @@
   - DirectWrite (`dwrite`) lays text out on the same core, with font
     fallback, and its factory is an `IDWriteFactory3` with Windows 10's
     font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
-    for (`tools/dwtest`, `tools/dw3test`).
+    for (`tools/dwtest`, `tools/dw3test`). Its `IDWriteTextAnalyzer` uses ICU
+    for script, bidi and line-break analysis, then the shared HarfBuzz path
+    for logical-order glyph shaping and placements.

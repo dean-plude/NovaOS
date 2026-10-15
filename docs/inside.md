@@ -233,7 +233,9 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   - DirectWrite (`dwrite`) lays text out on the same core, with font
     fallback, and its factory is an `IDWriteFactory3` with Windows 10's
     font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
-    for (`tools/dwtest`, `tools/dw3test`).
+    for (`tools/dwtest`, `tools/dw3test`). Its `IDWriteTextAnalyzer` uses ICU
+    for script, bidi and line-break analysis, then the shared HarfBuzz path
+    for logical-order glyph shaping and placements.
 - **Images**: the Windows Imaging Component (`windowscodecs.dll`) decodes
   PNG, JPEG, BMP, GIF (every frame) and ICO with the bundled stb_image,
   converts between its ~50 pixel formats, scales, clips, flips, rotates,

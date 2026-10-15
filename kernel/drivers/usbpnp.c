@@ -70,7 +70,6 @@ static void function_kind(const UsbPnpFn *f, PnpNode *n)
     switch (f->kind) {
     case USBPNP_HUB:   desc = "Generic USB Hub"; break;
     case USBPNP_HID:   cls = "HIDClass"; desc = "USB Input Device"; break;
-    case USBPNP_PAD:   cls = "HIDClass"; desc = "USB Input Device"; break;
     case USBPNP_XPAD:  cls = "XnaComposite"; desc = "Xbox Controller"; break;
     case USBPNP_MSC:   desc = "USB Mass Storage Device"; break;
     case USBPNP_AUDIO: cls = "MEDIA"; desc = "USB Audio Device"; break;
@@ -114,11 +113,11 @@ static void add_grandchild(UsbDev *d, const UsbPnpFn *f, UINT32 parent, const ch
         ids(n->hwids, sizeof(n->hwids), a, NULL, NULL, NULL);
         bool kbd = f->kind == USBPNP_HID && f->proto == 1, mouse = f->kind == USBPNP_HID && f->proto == 2;
         ids(n->compat, sizeof(n->compat), kbd ? "HID_DEVICE_SYSTEM_KEYBOARD" : mouse ? "HID_DEVICE_SYSTEM_MOUSE" :
-            f->kind == USBPNP_PAD ? "HID_DEVICE_SYSTEM_GAME" : "HID_DEVICE_UP:000D_U:0002", "HID_DEVICE", NULL, NULL);
+            "HID_DEVICE_UP:000D_U:0002", "HID_DEVICE", NULL, NULL);
         ksnprintf(n->instance, sizeof(n->instance), "%s\\%s&0000", a, suffix);
         put(n->cls, sizeof(n->cls), kbd ? "Keyboard" : mouse ? "Mouse" : "HIDClass");
         put(n->desc, sizeof(n->desc), kbd ? "HID Keyboard Device" : mouse ? "HID-compliant mouse" :
-            f->kind == USBPNP_PAD ? "HID-compliant game controller" : "HID-compliant device");
+            "HID-compliant device");
         put(n->mfg, sizeof(n->mfg), kbd ? "(Standard keyboards)" : mouse ? "Microsoft" : "(Standard system devices)");
     }
     put(n->location, sizeof(n->location), d->name);
@@ -159,7 +158,7 @@ static UINT32 add_function(UsbDev *d, const UsbPnpFn *f, int mi, UINT32 parent, 
     function_kind(f, n);
     UINT32 id = PnpAdd(parent, n);
     kfree(n);
-    if (id && f->driver && (f->kind == USBPNP_MSC || f->kind == USBPNP_PAD ||
+    if (id && f->driver && (f->kind == USBPNP_MSC ||
                             (f->kind == USBPNP_HID && (f->proto == 1 || f->proto == 2))))
         add_grandchild(d, f, id, base, inst_suffix, product);
     return id;

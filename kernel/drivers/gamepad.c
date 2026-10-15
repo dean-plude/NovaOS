@@ -9,19 +9,24 @@
  *
  * HID gamepads and joysticks (an application collection of Generic
  * Desktop usage 4, Joystick, or 5, Game Pad: most controllers that are
- * not Xbox ones, flight sticks, wheels) are read here rather than by
- * usbhid.c, which would take their X and Y for a mouse: the report
- * descriptor (HID 1.11, section 6.2.2) says where the buttons (Button
- * page usages 1-32), the axes (Generic Desktop X, Y, Z, Rx, Ry, Rz,
- * Slider, Dial) and the hat switch are, and each report becomes the
- * state DirectInput shows: axes from 0 to 65535 over their logical
- * range, the hat in hundredths of a degree.  A D-pad given as Generic
- * Desktop D-pad Up/Down/Right/Left buttons (usages 0x90-0x93) becomes
- * the hat too.
+ * not Xbox ones, flight sticks, wheels) come through the HID class
+ * driver, as on Windows: HidUsb under hidclass moves their reports, and
+ * NovaOS's game controller class driver "gamehid" (nt/kbdhid.c), which
+ * Plug and Play starts on a HID_DEVICE_SYSTEM_GAME collection, hands the
+ * collection's report descriptor and each input report here
+ * (PadHidOpen, PadHidInput).  The report descriptor (HID 1.11, section
+ * 6.2.2) says where the buttons (Button page usages 1-32), the axes
+ * (Generic Desktop X, Y, Z, Rx, Ry, Rz, Slider, Dial) and the hat switch
+ * are, and each report becomes the state DirectInput shows: axes from 0
+ * to 65535 over their logical range, the hat in hundredths of a degree.
+ * A D-pad given as Generic Desktop D-pad Up/Down/Right/Left buttons
+ * (usages 0x90-0x93) becomes the hat too.  Raw Input and hid.dll read
+ * such a controller's reports from its collection, through hidclass;
+ * the raw side kept here (the report ring, um_hid.c's paths) is the Xbox
+ * controllers' HID side only.
  */
 
 #include "gamepad.h"
-#include "usb.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../ke/printf.h"
@@ -40,7 +45,7 @@ typedef struct {
     PadRumble rumble;
     void     *ctx;
     UINT16    rl, rr;                 /* the motors as last set */
-    UINT8    *desc;                   /* its HID report descriptor (kmalloc'd, or g_xbox_desc) */
+    UINT8    *desc;                   /* its HID report descriptor (an Xbox controller's: g_xbox_desc) */
     UINT16    desc_len, in_len;
     PadRaw    last;                   /* its latest report */
 } Pad;
@@ -155,7 +160,7 @@ void PadReport(int slot, const PadState *st)
         UINT32 packet = p->st.packet;
         p->st = *st;
         p->st.packet = packet + 1;
-        if (is_xbox(p)) {                                     /* (HID drivers send their own) */
+        if (is_xbox(p)) {                                     /* (a HID controller's are its collection's) */
             xbox_report(&p->st, r);
             raw_put(slot, p, r, sizeof(r));
             raw = true;
@@ -185,51 +190,6 @@ void PadDetach(int slot)
     if (serial) {
         waitq_wake(&g_rawq);
         if (sink) sink(slot, serial, NULL, -1);
-    }
-}
-
-void PadSetDescriptor(int slot, const UINT8 *desc, int len, int in_len)
-{
-    if (slot < 0 || slot >= PAD_SLOTS || len <= 0 || len > PAD_DESC_MAX) return;
-    UINT8 *copy = kmalloc((size_t)len);
-    if (!copy) return;
-    memcpy(copy, desc, (size_t)len);
-    IrqState s = spin_lock_irqsave(&g_pad_lock);
-    Pad *p = &g_pads[slot];
-    UINT8 *old = NULL;
-    if (p->used && !is_xbox(p)) {
-        old = p->desc;
-        p->desc = copy;
-        p->desc_len = (UINT16)len;
-        p->in_len = (UINT16)(in_len > PAD_REPORT_MAX ? PAD_REPORT_MAX : in_len);
-        copy = NULL;
-    }
-    spin_unlock_irqrestore(&g_pad_lock, s);
-    kfree(old);
-    kfree(copy);
-}
-
-void PadRawReport(int slot, const UINT8 *data, int len, bool ids)
-{
-    if (slot < 0 || slot >= PAD_SLOTS || len <= 0) return;
-    UINT8 r[PAD_REPORT_MAX];
-    memset(r, 0, sizeof(r));
-    int n = 0;
-    if (!ids) r[n++] = 0;
-    for (int i = 0; i < len && n < PAD_REPORT_MAX; i++) r[n++] = data[i];
-    IrqState s = spin_lock_irqsave(&g_pad_lock);
-    Pad *p = &g_pads[slot];
-    UINT32 serial = 0;
-    if (p->used && !is_xbox(p)) {
-        if (p->in_len > n) n = p->in_len;                   /* (a short report: the rest zero) */
-        raw_put(slot, p, r, n);
-        serial = p->info.serial;
-    }
-    PadRawSink sink = g_sink;
-    spin_unlock_irqrestore(&g_pad_lock, s);
-    if (serial) {
-        waitq_wake(&g_rawq);
-        if (sink) sink(slot, serial, r, n);
     }
 }
 
@@ -381,14 +341,11 @@ typedef struct {
 } PadField;
 
 typedef struct {
-    UsbDev  *dev;
-    UsbPipe *pipe;
     PadField f[MAX_FIELDS];
     int      n;
     bool     ids;
     int      slot;
     PadState last;
-    bool     dead;
 } HidPad;
 
 static UINT32 hp_u(const UINT8 *p, int n)
@@ -407,9 +364,8 @@ static INT32 hp_s(const UINT8 *p, int n)
 }
 
 /* The fields a gamepad's reports carry that matter here, from its report
- * descriptor; *@app: the first application collection (page << 8 | usage),
- * *@in_len: its longest input report in bytes with the ID byte */
-static void hp_parse(HidPad *h, const UINT8 *d, int len, UINT16 *app, int *in_len)
+ * descriptor; *@app: the first application collection (page << 8 | usage) */
+static void hp_parse(HidPad *h, const UINT8 *d, int len, UINT16 *app)
 {
     struct { UINT16 page; INT32 lmin, lmax; UINT8 size, count, id; } g = { 0 }, stack[4];
     int sp = 0, depth = 0, nusage = 0;
@@ -475,9 +431,6 @@ static void hp_parse(HidPad *h, const UINT8 *d, int len, UINT16 *app, int *in_le
         default: break;
         }
     }
-    int most = 0;
-    for (int k = 0; k < 256; k++) if (bits[k] > most) most = bits[k];
-    *in_len = 1 + (most + 7) / 8;
 }
 
 static INT32 hp_bits(const UINT8 *r, int len, int bit, int size, bool sign)
@@ -537,15 +490,12 @@ static bool hp_decode(const HidPad *h, UINT8 id, const UINT8 *r, int len, PadSta
     return any;
 }
 
-static bool hp_report(UsbPipe *p, const UINT8 *data, int len, void *ctx)
+void PadHidInput(void *pad, const UINT8 *data, int len)
 {
-    (void)p;
-    HidPad *h = ctx;
-    if (h->dead) return false;
-    PadRawReport(h->slot, data, len, h->ids);
+    HidPad *h = pad;
+    if (!h || len <= 0) return;
     UINT8 id = 0;
     if (h->ids) {
-        if (len < 1) return true;
         id = data[0];
         data++; len--;
     }
@@ -554,66 +504,46 @@ static bool hp_report(UsbPipe *p, const UINT8 *data, int len, void *ctx)
         h->last = st;
         PadReport(h->slot, &st);
     }
-    return true;
 }
 
-static void hp_gone(void *inst)
+void PadHidClose(void *pad)
 {
-    HidPad *h = inst;
-    h->dead = true;
+    HidPad *h = pad;
+    if (!h) return;
     PadDetach(h->slot);
-    kprintf("[USB] %s: game controller removed\n", UsbDevName(h->dev));
-    /* (the HidPad stays allocated: a report may still be on its way) */
+    kfree(h);
 }
 
-void *UsbPadHidProbe(UsbDev *d, const UsbIface *f)
+void *PadHidOpen(const UINT8 *desc, int len, UINT16 vid, UINT16 pid, const char *product, UINT32 node,
+                 char *what, int cap)
 {
-    int off = 0;
-    const UINT8 *hd = UsbIfaceFind(f, USB_DT_HID, &off);
-    if (!hd || hd[0] < 9) return NULL;
-    off = 0;
-    const UINT8 *ep = NULL;
-    for (const UINT8 *e; (e = UsbIfaceFind(f, USB_DT_ENDPOINT, &off)) != NULL;)
-        if ((e[2] & 0x80) && (e[3] & 3) == 3) { ep = e; break; }
-    if (!ep) return NULL;
-    UINT16 rlen = (UINT16)(hd[7] | hd[8] << 8);
-    UINT8 *desc = rlen ? kmalloc(rlen) : NULL;
-    if (!desc) return NULL;
     HidPad *h = kzalloc(sizeof(HidPad));
+    if (!h) return NULL;
     UINT16 app = 0;
-    int in_len = 0, got = h ? UsbControl(d, 0x81, 6, USB_DT_REPORT << 8, f->number, rlen, desc) : 0;
-    if (got > 0) hp_parse(h, desc, got, &app, &in_len);
-    if (!h || (app != 0x0104 && app != 0x0105)) { kfree(desc); kfree(h); return NULL; }   /* not a joystick or game pad */
+    hp_parse(h, desc, len, &app);
+    if (app != 0x0104 && app != 0x0105) { kfree(h); return NULL; }   /* not a joystick or game pad */
 
     PadInfo info;
     memset(&info, 0, sizeof(info));
     info.kind = PAD_HID;
-    info.vid = UsbDevVendor(d);
-    info.pid = UsbDevProduct(d);
+    info.vid = vid;
+    info.pid = pid;
     info.usage = app;
+    info.node = node;
     for (int i = 0; i < h->n; i++) {
         const PadField *pf = &h->f[i];
         if (pf->page == PAGE_BUTTON && pf->usage >= 1 && pf->usage <= 32 && pf->usage > info.buttons) info.buttons = (UINT8)pf->usage;
         if (pf->page == PAGE_DESKTOP && pf->usage >= 0x30 && pf->usage <= 0x37) info.axes |= (UINT8)(1u << (pf->usage - 0x30));
         if (pf->page == PAGE_DESKTOP && (pf->usage == 0x39 || (pf->usage >= 0x90 && pf->usage <= 0x93))) info.povs = 1;
     }
-    if (!UsbDevProductName(d, info.name, sizeof(info.name)))
-        ksnprintf(info.name, sizeof(info.name), app == 0x0104 ? "USB Joystick" : "USB Gamepad");
+    if (product && product[0]) strncpy(info.name, product, sizeof(info.name) - 1);
+    else ksnprintf(info.name, sizeof(info.name), app == 0x0104 ? "USB Joystick" : "USB Gamepad");
 
-    UINT16 mps = (UINT16)((ep[4] | ep[5] << 8) & 0x7FF);
-    h->dev = d;
     h->last.pov = -1;
     for (int a = 0; a < PAD_AXES; a++) h->last.axis[a] = 32768;
-    h->pipe = UsbOpenPipe(d, ep, mps);
-    if (!h->pipe) { kfree(desc); kfree(h); return NULL; }
-    if (f->sub == 0) UsbControl(d, 0x21, 0x0A, 0, f->number, 0, NULL);   /* SET_IDLE(0): reports on change only */
     h->slot = PadAttach(&info, NULL, NULL);
-    if (h->slot < 0) { kprintf("[USB] %s: no room for another game controller\n", UsbDevName(d)); kfree(desc); kfree(h); return NULL; }
-    PadSetDescriptor(h->slot, desc, got, in_len);
-    kfree(desc);
-    UsbBind(d, h, hp_gone);
-    kprintf("[USB] %s: %s \"%s\" (%d buttons, %d axes%s)\n", UsbDevName(d), app == 0x0104 ? "joystick" : "gamepad",
-            info.name, info.buttons, __builtin_popcount(info.axes), info.povs ? ", a hat" : "");
-    UsbPipeListen(h->pipe, mps, hp_report, h);
+    if (h->slot < 0) { kfree(h); return NULL; }
+    ksnprintf(what, cap, "%s \"%s\" (%d buttons, %d axes%s)", app == 0x0104 ? "joystick" : "gamepad",
+              info.name, info.buttons, __builtin_popcount(info.axes), info.povs ? ", a hat" : "");
     return h;
 }

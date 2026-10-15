@@ -535,6 +535,7 @@ static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; }
     { "kbdhid", "kbdhid.sys", KbdHidDriverEntry },
     { "mouhid", "mouhid.sys", MouHidDriverEntry },
     { "hiddigi", "hiddigi.sys", DigiHidDriverEntry },
+    { "gamehid", "gamehid.sys", GameHidDriverEntry },
 };
 
 static NTSTATUS drv_load(const char *service)

@@ -15,9 +15,12 @@
  * GetRawInputBuffer takes the calling thread's WM_INPUT messages off its
  * queue into an array of RAWINPUT blocks.
  *
- * The devices are the kernel's game controllers (novapad.h): their HID
- * report descriptors (an Xbox controller has the one Windows' Xbox driver
- * gives its HID side, "IG_" in its name) and the reports they send.  A
+ * The Xbox controllers are the kernel's controller slots (novapad.h):
+ * each has the HID report descriptor Windows' Xbox driver gives its HID
+ * side ("IG_" in its name) and sends its reports through the kernel's
+ * ring.  (A HID game pad or joystick is a HID class collection, below,
+ * as on Windows; its slot, which the gamehid class driver feeds for
+ * DirectInput, is not listed here.)  A
  * thread started at the first registration waits for reports and for
  * controllers to come or go, and posts the messages.  Device names are
  * the HID paths CreateFile opens (kernel/um/um_hid.c); RIDI_PREPARSEDDATA
@@ -90,6 +93,14 @@ static DWORD          g_known[NOVA_PAD_SLOTS];   /* serials the reader has annou
  * Devices
  * ------------------------------------------------------------------------- */
 
+/* Slot @slot's controller when Raw Input reads it from the slot: an Xbox
+ * controller's HID side.  (A HID controller is its HID collection's, a
+ * class device below, as on Windows.) */
+static BOOL pad_info(int slot, NovaPadInfo *i)
+{
+    return nova_pad_info(slot, i) && !i->node;
+}
+
 static HANDLE dev_handle(int slot, DWORD serial) { return (HANDLE)(ULONG_PTR)(DEV_BASE + serial * 8 + (DWORD)slot); }
 
 /* The controller a device handle names (its slot), or -1 */
@@ -100,7 +111,7 @@ static int dev_slot(HANDLE h, NovaPadInfo *info)
     int slot = (int)(v & 7);
     DWORD serial = (DWORD)((v - DEV_BASE) >> 3);
     NovaPadInfo i;
-    if (!nova_pad_info(slot, &i) || i.serial != serial) return -1;
+    if (!pad_info(slot, &i) || i.serial != serial) return -1;
     if (info) *info = i;
     return slot;
 }
@@ -387,7 +398,7 @@ static void deliver(const NovaPadRaw *r)
     DWORD usage;
     if (r->slot == NOVA_RAW_MOUSE) usage = USAGE_MOUSE;
     else if (r->slot == NOVA_RAW_KEYBOARD) usage = USAGE_KEYBOARD;
-    else if (!nova_pad_info(r->slot, &info) || info.serial != r->serial) return;
+    else if (!pad_info(r->slot, &info) || info.serial != r->serial) return;
     else usage = dev_usage(&info);
     AcquireSRWLockExclusive(&g_lock);
     RAWINPUTDEVICE *reg = reg_for(usage);
@@ -431,7 +442,7 @@ static void changes(void)
 {
     for (int s = 0; s < NOVA_PAD_SLOTS; s++) {
         NovaPadInfo i;
-        DWORD serial = nova_pad_info(s, &i) ? i.serial : 0;
+        DWORD serial = pad_info(s, &i) ? i.serial : 0;
         if (serial == g_known[s]) continue;
         if (g_known[s]) notify(dev_usage(&g_known_info[s]), dev_handle(s, g_known[s]), FALSE);
         g_known[s] = serial;
@@ -482,7 +493,7 @@ static void start_reader(void)
     ReleaseSRWLockExclusive(&g_class_lock);
     for (int s = 0; s < NOVA_PAD_SLOTS; s++) {         /* what is there now counts as announced */
         NovaPadInfo i;
-        g_known[s] = nova_pad_info(s, &i) ? i.serial : 0;
+        g_known[s] = pad_info(s, &i) ? i.serial : 0;
         if (g_known[s]) g_known_info[s] = i;
     }
     HANDLE t = CreateThread(NULL, 0, reader, NULL, 0, NULL);
@@ -528,7 +539,7 @@ USERAPI BOOL RegisterRawInputDevices(PCRAWINPUTDEVICE d, UINT n, UINT cb)
         if (d[i].usUsagePage == 1 && (page_only || d[i].usUsage == 6)) notify(USAGE_KEYBOARD, DEV_KEYBOARD, TRUE);
         for (int s = 0; s < NOVA_PAD_SLOTS; s++) {
             NovaPadInfo info;
-            if (!nova_pad_info(s, &info)) continue;
+            if (!pad_info(s, &info)) continue;
             DWORD u = dev_usage(&info);
             if ((USHORT)(u >> 16) != d[i].usUsagePage) continue;
             if (!page_only && (USHORT)u != d[i].usUsage) continue;
@@ -573,7 +584,7 @@ USERAPI UINT GetRawInputDeviceList(PRAWINPUTDEVICELIST list, PUINT n, UINT cb)
     all[have++].dwType = RIM_TYPEKEYBOARD;
     for (int s = 0; s < NOVA_PAD_SLOTS; s++) {
         NovaPadInfo i;
-        if (!nova_pad_info(s, &i)) continue;
+        if (!pad_info(s, &i)) continue;
         all[have].hDevice = dev_handle(s, i.serial);
         all[have].dwType = RIM_TYPEHID;
         have++;

@@ -465,10 +465,12 @@ The HID class host is built (Dean's ask, 2026-10-14; see
 [drivers.md](../drivers.md#hid-the-class-driver-and-minidrivers)), and
 USB keyboards and mice reach the desktop through it, on `kbdhid` and
 `mouhid` ([drivers.md](../drivers.md#keyboards-and-mice-kbdhid-and-mouhid)),
-and USB touch screens, pens and precision touchpads on `hiddigi`
-([drivers.md](../drivers.md#touch-screens-pens-and-touchpads-hiddigi)).
-Game pads (`gamepad.c`, XInput's slots) and I2C-HID touchpads still
-skip it.
+USB touch screens, pens and precision touchpads on `hiddigi`
+([drivers.md](../drivers.md#touch-screens-pens-and-touchpads-hiddigi)),
+and USB HID game pads and joysticks on `gamehid`
+([drivers.md](../drivers.md#game-pads-and-joysticks-gamehid)).
+Xbox controllers (not HID devices; `xpad.c`, as `xusb22.sys` on Windows)
+and I2C-HID touchpads still skip it.
 Later steps, each only when a target device needs it: PortCls
 and AVStream (for the T14's audio and camera if their built-in drivers
 fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3,

@@ -781,8 +781,9 @@ apps from the App Store catalog pass their nightly scripts.
   OpenGL is built in (Mesa's llvmpipe, OpenGL 4.5); the corpus test
   installs Krita from the App Store, draws a stroke and saves it as a
   `.kra` ([history](history/2026-10-14-krita-saves.md)).
-- [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
-  from the T14 over its own network.
+- [x] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
+  from the T14 over its own network.  Done 2026-10-15: Dean confirmed it on
+  the T14.
 - [x] **27.5 App Store badges from CI.** Show each app's verified badge from
   the latest nightly run (completing 20.7).  Each scheduled nightly run
   pushes its verdicts to the `store-badges` branch; a catalog refresh

@@ -41,7 +41,9 @@
  * Windows: each device node HID\... whose driver turned the HID interface
  * on is a RIM_TYPEHID device, its name the interface path, its
  * RIDI_DEVICEINFO and RIDI_PREPARSEDDATA what IOCTL_HID_GET_COLLECTION_
- * INFORMATION and _DESCRIPTOR say.  While the process has registrations a
+ * INFORMATION and _DESCRIPTOR say; keyboard and mouse collections (on the
+ * kbdhid and mouhid class drivers) are the keyboard and the mouse instead,
+ * as on Windows.  While the process has registrations a
  * thread per collection holds a handle of its own (the class driver queues
  * every input report for each open handle) and posts each report ReadFile
  * gives as WM_INPUT; the reader looks the device tree over again when
@@ -150,11 +152,14 @@ static ClassDev *class_dev(HANDLE h)
 }
 
 /* Whether node @n is a collection the HID class driver runs: HID\..., there,
- * its HID interface turned on by its driver */
+ * its HID interface turned on by its driver.  A keyboard or a mouse (on
+ * kbdhid or mouhid) is not: its keys and motion are the keyboard's and the
+ * mouse's (RIM_TYPEKEYBOARD, RIM_TYPEMOUSE), as on Windows. */
 static BOOL class_node(const NovaPnpNode *n)
 {
     static const GUID hid = NOVA_IF_HID;
     if (!nova_pnp_prefix(n->instance, "HID\\") || !(n->flags & NOVA_PNP_PRESENT)) return FALSE;
+    if (!lstrcmpiA(n->cls, "Keyboard") || !lstrcmpiA(n->cls, "Mouse")) return FALSE;
     GUID w[8];
     int m = (int)NtNovaGuiCtl(0, NOVA_CTL_PNP, 3 | (ULONG_PTR)n->id << 8, w);
     for (int j = 0; j < m && j < 8; j++) if (!memcmp(&w[j], &hid, sizeof(GUID))) return TRUE;

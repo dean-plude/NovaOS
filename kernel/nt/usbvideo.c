@@ -25,16 +25,24 @@
  *   - READ_FRAME: payloads from the streaming endpoint, each with its
  *     header (FID toggles per frame, EOF ends one, ERR spoils one), joined
  *     into one whole frame in the caller's buffer; an uncompressed frame
- *     of the wrong size is dropped;
+ *     of the wrong size is dropped, and so is one that lost a packet;
  *   - STOP: the pipe is aborted and its halt cleared, as uvcvideo stops
  *     a bulk stream.
  *
- * Not done yet: isochronous streaming endpoints (usbd.c has no
- * isochronous URBs; most built-in laptop cameras stream that way, so
- * the T14's still needs them), camera controls (brightness, exposure:
- * the processing unit's requests), still images, and a camera that is
- * one function of a composite device (NovaOS's USB PDOs are whole
- * devices).
+ * Isochronous cameras (most built-in laptop ones): the streaming
+ * interface's first setting has no endpoint, and each other setting an
+ * isochronous one of some bandwidth.  START picks the smallest setting
+ * whose packets hold the payload size the device asked for in its probe
+ * answer (SELECT_INTERFACE), and READ_FRAME takes payloads a packet at a
+ * time from ISOCH_TRANSFER URBs of ISO_PACKETS packets; STOP selects the
+ * first setting again, which ends the stream, as Windows' usbvideo.sys
+ * and Linux's uvcvideo do.  MJPEG frames are passed on whole: Media
+ * Foundation's source reader decodes them (userland/mfplat/reader.c).
+ *
+ * Not done yet: camera controls (brightness, exposure: the processing
+ * unit's requests), still images, frame-based formats (H.264).  A camera
+ * that is one function of a composite device gets its own PDO (usbd.c),
+ * so its microphone can run beside it.
  */
 #include "ntapi.h"
 #include "usbdi.h"
@@ -59,6 +67,8 @@ NT_API NT_STATUS nt_IoSetDeviceInterfaceState(NT_UNICODE_STRING *name, UINT8 ena
 #define ST_IO_TIMEOUT           ((NT_STATUS)0xC00000B5)
 #define MAX_PAYLOAD             (512 * 1024)
 #define FRAME_WAIT_MS           3000           /* a payload must come within this */
+#define ISO_PACKETS             32             /* packets an isochronous URB asks for */
+#define MAX_ALTS                16
 
 /* KSCATEGORY_VIDEO_CAMERA {E5323777-F976-4F5B-9B55-B94699C46E44} */
 static const NT_GUID g_camera_iface = { 0xE5323777, 0xF976, 0x4F5B, { 0x9B, 0x55, 0xB9, 0x46, 0x99, 0xC4, 0x6E, 0x44 } };
@@ -73,6 +83,14 @@ typedef struct {
     UINT8          vc, vs;             /* the VideoControl and VideoStreaming interface numbers */
     UINT8          ep;                 /* the streaming endpoint */
     void          *pipe;
+    void          *cfg_handle;         /* (SELECT_CONFIGURATION's answer) */
+    /* isochronous: the streaming interface's settings with an endpoint, and the stream's URB */
+    bool           iso;
+    UINT8          nalts, alt;         /* (alt: the setting streaming, 0: none) */
+    struct { UINT8 alt; UINT32 bytes; } alts[MAX_ALTS];
+    UrbIso        *urb;
+    UINT32         iso_next, iso_n;    /* the URB's next packet to read, packets it has */
+    bool           lost;               /* a packet of the frame went missing */
     bool           started, gone;
     NovaCamInfo    info;
     NT_KEVENT      lock;               /* (a synchronization event: one request at a time) */
@@ -199,7 +217,7 @@ static NT_STATUS parse(Uvc *u)
 {
     UINT8 *c = u->cfg;
     int cur = -1;                              /* the interface the descriptors belong to: 1 VC, 2 VS */
-    UINT8 format = 0, bpp = 0;
+    UINT8 format = 0, bpp = 0, alt = 0;
     UINT32 fourcc = 0;
     bool vs_found = false, ep_alt0 = false;
     for (UINT32 off = 0; off + 2 <= u->cfg_len && c[off] >= 2; off += c[off]) {
@@ -211,8 +229,13 @@ static NT_STATUS parse(Uvc *u)
             else if (d[6] == 2 && (!vs_found || d[2] == u->vs)) {
                 if (!vs_found) { u->vs = d[2]; vs_found = true; }
                 cur = 2;
+                alt = d[3];
                 if (d[3] == 0) ep_alt0 = d[4] > 0;
             }
+        } else if (d[1] == 5 && d[0] >= 7 && cur == 2 && alt && (d[3] & 3) == 1 && u->nalts < MAX_ALTS) {   /* ENDPOINT */
+            UINT16 mps = (UINT16)(d[4] | d[5] << 8);
+            u->alts[u->nalts].alt = alt;
+            u->alts[u->nalts++].bytes = (UINT32)(mps & 0x7FF) * (1 + (mps >> 11 & 3));
         } else if (d[1] == 0x24 && cur == 1 && d[2] == 1 && d[0] >= 5) {   /* VC_HEADER */
             u->uvc = (UINT16)(d[3] | d[4] << 8);
         } else if (d[1] == 0x24 && cur == 2) {
@@ -248,8 +271,10 @@ static NT_STATUS parse(Uvc *u)
     }
     if (!vs_found || !u->ep || !u->info.nmodes) return NT_STATUS_UNSUCCESSFUL;
     if (!ep_alt0) {
-        kprintf("[UVC] %04x:%04x: its stream is isochronous, which NovaOS does not support yet\n", vid(u), pid(u));
-        return NT_STATUS_NOT_SUPPORTED;
+        if (!u->nalts) return NT_STATUS_UNSUCCESSFUL;
+        u->iso = true;
+        kprintf("[UVC] %04x:%04x: isochronous, %u setting(s), up to %u bytes a packet\n", vid(u), pid(u), u->nalts,
+                u->alts[u->nalts - 1].bytes);
     }
     return NT_STATUS_SUCCESS;
 }
@@ -294,25 +319,53 @@ static NT_STATUS configure(Uvc *u)
     st = urb_wait(u, sel, 0);
     if (NT_SUCCESS(st)) {
         UsbdIfaceInfo *i = list[vc ? 1 : 0].Interface;
+        u->cfg_handle = sel->ConfigurationHandle;
         for (UINT32 k2 = 0; k2 < i->NumberOfPipes; k2++)
             if (i->Pipes[k2].EndpointAddress == u->ep) u->pipe = i->Pipes[k2].PipeHandle;
     }
     nt_ExFreePool(sel);
     if (!NT_SUCCESS(st)) return st;
-    return u->pipe ? NT_STATUS_SUCCESS : NT_STATUS_UNSUCCESSFUL;
+    return u->pipe || u->iso ? NT_STATUS_SUCCESS : NT_STATUS_UNSUCCESSFUL;   /* (isochronous: no pipe until START) */
 }
 
 /* ---- the stream ---- */
 
+/* SELECT_INTERFACE: the streaming interface's setting @alt (0 stops an
+ * isochronous stream); the pipe of its endpoint */
+static NT_STATUS select_alt(Uvc *u, UINT8 alt)
+{
+    UrbSelectIface x;
+    memset(&x, 0, sizeof(x));
+    x.Hdr.Length = sizeof(x);
+    x.Hdr.Function = URB_FUNCTION_SELECT_INTERFACE;
+    x.ConfigurationHandle = u->cfg_handle;
+    x.Interface.Length = sizeof(x.Interface);
+    x.Interface.InterfaceNumber = u->vs;
+    x.Interface.AlternateSetting = alt;
+    NT_STATUS st = urb_wait(u, &x, 0);
+    u->pipe = NULL;
+    u->alt = 0;
+    if (!NT_SUCCESS(st)) return st;
+    u->alt = alt;
+    for (UINT32 k = 0; k < x.Interface.NumberOfPipes; k++)
+        if (x.Interface.Pipes[k].EndpointAddress == u->ep) u->pipe = x.Interface.Pipes[k].PipeHandle;
+    return alt && !u->pipe ? NT_STATUS_UNSUCCESSFUL : NT_STATUS_SUCCESS;
+}
+
 static void stop(Uvc *u)
 {
     if (!u->owner) return;
-    if (!u->gone) {
+    if (!u->gone && u->iso) {
+        if (u->pipe) pipe_req(u, URB_FUNCTION_ABORT_PIPE);
+        if (u->alt) select_alt(u, 0);
+    } else if (!u->gone) {
         pipe_req(u, URB_FUNCTION_ABORT_PIPE);
         pipe_req(u, URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL);
     }
     kfree(u->buf);
     u->buf = NULL;
+    kfree(u->urb);
+    u->urb = NULL;
     u->owner = NULL;
     u->mode = NULL;
     kprintf("[UVC] %04x:%04x: stream stopped after %u frame(s)\n", vid(u), pid(u), u->seq);
@@ -341,8 +394,33 @@ static NT_STATUS start(Uvc *u, NT_FILE_OBJECT *fo, const NovaCamStart *s)
     }
     UINT32 payload = le32(probe + 22);
     if (!payload || payload > MAX_PAYLOAD) payload = payload ? MAX_PAYLOAD : 64 * 1024;
-    u->buf = kmalloc(payload);
-    if (!u->buf) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    if (u->iso) {
+        /* the smallest setting whose packets hold a payload (else the largest) */
+        UINT32 pick = u->nalts - 1;
+        for (UINT32 k = 0; k < u->nalts; k++)
+            if (u->alts[k].bytes >= payload && u->alts[k].bytes < u->alts[pick].bytes) pick = k;
+        if (u->alts[pick].bytes < payload) pick = u->nalts - 1;
+        payload = u->alts[pick].bytes;
+        u->urb = kzalloc(sizeof(UrbIso) + (ISO_PACKETS - 1) * sizeof(UsbdIsoPacket));
+        if (!u->urb) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        st = select_alt(u, u->alts[pick].alt);
+        if (!NT_SUCCESS(st)) {
+            kprintf("[UVC] %04x:%04x: setting %u of the streaming interface refused (%08x)\n", vid(u), pid(u),
+                    u->alts[pick].alt, (UINT32)st);
+            kfree(u->urb);
+            u->urb = NULL;
+            return st;
+        }
+        u->iso_next = u->iso_n = 0;
+        kprintf("[UVC] %04x:%04x: isochronous setting %u, %u bytes a packet\n", vid(u), pid(u), u->alt, payload);
+    }
+    u->buf = kmalloc(u->iso ? payload * ISO_PACKETS : payload);
+    if (!u->buf) {
+        kfree(u->urb);
+        u->urb = NULL;
+        if (u->iso) select_alt(u, 0);
+        return NT_STATUS_INSUFFICIENT_RESOURCES;
+    }
     u->payload = payload;
     u->owner = fo;
     u->mode = m;
@@ -354,10 +432,39 @@ static NT_STATUS start(Uvc *u, NT_FILE_OBJECT *fo, const NovaCamStart *s)
     return NT_STATUS_SUCCESS;
 }
 
-/* One payload from the streaming endpoint into u->buf: its size, or -1
- * (with *@st why) */
-static int payload(Uvc *u, NT_STATUS *st)
+/* The next isochronous packet (*@at): its size (0: an empty or lost
+ * packet), or -1 (with *@st why).  An URB of ISO_PACKETS packets at a time. */
+static int iso_payload(Uvc *u, NT_STATUS *st, UINT8 **at)
 {
+    if (u->iso_next >= u->iso_n) {
+        UrbIso *x = u->urb;
+        memset(x, 0, sizeof(UrbIso) + (ISO_PACKETS - 1) * sizeof(UsbdIsoPacket));
+        x->Hdr.Length = (UINT16)(sizeof(UrbIso) + (ISO_PACKETS - 1) * sizeof(UsbdIsoPacket));
+        x->Hdr.Function = URB_FUNCTION_ISOCH_TRANSFER;
+        x->PipeHandle = u->pipe;
+        x->TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_START_ISO_TRANSFER_ASAP;
+        x->TransferBufferLength = u->payload * ISO_PACKETS;
+        x->TransferBuffer = u->buf;
+        x->NumberOfPackets = ISO_PACKETS;
+        for (UINT32 k = 0; k < ISO_PACKETS; k++) x->IsoPacket[k].Offset = k * u->payload;
+        *st = urb_wait(u, x, FRAME_WAIT_MS);
+        if (*st == NT_STATUS_TIMEOUT) *st = ST_IO_TIMEOUT;
+        if (!NT_SUCCESS(*st)) return -1;
+        u->iso_next = 0;
+        u->iso_n = ISO_PACKETS;
+    }
+    UsbdIsoPacket *k = &u->urb->IsoPacket[u->iso_next++];
+    *at = u->buf + k->Offset;
+    if (k->Status) { u->lost = true; return 0; }
+    return (int)k->Length;
+}
+
+/* One payload from the streaming endpoint (*@at): its size, or -1 (with
+ * *@st why) */
+static int payload(Uvc *u, NT_STATUS *st, UINT8 **at)
+{
+    if (u->iso) return iso_payload(u, st, at);
+    *at = u->buf;
     UrbXfer x;
     memset(&x, 0, sizeof(x));
     x.Hdr.Length = sizeof(x);
@@ -376,11 +483,14 @@ static int read_frame(Uvc *u, UINT8 *dst, UINT32 cap, NT_STATUS *st)
 {
     UINT32 have = 0;
     bool in_frame = false, spoiled = false;
-    for (int tries = 0; tries < 4096; tries++) {
-        int n = payload(u, st);
+    for (int tries = 0; tries < (u->iso ? 16384 : 4096); tries++) {   /* (isochronous: empty packets between frames) */
+        UINT8 *b;
+        u->lost = false;
+        int n = payload(u, st, &b);
         if (n < 0) return -1;
-        if (n < 2 || u->buf[0] < 2 || u->buf[0] > n) continue;      /* (no header: not a payload) */
-        UINT8 hl = u->buf[0], info = u->buf[1], fid = info & 1;
+        if (u->lost) spoiled = true;                             /* (a packet lost: the frame is not whole) */
+        if (n < 2 || b[0] < 2 || b[0] > n) continue;            /* (no header: not a payload) */
+        UINT8 hl = b[0], info = b[1], fid = info & 1;
         bool eof = info & 2, err = info & 0x40;
         bool new_frame = u->eof || fid != u->fid;
         u->fid = fid;
@@ -394,7 +504,7 @@ static int read_frame(Uvc *u, UINT8 *dst, UINT32 cap, NT_STATUS *st)
         if (err) spoiled = true;
         UINT32 data = (UINT32)n - hl;
         if (have + data > cap) spoiled = true;
-        else memcpy(dst + have, u->buf + hl, data), have += data;
+        else memcpy(dst + have, b + hl, data), have += data;
         bool full = u->mode->fourcc != NOVACAM_MJPG && have >= u->mode->max_bytes;
         if (eof || full) {
             if (full) u->eof = true;

@@ -1,7 +1,7 @@
 /*
  * mfpriv.h — what mfplat.dll's parts share (mfplat.c: attribute stores,
  * media types, buffers, samples; camera.c: capture devices; reader.c:
- * the source reader)
+ * the source reader; mjpeg.c: MJPEG frames decoded)
  */
 #pragma once
 #define NOVA_MF_BUILD
@@ -112,6 +112,11 @@ HRESULT camera_read(Camera *c, BYTE **frame, UINT32 *bytes, UINT32 *seq);   /* t
 void    camera_stop(Camera *c);
 DWORD   camera_characteristics(Camera *c);
 const GUID *camera_subtype(UINT32 fourcc, GUID *buf);
+
+/* ---- mjpeg.c ---- */
+/* One MJPEG frame (@len bytes) of @w x @h into @rgb (w x h x 3 bytes,
+ * R, G, B); FALSE when it is not one (a damaged frame, another size) */
+BOOL mjpeg_decode(const BYTE *jpg, UINT32 len, UINT32 w, UINT32 h, BYTE *rgb);
 void    mf_fill_video_type(IMFMediaType *t, const GUID *subtype, UINT32 width, UINT32 height, UINT32 interval,
                            UINT32 min_interval, BOOL compressed);
 

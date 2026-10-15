@@ -809,11 +809,11 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   driver (`kernel/nt/usbvideo.c`), Media Foundation's capture path
   (`MFEnumDeviceSources`, the camera media source and `IMFSourceReader`
   with RGB32 conversion) and the Camera app, shown with a fake UVC camera
-  in the devices suite's `camera` boot. Still needed for the T14's
-  built-in webcam: isochronous transfers in `usbd.c` (the fake camera
-  streams on a bulk endpoint; most webcams, the T14's included, use
-  isochronous ones), MJPEG decoding for its larger sizes, and a boot
-  of `latest` on the T14 showing its picture in Camera.
+  in the devices suite's `camera` boot; isochronous streaming (URBs in
+  `usbd.c`, the driver choosing the alternate setting) and MJPEG frames
+  decoded by the source reader, shown with a fake isochronous MJPEG
+  camera in the `isocam` boot. Still needed: a boot of `latest` on the
+  T14 showing its built-in webcam's picture in Camera.
 - [ ] **28.4 Battery life.** Add processor idle states and device power
   management; measure idle power within 50% of Windows on the same T14.
 - [ ] **28.5 A second reference PC.** Pick an AMD machine and list its

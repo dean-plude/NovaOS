@@ -13429,6 +13429,58 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## Isochronous cameras and MJPEG frames
+
+The rest of roadmap step 28.3 that QEMU can show. Most webcams, the
+T14's built-in one included, stream on an isochronous endpoint and send
+their larger sizes as MJPEG; NovaOS's camera path could only read a bulk
+endpoint and pass MJPEG frames on undecoded.
+
+- **Isochronous URBs** (`kernel/nt/usbd.c`): `URB_FUNCTION_ISOCH_TRANSFER`
+  on an IN pipe starts the USB core's isochronous stream on it; each
+  packet the controller receives goes into a ring of the pipe's, and the
+  pipe's thread fills each URB's packets from it in order (lengths,
+  per-packet status, `ErrorCount`). Aborting the pipe, selecting another
+  alternate setting or unplugging the device stops the stream.
+- **The UVC driver** (`kernel/nt/usbvideo.c`) runs an isochronous camera:
+  it lists the streaming interface's alternate settings and their packet
+  sizes, selects the smallest that holds the payload size the camera
+  answered in its probe, reads payloads a packet at a time from URBs of
+  32 packets (a frame that lost a packet is dropped), and selects
+  setting 0 again to stop.
+- **MJPEG in the source reader** (`userland/mfplat/mjpeg.c`): frames are
+  decoded with stb_image into RGB32, NV12 or YUY2; a frame without
+  Huffman tables (most cameras leave them out) gets the JPEG standard's
+  typical ones, and a frame that does not decode is skipped. A size the
+  camera offers only as MJPEG can now be asked for as RGB32, so the
+  Camera app shows such a camera.
+- **Test**: `tools/campeer.py --iso` is a camera as laptops have them
+  (1209:000b: settings of 1024 and 3 x 1024 bytes a packet, MJPEG
+  640x480 and 320x240 without Huffman tables, YUY2 160x120), in the new
+  devices-suite boot `isocam`; `camtest --iso` reads every mode and
+  checks the decoded test card, and the Camera app shows it.
+
+Still needed for 28.3: a boot of `latest` on the T14 showing its
+webcam's picture in Camera.
+
+## MS-DOS in a console window
+
+Roadmap step 31.2.  `ntvdm.exe`, NovaOS's DOS host, boots the MS-DOS 4.00
+built in step 31.1 in a console window, as Windows' NT Virtual DOS
+Machine did.  x86-64 long mode has no virtual-8086 mode, so DOS runs on a
+real-mode CPU of NovaOS's own (`userland/programs/ntvdm/cpu86.c`, the
+8086 instruction set with the 80186's additions, about 700 lines of C)
+and a PC BIOS written in C (`pcbios.c`: text-mode video, the floppy disk,
+keyboard, clock, timer interrupt and CMOS), reached from the ROM's
+interrupt vectors through "BOP" instructions as NTVDM's were.  The build
+now makes MS-DOS (DOSBox joins the build's packages) and ships a 1.44 MB
+boot disk of all of it in `C:\Windows\System32\DOS`, with Microsoft's
+MIT licence; `ntvdm` in the Terminal boots it to `A:\>`, and F12 gives the
+Terminal back.  The `dostest` self-test types `VER` and `DIR` at the
+prompt; CI's MS-DOS job also boots the disk on the same CPU and BIOS
+built for Linux and runs `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session
+(`tools/msdos/vdm_test.py`).  [dos.md](dos.md) has the details.
+
 ## hidapi finds USB HID devices by their bus
 
 The fifth HID step: hidapi's Windows backend (and SDL, which uses it)

@@ -195,11 +195,11 @@ int main(void)
         CHECK("ICU line breaks keep NBSP and CRLF intact and break CJK",
               SUCCEEDED(V(analyzer, AnalyzeLineBreakpoints)(analyzer, &break_source.iface, 0, break_source.len, &sink.iface)) &&
               sink.breaks == break_source.len &&
-              sink.breakpoints[0].break_after == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
-              sink.breakpoints[1].break_after == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
-              sink.breakpoints[3].break_after == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
-              sink.breakpoints[4].break_after == DWRITE_BREAK_CONDITION_MUST_BREAK &&
-              sink.breakpoints[5].break_after == DWRITE_BREAK_CONDITION_CAN_BREAK);
+              sink.breakpoints[0].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[1].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[3].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[4].breakConditionAfter == DWRITE_BREAK_CONDITION_MUST_BREAK &&
+              sink.breakpoints[5].breakConditionAfter == DWRITE_BREAK_CONDITION_CAN_BREAK);
     }
 
     /* ---- the system collection, as Chromium's font lookup table walks it ---- */

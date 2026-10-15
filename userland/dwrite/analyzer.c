@@ -212,8 +212,8 @@ static HRESULT STDMETHODCALLTYPE analyzer_linebreaks(TextAnalyzer *analyzer, voi
     void *iterator = g_icu.break_open(2, NULL, (const UINT16 *)text, (INT32)length, &error);
     if (error > 0 || !iterator) { dw_free(breaks); dw_free(text); return E_FAIL; }
     for (UINT32 i = 0; i < length; i++) {
-        breaks[i].break_before = 1;
-        breaks[i].break_after = 1;
+        breaks[i].break_before = DWRITE_BREAK_CONDITION_MAY_NOT_BREAK;
+        breaks[i].break_after = DWRITE_BREAK_CONDITION_MAY_NOT_BREAK;
         breaks[i].whitespace = text[i] == ' ' || text[i] == '\t' || text[i] == 0x3000 ||
                                (text[i] >= 0x2000 && text[i] <= 0x200a);
         breaks[i].soft_hyphen = text[i] == 0x00ad;
@@ -223,7 +223,8 @@ static HRESULT STDMETHODCALLTYPE analyzer_linebreaks(TextAnalyzer *analyzer, voi
     while ((boundary = g_icu.break_next(iterator)) != -1) {
         if (boundary > 0 && (UINT32)boundary <= length) {
             INT32 status = g_icu.break_status(iterator);
-            BYTE condition = status >= 100 ? 2 : 0;
+            BYTE condition = status >= 100 ? DWRITE_BREAK_CONDITION_MUST_BREAK :
+                                             DWRITE_BREAK_CONDITION_CAN_BREAK;
             breaks[boundary - 1].break_after = condition;
             if ((UINT32)boundary < length) breaks[boundary].break_before = condition;
         }

@@ -1067,7 +1067,7 @@ static void usb_gone(void *inst)
     UsbdDev *v = inst;
     v->gone = true;
     kprintf("[USBD] %s: unplugged\n", v->usb->name);
-    NtPnpSurpriseRemoval(v->node);
+    if (NtPnpSurpriseRemoval(v->node)) v->usb->pnp_deferred = true;
 }
 
 NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node)

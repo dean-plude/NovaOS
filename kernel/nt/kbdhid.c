@@ -1,6 +1,6 @@
 /*
- * kbdhid.c — the keyboard and mouse class drivers on HID collections
- * (Windows' kbdhid.sys and mouhid.sys)
+ * kbdhid.c — the keyboard, mouse and digitizer class drivers on HID
+ * collections (Windows' kbdhid.sys and mouhid.sys, and what win32k reads)
  *
  * On Windows a USB keyboard or mouse is a HID device like any other:
  * hidusb.sys moves its reports, hidclass.sys makes a PDO for each of its
@@ -13,10 +13,23 @@
  * the HID class driver (hidclass.c), then one of these on each collection
  * (pnp.c: the inbox match keyboard.inf and msmouse.inf would make).
  *
- * Both services are this one driver, built into the kernel as hidusb.c
- * is: "kbdhid" takes keyboards and the consumer- and system-control
- * collections (media, browser, power and sleep keys), "mouhid" mice and
- * absolute pointers (QEMU's USB tablet).  On each device:
+ * The three services are this one driver, built into the kernel as
+ * hidusb.c is: "kbdhid" takes keyboards and the consumer- and
+ * system-control collections (media, browser, power and sleep keys),
+ * "mouhid" mice and absolute pointers (QEMU's USB tablet), "hiddigi" the
+ * digitizer collections: touch screens (usage page 0x0D usage 4), pens
+ * (2), a precision touchpad's finger collection (5) and a digitizer's
+ * configuration collection (0x0E).  Windows installs no driver on those
+ * (input.inf leaves them raw) and reads them from win32k; NovaOS reads
+ * them here, so their contacts become the touch, pen and touchpad input
+ * every other digitizer makes (WM_POINTER, WM_TOUCH, wintab32, the
+ * touchpad gestures).  Each digitizer collection decodes only its own
+ * fields (HidAttachApp), so a device that is a touch screen and a pen at
+ * once works as both.  On a configuration collection hiddigi does what
+ * Windows does when a precision touchpad starts: it sets the Input Mode
+ * feature to 3 (touchpad mode; IOCTL_HID_SET_FEATURE), and the device
+ * then sends finger reports on its Touch Pad collection instead of mouse
+ * reports on its mouse collection (where mouhid runs).  On each device:
  *
  *   - start: the collection is opened (IRP_MJ_CREATE with a file object of
  *     the driver's own, as kbdhid.sys opens its collection), its report
@@ -61,6 +74,7 @@ NT_API UINT8 nt_IoCancelIrp(NT_IRP *irp);
 typedef struct {
     NT_DEVICE_OBJECT *fdo, *lower;
     bool              mouse;                /* mouhid's (else kbdhid's) */
+    bool              digi;                 /* hiddigi's */
     NT_FILE_OBJECT    fo;                   /* its open handle on the collection */
     bool              open;
     void             *hid;                  /* the report parser's device */
@@ -85,7 +99,7 @@ static KSpinLock g_lock = KSPINLOCK_INIT;   /* g_dev, read_irp and the LED field
 static NT_KEVENT g_led_event;
 static bool      g_led_thread;
 
-static const char *tag(const Kdev *k) { return k->mouse ? "MOUHID" : "KBDHID"; }
+static const char *tag(const Kdev *k) { return k->digi ? "HIDDIGI" : k->mouse ? "MOUHID" : "KBDHID"; }
 static Kdev *kdev(NT_DEVICE_OBJECT *fdo) { return *(Kdev **)fdo->DeviceExtension; }
 
 /* ---- requests to the collection ---- */
@@ -242,6 +256,33 @@ static void led_thread(void *arg)
 
 /* ---- starting and stopping ---- */
 
+/* A digitizer's configuration collection (its feature reports only): a
+ * precision touchpad goes to touchpad mode, as Windows switches one when
+ * it starts (Input Mode 3, the surface and button switches on).  The
+ * collection has no input of its own to read. */
+static void digi_configure(Kdev *k, const HidNovaReportDescriptor *rd)
+{
+    void *all = HidAttach(rd->Descriptor, (int)rd->DescriptorLength, NULL);   /* (the whole device: where the mode is) */
+    UINT8 mode[32], id = 0;
+    int n = all ? HidTouchpadModeReport(all, &id, mode, sizeof(mode)) : 0;
+    bool ids = all && HidReportIds(all);
+    kfree(all);
+    if (!n || !rd->FeatureLength) {
+        kprintf("[HIDDIGI] %04x:%04x: digitizer configuration\n", k->vid, k->pid);
+        return;
+    }
+    UINT32 len = rd->FeatureLength;                           /* (hidclass's reports start with their ID, 0 without IDs) */
+    UINT8 *rep = kzalloc(len + sizeof(mode) + 1);
+    if (!rep) return;
+    if (ids) memcpy(rep, mode, (size_t)n);
+    else memcpy(rep + 1, mode, (size_t)n);
+    NT_STATUS st = request(k, NT_IRP_MJ_DEVICE_CONTROL, IOCTL_HID_SET_FEATURE, rep, len, NULL, 0, NULL, false);
+    kfree(rep);
+    if (NT_SUCCESS(st)) kprintf("[HIDDIGI] %04x:%04x: precision touchpad configuration: touchpad mode on\n", k->vid, k->pid);
+    else kprintf("[HIDDIGI] %04x:%04x: precision touchpad configuration: touchpad mode refused (0x%08x), "
+                 "it stays a mouse\n", k->vid, k->pid, (UINT32)st);
+}
+
 static NT_STATUS start(Kdev *k)
 {
     memset(&k->fo, 0, sizeof(k->fo));
@@ -262,7 +303,7 @@ static NT_STATUS start(Kdev *k)
     NT_ULONG_PTR n = 0;
     st = rd ? request(k, NT_IRP_MJ_INTERNAL_DEVICE_CONTROL, IOCTL_HID_NOVA_GET_REPORT_DESCRIPTOR, NULL, 0, rd, cap, &n, false)
             : NT_STATUS_INSUFFICIENT_RESOURCES;
-    if (!NT_SUCCESS(st) || n < sizeof(*rd) || !rd->InputLength) {
+    if (!NT_SUCCESS(st) || n < sizeof(*rd) || (!rd->InputLength && !k->digi)) {   /* (a configuration collection has none) */
         kprintf("[%s] %04x:%04x: no report descriptor (0x%08x)\n", tag(k), k->vid, k->pid, (UINT32)st);
         kfree(rd);
         return NT_SUCCESS(st) ? NT_STATUS_UNSUCCESSFUL : st;
@@ -270,7 +311,17 @@ static NT_STATUS start(Kdev *k)
     k->in_len = rd->InputLength;
     k->out_len = rd->OutputLength;
     const char *kind = NULL;
-    k->hid = HidAttach(rd->Descriptor, (int)rd->DescriptorLength, &kind);
+    if (k->digi) {
+        UINT16 app = (UINT16)(rd->UsagePage << 8 | (rd->Usage & 0xFF));
+        if (app == 0x0D0E) {                                  /* a configuration collection */
+            digi_configure(k, rd);
+            kfree(rd);
+            return NT_STATUS_SUCCESS;
+        }
+        k->hid = rd->InputLength ? HidAttachApp(rd->Descriptor, (int)rd->DescriptorLength, app, &kind) : NULL;
+    } else {
+        k->hid = HidAttach(rd->Descriptor, (int)rd->DescriptorLength, &kind);
+    }
     kfree(rd);
     if (!k->hid) {
         kprintf("[%s] %04x:%04x: nothing in its reports NovaOS uses\n", tag(k), k->vid, k->pid);
@@ -301,7 +352,7 @@ static NT_STATUS start(Kdev *k)
     HidStart(k->hid);
     nt_KeInitializeEvent(&k->reader_done, NT_NotificationEvent, 0);
     k->stopping = false;
-    k->reader = sched_create_thread_ex(k->mouse ? "mouhid" : "kbdhid", reader, k, PRIO_DEVICE_IO, 16 * 1024) != NULL;
+    k->reader = sched_create_thread_ex(k->digi ? "hiddigi" : k->mouse ? "mouhid" : "kbdhid", reader, k, PRIO_DEVICE_IO, 16 * 1024) != NULL;
     if (!k->reader) { HidStop(k->hid); return NT_STATUS_INSUFFICIENT_RESOURCES; }
     kprintf("[%s] %04x:%04x: %s, input reports %u bytes%s\n", tag(k), k->vid, k->pid, kind ? kind : "input device",
             k->in_len, wake ? ", wakes the machine" : "");
@@ -383,7 +434,7 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *fdo, NT_IRP *irp)
     return pass_down(k, irp);
 }
 
-static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool mouse)
+static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool mouse, bool digi)
 {
     Kdev *k = kzalloc(sizeof(*k));
     if (!k) return NT_STATUS_INSUFFICIENT_RESOURCES;
@@ -393,12 +444,14 @@ static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool m
     spin_unlock_irqrestore(&g_lock, s);
     if (slot < 0) { kfree(k); return NT_STATUS_INSUFFICIENT_RESOURCES; }
     NT_DEVICE_OBJECT *fdo;
-    NT_STATUS st = nt_IoCreateDevice(drv, sizeof(Kdev *), NULL, mouse ? 0x0F /* FILE_DEVICE_MOUSE */ : 0x0B /* KEYBOARD */,
+    NT_STATUS st = nt_IoCreateDevice(drv, sizeof(Kdev *), NULL,
+                                     digi ? 0x22 /* FILE_DEVICE_UNKNOWN */ : mouse ? 0x0F /* MOUSE */ : 0x0B /* KEYBOARD */,
                                      0x100 /* AUTOGENERATED_NAME */, 0, &fdo);
     if (!NT_SUCCESS(st)) { forget(k); kfree(k); return st; }
     *(Kdev **)fdo->DeviceExtension = k;
     k->fdo = fdo;
     k->mouse = mouse;
+    k->digi = digi;
     k->lower = nt_IoAttachDeviceToDeviceStack(fdo, pdo);
     if (!k->lower) { nt_IoDeleteDevice(fdo); forget(k); kfree(k); return NT_STATUS_UNSUCCESSFUL; }
     fdo->StackSize = (char)(k->lower->StackSize + 1);
@@ -406,8 +459,9 @@ static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool m
     return NT_STATUS_SUCCESS;
 }
 
-static NT_API NT_STATUS kbd_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false); }
-static NT_API NT_STATUS mou_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, true); }
+static NT_API NT_STATUS kbd_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, false); }
+static NT_API NT_STATUS mou_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, true, false); }
+static NT_API NT_STATUS digi_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, true); }
 
 NTSTATUS NT_API KbdHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
 {
@@ -422,5 +476,13 @@ NTSTATUS NT_API MouHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
     (void)reg;
     for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) drv->MajorFunction[i] = dispatch;
     drv->DriverExtension->AddDevice = mou_add;
+    return NT_STATUS_SUCCESS;
+}
+
+NTSTATUS NT_API DigiHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
+{
+    (void)reg;
+    for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) drv->MajorFunction[i] = dispatch;
+    drv->DriverExtension->AddDevice = digi_add;
     return NT_STATUS_SUCCESS;
 }

@@ -882,7 +882,8 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
 
 The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
 minidriver) is built; test `hid`.  USB keyboards and mice go through it
-to the `kbdhid` and `mouhid` class drivers; test `kbdmoutest`.  Later, only when a target device
+to the `kbdhid` and `mouhid` class drivers; test `kbdmoutest`.  USB touch screens, pens and
+precision touchpads go to the `hiddigi` digitizer class driver; test `digitest`.  Later, only when a target device
 needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
 
 ### Phase 31: DOS programs

@@ -20,9 +20,13 @@
  * two-finger scrolling (the gestures below).  One that refuses stays in
  * its default mouse mode: the pointer comes from its mouse collection and
  * the finger reports are left alone.  The same parser serves I2C-HID devices
- * (i2chid.c) through HidAttach() and HidInput().  A boot-class device whose report descriptor can't be
+ * (i2chid.c) through HidAttach() and HidInput(), and the class drivers on
+ * HID collections (nt/kbdhid.c), which every USB HID device in report
+ * protocol now runs on (HidUsb under hidclass, as on Windows; a class
+ * driver on one digitizer collection decodes only its fields:
+ * HidAttachApp()).  A boot-class device whose report descriptor can't be
  * read or understood is put in boot protocol and parsed with the boot
- * descriptors from appendix B instead.
+ * descriptors from appendix B instead, and stays here.
  *
  * Keys become set-1 scancodes (the codes a PS/2 keyboard sends), so
  * everything above the drivers sees one kind of keyboard.  USB keyboards
@@ -1083,10 +1087,11 @@ void *UsbHidProbe(UsbDev *d, const UsbIface *f, bool *for_class)
             ok = parse_report_desc(desc, rlen, &h->L);
             if (ok) classify(h);
             ok = ok && (h->keyboard || h->pointer || h->media);
-            if (ok && !h->touch && !h->pen && !h->touchpad) {
-                /* A keyboard, mouse or media-key device: the HID class
-                 * driver's, as on Windows (HidUsb under hidclass, kbdhid
-                 * and mouhid on its collections: nt/kbdhid.c) */
+            if (ok) {
+                /* A keyboard, mouse, media-key device, touch screen, pen
+                 * or precision touchpad: the HID class driver's, as on
+                 * Windows (HidUsb under hidclass; kbdhid, mouhid and
+                 * hiddigi on its collections: nt/kbdhid.c) */
                 kfree(desc);
                 kfree(h);
                 *for_class = true;
@@ -1158,6 +1163,40 @@ void *HidAttach(const UINT8 *desc, int len, const char **kind)
     classify(h);
     if (!h->keyboard && !h->pointer && !h->media) { kfree(h); return NULL; }
     if (kind) *kind = h->touchpad ? "touchpad (mouse mode)" : h->touch ? "multi-touch screen" : h->pen ? "pen tablet" :
+                      h->keyboard ? "keyboard" : !h->pointer ? "media keys" : h->absolute ? "absolute pointer" : "mouse";
+    return h;
+}
+
+/* One application collection of a device (@app: page << 8 | usage): its
+ * fields only, as a class driver on that collection decodes it.  A Touch
+ * Pad collection (0x0D05) is a precision touchpad in touchpad mode: the
+ * collection only has finger reports once the device took the Input Mode
+ * feature on its configuration collection. */
+void *HidAttachApp(const UINT8 *desc, int len, UINT16 app, const char **kind)
+{
+    Hid *h = kzalloc(sizeof(Hid));
+    if (!h) return NULL;
+    h->leds = 0xFF;
+    if (!parse_report_desc(desc, len, &h->L)) { kfree(h); return NULL; }
+    int n = 0;
+    for (int i = 0; i < h->L.n; i++)
+        if (h->L.f[i].app == app) h->L.f[n++] = h->L.f[i];
+    h->L.n = n;
+    h->L.app = app;
+    if (app == 0x0D05) {
+        h->touchpad = h->pointer = true;
+        for (int i = 0; i < n; i++)                  /* (classify() leaves a touchpad's finger fields out) */
+            h->L.f[i].app = 0x0D05;
+    } else {
+        h->L.touchpad = false;
+    }
+    classify(h);
+    if (!n || (!h->keyboard && !h->pointer && !h->media)) { kfree(h); return NULL; }
+    if (app == 0x0D05) {
+        h->ptp = true;
+        h->touch = h->pen = false;
+    }
+    if (kind) *kind = h->ptp ? "precision touchpad" : h->touch ? "multi-touch screen" : h->pen ? "pen tablet" :
                       h->keyboard ? "keyboard" : !h->pointer ? "media keys" : h->absolute ? "absolute pointer" : "mouse";
     return h;
 }

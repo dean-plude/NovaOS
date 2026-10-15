@@ -116,6 +116,17 @@ typedef struct {
 static Ptr    g_ptr[NPTR];
 static UINT32 g_frame;
 
+/* What each delivered frame's contacts were, and each touch WM_POINTER*
+ * message's frame: GetPointerInfo answers with the contact as it was in
+ * the message the thread took last, as on Windows (a contact may have
+ * lifted since: a tap's down and up come close together) */
+#define NFRAMES 16
+#define NTREC   64
+static struct { UINT32 frame; Ptr ptr[NPTR]; } g_snap[NFRAMES];
+static struct { UINT32 seq, frame; int taken; HWND h; UINT msg; UINT32 id; } g_trec[NTREC];
+static UINT32 g_trec_seq;
+static struct { DWORD tid; UINT32 seq; } g_tcur[16];       /* each thread's last touch pointer message */
+
 #define PT_PEN               3
 #define PEN_FLAG_BARREL      1
 #define PEN_FLAG_INVERTED    2
@@ -186,14 +197,58 @@ static void deliver_frame(void)
     for (int s = 0; s < NPTR; s++) {
         Ptr *p = &g_ptr[s];
         if (!p->changed) continue;
-        p->changed = 0;
         p->frame = g_frame;
+    }
+    g_snap[g_frame % NFRAMES].frame = g_frame;
+    memcpy(g_snap[g_frame % NFRAMES].ptr, g_ptr, sizeof(g_ptr));
+    for (int s = 0; s < NPTR; s++) {
+        Ptr *p = &g_ptr[s];
+        if (!p->changed) continue;
+        p->changed = 0;
         if (p->touch) continue;
         Wnd *t = W_quiet(p->target);
         if (!t) continue;
         UINT msg = p->kf & K_DOWN ? WM_POINTERDOWN : p->kf & K_UP ? WM_POINTERUP : WM_POINTERUPDATE;
+        int k = (int)(++g_trec_seq % NTREC);
+        g_trec[k].seq = g_trec_seq; g_trec[k].frame = g_frame; g_trec[k].taken = 0;
+        g_trec[k].h = t->h; g_trec[k].msg = msg; g_trec[k].id = (UINT32)s + 2;
         input_queue(t, msg, MAKEWPARAM(s + 2, p->flags & 0xFFFF), MAKELPARAM(p->pt.x, p->pt.y), p->time);
     }
+}
+
+/* GetMessage took touch pointer message @m: its frame is the thread's now */
+static void touch_taken(const MSG *m, UINT32 id)
+{
+    int best = -1;
+    for (int i = 0; i < NTREC; i++)
+        if (g_trec[i].seq && !g_trec[i].taken && g_trec[i].h == m->hwnd && g_trec[i].msg == m->message && g_trec[i].id == id &&
+            (best < 0 || g_trec[i].seq < g_trec[best].seq))
+            best = i;
+    if (best < 0) return;
+    g_trec[best].taken = 1;
+    DWORD tid = GetCurrentThreadId();
+    int k = -1;
+    for (int i = 0; i < 16 && k < 0; i++) if (g_tcur[i].tid == tid) k = i;
+    for (int i = 0; i < 16 && k < 0; i++) if (!g_tcur[i].tid) k = i;
+    if (k < 0) k = (int)(tid % 16);
+    g_tcur[k].tid = tid;
+    g_tcur[k].seq = g_trec[best].seq;
+}
+
+/* The contacts of the frame of the thread's current touch message, if it
+ * is @id's and still kept; else NULL (then the contacts as they are now) */
+static Ptr *touch_snapshot(UINT32 id)
+{
+    DWORD tid = GetCurrentThreadId();
+    for (int i = 0; i < 16; i++) {
+        if (g_tcur[i].tid != tid || !g_tcur[i].seq) continue;
+        int k = (int)(g_tcur[i].seq % NTREC);
+        if (g_trec[k].seq != g_tcur[i].seq || g_trec[k].id != id) return NULL;
+        UINT32 f = g_trec[k].frame;
+        if (g_snap[f % NFRAMES].frame != f) return NULL;
+        return g_snap[f % NFRAMES].ptr;
+    }
+    return NULL;
 }
 
 void touch_from_kernel(Wnd *top, const MSG *km)
@@ -306,7 +361,8 @@ USERAPI BOOL GetPointerInfo(UINT32 id, void *info)
 {
     if (id == 1 || id == PEN_ID) return rec_info(id, info, 0);
     LOCK();
-    Ptr *p = ptr_of(id);
+    Ptr *p = ptr_of(id), *snap = p ? touch_snapshot(id) : NULL;
+    if (snap) p = &snap[id - 2];
     if (p && info) fill_info(id, p, info);
     UNLOCK();
     if (!p || !info) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
@@ -316,7 +372,8 @@ USERAPI BOOL GetPointerInfo(UINT32 id, void *info)
 USERAPI BOOL GetPointerTouchInfo(UINT32 id, void *info)
 {
     LOCK();
-    Ptr *p = ptr_of(id);
+    Ptr *p = ptr_of(id), *snap = p ? touch_snapshot(id) : NULL;
+    if (snap) p = &snap[id - 2];
     if (p && info) fill_touch(id, p, info);
     UNLOCK();
     if (!p || !info) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
@@ -333,11 +390,12 @@ static BOOL frame_of(UINT32 id, UINT32 *n, void *info, int touch)
         return !info || rec_info(id, info, 0);
     }
     LOCK();
-    Ptr *p = ptr_of(id);
+    Ptr *p = ptr_of(id), *all = g_ptr, *snap = p ? touch_snapshot(id) : NULL;
     if (!p) { UNLOCK(); SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    if (snap) { all = snap; p = &snap[id - 2]; }
     UINT32 k = 0, cap = *n;
     for (int s = 0; s < NPTR; s++) {
-        Ptr *q = &g_ptr[s];
+        Ptr *q = &all[s];
         if (!q->used || !(q->down || q->frame == p->frame)) continue;
         if (info && k < cap) {
             if (touch) fill_touch((UINT32)s + 2, q, (PointerTouchInfo *)info + k);
@@ -715,6 +773,12 @@ void pointer_taken(const MSG *m)
 {
     if (m->message < WM_NCPOINTERUPDATE || m->message > WM_POINTERCAPTURECHANGED || m->message == WM_POINTERACTIVATE) return;
     UINT32 id = LOWORD(m->wParam);
+    if (id >= 2 && id < 2 + NPTR) {                 /* a touch contact's */
+        LOCK();
+        touch_taken(m, id);
+        UNLOCK();
+        return;
+    }
     if (id != 1 && id != PEN_ID) return;
     LOCK();
     PRec *best = NULL;

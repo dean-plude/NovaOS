@@ -3,8 +3,8 @@
  *
  * usbhid.c's report-descriptor parser and report decoding (keys, mice,
  * touchpads, touch screens, pens) serve I2C-HID devices (i2chid.c) and
- * the keyboard and mouse class drivers on HID collections (nt/kbdhid.c)
- * too.
+ * the keyboard, mouse and digitizer class drivers on HID collections
+ * (nt/kbdhid.c) too.
  */
 
 #pragma once
@@ -16,6 +16,9 @@
  * nothing NovaOS uses.  @kind says what it is ("touchpad (mouse mode)",
  * "keyboard", ...).  Nothing reaches the desktop until HidStart(). */
 void *HidAttach(const UINT8 *desc, int len, const char **kind);
+/* ... only its application collection @app (page << 8 | usage): what a
+ * class driver on one of a HID device's collections decodes */
+void *HidAttachApp(const UINT8 *desc, int len, UINT16 app, const char **kind);
 void  HidStart(void *hid);
 /* One input report (starting with its report ID if the device uses IDs) */
 void  HidInput(void *hid, const UINT8 *report, int len);

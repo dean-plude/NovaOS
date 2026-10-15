@@ -19,6 +19,12 @@
  *    by ReadFile as the input report the device echoes, on two handles
  *    at once; HidD_GetInputReport;
  *  - the input queue: HidD_Get/SetNumInputBuffers, HidD_FlushQueue;
+ *  - overlapped I/O on a handle opened with FILE_FLAG_OVERLAPPED, as
+ *    hidapi does it: a ReadFile left pending (ERROR_IO_PENDING) whose
+ *    event times out, then completes when a report comes; CancelIo and
+ *    CancelIoEx ending one with ERROR_OPERATION_ABORTED; an overlapped
+ *    WriteFile and DeviceIoControl (IOCTL_HID_GET_FEATURE); closing the
+ *    handle under a pending read;
  *  - Raw Input: GetRawInputDeviceList holds the collection as a
  *    RIM_TYPEHID device named by the same path, RIDI_DEVICEINFO and
  *    RIDI_PREPARSEDDATA describe it, RegisterRawInputDevices for usage
@@ -151,6 +157,97 @@ static BOOL read_echo(HANDLE h, UCHAR fill)
     DWORD n = 0;
     memset(r, 0xEE, sizeof(r));
     return ReadFile(h, r, sizeof(r), &n, NULL) && n == sizeof(r) && is_echo(r, fill);
+}
+
+/* ---- Overlapped I/O, as hidapi's hid_read_timeout, hid_write and
+ * hid_get_feature_report do it ---- */
+
+#define IOCTL_HID_GET_FEATURE ((0x0B << 16) | (100 << 2) | 2)   /* METHOD_OUT_DIRECT */
+
+/* An overlapped ReadFile of one report into @r: TRUE if it is left pending */
+static BOOL read_pending(HANDLE h, OVERLAPPED *o, UCHAR *r)
+{
+    ResetEvent(o->hEvent);
+    memset(r, 0xEE, REPORT_LEN);
+    DWORD n = 0;
+    return !ReadFile(h, r, REPORT_LEN, &n, o) && GetLastError() == ERROR_IO_PENDING;
+}
+
+static void overlapped_checks(const WCHAR *path, HANDLE h, const UCHAR *feature)
+{
+    HANDLE ho = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_OVERLAPPED, NULL);
+    check(ho != INVALID_HANDLE_VALUE, "CreateFile with FILE_FLAG_OVERLAPPED (error %lu)",
+          ho == INVALID_HANDLE_VALUE ? GetLastError() : 0);
+    if (ho == INVALID_HANDLE_VALUE) return;
+    HidD_FlushQueue(ho);
+    OVERLAPPED o;
+    memset(&o, 0, sizeof(o));
+    o.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    UCHAR r[REPORT_LEN];
+    DWORD n = 0;
+
+    /* a read that times out, then completes */
+    BOOL pending = read_pending(ho, &o, r);
+    check(pending, "overlapped ReadFile with no report waiting: ERROR_IO_PENDING (error %lu)", GetLastError());
+    DWORD w = WaitForSingleObject(o.hEvent, 300);
+    check(w == WAIT_TIMEOUT, "its event times out (WaitForSingleObject 300 ms: %lu)", w);
+    BOOL ok = GetOverlappedResult(ho, &o, &n, FALSE);
+    check(!ok && GetLastError() == ERROR_IO_INCOMPLETE, "GetOverlappedResult: ERROR_IO_INCOMPLETE (error %lu)",
+          ok ? 0 : GetLastError());
+    send_output(h, 0x70, TRUE);
+    w = WaitForSingleObject(o.hEvent, 5000);
+    ok = GetOverlappedResult(ho, &o, &n, TRUE);
+    check(w == WAIT_OBJECT_0 && ok && n == REPORT_LEN && is_echo(r, 0x70),
+          "the pending read completes with the next report (wait %lu, %lu bytes)", w, n);
+
+    /* CancelIo, CancelIoEx */
+    pending = read_pending(ho, &o, r);
+    ok = CancelIo(ho);
+    BOOL got = GetOverlappedResult(ho, &o, &n, TRUE);
+    check(pending && ok && !got && GetLastError() == ERROR_OPERATION_ABORTED,
+          "CancelIo ends a pending read: ERROR_OPERATION_ABORTED (error %lu)", got ? 0 : GetLastError());
+    pending = read_pending(ho, &o, r);
+    ok = CancelIoEx(ho, &o);
+    got = GetOverlappedResult(ho, &o, &n, TRUE);
+    check(pending && ok && !got && GetLastError() == ERROR_OPERATION_ABORTED,
+          "CancelIoEx on its OVERLAPPED: ERROR_OPERATION_ABORTED (error %lu)", got ? 0 : GetLastError());
+    check(!CancelIoEx(ho, &o) && GetLastError() == ERROR_NOT_FOUND, "CancelIoEx with nothing pending: ERROR_NOT_FOUND");
+
+    /* an overlapped write, and the read it answers */
+    UCHAR out[REPORT_LEN];
+    out[0] = 2;
+    for (int i = 1; i < REPORT_LEN; i++) out[i] = (UCHAR)(0x80 + i - 1);
+    ResetEvent(o.hEvent);
+    ok = WriteFile(ho, out, sizeof(out), &n, &o);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) ok = GetOverlappedResult(ho, &o, &n, TRUE);
+    else if (ok) ok = GetOverlappedResult(ho, &o, &n, FALSE);
+    check(ok && n == REPORT_LEN, "overlapped WriteFile: %lu bytes", n);
+    ResetEvent(o.hEvent);
+    memset(r, 0xEE, sizeof(r));
+    ok = ReadFile(ho, r, sizeof(r), &n, &o);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) ok = WaitForSingleObject(o.hEvent, 5000) == WAIT_OBJECT_0;
+    ok = ok && GetOverlappedResult(ho, &o, &n, TRUE);
+    check(ok && n == REPORT_LEN && is_echo(r, 0x80), "overlapped ReadFile: its echo");
+
+    /* an overlapped control code */
+    UCHAR g[REPORT_LEN];
+    memset(g, 0, sizeof(g));
+    g[0] = 3;
+    ResetEvent(o.hEvent);
+    ok = DeviceIoControl(ho, IOCTL_HID_GET_FEATURE, g, sizeof(g), g, sizeof(g), &n, &o);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) ok = TRUE;
+    ok = ok && GetOverlappedResult(ho, &o, &n, TRUE);
+    check(ok && n == REPORT_LEN && !memcmp(g, feature, REPORT_LEN),
+          "overlapped DeviceIoControl(IOCTL_HID_GET_FEATURE): %lu bytes (%02x %02x .. %02x)", n, g[0], g[1], g[8]);
+
+    /* closing the handle ends a pending read */
+    pending = read_pending(ho, &o, r);
+    CloseHandle(ho);
+    w = WaitForSingleObject(o.hEvent, 5000);
+    check(pending && w == WAIT_OBJECT_0 && (ULONG)o.Internal == 0xC0000120u,
+          "CloseHandle ends a pending read (STATUS_CANCELLED: %08lx)", (ULONG)o.Internal);
+    CloseHandle(o.hEvent);
 }
 
 /* ---- Raw Input ---- */
@@ -351,6 +448,7 @@ int main(int argc, char **argv)
               "the second handle's queue kept its three reports");
         CloseHandle(h2);
     }
+    overlapped_checks(path, h, f);
 
     WNDCLASSW wc = { 0 };
     wc.lpfnWndProc = wndproc;

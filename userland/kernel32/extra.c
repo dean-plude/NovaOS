@@ -481,6 +481,22 @@ NTSTATUS k32_overlapped_fsctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWO
     return s;
 }
 
+/* DeviceIoControl with an OVERLAPPED: a Windows driver's device may leave
+ * it pending (kernel/um/um_driver.c) */
+NTSTATUS k32_overlapped_ioctl(HANDLE h, OVERLAPPED *o, ULONG code, PVOID in, DWORD in_len, PVOID out, DWORD out_len)
+{
+    Watch *w = watch_new(h, o, 0);
+    HANDLE ev = w ? w->ev : (HANDLE)((ULONG_PTR)o->hEvent & ~(ULONG_PTR)1);
+    o->Internal = STATUS_PENDING;
+    o->InternalHigh = 0;
+    NTSTATUS s = NtDeviceIoControlFile(h, ev, 0, 0, (PIO_STATUS_BLOCK)o, code, in, in_len, out, out_len);
+    if (s == STATUS_PENDING) { if (w) watch_start(w); return s; }
+    o->Internal = (ULONG_PTR)s;
+    if (!NT_SUCCESS(s) && s != STATUS_BUFFER_OVERFLOW) o->InternalHigh = 0;
+    finished_now(h, o, w, 0, s);
+    return s;
+}
+
 WINBASEAPI BOOL WINAPI GetOverlappedResultEx(HANDLE h, LPOVERLAPPED ov, LPDWORD bytes, DWORD ms, BOOL alertable)
 {
     (void)h;

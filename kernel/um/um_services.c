@@ -487,8 +487,9 @@ static UINT64 sys_device_io_control(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (dv) {
         UINT64 info = 0;
         UINT32 st = um_driver_ioctl(dv, (UINT32)um_stack_arg(6), um_stack_arg(7), (UINT32)um_stack_arg(8),
-                                    um_stack_arg(9), (UINT32)um_stack_arg(10), &info);
+                                    um_stack_arg(9), (UINT32)um_stack_arg(10), a2, io, &info);
         um_ob_unref(dv);
+        if (st == 0x00000103u) return st;                       /* STATUS_PENDING: overlapped, finished later */
         if (a2) call(SYSCALL_NtSetEvent, a2, 0, 0, 0);          /* (finished already) */
         if (io >> 63) {
             UINT32 b[2] = { st, (UINT32)info };

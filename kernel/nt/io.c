@@ -34,6 +34,7 @@
 #include "../mm/vmm.h"
 
 bool um_stopping(void);                                         /* um.c: the calling program thread is ending */
+static void async_completed(NT_IRP *irp);
 
 #define NAME_MAX_  128
 #define MAX_DRIVERS 32
@@ -47,6 +48,8 @@ bool um_stopping(void);                                         /* um.c: the cal
 #define IRP_READ_OPERATION      0x00000100
 #define IRP_WRITE_OPERATION     0x00000200
 #define IRP_CLOSE_OPERATION     0x00000400
+/* FILE_OBJECT.Flags */
+#define FO_CLEANUP_COMPLETE     0x00004000
 /* DEVOBJ_EXTENSION.ExtensionFlags */
 #define DOE_DELETE_PENDING      0x00000002
 /* DEVICE_OBJECT.Characteristics */
@@ -439,8 +442,10 @@ NT_API void nt_IofCompleteRequest(NT_IRP *irp, char boost)
             irp->Tail.Overlay.CurrentStackLocation->Control |= NT_SL_PENDING_RETURNED;   /* (IoMarkIrpPending upward) */
         }
     }
+    bool waited = irp->Flags & IRP_SYNCHRONOUS_API;              /* (read first: a waiter may free it) */
     if (irp->UserIosb) *irp->UserIosb = irp->IoStatus;
     if (irp->UserEvent) nt_KeSetEvent(irp->UserEvent, 0, 0);
+    if (!waited) async_completed(irp);                           /* (an overlapped request's, if it is one) */
 }
 
 /* -----------------------------------------------------------------------
@@ -481,11 +486,32 @@ static NT_API NT_STATUS nt_IopInvalidDeviceRequest(NT_DEVICE_OBJECT *dev, NT_IRP
 /* -----------------------------------------------------------------------
  * The I/O manager's side: requests from programs
  * ----------------------------------------------------------------------- */
-typedef struct {
+/* A request.  A program's request on a handle opened for synchronous I/O
+ * waits for its IRP (req_send).  On an overlapped handle the IRP may stay
+ * pending after the system call returns (NtIoAsync): the completion
+ * thread finishes it later, as Windows' I/O manager does with its
+ * completion APC: the bytes back to the caller's buffer, the status,
+ * then the caller's NtIoAsync.done. */
+typedef struct Req {
     NT_IRP            *irp;
     NT_KEVENT          done;
     NT_IO_STATUS_BLOCK iosb;
+    /* finishing */
+    NT_FILE_OBJECT    *fo;
+    void              *sys;           /* buffered: the kernel copy */
+    UINT64             out;           /* the caller's buffer that @sys copies back to (0: none) */
+    UINT32             out_len;       /* the most it takes */
+    bool               pos;           /* advance the file's CurrentByteOffset */
+    /* overlapped */
+    NtIoAsync          as;
+    struct Req        *next;          /* g_async: started, not yet finished */
+    struct Req        *done_next;     /* g_done: completed, for the completion thread */
+    int                state;         /* REQ_* */
+    int                refs;
+    bool               cancelled, gone, finishing;
 } Req;
+
+enum { REQ_STARTING, REQ_PENDING, REQ_COMPLETED };
 
 /* An IRP for @fo's device with its stack, the next location filled with @major */
 static NT_IO_STACK_LOCATION *req_new(Req *r, NT_FILE_OBJECT *fo, UINT8 major, UINT32 flags)
@@ -493,6 +519,7 @@ static NT_IO_STACK_LOCATION *req_new(Req *r, NT_FILE_OBJECT *fo, UINT8 major, UI
     NT_DEVICE_OBJECT *dev = fo->DeviceObject;
     int n = dev->StackSize > 0 ? dev->StackSize : 1;
     memset(r, 0, sizeof(*r));
+    r->fo = fo;
     r->irp = kzalloc(sizeof(NT_IRP) + (size_t)n * sizeof(NT_IO_STACK_LOCATION));
     if (!r->irp) return NULL;
     NT_IRP *irp = r->irp;
@@ -514,19 +541,30 @@ static NT_IO_STACK_LOCATION *req_new(Req *r, NT_FILE_OBJECT *fo, UINT8 major, UI
     return sl;
 }
 
-/* Send it and wait for it to complete: its status */
-static NTSTATUS req_send(Req *r, NT_FILE_OBJECT *fo)
+/* Call the driver; false if its dispatch routine returned without
+ * completing the IRP and without STATUS_PENDING (it may still hold it) */
+static bool req_call(Req *r, NT_FILE_OBJECT *fo, NT_STATUS *st)
 {
-    NT_STATUS st = nt_IofCallDriver(fo->DeviceObject, r->irp);
+    *st = nt_IofCallDriver(fo->DeviceObject, r->irp);
     UINT8 irql = KeIrql();
     if (irql != PASSIVE_LEVEL) {
         NtDriver *drv = NtIoDriverOf(fo->DeviceObject->DriverObject);
         kprintf("[NT] %s: IRQL_GT_ZERO_AT_SYSTEM_SERVICE: dispatch returned at IRQL %u\n", drv ? drv->image : "?", irql);
         KeIrqlSet(PASSIVE_LEVEL);
     }
-    if (st != NT_STATUS_PENDING && !nt_KeReadStateEvent(&r->done)) {
+    if (*st != NT_STATUS_PENDING && !nt_KeReadStateEvent(&r->done)) {
         NtDriver *drv = NtIoDriverOf(fo->DeviceObject->DriverObject);
-        kprintf("[NT] %s: dispatch returned 0x%08x without completing its IRP\n", drv ? drv->image : "?", (UINT32)st);
+        kprintf("[NT] %s: dispatch returned 0x%08x without completing its IRP\n", drv ? drv->image : "?", (UINT32)*st);
+        return false;
+    }
+    return true;
+}
+
+/* Send it and wait for it to complete: its status */
+static NTSTATUS req_send(Req *r, NT_FILE_OBJECT *fo)
+{
+    NT_STATUS st;
+    if (!req_call(r, fo, &st)) {
         r->iosb.Status = st;
         r->irp = NULL;                                           /* (the driver may still hold it) */
         return st;
@@ -551,6 +589,191 @@ static void req_free(Req *r)
         nt_IoFreeMdl(m);
     }
     kfree(r->irp);
+    kfree(r->sys);
+}
+
+/* A completed request's status and bytes (*@info), its data copied back
+ * to the caller's buffer: by @r->as.copy for an overlapped request the
+ * completion thread finishes, else into the current process */
+static NTSTATUS req_result(Req *r, NTSTATUS st, UINT64 *info, bool async)
+{
+    UINT64 n = r->iosb.Information < r->out_len ? r->iosb.Information : r->out_len;
+    *info = 0;
+    if (NT_SUCCESS(st) && r->out && n) {
+        bool ok = async ? !r->gone && r->as.copy(r->as.ctx, r->out, r->sys, n)
+                        : NT_SUCCESS(CopyToUser((void *)(uintptr_t)r->out, r->sys, n));
+        if (!ok) st = STATUS_ACCESS_VIOLATION;
+    }
+    if (NT_SUCCESS(st)) {
+        *info = n;
+        if (r->pos) r->fo->CurrentByteOffset += (long long)n;
+    }
+    return st;
+}
+
+/* -----------------------------------------------------------------------
+ * Overlapped requests
+ * ----------------------------------------------------------------------- */
+static KSpinLock  g_async_lock = KSPINLOCK_INIT;
+static Req       *g_async;
+static Req       *g_done, **g_done_tail = &g_done;
+static NT_KEVENT  g_done_event;
+static void close_now(NT_FILE_OBJECT *fo);
+
+static void async_unlink(Req *r)
+{
+    for (Req **pp = &g_async; *pp; pp = &(*pp)->next)
+        if (*pp == r) { *pp = r->next; r->next = NULL; return; }
+}
+
+static bool async_busy(NT_FILE_OBJECT *fo)
+{
+    for (Req *r = g_async; r; r = r->next) if (r->fo == fo) return true;
+    return false;
+}
+
+static void async_unref(Req *r)
+{
+    IrqState s = spin_lock_irqsave(&g_async_lock);
+    bool last = --r->refs == 0;
+    spin_unlock_irqrestore(&g_async_lock, s);
+    if (last) { req_free(r); kfree(r); }
+}
+
+/* IofCompleteRequest finished an IRP that the I/O manager did not wait
+ * for: hand an overlapped request to the completion thread once its
+ * issuer has returned STATUS_PENDING (else the issuer finishes it) */
+static void async_completed(NT_IRP *irp)
+{
+    IrqState s = spin_lock_irqsave(&g_async_lock);
+    Req *r = g_async;
+    while (r && r->irp != irp) r = r->next;
+    bool queue = r && __atomic_exchange_n(&r->state, REQ_COMPLETED, __ATOMIC_ACQ_REL) == REQ_PENDING;
+    if (queue) {
+        *g_done_tail = r;
+        g_done_tail = &r->done_next;
+    }
+    spin_unlock_irqrestore(&g_async_lock, s);
+    if (queue) nt_KeSetEvent(&g_done_event, 0, 0);
+}
+
+/* The completion thread: finishes completed overlapped requests in their
+ * programs (data, I/O status block, event), and sends IRP_MJ_CLOSE for a
+ * handle closed while they were pending once its last one is done */
+static void completion_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        nt_KeWaitForSingleObject(&g_done_event, 0, 0, 0, NULL);
+        for (;;) {
+            IrqState s = spin_lock_irqsave(&g_async_lock);
+            Req *r = g_done;
+            if (r) {
+                g_done = r->done_next;
+                if (!g_done) g_done_tail = &g_done;
+                r->finishing = true;                     /* (r->gone stays as it is now) */
+            }
+            spin_unlock_irqrestore(&g_async_lock, s);
+            if (!r) break;
+            UINT64 info;
+            NTSTATUS st = req_result(r, r->iosb.Status, &info, true);
+            r->as.done(r->as.ctx, st, info, r->gone);
+            NT_FILE_OBJECT *fo = r->fo;
+            s = spin_lock_irqsave(&g_async_lock);
+            async_unlink(r);
+            r->finishing = false;
+            bool close = (fo->Flags & FO_CLEANUP_COMPLETE) && !async_busy(fo);
+            spin_unlock_irqrestore(&g_async_lock, s);
+            async_unref(r);
+            if (close) close_now(fo);
+        }
+    }
+}
+
+/* Start @r on an overlapped handle: STATUS_PENDING (@as->done reports
+ * the end later), or the status of a request the driver finished at once */
+static NTSTATUS req_start(Req *r, NT_FILE_OBJECT *fo, const NtIoAsync *as, UINT64 *info)
+{
+    Req *a = kmalloc(sizeof(*a));
+    if (!a) { req_free(r); return STATUS_INSUFFICIENT_RESOURCES; }
+    *a = *r;
+    a->as = *as;
+    a->refs = 1;
+    a->state = REQ_STARTING;
+    a->irp->Flags &= ~IRP_SYNCHRONOUS_API;
+    a->irp->UserIosb = &a->iosb;
+    a->irp->UserEvent = &a->done;
+    nt_KeInitializeEvent(&a->done, NT_NotificationEvent, 0);
+    IrqState s = spin_lock_irqsave(&g_async_lock);
+    a->next = g_async;
+    g_async = a;
+    spin_unlock_irqrestore(&g_async_lock, s);
+
+    NT_STATUS st;
+    req_call(a, fo, &st);
+    int expect = REQ_STARTING;
+    if (__atomic_compare_exchange_n(&a->state, &expect, REQ_PENDING, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return NT_STATUS_PENDING;                    /* (a driver returning neither: reported when it completes) */
+    s = spin_lock_irqsave(&g_async_lock);            /* finished already: here and now */
+    async_unlink(a);
+    spin_unlock_irqrestore(&g_async_lock, s);
+    st = req_result(a, a->iosb.Status, info, false);
+    async_unref(a);
+    return st;
+}
+
+/* Cancel the pending overlapped requests matching @fo (NULL: any), @owner
+ * (NULL: any) and @key (0: any); @gone: their owner is going away, so
+ * they finish without touching it.  How many were cancelled. */
+static int async_cancel(NT_FILE_OBJECT *fo, void *owner, UINT64 key, bool gone)
+{
+    int n = 0;
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_async_lock);
+        Req *r = g_async;
+        for (; r; r = r->next) {
+            if ((fo && r->fo != fo) || (owner && r->as.owner != owner) || (key && r->as.key != key)) continue;
+            if (gone && !r->finishing) r->gone = true;
+            if (!r->cancelled && r->state != REQ_COMPLETED) break;
+        }
+        if (r) { r->cancelled = true; r->refs++; }
+        spin_unlock_irqrestore(&g_async_lock, s);
+        if (!r) return n;
+        nt_IoCancelIrp(r->irp);
+        async_unref(r);
+        n++;
+    }
+}
+
+int NtIoCancel(NT_FILE_OBJECT *fo, void *owner, UINT64 key)
+{
+    int n = async_cancel(fo, owner, key, false);
+    /* NtCancelIoFile returns once they have finished, as on Windows (a
+     * driver that ignores the cancel is not waited for long) */
+    const INT64 tick = -10 * 10000LL;                            /* 10 ms */
+    for (int i = 0; n && i < 100; i++) {
+        bool left = false;
+        IrqState s = spin_lock_irqsave(&g_async_lock);
+        for (Req *r = g_async; r && !left; r = r->next) left = r->cancelled && r->fo == fo && (!owner || r->as.owner == owner);
+        spin_unlock_irqrestore(&g_async_lock, s);
+        if (!left) break;
+        nt_KeDelayExecutionThread(0, 0, &tick);
+    }
+    return n;
+}
+
+void NtIoOwnerGone(void *owner)
+{
+    async_cancel(NULL, owner, 0, true);
+    const INT64 tick = -1 * 10000LL;                             /* 1 ms */
+    for (;;) {                                                   /* (one being finished in it now: let it end) */
+        bool busy = false;
+        IrqState s = spin_lock_irqsave(&g_async_lock);
+        for (Req *r = g_async; r && !busy; r = r->next) busy = r->finishing && r->as.owner == owner;
+        spin_unlock_irqrestore(&g_async_lock, s);
+        if (!busy) return;
+        nt_KeDelayExecutionThread(0, 0, &tick);
+    }
 }
 
 /* Direct I/O: an MDL for the caller's buffer (@op: what the driver does
@@ -583,7 +806,6 @@ static void release(NT_FILE_OBJECT *fo)
     kfree(fo);
     unref(d);
 }
-
 NTSTATUS NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposition, UINT32 options, NT_FILE_OBJECT **out)
 {
     const char *rest = "";
@@ -639,9 +861,22 @@ NTSTATUS NtIoOpen(const char *path, UINT32 access, UINT32 share, UINT32 disposit
     return STATUS_SUCCESS;
 }
 
+/* Send a read, write or control request: wait for it, or (@as, an
+ * overlapped handle) start it */
+static NTSTATUS req_go(Req *r, NT_FILE_OBJECT *fo, const NtIoAsync *as, UINT64 *info)
+{
+    *info = 0;
+    if (as) return req_start(r, fo, as, info);
+    NTSTATUS st = req_send(r, fo);
+    if (r->irp) st = req_result(r, st, info, false);
+    req_free(r);
+    return st;
+}
+
 /* A read or write: buffered through a kernel copy, or the caller's own
  * buffer (neither) */
-static NTSTATUS transfer(NT_FILE_OBJECT *fo, bool write, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info)
+static NTSTATUS transfer(NT_FILE_OBJECT *fo, bool write, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info,
+                         const NtIoAsync *as)
 {
     NT_DEVICE_OBJECT *d = fo->DeviceObject;
     *info = 0;
@@ -662,32 +897,27 @@ static NTSTATUS transfer(NT_FILE_OBJECT *fo, bool write, UINT64 buf, UINT32 len,
     sl->Parameters.Read.ByteOffset = offset ? *offset : fo->CurrentByteOffset;
     r.irp->AssociatedIrp.SystemBuffer = sys;
     r.irp->UserBuffer = (void *)(uintptr_t)buf;
+    r.sys = sys;
+    r.out = buffered && !write ? buf : 0;
+    r.out_len = len;
+    r.pos = !offset;
     NTSTATUS st = direct ? req_mdl(&r, buf, len, write ? 0 /* IoReadAccess */ : 1 /* IoWriteAccess */) : STATUS_SUCCESS;
     if (!NT_SUCCESS(st)) { req_free(&r); return st; }
-    st = req_send(&r, fo);
-    UINT64 n = r.iosb.Information < len ? r.iosb.Information : len;
-    if (NT_SUCCESS(st) && buffered && !write && n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)buf, sys, n)))
-        st = STATUS_ACCESS_VIOLATION;
-    if (NT_SUCCESS(st)) {
-        *info = n;
-        if (!offset) fo->CurrentByteOffset += (long long)n;
-    }
-    if (r.irp) kfree(sys);
-    req_free(&r);
-    return st;
+    return req_go(&r, fo, as, info);
 }
 
-NTSTATUS NtIoRead(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info)
+NTSTATUS NtIoRead(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info, const NtIoAsync *as)
 {
-    return transfer(fo, false, buf, len, offset, info);
+    return transfer(fo, false, buf, len, offset, info, as);
 }
 
-NTSTATUS NtIoWrite(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info)
+NTSTATUS NtIoWrite(NT_FILE_OBJECT *fo, UINT64 buf, UINT32 len, const INT64 *offset, UINT64 *info, const NtIoAsync *as)
 {
-    return transfer(fo, true, buf, len, offset, info);
+    return transfer(fo, true, buf, len, offset, info, as);
 }
 
-NTSTATUS NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info)
+NTSTATUS NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 *info,
+                     const NtIoAsync *as)
 {
     UINT32 method = code & 3;
     bool direct = method == NT_METHOD_IN_DIRECT || method == NT_METHOD_OUT_DIRECT;
@@ -708,31 +938,41 @@ NTSTATUS NtIoControl(NT_FILE_OBJECT *fo, UINT32 code, UINT64 in, UINT32 in_len, 
     if (method == NT_METHOD_NEITHER) sl->Parameters.DeviceIoControl.Type3InputBuffer = (void *)(uintptr_t)in;
     r.irp->AssociatedIrp.SystemBuffer = sys;
     r.irp->UserBuffer = (void *)(uintptr_t)out;
+    r.sys = sys;
+    r.out = method == NT_METHOD_BUFFERED ? out : 0;
+    r.out_len = out_len;
     /* METHOD_IN_DIRECT: the driver reads the output buffer; OUT_DIRECT: it writes it */
     NTSTATUS st = direct ? req_mdl(&r, out, out_len, method == NT_METHOD_IN_DIRECT ? 0 : 1) : STATUS_SUCCESS;
-    if (!NT_SUCCESS(st)) { kfree(sys); req_free(&r); return st; }
-    st = req_send(&r, fo);
-    UINT64 n = r.iosb.Information;
-    if (n > out_len) n = out_len;
-    if (method == NT_METHOD_BUFFERED) {
-        if (NT_SUCCESS(st) && n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)out, sys, n))) st = STATUS_ACCESS_VIOLATION;
-    }
-    if (NT_SUCCESS(st)) *info = n;
-    if (r.irp) kfree(sys);
-    req_free(&r);
-    return st;
+    if (!NT_SUCCESS(st)) { req_free(&r); return st; }
+    return req_go(&r, fo, as, info);
 }
 
+static void send_close(NT_FILE_OBJECT *fo, UINT8 major, UINT32 flags)
+{
+    Req r;
+    if (!req_new(&r, fo, major, flags)) return;
+    req_send(&r, fo);
+    req_free(&r);
+}
+
+static void close_now(NT_FILE_OBJECT *fo)
+{
+    send_close(fo, NT_IRP_MJ_CLOSE, IRP_CLOSE_OPERATION);
+    release(fo);
+}
+
+/* The handle's last close.  Requests still pending are cancelled, and
+ * IRP_MJ_CLOSE waits for them, as their references to the file object
+ * hold it off on Windows: the completion thread sends it after the last */
 void NtIoClose(NT_FILE_OBJECT *fo)
 {
-    static const UINT8 majors[2] = { NT_IRP_MJ_CLEANUP, NT_IRP_MJ_CLOSE };
-    for (int i = 0; i < 2; i++) {
-        Req r;
-        if (!req_new(&r, fo, majors[i], i ? IRP_CLOSE_OPERATION : 0)) continue;
-        req_send(&r, fo);
-        req_free(&r);
-    }
-    release(fo);
+    send_close(fo, NT_IRP_MJ_CLEANUP, 0);
+    async_cancel(fo, NULL, 0, false);
+    IrqState s = spin_lock_irqsave(&g_async_lock);
+    bool busy = async_busy(fo);
+    if (busy) fo->Flags |= FO_CLEANUP_COMPLETE;
+    spin_unlock_irqrestore(&g_async_lock, s);
+    if (!busy) close_now(fo);
 }
 
 /* =======================================================================
@@ -925,6 +1165,9 @@ void NtIoWorkerInit(void)
     work_list_init(&g_work);
     nt_KeInitializeEvent(&g_work_event, NT_SynchronizationEvent, 0);
     if (sched_create_thread("nt-workitem", worker_thread, NULL, 9)) g_worker_started = true;
+    nt_KeInitializeEvent(&g_done_event, NT_SynchronizationEvent, 0);
+    if (!sched_create_thread("nt-iocomplete", completion_thread, NULL, 9))
+        kprintf("[NT] no I/O completion thread: overlapped device requests never finish\n");
 }
 
 NT_API NT_IO_WORKITEM *nt_IoAllocateWorkItem(NT_DEVICE_OBJECT *dev)

@@ -1157,8 +1157,9 @@ static UINT64 sys_read_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
     if (dv) {                               /* a Windows driver's device: an IRP */
         UINT64 info;
-        UINT32 st = um_driver_rw(dv, false, buf, len, um_stack_arg(8), &info);
+        UINT32 st = um_driver_rw(dv, false, buf, len, um_stack_arg(8), a2, iosb_ptr, &info);
         um_ob_unref(dv);
+        if (st == ST_PENDING) return st;    /* (overlapped: finished later) */
         set_io_event(a2);
         return iosb(iosb_ptr, st, info);
     }
@@ -1220,8 +1221,9 @@ static UINT64 sys_write_file(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *dv = um_handle_object(p, a1, UO_DEVICE);
     if (dv) {                               /* a Windows driver's device: an IRP */
         UINT64 info;
-        UINT32 st = um_driver_rw(dv, true, buf, len, um_stack_arg(8), &info);
+        UINT32 st = um_driver_rw(dv, true, buf, len, um_stack_arg(8), a2, iosb_ptr, &info);
         um_ob_unref(dv);
+        if (st == ST_PENDING) return st;    /* (overlapped: finished later) */
         set_io_event(a2);
         return iosb(iosb_ptr, st, info);
     }
@@ -2869,9 +2871,11 @@ static UINT64 sys_cancel_io(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a3; (void)a4;
     UmObject *po = um_handle_object(UmCurrent(), a1, UO_PIPE), *ao = po ? NULL : um_handle_object(UmCurrent(), a1, UO_AFD);
-    UINT32 st = po ? um_pipe_cancel(po, 0) : ao ? um_afd_cancel(ao, 0) : ST_SUCCESS;
+    UmObject *dv = po || ao ? NULL : um_handle_object(UmCurrent(), a1, UO_DEVICE);
+    UINT32 st = po ? um_pipe_cancel(po, 0) : ao ? um_afd_cancel(ao, 0) : dv ? um_driver_cancel(dv, 0) : ST_SUCCESS;
     if (po) um_ob_unref(po);
     if (ao) um_ob_unref(ao);
+    if (dv) um_ob_unref(dv);
     return iosb(a2, st, 0);
 }
 
@@ -2880,9 +2884,12 @@ static UINT64 sys_cancel_io_ex(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
     UmObject *po = um_handle_object(UmCurrent(), a1, UO_PIPE), *ao = po ? NULL : um_handle_object(UmCurrent(), a1, UO_AFD);
-    UINT32 st = po ? um_pipe_cancel(po, a2) : ao ? um_afd_cancel(ao, a2) : 0xC0000225u;    /* STATUS_NOT_FOUND */
+    UmObject *dv = po || ao ? NULL : um_handle_object(UmCurrent(), a1, UO_DEVICE);
+    UINT32 st = po ? um_pipe_cancel(po, a2) : ao ? um_afd_cancel(ao, a2) : dv ? um_driver_cancel(dv, a2) :
+                0xC0000225u;                                                                  /* STATUS_NOT_FOUND */
     if (po) um_ob_unref(po);
     if (ao) um_ob_unref(ao);
+    if (dv) um_ob_unref(dv);
     return iosb(a3, st, 0);
 }
 

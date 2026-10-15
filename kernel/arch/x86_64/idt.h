@@ -63,6 +63,7 @@
 #define IRQ_GPIO       (IRQ_BASE + 3)    /* GPIO controllers (gpio.c): one vector each, two at most */
 #define IRQ_I2CHID     (IRQ_BASE + 5)    /* an I2C-HID device's own Interrupt() line (i2chid.c) */
 #define IRQ_VMBUS      (IRQ_BASE + 6)    /* Hyper-V's SynIC: VMBus messages (vmbus.c) */
+#define IRQ_GPE_BLOCK  (IRQ_BASE + 7)    /* GPE block devices (ACPI0006) on interrupts other than the SCI (aml.c) */
 #define IRQ_SPURIOUS   0xFF
 
 /* NT syscall vector */

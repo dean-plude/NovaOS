@@ -27,6 +27,7 @@
 #include "../apps/apps.h"
 #include "../hal/acpi.h"
 #include "../hal/aml.h"
+#include "../hal/throttle.h"
 #include "../hal/firmware.h"
 #include "../fs/fsec.h"
 #include "../ke/sleep.h"
@@ -2722,6 +2723,8 @@ static UINT64 sys_power_action(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 /* NtPowerInformation(POWER_INFORMATION_LEVEL, PVOID In, ULONG InLength,
  * PVOID Out, ULONG OutLength): SystemPowerCapabilities (4),
  * SystemBatteryState (5) from the ACPI batteries and AC adapters,
+ * ProcessorInformation (11): each CPU's speed (the TSC's) and, while a
+ * thermal zone throttles it (hal/throttle.c), the lower MhzLimit,
  * ThermalInformation (12) of the first thermal zone, LastWakeTime (14) and
  * LastSleepTime (15).  powrprof answers the other levels itself. */
 static UINT64 sys_power_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
@@ -2756,13 +2759,27 @@ static UINT64 sys_power_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         AmlThermalZone z;
         if (AmlThermalZones(&z, 1) < 1) return ST_NOT_SUPPORTED;
         t.stamp = z.stamp;
-        t.processors = 1;
+        t.c1 = z.tc1;
+        t.c2 = z.tc2;
+        t.processors = z.processors ? z.processors : (1ull << (g_cpu_count < 64 ? g_cpu_count : 63)) - 1;
         t.period = z.period;
         t.temp = z.temp;
         t.passive = z.passive;
         t.critical = z.critical;
         if (cap < sizeof(t)) return ST_BUFFER_TOO_SMALL;
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, &t, sizeof(t))) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;
+    }
+    case 11: {                                      /* PROCESSOR_POWER_INFORMATION, one per CPU */
+        typedef struct { UINT32 number, max_mhz, current_mhz, mhz_limit, max_idle, current_idle; } Ppi;
+        Ppi p[MAX_CPUS];
+        UINT32 n = g_cpu_count < MAX_CPUS ? g_cpu_count : MAX_CPUS;
+        UINT32 mhz = (UINT32)(g_tsc_per_tick / 10000);  /* (TSC ticks per 10 ms) */
+        if (cap < n * sizeof(p[0])) return ST_BUFFER_TOO_SMALL;
+        for (UINT32 i = 0; i < n; i++) {
+            UINT32 limit = mhz * ThrottlePercent(i) / 100;
+            p[i] = (Ppi){ i, mhz, limit, limit, 0, 0 };
+        }
+        return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, p, n * sizeof(p[0]))) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;
     }
     case 14: case 15: {                             /* interrupt time (100 ns) of the last wake or sleep */
         UINT64 t = (UINT32)a1 == 14 ? SleepLastWakeTime() : SleepLastSleepTime();

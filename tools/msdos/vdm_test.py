@@ -109,11 +109,15 @@ def main():
     # bootRogue: the 80 x 25 screen written directly (the status line is
     # level, weapon, armor and HP at the bottom right), arrow keys from the
     # BIOS, the PIT's counter as its random seed; Esc ends it (INT 20h)
-    rogue = os.path.join(drive, 'rogue.com')
-    subprocess.run(['nasm', '-f', 'bin', '-Dcom_file=1', '-o', rogue,
+    # (in a folder laid out as NovaOS ships it: C:\Tests\Dos, the licence's
+    # long name beside it needs an alias)
+    games = os.path.join(drive, 'Tests', 'Dos')
+    os.makedirs(games)
+    subprocess.run(['nasm', '-f', 'bin', '-Dcom_file=1', '-o', os.path.join(games, 'ROGUE.COM'),
                     os.path.join(ROOT, 'third_party', 'bootrogue', 'rogue.asm')], check=True)
+    shutil.copy(os.path.join(ROOT, 'third_party', 'bootrogue', 'LICENSE'), os.path.join(games, 'ROGUE-LICENSE.TXT'))
     moves = ['key=right', 'key=down', 'key=left', 'key=up'] * 4
-    r = subprocess.run([exe, img, '--drive-c=' + drive, '--run=rogue.com', '--exit=0', 'screen= 16  ', 'screen=@'] +
+    r = subprocess.run([exe, img, '--drive-c=' + drive, '--cwd=Tests\\Dos', '--run=Tests\\Dos\\ROGUE.COM', '--exit=0', 'screen= 16  ', 'screen=@'] +
                        moves + ['key=esc'] + timeout)
     if r.returncode:
         sys.exit('vdm_test: bootRogue did not draw its dungeon, take the arrow keys and end on Esc')

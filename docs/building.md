@@ -1024,7 +1024,8 @@ python3 tools/novarun.py --net --put 'DIR=C:\Apps\x' 'cd C:\Apps\x' \
 ```
 
 For IPv6, `tools/v6peer.py` is a whole IPv6-only network (a router with
-SLAAC and RDNSS, DNS for `nova6.test`, an HTTP server) that QEMU reaches
+SLAAC, RDNSS, stateful DHCPv6 address assignment and DNS for `nova6.test`,
+and an HTTP server) that QEMU reaches
 through a datagram netdev, so the host needs no IPv6 of its own:
 
 ```bash

@@ -733,11 +733,11 @@ bool NetInitialize(void)
         raw_recv(g_ping6_pcb, ping6_recv, NULL);
     }
 
-    /* IPv6: a link-local address now, global ones from router
-     * advertisements (SLAAC), DNS servers from their RDNSS option */
+    /* IPv6: link-local and SLAAC addresses from router advertisements,
+     * stateful DHCPv6 addresses and DNS configuration */
     netif_create_ip6_linklocal_address(&g_netif, 1);
     netif_set_ip6_autoconfig_enabled(&g_netif, 1);
-    if (dhcp6_enable_stateless(&g_netif) != ERR_OK)
+    if (dhcp6_enable_stateful(&g_netif) != ERR_OK)
         kprintf("[NET] DHCPv6 could not start\n");
 
     if (g_nic != &g_none && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");

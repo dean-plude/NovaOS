@@ -46,6 +46,7 @@
 #define LWIP_IPV6_NUM_ADDRESSES     3       /* link-local + two from prefixes */
 #define LWIP_ND6_RDNSS_MAX_DNS_SERVERS 1    /* DNS servers from RAs (after DHCPv4's: see nd6.c) */
 #define LWIP_IPV6_DHCP6             1
+#define LWIP_IPV6_DHCP6_STATEFUL    1
 #define LWIP_IPV6_DHCP6_STATELESS   1
 #define LWIP_DHCP6_MAX_DNS_SERVERS  1
 #define LWIP_ICMP6                  1

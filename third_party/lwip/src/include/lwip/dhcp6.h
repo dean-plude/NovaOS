@@ -53,6 +53,7 @@ extern "C" {
 
 /** period (in milliseconds) of the application calling dhcp6_tmr() */
 #define DHCP6_TIMER_MSECS   500
+#define DHCP6_SERVER_ID_MAX  128
 
 struct dhcp6
 {
@@ -69,7 +70,23 @@ struct dhcp6
   /** #ticks with period DHCP6_TIMER_MSECS for request timeout */
   u16_t request_timeout;
 #if LWIP_IPV6_DHCP6_STATEFUL
-  /* @todo: add more members here to keep track of stateful DHCPv6 data, like lease times */
+  /** stateful client mode remains enabled while an Information-request runs */
+  u8_t stateful_enabled;
+  /** server selected from Advertise and used by Request/Renew */
+  u8_t server_id[DHCP6_SERVER_ID_MAX];
+  u16_t server_id_len;
+  /** address proposed by the selected server */
+  ip6_addr_t offered_address;
+  u32_t offered_preferred_time;
+  u32_t offered_valid_time;
+  /** slot containing the bound address, or -1 */
+  s8_t address_idx;
+  /** seconds remaining before renewal, rebinding, and lease expiry */
+  u32_t renew_time;
+  u32_t rebind_time;
+  u32_t valid_time;
+  /** half-second timer phase used for lease countdown */
+  u8_t second_tick;
 #endif /* LWIP_IPV6_DHCP6_STATEFUL */
 };
 

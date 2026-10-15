@@ -30,6 +30,7 @@ MY_MAC = bytes.fromhex('020000000001')
 MY_LL = bytes.fromhex('fe800000000000000000000000000001')
 MY_GL = PREFIX + bytes.fromhex('0000000000000001')
 DHCP6_DNS = PREFIX + bytes.fromhex('0000000000000002')
+DHCP6_ADDRESS = PREFIX + bytes.fromhex('0000000000000003')
 ALL_NODES = bytes.fromhex('ff020000000000000000000000000001')
 ALL_DHCP6 = bytes.fromhex('ff020000000000000000000000010002')   # ff02::1:2
 NAME = 'nova6.test'
@@ -78,7 +79,7 @@ class Peer:
         self.ip6(src, dst, 58, msg[:2] + struct.pack('!H', c) + msg[4:], 255, dst_mac)
 
     def router_advert(self, dst=ALL_NODES):
-        body = struct.pack('!BBHII', 64, 0x40, 1800, 0, 0)
+        body = struct.pack('!BBHII', 64, 0xC0, 1800, 0, 0)
         body += struct.pack('!BB', 1, 1) + MY_MAC                            # source link-layer address
         body += struct.pack('!BBBBIII', 3, 4, 64, 0xC0, 86400, 14400, 0) + PREFIX + b'\0' * 8   # prefix: on-link, autonomous
         body += struct.pack('!BBHI', 25, 3, 0, 3600) + MY_GL                 # RDNSS
@@ -127,6 +128,40 @@ class Peer:
 
     def on_udp(self, src, dst, seg):
         sport, dport = struct.unpack('!HH', seg[:4])
+        if dport == 547 and len(seg) >= 12 and seg[8] in (1, 3, 5, 6):
+            request = seg[8:]
+            msgtype = request[0]
+            options_in = {}
+            offset = 4
+            while offset + 4 <= len(request):
+                code, size = struct.unpack('!HH', request[offset:offset + 4])
+                offset += 4
+                if offset + size > len(request):
+                    return
+                options_in[code] = request[offset:offset + size]
+                offset += size
+            client_id = options_in.get(1)
+            ia_in = options_in.get(3)
+            if not client_id or not ia_in or len(ia_in) < 12:
+                return
+            server_id = b'\x00\x03\x00\x01' + MY_MAC
+            iaid = ia_in[:4]
+            ia_addr = (struct.pack('!HH', 5, 24) + DHCP6_ADDRESS +
+                       struct.pack('!II', 900, 1800))
+            ia_na = iaid + struct.pack('!II', 60, 90) + ia_addr
+            kind = 2 if msgtype == 1 else 7
+            options = (struct.pack('!HH', 1, len(client_id)) + client_id +
+                       struct.pack('!HH', 2, len(server_id)) + server_id +
+                       struct.pack('!HH', 3, len(ia_na)) + ia_na)
+            if msgtype != 1 and 6 in options_in:
+                options += struct.pack('!HH', 23, len(DHCP6_DNS)) + DHCP6_DNS
+            reply = bytes((kind,)) + request[1:4] + options
+            self.log('DHCPv6 %s: %s %s' %
+                     ({1: 'Solicit', 3: 'Request', 5: 'Renew', 6: 'Rebind'}[msgtype],
+                      'advertising' if msgtype == 1 else 'assigning',
+                      socket.inet_ntop(socket.AF_INET6, DHCP6_ADDRESS)))
+            self.udp(MY_LL, src, 547, sport, reply)
+            return
         if dport == 547 and len(seg) >= 12 and seg[8] == 11:
             request = seg[8:]
             server_id = b'\x00\x03\x00\x01' + MY_MAC

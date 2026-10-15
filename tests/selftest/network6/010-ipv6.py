@@ -3,6 +3,7 @@
 # nova6.test, HTTP on port 80)
 TESTS = [
     Test('IPv6 address', 'ipconfig', [r'IPv6 Address[ .]*: fd00:6e6f:7661:0:[0-9a-f:]+',
+                                      r'IPv6 Address[ .]*: fd00:6e6f:7661:[0-9a-f:]*3',
                                       r'DNS Servers[ .]*: fd00:6e6f:7661::1',
                                       r' {20,}fd00:6e6f:7661::2'], builtin=True),
     Test('ping -6', 'ping -6 nova6.test', [r'Reply from fd00:6e6f:7661::1', r'Received = 4, Lost = 0'], builtin=True),

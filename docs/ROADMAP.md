@@ -467,17 +467,18 @@ item ends when a named program or test demonstrates it.
   isochronous behind a high-speed hub on EHCI; QEMU cannot test them,
   and Intel chipsets since 2015, the reference ThinkPad's included, have xHCI
   only), webcams.
-- ACPI beyond the MADT: ~~shutdown, reboot, sleep, batteries~~ Done:
+- ACPI beyond the MADT: ~~shutdown, reboot, sleep, batteries, thermal
+  throttling, GPE blocks, PCI bridge routing~~ Done:
   power-off (S5), sleep (S3), reset and the fixed power button from the
   FADT; the AML interpreter (uACPI) for batteries, AC adapters,
   control-method power buttons and `_PTS`/`_WAK`; the lid (closing it
-  sleeps), thermal zones (passive cooling reported, sleep at `_HOT`,
-  shutdown at `_CRT`), wake devices from `_PRW` (the lid, power buttons,
-  USB controllers, with USB keyboards set for remote wakeup), the SCI as
-  a real interrupt through the I/O APIC and PCI interrupt routing from
-  `_PRT` (Phase 18.6).  Still to do: CPU throttling for passive cooling;
-  GPE blocks other than `\_GPE`; routing behind PCI bridges.  (USB wake
-  from S3 is confirmed on a real PC; QEMU can't emulate it.)
+  sleeps), thermal zones (passive `_PSL` processors throttled through
+  `_PTC`/`_TSS`, capped by `_TPC` and sampled at `_TSP`; sleep at `_HOT`,
+  shutdown at `_CRT`), wake devices from `_PRW` (including GPE-block
+  references), ACPI0006 GPE blocks, the SCI as a real interrupt through
+  the I/O APIC and PCI interrupt routing from `_PRT` on root and
+  downstream buses (including bridge pin swizzling).  (USB wake from S3
+  is confirmed on a real PC; QEMU can't emulate it.)
   (Display modes after S3 are set again on every adapter NovaOS drives:
   the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Physical GPUs,
   such as the T14's Intel Iris Xe, have no driver yet; see step 25.3.)

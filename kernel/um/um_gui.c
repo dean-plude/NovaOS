@@ -173,6 +173,8 @@ static UINT8 g_keydown[256];        /* keys held (auto-repeat sets lParam bit 30
 #define GUI_HOTKEYS 64
 static struct { bool used; UmProcess *proc; UINT32 win; INT32 id; UINT32 mods, vk; } g_hotkey[GUI_HOTKEYS];
 
+static void destroy_window(GuiWin *g);
+
 static GuiWin *win_of_handle(UmProcess *p, UINT64 h)
 {
     for (int i = 0; i < GUI_MAX_WINDOWS; i++)
@@ -600,6 +602,21 @@ static bool gui_tick(WND *w)
 {
     GuiWin *g = w->user;
     if (!g) return false;
+    bool thread_alive = false;
+    UmProcess *p = g->proc;
+    if (p && !p->exited && g->tid) {
+        um_lock_shared(&p->lock);
+        for (int i = 0; i < UM_MAX_THREADS; i++) {
+            UmThread *t = p->threads[i];
+            if (t && t->tid == g->tid) { thread_alive = !t->exited; break; }
+        }
+        um_unlock_shared(&p->lock);
+    }
+    if (!thread_alive) {
+        w->user = NULL;
+        destroy_window(g);
+        return false;
+    }
     UINT64 now = sched_ticks();
     bool any = false;
 

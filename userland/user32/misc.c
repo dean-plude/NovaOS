@@ -369,6 +369,9 @@ static int spi_dpi(UINT action, PVOID p, int dpi)
     return 0;
 }
 
+typedef struct { UINT cbSize; DWORD dwFlags; LPWSTR lpszDefaultScheme; } HIGHCONTRASTW_;
+typedef struct { UINT cbSize; DWORD dwFlags; LPSTR lpszDefaultScheme; } HIGHCONTRASTA_;
+
 USERAPI BOOL SystemParametersInfoW(UINT action, UINT uparam, PVOID p, UINT winini)
 {
     (void)uparam; (void)winini;
@@ -397,6 +400,25 @@ USERAPI BOOL SystemParametersInfoW(UINT action, UINT uparam, PVOID p, UINT winin
     case 0x1024: *(BOOL *)p = TRUE; return TRUE;            /* SPI_GETDROPSHADOW */
     case 0x1002: *(BOOL *)p = TRUE; return TRUE;            /* SPI_GETMENUANIMATION */
     case 0x0059: *(HKL *)p = GetKeyboardLayout(0); return TRUE;   /* SPI_GETDEFAULTINPUTLANG */
+    /* What WPF's SystemParameters reads (a failure throws Win32Exception
+     * in the program, HandBrake's start-up among them); Windows' defaults */
+    case 0x0042: {                                          /* SPI_GETHIGHCONTRAST: off, available */
+        HIGHCONTRASTW_ *hc = p;
+        static WCHAR none[1];
+        hc->dwFlags = 0x00000002;                           /* HCF_AVAILABLE */
+        hc->lpszDefaultScheme = none;
+        return TRUE;
+    }
+    case 0x0005: *(int *)p = 1; return TRUE;                /* SPI_GETBORDER */
+    case 0x000D: case 0x0018: *(int *)p = 75; return TRUE;  /* SPI_ICONHORIZONTALSPACING, SPI_ICONVERTICALSPACING */
+    case 0x0019: *(BOOL *)p = TRUE; return TRUE;            /* SPI_GETICONTITLEWRAP */
+    case 0x0026: *(BOOL *)p = TRUE; return TRUE;            /* SPI_GETDRAGFULLWINDOWS */
+    case 0x0062: case 0x0064: *(UINT *)p = 4; return TRUE;  /* SPI_GETMOUSEHOVERWIDTH, SPI_GETMOUSEHOVERHEIGHT */
+    case 0x0066: *(UINT *)p = 400; return TRUE;             /* SPI_GETMOUSEHOVERTIME */
+    case 0x006A: *(UINT *)p = 400; return TRUE;             /* SPI_GETMENUSHOWDELAY */
+    case 0x2004: *(DWORD *)p = 7; return TRUE;              /* SPI_GETFOREGROUNDFLASHCOUNT */
+    case 0x2006: *(DWORD *)p = 1; return TRUE;              /* SPI_GETCARETWIDTH */
+    case 0x200E: case 0x2010: *(UINT *)p = 1; return TRUE;  /* SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT */
     case 0x005A: return kbd_set_default(p ? *(HKL *)p : NULL);    /* SPI_SETDEFAULTINPUTLANG */
     }
     if (p && action >= 0x1000 && action < 0x2000 && !(action & 1)) { *(BOOL *)p = FALSE; return TRUE; }   /* other SPI_GET* booleans */
@@ -435,6 +457,12 @@ USERAPI BOOL SystemParametersInfoA(UINT action, UINT uparam, PVOID p, UINT winin
         SystemParametersInfoW(action, 0, &w, 0);
         m->iHorzSpacing = w.iHorzSpacing; m->iVertSpacing = w.iVertSpacing; m->iTitleWrap = w.iTitleWrap;
         lf_w2a(&w.lfFont, &m->lfFont);
+        return TRUE;
+    }
+    if (p && action == 0x0042) {                            /* SPI_GETHIGHCONTRAST: an ANSI scheme name */
+        static char none[1];
+        SystemParametersInfoW(action, uparam, p, winini);
+        ((HIGHCONTRASTA_ *)p)->lpszDefaultScheme = none;
         return TRUE;
     }
     return SystemParametersInfoW(action, uparam, p, winini);

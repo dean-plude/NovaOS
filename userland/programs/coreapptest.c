@@ -313,6 +313,7 @@ static HRESULT factory(const WCHAR *cls, const GUID *iid, void **out)
     WindowsCreateString(cls, (UINT32)wcslen(cls), &s);
     HRESULT hr = RoGetActivationFactory(s, iid, out);
     WindowsDeleteString(s);
+    if (hr != S_OK) printf("coreapptest: RoGetActivationFactory(%ls): 0x%08lX\n", cls, (unsigned long)hr);
     return hr;
 }
 

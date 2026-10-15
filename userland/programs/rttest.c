@@ -2,13 +2,22 @@
  * the C99 complex functions in ucrtbase (with MSVC's _Dcomplex and
  * _Fcomplex structures, as NumPy calls them), conio's _cprintf family, and
  * the DLL search directories (AddDllDirectory, RemoveDllDirectory,
- * SetDllDirectory), and the UCRT's secure scanf (sscanf_s as MSVC's
- * headers inline it) */
+ * SetDllDirectory, which a child process inherits), the C runtime's
+ * descriptors a child started with _spawn inherits, and the UCRT's secure
+ * scanf (sscanf_s as MSVC's headers inline it) */
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <windows.h>
+
+__declspec(dllimport) int _pipe(int *fds, unsigned size, int mode);
+__declspec(dllimport) intptr_t _spawnl(int mode, const char *path, const char *arg0, ...);
+__declspec(dllimport) int _write(int fd, const void *buf, unsigned n);
+__declspec(dllimport) int _read(int fd, void *buf, unsigned n);
+__declspec(dllimport) int _close(int fd);
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); } } while (0)
@@ -62,6 +71,35 @@ static void conio(void)
     CHECK("_cputs", _cputs("rttest: cputs\r\n") == 0);
 }
 
+/* A child started with _spawn (as GLib starts GIMP's plug-ins) gets the
+ * C runtime's descriptors (a pipe's write end, by number, as "-gimp 9 8"
+ * passes it) and SetDllDirectory's directory: it loads dirtest4.dll from
+ * there and writes what it found down the pipe.  _spawn joins the
+ * arguments as they are, so a caller's quotes make one argument */
+static void child_inherits(void)
+{
+    int fds[2];
+    char exe[MAX_PATH], arg[16], got[8] = "";
+    CHECK("_pipe", _pipe(fds, 256, 0x8000 /* _O_BINARY */) == 0);
+    GetModuleFileNameA(NULL, exe, MAX_PATH);
+    snprintf(arg, sizeof(arg), "%d", fds[1]);
+    CHECK("_spawnl a child", _spawnl(0 /* _P_WAIT */, exe, "rttest", "child", arg, "\"a b\"", NULL) == 0);
+    _close(fds[1]);
+    int n = _read(fds[0], got, sizeof(got) - 1);
+    got[n > 0 ? n : 0] = 0;
+    CHECK("the child wrote to the descriptor it inherited", n > 0);
+    CHECK("the child found a DLL in the inherited SetDllDirectory directory", !strncmp(got, "dll", 3));
+    CHECK("_spawn passes arguments as they are (the caller's quotes)", !strcmp(got + 3, "+q"));
+    _close(fds[0]);
+}
+
+static int child(const char *fd, const char *quoted)
+{
+    char r[8];
+    snprintf(r, sizeof(r), "%s%s", LoadLibraryW(L"dirtest4.dll") ? "dll" : "non", !strcmp(quoted, "a b") ? "+q" : "");
+    return _write(atoi(fd), r, (unsigned)strlen(r)) == (int)strlen(r) ? 0 : 1;
+}
+
 /* testdll.dll copied into a directory of its own under several names (a
  * module stays loaded once found, so each check looks for a fresh name) */
 static void dll_directories(void)
@@ -93,6 +131,7 @@ static void dll_directories(void)
 
     CHECK("SetDllDirectoryW", SetDllDirectoryW(dir));
     CHECK("found in SetDllDirectory's directory", LoadLibraryW(L"dirtest3.dll") != NULL);
+    child_inherits();
     CHECK("SetDllDirectoryW(NULL)", SetDllDirectoryW(NULL));
     CHECK("not found after resetting", LoadLibraryW(L"dirtest4.dll") == NULL);
 }
@@ -120,8 +159,9 @@ static void secure_scanf(void)
     CHECK("sscanf_s too long a string fails", my_sscanf_s("toolongword 1", "%s %d", w, 4u, &n) == 0 && w[0] == 0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 4 && !strcmp(argv[1], "child")) return child(argv[2], argv[3]);
     complex_math();
     conio();
     dll_directories();

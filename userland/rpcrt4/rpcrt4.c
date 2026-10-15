@@ -36,6 +36,27 @@ RPCAPI int WINAPI UuidEqual(GUID *a, GUID *b, LONG *st)
     return 1;
 }
 
+/* The filter RPC stubs put on their __except: faults that mean a bug in
+ * the process (access violation, breakpoint, bad instruction, stack
+ * overflow, deadlock) keep searching; every other exception is the RPC
+ * call's own and its handler runs (GIMP's crash handler calls it) */
+RPCAPI int WINAPI I_RpcExceptionFilter(ULONG code)
+{
+    switch (code) {
+    case 0x80000002: /* STATUS_DATATYPE_MISALIGNMENT */
+    case 0x80000003: /* STATUS_BREAKPOINT */
+    case 0xC0000005: /* STATUS_ACCESS_VIOLATION */
+    case 0xC000001D: /* STATUS_ILLEGAL_INSTRUCTION */
+    case 0xC0000096: /* STATUS_PRIVILEGED_INSTRUCTION */
+    case 0xC00000AA: /* STATUS_INSTRUCTION_MISALIGNMENT */
+    case 0xC00000FD: /* STATUS_STACK_OVERFLOW */
+    case 0xC0000194: /* STATUS_POSSIBLE_DEADLOCK */
+        return EXCEPTION_CONTINUE_SEARCH;
+    default:
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+}
+
 static const char g_hex[] = "0123456789abcdef";
 static void uuid_text(const GUID *u, char out[37])
 {

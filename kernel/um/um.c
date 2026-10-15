@@ -2814,6 +2814,9 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
      * since 2008).  Older ones (SDL 1.2.8 builds its blitters into a data
      * array and calls them) run with DEP off: UmDepFault */
     p->dep_off = p->wow && !(um_pe_dll_characteristics(exe) & 0x0100);
+    /* SetDllDirectory's folder is inherited, as on Windows: GIMP sets its
+     * bin folder so the plug-ins it starts from lib\gimp find its DLLs */
+    if (UmCurrent()) memcpy(p->dll_dir, UmCurrent()->dll_dir, sizeof(p->dll_dir));
 
     /* Map the program, ntdll (every process has it) and their imports */
     Loader *L = loader_new(p, err, err_cap);

@@ -90,6 +90,70 @@ void *__nova_fd_handle(int fd)
     return o ? o->h : INVALID_HANDLE_VALUE;
 }
 
+/* Descriptors a child inherits, as Windows' C runtime passes them: in
+ * STARTUPINFO's lpReserved2, an int count, a flags byte per descriptor
+ * (FOPEN 0x01, FPIPE 0x08, FAPPEND 0x20, FDEV 0x40) and then its handle.
+ * GLib hands GIMP's plug-ins their pipes this way ("-gimp 9 8"). */
+#define CRT_FOPEN 0x01
+#define CRT_FPIPE 0x08
+#define CRT_FAPPEND 0x20
+#define CRT_FDEV 0x40
+static BYTE *fd_inherit_block(WORD *size)
+{
+    int n = 0, saved = errno;
+    for (int i = 0; i < MAX_FD; i++) if (fd_get(i)) n = i + 1;
+    errno = saved;                              /* fd_get's EBADF for the gaps */
+    *size = 0;
+    if (!n) return 0;
+    size_t len = sizeof(int) + (size_t)n * (1 + sizeof(HANDLE));
+    BYTE *b = calloc(1, len);
+    if (!b) return 0;
+    memcpy(b, &n, sizeof(int));
+    for (int i = 0; i < n; i++) {
+        OpenFile *o = i < 3 ? fd_get(i) : g_fd[i];
+        HANDLE h = INVALID_HANDLE_VALUE;
+        DWORD hf = 0;
+        if (o && GetHandleInformation(o->h, &hf) && (hf & HANDLE_FLAG_INHERIT)) {
+            DWORD t = GetFileType(o->h);
+            b[sizeof(int) + i] = CRT_FOPEN | (t == FILE_TYPE_PIPE ? CRT_FPIPE : 0) |
+                                 (t == FILE_TYPE_CHAR ? CRT_FDEV : 0) | (o->append ? CRT_FAPPEND : 0);
+            h = o->h;
+        }
+        memcpy(b + sizeof(int) + n + (size_t)i * sizeof(HANDLE), &h, sizeof(HANDLE));
+    }
+    errno = saved;
+    *size = (WORD)len;
+    return b;
+}
+
+/* At start: the descriptors the creator's C runtime passed (3 and up; 0-2
+ * are the standard handles, which the process inherits anyway) */
+void __nova_fd_import(void)
+{
+    STARTUPINFOW si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    GetStartupInfoW(&si);
+    if (!si.lpReserved2 || si.cbReserved2 < sizeof(int)) return;
+    int count;
+    memcpy(&count, si.lpReserved2, sizeof(int));
+    if (count <= 0 || (size_t)si.cbReserved2 < sizeof(int) + (size_t)count * (1 + sizeof(HANDLE))) return;
+    int n = count < MAX_FD ? count : MAX_FD;
+    for (int i = 3; i < n; i++) {
+        BYTE f = si.lpReserved2[sizeof(int) + i];
+        HANDLE h;
+        memcpy(&h, si.lpReserved2 + sizeof(int) + count + (size_t)i * sizeof(HANDLE), sizeof(HANDLE));
+        if (!(f & CRT_FOPEN) || h == INVALID_HANDLE_VALUE || !h || g_fd[i]) continue;
+        OpenFile *o = calloc(1, sizeof(*o));
+        if (!o) return;
+        o->h = h;
+        o->owns = 1;
+        o->refs = 1;
+        o->append = (f & CRT_FAPPEND) != 0;
+        g_fd[i] = o;
+    }
+}
+
 void __nova_set_errno_win32(void)
 {
     DWORD e = GetLastError();
@@ -702,22 +766,6 @@ __declspec(dllexport) int _pclose(FILE *f)
 #define P_NOWAITO_ 3
 #define P_DETACH_  4
 
-/* One argument, quoted the way CommandLineToArgv reads it back */
-static void quote_arg(char *out, size_t *o, size_t cap, const char *a)
-{
-    int need = !*a || strpbrk(a, " \t\"") != 0;
-    if (need && *o < cap) out[(*o)++] = '"';
-    for (const char *p = a; *p; p++) {
-        size_t bs = 0;
-        while (*p == '\\') { bs++; p++; }
-        if (!*p) { for (size_t i = 0; i < (need ? bs * 2 : bs) && *o < cap; i++) out[(*o)++] = '\\'; break; }
-        if (*p == '"') { for (size_t i = 0; i < bs * 2 + 1 && *o < cap; i++) out[(*o)++] = '\\'; }
-        else for (size_t i = 0; i < bs && *o < cap; i++) out[(*o)++] = '\\';
-        if (*o < cap) out[(*o)++] = *p;
-    }
-    if (need && *o < cap) out[(*o)++] = '"';
-}
-
 static intptr_t spawn_common(int mode, const char *path, const char *const *argv, const char *const *envp, int search)
 {
     char image[MAX_PATH];
@@ -732,9 +780,11 @@ static intptr_t spawn_common(int mode, const char *path, const char *const *argv
     size_t cap = 32768, o = 0;
     char *cl = malloc(cap);
     if (!cl) { errno = ENOMEM; return -1; }
+    /* the arguments joined by spaces as they are, as Windows' C runtime
+     * does: callers quote their own (GLib does, for GIMP's plug-ins) */
     for (int i = 0; argv && argv[i]; i++) {
-        if (i && o < cap) cl[o++] = ' ';
-        quote_arg(cl, &o, cap - 1, argv[i]);
+        if (i && o < cap - 1) cl[o++] = ' ';
+        for (const char *a = argv[i]; *a && o < cap - 1; a++) cl[o++] = *a;
     }
     cl[o] = 0;
     char *env = 0;
@@ -751,9 +801,11 @@ static intptr_t spawn_common(int mode, const char *path, const char *const *argv
     STARTUPINFOA si;
     memset(&si, 0, sizeof(si));
     si.cb = sizeof(si);
+    si.lpReserved2 = fd_inherit_block(&si.cbReserved2);
     PROCESS_INFORMATION pi;
     fflush(0);
     BOOL ok = CreateProcessA(image, cl, 0, 0, TRUE, mode == P_DETACH_ ? DETACHED_PROCESS : 0, env, 0, &si, &pi);
+    free(si.lpReserved2);
     free(cl);
     free(env);
     if (!ok) { __nova_set_errno_win32(); if (errno == EINVAL) errno = ENOENT; return -1; }

@@ -1,5 +1,6 @@
 # rttest: the UCRT's C99 complex functions, conio's _cprintf, and the DLL
-# search directories (AddDllDirectory, SetDllDirectory), and the secure
+# search directories (AddDllDirectory, SetDllDirectory, inherited by a
+# _spawn'd child with the C runtime's descriptors), and the secure
 # scanf (sscanf_s's sizes), 64- and 32-bit
 DOC = '`rttest` (complex math, conio, DLL directories, sscanf_s, 64- and 32-bit)'
 TESTS = [

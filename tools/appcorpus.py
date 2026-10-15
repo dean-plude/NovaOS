@@ -39,7 +39,7 @@ The exit status counts failed and unrun programs; skips do not fail the run.  --
 a Markdown pass/fail table, one row per program (the nightly workflow,
 .github/workflows/nightly.yml, posts it).
 """
-import argparse, hashlib, json, http.server, math, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, zipfile
+import argparse, hashlib, json, http.server, math, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, zipfile, zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from novarun import Nova, ROOT, accel_args
@@ -452,10 +452,30 @@ def make_torrent(name, data):
                     'info': {'name': name, 'length': len(data), 'piece length': piece, 'pieces': pieces}})
 
 
+def make_png(path, w=320, h=240):
+    """A 24-bit PNG of colour bars over a grey gradient, for image editors"""
+    bars = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0), (255, 0, 255), (255, 0, 0), (0, 0, 255),
+            (0, 0, 0)]
+    rows = b''
+    for y in range(h):
+        row = bytearray(b'\0')
+        for x in range(w):
+            if y < h * 2 // 3:
+                row += bytes(bars[x * len(bars) // w])
+            else:
+                row += bytes((x * 255 // (w - 1),) * 3)
+        rows += row
+    chunk = lambda kind, data: (struct.pack('>I', len(data)) + kind + data +
+                                struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff))
+    with open(path, 'wb') as f:
+        f.write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
+                chunk(b'IDAT', zlib.compress(rows, 9)) + chunk(b'IEND', b''))
+
+
 def make_data(d):
     """C:\\Apps\\data: text to search, a PDF, a Word document and an Excel
-    workbook, an e-mail message, a .torrent, two files to compare and a git
-    repository to clone"""
+    workbook, an e-mail message, a .torrent, a picture, two files to compare
+    and a git repository to clone"""
     os.makedirs(d)
     with open(os.path.join(d, 'hello.txt'), 'w', newline='\n') as f:
         f.write(SAMPLE)
@@ -464,6 +484,7 @@ def make_data(d):
     make_pdf(os.path.join(d, 'corpus.pdf'), SAMPLE.splitlines())
     make_docx(os.path.join(d, 'letter.docx'), SAMPLE.splitlines())
     make_xlsx(os.path.join(d, 'sums.xlsx'), [40, 2])
+    make_png(os.path.join(d, 'picture.png'))
     with open(os.path.join(d, 'notes.txt'), 'w', newline='\n') as f:
         f.write('more text\n')
     with open(os.path.join(d, 'hello.eml'), 'w', newline='\r\n') as f:

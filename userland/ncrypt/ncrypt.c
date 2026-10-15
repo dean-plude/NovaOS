@@ -125,3 +125,16 @@ NC SECURITY_STATUS WINAPI NCryptDecrypt(NCRYPT_HANDLE key, PBYTE in, DWORD inn, 
     if (n) *n = 0;
     return NTE_INVALID_HANDLE_;
 }
+
+/* Windows' ncrypt.dll also carries the BCrypt primitives (GnuTLS, in
+ * GIMP, imports its random numbers from here): forwarded to bcrypt.dll */
+#pragma comment(linker, "/export:BCryptOpenAlgorithmProvider=bcrypt.BCryptOpenAlgorithmProvider")
+#pragma comment(linker, "/export:BCryptCloseAlgorithmProvider=bcrypt.BCryptCloseAlgorithmProvider")
+#pragma comment(linker, "/export:BCryptGenRandom=bcrypt.BCryptGenRandom")
+#pragma comment(linker, "/export:BCryptGetProperty=bcrypt.BCryptGetProperty")
+#pragma comment(linker, "/export:BCryptSetProperty=bcrypt.BCryptSetProperty")
+#pragma comment(linker, "/export:BCryptCreateHash=bcrypt.BCryptCreateHash")
+#pragma comment(linker, "/export:BCryptHashData=bcrypt.BCryptHashData")
+#pragma comment(linker, "/export:BCryptFinishHash=bcrypt.BCryptFinishHash")
+#pragma comment(linker, "/export:BCryptDestroyHash=bcrypt.BCryptDestroyHash")
+#pragma comment(linker, "/export:BCryptFreeBuffer=bcrypt.BCryptFreeBuffer")

@@ -84,10 +84,10 @@
       "url": "https://download.gimp.org/gimp/v2.10/windows/gimp-2.10.38-setup.exe",
       "file": "gimp-2.10.38-setup.exe",
       "dest": null,
-      "exe": null,
+      "exe": "GIMP 2\\bin\\gimp-2.10.exe",
       "kind": "setup",
-      "size_mb": 260,
-      "note": "32-bit installer (Inno Setup) for 64-bit GIMP; untested",
+      "size_mb": 330,
+      "note": "64-bit GIMP 2.10 (GTK 2) from its Inno Setup installer; opens pictures on NovaOS (nightly corpus)",
       "label": "G",
       "color": "#5C4A36"
     },

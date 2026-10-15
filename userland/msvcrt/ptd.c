@@ -56,7 +56,9 @@ static void ptd_free(void)
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     (void)inst;
-    if (reason == DLL_THREAD_DETACH) ptd_free();
+    extern void __nova_fd_import(void);
+    if (reason == DLL_PROCESS_ATTACH) __nova_fd_import();     /* descriptors from the creator */
+    else if (reason == DLL_THREAD_DETACH) ptd_free();
     else if (reason == DLL_PROCESS_DETACH && !reserved) {   /* FreeLibrary, not process exit */
         ptd_free();
         if (g_slot != -1) TlsFree((DWORD)g_slot);

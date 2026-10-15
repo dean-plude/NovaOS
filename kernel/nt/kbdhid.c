@@ -1,6 +1,7 @@
 /*
- * kbdhid.c — the keyboard, mouse and digitizer class drivers on HID
- * collections (Windows' kbdhid.sys and mouhid.sys, and what win32k reads)
+ * kbdhid.c — the keyboard, mouse, digitizer and game controller class
+ * drivers on HID collections (Windows' kbdhid.sys and mouhid.sys, and
+ * what win32k and DirectInput read)
  *
  * On Windows a USB keyboard or mouse is a HID device like any other:
  * hidusb.sys moves its reports, hidclass.sys makes a PDO for each of its
@@ -13,7 +14,7 @@
  * the HID class driver (hidclass.c), then one of these on each collection
  * (pnp.c: the inbox match keyboard.inf and msmouse.inf would make).
  *
- * The three services are this one driver, built into the kernel as
+ * The four services are this one driver, built into the kernel as
  * hidusb.c is: "kbdhid" takes keyboards and the consumer- and
  * system-control collections (media, browser, power and sleep keys),
  * "mouhid" mice and absolute pointers (QEMU's USB tablet), "hiddigi" the
@@ -29,7 +30,14 @@
  * Windows does when a precision touchpad starts: it sets the Input Mode
  * feature to 3 (touchpad mode; IOCTL_HID_SET_FEATURE), and the device
  * then sends finger reports on its Touch Pad collection instead of mouse
- * reports on its mouse collection (where mouhid runs).  On each device:
+ * reports on its mouse collection (where mouhid runs).  "gamehid" takes
+ * game pads and joysticks (HID_DEVICE_SYSTEM_GAME: Generic Desktop usages
+ * 4 and 5).  Windows installs no driver on those either and DirectInput
+ * reads them through hid.dll; NovaOS's DirectInput, winmm joysticks and
+ * XInput read the controller slots (drivers/gamepad.h), so gamehid gives
+ * the controller a slot and hands each report to gamepad.c, which
+ * decodes it.  Raw Input and hid.dll still read the collection itself,
+ * as on Windows.  On each device:
  *
  *   - start: the collection is opened (IRP_MJ_CREATE with a file object of
  *     the driver's own, as kbdhid.sys opens its collection), its report
@@ -53,6 +61,7 @@
 #include "ntapi.h"
 #include "hidclass.h"
 #include "../drivers/hid.h"
+#include "../drivers/gamepad.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
 #include "../ke/spinlock.h"
@@ -68,16 +77,19 @@ NT_API UINT8 nt_IoCancelIrp(NT_IRP *irp);
 #define MAX_DEV   16
 #define READ_MAX  8                         /* reports a read takes at most */
 
-/* A collection one of the two drivers runs.  (Never freed: the report
+/* A collection one of the four drivers runs.  (Never freed: the report
  * parser's device and the LED path may still name it after the removal,
  * as usbhid.c keeps its devices.) */
 typedef struct {
     NT_DEVICE_OBJECT *fdo, *lower;
     bool              mouse;                /* mouhid's (else kbdhid's) */
     bool              digi;                 /* hiddigi's */
+    bool              game;                 /* gamehid's */
+    NT_DEVICE_OBJECT *pdo;
     NT_FILE_OBJECT    fo;                   /* its open handle on the collection */
     bool              open;
     void             *hid;                  /* the report parser's device */
+    void             *pad;                  /* gamehid: gamepad.c's controller */
     bool              ids;                  /* its reports start with an ID byte */
     UINT16            vid, pid;
     UINT16            in_len, out_len;
@@ -99,7 +111,7 @@ static KSpinLock g_lock = KSPINLOCK_INIT;   /* g_dev, read_irp and the LED field
 static NT_KEVENT g_led_event;
 static bool      g_led_thread;
 
-static const char *tag(const Kdev *k) { return k->digi ? "HIDDIGI" : k->mouse ? "MOUHID" : "KBDHID"; }
+static const char *tag(const Kdev *k) { return k->game ? "GAMEHID" : k->digi ? "HIDDIGI" : k->mouse ? "MOUHID" : "KBDHID"; }
 static Kdev *kdev(NT_DEVICE_OBJECT *fdo) { return *(Kdev **)fdo->DeviceExtension; }
 
 /* ---- requests to the collection ---- */
@@ -136,11 +148,12 @@ static NT_STATUS pass_down(Kdev *k, NT_IRP *irp)
 
 /* A request of the driver's own on its handle (@major; an I/O control
  * @code with @sys its system buffer of @in_len / @out_len bytes, or
- * @user its METHOD_NEITHER buffer; a read or write @sys of @out_len
- * bytes): waits for it; *@info the bytes it moved.  With @track, the IRP
- * is kept in read_irp while it runs (stop cancels it). */
-static NT_STATUS request(Kdev *k, UINT8 major, UINT32 code, void *sys, UINT32 in_len, void *user, UINT32 out_len,
-                         NT_ULONG_PTR *info, bool track)
+ * @user its METHOD_NEITHER buffer, or @mdl its direct-I/O output buffer;
+ * a read or write @sys of @out_len bytes): waits for it; *@info the bytes
+ * it moved.  With @track, the IRP is kept in read_irp while it runs (stop
+ * cancels it). */
+static NT_STATUS request_mdl(Kdev *k, UINT8 major, UINT32 code, void *sys, UINT32 in_len, void *user, NT_MDL *mdl,
+                             UINT32 out_len, NT_ULONG_PTR *info, bool track)
 {
     NT_IRP *irp = nt_IoAllocateIrp(k->lower->StackSize, 0);
     if (!irp) return NT_STATUS_INSUFFICIENT_RESOURCES;
@@ -152,6 +165,7 @@ static NT_STATUS request(Kdev *k, UINT8 major, UINT32 code, void *sys, UINT32 in
     irp->RequestorMode = 0;
     irp->AssociatedIrp.SystemBuffer = sys;
     irp->UserBuffer = user;
+    irp->MdlAddress = mdl;
     irp->IoStatus.Status = NT_STATUS_NOT_SUPPORTED;
     NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
     sl->MajorFunction = major;
@@ -182,6 +196,12 @@ static NT_STATUS request(Kdev *k, UINT8 major, UINT32 code, void *sys, UINT32 in
     return iosb.Status;
 }
 
+static NT_STATUS request(Kdev *k, UINT8 major, UINT32 code, void *sys, UINT32 in_len, void *user, UINT32 out_len,
+                         NT_ULONG_PTR *info, bool track)
+{
+    return request_mdl(k, major, code, sys, in_len, user, NULL, out_len, info, track);
+}
+
 /* ---- input ---- */
 
 static void reader(void *arg)
@@ -199,7 +219,8 @@ static void reader(void *arg)
                 /* (hidclass's reports start with their ID byte, 0 when the
                  * device has none; the parser wants them as the device sends them) */
                 const UINT8 *r = k->buf + at;
-                HidInputAt(k->hid, k->ids ? r : r + 1, k->ids ? k->in_len : k->in_len - 1, now);
+                if (k->pad) PadHidInput(k->pad, k->ids ? r : r + 1, k->ids ? k->in_len : k->in_len - 1);
+                else HidInputAt(k->hid, k->ids ? r : r + 1, k->ids ? k->in_len : k->in_len - 1, now);
             }
         } else if (st == ST_DEVICE_NOT_CONNECTED || st == NT_STATUS_CANCELLED) {
             break;                                           /* (gone, or being stopped) */
@@ -283,6 +304,60 @@ static void digi_configure(Kdev *k, const HidNovaReportDescriptor *rd)
                  "it stays a mouse\n", k->vid, k->pid, (UINT32)st);
 }
 
+/* Whether a report descriptor gives its reports IDs (a Report ID item) */
+static bool desc_ids(const UINT8 *d, UINT32 len)
+{
+    for (UINT32 i = 0; i < len;) {
+        UINT8 b = d[i];
+        if (b == 0xFE) { if (i + 1 >= len) break; i += 3u + d[i + 1]; continue; }   /* (a long item) */
+        if ((b & 0xFC) == 0x84) return true;
+        i += 1u + ((b & 3) == 3 ? 4u : (b & 3));
+    }
+    return false;
+}
+
+/* The device's product string (IOCTL_HID_GET_PRODUCT_STRING, direct
+ * I/O) into @out as ASCII ("" when it has none) */
+static void product_string(Kdev *k, char *out, int cap)
+{
+    out[0] = 0;
+    NT_WCHAR *w = kzalloc(128);
+    NT_MDL *m = w ? nt_IoAllocateMdl(w, 128, 0, 0, NULL) : NULL;
+    if (m) {
+        nt_MmBuildMdlForNonPagedPool(m);
+        if (NT_SUCCESS(request_mdl(k, NT_IRP_MJ_DEVICE_CONTROL, IOCTL_HID_GET_PRODUCT_STRING, NULL, 0, NULL, m, 128,
+                                   NULL, false))) {
+            int n = 0;
+            for (int i = 0; i < 63 && w[i] && n < cap - 1; i++) out[n++] = w[i] < 0x80 ? (char)w[i] : '?';
+            out[n] = 0;
+        }
+        nt_IoFreeMdl(m);
+    }
+    kfree(w);
+}
+
+/* gamehid: the controller gets a slot (gamepad.c decodes its reports) */
+static NT_STATUS game_start(Kdev *k, const HidNovaReportDescriptor *rd)
+{
+    char name[64], what[128];
+    product_string(k, name, sizeof(name));
+    k->ids = desc_ids(rd->Descriptor, rd->DescriptorLength);
+    k->pad = PadHidOpen(rd->Descriptor, (int)rd->DescriptorLength, k->vid, k->pid, name, NtPnpNodeOf(k->pdo),
+                        what, sizeof(what));
+    if (!k->pad) {
+        kprintf("[GAMEHID] %04x:%04x: not a game pad or joystick, or no controller slot free\n", k->vid, k->pid);
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    k->buf = kmalloc((size_t)k->in_len * READ_MAX);
+    if (!k->buf) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    nt_KeInitializeEvent(&k->reader_done, NT_NotificationEvent, 0);
+    k->stopping = false;
+    k->reader = sched_create_thread_ex("gamehid", reader, k, PRIO_DEVICE_IO, 16 * 1024) != NULL;
+    if (!k->reader) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    kprintf("[GAMEHID] %04x:%04x: %s, input reports %u bytes\n", k->vid, k->pid, what, k->in_len);
+    return NT_STATUS_SUCCESS;
+}
+
 static NT_STATUS start(Kdev *k)
 {
     memset(&k->fo, 0, sizeof(k->fo));
@@ -311,6 +386,11 @@ static NT_STATUS start(Kdev *k)
     k->in_len = rd->InputLength;
     k->out_len = rd->OutputLength;
     const char *kind = NULL;
+    if (k->game) {
+        st = game_start(k, rd);
+        kfree(rd);
+        return st;
+    }
     if (k->digi) {
         UINT16 app = (UINT16)(rd->UsagePage << 8 | (rd->Usage & 0xFF));
         if (app == 0x0D0E) {                                  /* a configuration collection */
@@ -384,6 +464,11 @@ static void stop(Kdev *k)
         kprintf("[%s] %04x:%04x: removed\n", tag(k), k->vid, k->pid);
         k->hid = NULL;
     }
+    if (k->pad) {                                            /* (its reader is done: no report on its way) */
+        PadHidClose(k->pad);
+        kprintf("[%s] %04x:%04x: removed\n", tag(k), k->vid, k->pid);
+        k->pad = NULL;
+    }
     if (k->open) {
         request(k, NT_IRP_MJ_CLEANUP, 0, NULL, 0, NULL, 0, NULL, false);
         request(k, NT_IRP_MJ_CLOSE, 0, NULL, 0, NULL, 0, NULL, false);
@@ -434,7 +519,7 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *fdo, NT_IRP *irp)
     return pass_down(k, irp);
 }
 
-static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool mouse, bool digi)
+static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool mouse, bool digi, bool game)
 {
     Kdev *k = kzalloc(sizeof(*k));
     if (!k) return NT_STATUS_INSUFFICIENT_RESOURCES;
@@ -445,13 +530,15 @@ static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool m
     if (slot < 0) { kfree(k); return NT_STATUS_INSUFFICIENT_RESOURCES; }
     NT_DEVICE_OBJECT *fdo;
     NT_STATUS st = nt_IoCreateDevice(drv, sizeof(Kdev *), NULL,
-                                     digi ? 0x22 /* FILE_DEVICE_UNKNOWN */ : mouse ? 0x0F /* MOUSE */ : 0x0B /* KEYBOARD */,
+                                     digi || game ? 0x22 /* FILE_DEVICE_UNKNOWN */ : mouse ? 0x0F /* MOUSE */ : 0x0B /* KEYBOARD */,
                                      0x100 /* AUTOGENERATED_NAME */, 0, &fdo);
     if (!NT_SUCCESS(st)) { forget(k); kfree(k); return st; }
     *(Kdev **)fdo->DeviceExtension = k;
     k->fdo = fdo;
     k->mouse = mouse;
     k->digi = digi;
+    k->game = game;
+    k->pdo = pdo;
     k->lower = nt_IoAttachDeviceToDeviceStack(fdo, pdo);
     if (!k->lower) { nt_IoDeleteDevice(fdo); forget(k); kfree(k); return NT_STATUS_UNSUCCESSFUL; }
     fdo->StackSize = (char)(k->lower->StackSize + 1);
@@ -459,9 +546,10 @@ static NT_STATUS add_device(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo, bool m
     return NT_STATUS_SUCCESS;
 }
 
-static NT_API NT_STATUS kbd_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, false); }
-static NT_API NT_STATUS mou_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, true, false); }
-static NT_API NT_STATUS digi_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, true); }
+static NT_API NT_STATUS kbd_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, false, false); }
+static NT_API NT_STATUS mou_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, true, false, false); }
+static NT_API NT_STATUS digi_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, true, false); }
+static NT_API NT_STATUS game_add(NT_DRIVER_OBJECT *drv, NT_DEVICE_OBJECT *pdo) { return add_device(drv, pdo, false, false, true); }
 
 NTSTATUS NT_API KbdHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
 {
@@ -484,5 +572,13 @@ NTSTATUS NT_API DigiHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg
     (void)reg;
     for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) drv->MajorFunction[i] = dispatch;
     drv->DriverExtension->AddDevice = digi_add;
+    return NT_STATUS_SUCCESS;
+}
+
+NTSTATUS NT_API GameHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
+{
+    (void)reg;
+    for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) drv->MajorFunction[i] = dispatch;
+    drv->DriverExtension->AddDevice = game_add;
     return NT_STATUS_SUCCESS;
 }

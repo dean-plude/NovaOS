@@ -176,5 +176,4 @@ void  UsbHidSyncLeds(void);                            /* usb thread: lock-key L
 int   UsbHidSelfCheck(void (*say)(void *ctx, const char *line), void *ctx);
 void *UsbMscProbe(UsbDev *d, const UsbIface *f);      /* usbmsc.c */
 void *UsbAudioProbe(UsbDev *d, const UsbIface *f);    /* usbaudio.c */
-void *UsbPadHidProbe(UsbDev *d, const UsbIface *f);   /* gamepad.c: HID gamepads and joysticks (before usbhid.c) */
 void *UsbXpadProbe(UsbDev *d, const UsbIface *f);     /* xpad.c: Xbox 360 and Xbox One controllers */

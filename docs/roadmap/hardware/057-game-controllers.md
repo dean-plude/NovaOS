@@ -6,7 +6,8 @@
   Input (`WM_INPUT` with each controller's HID reports) and `hid.dll`
   (`HidD_*` on a controller's HID path, `HidP_*` on its report
   descriptor; an Xbox controller has the one Windows' Xbox driver
-  gives).  A vendor's USB HID device runs on the HID class driver, where
+  gives; a HID game pad's path is its HID class collection's, on the
+  `gamehid` class driver).  A vendor's USB HID device runs on the HID class driver, where
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl`, and overlapped `ReadFile`, `WriteFile` and
   `DeviceIoControl` with `CancelIo` work as hidapi uses them

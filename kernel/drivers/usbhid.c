@@ -1086,12 +1086,14 @@ void *UsbHidProbe(UsbDev *d, const UsbIface *f, bool *for_class)
         if (desc && UsbControl(d, 0x81, 6, USB_DT_REPORT << 8, f->number, rlen, desc) > 0) {
             ok = parse_report_desc(desc, rlen, &h->L);
             if (ok) classify(h);
-            ok = ok && (h->keyboard || h->pointer || h->media);
+            bool game = ok && (h->L.app == 0x0104 || h->L.app == 0x0105);    /* (a joystick or a game pad) */
+            ok = ok && (h->keyboard || h->pointer || h->media || game);
             if (ok) {
-                /* A keyboard, mouse, media-key device, touch screen, pen
-                 * or precision touchpad: the HID class driver's, as on
-                 * Windows (HidUsb under hidclass; kbdhid, mouhid and
-                 * hiddigi on its collections: nt/kbdhid.c) */
+                /* A keyboard, mouse, media-key device, touch screen, pen,
+                 * precision touchpad or game controller: the HID class
+                 * driver's, as on Windows (HidUsb under hidclass; kbdhid,
+                 * mouhid, hiddigi and gamehid on its collections:
+                 * nt/kbdhid.c) */
                 kfree(desc);
                 kfree(h);
                 *for_class = true;

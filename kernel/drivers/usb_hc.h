@@ -180,7 +180,7 @@ extern KSpinLock g_usb_lock;
 
 /* An interface offered to the drivers, and who took it */
 #define USBPNP_MAX_FN   USB_MAX_FNS
-enum { USBPNP_NONE, USBPNP_HUB, USBPNP_HID, USBPNP_PAD, USBPNP_XPAD, USBPNP_MSC, USBPNP_AUDIO };
+enum { USBPNP_NONE, USBPNP_HUB, USBPNP_HID, USBPNP_XPAD, USBPNP_MSC, USBPNP_AUDIO };
 typedef struct {
     UINT8       number, cls, sub, proto;
     int         kind;              /* USBPNP_*: the driver that took it */

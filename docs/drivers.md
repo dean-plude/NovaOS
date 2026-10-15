@@ -294,13 +294,13 @@ for its usage gets every input report as `WM_INPUT` (and
 `WM_INPUT_DEVICE_CHANGE` as it comes and goes), as win32k does on
 Windows.
 
-A USB HID device that is not a game controller (those keep NovaOS's own
-driver) gets NovaOS's own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`,
+A USB HID device gets NovaOS's own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`,
 built into the kernel in place of Windows' `hidusb.sys`): interrupt IN
 for input, interrupt OUT or `SET_REPORT` for output,
 `GET_REPORT`/`SET_REPORT` for feature and input reports. That covers
 vendor-defined devices and every USB keyboard, mouse, tablet, media-key
-device, touch screen, pen and precision touchpad (a device that can only
+device, touch screen, pen, precision touchpad, game pad and joystick (a
+device that can only
 speak the boot protocol keeps NovaOS's own `usbhid` driver). On a composite device each HID
 function gets its own (see [USB client drivers](#usb-client-drivers)).
 
@@ -353,6 +353,32 @@ mouse reports on its mouse collection, where `mouhid` runs (a touchpad
 that refuses stays a mouse). Raw Input lists the digitizer collections as
 `RIM_TYPEHID` devices, as Windows does. Touchpads on I2C (the T14's) keep
 NovaOS's I2C-HID driver for now.
+
+### Game pads and joysticks: gamehid
+
+A USB HID game pad or joystick (a collection of Generic Desktop usage 5
+or 4, `HID_DEVICE_SYSTEM_GAME`) runs the same way too: `HidUsb` under
+the HID class driver, then NovaOS's game controller class driver,
+`gamehid` (the fourth service of `kernel/nt/kbdhid.c`), with the setup
+class HIDClass and the name "HID-compliant game controller". On Windows
+`input.inf` leaves a game controller's collection raw and DirectInput
+reads it through `hid.dll`; NovaOS's DirectInput, winmm's joystick API
+and XInput read the kernel's controller slots instead
+(`kernel/drivers/gamepad.h`), so `gamehid` gives the controller a slot
+(named by its product string) and hands each report it reads from the
+collection to `kernel/drivers/gamepad.c`, which decodes the buttons,
+axes and hat from the report descriptor as before. Everything else sees
+the collection itself, as on Windows: Raw Input lists it as a
+`RIM_TYPEHID` device named by its interface path (`\\?\HID#VID_1209&
+PID_0007#...`) and posts its reports as `WM_INPUT`; setupapi and cfgmgr32
+list that interface; `hid.dll` opens it through the class driver
+(attributes, product string, preparsed data, `ReadFile`,
+`HidD_GetInputReport`); and DirectInput's `DIPROP_GUIDANDPATH` names it.
+SDL reads such a pad through DirectInput or Raw Input as before. Xbox
+360 and Xbox One controllers are not HID devices (vendor-specific
+interfaces, `xusb22.sys` on Windows) and keep NovaOS's `xpad` driver,
+their XInput user index and the HID side Windows gives them (`&IG_00`
+in its path).
 
 A handle opened with `FILE_FLAG_OVERLAPPED` does overlapped I/O, as
 hidapi and most HID tools use it: `ReadFile` with no report waiting
@@ -672,6 +698,7 @@ kept in the repository or the image.
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
 | `touch` | `HidUsb`, `hiddigi` and `mouhid` on a USB digitizer (and virtio-input for QEMU's own) | a virtio multi-touch screen and tablet, and a USB touch screen, pen and precision touchpad in one device (`tools/padpeer.py --kind digitizer`) | `touchtest` on the virtio screen; `digitest`: each collection on its class driver, Raw Input's digitizer devices, a touch, the pen with its pressure, the touchpad moving the pointer, a tap and two-finger scrolling, unplugging |
+| `gamepad` | `xpad` on two Xbox controllers; `HidUsb` and `gamehid` on a HID game pad | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`) | `padtest`: XInput and DirectInput 8 on all three, motors, unplugging; `rawpadtest`: Raw Input, setupapi and `hid.dll` on the Xbox One's HID side and the game pad's class collection |
 | `devmgr` | `HidUsb`, `kbdhid` and `mouhid` | QEMU's USB keyboard and tablet, and a second pair the test plugs in | Device Manager on the machine's devices; `kbdmoutest`: the class drivers on each collection, none of them a Raw Input HID device, the pointer following the new tablet, a line typed on the new keyboard, unplugging |
 | `vhidmini` | Microsoft's `vhidmini2` sample (`vhidmini.sys`, KMDF 1.33, built unchanged) under NovaOS's `mshidkmdf` | none: a root-enumerated device (`ROOT\HIDCLASS\0000`, hardware ID `root\vhidmini`) | `SetupDiCreateDeviceInfo` and `DIF_REGISTERDEVICE`, `Include`/`Needs` and a lower filter, `hid.dll` on it: attributes, strings, caps, feature, input and output reports, `ReadFile`/`WriteFile`, Raw Input, Device Manager, start at boot, `pnputil /remove-device` |
 | `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |

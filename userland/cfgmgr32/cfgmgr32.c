@@ -104,11 +104,19 @@ static DWORD usb_node(const char *usb_id)
     return 0;
 }
 
+/* Slot @slot's controller when it stands for a device node of its own:
+ * an Xbox controller's HID side.  (A HID game pad is its HID class
+ * collection's node, in the tree.) */
+static BOOL pad_info(int slot, NovaPadInfo *p)
+{
+    return nova_pad_info(slot, p) && !p->node;
+}
+
 /* A game controller as a device node */
 static BOOL pad_node(int slot, NovaPnpNode *n)
 {
     NovaPadInfo p;
-    if (slot < 0 || slot >= NOVA_PAD_SLOTS || !nova_pad_info(slot, &p)) return FALSE;
+    if (slot < 0 || slot >= NOVA_PAD_SLOTS || !pad_info(slot, &p)) return FALSE;
     memset(n, 0, sizeof(*n));
     n->id = PAD_BASE + (DWORD)slot;
     n->flags = NOVA_PNP_PRESENT | NOVA_PNP_STARTED | NOVA_PNP_REMOVABLE;
@@ -143,7 +151,7 @@ static BOOL stood_in_for(const NovaPnpNode *n)
     for (int slot = 0; slot < NOVA_PAD_SLOTS; slot++) {
         NovaPadInfo p;
         char usb[24];
-        if (!nova_pad_info(slot, &p)) continue;
+        if (!pad_info(slot, &p)) continue;
         pad_usb_id(&p, usb);
         if (nova_pnp_prefix(n->instance + 4, usb + 4)) return TRUE;
     }
@@ -673,7 +681,7 @@ static ULONG iface_list(const GUID *cls, const char *id, ULONG flags, WCHAR *out
         for (int slot = 0; slot < NOVA_PAD_SLOTS; slot++) {
             NovaPadInfo i;
             NovaPnpNode node;
-            if (!nova_pad_info(slot, &i)) continue;
+            if (!pad_info(slot, &i)) continue;
             if (id && id[0] && !(pad_node(slot, &node) && ieq(node.instance, id))) continue;
             int len = nova_pad_path(&i, path, TRUE) + 1;
             for (int k = 0; k < len; k++, n++) if (out && n < cap) out[n] = path[k];

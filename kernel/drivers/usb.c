@@ -687,19 +687,16 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
         int kind = USBPNP_NONE;
         bool for_class = false;
         if (f.cls == 9)       inst = UsbHubProbe(d, &f), kind = USBPNP_HUB;
-        else if (f.cls == 3) {
-            if ((inst = UsbPadHidProbe(d, &f))) kind = USBPNP_PAD;
-            else inst = UsbHidProbe(d, &f, &for_class), kind = USBPNP_HID;
-        }
+        else if (f.cls == 3) inst = UsbHidProbe(d, &f, &for_class), kind = USBPNP_HID;
         else if (f.cls == 0xFF) inst = UsbXpadProbe(d, &f), kind = USBPNP_XPAD;
         else if (f.cls == 8)  inst = UsbMscProbe(d, &f), kind = USBPNP_MSC;
         else if (f.cls == 1)  inst = UsbAudioProbe(d, &f), kind = USBPNP_AUDIO;
-        if (for_class)                    /* (keyboards, mice, digitizers: Plug and Play starts HidUsb on it) */
+        if (for_class)                    /* (keyboards, mice, digitizers, game pads: Plug and Play starts HidUsb on it) */
             kprintf("[USB] %s: interface %d: a HID input device, for the HID class driver\n", d->name, f.number);
         else if (!inst)
             kprintf("[USB] %s: interface %d (class %02x/%02x/%02x) not used\n",
                     d->name, f.number, f.cls, f.sub, f.proto);
-        static const char *const drivers[] = { NULL, "usbhub", "usbhid", "gamepad", "xpad", "usbmsc", "usbaudio" };
+        static const char *const drivers[] = { NULL, "usbhub", "usbhid", "xpad", "usbmsc", "usbaudio" };
         if (nfn < USBPNP_MAX_FN)
             fn[nfn++] = (UsbPnpFn){ f.number, f.cls, f.sub, f.proto, inst ? kind : USBPNP_NONE, inst ? drivers[kind] : NULL };
     }

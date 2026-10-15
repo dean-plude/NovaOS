@@ -13435,6 +13435,11 @@ not there yet.  The new core self-test `wictest` (64- and 32-bit) covers
 the factory, every decoder, conversion, the transforms, palettes,
 bitmaps and the proxy exports.
 
+HandBrake now gets past its first icon (a PNG decoded through the new
+WIC), but its main window still does not appear: WPF creates only its
+hidden helper windows and then waits in its message loop.  That is the
+next step for HandBrake (roadmap 27.1); it stays Borked.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

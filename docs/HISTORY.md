@@ -13429,6 +13429,93 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## Isochronous cameras and MJPEG frames
+
+The rest of roadmap step 28.3 that QEMU can show. Most webcams, the
+T14's built-in one included, stream on an isochronous endpoint and send
+their larger sizes as MJPEG; NovaOS's camera path could only read a bulk
+endpoint and pass MJPEG frames on undecoded.
+
+- **Isochronous URBs** (`kernel/nt/usbd.c`): `URB_FUNCTION_ISOCH_TRANSFER`
+  on an IN pipe starts the USB core's isochronous stream on it; each
+  packet the controller receives goes into a ring of the pipe's, and the
+  pipe's thread fills each URB's packets from it in order (lengths,
+  per-packet status, `ErrorCount`). Aborting the pipe, selecting another
+  alternate setting or unplugging the device stops the stream.
+- **The UVC driver** (`kernel/nt/usbvideo.c`) runs an isochronous camera:
+  it lists the streaming interface's alternate settings and their packet
+  sizes, selects the smallest that holds the payload size the camera
+  answered in its probe, reads payloads a packet at a time from URBs of
+  32 packets (a frame that lost a packet is dropped), and selects
+  setting 0 again to stop.
+- **MJPEG in the source reader** (`userland/mfplat/mjpeg.c`): frames are
+  decoded with stb_image into RGB32, NV12 or YUY2; a frame without
+  Huffman tables (most cameras leave them out) gets the JPEG standard's
+  typical ones, and a frame that does not decode is skipped. A size the
+  camera offers only as MJPEG can now be asked for as RGB32, so the
+  Camera app shows such a camera.
+- **Test**: `tools/campeer.py --iso` is a camera as laptops have them
+  (1209:000b: settings of 1024 and 3 x 1024 bytes a packet, MJPEG
+  640x480 and 320x240 without Huffman tables, YUY2 160x120), in the new
+  devices-suite boot `isocam`; `camtest --iso` reads every mode and
+  checks the decoded test card, and the Camera app shows it.
+
+Still needed for 28.3: a boot of `latest` on the T14 showing its
+webcam's picture in Camera.
+
+## MS-DOS in a console window
+
+Roadmap step 31.2.  `ntvdm.exe`, NovaOS's DOS host, boots the MS-DOS 4.00
+built in step 31.1 in a console window, as Windows' NT Virtual DOS
+Machine did.  x86-64 long mode has no virtual-8086 mode, so DOS runs on a
+real-mode CPU of NovaOS's own (`userland/programs/ntvdm/cpu86.c`, the
+8086 instruction set with the 80186's additions, about 700 lines of C)
+and a PC BIOS written in C (`pcbios.c`: text-mode video, the floppy disk,
+keyboard, clock, timer interrupt and CMOS), reached from the ROM's
+interrupt vectors through "BOP" instructions as NTVDM's were.  The build
+now makes MS-DOS (DOSBox joins the build's packages) and ships a 1.44 MB
+boot disk of all of it in `C:\Windows\System32\DOS`, with Microsoft's
+MIT licence; `ntvdm` in the Terminal boots it to `A:\>`, and F12 gives the
+Terminal back.  The `dostest` self-test types `VER` and `DIR` at the
+prompt; CI's MS-DOS job also boots the disk on the same CPU and BIOS
+built for Linux and runs `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session
+(`tools/msdos/vdm_test.py`).  [dos.md](dos.md) has the details.
+
+## hidapi finds USB HID devices by their bus
+
+The fifth HID step: hidapi's Windows backend (and SDL, which uses it)
+asks the Configuration Manager what bus each HID device is on before it
+reads its strings. It takes the HID interface's
+`DEVPKEY_Device_InstanceId` with `CM_Get_Device_Interface_PropertyW`,
+which NovaOS's cfgmgr32 did not have, so every device came back with
+an unknown bus and no USB details.
+
+- **cfgmgr32**: `CM_Get_Device_Interface_PropertyW` (and `_ExW`): an
+  interface path names its device; its properties are the device's
+  instance ID and `DEVPKEY_DeviceInterface_ClassGuid`, `_Enabled` and
+  `_FriendlyName`, and a path no device exposes is
+  `CR_NO_SUCH_DEVICE_INTERFACE`. A device node gains
+  `DEVPKEY_Device_BusTypeGuid`, `DEVPKEY_Device_ContainerId` (shared by
+  a removable device's functions and HID collections) and
+  `DEVPKEY_NAME`, and `CM_Get_DevNode_Property_ExW`.
+- **USB instance IDs**: a USB device with a usable serial number string
+  gets it as its instance ID (`USB\VID_1209&PID_0008\NOVA0002`), as on
+  Windows, so it keeps its ID on any port; one without, or one whose
+  serial another device with the same IDs already uses, is named by its
+  port as before.
+- **SDK headers**: `guiddef.h`, `initguid.h`, `devpropdef.h`,
+  `propkeydef.h`, `ntdef.h`, `winbase.h`, `MAKELANGID`, `ARRAYSIZE`,
+  `PZZWSTR`, `MB_`/`WC_ERR_INVALID_CHARS`, and `wchar.h` declaring the
+  wide character classes as Visual C++'s does.
+- **Programs** can build a vendored C library beside them (a program
+  manifest's `sources` and `include` now work for C too).
+
+hidapi 0.15.0 (`third_party/hidapi`, BSD licence) builds unchanged into
+`hidapitest`, which the devices suite's "hid" boot runs 64-bit and
+32-bit: `hid_enumerate` reports the vendor-defined test device as USB
+with its instance ID, product and serial number, and `hid_open`,
+feature reports, `hid_write` and `hid_read_timeout` work on it.
+
 ## MS-DOS 4.0 built from Microsoft's source
 
 Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran

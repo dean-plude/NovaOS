@@ -21,6 +21,13 @@
  *    the bars' colours and frame numbers that go up;
  *  - the asynchronous reader (MF_SOURCE_READER_ASYNC_CALLBACK) and Flush;
  *  - a second reader on the same camera refused while the first streams.
+ *
+ * "camtest --iso" runs in the boot "isocam" instead, on tools/campeer.py
+ * --iso: 1209:000b "NovaOS Isochronous Camera", which streams on an
+ * isochronous endpoint (two alternate settings; the UVC driver picks one
+ * by the payload size) in MJPEG 640x480 and 320x240 and YUY2 160x120.
+ * The same checks, its MJPEG frames read as they come (JPEG images) and
+ * decoded by the source reader into RGB32, NV12 and YUY2.
  */
 #include <windows.h>
 #include <stdio.h>
@@ -90,17 +97,25 @@ static int card(const GUID *sub, const BYTE *p, UINT32 w, UINT32 h, LONG stride,
         }
     }
     if (bad) return -1;
-    int n = 0;
+    int n = 0, last_row = 0;
     UINT32 band = h * 7 / 8 & ~1u;
     for (int k = 0; k < 16; k++) {
         int px[3];
         pixel(sub, p, w, h, stride, (UINT32)(k * (w / 16) + w / 32), band + (h - band) / 2, px);
         if (px[0] > 128) n |= 1 << k;
+        pixel(sub, p, w, h, stride, (UINT32)(k * (w / 16) + w / 32), h - 2, px);
+        if (px[0] > 128) last_row |= 1 << k;
+    }
+    if (last_row != n) {                                  /* (the bottom rows of another frame: one torn) */
+        printf("  %s: frame %d with the bottom rows of %d\n", what, n, last_row);
+        return -1;
     }
     return n;
 }
 
-/* Reads @count frames of the reader's current type; the last number (-1: failed) */
+/* Reads @count frames of the reader's current type; the last number (-1:
+ * failed).  MJPEG frames, which have no picture to check, count up from 0
+ * when they are JPEG images. */
 static int read_frames(IMFSourceReader *r, int count, const char *what)
 {
     IMFMediaType *t = NULL;
@@ -126,7 +141,19 @@ static int read_frames(IMFSourceReader *r, int count, const char *what)
         IMF2DBuffer *b2 = NULL;
         BYTE *p = NULL;
         LONG stride = 0;
-        if (SUCCEEDED(s->lpVtbl->ConvertToContiguousBuffer(s, &b)) &&
+        DWORD len = 0;
+        if (IsEqualGUID(&sub, &MFVideoFormat_MJPG)) {
+            if (SUCCEEDED(s->lpVtbl->ConvertToContiguousBuffer(s, &b)) && SUCCEEDED(b->lpVtbl->Lock(b, &p, NULL, &len))) {
+                if (len < 4 || p[0] != 0xFF || p[1] != 0xD8 || p[len - 2] != 0xFF || p[len - 1] != 0xD9) {
+                    printf("  %s: not a JPEG image (%lu bytes)\n", what, (unsigned long)len);
+                    ok = 0;
+                }
+                b->lpVtbl->Unlock(b);
+                last++;
+            } else {
+                ok = 0;
+            }
+        } else if (SUCCEEDED(s->lpVtbl->ConvertToContiguousBuffer(s, &b)) &&
             SUCCEEDED(b->lpVtbl->QueryInterface(b, &IID_IMF2DBuffer, (void **)&b2)) &&
             SUCCEEDED(b2->lpVtbl->Lock2D(b2, &p, &stride))) {
             int n = card(&sub, p, w, h, stride, what);
@@ -208,6 +235,38 @@ static IMFSourceReaderCallbackVtbl g_cb_vtbl = { cb_qi, cb_addref, cb_release, c
 
 static WCHAR g_name[128];
 
+/* What the camera of the boot offers and what is read from it */
+typedef struct { const GUID *sub; UINT32 w, h, fps; } Type;
+typedef struct { const GUID *sub; UINT32 w, h, fps; const char *what; } Run;
+
+static const Type g_bulk_types[3] = {
+    { &MFVideoFormat_YUY2, 640, 480, 30 }, { &MFVideoFormat_YUY2, 320, 240, 30 }, { &MFVideoFormat_NV12, 640, 480, 30 },
+};
+static const Run g_bulk_runs[] = {
+    { &MFVideoFormat_YUY2,  640, 480, 30, "YUY2 640x480" },
+    { &MFVideoFormat_YUY2,  320, 240, 15, "YUY2 320x240 at 15 a second" },
+    { &MFVideoFormat_NV12,  640, 480, 30, "NV12 640x480" },
+    { &MFVideoFormat_RGB32, 640, 480, 0,  "RGB32 640x480 from NV12" },
+    { &MFVideoFormat_RGB32, 320, 240, 0,  "RGB32 320x240 from YUY2" },
+    { &MFVideoFormat_NV12,  320, 240, 0,  "NV12 320x240 from YUY2" },
+    { &MFVideoFormat_YUY2,  640, 480, 0,  "YUY2 640x480" },
+    { NULL },
+};
+static const Type g_iso_types[3] = {
+    { &MFVideoFormat_MJPG, 640, 480, 30 }, { &MFVideoFormat_MJPG, 320, 240, 30 }, { &MFVideoFormat_YUY2, 160, 120, 15 },
+};
+static const Run g_iso_runs[] = {
+    { &MFVideoFormat_MJPG,  640, 480, 30, "MJPEG 640x480" },
+    { &MFVideoFormat_RGB32, 640, 480, 0,  "RGB32 640x480 from MJPEG" },
+    { &MFVideoFormat_RGB32, 640, 480, 15, "RGB32 640x480 from MJPEG at 15 a second" },
+    { &MFVideoFormat_NV12,  320, 240, 0,  "NV12 320x240 from MJPEG" },
+    { &MFVideoFormat_YUY2,  320, 240, 0,  "YUY2 320x240 from MJPEG" },
+    { &MFVideoFormat_YUY2,  160, 120, 15, "YUY2 160x120" },
+    { &MFVideoFormat_RGB32, 160, 120, 0,  "RGB32 160x120 from YUY2" },
+    { &MFVideoFormat_MJPG,  320, 240, 30, "MJPEG 320x240" },
+    { NULL },
+};
+
 static IMFMediaSource *open_camera(IMFActivate **act_out)
 {
     IMFAttributes *a;
@@ -226,10 +285,15 @@ static IMFMediaSource *open_camera(IMFActivate **act_out)
     return src;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    BOOL iso = argc > 1 && !strcmp(argv[1], "--iso");
+    const WCHAR *want_name = iso ? L"NovaOS Isochronous Camera" : L"NovaOS Test Camera";
+    const Type *want = iso ? g_iso_types : g_bulk_types;
+    const Run *runs = iso ? g_iso_runs : g_bulk_runs;
     setvbuf(stdout, NULL, _IONBF, 0);
-    printf("camtest: a USB camera through Media Foundation (%d-bit)\n", (int)sizeof(void *) * 8);
+    printf("camtest: a USB camera through Media Foundation (%d-bit%s)\n", (int)sizeof(void *) * 8,
+           iso ? ", isochronous" : "");
     check(SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_FULL)), "MFStartup");
 
     /* ---- enumeration ---- */
@@ -245,7 +309,7 @@ int main(void)
         UINT32 len = 0;
         devs[0]->lpVtbl->GetAllocatedString(devs[0], &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &name, &len);
         devs[0]->lpVtbl->GetAllocatedString(devs[0], &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &link, &len);
-        check(name && !wcscmp(name, L"NovaOS Test Camera"), "friendly name \"%ls\"", name ? name : L"");
+        check(name && !wcscmp(name, want_name), "friendly name \"%ls\"", name ? name : L"");
         check(link && wcslen(link) > 4, "symbolic link %ls", link ? link : L"");
         if (name) lstrcpynW(g_name, name, 128);
         CoTaskMemFree(name);
@@ -297,9 +361,6 @@ int main(void)
     hr = MFCreateSourceReaderFromMediaSource(src, NULL, &r);
     check(SUCCEEDED(hr) && r, "MFCreateSourceReaderFromMediaSource (%08lx)", (unsigned long)hr);
     if (!r) goto done;
-    static const struct { const GUID *sub; UINT32 w, h, fps; } want[3] = {
-        { &MFVideoFormat_YUY2, 640, 480, 30 }, { &MFVideoFormat_YUY2, 320, 240, 30 }, { &MFVideoFormat_NV12, 640, 480, 30 },
-    };
     int types_ok = 1;
     for (DWORD k = 0;; k++) {
         IMFMediaType *t = NULL;
@@ -319,18 +380,10 @@ int main(void)
             types_ok = 0;
         t->lpVtbl->Release(t);
     }
-    check(types_ok, "native types: YUY2 640x480, YUY2 320x240, NV12 640x480");
+    check(types_ok, iso ? "native types: MJPG 640x480, MJPG 320x240, YUY2 160x120" :
+                          "native types: YUY2 640x480, YUY2 320x240, NV12 640x480");
 
-    static const struct { const GUID *sub; UINT32 w, h, fps; const char *what; } runs[] = {
-        { &MFVideoFormat_YUY2,  640, 480, 30, "YUY2 640x480" },
-        { &MFVideoFormat_YUY2,  320, 240, 15, "YUY2 320x240 at 15 a second" },
-        { &MFVideoFormat_NV12,  640, 480, 30, "NV12 640x480" },
-        { &MFVideoFormat_RGB32, 640, 480, 0,  "RGB32 640x480 from NV12" },
-        { &MFVideoFormat_RGB32, 320, 240, 0,  "RGB32 320x240 from YUY2" },
-        { &MFVideoFormat_NV12,  320, 240, 0,  "NV12 320x240 from YUY2" },
-        { &MFVideoFormat_YUY2,  640, 480, 0,  "YUY2 640x480" },
-    };
-    for (int k = 0; k < (int)(sizeof(runs) / sizeof(runs[0])); k++) {
+    for (int k = 0; runs[k].sub; k++) {
         hr = set_type(r, runs[k].sub, runs[k].w, runs[k].h, runs[k].fps);
         int last = SUCCEEDED(hr) ? read_frames(r, 5, runs[k].what) : -1;
         check(last >= 0, "%s: 5 frames, the last number %d (hr %08lx)", runs[k].what, last, (unsigned long)hr);
@@ -342,7 +395,7 @@ int main(void)
     IMFSourceReader *r2 = NULL;
     if (src2) MFCreateSourceReaderFromMediaSource(src2, NULL, &r2);
     if (r2) {
-        set_type(r2, &MFVideoFormat_YUY2, 640, 480, 0);
+        set_type(r2, want[0].sub, want[0].w, want[0].h, 0);
         DWORD idx, flags = 0;
         LONGLONG ts;
         IMFSample *s = NULL;

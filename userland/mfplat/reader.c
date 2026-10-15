@@ -5,11 +5,13 @@
  * The reader has the camera's one video stream, selected.  Its native
  * types are the camera's modes; its current type is first the camera's
  * current mode, and SetCurrentMediaType picks another mode by subtype and
- * frame size, or asks for frames converted from an uncompressed one:
- * RGB32 and ARGB32 (top-down, as Media Foundation's RGB is), NV12 and
- * YUY2 from YUY2 or NV12 (BT.601), as Windows' video processor does for
- * a reader made with MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING (NovaOS
- * converts whether or not it was asked to).  A frame rate in the type
+ * frame size, or asks for frames converted from another: RGB32 and
+ * ARGB32 (top-down, as Media Foundation's RGB is), NV12 and YUY2 from
+ * YUY2, NV12 or MJPEG (BT.601), as Windows' MJPEG decoder and video
+ * processor do for a reader made with MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING
+ * (NovaOS converts whether or not it was asked to).  An uncompressed mode
+ * of the size is taken before an MJPEG one; an MJPEG frame that does not
+ * decode (damaged on the way) is skipped for the next.  A frame rate in the type
  * asks the camera for that interval.
  *
  * ReadSample starts the camera's stream on the first read and returns
@@ -38,6 +40,7 @@ typedef struct {
     IMFMediaType    *current;          /* what the reader hands out */
     UINT32           mode;             /* the camera mode it comes from */
     Conv             conv;
+    BYTE            *rgb;              /* an MJPEG frame decoded (w x h x 3) */
     UINT32           interval;         /* the interval asked for (0: the mode's) */
     LONGLONG         t0;               /* the first frame's time (-1: none yet) */
     LARGE_INTEGER    freq;
@@ -62,6 +65,46 @@ static void yuv_bgra(int y, int u, int v, BYTE *o)
     o[1] = clip((c - 100 * d - 208 * e + 128) >> 8);
     o[2] = clip((c + 409 * e + 128) >> 8);
     o[3] = 255;
+}
+
+/* RGB to BT.601 studio-range YUV */
+static void rgb_yuv(const BYTE *p, int *y, int *u, int *v)
+{
+    int r = p[0], g = p[1], b = p[2];
+    *y = (66 * r + 129 * g + 25 * b + 128) / 256 + 16;
+    *u = (-38 * r - 74 * g + 112 * b + 128 + 128 * 256) / 256;
+    *v = (112 * r - 94 * g - 18 * b + 128 + 128 * 256) / 256;
+}
+
+/* A decoded MJPEG frame (@rgb, @w x @h) into @dst as @conv; the bytes written */
+static DWORD convert_rgb(Conv conv, UINT32 w, UINT32 h, const BYTE *rgb, BYTE *dst)
+{
+    if (conv == CONV_RGB32) {
+        for (size_t i = 0, n = (size_t)w * h; i < n; i++, rgb += 3, dst += 4) {
+            dst[0] = rgb[2]; dst[1] = rgb[1]; dst[2] = rgb[0]; dst[3] = 255;
+        }
+        return w * h * 4;
+    }
+    for (UINT32 y = 0; y < h; y++)
+        for (UINT32 x = 0; x + 1 < w; x += 2) {
+            const BYTE *p = rgb + ((size_t)y * w + x) * 3;
+            int y0, y1, u0, u1, v0, v1;
+            rgb_yuv(p, &y0, &u0, &v0);
+            rgb_yuv(p + 3, &y1, &u1, &v1);
+            BYTE u = (BYTE)((u0 + u1 + 1) / 2), v = (BYTE)((v0 + v1 + 1) / 2);
+            if (conv == CONV_YUY2) {
+                BYTE *o = dst + ((size_t)y * w + x) * 2;
+                o[0] = (BYTE)y0; o[1] = u; o[2] = (BYTE)y1; o[3] = v;
+            } else {                                                   /* NV12: the even rows' chroma */
+                dst[(size_t)y * w + x] = (BYTE)y0;
+                dst[(size_t)y * w + x + 1] = (BYTE)y1;
+                if (!(y & 1)) {
+                    BYTE *uv = dst + (size_t)w * h + (size_t)(y / 2) * w + x;
+                    uv[0] = u; uv[1] = v;
+                }
+            }
+        }
+    return conv == CONV_YUY2 ? w * h * 2 : w * h * 3 / 2;
 }
 
 /* @src (@fourcc, @w x @h) into @dst as @conv; the bytes written */
@@ -122,7 +165,16 @@ static HRESULT read_one(Reader *r, DWORD *flags, LONGLONG *ts, IMFSample **out)
     HRESULT hr = camera_start(r->c, r->interval);
     BYTE *frame = NULL;
     UINT32 bytes = 0;
-    if (SUCCEEDED(hr)) hr = camera_read(r->c, &frame, &bytes, NULL);
+    BOOL decode = m->fourcc == NOVACAM_MJPG && r->conv != CONV_NONE;
+    if (SUCCEEDED(hr) && decode && !r->rgb) {
+        r->rgb = HeapAlloc(GetProcessHeap(), 0, (size_t)m->width * m->height * 3);
+        if (!r->rgb) hr = E_OUTOFMEMORY;
+    }
+    for (int tries = 0; SUCCEEDED(hr); tries++) {
+        hr = camera_read(r->c, &frame, &bytes, NULL);
+        if (FAILED(hr) || !decode || mjpeg_decode(frame, bytes, m->width, m->height, r->rgb)) break;
+        if (tries == 30) hr = MF_E_INVALID_STREAM_DATA;               /* (none of a second's frames decode) */
+    }
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     LONGLONG t = (LONGLONG)((double)now.QuadPart * 10000000.0 / (double)r->freq.QuadPart);
@@ -139,7 +191,8 @@ static HRESULT read_one(Reader *r, DWORD *flags, LONGLONG *ts, IMFSample **out)
         if (SUCCEEDED(hr)) {
             BYTE *d;
             b->lpVtbl->Lock(b, &d, NULL, NULL);
-            DWORD n = r->conv == CONV_NONE ? (memcpy(d, frame, bytes), bytes) : convert(r->conv, m->fourcc, w, h, frame, d);
+            DWORD n = r->conv == CONV_NONE ? (memcpy(d, frame, bytes), bytes) :
+                      decode ? convert_rgb(r->conv, w, h, r->rgb, d) : convert(r->conv, m->fourcc, w, h, frame, d);
             b->lpVtbl->Unlock(b);
             b->lpVtbl->SetCurrentLength(b, n);
             hr = mf_create_sample(&s);
@@ -218,6 +271,7 @@ static ULONG STDMETHODCALLTYPE r_release(IMFSourceReader *This)
         CloseHandle(r->wake);
     }
     if (r->cb) r->cb->lpVtbl->Release(r->cb);
+    if (r->rgb) HeapFree(GetProcessHeap(), 0, r->rgb);
     camera_stop(r->c);
     r->src->lpVtbl->Shutdown(r->src);
     r->src->lpVtbl->Release(r->src);
@@ -311,13 +365,16 @@ static HRESULT STDMETHODCALLTYPE r_SetCurrentMediaType(IMFSourceReader *This, DW
         if (IsEqualGUID(&sub, camera_subtype(m->fourcc, &g)) && size == ((UINT64)m->width << 32 | m->height)) pick = (int)k;
     }
     if (pick < 0 && conv != CONV_NONE) {
+        /* the current mode, then an uncompressed one, then MJPEG */
         UINT32 want = conv == CONV_NV12 ? NOVACAM_YUY2 : conv == CONV_YUY2 ? NOVACAM_NV12 : 0;
-        for (int pass = 0; pass < 2 && pick < 0; pass++)          /* (the current mode first) */
+        for (int pass = 0; pass < 3 && pick < 0; pass++)
             for (UINT32 k = 0; k < camera_mode_count(r->c) && pick < 0; k++) {
                 const NovaCamMode *m = camera_mode(r->c, k);
                 if (!pass && k != r->mode) continue;
                 if (size != ((UINT64)m->width << 32 | m->height)) continue;
-                if (want ? m->fourcc == want : (m->fourcc == NOVACAM_YUY2 || m->fourcc == NOVACAM_NV12)) pick = (int)k;
+                if (pass < 2 && (want ? m->fourcc == want : (m->fourcc == NOVACAM_YUY2 || m->fourcc == NOVACAM_NV12)))
+                    pick = (int)k;
+                else if (pass != 1 && m->fourcc == NOVACAM_MJPG) pick = (int)k;
             }
         how = conv;
     }
@@ -328,6 +385,8 @@ static HRESULT STDMETHODCALLTYPE r_SetCurrentMediaType(IMFSourceReader *This, DW
         if (SUCCEEDED(hr)) {
             if ((UINT32)pick != r->mode || interval != r->interval) camera_stop(r->c);
             hr = camera_set_mode(r->c, (UINT32)pick);
+            if (r->rgb) HeapFree(GetProcessHeap(), 0, r->rgb);
+            r->rgb = NULL;
             r->current->lpVtbl->Release(r->current);
             r->current = n;
             r->mode = (UINT32)pick;

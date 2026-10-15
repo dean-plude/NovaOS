@@ -289,10 +289,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   Start menu finding its event, Calculator (Windows Calculator's
   CalcManager engine) from the Start menu: Standard, Scientific
   (precedence, x^y, 25!) and Programmer (hexadecimal, AND) answers to
-  typed expressions, programs started from the Start menu (Win+S, the
-  name, Enter): `winhello`, a GUI program, with no Terminal window, and
-  `hello`, a console program, in a Terminal, `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
+  typed expressions, `dostest` (MS-DOS 4.00 boots in a console window on
+  ntvdm.exe's real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR,
+  F12 gives the screen back), programs started from the Start menu
+  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
+  window, and `hello`, a console program, in a Terminal, `crash kernel`,
+  a deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
@@ -315,6 +317,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |
 | `hid` | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`): the HID class driver on its USB minidriver; `hidclasstest` through setupapi and `hid.dll` (strings, preparsed data, feature, input and output reports), Raw Input (`WM_INPUT` and the device list), unplugging |
 | `camera` | a fake UVC 1.1 camera (`tools/campeer.py`): the UVC class driver; `camtest` through Media Foundation (`MFEnumDeviceSources`, the source reader in each mode and its converters, the asynchronous reader), then the Camera app's picture (`docs/screenshots/camera.png`) |
+| `isocam` | a fake UVC 1.1 camera streaming isochronously in MJPEG and YUY2 (`tools/campeer.py --iso`): the UVC driver on isochronous URBs; `camtest --iso` in each mode, the MJPEG frames decoded into RGB32, NV12 and YUY2, then the Camera app showing MJPEG 640x480 |
 | `pnp` | a keyboard, a hub and a USB stick plugged into xHCI and removed: `pnptest` follows the Plug and Play device tree |
 | `ntfs` | an NTFS volume as drive D:: hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
 | `wdm` | a Windows kernel-mode test driver (`wdmtest.sys`) under the signing policy (loads only with test signing on; unsigned and tampered copies never), then a KMDF driver (`kmdftest.sys`) on `Wdf01000.sys` |
@@ -395,7 +398,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

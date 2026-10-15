@@ -22,8 +22,9 @@
  *     run under other drivers (NovaOS's or Windows');
  *   - the URBs a client sends: select configuration and interface
  *     (pipe handles for its endpoints), control transfers (standard,
- *     class and vendor requests, descriptors, status, features), bulk and
- *     interrupt transfers, abort and reset of a pipe, the frame number;
+ *     class and vendor requests, descriptors, status, features), bulk,
+ *     interrupt and isochronous IN transfers, abort and reset of a pipe,
+ *     the frame number;
  *   - the hub's other requests: port status, port reset and cycle, the
  *     selective-suspend idle notification (held until the client cancels
  *     it: NovaOS does not suspend a device), and IRP_MN_QUERY_INTERFACE
@@ -37,9 +38,22 @@
  * core (which waits for each) and completes them at DISPATCH_LEVEL, as
  * the hub's completion DPC would.  An IN transfer the device has no data
  * for waits on its pipe (others are not held up); aborting the pipe or
- * cancelling the IRP ends it.  Isochronous transfers are not supported
- * yet (no client needs them); interrupt pipes run as bulk ones do (on
- * xHCI, which treats both alike).  When the device is unplugged its
+ * cancelling the IRP ends it.  Interrupt pipes run as bulk ones do (on
+ * xHCI, which treats both alike).
+ *
+ * Isochronous IN (a USB camera's stream, usbvideo.c, or a Windows
+ * client's): the first ISOCH_TRANSFER URB on a pipe starts the core's
+ * isochronous stream on it (drivers/usb.h: transfers kept queued back to
+ * back, a packet each service interval), whose callback copies every
+ * packet into a ring of the pipe's; the pipe's thread fills each URB's
+ * packets from the ring in order, as the controller would have, and
+ * completes it.  A client that keeps a URB or two queued (as Windows
+ * clients do) loses nothing; packets that arrive while none is queued
+ * wait in the ring until it is full (then the newest are dropped, as a
+ * controller with no transfer scheduled would miss them).  Aborting the
+ * pipe or selecting another alternate setting stops the stream.
+ * Isochronous OUT is not supported yet (USB audio is NovaOS's own
+ * driver, drivers/usbaudio.c).  When the device is unplugged its
  * requests fail with USBD_STATUS_DEVICE_GONE and the PnP manager is told
  * (surprise removal).
  */
@@ -64,6 +78,9 @@ NT_API void  usbd_cancel_idle(NT_DEVICE_OBJECT *dev, NT_IRP *irp);
 #define NT_IRP_MJ_INTERNAL_DEVICE_CONTROL 0x0F
 #define USBD_STACK            (24 * 1024)
 #define PIPE_BUF              (64 * 1024)          /* each pipe's DMA buffer: a transfer moves this much at a time */
+#define ISO_XFERS             4                    /* the core's isochronous stream: transfers kept queued, */
+#define ISO_PACKETS           8                    /* packets each */
+#define ISO_RING              256                  /* packets a pipe holds for its URBs */
 #define TAG_USBD              0x64627355u          /* 'Usbd' */
 
 #define ST_DEVICE_NOT_CONNECTED ((NT_STATUS)0xC000009D)
@@ -86,6 +103,12 @@ typedef struct {
     NT_KEVENT      wake, idle;         /* work for the thread; nothing active */
     volatile bool  abort;              /* ABORT_PIPE: the active transfer gives up */
     bool           thread;
+    /* isochronous IN: packets the core's stream received, waiting for URBs */
+    UINT8         *ring;               /* ISO_RING packets of psize bytes */
+    UINT16        *ring_len;
+    UINT32         psize;
+    volatile UINT32 wr, rd;            /* packets put in (the callback), taken out (the thread) */
+    UINT32         dropped;
 } UsbdPipe;
 
 struct UsbdDev {
@@ -338,9 +361,101 @@ out:
     return st;
 }
 
+/* ---- isochronous IN ---- */
+
+/* The core's stream: a finished transfer's packets into the ring
+ * (interrupts off, the core's lock held: copy and go) */
+static void iso_in(UsbPipe *up, UINT8 *data, UINT16 *lens, int packets, void *ctx)
+{
+    UsbdPipe *p = ctx;
+    UINT32 psize = UsbIsoPacketSize(up);
+    for (int i = 0; i < packets; i++) {
+        UINT32 wr = p->wr;
+        if (wr - __atomic_load_n(&p->rd, __ATOMIC_ACQUIRE) >= ISO_RING) { p->dropped++; continue; }
+        UINT32 n = lens[i] < p->psize ? lens[i] : p->psize;
+        UINT32 slot = wr % ISO_RING;
+        memcpy(p->ring + (size_t)slot * p->psize, data + (size_t)i * psize, n);
+        p->ring_len[slot] = (UINT16)n;
+        __atomic_store_n(&p->wr, wr + 1, __ATOMIC_RELEASE);
+    }
+}
+
+static void iso_stop(UsbdPipe *p)
+{
+    if (!p->ring) return;
+    if (p->pipe) UsbIsoStop(p->pipe);
+    if (p->dropped) kprintf("[USBD] %s: endpoint %02x: %u isochronous packet(s) dropped\n", p->dev->usb->name, p->addr,
+                            p->dropped);
+    kfree(p->ring);
+    kfree(p->ring_len);
+    p->ring = NULL;
+    p->ring_len = NULL;
+    p->wr = p->rd = p->dropped = 0;
+}
+
+static UINT32 iso_start(UsbdPipe *p)
+{
+    if (p->ring) return USBD_STATUS_SUCCESS;
+    p->psize = UsbIsoPacketSize(p->pipe);
+    p->ring = kmalloc((size_t)ISO_RING * p->psize);
+    p->ring_len = kzalloc(ISO_RING * sizeof(UINT16));
+    p->wr = p->rd = p->dropped = 0;
+    if (!p->ring || !p->ring_len || !UsbIsoStart(p->pipe, ISO_XFERS, ISO_PACKETS, iso_in, p)) {
+        kfree(p->ring);
+        kfree(p->ring_len);
+        p->ring = NULL;
+        p->ring_len = NULL;
+        return USBD_STATUS_ISOCH_REQUEST_FAILED;
+    }
+    kprintf("[USBD] %s: endpoint %02x: isochronous stream, %u bytes every %u us\n", p->dev->usb->name, p->addr,
+            p->psize, UsbIsoIntervalUs(p->pipe));
+    return USBD_STATUS_SUCCESS;
+}
+
+/* An ISOCH_TRANSFER URB (IN): each of its packets is the stream's next
+ * packet, at its offset in the buffer (cut to the room up to the next
+ * packet's offset) */
+static UINT32 run_iso(UsbdPipe *p, UrbIso *u, NT_IRP *irp)
+{
+    UsbdDev *v = p->dev;
+    UINT8 *buf = xfer_buf((UrbXfer *)u);
+    UINT32 len = u->TransferBufferLength, n = u->NumberOfPackets, total = 0;
+    if (!buf || !n || n > 1024 || u->Hdr.Length < sizeof(UrbIso) + (n - 1) * sizeof(UsbdIsoPacket))
+        return USBD_STATUS_INVALID_PARAMETER;
+    if (!(p->addr & 0x80)) return USBD_STATUS_NOT_SUPPORTED;
+    UINT32 st = iso_start(p);
+    if (st) return st;
+    u->StartFrame = (UINT32)(sched_ticks() * 10);
+    u->ErrorCount = 0;
+    UINT32 i;
+    for (i = 0; i < n; i++) {
+        UsbdIsoPacket *k = &u->IsoPacket[i];
+        UINT32 end = i + 1 < n ? u->IsoPacket[i + 1].Offset : len;
+        UINT32 room = k->Offset < end && end <= len ? end - k->Offset : 0;
+        for (;;) {                                               /* (a packet comes every service interval) */
+            if (v->gone || v->usb->gone) { st = USBD_STATUS_DEVICE_GONE; goto out; }
+            if (p->abort || irp->Cancel) { st = USBD_STATUS_CANCELED; goto out; }
+            if (__atomic_load_n(&p->wr, __ATOMIC_ACQUIRE) != p->rd) break;
+            sched_sleep_tick();
+        }
+        UINT32 slot = p->rd % ISO_RING, got = p->ring_len[slot];
+        if (got > room) { got = room; k->Status = USBD_STATUS_ISOCH_REQUEST_FAILED; u->ErrorCount++; }
+        else k->Status = USBD_STATUS_SUCCESS;
+        memcpy(buf + k->Offset, p->ring + (size_t)slot * p->psize, got);
+        k->Length = got;
+        total += got;
+        __atomic_store_n(&p->rd, p->rd + 1, __ATOMIC_RELEASE);
+    }
+out:
+    for (; i < n; i++) u->IsoPacket[i].Length = 0, u->IsoPacket[i].Status = USBD_STATUS_ISO_NOT_ACCESSED_BY_HW;
+    u->TransferBufferLength = total;
+    return st;
+}
+
 static UINT32 run(UsbdPipe *p, NT_IRP *irp)
 {
     UrbXfer *u = NtIrpCurrentStack(irp)->Parameters.Others.Argument1;
+    if (u->Hdr.Function == URB_FUNCTION_ISOCH_TRANSFER) return run_iso(p, (UrbIso *)u, irp);
     if (u->Hdr.Function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) return run_bulk(p, u, irp);
     return run_control(p->dev, u);
 }
@@ -543,6 +658,14 @@ static UINT32 select_iface(UsbdDev *v, UrbSelectIface *u)
 {
     UsbdIfaceInfo *i = &u->Interface;
     if (!mine(v, i->InterfaceNumber)) return USBD_STATUS_INVALID_PARAMETER;
+    /* the old setting's pipes close: their transfers end, their streams stop */
+    for (int k = 0; k < 32; k++) {
+        UsbdPipe *p = v->pipes[k];
+        if (!p || !p->pipe || p->pipe->iface != i->InterfaceNumber) continue;
+        pipe_abort(p);
+        iso_stop(p);
+        p->pipe = NULL;
+    }
     if (!UsbSetInterface(v->usb, i->InterfaceNumber, i->AlternateSetting)) return USBD_STATUS_STALL_PID;
     v->alt[i->InterfaceNumber & 31] = i->AlternateSetting;
     return fill_iface(v, i);
@@ -573,6 +696,7 @@ static NT_STATUS submit_urb(UsbdDev *v, NT_IRP *irp, UrbHeader *u)
         UsbdPipe *p = pipe_of(v, ((UrbPipe *)u)->PipeHandle);
         if (!p) return urb_status(u, USBD_STATUS_INVALID_PIPE_HANDLE);
         pipe_abort(p);
+        if (passive) iso_stop(p);                                /* (the next URB starts the stream again) */
         return urb_status(u, USBD_STATUS_SUCCESS);
     }
     case URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL:
@@ -591,9 +715,12 @@ static NT_STATUS submit_urb(UsbdDev *v, NT_IRP *irp, UrbHeader *u)
         u->Status = USBD_STATUS_PENDING;
         return enqueue(p, irp);
     }
-    case URB_FUNCTION_ISOCH_TRANSFER:
-        kprintf("[USBD] %s: isochronous transfers are not supported yet\n", v->usb->name);
-        return urb_status(u, USBD_STATUS_NOT_SUPPORTED);
+    case URB_FUNCTION_ISOCH_TRANSFER: {
+        UsbdPipe *p = pipe_of(v, ((UrbIso *)u)->PipeHandle);
+        if (!p || !p->pipe || p->type != 1) return urb_status(u, USBD_STATUS_INVALID_PIPE_HANDLE);
+        u->Status = USBD_STATUS_PENDING;
+        return enqueue(p, irp);
+    }
     case URB_FUNCTION_CONTROL_TRANSFER:
     case URB_FUNCTION_CONTROL_TRANSFER_EX: {
         UrbXfer *x = (UrbXfer *)u;
@@ -793,7 +920,7 @@ static size_t multi_len(const char *m)
 static void flush(UsbdDev *v)
 {
     pipe_abort(&v->ep0);
-    for (int i = 0; i < 32; i++) if (v->pipes[i]) pipe_abort(v->pipes[i]);
+    for (int i = 0; i < 32; i++) if (v->pipes[i]) pipe_abort(v->pipes[i]), iso_stop(v->pipes[i]);
     IrqState s = spin_lock_irqsave(&g_lock);
     NT_IRP *idle = v->idle;
     spin_unlock_irqrestore(&g_lock, s);

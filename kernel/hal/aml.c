@@ -751,6 +751,108 @@ static uacpi_iteration_decision found_root_bridge(void *user, uacpi_namespace_no
     return UACPI_ITERATION_DECISION_CONTINUE;
 }
 
+typedef struct {
+    UINT64 address;
+    UINT64 length;
+    uacpi_address_space space;
+    UINT32 irq;
+    bool have_address, have_irq;
+} GpeBlock;
+
+static uacpi_iteration_decision gpe_block_resource(void *user, uacpi_resource *r)
+{
+    GpeBlock *b = user;
+    UINT64 address = 0, length = 0;
+    uacpi_address_space space;
+
+    switch (r->type) {
+    case UACPI_RESOURCE_TYPE_FIXED_IO:
+        address = r->fixed_io.address;
+        length = r->fixed_io.length;
+        space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        break;
+    case UACPI_RESOURCE_TYPE_FIXED_MEMORY32:
+        address = r->fixed_memory32.address;
+        length = r->fixed_memory32.length;
+        space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        break;
+    case UACPI_RESOURCE_TYPE_IO:
+        address = r->io.minimum;
+        length = r->io.length;
+        space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        break;
+    case UACPI_RESOURCE_TYPE_ADDRESS16:
+        address = r->address16.minimum;
+        length = r->address16.address_length;
+        space = r->address16.common.type == UACPI_RANGE_IO ?
+                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        break;
+    case UACPI_RESOURCE_TYPE_ADDRESS32:
+        address = r->address32.minimum;
+        length = r->address32.address_length;
+        space = r->address32.common.type == UACPI_RANGE_IO ?
+                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        break;
+    case UACPI_RESOURCE_TYPE_ADDRESS64:
+        address = r->address64.minimum;
+        length = r->address64.address_length;
+        space = r->address64.common.type == UACPI_RANGE_IO ?
+                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        break;
+    case UACPI_RESOURCE_TYPE_ADDRESS64_EXTENDED:
+        address = r->address64_extended.minimum;
+        length = r->address64_extended.address_length;
+        space = r->address64_extended.common.type == UACPI_RANGE_IO ?
+                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        break;
+    case UACPI_RESOURCE_TYPE_IRQ:
+        if (r->irq.num_irqs) {
+            b->irq = r->irq.irqs[0];
+            b->have_irq = true;
+        }
+        return UACPI_ITERATION_DECISION_CONTINUE;
+    case UACPI_RESOURCE_TYPE_EXTENDED_IRQ:
+        if (r->extended_irq.num_irqs) {
+            b->irq = r->extended_irq.irqs[0];
+            b->have_irq = true;
+        }
+        return UACPI_ITERATION_DECISION_CONTINUE;
+    default:
+        return UACPI_ITERATION_DECISION_CONTINUE;
+    }
+
+    if (length && (space == UACPI_ADDRESS_SPACE_SYSTEM_IO ||
+                   space == UACPI_ADDRESS_SPACE_SYSTEM_MEMORY)) {
+        b->address = address;
+        b->length = length;
+        b->space = space;
+        b->have_address = true;
+    }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+static uacpi_iteration_decision found_gpe_block(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)user; (void)depth;
+    GpeBlock b = { 0 };
+    if (uacpi_for_each_device_resource(node, "_CRS", gpe_block_resource, &b) != UACPI_STATUS_OK ||
+        !b.have_address || !b.have_irq || b.length < 2 || (b.length & 1) ||
+        b.length / 2 > 0xFFFF || b.address + b.length < b.address) {
+        const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
+        kprintf("[ACPI] GPE block %s: unsupported or invalid _CRS\n", path ? path : "?");
+        uacpi_free_absolute_path(path);
+        return UACPI_ITERATION_DECISION_CONTINUE;
+    }
+
+    uacpi_status st = uacpi_install_gpe_block(node, b.address, b.space,
+                                               (uacpi_u16)(b.length / 2), b.irq);
+    const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
+    kprintf("[ACPI] GPE block %s: %s (%u registers, IRQ %u)\n", path ? path : "?",
+            uacpi_status_to_string(st), (UINT32)(b.length / 2), b.irq);
+    uacpi_free_absolute_path(path);
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
 bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
 {
     for (int i = 0; i < g_nprt; i++) {
@@ -795,22 +897,35 @@ static void route_pci(void)
  * ----------------------------------------------------------------------- */
 #define MAX_WAKE 16
 
-typedef struct { uacpi_namespace_node *node; UINT16 gpe; char what[24]; } WakeDev;
+typedef struct {
+    uacpi_namespace_node *node, *gpe_device;
+    UINT16 gpe;
+    char what[24];
+} WakeDev;
 static WakeDev g_wake[MAX_WAKE];
 static int     g_nwake;
 
-static bool wake_gpe(uacpi_namespace_node *node, UINT16 *gpe)
+static bool wake_gpe(uacpi_namespace_node *node, uacpi_namespace_node **gpe_device, UINT16 *gpe)
 {
     uacpi_object *o = NULL;
-    uacpi_object_array a;
-    uacpi_u64 v;
+    uacpi_object_array a, ref;
+    uacpi_u64 v, idx;
     bool ok = false;
     if (uacpi_eval_simple_package(node, "_PRW", &o) != UACPI_STATUS_OK) return false;
-    /* (the GPE may also be a package naming a GPE block device; only \_GPE ones here) */
-    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK && a.count >= 2 &&
-        uacpi_object_get_integer(a.objects[0], &v) == UACPI_STATUS_OK) {
-        *gpe = (UINT16)v;
-        ok = true;
+    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK && a.count >= 2) {
+        if (uacpi_object_get_integer(a.objects[0], &v) == UACPI_STATUS_OK && v <= 0xFFFF) {
+            *gpe_device = NULL;
+            *gpe = (UINT16)v;
+            ok = true;
+        } else if (uacpi_object_get_package(a.objects[0], &ref) == UACPI_STATUS_OK &&
+                   ref.count >= 2 &&
+                   uacpi_object_get_integer(ref.objects[1], &idx) == UACPI_STATUS_OK &&
+                   idx <= 0xFFFF &&
+                   uacpi_object_is_aml_namepath(ref.objects[0]) &&
+                   uacpi_object_resolve_as_aml_namepath(ref.objects[0], node, gpe_device) == UACPI_STATUS_OK) {
+            *gpe = (UINT16)idx;
+            ok = *gpe_device != NULL;
+        }
     }
     uacpi_object_unref(o);
     return ok;
@@ -819,11 +934,13 @@ static bool wake_gpe(uacpi_namespace_node *node, UINT16 *gpe)
 static void add_wake(uacpi_namespace_node *node, const char *what)
 {
     UINT16 gpe;
-    if (g_nwake == MAX_WAKE || !wake_gpe(node, &gpe)) return;
-    if (uacpi_setup_gpe_for_wake(NULL, gpe, node) != UACPI_STATUS_OK) return;
+    uacpi_namespace_node *gpe_device = NULL;
+    if (g_nwake == MAX_WAKE || !wake_gpe(node, &gpe_device, &gpe)) return;
+    if (uacpi_setup_gpe_for_wake(gpe_device, gpe, node) != UACPI_STATUS_OK) return;
     WakeDev *w = &g_wake[g_nwake++];
     w->node = node;
     w->gpe = gpe;
+    w->gpe_device = gpe_device;
     strncpy(w->what, what, sizeof(w->what) - 1);
     const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
     kprintf("[ACPI] Wake device %s (%s): GPE 0x%x\n", path ? path : "?", what, gpe);
@@ -876,7 +993,7 @@ static void arm_wake(void)
 {
     for (int i = 0; i < g_nwake; i++) {
         device_wake(g_wake[i].node, true);
-        uacpi_enable_gpe_for_wake(NULL, g_wake[i].gpe);
+        uacpi_enable_gpe_for_wake(g_wake[i].gpe_device, g_wake[i].gpe);
     }
 }
 
@@ -885,7 +1002,8 @@ static void report_wake(void)
 {
     for (int i = 0; i < g_nwake; i++) {
         uacpi_event_info info = 0;
-        if (uacpi_gpe_info(NULL, g_wake[i].gpe, &info) == UACPI_STATUS_OK && (info & UACPI_EVENT_INFO_HW_STATUS)) {
+        if (uacpi_gpe_info(g_wake[i].gpe_device, g_wake[i].gpe, &info) == UACPI_STATUS_OK &&
+            (info & UACPI_EVENT_INFO_HW_STATUS)) {
             const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(g_wake[i].node);
             kprintf("[ACPI] Woken by %s (%s)\n", path ? path : "?", g_wake[i].what);
             uacpi_free_absolute_path(path);
@@ -1186,6 +1304,7 @@ static bool load(void)
     uacpi_find_devices("PNP0C0A", found_battery, NULL);
     uacpi_find_devices("ACPI0003", found_adapter, NULL);
     uacpi_find_devices("PNP0C0D", found_lid, NULL);
+    uacpi_find_devices("ACPI0006", found_gpe_block, NULL);
     {
         static const uacpi_char *lps0[] = { "INT33A1", "PNP0D80", NULL };
         uacpi_find_devices_at(uacpi_namespace_root(), lps0, found_lps0, NULL);

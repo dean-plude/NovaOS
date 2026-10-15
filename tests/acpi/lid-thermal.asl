@@ -21,8 +21,34 @@ DefinitionBlock ("", "SSDT", 2, "NOVA", "LIDTHERM", 1)
         {
             Name (_HID, EisaId ("PNP0C0D"))
             Name (LAST, 0)                          /* the lid as last notified */
-            Name (_PRW, Package () { 0x0E, 3 })     /* opening it wakes the machine */
+            Name (_PRW, Package () { Package () { \_SB.GPE0, 0x0E }, 3 })
             Method (_LID) { Return (LIDC == 0) }
+        }
+
+        Device (GPE0)
+        {
+            Name (_HID, "ACPI0006")
+            Name (_UID, 0)
+            Name (_CRS, ResourceTemplate ()
+            {
+                IO (Decode16, 0x00EC, 0x00EC, 0, 4)
+                IRQNoFlags () { 9 }
+            })
+        }
+
+        Processor (CPU0, 0, 0x00EA, 6)
+        {
+            Name (_PTC, Package ()
+            {
+                Register (SystemIO, 8, 0, 1, 0x00EA),
+                Register (SystemIO, 8, 0, 1, 0x00EB)
+            })
+            Name (_TPC, 1)
+            Name (_TSS, Package ()
+            {
+                Package () { 100, 0, 0, 0, 0 },
+                Package () { 50, 0, 0, 1, 1 }
+            })
         }
 
     }
@@ -42,6 +68,8 @@ DefinitionBlock ("", "SSDT", 2, "NOVA", "LIDTHERM", 1)
         ThermalZone (TZ00)
         {
             Name (_TZP, 10)                          /* poll every 1.0 s */
+            Name (_TSP, 10)                          /* throttle updates no faster than once a second */
+            Name (_PSL, Package () { \_SB.CPU0 })
             Method (_TMP)
             {
                 If (LIDC != \_SB.LID0.LAST)

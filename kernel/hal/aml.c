@@ -555,11 +555,37 @@ bool AmlLidClosedEvent(void) { return __atomic_exchange_n(&g_lid_event, 0, __ATO
  * Thermal zones
  * ----------------------------------------------------------------------- */
 #define MAX_ZONES 8
+#define MAX_THERMAL_CPUS 32
+#define MAX_TSTATES 16
+#define MAX_ZONE_CPUS 16
+
+typedef struct {
+    UINT8 space, width, offset, access;
+    UINT64 address;
+} AmlGas;
+
+typedef struct {
+    UINT32 control, status;
+} AmlTState;
+
+typedef struct {
+    uacpi_namespace_node *node;
+    AmlGas control, status;
+    AmlTState states[MAX_TSTATES];
+    UINT8 nstates, max_state, current_state;
+    bool valid;
+} ThermalCpu;
+
+static ThermalCpu g_thermal_cpu[MAX_THERMAL_CPUS];
+static int g_nthermal_cpu;
 
 typedef struct {
     uacpi_namespace_node *node;
     AmlThermalZone        z;
-    UINT64                next;              /* tick of the next reading */
+    uacpi_namespace_node *cpus[MAX_ZONE_CPUS];
+    UINT8                 ncpus;
+    UINT32                tsp;
+    UINT64                next, next_throttle; /* next temperature read / throttle update */
     bool                  trips, hot_sent, crit_sent;
 } Zone;
 
@@ -568,6 +594,129 @@ static int             g_nzone;
 static volatile UINT32 g_zone_read;          /* a notification: read them now */
 static volatile UINT32 g_thermal_req;
 static KSpinLock       g_zone_lock = KSPINLOCK_INIT;
+
+static bool thermal_gas(uacpi_object *o, AmlGas *g)
+{
+    uacpi_data_view b;
+    if (uacpi_object_get_buffer(o, &b) != UACPI_STATUS_OK || b.length < 12) return false;
+    g->space = b.const_bytes[0];
+    g->width = b.const_bytes[1];
+    g->offset = b.const_bytes[2];
+    g->access = b.const_bytes[3];
+    memcpy(&g->address, b.const_bytes + 4, sizeof(g->address));
+    return g->address && g->width && g->width <= 32 && g->offset + g->width <= 32 &&
+           (g->space == 0 || g->space == 1) && g->access <= 3;
+}
+
+static bool thermal_register(AmlGas *g, UINT32 *value, bool write)
+{
+    UINT32 bytes = g->access ? 1u << (g->access - 1) : (g->width + g->offset + 7) / 8;
+    if (bytes != 1 && bytes != 2 && bytes != 4) return false;
+    UINT32 access_bits = bytes * 8;
+    if (g->width + g->offset > access_bits) return false;
+    UINT32 raw;
+    if (g->space == 1) {
+        if (g->address > 0xFFFF) return false;
+        raw = bytes == 1 ? inb((UINT16)g->address) :
+              bytes == 2 ? inw((UINT16)g->address) : inl((UINT16)g->address);
+    } else {
+        volatile void *p = PciMapPhysical(g->address, bytes);
+        if (!p) return false;
+        raw = bytes == 1 ? *(volatile UINT8 *)p :
+              bytes == 2 ? *(volatile UINT16 *)p : *(volatile UINT32 *)p;
+    }
+    UINT32 mask = g->width == 32 ? 0xFFFFFFFFu : (1u << g->width) - 1;
+    if (write) {
+        raw = (raw & ~(mask << g->offset)) | ((*value & mask) << g->offset);
+        if (g->space == 1) {
+            if (bytes == 1) outb((UINT16)g->address, (UINT8)raw);
+            else if (bytes == 2) outw((UINT16)g->address, (UINT16)raw);
+            else outl((UINT16)g->address, raw);
+        } else {
+            volatile void *p = PciMapPhysical(g->address, bytes);
+            if (!p) return false;
+            if (bytes == 1) *(volatile UINT8 *)p = (UINT8)raw;
+            else if (bytes == 2) *(volatile UINT16 *)p = (UINT16)raw;
+            else *(volatile UINT32 *)p = raw;
+        }
+    } else {
+        *value = (raw >> g->offset) & mask;
+    }
+    return true;
+}
+
+static ThermalCpu *thermal_cpu(uacpi_namespace_node *node)
+{
+    for (int i = 0; i < g_nthermal_cpu; i++)
+        if (g_thermal_cpu[i].node == node) return &g_thermal_cpu[i];
+    if (g_nthermal_cpu == MAX_THERMAL_CPUS) return NULL;
+
+    ThermalCpu *cpu = &g_thermal_cpu[g_nthermal_cpu++];
+    memset(cpu, 0, sizeof(*cpu));
+    cpu->node = node;
+    cpu->current_state = 0xFF;
+
+    uacpi_object *ptc = NULL, *tss = NULL;
+    uacpi_object_array regs, states;
+    bool ok = uacpi_eval_simple_package(node, "_PTC", &ptc) == UACPI_STATUS_OK &&
+              uacpi_object_get_package(ptc, &regs) == UACPI_STATUS_OK && regs.count >= 2 &&
+              thermal_gas(regs.objects[0], &cpu->control) &&
+              thermal_gas(regs.objects[1], &cpu->status) &&
+              uacpi_eval_simple_package(node, "_TSS", &tss) == UACPI_STATUS_OK &&
+              uacpi_object_get_package(tss, &states) == UACPI_STATUS_OK &&
+              states.count > 0 && states.count <= MAX_TSTATES;
+    if (ok) {
+        for (uacpi_size i = 0; i < states.count; i++) {
+            uacpi_object_array fields;
+            UINT64 control, status;
+            if (uacpi_object_get_package(states.objects[i], &fields) != UACPI_STATUS_OK ||
+                fields.count < 5 ||
+                uacpi_object_get_integer(fields.objects[3], &control) != UACPI_STATUS_OK ||
+                uacpi_object_get_integer(fields.objects[4], &status) != UACPI_STATUS_OK ||
+                control > 0xFFFFFFFFu || status > 0xFFFFFFFFu) {
+                ok = false;
+                break;
+            }
+            cpu->states[i] = (AmlTState){ (UINT32)control, (UINT32)status };
+        }
+    }
+    uacpi_object_unref(ptc);
+    uacpi_object_unref(tss);
+
+    if (ok) {
+        uacpi_u64 tpc;
+        cpu->max_state = (UINT8)(states.count - 1);
+        if (uacpi_eval_simple_integer(node, "_TPC", &tpc) == UACPI_STATUS_OK &&
+            tpc < cpu->max_state)
+            cpu->max_state = (UINT8)tpc;
+        cpu->nstates = (UINT8)states.count;
+        cpu->valid = true;
+    } else {
+        const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
+        kprintf("[ACPI] Processor %s: unsupported _PTC/_TSS, passive throttling disabled\n",
+                path ? path : "?");
+        uacpi_free_absolute_path(path);
+    }
+    return cpu;
+}
+
+static void zone_processors(Zone *zn)
+{
+    uacpi_object *o = NULL;
+    uacpi_object_array a;
+    zn->ncpus = 0;
+    if (uacpi_eval_simple_package(zn->node, "_PSL", &o) != UACPI_STATUS_OK) return;
+    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK) {
+        for (uacpi_size i = 0; i < a.count && zn->ncpus < MAX_ZONE_CPUS; i++) {
+            uacpi_namespace_node *node = NULL;
+            if (uacpi_object_is_aml_namepath(a.objects[i]) &&
+                uacpi_object_resolve_as_aml_namepath(a.objects[i], zn->node, &node) == UACPI_STATUS_OK &&
+                node && thermal_cpu(node))
+                zn->cpus[zn->ncpus++] = node;
+        }
+    }
+    uacpi_object_unref(o);
+}
 
 static UINT32 zone_int(Zone *zn, const char *name)
 {
@@ -592,9 +741,13 @@ static void read_trips(Zone *zn)
     z.critical = zone_int(zn, "_CRT");
     uacpi_u64 tzp = 0;
     z.period = uacpi_eval_simple_integer(zn->node, "_TZP", &tzp) == UACPI_STATUS_OK ? (UINT32)tzp : 0;
+    uacpi_u64 tsp = 0;
+    zn->tsp = uacpi_eval_simple_integer(zn->node, "_TSP", &tsp) == UACPI_STATUS_OK &&
+              tsp < 10000 ? (UINT32)tsp : 0;
     IrqState s = spin_lock_irqsave(&g_zone_lock);
     zn->z = z;
     spin_unlock_irqrestore(&g_zone_lock, s);
+    zone_processors(zn);
     zn->trips = true;
 }
 
@@ -681,6 +834,54 @@ static void poll_zones(bool all)
     UINT64 now = sched_ticks();
     for (int i = 0; i < g_nzone; i++)
         if (all || now >= g_zone[i].next) read_zone(&g_zone[i]);
+
+    for (int c = 0; c < g_nthermal_cpu; c++) {
+        ThermalCpu *cpu = &g_thermal_cpu[c];
+        if (!cpu->valid) continue;
+        bool associated = false, due = false;
+        for (int z = 0; z < g_nzone; z++) {
+            for (int p = 0; p < g_zone[z].ncpus; p++) {
+                if (g_zone[z].cpus[p] != cpu->node) continue;
+                associated = true;
+                if (!g_zone[z].next_throttle || now >= g_zone[z].next_throttle) due = true;
+                break;
+            }
+        }
+        if (!associated || !due) continue;
+        UINT8 target = 0;
+        for (int z = 0; z < g_nzone; z++) {
+            if (!g_zone[z].z.cooling) continue;
+            for (int p = 0; p < g_zone[z].ncpus; p++)
+                if (g_zone[z].cpus[p] == cpu->node && cpu->max_state > target)
+                    target = cpu->max_state;
+        }
+        if (cpu->current_state == target) {
+            for (int z = 0; z < g_nzone; z++)
+                for (int p = 0; p < g_zone[z].ncpus; p++)
+                    if (g_zone[z].cpus[p] == cpu->node)
+                        g_zone[z].next_throttle = now + (g_zone[z].tsp ? g_zone[z].tsp : 10) * 10;
+            continue;
+        }
+        if (cpu->current_state == 0xFF && target == 0) {
+            cpu->current_state = 0;
+            continue;
+        }
+        UINT32 status = 0;
+        if (!thermal_register(&cpu->status, &status, false) ||
+            status != cpu->states[target].status) {
+            UINT32 control = cpu->states[target].control;
+            if (!thermal_register(&cpu->control, &control, true)) continue;
+        }
+        cpu->current_state = target;
+        const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(cpu->node);
+        kprintf("[ACPI] Processor %s: passive throttle state %u%s\n", path ? path : "?",
+                target, target ? " applied" : " released");
+        uacpi_free_absolute_path(path);
+        for (int z = 0; z < g_nzone; z++)
+            for (int p = 0; p < g_zone[z].ncpus; p++)
+                if (g_zone[z].cpus[p] == cpu->node)
+                    g_zone[z].next_throttle = now + (g_zone[z].tsp ? g_zone[z].tsp : 10) * 10;
+    }
 }
 
 int AmlThermalZones(AmlThermalZone *out, int max)

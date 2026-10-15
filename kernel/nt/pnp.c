@@ -1190,8 +1190,11 @@ static bool inbox_hid(const PnpNode *n, const char *key)
  * keyboard.inf or msmouse.inf would install, NovaOS's own (kbdhid.c):
  * kbdhid on a keyboard, and on the consumer and system control
  * collections (media and power keys, which Windows reads in win32k),
- * mouhid on a mouse or another pointer.  Its Service, Class and ClassGUID
- * go in its Enum key @key, its class in @n. */
+ * mouhid on a mouse or another pointer, hiddigi on a touch screen, a pen,
+ * a precision touchpad's finger collection and a digitizer's
+ * configuration collection (Windows' input.inf leaves those raw for
+ * win32k to read; they stay in the HIDClass class, as there).  Its
+ * Service, Class and ClassGUID go in its Enum key @key, its class in @n. */
 static bool inbox_input(PnpNode *n, const char *key)
 {
     const char *service = NULL, *cls = "HIDClass", *guid = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
@@ -1202,6 +1205,9 @@ static bool inbox_input(PnpNode *n, const char *key)
             service = "mouhid", cls = "Mouse", guid = "{4d36e96f-e325-11ce-bfc1-08002be10318}";
         } else if (!strcmp(c, "HID_DEVICE_UP:000C_U:0001") || !strcmp(c, "HID_DEVICE_UP:0001_U:0080")) {
             service = "kbdhid";
+        } else if (!strcmp(c, "HID_DEVICE_UP:000D_U:0002") || !strcmp(c, "HID_DEVICE_UP:000D_U:0004") ||
+                   !strcmp(c, "HID_DEVICE_UP:000D_U:0005") || !strcmp(c, "HID_DEVICE_UP:000D_U:000E")) {
+            service = "hiddigi";
         }
     }
     if (!service) return false;
@@ -1216,7 +1222,7 @@ static bool inbox_input(PnpNode *n, const char *key)
  * pnputil show as such (an installed package does not replace them) */
 static bool inbox_class_driver(const char *service)
 {
-    return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid");
+    return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid") || !strcmp(service, "hiddigi");
 }
 
 /* A service NovaOS no longer runs these devices with: usbhid.c ran USB

@@ -204,8 +204,14 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     `shell32`, `oleacc`, `uxtheme`, `dwmapi`.
   - **COM**: `ole32`/`oleaut32` (in-process and local servers, type
     libraries, calls between processes with the standard marshaler, the
-    Windows Runtime's strings and the few runtime classes Win32 programs
-    ask for) and `rpcrt4` (the NDR engine proxy/stub DLLs run on).
+    Windows Runtime's strings and activation, in-process runtime classes
+    found through the registry's `ActivatableClassId` keys) and `rpcrt4`
+    (the NDR engine proxy/stub DLLs run on).
+  - **UWP app model**: `twinapi.appcore` (`CoreApplication.Run` driving an
+    app's `IFrameworkView`, its `CoreWindow` with keyboard, size,
+    visibility and close events, and the `CoreDispatcher`; DXGI swap
+    chains present into a CoreWindow), the first step towards
+    `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
   - **Sound and input**: `winmm` (waveOut, waveIn, MIDI, joysticks),
     `mmdevapi` (WASAPI playback and capture, one endpoint per device),
     `dsound`, `xaudio2_7`/`_8`/`_9` and `x3daudio1_7` (on FAudio),

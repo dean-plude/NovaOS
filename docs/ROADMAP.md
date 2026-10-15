@@ -326,8 +326,9 @@ item ends when a named program or test demonstrates it.
   Programmer calculators~~ Done (`calc`); the converters (CalcManager's
   `UnitConverter` needs the Concurrency Runtime's `task<>`, and the unit
   and currency data comes from the app's C# view models); then the
-  shipped UWP package itself, which needs MSIX deployment, WinRT
-  activation, `Windows.UI.Xaml` with WinUI 2 and the UWP .NET runtime.
+  shipped UWP package itself, which needs MSIX deployment,
+  `Windows.UI.Xaml` with WinUI 2 (Phase 32, under way: WinRT activation
+  and the app model are step 32.1) and the UWP .NET runtime.
 
 <!-- END generated:next-apps -->
 
@@ -882,7 +883,8 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
 
 The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
 minidriver) is built; test `hid`.  USB keyboards and mice go through it
-to the `kbdhid` and `mouhid` class drivers; test `kbdmoutest`.  Later, only when a target device
+to the `kbdhid` and `mouhid` class drivers; test `kbdmoutest`.  USB touch screens, pens and
+precision touchpads go to the `hiddigi` digitizer class driver; test `digitest`.  Later, only when a target device
 needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
 
 ### Phase 31: DOS programs

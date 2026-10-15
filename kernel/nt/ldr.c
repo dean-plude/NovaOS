@@ -39,8 +39,8 @@
  * (hidusb.c's "HidUsb", which Windows' input.inf runs from hidusb.sys,
  * usbvideo.c's "usbvideo", usbvideo.inf's usbvideo.sys, mshidkmdf.c's
  * "mshidkmdf", the minidriver under a KMDF HID driver, and kbdhid.c's
- * "kbdhid" and "mouhid", the keyboard and mouse class drivers on HID
- * collections):
+ * "kbdhid", "mouhid" and "hiddigi", the keyboard, mouse and digitizer
+ * class drivers on HID collections):
  * NtDrvLoad gives them a driver object and calls their DriverEntry the
  * same way, with no image to map or check; they are never unloaded.
  *
@@ -534,6 +534,7 @@ static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; }
     { "mshidkmdf", "mshidkmdf.sys", MsHidKmdfDriverEntry },
     { "kbdhid", "kbdhid.sys", KbdHidDriverEntry },
     { "mouhid", "mouhid.sys", MouHidDriverEntry },
+    { "hiddigi", "hiddigi.sys", DigiHidDriverEntry },
 };
 
 static NTSTATUS drv_load(const char *service)

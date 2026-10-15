@@ -37,7 +37,10 @@ order; --list prints them):
             pulled and plugged back, and the IPv4 tests again
   devices   a boot per device QEMU has that the core boot hasn't
             (tests/selftest/devices/NAME/): "touch", a virtio multi-touch
-            screen (touchtest); "usbaudio", USB speakers on xHCI, OHCI and
+            screen (touchtest) and a USB digitizer (tools/padpeer.py
+            --kind digitizer: a touch screen, a pen and a precision
+            touchpad) whose collections run on the HID class driver's
+            hiddigi and mouhid (digitest); "usbaudio", USB speakers on xHCI, OHCI and
             UHCI and no HD Audio card (soundtest; each speaker's WAV must
             hold its tones); "usbheadset", a high-speed USB headset on EHCI,
             USB microphones plugged into xHCI, OHCI and UHCI and a
@@ -410,9 +413,20 @@ def e1000e_boot(work):
 
 
 def touch_boot(work):
-    """A virtio multi-touch screen (QEMU's input-send-event "mtt" events) and
-    a virtio tablet (an absolute pointer)"""
-    return ['-device', 'virtio-multitouch-pci', '-device', 'virtio-tablet-pci'], []
+    """A virtio multi-touch screen (QEMU's input-send-event "mtt" events), a
+    virtio tablet (an absolute pointer) and a USB digitizer on an xHCI
+    controller: tools/padpeer.py --kind digitizer behind a QEMU usb-redir
+    device (port 10717; a touch screen, a pen and a precision touchpad)"""
+    log = os.path.join(work, 'padpeer-10717.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'padpeer.py'), '--port', '10717',
+                          '--kind', 'digitizer'], stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-device', 'virtio-multitouch-pci', '-device', 'virtio-tablet-pci', '-device', 'qemu-xhci,id=xhci',
+            '-chardev', 'socket,id=digi,host=127.0.0.1,port=10717',
+            '-device', 'usb-redir,id=digi,chardev=digi,bus=xhci.0'], [p]
 
 
 def usbaudio_boot(work):
@@ -1010,7 +1024,7 @@ def main():
                 for p in procs:
                     p.kill()
                 for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
-                        + [f'padpeer-{p}.log' for p in range(10710, 10714)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
+                        + [f'padpeer-{p}.log' for p in (10710, 10711, 10712, 10713, 10717)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
                                                                                  'isocampeer.log', 'compositepeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)

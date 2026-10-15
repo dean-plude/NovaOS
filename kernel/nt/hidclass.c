@@ -477,7 +477,9 @@ static const char *coll_name(const Coll *c)
     if (page == 1 && u == 6) return "HID Keyboard Device";
     if (page == 1 && u == 0x80) return "HID-compliant system controller";
     if (page == 0x0C) return "HID-compliant consumer control device";
-    if (page == 0x0D) return "HID-compliant touch screen";
+    if (page == 0x0D && u == 2) return "HID-compliant pen";
+    if (page == 0x0D && u == 4) return "HID-compliant touch screen";
+    if (page == 0x0D && u == 5) return "HID-compliant touch pad";
     if (page >= 0xFF00) return "HID-compliant vendor-defined device";
     return "HID-compliant device";
 }
@@ -701,6 +703,10 @@ static NT_STATUS coll_ioctl(Coll *c, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
         if (out_len < sizeof(*r) + f->desc_len) return NT_STATUS_BUFFER_TOO_SMALL;
         r->InputLength = c->in_len;
         r->OutputLength = c->out_len;
+        r->FeatureLength = c->feat_len;
+        r->UsagePage = c->pp->page;
+        r->Usage = c->pp->usage;
+        r->Reserved = 0;
         r->DescriptorLength = f->desc_len;
         memcpy(r->Descriptor, f->desc, f->desc_len);
         *info = sizeof(*r) + f->desc_len;

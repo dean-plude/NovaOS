@@ -294,13 +294,14 @@ for its usage gets every input report as `WM_INPUT` (and
 `WM_INPUT_DEVICE_CHANGE` as it comes and goes), as win32k does on
 Windows.
 
-A USB HID device that is not a game controller, touch screen, pen or
-touchpad (those keep NovaOS's own drivers) gets NovaOS's own USB
-minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the kernel in
-place of Windows' `hidusb.sys`): interrupt IN for input, interrupt OUT or
-`SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for feature and input
-reports. That covers vendor-defined devices and every USB keyboard,
-mouse, tablet and media-key device. On a composite device each HID
+A USB HID device that is not a game controller (those keep NovaOS's own
+driver) gets NovaOS's own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`,
+built into the kernel in place of Windows' `hidusb.sys`): interrupt IN
+for input, interrupt OUT or `SET_REPORT` for output,
+`GET_REPORT`/`SET_REPORT` for feature and input reports. That covers
+vendor-defined devices and every USB keyboard, mouse, tablet, media-key
+device, touch screen, pen and precision touchpad (a device that can only
+speak the boot protocol keeps NovaOS's own `usbhid` driver). On a composite device each HID
 function gets its own (see [USB client drivers](#usb-client-drivers)).
 
 ### Keyboards and mice: kbdhid and mouhid
@@ -328,6 +329,30 @@ and the mouse, not as a `RIM_TYPEHID` device, as on Windows; programs can
 still open the collection (hidapi lists keyboards). Device Manager and
 `pnputil` show the two as NovaOS drivers: a driver package that matches a
 keyboard's hardware ID is listed as outranked by `kbdhid`.
+
+### Touch screens, pens and touchpads: hiddigi
+
+A USB touch screen, pen or precision touchpad runs the same way. Its
+digitizer collections, a touch screen (usage page `0x0D`, usage 4,
+`HID_DEVICE_UP:000D_U:0004`), a pen (2), a touchpad's finger collection
+(5) and a digitizer's configuration collection (`0x0E`), get NovaOS's
+digitizer class driver, `hiddigi` (the third service of
+`kernel/nt/kbdhid.c`), and keep the setup class HIDClass. On Windows
+`input.inf` leaves those collections raw and win32k reads them itself;
+NovaOS reads them in `hiddigi` and hands the contacts to the same paths
+its other digitizers use: touch becomes `WM_POINTER` (`PT_TOUCH`) and
+`WM_TOUCH`, the pen `WM_POINTER` (`PT_PEN`, pressure, barrel button,
+eraser) and wintab32's packets, and the touchpad's fingers the pointer,
+taps, clicks and two-finger scrolling. Each collection decodes only its
+own fields, so one device that is a touch screen and a pen at once
+works as both. On a precision touchpad's configuration collection
+`hiddigi` does what Windows does when the touchpad starts: it sets the
+Input Mode feature to touchpad mode (`IOCTL_HID_SET_FEATURE`), and the
+device then sends finger reports on its Touch Pad collection rather than
+mouse reports on its mouse collection, where `mouhid` runs (a touchpad
+that refuses stays a mouse). Raw Input lists the digitizer collections as
+`RIM_TYPEHID` devices, as Windows does. Touchpads on I2C (the T14's) keep
+NovaOS's I2C-HID driver for now.
 
 A handle opened with `FILE_FLAG_OVERLAPPED` does overlapped I/O, as
 hidapi and most HID tools use it: `ReadFile` with no report waiting
@@ -646,6 +671,7 @@ kept in the repository or the image.
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
+| `touch` | `HidUsb`, `hiddigi` and `mouhid` on a USB digitizer (and virtio-input for QEMU's own) | a virtio multi-touch screen and tablet, and a USB touch screen, pen and precision touchpad in one device (`tools/padpeer.py --kind digitizer`) | `touchtest` on the virtio screen; `digitest`: each collection on its class driver, Raw Input's digitizer devices, a touch, the pen with its pressure, the touchpad moving the pointer, a tap and two-finger scrolling, unplugging |
 | `devmgr` | `HidUsb`, `kbdhid` and `mouhid` | QEMU's USB keyboard and tablet, and a second pair the test plugs in | Device Manager on the machine's devices; `kbdmoutest`: the class drivers on each collection, none of them a Raw Input HID device, the pointer following the new tablet, a line typed on the new keyboard, unplugging |
 | `vhidmini` | Microsoft's `vhidmini2` sample (`vhidmini.sys`, KMDF 1.33, built unchanged) under NovaOS's `mshidkmdf` | none: a root-enumerated device (`ROOT\HIDCLASS\0000`, hardware ID `root\vhidmini`) | `SetupDiCreateDeviceInfo` and `DIF_REGISTERDEVICE`, `Include`/`Needs` and a lower filter, `hid.dll` on it: attributes, strings, caps, feature, input and output reports, `ReadFile`/`WriteFile`, Raw Input, Device Manager, start at boot, `pnputil /remove-device` |
 | `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |

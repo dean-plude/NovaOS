@@ -50,7 +50,7 @@ TESTS = [
           r'\[KBDHID\] 0627:0001: first input report', r'\[MOUHID\] 0627:0001: first input report',
           r'\[KBDHID\] 0627:0001: removed', r'\[MOUHID\] 0627:0001: removed'],
          timeout=180,
-         boot_expect=[r'\[USB\] [^\n]*: interface 0: a HID keyboard or mouse, for the HID class driver',
+         boot_expect=[r'\[USB\] [^\n]*: interface 0: a HID input device, for the HID class driver',
                       r'\[KBDHID\] 0627:0001: keyboard, input reports \d+ bytes, wakes the machine',
                       r'\[MOUHID\] 0627:0001: absolute pointer, input reports \d+ bytes'],
          acts=[(r'\[HID\] kbdmou step 1:', _plug), (r'\[HID\] kbdmou step 2:', _move),

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A USB game controller for testing NovaOS, as a QEMU usb-redir device.
 
-    tools/padpeer.py --port 10710 --kind xbox360|xboxone|hid|vendor [--ctl PORT]
+    tools/padpeer.py --port 10710 --kind xbox360|xboxone|hid|vendor|digitizer [--ctl PORT]
 
 QEMU has no gamepad of its own, so this program is one, behind QEMU's
 usb-redir device (the usbredir protocol, as tools/usbredirpeer.py speaks
@@ -31,6 +31,21 @@ It listens on --port for QEMU and is, at full speed, one of:
            own: an output report (on 0x01, or SET_REPORT) comes back as
            input report 1 with the same bytes, and the feature report
            reads back what SET_REPORT last wrote.
+  digitizer
+           a USB digitizer (1209:000B, "NovaOS Test Digitizer"): one HID
+           interface whose report descriptor has the top-level
+           collections a touch screen, a pen and a Windows precision
+           touchpad have, as Windows' sample descriptors lay them out: a
+           touch screen (Digitizer 04, report 1: two fingers with Tip
+           Switch, Contact Identifier and X/Y 0-32767, and the Contact
+           Count), a pen (Digitizer 02, report 2: Tip, Barrel, Invert,
+           Eraser, In Range, X/Y 0-32767, Tip Pressure 0-1023), a touchpad
+           (Digitizer 05, report 3: two fingers with Confidence, Tip,
+           Contact Identifier and X/Y 0-1000 over 10 cm, Scan Time,
+           Contact Count and the pad's button), its mouse (Generic Desktop
+           02, report 4: two buttons, relative X/Y) and its configuration
+           (Digitizer 0E, feature report 5: Input Mode, Surface and Button
+           Switch).  It sends what --ctl says; SET_REPORT is printed.
 
 The test drives it through --ctl (default --port + 100), a TCP port that
 takes lines of name=value pairs and answers "ok" once the report is sent:
@@ -40,6 +55,12 @@ takes lines of name=value pairs and answers "ok" once the report is sent:
   hid:     buttons (bit n: button n + 1), hat (0-7, 8 centred), x, y, z,
            rz (0-255)
   vendor:  in (eight bytes, as hex: sent as input report 1)
+  digitizer: each pair is a report, sent in order:
+           touch=TIP:X:Y[/TIP:X:Y] (the fingers, contact IDs 1 and 2),
+           pen=FLAGS:X:Y:PRESSURE (FLAGS bit 0 tip, 1 barrel, 2 invert,
+           3 eraser, 4 in range), pad=TIP:X:Y[/TIP:X:Y] (fingers, X/Y
+           0-1000; with button=1 before it in the line the pad is pressed),
+           mouse=BUTTONS:DX:DY
 
 What the host sends the controller is printed: "rumble LEFT RIGHT" (the
 motor bytes as sent), "led N", "power on", "set_report HEX".
@@ -66,6 +87,53 @@ HID_REPORT = bytes([
     0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
     0x65, 0x00, 0x45, 0x00, 0x75, 0x04, 0x95, 0x01, 0x81, 0x03,
     0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
+    0xC0,
+])
+
+# The digitizer's: a touch screen (report 1), a pen (2), a precision
+# touchpad (3), its mouse (4) and its configuration (feature report 5)
+_TOUCH_FINGER = bytes([
+    0x09, 0x22, 0xA1, 0x02,
+    0x05, 0x0D, 0x09, 0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02,
+    0x75, 0x07, 0x95, 0x01, 0x81, 0x03,
+    0x09, 0x51, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+    0x05, 0x0D, 0xC0,
+])
+_PAD_FINGER = bytes([
+    0x09, 0x22, 0xA1, 0x02,
+    0x15, 0x00, 0x25, 0x01, 0x09, 0x47, 0x09, 0x42, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02,
+    0x95, 0x06, 0x81, 0x03,
+    0x25, 0x7F, 0x09, 0x51, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0x05, 0x01, 0x26, 0xE8, 0x03, 0x35, 0x00, 0x46, 0xE8, 0x03, 0x55, 0x0E, 0x65, 0x11,
+    0x09, 0x30, 0x09, 0x31, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+    0x45, 0x00, 0x55, 0x00, 0x65, 0x00,
+    0x05, 0x0D, 0xC0,
+])
+DIGITIZER_REPORT = bytes([
+    0x05, 0x0D, 0x09, 0x04, 0xA1, 0x01, 0x85, 0x01]) + _TOUCH_FINGER * 2 + bytes([
+    0x09, 0x54, 0x15, 0x00, 0x25, 0x02, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0xC0,
+    0x05, 0x0D, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x02, 0x09, 0x20, 0xA1, 0x00,
+    0x09, 0x42, 0x09, 0x44, 0x09, 0x3C, 0x09, 0x45, 0x09, 0x32, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x05, 0x81, 0x02,
+    0x95, 0x03, 0x81, 0x03,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+    0x05, 0x0D, 0x09, 0x30, 0x26, 0xFF, 0x03, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02,
+    0xC0, 0xC0,
+    0x05, 0x0D, 0x09, 0x05, 0xA1, 0x01, 0x85, 0x03]) + _PAD_FINGER * 2 + bytes([
+    0x09, 0x56, 0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02,
+    0x09, 0x54, 0x25, 0x05, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+    0x05, 0x09, 0x09, 0x01, 0x25, 0x01, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02, 0x95, 0x07, 0x81, 0x03,
+    0xC0,
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x04, 0x09, 0x01, 0xA1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x02, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02,
+    0x95, 0x06, 0x81, 0x03,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+    0xC0, 0xC0,
+    0x05, 0x0D, 0x09, 0x0E, 0xA1, 0x01, 0x85, 0x05,
+    0x09, 0x22, 0xA1, 0x02, 0x09, 0x52, 0x15, 0x00, 0x25, 0x0A, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02, 0xC0,
+    0x09, 0x22, 0xA1, 0x00, 0x09, 0x57, 0x09, 0x58, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0xB1, 0x02,
+    0x95, 0x06, 0xB1, 0x03, 0xC0,
     0xC0,
 ])
 
@@ -97,6 +165,12 @@ class Pad:
             self.state = {'buttons': 0, 'hat': 8, 'x': 128, 'y': 128, 'z': 128, 'rz': 128}
             self.ifaces = [(0, 3, 0, 0)]
             self.mps, self.interval = 8, 10
+        elif kind == 'digitizer':
+            self.vid, self.pid, self.product = 0x1209, 0x000B, 'NovaOS Test Digitizer'
+            self.state = {}
+            self.ifaces = [(0, 3, 0, 0)]
+            self.mps, self.interval = 64, 4
+            self.scan = 0
         elif kind == 'vendor':
             self.vid, self.pid, self.product = 0x1209, 0x0008, 'NovaOS Test HID Device'
             self.state = {'in': None, 'feature': bytes(8)}
@@ -115,10 +189,10 @@ class Pad:
             le16(self.pid) + le16(0x0114) + bytes([1, 2, 3, 1])
 
     def is_hid(self):
-        return self.kind in ('hid', 'vendor')
+        return self.kind in ('hid', 'vendor', 'digitizer')
 
     def report_desc(self):
-        return VENDOR_REPORT if self.kind == 'vendor' else HID_REPORT
+        return {'vendor': VENDOR_REPORT, 'digitizer': DIGITIZER_REPORT}.get(self.kind, HID_REPORT)
 
     def config_desc(self):
         f = self.ifaces[0]
@@ -127,9 +201,9 @@ class Pad:
             d += bytes([9, 0x21]) + le16(0x0111) + bytes([0, 1, 0x22]) + le16(len(VENDOR_REPORT))
             d += bytes([7, 5, EP_IN, 3]) + le16(self.mps) + bytes([self.interval])
             d += bytes([7, 5, EP_OUT, 3]) + le16(self.mps) + bytes([self.interval])
-        elif self.kind == 'hid':
+        elif self.kind in ('hid', 'digitizer'):
             d = bytes([9, 4, 0, 0, 1, 3, 0, 0, 0])
-            d += bytes([9, 0x21]) + le16(0x0111) + bytes([0, 1, 0x22]) + le16(len(HID_REPORT))
+            d += bytes([9, 0x21]) + le16(0x0111) + bytes([0, 1, 0x22]) + le16(len(self.report_desc()))
             d += bytes([7, 5, EP_IN, 3]) + le16(self.mps) + bytes([self.interval])
         else:
             d = bytes([9, 4, 0, 0, 2, f[1], f[2], f[3], 0])
@@ -143,7 +217,7 @@ class Pad:
         if i == 0:
             return bytes([4, 3]) + le16(0x0409)
         s = {1: 'NovaOS' if self.is_hid() else 'Microsoft', 2: self.product,
-             3: 'NOVA0002' if self.kind == 'vendor' else 'NOVA0001'}.get(i)
+             3: {'vendor': 'NOVA0002', 'digitizer': 'NOVA0003'}.get(self.kind, 'NOVA0001')}.get(i)
         if s is None:
             return None
         u = s.encode('utf-16-le')
@@ -155,7 +229,7 @@ class Pad:
             eps.append((EP_IN, 3, self.interval, 0, self.mps))
             if self.kind == 'vendor':
                 eps.append((EP_OUT, 3, self.interval, 0, self.mps))
-            elif self.kind != 'hid':
+            elif self.kind not in ('hid', 'digitizer'):
                 eps.append((EP_OUT, 3, 8 if self.kind == 'xbox360' else 4, 0, self.mps))
         return eps
 
@@ -177,6 +251,30 @@ class Pad:
         self.seq = (self.seq + 1) & 0xFF
         return struct.pack('<BBBBBBHHhhhh', 0x20, 0x00, self.seq, 0x0E, byte4, byte5, s['lt'] * 4 + (3 if s['lt'] else 0),
                            s['rt'] * 4 + (3 if s['rt'] else 0), s['lx'], s['ly'], s['rx'], s['ry'])
+
+    def digitizer_report(self, key, value, button=0):
+        """The digitizer's input report for one --ctl pair"""
+        v = [[int(x, 0) for x in part.split(':')] for part in value.split('/')]
+        if key == 'touch':
+            fingers = (v + [[0, 0, 0]] * 2)[:2]
+            r = bytes([1])
+            for i, (tip, x, y) in enumerate(fingers):
+                r += struct.pack('<BBHH', tip & 1, i + 1, x, y)
+            return r + bytes([sum(1 for f in v if f[0])  or len(v)])
+        if key == 'pen':
+            flags, x, y, p = v[0]
+            return bytes([2]) + struct.pack('<BHHH', flags & 0x1F, x, y, p)
+        if key == 'pad':
+            fingers = (v + [[0, 0, 0]] * 2)[:2]
+            r = bytes([3])
+            for i, (tip, x, y) in enumerate(fingers):
+                r += struct.pack('<BBHH', 3 if tip else 0, i + 1, x, y)
+            self.scan = (self.scan + 100) & 0xFFFF
+            return r + struct.pack('<HBB', self.scan, len(v), button & 1)
+        if key == 'mouse':
+            b, dx, dy = v[0]
+            return bytes([4]) + struct.pack('<Bbb', b & 3, dx, dy)
+        raise KeyError(key)
 
     def guide_report(self):
         """Xbox One: the Guide button's own report"""
@@ -338,7 +436,7 @@ class Conn:
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
                 if body[0] == EP_IN and not self.listening:
                     self.listening = True
-                    if self.pad.kind != 'vendor':     # (the vendor device only answers what it is sent)
+                    if self.pad.kind not in ('vendor', 'digitizer'):     # (those only send what they are told to)
                         self.send_report()
                     else:
                         print(f'padpeer: listening ({len(self.held)} held)', flush=True)
@@ -367,6 +465,20 @@ def ctl_loop(port, pad, conns):
         f = c.makefile('rw')
         for line in f:
             try:
+                if pad.kind == 'digitizer':
+                    button = 0
+                    for kv in line.split():
+                        k, v = kv.split('=')
+                        if k == 'button':
+                            button = int(v, 0)
+                            continue
+                        r = pad.digitizer_report(k, v, button)
+                        for conn in list(conns):
+                            if conn.listening:
+                                conn.send(INTERRUPT_PACKET, struct.pack('<BBH', EP_IN, OK, len(r)), r)
+                    f.write('ok\n')
+                    f.flush()
+                    continue
                 guide = False
                 for kv in line.split():
                     k, v = kv.split('=')
@@ -387,7 +499,7 @@ def ctl_loop(port, pad, conns):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
-    ap.add_argument('--kind', choices=('xbox360', 'xboxone', 'hid', 'vendor'), required=True)
+    ap.add_argument('--kind', choices=('xbox360', 'xboxone', 'hid', 'vendor', 'digitizer'), required=True)
     ap.add_argument('--ctl', type=int)
     a = ap.parse_args()
     pad = Pad(a.kind)

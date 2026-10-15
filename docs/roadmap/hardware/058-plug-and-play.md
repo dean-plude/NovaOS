@@ -8,7 +8,6 @@
   service, `WM_DEVICECHANGE`~~ Done: the PlugPlay service running and
   keeping `HKLM\SYSTEM\CurrentControlSet\Enum`,
   `RegisterDeviceNotification` (`DBT_DEVICEARRIVAL`,
-  `DBT_DEVICEQUERYREMOVE`, `DBT_DEVICEQUERYREMOVEFAILED`,
   `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services and
   open device handles) and `CM_Register_Notification`.  ~~setupapi's and cfgmgr32's
   enumeration of the tree~~ Done: `SetupDiGetClassDevs` for every class,
@@ -17,4 +16,7 @@
   and `DEVPKEY` properties (a device's bus type and container too), a
   device interface's properties (`CM_Get_Device_Interface_PropertyW`),
   device keys, and `pnputil /enum-devices`
-  matching the driver store.
+  matching the driver store.  Still to do: a synchronous query-remove
+  round-trip (`DBT_DEVICEQUERYREMOVE`, `DBT_DEVICEQUERYREMOVEFAILED`,
+  `DBT_DEVICEREMOVEPENDING`) so applications can close handles or veto before
+  `IRP_MN_QUERY_REMOVE_DEVICE`; current query notifications are asynchronous.

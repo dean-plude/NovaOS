@@ -36,12 +36,14 @@ static const GUID g_usb = NOVA_IF_USB_DEVICE, g_kbd = NOVA_IF_KEYBOARD;
 static volatile LONG msg_usb_kbd, msg_usb_stick, all_kbd, vol_arrival, vol_removal, devnodes, cm_kbd, cm_enum, cm_started, cm_removed;
 static volatile LONG bad_name;
 static volatile LONG handle_removal, bad_handle;
-static WCHAR usb_device_path[256];
+static WCHAR keyboard_device_path[256];
 static HANDLE usb_handle, handle_reg;
 
 static LRESULT CALLBACK msg_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
-    if (m == WM_DEVICECHANGE && (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE)) {
+    if (m == WM_DEVICECHANGE &&
+        (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEQUERYREMOVE || wp == DBT_DEVICEQUERYREMOVEFAILED ||
+         wp == DBT_DEVICEREMOVEPENDING || wp == DBT_DEVICEREMOVECOMPLETE)) {
         DEV_BROADCAST_HDR *hd = (DEV_BROADCAST_HDR *)lp;
         LONG v = wp == DBT_DEVICEARRIVAL ? 1 : 2;
         if (hd && hd->dbch_devicetype == DBT_DEVTYP_HANDLE) {
@@ -56,10 +58,6 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             printf("usb device %s: %ls\n", v == 1 ? "arrival" : "removal", d->dbcc_name);
             if (wcsstr(d->dbcc_name, L"\\\\?\\USB#VID_0627&PID_0001#")) {
                 msg_usb_kbd |= v;
-                if (v == 1) {
-                    wcsncpy(usb_device_path, d->dbcc_name, sizeof(usb_device_path) / sizeof(usb_device_path[0]) - 1);
-                    usb_device_path[sizeof(usb_device_path) / sizeof(usb_device_path[0]) - 1] = 0;
-                }
             }
             if (wcsstr(d->dbcc_name, L"\\\\?\\USB#VID_46F4&PID_0001#")) msg_usb_stick |= v;
             if (!wcsstr(d->dbcc_name, L"#{a5dcbf10-6530-11d2-901f-00c04fb951ed}")) bad_name = 1;
@@ -86,6 +84,12 @@ static LRESULT CALLBACK top_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             if (!memcmp(&d->dbcc_classguid, &g_kbd, sizeof(GUID)) && strstr(d->dbcc_name, "\\\\?\\HID#VID_0627&PID_0001#")) {
                 printf("keyboard interface %s: %s\n", v == 1 ? "arrival" : "removal", d->dbcc_name);
                 all_kbd |= v;
+                if (v == 1) {
+                    int i = 0;
+                    for (; d->dbcc_name[i] && i < (int)(sizeof(keyboard_device_path) / sizeof(keyboard_device_path[0])) - 1; i++)
+                        keyboard_device_path[i] = (unsigned char)d->dbcc_name[i];
+                    keyboard_device_path[i] = 0;
+                }
             }
         }
         return TRUE;
@@ -223,7 +227,11 @@ int main(void)
     CHECK("Enum has the keyboard, with its service", inst[0] && reg_str(path, "Service", v, sizeof(v)) && !strcmp(v, "HidUsb"));
     printf("keyboard: %s\n", inst);
 
-    usb_handle = CreateFileW(usb_device_path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    usb_handle = keyboard_device_path[0] ?
+        CreateFileW(keyboard_device_path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL) :
+        INVALID_HANDLE_VALUE;
+    if (usb_handle == INVALID_HANDLE_VALUE)
+        printf("opening keyboard interface failed: %lu\n", (unsigned long)GetLastError());
     DEV_BROADCAST_HANDLE hf;
     memset(&hf, 0, sizeof(hf));
     hf.dbch_size = sizeof(hf);
@@ -231,6 +239,8 @@ int main(void)
     hf.dbch_handle = usb_handle;
     handle_reg = usb_handle != INVALID_HANDLE_VALUE ?
         RegisterDeviceNotificationW(msgw, &hf, DEVICE_NOTIFY_WINDOW_HANDLE) : NULL;
+    if (usb_handle != INVALID_HANDLE_VALUE && !handle_reg)
+        printf("registering keyboard handle failed: %lu\n", (unsigned long)GetLastError());
     CHECK("register a USB device handle", usb_handle != INVALID_HANDLE_VALUE && handle_reg);
 
     /* Taken out */

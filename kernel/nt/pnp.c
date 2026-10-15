@@ -1111,6 +1111,8 @@ static NT_STATUS query_remove(NtPdo *p)
             PnpNotify(PNP_QUERY_REMOVE_FAILED, asked[i]->node);
             send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
         }
+    } else {
+        for (int i = 0; i < n; i++) PnpNotify(PNP_REMOVE_PENDING, asked[i]->node);
     }
     return st;
 }

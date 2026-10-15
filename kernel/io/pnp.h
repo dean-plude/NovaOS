@@ -63,6 +63,7 @@ typedef struct {
 #define PNP_REMOVAL       2
 #define PNP_QUERY_REMOVE  3
 #define PNP_QUERY_REMOVE_FAILED 4
+#define PNP_REMOVE_PENDING 5
 typedef struct {
     UINT32 seq;                     /* from 1, one more for each event */
     UINT32 kind;                    /* PNP_* event */

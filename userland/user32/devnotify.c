@@ -7,6 +7,10 @@
  * desktop's WM_DEVICECHANGE to one of the process's windows (msg.c), which
  * carries the event the change started after.  For each event it sends
  * what Windows sends:
+ *   - DBT_DEVICEQUERYREMOVE, DBT_DEVICEQUERYREMOVEFAILED,
+ *     DBT_DEVICEREMOVEPENDING, DBT_DEVICEARRIVAL and
+ *     DBT_DEVICEREMOVECOMPLETE with a DEV_BROADCAST_HANDLE to windows and
+ *     services registered for an open device handle;
  *   - DBT_DEVICEARRIVAL / DBT_DEVICEREMOVECOMPLETE with a
  *     DEV_BROADCAST_DEVICEINTERFACE to the windows registered for the
  *     device's interface class (or for all of them), and to a service
@@ -18,6 +22,8 @@
  *     hidden ones included.
  * Messages go with SendMessageTimeout (a window that does not answer in
  * two seconds is passed over), as Windows' broadcasts do.
+ * Query-remove notices are asynchronous status notifications; they do not
+ * delay the kernel query or collect a window's veto response.
  */
 #include "u32.h"
 #include <novapnp.h>
@@ -199,9 +205,11 @@ static DWORD WINAPI follower(void *arg)
             case NOVA_PNP_REMOVAL: what = DBT_DEVICEREMOVECOMPLETE; changed = TRUE; break;
             case NOVA_PNP_QUERY_REMOVE: what = DBT_DEVICEQUERYREMOVE; break;
             case NOVA_PNP_QUERY_REMOVE_FAILED: what = DBT_DEVICEQUERYREMOVEFAILED; break;
+            case NOVA_PNP_REMOVE_PENDING: what = DBT_DEVICEREMOVEPENDING; break;
             default: continue;
             }
-            for (int j = 0; j < k; j++) interface_event(&node, &g[j], what);
+            if (r.e[i].kind == NOVA_PNP_ARRIVAL || r.e[i].kind == NOVA_PNP_REMOVAL)
+                for (int j = 0; j < k; j++) interface_event(&node, &g[j], what);
             handle_event(node.id, what);
         }
         g_after = r.e[n - 1].seq;

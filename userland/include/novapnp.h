@@ -39,6 +39,7 @@ typedef struct {
 #define NOVA_PNP_REMOVAL 2
 #define NOVA_PNP_QUERY_REMOVE 3
 #define NOVA_PNP_QUERY_REMOVE_FAILED 4
+#define NOVA_PNP_REMOVE_PENDING 5
 typedef struct { DWORD seq, kind, id, reserved; } NovaPnpEvent; /* kind: NOVA_PNP_* */
 
 typedef struct {

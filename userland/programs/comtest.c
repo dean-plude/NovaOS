@@ -46,6 +46,50 @@ typedef HRESULT (STDMETHODCALLTYPE *PfFileFn)(void *, LPCWSTR, DWORD);
 enum { SL_GETPATH = 3, SL_GETDESC = 6, SL_SETDESC, SL_GETDIR, SL_SETDIR, SL_GETARGS, SL_SETARGS,
        SL_GETICON = 16, SL_SETICON, SL_SETPATH = 20, PF_LOAD = 5, PF_SAVE = 6 };
 
+/* ---- shell32's TaskbarList: every ITaskbarList4 method answers S_OK, and
+ * on x86 each pops its own arguments (stdcall), leaving the stack as it was ---- */
+DEFINE_GUID(CLSID_TaskbarList_T, 0x56FDF344, 0xFD6D, 0x11D0, 0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90);
+DEFINE_GUID(IID_ITaskbarList4_T, 0xC43DC798, 0x95D1, 0x4BEA, 0x90, 0x30, 0xBB, 0x99, 0xE2, 0x98, 0x3A, 0x1A);
+typedef HRESULT (STDMETHODCALLTYPE *Tb0)(void *);
+typedef HRESULT (STDMETHODCALLTYPE *Tb1)(void *, ULONG_PTR);
+typedef HRESULT (STDMETHODCALLTYPE *Tb2)(void *, ULONG_PTR, ULONG_PTR);
+typedef HRESULT (STDMETHODCALLTYPE *Tb3)(void *, ULONG_PTR, ULONG_PTR, ULONG_PTR);
+typedef HRESULT (STDMETHODCALLTYPE *TbProgress)(void *, HWND, ULONGLONG, ULONGLONG);
+static ULONG_PTR stack_now(void)
+{
+#ifdef _M_IX86
+    ULONG_PTR sp;
+    __asm__ volatile("movl %%esp, %0" : "=r"(sp));
+    return sp;
+#else
+    return 0;
+#endif
+}
+static void taskbar_tests(void)
+{
+    void *tb = 0;
+    CHECK("TaskbarList", CoCreateInstance(&CLSID_TaskbarList_T, 0, CLSCTX_INPROC_SERVER, &IID_ITaskbarList4_T, &tb) == S_OK && tb);
+    if (!tb) return;
+    void **vt = *(void ***)tb;
+    static const signed char args[] = { 0, 1, 1, 1, 1, 2, -1, 2, 2, 1, 2, 3, 3, 3, 2, 3, 2, 2, 2 };   /* from HrInit; -1 SetProgressValue */
+    int ok = 1;
+    for (int i = 0; i < (int)sizeof(args); i++) {
+        void *m = vt[3 + i];
+        ULONG_PTR before = stack_now();
+        HRESULT hr;
+        switch (args[i]) {
+        case 0: hr = ((Tb0)m)(tb); break;
+        case 1: hr = ((Tb1)m)(tb, 1); break;
+        case 2: hr = ((Tb2)m)(tb, 1, 2); break;
+        case 3: hr = ((Tb3)m)(tb, 1, 2, 3); break;
+        default: hr = ((TbProgress)m)(tb, 0, 50, 100); break;
+        }
+        if (hr != S_OK || stack_now() != before) { ok = 0; printf("TaskbarList method %d: %08lx\n", 3 + i, (unsigned long)hr); }
+    }
+    CHECK("TaskbarList methods (and their stack)", ok);
+    ((RelFn)vt[2])(tb);
+}
+
 static void shortcut_tests(void)
 {
     void *sl = 0, *pf = 0;
@@ -257,6 +301,7 @@ int main(void)
     SysFreeString(desc);
 
     shortcut_tests();
+    taskbar_tests();
     CoUninitialize();
     printf("comtest: %d passed, %d failed\n", pass, fail);
     return fail != 0;

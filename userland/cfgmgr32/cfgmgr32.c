@@ -423,6 +423,55 @@ static const GUID k_device = { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0
 static const GUID k_inst = { 0x78c34fc8, 0x104a, 0x4aca, { 0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57 } };
 static const GUID k_node = { 0x4340a6c5, 0x93fa, 0x4706, { 0x97, 0x2c, 0x7b, 0x64, 0x80, 0x08, 0xa5, 0xa7 } };
 static const GUID k_present = { 0x540b947e, 0x8b40, 0x45bc, { 0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2 } };
+static const GUID k_name = { 0xb725f130, 0x47ef, 0x101a, { 0xa5, 0xf1, 0x02, 0x60, 0x8c, 0x9e, 0xeb, 0xac } };
+static const GUID k_container = { 0x8c7ed206, 0x3f8a, 0x4827, { 0xb3, 0xab, 0xae, 0x9e, 0x1f, 0xae, 0xfc, 0x6c } };
+
+/* The bus a node's enumerator stands for (DEVPKEY_Device_BusTypeGuid:
+ * GUID_BUS_TYPE_*), or FALSE (a root-enumerated or software device has
+ * none) */
+static BOOL bus_type(const NovaPnpNode *n, GUID *g)
+{
+    static const struct { const char *enumerator; GUID bus; } buses[] = {
+        { "USB\\", { 0x9d7debbc, 0xc85d, 0x11d1, { 0x9e, 0xb4, 0x00, 0x60, 0x08, 0xc3, 0xa1, 0x9a } } },
+        { "HID\\", { 0xeeaf37d0, 0x1963, 0x47c4, { 0xaa, 0x48, 0x72, 0x47, 0x6d, 0xb7, 0xcf, 0x49 } } },
+        { "PCI\\", { 0xc8ebdfb0, 0xb510, 0x11d0, { 0x80, 0xe5, 0x00, 0xa0, 0xc9, 0x25, 0x42, 0xe3 } } },
+        { "ACPI\\", { 0xd7b46895, 0x001a, 0x4942, { 0x89, 0x1f, 0xa7, 0xd4, 0x66, 0x10, 0xa8, 0x43 } } },
+    };
+    for (unsigned i = 0; i < sizeof(buses) / sizeof(buses[0]); i++)
+        if (nova_pnp_prefix(n->instance, buses[i].enumerator)) { *g = buses[i].bus; return TRUE; }
+    return FALSE;
+}
+
+/* The container a node belongs to (DEVPKEY_Device_ContainerId): every
+ * node of one removable device (a USB device, its functions and their HID
+ * collections) shares the device's, a GUID made from its instance ID; a
+ * device built into the machine is in the machine's own container,
+ * {00000000-0000-0000-ffff-ffffffffffff}, as on Windows */
+static void container_id(const NovaPnpNode *node, GUID *g)
+{
+    NovaPnpNode n = *node, p;
+    while ((nova_pnp_prefix(n.instance, "HID\\") || (nova_pnp_prefix(n.instance, "USB\\") && nova_pnp_has(n.instance, "&MI_"))) &&
+           n.parent && get(n.parent, &p))
+        n = p;
+    memset(g, 0, sizeof(*g));
+    if (!(n.flags & NOVA_PNP_REMOVABLE) && !nova_pnp_prefix(n.instance, "USB\\")) {
+        memset(g->Data4, 0xFF, 8);
+        return;
+    }
+    /* FNV-1a over the upper-cased instance ID, spread over the 16 bytes,
+     * marked as a version 5 (name-based) GUID */
+    BYTE *b = (BYTE *)g;
+    for (int round = 0; round < 4; round++) {
+        DWORD h = 2166136261u + (DWORD)round * 16777619u;
+        for (const char *c = n.instance; *c; c++) {
+            char u = *c >= 'a' && *c <= 'z' ? (char)(*c - 32) : *c;
+            h = (h ^ (BYTE)u) * 16777619u;
+        }
+        memcpy(b + 4 * round, &h, 4);
+    }
+    g->Data3 = (WORD)((g->Data3 & 0x0FFF) | 0x5000);
+    g->Data4[0] = (BYTE)((g->Data4[0] & 0x3F) | 0x80);
+}
 
 static CONFIGRET put_value(ULONG t, const void *v, ULONG size, PULONG type, PBYTE buf, PULONG len)
 {
@@ -562,9 +611,28 @@ CFGMGR32 CONFIGRET WINAPI CM_Get_DevNode_PropertyW(DEVINST dn, const void *key, 
     }
     if (!memcmp(&k->fmtid, &k_driver, sizeof(GUID)))
         return driver_property(&n, k->pid, type, buf, len);
+    if (!memcmp(&k->fmtid, &k_device, sizeof(GUID)) && k->pid == 21) {                  /* BusTypeGuid */
+        GUID g;
+        if (!bus_type(&n, &g)) { *len = 0; return CR_NO_SUCH_VALUE; }
+        return put_value(DEVPROP_TYPE_GUID, &g, sizeof(g), type, buf, len);
+    }
+    if (!memcmp(&k->fmtid, &k_container, sizeof(GUID)) && k->pid == 2) {                /* ContainerId */
+        GUID g;
+        container_id(&n, &g);
+        return put_value(DEVPROP_TYPE_GUID, &g, sizeof(g), type, buf, len);
+    }
+    if (!memcmp(&k->fmtid, &k_name, sizeof(GUID)) && k->pid == 10) {                    /* DEVPKEY_NAME */
+        const char *s = n.friendly[0] ? n.friendly : n.desc;
+        if (!s[0]) { *len = 0; return CR_NO_SUCH_VALUE; }
+        int size = MultiByteToWideChar(CP_ACP, 0, s, -1, w, 200);
+        return put_value(DEVPROP_TYPE_STRING, w, (ULONG)size * sizeof(WCHAR), type, buf, len);
+    }
     *len = 0;
     return CR_NO_SUCH_VALUE;
 }
+CFGMGR32 CONFIGRET WINAPI CM_Get_DevNode_Property_ExW(DEVINST dn, const void *key, PULONG type, PBYTE buf, PULONG len, ULONG flags,
+                                                      HANDLE m)
+{ (void)m; return CM_Get_DevNode_PropertyW(dn, key, type, buf, len, flags); }
 
 /* The device's hardware key (Enum\<instance>\Device Parameters) or
  * software key (Control\Class\{class}\NNNN, the one SPDRP_DRIVER names) */
@@ -684,6 +752,103 @@ CFGMGR32 CONFIGRET WINAPI CM_Get_Device_Interface_ListA(LPGUID cls, LPCSTR id, c
     HeapFree(GetProcessHeap(), 0, w);
     return CR_SUCCESS;
 }
+
+/* ---- device interface properties ----
+ * An interface path is "\\?\" + the device's instance ID with '#' for
+ * '\' + "#{class GUID}" (and "\reference" for an interface with a
+ * reference string), so the path names its device; the interface is one
+ * the device's interface list holds.  Its properties are the
+ * DEVPKEY_DeviceInterface_* ones and the device's instance ID
+ * (DEVPKEY_Device_InstanceId), which hidapi reads to reach the device node
+ * and from there the bus (the parent's compatible IDs) and the USB
+ * device's hardware IDs and serial number. */
+#define CR_NO_SUCH_DEVICE_INTERFACE 0x37
+static const GUID k_iface = { 0x026e516e, 0xb814, 0x414b, { 0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22 } };
+
+static int hexval(WCHAR c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}" at @s as a GUID */
+static BOOL parse_guid(const WCHAR *s, GUID *g)
+{
+    static const signed char at[16] = { 1, 3, 5, 7, 10, 12, 15, 17, 20, 22, 25, 27, 29, 31, 33, 35 };
+    BYTE b[16];
+    if (s[0] != '{' || s[9] != '-' || s[14] != '-' || s[19] != '-' || s[24] != '-' || s[37] != '}') return FALSE;
+    for (int i = 0; i < 16; i++) {
+        int hi = hexval(s[at[i]]), lo = hexval(s[at[i] + 1]);
+        if (hi < 0 || lo < 0) return FALSE;
+        b[i] = (BYTE)(hi << 4 | lo);
+    }
+    g->Data1 = (DWORD)b[0] << 24 | (DWORD)b[1] << 16 | (DWORD)b[2] << 8 | b[3];
+    g->Data2 = (WORD)(b[4] << 8 | b[5]);
+    g->Data3 = (WORD)(b[6] << 8 | b[7]);
+    memcpy(g->Data4, b + 8, 8);
+    return TRUE;
+}
+
+/* The device node and class of interface @path, or 0 when no device
+ * exposes it */
+static DEVINST iface_node(LPCWSTR path, NovaPnpNode *n, GUID *cls)
+{
+    if (!path || (path[0] != '\\' && path[0] != '/')) return 0;
+    if (!(path[1] == '\\' || path[1] == '/') || !(path[2] == '?' || path[2] == '.') || path[3] != '\\') return 0;
+    const WCHAR *g = NULL;
+    for (const WCHAR *c = path + 4; *c; c++) if (c[0] == '#' && c[1] == '{') g = c;
+    if (!g || g - (path + 4) >= 127 || !parse_guid(g + 1, cls)) return 0;
+    char id[128];
+    int k = 0;
+    for (const WCHAR *c = path + 4; c < g; c++) id[k++] = (char)(*c == '#' ? '\\' : *c);
+    id[k] = 0;
+    DEVINST dn = find(id, n);
+    if (!dn) return 0;
+    /* (one of its interfaces, present or not) */
+    ULONG need = iface_list(cls, n->instance, CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES, NULL, 0);
+    WCHAR *list = HeapAlloc(GetProcessHeap(), 0, need * sizeof(WCHAR));
+    if (!list) return 0;
+    iface_list(cls, n->instance, CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES, list, need);
+    BOOL found = FALSE;
+    for (WCHAR *p = list; *p && !found; p += lstrlenW(p) + 1) found = !lstrcmpiW(p, path);
+    HeapFree(GetProcessHeap(), 0, list);
+    return found ? dn : 0;
+}
+
+CFGMGR32 CONFIGRET WINAPI CM_Get_Device_Interface_PropertyW(LPCWSTR path, const void *key, PULONG type, PBYTE buf, PULONG len,
+                                                            ULONG flags)
+{
+    const DevPropKey *k = key;
+    if (!path || !k || !type || !len || (*len && !buf)) return CR_INVALID_POINTER;
+    if (flags) return CR_INVALID_FLAG;
+    NovaPnpNode n;
+    GUID cls;
+    DEVINST dn = iface_node(path, &n, &cls);
+    if (!dn) { *len = 0; return CR_NO_SUCH_DEVICE_INTERFACE; }
+    WCHAR w[200];
+    if (!memcmp(&k->fmtid, &k_inst, sizeof(GUID)) && k->pid == 256) {                    /* Device_InstanceId */
+        int size = MultiByteToWideChar(CP_ACP, 0, n.instance, -1, w, 200);
+        return put_value(DEVPROP_TYPE_STRING, w, (ULONG)size * sizeof(WCHAR), type, buf, len);
+    }
+    if (!memcmp(&k->fmtid, &k_iface, sizeof(GUID))) {
+        if (k->pid == 2) {                                                                 /* FriendlyName */
+            const char *s = n.friendly[0] ? n.friendly : n.desc;
+            if (!s[0]) { *len = 0; return CR_NO_SUCH_VALUE; }
+            int size = MultiByteToWideChar(CP_ACP, 0, s, -1, w, 200);
+            return put_value(DEVPROP_TYPE_STRING, w, (ULONG)size * sizeof(WCHAR), type, buf, len);
+        }
+        if (k->pid == 3) {                                                                 /* Enabled */
+            BYTE b = present(&n) ? 0xFF : 0;
+            return put_value(DEVPROP_TYPE_BOOLEAN, &b, 1, type, buf, len);
+        }
+        if (k->pid == 4)                                                                   /* ClassGuid */
+            return put_value(DEVPROP_TYPE_GUID, &cls, sizeof(cls), type, buf, len);
+    }
+    *len = 0;
+    return CR_NO_SUCH_VALUE;
+}
+CFGMGR32 CONFIGRET WINAPI CM_Get_Device_Interface_Property_ExW(LPCWSTR path, const void *key, PULONG type, PBYTE buf, PULONG len,
+                                                               ULONG flags, HANDLE m)
+{ (void)m; return CM_Get_Device_Interface_PropertyW(path, key, type, buf, len, flags); }
 
 /* ---- logical configurations and resource descriptors ----
  * A device's allocated and boot configurations are the same one: the

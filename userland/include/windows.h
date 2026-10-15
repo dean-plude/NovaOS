@@ -74,6 +74,17 @@ typedef const GUID *REFGUID, *REFIID, *REFCLSID;
 typedef const GUID *LPCGUID;
 typedef DWORD LCID;
 typedef WORD  LANGID;
+#define MAKELANGID(p, s)  ((((WORD)(s)) << 10) | (WORD)(p))
+#define PRIMARYLANGID(l)  ((WORD)(l) & 0x3ff)
+#define SUBLANGID(l)      ((WORD)(l) >> 10)
+#define LANG_NEUTRAL      0x00
+#define SUBLANG_NEUTRAL   0x00
+#define SUBLANG_DEFAULT   0x01
+typedef WCHAR *PZZWSTR;                  /* a list of strings, each with its NUL, then a NUL */
+typedef const WCHAR *PCZZWSTR;
+#ifndef ARRAYSIZE
+#define ARRAYSIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 
 /* HRESULTs (winerror.h) */
 #define SUCCEEDED(hr)            (((HRESULT)(hr)) >= 0)
@@ -387,6 +398,8 @@ WINBASEAPI BOOL    WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME 
 WINBASEAPI LONG    WINAPI CompareFileTime(const FILETIME *a, const FILETIME *b);
 
 /* Strings */
+#define MB_ERR_INVALID_CHARS 0x00000008
+#define WC_ERR_INVALID_CHARS 0x00000080
 WINBASEAPI int     WINAPI MultiByteToWideChar(UINT cp, DWORD flags, LPCSTR s, int n, LPWSTR out, int cap);
 WINBASEAPI int     WINAPI WideCharToMultiByte(UINT cp, DWORD flags, LPCWSTR s, int n, LPSTR out, int cap,
                                               LPCSTR defchar, LPBOOL used);

@@ -752,7 +752,7 @@ are done (#370, #372, #375, #376).
 **Goal:** make NovaOS a desktop someone can use all day. **Gate:** 40 GUI
 apps from the App Store catalog pass their nightly scripts.
 
-- [ ] **27.1 Grow the corpus.** Add an App Store app per pull request,
+- [x] **27.1 Grow the corpus.** Add an App Store app per pull request,
   starting from failures in the existing corpus, until 40 GUI apps pass.
   The corpus had no failures left (39 of 39 on 2026-10-13), so it starts
   from the Store's untested apps: WinSCP (installs and opens its Login
@@ -761,9 +761,11 @@ apps from the App Store catalog pass their nightly scripts.
   [history](history/2026-10-14-thunderbird.md)), qBittorrent (installs
   and opens a `.torrent`; [history](history/2026-10-14-qbittorrent.md)),
   OBS Studio (installs, adds a scene and saves it;
-  [history](history/2026-10-14-obs-studio.md)) and GIMP (installs and
+  [history](history/2026-10-14-obs-studio.md)), GIMP (installs and
   opens a picture through its plug-ins;
-  [history](history/2026-10-14-gimp.md)).
+  [history](history/2026-10-14-gimp.md)) and ShareX, the fortieth
+  (installs, captures the screen with its Print Screen hot key and saves
+  a PNG; [history](history/2026-10-15-sharex.md)).
 - [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
   from the Store's Windows Installer package; the nightly corpus types a

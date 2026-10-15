@@ -67,8 +67,58 @@ USERAPI void keybd_event(BYTE vk, BYTE sc, DWORD flags, ULONG_PTR extra) { (void
 USERAPI void mouse_event(DWORD flags, DWORD dx, DWORD dy, DWORD data, ULONG_PTR extra) { (void)flags; (void)dx; (void)dy; (void)data; (void)extra; }
 USERAPI BOOL BlockInput(BOOL block) { (void)block; return FALSE; }
 USERAPI BOOL GetLastInputInfo(void *lii) { DWORD *p = lii; p[1] = g_msg_time ? g_msg_time : GetTickCount(); return TRUE; }
-USERAPI BOOL RegisterHotKey(HWND h, int id, UINT mods, UINT vk) { (void)h; (void)id; (void)mods; (void)vk; SetLastError(1409 /* ERROR_HOTKEY_ALREADY_REGISTERED */); return FALSE; }
-USERAPI BOOL UnregisterHotKey(HWND h, int id) { (void)h; (void)id; return TRUE; }
+/* Hot keys: the desktop keeps the combinations (CTL_HOTKEY) and sends
+ * WM_HOTKEY to the top-level window holding the one registered, whichever
+ * window has the keyboard; this table says which window that was.  A hot
+ * key for no window (the thread's queue) is not supported */
+#define MAX_HOTKEYS 64
+static struct { UINT32 kid; int id; HWND h; } g_hotkeys[MAX_HOTKEYS];
+
+HWND hotkey_window(UINT32 kid, int id)
+{
+    HWND h = NULL;
+    LOCK();
+    for (int i = 0; i < MAX_HOTKEYS && !h; i++)
+        if (g_hotkeys[i].h && g_hotkeys[i].kid == kid && g_hotkeys[i].id == id) h = g_hotkeys[i].h;
+    UNLOCK();
+    return h;
+}
+
+USERAPI BOOL RegisterHotKey(HWND h, int id, UINT mods, UINT vk)
+{
+    Wnd *w = h ? W_quiet(h) : NULL;
+    if (!w) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return FALSE; }
+    if (w->tid != GetCurrentThreadId()) { SetLastError(1408 /* ERROR_WINDOW_OF_OTHER_THREAD */); return FALSE; }
+    Wnd *top = top_of(w);
+    if (!top || !ensure_kernel_window(top)) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return FALSE; }
+    INT32 in[3] = { id, (INT32)mods, (INT32)vk };
+    LONG_PTR r = NtNovaGuiCtl(top->kid, CTL_HOTKEY, 0, in);
+    if (r != 1) { SetLastError(r == 2 ? 1409 /* ERROR_HOTKEY_ALREADY_REGISTERED */ : ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+    LOCK();
+    int slot = -1;
+    for (int i = 0; i < MAX_HOTKEYS; i++) {
+        if (g_hotkeys[i].h && g_hotkeys[i].kid == top->kid && g_hotkeys[i].id == id) { slot = i; break; }
+        if (!g_hotkeys[i].h && slot < 0) slot = i;
+    }
+    if (slot >= 0) { g_hotkeys[slot].kid = top->kid; g_hotkeys[slot].id = id; g_hotkeys[slot].h = h; }
+    UNLOCK();
+    return TRUE;
+}
+
+USERAPI BOOL UnregisterHotKey(HWND h, int id)
+{
+    Wnd *w = h ? W_quiet(h) : NULL;
+    Wnd *top = w ? top_of(w) : NULL;
+    if (!top || !top->kid) { SetLastError(1419 /* ERROR_HOTKEY_NOT_REGISTERED */); return FALSE; }
+    INT32 in[1] = { id };
+    LONG_PTR r = NtNovaGuiCtl(top->kid, CTL_HOTKEY, 1, in);
+    LOCK();
+    for (int i = 0; i < MAX_HOTKEYS; i++)
+        if (g_hotkeys[i].h && g_hotkeys[i].kid == top->kid && g_hotkeys[i].id == id) g_hotkeys[i].h = NULL;
+    UNLOCK();
+    if (r != 1) { SetLastError(1419 /* ERROR_HOTKEY_NOT_REGISTERED */); return FALSE; }
+    return TRUE;
+}
 USERAPI UINT GetDoubleClickTime(void) { return 500; }
 USERAPI BOOL SetDoubleClickTime(UINT ms) { (void)ms; return TRUE; }
 USERAPI BOOL SwapMouseButton(BOOL swap) { (void)swap; return FALSE; }

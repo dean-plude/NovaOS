@@ -1645,7 +1645,7 @@ WINBASEAPI DWORD WINAPI GetFinalPathNameByHandleA(HANDLE h, LPSTR buf, DWORD n, 
 WINBASEAPI DWORD WINAPI GetFullPathNameW(LPCWSTR name, DWORD n, LPWSTR buf, LPWSTR *part)
 {
     char a[MAX_PATH * 3], full[MAX_PATH];
-    if (!wide_to_temp(name, a, sizeof(a)) || !full_path(a, full, MAX_PATH)) { SetLastError(ERROR_INVALID_NAME); return 0; }
+    if (!wide_to_temp(name, a, sizeof(a)) || !full_path_name(a, full, MAX_PATH)) { SetLastError(ERROR_INVALID_NAME); return 0; }
     /* keep a trailing separator, as Windows does */
     int al = (int)strlen(a), fl = (int)strlen(full);
     if (al && (a[al - 1] == '\\' || a[al - 1] == '/') && full[fl - 1] != '\\' && fl < MAX_PATH - 1) { full[fl++] = '\\'; full[fl] = 0; }

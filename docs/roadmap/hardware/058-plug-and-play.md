@@ -13,7 +13,9 @@
   enumeration of the tree~~ Done: `SetupDiGetClassDevs` for every class,
   enumerator and interface class, `CM_Locate_DevNode`,
   `CM_Get_Child`/`Sibling`/`Parent`, device ID lists, status, registry
-  and `DEVPKEY` properties, device keys, and `pnputil /enum-devices`
+  and `DEVPKEY` properties (a device's bus type and container too), a
+  device interface's properties (`CM_Get_Device_Interface_PropertyW`),
+  device keys, and `pnputil /enum-devices`
   matching the driver store.  Still to do: query-remove
   (`DBT_DEVICEQUERYREMOVE`) and handle notifications
   (`DBT_DEVTYP_HANDLE`).

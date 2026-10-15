@@ -1,0 +1,12 @@
+hidapi 0.15.0 (https://github.com/libusb/hidapi, tag hidapi-0.15.0, commit
+d6b2a974608dec3b76fb1e36c189f22b9cf3650c), used under its BSD licence
+(hidapi is offered under the GPL v3, a BSD-style licence or the original
+HIDAPI licence, at the user's choice; see LICENSE.txt and LICENSE-bsd.txt).
+Only hidapi/hidapi.h and windows/hid.c with the windows/hidapi_*.h headers
+and windows/hidapi_descriptor_reconstruct.c (which hid.c includes) are
+kept, unchanged.  hidapitest.exe (userland/programs/hidapitest.c, the
+devices self-test boot "hid") builds the Windows backend against NovaOS's
+own SDK headers to check that NovaOS gives it what Windows does: the HID
+interface list, hid.dll and the device interface and device node
+properties (cfgmgr32) it reads to tell USB, Bluetooth, I2C and SPI devices
+apart.

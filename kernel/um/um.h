@@ -170,6 +170,10 @@ void       UmConsolePseudoInput(UmConsole *c, const char *data, int len);
 void       UmConsolePseudoResize(UmConsole *c, int cols, int rows);
 /* Windows virtual-key code for a set-1 scan code (E0-prefixed: @ext) */
 UINT32     UmScancodeToVk(UINT8 sc, bool ext);
+/* A key went down: a program's RegisterHotKey combination?  (it is then
+ * sent WM_HOTKEY and the key goes no further); @mods MOD_ALT 1, MOD_CONTROL
+ * 2, MOD_SHIFT 4, MOD_WIN 8 */
+bool       UmGuiHotkey(UINT8 sc, bool ext, UINT32 mods, bool repeat);
 
 /* -----------------------------------------------------------------------
  * Hooks for the architecture code (interrupts disabled)

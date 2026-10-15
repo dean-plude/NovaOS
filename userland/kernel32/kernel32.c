@@ -179,6 +179,25 @@ int full_path(const char *name, char *out, int cap)
 }
 
 
+/* GetFullPathName's answer: as full_path, except that a name in the
+ * device namespace other than a drive ("\\.\pipe\NAME", "\\.\COM1",
+ * "\\?\Volume{...}") stays as it is, as on Windows; .NET makes a named
+ * pipe's name with Path.GetFullPath, which made it C:\cwd\pipe\NAME */
+int full_path_name(const char *name, char *out, int cap)
+{
+    const char *rest = skip_prefix(name);
+    if (rest != name && !(((rest[0] | 0x20) >= 'a' && (rest[0] | 0x20) <= 'z') && rest[1] == ':')) {
+        int n = 0;
+        for (; name[n]; n++) {
+            if (n >= cap - 1) return 0;
+            out[n] = name[n] == '/' ? '\\' : name[n];
+        }
+        out[n] = 0;
+        return n;
+    }
+    return full_path(name, out, cap);
+}
+
 /* "\\.\pipe\NAME" (or \\?\pipe\) -> NAME, else 0 */
 const char *k32_pipe_name(const char *name)
 {
@@ -316,7 +335,7 @@ WINBASEAPI BOOL WINAPI SetCurrentDirectoryA(LPCSTR path)
 WINBASEAPI DWORD WINAPI GetFullPathNameA(LPCSTR name, DWORD size, LPSTR buf, LPSTR *filepart)
 {
     char full[MAX_PATH];
-    int n = full_path(name, full, MAX_PATH);
+    int n = full_path_name(name, full, MAX_PATH);
     if (!n) { SetLastError(ERROR_INVALID_NAME); return 0; }
     if (size <= (DWORD)n) return (DWORD)n + 1;
     kmemcpy(buf, full, (SIZE_T)n + 1);

@@ -605,6 +605,24 @@ void GdiVLine(int x, int y0, int y1, GdiColor c)
     GdiFillRect(RECT(x, y0, 1, y1 - y0 + 1), c);
 }
 
+/* What the screen shows (the back buffer: every window composed, the
+ * pointer not) in logical pixels from (@x, @y) on the primary monitor,
+ * @w * @h of them as 0x00RRGGBB into @out (@w per row); pixels off the
+ * screen are black.  Programs' screen captures (BitBlt from GetDC(NULL)) */
+void GdiReadScreen(int x, int y, int w, int h, UINT32 *out)
+{
+    for (int j = 0; j < h; j++) {
+        UINT32 *o = out + (size_t)j * w;
+        int dy = (y + j) * g.s;
+        for (int i = 0; i < w; i++) {
+            int dx = (x + i) * g.s;
+            if (!g.ready || !g.buf || dx < g.bx0 || dy < g.by0 || dx >= g.bx1 || dy >= g.by1 || dx >= g.dw || dy >= g.dh) { o[i] = 0; continue; }
+            UINT32 v = g.buf[(size_t)dy * g.bstride + dx] & 0xFFFFFF;
+            o[i] = g.bgr ? v : ((v & 0xFF) << 16) | (v & 0xFF00) | (v >> 16);
+        }
+    }
+}
+
 void GdiPutPixel(int x, int y, GdiColor c)
 {
     GdiFillRect(RECT(x, y, 1, 1), c);

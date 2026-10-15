@@ -10,6 +10,7 @@ int         w2u(const WCHAR *w, int n, char *out, int cap);   /* UTF-16 -> UTF-8
 int         u2w(const char *s, int n, WCHAR *out, int cap);   /* UTF-8 -> UTF-16 */
 const char *cwd(void);
 int         full_path(const char *name, char *out, int cap);
+int         full_path_name(const char *name, char *out, int cap);   /* GetFullPathName: device names kept */
 BOOL        nt_path(const char *name, NtPath *p);
 char       *wide_to_temp(LPCWSTR w, char *buf, int cap);
 const char *k32_module_path(HMODULE m, char *tmp);   /* tmp: MAX_PATH; 0 if not loaded */

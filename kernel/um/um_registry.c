@@ -800,6 +800,11 @@ static void defaults(void)
     if (!has_value(is, "")) { kset_sz(is, "", "shell32.dll", 1); kset_sz(is, "ThreadingModel", "Apartment", 1); }
     RegKey *isc = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{FBF23B40-E3F0-101B-8488-00AA003E56F8}", false);
     if (!has_value(isc, "")) kset_sz(isc, "", "Internet Shortcut", 1);
+    /* taskbar buttons' progress and overlays: shell32's TaskbarList class */
+    RegKey *tb = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{56FDF344-FD6D-11D0-958A-006097C9A090}\\InprocServer32", false);
+    if (!has_value(tb, "")) { kset_sz(tb, "", "shell32.dll", 1); kset_sz(tb, "ThreadingModel", "Apartment", 1); }
+    RegKey *tbc = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{56FDF344-FD6D-11D0-958A-006097C9A090}", false);
+    if (!has_value(tbc, "")) kset_sz(tbc, "", "Task Bar Communication", 1);
     /* the audio endpoints (mmdevapi's MMDeviceEnumerator) */
     RegKey *mmd = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{BCDE0395-E52F-467C-8E3D-C4579291692E}\\InprocServer32", false);
     if (!has_value(mmd, "")) { kset_sz(mmd, "", "mmdevapi.dll", 1); kset_sz(mmd, "ThreadingModel", "Both", 1); }

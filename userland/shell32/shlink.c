@@ -686,12 +686,16 @@ static Factory g_link_factory = { (void *)g_cf_vtbl };
 /* urlshort.c: the InternetShortcut class */
 static const GUID CLSID_InternetShortcut_ = { 0xFBF23B40, 0xE3F0, 0x101B, { 0x84, 0x88, 0x00, 0xAA, 0x00, 0x3E, 0x56, 0xF8 } };
 HRESULT url_class_object(REFIID riid, void **ppv);
+/* taskbar.c: the TaskbarList class */
+static const GUID CLSID_TaskbarList_ = { 0x56FDF344, 0xFD6D, 0x11D0, { 0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90 } };
+HRESULT taskbar_class_object(REFIID riid, void **ppv);
 
 __declspec(dllexport) HRESULT STDAPICALLTYPE DllGetClassObject(REFCLSID clsid, REFIID riid, void **ppv)
 {
     if (!ppv) return E_INVALIDARG_;
     *ppv = 0;
     if (same_guid(clsid, &CLSID_InternetShortcut_)) return url_class_object(riid, ppv);
+    if (same_guid(clsid, &CLSID_TaskbarList_)) return taskbar_class_object(riid, ppv);
     if (!same_guid(clsid, &CLSID_ShellLink_)) return CLASS_E_CLASSNOTAVAILABLE_;
     return cf_qi(&g_link_factory, riid, ppv);
 }

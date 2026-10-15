@@ -7,6 +7,8 @@
 #define IL_MAGIC 0x494D4C32u
 
 typedef struct _IMAGELIST {
+    const void *vtbl;               /* an HIMAGELIST is its IImageList, as on Windows (SHGetImageList's) */
+    LONG refs;
     DWORD magic;
     int cx, cy, count, cap, grow;
     UINT flags;
@@ -14,6 +16,8 @@ typedef struct _IMAGELIST {
     COLORREF bk;
     int overlay[16];
 } IL;
+
+static const void *const g_il_vtbl[];
 
 static IL *il(HIMAGELIST h)
 {
@@ -39,6 +43,8 @@ CC HIMAGELIST WINAPI ImageList_Create(int cx, int cy, UINT flags, int initial, i
     if (cx <= 0 || cy <= 0) return NULL;
     IL *l = calloc(1, sizeof(IL));
     if (!l) return NULL;
+    l->vtbl = g_il_vtbl;
+    l->refs = 1;
     l->magic = IL_MAGIC;
     l->cx = cx; l->cy = cy; l->flags = flags; l->grow = grow > 0 ? grow : 4;
     l->bk = CLR_NONE;
@@ -601,5 +607,222 @@ CC BOOL WINAPI ImageList_Write(HIMAGELIST h, struct IStream *stream)
     free(px);
     return ok;
 }
-CC HRESULT WINAPI ImageList_CoCreateInstance(const void *clsid, void *outer, const void *iid, void **out) { (void)clsid; (void)outer; (void)iid; if (out) *out = NULL; return 0x80004001L; }
-CC HRESULT WINAPI HIMAGELIST_QueryInterface(HIMAGELIST h, const void *iid, void **out) { (void)h; (void)iid; if (out) *out = NULL; return 0x80004002L; }
+/* ---- IImageList / IImageList2: the same list through COM (shell32's
+ * SHGetImageList hands it out; .NET programs such as ShareX call GetIcon
+ * on it through the vtable) ---- */
+#define S_OK_ 0L
+#define E_NOINTERFACE_ ((HRESULT)0x80004002L)
+#define E_NOTIMPL_ ((HRESULT)0x80004001L)
+#define E_INVALIDARG_ ((HRESULT)0x80070057L)
+#define E_FAIL_ ((HRESULT)0x80004005L)
+#define OK(b) ((b) ? S_OK_ : E_FAIL_)
+
+static const GUID IID_IUnknown_ = { 0x00000000, 0x0000, 0x0000, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID IID_IImageList_ = { 0x46EB5926, 0x582E, 0x4017, { 0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50 } };
+static const GUID IID_IImageList2_ = { 0x192B9D83, 0x50FC, 0x457B, { 0x90, 0xA0, 0x2B, 0x82, 0xA8, 0xB5, 0xDA, 0xE1 } };
+
+static HRESULT il_query(IL *l, const GUID *iid, void **out)
+{
+    if (!out) return E_INVALIDARG_;
+    *out = NULL;
+    if (!il((HIMAGELIST)l)) return E_INVALIDARG_;
+    if (!iid || !memcmp(iid, &IID_IUnknown_, sizeof(GUID)) || !memcmp(iid, &IID_IImageList_, sizeof(GUID)) ||
+        !memcmp(iid, &IID_IImageList2_, sizeof(GUID))) {
+        InterlockedIncrement(&l->refs);
+        *out = l;
+        return S_OK_;
+    }
+    return E_NOINTERFACE_;
+}
+
+static HRESULT WINAPI m_QueryInterface(IL *l, const GUID *iid, void **out) { return il_query(l, iid, out); }
+static ULONG WINAPI m_AddRef(IL *l) { return (ULONG)InterlockedIncrement(&l->refs); }
+static ULONG WINAPI m_Release(IL *l)
+{
+    LONG n = InterlockedDecrement(&l->refs);
+    if (n <= 0) ImageList_Destroy((HIMAGELIST)l);
+    return n > 0 ? (ULONG)n : 0;
+}
+static HRESULT WINAPI m_Add(IL *l, HBITMAP bm, HBITMAP mask, int *i)
+{
+    int r = ImageList_Add((HIMAGELIST)l, bm, mask);
+    if (i) *i = r;
+    return OK(r >= 0);
+}
+static HRESULT WINAPI m_ReplaceIcon(IL *l, int i, HICON icon, int *out)
+{
+    int r = ImageList_ReplaceIcon((HIMAGELIST)l, i, icon);
+    if (out) *out = r;
+    return OK(r >= 0);
+}
+static HRESULT WINAPI m_SetOverlayImage(IL *l, int i, int ov) { return OK(ImageList_SetOverlayImage((HIMAGELIST)l, i, ov)); }
+static HRESULT WINAPI m_Replace(IL *l, int i, HBITMAP bm, HBITMAP mask) { return OK(ImageList_Replace((HIMAGELIST)l, i, bm, mask)); }
+static HRESULT WINAPI m_AddMasked(IL *l, HBITMAP bm, COLORREF key, int *i)
+{
+    int r = ImageList_AddMasked((HIMAGELIST)l, bm, key);
+    if (i) *i = r;
+    return OK(r >= 0);
+}
+static HRESULT WINAPI m_Draw(IL *l, IMAGELISTDRAWPARAMS *p)
+{
+    if (!p) return E_INVALIDARG_;
+    p->himl = (HIMAGELIST)l;
+    return OK(ImageList_DrawIndirect(p));
+}
+static HRESULT WINAPI m_Remove(IL *l, int i) { return OK(ImageList_Remove((HIMAGELIST)l, i)); }
+static HRESULT WINAPI m_GetIcon(IL *l, int i, UINT flags, HICON *out)
+{
+    if (!out) return E_INVALIDARG_;
+    *out = ImageList_GetIcon((HIMAGELIST)l, i, flags);
+    return OK(*out);
+}
+static HRESULT WINAPI m_GetImageInfo(IL *l, int i, IMAGEINFO *info) { return OK(ImageList_GetImageInfo((HIMAGELIST)l, i, info)); }
+static HRESULT WINAPI m_Copy(IL *l, int di, IL *src, int si, UINT flags)
+{
+    return OK(ImageList_Copy((HIMAGELIST)l, di, (HIMAGELIST)src, si, flags));
+}
+static HRESULT WINAPI m_Merge(IL *l, int i1, IL *b, int i2, int dx, int dy, const GUID *iid, void **out)
+{
+    if (!out) return E_INVALIDARG_;
+    *out = NULL;
+    IL *n = il(ImageList_Merge((HIMAGELIST)l, i1, (HIMAGELIST)b, i2, dx, dy));
+    if (!n) return E_FAIL_;
+    HRESULT hr = il_query(n, iid, out);
+    m_Release(n);
+    return hr;
+}
+static HRESULT WINAPI m_Clone(IL *l, const GUID *iid, void **out)
+{
+    if (!out) return E_INVALIDARG_;
+    *out = NULL;
+    IL *n = il(ImageList_Duplicate((HIMAGELIST)l));
+    if (!n) return E_FAIL_;
+    HRESULT hr = il_query(n, iid, out);
+    m_Release(n);
+    return hr;
+}
+static HRESULT WINAPI m_GetImageRect(IL *l, int i, RECT *r)
+{
+    IMAGEINFO info;
+    if (!r || !ImageList_GetImageInfo((HIMAGELIST)l, i, &info)) return E_FAIL_;
+    *r = info.rcImage;
+    return S_OK_;
+}
+static HRESULT WINAPI m_GetIconSize(IL *l, int *cx, int *cy) { return OK(ImageList_GetIconSize((HIMAGELIST)l, cx, cy)); }
+static HRESULT WINAPI m_SetIconSize(IL *l, int cx, int cy) { return OK(ImageList_SetIconSize((HIMAGELIST)l, cx, cy)); }
+static HRESULT WINAPI m_GetImageCount(IL *l, int *n)
+{
+    if (!n) return E_INVALIDARG_;
+    *n = ImageList_GetImageCount((HIMAGELIST)l);
+    return S_OK_;
+}
+static HRESULT WINAPI m_SetImageCount(IL *l, UINT n) { return OK(ImageList_SetImageCount((HIMAGELIST)l, n)); }
+static HRESULT WINAPI m_SetBkColor(IL *l, COLORREF c, COLORREF *old)
+{
+    COLORREF o = ImageList_SetBkColor((HIMAGELIST)l, c);
+    if (old) *old = o;
+    return S_OK_;
+}
+static HRESULT WINAPI m_GetBkColor(IL *l, COLORREF *c)
+{
+    if (!c) return E_INVALIDARG_;
+    *c = ImageList_GetBkColor((HIMAGELIST)l);
+    return S_OK_;
+}
+static HRESULT WINAPI m_BeginDrag(IL *l, int i, int dx, int dy) { return OK(ImageList_BeginDrag((HIMAGELIST)l, i, dx, dy)); }
+static HRESULT WINAPI m_EndDrag(IL *l) { (void)l; ImageList_EndDrag(); return S_OK_; }
+static HRESULT WINAPI m_DragEnter(IL *l, HWND h, int x, int y) { (void)l; return OK(ImageList_DragEnter(h, x, y)); }
+static HRESULT WINAPI m_DragLeave(IL *l, HWND h) { (void)l; return OK(ImageList_DragLeave(h)); }
+static HRESULT WINAPI m_DragMove(IL *l, int x, int y) { (void)l; return OK(ImageList_DragMove(x, y)); }
+static HRESULT WINAPI m_SetDragCursorImage(IL *l, IL *src, int i, int dx, int dy)
+{
+    (void)l;
+    return OK(ImageList_SetDragCursorImage((HIMAGELIST)src, i, dx, dy));
+}
+static HRESULT WINAPI m_DragShowNolock(IL *l, BOOL show) { (void)l; return OK(ImageList_DragShowNolock(show)); }
+static HRESULT WINAPI m_GetDragImage(IL *l, POINT *p, POINT *hot, const GUID *iid, void **out)
+{
+    (void)l; (void)p; (void)hot; (void)iid;
+    if (out) *out = NULL;
+    return E_FAIL_;
+}
+static HRESULT WINAPI m_GetItemFlags(IL *l, int i, DWORD *flags)
+{
+    (void)l; (void)i;
+    if (!flags) return E_INVALIDARG_;
+    *flags = 0;
+    return S_OK_;
+}
+static HRESULT WINAPI m_GetOverlayImage(IL *l, int ov, int *i)
+{
+    IL *x = il((HIMAGELIST)l);
+    if (!x || !i || ov < 1 || ov > 15) return E_INVALIDARG_;
+    *i = x->overlay[ov];
+    return S_OK_;
+}
+/* IImageList2 */
+static HRESULT WINAPI m_Resize(IL *l, int cx, int cy) { return OK(ImageList_SetIconSize((HIMAGELIST)l, cx, cy)); }
+static HRESULT WINAPI m_GetOriginalSize(IL *l, int i, DWORD flags, int *cx, int *cy)
+{
+    (void)i; (void)flags;
+    return OK(ImageList_GetIconSize((HIMAGELIST)l, cx, cy));
+}
+static HRESULT WINAPI m_SetOriginalSize(IL *l, int i, int cx, int cy) { (void)l; (void)i; (void)cx; (void)cy; return S_OK_; }
+static HRESULT WINAPI m_SetCallback(IL *l, void *cb) { (void)l; (void)cb; return E_NOTIMPL_; }
+static HRESULT WINAPI m_GetCallback(IL *l, const GUID *iid, void **out)
+{
+    (void)l; (void)iid;
+    if (out) *out = NULL;
+    return E_NOTIMPL_;
+}
+static HRESULT WINAPI m_ForceImagePresent(IL *l, int i, DWORD flags) { (void)l; (void)i; (void)flags; return S_OK_; }
+static HRESULT WINAPI m_DiscardImages(IL *l, int a, int b, DWORD flags) { (void)l; (void)a; (void)b; (void)flags; return S_OK_; }
+static HRESULT WINAPI m_PreloadImages(IL *l, IMAGELISTDRAWPARAMS *p) { (void)l; (void)p; return S_OK_; }
+static HRESULT WINAPI m_GetStatistics(IL *l, void *stats) { (void)l; (void)stats; return E_NOTIMPL_; }
+static HRESULT WINAPI m_Initialize(IL *l, int cx, int cy, UINT flags, int initial, int grow)
+{
+    (void)initial;
+    IL *x = il((HIMAGELIST)l);
+    if (!x || cx <= 0 || cy <= 0) return E_INVALIDARG_;
+    ImageList_SetIconSize((HIMAGELIST)x, cx, cy);
+    x->flags = flags;
+    x->grow = grow > 0 ? grow : 4;
+    return S_OK_;
+}
+static HRESULT WINAPI m_Replace2(IL *l, int i, HBITMAP bm, HBITMAP mask, void *unk, DWORD flags)
+{
+    (void)unk; (void)flags;
+    return OK(ImageList_Replace((HIMAGELIST)l, i, bm, mask));
+}
+static HRESULT WINAPI m_ReplaceFromImageList(IL *l, int i, IL *src, int si, void *unk, DWORD flags)
+{
+    (void)unk; (void)flags;
+    return OK(ImageList_Copy((HIMAGELIST)l, i, (HIMAGELIST)src, si, 0));
+}
+
+static const void *const g_il_vtbl[] = {
+    m_QueryInterface, m_AddRef, m_Release,
+    m_Add, m_ReplaceIcon, m_SetOverlayImage, m_Replace, m_AddMasked, m_Draw, m_Remove, m_GetIcon,
+    m_GetImageInfo, m_Copy, m_Merge, m_Clone, m_GetImageRect, m_GetIconSize, m_SetIconSize,
+    m_GetImageCount, m_SetImageCount, m_SetBkColor, m_GetBkColor, m_BeginDrag, m_EndDrag,
+    m_DragEnter, m_DragLeave, m_DragMove, m_SetDragCursorImage, m_DragShowNolock, m_GetDragImage,
+    m_GetItemFlags, m_GetOverlayImage,
+    m_Resize, m_GetOriginalSize, m_SetOriginalSize, m_SetCallback, m_GetCallback, m_ForceImagePresent,
+    m_DiscardImages, m_PreloadImages, m_GetStatistics, m_Initialize, m_Replace2, m_ReplaceFromImageList,
+};
+
+/* CLSID_ImageList: a new empty list (IImageList2::Initialize sizes it) */
+CC HRESULT WINAPI ImageList_CoCreateInstance(const void *clsid, void *outer, const void *iid, void **out)
+{
+    (void)clsid;
+    if (!out) return E_INVALIDARG_;
+    *out = NULL;
+    if (outer) return (HRESULT)0x80040110L;                     /* CLASS_E_NOAGGREGATION */
+    IL *l = il(ImageList_Create(16, 16, ILC_COLOR32, 4, 4));
+    if (!l) return (HRESULT)0x8007000EL;                        /* E_OUTOFMEMORY */
+    HRESULT hr = il_query(l, iid, out);
+    m_Release(l);
+    return hr;
+}
+
+CC HRESULT WINAPI HIMAGELIST_QueryInterface(HIMAGELIST h, REFIID iid, void **out) { return il_query((IL *)h, iid, out); }

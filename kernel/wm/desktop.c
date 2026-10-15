@@ -1928,6 +1928,10 @@ static void system_key(const KeyEvent *k)
 
 static void desktop_key(const KeyEvent *k)
 {
+    static bool held[256];                      /* (auto-repeat, for MOD_NOREPEAT hot keys) */
+    int ki = (k->scancode & 0x7F) | (k->extended ? 0x80 : 0);
+    bool repeat = k->pressed && held[ki];
+    held[ki] = k->pressed;
     system_key(k);
     bool win_key = k->extended && k->scancode == KEY_LWIN;
 
@@ -1969,6 +1973,13 @@ static void desktop_key(const KeyEvent *k)
         (k->ch == 'k' || k->ch == 'K')) {
         close_popups();
         start_open(true);
+        return;
+    }
+
+    /* A program's RegisterHotKey combination (ShareX's Print Screen) */
+    if (k->pressed && UmGuiHotkey(k->scancode, k->extended,
+                    (k->alt ? 1u : 0) | (k->ctrl ? 2u : 0) | (k->shift ? 4u : 0) | (g_win_down ? 8u : 0), repeat)) {
+        if (g_win_down) g_win_used = true;
         return;
     }
 

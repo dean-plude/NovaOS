@@ -13399,6 +13399,54 @@ list written to a stream and read back, and the desktop folder listing
 items but draw none of them, its port number box is blank, and no
 transfer is checked yet.
 
+## ShareX captures the screen
+
+Roadmap step 27.1 (grow the corpus), its fortieth GUI app: ShareX 19.0.1,
+the screenshot tool the App Store lists.  It is not a .NET 8 program as the
+catalog said: ShareX 18 and later ship as a portable zip with their own
+.NET 9 runtime (Windows Forms), so the Store entry now points at that zip
+and needs no runtime of its own.  The nightly corpus installs it, starts
+`C:\Programs\ShareX\ShareX.exe`, presses Print Screen (ShareX's "capture
+entire screen" hot key) and checks that a PNG lands in ShareX's
+`Screenshots` folder (`tests/appcorpus/960-sharex.py`); the main window
+must match `tests/reference/sharex.png`.  It needed these NovaOS fixes:
+
+- **SendMessageCallback returns at once.**  To another thread's window it
+  now queues the message and calls the callback in the sending thread
+  once the window answered, as Windows does.  WinForms sends its system
+  events window a colour change this way and pumps messages until the
+  callback runs; the old send waited for the answer and ShareX never
+  showed its window.
+- **Hot keys.**  `RegisterHotKey` and `UnregisterHotKey` are real: the
+  desktop turns a registered key press into `WM_HOTKEY` for the window
+  that registered it (a new GUI control, `CTL_HOTKEY`).
+- **Screen capture.**  `BitBlt` and `StretchBlt` from the screen DC
+  (`GetDC(NULL)`) read the composed desktop through a new GUI control,
+  `CTL_SCREEN_READ`; they used to copy black.
+- **SHGetFileInfoW writes only what it is given.**  ShareX passes the size
+  of the ANSI structure; NovaOS wrote the whole wide one past the end of
+  the caller's buffer, which .NET reported as a stack overflow.
+- **Image lists are COM objects.**  An `HIMAGELIST` is now also an
+  `IImageList`/`IImageList2` (its vtable comes first, as on Windows), and
+  `SHGetImageList` hands out that interface; ShareX calls it through COM.
+- **TaskbarList.**  `shell32` provides the TaskbarList class
+  (`ITaskbarList` to `ITaskbarList4`, registered under its CLSID); every
+  call succeeds and changes nothing yet.  Without it ShareX showed an
+  error box after each capture.
+- **One COM context per apartment thread.**  `CoGetContextToken` gave all
+  single-threaded apartments the same token, and .NET, which keys its COM
+  wrappers by that token, released the UI thread's wrappers when a worker
+  thread ended ("COM object that has been separated from its underlying
+  RCW").
+- **GDI+ GetHdc on a bitmap.**  `GdipGetDC` on a bitmap's graphics now
+  gives a memory DC on a copy of its pixels, copied back on release (it
+  returned "Not implemented"); WinForms' `TextRenderer` draws ShareX's
+  notification text this way.
+- **Smaller fixes.**  `SetWindowPos` with `SWP_HIDEWINDOW` hides a
+  top-level window (WinForms' `Hide`), `GetFullPathName` keeps
+  `\\.\pipe\` names as they are (ShareX's single-instance pipe), and
+  `CoWaitForMultipleHandles` returns `RPC_S_CALLPENDING` on a timeout.
+
 ## The Windows Imaging Component
 
 NovaOS's `windowscodecs.dll` was four stubs, so a WPF program stopped at

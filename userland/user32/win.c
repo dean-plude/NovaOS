@@ -801,8 +801,11 @@ void wnd_set_pos(Wnd *w, HWND after, int x, int y, int cx, int cy, UINT flags)
         else a = W_quiet(after);
         if (a != w && (a == (Wnd *)1 || !a || a->parent == w->parent)) { unlink_wnd(w); link_wnd(w, a); }
     }
-    if (flags & SWP_SHOWWINDOW) w->style |= WS_VISIBLE;
-    if (flags & SWP_HIDEWINDOW) w->style &= ~WS_VISIBLE;
+    /* (a top-level window's ShowWindow below changes the style: changed
+     * here first, it would see no change and leave the desktop's window
+     * up, as WinForms' Hide did) */
+    if (w->parent && (flags & SWP_SHOWWINDOW)) w->style |= WS_VISIBLE;
+    if (w->parent && (flags & SWP_HIDEWINDOW)) w->style &= ~WS_VISIBLE;
 
     if (!w->parent) {
         if ((moved || sized || (flags & SWP_FRAMECHANGED)) && w->kid && w->kframe >= 0 && frame_flags(w) != w->kframe) {

@@ -158,14 +158,15 @@ int sys_icon_index(const WCHAR *path, DWORD attrs)
     return IC_FILE;
 }
 
-/* SHGetImageList: the list itself stands for its IImageList */
+/* SHGetImageList: the list is its own IImageList (comctl32 gives it the
+ * vtable), handed out with a reference of the caller's, as on Windows:
+ * .NET programs (ShareX's file icons) call it through COM and release it */
 SHSTDAPI_(HRESULT) SHGetImageList(int which, REFIID riid, void **out)
 {
-    (void)riid;
     if (!out) return E_POINTER;
+    *out = NULL;
     HIMAGELIST l = sys_image_list(which == 1 /* SHIL_SMALL */ || which == 3 /* SHIL_SYSSMALL */);
-    *out = l;
-    return l ? S_OK : E_FAIL;
+    return l ? HIMAGELIST_QueryInterface(l, riid, out) : E_FAIL;
 }
 
 SHSTDAPI_(BOOL) Shell_GetImageLists(HIMAGELIST *large, HIMAGELIST *small)

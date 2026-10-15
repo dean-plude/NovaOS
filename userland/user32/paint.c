@@ -424,6 +424,7 @@ static HDC screen_dc(void)
         g_screen_dc.w = g_screen_dc.h = g_screen_dc.stride = 64;
         g_screen_dc.bk_color = 0xFFFFFF; g_screen_dc.bk_mode = OPAQUE;
         g_screen_dc.has_pen = 1; g_screen_dc.pen_width = 1;
+        g_screen_dc.screen = 1;
     }
     return (HDC)&g_screen_dc;
 }

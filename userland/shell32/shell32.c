@@ -672,9 +672,8 @@ typedef struct { HICON hIcon; int iIcon; DWORD dwAttributes; WCHAR szDisplayName
 HIMAGELIST sys_image_list(int small);
 int sys_icon_index(const WCHAR *path, DWORD attrs);
 
-SHSTDAPI_(DWORD_PTR) SHGetFileInfoW(LPCWSTR path, DWORD attrs, SHFILEINFOW *info, UINT n, UINT flags)
+static DWORD_PTR file_info(LPCWSTR path, DWORD attrs, SHFILEINFOW *info, UINT flags)
 {
-    (void)n;
     WCHAR pbuf[MAX_PATH];
     if ((flags & 0x8 /* SHGFI_PIDL */) && path) {
         if (!SHGetPathFromIDListW((LPCITEMIDLIST)path, pbuf)) return 0;
@@ -710,6 +709,17 @@ SHSTDAPI_(DWORD_PTR) SHGetFileInfoW(LPCWSTR path, DWORD attrs, SHFILEINFOW *info
         info->dwAttributes = (a & FILE_ATTRIBUTE_DIRECTORY) ? 0x20000000 | 0x80000000 : 0x40000000;   /* FOLDER|HASSUBFOLDER : FILESYSTEM */
     if (flags & 0x4000) return (DWORD_PTR)sys_image_list(small);
     return 1;
+}
+
+/* Filled in a copy, and only @n bytes of it given back: a caller may pass
+ * a smaller structure (ShareX's, through .NET, is the ANSI one's size),
+ * and the bytes past it are its stack */
+SHSTDAPI_(DWORD_PTR) SHGetFileInfoW(LPCWSTR path, DWORD attrs, SHFILEINFOW *info, UINT n, UINT flags)
+{
+    SHFILEINFOW copy;
+    DWORD_PTR r = file_info(path, attrs, info ? &copy : NULL, flags);
+    if (info && r) for (UINT i = 0; i < n && i < sizeof(copy); i++) ((BYTE *)info)[i] = ((BYTE *)&copy)[i];
+    return r;
 }
 
 typedef struct { HICON hIcon; int iIcon; DWORD dwAttributes; char szDisplayName[MAX_PATH]; char szTypeName[80]; } SHFILEINFOA;

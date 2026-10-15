@@ -110,6 +110,11 @@ typedef struct GpGraphics {
     HDC hdc;                        /* on a device context */
     HWND hwnd;                      /* (from GdipCreateFromHWND: released with the graphics) */
     plutovg_canvas_t *c;            /* the bitmap's canvas */
+    /* GdipGetDC on a bitmap: a memory DC on a copy of its pixels, copied
+     * back by GdipReleaseDC */
+    HDC dib_dc;
+    HBITMAP dib, dib_old;
+    UINT32 *dib_bits, *dib_snap;
     int smoothing, pixel_offset, interpolation, compositing, compositing_quality, text_hint, page_unit;
     REAL page_scale;
     plutovg_matrix_t world;

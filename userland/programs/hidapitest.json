@@ -1,0 +1,7 @@
+{
+  "x86": true,
+  "selftest": true,
+  "libs": ["cfgmgr32"],
+  "sources": ["third_party/hidapi/windows/hid.c"],
+  "include": ["third_party/hidapi/hidapi", "third_party/hidapi/windows"]
+}

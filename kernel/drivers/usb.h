@@ -81,6 +81,12 @@ const char *UsbDevName(const UsbDev *d);
 /* The device's product name (its iProduct string, in ASCII) into @out;
  * false when it has none */
 bool UsbDevProductName(UsbDev *d, char *out, int cap);
+/* The device's serial number as Windows makes it the device's instance ID
+ * (USB\VID_v&PID_p\<serial>): its iSerialNumber string when every
+ * character is printable ASCII other than a space or a comma and no other
+ * device present with its vendor and product IDs has the same one; false
+ * (the instance ID is then made from where it is plugged in) when not */
+bool UsbDevSerialId(UsbDev *d, char *out, int cap);
 
 /* The active configuration descriptor, every interface and alternate
  * setting of it; *@len its bytes */

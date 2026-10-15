@@ -10,7 +10,10 @@
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl`, and overlapped `ReadFile`, `WriteFile` and
   `DeviceIoControl` with `CancelIo` work as hidapi uses them
-  ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers));
+  hidapi's own Windows backend, built unchanged, finds such a device as
+  USB through the device interface and device node properties
+  (`CM_Get_Device_Interface_PropertyW`, `DEVPKEY_Device_*`).
   Raw Input lists the class driver's collections too and sends their
   reports as `WM_INPUT`.
   Still to do: raw keyboard and mouse input, the Xbox

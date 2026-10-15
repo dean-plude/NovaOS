@@ -169,10 +169,15 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
 {
     UINT32 parent = d->parent ? d->parent->pnp : d->hc->pnp;
     if (!parent || !nfn) return;
-    char product[64], suffix[32];
+    char product[64], suffix[32], id[48];
     if (!UsbDevProductName(d, product, sizeof(product))) product[0] = 0;
     ksnprintf(suffix, sizeof(suffix), "5&%X&%X&%u", d->hc->num, d->route << 8 | d->root_port,
               d->parent ? d->parent_port : d->root_port);
+    /* The device's instance ID ends in its serial number when it has a
+     * usable one, as on Windows (so it keeps its ID on any port), else in
+     * where it is plugged in; a composite device's functions are told
+     * apart by where it is */
+    if (!UsbDevSerialId(d, id, sizeof(id))) memcpy(id, suffix, sizeof(suffix));
 
     /* Functions: the interfaces, a run of audio interfaces counting as
      * one (its control interface and streams), and a camera's video
@@ -196,7 +201,7 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
     if (!composite) {
         UsbPnpFn one = f[0];
         for (int i = 1; i < n && !one.driver; i++) if (f[i].driver) one = f[i];
-        d->pnp = add_function(d, &one, -1, parent, suffix, product);
+        d->pnp = add_function(d, &one, -1, parent, id, product);
         if (d->pnp && !one.driver) NtPnpUsbArrived(d->pnp);    /* (a Windows driver may be installed on it) */
         return;
     }
@@ -208,7 +213,7 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
     ids(c->hwids, sizeof(c->hwids), a, b, NULL, NULL);
     ids(c->compat, sizeof(c->compat), "USB\\DevClass_00&SubClass_00&Prot_00", "USB\\DevClass_00&SubClass_00",
         "USB\\DevClass_00", "USB\\COMPOSITE");
-    ksnprintf(c->instance, sizeof(c->instance), "%s\\%s", b, suffix);
+    ksnprintf(c->instance, sizeof(c->instance), "%s\\%s", b, id);
     ksnprintf(c->location, sizeof(c->location), "Port_#%04u.Hub_#%04u", d->parent ? d->parent_port : d->root_port,
               d->parent ? (unsigned)d->parent->depth + 2 : (unsigned)d->hc->num);
     put(c->friendly, sizeof(c->friendly), product);

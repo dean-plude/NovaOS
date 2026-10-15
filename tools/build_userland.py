@@ -106,11 +106,12 @@ def cflags():
 #             Microsoft's STL headers; see userland/msvcp140/build.py)
 #   gui       true: a GUI program (/subsystem:windows): the shell starts it
 #             with no console window, as Windows does
-#   sources   more C++ files compiled into it with its own flags (paths
-#             or globs from the repository root, e.g. a vendored library's
-#             under third_party/); with "include" (directories searched)
-#             and "force_include" (headers each file starts with, as
-#             Visual Studio's /FI), also from the repository root
+#   sources   more files compiled into it with its own flags (paths or
+#             globs from the repository root, e.g. a vendored library's
+#             under third_party/); with "include" (directories searched),
+#             and for a C++ program "force_include" (headers each file
+#             starts with, as Visual Studio's /FI), also from the
+#             repository root
 import json
 SLOT = 0x01000000
 AUTO_X64 = (0x7FFD00000000, 0x7FFE00000000)
@@ -503,8 +504,13 @@ def build_pass(arch, all_tasks):
         elif src.endswith('.cpp'):                # C++ (exceptions, RTTI): vcruntime140
             run(['clang++'] + cflags() + ['-fcxx-exceptions', '-fexceptions', '-std=c++17',
                  '-c', os.path.join(progdir, src), '-o', obj])
-        else:
-            cc(os.path.join(progdir, src), obj)
+        else:                                     # C (with a vendored C library's files, if any)
+            top = os.path.dirname(HERE)
+            inc = [f for d in prog.get('include', []) for f in ('-I', os.path.join(top, d))]
+            cc(os.path.join(progdir, src), obj, inc)
+            srcs = [f for g in prog.get('sources', []) for f in sorted(glob.glob(os.path.join(top, g), recursive=True))]
+            if srcs:
+                objs += compile_many(srcs, odir, f'prog_{name}_', cflags() + inc)
         res = []                                  # NAME.rc: resources (e.g. the icon)
         rc = os.path.join(progdir, name + '.rc')
         if os.path.exists(rc):

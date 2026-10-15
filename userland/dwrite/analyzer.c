@@ -10,6 +10,7 @@
 DEFINE_GUID(IID_IDWriteTextAnalyzer, 0xb7e6163e, 0x7f46, 0x43b4, 0x84,0xb3, 0xe4,0xe6,0x24,0x9c,0x36,0x5d);
 
 typedef struct { UINT16 script, shapes; } ScriptAnalysis;
+enum { LINE_BREAK_NEUTRAL, LINE_BREAK_CAN, LINE_BREAK_MAY_NOT, LINE_BREAK_MUST };
 typedef struct {
     BYTE break_before : 2;
     BYTE break_after : 2;
@@ -212,8 +213,8 @@ static HRESULT STDMETHODCALLTYPE analyzer_linebreaks(TextAnalyzer *analyzer, voi
     void *iterator = g_icu.break_open(2, NULL, (const UINT16 *)text, (INT32)length, &error);
     if (error > 0 || !iterator) { dw_free(breaks); dw_free(text); return E_FAIL; }
     for (UINT32 i = 0; i < length; i++) {
-        breaks[i].break_before = DWRITE_BREAK_CONDITION_MAY_NOT_BREAK;
-        breaks[i].break_after = DWRITE_BREAK_CONDITION_MAY_NOT_BREAK;
+        breaks[i].break_before = LINE_BREAK_MAY_NOT;
+        breaks[i].break_after = LINE_BREAK_MAY_NOT;
         breaks[i].whitespace = text[i] == ' ' || text[i] == '\t' || text[i] == 0x3000 ||
                                (text[i] >= 0x2000 && text[i] <= 0x200a);
         breaks[i].soft_hyphen = text[i] == 0x00ad;
@@ -223,8 +224,7 @@ static HRESULT STDMETHODCALLTYPE analyzer_linebreaks(TextAnalyzer *analyzer, voi
     while ((boundary = g_icu.break_next(iterator)) != -1) {
         if (boundary > 0 && (UINT32)boundary <= length) {
             INT32 status = g_icu.break_status(iterator);
-            BYTE condition = status >= 100 ? DWRITE_BREAK_CONDITION_MUST_BREAK :
-                                             DWRITE_BREAK_CONDITION_CAN_BREAK;
+            BYTE condition = status >= 100 ? LINE_BREAK_MUST : LINE_BREAK_CAN;
             breaks[boundary - 1].break_after = condition;
             if ((UINT32)boundary < length) breaks[boundary].break_before = condition;
         }

@@ -311,6 +311,29 @@ later copies the data back, writes the `OVERLAPPED`'s status and sets
 its event (or posts to the handle's completion port), as Windows'
 completion APC does (`kernel/nt/io.c`, `kernel/um/um_driver.c`).
 
+hidapi (and SDL, which uses it) tells a USB HID device from a Bluetooth,
+Bluetooth LE, I2C or SPI one by the device tree, as on Windows: the HID
+interface's `DEVPKEY_Device_InstanceId`
+(`CM_Get_Device_Interface_PropertyW`) names the collection's device
+node, and the compatible IDs of that node's parent (`USB\Class_03...`
+for a USB device) say which bus it is on; for a USB device it then reads
+the parent's hardware IDs (`REV_`, `MI_`) and, when the device gives no
+serial number string, takes it from the USB device's instance ID. NovaOS
+answers these from its Plug and Play tree (`userland/cfgmgr32`): a device
+interface path names its device, and its properties are the device's
+instance ID and the interface's class, friendly name and state; a device
+node also has `DEVPKEY_Device_BusTypeGuid` (from its enumerator: USB,
+HID, PCI, ACPI) and `DEVPKEY_Device_ContainerId` (one per removable
+device, shared by its functions and their HID collections). A USB
+device's instance ID is its serial number when it has a usable one
+(printable ASCII, no spaces or commas, and no other device with its
+vendor and product IDs using it), as Windows makes it, so the device
+keeps its ID on any port: `USB\VID_1209&PID_0008\NOVA0002`; one without
+is named by where it is plugged in. hidapi 0.15.0's Windows backend,
+built unchanged (`third_party/hidapi`), enumerates and talks to the
+devices suite's vendor-defined device in `hidapitest` (the "hid" boot,
+64-bit and 32-bit).
+
 A KMDF HID driver cannot call `HidRegisterMinidriver` itself (the
 framework owns its dispatch table), so on Windows it sits as a lower
 filter under `mshidkmdf.sys`, a pass-through minidriver: its INF says

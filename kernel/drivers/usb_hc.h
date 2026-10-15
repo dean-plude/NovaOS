@@ -85,6 +85,8 @@ struct UsbDev {
     bool             is_hub;
     UINT16           vid, pid;
     UINT8            iproduct;     /* the product's string descriptor (0: none) */
+    UINT8            iserial;      /* the serial number's (0: none) */
+    char             serial[48];   /* the serial number its instance ID is, or "" */
     UINT16           rev;          /* bcdDevice */
     UINT32           pnp;          /* its device node (io/pnp.h), 0 if none */
     /* a composite device's functions: each one's node under d->pnp and

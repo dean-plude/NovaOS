@@ -107,3 +107,5 @@ _CRTIMP int    _wremove(const wchar_t *name);
 _CRTIMP int    _wrename(const wchar_t *a, const wchar_t *b);
 _CRTIMP int    _wunlink(const wchar_t *name);
 _NOVA_END
+/* (and the wide character classes, as Visual C++'s wchar.h declares them) */
+#include <wctype.h>

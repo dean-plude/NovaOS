@@ -156,6 +156,31 @@ bool UsbDevProductName(UsbDev *d, char *out, int cap)
     out[k] = 0;
     return k > 0;
 }
+
+bool UsbDevSerialId(UsbDev *d, char *out, int cap)
+{
+    UINT8 s[128];
+    d->serial[0] = 0;
+    int n = d->iserial ? UsbControl(d, 0x80, 6, (UINT16)(0x0300 | d->iserial), 0x0409, sizeof(s), s) : -1;
+    if (n < 4 || s[1] != 3) return false;
+    if (n > s[0]) n = s[0];
+    char v[sizeof(d->serial)];
+    int k = 0;
+    for (int i = 2; i + 1 < n; i += 2) {
+        UINT16 c = (UINT16)(s[i] | s[i + 1] << 8);
+        if (c <= 0x20 || c >= 0x7F || c == ',' || k >= (int)sizeof(v) - 1) return false;
+        v[k++] = (char)c;
+    }
+    v[k] = 0;
+    if (!k || k >= cap) return false;
+    for (int i = 0; i < MAX_DEVS; i++) {
+        UsbDev *o = g_devs[i];
+        if (o && o != d && !o->gone && o->vid == d->vid && o->pid == d->pid && !strcmp(o->serial, v)) return false;
+    }
+    memcpy(d->serial, v, (size_t)k + 1);
+    memcpy(out, v, (size_t)k + 1);
+    return true;
+}
 UINT16 UsbPipeMaxPacket(const UsbPipe *p) { return p->mps; }
 
 const UINT8 *UsbDevConfig(const UsbDev *d, int *len)
@@ -620,6 +645,7 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
     d->vid = (UINT16)(d->buf[8] | d->buf[9] << 8);
     d->pid = (UINT16)(d->buf[10] | d->buf[11] << 8);
     d->iproduct = d->buf[15];
+    d->iserial = d->buf[16];
     d->rev = (UINT16)(d->buf[12] | d->buf[13] << 8);
     UINT8 dev_class = d->buf[4];
 

@@ -2,13 +2,15 @@
  * BIOS (userland/programs/ntvdm/cpu86.c, pcbios.c) on the build machine,
  * outside NovaOS, and drives it from the command line:
  *
- *     vdm_test IMAGE [wait=TEXT | type=TEXT]... [--timeout SECONDS]
+ *     vdm_test IMAGE [wait=TEXT | screen=TEXT | type=TEXT | key=NAME]... [--timeout SECONDS]
  *              [--drive-c=DIR [--cwd=PATH] [--run=PATH [--args=TEXT] --exit=CODE]]
  *     vdm_test --put-dosrw=DIR
  *
  * wait=TEXT runs DOS until it writes TEXT to the screen (through the
- * BIOS, after what the last wait matched); type=TEXT types it ("\r" is
- * Enter).  --drive-c gives DOS directory DIR as drive C: (redir.h), with
+ * BIOS, after what the last wait matched); screen=TEXT until the text
+ * screen (video memory, as a program that writes it directly leaves it)
+ * shows TEXT; type=TEXT types it ("\r" is Enter); key=NAME presses up,
+ * down, left, right or esc.  --drive-c gives DOS directory DIR as drive C: (redir.h), with
  * PATH under it as the current directory; --run has DOS run the program
  * PATH (under DIR) as ntvdm.exe does for CreateProcess, and DOS must end
  * when it does with exit code CODE.  --put-dosrw writes the test program
@@ -220,6 +222,30 @@ static const VdmFs host_fs = { NULL, fs_list, fs_stat, fs_open, fs_close, fs_rea
                                fs_remove, fs_rename, fs_mkdir, fs_rmdir, fs_space };
 
 static char screen[25 * 81 + 1];
+static void read_screen(Vdm *v);
+
+/* the BIOS key (scan code << 8 | character) of a key=NAME */
+static uint16_t named_key(const char *name)
+{
+    static const struct { const char *name; uint16_t key; } keys[] = {
+        { "up", 0x4800 }, { "down", 0x5000 }, { "left", 0x4B00 }, { "right", 0x4D00 }, { "esc", 0x011B },
+    };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        if (!strcmp(name, keys[i].name)) return keys[i].key;
+    return 0;
+}
+
+/* an ASCII stand-in for a code page 437 picture character (faces,
+ * box drawing, shading, dots), so a game's screen reads in the log */
+static char glyph(uint8_t ch)
+{
+    if (ch == 1 || ch == 2) return '@';
+    if (ch >= 0xB0 && ch <= 0xB2) return ':';
+    if (ch >= 0xB3 && ch <= 0xDA) return '#';
+    if (ch == 0xF9 || ch == 0xFA) return '.';
+    if (ch == 0xF0) return '=';
+    return ' ';
+}
 
 static void read_screen(Vdm *v)
 {
@@ -229,7 +255,7 @@ static void read_screen(Vdm *v)
     for (int y = 0; y < rows && y < 25; y++) {
         for (int x = 0; x < cols && x < 80; x++) {
             uint8_t ch = t[(y * cols + x) * 2];
-            *p++ = ch >= 32 && ch < 127 ? (char)ch : ' ';
+            *p++ = ch >= 32 && ch < 127 ? (char)ch : glyph(ch);
         }
         *p++ = '\n';
     }
@@ -252,7 +278,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc < 2) {
-        fprintf(stderr, "usage: vdm_test IMAGE [wait=TEXT | type=TEXT]... [--timeout SECONDS]\n");
+        fprintf(stderr, "usage: vdm_test IMAGE [wait=TEXT | screen=TEXT | type=TEXT | key=NAME]... [--timeout SECONDS]\n");
         return 2;
     }
     const char *drive = NULL, *cwd = "", *run = NULL, *args = "";
@@ -291,9 +317,13 @@ int main(int argc, char **argv)
     for (int i = 2; i < argc && ok; i++) {
         if (!strcmp(argv[i], "--timeout")) { i++; continue; }
         if (!strncmp(argv[i], "--", 2)) continue;
-        if (!strncmp(argv[i], "type=", 5)) {
-            for (const char *s = argv[i] + 5; *s && ok; s++) {
-                uint16_t k = s[0] == '\\' && s[1] == 'r' ? (s++, vdm_char_key('\r')) : vdm_char_key((uint8_t)*s);
+        if (!strncmp(argv[i], "type=", 5) || !strncmp(argv[i], "key=", 4)) {
+            int named = argv[i][0] == 'k';
+            if (named && !named_key(argv[i] + 4)) { fprintf(stderr, "vdm_test: what key is %s?\n", argv[i]); return 2; }
+            for (const char *s = argv[i] + (named ? 4 : 5); *s && ok; s++) {
+                uint16_t k = named ? named_key(s) : s[0] == '\\' && s[1] == 'r' ? (s++, vdm_char_key('\r'))
+                                                                           : vdm_char_key((uint8_t)*s);
+                if (named) s += strlen(s) - 1;
                 while (!vdm_key(&vdm, k)) {         /* (as fast as DOS takes them) */
                     vdm_run(&vdm, 20000);
                     if (host_ms(NULL) > deadline) { printf("vdm_test: DOS takes no keys\n"); ok = 0; break; }
@@ -301,11 +331,20 @@ int main(int argc, char **argv)
             }
             continue;
         }
-        if (strncmp(argv[i], "wait=", 5)) { fprintf(stderr, "vdm_test: what is %s?\n", argv[i]); return 2; }
-        const char *want = argv[i] + 5;
+        int on_screen = !strncmp(argv[i], "screen=", 7);
+        if (!on_screen && strncmp(argv[i], "wait=", 5)) { fprintf(stderr, "vdm_test: what is %s?\n", argv[i]); return 2; }
+        const char *want = argv[i] + (on_screen ? 7 : 5);
         for (;;) {
             int r = vdm_run(&vdm, 200000);
-            const char *hit = said ? strstr(said + from, want) : NULL;
+            if (on_screen) {
+                read_screen(&vdm);
+                if (strstr(screen, want)) {
+                    printf("vdm_test: \"%s\" on the screen after %llu instructions\n", want,
+                           (unsigned long long)vdm.cpu.count);
+                    break;
+                }
+            }
+            const char *hit = on_screen ? NULL : said ? strstr(said + from, want) : NULL;
             if (hit) {
                 from = (size_t)(hit - said) + strlen(want);
                 printf("vdm_test: \"%s\" after %llu instructions\n", want, (unsigned long long)vdm.cpu.count);

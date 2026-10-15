@@ -13463,6 +13463,21 @@ endpoint and pass MJPEG frames on undecoded.
 Still needed for 28.3: a boot of `latest` on the T14 showing its
 webcam's picture in Camera.
 
+## A DOS game, and Phase 31 done
+
+Roadmap step 31.4, the last of Phase 31.  bootRogue, Oscar Toledo G.'s
+roguelike in 510 bytes of 8086 code (BSD 2-clause, `third_party/bootrogue`,
+unchanged), is assembled with NASM and ships as `C:\Tests\Dos\ROGUE.COM`.
+It is the first DOS program in the tests that bypasses DOS and the BIOS:
+it writes its dungeon straight into video memory and seeds its random
+numbers from the timer chip.  `dostest` now starts it, waits for the hero
+and the HP on the console, plays eight moves with the arrow keys and ends
+it with Esc (exit code 0); CI's MS-DOS job plays it on Linux as well
+(`vdm_test` learned `screen=` and `key=` steps) and writes a file in
+`EDLIN`.  MS-DOS 4.00's utilities (Gold: text mode only) and bootRogue
+(Platinum) have compatibility entries, the user guide has a DOS programs
+section, and [dos.md](dos.md) a screenshot.
+
 ## MS-DOS in a console window
 
 Roadmap step 31.2.  `ntvdm.exe`, NovaOS's DOS host, boots the MS-DOS 4.00

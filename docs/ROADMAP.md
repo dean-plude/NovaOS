@@ -918,9 +918,14 @@ small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
   returns with its exit code; `dostest` runs a `.COM` from `cmd` by name
   and an `.EXE` from `CreateProcess`, each reading and writing a file on
   C:.
-- [ ] **31.4 Programs and documentation.** A DOS utility and a freeware
+- [x] **31.4 Programs and documentation.** A DOS utility and a freeware
   DOS game bundled for CI, their compatibility entries, a screenshot,
-  and the user guide.
+  and the user guide.  bootRogue (BSD 2-clause, `third_party/bootrogue`)
+  ships as `C:\Tests\Dos\ROGUE.COM`; `dostest` plays it with the arrow
+  keys and CI's MS-DOS job plays it and writes a file in `EDLIN`;
+  compatibility entries for MS-DOS 4.00's utilities and bootRogue,
+  `docs/screenshots/dos-bootrogue.png`, and [dos.md](dos.md) as the
+  user guide.
 
 ---
 

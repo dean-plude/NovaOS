@@ -41,8 +41,8 @@ void UmGuiDpiChanged(void);            /* a monitor's DPI changed: WM_NOVA_DPI t
 void UmGuiDevicesChanged(UINT32 after);   /* devices came or went (events after seq @after): WM_DEVICECHANGE to every window */
 
 /* Find a program by name: a path, or a bare name searched in @cwd,
- * C:\Programs and C:\Windows\System32 (".exe" added if missing), then as
- * C:\Programs\NAME\NAME.exe. */
+ * C:\Programs and C:\Windows\System32 (".com", then ".exe", added if
+ * missing, as cmd's PATHEXT has them), then as C:\Programs\NAME\NAME.exe. */
 RamNode   *UmFindProgram(RamNode *cwd, const char *name);
 
 /* Start @exe with command line @cmdline (UTF-8/ASCII), current directory
@@ -62,6 +62,15 @@ void        UmSpawnAbandon(UmSpawnJob *j);
 /* Start a program to run on its own (UmSpawn + UmDetach) without waiting
  * for it to load; a failure is logged.  False if out of memory. */
 bool        UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd);
+/* Whether @f is a 16-bit DOS program: an MZ image with no Windows header
+ * after its DOS one, or a .COM file that is not an MZ image */
+bool        UmIsDosProgram(RamNode *f);
+/* The program that runs @exe with command line @cmdline: @exe itself, or
+ * for a DOS program the DOS host, as Windows starts ntvdm.exe for one
+ * (C:\Windows\System32\ntvdm.exe, its command line in *@host_cmd:
+ * ntvdm.exe -run "PATH" ARGUMENTS, for the caller to kfree; NULL when
+ * @exe runs as itself).  Every way of starting a program goes through it. */
+RamNode    *UmDosHost(RamNode *exe, const char *cmdline, char **host_cmd);
 /* Whether @exe is a Windows GUI program (PE subsystem 2, 32- or 64-bit):
  * one the shell starts on its own, with no console window */
 bool        UmIsGuiProgram(RamNode *exe);

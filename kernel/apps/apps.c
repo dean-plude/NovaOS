@@ -218,7 +218,7 @@ static FileType file_type(const RamNode *f)
     if (has_ext(f->name, ".ico")) return FT_ICON;
     if (has_ext(f->name, ".cur")) return FT_CURSOR;
     if (has_ext(f->name, ".png")) return FT_PNG;
-    if (has_ext(f->name, ".exe")) return FT_EXE;
+    if (has_ext(f->name, ".exe") || has_ext(f->name, ".com")) return FT_EXE;     /* (a DOS .COM runs in ntvdm.exe) */
     if (has_ext(f->name, ".dll")) return FT_DLL;
     if (has_ext(f->name, ".msi")) return FT_MSI;
     if (has_ext(f->name, ".lnk")) return FT_LINK;

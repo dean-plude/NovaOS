@@ -2461,6 +2461,11 @@ static UINT64 sys_nova_create_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
     RamNode *cwd = dp[0] ? RamfsResolve(NULL, dp) : p->cwd;
     if (!cwd || !cwd->dir) cwd = p->cwd;
     if (!st && (!exe || exe->dir)) st = ST_OBJECT_NAME_NOT_FOUND;
+    if (!st) {                                      /* a DOS program: the DOS host runs it */
+        char *dos;
+        exe = UmDosHost(exe, cmd, &dos);
+        if (dos) { kfree(cmd); cmd = dos; }
+    }
     /* Map the images first, letting go of the desktop lock meanwhile (the
      * program stays pinned, the folder referenced) */
     bool pinned = false;

@@ -50,15 +50,53 @@ def main():
     cc = os.environ.get('CC') or shutil.which('cc') or 'gcc'
     subprocess.run([cc, '-O2', '-Wall', '-Wextra', '-Werror', '-I', VDM, '-o', exe,
                     os.path.join(HERE, 'vdm_test.c'), os.path.join(VDM, 'cpu86.c'),
-                    os.path.join(VDM, 'pcbios.c')], check=True)
-    autoexec = os.path.join(work, 'AUTOEXEC.BAT')
-    with open(autoexec, 'wb') as f:
-        f.write(b'@ECHO OFF\r\nPROMPT $P$G\r\n')       # (what build_userland.py puts on NovaOS's disk)
-    img = mkdisk.make(built, os.path.join(work, 'msdos.img'), add=[('AUTOEXEC.BAT', autoexec)])
-    r = subprocess.run([exe, img] + STEPS + ['--timeout', str(a.timeout)])
+                    os.path.join(VDM, 'pcbios.c'), os.path.join(VDM, 'redir.c')], check=True)
+    img = mkdisk.make(built, os.path.join(work, 'msdos.img'),          # (the disk build_userland.py ships)
+                      add=mkdisk.novaos_files(os.path.join(work, 'files')))
+    timeout = ['--timeout', str(a.timeout)]
+    r = subprocess.run([exe, img] + STEPS + timeout)
     if r.returncode:
         sys.exit('vdm_test: MS-DOS on the real-mode CPU and BIOS did not do what was typed')
     print('vdm_test: MS-DOS 4.0 boots on ntvdm\'s CPU and BIOS and runs VER, DIR, MEM, CHKDSK, COPY, TYPE and DEBUG')
+
+    drive = os.path.join(work, 'c')
+    shutil.rmtree(drive, ignore_errors=True)
+    folder = os.path.join(drive, 'Users', 'Dean', 'My DOS programs')    # (DOS: C:\USERS\DEAN\MYDOSP~1)
+    os.makedirs(folder)
+    subprocess.run([exe, '--put-dosrw=' + folder], check=True)
+    os.rename(os.path.join(folder, 'DOSRW.COM'), os.path.join(folder, 'dosrw.com'))
+    shutil.copy(os.path.join(built, 'MEM.EXE'), os.path.join(drive, 'mem.exe'))
+    with open(os.path.join(folder, 'in.txt'), 'wb') as f:
+        f.write(b'hello from the host\r\n')
+    rel = os.path.join('Users', 'Dean', 'My DOS programs')
+    out = os.path.join(folder, 'OUT.TXT')
+    for prog in ('dosrw.com', 'DOSRW.EXE'):
+        if os.path.exists(out):
+            os.unlink(out)
+        r = subprocess.run([exe, img, '--drive-c=' + drive, '--cwd=' + rel, '--run=' + os.path.join(rel, prog),
+                            '--args=IN.TXT', '--exit=42', 'wait=DOSRW: wrote OUT.TXT'] + timeout)
+        if r.returncode or not os.path.exists(out):
+            sys.exit(f'vdm_test: {prog} did not run on drive C: as CreateProcess starts it')
+        with open(out, 'rb') as f:
+            if f.read() != b'DOS read: hello from the host\r\n':
+                sys.exit(f'vdm_test: {prog} wrote the wrong OUT.TXT')
+    steps = [
+        'wait=A:\\>', 'type=C:\\r', 'wait=C:\\>', 'type=DIR\\r', 'wait=MEM      EXE', 'wait=bytes free',
+        'type=CD USERS\\DEAN\\MYDOSP~1\\r', 'wait=C:\\USERS\\DEAN\\MYDOSP~1>',
+        'type=CLS\\r', 'type=DIR\\r', 'wait=DOSRW    COM       141', 'wait=bytes free',
+        'type=DOSRW\\r', 'wait=DOSRW: wrote OUT.TXT', 'type=TYPE OUT.TXT\\r', 'wait=DOS read: hello from the host',
+        'type=COPY IN.TXT COPY.TXT\\r', 'wait=1 File(s) copied',
+        'type=MD SUB\\r', 'type=CD SUB\\r', 'wait=MYDOSP~1\\SUB>', 'type=CD ..\\r', 'type=RD SUB\\r',
+        'type=REN COPY.TXT RENAMED.TXT\\r', 'type=DEL OUT.TXT\\r',
+        'type=CLS\\r', 'type=C:\\MEM\\r', 'wait=largest executable program size', 'wait=>',
+    ]
+    os.unlink(out)
+    r = subprocess.run([exe, img, '--drive-c=' + drive] + steps + timeout)
+    names = sorted(os.listdir(folder))
+    if r.returncode or names != ['DOSRW.EXE', 'RENAMED.TXT', 'dosrw.com', 'in.txt']:
+        sys.exit(f'vdm_test: drive C: at the prompt did not do what was typed (the folder has {names})')
+    print('vdm_test: drive C: works: DOSRW.COM and DOSRW.EXE run as CreateProcess starts them, and DIR, CD, '
+          'TYPE, COPY, MD, RD, REN, DEL and MEM at the prompt')
 
 
 if __name__ == '__main__':

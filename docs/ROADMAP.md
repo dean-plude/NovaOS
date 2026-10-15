@@ -553,7 +553,10 @@ item ends when a named program or test demonstrates it.
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl`, and overlapped `ReadFile`, `WriteFile` and
   `DeviceIoControl` with `CancelIo` work as hidapi uses them
-  ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers)).
+  ([drivers.md](drivers.md#hid-the-class-driver-and-minidrivers));
+  hidapi's own Windows backend, built unchanged, finds such a device as
+  USB through the device interface and device node properties
+  (`CM_Get_Device_Interface_PropertyW`, `DEVPKEY_Device_*`).
   Raw Input lists the class driver's collections too and sends their
   reports as `WM_INPUT`.
   Still to do: raw keyboard and mouse input, the Xbox
@@ -574,7 +577,9 @@ item ends when a named program or test demonstrates it.
   enumeration of the tree~~ Done: `SetupDiGetClassDevs` for every class,
   enumerator and interface class, `CM_Locate_DevNode`,
   `CM_Get_Child`/`Sibling`/`Parent`, device ID lists, status, registry
-  and `DEVPKEY` properties, device keys, and `pnputil /enum-devices`
+  and `DEVPKEY` properties (a device's bus type and container too), a
+  device interface's properties (`CM_Get_Device_Interface_PropertyW`),
+  device keys, and `pnputil /enum-devices`
   matching the driver store.  Still to do: query-remove
   (`DBT_DEVICEQUERYREMOVE`) and handle notifications
   (`DBT_DEVTYP_HANDLE`).
@@ -901,10 +906,16 @@ small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
   (`C:\Windows\System32\DOS\MSDOS.IMG`) to `A:\>` in the console
   window; `dostest` types `VER` and `DIR` there, and CI's MS-DOS job runs
   the same CPU and BIOS on Linux through `MEM`, `CHKDSK` and `DEBUG`.
-- [ ] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
+- [x] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
   on a 16-bit image starts the DOS host (as Windows starts `ntvdm.exe`),
   so a `.COM` or `.EXE` runs from `cmd.exe`, the Terminal and Explorer,
-  with the NovaOS drives visible to DOS.
+  with the NovaOS drives visible to DOS.  The kernel's process start runs
+  a DOS `MZ` or `.COM` image as `ntvdm.exe -run`; DOS sees NovaOS's C:
+  through its own network redirector interface (`INT 2Fh AH=11h`, 8.3
+  aliases for long names), `REDIR.COM` runs the program and the console
+  returns with its exit code; `dostest` runs a `.COM` from `cmd` by name
+  and an `.EXE` from `CreateProcess`, each reading and writing a file on
+  C:.
 - [ ] **31.4 Programs and documentation.** A DOS utility and a freeware
   DOS game bundled for CI, their compatibility entries, a screenshot,
   and the user guide.

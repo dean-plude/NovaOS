@@ -13429,6 +13429,78 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## MS-DOS in a console window
+
+Roadmap step 31.2.  `ntvdm.exe`, NovaOS's DOS host, boots the MS-DOS 4.00
+built in step 31.1 in a console window, as Windows' NT Virtual DOS
+Machine did.  x86-64 long mode has no virtual-8086 mode, so DOS runs on a
+real-mode CPU of NovaOS's own (`userland/programs/ntvdm/cpu86.c`, the
+8086 instruction set with the 80186's additions, about 700 lines of C)
+and a PC BIOS written in C (`pcbios.c`: text-mode video, the floppy disk,
+keyboard, clock, timer interrupt and CMOS), reached from the ROM's
+interrupt vectors through "BOP" instructions as NTVDM's were.  The build
+now makes MS-DOS (DOSBox joins the build's packages) and ships a 1.44 MB
+boot disk of all of it in `C:\Windows\System32\DOS`, with Microsoft's
+MIT licence; `ntvdm` in the Terminal boots it to `A:\>`, and F12 gives the
+Terminal back.  The `dostest` self-test types `VER` and `DIR` at the
+prompt; CI's MS-DOS job also boots the disk on the same CPU and BIOS
+built for Linux and runs `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session
+(`tools/msdos/vdm_test.py`).  [dos.md](dos.md) has the details.
+
+## DOS programs start like Windows programs
+
+Roadmap step 31.3.  A 16-bit DOS program now starts the way a Windows one
+does: by name in `cmd` or the Terminal, by a double-click in File Explorer,
+or through `CreateProcess`.  As Windows started `ntvdm.exe` for such an
+image, the kernel's process start sees an `MZ` image with no Windows header
+after it, or a `.COM` file that is not an `MZ` image, and starts
+`ntvdm.exe -run PROGRAM ARGUMENTS` instead.  DOS sees NovaOS's drive C:
+through its own network redirector interface (`INT 2Fh AH=11h`), answered
+by the BIOS from NovaOS's files, with 8.3 aliases for long names
+(`MYDOSP~1`) and the caller's current folder as DOS's; nothing is copied.
+`REDIR.COM`, which the boot disk's `AUTOEXEC.BAT` runs, installs the drive
+and runs the program; when it ends the console is Windows' again, with what
+the program printed still on it and its exit code as the process's.
+`dostest` runs a `.COM` from `cmd` by name and an `.EXE` from
+`CreateProcess`, each reading and writing a file on C:, and CI's MS-DOS job
+runs the same on Linux and types `DIR`, `CD`, `COPY`, `REN`, `DEL` and
+`MEM` on drive C:.  See [dos.md](dos.md).
+
+## hidapi finds USB HID devices by their bus
+
+The fifth HID step: hidapi's Windows backend (and SDL, which uses it)
+asks the Configuration Manager what bus each HID device is on before it
+reads its strings. It takes the HID interface's
+`DEVPKEY_Device_InstanceId` with `CM_Get_Device_Interface_PropertyW`,
+which NovaOS's cfgmgr32 did not have, so every device came back with
+an unknown bus and no USB details.
+
+- **cfgmgr32**: `CM_Get_Device_Interface_PropertyW` (and `_ExW`): an
+  interface path names its device; its properties are the device's
+  instance ID and `DEVPKEY_DeviceInterface_ClassGuid`, `_Enabled` and
+  `_FriendlyName`, and a path no device exposes is
+  `CR_NO_SUCH_DEVICE_INTERFACE`. A device node gains
+  `DEVPKEY_Device_BusTypeGuid`, `DEVPKEY_Device_ContainerId` (shared by
+  a removable device's functions and HID collections) and
+  `DEVPKEY_NAME`, and `CM_Get_DevNode_Property_ExW`.
+- **USB instance IDs**: a USB device with a usable serial number string
+  gets it as its instance ID (`USB\VID_1209&PID_0008\NOVA0002`), as on
+  Windows, so it keeps its ID on any port; one without, or one whose
+  serial another device with the same IDs already uses, is named by its
+  port as before.
+- **SDK headers**: `guiddef.h`, `initguid.h`, `devpropdef.h`,
+  `propkeydef.h`, `ntdef.h`, `winbase.h`, `MAKELANGID`, `ARRAYSIZE`,
+  `PZZWSTR`, `MB_`/`WC_ERR_INVALID_CHARS`, and `wchar.h` declaring the
+  wide character classes as Visual C++'s does.
+- **Programs** can build a vendored C library beside them (a program
+  manifest's `sources` and `include` now work for C too).
+
+hidapi 0.15.0 (`third_party/hidapi`, BSD licence) builds unchanged into
+`hidapitest`, which the devices suite's "hid" boot runs 64-bit and
+32-bit: `hid_enumerate` reports the vendor-defined test device as USB
+with its instance ID, product and serial number, and `hid_open`,
+feature reports, `hid_write` and `hid_read_timeout` work on it.
+
 ## MS-DOS 4.0 built from Microsoft's source
 
 Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran

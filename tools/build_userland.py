@@ -705,12 +705,9 @@ for n in sorted(os.listdir(os.path.join(umdfdir, 'umdftest'))):
 # (tools/msdos/mkdisk.py), and its licence: C:\Windows\System32\DOS
 msdosdir = os.path.join(out, 'msdos')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msdos', 'build_msdos.py'), msdosdir])
-autoexec = os.path.join(out, 'msdos-autoexec.bat')
-with open(autoexec, 'wb') as f:
-    f.write(b'@ECHO OFF\r\nPROMPT $P$G\r\n')
 msdosimg = os.path.join(out, 'MSDOS.IMG')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msdos', 'mkdisk.py'), msdosdir, msdosimg,
-     '--add', f'AUTOEXEC.BAT={autoexec}'])
+     '--novaos'])
 built.append(('\\Windows\\System32\\DOS\\MSDOS.IMG', msdosimg))
 built.append(('\\Windows\\System32\\DOS\\LICENSE.TXT', os.path.join(msdosdir, 'LICENSE')))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)

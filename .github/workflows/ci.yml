@@ -263,7 +263,7 @@ jobs:
         path: graphics-out
         if-no-files-found: ignore
   msdos:
-    name: MS-DOS 4.0 (built from source, booted in QEMU)
+    name: MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)
     needs: checks
     if: needs.checks.outputs.code == 'true'
     runs-on: ubuntu-24.04
@@ -283,6 +283,8 @@ jobs:
       run: python3 tools/msdos/build_msdos.py msdos-out
     - name: Boot it from a floppy image and run COMMAND.COM and MEM.EXE
       run: python3 tools/msdos/boot_test.py msdos-out --work msdos-boot
+    - name: Boot it on ntvdm's real-mode CPU and BIOS and type at COMMAND.COM
+      run: python3 tools/msdos/vdm_test.py msdos-out --work msdos-vdm
     - name: Keep the MS-DOS files and the boot log
       if: always()
       uses: actions/upload-artifact@v4

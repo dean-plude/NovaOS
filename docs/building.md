@@ -16,7 +16,7 @@ sudo apt update
 sudo apt install -y \
     git cmake ninja-build make nasm python3 \
     clang lld llvm libc++-dev gcc-mingw-w64-x86-64 \
-    mtools dosfstools xorriso p7zip-full \
+    mtools dosfstools xorriso p7zip-full dosbox \
     qemu-system-x86 ovmf acpica-tools
 ```
 
@@ -34,7 +34,8 @@ build`), plus QEMU, OVMF and `iasl` for running and testing.
 | `python3` | The userland build (`tools/build_userland.py` and the scripts it calls) |
 | `git` | Fetching Microsoft's Windows-Driver-Frameworks source (see below) |
 | `p7zip-full` | **Required.** Unpacking the bundled Firefox installer and Mesa archive (`7z`, or `7zz` from the `7zip` package) |
-| `mtools`, `dosfstools` | `nova.img`, and copying files onto data disks |
+| `mtools`, `dosfstools` | `nova.img`, copying files onto data disks, and MS-DOS's boot disk (`tools/msdos/mkdisk.py`) |
+| `dosbox` | Building MS-DOS 4.00 from Microsoft's source with its own MASM, C compiler and LINK (`tools/msdos/build_msdos.py`, [dos.md](dos.md)); run headless, a build tool only |
 | `xorriso` | `scripts/create-iso.sh` |
 | `qemu-system-x86`, `ovmf` | Running NovaOS |
 | `acpica-tools` | `iasl`, which the core self-tests use to compile the ACPI tables in `tests/acpi/` |
@@ -44,7 +45,7 @@ up rebuilds.
 
 ### Network access during the build
 
-The build downloads three things.  Each is pinned and checked, and kept
+The build downloads four things.  Each is pinned and checked, and kept
 in a cache under `~/.cache/novaos`:
 
 | What | From | Cache | Checked by |
@@ -52,6 +53,7 @@ in a cache under `~/.cache/novaos`:
 | Firefox 157.0 installer (`tools/bundle_firefox.py`) | `archive.mozilla.org` | `~/.cache/novaos/firefox`, or `NOVA_FIREFOX_CACHE` | Mozilla's `SHA512SUMS` |
 | Mesa 24.2.4 llvmpipe, mesa-dist-win (`tools/bundle_mesa.py`) | GitHub releases | `~/.cache/novaos/mesa`, or `NOVA_MESA_CACHE` | a SHA-256 in the script |
 | Windows-Driver-Frameworks at a pinned commit (`tools/kmdf/build_kmdf.py`) | GitHub, with `git fetch` | `~/.cache/novaos/wdf` | the commit id |
+| MS-DOS at a pinned commit (`tools/msdos/build_msdos.py`), and the DOS files built from it | GitHub, with `git fetch` | `~/.cache/novaos/msdos` | the commit id |
 
 Firefox's `SHA512SUMS` is fetched again on every build, so even a build
 with a full cache needs to reach `archive.mozilla.org`.  Firefox and

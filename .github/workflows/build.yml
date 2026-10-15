@@ -42,6 +42,11 @@ jobs:
       with:
         path: ~/.cache/novaos/mesa
         key: mesa-${{ runner.os }}-${{ hashFiles('tools/bundle_mesa.py') }}
+    - name: Restore the MS-DOS build cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/novaos/msdos
+        key: msdos-v1-${{ hashFiles('tools/msdos/build_msdos.py') }}
     - name: Fetch release firmware (default firmware set and DSP firmware)
       run: python3 tools/fetch_firmware.py
       if: inputs.release

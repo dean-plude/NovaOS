@@ -1,0 +1,1 @@
+| `dostest` | The DOS host (step 31.2): `ntvdm.exe` boots MS-DOS 4.00 in the Terminal's console window on its own real-mode CPU and BIOS; at `COMMAND.COM`'s prompt the test types `VER` and `DIR /W` as key records and reads "MS-DOS Version 4.00" and the listing off the screen; F12 ends `ntvdm.exe` and the Terminal's screen comes back |

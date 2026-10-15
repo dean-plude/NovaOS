@@ -4,9 +4,9 @@
     boot_test.py BUILT_DIR [--work DIR] [--timeout SECONDS]
 
 Checks that the build is a working DOS, not just a set of files: it makes a
-1.44 MB floppy image the way SYS A: would (mtools' mformat with the built
-boot sector, MSBOOT.BIN, IO.SYS and MSDOS.SYS as the first two files of
-the root directory, then COMMAND.COM), with an AUTOEXEC.BAT that sends the
+1.44 MB floppy image the way SYS A: would (mkdisk.py: IO.SYS and MSDOS.SYS
+as the first two files of the root directory, then COMMAND.COM and
+MEM.EXE), with an AUTOEXEC.BAT that sends the
 output of COMMAND.COM's VER and DIR and of MEM.EXE to AUX, the first serial
 port, and boots it in QEMU's PC (SeaBIOS).  It passes when the serial port
 shows "MS-DOS Version 4.00", the directory listing and MEM's report, and
@@ -15,6 +15,9 @@ the marker the batch file echoes last.
 Needs qemu-system-i386 (or qemu-system-x86_64) and mtools.
 """
 import argparse, os, shutil, subprocess, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mkdisk
 
 MARK = 'NOVAOS-MSDOS-BOOT-OK'
 AUTOEXEC = f'''@ECHO OFF
@@ -39,31 +42,8 @@ def main():
     log = os.path.join(work, 'com1.log')
     with open(os.path.join(work, 'AUTOEXEC.BAT'), 'w', newline='\r\n') as f:
         f.write(AUTOEXEC)
-    if os.path.exists(img):
-        os.unlink(img)
-    env = dict(os.environ, MTOOLS_NO_VFAT='1', MTOOLS_SKIP_CHECK='1')
-    def mtool(*args):
-        subprocess.run(list(args), check=True, env=env)
-    # EXE2BIN writes the boot sector (ORG 7C00h) at offset 7C00h of
-    # MSBOOT.BIN, after zeros; the sector itself is the last 512 bytes
-    with open(os.path.join(built, 'MSBOOT.BIN'), 'rb') as f:
-        sector = f.read()[-512:]
-    if sector[-2:] != b'\x55\xaa':
-        sys.exit('boot_test: MSBOOT.BIN does not end in a boot sector')
-    boot = os.path.join(work, 'bootsect.bin')
-    with open(boot, 'wb') as f:
-        f.write(sector)
-    mtool('mformat', '-C', '-f', '1440', '-B', boot, '-i', img, '::')
-    # mformat takes the geometry from the disk; the BIOS drive number the
-    # boot sector reads from (offset 24h, 80h in the source) is set the way
-    # FORMAT sets it for a floppy: drive 0
-    with open(img, 'r+b') as f:
-        f.seek(0x24)
-        f.write(b'\x00')
-    for name in ('IO.SYS', 'MSDOS.SYS', 'COMMAND.COM', 'MEM.EXE'):
-        mtool('mcopy', '-i', img, os.path.join(built, name), '::' + name)
-    mtool('mcopy', '-i', img, os.path.join(work, 'AUTOEXEC.BAT'), '::AUTOEXEC.BAT')
-    mtool('mattrib', '-i', img, '+s', '+h', '+r', '::IO.SYS', '::MSDOS.SYS')
+    mkdisk.make(built, img, ['IO.SYS', 'MSDOS.SYS', 'COMMAND.COM', 'MEM.EXE'],
+                [('AUTOEXEC.BAT', os.path.join(work, 'AUTOEXEC.BAT'))])
 
     qemu = shutil.which('qemu-system-i386') or shutil.which('qemu-system-x86_64')
     if not qemu:

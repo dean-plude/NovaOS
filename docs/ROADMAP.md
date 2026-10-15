@@ -887,16 +887,20 @@ NTVDM. The DOS is MS-DOS 4.00 built from Microsoft's MIT-licensed source
 unchanged; since x86-64 long mode has no virtual-8086 mode, it runs on a
 small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
 
-- [ ] **31.1 Build MS-DOS 4.0 from source.** CI builds `v4.0/src` with
+- [x] **31.1 Build MS-DOS 4.0 from source.** CI builds `v4.0/src` with
   the tree's own MASM, C compiler, LINK and NMAKE
   (`tools/msdos/build_msdos.py`) and boots the result from a floppy image
   in QEMU (`tools/msdos/boot_test.py`): `COMMAND.COM` reports
   "MS-DOS Version 4.00" and `MEM.EXE` runs.
-- [ ] **31.2 A real-mode CPU and a PC BIOS for it.** An 8086/80286
+- [x] **31.2 A real-mode CPU and a PC BIOS for it.** An 8086/80286
   interpreter (MIT/zlib/BSD code, no GPL) with the BIOS services DOS uses
   (video text mode, keyboard, disk, clock) on a NovaOS console window;
   the built `IO.SYS` and `MSDOS.SYS` boot on it to the `COMMAND.COM`
-  prompt.
+  prompt.  `ntvdm.exe` runs DOS on NovaOS's own 8086/80186 interpreter
+  and a BIOS in C, and boots the MS-DOS 4.00 disk the build now ships
+  (`C:\Windows\System32\DOS\MSDOS.IMG`) to `A:\>` in the console
+  window; `dostest` types `VER` and `DIR` there, and CI's MS-DOS job runs
+  the same CPU and BIOS on Linux through `MEM`, `CHKDSK` and `DEBUG`.
 - [ ] **31.3 Start DOS programs like Windows programs.** `CreateProcess`
   on a 16-bit image starts the DOS host (as Windows starts `ntvdm.exe`),
   so a `.COM` or `.EXE` runs from `cmd.exe`, the Terminal and Explorer,

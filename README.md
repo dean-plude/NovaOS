@@ -129,7 +129,7 @@ The build host is Linux (Ubuntu or Debian; on Windows use WSL2, on a Mac see
 
 ```bash
 sudo apt install cmake nasm clang lld llvm libc++-dev gcc-mingw-w64-x86-64 \
-                 python3 git p7zip-full qemu-system-x86 ovmf mtools dosfstools xorriso
+                 python3 git p7zip-full qemu-system-x86 ovmf mtools dosfstools xorriso dosbox
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
@@ -283,7 +283,7 @@ before new code is written.
 | [Architecture](docs/design/architecture.md) | The key design decisions |
 | [Inside NovaOS](docs/inside.md) | A tour of every part |
 | [Early architecture](docs/phase1-architecture.md) | Boot flow, address-space layout, the early kernel |
-| [DOS programs](docs/dos.md) | Building MS-DOS 4.0 from Microsoft's source, and the plan for running DOS programs |
+| [DOS programs](docs/dos.md) | MS-DOS 4.0 built from Microsoft's source and booted by `ntvdm` in a console window, and the plan for running DOS programs |
 | [Drivers](docs/drivers.md) and [Windows driver design](docs/design/windows-drivers.md) | Running Windows driver packages |
 | [Desktop design](docs/design/native-desktop.md) | How the Aurora desktop maps its design reference onto the native shell |
 | [Intel GPU design](docs/design/intel-gpu.md) | The plan for the reference laptop's GPU |

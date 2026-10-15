@@ -510,7 +510,8 @@ def build_pass(arch, all_tasks):
             cc(os.path.join(progdir, src), obj, inc)
             srcs = [f for g in prog.get('sources', []) for f in sorted(glob.glob(os.path.join(top, g), recursive=True))]
             if srcs:
-                objs += compile_many(srcs, odir, f'prog_{name}_', cflags() + inc)
+                headers = [h for d in {os.path.dirname(f) for f in srcs} for h in glob.glob(os.path.join(d, '*.h'))]
+                objs += compile_many(srcs, odir, f'prog_{name}_', cflags() + inc, headers)
         res = []                                  # NAME.rc: resources (e.g. the icon)
         rc = os.path.join(progdir, name + '.rc')
         if os.path.exists(rc):
@@ -698,6 +699,20 @@ for n in ('Wudfx02000.dll', 'WUDFHost.exe'):
     built.append((f'\\Windows\\System32\\{n}', os.path.join(umdfdir, n)))
 for n in sorted(os.listdir(os.path.join(umdfdir, 'umdftest'))):
     built.append((f'\\Tests\\Umdf\\{n}', os.path.join(umdfdir, 'umdftest', n)))
+# 3a2f. MS-DOS 4.00 (Phase 31), built from Microsoft's MIT-licensed source
+# with its own MASM, C compiler and LINK in DOSBox (tools/msdos/
+# build_msdos.py), on the 1.44 MB boot disk ntvdm.exe boots
+# (tools/msdos/mkdisk.py), and its licence: C:\Windows\System32\DOS
+msdosdir = os.path.join(out, 'msdos')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msdos', 'build_msdos.py'), msdosdir])
+autoexec = os.path.join(out, 'msdos-autoexec.bat')
+with open(autoexec, 'wb') as f:
+    f.write(b'@ECHO OFF\r\nPROMPT $P$G\r\n')
+msdosimg = os.path.join(out, 'MSDOS.IMG')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msdos', 'mkdisk.py'), msdosdir, msdosimg,
+     '--add', f'AUTOEXEC.BAT={autoexec}'])
+built.append(('\\Windows\\System32\\DOS\\MSDOS.IMG', msdosimg))
+built.append(('\\Windows\\System32\\DOS\\LICENSE.TXT', os.path.join(msdosdir, 'LICENSE')))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)
 sf2 = os.path.join(out, 'gm.sf2')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'make_gm_soundfont.py'), sf2])

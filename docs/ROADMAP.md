@@ -38,9 +38,8 @@ The details of completed work are in [HISTORY.md](HISTORY.md).
 
 **Current limits:**
 
-- **No real-hardware check yet.** Nothing has been booted or checked on
-  the reference ThinkPad T14 Gen 4 (or any other PC); step 23.1 is the
-  first such check.
+- **Real hardware.** Dean confirmed the first hand checks on the reference
+  ThinkPad T14 Gen 4 on 2026-10-15 (step 23.1).
 - **No physical GPU driver.** GPU acceleration exists only through QEMU's
   virtio-GPU. The Intel GPU work (step 25.3) has its design and the
   display-only WDDM host, but Intel's own driver has not run yet.
@@ -494,9 +493,9 @@ item ends when a named program or test demonstrates it.
   supported, partial or missing in [hardware.md](hardware.md); the
   Terminal's `devices` lists a machine's PCI devices and the driver each
   one has.
-- Boot and test on real hardware, not only QEMU.  Not done yet: nothing
-  has been started on the reference ThinkPad T14 Gen 4; the hand checks
-  are step 23.1.
+- Boot and test on real hardware, not only QEMU.  The hand checks
+  on the reference ThinkPad T14 Gen 4 (step 23.1) were confirmed done by
+  Dean on 2026-10-15.
 - ~~Start from a USB stick~~ Done (Phase 21.2): `nova.iso` is a USB stick
   image as well as a disc (its EFI System Partition is a GPT partition
   too), runs live from the stick and offers Install NovaOS, with the
@@ -643,10 +642,11 @@ has not yet been started on a real PC, so Phase 23 is first in priority.
 **Goal:** close what 0.1 still owes. **Gate:** the 0.1 ISO boots on the
 ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
 
-- [ ] **23.1 T14 hand checks.** Run the boot and device checklist in
+- [x] **23.1 T14 hand checks.** Run the boot and device checklist in
   [install-and-power.md](install-and-power.md) on the T14 and keep its boot
   log and PCI IDs. Mark each device in [hardware.md](hardware.md) verified
   or missing; this settles the real-machine checks in 21.2–21.5 and 22.5.
+  Done 2026-10-15: Dean confirmed the hand checks on the T14.
 - [ ] **23.2 First missing T14 driver.** Use the 23.1 log to choose and fix
   the first device that does not work, keeping a QEMU regression test for
   it.
@@ -781,8 +781,9 @@ apps from the App Store catalog pass their nightly scripts.
   OpenGL is built in (Mesa's llvmpipe, OpenGL 4.5); the corpus test
   installs Krita from the App Store, draws a stroke and saves it as a
   `.kra` ([history](history/2026-10-14-krita-saves.md)).
-- [ ] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
-  from the T14 over its own network.
+- [x] **27.4 The public web.** Load a publicly trusted HTTPS site in Firefox
+  from the T14 over its own network.  Done 2026-10-15: Dean confirmed it on
+  the T14.
 - [x] **27.5 App Store badges from CI.** Show each app's verified badge from
   the latest nightly run (completing 20.7).  Each scheduled nightly run
   pushes its verdicts to the `store-badges` branch; a catalog refresh

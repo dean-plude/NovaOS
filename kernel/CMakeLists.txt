@@ -235,6 +235,7 @@ set(KERNEL_C_SOURCES
     nt/hidclass.c
     nt/hidusb.c
     nt/mshidkmdf.c
+    nt/kbdhid.c
     nt/intr.c
     nt/io.c
     nt/ke.c

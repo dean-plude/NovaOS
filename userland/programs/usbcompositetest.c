@@ -12,10 +12,10 @@
  *    USB\COMPOSITE, "USB Composite Device", started;
  *  - a child per interface, USB\VID_1209&PID_000A&MI_nn with
  *    USB\VID_1209&PID_000A&REV_0114&MI_nn first and USB\Class_03&...
- *    compatible IDs, each started: interface 0 by NovaOS's keyboard
- *    driver (usbhid) with a HID keyboard under it, interfaces 1 and 2 by
- *    the HID class driver's USB minidriver (HidUsb) with a
- *    HID\VID_1209&PID_000A&MI_nn collection under each;
+ *    compatible IDs, each started by the HID class driver's USB
+ *    minidriver (HidUsb) with a HID\VID_1209&PID_000A&MI_nn collection
+ *    under it: interface 0's a keyboard on the keyboard class driver
+ *    (kbdhid), interfaces 1 and 2's vendor-defined ones;
  *  - both collections in the HID interface list, each path naming its
  *    interface; through hid.dll the right usage on each, reports echoed
  *    on the function written to only, and a feature report per function;
@@ -227,7 +227,7 @@ static void check_tree(void)
         check(list_has(c, CM_DRP_COMPATIBLEIDS, L"USB\\Class_03", FALSE), "interface %d: compatible ID USB\\Class_03", mi);
         check(started(c, &problem), "interface %d is started (problem %lu)", mi, problem);
         prop(c, CM_DRP_SERVICE, s, 200);
-        check(!lstrcmpiW(s, mi ? L"HidUsb" : L"usbhid"), "interface %d: its driver is %ls", mi, s);
+        check(!lstrcmpiW(s, L"HidUsb"), "interface %d: its driver is %ls", mi, s);
 
         /* the collection under it */
         DWORD g;
@@ -246,6 +246,12 @@ static void check_tree(void)
         } else {
             prop(g, CM_DRP_CLASS, s, 200);
             check(!lstrcmpiW(s, L"Keyboard"), "interface 0's child is a keyboard (class %ls)", s);
+            check(list_has(g, CM_DRP_HARDWAREID, L"HID_DEVICE_SYSTEM_KEYBOARD", FALSE),
+                  "interface 0's collection: hardware ID HID_DEVICE_SYSTEM_KEYBOARD");
+            for (int i = 0; i < 50 && !started(g, &problem); i++) Sleep(100);
+            check(started(g, &problem), "interface 0's collection is started (problem %lu)", problem);
+            prop(g, CM_DRP_SERVICE, s, 200);
+            check(!lstrcmpiW(s, L"kbdhid"), "interface 0's collection: its driver is %ls", s);
         }
     }
     check(kids == NFN && seen[0] && seen[1] && seen[2], "a child for each of the %d interfaces (%d)", NFN, kids);

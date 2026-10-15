@@ -8,7 +8,7 @@
 # SetupDiOpenDevRegKey).  The keyboard stays plugged in for pnputil: it
 # publishes tools/drivertest/mkdriver.py's novakbd.inf, and
 # /enum-devices /drivers lists the package as matching the keyboard,
-# outranked by NovaOS's own driver; /disconnected lists the phantoms.
+# outranked by NovaOS's own keyboard class driver (kbdhid); /disconnected lists the phantoms.
 
 
 def _plug_keyboard(nova):
@@ -27,11 +27,11 @@ TESTS = [
           r'Device Description: +HID Keyboard Device',
           r'Class GUID: +\{4d36e96b-e325-11ce-bfc1-08002be10318\}',
           r'Status: +Started',
-          r'Driver Name: +usbhid \(a NovaOS driver\)',
+          r'Driver Name: +kbdhid \(a NovaOS driver\)',
           r'Hardware IDs:\s+HID\\VID_0627&PID_0001',
           r'Original Name: +novakbd\.inf',
           r'Matching Device ID: +HID\\VID_0627&PID_0001',
-          r'Driver Status: +Outranked by the NovaOS driver usbhid']),
+          r'Driver Status: +Outranked by the NovaOS driver kbdhid']),
     Test('pnp disconnected devices', 'pnputil /enum-devices /disconnected',
          [r'Instance ID: +USBSTOR\\Disk&Ven_&Prod_\S+', r'Status: +Disconnected']),
 ]

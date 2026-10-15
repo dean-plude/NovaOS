@@ -900,6 +900,21 @@ static NT_STATUS pdo_pnp(UsbdDev *v, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
     return st;
 }
 
+/* IRP_MN_WAIT_WAKE: the device may wake the machine (its remote wakeup
+ * armed, SET_FEATURE(DEVICE_REMOTE_WAKEUP), when its configuration says
+ * it can).  NovaOS completes it at once: the wake itself is the
+ * controller's (xhci.c), and the device stays armed. */
+static NT_STATUS pdo_power(UsbdDev *v, NT_IO_STACK_LOCATION *sl)
+{
+    if (sl->MinorFunction != 0x00) return NT_STATUS_SUCCESS;  /* (D0 always: NovaOS does not suspend USB devices) */
+    UsbDev *d = v->usb;
+    if (v->gone || d->gone) return ST_NO_SUCH_DEVICE;
+    if (!d->cfg || d->cfg_len < 9 || !(d->cfg[7] & 0x20)) return NT_STATUS_NOT_SUPPORTED;
+    if (UsbControl(d, 0x00, 3, 1, 0, 0, NULL) < 0) return ST_IO_DEVICE_ERROR;
+    kprintf("[USBD] %s: remote wakeup armed\n", d->name);
+    return NT_STATUS_SUCCESS;
+}
+
 static NT_API NT_STATUS pdo_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 {
     UsbdDev *v = dev_of(dev);
@@ -909,7 +924,7 @@ static NT_API NT_STATUS pdo_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
     switch (sl->MajorFunction) {
     case NT_IRP_MJ_INTERNAL_DEVICE_CONTROL: st = internal_ioctl(v, irp, sl, &pending); break;
     case NT_IRP_MJ_PNP:            st = pdo_pnp(v, irp, sl); break;
-    case NT_IRP_MJ_POWER:          st = NT_STATUS_SUCCESS; break;   /* (D0 always: NovaOS does not suspend USB devices) */
+    case NT_IRP_MJ_POWER:          st = pdo_power(v, sl); break;
     case NT_IRP_MJ_SYSTEM_CONTROL: st = irp->IoStatus.Status; break;
     default:                       st = NT_STATUS_INVALID_DEVICE_REQUEST; break;
     }

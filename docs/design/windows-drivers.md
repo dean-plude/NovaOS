@@ -247,7 +247,7 @@ step and only when a target driver needs it:
 | USB bus interface | `usbhub3.sys`, `ucx01000.sys` (URBs, `IOCTL_INTERNAL_USB_SUBMIT_URB`), and `usbccgp.sys` for composite devices (a PDO per function, `MI_nn`) | USB client drivers (USB serial, vendor devices, each function of a composite device) | NovaOS's USB core (`kernel/drivers/usb.c`) |
 | NDIS | `ndis.sys` (NDIS 6.x miniports), then WDI/WiFiCx for Wi-Fi | Ethernet and Wi-Fi cards (`netkvm.sys`, Intel `Netwtw*.sys`) | lwIP and NovaOS's network interfaces |
 | Storport | `storport.sys` | storage miniports (`viostor.sys`, `vioscsi.sys`, Intel VMD) | NovaOS's disk layer |
-| HID class | `hidclass.sys` (`kernel/nt/hidclass.c`, built) | HID minidrivers (vendor touchpads, pens), and NovaOS's USB one (`hidusb.c`); KMDF HID drivers as lower filters under NovaOS's `mshidkmdf.sys` (`mshidkmdf.c`, Microsoft's `vhidmini2` sample checked in CI) | `hid.dll` and setupapi (one device per top-level collection) |
+| HID class | `hidclass.sys` (`kernel/nt/hidclass.c`, built) | HID minidrivers (vendor touchpads, pens), and NovaOS's USB one (`hidusb.c`); KMDF HID drivers as lower filters under NovaOS's `mshidkmdf.sys` (`mshidkmdf.c`, Microsoft's `vhidmini2` sample checked in CI) | `hid.dll` and setupapi (one device per top-level collection); keyboard and mouse collections go to NovaOS's `kbdhid.sys` and `mouhid.sys` class drivers (`kernel/nt/kbdhid.c`), which feed `win32k` and Raw Input |
 | PortCls / AVStream | `portcls.sys`, `ks.sys` | audio and camera drivers | NovaOS's audio and capture paths |
 | WDDM | `dxgkrnl.sys` | display miniports and their user-mode D3D/Vulkan drivers | `gdi32`'s `D3DKMT*` calls and the compositor |
 
@@ -462,7 +462,9 @@ downloaded by the test as NovaOS's other tests download apps.
     time through a bounce buffer, line interrupts, no adapter removal.
 
 The HID class host is built (Dean's ask, 2026-10-14; see
-[drivers.md](../drivers.md#hid-the-class-driver-and-minidrivers)).
+[drivers.md](../drivers.md#hid-the-class-driver-and-minidrivers)), and
+USB keyboards and mice reach the desktop through it, on `kbdhid` and
+`mouhid` ([drivers.md](../drivers.md#keyboards-and-mice-kbdhid-and-mouhid)).
 Later steps, each only when a target device needs it: PortCls
 and AVStream (for the T14's audio and camera if their built-in drivers
 fall short), and WDDM ([intel-gpu.md](intel-gpu.md), roadmap step 25.3,

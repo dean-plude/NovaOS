@@ -13429,6 +13429,63 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## hidapi finds USB HID devices by their bus
+
+The fifth HID step: hidapi's Windows backend (and SDL, which uses it)
+asks the Configuration Manager what bus each HID device is on before it
+reads its strings. It takes the HID interface's
+`DEVPKEY_Device_InstanceId` with `CM_Get_Device_Interface_PropertyW`,
+which NovaOS's cfgmgr32 did not have, so every device came back with
+an unknown bus and no USB details.
+
+- **cfgmgr32**: `CM_Get_Device_Interface_PropertyW` (and `_ExW`): an
+  interface path names its device; its properties are the device's
+  instance ID and `DEVPKEY_DeviceInterface_ClassGuid`, `_Enabled` and
+  `_FriendlyName`, and a path no device exposes is
+  `CR_NO_SUCH_DEVICE_INTERFACE`. A device node gains
+  `DEVPKEY_Device_BusTypeGuid`, `DEVPKEY_Device_ContainerId` (shared by
+  a removable device's functions and HID collections) and
+  `DEVPKEY_NAME`, and `CM_Get_DevNode_Property_ExW`.
+- **USB instance IDs**: a USB device with a usable serial number string
+  gets it as its instance ID (`USB\VID_1209&PID_0008\NOVA0002`), as on
+  Windows, so it keeps its ID on any port; one without, or one whose
+  serial another device with the same IDs already uses, is named by its
+  port as before.
+- **SDK headers**: `guiddef.h`, `initguid.h`, `devpropdef.h`,
+  `propkeydef.h`, `ntdef.h`, `winbase.h`, `MAKELANGID`, `ARRAYSIZE`,
+  `PZZWSTR`, `MB_`/`WC_ERR_INVALID_CHARS`, and `wchar.h` declaring the
+  wide character classes as Visual C++'s does.
+- **Programs** can build a vendored C library beside them (a program
+  manifest's `sources` and `include` now work for C too).
+
+hidapi 0.15.0 (`third_party/hidapi`, BSD licence) builds unchanged into
+`hidapitest`, which the devices suite's "hid" boot runs 64-bit and
+32-bit: `hid_enumerate` reports the vendor-defined test device as USB
+with its instance ID, product and serial number, and `hid_open`,
+feature reports, `hid_write` and `hid_read_timeout` work on it.
+
+## Keyboards and mice through kbdhid and mouhid
+
+USB keyboards and mice used to bypass NovaOS's HID class driver: the
+USB core handed them straight to NovaOS's own `usbhid` driver.  They now
+take the Windows path.  The USB device runs `HidUsb` under the HID class
+driver, which makes a collection per top-level collection; a keyboard
+collection (hardware ID `HID_DEVICE_SYSTEM_KEYBOARD`) gets the new
+`kbdhid` class driver and a mouse or pointer collection
+(`HID_DEVICE_SYSTEM_MOUSE`) gets `mouhid`, as `keyboard.inf` and
+`msmouse.inf` install them on Windows.  Both are built into the kernel
+(`kernel/nt/kbdhid.c`): they read the collection's input reports through
+`IRP_MJ_READ`, decode them with NovaOS's report parser and post keys and
+motion to the desktop, write the keyboard lights with `IRP_MJ_WRITE`,
+and arm remote wakeup with `IOCTL_HID_ENABLE_WAKE_ON_SX`.  Device
+Manager shows them under Keyboards and Mice, and Raw Input lists them
+as the keyboard and mouse rather than as HID devices.
+
+USB touch screens, pens, touchpads, boot-protocol-only devices and game
+pads keep NovaOS's own USB drivers for now.  Test: `kbdmoutest` in the
+devices suite's "devmgr" boot plugs in a second keyboard and tablet,
+moves the pointer, types a line and unplugs them.
+
 ## MS-DOS 4.0 built from Microsoft's source
 
 Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran

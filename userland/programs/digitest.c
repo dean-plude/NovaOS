@@ -24,7 +24,15 @@
  *  - "digitest step 4": a tap on the touchpad: WM_LBUTTONDOWN and UP;
  *  - "digitest step 5": two fingers move down the touchpad: WM_MOUSEWHEEL,
  *    away from the user (the content follows the fingers);
- *  - "digitest step 6": the test unplugs the digitizer: its collections
+ *  - "digitest step 6": tap and drag: a tap, then a finger touches again
+ *    at once and moves 40 mm right: two left clicks, the second one held
+ *    while the pointer moves right and let go when the finger lifts;
+ *  - "digitest step 7": two fingers flick 30 mm down the touchpad (ten
+ *    notches) and lift while moving: the scrolling coasts on past the ten;
+ *  - "digitest step 8": the same flick, then a finger touches and moves
+ *    right: the touch stops the coasting (no more WM_MOUSEWHEEL once the
+ *    pointer has moved);
+ *  - "digitest step 9": the test unplugs the digitizer: its collections
  *    leave, and Raw Input and GetPointerDevices no longer list them.
  */
 #include <windows.h>
@@ -161,8 +169,8 @@ static int pens(void)
 }
 
 /* What the window saw */
-static int touch_down, touch_up, pen_down, pen_up, lbdown, lbup, wheel;
-static POINT touch_at, pen_at;
+static int touch_down, touch_up, pen_down, pen_up, lbdown, lbup, wheel, dragmoves;
+static POINT touch_at, pen_at, lbdown_at, lbup_at;
 static UINT32 pen_pressure;
 
 static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
@@ -184,8 +192,9 @@ static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         if (type == PT_PEN_ && m == WM_POINTERUP_) pen_up++;
         return 0;                                    /* (no mouse messages from these) */
     }
-    case WM_LBUTTONDOWN: lbdown++; return 0;
-    case WM_LBUTTONUP: lbup++; return 0;
+    case WM_LBUTTONDOWN: lbdown++; lbdown_at.x = (short)LOWORD(lp); lbdown_at.y = (short)HIWORD(lp); return 0;
+    case WM_LBUTTONUP: lbup++; lbup_at.x = (short)LOWORD(lp); lbup_at.y = (short)HIWORD(lp); return 0;
+    case WM_MOUSEMOVE: if (wp & MK_LBUTTON) dragmoves++; return 0;
     case WM_MOUSEWHEEL: wheel += (short)HIWORD(wp); return 0;
     }
     return DefWindowProcA(h, m, wp, lp);
@@ -209,6 +218,33 @@ static BOOL pen_done(void) { return pen_up >= 1; }
 static BOOL moved_done(void) { POINT p; GetCursorPos(&p); return p.x - cursor_start.x >= 200; }
 static BOOL tap_done(void) { return lbup >= 1; }
 static BOOL wheel_done(void) { return wheel >= 3 * WHEEL_DELTA; }
+static BOOL drag_done(void) { return lbup >= 2; }
+static BOOL flicked(void) { return wheel >= 10 * WHEEL_DELTA; }
+static BOOL stop_moved(void) { POINT p; GetCursorPos(&p); return p.x - cursor_start.x >= 100; }
+
+/* Pump until the wheel has not turned for @quiet ms (at most @secs s) */
+static void settle(int quiet, int secs)
+{
+    DWORD end = GetTickCount() + secs * 1000, still = GetTickCount();
+    int last = wheel;
+    while (GetTickCount() < end && GetTickCount() - still < (DWORD)quiet) {
+        MSG msg;
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+        if (wheel != last) { last = wheel; still = GetTickCount(); }
+        Sleep(20);
+    }
+}
+
+/* Pump for @ms whatever comes */
+static void pump_for(int ms)
+{
+    DWORD end = GetTickCount() + ms;
+    while (GetTickCount() < end) {
+        MSG msg;
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+        Sleep(20);
+    }
+}
 
 int main(void)
 {
@@ -290,7 +326,39 @@ int main(void)
     pump(wheel_done, 30);
     check(wheel >= 3 * WHEEL_DELTA, "two fingers scroll: WM_MOUSEWHEEL away from the user (%d)", wheel);
 
-    step(6, "unplug the digitizer");
+    settle(600, 10);
+    SetCursorPos(sw / 4, sh / 2);
+    GetCursorPos(&cursor_start);
+    lbdown = lbup = dragmoves = 0;
+    step(6, "tap, then touch again and drag right");
+    pump(drag_done, 30);
+    check(lbdown == 2 && lbup == 2, "tap and drag: the tap's click, then the button held for the drag (%d down, %d up)",
+          lbdown, lbup);
+    check(lbup_at.x - lbdown_at.x >= 200 && dragmoves > 0,
+          "the drag moves the pointer with the left button down (from x %ld to %ld, %d moves)",
+          (long)lbdown_at.x, (long)lbup_at.x, dragmoves);
+
+    settle(600, 10);
+    wheel = 0;
+    step(7, "flick two fingers down the touchpad");
+    pump(flicked, 30);
+    settle(800, 15);
+    check(wheel >= 12 * WHEEL_DELTA, "scrolling coasts on after the fingers lift (%d notches, the fingers moved 10)",
+          wheel / WHEEL_DELTA);
+
+    SetCursorPos(sw / 4, sh / 2);
+    GetCursorPos(&cursor_start);
+    wheel = 0;
+    step(8, "flick, then touch the touchpad to stop");
+    pump(stop_moved, 30);
+    pump_for(300);
+    int stopped_at = wheel;
+    pump_for(800);
+    check(stopped_at >= 10 * WHEEL_DELTA && wheel == stopped_at,
+          "a touch stops the coasting (%d notches when the finger moved, %d after)",
+          stopped_at / WHEEL_DELTA, wheel / WHEEL_DELTA);
+
+    step(9, "unplug the digitizer");
     for (int i = 0; i < 300; i++) {
         n = collections(&digi, &mouse);
         if (!n) break;

@@ -16,8 +16,8 @@
  * keyboard sends for those keys.  Touchpads (a Touch Pad application
  * collection, Windows precision touchpads) are switched to touchpad mode
  * when they take it (the Input Mode feature, as Windows does): their
- * finger reports then make the pointer motion, taps, clicks and
- * two-finger scrolling (the gestures below).  One that refuses stays in
+ * finger reports then make the pointer motion, taps, tap-and-drag, clicks
+ * and two-finger scrolling that coasts on (the gestures below).  One that refuses stays in
  * its default mouse mode: the pointer comes from its mouse collection and
  * the finger reports are left alone.  The same parser serves I2C-HID devices
  * (i2chid.c) through HidAttach() and HidInput(), and the class drivers on
@@ -30,7 +30,8 @@
  *
  * Keys become set-1 scancodes (the codes a PS/2 keyboard sends), so
  * everything above the drivers sees one kind of keyboard.  USB keyboards
- * do not repeat keys themselves; UsbHidTickAll() does it.
+ * do not repeat keys themselves; UsbHidTickAll() does it, and keeps a
+ * touchpad's scrolling coasting after the fingers lift.
  */
 
 #include "usb.h"
@@ -41,6 +42,7 @@
 #include "../lib/string.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
+#include "../ke/spinlock.h"
 
 #define EXT 0x100                     /* E0-prefixed set-1 code */
 
@@ -396,6 +398,14 @@ typedef struct {
     INT32      tp_rx, tp_ry;         /* pointer motion not yet a pixel (um) */
     INT32      tp_sx, tp_sy;         /* scrolling not yet a notch (um) */
     UINT8      tp_axis;              /* scrolling locked to: 0 not yet, 1 vertical, 2 horizontal */
+    bool       tp_drag;              /* tap-and-drag: the left button is held while the finger is down */
+    bool       tp_stopped;           /* the gesture's touch stopped a coast (so it is no tap) */
+    UINT64     tp_tap_at;            /* when the last one-finger tap lifted (0: none to drag from) */
+    UINT64     tp_last;              /* the last frame (ticks) */
+    INT32      tp_vx, tp_vy;         /* scrolling speed (um per tick, x256), smoothed over the frames */
+    bool       tp_coast;             /* scrolling coasts on after the fingers lifted */
+    UINT64     tp_coast_at;          /* ... worked out up to this tick */
+    KSpinLock  tp_lock;              /* (frames and the coasting tick come on different threads) */
     bool       dead;
     /* Not a USB device of usbhid.c's own (kbdhid/mouhid, I2C-HID): where
      * its output reports (the keyboard LEDs) go */
@@ -782,28 +792,47 @@ static void touch_report(Hid *h, UINT8 id, const UINT8 *r, int len)
  *
  * A Windows precision touchpad reports its fingers (Tip Switch,
  * Confidence, Contact Identifier, X/Y with a physical size) and the pad's
- * button, and leaves the gestures to the host.  These are Windows' basic
- * ones (its defaults), worked out from each finished frame:
+ * button, and leaves the gestures to the host.  These are Windows 11's
+ * basic ones (its defaults), worked out from each finished frame:
  *
  *   - one finger moving moves the pointer (a pixel per TP_UM_PER_PX);
  *   - a short touch that hardly moves (TP_TAP_TICKS, TP_TAP_UM) is a left
  *     click when it lifts, and with two fingers a right click;
+ *   - tap and drag ("Tap twice and drag to multi-select"): a finger that
+ *     touches again within TP_DRAG_TICKS of a one-finger tap holds the
+ *     left button down until it lifts, so moving it drags; lifting ends
+ *     the drag (no drag lock), and touching again quickly without moving
+ *     is the second click of a double-click;
  *   - two fingers moving scroll: mouse wheel notches (one per
  *     TP_UM_PER_NOTCH), so every program's WM_MOUSEWHEEL and
  *     WM_MOUSEHWHEEL handling works; the content follows the fingers
  *     (Windows' default direction), up and down or sideways, whichever
  *     way the fingers went first;
+ *   - scrolling coasts: fingers that lift while still moving leave the
+ *     scrolling going at their speed, slowing down (TP_COAST_KEEP of it
+ *     each tick) until it stops (TP_COAST_END) or a finger touches the
+ *     pad, which only stops it (that touch is no tap);
  *   - pressing the pad is a left click, or a right click with two fingers
  *     on it; a finger dragging while it is held moves the pointer.
  *
- * Contacts the device does not trust (Confidence off: a palm) are left
- * out.  Frames come as touch screens send them: in hybrid mode a frame
- * with more fingers than a report holds spans several reports. */
+ * The tap and tap-and-drag timeouts are libinput's (MIT; its tap state
+ * machine is tied to its own device model, so the rules are taken rather
+ * than its code).  Contacts the device does not trust (Confidence off: a
+ * palm) are left out.  Frames come as touch screens send them: in hybrid
+ * mode a frame with more fingers than a report holds spans several
+ * reports.  The scrolling speed is smoothed over the frames; a pad sends
+ * frames all the while fingers rest on it, so fingers that stop before
+ * they lift leave next to no speed and do not coast. */
 
 #define TP_TAP_TICKS    18            /* 180 ms */
 #define TP_TAP_UM       2000          /* 2 mm */
+#define TP_DRAG_TICKS   30            /* 300 ms */
 #define TP_UM_PER_PX    80
 #define TP_UM_PER_NOTCH 3000
+#define TP_COAST_MIN    (100 * 256)   /* 10 mm/s: slower fingers do not coast */
+#define TP_COAST_MAX    (5000 * 256)  /* 500 mm/s: the fastest coast */
+#define TP_COAST_END    (20 * 256)    /* 2 mm/s: it has stopped */
+#define TP_COAST_KEEP   248           /* /256 of the speed kept each tick (about a second to stop) */
 
 /* Where a touchpad coordinate is, in micrometres from the pad's edge:
  * through the field's physical range, unit exponent and unit (centimetres
@@ -824,6 +853,28 @@ static INT32 pad_um(const HidField *f, INT32 v)
 
 static INT32 iabs(INT32 v) { return v < 0 ? -v : v; }
 
+static INT32 clamp_speed(INT64 v)
+{
+    return (INT32)(v > TP_COAST_MAX ? TP_COAST_MAX : v < -TP_COAST_MAX ? -TP_COAST_MAX : v);
+}
+
+/* Scrolling that is not yet a notch (tp_sx, tp_sy) into the wheels, on the
+ * axis the gesture locked to */
+static void tp_scroll_out(Hid *h, InputEvent *ev)
+{
+    if (!h->tp_axis && (iabs(h->tp_sx) >= TP_UM_PER_NOTCH || iabs(h->tp_sy) >= TP_UM_PER_NOTCH))
+        h->tp_axis = iabs(h->tp_sy) >= iabs(h->tp_sx) ? 1 : 2;
+    if (h->tp_axis == 1) {                                /* fingers down: the content down, the view up */
+        ev->dz = h->tp_sy / TP_UM_PER_NOTCH;
+        h->tp_sy -= ev->dz * TP_UM_PER_NOTCH;
+        h->tp_sx = 0;
+    } else if (h->tp_axis == 2) {                         /* fingers right: the view left */
+        ev->dw = -(h->tp_sx / TP_UM_PER_NOTCH);
+        h->tp_sx += ev->dw * TP_UM_PER_NOTCH;
+        h->tp_sy = 0;
+    }
+}
+
 /* A frame is complete: make the gesture's next step */
 static void tp_frame(Hid *h, UINT64 now)
 {
@@ -831,15 +882,23 @@ static void tp_frame(Hid *h, UINT64 now)
     InputEvent ev;
     memset(&ev, 0, sizeof(ev));
     ev.type = INPUT_MOUSE;
+    IrqState s = spin_lock_irqsave(&h->tp_lock);
     if (n && !h->tp_nprev) {                              /* the first finger touched */
-        h->tp_start = now;
+        h->tp_stopped = h->tp_coast;                      /* (a touch stops a coast) */
+        h->tp_coast = false;
+        h->tp_drag = n == 1 && h->tp_tap_at && now - h->tp_tap_at <= TP_DRAG_TICKS;
+        h->tp_tap_at = 0;
+        h->tp_start = h->tp_last = now;
         h->tp_most = 0;
         h->tp_travel = 0;
         h->tp_scrolled = h->tp_pressed = false;
         h->tp_rx = h->tp_ry = h->tp_sx = h->tp_sy = 0;
+        h->tp_vx = h->tp_vy = 0;
         h->tp_axis = 0;
     }
     if (n > h->tp_most) h->tp_most = n;
+    INT64 dt = now > h->tp_last ? (INT64)(now - h->tp_last) : 1;
+    h->tp_last = now;
 
     /* How the fingers moved since the last frame: on average, and the one
      * that moved most */
@@ -859,7 +918,10 @@ static void tp_frame(Hid *h, UINT64 now)
     if (h->tp_click && !h->tp_btn) { h->tp_btn = n >= 2 ? MOUSE_RIGHT : MOUSE_LEFT; h->tp_pressed = true; }
     else if (!h->tp_click) h->tp_btn = 0;
 
-    if (moved && (n == 1 || (h->tp_btn && n >= 2))) {     /* the pointer */
+    bool dragged = h->tp_drag;
+    if (!n) h->tp_drag = false;                           /* (lifting ends a drag) */
+
+    if (moved && (n == 1 || ((h->tp_btn || h->tp_drag) && n >= 2))) {     /* the pointer */
         h->tp_rx += n == 1 ? mx : bx;
         h->tp_ry += n == 1 ? my : by;
         ev.dx = h->tp_rx / TP_UM_PER_PX; h->tp_rx -= ev.dx * TP_UM_PER_PX;
@@ -867,36 +929,62 @@ static void tp_frame(Hid *h, UINT64 now)
     } else if (moved == 2 && n == 2) {                    /* scrolling */
         h->tp_sx += mx;
         h->tp_sy += my;
-        if (!h->tp_axis && (iabs(h->tp_sx) >= TP_UM_PER_NOTCH || iabs(h->tp_sy) >= TP_UM_PER_NOTCH))
-            h->tp_axis = iabs(h->tp_sy) >= iabs(h->tp_sx) ? 1 : 2;
-        if (h->tp_axis == 1) {                            /* fingers down: the content down, the view up */
-            ev.dz = h->tp_sy / TP_UM_PER_NOTCH;
-            h->tp_sy -= ev.dz * TP_UM_PER_NOTCH;
-            h->tp_sx = 0;
-        } else if (h->tp_axis == 2) {                     /* fingers right: the view left */
-            ev.dw = -(h->tp_sx / TP_UM_PER_NOTCH);
-            h->tp_sx += ev.dw * TP_UM_PER_NOTCH;
-            h->tp_sy = 0;
-        }
+        h->tp_vx = clamp_speed(((INT64)h->tp_vx + (INT64)mx * 256 / dt) / 2);
+        h->tp_vy = clamp_speed(((INT64)h->tp_vy + (INT64)my * 256 / dt) / 2);
+        tp_scroll_out(h, &ev);
         if (ev.dz || ev.dw) h->tp_scrolled = true;
     }
-    ev.buttons = h->tp_btn;
+    ev.buttons = h->tp_btn | (h->tp_drag ? MOUSE_LEFT : 0);
     if (ev.dx || ev.dy || ev.dz || ev.dw || ev.buttons != h->buttons) hid_post(h, &ev);
     h->buttons = ev.buttons;
 
-    /* Every finger lifted: was it a tap? */
-    if (!n && h->tp_nprev && !h->tp_pressed && !h->tp_scrolled && h->tp_travel < TP_TAP_UM &&
-        now - h->tp_start <= TP_TAP_TICKS && h->tp_most <= 2) {
-        ev.dx = ev.dy = ev.dz = ev.dw = 0;
-        ev.buttons = h->tp_most == 2 ? MOUSE_RIGHT : MOUSE_LEFT;
-        hid_post(h, &ev);
-        ev.buttons = 0;
-        hid_post(h, &ev);
+    if (!n && h->tp_nprev) {
+        /* Every finger lifted: still scrolling, it coasts on */
+        INT32 v = h->tp_axis == 1 ? h->tp_vy : h->tp_axis == 2 ? h->tp_vx : 0;
+        if (h->tp_scrolled && h->tp_most == 2 && iabs(v) >= TP_COAST_MIN) {
+            if (h->tp_axis == 1) h->tp_vx = 0;
+            else h->tp_vy = 0;
+            h->tp_coast = true;
+            h->tp_coast_at = now;
+        }
+        /* ... or was it a tap? */
+        if (!dragged && !h->tp_stopped && !h->tp_pressed && !h->tp_scrolled && h->tp_travel < TP_TAP_UM &&
+            now - h->tp_start <= TP_TAP_TICKS && h->tp_most <= 2) {
+            ev.dx = ev.dy = ev.dz = ev.dw = 0;
+            ev.buttons = h->tp_most == 2 ? MOUSE_RIGHT : MOUSE_LEFT;
+            hid_post(h, &ev);
+            ev.buttons = 0;
+            hid_post(h, &ev);
+            if (h->tp_most == 1) h->tp_tap_at = now ? now : 1;    /* (a finger touching soon drags) */
+        }
     }
     for (int i = 0; i < n; i++) h->tp_prev[i] = h->tp_cur[i];
     h->tp_nprev = n;
     h->tp_ncur = 0;
     h->tp_click = false;
+    spin_unlock_irqrestore(&h->tp_lock, s);
+}
+
+/* Coasting scrolling, every tick: its speed moves the content on, and
+ * slows down */
+static void tp_coast_step(Hid *h, UINT64 now)
+{
+    IrqState s = spin_lock_irqsave(&h->tp_lock);
+    if (!h->tp_coast || h->dead) { spin_unlock_irqrestore(&h->tp_lock, s); return; }
+    for (; h->tp_coast_at < now && h->tp_coast; h->tp_coast_at++) {
+        h->tp_sx += h->tp_vx / 256;
+        h->tp_sy += h->tp_vy / 256;
+        h->tp_vx = (INT32)((INT64)h->tp_vx * TP_COAST_KEEP / 256);
+        h->tp_vy = (INT32)((INT64)h->tp_vy * TP_COAST_KEEP / 256);
+        if (iabs(h->tp_vx) < TP_COAST_END && iabs(h->tp_vy) < TP_COAST_END) h->tp_coast = false;
+    }
+    InputEvent ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = INPUT_MOUSE;
+    tp_scroll_out(h, &ev);
+    ev.buttons = h->buttons;
+    if (ev.dz || ev.dw) hid_post(h, &ev);
+    spin_unlock_irqrestore(&h->tp_lock, s);
 }
 
 static void tp_report(Hid *h, UINT8 id, const UINT8 *r, int len, UINT64 now)
@@ -964,10 +1052,12 @@ static bool on_report(UsbPipe *p, const UINT8 *data, int len, void *ctx)
     return true;
 }
 
+/* Every tick: held keys repeat, touchpad scrolling coasts */
 void UsbHidTickAll(UINT64 now)
 {
     for (int i = 0; i < MAX_HID; i++) {
         Hid *h = g_hids[i];
+        if (h && h->ptp && h->tp_coast) tp_coast_step(h, now);
         if (!h || h->dead || !h->repeat || now < h->repeat_at) continue;
         post_key(h, h->repeat, true);                   /* a make without a break, as PS/2 sends */
         h->repeat_at = now + REPEAT_RATE;
@@ -1023,6 +1113,7 @@ static void hid_gone(void *inst)
         touch_frame_end(h);
     }
     h->repeat = 0;
+    h->tp_coast = h->tp_drag = false;
     h->dead = true;
     for (int i = 0; i < MAX_HID; i++)
         if (g_hids[i] == h) g_hids[i] = NULL;
@@ -1249,6 +1340,7 @@ void HidStop(void *hid)
         touch_frame_end(h);
     }
     h->repeat = 0;
+    h->tp_coast = h->tp_drag = false;
     h->dead = true;
     for (int i = 0; i < MAX_HID; i++)
         if (g_hids[i] == h) g_hids[i] = NULL;

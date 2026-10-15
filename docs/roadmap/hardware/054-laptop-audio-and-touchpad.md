@@ -15,5 +15,8 @@
   (Phase 21.4): a driver for Intel's GPIO controllers (Tiger Lake to
   Meteor Lake) takes the touchpad's GpioInt pin and the touchpad is read
   when it fires, polled only when no interrupt can be had (checked on a
-  modelled controller, `hwcheck`).  Not yet: tap-and-drag and scrolling
-  that coasts on after the fingers lift.
+  modelled controller, `hwcheck`).  ~~Tap-and-drag and scrolling that
+  coasts on after the fingers lift~~ Done: a tap then a touch drags with
+  the left button held until the finger lifts (no drag lock, as Windows
+  11), and a two-finger flick keeps scrolling, slowing down, until it
+  stops or a touch stops it (`hwcheck`, `digitest`).

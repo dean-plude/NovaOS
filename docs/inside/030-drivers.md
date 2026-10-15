@@ -22,7 +22,8 @@
     Input and `hid.dll`).
   - **Other input**: PS/2 keyboards and mice; I2C-HID touchpads on Intel's
     LPSS I2C controllers, found through ACPI and read on their GPIO
-    interrupt (tap to click, two-finger right click and scrolling);
+    interrupt (tap to click, tap and drag, two-finger right click and
+    scrolling that coasts after a flick);
     virtio multi-touch screens, pens and tablets.
   - **Display**: a VBE "DISPI" driver for QEMU's standard VGA, QXL,
     virtio-vga, VMware and bochs-display adapters and VirtualBox's VBoxVGA

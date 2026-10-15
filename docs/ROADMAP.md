@@ -629,7 +629,7 @@ item ends when a named program or test demonstrates it.
 
 ---
 
-## After 0.1: Phases 23 to 31
+## After 0.1: Phases 23 to 32
 
 These phases follow the first release. They keep the rule of Phases 15 to
 22: each step is one focused change with a check anyone can repeat. A
@@ -921,6 +921,33 @@ small real-mode CPU inside a NovaOS process. See [dos.md](dos.md).
 - [ ] **31.4 Programs and documentation.** A DOS utility and a freeware
   DOS game bundled for CI, their compatibility entries, a screenshot,
   and the user guide.
+
+### Phase 32: Windows.UI.Xaml
+
+**Goal:** UWP and XAML apps draw their windows on NovaOS: the Windows
+Runtime's app model (`CoreApplication`, `CoreWindow`), its compositor,
+and the XAML framework built from Microsoft's MIT source
+([github.com/microsoft/microsoft-ui-xaml](https://github.com/microsoft/microsoft-ui-xaml))
+as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
+[design/windows-ui-xaml.md](design/windows-ui-xaml.md).
+
+- [ ] **32.1 WinRT activation from the registry; CoreApplication and
+  CoreWindow.** `RoGetActivationFactory` loads the in-process server
+  named under `ActivatableClassId`; `twinapi.appcore.dll` runs an
+  `IFrameworkView` through `CoreApplication.Run` on a `CoreWindow` with
+  its events and dispatcher; DXGI presents into a CoreWindow.  Test
+  `coreapptest`.
+- [ ] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
+  and drawing surfaces on NovaOS's DirectComposition; CoreWindow's
+  pointer events.
+- [ ] **32.3 The XAML core builds.** The `dxaml` core as
+  `Windows.UI.Xaml.dll`: `Application.Start` runs and `XamlReader.Load`
+  parses a page.
+- [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
+  drawn, typed into and clicked in a self-test, with a screenshot.
+- [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
+- [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
+  then the Calculator package.
 
 ---
 

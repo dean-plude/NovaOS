@@ -1,0 +1,4 @@
+{
+  "deps": ["ole32", "user32", "kernel32", "ntdll"],
+  "file": "twinapi.appcore.dll"
+}

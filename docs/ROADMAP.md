@@ -322,6 +322,13 @@ item ends when a named program or test demonstrates it.
   shaders, so KVM runs judge it)~~ Done (in the nightly corpus).  Still
   to do: GOG GALAXY's client, signing in to Steam (its login window opens
   and draws), Roblox's player (its anti-cheat refuses virtual machines).
+- Windows Calculator (github.com/microsoft/calculator): ~~its engine,
+  CalcManager, in a Win32 `calc.exe` with the Standard, Scientific and
+  Programmer calculators~~ Done (`calc`); the converters (CalcManager's
+  `UnitConverter` needs the Concurrency Runtime's `task<>`, and the unit
+  and currency data comes from the app's C# view models); then the
+  shipped UWP package itself, which needs MSIX deployment, WinRT
+  activation, `Windows.UI.Xaml` with WinUI 2 and the UWP .NET runtime.
 
 <!-- END generated:next-apps -->
 

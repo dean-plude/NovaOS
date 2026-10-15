@@ -630,12 +630,13 @@ static void draw_prog_icon(int i, int x, int y, int s)
 {
     RamNode *n = g_progs[i].link ? RamfsResolve(NULL, g_progs[i].path) : NULL;
     if (n) AppDrawNodeIcon(n, x, y, s);
-    else AppDrawProgramIcon(g_progs[i].name, x, y, s);
+    else AppDrawProgramIcon(g_progs[i].path[0] ? g_progs[i].path : g_progs[i].name, x, y, s);
 }
 
-/* System tools in C:\Windows\System32 the Start menu lists by name, as
- * Windows lists its Windows Tools */
+/* Programs in C:\Windows\System32 the Start menu lists by name, as
+ * Windows lists Calculator and its Windows Tools */
 static const struct { const char *name, *path; } g_tools[] = {
+    { "Calculator", "\\Windows\\System32\\calc.exe" },
     { "Device Manager", "\\Windows\\System32\\devmgmt.exe" },
     { "Event Viewer", "\\Windows\\System32\\eventvwr.exe" },
     { "Disk Management", "\\Windows\\System32\\diskmgmt.exe" },

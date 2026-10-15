@@ -143,12 +143,38 @@ def png_rect(w, h, img):
     return (b'\x89PNG\r\n\x1a\n' + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
             ch(b'IDAT', zlib.compress(bytes(raw), 9)) + ch(b'IEND', b''))
 
+def calc(n):
+    """Calculator: a dark calculator with a display, light keys and a blue equals key"""
+    img = []
+    u = n / 256
+    for y in range(n):
+        for x in range(n):
+            px, py = x + 0.5, y + 0.5
+            c = (0, 0, 0, 0)
+            bx0, by0, bx1, by1 = n * 0.16, n * 0.08, n * 0.84, n * 0.92
+            c = over(c, lerp((0x5A, 0x5E, 0x66), (0x2C, 0x2E, 0x34), py / n),
+                     cov(rrect(px, py, bx0, by0, bx1, by1, n * 0.12)))
+            c = over(c, (0xE4, 0xEC, 0xF6), cov(rrect(px, py, n * 0.25, n * 0.17, n * 0.75, n * 0.36, max(1.0, 10 * u))))
+            rows, cols = (3, 3) if n >= 24 else (2, 2)
+            kx0, ky0, kx1, ky1 = n * 0.25, n * 0.44, n * 0.75, n * 0.84
+            gap = n * 0.04
+            kw, kh = (kx1 - kx0 - gap * (cols - 1)) / cols, (ky1 - ky0 - gap * (rows - 1)) / rows
+            for r in range(rows):
+                for k in range(cols):
+                    x0, y0 = kx0 + k * (kw + gap), ky0 + r * (kh + gap)
+                    col = (0x2E, 0x8C, 0xF0) if (r, k) == (rows - 1, cols - 1) else (0xC8, 0xCC, 0xD4)
+                    c = over(c, col, cov(rrect(px, py, x0, y0, x0 + kw, y0 + kh, max(1.0, 6 * u))))
+            img.append(c)
+    return img
+
+
 PICTURES = {
     'userland/files/Pictures/Sunset.png': (sunset, 640, 400),
 }
 
 ICONS = {
     'userland/programs/winhello.ico': winhello,
+    'userland/programs/calc.ico': calc,
     'userland/files/Pictures/Nova.ico': nova,
 }
 

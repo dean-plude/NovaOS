@@ -35,6 +35,7 @@
 
 #define APPCORE_API __declspec(dllexport)
 typedef BYTE boolean_t;
+int _fltused = 0x9875;          /* sizes in DIPs are floats (the compiler references it) */
 
 #define E_ILLEGAL_METHOD_CALL_ ((HRESULT)0x8000000EL)
 #define RPC_E_WRONG_THREAD_    ((HRESULT)0x8001010EL)

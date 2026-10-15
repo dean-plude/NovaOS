@@ -13432,7 +13432,9 @@ must match `tests/reference/sharex.png`.  It needed these NovaOS fixes:
 - **TaskbarList.**  `shell32` provides the TaskbarList class
   (`ITaskbarList` to `ITaskbarList4`, registered under its CLSID); every
   call succeeds and changes nothing yet.  Without it ShareX showed an
-  error box after each capture.
+  error box after each capture.  `comtest` (64- and now 32-bit) calls
+  every method and checks that each leaves a 32-bit caller's stack as it
+  was.
 - **One COM context per apartment thread.**  `CoGetContextToken` gave all
   single-threaded apartments the same token, and .NET, which keys its COM
   wrappers by that token, released the UI thread's wrappers when a worker

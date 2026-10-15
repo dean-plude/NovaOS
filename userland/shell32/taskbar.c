@@ -53,17 +53,27 @@ static ULONG STDMETHODCALLTYPE tb_release(TaskbarList *t)
     if (!n) HeapFree(GetProcessHeap(), 0, t);
     return (ULONG)n;
 }
-/* every other method: S_OK, whatever its arguments (all take the object
- * and at most five more, in registers or above the shadow space) */
-static HRESULT STDMETHODCALLTYPE tb_ok(TaskbarList *t) { (void)t; return S_OK_; }
+/* every other method: S_OK.  Each takes its own arguments, since on x86
+ * a method pops them itself (stdcall): one for all would leave the
+ * caller's stack off by the difference (VLC's video window crashed so) */
+static HRESULT STDMETHODCALLTYPE tb_ok0(TaskbarList *t) { (void)t; return S_OK_; }
+static HRESULT STDMETHODCALLTYPE tb_ok1(TaskbarList *t, ULONG_PTR a) { (void)t; (void)a; return S_OK_; }
+static HRESULT STDMETHODCALLTYPE tb_ok2(TaskbarList *t, ULONG_PTR a, ULONG_PTR b) { (void)t; (void)a; (void)b; return S_OK_; }
+static HRESULT STDMETHODCALLTYPE tb_ok3(TaskbarList *t, ULONG_PTR a, ULONG_PTR b, ULONG_PTR c) { (void)t; (void)a; (void)b; (void)c; return S_OK_; }
+static HRESULT STDMETHODCALLTYPE tb_progress(TaskbarList *t, HWND w, ULONGLONG done, ULONGLONG total)
+{
+    (void)t; (void)w; (void)done; (void)total;
+    return S_OK_;
+}
 
 static void *const g_tb_vtbl[] = {
     tb_qi, tb_addref, tb_release,
-    tb_ok, tb_ok, tb_ok, tb_ok, tb_ok,                  /* HrInit, AddTab, DeleteTab, ActivateTab, SetActiveAlt */
-    tb_ok,                                              /* MarkFullscreenWindow */
-    tb_ok, tb_ok, tb_ok, tb_ok, tb_ok, tb_ok,           /* SetProgressValue/State, RegisterTab, UnregisterTab, SetTabOrder, SetTabActive */
-    tb_ok, tb_ok, tb_ok, tb_ok, tb_ok, tb_ok,           /* ThumbBar*, SetOverlayIcon, SetThumbnailTooltip, SetThumbnailClip */
-    tb_ok,                                              /* SetTabProperties */
+    tb_ok0, tb_ok1, tb_ok1, tb_ok1, tb_ok1,             /* HrInit, AddTab, DeleteTab, ActivateTab, SetActiveAlt */
+    tb_ok2,                                             /* MarkFullscreenWindow */
+    tb_progress, tb_ok2, tb_ok2, tb_ok1, tb_ok2, tb_ok3, /* SetProgressValue/State, RegisterTab, UnregisterTab, SetTabOrder, SetTabActive */
+    tb_ok3, tb_ok3, tb_ok2,                             /* ThumbBarAddButtons, ThumbBarUpdateButtons, ThumbBarSetImageList */
+    tb_ok3, tb_ok2, tb_ok2,                             /* SetOverlayIcon, SetThumbnailTooltip, SetThumbnailClip */
+    tb_ok2,                                             /* SetTabProperties */
 };
 
 static HRESULT STDMETHODCALLTYPE cf_qi(void *t, REFIID riid, void **ppv)

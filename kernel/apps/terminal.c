@@ -1448,6 +1448,8 @@ static char cell_char(UINT32 c)
     if (c == 0x201C || c == 0x201D) return '"';
     if (c == 0x2022 || c == 0x00B7) return '*';
     if (c >= 0x2580 && c <= 0x259F) return '#';         /* blocks */
+    if (c == 0x263A || c == 0x263B) return '@';         /* faces: a DOS game's player, as a roguelike draws it */
+    if (c == 0x2261) return '=';                       /* (code page 437's F0h, a ladder in bootRogue) */
     return '?';
 }
 
@@ -1505,10 +1507,26 @@ static const VTermScreenCallbacks g_vt_cbs = {
 
 /* Start screen mode: the lines on show move into the emulator's screen
  * (the last one, still open, with the cursor after it) */
+/* A program that takes the whole screen gets at least a PC's 80 x 25, as
+ * a console window has (a DOS program's screen is 25 rows): the window
+ * grows to fit, never shrinks */
+static void screen_min_size(Term *t)
+{
+    WND *w = t->w;
+    if (w->maximized || w->snapped) return;
+    int rows = term_rows(t), cols = term_cols(t);
+    GdiRect f = w->frame;
+    if (rows < 25) f.h += (25 - rows) * T_LINE_H;
+    if (cols < 80) f.w += ((80 - cols) * GdiMonoCellW256() + 255) / 256;
+    if (f.h != w->frame.h || f.w != w->frame.w) WmSetFrame(w, f);
+}
+
 static bool screen_enter(Term *t)
 {
     Job *j = &t->job;
     if (j->vt) return true;
+    screen_min_size(t);
+    if (j->con) UmConsoleSetSize(j->con, term_cols(t), term_rows(t));
     int rows = term_rows(t), cols = term_cols(t);
     VTerm *vt = vterm_new(rows, cols);
     if (!vt) return false;

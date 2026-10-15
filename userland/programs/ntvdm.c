@@ -293,6 +293,13 @@ static void draw(Vdm *v)
     if (cols > 80) cols = 80;
     if (rows > 50) rows = 50;
     size_t n = (size_t)cols * rows * 2;
+    CONSOLE_SCREEN_BUFFER_INFO info;            /* (the window grew to fit 25 rows: all of it again) */
+    static COORD shown_size;
+    if (GetConsoleScreenBufferInfo(out, &info) &&
+        (info.dwSize.X != shown_size.X || info.dwSize.Y != shown_size.Y)) {
+        shown_size = info.dwSize;
+        drawn = 0;
+    }
     int top = 0, bottom = rows - 1;             /* (the rows that changed: the console redraws them) */
     if (drawn && cols == shown_cols && rows == shown_rows) {
         size_t row = (size_t)cols * 2;
@@ -444,7 +451,7 @@ int main(int argc, char **argv)
     SetConsoleMode(out, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     CURSOR_INFO old_cursor = { 25, TRUE };
     GetConsoleCursorInfo(out, &old_cursor);
-    WriteConsoleA(out, "\x1b[?1049h\x1b[H\x1b[2J", 16, &n, NULL);   /* the alternate screen */
+    WriteConsoleA(out, "\x1b[?1049h\x1b[H\x1b[2J", 15, &n, NULL);   /* the alternate screen */
     SetConsoleTitleW(program[0] ? L"MS-DOS 4.00" : L"MS-DOS 4.00 (F12 returns to NovaOS)");
     OutputDebugStringA("ntvdm: booting MS-DOS\n");
 

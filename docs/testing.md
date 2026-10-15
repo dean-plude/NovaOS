@@ -293,12 +293,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   ntvdm.exe's real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR,
   F12 gives the screen back; a DOS .COM run from cmd by name and a DOS
   .EXE from CreateProcess read and write files on drive C: and return
-  their exit code), programs started from the Start menu (Win+S, the
-  name, Enter): `winhello`, a GUI program, with no Terminal window, and
-  `hello`, a console program, in a Terminal, `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
-  function names, and last the kernel crash report: after `crash kernel`
-  and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
+  their exit code; the DOS game bootRogue draws its dungeon straight
+  into video memory, takes arrow keys and ends on Esc), programs started
+  from the Start menu (Win+S, the name, Enter): `winhello`, a GUI
+  program, with no Terminal window, and `hello`, a console program, in a
+  Terminal, `crash kernel`, a deliberate kernel fault whose serial log
+  must show a backtrace with function names, and last the kernel crash
+  report: after `crash kernel` and a reset, `crashes last` shows the
+  fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 

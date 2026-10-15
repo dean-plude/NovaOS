@@ -13,7 +13,13 @@
  * it reads IN.TXT and writes OUT.TXT through DOS's drive C:; cmd's exit
  * code is the program's (42), what it printed stays on the screen, and
  * the console is the Terminal's again.  The .EXE (an MZ image) then runs
- * the same way from CreateProcess itself. */
+ * the same way from CreateProcess itself.
+ *
+ * Last, a game (roadmap step 31.4): bootRogue (third_party/bootrogue,
+ * C:\Tests\Dos\ROGUE.COM) sets the text mode itself and draws its dungeon
+ * straight into video memory.  Its hero (a smiling face, U+263A in the
+ * console) and status line (HP 16) must show, it takes arrow keys, and
+ * Esc ends it with exit code 0. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -191,6 +197,41 @@ static void dos_programs(void)
     printf("dostest: dosrw.com from cmd in %lu ms, dosrwexe.exe in %lu ms\n", com_ms, exe_ms);
 }
 
+/* step 31.4: a DOS game that owns the screen, played with the arrow keys */
+static void dos_game(void)
+{
+    static const char dir[] = "C:\\Tests\\Dos";
+    char cl[] = "C:\\Tests\\Dos\\ROGUE.COM";
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    printf("dostest: bootRogue\n");
+    fflush(stdout);
+    if (!CreateProcessA(NULL, cl, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+        printf("dostest: CreateProcess(%s): error %lu\n", cl, GetLastError());
+        CHECK("bootRogue (ROGUE.COM) starts", 0);
+        return;
+    }
+    CHECK("bootRogue draws its hero", wait_for(L"\x263A", 1));
+    CHECK("bootRogue shows its HP (16)", wait_for(L" 16 ", 1));
+    static const WORD moves[] = { VK_RIGHT, VK_DOWN, VK_LEFT, VK_UP };
+    for (int i = 0; i < 8; i++) {
+        press(moves[i % 4], 0);
+        Sleep(100);
+    }
+    CHECK("bootRogue still shows its hero after eight moves", wait_for(L"\x263A", 1));
+    Sleep(6000);                                /* (the self-test's screenshot of the game) */
+    press(VK_ESCAPE, 0x1B);
+    DWORD w = WaitForSingleObject(pi.hProcess, WAIT_MS), code = (DWORD)-1;
+    if (w == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+    else TerminateProcess(pi.hProcess, 1);
+    CHECK("Esc ends bootRogue with exit code 0", w == WAIT_OBJECT_0 && code == 0);
+    CHECK("the console is the Terminal's again after the game", count(read_screen(), L"dostest: bootRogue") == 1);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+}
+
 int main(void)
 {
     out = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -233,6 +274,7 @@ int main(void)
     CloseHandle(pi.hThread);
 
     dos_programs();
+    dos_game();
 
     if (booted) printf("dostest: COMMAND.COM prompt after %lu ms\n", boot_ms);
     printf("dostest: %d passed, %d failed\n", passed, failed);

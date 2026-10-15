@@ -211,6 +211,20 @@ Windows tools, such as `cmd` (runs NovaOS's `cmd.exe`, for batch files),
 `find`, `findstr`, `sort`, `more`, `less`, `sc`, `pnputil`,
 `tzutil`, `msiexec` and `shutdown`.  Up and Down recall earlier commands.
 
+### DOS programs
+
+![bootRogue, a DOS game, in the Terminal](screenshots/dos-bootrogue.png)
+
+16-bit DOS programs (`.COM` and `.EXE`) run as Windows ran them through
+NTVDM: type the name in the Terminal or `cmd`, or double-click one in File
+Explorer, and it runs in the console window on MS-DOS 4.00 with drive C:
+and the current folder as you have them (long names show as 8.3 names,
+such as `MYDOSP~1`).  When it ends the window is the Terminal's again and
+`%ERRORLEVEL%` is its exit code.  `ntvdm` on its own boots to an `A:\>`
+prompt with all of MS-DOS 4.00's commands (F12 leaves).  To try a game,
+type `C:\Tests\Dos\ROGUE`: arrow keys move, Esc quits.  Text-mode programs
+only for now: no graphics, sound or mouse.  Details in [dos.md](dos.md).
+
 ## Installing programs
 
 The **App Store** in the dock lists programs by category.  For each one,

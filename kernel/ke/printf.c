@@ -276,7 +276,8 @@ void kvprintf(const char *fmt, __builtin_va_list ap)
 void kserial_write(const char *s, size_t n)
 {
     IrqState irq = spin_lock_irqsave(&g_print_lock);
-    for (size_t i = 0; i < n && s[i]; i++) serial_putc(s[i]);
+    for (size_t i = 0; i < n; i++)
+        if (s[i]) serial_putc(s[i]);            /* (a NUL a program wrote: the rest still goes out) */
     spin_unlock_irqrestore(&g_print_lock, irq);
 }
 

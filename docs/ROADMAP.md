@@ -938,7 +938,7 @@ and the XAML framework built from Microsoft's MIT source
 as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
 [design/windows-ui-xaml.md](design/windows-ui-xaml.md).
 
-- [ ] **32.1 WinRT activation from the registry; CoreApplication and
+- [x] **32.1 WinRT activation from the registry; CoreApplication and
   CoreWindow.** `RoGetActivationFactory` loads the in-process server
   named under `ActivatableClassId`; `twinapi.appcore.dll` runs an
   `IFrameworkView` through `CoreApplication.Run` on a `CoreWindow` with

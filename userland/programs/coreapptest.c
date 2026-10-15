@@ -9,7 +9,11 @@
  * VisibilityChanged, Closed), its dispatcher pumping them, RunAsync from
  * another thread completing its IAsyncAction, and CoreApplication.Exit
  * ending the view; in 64 bits a Direct3D 11 swap chain made for the
- * CoreWindow (DXGI's CreateSwapChainForCoreWindow) presenting into it.
+ * CoreWindow (DXGI's CreateSwapChainForCoreWindow) presenting into it; the
+ * window's pointer events from the mouse's messages (PointerEntered,
+ * PointerPressed, a second button as PointerMoved, PointerReleased,
+ * PointerWheelChanged) with their PointerPoints; and a Windows.UI.Composition
+ * target on the CoreWindow (CreateTargetForCurrentView) showing a sprite.
  *
  *   coreapptest ARGS...   the self-test runs it as "coreapptest hello world"
  */
@@ -26,6 +30,7 @@ static int pass, fail;
 typedef ULONG (STDMETHODCALLTYPE *Rel_t)(void *);
 typedef HRESULT (STDMETHODCALLTYPE *QI_t)(void *, const GUID *, void **);
 typedef HRESULT (STDMETHODCALLTYPE *Get_t)(void *, void *);
+typedef HRESULT (STDMETHODCALLTYPE *Put_t)(void *, void *);
 typedef HRESULT (STDMETHODCALLTYPE *Call_t)(void *);
 #define RELEASE(o) do { if (o) VT(o, 2, Rel_t)(o); (o) = NULL; } while (0)
 
@@ -44,7 +49,9 @@ static const GUID IID_IAsyncInfo_T = { 0x00000036, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 
 
 /* ICoreWindow's slots (IInspectable's six first) */
 enum { W_BOUNDS = 7, W_DISPATCHER = 9, W_VISIBLE = 17, W_ACTIVATE = 18, W_ADD_CHAR = 28, W_ADD_CLOSED = 30,
-       W_ADD_KEYDOWN = 34, W_ADD_KEYUP = 36, W_ADD_SIZE = 54, W_ADD_VISIBILITY = 56 };
+       W_ADD_KEYDOWN = 34, W_ADD_KEYUP = 36, W_ADD_PTR_ENTERED = 40, W_ADD_PTR_MOVED = 44, W_ADD_PTR_PRESSED = 46,
+       W_ADD_PTR_RELEASED = 48, W_ADD_PTR_WHEEL = 52, W_ADD_SIZE = 54, W_ADD_VISIBILITY = 56 };
+typedef struct { float X, Y; } PointF;
 typedef struct { float X, Y, Width, Height; } RectF;
 typedef struct { float Width, Height; } SizeF;
 typedef struct { UINT32 RepeatCount, ScanCode; BYTE IsExtendedKey, IsMenuKeyDown, WasKeyDown, IsKeyReleased; } KeyStatus;
@@ -182,6 +189,123 @@ static void swap_chain(void)
 #endif
 }
 
+/* ---- pointer events ------------------------------------------------- */
+static const GUID IID_IPointerPoint_T = { 0xE995317D, 0x7296, 0x42D9, { 0x82, 0x33, 0xC5, 0xBE, 0x73, 0xB7, 0x4A, 0x4A } };
+typedef struct { int n; PointF pos; UINT32 id; BYTE contact, left, right; int update, wheel, device; } Seen;
+static Seen g_entered, g_pressed, g_moved, g_released, g_wheel;
+/* PointerEventArgs: its CurrentPoint, the point's Position, PointerId,
+ * IsInContact, PointerDevice's type, and its Properties' buttons, update
+ * kind and wheel */
+static void seen(Seen *s, void *args)
+{
+    void *pt = 0, *props = 0, *dev = 0;
+    s->n++;
+    VT(args, 6, Get_t)(args, &pt);                                  /* CurrentPoint */
+    if (!pt) return;
+    void *same = 0;
+    VT(pt, 0, QI_t)(pt, &IID_IPointerPoint_T, &same);
+    if (same != pt) s->device = -2;
+    RELEASE(same);
+    VT(pt, 7, Get_t)(pt, &s->pos);
+    VT(pt, 9, Get_t)(pt, &s->id);
+    VT(pt, 12, Get_t)(pt, &s->contact);
+    VT(pt, 6, Get_t)(pt, &dev);
+    if (dev && s->device != -2) VT(dev, 6, Get_t)(dev, &s->device);   /* PointerDeviceType */
+    RELEASE(dev);
+    VT(pt, 13, Get_t)(pt, &props);
+    if (props) {
+        VT(props, 16, Get_t)(props, &s->left);
+        VT(props, 17, Get_t)(props, &s->right);
+        VT(props, 19, Get_t)(props, &s->wheel);
+        VT(props, 27, Get_t)(props, &s->update);
+    }
+    RELEASE(props);
+    RELEASE(pt);
+}
+static void on_entered(void *w, void *a) { (void)w; seen(&g_entered, a); }
+static void on_pressed(void *w, void *a) { (void)w; seen(&g_pressed, a); }
+static void on_moved(void *w, void *a) { (void)w; seen(&g_moved, a); }
+static void on_released(void *w, void *a) { (void)w; seen(&g_released, a); }
+static void on_wheel(void *w, void *a) { (void)w; seen(&g_wheel, a); }
+static Handler h_entered = { handler2_vt, on_entered }, h_pressed = { handler2_vt, on_pressed }, h_moved = { handler2_vt, on_moved },
+               h_released = { handler2_vt, on_released }, h_wheel = { handler2_vt, on_wheel };
+typedef HRESULT (STDMETHODCALLTYPE *AddH_t)(void *, void *, EventRegistrationToken *);
+static void pointer_events(void)
+{
+    EventRegistrationToken t;
+    int ok = 1;
+    ok &= VT(g_win, W_ADD_PTR_ENTERED, AddH_t)(g_win, &h_entered, &t) == S_OK;
+    ok &= VT(g_win, W_ADD_PTR_PRESSED, AddH_t)(g_win, &h_pressed, &t) == S_OK;
+    ok &= VT(g_win, W_ADD_PTR_MOVED, AddH_t)(g_win, &h_moved, &t) == S_OK;
+    ok &= VT(g_win, W_ADD_PTR_RELEASED, AddH_t)(g_win, &h_released, &t) == S_OK;
+    ok &= VT(g_win, W_ADD_PTR_WHEEL, AddH_t)(g_win, &h_wheel, &t) == S_OK;
+    CHECK("pointer events +=", ok);
+    LPARAM at = MAKELPARAM(30, 40);
+    POINT scr = { 30, 40 };
+    ClientToScreen(g_hwnd, &scr);
+    PostMessageW(g_hwnd, WM_MOUSEMOVE, 0, at);
+    PostMessageW(g_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, at);
+    PostMessageW(g_hwnd, WM_RBUTTONDOWN, MK_LBUTTON | MK_RBUTTON, at);
+    PostMessageW(g_hwnd, WM_RBUTTONUP, MK_LBUTTON, at);
+    PostMessageW(g_hwnd, WM_LBUTTONUP, 0, at);
+    PostMessageW(g_hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, 120), MAKELPARAM(scr.x, scr.y));
+    VT(g_disp, 7, HRESULT (STDMETHODCALLTYPE *)(void *, int))(g_disp, 3);
+    float s = GetDpiForWindow(g_hwnd) / 96.0f;
+    CHECK("PointerEntered", g_entered.n == 1);
+    CHECK("PointerPressed: once, left button (LeftButtonPressed)", g_pressed.n == 1 && g_pressed.left == 1 && g_pressed.update == 1 &&
+                                                                    g_pressed.contact == 1);
+    CHECK("its PointerPoint: Position in DIPs, PointerId 1, a mouse", (int)(g_pressed.pos.X * s + 0.5f) == 30 &&
+                                                                     (int)(g_pressed.pos.Y * s + 0.5f) == 40 && g_pressed.id == 1 &&
+                                                                     g_pressed.device == 2);
+    CHECK("the move and the second button: PointerMoved", g_moved.n == 3 && g_moved.update == 4 && g_moved.left == 1 && g_moved.right == 0);
+    CHECK("PointerReleased: LeftButtonReleased, not in contact", g_released.n == 1 && g_released.update == 2 && g_released.left == 0 &&
+                                                                 g_released.contact == 0);
+    CHECK("PointerWheelChanged: MouseWheelDelta 120, its place in the window", g_wheel.n == 1 && g_wheel.wheel == 120 &&
+                                                                               (int)(g_wheel.pos.X * s + 0.5f) == 30);
+}
+
+/* a Windows.UI.Composition target on the CoreWindow: a magenta sprite */
+static void composition(void)
+{
+    static const GUID IID_ICompositor_T = { 0xB403CA50, 0x7F8C, 0x4E83, { 0x98, 0x5F, 0xCC, 0x45, 0x06, 0x00, 0x36, 0xD8 } };
+    static const GUID IID_IVisual_T = { 0x117E202D, 0xA859, 0x4C89, { 0x87, 0x3B, 0xC2, 0xAA, 0x56, 0x67, 0x88, 0xE3 } };
+    typedef struct { float X, Y, Z; } Vec3;
+    typedef struct { BYTE A, R, G, B; } Color;
+    HSTRING cls = 0;
+    WindowsCreateString(L"Windows.UI.Composition.Compositor", 33, &cls);
+    void *insp = 0, *comp = 0, *target = 0, *sprite = 0, *brush = 0, *v = 0;
+    RoActivateInstance(cls, &insp);
+    WindowsDeleteString(cls);
+    if (insp) VT(insp, 0, QI_t)(insp, &IID_ICompositor_T, &comp);
+    RELEASE(insp);
+    CHECK("a Compositor", comp != 0);
+    if (!comp) return;
+    CHECK("CreateTargetForCurrentView", VT(comp, 25, Get_t)(comp, &target) == S_OK && target);
+    Color magenta = { 255, 255, 0, 255 };
+    VT(comp, 22, Get_t)(comp, &sprite);
+    VT(comp, 8, HRESULT (STDMETHODCALLTYPE *)(void *, Color, void **))(comp, magenta, &brush);
+    if (sprite && brush && target) {
+        VT(sprite, 7, Put_t)(sprite, brush);
+        VT(sprite, 0, QI_t)(sprite, &IID_IVisual_T, &v);
+        PointF size = { 50, 50 };
+        Vec3 at = { 100, 100, 0 };
+        VT(v, 36, HRESULT (STDMETHODCALLTYPE *)(void *, PointF))(v, size);
+        VT(v, 21, HRESULT (STDMETHODCALLTYPE *)(void *, Vec3))(v, at);
+        VT(target, 7, Put_t)(target, v);                            /* Root */
+        COLORREF px = 0;
+        for (int i = 0; i < 250; i++) {
+            VT(g_disp, 7, HRESULT (STDMETHODCALLTYPE *)(void *, int))(g_disp, 3);
+            HDC dc = GetDC(g_hwnd);
+            px = GetPixel(dc, 120, 120);
+            ReleaseDC(g_hwnd, dc);
+            if (px == RGB(255, 0, 255)) break;
+            Sleep(20);
+        }
+        CHECK("the sprite drawn in the CoreWindow", px == RGB(255, 0, 255));
+    }
+    RELEASE(v); RELEASE(brush); RELEASE(sprite); RELEASE(target); RELEASE(comp);
+}
+
 /* ---- the app's view and its source (IInspectable objects) ------------ */
 typedef struct { const void *const *vt; } Obj;
 static HRESULT STDMETHODCALLTYPE o_iids(Obj *o, ULONG *n, GUID **g) { (void)o; *n = 0; *g = 0; return S_OK; }
@@ -271,6 +395,8 @@ static HRESULT STDMETHODCALLTYPE v_run(Obj *o)
     CHECK("SizeChanged: the client area in DIPs", g_size.Width > 0 && (int)(g_size.Width * s + 0.5f) == cr.right &&
                                                   (int)(g_size.Height * s + 0.5f) == cr.bottom);
     swap_chain();
+    pointer_events();
+    composition();
 
     HANDLE t = CreateThread(0, 0, post_work, 0, 0, 0);
     WaitForSingleObject(t, 10000);

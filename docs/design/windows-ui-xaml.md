@@ -16,7 +16,7 @@ From the bottom up:
 |---|---|---|
 | Windows Runtime core | `combase.dll`: `HSTRING`, `RoGetActivationFactory`, `RoActivateInstance`, the registry's `ActivatableClassId` keys, `.winmd` metadata | `ole32.dll` (`userland/ole32/winrt.c`) |
 | App model | `twinapi.appcore.dll` (`CoreApplication`, views), `Windows.UI.dll` (`CoreWindow`, `CoreDispatcher`) | `twinapi.appcore.dll` (`userland/twinapi_appcore`), step 32.1 |
-| Composition | `Windows.UI.Composition` (the system compositor's WinRT API, over DirectComposition and Direct3D 11) | to write (NovaOS has `dcomp.dll`), step 32.2 |
+| Composition | `Windows.UI.Composition` (the system compositor's WinRT API, over DirectComposition and Direct3D 11) | `dcomp.dll` (`userland/dcomp/composition.c`), step 32.2 |
 | XAML | `Windows.UI.Xaml.dll` (system XAML) and WinUI 2 (`Microsoft.UI.Xaml.dll`, controls on top of it) | Microsoft's MIT XAML source, built for NovaOS, steps 32.3 on |
 | Packages | AppX/MSIX deployment, `resources.pri` (MRT), the app container | to write, after XAML draws |
 
@@ -80,7 +80,30 @@ the first question step 32.3 answers.
    visuals, colour and surface brushes, `CompositionGraphicsDevice`
    drawing surfaces over Direct2D, the desktop and CoreWindow targets,
    and the interop interfaces XAML uses, on NovaOS's DirectComposition.
-   CoreWindow's pointer events (`PointerPoint`) join here.
+   CoreWindow's pointer events (`PointerPoint`) join here.  Done as
+   follows: `dcomp.dll` serves `Windows.UI.Composition.Compositor` (as
+   Windows' does) with container and sprite visuals (offset, size,
+   anchor and centre points, scale, Z rotation, the transform matrix's
+   2-D part, opacity, visibility, inset clips, the visual collection),
+   colour and surface brushes (all four stretches, alignment ratios),
+   targets on a window (`ICompositorDesktopInterop`) or on the thread's
+   CoreWindow (`CreateTargetForCurrentView`), graphics devices on a
+   Direct3D 11 device and their drawing surfaces
+   (`ICompositorInterop`, `ICompositionDrawingSurfaceInterop`: the
+   surface's texture, read back at `EndDraw` as DirectComposition's own
+   surfaces are) and surfaces showing a composition swap chain.  A thread
+   of the compositor's draws each target's tree in software after every
+   change and copies it into the window with the GDI.  Not yet:
+   animations (accepted, not run), expression animations, property sets,
+   effects, batches, 3-D transforms, clips other than insets, bilinear
+   sampling, and drawing surfaces on an `ID2D1Device` (NovaOS's
+   Direct2D has no device contexts yet; XAML's text needs them, so 32.3
+   or 32.4 adds them).  `twinapi.appcore`'s CoreWindow raises
+   `PointerEntered`, `PointerMoved`, `PointerPressed`, `PointerReleased`,
+   `PointerWheelChanged`, `PointerExited` and `PointerCaptureLost` from
+   the mouse's messages with a `PointerPoint` (pointer 1, a mouse
+   `PointerDevice`) and its `PointerPointProperties`.  Test: `comptest`,
+   and `coreapptest`'s pointer and CoreWindow-target checks.
 3. **32.3 The XAML core builds.** `dxaml`'s core, parser and metadata
    built as `Windows.UI.Xaml.dll` against 32.1 and 32.2;
    `Windows.UI.Xaml.Application.Start` runs and `XamlReader.Load` parses a

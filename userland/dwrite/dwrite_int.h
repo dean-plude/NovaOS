@@ -253,6 +253,7 @@ HRESULT font_set_faces(void *set, FontFile ***files, UINT32 **index, UINT32 *n);
 HRESULT font_fallback_system(void **out);
 HRESULT font_fallback_builder_create(void **out);
 HRESULT font_download_queue(void **out);
+HRESULT text_analyzer_create(void **out);
 /* face.c: color glyphs (COLR/CPAL) */
 HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, const DW_GLYPH_RUN_DESCRIPTION *desc,
                                   UINT32 palette, void **out);

@@ -87,7 +87,7 @@ desktop of early October.
 | `direct3d-9.png` | 1280x800 | Earlier (2026-10-01): `d3d9test`'s Direct3D 9 triangle (`tests/selftest/graphics/008-d3d9test.py`). |
 | `direct2d.png` | 1280x800 | Earlier (2026-10-02): `d2dtest`'s Direct2D scene in a window (`tests/selftest/graphics/005-d2dtest.py`). |
 | `squash-the-creeps.png` | 1280x800 | Earlier (2026-10-12, roadmap step 24.4): Godot's Squash the Creeps sample on Direct3D 12. |
-| `dos-bootrogue.png` | 1280x800 | Roadmap step 31.4: the DOS game bootRogue (`C:\Tests\Dos\ROGUE.COM`) in the Terminal's console window on `ntvdm.exe`, after eight moves: the core self-test `dostest`'s screenshot (`tests/selftest/core/169-dos.py`, `tools/selftest.py --suite core --only dos`), resized from 2560x1600.  In [dos.md](../dos.md) and the user guide, not in the README. |
+| `dos-bootrogue.png` | 1280x800 | Roadmap step 31.4: the DOS game bootRogue (`C:\Tests\Dos\ROGUE.COM`) in the Terminal's console window on `ntvdm.exe`, after eight moves: the core self-test `dostest`'s screenshot (`tests/selftest/core/169-dos.py`, `tools/selftest.py --suite core --only dostest`), resized from 2560x1600.  In [dos.md](../dos.md) and the user guide, not in the README. |
 
 ## Refreshing a screenshot
 

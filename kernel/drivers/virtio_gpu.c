@@ -1544,8 +1544,11 @@ static bool overlay_read(Vgpu *v, VgpuBlob *src, const VgpuScreen *s, int x, int
             src->lent_len = e[1];
         }
         UINT32 box[6] = { (UINT32)x, (UINT32)y, 0, (UINT32)w, (UINT32)h, 1 };
-        VgpuTransfer3dEx(g_pctx, src, false, box, start - base, 0, (UINT32)s->stride * 4, 0, pg == last ? g_psync : 0,
-                         pg == last ? g_pseq + 1 : 0, XFER_QUIET);
+        if (!VgpuTransfer3dEx(g_pctx, src, false, box, start - base, 0, (UINT32)s->stride * 4, 0,
+                             pg == last ? g_psync : 0, pg == last ? g_pseq + 1 : 0, XFER_QUIET)) {
+            blob_lend_unlock(src);
+            return false;
+        }
     }
     blob_lend_unlock(src);
     return true;

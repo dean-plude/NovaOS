@@ -12,6 +12,10 @@
 //   /chunked   three 1000-byte chunks (Transfer-Encoding: chunked)
 //   /stream/BYTES/SEED  BYTES of a pattern (byte i = (i*7 + SEED*13 + (i>>16)) % 251),
 //              written as fast as the client takes them (userland/programs/dltest.c)
+//   /winget/...  a WinGet REST source (information, manifestSearch,
+//              packageManifests/ID) with two test packages and their
+//              downloads under /winget/files/ (userland/programs/winget.c;
+//              tests/selftest/network4/080-winget.py)
 // tools/selftest.py --suite network starts it with a throwaway certificate.
 'use strict';
 const crypto = require('crypto'), fs = require('fs'), http = require('http'), http2 = require('http2');
@@ -72,10 +76,73 @@ function handle(req, res) {
             res.end();
         };
         more();
+    } else if (req.url.startsWith('/winget/')) {
+        winget(req, res, head);
     } else {
         res.writeHead(404, { ...head, 'content-type': 'text/plain' });
         res.end('not found\n');
     }
+}
+
+// The WinGet REST source: NovaOS.WinGetTest 1.0.0 and 2.0.0 (a portable
+// "program" whose bytes name its version) and NovaOS.WinGetBad, whose
+// manifest gives the wrong SHA-256
+const wingetFile = (v) => Buffer.from(`MZ NovaOS winget test ${v}\r\n`);
+const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex').toUpperCase();
+function wingetPackages(base) {
+    const version = (id, name, v, sha) => ({
+        PackageVersion: v,
+        DefaultLocale: { PackageLocale: 'en-US', PackageName: name, Publisher: 'NovaOS', ShortDescription: `${name} for the self-tests`,
+                         Moniker: id === 'NovaOS.WinGetTest' ? 'wgtest' : 'wgbad', License: 'MIT' },
+        Installers: [{ Architecture: 'neutral', InstallerType: 'portable', InstallerUrl: `${base}/files/wgtest-${v}.exe`,
+                       InstallerSha256: sha, Commands: [id === 'NovaOS.WinGetTest' ? 'wgtest' : 'wgbad'] }],
+    });
+    return [
+        { PackageIdentifier: 'NovaOS.WinGetTest', Versions: ['1.0.0', '2.0.0'].map((v) => version('NovaOS.WinGetTest', 'WinGet Test', v, sha256(wingetFile(v)))) },
+        { PackageIdentifier: 'NovaOS.WinGetBad', Versions: [version('NovaOS.WinGetBad', 'WinGet Bad Hash', '1.0.0', '0'.repeat(64))] },
+    ];
+}
+function winget(req, res, head) {
+    const json = (status, body) => {
+        res.writeHead(status, { ...head, 'content-type': 'application/json' });
+        res.end(body === undefined ? '' : JSON.stringify(body));
+    };
+    const base = `http://${req.headers.host || req.headers[':authority']}/winget`;
+    const packages = wingetPackages(base);
+    const url = req.url.slice('/winget'.length);
+    const file = url.match(/^\/files\/wgtest-([0-9.]+)\.exe$/);
+    if (file) {
+        const b = wingetFile(file[1]);
+        res.writeHead(200, { ...head, 'content-type': 'application/octet-stream', 'content-length': b.length });
+        return res.end(b);
+    }
+    if (url === '/information')
+        return json(200, { Data: { SourceIdentifier: 'NovaOS.Test', ServerSupportedVersions: ['1.4.0'] } });
+    const manifest = url.match(/^\/packageManifests\/([^/?]+)/);
+    if (manifest) {
+        const p = packages.find((p) => p.PackageIdentifier.toLowerCase() === decodeURIComponent(manifest[1]).toLowerCase());
+        return p ? json(200, { Data: p }) : json(404, { ErrorCode: 404, ErrorMessage: 'not found' });
+    }
+    if (url === '/manifestSearch' && req.method === 'POST') {
+        const parts = [];
+        req.on('data', (d) => parts.push(d));
+        req.on('end', () => {
+            let q = {};
+            try { q = JSON.parse(Buffer.concat(parts).toString()); } catch (e) { return json(400, { ErrorCode: 400 }); }
+            const want = (q.Query && q.Query.KeyWord) || (q.Filters && q.Filters[0] && q.Filters[0].RequestMatch.KeyWord) || '';
+            const exact = ((q.Query && q.Query.MatchType) || (q.Filters && q.Filters[0] && q.Filters[0].RequestMatch.MatchType)) === 'Exact';
+            const hit = (s) => exact ? s.toLowerCase() === want.toLowerCase() : s.toLowerCase().includes(want.toLowerCase());
+            const found = packages.filter((p) => !want || hit(p.PackageIdentifier) ||
+                hit(p.Versions[0].DefaultLocale.PackageName) || hit(p.Versions[0].DefaultLocale.Moniker));
+            log(`winget search "${want}"${exact ? ' (exact)' : ''}: ${found.length}`);
+            if (!found.length) return json(204);
+            json(200, { Data: found.map((p) => ({ PackageIdentifier: p.PackageIdentifier,
+                PackageName: p.Versions[0].DefaultLocale.PackageName, Publisher: 'NovaOS',
+                Versions: p.Versions.map((v) => ({ PackageVersion: v.PackageVersion })) })) });
+        });
+        return;
+    }
+    json(404, { ErrorCode: 404, ErrorMessage: 'not found' });
 }
 
 const connections = new WeakMap();

@@ -196,6 +196,7 @@ The Terminal has its own commands; `help` lists them.  The most useful:
 | `dir`, `cd`, `type`, `copy`, `del`, `mkdir` | Work with files |
 | `start <app> [file]` | Open a built-in app (`notepad`, `explorer`, `settings`, `calendar`, `browser`, `store`, `welcome`) |
 | `store install <name>` | Install a program from the App Store |
+| `winget search`, `install`, `list`, `upgrade`, `uninstall` | The Windows Package Manager ([below](#winget)) |
 | `ipconfig`, `ping`, `nslookup`, `curl`, `wget` | Network |
 | `tasklist`, `taskkill /PID n` or `/IM name.exe` | List and stop programs |
 | `devices` | PCI devices and the driver each one has |
@@ -246,6 +247,50 @@ The App Store's list of programs is a JSON file that can be updated
 without updating NovaOS (**Refresh** in the App Store, or
 `store refresh`).  [app-store-catalog.md](app-store-catalog.md) explains
 how.
+
+### winget
+
+`winget`, the Windows Package Manager's command, works in the Terminal and
+in `cmd` with Windows' commands and options:
+
+| Command | Does |
+|---|---|
+| `winget search <words>` | Find packages (by name, identifier or moniker) |
+| `winget show <package>` | A package's details and the installer NovaOS would use |
+| `winget install <package>` | Download, check and install it (`-v` a version, `-s` a source, `-i` with the installer's own questions) |
+| `winget install -m <manifest>` | Install from a manifest file or folder on disk |
+| `winget list` | Installed programs, with newer versions where a source has one |
+| `winget upgrade` | What can be upgraded; `winget upgrade --all` or `winget upgrade <package>` upgrades |
+| `winget uninstall <package>` | Remove a program |
+| `winget source list`, `add`, `remove`, `update`, `reset --force` | Package sources |
+| `winget hash <file>` | A file's SHA-256, as manifests give it |
+
+It has three kinds of source:
+
+- **novaos**: the App Store's catalog, installed exactly as the App Store
+  does (so `winget install 7-Zip` and **Get**, **Install** in the App Store
+  are the same).  Programs NovaOS has been tested with come from here
+  first, under their winget identifiers where they have one
+  (`winget install 7zip.7zip`).
+- **winget**: the community repository Microsoft's winget uses,
+  [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
+  NovaOS reads its manifests from GitHub, so it finds a package by its
+  exact identifier, as written there (`winget install Mozilla.Firefox`,
+  `winget search Gyan.FFmpeg`); searching it by words needs Microsoft's
+  index, which NovaOS does not read yet.  Its programs have not
+  necessarily been tested on NovaOS.
+- **REST sources** your organization runs (`winget source add <name>
+  <url>`), as on Windows.
+
+The download's SHA-256 must match the manifest's.  Setup programs run
+silently with the switches the manifest gives (or winget's usual ones for
+Inno Setup, NSIS, WiX Burn and Windows Installer); a portable program is
+copied to `C:\Programs\<command>\<command>.exe`, so typing its command
+runs it; `.zip` packages need **7-Zip** (`winget install 7zip.7zip`).
+MSIX and Microsoft Store packages cannot be installed: they need Windows'
+package deployment, which NovaOS does not have.  `winget list` shows what
+winget and the App Store installed and every program with an entry in
+Windows' installed programs list.
 
 ### Drivers
 

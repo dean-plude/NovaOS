@@ -272,7 +272,7 @@ static bool build_resources(NtPdo *p)
     UINT32 gsi = 0;
     bool level = true, low = true, have = false;
     if (pin >= 1 && pin <= 4) {
-        have = d->bus == 0 && AmlPciIrq(d->dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        have = AmlPciIrq(d->bus, d->dev, d->func, (UINT8)(pin - 1), &gsi, &level, &low);
         if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = low = true; }
     }
     UINT8 vector = have ? NtIntrVector(gsi, level, low) : 0;
@@ -1872,4 +1872,3 @@ NT_API void nt_IoInvalidateDeviceRelations(NT_DEVICE_OBJECT *pdo, int type)
 NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp) { (void)irp; }
 
 NT_API NT_STATUS nt_PoCallDriver(NT_DEVICE_OBJECT *dev, NT_IRP *irp) { return nt_IofCallDriver(dev, irp); }
-

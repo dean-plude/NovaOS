@@ -76,9 +76,10 @@ int AmlThermalZones(AmlThermalZone *out, int max);
 #define AML_THERMAL_SHUTDOWN 2
 int AmlThermalRequest(void);
 
-/* PCI interrupt routing (_PRT of the root bridge): the GSI that pin @pin
- * (0 = INTA) of device @dev on bus 0 is wired to, and how it triggers */
-bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low);
+/* PCI interrupt routing (_PRT): the GSI that pin @pin (0 = INTA) of
+ * function @fn of device @dev on bus @bus is wired to, and how it triggers. */
+bool AmlPciIrq(UINT8 bus, UINT8 dev, UINT8 fn, UINT8 pin,
+               UINT32 *gsi, bool *level, bool *low);
 
 /* The SCI is an interrupt (false: polled) */
 bool AmlSciIsInterrupt(void);

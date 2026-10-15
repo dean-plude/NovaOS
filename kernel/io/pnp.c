@@ -236,13 +236,13 @@ int PnpResources(UINT32 id, PnpResource *out, int max)
         out[k].start = r[i].base;
         out[k].length = r[i].size;
     }
-    /* the interrupt line, routed as kernel/nt/pnp.c routes it (_PRT on bus 0) */
+    /* the interrupt line, routed as kernel/nt/pnp.c routes it */
     UINT32 r3c = PciRead32(d.bus, d.dev, d.func, 0x3C);
     UINT8 pin = (UINT8)(r3c >> 8);
     UINT32 gsi = 0;
     bool level = true, low = true, have = false;
     if (pin >= 1 && pin <= 4) {
-        have = d.bus == 0 && AmlPciIrq(d.dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        have = AmlPciIrq(d.bus, d.dev, d.func, (UINT8)(pin - 1), &gsi, &level, &low);
         if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = true; }
     }
     if (have && k < max) {

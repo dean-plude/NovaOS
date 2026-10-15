@@ -698,11 +698,15 @@ int AmlThermalRequest(void) { return (int)__atomic_exchange_n(&g_thermal_req, AM
  * PCI interrupt routing: the root bridge's _PRT (APIC mode, \_PIC(1)),
  * with link devices (PNP0C0F) resolved through their _CRS
  * ----------------------------------------------------------------------- */
-#define MAX_ROUTES 128
+#define MAX_ROUTES 512
+#define MAX_PCI_NAMESPACE_DEPTH 16
 
-typedef struct { UINT8 dev, pin; bool level, low; UINT32 gsi; } PciRoute;
+typedef struct { UINT8 bus, dev, pin; UINT16 fn; bool level, low; UINT32 gsi; } PciRoute;
 static PciRoute g_prt[MAX_ROUTES];
 static int      g_nprt;
+
+typedef struct { UINT8 bus, dev, fn; bool valid; } PciBusParent;
+static PciBusParent g_pci_parent[256];
 
 typedef struct { UINT32 gsi; bool level, low, found; } LinkIrq;
 
@@ -724,16 +728,18 @@ static uacpi_iteration_decision link_resource(void *user, uacpi_resource *r)
     return UACPI_ITERATION_DECISION_BREAK;
 }
 
-static uacpi_iteration_decision found_root_bridge(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+static int read_prt(uacpi_namespace_node *node, UINT8 bus)
 {
-    (void)depth;
     uacpi_pci_routing_table *t = NULL;
-    if (*(bool *)user || uacpi_get_pci_routing_table(node, &t) != UACPI_STATUS_OK) return UACPI_ITERATION_DECISION_CONTINUE;
-    *(bool *)user = true;                         /* the first root bridge: bus 0 */
+    if (uacpi_get_pci_routing_table(node, &t) != UACPI_STATUS_OK) return 0;
     int links = 0;
+    int added = 0;
     for (uacpi_size i = 0; i < t->num_entries && g_nprt < MAX_ROUTES; i++) {
         uacpi_pci_routing_table_entry *e = &t->entries[i];
-        PciRoute r = { (UINT8)(e->address >> 16), e->pin, true, true, e->index };
+        UINT32 dev = (UINT32)(e->address >> 16);
+        UINT32 fn = (UINT32)e->address & 0xFFFF;
+        if (dev >= 32 || (fn >= 8 && fn != 0xFFFF) || e->pin >= 4) continue;
+        PciRoute r = { bus, (UINT8)dev, e->pin, (UINT16)fn, true, true, e->index };
         if (e->source) {                          /* a link device: its current IRQ */
             LinkIrq l = { 0 };
             uacpi_for_each_device_resource(e->source, "_CRS", link_resource, &l);
@@ -742,15 +748,64 @@ static uacpi_iteration_decision found_root_bridge(void *user, uacpi_namespace_no
             links++;
         }
         g_prt[g_nprt++] = r;
+        added++;
     }
     const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
-    kprintf("[ACPI] PCI interrupt routing: %d entries from %s._PRT (%d through link devices)\n",
-            g_nprt, path ? path : "?", links);
+    kprintf("[ACPI] PCI interrupt routing: %d entries from %s._PRT on bus %u (%d through link devices)\n",
+            added, path ? path : "?", bus, links);
     uacpi_free_absolute_path(path);
     uacpi_free_pci_routing_table(t);
+    return added;
+}
+
+typedef struct { UINT8 bus, depth; } PciNamespaceBus;
+
+static uacpi_iteration_decision walk_pci_child(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)depth;
+    PciNamespaceBus *parent = user;
+    PciNamespaceBus child = *parent;
+    if (child.depth >= MAX_PCI_NAMESPACE_DEPTH) return UACPI_ITERATION_DECISION_CONTINUE;
+
+    uacpi_u64 adr;
+    if (uacpi_eval_adr(node, &adr) == UACPI_STATUS_OK &&
+        (adr >> 16) < 32 && (adr & 0xFFFF) < 8) {
+        UINT8 dev = (UINT8)(adr >> 16), fn = (UINT8)adr;
+        UINT32 id = PciRead32(parent->bus, dev, fn, 0);
+        if ((id & 0xFFFF) != 0xFFFF) {
+            UINT32 cls = PciRead32(parent->bus, dev, fn, 0x08) >> 8;
+            UINT32 header = (PciRead32(parent->bus, dev, fn, 0x0C) >> 16) & 0x7F;
+            if ((cls >> 8) == 0x0604 && header == 1) {
+                UINT32 buses = PciRead32(parent->bus, dev, fn, 0x18);
+                UINT8 secondary = (UINT8)(buses >> 8), subordinate = (UINT8)(buses >> 16);
+                if (secondary && secondary > parent->bus && subordinate >= secondary) {
+                    if (!g_pci_parent[secondary].valid) {
+                        g_pci_parent[secondary] = (PciBusParent){ parent->bus, dev, fn, true };
+                    }
+                    read_prt(node, secondary);
+                    child.bus = secondary;
+                }
+            }
+        }
+    }
+    child.depth++;
+    uacpi_namespace_for_each_child(node, walk_pci_child, NULL,
+                                   UACPI_OBJECT_DEVICE_BIT, 1, &child);
     return UACPI_ITERATION_DECISION_CONTINUE;
 }
 
+static uacpi_iteration_decision found_root_bridge(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)depth;
+    bool *found = user;
+    if (*found) return UACPI_ITERATION_DECISION_CONTINUE;
+    *found = true;
+    read_prt(node, 0);
+    PciNamespaceBus bus = { 0, 0 };
+    uacpi_namespace_for_each_child(node, walk_pci_child, NULL,
+                                   UACPI_OBJECT_DEVICE_BIT, 1, &bus);
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
 typedef struct {
     UINT64 address;
     UINT64 length;
@@ -784,35 +839,51 @@ static uacpi_iteration_decision gpe_block_resource(void *user, uacpi_resource *r
     case UACPI_RESOURCE_TYPE_ADDRESS16:
         address = r->address16.minimum;
         length = r->address16.address_length;
-        space = r->address16.common.type == UACPI_RANGE_IO ?
-                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        if (r->address16.common.type == UACPI_RANGE_IO)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        else if (r->address16.common.type == UACPI_RANGE_MEMORY)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        else
+            return UACPI_ITERATION_DECISION_CONTINUE;
         break;
     case UACPI_RESOURCE_TYPE_ADDRESS32:
         address = r->address32.minimum;
         length = r->address32.address_length;
-        space = r->address32.common.type == UACPI_RANGE_IO ?
-                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        if (r->address32.common.type == UACPI_RANGE_IO)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        else if (r->address32.common.type == UACPI_RANGE_MEMORY)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        else
+            return UACPI_ITERATION_DECISION_CONTINUE;
         break;
     case UACPI_RESOURCE_TYPE_ADDRESS64:
         address = r->address64.minimum;
         length = r->address64.address_length;
-        space = r->address64.common.type == UACPI_RANGE_IO ?
-                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        if (r->address64.common.type == UACPI_RANGE_IO)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        else if (r->address64.common.type == UACPI_RANGE_MEMORY)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        else
+            return UACPI_ITERATION_DECISION_CONTINUE;
         break;
     case UACPI_RESOURCE_TYPE_ADDRESS64_EXTENDED:
         address = r->address64_extended.minimum;
         length = r->address64_extended.address_length;
-        space = r->address64_extended.common.type == UACPI_RANGE_IO ?
-                UACPI_ADDRESS_SPACE_SYSTEM_IO : UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        if (r->address64_extended.common.type == UACPI_RANGE_IO)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        else if (r->address64_extended.common.type == UACPI_RANGE_MEMORY)
+            space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+        else
+            return UACPI_ITERATION_DECISION_CONTINUE;
         break;
     case UACPI_RESOURCE_TYPE_IRQ:
-        if (r->irq.num_irqs) {
+        if (r->irq.num_irqs && !b->have_irq) {
             b->irq = r->irq.irqs[0];
             b->have_irq = true;
         }
         return UACPI_ITERATION_DECISION_CONTINUE;
     case UACPI_RESOURCE_TYPE_EXTENDED_IRQ:
-        if (r->extended_irq.num_irqs) {
+        if (r->extended_irq.num_irqs && !b->have_irq) {
             b->irq = r->extended_irq.irqs[0];
             b->have_irq = true;
         }
@@ -821,7 +892,7 @@ static uacpi_iteration_decision gpe_block_resource(void *user, uacpi_resource *r
         return UACPI_ITERATION_DECISION_CONTINUE;
     }
 
-    if (length && (space == UACPI_ADDRESS_SPACE_SYSTEM_IO ||
+    if (length && !b->have_address && (space == UACPI_ADDRESS_SPACE_SYSTEM_IO ||
                    space == UACPI_ADDRESS_SPACE_SYSTEM_MEMORY)) {
         b->address = address;
         b->length = length;
@@ -837,7 +908,7 @@ static uacpi_iteration_decision found_gpe_block(void *user, uacpi_namespace_node
     GpeBlock b = { 0 };
     if (uacpi_for_each_device_resource(node, "_CRS", gpe_block_resource, &b) != UACPI_STATUS_OK ||
         !b.have_address || !b.have_irq || b.length < 2 || (b.length & 1) ||
-        b.length / 2 > 0xFFFF || b.address + b.length < b.address) {
+        b.length / 2 > 8191 || b.address + b.length < b.address) {
         const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
         kprintf("[ACPI] GPE block %s: unsupported or invalid _CRS\n", path ? path : "?");
         uacpi_free_absolute_path(path);
@@ -853,41 +924,70 @@ static uacpi_iteration_decision found_gpe_block(void *user, uacpi_namespace_node
     return UACPI_ITERATION_DECISION_CONTINUE;
 }
 
-bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
+static bool find_prt_route(UINT8 bus, UINT8 dev, UINT8 fn, UINT8 pin,
+                           UINT32 *gsi, bool *level, bool *low)
 {
+    int wildcard = -1;
     for (int i = 0; i < g_nprt; i++) {
-        if (g_prt[i].dev != dev || g_prt[i].pin != pin) continue;
+        if (g_prt[i].bus != bus || g_prt[i].dev != dev || g_prt[i].pin != pin) continue;
+        if (g_prt[i].fn == 0xFFFF) {
+            wildcard = i;
+            continue;
+        }
+        if (g_prt[i].fn != fn) continue;
         if (gsi) *gsi = g_prt[i].gsi;
         if (level) *level = g_prt[i].level;
         if (low) *low = g_prt[i].low;
         return true;
     }
+    if (wildcard >= 0) {
+        if (gsi) *gsi = g_prt[wildcard].gsi;
+        if (level) *level = g_prt[wildcard].level;
+        if (low) *low = g_prt[wildcard].low;
+        return true;
+    }
     return false;
 }
 
-/* Each function on bus 0 that uses an interrupt pin: its GSI goes in the
- * Interrupt Line register, as a PC BIOS would leave it */
+bool AmlPciIrq(UINT8 bus, UINT8 dev, UINT8 fn, UINT8 pin,
+               UINT32 *gsi, bool *level, bool *low)
+{
+    for (int depth = 0; depth < 256; depth++) {
+        if (find_prt_route(bus, dev, fn, pin, gsi, level, low)) return true;
+        PciBusParent *parent = &g_pci_parent[bus];
+        if (!parent->valid) return false;
+        pin = (UINT8)((pin + dev) & 3);       /* PCI INTx pin swizzling at this bridge */
+        bus = parent->bus;
+        dev = parent->dev;
+        fn = parent->fn;
+    }
+    return false;
+}
+
+/* Each PCI function that uses an interrupt pin: its GSI goes in the
+ * Interrupt Line register, as a PC BIOS would leave it. */
 static void route_pci(void)
 {
     int routed = 0, missing = 0;
-    for (UINT8 dev = 0; dev < 32; dev++)
-        for (UINT8 fn = 0; fn < 8; fn++) {
-            UINT32 id = PciRead32(0, dev, fn, 0);
-            if ((id & 0xFFFF) == 0xFFFF) { if (!fn) break; continue; }
-            UINT32 r3c = PciRead32(0, dev, fn, 0x3C);
-            UINT8 pin = (UINT8)(r3c >> 8);
-            UINT32 gsi;
-            if (pin >= 1 && pin <= 4) {
-                if (AmlPciIrq(dev, pin - 1, &gsi, NULL, NULL) && gsi < 255) {
-                    PciWrite32(0, dev, fn, 0x3C, (r3c & ~0xFFu) | gsi);
-                    routed++;
-                } else {
-                    missing++;
+    for (int bus = 0; bus < 256; bus++)
+        for (UINT8 dev = 0; dev < 32; dev++)
+            for (UINT8 fn = 0; fn < 8; fn++) {
+                UINT32 id = PciRead32((UINT8)bus, dev, fn, 0);
+                if ((id & 0xFFFF) == 0xFFFF) { if (!fn) break; continue; }
+                UINT32 r3c = PciRead32((UINT8)bus, dev, fn, 0x3C);
+                UINT8 pin = (UINT8)(r3c >> 8);
+                UINT32 gsi;
+                if (pin >= 1 && pin <= 4) {
+                    if (AmlPciIrq((UINT8)bus, dev, fn, (UINT8)(pin - 1), &gsi, NULL, NULL) && gsi < 255) {
+                        PciWrite32((UINT8)bus, dev, fn, 0x3C, (r3c & ~0xFFu) | gsi);
+                        routed++;
+                    } else {
+                        missing++;
+                    }
                 }
+                if (!fn && !(PciRead32((UINT8)bus, dev, 0, 0x0C) & 0x00800000)) break;
             }
-            if (!fn && !(PciRead32(0, dev, 0, 0x0C) & 0x00800000)) break;   /* single-function */
-        }
-    if (g_nprt) kprintf("[ACPI] Routed the interrupt pins of %d PCI function(s) on bus 0%s\n", routed,
+    if (g_nprt) kprintf("[ACPI] Routed the interrupt pins of %d PCI function(s) across buses%s\n", routed,
                         missing ? " (some have no _PRT entry)" : "");
 }
 

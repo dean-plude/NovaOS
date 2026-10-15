@@ -50,6 +50,7 @@
 
 #define USBD_TRANSFER_DIRECTION_IN   0x01
 #define USBD_SHORT_TRANSFER_OK       0x02
+#define USBD_START_ISO_TRANSFER_ASAP 0x04
 #define USBD_DEFAULT_PIPE_TRANSFER   0x08
 
 #define USBD_STATUS_SUCCESS                 0x00000000
@@ -62,6 +63,8 @@
 #define USBD_STATUS_NOT_SUPPORTED           0xC0000E00
 #define USBD_STATUS_CANCELED                0xC0010000
 #define USBD_STATUS_DEVICE_GONE             0xC0007000
+#define USBD_STATUS_ISO_NOT_ACCESSED_BY_HW  0xC0020000
+#define USBD_STATUS_ISOCH_REQUEST_FAILED    0xC0000B00
 
 #define IOCTL_INTERNAL_USB_SUBMIT_URB             0x00220003
 #define IOCTL_INTERNAL_USB_RESET_PORT             0x00220007
@@ -138,11 +141,31 @@ typedef struct {
     UINT8     Setup[8];                /* control: the SETUP packet; the requests: their fields */
 } UrbXfer;
 
+/* _URB_ISOCH_TRANSFER: the transfer URBs' first part, then the frame and
+ * the packets (USBD_ISO_PACKET_DESCRIPTOR: each one's place in the
+ * buffer, and on return its length and status) */
+typedef struct { UINT32 Offset, Length, Status; } UsbdIsoPacket;
+
+typedef struct {
+    UrbHeader Hdr;
+    void     *PipeHandle;
+    UINT32    TransferFlags;
+    UINT32    TransferBufferLength;
+    void     *TransferBuffer;
+    NT_MDL   *TransferBufferMDL;
+    void     *UrbLink;
+    void     *hca[8];
+    UINT32    StartFrame, NumberOfPackets, ErrorCount;
+    UsbdIsoPacket IsoPacket[1];
+} UrbIso;
+
 _Static_assert(sizeof(UrbHeader) == 24 && sizeof(UsbdPipeInfo) == 24 && sizeof(UsbdIfaceInfo) == 48 &&
                __builtin_offsetof(UrbSelectConfig, Interface) == 40 &&
                __builtin_offsetof(UrbSelectIface, Interface) == 32 &&
                __builtin_offsetof(UrbXfer, TransferBufferLength) == 36 &&
-               __builtin_offsetof(UrbXfer, hca) == 64 && __builtin_offsetof(UrbXfer, Setup) == 128,
+               __builtin_offsetof(UrbXfer, hca) == 64 && __builtin_offsetof(UrbXfer, Setup) == 128 &&
+               __builtin_offsetof(UrbIso, StartFrame) == 128 && __builtin_offsetof(UrbIso, IsoPacket) == 140 &&
+               sizeof(UrbIso) == 152,
                "URB layouts (usb.h, x64)");
 
 /* USBD_INTERFACE_LIST_ENTRY, and the usbd.sys export that builds a

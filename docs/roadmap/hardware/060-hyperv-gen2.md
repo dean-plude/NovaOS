@@ -12,8 +12,10 @@
     C: (#402)
   - [x] Synthetic video: a resolution chosen in Settings (#403)
   - [x] netvsc: the network adapter (NVSP and RNDIS) (#404)
-  - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),
-    the SynIC on every CPU, channel interrupts instead of polling, devices
-    added and removed while running
-  - [ ] Key-value exchange (the VM's name and addresses in Hyper-V
-    Manager)
+  - [x] Channel interrupts instead of polling, devices added and removed
+    while running (#405).  The reference TSC page, synthetic timers and
+    the SynIC on every CPU turned out not to be needed: the TSC and the
+    local APIC timer already run at the frequencies Hyper-V's MSRs give,
+    and every channel interrupts CPU 0
+  - [x] Key-value exchange (the VM's name and addresses in Hyper-V
+    Manager) (#407)

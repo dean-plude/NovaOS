@@ -16,7 +16,7 @@ and wait for someone to do them by hand (roadmap step 23.1).
 | Machine | Status |
 |---|---|
 | **QEMU** (Linux with or without KVM, macOS, Windows through WSL2) | Supported, and tested in CI on every pull request that changes code: a q35 machine with OVMF firmware, started as [building.md](building.md#running-in-qemu) and [macos.md](macos.md) describe |
-| **Hyper-V** | A Generation 2 VM with Secure Boot off. NovaOS has drivers for the VMBus keyboard and mouse, its SCSI disks (so it installs to a VHDX), its synthetic video (resolution changes), its network adapter and the shutdown, heartbeat and time sync services, but **has not been run on real Hyper-V yet** (roadmap step 23.4) ([hyperv.md](hyperv.md)) |
+| **Hyper-V** | A Generation 2 VM with Secure Boot off. NovaOS has drivers for the VMBus keyboard and mouse, its SCSI disks (so it installs to a VHDX), its synthetic video (resolution changes), its network adapter and the shutdown, heartbeat, time sync and data exchange services (the VM's addresses in Hyper-V Manager), but **has not been run on real Hyper-V yet** (roadmap step 23.4) ([hyperv.md](hyperv.md)) |
 | **Other virtual machines** (VirtualBox, VMware, UTM) | Untested. UTM is QEMU underneath ([macos.md](macos.md)). NovaOS needs UEFI, an AHCI SATA or NVMe disk for its built-in drivers, and an Intel e1000/e1000e or virtio-net network card |
 | **Real PCs** | **Not yet run on any machine.** NovaOS should start from a USB stick on a UEFI PC with Secure Boot off, on the firmware's framebuffer. The reference machine below is the first one to be checked ([install-and-power.md](install-and-power.md#checks-on-the-t14)) |
 | **Macs** | Intel Macs from a USB stick, untested and with few drivers ([macos.md](macos.md)); Apple Silicon Macs only in QEMU |

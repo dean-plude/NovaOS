@@ -1,5 +1,6 @@
 {
   "x86": true,
   "msstl": true,
-  "selftest": true
+  "selftest": true,
+  "libs": ["version"]
 }

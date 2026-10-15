@@ -25,6 +25,7 @@
 #include <system_error>
 #include <thread>
 #include <vector>
+#include <windows.h>
 
 static int pass, fail;
 #define CHECK(what, cond)                                                   \
@@ -198,6 +199,20 @@ static void text()
     CHECK("regex", std::regex_search(mail, m, re) && m[2] == "example");
 }
 
+/* msvcp140.dll carries a 14.4x version, as Visual Studio 2022's runtime:
+ * OBS Studio will not start on one older than 14.40 or with no version */
+static void dll_version()
+{
+    DWORD h = 0, n = GetFileVersionInfoSizeW(L"msvcp140.dll", &h);
+    std::vector<char> buf(n);
+    VS_FIXEDFILEINFO *fi = nullptr;
+    UINT len = 0;
+    bool ok = n && GetFileVersionInfoW(L"msvcp140.dll", 0, n, buf.data()) &&
+              VerQueryValueW(buf.data(), L"\\", (void **)&fi, &len) && fi;
+    CHECK("msvcp140.dll version 14.40 or later",
+          ok && HIWORD(fi->dwFileVersionMS) == 14 && LOWORD(fi->dwFileVersionMS) >= 40);
+}
+
 int main()
 {
     strings_and_containers();
@@ -208,6 +223,7 @@ int main()
     pmr();
     files();
     text();
+    dll_version();
     std::printf("stltest: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

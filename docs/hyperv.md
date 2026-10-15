@@ -17,7 +17,8 @@ devices* on **VMBus**, Hyper-V's own bus. NovaOS drives the keyboard, the
 mouse, the SCSI disks ([below](#disks)), the video ([below](#display)), the
 network adapter ([below](#network)) and the integration services ([below](#integration-services)); the rest is listed under
 [What does not work yet](#what-does-not-work-yet). Full Gen 2 support is
-a roadmap item ([ROADMAP.md](ROADMAP.md)), one device per step: Hyper-V's own clock and timers, then key-value exchange.
+a roadmap item ([ROADMAP.md](ROADMAP.md)); every step of it is written,
+and what remains is checking each device on a real Hyper-V host.
 
 ## Making the VM
 
@@ -78,7 +79,10 @@ inside the guest that NovaOS does not have.
   pointer (the pointer follows the host's cursor, with no capture and no
   Ctrl+Alt+Left to release it).
 
-The device poll thread reads both rings every 10 ms timer tick.
+The host signals a channel with the SynIC's interrupt (SINT2, that
+channel's bit set in the event flags page); NovaOS's `vmbus` thread then
+reads its ring at once, and checks every ring each 10 ms timer tick in
+case a signal was missed.
 
 ## Disks
 
@@ -145,7 +149,7 @@ Hyper-V Manager is handled by the host as usual.
 
 ## Integration services
 
-`kernel/drivers/hv_util.c` answers three of the integration services
+`kernel/drivers/hv_util.c` answers four of the integration services
 Hyper-V Manager lists under the VM's Settings (all on by default):
 
 - **Operating system shutdown**: the host's Shut Down (Hyper-V Manager,
@@ -158,11 +162,37 @@ Hyper-V Manager lists under the VM's Settings (all on by default):
   Windows programs read (`GetSystemTime`, `NtQuerySystemTime`) is set
   from the host's clock.  The taskbar clock still reads the VM's CMOS
   clock, which Hyper-V keeps from the host's too.
+- **Data Exchange** (key-value exchange): NovaOS tells the host its name
+  (`nova-pc`), its operating system (NovaOS and its version), its
+  processor architecture and its IPv4 and IPv6 addresses, so Hyper-V
+  Manager's Networking tab and `Get-VMNetworkAdapter NovaOS |
+  Select IPAddresses` show the VM's addresses (once DHCP has given one).
+  Items the host sets for the VM (`Msvm_KvpExchangeComponent`, up to 16)
+  are kept in memory until NovaOS restarts.
 
 Each service first agrees on a version with the host: the newest of
 framework 3.0 or 1.0, and shutdown 3.1, 3.0 or 1.0, time sync 4.0
 (with the partition reference counter, so the time the message spent on
-the way is added), 3.0 or 1.0, heartbeat 3.0 or 1.0.
+the way is added), 3.0 or 1.0, heartbeat 3.0 or 1.0, key-value exchange
+4.0 or 3.0.
+
+## Devices added and removed while running
+
+The host's messages keep coming after start, and the `vmbus` thread
+handles them:
+
+- A device **added** while NovaOS runs (a network adapter added in
+  Hyper-V Manager, an integration service ticked under Integration
+  Services) is opened as at start; a network adapter added this way
+  becomes the network stack's adapter and DHCP starts on it.
+- A device **removed** (a network adapter removed, an integration
+  service unticked) is let go: its driver stops (no network, no more
+  heartbeat), then NovaOS closes the channel, hands back the memory the
+  host had been given, and releases the device's number so the host can
+  offer it again.
+
+Disks added to or removed from a SCSI controller while NovaOS runs are
+still seen only at the next start.
 
 ## The clock
 
@@ -203,6 +233,7 @@ version and the descriptor's size depend on the host):
 [HVUTIL] time sync: framework 3.0, messages 4.0
 [HVUTIL] time sync: clock set from the host's (moved +0.012 s)
 [HVUTIL] heartbeat: framework 3.0, messages 3.0
+[HVUTIL] key-value exchange: framework 3.0, messages 4.0
 [VMBUS] Hyper-V SCSI: channel 6 open
 [STORVSC] controller 0: protocol 6.2, transfers up to 128 KiB
 [STORVSC] controller 0, location 0: hv0 "Msft     Virtual Disk", 130048 MiB
@@ -214,9 +245,17 @@ version and the descriptor's size depend on the host):
 [DISPLAY] Hyper-V synthetic video: 1024x768, 9 mode(s)
 ```
 
+Adding and removing devices while NovaOS runs shows lines like these:
+
+```
+[VMBUS] Device 3: heartbeat {57164f39-9115-4e78-ab55-382f3bd5422d} (added)
+[VMBUS] Hyper-V heartbeat: channel 3 open
+[VMBUS] Hyper-V network: removed by the host (channel 8)
+[NET] Adapter Hyper-V network adapter gone: loopback only
+```
+
 Every device the host offers is listed, with a name for the common ones
-(key-value exchange and dynamic memory are named and marked "no
-driver"). Other
+(dynamic memory is named and marked "no driver"). Other
 lines say what went wrong:
 
 | Line | Meaning |
@@ -240,6 +279,7 @@ lines say what went wrong:
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
 | `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |
 | `[NETVSC] Link down` | the VM's adapter is not connected to a switch (Settings, Network Adapter, Virtual switch) |
+| `[VMBUS] ...: removed by the host (channel N)` | the device was removed from the VM's settings (or its integration service unticked) while NovaOS ran |
 | `[DISPLAY] 1920x1080 refused by Hyper-V` | the host did not take the mode change; the screen stays as it was |
 
 ## What does not work yet
@@ -251,8 +291,8 @@ lines say what went wrong:
 | Disks | Driver exists ([above](#disks)); not yet checked on a real host. 4 KiB-sector VHDX files and disks added while running are not used |
 | Network | Driver exists ([above](#network)); not yet checked on a real host. One adapter, no offloads |
 | Sound | Hyper-V has no virtual sound card (only through an enhanced session) |
-| Shutdown, time sync, heartbeat | Drivers exist ([above](#integration-services)); not yet checked on a real host |
-| Key-value exchange, guest services, VSS backup, dynamic memory | No drivers: Hyper-V Manager shows no addresses for the VM, and memory stays as it started |
+| Shutdown, time sync, heartbeat, key-value exchange | Drivers exist ([above](#integration-services)); not yet checked on a real host |
+| Guest services, VSS backup, dynamic memory | No drivers: files cannot be copied in with `Copy-VMFile`, backups are not application-consistent, and memory stays as it started |
 
 ## Tests
 
@@ -265,7 +305,10 @@ for the integration services: the version each picks from the host's
 lists (and none when nothing matches), answers carrying the host's
 transaction ID, the heartbeat's sequence number, each shutdown flag, and
 time sync's SYNC, SAMPLE and probe messages with and without version 4's
-reference counter.  `tests/host/hv_storvsc.c` (`tests/tools/test_hv_storvsc.py`)
+reference counter, and key-value exchange (the guest's items in Hyper-V's
+order, its addresses before and after DHCP, the host's items set,
+replaced, read, listed and deleted, a full table, and the requests it
+refuses).  `tests/host/hv_storvsc.c` (`tests/tools/test_hv_storvsc.py`)
 runs the SCSI driver against a fake host: the GPA-direct packet layout,
 bring-up with a refused protocol version, the scan (a disk, the DVD drive,
 a 4 KiB-sector disk, an 8 TiB disk that needs READ CAPACITY(16), empty
@@ -283,11 +326,15 @@ handshake, frames sent (short ones padded, all 32 send pages in flight,
 one given back), frames received (two in one packet, one after a
 per-packet info block, a bad one and a range outside the buffer dropped
 but given back, a full queue), the link going and coming, the host's
-keepalive, and a host that refuses or never answers. Its mouse case uses the device information layout Hyper-V sends (a
+keepalive, a host that refuses or never answers, and the adapter added
+while NovaOS runs (it attaches to the network stack) and removed (it
+detaches; sends and reads find nothing).  The storage and video tests
+also remove their device and check nothing more is sent. Its mouse case uses the device information layout Hyper-V sends (a
 32-byte block: a 32-bit size, vendor, product, version and eleven
 reserved 16-bit words, then the HID descriptor), checked against
 FreeBSD's `hv_hid.c`.
 
 QEMU cannot offer Hyper-V's VMBus devices, so the VMBus connection itself
-(hypercalls, the SynIC, the handshake, opening channels) is not tested in
+(hypercalls, the SynIC and its interrupt, the handshake, opening and
+closing channels, devices added and removed) is not tested in
 CI and can only be checked in a real Hyper-V VM.

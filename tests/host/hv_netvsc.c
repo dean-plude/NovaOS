@@ -14,6 +14,11 @@ void *kzalloc(size_t n) { return calloc(1, n); }
 void *kernel_alloc_pages(size_t n) { void *p = aligned_alloc(4096, n * 4096); memset(p, 0, n * 4096); return p; }
 void udelay(UINT64 us) { (void)us; }
 void sched_yield(void) {}
+static bool net_up;                                   /* NetInitialize has run */
+static const NetAdapter *net_adapter;
+bool NetAvailable(void) { return net_up; }
+void NetAttach(const NetAdapter *a) { net_adapter = a; }
+void NetDetach(const NetAdapter *a) { if (net_adapter == a) net_adapter = NULL; }
 
 /* ---- the fake host ---- */
 #define GPADL 0x42
@@ -332,6 +337,32 @@ static void refusal_checks(void)
     puts("refusals passed");
 }
 
+static void hotplug_checks(void)
+{
+    net_up = false;                                   /* found at start: net.c takes it itself */
+    fresh(0x50000);
+    HvNetworkDriver.started(ctx);
+    assert(ctx->up && NetvscAdapter() && !net_adapter);
+    const NetAdapter *a = NetvscAdapter();
+    net_adapter = a;
+    HvNetworkDriver.removed(ctx);                     /* removed from the VM's settings */
+    assert(!net_adapter && !NetvscAdapter() && !ctx->up);
+    UINT8 buf[64] = { 0 }, mac[6];
+    assert(!a->transmit(buf, 60) && !a->receive(buf, sizeof(buf)) && !a->link_up());
+    a->mac(mac);
+    assert(!mac[0] && !mac[5]);
+    net_up = true;                                    /* added while NovaOS runs: it attaches */
+    fresh(0x50000);
+    HvNetworkDriver.started(ctx);
+    assert(ctx->up && net_adapter == NetvscAdapter() && net_adapter);
+    Netvsc *old = ctx;
+    fresh(0x50000);                                   /* a second adapter's removal leaves the first */
+    g_nv = old;
+    HvNetworkDriver.removed(ctx);
+    assert(net_adapter && NetvscAdapter());
+    puts("adding and removing passed");
+}
+
 int main(void)
 {
     /* {f8615163-df3e-46c5-913f-f2d2f965ed0e} */
@@ -344,6 +375,7 @@ int main(void)
     bringup_checks();
     traffic_checks();
     refusal_checks();
+    hotplug_checks();
     puts("hv_netvsc: all passed");
     return 0;
 }

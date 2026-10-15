@@ -604,11 +604,13 @@ item ends when a named program or test demonstrates it.
     C: (#402)
   - [x] Synthetic video: a resolution chosen in Settings (#403)
   - [x] netvsc: the network adapter (NVSP and RNDIS) (#404)
-  - [ ] Hyper-V clock and timers (reference TSC page, synthetic timers),
-    the SynIC on every CPU, channel interrupts instead of polling, devices
-    added and removed while running
-  - [ ] Key-value exchange (the VM's name and addresses in Hyper-V
-    Manager)
+  - [x] Channel interrupts instead of polling, devices added and removed
+    while running (#405).  The reference TSC page, synthetic timers and
+    the SynIC on every CPU turned out not to be needed: the TSC and the
+    local APIC timer already run at the frequencies Hyper-V's MSRs give,
+    and every channel interrupts CPU 0
+  - [x] Key-value exchange (the VM's name and addresses in Hyper-V
+    Manager) (#407)
 
 <!-- END generated:next-hardware -->
 
@@ -747,8 +749,10 @@ apps from the App Store catalog pass their nightly scripts.
   from the Store's untested apps: WinSCP (installs and opens its Login
   dialog; [history](history/2026-10-14-winscp.md)), Thunderbird (installs
   and opens an e-mail message;
-  [history](history/2026-10-14-thunderbird.md)) and qBittorrent (installs
-  and opens a `.torrent`; [history](history/2026-10-14-qbittorrent.md)).
+  [history](history/2026-10-14-thunderbird.md)), qBittorrent (installs
+  and opens a `.torrent`; [history](history/2026-10-14-qbittorrent.md))
+  and OBS Studio (installs, adds a scene and saves it;
+  [history](history/2026-10-14-obs-studio.md)).
 - [x] **27.2 An office suite.** Add LibreOffice from the catalog; open, edit
   and save `.docx` and `.xlsx` files.  LibreOffice 24.8 installs silently
   from the Store's Windows Installer package; the nightly corpus types a

@@ -257,6 +257,7 @@ struct Chain {
     LONG refs;
     IUnknown *device;                   /* (on a GPU: its ID3D11Device) */
     HWND hwnd;                          /* (0: for DirectComposition) */
+    IUnknown *core;                     /* (a CoreWindow's chain: the window) */
     NDXGI_SWAP_CHAIN_DESC1 desc;
     IUnknown *buffer;                   /* its ID3D11Texture2D */
     INovaSoftTexture *bits;             /* (the software device's) */
@@ -429,6 +430,7 @@ static ULONG STDMETHODCALLTYPE c_release(Chain *c)
         DeleteCriticalSection(&c->rb_lock);
         if (c->ctx) c->ctx->lpVtbl->Release(c->ctx);
         if (c->device) c->device->lpVtbl->Release(c->device);
+        if (c->core) c->core->lpVtbl->Release(c->core);
         HeapFree(GetProcessHeap(), 0, c->rgba_tmp);
         HeapFree(GetProcessHeap(), 0, c);
     }
@@ -562,7 +564,12 @@ static HRESULT STDMETHODCALLTYPE c_gethwnd(Chain *c, HWND *h)
     *h = c->hwnd;
     return c->hwnd ? S_OK : NDXGI_ERROR_INVALID_CALL;
 }
-static HRESULT STDMETHODCALLTYPE c_getcore(Chain *c, const GUID *iid, void **out) { (void)c; (void)iid; if (out) *out = NULL; return NDXGI_ERROR_INVALID_CALL; }
+static HRESULT STDMETHODCALLTYPE c_getcore(Chain *c, const GUID *iid, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    *out = NULL;
+    return c->core ? c->core->lpVtbl->QueryInterface(c->core, iid, out) : NDXGI_ERROR_INVALID_CALL;
+}
 static BOOL STDMETHODCALLTYPE c_mono(Chain *c) { (void)c; return FALSE; }
 static HRESULT STDMETHODCALLTYPE c_getrestrict(Chain *c, void **out) { (void)c; if (out) *out = NULL; return S_OK; }
 static HRESULT STDMETHODCALLTYPE c_setbg(Chain *c, const void *col) { (void)c; (void)col; return S_OK; }
@@ -796,8 +803,29 @@ static HRESULT STDMETHODCALLTYPE f_forhwnd(Factory *f, IUnknown *dev, HWND h, co
     if (!h) { if (out) *out = NULL; return NDXGI_ERROR_INVALID_CALL; }
     return make_chain(dev, h, d, out);
 }
+/* A UWP app's CoreWindow (twinapi.appcore.dll): ICoreWindowInterop gives
+ * its HWND, and the chain presents there as for CreateSwapChainForHwnd */
+static const GUID IID_ICoreWindowInterop_ = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 static HRESULT STDMETHODCALLTYPE f_forcore(Factory *f, IUnknown *dev, IUnknown *w, const NDXGI_SWAP_CHAIN_DESC1 *d, void *r, void **out)
-{ (void)f; (void)dev; (void)w; (void)d; (void)r; if (out) *out = NULL; return NDXGI_ERROR_INVALID_CALL; }
+{
+    (void)f; (void)r;
+    if (!out) return NDXGI_ERROR_INVALID_CALL;
+    *out = NULL;
+    IUnknown *interop = NULL;
+    HWND h = NULL;
+    if (!w || FAILED(w->lpVtbl->QueryInterface(w, &IID_ICoreWindowInterop_, (void **)&interop)) || !interop)
+        return NDXGI_ERROR_INVALID_CALL;
+    ((HRESULT (STDMETHODCALLTYPE *)(IUnknown *, HWND *))((void **)interop->lpVtbl)[3])(interop, &h);   /* get_WindowHandle */
+    interop->lpVtbl->Release(interop);
+    if (!h || !d || (d->SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL_ && d->SwapEffect != DXGI_SWAP_EFFECT_FLIP_DISCARD_))
+        return NDXGI_ERROR_INVALID_CALL;               /* (a CoreWindow takes flip-model chains only, as on Windows) */
+    HRESULT hr = make_chain(dev, h, d, out);
+    if (SUCCEEDED(hr)) {
+        w->lpVtbl->AddRef(w);
+        ((Chain *)*out)->core = w;
+    }
+    return hr;
+}
 static HRESULT STDMETHODCALLTYPE f_sharedluid(Factory *f, HANDLE h, LUID *l) { (void)f; (void)h; (void)l; return E_INVALIDARG; }
 static HRESULT STDMETHODCALLTYPE f_regwin(Factory *f, HWND h, UINT m, DWORD *cookie) { (void)f; (void)h; (void)m; if (cookie) *cookie = 0; return S_OK; }
 static HRESULT STDMETHODCALLTYPE f_regevent(Factory *f, HANDLE e, DWORD *cookie) { (void)f; (void)e; if (cookie) *cookie = 0; return S_OK; }

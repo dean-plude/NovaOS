@@ -2572,17 +2572,8 @@ K32 BOOL WINAPI GetLogicalProcessorInformation(PVOID buf, PDWORD len)
     return TRUE;
 }
 
-/* Windows Runtime (api-ms-win-core-winrt): initializing it succeeds;
- * there are no WinRT classes to activate */
-K32 HRESULT WINAPI RoInitialize(int type) { (void)type; return S_OK; }
-K32 void WINAPI RoUninitialize(void) { }
-K32 HRESULT WINAPI RoGetActivationFactory(PVOID cls, REFIID iid, void **f)
-{
-    (void)cls; (void)iid;
-    if (f) *f = 0;
-    return 0x80040154;                                    /* REGDB_E_CLASSNOTREG */
-}
-K32 HRESULT WINAPI RoActivateInstance(PVOID cls, void **inst) { (void)cls; if (inst) *inst = 0; return 0x80040154; }
+/* (The Windows Runtime's Ro* functions are ole32's, as combase's on Windows:
+ * userland/ole32/winrt.c.  kernel32 does not export them.) */
 
 /* Heaps: one process heap underneath */
 K32 SIZE_T WINAPI HeapCompact(HANDLE h, DWORD flags) { (void)h; (void)flags; return 1 << 20; }

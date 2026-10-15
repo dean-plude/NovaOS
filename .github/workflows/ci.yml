@@ -270,10 +270,10 @@ jobs:
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
-    - name: Install DOSBox, mtools and QEMU
+    - name: Install DOSBox, mtools, NASM and QEMU
       run: |-
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dosbox mtools qemu-system-x86
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dosbox mtools nasm qemu-system-x86
     - name: Cache the MS-DOS build
       uses: actions/cache@v4
       with:
@@ -283,7 +283,7 @@ jobs:
       run: python3 tools/msdos/build_msdos.py msdos-out
     - name: Boot it from a floppy image and run COMMAND.COM and MEM.EXE
       run: python3 tools/msdos/boot_test.py msdos-out --work msdos-boot
-    - name: Boot it on ntvdm's real-mode CPU and BIOS and type at COMMAND.COM
+    - name: Boot it on ntvdm's real-mode CPU and BIOS, type at COMMAND.COM and play bootRogue
       run: python3 tools/msdos/vdm_test.py msdos-out --work msdos-vdm
     - name: Keep the MS-DOS files and the boot log
       if: always()

@@ -8,11 +8,15 @@ PC BIOS of NovaOS's own (userland/programs/ntvdm/cpu86.c, pcbios.c).  They
 are plain C, so this script also builds them for the build machine with
 tools/msdos/vdm_test.c as the host, makes the boot disk NovaOS ships
 (mkdisk.py), boots it and types at COMMAND.COM's prompt as dostest does in
-NovaOS: VER, DIR, MEM, CHKDSK, a COPY and TYPE through the disk, and a few
-instructions assembled and run in DEBUG (MUL's 32-bit product and flags).
+NovaOS: VER, DIR, MEM, CHKDSK, a COPY and TYPE through the disk, a few
+instructions assembled and run in DEBUG (MUL's 32-bit product and flags)
+and a file written in EDLIN.  Then DOS programs run on a directory as
+drive C: as CreateProcess starts them, and bootRogue (third_party/
+bootrogue, assembled with NASM), a game that draws straight into video
+memory, plays a few moves and ends on Esc.
 CI's MS-DOS job runs it beside boot_test.py (the same disk in QEMU's PC),
 so a change to the CPU or BIOS is tested in seconds without booting
-NovaOS.  Needs a C compiler (cc) and mtools.
+NovaOS.  Needs a C compiler (cc), NASM and mtools.
 """
 import argparse, os, shutil, subprocess, sys
 
@@ -34,6 +38,9 @@ STEPS = [
     'type=A 100\\r', 'type=MOV AX,1234\\r', 'type=MOV BX,5678\\r', 'type=MUL BX\\r', 'type=INT 3\\r',
     'type=\\r', 'type=G=100\\r', 'wait=AX=0060  BX=5678  CX=0000  DX=0626', 'wait=OV UP EI PL NZ NA PO CY',
     'type=Q\\r', 'wait=A:\\>',
+    'type=CLS\\r', 'type=EDLIN NOTE.TXT\\r', 'wait=New file', 'wait=*',
+    'type=I\\r', 'wait=1:*', 'type=written in EDLIN\\r', 'wait=2:*', 'type=\x03', 'wait=*',
+    'type=E\\r', 'wait=A:\\>', 'type=TYPE NOTE.TXT\\r', 'wait=written in EDLIN', 'wait=A:\\>',
 ]
 
 
@@ -57,7 +64,8 @@ def main():
     r = subprocess.run([exe, img] + STEPS + timeout)
     if r.returncode:
         sys.exit('vdm_test: MS-DOS on the real-mode CPU and BIOS did not do what was typed')
-    print('vdm_test: MS-DOS 4.0 boots on ntvdm\'s CPU and BIOS and runs VER, DIR, MEM, CHKDSK, COPY, TYPE and DEBUG')
+    print('vdm_test: MS-DOS 4.0 boots on ntvdm\'s CPU and BIOS and runs VER, DIR, MEM, CHKDSK, COPY, TYPE, DEBUG '
+          'and EDLIN')
 
     drive = os.path.join(work, 'c')
     shutil.rmtree(drive, ignore_errors=True)
@@ -97,6 +105,23 @@ def main():
         sys.exit(f'vdm_test: drive C: at the prompt did not do what was typed (the folder has {names})')
     print('vdm_test: drive C: works: DOSRW.COM and DOSRW.EXE run as CreateProcess starts them, and DIR, CD, '
           'TYPE, COPY, MD, RD, REN, DEL and MEM at the prompt')
+
+    # bootRogue: the 80 x 25 screen written directly (the status line is
+    # level, weapon, armor and HP at the bottom right), arrow keys from the
+    # BIOS, the PIT's counter as its random seed; Esc ends it (INT 20h)
+    # (in a folder laid out as NovaOS ships it: C:\Tests\Dos, the licence's
+    # long name beside it needs an alias)
+    games = os.path.join(drive, 'Tests', 'Dos')
+    os.makedirs(games)
+    subprocess.run(['nasm', '-f', 'bin', '-Dcom_file=1', '-o', os.path.join(games, 'ROGUE.COM'),
+                    os.path.join(ROOT, 'third_party', 'bootrogue', 'rogue.asm')], check=True)
+    shutil.copy(os.path.join(ROOT, 'third_party', 'bootrogue', 'LICENSE'), os.path.join(games, 'ROGUE-LICENSE.TXT'))
+    moves = ['key=right', 'key=down', 'key=left', 'key=up'] * 4
+    r = subprocess.run([exe, img, '--drive-c=' + drive, '--cwd=Tests\\Dos', '--run=Tests\\Dos\\ROGUE.COM', '--exit=0', 'screen= 16  ', 'screen=@'] +
+                       moves + ['key=esc'] + timeout)
+    if r.returncode:
+        sys.exit('vdm_test: bootRogue did not draw its dungeon, take the arrow keys and end on Esc')
+    print('vdm_test: bootRogue draws its dungeon, takes 16 moves and ends on Esc')
 
 
 if __name__ == '__main__':

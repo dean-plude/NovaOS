@@ -13463,6 +13463,28 @@ endpoint and pass MJPEG frames on undecoded.
 Still needed for 28.3: a boot of `latest` on the T14 showing its
 webcam's picture in Camera.
 
+## A DOS game, and Phase 31 done
+
+Roadmap step 31.4, the last of Phase 31.  bootRogue, Oscar Toledo G.'s
+roguelike in 510 bytes of 8086 code (BSD 2-clause, `third_party/bootrogue`,
+unchanged), is assembled with NASM and ships as `C:\Tests\Dos\ROGUE.COM`.
+It is the first DOS program in the tests that bypasses DOS and the BIOS:
+it writes its dungeon straight into video memory and seeds its random
+numbers from the timer chip.  `dostest` now starts it, waits for the hero
+and the HP on the console, plays eight moves with the arrow keys and ends
+it with Esc (exit code 0); CI's MS-DOS job plays it on Linux as well
+(`vdm_test` learned `screen=` and `key=` steps) and writes a file in
+`EDLIN`.  MS-DOS 4.00's utilities (Gold: text mode only) and bootRogue
+(Platinum) have compatibility entries, the user guide has a DOS programs
+section, and [dos.md](dos.md) a screenshot.  Three NovaOS fixes came with
+it: the Terminal grows to at least 80 x 25 for a program that takes the
+whole console (its 21 rows cut off a DOS screen's last four), an 8.3
+alias such as `ROGUE-~1.TXT` no longer overruns a buffer in the DOS
+redirector, and `ntvdm` no longer writes a NUL after the sequence that
+opens the alternate screen.  That NUL cut off the Terminal's copy of a
+program's output on the serial port, so on CI's faster KVM runners
+`dostest`'s summary went missing and the 31.3 merge turned main red.
+
 ## MS-DOS in a console window
 
 Roadmap step 31.2.  `ntvdm.exe`, NovaOS's DOS host, boots the MS-DOS 4.00
@@ -13692,6 +13714,42 @@ HandBrake now gets past its first icon (a PNG decoded through the new
 WIC), but its main window still does not appear: WPF creates only its
 hidden helper windows and then waits in its message loop.  That is the
 next step for HandBrake (roadmap 27.1); it stays Borked.
+
+## The UWP app model's core: CoreApplication and CoreWindow
+
+First step of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)).  XAML's `Application.Start` and
+every DirectX UWP app stand on the Windows Runtime's app model, so that
+comes first:
+
+- **Activation from the registry.**  `RoGetActivationFactory` used to know
+  only the classes built into `ole32`.  It now also loads the in-process
+  server the registry names for a class, as combase does:
+  `HKLM\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\<class>` with
+  `DllPath` (and `ActivationType` 0), whose `DllGetActivationFactory`
+  makes the factory.
+- **`twinapi.appcore.dll`** (new) serves
+  `Windows.ApplicationModel.Core.CoreApplication`: `Run` takes the app's
+  `IFrameworkViewSource`, makes its view and calls `Initialize`,
+  `SetWindow`, `Load`, the launch's `Activated` event
+  (`LaunchActivatedEventArgs` with the command line as `Arguments`), `Run`
+  and `Uninitialize`; `Exit`, `GetCurrentView` and `MainView`.  The view's
+  `Windows.UI.Core.CoreWindow` is a top-level window (its HWND through
+  `ICoreWindowInterop`) with `Activate`, `Close`, `Bounds` and key states
+  in DIPs, pointer capture and a hidden cursor, and the `Activated`,
+  `CharacterReceived`, `Closed`, `KeyDown`, `KeyUp`, `SizeChanged` and
+  `VisibilityChanged` events from its messages; its `CoreDispatcher`
+  pumps them (`ProcessEvents` with every option) and runs `RunAsync` work
+  posted from other threads, completing its `IAsyncAction`.
+  `CoreWindow.GetForCurrentThread` answers on the window's thread.
+- **DXGI's `CreateSwapChainForCoreWindow`** makes a flip-model swap chain
+  on the CoreWindow's HWND, and `GetCoreWindow` gives the window back, so a
+  DirectX UWP app's frame loop presents.
+
+New core self-test `coreapptest` (64- and 32-bit).  Not yet: the pointer
+events (they take handlers and are not raised; `PointerPoint` comes with
+composition in step 32.2), `RunIdleAsync`, `CoreCursor` objects, secondary
+views, `Properties`, suspend and resume, and app packages.
 
 ## System parameters for WPF
 

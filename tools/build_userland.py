@@ -710,6 +710,13 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msdos', 'mkdi
      '--novaos'])
 built.append(('\\Windows\\System32\\DOS\\MSDOS.IMG', msdosimg))
 built.append(('\\Windows\\System32\\DOS\\LICENSE.TXT', os.path.join(msdosdir, 'LICENSE')))
+# bootRogue (third_party/bootrogue, BSD 2-clause), a DOS game in 510 bytes
+# of 8086 code, assembled as a .COM: dostest plays it (docs/dos.md)
+roguecom = os.path.join(out, 'ROGUE.COM')
+run(['nasm', '-f', 'bin', '-Dcom_file=1', '-o', roguecom,
+     os.path.join(os.path.dirname(HERE), 'third_party', 'bootrogue', 'rogue.asm')])
+built.append(('\\Tests\\Dos\\ROGUE.COM', roguecom))
+built.append(('\\Tests\\Dos\\ROGUE-LICENSE.TXT', os.path.join(os.path.dirname(HERE), 'third_party', 'bootrogue', 'LICENSE')))
 # 3a3. the General MIDI soundfont winmm's synthesizer plays (generated)
 sf2 = os.path.join(out, 'gm.sf2')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'make_gm_soundfont.py'), sf2])

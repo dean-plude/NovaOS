@@ -168,7 +168,7 @@ typedef struct {
     EntryFn fn;
     void *arg;
     int nstems;
-    struct { char stem[10]; int n; } stems[32];
+    struct { char stem[12]; int n; } stems[32];   /* (six of the name, a dot, three: "ROGUE-.TXT") */
 } Walk;
 
 static int walk_entry(void *arg, const VdmFile *f)
@@ -176,7 +176,7 @@ static int walk_entry(void *arg, const VdmFile *f)
     Walk *w = arg;
     char dos[13];
     if (!fits_83(f->name, dos)) {
-        char base[9], ext[4], stem[10];
+        char base[9], ext[4], stem[12];
         alias_stem(f->name, base, ext);
         memcpy(stem, base, 7);
         strcat(stem, ".");

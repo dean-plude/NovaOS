@@ -149,12 +149,6 @@ HRESULT ole32_winrt_factory(const WCHAR *name, UINT32 len, REFIID iid, void **ou
     if (len == n && i == n) return kcm_qi(&g_kcm, iid, out);
     HRESULT hr = ole32_uisettings_factory(name, len, iid, out);
     if (hr != REGDB_E_CLASSNOTREG) return hr;
-    char msg[160] = "ole32: no Windows Runtime class ";
-    UINT32 at = 32;
-    for (i = 0; i < len && at < sizeof(msg) - 2; i++) msg[at++] = name[i] < 0x80 ? (char)name[i] : '?';
-    msg[at++] = '\n';
-    msg[at] = 0;
-    OutputDebugStringA(msg);
     *out = 0;
-    return REGDB_E_CLASSNOTREG;
+    return REGDB_E_CLASSNOTREG;                 /* (winrt.c asks the registry next) */
 }

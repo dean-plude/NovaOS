@@ -192,9 +192,72 @@ built for Linux with a directory as drive C:, then types `C:`, `CD` into
 the folder by its alias, `DIR`, `TYPE`, `COPY`, `MD`, `RD`, `REN`, `DEL`
 and `MEM` from C: at the prompt (`tools/msdos/vdm_test.py`).
 
+## Step 31.4: a game, and what runs
+
+![bootRogue in NovaOS's console window](screenshots/dos-bootrogue.png)
+
+**A game.**  bootRogue by Oscar Toledo G.
+([github.com/nanochess/bootRogue](https://github.com/nanochess/bootRogue),
+BSD 2-clause licence) is a roguelike in 510 bytes of 8086 code, the kind of
+program NTVDM had to run as well as DOS's own: it sets the text mode with
+`INT 10h`, writes its dungeon straight into video memory at B800:0 rather
+than through DOS or the BIOS, takes its random seed from the timer chip's
+counter (port 40h) and reads the arrow keys with `INT 16h`.  Its source is
+in `third_party/bootrogue`, unchanged; the build assembles it with NASM as
+a `.COM` and ships it as `C:\Tests\Dos\ROGUE.COM` with its licence.
+Type `C:\Tests\Dos\ROGUE` in the Terminal to play: the arrow keys move
+the smiling face (light shows the room you are in), walking into a letter
+fights a monster, the numbers at the bottom right are level, weapon,
+armour and HP, and Esc gives the Terminal back.
+
+**The window.**  A DOS screen is 80 x 25, and the Terminal's window had
+21 rows, so a program's last rows (bootRogue's status line) were cut off.
+When a program takes the whole console (it reads keys one at a time, as
+`ntvdm.exe` does), the Terminal now grows its window to at least 80 x 25,
+as a Windows console window is, and `ntvdm.exe` draws the whole screen
+again when the console's size changes.  The Terminal draws characters
+from the monospace font's ASCII: box drawing as lines and corners, the
+smiling faces as `@` and other picture characters as stand-ins, while the
+console itself keeps the real characters (what `ReadConsoleOutput` and the
+tests read).
+
+Making the game run also found a bug in step 31.3's drive C:: the alias
+for a long name with a six-character stem and an extension
+(`ROGUE-LICENSE.TXT`, `ROGUE-~1.TXT`) overran a ten-byte buffer in
+`redir.c`, and DOS could not find anything in that folder.  And
+`ntvdm.exe` wrote a NUL after the sequence that opens the alternate
+screen; the Terminal's copy of program output on the serial port (what
+the self-tests read) stopped at it, so on fast runs everything read in the
+same chunk after it, `dostest`'s summary included, went missing.  The
+sequence is written without it, and that copy now skips a NUL instead of
+stopping.
+
+**Tests.**  `dostest` starts `ROGUE.COM` with `CreateProcess`, waits for
+the hero (U+263A in the console, code page 437's `01h`) and the HP, plays
+eight moves with the arrow keys and presses Esc, which must end it with
+exit code 0 and give the console back; the core boot's screenshot of it is
+`docs/screenshots/dos-bootrogue.png`.  CI's MS-DOS job plays it on Linux
+too, through `vdm_test`'s new `screen=` (text on the screen, read from
+video memory) and `key=` (arrows and Esc) steps, and writes a file in
+`EDLIN` at the prompt.
+
+**What runs.**  These have compatibility entries
+([compatibility.md](compatibility.md)):
+
+| Program | Rating | Checked by |
+|---------|--------|------------|
+| MS-DOS 4.00's `COMMAND.COM` and its utilities (`DIR`, `COPY`, `TYPE`, `MEM`, `CHKDSK`, `DEBUG`, `EDLIN`) | Gold | `dostest` and CI's MS-DOS job |
+| bootRogue | Platinum | `dostest` and CI's MS-DOS job |
+
+The utilities are Gold rather than Platinum because of what the DOS host
+does not have yet: graphics modes (CGA, EGA, VGA), sound, a mouse,
+expanded and extended memory, and keyboard layouts other than US.  The
+4.00 source has no `EDIT` or `QBASIC` (they came with MS-DOS 5).
+
 ## What comes next
 
-- **31.4** a bundled DOS utility and freeware game in CI, their
-  compatibility entries and a screenshot.
+Phase 31 is done.  Graphics modes, the PC speaker and a mouse for DOS
+games, and other keyboard layouts, would be the next steps if DOS games
+become a target; none is on the roadmap yet.
 
 The steps and what counts as done are in [ROADMAP.md](ROADMAP.md#phase-31-dos-programs).

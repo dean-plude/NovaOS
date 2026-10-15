@@ -572,7 +572,7 @@ typedef struct {
     uacpi_namespace_node *node;
     AmlGas control, status;
     AmlTState states[MAX_TSTATES];
-    UINT8 nstates, max_state, current_state;
+    UINT8 nstates, platform_state, current_state;
     bool valid;
 } ThermalCpu;
 
@@ -685,11 +685,10 @@ static ThermalCpu *thermal_cpu(uacpi_namespace_node *node)
 
     if (ok) {
         uacpi_u64 tpc;
-        cpu->max_state = (UINT8)(states.count - 1);
-        if (uacpi_eval_simple_integer(node, "_TPC", &tpc) == UACPI_STATUS_OK &&
-            tpc < cpu->max_state)
-            cpu->max_state = (UINT8)tpc;
         cpu->nstates = (UINT8)states.count;
+        if (uacpi_eval_simple_integer(node, "_TPC", &tpc) == UACPI_STATUS_OK &&
+            tpc < cpu->nstates)
+            cpu->platform_state = (UINT8)tpc;
         cpu->valid = true;
     } else {
         const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
@@ -852,9 +851,10 @@ static void poll_zones(bool all)
         for (int z = 0; z < g_nzone; z++) {
             if (!g_zone[z].z.cooling) continue;
             for (int p = 0; p < g_zone[z].ncpus; p++)
-                if (g_zone[z].cpus[p] == cpu->node && cpu->max_state > target)
-                    target = cpu->max_state;
+                if (g_zone[z].cpus[p] == cpu->node && cpu->nstates - 1 > target)
+                    target = (UINT8)(cpu->nstates - 1);
         }
+        if (cpu->platform_state > target) target = cpu->platform_state;
         if (cpu->current_state == target) {
             for (int z = 0; z < g_nzone; z++)
                 for (int p = 0; p < g_zone[z].ncpus; p++)

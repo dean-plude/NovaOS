@@ -43,7 +43,7 @@ DefinitionBlock ("", "SSDT", 2, "NOVA", "LIDTHERM", 1)
                 Register (SystemIO, 8, 0, 1, 0x00EA),
                 Register (SystemIO, 8, 0, 1, 0x00EB)
             })
-            Name (_TPC, 1)
+            Name (_TPC, 0)
             Name (_TSS, Package ()
             {
                 Package () { 100, 0, 0, 0, 0 },

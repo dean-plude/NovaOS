@@ -473,7 +473,8 @@ item ends when a named program or test demonstrates it.
   FADT; the AML interpreter (uACPI) for batteries, AC adapters,
   control-method power buttons and `_PTS`/`_WAK`; the lid (closing it
   sleeps), thermal zones (passive `_PSL` processors throttled through
-  `_PTC`/`_TSS`, capped by `_TPC` and sampled at `_TSP`; sleep at `_HOT`,
+  `_PTC`/`_TSS`, honoring the `_TPC` platform throttle level and `_TSP`;
+  sleep at `_HOT`,
   shutdown at `_CRT`), wake devices from `_PRW` (including GPE-block
   references), ACPI0006 GPE blocks, the SCI as a real interrupt through
   the I/O APIC and PCI interrupt routing from `_PRT` on root and

@@ -21,7 +21,8 @@
 - **Thermal zones**: `_TMP`, `_PSV`, `_HOT`, `_CRT` and `_TZP`, read every
   `_TZP` (at least every 10 s) and on `Notify 0x80`/`0x81`.  Crossing the
   passive trip point throttles processors listed by `_PSL` through supported
-  `_PTC`/`_TSS` controls, capped by `_TPC` and updated no faster than `_TSP`;
+  `_PTC`/`_TSS` controls, honoring the `_TPC` platform throttle level and
+  updated no faster than `_TSP`;
   `_HOT` puts the machine to sleep and `_CRT` shuts it down, drive C: saved
   first.
 - **Wake devices** (`_PRW`): integer GPEs and GPE-block/device references

@@ -1,1 +1,1 @@
-{"deps": ["shlwapi", "oleaut32", "msvcrt", "kernel32", "ntdll"]}
+{"deps": ["shlwapi", "oleaut32", "ole32", "msvcrt", "kernel32", "ntdll"]}

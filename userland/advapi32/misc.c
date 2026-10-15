@@ -55,6 +55,11 @@ WINADVAPI ULONG WINAPI RegisterTraceGuidsA(PVOID cb, PVOID ctx, const GUID *g, U
 }
 WINADVAPI ULONG WINAPI UnregisterTraceGuids(ULONGLONG h) { (void)h; return ERROR_SUCCESS; }
 WINADVAPI ULONG WINAPI TraceEvent(ULONGLONG h, PVOID ev) { (void)h; (void)ev; return ERROR_SUCCESS; }
+WINADVAPI ULONG __cdecl TraceMessage(ULONGLONG h, ULONG flags, const GUID *g, USHORT num, ...)
+{
+    (void)h; (void)flags; (void)g; (void)num;
+    return ERROR_SUCCESS;                           /* no trace session listens */
+}
 WINADVAPI ULONGLONG WINAPI GetTraceLoggerHandle(PVOID buf) { (void)buf; SetLastError(ERROR_INVALID_HANDLE); return (ULONGLONG)-1; }
 WINADVAPI UCHAR WINAPI GetTraceEnableLevel(ULONGLONG h) { (void)h; return 0; }
 WINADVAPI ULONG WINAPI GetTraceEnableFlags(ULONGLONG h) { (void)h; return 0; }

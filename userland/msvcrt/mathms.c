@@ -11,18 +11,18 @@ __declspec(dllexport) int _fltused = 0x9875;   /* floating point in use (the com
 double _hypot(double x, double y)     { return hypot(x, y); }
 __declspec(dllexport) float _hypotf(float x, float y)      { return hypotf(x, y); }
 double _copysign(double x, double y)  { return copysign(x, y); }
-float  _copysignf(float x, float y)   { return copysignf(x, y); }
+__declspec(dllexport) float _copysignf(float x, float y)   { return copysignf(x, y); }
 double _chgsign(double x)             { return -x; }
 double _logb(double x)                { return logb(x); }
-float  _logbf(float x)                { return logbf(x); }
+__declspec(dllexport) float _logbf(float x)                { return logbf(x); }
 double _nextafter(double x, double y) { return nextafter(x, y); }
-float  _nextafterf(float x, float y)  { return nextafterf(x, y); }
+__declspec(dllexport) float _nextafterf(float x, float y)  { return nextafterf(x, y); }
 double _scalb(double x, long e)       { return scalbln(x, e); }
 float  _scalbf(float x, long e)       { return scalbnf(x, (int)e); }
 int    _finite(double x)              { return isfinite(x); }
-int    _finitef(float x)              { return isfinite(x); }
+__declspec(dllexport) int _finitef(float x)              { return isfinite(x); }
 int    _isnan(double x)               { return isnan(x); }
-int    _isnanf(float x)               { return isnan(x); }
+__declspec(dllexport) int _isnanf(float x)               { return isnan(x); }
 double _j0(double x) { return j0(x); }
 double _j1(double x) { return j1(x); }
 double _jn(int n, double x) { return jn(n, x); }

@@ -481,8 +481,23 @@ static bool img_privatize(UmProcess *p, UINT64 va, pte_t *e)
     return true;
 }
 
+/* The section page at @e (@va) becomes the process's own copy: a view
+ * made PAGE_WRITECOPY, whose writes reach neither the section nor its file */
+static bool share_privatize(UmProcess *p, UINT64 va, pte_t *e)
+{
+    PADDR f = pmm_alloc_page();
+    if (!f) return false;
+    memcpy(um_frame_ptr(f), um_frame_ptr(*e & PTE_ADDR_MASK), PAGE_SIZE);
+    *e = f | (*e & ~(PTE_ADDR_MASK | PTE_SHARED));
+    if (is_current(p)) invlpg(va);
+    p->commit++;
+    __atomic_add_fetch(&p->pages, 1, __ATOMIC_RELAXED);
+    return true;
+}
+
 bool um_commit(UmProcess *p, UINT64 va, UINT64 size, UINT32 protect)
 {
+    bool wc = (protect & 0xFF) == 0x08 || (protect & 0xFF) == 0x80;   /* PAGE_(EXECUTE_)WRITECOPY */
     UINT64 f = pte_flags(protect);
     bool guard = protect & 0x100;                       /* PAGE_GUARD */
     bool ok = true, changed = false;
@@ -492,6 +507,10 @@ bool um_commit(UmProcess *p, UINT64 va, UINT64 size, UINT32 protect)
         if ((*e & PTE_PRESENT) && (*e & PTE_ADDR_MASK) == g_kusd_pa) continue;   /* stays read-only */
         if ((*e & PTE_IMAGE) && (f & PTE_WRITE)) {       /* a shared module page made writable: its own copy */
             if (!img_privatize(p, a, e)) { ok = false; break; }
+        }
+        if (wc && (*e & PTE_PRESENT) && (*e & PTE_SHARED)) {
+            if (!share_privatize(p, a, e)) { ok = false; break; }
+            changed = true;
         }
         if (*e & PTE_PRESENT) {                         /* re-commit: new protection */
             UINT64 nf = guard ? (f & ~PTE_USER) | PTE_GUARD : f;
@@ -969,6 +988,7 @@ UmRegion *um_region_add(UmProcess *p, UINT64 base, UINT64 size, UINT32 protect, 
     r->size = (size + 0xFFF) & ~0xFFFULL;
     r->protect = protect;
     r->image = image;
+    r->placeholder = false;
     r->section = NULL;
     return r;
 }

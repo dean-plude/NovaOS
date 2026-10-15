@@ -5,6 +5,7 @@
  */
 #define NOVA_BUILD_GDI32
 #include <windows.h>
+#include <winternl.h>
 #include "gdi_int.h"
 
 GDIAPI BOOL SetWindowOrgEx(HDC h, int x, int y, LPPOINT old);
@@ -272,3 +273,13 @@ GDIAPI BOOL GetICMProfileW(HDC h, LPDWORD n, LPWSTR name) { (void)h; (void)n; (v
 GDIAPI BOOL GetICMProfileA(HDC h, LPDWORD n, LPSTR name) { (void)h; (void)n; (void)name; return FALSE; }
 
 
+
+/* GdiEntry13 (DdQueryDisplaySettingsUniqueness): a number that changes
+ * when the display mode does.  WPF's wpfgfx looks it up by name and calls
+ * it unchecked to notice mode changes; one display, so its size will do */
+GDIAPI ULONG GdiEntry13(void)
+{
+    ULONG w = 1280, h = 800;
+    NtNovaGuiScreenSize(&w, &h);
+    return w << 16 ^ h;
+}

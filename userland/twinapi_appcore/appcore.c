@@ -424,10 +424,12 @@ static HRESULT STDMETHODCALLTYPE win_visible(Win *w, boolean_t *v)
     *v = w->hwnd && IsWindowVisible(w->hwnd) && !IsIconic(w->hwnd);
     return S_OK;
 }
+static void raise_visible(BOOL v);
 static HRESULT STDMETHODCALLTYPE win_activate(Win *w)
 {
     if (!w->hwnd) return E_ILLEGAL_METHOD_CALL_;
     if (!IsWindowVisible(w->hwnd)) ShowWindow(w->hwnd, SW_SHOW);
+    raise_visible(IsWindowVisible(w->hwnd) && !IsIconic(w->hwnd));    /* (whether or not WM_SHOWWINDOW came) */
     SetForegroundWindow(w->hwnd);
     UpdateWindow(w->hwnd);
     return S_OK;
@@ -647,6 +649,7 @@ static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             g_win.closed = 1;
             raise_event(EV_CLOSED, args_new(ARGS_PLAIN));
             ShowWindow(h, SW_HIDE);
+            raise_visible(FALSE);
         }
         return 0;
     }

@@ -1,9 +1,13 @@
 /*
  * Windows Runtime strings (HSTRING) and activation, the part of combase
  * (api-ms-win-core-winrt-*) Win32 programs touch: they make HSTRINGs to
- * name runtime classes, and ask for activation factories, which NovaOS
- * has few of (winrt_classes.c, uisettings.c; others give
- * REGDB_E_CLASSNOTREG, as for a class Windows lacks).
+ * name runtime classes, and ask for activation factories.  A class is
+ * answered by ole32 itself (winrt_classes.c, uisettings.c) or, as Windows
+ * does, by the in-process server the registry names for it:
+ * HKLM\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\<class>
+ * has DllPath, and that DLL's DllGetActivationFactory makes the factory
+ * (twinapi.appcore.dll's CoreApplication, for one).  Others give
+ * REGDB_E_CLASSNOTREG, as for a class Windows lacks.
  */
 #define NOVA_BUILD_OLE32
 #include <objbase.h>
@@ -124,18 +128,66 @@ WINOLEAPI_(HRESULT) WindowsConcatString(HSTRING a, HSTRING b, HSTRING *out)
     return hr;
 }
 
-/* Activation: only the classes in winrt_classes.c */
+/* Activation: the classes in winrt_classes.c, then the registry's */
 HRESULT ole32_winrt_factory(const WCHAR *name, UINT32 len, REFIID iid, void **out);
 WINOLEAPI_(HRESULT) RoInitialize(int type) { return CoInitializeEx(0, type == 0 ? COINIT_APARTMENTTHREADED : COINIT_MULTITHREADED); }
 WINOLEAPI_(void) RoUninitialize(void) { CoUninitialize(); }
+static const GUID IID_IActivationFactory__ = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+
+/* An in-process server: ActivatableClassId\<class> (ActivationType 0)
+ * names the DLL; its DllGetActivationFactory(class, IActivationFactory **)
+ * makes the factory, which is then asked for the interface wanted.  The
+ * DLL stays loaded, as combase keeps it while the process runs. */
+static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFIID iid, void **out)
+{
+    static const WCHAR root[] = L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\";
+    WCHAR key[300], path[MAX_PATH];
+    UINT32 n = 0;
+    for (const WCHAR *r = root; *r; r++) key[n++] = *r;
+    if (!len || n + len >= sizeof key / sizeof key[0]) return REGDB_E_CLASSNOTREG;
+    for (UINT32 i = 0; i < len; i++) {
+        if (!name[i] || name[i] == '\\') return REGDB_E_CLASSNOTREG;
+        key[n++] = name[i];
+    }
+    key[n] = 0;
+    DWORD type = 0, size = sizeof type;
+    if (!RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ActivationType", RRF_RT_REG_DWORD, 0, &type, &size) && type != 0)
+        return REGDB_E_CLASSNOTREG;                   /* out of process: not served yet */
+    size = sizeof path;
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, key, L"DllPath", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, 0, path, &size))
+        return REGDB_E_CLASSNOTREG;
+    HMODULE mod = LoadLibraryExW(path, 0, 0);
+    if (!mod) return CO_E_DLLNOTFOUND;
+    typedef HRESULT (WINAPI *GetFactory)(HSTRING, IUnknown **);
+    GetFactory get = (GetFactory)GetProcAddress(mod, "DllGetActivationFactory");
+    if (!get) return CO_E_ERRORINDLL;
+    IUnknown *f = 0;
+    HRESULT hr = get(cls, &f);
+    if (FAILED(hr)) return hr;
+    if (!f) return E_UNEXPECTED;
+    hr = f->lpVtbl->QueryInterface(f, iid, out);
+    f->lpVtbl->Release(f);
+    return hr;
+}
+
 WINOLEAPI_(HRESULT) RoGetActivationFactory(HSTRING cls, REFIID iid, void **f)
 {
     if (!f) return E_POINTER;
+    *f = 0;
     UINT32 len;
     const WCHAR *name = WindowsGetStringRawBuffer(cls, &len);
-    return ole32_winrt_factory(name, len, iid, f);
+    HRESULT hr = ole32_winrt_factory(name, len, iid, f);
+    if (hr != REGDB_E_CLASSNOTREG) return hr;
+    hr = registry_factory(cls, name, len, iid, f);
+    if (hr != REGDB_E_CLASSNOTREG) return hr;
+    char msg[160] = "ole32: no Windows Runtime class ";
+    UINT32 at = 32;
+    for (UINT32 i = 0; i < len && at < sizeof msg - 2; i++) msg[at++] = name[i] < 0x80 ? (char)name[i] : '?';
+    msg[at++] = '\n';
+    msg[at] = 0;
+    OutputDebugStringA(msg);
+    return REGDB_E_CLASSNOTREG;
 }
-static const GUID IID_IActivationFactory__ = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 /* The class's factory's IActivationFactory::ActivateInstance, the slot
  * after IInspectable's six */
 WINOLEAPI_(HRESULT) RoActivateInstance(HSTRING cls, void **inst)

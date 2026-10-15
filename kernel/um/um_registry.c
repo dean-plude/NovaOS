@@ -828,6 +828,25 @@ static void defaults(void)
     if (!has_value(ts, "")) { kset_sz(ts, "", "taskschd.dll", 1); kset_sz(ts, "ThreadingModel", "Both", 1); }
     RegKey *tsc = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}", false);
     if (!has_value(tsc, "")) kset_sz(tsc, "", "TaskScheduler class", 1);
+    /* Windows Runtime classes served in process (RoGetActivationFactory
+     * loads DllPath and calls its DllGetActivationFactory): the UWP app
+     * model's CoreApplication and CoreWindow (twinapi.appcore.dll; Windows
+     * keeps CoreWindow in Windows.UI.dll).  ActivationType 0 = in process,
+     * Threading 0 = both apartments. */
+    static const char *const wrt_classes[][2] = {
+        { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
+        { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
+    };
+    for (unsigned i = 0; i < sizeof wrt_classes / sizeof wrt_classes[0]; i++) {
+        char path[160];
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\%s", wrt_classes[i][0]);
+        RegKey *k = kpath(path, false);
+        if (!has_value(k, "DllPath")) {
+            kset_sz(k, "DllPath", wrt_classes[i][1], 1);
+            kset_dword(k, "ActivationType", 0);
+            kset_dword(k, "Threading", 0);
+        }
+    }
     /* DirectSound and DirectSoundCapture (dsound.dll), so CoCreateInstance finds them */
     static const char *const ds_clsids[] = {
         "{47D4D946-62E8-11CF-93BC-444553540000}", "{3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}",

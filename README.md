@@ -225,6 +225,7 @@ PC or on Microsoft Hyper-V.  The next phases are:
 | 27 | Everyday apps: a larger app corpus, an office suite, the public web over the T14's own network |
 | 28 | Laptop hardware: Wi-Fi, Bluetooth, camera, battery life, a second reference PC |
 | 29 | NovaOS 0.2 on both reference PCs |
+| 31 | DOS programs: MS-DOS 4.0 built from Microsoft's source, on a real-mode CPU in a NovaOS console window, as NTVDM did |
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has every step, what has been done and
 what counts as done.
@@ -280,6 +281,7 @@ before new code is written.
 | [Architecture](docs/design/architecture.md) | The key design decisions |
 | [Inside NovaOS](docs/inside.md) | A tour of every part |
 | [Early architecture](docs/phase1-architecture.md) | Boot flow, address-space layout, the early kernel |
+| [DOS programs](docs/dos.md) | Building MS-DOS 4.0 from Microsoft's source, and the plan for running DOS programs |
 | [Drivers](docs/drivers.md) and [Windows driver design](docs/design/windows-drivers.md) | Running Windows driver packages |
 | [Desktop design](docs/design/native-desktop.md) | How the Aurora desktop maps its design reference onto the native shell |
 | [Intel GPU design](docs/design/intel-gpu.md) | The plan for the reference laptop's GPU |

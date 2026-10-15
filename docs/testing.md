@@ -102,20 +102,20 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   and fonts at 192 DPI; per-thread awareness contexts; controls and
   dialogs rescaled when a window's DPI changes, comctl32 at 192 DPI, and
   coordinates converted between awareness contexts), `disptest`,
-  `icutest` (ICU and locales, 64- and 32-bit), `comtest`, `nlstest`
-  (date, time, number and currency formats in German and Japanese, 64-
-  and 32-bit; `nlstest user`), `nlstest calendars` (Japanese eras,
-  Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura and Persian dates;
-  `GetDurationFormat`) and `nlstest override` (`SetLocaleInfo`), 64- and
-  32-bit, `tlbtest` (type libraries, 64- and 32-bit), `usptest` (Arabic
-  and Devanagari shaped through Uniscribe and drawn by `ExtTextOut`, 64-
-  and 32-bit), `cppeh`, `dlgtest` (the common file dialogs:
-  `OPENFILENAME` settings, `IFileDialog` objects), `unwindtest`,
-  `stltest` (the C++ standard library, 64- and 32-bit), `delaytest` (the
-  DLLs Firefox delay-loads), `rttest` (complex math, conio, DLL
-  directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt programs
-  need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello, the
-  process DACL), `battery` (against the battery in
+  `icutest` (ICU and locales, 64- and 32-bit), `comtest`, `wictest`,
+  `nlstest` (date, time, number and currency formats in German and
+  Japanese, 64- and 32-bit; `nlstest user`), `nlstest calendars`
+  (Japanese eras, Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura
+  and Persian dates; `GetDurationFormat`) and `nlstest override`
+  (`SetLocaleInfo`), 64- and 32-bit, `tlbtest` (type libraries, 64- and
+  32-bit), `usptest` (Arabic and Devanagari shaped through Uniscribe and
+  drawn by `ExtTextOut`, 64- and 32-bit), `cppeh`, `dlgtest` (the common
+  file dialogs: `OPENFILENAME` settings, `IFileDialog` objects),
+  `unwindtest`, `stltest` (the C++ standard library, 64- and 32-bit),
+  `delaytest` (the DLLs Firefox delay-loads), `rttest` (complex math,
+  conio, DLL directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt
+  programs need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello,
+  the process DACL), `battery` (against the battery in
   `tests/acpi/battery.asl`), `soundtest` (the recorded WAV must hold the
   tones played), `soundtest godot` (WASAPI through IAudioClient3 as
   Godot plays, 64-bit and 32-bit), `soundtest record`, `capture` and
@@ -392,7 +392,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

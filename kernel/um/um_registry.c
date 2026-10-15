@@ -832,17 +832,19 @@ static void defaults(void)
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication and CoreWindow (twinapi.appcore.dll; Windows
      * keeps CoreWindow in Windows.UI.dll).  ActivationType 0 = in process,
-     * Threading 0 = both apartments. */
+     * Threading 0 = both apartments.  As on Windows, the 32-bit view
+     * (WOW6432Node) has its own copy, naming the SysWOW64 DLL. */
     static const char *const wrt_classes[][2] = {
         { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
     };
-    for (unsigned i = 0; i < sizeof wrt_classes / sizeof wrt_classes[0]; i++) {
-        char path[160];
-        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\%s", wrt_classes[i][0]);
+    for (unsigned i = 0; i < 2 * (sizeof wrt_classes / sizeof wrt_classes[0]); i++) {
+        char path[180];
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\%sMicrosoft\\WindowsRuntime\\ActivatableClassId\\%s",
+                  i & 1 ? "WOW6432Node\\" : "", wrt_classes[i / 2][0]);
         RegKey *k = kpath(path, false);
         if (!has_value(k, "DllPath")) {
-            kset_sz(k, "DllPath", wrt_classes[i][1], 1);
+            kset_sz(k, "DllPath", wrt_classes[i / 2][1], 1);
             kset_dword(k, "ActivationType", 0);
             kset_dword(k, "Threading", 0);
         }

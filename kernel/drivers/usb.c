@@ -685,15 +685,18 @@ static UsbDev *enumerate(UsbHc *hc, UsbDev *parent, UINT8 hub_port, UINT8 root, 
         f.len = end - off;
         void *inst = NULL;
         int kind = USBPNP_NONE;
+        bool for_class = false;
         if (f.cls == 9)       inst = UsbHubProbe(d, &f), kind = USBPNP_HUB;
         else if (f.cls == 3) {
             if ((inst = UsbPadHidProbe(d, &f))) kind = USBPNP_PAD;
-            else inst = UsbHidProbe(d, &f), kind = USBPNP_HID;
+            else inst = UsbHidProbe(d, &f, &for_class), kind = USBPNP_HID;
         }
         else if (f.cls == 0xFF) inst = UsbXpadProbe(d, &f), kind = USBPNP_XPAD;
         else if (f.cls == 8)  inst = UsbMscProbe(d, &f), kind = USBPNP_MSC;
         else if (f.cls == 1)  inst = UsbAudioProbe(d, &f), kind = USBPNP_AUDIO;
-        if (!inst)
+        if (for_class)                    /* (keyboards and mice: Plug and Play starts HidUsb on it) */
+            kprintf("[USB] %s: interface %d: a HID keyboard or mouse, for the HID class driver\n", d->name, f.number);
+        else if (!inst)
             kprintf("[USB] %s: interface %d (class %02x/%02x/%02x) not used\n",
                     d->name, f.number, f.cls, f.sub, f.proto);
         static const char *const drivers[] = { NULL, "usbhub", "usbhid", "gamepad", "xpad", "usbmsc", "usbaudio" };

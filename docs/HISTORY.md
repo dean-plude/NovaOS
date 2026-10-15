@@ -13516,6 +13516,28 @@ hidapi 0.15.0 (`third_party/hidapi`, BSD licence) builds unchanged into
 with its instance ID, product and serial number, and `hid_open`,
 feature reports, `hid_write` and `hid_read_timeout` work on it.
 
+## Keyboards and mice through kbdhid and mouhid
+
+USB keyboards and mice used to bypass NovaOS's HID class driver: the
+USB core handed them straight to NovaOS's own `usbhid` driver.  They now
+take the Windows path.  The USB device runs `HidUsb` under the HID class
+driver, which makes a collection per top-level collection; a keyboard
+collection (hardware ID `HID_DEVICE_SYSTEM_KEYBOARD`) gets the new
+`kbdhid` class driver and a mouse or pointer collection
+(`HID_DEVICE_SYSTEM_MOUSE`) gets `mouhid`, as `keyboard.inf` and
+`msmouse.inf` install them on Windows.  Both are built into the kernel
+(`kernel/nt/kbdhid.c`): they read the collection's input reports through
+`IRP_MJ_READ`, decode them with NovaOS's report parser and post keys and
+motion to the desktop, write the keyboard lights with `IRP_MJ_WRITE`,
+and arm remote wakeup with `IOCTL_HID_ENABLE_WAKE_ON_SX`.  Device
+Manager shows them under Keyboards and Mice, and Raw Input lists them
+as the keyboard and mouse rather than as HID devices.
+
+USB touch screens, pens, touchpads, boot-protocol-only devices and game
+pads keep NovaOS's own USB drivers for now.  Test: `kbdmoutest` in the
+devices suite's "devmgr" boot plugs in a second keyboard and tablet,
+moves the pointer, types a line and unplugs them.
+
 ## MS-DOS 4.0 built from Microsoft's source
 
 Roadmap step 31.1, the first of Phase 31 (DOS programs, as NTVDM ran
@@ -13623,6 +13645,25 @@ HandBrake now gets past its first icon (a PNG decoded through the new
 WIC), but its main window still does not appear: WPF creates only its
 hidden helper windows and then waits in its message loop.  That is the
 next step for HandBrake (roadmap 27.1); it stays Borked.
+
+## System parameters for WPF
+
+WPF's `SystemParameters` reads its values with `SystemParametersInfo`
+and throws `Win32Exception` when a call fails.  NovaOS's `user32.dll`
+failed several of them, `SPI_GETHIGHCONTRAST` among them, so HandBrake
+(roadmap step 27.1) died in its start-up when it asked whether high
+contrast was on, and then again in its error dialog, which never got
+its styles.  `SystemParametersInfo` now answers every value WPF reads,
+with Windows' defaults: high contrast (off, available, in the W and A
+forms), border width, icon spacing and title wrap, full-window drag,
+hover width, height and time, the menu show delay, the foreground flash
+count, caret width and focus border sizes.  `apitest` checks each one.
+
+HandBrake now gets as far as creating its main window, but WPF's text
+formatting then needs a DirectWrite text analyzer
+(`IDWriteFactory::CreateTextAnalyzer`), which NovaOS's `dwrite.dll`
+does not have yet, so the window is never shown.  That is HandBrake's
+next step; it stays Borked.
 
 <!-- END generated:history -->
 

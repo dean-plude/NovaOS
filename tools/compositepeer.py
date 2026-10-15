@@ -17,8 +17,9 @@ It is, at full speed, 1209:000A ("NovaOS Test Composite Device", serial
 NOVA0003, device class 0: each interface says what it is) with three
 interfaces:
 
-  0  a boot keyboard (class 3/1/1, interrupt IN 0x81): NovaOS's own USB
-     keyboard driver takes it; it never sends a key;
+  0  a boot keyboard (class 3/1/1, interrupt IN 0x81): HidUsb runs it under
+     the HID class driver, its keyboard collection on kbdhid; it never
+     sends a key (its LED reports are ignored);
   1  a vendor-defined HID function, usage page FF00 usage 1 (interrupt
      IN 0x82, OUT 0x02);
   2  a vendor-defined HID function, usage page FF00 usage 2 (interrupt

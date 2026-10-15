@@ -228,9 +228,14 @@ class Nova:
         """Wait for the desktop, then open the Terminal mirrored to serial"""
         out, ok = self.sr.wait('Entering kernel main loop', boot_timeout)
         self.booted = time.time()           # (the desktop is up: tools/ci/perf.py times the boot to here)
-        self.boot_log = out
         if not ok:
             raise RuntimeError('NovaOS did not boot:\n' + out[-3000:])
+        if any(a.startswith('usb-kbd') for a in self.extra):
+            # (QEMU types on its newest keyboard, the USB one: the keys go
+            # nowhere until the keyboard class driver runs it, kernel/nt/kbdhid.c)
+            more, _ = self.sr.wait('[KBDHID] 0627:0001: keyboard', 60)
+            out += more
+        self.boot_log = out
         if not self.qmp:
             self.qmp = Qmp(self.sock)
         time.sleep(2)

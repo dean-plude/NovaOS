@@ -359,6 +359,26 @@ int main(int argc, char **argv)
         CHECK("NCryptOpenStorageProvider", open_prov && !open_prov(&prov, 0, 0) && prov && free_obj && !free_obj(prov));
     }
 
+    /* ---- user32: every system parameter WPF's SystemParameters reads (a FALSE throws in the program) ---- */
+    {
+        BOOL (WINAPI *spi)(UINT, UINT, PVOID, UINT) = (void *)fn("user32.dll", "SystemParametersInfoW");
+        static const UINT gets[] = { 0x0005, 0x000A, 0x0016, 0x0019, 0x001B, 0x0026, 0x0044, 0x005F, 0x0062, 0x0064,
+                                     0x0066, 0x0068, 0x006A, 0x1002, 0x1004, 0x1006, 0x1008, 0x100A, 0x100E, 0x1010,
+                                     0x1012, 0x1014, 0x1016, 0x1018, 0x101A, 0x1020, 0x1022, 0x1024, 0x103E, 0x1042,
+                                     0x2004, 0x2006, 0x200E, 0x2010 };
+        int bad = 0;
+        for (unsigned i = 0; i < sizeof(gets) / sizeof(gets[0]); i++) {
+            DWORD v[4] = { 0 };
+            if (!spi || !spi(gets[i], 0, v, 0)) { printf("SystemParametersInfo(0x%04x) failed\n", gets[i]); bad = 1; }
+        }
+        CHECK("SystemParametersInfo: WPF's parameters", !bad);
+        int sp = 0;
+        CHECK("SPI_ICONHORIZONTALSPACING", spi && spi(0x000D, 0, &sp, 0) && sp > 0);
+        struct { UINT cbSize; DWORD dwFlags; LPWSTR lpszDefaultScheme; } hc = { sizeof(hc), 0xFFFFFFFF, 0 };
+        CHECK("SPI_GETHIGHCONTRAST", spi && spi(0x0042, sizeof(hc), &hc, 0) && !(hc.dwFlags & 1 /* HCF_HIGHCONTRASTON */) &&
+                                     hc.lpszDefaultScheme);
+    }
+
     printf("apitest: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

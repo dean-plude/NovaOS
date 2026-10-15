@@ -2,7 +2,9 @@
  * hid.h — HID devices on buses other than USB
  *
  * usbhid.c's report-descriptor parser and report decoding (keys, mice,
- * touchpads, touch screens, pens) serve I2C-HID devices (i2chid.c) too.
+ * touchpads, touch screens, pens) serve I2C-HID devices (i2chid.c) and
+ * the keyboard and mouse class drivers on HID collections (nt/kbdhid.c)
+ * too.
  */
 
 #pragma once
@@ -19,6 +21,15 @@ void  HidStart(void *hid);
 void  HidInput(void *hid, const UINT8 *report, int len);
 /* ... that came at @tick (sched_ticks(): touchpad taps are timed) */
 void  HidInputAt(void *hid, const UINT8 *report, int len, UINT64 tick);
+/* The device went: the keys and buttons it held are let go; no more input */
+void  HidStop(void *hid);
+/* Whether its reports start with a report ID; whether it has keys */
+bool  HidReportIds(void *hid);
+bool  HidIsKeyboard(void *hid);
+/* Where its output reports go (the keyboard LEDs, kept in step with the
+ * lock keys): @out gets each with its report ID byte first (0 when the
+ * device has no IDs), from the usb thread, and must not wait */
+void  HidSetOutput(void *hid, void (*out)(void *ctx, const UINT8 *report, int len), void *ctx);
 
 /* Precision touchpads: the feature report (@id, @out with the ID byte
  * first if the device uses IDs) that switches one to touchpad mode

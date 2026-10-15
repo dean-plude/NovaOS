@@ -98,13 +98,15 @@ static ULONG id_list(const WCHAR *filter, ULONG flags)
     return len;
 }
 
-/* The keyboard's HID node, present (0: not yet) */
+/* The keyboard's HID node, present and its driver started (0: not yet) */
 static DWORD keyboard(WCHAR *id)
 {
     id_list(L"HID", 0x101);                         /* (CM_GETIDLIST_FILTER_ENUMERATOR | _PRESENT) */
     for (WCHAR *s = g_list; *s; s += wcslen(s) + 1) {
         DWORD dn;
-        if (!_wcsnicmp(s, L"HID\\VID_0627&PID_0001\\", 22) && !CM_Locate_DevNodeW(&dn, s, 0)) { wcscpy(id, s); return dn; }
+        ULONG status = 0, problem = 0;
+        if (!_wcsnicmp(s, L"HID\\VID_0627&PID_0001\\", 22) && !CM_Locate_DevNodeW(&dn, s, 0) &&
+            !CM_Get_DevNode_Status(&status, &problem, dn, 0) && (status & DN_STARTED)) { wcscpy(id, s); return dn; }
     }
     return 0;
 }
@@ -144,8 +146,8 @@ static void cfgmgr(DWORD kbd, const WCHAR *kbd_id)
           !CM_Get_DevNode_Registry_PropertyW(kbd, CM_DRP_HARDWAREID, &type, s, &len, 0) && type == REG_MULTI_SZ &&
           in_list(s, L"HID\\VID_0627&PID_0001", FALSE));
     len = sizeof(s);
-    CHECK("CM_DRP_SERVICE is the NovaOS driver usbhid",
-          !CM_Get_DevNode_Registry_PropertyW(kbd, CM_DRP_SERVICE, &type, s, &len, 0) && !wcscmp(s, L"usbhid"));
+    CHECK("CM_DRP_SERVICE is the keyboard class driver kbdhid",
+          !CM_Get_DevNode_Registry_PropertyW(kbd, CM_DRP_SERVICE, &type, s, &len, 0) && !wcscmp(s, L"kbdhid"));
     len = 2;
     CHECK("a property too big for the buffer: CR_BUFFER_SMALL and its size",
           CM_Get_DevNode_Registry_PropertyW(kbd, CM_DRP_CLASS, &type, s, &len, 0) == 0x1A && len == 18);
@@ -178,9 +180,11 @@ static void cfgmgr(DWORD kbd, const WCHAR *kbd_id)
     id_list(L"USB", 0x101);
     CHECK("CM_GETIDLIST_FILTER_ENUMERATOR USB: only USB devices", g_list[0] && all_start(g_list, L"USB\\") &&
                                                                in_list(g_list, pid, FALSE));
-    id_list(L"usbhid", 0x102);
-    CHECK("CM_GETIDLIST_FILTER_SERVICE usbhid: the keyboard and its USB device", in_list(g_list, kbd_id, FALSE) &&
-                                                                                in_list(g_list, pid, FALSE));
+    id_list(L"kbdhid", 0x102);
+    CHECK("CM_GETIDLIST_FILTER_SERVICE kbdhid: the keyboard, not its USB device", in_list(g_list, kbd_id, FALSE) &&
+                                                                                 !in_list(g_list, pid, FALSE));
+    id_list(L"HidUsb", 0x102);
+    CHECK("CM_GETIDLIST_FILTER_SERVICE HidUsb: its USB device", in_list(g_list, pid, FALSE) && !in_list(g_list, kbd_id, FALSE));
     id_list(L"{4d36e96b-e325-11ce-bfc1-08002be10318}", 0x300);
     CHECK("CM_GETIDLIST_FILTER_CLASS Keyboard: the keyboard", in_list(g_list, kbd_id, FALSE) && all_start(g_list, L"HID\\"));
     id_list(pid, 0x20);

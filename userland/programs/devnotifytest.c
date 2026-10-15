@@ -203,7 +203,7 @@ int main(void)
     keyboard_instance(inst, sizeof(inst));
     snprintf(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Enum\\%s", inst);
     for (int i = 0; i < 50 && !reg_str(path, "Service", v, sizeof(v)); i++) Sleep(100);
-    CHECK("Enum has the keyboard, with its service", inst[0] && reg_str(path, "Service", v, sizeof(v)) && !strcmp(v, "usbhid"));
+    CHECK("Enum has the keyboard, with its service", inst[0] && reg_str(path, "Service", v, sizeof(v)) && !strcmp(v, "HidUsb"));
     printf("keyboard: %s\n", inst);
 
     /* Taken out */

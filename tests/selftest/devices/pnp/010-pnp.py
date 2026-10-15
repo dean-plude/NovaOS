@@ -3,8 +3,8 @@
 # controller's root hub), then the test plugs a USB keyboard into port 1
 # and a USB hub into port 2 with a USB stick behind it (QEMU's usb-kbd,
 # usb-hub and usb-storage, through the QMP monitor) and pnptest waits for
-# their nodes to arrive: the keyboard as a USB input device with a
-# Keyboard-class HID child, the stick as a DiskDrive-class USBSTOR child
+# their nodes to arrive: the keyboard as a USB input device on HidUsb with
+# a Keyboard-class HID collection on the keyboard class driver (kbdhid), the stick as a DiskDrive-class USBSTOR child
 # of its mass-storage function.  Unplugging the hub takes the stick's
 # nodes away with it, unplugging the keyboard takes its own; both stay
 # behind as devices not present (Windows' phantoms).
@@ -21,10 +21,11 @@ def _qmp(nova, cmd, **args):
 
 def _plug_keyboard(nova):
     """(QEMU sends its keys to the newest keyboard: the test types the
-    command once NovaOS has taken it, or the first keys are lost)"""
+    command once the keyboard class driver runs it, or the first keys are
+    lost)"""
     _qmp(nova, 'device_add', driver='usb-kbd', id='kbd1', bus='xhci.0', port='1')
     for _ in range(240):
-        if re.search(r'\[PNP\] arrival: HID\\VID_0627', open(nova.serial_path, 'rb').read().decode('latin-1')):
+        if re.search(r'\[KBDHID\] 0627:0001: keyboard', open(nova.serial_path, 'rb').read().decode('latin-1')):
             break
         time.sleep(0.25)
     time.sleep(1)
@@ -53,8 +54,8 @@ TESTS = [
           r'USB\\ROOT_HUB30\\4&1&0&0 \[USB\] USB Root Hub \(USB 3\.0\) \(usb\)',
           r'pnptest: \d+ devices present, 0 not present, 0 failed']),
     Test('pnp keyboard arrival', r'pnptest arrival HID\VID_0627',
-         [r'arrival: HID\\VID_0627&PID_0001\\[^ ]+&0000 \[Keyboard\] HID Keyboard Device \(usbhid\)',
-          r'arrival: USB\\VID_0627&PID_0001\\[^ ]+ \[HIDClass\] USB Input Device \(usbhid\)'],
+         [r'arrival: HID\\VID_0627&PID_0001\\[^ ]+&0000 \[Keyboard\] HID Keyboard Device \(kbdhid\)',
+          r'arrival: USB\\VID_0627&PID_0001\\[^ ]+ \[HIDClass\] USB Input Device \(HidUsb\)'],
          before=_plug_keyboard),
     Test('pnp stick arrival', r'pnptest arrival USBSTOR\Disk',
          [r'arrival: USB\\VID_0409&PID_55AA\\[^ ]+ \[USB\] Generic USB Hub \(usbhub\)',

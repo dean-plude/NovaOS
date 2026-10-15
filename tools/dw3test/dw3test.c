@@ -68,6 +68,32 @@ static HRESULT STDMETHODCALLTYPE src_subst(IDWriteTextAnalysisSource *s, UINT32 
 }
 static IDWriteTextAnalysisSourceVtbl src_vtbl = { src_qi, src_addref, src_release, src_text, src_before, src_dir, src_locale, src_subst };
 
+typedef struct { IDWriteTextAnalysisSink iface; UINT32 scripts, bidi; } Sink;
+static HRESULT STDMETHODCALLTYPE sink_qi(IDWriteTextAnalysisSink *s, REFIID iid, void **out) { (void)iid; *out = s; return S_OK; }
+static ULONG STDMETHODCALLTYPE sink_addref(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
+static ULONG STDMETHODCALLTYPE sink_release(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
+static HRESULT STDMETHODCALLTYPE sink_script(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, const DWRITE_SCRIPT_ANALYSIS *a)
+{
+    Sink *sink = (Sink *)s;
+    (void)pos; (void)a;
+    if (len) sink->scripts++;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sink_breaks(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, const DWRITE_LINE_BREAKPOINT *b)
+{ (void)s; (void)pos; (void)len; (void)b; return S_OK; }
+static HRESULT STDMETHODCALLTYPE sink_bidi(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, UINT8 explicit_level, UINT8 resolved_level)
+{
+    Sink *sink = (Sink *)s;
+    (void)pos; (void)explicit_level; (void)resolved_level;
+    if (len) sink->bidi++;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sink_number(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, IDWriteNumberSubstitution *n)
+{ (void)s; (void)pos; (void)len; (void)n; return S_OK; }
+static IDWriteTextAnalysisSinkVtbl sink_vtbl = {
+    sink_qi, sink_addref, sink_release, sink_script, sink_breaks, sink_bidi, sink_number
+};
+
 /* the Win32 family name of a font */
 static void family_of(IDWriteFont *font, WCHAR *out, UINT32 cap)
 {
@@ -134,6 +160,18 @@ int main(void)
           SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory3_, (IUnknown **)&direct)) && direct);
     if (direct) IDWriteFactory3_Release(direct);
     if (!f2 || !f3) { printf("dw3test: %d passed, %d failed\n", pass, fail); return 1; }
+
+    IDWriteTextAnalyzer *analyzer = NULL;
+    CHECK("IDWriteFactory CreateTextAnalyzer", SUCCEEDED(V(f, CreateTextAnalyzer)(f, &analyzer)) && analyzer);
+    if (analyzer) {
+        const WCHAR analysis_text[] = L"Latin العربية";
+        Source source = { { &src_vtbl }, analysis_text, (UINT32)wcslen(analysis_text) };
+        Sink sink = { { &sink_vtbl }, 0, 0 };
+        CHECK("IDWriteTextAnalyzer AnalyzeScript", SUCCEEDED(V(analyzer, AnalyzeScript)(analyzer, &source.iface, 0,
+              source.len, &sink.iface)) && sink.scripts >= 2);
+        CHECK("IDWriteTextAnalyzer AnalyzeBidi", SUCCEEDED(V(analyzer, AnalyzeBidi)(analyzer, &source.iface, 0,
+              source.len, &sink.iface)) && sink.bidi > 0);
+    }
 
     /* ---- the system collection, as Chromium's font lookup table walks it ---- */
     IDWriteFontCollection *coll = NULL;
@@ -347,6 +385,23 @@ int main(void)
 
     /* ---- glyph rendering as Skia asks for it ---- */
     if (face3) {
+        if (analyzer) {
+            const WCHAR sample[] = L"Hello";
+            DWRITE_SCRIPT_ANALYSIS script = { 0 };
+            DWRITE_SHAPING_TEXT_PROPERTIES text_props[5] = { 0 };
+            DWRITE_SHAPING_GLYPH_PROPERTIES glyph_props[16] = { 0 };
+            UINT16 cluster_map[5] = { 0 }, glyph_indices[16] = { 0 };
+            UINT32 glyph_count = 0;
+            HRESULT shape_hr = V(analyzer, GetGlyphs)(analyzer, sample, 5, (IDWriteFontFace *)face3, FALSE, FALSE,
+                &script, L"en-us", NULL, NULL, NULL, 0, 16, cluster_map, text_props, glyph_indices, glyph_props, &glyph_count);
+            CHECK("IDWriteTextAnalyzer GetGlyphs", SUCCEEDED(shape_hr) && glyph_count > 0 && glyph_count <= 16);
+            FLOAT advances[16] = { 0 };
+            DWRITE_GLYPH_OFFSET offsets[16] = { 0 };
+            HRESULT place_hr = shape_hr == S_OK ? V(analyzer, GetGlyphPlacements)(analyzer, sample, cluster_map,
+                text_props, 5, glyph_indices, glyph_props, glyph_count, (IDWriteFontFace *)face3, 16.0f,
+                FALSE, FALSE, &script, L"en-us", NULL, NULL, 0, advances, offsets) : shape_hr;
+            CHECK("IDWriteTextAnalyzer GetGlyphPlacements", SUCCEEDED(place_hr) && advances[0] > 0);
+        }
         UINT16 g[2];
         UINT32 cps[2] = { 'O', 'k' };
         IDWriteFontFace_GetGlyphIndices((IDWriteFontFace *)face3, cps, 2, g);
@@ -405,6 +460,7 @@ int main(void)
     CHECK("the download queue is empty", SUCCEEDED(V(f3, GetFontDownloadQueue)(f3, &q)) && q && V(q, IsEmpty)(q));
     if (q) V(q, Release)(q);
 
+    if (analyzer) IDWriteTextAnalyzer_Release(analyzer);
     printf("dw3test: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

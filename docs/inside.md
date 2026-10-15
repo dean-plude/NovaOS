@@ -234,6 +234,12 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     fallback, and its factory is an `IDWriteFactory3` with Windows 10's
     font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
     for (`tools/dwtest`, `tools/dw3test`).
+- **Images**: the Windows Imaging Component (`windowscodecs.dll`) decodes
+  PNG, JPEG, BMP, GIF (every frame) and ICO with the bundled stb_image,
+  converts between its ~50 pixel formats, scales, clips, flips, rotates,
+  builds palettes and bitmaps you can lock, and lists its codecs and
+  formats, the way WPF and other programs use it.  Encoders and metadata
+  readers are not there yet (`tools/wictest`).
 - **2D drawing**: Direct2D (`d2d1.dll`) draws in software: geometries
   (rectangles, ellipses, paths with Béziers and arcs, groups, transforms,
   combining, widening, tessellation), strokes with caps, joins and dashes,

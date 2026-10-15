@@ -803,6 +803,21 @@ static void defaults(void)
     /* the audio endpoints (mmdevapi's MMDeviceEnumerator) */
     RegKey *mmd = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{BCDE0395-E52F-467C-8E3D-C4579291692E}\\InprocServer32", false);
     if (!has_value(mmd, "")) { kset_sz(mmd, "", "mmdevapi.dll", 1); kset_sz(mmd, "ThreadingModel", "Both", 1); }
+    /* the Windows Imaging Component (windowscodecs.dll): the imaging
+     * factories, the decoders and the format converter */
+    static const char *const wic_clsids[] = {
+        "{CACAF262-9370-4615-A13B-9F5539DA4C0A}", "{317D06E8-5F24-433D-BDF7-79CE68D8ABC2}",
+        "{389EA17B-5078-4CDE-B6EF-25C15175C751}", "{E018945B-AA86-4008-9BD4-6777A1E40C11}",
+        "{9456A480-E88B-43EA-9E73-0B2D9B71B1CA}", "{6B462062-7CBF-400D-9FDB-813DD10F2778}",
+        "{381DDA3C-9CE9-4834-A23E-1F98F8FC52BE}", "{C61BFCDF-2E0F-4AAD-A8D7-E06BAFEBCDFE}",
+        "{1A3F11DC-B514-4B17-8C5F-2154513852F1}",
+    };
+    for (unsigned i = 0; i < sizeof wic_clsids / sizeof wic_clsids[0]; i++) {
+        char path[96];
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", wic_clsids[i]);
+        RegKey *k = kpath(path, false);
+        if (!has_value(k, "")) { kset_sz(k, "", "windowscodecs.dll", 1); kset_sz(k, "ThreadingModel", "Both", 1); }
+    }
     /* Task Scheduler 2.0 (taskschd.dll's TaskScheduler class) */
     RegKey *ts = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}\\InprocServer32", false);
     if (!has_value(ts, "")) { kset_sz(ts, "", "taskschd.dll", 1); kset_sz(ts, "ThreadingModel", "Both", 1); }

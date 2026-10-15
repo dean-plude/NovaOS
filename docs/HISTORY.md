@@ -13429,6 +13429,47 @@ Scientific, 25! comes out exact, and 255 is FF in Programmer.  Still to
 do: the converters (CalcManager's unit converter needs the Concurrency
 Runtime's tasks) and the real UWP package (WinRT activation and XAML).
 
+## The Windows Imaging Component
+
+NovaOS's `windowscodecs.dll` was four stubs, so a WPF program stopped at
+the first icon it decoded (HandBrake, roadmap step 27.1).  It is now a
+real Windows Imaging Component written for NovaOS on the bundled
+stb_image (public domain / MIT):
+
+- **Decoders** for PNG, JPEG, BMP and GIF (stb_image; every GIF frame)
+  and ICO (NovaOS's own parser: PNG entries and 1-, 4-, 8-, 24- and
+  32-bit DIB entries with their masks), picked by container, by CLSID or
+  by sniffing the stream, with each frame's size and DPI (PNG `pHYs`,
+  JPEG JFIF, BMP pixels per metre), palettes, thumbnails where the
+  format has none reported as such, and `CreateDecoderFromFilename` and
+  `CreateDecoderFromFileHandle` (WPF's file streams).
+- **Pixel formats and conversion**: ~50 formats (indexed, black and
+  white, gray, 5-5-5, 5-6-5, 10-10-10, BGR/RGB/BGRA/RGBA/PBGRA in 8 and
+  16 bits, half, fixed and float scRGB, CMYK, RGBE) through one
+  converter, with the usual 8-bit paths kept fast; `WICConvertBitmapSource`.
+- **Transforms**: scaler (nearest, linear, cubic, Fant), clipper,
+  flip-rotator; **palettes** (the predefined ones and one built from a
+  bitmap); **bitmaps** you can lock for reading or writing, from memory,
+  another source, a file mapping (`WICCreateBitmapFromSection`), an
+  HBITMAP or an HICON; **streams** on memory, files, other streams and
+  regions of them; colour contexts.
+- **Component info**: decoder and pixel-format info objects, their
+  patterns, MIME types and extensions, and the component enumerator.
+- **The `_Proxy` exports** WPF's PresentationCore calls (97 of them),
+  `WICMapGuidToShortName` and its kin, and the COM classes registered
+  under `HKCR\CLSID` so `CoCreateInstance` finds them.
+
+Encoders, metadata readers (they answer `WINCODEC_ERR_UNSUPPORTEDOPERATION`,
+which WPF expects of a codec without them) and `windowscodecsext.dll` are
+not there yet.  The new core self-test `wictest` (64- and 32-bit) covers
+the factory, every decoder, conversion, the transforms, palettes,
+bitmaps and the proxy exports.
+
+HandBrake now gets past its first icon (a PNG decoded through the new
+WIC), but its main window still does not appear: WPF creates only its
+hidden helper windows and then waits in its message loop.  That is the
+next step for HandBrake (roadmap 27.1); it stays Borked.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

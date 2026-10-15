@@ -947,12 +947,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `IFrameworkView` through `CoreApplication.Run` on a `CoreWindow` with
   its events and dispatcher; DXGI presents into a CoreWindow.  Test
   `coreapptest`.
-- [ ] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
+- [x] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
   and drawing surfaces on NovaOS's DirectComposition; CoreWindow's
-  pointer events.
+  pointer events.  Test `comptest`.
 - [ ] **32.3 The XAML core builds.** The `dxaml` core as
   `Windows.UI.Xaml.dll`: `Application.Start` runs and `XamlReader.Load`
-  parses a page.
+  parses a page.  First part done: Direct2D 1.1's devices and device
+  contexts, and DirectComposition and Composition surfaces drawn with
+  them, which XAML draws its text and shapes with (test `d2dctxtest`).
+  Next: the `dxaml` build itself.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

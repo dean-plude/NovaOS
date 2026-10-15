@@ -8,7 +8,8 @@
  * RemoveAll; the objects' interfaces, runtime class names, Parent and
  * Compositor; and in 64 bits a drawing surface of a graphics device on a
  * WARP Direct3D 11 device (ICompositorInterop, BeginDraw/EndDraw), shown by
- * a surface brush stretched (Fill) and not (None).
+ * a surface brush stretched (Fill) and not (None), and one of a graphics
+ * device on an ID2D1Device, drawn through BeginDraw's ID2D1DeviceContext.
  *
  * The compositor draws on its own thread after each change, so each check
  * waits (up to five seconds) for the pixel to show.
@@ -180,8 +181,42 @@ static void drawing_surface(void *children)
         VT(surface, 8, Get_t)(surface, &got);
         CHECK("Resize: the new size, the pixels kept", got.Width == 16 && shows(130, 210, RGB(255, 128, 0)));
     }
-    RELEASE(v); RELEASE(s); RELEASE(sb); RELEASE(brush); RELEASE(dsi); RELEASE(surface); RELEASE(gdev); RELEASE(interop);
-    RELEASE(ctx); RELEASE(dev);
+    RELEASE(v); RELEASE(s); RELEASE(sb); RELEASE(brush); RELEASE(dsi); RELEASE(surface); RELEASE(gdev);
+
+    /* a graphics device on an ID2D1Device of the same Direct3D device: BeginDraw hands out a device context */
+    typedef HRESULT (WINAPI *D2DDevice_t)(void *, const void *, void **);
+    HMODULE d2d = LoadLibraryW(L"d2d1.dll");
+    D2DDevice_t cdev = d2d ? (D2DDevice_t)GetProcAddress(d2d, "D2D1CreateDevice") : 0;
+    void *dxgi = 0, *d2ddev = 0, *dc = 0;
+    VT(dev, 0, QI_t)(dev, &NIID_IDXGIDevice, &dxgi);
+    if (cdev && dxgi) cdev(dxgi, NULL, &d2ddev);
+    CHECK("an ID2D1Device", d2ddev != 0);
+    if (interop && d2ddev) VT(interop, 5, HRESULT (STDMETHODCALLTYPE *)(void *, void *, void **))(interop, d2ddev, &gdev);
+    CHECK("CreateGraphicsDevice(the ID2D1Device)", gdev != 0);
+    if (gdev) VT(gdev, 6, HRESULT (STDMETHODCALLTYPE *)(void *, SizeF, int, int, void **))(gdev, sz, 87, 1, &surface);
+    if (surface) VT(surface, 0, QI_t)(surface, &IID_ICompositionDrawingSurfaceInterop_T, &dsi);
+    hr = dsi ? VT(dsi, 3, HRESULT (STDMETHODCALLTYPE *)(void *, const RECT *, const GUID *, void **, POINT *))(dsi, NULL, &NIID_ID2D1DeviceContext, &dc, &off) : E_FAIL;
+    CHECK("BeginDraw: an ID2D1DeviceContext", hr == S_OK && dc);
+    if (dc) {
+        struct { float r, g, b, a; } cyan = { 0, 1, 1, 1 };
+        VT(dc, 47, void (STDMETHODCALLTYPE *)(void *, const void *))(dc, &cyan);                             /* Clear */
+        RELEASE(dc);
+        CHECK("EndDraw", VT(dsi, 4, Call_t)(dsi) == S_OK);
+        VT(g_comp, C_SURFACE_BRUSH, HRESULT (STDMETHODCALLTYPE *)(void *, void *, void **))(g_comp, surface, &brush);
+        if (brush) {
+            VT(g_comp, C_SPRITE, Get_t)(g_comp, &s);
+            VT(s, 7, Put_t)(s, brush);
+            VT(s, 0, QI_t)(s, &IID_IVisual_T, &v);
+            Vec2 size = { 32, 32 };
+            Vec3 at = { 200, 200, 0 };
+            VT(v, V_SIZE, HRESULT (STDMETHODCALLTYPE *)(void *, Vec2))(v, size);
+            VT(v, V_OFFSET, HRESULT (STDMETHODCALLTYPE *)(void *, Vec3))(v, at);
+            VT(children, VC_INSERT_TOP, Put_t)(children, v);
+        }
+        CHECK("the surface drawn with Direct2D, shown", shows(216, 216, RGB(0, 255, 255)));
+    }
+    RELEASE(v); RELEASE(s); RELEASE(brush); RELEASE(dsi); RELEASE(surface); RELEASE(gdev); RELEASE(d2ddev); RELEASE(dxgi);
+    RELEASE(interop); RELEASE(ctx); RELEASE(dev);
 }
 #endif
 

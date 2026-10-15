@@ -76,6 +76,7 @@ typedef struct {
 struct Texture {
     const TextureVtbl *vtbl;
     INovaSoftTexture nova;
+    const void *const *surf;            /* IDXGISurface */
     LONG refs;
     Device *dev;
     ND3D11_TEXTURE2D_DESC desc;
@@ -83,6 +84,7 @@ struct Texture {
     BYTE *bits;                         /* (the first subresource only) */
 };
 #define TEX_OF_NOVA(p) ((Texture *)((BYTE *)(p) - offsetof(Texture, nova)))
+#define TEX_OF_SURF(p) ((Texture *)((BYTE *)(p) - offsetof(Texture, surf)))
 
 static ULONG STDMETHODCALLTYPE d_addref(Device *d);
 static ULONG STDMETHODCALLTYPE d_release(Device *d);
@@ -99,6 +101,11 @@ static HRESULT STDMETHODCALLTYPE t_qi(Texture *t, const GUID *iid, void **out)
     if (novadx_same(iid, &NIID_INovaSoftTexture)) {
         InterlockedIncrement(&t->refs);
         *out = &t->nova;
+        return S_OK;
+    }
+    if (novadx_same(iid, &NIID_IDXGISurface) || novadx_same(iid, &NIID_IDXGIDeviceSubObject) || novadx_same(iid, &NIID_IDXGIObject)) {
+        InterlockedIncrement(&t->refs);
+        *out = &t->surf;
         return S_OK;
     }
     *out = NULL;
@@ -139,6 +146,47 @@ static BYTE *STDMETHODCALLTYPE tn_bits(INovaSoftTexture *n, UINT *pitch, ND3D11_
     return t->bits;
 }
 static const INovaSoftTextureVtbl g_tex_nova_vtbl = { tn_qi, tn_addref, tn_release, tn_bits };
+
+/* IDXGISurface: what Direct2D's CreateBitmapFromDxgiSurface and
+ * DirectComposition's BeginDraw are given */
+typedef struct { UINT Width, Height, Format; NDXGI_SAMPLE_DESC SampleDesc; } NDXGI_SURFACE_DESC;
+typedef struct { INT Pitch; BYTE *pBits; } NDXGI_MAPPED_RECT;
+static HRESULT STDMETHODCALLTYPE ts_qi(void *p, const GUID *iid, void **out) { return t_qi(TEX_OF_SURF(p), iid, out); }
+static ULONG STDMETHODCALLTYPE ts_addref(void *p) { return t_addref(TEX_OF_SURF(p)); }
+static ULONG STDMETHODCALLTYPE ts_release(void *p) { return t_release(TEX_OF_SURF(p)); }
+static HRESULT STDMETHODCALLTYPE ts_setpriv(void *p, const GUID *g, UINT n, const void *d) { (void)p; (void)g; (void)n; (void)d; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ts_setprivif(void *p, const GUID *g, const IUnknown *u) { (void)p; (void)g; (void)u; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ts_getpriv(void *p, const GUID *g, UINT *n, void *d)
+{ (void)p; (void)g; (void)d; if (n) *n = 0; return NDXGI_ERROR_NOT_FOUND; }
+/* GetParent and GetDevice: the device, as @iid */
+static HRESULT STDMETHODCALLTYPE ts_parent(void *p, const GUID *iid, void **out)
+{
+    Texture *t = TEX_OF_SURF(p);
+    if (!out) return E_POINTER;
+    return ((HRESULT (STDMETHODCALLTYPE *)(Device *, const GUID *, void **))t->dev->vtbl[0])(t->dev, iid, out);
+}
+static HRESULT STDMETHODCALLTYPE ts_desc(void *p, NDXGI_SURFACE_DESC *d)
+{
+    Texture *t = TEX_OF_SURF(p);
+    if (!d) return E_INVALIDARG;
+    d->Width = t->desc.Width; d->Height = t->desc.Height; d->Format = t->desc.Format;
+    d->SampleDesc = t->desc.SampleDesc;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ts_map(void *p, NDXGI_MAPPED_RECT *m, UINT flags)
+{
+    Texture *t = TEX_OF_SURF(p);
+    (void)flags;
+    if (!m) return E_INVALIDARG;
+    m->Pitch = (INT)t->pitch;
+    m->pBits = t->bits;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ts_unmap(void *p) { (void)p; return S_OK; }
+static const void *const g_tex_surf_vtbl[] = {
+    (void *)ts_qi, (void *)ts_addref, (void *)ts_release, (void *)ts_setpriv, (void *)ts_setprivif, (void *)ts_getpriv,
+    (void *)ts_parent, (void *)ts_parent /* GetDevice */, (void *)ts_desc, (void *)ts_map, (void *)ts_unmap,
+};
 
 /* @r as one of our textures (NULL: another kind of resource) */
 static Texture *tex_of(void *r)
@@ -188,6 +236,7 @@ static HRESULT STDMETHODCALLTYPE d_tex2d(Device *d, const ND3D11_TEXTURE2D_DESC 
     if (!t->bits) { HeapFree(GetProcessHeap(), 0, t); return E_OUTOFMEMORY; }
     t->vtbl = &g_tex_vtbl;
     t->nova.lpVtbl = &g_tex_nova_vtbl;
+    t->surf = g_tex_surf_vtbl;
     t->refs = 1;
     t->dev = d;
     d_addref(d);

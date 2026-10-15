@@ -35,6 +35,7 @@
 #define DINPUTAPI __declspec(dllexport)
 #include <dinput.h>
 #include <novapad.h>
+#include <novapnp.h>
 #include <string.h>
 
 #ifndef VK_NUMPAD0
@@ -489,11 +490,17 @@ static HRESULT STDMETHODCALLTYPE dw_enumobjects(IDirectInputDevice8W *This, LPDI
     return DI_OK;
 }
 
-/* The controller's HID path (lower case, as DirectInput gives it), the one
- * Raw Input and setupapi list and CreateFile opens */
+/* The controller's HID path (lower case, as DirectInput gives it, at
+ * most MAX_PATH characters), the one Raw Input and setupapi list and
+ * CreateFile opens: a HID game pad's is its HID class collection's
+ * interface, an Xbox controller's its HID side's */
 static void path_of(Dev *d, WCHAR *out)
 {
-    nova_pad_path(&d->info, out, TRUE);
+    static const GUID hid = NOVA_IF_HID;
+    NovaPnpNode n;
+    if (!d->info.node || !nova_pnp_node(d->info.node, &n)) { nova_pad_path(&d->info, out, TRUE); return; }
+    nova_pnp_iface_path(&n, &hid, out, MAX_PATH);
+    for (WCHAR *c = out; *c; c++) if (*c >= L'A' && *c <= L'Z') *c = (WCHAR)(*c + 32);
 }
 
 static HRESULT STDMETHODCALLTYPE dw_getprop(IDirectInputDevice8W *This, REFGUID prop, LPDIPROPHEADER ph)

@@ -837,6 +837,7 @@ static void defaults(void)
     static const char *const wrt_classes[][2] = {
         { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
+        { "Windows.UI.Composition.Compositor", "dcomp.dll" },
     };
     for (unsigned i = 0; i < 2 * (sizeof wrt_classes / sizeof wrt_classes[0]); i++) {
         char path[180];

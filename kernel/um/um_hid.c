@@ -1,8 +1,9 @@
 /*
  * um_hid.c — HID device handles: a game controller opened by its HID path
  *
- * Every controller (drivers/gamepad.h) is a HID device with a path as
- * Windows names its HID collections:
+ * Every Xbox controller (drivers/gamepad.h) is a HID device with a path
+ * as Windows names its HID collections (a HID game pad's path is its
+ * collection's, through the HID class driver, not one of these):
  *
  *     \\?\HID#VID_045E&PID_028E&IG_00#8&SERIAL&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}
  *
@@ -96,7 +97,8 @@ UINT32 um_hid_open(const char *path, UINT32 options, UmObject **out)
 {
     UINT32 serial = serial_of(path);
     int slot = serial ? PadSlotOfSerial(serial) : -1;
-    if (slot < 0) return ST_OBJECT_NAME_NOT_FOUND;
+    PadInfo pi;
+    if (slot < 0 || !PadGetInfo(slot, &pi) || pi.node) return ST_OBJECT_NAME_NOT_FOUND;   /* (a HID controller: its collection's path) */
     um_lock(&g_hl);
     if (!g_sink_set) { PadSetRawSink(sink); g_sink_set = true; }
     int at = -1;

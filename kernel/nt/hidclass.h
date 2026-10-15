@@ -133,8 +133,11 @@ NTSTATUS NT_API MsHidKmdfDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *r
 NT_API NT_STATUS nt_HidRegisterMinidriver(HidMinidriverRegistration *r);
 /* kbdhid.c: the keyboard and mouse class drivers on HID collections (the
  * services "kbdhid" and "mouhid", as keyboard.inf and msmouse.inf name
- * Windows' kbdhid.sys and mouhid.sys), and "hiddigi" on touch screens,
- * pens and precision touchpads (what win32k reads on Windows) */
+ * Windows' kbdhid.sys and mouhid.sys), "hiddigi" on touch screens,
+ * pens and precision touchpads (what win32k reads on Windows) and
+ * "gamehid" on game pads and joysticks (what DirectInput reads on
+ * Windows) */
 NTSTATUS NT_API KbdHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
 NTSTATUS NT_API MouHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
 NTSTATUS NT_API DigiHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
+NTSTATUS NT_API GameHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);

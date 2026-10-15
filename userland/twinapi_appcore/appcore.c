@@ -20,10 +20,19 @@
  * how DXGI's CreateSwapChainForCoreWindow finds where to present.  Its
  * dispatcher pumps the thread's messages (ProcessEvents) and turns them
  * into the window's events: Activated, CharacterReceived, Closed, KeyDown,
- * KeyUp, SizeChanged and VisibilityChanged.  RunAsync posts work to the
- * window's thread.  The pointer events, input-enabled, touch hit testing
- * and automation events accept handlers and are not raised yet; sizes are
- * in device-independent pixels (the window's DPI over 96).
+ * KeyUp, SizeChanged and VisibilityChanged, and from the mouse's messages
+ * the pointer events (PointerEntered, PointerMoved, PointerPressed,
+ * PointerReleased, PointerWheelChanged, PointerExited and
+ * PointerCaptureLost), whose PointerEventArgs carry a
+ * Windows.UI.Input.PointerPoint (pointer 1, a mouse: its position in the
+ * window, timestamp, contact, and in its PointerPointProperties the
+ * buttons held, the button that changed and the wheel's turn).  A second
+ * button pressed while one is held is a PointerMoved, as on Windows.
+ * RunAsync posts work to the window's thread.  The input-enabled, touch
+ * hit testing and automation events accept handlers and are not raised
+ * yet; there are no intermediate points (GetIntermediatePoints) and no
+ * touch or pen pointers; sizes and positions are in device-independent
+ * pixels (the window's DPI over 96).
  *
  * There is one view, the main one, as in an app that never calls
  * CreateNewView.  The application, view, window and dispatcher objects are
@@ -64,6 +73,10 @@ static const GUID IID_IVisibilityChangedEventArgs_ = { 0xBF9918EA, 0xD801, 0x456
 static const GUID IID_IWindowActivatedEventArgs_   = { 0x179D65E7, 0x4658, 0x4CB6, { 0xAA, 0x13, 0x41, 0xD0, 0x94, 0xEA, 0x25, 0x5E } };
 static const GUID IID_IActivatedEventArgs_         = { 0xCF651713, 0xCD08, 0x4FD8, { 0xB6, 0x97, 0xA2, 0x81, 0xB6, 0x54, 0x4E, 0x2E } };
 static const GUID IID_ILaunchActivatedEventArgs_   = { 0xFBC93E26, 0xA14A, 0x4B4F, { 0x82, 0xB0, 0x33, 0xBE, 0xD9, 0x20, 0xAF, 0x52 } };
+static const GUID IID_IPointerEventArgs_           = { 0x920D9CB1, 0xA5FC, 0x4A21, { 0x8C, 0x09, 0x49, 0xDF, 0xE6, 0xFF, 0xE2, 0x5F } };
+static const GUID IID_IPointerPoint_               = { 0xE995317D, 0x7296, 0x42D9, { 0x82, 0x33, 0xC5, 0xBE, 0x73, 0xB7, 0x4A, 0x4A } };
+static const GUID IID_IPointerPointProperties_     = { 0xC79D8A4B, 0xC163, 0x4EE7, { 0x80, 0x3F, 0x67, 0xCE, 0x79, 0xF9, 0x97, 0x2D } };
+static const GUID IID_IPointerDevice_              = { 0x93C9BAFC, 0xEBCB, 0x467E, { 0x82, 0xC6, 0x27, 0x6F, 0xEA, 0xE3, 0x6B, 0x5A } };
 
 typedef struct { float X, Y; } PointF;
 typedef struct { float Width, Height; } SizeF;
@@ -165,7 +178,8 @@ static void ev_fire(Event *e, void *sender, void *args)
 /* ---- event arguments --------------------------------------------------
  * One object for every CoreWindow event: its default interface (spec)
  * depends on the event, and ICoreWindowEventArgs (Handled) is beside it. */
-enum { ARGS_PLAIN, ARGS_KEY, ARGS_CHAR, ARGS_SIZE, ARGS_VISIBLE, ARGS_ACTIVATED };
+enum { ARGS_PLAIN, ARGS_KEY, ARGS_CHAR, ARGS_SIZE, ARGS_VISIBLE, ARGS_ACTIVATED, ARGS_POINTER };
+typedef struct Pt Pt;
 typedef struct Args Args;
 typedef struct { INSPECTABLE(Args); void *m[2]; } ArgsVtbl;
 struct Args {
@@ -179,6 +193,8 @@ struct Args {
     SizeF size;
     boolean_t visible;
     int state;                          /* CoreWindowActivationState */
+    Pt *point;                          /* (counted) */
+    int modifiers;                      /* VirtualKeyModifiers */
 };
 #define ARGS_OF_BASE(p) ((Args *)((char *)(p) - __builtin_offsetof(Args, base)))
 
@@ -190,6 +206,7 @@ static const GUID *args_iid(int kind)
     case ARGS_SIZE: return &IID_IWindowSizeChangedEventArgs_;
     case ARGS_VISIBLE: return &IID_IVisibilityChangedEventArgs_;
     case ARGS_ACTIVATED: return &IID_IWindowActivatedEventArgs_;
+    case ARGS_POINTER: return &IID_IPointerEventArgs_;
     }
     return &IID_ICoreWindowEventArgs_;
 }
@@ -203,10 +220,14 @@ static HRESULT STDMETHODCALLTYPE args_qi(Args *a, REFIID iid, void **out)
     return S_OK;
 }
 static ULONG STDMETHODCALLTYPE args_addref(Args *a) { return (ULONG)InterlockedIncrement(&a->refs); }
+static ULONG pt_release(Pt *p);
 static ULONG STDMETHODCALLTYPE args_release(Args *a)
 {
     LONG r = InterlockedDecrement(&a->refs);
-    if (!r) HeapFree(GetProcessHeap(), 0, a);
+    if (!r) {
+        if (a->point) pt_release(a->point);
+        HeapFree(GetProcessHeap(), 0, a);
+    }
     return (ULONG)r;
 }
 static HRESULT STDMETHODCALLTYPE args_name(Args *a, HSTRING *n)
@@ -215,6 +236,7 @@ static HRESULT STDMETHODCALLTYPE args_name(Args *a, HSTRING *n)
         L"Windows.UI.Core.CoreWindowEventArgs", L"Windows.UI.Core.KeyEventArgs",
         L"Windows.UI.Core.CharacterReceivedEventArgs", L"Windows.UI.Core.WindowSizeChangedEventArgs",
         L"Windows.UI.Core.VisibilityChangedEventArgs", L"Windows.UI.Core.WindowActivatedEventArgs",
+        L"Windows.UI.Core.PointerEventArgs",
     };
     return make_hstring(names[a->kind], n);
 }
@@ -226,6 +248,9 @@ static HRESULT STDMETHODCALLTYPE key_status(Args *a, KeyStatus *v) { if (!v) ret
 static HRESULT STDMETHODCALLTYPE size_size(Args *a, SizeF *v) { if (!v) return E_POINTER; *v = a->size; return S_OK; }
 static HRESULT STDMETHODCALLTYPE vis_visible(Args *a, boolean_t *v) { if (!v) return E_POINTER; *v = a->visible; return S_OK; }
 static HRESULT STDMETHODCALLTYPE act_state(Args *a, int *v) { if (!v) return E_POINTER; *v = a->state; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ptr_point(Args *a, void **v);
+static HRESULT STDMETHODCALLTYPE ptr_modifiers(Args *a, int *v) { if (!v) return E_POINTER; *v = a->modifiers; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ptr_intermediate(Args *a, void **v) { (void)a; if (v) *v = 0; return E_NOTIMPL; }
 
 #define ARGS_FNS (void *)args_qi, (void *)args_addref, (void *)args_release, (void *)no_iids, (void *)args_name, (void *)base_trust
 static const void *const args_base_vt[] = { ARGS_FNS, (void *)args_get_handled, (void *)args_put_handled };
@@ -234,6 +259,7 @@ static const void *const args_char_vt[] = { ARGS_FNS, (void *)char_code, (void *
 static const void *const args_size_vt[] = { ARGS_FNS, (void *)size_size };
 static const void *const args_vis_vt[] = { ARGS_FNS, (void *)vis_visible };
 static const void *const args_act_vt[] = { ARGS_FNS, (void *)act_state };
+static const void *const args_ptr_vt[] = { ARGS_FNS, (void *)ptr_point, (void *)ptr_modifiers, (void *)ptr_intermediate };
 
 /* The base interface's QueryInterface and counts are reached through the
  * Args the pointer sits in: a thunk table for the second vtable */
@@ -250,12 +276,137 @@ static Args *args_new(int kind)
 {
     Args *a = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *a);
     if (!a) return 0;
-    static const void *const *const specs[] = { args_base_vt, args_key_vt, args_char_vt, args_size_vt, args_vis_vt, args_act_vt };
+    static const void *const *const specs[] = { args_base_vt, args_key_vt, args_char_vt, args_size_vt, args_vis_vt, args_act_vt,
+                                                args_ptr_vt };
     a->spec = (const ArgsVtbl *)specs[kind];
     a->base = (const ArgsVtbl *)args_base2_vt;
     a->refs = 1;
     a->kind = kind;
     return a;
+}
+
+/* ---- PointerPoint (Windows.UI.Input) ----------------------------------
+ * One allocation for a PointerPoint and its PointerPointProperties (each
+ * answers QueryInterface for its own interfaces; one count), and a static
+ * PointerDevice: the mouse */
+struct Pt {
+    const void *const *vt;              /* IPointerPoint */
+    const void *const *props;           /* IPointerPointProperties */
+    LONG refs;
+    PointF pos;
+    UINT32 frame;
+    UINT64 time;                        /* microseconds */
+    boolean_t contact, left, right, middle, x1, x2, hwheel;
+    INT32 wheel;
+    int update;                         /* PointerUpdateKind */
+};
+#define PT_OF_PROPS(p) ((Pt *)((char *)(p) - __builtin_offsetof(Pt, props)))
+static HRESULT STDMETHODCALLTYPE pt_qi(Pt *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_IPointerPoint_)) { *out = 0; return E_NOINTERFACE; }
+    *out = &p->vt;
+    InterlockedIncrement(&p->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE pt_addref(Pt *p) { return (ULONG)InterlockedIncrement(&p->refs); }
+static ULONG pt_release(Pt *p)
+{
+    LONG r = InterlockedDecrement(&p->refs);
+    if (!r) HeapFree(GetProcessHeap(), 0, p);
+    return (ULONG)r;
+}
+static ULONG STDMETHODCALLTYPE pt_release_m(Pt *p) { return pt_release(p); }
+static HRESULT STDMETHODCALLTYPE pt_name(Pt *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Input.PointerPoint", n); }
+static const void *const *const g_mouse_device;
+static HRESULT STDMETHODCALLTYPE pt_device(Pt *p, void **v) { (void)p; if (!v) return E_POINTER; *v = (void *)&g_mouse_device; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_pos(Pt *p, PointF *v) { if (!v) return E_POINTER; *v = p->pos; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_id(Pt *p, UINT32 *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_frame(Pt *p, UINT32 *v) { if (!v) return E_POINTER; *v = p->frame; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_time(Pt *p, UINT64 *v) { if (!v) return E_POINTER; *v = p->time; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_contact(Pt *p, boolean_t *v) { if (!v) return E_POINTER; *v = p->contact; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pt_props(Pt *p, void **v)
+{
+    if (!v) return E_POINTER;
+    InterlockedIncrement(&p->refs);
+    *v = &p->props;
+    return S_OK;
+}
+static const void *const pt_vt[] = { (void *)pt_qi, (void *)pt_addref, (void *)pt_release_m, (void *)no_iids, (void *)pt_name,
+                                     (void *)base_trust, (void *)pt_device, (void *)pt_pos, (void *)pt_pos /* RawPosition */,
+                                     (void *)pt_id, (void *)pt_frame, (void *)pt_time, (void *)pt_contact, (void *)pt_props };
+/* IPointerPointProperties, in the order of its declaration */
+#define PP(p) PT_OF_PROPS(p)
+static HRESULT STDMETHODCALLTYPE pp_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_IPointerPointProperties_)) { *out = 0; return E_NOINTERFACE; }
+    *out = p;
+    InterlockedIncrement(&PP(p)->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE pp_addref(void *p) { return pt_addref(PP(p)); }
+static ULONG STDMETHODCALLTYPE pp_release(void *p) { return pt_release(PP(p)); }
+static HRESULT STDMETHODCALLTYPE pp_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Input.PointerPointProperties", n); }
+static HRESULT STDMETHODCALLTYPE pp_pressure(void *p, float *v) { if (!v) return E_POINTER; *v = PP(p)->contact ? 0.5f : 0.0f; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_false(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_true(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_zero(void *p, float *v) { (void)p; if (!v) return E_POINTER; *v = 0.0f; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_rect(void *p, RectF *v)
+{
+    if (!v) return E_POINTER;
+    v->X = PP(p)->pos.X; v->Y = PP(p)->pos.Y; v->Width = v->Height = 0;
+    return S_OK;
+}
+#define PP_BOOL(name, field) static HRESULT STDMETHODCALLTYPE pp_##name(void *p, boolean_t *v) { if (!v) return E_POINTER; *v = PP(p)->field; return S_OK; }
+PP_BOOL(left, left) PP_BOOL(right, right) PP_BOOL(middle, middle) PP_BOOL(x1, x1) PP_BOOL(x2, x2) PP_BOOL(hwheel, hwheel)
+static HRESULT STDMETHODCALLTYPE pp_wheel(void *p, INT32 *v) { if (!v) return E_POINTER; *v = PP(p)->wheel; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_update(void *p, int *v) { if (!v) return E_POINTER; *v = PP(p)->update; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_has_usage(void *p, UINT32 page, UINT32 id, boolean_t *v) { (void)p; (void)page; (void)id; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pp_usage(void *p, UINT32 page, UINT32 id, INT32 *v) { (void)p; (void)page; (void)id; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static const void *const pp_vt[] = {
+    (void *)pp_qi, (void *)pp_addref, (void *)pp_release, (void *)no_iids, (void *)pp_name, (void *)base_trust,
+    (void *)pp_pressure, (void *)pp_false /* IsInverted */, (void *)pp_false /* IsEraser */, (void *)pp_zero /* Orientation */,
+    (void *)pp_zero /* XTilt */, (void *)pp_zero /* YTilt */, (void *)pp_zero /* Twist */, (void *)pp_rect, (void *)pp_rect,
+    (void *)pp_true /* TouchConfidence */, (void *)pp_left, (void *)pp_right, (void *)pp_middle, (void *)pp_wheel,
+    (void *)pp_hwheel, (void *)pp_true /* IsPrimary */, (void *)pp_true /* IsInRange */, (void *)pp_false /* IsCanceled */,
+    (void *)pp_false /* IsBarrelButtonPressed */, (void *)pp_x1, (void *)pp_x2, (void *)pp_update, (void *)pp_has_usage,
+    (void *)pp_usage,
+};
+_Static_assert(sizeof pp_vt / sizeof pp_vt[0] == 6 + 24, "IPointerPointProperties has 24 methods");
+
+/* IPointerDevice: the mouse (PointerDeviceType Mouse 2, one contact, the
+ * whole screen) */
+static HRESULT STDMETHODCALLTYPE dev_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_IPointerDevice_)) { *out = 0; return E_NOINTERFACE; }
+    *out = p;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE dev_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.Devices.Input.PointerDevice", n); }
+static HRESULT STDMETHODCALLTYPE dev_type(void *p, int *v) { (void)p; if (!v) return E_POINTER; *v = 2; return S_OK; }
+static HRESULT STDMETHODCALLTYPE dev_contacts(void *p, UINT32 *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE dev_screen(void *p, RectF *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    v->X = v->Y = 0;
+    v->Width = (float)GetSystemMetrics(SM_CXSCREEN); v->Height = (float)GetSystemMetrics(SM_CYSCREEN);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE dev_usages(void *p, void **v) { (void)p; if (v) *v = 0; return E_NOTIMPL; }
+static const void *const dev_vt[] = { (void *)dev_qi, (void *)static_ref, (void *)static_ref, (void *)no_iids, (void *)dev_name,
+                                      (void *)base_trust, (void *)dev_type, (void *)pp_true /* IsIntegrated */, (void *)dev_contacts,
+                                      (void *)dev_screen, (void *)dev_screen, (void *)dev_usages };
+static const void *const *const g_mouse_device = dev_vt;
+
+static HRESULT STDMETHODCALLTYPE ptr_point(Args *a, void **v)
+{
+    if (!v) return E_POINTER;
+    *v = a->point ? (void *)&a->point->vt : 0;
+    if (a->point) pt_addref(a->point);
+    return S_OK;
 }
 
 /* ---- IAsyncAction (RunAsync) ------------------------------------------ */
@@ -357,7 +508,9 @@ typedef struct Win {
     HWND hwnd;
     DWORD tid;
     Event ev[EV_COUNT];
-    boolean_t input_enabled, message_handled, cursor_hidden, closed, visible;
+    boolean_t input_enabled, message_handled, cursor_hidden, closed, visible, pointer_inside;
+    WPARAM buttons;                     /* the mouse buttons held (MK_*) */
+    UINT32 frames;
     int flow;
     UINT32 next_action;
 } Win;
@@ -602,6 +755,72 @@ static void raise_visible(BOOL v)
     raise_event(EV_VISIBILITY, a);
 }
 
+/* A pointer event from a mouse message; TRUE when a handler set Handled */
+#define MK_ALL (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2)
+static BOOL raise_one_pointer(int ev, int update, POINT at, WPARAM held, INT32 wheel, BOOL hwheel)
+{
+    Args *a = args_new(ARGS_POINTER);
+    Pt *p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *p);
+    if (!a || !p) { if (a) args_release(a); HeapFree(GetProcessHeap(), 0, p); return FALSE; }
+    p->vt = pt_vt;
+    p->props = pp_vt;
+    p->refs = 1;
+    float s = win_scale();
+    p->pos.X = at.x / s; p->pos.Y = at.y / s;
+    p->frame = ++g_win.frames;
+    p->time = (UINT64)GetMessageTime() * 1000;
+    p->left = !!(held & MK_LBUTTON); p->right = !!(held & MK_RBUTTON); p->middle = !!(held & MK_MBUTTON);
+    p->x1 = !!(held & MK_XBUTTON1); p->x2 = !!(held & MK_XBUTTON2);
+    p->contact = (held & MK_ALL) != 0;
+    p->wheel = wheel; p->hwheel = hwheel ? 1 : 0;
+    p->update = update;
+    a->point = p;
+    a->modifiers = (GetKeyState(VK_CONTROL) < 0 ? 1 : 0) | (GetKeyState(VK_MENU) < 0 ? 2 : 0) | (GetKeyState(VK_SHIFT) < 0 ? 4 : 0) |
+                   (GetKeyState(VK_LWIN) < 0 || GetKeyState(VK_RWIN) < 0 ? 8 : 0);
+    return raise_event(ev, a);
+}
+static BOOL raise_pointer(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    POINT at = { (short)LOWORD(lp), (short)HIWORD(lp) };
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) ScreenToClient(h, &at);     /* (a wheel's place is the screen's) */
+    if (msg == WM_MOUSELEAVE || msg == WM_CAPTURECHANGED) {
+        POINT c;
+        GetCursorPos(&c);
+        ScreenToClient(h, &c);
+        at = c;
+    }
+    WPARAM held = msg == WM_MOUSELEAVE || msg == WM_CAPTURECHANGED ? g_win.buttons : (LOWORD(wp) & MK_ALL);
+    if (msg == WM_MOUSELEAVE) {
+        g_win.pointer_inside = 0;
+        return raise_one_pointer(EV_PTR_EXITED, 0, at, held, 0, FALSE);
+    }
+    if (msg == WM_CAPTURECHANGED) return (HWND)lp != h && raise_one_pointer(EV_PTR_CAPTURE_LOST, 0, at, held, 0, FALSE);
+    if (!g_win.pointer_inside) {                                                     /* (entered: watch for leaving) */
+        TRACKMOUSEEVENT t = { sizeof t, TME_LEAVE, h, 0 };
+        g_win.pointer_inside = 1;
+        TrackMouseEvent(&t);
+        raise_one_pointer(EV_PTR_ENTERED, 0, at, held, 0, FALSE);
+    }
+    WPARAM before = g_win.buttons;
+    g_win.buttons = held;
+    int ev = EV_PTR_MOVED, update = 0;                                               /* PointerUpdateKind Other */
+    switch (msg) {
+    case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+        return raise_one_pointer(EV_PTR_WHEEL, 0, at, held, (short)HIWORD(wp), msg == WM_MOUSEHWHEEL);
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: update = 1; break;
+    case WM_LBUTTONUP: update = 2; break;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: update = 3; break;
+    case WM_RBUTTONUP: update = 4; break;
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: update = 5; break;
+    case WM_MBUTTONUP: update = 6; break;
+    case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: update = HIWORD(wp) == XBUTTON2 ? 9 : 7; break;
+    case WM_XBUTTONUP: update = HIWORD(wp) == XBUTTON2 ? 10 : 8; break;
+    }
+    if (update && (update & 1) && !(before & MK_ALL)) ev = EV_PTR_PRESSED;         /* (the first button down) */
+    if (update && !(update & 1) && !(held & MK_ALL)) ev = EV_PTR_RELEASED;         /* (the last one up) */
+    return raise_one_pointer(ev, update, at, held, 0, FALSE);
+}
+
 static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     Args *a;
@@ -635,6 +854,11 @@ static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CHAR: case WM_SYSCHAR:
         if ((a = args_new(ARGS_CHAR))) { a->key = (UINT32)wp; a->status = key_status_of(lp); }
         if (raise_event(EV_CHAR, a)) return 0;
+        break;
+    case WM_MOUSEMOVE: case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL: case WM_MOUSELEAVE: case WM_CAPTURECHANGED:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK: case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK: case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
+        if (raise_pointer(h, msg, wp, lp)) return msg >= WM_XBUTTONDOWN && msg <= WM_XBUTTONDBLCLK ? TRUE : 0;
         break;
     case WM_SETCURSOR:
         if (g_win.cursor_hidden && LOWORD(lp) == HTCLIENT) { SetCursor(0); return TRUE; }
@@ -679,6 +903,8 @@ static HRESULT create_window(void)
     for (WCHAR *p = title; *p; p++) if (p[0] == '.' && (p[1] | 0x20) == 'e' && (p[2] | 0x20) == 'x' && (p[3] | 0x20) == 'e' && !p[4]) *p = 0;
     g_win.closed = 0;
     g_win.visible = 0;
+    g_win.pointer_inside = 0;
+    g_win.buttons = 0;
     g_win.input_enabled = 1;
     g_win.tid = GetCurrentThreadId();
     g_win.hwnd = CreateWindowExW(0, cls, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,

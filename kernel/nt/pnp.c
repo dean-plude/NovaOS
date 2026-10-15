@@ -187,6 +187,12 @@ const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo)
     return p ? p->instance : NULL;
 }
 
+UINT32 NtPnpNodeOf(NT_DEVICE_OBJECT *pdo)
+{
+    NtPdo *p = pdo_of(pdo);
+    return p ? p->node : 0;
+}
+
 /* ---- strings for the driver: wide, in pool it frees with ExFreePool ---- */
 
 static NT_WCHAR *pool_wide(const char *s, size_t n)
@@ -1194,13 +1200,18 @@ static bool inbox_hid(const PnpNode *n, const char *key)
  * mouhid on a mouse or another pointer, hiddigi on a touch screen, a pen,
  * a precision touchpad's finger collection and a digitizer's
  * configuration collection (Windows' input.inf leaves those raw for
- * win32k to read; they stay in the HIDClass class, as there).  Its
+ * win32k to read; they stay in the HIDClass class, as there), gamehid on
+ * a game pad or a joystick (raw on Windows too, for DirectInput to read
+ * through hid.dll; NovaOS's DirectInput, winmm and XInput read the
+ * controller slots gamehid feeds).  Its
  * Service, Class and ClassGUID go in its Enum key @key, its class in @n. */
 static bool inbox_input(PnpNode *n, const char *key)
 {
     const char *service = NULL, *cls = "HIDClass", *guid = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
     for (const char *c = n->hwids; *c && !service; c += strlen(c) + 1) {   /* (hidclass lists them as hardware IDs) */
-        if (!strcmp(c, "HID_DEVICE_SYSTEM_KEYBOARD")) {
+        if (!strcmp(c, "HID_DEVICE_SYSTEM_GAME")) {
+            service = "gamehid";
+        } else if (!strcmp(c, "HID_DEVICE_SYSTEM_KEYBOARD")) {
             service = "kbdhid", cls = "Keyboard", guid = "{4d36e96b-e325-11ce-bfc1-08002be10318}";
         } else if (!strcmp(c, "HID_DEVICE_SYSTEM_MOUSE") || !strcmp(c, "HID_DEVICE_UP:0001_U:0001")) {
             service = "mouhid", cls = "Mouse", guid = "{4d36e96f-e325-11ce-bfc1-08002be10318}";
@@ -1223,7 +1234,8 @@ static bool inbox_input(PnpNode *n, const char *key)
  * pnputil show as such (an installed package does not replace them) */
 static bool inbox_class_driver(const char *service)
 {
-    return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid") || !strcmp(service, "hiddigi");
+    return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid") || !strcmp(service, "hiddigi") ||
+           !strcmp(service, "gamehid");
 }
 
 /* A service NovaOS no longer runs these devices with: usbhid.c ran USB
@@ -1484,7 +1496,7 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
         strcpy(n->cls, "HIDClass");
         ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", c->instance);
         if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service))
-            inbox_input(n, key);                             /* (a keyboard or a mouse: kbdhid, mouhid) */
+            inbox_input(n, key);                             /* (a keyboard, a mouse, a digitizer, a game pad) */
     }
     n->flags = PNP_PRESENT;
     c->node = PnpAdd(bus->node, n);

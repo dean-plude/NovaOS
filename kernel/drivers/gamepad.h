@@ -2,8 +2,9 @@
  * gamepad.h — game controllers (gamepads and joysticks)
  *
  * The drivers (xpad.c: Xbox 360 and Xbox One controllers, which are not
- * HID devices; gamepad.c: HID gamepads and joysticks, Generic Desktop
- * usages 4 and 5) keep the state of each controller in a slot here.
+ * HID devices; the "gamehid" class driver, nt/kbdhid.c, through
+ * gamepad.c: HID gamepads and joysticks, Generic Desktop usages 4 and 5,
+ * on the HID class driver's collections) keep the state of each controller in a slot here.
  * Programs read it through NtNovaGuiCtl's CTL_GAMEPAD (um_gui.c):
  * xinput1_4.dll sees the Xbox controllers, dinput8.dll every controller,
  * as on Windows.  Every controller has the generic view DirectInput
@@ -51,6 +52,8 @@ typedef struct {
     UINT8  rumble;                    /* 1: it has motors */
     UINT16 usage;                     /* HID usage page << 8 | usage: 0x0104 joystick, 0x0105 gamepad */
     char   name[64];
+    UINT32 node;                      /* a HID controller: its collection's Plug and Play node (Raw Input,
+                                       * hid.dll and setupapi reach it there, by its interface path) */
 } PadInfo;
 
 /* For the drivers.  A controller gets a slot (-1: none free) with its
@@ -70,10 +73,11 @@ int    PadXInputSlot(int user);                           /* the slot of XInput 
 bool   PadSetRumble(int slot, UINT16 left, UINT16 right);
 
 /* Raw HID reports, for Raw Input (WM_INPUT) and HID device handles
- * (um_hid.c): every controller has a HID report descriptor (an Xbox
- * controller the one Windows' Xbox driver gives its HID side: X/Y the
- * left stick, Rx/Ry the right, Z both triggers, ten buttons and a hat)
- * and its input reports go through a ring programs read.  A report starts
+ * (um_hid.c) on the Xbox controllers: each has the HID report descriptor
+ * Windows' Xbox driver gives its HID side (X/Y the left stick, Rx/Ry the
+ * right, Z both triggers, ten buttons and a hat) and its input reports go
+ * through a ring programs read.  (A HID controller's are its collection's,
+ * read through the HID class driver.)  A report starts
  * with its report ID byte (0 when the device uses none), as Windows
  * hands them out, and is the device's input report length long. */
 #define PAD_DESC_MAX    1024
@@ -88,11 +92,18 @@ typedef struct {
     UINT8  data[PAD_REPORT_MAX];
 } PadRaw;
 
-/* For HID drivers, after PadAttach: the device's own descriptor and its
- * input report length (with the ID byte); and each report as it comes
- * (@r without an ID byte when the device uses none: @ids false) */
-void PadSetDescriptor(int slot, const UINT8 *desc, int len, int in_len);
-void PadRawReport(int slot, const UINT8 *r, int len, bool ids);
+/* For the game controller class driver (nt/kbdhid.c's "gamehid") on a
+ * HID collection: PadHidOpen takes the device's report descriptor and,
+ * when it is a joystick or a game pad, gives it a slot (NULL: not one, or
+ * no slot free); @node is the collection's Plug and Play node, @what
+ * (@cap bytes) gets what it is ('gamepad "Name" (16 buttons, 4 axes, a
+ * hat)').  PadHidInput takes each input report as the device sends it
+ * (its ID byte first only when it uses report IDs); PadHidClose frees
+ * the slot. */
+void *PadHidOpen(const UINT8 *desc, int len, UINT16 vid, UINT16 pid, const char *product, UINT32 node,
+                 char *what, int cap);
+void  PadHidInput(void *pad, const UINT8 *r, int len);
+void  PadHidClose(void *pad);
 
 /* The mouse's and the keyboard's raw input (user32's RIM_TYPEMOUSE and
  * RIM_TYPEKEYBOARD) go through the same ring, as reports of these two

@@ -39,6 +39,8 @@ typedef struct {
     BYTE  buttons, axes, povs, rumble;
     WORD  usage;
     char  name[64];
+    DWORD node;                      /* a HID controller: its HID collection's device node (its path is the
+                                      * collection's HID interface; Raw Input and setupapi list it there) */
 } NovaPadInfo;
 
 #define NOVA_PAD_DESC_MAX   1024

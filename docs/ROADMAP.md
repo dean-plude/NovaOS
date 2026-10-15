@@ -549,7 +549,8 @@ item ends when a named program or test demonstrates it.
   Input (`WM_INPUT` with each controller's HID reports) and `hid.dll`
   (`HidD_*` on a controller's HID path, `HidP_*` on its report
   descriptor; an Xbox controller has the one Windows' Xbox driver
-  gives).  A vendor's USB HID device runs on the HID class driver, where
+  gives; a HID game pad's path is its HID class collection's, on the
+  `gamehid` class driver).  A vendor's USB HID device runs on the HID class driver, where
   `hid.dll` has output and feature reports and `IOCTL_HID_*` through
   `DeviceIoControl`, and overlapped `ReadFile`, `WriteFile` and
   `DeviceIoControl` with `CancelIo` work as hidapi uses them
@@ -884,7 +885,9 @@ drivers. Design: [design/windows-drivers.md](design/windows-drivers.md)
 The HID class host (`hidclass.sys`'s part, with NovaOS's USB HID
 minidriver) is built; test `hid`.  USB keyboards and mice go through it
 to the `kbdhid` and `mouhid` class drivers; test `kbdmoutest`.  USB touch screens, pens and
-precision touchpads go to the `hiddigi` digitizer class driver; test `digitest`.  Later, only when a target device
+precision touchpads go to the `hiddigi` digitizer class driver; test `digitest`.  USB HID game pads and
+joysticks go to the `gamehid` class driver, which feeds DirectInput's controller slots while Raw Input and
+`hid.dll` read the collection itself; tests `padtest` and `rawpadtest`.  Later, only when a target device
 needs them: PortCls and AVStream drivers, and the full WDDM render path (step 25.3 onwards).
 
 ### Phase 31: DOS programs
@@ -938,7 +941,7 @@ and the XAML framework built from Microsoft's MIT source
 as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
 [design/windows-ui-xaml.md](design/windows-ui-xaml.md).
 
-- [ ] **32.1 WinRT activation from the registry; CoreApplication and
+- [x] **32.1 WinRT activation from the registry; CoreApplication and
   CoreWindow.** `RoGetActivationFactory` loads the in-process server
   named under `ActivatableClassId`; `twinapi.appcore.dll` runs an
   `IFrameworkView` through `CoreApplication.Run` on a `CoreWindow` with

@@ -204,6 +204,8 @@ NTSTATUS  NtIoNameDevice(NT_DEVICE_OBJECT *d);
  * device instance (PCI\VEN_...), for ndis.c and storport.c */
 UINT32    NtPnpConfig(NT_DEVICE_OBJECT *pdo, bool write, void *buf, UINT32 off, UINT32 len);
 const char *NtPnpInstanceOf(NT_DEVICE_OBJECT *pdo);
+/* PDO @pdo's device tree node (0: not one Plug and Play knows) */
+UINT32    NtPnpNodeOf(NT_DEVICE_OBJECT *pdo);
 
 /* intr.c: a vector of its own for GSI @gsi, routed (masked until a driver
  * connects to it) to the boot CPU; 0 if it cannot be routed */

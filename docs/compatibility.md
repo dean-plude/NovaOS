@@ -67,13 +67,9 @@ planned (roadmap item 27.5).
 | Platinum | 7 | 6 | 9 | 6 | 28 |
 | Gold | 0 | 3 | 0 | 1 | 4 |
 | Silver | 5 | 1 | 0 | 1 | 7 |
-| Bronze | 17 | 2 | 1 | 1 | 21 |
-| Borked | 0 | 1 | 0 | 0 | 1 |
-| Untested | 2 | 0 | 1 | 3 | 6 |
-| **All** | 31 | 13 | 11 | 12 | 67 |
-| Bronze | 16 | 2 | 1 | 2 | 21 |
+| Bronze | 17 | 2 | 1 | 2 | 22 |
 | Borked | 1 | 1 | 0 | 0 | 2 |
-| Untested | 2 | 0 | 1 | 3 | 6 |
+| Untested | 1 | 0 | 1 | 3 | 5 |
 | **All** | 31 | 13 | 11 | 13 | 68 |
 
 ### Programs
@@ -109,9 +105,7 @@ planned (roadmap item 27.5).
 | **OBS Studio 30.2.3** (App Store; 64-bit, Qt 6, Direct3D 11) | Bronze | Installs from the App Store (the official zip) and, with the Store's Mesa 3D and DXVK installed first, opens its main window drawn with Direct3D 11 through DXVK on llvmpipe; cancels the Auto-Configuration Wizard, adds a scene from the Scenes dock (the name it offers) and saves it in its scene collection ([history](history/2026-10-14-obs-studio.md)) | A name typed into the Add Scene box is lost (the box never takes the keyboard, while Enter still reaches the dialog; user32 activates and focuses the dialog as Windows does, so the cause is still open); without DXVK it cannot start ("Failed to initialize video"): NovaOS has no Direct3D 11 device of its own; nothing captured, recorded or streamed in the test; Windows Graphics Capture is not available (`libobs-winrt.dll` needs `CoreMessaging.dll`, so OBS keeps to its BitBlt capture) and the browser source is not checked | nightly corpus ([`958-obs-studio.py`](../tests/appcorpus/958-obs-studio.py)) |
 | **qBittorrent 5.0.2** (App Store; 64-bit, Qt 6, NSIS installer) | Bronze | Installs from the App Store (its NSIS installer, silently, which elevates itself through UAC) and opens a `.torrent`: the Legal Notice on first start, then the Add torrent dialog over the main window with the torrent's name, size, date, info hash and file list ([history](history/2026-10-14-qbittorrent.md)) | Nothing downloaded or seeded (the test has no peers or tracker); its crash handler's stack trace has no symbols (NovaOS has no debugger engine behind `dbgeng.dll`) | nightly corpus ([`956-qbittorrent.py`](../tests/appcorpus/956-qbittorrent.py)) |
 | **WinSCP 6.3.5** (App Store; 32-bit, C++Builder VCL, Inno Setup installer) | Bronze | Installs from the App Store (its Inno Setup installer, silently, registering its 64-bit shell extension through `regsvr32`) and opens its Login dialog over its main window, whose two panels open on local folders ([history](history/2026-10-14-winscp.md)) | The Login dialog's site tree and the file panels list their items but draw none of them, and the port number box is blank; no connection or transfer checked | nightly corpus ([`952-winscp.py`](../tests/appcorpus/952-winscp.py)) |
-| **HandBrake** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 | **HandBrake** (App Store) | Borked | Installs; starts on .NET 8, loads libhb and its video engines | Its WPF main window never shows: WPF decodes its icons with the Windows Imaging Component (WindowsCodecs.dll), which NovaOS does not have yet | by hand |
-| **GIMP** (App Store) | Untested | — | — | — |
 | **ShareX** (App Store) | Untested | — | Not checked yet; needs the .NET Desktop Runtime 8, whose desktop programs are not checked either | — |
 
 ### Games and game stores

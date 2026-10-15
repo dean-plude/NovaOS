@@ -241,7 +241,7 @@ def close_lid(nova):
     for _ in range(240):
         log = open(nova.serial_path, 'rb').read().decode('latin-1')
         log = log[log.rfind('Lid closed: sleeping'):]
-        if 'Woke up' in log and re.search(r'keyboard removed[\s\S]*\[USB\] port \d+: keyboard \(report protocol', log):
+        if 'Woke up' in log and re.search(r'\[KBDHID\] 0627:0001: removed[\s\S]*\[KBDHID\] 0627:0001: keyboard', log):
             break
         time.sleep(0.25)
 

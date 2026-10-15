@@ -1,6 +1,7 @@
 # inputtest: mouse side buttons and the horizontal wheel (a USB mouse
-# plugged in for the test, then the PS/2 mouse) and the volume keys (the USB
-# keyboard), as a program's window gets them; usbcheck runs the HID report
+# plugged in for the test, on the mouse class driver mouhid, then the PS/2
+# mouse) and the volume keys (the USB keyboard, on kbdhid), as a program's
+# window gets them; usbcheck runs the HID report
 # parser on media-key, five-button-mouse and pen report descriptors QEMU has
 # no device for, and the virtio-input pen and tablet decoding on canned events
 import re, time
@@ -21,10 +22,10 @@ def _buttons(nova, *names):
 
 def usb_mouse(nova):
     """Plug a USB mouse into the xHCI controller and press its buttons 4 and 5"""
-    before = len(re.findall(r'\[USB\] [^\n]*: mouse', _log(nova)))
+    before = len(re.findall(r'\[MOUHID\] [^\n]*: mouse', _log(nova)))
     nova.hmp('device_add usb-mouse,bus=xhci.0,id=xmouse')
     for _ in range(80):
-        if len(re.findall(r'\[USB\] [^\n]*: mouse', _log(nova))) > before:
+        if len(re.findall(r'\[MOUHID\] [^\n]*: mouse', _log(nova))) > before:
             break
         time.sleep(0.25)
     time.sleep(1)
@@ -35,7 +36,7 @@ def ps2_mouse(nova):
     """Unplug it: the PS/2 mouse turns its horizontal wheel and presses button 4"""
     nova.hmp('device_del xmouse')
     for _ in range(80):
-        if re.search(r'\[USB\] [^\n]*: pointer removed', _log(nova)):
+        if re.search(r'\[MOUHID\] [^\n]*: removed', _log(nova)):
             break
         time.sleep(0.25)
     time.sleep(1)

@@ -288,14 +288,40 @@ for its usage gets every input report as `WM_INPUT` (and
 `WM_INPUT_DEVICE_CHANGE` as it comes and goes), as win32k does on
 Windows.
 
-A USB HID device that no NovaOS driver takes (a vendor-defined device,
-not a keyboard, mouse, touch screen or game controller) gets NovaOS's
-own USB minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the
-kernel in place of Windows' `hidusb.sys`): interrupt IN for input,
-interrupt OUT or `SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for
-feature and input reports. On a composite device each HID function gets
-its own (see [USB client drivers](#usb-client-drivers)). NovaOS's own
-keyboards, mice and game controllers keep their built-in drivers.
+A USB HID device that is not a game controller, touch screen, pen or
+touchpad (those keep NovaOS's own drivers) gets NovaOS's own USB
+minidriver, `HidUsb` (`kernel/nt/hidusb.c`, built into the kernel in
+place of Windows' `hidusb.sys`): interrupt IN for input, interrupt OUT or
+`SET_REPORT` for output, `GET_REPORT`/`SET_REPORT` for feature and input
+reports. That covers vendor-defined devices and every USB keyboard,
+mouse, tablet and media-key device. On a composite device each HID
+function gets its own (see [USB client drivers](#usb-client-drivers)).
+
+### Keyboards and mice: kbdhid and mouhid
+
+USB keyboards and mice reach the desktop the way they do on Windows:
+`HidUsb` under the HID class driver, then a class driver on each
+top-level collection. Plug and Play installs NovaOS's keyboard class
+driver, `kbdhid`, on a keyboard collection (`HID_DEVICE_SYSTEM_KEYBOARD`,
+setup class Keyboard) and on consumer- and system-control collections
+(media, browser, power and sleep keys), and its mouse class driver,
+`mouhid`, on a mouse or pointer collection (`HID_DEVICE_SYSTEM_MOUSE`,
+setup class Mouse), as Windows' `keyboard.inf` and `msmouse.inf` install
+`kbdhid.sys` and `mouhid.sys`. Both are one driver built into the kernel
+(`kernel/nt/kbdhid.c`). Each opens its collection like any program,
+reads the device's report descriptor and its reports, and decodes them
+with the same report parser the I2C touchpads use (`kernel/drivers/
+usbhid.c`): keys become the scan codes every keyboard makes, motion,
+buttons, wheels and absolute positions the pointer's events, so the
+desktop, Raw Input and DirectInput see a USB keyboard or mouse as they
+did before. The keyboard's Caps, Num and Scroll Lock lights follow the
+lock keys as output reports, and a keyboard asks to wake the machine
+(`IOCTL_HID_ENABLE_WAKE_ON_SX`: the USB bus driver arms its remote
+wakeup). Raw Input lists a keyboard or mouse collection as the keyboard
+and the mouse, not as a `RIM_TYPEHID` device, as on Windows; programs can
+still open the collection (hidapi lists keyboards). Device Manager and
+`pnputil` show the two as NovaOS drivers: a driver package that matches a
+keyboard's hardware ID is listed as outranked by `kbdhid`.
 
 A handle opened with `FILE_FLAG_OVERLAPPED` does overlapped I/O, as
 hidapi and most HID tools use it: `ReadFile` with no report waiting
@@ -605,7 +631,8 @@ kept in the repository or the image.
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
-| `composite` | NovaOS's keyboard driver, and the HID class driver with `HidUsb` on each other function | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
+| `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
+| `devmgr` | `HidUsb`, `kbdhid` and `mouhid` | QEMU's USB keyboard and tablet, and a second pair the test plugs in | Device Manager on the machine's devices; `kbdmoutest`: the class drivers on each collection, none of them a Raw Input HID device, the pointer following the new tablet, a line typed on the new keyboard, unplugging |
 | `vhidmini` | Microsoft's `vhidmini2` sample (`vhidmini.sys`, KMDF 1.33, built unchanged) under NovaOS's `mshidkmdf` | none: a root-enumerated device (`ROOT\HIDCLASS\0000`, hardware ID `root\vhidmini`) | `SetupDiCreateDeviceInfo` and `DIF_REGISTERDEVICE`, `Include`/`Needs` and a lower filter, `hid.dll` on it: attributes, strings, caps, feature, input and output reports, `ReadFile`/`WriteFile`, Raw Input, Device Manager, start at boot, `pnputil /remove-device` |
 | `camera` | NovaOS's UVC class driver (`usbvideo`) | a fake UVC 1.1 camera (`tools/campeer.py`) | Media Foundation on it: `MFEnumDeviceSources`, the source reader in each mode and as RGB32, the Camera app |
 

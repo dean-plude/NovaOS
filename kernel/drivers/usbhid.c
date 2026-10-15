@@ -393,6 +393,10 @@ typedef struct {
     INT32      tp_sx, tp_sy;         /* scrolling not yet a notch (um) */
     UINT8      tp_axis;              /* scrolling locked to: 0 not yet, 1 vertical, 2 horizontal */
     bool       dead;
+    /* Not a USB device of usbhid.c's own (kbdhid/mouhid, I2C-HID): where
+     * its output reports (the keyboard LEDs) go */
+    void     (*out)(void *ctx, const UINT8 *report, int len);
+    void      *out_ctx;
 } Hid;
 
 static Hid *g_hids[MAX_HID];
@@ -972,7 +976,7 @@ void UsbHidSyncLeds(void)
     UINT32 want = InputLockState();
     for (int i = 0; i < MAX_HID; i++) {
         Hid *h = g_hids[i];
-        if (!h || h->dead || !h->dev || !h->keyboard || h->leds == want || !h->L.led_bytes) continue;
+        if (!h || h->dead || (!h->dev && !h->out) || !h->keyboard || h->leds == want || !h->L.led_bytes) continue;
         bool any = false;
         UINT8 rep[9];
         memset(rep, 0, sizeof(rep));
@@ -987,6 +991,12 @@ void UsbHidSyncLeds(void)
         h->leds = (UINT8)want;
         if (!any) continue;
         int len = at + (h->L.led_bytes > 8 ? 8 : h->L.led_bytes);
+        if (!h->dev) {                                     /* (a class driver's: the ID byte first, 0 without IDs) */
+            UINT8 out[9] = { 0 };
+            memcpy(out + 1 - at, rep, (size_t)len);
+            h->out(h->out_ctx, out, len + 1 - at);
+            continue;
+        }
         if (UsbControl(h->dev, 0x21, 0x09, (UINT16)(0x0200 | h->L.led_id), h->iface, (UINT16)len, rep) < 0)   /* SET_REPORT(output) */
             kprintf("[USB] %s: keyboard LEDs not set\n", UsbDevName(h->dev));
     }
@@ -1043,8 +1053,9 @@ static void classify(Hid *h)
     if (h->touch) { h->pen = false; h->pen_caps = 0; for (int s = 0; s < TOUCH_MAX; s++) h->t_cid[s] = -1; }
 }
 
-void *UsbHidProbe(UsbDev *d, const UsbIface *f)
+void *UsbHidProbe(UsbDev *d, const UsbIface *f, bool *for_class)
 {
+    *for_class = false;
     int slot = -1;
     for (int i = 0; i < MAX_HID && slot < 0; i++) if (!g_hids[i]) slot = i;
     if (slot < 0) return NULL;
@@ -1072,6 +1083,15 @@ void *UsbHidProbe(UsbDev *d, const UsbIface *f)
             ok = parse_report_desc(desc, rlen, &h->L);
             if (ok) classify(h);
             ok = ok && (h->keyboard || h->pointer || h->media);
+            if (ok && !h->touch && !h->pen && !h->touchpad) {
+                /* A keyboard, mouse or media-key device: the HID class
+                 * driver's, as on Windows (HidUsb under hidclass, kbdhid
+                 * and mouhid on its collections: nt/kbdhid.c) */
+                kfree(desc);
+                kfree(h);
+                *for_class = true;
+                return NULL;
+            }
             if (ok && f->sub == 1) UsbControl(d, 0x21, 0x0B, 1, f->number, 0, NULL);   /* SET_PROTOCOL(report) */
             UINT8 mode[32], mid;
             int mlen = ok ? HidTouchpadModeReport(h, &mid, mode, sizeof(mode)) : 0;
@@ -1161,6 +1181,55 @@ void HidStart(void *hid)
         InputTouchScreen(most > fingers ? most : fingers);
     }
     if (h->pen) TabletDevice(NULL, 1, h->pen_caps);
+}
+
+/* A class driver's device goes: every key and button it holds is let go */
+void HidStop(void *hid)
+{
+    Hid *h = hid;
+    if (!h || h->dead) return;
+    if (h->keyboard) {
+        UINT8 none[32];
+        memset(none, 0, sizeof(none));
+        keyboard_state(h, none, 0);
+    }
+    for (int i = 0; i < h->ncc; i++) post_key(h, h->cc[i], false);
+    h->ncc = 0;
+    if (h->buttons) {
+        InputEvent ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = INPUT_MOUSE;
+        hid_post(h, &ev);
+        h->buttons = 0;
+    }
+    if (h->pen) TabletDevice(NULL, -1, h->pen_caps);
+    if (h->touch) {
+        for (int s = 0; s < TOUCH_MAX; s++) h->t_seen[s] = false;
+        touch_frame_end(h);
+    }
+    h->repeat = 0;
+    h->dead = true;
+    for (int i = 0; i < MAX_HID; i++)
+        if (g_hids[i] == h) g_hids[i] = NULL;
+    /* (the Hid stays allocated, as a USB one does) */
+}
+
+bool HidReportIds(void *hid)
+{
+    return hid && ((Hid *)hid)->L.ids;
+}
+
+bool HidIsKeyboard(void *hid)
+{
+    return hid && ((Hid *)hid)->keyboard;
+}
+
+void HidSetOutput(void *hid, void (*out)(void *ctx, const UINT8 *report, int len), void *ctx)
+{
+    Hid *h = hid;
+    if (!h) return;
+    h->out_ctx = ctx;
+    h->out = out;
 }
 
 void HidInput(void *hid, const UINT8 *report, int len)

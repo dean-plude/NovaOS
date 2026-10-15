@@ -103,6 +103,18 @@ _Static_assert(sizeof(HidMinidriverRegistration) == 32 && sizeof(HidDescriptor) 
 #define IOCTL_HID_GET_INDEXED_STRING          HID_CTL(120, NT_METHOD_OUT_DIRECT)
 #define IOCTL_HID_GET_MS_GENRE_DESCRIPTOR     HID_CTL(121, NT_METHOD_OUT_DIRECT)
 
+/* NovaOS's own, from kernel callers only (internal device control on a
+ * collection, METHOD_NEITHER): the lengths of the collection's input and
+ * output reports and the device's whole report descriptor, as its
+ * minidriver gave it.  The keyboard and mouse class drivers (kbdhid.c)
+ * decode the collection's reports with it. */
+#define IOCTL_HID_NOVA_GET_REPORT_DESCRIPTOR  HID_CTL(0x800, NT_METHOD_NEITHER)
+typedef struct {
+    UINT16 InputLength, OutputLength;   /* with the report ID byte (0: none of that type) */
+    UINT32 DescriptorLength;
+    UINT8  Descriptor[];
+} HidNovaReportDescriptor;
+
 /* IOCTL_HID_GET_STRING's string IDs (Type3InputBuffer: ID | language << 16) */
 #define HID_STRING_ID_IMANUFACTURER 14
 #define HID_STRING_ID_IPRODUCT      15
@@ -115,3 +127,8 @@ NTSTATUS NT_API HidUsbDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
  * filter of (the service "mshidkmdf", MsHidKmdf.inf's mshidkmdf.sys) */
 NTSTATUS NT_API MsHidKmdfDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
 NT_API NT_STATUS nt_HidRegisterMinidriver(HidMinidriverRegistration *r);
+/* kbdhid.c: the keyboard and mouse class drivers on HID collections (the
+ * services "kbdhid" and "mouhid", as keyboard.inf and msmouse.inf name
+ * Windows' kbdhid.sys and mouhid.sys) */
+NTSTATUS NT_API KbdHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
+NTSTATUS NT_API MouHidDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);

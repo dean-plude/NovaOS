@@ -1186,6 +1186,47 @@ static bool inbox_hid(const PnpNode *n, const char *key)
     return true;
 }
 
+/* A HID collection nothing was installed on: the class driver Windows'
+ * keyboard.inf or msmouse.inf would install, NovaOS's own (kbdhid.c):
+ * kbdhid on a keyboard, and on the consumer and system control
+ * collections (media and power keys, which Windows reads in win32k),
+ * mouhid on a mouse or another pointer.  Its Service, Class and ClassGUID
+ * go in its Enum key @key, its class in @n. */
+static bool inbox_input(PnpNode *n, const char *key)
+{
+    const char *service = NULL, *cls = "HIDClass", *guid = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
+    for (const char *c = n->hwids; *c && !service; c += strlen(c) + 1) {   /* (hidclass lists them as hardware IDs) */
+        if (!strcmp(c, "HID_DEVICE_SYSTEM_KEYBOARD")) {
+            service = "kbdhid", cls = "Keyboard", guid = "{4d36e96b-e325-11ce-bfc1-08002be10318}";
+        } else if (!strcmp(c, "HID_DEVICE_SYSTEM_MOUSE") || !strcmp(c, "HID_DEVICE_UP:0001_U:0001")) {
+            service = "mouhid", cls = "Mouse", guid = "{4d36e96f-e325-11ce-bfc1-08002be10318}";
+        } else if (!strcmp(c, "HID_DEVICE_UP:000C_U:0001") || !strcmp(c, "HID_DEVICE_UP:0001_U:0080")) {
+            service = "kbdhid";
+        }
+    }
+    if (!service) return false;
+    um_registry_set_sz(key, "Service", service);
+    um_registry_set_sz(key, "Class", cls);
+    um_registry_set_sz(key, "ClassGUID", guid);
+    strcpy(n->cls, cls);
+    return true;
+}
+
+/* The class drivers above: NovaOS's own drivers, which Device Manager and
+ * pnputil show as such (an installed package does not replace them) */
+static bool inbox_class_driver(const char *service)
+{
+    return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid");
+}
+
+/* A service NovaOS no longer runs these devices with: usbhid.c ran USB
+ * keyboards and mice before kbdhid/mouhid did, and an Enum key written
+ * then still names it */
+static bool stale_service(const char *service)
+{
+    return !strcmp(service, "usbhid");
+}
+
 /* A USB camera (video interfaces) no NovaOS driver took and nothing was
  * installed on: NovaOS's own UVC driver (usbvideo.c), as Windows'
  * usbvideo.inf installs usbvideo.sys on USB\Class_0E */
@@ -1211,8 +1252,8 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
             ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", n->instance);
             UINT32 disabled = 0;
             if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(k->node, PROB_DISABLED);
-            else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0]) || inbox_hid(n, key) ||
-                     inbox_video(n, key))
+            else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0] && !stale_service(service)) ||
+                     inbox_hid(n, key) || inbox_video(n, key))
                 NtPnpStart(k->node);
         }
         kfree(n);
@@ -1428,7 +1469,13 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
     strcpy(n->instance, c->instance);
     if (!n->hwids[0]) strncpy(n->hwids, dev, sizeof(n->hwids) - 2);
     if (!n->desc[0]) strncpy(n->desc, dev, sizeof(n->desc) - 1);
-    if (!strncmp(dev, "HID\\", 4)) strcpy(n->cls, "HIDClass");   /* (a HID collection, as input.inf files it) */
+    if (!strncmp(dev, "HID\\", 4)) {                       /* (a HID collection, as input.inf files it) */
+        char key[200], service[64] = "";
+        strcpy(n->cls, "HIDClass");
+        ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", c->instance);
+        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service))
+            inbox_input(n, key);                             /* (a keyboard or a mouse: kbdhid, mouhid) */
+    }
     n->flags = PNP_PRESENT;
     c->node = PnpAdd(bus->node, n);
     if (!c->node) goto fail;
@@ -1451,6 +1498,7 @@ static void child_start(NtPdo *c)
     UINT32 flags = 0;
     if (um_registry_get_dword(key, "ConfigFlags", &flags) && (flags & 1)) { PnpSetProblem(c->node, PROB_DISABLED); return; }
     um_registry_get_sz(key, "Service", service, sizeof(service));
+    if (stale_service(service)) service[0] = 0;
     char cls[32] = "", friendly[96] = "";
     um_registry_get_sz(key, "Class", cls, sizeof(cls));
     um_registry_get_sz(key, "FriendlyName", friendly, sizeof(friendly));
@@ -1471,6 +1519,7 @@ static void child_start(NtPdo *c)
     c->rawpdo = !service[0];
     strncpy(c->service, c->rawpdo ? c->parent->service : service, sizeof(c->service) - 1);
     if (c->rawpdo) PnpSetRawDriver(c->node, c->service);
+    else if (inbox_class_driver(c->service)) PnpSetDriver(c->node, c->service);
     else PnpSetWindowsDriver(c->node, c->service);
     kprintf("[PNP] %s: started (%s %s)\n", c->instance, c->rawpdo ? "raw, bus driver" : "driver", c->service);
     enumerate(c);

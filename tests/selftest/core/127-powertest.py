@@ -14,6 +14,6 @@ TESTS = [
                       r'\[ACPI\] Lid \\_SB_\.LID0', r'\[ACPI\] Thermal zone \\_TZ_\.TZ00: 40\.0 C',
                       r'\[ACPI\] Wake device \\_SB_\.LID0 \(lid\)',
                       r'\[ACPI\] Wake device \\_SB_\.PCI0\.XHC0 \(USB controller\)',
-                      r'\[USB\] [^\n]*keyboard[^\n]*wakes the machine'],
+                      r'\[KBDHID\] [^\n]*keyboard[^\n]*wakes the machine'],
          timeout=300),
 ]

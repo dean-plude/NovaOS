@@ -36,10 +36,17 @@
  * programs see them on Windows; a minidriver of a device without IDs reads
  * and writes reports without that byte.
  *
+ * Keyboards and mice: the PnP manager starts the keyboard and mouse class
+ * drivers (kbdhid.c: kbdhid, mouhid) on their collections, as Windows'
+ * keyboard.inf and msmouse.inf install them; they open the collection
+ * like any program and read its reports.  IOCTL_HID_ENABLE_WAKE_ON_SX
+ * (kbdhid asks it for a keyboard) sends IRP_MN_WAIT_WAKE down the
+ * device's stack: on USB the bus driver arms the device's remote wakeup
+ * (usbd.c).
+ *
  * Not done yet: polled minidrivers are read in the same loop (no per-handle
  * polling interval), selective suspend (IOCTL_HID_SEND_IDLE_NOTIFICATION_REQUEST
- * is never sent), and the keyboard and mouse class drivers on top
- * (kbdhid/mouhid): NovaOS's own input drivers keep those devices.
+ * is never sent).
  */
 #include "ntapi.h"
 #include "hidclass.h"
@@ -247,6 +254,28 @@ static NT_STATUS mini_ioctl(Fdo *f, UINT32 code, void *in, UINT32 in_len, void *
     nt_KeWaitForSingleObject(&ev, 0, 0, 0, NULL);
     if (info) *info = iosb.Information;
     irp->MdlAddress = NULL;
+    nt_IoFreeIrp(irp);
+    return iosb.Status;
+}
+
+/* IRP_MN_WAIT_WAKE down the device's stack (minidriver, then its bus):
+ * its status (the bus completes it once the device is armed) */
+static NT_STATUS wait_wake(Fdo *f)
+{
+    NT_IRP *irp = nt_IoAllocateIrp(f->fdo->StackSize, 0);
+    if (!irp) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    NT_KEVENT ev;
+    NT_IO_STATUS_BLOCK iosb = { { 0 }, 0 };
+    nt_KeInitializeEvent(&ev, NT_NotificationEvent, 0);
+    irp->UserEvent = &ev;
+    irp->UserIosb = &iosb;
+    irp->IoStatus.Status = NT_STATUS_NOT_SUPPORTED;
+    NT_IO_STACK_LOCATION *sl = NtIrpNextStack(irp);
+    sl->MajorFunction = NT_IRP_MJ_POWER;
+    sl->MinorFunction = 0x00;                                /* IRP_MN_WAIT_WAKE */
+    sl->Parameters.Others.Argument1 = (void *)(UINT64)4;     /* PowerSystemSleeping3: the deepest it wakes from */
+    call_mini(f, irp);
+    nt_KeWaitForSingleObject(&ev, 0, 0, 0, NULL);
     nt_IoFreeIrp(irp);
     return iosb.Status;
 }
@@ -664,6 +693,22 @@ static NT_STATUS coll_ioctl(Coll *c, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
         kfree(old);
         return NT_STATUS_SUCCESS;
     }
+    case IOCTL_HID_NOVA_GET_REPORT_DESCRIPTOR:                /* (METHOD_NEITHER, kernel callers only) */
+        if (irp->RequestorMode || sl->MajorFunction != NT_IRP_MJ_INTERNAL_DEVICE_CONTROL || !irp->UserBuffer)
+            return NT_STATUS_INVALID_DEVICE_REQUEST;
+    {
+        HidNovaReportDescriptor *r = irp->UserBuffer;
+        if (out_len < sizeof(*r) + f->desc_len) return NT_STATUS_BUFFER_TOO_SMALL;
+        r->InputLength = c->in_len;
+        r->OutputLength = c->out_len;
+        r->DescriptorLength = f->desc_len;
+        memcpy(r->Descriptor, f->desc, f->desc_len);
+        *info = sizeof(*r) + f->desc_len;
+        return NT_STATUS_SUCCESS;
+    }
+    case IOCTL_HID_ENABLE_WAKE_ON_SX:
+        if (in_len < 1 || !sys) return NT_STATUS_INVALID_PARAMETER;
+        return *(UINT8 *)sys ? wait_wake(f) : NT_STATUS_SUCCESS;
     case IOCTL_HID_GET_POLL_FREQUENCY_MSEC:
         if (out_len < 4) return NT_STATUS_BUFFER_TOO_SMALL;
         *(UINT32 *)sys = f->mini->polled ? 8 : 0;
@@ -672,7 +717,6 @@ static NT_STATUS coll_ioctl(Coll *c, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
     case IOCTL_HID_SET_POLL_FREQUENCY_MSEC:
     case IOCTL_HID_GET_DRIVER_CONFIG:
     case IOCTL_HID_SET_DRIVER_CONFIG:
-    case IOCTL_HID_ENABLE_WAKE_ON_SX:
     case IOCTL_HID_SET_S0_IDLE_TIMEOUT:
         return NT_STATUS_SUCCESS;
     case IOCTL_HID_GET_FEATURE: case IOCTL_HID_SET_FEATURE: case IOCTL_HID_GET_INPUT_REPORT:
@@ -906,7 +950,7 @@ static NT_STATUS fdo_started(Fdo *f)
     if (f->max_in) {
         nt_KeInitializeEvent(&f->pump_done, NT_NotificationEvent, 0);
         f->stopping = false;
-        f->pump = sched_create_thread_ex("hid-read", pump, f, 9, 16 * 1024) != NULL;
+        f->pump = sched_create_thread_ex("hid-read", pump, f, PRIO_DEVICE_IO, 16 * 1024) != NULL;   /* (input: above programs) */
     }
     return NT_STATUS_SUCCESS;
 }

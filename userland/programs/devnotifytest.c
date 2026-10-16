@@ -30,13 +30,13 @@ __declspec(dllimport) DWORD WINAPI CM_Unregister_Notification(HANDLE h);
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); } } while (0)
 
-static const GUID g_usb = NOVA_IF_USB_DEVICE, g_kbd = NOVA_IF_KEYBOARD;
+static const GUID g_usb = NOVA_IF_USB_DEVICE, g_kbd = NOVA_IF_KEYBOARD, g_hid = NOVA_IF_HID;
 
 /* What arrived (1) and left (2), by who heard */
 static volatile LONG msg_usb_kbd, msg_usb_stick, all_kbd, vol_arrival, vol_removal, devnodes, cm_kbd, cm_enum, cm_started, cm_removed;
 static volatile LONG bad_name;
 static volatile LONG handle_removal, bad_handle;
-static WCHAR keyboard_device_path[256];
+static WCHAR keyboard_device_path[256];     /* the keyboard's HID interface: the one kbdhid publishes and a program opens */
 static HANDLE usb_handle, handle_reg;
 
 static LRESULT CALLBACK msg_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
@@ -84,12 +84,12 @@ static LRESULT CALLBACK top_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             if (!memcmp(&d->dbcc_classguid, &g_kbd, sizeof(GUID)) && strstr(d->dbcc_name, "\\\\?\\HID#VID_0627&PID_0001#")) {
                 printf("keyboard interface %s: %s\n", v == 1 ? "arrival" : "removal", d->dbcc_name);
                 all_kbd |= v;
-                if (v == 1) {
-                    int i = 0;
-                    for (; d->dbcc_name[i] && i < (int)(sizeof(keyboard_device_path) / sizeof(keyboard_device_path[0])) - 1; i++)
-                        keyboard_device_path[i] = (unsigned char)d->dbcc_name[i];
-                    keyboard_device_path[i] = 0;
-                }
+            }
+            if (v == 1 && !memcmp(&d->dbcc_classguid, &g_hid, sizeof(GUID)) && strstr(d->dbcc_name, "\\\\?\\HID#VID_0627&PID_0001#")) {
+                int i = 0;
+                for (; d->dbcc_name[i] && i < (int)(sizeof(keyboard_device_path) / sizeof(keyboard_device_path[0])) - 1; i++)
+                    keyboard_device_path[i] = (unsigned char)d->dbcc_name[i];
+                keyboard_device_path[i] = 0;
             }
         }
         return TRUE;

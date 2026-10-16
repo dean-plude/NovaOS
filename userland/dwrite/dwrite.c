@@ -1258,9 +1258,7 @@ static HRESULT STDMETHODCALLTYPE fa_ellipsis(Factory *f, void *fmt, void **out)
 static HRESULT STDMETHODCALLTYPE fa_text_analyzer(Factory *f, void **out)
 {
     (void)f;
-    dw_log("unimplemented IDWriteFactory::CreateTextAnalyzer");
-    *out = NULL;
-    return E_NOTIMPL;
+    return text_analyzer_create(out);
 }
 static HRESULT STDMETHODCALLTYPE fa_number_subst(Factory *f, UINT32 method, const WCHAR *locale, BOOL ignore, void **out)
 {
@@ -1413,4 +1411,3 @@ DWAPI HRESULT WINAPI DWriteCreateFactory(UINT32 type, REFIID riid, void **out)
     if (FAILED(hr)) dw_log("DWriteCreateFactory: interface %x not supported", riid->Data1);
     return hr;
 }
-

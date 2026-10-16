@@ -267,6 +267,25 @@ for resources).  It is built 64-bit only into `C:\Programs` unless a
 | `selftest` | `true`: list it among the self-test programs in [testing.md](testing.md) |
 | `sources` | With `msstl`: more `.cpp` files compiled into it with its flags, as paths or globs from the repository root, e.g. a vendored library's (`calc.json` builds Windows Calculator's CalcManager) |
 | `include`, `force_include` | With `sources`: directories searched for headers, and headers every file starts with (Visual Studio's `/FI`, for a project's forced precompiled header), from the repository root |
+| `winrt_abi` | `true`: a `.cpp` built against the Windows Runtime C++ ABI headers (`windows.ui.composition.h`, `microsoft.ui.xaml.h` ...), which the build generates without MIDL (below; `userland/programs/winrtabitest.cpp`) |
+
+### Windows Runtime ABI headers (no MIDL)
+
+C++ code written against the Windows Runtime (`ABI::Windows::UI::Composition::ICompositor`,
+`__uuidof`, `IVector<HSTRING>`, the XAML framework's own sources) includes the
+headers MIDL makes from IDL and the Windows SDK ships.  NovaOS makes them with
+`tools/winrt/abigen.py` (Python, a few seconds) from Windows' metadata
+(`third_party/winmd`, from windows-rs) and the XAML framework's MIDL 3 IDL
+(`third_party/microsoft-ui-xaml`): one `namespace.h` per namespace (its
+interfaces in vtable order with their IIDs, delegates, runtime class names,
+the generic instances its types use) and a `namespace.values.h` (enums,
+structs, generic interface templates), on `userland/include/winrt_abi.h`.  The
+userland build generates them into its include directory
+(`build/userland/include/winrt-abi`) the first time a manifest with
+`"winrt_abi": true` needs them.  `python3 tools/winrt/abigen.py --check` (run by
+`build_userland.py --check`, so by CI's checks) compares what the IDL gives with
+Microsoft's published `Microsoft.UI.Xaml.winmd`: the same interfaces, member
+order and signatures.  See [design/windows-ui-xaml.md](design/windows-ui-xaml.md).
 
 ### Generated and prebuilt files
 

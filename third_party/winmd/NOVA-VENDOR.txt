@@ -1,0 +1,27 @@
+Windows Runtime metadata (.winmd), vendored for NovaOS
+======================================================
+
+Source: https://github.com/microsoft/windows-rs (MIT OR Apache-2.0; NovaOS
+takes it under MIT, LICENSE), commit 9568d7a621539f02b965e1cbfb811bc9c45d5f6f.
+Kept, unchanged:
+  crates/libs/default/Windows.winmd          Windows' own types (the
+      Windows SDK's Windows.* namespaces: Foundation, UI.Composition,
+      ApplicationModel.Core, UI.Core, ...)
+  crates/tools/reactor-metadata/winmd/       the Windows App SDK's
+      Microsoft.UI.winmd                     "lifted" Composition, Input,
+      Microsoft.UI.Text.winmd                Content, Dispatching and
+      Microsoft.Graphics.winmd               Windowing types XAML's IDL
+      Microsoft.Foundation.winmd             names, DirectX enums, MRT Core
+      Microsoft.Windows.ApplicationModel.Resources.winmd
+      Microsoft.UI.Xaml.winmd                the published XAML types: read
+                                             only for their IIDs
+
+tools/winrt/abigen.py reads them, with the XAML framework's IDL
+(third_party/microsoft-ui-xaml), and writes the C++ ABI headers MIDL and
+the Windows SDK would give (docs/design/windows-ui-xaml.md).  The build
+generates them into its include directory for the programs and DLLs whose
+manifest says "winrt_abi": true.
+
+To update: copy the same files from a newer windows-rs commit and rebuild;
+abigen.py's check (python3 tools/winrt/abigen.py --check) compares the
+XAML IDL against Microsoft.UI.Xaml.winmd.

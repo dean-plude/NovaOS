@@ -37,7 +37,10 @@ typedef struct {
 
 #define NOVA_PNP_ARRIVAL 1
 #define NOVA_PNP_REMOVAL 2
-typedef struct { DWORD seq, kind, id, reserved; } NovaPnpEvent;
+#define NOVA_PNP_QUERY_REMOVE 3
+#define NOVA_PNP_QUERY_REMOVE_FAILED 4
+#define NOVA_PNP_REMOVE_PENDING 5
+typedef struct { DWORD seq, kind, id, reserved; } NovaPnpEvent; /* kind: NOVA_PNP_* */
 
 typedef struct {
     DWORD after, wait_ms, max;      /* in */
@@ -54,6 +57,12 @@ static inline DWORD nova_pnp_count(void)
 static inline BOOL nova_pnp_node(DWORD id, NovaPnpNode *n)
 {
     return NtNovaGuiCtl(0, NOVA_CTL_PNP, 1 | (ULONG_PTR)id << 8, n) != 0;
+}
+
+/* The PnP node of an open device handle, or 0 if it is not a device node. */
+static inline DWORD nova_pnp_handle_node(HANDLE handle)
+{
+    return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 9, (void *)(ULONG_PTR)handle);
 }
 
 /* The events after r->after (r->max of them at most), waiting up to

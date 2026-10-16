@@ -40,6 +40,15 @@ static void device_destroy(UmObject *o)
     NtIoClose(((DeviceFile *)o)->fo);
 }
 
+UINT32 um_driver_pnp_node(UmProcess *p, UINT64 handle)
+{
+    UmObject *o = um_handle_object(p, handle, UO_DEVICE);
+    if (!o) return 0;
+    UINT32 node = NtPnpNodeForFile(((DeviceFile *)o)->fo);
+    um_ob_unref(o);
+    return node;
+}
+
 bool um_driver_name(const char *path)
 {
     return NtIoIsDevice(path);

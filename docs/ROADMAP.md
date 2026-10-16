@@ -573,17 +573,18 @@ item ends when a named program or test demonstrates it.
   service, `WM_DEVICECHANGE`~~ Done: the PlugPlay service running and
   keeping `HKLM\SYSTEM\CurrentControlSet\Enum`,
   `RegisterDeviceNotification` (`DBT_DEVICEARRIVAL`,
-  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services)
-  and `CM_Register_Notification`.  ~~setupapi's and cfgmgr32's
+  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services and
+  open device handles) and `CM_Register_Notification`.  ~~setupapi's and cfgmgr32's
   enumeration of the tree~~ Done: `SetupDiGetClassDevs` for every class,
   enumerator and interface class, `CM_Locate_DevNode`,
   `CM_Get_Child`/`Sibling`/`Parent`, device ID lists, status, registry
   and `DEVPKEY` properties (a device's bus type and container too), a
   device interface's properties (`CM_Get_Device_Interface_PropertyW`),
   device keys, and `pnputil /enum-devices`
-  matching the driver store.  Still to do: query-remove
-  (`DBT_DEVICEQUERYREMOVE`) and handle notifications
-  (`DBT_DEVTYP_HANDLE`).
+  matching the driver store.  Still to do: a synchronous query-remove
+  round-trip (`DBT_DEVICEQUERYREMOVE`, `DBT_DEVICEQUERYREMOVEFAILED`,
+  `DBT_DEVICEREMOVEPENDING`) so applications can close handles or veto before
+  `IRP_MN_QUERY_REMOVE_DEVICE`; current query notifications are asynchronous.
 - Windows drivers the Windows 11 way (Phase 30, complete: all eleven
   steps are in; design in [design/windows-drivers.md](design/windows-drivers.md),
   what ships in [drivers.md](drivers.md)): unchanged Windows driver

@@ -149,7 +149,9 @@ static DWORD WINAPI follower(void *arg)
         int n = nova_pnp_events(&r);
         for (int i = 0; i < n; i++) {
             NovaPnpNode node;
-            if (nova_pnp_node(r.e[i].id, &node)) event(&node, r.e[i].kind == NOVA_PNP_ARRIVAL);
+            if ((r.e[i].kind == NOVA_PNP_ARRIVAL || r.e[i].kind == NOVA_PNP_REMOVAL) &&
+                nova_pnp_node(r.e[i].id, &node))
+                event(&node, r.e[i].kind == NOVA_PNP_ARRIVAL);
         }
         if (n) after = r.e[n - 1].seq;
     }

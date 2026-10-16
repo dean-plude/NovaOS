@@ -135,6 +135,8 @@ item ends when a named program or test demonstrates it.
   [Complex text](HISTORY.md#complex-text-harfbuzz-freetype-and-uniscribe).
 - ~~**Direct2D** (`d2d1.dll`)~~ Done (19.2): a software Direct2D, with
   text through DirectWrite's text layouts; see [Direct2D](HISTORY.md#direct2d).
+  Direct2D 1.1's devices and device contexts followed for XAML (32.3):
+  see [Direct2D device contexts](HISTORY.md#direct2d-device-contexts).
 - ~~**ffmpeg's imports**~~ Done (19.3): see [ffmpeg](HISTORY.md#ffmpeg).
   `ffmpeg -i in.mp4 out.webm` (H.264 and AAC to VP9 and Opus) completes,
   and the nightly app corpus runs it.
@@ -327,8 +329,9 @@ item ends when a named program or test demonstrates it.
   `UnitConverter` needs the Concurrency Runtime's `task<>`, and the unit
   and currency data comes from the app's C# view models); then the
   shipped UWP package itself, which needs MSIX deployment,
-  `Windows.UI.Xaml` with WinUI 2 (Phase 32, under way: WinRT activation
-  and the app model are step 32.1) and the UWP .NET runtime.
+  `Windows.UI.Xaml` with WinUI 2 (Phase 32, under way: WinRT activation,
+  the app model and the compositor are done, Direct2D device contexts
+  too; the XAML build is next) and the UWP .NET runtime.
 
 <!-- END generated:next-apps -->
 

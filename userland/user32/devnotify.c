@@ -183,6 +183,7 @@ static DWORD WINAPI follower(void *arg)
 {
     (void)arg;
     static NovaPnpRead r;
+    BOOL changed = FALSE;                  /* (arrivals and removals not yet broadcast, across batches) */
     for (;;) {
         memset(&r, 0, sizeof(r));
         r.after = g_after;
@@ -190,10 +191,10 @@ static DWORD WINAPI follower(void *arg)
         r.max = 32;
         int n = nova_pnp_events(&r);
         if (!n) {
+            if (changed) { broadcast(); changed = FALSE; }
             if (r.newest < g_after) g_after = r.newest;        /* (not to wait past the kernel's newest) */
             continue;
         }
-        BOOL changed = FALSE;
         for (int i = 0; i < n; i++) {
             NovaPnpNode node;
             if (!nova_pnp_node(r.e[i].id, &node)) continue;
@@ -213,7 +214,7 @@ static DWORD WINAPI follower(void *arg)
             handle_event(node.id, what);
         }
         g_after = r.e[n - 1].seq;
-        if (n < 32 && changed) broadcast();   /* (after the batch: one DBT_DEVNODES_CHANGED for it) */
+        if (n < 32 && changed) { broadcast(); changed = FALSE; }   /* (after the batch: one DBT_DEVNODES_CHANGED for it) */
     }
     return 0;
 }

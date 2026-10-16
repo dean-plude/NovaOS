@@ -1174,6 +1174,7 @@ static void usb_remove(NtPdo *p)
     for (NtIface *f = p->ifaces, *next; f; f = next) { next = f->next; kfree(f); }
     unload_if_idle(drv);
     filters_gone(p);
+    PnpRemove(p->node);          /* (the usb thread left the node for now: see remove_dev) */
     kfree(p);
 }
 
@@ -1276,24 +1277,27 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
         }
         kfree(n);
     } else {
+        bool found = false;
         pnp_lock();
         for (int i = 0; i < g_npdo; i++)
-            if (g_pdo[i]->usb && g_pdo[i]->node == k->node) { usb_remove(g_pdo[i]); break; }
+            if (g_pdo[i]->usb && g_pdo[i]->node == k->node) { usb_remove(g_pdo[i]); found = true; break; }
         pnp_unlock();
+        if (!found) PnpRemove(k->node);
     }
     nt_IoFreeWorkItem(k->w);
     kfree(k);
 }
 
-static void defer(int what, UINT32 node)
+static bool defer(int what, UINT32 node)
 {
     PnpWork *k = kzalloc(sizeof(*k));
-    if (!k) return;
+    if (!k) return false;
     k->w = nt_IoAllocateWorkItem(NULL);
-    if (!k->w) { kfree(k); return; }
+    if (!k->w) { kfree(k); return false; }
     k->what = what;
     k->node = node;
     nt_IoQueueWorkItem(k->w, work_routine, 1 /* DelayedWorkQueue */, k);
+    return true;
 }
 
 /* Set once NtPnpBoot ran: the registry is loaded and the work-item thread
@@ -1301,7 +1305,7 @@ static void defer(int what, UINT32 node)
 static volatile bool g_booted;
 
 void NtPnpUsbArrived(UINT32 node) { if (g_booted) defer(WORK_USB_ARRIVED, node); }
-void NtPnpSurpriseRemoval(UINT32 node) { if (g_booted) defer(WORK_SURPRISE, node); }
+bool NtPnpSurpriseRemoval(UINT32 node) { return g_booted && defer(WORK_SURPRISE, node); }
 
 /* ---- root-enumerated devices ---- */
 

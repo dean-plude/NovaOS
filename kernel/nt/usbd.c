@@ -1067,7 +1067,9 @@ static void usb_gone(void *inst)
     UsbdDev *v = inst;
     v->gone = true;
     kprintf("[USBD] %s: unplugged\n", v->usb->name);
-    NtPnpSurpriseRemoval(v->node);
+    /* (a composite device's own node has no stack of its own: only a
+     * single-function device's node is removed behind its work item) */
+    if (NtPnpSurpriseRemoval(v->node) && v->node == v->usb->pnp) v->usb->pnp_deferred = true;
 }
 
 NT_DEVICE_OBJECT *NtUsbPdo(UINT32 node)

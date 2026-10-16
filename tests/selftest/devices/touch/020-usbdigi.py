@@ -62,7 +62,7 @@ TESTS = [
                       r'\[HIDDIGI\] 1209:000b: precision touchpad configuration: touchpad mode on',
                       r'\[MOUHID\] 1209:000b: touchpad \(mouse mode\), input reports \d+ bytes'],
          acts=[(r'digitest step 1:', _send('touch=1:8192:16384', 0.3, 'touch=0:8192:16384')),
-               (r'digitest step 2:', _send('pen=16:24575:16384', 0.2, 'pen=17:24575:16384:512', 0.3,
+               (r'digitest step 2:', _send('pen=16:24575:16384:0', 0.2, 'pen=17:24575:16384:512', 0.3,
                                            'pen=16:24575:16384:0', 0.2, 'pen=0:24575:16384:0')),
                (r'digitest step 3:', _send(*_RIGHT)),
                (r'digitest step 4:', _send('pad=1:500:500 pad=0:500:500')),

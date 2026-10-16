@@ -17,7 +17,8 @@
  *     the PDO: it creates its functional device object and attaches it;
  *   - IRP_MN_QUERY_CAPABILITIES, then IRP_MN_START_DEVICE down the stack
  *     with the function's resources from its configuration space: each
- *     memory and I/O BAR, and its interrupt line (a GSI from ACPI's _PRT,
+ *     memory and I/O BAR, and its interrupt line (a GSI from ACPI's _PRT, or
+ *     swizzled through the bridges above a function with none,
  *     routed to a vector of its own, intr.c), raw and translated.
  *
  * NtPnpStop takes a started device away again the way Windows disables
@@ -278,7 +279,7 @@ static bool build_resources(NtPdo *p)
     UINT32 gsi = 0;
     bool level = true, low = true, have = false;
     if (pin >= 1 && pin <= 4) {
-        have = d->bus == 0 && AmlPciIrq(d->dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        have = AmlPciIrq(d->bus, d->dev, (UINT8)(pin - 1), &gsi, &level, &low);
         if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = low = true; }
     }
     UINT8 vector = have ? NtIntrVector(gsi, level, low) : 0;

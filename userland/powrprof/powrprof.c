@@ -1,7 +1,8 @@
 /*
- * powrprof.dll — power management.  NovaOS runs every processor at one
- * fixed speed, with the "Balanced" scheme active; batteries, the lid,
- * thermal zones and the last sleep and wake come from the kernel
+ * powrprof.dll — power management.  NovaOS runs every processor at its
+ * full speed unless a thermal zone throttles it for passive cooling, with
+ * the "Balanced" scheme active; the processors' speeds, batteries, the
+ * lid, thermal zones and the last sleep and wake come from the kernel
  * (NtPowerInformation).
  */
 #include <windows.h>
@@ -29,6 +30,8 @@ POWRPROF LONG WINAPI CallNtPowerInformation(int level, PVOID in, ULONG inlen, PV
     case 11: {                                       /* ProcessorInformation: one entry per CPU */
         ULONG need = si.dwNumberOfProcessors * (ULONG)sizeof(PPI);
         if (!out || outlen < need) return STATUS_BUFFER_TOO_SMALL_;
+        if (NtPowerInformation(11, in, inlen, out, need) == STATUS_SUCCESS_)
+            return STATUS_SUCCESS_;                  /* (the speed, and MhzLimit while throttled) */
         PPI *p = out;
         for (DWORD i = 0; i < si.dwNumberOfProcessors; i++) {
             p[i].Number = i;

@@ -1,5 +1,7 @@
 # edu: a Plug and Play driver with real resources (step 30.3).  QEMU's edu
-# device (-device edu, PCI 1234:11e8) has no NovaOS driver.  With test
+# device (-device edu, PCI 1234:11e8) has no NovaOS driver.  It sits
+# behind a PCIe root port with no _PRT, so its interrupt line is routed by
+# the bridge swizzle (kernel/hal/aml.c).  With test
 # signing on, "pnputil /add-driver edutest.inf /install" stages edutest.sys
 # (tools/drivertest/edutest.c, in C:\Tests\Edu) and installs it on the
 # device: the PnP manager (kernel/nt/pnp.c) loads it, calls AddDevice and
@@ -26,7 +28,9 @@ DOC = ('QEMU\'s edu PCI device: a Plug and Play driver (edutest.sys) installed w
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 TESTS = [
     Test('edu test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2,
+         boot_expect=[r'\[ACPI\] PCI bus \w\w behind bridge 00:\w\w\.\d: no _PRT',
+                      r'\[ACPI\] PCI \w\w:00\.0 INTA: GSI \d+ \(swizzled through its bridges\)']),
     Test('edu restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('edu install', r'pnputil /add-driver C:\Tests\Edu\edutest.inf /install',
          [r'Driver package installed on device: PCI\\VEN_1234&DEV_11E8',

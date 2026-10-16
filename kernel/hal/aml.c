@@ -23,6 +23,7 @@
 #include "ec.h"
 #include "gpio.h"
 #include "pci.h"
+#include "throttle.h"
 #include "ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/cpu.h"
@@ -40,6 +41,8 @@
 #include <uacpi/sleep.h>
 #include <uacpi/utilities.h>
 #include <uacpi/resources.h>
+#include <uacpi/tables.h>
+#include <uacpi/acpi.h>
 #include <uacpi/kernel_api.h>
 
 extern uint64_t g_tsc_per_tick;          /* apic.c: TSC ticks per 10 ms */
@@ -233,12 +236,21 @@ uacpi_status uacpi_kernel_handle_firmware_request(uacpi_firmware_request *req)
     return UACPI_STATUS_OK;
 }
 
-/* The SCI: an interrupt through the I/O APIC, else polled by the acpi thread */
+/* The SCI: an interrupt through the I/O APIC, else polled by the acpi thread.
+ * A GPE block device (ACPI0006) may have an interrupt of its own instead
+ * of the SCI: those share one vector (IRQ_GPE_BLOCK) and are polled with
+ * the SCI too. */
 static uacpi_interrupt_handler g_sci;
 static uacpi_handle            g_sci_ctx;
 static bool                    g_sci_irq;
 static volatile UINT32         g_kick;           /* work queued, or something to read */
 static volatile UINT32         g_work_busy;
+
+#define MAX_BLOCK_IRQS 4
+typedef struct { uacpi_interrupt_handler fn; uacpi_handle ctx; UINT32 irq; } BlockIrq;
+static BlockIrq g_block_irq[MAX_BLOCK_IRQS];
+static bool     g_block_vector;                  /* IRQ_GPE_BLOCK installed */
+static bool     g_next_level = true, g_next_low; /* the next block interrupt's _CRS (found_gpe_block) */
 
 static void kick(void)
 {
@@ -253,9 +265,35 @@ static void sci_interrupt(void *ctx)
     g_sci(g_sci_ctx);                                /* (queuing work kicks the thread) */
 }
 
+static void block_interrupt(void *ctx)
+{
+    (void)ctx;
+    for (int i = 0; i < MAX_BLOCK_IRQS; i++) {
+        uacpi_interrupt_handler fn = __atomic_load_n(&g_block_irq[i].fn, __ATOMIC_ACQUIRE);
+        if (fn) fn(g_block_irq[i].ctx);
+    }
+}
+
 uacpi_status uacpi_kernel_install_interrupt_handler(uacpi_u32 irq, uacpi_interrupt_handler h,
                                                     uacpi_handle ctx, uacpi_handle *out)
 {
+    if (g_sci) {                                     /* (the SCI comes first: uacpi_initialize) */
+        for (int i = 0; i < MAX_BLOCK_IRQS; i++) {
+            if (g_block_irq[i].fn) continue;
+            g_block_irq[i].ctx = ctx;
+            g_block_irq[i].irq = irq;
+            __atomic_store_n(&g_block_irq[i].fn, h, __ATOMIC_RELEASE);
+            *out = &g_block_irq[i];
+            UINT32 gsi;
+            if (!g_block_vector) g_block_vector = IrqInstall(IRQ_GPE_BLOCK, block_interrupt, NULL);
+            if (g_block_vector && IoApicRouteIrq(irq, g_next_level, g_next_low, IRQ_GPE_BLOCK, &gsi))
+                kprintf("[ACPI] GPE block interrupt on IRQ %u (GSI %u)\n", irq, gsi);
+            else
+                kprintf("[ACPI] GPE block interrupt on IRQ %u: no I/O APIC input, polled\n", irq);
+            return UACPI_STATUS_OK;
+        }
+        return UACPI_STATUS_OUT_OF_MEMORY;
+    }
     g_sci_ctx = ctx;
     g_sci = h;
     *out = (uacpi_handle)&g_sci;
@@ -272,8 +310,9 @@ uacpi_status uacpi_kernel_install_interrupt_handler(uacpi_u32 irq, uacpi_interru
 
 uacpi_status uacpi_kernel_uninstall_interrupt_handler(uacpi_interrupt_handler h, uacpi_handle irq)
 {
-    (void)h; (void)irq;
-    g_sci = NULL;
+    (void)h;
+    if (irq == (uacpi_handle)&g_sci) g_sci = NULL;
+    else __atomic_store_n(&((BlockIrq *)irq)->fn, NULL, __ATOMIC_RELEASE);
     return UACPI_STATUS_OK;
 }
 
@@ -556,11 +595,21 @@ bool AmlLidClosedEvent(void) { return __atomic_exchange_n(&g_lid_event, 0, __ATO
  * ----------------------------------------------------------------------- */
 #define MAX_ZONES 8
 
+#define MAX_PSL 16
+
 typedef struct {
     uacpi_namespace_node *node;
     AmlThermalZone        z;
     UINT64                next;              /* tick of the next reading */
     bool                  trips, hot_sent, crit_sent;
+    /* passive cooling (ACPI 6.5, 11.1.5): the processors it slows (_PSL),
+     * its constants (_TC1, _TC2) and period (_TSP, tenths of a second) */
+    void                 *psl[MAX_PSL];
+    int                   npsl;
+    INT32                 tc1, tc2;
+    UINT32                tsp, last;         /* last: the previous reading */
+    INT32                 perf;              /* the performance it asks for, percent */
+    UINT64                next_passive;
 } Zone;
 
 static Zone            g_zone[MAX_ZONES];
@@ -584,6 +633,28 @@ static void celsius(char *out, UINT32 dk)
     ksnprintf(out, 16, "%s%d.%d C", sign, t / 10, t % 10);
 }
 
+/* _PSL, _TC1, _TC2 and _TSP.  Without _TC1/_TC2 the zone uses 4 and 3
+ * (common firmware values); without _PSL, every processor. */
+static void read_passive(Zone *zn)
+{
+    uacpi_u64 v;
+    zn->tc1 = uacpi_eval_simple_integer(zn->node, "_TC1", &v) == UACPI_STATUS_OK && v < 100 ? (INT32)v : 4;
+    zn->tc2 = uacpi_eval_simple_integer(zn->node, "_TC2", &v) == UACPI_STATUS_OK && v < 100 ? (INT32)v : 3;
+    zn->tsp = uacpi_eval_simple_integer(zn->node, "_TSP", &v) == UACPI_STATUS_OK && v && v < 1000 ? (UINT32)v : 10;
+    zn->npsl = 0;
+    uacpi_object *o = NULL;
+    uacpi_object_array a;
+    if (uacpi_eval_simple_package(zn->node, "_PSL", &o) != UACPI_STATUS_OK) return;
+    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK)
+        for (uacpi_size i = 0; i < a.count && zn->npsl < MAX_PSL; i++) {
+            uacpi_namespace_node *n = NULL;
+            if (uacpi_object_is_aml_namepath(a.objects[i]) &&
+                uacpi_object_resolve_as_aml_namepath(a.objects[i], zn->node, &n) == UACPI_STATUS_OK && n)
+                zn->psl[zn->npsl++] = n;
+        }
+    uacpi_object_unref(o);
+}
+
 static void read_trips(Zone *zn)
 {
     AmlThermalZone z = zn->z;
@@ -592,10 +663,37 @@ static void read_trips(Zone *zn)
     z.critical = zone_int(zn, "_CRT");
     uacpi_u64 tzp = 0;
     z.period = uacpi_eval_simple_integer(zn->node, "_TZP", &tzp) == UACPI_STATUS_OK ? (UINT32)tzp : 0;
+    read_passive(zn);
+    z.tc1 = (UINT32)zn->tc1;
+    z.tc2 = (UINT32)zn->tc2;
+    z.processors = 0;
+    for (int i = 0; i < zn->npsl; i++) {
+        int cpu = ThrottleCpuOf(zn->psl[i]);
+        if (cpu >= 0 && cpu < 64) z.processors |= 1ull << cpu;
+    }
     IrqState s = spin_lock_irqsave(&g_zone_lock);
     zn->z = z;
     spin_unlock_irqrestore(&g_zone_lock, s);
     zn->trips = true;
+}
+
+/* At or above _PSV (and until the processors are back to full speed):
+ * every _TSP, performance changes by -(_TC1 * (Tn - Tn-1) + _TC2 * (Tn -
+ * _PSV)) percent, the temperatures in kelvin (ACPI 6.5, 11.1.5.1) */
+static void passive(Zone *zn, UINT32 t)
+{
+    UINT32 psv = zn->z.passive;
+    if (!psv || (t < psv && zn->perf >= 100)) {
+        zn->perf = 100;
+    } else if (sched_ticks() >= zn->next_passive) {
+        INT32 dp = (zn->tc1 * ((INT32)t - (INT32)(zn->last ? zn->last : t)) + zn->tc2 * ((INT32)t - (INT32)psv)) / 10;
+        zn->perf -= dp;
+        if (zn->perf < 0) zn->perf = 0;
+        if (zn->perf > 100) zn->perf = 100;
+        zn->next_passive = sched_ticks() + zn->tsp * 10;
+        ThrottlePassive((int)(zn - g_zone), zn->psl, zn->npsl, (UINT32)zn->perf);
+    }
+    zn->last = t;
 }
 
 static void read_zone(Zone *zn)
@@ -604,6 +702,7 @@ static void read_zone(Zone *zn)
     UINT32 t = zone_int(zn, "_TMP");
     /* polled every _TZP (at least every 10 s, as notifications alone can be missed) */
     UINT32 period = zn->z.period && zn->z.period < 100 ? zn->z.period : 100;
+    if (zn->perf < 100 && zn->tsp < period) period = zn->tsp;     /* (passive cooling: every _TSP) */
     zn->next = sched_ticks() + period * 10;
     if (!t) return;
     AmlThermalZone z = zn->z;
@@ -615,6 +714,7 @@ static void read_zone(Zone *zn)
         kprintf("[ACPI] %s: %s, %s the passive trip point (%s): passive cooling %s\n", z.name, now,
                 cooling ? "at or above" : "below", trip, cooling ? "on" : "off");
     }
+    passive(zn, t);
     if (z.critical && t >= z.critical) {
         if (!zn->crit_sent) {
             celsius(trip, z.critical);
@@ -659,6 +759,7 @@ static uacpi_iteration_decision found_zone(void *user, uacpi_namespace_node *nod
     if (g_nzone == MAX_ZONES) return UACPI_ITERATION_DECISION_BREAK;
     Zone *zn = &g_zone[g_nzone];
     zn->node = node;
+    zn->perf = 100;
     const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
     strncpy(zn->z.name, path ? path : "?", sizeof(zn->z.name) - 1);
     uacpi_free_absolute_path(path);
@@ -695,14 +796,30 @@ int AmlThermalZones(AmlThermalZone *out, int max)
 int AmlThermalRequest(void) { return (int)__atomic_exchange_n(&g_thermal_req, AML_THERMAL_NONE, __ATOMIC_ACQ_REL); }
 
 /* -----------------------------------------------------------------------
- * PCI interrupt routing: the root bridge's _PRT (APIC mode, \_PIC(1)),
- * with link devices (PNP0C0F) resolved through their _CRS
+ * PCI interrupt routing: the root bridges' _PRT (APIC mode, \_PIC(1)),
+ * with link devices (PNP0C0F) resolved through their _CRS, and behind
+ * PCI-to-PCI bridges (PCIe root and switch ports among them) the bridge's
+ * own _PRT where the firmware gives one, else the standard swizzle (PCI
+ * Bridge spec 1.2, 9.1): pin (pin + device) mod 4 on the bridge's own
+ * device number, one bridge up at a time, until a bus with a _PRT
  * ----------------------------------------------------------------------- */
-#define MAX_ROUTES 128
+#define MAX_ROUTES  256
+#define MAX_BRIDGES 32
 
-typedef struct { UINT8 dev, pin; bool level, low; UINT32 gsi; } PciRoute;
+typedef struct { UINT8 bus, dev, pin; bool level, low; UINT32 gsi; } PciRoute;
 static PciRoute g_prt[MAX_ROUTES];
 static int      g_nprt;
+
+typedef struct {
+    UINT8                 bus, dev, fn;          /* the bridge */
+    UINT8                 sec;                   /* its secondary bus */
+    uacpi_namespace_node *node;                  /* its namespace device, if described */
+    bool                  prt;                   /* the secondary bus has its own _PRT */
+} PciBridge;
+static PciBridge g_bridge[MAX_BRIDGES];
+static int       g_nbridge;
+static UINT8     g_prt_bus[MAX_BRIDGES + 8];    /* buses with a _PRT (root buses first) */
+static int       g_nprt_bus;
 
 typedef struct { UINT32 gsi; bool level, low, found; } LinkIrq;
 
@@ -724,37 +841,97 @@ static uacpi_iteration_decision link_resource(void *user, uacpi_resource *r)
     return UACPI_ITERATION_DECISION_BREAK;
 }
 
-static uacpi_iteration_decision found_root_bridge(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+/* @node's _PRT as the routing of @bus; how many entries, -1 if it has none */
+static int add_prt(uacpi_namespace_node *node, UINT8 bus, int *links)
 {
-    (void)depth;
     uacpi_pci_routing_table *t = NULL;
-    if (*(bool *)user || uacpi_get_pci_routing_table(node, &t) != UACPI_STATUS_OK) return UACPI_ITERATION_DECISION_CONTINUE;
-    *(bool *)user = true;                         /* the first root bridge: bus 0 */
-    int links = 0;
+    if (g_nprt_bus == (int)sizeof(g_prt_bus) || uacpi_get_pci_routing_table(node, &t) != UACPI_STATUS_OK) return -1;
+    g_prt_bus[g_nprt_bus++] = bus;
+    int n = 0;
     for (uacpi_size i = 0; i < t->num_entries && g_nprt < MAX_ROUTES; i++) {
         uacpi_pci_routing_table_entry *e = &t->entries[i];
-        PciRoute r = { (UINT8)(e->address >> 16), e->pin, true, true, e->index };
+        PciRoute r = { bus, (UINT8)(e->address >> 16), e->pin, true, true, e->index };
         if (e->source) {                          /* a link device: its current IRQ */
             LinkIrq l = { 0 };
             uacpi_for_each_device_resource(e->source, "_CRS", link_resource, &l);
             if (!l.found) continue;
             r.gsi = l.gsi; r.level = l.level; r.low = l.low;
-            links++;
+            (*links)++;
         }
         g_prt[g_nprt++] = r;
+        n++;
     }
-    const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
-    kprintf("[ACPI] PCI interrupt routing: %d entries from %s._PRT (%d through link devices)\n",
-            g_nprt, path ? path : "?", links);
-    uacpi_free_absolute_path(path);
     uacpi_free_pci_routing_table(t);
-    return UACPI_ITERATION_DECISION_CONTINUE;
+    return n;
 }
 
-bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
+static bool bus_has_prt(UINT8 bus)
+{
+    for (int i = 0; i < g_nprt_bus; i++) if (g_prt_bus[i] == bus) return true;
+    return false;
+}
+
+/* The namespace device of the function at @dev.@fn below @parent (_ADR) */
+typedef struct { UINT64 adr; uacpi_namespace_node *found; } AdrFind;
+
+static uacpi_iteration_decision match_adr(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)depth;
+    AdrFind *f = user;
+    uacpi_u64 adr;
+    if (uacpi_eval_adr(node, &adr) != UACPI_STATUS_OK || adr != f->adr) return UACPI_ITERATION_DECISION_CONTINUE;
+    f->found = node;
+    return UACPI_ITERATION_DECISION_BREAK;
+}
+
+static uacpi_namespace_node *g_root_node[8];     /* the root bridges' devices, by _BBN */
+static UINT8                 g_root_bus[8];
+static int                   g_nroot;
+
+static uacpi_namespace_node *bus_node(UINT8 bus)
+{
+    for (int i = 0; i < g_nroot; i++) if (g_root_bus[i] == bus) return g_root_node[i];
+    for (int i = 0; i < g_nbridge; i++) if (g_bridge[i].sec == bus) return g_bridge[i].node;
+    return NULL;
+}
+
+/* The PCI-to-PCI bridges (header type 1) found at boot, parents first; the
+ * namespace device of each, and its _PRT */
+static void find_bridges(void)
+{
+    PciDevice d;
+    for (int i = 0; PciAt(i, &d, NULL) && g_nbridge < MAX_BRIDGES; i++) {
+        if ((PciRead32(d.bus, d.dev, d.func, 0x0C) >> 16 & 0x7F) != 1) continue;
+        PciBridge *b = &g_bridge[g_nbridge];
+        b->bus = d.bus; b->dev = d.dev; b->fn = d.func;
+        b->sec = (UINT8)(PciRead32(d.bus, d.dev, d.func, 0x18) >> 8);
+        if (!b->sec || b->sec <= d.bus) continue;               /* (not configured) */
+        b->node = NULL;
+        uacpi_namespace_node *parent = bus_node(d.bus);
+        if (parent) {
+            AdrFind f = { ((UINT64)d.dev << 16) | d.func, NULL };
+            uacpi_namespace_for_each_child(parent, match_adr, NULL, UACPI_OBJECT_DEVICE_BIT, 1, &f);
+            b->node = f.found;
+        }
+        int links = 0, n = b->node ? add_prt(b->node, b->sec, &links) : -1;
+        b->prt = n >= 0;
+        g_nbridge++;
+        if (b->prt) {
+            const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(b->node);
+            kprintf("[ACPI] PCI interrupt routing behind bridge %02x:%02x.%x (bus %02x): %d entries from %s._PRT\n",
+                    d.bus, d.dev, d.func, b->sec, n, path ? path : "?");
+            uacpi_free_absolute_path(path);
+        } else {
+            kprintf("[ACPI] PCI bus %02x behind bridge %02x:%02x.%x: no _PRT, its pins are swizzled onto the bridge's\n",
+                    b->sec, d.bus, d.dev, d.func);
+        }
+    }
+}
+
+static bool lookup(UINT8 bus, UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
 {
     for (int i = 0; i < g_nprt; i++) {
-        if (g_prt[i].dev != dev || g_prt[i].pin != pin) continue;
+        if (g_prt[i].bus != bus || g_prt[i].dev != dev || g_prt[i].pin != pin) continue;
         if (gsi) *gsi = g_prt[i].gsi;
         if (level) *level = g_prt[i].level;
         if (low) *low = g_prt[i].low;
@@ -763,30 +940,144 @@ bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
     return false;
 }
 
-/* Each function on bus 0 that uses an interrupt pin: its GSI goes in the
- * Interrupt Line register, as a PC BIOS would leave it */
+bool AmlPciIrq(UINT8 bus, UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low)
+{
+    for (int hops = 0; hops <= MAX_BRIDGES; hops++) {
+        if (bus_has_prt(bus)) return lookup(bus, dev, pin, gsi, level, low);
+        int i = 0;
+        while (i < g_nbridge && g_bridge[i].sec != bus) i++;
+        if (i == g_nbridge) return false;                       /* (a bus nothing leads to) */
+        pin = (UINT8)((pin + dev) % 4);                         /* the swizzle */
+        dev = g_bridge[i].dev;
+        bus = g_bridge[i].bus;
+    }
+    return false;
+}
+
+/* Each function that uses an interrupt pin: its GSI goes in the Interrupt
+ * Line register, as a PC BIOS would leave it */
 static void route_pci(void)
 {
-    int routed = 0, missing = 0;
-    for (UINT8 dev = 0; dev < 32; dev++)
-        for (UINT8 fn = 0; fn < 8; fn++) {
-            UINT32 id = PciRead32(0, dev, fn, 0);
-            if ((id & 0xFFFF) == 0xFFFF) { if (!fn) break; continue; }
-            UINT32 r3c = PciRead32(0, dev, fn, 0x3C);
-            UINT8 pin = (UINT8)(r3c >> 8);
-            UINT32 gsi;
-            if (pin >= 1 && pin <= 4) {
-                if (AmlPciIrq(dev, pin - 1, &gsi, NULL, NULL) && gsi < 255) {
-                    PciWrite32(0, dev, fn, 0x3C, (r3c & ~0xFFu) | gsi);
-                    routed++;
-                } else {
-                    missing++;
-                }
+    int routed = 0, behind = 0, missing = 0;
+    PciDevice d;
+    for (int i = 0; PciAt(i, &d, NULL); i++) {
+        UINT32 r3c = PciRead32(d.bus, d.dev, d.func, 0x3C);
+        UINT8 pin = (UINT8)(r3c >> 8);
+        UINT32 gsi;
+        if (pin < 1 || pin > 4) continue;
+        if (AmlPciIrq(d.bus, d.dev, pin - 1, &gsi, NULL, NULL) && gsi < 255) {
+            PciWrite32(d.bus, d.dev, d.func, 0x3C, (r3c & ~0xFFu) | gsi);
+            routed++;
+            if (!bus_has_prt(d.bus)) {
+                behind++;
+                kprintf("[ACPI] PCI %02x:%02x.%x INT%c: GSI %u (swizzled through its bridges)\n",
+                        d.bus, d.dev, d.func, 'A' + pin - 1, gsi);
             }
-            if (!fn && !(PciRead32(0, dev, 0, 0x0C) & 0x00800000)) break;   /* single-function */
+        } else {
+            missing++;
         }
-    if (g_nprt) kprintf("[ACPI] Routed the interrupt pins of %d PCI function(s) on bus 0%s\n", routed,
-                        missing ? " (some have no _PRT entry)" : "");
+    }
+    if (g_nprt) kprintf("[ACPI] Routed the interrupt pins of %d PCI function(s), %d behind bridges without a _PRT%s\n",
+                        routed, behind, missing ? " (some have no _PRT entry)" : "");
+}
+
+/* The root bridges, then the bridges below them (in load()) */
+static uacpi_iteration_decision found_root(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)user; (void)depth;
+    if (g_nroot == 8) return UACPI_ITERATION_DECISION_BREAK;
+    uacpi_u64 bbn = 0;
+    uacpi_eval_simple_integer(node, "_BBN", &bbn);
+    int links = 0, n = add_prt(node, (UINT8)bbn, &links);
+    if (n < 0) return UACPI_ITERATION_DECISION_CONTINUE;          /* (no _PRT: not a PCI root we route) */
+    g_root_node[g_nroot] = node;
+    g_root_bus[g_nroot++] = (UINT8)bbn;
+    const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
+    kprintf("[ACPI] PCI interrupt routing: %d entries from %s._PRT (%d through link devices)\n",
+            n, path ? path : "?", links);
+    uacpi_free_absolute_path(path);
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+static void find_pci_routing(void)
+{
+    static const uacpi_char *roots[] = { "PNP0A08", "PNP0A03", NULL };
+    uacpi_find_devices_at(uacpi_namespace_root(), roots, found_root, NULL);
+    find_bridges();
+    route_pci();
+}
+
+/* -----------------------------------------------------------------------
+ * GPE block devices (ACPI0006, ACPI 6.5 section 9.10): general-purpose
+ * events beyond the FADT's GPE0 and GPE1 blocks, which uACPI sets up
+ * itself as \_GPE.  The device's _CRS gives the block's registers (its
+ * status bytes, then as many enable bytes, in I/O or memory space) and, if
+ * it has one, an interrupt of its own; without one it raises the SCI.
+ * uACPI then runs the _Lxx and _Exx methods under the device, whose
+ * Notify reaches the lid, buttons, batteries and thermal zones as \_GPE's
+ * methods do, and its GPEs can wake the machine (_PRW).
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    UINT64              base;
+    UINT32              len;
+    uacpi_address_space space;
+    bool                have, have_irq, level, low;
+    UINT32              irq;
+} BlockRes;
+
+static uacpi_iteration_decision block_resource(void *user, uacpi_resource *r)
+{
+    BlockRes *b = user;
+    if (!b->have) {
+        b->have = true;
+        b->space = UACPI_ADDRESS_SPACE_SYSTEM_IO;
+        if (r->type == UACPI_RESOURCE_TYPE_IO) { b->base = r->io.minimum; b->len = r->io.length; }
+        else if (r->type == UACPI_RESOURCE_TYPE_FIXED_IO) { b->base = r->fixed_io.address; b->len = r->fixed_io.length; }
+        else {
+            b->space = UACPI_ADDRESS_SPACE_SYSTEM_MEMORY;
+            if (r->type == UACPI_RESOURCE_TYPE_FIXED_MEMORY32) { b->base = r->fixed_memory32.address; b->len = r->fixed_memory32.length; }
+            else if (r->type == UACPI_RESOURCE_TYPE_MEMORY32) { b->base = r->memory32.minimum; b->len = r->memory32.length; }
+            else b->have = false;
+        }
+    }
+    if (!b->have_irq && r->type == UACPI_RESOURCE_TYPE_IRQ && r->irq.num_irqs) {
+        b->have_irq = true;
+        b->irq = r->irq.irqs[0];
+        b->level = r->irq.triggering == UACPI_TRIGGERING_LEVEL;
+        b->low = r->irq.polarity == UACPI_POLARITY_ACTIVE_LOW;
+    } else if (!b->have_irq && r->type == UACPI_RESOURCE_TYPE_EXTENDED_IRQ && r->extended_irq.num_irqs) {
+        b->have_irq = true;
+        b->irq = r->extended_irq.irqs[0];
+        b->level = r->extended_irq.triggering == UACPI_TRIGGERING_LEVEL;
+        b->low = r->extended_irq.polarity == UACPI_POLARITY_ACTIVE_LOW;
+    }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+static uacpi_iteration_decision found_gpe_block(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)user; (void)depth;
+    BlockRes b = { 0 };
+    uacpi_for_each_device_resource(node, "_CRS", block_resource, &b);
+    const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
+    struct acpi_fadt *fadt = NULL;
+    UINT32 sci = uacpi_table_fadt(&fadt) == UACPI_STATUS_OK && fadt ? fadt->sci_int : 9;
+    if (!b.have || b.len < 2 || b.len > 2 * 255) {
+        kprintf("[ACPI] GPE block %s: no register range in its _CRS\n", path ? path : "?");
+    } else {
+        g_next_level = b.have_irq ? b.level : true;
+        g_next_low = b.have_irq ? b.low : false;
+        UINT32 irq = b.have_irq ? b.irq : sci;
+        uacpi_status st = uacpi_install_gpe_block(node, b.base, b.space, (uacpi_u16)(b.len / 2), irq);
+        if (st == UACPI_STATUS_OK)
+            kprintf("[ACPI] GPE block %s: %u events at %s 0x%llx, on %s %u\n", path ? path : "?", b.len / 2 * 8,
+                    b.space == UACPI_ADDRESS_SPACE_SYSTEM_IO ? "I/O" : "memory", (unsigned long long)b.base,
+                    irq == sci ? "the SCI, IRQ" : "IRQ", irq);
+        else
+            kprintf("[ACPI] GPE block %s: %s\n", path ? path : "?", uacpi_status_to_string(st));
+    }
+    uacpi_free_absolute_path(path);
+    return UACPI_ITERATION_DECISION_CONTINUE;
 }
 
 /* -----------------------------------------------------------------------
@@ -795,22 +1086,33 @@ static void route_pci(void)
  * ----------------------------------------------------------------------- */
 #define MAX_WAKE 16
 
-typedef struct { uacpi_namespace_node *node; UINT16 gpe; char what[24]; } WakeDev;
+typedef struct { uacpi_namespace_node *node, *block; UINT16 gpe; char what[24]; } WakeDev;
 static WakeDev g_wake[MAX_WAKE];
 static int     g_nwake;
 
-static bool wake_gpe(uacpi_namespace_node *node, UINT16 *gpe)
+/* _PRW's first element: a GPE number in \_GPE (the FADT's GPE0 and GPE1
+ * blocks), or a package naming a GPE block device and the GPE in it */
+static bool wake_gpe(uacpi_namespace_node *node, uacpi_namespace_node **block, UINT16 *gpe)
 {
     uacpi_object *o = NULL;
-    uacpi_object_array a;
+    uacpi_object_array a, b;
     uacpi_u64 v;
     bool ok = false;
+    *block = NULL;
     if (uacpi_eval_simple_package(node, "_PRW", &o) != UACPI_STATUS_OK) return false;
-    /* (the GPE may also be a package naming a GPE block device; only \_GPE ones here) */
-    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK && a.count >= 2 &&
-        uacpi_object_get_integer(a.objects[0], &v) == UACPI_STATUS_OK) {
-        *gpe = (UINT16)v;
-        ok = true;
+    if (uacpi_object_get_package(o, &a) == UACPI_STATUS_OK && a.count >= 2) {
+        if (uacpi_object_get_integer(a.objects[0], &v) == UACPI_STATUS_OK) {
+            *gpe = (UINT16)v;
+            ok = true;
+        } else if (uacpi_object_get_package(a.objects[0], &b) == UACPI_STATUS_OK && b.count >= 2 &&
+                   uacpi_object_get_integer(b.objects[1], &v) == UACPI_STATUS_OK) {
+            uacpi_object *ref = b.objects[0], *dev = NULL;
+            if (uacpi_object_is_aml_namepath(ref))
+                ok = uacpi_object_resolve_as_aml_namepath(ref, node, block) == UACPI_STATUS_OK;
+            else if (uacpi_object_get_dereferenced(ref, &dev) == UACPI_STATUS_OK)
+                uacpi_object_unref(dev);              /* (a reference to the device object: no node to name it) */
+            *gpe = (UINT16)v;
+        }
     }
     uacpi_object_unref(o);
     return ok;
@@ -819,14 +1121,19 @@ static bool wake_gpe(uacpi_namespace_node *node, UINT16 *gpe)
 static void add_wake(uacpi_namespace_node *node, const char *what)
 {
     UINT16 gpe;
-    if (g_nwake == MAX_WAKE || !wake_gpe(node, &gpe)) return;
-    if (uacpi_setup_gpe_for_wake(NULL, gpe, node) != UACPI_STATUS_OK) return;
+    uacpi_namespace_node *block;
+    if (g_nwake == MAX_WAKE || !wake_gpe(node, &block, &gpe)) return;
+    if (uacpi_setup_gpe_for_wake(block, gpe, node) != UACPI_STATUS_OK) return;
     WakeDev *w = &g_wake[g_nwake++];
     w->node = node;
+    w->block = block;
     w->gpe = gpe;
     strncpy(w->what, what, sizeof(w->what) - 1);
     const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(node);
-    kprintf("[ACPI] Wake device %s (%s): GPE 0x%x\n", path ? path : "?", what, gpe);
+    const uacpi_char *bpath = block ? uacpi_namespace_node_generate_absolute_path(block) : NULL;
+    if (block) kprintf("[ACPI] Wake device %s (%s): GPE 0x%x of %s\n", path ? path : "?", what, gpe, bpath ? bpath : "?");
+    else kprintf("[ACPI] Wake device %s (%s): GPE 0x%x\n", path ? path : "?", what, gpe);
+    uacpi_free_absolute_path(bpath);
     uacpi_free_absolute_path(path);
 }
 
@@ -876,7 +1183,7 @@ static void arm_wake(void)
 {
     for (int i = 0; i < g_nwake; i++) {
         device_wake(g_wake[i].node, true);
-        uacpi_enable_gpe_for_wake(NULL, g_wake[i].gpe);
+        uacpi_enable_gpe_for_wake(g_wake[i].block, g_wake[i].gpe);
     }
 }
 
@@ -885,7 +1192,7 @@ static void report_wake(void)
 {
     for (int i = 0; i < g_nwake; i++) {
         uacpi_event_info info = 0;
-        if (uacpi_gpe_info(NULL, g_wake[i].gpe, &info) == UACPI_STATUS_OK && (info & UACPI_EVENT_INFO_HW_STATUS)) {
+        if (uacpi_gpe_info(g_wake[i].block, g_wake[i].gpe, &info) == UACPI_STATUS_OK && (info & UACPI_EVENT_INFO_HW_STATUS)) {
             const uacpi_char *path = uacpi_namespace_node_generate_absolute_path(g_wake[i].node);
             kprintf("[ACPI] Woken by %s (%s)\n", path ? path : "?", g_wake[i].what);
             uacpi_free_absolute_path(path);
@@ -1162,6 +1469,7 @@ void AmlWake(void)
     __atomic_store_n(&g_refresh, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_lid_read, 1, __ATOMIC_RELEASE);       /* the lid may have opened */
     __atomic_store_n(&g_zone_read, 1, __ATOMIC_RELEASE);
+    ThrottleResume();
     kick();
 }
 
@@ -1193,14 +1501,11 @@ static bool load(void)
     GpioProbe();                         /* (before the devices whose interrupts are its pins) */
     uacpi_find_devices("PNP0C50", found_i2c_hid, NULL);
     uacpi_find_devices("ACPI0C50", found_i2c_hid, NULL);
+    ThrottleProbe();                     /* (before the thermal zones that slow the processors) */
     uacpi_namespace_for_each_child(uacpi_namespace_root(), found_zone, NULL,
                                    UACPI_OBJECT_THERMAL_ZONE_BIT, UACPI_MAX_DEPTH_ANY, NULL);
-    if (IoApicPresent()) {               /* (in PIC mode _PRT names ISA IRQs, which nothing routes) */
-        static const uacpi_char *roots[] = { "PNP0A08", "PNP0A03", NULL };
-        bool found = false;
-        uacpi_find_devices_at(uacpi_namespace_root(), roots, found_root_bridge, &found);
-        route_pci();
-    }
+    if (IoApicPresent()) find_pci_routing();   /* (in PIC mode _PRT names ISA IRQs, which nothing routes) */
+    uacpi_find_devices("ACPI0006", found_gpe_block, NULL);   /* (before the wake devices that name them) */
     /* wake devices, before the GPEs are enabled (wake GPEs stay off while awake) */
     uacpi_find_devices("PNP0C0D", found_wake_button, "lid");
     uacpi_find_devices("PNP0C0C", found_wake_button, "power button");
@@ -1224,6 +1529,7 @@ static void acpi_thread(void *arg)
         __atomic_store_n(&g_kick, 0, __ATOMIC_RELEASE);
         if (g_sci && sched_ticks() >= next_sci) {     /* a missed edge, or no interrupt at all */
             g_sci(g_sci_ctx);
+            block_interrupt(NULL);                    /* (GPE blocks on interrupts of their own) */
             next_sci = sched_ticks() + (g_sci_irq ? 100 : 10);
         }
         run_work();

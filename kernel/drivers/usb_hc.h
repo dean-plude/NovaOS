@@ -74,7 +74,6 @@ struct UsbPipe {
 struct UsbDev {
     UsbHc           *hc;
     volatile bool    gone;
-    volatile bool    pnp_deferred;   /* the NT PnP manager removes its node once the stacks are down */
     UINT8            addr;         /* USB address (0 until assigned) */
     UINT8            root_port, speed, depth;
     UINT32           route;        /* xHCI route string: hub ports, 4 bits per tier */

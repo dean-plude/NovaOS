@@ -188,7 +188,7 @@ void      NtPnpUsbArrived(UINT32 node);
 /* Device node @node's hardware left (unplugged): IRP_MN_SURPRISE_REMOVAL
  * and IRP_MN_REMOVE_DEVICE to its stack and its children's, later, on a
  * worker thread */
-bool      NtPnpSurpriseRemoval(UINT32 node);   /* false: not queued (the caller removes the node) */
+void      NtPnpSurpriseRemoval(UINT32 node);
 
 /* usbd.c: the USB bus interface for Windows USB client drivers.  The PDO
  * of the USB device whose node is @node (made the first time), or NULL */

@@ -359,15 +359,19 @@ int main(void)
           stopped_at / WHEEL_DELTA, wheel / WHEEL_DELTA);
 
     step(9, "unplug the digitizer");
+    /* (the nodes go with the USB device at once; the drivers stop on a work
+     * item after them, so the pen leaves GetPointerDevices a little later) */
+    int np = pens();
     for (int i = 0; i < 300; i++) {
         n = collections(&digi, &mouse);
-        if (!n) break;
+        np = pens();
+        if (!n && !np) break;
         Sleep(100);
     }
     raw = raw_digitizer(&usages, &other);
     check(n == 0, "its collections leave (%d)", n);
     check(raw <= 0, "Raw Input no longer lists them (%d)", raw);
-    check(pens() == 0, "GetPointerDevices lists no pen (%d)", pens());
+    check(np == 0, "GetPointerDevices lists no pen (%d)", np);
 
     DestroyWindow(w);
     printf("digitest: %d passed, %d failed\n", g_pass, g_fail);

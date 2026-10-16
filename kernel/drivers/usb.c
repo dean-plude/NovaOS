@@ -442,11 +442,7 @@ static void remove_dev(UsbDev *d)
     for (int i = d->nbind - 1; i >= 0; i--)
         if (d->bind[i].gone) d->bind[i].gone(d->bind[i].inst);
     d->nbind = 0;
-    /* (its node stays, not present.  When the NT PnP manager took the removal
-     * its stacks are still coming down on a work item, and it removes the node
-     * after them, so a node that is gone means its drivers are) */
-    if (d->pnp && !d->pnp_deferred) PnpRemove(d->pnp);
-    d->pnp = 0;
+    if (d->pnp) { PnpRemove(d->pnp); d->pnp = 0; }      /* (its node stays, not present) */
     while (__atomic_load_n(&d->users, __ATOMIC_ACQUIRE)) UsbDelay(1);
     d->hc->ops->dev_remove(d->hc, d);
     for (int i = 0; i < 32; i++) {

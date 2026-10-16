@@ -1,6 +1,6 @@
 # the network suite's IPv6 boot: an IPv6-only network that is tools/v6peer.py
-# (SLAAC and RDNSS, stateless DHCPv6 naming a second DNS server, DNS for
-# nova6.test, HTTP on port 80)
+# (SLAAC and RDNSS, stateful DHCPv6 naming a second DNS server: 020-dhcp6.py,
+# DNS for nova6.test, HTTP on port 80)
 TESTS = [
     Test('IPv6 address', 'ipconfig', [r'IPv6 Address[ .]*: fd00:6e6f:7661:0:[0-9a-f:]+',
                                       r'DNS Servers[ .]*: fd00:6e6f:7661::1',

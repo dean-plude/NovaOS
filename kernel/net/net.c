@@ -556,14 +556,116 @@ void NetGetStatus(NetStatus *st)
     for (int i = 0; i < LWIP_IPV6_NUM_ADDRESSES && st->ip6_count < NET_IP6_MAX; i++) {
         u8_t state = netif_ip6_addr_state(&g_netif, i);
         if (!ip6_addr_isvalid(state) && !ip6_addr_istentative(state)) continue;
-        memcpy(st->ip6[st->ip6_count], netif_ip6_addr(&g_netif, i)->addr, 16);
-        st->ip6_preferred[st->ip6_count] = ip6_addr_ispreferred(state);
-        st->ip6_count++;
+        int k = st->ip6_count++;
+        memcpy(st->ip6[k], netif_ip6_addr(&g_netif, i)->addr, 16);
+        st->ip6_preferred[k] = ip6_addr_ispreferred(state);
+        st->ip6_dhcp[k] = dhcp6_owns_address(&g_netif, (s8_t)i);
+        bool fixed = netif_ip6_addr_isstatic(&g_netif, i);           /* (the link-local one) */
+        st->ip6_valid[k] = fixed ? 0xFFFFFFFFu : netif_ip6_addr_valid_life(&g_netif, i);
+        st->ip6_pref[k]  = fixed ? 0xFFFFFFFFu : netif_ip6_addr_pref_life(&g_netif, i);
+    }
+    const struct dhcp6 *d6 = netif_dhcp6_data(&g_netif);
+    if (d6 && d6->stateful) {
+        st->dhcp6 = dhcp6_bound(d6);
+        st->dhcp6_iaid = d6->iaid;
+        st->dhcp6_duid_len = d6->duid_len;
+        memcpy(st->dhcp6_duid, d6->duid, sizeof(st->dhcp6_duid));
+        if (st->dhcp6) {
+            memcpy(st->dhcp6_server, d6->server_addr.addr, 16);
+            st->dhcp6_t1 = d6->t1;
+            st->dhcp6_t2 = d6->t2;
+            st->dhcp6_valid = d6->valid_life;
+            st->dhcp6_age = d6->lease_ticks / (1000 / DHCP6_TIMER_MSECS);
+            strncpy(st->dns_suffix, d6->domains, sizeof(st->dns_suffix) - 1);
+        }
     }
     net_unlock();
 }
 
 static void keep_manual_dns(void);
+
+/* -----------------------------------------------------------------------
+ * Stateful DHCPv6 (lwIP's dhcp6.c, RFC 8415): what happens to the lease
+ * goes in the log; ipconfig /release6 and /renew6, and a Release before
+ * the machine shuts down or restarts
+ * ----------------------------------------------------------------------- */
+static void dhcp6_announce(void)                     /* (lock held) */
+{
+    static UINT16 seen[6];
+    const struct dhcp6 *d = netif_dhcp6_data(&g_netif);
+    if (!d) return;
+    UINT16 now[6] = { d->binds, d->renews, d->rebinds, d->releases, d->declines, d->expiries };
+    if (!memcmp(now, seen, sizeof(now))) return;
+    char a[48] = "", sv[48] = "", dns[48] = "none";
+    NetIp x = { .v6 = true };
+    memcpy(x.a, d->addr.addr, 16);
+    NetFormatAddr(&x, a, sizeof(a));
+    memcpy(x.a, d->server_addr.addr, 16);
+    NetFormatAddr(&x, sv, sizeof(sv));
+    if (d->dns_count) { memcpy(x.a, d->dns[0].addr, 16); NetFormatAddr(&x, dns, sizeof(dns)); }
+    if (now[0] != seen[0])
+        kprintf("[NET] DHCPv6: address %s from server %s (T1 %u s, T2 %u s, valid %u s), DNS %s, search list %s\n",
+                a, sv, (unsigned)d->t1, (unsigned)d->t2, (unsigned)d->valid_life, dns, d->domains[0] ? d->domains : "none");
+    if (now[1] != seen[1]) kprintf("[NET] DHCPv6: lease on %s renewed (valid %u s)\n", a, (unsigned)d->valid_life);
+    if (now[2] != seen[2]) kprintf("[NET] DHCPv6: lease on %s rebound by server %s (valid %u s)\n", a, sv, (unsigned)d->valid_life);
+    if (now[3] != seen[3]) kprintf("[NET] DHCPv6: release confirmed by server %s\n", sv);
+    if (now[4] != seen[4]) kprintf("[NET] DHCPv6: declined an address another machine uses\n");
+    if (now[5] != seen[5]) kprintf("[NET] DHCPv6: lease ended; soliciting again\n");
+    memcpy(seen, now, sizeof(now));
+}
+
+/* Wait (unlocked) up to @ms for @done; with the lock held when it returns */
+static bool dhcp6_wait(bool (*done)(const struct dhcp6 *d, UINT32 arg), UINT32 arg, UINT32 ms)
+{
+    UINT64 end = sched_ticks() + ms / 10;
+    for (;;) {
+        const struct dhcp6 *d = netif_dhcp6_data(&g_netif);
+        if (!d || done(d, arg)) return d != NULL;
+        if (sched_ticks() >= end) return false;
+        net_unlock();
+        net_wake();
+        sched_sleep_until(NULL, sched_ticks() + 2);
+        net_lock();
+    }
+}
+
+static bool released(const struct dhcp6 *d, UINT32 before) { return d->state != DHCP6_STATE_RELEASE || d->releases != before; }
+static bool leased(const struct dhcp6 *d, UINT32 events)
+{
+    return dhcp6_bound(d) && d->state == DHCP6_STATE_BOUND && (UINT32)(d->binds + d->renews + d->rebinds) != events;
+}
+
+int NetDhcp6Release(void)
+{
+    if (!g_up) return -1;
+    net_lock();
+    const struct dhcp6 *d = netif_dhcp6_data(&g_netif);
+    bool had = d && dhcp6_bound(d);
+    UINT32 before = d ? d->releases : 0;
+    dhcp6_release(&g_netif);
+    int r = !had ? -1 : (dhcp6_wait(released, before, 2000) && d->releases != before) ? 1 : 0;
+    dhcp6_announce();
+    net_unlock();
+    return r;
+}
+
+bool NetDhcp6Renew(void)
+{
+    if (!g_up) return false;
+    net_lock();
+    const struct dhcp6 *d = netif_dhcp6_data(&g_netif);
+    UINT32 events = d ? (UINT32)(d->binds + d->renews + d->rebinds) : 0;
+    dhcp6_renew(&g_netif);
+    bool ok = dhcp6_wait(leased, events, 10000);
+    dhcp6_announce();
+    net_unlock();
+    return ok;
+}
+
+void NetShutdown(void)
+{
+    if (NetDhcp6Release() == 0) kprintf("[NET] DHCPv6: released the lease (no answer from the server)\n");
+}
 
 /* -----------------------------------------------------------------------
  * Net thread
@@ -593,6 +695,7 @@ static void net_thread(void *arg)
         if (link != g_link) {
             g_link = link;
             if (link) netif_set_link_up(&g_netif); else netif_set_link_down(&g_netif);
+            dhcp6_link_changed(&g_netif, link);           /* (link down: the DHCPv6 lease goes) */
         }
         bool got = poll_input() > 0;
         struct netif *nf;
@@ -626,8 +729,10 @@ static void net_thread(void *arg)
                     NetFormatAddr(&x, dns, sizeof(dns));
                     break;
                 }
+            if (dhcp6_owns_address(&g_netif, (s8_t)i)) continue;   /* (said below) */
             kprintf("[NET] IPv6: address %s (from a router advertisement), DNS %s\n", buf, dns);
         }
+        dhcp6_announce();
         keep_manual_dns();
         net_unlock();
         if (busy) net_wake();               /* data, connections or operations moved on */
@@ -653,6 +758,7 @@ static void adapter_changed(void)
 {
     g_announced = false;
     dhcp_release_and_stop(&g_netif);
+    dhcp6_link_changed(&g_netif, 0);
     ip4_addr_t zero;
     ip4_addr_set_zero(&zero);
     netif_set_addr(&g_netif, &zero, &zero, &zero);
@@ -734,10 +840,13 @@ bool NetInitialize(void)
     }
 
     /* IPv6: a link-local address now, global ones from router
-     * advertisements (SLAAC), DNS servers from their RDNSS option */
+     * advertisements (SLAAC), DNS servers from their RDNSS option; and
+     * DHCPv6: an address (IA_NA), DNS servers and the search list from a
+     * server when an RA has the M flag (stateful), only the DNS servers
+     * when it has just the O flag (stateless) */
     netif_create_ip6_linklocal_address(&g_netif, 1);
     netif_set_ip6_autoconfig_enabled(&g_netif, 1);
-    if (dhcp6_enable_stateless(&g_netif) != ERR_OK)
+    if (dhcp6_enable_stateful(&g_netif) != ERR_OK)
         kprintf("[NET] DHCPv6 could not start\n");
 
     if (g_nic != &g_none && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");

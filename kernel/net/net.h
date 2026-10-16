@@ -37,7 +37,7 @@ typedef struct {
     UINT8  a[16];
 } NetIp;
 
-#define NET_IP6_MAX 3
+#define NET_IP6_MAX 4
 
 typedef struct {
     bool   present;          /* a supported NIC was found */
@@ -52,9 +52,21 @@ typedef struct {
     int    ip6_count;        /* valid IPv6 addresses (link-local first) */
     UINT8  ip6[NET_IP6_MAX][16];
     bool   ip6_preferred[NET_IP6_MAX];   /* else still tentative or deprecated */
+    bool   ip6_dhcp[NET_IP6_MAX];        /* leased from a DHCPv6 server (else SLAAC, or link-local) */
+    UINT32 ip6_valid[NET_IP6_MAX], ip6_pref[NET_IP6_MAX];   /* lifetimes left, s (0xFFFFFFFF: infinite) */
     UINT32 if_index;         /* the interface's number (IPv6 zone) */
     NetIp  dns_all[3];       /* every DNS server, IPv4 and IPv6 (v6 false, zero: none) */
     UINT64 in_octets, out_octets, in_frames, out_frames;   /* what the adapter moved since boot */
+    /* stateful DHCPv6 (RFC 8415): the client's DUID and IAID, and while
+     * an address is leased (dhcp6) the server, T1, T2 and the valid
+     * lifetime as granted, the lease's age, and the domain search list */
+    bool   dhcp6;
+    UINT8  dhcp6_server[16];
+    UINT32 dhcp6_iaid;
+    int    dhcp6_duid_len;
+    UINT8  dhcp6_duid[20];
+    UINT32 dhcp6_t1, dhcp6_t2, dhcp6_valid, dhcp6_age;   /* s (0xFFFFFFFF: infinite) */
+    char   dns_suffix[128];  /* "a.example,b.example" (empty: none) */
 } NetStatus;
 
 void NetGetStatus(NetStatus *st);
@@ -65,6 +77,14 @@ void NetFormatAddr(const NetIp *ip, char *buf, int cap);
 bool NetParseAddr(const char *s, NetIp *ip);
 /* Whether the interface has an IPv6 address other than its link-local one */
 bool NetHasIp6(void);
+
+/* Stateful DHCPv6: ipconfig /release6 (1: released and the server
+ * confirmed, 0: released without an answer, -1: no lease) and /renew6
+ * (true once a server has granted or extended the lease, up to 10 s);
+ * NetShutdown releases it before the machine powers off or restarts. */
+int  NetDhcp6Release(void);
+bool NetDhcp6Renew(void);
+void NetShutdown(void);
 
 /* Manual IPv4 settings (Settings > Network's Edit, netsh).  All network
  * byte order; manual_ip off: the address comes from DHCP; manual_dns off:

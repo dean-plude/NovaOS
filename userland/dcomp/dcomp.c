@@ -32,7 +32,12 @@
  * 3's, or DCompositionCreateDevice's): BeginDraw hands the program that
  * texture with the update rectangle's offset in it, and EndDraw copies the
  * rectangle into a staging texture and reads it back, as dxgi.dll does at
- * a GPU swap chain's present.  Chromium turns on its hardware
+ * a GPU swap chain's present.  Given an ID2D1Device as the rendering
+ * device (the device's, or an IDCompositionSurfaceFactory's), surfaces
+ * are made on its Direct3D 11 device, and BeginDraw asked for an
+ * ID2D1DeviceContext hands out one of that device's device contexts
+ * drawing into the texture, as the XAML framework draws its text and
+ * shapes; EndDraw ends its drawing first.  Chromium turns on its hardware
  * DirectComposition path (its root surface a DirectComposition surface or
  * a composition swap chain on ANGLE's Direct3D 11 device) when
  * DCompositionCreateDevice3 exists and gives it IDCompositionDesktopDevice
@@ -71,6 +76,8 @@ struct Surface {
     const void *const *vtbl;
     LONG refs;
     IUnknown *dev, *ctx;                /* the ID3D11Device and its immediate context (counted) */
+    IUnknown *d2d;                      /* the ID2D1Device it was made with, or NULL (counted) */
+    IUnknown *dc;                       /* BeginDraw's ID2D1DeviceContext, while drawing with one (counted) */
     IUnknown *tex, *staging;
     UINT w, h, format;
     BYTE *frame;                        /* BGRA, w * 4 bytes a row */
@@ -501,14 +508,17 @@ static ULONG STDMETHODCALLTYPE s_release(Surface *s)
 {
     LONG r = InterlockedDecrement(&s->refs);
     if (!r) {
+        if (s->dc) novadx_d2d_end(s->dc);
         surface_drop(s);
+        if (s->d2d) s->d2d->lpVtbl->Release(s->d2d);
         s->ctx->lpVtbl->Release(s->ctx);
         s->dev->lpVtbl->Release(s->dev);
         HeapFree(GetProcessHeap(), 0, s);
     }
     return (ULONG)r;
 }
-/* the texture, to draw @r of it (NULL: all), at *@offset in it */
+/* the texture, to draw @r of it (NULL: all), at *@offset in it; or, on a
+ * device made with an ID2D1Device, a device context drawing into it */
 static HRESULT STDMETHODCALLTYPE s_begin(Surface *s, const RECT *r, const GUID *iid, void **out, POINT *offset)
 {
     if (!out || !offset) return E_POINTER;
@@ -521,8 +531,16 @@ static HRESULT STDMETHODCALLTYPE s_begin(Surface *s, const RECT *r, const GUID *
         u = *r;
     }
     if (!s->tex) return E_FAIL;
-    HRESULT hr = s->tex->lpVtbl->QueryInterface(s->tex, iid, out);
-    if (FAILED(hr)) return hr;
+    HRESULT hr;
+    if (novadx_same(iid, &NIID_ID2D1DeviceContext)) {
+        hr = novadx_d2d_begin(s->d2d, s->tex, &s->dc);
+        if (FAILED(hr)) return hr;
+        s->dc->lpVtbl->AddRef(s->dc);
+        *out = s->dc;
+    } else {
+        hr = s->tex->lpVtbl->QueryInterface(s->tex, iid, out);
+        if (FAILED(hr)) return hr;
+    }
     s->drawing = TRUE;
     s->update = u;
     offset->x = u.left; offset->y = u.top;
@@ -531,6 +549,7 @@ static HRESULT STDMETHODCALLTYPE s_begin(Surface *s, const RECT *r, const GUID *
 static HRESULT STDMETHODCALLTYPE s_end(Surface *s)
 {
     if (!s->drawing) return DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED_;
+    if (s->dc) { novadx_d2d_end(s->dc); s->dc = NULL; }
     EnterCriticalSection(&g_lock);
     novadx_read_back(s->ctx, s->staging, s->tex, s->format, s->w, s->h, s->frame, &s->update);
     UnionRect(&s->dirty, &s->dirty, &s->update);
@@ -860,6 +879,7 @@ struct Dc {
     LONG refs;
     int version;
     IUnknown *d3d, *ctx;                /* the rendering device (ID3D11Device) and its immediate context, for surfaces */
+    IUnknown *d2d;                      /* the ID2D1Device it was given as the rendering device, or NULL */
 };
 static const void *const g_v1_vtbl[], *const g_desktop_vtbl[], *const g_dev3_vtbl[];
 
@@ -893,6 +913,7 @@ static ULONG STDMETHODCALLTYPE d_release(void *p)
     if (!r) {
         if (d->ctx) d->ctx->lpVtbl->Release(d->ctx);
         if (d->d3d) d->d3d->lpVtbl->Release(d->d3d);
+        if (d->d2d) d->d2d->lpVtbl->Release(d->d2d);
         HeapFree(GetProcessHeap(), 0, d);
     }
     return (ULONG)r;
@@ -949,22 +970,94 @@ static HRESULT STDMETHODCALLTYPE d_visual(void *p, void **out)
     *out = v;
     return S_OK;
 }
-static HRESULT STDMETHODCALLTYPE d_surface(void *p, UINT w, UINT h, UINT format, UINT alpha, void **out)
+/* a surface on @d3d (whose immediate context is @ctx), drawn with @d2d's device contexts when not NULL */
+static HRESULT surface_new(IUnknown *d3d, IUnknown *ctx, IUnknown *d2d, UINT w, UINT h, UINT format, void **out)
 {
-    Dc *d = dc_of(p);
-    (void)alpha;
     if (!out) return E_POINTER;
     *out = NULL;
-    if (!d->d3d || !d->ctx) return E_INVALIDARG;           /* (no rendering device) */
+    if (!d3d || !ctx) return E_INVALIDARG;                 /* (no rendering device) */
     if (!w || !h || !surface_format(format)) return E_INVALIDARG;
     Surface *s = make(sizeof(Surface), g_surface_vtbl);
     if (!s) return E_OUTOFMEMORY;
     s->format = format;
-    s->dev = d->d3d; s->dev->lpVtbl->AddRef(s->dev);
-    s->ctx = d->ctx; s->ctx->lpVtbl->AddRef(s->ctx);
+    s->dev = d3d; s->dev->lpVtbl->AddRef(s->dev);
+    s->ctx = ctx; s->ctx->lpVtbl->AddRef(s->ctx);
+    if (d2d) { s->d2d = d2d; d2d->lpVtbl->AddRef(d2d); }
     HRESULT hr = surface_make(s, w, h);
     if (FAILED(hr)) { s_release(s); return hr; }
     *out = s;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE d_surface(void *p, UINT w, UINT h, UINT format, UINT alpha, void **out)
+{
+    Dc *d = dc_of(p);
+    (void)alpha;
+    return surface_new(d->d3d, d->ctx, d->d2d, w, h, format, out);
+}
+
+/* IDCompositionSurfaceFactory: surfaces on another rendering device */
+typedef struct {
+    const void *const *vtbl;
+    LONG refs;
+    IUnknown *d3d, *ctx, *d2d;
+} Factory;
+static const void *const g_factory_vtbl[];
+static HRESULT STDMETHODCALLTYPE sf_qi(Factory *f, const GUID *iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_IDCompositionSurfaceFactory)) {
+        InterlockedIncrement(&f->refs);
+        *out = f;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE sf_addref(Factory *f) { return (ULONG)InterlockedIncrement(&f->refs); }
+static ULONG STDMETHODCALLTYPE sf_release(Factory *f)
+{
+    LONG r = InterlockedDecrement(&f->refs);
+    if (!r) {
+        f->ctx->lpVtbl->Release(f->ctx);
+        f->d3d->lpVtbl->Release(f->d3d);
+        if (f->d2d) f->d2d->lpVtbl->Release(f->d2d);
+        HeapFree(GetProcessHeap(), 0, f);
+    }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE sf_surface(Factory *f, UINT w, UINT h, UINT format, UINT alpha, void **out)
+{
+    (void)alpha;
+    return surface_new(f->d3d, f->ctx, f->d2d, w, h, format, out);
+}
+static const void *const g_factory_vtbl[] = { (void *)sf_qi, (void *)sf_addref, (void *)sf_release, (void *)sf_surface,
+                                              (void *)sf_surface /* CreateVirtualSurface */ };
+
+/* @rendering (an IDXGIDevice, ID3D11Device or ID2D1Device) as the device
+ * surfaces are made on: its ID3D11Device, immediate context and ID2D1Device
+ * (all counted; the last NULL unless it is one) */
+static int rendering_device(IUnknown *rendering, IUnknown **d3d, IUnknown **ctx, IUnknown **d2d)
+{
+    *ctx = NULL;
+    *d3d = novadx_rendering_d3d(rendering, d2d);
+    if (!*d3d) return 0;
+    ((void (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)*d3d)[40])(*d3d, ctx);  /* GetImmediateContext */
+    if (*ctx) return 1;
+    (*d3d)->lpVtbl->Release(*d3d);
+    if (*d2d) (*d2d)->lpVtbl->Release(*d2d);
+    *d3d = *d2d = NULL;
+    return 0;
+}
+
+static HRESULT STDMETHODCALLTYPE d_surface_factory(void *p, IUnknown *rendering, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    *out = NULL;
+    Factory *f = make(sizeof(Factory), g_factory_vtbl);
+    if (!f) return E_OUTOFMEMORY;
+    if (!rendering_device(rendering, &f->d3d, &f->ctx, &f->d2d)) { HeapFree(GetProcessHeap(), 0, f); return E_INVALIDARG; }
+    *out = f;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE d_clip(void *p, void **out)
@@ -991,7 +1084,6 @@ static HRESULT STDMETHODCALLTYPE d_effectgroup(void *p, void **out)
 static HRESULT STDMETHODCALLTYPE d_none1(void *p, void **out) { (void)p; if (out) *out = NULL; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE d_none2(void *p, HANDLE h, void **out) { (void)p; (void)h; if (out) *out = NULL; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE d_none2w(void *p, HWND h, void **out) { (void)p; (void)h; if (out) *out = NULL; return E_NOTIMPL; }
-static HRESULT STDMETHODCALLTYPE d_none2u(void *p, IUnknown *u, void **out) { (void)p; (void)u; if (out) *out = NULL; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE d_none3(void *p, void **a, UINT n, void **out) { (void)p; (void)a; (void)n; if (out) *out = NULL; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE d_state(void *p, BOOL *ok) { (void)p; if (!ok) return E_INVALIDARG; *ok = TRUE; return S_OK; }
 
@@ -1008,7 +1100,7 @@ static const void *const g_v1_vtbl[] = {
  * IDCompositionDevice3's */
 #define DEVICE2 \
     (void *)d_qi, (void *)d_addref, (void *)d_release, (void *)d_commit, (void *)d_wait, (void *)d_stats, (void *)d_visual, \
-    (void *)d_none2u /* CreateSurfaceFactory */, (void *)d_surface, (void *)d_surface /* CreateVirtualSurface */, \
+    (void *)d_surface_factory, (void *)d_surface, (void *)d_surface /* CreateVirtualSurface */, \
     (void *)d_none1, (void *)d_none1, (void *)d_none1, (void *)d_none1, (void *)d_none1, (void *)d_none3, (void *)d_none1, \
     (void *)d_none1, (void *)d_none1, (void *)d_none1, (void *)d_none3, (void *)d_effectgroup, (void *)d_clip, (void *)d_none1
 static const void *const g_desktop_vtbl[] = { DEVICE2, (void *)d_target, (void *)d_none2, (void *)d_none2w };
@@ -1018,7 +1110,8 @@ static const void *const g_dev3_vtbl[] = {                  /* (its thirteen eff
 };
 
 /* A device of @version; @rendering: the device surfaces are made on (an
- * IDXGIDevice of a Direct3D 11 device; NULL: no surfaces) */
+ * IDXGIDevice of a Direct3D 11 device, or an ID2D1Device on one; NULL: no
+ * surfaces) */
 static HRESULT create(int version, IUnknown *rendering, const GUID *iid, void **out)
 {
     if (!out) return E_POINTER;
@@ -1028,12 +1121,7 @@ static HRESULT create(int version, IUnknown *rendering, const GUID *iid, void **
     d->v1 = g_v1_vtbl; d->desktop = g_desktop_vtbl; d->dev3 = g_dev3_vtbl;
     d->refs = 1;
     d->version = version;
-    void *dev = NULL;
-    if (rendering && SUCCEEDED(rendering->lpVtbl->QueryInterface(rendering, &NIID_ID3D11Device, &dev))) {
-        d->d3d = dev;
-        ((void (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)d->d3d)[40])(d->d3d, &d->ctx);  /* GetImmediateContext */
-        if (!d->ctx) { d->d3d->lpVtbl->Release(d->d3d); d->d3d = NULL; }
-    }
+    rendering_device(rendering, &d->d3d, &d->ctx, &d->d2d);
     HRESULT hr = d_qi(d, iid, out);
     d_release(d);
     return hr;

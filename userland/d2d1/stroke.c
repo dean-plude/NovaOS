@@ -22,7 +22,7 @@ static HRESULT STDMETHODCALLTYPE ss_qi(StrokeStyle *s, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1StrokeStyle)) {
+        IsEqualIID(riid, &IID_ID2D1StrokeStyle) || IsEqualIID(riid, &IID_ID2D1StrokeStyle1)) {
         *out = s;
         InterlockedIncrement(&s->ref);
         return S_OK;
@@ -55,8 +55,11 @@ static void STDMETHODCALLTYPE ss_dashes(StrokeStyle *s, float *d, UINT32 n)
     for (UINT32 i = 0; i < n; i++) d[i] = s->p.dashStyle == DASH_CUSTOM && i < s->ndashes ? s->dashes[i] : 0;
 }
 
+/* ID2D1StrokeStyle1: D2D1_STROKE_TRANSFORM_TYPE */
+static UINT32 STDMETHODCALLTYPE ss_transform_type(StrokeStyle *s) { return s->transform_type; }
+
 const void *const ss_vtbl[] = { ss_qi, ss_addref, ss_release, ss_factory, ss_start_cap, ss_end_cap, ss_dash_cap,
-                                ss_miter, ss_join, ss_offset, ss_style, ss_count, ss_dashes };
+                                ss_miter, ss_join, ss_offset, ss_style, ss_count, ss_dashes, ss_transform_type };
 
 HRESULT stroke_style_create(void *factory, const STROKEPROPS *p, const float *dashes, UINT32 n, void **out)
 {

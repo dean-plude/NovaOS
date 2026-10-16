@@ -18,12 +18,13 @@ Target *target_of(void *iface)
 {
     if (!iface) return NULL;
     const void *v = *(const void **)iface;
-    return v == rt_hwnd_vtbl || v == rt_dc_vtbl || v == rt_bitmap_vtbl ? iface : NULL;
+    return v == rt_hwnd_vtbl || v == rt_dc_vtbl || v == rt_bitmap_vtbl || v == rt_ctx_vtbl ? iface : NULL;
 }
 
 /* ---- state helpers ---- */
 MAT target_world(Target *t)
 {
+    if (t->unit_pixels) return t->transform;        /* (a device context in D2D1_UNIT_MODE_PIXELS) */
     MAT s = { t->dpix / 96, 0, 0, t->dpiy / 96, 0, 0 };
     return mat_mul(&t->transform, &s);
 }
@@ -115,12 +116,12 @@ static void free_surface(Target *t)
     t->mdc = NULL;
     t->dib = NULL;
     t->old_bm = NULL;
-    if (t->kind != TGT_BITMAP) memset(&t->s, 0, sizeof(t->s));
+    if (t->kind != TGT_BITMAP && t->kind != TGT_CONTEXT) memset(&t->s, 0, sizeof(t->s));
 }
 
 HRESULT target_resize(Target *t, int w, int h)
 {
-    if (t->kind == TGT_BITMAP) return D2DERR_UNSUPPORTED_OPERATION;
+    if (t->kind == TGT_BITMAP || t->kind == TGT_CONTEXT) return D2DERR_UNSUPPORTED_OPERATION;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     if (w > 16384 || h > 16384) return E_INVALIDARG;
@@ -253,7 +254,8 @@ static HRESULT STDMETHODCALLTYPE t_qi(Target *t, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
     const GUID *kind = t->kind == TGT_HWND ? &IID_ID2D1HwndRenderTarget :
-                       t->kind == TGT_DC ? &IID_ID2D1DCRenderTarget : &IID_ID2D1BitmapRenderTarget;
+                       t->kind == TGT_DC ? &IID_ID2D1DCRenderTarget :
+                       t->kind == TGT_CONTEXT ? &IID_ID2D1DeviceContext : &IID_ID2D1BitmapRenderTarget;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
         IsEqualIID(riid, &IID_ID2D1RenderTarget) || IsEqualIID(riid, kind)) {
         *out = t;
@@ -277,6 +279,7 @@ static ULONG STDMETHODCALLTYPE t_release(Target *t)
         while (t->nlayers) pop_layer(t);
         free_surface(t);
         if (t->bitmap) COM_RELEASE(t->bitmap);
+        COM_RELEASE(t->device);
         COM_RELEASE(t->text_params);
         factory_release(t->factory);
         d_free(t);
@@ -749,6 +752,7 @@ static void STDMETHODCALLTYPE t_pop_layer(Target *t)
 
 static HRESULT STDMETHODCALLTYPE t_flush(Target *t, UINT64 *a, UINT64 *b)
 {
+    if (t->kind == TGT_CONTEXT && t->drawing && t->bitmap) bitmap_push(t->bitmap);
     t_get_tags(t, a, b);
     return t->error;
 }
@@ -758,6 +762,7 @@ static void STDMETHODCALLTYPE t_save_state(Target *t, void *block)
     if (!block) return;
     STATEDESC d = { t->aa, t->text_aa, t->tag1, t->tag2, t->transform };
     state_block_set(block, &d, t->text_params);
+    if (t->kind == TGT_CONTEXT) state_block_set1(block, t->blend, t->unit_pixels);
 }
 static void STDMETHODCALLTYPE t_restore_state(Target *t, void *block)
 {
@@ -771,6 +776,7 @@ static void STDMETHODCALLTYPE t_restore_state(Target *t, void *block)
     t->tag2 = d.tag2;
     t->transform = d.transform;
     t_set_params(t, params);
+    if (t->kind == TGT_CONTEXT) state_block_get1(block, &t->blend, &t->unit_pixels);
 }
 
 static void STDMETHODCALLTYPE t_push_clip(Target *t, const RCF *r, UINT32 aa)
@@ -812,6 +818,7 @@ static void STDMETHODCALLTYPE t_begin(Target *t)
         BitBlt(t->mdc, 0, 0, t->s.w, t->s.h, t->bound_dc, t->bound_rc.left, t->bound_rc.top, SRCCOPY);
         opaque(t);
     }
+    if (t->kind == TGT_CONTEXT && t->bitmap) bitmap_pull(t->bitmap);
 }
 
 static HRESULT STDMETHODCALLTYPE t_end(Target *t, UINT64 *a, UINT64 *b)
@@ -832,6 +839,8 @@ static HRESULT STDMETHODCALLTYPE t_end(Target *t, UINT64 *a, UINT64 *b)
             }
         } else if (t->kind == TGT_DC && t->bound_dc && t->mdc) {
             BitBlt(t->bound_dc, t->bound_rc.left, t->bound_rc.top, t->s.w, t->s.h, t->mdc, 0, 0, SRCCOPY);
+        } else if (t->kind == TGT_CONTEXT && t->bitmap) {
+            bitmap_push(t->bitmap);
         }
     }
     t->drawing = 0;
@@ -917,6 +926,253 @@ const void *const rt_hwnd_vtbl[] = { RT_METHODS, h_state, h_resize, h_hwnd };
 const void *const rt_dc_vtbl[] = { RT_METHODS, dc_bind };
 const void *const rt_bitmap_vtbl[] = { RT_METHODS, bt_bitmap };
 
+/* ---- ID2D1DeviceContext ---- */
+void context_set_target(Target *t, Bitmap *b)
+{
+    if (b == t->bitmap) return;
+    if (t->drawing && t->bitmap) bitmap_push(t->bitmap);
+    if (b) COM_ADDREF(b);
+    if (t->bitmap) COM_RELEASE(t->bitmap);
+    t->bitmap = b;
+    if (b) {
+        t->s = b->s;
+        t->fmt = b->fmt;
+        if (t->drawing) bitmap_pull(b);
+    } else memset(&t->s, 0, sizeof(t->s));
+    t->nclips = 0;
+}
+
+static HRESULT STDMETHODCALLTYPE c_bitmap1(Target *t, SZU size, const void *src, UINT32 pitch, const BMPPROPS1 *p,
+                                           void **out)
+{
+    if (!out) return E_POINTER;
+    BMPPROPS bp = { { 87, 1 }, t->dpix, t->dpiy };
+    if (p) {
+        bp.pixelFormat = p->pixelFormat;
+        if (p->dpiX > 0 && p->dpiY > 0) { bp.dpiX = p->dpiX; bp.dpiY = p->dpiY; }
+    }
+    Bitmap *b;
+    HRESULT hr = bitmap_create(t->factory, size, src, pitch, &bp, &b);
+    *out = SUCCEEDED(hr) ? b : NULL;
+    if (SUCCEEDED(hr) && p) b->options = p->bitmapOptions;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE c_bitmap1_wic(Target *t, void *wic, const BMPPROPS1 *p, void **out)
+{
+    BMPPROPS bp;
+    if (p) { bp.pixelFormat = p->pixelFormat; bp.dpiX = p->dpiX; bp.dpiY = p->dpiY; }
+    HRESULT hr = t_bitmap_from_wic(t, wic, p ? &bp : NULL, out);
+    if (SUCCEEDED(hr) && p) bitmap_of(*out)->options = p->bitmapOptions;
+    return hr;
+}
+/* colour management isn't done: every colour is sRGB */
+static HRESULT STDMETHODCALLTYPE c_color_context(Target *t, UINT32 space, const BYTE *profile, UINT32 n, void **out)
+{
+    (void)t; (void)space; (void)profile; (void)n;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE c_color_file(Target *t, const WCHAR *name, void **out)
+{
+    (void)t; (void)name;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE c_color_wic(Target *t, void *wic, void **out)
+{
+    (void)t; (void)wic;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE c_bitmap_surface(Target *t, IUnknown *surface, const BMPPROPS1 *p, void **out)
+{
+    if (!out) return E_POINTER;
+    Bitmap *b;
+    HRESULT hr = bitmap_from_surface(t->factory, surface, p, &b);
+    *out = SUCCEEDED(hr) ? b : NULL;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE c_effect(Target *t, REFCLSID id, void **out)
+{
+    (void)t; (void)id;
+    if (out) *out = 0;
+    return D2DERR_EFFECT_IS_NOT_REGISTERED;
+}
+static HRESULT STDMETHODCALLTYPE c_stops1(Target *t, const GSTOP *s, UINT32 n, UINT32 pre, UINT32 post, UINT32 precision,
+                                          UINT32 extend, UINT32 mode, void **out)
+{
+    (void)post; (void)precision; (void)mode;
+    if (!out) return E_POINTER;
+    return stops_create(t->factory, s, n, pre == 2 ? 1 : 0, extend, out);   /* (scRGB: interpolated in linear light) */
+}
+static HRESULT STDMETHODCALLTYPE c_image_brush(Target *t, void *image, const void *ip, const BRUSHPROPS *bp, void **out)
+{
+    (void)t; (void)image; (void)ip; (void)bp;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE c_bitmap_brush1(Target *t, void *bitmap, const UINT32 *p, const BRUSHPROPS *props,
+                                                 void **out)
+{
+    BMPBRUSHPROPS bp = { 0, 0, 1 };
+    if (p) { bp.extendModeX = p[0]; bp.extendModeY = p[1]; bp.interpolationMode = p[2] ? 1 : 0; }
+    HRESULT hr = t_bitmap_brush(t, bitmap, &bp, props, out);
+    if (SUCCEEDED(hr)) brush_of(*out)->interp1 = p ? p[2] : 1;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE c_command_list(Target *t, void **out)
+{
+    (void)t;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+static BOOL STDMETHODCALLTYPE c_format_ok(Target *t, UINT32 f)
+{
+    (void)t;
+    return f == 87 || f == 88 || f == 91 || f == 28 || f == 65;
+}
+static BOOL STDMETHODCALLTYPE c_precision_ok(Target *t, UINT32 p) { (void)t; return p == 1; }   /* 8BPC_UNORM */
+
+/* a bitmap's rectangle, in DIPs (pixels in D2D1_UNIT_MODE_PIXELS) */
+static HRESULT image_rect(Target *t, void *image, RCF *r)
+{
+    Bitmap *b = bitmap_of(image);
+    if (!b) return E_INVALIDARG;
+    r->left = r->top = 0;
+    r->right = t->unit_pixels ? b->s.w : b->s.w * 96.0f / b->dpix;
+    r->bottom = t->unit_pixels ? b->s.h : b->s.h * 96.0f / b->dpiy;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE c_local_bounds(Target *t, void *image, RCF *r)
+{
+    if (!r) return E_POINTER;
+    return image_rect(t, image, r);
+}
+static RCF transformed_bounds(const MAT *m, const RCF *r)
+{
+    PT p[4] = { { r->left, r->top }, { r->right, r->top }, { r->right, r->bottom }, { r->left, r->bottom } };
+    RCF o = { INFINITY, INFINITY, -INFINITY, -INFINITY };
+    for (int i = 0; i < 4; i++) {
+        PT q = mat_apply(m, p[i]);
+        o.left = fminf(o.left, q.x); o.right = fmaxf(o.right, q.x);
+        o.top = fminf(o.top, q.y); o.bottom = fmaxf(o.bottom, q.y);
+    }
+    return o;
+}
+static HRESULT STDMETHODCALLTYPE c_world_bounds(Target *t, void *image, RCF *r)
+{
+    if (!r) return E_POINTER;
+    RCF l;
+    HRESULT hr = image_rect(t, image, &l);
+    if (SUCCEEDED(hr)) *r = transformed_bounds(&t->transform, &l);
+    return hr;
+}
+/* the run's advance box, from the font's ascent and descent
+   (IDWriteFontFace::GetMetrics, slot 8: DWRITE_FONT_METRICS in design units) */
+static HRESULT STDMETHODCALLTYPE c_glyph_bounds(Target *t, PT origin, const DW_GLYPHRUN *run, UINT32 mode, RCF *r)
+{
+    (void)mode;
+    if (!run || !r) return E_POINTER;
+    float w = 0;
+    for (UINT32 i = 0; i < run->glyphCount; i++) w += run->glyphAdvances ? run->glyphAdvances[i] : 0;
+    struct { UINT16 du, asc, desc; INT16 gap; UINT16 cap, x; INT16 upos; UINT16 uth; INT16 spos; UINT16 sth; } m = { 0 };
+    float asc = run->fontEmSize, desc = run->fontEmSize * 0.25f;
+    if (run->fontFace) {
+        VSLOT(run->fontFace, 8, void (STDMETHODCALLTYPE *)(void *, void *))(run->fontFace, &m);
+        if (m.du) { asc = run->fontEmSize * m.asc / m.du; desc = run->fontEmSize * m.desc / m.du; }
+    }
+    RCF b = { origin.x, origin.y - asc, origin.x + w, origin.y + desc };
+    if (run->bidiLevel & 1) { b.left = origin.x - w; b.right = origin.x; }
+    *r = transformed_bounds(&t->transform, &b);
+    return S_OK;
+}
+static void STDMETHODCALLTYPE c_get_device(Target *t, void **out)
+{
+    *out = t->device;
+    if (t->device) COM_ADDREF(t->device);
+}
+static void STDMETHODCALLTYPE c_set_target(Target *t, void *image)
+{
+    Bitmap *b = bitmap_of(image);
+    if (image && !b) { t->error = E_INVALIDARG; return; }
+    context_set_target(t, b);
+}
+static void STDMETHODCALLTYPE c_get_target(Target *t, void **out)
+{
+    *out = t->bitmap;
+    if (t->bitmap) COM_ADDREF(t->bitmap);
+}
+static void STDMETHODCALLTYPE c_set_controls(Target *t, const RENDERCONTROLS *c) { if (c) t->controls = *c; }
+static void STDMETHODCALLTYPE c_get_controls(Target *t, RENDERCONTROLS *c) { if (c) *c = t->controls; }
+/* (only source-over is drawn) */
+static void STDMETHODCALLTYPE c_set_blend(Target *t, UINT32 b) { t->blend = b; }
+static UINT32 STDMETHODCALLTYPE c_get_blend(Target *t) { return t->blend; }
+static void STDMETHODCALLTYPE c_set_unit(Target *t, UINT32 u) { t->unit_pixels = u == 1; }
+static UINT32 STDMETHODCALLTYPE c_get_unit(Target *t) { return t->unit_pixels; }
+static void STDMETHODCALLTYPE c_glyphs(Target *t, PT origin, const DW_GLYPHRUN *run, const void *desc, void *brush,
+                                       UINT32 mode)
+{
+    (void)desc;
+    t_draw_glyphs(t, origin, run, brush, mode);
+}
+/* an image (a bitmap) at @offset, the part @rect of it */
+static void STDMETHODCALLTYPE c_image(Target *t, void *image, const PT *offset, const RCF *rect, UINT32 interp,
+                                      UINT32 composite)
+{
+    (void)composite;
+    RCF all, s, d;
+    if (FAILED(image_rect(t, image, &all))) return;
+    s = rect ? *rect : all;
+    PT o = offset ? *offset : (PT){ 0, 0 };
+    d.left = o.x + s.left; d.top = o.y + s.top;
+    d.right = o.x + s.right; d.bottom = o.y + s.bottom;
+    t_draw_bitmap(t, image, &d, 1, interp ? 1 : 0, &s);
+}
+static void STDMETHODCALLTYPE c_metafile(Target *t, void *mf, const PT *offset) { (void)t; (void)mf; (void)offset; }
+static void STDMETHODCALLTYPE c_bitmap(Target *t, void *bitmap, const RCF *dst, float opacity, UINT32 interp,
+                                       const RCF *src, const void *perspective)
+{
+    (void)perspective;
+    t_draw_bitmap(t, bitmap, dst, opacity, interp ? 1 : 0, src);
+}
+static void STDMETHODCALLTYPE c_push_layer(Target *t, const LAYERPARAMS *lp, void *layer) { t_push_layer(t, lp, layer); }
+static HRESULT STDMETHODCALLTYPE c_invalidate(Target *t, void *e, UINT32 i, const RCF *r)
+{
+    (void)t; (void)e; (void)i; (void)r;
+    return E_INVALIDARG;
+}
+static HRESULT STDMETHODCALLTYPE c_invalid_count(Target *t, void *e, UINT32 *n)
+{
+    (void)t; (void)e;
+    if (n) *n = 0;
+    return E_INVALIDARG;
+}
+static HRESULT STDMETHODCALLTYPE c_invalid_rects(Target *t, void *e, RCF *r, UINT32 n)
+{
+    (void)t; (void)e; (void)r; (void)n;
+    return E_INVALIDARG;
+}
+static HRESULT STDMETHODCALLTYPE c_required(Target *t, void *e, const RCF *r, const void *d, RCF *out, UINT32 n)
+{
+    (void)t; (void)e; (void)r; (void)d; (void)out; (void)n;
+    return E_INVALIDARG;
+}
+static void STDMETHODCALLTYPE c_opacity_mask(Target *t, void *mask, void *brush, const RCF *dst, const RCF *src)
+{
+    t_opacity_mask(t, mask, brush, 0, dst, src);
+}
+
+const void *const rt_ctx_vtbl[] = {
+    RT_METHODS,
+    c_bitmap1, c_bitmap1_wic, c_color_context, c_color_file, c_color_wic, c_bitmap_surface, c_effect, c_stops1,
+    c_image_brush, c_bitmap_brush1, c_command_list, c_format_ok, c_precision_ok, c_local_bounds, c_world_bounds,
+    c_glyph_bounds, c_get_device, c_set_target, c_get_target, c_set_controls, c_get_controls, c_set_blend, c_get_blend,
+    c_set_unit, c_get_unit, c_glyphs, c_image, c_metafile, c_bitmap, c_push_layer, c_invalidate, c_invalid_count,
+    c_invalid_rects, c_required, c_opacity_mask,
+};
+_Static_assert(sizeof(rt_ctx_vtbl) / sizeof(rt_ctx_vtbl[0]) == 57 + 35, "ID2D1DeviceContext has 92 methods");
+
+
 /* ---- ID2D1GdiInteropRenderTarget ---- */
 static Target *from_gdi(void *p) { return (Target *)((char *)p - offsetof(Target, gdi_vtbl)); }
 static HRESULT STDMETHODCALLTYPE gi_qi(void *p, REFIID riid, void **out) { return t_qi(from_gdi(p), riid, out); }
@@ -945,7 +1201,7 @@ const void *const gdi_vtbl[] = { gi_qi, gi_addref, gi_release, gi_getdc, gi_rele
 HRESULT target_create(void *factory, int kind, const RTPROPS *props, Target **out)
 {
     *out = 0;
-    PIXFMT fmt = { 87, kind == TGT_BITMAP ? 1u : 3u };
+    PIXFMT fmt = { 87, kind == TGT_BITMAP || kind == TGT_CONTEXT ? 1u : 3u };
     float dpix = 0, dpiy = 0;
     if (props) {
         if (props->pixelFormat.format && props->pixelFormat.format != 87) return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
@@ -957,7 +1213,7 @@ HRESULT target_create(void *factory, int kind, const RTPROPS *props, Target **ou
     if (kind == TGT_DC && (!props || !props->pixelFormat.alphaMode)) return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
     Target *t = d_alloc(sizeof(*t));
     if (!t) return E_OUTOFMEMORY;
-    t->vtbl = kind == TGT_HWND ? rt_hwnd_vtbl : kind == TGT_DC ? rt_dc_vtbl : rt_bitmap_vtbl;
+    t->vtbl = kind == TGT_HWND ? rt_hwnd_vtbl : kind == TGT_DC ? rt_dc_vtbl : kind == TGT_CONTEXT ? rt_ctx_vtbl : rt_bitmap_vtbl;
     t->gdi_vtbl = gdi_vtbl;
     t->ref = 1;
     t->factory = factory;

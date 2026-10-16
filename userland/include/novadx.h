@@ -58,6 +58,9 @@ NOVADX_GUID(NIID_ID3D11Device,          0xdb6f6ddb, 0xac77, 0x4e88, 0x82, 0x53, 
 NOVADX_GUID(NIID_ID3D11DeviceChild,     0x1841e5c8, 0x16b0, 0x489b, 0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae);
 NOVADX_GUID(NIID_ID3D11DeviceContext,   0xc0bfa96c, 0xe089, 0x44fb, 0x8e, 0xaf, 0x26, 0xf8, 0x79, 0x61, 0x90, 0xda);
 NOVADX_GUID(NIID_ID3D11Resource,        0xdc8e63f3, 0xd12b, 0x4952, 0xb4, 0x7b, 0x5e, 0x45, 0x02, 0x6a, 0x86, 0x2d);
+NOVADX_GUID(NIID_IDXGISurface,          0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
+NOVADX_GUID(NIID_ID2D1Device,           0x47dd575d, 0xac05, 0x4cdd, 0x80, 0x49, 0x9b, 0x02, 0xcd, 0x16, 0xf4, 0x4c);
+NOVADX_GUID(NIID_ID2D1DeviceContext,    0xe8f7fe7a, 0x191c, 0x466d, 0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98);
 NOVADX_GUID(NIID_ID3D11Texture2D,       0x6f15aaf2, 0xd208, 0x4e89, 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c);
 NOVADX_GUID(NIID_IDCompositionDevice,   0xc37ea93a, 0xe7aa, 0x450d, 0xb1, 0x6f, 0x97, 0x46, 0xcb, 0x04, 0x07, 0xf3);
 NOVADX_GUID(NIID_IDCompositionTarget,   0xeacdd04c, 0x117e, 0x4e17, 0x88, 0xf4, 0xd1, 0xb1, 0x2b, 0x0e, 0x3d, 0x89);
@@ -68,6 +71,7 @@ NOVADX_GUID(NIID_IDCompositionVisual3,  0x2775f462, 0xb6c1, 0x4015, 0xb0, 0xbe, 
 NOVADX_GUID(NIID_IDCompositionDevice2,  0x75f6468d, 0x1b8e, 0x447c, 0x9b, 0xc6, 0x75, 0xfe, 0xa8, 0x0b, 0x5b, 0x25);
 NOVADX_GUID(NIID_IDCompositionDesktopDevice, 0x5f4633fe, 0x1e08, 0x4cb8, 0x8c, 0x75, 0xce, 0x24, 0x33, 0x3f, 0x56, 0x02);
 NOVADX_GUID(NIID_IDCompositionDevice3,  0x0987cb06, 0xf916, 0x48bf, 0x8d, 0x35, 0xce, 0x76, 0x41, 0x78, 0x1b, 0xd9);
+NOVADX_GUID(NIID_IDCompositionSurfaceFactory, 0xe334bc12, 0x3937, 0x4e02, 0x85, 0xeb, 0xfc, 0xf4, 0xeb, 0x30, 0xd2, 0xc8);
 NOVADX_GUID(NIID_IDCompositionSurface,  0xbb8a4953, 0x2c99, 0x4f5a, 0x96, 0xf5, 0x48, 0x19, 0x02, 0x7f, 0xa3, 0xac);
 NOVADX_GUID(NIID_IDCompositionVirtualSurface, 0xae471c51, 0x5f53, 0x4a24, 0x8d, 0x3e, 0xd0, 0xc3, 0x9c, 0x30, 0xb3, 0xf0);
 NOVADX_GUID(NIID_IDCompositionClip,     0x64ac3703, 0x9d3f, 0x45ec, 0xa1, 0x09, 0x7c, 0xac, 0x0e, 0x7a, 0x13, 0xa7);
@@ -80,6 +84,7 @@ NOVADX_GUID(NIID_INovaSoftDevice,       0x6e6f7661, 0x0001, 0x4458, 0x91, 0x00, 
 NOVADX_GUID(NIID_INovaSoftTexture,      0x6e6f7661, 0x0002, 0x4458, 0x91, 0x00, 0x73, 0x6f, 0x66, 0x74, 0x64, 0x78);
 NOVADX_GUID(NIID_INovaSwapChain,        0x6e6f7661, 0x0003, 0x4458, 0x91, 0x00, 0x73, 0x6f, 0x66, 0x74, 0x64, 0x78);
 NOVADX_GUID(NIID_INovaSoftAdapter,      0x6e6f7661, 0x0004, 0x4458, 0x91, 0x00, 0x73, 0x6f, 0x66, 0x74, 0x64, 0x78);
+NOVADX_GUID(NIID_INovaD2DDevice,        0x6e6f7661, 0x0005, 0x4458, 0x91, 0x00, 0x73, 0x6f, 0x66, 0x74, 0x64, 0x78);
 
 static inline int novadx_same(const GUID *a, const GUID *b) { return !__builtin_memcmp(a, b, sizeof(GUID)); }
 
@@ -188,6 +193,73 @@ typedef struct {
                                          BOOL *shown);
 } INovaSwapChainVtbl;
 struct INovaSwapChain { const INovaSwapChainVtbl *lpVtbl; };
+
+/* A Direct2D device (d2d1.dll's ID2D1Device) answers this with the
+ * Direct3D 11 device it was made on, so DirectComposition and
+ * Windows.UI.Composition (dcomp.dll), given an ID2D1Device as their
+ * rendering device, make their surfaces' textures on that device */
+typedef struct INovaD2DDevice INovaD2DDevice;
+typedef struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(INovaD2DDevice *, const GUID *, void **);
+    ULONG   (STDMETHODCALLTYPE *AddRef)(INovaD2DDevice *);
+    ULONG   (STDMETHODCALLTYPE *Release)(INovaD2DDevice *);
+    IUnknown *(STDMETHODCALLTYPE *D3D11Device)(INovaD2DDevice *);     /* (counted) */
+} INovaD2DDeviceVtbl;
+struct INovaD2DDevice { const INovaD2DDeviceVtbl *lpVtbl; };
+
+/* @rendering (an IDXGIDevice or ID3D11Device, or an ID2D1Device) as its
+ * Direct3D 11 device (counted), and the ID2D1Device when it is one
+ * (counted; else NULL) */
+static inline IUnknown *novadx_rendering_d3d(IUnknown *rendering, IUnknown **d2d)
+{
+    IUnknown *d3d = NULL;
+    *d2d = NULL;
+    if (!rendering) return NULL;
+    if (SUCCEEDED(rendering->lpVtbl->QueryInterface(rendering, &NIID_ID3D11Device, (void **)&d3d)) && d3d) return d3d;
+    INovaD2DDevice *n = NULL;
+    if (FAILED(rendering->lpVtbl->QueryInterface(rendering, &NIID_INovaD2DDevice, (void **)&n)) || !n) return NULL;
+    d3d = n->lpVtbl->D3D11Device(n);
+    n->lpVtbl->Release(n);
+    if (d3d) {
+        *d2d = rendering;
+        rendering->lpVtbl->AddRef(rendering);
+    }
+    return d3d;
+}
+
+/* BeginDraw of a surface asked for an ID2D1DeviceContext: a device
+ * context of @d2d (an ID2D1Device) drawing into @tex, the surface's
+ * texture, already in BeginDraw, as Windows' DirectComposition hands it
+ * out (the caller translates by the update offset itself).  EndDraw ends
+ * the drawing and releases it */
+static inline HRESULT novadx_d2d_begin(IUnknown *d2d, IUnknown *tex, IUnknown **dc)
+{
+    typedef HRESULT (STDMETHODCALLTYPE *CreateDC_t)(IUnknown *, UINT, IUnknown **);
+    typedef HRESULT (STDMETHODCALLTYPE *FromSurface_t)(IUnknown *, IUnknown *, const void *, IUnknown **);
+    typedef void    (STDMETHODCALLTYPE *SetTarget_t)(IUnknown *, IUnknown *);
+    typedef void    (STDMETHODCALLTYPE *Call_t)(IUnknown *);
+    IUnknown *c = NULL, *bmp = NULL;
+    *dc = NULL;
+    if (!d2d) return E_NOINTERFACE;
+    HRESULT hr = ((CreateDC_t)(*(void ***)d2d)[4])(d2d, 0, &c);                 /* ID2D1Device::CreateDeviceContext */
+    if (FAILED(hr)) return hr;
+    hr = ((FromSurface_t)(*(void ***)c)[62])(c, tex, NULL, &bmp);              /* CreateBitmapFromDxgiSurface */
+    if (FAILED(hr)) { c->lpVtbl->Release(c); return hr; }
+    ((SetTarget_t)(*(void ***)c)[74])(c, bmp);                                  /* SetTarget */
+    bmp->lpVtbl->Release(bmp);
+    ((Call_t)(*(void ***)c)[48])(c);                                            /* BeginDraw */
+    *dc = c;
+    return S_OK;
+}
+static inline void novadx_d2d_end(IUnknown *dc)
+{
+    typedef HRESULT (STDMETHODCALLTYPE *EndDraw_t)(IUnknown *, UINT64 *, UINT64 *);
+    typedef void    (STDMETHODCALLTYPE *SetTarget_t)(IUnknown *, IUnknown *);
+    if (!dc) return;
+    ((EndDraw_t)(*(void ***)dc)[49])(dc, NULL, NULL);                          /* EndDraw: the pixels reach the texture */
+    ((SetTarget_t)(*(void ***)dc)[74])(dc, NULL);
+    dc->lpVtbl->Release(dc);
+}
 
 /* The part @r (NULL: all) of @src, a @w x @h texture of a Direct3D 11
  * device whose immediate context is @ctx, read back into @frame (BGRA,

@@ -509,6 +509,7 @@ UINT32     um_driver_rw(UmObject *o, bool write, UINT64 buf, UINT32 len, UINT64 
 UINT32     um_driver_ioctl(UmObject *o, UINT32 code, UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len, UINT64 event,
                            UINT64 iosb, UINT64 *info);
 UINT32     um_driver_cancel(UmObject *o, UINT64 iosb);
+UINT32     um_driver_pnp_node(UmProcess *p, UINT64 handle);
 void       um_driver_process_gone(UmProcess *p);
 
 /* um_disk.c: disk and volume handles (\\.\PhysicalDriveN, \\.\X:, \\?\Volume{...}) */

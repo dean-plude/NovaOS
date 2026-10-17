@@ -17,7 +17,8 @@
  *     the PDO: it creates its functional device object and attaches it;
  *   - IRP_MN_QUERY_CAPABILITIES, then IRP_MN_START_DEVICE down the stack
  *     with the function's resources from its configuration space: each
- *     memory and I/O BAR, and its interrupt line (a GSI from ACPI's _PRT,
+ *     memory and I/O BAR, and its interrupt line (a GSI from ACPI's _PRT, or
+ *     swizzled through the bridges above a function with none,
  *     routed to a vector of its own, intr.c), raw and translated.
  *
  * NtPnpStop takes a started device away again the way Windows disables
@@ -278,7 +279,7 @@ static bool build_resources(NtPdo *p)
     UINT32 gsi = 0;
     bool level = true, low = true, have = false;
     if (pin >= 1 && pin <= 4) {
-        have = d->bus == 0 && AmlPciIrq(d->dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        have = AmlPciIrq(d->bus, d->dev, (UINT8)(pin - 1), &gsi, &level, &low);
         if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = low = true; }
     }
     UINT8 vector = have ? NtIntrVector(gsi, level, low) : 0;
@@ -1085,30 +1086,57 @@ static NtPdo *child_of(NtPdo *bus)
     return NULL;
 }
 
-/* IRP_MN_QUERY_REMOVE_DEVICE to @p and everything under it, children
- * first; on a veto, IRP_MN_CANCEL_REMOVE_DEVICE to those that agreed */
+/* Query the started descendants before @p. */
+static NT_STATUS query_remove_tree(NtPdo *p, NtPdo **asked, int *n)
+{
+    for (int i = 0; i < g_npdo; i++) {
+        NtPdo *c = g_pdo[i];
+        if (c->parent != p || !c->started) continue;
+        NT_STATUS st = query_remove_tree(c, asked, n);
+        if (!NT_SUCCESS(st)) return st;
+    }
+    PnpNotify(PNP_QUERY_REMOVE, p->node);
+    NT_STATUS st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
+    if (NT_SUCCESS(st)) {
+        asked[(*n)++] = p;
+    } else {
+        PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
+        kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
+    }
+    return st;
+}
+
+/* IRP_MN_QUERY_REMOVE_DEVICE to @p and its descendants; on a veto, cancel
+ * the devices that agreed and tell their registrations the query failed. */
 static NT_STATUS query_remove(NtPdo *p)
 {
     NtPdo *asked[MAX_PDOS];
     int n = 0;
-    NT_STATUS st = NT_STATUS_SUCCESS;
-    for (int i = 0; i < g_npdo && NT_SUCCESS(st); i++) {
-        NtPdo *c = g_pdo[i];
-        if (c->parent != p || !c->started) continue;
-        st = send_pnp(c->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
-        if (NT_SUCCESS(st)) asked[n++] = c;
-        else kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", c->instance, (UINT32)st);
-    }
-    if (NT_SUCCESS(st)) {
-        st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
-        if (!NT_SUCCESS(st)) {
-            kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
-            send_pnp(p->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
+    NT_STATUS st = query_remove_tree(p, asked, &n);
+    if (!NT_SUCCESS(st)) {
+        for (int i = 0; i < n; i++) {
+            PnpNotify(PNP_QUERY_REMOVE_FAILED, asked[i]->node);
+            send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
         }
+    } else {
+        for (int i = 0; i < n; i++) PnpNotify(PNP_REMOVE_PENDING, asked[i]->node);
     }
-    if (!NT_SUCCESS(st))
-        for (int i = 0; i < n; i++) send_pnp(asked[i]->pdo, NT_IRP_MN_CANCEL_REMOVE_DEVICE, NULL, NULL, NULL);
     return st;
+}
+
+UINT32 NtPnpNodeForFile(NT_FILE_OBJECT *file)
+{
+    if (!file || !file->DeviceObject) return 0;
+    pnp_init();
+    pnp_lock();
+    UINT32 node = 0;
+    for (int i = 0; i < g_npdo && !node; i++) {
+        NtPdo *p = g_pdo[i];
+        for (NT_DEVICE_OBJECT *d = p->pdo; d; d = d->AttachedDevice)
+            if (d == file->DeviceObject) { node = p->node; break; }
+    }
+    pnp_unlock();
+    return node;
 }
 
 NTSTATUS NtPnpStop(UINT32 node)
@@ -1890,4 +1918,3 @@ NT_API void nt_IoInvalidateDeviceRelations(NT_DEVICE_OBJECT *pdo, int type)
 NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp) { (void)irp; }
 
 NT_API NT_STATUS nt_PoCallDriver(NT_DEVICE_OBJECT *dev, NT_IRP *irp) { return nt_IofCallDriver(dev, irp); }
-

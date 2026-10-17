@@ -7,6 +7,10 @@
  * desktop's WM_DEVICECHANGE to one of the process's windows (msg.c), which
  * carries the event the change started after.  For each event it sends
  * what Windows sends:
+ *   - DBT_DEVICEQUERYREMOVE, DBT_DEVICEQUERYREMOVEFAILED,
+ *     DBT_DEVICEREMOVEPENDING, DBT_DEVICEARRIVAL and
+ *     DBT_DEVICEREMOVECOMPLETE with a DEV_BROADCAST_HANDLE to windows and
+ *     services registered for an open device handle;
  *   - DBT_DEVICEARRIVAL / DBT_DEVICEREMOVECOMPLETE with a
  *     DEV_BROADCAST_DEVICEINTERFACE to the windows registered for the
  *     device's interface class (or for all of them), and to a service
@@ -18,6 +22,8 @@
  *     hidden ones included.
  * Messages go with SendMessageTimeout (a window that does not answer in
  * two seconds is passed over), as Windows' broadcasts do.
+ * Query-remove notices are asynchronous status notifications; they do not
+ * delay the kernel query or collect a window's veto response.
  */
 #include "u32.h"
 #include <novapnp.h>
@@ -32,12 +38,25 @@ typedef struct { DWORD size, type, reserved; } BroadcastHdr;
 typedef struct { DWORD size, type, reserved; GUID guid; WCHAR name[256]; } BroadcastIfaceW;
 typedef struct { DWORD size, type, reserved; GUID guid; char name[256]; } BroadcastIfaceA;
 typedef struct { DWORD size, type, reserved, unitmask; WORD flags; } BroadcastVolume;
+typedef struct {
+    DWORD size, type, reserved;
+    HANDLE handle, notification;
+    GUID event;
+    LONG nameoffset;
+    BYTE data[256];
+} BroadcastHandle;
 
 typedef struct {
     DWORD magic;
     HANDLE target;                   /* a window, or a service's status handle */
     BOOL service, all, wide;
     GUID guid;
+    DWORD node;
+    HANDLE device;
+    HANDLE registration;
+    LONG nameoffset;
+    DWORD data_size;
+    BYTE data[256];
 } Reg;
 
 static CRITICAL_SECTION g_lock;
@@ -97,6 +116,37 @@ static void interface_event(const NovaPnpNode *n, const GUID *g, WPARAM what)
     }
 }
 
+/* A registered file handle belongs to this device node. */
+static void handle_event(DWORD node, WPARAM what)
+{
+    Reg sent[MAX_REGS];
+    int k = 0;
+    lock();
+    for (int i = 0; i < MAX_REGS; i++)
+        if (g_reg[i] && g_reg[i]->node == node) {
+            sent[k] = *g_reg[i];
+            sent[k++].registration = (HANDLE)g_reg[i];
+        }
+    unlock();
+    for (int i = 0; i < k; i++) {
+        BroadcastHandle b;
+        memset(&b, 0, sizeof(b));
+        b.size = (DWORD)(__builtin_offsetof(BroadcastHandle, data) + sent[i].data_size);
+        b.type = DBT_DEVTYP_HANDLE;
+        b.handle = sent[i].device;
+        b.notification = sent[i].registration;
+        b.event = sent[i].guid;
+        b.nameoffset = sent[i].nameoffset;
+        if (sent[i].data_size) memcpy(b.data, sent[i].data, sent[i].data_size);
+        if (sent[i].service) {
+            service_event_fn fn = (service_event_fn)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "NovaServiceDeviceEvent");
+            if (fn) fn(sent[i].target, (DWORD)what, &b);
+        } else {
+            send((HWND)sent[i].target, what, (LPARAM)&b);
+        }
+    }
+}
+
 static BOOL CALLBACK collect(HWND h, LPARAM lp)
 {
     HWND *list = (HWND *)lp;
@@ -143,16 +193,27 @@ static DWORD WINAPI follower(void *arg)
             if (r.newest < g_after) g_after = r.newest;        /* (not to wait past the kernel's newest) */
             continue;
         }
+        BOOL changed = FALSE;
         for (int i = 0; i < n; i++) {
             NovaPnpNode node;
             if (!nova_pnp_node(r.e[i].id, &node)) continue;
             GUID g[4];
             int k = nova_pnp_interfaces(&node, g);
-            WPARAM what = r.e[i].kind == NOVA_PNP_ARRIVAL ? DBT_DEVICEARRIVAL : DBT_DEVICEREMOVECOMPLETE;
-            for (int j = 0; j < k; j++) interface_event(&node, &g[j], what);
+            WPARAM what;
+            switch (r.e[i].kind) {
+            case NOVA_PNP_ARRIVAL: what = DBT_DEVICEARRIVAL; changed = TRUE; break;
+            case NOVA_PNP_REMOVAL: what = DBT_DEVICEREMOVECOMPLETE; changed = TRUE; break;
+            case NOVA_PNP_QUERY_REMOVE: what = DBT_DEVICEQUERYREMOVE; break;
+            case NOVA_PNP_QUERY_REMOVE_FAILED: what = DBT_DEVICEQUERYREMOVEFAILED; break;
+            case NOVA_PNP_REMOVE_PENDING: what = DBT_DEVICEREMOVEPENDING; break;
+            default: continue;
+            }
+            if (r.e[i].kind == NOVA_PNP_ARRIVAL || r.e[i].kind == NOVA_PNP_REMOVAL)
+                for (int j = 0; j < k; j++) interface_event(&node, &g[j], what);
+            handle_event(node.id, what);
         }
         g_after = r.e[n - 1].seq;
-        if (n < 32) broadcast();             /* (after the batch: one DBT_DEVNODES_CHANGED for it) */
+        if (n < 32 && changed) broadcast();   /* (after the batch: one DBT_DEVNODES_CHANGED for it) */
     }
     return 0;
 }
@@ -179,6 +240,12 @@ static HANDLE reg(HANDLE target, LPVOID filter, DWORD flags, BOOL wide)
     if (!target || !h || h->size < sizeof(BroadcastHdr)) { SetLastError(ERROR_INVALID_PARAMETER); return NULL; }
     if (!(flags & DEVICE_NOTIFY_SERVICE_HANDLE) && !IsWindow((HWND)target)) { SetLastError(ERROR_INVALID_WINDOW_HANDLE); return NULL; }
     if (h->type != DBT_DEVTYP_DEVICEINTERFACE && h->type != DBT_DEVTYP_HANDLE) { SetLastError(13 /* ERROR_INVALID_DATA */); return NULL; }
+    if (h->type == DBT_DEVTYP_HANDLE &&
+        (h->size < __builtin_offsetof(BroadcastHandle, data) + 1 ||
+         h->size > __builtin_offsetof(BroadcastHandle, data) + sizeof(((BroadcastHandle *)0)->data))) {
+        SetLastError(13 /* ERROR_INVALID_DATA */);
+        return NULL;
+    }
     Reg *r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Reg));
     if (!r) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
     r->magic = REG_MAGIC;
@@ -188,9 +255,20 @@ static HANDLE reg(HANDLE target, LPVOID filter, DWORD flags, BOOL wide)
     if (h->type == DBT_DEVTYP_DEVICEINTERFACE) {
         r->all = (flags & DEVICE_NOTIFY_ALL_INTERFACE_CLASSES) != 0;
         if (h->size >= __builtin_offsetof(BroadcastIfaceW, name)) r->guid = ((const BroadcastIfaceW *)h)->guid;
+    } else {
+        const BroadcastHandle *b = (const BroadcastHandle *)h;
+        r->device = b->handle;
+        r->node = nova_pnp_handle_node(r->device);
+        if (!r->node) {
+            HeapFree(GetProcessHeap(), 0, r);
+            SetLastError(ERROR_INVALID_HANDLE);
+            return NULL;
+        }
+        r->guid = b->event;
+        r->nameoffset = b->nameoffset;
+        r->data_size = h->size - (DWORD)__builtin_offsetof(BroadcastHandle, data);
+        memcpy(r->data, b->data, r->data_size);
     }
-    /* (DBT_DEVTYP_HANDLE: a file handle's device: NovaOS sends no events
-     * for open handles; the registration is kept and stays quiet) */
     lock();
     int i = 0;
     while (i < MAX_REGS && g_reg[i]) i++;

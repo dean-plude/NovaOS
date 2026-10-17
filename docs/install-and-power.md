@@ -74,6 +74,61 @@ a second, in case an edge goes missing. The log shows the controller
 (`[EC] \_SB_.PCI0.LPCB.EC__: ports 0x62/0x66 (from the ECDT), GPE 0x...`)
 and each kind of event the first time it comes (`[EC] Event 0x2a: _Q2A`).
 
+## Passive cooling, GPE blocks and PCI bridges
+
+**Throttling.** A thermal zone at or above its passive trip point
+(`_PSV`) slows the processors in its `_PSL` (all of them if it has
+none). Every `_TSP` (a second if not given) it changes their performance
+by `-(_TC1 × (T now − T before) + _TC2 × (T now − _PSV))` percent, the
+formula of ACPI 6.5 section 11.1.5 (4 and 3 when the firmware gives no
+constants), until the zone has cooled and the processors are back to
+full speed. `kernel/hal/throttle.c` puts each processor in the
+shallowest T-state at or below what the hottest zone asks for, never
+shallower than `_TPC` allows (Notify 0x82 when that changes):
+
+- with `_PTC` and `_TSS`, it writes the state's control value to the
+  control register and checks the status register, in I/O or memory
+  space; a register in FFixedHW is Intel's `IA32_CLOCK_MODULATION` MSR,
+  which each CPU writes for itself on its next timer tick;
+- without them, `P_CNT` in the processor's `P_BLK`, with the FADT's duty
+  cycle field.
+
+The log lists each throttled processor (`[ACPI] Processor
+\_SB_.CPUS.C000 (CPU 0): 4 T-states (100% 75% 50% 25%), through _PTC,
+...`) and each change (`[ACPI] \_SB_.CPUS.C000: T3 (25% performance) for
+passive cooling`). `CallNtPowerInformation(ProcessorInformation)` reports
+the lower `MhzLimit` while a CPU is throttled, and `ThermalInformation`
+the zone's constants and processors. Many recent Intel laptops leave
+T-states out of their tables and cool with the processor's own
+mechanisms; there the log has no `Processor` line and nothing is
+throttled.
+
+**GPE blocks.** uACPI handles the FADT's GPE0 and GPE1 blocks (`\_GPE`)
+itself. NovaOS also sets up each GPE block device (`ACPI0006`) from its
+`_CRS`: the block's status and enable registers, in I/O or memory space,
+and its interrupt, or the SCI when it names none. The `_Lxx` and `_Exx`
+methods under the device run as `\_GPE`'s do, and a `_PRW` that names
+the block (`Package () { Package () { \_SB.GPE1, 1 }, 3 }`) makes that
+GPE a wake event. The log says `[ACPI] GPE block \_SB_.GPE1: 8 events at
+I/O 0xea, on the SCI, IRQ 9`.
+
+**Bridges.** A PCI function behind a PCI-to-PCI bridge (a PCIe root or
+switch port, for one) has its interrupt from the bridge's own `_PRT`
+when the firmware gives one, and otherwise through the standard swizzle:
+pin `(pin + device) mod 4` on the bridge's device number, one bridge up
+at a time, to a bus that has a `_PRT`. Its Interrupt Line register and
+the interrupt a Windows driver gets both use that GSI. The log names
+each bus behind a bridge and each function routed by the swizzle
+(`[ACPI] PCI 01:00.0 INTA: GSI 22 (swizzled through its bridges)`).
+
+**Tests.** The core boot's `powertest` heats the thermal zone in
+`tests/acpi/lid-thermal.asl` past its passive trip point: CPU 0 goes to
+its deepest T-state (`MhzLimit` 25%) and back once cool, the T-states
+being pc-testdev's scratch memory. The same table's lid raises its event
+and its wake through a GPE block device. The devices suite's `edu` boot
+puts QEMU's edu device behind a PCIe root port, which QEMU describes
+with no `_PRT`, and its driver's interrupts arrive.
+
 ## Sleep without S3
 
 Laptops sold for Windows' Modern Standby, the T14 Gen 4 among them, often

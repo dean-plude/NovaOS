@@ -108,6 +108,17 @@ void PnpRemove(UINT32 id)
     if (g_seq != after) UmGuiDevicesChanged(after);
 }
 
+void PnpNotify(UINT32 kind, UINT32 id)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    UINT32 after = g_seq;
+    if (id && id <= g_count && g_node[id] && (g_node[id]->flags & PNP_PRESENT))
+        event_locked(kind, g_node[id]);
+    bool changed = g_seq != after;
+    spin_unlock_irqrestore(&g_lock, s);
+    if (changed) UmGuiDevicesChanged(after);
+}
+
 void PnpDelete(UINT32 id)
 {
     PnpRemove(id);
@@ -236,13 +247,13 @@ int PnpResources(UINT32 id, PnpResource *out, int max)
         out[k].start = r[i].base;
         out[k].length = r[i].size;
     }
-    /* the interrupt line, routed as kernel/nt/pnp.c routes it (_PRT on bus 0) */
+    /* the interrupt line, routed as kernel/nt/pnp.c routes it (_PRT, or swizzled behind bridges) */
     UINT32 r3c = PciRead32(d.bus, d.dev, d.func, 0x3C);
     UINT8 pin = (UINT8)(r3c >> 8);
     UINT32 gsi = 0;
     bool level = true, low = true, have = false;
     if (pin >= 1 && pin <= 4) {
-        have = d.bus == 0 && AmlPciIrq(d.dev, (UINT8)(pin - 1), &gsi, &level, &low);
+        have = AmlPciIrq(d.bus, d.dev, (UINT8)(pin - 1), &gsi, &level, &low);
         if (!have && (UINT8)r3c && (UINT8)r3c != 0xFF) { gsi = (UINT8)r3c; have = true; level = true; }
     }
     if (have && k < max) {

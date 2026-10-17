@@ -110,7 +110,8 @@ void UpdateSetChannel(const char *url)
  * body in *body) or NULL with the error set.  The caller releases it. */
 static NetOp *fetch(const char *url, const char **body, UINT32 *blen, bool progress)
 {
-    char host[128], path[512], loc[512];
+    static char path[NET_URL_MAX], loc[NET_URL_MAX];     /* (the one update thread; signed redirects are long) */
+    char host[128];
     UINT16 port;
     bool https;
     if (!NetParseUrl(url, host, sizeof(host), &port, path, sizeof(path), &https)) { fail("Bad address: %s", url); return NULL; }

@@ -289,14 +289,19 @@ The core and devices suites are described in [testing.md](testing.md).
     static address and back to DHCP, and `winget` with the WinGet REST
     source in `tools/h2server.js` (source add, search, install of an older
     version, list, upgrade, uninstall, a download whose SHA-256 is wrong
-    refused) and the App Store's catalog as a source.
+    refused) and the App Store's catalog as a source; last, an App Store
+    download as from a real site (`store install` with the test server's
+    catalog: a redirect to a ~1,000-character signed address as GitHub's
+    release downloads, a 503 the Store tries again after, and a body
+    trickled over ~40 s).
   - virtio-net on an IPv6-only network served by `tools/v6peer.py`: SLAAC
     and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6; stateful DHCPv6
     (the lease in `ipconfig /all` and `dhcp6test`, 64- and 32-bit, a
     Rebind at T2 and a Renew while `ping -6` runs, `ipconfig /release6`
     and `/renew6`).
   - an Intel e1000e (82574L): its PHY and link, the link pulled and plugged
-    back, sleep and wake, then the IPv4 tests above again on it.
+    back, sleep and wake, then the IPv4 tests above again on it (not
+    `winget` or the App Store download).
 - **Graphics** (the **Graphics tests (OpenGL, Direct3D)** job): two
   monitors, the first a QEMU 3D virtio-gpu with Venus
   (`virtio-vga-gl,venus=on`, whose Vulkan and OpenGL are the runner's

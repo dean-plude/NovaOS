@@ -232,6 +232,11 @@ The **App Store** in the dock lists programs by category.  For each one,
 running its setup program or Windows Installer package, or by unpacking
 its archive with 7-Zip), and **Open** starts it.  Installed programs also
 appear in Start.  In the Terminal, `store install <name>` does the same.
+A download that fails on the way (no data for 30 seconds, a dropped
+connection, a busy server) is tried again from the start, up to three
+times, before the row says **Failed** with the reason and the server's
+name; each failed try is also in the serial log (`[STORE] ...`).
+Downloads can be up to 1 GB, held in memory until they are saved.
 A **Verified** badge next to a program's name means the nightly tests
 installed that same download and it passed last night (with its rating
 from [compatibility.md](compatibility.md)); **Failed last nightly**

@@ -27,8 +27,11 @@ order; --list prints them):
   network   two boots with a virtio-net adapter (tests/selftest/network4
             and network6).  IPv4 on QEMU's user-mode network: ipconfig, ping,
             Winsock (netcat), winhttp's HTTP/2 (httptest suite) and eight
-            long downloads at once (dltest -w) and winget against its REST
-            source, all against tools/h2server.js
+            long downloads at once (dltest -w), winget against its REST
+            source and an App Store download (a catalog from the test
+            server, a redirect to a ~1,000-character signed address, a 503
+            the Store tries again after, a body trickled over more than 30
+            s), all against tools/h2server.js
             (needs node and openssl).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
             ping -6, curl -6 and Winsock over IPv6 (netcat), stateful
@@ -357,7 +360,7 @@ def renamed(t, suffix):
 
 # The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith('winget')]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store'))]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)
@@ -396,7 +399,8 @@ def net4_boot(work):
     """Start tools/h2server.js with a throwaway certificate; QEMU's arguments and the server"""
     cert, key = os.path.join(work, 'h2cert.pem'), os.path.join(work, 'h2key.pem')
     subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert,
-                    '-days', '2', '-subj', '/CN=novaos-test'], check=True, capture_output=True)
+                    '-days', '2', '-subj', '/CN=novaos-test', '-addext', 'subjectAltName=IP:10.0.2.2'],
+                   check=True, capture_output=True)
     srv = subprocess.Popen(['node', os.path.join(ROOT, 'tools', 'h2server.js'), cert, key, '18443', '18080'],
                            stdout=open(os.path.join(work, 'h2server.log'), 'w'), stderr=subprocess.STDOUT)
     return ['-nic', 'user,model=virtio-net-pci'], [srv]
@@ -936,7 +940,9 @@ BOOTS = {
 
 
 def store_verdict(nova, t, out):
-    """Wait for the App Store's outcome line for @t; (why it failed or None, the log)"""
+    """Wait for the App Store's outcome line for @t; (why it failed or None, the log).
+    It must say "Installed", or match @t.expect[0] when there is one ("Downloaded"
+    for a program that runs from C:\\Downloads)"""
     pat = re.compile(r'\[STORE\] ' + re.escape(t.store) + r': ([^\n]*)')
     end = time.time() + t.timeout
     while not pat.search(out) and time.time() < end and nova.q.poll() is None:
@@ -945,7 +951,8 @@ def store_verdict(nova, t, out):
     m = pat.search(out)
     if not m:
         return f'no outcome from the App Store in {t.timeout} s', out
-    return (None if m.group(1).startswith('Installed') else m.group(1)), out
+    good = re.match(t.expect[0], m.group(1)) if t.expect else m.group(1).startswith('Installed')
+    return (None if good else m.group(1)), out
 
 
 def verdict(t, out, ok, exe):

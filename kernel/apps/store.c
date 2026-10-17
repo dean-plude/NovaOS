@@ -5,8 +5,11 @@
  * The catalog is read from JSON (name, publisher, download URL, and where the
  * installed program ends up).  "Get" fetches the installer over HTTP(S)
  * with the same asynchronous network operations the Terminal's wget
- * uses; "Install" runs the downloaded installer; "Open" starts the
- * program once its executable exists under C:\Programs.  The list
+ * uses, following redirects to signed download URLs and trying again
+ * (from the catalog's address) after a failure that may pass: a timeout,
+ * a dropped connection, a 5xx or 429 answer.  "Install" runs the
+ * downloaded installer; "Open" starts the program once its executable
+ * exists under C:\Programs.  The list
  * scrolls with the built-in apps' scroll bar (UiScroll, as File Explorer's).
  * The Updates page updates NovaOS itself from its update channel
  * (fs/update.c): check, download and stage, then restart.
@@ -16,6 +19,7 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../ke/printf.h"
+#include "../ke/scheduler.h"
 #include "../net/net.h"
 #include "../um/um.h"
 #include "../fs/update.h"
@@ -42,7 +46,9 @@ static StoreBadges *g_store_badges;        /* the nightly corpus's verdicts, or 
 /* -----------------------------------------------------------------------
  * State
  * ----------------------------------------------------------------------- */
-enum { DL_NONE, DL_RESOLVE, DL_FETCH, DL_FAILED };
+enum { DL_NONE, DL_RESOLVE, DL_FETCH, DL_FAILED, DL_RETRY };
+
+#define DL_ATTEMPTS 3              /* tries per download before "Failed" */
 
 typedef struct {
     int     cat;                   /* selected category */
@@ -54,7 +60,9 @@ typedef struct {
     int     phase;
     NetOp  *op;
     UINT32  shown;                 /* bytes shown in the progress text */
-    char    host[128], path[512];
+    int     attempt;               /* 1..DL_ATTEMPTS */
+    UINT64  retry_at;              /* DL_RETRY: when (ticks) */
+    char    host[128], path[NET_URL_MAX], loc[NET_URL_MAX];
     UINT16  port;
     bool    https;
     int     redirects;
@@ -295,7 +303,7 @@ static int visible(const Store *s, int *out)
 static void set_msg(Store *s, int i, const char *m)
 {
     s->bad[i] = !strncmp(m, "Failed", 6) || !strncmp(m, "Could not", 9);
-    if (s->bad[i] || !strncmp(m, "Installed", 9))       /* the outcome, for the serial log */
+    if (s->bad[i] || !strncmp(m, "Installed", 9) || !strncmp(m, "Downloaded", 10))   /* the outcome, for the serial log */
         kprintf("[STORE] %s: %s\n", g_catalog[i].name, m);
     strncpy(s->msg[i], m, sizeof(s->msg[i]) - 1);
     s->msg[i][sizeof(s->msg[i]) - 1] = '\0';
@@ -306,13 +314,43 @@ static void set_msg(Store *s, int i, const char *m)
  * ----------------------------------------------------------------------- */
 static void dl_fail(Store *s, const char *why)
 {
-    char m[64];
+    char m[72];
+    kprintf("[STORE] Download of %s from %s (attempt %d of %d) failed: %s\n",
+            g_catalog[s->dl].name, s->host, s->attempt, DL_ATTEMPTS, why);
     ksnprintf(m, sizeof(m), "Failed: %s", why);
     set_msg(s, s->dl, m);
     if (s->op) NetRelease(s->op);
     s->op = NULL;
     s->phase = DL_NONE;
     s->dl = -1;
+}
+
+/* A failure that may pass (the network or the server, not the file):
+ * start over from the catalog's address a little later, up to
+ * DL_ATTEMPTS times, else fail with @why */
+static void dl_retry(Store *s, const char *why)
+{
+    if (s->attempt >= DL_ATTEMPTS) { dl_fail(s, why); return; }
+    kprintf("[STORE] Download of %s from %s (attempt %d of %d) failed: %s; trying again\n",
+            g_catalog[s->dl].name, s->host, s->attempt, DL_ATTEMPTS, why);
+    if (s->op) NetRelease(s->op);
+    s->op = NULL;
+    s->phase = DL_RETRY;
+    s->retry_at = sched_ticks() + (UINT64)s->attempt * 300;     /* 3 s, then 6 s */
+    s->attempt++;
+    char m[72];
+    ksnprintf(m, sizeof(m), "%s; trying again (%d of %d)...", why, s->attempt, DL_ATTEMPTS);
+    set_msg(s, s->dl, m);
+}
+
+/* Is a failed network operation's @error worth another try?  Not when
+ * the certificate is wrong or the file can't be held. */
+static bool dl_transient(const char *error)
+{
+    static const char *const never[] = { "ertificate", "too large", "Out of memory", "too long", "not available" };
+    for (unsigned i = 0; i < sizeof(never) / sizeof(never[0]); i++)
+        if (strstr(error, never[i])) return false;
+    return true;
 }
 
 static bool dl_target(Store *s, const char *url)
@@ -327,6 +365,40 @@ static void dl_resolve(Store *s)
     if (!s->op) dl_fail(s, "the network is busy");
 }
 
+/* (Re)start the download at the catalog's address */
+static void dl_begin(Store *s)
+{
+    s->redirects = 0;
+    s->shown = 0;
+    set_msg(s, s->dl, s->attempt > 1 ? "Connecting again..." : "Connecting...");
+    if (!dl_target(s, g_catalog[s->dl].url)) { dl_fail(s, "bad download address"); return; }
+    dl_resolve(s);
+}
+
+/* Follow a redirect to @loc: an absolute URL, "//host/path" (this
+ * scheme), "/path" (this server) or a path relative to this one */
+static bool dl_redirect(Store *s, const char *loc)
+{
+    static char url[NET_URL_MAX + 8];               /* (the window thread's) */
+    if (loc[0] == '/' && loc[1] == '/') {
+        ksnprintf(url, sizeof(url), "%s:%s", s->https ? "https" : "http", loc);
+        return strlen(url) < NET_URL_MAX && dl_target(s, url);
+    }
+    if (strstr(loc, "://")) return dl_target(s, loc);
+    if (loc[0] == '/') {
+        if (strlen(loc) >= sizeof(s->path)) return false;
+        strcpy(s->path, loc);
+        return true;
+    }
+    char *q = strchr(s->path, '?');                 /* the path's own folder */
+    if (q) *q = '\0';
+    char *slash = strrchr(s->path, '/');
+    size_t keep = slash ? (size_t)(slash - s->path) + 1 : 0;
+    if (keep + strlen(loc) >= sizeof(s->path)) return false;
+    strcpy(s->path + keep, loc);
+    return true;
+}
+
 static void dl_start(Store *s, int i)
 {
     if (s->catalog_op) { set_msg(s, i, "Wait for catalog refresh"); return; }
@@ -339,11 +411,8 @@ static void dl_start(Store *s, int i)
         return;
     }
     s->dl = i;
-    s->redirects = 0;
-    s->shown = 0;
-    set_msg(s, i, "Connecting...");
-    if (!dl_target(s, g_catalog[i].url)) { dl_fail(s, "bad download address"); return; }
-    dl_resolve(s);
+    s->attempt = 1;
+    dl_begin(s);
 }
 
 static void dl_cancel(Store *s)
@@ -361,34 +430,32 @@ static void dl_done(Store *s)
     const StoreApp *a = &g_catalog[s->dl];
     const char *body;
     UINT32 blen;
-    char loc[512];
-    int status = NetHttpParse(s->op, &body, &blen, loc, sizeof(loc));
-    if (!status) { dl_fail(s, "unreadable response"); return; }
+    char *loc = s->loc;
+    int status = NetHttpParse(s->op, &body, &blen, loc, sizeof(s->loc));
+    if (!status) { dl_retry(s, "unreadable response"); return; }
 
-    if (status >= 300 && status < 400 && loc[0] && s->redirects < 8) {
+    if (status >= 300 && status < 400 && loc[0]) {
+        if (s->redirects >= 8) { dl_fail(s, "too many redirects"); return; }
         NetRelease(s->op);
         s->op = NULL;
         s->redirects++;
-        if (loc[0] == '/') {                          /* same host */
-            strncpy(s->path, loc, sizeof(s->path) - 1);
-            s->path[sizeof(s->path) - 1] = '\0';
-        } else if (!dl_target(s, loc)) {
-            dl_fail(s, "bad redirect");
-            return;
-        }
+        if (strlen(loc) >= sizeof(s->loc) - 1) { dl_fail(s, "redirect address too long"); return; }
+        if (!dl_redirect(s, loc)) { dl_fail(s, "bad redirect"); return; }
         dl_resolve(s);
         return;
     }
     if (status != 200) {
         char m[48];
-        ksnprintf(m, sizeof(m), "server replied %d", status);
-        dl_fail(s, m);
+        ksnprintf(m, sizeof(m), "%s replied %d", s->host, status);
+        if (status == 408 || status == 429 || status >= 500) dl_retry(s, m);
+        else dl_fail(s, m);
         return;
     }
     RamNode *dir = RamfsResolve(NULL, "\\Downloads");
     if (!dir) dir = RamfsCreate(RamfsResolve(NULL, "\\"), "Downloads", true);
     RamNode *f = dir ? RamfsFind(dir, a->file) : NULL;
     if (!f && dir) f = RamfsCreate(dir, a->file, false);
+    if (f && !f->dir && !RamfsFits(f, blen)) { dl_fail(s, "not enough space on drive C:"); return; }
     if (!f || f->dir || !RamfsWrite(f, body, blen)) { dl_fail(s, "could not save the file"); return; }
     char sz[24], m[64];
     AppFormatSize(blen, sz, sizeof(sz));
@@ -408,11 +475,21 @@ static bool upd_changed(const Store *s);
 static bool dl_tick(Store *s)
 {
     bool changed = unpack_tick(s);
+    if (s->dl >= 0 && s->phase == DL_RETRY) {
+        if (sched_ticks() < s->retry_at) return changed;
+        dl_begin(s);
+        return true;
+    }
     if (s->dl < 0 || !s->op) return changed;
     NetOp *op = s->op;
     if (s->phase == DL_RESOLVE) {
         if (op->state == NET_PENDING) return false;
-        if (op->state == NET_FAILED) { dl_fail(s, op->error[0] ? op->error : "name not found"); return true; }
+        if (op->state == NET_FAILED) {
+            char m[72];
+            ksnprintf(m, sizeof(m), "could not find %s (%s)", s->host, op->error[0] ? op->error : "no answer");
+            dl_retry(s, m);
+            return true;
+        }
         NetIp ip = op->addr;
         NetRelease(op);
         s->op = NetHttpGetAddr(&ip, s->port, s->host, s->path, s->https);
@@ -432,8 +509,11 @@ static bool dl_tick(Store *s)
             set_msg(s, s->dl, m);
             return true;
         }
-        if (op->state == NET_FAILED) dl_fail(s, op->error[0] ? op->error : "connection lost");
-        else dl_done(s);
+        if (op->state == NET_FAILED) {
+            char why[sizeof(op->error)];                /* (op goes before the message is made) */
+            strcpy(why, op->error[0] ? op->error : "connection lost");
+            if (dl_transient(why)) dl_retry(s, why); else dl_fail(s, why);
+        } else dl_done(s);
         return true;
     }
     return false;
@@ -1082,10 +1162,14 @@ const char *StoreClose(void)
     return "Closed the App Store.";
 }
 
+/* "store refresh" in the Terminal: the Store opens in the background, as
+ * for "store install", so the Terminal keeps the keyboard */
 const char *StoreRefresh(void)
 {
+    WND *was = WmActiveWindow();
     StoreOpen();
     if (!g_store) return "Could not open the App Store.";
+    if (was && was != g_store) WmSetActive(was);
     Store *s = g_store->user;
     catalog_refresh(s);
     return s->catalog_msg;

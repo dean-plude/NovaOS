@@ -12,6 +12,12 @@
 //   /chunked   three 1000-byte chunks (Transfer-Encoding: chunked)
 //   /stream/BYTES/SEED  BYTES of a pattern (byte i = (i*7 + SEED*13 + (i>>16)) % 251),
 //              written as fast as the client takes them (userland/programs/dltest.c)
+//   /store/...  an App Store (kernel/apps/store.c) catalog, over HTTP or HTTPS:
+//              ca.pem (this server's certificate, to trust), catalog.json (one
+//              portable program), get/FILE (302 to a ~1,000-character signed
+//              address, as GitHub's release downloads), blob/FILE?SIG (403 for
+//              a cut signature; 503 the first time; then 6 MB over ~40 s)
+//              (tests/selftest/network4/090-store-download.py)
 //   /winget/...  a WinGet REST source (information, manifestSearch,
 //              packageManifests/ID) with two test packages and their
 //              downloads under /winget/files/ (userland/programs/winget.c;
@@ -76,12 +82,60 @@ function handle(req, res) {
             res.end();
         };
         more();
+    } else if (req.url.startsWith('/store/')) {
+        store(req, res, head);
     } else if (req.url.startsWith('/winget/')) {
         winget(req, res, head);
     } else {
         res.writeHead(404, { ...head, 'content-type': 'text/plain' });
         res.end('not found\n');
     }
+}
+
+// The App Store's test catalog: "Store Download Test", whose download
+// redirects to a signed address as long as GitHub's, fails once with 503
+// and then arrives slower than the old 30-second limit on a whole request
+const STORE_SIZE = 6 * 1024 * 1024;
+const storeSig = 'sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-17T18%3A30%3A24Z&sig=' + 'S'.repeat(400) +
+                 '&jwt=' + 'J'.repeat(450) + '&response-content-type=application%2Foctet-stream';
+let storeBlobs = 0;
+function store(req, res, head) {
+    const host = req.headers.host || req.headers[':authority'];
+    const send = (status, type, body, extra = {}) => {
+        res.writeHead(status, { ...head, 'content-type': type, 'content-length': body.length, ...extra });
+        res.end(body);
+    };
+    const url = req.url.slice('/store'.length);
+    if (url === '/ca.pem') return send(200, 'application/x-pem-file', fs.readFileSync(cert));
+    if (url === '/catalog.json') {
+        return send(200, 'application/json', Buffer.from(JSON.stringify({ schema_version: 1, apps: [{
+            name: 'Store Download Test', publisher: 'NovaOS', summary: 'The self-tests\' App Store download',
+            category: 'utilities', url: `https://${host}/store/get/storetest.exe`, file: 'storetest.exe',
+            dest: null, exe: null, kind: 'portable', size_mb: 6, note: 'tools/h2server.js', label: 'T',
+            color: '#2A5DB0', id: null, version: null }] })));
+    }
+    const get = url.match(/^\/get\/([\w.-]+)$/);
+    if (get) {
+        res.writeHead(302, { ...head, location: `https://${host}/store/blob/${get[1]}?${storeSig}`, 'content-length': 0 });
+        return res.end();
+    }
+    const blob = url.match(/^\/blob\/[\w.-]+\?(.*)$/);
+    if (!blob) return send(404, 'text/plain', Buffer.from('not found\n'));
+    if (blob[1] !== storeSig) {
+        log(`store: a cut signature (${blob[1].length} of ${storeSig.length} characters)`);
+        return send(403, 'text/plain', Buffer.from('signature does not match\n'));
+    }
+    if (++storeBlobs === 1) return send(503, 'text/plain', Buffer.from('try again\n'), { 'retry-after': '1' });
+    res.writeHead(200, { ...head, 'content-type': 'application/octet-stream', 'content-length': STORE_SIZE });
+    let sent = 0;
+    const timer = setInterval(() => {                    // 64 KB every 400 ms: ~40 s in all
+        const b = Buffer.alloc(Math.min(65536, STORE_SIZE - sent));
+        for (let i = 0; i < b.length; i++) b[i] = (sent + i) * 7 % 251;
+        sent += b.length;
+        res.write(b);
+        if (sent >= STORE_SIZE) { clearInterval(timer); res.end(); log('store: sent the download'); }
+    }, 400);
+    res.on('close', () => clearInterval(timer));
 }
 
 // The WinGet REST source: NovaOS.WinGetTest 1.0.0 and 2.0.0 (a portable

@@ -471,7 +471,13 @@ def build_pass(arch, all_tasks):
     rt = os.path.join(odir, 'x86rt.obj')
     task('crt0', [], lambda: cc(os.path.join(HERE, 'crt', 'crt0.c'), crt0))
     task('tlssup', [], lambda: cc(os.path.join(HERE, 'lib', 'tlssup.c'), tlssup))
-    prelude = ['crt0', 'tlssup']
+    tlregdtr = os.path.join(odir, 'tlregdtr.lib')   # thread_local destructors, pulled in only where used
+    def build_tlregdtr():
+        obj = os.path.join(odir, 'tlregdtr.obj')
+        cc(os.path.join(HERE, 'lib', 'tlregdtr.c'), obj)
+        run(['lld-link', '/lib', f'/out:{tlregdtr}', obj])
+    task('tlregdtr', [], build_tlregdtr)
+    prelude = ['crt0', 'tlssup', 'tlregdtr']
     if arch == 'x86':                              # 64-bit division helpers the compiler calls
         task('x86rt', [], lambda: cc(os.path.join(HERE, 'lib', 'x86rt.c'), rt))
         prelude.append('x86rt')
@@ -555,7 +561,7 @@ def build_pass(arch, all_tasks):
     def link_prog(src, name, prog):
         exe = os.path.join(odir, f'{name}.exe')
         objs, res = compiled[name]
-        stl = ((xamlobjs if prog.get('xaml') else []) + stlobjs + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
+        stl = ((xamlobjs if prog.get('xaml') else []) + stlobjs + [tlregdtr] + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
             if src.endswith('.cpp') and prog.get('msstl') else []
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS]
         run(['lld-link', '/subsystem:' + ('windows' if prog.get('gui') else 'console'),

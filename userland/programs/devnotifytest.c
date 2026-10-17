@@ -85,7 +85,8 @@ static LRESULT CALLBACK top_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
                 printf("keyboard interface %s: %s\n", v == 1 ? "arrival" : "removal", d->dbcc_name);
                 all_kbd |= v;
             }
-            if (v == 1 && !memcmp(&d->dbcc_classguid, &g_hid, sizeof(GUID)) && strstr(d->dbcc_name, "\\\\?\\HID#VID_0627&PID_0001#")) {
+            if (v == 1 && !memcmp(&d->dbcc_classguid, &g_hid, sizeof(GUID)) &&
+                strstr(d->dbcc_name, "\\\\?\\HID#VID_0627&PID_0001#")) {
                 int i = 0;
                 for (; d->dbcc_name[i] && i < (int)(sizeof(keyboard_device_path) / sizeof(keyboard_device_path[0])) - 1; i++)
                     keyboard_device_path[i] = (unsigned char)d->dbcc_name[i];

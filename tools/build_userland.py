@@ -106,6 +106,9 @@ def cflags():
 #             Microsoft's STL headers; see userland/msvcp140/build.py)
 #   gui       true: a GUI program (/subsystem:windows): the shell starts it
 #             with no console window, as Windows does
+#   winrt_abi true: a C++ program built against the Windows Runtime ABI
+#             headers tools/winrt/abigen.py generates (windows.foundation.h,
+#             windows.ui.composition.h, microsoft.ui.xaml.h ...)
 #   sources   more files compiled into it with its own flags (paths or
 #             globs from the repository root, e.g. a vendored library's
 #             under third_party/); with "include" (directories searched),
@@ -195,7 +198,9 @@ PROGRAM_LIBS = ['msvcrt', 'kernel32', 'ntdll', 'ws2_32', 'user32', 'gdi32', 'tes
                 'advapi32', 'ole32', 'oleaut32', 'comctl32', 'shell32', 'msi', 'winmm']
 if CHECK:                                 # CI: the manifests load (bases, dependencies), nothing is built
     print(f'userland: {len(DLLS)} DLLs, {len(PROGRAMS)} program manifests: OK')
-    sys.exit(0)
+    # and the XAML framework's IDL still reads as Microsoft's published metadata
+    abigen = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'winrt', 'abigen.py')
+    sys.exit(subprocess.run([sys.executable, abigen, '--check']).returncode)
 
 SLOTS = threading.BoundedSemaphore(JOBS)      # compiler/linker processes running at once
 LOG = threading.Lock()                        # a failed command's output is written in one piece
@@ -211,6 +216,21 @@ def run(cmd):
         r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
         fail(' '.join(cmd) + '\n' + r.stdout + r.stderr)
+
+WINRT_ABI = threading.Lock()
+def winrt_abi_flags(m):
+    """-I for the Windows Runtime ABI headers (windows.ui.composition.h,
+    microsoft.ui.xaml.h ...) when manifest @m says "winrt_abi": true.  The
+    first caller generates them (tools/winrt/abigen.py, a few seconds; files
+    whose text is unchanged keep their times)."""
+    if not m.get('winrt_abi'):
+        return []
+    d = os.path.join(inc_gen, 'winrt-abi')
+    with WINRT_ABI:
+        if not getattr(winrt_abi_flags, 'done', False):
+            run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'winrt', 'abigen.py'), d])
+            winrt_abi_flags.done = True
+    return ['-I', d]
 
 def cc(src, obj, extra=()):
     run(['clang'] + cflags() + list(extra) + ['-c', src, '-o', obj])
@@ -502,7 +522,7 @@ def build_pass(arch, all_tasks):
             if srcs:
                 objs += compile_many(srcs, odir, f'prog_{name}_', flags, compiler='clang++')
         elif src.endswith('.cpp'):                # C++ (exceptions, RTTI): vcruntime140
-            run(['clang++'] + cflags() + ['-fcxx-exceptions', '-fexceptions', '-std=c++17',
+            run(['clang++'] + cflags() + winrt_abi_flags(prog) + ['-fcxx-exceptions', '-fexceptions', '-std=c++17',
                  '-c', os.path.join(progdir, src), '-o', obj])
         else:                                     # C (with a vendored C library's files, if any)
             top = os.path.dirname(HERE)

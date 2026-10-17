@@ -54,10 +54,12 @@ operating-system components, so NovaOS writes them (steps 32.1 and 32.2)
 and points the XAML build at them. NovaOS does not ship Microsoft's
 closed binaries.
 
-The build is clang in MSVC mode (as for the rest of NovaOS's C++), with
-the generated sources the repository checks in. How to produce the
-headers its IDL would give through MIDL (a closed tool) without it is
-the first question step 32.3 answers.
+The build is clang in MSVC mode (as for the rest of NovaOS's C++).  The
+headers its IDL would give through MIDL (a closed tool) come from
+`tools/winrt/abigen.py` instead (step 32.3's second part, below): it
+reads the framework's MIDL 3 IDL and Windows Runtime metadata and writes
+the same C++ ABI headers, at build time, from inputs the repository
+vendors.
 
 ## The steps (Phase 32)
 
@@ -125,7 +127,41 @@ the first question step 32.3 answers.
      surface.  Not yet: effects, command lists, image brushes, colour
      contexts, `ID2D1DeviceContext1` and later (XAML asks for
      `ID2D1DeviceContext4`/`5` only for colour glyphs and SVG).
-   - *The `dxaml` build*, starting with the headers MIDL would make.
+   - *The headers MIDL would make (done).*  `dxaml` is written against
+     the C++ ABI headers MIDL makes from its IDL
+     (`dxaml/xcp/dxaml/idl`, MIDL 3) and those of the Windows SDK and
+     the Windows App SDK.  `tools/winrt/abigen.py` writes them without
+     MIDL: `winmd.py` reads Windows Runtime metadata (`Windows.winmd` and
+     the lifted `Microsoft.UI*` `.winmd` files from windows-rs, MIT,
+     `third_party/winmd`), `idl.py` reads the MIDL 3 IDL and synthesizes
+     the interfaces MIDL makes for a runtime class (`IFoo` for its
+     instance members, `IFooStatics`, `IFooFactory` with a composable
+     class's `baseInterface`/`innerInterface`, `IFooOverrides`,
+     `IFooProtected`, `IFoo2`... for versioned member blocks, the names
+     `[interface_name]` and its kin give), and the writer emits one
+     `namespace.h` per namespace (interfaces in vtable order with
+     `__declspec(uuid)`, delegates as `IFooHandler`, the generic
+     instances the namespace's types use as `template <>`
+     specializations with the IIDs Windows' pinterface rule gives,
+     `__FIVector_1_...` names, `RuntimeClass_`/`InterfaceName_` strings)
+     and a `namespace.values.h` (enums with MIDL's `Name_Value`
+     constants, structs, the generic interfaces' `_impl` templates).
+     MIDL 3 invents the IIDs of the interfaces it synthesizes; NovaOS
+     takes them by name from Microsoft's published
+     `Microsoft.UI.Xaml.winmd`, so they are the IIDs Windows App SDK
+     apps use (interfaces only in the IDL, such as the private ones, get
+     name-based IIDs of NovaOS's).  `abigen.py --check` confirms that the
+     IDL's 2136 public types match that metadata in names, member order
+     and signatures.  Features `FeatureFlags.h` marks `AlwaysDisabled`
+     are left out, as MIDL does.  The userland build generates the headers
+     for any program or DLL whose manifest asks (`"winrt_abi": true`).
+     Test: `winrtabitest` (published IIDs, and the Compositor driven
+     through the generated interfaces).
+   - *The `dxaml` build.*  Next: the Windows SDK, WRL and WIL (MIT) pieces
+     its sources include beyond NovaOS's headers (MinGW-w64's headers, as
+     `msvcp140.dll`'s build uses, are the first candidate), then its core,
+     parser and metadata compiled as `Windows.UI.Xaml.dll`, until
+     `Application.Start` runs and `XamlReader.Load` parses a page.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

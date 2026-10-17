@@ -13955,6 +13955,70 @@ the next Renew is answered with a long lease.  The new tests check
 `ping -6` runs, `ipconfig /release6` (the server confirms) and
 `ipconfig /renew6`.
 
+## Touchpad tap-and-drag and coasting scroll
+
+Precision touchpads (the T14's I2C one and USB ones alike) gained the two
+Windows 11 gestures they lacked:
+
+- **Tap and drag.**  A tap, then the finger down again within 300 ms,
+  holds the left button down while that finger stays on the pad, so
+  moving it drags (a window, a selection, a file).  Lifting the finger
+  ends the drag: there is no drag lock, as Windows 11's default "Tap
+  twice and drag to multi-select" behaves.  Touching again quickly
+  without moving is the second click of a double-click.
+- **Coasting scroll.**  Two fingers that lift while still scrolling leave
+  the scrolling going at their speed, slowing down over about a second,
+  as Windows' scrolling does; fingers that stop before they lift do not
+  coast.  A touch on the pad stops it, and that touch is no tap.  The
+  coasting keeps coming as mouse-wheel notches, so every program's
+  `WM_MOUSEWHEEL` and `WM_MOUSEHWHEEL` handling sees it.
+
+Both are in the gesture code in `kernel/drivers/usbhid.c`, which every
+touchpad in touchpad mode goes through.  The tap and drag timeouts are
+libinput's (MIT); its tap state machine is built around its own device
+model, so the rules were taken rather than the code.  Tests: `hwcheck`'s
+modelled touchpad checks tap-and-drag (and that a touch 400 ms after a
+tap does not drag), and `digitest` in the devices suite's "touch" boot
+drags with a USB precision touchpad, flicks it so the scrolling coasts on
+past the fingers' ten notches, and stops a coast with a touch.
+
+## Windows Runtime headers without MIDL
+
+Second part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)), and the first question the
+`dxaml` build has to answer: Microsoft's XAML sources are written against
+the C++ "ABI" headers MIDL makes from their IDL, and against the Windows
+SDK's, and MIDL is a closed tool.
+
+- **`tools/winrt/abigen.py`** writes those headers from Windows Runtime
+  metadata (`.winmd`, read by `tools/winrt/winmd.py`) and MIDL 3 IDL
+  (`tools/winrt/idl.py`, which synthesizes a runtime class's `IFoo`,
+  `IFooStatics`, `IFooFactory`, `IFooOverrides`, `IFooProtected` and its
+  versioned member blocks' interfaces as MIDL does): one header per
+  namespace with each interface in vtable order and its IID, delegates,
+  enums (`Visibility_Collapsed`), structs, generic interface templates and
+  the specializations of the instances each namespace uses, with the IIDs
+  Windows computes for them (`__FIVector_1_HSTRING` and the rest), and
+  `RuntimeClass_`/`InterfaceName_` strings.  For the 380 namespaces of
+  Windows' metadata, the Windows App SDK's lifted `Microsoft.UI.*` types and
+  the XAML framework's IDL, in about three seconds; every header compiles
+  in one translation unit, 64- and 32-bit.
+- **Inputs, vendored:** `Windows.winmd` and the `Microsoft.UI*` metadata from
+  windows-rs (MIT) in `third_party/winmd`, and the XAML framework's IDL from
+  microsoft-ui-xaml (MIT) in `third_party/microsoft-ui-xaml`, pinned.
+  The IIDs MIDL 3 would invent for synthesized interfaces come from the
+  published `Microsoft.UI.Xaml.winmd`; `abigen.py --check` (part of CI's
+  checks) confirms all 2136 XAML types the IDL gives match that metadata in
+  names, member order and signatures.
+- **The build** generates them for programs and DLLs whose manifest says
+  `"winrt_abi": true`, on the new `winrt_abi.h` (`IInspectable`,
+  `IActivationFactory`, `AggregateType`).
+
+New core self-test `winrtabitest` (64- and 32-bit) checks published IIDs
+and drives the Compositor through the generated interfaces.  Next in
+32.3: the Windows SDK, WRL and WIL pieces the `dxaml` sources include, then
+their build as `Windows.UI.Xaml.dll`.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

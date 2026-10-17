@@ -1516,11 +1516,19 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
     if (!n->hwids[0]) strncpy(n->hwids, dev, sizeof(n->hwids) - 2);
     if (!n->desc[0]) strncpy(n->desc, dev, sizeof(n->desc) - 1);
     if (!strncmp(dev, "HID\\", 4)) {                       /* (a HID collection, as input.inf files it) */
-        char key[200], service[64] = "";
+        char key[200], service[64] = "", rcls[32] = "";
         strcpy(n->cls, "HIDClass");
         ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", c->instance);
-        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service))
-            inbox_input(n, key);                             /* (a keyboard, a mouse, a digitizer, a game pad) */
+        /* (a keyboard, a mouse, a digitizer, a game pad: also again when the
+         * key already names NovaOS's own driver, so the node has its class
+         * from its arrival on, as the first time; the PlugPlay service writes
+         * the class a node arrived with into the key, so a node arriving as
+         * HIDClass would keep the key's Keyboard from the next plug) */
+        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service) ||
+            inbox_class_driver(service))
+            inbox_input(n, key);
+        else if (um_registry_get_sz(key, "Class", rcls, sizeof(rcls)) && rcls[0])
+            strcpy(n->cls, rcls);                            /* (an installed driver's class) */
     }
     n->flags = PNP_PRESENT;
     c->node = PnpAdd(bus->node, n);

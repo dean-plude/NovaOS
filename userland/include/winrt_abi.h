@@ -9,6 +9,9 @@
 #include <windows.h>
 #include <objbase.h>
 #include <roapi.h>
+#if __has_include(<eventtoken.h>)   /* the Windows SDK's (MinGW-w64's) home of EventRegistrationToken */
+#include <eventtoken.h>
+#endif
 
 typedef unsigned char boolean;
 typedef double DOUBLE;
@@ -55,3 +58,32 @@ template <class TLogical, class TAbi> struct GetAbiType<AggregateType<TLogical, 
 template <class T> struct GetLogicalType { typedef T type; };
 template <class TLogical, class TAbi> struct GetLogicalType<AggregateType<TLogical, TAbi>> { typedef TLogical type; };
 }}}}
+
+/* The Windows SDK's windows.foundation.collections.h marks the structure
+ * types its collection templates hold with is_foundation_struct, and code
+ * that keeps such collections (XAML's) specializes it and adds its own
+ * Detail::_Cleanup overloads. */
+namespace ABI { namespace Windows { namespace Foundation { namespace Collections {
+template <class T> struct is_foundation_struct { enum { value = false }; };
+namespace Detail {}
+}}}}
+
+/* roapi.h's C++ helpers (the Windows SDK puts them in the ABI namespace
+ * when MIDL_NS_PREFIX is defined, as the generated headers always are) */
+namespace ABI { namespace Windows { namespace Foundation {
+template <class T> inline HRESULT GetActivationFactory(HSTRING activatableClassId, T **factory)
+{
+    return RoGetActivationFactory(activatableClassId, __uuidof(T), reinterpret_cast<void **>(factory));
+}
+template <class T> inline HRESULT ActivateInstance(HSTRING activatableClassId, T **instance)
+{
+    *instance = nullptr;
+    IInspectable *p = nullptr;
+    HRESULT hr = RoActivateInstance(activatableClassId, &p);
+    if (SUCCEEDED(hr)) {
+        hr = p->QueryInterface(__uuidof(T), reinterpret_cast<void **>(instance));
+        p->Release();
+    }
+    return hr;
+}
+}}}

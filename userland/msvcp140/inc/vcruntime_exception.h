@@ -16,6 +16,7 @@ __declspec(dllimport) void __cdecl __std_exception_copy(const __std_exception_da
 __declspec(dllimport) void __cdecl __std_exception_destroy(__std_exception_data *_Data);
 }
 
+#if _HAS_EXCEPTIONS        /* else <exception> declares stdext::exception, as MSVC's does */
 namespace std {
 class exception {
 public:
@@ -56,4 +57,5 @@ public:
     bad_array_new_length() noexcept : bad_alloc("bad array new length") {}
 };
 }
+#endif
 #pragma pack(pop)

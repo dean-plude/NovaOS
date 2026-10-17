@@ -1,0 +1,13 @@
+Microsoft's Windows Implementation Library (WIL), vendored for NovaOS
+====================================================================
+
+Source: https://github.com/microsoft/wil (MIT, LICENSE),
+commit f6f3069ab39fb19c1f89fa5f2d3aa8a1118ace43.
+Kept, unchanged: include/ (the library is headers only), LICENSE and
+ThirdPartyNotices.txt.
+
+Microsoft's XAML sources (third_party/microsoft-ui-xaml) are written on
+WIL's error handling (wil/result.h), resource wrappers and safe casts;
+userland/windows_ui_xaml/build.py puts include/ on their search path.
+
+To update: replace include/ with a newer commit's and rebuild.

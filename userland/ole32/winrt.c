@@ -128,6 +128,46 @@ WINOLEAPI_(HRESULT) WindowsConcatString(HSTRING a, HSTRING b, HSTRING *out)
     return hr;
 }
 
+/* A string built in place: the caller fills the characters
+ * WindowsPreallocateStringBuffer hands out, then promotes the buffer to the
+ * HSTRING it already is (or deletes it).  Zero characters give the empty
+ * string and no buffer, as on Windows. */
+typedef struct HSTRING_BUFFER_ *HSTRING_BUFFER;
+WINOLEAPI_(HRESULT) WindowsPreallocateStringBuffer(UINT32 len, WCHAR **chars, HSTRING_BUFFER *out)
+{
+    static const WCHAR empty[1];
+    if (!chars || !out) return E_POINTER;
+    *chars = 0;
+    *out = 0;
+    if (!len) {
+        *chars = (WCHAR *)empty;
+        return S_OK;
+    }
+    HSTRING h;
+    WCHAR *fill = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (len + 1) * sizeof(WCHAR));
+    if (!fill) return E_OUTOFMEMORY;
+    HRESULT hr = WindowsCreateString(fill, len, &h);      /* len characters (zeros) and the terminator */
+    HeapFree(GetProcessHeap(), 0, fill);
+    if (FAILED(hr)) return hr;
+    *chars = (WCHAR *)((HStr *)h)->chars;
+    *out = (HSTRING_BUFFER)h;
+    return S_OK;
+}
+WINOLEAPI_(HRESULT) WindowsPromoteStringBuffer(HSTRING_BUFFER buf, HSTRING *out)
+{
+    HStr *s = (HStr *)buf;
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!s) return S_OK;
+    if (s->chars[s->length]) return E_INVALIDARG;         /* the terminator was overwritten */
+    *out = (HSTRING)s;
+    return S_OK;
+}
+WINOLEAPI_(HRESULT) WindowsDeleteStringBuffer(HSTRING_BUFFER buf)
+{
+    return WindowsDeleteString((HSTRING)buf);
+}
+
 /* Activation: the classes in winrt_classes.c, then the registry's */
 HRESULT ole32_winrt_factory(const WCHAR *name, UINT32 len, REFIID iid, void **out);
 WINOLEAPI_(HRESULT) RoInitialize(int type) { return CoInitializeEx(0, type == 0 ? COINIT_APARTMENTTHREADED : COINIT_MULTITHREADED); }

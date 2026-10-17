@@ -268,6 +268,7 @@ for resources).  It is built 64-bit only into `C:\Programs` unless a
 | `sources` | With `msstl`: more `.cpp` files compiled into it with its flags, as paths or globs from the repository root, e.g. a vendored library's (`calc.json` builds Windows Calculator's CalcManager) |
 | `include`, `force_include` | With `sources`: directories searched for headers, and headers every file starts with (Visual Studio's `/FI`, for a project's forced precompiled header), from the repository root |
 | `winrt_abi` | `true`: a `.cpp` built against the Windows Runtime C++ ABI headers (`windows.ui.composition.h`, `microsoft.ui.xaml.h` ...), which the build generates without MIDL (below; `userland/programs/winrtabitest.cpp`) |
+| `xaml` | `true`: a `.cpp` built against Microsoft's XAML sources as they are compiled (`third_party/microsoft-ui-xaml`, WIL, NovaOS's WRL in `userland/windows_ui_xaml/inc`, the components' forced `precomp.h`) and linked with the XAML core built so far (`xaml_components.lib`, `userland/windows_ui_xaml/build.py`); implies `msstl` (`userland/programs/xamlbasetest.cpp`) |
 
 ### Windows Runtime ABI headers (no MIDL)
 

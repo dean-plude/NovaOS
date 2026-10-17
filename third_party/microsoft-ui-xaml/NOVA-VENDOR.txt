@@ -5,15 +5,25 @@ Source: https://github.com/microsoft/microsoft-ui-xaml (MIT, LICENSE),
 commit 866ba81a1c7c644e41fb838c755273e8f73e3a74 (2026-10-15).
 Kept so far, unchanged: dxaml/xcp/dxaml/idl (the framework's API in MIDL 3
 IDL: winrt/ its Windows Runtime types, com/ its classic COM interop
-interfaces) and dxaml/xcp/inc/FeatureFlags.h (which IDL features are on).
-Roadmap step 32.3 builds the rest of dxaml (the XAML core, parser and
-controls) as Windows.UI.Xaml.dll; its sources join this directory as the
-build takes them in (docs/design/windows-ui-xaml.md).
+interfaces), dxaml/xcp/inc/FeatureFlags.h (which IDL features are on),
+dxaml/xcp/components/xamlDiagnostics/idl (XAML diagnostics' IDL), and the
+sources roadmap step 32.3 builds so far with the headers they include: the
+XAML core's lowest component libraries (dxaml/xcp/components: base,
+xstring, criticalsection, dependencyLocator, runtimeEnabledFeatures, com,
+threading, staticpal, qualifiers, with their MSBuild projects), the
+components' precompiled header (components/pch), headers from
+dxaml/xcp/inc, core/inc, pal and components/metadata/inc, external/inc's
+gsl and ankerl, and XAML's ETW manifest
+(dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
+dxaml (the core above CDependencyObject, the parser and controls) joins as
+the build takes it in (docs/design/windows-ui-xaml.md).
 
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement
 is left out too, so the result matches the published Microsoft.UI.Xaml.winmd.
 
-To update: copy dxaml/xcp/dxaml/idl and FeatureFlags.h from a newer commit
-and run python3 tools/winrt/abigen.py --check.
+To update: copy the same files from a newer commit, run
+python3 tools/winrt/abigen.py --check, and build (userland/windows_ui_xaml/
+build.py compiles the components; a source a newer commit adds to their
+projects, or a header it newly includes, has to be copied too).

@@ -244,7 +244,7 @@ vendors.
      a `DependencyObjectCollection`, as Microsoft's own collection tests
      do, and walks a `CollectionMoveView`.  NovaOS gained what the
      sources needed below them: `thread_local` destructors (`__tlregdtor`
-     in `userland/lib/tlssup.c`), the UCRT's `_MAX_*TOSTR_*_COUNT` sizes,
+     in `userland/lib/tlregdtr.c`, linked only into C++ programs that have one), the UCRT's `_MAX_*TOSTR_*_COUNT` sizes,
      and `windowsnumerics.h`'s `invert` (MinGW-w64 declares it only).
    - *Next.*  The resources (`resources`, whose `ResourceResolver` needs
      the parser) and the parser, then the rest of the core and

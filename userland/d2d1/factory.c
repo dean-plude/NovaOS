@@ -4,6 +4,7 @@
  */
 #include "d2d_int.h"
 #include <windows.h>
+#include <stddef.h>
 
 int _fltused = 0x9875;      /* the compiler references it for float code */
 
@@ -61,13 +62,14 @@ typedef struct {
     void *factory;
     STATEDESC d;
     void *params;           /* IDWriteRenderingParams */
+    UINT32 blend, unit;     /* (ID2D1DrawingStateBlock1's) */
 } StateBlock;
 
 static HRESULT STDMETHODCALLTYPE sb_qi(StateBlock *b, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1DrawingStateBlock)) {
+        IsEqualIID(riid, &IID_ID2D1DrawingStateBlock) || IsEqualIID(riid, &IID_ID2D1DrawingStateBlock1)) {
         *out = b;
         InterlockedIncrement(&b->ref);
         return S_OK;
@@ -100,8 +102,23 @@ static void STDMETHODCALLTYPE sb_get_params(StateBlock *b, void **p)
     *p = b->params;
     if (b->params) COM_ADDREF(b->params);
 }
+static void STDMETHODCALLTYPE sb_get1(StateBlock *b, STATEDESC1 *d) { d->d = b->d; d->primitiveBlend = b->blend; d->unitMode = b->unit; }
+static void STDMETHODCALLTYPE sb_set1(StateBlock *b, const STATEDESC1 *d) { b->d = d->d; b->blend = d->primitiveBlend; b->unit = d->unitMode; }
 static const void *const sb_vtbl[] = { sb_qi, sb_addref, sb_release, sb_factory, sb_get, sb_set, sb_set_params,
-                                       sb_get_params };
+                                       sb_get_params, sb_get1, sb_set1 };
+
+void state_block_get1(void *iface, UINT32 *blend, UINT32 *unit)
+{
+    StateBlock *b = iface;
+    *blend = b->blend;
+    *unit = b->unit;
+}
+void state_block_set1(void *iface, UINT32 blend, UINT32 unit)
+{
+    StateBlock *b = iface;
+    b->blend = blend;
+    b->unit = unit;
+}
 
 void state_block_get(void *iface, STATEDESC *d, void **params)
 {
@@ -118,16 +135,26 @@ void state_block_set(void *iface, const STATEDESC *d, void *params)
 
 /* ---- the factory ---- */
 void factory_addref(void *f) { InterlockedIncrement(&((Factory *)f)->ref); }
+static void factory_free(Factory *f)
+{
+    DeleteCriticalSection(&f->lock);
+    d_free(f);
+}
 void factory_release(void *f)
 {
-    if (f && !InterlockedDecrement(&((Factory *)f)->ref)) d_free(f);
+    if (f && !InterlockedDecrement(&((Factory *)f)->ref)) factory_free(f);
 }
 
 static HRESULT STDMETHODCALLTYPE f_qi(Factory *f, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
-    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Factory)) {
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Factory) || IsEqualIID(riid, &IID_ID2D1Factory1)) {
         *out = f;
+        factory_addref(f);
+        return S_OK;
+    }
+    if (IsEqualIID(riid, &IID_ID2D1Multithread)) {
+        *out = &f->mt_vtbl;
         factory_addref(f);
         return S_OK;
     }
@@ -138,9 +165,21 @@ static ULONG STDMETHODCALLTYPE f_addref(Factory *f) { return InterlockedIncremen
 static ULONG STDMETHODCALLTYPE f_release(Factory *f)
 {
     LONG r = InterlockedDecrement(&f->ref);
-    if (!r) d_free(f);
+    if (!r) factory_free(f);
     return r;
 }
+
+/* ---- ID2D1Multithread: the factory's lock, which drawing doesn't take
+   (each object is used by one thread at a time); programs that share
+   Direct3D with Direct2D hold it around their own calls ---- */
+#define MT_FACTORY(p) ((Factory *)((char *)(p) - offsetof(Factory, mt_vtbl)))
+static HRESULT STDMETHODCALLTYPE mt_qi(void *p, REFIID riid, void **out) { return f_qi(MT_FACTORY(p), riid, out); }
+static ULONG STDMETHODCALLTYPE mt_addref(void *p) { return f_addref(MT_FACTORY(p)); }
+static ULONG STDMETHODCALLTYPE mt_release(void *p) { return f_release(MT_FACTORY(p)); }
+static BOOL STDMETHODCALLTYPE mt_protected(void *p) { return MT_FACTORY(p)->type == 1; }
+static void STDMETHODCALLTYPE mt_enter(void *p) { EnterCriticalSection(&MT_FACTORY(p)->lock); }
+static void STDMETHODCALLTYPE mt_leave(void *p) { LeaveCriticalSection(&MT_FACTORY(p)->lock); }
+static const void *const mt_vtbl[] = { mt_qi, mt_addref, mt_release, mt_protected, mt_enter, mt_leave };
 static HRESULT STDMETHODCALLTYPE f_reload(Factory *f) { (void)f; return S_OK; }
 
 static float desktop_dpi(void)
@@ -297,10 +336,80 @@ static HRESULT STDMETHODCALLTYPE f_dc_rt(Factory *f, const RTPROPS *p, void **ou
     return S_OK;
 }
 
+/* ---- ID2D1Factory1 ---- */
+static HRESULT STDMETHODCALLTYPE f_device(Factory *f, IUnknown *dxgi, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!dxgi) return E_INVALIDARG;
+    return device_create(f, dxgi, out);
+}
+/* D2D1_STROKE_STYLE_PROPERTIES1: D2D1_STROKE_STYLE_PROPERTIES and the transform type */
+typedef struct { STROKEPROPS p; UINT32 transformType; } STROKEPROPS1;
+static HRESULT STDMETHODCALLTYPE f_stroke1(Factory *f, const STROKEPROPS1 *p, const float *dashes, UINT32 n, void **out)
+{
+    if (!out) return E_POINTER;
+    HRESULT hr = stroke_style_create(f, p ? &p->p : NULL, dashes, n, out);
+    if (SUCCEEDED(hr) && p) stroke_style_of(*out)->transform_type = p->transformType;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE f_state1(Factory *f, const STATEDESC1 *d, void *params, void **out)
+{
+    HRESULT hr = f_state(f, d ? &d->d : NULL, params, out);
+    if (SUCCEEDED(hr) && d) state_block_set1(*out, d->primitiveBlend, d->unitMode);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE f_metafile(Factory *f, void *stream, void **out)
+{
+    (void)f; (void)stream;
+    if (out) *out = 0;
+    return E_NOTIMPL;
+}
+/* no effects can be registered: programs get the error and draw without them */
+static HRESULT STDMETHODCALLTYPE f_register_stream(Factory *f, REFCLSID c, void *xml, const void *b, UINT32 n, void *fn)
+{
+    (void)f; (void)c; (void)xml; (void)b; (void)n; (void)fn;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE f_register_string(Factory *f, REFCLSID c, const WCHAR *xml, const void *b, UINT32 n,
+                                                   void *fn)
+{
+    (void)f; (void)c; (void)xml; (void)b; (void)n; (void)fn;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE f_unregister(Factory *f, REFCLSID c) { (void)f; (void)c; return D2DERR_EFFECT_IS_NOT_REGISTERED; }
+static HRESULT STDMETHODCALLTYPE f_effects(Factory *f, CLSID *e, UINT32 n, UINT32 *returned, UINT32 *registered)
+{
+    (void)f; (void)e; (void)n;
+    if (returned) *returned = 0;
+    if (registered) *registered = 0;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE f_effect_props(Factory *f, REFCLSID c, void **out)
+{
+    (void)f; (void)c;
+    if (out) *out = 0;
+    return D2DERR_EFFECT_IS_NOT_REGISTERED;
+}
+
 static const void *const f_vtbl[] = {
     f_qi, f_addref, f_release, f_reload, f_dpi, f_rect, f_rrect, f_ellipse, f_group, f_transformed, f_path,
     f_stroke, f_state, f_wic_rt, f_hwnd_rt, f_dxgi_rt, f_dc_rt,
+    f_device, f_stroke1, f_path, f_state1, f_metafile, f_register_stream, f_register_string, f_unregister, f_effects,
+    f_effect_props,
 };
+
+Factory *factory_new(UINT32 type)
+{
+    Factory *f = d_alloc(sizeof(*f));
+    if (!f) return NULL;
+    f->vtbl = f_vtbl;
+    f->mt_vtbl = mt_vtbl;
+    f->ref = 1;
+    f->type = type;
+    InitializeCriticalSection(&f->lock);
+    return f;
+}
 
 D2D HRESULT WINAPI D2D1CreateFactory(UINT32 type, REFIID iid, const void *opts, void **out)
 {
@@ -308,27 +417,11 @@ D2D HRESULT WINAPI D2D1CreateFactory(UINT32 type, REFIID iid, const void *opts, 
     if (!out) return E_POINTER;
     *out = 0;
     if (type > 1) return E_INVALIDARG;
-    Factory *f = d_alloc(sizeof(*f));
+    Factory *f = factory_new(type);
     if (!f) return E_OUTOFMEMORY;
-    f->vtbl = f_vtbl;
-    f->ref = 1;
-    f->type = type;
     HRESULT hr = f_qi(f, iid, out);
     f_release(f);
     return hr;
-}
-
-D2D HRESULT WINAPI D2D1CreateDevice(void *dxgi, const void *props, void **out)
-{
-    (void)dxgi; (void)props;
-    if (out) *out = 0;
-    return E_NOTIMPL;
-}
-D2D HRESULT WINAPI D2D1CreateDeviceContext(void *surface, const void *props, void **out)
-{
-    (void)surface; (void)props;
-    if (out) *out = 0;
-    return E_NOTIMPL;
 }
 
 /* ---- exported helpers ---- */

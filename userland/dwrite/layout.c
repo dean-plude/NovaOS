@@ -129,6 +129,57 @@ static void *hb_font_of(FaceData *fd)
     return font;
 }
 
+HRESULT dw_shape_text(FaceData *fd, const WCHAR *text, UINT32 text_length, UINT32 start, UINT32 length,
+                      BOOL rtl, float em_size, DW_SHAPED_GLYPH **glyphs, UINT32 *count)
+{
+    if (!glyphs || !count) return E_INVALIDARG;
+    *glyphs = NULL;
+    *count = 0;
+    if (!fd || !text || !fd->upem || start > text_length || length > text_length - start ||
+        length > 0x7fffffff) return E_INVALIDARG;
+    if (!hb_load()) return E_FAIL;
+
+    void *font = hb_font_of(fd);
+    void *buf = hb.buffer_create();
+    if (!font || !buf) {
+        if (buf) hb.buffer_destroy(buf);
+        return E_OUTOFMEMORY;
+    }
+    hb.buffer_add_utf16(buf, (const UINT16 *)text, (int)text_length, start, (int)length);
+    hb.buffer_set_direction(buf, rtl ? 5 : 4);
+    hb.buffer_guess_segment_properties(buf);
+    hb.shape(font, buf, NULL, 0);
+    unsigned n = 0, pn = 0;
+    hb_info *info = hb.buffer_get_glyph_infos(buf, &n);
+    hb_pos *pos = hb.buffer_get_glyph_positions(buf, &pn);
+    if (n != pn || (n && (!info || !pos))) {
+        hb.buffer_destroy(buf);
+        return E_FAIL;
+    }
+    if (n > (UINT32)-1 / sizeof(DW_SHAPED_GLYPH)) {
+        hb.buffer_destroy(buf);
+        return E_OUTOFMEMORY;
+    }
+    DW_SHAPED_GLYPH *result = dw_zalloc(sizeof(*result) * (n ? n : 1));
+    if (!result) {
+        hb.buffer_destroy(buf);
+        return E_OUTOFMEMORY;
+    }
+    float scale = em_size / fd->upem;
+    for (unsigned i = 0; i < n; i++) {
+        unsigned k = rtl ? n - 1 - i : i;
+        result[i].glyph = (UINT16)info[k].codepoint;
+        result[i].cluster = info[k].cluster;
+        result[i].advance = pos[k].x_advance * scale;
+        result[i].offset.advanceOffset = (rtl ? -pos[k].x_offset : pos[k].x_offset) * scale;
+        result[i].offset.ascenderOffset = pos[k].y_offset * scale;
+    }
+    hb.buffer_destroy(buf);
+    *glyphs = result;
+    *count = n;
+    return S_OK;
+}
+
 /* ---- small helpers ---- */
 static UINT32 wlen(const WCHAR *s) { UINT32 n = 0; while (s && s[n]) n++; return n; }
 static float fabs_(float v) { return v < 0 ? -v : v; }
@@ -424,15 +475,10 @@ static void shape_run(Layout *l, Run *r, UINT32 *cap, UINT32 **clusters, UINT32 
 {
     float scale = r->size / (r->fd->upem ? r->fd->upem : 1000);
     r->g0 = l->ng;
-    if (hb_load()) {
-        void *font = hb_font_of(r->fd), *buf = hb.buffer_create();
-        hb.buffer_add_utf16(buf, (const UINT16 *)l->text, (int)l->n, r->start, (int)r->len);
-        hb.buffer_set_direction(buf, (r->level & 1) ? 5 : 4);
-        hb.buffer_guess_segment_properties(buf);
-        hb.shape(font, buf, NULL, 0);
-        unsigned n = 0;
-        hb_info *info = hb.buffer_get_glyph_infos(buf, &n);
-        hb_pos *pos = hb.buffer_get_glyph_positions(buf, &n);
+    DW_SHAPED_GLYPH *shaped = NULL;
+    UINT32 n = 0;
+    if (SUCCEEDED(dw_shape_text(r->fd, l->text, l->n, r->start, r->len, r->level & 1,
+                                r->size, &shaped, &n))) {
         if (grow_glyphs(l, n, cap)) {
             if (*ccap < l->ng + n) {
                 UINT32 nc = (l->ng + n) * 2;
@@ -442,19 +488,16 @@ static void shape_run(Layout *l, Run *r, UINT32 *cap, UINT32 **clusters, UINT32 
                 *clusters = c2;
                 *ccap = nc;
             }
-            for (unsigned i = 0; i < n; i++) {
-                /* right-to-left runs come out in visual order: keep them logical */
-                unsigned k = (r->level & 1) ? n - 1 - i : i;
+            for (UINT32 i = 0; i < n; i++) {
                 UINT32 g = l->ng + i;
-                l->gid[g] = (UINT16)info[k].codepoint;
-                l->adv[g] = pos[k].x_advance * scale;
-                l->off[g].advanceOffset = ((r->level & 1) ? -pos[k].x_offset : pos[k].x_offset) * scale;
-                l->off[g].ascenderOffset = pos[k].y_offset * scale;
-                if (*clusters) (*clusters)[g] = info[k].cluster;
+                l->gid[g] = shaped[i].glyph;
+                l->adv[g] = shaped[i].advance;
+                l->off[g] = shaped[i].offset;
+                if (*clusters) (*clusters)[g] = shaped[i].cluster;
             }
             l->ng += n;
         }
-        hb.buffer_destroy(buf);
+        dw_free(shaped);
     } else {
         /* nominal glyphs: one per character, advances and kerning from the font */
         if (grow_glyphs(l, r->len, cap)) {

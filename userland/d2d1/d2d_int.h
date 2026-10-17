@@ -15,6 +15,7 @@
  * return it, as MSVC's C++ member functions do.
  */
 #pragma once
+#include <windows.h>
 #include <objbase.h>
 #include <string.h>
 #include <math.h>
@@ -28,6 +29,7 @@
 #define D2DERR_BAD_NUMBER           ((HRESULT)0x88990011L)
 #define D2DERR_UNSUPPORTED_PIXEL_FORMAT ((HRESULT)0x88982F80L)
 #define D2DERR_PUSH_POP_UNBALANCED  ((HRESULT)0x88990016L)
+#define D2DERR_EFFECT_IS_NOT_REGISTERED ((HRESULT)0x88990028L)
 
 /* ---- interface ids ---- */
 #define D2D_GUID(n, l) DEFINE_GUID(n, l, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9)
@@ -60,6 +62,17 @@ DEFINE_GUID(IID_ID2D1Bitmap, 0xa2296057, 0xea42, 0x4099, 0x98, 0x3b, 0x53, 0x9f,
 DEFINE_GUID(IID_ID2D1Image, 0x65019f75, 0x8da2, 0x497c, 0xb3, 0x2c, 0xdf, 0xa3, 0x4e, 0x48, 0xed, 0xe6);
 DEFINE_GUID(IID_ID2D1DrawingStateBlock, 0x28506e39, 0xebf6, 0x46a1, 0xbb, 0x47, 0xfd, 0x85, 0x56, 0x5a, 0xb9, 0x57);
 DEFINE_GUID(IID_ID2D1GdiInteropRenderTarget, 0xe0db51c3, 0x6f77, 0x4bae, 0xb3, 0xd5, 0xe4, 0x75, 0x09, 0xb3, 0x58, 0x38);
+DEFINE_GUID(IID_ID2D1Factory1, 0xbb12d362, 0xdaee, 0x4b9a, 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f);
+DEFINE_GUID(IID_ID2D1Device, 0x47dd575d, 0xac05, 0x4cdd, 0x80, 0x49, 0x9b, 0x02, 0xcd, 0x16, 0xf4, 0x4c);
+DEFINE_GUID(IID_ID2D1DeviceContext, 0xe8f7fe7a, 0x191c, 0x466d, 0xad, 0x95, 0x97, 0x56, 0x78, 0xbd, 0xa9, 0x98);
+DEFINE_GUID(IID_ID2D1Bitmap1, 0xa898a84c, 0x3873, 0x4588, 0xb0, 0x8b, 0xeb, 0xbf, 0x97, 0x8d, 0xf0, 0x41);
+DEFINE_GUID(IID_ID2D1BitmapBrush1, 0x41343a53, 0xe41a, 0x49a2, 0x91, 0xcd, 0x21, 0x79, 0x3b, 0xbb, 0x62, 0xe5);
+DEFINE_GUID(IID_ID2D1GradientStopCollection1, 0xae1572f4, 0x5dd0, 0x4777, 0x99, 0x8b, 0x92, 0x79, 0x47, 0x2a, 0xe6, 0x3b);
+DEFINE_GUID(IID_ID2D1StrokeStyle1, 0x10a72a66, 0xe91c, 0x43f4, 0x99, 0x3f, 0xdd, 0xf4, 0xb8, 0x2b, 0x0b, 0x4a);
+DEFINE_GUID(IID_ID2D1PathGeometry1, 0x62baa2d2, 0xab54, 0x41b7, 0xb8, 0x72, 0x78, 0x7e, 0x01, 0x06, 0xa4, 0x21);
+DEFINE_GUID(IID_ID2D1DrawingStateBlock1, 0x689f1f85, 0xc72e, 0x4e33, 0x8f, 0x19, 0x85, 0x75, 0x4e, 0xfd, 0x5a, 0xce);
+DEFINE_GUID(IID_ID2D1Multithread, 0x31e6e7bc, 0xe0ff, 0x4d46, 0x8c, 0x64, 0xa0, 0xa8, 0xc4, 0x1c, 0x15, 0xd3);
+DEFINE_GUID(IID_IDXGISurface_, 0xcafcb56c, 0x6ac3, 0x4889, 0xbf, 0x47, 0x9e, 0x23, 0xbb, 0xd2, 0x60, 0xec);
 DEFINE_GUID(IID_IDWriteFactory_, 0xb859ee5a, 0xd838, 0x4b5b, 0xa2, 0xe8, 0x1a, 0xdc, 0x7d, 0x93, 0xdb, 0x48);
 DEFINE_GUID(IID_IDWritePixelSnapping_, 0xeaf3a2da, 0xecf4, 0x4d24, 0xb6, 0x44, 0xb3, 0x4f, 0x68, 0x42, 0x02, 0x4b);
 DEFINE_GUID(IID_IDWriteTextRenderer_, 0xef8a8135, 0x5cc6, 0x45fe, 0x88, 0x25, 0xc5, 0xa0, 0x72, 0x4e, 0xb8, 0x19);
@@ -89,6 +102,12 @@ typedef struct { UINT32 type; PIXFMT pixelFormat; float dpiX, dpiY; UINT32 usage
 typedef struct { HWND hwnd; SZU pixelSize; UINT32 presentOptions; } HWNDRTPROPS;
 typedef struct { UINT32 startCap, endCap, dashCap, lineJoin; float miterLimit; UINT32 dashStyle; float dashOffset; } STROKEPROPS;
 typedef struct { UINT32 antialiasMode, textAntialiasMode; UINT64 tag1, tag2; MAT transform; } STATEDESC;
+/* D2D1_DRAWING_STATE_DESCRIPTION1: STATEDESC, then the primitive blend and the unit mode */
+typedef struct { STATEDESC d; UINT32 primitiveBlend, unitMode; } STATEDESC1;
+/* D2D1_BITMAP_PROPERTIES1 */
+typedef struct { PIXFMT pixelFormat; float dpiX, dpiY; UINT32 bitmapOptions; void *colorContext; } BMPPROPS1;
+typedef struct { UINT32 pitch; BYTE *bits; } MAPPEDRECT;
+typedef struct { UINT32 bufferPrecision; SZU tileSize; } RENDERCONTROLS;
 typedef struct { RCF contentBounds; void *geometricMask; UINT32 maskAntialiasMode; MAT maskTransform; float opacity;
                  void *opacityBrush; UINT32 layerOptions; } LAYERPARAMS;
 typedef struct { PT point1, point2, point3; } TRIANGLE;
@@ -201,6 +220,7 @@ typedef struct {
     STROKEPROPS p;
     float *dashes;
     UINT32 ndashes;
+    UINT32 transform_type;          /* (ID2D1StrokeStyle1's; widths are always transformed) */
 } StrokeStyle;
 StrokeStyle *stroke_style_of(void *iface);
 HRESULT stroke_style_create(void *factory, const STROKEPROPS *p, const float *dashes, UINT32 n, void **out);
@@ -264,9 +284,23 @@ typedef struct {
     PIXFMT fmt;
     float dpix, dpiy;
     struct Target *owner_rt;        /* a bitmap render target's bitmap */
+    UINT32 options;                 /* D2D1_BITMAP_OPTIONS (ID2D1Bitmap1) */
+    int mapped;
+    BYTE *map_buf;                  /* Map's copy, when the format isn't premultiplied BGRA */
+    /* a bitmap on a DXGI surface (device.c): s holds its pixels, read
+       from the texture when a device context starts drawing into it and
+       written back when it stops */
+    IUnknown *tex;                  /* the ID3D11Texture2D (counted) */
+    IUnknown *d3dctx, *staging;     /* its device's immediate context, a staging copy to read it (counted) */
+    UINT32 dxgi_format;
 } Bitmap;
 Bitmap *bitmap_of(void *iface);
 HRESULT bitmap_create(void *factory, SZU size, const void *src, UINT32 pitch, const BMPPROPS *props, Bitmap **out);
+/* (device.c) a DXGI surface bitmap's pixels from and to its texture */
+void bitmap_pull(Bitmap *b);
+void bitmap_push(Bitmap *b);
+void bitmap_drop_surface(Bitmap *b);
+HRESULT bitmap_from_surface(void *factory, IUnknown *surface, const BMPPROPS1 *props, Bitmap **out);
 
 typedef struct {
     const void *vtbl;
@@ -281,6 +315,7 @@ typedef struct {
     GradientStops *stops;
     Bitmap *bitmap;
     UINT32 extend_x, extend_y, interp;
+    UINT32 interp1;                 /* (ID2D1BitmapBrush1's D2D1_INTERPOLATION_MODE) */
 } Brush;
 Brush *brush_of(void *iface);
 HRESULT brush_create(void *factory, int kind, const BRUSHPROPS *bp, Brush **out);
@@ -293,13 +328,20 @@ UINT32 premul(const COLORF *c, float opacity);
 /* ---- the factory ---- */
 typedef struct {
     const void *vtbl;
+    const void *mt_vtbl;            /* ID2D1Multithread */
     LONG ref;
     UINT32 type;
+    CRITICAL_SECTION lock;
 } Factory;
+Factory *factory_new(UINT32 type);
 void factory_addref(void *f);
 void factory_release(void *f);
 void state_block_get(void *iface, STATEDESC *d, void **params);
 void state_block_set(void *iface, const STATEDESC *d, void *params);
+void state_block_get1(void *iface, UINT32 *blend, UINT32 *unit);
+void state_block_set1(void *iface, UINT32 blend, UINT32 unit);
+/* (device.c) ID2D1Factory1::CreateDevice */
+HRESULT device_create(void *factory, IUnknown *dxgi, void **out);
 
 /* ---- render targets ---- */
 #define MAX_CLIPS 64
@@ -340,9 +382,16 @@ typedef struct Target {
     LayerState layers[MAX_LAYERS];
     int nlayers;
     void *text_params;
-    Bitmap *bitmap;                 /* a bitmap render target's */
+    Bitmap *bitmap;                 /* a bitmap render target's; a device context's target (counted) */
+    /* a device context's (ID2D1DeviceContext, device.c) */
+    void *device;                   /* its ID2D1Device (counted) */
+    UINT32 unit_pixels, blend;
+    RENDERCONTROLS controls;
 } Target;
-enum { TGT_HWND, TGT_DC, TGT_BITMAP };
+enum { TGT_HWND, TGT_DC, TGT_BITMAP, TGT_CONTEXT };
+extern const void *const rt_ctx_vtbl[];
+/* (device.c) a device context's target, and its drawing ending */
+void context_set_target(Target *t, Bitmap *b);
 Target *target_of(void *iface);
 HRESULT target_create(void *factory, int kind, const RTPROPS *props, Target **out);
 HRESULT target_resize(Target *t, int w, int h);

@@ -20,6 +20,7 @@
 #include "../../ps/ps.h"
 #include "../../hal/ps2.h"
 #include "../../hal/ioapic.h"
+#include "../../hal/throttle.h"
 #include "../../ke/kpcr.h"
 #include "../../ke/smp.h"
 #include "../../ke/probe.h"
@@ -316,6 +317,7 @@ static void dispatch(InterruptFrame *frame)
     /* ---- Timer interrupt (APIC local timer, vector IRQ_TIMER) ---- */
     if (vector == IRQ_TIMER) {
         apic_eoi();
+        ThrottleTick();                             /* (this CPU's clock modulation, hal/throttle.c) */
         /* Drive the clock (and keyboard/mouse polling, see sched_tick) and
          * preemptive scheduling: may context-switch to another
          * thread; control returns here (on this thread's stack) before the

@@ -208,10 +208,13 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     found through the registry's `ActivatableClassId` keys) and `rpcrt4`
     (the NDR engine proxy/stub DLLs run on).
   - **UWP app model**: `twinapi.appcore` (`CoreApplication.Run` driving an
-    app's `IFrameworkView`, its `CoreWindow` with keyboard, size,
-    visibility and close events, and the `CoreDispatcher`; DXGI swap
-    chains present into a CoreWindow), the first step towards
-    `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
+    app's `IFrameworkView`, its `CoreWindow` with keyboard, pointer
+    (`PointerPoint`), size, visibility and close events, and the
+    `CoreDispatcher`; DXGI swap chains present into a CoreWindow) and
+    `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
+    sprite visuals, colour and surface brushes, drawing surfaces on
+    Direct3D 11, targets on a window or a CoreWindow), the first steps
+    towards `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
   - **Sound and input**: `winmm` (waveOut, waveIn, MIDI, joysticks),
     `mmdevapi` (WASAPI playback and capture, one endpoint per device),
     `dsound`, `xaudio2_7`/`_8`/`_9` and `x3daudio1_7` (on FAudio),
@@ -239,7 +242,9 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   - DirectWrite (`dwrite`) lays text out on the same core, with font
     fallback, and its factory is an `IDWriteFactory3` with Windows 10's
     font sets and `IDWriteFontFallback`, which Chromium-based browsers ask
-    for (`tools/dwtest`, `tools/dw3test`).
+    for (`tools/dwtest`, `tools/dw3test`). Its `IDWriteTextAnalyzer` uses ICU
+    for script, bidi and line-break analysis, then the shared HarfBuzz path
+    for logical-order glyph shaping and placements.
 - **Images**: the Windows Imaging Component (`windowscodecs.dll`) decodes
   PNG, JPEG, BMP, GIF (every frame) and ICO with the bundled stb_image,
   converts between its ~50 pixel formats, scales, clips, flips, rotates,
@@ -250,7 +255,10 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   (rectangles, ellipses, paths with Béziers and arcs, groups, transforms,
   combining, widening, tessellation), strokes with caps, joins and dashes,
   solid, gradient and bitmap brushes, layers and clips, on HWND, DC and
-  bitmap render targets, with text through DirectWrite (`tools/d2dtest`).
+  bitmap render targets, with text through DirectWrite (`tools/d2dtest`);
+  Direct2D 1.1's devices on a Direct3D 11 device and their device
+  contexts, drawing into bitmaps and DXGI surfaces (DirectComposition's
+  and Windows.UI.Composition's among them) (`d2dctxtest`).
 - **Graphics**: drawing runs on the CPU by default, and on the host's GPU
   under QEMU with a 3D virtio-gpu.
   - **OpenGL**: `opengl32` hands every call to Mesa: llvmpipe (OpenGL 4.5

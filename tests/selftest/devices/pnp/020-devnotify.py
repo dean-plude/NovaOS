@@ -4,9 +4,9 @@
 # (RegisterDeviceNotification) and callbacks (CM_Register_Notification),
 # and at "[PNP] step 1" the test plugs a USB keyboard and a FAT-formatted
 # USB stick into the xHCI controller, at "[PNP] step 2" takes them out:
-# WM_DEVICECHANGE's interface arrivals and removals, the stick's drive
-# letter (DEV_BROADCAST_VOLUME), DBT_DEVNODES_CHANGED and the callbacks
-# must all come.
+# WM_DEVICECHANGE's interface arrivals and removals, a registered USB
+# device handle's removal, the stick's drive letter (DEV_BROADCAST_VOLUME),
+# DBT_DEVNODES_CHANGED and the callbacks must all come.
 import os
 import subprocess
 

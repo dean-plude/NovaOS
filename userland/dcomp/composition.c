@@ -13,10 +13,12 @@
  * colour brushes and surface brushes (stretch None, Fill, Uniform and
  * UniformToFill with alignment ratios); targets on a window (the desktop
  * target, ICompositorDesktopInterop) or on the thread's CoreWindow
- * (CreateTargetForCurrentView); graphics devices on a Direct3D 11 device
- * (ICompositorInterop::CreateGraphicsDevice) and their drawing surfaces,
- * drawn through ICompositionDrawingSurfaceInterop's BeginDraw (the
- * surface's ID3D11Texture2D or IDXGISurface) and EndDraw, which reads the
+ * (CreateTargetForCurrentView); graphics devices
+ * (ICompositorInterop::CreateGraphicsDevice, on a Direct3D 11 device or
+ * an ID2D1Device) and their drawing surfaces, drawn through
+ * ICompositionDrawingSurfaceInterop's BeginDraw (the surface's
+ * ID3D11Texture2D or IDXGISurface, or an ID2D1DeviceContext on a
+ * Direct2D device's) and EndDraw, which reads the
  * pixels back as dcomp.dll's own surfaces do; and surfaces showing a
  * composition swap chain of dxgi.dll's (CreateCompositionSurfaceForSwapChain).
  *
@@ -33,9 +35,8 @@
  * nothing), expression animations, property sets, effects, scoped and
  * commit batches, perspective and 3-D rotation (only the matrix's 2-D part
  * and the Z rotation are used), clips other than an inset clip (and a clip
- * under a rotation is its bounding box), bilinear sampling, ID2D1Device
- * graphics devices (NovaOS's Direct2D has no device contexts yet) and
- * surfaces from handles.
+ * under a rotation is its bounding box), bilinear sampling and surfaces
+ * from handles.
  */
 #include <windows.h>
 #include <roapi.h>
@@ -136,6 +137,8 @@ struct Obj {
     int pw, ph;
     /* graphics devices and drawing surfaces */
     IUnknown *d3d, *ctx;                /* (counted) */
+    IUnknown *d2d;                      /* the ID2D1Device the graphics device was made on, or NULL (counted) */
+    IUnknown *dc;                       /* a drawing surface's BeginDraw ID2D1DeviceContext, while drawing (counted) */
     IUnknown *tex, *staging;
     UINT w, h, format;
     int alpha;                          /* DirectXAlphaMode */
@@ -601,8 +604,10 @@ static void obj_free(Obj *o)
     if (o->chain) o->chain->lpVtbl->Release(o->chain);
     if (o->tex) o->tex->lpVtbl->Release(o->tex);
     if (o->staging) o->staging->lpVtbl->Release(o->staging);
+    if (o->dc) novadx_d2d_end(o->dc);
     if (o->ctx) o->ctx->lpVtbl->Release(o->ctx);
     if (o->d3d) o->d3d->lpVtbl->Release(o->d3d);
+    if (o->d2d) o->d2d->lpVtbl->Release(o->d2d);
     if (o->comp) obj_release(o->comp);
     HeapFree(GetProcessHeap(), 0, o);
     schedule();
@@ -937,6 +942,7 @@ static HRESULT STDMETHODCALLTYPE gd_create(void *p, SizeF size, int format, int 
     s->alpha = alpha;
     s->d3d = g->d3d; s->d3d->lpVtbl->AddRef(s->d3d);
     s->ctx = g->ctx; s->ctx->lpVtbl->AddRef(s->ctx);
+    if (g->d2d) { s->d2d = g->d2d; s->d2d->lpVtbl->AddRef(s->d2d); }
     UINT w = (UINT)(int)size.Width, h = (UINT)(int)size.Height;
     HRESULT hr = w && h ? surface_make(s, w, h) : S_OK;           /* (an empty surface gets its texture at Resize) */
     if (FAILED(hr)) { obj_release(s); return hr; }
@@ -953,14 +959,21 @@ static HRESULT STDMETHODCALLTYPE gd_add_replaced(void *p, void *h, EventRegistra
 static HRESULT STDMETHODCALLTYPE gd_remove_replaced(void *p, EventRegistrationToken t) { (void)p; (void)t; return S_OK; }
 static const void *const graphics_vt[] = { BASE(2), (void *)gd_create, (void *)gd_add_replaced, (void *)gd_remove_replaced };
 
-/* @dev as a Direct3D 11 device and its immediate context (counted) */
-static HRESULT d3d_of(IUnknown *dev, IUnknown **d3d, IUnknown **ctx)
+/* @dev (a Direct3D 11 device, or an ID2D1Device on one) as a Direct3D 11
+ * device, its immediate context and the ID2D1Device (all counted; the last
+ * NULL unless @dev is one) */
+static HRESULT d3d_of(IUnknown *dev, IUnknown **d3d, IUnknown **ctx, IUnknown **d2d)
 {
     *d3d = *ctx = 0;
-    if (!dev) return E_INVALIDARG;
-    if (FAILED(dev->lpVtbl->QueryInterface(dev, &NIID_ID3D11Device, (void **)d3d)) || !*d3d) return E_INVALIDARG;
+    *d3d = novadx_rendering_d3d(dev, d2d);
+    if (!*d3d) return E_INVALIDARG;
     ((void (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))((void **)*(void **)*d3d)[40])(*d3d, ctx);      /* GetImmediateContext */
-    if (!*ctx) { (*d3d)->lpVtbl->Release(*d3d); *d3d = 0; return E_FAIL; }
+    if (!*ctx) {
+        (*d3d)->lpVtbl->Release(*d3d);
+        if (*d2d) (*d2d)->lpVtbl->Release(*d2d);
+        *d3d = *d2d = 0;
+        return E_FAIL;
+    }
     return S_OK;
 }
 /* ICompositionGraphicsDeviceInterop (slot 3) */
@@ -968,19 +981,20 @@ static HRESULT STDMETHODCALLTYPE gdi_get(void *p, IUnknown **out)
 {
     Obj *g = OBJ_AT(p, 3);
     if (!out) return E_POINTER;
-    *out = g->d3d;
+    *out = g->d2d ? g->d2d : g->d3d;
     if (*out) (*out)->lpVtbl->AddRef(*out);
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE gdi_set(void *p, IUnknown *dev)
 {
     Obj *g = OBJ_AT(p, 3);
-    IUnknown *d3d, *ctx;
-    HRESULT hr = d3d_of(dev, &d3d, &ctx);
+    IUnknown *d3d, *ctx, *d2d;
+    HRESULT hr = d3d_of(dev, &d3d, &ctx, &d2d);
     if (FAILED(hr)) return hr;
     if (g->d3d) g->d3d->lpVtbl->Release(g->d3d);
     if (g->ctx) g->ctx->lpVtbl->Release(g->ctx);
-    g->d3d = d3d; g->ctx = ctx;
+    if (g->d2d) g->d2d->lpVtbl->Release(g->d2d);
+    g->d3d = d3d; g->ctx = ctx; g->d2d = d2d;
     return S_OK;
 }
 static const void *const graphics_interop_vt[] = { UNK(3), (void *)gdi_get, (void *)gdi_set };
@@ -993,7 +1007,9 @@ static const void *const drawing_vt[] = { BASE(2), (void *)ds_alpha, (void *)ds_
 
 /* ICompositionDrawingSurfaceInterop (slot 3): BeginDraw hands out the
  * surface's texture (as @iid: ID3D11Texture2D, IDXGISurface) with the
- * update rectangle at *@offset in it; EndDraw reads the rectangle back */
+ * update rectangle at *@offset in it, or on a graphics device made on an
+ * ID2D1Device an ID2D1DeviceContext drawing into it; EndDraw reads the
+ * rectangle back */
 #define DS(p) OBJ_AT(p, 3)
 static HRESULT STDMETHODCALLTYPE dsi_begin(void *p, const RECT *r, REFIID iid, void **out, POINT *offset)
 {
@@ -1008,8 +1024,16 @@ static HRESULT STDMETHODCALLTYPE dsi_begin(void *p, const RECT *r, REFIID iid, v
             return E_INVALIDARG;
         u = *r;
     }
-    HRESULT hr = s->tex->lpVtbl->QueryInterface(s->tex, iid, out);
-    if (FAILED(hr)) return hr;
+    HRESULT hr;
+    if (novadx_same(iid, &NIID_ID2D1DeviceContext)) {
+        hr = novadx_d2d_begin(s->d2d, s->tex, &s->dc);
+        if (FAILED(hr)) return hr;
+        s->dc->lpVtbl->AddRef(s->dc);
+        *out = s->dc;
+    } else {
+        hr = s->tex->lpVtbl->QueryInterface(s->tex, iid, out);
+        if (FAILED(hr)) return hr;
+    }
     s->drawing = TRUE;
     s->update = u;
     offset->x = u.left; offset->y = u.top;
@@ -1019,6 +1043,7 @@ static HRESULT STDMETHODCALLTYPE dsi_end(void *p)
 {
     Obj *s = DS(p);
     if (!s->drawing) return DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED_;
+    if (s->dc) { novadx_d2d_end(s->dc); s->dc = NULL; }
     lock();
     novadx_read_back(s->ctx, s->staging, s->tex, s->format, s->w, s->h, s->frame, &s->update);
     unlock();
@@ -1169,13 +1194,17 @@ static HRESULT STDMETHODCALLTYPE ci_graphics(void *p, IUnknown *dev, void **out)
 {
     if (!out) return E_POINTER;
     *out = 0;
-    IUnknown *d3d, *ctx;
-    HRESULT hr = d3d_of(dev, &d3d, &ctx);
+    IUnknown *d3d, *ctx, *d2d;
+    HRESULT hr = d3d_of(dev, &d3d, &ctx, &d2d);
     if (FAILED(hr)) return hr;
     Obj *g = obj_new(COMP(p, 2), K_GRAPHICS);
-    if (!g) { ctx->lpVtbl->Release(ctx); d3d->lpVtbl->Release(d3d); return E_OUTOFMEMORY; }
+    if (!g) {
+        ctx->lpVtbl->Release(ctx); d3d->lpVtbl->Release(d3d);
+        if (d2d) d2d->lpVtbl->Release(d2d);
+        return E_OUTOFMEMORY;
+    }
     g->vt[0] = co_vt; g->vt[1] = closable_vt; g->vt[2] = graphics_vt; g->vt[3] = graphics_interop_vt;
-    g->d3d = d3d; g->ctx = ctx;
+    g->d3d = d3d; g->ctx = ctx; g->d2d = d2d;
     *out = IF(g, 2);
     return S_OK;
 }

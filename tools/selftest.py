@@ -227,17 +227,21 @@ def tones(*hz, wav=None, only=False):
 
 def close_lid(nova):
     """powertest asked: close the lid (pc-testdev port 0xE8, see
-    tests/acpi/lid-thermal.asl), and once NovaOS has gone to sleep open it,
-    press a key on the USB keyboard and wake the machine.  (QEMU 8.2 has no
-    USB remote-wakeup path to the platform: the key reaches the suspended
-    xHCI port, and system_wakeup stands in for its PME#.)"""
+    tests/acpi/lid-thermal.asl) and raise its GPE (GPE 0 of the GPE block
+    device at port 0xEA), and once NovaOS has gone to sleep open it, raise
+    the lid's wake GPE (GPE 1 of the block), press a key on the USB keyboard
+    and wake the machine.  (QEMU 8.2 has no USB remote-wakeup path to the
+    platform: the key reaches the suspended xHCI port, and system_wakeup
+    stands in for its PME# and the GPE's wake signal.)"""
     nova.hmp('o /b 0xe8 1')
+    nova.hmp('o /b 0xea 1')
     for _ in range(240):
         if nova.status() == 'suspended':
             break
         time.sleep(0.25)
     time.sleep(2)
     nova.hmp('o /b 0xe8 0')
+    nova.hmp('o /b 0xea 2')
     nova.qmp.key('shift')                     # (the USB keyboard has QEMU's input; types nothing)
     time.sleep(1)
     nova.qmp.cmd('system_wakeup')
@@ -587,8 +591,11 @@ def wdm_boot(work):
 
 def edu_boot(work):
     """QEMU's edu device (PCI 1234:11e8): a Plug and Play driver for it,
-    edutest.sys, is installed with pnputil (tests/selftest/devices/edu)"""
-    return ['-device', 'edu'], []
+    edutest.sys, is installed with pnputil (tests/selftest/devices/edu).
+    The device sits behind a PCIe root port, which QEMU describes with no
+    _PRT of its own: its INTA reaches the driver through the bridge
+    swizzle onto the root port's pin in the root bridge's _PRT"""
+    return ['-device', 'pcie-root-port,id=rp1,chassis=1,slot=1', '-device', 'edu,bus=rp1'], []
 
 
 def umdf_boot(work):

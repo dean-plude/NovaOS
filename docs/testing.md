@@ -102,22 +102,27 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   and fonts at 192 DPI; per-thread awareness contexts; controls and
   dialogs rescaled when a window's DPI changes, comctl32 at 192 DPI, and
   coordinates converted between awareness contexts), `disptest`,
-  `icutest` (ICU and locales, 64- and 32-bit), `comtest`, `coreapptest`
-  (CoreApplication.Run, CoreWindow events and dispatcher, RunAsync, a
-  swap chain for a CoreWindow; 64- and 32-bit), `wictest`, `nlstest`
-  (date, time, number and currency formats in German and Japanese, 64-
-  and 32-bit; `nlstest user`), `nlstest calendars` (Japanese eras,
-  Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura and Persian dates;
-  `GetDurationFormat`) and `nlstest override` (`SetLocaleInfo`), 64- and
-  32-bit, `tlbtest` (type libraries, 64- and 32-bit), `usptest` (Arabic
-  and Devanagari shaped through Uniscribe and drawn by `ExtTextOut`, 64-
-  and 32-bit), `cppeh`, `dlgtest` (the common file dialogs:
-  `OPENFILENAME` settings, `IFileDialog` objects), `unwindtest`,
-  `stltest` (the C++ standard library, 64- and 32-bit), `delaytest` (the
-  DLLs Firefox delay-loads), `rttest` (complex math, conio, DLL
-  directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt programs
-  need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello, the
-  process DACL), `battery` (against the battery in
+  `icutest` (ICU and locales, 64- and 32-bit), `comptest`
+  (Windows.UI.Composition: visuals, colour and surface brushes, a
+  desktop window target, drawing surfaces on Direct3D 11 and Direct2D;
+  64- and 32-bit), `comtest`, `coreapptest` (CoreApplication.Run,
+  CoreWindow events and dispatcher, RunAsync, a swap chain for a
+  CoreWindow; 64- and 32-bit), `d2dctxtest` (Direct2D device contexts:
+  ID2D1Device on Direct3D 11, bitmaps on DXGI surfaces,
+  DirectComposition surfaces drawn with Direct2D; 64-bit), `wictest`,
+  `nlstest` (date, time, number and currency formats in German and
+  Japanese, 64- and 32-bit; `nlstest user`), `nlstest calendars`
+  (Japanese eras, Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura
+  and Persian dates; `GetDurationFormat`) and `nlstest override`
+  (`SetLocaleInfo`), 64- and 32-bit, `tlbtest` (type libraries, 64- and
+  32-bit), `usptest` (Arabic and Devanagari shaped through Uniscribe and
+  drawn by `ExtTextOut`, 64- and 32-bit), `cppeh`, `dlgtest` (the common
+  file dialogs: `OPENFILENAME` settings, `IFileDialog` objects),
+  `unwindtest`, `stltest` (the C++ standard library, 64- and 32-bit),
+  `delaytest` (the DLLs Firefox delay-loads), `rttest` (complex math,
+  conio, DLL directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt
+  programs need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello,
+  the process DACL), `battery` (against the battery in
   `tests/acpi/battery.asl`), `soundtest` (the recorded WAV must hold the
   tones played), `soundtest godot` (WASAPI through IAudioClient3 as
   Godot plays, 64-bit and 32-bit), `soundtest record`, `capture` and
@@ -135,72 +140,74 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   file-system locks keep answering, the file-system one within 100 ms;
   the save holds the file-system lock under 20 ms), `xa2test` (XAudio2
   2.9 and 2.7 voices, callbacks and effects, and X3DAudio panning),
-  `powertest` (closing the lid in `tests/acpi/lid-thermal.asl` sleeps, a
-  USB key and the lid wake it, the thermal zone's readings), `disptest
-  1024 768` (saves the mode the restart must keep), `tpsimpletest` (5120
-  one-shot thread-pool callbacks: callback context and calling
-  convention, no leaked handles; 64- and 32-bit), `miditest` (MIDI
-  through `midiOut`, `midiStream` and the MCI sequencer), `nlstest set
-  ja-JP` (the user locale the restart must keep), `waitmigrationtest`
-  (yielding workers repeatedly wait-any and wait-all on unsignaled
-  events, exercising current-thread lookup and timeout registration on
-  SMP; x64 and x86), an installer that replaces a running program and
-  finishes after a restart (`filetest install`, `shutdown /r`, `filetest
-  installed`), `nlstest after-restart ja-JP` (the restart kept the user
-  locale), `disptest saved 1024 768` (the restart kept the saved display
-  mode), hard links kept across a restart (`linktest restarted`),
-  Windows Installer transforms, patches and rollback, and an installed
-  service started at the next boot (`msitest transform`, `patch`,
-  `rollback`, `service`, `shutdown /r`, `msitest service-boot`), Windows
-  Installer JScript and VBScript custom actions setting and reading
-  properties and writing files, and a failing script rolling its install
-  back (`msitest script`), `smftest` (the C++17 special math functions
-  in `msvcp140_2.dll`, 64- and 32-bit), `errnotest` (errno and the other
-  C runtime per-thread state belong to each thread, 64- and 32-bit), a
-  power cut in the middle of saving drive C: (the FAT holds chains no
-  file reaches; at the next boot NovaOS frees them and has as much free
-  space as `fsck.fat` finds), `boosttest` (a woken thread is boosted
-  above its base priority and runs within 2 ms while threads of the same
-  priority spin on every processor; the boost decays back to base, 64-
-  and 32-bit), `crtthreads` (FLS callbacks, per-thread locale,
-  thread-safe `getenv`, `WaitOnAddress` by API set, 64- and 32-bit),
-  `mmcsstest` (MMCSS through avrt.dll: "Pro Audio" runs at 18 and
-  "Games" at 16 without the privilege and reverts to the thread's own
-  priority; a registered thread woken by an event runs within 2 ms while
-  TIME_CRITICAL threads spin on every processor; registered threads
-  spinning on every processor still leave a NORMAL thread room, 64- and
-  32-bit), `prioritytest` (every priority class and thread level gives
-  NT's base priority and reads back; REALTIME without the privilege is
-  HIGH; with boosts off a HIGHEST thread woken by an event runs within 2
-  ms while NORMAL threads spin on every processor; the Terminal's
-  console program is the foreground process, gets the foreground boost
-  and three times a background process's time slice, 64- and 32-bit),
-  `tlsslots` (1088 TLS indexes and FLS callbacks at process exit, 64-
-  and 32-bit), `cmdlinetest` (a 1,200-character command typed into the
-  Terminal and into cmd.exe, CreateProcess with up to 32,766 characters
-  and from an unquoted path with spaces, 64- and 32-bit), `devices`
-  (every PCI function and the driver that claimed it: AHCI, the VGA
-  card, HD Audio, xHCI; bridges marked), `gl2test` (OpenGL 3+ with
-  shaders on the built-in Mesa llvmpipe, 64- and 32-bit), `glgeneric`
-  (OpenGL 1.1 with no OpenGL driver installed, drawing in 2D, 64- and
-  32-bit), `hwcheck` audio DSP: NHLT digital microphones, the SOF
-  firmware manifest, the DSP boot (ROM, code loader, FW_READY, IPC4),
-  the IPC4 capture pipeline into a host ring, paused and run again, and
-  the boot again after sleep, on a modelled DSP, `hwcheck` (HD Audio
-  controller matching, a modelled ALC257 codec with its headphone jack,
-  a modelled I2C-HID touchpad); the touchpad in the boot's ACPI table is
-  found and its missing controller reported, `crashtest` (crash.exe's
-  report in `C:\NovaOS\Crashes`: exception, module+offset, stack,
-  modules; 64- and 32-bit), and the Terminal's `Crash report:` line and
-  `crashes last`, `hwcheck` touchpad gestures on a modelled precision
-  touchpad: tap to click, two-finger tap for the right button,
-  two-finger scrolling (vertical and horizontal) as wheel notches, palms
-  ignored, `wndthreads` (child windows of other threads, sends to an
-  ended thread's window, 64- and 32-bit), `hwcheck mic`: a modelled
-  audio DSP as the "Microphone Array" recording device (`waveIn`, WASAPI
-  and DirectSound list it, `soundtest record` and `capture` hear its
-  tone, before and after a modelled sleep), `fpstate` (x87 control word
-  and MXCSR on new threads, across switches, `RtlRestoreContext` and SEH
+  `powertest` (closing the lid in `tests/acpi/lid-thermal.asl` sleeps,
+  its GPE in a GPE block device and a USB key wake it, the thermal
+  zone's readings, passive cooling throttling CPU 0 to its deepest
+  T-state and back), `disptest 1024 768` (saves the mode the restart
+  must keep), `tpsimpletest` (5120 one-shot thread-pool callbacks:
+  callback context and calling convention, no leaked handles; 64- and
+  32-bit), `miditest` (MIDI through `midiOut`, `midiStream` and the MCI
+  sequencer), `nlstest set ja-JP` (the user locale the restart must
+  keep), `waitmigrationtest` (yielding workers repeatedly wait-any and
+  wait-all on unsignaled events, exercising current-thread lookup and
+  timeout registration on SMP; x64 and x86), an installer that replaces
+  a running program and finishes after a restart (`filetest install`,
+  `shutdown /r`, `filetest installed`), `nlstest after-restart ja-JP`
+  (the restart kept the user locale), `disptest saved 1024 768` (the
+  restart kept the saved display mode), hard links kept across a restart
+  (`linktest restarted`), Windows Installer transforms, patches and
+  rollback, and an installed service started at the next boot (`msitest
+  transform`, `patch`, `rollback`, `service`, `shutdown /r`, `msitest
+  service-boot`), Windows Installer JScript and VBScript custom actions
+  setting and reading properties and writing files, and a failing script
+  rolling its install back (`msitest script`), `smftest` (the C++17
+  special math functions in `msvcp140_2.dll`, 64- and 32-bit),
+  `errnotest` (errno and the other C runtime per-thread state belong to
+  each thread, 64- and 32-bit), a power cut in the middle of saving
+  drive C: (the FAT holds chains no file reaches; at the next boot
+  NovaOS frees them and has as much free space as `fsck.fat` finds),
+  `boosttest` (a woken thread is boosted above its base priority and
+  runs within 2 ms while threads of the same priority spin on every
+  processor; the boost decays back to base, 64- and 32-bit),
+  `crtthreads` (FLS callbacks, per-thread locale, thread-safe `getenv`,
+  `WaitOnAddress` by API set, 64- and 32-bit), `mmcsstest` (MMCSS
+  through avrt.dll: "Pro Audio" runs at 18 and "Games" at 16 without the
+  privilege and reverts to the thread's own priority; a registered
+  thread woken by an event runs within 2 ms while TIME_CRITICAL threads
+  spin on every processor; registered threads spinning on every
+  processor still leave a NORMAL thread room, 64- and 32-bit),
+  `prioritytest` (every priority class and thread level gives NT's base
+  priority and reads back; REALTIME without the privilege is HIGH; with
+  boosts off a HIGHEST thread woken by an event runs within 2 ms while
+  NORMAL threads spin on every processor; the Terminal's console program
+  is the foreground process, gets the foreground boost and three times a
+  background process's time slice, 64- and 32-bit), `tlsslots` (1088 TLS
+  indexes and FLS callbacks at process exit, 64- and 32-bit),
+  `cmdlinetest` (a 1,200-character command typed into the Terminal and
+  into cmd.exe, CreateProcess with up to 32,766 characters and from an
+  unquoted path with spaces, 64- and 32-bit), `devices` (every PCI
+  function and the driver that claimed it: AHCI, the VGA card, HD Audio,
+  xHCI; bridges marked), `gl2test` (OpenGL 3+ with shaders on the
+  built-in Mesa llvmpipe, 64- and 32-bit), `glgeneric` (OpenGL 1.1 with
+  no OpenGL driver installed, drawing in 2D, 64- and 32-bit), `hwcheck`
+  audio DSP: NHLT digital microphones, the SOF firmware manifest, the
+  DSP boot (ROM, code loader, FW_READY, IPC4), the IPC4 capture pipeline
+  into a host ring, paused and run again, and the boot again after
+  sleep, on a modelled DSP, `hwcheck` (HD Audio controller matching, a
+  modelled ALC257 codec with its headphone jack, a modelled I2C-HID
+  touchpad); the touchpad in the boot's ACPI table is found and its
+  missing controller reported, `crashtest` (crash.exe's report in
+  `C:\NovaOS\Crashes`: exception, module+offset, stack, modules; 64- and
+  32-bit), and the Terminal's `Crash report:` line and `crashes last`,
+  `hwcheck` touchpad gestures on a modelled precision touchpad: tap to
+  click, two-finger tap for the right button, two-finger scrolling
+  (vertical and horizontal) as wheel notches, palms ignored,
+  `wndthreads` (child windows of other threads, sends to an ended
+  thread's window, 64- and 32-bit), `hwcheck mic`: a modelled audio DSP
+  as the "Microphone Array" recording device (`waveIn`, WASAPI and
+  DirectSound list it, `soundtest record` and `capture` hear its tone,
+  before and after a modelled sleep), `fpstate` (x87 control word and
+  MXCSR on new threads, across switches, `RtlRestoreContext` and SEH
   unwinds, 64- and 32-bit), `ramdisktest` (files on drive C: take the
   memory their contents need: appended files, SetEndOfFile, deleting;
   the memory programs are told), the first-boot setup, `start welcome`
@@ -327,7 +334,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `pnp` | a keyboard, a hub and a USB stick plugged into xHCI and removed: `pnptest` follows the Plug and Play device tree |
 | `ntfs` | an NTFS volume as drive D:: hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
 | `wdm` | a Windows kernel-mode test driver (`wdmtest.sys`) under the signing policy (loads only with test signing on; unsigned and tampered copies never), then a KMDF driver (`kmdftest.sys`) on `Wdf01000.sys` |
-| `edu` | QEMU's edu PCI device: a Plug and Play driver (`edutest.sys`) installed with `pnputil`, with its memory, interrupt and DMA from the PnP manager; disabled and enabled again |
+| `edu` | QEMU's edu PCI device, behind a PCIe root port (its interrupt routed through the bridge swizzle): a Plug and Play driver (`edutest.sys`) installed with `pnputil`, with its memory, interrupt and DMA from the PnP manager; disabled and enabled again |
 | `vioser` | virtio-win's signed `vioser.sys` (KMDF) on virtio-serial: bytes to the host and back |
 | `usbserial` | QEMU's FTDI FT232 USB serial adapter: FTDI's own driver found by hardware ID, the port becomes COM3 and `serialtest` loops data through it |
 | `ax211` | Intel's AX211 Wi-Fi driver (`Netwtw14.sys`) downloaded by hardware ID and loaded on a stand-in PCI device; it loads its firmware and registers with NDIS, and its hardware probe fails as expected, since the device is not a real AX211 |
@@ -404,7 +411,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `digitest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `digitest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

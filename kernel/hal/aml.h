@@ -65,6 +65,8 @@ typedef struct {
     char   name[40];
     UINT32 temp, passive, hot, critical, period;
     bool   cooling;                    /* at or above the passive trip point */
+    UINT32 tc1, tc2;                   /* passive cooling constants (_TC1, _TC2) */
+    UINT64 processors;                 /* the CPUs it cools (_PSL; 0: all) */
     UINT32 stamp;                      /* bumped when a reading changes */
 } AmlThermalZone;
 int AmlThermalZones(AmlThermalZone *out, int max);
@@ -76,9 +78,10 @@ int AmlThermalZones(AmlThermalZone *out, int max);
 #define AML_THERMAL_SHUTDOWN 2
 int AmlThermalRequest(void);
 
-/* PCI interrupt routing (_PRT of the root bridge): the GSI that pin @pin
- * (0 = INTA) of device @dev on bus 0 is wired to, and how it triggers */
-bool AmlPciIrq(UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low);
+/* PCI interrupt routing (_PRT of the root bridges and of bridges that have
+ * one, else the bridge swizzle): the GSI that pin @pin (0 = INTA) of device
+ * @dev on bus @bus is wired to, and how it triggers */
+bool AmlPciIrq(UINT8 bus, UINT8 dev, UINT8 pin, UINT32 *gsi, bool *level, bool *low);
 
 /* The SCI is an interrupt (false: polled) */
 bool AmlSciIsInterrupt(void);

@@ -28,7 +28,7 @@ static HRESULT STDMETHODCALLTYPE gs_qi(GradientStops *g, REFIID riid, void **out
 {
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1GradientStopCollection)) {
+        IsEqualIID(riid, &IID_ID2D1GradientStopCollection) || IsEqualIID(riid, &IID_ID2D1GradientStopCollection1)) {
         *out = g;
         InterlockedIncrement(&g->ref);
         return S_OK;
@@ -55,7 +55,14 @@ static void STDMETHODCALLTYPE gs_get(GradientStops *g, GSTOP *s, UINT32 n)
 }
 static UINT32 STDMETHODCALLTYPE gs_gamma(GradientStops *g) { return g->gamma; }
 static UINT32 STDMETHODCALLTYPE gs_extend(GradientStops *g) { return g->extend; }
-const void *const gs_vtbl[] = { gs_qi, gs_addref, gs_release, gs_factory, gs_count, gs_get, gs_gamma, gs_extend };
+/* ID2D1GradientStopCollection1: the stops are kept as given (straight
+   alpha, sRGB), interpolated in the space the gamma names, 8 bits a channel */
+static UINT32 STDMETHODCALLTYPE gs_pre_space(GradientStops *g) { return g->gamma == 1 ? 2 : 1; }   /* D2D1_COLOR_SPACE */
+static UINT32 STDMETHODCALLTYPE gs_post_space(GradientStops *g) { (void)g; return 1; }
+static UINT32 STDMETHODCALLTYPE gs_precision(GradientStops *g) { (void)g; return 1; }               /* 8BPC_UNORM */
+static UINT32 STDMETHODCALLTYPE gs_interp_mode(GradientStops *g) { (void)g; return 0; }             /* STRAIGHT */
+const void *const gs_vtbl[] = { gs_qi, gs_addref, gs_release, gs_factory, gs_count, gs_get, gs_gamma, gs_extend,
+                                gs_get, gs_pre_space, gs_post_space, gs_precision, gs_interp_mode };
 
 static int cmp_stop(const void *a, const void *b)
 {
@@ -129,7 +136,7 @@ static HRESULT STDMETHODCALLTYPE bm_qi(Bitmap *b, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1Image) || IsEqualIID(riid, &IID_ID2D1Bitmap)) {
+        IsEqualIID(riid, &IID_ID2D1Image) || IsEqualIID(riid, &IID_ID2D1Bitmap) || IsEqualIID(riid, &IID_ID2D1Bitmap1)) {
         *out = b;
         InterlockedIncrement(&b->ref);
         return S_OK;
@@ -142,7 +149,9 @@ static ULONG STDMETHODCALLTYPE bm_release(Bitmap *b)
 {
     LONG r = InterlockedDecrement(&b->ref);
     if (!r) {
+        bitmap_drop_surface(b);
         factory_release(b->factory);
+        d_free(b->map_buf);
         d_free(b->s.px);
         d_free(b);
     }
@@ -234,8 +243,59 @@ static HRESULT STDMETHODCALLTYPE bm_copy_memory(Bitmap *b, const RCU *r, const v
     return S_OK;
 }
 
+/* ---- ID2D1Bitmap1 ---- */
+static void STDMETHODCALLTYPE bm_color_context(Bitmap *b, void **out) { (void)b; if (out) *out = NULL; }
+static UINT32 STDMETHODCALLTYPE bm_options(Bitmap *b) { return b->options; }
+static HRESULT STDMETHODCALLTYPE bm_surface(Bitmap *b, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = NULL;
+    if (!b->tex) return D2DERR_UNSUPPORTED_OPERATION;
+    return COM_QI(b->tex, &IID_IDXGISurface_, out);
+}
+/* Map: a bitmap made with D2D1_BITMAP_OPTIONS_CPU_READ (4) reads its
+   pixels in its own format */
+static HRESULT STDMETHODCALLTYPE bm_map(Bitmap *b, UINT32 options, MAPPEDRECT *m)
+{
+    if (!m) return E_POINTER;
+    m->pitch = 0;
+    m->bits = NULL;
+    if (b->mapped || !(b->options & 4) || (options & ~1u) || !(options & 1)) return E_INVALIDARG;
+    if (b->tex) bitmap_pull(b);
+    UINT32 fmt = b->fmt.format;
+    if (fmt == 87 || fmt == 88) {
+        m->pitch = b->s.stride * 4;
+        m->bits = (BYTE *)b->s.px;
+    } else {
+        int bpp = fmt == 65 ? 1 : 4;
+        d_free(b->map_buf);
+        b->map_buf = d_alloc((size_t)b->s.w * b->s.h * bpp);
+        if (!b->map_buf) return E_OUTOFMEMORY;
+        for (int y = 0; y < b->s.h; y++)
+            for (int x = 0; x < b->s.w; x++) {
+                UINT32 v = b->s.px[(size_t)y * b->s.stride + x];
+                BYTE *d = b->map_buf + ((size_t)y * b->s.w + x) * bpp;
+                if (bpp == 1) d[0] = (BYTE)(v >> 24);
+                else { d[0] = (BYTE)(v >> 16); d[1] = (BYTE)(v >> 8); d[2] = (BYTE)v; d[3] = (BYTE)(v >> 24); }
+            }
+        m->pitch = b->s.w * bpp;
+        m->bits = b->map_buf;
+    }
+    b->mapped = 1;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE bm_unmap(Bitmap *b)
+{
+    if (!b->mapped) return D2DERR_WRONG_STATE;
+    b->mapped = 0;
+    d_free(b->map_buf);
+    b->map_buf = NULL;
+    return S_OK;
+}
+
 const void *const bm_vtbl[] = { bm_qi, bm_addref, bm_release, bm_factory, bm_size, bm_pixel_size, bm_format,
-                                bm_dpi, bm_copy_bitmap, bm_copy_target, bm_copy_memory };
+                                bm_dpi, bm_copy_bitmap, bm_copy_target, bm_copy_memory,
+                                bm_color_context, bm_options, bm_surface, bm_map, bm_unmap };
 
 HRESULT bitmap_create(void *factory, SZU size, const void *src, UINT32 pitch, const BMPPROPS *props, Bitmap **out)
 {
@@ -244,6 +304,7 @@ HRESULT bitmap_create(void *factory, SZU size, const void *src, UINT32 pitch, co
     UINT32 fmt = props ? props->pixelFormat.format : 87, alpha = props ? props->pixelFormat.alphaMode : 1;
     if (fmt == 0) fmt = 87;
     if (alpha == 0) alpha = fmt == 65 ? 2 : 1;
+    if (fmt == 88 || fmt == 91) fmt = 87;    /* (B8G8R8X8 and the sRGB view are drawn as B8G8R8A8) */
     if (fmt != 87 && fmt != 28 && fmt != 65) return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
     if (alpha == 2 && fmt != 65) return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
     Bitmap *b = d_alloc(sizeof(*b));
@@ -282,7 +343,8 @@ static HRESULT STDMETHODCALLTYPE br_qi(Brush *b, REFIID riid, void **out)
                                          &IID_ID2D1RadialGradientBrush, &IID_ID2D1BitmapBrush };
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1Brush) || IsEqualIID(riid, kinds[b->kind])) {
+        IsEqualIID(riid, &IID_ID2D1Brush) || IsEqualIID(riid, kinds[b->kind]) ||
+        (b->kind == PAINT_BITMAP && IsEqualIID(riid, &IID_ID2D1BitmapBrush1))) {
         *out = b;
         InterlockedIncrement(&b->ref);
         return S_OK;
@@ -315,7 +377,7 @@ const void *const br_solid_vtbl[] = { BRUSH_METHODS, sc_set, sc_get };
 
 static void STDMETHODCALLTYPE bb_set_x(Brush *b, UINT32 m) { b->extend_x = m; }
 static void STDMETHODCALLTYPE bb_set_y(Brush *b, UINT32 m) { b->extend_y = m; }
-static void STDMETHODCALLTYPE bb_set_interp(Brush *b, UINT32 m) { b->interp = m; }
+static void STDMETHODCALLTYPE bb_set_interp(Brush *b, UINT32 m) { b->interp = b->interp1 = m; }
 static void STDMETHODCALLTYPE bb_set_bitmap(Brush *b, void *bmp)
 {
     Bitmap *n = bitmap_of(bmp);
@@ -331,8 +393,11 @@ static void STDMETHODCALLTYPE bb_bitmap(Brush *b, void **out)
     *out = b->bitmap;
     if (b->bitmap) bm_addref(b->bitmap);
 }
+/* ID2D1BitmapBrush1: D2D1_INTERPOLATION_MODE, nearest neighbour (0) or a linear filter (the rest) */
+static void STDMETHODCALLTYPE bb_set_interp1(Brush *b, UINT32 m) { b->interp = m ? 1 : 0; b->interp1 = m; }
+static UINT32 STDMETHODCALLTYPE bb_interp1(Brush *b) { return b->interp1; }
 const void *const br_bitmap_vtbl[] = { BRUSH_METHODS, bb_set_x, bb_set_y, bb_set_interp, bb_set_bitmap,
-                                       bb_x, bb_y, bb_interp, bb_bitmap };
+                                       bb_x, bb_y, bb_interp, bb_bitmap, bb_set_interp1, bb_interp1 };
 
 static void STDMETHODCALLTYPE lg_set_start(Brush *b, PT p) { b->p0 = p; }
 static void STDMETHODCALLTYPE lg_set_end(Brush *b, PT p) { b->p1 = p; }

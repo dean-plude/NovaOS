@@ -135,6 +135,7 @@ set(KERNEL_C_SOURCES
     hal/fwcfg.c
     hal/acpi.c
     hal/aml.c
+    hal/throttle.c
     hal/ec.c
     hal/gpio.c
     hal/ioapic.c

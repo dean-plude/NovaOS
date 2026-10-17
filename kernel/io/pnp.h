@@ -61,9 +61,12 @@ typedef struct {
 /* An event (NovaPnpEvent) */
 #define PNP_ARRIVAL       1
 #define PNP_REMOVAL       2
+#define PNP_QUERY_REMOVE  3
+#define PNP_QUERY_REMOVE_FAILED 4
+#define PNP_REMOVE_PENDING 5
 typedef struct {
     UINT32 seq;                     /* from 1, one more for each event */
-    UINT32 kind;                    /* PNP_ARRIVAL or PNP_REMOVAL */
+    UINT32 kind;                    /* PNP_* event */
     UINT32 id;                      /* the node */
     UINT32 reserved;
 } PnpEvent;
@@ -79,6 +82,8 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *n);
 /* The node and everything under it left (a removal event for each, the
  * deepest first); they stay as phantoms */
 void PnpRemove(UINT32 id);
+/* Record a PnP notification event for an existing node. */
+void PnpNotify(UINT32 kind, UINT32 id);
 /* Remove node @id and delete it (PNP_DELETED), as uninstalling a device
  * does: a later PnpAdd of its instance brings it back */
 void PnpDelete(UINT32 id);

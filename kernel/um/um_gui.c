@@ -1715,6 +1715,7 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
         if (n && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)ptr, r, sizeof(PnpResource) * (size_t)n))) return 0;
         return (UINT64)n;
     }
+    case 9: return um_driver_pnp_node(UmCurrent(), ptr);
     }
     return 0;
 }

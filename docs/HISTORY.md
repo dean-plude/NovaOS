@@ -13399,6 +13399,46 @@ list written to a stream and read back, and the desktop folder listing
 items but draw none of them, its port number box is blank, and no
 transfer is checked yet.
 
+## ACPI: processor throttling, GPE blocks and interrupts behind bridges
+
+The three items left open under "ACPI beyond the MADT" since Phase 18.6
+are done ([install-and-power.md](../install-and-power.md) has the
+details):
+
+- **Passive cooling throttles the processors.** A thermal zone at or
+  above `_PSV` used to only report it. Now every `_TSP` it works out the
+  performance its `_PSL` processors should give up from `_TC1` and
+  `_TC2` (ACPI 6.5, 11.1.5), and `kernel/hal/throttle.c` puts each
+  processor in the matching T-state: from `_PTC`, `_TSS` and `_TPC`
+  (control and status registers in I/O or memory space, or Intel's
+  `IA32_CLOCK_MODULATION` MSR, which each CPU writes on its own timer
+  tick), or from `P_CNT` and the FADT's duty cycle field. `_TPC`
+  changes (Notify 0x82) are followed, the states are written again after
+  S3, and `CallNtPowerInformation(ProcessorInformation)` reports a
+  throttled CPU's lower `MhzLimit` (it used to return a fixed 2000 MHz
+  from powrprof); `ThermalInformation` now carries the zone's constants
+  and processors.
+- **GPE block devices.** Besides the FADT's `\_GPE` blocks, each
+  `ACPI0006` device's block is set up from its `_CRS` (registers in I/O
+  or memory space; the SCI, or an interrupt of its own on a new vector,
+  `IRQ_GPE_BLOCK`, polled once a second like the SCI). uACPI runs its
+  `_Lxx`/`_Exx` methods, so their Notify reaches the lid, buttons,
+  batteries and thermal zones; a `_PRW` naming the block makes its GPE a
+  wake event, and the wake report names the device.
+- **Interrupts behind PCI bridges.** Routing used to cover bus 0 only, so
+  a device behind a PCIe root port got the firmware's legacy IRQ number
+  instead of its GSI. Now every root bridge's `_PRT` (by `_BBN`) and
+  every bridge's own `_PRT` are read, and a bus without one is routed by
+  the standard swizzle onto its bridge's pin, one bridge at a time; the
+  Interrupt Line registers, the PnP manager's resources for Windows
+  drivers and the inbox drivers' all use it.
+
+Tests: `powertest` (core) checks throttling to the deepest T-state and
+back through `ProcessorInformation`, with `tests/acpi/lid-thermal.asl`'s
+T-states in pc-testdev's scratch memory and its lid's event and wake
+coming through a GPE block device; the devices suite's `edu` boot puts
+the edu device behind a PCIe root port, which QEMU gives no `_PRT`.
+
 ## Calculator
 
 Dean asked for Windows Calculator (github.com/microsoft/calculator).  The
@@ -13736,6 +13776,43 @@ WIC), but its main window still does not appear: WPF creates only its
 hidden helper windows and then waits in its message loop.  That is the
 next step for HandBrake (roadmap 27.1); it stays Borked.
 
+## Windows.UI.Composition, and CoreWindow's pointer events
+
+Second step of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the compositor XAML draws with.
+
+- **`Windows.UI.Composition`** in `dcomp.dll`, as on Windows (the
+  registry's `ActivatableClassId` key for
+  `Windows.UI.Composition.Compositor` names it).  The `Compositor` makes
+  container and sprite visuals (offset, size, anchor and centre points,
+  scale, rotation, the transform matrix's 2-D part, opacity, visibility,
+  inset clips, and the children collection with `InsertAtTop`,
+  `InsertAtBottom`, `InsertAbove`, `InsertBelow`, `Remove` and
+  `RemoveAll`), colour brushes and surface brushes (stretch `None`,
+  `Fill`, `Uniform`, `UniformToFill`, alignment ratios), and targets on a
+  window (`ICompositorDesktopInterop::CreateDesktopWindowTarget`) or on
+  the thread's CoreWindow (`CreateTargetForCurrentView`).  Through
+  `ICompositorInterop` it makes graphics devices on a Direct3D 11 device,
+  whose drawing surfaces programs draw into with `BeginDraw`/`EndDraw`
+  (`ICompositionDrawingSurfaceInterop`, reading the pixels back as
+  DirectComposition's surfaces do), and surfaces showing a composition
+  swap chain.  Changes show without a commit: the compositor's thread
+  draws each target's tree in software and copies it into the window.
+- **CoreWindow's pointer events.**  `PointerEntered`, `PointerMoved`,
+  `PointerPressed`, `PointerReleased`, `PointerWheelChanged`,
+  `PointerExited` and `PointerCaptureLost` are raised from the mouse's
+  messages, with a `Windows.UI.Input.PointerPoint` (position in DIPs,
+  pointer 1, a mouse `PointerDevice`, timestamp, contact) and its
+  `PointerPointProperties` (the buttons held, the `PointerUpdateKind`, the
+  wheel's turn).
+
+New core self-test `comptest` (64- and 32-bit); `coreapptest` checks the
+pointer events and a composition target on its CoreWindow.  Not yet:
+animations (accepted, not run), expression animations, property sets,
+effects, batches, 3-D transforms, clips other than insets, bilinear
+sampling, drawing surfaces on a Direct2D device, and touch and pen
+pointers.
+
 ## The UWP app model's core: CoreApplication and CoreWindow
 
 First step of `Windows.UI.Xaml` on NovaOS (Phase 32,
@@ -13790,6 +13867,40 @@ formatting then needs a DirectWrite text analyzer
 (`IDWriteFactory::CreateTextAnalyzer`), which NovaOS's `dwrite.dll`
 does not have yet, so the window is never shown.  That is HandBrake's
 next step; it stays Borked.
+
+## Direct2D device contexts
+
+First part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the XAML framework draws its
+text and shapes with Direct2D 1.1's device contexts, into
+DirectComposition surfaces, so those come before its build.
+
+- **`ID2D1Factory1`** (with `ID2D1Multithread`), **`ID2D1Device`** on a
+  Direct3D 11 device (`ID2D1Factory1::CreateDevice`, `D2D1CreateDevice`)
+  and **`ID2D1DeviceContext`**: every render-target call, plus
+  `CreateBitmap` with `D2D1_BITMAP_PROPERTIES1`,
+  `CreateBitmapFromDxgiSurface`, `SetTarget`/`GetTarget`, unit modes,
+  `DrawImage` and `DrawBitmap` of bitmaps, 1.1's gradient stop
+  collections, bitmap brushes, stroke styles, path geometries and drawing
+  state blocks; `ID2D1Bitmap1` (`GetOptions`, `GetSurface`, `Map` for a
+  `CPU_READ` bitmap); `D2D1CreateDeviceContext`.  Drawing stays in
+  software: a bitmap on a DXGI surface keeps its pixels in memory, read
+  from the texture when a context starts drawing into it and written back
+  at `Flush` and `EndDraw`, so it works on the software Direct3D device
+  and on DXVK's.  Not yet: effects, command lists, image brushes, colour
+  contexts, `ID2D1DeviceContext1` and later, perspective in `DrawBitmap`,
+  primitive blends other than source-over.
+- **DirectComposition and Windows.UI.Composition on an `ID2D1Device`.**
+  Given one as the rendering device (`DCompositionCreateDevice2`, the new
+  `IDCompositionSurfaceFactory`, `ICompositorInterop::CreateGraphicsDevice`),
+  surfaces are made on its Direct3D device and `BeginDraw` asked for an
+  `ID2D1DeviceContext` hands out one drawing into the surface, as Windows
+  does.  The software Direct3D device's textures now answer
+  `IDXGISurface`.
+
+New core self-test `d2dctxtest` (64-bit); `comptest` draws a drawing
+surface of a graphics device made on an `ID2D1Device`.  Next in 32.3:
+building the `dxaml` core as `Windows.UI.Xaml.dll`.
 
 <!-- END generated:history -->
 

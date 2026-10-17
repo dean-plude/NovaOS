@@ -95,10 +95,9 @@ the first question step 32.3 answers.
    of the compositor's draws each target's tree in software after every
    change and copies it into the window with the GDI.  Not yet:
    animations (accepted, not run), expression animations, property sets,
-   effects, batches, 3-D transforms, clips other than insets, bilinear
-   sampling, and drawing surfaces on an `ID2D1Device` (NovaOS's
-   Direct2D has no device contexts yet; XAML's text needs them, so 32.3
-   or 32.4 adds them).  `twinapi.appcore`'s CoreWindow raises
+   effects, batches, 3-D transforms, clips other than insets and bilinear
+   sampling (drawing surfaces on an `ID2D1Device` came with 32.3's first
+   part).  `twinapi.appcore`'s CoreWindow raises
    `PointerEntered`, `PointerMoved`, `PointerPressed`, `PointerReleased`,
    `PointerWheelChanged`, `PointerExited` and `PointerCaptureLost` from
    the mouse's messages with a `PointerPoint` (pointer 1, a mouse
@@ -107,7 +106,26 @@ the first question step 32.3 answers.
 3. **32.3 The XAML core builds.** `dxaml`'s core, parser and metadata
    built as `Windows.UI.Xaml.dll` against 32.1 and 32.2;
    `Windows.UI.Xaml.Application.Start` runs and `XamlReader.Load` parses a
-   page into its object tree.
+   page into its object tree.  Two pull requests:
+   - *Direct2D device contexts (done).*  XAML draws its text and shapes
+     with Direct2D 1.1: it makes an `ID2D1Factory1` (and takes its
+     `ID2D1Multithread`), an `ID2D1Device` on its Direct3D 11 device and
+     that device's contexts, and draws into DirectComposition surfaces
+     made through an `IDCompositionSurfaceFactory` on the `ID2D1Device`,
+     whose `BeginDraw` hands it a device context (`dxaml/xcp/plat/win/desktop`:
+     `D3D11DeviceInstance.cpp`, `DCompSurface.cpp`, `D2DAcceleratedRT.cpp`).
+     `d2d1.dll` now has `ID2D1Factory1`, `ID2D1Device`,
+     `ID2D1DeviceContext` (its target a bitmap of its own or of a DXGI
+     surface, read from the texture at `BeginDraw` and written back at
+     `Flush` and `EndDraw`, so any Direct3D 11 device works),
+     `ID2D1Bitmap1` and the other 1.1 interfaces it hands out;
+     DirectComposition and Windows.UI.Composition take an `ID2D1Device`
+     as their rendering device and give out device contexts from
+     `BeginDraw`.  Test: `d2dctxtest`, and `comptest`'s Direct2D drawing
+     surface.  Not yet: effects, command lists, image brushes, colour
+     contexts, `ID2D1DeviceContext1` and later (XAML asks for
+     `ID2D1DeviceContext4`/`5` only for colour glyphs and SVG).
+   - *The `dxaml` build*, starting with the headers MIDL would make.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

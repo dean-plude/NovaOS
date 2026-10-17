@@ -9,9 +9,11 @@
  *                                wakes the machine
  *   "powertest: heat to 70 C"    above the passive trip point
  *   "powertest: cool to 45 C"
- * Checks the capabilities, the thermal readings (CallNtPowerInformation)
- * and that closing the lid put the machine to sleep (LastSleepTime and
- * LastWakeTime moved on).
+ * Checks the capabilities, the thermal readings (CallNtPowerInformation),
+ * that closing the lid put the machine to sleep (LastSleepTime and
+ * LastWakeTime moved on), and that passive cooling throttles the first
+ * processor (its _PSL) to its deepest T-state, 25 percent (MhzLimit of
+ * ProcessorInformation), and lets it run at full speed again once cool.
  */
 #include <windows.h>
 #include <stdio.h>
@@ -26,6 +28,8 @@ typedef struct {
     UCHAR     ActiveTripPointCount;
     ULONG     ActiveTripPoint[10];
 } THERMAL_INFO;
+
+typedef struct { ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState; } PPI;
 
 static CallNtPowerInformationFn cnpi;
 static int passed, failed;
@@ -47,6 +51,19 @@ static ULONGLONG power_time(int level)
     ULONGLONG t = 0;
     cnpi(level, NULL, 0, &t, sizeof(t));
     return t;
+}
+
+/* CPU 0's speed limit as a percentage of its full speed (0: unknown) */
+static ULONG cpu0_percent(void)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    PPI p[64];
+    if (si.dwNumberOfProcessors > 64 || cnpi(11, NULL, 0, p, si.dwNumberOfProcessors * sizeof(PPI)) != 0 ||
+        !p[0].MaxMhz)
+        return 0;
+    printf("CPU 0: %lu MHz, limit %lu MHz\n", p[0].MaxMhz, p[0].MhzLimit);
+    return (p[0].MhzLimit * 100 + p[0].MaxMhz / 2) / p[0].MaxMhz;
 }
 
 /* Wait up to @secs for the zone to read @dk tenths of a kelvin */
@@ -84,6 +101,9 @@ int main(void)
     check("passive trip point 60 C", t.PassiveTripPoint == 3332);
     check("critical trip point 95 C", t.CriticalTripPoint == 3682);
     check("sampled every second", t.SamplingPeriod == 10);
+    check("passive constants 2 and 5", t.ThermalConstant1 == 2 && t.ThermalConstant2 == 5);
+    check("it cools CPU 0", t.Processors == 1);
+    check("CPU 0 at full speed", cpu0_percent() == 100);
 
     /* The lid: closing it sleeps */
     ULONGLONG slept0 = power_time(15);
@@ -102,9 +122,11 @@ int main(void)
     printf("powertest: heat to 70 C\n");
     fflush(stdout);
     check("the zone reads 70 C", wait_temp(3432, 30));
+    check("CPU 0 throttled to 25%", cpu0_percent() == 25);
     printf("powertest: cool to 45 C\n");
     fflush(stdout);
     check("the zone reads 45 C", wait_temp(3182, 30));
+    check("CPU 0 at full speed again", cpu0_percent() == 100);
 
     printf("powertest: %d passed, %d failed\n", passed, failed);
     return failed != 0;

@@ -36,7 +36,8 @@ static HRESULT STDMETHODCALLTYPE g_qi(Geometry *g, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ID2D1Resource) ||
-        IsEqualIID(riid, &IID_ID2D1Geometry) || IsEqualIID(riid, kind_iid(g->kind))) {
+        IsEqualIID(riid, &IID_ID2D1Geometry) || IsEqualIID(riid, kind_iid(g->kind)) ||
+        (g->kind == G_PATH && IsEqualIID(riid, &IID_ID2D1PathGeometry1))) {
         *out = g;
         InterlockedIncrement(&g->ref);
         return S_OK;
@@ -366,7 +367,13 @@ static HRESULT STDMETHODCALLTYPE p_figures(Geometry *g, UINT32 *n)
 const void *const g_vtbl_rect[] = { GEOMETRY_METHODS, g_get_rect };
 const void *const g_vtbl_rrect[] = { GEOMETRY_METHODS, g_get_rrect };
 const void *const g_vtbl_ellipse[] = { GEOMETRY_METHODS, g_get_ellipse };
-const void *const g_vtbl_path[] = { GEOMETRY_METHODS, p_open, p_stream, p_segments, p_figures };
+/* ID2D1PathGeometry1 */
+static HRESULT STDMETHODCALLTYPE p_point_at(Geometry *g, float length, UINT32 start, const MAT *m, float tol, void *desc)
+{
+    (void)g; (void)length; (void)start; (void)m; (void)tol; (void)desc;
+    return E_NOTIMPL;
+}
+const void *const g_vtbl_path[] = { GEOMETRY_METHODS, p_open, p_stream, p_segments, p_figures, p_point_at };
 const void *const g_vtbl_transformed[] = { GEOMETRY_METHODS, g_get_source, g_get_transform };
 const void *const g_vtbl_group[] = { GEOMETRY_METHODS, g_group_fill, g_group_count, g_group_get };
 

@@ -135,6 +135,8 @@ item ends when a named program or test demonstrates it.
   [Complex text](HISTORY.md#complex-text-harfbuzz-freetype-and-uniscribe).
 - ~~**Direct2D** (`d2d1.dll`)~~ Done (19.2): a software Direct2D, with
   text through DirectWrite's text layouts; see [Direct2D](HISTORY.md#direct2d).
+  Direct2D 1.1's devices and device contexts followed for XAML (32.3):
+  see [Direct2D device contexts](HISTORY.md#direct2d-device-contexts).
 - ~~**ffmpeg's imports**~~ Done (19.3): see [ffmpeg](HISTORY.md#ffmpeg).
   `ffmpeg -i in.mp4 out.webm` (H.264 and AAC to VP9 and Opus) completes,
   and the nightly app corpus runs it.
@@ -327,8 +329,9 @@ item ends when a named program or test demonstrates it.
   `UnitConverter` needs the Concurrency Runtime's `task<>`, and the unit
   and currency data comes from the app's C# view models); then the
   shipped UWP package itself, which needs MSIX deployment,
-  `Windows.UI.Xaml` with WinUI 2 (Phase 32, under way: WinRT activation
-  and the app model are step 32.1) and the UWP .NET runtime.
+  `Windows.UI.Xaml` with WinUI 2 (Phase 32, under way: WinRT activation,
+  the app model and the compositor are done, Direct2D device contexts
+  too; the XAML build is next) and the UWP .NET runtime.
 
 <!-- END generated:next-apps -->
 
@@ -468,7 +471,7 @@ item ends when a named program or test demonstrates it.
   isochronous behind a high-speed hub on EHCI; QEMU cannot test them,
   and Intel chipsets since 2015, the reference ThinkPad's included, have xHCI
   only), webcams.
-- ACPI beyond the MADT: ~~shutdown, reboot, sleep, batteries~~ Done:
+- ~~ACPI beyond the MADT: shutdown, reboot, sleep, batteries~~ Done:
   power-off (S5), sleep (S3), reset and the fixed power button from the
   FADT; the AML interpreter (uACPI) for batteries, AC adapters,
   control-method power buttons and `_PTS`/`_WAK`; the lid (closing it
@@ -476,9 +479,14 @@ item ends when a named program or test demonstrates it.
   shutdown at `_CRT`), wake devices from `_PRW` (the lid, power buttons,
   USB controllers, with USB keyboards set for remote wakeup), the SCI as
   a real interrupt through the I/O APIC and PCI interrupt routing from
-  `_PRT` (Phase 18.6).  Still to do: CPU throttling for passive cooling;
-  GPE blocks other than `\_GPE`; routing behind PCI bridges.  (USB wake
-  from S3 is confirmed on a real PC; QEMU can't emulate it.)
+  `_PRT` (Phase 18.6).  ~~CPU throttling for passive cooling; GPE blocks
+  other than `\_GPE`; routing behind PCI bridges~~ Done (2026-10-15):
+  T-states from `_PTC`/`_TSS`/`_TPC` (I/O, memory or the clock
+  modulation MSR) or `P_CNT`, driven by each zone's `_PSL`, `_TC1`,
+  `_TC2` and `_TSP` and reported as `MhzLimit`; GPE block devices
+  (ACPI0006) on the SCI or their own interrupt, with their `_Lxx`/`_Exx`
+  methods and wake GPEs; bridges' own `_PRT`, else the standard swizzle.
+  (USB wake from S3 is confirmed on a real PC; QEMU can't emulate it.)
   (Display modes after S3 are set again on every adapter NovaOS drives:
   the VBE ones, QXL, virtio-vga, VMware SVGA and Cirrus.  Physical GPUs,
   such as the T14's Intel Iris Xe, have no driver yet; see step 25.3.)
@@ -573,17 +581,18 @@ item ends when a named program or test demonstrates it.
   service, `WM_DEVICECHANGE`~~ Done: the PlugPlay service running and
   keeping `HKLM\SYSTEM\CurrentControlSet\Enum`,
   `RegisterDeviceNotification` (`DBT_DEVICEARRIVAL`,
-  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services)
-  and `CM_Register_Notification`.  ~~setupapi's and cfgmgr32's
+  `DBT_DEVICEREMOVECOMPLETE`, `DBT_DEVNODES_CHANGED`, volumes, services and
+  open device handles) and `CM_Register_Notification`.  ~~setupapi's and cfgmgr32's
   enumeration of the tree~~ Done: `SetupDiGetClassDevs` for every class,
   enumerator and interface class, `CM_Locate_DevNode`,
   `CM_Get_Child`/`Sibling`/`Parent`, device ID lists, status, registry
   and `DEVPKEY` properties (a device's bus type and container too), a
   device interface's properties (`CM_Get_Device_Interface_PropertyW`),
   device keys, and `pnputil /enum-devices`
-  matching the driver store.  Still to do: query-remove
-  (`DBT_DEVICEQUERYREMOVE`) and handle notifications
-  (`DBT_DEVTYP_HANDLE`).
+  matching the driver store.  Still to do: a synchronous query-remove
+  round-trip (`DBT_DEVICEQUERYREMOVE`, `DBT_DEVICEQUERYREMOVEFAILED`,
+  `DBT_DEVICEREMOVEPENDING`) so applications can close handles or veto before
+  `IRP_MN_QUERY_REMOVE_DEVICE`; current query notifications are asynchronous.
 - Windows drivers the Windows 11 way (Phase 30, complete: all eleven
   steps are in; design in [design/windows-drivers.md](design/windows-drivers.md),
   what ships in [drivers.md](drivers.md)): unchanged Windows driver
@@ -947,12 +956,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `IFrameworkView` through `CoreApplication.Run` on a `CoreWindow` with
   its events and dispatcher; DXGI presents into a CoreWindow.  Test
   `coreapptest`.
-- [ ] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
+- [x] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
   and drawing surfaces on NovaOS's DirectComposition; CoreWindow's
-  pointer events.
+  pointer events.  Test `comptest`.
 - [ ] **32.3 The XAML core builds.** The `dxaml` core as
   `Windows.UI.Xaml.dll`: `Application.Start` runs and `XamlReader.Load`
-  parses a page.
+  parses a page.  First part done: Direct2D 1.1's devices and device
+  contexts, and DirectComposition and Composition surfaces drawn with
+  them, which XAML draws its text and shapes with (test `d2dctxtest`).
+  Next: the `dxaml` build itself.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

@@ -68,6 +68,49 @@ static HRESULT STDMETHODCALLTYPE src_subst(IDWriteTextAnalysisSource *s, UINT32 
 }
 static IDWriteTextAnalysisSourceVtbl src_vtbl = { src_qi, src_addref, src_release, src_text, src_before, src_dir, src_locale, src_subst };
 
+typedef struct {
+    IDWriteTextAnalysisSink iface;
+    UINT32 scripts, breaks, bidi;
+    UINT16 script_ids[8];
+    DWRITE_LINE_BREAKPOINT breakpoints[64];
+    UINT8 bidi_levels[64];
+} Sink;
+static HRESULT STDMETHODCALLTYPE sink_qi(IDWriteTextAnalysisSink *s, REFIID iid, void **out) { (void)iid; *out = s; return S_OK; }
+static ULONG STDMETHODCALLTYPE sink_addref(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
+static ULONG STDMETHODCALLTYPE sink_release(IDWriteTextAnalysisSink *s) { (void)s; return 1; }
+static HRESULT STDMETHODCALLTYPE sink_script(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, const DWRITE_SCRIPT_ANALYSIS *a)
+{
+    Sink *sink = (Sink *)s;
+    (void)pos;
+    if (len && sink->scripts < 8) sink->script_ids[sink->scripts++] = a->script;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sink_breaks(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, const DWRITE_LINE_BREAKPOINT *b)
+{
+    Sink *sink = (Sink *)s;
+    (void)pos;
+    if (len <= 64) {
+        memcpy(sink->breakpoints, b, len * sizeof(*b));
+        sink->breaks = len;
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sink_bidi(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, UINT8 explicit_level, UINT8 resolved_level)
+{
+    Sink *sink = (Sink *)s;
+    (void)pos; (void)explicit_level;
+    if (pos + len <= 64) {
+        memset(sink->bidi_levels + pos, resolved_level, len);
+        sink->bidi += len;
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sink_number(IDWriteTextAnalysisSink *s, UINT32 pos, UINT32 len, IDWriteNumberSubstitution *n)
+{ (void)s; (void)pos; (void)len; (void)n; return S_OK; }
+static IDWriteTextAnalysisSinkVtbl sink_vtbl = {
+    sink_qi, sink_addref, sink_release, sink_script, sink_breaks, sink_bidi, sink_number
+};
+
 /* the Win32 family name of a font */
 static void family_of(IDWriteFont *font, WCHAR *out, UINT32 cap)
 {
@@ -134,6 +177,30 @@ int main(void)
           SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory3_, (IUnknown **)&direct)) && direct);
     if (direct) IDWriteFactory3_Release(direct);
     if (!f2 || !f3) { printf("dw3test: %d passed, %d failed\n", pass, fail); return 1; }
+
+    IDWriteTextAnalyzer *analyzer = NULL;
+    CHECK("IDWriteFactory CreateTextAnalyzer", SUCCEEDED(V(f, CreateTextAnalyzer)(f, &analyzer)) && analyzer);
+    if (analyzer) {
+        const WCHAR analysis_text[] = L"Latin العربية";
+        Source source = { { &src_vtbl }, analysis_text, (UINT32)wcslen(analysis_text) };
+        Sink sink = { { &sink_vtbl }, 0 };
+        CHECK("IDWriteTextAnalyzer AnalyzeScript", SUCCEEDED(V(analyzer, AnalyzeScript)(analyzer, &source.iface, 0,
+              source.len, &sink.iface)) && sink.scripts >= 2 && sink.script_ids[0] != sink.script_ids[1]);
+        CHECK("IDWriteTextAnalyzer AnalyzeBidi", SUCCEEDED(V(analyzer, AnalyzeBidi)(analyzer, &source.iface, 0,
+              source.len, &sink.iface)) && sink.bidi == source.len && sink.bidi_levels[0] != sink.bidi_levels[7]);
+        const WCHAR break_text[] = L"A\x00a0" L"B\r\n" L"\x65e5\x672c";
+        Source break_source = { { &src_vtbl }, break_text, (UINT32)wcslen(break_text) };
+        memset(&sink, 0, sizeof(sink));
+        sink.iface.lpVtbl = &sink_vtbl;
+        CHECK("ICU line breaks keep NBSP and CRLF intact and break CJK",
+              SUCCEEDED(V(analyzer, AnalyzeLineBreakpoints)(analyzer, &break_source.iface, 0, break_source.len, &sink.iface)) &&
+              sink.breaks == break_source.len &&
+              sink.breakpoints[0].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[1].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[3].breakConditionAfter == DWRITE_BREAK_CONDITION_MAY_NOT_BREAK &&
+              sink.breakpoints[4].breakConditionAfter == DWRITE_BREAK_CONDITION_MUST_BREAK &&
+              sink.breakpoints[5].breakConditionAfter == DWRITE_BREAK_CONDITION_CAN_BREAK);
+    }
 
     /* ---- the system collection, as Chromium's font lookup table walks it ---- */
     IDWriteFontCollection *coll = NULL;
@@ -347,6 +414,42 @@ int main(void)
 
     /* ---- glyph rendering as Skia asks for it ---- */
     if (face3) {
+        if (analyzer) {
+            const WCHAR sample[] = L"Hello";
+            DWRITE_SCRIPT_ANALYSIS script = { 0 };
+            DWRITE_SHAPING_TEXT_PROPERTIES text_props[5] = { 0 };
+            DWRITE_SHAPING_GLYPH_PROPERTIES glyph_props[16] = { 0 };
+            UINT16 cluster_map[5] = { 0 }, glyph_indices[16] = { 0 };
+            UINT32 glyph_count = 0;
+            HRESULT shape_hr = V(analyzer, GetGlyphs)(analyzer, sample, 5, (IDWriteFontFace *)face3, FALSE, FALSE,
+                &script, L"en-us", NULL, NULL, NULL, 0, 16, cluster_map, text_props, glyph_indices, glyph_props, &glyph_count);
+            CHECK("IDWriteTextAnalyzer GetGlyphs", SUCCEEDED(shape_hr) && glyph_count > 0 && glyph_count <= 16);
+            FLOAT advances[16] = { 0 };
+            DWRITE_GLYPH_OFFSET offsets[16] = { 0 };
+            HRESULT place_hr = shape_hr == S_OK ? V(analyzer, GetGlyphPlacements)(analyzer, sample, cluster_map,
+                text_props, 5, glyph_indices, glyph_props, glyph_count, (IDWriteFontFace *)face3, 16.0f,
+                FALSE, FALSE, &script, L"en-us", NULL, NULL, 0, advances, offsets) : shape_hr;
+            CHECK("IDWriteTextAnalyzer GetGlyphPlacements", SUCCEEDED(place_hr) && advances[0] > 0);
+
+            const WCHAR arabic[] = L"\x645\x631\x62d\x628\x627";
+            UINT16 rtl_clusters[5] = { 0 }, rtl_glyphs[16] = { 0 };
+            DWRITE_SHAPING_TEXT_PROPERTIES rtl_text_props[5] = { 0 };
+            DWRITE_SHAPING_GLYPH_PROPERTIES rtl_glyph_props[16] = { 0 };
+            UINT32 rtl_count = 0;
+            HRESULT rtl_hr = V(analyzer, GetGlyphs)(analyzer, arabic, 5, (IDWriteFontFace *)face3, FALSE, TRUE,
+                &script, L"ar", NULL, NULL, NULL, 0, 16, rtl_clusters, rtl_text_props, rtl_glyphs,
+                rtl_glyph_props, &rtl_count);
+            BOOL monotonic = SUCCEEDED(rtl_hr) && rtl_count > 0;
+            for (UINT32 i = 1; monotonic && i < 5; i++) monotonic = rtl_clusters[i] >= rtl_clusters[i - 1];
+            CHECK("RTL glyphs and cluster map are in logical order", monotonic);
+            FLOAT rtl_advances[16] = { 0 };
+            DWRITE_GLYPH_OFFSET rtl_offsets[16] = { 0 };
+            HRESULT rtl_place_hr = SUCCEEDED(rtl_hr) ?
+                V(analyzer, GetGlyphPlacements)(analyzer, arabic, rtl_clusters, rtl_text_props, 5, rtl_glyphs,
+                    rtl_glyph_props, rtl_count, (IDWriteFontFace *)face3, 16.0f, FALSE, TRUE, &script, L"ar",
+                    NULL, NULL, 0, rtl_advances, rtl_offsets) : rtl_hr;
+            CHECK("RTL placements reuse logical-order glyphs", SUCCEEDED(rtl_place_hr) && rtl_advances[0] > 0);
+        }
         UINT16 g[2];
         UINT32 cps[2] = { 'O', 'k' };
         IDWriteFontFace_GetGlyphIndices((IDWriteFontFace *)face3, cps, 2, g);
@@ -405,6 +508,7 @@ int main(void)
     CHECK("the download queue is empty", SUCCEEDED(V(f3, GetFontDownloadQueue)(f3, &q)) && q && V(q, IsEmpty)(q));
     if (q) V(q, Release)(q);
 
+    if (analyzer) IDWriteTextAnalyzer_Release(analyzer);
     printf("dw3test: %d passed, %d failed\n", pass, fail);
     return fail != 0;
 }

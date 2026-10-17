@@ -107,7 +107,10 @@ void NetRestoreConfig(void);
 typedef enum { NET_PENDING = 0, NET_DONE = 1, NET_FAILED = -1 } NetState;
 typedef enum { NETOP_DNS, NETOP_PING, NETOP_HTTP } NetOpKind;
 
-#define NET_HTTP_MAX  (256u * 1024 * 1024) /* largest response kept (App Store installers) */
+#define NET_HTTP_MAX  (1024u * 1024 * 1024) /* largest response kept (App Store installers: LibreOffice 350 MB) */
+/* The longest URL path (and Location header) followed: download sites
+ * redirect to signed URLs (GitHub's release assets: ~900 characters) */
+#define NET_URL_MAX   2048
 
 typedef struct NetOp {
     NetOpKind       kind;
@@ -135,7 +138,7 @@ typedef struct NetOp {
     UINT64          started, deadline;   /* ticks */
     void           *conn;           /* http.c connection while in flight */
     UINT32          cap;
-    char            request[768];
+    char            request[NET_URL_MAX + 512];
 } NetOp;
 
 /* Resolve a host name (or address literal) to an address in op->addr

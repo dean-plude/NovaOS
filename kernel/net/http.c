@@ -9,7 +9,10 @@
  * the response arrived, the request is retried once on a new connection.
  * New HTTPS connections resume a cached TLS session when the server
  * allows it (tls.c).  Responses must be complete: a connection that closes
- * before the announced length (or the final chunk) is an error.
+ * before the announced length (or the final chunk) is an error.  A request
+ * fails when nothing has arrived for HTTP_TIMEOUT, however long the whole
+ * transfer takes (a 300 MB installer on a slow line), and a response that
+ * announces its length gets its buffer at that size at once.
  *
  * Runs under the network lock: lwIP callbacks come from the net thread,
  * NetHttpGet()/NetRelease() from app threads (net.c takes the lock).
@@ -26,7 +29,7 @@
 #include "lwip/ip_addr.h"
 
 #define HTTP_CONNS      16
-#define HTTP_TIMEOUT    3000        /* ticks (30 s) for a whole request */
+#define HTTP_TIMEOUT    3000        /* ticks (30 s) without a byte of the response */
 #define IDLE_TIMEOUT    3000        /* ticks an idle connection is kept */
 
 typedef enum { R_HEADERS, R_LENGTH, R_CHUNKED, R_UNTIL_CLOSE } RState;
@@ -77,19 +80,27 @@ static void submit(NetOp *op, const NetIp *ip, UINT16 port, const char *host, bo
 /* -----------------------------------------------------------------------
  * Helpers
  * ----------------------------------------------------------------------- */
+/* Room for @cap bytes of response in all (false with the op failed) */
+static bool reserve(NetOp *op, UINT64 cap)
+{
+    if (cap <= op->cap) return true;
+    if (cap > NET_HTTP_MAX) { net_op_fail(op, "Response is too large"); return false; }
+    char *nb = kmalloc((size_t)cap);
+    if (!nb) { net_op_fail(op, "Out of memory for the download"); return false; }
+    if (op->len) memcpy(nb, op->data, op->len);
+    kfree(op->data);
+    op->data = nb;
+    op->cap = (UINT32)cap;
+    return true;
+}
+
 bool net_op_append(NetOp *op, const void *data, UINT32 n)
 {
     if (op->len + n > op->cap) {
-        UINT32 need = op->len + n, cap = op->cap ? op->cap : 64 * 1024;
+        UINT64 need = (UINT64)op->len + n, cap = op->cap ? op->cap : 64 * 1024;
         while (cap < need) cap *= 2;
-        if (cap > NET_HTTP_MAX) cap = NET_HTTP_MAX;
-        if (need > cap) { net_op_fail(op, "Response is too large"); return false; }
-        char *nb = kmalloc(cap);
-        if (!nb) { net_op_fail(op, "Out of memory"); return false; }
-        if (op->len) memcpy(nb, op->data, op->len);
-        kfree(op->data);
-        op->data = nb;
-        op->cap = cap;
+        if (cap > NET_HTTP_MAX && need <= NET_HTTP_MAX) cap = NET_HTTP_MAX;
+        if (!reserve(op, cap)) return false;
     }
     memcpy(op->data + op->len, data, n);
     op->len += n;
@@ -261,6 +272,10 @@ static int parse(Conn *c)
             c->rs = R_CHUNKED; c->cs = CH_SIZE; c->pos = end;
         } else if (have_len) {
             c->rs = R_LENGTH; c->body_len = clen;
+            /* the whole response at once: no copying as it grows, and
+             * never twice its size in memory */
+            if (!reserve(op, (UINT64)end + clen)) { c->op = NULL; op->conn = NULL; return -1; }
+            d = op->data;
         } else {
             c->rs = R_UNTIL_CLOSE; c->close_after = true;
         }
@@ -334,6 +349,7 @@ static int parse(Conn *c)
 static void got_data(Conn *c, const void *data, UINT32 n)
 {
     if (!c->op) { conn_close(c, false); return; }           /* unsolicited: drop */
+    c->op->deadline = sched_ticks() + HTTP_TIMEOUT;          /* still arriving */
     if (!net_op_append(c->op, data, n)) {                    /* (op failed) */
         c->op->conn = NULL;
         c->op = NULL;
@@ -557,11 +573,12 @@ NetOp *NetHttpGetAddr(const NetIp *ip, UINT16 port, const char *host, const char
     const char *lb = strchr(host, ':') ? "[" : "", *rb = *lb ? "]" : "";   /* an IPv6 literal */
     if (port == (https ? 443 : 80)) ksnprintf(hostport, sizeof(hostport), "%s%s%s", lb, host, rb);
     else                            ksnprintf(hostport, sizeof(hostport), "%s%s%s:%u", lb, host, rb, port);
-    ksnprintf(op->request, sizeof(op->request),
+    int n = ksnprintf(op->request, sizeof(op->request),
               "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: NovaOS/0.9\r\n"
               "Accept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
               path && *path ? path : "/", hostport);
-    submit(op, ip, port, host, https);
+    if (n < 0 || n >= (int)sizeof(op->request)) net_op_fail(op, "The web address is too long");   /* never send it cut */
+    else submit(op, ip, port, host, https);
     net_unlock();
     return op;
 }
@@ -590,7 +607,7 @@ void http_poll(void)
         Conn *c = &g_conns[i];
         if (!c->used) continue;
         if (c->op && now > c->op->deadline) {
-            req_fail(c, "Timed out");
+            req_fail(c, "Timed out: no data for 30 s");
             conn_close(c, false);
         } else if (!c->op && now - c->idle_since > IDLE_TIMEOUT) {
             conn_close(c, true);

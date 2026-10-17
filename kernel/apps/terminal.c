@@ -65,7 +65,7 @@ typedef struct {
     JobKind kind;
     int     phase;
     NetOp  *op;
-    char    host[128], path[256];
+    char    host[128], path[NET_URL_MAX];
     UINT16  port;
     NetIp   addr;
     int     family;            /* -4 / -6: only that address family (0: either) */
@@ -1210,7 +1210,7 @@ static void fetch_done(Term *t)
     Job *j = &t->job;
     const char *body;
     UINT32 blen;
-    char loc[256];
+    static char loc[NET_URL_MAX];      /* (the window thread's) a signed download's redirect is long */
     int status = NetHttpParse(j->op, &body, &blen, loc, sizeof(loc));
     if (!status) { terr(t, "The server sent a response NovaOS could not read."); fetch_next(t); return; }
 

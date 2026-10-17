@@ -442,7 +442,11 @@ static void remove_dev(UsbDev *d)
     for (int i = d->nbind - 1; i >= 0; i--)
         if (d->bind[i].gone) d->bind[i].gone(d->bind[i].inst);
     d->nbind = 0;
-    if (d->pnp) { PnpRemove(d->pnp); d->pnp = 0; }      /* (its node stays, not present) */
+    /* (the gone() callbacks returned once the Windows driver stacks on it,
+     * its HID collections' among them, came down, as REMOVE_DEVICE goes
+     * up the tree on Windows: its node goes after them, and stays, not
+     * present) */
+    if (d->pnp) { PnpRemove(d->pnp); d->pnp = 0; }
     while (__atomic_load_n(&d->users, __ATOMIC_ACQUIRE)) UsbDelay(1);
     d->hc->ops->dev_remove(d->hc, d);
     for (int i = 0; i < 32; i++) {

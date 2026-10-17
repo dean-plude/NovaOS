@@ -119,6 +119,8 @@ def cflags():
 #             and for a C++ program "force_include" (headers each file
 #             starts with, as Visual Studio's /FI), also from the
 #             repository root
+#   cflags    for a C++ program on the standard library: more compiler
+#             flags for it and its sources (e.g. a -D its tests build with)
 import json
 SLOT = 0x01000000
 AUTO_X64 = (0x7FFD00000000, 0x7FFE00000000)
@@ -526,7 +528,8 @@ def build_pass(arch, all_tasks):
             top = os.path.dirname(HERE)
             flags = (XAML.program_flags(me) if prog.get('xaml') else HOOKS['msvcp140'].program_flags(me)) + \
                 [f for d in prog.get('include', []) for f in ('-I', os.path.join(top, d))] + \
-                [f for h in prog.get('force_include', []) for f in ('-include', os.path.join(top, h))]
+                [f for h in prog.get('force_include', []) for f in ('-include', os.path.join(top, h))] + \
+                prog.get('cflags', [])
             run(['clang++'] + flags + ['-c', os.path.join(progdir, src), '-o', obj])
             srcs = [f for g in prog.get('sources', [])  # (a vendored library beside it)
                     for f in sorted(glob.glob(os.path.join(top, g), recursive=True))]

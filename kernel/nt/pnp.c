@@ -1100,7 +1100,7 @@ static NT_STATUS query_remove_tree(NtPdo *p, NtPdo **asked, int *n)
     if (NT_SUCCESS(st)) {
         asked[(*n)++] = p;
     } else {
-        PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
+        asked[(*n)++] = p;                 /* (its stack gets the cancel too: an upper driver may have agreed) */
         kprintf("[PNP] %s: removal vetoed by its driver (0x%08x)\n", p->instance, (UINT32)st);
     }
     return st;

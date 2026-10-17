@@ -31,7 +31,9 @@ order; --list prints them):
             source, all against tools/h2server.js
             (needs node and openssl).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
-            ping -6, curl -6 and Winsock over IPv6 (netcat).  Then a third
+            ping -6, curl -6 and Winsock over IPv6 (netcat), stateful
+            DHCPv6 (ipconfig /all, dhcp6test, rebind and renew,
+            ipconfig /release6 and /renew6).  Then a third
             boot with an Intel e1000e (82574L) instead of virtio-net
             (tests/selftest/network-e1000e): its PHY and link, the link
             pulled and plugged back, and the IPv4 tests again
@@ -341,8 +343,8 @@ def venus_gpu():
 # HTTP/2: QEMU's user-mode network, where 10.0.2.2 is this machine and
 # tools/h2server.js serves HTTPS (HTTP/2 by ALPN, self-signed) on 18443 and
 # HTTP/1.1 on 18080.  IPv6: an IPv6-only network that is tools/v6peer.py (a
-# router with SLAAC and RDNSS, DNS for nova6.test, HTTP on port 80), over a
-# QEMU datagram netdev.
+# router with SLAAC and RDNSS, a stateful DHCPv6 server, DNS for nova6.test,
+# HTTP on port 80), over a QEMU datagram netdev.
 NET4 = load_suite('network4')
 NET6 = load_suite('network6')
 

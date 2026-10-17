@@ -12,8 +12,15 @@ QEMU sends each Ethernet frame of the guest's NIC as one UDP datagram:
 and this program answers them as the guest's only neighbor, a router:
 
   * router advertisements (on start, every few seconds and on router
-    solicitations) with the prefix fd00:6e6f:7661::/64 for SLAAC and
-    itself as DNS server (RDNSS),
+    solicitations) with the prefix fd00:6e6f:7661::/64 for SLAAC,
+    itself as DNS server (RDNSS) and the M and O flags,
+  * a stateful DHCPv6 server (RFC 8415): Solicit, Request, Renew, Rebind,
+    Release and Decline for one address, fd00:6e6f:7661::100, with a
+    second DNS server (fd00:6e6f:7661::2) and the search list nova6.test,
+    example.test.  The first lease is short (T1 4 s, T2 8 s) and its
+    Renews go unanswered, so the client must Rebind; a Renew after that is
+    answered and the lease made long.  Information-requests (stateless
+    DHCPv6) get the DNS server too,
   * neighbor solicitations for its addresses, and echo requests (ping -6),
   * DNS over UDP: nova6.test has the AAAA record fd00:6e6f:7661::1 and no
     A record; every other name is NXDOMAIN,
@@ -32,6 +39,8 @@ MY_GL = PREFIX + bytes.fromhex('0000000000000001')
 DHCP6_DNS = PREFIX + bytes.fromhex('0000000000000002')
 ALL_NODES = bytes.fromhex('ff020000000000000000000000000001')
 ALL_DHCP6 = bytes.fromhex('ff020000000000000000000000010002')   # ff02::1:2
+LEASED = PREFIX + bytes.fromhex('0000000000000100')                # the DHCPv6 address
+SEARCH = ['nova6.test', 'example.test']
 NAME = 'nova6.test'
 PAGE = (b'<html><body><h1>Hello over IPv6</h1>'
         b'<p>Served by the NovaOS test peer (tools/v6peer.py).</p></body></html>\n')
@@ -60,6 +69,8 @@ class Peer:
         self.log = log
         self.tcp = {}                       # (guest addr, guest port) -> connection
         self.last_ra = 0
+        self.rebound = False                # a Rebind was answered (Renews are answered from then on)
+        self.renewed = False
 
     # -- output --------------------------------------------------------
     def eth(self, dst_mac, payload, ethertype=0x86DD):
@@ -78,7 +89,7 @@ class Peer:
         self.ip6(src, dst, 58, msg[:2] + struct.pack('!H', c) + msg[4:], 255, dst_mac)
 
     def router_advert(self, dst=ALL_NODES):
-        body = struct.pack('!BBHII', 64, 0x40, 1800, 0, 0)
+        body = struct.pack('!BBHII', 64, 0xC0, 1800, 0, 0)                  # M and O: DHCPv6 for addresses and more
         body += struct.pack('!BB', 1, 1) + MY_MAC                            # source link-layer address
         body += struct.pack('!BBBBIII', 3, 4, 64, 0xC0, 86400, 14400, 0) + PREFIX + b'\0' * 8   # prefix: on-link, autonomous
         body += struct.pack('!BBHI', 25, 3, 0, 3600) + MY_GL                 # RDNSS
@@ -125,8 +136,51 @@ class Peer:
             self.log('echo request from %s' % socket.inet_ntop(socket.AF_INET6, src))
             self.icmp6(dst, src, 129, 0, m[4:])
 
+    def dhcp6(self, src, sport, m):
+        """A stateful DHCPv6 client's message: the reply, as RFC 8415 section 18.3 says"""
+        names = {1: 'Solicit', 3: 'Request', 5: 'Renew', 6: 'Rebind', 8: 'Release', 9: 'Decline'}
+        typ, xid, opts, i = m[0], m[1:4], {}, 4
+        while i + 4 <= len(m):
+            code, n = struct.unpack('!HH', m[i:i + 4])
+            opts.setdefault(code, m[i + 4:i + 4 + n])
+            i += 4 + n
+        client, ia = opts.get(1), opts.get(3)
+        if typ not in names or client is None:
+            return
+        server_id = b'\x00\x03\x00\x01' + MY_MAC
+        if typ in (3, 5, 8, 9) and opts.get(2) != server_id:
+            self.log('DHCPv6 %s for another server: ignored' % names[typ])
+            return
+        if typ == 5 and not self.rebound:
+            self.log('DHCPv6 Renew: not answered (the client must Rebind at T2)')
+            return
+        iaid = ia[:4] if ia and len(ia) >= 12 else b'\0\0\0\0'
+        if typ in (8, 9):
+            self.log('DHCPv6 %s of %s: replying' % (names[typ], socket.inet_ntop(socket.AF_INET6, LEASED)))
+            options = struct.pack('!HHH', 13, 2, 0)                          # Status Code: success
+        else:
+            if typ == 6:
+                self.rebound = True
+            elif typ == 5:
+                self.renewed = True
+            t1, t2, pref, valid = (300, 480, 600, 900) if self.renewed else (4, 8, 30, 60)
+            iaaddr = LEASED + struct.pack('!II', pref, valid)
+            ia_na = iaid + struct.pack('!II', t1, t2) + struct.pack('!HH', 5, len(iaaddr)) + iaaddr
+            search = b''.join(b''.join(bytes([len(l)]) + l.encode() for l in name.split('.')) + b'\0' for name in SEARCH)
+            options = (struct.pack('!HH', 3, len(ia_na)) + ia_na +
+                       struct.pack('!HH', 23, len(DHCP6_DNS)) + DHCP6_DNS +
+                       struct.pack('!HH', 24, len(search)) + search)
+            self.log('DHCPv6 %s: %s %s (T1 %d s, T2 %d s, valid %d s)' %
+                     (names[typ], 'advertising' if typ == 1 else 'leasing',
+                      socket.inet_ntop(socket.AF_INET6, LEASED), t1, t2, valid))
+        options = struct.pack('!HH', 1, len(client)) + client + struct.pack('!HH', 2, len(server_id)) + server_id + options
+        self.udp(MY_LL, src, 547, sport, bytes([2 if typ == 1 else 7]) + xid + options)
+
     def on_udp(self, src, dst, seg):
         sport, dport = struct.unpack('!HH', seg[:4])
+        if dport == 547 and len(seg) >= 12 and seg[8] != 11:
+            self.dhcp6(src, sport, seg[8:])
+            return
         if dport == 547 and len(seg) >= 12 and seg[8] == 11:
             request = seg[8:]
             server_id = b'\x00\x03\x00\x01' + MY_MAC

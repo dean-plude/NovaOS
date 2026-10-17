@@ -43,11 +43,17 @@ typedef struct {
     DWORD if_index;
     BYTE  mac[6], ip6_count, dns_count;
     DWORD ip, mask, gw;                 /* network byte order */
-    BYTE  ip6[3][16];
-    BYTE  ip6_preferred[3];
+    BYTE  ip6[4][16];
+    BYTE  ip6_preferred[4];
     BYTE  dns_v6[3];
     BYTE  dns[3][16];
     char  adapter[64];
+    BYTE  ip6_dhcp[4];                  /* ip6[i] leased from a DHCPv6 server */
+    DWORD ip6_valid[4], ip6_pref[4];    /* lifetimes left, s */
+    DWORD dhcp6_iaid;
+    BYTE  dhcp6_server[16];             /* (zero: no lease) */
+    BYTE  dhcp6_duid_len, dhcp6_duid[20];
+    char  dns_suffix[128];              /* the search list: "a.example,b.example" */
 } KAdapter;
 
 /* FALSE: no adapter */
@@ -160,6 +166,12 @@ typedef struct Adapter_ {
     void *FirstDnsSuffix;
 } Adapter;
 
+/* IP_ADAPTER_DNS_SUFFIX */
+typedef struct Suffix_ {
+    struct Suffix_ *Next;
+    WCHAR String[256];
+} Suffix;
+
 #define AF_UNSPEC_ 0
 #define GAA_FLAG_SKIP_UNICAST_      0x1
 #define GAA_FLAG_SKIP_ANYCAST_      0x2
@@ -228,7 +240,12 @@ static void build_adapter(Arena *ar, const KAdapter *k, ULONG family, ULONG flag
     adapter_guid(k, guid);
     char *name = take(ar, (ULONG)lstrlenA(guid) + 1);
     if (name) lstrcpyA(name, guid);
-    WCHAR *suffix = wstr(ar, ""), *desc = wstr(ar, k->adapter[0] ? k->adapter : "Ethernet adapter");
+    /* the DNS suffix: the first name of DHCPv6's domain search list */
+    char first[128];
+    lstrcpynA(first, k->dns_suffix, sizeof(first));
+    for (char *c = first; *c; c++) if (*c == ',') { *c = 0; break; }
+    BOOL lease6 = k->dhcp6_server[0] != 0;
+    WCHAR *suffix = wstr(ar, first), *desc = wstr(ar, k->adapter[0] ? k->adapter : "Ethernet adapter");
     WCHAR *friendly = wstr(ar, (flags & GAA_FLAG_SKIP_FRIENDLY_NAME_) ? "" : "Ethernet");
     if (ad) {
         ad->Length = sizeof(Adapter);
@@ -239,7 +256,8 @@ static void build_adapter(Arena *ar, const KAdapter *k, ULONG family, ULONG flag
         ad->FriendlyName = friendly;
         memcpy(ad->PhysicalAddress, k->mac, 6);
         ad->PhysicalAddressLength = 6;
-        ad->Flags = 0x1 | 0x2 | ((k->flags & 8) ? 0x4 : 0) | 0x40 | 0x80 | 0x100;  /* DDNS, suffix, DHCPv4, NetBIOS, IPv4, IPv6 */
+        ad->Flags = 0x1 | 0x2 | ((k->flags & 8) ? 0x4 : 0) | 0x40 | 0x80 | 0x100 |  /* DDNS, suffix, DHCPv4, NetBIOS, IPv4, IPv6 */
+                    (lease6 ? 0x200 : 0);                     /* IP_ADAPTER_IPV6_MANAGE_ADDRESS_CONFIG */
         ad->Mtu = 1500;
         ad->IfType = 6;                                       /* IF_TYPE_ETHERNET_CSMACD */
         ad->OperStatus = (k->flags & 2) ? 1 : 2;               /* IfOperStatusUp / Down */
@@ -261,11 +279,12 @@ static void build_adapter(Arena *ar, const KAdapter *k, ULONG family, ULONG flag
             if (!u) continue;
             u->Length = sizeof(Unicast);
             u->Address = sa;
-            u->PrefixOrigin = link_local6(k->ip6[i]) ? 2 : 3;           /* WellKnown / RouterAdvertisement */
-            u->SuffixOrigin = link_local6(k->ip6[i]) ? 4 : 4;           /* LinkLayerAddress (EUI-64) */
+            u->PrefixOrigin = link_local6(k->ip6[i]) ? 2 : k->ip6_dhcp[i] ? 3 : 4;   /* WellKnown / Dhcp / RouterAdvertisement */
+            u->SuffixOrigin = k->ip6_dhcp[i] ? 3 : 4;                   /* Dhcp / LinkLayerAddress (EUI-64) */
             u->DadState = k->ip6_preferred[i] ? 4 : 1;                  /* Preferred / Tentative */
-            u->ValidLifetime = u->PreferredLifetime = u->LeaseLifetime = 0xFFFFFFFF;
-            u->OnLinkPrefixLength = 64;
+            u->ValidLifetime = u->LeaseLifetime = k->ip6_valid[i];
+            u->PreferredLifetime = k->ip6_pref[i];
+            u->OnLinkPrefixLength = k->ip6_dhcp[i] ? 128 : 64;          /* (an IA_NA address has no prefix: Windows says 128) */
             *link = u;
             link = &u->Next;
         }
@@ -295,6 +314,29 @@ static void build_adapter(Arena *ar, const KAdapter *k, ULONG family, ULONG flag
             d->Address = sa;
             *link = d;
             link = &d->Next;
+        }
+    }
+    /* the DHCPv6 client (RFC 8415): server, DUID, IAID; the search list */
+    if (want6 && lease6) {
+        SockAddr sa = sockaddr(ar, TRUE, k->dhcp6_server, link_local6(k->dhcp6_server) ? k->if_index : 0);
+        if (ad) ad->Dhcpv6Server = sa;
+    }
+    if (ad && k->dhcp6_duid_len && k->dhcp6_duid_len <= sizeof(k->dhcp6_duid)) {
+        memcpy(ad->Dhcpv6ClientDuid, k->dhcp6_duid, k->dhcp6_duid_len);
+        ad->Dhcpv6ClientDuidLength = k->dhcp6_duid_len;
+        ad->Dhcpv6Iaid = k->dhcp6_iaid;
+    }
+    {
+        Suffix **link = ad ? (Suffix **)&ad->FirstDnsSuffix : NULL;
+        const char *n = k->dns_suffix;
+        while (*n) {
+            Suffix *x = take(ar, sizeof(Suffix));
+            int len = 0;
+            while (n[len] && n[len] != ',') len++;
+            for (int i = 0; x && i < len && i < 255; i++) x->String[i] = (BYTE)n[i];
+            if (x) { *link = x; link = &x->Next; }
+            n += len;
+            if (*n == ',') n++;
         }
     }
     if ((flags & GAA_FLAG_INCLUDE_GATEWAYS_) && want4 && has4 && k->gw) {

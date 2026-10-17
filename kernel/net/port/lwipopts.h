@@ -43,11 +43,12 @@
 #define LWIP_IPV6_MLD               1
 #define LWIP_IPV6_FRAG              0
 #define LWIP_IPV6_REASS             0
-#define LWIP_IPV6_NUM_ADDRESSES     3       /* link-local + two from prefixes */
+#define LWIP_IPV6_NUM_ADDRESSES     4       /* link-local + two from prefixes + a DHCPv6 lease */
 #define LWIP_ND6_RDNSS_MAX_DNS_SERVERS 1    /* DNS servers from RAs (after DHCPv4's: see nd6.c) */
 #define LWIP_IPV6_DHCP6             1
 #define LWIP_IPV6_DHCP6_STATELESS   1
-#define LWIP_DHCP6_MAX_DNS_SERVERS  1
+#define LWIP_IPV6_DHCP6_STATEFUL    1       /* (NovaOS's, in dhcp6.c: RFC 8415, one IA_NA) */
+#define LWIP_DHCP6_MAX_DNS_SERVERS  2
 #define LWIP_ICMP6                  1
 #define LWIP_IPV6_SEND_ROUTER_SOLICIT 1
 #define LWIP_ARP                    1

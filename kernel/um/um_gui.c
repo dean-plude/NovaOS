@@ -1312,7 +1312,11 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  *          2 ptr <-> { after, wait ms (1 s at most), max (<= 32); out:
  *            newest seq } then PnpEvent[max]: the arrivals and removals
  *            after seq "after", waiting for one up to "wait ms"; returns
- *            how many */
+ *            how many
+ *          10 the caller holds one more (ptr 1) or one fewer (0) handle
+ *            registration on node arg >> 8 (its query-removes wait for it)
+ *          11 the caller's answer to query-remove event arg >> 8: ptr 1
+ *            refuses (a window returned BROADCAST_QUERY_DENY) */
 #define CTL_PNP            56
 /* The event log's post box (um_eventlog.c: advapi32's ReportEvent and
  * readers, the EventLog service), by arg's low byte:
@@ -1716,6 +1720,12 @@ static UINT64 pnp_ctl(UINT64 arg, UINT64 ptr)
         return (UINT64)n;
     }
     case 9: return um_driver_pnp_node(UmCurrent(), ptr);
+    case 10:                                    /* a handle registration on node arg >> 8: made (ptr 1) or gone (0) */
+        PnpWatch(UmCurrent(), (UINT32)(arg >> 8), ptr != 0);
+        return 1;
+    case 11:                                    /* the answer to query-remove event arg >> 8: ptr 1 refuses */
+        PnpAnswer(UmCurrent(), (UINT32)(arg >> 8), ptr != 0);
+        return 1;
     }
     return 0;
 }
@@ -2652,6 +2662,7 @@ void um_gui_process_gone(UmProcess *p)
         }
     }
     xmsg_process_gone(p);
+    PnpOwnerGone(p);                          /* its device handle registrations */
     IrqState ts = spin_lock_irqsave(&g_gui_lock);
     for (int i = 0; i < GUI_HOTKEYS; i++) if (g_hotkey[i].proc == p) g_hotkey[i].used = false;
     for (int i = GUI_TAG_MIN; i < GUI_TAGS; i++) if (g_tag_proc[i] == p) g_tag_proc[i] = NULL;

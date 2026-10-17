@@ -1086,6 +1086,11 @@ static NtPdo *child_of(NtPdo *bus)
     return NULL;
 }
 
+/* How long the programs registered for a device's handle get to answer
+ * DBT_DEVICEQUERYREMOVE (10 ms ticks): a program that does not answer
+ * cannot hold a removal up for longer, and counts as agreeing */
+#define QUERY_REMOVE_WAIT 1000
+
 /* Query the started descendants before @p. */
 static NT_STATUS query_remove_tree(NtPdo *p, NtPdo **asked, int *n)
 {
@@ -1095,7 +1100,13 @@ static NT_STATUS query_remove_tree(NtPdo *p, NtPdo **asked, int *n)
         NT_STATUS st = query_remove_tree(c, asked, n);
         if (!NT_SUCCESS(st)) return st;
     }
-    PnpNotify(PNP_QUERY_REMOVE, p->node);
+    /* (programs first, as Windows asks them before the drivers: a program
+     * holding the device open may refuse; its stack then gets no IRP) */
+    if (!PnpQueryRemove(p->node, QUERY_REMOVE_WAIT)) {
+        PnpNotify(PNP_QUERY_REMOVE_FAILED, p->node);
+        kprintf("[PNP] %s: removal vetoed by a program\n", p->instance);
+        return NT_STATUS_UNSUCCESSFUL;
+    }
     NT_STATUS st = send_pnp(p->pdo, NT_IRP_MN_QUERY_REMOVE_DEVICE, NULL, NULL, NULL);
     if (NT_SUCCESS(st)) {
         asked[(*n)++] = p;
@@ -1539,6 +1550,10 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
         if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service) ||
             inbox_class_driver(service))                     /* (a collection plugged in before: its key names our own driver) */
             inbox_input(n, key);                             /* (a keyboard, a mouse, a digitizer, a game pad) */
+        else {                                               /* (an installed third-party driver: the class its INF gave) */
+            char rcls[sizeof(n->cls)] = "";
+            if (um_registry_get_sz(key, "Class", rcls, sizeof(rcls)) && rcls[0]) strncpy(n->cls, rcls, sizeof(n->cls) - 1);
+        }
     }
     n->flags = PNP_PRESENT;
     c->node = PnpAdd(bus->node, n);

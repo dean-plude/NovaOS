@@ -14019,6 +14019,83 @@ and drives the Compositor through the generated interfaces.  Next in
 32.3: the Windows SDK, WRL and WIL pieces the `dxaml` sources include, then
 their build as `Windows.UI.Xaml.dll`.
 
+## Programs answer query-remove before the drivers
+
+`DBT_DEVICEQUERYREMOVE` reached programs only as a notice: by the time a
+window saw it, the PnP manager had already sent
+`IRP_MN_QUERY_REMOVE_DEVICE` down the stack, so a program could neither
+refuse the removal nor close its handle first.
+
+Now it is Windows' synchronous round.  user32 tells the kernel's device
+tree about each handle registration (`RegisterDeviceNotification` with a
+`DEV_BROADCAST_HANDLE`), and before the drivers are asked
+(`PnpQueryRemove` in `kernel/io/pnp.c`, called from `kernel/nt/pnp.c`) the
+PnP manager waits for every such program to answer the query.  A window
+or service returning `BROADCAST_QUERY_DENY` vetoes the removal: the device
+gets no IRP and the programs get `DBT_DEVICEQUERYREMOVEFAILED`.  The wait
+is bounded at ten seconds, so a hung program cannot hold a removal up,
+and a program that exits stops being waited for; a surprise removal asks
+nobody.  `edutest notify` (the devices suite's edu boot) refuses once and
+then agrees, closing its handle, so the driver accepts.
+
+A HID collection re-plugged with an installed third-party driver now also
+keeps the class its INF gave (the Enum key's `Class`) instead of coming
+back as `HIDClass`.
+
+## USB unplug in Windows order
+
+Unplugging a USB device took its PnP node away on the usb thread at once,
+while the Windows driver stacks on it (HidUsb, the HID collections and
+their kbdhid, mouhid and hiddigi class drivers) came down later on a work
+item.  For a moment the device's collections were gone but its pen,
+keys or buttons were still there: the touch boot's digitizer test had to
+wait for the pen to leave after its collections did.
+
+Now the usb thread waits for that work item (`NtPnpSurpriseRemoval` in
+`kernel/nt/pnp.c`, bounded at five seconds) before it removes the node,
+as Windows sends `IRP_MN_SURPRISE_REMOVAL` and `IRP_MN_REMOVE_DEVICE` up
+from the leaves before the hub's removal completes.  A device that comes
+straight back (a keyboard after sleep) is enumerated only after its old
+stacks are down, so the old removal can no longer land on the new node.
+`digitest` step 9 checks the pen once the collections are gone, without
+waiting for it.
+
+## The XAML core's toolchain, and its lowest layer built
+
+Third part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): Microsoft's XAML sources
+(`dxaml`, microsoft-ui-xaml, MIT) now compile for NovaOS as Microsoft
+compiles them, and the first of them are built and tested.
+
+- **The build** (`userland/windows_ui_xaml/build.py`): clang in MSVC mode,
+  C++17 without C++ exceptions, over Microsoft's STL and MinGW-w64's
+  Windows headers, each component's sources, include directories and
+  definitions read from its MSBuild project (`vcxproj.py`), its forced
+  precompiled header included.  A program whose manifest says
+  `"xaml": true` is built the same way and linked with the result.
+- **What the sources need beyond those headers:** WIL (MIT, vendored in
+  `third_party/wil`); NovaOS's own WRL (the Windows SDK's Windows Runtime
+  C++ template library: `ComPtr`, `WeakRef`, `RuntimeClass`, `Make`,
+  `Callback`, `EventSource`, `HString` and the rest); `weakreference.h`,
+  XAML diagnostics' `xamlom.h`, SAL annotations and Windows Runtime
+  `HRESULT`s MinGW-w64 lacks; TraceLogging and ETW compiled out (the events
+  header `mc.exe` would make, written by `etwgen.py`); MIDL's per-IDL-file
+  headers from `abigen.py`; and one-line headers mapping each include
+  spelling to the file a case-insensitive disk would find.
+- **Built:** the components below `CDependencyObject` (`base`, `xstring`,
+  `criticalsection`, `dependencyLocator`, `runtimeEnabledFeatures`, `com`,
+  `threading`, `staticpal`, `qualifiers`) as `xaml_components.lib`.
+- **`ole32.dll`** gained the string buffers XAML's string builder uses
+  (`WindowsPreallocateStringBuffer`, `WindowsPromoteStringBuffer`,
+  `WindowsDeleteStringBuffer`).
+- **Found:** 75 headers the open sources include come from closed Windows
+  App SDK pieces (FrameworkUdk's `InputSiteHelpers.h`, which
+  `CDependencyObject.h` includes, the lifted composition interop headers,
+  the PTLS text engine); NovaOS writes those next.
+
+New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
+weak references, delegates, events, strings) and the built components.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

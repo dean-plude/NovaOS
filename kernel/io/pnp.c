@@ -5,6 +5,14 @@
  * valid); a removed device stays as a phantom and a device with the same
  * instance ID takes its node back.  Arrivals and removals go into a ring
  * of events that readers follow by sequence number.
+ *
+ * Query-remove waits for programs as Windows' PnP manager does: before a
+ * device's drivers get IRP_MN_QUERY_REMOVE_DEVICE, each program holding a
+ * handle registration on it (RegisterDeviceNotification with a
+ * DEV_BROADCAST_HANDLE; user32 tells the tree, PnpWatch) has its windows
+ * and services sent DBT_DEVICEQUERYREMOVE and answers whether one returned
+ * BROADCAST_QUERY_DENY (PnpAnswer).  The wait is bounded, so a hung
+ * program cannot hold a removal up; a surprise removal asks nobody.
  */
 
 #include "pnp.h"
@@ -117,6 +125,112 @@ void PnpNotify(UINT32 kind, UINT32 id)
     bool changed = g_seq != after;
     spin_unlock_irqrestore(&g_lock, s);
     if (changed) UmGuiDevicesChanged(after);
+}
+
+/* ---- query-remove to programs ---- */
+
+#define MAX_WATCH   64
+#define MAX_ANSWERS 16
+
+static struct { void *owner; UINT32 node; int count; } g_watch[MAX_WATCH];
+static struct {
+    bool active, deny;
+    UINT32 seq, node;
+    void *answered[MAX_ANSWERS];
+    int nanswered;
+} g_query;
+
+void PnpWatch(void *owner, UINT32 id, bool on)
+{
+    if (!owner || !id) return;
+    IrqState s = spin_lock_irqsave(&g_lock);
+    int at = -1, free_at = -1;
+    for (int i = 0; i < MAX_WATCH; i++) {
+        if (g_watch[i].count && g_watch[i].owner == owner && g_watch[i].node == id) at = i;
+        else if (!g_watch[i].count && free_at < 0) free_at = i;
+    }
+    if (on) {
+        if (at < 0 && free_at >= 0) { at = free_at; g_watch[at].owner = owner; g_watch[at].node = id; }
+        if (at >= 0) g_watch[at].count++;
+    } else if (at >= 0) {
+        g_watch[at].count--;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+void PnpOwnerGone(void *owner)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    for (int i = 0; i < MAX_WATCH; i++) if (g_watch[i].owner == owner) g_watch[i].count = 0;
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+static bool watching_locked(void *owner, UINT32 id)
+{
+    for (int i = 0; i < MAX_WATCH; i++)
+        if (g_watch[i].count && g_watch[i].node == id && (!owner || g_watch[i].owner == owner)) return true;
+    return false;
+}
+
+/* The programs watching the query's node that have not answered yet (lock held) */
+static int unanswered_locked(void)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_WATCH; i++) {
+        if (!g_watch[i].count || g_watch[i].node != g_query.node) continue;
+        bool done = false;
+        for (int k = 0; k < g_query.nanswered && !done; k++) done = g_query.answered[k] == g_watch[i].owner;
+        if (!done) n++;
+    }
+    return n;
+}
+
+void PnpAnswer(void *owner, UINT32 seq, bool deny)
+{
+    IrqState s = spin_lock_irqsave(&g_lock);
+    if (g_query.active && g_query.seq == seq && watching_locked(owner, g_query.node)) {
+        bool known = false;
+        for (int k = 0; k < g_query.nanswered && !known; k++) known = g_query.answered[k] == owner;
+        if (!known && g_query.nanswered < MAX_ANSWERS) g_query.answered[g_query.nanswered++] = owner;
+        if (deny) g_query.deny = true;
+    }
+    spin_unlock_irqrestore(&g_lock, s);
+}
+
+bool PnpQueryRemove(UINT32 id, UINT64 ticks)
+{
+    char inst[128] = "";
+    IrqState s = spin_lock_irqsave(&g_lock);
+    UINT32 after = g_seq;
+    bool wait = false;
+    if (id && id <= g_count && g_node[id] && (g_node[id]->flags & PNP_PRESENT)) {
+        event_locked(PNP_QUERY_REMOVE, g_node[id]);
+        copy_str(inst, sizeof(inst), g_node[id]->instance);
+        wait = watching_locked(NULL, id) && !g_query.active;
+        if (wait) {
+            memset(&g_query, 0, sizeof(g_query));
+            g_query.active = true;
+            g_query.seq = g_seq;
+            g_query.node = id;
+        }
+    }
+    bool changed = g_seq != after;
+    spin_unlock_irqrestore(&g_lock, s);
+    if (changed) UmGuiDevicesChanged(after);
+    if (!wait) return true;
+    UINT64 end = sched_ticks() + ticks;
+    bool deny = false, done = false;
+    for (;;) {
+        s = spin_lock_irqsave(&g_lock);
+        deny = g_query.deny;
+        done = deny || !unanswered_locked();
+        if (done || sched_ticks() >= end) g_query.active = false;
+        spin_unlock_irqrestore(&g_lock, s);
+        if (done || sched_ticks() >= end) break;
+        sched_sleep_until(NULL, sched_ticks() + 1);
+    }
+    if (!done) kprintf("[PNP] %s: a program did not answer the query-remove in time\n", inst);
+    return !deny;
 }
 
 void PnpDelete(UINT32 id)

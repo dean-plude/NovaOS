@@ -84,6 +84,21 @@ UINT32 PnpAdd(UINT32 parent, const PnpNode *n);
 void PnpRemove(UINT32 id);
 /* Record a PnP notification event for an existing node. */
 void PnpNotify(UINT32 kind, UINT32 id);
+/* Query-remove to programs (DBT_DEVICEQUERYREMOVE, Windows' synchronous
+ * round): a PNP_QUERY_REMOVE event for node @id, then, while a program
+ * watches the node (PnpWatch: user32 holds a DBT_DEVTYP_HANDLE
+ * registration for a handle open on it), a wait of up to @ticks for each
+ * such program to answer it (PnpAnswer).  False when one refused
+ * (BROADCAST_QUERY_DENY); one that does not answer in time, or exits,
+ * counts as agreeing.  Sleeps; one query at a time (the caller serializes) */
+bool PnpQueryRemove(UINT32 id, UINT64 ticks);
+/* Program @owner holds one more (@on) or one fewer handle registration on
+ * node @id */
+void PnpWatch(void *owner, UINT32 id, bool on);
+/* Program @owner's answer to query-remove event @seq (@deny: it refused) */
+void PnpAnswer(void *owner, UINT32 seq, bool deny);
+/* Program @owner exited: its registrations go */
+void PnpOwnerGone(void *owner);
 /* Remove node @id and delete it (PNP_DELETED), as uninstalling a device
  * does: a later PnpAdd of its instance brings it back */
 void PnpDelete(UINT32 id);

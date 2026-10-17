@@ -329,6 +329,10 @@ and the mouse, not as a `RIM_TYPEHID` device, as on Windows; programs can
 still open the collection (hidapi lists keyboards). Device Manager and
 `pnputil` show the two as NovaOS drivers: a driver package that matches a
 keyboard's hardware ID is listed as outranked by `kbdhid`.
+A keyboard plugged in again keeps its setup class: the node is created as
+Keyboard from the start even though its Enum key already names `kbdhid`
+(the PlugPlay service rewrites `Class` from the node on every arrival, so a
+node born as HIDClass would lose the class for good).
 
 ### Touch screens, pens and touchpads: hiddigi
 

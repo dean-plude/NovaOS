@@ -222,6 +222,12 @@ typedef struct {
     UINT8  dns_v6[3];                   /* dns[i] is IPv6 (else IPv4 in its first 4 bytes) */
     UINT8  dns[3][16];
     char   adapter[64];
+    UINT8  ip6_dhcp[NET_IP6_MAX];       /* ip6[i] leased from a DHCPv6 server */
+    UINT32 ip6_valid[NET_IP6_MAX], ip6_pref[NET_IP6_MAX];   /* lifetimes left, s */
+    UINT32 dhcp6_iaid;
+    UINT8  dhcp6_server[16];            /* (zero: no lease) */
+    UINT8  dhcp6_duid_len, dhcp6_duid[20];
+    char   dns_suffix[128];             /* the search list: "a.example,b.example" */
 } NetAdapterInfo;
 
 static UINT64 adapter_info(UINT64 out)
@@ -244,6 +250,16 @@ static UINT64 adapter_info(UINT64 out)
         memcpy(a.dns[a.dns_count++], st.dns_all[i].a, 16);
     }
     if (st.adapter) strncpy(a.adapter, st.adapter, sizeof(a.adapter) - 1);
+    for (int i = 0; i < NET_IP6_MAX; i++) {
+        a.ip6_dhcp[i] = st.ip6_dhcp[i];
+        a.ip6_valid[i] = st.ip6_valid[i];
+        a.ip6_pref[i] = st.ip6_pref[i];
+    }
+    a.dhcp6_iaid = st.dhcp6_iaid;
+    if (st.dhcp6) memcpy(a.dhcp6_server, st.dhcp6_server, 16);
+    a.dhcp6_duid_len = (UINT8)st.dhcp6_duid_len;
+    memcpy(a.dhcp6_duid, st.dhcp6_duid, sizeof(a.dhcp6_duid));
+    memcpy(a.dns_suffix, st.dns_suffix, sizeof(a.dns_suffix));
     if (!out || !NT_SUCCESS(CopyToUser((void *)(uintptr_t)out, &a, sizeof(a)))) return (UINT64)(INT64)-SOCK_EFAULT;
     return sizeof(a);
 }

@@ -475,6 +475,7 @@ static void power_restart(void)
 {
     kprintf("[SHELL] Restarting\n");
     if (g_ready) power_screen("Restarting");
+    NetShutdown();                                  /* (a DHCPv6 Release to the server) */
     UmSaveAll();
     AcpiReset();
 }
@@ -485,6 +486,7 @@ static void power_shutdown(void)
 {
     kprintf("[SHELL] Shutting down\n");
     if (g_ready) power_screen("Shutting down");
+    NetShutdown();                                  /* (a DHCPv6 Release to the server) */
     UmSaveAll();
     AcpiPowerOff();
     kprintf("[SHELL] The machine didn't power off\n");

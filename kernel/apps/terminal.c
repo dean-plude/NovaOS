@@ -267,7 +267,7 @@ static void cmd_help(Term *t)
         "  install [disk] [/fat]  install NovaOS on a disk (no disk: list them)\n"
         "  update [install]    check for a newer NovaOS (and install it)\n"
         "  update channel [url]  where updates come from\n"
-        "  ipconfig            show the network configuration\n"
+        "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
@@ -722,11 +722,43 @@ static void cmd_hwcheck(Term *t, const char *a1, const char *a2)
     tprintf(t, "hwcheck: %s, %d failed", failed ? "done" : "all passed", failed < 0 ? 1 : failed);
 }
 
-static void cmd_ipconfig(Term *t)
+static const char *life_str(UINT32 s, char *buf, int cap)
 {
+    if (s == 0xFFFFFFFFu) return "infinite";
+    ksnprintf(buf, cap, "%u s", (unsigned)s);
+    return buf;
+}
+
+/* ipconfig [/all | /release6 | /renew6]: the adapter as Windows' ipconfig
+ * shows it; /all adds the DHCPv6 client's IAID, DUID, server and lease
+ * and the DNS suffix search list; /release6 and /renew6 release or renew
+ * the DHCPv6 lease first */
+static void cmd_ipconfig(Term *t, const char *a1)
+{
+    bool all = a1 && (is(a1, "/all") || is(a1, "-all"));
+    if (a1 && (is(a1, "/release6") || is(a1, "-release6"))) {
+        int r = NetDhcp6Release();
+        tprint(t, r > 0 ? "Released the DHCPv6 lease (the server confirmed)." :
+                  r == 0 ? "Released the DHCPv6 lease (no answer from the server)." :
+                           "The adapter Ethernet has no DHCPv6 lease to release.");
+    } else if (a1 && (is(a1, "/renew6") || is(a1, "-renew6"))) {
+        if (NetDhcp6Renew()) tprint(t, "Renewed the DHCPv6 lease.");
+        else terr(t, "An error occurred while renewing interface Ethernet : no DHCPv6 server answered.");
+    } else if (a1 && !all) {
+        terr(t, "Usage: ipconfig [/all | /release6 | /renew6]");
+        return;
+    }
     NetStatus st;
     NetGetStatus(&st);
     tprint(t, "Ethernet adapter Ethernet:\n");
+    if (st.dns_suffix[0]) {                                  /* (the first name of the search list) */
+        char first[128];
+        strncpy(first, st.dns_suffix, sizeof(first) - 1);
+        first[sizeof(first) - 1] = '\0';
+        char *c = strchr(first, ',');
+        if (c) *c = '\0';
+        tprintf(t, "   Connection-specific DNS Suffix  . : %s", first);
+    }
     tprintf(t, "   Description . . . . : %s", st.adapter);
     if (!st.present) return;
     tprintf(t, "   Physical Address. . : %02x-%02x-%02x-%02x-%02x-%02x",
@@ -740,7 +772,8 @@ static void cmd_ipconfig(Term *t)
         bool ll = st.ip6[i][0] == 0xFE && (st.ip6[i][1] & 0xC0) == 0x80;
         if (ll) tprintf(t, "   Link-local IPv6 Address : %s%%%u%s", a6, (unsigned)st.if_index,
                         st.ip6_preferred[i] ? "" : " (tentative)");
-        else    tprintf(t, "   IPv6 Address. . . . : %s%s", a6, st.ip6_preferred[i] ? "" : " (tentative)");
+        else    tprintf(t, "   IPv6 Address. . . . : %s%s%s", a6, st.ip6_preferred[i] ? "" : " (tentative)",
+                        all && st.ip6_dhcp[i] ? " (DHCPv6)" : "");
     }
     if (!st.configured) tprint(t, "   IPv4 Address. . . . : (waiting for DHCP)");
     else {
@@ -759,6 +792,38 @@ static void cmd_ipconfig(Term *t)
         NetFormatAddr(d, ds, sizeof(ds));
         tprintf(t, first ? "   DNS Servers . . . . : %s" : "                         %s", ds);
         first = false;
+    }
+    if (!all) return;
+    if (st.dhcp6_duid_len) {
+        char duid[64];
+        int n = 0;
+        for (int i = 0; i < st.dhcp6_duid_len && n < (int)sizeof(duid) - 3; i++)
+            n += ksnprintf(duid + n, sizeof(duid) - n, i ? "-%02X" : "%02X", st.dhcp6_duid[i]);
+        tprintf(t, "   DHCPv6 IAID . . . . : %u", (unsigned)st.dhcp6_iaid);
+        tprintf(t, "   DHCPv6 Client DUID. : %s", duid);
+    }
+    if (st.dhcp6) {
+        NetIp x = { .v6 = true };
+        memcpy(x.a, st.dhcp6_server, 16);
+        char sv[48], v[16], t1[16], t2[16];
+        NetFormatAddr(&x, sv, sizeof(sv));
+        tprintf(t, "   DHCPv6 Server . . . : %s", sv);
+        UINT32 left = st.dhcp6_valid == 0xFFFFFFFFu ? 0xFFFFFFFFu : st.dhcp6_valid > st.dhcp6_age ? st.dhcp6_valid - st.dhcp6_age : 0;
+        tprintf(t, "   DHCPv6 Lease. . . . : %s left (renews at %s, rebinds at %s)",
+                life_str(left, v, sizeof(v)), life_str(st.dhcp6_t1, t1, sizeof(t1)), life_str(st.dhcp6_t2, t2, sizeof(t2)));
+    }
+    if (st.dns_suffix[0]) {
+        char list[128];
+        strncpy(list, st.dns_suffix, sizeof(list) - 1);
+        list[sizeof(list) - 1] = '\0';
+        bool head = true;
+        for (char *n = list; n && *n; ) {
+            char *c = strchr(n, ',');
+            if (c) *c++ = '\0';
+            tprintf(t, head ? "   DNS Suffix Search List. : %s" : "                             %s", n);
+            head = false;
+            n = c;
+        }
     }
 }
 
@@ -1950,7 +2015,7 @@ static void run_cmd_line(Term *t, char *cmdline, const char *original)
             tprint(t, StoreInstall(name));
         }
     }
-    else if (is(c, "ipconfig") || is(c, "ifconfig")) cmd_ipconfig(t);
+    else if (is(c, "ipconfig") || is(c, "ifconfig")) cmd_ipconfig(t, a1);
     else if (is(c, "netsh"))                    cmd_netsh(t, argc, argv);
     else if (is(c, "ping"))                     cmd_ping(t, argc, argv);
     else if (is(c, "nslookup"))                 cmd_nslookup(t, a1);

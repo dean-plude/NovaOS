@@ -449,9 +449,9 @@ item ends when a named program or test demonstrates it.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).
-  The `network` self-test suite checks both.  Stateless DHCPv6 supplies DNS
-  configuration; stateful DHCPv6 address assignment remains unsupported by
-  the vendored lwIP client.  WinHTTP reuses HTTP/1.1 connections and supports
+  The `network` self-test suite checks both.  DHCPv6 is stateless (DNS
+  servers) and stateful (RFC 8415: an address, DNS servers and the search
+  list, with renew, rebind and release), written into lwIP's client.  WinHTTP reuses HTTP/1.1 connections and supports
   WebSockets.  HTTP/3 remains to do; it needs a QUIC transport.
 - ~~USB (xHCI) with HID keyboards and mice~~ Done: keyboards, mice,
   tablets and touch screens in report protocol, on root ports or behind
@@ -537,8 +537,11 @@ item ends when a named program or test demonstrates it.
   (Phase 21.4): a driver for Intel's GPIO controllers (Tiger Lake to
   Meteor Lake) takes the touchpad's GpioInt pin and the touchpad is read
   when it fires, polled only when no interrupt can be had (checked on a
-  modelled controller, `hwcheck`).  Not yet: tap-and-drag and scrolling
-  that coasts on after the fingers lift.
+  modelled controller, `hwcheck`).  ~~Tap-and-drag and scrolling that
+  coasts on after the fingers lift~~ Done: a tap then a touch drags with
+  the left button held until the finger lifts (no drag lock, as Windows
+  11), and a two-finger flick keeps scrolling, slowing down, until it
+  stops or a touch stops it (`hwcheck`, `digitest`).
 - ~~Install to the internal NVMe disk, and S3, batteries and the lid on
   the reference machine's tables~~ Done (Phase 21.5): the ACPI embedded
   controller that laptops keep their lid, battery and AC adapter behind;

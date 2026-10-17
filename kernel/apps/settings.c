@@ -546,8 +546,9 @@ static void page_network(Settings *st, int x, int y, int w)
     GdiTextBold(x + 16, y + 14, "Ethernet", UI_TEXT);
     const char *state = !ns.present ? "No network adapter found" :
                         !ns.link ? "Disconnected (no link)" :
+                        !ns.configured && ns.dhcp6 ? "Connected (IPv6, DHCPv6)" :
                         !ns.configured ? "Connecting (waiting for DHCP)..." : "Connected";
-    GdiColor dot = ns.configured ? GDI_C(0x2E, 0xB8, 0x5C) :
+    GdiColor dot = ns.configured || ns.dhcp6 ? GDI_C(0x2E, 0xB8, 0x5C) :
                    ns.link ? GDI_C(0xE8, 0xA8, 0x20) : GDI_C(0xD0, 0x40, 0x40);
     GdiRoundRect(RECT(x + 16, y + 44, 10, 10), 5, dot, GDI_TRANSPARENT);
     GdiTextT(x + 34, y + 40, state, UI_TEXT2);
@@ -560,6 +561,24 @@ static void page_network(Settings *st, int x, int y, int w)
               ns.mac[2], ns.mac[3], ns.mac[4], ns.mac[5]);
     row(x, y, w, "Adapter", ns.adapter);          y += 50;
     row(x, y, w, "Physical address (MAC)", mac);  y += 50;
+    for (int i = 0; i < ns.ip6_count; i++) {                  /* the DHCPv6 lease (RFC 8415) */
+        if (!ns.ip6_dhcp[i]) continue;
+        NetIp a6 = { .v6 = true };
+        char text[48];
+        memcpy(a6.a, ns.ip6[i], 16);
+        NetFormatAddr(&a6, text, sizeof(text));
+        row(x, y, w, "IPv6 address (DHCPv6)", text); y += 50;
+    }
+    if (ns.dhcp6) {
+        char lease[64];
+        if (ns.dhcp6_valid == 0xFFFFFFFFu) strcpy(lease, "Does not expire");
+        else {
+            UINT32 left = ns.dhcp6_valid > ns.dhcp6_age ? ns.dhcp6_valid - ns.dhcp6_age : 0;
+            ksnprintf(lease, sizeof(lease), "Expires in %u min %u s (renewed before then)", (unsigned)(left / 60), (unsigned)(left % 60));
+        }
+        row(x, y, w, "DHCPv6 lease", lease); y += 50;
+    }
+    if (ns.dns_suffix[0]) { row(x, y, w, "DNS suffix search list", ns.dns_suffix); y += 50; }
     if (!ns.configured) return;
     NetFormatIp(ns.ip, ip, sizeof(ip));
     NetFormatIp(ns.mask, mask, sizeof(mask));
@@ -613,7 +632,8 @@ static bool set_tick(WND *w)
     if (!st || st->page != SETTINGS_NETWORK) return false;
     NetStatus ns;
     NetGetStatus(&ns);
-    UINT32 sig = ns.ip ^ ns.gw ^ ns.dns[0] ^ (ns.link ? 1u : 0) ^ (ns.configured ? 2u : 0);
+    UINT32 sig = ns.ip ^ ns.gw ^ ns.dns[0] ^ (ns.link ? 1u : 0) ^ (ns.configured ? 2u : 0) ^ (ns.dhcp6 ? 4u : 0) ^
+                 ((UINT32)ns.ip6_count << 3) ^ (ns.dhcp6_valid - ns.dhcp6_age) / 60 << 6;
     if (sig == st->net_sig) return false;
     st->net_sig = sig;
     return true;

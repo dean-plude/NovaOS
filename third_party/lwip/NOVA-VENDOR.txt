@@ -7,3 +7,10 @@ NovaOS changes:
 - src/core/ipv6/nd6.c: a DNS server from a router advertisement (RDNSS)
   goes in the first free DNS slot instead of replacing the servers DHCPv4
   set (marked "NovaOS:").
+- src/core/ipv6/dhcp6.c, src/include/lwip/dhcp6.h, src/include/lwip/prot/dhcp6.h:
+  stateful DHCPv6 (RFC 8415), which lwIP 2.2.0 leaves unimplemented: one
+  IA_NA with one address, its DNS servers and domain search list, Renew at
+  T1, Rebind at T2, Release and Decline, retransmitted as section 15 says;
+  dhcp6_release/dhcp6_renew/dhcp6_link_changed for the kernel (marked
+  "NovaOS:").  nd6.c leaves the leased address's lifetimes to DHCPv6 when
+  its prefix is also advertised for SLAAC.

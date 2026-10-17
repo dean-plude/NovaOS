@@ -36,7 +36,7 @@ static const GUID g_usb = NOVA_IF_USB_DEVICE, g_kbd = NOVA_IF_KEYBOARD, g_hid = 
 static volatile LONG msg_usb_kbd, msg_usb_stick, all_kbd, vol_arrival, vol_removal, devnodes, cm_kbd, cm_enum, cm_started, cm_removed;
 static volatile LONG bad_name;
 static volatile LONG handle_removal, bad_handle;
-static WCHAR keyboard_device_path[256];
+static WCHAR keyboard_device_path[256];     /* the keyboard's HID interface: the one kbdhid publishes and a program opens */
 static HANDLE usb_handle, handle_reg;
 
 static LRESULT CALLBACK msg_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)

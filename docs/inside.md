@@ -90,7 +90,8 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     Input and `hid.dll`).
   - **Other input**: PS/2 keyboards and mice; I2C-HID touchpads on Intel's
     LPSS I2C controllers, found through ACPI and read on their GPIO
-    interrupt (tap to click, two-finger right click and scrolling);
+    interrupt (tap to click, tap and drag, two-finger right click and
+    scrolling that coasts after a flick);
     virtio multi-touch screens, pens and tablets.
   - **Display**: a VBE "DISPI" driver for QEMU's standard VGA, QXL,
     virtio-vga, VMware and bochs-display adapters and VirtualBox's VBoxVGA
@@ -128,7 +129,11 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 - **Networking** (`kernel/net/`): lwIP for TCP/IP over IPv4 and IPv6.
   - DHCP, SLAAC and DNS over either, or a static address and DNS servers
     set in Settings > Network or with the Terminal's `netsh`, kept across
-    restarts. A loopback interface carries 127.0.0.1 and ::1, and
+    restarts.  DHCPv6 both ways: stateful (RFC 8415: an address, DNS
+    servers and the domain search list from a server when a router
+    advertisement sets the M flag, renewed at T1, rebound at T2, released
+    by `ipconfig /release6` and at shutdown) and stateless (DNS servers
+    only, on the O flag). A loopback interface carries 127.0.0.1 and ::1, and
     `localhost` resolves to both without DNS.
   - An HTTP/1.1 client and Mbed TLS with the Mozilla root store in the
     kernel, which the App Store and updates download with.

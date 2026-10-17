@@ -225,6 +225,9 @@ nd6_process_autoconfig_prefix(struct netif *netif,
   for (i = 1; i < LWIP_IPV6_NUM_ADDRESSES; i++) {
     addr_state = netif_ip6_addr_state(netif, i);
     if (!ip6_addr_isinvalid(addr_state) && !netif_ip6_addr_isstatic(netif, i) &&
+#if LWIP_IPV6_DHCP6_STATEFUL
+        !dhcp6_owns_address(netif, i) &&      /* NovaOS: a DHCPv6 lease keeps the server's lifetimes */
+#endif
         ip6_addr_net_eq(prefix_addr, netif_ip6_addr(netif, i))) {
       /* Update the valid lifetime, as per RFC 4862 Sec. 5.5.3 point (e).
        * The valid lifetime will never drop to zero as a result of this. */

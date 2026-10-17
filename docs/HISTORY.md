@@ -13902,6 +13902,86 @@ New core self-test `d2dctxtest` (64-bit); `comptest` draws a drawing
 surface of a graphics device made on an `ID2D1Device`.  Next in 32.3:
 building the `dxaml` core as `Windows.UI.Xaml.dll`.
 
+## Stateful DHCPv6
+
+NovaOS now gets an IPv6 address from a DHCPv6 server (RFC 8415) when a
+router's advertisement sets the "managed" (M) flag, as Windows does.  lwIP
+2.2.0's DHCPv6 client only did stateless DHCPv6, and no BSD or MIT client
+fitted lwIP's single-threaded kernel model (dhcpcd and WIDE-DHCPv6 are
+userspace daemons), so the stateful half is written into lwIP's own
+BSD-licensed `dhcp6.c`, beside the stateless code it shares the parser and
+DNS handling with:
+
+- a Solicit (after a random delay of up to a second), collecting
+  Advertises for the first retransmission timeout (one with Preference 255
+  at once), then a Request for one IA_NA with the advertised address;
+- the Reply's address goes on the interface with the server's valid and
+  preferred lifetimes, and its DNS servers and domain search list are used;
+- a Renew to that server at T1, a Rebind to any server at T2 (T1 and T2
+  default to half and four fifths of the preferred lifetime when the server
+  leaves them to the client), and a new Solicit when the valid lifetime
+  ends or a server says the binding is gone or not on this link;
+- a Decline when duplicate address detection finds the address in use;
+- a Release on `ipconfig /release6` and before the machine shuts down or
+  restarts; `ipconfig /renew6` renews (or solicits again); the link going
+  down drops the lease, and the next advertisement with the M flag starts
+  over;
+- retransmission as section 15 says, with the constants of section 7.6.
+
+An advertisement with only the "other configuration" (O) flag still gets
+an Information-request (stateless DHCPv6).  When the leased address's
+prefix is also advertised for SLAAC, the SLAAC address is made beside it
+and router advertisements no longer touch the lease's lifetimes.  The
+interface holds four IPv6 addresses now (link-local, two SLAAC, the lease).
+
+The lease shows where DHCPv4's does: `ipconfig` gives the connection's DNS
+suffix, and `ipconfig /all` marks the address "(DHCPv6)" and adds the
+DHCPv6 IAID, client DUID (a DUID-LL of the MAC), server, the lease's time
+left with T1 and T2, and the DNS suffix search list; `GetAdaptersAddresses`
+reports the address with `Dhcp` origins, its real lifetimes and a /128
+on-link prefix, the adapter's `Dhcpv6Server`, `Dhcpv6ClientDuid`,
+`Dhcpv6Iaid`, `DnsSuffix` and `FirstDnsSuffix` list (SLAAC addresses now
+say `IpPrefixOriginRouterAdvertisement` with their real lifetimes too);
+Settings > Network shows the leased address, when the lease expires and
+the search list, and says "Connected" on an IPv6-only network with a
+lease.
+
+The network suite's IPv6 peer (`tools/v6peer.py`) is now a stateful DHCPv6
+server too: it leases `fd00:6e6f:7661::100` with a second DNS server and
+the search list `nova6.test, example.test`, gives the first lease T1 4 s
+and T2 8 s and leaves its Renews unanswered, so the client must Rebind;
+the next Renew is answered with a long lease.  The new tests check
+`ipconfig /all`, `dhcp6test` (64- and 32-bit), the rebind and renew while
+`ping -6` runs, `ipconfig /release6` (the server confirms) and
+`ipconfig /renew6`.
+
+## Touchpad tap-and-drag and coasting scroll
+
+Precision touchpads (the T14's I2C one and USB ones alike) gained the two
+Windows 11 gestures they lacked:
+
+- **Tap and drag.**  A tap, then the finger down again within 300 ms,
+  holds the left button down while that finger stays on the pad, so
+  moving it drags (a window, a selection, a file).  Lifting the finger
+  ends the drag: there is no drag lock, as Windows 11's default "Tap
+  twice and drag to multi-select" behaves.  Touching again quickly
+  without moving is the second click of a double-click.
+- **Coasting scroll.**  Two fingers that lift while still scrolling leave
+  the scrolling going at their speed, slowing down over about a second,
+  as Windows' scrolling does; fingers that stop before they lift do not
+  coast.  A touch on the pad stops it, and that touch is no tap.  The
+  coasting keeps coming as mouse-wheel notches, so every program's
+  `WM_MOUSEWHEEL` and `WM_MOUSEHWHEEL` handling sees it.
+
+Both are in the gesture code in `kernel/drivers/usbhid.c`, which every
+touchpad in touchpad mode goes through.  The tap and drag timeouts are
+libinput's (MIT); its tap state machine is built around its own device
+model, so the rules were taken rather than the code.  Tests: `hwcheck`'s
+modelled touchpad checks tap-and-drag (and that a touch 400 ms after a
+tap does not drag), and `digitest` in the devices suite's "touch" boot
+drags with a USB precision touchpad, flicks it so the scrolling coasts on
+past the fingers' ten notches, and stops a coast with a touch.
+
 ## Windows Runtime headers without MIDL
 
 Second part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,

@@ -71,7 +71,16 @@ PACK_STRUCT_END
 typedef enum {
   DHCP6_STATE_OFF               = 0,
   DHCP6_STATE_STATELESS_IDLE    = 1,
-  DHCP6_STATE_REQUESTING_CONFIG = 2
+  DHCP6_STATE_REQUESTING_CONFIG = 2,
+  /* NovaOS: stateful DHCPv6 (RFC 8415) */
+  DHCP6_STATE_STATEFUL_IDLE     = 3,  /* enabled, no lease: waiting for an RA with the M flag */
+  DHCP6_STATE_SOLICIT           = 4,
+  DHCP6_STATE_REQUEST           = 5,
+  DHCP6_STATE_BOUND             = 6,
+  DHCP6_STATE_RENEW             = 7,
+  DHCP6_STATE_REBIND            = 8,
+  DHCP6_STATE_RELEASE           = 9,
+  DHCP6_STATE_DECLINE           = 10
 } dhcp6_state_enum_t;
 
 /* DHCPv6 message types */

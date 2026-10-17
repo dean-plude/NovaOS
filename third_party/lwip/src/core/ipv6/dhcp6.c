@@ -7,7 +7,9 @@
  * RFC 3315 (stateful DHCPv6) and
  * RFC 3736 (stateless DHCPv6).
  *
- * For now, only stateless DHCPv6 is implemented!
+ * NovaOS: stateful DHCPv6 (RFC 8415: one IA_NA with one address, its DNS
+ * servers and domain search list; Renew at T1, Rebind at T2, Release and
+ * Decline) is implemented as well, beside stateless DHCPv6.
  *
  * TODO:
  * - enable/disable API to not always start when RA is received
@@ -64,6 +66,7 @@
 #include "lwip/def.h"
 #include "lwip/udp.h"
 #include "lwip/dns.h"
+#include "lwip/sys.h"
 
 #include <string.h>
 
@@ -103,6 +106,11 @@ enum dhcp6_option_idx {
 #if LWIP_DHCP6_GET_NTP_SRV
   DHCP6_OPTION_IDX_NTP_SERVER,
 #endif /* LWIP_DHCP_GET_NTP_SRV */
+#if LWIP_IPV6_DHCP6_STATEFUL
+  DHCP6_OPTION_IDX_IA_NA,
+  DHCP6_OPTION_IDX_STATUS_CODE,
+  DHCP6_OPTION_IDX_PREFERENCE,
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
   DHCP6_OPTION_IDX_MAX
 };
 
@@ -262,9 +270,25 @@ dhcp6_set_state(struct dhcp6 *dhcp6, u8_t new_state, const char *dbg_caller)
   }
 }
 
+#if LWIP_IPV6_DHCP6_STATEFUL
+#if !LWIP_IPV6_DHCP6_STATELESS || !LWIP_DHCP6_PROVIDE_DNS_SERVERS
+#error "NovaOS: stateful DHCPv6 is built with stateless DHCPv6 and DNS servers"
+#endif
+/* the state to go back to after an Information-request */
+#define DHCP6_IDLE_STATE(dhcp6) ((dhcp6)->stateful ? DHCP6_STATE_STATEFUL_IDLE : DHCP6_STATE_STATELESS_IDLE)
+static void dhcp6_drop_lease(struct netif *netif, struct dhcp6 *dhcp6);
+#else
+#define DHCP6_IDLE_STATE(dhcp6) DHCP6_STATE_STATELESS_IDLE
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
+
 static int
 dhcp6_stateless_enabled(struct dhcp6 *dhcp6)
 {
+#if LWIP_IPV6_DHCP6_STATEFUL
+  if (dhcp6->stateful) {
+    return 0;
+  }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
   if ((dhcp6->state == DHCP6_STATE_STATELESS_IDLE) ||
       (dhcp6->state == DHCP6_STATE_REQUESTING_CONFIG)) {
     return 1;
@@ -298,9 +322,27 @@ dhcp6_stateful_enabled(struct dhcp6 *dhcp6)
 err_t
 dhcp6_enable_stateful(struct netif *netif)
 {
+#if LWIP_IPV6_DHCP6_STATEFUL
+  /* NovaOS: a Solicit on an RA with the M flag; an Information-request
+   * (stateless) on one with only the O flag */
+  struct dhcp6 *dhcp6 = dhcp6_get_struct(netif, "dhcp6_enable_stateful()");
+  if (dhcp6 == NULL) {
+    return ERR_MEM;
+  }
+  if (dhcp6->stateful) {
+    return ERR_OK;
+  }
+  dhcp6->stateful = 1;
+  dhcp6->hold = 0;
+  dhcp6->addr_idx = -1;
+  ip6_addr_set_zero(&dhcp6->addr);
+  dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_enable_stateful");
+  return ERR_OK;
+#else
   LWIP_UNUSED_ARG(netif);
   LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE, ("stateful dhcp6 not implemented yet\n"));
   return ERR_VAL;
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
 }
 
 /**
@@ -328,8 +370,11 @@ dhcp6_enable_stateless(struct netif *netif)
     return ERR_OK;
   } else if (dhcp6->state != DHCP6_STATE_OFF) {
     /* stateful running */
-    /* @todo: stop stateful once it is implemented */
     LWIP_DEBUGF(DHCP_DEBUG | LWIP_DBG_TRACE, ("dhcp6_enable_stateless(): switching from stateful to stateless DHCPv6\n"));
+#if LWIP_IPV6_DHCP6_STATEFUL
+    dhcp6_drop_lease(netif, dhcp6);           /* NovaOS: (the address goes) */
+    dhcp6->stateful = 0;
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
   }
   LWIP_DEBUGF(DHCP_DEBUG | LWIP_DBG_TRACE, ("dhcp6_enable_stateless(): stateless DHCPv6 enabled\n"));
   dhcp6_set_state(dhcp6, DHCP6_STATE_STATELESS_IDLE, "dhcp6_enable_stateless");
@@ -354,6 +399,12 @@ dhcp6_disable(struct netif *netif)
     if (dhcp6->state != DHCP6_STATE_OFF) {
       LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE, ("dhcp6_disable(): DHCPv6 disabled (old state: %s)\n",
         (dhcp6_stateless_enabled(dhcp6) ? "stateless" : "stateful")));
+#if LWIP_IPV6_DHCP6_STATEFUL
+      if (dhcp6->stateful) {
+        dhcp6_drop_lease(netif, dhcp6);       /* NovaOS */
+        dhcp6->stateful = 0;
+      }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
       dhcp6_set_state(dhcp6, DHCP6_STATE_OFF, "dhcp6_disable");
       if (dhcp6->pcb_allocated != 0) {
         dhcp6_dec_pcb_refcount(); /* free DHCPv6 PCB if not needed any more */
@@ -506,7 +557,7 @@ static err_t
 dhcp6_request_config(struct netif *netif, struct dhcp6 *dhcp6)
 {
   /* stateless mode enabled and no request running? */
-  if (dhcp6->state == DHCP6_STATE_STATELESS_IDLE) {
+  if (dhcp6->state == DHCP6_IDLE_STATE(dhcp6)) {
     /* send Information-request and wait for answer; setup receive timeout */
     dhcp6_information_request(netif, dhcp6);
   }
@@ -519,7 +570,7 @@ dhcp6_abort_config_request(struct dhcp6 *dhcp6)
 {
   if (dhcp6->state == DHCP6_STATE_REQUESTING_CONFIG) {
     /* abort running request */
-    dhcp6_set_state(dhcp6, DHCP6_STATE_STATELESS_IDLE, "dhcp6_abort_config_request");
+    dhcp6_set_state(dhcp6, DHCP6_IDLE_STATE(dhcp6), "dhcp6_abort_config_request");
   }
 }
 
@@ -569,9 +620,66 @@ dhcp6_handle_config_reply(struct netif *netif, struct pbuf *p_msg_in)
           dns_setserver(free_s, &dns_addr);
         }
       }
+#if LWIP_IPV6_DHCP6_STATEFUL
+      if (dhcp6->dns_count < DHCP6_DNS_KEPT) {
+        ip6_addr_copy(dhcp6->dns[dhcp6->dns_count], *dns_addr6);
+        dhcp6->dns_count++;
+      }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
     }
   }
-  /* @ todo: parse and set Domain Search List */
+#if LWIP_IPV6_DHCP6_STATEFUL
+  /* NovaOS: the Domain Search List (RFC 3646: names as DNS labels,
+   * uncompressed), kept as "a.example,b.example" */
+  if (dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_DOMAIN_LIST)) {
+    u16_t i = dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_DOMAIN_LIST);
+    u16_t end = (u16_t)(i + dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_DOMAIN_LIST));
+    u16_t o = 0, name_start = 0, k;
+    u8_t labels = 0, cut = 0;
+    while (i < end) {
+      u8_t lab;
+      if (pbuf_copy_partial(p_msg_in, &lab, 1, i) != 1) {
+        cut = 1;
+        break;
+      }
+      i++;
+      if (lab == 0) {                         /* a name ends */
+        if (labels) {
+          dhcp6->domains[o++] = ',';
+          labels = 0;
+        }
+        name_start = o;
+        continue;
+      }
+      if ((lab > 63) || (i + lab > end) || (o + lab + 2 >= DHCP6_DOMAINS_MAX)) {
+        cut = 1;
+        break;
+      }
+      if (labels) {
+        dhcp6->domains[o++] = '.';
+      }
+      if (pbuf_copy_partial(p_msg_in, &dhcp6->domains[o], lab, i) != lab) {
+        cut = 1;
+        break;
+      }
+      for (k = o; k < o + lab; k++) {
+        if ((dhcp6->domains[k] <= ' ') || (dhcp6->domains[k] > '~') || (dhcp6->domains[k] == ',')) {
+          dhcp6->domains[k] = '-';
+        }
+      }
+      o = (u16_t)(o + lab);
+      i = (u16_t)(i + lab);
+      labels++;
+    }
+    if (cut || labels) {                      /* (a name cut off part-way goes) */
+      o = name_start;
+    }
+    if ((o > 0) && (dhcp6->domains[o - 1] == ',')) {
+      o--;
+    }
+    dhcp6->domains[o] = '\0';
+  }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
 #endif /* LWIP_DHCP6_PROVIDE_DNS_SERVERS */
 
 #if LWIP_DHCP6_GET_NTP_SRV
@@ -600,6 +708,658 @@ dhcp6_handle_config_reply(struct netif *netif, struct pbuf *p_msg_in)
 }
 #endif /* LWIP_IPV6_DHCP6_STATELESS */
 
+#if LWIP_IPV6_DHCP6_STATEFUL
+/* NovaOS: stateful DHCPv6 (RFC 8415), one IA_NA holding one address.
+ * An RA with the M flag starts a Solicit; the client takes the best
+ * Advertise of those that came in the first retransmission timeout (or
+ * the first with Preference 255, or the first at all after that), sends
+ * a Request, and the Reply binds the address with its DNS servers and
+ * domain search list.  At T1 it sends Renews to that server, at T2
+ * Rebinds to any, and when the valid lifetime runs out the address goes
+ * and a Solicit starts again.  dhcp6_release sends a Release; an address
+ * DAD finds in use gets a Decline.  Messages are retransmitted as section
+ * 15 says, with the constants of section 7.6. */
+#define SOL_MAX_DELAY   1000
+#define SOL_TIMEOUT     1000
+#define SOL_MAX_RT      3600000
+#define REQ_TIMEOUT     1000
+#define REQ_MAX_RT      30000
+#define REQ_MAX_RC      10
+#define REN_TIMEOUT     10000
+#define REN_MAX_RT      600000
+#define REB_TIMEOUT     10000
+#define REB_MAX_RT      600000
+#define REL_TIMEOUT     1000
+#define REL_MAX_RC      4
+#define DEC_TIMEOUT     1000
+#define DEC_MAX_RC      4
+
+#define DHCP6_LEASE_SECS(dhcp6) ((dhcp6)->lease_ticks / (1000 / DHCP6_TIMER_MSECS))
+
+static void
+dhcp6_set_timeout_ms(struct dhcp6 *dhcp6, u32_t ms)
+{
+  u32_t ticks = (ms + DHCP6_TIMER_MSECS - 1) / DHCP6_TIMER_MSECS;
+  dhcp6->request_timeout = (u16_t)(ticks == 0 ? 1 : (ticks > 0xFFFF ? 0xFFFF : ticks));
+}
+
+/* The next retransmission timeout: IRT the first time, then twice the
+ * last, at most MRT (0: no limit); each randomized by +-10 % (the first
+ * Solicit's only upwards) */
+static u32_t
+dhcp6_next_rt(struct dhcp6 *dhcp6, u32_t irt, u32_t mrt, u8_t first_up)
+{
+  u32_t rt = (dhcp6->tries == 0) ? irt : 2 * dhcp6->rt;
+  u32_t j;
+  if ((mrt != 0) && (rt > mrt)) {
+    rt = mrt;
+  }
+  dhcp6->rt = rt;
+  j = rt / 10;
+  if (j == 0) {
+    return rt;
+  }
+  if (first_up && (dhcp6->tries == 0)) {
+    return rt + (LWIP_RAND() % (j + 1));
+  }
+  return rt - j + (LWIP_RAND() % (2 * j + 1));
+}
+
+/* This client's DUID (DUID-LL: hardware type 1 and the MAC, stable for
+ * the adapter) and its IA_NA's IAID (the MAC's last four bytes) */
+static void
+dhcp6_make_ids(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6->duid[0] = 0;
+  dhcp6->duid[1] = DHCP6_DUID_LL;
+  dhcp6->duid[2] = 0;
+  dhcp6->duid[3] = 1;
+  MEMCPY(&dhcp6->duid[4], netif->hwaddr, 6);
+  dhcp6->duid_len = 10;
+  dhcp6->iaid = ((u32_t)netif->hwaddr[2] << 24) | ((u32_t)netif->hwaddr[3] << 16) |
+                ((u32_t)netif->hwaddr[4] << 8) | netif->hwaddr[5];
+}
+
+static u16_t
+dhcp6_option_long(u16_t options_out_len, u8_t *options, u32_t value)
+{
+  options_out_len = dhcp6_option_short(options_out_len, options, (u16_t)(value >> 16));
+  return dhcp6_option_short(options_out_len, options, (u16_t)value);
+}
+
+static u16_t
+dhcp6_option_bytes(u16_t options_out_len, u8_t *options, u16_t code, const void *data, u16_t len)
+{
+  options_out_len = dhcp6_option_short(options_out_len, options, code);
+  options_out_len = dhcp6_option_short(options_out_len, options, len);
+  MEMCPY(&options[options_out_len], data, len);
+  return (u16_t)(options_out_len + len);
+}
+
+/* Send a Solicit, Request, Renew, Rebind, Release or Decline */
+static err_t
+dhcp6_stateful_send(struct netif *netif, struct dhcp6 *dhcp6, u8_t msg_type)
+{
+  static const u16_t requested_options[] = { DHCP6_OPTION_DNS_SERVERS, DHCP6_OPTION_DOMAIN_LIST };
+  u8_t with_server = (u8_t)((msg_type == DHCP6_REQUEST) || (msg_type == DHCP6_RENEW) ||
+                            (msg_type == DHCP6_RELEASE) || (msg_type == DHCP6_DECLINE));
+  u8_t with_addr = (u8_t)((msg_type != DHCP6_SOLICIT) && !ip6_addr_isany(&dhcp6->addr));
+  u8_t with_oro = (u8_t)((msg_type != DHCP6_RELEASE) && (msg_type != DHCP6_DECLINE));
+  u16_t alloc = (u16_t)(4 + DHCP6_DUID_MAX + 4 + DHCP6_SERVER_ID_MAX + 6 + 16 + 28 + 4 + sizeof(requested_options));
+  u16_t n;
+  u32_t elapsed;
+  err_t err;
+  struct dhcp6_msg *msg_out;
+  u8_t *options;
+  struct pbuf *p_out = dhcp6_create_msg(netif, dhcp6, msg_type, alloc, &n);
+  if (p_out == NULL) {
+    return ERR_MEM;
+  }
+  msg_out = (struct dhcp6_msg *)p_out->payload;
+  options = (u8_t *)(msg_out + 1);
+  if (dhcp6->tries == 0) {
+    dhcp6->exchange_start = sys_now();
+  }
+  elapsed = (sys_now() - dhcp6->exchange_start) / 10;     /* (hundredths of a second) */
+  n = dhcp6_option_bytes(n, options, DHCP6_OPTION_CLIENTID, dhcp6->duid, dhcp6->duid_len);
+  if (with_server) {
+    n = dhcp6_option_bytes(n, options, DHCP6_OPTION_SERVERID, dhcp6->server_id, dhcp6->server_id_len);
+  }
+  n = dhcp6_option_short(n, options, DHCP6_OPTION_ELAPSED_TIME);
+  n = dhcp6_option_short(n, options, 2);
+  n = dhcp6_option_short(n, options, (u16_t)(elapsed > 0xFFFF ? 0xFFFF : elapsed));
+  /* the IA_NA: T1 and T2 0 (the server's choice), with the address held or offered */
+  n = dhcp6_option_short(n, options, DHCP6_OPTION_IA_NA);
+  n = dhcp6_option_short(n, options, (u16_t)(12 + (with_addr ? 28 : 0)));
+  n = dhcp6_option_long(n, options, dhcp6->iaid);
+  n = dhcp6_option_long(n, options, 0);
+  n = dhcp6_option_long(n, options, 0);
+  if (with_addr) {
+    n = dhcp6_option_short(n, options, DHCP6_OPTION_IAADDR);
+    n = dhcp6_option_short(n, options, 24);
+    MEMCPY(&options[n], dhcp6->addr.addr, 16);
+    n = (u16_t)(n + 16);
+    n = dhcp6_option_long(n, options, 0);
+    n = dhcp6_option_long(n, options, 0);
+  }
+  if (with_oro) {
+    n = dhcp6_option_optionrequest(n, options, requested_options, LWIP_ARRAYSIZE(requested_options), p_out->len);
+  }
+  LWIP_HOOK_DHCP6_APPEND_OPTIONS(netif, dhcp6, dhcp6->state, msg_out, msg_type, n, p_out->len);
+  dhcp6_msg_finalize(n, p_out);
+  err = udp_sendto_if(dhcp6_pcb, p_out, &dhcp6_All_DHCP6_Relay_Agents_and_Servers, DHCP6_SERVER_PORT, netif);
+  pbuf_free(p_out);
+  LWIP_DEBUGF(DHCP6_DEBUG | LWIP_DBG_TRACE, ("dhcp6_stateful_send(%d): %d\n", (int)msg_type, (int)err));
+  return err;
+}
+
+/* Send (or send again) and set the retransmission timeout */
+static void
+dhcp6_send_and_wait(struct netif *netif, struct dhcp6 *dhcp6, u8_t msg_type, u32_t irt, u32_t mrt)
+{
+  u32_t ms;
+  if (dhcp6_stateful_send(netif, dhcp6, msg_type) == ERR_RTE) {
+    /* no usable source address yet (the link-local address is tentative
+     * while DAD runs): nothing went out, so again on the next tick */
+    dhcp6->request_timeout = 1;
+    return;
+  }
+  ms = dhcp6_next_rt(dhcp6, irt, mrt, (u8_t)(msg_type == DHCP6_SOLICIT));
+  if (dhcp6->tries < 255) {
+    dhcp6->tries++;
+  }
+  dhcp6_set_timeout_ms(dhcp6, ms);
+}
+
+/* The leased address leaves the netif (dhcp6->addr stays for a Release or Decline) */
+static void
+dhcp6_drop_address(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  s8_t i = dhcp6->addr_idx;
+  if ((i >= 0) && (i < LWIP_IPV6_NUM_ADDRESSES) &&
+      ip6_addr_zoneless_eq(netif_ip6_addr(netif, i), &dhcp6->addr)) {
+    netif_ip6_addr_set_state(netif, i, IP6_ADDR_INVALID);
+    netif_ip6_addr_set_valid_life(netif, i, 0);
+    netif_ip6_addr_set_pref_life(netif, i, 0);
+  }
+  dhcp6->addr_idx = -1;
+}
+
+/* ... and the DNS servers the server named, and the search list */
+static void
+dhcp6_forget_config(struct dhcp6 *dhcp6)
+{
+  u8_t i, s;
+  for (i = 0; i < dhcp6->dns_count; i++) {
+    ip_addr_t a;
+    ip_addr_copy_from_ip6(a, dhcp6->dns[i]);
+    for (s = 0; s < DNS_MAX_SERVERS; s++) {
+      if (ip_addr_zoneless_eq(dns_getserver(s), &a)) {
+        dns_setserver(s, NULL);
+      }
+    }
+  }
+  dhcp6->dns_count = 0;
+  dhcp6->domains[0] = '\0';
+}
+
+static void
+dhcp6_drop_lease(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_drop_address(netif, dhcp6);
+  dhcp6_forget_config(dhcp6);
+  ip6_addr_set_zero(&dhcp6->addr);
+  dhcp6->t1 = dhcp6->t2 = dhcp6->pref_life = dhcp6->valid_life = 0;
+  dhcp6->lease_ticks = 0;
+}
+
+static void
+dhcp6_start_solicit(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_make_ids(netif, dhcp6);
+  dhcp6_set_state(dhcp6, DHCP6_STATE_SOLICIT, "dhcp6_start_solicit");
+  dhcp6->have_adv = 0;
+  dhcp6->adv_pref = 0;
+  dhcp6->server_id_len = 0;
+  if (dhcp6->addr_idx < 0) {
+    ip6_addr_set_zero(&dhcp6->addr);
+  }
+  /* the first Solicit waits a random time up to SOL_MAX_DELAY (section 18.2.1) */
+  dhcp6_set_timeout_ms(dhcp6, LWIP_RAND() % SOL_MAX_DELAY);
+}
+
+static void
+dhcp6_start_request(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_set_state(dhcp6, DHCP6_STATE_REQUEST, "dhcp6_start_request");
+  dhcp6_send_and_wait(netif, dhcp6, DHCP6_REQUEST, REQ_TIMEOUT, REQ_MAX_RT);
+}
+
+static void
+dhcp6_start_renew(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_set_state(dhcp6, DHCP6_STATE_RENEW, "dhcp6_start_renew");
+  dhcp6_send_and_wait(netif, dhcp6, DHCP6_RENEW, REN_TIMEOUT, REN_MAX_RT);
+}
+
+static void
+dhcp6_start_rebind(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_set_state(dhcp6, DHCP6_STATE_REBIND, "dhcp6_start_rebind");
+  dhcp6_send_and_wait(netif, dhcp6, DHCP6_REBIND, REB_TIMEOUT, REB_MAX_RT);
+}
+
+static void
+dhcp6_start_decline(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6->declines++;
+  dhcp6_drop_address(netif, dhcp6);
+  dhcp6_forget_config(dhcp6);
+  dhcp6_set_state(dhcp6, DHCP6_STATE_DECLINE, "dhcp6_start_decline");
+  dhcp6_send_and_wait(netif, dhcp6, DHCP6_DECLINE, DEC_TIMEOUT, 0);
+}
+
+/* The lease is gone: Solicit again if the router still says to */
+static void
+dhcp6_lease_lost(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  dhcp6_drop_lease(netif, dhcp6);
+  if (dhcp6->managed && !dhcp6->hold) {
+    dhcp6_start_solicit(netif, dhcp6);
+  } else {
+    dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_lease_lost");
+  }
+}
+
+/* A server's message names it and is for this client (section 16) */
+static int
+dhcp6_for_us(struct dhcp6 *dhcp6, struct pbuf *p)
+{
+  u8_t buf[DHCP6_DUID_MAX];
+  u16_t len;
+  if (!dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_SERVER_ID) || !dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_CLI_ID)) {
+    return 0;
+  }
+  len = dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_SERVER_ID);
+  if ((len == 0) || (len > DHCP6_SERVER_ID_MAX)) {
+    return 0;
+  }
+  len = dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_CLI_ID);
+  if ((len != dhcp6->duid_len) ||
+      (pbuf_copy_partial(p, buf, len, dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_CLI_ID)) != len)) {
+    return 0;
+  }
+  return memcmp(buf, dhcp6->duid, len) == 0;
+}
+
+static void
+dhcp6_take_server(struct dhcp6 *dhcp6, struct pbuf *p, const ip_addr_t *from)
+{
+  u16_t len = dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_SERVER_ID);
+  dhcp6->server_id_len = (u8_t)pbuf_copy_partial(p, dhcp6->server_id, len,
+                                                 dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_SERVER_ID));
+  ip6_addr_copy(dhcp6->server_addr, *ip_2_ip6(from));
+}
+
+/* A Status Code option's code (at @start, @len long); success when absent */
+static u16_t
+dhcp6_status_at(struct pbuf *p, u16_t start, u16_t len)
+{
+  u8_t c[2];
+  if ((len < 2) || (pbuf_copy_partial(p, c, 2, start) != 2)) {
+    return DHCP6_STATUS_SUCCESS;
+  }
+  return (u16_t)((c[0] << 8) | c[1]);
+}
+
+static u32_t
+dhcp6_get_u32(const u8_t *b)
+{
+  return ((u32_t)b[0] << 24) | ((u32_t)b[1] << 16) | ((u32_t)b[2] << 8) | b[3];
+}
+
+/* The message's IA_NA for this client: its status code, T1, T2 and its
+ * first address with a valid lifetime (DHCP6_STATUS_NOADDRSAVAIL when it
+ * holds none); -1 when there is no IA_NA for us, or a bad one */
+struct dhcp6_ia {
+  u32_t t1, t2, pref, valid;
+  ip6_addr_t addr;
+};
+
+static int
+dhcp6_parse_ia_na(struct dhcp6 *dhcp6, struct pbuf *p, struct dhcp6_ia *ia)
+{
+  u8_t b[24];
+  u16_t start, end, off;
+  u16_t status = DHCP6_STATUS_SUCCESS;
+  u8_t found = 0;
+  if (!dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_IA_NA)) {
+    return -1;
+  }
+  start = dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_IA_NA);
+  end = (u16_t)(start + dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_IA_NA));
+  if ((end < start + 12) || (pbuf_copy_partial(p, b, 12, start) != 12) || (dhcp6_get_u32(b) != dhcp6->iaid)) {
+    return -1;
+  }
+  ia->t1 = dhcp6_get_u32(&b[4]);
+  ia->t2 = dhcp6_get_u32(&b[8]);
+  if ((ia->t1 != 0) && (ia->t2 != 0) && (ia->t1 > ia->t2)) {
+    return -1;                                /* (section 21.4: discarded) */
+  }
+  for (off = (u16_t)(start + 12); off + 4 <= end; ) {
+    u16_t code, len;
+    if (pbuf_copy_partial(p, b, 4, off) != 4) {
+      return -1;
+    }
+    code = (u16_t)((b[0] << 8) | b[1]);
+    len = (u16_t)((b[2] << 8) | b[3]);
+    if (off + 4 + len > end) {
+      return -1;
+    }
+    if ((code == DHCP6_OPTION_IAADDR) && (len >= 24) && !found &&
+        (pbuf_copy_partial(p, b, 24, (u16_t)(off + 4)) == 24)) {
+      u32_t pref = dhcp6_get_u32(&b[16]), valid = dhcp6_get_u32(&b[20]);
+      if ((valid != 0) && (pref <= valid)) {
+        MEMCPY(ia->addr.addr, b, 16);           /* (network byte order, as lwIP keeps it) */
+        ip6_addr_clear_zone(&ia->addr);
+        ia->pref = pref;
+        ia->valid = valid;
+        found = 1;
+      }
+    } else if (code == DHCP6_OPTION_STATUS_CODE) {
+      status = dhcp6_status_at(p, (u16_t)(off + 4), len);
+    }
+    off = (u16_t)(off + 4 + len);
+  }
+  if ((status == DHCP6_STATUS_SUCCESS) && !found) {
+    return DHCP6_STATUS_NOADDRSAVAIL;
+  }
+  return status;
+}
+
+static u16_t
+dhcp6_top_status(struct dhcp6 *dhcp6, struct pbuf *p)
+{
+  if (!dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_STATUS_CODE)) {
+    return DHCP6_STATUS_SUCCESS;
+  }
+  return dhcp6_status_at(p, dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_STATUS_CODE),
+                         dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_STATUS_CODE));
+}
+
+/* An Advertise, while soliciting */
+static void
+dhcp6_handle_advertise(struct netif *netif, struct dhcp6 *dhcp6, struct pbuf *p, const ip_addr_t *from)
+{
+  struct dhcp6_ia ia;
+  u8_t pref = 0;
+  if ((dhcp6->state != DHCP6_STATE_SOLICIT) || !dhcp6_for_us(dhcp6, p) ||
+      (dhcp6_top_status(dhcp6, p) != DHCP6_STATUS_SUCCESS) ||
+      (dhcp6_parse_ia_na(dhcp6, p, &ia) != DHCP6_STATUS_SUCCESS)) {
+    return;
+  }
+  if (dhcp6_option_given(dhcp6, DHCP6_OPTION_IDX_PREFERENCE) &&
+      (dhcp6_get_option_length(dhcp6, DHCP6_OPTION_IDX_PREFERENCE) >= 1)) {
+    pbuf_copy_partial(p, &pref, 1, dhcp6_get_option_start(dhcp6, DHCP6_OPTION_IDX_PREFERENCE));
+  }
+  if (!dhcp6->have_adv || (pref > dhcp6->adv_pref)) {
+    dhcp6_take_server(dhcp6, p, from);
+    ip6_addr_copy(dhcp6->addr, ia.addr);
+    dhcp6->adv_pref = pref;
+    dhcp6->have_adv = 1;
+  }
+  /* the best possible, or the first one after the first timeout: at once */
+  if ((pref == 255) || (dhcp6->tries > 1)) {
+    dhcp6_start_request(netif, dhcp6);
+  }
+}
+
+/* The Reply's address goes on the netif (or has its lifetimes extended) */
+static void
+dhcp6_bind(struct netif *netif, struct dhcp6 *dhcp6, const struct dhcp6_ia *ia)
+{
+  s8_t idx = dhcp6->addr_idx;
+  u8_t was = dhcp6->state;
+  if ((idx >= 0) && !ip6_addr_zoneless_eq(&dhcp6->addr, &ia->addr)) {
+    dhcp6_drop_address(netif, dhcp6);         /* (another address than before) */
+    idx = -1;
+  }
+  if (idx < 0) {
+    s8_t had = netif_get_ip6_addr_match(netif, &ia->addr);
+    if (((had >= 0) && netif_ip6_addr_isstatic(netif, had)) ||
+        (netif_add_ip6_address(netif, &ia->addr, &idx) != ERR_OK) || (idx < 0)) {
+      /* set by hand already, or no free address slot: not ours to lease */
+      dhcp6->addr_idx = -1;
+      dhcp6_drop_lease(netif, dhcp6);
+      dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_bind");
+      return;
+    }
+  }
+  dhcp6->addr_idx = idx;
+  ip6_addr_copy(dhcp6->addr, ia->addr);
+  netif_ip6_addr_set_valid_life(netif, idx, ia->valid);
+  netif_ip6_addr_set_pref_life(netif, idx, ia->pref);
+  if ((ia->pref > 0) && ip6_addr_isdeprecated(netif_ip6_addr_state(netif, idx))) {
+    netif_ip6_addr_set_state(netif, idx, IP6_ADDR_PREFERRED);
+  }
+  dhcp6->pref_life = ia->pref;
+  dhcp6->valid_life = ia->valid;
+  dhcp6->t1 = ia->t1;
+  dhcp6->t2 = ia->t2;
+  if ((dhcp6->t1 == 0) || (dhcp6->t2 == 0)) {
+    /* left to the client: half and four fifths of the preferred lifetime (section 21.4) */
+    if (ip6_addr_life_isinfinite(ia->pref)) {
+      dhcp6->t1 = dhcp6->t2 = IP6_ADDR_LIFE_INFINITE;
+    } else {
+      dhcp6->t1 = ia->pref / 2;
+      dhcp6->t2 = ia->pref / 5 * 4;
+    }
+  }
+  dhcp6->lease_ticks = 0;
+  dhcp6_set_state(dhcp6, DHCP6_STATE_BOUND, "dhcp6_bind");
+  if (was == DHCP6_STATE_RENEW) {
+    dhcp6->renews++;
+  } else if (was == DHCP6_STATE_REBIND) {
+    dhcp6->rebinds++;
+  } else {
+    dhcp6->binds++;
+  }
+}
+
+/* A Reply to a Request, Renew, Rebind, Release or Decline (section 18.2.10) */
+static void
+dhcp6_handle_stateful_reply(struct netif *netif, struct dhcp6 *dhcp6, struct pbuf *p, const ip_addr_t *from)
+{
+  struct dhcp6_ia ia;
+  int status;
+  u8_t state = dhcp6->state;
+  if (!dhcp6_for_us(dhcp6, p)) {
+    return;
+  }
+  if (state == DHCP6_STATE_RELEASE) {
+    dhcp6->releases++;
+    ip6_addr_set_zero(&dhcp6->addr);
+    dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_handle_stateful_reply");
+    return;
+  }
+  if (state == DHCP6_STATE_DECLINE) {
+    ip6_addr_set_zero(&dhcp6->addr);
+    dhcp6_start_solicit(netif, dhcp6);
+    return;
+  }
+  if ((state != DHCP6_STATE_REQUEST) && (state != DHCP6_STATE_RENEW) && (state != DHCP6_STATE_REBIND)) {
+    return;
+  }
+  if (dhcp6_top_status(dhcp6, p) != DHCP6_STATUS_SUCCESS) {
+    return;                                   /* (sent again when the timeout comes) */
+  }
+  status = dhcp6_parse_ia_na(dhcp6, p, &ia);
+  if (status < 0) {
+    return;
+  }
+  if (status == DHCP6_STATUS_NOBINDING && state != DHCP6_STATE_REQUEST) {
+    /* the server lost the binding: Request it again (section 18.2.10.1) */
+    dhcp6_take_server(dhcp6, p, from);
+    dhcp6_start_request(netif, dhcp6);
+    return;
+  }
+  if (status != DHCP6_STATUS_SUCCESS) {
+    /* no address, not on this link, ...: start over */
+    dhcp6->expiries++;
+    dhcp6_drop_lease(netif, dhcp6);
+    dhcp6_start_solicit(netif, dhcp6);
+    return;
+  }
+  dhcp6_take_server(dhcp6, p, from);
+  dhcp6_bind(netif, dhcp6, &ia);
+  if (dhcp6->state == DHCP6_STATE_BOUND) {
+    dhcp6_forget_config(dhcp6);               /* (what this Reply names replaces it) */
+    dhcp6_handle_config_reply(netif, p);
+  }
+}
+
+/* A retransmission timeout */
+static void
+dhcp6_stateful_timeout(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  switch (dhcp6->state) {
+    case DHCP6_STATE_SOLICIT:
+      if (dhcp6->have_adv) {
+        dhcp6_start_request(netif, dhcp6);
+      } else {
+        dhcp6_send_and_wait(netif, dhcp6, DHCP6_SOLICIT, SOL_TIMEOUT, SOL_MAX_RT);
+      }
+      break;
+    case DHCP6_STATE_REQUEST:
+      if (dhcp6->tries >= REQ_MAX_RC) {
+        dhcp6_start_solicit(netif, dhcp6);
+      } else {
+        dhcp6_send_and_wait(netif, dhcp6, DHCP6_REQUEST, REQ_TIMEOUT, REQ_MAX_RT);
+      }
+      break;
+    case DHCP6_STATE_RENEW:
+      dhcp6_send_and_wait(netif, dhcp6, DHCP6_RENEW, REN_TIMEOUT, REN_MAX_RT);
+      break;
+    case DHCP6_STATE_REBIND:
+      dhcp6_send_and_wait(netif, dhcp6, DHCP6_REBIND, REB_TIMEOUT, REB_MAX_RT);
+      break;
+    case DHCP6_STATE_RELEASE:
+      if (dhcp6->tries >= REL_MAX_RC) {
+        ip6_addr_set_zero(&dhcp6->addr);
+        dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_stateful_timeout");
+      } else {
+        dhcp6_send_and_wait(netif, dhcp6, DHCP6_RELEASE, REL_TIMEOUT, 0);
+      }
+      break;
+    case DHCP6_STATE_DECLINE:
+      if (dhcp6->tries >= DEC_MAX_RC) {
+        ip6_addr_set_zero(&dhcp6->addr);
+        dhcp6_start_solicit(netif, dhcp6);
+      } else {
+        dhcp6_send_and_wait(netif, dhcp6, DHCP6_DECLINE, DEC_TIMEOUT, 0);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+/* Every DHCP6_TIMER_MSECS while a lease is held: T1, T2, the valid
+ * lifetime, and the address's DAD */
+static void
+dhcp6_lease_tick(struct netif *netif, struct dhcp6 *dhcp6)
+{
+  u32_t secs;
+  u8_t st;
+  if ((dhcp6->state != DHCP6_STATE_BOUND) && (dhcp6->state != DHCP6_STATE_RENEW) &&
+      (dhcp6->state != DHCP6_STATE_REBIND)) {
+    return;
+  }
+  dhcp6->lease_ticks++;
+  secs = DHCP6_LEASE_SECS(dhcp6);
+  st = dhcp6->addr_idx >= 0 ? netif_ip6_addr_state(netif, dhcp6->addr_idx) : IP6_ADDR_INVALID;
+  if (ip6_addr_isduplicated(st)) {
+    dhcp6_start_decline(netif, dhcp6);        /* another machine has it */
+  } else if (ip6_addr_isinvalid(st) || !ip6_addr_zoneless_eq(netif_ip6_addr(netif, dhcp6->addr_idx), &dhcp6->addr) ||
+             (!ip6_addr_life_isinfinite(dhcp6->valid_life) && (secs >= dhcp6->valid_life))) {
+    dhcp6->expiries++;                        /* the valid lifetime ran out */
+    dhcp6_lease_lost(netif, dhcp6);
+  } else if ((dhcp6->state == DHCP6_STATE_BOUND) && !ip6_addr_life_isinfinite(dhcp6->t1) && (secs >= dhcp6->t1)) {
+    dhcp6_start_renew(netif, dhcp6);
+  } else if ((dhcp6->state != DHCP6_STATE_REBIND) && !ip6_addr_life_isinfinite(dhcp6->t2) && (secs >= dhcp6->t2)) {
+    dhcp6_start_rebind(netif, dhcp6);
+  }
+}
+
+/**
+ * NovaOS: release the lease: the address goes now and a Release tells
+ * the server; no Solicit until dhcp6_renew (ipconfig /release6, and
+ * before the machine shuts down or restarts)
+ */
+void
+dhcp6_release(struct netif *netif)
+{
+  struct dhcp6 *dhcp6 = netif_dhcp6_data(netif);
+  if ((dhcp6 == NULL) || !dhcp6->stateful) {
+    return;
+  }
+  dhcp6->hold = 1;
+  if (dhcp6_bound(dhcp6)) {
+    dhcp6_drop_address(netif, dhcp6);
+    dhcp6_forget_config(dhcp6);
+    dhcp6_set_state(dhcp6, DHCP6_STATE_RELEASE, "dhcp6_release");
+    dhcp6_send_and_wait(netif, dhcp6, DHCP6_RELEASE, REL_TIMEOUT, 0);
+  } else if ((dhcp6->state == DHCP6_STATE_SOLICIT) || (dhcp6->state == DHCP6_STATE_REQUEST)) {
+    dhcp6_drop_lease(netif, dhcp6);
+    dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_release");
+  }
+}
+
+/**
+ * NovaOS: renew the lease now (ipconfig /renew6): a Renew while bound,
+ * else a Solicit
+ */
+void
+dhcp6_renew(struct netif *netif)
+{
+  struct dhcp6 *dhcp6 = netif_dhcp6_data(netif);
+  if ((dhcp6 == NULL) || !dhcp6->stateful) {
+    return;
+  }
+  dhcp6->hold = 0;
+  if (dhcp6->state == DHCP6_STATE_BOUND) {
+    dhcp6_start_renew(netif, dhcp6);
+  } else if ((dhcp6->state == DHCP6_STATE_STATEFUL_IDLE) || (dhcp6->state == DHCP6_STATE_REQUESTING_CONFIG) ||
+             (dhcp6->state == DHCP6_STATE_RELEASE)) {
+    dhcp6_start_solicit(netif, dhcp6);
+  }
+}
+
+/**
+ * NovaOS: the link went down (the lease goes: another network may be
+ * there when it comes back, whose RA starts a Solicit) or up
+ */
+void
+dhcp6_link_changed(struct netif *netif, u8_t up)
+{
+  struct dhcp6 *dhcp6 = netif_dhcp6_data(netif);
+  if ((dhcp6 == NULL) || !dhcp6->stateful || up) {
+    return;
+  }
+  dhcp6->managed = 0;
+  dhcp6_drop_lease(netif, dhcp6);
+  dhcp6_set_state(dhcp6, DHCP6_STATE_STATEFUL_IDLE, "dhcp6_link_changed");
+}
+
+/** NovaOS: whether address slot @idx holds the leased address (nd6.c leaves its lifetimes to DHCPv6) */
+u8_t
+dhcp6_owns_address(struct netif *netif, s8_t idx)
+{
+  struct dhcp6 *dhcp6 = netif_dhcp6_data(netif);
+  return (u8_t)((dhcp6 != NULL) && dhcp6->stateful && (idx >= 0) && (dhcp6->addr_idx == idx));
+}
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
+
 /** This function is called from nd6 module when an RA message is received
  * It triggers DHCPv6 requests (if enabled).
  */
@@ -615,6 +1375,22 @@ dhcp6_nd6_ra_trigger(struct netif *netif, u8_t managed_addr_config, u8_t other_c
   LWIP_UNUSED_ARG(other_config);
   LWIP_UNUSED_ARG(dhcp6);
 
+#if LWIP_IPV6_DHCP6_STATEFUL
+  /* NovaOS: M flag: a Solicit (unless a lease is held or being sought, or
+   * it was released by hand); only the O flag: an Information-request */
+  if ((dhcp6 != NULL) && dhcp6->stateful) {
+    dhcp6->managed = (u8_t)(managed_addr_config != 0);
+    if (managed_addr_config) {
+      if (!dhcp6->hold && ((dhcp6->state == DHCP6_STATE_STATEFUL_IDLE) ||
+                           (dhcp6->state == DHCP6_STATE_REQUESTING_CONFIG))) {
+        dhcp6_start_solicit(netif, dhcp6);
+      }
+    } else if (other_config) {
+      dhcp6_request_config(netif, dhcp6);
+    }
+    return;
+  }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
 #if LWIP_IPV6_DHCP6_STATELESS
   if (dhcp6 != NULL) {
     if (dhcp6_stateless_enabled(dhcp6)) {
@@ -705,6 +1481,20 @@ dhcp6_parse_reply(struct pbuf *p, struct dhcp6 *dhcp6)
         dhcp6_set_option(dhcp6, DHCP6_OPTION_IDX_NTP_SERVER, val_offset, len);
         break;
 #endif /* LWIP_DHCP6_GET_NTP_SRV*/
+#if LWIP_IPV6_DHCP6_STATEFUL
+      case (DHCP6_OPTION_IA_NA):
+        dhcp6_got_option(dhcp6, DHCP6_OPTION_IDX_IA_NA);
+        dhcp6_set_option(dhcp6, DHCP6_OPTION_IDX_IA_NA, val_offset, len);
+        break;
+      case (DHCP6_OPTION_STATUS_CODE):
+        dhcp6_got_option(dhcp6, DHCP6_OPTION_IDX_STATUS_CODE);
+        dhcp6_set_option(dhcp6, DHCP6_OPTION_IDX_STATUS_CODE, val_offset, len);
+        break;
+      case (DHCP6_OPTION_PREFERENCE):
+        dhcp6_got_option(dhcp6, DHCP6_OPTION_IDX_PREFERENCE);
+        dhcp6_set_option(dhcp6, DHCP6_OPTION_IDX_PREFERENCE, val_offset, len);
+        break;
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
       default:
         LWIP_DEBUGF(DHCP6_DEBUG, ("skipping option %"U16_F" in options\n", op));
         LWIP_HOOK_DHCP6_PARSE_OPTION(ip_current_netif(), dhcp6, dhcp6->state, msg_in,
@@ -771,13 +1561,22 @@ dhcp6_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr
 #if LWIP_IPV6_DHCP6_STATELESS
     /* in info-requesting state? */
     if (dhcp6->state == DHCP6_STATE_REQUESTING_CONFIG) {
-      dhcp6_set_state(dhcp6, DHCP6_STATE_STATELESS_IDLE, "dhcp6_recv");
+      dhcp6_set_state(dhcp6, DHCP6_IDLE_STATE(dhcp6), "dhcp6_recv");
       dhcp6_handle_config_reply(netif, p);
     } else
 #endif /* LWIP_IPV6_DHCP6_STATELESS */
+#if LWIP_IPV6_DHCP6_STATEFUL
+    if (dhcp6->stateful) {
+      dhcp6_handle_stateful_reply(netif, dhcp6, p, addr);   /* NovaOS */
+    } else
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
     {
       /* @todo: handle reply in other states? */
     }
+#if LWIP_IPV6_DHCP6_STATEFUL
+  } else if ((msg_type == DHCP6_ADVERTISE) && dhcp6->stateful) {
+    dhcp6_handle_advertise(netif, dhcp6, p, addr);         /* NovaOS */
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
   } else {
     /* @todo: handle other message types */
   }
@@ -807,6 +1606,11 @@ dhcp6_timeout(struct netif *netif, struct dhcp6 *dhcp6)
     dhcp6_information_request(netif, dhcp6);
   }
 #endif /* LWIP_IPV6_DHCP6_STATELESS */
+#if LWIP_IPV6_DHCP6_STATEFUL
+  if (dhcp6->stateful) {
+    dhcp6_stateful_timeout(netif, dhcp6);
+  }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
 }
 
 /**
@@ -825,6 +1629,11 @@ dhcp6_tmr(void)
     struct dhcp6 *dhcp6 = netif_dhcp6_data(netif);
     /* only act on DHCPv6 configured interfaces */
     if (dhcp6 != NULL) {
+#if LWIP_IPV6_DHCP6_STATEFUL
+      if (dhcp6->stateful) {
+        dhcp6_lease_tick(netif, dhcp6);       /* NovaOS: T1, T2, the lease's end */
+      }
+#endif /* LWIP_IPV6_DHCP6_STATEFUL */
       /* timer is active (non zero), and is about to trigger now */
       if (dhcp6->request_timeout > 1) {
         dhcp6->request_timeout--;

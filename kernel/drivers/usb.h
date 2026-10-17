@@ -169,7 +169,7 @@ void *UsbHubProbe(UsbDev *d, const UsbIface *f);      /* usbhub.c */
 void  UsbHubService(void *inst);                       /* usb thread: handle port changes */
 void  UsbHubServiceAll(void);                          /* ... of every hub that signalled */
 void *UsbHidProbe(UsbDev *d, const UsbIface *f, bool *for_class);      /* usbhid.c */
-void  UsbHidTickAll(UINT64 now);                       /* key repeat, every tick */
+void  UsbHidTickAll(UINT64 now);                       /* key repeat, touchpad coasting, every tick */
 void  UsbHidSyncLeds(void);                            /* usb thread: lock-key LEDs */
 /* The Terminal's usbcheck: run the report parser on report descriptors
  * QEMU has no device for; says a line per check, returns how many failed */

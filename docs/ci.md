@@ -291,7 +291,10 @@ The core and devices suites are described in [testing.md](testing.md).
     version, list, upgrade, uninstall, a download whose SHA-256 is wrong
     refused) and the App Store's catalog as a source.
   - virtio-net on an IPv6-only network served by `tools/v6peer.py`: SLAAC
-    and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6.
+    and RDNSS, `ping -6`, `curl -6` and Winsock over IPv6; stateful DHCPv6
+    (the lease in `ipconfig /all` and `dhcp6test`, 64- and 32-bit, a
+    Rebind at T2 and a Renew while `ping -6` runs, `ipconfig /release6`
+    and `/renew6`).
   - an Intel e1000e (82574L): its PHY and link, the link pulled and plugged
     back, sleep and wake, then the IPv4 tests above again on it.
 - **Graphics** (the **Graphics tests (OpenGL, Direct3D)** job): two

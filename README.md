@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/dean-plude/os/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dean-plude/os/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/dean-plude/os?label=release)](https://github.com/dean-plude/os/releases/latest)
-[![License: Apache License 2.0](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache License 2.0](https://img.shields.io/badge/license-Apache%20License%202.0-blue)](LICENSE)
 
 **An operating system written from scratch that runs Windows programs
 natively.**

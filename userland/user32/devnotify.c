@@ -22,8 +22,12 @@
  *     hidden ones included.
  * Messages go with SendMessageTimeout (a window that does not answer in
  * two seconds is passed over), as Windows' broadcasts do.
- * Query-remove notices are asynchronous status notifications; they do not
- * delay the kernel query or collect a window's veto response.
+ * DBT_DEVICEQUERYREMOVE is a question: the kernel's PnP manager waits for
+ * this process's answer before the device's drivers are asked (each
+ * handle registration is counted in the kernel, nova_pnp_watch), and one
+ * window or service returning BROADCAST_QUERY_DENY refuses the removal;
+ * the kernel then sends DBT_DEVICEQUERYREMOVEFAILED.  The kernel's wait is
+ * bounded, so a hung window cannot hold a removal up.
  */
 #include "u32.h"
 #include <novapnp.h>
@@ -33,6 +37,7 @@
 #define SERVICE_CONTROL_DEVICEEVENT 0x0000000B
 #define MAX_REGS  64
 #define REG_MAGIC 0x444E5452u                    /* "RTND" */
+#define BROADCAST_QUERY_DENY 0x424D5144
 
 typedef struct { DWORD size, type, reserved; } BroadcastHdr;
 typedef struct { DWORD size, type, reserved; GUID guid; WCHAR name[256]; } BroadcastIfaceW;
@@ -116,9 +121,11 @@ static void interface_event(const NovaPnpNode *n, const GUID *g, WPARAM what)
     }
 }
 
-/* A registered file handle belongs to this device node. */
-static void handle_event(DWORD node, WPARAM what)
+/* A registered file handle belongs to this device node; whether a window
+ * or service refused (a query) */
+static BOOL handle_event(DWORD node, WPARAM what)
 {
+    BOOL deny = FALSE;
     Reg sent[MAX_REGS];
     int k = 0;
     lock();
@@ -140,11 +147,12 @@ static void handle_event(DWORD node, WPARAM what)
         if (sent[i].data_size) memcpy(b.data, sent[i].data, sent[i].data_size);
         if (sent[i].service) {
             service_event_fn fn = (service_event_fn)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "NovaServiceDeviceEvent");
-            if (fn) fn(sent[i].target, (DWORD)what, &b);
-        } else {
-            send((HWND)sent[i].target, what, (LPARAM)&b);
+            if (fn && fn(sent[i].target, (DWORD)what, &b) == BROADCAST_QUERY_DENY) deny = TRUE;
+        } else if (send((HWND)sent[i].target, what, (LPARAM)&b) == BROADCAST_QUERY_DENY) {
+            deny = TRUE;
         }
     }
+    return deny;
 }
 
 static BOOL CALLBACK collect(HWND h, LPARAM lp)
@@ -197,9 +205,10 @@ static DWORD WINAPI follower(void *arg)
         }
         for (int i = 0; i < n; i++) {
             NovaPnpNode node;
-            if (!nova_pnp_node(r.e[i].id, &node)) continue;
-            GUID g[4];
-            int k = nova_pnp_interfaces(&node, g);
+            if (!nova_pnp_node(r.e[i].id, &node)) {
+                if (r.e[i].kind == NOVA_PNP_QUERY_REMOVE) nova_pnp_answer(r.e[i].seq, FALSE);
+                continue;
+            }
             WPARAM what;
             switch (r.e[i].kind) {
             case NOVA_PNP_ARRIVAL: what = DBT_DEVICEARRIVAL; changed = TRUE; break;
@@ -209,9 +218,13 @@ static DWORD WINAPI follower(void *arg)
             case NOVA_PNP_REMOVE_PENDING: what = DBT_DEVICEREMOVEPENDING; break;
             default: continue;
             }
-            if (r.e[i].kind == NOVA_PNP_ARRIVAL || r.e[i].kind == NOVA_PNP_REMOVAL)
+            if (r.e[i].kind == NOVA_PNP_ARRIVAL || r.e[i].kind == NOVA_PNP_REMOVAL) {
+                GUID g[4];                         /* (not for a query: the PnP manager waits on the answer) */
+                int k = nova_pnp_interfaces(&node, g);
                 for (int j = 0; j < k; j++) interface_event(&node, &g[j], what);
-            handle_event(node.id, what);
+            }
+            BOOL deny = handle_event(node.id, what);
+            if (r.e[i].kind == NOVA_PNP_QUERY_REMOVE) nova_pnp_answer(r.e[i].seq, deny);
         }
         g_after = r.e[n - 1].seq;
         if (n < 32 && changed) { broadcast(); changed = FALSE; }   /* (after the batch: one DBT_DEVNODES_CHANGED for it) */
@@ -280,6 +293,7 @@ static HANDLE reg(HANDLE target, LPVOID filter, DWORD flags, BOOL wide)
     memset(&q, 0, sizeof(q));
     nova_pnp_events(&q);                           /* (max 0: just the newest) */
     follow(q.newest);
+    if (r->node) nova_pnp_watch(r->node, TRUE);    /* (after: the follower then sees every query that waits for it) */
     return r;
 }
 
@@ -294,6 +308,7 @@ USERAPI BOOL UnregisterDeviceNotification(HANDLE h)
     for (int i = 0; i < MAX_REGS; i++) if (g_reg[i] && g_reg[i] == r) { g_reg[i] = NULL; found = TRUE; }
     unlock();
     if (!found) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
+    if (r->node) nova_pnp_watch(r->node, FALSE);
     r->magic = 0;
     HeapFree(GetProcessHeap(), 0, r);
     return TRUE;

@@ -65,6 +65,21 @@ static inline DWORD nova_pnp_handle_node(HANDLE handle)
     return (DWORD)NtNovaGuiCtl(0, NOVA_CTL_PNP, 9, (void *)(ULONG_PTR)handle);
 }
 
+/* This process holds one more (@on) or one fewer handle registration
+ * (DBT_DEVTYP_HANDLE) on node @id: a query-remove of it waits for this
+ * process's answer */
+static inline void nova_pnp_watch(DWORD id, BOOL on)
+{
+    NtNovaGuiCtl(0, NOVA_CTL_PNP, 10 | (ULONG_PTR)id << 8, (void *)(ULONG_PTR)(on ? 1 : 0));
+}
+
+/* This process's answer to query-remove event @seq (@deny: a window or
+ * service returned BROADCAST_QUERY_DENY) */
+static inline void nova_pnp_answer(DWORD seq, BOOL deny)
+{
+    NtNovaGuiCtl(0, NOVA_CTL_PNP, 11 | (ULONG_PTR)seq << 8, (void *)(ULONG_PTR)(deny ? 1 : 0));
+}
+
 /* The events after r->after (r->max of them at most), waiting up to
  * r->wait_ms (1 s at most) for one; returns how many, r->newest the
  * newest's seq */

@@ -592,10 +592,13 @@ item ends when a named program or test demonstrates it.
   and `DEVPKEY` properties (a device's bus type and container too), a
   device interface's properties (`CM_Get_Device_Interface_PropertyW`),
   device keys, and `pnputil /enum-devices`
-  matching the driver store.  Still to do: a synchronous query-remove
-  round-trip (`DBT_DEVICEQUERYREMOVE`, `DBT_DEVICEQUERYREMOVEFAILED`,
-  `DBT_DEVICEREMOVEPENDING`) so applications can close handles or veto before
-  `IRP_MN_QUERY_REMOVE_DEVICE`; current query notifications are asynchronous.
+  matching the driver store.  ~~A synchronous query-remove round-trip~~
+  Done: before `IRP_MN_QUERY_REMOVE_DEVICE` the PnP manager sends
+  `DBT_DEVICEQUERYREMOVE` to the programs holding a handle registration on
+  the device and waits (at most ten seconds) for their answers; a
+  `BROADCAST_QUERY_DENY` vetoes the removal (`DBT_DEVICEQUERYREMOVEFAILED`),
+  agreeing programs close their handles first (`DBT_DEVICEREMOVEPENDING`
+  after); a surprise removal asks nobody.
 - Windows drivers the Windows 11 way (Phase 30, complete: all eleven
   steps are in; design in [design/windows-drivers.md](design/windows-drivers.md),
   what ships in [drivers.md](drivers.md)): unchanged Windows driver

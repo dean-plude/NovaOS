@@ -4,7 +4,9 @@
 # digitizer collections on hiddigi, its mouse on mouhid
 # (kernel/nt/kbdhid.c).  hiddigi puts the touchpad in touchpad mode at
 # boot; the test touches the screen, uses the pen, moves a finger on the
-# touchpad, taps it, scrolls with two fingers and unplugs the device.
+# touchpad, taps it, scrolls with two fingers, taps and drags, flicks two
+# fingers so the scrolling coasts, stops a coast with a touch and unplugs
+# the device.
 import socket
 import time
 
@@ -42,6 +44,12 @@ def _unplug(nova):
 _RIGHT = tuple(f'pad=1:{200 + 40 * i}:500' for i in range(11)) + ('pad=0:600:500',)
 # Two fingers 40 mm down
 _DOWN = tuple(f'pad=1:400:{200 + 40 * i}/1:600:{200 + 40 * i}' for i in range(11)) + ('pad=0:400:600/0:600:600',)
+# A tap, then the finger down again at once and 40 mm right
+_TAP_DRAG = ('pad=1:200:500 pad=0:200:500',) + _RIGHT
+# Two fingers flicking 30 mm down (10 notches) and lifting while they move
+_FLICK = tuple(f'pad=1:400:{200 + 100 * i}/1:600:{200 + 100 * i}' for i in range(4)) + ('pad=0:400:500/0:600:500',)
+# ... then a finger touching 0.1 s later and moving 16 mm right
+_STOP = _FLICK + (0.1,) + tuple(f'pad=1:{500 + 40 * i}:500' for i in range(5)) + ('pad=0:660:500',)
 
 TESTS = [
     Test('usb digitizer class driver', 'digitest',
@@ -59,5 +67,8 @@ TESTS = [
                (r'digitest step 3:', _send(*_RIGHT)),
                (r'digitest step 4:', _send('pad=1:500:500 pad=0:500:500')),
                (r'digitest step 5:', _send(*_DOWN)),
-               (r'digitest step 6:', _unplug)]),
+               (r'digitest step 6:', _send(*_TAP_DRAG)),
+               (r'digitest step 7:', _send(*_FLICK)),
+               (r'digitest step 8:', _send(*_STOP)),
+               (r'digitest step 9:', _unplug)]),
 ]

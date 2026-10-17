@@ -5,16 +5,20 @@
 # click, a two-finger tap a right click, a touch held too long none, one
 # finger moves the pointer by the pad's physical size, two fingers moving
 # down or left turn the wheel and the horizontal wheel in whole notches (the
-# content follows the fingers), a palm moves nothing and pressing the pad
-# with two fingers on it is a right click.  QEMU has no touchpad to
-# do this with
+# content follows the fingers), a palm moves nothing, pressing the pad
+# with two fingers on it is a right click, and a tap followed at once by a
+# touch drags with the left button held until the finger lifts.  QEMU has
+# no touchpad to do this with
 DOC = ('`hwcheck` touchpad gestures on a modelled precision touchpad: tap to click, two-finger tap for the right '
-       'button, two-finger scrolling (vertical and horizontal) as wheel notches, palms ignored')
+       'button, two-finger scrolling (vertical and horizontal) as wheel notches, palms ignored, tap and drag')
 TESTS = [
     Test('touchpad gestures', 'hwcheck', [r'ok   touchpad: switched to touchpad mode \(Input Mode 3, switches 3\)',
                                           r'ok   touchpad: one-finger tap: left click: m1,0,0 m0,0,0',
                                           r'ok   touchpad: two-finger tap: right click: m2,0,0 m0,0,0',
                                           r'ok   touchpad: two fingers 6 mm down: the wheel 2 notches up',
                                           r'ok   touchpad: two fingers 7 mm left: the horizontal wheel 2 notches right',
+                                          r'ok   touchpad: tap, then touch and drag 10 mm right: the button held until the lift: '
+                                          r'm1,0,0 m0,0,0 m1,0,0 m1,62,0 m1,63,0 m0,0,0',
+                                          r'ok   touchpad: a touch 400 ms after a tap: no drag: m1,0,0 m0,0,0 m0,62,0',
                                           r'hwcheck: all passed, 0 failed'], builtin=True),
 ]

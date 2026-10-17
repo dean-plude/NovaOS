@@ -108,7 +108,7 @@ vendors.
 3. **32.3 The XAML core builds.** `dxaml`'s core, parser and metadata
    built as `Windows.UI.Xaml.dll` against 32.1 and 32.2;
    `Windows.UI.Xaml.Application.Start` runs and `XamlReader.Load` parses a
-   page into its object tree.  Two pull requests:
+   page into its object tree.  Several pull requests:
    - *Direct2D device contexts (done).*  XAML draws its text and shapes
      with Direct2D 1.1: it makes an `ID2D1Factory1` (and takes its
      `ID2D1Multithread`), an `ID2D1Device` on its Direct3D 11 device and
@@ -157,11 +157,50 @@ vendors.
      for any program or DLL whose manifest asks (`"winrt_abi": true`).
      Test: `winrtabitest` (published IIDs, and the Compositor driven
      through the generated interfaces).
-   - *The `dxaml` build.*  Next: the Windows SDK, WRL and WIL (MIT) pieces
-     its sources include beyond NovaOS's headers (MinGW-w64's headers, as
-     `msvcp140.dll`'s build uses, are the first candidate), then its core,
-     parser and metadata compiled as `Windows.UI.Xaml.dll`, until
-     `Application.Start` runs and `XamlReader.Load` parses a page.
+   - *The `dxaml` toolchain and the core's lowest layer (done).*
+     `userland/windows_ui_xaml/build.py` compiles Microsoft's sources as
+     Microsoft does: clang in MSVC mode, C++17 without C++ exceptions, over
+     Microsoft's STL and MinGW-w64's Windows headers (as `msvcp140.dll`'s
+     build), with each component's sources, include directories and
+     definitions read from its MSBuild project (`vcxproj.py`) and
+     `components/pch/precomp.h` forced in.  What the sources need beyond
+     that: WIL (MIT, vendored in `third_party/wil`); in
+     `userland/windows_ui_xaml/inc` NovaOS's own WRL (the Windows SDK's
+     Windows Runtime C++ template library: `ComPtr`, `WeakRef`,
+     `RuntimeClass` with `Implements`, `CloakedIid`, `ChainInterfaces`,
+     `MixIn`, `ComposableBase` and `FtmBase`, `Make`,
+     `MakeAndInitialize`, `Callback`, `EventSource`, `HString`,
+     `HStringReference`, `Module`, the handle wrappers), `weakreference.h`,
+     `xamlom.h` (XAML diagnostics, from its public documentation), the
+     SAL annotations, Windows Runtime `HRESULT`s and `MIDL_INTERFACE`
+     with its `uuid` that MinGW-w64 lacks, and TraceLogging compiled out;
+     ETW compiled out too, with the events header `mc.exe` would make from
+     XAML's manifest written by `etwgen.py`; `abigen.py` now also writes
+     MIDL's per-IDL-file headers (`Microsoft.UI.Xaml.controls.controls.h`,
+     `Microsoft.UI.Xaml.private.h`); and a directory of one-line headers
+     maps each include spelling the sources use to the file a
+     case-insensitive disk would find.  The components below
+     `CDependencyObject` build into `xaml_components.lib`: `base`,
+     `xstring`, `criticalsection`, `dependencyLocator`,
+     `runtimeEnabledFeatures`, `com`, `threading`, `staticpal` and
+     `qualifiers` (their sources joined `third_party/microsoft-ui-xaml`).
+     A program says `"xaml": true` to be built the same way and linked
+     with it.  Test: `xamlbasetest`.
+   - *What is closed.*  The open-source tree is not all of XAML: 75
+     headers it includes come from closed Windows App SDK pieces, chiefly
+     FrameworkUdk (`InputSiteHelpers.h`, which `CDependencyObject.h`
+     includes, so every component above the lowest layer stops there;
+     `CoreWindow.h`, `Theming.h`, `MUIUDK.h`), the lifted input and
+     composition interop headers (`microsoft.ui.composition.interop.h`,
+     `microsoft.ui.composition.experimental.h`) and the PTLS text engine
+     (`ptls-min.h`, `XamlTextHost.h`); plus SDK headers MinGW-w64 lacks
+     (`d2d1_3.h`, `async.h`, `atlbase.h`, `rometadataresolution.h`).
+     NovaOS writes these as its own, from how the open sources call them
+     and public documentation.
+   - *Next.*  Those headers, then `CDependencyObject` and the rest of the
+     core, the parser and `dxaml/lib` compiled as `Windows.UI.Xaml.dll`,
+     until `Application.Start` runs and `XamlReader.Load` parses a page,
+     one component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

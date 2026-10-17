@@ -109,6 +109,10 @@ def cflags():
 #   winrt_abi true: a C++ program built against the Windows Runtime ABI
 #             headers tools/winrt/abigen.py generates (windows.foundation.h,
 #             windows.ui.composition.h, microsoft.ui.xaml.h ...)
+#   xaml      true: a C++ program built against Microsoft's XAML sources
+#             as they are compiled (third_party/microsoft-ui-xaml, WIL,
+#             NovaOS's WRL) and linked with the XAML components built so
+#             far (userland/windows_ui_xaml/build.py); implies msstl
 #   sources   more files compiled into it with its own flags (paths or
 #             globs from the repository root, e.g. a vendored library's
 #             under third_party/); with "include" (directories searched),
@@ -193,6 +197,11 @@ def load_hook(name, path):
 DLLS = load_manifests()
 PROGRAMS = load_programs()
 HOOKS = {n: load_hook(n, m['hook']) for n, m in DLLS.items() if m['hook']}
+XAML = load_hook('windows_ui_xaml', os.path.join(HERE, 'windows_ui_xaml', 'build.py'))
+for _p in PROGRAMS.values():                  # a program on XAML's sources is on the STL
+    if _p.get('xaml'):
+        _p['msstl'] = True
+        _p['libs'] = _p.get('libs', []) + [l for l in XAML.LIBS if l not in _p.get('libs', [])]
 # the DLLs every program links against
 PROGRAM_LIBS = ['msvcrt', 'kernel32', 'ntdll', 'ws2_32', 'user32', 'gdi32', 'testdll', 'vcruntime140',
                 'advapi32', 'ole32', 'oleaut32', 'comctl32', 'shell32', 'msi', 'winmm']
@@ -505,15 +514,17 @@ def build_pass(arch, all_tasks):
             continue
         progs.append((src, name, prog))
     stl_libs = ('msvcp140', 'msvcp140_1', 'msvcp140_2', 'msvcp140_atomic_wait')
-    compiled, stlobjs = {}, []     # each program's object and resources; what msstl programs link
+    compiled, stlobjs, xamlobjs = {}, [], []  # each program's object and resources; what msstl and xaml programs link
     if any(src.endswith('.cpp') and prog.get('msstl') for src, name, prog in progs):
         task('stlprog', [], lambda: stlobjs.extend(HOOKS['msvcp140'].program_objs(me, odir)))
+    if any(src.endswith('.cpp') and prog.get('xaml') for src, name, prog in progs):
+        task('xamlprog', [], lambda: xamlobjs.extend(XAML.program_objs(me, odir)))
     def compile_prog(src, name, prog):
         obj = os.path.join(odir, f'prog_{name}.obj')
         objs = [obj]
         if src.endswith('.cpp') and prog.get('msstl'):  # C++ on the standard library (msvcp140)
             top = os.path.dirname(HERE)
-            flags = HOOKS['msvcp140'].program_flags(me) + \
+            flags = (XAML.program_flags(me) if prog.get('xaml') else HOOKS['msvcp140'].program_flags(me)) + \
                 [f for d in prog.get('include', []) for f in ('-I', os.path.join(top, d))] + \
                 [f for h in prog.get('force_include', []) for f in ('-include', os.path.join(top, h))]
             run(['clang++'] + flags + ['-c', os.path.join(progdir, src), '-o', obj])
@@ -541,7 +552,7 @@ def build_pass(arch, all_tasks):
     def link_prog(src, name, prog):
         exe = os.path.join(odir, f'{name}.exe')
         objs, res = compiled[name]
-        stl = (stlobjs + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
+        stl = ((xamlobjs if prog.get('xaml') else []) + stlobjs + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
             if src.endswith('.cpp') and prog.get('msstl') else []
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS]
         run(['lld-link', '/subsystem:' + ('windows' if prog.get('gui') else 'console'),
@@ -558,7 +569,7 @@ def build_pass(arch, all_tasks):
         msstl = src.endswith('.cpp') and prog.get('msstl')
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS] + (list(stl_libs) if msstl else [])
         deps = ['cc:' + name] + prelude + ['dll:' + l for l in libs if 'dll:' + l in tasks] + \
-               (['stlprog'] if msstl else [])
+               (['stlprog'] if msstl else []) + (['xamlprog'] if msstl and prog.get('xaml') else [])
         task('exe:' + name, deps, lambda a=(src, name, prog): link_prog(*a))
 
     for key, (deps, fn) in tasks.items():

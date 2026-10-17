@@ -58,6 +58,7 @@ class IdlReader:
         self.declared = []          # generic instances from declare blocks
         self.classic_out = {}       # file -> [('quote', text) | ('iface', name)]: global COM IDL
         self.imports = {}           # file -> [header names its imports give]
+        self.file_ns = {}           # file -> {namespaces whose Windows Runtime types it declares}
         self.disabled = set(disabled_features)
 
     # -- token stream ---------------------------------------------------------
@@ -245,6 +246,9 @@ class IdlReader:
             raise SyntaxError('%s: unknown declaration %r' % (self.file, kind))
         if ty is None or skip:
             return
+        for x in (ty if isinstance(ty, list) else [ty]):
+            if x.namespace and not getattr(x, 'classic', False):
+                self.file_ns.setdefault(self.file, set()).add(x.namespace)
         if isinstance(ty, list):
             for x in ty:
                 self.types[x.name] = x

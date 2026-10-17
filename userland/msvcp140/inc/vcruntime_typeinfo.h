@@ -41,6 +41,7 @@ private:
 namespace std {
 using ::type_info;
 
+#if _HAS_EXCEPTIONS        /* else <typeinfo> declares stdext::bad_cast, as MSVC's does */
 class bad_cast : public exception {
 public:
     bad_cast() noexcept : exception("bad cast", 1) {}
@@ -64,5 +65,6 @@ public:
 private:
     __non_rtti_object(const char *const _Message, int) noexcept : bad_typeid(_Message, 1) {}
 };
+#endif
 }
 #pragma pack(pop)

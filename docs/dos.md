@@ -85,7 +85,7 @@ three-operand `IMUL`, shifts by an immediate count, `ENTER`/`LEAVE`,
 at 1 MB, A20 off).  Its flags read as an 8086's, so programs that look for
 a 286 find an 8086 and do not try protected mode; there is no 8087 (ESC
 instructions do nothing, and the equipment word says so).  It is NovaOS's
-own code under the repository's MIT licence: the free interpreters are
+own code under the repository's Apache 2.0 licence: the free interpreters are
 GPL (DOSBox, 86Box, emu2), and Microsoft publishes no real-mode CPU under
 the MIT licence (OpenVMM's `x86emu`, in Rust, emulates single instructions
 for a hypervisor's exits rather than running a CPU).

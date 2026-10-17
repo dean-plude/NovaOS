@@ -973,10 +973,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `dxaml` toolchain (Microsoft's MSBuild projects read, WIL vendored,
   NovaOS's WRL, the Windows SDK pieces MinGW-w64 lacks, MIDL's per-IDL-file
   headers, ETW compiled out) and the XAML core's lowest layer built from its
-  sources (test `xamlbasetest`).  Next: stand-ins for the closed Windows App
-  SDK headers the core includes (`InputSiteHelpers.h` and the rest of
-  FrameworkUdk, lifted IXP, the PTLS text engine), then `CDependencyObject`
-  and up, the parser, and `dxaml/lib` as `Windows.UI.Xaml.dll`.
+  sources (test `xamlbasetest`).  Fourth part done: NovaOS stand-ins for
+  the closed Windows App SDK headers the core's lower layers include
+  (`InputSiteHelpers.h` and FrameworkUdk's other helpers, the lifted input
+  and composition interop headers, WRL's `async.h`), the type metadata
+  built and linked (every built-in type and dependency property, looked up
+  in `xamlbasetest`) and `CDependencyObject`'s property system compiled.
+  Next: the collections (`CompositionHelper.h` and the rest of the
+  composition tree's headers), then the rest of the core, the parser, and
+  `dxaml/lib` as `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

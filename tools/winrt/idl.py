@@ -53,8 +53,12 @@ def tokenize(text):
 
 
 class IdlReader:
-    def __init__(self, disabled_features=()):
+    def __init__(self, disabled_features=(), keep_disabled_types=False):
         self.types = {}
+        # a whole type of a disabled feature is kept when asked (headers
+        # for building XAML itself, which uses such types unconditionally);
+        # members of a disabled feature are always left out
+        self.keep_disabled_types = keep_disabled_types
         self.declared = []          # generic instances from declare blocks
         self.classic_out = {}       # file -> [('quote', text) | ('iface', name)]: global COM IDL
         self.imports = {}           # file -> [header names its imports give]
@@ -221,7 +225,7 @@ class IdlReader:
         while self.peek() in ('unsealed', 'sealed', 'static', 'partial'):
             mods.add(self.next())
         kind = self.next()
-        skip = self.disabled_by(attrs)
+        skip = self.disabled_by(attrs) and not self.keep_disabled_types
         if kind == 'apicontract':
             name = self.qualify(self.next())
             self.expect('{')

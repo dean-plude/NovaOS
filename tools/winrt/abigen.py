@@ -305,12 +305,14 @@ class Generator:
         tails = {}
         classic = {os.path.basename(p)[:-4].lower() + '.h' for p in getattr(self, 'classic', {})}
         file_ns, imports = getattr(self, 'file_ns', {}), getattr(self, 'imports', {})
-        names = {os.path.basename(p)[:-4].lower() + '.h' for p in set(file_ns) | set(imports)}
+        names = {os.path.basename(p)[:-4].lower() + '.h' for p in set(file_ns) | set(imports)} | \
+                {ns.lower() + '.h' for ns in byns}     # an imported SDK IDL file's header is its namespace's
         for path in sorted(set(file_ns) | set(imports)):
             name = os.path.basename(path)[:-4].lower() + '.h'
             incs = ['#include "%s"' % i for i in imports.get(path, []) if i in names and i != name]
             incs += ['#include "%s.h"' % ns.lower() for ns in sorted(file_ns.get(path, ()))
                      if ns in byns and ns.lower() + '.h' != name]
+            incs = list(dict.fromkeys(incs))
             if not incs:
                 continue
             if name in classic or any(ns.lower() + '.h' == name for ns in byns):
@@ -351,7 +353,8 @@ class Generator:
         elif isinstance(t, RuntimeClass):
             decl = 'class %s;' % t.short
         elif isinstance(t, Enum):
-            decl = 'enum %s : %s;' % (t.short, 'unsigned int' if t.underlying == 'UInt32' else 'int')
+            decl = 'enum %s%s : %s;' % ('class ' if t.name in SCOPED_ENUMS else '', t.short,
+                                        'unsigned int' if t.underlying == 'UInt32' else 'int')
         elif isinstance(t, Struct):
             decl = 'struct %s;' % t.short
         else:
@@ -510,9 +513,10 @@ class Generator:
 
     def enum_text(self, t):
         u = 'unsigned int' if t.underlying == 'UInt32' else 'int'
-        lines = ['enum %s : %s' % (t.short, u), '{']
+        scoped = t.name in SCOPED_ENUMS
+        lines = ['enum %s%s : %s' % ('class ' if scoped else '', t.short, u), '{']
         for n, val in t.values:
-            lines.append('    %s_%s = %s,' % (t.short, n, ('%#x' % val) if u != 'int' else val))
+            lines.append('    %s%s = %s,' % ('' if scoped else t.short + '_', n, ('%#x' % val) if u != 'int' else val))
         lines.append('};')
         return '\n'.join(lines)
 
@@ -615,6 +619,10 @@ def _open(ns):
     return ' '.join('namespace %s {' % p for p in ns.split('::'))
 
 
+# enums the Windows SDK declares in classic COM IDL (asyncinfo.idl) as a
+# scoped enum, AsyncStatus::Completed, not MIDL's AsyncStatus_Completed
+SCOPED_ENUMS = {'Windows.Foundation.AsyncStatus'}
+
 def _write(path, lines):
     text = '\n'.join(lines) + '\n'
     if os.path.exists(path) and open(path).read() == text:
@@ -679,12 +687,12 @@ def resolve_names(ir, types):
     ir.declared = kept
 
 
-def load(winmds, idls, iid_winmds, disabled):
+def load(winmds, idls, iid_winmds, disabled, keep_disabled_types=True):
     r = winmdmod.Reader()
     for w in winmds:
         r.load(w)
     types = dict(r.types)
-    ir = idlmod.IdlReader(disabled_features=disabled)
+    ir = idlmod.IdlReader(disabled_features=disabled, keep_disabled_types=keep_disabled_types)
     for f in idls:
         ir.load(f)
     for n, t in ir.types.items():
@@ -707,6 +715,11 @@ def load(winmds, idls, iid_winmds, disabled):
 TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WINMD = os.path.join(TOP, 'third_party', 'winmd')
 XAML_IDL = os.path.join(TOP, 'third_party', 'microsoft-ui-xaml', 'dxaml', 'xcp', 'dxaml', 'idl')
+# NovaOS's own IDL: the generic instances the Windows SDK's Foundation IDL
+# declares, and the Windows App SDK types the XAML sources use that the
+# published metadata predates
+NOVA_OWN_IDL = [os.path.join(TOP, 'userland', 'windows_ui_xaml', 'idl', f)
+                for f in ('windows.foundation.declares.idl', 'microsoft.ui.lifted.idl')]
 # NovaOS's inputs: Windows' metadata, the lifted Microsoft.UI types XAML
 # names, and the XAML framework's IDL (third_party/*/NOVA-VENDOR.txt)
 NOVA_WINMD = ['Windows', 'Microsoft.UI', 'Microsoft.UI.Text', 'Microsoft.Graphics',
@@ -738,7 +751,7 @@ def nova_disabled():
 
 def nova_inputs():
     return ([os.path.join(WINMD, n + '.winmd') for n in NOVA_WINMD],
-            [os.path.join(XAML_IDL, f) for f in NOVA_IDL],
+            [os.path.join(XAML_IDL, f) for f in NOVA_IDL] + NOVA_OWN_IDL,
             [os.path.join(WINMD, n + '.winmd') for n in NOVA_IIDS], nova_disabled())
 
 
@@ -749,7 +762,7 @@ def check():
     winmds, idls, iids, disabled = nova_inputs()
     ref = winmdmod.Reader()
     ref.load(iids[0])
-    types, _, _, _, _, _ = load(winmds, idls, [], disabled)
+    types, _, _, _, _, _ = load(winmds, idls, [], disabled, keep_disabled_types=False)
 
     def sig(t):
         if t is None:

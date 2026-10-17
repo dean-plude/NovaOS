@@ -1,0 +1,47 @@
+// NovaOS: Windows App SDK types (its "lifted" input, composition and
+// content, shipped closed) that Microsoft's XAML sources use and the
+// published metadata NovaOS reads (third_party/winmd, from windows-rs)
+// predates.  Declared from how the sources call them and Microsoft's
+// documentation of the Windows App SDK; tools/winrt/abigen.py adds them to
+// the namespaces' headers, with NovaOS's own IIDs (NovaOS's lifted DLLs are
+// the ones that answer to them).
+
+import "microsoft.ui.input.idl";
+import "microsoft.ui.content.idl";
+
+namespace Microsoft.UI.Input
+{
+    // whether a click on the source activates its window
+    enum InputPointerActivationBehavior
+    {
+        Default = 0,
+        Activate = 1,
+        NoActivate = 2,
+    };
+
+    // InputPointerSource's newer members (its TouchHitTesting event is left
+    // out: XAML's handler for it is disabled in its sources)
+    interface IInputPointerSource2
+    {
+        Microsoft.UI.Input.InputPointerActivationBehavior ActivationBehavior;
+        event Windows.Foundation.TypedEventHandler<Microsoft.UI.Input.InputPointerSource, Microsoft.UI.Input.PointerEventArgs> DirectManipulationHitTest;
+        Boolean TrySetDeviceKinds(Microsoft.UI.Input.InputPointerSourceDeviceKinds kinds);
+    };
+}
+
+namespace Microsoft.UI.Content
+{
+    // the site bridge of a popup window an island opens (a windowed
+    // popup); XAML shows and hides it through its IDesktopSiteBridge
+    runtimeclass PopupWindowSiteBridge
+    {
+        void Show();
+        void Hide();
+    }
+
+    // DesktopSiteBridge's newer members: a popup's own bridge
+    interface IDesktopSiteBridge2
+    {
+        Microsoft.UI.Content.PopupWindowSiteBridge TryCreatePopupSiteBridge();
+    };
+}

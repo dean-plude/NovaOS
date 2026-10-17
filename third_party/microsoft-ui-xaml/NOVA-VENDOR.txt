@@ -10,10 +10,14 @@ dxaml/xcp/components/xamlDiagnostics/idl (XAML diagnostics' IDL), and the
 sources roadmap step 32.3 builds so far with the headers they include: the
 XAML core's lowest component libraries (dxaml/xcp/components: base,
 xstring, criticalsection, dependencyLocator, runtimeEnabledFeatures, com,
-threading, staticpal, qualifiers, with their MSBuild projects), the
-components' precompiled header (components/pch), headers from
-dxaml/xcp/inc, core/inc, pal and components/metadata/inc, external/inc's
-gsl and ankerl, and XAML's ETW manifest
+threading, staticpal, qualifiers; the type metadata, metadata and
+metadata/DynamicMetadataStorage; CDependencyObject's property system,
+DependencyObject; with their MSBuild projects), two of the isolated unit
+tests' stubs (components/unittests/stubs ClassInfo_Stub.cpp and
+MetadataAPI_Stub.cpp, linked by xamlbasetest), the components'
+precompiled header (components/pch), headers from dxaml/xcp/inc, core/inc,
+pal and the components' inc directories those include, external/inc's gsl
+and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the core above CDependencyObject, the parser and controls) joins as
 the build takes it in (docs/design/windows-ui-xaml.md).

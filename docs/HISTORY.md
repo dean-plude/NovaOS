@@ -14019,6 +14019,90 @@ and drives the Compositor through the generated interfaces.  Next in
 32.3: the Windows SDK, WRL and WIL pieces the `dxaml` sources include, then
 their build as `Windows.UI.Xaml.dll`.
 
+## USB unplug in Windows order
+
+Unplugging a USB device took its PnP node away on the usb thread at once,
+while the Windows driver stacks on it (HidUsb, the HID collections and
+their kbdhid, mouhid and hiddigi class drivers) came down later on a work
+item.  For a moment the device's collections were gone but its pen,
+keys or buttons were still there: the touch boot's digitizer test had to
+wait for the pen to leave after its collections did.
+
+Now the usb thread waits for that work item (`NtPnpSurpriseRemoval` in
+`kernel/nt/pnp.c`, bounded at five seconds) before it removes the node,
+as Windows sends `IRP_MN_SURPRISE_REMOVAL` and `IRP_MN_REMOVE_DEVICE` up
+from the leaves before the hub's removal completes.  A device that comes
+straight back (a keyboard after sleep) is enumerated only after its old
+stacks are down, so the old removal can no longer land on the new node.
+`digitest` step 9 checks the pen once the collections are gone, without
+waiting for it.
+
+## The closed Windows App SDK headers, and XAML's type metadata
+
+Fourth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the headers the XAML core's lower
+layers include from closed Windows App SDK pieces now have NovaOS
+stand-ins, and the next layers of Microsoft's sources build.
+
+- **FrameworkUdk's helpers** (`userland/windows_ui_xaml/inc`):
+  `InputSiteHelpers.h` (an island's input site and its window, which
+  `CDependencyObject.h` includes), `InputHelpers.h`,
+  `ContentExternalLinkHelper.h`, `TextInputProducerHelper.h` and
+  `FrameworkUdk/FrameworkInputView.h`, written from how the open sources
+  call them.
+- **The lifted IXP's interop headers:** `microsoft.ui.composition.interop.h`,
+  `microsoft.ui.composition.experimental.h`,
+  `microsoft.ui.input.inputpretranslatesource.interop.h` and the Windows
+  App SDK's `Microsoft.DirectManipulation.h`; lifted types newer than
+  windows-rs's `Microsoft.UI.winmd` come from NovaOS's own IDL.
+- **Windows SDK pieces MinGW-w64 lacks:** WRL's `async.h` (`AsyncBase`),
+  `rometadataresolution.h`, `d2d1_3.h` (Direct2D 1.1 so far), the UI
+  Automation interfaces with their IIDs from Windows' Win32 metadata,
+  `GUID_NULL`, constexpr enum-flag operators; `AsyncStatus` became a
+  scoped enum, as in the SDK.
+- **Built:** the type metadata (`metadata`, `DynamicMetadataStorage`),
+  linked, and `CDependencyObject`'s property system (`DependencyObject`),
+  compiled, in `xaml_components.lib`.
+
+`xamlbasetest` now also looks up XAML's built-in types and dependency
+properties by index and by name.
+
+## The XAML core's toolchain, and its lowest layer built
+
+Third part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): Microsoft's XAML sources
+(`dxaml`, microsoft-ui-xaml, MIT) now compile for NovaOS as Microsoft
+compiles them, and the first of them are built and tested.
+
+- **The build** (`userland/windows_ui_xaml/build.py`): clang in MSVC mode,
+  C++17 without C++ exceptions, over Microsoft's STL and MinGW-w64's
+  Windows headers, each component's sources, include directories and
+  definitions read from its MSBuild project (`vcxproj.py`), its forced
+  precompiled header included.  A program whose manifest says
+  `"xaml": true` is built the same way and linked with the result.
+- **What the sources need beyond those headers:** WIL (MIT, vendored in
+  `third_party/wil`); NovaOS's own WRL (the Windows SDK's Windows Runtime
+  C++ template library: `ComPtr`, `WeakRef`, `RuntimeClass`, `Make`,
+  `Callback`, `EventSource`, `HString` and the rest); `weakreference.h`,
+  XAML diagnostics' `xamlom.h`, SAL annotations and Windows Runtime
+  `HRESULT`s MinGW-w64 lacks; TraceLogging and ETW compiled out (the events
+  header `mc.exe` would make, written by `etwgen.py`); MIDL's per-IDL-file
+  headers from `abigen.py`; and one-line headers mapping each include
+  spelling to the file a case-insensitive disk would find.
+- **Built:** the components below `CDependencyObject` (`base`, `xstring`,
+  `criticalsection`, `dependencyLocator`, `runtimeEnabledFeatures`, `com`,
+  `threading`, `staticpal`, `qualifiers`) as `xaml_components.lib`.
+- **`ole32.dll`** gained the string buffers XAML's string builder uses
+  (`WindowsPreallocateStringBuffer`, `WindowsPromoteStringBuffer`,
+  `WindowsDeleteStringBuffer`).
+- **Found:** 75 headers the open sources include come from closed Windows
+  App SDK pieces (FrameworkUdk's `InputSiteHelpers.h`, which
+  `CDependencyObject.h` includes, the lifted composition interop headers,
+  the PTLS text engine); NovaOS writes those next.
+
+New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
+weak references, delegates, events, strings) and the built components.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

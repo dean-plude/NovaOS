@@ -13776,6 +13776,43 @@ WIC), but its main window still does not appear: WPF creates only its
 hidden helper windows and then waits in its message loop.  That is the
 next step for HandBrake (roadmap 27.1); it stays Borked.
 
+## Windows.UI.Composition, and CoreWindow's pointer events
+
+Second step of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the compositor XAML draws with.
+
+- **`Windows.UI.Composition`** in `dcomp.dll`, as on Windows (the
+  registry's `ActivatableClassId` key for
+  `Windows.UI.Composition.Compositor` names it).  The `Compositor` makes
+  container and sprite visuals (offset, size, anchor and centre points,
+  scale, rotation, the transform matrix's 2-D part, opacity, visibility,
+  inset clips, and the children collection with `InsertAtTop`,
+  `InsertAtBottom`, `InsertAbove`, `InsertBelow`, `Remove` and
+  `RemoveAll`), colour brushes and surface brushes (stretch `None`,
+  `Fill`, `Uniform`, `UniformToFill`, alignment ratios), and targets on a
+  window (`ICompositorDesktopInterop::CreateDesktopWindowTarget`) or on
+  the thread's CoreWindow (`CreateTargetForCurrentView`).  Through
+  `ICompositorInterop` it makes graphics devices on a Direct3D 11 device,
+  whose drawing surfaces programs draw into with `BeginDraw`/`EndDraw`
+  (`ICompositionDrawingSurfaceInterop`, reading the pixels back as
+  DirectComposition's surfaces do), and surfaces showing a composition
+  swap chain.  Changes show without a commit: the compositor's thread
+  draws each target's tree in software and copies it into the window.
+- **CoreWindow's pointer events.**  `PointerEntered`, `PointerMoved`,
+  `PointerPressed`, `PointerReleased`, `PointerWheelChanged`,
+  `PointerExited` and `PointerCaptureLost` are raised from the mouse's
+  messages, with a `Windows.UI.Input.PointerPoint` (position in DIPs,
+  pointer 1, a mouse `PointerDevice`, timestamp, contact) and its
+  `PointerPointProperties` (the buttons held, the `PointerUpdateKind`, the
+  wheel's turn).
+
+New core self-test `comptest` (64- and 32-bit); `coreapptest` checks the
+pointer events and a composition target on its CoreWindow.  Not yet:
+animations (accepted, not run), expression animations, property sets,
+effects, batches, 3-D transforms, clips other than insets, bilinear
+sampling, drawing surfaces on a Direct2D device, and touch and pen
+pointers.
+
 ## The UWP app model's core: CoreApplication and CoreWindow
 
 First step of `Windows.UI.Xaml` on NovaOS (Phase 32,
@@ -13830,6 +13867,77 @@ formatting then needs a DirectWrite text analyzer
 (`IDWriteFactory::CreateTextAnalyzer`), which NovaOS's `dwrite.dll`
 does not have yet, so the window is never shown.  That is HandBrake's
 next step; it stays Borked.
+
+## Direct2D device contexts
+
+First part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the XAML framework draws its
+text and shapes with Direct2D 1.1's device contexts, into
+DirectComposition surfaces, so those come before its build.
+
+- **`ID2D1Factory1`** (with `ID2D1Multithread`), **`ID2D1Device`** on a
+  Direct3D 11 device (`ID2D1Factory1::CreateDevice`, `D2D1CreateDevice`)
+  and **`ID2D1DeviceContext`**: every render-target call, plus
+  `CreateBitmap` with `D2D1_BITMAP_PROPERTIES1`,
+  `CreateBitmapFromDxgiSurface`, `SetTarget`/`GetTarget`, unit modes,
+  `DrawImage` and `DrawBitmap` of bitmaps, 1.1's gradient stop
+  collections, bitmap brushes, stroke styles, path geometries and drawing
+  state blocks; `ID2D1Bitmap1` (`GetOptions`, `GetSurface`, `Map` for a
+  `CPU_READ` bitmap); `D2D1CreateDeviceContext`.  Drawing stays in
+  software: a bitmap on a DXGI surface keeps its pixels in memory, read
+  from the texture when a context starts drawing into it and written back
+  at `Flush` and `EndDraw`, so it works on the software Direct3D device
+  and on DXVK's.  Not yet: effects, command lists, image brushes, colour
+  contexts, `ID2D1DeviceContext1` and later, perspective in `DrawBitmap`,
+  primitive blends other than source-over.
+- **DirectComposition and Windows.UI.Composition on an `ID2D1Device`.**
+  Given one as the rendering device (`DCompositionCreateDevice2`, the new
+  `IDCompositionSurfaceFactory`, `ICompositorInterop::CreateGraphicsDevice`),
+  surfaces are made on its Direct3D device and `BeginDraw` asked for an
+  `ID2D1DeviceContext` hands out one drawing into the surface, as Windows
+  does.  The software Direct3D device's textures now answer
+  `IDXGISurface`.
+
+New core self-test `d2dctxtest` (64-bit); `comptest` draws a drawing
+surface of a graphics device made on an `ID2D1Device`.  Next in 32.3:
+building the `dxaml` core as `Windows.UI.Xaml.dll`.
+
+## Windows Runtime headers without MIDL
+
+Second part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)), and the first question the
+`dxaml` build has to answer: Microsoft's XAML sources are written against
+the C++ "ABI" headers MIDL makes from their IDL, and against the Windows
+SDK's, and MIDL is a closed tool.
+
+- **`tools/winrt/abigen.py`** writes those headers from Windows Runtime
+  metadata (`.winmd`, read by `tools/winrt/winmd.py`) and MIDL 3 IDL
+  (`tools/winrt/idl.py`, which synthesizes a runtime class's `IFoo`,
+  `IFooStatics`, `IFooFactory`, `IFooOverrides`, `IFooProtected` and its
+  versioned member blocks' interfaces as MIDL does): one header per
+  namespace with each interface in vtable order and its IID, delegates,
+  enums (`Visibility_Collapsed`), structs, generic interface templates and
+  the specializations of the instances each namespace uses, with the IIDs
+  Windows computes for them (`__FIVector_1_HSTRING` and the rest), and
+  `RuntimeClass_`/`InterfaceName_` strings.  For the 380 namespaces of
+  Windows' metadata, the Windows App SDK's lifted `Microsoft.UI.*` types and
+  the XAML framework's IDL, in about three seconds; every header compiles
+  in one translation unit, 64- and 32-bit.
+- **Inputs, vendored:** `Windows.winmd` and the `Microsoft.UI*` metadata from
+  windows-rs (MIT) in `third_party/winmd`, and the XAML framework's IDL from
+  microsoft-ui-xaml (MIT) in `third_party/microsoft-ui-xaml`, pinned.
+  The IIDs MIDL 3 would invent for synthesized interfaces come from the
+  published `Microsoft.UI.Xaml.winmd`; `abigen.py --check` (part of CI's
+  checks) confirms all 2136 XAML types the IDL gives match that metadata in
+  names, member order and signatures.
+- **The build** generates them for programs and DLLs whose manifest says
+  `"winrt_abi": true`, on the new `winrt_abi.h` (`IInspectable`,
+  `IActivationFactory`, `AggregateType`).
+
+New core self-test `winrtabitest` (64- and 32-bit) checks published IIDs
+and drives the Compositor through the generated interfaces.  Next in
+32.3: the Windows SDK, WRL and WIL pieces the `dxaml` sources include, then
+their build as `Windows.UI.Xaml.dll`.
 
 <!-- END generated:history -->
 

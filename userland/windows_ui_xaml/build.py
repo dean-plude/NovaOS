@@ -91,6 +91,7 @@ def _msvcp(b):
 def generated(b):
     """the directory of generated headers (ETW events, include spellings),
     made once per build"""
+    abi = [x for x in b.winrt_abi_flags({'winrt_abi': True}) if x != '-I']  # generated first: fold() maps to them
     with _SETUP:
         d = os.path.join(b.out, 'include', 'xaml')
         if 'gen' not in _done:
@@ -102,7 +103,7 @@ def generated(b):
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
             fold(os.path.join(d, 'fold'), [os.path.join(XCP, p) for p in COMPONENT_INCLUDES] +
-                 [INC, WIL, os.path.join(b.inc_gen, 'winrt-abi'), d, _msvcp(b).mingw_include(),
+                 [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
         return d

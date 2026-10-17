@@ -244,6 +244,7 @@ set(KERNEL_C_SOURCES
     nt/ldr.c
     nt/mm.c
     nt/ndis.c
+    nt/wdi.c
     nt/ntoskrnl.c
     nt/pnp.c
     nt/po.c

@@ -821,8 +821,13 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   firmware; join WPA2 and WPA3 networks and fetch HTTPS content. Intel's
   own Windows driver (`Netwtw14.sys`) already downloads by hardware ID,
   installs and registers with NovaOS's NDIS host on a stand-in device in
-  QEMU (step 30.9); scanning and joining a network on the real card is
-  this step.
+  QEMU (step 30.9). The first part of NovaOS's WDI command layer
+  (`kernel/nt/wdi.c`: adapter capabilities, the station port and scans,
+  with `netsh wlan show interfaces` and `netsh wlan show networks`) is
+  done, tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
+  devices suite's `wifi` boot). Still needed: the data path (TAL TX/RX),
+  connecting with WPA2 and WPA3, `wlanapi.dll` and Settings' Wi-Fi page,
+  then scanning and joining a network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
@@ -986,8 +991,12 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and composition interop headers, WRL's `async.h`), the type metadata
   built and linked (every built-in type and dependency property, looked up
   in `xamlbasetest`) and `CDependencyObject`'s property system compiled.
-  Next: the collections (`CompositionHelper.h` and the rest of the
-  composition tree's headers), then the rest of the core, the parser, and
+  Fifth part done: the collections and the value types under them
+  (`CValue`, flyweight, primitive dependency objects, math, theming)
+  built and linked with `CDependencyObject`, stand-ins for the composition
+  tree's `CompositionHelper.h`, and a `DependencyObjectCollection` filled,
+  searched and emptied in `xamlbasetest` on Microsoft's unit-test stubs.
+  Next: the resources and the parser, then the rest of the core and
   `dxaml/lib` as `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.

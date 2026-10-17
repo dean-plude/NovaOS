@@ -138,7 +138,9 @@ with `IRP_MN_QUERY_DEVICE_RELATIONS`) get device nodes from their
 `IRP_MN_QUERY_ID` answers and start with their own drivers, or raw when
 they allow it; a child no longer reported is removed. Unplugging a USB
 device sends `IRP_MN_SURPRISE_REMOVAL` and `IRP_MN_REMOVE_DEVICE`,
-children first. A driver that fails to load shows problem code 39, one
+children first, and the USB device's node leaves only once those stacks
+are down: a HID collection's keyboard, mouse or pen is gone before the
+unplug is. A driver that fails to load shows problem code 39, one
 whose signature fails problem code 52.
 
 A root-enumerated device, one with no hardware under it (a virtual

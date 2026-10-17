@@ -1174,7 +1174,14 @@ NT_API void nt_IoFreeWorkItem(NT_IO_WORKITEM *w);
 NT_API void nt_IoQueueWorkItem(NT_IO_WORKITEM *w, NT_IO_WORKITEM_ROUTINE routine, int queue_type, void *ctx);
 
 enum { WORK_USB_ARRIVED, WORK_SURPRISE };
-typedef struct { NT_IO_WORKITEM *w; int what; UINT32 node; } PnpWork;
+/* (refs: the work item's, and the usb thread's while it waits for a
+ * removal; the last one frees it) */
+typedef struct { NT_IO_WORKITEM *w; int what; UINT32 node; volatile int refs; volatile bool done; } PnpWork;
+
+static void work_put(PnpWork *k)
+{
+    if (!__atomic_sub_fetch(&k->refs, 1, __ATOMIC_ACQ_REL)) kfree(k);
+}
 
 /* USB device @p is gone: its children, then its own stack get
  * IRP_MN_SURPRISE_REMOVAL and IRP_MN_REMOVE_DEVICE; its record goes (it
@@ -1310,10 +1317,13 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
         pnp_unlock();
     }
     nt_IoFreeWorkItem(k->w);
-    kfree(k);
+    __atomic_store_n(&k->done, true, __ATOMIC_RELEASE);
+    work_put(k);
 }
 
-static void defer(int what, UINT32 node)
+/* Queue @what for @node on the work-item thread; @wait: and wait until it
+ * ran (bounded, so a driver stuck in its remove cannot hang the caller) */
+static void defer(int what, UINT32 node, bool wait)
 {
     PnpWork *k = kzalloc(sizeof(*k));
     if (!k) return;
@@ -1321,15 +1331,22 @@ static void defer(int what, UINT32 node)
     if (!k->w) { kfree(k); return; }
     k->what = what;
     k->node = node;
+    k->refs = wait ? 2 : 1;
     nt_IoQueueWorkItem(k->w, work_routine, 1 /* DelayedWorkQueue */, k);
+    if (!wait) return;
+    UINT64 end = sched_ticks() + 500;                       /* (5 s) */
+    while (!__atomic_load_n(&k->done, __ATOMIC_ACQUIRE) && sched_ticks() < end)
+        sched_sleep_until(NULL, sched_ticks() + 1);
+    if (!k->done) kprintf("[PNP] node %u: its drivers are still coming down after 5 s\n", node);
+    work_put(k);
 }
 
 /* Set once NtPnpBoot ran: the registry is loaded and the work-item thread
  * is up.  A USB device enumerated before that is started by NtPnpBoot. */
 static volatile bool g_booted;
 
-void NtPnpUsbArrived(UINT32 node) { if (g_booted) defer(WORK_USB_ARRIVED, node); }
-void NtPnpSurpriseRemoval(UINT32 node) { if (g_booted) defer(WORK_SURPRISE, node); }
+void NtPnpUsbArrived(UINT32 node) { if (g_booted) defer(WORK_USB_ARRIVED, node, false); }
+void NtPnpSurpriseRemoval(UINT32 node) { if (g_booted) defer(WORK_SURPRISE, node, true); }
 
 /* ---- root-enumerated devices ---- */
 
@@ -1428,7 +1445,7 @@ void NtPnpBoot(void)
     for (UINT32 id = 1; id <= count; id++) {
         if (!PnpGet(id, n) || !(n->flags & PNP_PRESENT) || ((n->flags & PNP_STARTED) && !(n->flags & PNP_INBOX))) continue;
         if (!strncmp(n->instance, "USB\\", 4)) {             /* (on the work-item thread, with later arrivals) */
-            if (UsbFnByPnp(id, NULL)) defer(WORK_USB_ARRIVED, id);
+            if (UsbFnByPnp(id, NULL)) defer(WORK_USB_ARRIVED, id, false);
             continue;
         }
         if (strncmp(n->instance, "PCI\\", 4) && (strncmp(n->instance, "ROOT\\", 5) || n->parent != PNP_ROOT)) continue;

@@ -187,8 +187,9 @@ bool      NtPnpInterruptOf(NT_DEVICE_OBJECT *pdo, UINT32 *vector, UINT8 *irql);
  * on a worker thread; any thread may call this) */
 void      NtPnpUsbArrived(UINT32 node);
 /* Device node @node's hardware left (unplugged): IRP_MN_SURPRISE_REMOVAL
- * and IRP_MN_REMOVE_DEVICE to its stack and its children's, later, on a
- * worker thread */
+ * and IRP_MN_REMOVE_DEVICE to its children's stacks, then its own, on a
+ * worker thread; returns once they are down (the usb thread removes the
+ * node after that, so no child outlives it) */
 void      NtPnpSurpriseRemoval(UINT32 node);
 
 /* usbd.c: the USB bus interface for Windows USB client drivers.  The PDO

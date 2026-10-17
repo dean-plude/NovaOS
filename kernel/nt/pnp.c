@@ -1519,7 +1519,8 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
         char key[200], service[64] = "";
         strcpy(n->cls, "HIDClass");
         ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", c->instance);
-        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service))
+        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0] || stale_service(service) ||
+            inbox_class_driver(service))                     /* (a collection plugged in before: its key names our own driver) */
             inbox_input(n, key);                             /* (a keyboard, a mouse, a digitizer, a game pad) */
     }
     n->flags = PNP_PRESENT;

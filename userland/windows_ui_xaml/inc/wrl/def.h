@@ -9,6 +9,11 @@
 #define __WRL_IMPLEMENTS_FTM_BASE__(flags) (((flags) & ::Microsoft::WRL::InhibitFtmBase) == 0)
 #endif
 
+/* a class nothing derives from (WIL's async helpers) */
+#ifndef WrlFinal
+#define WrlFinal final
+#endif
+
 namespace Microsoft { namespace WRL {
 enum RuntimeClassType
 {

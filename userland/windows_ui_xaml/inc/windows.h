@@ -66,6 +66,40 @@
 #define E_NOT_VALID_STATE HRESULT_FROM_WIN32(ERROR_INVALID_STATE)
 #endif
 
+/* the Windows SDK's flag operators are constexpr (XAML's metadata
+ * initializes constexpr defaults with them); MinGW-w64's are not */
+#ifdef __cplusplus
+#undef DEFINE_ENUM_FLAG_OPERATORS
+#define DEFINE_ENUM_FLAG_OPERATORS(E) \
+extern "C++" { \
+inline constexpr E operator|(E a, E b) throw() { return E((__underlying_type(E))a | (__underlying_type(E))b); } \
+inline E &operator|=(E &a, E b) throw() { return a = a | b; } \
+inline constexpr E operator&(E a, E b) throw() { return E((__underlying_type(E))a & (__underlying_type(E))b); } \
+inline E &operator&=(E &a, E b) throw() { return a = a & b; } \
+inline constexpr E operator~(E a) throw() { return E(~(__underlying_type(E))a); } \
+inline constexpr E operator^(E a, E b) throw() { return E((__underlying_type(E))a ^ (__underlying_type(E))b); } \
+inline E &operator^=(E &a, E b) throw() { return a = a ^ b; } \
+}
+#endif
+
+/* agile references (the Windows SDK's objidl.h and combaseapi.h;
+ * ole32 has RoGetAgileReference) */
+#ifdef __cplusplus
+#ifndef NOVA_AGILEREFERENCE_DEFINED
+#define NOVA_AGILEREFERENCE_DEFINED
+enum AgileReferenceOptions { AGILEREFERENCE_DEFAULT = 0, AGILEREFERENCE_DELAYEDMARSHAL = 1 };
+extern "C" HRESULT WINAPI RoGetAgileReference(AgileReferenceOptions options, REFIID riid, IUnknown *pUnk,
+                                              struct IAgileReference **ppAgileReference);
+#endif
+#endif
+
 /* the Windows SDK's spelling: works on any expression, const or not */
 #undef UNREFERENCED_PARAMETER
 #define UNREFERENCED_PARAMETER(P) (P)
+
+/* GUID_NULL (cguid.h): the Windows SDK's uuid.lib defines it; here every
+ * object that uses it carries one copy, folded at link time */
+#ifdef __cplusplus
+#include <cguid.h>
+extern "C" __declspec(selectany) const GUID GUID_NULL = {};
+#endif

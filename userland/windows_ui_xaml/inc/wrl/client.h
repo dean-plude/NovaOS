@@ -232,3 +232,9 @@ template <class T> inline HRESULT ActivateInstance(HSTRING activatableClassId, :
     return ActivateInstance(activatableClassId, instance.ReleaseAndGetAddressOf());
 }
 }}}
+
+/* IID_PPV_ARGS(&comPtr): the ComPtr's address, emptied, as the void ** */
+template <class T> inline void **IID_PPV_ARGS_Helper(::Microsoft::WRL::Details::ComPtrRef<T> pp) throw()
+{
+    return pp;
+}

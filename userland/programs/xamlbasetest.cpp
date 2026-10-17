@@ -1,11 +1,16 @@
 /* xamlbasetest.exe — the first of Microsoft's XAML framework built for
  * NovaOS (roadmap step 32.3, docs/design/windows-ui-xaml.md): the XAML
  * core's lowest layer (dxaml/xcp/components: strings, numbers, containers,
- * resource qualifiers, runtime-enabled features, the dependency locator),
- * compiled from Microsoft's sources as XAML is compiled and linked from
- * xaml_components.lib, plus NovaOS's WRL (the Windows SDK's Windows Runtime
- * C++ template library the sources are written on): ComPtr, RuntimeClass,
- * weak references, Callback, EventSource, HString.
+ * resource qualifiers, runtime-enabled features, the dependency locator)
+ * and its type metadata (every built-in type and dependency property, by
+ * index and by name), compiled from Microsoft's sources as XAML is
+ * compiled and linked from xaml_components.lib, plus NovaOS's WRL (the
+ * Windows SDK's Windows Runtime C++ template library the sources are
+ * written on): ComPtr, RuntimeClass, weak references, Callback,
+ * EventSource, HString.  The metadata's two calls into the layers above
+ * (custom types' providers and class constructors) are Microsoft's own
+ * stubs from its isolated unit tests (components/unittests/stubs), linked
+ * here until those layers build.
  *
  *   xamlbasetest        the self-test runs it with no arguments
  */
@@ -21,6 +26,10 @@
 #include <QualifierFactory.h>
 #include <RuntimeEnabledFeatures.h>
 #include <DependencyLocator.h>
+#include <Indexes.g.h>
+#include <TypeTableStructs.h>
+#include <MetadataAPI.h>
+#include <CStaticLock.h>
 
 using namespace Microsoft::WRL;
 using namespace Microsoft::WRL::Wrappers;
@@ -98,20 +107,20 @@ static void test_wrl()
     }
     {
         int calls = 0;
-        wf::AsyncStatus seen = wf::AsyncStatus_Started;
+        wf::AsyncStatus seen = wf::AsyncStatus::Started;
         auto cb = Callback<wf::IAsyncActionCompletedHandler>([&](wf::IAsyncAction *, wf::AsyncStatus s) -> HRESULT {
             calls++;
             seen = s;
             return S_OK;
         });
-        CHECK("Callback", cb && SUCCEEDED(cb->Invoke(nullptr, wf::AsyncStatus_Completed)) && calls == 1 && seen == wf::AsyncStatus_Completed);
+        CHECK("Callback", cb && SUCCEEDED(cb->Invoke(nullptr, wf::AsyncStatus::Completed)) && calls == 1 && seen == wf::AsyncStatus::Completed);
 
         EventSource<wf::IAsyncActionCompletedHandler> ev;
         EventRegistrationToken t1, t2;
         CHECK("EventSource Add", SUCCEEDED(ev.Add(cb.Get(), &t1)) && SUCCEEDED(ev.Add(cb.Get(), &t2)) && ev.GetSize() == 2);
-        CHECK("InvokeAll", SUCCEEDED(ev.InvokeAll(nullptr, wf::AsyncStatus_Error)) && calls == 3 && seen == wf::AsyncStatus_Error);
+        CHECK("InvokeAll", SUCCEEDED(ev.InvokeAll(nullptr, wf::AsyncStatus::Error)) && calls == 3 && seen == wf::AsyncStatus::Error);
         ev.Remove(t1);
-        CHECK("Remove", ev.GetSize() == 1 && SUCCEEDED(ev.InvokeAll(nullptr, wf::AsyncStatus_Canceled)) && calls == 4);
+        CHECK("Remove", ev.GetSize() == 1 && SUCCEEDED(ev.InvokeAll(nullptr, wf::AsyncStatus::Canceled)) && calls == 4);
     }
     {
         HString s;
@@ -190,11 +199,61 @@ static void test_components()
     }
 }
 
+/* the type metadata: XAML's built-in types and properties (StaticMetadata.g.cpp) */
+static void test_metadata()
+{
+    using DirectUI::MetadataAPI;
+    const CClassInfo *button = MetadataAPI::GetClassInfoByIndex(KnownTypeIndex::Button);
+    CHECK("Button class info", button && button->GetIndex() == KnownTypeIndex::Button &&
+          button->GetName().Equals(XSTRING_PTR_EPHEMERAL(L"Button")));
+    CHECK("Button full name", button && button->GetFullName().Equals(XSTRING_PTR_EPHEMERAL(L"Microsoft.UI.Xaml.Controls.Button")));
+    int depth = 0;
+    const CClassInfo *t = button;
+    while (t && t->GetIndex() != KnownTypeIndex::DependencyObject && depth < 32) { t = t->GetBaseType(); depth++; }
+    CHECK("Button derives from DependencyObject", t && t->GetIndex() == KnownTypeIndex::DependencyObject && depth >= 4);
+
+    CHECK("IsAssignableFrom", MetadataAPI::IsAssignableFrom(KnownTypeIndex::DependencyObject, KnownTypeIndex::FrameworkElement) &&
+          MetadataAPI::IsAssignableFrom(KnownTypeIndex::ListViewBase, KnownTypeIndex::ListView) &&
+          !MetadataAPI::IsAssignableFrom(KnownTypeIndex::Control, KnownTypeIndex::DependencyObject) &&
+          !MetadataAPI::IsAssignableFrom(KnownTypeIndex::FrameworkElement, KnownTypeIndex::Application));
+
+    const CClassInfo *byName = nullptr;
+    CHECK("GetClassInfoByFullName", SUCCEEDED(MetadataAPI::GetClassInfoByFullName(
+              XSTRING_PTR_EPHEMERAL(L"Microsoft.UI.Xaml.Controls.Grid"), &byName)) && byName &&
+          byName->GetIndex() == KnownTypeIndex::Grid);
+
+    const CDependencyProperty *width = MetadataAPI::GetDependencyPropertyByIndex(KnownPropertyIndex::FrameworkElement_Width);
+    CHECK("FrameworkElement.Width", width && width->GetName().Equals(XSTRING_PTR_EPHEMERAL(L"Width")) &&
+          width->GetDeclaringTypeIndex() == KnownTypeIndex::FrameworkElement &&
+          width->GetPropertyTypeIndex() == KnownTypeIndex::Double);
+    const CDependencyProperty *row = MetadataAPI::GetDependencyPropertyByIndex(KnownPropertyIndex::Grid_Row);
+    CHECK("Grid.Row is attached", row && row->IsAttached() && row->GetName().Equals(XSTRING_PTR_EPHEMERAL(L"Row")));
+
+    const CDependencyProperty *found = nullptr;
+    CHECK("TryGetDependencyPropertyByName", SUCCEEDED(MetadataAPI::TryGetDependencyPropertyByName(
+              button, XSTRING_PTR_EPHEMERAL(L"Content"), &found)) && found &&
+          found->GetIndex() == KnownPropertyIndex::ContentControl_Content);
+    found = nullptr;
+    CHECK("inherited property by name (Width on Button)", SUCCEEDED(MetadataAPI::TryGetDependencyPropertyByName(
+              button, XSTRING_PTR_EPHEMERAL(L"Width"), &found)) && found == width);
+    found = nullptr;
+    CHECK("Name directive", SUCCEEDED(MetadataAPI::TryGetDependencyPropertyByName(
+              button, XSTRING_PTR_EPHEMERAL(L"Name"), &found, true)) && found &&
+          found->GetIndex() == KnownPropertyIndex::DependencyObject_Name);
+    found = nullptr;
+    CHECK("unknown property", SUCCEEDED(MetadataAPI::TryGetDependencyPropertyByName(
+              button, XSTRING_PTR_EPHEMERAL(L"NoSuchProperty"), &found)) && !found);
+}
+
 int main(void)
 {
     if (FAILED(RoInitialize(RO_INIT_MULTITHREADED))) printf("RoInitialize failed\n");
     test_wrl();
     test_components();
+    /* the lock over XAML's process-wide state (the metadata's custom types),
+     * which Microsoft.UI.Xaml.dll's DllMain sets up */
+    CHECK("StaticLockGlobalInit", SUCCEEDED(DirectUI::StaticLockGlobalInit()));
+    test_metadata();
     printf("xamlbasetest: %d passed, %d failed (%d-bit)\n", pass, fail, (int)sizeof(void *) * 8);
     return fail != 0;
 }

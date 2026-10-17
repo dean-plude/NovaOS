@@ -450,6 +450,26 @@ template <class T, class... Args> ComPtr<T> Make(Args &&...args) throw()
     return o;
 }
 
+namespace Details {
+template <class T, class = void> struct HasInitialize { static const bool value = false; };
+template <class T> struct HasInitialize<T, decltype((void)static_cast<T *>(nullptr)->RuntimeClassInitialize())>
+{
+    static const bool value = true;
+};
+template <class T, class... Args> inline HRESULT Initialize(T *p, Args &&...args) throw()
+{
+    return p->RuntimeClassInitialize(Forward<Args>(args)...);
+}
+/* a class without a RuntimeClassInitialize() needs none to be made */
+template <class T> inline HRESULT Initialize(T *p) throw()
+{
+    if constexpr (HasInitialize<T>::value)
+        return p->RuntimeClassInitialize();
+    else
+        return S_OK;
+}
+} // namespace Details
+
 /* a new T, made ready by its RuntimeClassInitialize(args...) */
 template <class T, class I, class... Args> HRESULT MakeAndInitialize(I **result, Args &&...args) throw()
 {
@@ -459,7 +479,7 @@ template <class T, class I, class... Args> HRESULT MakeAndInitialize(I **result,
     if (!buf) return E_OUTOFMEMORY;
     T *p = new (buf) T();
     a.Detach();
-    HRESULT hr = p->RuntimeClassInitialize(Details::Forward<Args>(args)...);
+    HRESULT hr = Details::Initialize(p, Details::Forward<Args>(args)...);
     if (FAILED(hr)) {
         p->Release();
         return hr;

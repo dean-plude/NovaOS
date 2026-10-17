@@ -182,6 +182,20 @@ inline bool operator==(const HSTRING &l, const HString &r) throw()
     return SUCCEEDED(::WindowsCompareStringOrdinal(l, r.Get(), &res)) && res == 0;
 }
 inline bool operator==(const HString &l, const HSTRING &r) throw() { return r == l; }
+inline bool operator==(const HStringReference &l, const HStringReference &r) throw()
+{
+    INT32 res = 0;
+    return SUCCEEDED(::WindowsCompareStringOrdinal(l.Get(), r.Get(), &res)) && res == 0;
+}
+inline bool operator==(const HSTRING &l, const HStringReference &r) throw()
+{
+    INT32 res = 0;
+    return SUCCEEDED(::WindowsCompareStringOrdinal(l, r.Get(), &res)) && res == 0;
+}
+inline bool operator==(const HStringReference &l, const HSTRING &r) throw() { return r == l; }
+inline bool operator!=(const HStringReference &l, const HStringReference &r) throw() { return !(l == r); }
+inline bool operator!=(const HSTRING &l, const HStringReference &r) throw() { return !(l == r); }
+inline bool operator!=(const HStringReference &l, const HSTRING &r) throw() { return !(l == r); }
 inline bool operator!=(const HString &l, const HString &r) throw() { return !(l == r); }
 inline bool operator!=(const HStringReference &l, const HString &r) throw() { return !(l == r); }
 inline bool operator!=(const HString &l, const HStringReference &r) throw() { return !(l == r); }

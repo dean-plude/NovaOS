@@ -20,11 +20,12 @@
 #   sources the file it names on a case-insensitive disk (Windows.h for
 #   windows.h, wil\Result.h for wil/result.h)
 #
-# So far the XAML core's lowest layer builds: the component libraries in
+# So far the XAML core's lowest layers build: the component libraries in
 # LIBRARIES, as one static library (xaml_components.lib) that the
-# self-test xamlbasetest links.  The rest of the core (CDependencyObject
-# and up) needs the closed Windows App SDK pieces (FrameworkUdk, lifted
-# IXP) NovaOS has to write.
+# self-test xamlbasetest links, up to the type metadata and
+# CDependencyObject's property system.  inc/ also stands in for the closed
+# Windows App SDK headers those include (FrameworkUdk's helpers, the lifted
+# IXP interop headers); the rest of the core links as it builds.
 import os, re, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +48,7 @@ etwgen = _load('etwgen')
 PROPS = {'XcpPath': XCP, 'XamlSourcePath': os.path.join(MUX, 'dxaml'), 'RepoRoot': MUX}
 
 # The component libraries built so far (dxaml/xcp/components/...: the
-# lowest layer, below CDependencyObject)
+# lowest layer, the type metadata and CDependencyObject)
 LIBRARIES = '''base/lib/Microsoft.UI.Xaml.Base.vcxproj
 xstring/lib/Microsoft.UI.Xaml.XString.vcxproj
 criticalsection/lib/Microsoft.UI.Xaml.CriticalSection.vcxproj
@@ -56,7 +57,10 @@ runtimeEnabledFeatures/lib/Microsoft.UI.Xaml.RuntimeEnabledFeatures.vcxproj
 com/lib/Microsoft.UI.Xaml.Com.vcxproj
 threading/lib/Microsoft.UI.Xaml.Threading.vcxproj
 staticpal/lib/Microsoft.UI.Xaml.StaticPal.vcxproj
-qualifiers/lib/Microsoft.UI.Xaml.Qualifiers.vcxproj'''.split()
+qualifiers/lib/Microsoft.UI.Xaml.Qualifiers.vcxproj
+metadata/lib/Microsoft.UI.Xaml.Metadata.vcxproj
+metadata/DynamicMetadataStorage/Microsoft.UI.Xaml.DynamicMetadataStorage.vcxproj
+DependencyObject/lib/Microsoft.UI.Xaml.DependencyObject.vcxproj'''.split()
 
 # The include directories every component sees (components/base.props,
 # in its order) and the definitions components/common.props and
@@ -102,11 +106,22 @@ def generated(b):
             p = os.path.join(d, 'winrt_abi.h')
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
-            fold(os.path.join(d, 'fold'), [os.path.join(XCP, p) for p in COMPONENT_INCLUDES] +
+            fold(os.path.join(d, 'fold'), component_includes() + project_includes() +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
         return d
+
+
+def component_includes():
+    """COMPONENT_INCLUDES as spelled on disk (the projects name
+    collection\\inc for Collection/Inc)"""
+    return [p for p in (vcxproj.find_case(os.path.join(XCP, d)) for d in COMPONENT_INCLUDES) if p]
+
+
+def project_includes():
+    """the include directories LIBRARIES' projects add"""
+    return [i for proj in LIBRARIES for i in vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)['includes']]
 
 
 def fold(out, dirs):
@@ -120,7 +135,7 @@ def fold(out, dirs):
             for f in files:
                 rel = os.path.relpath(os.path.join(root, f), d).replace(os.sep, '/')
                 real.add(rel)
-                lower.setdefault(rel.lower(), os.path.join(root, f))
+                lower.setdefault(rel.lower(), (d, rel))
     pat = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.M)
     want = set()
     for top in (XCP, WIL):
@@ -137,7 +152,10 @@ def fold(out, dirs):
         if target:
             p = os.path.join(out, s)
             os.makedirs(os.path.dirname(p), exist_ok=True)
-            text = '#include "%s"\n' % os.path.abspath(target)
+            # NovaOS's own headers by name, so their #include_next goes on
+            # to the header they extend
+            text = ('#include <%s>\n' % target[1]) if target[0] == INC else \
+                '#include "%s"\n' % os.path.abspath(os.path.join(*target))
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
 
@@ -150,7 +168,7 @@ def flags(b):
                                                           '-D_HAS_OLD_IOSTREAMS_MEMBERS=1', '-fcxx-exceptions', '-fexceptions')]
     base = ['-std=c++17' if f.startswith('-std=') else f for f in base] + ['-fno-exceptions']
     inc = [os.path.join(gen, 'fold'), INC] + [x for x in b.winrt_abi_flags({'winrt_abi': True}) if x != '-I'] + \
-          [gen, WIL] + [os.path.join(XCP, p) for p in COMPONENT_INCLUDES] + [os.path.join(MUX, 'external', 'inc')]
+          [gen, WIL] + component_includes() + [os.path.join(MUX, 'external', 'inc')]
     # MSVC accepts, with a warning, what clang makes errors by default
     # (narrowing an HRESULT case label or an enumerator)
     return [f for d in inc for f in ('-I', d)] + base + ['-D' + d for d in DEFINES] + \
@@ -165,8 +183,7 @@ def library(b, odir):
     lib = os.path.join(odir, 'xaml_components.lib')
     with _LIB:
         f = flags(b)
-        headers = [os.path.join(INC, h) for h in os.listdir(INC) if h.endswith('.h')] + \
-                  [os.path.join(INC, 'wrl', h) for h in os.listdir(os.path.join(INC, 'wrl')) if h.endswith('.h')] + \
+        headers = [os.path.join(r, h) for r, _, fs in os.walk(INC) for h in fs if h.endswith('.h')] + \
                   [os.path.abspath(__file__)]
         objs = []
         for proj in LIBRARIES:

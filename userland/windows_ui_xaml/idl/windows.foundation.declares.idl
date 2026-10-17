@@ -1,0 +1,56 @@
+// NovaOS: the generic instances the Windows SDK's windows.foundation.idl
+// (and windows.foundation.numerics.idl) declare, so windows.foundation.h
+// has them whether or not a type in the metadata uses them: a boxed value
+// of each primitive and basic struct (IReference<T>) and of their arrays
+// (IReferenceArray<T>).  XAML's metadata tables take their IIDs.
+
+namespace Windows.Foundation
+{
+    declare
+    {
+        interface Windows.Foundation.IReference<UInt8>;
+        interface Windows.Foundation.IReference<Int16>;
+        interface Windows.Foundation.IReference<UInt16>;
+        interface Windows.Foundation.IReference<Int32>;
+        interface Windows.Foundation.IReference<UInt32>;
+        interface Windows.Foundation.IReference<Int64>;
+        interface Windows.Foundation.IReference<UInt64>;
+        interface Windows.Foundation.IReference<Single>;
+        interface Windows.Foundation.IReference<Double>;
+        interface Windows.Foundation.IReference<Char16>;
+        interface Windows.Foundation.IReference<Boolean>;
+        interface Windows.Foundation.IReference<String>;
+        interface Windows.Foundation.IReference<Guid>;
+        interface Windows.Foundation.IReference<Windows.Foundation.DateTime>;
+        interface Windows.Foundation.IReference<Windows.Foundation.TimeSpan>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Point>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Size>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Rect>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Matrix3x2>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Matrix4x4>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Plane>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Quaternion>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Vector2>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Vector3>;
+        interface Windows.Foundation.IReference<Windows.Foundation.Numerics.Vector4>;
+        interface Windows.Foundation.IReferenceArray<UInt8>;
+        interface Windows.Foundation.IReferenceArray<Int16>;
+        interface Windows.Foundation.IReferenceArray<UInt16>;
+        interface Windows.Foundation.IReferenceArray<Int32>;
+        interface Windows.Foundation.IReferenceArray<UInt32>;
+        interface Windows.Foundation.IReferenceArray<Int64>;
+        interface Windows.Foundation.IReferenceArray<UInt64>;
+        interface Windows.Foundation.IReferenceArray<Single>;
+        interface Windows.Foundation.IReferenceArray<Double>;
+        interface Windows.Foundation.IReferenceArray<Char16>;
+        interface Windows.Foundation.IReferenceArray<Boolean>;
+        interface Windows.Foundation.IReferenceArray<String>;
+        interface Windows.Foundation.IReferenceArray<Object>;
+        interface Windows.Foundation.IReferenceArray<Guid>;
+        interface Windows.Foundation.IReferenceArray<Windows.Foundation.DateTime>;
+        interface Windows.Foundation.IReferenceArray<Windows.Foundation.TimeSpan>;
+        interface Windows.Foundation.IReferenceArray<Windows.Foundation.Point>;
+        interface Windows.Foundation.IReferenceArray<Windows.Foundation.Size>;
+        interface Windows.Foundation.IReferenceArray<Windows.Foundation.Rect>;
+    };
+}

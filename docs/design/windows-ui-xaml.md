@@ -197,10 +197,38 @@ vendors.
      (`d2d1_3.h`, `async.h`, `atlbase.h`, `rometadataresolution.h`).
      NovaOS writes these as its own, from how the open sources call them
      and public documentation.
-   - *Next.*  Those headers, then `CDependencyObject` and the rest of the
-     core, the parser and `dxaml/lib` compiled as `Windows.UI.Xaml.dll`,
-     until `Application.Start` runs and `XamlReader.Load` parses a page,
-     one component seam per pull request.
+   - *The closed headers, the metadata and `CDependencyObject` (done so
+     far).*  `userland/windows_ui_xaml/inc` now has the stand-ins the
+     core's lower layers include: FrameworkUdk's `InputSiteHelpers.h`
+     (an island's input site and its window), `InputHelpers.h`,
+     `ContentExternalLinkHelper.h`, `TextInputProducerHelper.h` and
+     `FrameworkUdk/FrameworkInputView.h`; the lifted IXP's
+     `microsoft.ui.composition.interop.h` (`ICompositorSwapChainInterop`),
+     `microsoft.ui.composition.experimental.h` and
+     `microsoft.ui.input.inputpretranslatesource.interop.h`;
+     `Microsoft.DirectManipulation.h` (the Windows App SDK's additions to
+     DirectManipulation); and from the Windows SDK, WRL's `async.h`
+     (`AsyncBase`), `rometadataresolution.h`, a `d2d1_3.h` that so far
+     gives Direct2D 1.1, the UI Automation interfaces MinGW-w64's
+     `uiautomationcore.h` lacks (their IIDs from Windows' Win32
+     metadata), `GUID_NULL` and constexpr enum-flag operators.  Lifted
+     types newer than windows-rs's `Microsoft.UI.winmd`
+     (`IInputPointerSource2`, `PopupWindowSiteBridge`) come from NovaOS's
+     own IDL (`userland/windows_ui_xaml/idl`), which also declares the
+     `IReference<T>` instances XAML's metadata names; `AsyncStatus` is a
+     scoped enum, as in the SDK.  With them the type metadata (`metadata`,
+     `DynamicMetadataStorage`: every built-in type, property and
+     namespace) builds and links, and `CDependencyObject`'s property
+     system (`DependencyObject`) compiles into `xaml_components.lib`.
+     `xamlbasetest` looks types and properties up by index and by name;
+     the metadata's two calls into the layers above (custom types'
+     providers, class constructors) are Microsoft's own stubs from its
+     isolated unit tests until those layers build.
+   - *Next.*  The collections (`Collection`, which needs the composition
+     tree's `CompHelper/CompositionHelper.h`), then the rest of the core,
+     the parser and `dxaml/lib` compiled as `Windows.UI.Xaml.dll`, until
+     `Application.Start` runs and `XamlReader.Load` parses a page, one
+     component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

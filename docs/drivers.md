@@ -66,7 +66,7 @@ administrator (`SeLoadDriverPrivilege`).
 | `pnputil /delete-driver oemN.inf [/uninstall] [/force]` | removes a staged package |
 | `pnputil /enum-drivers` | the staged packages, with their signer and, for downloaded ones, their source |
 | `pnputil /enum-devices [/connected \| /disconnected] [/class C] [/instanceid ID] [/deviceid ID] [/ids] [/drivers]` | the Plug and Play device tree, with each device's status and driver, its hardware and compatible IDs (`/ids`) and the staged packages that match it (`/drivers`) |
-| `pnputil /disable-device`, `/enable-device`, `/restart-device` (an instance ID, or `/deviceid ID`) | take a device's Windows driver away (query-remove, then remove; a driver may refuse while a program has the device open), start it again, or both; a disabled device stays off across restarts |
+| `pnputil /disable-device`, `/enable-device`, `/restart-device` (an instance ID, or `/deviceid ID`) | take a device's Windows driver away (query-remove, then remove; a program registered for a handle on the device (`RegisterDeviceNotification`) is asked first with `DBT_DEVICEQUERYREMOVE` and may refuse with `BROADCAST_QUERY_DENY`, the PnP manager waiting up to ten seconds for its answer; then a driver may refuse while a program has the device open), start it again, or both; a disabled device stays off across restarts |
 | `pnputil /scan-devices [/instanceid ID] [/search-online [/source URL] [/install]]` | rescan; `/search-online` downloads packages by hardware ID ([below](#downloading-drivers-by-hardware-id)) |
 | `pnputil /remove-device` (an instance ID, or `/deviceid ID`) | removes a device and its driver from the tree; NovaOS removes only root-enumerated devices (`ROOT\...`), the ones a program made |
 

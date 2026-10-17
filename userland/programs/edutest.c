@@ -16,6 +16,13 @@
  *                    driver vetoes IRP_MN_QUERY_REMOVE_DEVICE; disabling
  *                    needs SeLoadDriverPrivilege: edutest.manifest asks
  *                    for highestAvailable)
+ *   edutest notify   a program's own veto, before the driver is asked: a
+ *                    window registered for the open handle
+ *                    (RegisterDeviceNotification, DEV_BROADCAST_HANDLE)
+ *                    refuses DBT_DEVICEQUERYREMOVE once (BROADCAST_QUERY_DENY:
+ *                    disabling is vetoed, DBT_DEVICEQUERYREMOVEFAILED follows)
+ *                    and then agrees, closing its handle as Windows programs
+ *                    do, so the driver accepts and the device is disabled
  *   edutest absent   no device has the interface (after pnputil
  *                    /disable-device), and the old path no longer opens
  *   edutest message  as edutest, and the interrupt must have come as an MSI message
@@ -31,7 +38,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <dbt.h>
 #include "../../tools/drivertest/edutest.h"
+
+#define BROADCAST_QUERY_DENY 0x424D5144
 
 WINBASEAPI BOOL WINAPI DeviceIoControl(HANDLE h, DWORD code, LPVOID in, DWORD in_n, LPVOID out, DWORD out_n,
                                        LPDWORD returned, LPOVERLAPPED ov);
@@ -93,6 +103,100 @@ static int done(const char *what)
     return failed;
 }
 
+/* edutest notify: the window, on a thread of its own (the main thread waits
+ * in CM_Disable_DevNode while the PnP manager waits for the answer) */
+static HANDLE n_dev = INVALID_HANDLE_VALUE, n_reg, n_ready;
+static volatile LONG n_refuse = 1, n_query, n_failed, n_pending, n_bad;
+
+static LRESULT CALLBACK notify_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
+{
+    if (m != WM_DEVICECHANGE) return DefWindowProcW(w, m, wp, lp);
+    DEV_BROADCAST_HANDLE *b = (DEV_BROADCAST_HANDLE *)lp;
+    if (!b || b->dbch_devicetype != DBT_DEVTYP_HANDLE) return TRUE;
+    if (b->dbch_hdevnotify != n_reg) n_bad = 1;
+    if (wp == DBT_DEVICEQUERYREMOVE) {
+        InterlockedIncrement(&n_query);
+        printf("DBT_DEVICEQUERYREMOVE: %s\n", n_refuse ? "refused" : "agreed, handle closed");
+        if (n_refuse) return BROADCAST_QUERY_DENY;
+        CloseHandle(n_dev);                                  /* (what a program does before it agrees) */
+        n_dev = INVALID_HANDLE_VALUE;
+    } else if (wp == DBT_DEVICEQUERYREMOVEFAILED) {
+        InterlockedIncrement(&n_failed);
+        printf("DBT_DEVICEQUERYREMOVEFAILED\n");
+    } else if (wp == DBT_DEVICEREMOVEPENDING) {
+        InterlockedIncrement(&n_pending);
+        printf("DBT_DEVICEREMOVEPENDING\n");
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI notify_thread(void *arg)
+{
+    (void)arg;
+    WNDCLASSW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = notify_proc;
+    wc.lpszClassName = L"EduTestNotify";
+    RegisterClassW(&wc);
+    HWND w = CreateWindowExW(0, L"EduTestNotify", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, NULL, NULL);
+    DEV_BROADCAST_HANDLE f;
+    memset(&f, 0, sizeof(f));
+    f.dbch_size = sizeof(f);
+    f.dbch_devicetype = DBT_DEVTYP_HANDLE;
+    f.dbch_handle = n_dev;
+    n_reg = w ? RegisterDeviceNotificationW(w, &f, DEVICE_NOTIFY_WINDOW_HANDLE) : NULL;
+    SetEvent(n_ready);
+    MSG m;
+    while (GetMessageW(&m, NULL, 0, 0) > 0) DispatchMessageW(&m);
+    if (n_reg) UnregisterDeviceNotification(n_reg);
+    if (w) DestroyWindow(w);
+    return 0;
+}
+
+static void wait_for(volatile LONG *v, LONG want)
+{
+    for (int i = 0; i < 300 && *v < want; i++) Sleep(10);
+}
+
+static int notify(HANDLE h, const WCHAR *path)
+{
+    WCHAR inst[256];
+    DWORD dn, tid = 0;
+    n_dev = h;
+    n_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
+    HANDLE t = CreateThread(NULL, 0, notify_thread, NULL, 0, &tid);
+    if (t) WaitForSingleObject(n_ready, 5000);
+    check(n_reg != NULL, "RegisterDeviceNotification for the open handle");
+    instance_of(path, inst, 256);
+    check(!CM_Locate_DevNodeW(&dn, inst, 0), "locate the device node");
+
+    CONFIGRET cr = CM_Disable_DevNode(dn, 0);
+    printf("disable, the window refusing: CONFIGRET 0x%lx\n", (unsigned long)cr);
+    check(cr == 0x17, "the window's BROADCAST_QUERY_DENY vetoes it (CR_REMOVE_VETOED)");
+    check(n_query == 1, "the window was asked first (DBT_DEVICEQUERYREMOVE)");
+    wait_for(&n_failed, 1);
+    check(n_failed == 1, "then told the query failed (DBT_DEVICEQUERYREMOVEFAILED)");
+    DWORD n = 0;
+    EDUTEST_INFO info;
+    check(DeviceIoControl(n_dev, IOCTL_EDUTEST_INFO, NULL, 0, &info, sizeof(info), &n, NULL), "the driver still answers");
+
+    n_refuse = 0;
+    cr = CM_Disable_DevNode(dn, 0);
+    printf("disable, the window agreeing: CONFIGRET 0x%lx\n", (unsigned long)cr);
+    check(cr == 0, "with the window agreeing (its handle closed) the driver accepts and the device is disabled");
+    check(n_query == 2 && n_dev == INVALID_HANDLE_VALUE, "the window was asked again and closed its handle first");
+    wait_for(&n_pending, 1);
+    check(n_pending == 1, "DBT_DEVICEREMOVEPENDING");
+    check(n_failed == 1 && !n_bad, "no second DBT_DEVICEQUERYREMOVEFAILED, and the registration's handle each time");
+    if (t) {
+        PostThreadMessageW(tid, WM_QUIT, 0, 0);
+        WaitForSingleObject(t, 5000);
+        CloseHandle(t);
+    }
+    if (n_dev != INVALID_HANDLE_VALUE) CloseHandle(n_dev);
+    return done("edutest notify");
+}
+
 /* MSISupported of the device whose interface path (or former path) is @path */
 static BOOL set_msi(const WCHAR *path, DWORD on)
 {
@@ -135,6 +239,7 @@ int main(int argc, char **argv)
     check(h != INVALID_HANDLE_VALUE, "open the interface");
     if (h == INVALID_HANDLE_VALUE) return done("edutest");
 
+    if (argc > 1 && !strcmp(argv[1], "notify")) return notify(h, path);
     if (argc > 1 && !strcmp(argv[1], "veto")) {
         WCHAR inst[256];
         DWORD dn;

@@ -10,7 +10,11 @@
 # compute factorials (the interrupt reaches the driver's ISR and DPC) and
 # move buffers by DMA (a scatter/gather list, a common buffer and map
 # registers, within edu's 28-bit reach).  With a handle open the driver
-# vetoes removal; pnputil /disable-device then removes it (query-remove,
+# vetoes removal; so does a program: "edutest notify" registers its open
+# handle (RegisterDeviceNotification, DEV_BROADCAST_HANDLE), and the PnP
+# manager waits for its window's answer to DBT_DEVICEQUERYREMOVE before the
+# driver is asked: refused once (DBT_DEVICEQUERYREMOVEFAILED), then agreed
+# with the handle closed, so the driver accepts; pnputil /disable-device then removes it (query-remove,
 # remove; the driver unloads), /enable-device starts it again, a restart
 # starts it at boot, and a device left disabled stays so across a restart.
 # Message-signalled interrupts (step 30.3's last part): the INF does not opt in, so the device
@@ -24,7 +28,7 @@
 DOC = ('QEMU\'s edu PCI device: a Plug and Play driver (edutest.sys) installed with `pnputil /add-driver /install`, '
        'started by the PnP manager with the device\'s memory BAR and interrupt, driven by `edutest` (a factorial '
        'through the interrupt, ISR and DPC; DMA by scatter/gather list, common buffer and map registers), removal '
-       'vetoed while open, then disabled, enabled and started at boot')
+       'vetoed while open, by the driver and by a program\'s DBT_DEVICEQUERYREMOVE answer, then disabled, enabled and started at boot')
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 TESTS = [
     Test('edu test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
@@ -43,6 +47,14 @@ TESTS = [
                                    r'edutest: \d+ passed, 0 failed']),
     Test('edu removal vetoed', 'edutest veto',
          [r'\[DbgPrint\] edutest: removal vetoed, 1 handle\(s\) open', r'edutest veto: \d+ passed, 0 failed']),
+    Test('edu removal vetoed by a program', 'edutest notify',
+         [r'DBT_DEVICEQUERYREMOVE: refused', r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: removal vetoed by a program',
+          r'disable, the window refusing: CONFIGRET 0x17', r'DBT_DEVICEQUERYREMOVEFAILED',
+          r'DBT_DEVICEQUERYREMOVE: agreed, handle closed', r'\[DbgPrint\] edutest: query-remove accepted',
+          r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: removed \(driver EduTest\)', r'DBT_DEVICEREMOVEPENDING',
+          r'edutest notify: \d+ passed, 0 failed']),
+    Test('edu enable after the program\'s query', 'pnputil /enable-device /deviceid ' + EDU_ID,
+         [r'Device enabled successfully', r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: started \(driver EduTest\)']),
     Test('edu disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] edutest: query-remove accepted',
           r'\[DbgPrint\] edutest: hardware released', r'\[DbgPrint\] edutest: removed',

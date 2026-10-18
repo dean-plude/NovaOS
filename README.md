@@ -297,6 +297,7 @@ before new code is written.
 | [Drivers](docs/drivers.md) and [Windows driver design](docs/design/windows-drivers.md) | Running Windows driver packages |
 | [Desktop design](docs/design/native-desktop.md) | How the Aurora desktop maps its design reference onto the native shell |
 | [Intel GPU design](docs/design/intel-gpu.md) | The plan for the reference laptop's GPU |
+| [Anti-cheat and DRM](docs/design/anti-cheat-drm.md) | What game anti-cheat and DRM need from the OS, and what NovaOS has |
 | [Ethernet](docs/ethernet.md) | The Intel Ethernet driver |
 | [Building Firefox](docs/building-firefox.md) | How the bundled Firefox is fetched and packaged |
 | [Roadmap](docs/ROADMAP.md) and [History](docs/HISTORY.md) | What comes next, and what every phase added |

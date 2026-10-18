@@ -130,7 +130,8 @@ would start an entry: `LoadImage` from its volume's device path and file,
 the firmware's watchdog armed, `StartImage`. If it returns (or cannot be
 loaded) the menu shows again. One "Windows Boot Manager" line is enough:
 it lists every Windows itself. Step 33.3's recovery choices (previous
-version, safe mode, startup repair) join the same menu.
+version, safe mode, startup repair) are a menu of their own that follows
+it, Advanced startup ([recovery.md](recovery.md)).
 
 **The test.** The `beside` boot's stand-in `bootmgfw.efi` is a small UEFI
 application (`bootmgfw_standin` in `tools/selftest.py`, a PE32+ the host

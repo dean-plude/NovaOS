@@ -22,6 +22,7 @@
  * it checks opens with um_access_check_sd.
  */
 #include "um_internal.h"
+#include "../wm/consent.h"
 #include "../ke/probe.h"
 #include "../ke/printf.h"
 #include "../ke/spinlock.h"
@@ -91,6 +92,7 @@ static const UINT8 g_logon_sid[] = { 1, 3, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 0
 static const UINT8 g_medium_il_sid[] = { 1, 1, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0 };               /* S-1-16-8192 */
 static const UINT8 g_high_il_sid[] = { 1, 1, 0, 0, 0, 0, 0, 16, 0, 0x30, 0, 0 };                 /* S-1-16-12288 */
 static const UINT8 g_system_sid[] = { 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 };                     /* S-1-5-18 */
+static const UINT8 g_system_il_sid[] = { 1, 1, 0, 0, 0, 0, 0, 16, 0, 0x40, 0, 0 };               /* S-1-16-16384 */
 
 /* Descriptors change under this lock (they are read under it too) */
 static KSpinLock g_sd_lock = KSPINLOCK_INIT;
@@ -374,6 +376,118 @@ bool um_elevate_process(UmProcess *p)
     ob_unlock(s);
     if (old) um_ob_unref(old);
     return true;
+}
+
+/* Integrity levels (Windows' mandatory labels): SYSTEM's tokens are
+ * system, an elevated administrator's high, everyone else's medium.  A
+ * process has its token's; one of a lower level may not open one of a
+ * higher level for more than waiting on it and asking its name
+ * (NO_WRITE_UP and NO_READ_UP, the label every process gets) */
+static UINT32 token_il(const UmToken *t)
+{
+    if (sid_eq(t->user.sid, g_system_sid)) return 0x4000;
+    return t->elevation == 2 ? 0x3000 : 0x2000;
+}
+
+UINT32 um_token_integrity(UmObject *t)
+{
+    return t && t->type == UO_TOKEN ? token_il(t->ptr) : 0x4000;   /* (no token: the kernel's) */
+}
+
+bool um_token_split(UmObject *t)
+{
+    return t && t->type == UO_TOKEN && ((const UmToken *)t->ptr)->elevation == 3;
+}
+
+static UmObject *effective_token(void);
+
+/* The calling thread's level (a kernel thread's: system) */
+static UINT32 caller_integrity(void)
+{
+    if (!UmCurrent()) return 0x4000;
+    UmObject *o = effective_token();
+    UINT32 l = um_token_integrity(o);
+    if (o) um_ob_unref(o);
+    return l;
+}
+
+UINT32 um_integrity_gate(UmObject *o, UINT32 want, bool *limited, UINT32 *granted)
+{
+    *limited = false;
+    *granted = 0;
+    UmProcess *p = o->type == UO_PROCESS ? o->proc : o->type == UO_THREAD ? ((UmThread *)o)->proc : NULL;
+    if (!p) return ST_SUCCESS;
+    IrqState s = ob_lock();
+    UmObject *t = p->token ? um_ob_ref(p->token) : NULL;
+    ob_unlock(s);
+    UINT32 target = t ? um_token_integrity(t) : 0x2000, mine = caller_integrity();
+    if (t) um_ob_unref(t);
+    if (mine >= target) return ST_SUCCESS;
+    /* SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION (a thread's
+     * THREAD_QUERY_LIMITED_INFORMATION): GENERIC_EXECUTE's, all that
+     * NO_READ_UP and NO_WRITE_UP leave */
+    UINT32 allowed = 0x00100000u | (o->type == UO_PROCESS ? 0x1000u : 0x0800u);
+    UINT32 m = want & 0x00FFFFFFu & ~allowed;
+    if ((want & 0xD0000000u) || m) {                       /* GENERIC_READ, _WRITE, _ALL, or a right beyond them */
+        kprintf("[SEC] Integrity: %s (level %X) may not open %s %u (level %X) for %X\n",
+                UmCurrent() ? UmCurrent()->name : "kernel", mine, o->type == UO_PROCESS ? "process" : "a thread of",
+                p->pid, target, want);
+        return ST_ACCESS_DENIED;
+    }
+    *limited = true;
+    *granted = want & 0x02000000u ? allowed : (want & allowed) | (want & 0x20000000u ? allowed : 0);
+    return ST_SUCCESS;
+}
+
+/* -----------------------------------------------------------------------
+ * UAC: asking before a program runs as administrator
+ *
+ * HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System, as on
+ * Windows: ConsentPromptBehaviorAdmin (0 elevate without asking, 1 and 3
+ * ask for credentials, 2, 4 and 5 ask Yes or No; 5 by default) and
+ * ConsentPromptBehaviorUser (0 refuse, 1 and 3 ask for an administrator's
+ * credentials; 3 by default); EnableLUA 0 lets administrators elevate
+ * without asking.  The prompt is wm/consent.c's, on the secure desktop.
+ * ----------------------------------------------------------------------- */
+#define UAC_POLICY "Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
+
+static UINT32 uac_policy(const char *name, UINT32 dflt)
+{
+    UINT32 v;
+    return um_registry_get_dword(UAC_POLICY, name, &v) ? v : dflt;
+}
+
+UmObject *um_uac_elevate(UmObject *t, const char *path, UINT32 *st)
+{
+    *st = ST_SUCCESS;
+    const UmToken *k = t ? t->ptr : NULL;
+    if (!k || (k->elevation != 1 && k->elevation != 3)) return t ? um_ob_ref(t) : NULL;   /* (elevated already, or SYSTEM) */
+    bool admin = k->elevation == 3;
+    UINT32 rid = um_token_rid(t);
+    if (!rid) rid = um_session_rid();
+    UINT32 how = admin ? uac_policy("ConsentPromptBehaviorAdmin", 5) : uac_policy("ConsentPromptBehaviorUser", 3);
+    if (admin && (how == 0 || uac_policy("EnableLUA", 1) == 0)) {
+        kprintf("[UAC] %s: elevated without a prompt (policy)\n", path);
+        UmObject *e = elevated_token_for(t);
+        if (!e) *st = ST_NO_MEMORY;
+        return e ? um_ob_ref(e) : NULL;
+    }
+    if (!admin && how == 0) {
+        kprintf("[UAC] %s: refused (standard users may not elevate: policy)\n", path);
+        *st = ST_ACCESS_DENIED;
+        return NULL;
+    }
+    UINT32 who = ConsentAsk(path, !admin || how == 1 || how == 3, rid);
+    if (!who) { *st = 0xC0000120u; return NULL; }              /* STATUS_CANCELLED */
+    UmObject *e = NULL;
+    if (who == rid && admin) {
+        e = elevated_token_for(t);
+        if (e) um_ob_ref(e);
+    } else {
+        e = um_token_new_user(who, true);                      /* (another account's: a logon of its own) */
+    }
+    if (!e) *st = ST_NO_MEMORY;
+    return e;
 }
 
 /* NtSetInformationProcess(ProcessAccessToken): { HANDLE Token; HANDLE
@@ -943,7 +1057,8 @@ static UINT64 sys_query_token(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     case 40: v = t.nrestricted ? 1 : 0; out_put(&o, 0, &v, 4); break;           /* TokenIsRestricted */
     case 25: {                                                                  /* TokenIntegrityLevel */
         SidAttr il;
-        sid_set(&il, t.elevation == 2 ? g_high_il_sid : g_medium_il_sid, 0x20);  /* SE_GROUP_INTEGRITY */
+        UINT32 lvl = token_il(&t);
+        sid_set(&il, lvl == 0x4000 ? g_system_il_sid : lvl == 0x3000 ? g_high_il_sid : g_medium_il_sid, 0x20);  /* SE_GROUP_INTEGRITY */
         out_groups(&o, &il, 1, false);
         break;
     }

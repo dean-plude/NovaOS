@@ -182,6 +182,7 @@ set(KERNEL_C_SOURCES
     fs/setup.c
     fs/bootfiles.c
     fs/update.c
+    fs/recovery.c
     fs/bootlog.c
     net/net.c
     net/tls.c
@@ -278,6 +279,7 @@ set(KERNEL_C_SOURCES
     wm/wm.c
     wm/desktop.c
     wm/logon.c
+    wm/consent.c
     wm/wallpaper.c
     wm/clipboard.c
     wm/input.c

@@ -43,6 +43,7 @@
 #include "../drivers/virtio_gpu.h"
 #include "../arch/x86_64/cpu.h"
 #include "../ke/printf.h"
+#include "../fs/recovery.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 
@@ -940,7 +941,10 @@ void DisplayInit(const BootFramebuffer *boot)
     d.boot = (DisplayMode){ (int)boot->width, (int)boot->height };
     d.def = d.boot;
 
-    if (bochs_probe(boot)) {
+    bool safe = RecoverySafeMode();                     /* (the firmware's framebuffer only) */
+    if (safe) {
+        kprintf("[DISPLAY] Safe mode: no display adapter driver, the firmware's framebuffer only\n");
+    } else if (bochs_probe(boot)) {
         bochs_read_mode();
         if (d.cur.w != d.boot.w || d.cur.h != d.boot.h) {
             /* Not the mode the GOP reported: trust the GOP, and switch to
@@ -974,10 +978,11 @@ void DisplayInit(const BootFramebuffer *boot)
     g_boot_size = boot->size;
     claim_boot_display(boot->base);
     if (d.kind == DRV_BOCHS) PciAllowSetAside(&d.pci, bochs_set_aside);   /* (for a Windows display driver) */
-    VgpuInit();
+    if (!safe) VgpuInit();
     if (d.kind == DRV_BOCHS) virtio_takeover();
     kprintf("[DISPLAY] %s: %dx%d, %d mode(s), %s\n", DisplayDriverName(), d.cur.w, d.cur.h,
             d.nmodes, d.flip ? "page flipping" : "single page");
+    if (safe) return;
     heads_probe(boot);
     vheads_probe();
 }

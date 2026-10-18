@@ -14261,6 +14261,31 @@ lock screen (a wrong password refused first) while its own program keeps
 running, checks the new profile and hive, switches back and signs the
 second account out.
 
+## Advanced startup: safe mode, startup repair and the previous version
+
+Third part of roadmap step 33.3 ([design](../design/recovery.md)), which
+it finishes. The boot loader has an Advanced startup menu
+(`bootloader/src/recovery.c`), the counterpart of Windows' Advanced Boot
+Options and recovery environment: F8 as it starts, `shutdown /r /o` (a
+mark on the ESP; advapi32's `InitiateShutdown` with
+`SHUTDOWN_RESTART_BOOTOPTIONS`), or by itself after two starts in a row
+that did not reach the desktop (the loader counts starts in
+`\EFI\NOVA\starts.cnt`, the kernel deletes it at the desktop, as Windows'
+`bootstat.dat`), when it runs startup repair after 30 seconds.
+
+It offers the previous version (an update now keeps the loader it replaces
+as `bootx64.old` beside `kernel.old`, and the menu starts that loader,
+which starts `kernel.old` once), safe mode (no Windows driver package's
+`.sys` loads, the firmware's framebuffer instead of a display driver, a
+black desktop with "Safe Mode" in its corners) and startup repair (the
+ESP's file system checked, `BOOTX64.EFI` and `kernel.elf` put back from the
+known-good set, an unfinished update removed, a report in
+`C:\Windows\System32\LogFiles\Srt\SrtTrail.txt`). A `kernel.elf` that is
+not a kernel starts `kernel.old` with startup repair by itself.
+
+The devices suite's new `rollbacktest` boot starts each line from the menu
+and checks the menu comes up by itself after two failed starts.
+
 ## NovaOS starts first beside Windows, and offers Windows
 
 Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
@@ -14281,6 +14306,35 @@ The boot loader then looks on the PC's other volumes for Windows'
 NovaOS and Windows Boot Manager, which it starts with `LoadImage` and
 `StartImage`.  The devices suite's `beside` boot checks all of it, with a
 small UEFI application standing in for Windows' boot manager.
+
+## Printing: network printers (IPP) and Settings > Printers
+
+Second part of roadmap step 33.5 ([design](../design/printing.md)).
+NovaOS printed only to PDF files; now it prints to the printers people
+have at home and at work, without a driver, the way Windows 11 does with
+its "Microsoft IPP Class Driver":
+
+- **IPP ports in the Print Spooler.** A printer whose port is an
+  `ipp://`, `ipps://`, `http://` or `https://` address is an IPP printer.
+  The spooler asks it for its attributes (`Get-Printer-Attributes`) and
+  sends each job with `Print-Job` over WinHTTP: a PDF as it is when the
+  printer takes PDF, otherwise PWG Raster made from the PDF's pages at a
+  resolution the printer has (sRGB, or grey for a grey-only printer); raw
+  jobs go as they are. A printer that does not answer keeps its job,
+  shown as offline, and the spooler tries again every 30 seconds.
+- **Settings > Printers** lists the printers with their state and
+  location, sets the default, removes printers and adds a network printer
+  by its address. The spooler then names the new printer after its make
+  and model, as Windows' "Add a printer" does.
+- **Tests:** `tools/ippprinter.py`, a fake IPP Everywhere printer on the
+  CI host, takes jobs in the network suite and hands back what it got:
+  `spooltest ipp` checks that the PDF arrives byte for byte, a raw job as
+  it is, a page sent as PWG Raster exactly as GDI drew it, the naming of a
+  printer added the way Settings adds one, and an unreachable printer
+  holding its job.
+
+Next: the step's "Done when": Notepad and SumatraPDF printing to the PDF
+printer and to the IPP printer in the app corpus.
 
 ## Printing: the print spooler, Microsoft Print to PDF and the print dialogs
 
@@ -14307,6 +14361,29 @@ way:
   must be exactly what GDI draws.
 
 Next: IPP Everywhere network printing, then Settings' Printers page.
+
+## Programs ask before they run as administrator
+
+First part of roadmap step 33.2 ([design](../design/uac.md)).  A program
+whose manifest asks for administrator, and ShellExecute's `runas`, used to
+get the elevated half of the administrator's token at once, as if UAC
+were set to "never notify".  Now the screen dims and User Account
+Control's prompt asks first (`kernel/wm/consent.c`, Windows'
+`consent.exe`): an administrator answers Yes or No, a standard user types
+an administrator's user name and password, and a wrong one is refused.
+No fails `runas` with `ERROR_CANCELLED` and an installer's start with
+`ERROR_ELEVATION_REQUIRED`; the policy values Windows uses
+(`ConsentPromptBehaviorAdmin`, `ConsentPromptBehaviorUser`, `EnableLUA`)
+decide whether it asks.  Only the keyboard and the mouse reach the
+prompt, never a program's input, as on the secure desktop.
+
+Tokens now say their integrity level (system, high, medium), and a
+process of a lower level cannot open one of a higher level for more than
+waiting on it and asking its exit code: an elevated program cannot be
+written, read or ended from an unelevated one.  The self-test harness
+presses Alt+Y at each prompt for the tests that start installers, as the
+person at the keyboard would; the new `uactest` answers its prompts
+itself.
 
 ## A failed update comes back on its own
 

@@ -83,6 +83,7 @@ set(BOOTLOADER_SOURCES
     src/paging.c
     src/console.c
     src/bootmenu.c
+    src/recovery.c
 )
 
 set(BOOTLOADER_INCLUDE_DIRS

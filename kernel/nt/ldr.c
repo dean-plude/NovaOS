@@ -52,6 +52,7 @@
 #include "usbvideo.h"
 #include "../ldr/ldr.h"
 #include "../ke/printf.h"
+#include "../fs/recovery.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../mm/pmm.h"
@@ -71,6 +72,7 @@
 #define IMAGE_SUBSYSTEM_NATIVE      1
 #define IMAGE_FILE_RELOCS_STRIPPED  0x0001
 #define ST_IMAGE_ALREADY_LOADED     ((NTSTATUS)0xC000010E)
+#define ST_SAFE_MODE                ((NTSTATUS)0xC000036B)   /* STATUS_DRIVER_BLOCKED: safe mode */
 #define ST_PROCEDURE_NOT_FOUND      ((NTSTATUS)0xC000007A)
 #define ST_DRIVER_UNLOAD_FAILED     ((NTSTATUS)0xC0000010)   /* (STATUS_INVALID_DEVICE_REQUEST, as Windows) */
 
@@ -556,6 +558,12 @@ static NTSTATUS drv_load(const char *service)
             image = path + strlen("C:\\Windows\\System32\\drivers\\");
             memset(&m, 0, sizeof(m));
         }
+    if (!builtin && RecoverySafeMode()) {
+        /* (safe mode: NovaOS's own drivers only, as Windows' safe mode
+         * starts only the drivers its SafeBoot\Minimal key lists) */
+        kprintf("[NT] %s: not loaded in safe mode (a Windows driver package's driver)\n", service);
+        return ST_SAFE_MODE;
+    }
     if (!builtin) {
         image_path(service, path, sizeof(path));
         for (const char *c = path; *c; c++) if (*c == '\\') image = c + 1;
@@ -618,7 +626,7 @@ NTSTATUS NtDrvLoadQuiet(const char *service)
 NTSTATUS NtDrvLoad(const char *service)
 {
     NTSTATUS st = drv_load(service);
-    if (NT_SUCCESS(st) || st == ST_IMAGE_ALREADY_LOADED || !g_ready) return st;
+    if (NT_SUCCESS(st) || st == ST_IMAGE_ALREADY_LOADED || st == ST_SAFE_MODE || !g_ready) return st;
     char why[160];
     if ((UINT32)st == 0xC0000428u)                      /* STATUS_INVALID_IMAGE_HASH */
         ksnprintf(why, sizeof(why), "Windows cannot verify the digital signature for this file. (0x%08X)", (UINT32)st);

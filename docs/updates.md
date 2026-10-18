@@ -74,7 +74,9 @@ next start by the boot loader and the new kernel, the same idea as
 4. **Finish.** Once the new kernel has reached the desktop (its loop has
    answered for three seconds with an account signed in or the sign-in
    screen showing, as Windows counts a boot as good at logon), it renames
-   `kernel.elf` to `kernel.old` and `kernel.new` to `kernel.elf`, replaces
+   `kernel.elf` to `kernel.old` and `kernel.new` to `kernel.elf`, keeps the
+   boot loader it replaces as `\EFI\NOVA\bootx64.old` (the known-good set
+   the [Advanced startup menu](design/recovery.md) starts), replaces
    `BOOTX64.EFI` with the new boot loader, and deletes the trying mark. The
    log says
    `[UPDATE] Updated NovaOS from 0.1.0 to 0.1.1 (the previous kernel is kept as \EFI\NOVA\kernel.old)`.

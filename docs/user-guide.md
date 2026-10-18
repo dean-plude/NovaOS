@@ -437,6 +437,24 @@ microphones sit behind Intel's audio DSP and appear as "Microphone Array
 (DSP)" when the DSP firmware is included in the build
 ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
 
+## Printing
+
+Programs print the Windows way: their **Print** command shows the Print
+dialog with your printers. **Microsoft Print to PDF** is installed and
+saves each page to a PDF file.
+
+**Network printers** print without a driver when they support IPP
+Everywhere (driverless printing, also sold as Mopria). In **Settings >
+Printers**, type the printer's IP address or host name (or an `ipp://`
+address) under **Add a network printer** and choose **Add**. NovaOS asks
+the printer for its make and model and names it after them; jobs go to
+it as PDF, or as PWG Raster when the printer takes nothing else. A
+printer that is switched off keeps its jobs and prints them when it
+answers again. The same page sets the default printer and removes
+printers.
+
+![Settings > Printers](screenshots/settings-printers.png)
+
 ## Updating NovaOS
 
 An installed NovaOS updates itself.  The App Store's **Updates** page (or

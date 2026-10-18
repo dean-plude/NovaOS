@@ -686,6 +686,19 @@ static void erase_entry(FatVol *v, const FatEntry *fe)
 /* ---------------------------------------------------------------------------
  * Files and directories
  * ------------------------------------------------------------------------- */
+UINT64 FatStart(const FatVol *v) { return v->base; }
+
+/* The first min(@n, its size, a cluster) bytes of file @fe; how many, or 0 */
+UINT32 FatReadHead(FatVol *v, const FatEntry *fe, void *buf, UINT32 n)
+{
+    if (n > fe->size) n = fe->size;
+    if (n > v->cluster_bytes) n = v->cluster_bytes;
+    if (!n || is_end(v, fe->cluster) || fe->cluster >= v->clusters + 2) return 0;
+    if (!dev_read(v, clus_lba(v, fe->cluster), v->spc, v->cbuf)) return 0;
+    memcpy(buf, v->cbuf, n);
+    return n;
+}
+
 bool FatRead(FatVol *v, const FatEntry *fe, void *buf)
 {
     UINT8 *out = buf;

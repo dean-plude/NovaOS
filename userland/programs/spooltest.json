@@ -1,1 +1,1 @@
-{ "x86": true, "selftest": true, "libs": ["winspool", "comdlg32"] }
+{ "x86": true, "selftest": true, "libs": ["winspool", "comdlg32", "winhttp"] }

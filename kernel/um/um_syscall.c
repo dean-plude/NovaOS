@@ -32,6 +32,7 @@
 #include "../fs/fsec.h"
 #include "../ke/sleep.h"
 #include "../ke/kpcr.h"
+#include "../fs/recovery.h"
 
 #define ST_SUCCESS                 0x00000000u
 #define ST_PENDING                 0x00000103u
@@ -2703,14 +2704,19 @@ void UmClockSet(UINT64 now_100ns)
 }
 
 /* NtShutdownSystem(SHUTDOWN_ACTION Action): ShutdownNoReboot (0) and
- * ShutdownPowerOff (2) power off, ShutdownReboot (1) restarts.  The
- * desktop loop saves drive C: and does it, so this returns. */
+ * ShutdownPowerOff (2) power off, ShutdownReboot (1) restarts, and
+ * NovaOS's own 3 restarts into the boot loader's Advanced startup menu
+ * (advapi32's InitiateShutdown with SHUTDOWN_RESTART_BOOTOPTIONS:
+ * shutdown /r /o; fs/recovery.h).  The desktop loop saves drive C: and
+ * does it, so this returns. */
 static UINT64 sys_shutdown_system(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a2; (void)a3; (void)a4;
-    if ((UINT32)a1 > 2) return ST_INVALID_PARAMETER;
-    kprintf("[UM] NtShutdownSystem(%s)\n", (UINT32)a1 == 1 ? "reboot" : "power off");
-    DesktopPowerRequest((UINT32)a1 == 1 ? POWER_RESTART : POWER_SHUTDOWN);
+    if ((UINT32)a1 > 3) return ST_INVALID_PARAMETER;
+    if ((UINT32)a1 == 3 && !RecoveryRequestMenu()) return ST_NOT_SUPPORTED;
+    kprintf("[UM] NtShutdownSystem(%s)\n", (UINT32)a1 == 3 ? "reboot to Advanced startup" :
+                                           (UINT32)a1 == 1 ? "reboot" : "power off");
+    DesktopPowerRequest((UINT32)a1 & 1 ? POWER_RESTART : POWER_SHUTDOWN);
     return ST_SUCCESS;
 }
 

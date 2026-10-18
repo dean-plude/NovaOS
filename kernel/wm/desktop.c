@@ -51,6 +51,7 @@
 #include "../drivers/audio.h"
 #include "../drivers/virtio_input.h"
 #include "../drivers/gamepad.h"
+#include "../fs/recovery.h"
 
 /* -----------------------------------------------------------------------
  * Themes
@@ -721,6 +722,7 @@ static const struct { const char *name; const char *keys; int page; } g_setting_
     { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
     { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
     { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
+    { "Printers",        "printers printing printer scanner ipp default add network", SETTINGS_PRINTERS },
     { "About",           "about version fonts licence",                       SETTINGS_ABOUT },
 };
 #define N_SETTING_ITEMS ((int)(sizeof(g_setting_items) / sizeof(g_setting_items[0])))
@@ -1351,9 +1353,23 @@ void DesktopDrawThemePreview(int i, GdiRect r)
 /* -----------------------------------------------------------------------
  * Shell layers (registered with the WM)
  * ----------------------------------------------------------------------- */
+/* Safe mode: a black desktop with "Safe Mode" in its four corners, as
+ * Windows shows it */
+static void draw_safe_mode(void)
+{
+    static const char text[] = "Safe Mode";
+    int w = GdiScreenW(), h = GdiScreenH(), tw = GdiTextW(text), m = 8;
+    GdiFillRect(RECT(0, 0, w, h), 0x000000);
+    GdiTextT(m, m, text, 0xFFFFFF);
+    GdiTextT(w - tw - m, m, text, 0xFFFFFF);
+    GdiTextT(m, h - GDI_FONT_H - m - 56, text, 0xFFFFFF);         /* (above the dock) */
+    GdiTextT(w - tw - m, h - GDI_FONT_H - m - 56, text, 0xFFFFFF);
+}
+
 static void shell_background(void)
 {
-    draw_wallpaper_in(TH, RECT(0, 0, GdiScreenW(), GdiScreenH()));
+    if (RecoverySafeMode()) draw_safe_mode();
+    else draw_wallpaper_in(TH, RECT(0, 0, GdiScreenW(), GdiScreenH()));
     for (int i = 1; i < GdiMonitorCount(); i++)        /* the other monitors: wallpaper only */
         draw_wallpaper_in(TH, GdiMonitorRect(i));
     draw_desktop_icons();

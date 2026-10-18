@@ -43,6 +43,7 @@ void    FatForget(FatVol *v);
 const char *FatLabel(const FatVol *v);        /* "NOVADATA", trimmed */
 int         FatType(const FatVol *v);         /* 16 or 32 */
 BlockDev   *FatDevice(const FatVol *v);
+UINT64      FatStart(const FatVol *v);       /* its first sector on the device */
 UINT64      FatFreeBytes(FatVol *v);
 UINT64      FatTotalBytes(const FatVol *v);
 
@@ -54,6 +55,8 @@ bool FatLookupPath(FatVol *v, const char *path, FatEntry *out);
 
 /* Read a whole file into @buf (at least e->size bytes). */
 bool FatRead(FatVol *v, const FatEntry *e, void *buf);
+/* Read the first bytes of a file (up to @n, its size and one cluster); how many */
+UINT32 FatReadHead(FatVol *v, const FatEntry *e, void *buf, UINT32 n);
 /* The time the next entries written on @v get (DOS date << 16 | time; 0: now) */
 void FatSetStamp(FatVol *v, UINT32 dos_time);
 /* Create or replace the file @name in @dir with @len bytes of @data. */

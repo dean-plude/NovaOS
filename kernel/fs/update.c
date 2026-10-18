@@ -14,6 +14,7 @@
 #include "fat.h"
 #include "persist.h"
 #include "setup.h"
+#include "recovery.h"
 #include "../net/net.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
@@ -37,6 +38,7 @@ _Static_assert(sizeof(UPDATE_SIGNING_KEY) == 1 || sizeof(UPDATE_SIGNING_KEY) == 
 #define F_NEW        "kernel.new"
 #define F_OLD        "kernel.old"
 #define F_LOADER_NEW "bootx64.new"
+#define F_LOADER_OLD "bootx64.old"       /* the loader kernel.old came with (recovery.h) */
 #define F_PENDING    "update.pnd"
 #define F_TRYING     "update.try"
 #define F_INFO       "update.txt"        /* "version X" and "from Y" of the staged update */
@@ -401,6 +403,30 @@ static bool sync(FatVol *v)
     return ok;
 }
 
+/* The ESP, one user at a time (an update being staged, the update's first
+ * start finishing, recovery.c's failed-start count and startup repair):
+ * open_esp with the lock taken (dropped again when there is none), and
+ * esp_close, which unmounts it and lets go */
+static volatile int g_esp_busy;
+
+static FatVol *esp_open(UINT32 *nova_dir)
+{
+    while (__atomic_exchange_n(&g_esp_busy, 1, __ATOMIC_ACQUIRE)) sched_sleep_tick();
+    FatVol *v = open_esp(nova_dir);
+    if (!v) __atomic_store_n(&g_esp_busy, 0, __ATOMIC_RELEASE);
+    return v;
+}
+
+static void esp_close(FatVol *v)
+{
+    FatUnmount(v);
+    __atomic_store_n(&g_esp_busy, 0, __ATOMIC_RELEASE);
+}
+
+FatVol *UpdateEspOpen(UINT32 *nova_dir) { return esp_open(nova_dir); }
+bool    UpdateEspSync(FatVol *esp)      { return sync(esp); }
+void    UpdateEspClose(FatVol *esp)     { esp_close(esp); }
+
 /* A file of the ESP read whole into a new buffer (*len), or NULL */
 static UINT8 *read_file(FatVol *v, const char *path, UINT32 *len)
 {
@@ -522,21 +548,21 @@ static void install(void)
 
     step("Writing the update to the EFI System Partition");
     UINT32 dir;
-    FatVol *esp = open_esp(&dir);
+    FatVol *esp = esp_open(&dir);
     if (!esp) { fail("The EFI System Partition NovaOS started from was not found."); goto out; }
     clear_staging(esp, dir, true);
     sync(esp);
     UINT64 need = g_kernel.size + g_loader.size + (1u << 20), room = FatFreeBytes(esp);
     if (room < need) {
         fail("The EFI System Partition has %u MB free; the update needs %u MB.", (unsigned)(room >> 20), (unsigned)((need + (1u << 20) - 1) >> 20));
-        FatUnmount(esp);
+        esp_close(esp);
         goto out;
     }
     if (!write_checked(esp, dir, F_NEW, kdata, (UINT32)g_kernel.size) ||
         (ldata && !write_checked(esp, dir, F_LOADER_NEW, ldata, (UINT32)g_loader.size))) {
         clear_staging(esp, dir, false);
         sync(esp);
-        FatUnmount(esp);
+        esp_close(esp);
         fail("Writing the update to the EFI System Partition failed (it was removed again).");
         goto out;
     }
@@ -547,11 +573,11 @@ static void install(void)
         !FatWriteFile(esp, dir, F_PENDING, "pending\n", 8) || !sync(esp)) {
         clear_staging(esp, dir, false);
         sync(esp);
-        FatUnmount(esp);
+        esp_close(esp);
         fail("Writing the update to the EFI System Partition failed (it was removed again).");
         goto out;
     }
-    FatUnmount(esp);
+    esp_close(esp);
     step("The update is ready: restart NovaOS to finish it");
     kprintf("[UPDATE] NovaOS %s is staged; it starts at the next restart\n", (const char *)g_st.version);
     set_state(UPDATE_READY);
@@ -629,8 +655,18 @@ static void finish(FatVol *esp, UINT32 dir, const char *info)
     bool ok = (!has_file(esp, NOVA_DIR "\\" F_KERNEL) || FatRename(esp, dir, F_KERNEL, F_OLD)) &&
               FatRename(esp, dir, F_NEW, F_KERNEL) && sync(esp);
     if (ok && loader) {
+        /* the loader the previous kernel came with is kept beside it as
+         * bootx64.old: the known-good set the Advanced startup menu starts
+         * (recovery.h); an update without a loader keeps this one, so
+         * kernel.old goes with it */
         FatEntry e;
+        UINT32 olen = 0;
+        UINT8 *cur = read_file(esp, BOOT_DIR "\\" F_LOADER, &olen);
+        if (cur) FatWriteFile(esp, dir, F_LOADER_OLD, cur, olen);
+        kfree(cur);
         ok = FatLookupPath(esp, BOOT_DIR, &e) && e.dir && FatWriteFile(esp, e.cluster, F_LOADER, loader, llen) && sync(esp);
+    } else if (ok) {
+        FatDelete(esp, dir, F_LOADER_OLD);
     }
     kfree(loader);
     if (!ok) {
@@ -655,7 +691,7 @@ static void boot_thread(void *arg)
 {
     (void)arg;
     UINT32 dir;
-    FatVol *esp = open_esp(&dir);
+    FatVol *esp = esp_open(&dir);
     if (!esp) {
         if (g_boot_flags) kprintf("[UPDATE] The EFI System Partition NovaOS started from was not found\n");
         return;
@@ -680,7 +716,7 @@ static void boot_thread(void *arg)
         um_registry_set_sz(UPDATE_KEY, "LastUpdate", g_notice);
     }
     kfree(info);
-    FatUnmount(esp);
+    esp_close(esp);
 }
 
 /* Restart an update's first start that did not make it: the trying mark
@@ -748,19 +784,22 @@ void UpdateBootProgress(const char *step)
 void UpdateBootGood(void)
 {
     if (g_watching) g_start_good = true;
+    RecoveryStartGood();
 }
 
 void UpdateDesktopTurn(bool signed_in)
 {
     static UINT64 since;
-    if (!g_watching || g_start_good) return;
-    if (!signed_in) return;
+    static bool good;
+    if (good || !signed_in) return;
     UINT64 now = sched_ticks();
     if (!since) {
         since = now ? now : 1;
         UpdateBootProgress("the desktop's first turn");
     } else if (now - since >= 300) {
-        g_start_good = true;                            /* (the watching thread finishes the update) */
+        good = true;
+        if (g_watching) g_start_good = true;            /* (the watching thread finishes the update) */
+        RecoveryStartGood();                            /* (every start: the failed-start count) */
     }
 }
 

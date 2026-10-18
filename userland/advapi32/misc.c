@@ -317,6 +317,17 @@ WINADVAPI BOOL WINAPI InitiateSystemShutdownW(LPWSTR m, LPWSTR msg, DWORD t, BOO
 { return InitiateSystemShutdownExW(m, msg, t, f, r, 0); }
 WINADVAPI BOOL WINAPI InitiateSystemShutdownA(LPSTR m, LPSTR msg, DWORD t, BOOL f, BOOL r)
 { (void)m; (void)msg; return InitiateSystemShutdownExW(NULL, NULL, t, f, r, 0); }
+/* InitiateShutdown: the same, and SHUTDOWN_RESTART_BOOTOPTIONS restarts
+ * into the boot loader's Advanced startup menu (shutdown /r /o), which
+ * NovaOS's NtShutdownSystem takes as its own action 3 */
+WINADVAPI DWORD WINAPI InitiateShutdownW(LPWSTR m, LPWSTR msg, DWORD grace, DWORD flags, DWORD reason)
+{
+    (void)m; (void)msg; (void)grace; (void)reason;
+    ULONG action = (flags & SHUTDOWN_RESTART) ? ((flags & SHUTDOWN_RESTART_BOOTOPTIONS) ? 3 : 1) : 2;
+    return NtShutdownSystem(action) == 0 ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+}
+WINADVAPI DWORD WINAPI InitiateShutdownA(LPSTR m, LPSTR msg, DWORD grace, DWORD flags, DWORD reason)
+{ (void)m; (void)msg; return InitiateShutdownW(NULL, NULL, grace, flags, reason); }
 WINADVAPI BOOL WINAPI AbortSystemShutdownW(LPWSTR m) { (void)m; SetLastError(ERROR_NO_SHUTDOWN_IN_PROGRESS); return FALSE; }
 WINADVAPI BOOL WINAPI AbortSystemShutdownA(LPSTR m) { (void)m; SetLastError(ERROR_NO_SHUTDOWN_IN_PROGRESS); return FALSE; }
 

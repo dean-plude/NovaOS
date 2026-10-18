@@ -32,7 +32,8 @@ order; --list prints them):
             server, a redirect to a ~1,000-character signed address, a 503
             the Store tries again after, a body trickled over more than 30
             s), all against tools/h2server.js
-            (needs node and openssl).  IPv6 on an IPv6-only
+            (needs node and openssl), and network printing to a fake IPP
+            printer, tools/ippprinter.py (spooltest ipp).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
             ping -6, curl -6 and Winsock over IPv6 (netcat), stateful
             DHCPv6 (ipconfig /all, dhcp6test, rebind and renew,
@@ -75,7 +76,13 @@ order; --list prints them):
             or changed after signing, then updates itself from a signed
             one to a newer test build of this kernel, restarts
             into it twice, and goes back to it when the next update is
-            reset while it first starts; "driversearch", QEMU's
+            reset while it first starts; "rollbacktest", an installed
+            NovaOS with a previous version beside it (kernel.old and
+            bootx64.old) and an unfinished update's files: the boot
+            loader's Advanced startup menu, asked for with shutdown /r /o,
+            starts safe mode, startup repair and the previous version, and
+            comes up by itself after two starts that did not reach the
+            desktop; "driversearch", QEMU's
             virtio-serial port, which has no NovaOS driver, on a network
             answering as the Microsoft Update Catalog does from recorded
             pages (tools/drivertest/catalog_fixture.py): pnputil
@@ -356,7 +363,8 @@ def venus_gpu():
 # The network suite's two boots, each with a virtio-net adapter.  IPv4 and
 # HTTP/2: QEMU's user-mode network, where 10.0.2.2 is this machine and
 # tools/h2server.js serves HTTPS (HTTP/2 by ALPN, self-signed) on 18443 and
-# HTTP/1.1 on 18080.  IPv6: an IPv6-only network that is tools/v6peer.py (a
+# HTTP/1.1 on 18080, and tools/ippprinter.py is a network printer (IPP) on
+# 18631.  IPv6: an IPv6-only network that is tools/v6peer.py (a
 # router with SLAAC and RDNSS, a stateful DHCPv6 server, DNS for nova6.test,
 # HTTP on port 80), over a QEMU datagram netdev.
 NET4 = load_suite('network4')
@@ -371,7 +379,7 @@ def renamed(t, suffix):
 
 # The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store'))]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store', 'spooltest'))]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)
@@ -384,6 +392,7 @@ CDBOOT = load_suite('devices/cdboot')
 LAPTOP = load_suite('devices/laptop')
 BESIDE = load_suite('devices/beside')
 UPDATE = load_suite('devices/update')
+ROLLBACK = load_suite('devices/rollbacktest')
 DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 HID = load_suite('devices/hid')
@@ -416,7 +425,9 @@ def net4_boot(work):
                    check=True, capture_output=True)
     srv = subprocess.Popen(['node', os.path.join(ROOT, 'tools', 'h2server.js'), cert, key, '18443', '18080'],
                            stdout=open(os.path.join(work, 'h2server.log'), 'w'), stderr=subprocess.STDOUT)
-    return ['-nic', 'user,model=virtio-net-pci'], [srv]
+    ipp = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'ippprinter.py'), '--port', '18631'],
+                           stdout=open(os.path.join(work, 'ippprinter.log'), 'w'), stderr=subprocess.STDOUT)
+    return ['-nic', 'user,model=virtio-net-pci'], [srv, ipp]
 
 
 def net6_boot(work):
@@ -1008,6 +1019,31 @@ def update_boot(work):
     return ['-nic', 'user,model=virtio-net-pci', '-fw_cfg', f'name=opt/novaos/update-key,string={public}'], [srv]
 
 
+def rollbacktest_boot(work):
+    """A copy of build/nova.img (an installed NovaOS) with the known-good
+    set an update leaves beside it: \\EFI\\NOVA\\kernel.old, this build's
+    kernel stamped as version 0.0.9-test (tools/mkupdate.py), and
+    bootx64.old, this build's boot loader; and the files of an update that
+    never finished (kernel.new and update.txt with no mark), for startup
+    repair to find (tests/selftest/devices/rollbacktest)"""
+    img = os.path.join(work, 'rollback.img')
+    subprocess.run(['cp', '--sparse=always', os.path.join(ROOT, 'build', 'nova.img'), img], check=True)
+    prev = os.path.join(work, 'previous')
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkupdate.py'), prev, '--version', '0.0.9-test',
+                    '--no-loader'], check=True, stdout=subprocess.DEVNULL)
+    stale = os.path.join(work, 'update.txt')
+    with open(stale, 'w') as f:
+        f.write('version 9.9.9-test\nfrom 0.0.9-test\n')
+    junk = os.path.join(work, 'kernel.new')
+    with open(junk, 'wb') as f:
+        f.write(b'not a kernel\n' * 64)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    for src, dst in ((os.path.join(prev, 'kernel.elf'), 'kernel.old'), (os.path.join(ROOT, 'build', 'bootx64.efi'), 'bootx64.old'),
+                     (stale, 'update.txt'), (junk, 'kernel.new')):
+        subprocess.run(['mcopy', '-o', '-i', img, src, '::/EFI/NOVA/' + dst], check=True, env=env)
+    return [], [], {'img': img}
+
+
 def driversearch_boot(work):
     """QEMU's virtio-serial port, which has no NovaOS driver, on a user-mode
     network where 10.0.2.2:18091 answers as the Microsoft Update Catalog
@@ -1100,6 +1136,7 @@ BOOTS = {
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot),
                 ('beside', BESIDE, beside_boot), ('update', UPDATE, update_boot),
+                ('rollbacktest', ROLLBACK, rollbacktest_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
                 ('isocam', ISOCAM, isocam_boot), ('composite', COMPOSITE, composite_boot),
                 ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
@@ -1213,7 +1250,7 @@ def main():
             finally:
                 for p in procs:
                     p.kill()
-                for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
+                for log in ['h2server.log', 'ippprinter.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
                         + [f'padpeer-{p}.log' for p in (10710, 10711, 10712, 10713, 10717)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
                                                                                  'isocampeer.log', 'compositepeer.log']:
                     if os.path.exists(os.path.join(work, log)):

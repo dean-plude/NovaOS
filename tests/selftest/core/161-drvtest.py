@@ -4,7 +4,7 @@
 DOC = ('driver packages staged in the driver store and published as oemN.inf from a program '
        '(`DiInstallDriver`, `SetupCopyOEMInf`), with `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`)')
 TESTS = [
-    Test('driver package from a program', 'drvtest exe', [r'drvtest exe: \d+ passed, 0 failed']),
+    Test('driver package from a program', 'drvtest exe', [r'drvtest exe: \d+ passed, 0 failed'], elevated=True),
     Test('driver package with pnputil', 'drvtest zip', [r'drvtest zip: \d+ passed, 0 failed']),
-    Test('driver package from an MSI', 'drvtest msi', [r'drvtest msi: \d+ passed, 0 failed']),
+    Test('driver package from an MSI', 'drvtest msi', [r'drvtest msi: \d+ passed, 0 failed'], elevated=True),
 ]

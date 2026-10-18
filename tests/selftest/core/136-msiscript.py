@@ -4,5 +4,5 @@
 DOC = ('Windows Installer JScript and VBScript custom actions setting and reading properties and writing files, '
        'and a failing script rolling its install back (`msitest script`)')
 TESTS = [
-    Test('msi script actions', 'msitest script', [r'msitest script: \d+ passed, 0 failed']),
+    Test('msi script actions', 'msitest script', [r'msitest script: \d+ passed, 0 failed'], elevated=True),
 ]

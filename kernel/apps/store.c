@@ -23,6 +23,7 @@
 #include "../net/net.h"
 #include "../um/um.h"
 #include "../fs/update.h"
+#include "../fs/fsec.h"
 #include "../wm/desktop.h"
 
 /* -----------------------------------------------------------------------
@@ -553,7 +554,7 @@ static UINT16 pe_machine(RamNode *f)
 static void spawn(Store *s, int i, RamNode *exe, const char *cmdline, RamNode *cwd)
 {
     char err[160];
-    UmProcess *p = UmSpawn(exe, cmdline, cwd, NULL, err, sizeof(err));
+    UmProcess *p = UmSpawnElevated(exe, cmdline, cwd, NULL, err, sizeof(err));
     if (!p) {
         char m[96];
         ksnprintf(m, sizeof(m), "Could not start: %s", err);
@@ -605,7 +606,7 @@ static void unpack(Store *s, int i, RamNode *f)
         }
         cmd[n] = '\0';
     }
-    UmProcess *p = UmSpawn(z, cmd, f->parent, NULL, err, sizeof(err));
+    UmProcess *p = UmSpawnElevated(z, cmd, f->parent, NULL, err, sizeof(err));
     if (!p) {
         char m[96];
         ksnprintf(m, sizeof(m), "Could not start 7-Zip: %s", err);
@@ -697,6 +698,13 @@ static bool unpack_tick(Store *s)
         char m[96];
         if (a->system) ksnprintf(m, sizeof(m), "Installed in C:\\Windows\\System32");
         else           ksnprintf(m, sizeof(m), "Installed in C:\\Programs\\%s", a->dest);
+        /* An unpacked (portable) program keeps its settings beside it, as
+         * ShareX's Portable file says to: its folder is the user's to write,
+         * as its own installer's users-modify would make it (UAC) */
+        char dir[RAMFS_PATH_MAX];
+        ksnprintf(dir, sizeof(dir), "\\Programs\\%s", a->dest);
+        RamNode *d = a->system ? NULL : RamfsResolve(NULL, dir);
+        if (d && d->dir) FsecShareFolder(d);
         set_msg(s, i, m);
     } else {
         char m[96];

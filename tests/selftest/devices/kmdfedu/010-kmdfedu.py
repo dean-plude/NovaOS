@@ -23,7 +23,7 @@ DOC = ('a KMDF driver (kmdfedu.sys) on QEMU\'s edu PCI device, installed with `p
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 TESTS = [
     Test('kmdfedu test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('kmdfedu restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('kmdfedu install', r'pnputil /add-driver C:\Tests\KmdfEdu\kmdfedu.inf /install',
          [r'Driver package installed on device: PCI\\VEN_1234&DEV_11E8',

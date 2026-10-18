@@ -65,7 +65,8 @@ def _standard_user(nova):
 DOC = ('`uactest` (standard users and UAC: the consent prompt on the secure desktop for runas and for an installer\'s '
        'manifest, No refused, Yes elevating to high integrity; a standard user\'s credential prompt refusing a wrong '
        'administrator password and running the installer and runas as the administrator; a medium-integrity process '
-       'kept from writing, reading or ending a high-integrity one)')
+       'kept from writing, reading or ending a high-integrity one; programs that are not elevated refused changes to '
+       '`C:\\Windows`, `C:\\Programs` and `HKLM`, which they read, and the elevated one making them)')
 TESTS = [
     Test('uactest', 'uactest', [r'uactest: \d+ passed, 0 failed'],
          timeout=600, uac_auto=False, shot=r'uactest: prompt 1',
@@ -73,5 +74,6 @@ TESTS = [
                (r'uactest: prompt 2', _answer(('alt', 'n'))),
                (r'uactest: prompt 3', _standard_user),
                (r'uactest: prompt 4', _answer(('alt', 'y')))],
-         boot_expect=[r'\[UAC\] Wrong administrator name or password', r'\[SEC\] Integrity: uactest\.exe']),
+         boot_expect=[r'\[UAC\] Wrong administrator name or password', r'\[SEC\] Integrity: uactest\.exe',
+                      r'\[SEC\] Registry: uactest\.exe \(not elevated\) may not change machine key']),
 ]

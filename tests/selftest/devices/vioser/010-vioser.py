@@ -21,7 +21,7 @@ VIOSER_ID = '"PCI\\VEN_1AF4&DEV_1003"'
 PORT = r'\{6FDE7547-1B65-48ae-B628-80BE62016026\}\\VIOSerialPort\\\S+'
 TESTS = [
     Test('vioser test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('vioser restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('vioser install', r'pnputil /add-driver C:\Tests\Vioser\vioser.inf /install',
          [r'Driver package installed on device: PCI\\VEN_1AF4&DEV_1003',

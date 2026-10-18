@@ -49,7 +49,7 @@ TESTS = [
           r'\[NT\] wdmcat\.sys: not loaded: signed by NovaOS Test Driver Signer \(oem\d+\.cat\), '
           r'which is not a Microsoft driver signature'], builtin=True),
     Test('wdm test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('wdm restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('wdm unsigned refused with test signing', 'sc start WdmUnsigned',
          [r'\[SC\] StartService FAILED 577', r'\[NT\] wdmunsigned\.sys: not loaded: it is not signed'], builtin=True),

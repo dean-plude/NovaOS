@@ -19,7 +19,8 @@ def unpack(app, files, dest):
 
 
 APP = App('SumatraPDF', '3.4.6', 'https://registry.npmjs.org/pdf-to-printer/-/pdf-to-printer-5.8.1.tgz',
-          'SumatraPDF', [Test('add a printer', rf'spooltest.exe add "{IPP_PRINTER}" {IPP_BASE}/ipp/print', timeout=60),
+          'SumatraPDF', [Test('add a printer', rf'spooltest.exe add "{IPP_PRINTER}" {IPP_BASE}/ipp/print', timeout=60,
+                              elevated=True),     # (adding a printer is an administrator's, as on Windows)
                          Test('open a PDF', rf'start {A}\SumatraPDF\SumatraPDF.exe {A}\data\corpus.pdf', timeout=12),
                          Test('print it', rf'spooltest.exe same C:\Temp\sumatrapdf.pdf {IPP_BASE}', timeout=120)],
           unpack=unpack, gui=True, printer=True)

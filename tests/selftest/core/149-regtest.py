@@ -7,6 +7,6 @@
 DOC = '`regtest` (isolated 32- and 64-bit machine registry views, shared keys, and registry keys and values changed concurrently)'
 
 TESTS = [
-    Test('registry keys x64', 'regtest', [r'regtest: \d+ passed, 0 failed'], timeout=300),
-    Test('registry keys x86', r'C:\Programs\x86\regtest.exe 150', [r'regtest: \d+ passed, 0 failed'], timeout=300),
+    Test('registry keys x64', 'regtest', [r'regtest: \d+ passed, 0 failed'], timeout=300, elevated=True),
+    Test('registry keys x86', r'C:\Programs\x86\regtest.exe 150', [r'regtest: \d+ passed, 0 failed'], timeout=300, elevated=True),
 ]

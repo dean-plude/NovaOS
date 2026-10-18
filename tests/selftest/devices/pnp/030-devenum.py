@@ -19,7 +19,7 @@ def _plug_keyboard(nova):
 
 TESTS = [
     Test('pnp device enumeration', 'devenumtest', [r'devenumtest: \d+ passed, 0 failed'], timeout=180,
-         acts=[(r'\[PNP\] step 1: plug in a USB keyboard', _plug_keyboard)]),
+         acts=[(r'\[PNP\] step 1: plug in a USB keyboard', _plug_keyboard)], elevated=True),
     Test('pnp driver package', r'pnputil /add-driver C:\Tests\PnpDriver\novakbd.inf',
          [r'Driver package added successfully', r'Published Name: +oem\d+\.inf']),
     Test('pnp devices and drivers', 'pnputil /enum-devices /connected /class Keyboard /ids /drivers',

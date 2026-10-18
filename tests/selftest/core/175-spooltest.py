@@ -12,6 +12,6 @@ DOC = ('`spooltest` (the print spooler and `winspool.drv`: printers, raw jobs, t
 TESTS = [
     Test('spooltest x64', 'spooltest', [r'spooltest: \d+ passed, 0 failed'], timeout=240,
          shot=r'spooltest: print dialog open',
-         boot_expect=[r'\[SPOOLER\] Print spooler running']),
-    Test('spooltest x86', r'C:\Programs\x86\spooltest.exe', [r'spooltest: \d+ passed, 0 failed'], timeout=240),
+         boot_expect=[r'\[SPOOLER\] Print spooler running'], elevated=True),
+    Test('spooltest x86', r'C:\Programs\x86\spooltest.exe', [r'spooltest: \d+ passed, 0 failed'], timeout=240, elevated=True),
 ]

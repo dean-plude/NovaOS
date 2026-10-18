@@ -211,10 +211,13 @@ class Test:
     then not taken for a panic of this boot.  @uac_auto: UAC's consent
     prompt is answered Yes (Alt+Y) whenever it shows, as by the person at
     the keyboard (tools/novarun.py); False when the test answers it itself
-    (its @acts)."""
+    (its @acts).  @elevated: the program changes the machine (HKLM,
+    C:\\Windows, C:\\Programs), so it runs as administrator: "sudo @cmd",
+    whose UAC prompt is answered Yes, as one would run it on Windows."""
     def __init__(self, name, cmd, expect=(), timeout=180, check=None, store=None, shot=None, crash=False, reboot=False,
                  acts=(), boot_expect=(), builtin=False, settle=0, before=None, restart=False,
-                 quotes_panic=False, cut=None, uac_auto=True):
+                 quotes_panic=False, cut=None, uac_auto=True, elevated=False):
+        self.line = 'sudo ' + cmd if elevated else cmd    # (what is typed)
         self.name, self.cmd, self.expect, self.timeout, self.check = name, cmd, expect, timeout, check
         self.store, self.shot, self.crash, self.reboot = store, shot, crash, reboot
         self.acts, self.boot_expect, self.builtin, self.settle = acts, boot_expect, builtin, settle
@@ -1428,7 +1431,7 @@ def run_boot(a, tests, work, label, **nova_args):
             png = os.path.join(a.out, slug + '.png')
             if t.crash:
                 nova.sr.read_new()
-                nova.qmp.type(t.cmd + '\n')
+                nova.qmp.type(t.line + '\n')
                 out, ok = nova.sr.wait('KERNEL PAGE FAULT', t.timeout)
                 out += nova.sr.wait('halting', 5)[0]
                 if not out.strip():                 # nothing at all: what the kernel said last
@@ -1443,7 +1446,7 @@ def run_boot(a, tests, work, label, **nova_args):
                 if t.before:
                     t.before(nova)
                 nova.sr.read_new()
-                nova.qmp.type(t.cmd + '\n')
+                nova.qmp.type(t.line + '\n')
                 out, end = '', time.time() + t.timeout
                 while not re.search(t.cut, out) and time.time() < end and '[TERM-DONE]' not in out:
                     time.sleep(0.25)
@@ -1462,7 +1465,7 @@ def run_boot(a, tests, work, label, **nova_args):
                     t.before(nova)
                     full_log += nova.sr.read_new()          # (what the kernel said meanwhile)
                 nova.uac_auto = t.uac_auto
-                out, ok = nova.run(t.cmd, t.timeout, shot=(t.shot, png) if t.shot else None, acts=t.acts)
+                out, ok = nova.run(t.line, t.timeout, shot=(t.shot, png) if t.shot else None, acts=t.acts)
                 nova.uac_auto = True
             if t.crash:
                 miss = [e for e in t.expect if not re.search(e, out)]

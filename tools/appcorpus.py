@@ -712,7 +712,7 @@ def main():
                 elif app.name == 'NovaOS':
                     out, w = screen(nova, t, a, ntfs)
                 else:
-                    out, ok = nova.run(t.cmd, t.timeout)
+                    out, ok = nova.run(t.line, t.timeout)   # (t.line: 'sudo ' + t.cmd for Test(elevated=True))
                     out = ANSI.sub('', out)          # rg and fd colour their output in a console
                     exe = re.split(r'[\\/]', t.cmd.split()[0])[-1]
                     w = verdict(t, out, ok, exe)

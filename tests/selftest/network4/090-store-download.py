@@ -20,7 +20,7 @@ CATALOG = 'https://10.0.2.2:18443/store/catalog.json'
 TESTS = [
     Test('store trust', 'wget http://10.0.2.2:18080/store/ca.pem', [r'Saved \d+ bytes'], builtin=True),
     Test('store certutil', r'certutil -addstore root C:\Downloads\ca.pem', [r'completed successfully'], builtin=True),
-    Test('store catalog', rf'cmd /c "echo {CATALOG}> C:\Windows\AppStore\catalog-url.txt"'),
+    Test('store catalog', rf'cmd /c "echo {CATALOG}> C:\Windows\AppStore\catalog-url.txt"', elevated=True),
     Test('store refresh', 'store refresh', [r'Refreshing catalog'], builtin=True),
     Test('store download', 'store install Store Download Test', [r'Downloaded 6\.0 MB'], store='Store Download Test',
          before=catalog_refreshed, timeout=420),

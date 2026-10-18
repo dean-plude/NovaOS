@@ -19,6 +19,12 @@
  *     more than waiting on it and asking its exit code ("uactest wait":
  *     OpenProcess for writing, reading or ending it is denied, a limited
  *     handle can neither end it, read it nor be duplicated into more).
+ *   - neither the limited administrator nor the standard user may change
+ *     C:\Windows, C:\Programs or HKLM (ACCESS_DENIED: a new file or
+ *     folder, writing or deleting a system file, a new machine key, a
+ *     value set through a key opened for reading), while both read them
+ *     and write C:\Windows\Temp; the elevated program changes them all
+ *     (and puts them back).
  *
  * The children report through their exit codes (the number of checks
  * that failed); the accounts are deleted at the end. */
@@ -191,6 +197,75 @@ static void remove_account(const WCHAR *name)
 }
 
 /* ---- "uactest asadmin": runas from the standard user, with uacadmin's password */
+/* ---- C:\Windows, C:\Programs and HKLM: refused unless @elevated (which
+ * leaves C:\Windows\uactest.txt for the standard user, @leftover, to fail
+ * to delete; "uactest admin" deletes it afterwards) */
+static BOOL make_file(const WCHAR *path)
+{
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return FALSE;
+    CloseHandle(f);
+    return TRUE;
+}
+
+static void protection_checks(BOOL elevated, BOOL leftover)
+{
+    const char *verb = elevated ? "allowed" : "denied";
+    char what[128];
+    DWORD e;
+#define EXPECT(desc, ok) (snprintf(what, sizeof(what), "%s: %s", desc, verb), \
+                          check(what, elevated ? (ok) : (!(ok) && (e = GetLastError(), e == ERROR_ACCESS_DENIED))))
+    SetLastError(0);
+    EXPECT("a new file in C:\\Windows", make_file(elevated ? L"C:\\Windows\\uactest.txt" : L"C:\\Windows\\uactest-user.txt"));
+    SetLastError(0);
+    EXPECT("a new file in C:\\Windows\\System32", make_file(L"C:\\Windows\\System32\\uactest.dll"));
+    SetLastError(0);
+    EXPECT("a new folder in C:\\Programs", CreateDirectoryW(L"C:\\Programs\\uactest", NULL));
+    SetLastError(0);
+    HANDLE f = CreateFileW(L"C:\\Windows\\System32\\cmd.exe", GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    EXPECT("opening a system program for writing", f != INVALID_HANDLE_VALUE);
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    f = CreateFileW(L"C:\\Windows\\System32\\cmd.exe", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    check("reading a system program: allowed", f != INVALID_HANDLE_VALUE);
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    check("a new file in C:\\Windows\\Temp: allowed", make_file(L"C:\\Windows\\Temp\\uactest.tmp") &&
+          DeleteFileW(L"C:\\Windows\\Temp\\uactest.tmp"));
+    if (elevated) {
+        check("deleting the new file and folder: allowed", DeleteFileW(L"C:\\Windows\\System32\\uactest.dll") &&
+              RemoveDirectoryW(L"C:\\Programs\\uactest"));
+    } else if (leftover) {
+        SetLastError(0);
+        EXPECT("deleting the administrator's file in C:\\Windows", DeleteFileW(L"C:\\Windows\\uactest.txt"));
+    }
+
+    HKEY k = 0;
+    LSTATUS r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\uactest", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL);
+    snprintf(what, sizeof(what), "a new key under HKLM\\SOFTWARE: %s", verb);
+    check(what, elevated ? r == 0 : r == ERROR_ACCESS_DENIED);
+    if (k) { RegCloseKey(k); k = 0; }
+    r = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_SET_VALUE, &k);
+    snprintf(what, sizeof(what), "HKLM\\...\\CurrentVersion opened to set values: %s", verb);
+    check(what, elevated ? r == 0 : r == ERROR_ACCESS_DENIED);
+    if (k) { RegCloseKey(k); k = 0; }
+    r = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &k);
+    WCHAR name[64];
+    DWORD n = sizeof(name);
+    check("HKLM read: ProductName", r == 0 && !RegQueryValueExW(k, L"ProductName", NULL, NULL, (BYTE *)name, &n));
+    if (!elevated)
+        check("a value set through a key opened for reading: denied",
+              k && RegSetValueExW(k, L"uactest", 0, REG_DWORD, (const BYTE *)&n, 4) == ERROR_ACCESS_DENIED);
+    if (k) RegCloseKey(k);
+    k = 0;
+    r = RegOpenKeyW(HKEY_LOCAL_MACHINE, L"SOFTWARE", &k);          /* (MAXIMUM_ALLOWED) */
+    check("RegOpenKey(HKLM\\SOFTWARE): opens", r == 0);
+    r = k ? RegSetValueExW(k, L"uactest", 0, REG_DWORD, (const BYTE *)&n, 4) : 1;
+    snprintf(what, sizeof(what), "... a value set through it: %s", verb);
+    check(what, elevated ? r == 0 : r == ERROR_ACCESS_DENIED);
+    if (k) { RegDeleteValueW(k, L"uactest"); RegCloseKey(k); }
+    if (elevated) check("the new key deleted", RegDeleteKeyW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\uactest") == 0);
+#undef EXPECT
+}
+
 static int as_admin(void)
 {
     who = "uactest asadmin";
@@ -212,6 +287,7 @@ static int user(void)
     check("not elevated", token_dword(TokenElevation_) == 0);
     check("medium integrity", integrity() == 0x2000);
     check("not in Administrators", !in_admins());
+    protection_checks(FALSE, TRUE);
     /* an installer: the credential prompt (a wrong password first, refused) */
     DWORD code = installer();
     check("the installer ran elevated once an administrator's password was typed", code == 0);
@@ -227,6 +303,7 @@ static int admin(void)
     who = "uactest admin";
     check("runas Yes: elevated (TokenElevation 1, high integrity, Administrators)", elevated());
     check("TokenElevationType full", token_dword(TokenElevationType_) == 2);
+    protection_checks(TRUE, FALSE);
     remove_account(STD_USER);
     remove_account(ADMIN_USER);
     USER_INFO_1_ u = { STD_USER, STD_PASS, 0, 1 /* USER_PRIV_USER */, NULL, NULL, UF_SCRIPT_, NULL };
@@ -250,6 +327,7 @@ static int admin(void)
         CloseHandle(pi.hProcess);
     }
     check("the standard user's checks passed", code == 0);
+    check("the file in C:\\Windows deleted", DeleteFileW(L"C:\\Windows\\uactest.txt"));
     if (t) CloseHandle(t);
     remove_account(STD_USER);
     remove_account(ADMIN_USER);
@@ -329,6 +407,7 @@ int main(int argc, char **argv)
     check("TokenElevation 0", token_dword(TokenElevation_) == 0);
     check("medium integrity", integrity() == 0x2000);
     check("Administrators only for denying", !in_admins());
+    protection_checks(FALSE, FALSE);
 
     say("prompt 1: No");
     DWORD r = shell(L"runas", L"child", NULL);

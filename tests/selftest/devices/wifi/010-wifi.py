@@ -44,7 +44,7 @@ def _dhcp(nova):
 
 TESTS = [
     Test('wifi test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('wifi restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('wifi no interface', 'netsh wlan show interfaces', [r'There is no wireless interface on the system\.'],
          builtin=True),

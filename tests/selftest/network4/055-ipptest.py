@@ -10,5 +10,5 @@ DOC = ('`spooltest ipp` (network printing: a fake IPP printer on the host gets t
        'and PWG Raster pages exactly as GDI draws them; a printer added as Settings adds one is named after its model; '
        'an unreachable printer keeps its job offline)')
 TESTS = [
-    Test('spooltest IPP', 'spooltest ipp http://10.0.2.2:18631', [r'spooltest: \d+ passed, 0 failed'], timeout=300),
+    Test('spooltest IPP', 'spooltest ipp http://10.0.2.2:18631', [r'spooltest: \d+ passed, 0 failed'], timeout=300, elevated=True),
 ]

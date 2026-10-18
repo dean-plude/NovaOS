@@ -282,6 +282,16 @@ void UmInit(void)
     BootFilesInstall();                             /* wallpapers, icon sets, pictures: beside the kernel */
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
+    /* The folders in C:\Windows every user may write (kernel/fs/fsec.c):
+     * there before any program, which may not make them there itself */
+    RamNode *win = RamfsResolve(NULL, "\\Windows"), *sys = RamfsResolve(NULL, "\\Windows\\System32");
+    if (win) RamfsCreate(win, "Temp", true);
+    if (sys) {
+        RamfsCreate(sys, "Tasks", true);
+        RamfsCreate(sys, "CertStore", true);
+        RamNode *spool = RamfsCreate(sys, "spool", true);
+        if (spool) RamfsCreate(spool, "PRINTERS", true);
+    }
     um_registry_init();
     EvLogBoot();                                    /* (the System log's first event of this boot) */
     DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
@@ -1400,8 +1410,9 @@ UINT16 um_pe_dll_characteristics(RamNode *f)
  * installers mostly), UM_EXEC_HIGHEST (highestAvailable: administrator for
  * an administrator, as is for a standard user) or UM_EXEC_AS_INVOKER (0:
  * no manifest, asInvoker, or anything else) */
-int um_pe_exec_level(RamNode *f)
+static int exec_level(RamNode *f, bool *stated)
 {
+    if (stated) *stated = false;
     if (!RamfsLoad(f) || !um_pe_machine(f)) return false;
     const UINT8 *d = (const UINT8 *)f->data;
     UINT32 size = f->size, nt = rd32(d + 0x3C);
@@ -1447,13 +1458,37 @@ int um_pe_exec_level(RamNode *f)
     RVA_OFF(rd32(d + dir), off);
     #undef RVA_OFF
     if (!off || off >= size || len > size - off || len > 65536) return false;
-    static const char *const levels[] = { "requireAdministrator", "highestAvailable" };
-    for (int k = 0; k < 2; k++) {
+    static const char *const levels[] = { "requireAdministrator", "highestAvailable", "requestedExecutionLevel" };
+    for (int k = 0; k < 3; k++) {
         UINT32 l = (UINT32)strlen(levels[k]);
         for (UINT32 i = 0; i + l <= len; i++)
-            if (!memcmp(d + off + i, levels[k], l)) return k ? UM_EXEC_HIGHEST : UM_EXEC_REQUIRE_ADMIN;
+            if (!memcmp(d + off + i, levels[k], l)) {
+                if (stated) *stated = true;
+                return k == 2 ? UM_EXEC_AS_INVOKER : k ? UM_EXEC_HIGHEST : UM_EXEC_REQUIRE_ADMIN;
+            }
     }
     return UM_EXEC_AS_INVOKER;
+}
+
+int um_pe_exec_level(RamNode *f) { return exec_level(f, NULL); }
+
+/* Windows' installer detection: a 32-bit program whose manifest states no
+ * requestedExecutionLevel and whose name has "install", "setup" or
+ * "update" in it is taken for an installer that predates UAC, and asks for
+ * administrator as if its manifest said requireAdministrator (an Inno
+ * Setup 4 or an old NSIS setup.exe writes C:\Programs and HKLM) */
+static bool installer_detected(RamNode *f)
+{
+    bool stated;
+    if (exec_level(f, &stated) != UM_EXEC_AS_INVOKER || stated || um_pe_machine(f) != 0x014C) return false;
+    static const char *const words[] = { "install", "setup", "update" };
+    for (int k = 0; k < 3; k++)
+        for (const char *n = f->name; *n; n++) {
+            int i = 0;
+            while (words[k][i] && n[i] && (n[i] >= 'A' && n[i] <= 'Z' ? n[i] + 32 : n[i]) == words[k][i]) i++;
+            if (!words[k][i]) return true;
+        }
+    return false;
 }
 
 bool um_pe_wants_admin(RamNode *f) { return um_pe_exec_level(f) != UM_EXEC_AS_INVOKER; }
@@ -2833,12 +2868,22 @@ UmProcess *UmSpawn(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *c
     return um_spawn_ex(exe, cmdline, cwd, con, NULL, err, err_cap);
 }
 
+UmProcess *UmSpawnElevated(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
+                           char *err, int err_cap)
+{
+    UmSpawnOpts o;
+    memset(&o, 0, sizeof(o));
+    o.elevated = true;
+    return um_spawn_ex(exe, cmdline, cwd, con, &o, err, err_cap);
+}
+
 UmProcess *um_spawn_ex(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
                        const UmSpawnOpts *o, char *err, int err_cap)
 {
     char *dos;
     exe = UmDosHost(exe, cmdline, &dos);
-    UmProcess *p = um_spawn_image(exe, cwd, con, false, err, err_cap);
+    UmProcess *p = um_spawn_image(exe, cwd, con, false, o && o->elevated ? UM_ELEVATE_SILENT : UM_ELEVATE_MANIFEST,
+                                  err, err_cap);
     p = p ? um_spawn_finish(p, exe, dos ? dos : cmdline, o, err, err_cap) : NULL;
     kfree(dos);
     return p;
@@ -2848,7 +2893,7 @@ UmProcess *um_spawn_ex(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsol
  * @yield: the caller holds the desktop lock once and no process lock, and
  * keeps @exe pinned and @cwd referenced; the lock is let go while the
  * images load, so a large program does not stall the desktop. */
-UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield, char *err, int err_cap)
+UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield, int elevate, char *err, int err_cap)
 {
     err[0] = '\0';
     UmProcess *p = kzalloc(sizeof(*p));
@@ -2873,9 +2918,18 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
      * meanwhile (@yield; without it, the Store starting an installer,
      * nobody can be asked and it runs elevated as before) */
     int level = p->token && !um_token_elevated(p->token) ? um_pe_exec_level(exe) : UM_EXEC_AS_INVOKER;
+    if (level == UM_EXEC_AS_INVOKER && p->token && !um_token_elevated(p->token) && installer_detected(exe)) {
+        level = UM_EXEC_REQUIRE_ADMIN;
+        kprintf("[UAC] %s looks like an installer (no requested execution level in its manifest)\n", exe->name);
+    }
     if (level == UM_EXEC_HIGHEST && !um_token_split(p->token)) level = UM_EXEC_AS_INVOKER;
-    if (level != UM_EXEC_AS_INVOKER && !yield) {
-        if (um_elevate_process(p)) kprintf("[UM] %s runs as administrator (its manifest asks to)\n", exe->name);
+    if (elevate == UM_ELEVATE_ASK && p->token && !um_token_elevated(p->token)) level = UM_EXEC_REQUIRE_ADMIN;
+    if (elevate == UM_ELEVATE_SILENT && level == UM_EXEC_AS_INVOKER && p->token && !um_token_elevated(p->token))
+        level = UM_EXEC_REQUIRE_ADMIN;                       /* (asked by nobody: below) */
+    if (level != UM_EXEC_AS_INVOKER && (!yield || elevate == UM_ELEVATE_SILENT)) {
+        if (um_elevate_process(p))
+            kprintf("[UM] %s runs as administrator (%s)\n", exe->name,
+                    elevate == UM_ELEVATE_SILENT ? "started by the system" : "its manifest asks to");
     } else if (level != UM_EXEC_AS_INVOKER) {
         char path[RAMFS_PATH_MAX];
         RamfsPath(exe, path, sizeof(path));
@@ -2891,7 +2945,7 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
         }
         p->token = e;
         um_ob_unref(old);
-        kprintf("[UM] %s runs as administrator (its manifest asks to)\n", exe->name);
+        kprintf("[UM] %s runs as administrator (%s)\n", exe->name, elevate == UM_ELEVATE_ASK ? "sudo" : "its manifest asks to");
     }
     /* NORMAL_PRIORITY_CLASS, or an IDLE or BELOW_NORMAL creator's class,
      * as on Windows (CreateProcess's *_PRIORITY_CLASS flags set it after) */
@@ -3296,6 +3350,7 @@ struct UmSpawnJob {
     char       err[160];
     bool       done, abandoned, detached;
     bool       service;                     /* in no account's sign-in (services.exe) */
+    bool       elevate;                     /* as administrator after UAC's prompt (sudo) */
 };
 
 static void spawn_free(UmSpawnJob *j)
@@ -3310,7 +3365,11 @@ static void spawn_free(UmSpawnJob *j)
 /* Called with the desktop lock held once */
 static void spawn_run(UmSpawnJob *j, bool yield)
 {
-    UmProcess *p = um_spawn_image(j->exe, j->cwd, j->con, yield, j->err, sizeof(j->err));
+    /* (services.exe: as administrator, nobody asked, as Windows' runs as
+     * the system; it writes the services' state in HKLM) */
+    UmProcess *p = um_spawn_image(j->exe, j->cwd, j->con, yield,
+                                  j->service ? UM_ELEVATE_SILENT : j->elevate ? UM_ELEVATE_ASK : UM_ELEVATE_MANIFEST,
+                                  j->err, sizeof(j->err));
     if (p && j->service) p->session = 0;
     if (p) p = um_spawn_finish(p, j->exe, j->cmdline, NULL, j->err, sizeof(j->err));
     j->proc = p;
@@ -3333,7 +3392,8 @@ static void spawn_thread(void *arg)
     DesktopUnlock();
 }
 
-static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con, bool detached, bool service)
+static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con, bool detached, bool service,
+                               bool elevate)
 {
     UmSpawnJob *j = kzalloc(sizeof(*j));
     if (!j) return NULL;
@@ -3347,6 +3407,7 @@ static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, 
     j->con = um_console_ref(con);
     j->detached = detached;
     j->service = service;
+    j->elevate = elevate;
     RamfsPin(exe);
     RamfsRef(j->cwd);
     if (!sched_create_thread_ex("spawn", spawn_thread, j, PRIO_DESKTOP, 64 * 1024)) {
@@ -3369,17 +3430,27 @@ bool UmIsGuiProgram(RamNode *exe)
 
 UmSpawnJob *UmSpawnStart(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con)
 {
-    return spawn_start(exe, cmdline, cwd, con, false, false);
+    return spawn_start(exe, cmdline, cwd, con, false, false, false);
+}
+
+UmSpawnJob *UmSpawnStartElevated(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con)
+{
+    return spawn_start(exe, cmdline, cwd, con, false, false, true);
 }
 
 bool UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd)
 {
-    return spawn_start(exe, cmdline, cwd, NULL, true, false) != NULL;
+    return spawn_start(exe, cmdline, cwd, NULL, true, false, false) != NULL;
+}
+
+bool UmSpawnDetachedElevated(RamNode *exe, const char *cmdline, RamNode *cwd)
+{
+    return spawn_start(exe, cmdline, cwd, NULL, true, false, true) != NULL;
 }
 
 bool UmSpawnService(RamNode *exe, const char *cmdline, RamNode *cwd)
 {
-    return spawn_start(exe, cmdline, cwd, NULL, true, true) != NULL;
+    return spawn_start(exe, cmdline, cwd, NULL, true, true, false) != NULL;
 }
 
 bool UmSpawnPoll(UmSpawnJob *j, UmProcess **proc, char *err, int err_cap)

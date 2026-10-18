@@ -48,5 +48,10 @@ UINT32 FsecQuery(RamNode *n, UINT32 info, void *out, UINT32 cap);
  * (self-relative, @len bytes).  False if @sd is not valid. */
 bool   FsecSet(RamNode *n, UINT32 info, const void *sd, UINT32 len);
 
+/* Give folder @n (and what it holds, which inherits) the DACL of the
+ * system's shared folders (C:\Windows\Temp's: Authenticated Users change),
+ * as an installer granting users-modify on a portable program's folder */
+bool   FsecShareFolder(RamNode *n);
+
 /* Whether @sd (@len bytes) is a valid self-relative descriptor; its real length in *used */
 bool   FsecValid(const void *sd, UINT32 len, UINT32 *used);

@@ -1,0 +1,2 @@
+/* setuptest: its manifest says asInvoker, so Windows' installer detection (the "setup" in its name) leaves it unelevated */
+1 24 "setuptest.manifest"

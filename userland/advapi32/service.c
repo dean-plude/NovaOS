@@ -175,6 +175,10 @@ static SvcH *new_handle(DWORD kind, const WCHAR *name)
     return s;
 }
 
+#ifndef MAXIMUM_ALLOWED
+#define MAXIMUM_ALLOWED 0x02000000
+#endif
+
 static LSTATUS open_key(const WCHAR *name, bool write, HKEY *k)
 {
     WCHAR path[400];
@@ -238,7 +242,12 @@ static void query_status(const WCHAR *name, SERVICE_STATUS_PROCESS *st)
     memset(st, 0, sizeof(*st));
     st->dwCurrentState = SERVICE_STOPPED;
     HKEY k;
-    if (open_key(name, true, &k)) return;
+    WCHAR path[400];
+    wcopy(path, 400, SERVICES_KEY);
+    wcat(path, 400, name);
+    /* (MAXIMUM_ALLOWED: a program that is not elevated reads the state; only
+     * an elevated one, or the service, notes a service that ended unseen) */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, MAXIMUM_ALLOWED, &k)) return;
     st->dwServiceType = get_dword(k, L"Type", 0x10);
     st->dwCurrentState = get_dword(k, L"NovaState", SERVICE_STOPPED);
     st->dwControlsAccepted = get_dword(k, L"NovaControls", 0);
@@ -413,7 +422,8 @@ WINADVAPI BOOL WINAPI ChangeServiceConfigW(SC_HANDLE h, DWORD type, DWORD start,
     SvcH *s = handle(h, K_SVC);
     HKEY k;
     if (!s) return FALSE;
-    if (open_key(s->name, true, &k)) { SetLastError(ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
+    LSTATUS kr = open_key(s->name, true, &k);
+    if (kr) { SetLastError(kr == ERROR_ACCESS_DENIED ? ERROR_ACCESS_DENIED : ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
     if (type != SERVICE_NO_CHANGE) set_dword(k, L"Type", type);
     if (start != SERVICE_NO_CHANGE) set_dword(k, L"Start", start);
     if (errc != SERVICE_NO_CHANGE) set_dword(k, L"ErrorControl", errc);
@@ -444,7 +454,8 @@ WINADVAPI BOOL WINAPI ChangeServiceConfig2W(SC_HANDLE h, DWORD level, LPVOID inf
     SvcH *s = handle(h, K_SVC);
     HKEY k;
     if (!s) return FALSE;
-    if (open_key(s->name, true, &k)) { SetLastError(ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
+    LSTATUS kr = open_key(s->name, true, &k);
+    if (kr) { SetLastError(kr == ERROR_ACCESS_DENIED ? ERROR_ACCESS_DENIED : ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
     if (level == 1 && info) {
         LPCWSTR d = *(LPCWSTR *)info;
         if (d && d[0]) set_str(k, L"Description", REG_SZ, d);
@@ -901,7 +912,8 @@ WINADVAPI BOOL WINAPI StartServiceW(SC_HANDLE h, DWORD argc, LPCWSTR *argv)
     SERVICE_STATUS_PROCESS st;
     query_status(s->name, &st);
     if (st.dwCurrentState != SERVICE_STOPPED) { SetLastError(ERROR_SERVICE_ALREADY_RUNNING); return FALSE; }
-    if (open_key(s->name, true, &k)) { SetLastError(ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
+    LSTATUS kr = open_key(s->name, true, &k);
+    if (kr) { SetLastError(kr == ERROR_ACCESS_DENIED ? ERROR_ACCESS_DENIED : ERROR_SERVICE_DOES_NOT_EXIST); return FALSE; }
     DWORD type = get_dword(k, L"Type", 0x10);
     if (get_dword(k, L"Start", 3) == SERVICE_DISABLED) { RegCloseKey(k); SetLastError(ERROR_SERVICE_DISABLED); return FALSE; }
     if (type & (SERVICE_KERNEL_DRIVER | SERVICE_FILE_SYSTEM_DRIVER)) { BOOL r = load_driver(k, s->name, true); RegCloseKey(k); return r; }

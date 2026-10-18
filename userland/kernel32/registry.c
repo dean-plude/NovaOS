@@ -25,6 +25,9 @@ void *memset(void *d, int c, size_t n);
 size_t strlen(const char *s);
 
 #define REG_USER_SID "S-1-5-21-1000-2000-3000-1001"
+#ifndef MAXIMUM_ALLOWED
+#define MAXIMUM_ALLOWED 0x02000000
+#endif
 
 static int wlen(const WCHAR *s) { int n = 0; if (s) while (s[n]) n++; return n; }
 static void *ralloc(SIZE_T n) { return RtlAllocateHeap(RtlGetProcessHeap(), 0, n); }
@@ -85,7 +88,9 @@ static NTSTATUS open_abs(const char *path, BOOL create, HANDLE *out)
     oa.Length = sizeof(oa);
     oa.ObjectName = &us;
     oa.Attributes = OBJ_CASE_INSENSITIVE;
-    return create ? NtCreateKey(out, KEY_ALL_ACCESS, &oa, 0, 0, 0, 0) : NtOpenKey(out, KEY_ALL_ACCESS, &oa);
+    /* (MAXIMUM_ALLOWED: what the caller may, as Windows opens them; HKLM is
+     * read-only to a program that is not elevated) */
+    return create ? NtCreateKey(out, MAXIMUM_ALLOWED, &oa, 0, 0, 0, 0) : NtOpenKey(out, MAXIMUM_ALLOWED, &oa);
 }
 
 /* HKEY_CURRENT_USER: HKEY_USERS\<the user's SID>, the user the calling
@@ -182,8 +187,8 @@ WINBASEAPI LSTATUS WINAPI RegOpenKeyExA(HKEY key, LPCSTR sub, DWORD options, REG
     return r;
 }
 
-WINBASEAPI LSTATUS WINAPI RegOpenKeyW(HKEY key, LPCWSTR sub, PHKEY out) { return RegOpenKeyExW(key, sub, 0, KEY_ALL_ACCESS, out); }
-WINBASEAPI LSTATUS WINAPI RegOpenKeyA(HKEY key, LPCSTR sub, PHKEY out) { return RegOpenKeyExA(key, sub, 0, KEY_ALL_ACCESS, out); }
+WINBASEAPI LSTATUS WINAPI RegOpenKeyW(HKEY key, LPCWSTR sub, PHKEY out) { return RegOpenKeyExW(key, sub, 0, MAXIMUM_ALLOWED, out); }
+WINBASEAPI LSTATUS WINAPI RegOpenKeyA(HKEY key, LPCSTR sub, PHKEY out) { return RegOpenKeyExA(key, sub, 0, MAXIMUM_ALLOWED, out); }
 
 WINBASEAPI LSTATUS WINAPI RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls, DWORD options, REGSAM sam,
                                           LPSECURITY_ATTRIBUTES sa, PHKEY out, LPDWORD disposition)
@@ -204,8 +209,8 @@ WINBASEAPI LSTATUS WINAPI RegCreateKeyExA(HKEY key, LPCSTR sub, DWORD reserved, 
     return r;
 }
 
-WINBASEAPI LSTATUS WINAPI RegCreateKeyW(HKEY key, LPCWSTR sub, PHKEY out) { return RegCreateKeyExW(key, sub, 0, 0, 0, KEY_ALL_ACCESS, 0, out, 0); }
-WINBASEAPI LSTATUS WINAPI RegCreateKeyA(HKEY key, LPCSTR sub, PHKEY out) { return RegCreateKeyExA(key, sub, 0, 0, 0, KEY_ALL_ACCESS, 0, out, 0); }
+WINBASEAPI LSTATUS WINAPI RegCreateKeyW(HKEY key, LPCWSTR sub, PHKEY out) { return RegCreateKeyExW(key, sub, 0, 0, 0, MAXIMUM_ALLOWED, 0, out, 0); }
+WINBASEAPI LSTATUS WINAPI RegCreateKeyA(HKEY key, LPCSTR sub, PHKEY out) { return RegCreateKeyExA(key, sub, 0, 0, 0, MAXIMUM_ALLOWED, 0, out, 0); }
 
 WINBASEAPI LSTATUS WINAPI RegCloseKey(HKEY key)
 {
@@ -242,7 +247,7 @@ static LSTATUS with_sub(HKEY key, LPCWSTR sub, HANDLE *h, BOOL *close)
     *close = FALSE;
     if (sub && *sub) {
         HKEY k;
-        LSTATUS r = err(open_sub(key, sub, FALSE, 0, KEY_ALL_ACCESS, &k, 0));
+        LSTATUS r = err(open_sub(key, sub, FALSE, 0, MAXIMUM_ALLOWED, &k, 0));
         if (r) return r;
         *h = k;
         *close = TRUE;

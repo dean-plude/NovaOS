@@ -134,6 +134,9 @@ class BundleTests(unittest.TestCase):
 #define ERROR_FILE_NOT_FOUND 2
 #define ERROR_PATH_NOT_FOUND 3
 #define ERROR_NOT_ENOUGH_MEMORY 8
+#define ERROR_ELEVATION_REQUIRED 740
+#define ERROR_CANCELLED 1223
+#define NOVA_ACCOUNT_ELEVATE 0
 typedef wchar_t WCHAR;
 typedef const WCHAR *LPCWSTR;
 typedef unsigned DWORD;
@@ -157,11 +160,10 @@ static DWORD GetFileAttributesW(LPCWSTR p) {
     return wcsstr(p, L"missing") ? INVALID_FILE_ATTRIBUTES : 0;
 }
 static int lstrcmpiW(LPCWSTR a, LPCWSTR b) { return wcscmp(a, b); }
-static HANDLE elevated_token(void) { return 0; }
+static DWORD token_dword(int c, DWORD d) { (void)c; return d; }
 static DWORD GetLastError(void) { return ERROR_FILE_NOT_FOUND; }
 static int CloseHandle(HANDLE h) { (void)h; return 1; }
-static void NtClose(HANDLE h) { (void)h; }
-static NTSTATUS NtSetInformationProcess(HANDLE p, int c, void *v, unsigned n) { (void)p;(void)c;(void)v;(void)n;return 0; }
+static NTSTATUS NtNovaAccount(int op, HANDLE h, void *a, void *b, void *c, void *d) { (void)op;(void)h;(void)a;(void)b;(void)c;(void)d;return 0; }
 static void TerminateProcess(HANDLE p, int s) { (void)p;(void)s; }
 static void ResumeThread(HANDLE h) { (void)h; }
 static BOOL CreateProcessW(void *app, WCHAR *cmd, void *a, void *b, int inherit, int flags,

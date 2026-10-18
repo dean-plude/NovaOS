@@ -695,8 +695,9 @@ game with sound and a controller.
   without bypassing it; done when Roblox reaches its home page.
 - [ ] **24.6 Epic Games Launcher.** Sign in and show its library. It
   depends on WebView2's GPU path, which is in (25.1).
-- [ ] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
-  what NovaOS lacks and the faithful fix; never bypass or patch them.
+- [x] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
+  what NovaOS lacks and the faithful fix; never bypass or patch them; see
+  [anti-cheat and DRM](design/anti-cheat-drm.md).
 
 ### Phase 25: GPU
 

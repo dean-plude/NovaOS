@@ -224,6 +224,25 @@ static Thread *rq_dequeue(RunQueue *rq)
     return t;
 }
 
+/* CPU @c's queue holds work for CPU @me: any thread for its own CPU,
+ * one it may steal (not pinned) for another.  (Unlocked: a hint, looked
+ * at again under the lock.) */
+static bool rq_work_for(uint32_t c, uint32_t me)
+{
+    Thread *h = __atomic_load_n(&g_rq[c].head, __ATOMIC_RELAXED);
+    return h && (c == me || !h->pinned || __atomic_load_n(&g_rq[c].count, __ATOMIC_RELAXED) > 1);
+}
+
+/* The first queued thread another CPU may take: not a pinned one (those
+ * stay on CPU 0), which may sit at the head for long, ahead of programs */
+static Thread *rq_first_unpinned(RunQueue *rq)
+{
+    Thread *t = rq->head;
+    for (size_t n = 0; n < rq->count; n++, t = t->next)
+        if (!t->pinned) return t;
+    return NULL;
+}
+
 /* -----------------------------------------------------------------------
  * Priority boosts (NT's, Windows Internals ch. 4 "Priority boosts")
  *
@@ -402,9 +421,9 @@ static Thread *steal(void)
             pause_cpu();
         }
         if (!locked) continue;
-        if (v->head && v->head->pinned) { spin_unlock(&v->lock); continue; }   /* (it stays there) */
-        Thread *t = rq_dequeue(v);
+        Thread *t = rq_first_unpinned(v);         /* (the pinned ones stay there) */
         if (t) {
+            rq_unlink(v, t);
             if (t->in_sleepers) rq_drop_sleeper(v, t);
             __atomic_store_n(&t->cpu, me, __ATOMIC_RELEASE);   /* ours now */
         }
@@ -1091,7 +1110,7 @@ void sched_tick(void)
     timer_arm(cpu, soonest < g_next_tick[cpu] ? soonest : g_next_tick[cpu]);
     /* Threads wait here while a CPU idles with its tick stopped: wake it to steal one */
     Thread *waiting = __atomic_load_n(&rq->head, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&g_ticks_stopped, __ATOMIC_RELAXED) && waiting && !waiting->pinned)
+    if (__atomic_load_n(&g_ticks_stopped, __ATOMIC_RELAXED) && waiting && (!waiting->pinned || rq->count > 1))
         smp_kick(MAX_CPUS);
     if (!current_thread) return;
 
@@ -1115,7 +1134,7 @@ void sched_tick(void)
     bool steal_now = false;
     if (tick && current_thread->idle)
         for (uint32_t c = 0; c < g_cpu_count && !steal_now; c++)
-            steal_now = __atomic_load_n(&g_rq[c].head, __ATOMIC_RELAXED) != NULL;
+            steal_now = rq_work_for(c, cpu);
     /* A sleeper that is due runs now, or a thread woken for this CPU
      * (sched_unblock); or the time slice expired.  The thread preempted
      * for either keeps its place ahead of those waiting their turn
@@ -1394,7 +1413,7 @@ bool sched_work_waiting(void)
 {
     if (g_resched[this_cpu()]) return true;
     for (uint32_t c = 0; c < g_cpu_count; c++)      /* (an idle CPU steals: switch_locked) */
-        if (__atomic_load_n(&g_rq[c].head, __ATOMIC_RELAXED)) return true;
+        if (rq_work_for(c, this_cpu())) return true;
     return false;
 }
 

@@ -137,6 +137,7 @@ static int create(void)
                   SetupDiCreateDeviceInfoW(set, L"Display", &GUID_DEVCLASS_DISPLAY_, NULL, NULL, DICD_GENERATE_ID, &d) &&
                   SetupDiSetDeviceRegistryPropertyW(set, &d, SPDRP_HARDWAREID, (const BYTE *)hw, sizeof(hw)) &&
                   SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &d);
+        if (!ok) printf("kmttest: registering failed, error %lu\n", GetLastError());
         check(ok, "a root-enumerated display device registered (SetupDiCreateDeviceInfo, DIF_REGISTERDEVICE)");
         if (ok && SetupDiGetDeviceInstanceIdW(set, &d, id, 200, NULL)) printf("kmttest: registered %ls\n", id);
         if (set != INVALID_HANDLE_VALUE) SetupDiDestroyDeviceInfoList(set);

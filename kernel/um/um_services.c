@@ -85,6 +85,24 @@ static UINT64 sysinfo_basic(UINT64 buf, UINT32 len, UINT64 ret)
     return put(buf, b, size) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
 }
 
+/* SystemHandleInformation (16), SystemExtendedHandleInformation (64): every
+ * open handle of every program, with its object's address, type index and
+ * granted access, as anti-cheat and process tools read them (step 24.8) */
+static UINT64 sysinfo_handles(bool ext, UINT64 buf, UINT32 len, UINT64 ret)
+{
+    UINT32 need = um_handle_table(NULL, 0, ext);
+    if (len < need) return !ret || put(ret, &need, 4) ? ST_INFO_LENGTH_MISMATCH : ST_ACCESS_VIOLATION;
+    UINT8 *k = kmalloc(len);
+    if (!k) return 0xC0000017u;                           /* STATUS_NO_MEMORY */
+    um_handle_table(k, len, ext);                         /* (more may have opened since: they do not fit) */
+    UINT32 n;
+    memcpy(&n, k, 4);                                     /* NumberOfHandles (low half on the extended form) */
+    UINT32 used = (ext ? 16 : 8) + n * (ext ? 40 : 24);
+    UINT64 st = put(buf, k, used) && (!ret || put(ret, &used, 4)) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    kfree(k);
+    return st;
+}
+
 /* SystemProcessInformation (5): a SYSTEM_PROCESS_INFORMATION per running
  * program (0x100 bytes on x64), each followed by a SYSTEM_THREAD_INFORMATION
  * per thread (0x50) and then its name, as Windows lays them out; Task
@@ -282,6 +300,9 @@ static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT
         }
         return ST_SUCCESS;
     }
+    case 16:                                                        /* SystemHandleInformation */
+    case 64:                                                        /* SystemExtendedHandleInformation */
+        return sysinfo_handles((UINT32)a1 == 64, a2, len, a4);
     case 11:                                                        /* SystemModuleInformation */
     case 77:                                                        /* SystemModuleInformationEx */
         return sysinfo_modules((UINT32)a1 == 77, a2, len, a4);

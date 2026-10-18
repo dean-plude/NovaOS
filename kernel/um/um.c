@@ -51,6 +51,7 @@
 #include "../gdi/png.h"
 #include "../drivers/virtio_gpu.h"
 #include "../nt/nt.h"
+#include "../nt/psnotify.h"
 
 static UmProcess     *g_procs[UM_MAX_PROCS];
 static UINT32         g_next_id = 100;
@@ -2270,10 +2271,14 @@ UINT32 um_load_dll(UmProcess *p, const char *name, UINT64 *base, UINT32 flags)
         *base = p->modules[m].base;
         if (!write_ldr_info(p, ninit) || !write_stubs(p)) st = 0xC0000017u;
     }
+    int now = p->nmodules;
     um_unlock_excl(&p->lock);
     L->keep = !st;
+    bool image = !L->data;
     loader_free(L);
     um_unlock(&p->ldr_lock);
+    for (int i = nmod; !st && image && i < now; i++)        /* (drivers' load-image notify routines) */
+        NtPsNotifyImage(p->pid, p->modules[i].path, p->modules[i].base, p->modules[i].size, false);
     return st;
 }
 
@@ -2670,6 +2675,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
     t->ob.refs = 1;                                        /* the process's thread table */
     t->proc = p;
     t->tid = um_new_id();
+    um_nt_object(&t->ob, t->tid, p->pid);
     t->start = start;
     t->arg = arg;
     t->suspend = suspended ? 1 : 0;
@@ -2766,6 +2772,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
         return NULL;
     }
     um_unlock_excl(&p->lock);
+    NtPsNotifyThread(p->pid, t->tid, true);                /* (drivers' thread notify routines) */
     *status = 0;
     return t;
 }
@@ -2806,6 +2813,12 @@ static void release_images(UmProcess *p)
 
 static void destroy(UmProcess *p)
 {
+    IrqState s = ob_lock();                 /* (an object a driver holds outlives it) */
+    if (p->exit_ob) { p->exit_ob->proc = NULL; p->exit_ob = NULL; }
+    UmObject *self = p->nt_self;
+    p->nt_self = NULL;
+    ob_unlock(s);
+    if (self) um_ob_unref(self);
     um_console_flush_log(p);
     release_images(p);
     imgc_release(p);
@@ -2901,6 +2914,7 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
     UmProcess *p = kzalloc(sizeof(*p));
     if (!p) { ksnprintf(err, err_cap, "Out of memory"); return NULL; }
     strncpy(p->name, exe->name, sizeof(p->name) - 1);
+    strncpy(p->image_file_name, exe->name, sizeof(p->image_file_name) - 1);
     p->pid = um_new_id();
     p->parent_pid = UmCurrent() ? UmCurrent()->pid : 0;
     p->create_time = um_now_100ns();
@@ -3015,6 +3029,18 @@ UmProcess *um_spawn_finish(UmProcess *p, RamNode *exe, const char *cmdline, cons
 
     char image_path[RAMFS_PATH_MAX], cwd_path[RAMFS_PATH_MAX];
     RamfsPath(exe, image_path, sizeof(image_path));
+    /* A protected process (step 24.8): only when its program's signature
+     * meets the signing policy (kernel/nt/ldr.c), as Windows checks a
+     * protected process's image against its signer level */
+    if (o && o->protection) {
+        if (NtCiCheckProgram(exe, exe->name)) {
+            destroy(p);
+            ksnprintf(err, err_cap, "%s may not run protected: its signature does not meet the signing level", exe->name);
+            return NULL;
+        }
+        p->protection = o->protection;
+        kprintf("[UM] %s runs as a protected process (PS_PROTECTION 0x%02x)\n", exe->name, p->protection);
+    }
     memcpy(p->image_path, image_path, sizeof(p->image_path));
     RamfsPath(p->cwd, cwd_path, sizeof(cwd_path));
     int cl = (int)strlen(cwd_path);
@@ -3052,13 +3078,38 @@ UmProcess *um_spawn_finish(UmProcess *p, RamNode *exe, const char *cmdline, cons
     punlock();
     if (slot < 0) { destroy(p); ksnprintf(err, err_cap, "Too many programs are running"); return NULL; }
 
+    /* Drivers' process notify routines hear of it before it runs (an Ex
+     * routine may refuse it), with its object the creator's handle names,
+     * then their load-image ones of the modules mapped for it */
+    if (o && o->process_ob) {
+        IrqState s = ob_lock();
+        p->exit_ob = o->process_ob;
+        o->process_ob->proc = p;
+        um_nt_object(o->process_ob, p->pid, p->pid);
+        ob_unlock(s);
+    }
+    UINT32 refused = NtPsNotifyProcessCreate(p, image_path, cmdline);
+    if (refused) {
+        NtPsNotifyProcessExit(p);
+        plock(); g_procs[slot] = NULL; punlock();
+        if (o && o->process_ob) { IrqState s = ob_lock(); o->process_ob->proc = NULL; p->exit_ob = NULL; ob_unlock(s); }
+        destroy(p);
+        if (o && o->refused) *o->refused = refused;
+        ksnprintf(err, err_cap, "A driver refused it (0x%08x)", refused);
+        return NULL;
+    }
+    for (int i = 0; i < p->nmodules; i++)
+        NtPsNotifyImage(p->pid, p->modules[i].path, p->modules[i].base, p->modules[i].size, false);
+
     /* The first thread: the program's entry point gets the PEB (as on Windows) */
     UINT64 stack = p->stack_reserve ? p->stack_reserve : UM_STACK_SIZE;
     if (stack < UM_STACK_SIZE) stack = UM_STACK_SIZE;
     if (stack > 8 * 1024 * 1024) stack = 8 * 1024 * 1024;
     UINT32 st;
     if (!um_create_thread(p, entry, p->lay.peb, stack, o && o->suspended, &st)) {
+        NtPsNotifyProcessExit(p);
         plock(); g_procs[slot] = NULL; punlock();
+        if (o && o->process_ob) { IrqState s = ob_lock(); o->process_ob->proc = NULL; p->exit_ob = NULL; ob_unlock(s); }
         destroy(p);
         ksnprintf(err, err_cap, "Out of memory");
         return NULL;
@@ -3094,6 +3145,7 @@ void um_exit_thread(UINT32 status)
     t->exited = true;
     t->ob.signaled = true;
     um_ob_wake(&t->ob);
+    bool ended = p->live_threads == 1;
     if (--p->live_threads == 0) {
         p->exit_status = p->kill_pending ? p->kill_status : status;
         p->exit_time = um_now_100ns();
@@ -3105,6 +3157,8 @@ void um_exit_thread(UINT32 status)
     ob_unlock(s);
     um_unlock_excl(&p->lock);
     um_thread_drop_token(t);
+    NtPsNotifyThread(p->pid, t->tid, false);    /* (drivers' notify routines: the thread, then the process) */
+    if (ended) NtPsNotifyProcessExit(p);
     if (last) kprintf("[UM] %s (PID %u) exited with code %u (0x%x)\n", p->name, p->pid, code, code);
     sched_exit_current();
 }
@@ -3583,7 +3637,10 @@ void UmPoll(void)
             plock(); g_procs[i] = NULL; punlock();
             IrqState st = ob_lock();                /* handles opened by others outlive it */
             if (p->exit_ob) { p->exit_ob->count = (INT32)p->exit_status; p->exit_ob->proc = NULL; p->exit_ob = NULL; }
+            UmObject *self = p->nt_self;            /* (drivers' hold, when its exit was never told) */
+            p->nt_self = NULL;
             ob_unlock(st);
+            if (self) um_ob_unref(self);
             if (p->con) UmConsoleRelease(p->con);
             if (p->token) um_ob_unref(p->token);
             kfree(p->stub_names);
@@ -3616,6 +3673,7 @@ UmObject *um_open_process(UINT32 pid)
         else if (fresh) {
             fresh->type = UO_PROCESS;
             fresh->refs = 1;
+            um_nt_object(fresh, p->pid, p->pid);
             fresh->proc = p;
             fresh->signaled = p->exited;
             fresh->destroy = opened_ob_destroy;
@@ -3643,6 +3701,73 @@ UmObject *um_open_thread(UINT32 tid)
     }
     punlock();
     return r;
+}
+
+/* The Windows object type index of a handle's object, as Windows 10
+ * numbers its types (NtQueryObject's TypeIndex says the same) */
+UINT8 um_type_index(const UmHandle *h)
+{
+    if (h->kind != H_OBJECT) return 37;                    /* File: files, folders, consoles, NUL */
+    switch (h->obj->type) {
+    case UO_DIRECTORY:   return 3;
+    case UO_SYMLINK:     return 4;
+    case UO_TOKEN:       return 5;
+    case UO_PROCESS:     return 7;
+    case UO_THREAD:      return 8;
+    case UO_EVENT:       return 16;
+    case UO_MUTANT:      return 17;
+    case UO_SEMAPHORE:   return 19;
+    case UO_TIMER:       return 20;
+    case UO_KEYED_EVENT: return 23;
+    case UO_SECTION:     return 42;
+    case UO_KEY:         return 44;
+    default:             return 37;                        /* pipes, sockets, devices: file objects */
+    }
+}
+
+UINT32 um_handle_table(UINT8 *out, UINT32 cap, bool ext)
+{
+    UINT32 head = ext ? 16 : 8, size = ext ? 40 : 24, n = 0, written = 0;
+    for (int i = 0; i < UM_MAX_PROCS; i++) {
+        UmProcess *p = g_procs[i];                         /* (as UmList: a snapshot) */
+        if (!p || p->reclaimed) continue;
+        um_lock_excl(&p->lock);
+        for (int k = 0; k < UM_MAX_HANDLES; k++) {
+            const UmHandle *h = &p->handles[k];
+            if (h->kind == H_FREE) continue;
+            n++;
+            if (!out || head + (written + 1) * size > cap) continue;
+            bool ps = h->kind == H_OBJECT && (h->obj->type == UO_PROCESS || h->obj->type == UO_THREAD);
+            UINT64 obj = h->kind == H_OBJECT ? (uintptr_t)h->obj : h->node ? (uintptr_t)h->node :
+                         h->console ? (uintptr_t)h->console : (uintptr_t)h;   /* (the object's kernel address) */
+            UINT32 access = h->access_known ? h->access : ps ? 0x001FFFFFu : 0x001F01FFu;
+            UINT8 *e = out + head + written * size, type = um_type_index(h), attrs = h->inherit ? 2 : 0;
+            UINT32 hv = (UINT32)(k + 1) * 4;
+            memset(e, 0, size);
+            if (ext) {                                     /* SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX */
+                wr64(e, obj);
+                wr64(e + 8, p->pid);
+                wr64(e + 16, hv);
+                put_u32(e + 24, access);
+                e[30] = type;                              /* ObjectTypeIndex (after CreatorBackTraceIndex) */
+                put_u32(e + 32, attrs);
+            } else {                                       /* SYSTEM_HANDLE_TABLE_ENTRY_INFO */
+                e[0] = (UINT8)p->pid; e[1] = (UINT8)(p->pid >> 8);
+                e[4] = type;
+                e[5] = attrs;
+                e[6] = (UINT8)hv; e[7] = (UINT8)(hv >> 8);
+                wr64(e + 8, obj);
+                put_u32(e + 16, access);
+            }
+            written++;
+        }
+        um_unlock_excl(&p->lock);
+    }
+    if (out && cap >= head) {                              /* NumberOfHandles: the entries written */
+        memset(out, 0, head);
+        if (ext) wr64(out, written); else put_u32(out, written);
+    }
+    return head + n * size;
 }
 
 int UmList(UmProcInfo *out, int max)

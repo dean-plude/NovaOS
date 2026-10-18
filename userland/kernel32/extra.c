@@ -966,12 +966,13 @@ static char *env_utf8(LPVOID env, BOOL unicode, SIZE_T *len)
 
 static const HANDLE *handle_list(DWORD flags, const void *si, DWORD cb, SIZE_T *n);
 static PVOID pseudo_console_attribute(DWORD flags, const void *si, DWORD cb, BOOL *found);
+static BOOL protection(DWORD flags, const void *si, DWORD cb, BYTE *prot);
 
 /* @list (@nlist handles): STARTUPINFOEX's handle list, the only handles
  * the child inherits (NULL: every inheritable one) */
 static BOOL create_process(const char *app, char *cmd, const char *dir, HANDLE std[3], BOOL inherit,
                            DWORD flags, LPVOID env, const void *rt, WORD rt_len, const HANDLE *list, SIZE_T nlist,
-                           HANDLE pseudo, LPPROCESS_INFORMATION pi)
+                           HANDLE pseudo, BYTE prot, LPPROCESS_INFORMATION pi)
 {
     char name[MAX_PATH], image[MAX_PATH], cwdbuf[MAX_PATH];
     if (app) {
@@ -1029,6 +1030,7 @@ static BOOL create_process(const char *app, char *cmd, const char *dir, HANDLE s
         io.HandleList = list;
         io.HandleCount = nlist;
     }
+    if (prot) io.Flags |= 32 | (ULONG)prot << 8;               /* run protected, at this PS_PROTECTION */
     io.PseudoConsole = pseudo;
     io.Environment = envb;
     io.EnvironmentSize = env_len;
@@ -1076,8 +1078,10 @@ WINBASEAPI BOOL WINAPI CreateProcessA(LPCSTR app, LPSTR cmd, LPSECURITY_ATTRIBUT
     if (pseudo && !(si && (si->dwFlags & STARTF_USESTDHANDLES))) std[0] = std[1] = std[2] = 0;
     SIZE_T nlist;
     const HANDLE *list = handle_list(flags, si, si ? si->cb : 0, &nlist);
+    BYTE prot;
+    if (!protection(flags, si, si ? si->cb : 0, &prot)) return FALSE;
     return create_process(app, cmd, dir, std, inherit, flags, env,
-                          si ? si->lpReserved2 : 0, si ? si->cbReserved2 : 0, list, nlist, pseudo, pi);
+                          si ? si->lpReserved2 : 0, si ? si->cbReserved2 : 0, list, nlist, pseudo, prot, pi);
 }
 
 WINBASEAPI BOOL WINAPI CreateProcessW(LPCWSTR app, LPWSTR cmd, LPSECURITY_ATTRIBUTES pa, LPSECURITY_ATTRIBUTES ta, BOOL inherit,
@@ -1101,8 +1105,11 @@ WINBASEAPI BOOL WINAPI CreateProcessW(LPCWSTR app, LPWSTR cmd, LPSECURITY_ATTRIB
     if (pseudo && !(si && (si->dwFlags & STARTF_USESTDHANDLES))) std[0] = std[1] = std[2] = 0;
     SIZE_T nlist;
     const HANDLE *list = handle_list(flags, si, si ? si->cb : 0, &nlist);
+    BYTE prot;
+    if (!protection(flags, si, si ? si->cb : 0, &prot)) { zfree(c); return FALSE; }
     BOOL ok = create_process(app ? wide_to_temp(app, a, sizeof(a)) : 0, c, dir ? wide_to_temp(dir, d, sizeof(d)) : 0,
-                             std, inherit, flags, env, si ? si->lpReserved2 : 0, si ? si->cbReserved2 : 0, list, nlist, pseudo, pi);
+                             std, inherit, flags, env, si ? si->lpReserved2 : 0, si ? si->cbReserved2 : 0, list, nlist, pseudo,
+                             prot, pi);
     zfree(c);
     return ok;
 }
@@ -1135,7 +1142,8 @@ WINBASEAPI DWORD WINAPI GetProcessId(HANDLE h)
 
 /* A process/thread attribute list, in the caller's buffer: room for @max
  * attributes, @count set.  CreateProcess reads the handle list
- * (PROC_THREAD_ATTRIBUTE_HANDLE_LIST) and pseudo-console attribute; parent
+ * (PROC_THREAD_ATTRIBUTE_HANDLE_LIST), pseudo-console and protection-level
+ * attributes; parent
  * process and mitigation policy attributes are kept and not acted on. */
 typedef struct { DWORD_PTR attr; PVOID value; SIZE_T size; } ProcAttr;
 typedef struct { DWORD max, count; BYTE pad[40]; ProcAttr a[1]; } ProcAttrList;
@@ -1157,6 +1165,10 @@ WINBASEAPI BOOL WINAPI UpdateProcThreadAttribute(LPPROC_THREAD_ATTRIBUTE_LIST l,
     ProcAttrList *pl = (ProcAttrList *)l;
     if (!pl || flags) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     if (attr == PROC_THREAD_ATTRIBUTE_HANDLE_LIST && (!v || !n || n % sizeof(HANDLE))) {
+        SetLastError(ERROR_BAD_LENGTH);
+        return FALSE;
+    }
+    if (attr == PROC_THREAD_ATTRIBUTE_PROTECTION_LEVEL && (!v || n != sizeof(DWORD))) {
         SetLastError(ERROR_BAD_LENGTH);
         return FALSE;
     }
@@ -1185,6 +1197,38 @@ static PVOID pseudo_console_attribute(DWORD flags, const void *si, DWORD cb, BOO
             return pl->a[i].value;
         }
     return 0;
+}
+
+/* The PS_PROTECTION a CREATE_PROTECTED_PROCESS asks for (0: none): the
+ * attribute list's PROTECTION_LEVEL_* (SAME: the creator's own), or on its
+ * own a protected process of the Authenticode signer, as Windows makes it.
+ * The kernel runs the program so only if its signature allows that level.
+ * The protection byte is Type in bits 0-2 (1 light, 2 protected), Signer
+ * in bits 4-7 */
+static BOOL protection(DWORD flags, const void *si, DWORD cb, BYTE *prot)
+{
+    static const BYTE level[] = { 0x61, 0x52, 0x51, 0x31, 0x41, 0x62, 0x21, 0x12, 0x81 };
+    *prot = 0;
+    if (!(flags & CREATE_PROTECTED_PROCESS)) return TRUE;
+    *prot = 0x12;                                    /* PsProtectedSignerAuthenticode, protected */
+    if (!(flags & EXTENDED_STARTUPINFO_PRESENT) || !si || cb < sizeof(STARTUPINFOEXW)) return TRUE;
+    const ProcAttrList *pl = (const ProcAttrList *)((const STARTUPINFOEXW *)si)->lpAttributeList;
+    for (DWORD i = 0; pl && i < pl->count; i++) {
+        if (pl->a[i].attr != PROC_THREAD_ATTRIBUTE_PROTECTION_LEVEL) continue;
+        DWORD l = *(const DWORD *)pl->a[i].value;
+        if (l == PROTECTION_LEVEL_SAME) {
+            BYTE mine = 0;
+            NtQueryInformationProcess(GetCurrentProcess(), 61 /* ProcessProtectionInformation */, &mine, 1, 0);
+            if (!mine) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+            *prot = mine;
+        } else if (l < sizeof(level)) {
+            *prot = level[l];
+        } else {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 /* The handle list of STARTUPINFOEX's attribute list, or NULL */

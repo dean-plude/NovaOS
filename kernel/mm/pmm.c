@@ -83,6 +83,34 @@ static bool bitmap_test(size_t page_idx)  /* 1 = used */
     return !!(pmm.bitmap[page_idx / 64] & (UINT64_C(1) << (page_idx % 64)));
 }
 
+/* The machine's RAM as the firmware reported it (what Windows'
+ * MmGetPhysicalMemoryRanges gives): the ranges pmm_is_ram looks in */
+#define RAM_RANGES 64
+static struct { uintptr_t base, end; } ram_ranges[RAM_RANGES];
+static uint32_t ram_count;
+
+static void note_ram(const BootMemDescriptor *d)
+{
+    switch (d->type) {
+    case BOOT_MEM_LOADER_CODE: case BOOT_MEM_LOADER_DATA: case BOOT_MEM_BOOT_SERVICES:
+    case BOOT_MEM_CONVENTIONAL: case BOOT_MEM_ACPI_RECLAIM: case BOOT_MEM_KERNEL:
+        break;
+    default:
+        return;
+    }
+    uintptr_t base = d->physical_base, end = base + d->num_pages * PAGE_SIZE;
+    if (ram_count && ram_ranges[ram_count - 1].end == base) { ram_ranges[ram_count - 1].end = end; return; }
+    if (ram_count < RAM_RANGES) { ram_ranges[ram_count].base = base; ram_ranges[ram_count++].end = end; }
+}
+
+bool pmm_is_ram(uintptr_t pa, size_t n)
+{
+    for (uint32_t i = 0; i < ram_count; i++)
+        if (pa >= ram_ranges[i].base && pa < ram_ranges[i].end)
+            return n <= ram_ranges[i].end - pa;
+    return false;
+}
+
 /* -----------------------------------------------------------------------
  * pmm_init
  * ----------------------------------------------------------------------- */
@@ -112,6 +140,7 @@ void pmm_init(const BootInfo *info)
         if (d->type == BOOT_MEM_CONVENTIONAL) {
             total_conventional += d->num_pages * PAGE_SIZE;
         }
+        note_ram(d);
 
         /* Print each region */
         const char *type_names[] = {

@@ -154,12 +154,12 @@ static HRESULT STDMETHODCALLTYPE a_getdesc2(Adapter *a, void *out)
     return S_OK;
 }
 /* the user-mode driver's version, as Chromium reads it: WARP's is the
- * system's (10.0.19045.1) */
+ * system's (10.0.18362.1) */
 static HRESULT STDMETHODCALLTYPE a_checkif(Adapter *a, const GUID *iid, LARGE_INTEGER *umd)
 {
     (void)a;
     if (!novadx_same(iid, &NIID_IDXGIDevice)) return NDXGI_ERROR_UNSUPPORTED;
-    if (umd) { umd->HighPart = 10 << 16; umd->LowPart = (19045u << 16) | 1; }
+    if (umd) { umd->HighPart = 10 << 16; umd->LowPart = (18362u << 16) | 1; }
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE a_regevent(Adapter *a, HANDLE e, DWORD *cookie) { (void)a; (void)e; if (cookie) *cookie = 0; return S_OK; }

@@ -265,12 +265,14 @@ NTSYSAPI PPEB NTAPI RtlGetCurrentPeb(void)
     return peb;
 }
 
-/* Windows 10 22H2 (build 19045), the version NovaOS reports everywhere */
+/* Windows 10 1903 (build 18362), the version NovaOS reports everywhere: the
+ * PEB, KUSER_SHARED_DATA, the registry and the kernel's RtlGetVersion say
+ * the same, and the system-call numbers are 1903's */
 NTSYSAPI VOID NTAPI RtlGetNtVersionNumbers(ULONG *major, ULONG *minor, ULONG *build)
 {
     if (major) *major = 10;
     if (minor) *minor = 0;
-    if (build) *build = 0xF0000000u | 19045;       /* high nibble: a free (retail) build */
+    if (build) *build = 0xF0000000u | 18362;       /* high nibble: a free (retail) build */
 }
 
 /* RtlGetDeviceFamilyInfoEnum(ULONGLONG *UAPInfo, DWORD *DeviceFamily, DWORD *DeviceForm):
@@ -279,7 +281,7 @@ NTSYSAPI VOID NTAPI RtlGetNtVersionNumbers(ULONG *major, ULONG *minor, ULONG *bu
  * checks the family before it installs) */
 NTSYSAPI VOID NTAPI RtlGetDeviceFamilyInfoEnum(ULONGLONG *uap, ULONG *family, ULONG *form)
 {
-    if (uap) *uap = (ULONGLONG)10 << 48 | (ULONGLONG)0 << 32 | (ULONGLONG)19045 << 16 | 1;
+    if (uap) *uap = (ULONGLONG)10 << 48 | (ULONGLONG)0 << 32 | (ULONGLONG)18362 << 16 | 1;
     if (family) *family = 3;                       /* DEVICEFAMILYINFOENUM_DESKTOP */
     if (form) *form = 0;                           /* DEVICEFAMILYDEVICEFORM_UNKNOWN, as most PCs report */
 }
@@ -292,7 +294,7 @@ NTSYSAPI NTSTATUS NTAPI RtlGetVersion(PVOID info)
     for (ULONG i = 1; i < size / 4; i++) v[i] = 0;
     v[1] = 10;                                     /* major */
     v[2] = 0;                                      /* minor */
-    v[3] = 19045;                                  /* build */
+    v[3] = 18362;                                  /* build */
     v[4] = 2;                                      /* VER_PLATFORM_WIN32_NT */
     if (size >= 284) ((UCHAR *)v)[282] = 1;        /* wProductType: VER_NT_WORKSTATION */
     return 0;

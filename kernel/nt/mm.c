@@ -224,6 +224,45 @@ NT_API UINT64 nt_MmGetPhysicalAddress(void *va)
 
 NT_API UINT8 nt_MmIsAddressValid(void *va) { return nt_MmGetPhysicalAddress(va) != 0; }
 
+/* MmCopyMemory: copy from a physical address (MM_COPY_MEMORY_PHYSICAL) or
+ * a virtual one (MM_COPY_MEMORY_VIRTUAL; below the kernel half, the
+ * current process's) into the driver's buffer without faulting on a page
+ * that is not there.  An anti-cheat driver reads memory this way.  Only
+ * RAM is read: a physical address outside the firmware's RAM, or a kernel
+ * address mapped over device memory, ends the copy (reading MMIO could
+ * set off the device); so does an unmapped page.  As on Windows, what was
+ * copied is counted and a short copy is STATUS_PARTIAL_COPY, none at all
+ * an error */
+#define MM_COPY_MEMORY_PHYSICAL  1
+#define MM_COPY_MEMORY_VIRTUAL   2
+#define NT_STATUS_PARTIAL_COPY   ((NT_STATUS)0x8000000D)
+
+NT_API NTSTATUS nt_MmCopyMemory(void *target, UINT64 source, UINT64 n, UINT32 flags, UINT64 *done)
+{
+    if (done) *done = 0;
+    if (!target || !done || (flags != MM_COPY_MEMORY_PHYSICAL && flags != MM_COPY_MEMORY_VIRTUAL))
+        return NT_STATUS_INVALID_PARAMETER;
+    UINT64 copied = 0;
+    while (copied < n) {
+        UINT64 at = source + copied, chunk = PAGE_SIZE - (at & (PAGE_SIZE - 1));
+        if (chunk > n - copied) chunk = n - copied;
+        UINT8 *to = (UINT8 *)target + copied;
+        if (flags == MM_COPY_MEMORY_PHYSICAL) {
+            if (!pmm_is_ram(at, chunk)) break;
+            memcpy(to, PHYS_TO_VIRT(at), chunk);
+        } else if (at >= UINT64_C(0x0000800000000000)) {
+            UINT64 pa = paging_virt_to_phys(at);
+            if (!pa || !pmm_is_ram(pa, chunk)) break;
+            memcpy(to, (const void *)(uintptr_t)at, chunk);
+        } else if (!NT_SUCCESS(CopyFromUser(to, (const void *)(uintptr_t)at, chunk))) {
+            break;
+        }
+        copied += chunk;
+    }
+    *done = copied;
+    return copied == n ? NT_STATUS_SUCCESS : copied ? NT_STATUS_PARTIAL_COPY : NT_STATUS_ACCESS_VIOLATION;
+}
+
 /* An export by name (drivers look up what newer Windows versions added) */
 NT_API void *nt_MmGetSystemRoutineAddress(NT_UNICODE_STRING *name)
 {

@@ -98,6 +98,12 @@ size_t pmm_free_now(void);
 size_t pmm_ram_pages(void);
 
 /*
+ * Whether physical bytes [pa, pa+n) are RAM (not MMIO, firmware-reserved
+ * or a hole): MmCopyMemory's MM_COPY_MEMORY_PHYSICAL reads only those.
+ */
+bool pmm_is_ram(uintptr_t pa, size_t n);
+
+/*
  * Mark a physical range as used (prevents allocation of those pages).
  * Used to protect firmware regions, MMIO, etc.
  */

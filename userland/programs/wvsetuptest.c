@@ -146,7 +146,7 @@ static void machine(void)
         ULONG fam = 99, form = 99;
         family(&uap, &fam, &form);
         CHECK("a desktop (DEVICEFAMILYINFOENUM_DESKTOP)", fam == 3);
-        CHECK("Windows 10.0.19045", uap >> 48 == 10 && (uap >> 32 & 0xFFFF) == 0 && (uap >> 16 & 0xFFFF) == 19045);
+        CHECK("Windows 10.0.18362", uap >> 48 == 10 && (uap >> 32 & 0xFFFF) == 0 && (uap >> 16 & 0xFFFF) == 18362);
         CHECK("a device form", form != 99);
         family(NULL, &fam, NULL);                   /* (each output is optional) */
     }

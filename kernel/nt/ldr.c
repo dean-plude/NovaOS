@@ -47,6 +47,7 @@
  * Loads and unloads run under the big kernel lock.
  */
 #include "nt.h"
+#include "psnotify.h"
 #include "ci.h"
 #include "hidclass.h"
 #include "usbvideo.h"
@@ -509,6 +510,7 @@ static NtDriver *load_export_driver(const char *image)
     NtDriver *drv = new_driver(service, image, path, &m);
     if (!drv) { unmap(&m); return NULL; }
     drv->dll = true;
+    NtPsNotifyImage(0, path, m.base, m.size, true);
     DllInitializeFn init = (DllInitializeFn)(uintptr_t)image_export(m.base, m.size, "DllInitialize", 0);
     if (init) {
         if (!loading_push(drv)) { free_driver(drv); unmap(&m); return NULL; }
@@ -593,6 +595,7 @@ static NTSTATUS drv_load(const char *service)
     drv->ext.DriverObject = obj;
     NtIoAddDriver(drv);                            /* (fills MajorFunction with the default) */
 
+    if (!builtin) NtPsNotifyImage(0, path, m.base, m.size, true);   /* (load-image routines hear of a driver first) */
     loading_push(drv);
     st = obj->DriverInit(obj, &drv->reg_path);
     loading_pop();
@@ -600,6 +603,7 @@ static NTSTATUS drv_load(const char *service)
     else kprintf("[NT] %s loaded at 0x%llx (service %s): DriverEntry returned 0x%08x\n", image,
                  (unsigned long long)m.base, service, (UINT32)st);
     if (!NT_SUCCESS(st)) {
+        NtPsDriverGone(drv);
         NtIoDropDevices(drv);
         NtIoRemoveDriver(drv);
         NtPoolDriverGone(drv);
@@ -646,6 +650,7 @@ static void unload(NtDriver *drv)
     while (*pp && *pp != drv) pp = &(*pp)->next;
     if (*pp) *pp = drv->next;
     if (drv->obj->DriverUnload) drv->obj->DriverUnload(drv->obj);
+    NtPsDriverGone(drv);                           /* (routines it left registered) */
     NtIoDropDevices(drv);
     NtIoRemoveDriver(drv);
     NtPoolDriverGone(drv);
@@ -695,6 +700,17 @@ const char *NtDrvNameOf(UINT64 addr, UINT64 *offset)
     if (!d) return NULL;
     *offset = addr - d->base;
     return d->image;
+}
+
+/* Whether program file @f (@name; pinned by the caller) may run as a
+ * protected process (step 24.8): its signature, embedded or in an
+ * installed catalog, meets the policy a driver's does (Microsoft's, or any
+ * intact one with test signing on, as Windows' test mode admits a
+ * test-signed protected process).  STATUS_INVALID_IMAGE_HASH, logged, if not */
+UINT32 NtCiCheckProgram(RamNode *f, const char *name)
+{
+    CiResult r;
+    return (UINT32)CiValidateImage(name, (const UINT8 *)f->data, f->data ? f->size : 0, g_test_signing, &r);
 }
 
 NtDriver *NtDrvByAddress(UINT64 addr)

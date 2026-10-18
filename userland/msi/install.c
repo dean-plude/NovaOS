@@ -393,7 +393,7 @@ static void system_properties(Inst *in)
 {
     set_prop(in, "VersionNT", "1000");
     set_prop(in, "VersionNT64", "1000");
-    set_prop(in, "WindowsBuild", "19045");
+    set_prop(in, "WindowsBuild", "18362");
     set_prop(in, "ServicePackLevel", "0");
     set_prop(in, "MsiNTProductType", "1");
     set_prop(in, "Privileged", "1");

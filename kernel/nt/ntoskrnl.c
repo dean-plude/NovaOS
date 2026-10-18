@@ -340,7 +340,9 @@ NT_API NTSTATUS nt_RtlUnicodeToMultiByteN(char *dst, UINT32 dstmax, UINT32 *writ
 
 /* -----------------------------------------------------------------------
  * Version (KMDF checks the OS version it binds against): report the
- * Windows build NovaOS presents as, Windows 10 2004 (10.0.19041)
+ * Windows build NovaOS presents as everywhere, Windows 10 1903 (10.0.18362):
+ * the PEB, KUSER_SHARED_DATA, the registry and ntdll say the same, and the
+ * system-call numbers are 1903's
  * ----------------------------------------------------------------------- */
 NT_API NTSTATUS nt_RtlGetVersion(void *info)
 {
@@ -348,7 +350,7 @@ NT_API NTSTATUS nt_RtlGetVersion(void *info)
     if (!v || v[0] < 5 * 4) return STATUS_INVALID_PARAMETER;
     v[1] = 10;                                   /* dwMajorVersion */
     v[2] = 0;                                    /* dwMinorVersion */
-    v[3] = 19041;                                /* dwBuildNumber */
+    v[3] = 18362;                                /* dwBuildNumber */
     v[4] = 2;                                    /* VER_PLATFORM_WIN32_NT */
     return STATUS_SUCCESS;
 }
@@ -358,7 +360,7 @@ NT_API UINT8 nt_PsGetVersion(UINT32 *major, UINT32 *minor, UINT32 *build, NT_UNI
 {
     if (major) *major = 10;
     if (minor) *minor = 0;
-    if (build) *build = 19041;
+    if (build) *build = 18362;
     if (csd && csd->Buffer && csd->MaximumLength >= 2) { csd->Length = 0; csd->Buffer[0] = 0; }
     return 0;
 }
@@ -919,5 +921,5 @@ NT_API NTSTATUS nt_RtlUnicodeStringToInteger(const NT_UNICODE_STRING *s, UINT32 
     return STATUS_SUCCESS;
 }
 
-/* NovaOS presents as Windows 10 2004 (RtlGetVersion): NTDDI_WIN10_VB */
-NT_API UINT8 nt_RtlIsNtDdiVersionAvailable(UINT32 version) { return version <= 0x0A000008u; }
+/* NovaOS presents as Windows 10 1903 (RtlGetVersion): NTDDI_WIN10_19H1 */
+NT_API UINT8 nt_RtlIsNtDdiVersionAvailable(UINT32 version) { return version <= 0x0A000007u; }

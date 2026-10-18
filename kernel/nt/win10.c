@@ -17,7 +17,7 @@
  *               an activation reports the active condition at once and an
  *               idle request the idle condition; the device is never powered
  *               down by it (no runtime power management yet)
- *   Ps          a process's ID
+ * (a process's ID and the rest of Ps are psnotify.c's)
  */
 #include "nt.h"
 #include "ntapi.h"
@@ -218,9 +218,3 @@ NT_API void nt_PoFxSetDeviceIdleTimeout(void *h, UINT64 timeout) { (void)h; (voi
  * source: NovaOS does not sleep */
 NT_API void nt_PoSetSystemWake(NT_IRP *irp) { (void)irp; }
 NT_API UINT8 nt_PoGetSystemWake(NT_IRP *irp) { (void)irp; return 0; }
-
-/* -----------------------------------------------------------------------
- * Ps
- * ----------------------------------------------------------------------- */
-/* (a PEPROCESS NovaOS hands a driver is its process record) */
-NT_API void *nt_PsGetProcessId(UmProcess *p) { return p ? (void *)(uintptr_t)p->pid : NULL; }

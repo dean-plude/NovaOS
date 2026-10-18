@@ -10,13 +10,16 @@
  * start routine runs with the Microsoft x64 calling convention, like every
  * driver callback.
  *
- * At this step the only handle a driver can reference by value is such a
- * system-thread handle; referencing the Zw layer's file and key handles
- * (zw.c) by value arrives with the object manager in a later driver step,
- * so ObReferenceObjectByHandle returns STATUS_INVALID_HANDLE for anything
+ * The handles a driver can reference by value are such a system-thread
+ * handle and a program's process and thread handles (step 24.8,
+ * psnotify.c: its PEPROCESS or PETHREAD, the rights checked against the
+ * handle's); referencing the Zw layer's file and key handles (zw.c) by
+ * value arrives with the object manager in a later driver step, so
+ * ObReferenceObjectByHandle returns STATUS_INVALID_HANDLE for anything
  * else.  ObfReferenceObject/ObfDereferenceObject count references on an
- * NtSysThread and are no-ops on any other pointer (drivers also hand them
- * device objects, which NovaOS does not reference-count yet).
+ * NtSysThread, a process and a thread, and are no-ops on any other pointer
+ * (drivers also hand them device objects, which NovaOS does not
+ * reference-count yet).
  */
 #include "nt.h"
 #include "ntapi.h"
@@ -25,6 +28,7 @@
 #include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
+#include "../um/um_internal.h"
 
 #define NT_SYSTHREAD_MAGIC  0x53795468u   /* 'SyTh' */
 #define NT_DRIVER_STACK     (24 * 1024)   /* driver threads run deeper than tests */
@@ -140,9 +144,9 @@ static NtSysThread *as_systhread(void *p)
 NT_API NTSTATUS nt_ObReferenceObjectByHandle(void *Handle, UINT32 DesiredAccess, void *ObjectType, char AccessMode,
                                              void **Object, void *HandleInformation)
 {
-    (void)DesiredAccess; (void)ObjectType; (void)AccessMode; (void)HandleInformation;
+    (void)AccessMode; (void)HandleInformation;
     NtSysThread *st = as_systhread(Handle);
-    if (!st) return STATUS_INVALID_HANDLE;
+    if (!st) return Object ? NtPsReferenceByHandle(Handle, DesiredAccess, ObjectType, Object) : STATUS_INVALID_HANDLE;
     IrqState s = spin_lock_irqsave(&g_sys_lock);
     st->refs++;
     spin_unlock_irqrestore(&g_sys_lock, s);
@@ -169,6 +173,7 @@ bool NtPsHandleClose(void *Handle)
 
 NT_API void nt_ObfReferenceObject(void *Object)
 {
+    if (NtPsObject(Object)) { um_ob_ref(Object); return; }   /* a process or thread (psnotify.c) */
     NtSysThread *st = as_systhread(Object);
     if (!st) return;
     IrqState s = spin_lock_irqsave(&g_sys_lock);
@@ -178,6 +183,7 @@ NT_API void nt_ObfReferenceObject(void *Object)
 
 NT_API void nt_ObfDereferenceObject(void *Object)
 {
+    if (NtPsObject(Object)) { um_ob_unref(Object); return; }
     NtSysThread *st = as_systhread(Object);
     if (!st) return;
     IrqState s = spin_lock_irqsave(&g_sys_lock);

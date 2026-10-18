@@ -342,7 +342,7 @@ void CmInitialize(void)
         cm_init_sz(control,   "SystemRoot",       "\\Windows");
         cm_init_dword(control,"CurrentMajorVersionNumber", 10);
         cm_init_dword(control,"CurrentMinorVersionNumber", 0);
-        cm_init_dword(control,"CurrentBuildNumber",        19041);
+        cm_init_dword(control,"CurrentBuildNumber",        18362);
     }
 
     /* HKLM\SYSTEM\CurrentControlSet\Services */
@@ -357,7 +357,7 @@ void CmInitialize(void)
         cm_init_sz(winver,    "EditionID",         "Professional");
         cm_init_dword(winver, "CurrentMajorVersionNumber", 10);
         cm_init_dword(winver, "CurrentMinorVersionNumber", 0);
-        cm_init_dword(winver, "CurrentBuildNumber",        19041);
+        cm_init_dword(winver, "CurrentBuildNumber",        18362);
         cm_init_dword(winver, "UBR",                       1);
     }
 

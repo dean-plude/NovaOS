@@ -9,7 +9,9 @@
  * ZwLoadDriver / ZwUnloadDriver to the driver loader (ldr.c), and
  * ZwQuerySystemInformation's SystemModuleInformation to the loaded-driver
  * list, which is what a driver (KMDF among them) reads to find its own
- * image base.
+ * image base, and its SystemHandleInformation / SystemExtendedHandleInformation
+ * (16 / 64) to every process's handle table (an anti-cheat driver walks it
+ * for handles open on its game).
  *
  * A Zw registry handle is a small kernel object holding the key's path
  * (NovaOS keeps the registry as a tree of names, not of objects a handle
@@ -653,8 +655,17 @@ typedef struct {
     UINT8   FullPathName[256];
 } RtlProcessModule;
 
+UINT32 um_handle_table(UINT8 *out, UINT32 cap, bool ext);   /* (um.c) */
+
 NT_API NTSTATUS nt_ZwQuerySystemInformation(UINT32 cls, void *info, UINT32 len, UINT32 *ret_len)
 {
+    if (cls == 16 || cls == 64) {         /* SystemHandleInformation, SystemExtendedHandleInformation */
+        UINT32 need = um_handle_table(NULL, 0, cls == 64);
+        if (len < need) { if (ret_len) *ret_len = need; return NT_STATUS_INFO_LENGTH_MISMATCH; }
+        um_handle_table(info, len, cls == 64);
+        if (ret_len) *ret_len = need;
+        return NT_STATUS_SUCCESS;
+    }
     if (cls != SystemModuleInformation) {
         if (ret_len) *ret_len = 0;
         return NT_STATUS_NOT_IMPLEMENTED;

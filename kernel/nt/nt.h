@@ -17,7 +17,11 @@
  *   ke.c        the kernel's: IRQL, DPCs, spin locks, events, semaphores,
  *               timers, fast mutexes, time, KeBugCheckEx
  *   ex.c        the pool (ExAllocatePool*)
- *   mm.c        MDLs, physical addresses, MmGetSystemRoutineAddress
+ *   mm.c        MDLs, physical addresses, MmGetSystemRoutineAddress,
+ *               MmCopyMemory
+ *   psnotify.c  process, thread and image notify routines, Ob callbacks
+ *               on process and thread handles, and the PEPROCESS/PETHREAD
+ *               getters (what anti-cheat drivers watch the system through)
  *   io.c        Windows devices and their names, device stacks, IRPs: what
  *               a program's NtCreateFile, NtReadFile, NtWriteFile,
  *               NtDeviceIoControlFile and NtClose on a Windows device turn into
@@ -95,6 +99,14 @@ int       NtDrvModules(UINT64 *base, UINT32 *size, char (*path)[260], int max);
 void      NtDrvLastClose(NtDriver *drv);
 /* The loaded driver whose image holds @addr, or NULL */
 NtDriver *NtDrvByAddress(UINT64 addr);
+
+/* psnotify.c: whether @p is a process or thread object handed to drivers
+ * (a referenced UmObject); ObReferenceObjectByHandle on a program's
+ * process or thread handle; @drv unloads: remove its notify routines and
+ * Ob callbacks */
+bool      NtPsObject(void *p);
+NTSTATUS  NtPsReferenceByHandle(void *handle, UINT32 access, void *type, void **object);
+void      NtPsDriverGone(NtDriver *drv);
 
 /* ex.c: @drv unloads: log the pool blocks it never freed */
 void      NtPoolDriverGone(NtDriver *drv);

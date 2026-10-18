@@ -413,4 +413,4 @@ NT_API void nt___chkstk(void);
 
 /* The build Windows reports (NtBuildNumber: 0xF000 in the top bits marks
  * a free build), as RtlGetVersion does */
-UINT32 nt_NtBuildNumber = 0xF0000000u | 19041;
+UINT32 nt_NtBuildNumber = 0xF0000000u | 18362;

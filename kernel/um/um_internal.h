@@ -100,6 +100,8 @@ typedef enum { UO_EVENT = 1, UO_MUTANT, UO_SEMAPHORE, UO_THREAD, UO_SOCKET, UO_W
 typedef struct UmThread UmThread;
 
 typedef struct UmObject {
+    UINT32          nt_magic;       /* UM_NT_OBJECT: a process or thread object drivers may be handed (kernel/nt/psnotify.c) */
+    UINT32          nt_id, nt_pid;  /* and its process or thread id, and a thread's process id (they outlive the process) */
     UmObType        type;
     volatile int    refs;
     bool            signaled;       /* event state; thread: has ended */
@@ -174,6 +176,11 @@ void      um_ob_wake(UmObject *o);
  * threads woken; um_ob_wake gives an event's, a semaphore's or a mutex's
  * (+1) */
 void      um_ob_wake_boost(UmObject *o, int boost);
+
+/* A process's or thread's object as drivers see it: the PEPROCESS or
+ * PETHREAD kernel/nt/psnotify.c hands them (their first field) */
+#define UM_NT_OBJECT 0x6A624F50u   /* 'PObj' */
+static inline void um_nt_object(UmObject *o, UINT32 id, UINT32 pid) { o->nt_magic = UM_NT_OBJECT; o->nt_id = id; o->nt_pid = pid; }
 
 typedef enum { H_FREE = 0, H_FILE, H_CON_IN, H_CON_OUT, H_DIR, H_OBJECT, H_NULL } UmHandleKind;
 
@@ -336,6 +343,12 @@ struct UmProcess {
     UINT8           prio_class;
     bool            no_boost;
     bool            auto_align; /* ProcessEnableAlignmentFaultFixup, SEM_NOALIGNMENTFAULTEXCEPT (um_gpfault.c) */
+    /* Its PS_PROTECTION (Type: bits 0-2, 1 light, 2 protected; Signer:
+     * bits 4-7), set at creation from a signature that meets it (0: none) */
+    UINT8           protection;
+    char            image_file_name[16];   /* EPROCESS.ImageFileName: its program's name, 15 characters at most */
+    UmObject       *nt_self;    /* its object as drivers were handed it (PsGetCurrentProcess, notify
+                                 * routines; referenced until it exits: kernel/nt/psnotify.c) */
 };
 
 /* um.c */
@@ -459,10 +472,21 @@ UmObject  *um_handle_object(UmProcess *p, UINT64 h, UmObType type);   /* referen
 /* ... also from a handle with only SYNCHRONIZE and the limited query right
  * to a process or thread of a higher integrity level (waiting, exit codes) */
 UmObject  *um_handle_object_limited(UmProcess *p, UINT64 h, UmObType type);
+/* ... only when a process or thread handle grants @right (PROCESS_VM_READ,
+ * PROCESS_TERMINATE...: what a protected process or a driver's Ob callback
+ * left it); *@st says why not: STATUS_INVALID_HANDLE or STATUS_ACCESS_DENIED */
+UmObject  *um_handle_object_right(UmProcess *p, UINT64 h, UmObType type, UINT32 right, UINT32 *st);
 /* The process a handle names (-1: @self); @ob holds a reference to drop
  * (um_ob_unref) when it is another process.  NULL if bad or gone. */
 UmProcess *um_proc_of(UmProcess *self, UINT64 h, UmObject **ob);
 UmProcess *um_proc_of_query(UmProcess *self, UINT64 h, UmObject **ob);   /* ... only to ask about it */
+UmProcess *um_proc_of_right(UmProcess *self, UINT64 h, UmObject **ob, UINT32 right, UINT32 *st);   /* ... with @right */
+/* SystemHandleInformation (16) or, @ext, SystemExtendedHandleInformation
+ * (64): every process's handles, laid out as on x64 Windows, into @out
+ * (@cap bytes; NULL to measure); the bytes the whole table takes */
+UINT32     um_handle_table(UINT8 *out, UINT32 cap, bool ext);
+/* The Windows object type index of a handle's object (Process 7, Thread 8, File 37...) */
+UINT8      um_type_index(const UmHandle *h);
 bool       um_handle_object_exists(UmProcess *p, UINT64 h);           /* any open handle */
 UmObject  *um_open_process(UINT32 pid);          /* OpenProcess: referenced, or NULL */
 UmObject  *um_open_thread(UINT32 tid);           /* OpenThread: referenced, or NULL */
@@ -485,6 +509,9 @@ typedef struct {
     UINT32          runtime_len;
     bool            suspended;          /* CREATE_SUSPENDED: the first thread waits for NtResumeThread */
     bool            elevated;           /* as administrator, nobody asked (UmSpawnElevated) */
+    UINT8           protection;         /* PS_PROTECTION asked for (CREATE_PROTECTED_PROCESS), its image's signature checked */
+    UmObject       *process_ob;         /* its creator's process object (UO_PROCESS), or NULL */
+    UINT32         *refused;            /* set to a driver's CreationStatus when a process notify routine refused it */
 } UmSpawnOpts;
 UmProcess *um_spawn_ex(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
                        const UmSpawnOpts *o, char *err, int err_cap);
@@ -612,8 +639,9 @@ UmObject  *um_uac_elevate(UmObject *token, const char *path, UINT32 *st);
 /* Integrity level of a token: 0x1000 low, 0x2000 medium, 0x3000 high, 0x4000 system */
 UINT32     um_token_integrity(UmObject *token);
 /* Opening process or thread object @o for @want from a lower integrity
- * level than its process's (NO_READ_UP | NO_WRITE_UP): ACCESS_DENIED
- * unless only SYNCHRONIZE and the limited query right are asked for; then
+ * level than its process's (NO_READ_UP | NO_WRITE_UP), or from a process
+ * whose PS_PROTECTION does not dominate a protected one's: ACCESS_DENIED
+ * unless only the rights left to such an opener are asked for; then
  * *limited and *granted say what the handle holds (um_handle_object gives
  * such a handle's object only to waiting and asking) */
 UINT32     um_integrity_gate(UmObject *o, UINT32 want, bool *limited, UINT32 *granted);

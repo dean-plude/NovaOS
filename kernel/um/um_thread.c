@@ -11,6 +11,7 @@
 #include "um_internal.h"
 #include "../ke/probe.h"
 #include "../ke/printf.h"
+#include "../nt/psnotify.h"
 #include "../ke/smp.h"
 #include "../ke/ksym.h"
 #include "../mm/vmm.h"
@@ -1166,6 +1167,12 @@ static UINT64 query_info_process(UmProcess *p, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     if (a2 == 27 || a2 == 43) return query_image_name(p, a2 == 27, a3, a4);
     if (a2 == 60) return query_command_line(p, a3, a4);
+    if (a2 == 61) {                                            /* ProcessProtectionInformation: its PS_PROTECTION */
+        if (a4 < 1) return ST_INFO_LENGTH_MISMATCH;
+        UINT64 ret = um_stack_arg(5);
+        if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)a3, &p->protection, 1))) return ST_ACCESS_VIOLATION;
+        return !ret || put_u32(ret, 1) ? ST_SUCCESS : ST_ACCESS_VIOLATION;
+    }
     if (a2 == 26) {                                            /* ProcessWow64Information: its 32-bit PEB, or 0 */
         if (a4 < 8) return ST_INFO_LENGTH_MISMATCH;
         UINT64 v = p->wow ? p->lay.peb : 0, ret = um_stack_arg(5);
@@ -1236,6 +1243,18 @@ static UmProcess *proc_of(UmProcess *self, UINT64 h, UmObject **ob, bool limited
     return o->proc;
 }
 
+UmProcess *um_proc_of_right(UmProcess *self, UINT64 h, UmObject **ob, UINT32 right, UINT32 *st)
+{
+    *ob = NULL;
+    *st = ST_INVALID_HANDLE;
+    if (h == UINT64_C(0xFFFFFFFFFFFFFFFF)) return self;
+    UmObject *o = um_handle_object_right(self, h, UO_PROCESS, right, st);
+    if (!o) return NULL;
+    if (!o->proc || o->proc->reclaimed) { um_ob_unref(o); *st = ST_INVALID_HANDLE; return NULL; }
+    *ob = o;
+    return o->proc;
+}
+
 UmProcess *um_proc_of(UmProcess *self, UINT64 h, UmObject **ob) { return proc_of(self, h, ob, false); }
 /* ... for asking about it only (a handle with PROCESS_QUERY_LIMITED_INFORMATION will do) */
 UmProcess *um_proc_of_query(UmProcess *self, UINT64 h, UmObject **ob) { return proc_of(self, h, ob, true); }
@@ -1249,8 +1268,10 @@ static UINT64 sys_duplicate_object(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmProcess *p = UmCurrent();
     UINT32 attrs = (UINT32)um_stack_arg(6), options = (UINT32)um_stack_arg(7);
     UmObject *sob = NULL, *tob = NULL;
-    UmProcess *sp = um_proc_of(p, a1, &sob);
-    if (!sp) return ST_INVALID_HANDLE;
+    UINT32 why;
+    UmProcess *sp = um_proc_of_right(p, a1, &sob, 0x40u, &why);   /* PROCESS_DUP_HANDLE */
+    if (!sp) return why;
+    UmObject *ob_dup = NULL;                                      /* a process or thread being duplicated */
     UmProcess *tp = a3 ? um_proc_of(p, a3, &tob) : NULL;
     if (a3 && !tp) { if (sob) um_ob_unref(sob); return ST_INVALID_HANDLE; }
     UINT64 nh = 0;
@@ -1296,8 +1317,14 @@ static UINT64 sys_duplicate_object(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
             UINT32 granted = 0;
             if (!(options & 2)) st = um_integrity_gate(src.obj, (UINT32)um_stack_arg(5), &limited, &granted);
             else if (src.access_known) { limited = true; granted = src.access; }   /* (DUPLICATE_SAME_ACCESS: what it had) */
-            src.access_known = limited;
-            src.access = granted;
+            /* ... less what drivers' Ob callbacks take away (step 24.8: a
+             * duplicate is how a stripped handle would get its rights back) */
+            UINT32 all = limited ? granted : (options & 2) ? 0x001FFFFFu
+                                                         : NtPsMapAccess((UINT32)um_stack_arg(5), src.obj->type == UO_THREAD);
+            UINT32 give = st ? 0 : NtObPreOperation(src.obj, true, all);
+            ob_dup = st ? NULL : src.obj;
+            src.access_known = limited || give != all;
+            src.access = give;
         } else if (tp && !(options & 2) && src.kind == H_OBJECT && src.access_known) {
             /* Rights of its own (not DUPLICATE_SAME_ACCESS): within what the
              * source handle was granted they are given; more is an open of
@@ -1315,6 +1342,7 @@ static UINT64 sys_duplicate_object(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         }
         if (ok && tp && !st) {
             if (!(options & 4)) src.inherit = attrs & 2;     /* DUPLICATE_SAME_ATTRIBUTES, OBJ_INHERIT */
+            if (ob_dup) um_ob_ref(ob_dup);                   /* (held for the post-operation callbacks) */
             um_lock_excl(&tp->lock);
             int free = -1;
             for (int i = 0; i < UM_MAX_HANDLES; i++) if (tp->handles[i].kind == H_FREE) { free = i; break; }
@@ -1322,6 +1350,7 @@ static UINT64 sys_duplicate_object(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
             else um_handles_full(tp);
             um_unlock_excl(&tp->lock);
             if (free < 0) st = ST_TOO_MANY_HANDLES;
+            if (ob_dup) { NtObPostOperation(ob_dup, true, src.access, st); um_ob_unref(ob_dup); }
         }
         if (ok && (!tp || st)) {                             /* not placed: drop the reference */
             if (src.kind == H_FILE || src.kind == H_DIR) RamfsUnref(src.node);

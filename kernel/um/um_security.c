@@ -22,6 +22,7 @@
  * it checks opens with um_access_check_sd.
  */
 #include "um_internal.h"
+#include "../nt/psnotify.h"
 #include "../wm/consent.h"
 #include "../ke/probe.h"
 #include "../ke/printf.h"
@@ -411,12 +412,42 @@ static UINT32 caller_integrity(void)
     return l;
 }
 
+/* Whether a process protected as @mine (PS_PROTECTION) may open one
+ * protected as @target fully: Windows' RtlTestProtectedAccess, where a
+ * protected process dominates a light one and a signer the signers below
+ * it (WinTcb > Windows > Lsa > Antimalware > CodeGen > Authenticode) */
+static bool protection_dominates(UINT8 mine, UINT8 target)
+{
+    UINT8 mt = mine & 7, tt = target & 7;
+    return mt >= tt && (mine >> 4) >= (target >> 4) && mt;
+}
+
 UINT32 um_integrity_gate(UmObject *o, UINT32 want, bool *limited, UINT32 *granted)
 {
     *limited = false;
     *granted = 0;
     UmProcess *p = o->type == UO_PROCESS ? o->proc : o->type == UO_THREAD ? ((UmThread *)o)->proc : NULL;
     if (!p) return ST_SUCCESS;
+    /* A protected process (step 24.8): a caller it does not dominate, an
+     * administrator with every privilege too, gets only the limited rights
+     * (and not PROCESS_TERMINATE when an Antimalware, Lsa, Windows or
+     * WinTcb signer protects it); asking for more is ACCESS_DENIED, as on
+     * Windows.  Kernel-mode code (drivers) is not held back. */
+    UINT32 cap = 0xFFFFFFFFu;
+    UmProcess *me = UmCurrent();
+    if ((p->protection & 7) && me && me != p && !protection_dominates(me->protection, p->protection)) {
+        bool thread = o->type == UO_THREAD;
+        UINT8 signer = p->protection >> 4;
+        cap = thread ? 0x00101C03u : 0x00103800u | (signer >= 3 && signer <= 7 ? 0 : 1);
+        UINT32 asked = NtPsMapAccess(want & ~0x02000000u, thread);   /* (MAXIMUM_ALLOWED: what is allowed) */
+        if (asked & ~cap) {
+            kprintf("[SEC] Protected: %s may not open %s %u (PS_PROTECTION 0x%02X) for %X\n", me->name,
+                    thread ? "a thread of" : "process", p->pid, p->protection, want);
+            return ST_ACCESS_DENIED;
+        }
+        *limited = true;
+        *granted = want & 0x02000000u ? cap : asked;
+    }
     IrqState s = ob_lock();
     UmObject *t = p->token ? um_ob_ref(p->token) : NULL;
     ob_unlock(s);
@@ -435,7 +466,7 @@ UINT32 um_integrity_gate(UmObject *o, UINT32 want, bool *limited, UINT32 *grante
         return ST_ACCESS_DENIED;
     }
     *limited = true;
-    *granted = want & 0x02000000u ? allowed : (want & allowed) | (want & 0x20000000u ? allowed : 0);
+    *granted = (want & 0x02000000u ? allowed : (want & allowed) | (want & 0x20000000u ? allowed : 0)) & cap;
     return ST_SUCCESS;
 }
 

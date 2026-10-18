@@ -256,6 +256,7 @@ set(KERNEL_C_SOURCES
     nt/pnp.c
     nt/po.c
     nt/ps.c
+    nt/psnotify.c
     nt/se.c
     nt/seh.c
     nt/storport.c

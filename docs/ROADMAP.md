@@ -646,7 +646,7 @@ item ends when a named program or test demonstrates it.
 
 ---
 
-## After 0.1: Phases 23 to 32
+## After 0.1: Phases 23 to 33
 
 These phases follow the first release. They keep the rule of Phases 15 to
 22: each step is one focused change with a check anyone can repeat. A
@@ -1012,6 +1012,53 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   then the Calculator package.
 
 ---
+
+### Phase 33: Everyday OS
+
+**Goal:** NovaOS is safe and recoverable enough to be someone's only
+computer: it has accounts and a sign-in, runs apps without administrator
+rights, can be updated and rolled back, installs beside Windows, and prints.
+Each step follows the Windows way: the same account, token, elevation,
+servicing and print models Windows apps and drivers already expect.
+**Gate:** after 0.2 (Phase 29); starts once the gap list ahead of it is done.
+
+- [ ] **33.1 User accounts and sign-in.** Local accounts in a SAM/LSA
+  store, a sign-in and lock screen (password or PIN), `LogonUser`,
+  per-user profiles with their own `HKCU` hive, and fast user switching.
+  Done when a second account is created in Settings, signs in, gets its own
+  profile and registry hive, switches with the first account's apps still
+  running, and a wrong password is refused (self-test `accounttest`, plus a
+  screenshot of the sign-in screen).
+- [ ] **33.2 Standard-user security and UAC.** New accounts are standard
+  users with a filtered token and integrity levels; `consent.exe` shows the
+  real UAC consent flow on a secure desktop for elevation. Done when a
+  standard user running an installer sees the consent prompt, a wrong
+  administrator password is refused, an unelevated process cannot write to
+  `C:\Windows` or `HKLM`, and a medium-integrity process cannot open a
+  high-integrity one (self-test `uactest`).
+- [ ] **33.3 Update rollback and a recovery boot.** Updates install into a
+  new boot image beside the running one (A/B or snapshot) and roll back
+  automatically when the new image fails to reach the desktop; a recovery
+  boot offers safe mode, last known good drivers, startup repair and reset.
+  Done when CI applies a deliberately broken update in QEMU and the next boot
+  returns to the previous image on its own, and the recovery menu starts safe
+  mode and a repair run (boot test `rollbacktest`).
+- [ ] **33.4 A graphical installer that installs beside Windows.** Replace
+  the whole-disk `install` command with a graphical installer that shrinks an
+  existing NTFS partition, adds NovaOS to the firmware boot menu (and chains
+  Windows Boot Manager so a boot menu lists both), and keeps user data on a
+  reinstall. Done when, in QEMU, an installer run on a disk holding a
+  Windows-style NTFS volume leaves that volume's files intact, boots NovaOS
+  and offers the other system in the boot menu; a screenshot of each
+  installer page is in `docs/screenshots/`.
+- [ ] **33.5 Printing.** The Windows print model: a spooler service
+  (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
+  Print Management, real printer drivers loaded unchanged where they are
+  user mode, driverless IPP network printing, and an XPS/PDF print path with
+  "Microsoft Print to PDF". Done when Notepad and SumatraPDF list a printer,
+  print a page to the PDF printer and to an IPP printer served by a test
+  host in CI, and the output matches a reference file (self-test
+  `spooltest`); WIA scanning is a follow-up.
 
 ## Cross-cutting (maintain throughout)
 

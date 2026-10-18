@@ -125,6 +125,10 @@ typedef struct WND {
                               * SetCursor), or NULL: the arrow.  Set under the
                               * desktop lock, then WmCursorShapeChanged() */
     void      *user;         /* app state */
+    UINT32     session;      /* the sign-in it belongs to (an account's RID: fast
+                              * user switching), 0: every one (a service's) */
+    bool       away;         /* its sign-in is switched away from: hidden, */
+    bool       away_shown;   /* ... and whether it shows when it comes back */
 } WND;
 
 /* -----------------------------------------------------------------------
@@ -168,7 +172,18 @@ GdiRect WmClientRect(const WND *w);
  * dragged.  Desktop lock. */
 bool WmRectUncovered(const WND *w, GdiRect r);
 
-/* Topmost window belonging to app `app`, or NULL. */
+/* Fast user switching (wm/logon.c): show the windows of @rid's sign-in
+ * and put every other sign-in's away (hidden, their programs running),
+ * giving the focus back to the window that had it when @rid's was put
+ * away.  A window belongs to the sign-in of the program that made it
+ * (built-in apps: the screen's). */
+void WmSetSession(UINT32 rid);
+UINT32 WmSession(void);
+/* Sign-out: close the built-in apps' windows of @rid's sign-in (its
+ * programs' go as they are ended, UmEndSession) */
+void WmCloseSession(UINT32 rid);
+
+/* Topmost window belonging to app `app`, or NULL (not one put away). */
 WND *WmFindApp(int app);
 int  WmWindowCount(void);
 /* Windows (minimized ones too), topmost first; returns how many (<= max). */

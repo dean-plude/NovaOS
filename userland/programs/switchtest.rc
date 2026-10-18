@@ -1,0 +1,2 @@
+/* switchtest: its manifest asks to run as administrator (requireAdministrator), as signing another account out needs */
+1 24 "switchtest.manifest"

@@ -80,6 +80,7 @@ static int  g_hover_part;
 static WND *g_grab;                 /* explicit capture (WmSetCapture) */
 static WND *g_rcapture;             /* client that received a right/middle press */
 static WND *g_hover_client;         /* hover window the pointer is over */
+static UINT32 g_session;             /* the sign-in on the screen (an account's RID; 0: not yet) */
 static int  g_wheel;
 static UINT32 g_buttons;
 
@@ -225,8 +226,14 @@ WND *WmCreateWindowEx(const char *title, GdiRect frame, UINT32 style,
         w->app       = -1;
         w->on_paint  = on_paint;
         w->user      = user;
+        w->session   = UmCurrentSession();
         WmSetTitle(w, title);
         g_used[i] = true;
+        if (w->session && g_session && w->session != g_session) {   /* (a program of a sign-in switched away from) */
+            w->away = w->away_shown = true;
+            w->visible = false;
+            activate = false;
+        }
         if (activate) WmSetActive(w);
         else { w->z = g_next_z++; mark_dirty(); }
         return w;
@@ -281,6 +288,7 @@ void WmDestroyWindow(WND *w)
 void WmShowWindow(WND *w, bool visible)
 {
     if (!w) return;
+    if (w->away) { w->away_shown = visible; return; }      /* (shows when its sign-in comes back) */
     bool hide_active = !visible && w->visible && w->active;
     w->visible = visible;
     if (hide_active) activate_next(w, w->owner);    /* as Windows does when the active window hides */
@@ -312,7 +320,7 @@ static WND *by_id(int id)
 
 void WmSetActive(WND *w)
 {
-    if (!w) return;
+    if (!w || w->away) return;
     if (w->popup) { w->z = g_next_z++; mark_dirty(); return; }   /* popups never take the focus */
     for (int j = 0; j < WM_MAX_WINDOWS; j++)
         if (g_used[j]) g_windows[j].active = false;
@@ -495,10 +503,72 @@ WND *WmFindApp(int app)
     WND *best = NULL;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         WND *w = &g_windows[i];
-        if (!g_used[i] || w->app != app) continue;
+        if (!g_used[i] || w->app != app || w->away) continue;
         if (!best || w->z > best->z) best = w;
     }
     return best;
+}
+
+/* -----------------------------------------------------------------------
+ * Sign-ins (fast user switching)
+ * ----------------------------------------------------------------------- */
+#define SESSION_SLOTS 8
+static struct { UINT32 rid; int active; } g_sess_focus[SESSION_SLOTS];   /* the focus each had when put away */
+
+UINT32 WmSession(void) { return g_session; }
+
+void WmSetSession(UINT32 rid)
+{
+    if (!rid) return;
+    UINT32 old = g_session;
+    if (old == rid) return;
+    if (!old) {                             /* the first sign-in: what is up already is its */
+        g_session = rid;
+        for (int i = 0; i < WM_MAX_WINDOWS; i++) if (g_used[i] && g_windows[i].session) g_windows[i].session = rid;
+        return;
+    }
+    WND *act = WmActiveWindow();
+    if (old) {
+        int slot = -1;
+        for (int i = 0; i < SESSION_SLOTS && slot < 0; i++) if (g_sess_focus[i].rid == old) slot = i;
+        for (int i = 0; i < SESSION_SLOTS && slot < 0; i++) if (!g_sess_focus[i].rid) slot = i;
+        if (slot >= 0) { g_sess_focus[slot].rid = old; g_sess_focus[slot].active = act ? act->id : 0; }
+    }
+    g_session = rid;
+    g_drag = g_resize = g_capture = g_press = g_hover = g_grab = g_rcapture = g_hover_client = NULL;
+    int shown_n = 0, away_n = 0, focus = 0;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        WND *w = &g_windows[i];
+        if (!g_used[i] || !w->session) continue;
+        if (w->session != rid && !w->away) {
+            w->away = true;
+            w->away_shown = w->visible;
+            w->visible = false;
+            w->active = false;
+            away_n++;
+        } else if (w->session == rid && w->away) {
+            w->away = false;
+            w->visible = w->away_shown;
+            shown_n++;
+        }
+    }
+    for (int i = 0; i < SESSION_SLOTS; i++)
+        if (g_sess_focus[i].rid == rid) { focus = g_sess_focus[i].active; g_sess_focus[i].rid = 0; }
+    WND *f = focus ? by_id(focus) : NULL;
+    if (!f || !shown(f)) f = topmost(NULL);
+    if (f) WmSetActive(f);
+    else for (int i = 0; i < WM_MAX_WINDOWS; i++) if (g_used[i]) g_windows[i].active = false;
+    if (old) kprintf("[WM] Sign-in %u on the screen: %d windows back, %d put away\n", rid, shown_n, away_n);
+    mark_dirty();
+}
+
+void WmCloseSession(UINT32 rid)
+{
+    for (int i = 0; i < WM_MAX_WINDOWS && rid; i++) {
+        WND *w = &g_windows[i];
+        if (g_used[i] && w->session == rid && !w->presents) WmDestroyWindow(w);   /* (programs' windows: UmEndSession) */
+    }
+    for (int i = 0; i < SESSION_SLOTS; i++) if (g_sess_focus[i].rid == rid) g_sess_focus[i].rid = 0;
 }
 
 int WmWindowCount(void)

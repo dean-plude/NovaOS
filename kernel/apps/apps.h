@@ -202,7 +202,8 @@ void NotepadOpen(RamNode *file);
 void SettingsOpen(void);
 /* Settings pages (for SettingsOpenPage) */
 enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_STORAGE,
-       SETTINGS_NETWORK, SETTINGS_TIME_LANGUAGE, SETTINGS_ABOUT };
+       SETTINGS_NETWORK, SETTINGS_ACCOUNTS, SETTINGS_TIME_LANGUAGE, SETTINGS_ABOUT,
+       SETTINGS_ACCOUNTS_ADD = 100 /* Accounts, with "Add an account" open */ };
 /* Open Settings (or focus the open window) at page @page */
 void SettingsOpenPage(int page);
 void CalendarOpen(void);

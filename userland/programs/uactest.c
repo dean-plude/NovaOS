@@ -216,7 +216,7 @@ static void protection_checks(BOOL elevated, BOOL leftover)
 #define EXPECT(desc, ok) (snprintf(what, sizeof(what), "%s: %s", desc, verb), \
                           check(what, elevated ? (ok) : (!(ok) && (e = GetLastError(), e == ERROR_ACCESS_DENIED))))
     SetLastError(0);
-    EXPECT("a new file in C:\\Windows", make_file(L"C:\\Windows\\uactest.txt"));
+    EXPECT("a new file in C:\\Windows", make_file(elevated ? L"C:\\Windows\\uactest.txt" : L"C:\\Windows\\uactest-user.txt"));
     SetLastError(0);
     EXPECT("a new file in C:\\Windows\\System32", make_file(L"C:\\Windows\\System32\\uactest.dll"));
     SetLastError(0);

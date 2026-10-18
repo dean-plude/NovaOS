@@ -282,6 +282,16 @@ void UmInit(void)
     BootFilesInstall();                             /* wallpapers, icon sets, pictures: beside the kernel */
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
+    /* The folders in C:\Windows every user may write (kernel/fs/fsec.c):
+     * there before any program, which may not make them there itself */
+    RamNode *win = RamfsResolve(NULL, "\\Windows"), *sys = RamfsResolve(NULL, "\\Windows\\System32");
+    if (win) RamfsCreate(win, "Temp", true);
+    if (sys) {
+        RamfsCreate(sys, "Tasks", true);
+        RamfsCreate(sys, "CertStore", true);
+        RamNode *spool = RamfsCreate(sys, "spool", true);
+        if (spool) RamfsCreate(spool, "PRINTERS", true);
+    }
     um_registry_init();
     EvLogBoot();                                    /* (the System log's first event of this boot) */
     DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
@@ -3326,7 +3336,10 @@ static void spawn_free(UmSpawnJob *j)
 /* Called with the desktop lock held once */
 static void spawn_run(UmSpawnJob *j, bool yield)
 {
-    UmProcess *p = um_spawn_image(j->exe, j->cwd, j->con, yield, j->elevate ? UM_ELEVATE_ASK : UM_ELEVATE_MANIFEST,
+    /* (services.exe: as administrator, nobody asked, as Windows' runs as
+     * the system; it writes the services' state in HKLM) */
+    UmProcess *p = um_spawn_image(j->exe, j->cwd, j->con, yield,
+                                  j->service ? UM_ELEVATE_SILENT : j->elevate ? UM_ELEVATE_ASK : UM_ELEVATE_MANIFEST,
                                   j->err, sizeof(j->err));
     if (p && j->service) p->session = 0;
     if (p) p = um_spawn_finish(p, j->exe, j->cmdline, NULL, j->err, sizeof(j->err));

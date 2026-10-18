@@ -4,8 +4,9 @@ Status: design, decided 2026-10-13 (roadmap step 25.3).  Step 1 of the
 steps at the end, the display-only WDDM host (`\Device\DxgKrnl`, tested
 with NovaOS's `wddmdod.sys` on QEMU's standard VGA), is merged.  Step 3's
 first part (the `D3DKMT*` calls, the Basic Render adapter's allocations
-and CPU fences) is in; the rest of step 3, and steps 2, 4 and 5, are not
-built.  Intel's driver has not been tried: it needs step 2
+and CPU fences) is in, and its second (render miniports: `DxgkInitialize`
+and the test driver `wddmtest.sys`'s adapter, devices and allocations);
+the rest of step 3, and steps 2, 4 and 5, are not built.  Intel's driver has not been tried: it needs step 2
 and the T14, and nothing has run on the T14 yet.
 
 **The decision.**  NovaOS drives the ThinkPad T14 Gen 4's Intel Iris Xe
@@ -238,10 +239,16 @@ test miniports, and Intel's driver only on the T14 (Dean's hand checks in
   by it.
 - **`kmttest`** (built, step 3's first part; `userland/programs/kmttest.c`,
   the core suite): the `D3DKMT*` calls on the Basic Render adapter.
-- **`wddmtest.sys`** (planned, step 3), a render miniport whose "GPU" is a kernel thread
-  executing a tiny command format in software: exercises allocations,
-  GPU virtual addresses, paging buffers, submission, fences, preemption
-  and TDR on QEMU, with a test program driving it through `D3DKMT*`.
+- **`wddmtest.sys`** (step 3, begun in its second part;
+  `tools/drivertest/wddmtest.c`), a render miniport whose "GPU" is
+  software, on a root-enumerated device (`root\WddmTest`, as the Basic
+  Render Driver has `ROOT\BasicRender`) in the devices suite's "wddm"
+  boot.  So far it registers a WDDM 2.0 `DRIVER_INITIALIZATION_DATA`,
+  describes one 256 MiB segment of system memory, and makes devices and
+  allocations (sized to its 64 KiB pages, opened on the device) that
+  `kmttest wddm` drives through `D3DKMT*`.  The later parts give it a
+  kernel thread executing a tiny command format: GPU virtual addresses,
+  paging buffers, submission, fences, preemption and TDR.
 - On the T14: `devices` shows the GPU started with Intel's driver,
   Settings changes the panel's mode, then (step 25.4) `gltest` and
   `d3dtest` pass on it and beat llvmpipe and lavapipe.
@@ -280,11 +287,24 @@ Each is one pull request off main.
       `D3DKMTLock2`; fences and monitored fences (the value on a read-only
       page in the process) signalled from the CPU, waited on in place or
       through an event, `WaitAny`.  Checked by `kmttest` in the core suite.
-   2. **Render miniports**: `DxgkInitialize`'s
-      `DRIVER_INITIALIZATION_DATA` and `wddmtest.sys` registering with it;
-      its adapter in the list beside Basic Render; allocations through
-      `DxgkDdiCreateAllocation`/`DestroyAllocation` and its segments
-      (`DXGKQAITYPE_QUERYSEGMENT4`).
+   2. **Render miniports** (done): `DxgkInitialize`'s
+      `DRIVER_INITIALIZATION_DATA` (all 193 entries in their places, read
+      as far as the driver's DDI version has them; WDDM 2.0 and later) and
+      `wddmtest.sys` registering with it; its adapter in the list before
+      Basic Render, as Windows lists hardware first; devices through
+      `DxgkDdiCreateDevice`; allocations sized by
+      `DxgkDdiCreateAllocation`, placed by VidMm in a segment with room
+      (`DXGKQAITYPE_QUERYSEGMENT4`), opened on the device
+      (`DxgkDdiOpenAllocation`, the driver finding its allocation through
+      `DxgkCbGetHandleData`) and taken down in the driver's order;
+      `DXGK_DRIVERCAPS` laid out as Windows' (the display-only step had
+      `WDDMVersion` in the wrong place).  Checked by `kmttest wddm` in the
+      "wddm" boot.  Two assumptions step 2 checks with Intel's driver:
+      displib's `DxgkInitialize` sends `IOCTL_VIDEO_DDI_FUNC_REGISTER`,
+      and `DxgkInitializeDisplayOnlyDriver` sends something else (NovaOS's
+      display-only test driver uses the next function code).  Not in it:
+      eviction (a full segment refuses), allocations in VRAM segments, and
+      a full driver's display.
    3. **GPU virtual addresses**: `DxgkDdiCreateProcess`, per-process
       address spaces, `D3DKMTMapGpuVirtualAddress`, page tables written
       through `DxgkDdiBuildPagingBuffer`, residency (`MakeResident`,

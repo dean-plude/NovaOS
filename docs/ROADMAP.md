@@ -727,7 +727,11 @@ measured frame-time gain over the CPU path.
   render path, on QEMU) has begun: the `D3DKMT*` calls reach the kernel,
   which lists a Basic Render adapter with video memory allocations mapped
   by `D3DKMTLock2` and fences signalled and waited on from the CPU
-  (`kmttest`; [history](HISTORY.md#d3dkmt-calls-reach-the-kernel)).
+  (`kmttest`; [history](HISTORY.md#d3dkmt-calls-reach-the-kernel)), and
+  render miniports register with `DxgkInitialize`: the test driver
+  `wddmtest.sys`'s adapter is listed beside Basic Render, with devices and
+  allocations the driver sizes in its segment (`kmttest wddm` in the
+  `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

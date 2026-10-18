@@ -1,3 +1,5 @@
 {
-  "system": true
+  "system": true,
+  "sources": ["userland/programs/spoolsv/*.c"],
+  "libs": ["winhttp"]
 }

@@ -721,6 +721,7 @@ static const struct { const char *name; const char *keys; int page; } g_setting_
     { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
     { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
     { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
+    { "Printers",        "printers printing printer scanner ipp default add network", SETTINGS_PRINTERS },
     { "About",           "about version fonts licence",                       SETTINGS_ABOUT },
 };
 #define N_SETTING_ITEMS ((int)(sizeof(g_setting_items) / sizeof(g_setting_items[0])))

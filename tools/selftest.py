@@ -32,7 +32,8 @@ order; --list prints them):
             server, a redirect to a ~1,000-character signed address, a 503
             the Store tries again after, a body trickled over more than 30
             s), all against tools/h2server.js
-            (needs node and openssl).  IPv6 on an IPv6-only
+            (needs node and openssl), and network printing to a fake IPP
+            printer, tools/ippprinter.py (spooltest ipp).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
             ping -6, curl -6 and Winsock over IPv6 (netcat), stateful
             DHCPv6 (ipconfig /all, dhcp6test, rebind and renew,
@@ -358,7 +359,8 @@ def venus_gpu():
 # The network suite's two boots, each with a virtio-net adapter.  IPv4 and
 # HTTP/2: QEMU's user-mode network, where 10.0.2.2 is this machine and
 # tools/h2server.js serves HTTPS (HTTP/2 by ALPN, self-signed) on 18443 and
-# HTTP/1.1 on 18080.  IPv6: an IPv6-only network that is tools/v6peer.py (a
+# HTTP/1.1 on 18080, and tools/ippprinter.py is a network printer (IPP) on
+# 18631.  IPv6: an IPv6-only network that is tools/v6peer.py (a
 # router with SLAAC and RDNSS, a stateful DHCPv6 server, DNS for nova6.test,
 # HTTP on port 80), over a QEMU datagram netdev.
 NET4 = load_suite('network4')
@@ -373,7 +375,7 @@ def renamed(t, suffix):
 
 # The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store'))]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store', 'spooltest'))]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)
@@ -419,7 +421,9 @@ def net4_boot(work):
                    check=True, capture_output=True)
     srv = subprocess.Popen(['node', os.path.join(ROOT, 'tools', 'h2server.js'), cert, key, '18443', '18080'],
                            stdout=open(os.path.join(work, 'h2server.log'), 'w'), stderr=subprocess.STDOUT)
-    return ['-nic', 'user,model=virtio-net-pci'], [srv]
+    ipp = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'ippprinter.py'), '--port', '18631'],
+                           stdout=open(os.path.join(work, 'ippprinter.log'), 'w'), stderr=subprocess.STDOUT)
+    return ['-nic', 'user,model=virtio-net-pci'], [srv, ipp]
 
 
 def net6_boot(work):
@@ -1242,7 +1246,7 @@ def main():
             finally:
                 for p in procs:
                     p.kill()
-                for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
+                for log in ['h2server.log', 'ippprinter.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
                         + [f'padpeer-{p}.log' for p in (10710, 10711, 10712, 10713, 10717)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
                                                                                  'isocampeer.log', 'compositepeer.log']:
                     if os.path.exists(os.path.join(work, log)):

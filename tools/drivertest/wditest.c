@@ -30,16 +30,30 @@
  * by DHCP, and answers pings.  So DHCP and ping in NovaOS go through the
  * whole data path, 802.11 frames both ways.
  *
+ * NovaNet is WPA2-Personal (passphrase "nova-wpa2-passphrase"): the driver
+ * is its access point's authenticator too (tools/drivertest/wpaap.h).  It
+ * wants EAPOL exempted from encryption before the connection
+ * (OID_WDI_SET_PRIVACY_EXEMPTION_LIST), associates, sends message 1 of the
+ * 4-way handshake, checks message 2's MIC (a wrong passphrase stops there:
+ * no message 3) and RSN element, sends message 3 with the group key, and
+ * after message 4 wants the keys it derived to come back in
+ * OID_WDI_SET_ADD_CIPHER_KEYS.  Until then it drops the station's data
+ * frames; after, the frames it "receives" are marked Protected, as a
+ * driver indicates frames it decrypted.  After the first ping it answers
+ * it replaces the group key (the group key handshake) and checks the new
+ * one comes back too.
+ *
  * Each check it makes of what it is sent goes to the debugger (DbgPrint),
  * where the wifi self-test reads it.
  *
  * Built by tools/drivertest/mksys.py; the wifi self-test installs it with
  * "pnputil /add-driver wditest.inf /install", scans with
  * "netsh wlan show networks mode=bssid" and connects with
- * "netsh wlan connect name=NovaGuest".
+ * "netsh wlan connect name=NovaGuest" (and NovaNet with key=).
  */
 #include "../../kernel/nt/ndis.h"
 #include "../../kernel/nt/wdi.h"
+#include "wpaap.h"
 
 #define IMPORT __declspec(dllimport) NT_API
 IMPORT unsigned int DbgPrint(const char *fmt, ...);
@@ -123,6 +137,7 @@ static const Ap APS[] = {
 };
 #define NAPS (int)(sizeof(APS) / sizeof(APS[0]))
 
+#define NNET      0                 /* APS[NNET]: the WPA2-Personal network, which connects with its passphrase */
 #define NGUEST    2                 /* APS[NGUEST]: the open network, which connects */
 #define PEER      1                 /* its peer ID */
 #define RXQ       16
@@ -130,6 +145,17 @@ static const Ap APS[] = {
 /* the router behind NovaGuest, which this driver plays (its MAC is the AP's BSSID) */
 static const unsigned char ROUTER_IP[4] = { 192, 168, 77, 1 }, CLIENT_IP[4] = { 192, 168, 77, 100 },
                            MASK[4] = { 255, 255, 255, 0 };
+
+/* NovaNet's PMK: PBKDF2-HMAC-SHA1("nova-wpa2-passphrase", "NovaNet", 4096, 32) */
+static const unsigned char PMK[32] = {
+    0x35, 0x68, 0x81, 0x1a, 0xf5, 0x81, 0x19, 0x10, 0x42, 0xf3, 0x6d, 0xe6, 0x1f, 0x6f, 0x46, 0xcb,
+    0x29, 0xa4, 0x01, 0x96, 0xb4, 0x80, 0x41, 0xee, 0x91, 0xdf, 0x37, 0x77, 0xb1, 0x52, 0x27, 0xc4,
+};
+/* The RSN element the driver associates with (PSK, CCMP), and its association request's body */
+static const unsigned char STA_RSN[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
+                                           0x00, 0x0f, 0xac, 2, 0, 0 };
+#define AP_RSN (IES_WPA2 + 13)      /* (NovaNet's beacon's RSN element: after its rates and DS parameter set) */
+#define AP_RSN_LEN 22
 
 /* ---- the adapter ---- */
 typedef struct {
@@ -152,7 +178,12 @@ typedef struct {
     int               nrx;
     unsigned int      tx_frames, rx_frames, arps, dhcps, pings, dhcp_said, ping_said;
     unsigned char     frame[2048], reply[1600];
+    /* the connection: which access point; WPA2's state */
+    int               ap, wpa2, exempt, hs, port_open, rekeyed, dropped;
+    WpaAp             wpa;
+    unsigned char     eapol[512];
 } Adapter;
+enum { HS_NONE, HS_MSG1, HS_MSG3, HS_DONE, HS_GROUP1 };
 
 static void *zero(void *p, unsigned long long n)
 {
@@ -275,7 +306,7 @@ static unsigned short csum(const unsigned char *p, unsigned int n)
 static void receive(Adapter *a, const unsigned char *dst, unsigned short type, const unsigned char *payload,
                     unsigned int n)
 {
-    const unsigned char *bssid = APS[NGUEST].bssid;
+    const unsigned char *bssid = APS[a->ap].bssid;
     NET_BUFFER_LIST *nbl = NdisAllocateNetBufferAndNetBufferList(a->pool, 0, 0, 0, 0, 24 + 8 + n);
     WDI_FRAME_METADATA *m = nbl ? ((ALLOC_META_FN)a->api->AllocateWiFiFrameMetaData)(a->dp) : 0;
     if (!m) {
@@ -288,6 +319,7 @@ static void receive(Adapter *a, const unsigned char *dst, unsigned short type, c
     zero(f, 24);
     f[0] = DOT11_FC0_DATA;
     f[1] = DOT11_FC1_FROM_DS;
+    if (a->port_open && type != ETHERTYPE_EAPOL) f[1] |= DOT11_FC1_PROTECTED;    /* (decrypted, as the hardware does) */
     copy(f + 4, dst, 6);
     copy(f + 10, bssid, 6);
     copy(f + 16, bssid, 6);
@@ -357,6 +389,34 @@ static void dhcp_reply(Adapter *a, const unsigned char *req, unsigned int n, uns
     receive(a, bcast, 0x0800, ip, tot);
 }
 
+/* An EAPOL-Key frame from the station: the authenticator's half of the
+ * 4-way handshake (messages 2 and 4) and of the group key handshake */
+static void eapol(Adapter *a, const unsigned char *f, unsigned int n)
+{
+    const unsigned char *sta = MAC;
+    if (!a->wpa2) { DbgPrint("wditest: an EAPOL frame on an open network\n"); return; }
+    if (a->hs == HS_MSG1) {
+        if (!ap_msg2(&a->wpa, f, n)) {
+            DbgPrint("wditest: 4-way handshake message 2 refused: %s; no message 3\n", a->wpa.why);
+            return;
+        }
+        DbgPrint("wditest: 4-way handshake message 2: MIC good, RSN element its association's; sending message 3\n");
+        unsigned int k = ap_msg3(&a->wpa, a->eapol);
+        a->hs = HS_MSG3;
+        receive(a, sta, ETHERTYPE_EAPOL, a->eapol, k);
+    } else if (a->hs == HS_MSG3) {
+        if (!ap_msg4(&a->wpa, f, n)) { DbgPrint("wditest: 4-way handshake message 4 refused: %s\n", a->wpa.why); return; }
+        a->hs = HS_DONE;
+        DbgPrint("wditest: 4-way handshake message 4: MIC good; the handshake is done\n");
+    } else if (a->hs == HS_GROUP1) {
+        if (!ap_group2(&a->wpa, f, n)) { DbgPrint("wditest: group key message 2 refused: %s\n", a->wpa.why); return; }
+        a->hs = HS_DONE;
+        DbgPrint("wditest: group key handshake message 2: MIC good\n");
+    } else {
+        DbgPrint("wditest: an EAPOL frame the access point did not expect\n");
+    }
+}
+
 /* One frame NovaOS sent: an 802.11 MSDU to the access point.  What the
  * router behind it answers: ARP for its address, DHCP, pings to it */
 static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
@@ -379,7 +439,7 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
                  m ? m->u.txMetaData.PeerID : 0);
         return;
     }
-    if (n < 32 || f[0] != DOT11_FC0_DATA || f[1] != DOT11_FC1_TO_DS || !same(f + 4, APS[NGUEST].bssid, 6) ||
+    if (n < 32 || f[0] != DOT11_FC0_DATA || f[1] != DOT11_FC1_TO_DS || !same(f + 4, APS[a->ap].bssid, 6) ||
         !same(f + 10, MAC, 6) || f[24] != 0xAA || f[25] != 0xAA || f[26] != 3) {
         DbgPrint("wditest: not an 802.11 data frame to the access point (fc %02x %02x, %u bytes)\n", f[0], f[1], n);
         return;
@@ -388,11 +448,22 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
     const unsigned char *p = f + 32, *src = f + 10;
     unsigned int pl = n - 32;
     if (type != ethertype) DbgPrint("wditest: frame metadata says Ethertype %04x, the frame %04x\n", ethertype, type);
+    if (type == ETHERTYPE_EAPOL) {
+        if (m->u.txMetaData.ExemptionAction != WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE)
+            DbgPrint("wditest: an EAPOL frame with exemption %u\n", m->u.txMetaData.ExemptionAction);
+        eapol(a, p, pl);
+        return;
+    }
+    if (a->wpa2 && (!a->port_open || m->u.txMetaData.ExemptionAction != WDI_EXEMPT_NO_EXEMPTION)) {
+        if (!a->dropped++) DbgPrint("wditest: a data frame before the keys (exemption %u): dropped\n",
+                                    m->u.txMetaData.ExemptionAction);
+        return;
+    }
     if (type == 0x0806 && pl >= 28 && p[7] == 1 && same(p + 24, ROUTER_IP, 4)) {     /* ARP: who has the router? */
         unsigned char r[28];
         copy(r, p, 6);
         r[7] = 2;
-        copy(r + 8, APS[NGUEST].bssid, 6);
+        copy(r + 8, APS[a->ap].bssid, 6);
         copy(r + 14, ROUTER_IP, 4);
         copy(r + 18, p + 8, 10);
         if (!a->arps++) DbgPrint("wditest: ARP: 192.168.77.1 is at the router\n");
@@ -425,6 +496,16 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
         r[hl + 2] = (unsigned char)(c >> 8); r[hl + 3] = (unsigned char)c;
         if (!a->pings++) DbgPrint("wditest: ping from %u.%u.%u.%u to the router: answering\n", p[12], p[13], p[14], p[15]);
         receive(a, src, 0x0800, r, tot);
+        if (a->wpa2 && a->hs == HS_DONE && !a->rekeyed) {       /* (the access point's rekeying interval, early) */
+            a->rekeyed = 1;
+            for (int i = 0; i < 16; i++) a->wpa.gtk[i] = (unsigned char)(0xB0 + i);
+            a->wpa.gtk_id = 2;
+            a->wpa.rsc[0] = 0;
+            unsigned int k = ap_group1(&a->wpa, a->eapol);
+            a->hs = HS_GROUP1;
+            DbgPrint("wditest: group key handshake: sending group key 2\n");
+            receive(a, src, ETHERTYPE_EAPOL, a->eapol, k);
+        }
     }
 }
 
@@ -627,34 +708,69 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         break;
     }
     case WDI_TASK_CONNECT: {
-        /* associated: the peer first (the data path's), then the association's result, then the task's end */
+        /* associated: the peer first (the data path's), then the association's result (with the
+         * association request the driver sent: its RSN element), then the task's end */
+        const Ap *ap = &APS[a->ap];
         a->port = PORT;
         a->connected = 1;
         WDI_MAC_ADDRESS mac;
-        copy(mac.Address, APS[NGUEST].bssid, 6);
+        copy(mac.Address, ap->bssid, 6);
         ((PEER_CREATE_FN)a->api->PeerCreateIndication)(a->dp, PORT, PEER, mac);
-        unsigned char r[128];
-        WDI_ASSOCIATION_RESULT_PARAMETERS ap;
-        zero(&ap, sizeof(ap));
-        ap.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
-        ap.AuthAlgorithm = WDI_AUTH_ALGO_80211_OPEN;
-        ap.UnicastCipherAlgorithm = ap.MulticastDataCipherAlgorithm = WDI_CIPHER_ALGO_NONE;
-        ap.PortAuthorized = 1;
-        unsigned int m = put(r, 0, WDI_TLV_BSSID, APS[NGUEST].bssid, 6);
-        m = put(r, m, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ap, sizeof(ap));
+        unsigned char r[160], q[64];
+        WDI_ASSOCIATION_RESULT_PARAMETERS ar;
+        zero(&ar, sizeof(ar));
+        ar.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
+        ar.AuthAlgorithm = a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+        ar.UnicastCipherAlgorithm = ar.MulticastDataCipherAlgorithm = a->wpa2 ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
+        ar.PortAuthorized = !a->wpa2;
+        unsigned int m = put(r, 0, WDI_TLV_BSSID, ap->bssid, 6);
+        m = put(r, m, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ar, sizeof(ar));
+        if (a->wpa2) {
+            unsigned int sl = 0, k = 4;
+            while (ap->ssid[sl]) sl++;
+            zero(q, 4);
+            q[0] = 0x11; q[1] = 0x04; q[2] = 10;            /* (capability: ESS, privacy; listen interval) */
+            q[k++] = 0; q[k++] = (unsigned char)sl;
+            copy(q + k, ap->ssid, sl);
+            k += sl;
+            copy(q + k, STA_RSN, sizeof(STA_RSN));
+            k += sizeof(STA_RSN);
+            m = put(r, m, WDI_TLV_ASSOCIATION_REQUEST_FRAME, q, k);
+        }
         n = put(t, 0, WDI_TLV_ASSOCIATION_RESULT, r, m);
         indicate(a, WDI_INDICATION_ASSOCIATION_RESULT, a->tid, n);
         indicate(a, WDI_INDICATION_CONNECT_COMPLETE, a->tid, 0);
-        DbgPrint("wditest: associated with %s, peer %u\n", APS[NGUEST].ssid, PEER);
+        DbgPrint("wditest: associated with %s, peer %u\n", ap->ssid, PEER);
+        if (a->wpa2) {                                      /* the 4-way handshake: message 1 */
+            WpaAp *w = &a->wpa;
+            zero(w, sizeof(*w));
+            copy(w->pmk, PMK, 32);
+            copy(w->aa, ap->bssid, 6);
+            copy(w->spa, MAC, 6);
+            w->ap_ie = AP_RSN;
+            w->ap_ie_len = AP_RSN_LEN;
+            w->sta_ie = STA_RSN;
+            w->sta_ie_len = sizeof(STA_RSN);
+            for (int i = 0; i < 32; i++) w->anonce[i] = (unsigned char)(a->tid * 31 + i * 7);
+            for (int i = 0; i < 16; i++) w->gtk[i] = (unsigned char)(0xA0 + i);
+            w->gtk_id = 1;
+            w->rsc[0] = 5;
+            unsigned int k = ap_msg1(w, a->eapol);
+            a->hs = HS_MSG1;
+            DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station\n");
+            receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
+        }
         break;
     }
     case WDI_TASK_DISCONNECT: {
         a->port = PORT;
         a->connected = 0;
+        a->port_open = a->hs = a->rekeyed = a->dropped = 0;    /* (and the connection's keys are gone) */
+        zero(&a->wpa, sizeof(a->wpa));
         NDIS_STATUS st = NDIS_STATUS_SUCCESS;
         ((PEER_DELETE_FN)a->api->PeerDeleteIndication)(a->dp, PORT, PEER, &st);
         indicate(a, WDI_INDICATION_DISCONNECT_COMPLETE, a->tid, 0);
-        DbgPrint("wditest: disassociated from %s\n", APS[NGUEST].ssid);
+        DbgPrint("wditest: disassociated from %s\n", APS[a->ap].ssid);
         break;
     }
     }
@@ -703,6 +819,54 @@ static NDIS_STATUS capabilities(unsigned char *t, unsigned int room, unsigned in
     if (out > room) return NDIS_STATUS_BUFFER_TOO_SHORT;
     *len = out;
     DbgPrint("wditest: adapter capabilities answered (%u bytes of TLVs)\n", out);
+    return NDIS_STATUS_SUCCESS;
+}
+
+/* OID_WDI_SET_ADD_CIPHER_KEYS: each key checked against the one the
+ * handshake gave the access point (the pairwise key for its BSSID, both
+ * ways; the group key by its index, inbound, from its RSC) */
+static NDIS_STATUS add_keys(Adapter *a, WDI_MESSAGE_HEADER *h, const unsigned char *t, unsigned int tlen)
+{
+    if (h->PortId != PORT || !a->wpa2 || !a->connected) return NDIS_STATUS_INVALID_PARAMETER;
+    for (unsigned int off = 0; off + sizeof(WDI_TLV_HEADER) <= tlen;) {
+        const WDI_TLV_HEADER *x = (const WDI_TLV_HEADER *)(t + off);
+        if (off + sizeof(*x) + x->Length > tlen) break;
+        const unsigned char *k = t + off + sizeof(*x);
+        unsigned int kl = x->Length, n, ml = 0, il = 0, rl = 0, cl = 0;
+        off += sizeof(*x) + x->Length;
+        if (x->Type != WDI_TLV_SET_CIPHER_KEY_INFO) continue;
+        WDI_CIPHER_KEY_TYPE_INFO ti;
+        const unsigned char *ty = find(k, kl, WDI_TLV_CIPHER_KEY_TYPE_INFO, &n);
+        const unsigned char *mac = find(k, kl, WDI_TLV_PEER_MAC_ADDRESS, &ml);
+        const unsigned char *id = find(k, kl, WDI_TLV_CIPHER_KEY_ID, &il);
+        const unsigned char *rsc = find(k, kl, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT, &rl);
+        const unsigned char *ccmp = find(k, kl, WDI_TLV_CIPHER_KEY_CCMP_KEY, &cl);
+        if (!ty || n < sizeof(ti) || !ccmp || cl != 16) {
+            DbgPrint("wditest: a cipher key without its type or CCMP key\n");
+            return NDIS_STATUS_INVALID_PARAMETER;
+        }
+        copy(&ti, ty, sizeof(ti));
+        if (ti.KeyType == WDI_CIPHER_KEY_TYPE_PAIRWISE_KEY) {
+            int ok = ti.CipherAlgorithm == WDI_CIPHER_ALGO_CCMP && ti.Direction == WDI_CIPHER_KEY_DIRECTION_BOTH &&
+                     mac && ml == 6 && same(mac, APS[a->ap].bssid, 6) && same(ccmp, AP_TK(&a->wpa), 16) &&
+                     a->hs >= HS_DONE;
+            DbgPrint("wditest: pairwise key for %02x:%02x:%02x:%02x:%02x:%02x: %s\n", mac ? mac[0] : 0, mac ? mac[1] : 0,
+                     mac ? mac[2] : 0, mac ? mac[3] : 0, mac ? mac[4] : 0, mac ? mac[5] : 0,
+                     ok ? "the 4-way handshake's" : "NOT the 4-way handshake's");
+            if (!ok) return NDIS_STATUS_INVALID_PARAMETER;
+            a->port_open = 1;
+        } else if (ti.KeyType == WDI_CIPHER_KEY_TYPE_GROUP_KEY) {
+            unsigned int kid = 99;
+            if (id && il >= 4) copy(&kid, id, 4);
+            int ok = ti.CipherAlgorithm == WDI_CIPHER_ALGO_CCMP && ti.Direction == WDI_CIPHER_KEY_DIRECTION_INBOUND &&
+                     kid == a->wpa.gtk_id && same(ccmp, a->wpa.gtk, 16) && rsc && rl == 6 && same(rsc, a->wpa.rsc, 6);
+            DbgPrint("wditest: group key %u: %s\n", kid, ok ? "the access point's" : "NOT the access point's");
+            if (!ok) return NDIS_STATUS_INVALID_PARAMETER;
+        } else {
+            DbgPrint("wditest: a cipher key of type %u\n", ti.KeyType);
+            return NDIS_STATUS_NOT_SUPPORTED;
+        }
+    }
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -796,9 +960,12 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
             entries += x->Type == WDI_TLV_CONNECT_BSS_ENTRY;
             off += sizeof(*x) + x->Length;
         }
-        const char *g = APS[NGUEST].ssid;
-        unsigned int gl = 0;
-        while (g[gl]) gl++;
+        const char *g = "(another)";
+        for (int i = 0; i < NAPS; i++) {
+            unsigned int gl = 0;
+            while (APS[i].ssid[gl]) gl++;
+            if (ss && sl == gl && same(ss, (const unsigned char *)APS[i].ssid, (int)gl)) g = APS[i].ssid;
+        }
         unsigned int algo = 0;
         if (au && al >= 4) copy(&algo, au, 4);
         if (h->PortId != PORT || !a->port_up || !ss || !au || !bs || bl != 6 || !bf || a->connected) {
@@ -808,16 +975,56 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
             break;
         }
         DbgPrint("wditest: connect task %u on port %u: SSID %s, auth %u, %d BSS entr%s, first %02x:%02x:%02x:%02x:%02x:%02x\n",
-                 h->TransactionId, h->PortId, sl == gl && same(ss, (const unsigned char *)g, (int)gl) ? g : "(another)",
+                 h->TransactionId, h->PortId, g,
                  algo, entries, entries == 1 ? "y" : "ies", bs[0], bs[1], bs[2], bs[3], bs[4], bs[5]);
-        if (sl != gl || !same(ss, (const unsigned char *)g, (int)gl) || !same(bs, APS[NGUEST].bssid, 6) ||
-            algo != WDI_AUTH_ALGO_80211_OPEN) {
-            st = NDIS_STATUS_NOT_SUPPORTED;                /* (only the open network connects) */
+        int target = -1;
+        for (int i = 0; i < NAPS; i++)
+            if (same(bs, APS[i].bssid, 6)) target = i;
+        if (target == NNET) {
+            /* NovaNet: WPA2-Personal, CCMP, the passphrase's handshake; EAPOL exempted first */
+            WDI_CONNECTION_SETTINGS cs;
+            unsigned int ul, ml, csl, uc = 0, mc = 0;
+            const unsigned char *u = find(cp, cl, WDI_TLV_UNICAST_CIPHER_ALGO_LIST, &ul);
+            const unsigned char *mu = find(cp, cl, WDI_TLV_MULTICAST_CIPHER_ALGO_LIST, &ml);
+            const unsigned char *c = find(cp, cl, WDI_TLV_CONNECTION_SETTINGS, &csl);
+            if (u && ul >= 4) copy(&uc, u, 4);
+            if (mu && ml >= 4) copy(&mc, mu, 4);
+            zero(&cs, sizeof(cs));
+            if (c && csl >= sizeof(cs)) copy(&cs, c, sizeof(cs));
+            DbgPrint("wditest: connect to NovaNet: auth %u, ciphers %u/%u, exclude unencrypted %u, EAPOL exempted %s\n",
+                     algo, uc, mc, cs.ExcludeUnencrypted, a->exempt ? "yes" : "no");
+            if (algo != WDI_AUTH_ALGO_RSNA_PSK || uc != WDI_CIPHER_ALGO_CCMP || mc != WDI_CIPHER_ALGO_CCMP ||
+                !cs.ExcludeUnencrypted || !a->exempt) {
+                st = NDIS_STATUS_NOT_SUPPORTED;
+                break;
+            }
+            a->wpa2 = 1;
+        } else if (target == NGUEST && algo == WDI_AUTH_ALGO_80211_OPEN) {
+            a->wpa2 = 0;
+        } else {
+            st = NDIS_STATUS_NOT_SUPPORTED;                /* (NovaNet-5G is WPA3's SAE: not here) */
             break;
         }
+        a->ap = target;
+        a->port_open = a->hs = a->rekeyed = a->dropped = 0;
         start_task(a, msg, h->TransactionId, 20);
         break;
     }
+    case WDI_SET_PRIVACY_EXEMPTION_LIST: {
+        WDI_PRIVACY_EXEMPTION_PARAMETERS e;
+        const unsigned char *v = find(t, tlen, WDI_TLV_PRIVACY_EXEMPTION_ENTRY, &n);
+        if (!v || n < sizeof(e) || h->PortId != PORT) { st = NDIS_STATUS_INVALID_PARAMETER; break; }
+        copy(&e, v, sizeof(e));
+        unsigned int type = (unsigned int)(v[0] << 8 | v[1]);              /* (big-endian) */
+        a->exempt = type == ETHERTYPE_EAPOL && e.ExemptionActionType == WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE &&
+                    e.ExemptionPacketType == WDI_EXEMPT_PACKET_TYPE_BOTH;
+        DbgPrint("wditest: privacy exemption: Ethertype %04x, action %u, packets %u\n", type, e.ExemptionActionType,
+                 e.ExemptionPacketType);
+        break;
+    }
+    case WDI_SET_ADD_CIPHER_KEYS:
+        st = add_keys(a, h, t, tlen);
+        break;
     case WDI_TASK_DISCONNECT: {
         WDI_DISCONNECT_PARAMETERS p;
         const unsigned char *v = find(t, tlen, WDI_TLV_DISCONNECT_PARAMETERS, &n);

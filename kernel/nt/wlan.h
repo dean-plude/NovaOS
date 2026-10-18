@@ -22,6 +22,12 @@ typedef struct {
     const char *auth;       /* "Open", "WPA2-Personal", "WPA3-Personal", ... (from its RSN element) */
     const char *cipher;     /* "None", "CCMP", "GCMP", "TKIP", "WEP" */
     const char *radio;      /* "802.11n", "802.11ac", "802.11ax" or "802.11g" (from its elements) */
+    UINT32 akms;            /* bit n: it offers AKM suite 00-0f-ac:n (2 PSK, 8 SAE, ...) */
+    UINT32 pairwise;        /* bit n: pairwise cipher suite 00-0f-ac:n (4 CCMP) */
+    UINT8  group;           /* its group cipher suite (4 CCMP) */
+    UINT8  rsn[64];         /* its RSN element, as its beacon has it (rsn_len 0: none) */
+    UINT8  rsn_len;
+    UINT16 rsn_caps;        /* its RSN capabilities (0x40: management frame protection required) */
 } WlanBss;
 
 typedef struct {
@@ -52,19 +58,25 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status);
 
 /* Connect the @i'th adapter to network @ssid (OID_WDI_TASK_CONNECT, with the
  * access points its last scan heard, scanning first if none had that SSID);
- * once associated it is the stack's network adapter (NetAttach) until
- * WlanDisconnect (OID_WDI_TASK_DISCONNECT).  Their answer: */
+ * a WPA2-Personal network needs @key, its passphrase (or the 64-digit hex
+ * PSK), and its 4-way handshake (nt/wpa.h) gives the driver its keys
+ * (OID_WDI_SET_ADD_CIPHER_KEYS).  Once associated (and the handshake done)
+ * it is the stack's network adapter (NetAttach) until WlanDisconnect
+ * (OID_WDI_TASK_DISCONNECT).  Their answer: */
 #define WLAN_OK          0
 #define WLAN_NO_NETWORK  (-1)  /* no access point with that SSID in range */
-#define WLAN_NEEDS_KEY   (-2)  /* a secured network (WPA2 and WPA3 come in later steps) */
+#define WLAN_NEEDS_KEY   (-2)  /* a secured network, and no @key */
 #define WLAN_FAILED      (-3)  /* the driver refused or the association failed: *@status */
 #define WLAN_NO_ADAPTER  (-4)
 #define WLAN_NOT_CONNECTED (-5)
-int  WlanConnect(int i, const char *ssid, UINT32 *status);
+#define WLAN_BAD_KEY     (-6)  /* the 4-way handshake failed: the access point did not take the key */
+#define WLAN_UNSUPPORTED (-7)  /* security NovaOS does not have yet (WPA3's SAE, WPA, WEP, TKIP, Enterprise) */
+#define WLAN_KEY_FORMAT  (-8)  /* @key is not 8 to 63 characters or 64 hex digits */
+int  WlanConnect(int i, const char *ssid, const char *key, UINT32 *status);
 int  WlanDisconnect(int i, UINT32 *status);
 /* The same in the background (netsh's), sharing the scan's: @ssid NULL
  * disconnects; then poll for the answer */
-bool WlanConnectStart(int i, const char *ssid);
+bool WlanConnectStart(int i, const char *ssid, const char *key);
 bool WlanConnectDone(int *result, UINT32 *status);
 /* Whether a Wi-Fi adapter is the stack's adapter now (ipconfig's "Wireless LAN adapter") */
 bool WlanCarriesNet(void);

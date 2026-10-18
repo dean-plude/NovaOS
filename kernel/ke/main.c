@@ -71,6 +71,7 @@
 #include "../fs/vfs.h"
 #include "../fs/initrd.h"
 #include "../fs/update.h"
+#include "../fs/recovery.h"
 #include "../fs/setup.h"
 #include "../fs/bootfiles.h"
 #include "../fs/ramfs.h"
@@ -245,6 +246,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
     SetupBootInfo(info);                  /* installation media (booted from the disc) */
     BootFilesInfo(info);                  /* the files beside the kernel (\EFI\NOVA\Files) */
     UpdateBootInfo(info);                 /* an update's first start, or one that failed */
+    RecoveryBootInfo(info);               /* safe mode, startup repair (Advanced startup) */
 
     kprintf("=== Phase 1: Paging ===\n");
     paging_init();
@@ -473,6 +475,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
     sti();
 
     UpdateBootDone();                     /* finish (or undo) the update this start tried */
+    RecoveryBootDone();                   /* startup repair, when it was chosen */
     kprintf("[NovaOS] Entering kernel main loop\n");
 
     bkl_release();                        /* the idle loop needs no lock */

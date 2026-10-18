@@ -15,8 +15,12 @@ and reset. How updates are fetched and staged is in
 | "Automatically restart" after a stop error (on by default) | `KeFatalStop`: on an update's first start, a kernel stop restarts the machine |
 | The hardware watchdog timer (WDAT), reset when the system stops answering | the chipset's TCO timer (`kernel/hal/tco.c`), running while an update first starts |
 | Rollback of a feature update that fails to start | the boot loader starts the previous kernel, which removes the update |
-| Windows Recovery Environment (WinRE) after two failed boots, F8 / Shift+Restart menu | the recovery menu in `BOOTX64.EFI` (to do) |
-| Safe mode, Last Known Good Configuration, Startup Repair, Reset this PC | recovery menu entries (to do) |
+| Windows Recovery Environment (WinRE) after two failed boots, F8, `shutdown /r /o` | the Advanced startup menu in `BOOTX64.EFI` (`bootloader/src/recovery.c`), after two failed starts (`\EFI\NOVA\starts.cnt`), F8 or `shutdown /r /o` |
+| Boot manager's `bootstat.dat` (boots that never reached logon) | `\EFI\NOVA\starts.cnt`, one more at each start, deleted at the desktop |
+| Safe mode (`SafeBoot\Minimal`: inbox drivers, Basic Display) | safe mode: NovaOS's own drivers, the firmware's framebuffer |
+| Last Known Good, "Uninstall latest update" | "Start the previous version of NovaOS": `bootx64.old` starting `kernel.old` |
+| Startup Repair (`SrtTrail.txt`) | startup repair, report in `C:\Windows\System32\LogFiles\Srt\SrtTrail.txt` |
+| Reset this PC | (to do) |
 
 ## Done: a failed update comes back on its own
 
@@ -96,19 +100,87 @@ starts the desktop. The devices suite's `update` boot stages each and checks
 that the machine comes back as the previous version with no reset from
 outside ([updates.md](../updates.md#the-self-test)).
 
-## To do (the next pieces of 33.3)
+## Done: the Advanced startup menu
+
+The boot loader (`bootloader/src/recovery.c`) has a menu of its own, the
+counterpart of Windows' Advanced Boot Options and of the recovery
+environment that comes up after failed boots. On an installed disk it
+shows before NovaOS starts:
+
+- when **F8** is pressed or held as the loader starts (it looks for the
+  key for 300 ms);
+- when NovaOS asked for it: **`shutdown /r /o`** (advapi32's
+  `InitiateShutdown` with `SHUTDOWN_RESTART_BOOTOPTIONS`, which
+  NovaOS's `NtShutdownSystem` takes as its own action 3) writes the mark
+  `\EFI\NOVA\recovery.req`, which the loader takes away again, as
+  Windows sets a one-time boot of its recovery;
+- **by itself after two failed starts.** The loader adds one to the count
+  in `\EFI\NOVA\starts.cnt` at every start, and the kernel deletes the
+  file once the start counts as good (the same point as an update's:
+  the desktop has answered for three seconds with someone signed in or
+  the sign-in screen up; `RecoveryStartGood`, `kernel/fs/recovery.c`),
+  as Windows' boot manager counts boots that never reached logon. With
+  two or more on the count the menu says
+  `NovaOS didn't start correctly: the last 2 starts stopped before the desktop.`
+  and runs startup repair unless something else is chosen within 30
+  seconds.
+
+![The Advanced startup menu](../screenshots/advanced-startup.png)
+
+Its lines (Up/Down or the number, then Enter):
+
+1. **Start NovaOS normally.**
+2. **Start the previous version of NovaOS**, when `kernel.old` is there.
+   An update now keeps the boot loader it replaces as
+   `\EFI\NOVA\bootx64.old` beside `kernel.old` (or deletes an older
+   `bootx64.old` when the update brought no loader, so `kernel.old` goes
+   with the current one): that pair is the known-good set. The menu starts
+   `bootx64.old` with the load option `previous` (`LoadImage` and
+   `StartImage`, as a firmware boot entry would), and that loader starts
+   `kernel.old` without a menu; without `bootx64.old` this loader starts
+   `kernel.old` itself. Either way it is once (`BOOT_FLAG_PREVIOUS`): the
+   next start is the installed version again. A `kernel.elf` that is not
+   an x86-64 ELF executable at all starts `kernel.old` this way by itself,
+   with startup repair.
+3. **Safe mode** (`BOOT_FLAG_SAFE_MODE`): no Windows driver package's
+   `.sys` loads (`kernel/nt/ldr.c` logs
+   `[NT] X: not loaded in safe mode` and the device stays without a
+   driver, as Windows' `SafeBoot\Minimal` starts inbox drivers only); the
+   display uses the firmware's framebuffer with no adapter driver
+   (`kernel/hal/display.c`), as Windows' Basic Display; the desktop is
+   black with "Safe Mode" in its corners.
+4. **Startup repair** (`BOOT_FLAG_STARTUP_REPAIR`): once interrupts are on
+   a thread checks the EFI System Partition's file system (lost clusters
+   freed, `FatReclaim`), puts back a damaged or missing
+   `\EFI\BOOT\BOOTX64.EFI` from `bootx64.old` and a damaged or missing
+   `kernel.elf` from `kernel.old`, removes an unfinished or staged update
+   (it can be installed again), clears the failed-start count, and writes
+   what it found to `C:\Windows\System32\LogFiles\Srt\SrtTrail.txt`, the
+   file Windows' Startup Repair writes. The start then goes on.
+
+The kernel's side is `kernel/fs/recovery.c` (`recovery.h`). Every user of
+the ESP (staging an update, finishing one, the count, startup repair) now
+takes it one at a time (`UpdateEspOpen`/`UpdateEspClose`,
+`kernel/fs/update.c`).
+
+### The boot test: rollbacktest
+
+The devices suite's `rollbacktest` boot starts a copy of `build/nova.img`
+with `kernel.old` (this build stamped `0.0.9-test` by
+`tools/mkupdate.py`), `bootx64.old` and the files of an update that never
+finished. It restarts with `shutdown /r /o` and picks safe mode (the log
+shows safe mode and the GOP framebuffer), then startup repair (its report
+says it removed the unfinished update), then the previous version (`ver`
+says 0.0.9-test), restarts normally, and last resets two starts before
+they reach the desktop: the third shows the menu by itself and runs
+startup repair. Together with the `update` boot's broken updates, this is
+33.3's "Done when".
+
+## To do
 
 1. **The ACPI WDAT table.** Drive the watchdog Windows uses where firmware
    describes one, beside the ICH9 TCO timer.
-2. **The known-good set and the boot menu.** Keep the previous boot loader
-   (`bootx64.old`) beside `kernel.old`, and give `BOOTX64.EFI` a menu
-   (shown when a key is held at start, or by itself after two starts in a
-   row that did not reach the desktop, as WinRE does) with "NovaOS", "the
-   previous version", "Safe mode" and "Startup repair".
-3. **Safe mode and startup repair.** Safe mode starts with only NovaOS's
-   own drivers and the firmware framebuffer (no third-party `.sys` packages,
-   the Windows driver model's equivalent of Last Known Good drivers);
-   startup repair checks the ESP and drive C:, restores the boot files from
-   the known-good set and clears a stuck update; reset reinstalls from the
-   running kernel and keeps `C:\Users`. The boot test `rollbacktest` then
-   starts each from the menu in QEMU, which is the step's "Done when".
+2. **Reset this PC**: reinstall from the running kernel and keep
+   `C:\Users`.
+3. **Settings > System > Recovery**: an "Advanced startup: Restart now"
+   button (today `shutdown /r /o` in the Terminal).

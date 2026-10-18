@@ -2,7 +2,9 @@
  * main.c — NovaOS UEFI bootloader entry point
  *
  * Flow:
- *   1. Locate the kernel ELF on the EFI System Partition
+ *   1. Locate the kernel ELF on the EFI System Partition (on an installed
+ *      disk, after the Advanced startup menu when it is asked for or the
+ *      last starts failed: recovery.c)
  *   2. Load it into memory at its requested physical addresses
  *   3. Enumerate GOP framebuffer
  *   4. Find ACPI RSDP in EFI configuration tables
@@ -22,6 +24,7 @@
 #include "../../include/boot_protocol.h"
 #include "elf_loader.h"
 #include "paging.h"
+#include "recovery.h"
 
 /* Forward declarations for helpers implemented below */
 static void   halt(void);
@@ -460,6 +463,12 @@ static UINT64 choose_kernel(CHAR16 **path)
     if (!boot_file_exists(KERNEL_PATH)) {
         if (!flags && boot_file_exists(KERNEL_NEW_PATH)) *path = KERNEL_NEW_PATH;
         else if (boot_file_exists(KERNEL_OLD_PATH)) *path = KERNEL_OLD_PATH;
+    } else if (*path == KERNEL_PATH && !kernel_file_plausible(KERNEL_PATH) && kernel_file_plausible(KERNEL_OLD_PATH)) {
+        /* A damaged kernel.elf: the previous one starts, and startup
+         * repair puts it back in kernel.elf's place (kernel/fs/recovery.c) */
+        console_printf("kernel.elf is damaged: starting the previous version (kernel.old) to repair it\r\n");
+        *path = KERNEL_OLD_PATH;
+        flags |= BOOT_FLAG_STARTUP_REPAIR;
     }
     return flags;
 }
@@ -839,7 +848,17 @@ EFI_STATUS __attribute__((ms_abi)) efi_main(
         g_boot_device = self->DeviceHandle;
     BOOLEAN live = booted_from_cd() || boot_file_exists(BOOTLOG_PATH);
     CHAR16 *kernel_path = KERNEL_PATH;
-    UINT64 update_flags = live ? 0 : choose_kernel(&kernel_path);
+    UINT64 recovery_flags = 0;
+    int recovery = live ? RECOVERY_NORMAL : recovery_start(ImageHandle, SystemTable, g_boot_device, &recovery_flags);
+    UINT64 update_flags = 0;
+    if (recovery == RECOVERY_PREVIOUS && boot_file_exists(KERNEL_OLD_PATH)) {
+        kernel_path = KERNEL_OLD_PATH;                    /* (once: an update's marks wait for the next start) */
+        console_printf("Starting the previous version of NovaOS (kernel.old)\r\n");
+    } else if (!live) {
+        recovery_flags &= ~(UINT64)BOOT_FLAG_PREVIOUS;
+        update_flags = choose_kernel(&kernel_path);
+    }
+    update_flags |= recovery_flags;
     EFI_FILE_PROTOCOL *kernel_file;
     UINTN              kernel_file_size;
     EFI_STATUS status = open_kernel_file(kernel_path, &kernel_file, &kernel_file_size);

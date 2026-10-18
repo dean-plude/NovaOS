@@ -154,6 +154,18 @@ typedef struct {
  * update (it stopped, or the PC was reset), or it is not a kernel: this
  * is the previous kernel again, and the update is to be thrown away */
 #define BOOT_FLAG_UPDATE_FAILED (1u << 5)
+/* Chosen in the boot loader's Advanced startup menu (bootloader/src/
+ * recovery.c; kernel/fs/recovery.h): safe mode (NovaOS's own drivers and
+ * the firmware's framebuffer only), startup repair (check and mend the
+ * boot files before the start goes on), or the previous version of
+ * NovaOS (\EFI\NOVA\kernel.old, started once) */
+#define BOOT_FLAG_SAFE_MODE      (1u << 6)
+#define BOOT_FLAG_STARTUP_REPAIR (1u << 7)
+#define BOOT_FLAG_PREVIOUS       (1u << 8)
+/* ... and the menu came up by itself: the starts before this one did not
+ * reach the desktop (BOOT_FAILED_STARTS in a row) */
+#define BOOT_FLAG_FAILED_STARTS  (1u << 9)
+#define BOOT_FAILED_STARTS       2
 
 /* Sanity check: kernel entry function signature */
 typedef void (*KernelEntryFn)(const BootInfo *info);

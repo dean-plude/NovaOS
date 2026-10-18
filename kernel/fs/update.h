@@ -95,7 +95,9 @@ void UpdateBootProgress(const char *step);
 /* Each turn of the desktop's loop; @signed_in: an account is signed in,
  * or the sign-in screen waits for one.  On an update's first start, the
  * start counts as good once the desktop has answered for 3 s with
- * @signed_in, and the update is finished (on the watching thread) */
+ * @signed_in, and the update is finished (on the watching thread); on
+ * every start that is also when recovery.h's failed-start count is
+ * cleared */
 void UpdateDesktopTurn(bool signed_in);
 /* The start counts as good now (a PC with no screen has no desktop to
  * wait for) */
@@ -119,3 +121,11 @@ bool UpdateCheck(void);
  * false if busy, live or there is nothing newer */
 bool UpdateInstall(void);
 void UpdateGetStatus(UpdateStatus *out);
+
+/* The EFI System Partition NovaOS started from, for recovery.c: mounted
+ * with \EFI\NOVA's cluster in *@nova_dir and held by the caller alone
+ * (an update waits) until UpdateEspClose; NULL if there is none */
+struct FatVol;
+struct FatVol *UpdateEspOpen(UINT32 *nova_dir);
+bool UpdateEspSync(struct FatVol *esp);
+void UpdateEspClose(struct FatVol *esp);

@@ -73,7 +73,10 @@ winspool.drv ── \\.\pipe\spoolss (novaspool.h) ──> spoolsv.exe ─┘
   on a paused printer, answers the Save As prompt, prints two GDI pages to
   a PDF and checks that the first page's image is exactly what GDI draws on
   a bitmap of the page's size, and answers the Print dialog
-  ([screenshot](../screenshots/print-dialog.png)).
+  ([screenshot](../screenshots/print-dialog.png)). `delaytest`, which
+  loads `winspool.drv` by name the way Firefox's delay-load helper does,
+  checks that the installed PDF printer is listed, is the default and
+  opens.
 
 ### Choices
 

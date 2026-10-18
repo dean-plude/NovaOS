@@ -20,7 +20,13 @@ installed by the App Store from Mozilla's installer and loads a page from
 an HTTPS server this script runs on the host, Notepad++ opens a file and
 PuTTY makes a raw connection
 to an echo server this script runs on the host (10.0.2.2 on QEMU's user
-network) and types a line, which the server must receive.  Each one's
+network) and types a line, which the server must receive.  A program that
+prints (App(printer=True): Notepad++ and SumatraPDF, Phase 33.5) prints
+its document from its own Print dialog (Ctrl+P) twice: to a network
+printer (tools/ippprinter.py on the host, which the program's first test
+adds) and to Microsoft Print to PDF; the page the printer got must match
+tests/reference/NAME-print.png and the PDF must be the same file
+(spooltest same).  Each one's
 screenshot (and This PC's) must match tests/reference/NAME.png
 (--update-reference writes those files from this run instead); the
 screenshots are kept in --out.  When a program needs sound (App(mic=True)
@@ -54,6 +60,9 @@ SAMPLE = 'NovaOS app corpus\na needle in a haystack\nthe end\n'
 PAD_PORT = 10720                    # the game pad's peer (tools/padpeer.py); its control port is PAD_PORT + 100
 ECHO_PORT = 2323                    # the echo server PuTTY connects to (on the host)
 HTTPS_PORT = 8443                   # the HTTPS server Firefox loads a page from (on the host)
+IPP_PORT = 18631                    # the network printer the printing programs print to (tools/ippprinter.py)
+IPP_BASE = f'http://10.0.2.2:{IPP_PORT}'
+IPP_PRINTER = 'NovaOS Test Printer'  # (after Microsoft Print to PDF in the Print dialog's list)
 STORE_JSON = os.path.join(ROOT, 'userland', 'store', 'catalog.json')
 SEVENZIP = 'https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe'   # unpacks App Store archives
 
@@ -97,11 +106,14 @@ class App:
     play), so its interaction alone decides and its screenshot is only
     kept in --out.  @close_wait: seconds a windowed program may take to end
     after its Alt+F4 (Godot needs minutes without KVM).  @closes: how many
-    Alt+F4s close it (WinSCP: its Login dialog, then its main window)."""
+    Alt+F4s close it (WinSCP: its Login dialog, then its main window).
+    @printer: the program prints its document after its interaction
+    (print_check); the fake IPP printer runs on the host and NovaOS gets
+    the network."""
     def __init__(self, name, version, url, dir, tests, unpack='zip', strip=0, extra=(),
                  gui=False, net=False, interact=None, https=False, store=None, processes=False,
                  mic=False, sound=None, runtimes=(), pad=None, mutable=False, online=False, reference=True,
-                 close_wait=120, closes=1):
+                 close_wait=120, closes=1, printer=False):
         self.name, self.version, self.url, self.dir, self.tests = name, version, url, dir, tests
         self.unpack, self.strip, self.extra = unpack, strip, list(extra)
         self.gui, self.net, self.interact = gui, net, interact
@@ -111,6 +123,7 @@ class App:
         self.pad, self.mutable, self.online, self.reference = pad, mutable, online, reference
         self.close_wait = close_wait
         self.closes = closes
+        self.printer = printer
 
 
 def pad(line):
@@ -139,7 +152,7 @@ def load_apps():
     apps = []
     for f in sorted(glob.glob(os.path.join(ROOT, 'tests', 'appcorpus', '*.py'))):
         ns = {'App': App, 'Test': Test, 'A': A, 'DRIVE_LABEL': DRIVE_LABEL, 'ROOT': ROOT, 'ECHO_PORT': ECHO_PORT,
-              'HTTPS_PORT': HTTPS_PORT, 'pad': pad, '__file__': f}
+              'HTTPS_PORT': HTTPS_PORT, 'IPP_BASE': IPP_BASE, 'IPP_PRINTER': IPP_PRINTER, 'pad': pad, '__file__': f}
         exec(compile(open(f).read(), f, 'exec'), ns)
         if not isinstance(ns.get('APP'), App):
             sys.exit(f'{f}: APP must be an App')
@@ -546,7 +559,7 @@ def compare(shot, ref, size=(640, 400), level=48):
 
 def network_required(apps):
     """Network access belongs to the selected apps, independently of fixtures."""
-    return any(app.net or app.https or app.online for app in apps)
+    return any(app.net or app.https or app.online or app.printer for app in apps)
 
 
 def reference_desktop(nova, work):
@@ -637,6 +650,9 @@ def main():
 
     ntfs = make_ntfs(os.path.join(work, 'ntfs.img')) if any(x.name == 'NovaOS' for x in staged) else None
     echo = EchoServer() if any(x.net for x in staged) else None
+    ipp = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'ippprinter.py'), '--port', str(IPP_PORT)],
+                           stdout=open(os.path.join(a.out, 'ippprinter.log'), 'w'), stderr=subprocess.STDOUT) \
+        if any(x.printer for x in staged) else None
     rec = wav = None
     if any(x.mic or x.sound for x in staged):
         if shutil.which('pulseaudio'):
@@ -696,7 +712,7 @@ def main():
                 elif app.name == 'NovaOS':
                     out, w = screen(nova, t, a, ntfs)
                 else:
-                    out, ok = nova.run(t.cmd, t.timeout)
+                    out, ok = nova.run(t.line, t.timeout)   # (t.line: 'sudo ' + t.cmd for Test(elevated=True))
                     out = ANSI.sub('', out)          # rg and fd colour their output in a console
                     exe = re.split(r'[\\/]', t.cmd.split()[0])[-1]
                     w = verdict(t, out, ok, exe)
@@ -743,6 +759,8 @@ def main():
             echo.close()
         if https:
             https.close()
+        if ipp:
+            ipp.kill()
         if padpeer:
             padpeer.kill()
         with open(os.path.join(a.out, 'serial.log'), 'w') as f:
@@ -819,6 +837,8 @@ def gui(nova, t, a, app, echo, close):
         out, _ = settle(nova, out)
         return out, m.group(0).split(') ', 1)[1]
     w = app.interact(nova, echo) if app.interact else None
+    if getattr(app, 'printer', False) and not w:
+        w = print_check(nova, a, app.name.lower())
     time.sleep(3)
     if getattr(app, 'reference', True):        # (tests stand in a bare namespace for the App)
         visual = check_shot(nova, a, app.name.lower() + '.png')
@@ -834,6 +854,82 @@ def gui(nova, t, a, app, echo, close):
         out, why = settle(nova, out, getattr(app, 'close_wait', 120))
         w = w or why
     return out, w
+
+
+def ipp_received(what):
+    """What the fake IPP printer's /ipp/print last got (print.bin,
+    print.txt), or b''"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{IPP_PORT}/received/{what}', timeout=10) as r:
+            return r.read()
+    except OSError:
+        return b''
+
+
+def pdf_page(pdf):
+    """The first page of a PDF NovaOS's printer DC wrote (one RGB image
+    per page, Flate; userland/gdi32/print.c) as a PIL image, or None"""
+    from PIL import Image
+    m = re.search(rb'/Width (\d+) /Height (\d+) /ColorSpace /DeviceRGB /BitsPerComponent 8 '
+                  rb'/Filter /FlateDecode /Length (\d+) >>\nstream\n', pdf)
+    if not m:
+        return None
+    w, h, n = (int(x) for x in m.groups())
+    try:
+        rgb = zlib.decompress(pdf[m.end():m.end() + n])
+    except zlib.error:
+        return None
+    return Image.frombytes('RGB', (w, h), rgb) if len(rgb) == w * h * 3 else None
+
+
+def print_check(nova, a, name, wait=240):
+    """Print the program's document from its Print dialog (Ctrl+P), as
+    someone would: first to the network printer (the last in the dialog's
+    list; the fake IPP printer must get a PDF whose page matches
+    tests/reference/@name-print.png), then to Microsoft Print to PDF (the
+    first), saved as C:\\Temp\\@name.pdf from its Save As box (the program's
+    next test compares the two).  Why it failed, or None"""
+    before = ipp_received('print.txt')
+    nova.keys('ctrl-p')
+    time.sleep(8)                                   # (the dialog lists the printers)
+    nova.shot(os.path.join(a.out, name + '-print-dialog.png'))
+    nova.keys('alt-n end ret')
+    end, txt = time.time() + wait, b''
+    while time.time() < end:
+        time.sleep(2)
+        txt = ipp_received('print.txt')
+        if txt and txt != before:
+            break
+    else:
+        return 'the network printer got nothing from the Print dialog'
+    print('    the printer got: ' + txt.decode(errors='replace').replace('\n', '; '), flush=True)
+    pdf = ipp_received('print.bin')
+    page = pdf_page(pdf) if b'document-format=application/pdf' in txt else None
+    if page is None:
+        return 'the network printer did not get a PDF page'
+    shot, ref = os.path.join(a.out, name + '-print.png'), os.path.join(REFERENCES, name + '-print.png')
+    from PIL import Image
+    page.resize((850, 1100), Image.BOX).save(shot, optimize=True)
+    if a.update_reference:
+        shutil.copyfile(shot, ref)
+    elif not os.path.exists(ref):
+        return f'no reference page {name}-print.png (run with --update-reference)'
+    else:
+        d = compare(shot, ref, size=(425, 550))
+        print(f'  {name}-print.png differs from the reference in {d:.1%} of pixels', flush=True)
+        if d > a.max_diff:
+            return f'the printed page differs from the reference in {d:.1%} of pixels'
+    time.sleep(5)                                   # (the program is done with its print job)
+    nova.keys('ctrl-p')
+    time.sleep(8)
+    nova.keys('alt-n home ret')
+    time.sleep(10)                                  # (Save Print Output As)
+    nova.shot(os.path.join(a.out, name + '-print-save.png'))
+    nova.keys('ctrl-a')
+    nova.qmp.type(f'C:\\Temp\\{name}.pdf\n')
+    time.sleep(20)                                  # (the page is drawn and spooled)
+    return None
 
 
 def settle(nova, out, wait=120):

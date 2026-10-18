@@ -23,6 +23,7 @@
  */
 
 #include "scheduler.h"
+#include "idle.h"
 #include "printf.h"
 #include "kpcr.h"
 #include "smp.h"
@@ -401,6 +402,7 @@ static Thread *steal(void)
             pause_cpu();
         }
         if (!locked) continue;
+        if (v->head && v->head->pinned) { spin_unlock(&v->lock); continue; }   /* (it stays there) */
         Thread *t = rq_dequeue(v);
         if (t) {
             if (t->in_sleepers) rq_drop_sleeper(v, t);
@@ -933,7 +935,7 @@ static void hand_off_due(RunQueue *rq, uint32_t cpu, uint64_t tsc)
 {
     for (Thread **pp = &rq->sleepers; *pp;) {
         Thread *t = *pp;
-        if (!t->wake_tsc || t->wake_tsc > tsc || t->state != THREAD_WAITING || t->bkl_depth) {
+        if (!t->wake_tsc || t->wake_tsc > tsc || t->state != THREAD_WAITING || t->bkl_depth || t->pinned) {
             pp = &t->sleep_next;
             continue;
         }
@@ -994,6 +996,53 @@ void sched_timer_rearm(void)
     timer_arm(cpu, at);
 }
 
+uint64_t sched_timer_armed(uint32_t cpu) { return cpu < MAX_CPUS ? g_armed[cpu] : 0; }
+
+/* Tickless idle: a CPU with nothing to run need not wake every 10 ms.  The
+ * boot CPU keeps ticking (the global tick's work: Windows drivers' KTIMERs,
+ * programs' timers, the desktop watchdog, load balancing); another CPU
+ * going idle arms its timer for the soonest of its own timed sleepers
+ * instead, at most a second ahead.  Work queued meanwhile reaches it as
+ * an IPI (smp_kick; and sched_tick kicks an idle CPU when its own queue
+ * has threads waiting, as the idle CPU's tick used to come stealing). */
+static volatile bool g_tick_stopped[MAX_CPUS];
+static volatile uint32_t g_ticks_stopped;      /* how many CPUs have it stopped */
+
+void sched_idle_stop_tick(void)
+{
+    uint32_t cpu = this_cpu();
+    if (!cpu || g_cpu_count < 2 || g_tick_stopped[cpu] || !g_tsc_per_tick) return;
+    uint64_t tsc = rdtsc(), at = tsc + 100 * g_tsc_per_tick;
+    RunQueue *rq = my_rq();
+    if (rq->sleepers) {
+        if (!spin_trylock(&rq->lock)) return;
+        for (Thread *t = rq->sleepers; t; t = t->sleep_next) {
+            if (t->state != THREAD_WAITING) continue;
+            if (t->wake_tsc && t->wake_tsc < at) at = t->wake_tsc;
+            if (t->wake_tick != UINT64_MAX && sched_tick_tsc(t->wake_tick) < at) at = sched_tick_tsc(t->wake_tick);
+        }
+        spin_unlock(&rq->lock);
+    }
+    if (at <= g_armed[cpu] || at <= g_next_tick[cpu]) return;   /* (due by the next tick anyway) */
+    g_tick_stopped[cpu] = true;
+    __atomic_fetch_add(&g_ticks_stopped, 1, __ATOMIC_RELAXED);
+    timer_arm(cpu, at);
+    IdleCountTickStop(cpu);
+}
+
+void sched_idle_restart_tick(void)
+{
+    uint32_t cpu = this_cpu();
+    if (!g_tick_stopped[cpu]) return;
+    g_tick_stopped[cpu] = false;
+    __atomic_fetch_sub(&g_ticks_stopped, 1, __ATOMIC_RELAXED);
+    uint64_t tsc = rdtsc();
+    g_next_tick[cpu] = next_grid_tick(tsc);
+    uint64_t at = g_next_tick[cpu];
+    if (g_armed[cpu] > tsc && g_armed[cpu] < at) at = g_armed[cpu];
+    timer_arm(cpu, at);
+}
+
 void sched_tick(void)
 {
     /* The global tick follows the TSC, so it neither runs N times too fast
@@ -1028,6 +1077,10 @@ void sched_tick(void)
     uint64_t soonest = UINT64_MAX;
     bool preempt = rq->sleepers ? wake_sleepers(rq, &soonest) : false;
     timer_arm(cpu, soonest < g_next_tick[cpu] ? soonest : g_next_tick[cpu]);
+    /* Threads wait here while a CPU idles with its tick stopped: wake it to steal one */
+    Thread *waiting = __atomic_load_n(&rq->head, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&g_ticks_stopped, __ATOMIC_RELAXED) && waiting && !waiting->pinned)
+        smp_kick(MAX_CPUS);
     if (!current_thread) return;
 
     Thread *cur = current_thread;

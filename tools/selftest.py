@@ -1060,7 +1060,9 @@ def usbboot_boot(work):
 def laptop_boot(work):
     """A Modern Standby laptop (tests/selftest/devices/laptop): QEMU without
     \\_S3 or an HPET, and with tests/acpi/laptop.asl (its embedded controller, lid,
-    battery and LPS0 device) and pc-testdev for the lid; nova.iso on a USB
+    battery, LPS0 device and processor C-states; a CPU with MWAIT, as
+    laptops' are) and
+    pc-testdev for the lid; nova.iso on a USB
     stick (build/nova.iso, or one made from the build) and an empty 2 GiB
     NVMe disk that is the first boot device (OVMF passes over it until
     NovaOS is installed there); the firmware's GOP for a display"""
@@ -1077,7 +1079,7 @@ def laptop_boot(work):
             '-drive', f'if=none,id=nvm,format=raw,file={nvme}', '-device', 'nvme,drive=nvm,serial=nova0,bootindex=0',
             '-device', 'qemu-xhci,id=xhci', '-drive', f'if=none,id=stick,format=raw,file={stick}',
             '-device', 'usb-storage,bus=xhci.0,drive=stick,bootindex=1'], [], \
-        {'img': False, 'vga': ('-vga', 'none', '-device', 'ramfb')}
+        {'img': False, 'vga': ('-vga', 'none', '-device', 'ramfb'), 'cpu_flags': ',+monitor'}
 
 
 def update_boot(work):

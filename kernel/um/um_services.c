@@ -18,6 +18,7 @@
 #include "../ke/probe.h"
 #include "../ke/printf.h"
 #include "../ke/kpcr.h"
+#include "../ke/idle.h"
 #include "../hal/firmware.h"
 #include "../mm/vmm.h"
 #include "../mm/pmm.h"
@@ -268,7 +269,7 @@ static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT
         return sysinfo_processes(a2, len, a4);
     case 8: {                                                       /* SystemProcessorPerformanceInformation */
         /* per CPU: IdleTime, KernelTime (idle included, as on Windows),
-         * UserTime, DpcTime, InterruptTime, InterruptCount */
+         * UserTime, DpcTime, InterruptTime (0), InterruptCount */
         UINT32 need = 48 * cpus();
         if (!put(a4, &need, 4)) return ST_ACCESS_VIOLATION;
         if (len < need) return ST_INFO_LENGTH_MISMATCH;
@@ -278,6 +279,30 @@ static UINT64 sys_query_system_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT
             r[0] = idle;
             r[1] = total - user;
             r[2] = user;
+            memcpy((UINT8 *)&r[5], (const void *)&g_kpcr[i].Interrupts, 4);   /* InterruptCount */
+            if (!put(a2 + 48 * (UINT64)i, r, 48)) return ST_ACCESS_VIOLATION;
+        }
+        return ST_SUCCESS;
+    }
+    case 42: {                                                      /* SystemProcessorIdleInformation */
+        /* per CPU: IdleTime, C1Time, C2Time, C3Time, C1Transitions,
+         * C2Transitions, C3Transitions (ke/idle.c: per ACPI type), and
+         * Padding, which Windows leaves 0: the times the CPU stopped its
+         * tick while idle (idletest reads it) */
+        UINT32 need = 48 * cpus();
+        if (!put(a4, &need, 4)) return ST_ACCESS_VIOLATION;
+        if (len < need) return ST_INFO_LENGTH_MISMATCH;
+        for (UINT32 i = 0; i < need / 48; i++) {
+            UINT64 r[6] = { 0 }, idle, user, total;
+            IdleStats st;
+            sched_cpu_times(i, &idle, &user, &total);
+            IdleGetStats(i, &st);
+            r[0] = idle;
+            r[1] = st.time[1];
+            r[2] = st.time[2];
+            r[3] = st.time[3];
+            UINT32 n[4] = { st.count[1], st.count[2], st.count[3], st.tick_stops };
+            memcpy(&r[4], n, 16);
             if (!put(a2 + 48 * (UINT64)i, r, 48)) return ST_ACCESS_VIOLATION;
         }
         return ST_SUCCESS;

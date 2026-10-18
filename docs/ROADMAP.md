@@ -849,6 +849,15 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   T14 showing its built-in webcam's picture in Camera.
 - [ ] **28.4 Battery life.** Add processor idle states and device power
   management; measure idle power within 50% of Windows on the same T14.
+  Done in QEMU: C-states from `_CST` (after `_OSC`/`_PDC`) entered with
+  MWAIT, a P_LVLx port or HLT (`kernel/ke/idle.c`, `kernel/hal/cstate.c`),
+  the tick stopped on idle CPUs other than the first, and idle devices of
+  Windows drivers sent to D3 through `PoRequestPowerIrp` (KMDF's S0 idle,
+  WDM idle detection, PCI PMCSR in the bus driver); tested in the devices
+  suite's `laptop` boot (`idletest`) and `kmdfedu` boot (D3 and back).
+  Still needed: the idle-drain measurement on the T14
+  ([install-and-power.md](install-and-power.md#checks-on-the-t14), check 7),
+  then PoFx runtime idle and `_LPI` if the drain is too high.
 - [ ] **28.5 A second reference PC.** Pick an AMD machine and list its
   devices in [hardware.md](hardware.md), each marked supported or missing.
 

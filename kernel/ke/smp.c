@@ -5,6 +5,7 @@
  */
 
 #include "smp.h"
+#include "idle.h"
 #include "kpcr.h"
 #include "printf.h"
 #include "scheduler.h"
@@ -272,9 +273,11 @@ void cpu_idle_wait(void)
      * there until the next tick.  (The fences pair: either the waker sees
      * Idle, or this sees its thread.) */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (!sched_work_waiting())
-        __asm__ volatile ("sti; hlt; cli" ::: "memory");
-    /* An interrupt ended the halt (and may have moved this thread to
+    if (!sched_work_waiting()) {
+        sched_idle_stop_tick();               /* (not the boot CPU) */
+        IdleEnter();                          /* (the deepest C-state that suits: idle.c) */
+    }
+    /* An interrupt ended the wait (and may have moved this thread to
      * another CPU) */
     KiGetCurrentKpcr()->Idle = 0;
     if (depth) { raw_lock(true); t->bkl_depth = depth; }

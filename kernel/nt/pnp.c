@@ -81,6 +81,7 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../ke/scheduler.h"
+#include "../ke/irql.h"
 #include "../um/um.h"
 
 #define ENUM_KEY "Machine\\SYSTEM\\CurrentControlSet\\Enum"
@@ -135,6 +136,8 @@ typedef struct NtPdo {
     bool                 usb;           /* a USB device's PDO (usbd.c's) */
     bool                 root;          /* a root-enumerated device's PDO (ours, no resources) */
     char                 filters[128];  /* the filter drivers on its stack (REG_MULTI_SZ) */
+    UINT8                dstate;        /* its device power state (PowerDeviceD0 1 .. D3 4; 0: D0, never set) */
+    UINT32               saved_cfg[15]; /* configuration space 0x04-0x3F before D3hot */
 } NtPdo;
 
 /* DEVICE_CAPABILITIES.Flags */
@@ -556,6 +559,65 @@ static NT_STATUS pdo_pnp(NtPdo *p, NT_IRP *irp, NT_IO_STACK_LOCATION *sl)
     return st;
 }
 
+/* ---- device power ---- */
+
+static UINT8 pci_cap(const PciDevice *d, UINT8 id);
+
+static void power_delay(UINT32 ms)
+{
+    if (KeIrql() < DISPATCH_LEVEL) sched_sleep_until_tsc(NULL, sched_tsc_after((UINT64)ms * 10000));
+    else nt_KeStallExecutionProcessor(ms * 1000);
+}
+
+/* IRP_MN_SET_POWER for a device power state at a PCI function's PDO: what
+ * pci.sys does on Windows.  A function with the PCI power management
+ * capability is moved there through its PMCSR (D0 and D3hot; D1 and D2
+ * where it lists them), with the 10 ms the specification allows it after
+ * D3hot either way; one that loses its configuration in D3hot (No_Soft_-
+ * Reset clear) gets its command register, BARs and interrupt line back on
+ * the way to D0.  A function without the capability only has its state
+ * recorded: its driver's D0Exit and D0Entry did what powering it needs. */
+static void pdo_set_dstate(NtPdo *p, UINT32 state)
+{
+    if (state < 1 || state > 4 || state == p->dstate || p->usb || p->root || p->parent) {
+        if (state >= 1 && state <= 4) p->dstate = (UINT8)state;
+        return;
+    }
+    const PciDevice *d = &p->pci;
+    UINT8 pm = pci_cap(d, 0x01);
+    UINT32 was = p->dstate ? p->dstate : 1;
+    if (pm) {
+        UINT16 pmc = PciRead16(d->bus, d->dev, d->func, pm + 2);
+        UINT32 want = state;
+        if ((want == 2 && !(pmc & 0x0200)) || (want == 3 && !(pmc & 0x0400))) want = 4;   /* (D1/D2 not supported: D3hot) */
+        UINT16 csr = PciRead16(d->bus, d->dev, d->func, pm + 4);
+        if (want == 4 && was == 1)
+            for (int i = 0; i < 15; i++) p->saved_cfg[i] = PciRead32(d->bus, d->dev, d->func, (UINT8)(0x04 + 4 * i));
+        PciWrite16(d->bus, d->dev, d->func, pm + 4, (UINT16)((csr & ~0x8003u) | (want - 1)));
+        if (want == 4 || was == 4) power_delay(10);
+        if (want == 1 && was == 4 && !(csr & 0x0008)) {             /* (No_Soft_Reset clear: it was reset) */
+            for (int i = 1; i < 15; i++) PciWrite32(d->bus, d->dev, d->func, (UINT8)(0x04 + 4 * i), p->saved_cfg[i]);
+            PciWrite16(d->bus, d->dev, d->func, 0x04, (UINT16)p->saved_cfg[0]);
+        }
+        UINT32 now = (PciRead16(d->bus, d->dev, d->func, pm + 4) & 3) + 1u;
+        kprintf("[PNP] %s: D%u (PCI power management, D%u before)\n", p->instance, now - 1, was - 1);
+        p->dstate = (UINT8)now;
+        return;
+    }
+    kprintf("[PNP] %s: D%u (no PCI power management, D%u before)\n", p->instance, state - 1, was - 1);
+    p->dstate = (UINT8)state;
+}
+
+/* IRP_MJ_POWER at a PDO: device power states move the hardware (above),
+ * system power states and queries succeed, IRP_MN_WAIT_WAKE succeeds (the
+ * wake arming the sleep code does: ke/sleep.c) */
+static NT_STATUS pdo_power(NtPdo *p, NT_IO_STACK_LOCATION *sl)
+{
+    if (sl->MinorFunction == 0x02 && (UINT64)sl->Parameters.Others.Argument2 == 1)    /* SET_POWER, DevicePowerState */
+        pdo_set_dstate(p, (UINT32)(UINT64)sl->Parameters.Others.Argument3);
+    return NT_STATUS_SUCCESS;
+}
+
 /* The PDOs' dispatch routine (every major function) */
 static NT_API NT_STATUS pdo_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 {
@@ -564,7 +626,7 @@ static NT_API NT_STATUS pdo_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
     NT_STATUS st;
     switch (sl->MajorFunction) {
     case NT_IRP_MJ_PNP:            st = pdo_pnp(p, irp, sl); break;
-    case NT_IRP_MJ_POWER:          st = NT_STATUS_SUCCESS; break;   /* (D0 always: no power management yet) */
+    case NT_IRP_MJ_POWER:          st = pdo_power(p, sl); break;
     case NT_IRP_MJ_SYSTEM_CONTROL: st = irp->IoStatus.Status; break;
     default:                       st = NT_STATUS_INVALID_DEVICE_REQUEST; break;
     }

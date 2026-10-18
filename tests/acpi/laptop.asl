@@ -2,7 +2,7 @@
  * (tools/selftest.py starts QEMU without \_S3, as the ThinkPad T14 Gen 4's
  * firmware has none): an embedded controller holding the lid switch, a
  * battery and the AC adapter, which their methods read as a real laptop's
- * do; an LPS0 device; and a thermal zone.
+ * do; an LPS0 device; a thermal zone; and the processors' C-states.
  *
  * QEMU emulates no embedded controller: _HID NOVA0EC1 makes NovaOS serve
  * this one with the model of a controller in kernel/hal/ec.c (its ports
@@ -120,6 +120,45 @@ DefinitionBlock ("", "SSDT", 2, "NOVA", "LAPTOP", 1)
                 Return (Buffer (1) { 0 })
             }
         }
+    }
+
+    /* The processors' C-states, described as a ThinkPad's are (step 28.4):
+     * _PDC learns what the OS supports, and _CST lists MWAIT C-states only
+     * for an OS that said it enters C1-C3 through MWAIT (bits 8 and 9), as
+     * Intel firmware does; else C1 with HLT alone.  C1 is MWAIT hint 0x00,
+     * C2 a read of a port (0xE9, pc-testdev's: reading it does nothing, as
+     * QEMU has no P_LVL2), C3 MWAIT hint 0x20 (Intel's C6 hints are deeper:
+     * QEMU's CPUID enumerates no sub-states, so any hint is taken). */
+    Name (PDCV, 0)                                  /* the capabilities _PDC was given */
+    Method (PDCS, 1)
+    {
+        CreateDWordField (Arg0, 8, CAPS)
+        PDCV = CAPS
+    }
+    Method (CSTS, 0)
+    {
+        If ((PDCV & 0x0300) != 0x0300)
+        {
+            Return (Package () { 1,
+                Package () { ResourceTemplate () { Register (FFixedHW, 0, 0, 0) }, 1, 1, 1000 } })
+        }
+        Return (Package () { 3,
+            Package () { ResourceTemplate () { Register (FFixedHW, 1, 2, 0x00, 1) }, 1, 1, 1000 },
+            Package () { ResourceTemplate () { Register (SystemIO, 8, 0, 0xE9) }, 2, 50, 500 },
+            Package () { ResourceTemplate () { Register (FFixedHW, 1, 2, 0x20, 3) }, 3, 200, 100 } })
+    }
+
+    External (\_SB.CPUS.C000, DeviceObj)
+    Scope (\_SB.CPUS.C000)
+    {
+        Method (_PDC, 1) { PDCS (Arg0) }
+        Method (_CST) { Return (CSTS ()) }
+    }
+    External (\_SB.CPUS.C001, DeviceObj)
+    Scope (\_SB.CPUS.C001)
+    {
+        Method (_PDC, 1) { PDCS (Arg0) }
+        Method (_CST) { Return (CSTS ()) }
     }
 
     Scope (\_TZ)

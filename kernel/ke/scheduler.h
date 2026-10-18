@@ -88,6 +88,7 @@ typedef struct Thread {
     uint8_t         boost_ticks;    /* ticks run while boosted since the last decay step */
     bool            balance_boost;  /* raised for starving (sched_tick): back to base after a quantum */
     bool            no_boost;       /* no wake-up boosts (SetThreadPriorityBoost) */
+    bool            pinned;         /* stays on the CPU it started on (never stolen or handed off) */
     uint64_t        ready_tick;     /* when it was last queued (the balance-set boost) */
     /* The Multimedia Class Scheduler (sched_set_mmcss): the real-time
      * priority it runs at (0: not registered), its own base for when it
@@ -281,6 +282,14 @@ uint64_t sched_tick_tsc(uint64_t tick);
 /* A timer interrupt this CPU can't act on (halted waiting for the kernel
  * lock): arm the next one */
 void sched_timer_rearm(void);
+/* The TSC this CPU's timer is armed for (idle.c: how long it may idle) */
+uint64_t sched_timer_armed(uint32_t cpu);
+/* cpu_idle_wait, interrupts off: a CPU other than the boot CPU stops its
+ * 10 ms tick while idle, its timer armed for its next timed sleeper (at
+ * most a second ahead); the boot CPU keeps the tick's work going.  Any
+ * interrupt restarts it (IdleWake). */
+void sched_idle_stop_tick(void);
+void sched_idle_restart_tick(void);
 /* For wait loops: yield the first few rounds, then sleep a tick per round
  * (the count restarts when the thread returns to user mode). */
 void sched_wait(void);

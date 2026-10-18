@@ -1,14 +1,17 @@
 # A laptop like the ThinkPad T14 Gen 4 (docs/hardware.md): no \_S3 (Modern
 # Standby firmware), no HPET, an embedded controller behind the lid,
-# battery and AC adapter, an LPS0 device (tests/acpi/laptop.asl), no
+# battery and AC adapter, an LPS0 device, processor C-states in _CST
+# (tests/acpi/laptop.asl) on a CPU with MWAIT, no
 # display adapter NovaOS drives (the firmware's GOP only), nova.iso on a
-# USB stick and an empty NVMe disk.  The lid sleeps it in low-power S0
+# USB stick and an empty NVMe disk.  The idle CPUs wait in their deepest
+# C-state, and CPU 1 stops its tick while idle (idletest).  The lid sleeps it in low-power S0
 # idle and wakes it; then NovaOS installs itself on the NVMe disk and
 # starts from it, through the firmware boot entry Setup added.
 import time
 
 DOC = ('a laptop without S3 whose lid and battery sit behind an embedded controller (`tests/acpi/laptop.asl`): '
-       'the battery read through it, the lid sleeping it in low-power S0 idle and waking it, then `install` '
+       'the battery read through it, idle CPUs in the C-states its `_CST` describes (MWAIT and a port) with CPU 1\'s '
+       'tick stopped while idle (`idletest`), the lid sleeping it in low-power S0 idle and waking it, then `install` '
        'onto an NVMe disk from the USB stick and the first start from that disk')
 
 
@@ -37,6 +40,12 @@ TESTS = [
                       r'\[EC\] \\_SB_\.EC0_: the self-tests\' embedded controller \(a model, no I/O ports\), GPE 0xf',
                       r'\[ACPI\] Low-power S0 idle device \\_SB_\.PEPD: Intel functions 0x79',
                       r'\[ACPI\] Lid \\_SB_\.LID0', r'\[ACPI\] Battery \\_SB_\.BAT0', r'\[ACPI\] AC adapter \\_SB_\.AC0_']),
+    Test('idle states', 'idletest 2', [r'idletest: \d+ passed, 0 failed'],
+         boot_expect=[r'\[IDLE\] MWAIT yes[^\n]*, in a virtual machine',
+                      r'\[IDLE\] CPU 0: C1 \(MWAIT 0x00, 1 us\), C2 \(I/O 0xe9, 50 us\), C3 \(MWAIT 0x20, 200 us\), '
+                      r'from \\_SB_\.CPUS\.C000\._CST',
+                      r'\[IDLE\] CPU 1: C1 \(MWAIT 0x00, 1 us\), C2 \(I/O 0xe9, 50 us\), C3 \(MWAIT 0x20, 200 us\), '
+                      r'from \\_SB_\.CPUS\.C001\._CST']),
     Test('lid sleep (S0 idle)', 'cmd /c echo awake', [r'awake'], before=lid_sleep,
          boot_expect=[r'\[EC\] Event 0x2a: _Q2A', r'\[ACPI\] Lid closed', r'\[SHELL\] Lid closed: sleeping',
                       r'\[SLEEP\] No S3 on this machine: sleeping in low-power S0 idle',

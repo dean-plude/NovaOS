@@ -1370,11 +1370,32 @@ NT_API NTSTATUS nt_IoRegisterPlugPlayNotification(int cat, UINT32 flags, void *d
 }
 NT_API NTSTATUS nt_IoUnregisterPlugPlayNotification(void *handle) { (void)handle; return NT_STATUS_SUCCESS; }
 
-NT_API UINT32 nt_PoSetPowerState(NT_DEVICE_OBJECT *dev, int type, UINT32 state) { (void)dev; (void)type; (void)state; return 0; }
-NT_API NTSTATUS nt_PoRequestPowerIrp(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 state, void *cb, void *ctx, NT_IRP **irp)
+/* PoSetPowerState(DeviceObject, POWER_STATE_TYPE, POWER_STATE): the power
+ * state a driver says its device is now in, kept where Windows keeps it
+ * (DEVOBJ_EXTENSION.PowerFlags: the system state in bits 0-3, the device
+ * state in bits 4-7); returns the one before (D0 and S0 at first) */
+NT_API UINT32 nt_PoSetPowerState(NT_DEVICE_OBJECT *dev, int type, UINT32 state)
 {
-    (void)dev; (void)minor; (void)state; (void)cb; (void)ctx; (void)irp;
-    return NT_STATUS_NOT_IMPLEMENTED;                 /* power IRPs: step 30.3 */
+    if (!dev || !dev->DeviceObjectExtension || (type != 0 && type != 1)) return 0;
+    NtDevObjExt *x = dev->DeviceObjectExtension;
+    int shift = type == 1 ? 4 : 0;
+    UINT32 old = (x->PowerFlags >> shift) & 0xF;
+    x->PowerFlags = (x->PowerFlags & ~(0xFu << shift)) | ((state & 0xF) << shift);
+    return old ? old : 1;                             /* (PowerDeviceD0, PowerSystemWorking) */
+}
+
+/* The device power state of @dev's stack as its drivers last set it
+ * (PowerDeviceD0 1 .. PowerDeviceD3 4): the highest any device object in
+ * the stack reported, D0 when none did */
+UINT32 NtDevicePowerState(NT_DEVICE_OBJECT *dev)
+{
+    UINT32 st = 1;
+    for (NT_DEVICE_OBJECT *d = dev; d; d = d->AttachedDevice) {
+        const NtDevObjExt *x = d->DeviceObjectExtension;
+        UINT32 v = x ? (x->PowerFlags >> 4) & 0xF : 0;
+        if (v > st) st = v;
+    }
+    return st;
 }
 
 /* IoGetDeviceObjectPointer opens a named device (\Device\X or a link's

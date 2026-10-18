@@ -25,6 +25,9 @@
  *                    do, so the driver accepts and the device is disabled
  *   edutest absent   no device has the interface (after pnputil
  *                    /disable-device), and the old path no longer opens
+ *   edutest idle     leaves the device alone for 6 s without a handle: kmdfedu.sys asks
+ *                    the framework to power it down after 2 s idle (S0 idle: a D3
+ *                    IRP down its stack), and the next request powers it up again
  *   edutest message  as edutest, and the interrupt must have come as an MSI message
  *   edutest line     as edutest, and as the device's line (INTx)
  *   edutest msi 1|0  turn MSISupported (HKLM\...\Enum\<device>\Device Parameters\Interrupt
@@ -231,6 +234,12 @@ int main(int argc, char **argv)
         check(h == INVALID_HANDLE_VALUE, "its interface path no longer opens");
         if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
         return done("edutest absent");
+    }
+    if (argc > 1 && !strcmp(argv[1], "idle")) {
+        check(path[0] != 0, "the edu device's interface is listed");
+        Sleep(6000);
+        printf("edutest idle: left the device alone for 6 s\n");
+        return done("edutest idle");
     }
     check(path[0] != 0, "the edu device's interface is listed");
     if (!path[0]) return done("edutest");

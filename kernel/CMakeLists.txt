@@ -136,6 +136,7 @@ set(KERNEL_C_SOURCES
     hal/acpi.c
     hal/aml.c
     hal/throttle.c
+    hal/cstate.c
     hal/ec.c
     hal/gpio.c
     hal/ioapic.c
@@ -223,6 +224,7 @@ set(KERNEL_C_SOURCES
     ke/kpcr.c
     ke/smp.c
     ke/sleep.c
+    ke/idle.c
     ke/timezone.c
     ke/waitq.c
     ke/probe.c

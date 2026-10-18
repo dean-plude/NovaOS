@@ -679,8 +679,52 @@ bool um_account_signin_required(void)
  * ----------------------------------------------------------------------- */
 enum {
     ACCT_LIST, ACCT_GET, ACCT_FIND, ACCT_ADD, ACCT_DELETE, ACCT_SET_PASSWORD, ACCT_CHANGE_PASSWORD,
-    ACCT_LOGON, ACCT_LOAD_PROFILE, ACCT_LOCK, ACCT_DELETE_PROFILE, ACCT_SESSION, ACCT_SIGN_OUT, ACCT_SESSIONS,
+    ACCT_LOGON, ACCT_LOAD_PROFILE, ACCT_LOCK, ACCT_DELETE_PROFILE, ACCT_SESSION, ACCT_SIGN_OUT, ACCT_SESSIONS, ACCT_ELEVATE,
 };
+
+/* ACCT_ELEVATE (shell32's "runas", Windows' AppInfo service): in_p is a
+ * handle to a process the caller created suspended; UAC's prompt
+ * (wm/consent.c) asks, and on Yes (or an administrator's password) the
+ * process gets the elevated token before it runs.  The token never
+ * reaches the caller.  STATUS_CANCELLED for No. */
+static UINT32 elevate_child(UINT64 h)
+{
+    UmProcess *me = UmCurrent();
+    UmObject *ob;
+    UmProcess *c = me ? um_proc_of(me, h, &ob) : NULL;
+    if (!c || c == me) { if (c && ob) um_ob_unref(ob); return 0xC0000008u; }     /* STATUS_INVALID_HANDLE */
+    UINT32 st = ST_SUCCESS;
+    if (c->parent_pid != me->pid || c->exited) st = ST_ACCESS_DENIED;          /* (only a child of its own, not yet ended) */
+    char path[RAMFS_PATH_MAX + 64];
+    path[0] = 0;
+    if (!st) {
+        DesktopLock();
+        if (c->exe_dir) RamfsPath(c->exe_dir, path, RAMFS_PATH_MAX);
+        DesktopUnlock();
+        size_t n = strlen(path);
+        ksnprintf(path + n, sizeof(path) - n, "%s%s", n && path[n - 1] != '\\' ? "\\" : "", c->name);
+    }
+    if (!st && um_token_elevated(c->token)) { um_ob_unref(ob); return ST_SUCCESS; }   /* (its manifest's prompt did already) */
+    UmObject *mine = NULL;
+    if (!st) {
+        IrqState s = ob_lock();
+        if (me->token) mine = um_ob_ref(me->token);
+        ob_unlock(s);
+        if (!mine) st = ST_NO_MEMORY;
+    }
+    UmObject *e = st ? NULL : um_uac_elevate(mine, path, &st);
+    if (mine) um_ob_unref(mine);
+    if (e) {
+        IrqState s = ob_lock();
+        UmObject *old = c->token;
+        c->token = e;                                       /* (takes our reference) */
+        ob_unlock(s);
+        if (old) um_ob_unref(old);
+        kprintf("[UM] %s runs as administrator (runas)\n", c->name);
+    }
+    um_ob_unref(ob);
+    return st;
+}
 
 typedef struct { UINT32 rid, flags; char name[UM_ACCOUNT_NAME_MAX + 1], password[UM_PASSWORD_MAX + 1], old[UM_PASSWORD_MAX + 1]; } AcctRequest;
 typedef struct { UINT32 rid, flags, password; char name[UM_ACCOUNT_NAME_MAX + 1], full[64], profile[96]; } AcctRecord;
@@ -707,6 +751,7 @@ static UINT32 give(UINT64 out, UINT64 cap, const void *data, UINT32 len, UINT64 
 static UINT64 sys_nova_account(UINT64 op, UINT64 in_p, UINT64 in_len, UINT64 out_p)
 {
     UINT64 out_len = um_stack_arg(5), ret = um_stack_arg(6);
+    if (op == ACCT_ELEVATE) return elevate_child(in_p);
     AcctRequest *rq = kzalloc(sizeof(*rq));
     if (!rq) return ST_NO_MEMORY;
     UINT32 st = ST_SUCCESS;

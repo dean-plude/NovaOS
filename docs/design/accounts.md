@@ -5,7 +5,8 @@ profiles, `LogonUser`, the `NetUser*` calls, the sign-in screen at boot and
 the lock screen came first; Settings' Accounts page, account pictures,
 sign-out and fast user switching second.  Per-user desktop settings and
 moving the first account's files to `C:\Users` are the next parts (below).
-UAC's consent prompt is step 33.2.
+UAC's consent prompt is step 33.2
+([uac.md](uac.md)).
 
 **The decision.**  NovaOS keeps accounts where Windows keeps them and hands
 programs the same objects Windows does: a SAM database in the registry, a
@@ -47,7 +48,7 @@ Everyone, Users, Interactive, Authenticated Users and a logon SID
 (`S-1-5-5-0-<n>`).  An administrator's normal token has Administrators as a
 deny-only group (Windows' filtered token, elevation type limited); a program
 whose manifest asks for `requireAdministrator` gets the linked elevated
-token, as before.  A standard user's token has elevation type default and
+token once UAC's prompt agrees ([uac.md](uac.md)).  A standard user's token has elevation type default and
 no Administrators group at all.  Creating, deleting and resetting another
 account need an elevated administrator.
 
@@ -135,6 +136,6 @@ that had the focus with it.
    `ProcessIdToSessionId`, `WTSLogoffSession`), which still report one
    console session.
 
-Step 33.2 then adds the consent prompt on a secure desktop and integrity
-levels to the tokens above; nothing here assumes the user is an
-administrator.
+Step 33.2 adds the consent prompt on a secure desktop and integrity
+levels to the tokens above ([uac.md](uac.md)); nothing here assumes the
+user is an administrator.

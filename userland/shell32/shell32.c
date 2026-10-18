@@ -385,22 +385,12 @@ static DWORD token_dword(ULONG cls, DWORD dflt)
     return v;
 }
 
-/* The elevated half of the caller's split token (TokenLinkedToken), for
- * the "runas" verb; NULL when the caller is elevated already */
-static HANDLE elevated_token(void)
-{
-    HANDLE t, linked = 0;
-    ULONG n;
-    if (token_dword(18 /* TokenElevationType */, 1) != 3 /* TokenElevationTypeLimited */) return 0;
-    if (NtOpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t) < 0) return 0;
-    if (NtQueryInformationToken(t, 19 /* TokenLinkedToken */, &linked, sizeof(linked), &n) < 0) linked = 0;
-    NtClose(t);
-    return linked;
-}
-
-/* Run @file (a program, or a web address in the browser); 0 or an SE_ERR_* code.
- * The "runas" verb runs it as administrator: NovaOS has no consent prompt
- * yet, so it is elevated at once (UAC's "never notify"). */
+/* Run @file (a program, or a web address in the browser); 0, an SE_ERR_*
+ * code, or ERROR_CANCELLED (No at UAC's prompt).
+ * The "runas" verb runs it as administrator, as Windows' AppInfo service
+ * does: started suspended, the kernel asks UAC's consent prompt (Yes from
+ * an administrator, an administrator's password from a standard user)
+ * and gives it the elevated token; No ends it (ERROR_CANCELLED). */
 static int execute(LPCWSTR verb, LPCWSTR file, LPCWSTR params, LPCWSTR dir, HANDLE *proc)
 {
     WCHAR cmd[2048], prog[MAX_PATH];
@@ -446,21 +436,19 @@ static int execute(LPCWSTR verb, LPCWSTR file, LPCWSTR params, LPCWSTR dir, HAND
     PROCESS_INFORMATION pi;
     for (unsigned i = 0; i < sizeof(si); i++) ((BYTE *)&si)[i] = 0;
     si.cb = sizeof(si);
-    HANDLE token = verb && !lstrcmpiW(verb, L"runas") ? elevated_token() : 0;
-    if (!CreateProcessW(0, cmd, 0, 0, FALSE, token ? CREATE_SUSPENDED : 0, 0, dir, &si, &pi)) {
+    BOOL elevate = verb && !lstrcmpiW(verb, L"runas") && !token_dword(20 /* TokenElevation */, 0);
+    if (!CreateProcessW(0, cmd, 0, 0, FALSE, elevate ? CREATE_SUSPENDED : 0, 0, dir, &si, &pi)) {
         DWORD e = GetLastError();
-        if (token) NtClose(token);
+        if (e == ERROR_ELEVATION_REQUIRED) return ERROR_CANCELLED;   /* (No at the prompt its manifest raised) */
         return e == ERROR_FILE_NOT_FOUND ? 2 : e == ERROR_PATH_NOT_FOUND ? 3 : e == ERROR_NOT_ENOUGH_MEMORY ? 8 : 5;
     }
-    if (token) {
-        struct { HANDLE token, thread; } at = { token, pi.hThread };
-        NTSTATUS st = NtSetInformationProcess(pi.hProcess, 9 /* ProcessAccessToken */, &at, sizeof(at));
-        NtClose(token);
+    if (elevate) {
+        NTSTATUS st = NtNovaAccount(NOVA_ACCOUNT_ELEVATE, pi.hProcess, 0, 0, 0, 0);
         if (st < 0) {
             TerminateProcess(pi.hProcess, 1);
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
-            return 5;                                       /* SE_ERR_ACCESSDENIED */
+            return st == (NTSTATUS)0xC0000120 /* STATUS_CANCELLED */ ? ERROR_CANCELLED : 5;
         }
         ResumeThread(pi.hThread);
     }
@@ -474,6 +462,7 @@ SHSTDAPI_(HINSTANCE) ShellExecuteW(HWND hwnd, LPCWSTR verb, LPCWSTR file, LPCWST
 {
     (void)hwnd; (void)show;
     int e = execute(verb, file, params, dir, 0);
+    if (e == ERROR_CANCELLED) e = 5;                        /* SE_ERR_ACCESSDENIED, as Windows */
     return (HINSTANCE)(ULONG_PTR)(e ? e : 42);
 }
 
@@ -500,9 +489,10 @@ SHSTDAPI_(BOOL) ShellExecuteExW(SHELLEXECUTEINFOW *info)
     if ((info->fMask & 0x04 /* SEE_MASK_IDLIST */) && info->lpIDList && SHGetPathFromIDListW(info->lpIDList, path)) file = path;
     HANDLE proc = 0;
     int e = execute(info->lpVerb, file ? file : (const WCHAR[]){ 0 }, info->lpParameters, info->lpDirectory, &proc);
-    info->hInstApp = (HINSTANCE)(ULONG_PTR)(e ? e : 42);
+    info->hInstApp = (HINSTANCE)(ULONG_PTR)(e == ERROR_CANCELLED ? 5 : e ? e : 42);
     if (e) {
-        SetLastError(e == 31 ? 1155 /* ERROR_NO_ASSOCIATION */ : e == 2 ? ERROR_FILE_NOT_FOUND : e == 3 ? ERROR_PATH_NOT_FOUND : ERROR_ACCESS_DENIED);
+        SetLastError(e == 31 ? 1155 /* ERROR_NO_ASSOCIATION */ : e == 2 ? ERROR_FILE_NOT_FOUND : e == 3 ? ERROR_PATH_NOT_FOUND :
+                     e == ERROR_CANCELLED ? ERROR_CANCELLED : ERROR_ACCESS_DENIED);
         return FALSE;
     }
     if (info->fMask & 0x40 /* SEE_MASK_NOCLOSEPROCESS */) info->hProcess = proc;

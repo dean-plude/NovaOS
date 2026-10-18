@@ -88,12 +88,16 @@ UINT32 ConsentAsk(const char *path, bool credentials, UINT32 self)
     return a;
 }
 
+static UINT32 g_serial;                     /* prompts shown so far */
+
 bool ConsentActive(void) { return g_on; }
+UINT32 ConsentSerial(void) { return g_serial; }
 
 void ConsentPoll(void)
 {
     if (g_on || !__atomic_load_n(&g_pending, __ATOMIC_ACQUIRE) || LogonActive()) return;
     g_pending = 0;
+    g_serial++;
     g_on = true;
     g_user[0] = 0;
     g_userlen = 0;

@@ -27,6 +27,8 @@
 UINT32 ConsentAsk(const char *path, bool credentials, UINT32 self);
 
 bool ConsentActive(void);
+/* Counts the prompts shown, so the desktop can tell one prompt from the next */
+UINT32 ConsentSerial(void);
 /* The desktop loop: shows a waiting request once nothing else (the
  * sign-in or lock screen) has the screen */
 void ConsentPoll(void);

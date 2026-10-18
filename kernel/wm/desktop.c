@@ -1415,6 +1415,8 @@ void DesktopInitialize(void)
 bool DesktopAvailable(void) { return g_ready; }
 
 static UINT8 g_secure_keys[32];                 /* keys pressed while UAC's prompt showed, by scancode (+128: E0) */
+static UINT8 g_secure_stale[32];                /* of those, the ones held when the prompt now showing opened */
+static UINT32 g_secure_seen;                    /* (the prompt showing at the last key: ConsentSerial) */
 
 bool DesktopOverlayCovers(GdiRect r)
 {
@@ -2291,14 +2293,21 @@ void DesktopRun(void *arg)
                 }
                 /* (the secure desktop: only the dialog hears it, and a key
                  * pressed there is its until released, repeats too, so
-                 * Alt+Y types no y once the dialog has gone) */
+                 * Alt+Y types no y once the dialog has gone and a held
+                 * Alt+N or Enter does not answer the next one) */
                 UINT32 kix = (UINT32)(ev.scancode & 0x7F) | (ev.extended ? 0x80u : 0);
-                bool held_here = (g_secure_keys[kix / 8] >> (kix % 8) & 1) != 0;
-                if (ConsentActive() || held_here) {
-                    if (ev.pressed) g_secure_keys[kix / 8] |= (UINT8)(1u << (kix % 8));
-                    else g_secure_keys[kix / 8] &= (UINT8)~(1u << (kix % 8));
+                UINT8 bit = (UINT8)(1u << (kix % 8));
+                bool held_here = (g_secure_keys[kix / 8] & bit) != 0, on = ConsentActive();
+                if (on && ConsentSerial() != g_secure_seen) {   /* (a new prompt: keys held from the last one are not its) */
+                    for (int i = 0; i < 32; i++) g_secure_stale[i] = g_secure_keys[i];
+                    g_secure_seen = ConsentSerial();
+                }
+                if (on || held_here) {
+                    bool stale = (g_secure_stale[kix / 8] & bit) != 0;
+                    if (ev.pressed) g_secure_keys[kix / 8] |= bit;
+                    else { g_secure_keys[kix / 8] &= (UINT8)~bit; g_secure_stale[kix / 8] &= (UINT8)~bit; }
                     if (key && k.extended && k.scancode == KEY_LWIN && !k.pressed) g_win_down = false;
-                    if (key) ConsentKey(&k);
+                    if (key && !(stale && k.pressed)) ConsentKey(&k);   /* (no repeats of a key pressed before it opened) */
                     continue;
                 }
                 raw_key(&ev, key ? &k : NULL);

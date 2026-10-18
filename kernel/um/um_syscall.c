@@ -3537,6 +3537,7 @@ void um_syscall_init(void)
     um_install(SYSCALL_NtYieldExecution,           sys_yield);
     um_thread_syscalls_init();
     um_security_syscalls_init();
+    um_accounts_syscalls_init();
     um_services_init();
     um_exception_syscalls_init();
     um_registry_syscalls_init();

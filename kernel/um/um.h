@@ -221,6 +221,7 @@ void   EvLogBoot(void);                      /* Kernel-General 12, once the regi
 int  um_registry_get_value(const char *path, const char *name, UINT32 *type, void *out, int cap);
 void um_registry_set_value(const char *path, const char *name, UINT32 type, const void *data, UINT32 len);
 bool um_registry_delete_value(const char *path, const char *name);
+bool um_registry_delete_tree(const char *path);    /* a key and everything below it */
 bool um_registry_create_key(const char *path);
 bool um_registry_key_exists(const char *path);
 /* Enumeration for kernel-mode ZwQueryKey / ZwEnumerateKey / ZwEnumerateValueKey */
@@ -237,6 +238,38 @@ int  um_registry_enum_value(const char *path, UINT32 index, UINT16 *name, int nc
 #define UM_SETUP_KEY "Machine\\SOFTWARE\\NovaOS\\Setup"
 /* The user's SID: HKEY_CURRENT_USER is "User\\" UM_USER_SID */
 #define UM_USER_SID "S-1-5-21-1000-2000-3000-1001"
+
+/* Local accounts (um_accounts.c): the SAM, profiles and the session */
+#define UM_ACCOUNT_NAME_MAX 20
+#define UM_PASSWORD_MAX     256
+#define UM_ACCT_ADMIN       0x1u          /* in Administrators */
+#define UM_ACCT_DISABLED    0x2u
+typedef struct {
+    UINT32 rid, flags;
+    bool   password;                      /* has one */
+    char   name[UM_ACCOUNT_NAME_MAX + 1];
+    char   full[64];                      /* display name ("" for none) */
+    char   profile[96];                   /* C:\Users\name ("" until the first sign-in) */
+} UmAccount;
+int    um_accounts_list(UmAccount *out, int cap);          /* by RID */
+bool   um_account_get(UINT32 rid, UmAccount *a);
+bool   um_account_find(const char *name, UmAccount *a);    /* any case */
+bool   um_account_name_ok(const char *name);
+UINT32 um_account_add(const char *name, const char *pw, UINT32 flags, UINT32 *rid);   /* NTSTATUS */
+UINT32 um_account_delete(UINT32 rid);
+UINT32 um_account_delete_profile(UINT32 rid);         /* the folder, hive and ProfileList entry */
+UINT32 um_account_set_password(UINT32 rid, const char *pw);  /* "" removes it */
+bool   um_account_rename(UINT32 rid, const char *name);
+bool   um_account_check(UINT32 rid, const char *pw);         /* (a wrong one waits a second) */
+bool   um_account_verify(UINT32 rid, const char *pw);        /* ... without waiting (the sign-in screen's) */
+UINT32 um_account_logon(const char *name, const char *pw, UmAccount *a);
+bool   um_account_load_profile(UINT32 rid, char *path, int cap);
+void   um_account_sid(UINT32 rid, UINT8 sid[28]);
+void   um_account_sid_string(UINT32 rid, char *out, int cap);
+UINT32 um_account_rid_of_sid(const UINT8 *sid);              /* 0: not a local account */
+UINT32 um_session_rid(void);              /* the account signed in on the screen */
+void   um_session_set(UINT32 rid);        /* ... signs in (wm/logon.c) */
+bool   um_account_signin_required(void);  /* the sign-in screen comes before the desktop */
 void UmFault(UINT32 status, UINT64 rip, UINT64 addr) __attribute__((noreturn));
 void UmFaultAt(UINT32 status, UINT64 rip, UINT64 addr, UINT64 sp) __attribute__((noreturn));
 /* Crash reports in C:\NovaOS\Crashes (um_crash.c) */

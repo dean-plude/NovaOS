@@ -105,7 +105,9 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
 
 NovaOS starts live from the disc and offers **Install NovaOS**, which
 partitions `disk.img` (GPT, an EFI System Partition and a data partition
-for drive C:).  Afterwards, run the same command without `-cdrom nova.iso`
+for drive C:).  On a disk that already holds Windows, Setup can instead
+install NovaOS beside it in the disk's free space and keep Windows'
+partitions as they are ([docs/design/installer.md](docs/design/installer.md)).  Afterwards, run the same command without `-cdrom nova.iso`
 to start the installed system; the first start walks you through your
 name, time zone, keyboard layout and display resolution.
 
@@ -166,7 +168,7 @@ A short tour; [docs/inside.md](docs/inside.md) has the full one, and
 - **Windows userland** (`userland/`): about 115 system DLLs written for NovaOS, 64- and 32-bit, from `ntdll`, `kernel32`, `user32` and `gdi32` to COM, the C and C++ runtimes, Windows Installer, Schannel, DirectWrite, Direct2D and ICU.
 - **Graphics**: a CPU-rendered GDI and desktop, OpenGL 4.5 on Mesa's llvmpipe built in, and Vulkan, DXVK and VKD3D-Proton from the App Store, on the CPU or, under QEMU, on the host's GPU through virtio-gpu.
 - **Program support**: the PE loader, 32-bit programs through a WoW64-style `ntdll`, x64 and x86 structured exceptions, consoles and ConPTY, COM between processes, Windows Installer, services and scheduled tasks.
-- **Apps and updates**: the App Store downloads open-source Windows programs and runtimes (with a badge for each one the nightly tests verify), `winget` installs them and packages from the winget community repository from the command line, Firefox is bundled as the default browser, and installed systems update themselves from an update channel that can be signed (the release key is not shipped yet).
+- **Apps and updates**: the App Store downloads open-source Windows programs and runtimes (with a badge for each one the nightly tests verify), `winget` installs them and packages from the winget community repository from the command line, Firefox is bundled as the default browser, and installed systems update themselves from an update channel that can be signed (the release key is not shipped yet) and go back to the previous version on their own when an update stops while it first starts.
 - **Printing**: the Windows print spooler and API, Microsoft Print to PDF, and the Print dialogs; network printing comes next.
 
 <!-- END generated:inside -->
@@ -229,6 +231,7 @@ PC or on Microsoft Hyper-V.  The next phases are:
 | 28 | Laptop hardware: Wi-Fi, Bluetooth, camera, battery life, a second reference PC |
 | 29 | NovaOS 0.2 on both reference PCs |
 | 31 | DOS programs: MS-DOS 4.0 built from Microsoft's source, on a real-mode CPU in a NovaOS console window, as NTVDM did |
+| 33 | Everyday OS: accounts and sign-in, standard users and UAC, update rollback and recovery, an installer beside Windows, printing |
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has every step, what has been done and
 what counts as done.

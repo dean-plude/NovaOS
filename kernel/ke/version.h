@@ -23,4 +23,13 @@ const char *NovaVersionMark(void);
  * ("0.1.10" > "0.1.9"; "0.1.1-test" < "0.1.1" < "0.1.1.1"; "0.1" = "0.1.0") */
 int NovaVersionCompare(const char *a, const char *b);
 
+/* A second marked field of the image, empty in every build: a test fault
+ * stamped by tools/mkupdate.py --fail-boot on a copy of a built kernel,
+ * so that the self-tests can serve an update that fails to start without
+ * a broken build ("panic": the kernel stops before it reaches the desktop;
+ * docs/design/recovery.md).  "" when none is stamped. */
+#define NOVA_FAULT_MARK_LEN 18
+#define NOVA_FAULT_MAX      16
+const char *NovaTestFault(void);
+
 #endif

@@ -20,6 +20,20 @@ _Static_assert(sizeof(NOVA_VERSION) <= NOVA_STAMP_VER_MAX, "version too long");
 
 const char *NovaVersionMark(void) { return (const char *)g_stamp; }
 
+/* The test fault field (version.h): the marker, then zeros */
+__attribute__((used, aligned(16)))
+static volatile const char g_fault[NOVA_FAULT_MARK_LEN + NOVA_FAULT_MAX] = "NovaOS-test-fault:";
+
+_Static_assert(sizeof("NovaOS-test-fault:") - 1 == NOVA_FAULT_MARK_LEN, "fault marker length");
+
+const char *NovaTestFault(void)
+{
+    static char fault[NOVA_FAULT_MAX];
+    for (int i = 0; i < NOVA_FAULT_MAX - 1; i++) fault[i] = g_fault[NOVA_FAULT_MARK_LEN + i];
+    fault[NOVA_FAULT_MAX - 1] = '\0';
+    return fault;
+}
+
 const char *NovaVersion(void)
 {
     static char ver[NOVA_STAMP_VER_MAX];

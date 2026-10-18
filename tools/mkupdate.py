@@ -3,7 +3,7 @@
 
     tools/mkupdate.py OUTDIR [--kernel build/kernel.elf] [--loader build/bootx64.efi]
                       [--version V] [--notes TEXT] [--base URL] [--no-loader]
-                      [--sign KEYFILE | --sign-env NAME]
+                      [--sign KEYFILE | --sign-env NAME] [--fail-boot panic]
     tools/mkupdate.py --new-key KEYFILE
     tools/mkupdate.py --public-key KEYFILE
 
@@ -23,6 +23,12 @@ the kernel's own version is the channel's.  The CI's rolling build of
 main stamps a development version, NOVA_VERSION+dev.YYYYMMDDHHMMSS
 (docs/updates.md, "The rolling build's channel").
 
+--fail-boot stamps a test fault into the kernel copy's second marked
+field (kernel/ke/version.h): with "panic" the kernel stops before it
+reaches the desktop.  Only the self-tests use it, to serve an update
+that fails its first start and must be rolled back
+(docs/design/recovery.md).
+
 --sign signs the channel file with the Ed25519 key in KEYFILE (--sign-env:
 the key in an environment variable, as the release workflow has it): a
 last line "signature ed25519 PUBLIC-KEY SIGNATURE" covers every byte
@@ -40,6 +46,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEY_H = os.path.join(ROOT, 'kernel', 'fs', 'update_key.h')
 MARK = b'NovaOS-version-stamp:'      # kernel/ke/version.h: NOVA_STAMP_MARK_LEN
 VER_MAX = 27                         # NOVA_STAMP_VER_MAX (with the NUL)
+FAULT_MARK = b'NovaOS-test-fault:'   # NOVA_FAULT_MARK_LEN
+FAULT_MAX = 16                       # NOVA_FAULT_MAX (with the NUL)
+FAULTS = ('panic',)
 
 
 def stamp_offset(data):
@@ -86,6 +95,7 @@ def main():
     ap.add_argument('--loader', default=os.path.join(ROOT, 'build', 'bootx64.efi'))
     ap.add_argument('--no-loader', action='store_true', help='leave the boot loader out of the update')
     ap.add_argument('--version', help='stamp the kernel copy with this version')
+    ap.add_argument('--fail-boot', choices=FAULTS, help='stamp a test fault: the kernel fails its start (self-tests only)')
     ap.add_argument('--notes', default='')
     ap.add_argument('--base', help='URL of the folder the files are served from (default: beside the channel file)')
     ap.add_argument('--sign', metavar='KEYFILE', help='sign the channel file with this Ed25519 key')
@@ -109,6 +119,12 @@ def main():
             sys.exit(f'bad version {a.version!r} (like 0.1.1, 0.1.1-test or 0.1.0+dev.20261004125600, at most {VER_MAX - 1} characters)')
         kernel[off:off + VER_MAX] = a.version.encode().ljust(VER_MAX, b'\0')
     version = bytes(kernel[off:off + VER_MAX]).split(b'\0')[0].decode()
+    if a.fail_boot:
+        at = kernel.find(FAULT_MARK)
+        if at < 0 or kernel.find(FAULT_MARK, at + 1) >= 0:
+            sys.exit('the kernel has no test fault field, or more than one (kernel/ke/version.c)')
+        at += len(FAULT_MARK)
+        kernel[at:at + FAULT_MAX] = a.fail_boot.encode().ljust(FAULT_MAX, b'\0')
 
     os.makedirs(a.out, exist_ok=True)
     files = [('kernel', 'kernel.elf', bytes(kernel))]

@@ -79,7 +79,12 @@ next start by the boot loader and the new kernel, the same idea as
 
 **Going back.** If the new kernel stops before it gets that far, or the PC
 is reset or loses power while it starts, the trying mark is still there at
-the next start. The boot loader then deletes it and starts the old
+the next start. A kernel that stops (a panic, a failed assertion, a fatal
+CPU exception) during that first start does not wait for someone to press
+reset: it logs
+`[UPDATE] The updated NovaOS 0.1.1 stopped while starting: restarting to go back to the previous version`
+and restarts the PC itself after three seconds, as Windows restarts after a
+stop error ([design/recovery.md](design/recovery.md)). The boot loader then deletes it and starts the old
 `kernel.elf` with `BOOT_FLAG_UPDATE_FAILED`, and the old NovaOS deletes the
 update's files and says so on the Updates page. The steps are ordered so
 that a power cut at any point leaves a system that starts: the pending mark
@@ -269,16 +274,25 @@ public, so no real NovaOS trusts it), whose public half QEMU passes as
 5. v2 is staged, and the machine is reset as soon as its kernel says it is
    starting: the next start is v1 again, which removes the update and offers
    it again.
-6. `store updates` shows the App Store's Updates page (screenshot
+6. `broken/`, a v3 whose kernel is stamped to stop before it reaches the
+   desktop (`tools/mkupdate.py --fail-boot panic`), is staged and started:
+   it stops, restarts the machine on its own, and the next start is v1
+   again, which removes it. Nothing outside the VM resets it.
+7. `store updates` shows the App Store's Updates page (screenshot
    `store-updates.png`).
 
 To run just this boot after a build:
 
 ```bash
-python3 tools/selftest.py --suite devices --only 'unsigned channel,unsigned refused,other key channel,other key refused,changed channel,changed refused,same channel,same version up to date,dev channel,dev build newer,update channel,update check,update install,restart into it,updated,restart again,up to date,dev channel again,dev build older,next update,stage it,reset while trying,offered again,store updates'
+python3 tools/selftest.py --suite devices --only 'unsigned channel,unsigned refused,other key channel,other key refused,changed channel,changed refused,same channel,same version up to date,dev channel,dev build newer,update channel,update check,update install,restart into it,updated,restart again,up to date,dev channel again,dev build older,next update,stage it,reset while trying,offered again,broken channel,stage broken update,broken update rolls back,rolled back,store updates'
 ```
 
 ## Not done yet
+
+- **Hangs, the boot menu and recovery.** An update whose kernel hangs
+  rather than stops still needs a reset to go back, and there is no boot
+  menu, safe mode or startup repair yet: the rest of roadmap step 33.3
+  ([design/recovery.md](design/recovery.md#to-do-the-next-pieces-of-333)).
 
 - **The release key.** No key is built in yet (roadmap step 23.5), so
   updates are not authenticated.

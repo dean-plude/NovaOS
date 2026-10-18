@@ -1,0 +1,2 @@
+/* accounttest: its manifest asks to run as administrator (requireAdministrator), as making accounts needs */
+1 24 "accounttest.manifest"

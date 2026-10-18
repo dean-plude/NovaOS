@@ -812,7 +812,14 @@ USERAPI BOOL ExitWindowsEx(UINT flags, DWORD reason)
     SetLastError(ERROR_NOT_SUPPORTED);
     return FALSE;
 }
-USERAPI BOOL LockWorkStation(void) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+/* The lock screen (kernel/wm/logon.c): it shows once the desktop next
+ * comes round, as Windows' does once LockWorkStation has returned */
+USERAPI BOOL LockWorkStation(void)
+{
+    NTSTATUS st = NtNovaAccount(NOVA_ACCOUNT_LOCK, 0, 0, 0, 0, 0);
+    if (st) { SetLastError(RtlNtStatusToDosError(st)); return FALSE; }
+    return TRUE;
+}
 /* A program's reason to hold a shutdown back ("Saving torrent
  * progress..."), kept on its window (a copy of the text) until it is
  * destroyed; NovaOS's shut down waits for no program, so nothing shows

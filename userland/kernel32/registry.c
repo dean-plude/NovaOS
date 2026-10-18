@@ -5,7 +5,7 @@
  * advapi32 forwards.  The predefined keys map to \Registry paths:
  *   HKEY_LOCAL_MACHINE  \Registry\Machine
  *   HKEY_USERS          \Registry\User
- *   HKEY_CURRENT_USER   \Registry\User\<the user's SID>
+ *   HKEY_CURRENT_USER   \Registry\User\<the SID of the user it runs as>
  *   HKEY_CLASSES_ROOT   \Registry\Machine\SOFTWARE\Classes
  *   HKEY_CURRENT_CONFIG \Registry\Machine\SYSTEM\CurrentControlSet\Hardware Profiles\Current
  * and are opened once per process.  A/W: values are stored as UTF-16;
@@ -16,6 +16,9 @@
 #include <winternl.h>
 #include <winreg.h>
 #include "k32.h"
+
+NTSYSAPI NTSTATUS NTAPI RtlFormatCurrentUserKeyPath(PUNICODE_STRING out);
+NTSYSAPI VOID NTAPI RtlFreeUnicodeString(PUNICODE_STRING s);
 
 void *memcpy(void *d, const void *s, size_t n);
 void *memset(void *d, int c, size_t n);
@@ -65,7 +68,6 @@ static const char *predef_path(ULONG_PTR k)
 {
     switch (k) {
     case 0x80000000: return "\\Registry\\Machine\\SOFTWARE\\Classes";
-    case 0x80000001: return "\\Registry\\User\\" REG_USER_SID;
     case 0x80000002: return "\\Registry\\Machine";
     case 0x80000003: return "\\Registry\\User";
     case 0x80000005: return "\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current";
@@ -86,6 +88,24 @@ static NTSTATUS open_abs(const char *path, BOOL create, HANDLE *out)
     return create ? NtCreateKey(out, KEY_ALL_ACCESS, &oa, 0, 0, 0, 0) : NtOpenKey(out, KEY_ALL_ACCESS, &oa);
 }
 
+/* HKEY_CURRENT_USER: HKEY_USERS\<the user's SID>, the user the calling
+ * thread runs as (RtlFormatCurrentUserKeyPath: each account has its own,
+ * kernel/um/um_accounts.c), made if it is not there yet */
+static NTSTATUS open_current_user(HANDLE *out)
+{
+    UNICODE_STRING us;
+    NTSTATUS s = RtlFormatCurrentUserKeyPath(&us);
+    if (s) return open_abs("\\Registry\\User\\" REG_USER_SID, TRUE, out);
+    OBJECT_ATTRIBUTES oa;
+    memset(&oa, 0, sizeof(oa));
+    oa.Length = sizeof(oa);
+    oa.ObjectName = &us;
+    oa.Attributes = OBJ_CASE_INSENSITIVE;
+    s = NtCreateKey(out, KEY_ALL_ACCESS, &oa, 0, 0, 0, 0);
+    RtlFreeUnicodeString(&us);
+    return s;
+}
+
 /* The kernel handle for @key (predefined ones opened on first use) */
 static NTSTATUS handle_of(HKEY key, HANDLE *out)
 {
@@ -93,10 +113,14 @@ static NTSTATUS handle_of(HKEY key, HANDLE *out)
     if (k < 0x80000000u || k > 0x80000005u) { *out = key; return key ? 0 : (NTSTATUS)0xC0000008; }
     int i = (int)(k - 0x80000000u);
     if (!g_predef[i]) {
-        const char *path = predef_path(k);
-        if (!path) return (NTSTATUS)0xC0000034;
         HANDLE h;
-        NTSTATUS s = open_abs(path, i == 5 || i == 0, &h);      /* HKCR and HKCC exist on demand */
+        NTSTATUS s;
+        if (i == 1) s = open_current_user(&h);
+        else {
+            const char *path = predef_path(k);
+            if (!path) return (NTSTATUS)0xC0000034;
+            s = open_abs(path, i == 5 || i == 0, &h);           /* HKCR and HKCC exist on demand */
+        }
         if (s) return s;
         if (__sync_val_compare_and_swap(&g_predef[i], (HANDLE)0, h)) NtClose(h);
     }
@@ -190,7 +214,16 @@ WINBASEAPI LSTATUS WINAPI RegCloseKey(HKEY key)
     return err(NtClose(key));
 }
 
-WINBASEAPI LSTATUS WINAPI RegOpenCurrentUser(REGSAM sam, PHKEY out) { return RegOpenKeyExW(HKEY_CURRENT_USER, 0, 0, sam, out); }
+/* The calling thread's user's key (an impersonating thread's: its client's) */
+WINBASEAPI LSTATUS WINAPI RegOpenCurrentUser(REGSAM sam, PHKEY out)
+{
+    (void)sam;
+    HANDLE h;
+    NTSTATUS s = open_current_user(&h);
+    if (s) return (LSTATUS)RtlNtStatusToDosError(s);
+    *out = h;
+    return ERROR_SUCCESS;
+}
 WINBASEAPI LSTATUS WINAPI RegOpenUserClassesRoot(HANDLE token, DWORD o, REGSAM sam, PHKEY out) { (void)token; (void)o; return RegOpenKeyExW(HKEY_CLASSES_ROOT, 0, 0, sam, out); }
 WINBASEAPI LSTATUS WINAPI RegConnectRegistryW(LPCWSTR machine, HKEY key, PHKEY out)
 {

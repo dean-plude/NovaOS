@@ -1034,6 +1034,12 @@ servicing and print models Windows apps and drivers already expect.
   profile and registry hive, switches with the first account's apps still
   running, and a wrong password is refused (self-test `accounttest`, plus a
   screenshot of the sign-in screen).
+  *Progress:* local accounts in the SAM with Argon2id passwords, a token,
+  profile and `HKCU` hive per account, `LogonUser`, `NetUserAdd` and the
+  rest of `netapi32`, `LoadUserProfile`, the sign-in screen at boot and the
+  lock screen (Win+L, `LockWorkStation`) are in, tested by `accounttest`.
+  Still to do: the Settings page, sign-out and fast user switching
+  ([design/accounts.md](design/accounts.md)).
 - [ ] **33.2 Standard-user security and UAC.** New accounts are standard
   users with a filtered token and integrity levels; `consent.exe` shows the
   real UAC consent flow on a secure desktop for elevation. Done when a
@@ -1048,6 +1054,12 @@ servicing and print models Windows apps and drivers already expect.
   Done when CI applies a deliberately broken update in QEMU and the next boot
   returns to the previous image on its own, and the recovery menu starts safe
   mode and a repair run (boot test `rollbacktest`).
+  Part 1: a kernel stop during an update's first start restarts the PC,
+  which goes back to the previous kernel on its own; the devices suite's
+  `update` boot stages a kernel stamped to stop (`tools/mkupdate.py
+  --fail-boot panic`) and checks it. Next: a hardware watchdog for hangs,
+  the boot menu with the known-good set, safe mode and startup repair
+  (design in [design/recovery.md](design/recovery.md)).
 - [ ] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an
   existing NTFS partition, adds NovaOS to the firmware boot menu (and chains
@@ -1056,6 +1068,12 @@ servicing and print models Windows apps and drivers already expect.
   Windows-style NTFS volume leaves that volume's files intact, boots NovaOS
   and offers the other system in the boot menu; a screenshot of each
   installer page is in `docs/screenshots/`.
+  *Part 1 (in progress, [design](design/installer.md)):* Setup's window
+  shows each disk's partitions and free space and installs NovaOS beside
+  them in the free space (its own ESP and data partition; Windows'
+  partitions untouched), tested by the devices suite's `beside` boot;
+  shrinking NTFS, the boot menu entry for Windows and reinstalling over
+  NovaOS with the data kept are the next parts.
 - [ ] **33.5 Printing.** The Windows print model: a spooler service
   (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
   Print Management, real printer drivers loaded unchanged where they are

@@ -358,6 +358,21 @@ NTSYSAPI NTSTATUS NTAPI NtNovaFlushView(PVOID base);
 /* Console handles: modes and input records (op: 0 get mode, 1 set mode,
  * 2 read records, 3 peek, 4 write, 5 count, 6 flush, 7 size in cells) */
 NTSYSAPI NTSTATUS NTAPI NtNovaConsole(HANDLE h, ULONG op, PVOID buf, ULONG len, PULONG res);
+/* Local accounts, LogonUser, profiles and the lock screen (kernel/um/um_accounts.c):
+ * advapi32, netapi32, userenv and user32's kernel half.  @in is a
+ * NOVA_ACCOUNT_REQUEST (none for LIST, LOCK, SESSION); @out gets NOVA_ACCOUNT
+ * records (LIST: one per account), a token HANDLE (LOGON) or { session RID,
+ * locked } (SESSION). */
+typedef struct { ULONG Rid, Flags; CHAR Name[21], Password[257], OldPassword[257]; } NOVA_ACCOUNT_REQUEST;
+typedef struct { ULONG Rid, Flags, HasPassword; CHAR Name[21], FullName[64], Profile[96]; } NOVA_ACCOUNT;
+enum {
+    NOVA_ACCOUNT_LIST, NOVA_ACCOUNT_GET, NOVA_ACCOUNT_FIND, NOVA_ACCOUNT_ADD, NOVA_ACCOUNT_DELETE,
+    NOVA_ACCOUNT_SET_PASSWORD, NOVA_ACCOUNT_CHANGE_PASSWORD, NOVA_ACCOUNT_LOGON,
+    NOVA_ACCOUNT_LOAD_PROFILE, NOVA_ACCOUNT_LOCK, NOVA_ACCOUNT_DELETE_PROFILE, NOVA_ACCOUNT_SESSION,
+};
+#define NOVA_ACCOUNT_ADMIN    0x1
+#define NOVA_ACCOUNT_DISABLED 0x2
+NTSYSAPI NTSTATUS NTAPI NtNovaAccount(ULONG op, PVOID in, ULONG in_len, PVOID out, ULONG out_len, PULONG ret);
 /* Fill buf with len (<= 4096) cryptographically random bytes from the kernel entropy pool */
 NTSYSAPI NTSTATUS NTAPI NtNovaGetRandom(void *buf, ULONG len);
 NTSYSAPI INT_PTR  NTAPI NtNovaSocket(ULONG type, ULONG family);

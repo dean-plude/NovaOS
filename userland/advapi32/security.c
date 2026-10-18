@@ -1,9 +1,10 @@
 /*
  * security.c — advapi32's security API.
  *
- * NovaOS has one desktop user, but tokens and object security are real:
- * the kernel keeps tokens (the user, S-1-5-21-…-1001, member of Users,
- * with Administrators only for denying since nothing is elevated), a
+ * Tokens and object security are real: the kernel keeps a token per
+ * local account (S-1-5-21-…-<RID>, member of Users; an administrator's
+ * normal token has Administrators only for denying, its elevated one has
+ * it enabled), LogonUser checks an account's password for its token, a
  * thread can impersonate another token, restricted tokens can be made,
  * and named kernel objects keep the security descriptor they were created
  * with and check it when they are opened.  Files and directories on drive
@@ -30,6 +31,7 @@ NTSYSAPI BOOLEAN NTAPI RtlDosPathNameToNtPathName_U(PCWSTR dos, PUNICODE_STRING 
 NTSYSAPI VOID NTAPI RtlFreeUnicodeString(PUNICODE_STRING s);
 void *memcpy(void *d, const void *s, size_t n);
 void *memset(void *d, int c, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
 
 static const BYTE g_user_sid[] = {                      /* S-1-5-21-1000-2000-3000-1001 */
     1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 0xE8, 3, 0, 0, 0xD0, 7, 0, 0, 0xB8, 0x0B, 0, 0, 0xE9, 3, 0, 0 };
@@ -40,6 +42,52 @@ static const BYTE g_auth_users_sid[] = { 1, 1, 0, 0, 0, 0, 0, 5, 11, 0, 0, 0 }; 
 static const BYTE g_interactive_sid[] = { 1, 1, 0, 0, 0, 0, 0, 5, 4, 0, 0, 0 };                 /* S-1-5-4 */
 static const BYTE g_medium_il_sid[] = { 1, 1, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0 };               /* S-1-16-8192 */
 static const BYTE g_system_sid[] = { 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0 };                     /* S-1-5-18 */
+
+/* -----------------------------------------------------------------------
+ * Local accounts (the kernel's, NtNovaAccount: kernel/um/um_accounts.c)
+ * ----------------------------------------------------------------------- */
+static BOOL account_call(ULONG op, ULONG rid, const char *name, const char *pw, NOVA_ACCOUNT *out)
+{
+    NOVA_ACCOUNT_REQUEST rq;
+    memset(&rq, 0, sizeof(rq));
+    rq.Rid = rid;
+    for (int i = 0; name && name[i] && i < 20; i++) rq.Name[i] = name[i];
+    for (int i = 0; pw && pw[i] && i < 256; i++) rq.Password[i] = pw[i];
+    ULONG got = 0;
+    NTSTATUS st = NtNovaAccount(op, &rq, sizeof(rq), out, out ? sizeof(*out) : 0, &got);
+    memset(&rq, 0, sizeof(rq));
+    if (st) { SetLastError(RtlNtStatusToDosError(st)); return FALSE; }
+    return TRUE;
+}
+
+/* A local account's SID: the machine domain's (S-1-5-21-1000-2000-3000) and its RID */
+static void account_sid(ULONG rid, BYTE sid[28])
+{
+    memcpy(sid, g_user_sid, 24);
+    memcpy(sid + 24, &rid, 4);
+}
+static ULONG account_rid(PSID sid)
+{
+    const BYTE *s = sid;
+    if (!s || s[1] != 5 || memcmp(s, g_user_sid, 24)) return 0;
+    ULONG rid;
+    memcpy(&rid, s + 24, 4);
+    return rid >= 1000 ? rid : 0;
+}
+
+/* The account the calling thread runs as (its impersonation token, else
+ * its process's): its RID, or 0 */
+static ULONG token_rid(HANDLE token)
+{
+    HANDLE t = token;
+    if (!t && NtOpenThreadToken((HANDLE)(LONG_PTR)-2, TOKEN_QUERY, TRUE, &t) && NtOpenProcessToken((HANDLE)(LONG_PTR)-1, TOKEN_QUERY, &t))
+        return 0;
+    ULONG_PTR buf[16];
+    ULONG got;
+    NTSTATUS st = NtQueryInformationToken(t, 1 /* TokenUser */, buf, sizeof(buf), &got);
+    if (t != token) NtClose(t);
+    return st ? 0 : account_rid(*(PSID *)buf);
+}
 
 /* -----------------------------------------------------------------------
  * SIDs
@@ -337,7 +385,9 @@ WINADVAPI BOOL WINAPI IsWellKnownSid(PSID sid, int type)
 static const char *account_of(PSID sid, const char **domain, SID_NAME_USE *use)
 {
     if (!sid || !IsValidSid(sid)) return 0;
-    if (EqualSid(sid, (PSID)g_user_sid)) { *domain = "NOVAOS"; *use = SidTypeUser; return user_name(); }
+    static NOVA_ACCOUNT a;                     /* (the name points into it) */
+    ULONG rid = account_rid(sid);
+    if (rid && account_call(NOVA_ACCOUNT_GET, rid, 0, 0, &a)) { *domain = "NOVAOS"; *use = SidTypeUser; return a.Name; }
     static const BYTE domain_sid[] = { 1, 4, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 0xE8, 3, 0, 0, 0xD0, 7, 0, 0, 0xB8, 0x0B, 0, 0 };
     if (EqualSid(sid, (PSID)domain_sid)) { *domain = "NOVAOS"; *use = SidTypeDomain; return "NOVAOS"; }
     char str[200];
@@ -415,7 +465,14 @@ static const BYTE *account_named(const char *name, const char **domain, SID_NAME
     DWORD pcn = sizeof(pc);
     if (!GetComputerNameA(pc, &pcn)) pc[0] = 0;
     BOOL here = !dl || ieq_s(name, dl, "NOVAOS") || ieq_s(name, dl, pc) || ieq_s(name, dl, ".");   /* (this machine) */
-    if (ieq_s(n, nl, user_name()) && here) { *domain = "NOVAOS"; *use = SidTypeUser; return g_user_sid; }
+    static BYTE user[28];                      /* (the account's SID, returned) */
+    NOVA_ACCOUNT a;
+    char one[21];
+    if (here && nl <= 20) {
+        memcpy(one, n, nl);
+        one[nl] = 0;
+        if (account_call(NOVA_ACCOUNT_FIND, 0, one, 0, &a)) { account_sid(a.Rid, user); *domain = "NOVAOS"; *use = SidTypeUser; return user; }
+    }
     if (!dl && (ieq_s(n, nl, "NOVAOS") || ieq_s(n, nl, pc))) { *domain = "NOVAOS"; *use = SidTypeDomain; return domain_sid; }
     for (unsigned i = 0; i < sizeof(g_accounts) / sizeof(g_accounts[0]); i++) {
         if (!ieq_s(n, nl, g_accounts[i].name)) continue;
@@ -682,12 +739,83 @@ WINADVAPI BOOL WINAPI AdjustTokenPrivileges(HANDLE token, BOOL disable_all, PTOK
 
 WINADVAPI BOOL WINAPI PrivilegeCheck(HANDLE token, PPRIVILEGE_SET ps, LPBOOL result) { (void)token; (void)ps; *result = TRUE; return TRUE; }
 
+/* LogonUser: a local account (domain "", ".", NOVAOS or the computer's
+ * name) and its password; the token is a new primary token for it, the
+ * limited one for an administrator, as Windows gives with UAC on.  Every
+ * logon type is interactive here (network logons need no blank-password
+ * rule: nothing signs in over the network) */
+static BOOL logon_utf8(const char *user, const char *domain, const char *pass, PHANDLE token)
+{
+    char pc[64];
+    DWORD pcn = sizeof(pc);
+    if (!GetComputerNameA(pc, &pcn)) pc[0] = 0;
+    size_t dl = domain ? strlen_(domain) : 0;
+    if (dl && !ieq_s(domain, dl, ".") && !ieq_s(domain, dl, "NOVAOS") && !ieq_s(domain, dl, pc)) {
+        *token = 0;
+        SetLastError(1355 /* ERROR_NO_SUCH_DOMAIN */);
+        return FALSE;
+    }
+    const char *at = user;                              /* user@domain */
+    char name[21];
+    size_t i = 0;
+    for (; at && at[i] && at[i] != '@' && i < 20; i++) name[i] = at[i];
+    name[i] = 0;
+    NOVA_ACCOUNT_REQUEST rq;
+    memset(&rq, 0, sizeof(rq));
+    memcpy(rq.Name, name, i + 1);
+    for (int j = 0; pass && pass[j] && j < 256; j++) rq.Password[j] = pass[j];
+    HANDLE h = 0;
+    ULONG got = 0;
+    NTSTATUS st = NtNovaAccount(NOVA_ACCOUNT_LOGON, &rq, sizeof(rq), &h, sizeof(h), &got);
+    memset(&rq, 0, sizeof(rq));
+    *token = st ? 0 : h;
+    if (st) { SetLastError(st == (NTSTATUS)0xC0000072 ? 1331 /* ERROR_ACCOUNT_DISABLED */ : 1326 /* ERROR_LOGON_FAILURE */); return FALSE; }
+    SetLastError(ERROR_SUCCESS);
+    return TRUE;
+}
+
+static char *w2u(LPCWSTR w)
+{
+    if (!w) return 0;
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, 0, 0, 0, 0);
+    char *s = n > 0 ? HeapAlloc(GetProcessHeap(), 0, (SIZE_T)n) : 0;
+    if (s) WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, 0, 0);
+    return s;
+}
+
+static void free_secret(char *s)
+{
+    if (!s) return;
+    for (char *p = s; *p; p++) *(volatile char *)p = 0;
+    HeapFree(GetProcessHeap(), 0, s);
+}
+
 WINADVAPI BOOL WINAPI LogonUserW(LPCWSTR user, LPCWSTR domain, LPCWSTR pass, DWORD type, DWORD prov, PHANDLE token)
 {
-    (void)user; (void)domain; (void)pass; (void)type; (void)prov;
-    *token = 0;
-    SetLastError(1326 /* ERROR_LOGON_FAILURE */);
-    return FALSE;
+    (void)type; (void)prov;
+    char *u = w2u(user), *d = w2u(domain), *p = w2u(pass);
+    BOOL ok = u ? logon_utf8(u, d, p, token) : (SetLastError(ERROR_INVALID_PARAMETER), FALSE);
+    DWORD e = GetLastError();
+    free_secret(u); free_secret(d); free_secret(p);
+    SetLastError(e);
+    return ok;
+}
+
+WINADVAPI BOOL WINAPI LogonUserA(LPCSTR user, LPCSTR domain, LPCSTR pass, DWORD type, DWORD prov, PHANDLE token)
+{
+    (void)type; (void)prov;
+    if (!user) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    return logon_utf8(user, domain, pass, token);
+}
+
+WINADVAPI BOOL WINAPI LogonUserExW(LPCWSTR user, LPCWSTR domain, LPCWSTR pass, DWORD type, DWORD prov, PHANDLE token,
+                                   PSID *logon_sid, PVOID *profile, LPDWORD profile_len, PVOID quota)
+{
+    if (logon_sid) *logon_sid = 0;
+    if (profile) *profile = 0;
+    if (profile_len) *profile_len = 0;
+    (void)quota;
+    return LogonUserW(user, domain, pass, type, prov, token);
 }
 
 /* Starts the program suspended, gives it @token (NtSetInformationProcess
@@ -729,13 +857,16 @@ WINADVAPI BOOL WINAPI CreateProcessWithTokenW(HANDLE token, DWORD logon, LPCWSTR
 /* -----------------------------------------------------------------------
  * User name
  * ----------------------------------------------------------------------- */
+/* The calling thread's account (its token's, as Windows' GetUserName);
+ * %USERNAME% when the token is no local account's */
 const char *user_name(void)
 {
     static char name[64];
-    if (!name[0]) {
-        DWORD n = GetEnvironmentVariableA("USERNAME", name, sizeof(name));
-        if (!n || n >= sizeof(name)) memcpy(name, "User", 5);
-    }
+    NOVA_ACCOUNT a;
+    ULONG rid = token_rid(0);
+    if (rid && account_call(NOVA_ACCOUNT_GET, rid, 0, 0, &a)) { memcpy(name, a.Name, sizeof(a.Name)); return name; }
+    DWORD n = GetEnvironmentVariableA("USERNAME", name, sizeof(name));
+    if (!n || n >= sizeof(name)) memcpy(name, "User", 5);
     return name;
 }
 

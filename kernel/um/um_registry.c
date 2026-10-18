@@ -32,6 +32,7 @@
 #define ST_BUFFER_OVERFLOW       0x80000005u
 #define ST_NO_MORE_ENTRIES       0x8000001Au
 #define ST_INVALID_HANDLE        0xC0000008u
+#define ST_ACCESS_DENIED         0xC0000022u
 #define ST_INVALID_PARAMETER     0xC000000Du
 #define ST_NO_MEMORY             0xC0000017u
 #define ST_BUFFER_TOO_SMALL      0xC0000023u
@@ -496,6 +497,21 @@ bool um_registry_delete_value(const char *path, const char *name)
             }
         um_unlock(key_lock(k));
     }
+    um_unlock_excl(&g_reg);
+    return done;
+}
+
+/* Delete a key and everything below it (the account store, um_accounts.c):
+ * true when it was there.  @path is ASCII, without "\Registry\". */
+bool um_registry_delete_tree(const char *path)
+{
+    UINT16 w[256];
+    UINT32 n = 0;
+    for (; path[n] && n < 255; n++) w[n] = (UINT8)path[n];
+    um_lock_excl(&g_reg);
+    RegKey *k = NULL;
+    bool done = walk(g_root, w, n, false, false, &k, NULL) == ST_SUCCESS && k && k != g_root && k->parent != g_root;
+    if (done) detach(k);
     um_unlock_excl(&g_reg);
     return done;
 }
@@ -1282,6 +1298,24 @@ static UINT32 give(UINT64 out, UINT32 cap, const UINT8 *info, UINT32 need, UINT3
  * The services
  * ----------------------------------------------------------------------- */
 
+/* HKLM\SAM\SAM, the account store (um_accounts.c: names, password
+ * hashes): no program opens it, as on Windows, where only SYSTEM may and
+ * lsass is the one that does.  Programs reach accounts through
+ * NtNovaAccount (LogonUser, NetUser*, LookupAccountSid). */
+static bool is_named(const RegKey *k, const char *s)
+{
+    UINT32 n = 0;
+    for (; s[n]; n++) if (n >= k->nlen || fold(k->name[n]) != fold((UINT8)s[n])) return false;
+    return n == k->nlen;
+}
+static bool in_sam(const RegKey *k)
+{
+    for (; k && k->parent && k->parent->parent; k = k->parent)
+        if (k->parent->parent->parent == g_root && is_named(k, "SAM") && is_named(k->parent, "SAM") &&
+            is_named(k->parent->parent, "Machine")) return true;
+    return false;
+}
+
 static UINT32 view_path(RegKey *start, const UINT16 *path, UINT32 n, UINT32 reg_view, bool leave_wow,
                         UINT16 **out, UINT32 *out_n);
 
@@ -1323,6 +1357,12 @@ static UINT32 open_or_create(UINT64 handle_ptr, UINT64 oa_ptr, bool create, UINT
         kfree(resolved);
         um_unlock_excl(&g_reg);
     } else if (!st) st = found;
+    if (!st) {
+        um_lock_shared(&g_reg);
+        bool sam = in_sam(k);
+        um_unlock_shared(&g_reg);
+        if (sam) { key_unref(k); st = ST_ACCESS_DENIED; }
+    }
     if (path != small) kfree(path);
     if (rob) um_ob_unref(rob);
     UINT64 h = 0;
@@ -2042,10 +2082,12 @@ static void env_key(const char *path, bool user, void (*cb)(void *, const char *
     }
 }
 
-void um_registry_environment(void (*cb)(void *, const char *, const char *, bool, bool), void *ctx)
+void um_registry_environment(const char *sid, void (*cb)(void *, const char *, const char *, bool, bool), void *ctx)
 {
+    char user[96];
+    ksnprintf(user, sizeof(user), "User\\%s\\Environment", sid ? sid : USER_SID);
     um_lock_excl(&g_reg);
     env_key("Machine\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", false, cb, ctx);
-    env_key("User\\" USER_SID "\\Environment", true, cb, ctx);
+    env_key(user, true, cb, ctx);
     um_unlock_excl(&g_reg);
 }

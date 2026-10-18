@@ -7,6 +7,9 @@ answers.  This note lists, per system, what it asks, what NovaOS answers
 today and what is missing, so the store and gaming steps (24.1 to 24.6)
 know what they can promise.
 
+The one-line status of each system is also in the [compatibility
+list](../compatibility.md#anti-cheat-and-drm-systems).
+
 ## The rule
 
 Anti-cheat, DRM and code signing are **never bypassed, spoofed or patched

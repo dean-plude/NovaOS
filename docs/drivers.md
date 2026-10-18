@@ -601,12 +601,17 @@ scan heard). The driver indicates the access point as its peer
 becomes the network stack's. Ethernet frames go out as 802.11 frames to
 the access point (ToDS, LLC/SNAP), and the answers come back the same
 way, so DHCP and the rest of TCP/IP run over Wi-Fi. `netsh wlan
+connect name=SSID key=PASSPHRASE` joins a WPA2-Personal network (CCMP):
+NovaOS exempts EAPOL from encryption
+(`OID_WDI_SET_PRIVACY_EXEMPTION_LIST`), connects with RSNA-PSK
+authentication, runs the 4-way handshake itself (`kernel/nt/wpa.c` on
+Mbed TLS, with group rekeys) and installs the pairwise and group keys
+(`OID_WDI_SET_ADD_CIPHER_KEYS`); the driver encrypts and decrypts. `netsh wlan
 disconnect` leaves (`OID_WDI_TASK_DISCONNECT`) and the stack goes back to
 the card it had. Disabling the device disconnects, deletes the port and
 stops the data path before the adapter closes.
 
-What is missing: WPA2 and WPA3 (the 4-way handshake and SAE, and
-`OID_WDI_SET_ADD_CIPHER_KEYS`), frames the driver injects itself,
+What is missing: WPA3 (SAE), WPA2-Enterprise, frames the driver injects itself,
 `wlanapi.dll` for programs and Settings' Wi-Fi page. That is the rest of
 roadmap step 28.1; scanning and joining on the real card needs the T14.
 
@@ -619,7 +624,12 @@ The test installs it with `pnputil` and checks the messages and data
 path calls from both sides (the driver reports what it was sent): the
 capabilities, configuration and port, the scan and the two `netsh wlan`
 listings. It also connects to the open network, gets 192.168.77.100 by
-DHCP and pings the router over the data path. Then it disconnects, and on
+DHCP and pings the router over the data path. Then it joins the WPA2
+network: a wrong passphrase is refused, and with the right one the
+driver's access point (its own SHA-1 and AES, `tools/drivertest/wpaap.h`)
+runs the 4-way handshake, checks the EAPOL exemption and the keys NovaOS
+installs, drops data before the keys and rekeys the group key once while
+NovaOS pings. Then it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 
@@ -660,8 +670,13 @@ start and lists them as render adapters to the `D3DKMT*` calls, which
 create devices and allocations through the driver
 (`DxgkDdiCreateDevice`, `CreateAllocation`, `OpenAllocation`). The test
 driver is `wddmtest.sys` (`tools/drivertest/wddmtest.c`), a render-only
-miniport whose GPU is software, on a root-enumerated device. Not there
-yet: GPU virtual addresses, command submission and the scheduler,
+miniport whose GPU is software, on a root-enumerated device. A driver
+with a GPU MMU (WDDM 2.0's GpuMmu) also gets GPU virtual addresses: a
+process object (`DxgkDdiCreateProcess`) and an address space per process,
+whose page tables VidMm keeps in system memory and the driver writes
+(`DxgkDdiBuildPagingBuffer`'s `UPDATE_PAGE_TABLE` and `FLUSH_TLB`, done
+with the CPU for now). Not there yet: page tables the GPU updates,
+command submission and the scheduler,
 interrupts and vertical blanks, a full driver's display, power states,
 and more than one source.
 

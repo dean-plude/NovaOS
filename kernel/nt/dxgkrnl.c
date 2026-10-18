@@ -57,10 +57,27 @@
  *                           DestroyDevice; whatever a removed adapter still
  *                           has goes before it stops
  *
+ * Step 3's third part: GPU virtual addresses, WDDM 2.0's GpuMmu model.  A
+ * driver that says GpuMmuSupported describes its page tables
+ * (DXGKQAITYPE_GPUMMUCAPS, DXGKQAITYPE_PAGETABLELEVELDESC per level, the
+ * root's size from DxgkDdiGetRootPageTableSize when there are two levels);
+ * each process gets the driver's process object (DxgkDdiCreateProcess,
+ * passed to DxgkDdiCreateDevice) and one address space on the adapter,
+ * which its devices share.  VidMm (here) owns the address space: it picks
+ * or checks the ranges (D3DKMTReserveGpuVirtualAddress,
+ * D3DKMTMapGpuVirtualAddress, D3DKMTFreeGpuVirtualAddress), makes the
+ * page tables, in system memory, and has the driver write their entries
+ * from DXGK_PTEs (DxgkDdiBuildPagingBuffer, DXGK_OPERATION_UPDATE_PAGE_TABLE,
+ * then DXGK_OPERATION_FLUSH_TLB).  Only drivers that update their page
+ * tables with the CPU (DXGK_PAGETABLEUPDATE_CPU_VIRTUAL) are served yet: a
+ * paging buffer with GPU commands in it waits for submission, the next part.
+ * An allocation destroyed while mapped leaves its range reserved but
+ * unmapped.
+ *
  * Tested by tools/drivertest/wddmtest.c, a render miniport whose GPU is
- * software.  Not yet: GPU virtual addresses, paging buffers and residency
- * (allocations stay where they are placed, never evicted), contexts and
- * submission, interrupts, fences the GPU signals, preemption and TDR (the
+ * software.  Not yet: eviction (allocations stay where they are placed;
+ * residency is counted, um_d3dkmt.c), paging buffers the GPU runs, contexts
+ * and submission, interrupts, fences the GPU signals, preemption and TDR (the
  * next parts of step 3), and a full driver's display (step 2, on the T14:
  * its outputs are counted but the desktop is not offered to it), power
  * states, more than one source, and monitor interfaces.
@@ -81,6 +98,8 @@
 #define MAX_CHILDREN 4
 #define MAX_MAPS    8
 #define MAX_SEGS    8
+#define MAX_LEVELS  4                      /* page table levels (DXGK_MAX_PAGE_TABLE_LEVEL_COUNT) */
+#define VA_ALIGN    0x10000ull             /* ranges VidMm picks: 64 KiB aligned, as Windows' are */
 #define ST_NO_VIDEO_MEMORY ((NT_STATUS)0xC01E0100)   /* STATUS_GRAPHICS_NO_VIDEO_MEMORY */
 
 typedef struct DxgkDriver {
@@ -120,7 +139,42 @@ typedef struct DxgkAdapter {
     struct { UINT64 size, used; UINT32 flags; } seg[MAX_SEGS];   /* (segment n + 1) */
     struct DxgkDev    *devs;
     struct DxgkAlloc  *allocs;
+    /* its GPU virtual addresses (gpummu: the driver said GpuMmuSupported and
+     * its page tables are ones VidMm can make) */
+    bool               gpummu;
+    int                levels;             /* page table levels, 0 the root */
+    UINT32             vabits;
+    struct { UINT32 bits, shift, entries; } lvl[MAX_LEVELS];
+    void              *pbuf;               /* the paging buffer DxgkDdiBuildPagingBuffer writes into */
+    UINT32             pbuf_size;
+    struct DxgkProc   *procs;
 } DxgkAdapter;
+
+/* A page table VidMm made: one page of system memory, and (above the
+ * leaves) the tables its entries point to */
+typedef struct DxgkTable {
+    PADDR              pa;
+    struct DxgkTable **child;
+} DxgkTable;
+
+/* A range of a process's GPU virtual addresses: reserved, or mapped to
+ * (part of) an allocation */
+typedef struct DxgkRange {
+    struct DxgkRange *next;                /* (in address order) */
+    UINT64           base, size;
+    UINT32           alloc;                /* dxgkrnl's handle; 0: reserved only */
+} DxgkRange;
+
+/* A process's view of an adapter: the driver's process object and the
+ * address space the process's devices share */
+typedef struct DxgkProc {
+    struct DxgkProc *next;
+    void            *owner;                /* the NovaOS process */
+    void            *kmd;                  /* the driver's (DxgkDdiCreateProcess) */
+    int              devices;
+    DxgkTable       *root;
+    DxgkRange       *ranges;
+} DxgkProc;
 
 /* A render adapter's device and allocations: dxgkrnl's handle for each,
  * and the driver's */
@@ -128,6 +182,7 @@ typedef struct DxgkDev {
     struct DxgkDev *next;
     UINT32          handle;
     void           *kmd;
+    DxgkProc       *proc;
 } DxgkDev;
 
 typedef struct DxgkAlloc {
@@ -841,9 +896,62 @@ static void fill_interface(DxgkAdapter *a)
     cb->DxgkCbAcquirePostDisplayOwnership = cb_post_display;
 }
 
+/* A GpuMmu driver's page tables (DXGKQAITYPE_GPUMMUCAPS, then each level's
+ * DXGKQAITYPE_PAGETABLELEVELDESC): what VidMm can make of them, or false */
+static bool gpummu_start(DxgkAdapter *a)
+{
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    const char *svc = a->drv->service;
+    DXGK_GPUMMUCAPS mmu;
+    memset(&mmu, 0, sizeof(mmu));
+    DXGKARG_QUERYADAPTERINFO q = { DXGKQAITYPE_GPUMMUCAPS, NULL, 0, &mmu, sizeof(mmu), 0, NULL };
+    NT_STATUS st = ddi->DxgkDdiQueryAdapterInfo(a->ctx, &q);
+    if (!NT_SUCCESS_(st) || mmu.PageTableLevelCount < 2 || mmu.PageTableLevelCount > MAX_LEVELS ||
+        mmu.VirtualAddressBitCount < 24 || mmu.VirtualAddressBitCount > 48) {
+        kprintf("[DXGK] %s: no usable GPU MMU caps (0x%08x)\n", svc, (UINT32)st);
+        return false;
+    }
+    if (mmu.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL || !ddi->DxgkDdiBuildPagingBuffer) {
+        kprintf("[DXGK] %s: page tables updated by the GPU (mode %d): not yet\n", svc, mmu.PageTableUpdateMode);
+        return false;
+    }
+    int n = (int)mmu.PageTableLevelCount;
+    UINT32 used = 12;                                     /* (VidMm's entries cover 4 KiB) */
+    for (int l = n - 1; l >= 0; l--) {
+        DXGK_PAGE_TABLE_LEVEL_DESC d;
+        memset(&d, 0, sizeof(d));
+        UINT32 level = (UINT32)l;
+        DXGKARG_QUERYADAPTERINFO ql = { DXGKQAITYPE_PAGETABLELEVELDESC, &level, sizeof(level), &d, sizeof(d), 0, NULL };
+        st = ddi->DxgkDdiQueryAdapterInfo(a->ctx, &ql);
+        UINT32 bits = l == 0 && n == 2 ? mmu.VirtualAddressBitCount - used : d.PageTableIndexBitCount;
+        bool fixed = l || n > 2;                          /* (a resizable root is sized below) */
+        if (!NT_SUCCESS_(st) || d.PageTableSegmentId || !bits || bits > 12 || used + bits > mmu.VirtualAddressBitCount ||
+            (fixed && d.PageTableSizeInBytes > PAGE_SIZE)) {
+            kprintf("[DXGK] %s: page table level %d not in system memory or over a page (0x%08x)\n", svc, l, (UINT32)st);
+            return false;
+        }
+        a->lvl[l].bits = bits;
+        a->lvl[l].shift = used;
+        a->lvl[l].entries = 1u << bits;
+        used += bits;
+    }
+    if (n == 2) {                                         /* (a resizable root: its size from the driver) */
+        DXGKARG_GETROOTPAGETABLESIZE r = { a->lvl[0].entries, 0 };
+        UINT64 bytes = ddi->DxgkDdiGetRootPageTableSize ? ddi->DxgkDdiGetRootPageTableSize(a->ctx, &r) : 0;
+        if (!bytes || bytes > PAGE_SIZE || r.NumberOfPte < a->lvl[0].entries) {
+            kprintf("[DXGK] %s: a root page table of %llu bytes: not yet\n", svc, (unsigned long long)bytes);
+            return false;
+        }
+    }
+    a->levels = n;
+    a->vabits = used;
+    kprintf("[DXGK] %s: GPU MMU, %d page table levels, %u-bit GPU virtual addresses\n", svc, n, used);
+    return true;
+}
+
 /* A render adapter's segments (DXGKQAITYPE_QUERYSEGMENT4: asked for the
- * count, then for the descriptors) */
-static void render_start(DxgkAdapter *a)
+ * count, then for the descriptors), and its GPU virtual addresses */
+static void render_start(DxgkAdapter *a, UINT32 mmcaps)
 {
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
     const char *svc = a->drv->service;
@@ -880,12 +988,251 @@ static void render_start(DxgkAdapter *a)
     a->nseg = (int)n;
     kprintf("[DXGK] %s: render adapter, LUID 0x%x, %d segment(s), %llu MB (%s)\n", svc, a->luid, a->nseg,
             (unsigned long long)(total >> 20), sys ? "system memory" : "video memory");
+    a->gpummu = false;
+    if (!(mmcaps & DXGK_VIDMMCAPS_GPUMMU)) return;
+    a->pbuf_size = out.PagingBufferSize < PAGE_SIZE ? PAGE_SIZE : out.PagingBufferSize > 0x10000 ? 0x10000 : out.PagingBufferSize;
+    if (!a->pbuf) a->pbuf = kzalloc(0x10000);
+    a->gpummu = a->pbuf && gpummu_start(a);
+}
+
+/* -----------------------------------------------------------------------
+ * GPU virtual addresses: a process's page tables, written by the driver
+ * (each call with the adapter's lock held)
+ * ----------------------------------------------------------------------- */
+static void *table_ptr(const DxgkTable *t) { return (void *)(uintptr_t)(PHYSMAP_BASE + t->pa); }
+static UINT32 va_index(const DxgkAdapter *a, int l, UINT64 va) { return (UINT32)(va >> a->lvl[l].shift) & (a->lvl[l].entries - 1); }
+
+/* DXGK_OPERATION_UPDATE_PAGE_TABLE: @n of table @t's entries from @start,
+ * from @e (one entry repeated with DXGK_UPDATEPT_REPEAT); the driver
+ * writes them with the CPU, so its paging buffer must stay empty */
+static NT_STATUS pt_write(DxgkAdapter *a, DxgkProc *p, int l, DxgkTable *t, UINT32 start, UINT32 n, DXGK_PTE *e,
+                          UINT32 flags, void *alloc, UINT64 offset, UINT64 va)
+{
+    DXGKARG_BUILDPAGINGBUFFER b;
+    memset(&b, 0, sizeof(b));
+    b.pDmaBuffer = a->pbuf;
+    b.DmaSize = a->pbuf_size;
+    b.Operation = DXGK_OPERATION_UPDATE_PAGE_TABLE;
+    DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *u = &b.UpdatePageTable;
+    u->PageTableLevel = (unsigned int)l;
+    u->hAllocation = alloc;
+    u->PageTableAddress.CpuVirtual = table_ptr(t);
+    u->pPageTableEntries = e;
+    u->StartIndex = start;
+    u->NumPageTableEntries = n;
+    u->Flags = flags;
+    u->AllocationOffsetInBytes = offset;
+    u->hProcess = p->kmd;
+    u->UpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
+    u->FirstPteVirtualAddress = va;
+    NT_STATUS st = a->drv->full.DxgkDdiBuildPagingBuffer(a->ctx, &b);
+    if (NT_SUCCESS_(st) && b.pDmaBuffer != a->pbuf) {
+        kprintf("[DXGK] %s: its page table updates need the GPU to run them: not yet\n", a->drv->service);
+        st = NT_STATUS_NOT_SUPPORTED;
+    }
+    return st;
+}
+
+static void tlb_flush(DxgkAdapter *a, DxgkProc *p, UINT64 start, UINT64 end)
+{
+    DXGKARG_BUILDPAGINGBUFFER b;
+    memset(&b, 0, sizeof(b));
+    b.pDmaBuffer = a->pbuf;
+    b.DmaSize = a->pbuf_size;
+    b.Operation = DXGK_OPERATION_FLUSH_TLB;
+    b.FlushTlb = (DXGK_BUILDPAGINGBUFFER_FLUSHTLB){ p->root->pa, p->kmd, start, end };
+    a->drv->full.DxgkDdiBuildPagingBuffer(a->ctx, &b);
+}
+
+static void table_free(DxgkAdapter *a, DxgkTable *t, int l)
+{
+    if (!t) return;
+    if (t->child)
+        for (UINT32 i = 0; i < a->lvl[l].entries; i++) table_free(a, t->child[i], l + 1);
+    kfree(t->child);
+    pmm_free_page(t->pa);
+    kfree(t);
+}
+
+/* A new level-@l table, every entry made invalid by the driver (InitialUpdate) */
+static DxgkTable *table_new(DxgkAdapter *a, DxgkProc *p, int l, UINT64 va)
+{
+    DxgkTable *t = kzalloc(sizeof(*t));
+    if (!t) return NULL;
+    t->pa = pmm_alloc_page();
+    bool leaf = l == a->levels - 1;
+    if (t->pa && !leaf) t->child = kzalloc(sizeof(DxgkTable *) * a->lvl[l].entries);
+    if (!t->pa || (!leaf && !t->child)) {
+        if (t->pa) pmm_free_page(t->pa);
+        kfree(t);
+        return NULL;
+    }
+    memset(table_ptr(t), 0, PAGE_SIZE);
+    DXGK_PTE none = { 0, 0 };
+    if (!NT_SUCCESS_(pt_write(a, p, l, t, 0, a->lvl[l].entries, &none, DXGK_UPDATEPT_REPEAT | DXGK_UPDATEPT_INITIAL_UPDATE,
+                              NULL, 0, va))) {
+        kfree(t->child);
+        t->child = NULL;
+        table_free(a, t, l);
+        return NULL;
+    }
+    return t;
+}
+
+/* The leaf table holding @va's entry, made (with the tables above it) if @make */
+static DxgkTable *leaf_of(DxgkAdapter *a, DxgkProc *p, UINT64 va, bool make)
+{
+    DxgkTable *t = p->root;
+    for (int l = 0; t && l < a->levels - 1; l++) {
+        UINT32 i = va_index(a, l, va);
+        if (!t->child[i] && make) {
+            UINT64 cover = va >> a->lvl[l].shift << a->lvl[l].shift;
+            DxgkTable *c = table_new(a, p, l + 1, cover);
+            DXGK_PTE e = { DXGK_PTE_VALID, c ? c->pa >> 12 : 0 };
+            if (c && !NT_SUCCESS_(pt_write(a, p, l, t, i, 1, &e, 0, NULL, 0, cover))) { table_free(a, c, l + 1); c = NULL; }
+            t->child[i] = c;
+        }
+        t = t->child[i];
+    }
+    return t;
+}
+
+/* Point @pages entries from @va at @frames (NULL: make them invalid) */
+static NT_STATUS va_write(DxgkAdapter *a, DxgkProc *p, UINT64 va, UINT64 pages, const PADDR *frames, UINT64 prot,
+                          DxgkAlloc *al, UINT64 first)
+{
+    UINT32 per = a->lvl[a->levels - 1].entries;
+    DXGK_PTE *e = kmalloc(sizeof(DXGK_PTE) * per);
+    if (!e) return NT_STATUS_NO_MEMORY;
+    NT_STATUS st = NT_STATUS_SUCCESS;
+    UINT64 flags = DXGK_PTE_VALID | (prot & 1 ? 0 : DXGK_PTE_READ_ONLY) | (prot & 2 ? 0 : DXGK_PTE_NO_EXECUTE);
+    for (UINT64 done = 0; done < pages && NT_SUCCESS_(st);) {
+        UINT64 at = va + done * PAGE_SIZE;
+        UINT32 start = va_index(a, a->levels - 1, at);
+        UINT32 n = (UINT32)(pages - done < per - start ? pages - done : per - start);
+        DxgkTable *t = leaf_of(a, p, at, frames != NULL);
+        if (!t) {
+            if (frames) st = NT_STATUS_NO_MEMORY;
+            done += n;
+            continue;
+        }
+        for (UINT32 i = 0; i < n; i++)
+            e[i] = frames ? (DXGK_PTE){ flags, frames[first + done + i] >> 12 } : (DXGK_PTE){ 0, 0 };
+        st = pt_write(a, p, a->levels - 1, t, start, n, e, 0, frames && al ? al->kmd : NULL,
+                      (first + done) * PAGE_SIZE, at);
+        done += n;
+    }
+    kfree(e);
+    tlb_flush(a, p, va, va + pages * PAGE_SIZE);
+    return st;
+}
+
+static void range_unmap(DxgkAdapter *a, DxgkProc *p, DxgkRange *r)
+{
+    if (!r->alloc) return;
+    va_write(a, p, r->base, r->size / PAGE_SIZE, NULL, 0, NULL, 0);
+    r->alloc = 0;
+}
+
+/* A free range of @size in [@min, @max), VA_ALIGN aligned; 0 if none */
+static UINT64 va_find(DxgkAdapter *a, DxgkProc *p, UINT64 min, UINT64 max, UINT64 size)
+{
+    UINT64 top = 1ull << a->vabits;
+    if (!max || max > top) max = top;
+    UINT64 at = min < VA_ALIGN ? VA_ALIGN : (min + VA_ALIGN - 1) & ~(VA_ALIGN - 1);
+    for (DxgkRange *r = p->ranges;; r = r->next) {
+        UINT64 end = r ? r->base : max;
+        if (at + size <= end && at + size <= max && at + size > at) return at;
+        if (!r) return 0;
+        if (r->base + r->size > at) at = (r->base + r->size + VA_ALIGN - 1) & ~(VA_ALIGN - 1);
+    }
+}
+
+/* A new range record [@base, +@size), in order */
+static DxgkRange *range_add(DxgkProc *p, UINT64 base, UINT64 size)
+{
+    DxgkRange *r = kzalloc(sizeof(*r));
+    if (!r) return NULL;
+    r->base = base;
+    r->size = size;
+    DxgkRange **pp = &p->ranges;
+    while (*pp && (*pp)->base < base) pp = &(*pp)->next;
+    r->next = *pp;
+    *pp = r;
+    return r;
+}
+
+/* The record exactly [@base, +@size), split out of the one reservation
+ * holding it; NULL if no one range holds it */
+static DxgkRange *range_carve(DxgkAdapter *a, DxgkProc *p, UINT64 base, UINT64 size)
+{
+    DxgkRange *r = p->ranges;
+    while (r && !(base >= r->base && base + size <= r->base + r->size)) r = r->next;
+    if (!r || (r->alloc && (r->base != base || r->size != size))) return NULL;   /* (part of a mapped one: no) */
+    range_unmap(a, p, r);
+    if (r->base + r->size > base + size && !range_add(p, base + size, r->base + r->size - base - size)) return NULL;
+    if (r->base < base) {
+        r->size = base - r->base;
+        return range_add(p, base, size);
+    }
+    r->size = size;
+    return r;
+}
+
+static void proc_release(DxgkAdapter *a, DxgkProc *p)
+{
+    if (--p->devices) return;
+    while (p->ranges) {                                   /* (no unmapping: the tables go too) */
+        DxgkRange *r = p->ranges;
+        p->ranges = r->next;
+        kfree(r);
+    }
+    table_free(a, p->root, 0);
+    if (a->drv->full.DxgkDdiCreateProcess && a->drv->full.DxgkDdiDestroyProcess)
+        a->drv->full.DxgkDdiDestroyProcess(a->ctx, p->kmd);
+    for (DxgkProc **pp = &a->procs; *pp; pp = &(*pp)->next)
+        if (*pp == p) { *pp = p->next; break; }
+    kfree(p);
+}
+
+/* @owner's process on @a, made (DxgkDdiCreateProcess, its root page table)
+ * on its first device */
+static DxgkProc *proc_get(DxgkAdapter *a, void *owner)
+{
+    for (DxgkProc *p = a->procs; p; p = p->next)
+        if (p->owner == owner) { p->devices++; return p; }
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    DxgkProc *p = kzalloc(sizeof(*p));
+    if (!p) return NULL;
+    p->owner = owner;
+    if (ddi->DxgkDdiCreateProcess) {
+        DXGKARG_CREATEPROCESS cp;
+        memset(&cp, 0, sizeof(cp));
+        cp.hDxgkProcess = p;
+        NT_STATUS st = ddi->DxgkDdiCreateProcess(a->ctx, &cp);
+        if (!NT_SUCCESS_(st)) {
+            kprintf("[DXGK] %s: DxgkDdiCreateProcess failed (0x%08x)\n", a->drv->service, (UINT32)st);
+            kfree(p);
+            return NULL;
+        }
+        p->kmd = cp.hKmdProcess;
+    }
+    p->devices = 1;
+    p->next = a->procs;
+    a->procs = p;
+    if (a->gpummu && !(p->root = table_new(a, p, 0, 0))) {
+        proc_release(a, p);
+        return NULL;
+    }
+    return p;
 }
 
 static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
 {
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
     DXGKARG_CLOSEALLOCATION c = { 1, &al->devspec };
+    for (DxgkRange *r = al->dev->proc ? al->dev->proc->ranges : NULL; r; r = r->next)
+        if (r->alloc == al->handle) range_unmap(a, al->dev->proc, r);   /* (its ranges stay reserved) */
     if (al->devspec) ddi->DxgkDdiCloseAllocation(al->dev->kmd, &c);
     DXGKARG_DESTROYALLOCATION d = { 1, &al->kmd, NULL, 0 };
     ddi->DxgkDdiDestroyAllocation(a->ctx, &d);
@@ -902,6 +1249,7 @@ static void dev_free(DxgkAdapter *a, DxgkDev *d)
         if (al->dev == d) alloc_free(a, al);
     }
     a->drv->full.DxgkDdiDestroyDevice(d->kmd);
+    if (d->proc) proc_release(a, d->proc);
     for (DxgkDev **pp = &a->devs; *pp; pp = &(*pp)->next)
         if (*pp == d) { *pp = d->next; break; }
     kfree(d);
@@ -946,7 +1294,7 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
         kprintf("[DXGK] %s: started, %u source(s), %u output(s)\n", svc, sources, children);
     a->wddm = caps.WDDMVersion;
     if (a->drv->render) {
-        render_start(a);
+        render_start(a, caps.MemoryManagementCaps.Value);
         if (sources)                              /* (a full driver's display is step 2's) */
             kprintf("[DXGK] %s: its outputs are not used yet; the screen stays the built-in driver's\n", svc);
         return NT_STATUS_SUCCESS;
@@ -1039,6 +1387,7 @@ static void adapter_free(DxgkAdapter *a)
         if (*pp == a) { *pp = a->next; break; }
     a->drv->adapters--;
     kfree(a->xlat);
+    kfree(a->pbuf);
     kfree(a);
 }
 
@@ -1297,6 +1646,7 @@ static void render_info(const DxgkAdapter *a, DxgkRenderInfo *out)
     out->luid = a->luid;
     strncpy(out->service, a->drv->service, sizeof(out->service) - 1);
     out->wddm = (UINT32)a->wddm;
+    out->va_bits = a->gpummu ? a->vabits : 0;
     out->system = true;
     for (int i = 0; i < a->nseg; i++) {
         out->memory += a->seg[i].size;
@@ -1335,19 +1685,20 @@ static UINT32 handle_new(void)
     return g_handles;
 }
 
-UINT32 DxgkRenderCreateDevice(UINT64 luid)
+UINT32 DxgkRenderCreateDevice(UINT64 luid, void *owner)
 {
     render_lock();
     DxgkAdapter *a = render_adapter(luid);
     DxgkDev *d = a ? kzalloc(sizeof(*d)) : NULL;
     UINT32 h = 0;
     if (d) {
+        lock(a);
+        d->proc = proc_get(a, owner);
         DXGKARG_CREATEDEVICE cd;
         memset(&cd, 0, sizeof(cd));
         cd.hDevice = d;                                   /* (dxgkrnl's handle: the driver passes it back) */
-        lock(a);
-        NT_STATUS st = a->drv->full.DxgkDdiCreateDevice(a->ctx, &cd);
-        unlock(a);
+        cd.hKmdProcess = d->proc ? d->proc->kmd : NULL;
+        NT_STATUS st = d->proc ? a->drv->full.DxgkDdiCreateDevice(a->ctx, &cd) : NT_STATUS_NO_MEMORY;
         if (NT_SUCCESS_(st)) {
             d->handle = h = handle_new();
             d->kmd = cd.hDevice;
@@ -1355,8 +1706,10 @@ UINT32 DxgkRenderCreateDevice(UINT64 luid)
             a->devs = d;
         } else {
             kprintf("[DXGK] %s: DxgkDdiCreateDevice failed (0x%08x)\n", a->drv->service, (UINT32)st);
+            if (d->proc) proc_release(a, d->proc);
             kfree(d);
         }
+        unlock(a);
     }
     render_unlock();
     return h;
@@ -1448,4 +1801,86 @@ void DxgkRenderDestroyAllocation(UINT64 luid, UINT32 alloc)
     for (DxgkAlloc *al = a ? a->allocs : NULL; al; al = al->next)
         if (al->handle == alloc) { lock(a); alloc_free(a, al); unlock(a); break; }
     render_unlock();
+}
+
+/* @owner's address space on adapter @luid (render_lock held, then the
+ * adapter's lock taken): NULL if it has none */
+static DxgkProc *va_space(UINT64 luid, void *owner, DxgkAdapter **out)
+{
+    DxgkAdapter *a = render_adapter(luid);
+    if (!a || !a->gpummu) return NULL;
+    for (DxgkProc *p = a->procs; p; p = p->next)
+        if (p->owner == owner && p->root) { *out = a; lock(a); return p; }
+    return NULL;
+}
+
+UINT32 DxgkRenderReserveVa(UINT64 luid, void *owner, UINT64 base, UINT64 min, UINT64 max, UINT64 size, UINT64 *va)
+{
+    if (!size || (size | base) & (PAGE_SIZE - 1)) return (UINT32)NT_STATUS_INVALID_PARAMETER;
+    render_lock();
+    DxgkAdapter *a;
+    DxgkProc *p = va_space(luid, owner, &a);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (p) {
+        UINT64 at = base ? base : va_find(a, p, min, max, size);
+        if (base && va_find(a, p, base, base + size, size) != base) at = 0;   /* (taken, or past the top) */
+        if (!at) st = ST_NO_VIDEO_MEMORY;
+        else if (range_add(p, at, size)) { *va = at; st = NT_STATUS_SUCCESS; }
+        else st = NT_STATUS_NO_MEMORY;
+        unlock(a);
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+UINT32 DxgkRenderMapVa(UINT64 luid, void *owner, UINT32 alloc, const PADDR *frames, UINT64 first, UINT64 pages,
+                       UINT64 base, UINT64 min, UINT64 max, UINT64 prot, UINT64 *va)
+{
+    if (!pages || base & (PAGE_SIZE - 1)) return (UINT32)NT_STATUS_INVALID_PARAMETER;
+    render_lock();
+    DxgkAdapter *a;
+    DxgkProc *p = va_space(luid, owner, &a);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    DxgkAlloc *al = NULL;
+    for (DxgkAlloc *x = p ? a->allocs : NULL; x; x = x->next)
+        if (x->handle == alloc && x->dev->proc == p) al = x;
+    if (al) {
+        UINT64 size = pages * PAGE_SIZE;
+        DxgkRange *r = base ? range_carve(a, p, base, size) : NULL;   /* (in a range it reserved) */
+        bool fresh = !r;
+        if (!r && base && va_find(a, p, base, base + size, size) != base) base = 0;   /* (taken) */
+        else if (!r && !base) base = va_find(a, p, min, max, size);
+        if (!r && base) r = range_add(p, base, size);
+        if (!r) st = ST_NO_VIDEO_MEMORY;
+        else if (NT_SUCCESS_(st = va_write(a, p, base, pages, frames, prot, al, first))) {
+            r->alloc = alloc;
+            *va = base;
+        } else {
+            va_write(a, p, base, pages, NULL, 0, NULL, 0);
+            for (DxgkRange **pp = &p->ranges; fresh && *pp; pp = &(*pp)->next)
+                if (*pp == r) { *pp = r->next; kfree(r); break; }
+        }
+    }
+    if (p) unlock(a);
+    render_unlock();
+    return (UINT32)st;
+}
+
+UINT32 DxgkRenderFreeVa(UINT64 luid, void *owner, UINT64 base, UINT64 size)
+{
+    render_lock();
+    DxgkAdapter *a;
+    DxgkProc *p = va_space(luid, owner, &a);
+    int n = 0;
+    for (DxgkRange **pp = p ? &p->ranges : NULL; pp && *pp;) {
+        DxgkRange *r = *pp;
+        if (r->base < base || r->base + r->size > base + size) { pp = &r->next; continue; }
+        range_unmap(a, p, r);
+        *pp = r->next;
+        kfree(r);
+        n++;
+    }
+    if (p) unlock(a);
+    render_unlock();
+    return n ? 0 : (UINT32)NT_STATUS_INVALID_PARAMETER;
 }

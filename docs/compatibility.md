@@ -228,6 +228,28 @@ table the way Hyperion reads it, `aligntest` the alignment-fault fixup and
 `gatetest` the segment layout, the 32-bit code, the calling thread's
 context and `__fastfail`.
 
+## Anti-cheat and DRM systems
+
+Status of each common system.  NovaOS never bypasses, spoofs or patches
+one; the fix is always the real Windows facility it checks.  The checks,
+the plan and the reasoning are in [anti-cheat and
+DRM](design/anti-cheat-drm.md).
+
+| System | Status | What NovaOS has | What it lacks | Fix or step |
+|---|---|---|---|---|
+| Hyperion (Roblox) | Stops at "Virtual Machine detected" under QEMU; untested on bare metal | Windows-numbered syscalls, alignment fixup, 32-bit segment, thread context | A bare-metal run | Test on the T14 (24.5); the VM is never hidden |
+| Easy Anti-Cheat | Does not run | Syscall ABI, module and process lists, driver signing policy | Kernel callbacks, protected-process levels, `MmCopyMemory` | Callbacks, protection levels, driver memory access; user-mode EAC and EOS builds first |
+| BattlEye | Does not run | As for Easy Anti-Cheat | The same, and it is strict about hypervisors | The same steps; expected last |
+| Vanguard (Riot) | Does not run | Test signing and signature checks | Secure Boot state, TPM 2.0, measured boot, HVCI | Secure Boot and TPM work (Phase 23); out of scope for 0.2 |
+| FACEIT, ESEA | Does not run | As for Vanguard | Secure Boot and TPM | As for Vanguard |
+| VAC (Valve) | Expected to run with the game | Honest module and process lists | Nothing known | None; keep the lists honest |
+| Denuvo Anti-Tamper | Untested | Real SMBIOS, disk and network IDs | Timing headroom under emulation | Keep hardware IDs real and stable; measure on bare metal |
+| Steam DRM | Waits on Steam sign-in (24.1) | `SteamService` runs | A working login window | Finish 24.1 |
+| GOG Galaxy | DRM-free games run; the client waits on sign-in (24.2) | DRM-free offline installers | Galaxy sign-in | Finish 24.2 |
+| Epic Games Launcher | Not started (24.6) | WebView2 GPU path (25.1) | Sign-in, and EAC for some titles | Start 24.6 |
+| Widevine, PlayReady | Software Widevine (L3) only | A browser that plays L3 | A trusted execution environment for L1 and SL3000 | Accept L3 |
+| VMProtect, Themida | Expected to run | Faithful CPUID, timing and debugger answers | Nothing known | None |
+
 ## WebView2
 
 Roblox's login page, and many other programs, show web content with

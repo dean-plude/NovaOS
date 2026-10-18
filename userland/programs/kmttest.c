@@ -33,6 +33,13 @@
  *                 back; one past the segment refused; DestroyDevice takes the
  *                 rest with it (DxgkDdiCloseAllocation, DestroyAllocation,
  *                 DestroyDevice)
+ *   GPU VA        (step 3's third part) a paging queue and its fence; an
+ *                 allocation mapped where VidMm picks and into a reserved
+ *                 range, overlaps and overruns refused, the paging fence
+ *                 already reached; MakeResident and Evict counted; freeing
+ *                 the range and destroying the allocation unmap them (the
+ *                 driver reads each mapping's first word back through its
+ *                 page tables, which the self-test checks in its log)
  */
 #include <windows.h>
 #include <stdio.h>
@@ -150,6 +157,90 @@ static int create(void)
     return g_fail != 0;
 }
 
+/* ---- "kmttest wddm", its GPU virtual addresses (the driver's GPU MMU) ---- */
+#define WORD_A 0x600DF00Du
+#define WORD_B 0x5ECD0A6Eu
+
+static void gpu_va(D3DKMT_HANDLE adapter, D3DKMT_HANDLE dev)
+{
+    LONG st;
+    D3DKMT_CREATEPAGINGQUEUE pq;
+    memset(&pq, 0, sizeof(pq));
+    pq.hDevice = dev;
+    check(D3DKMTCreatePagingQueue(&pq) == 0 && pq.hPagingQueue && pq.hSyncObject && pq.FenceValueCPUVirtualAddress,
+          "CreatePagingQueue: a paging queue and its monitored fence");
+    if (!pq.FenceValueCPUVirtualAddress) return;
+    volatile UINT64 *fence = pq.FenceValueCPUVirtualAddress;
+    D3DKMT_HANDLE a3 = allocate(dev, 128u << 10, &st);
+    check(a3 != 0, "a 128 KiB allocation to map");
+    D3DKMT_LOCK2 lk = { dev, a3, 0, NULL };
+    if (D3DKMTLock2(&lk) == 0 && lk.pData) {
+        ((volatile UINT *)lk.pData)[0] = WORD_A;
+        ((volatile UINT *)((char *)lk.pData + 65536))[0] = WORD_B;
+        D3DKMT_UNLOCK2 ul = { dev, a3 };
+        D3DKMTUnlock2(&ul);
+    }
+
+    D3DDDI_MAPGPUVIRTUALADDRESS m;
+    memset(&m, 0, sizeof(m));
+    m.hPagingQueue = pq.hPagingQueue;
+    m.hAllocation = a3;
+    m.SizeInPages = 32;
+    m.Protection.Write = 1;
+    st = D3DKMTMapGpuVirtualAddress(&m);
+    check(st == 0 && m.VirtualAddress && !(m.VirtualAddress & 0xFFFF),
+          "MapGpuVirtualAddress: VidMm picks a 64 KiB-aligned address, the driver writes the page tables");
+    printf("kmttest: mapped at GPU VA 0x%llx (0x%08lx)\n", (unsigned long long)m.VirtualAddress, (unsigned long)st);
+    check(m.PagingFenceValue && *fence >= m.PagingFenceValue, "its paging fence value is already reached");
+
+    D3DDDI_RESERVEGPUVIRTUALADDRESS r;
+    memset(&r, 0, sizeof(r));
+    r.hPagingQueue = pq.hPagingQueue;
+    r.Size = 1u << 20;
+    check(D3DKMTReserveGpuVirtualAddress(&r) == 0 && r.VirtualAddress &&
+          (r.VirtualAddress >= m.VirtualAddress + (128u << 10) || r.VirtualAddress + r.Size <= m.VirtualAddress),
+          "ReserveGpuVirtualAddress: 1 MiB apart from the mapping");
+    D3DDDI_MAPGPUVIRTUALADDRESS m2 = m;
+    m2.BaseAddress = r.VirtualAddress + 0x10000;
+    m2.OffsetInPages = 16;
+    m2.SizeInPages = 16;
+    m2.Protection.Value = 0;                              /* read-only */
+    m2.VirtualAddress = 0;
+    check(D3DKMTMapGpuVirtualAddress(&m2) == 0 && m2.VirtualAddress == r.VirtualAddress + 0x10000 &&
+          m2.PagingFenceValue > m.PagingFenceValue,
+          "MapGpuVirtualAddress in the reserved range: the second half, read-only");
+    D3DDDI_MAPGPUVIRTUALADDRESS bad = m2;
+    bad.BaseAddress = r.VirtualAddress + 0x8000;
+    check(D3DKMTMapGpuVirtualAddress(&bad) != 0, "a mapping over part of another is refused");
+    bad = m;
+    bad.SizeInPages = 33;
+    check(D3DKMTMapGpuVirtualAddress(&bad) != 0, "one past the allocation's end is refused");
+
+    D3DDDI_MAKERESIDENT mr;
+    memset(&mr, 0, sizeof(mr));
+    mr.hPagingQueue = pq.hPagingQueue;
+    mr.NumAllocations = 1;
+    mr.AllocationList = &a3;
+    check(D3DKMTMakeResident(&mr) == 0 && mr.PagingFenceValue && *fence >= mr.PagingFenceValue, "MakeResident");
+    UINT64 before = usage(adapter);
+    D3DKMT_EVICT ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.hDevice = dev;
+    ev.NumAllocations = 1;
+    ev.AllocationList = &a3;
+    check(D3DKMTEvict(&ev) == 0 && usage(adapter) == before, "an Evict after a MakeResident leaves it resident");
+    check(D3DKMTEvict(&ev) == 0 && usage(adapter) == before - (128u << 10), "a second Evict: its memory no longer counted");
+    check(D3DKMTMakeResident(&mr) == 0 && usage(adapter) == before, "MakeResident counts it again");
+
+    D3DKMT_FREEGPUVIRTUALADDRESS fr = { adapter, r.VirtualAddress, r.Size };
+    check(D3DKMTFreeGpuVirtualAddress(&fr) == 0, "FreeGpuVirtualAddress unmaps and frees the reserved range");
+    check(D3DKMTFreeGpuVirtualAddress(&fr) != 0, "freeing it twice is refused");
+    D3DKMT_DESTROYALLOCATION2 da = { dev, 0, &a3, 1, 0 };
+    check(D3DKMTDestroyAllocation2(&da) == 0, "destroying a mapped allocation unmaps it");
+    D3DDDI_DESTROYPAGINGQUEUE dq = { pq.hPagingQueue };
+    check(D3DKMTDestroyPagingQueue(&dq) == 0, "DestroyPagingQueue");
+}
+
 /* ---- "kmttest wddm": the adapter of wddmtest.sys ---- */
 static int wddm(void)
 {
@@ -217,6 +308,8 @@ static int wddm(void)
     D3DKMT_DESTROYALLOCATION2 da = { dev, 0, &a2, 1, 0 };
     check(D3DKMTDestroyAllocation2(&da) == 0 && usage(adapter) == 65536,
           "DestroyAllocation2 gives it back (DxgkDdiCloseAllocation, DxgkDdiDestroyAllocation)");
+    gpu_va(adapter, dev);
+    check(usage(adapter) == 65536, "the mapped allocation's memory is back");
     D3DKMT_DESTROYDEVICE dd = { dev };
     check(D3DKMTDestroyDevice(&dd) == 0 && usage(adapter) == 0, "DestroyDevice takes the other with it");
     D3DKMT_CLOSEADAPTER close = { adapter };

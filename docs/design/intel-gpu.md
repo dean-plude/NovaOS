@@ -4,8 +4,10 @@ Status: design, decided 2026-10-13 (roadmap step 25.3).  Step 1 of the
 steps at the end, the display-only WDDM host (`\Device\DxgKrnl`, tested
 with NovaOS's `wddmdod.sys` on QEMU's standard VGA), is merged.  Step 3's
 first part (the `D3DKMT*` calls, the Basic Render adapter's allocations
-and CPU fences) is in, and its second (render miniports: `DxgkInitialize`
-and the test driver `wddmtest.sys`'s adapter, devices and allocations);
+and CPU fences) is in, its second (render miniports: `DxgkInitialize`
+and the test driver `wddmtest.sys`'s adapter, devices and allocations),
+and its third (GPU virtual addresses: per-process page tables the driver
+writes through paging buffers, residency counted);
 the rest of step 3, and steps 2, 4 and 5, are not built.  Intel's driver has not been tried: it needs step 2
 and the T14, and nothing has run on the T14 yet.
 
@@ -246,9 +248,12 @@ test miniports, and Intel's driver only on the T14 (Dean's hand checks in
   boot.  So far it registers a WDDM 2.0 `DRIVER_INITIALIZATION_DATA`,
   describes one 256 MiB segment of system memory, and makes devices and
   allocations (sized to its 64 KiB pages, opened on the device) that
-  `kmttest wddm` drives through `D3DKMT*`.  The later parts give it a
-  kernel thread executing a tiny command format: GPU virtual addresses,
-  paging buffers, submission, fences, preemption and TDR.
+  `kmttest wddm` drives through `D3DKMT*`, and (third part) a GPU MMU:
+  two levels of 4 KiB page tables in system memory, its own 8-byte entry
+  format written with the CPU from VidMm's `DXGK_PTE`s, and each new
+  mapping's first word read back through those tables as its GPU would.
+  The later parts give it a kernel thread executing a tiny command
+  format: submission, fences, preemption and TDR.
 - On the T14: `devices` shows the GPU started with Intel's driver,
   Settings changes the panel's mode, then (step 25.4) `gltest` and
   `d3dtest` pass on it and beat llvmpipe and lavapipe.
@@ -305,10 +310,29 @@ Each is one pull request off main.
       display-only test driver uses the next function code).  Not in it:
       eviction (a full segment refuses), allocations in VRAM segments, and
       a full driver's display.
-   3. **GPU virtual addresses**: `DxgkDdiCreateProcess`, per-process
-      address spaces, `D3DKMTMapGpuVirtualAddress`, page tables written
-      through `DxgkDdiBuildPagingBuffer`, residency (`MakeResident`,
-      `Evict`) against the budget.
+   3. **GPU virtual addresses** (done): a driver that says
+      `GpuMmuSupported` describes its page tables
+      (`DXGKQAITYPE_GPUMMUCAPS`, `DXGKQAITYPE_PAGETABLELEVELDESC`, the
+      root's size from `DxgkDdiGetRootPageTableSize` when there are two
+      levels); each process gets the driver's process object
+      (`DxgkDdiCreateProcess`, handed to `DxgkDdiCreateDevice`) and one
+      address space per adapter that its devices share.  VidMm picks or
+      checks the ranges (`D3DKMTReserveGpuVirtualAddress`,
+      `MapGpuVirtualAddress`, `FreeGpuVirtualAddress`), makes the page
+      tables in system memory and has the driver write their entries
+      (`DxgkDdiBuildPagingBuffer`: `UPDATE_PAGE_TABLE` from `DXGK_PTE`s,
+      new tables made invalid first, then `FLUSH_TLB`); a paging queue
+      (`D3DKMTCreatePagingQueue`) carries a monitored fence that each call
+      has already signalled when it returns; `D3DKMTMakeResident` and
+      `Evict` count residency, and an evicted allocation leaves the
+      budget's usage.  Checked by `kmttest wddm`, with `wddmtest.sys`
+      reading each mapping back through its own tables.  Not in it: page
+      tables the GPU updates (`DXGK_PAGETABLEUPDATE_GPU_VIRTUAL` or
+      `GPU_PHYSICAL`, Intel's driver may well use one: its paging buffers
+      run once submission exists, part 4), page tables in VRAM segments,
+      evicting pages from memory, and GPU addresses on Basic Render.  An
+      assumption step 2 checks: VidMm gives system memory pages as
+      `DXGK_PTE`s with segment 0.
    4. **Contexts and submission**: `D3DKMTCreateContextVirtual`,
       `D3DKMTSubmitCommand`, the scheduler calling
       `DxgkDdiSubmitCommandVirtual` in order, the miniport's interrupt and

@@ -18,7 +18,10 @@ the GUI and the drivers they expect.
 ## Where we are
 
 NovaOS 0.1.0, the first release, was published on 2026-10-04 from the
-`v0.1.0` tag ([release notes](releases/0.1.0.md)). Since then every green
+`v0.1.0` tag ([release notes](releases/0.1.0.md)). NovaOS 0.2 "Kepler"
+(`0.2.0`, [release notes](releases/0.2.0.md)) is cut after Phase 33, the
+everyday-OS phase; it is tagged `v0.2.0` by the repository owner once main's
+CI is green (step 29.1). Since 0.1 every green
 CI run on a push to `main` republishes a rolling **latest** release with
 that commit's `nova.iso`. The release closed Phase 22 except its checks
 on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
@@ -695,8 +698,9 @@ game with sound and a controller.
   without bypassing it; done when Roblox reaches its home page.
 - [ ] **24.6 Epic Games Launcher.** Sign in and show its library. It
   depends on WebView2's GPU path, which is in (25.1).
-- [ ] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
-  what NovaOS lacks and the faithful fix; never bypass or patch them.
+- [x] **24.7 Anti-cheat and DRM notes.** Record what common systems require,
+  what NovaOS lacks and the faithful fix; never bypass or patch them; see
+  [anti-cheat and DRM](design/anti-cheat-drm.md).
 
 ### Phase 25: GPU
 
@@ -731,7 +735,10 @@ measured frame-time gain over the CPU path.
   render miniports register with `DxgkInitialize`: the test driver
   `wddmtest.sys`'s adapter is listed beside Basic Render, with devices and
   allocations the driver sizes in its segment (`kmttest wddm` in the
-  `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)).
+  `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)),
+  and with GPU virtual addresses: per-process page tables VidMm makes and
+  the driver writes through paging buffers
+  ([history](HISTORY.md#gpu-virtual-addresses)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or
@@ -826,13 +833,17 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   own Windows driver (`Netwtw14.sys`) already downloads by hardware ID,
   installs and registers with NovaOS's NDIS host on a stand-in device in
   QEMU (step 30.9). NovaOS's WDI upper edge (`kernel/nt/wdi.c`) has
-  two parts done. The first is the command layer: adapter capabilities,
+  three parts done. The first is the command layer: adapter capabilities,
   the station port and scans, with `netsh wlan show interfaces` and
   `netsh wlan show networks`. The second is the data path: the TAL TX/RX
   interface, so 802.11 frames go both ways, plus joining open networks
   with `netsh wlan connect`, after which DHCP and ping run over Wi-Fi.
-  Both are tested with NovaOS's own WDI miniport on QEMU's `edu` device
-  (the devices suite's `wifi` boot). Still needed: WPA2 and WPA3,
+  The third is WPA2-Personal (`netsh wlan connect name=SSID
+  key=PASSPHRASE`): the 4-way handshake in `kernel/nt/wpa.c`, the EAPOL
+  exemption and the keys handed to the driver
+  (`OID_WDI_SET_ADD_CIPHER_KEYS`). All three are tested with NovaOS's
+  own WDI miniport on QEMU's `edu` device (the devices suite's `wifi`
+  boot). Still needed: WPA3 (SAE),
   `wlanapi.dll` and Settings' Wi-Fi page, then scanning and joining a
   network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
@@ -871,7 +882,10 @@ tagged `v0.2.0` passes the full CI suite and T14 checks.
 
 - [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
-  must boot in QEMU and on both reference PCs.
+  must boot in QEMU and on both reference PCs. The version (0.2.0, code name
+  "Kepler") and [the release notes](releases/0.2.0.md) are in; ticks when
+  `v0.2.0` is published and its ISO boots on the T14 (the second reference
+  PC, 28.5, is not picked yet).
 
 ### Phase 30: Windows drivers
 

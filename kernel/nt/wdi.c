@@ -38,14 +38,26 @@
  * wlan connect) is OID_WDI_TASK_CONNECT with the access points the scan
  * heard, the driver indicating its peer (the access point) and the
  * association's result; then the adapter is the stack's (NetAttach) and
- * DHCP runs over Wi-Fi.  Open networks only so far: not yet here
- * (docs/drivers.md) are the WPA2 and WPA3 handshakes, wlanapi.dll and
- * Settings' Wi-Fi page.
+ * DHCP runs over Wi-Fi.
+ *
+ * A WPA2-Personal network (an RSN element offering the PSK AKM and CCMP)
+ * connects with its passphrase: before OID_WDI_TASK_CONNECT, EAPOL frames
+ * are exempted from encryption (OID_WDI_SET_PRIVACY_EXEMPTION_LIST); once
+ * associated, the access point's EAPOL-Key frames (Ethertype 0x888E) come
+ * up the data path to the supplicant (wpa.c) instead of the stack, its
+ * replies go down it with their exemption in the frame's metadata, and when
+ * the 4-way handshake is done the pairwise and group keys go to the driver
+ * (OID_WDI_SET_ADD_CIPHER_KEYS), which encrypts and decrypts with them.
+ * Only then does the stack get the adapter; until then, and whenever a
+ * frame comes unencrypted, only EAPOL passes.  A later group key handshake
+ * (the access point's rekeying) is answered from a work item.  Not yet here
+ * (docs/drivers.md): WPA3's SAE, wlanapi.dll and Settings' Wi-Fi page.
  */
 #include "ntapi.h"
 #include "ndis.h"
 #include "wdi.h"
 #include "wlan.h"
+#include "wpa.h"
 #include "../ke/irql.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
@@ -64,6 +76,9 @@
 #define RX_SLOTS          64        /* received frames waiting for the stack */
 #define RX_FRAME          1536
 #define POOL_TAG          0x49445749u   /* 'IWDI' */
+#define EAPOL_SLOTS       4         /* EAPOL frames waiting for the supplicant */
+#define EAPOL_MAX         512
+#define HANDSHAKE_MS      8000      /* (an access point resends message 1 a few times, a second apart) */
 
 /* A frame on its way out: an NBL of one 802.11 MSDU with its metadata */
 typedef struct {
@@ -122,6 +137,20 @@ struct WdiHost {
     bool           peer_deleted;    /* (the driver deleted it: confirmed after the disconnect) */
     bool           assoc_seen;
     WDI_ASSOCIATION_RESULT_PARAMETERS assoc;
+    UINT8          assoc_ie[WPA_IE_MAX];   /* the RSN element the driver associated with (its request's) */
+    UINT8          assoc_ie_len;
+    /* WPA2: the supplicant and the EAPOL frames for it */
+    volatile bool  rsna;            /* the connection is secured: only EAPOL may come unencrypted */
+    volatile bool  keys;            /* the driver has the pairwise key */
+    volatile bool  handshaking;     /* WlanConnect runs the handshake (else a work item answers rekeys) */
+    WpaSupplicant  wpa;
+    NT_KSPIN_LOCK  eapol_lock;
+    UINT8          eapol[EAPOL_SLOTS][EAPOL_MAX];
+    UINT16         eapol_len[EAPOL_SLOTS];
+    UINT32         eapol_head, eapol_tail;
+    NT_KEVENT      eapol_event;
+    NT_IO_WORKITEM *eapol_work;
+    volatile bool  work_queued;
 };
 
 /* (hosts are never freed, only reused: netsh can hold one while its
@@ -359,22 +388,32 @@ static void parse_frame(WlanBss *b, const UINT8 *f, UINT32 n)
             b->channel = e[0];
         } else if (id == 48 && len >= 8) {                           /* RSN */
             rsn = true;
+            if (2u + len <= sizeof(b->rsn)) {                        /* (kept: the 4-way handshake checks it) */
+                memcpy(b->rsn, e - 2, 2u + len);
+                b->rsn_len = (UINT8)(2 + len);
+            }
+            static const UINT8 ieee[3] = { 0x00, 0x0F, 0xAC };
+            if (!memcmp(e + 2, ieee, 3)) b->group = e[5];
             UINT32 p = 6;                                            /* (version, group cipher) */
             UINT16 np = (UINT16)(e[p] | e[p + 1] << 8);
             p += 2;
             b->cipher = "CCMP";
-            for (UINT16 i = 0; i < np && p + 4 <= len; i++, p += 4)
+            for (UINT16 i = 0; i < np && p + 4 <= len; i++, p += 4) {
+                if (!memcmp(e + p, ieee, 3) && e[p + 3] < 32) b->pairwise |= 1u << e[p + 3];
                 if (e[p + 3] == 8 || e[p + 3] == 9) b->cipher = "GCMP";
                 else if (e[p + 3] == 2 && np == 1) b->cipher = "TKIP";
+            }
             if (p + 2 <= len) {
                 UINT16 na = (UINT16)(e[p] | e[p + 1] << 8);
                 p += 2;
                 b->auth = NULL;
                 for (UINT16 i = 0; i < na && p + 4 <= len; i++, p += 4) {
                     const char *a = akm_auth(e[p + 3]);
+                    if (!memcmp(e + p, ieee, 3) && e[p + 3] < 32) b->akms |= 1u << e[p + 3];
                     /* (an AP offering SAE and PSK, WPA3 transition mode, shows as WPA3) */
                     if (!b->auth || !strcmp(a, "WPA3-Personal")) b->auth = a;
                 }
+                if (p + 2 <= len) b->rsn_caps = (UINT16)(e[p] | e[p + 1] << 8);
             }
         } else if (id == 221 && len >= 4 && e[0] == 0x00 && e[1] == 0x50 && e[2] == 0xF2 && e[3] == 1) {
             wpa = true;                                              /* (WPA, before RSN) */
@@ -739,14 +778,14 @@ static void tx_kick(WdiHost *w)
     nt_KeLowerIrql(old);
 }
 
-/* An Ethernet frame from the stack as an 802.11 MSDU to the access point
- * (ToDS: address 1 the BSSID, 2 the source, 3 the destination) */
-static bool wifi_transmit(const void *frame, UINT16 len)
+/* A frame as an 802.11 MSDU to the access point (ToDS: address 1 the
+ * BSSID, 2 the source, 3 the destination; LLC/SNAP, @type, @payload),
+ * queued for the driver with its exemption from encryption (WDI_EXEMPT_*);
+ * NULL if there is no room or no connection */
+static TxFrame *tx_send(WdiHost *w, const UINT8 *dst, const UINT8 *src, UINT16 type, const UINT8 *payload, UINT32 plen,
+                        UINT32 exemption)
 {
-    WdiHost *w = g_net_host;
-    const UINT8 *e = frame;
-    if (!w || !w->tx || !w->peer_up || len < 14 || len - 14u + DOT11_DATA_HEADER + DOT11_SNAP_LEN > TX_FRAME_BUF)
-        return false;
+    if (!w->tx || !w->peer_up || DOT11_DATA_HEADER + DOT11_SNAP_LEN + plen > TX_FRAME_BUF) return NULL;
     TxFrame *f = NULL;
     for (int i = 0; i < TX_FRAMES && !f; i++)
         if (__atomic_load_n(&w->tx[i].state, __ATOMIC_ACQUIRE) == TXF_FREE) {
@@ -755,19 +794,21 @@ static bool wifi_transmit(const void *frame, UINT16 len)
                                             __ATOMIC_ACQUIRE))
                 f = &w->tx[i];
         }
-    if (!f) return false;
+    if (!f) return NULL;
     DOT11_DATA_HEADER_T *h = (DOT11_DATA_HEADER_T *)f->buf;
     memset(h, 0, sizeof(*h));
     h->FrameControl[0] = DOT11_FC0_DATA;
-    h->FrameControl[1] = DOT11_FC1_TO_DS;
+    h->FrameControl[1] = DOT11_FC1_TO_DS;              /* (the driver sets Protected when it encrypts) */
     memcpy(h->Address1, w->peer_mac, 6);
-    memcpy(h->Address2, e + 6, 6);
-    memcpy(h->Address3, e, 6);
+    memcpy(h->Address2, src, 6);
+    memcpy(h->Address3, dst, 6);
     static const UINT8 snap[6] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00 };
     UINT8 *p = f->buf + DOT11_DATA_HEADER;
     memcpy(p, snap, 6);
-    memcpy(p + 6, e + 12, len - 12u);                   /* (the Ethertype, then the payload) */
-    UINT32 n = DOT11_DATA_HEADER + 6 + (len - 12u);
+    p[6] = (UINT8)(type >> 8);
+    p[7] = (UINT8)type;
+    memcpy(p + 8, payload, plen);
+    UINT32 n = DOT11_DATA_HEADER + DOT11_SNAP_LEN + plen;
     f->mdl->ByteCount = n;
     memset(&f->meta, 0, sizeof(f->meta));
     f->meta.pNBL = &f->nbl;
@@ -776,8 +817,9 @@ static bool wifi_transmit(const void *frame, UINT16 len)
     t->PortID = w->port_id;
     t->PeerID = w->peer;
     t->ExTID = w->assoc.WMMQoSEnabled ? 0 : WDI_EXT_TID_NON_QOS;
-    t->IsUnicast = !(e[0] & 1);
-    t->Ethertype = (UINT16)(e[12] << 8 | e[13]);
+    t->IsUnicast = !(dst[0] & 1);
+    t->Ethertype = type;
+    t->ExemptionAction = exemption;
     memset(&f->nbl, 0, sizeof(f->nbl));
     memset(&f->nb, 0, sizeof(f->nb));
     f->nbl.FirstNetBuffer = &f->nb;
@@ -789,14 +831,36 @@ static bool wifi_transmit(const void *frame, UINT16 len)
     w->txq[w->txq_head++ % TX_FRAMES] = (UINT16)(f - w->tx);
     nt_KeReleaseSpinLock(&w->tx_lock, old);
     tx_kick(w);
-    return true;
+    return f;
 }
+
+/* Wait (up to a second) for frame @f, frame ID @id, to have gone to the hardware */
+static void tx_wait(TxFrame *f, WDI_FRAME_ID id)
+{
+    for (int k = 0; f && k < 100; k++) {
+        if (__atomic_load_n(&f->state, __ATOMIC_ACQUIRE) == TXF_FREE || f->meta.FrameID != id) return;
+        INT64 t = -100000;                              /* (10 ms) */
+        nt_KeDelayExecutionThread(0, 0, &t);
+    }
+}
+
+/* An Ethernet frame from the stack (encrypted by the driver on a secured connection) */
+static bool wifi_transmit(const void *frame, UINT16 len)
+{
+    WdiHost *w = g_net_host;
+    const UINT8 *e = frame;
+    if (!w || len < 14) return false;
+    return tx_send(w, e, e + 6, (UINT16)(e[12] << 8 | e[13]), e + 14, len - 14u, WDI_EXEMPT_NO_EXEMPTION) != NULL;
+}
+
+static void eapol_push(WdiHost *w, const UINT8 *f, UINT32 n);
 
 /* An 802.11 data frame from the driver as an Ethernet frame for the stack */
 static void rx_push(WdiHost *w, const UINT8 *f, UINT32 n)
 {
-    if (n < DOT11_DATA_HEADER + DOT11_SNAP_LEN || (f[0] & 0x0C) != 0x08 || (f[1] & DOT11_FC1_PROTECTED)) {
-        w->rx_dropped++;                                /* (not data, or still encrypted) */
+    bool prot = n >= 2 && (f[1] & DOT11_FC1_PROTECTED);
+    if (n < DOT11_DATA_HEADER + DOT11_SNAP_LEN || (f[0] & 0x0C) != 0x08 || (prot && !w->keys)) {
+        w->rx_dropped++;                                /* (not data, or encrypted with no key to have decrypted it) */
         return;
     }
     bool to = f[1] & DOT11_FC1_TO_DS, from = f[1] & DOT11_FC1_FROM_DS;
@@ -804,7 +868,19 @@ static void rx_push(WdiHost *w, const UINT8 *f, UINT32 n)
     if (f[0] & 0x80) hl += 2 + ((f[1] & 0x80) ? 4 : 0);    /* (QoS control, and HT control with the Order bit) */
     const UINT8 *da = f + 4, *sa = from ? (to ? f + 24 : f + 16) : f + 10;
     const UINT8 *l = f + hl;
+    /* (the driver decrypted a protected frame; it may have left its CCMP header) */
+    if (prot && n >= hl + DOT11_CCMP_HEADER + DOT11_SNAP_LEN && !(l[0] == 0xAA && l[1] == 0xAA && l[2] == 0x03) &&
+        l[8] == 0xAA && l[9] == 0xAA && l[10] == 0x03) {
+        hl += DOT11_CCMP_HEADER;
+        l += DOT11_CCMP_HEADER;
+    }
     if (n < hl + DOT11_SNAP_LEN || l[0] != 0xAA || l[1] != 0xAA || l[2] != 0x03) { w->rx_dropped++; return; }
+    UINT16 type = (UINT16)(l[6] << 8 | l[7]);
+    if (type == ETHERTYPE_EAPOL) {                      /* (the supplicant's, not the stack's) */
+        eapol_push(w, l + DOT11_SNAP_LEN, n - hl - DOT11_SNAP_LEN);
+        return;
+    }
+    if (w->rsna && !prot) { w->rx_dropped++; return; }  /* (ExcludeUnencrypted: only EAPOL comes in the clear) */
     UINT32 plen = n - hl - 6;                           /* (the Ethertype and the payload) */
     if (12 + plen > RX_FRAME) { w->rx_dropped++; return; }
     UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->rx_lock);
@@ -847,6 +923,131 @@ static const NetAdapter g_wifi_ops = { wifi_name, wifi_mac, wifi_link, wifi_tran
 bool WlanCarriesNet(void) { return g_net_host != NULL; }
 
 /* -----------------------------------------------------------------------
+ * WPA2: EAPOL frames to the supplicant (wpa.c), its replies, the keys
+ * ----------------------------------------------------------------------- */
+static NT_API void eapol_work(NT_DEVICE_OBJECT *dev, void *ctx);
+
+/* An EAPOL frame from the access point (from rx_push, at DISPATCH_LEVEL):
+ * queued for the handshake WlanConnect runs, or for the work item that
+ * answers a rekey */
+static void eapol_push(WdiHost *w, const UINT8 *f, UINT32 n)
+{
+    if (!w->rsna || n > EAPOL_MAX) { w->rx_dropped++; return; }
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->eapol_lock);
+    bool room = w->eapol_head - w->eapol_tail < EAPOL_SLOTS;
+    if (room) {
+        UINT32 k = w->eapol_head++ % EAPOL_SLOTS;
+        memcpy(w->eapol[k], f, n);
+        w->eapol_len[k] = (UINT16)n;
+    }
+    nt_KeReleaseSpinLock(&w->eapol_lock, old);
+    if (!room) { w->rx_dropped++; return; }
+    if (w->handshaking) nt_KeSetEvent(&w->eapol_event, 0, 0);
+    else if (w->eapol_work && !__atomic_exchange_n(&w->work_queued, true, __ATOMIC_ACQ_REL))
+        nt_IoQueueWorkItem(w->eapol_work, eapol_work, NT_DelayedWorkQueue, w);
+}
+
+static bool eapol_pop(WdiHost *w, UINT8 *out, UINT32 *n)
+{
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->eapol_lock);
+    bool got = w->eapol_tail != w->eapol_head;
+    if (got) {
+        UINT32 k = w->eapol_tail++ % EAPOL_SLOTS;
+        *n = w->eapol_len[k];
+        memcpy(out, w->eapol[k], *n);
+        memset(w->eapol[k], 0, *n);
+    }
+    nt_KeReleaseSpinLock(&w->eapol_lock, old);
+    return got;
+}
+
+/* OID_WDI_SET_ADD_CIPHER_KEYS: the handshake's pairwise key (for the
+ * access point, both ways) and its group key (by index, inbound), CCMP;
+ * or the group key alone (a rekey) */
+static bool install_keys(WdiHost *w, UINT8 *buf, bool pairwise)
+{
+    UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER), k[128];
+    UINT32 tlen = 0, n;
+    if (pairwise) {
+        WDI_CIPHER_KEY_TYPE_INFO ti = { WDI_CIPHER_ALGO_CCMP, WDI_CIPHER_KEY_DIRECTION_BOTH, 0,
+                                        WDI_CIPHER_KEY_TYPE_PAIRWISE_KEY };
+        n = tlv_put(k, 0, WDI_TLV_PEER_MAC_ADDRESS, w->peer_mac, 6);
+        n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_TYPE_INFO, &ti, sizeof(ti));
+        n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_CCMP_KEY, WpaTk(&w->wpa), WPA_TK_LEN);
+        tlen = tlv_put(t, tlen, WDI_TLV_SET_CIPHER_KEY_INFO, k, (UINT16)n);
+    }
+    UINT32 id = w->wpa.gtk_id;
+    WDI_CIPHER_KEY_TYPE_INFO gi = { WDI_CIPHER_ALGO_CCMP, WDI_CIPHER_KEY_DIRECTION_INBOUND, 0,
+                                    WDI_CIPHER_KEY_TYPE_GROUP_KEY };
+    n = tlv_put(k, 0, WDI_TLV_CIPHER_KEY_ID, &id, sizeof(id));
+    n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_TYPE_INFO, &gi, sizeof(gi));
+    n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT, w->wpa.gtk_rsc, 6);
+    n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_CCMP_KEY, w->wpa.gtk, w->wpa.gtk_len);
+    tlen = tlv_put(t, tlen, WDI_TLV_SET_CIPHER_KEY_INFO, k, (UINT16)n);
+    memset(k, 0, sizeof(k));
+    NDIS_STATUS st = command(w, WDI_SET_ADD_CIPHER_KEYS, w->port_id, buf, tlen, 0, NULL, 0);
+    memset(t, 0, tlen);                                 /* (no key material left in the buffer) */
+    if (pairwise) kprintf("[WPA] %s: pairwise key and group key %u installed (0x%08x)\n", w->info.service, id, (UINT32)st);
+    else kprintf("[WPA] %s: group key %u installed (0x%08x)\n", w->info.service, id, (UINT32)st);
+    if (st == NDIS_STATUS_SUCCESS && pairwise) w->keys = true;
+    return st == NDIS_STATUS_SUCCESS;
+}
+
+/* The EAPOL frames queued for the supplicant: each one's reply sent (with
+ * its exemption: unencrypted until there is a pairwise key), and after
+ * message 3 or a group message the keys installed (once the reply has
+ * gone, so it goes out under the old keys).  The caller holds the command
+ * lock.  Returns the last frame's WPA_* outcome that was not a drop. */
+static int eapol_step(WdiHost *w, UINT8 *buf)
+{
+    static UINT8 frame[EAPOL_MAX], reply[WPA_FRAME_MAX];     /* (under the command lock) */
+    UINT32 n, rl;
+    int last = WPA_DROP;
+    while (eapol_pop(w, frame, &n)) {
+        int r = WpaReceive(&w->wpa, frame, n, reply, &rl);
+        if (r == WPA_DROP) {
+            kprintf("[WPA] %s: EAPOL frame dropped: %s\n", w->info.service, w->wpa.why ? w->wpa.why : "?");
+            continue;
+        }
+        kprintf("[WPA] %s: %s\n", w->info.service,
+                r == WPA_REPLY ? "4-way handshake message 1 (the ANonce): sending message 2" :
+                r == WPA_PAIRWISE ? "4-way handshake message 3 (MIC good, group key): sending message 4" :
+                                    "group key handshake message 1 (a new group key): sending message 2");
+        TxFrame *f = tx_send(w, w->peer_mac, w->port_attr.MacAddress, ETHERTYPE_EAPOL, reply, rl,
+                             WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE);
+        if (!f) kprintf("[WPA] %s: no room to send the reply\n", w->info.service);
+        if (r != WPA_REPLY) {
+            tx_wait(f, f ? f->meta.FrameID : 0);
+            install_keys(w, buf, r == WPA_PAIRWISE);
+        }
+        memset(reply, 0, rl);
+        last = r;
+    }
+    memset(frame, 0, sizeof(frame));
+    return last;
+}
+
+/* A rekey after the connection (the access point's group key handshake, or
+ * a new 4-way handshake), at PASSIVE_LEVEL */
+static NT_API void eapol_work(NT_DEVICE_OBJECT *dev, void *ctx)
+{
+    (void)dev;
+    WdiHost *w = ctx;
+    __atomic_store_n(&w->work_queued, false, __ATOMIC_RELEASE);
+    lock(w);
+    UINT8 *buf = w->adapter && w->info.connected && w->rsna ? kmalloc(CMD_BUF) : NULL;
+    if (buf) {
+        eapol_step(w, buf);
+        kfree(buf);
+    } else {
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->eapol_lock);
+        w->eapol_tail = w->eapol_head;
+        nt_KeReleaseSpinLock(&w->eapol_lock, old);
+    }
+    unlock(w);
+}
+
+/* -----------------------------------------------------------------------
  * Indications (from NdisMIndicateStatusEx, at up to DISPATCH_LEVEL)
  * ----------------------------------------------------------------------- */
 void WdiIndicate(void *adapter, UINT32 code, const void *buf, UINT32 len)
@@ -873,10 +1074,22 @@ void WdiIndicate(void *adapter, UINT32 code, const void *buf, UINT32 len)
             const WDI_TLV_HEADER *t = (const WDI_TLV_HEADER *)(m + off);
             if (off + sizeof(*t) + t->Length > n) break;
             WDI_ASSOCIATION_RESULT_PARAMETERS ap;
+            const UINT8 *r = m + off + sizeof(*t);
             if (t->Type == WDI_TLV_ASSOCIATION_RESULT &&
-                tlv_get(m + off + sizeof(*t), t->Length, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ap, sizeof(ap))) {
+                tlv_get(r, t->Length, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ap, sizeof(ap))) {
                 w->assoc = ap;
                 w->assoc_seen = true;
+                /* the RSN element of the request it sent (capability, listen interval, then elements):
+                 * message 2 of the 4-way handshake repeats it */
+                UINT32 ql;
+                const UINT8 *q = tlv_find(r, t->Length, WDI_TLV_ASSOCIATION_REQUEST_FRAME, &ql);
+                w->assoc_ie_len = 0;
+                for (UINT32 k = 4; q && k + 2 <= ql && k + 2u + q[k + 1] <= ql; k += 2u + q[k + 1])
+                    if (q[k] == 48 && 2u + q[k + 1] <= sizeof(w->assoc_ie)) {
+                        memcpy(w->assoc_ie, q + k, 2u + q[k + 1]);
+                        w->assoc_ie_len = (UINT8)(2 + q[k + 1]);
+                        break;
+                    }
             }
             off += sizeof(*t) + t->Length;
         }
@@ -918,9 +1131,13 @@ WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequ
     w->tal_init = tal_init;
     w->tal_deinit = tal_deinit;
     w->tal_started = w->tal_port = w->peer_up = w->peer_deleted = w->assoc_seen = w->tx_paused = false;
+    w->rsna = w->keys = w->handshaking = false;
     nt_KeInitializeEvent(&w->cmd_lock, NT_SynchronizationEvent, 0);   /* (taken: the bring-up below holds it) */
     nt_KeInitializeEvent(&w->task_done, NT_NotificationEvent, 0);
-    w->bss_lock = 0;
+    nt_KeInitializeEvent(&w->eapol_event, NT_SynchronizationEvent, 0);
+    w->bss_lock = w->eapol_lock = 0;
+    w->eapol_head = w->eapol_tail = 0;
+    if (!w->eapol_work) w->eapol_work = nt_IoAllocateWorkItem(NULL);   /* (kept with the host: it is reused) */
     w->adapter = adapter;
     /* (wdiwifi.sys's order: the data path, capabilities, configuration, the data path's start, the port) */
     bool dp = tal_initialize(w);
@@ -1055,6 +1272,7 @@ static int find_bss(WdiHost *w, const char *ssid)
  * the adapter it had before (the caller holds the command lock) */
 static void disconnect_locked(WdiHost *w, UINT8 *buf, bool quiet)
 {
+    UINT8 old;
     if (g_net_host == w) {
         NetDetach(&g_wifi_ops);
         g_net_host = NULL;
@@ -1070,8 +1288,14 @@ static void disconnect_locked(WdiHost *w, UINT8 *buf, bool quiet)
     __atomic_store_n(&w->peer_up, false, __ATOMIC_RELEASE);
     w->peer_deleted = false;
     w->info.connected = false;
+    /* (the driver drops the connection's keys itself: they are not static) */
+    w->rsna = w->keys = w->handshaking = false;
+    WpaClear(&w->wpa);
+    old = nt_KeAcquireSpinLockRaiseToDpc(&w->eapol_lock);
+    w->eapol_tail = w->eapol_head;
+    nt_KeReleaseSpinLock(&w->eapol_lock, old);
     /* (frames still queued are dropped; those with the driver came back with its peer) */
-    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->tx_lock);
+    old = nt_KeAcquireSpinLockRaiseToDpc(&w->tx_lock);
     while (w->tx && w->txq_tail != w->txq_head) w->tx[w->txq[w->txq_tail++ % TX_FRAMES]].state = TXF_FREE;
     nt_KeReleaseSpinLock(&w->tx_lock, old);
     if (!quiet) kprintf("[WDI] %s: disconnected from %s (0x%08x)\n", w->info.service, w->info.bss.ssid, (UINT32)st);
@@ -1096,7 +1320,55 @@ static UINT32 connect_entry(UINT8 *out, UINT32 off, const UINT8 *raw, UINT32 n)
     return start + len;
 }
 
-int WlanConnect(int i, const char *ssid, UINT32 *status)
+/* What @b's security asks of a connection: WLAN_OK and *@rsna false for an
+ * open network, *@rsna true for WPA2-Personal with CCMP (also offered by a
+ * WPA3 transition-mode network), else why not */
+static int security_of(const WlanBss *b, const char *key, bool *rsna)
+{
+    *rsna = false;
+    if (!b->rsn_len) return b->privacy ? WLAN_UNSUPPORTED : WLAN_OK;    /* (WEP or WPA without RSN) */
+    if (!(b->akms & (1u << 2)) || !(b->pairwise & (1u << WDI_CIPHER_ALGO_CCMP)) || b->group != WDI_CIPHER_ALGO_CCMP ||
+        (b->rsn_caps & 0x40))                           /* (PSK, CCMP both ways; no required MFP) */
+        return WLAN_UNSUPPORTED;
+    *rsna = true;
+    return key && key[0] ? WLAN_OK : WLAN_NEEDS_KEY;
+}
+
+/* OID_WDI_SET_PRIVACY_EXEMPTION_LIST: EAPOL may come and go unencrypted
+ * while there is no pairwise key */
+static void set_exemptions(WdiHost *w, UINT8 *buf)
+{
+    WDI_PRIVACY_EXEMPTION_PARAMETERS e = { (UINT16)(ETHERTYPE_EAPOL >> 8 | (ETHERTYPE_EAPOL & 0xFF) << 8),
+                                           WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE, WDI_EXEMPT_PACKET_TYPE_BOTH };
+    UINT32 tlen = tlv_put(buf + sizeof(WDI_MESSAGE_HEADER), 0, WDI_TLV_PRIVACY_EXEMPTION_ENTRY, &e, sizeof(e));
+    NDIS_STATUS st = command(w, WDI_SET_PRIVACY_EXEMPTION_LIST, w->port_id, buf, tlen, 0, NULL, 0);
+    kprintf("[WPA] %s: EAPOL exempted from encryption (0x%08x)\n", w->info.service, (UINT32)st);
+}
+
+/* The 4-way handshake, once associated: its frames answered as they come
+ * until message 3 brings the keys (the caller holds the command lock) */
+static int handshake_locked(WdiHost *w, UINT8 *buf)
+{
+    /* (message 2 repeats the RSN element the driver associated with; if it
+     * did not say, the one it was asked for: PSK, CCMP) */
+    static const UINT8 rsn_psk_ccmp[] = { 48, 20, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, 4,
+                                          1, 0, 0x00, 0x0F, 0xAC, 2, 0, 0 };
+    if (w->assoc_ie_len) memcpy(w->wpa.own_ie, w->assoc_ie, w->wpa.own_ie_len = w->assoc_ie_len);
+    else memcpy(w->wpa.own_ie, rsn_psk_ccmp, w->wpa.own_ie_len = sizeof(rsn_psk_ccmp));
+    bool m1 = false;
+    for (int waited = 0; waited < HANDSHAKE_MS; waited += 100) {
+        int r = eapol_step(w, buf);
+        if (r == WPA_REPLY) m1 = true;
+        if (r == WPA_PAIRWISE) return w->keys ? WLAN_OK : WLAN_FAILED;
+        INT64 t = -1000000;                             /* (100 ms) */
+        nt_KeWaitForSingleObject(&w->eapol_event, 0, 0, 0, &t);
+    }
+    kprintf("[WPA] %s: the 4-way handshake did not finish: %s\n", w->info.service,
+            m1 ? "no message 3 after message 2 (the access point did not take the key)" : "no message 1 came");
+    return m1 ? WLAN_BAD_KEY : WLAN_FAILED;
+}
+
+int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
 {
     if (status) *status = (UINT32)NDIS_STATUS_FAILURE;
     UINT8 *buf = kmalloc(CMD_BUF);
@@ -1109,9 +1381,10 @@ int WlanConnect(int i, const char *ssid, UINT32 *status)
     }
     int b = find_bss(w, ssid);
     if (b < 0 && scan_locked(w, buf) == NDIS_STATUS_SUCCESS) b = find_bss(w, ssid);
-    int r = WLAN_OK;
-    if (b < 0) r = WLAN_NO_NETWORK;
-    else if (strcmp(w->bss[b].auth, "Open") || w->bss[b].privacy) r = WLAN_NEEDS_KEY;
+    bool rsna = false;
+    int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, &rsna);
+    UINT8 pmk[WPA_PMK_LEN];
+    if (r == WLAN_OK && rsna && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
     if (r != WLAN_OK) {
         unlock(w);
         kfree(buf);
@@ -1119,11 +1392,28 @@ int WlanConnect(int i, const char *ssid, UINT32 *status)
     }
     if (w->info.connected) disconnect_locked(w, buf, false);
     WlanBss bss = w->bss[b];
-    /* WDI_TLV_CONNECT_PARAMETERS: the settings, the SSID, open authentication, no ciphers */
+    /* WDI_TLV_CONNECT_PARAMETERS: the settings, the SSID, the authentication and ciphers allowed */
     UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER), cp[160];
     WDI_CONNECTION_SETTINGS cs;
     memset(&cs, 0, sizeof(cs));
-    UINT32 auth = WDI_AUTH_ALGO_80211_OPEN, cipher = WDI_CIPHER_ALGO_NONE;
+    cs.ExcludeUnencrypted = rsna;
+    UINT32 auth = rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+    UINT32 cipher = rsna ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
+    if (rsna) {
+        memcpy(w->wpa.pmk, pmk, sizeof(pmk));
+        memset(pmk, 0, sizeof(pmk));
+        memcpy(w->wpa.aa, bss.bssid, 6);
+        memcpy(w->wpa.spa, w->port_attr.MacAddress, 6);
+        memcpy(w->wpa.ap_ie, bss.rsn, w->wpa.ap_ie_len = bss.rsn_len);
+        WpaStart(&w->wpa);
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->eapol_lock);
+        w->eapol_tail = w->eapol_head;
+        nt_KeReleaseSpinLock(&w->eapol_lock, old);
+        nt_KeClearEvent(&w->eapol_event);
+        set_exemptions(w, buf);
+        w->keys = false;
+        w->handshaking = w->rsna = true;                /* (message 1 may come before the connection completes) */
+    }
     UINT32 n = tlv_put(cp, 0, WDI_TLV_CONNECTION_SETTINGS, &cs, sizeof(cs));
     n = tlv_put(cp, n, WDI_TLV_SSID, bss.ssid, (UINT16)strlen(bss.ssid));
     n = tlv_put(cp, n, WDI_TLV_AUTH_ALGO_LIST, &auth, sizeof(auth));
@@ -1137,6 +1427,7 @@ int WlanConnect(int i, const char *ssid, UINT32 *status)
                 tlen + w->bss_raw_len[k] + 64 < CMD_BUF - sizeof(WDI_MESSAGE_HEADER))
                 tlen = connect_entry(t, tlen, w->bss_raw[k], w->bss_raw_len[k]);
     w->assoc_seen = false;
+    w->assoc_ie_len = 0;
     memset(&w->assoc, 0, sizeof(w->assoc));
     NDIS_STATUS st = command(w, WDI_TASK_CONNECT, w->port_id, buf, tlen, WDI_INDICATION_CONNECT_COMPLETE, NULL,
                              CONNECT_WAIT_S);
@@ -1152,6 +1443,8 @@ int WlanConnect(int i, const char *ssid, UINT32 *status)
         kprintf("[WDI] %s: connecting to %s (%s) failed (0x%08x, association status %u)\n", w->info.service, bss.ssid,
                 mac, (UINT32)st, w->assoc_seen ? w->assoc.AssociationStatus : 0xFFFFFFFFu);
         if (w->peer_up || w->peer_deleted) disconnect_locked(w, buf, true);
+        w->rsna = w->handshaking = false;
+        WpaClear(&w->wpa);
         if (status) *status = (UINT32)st;
         unlock(w);
         kfree(buf);
@@ -1163,9 +1456,22 @@ int WlanConnect(int i, const char *ssid, UINT32 *status)
     w->info.connected = true;
     w->tx_paused = false;
     kprintf("[WDI] %s: connected to %s (%s) on port %u, peer %u: %s, %s, WMM %s\n", w->info.service, bss.ssid, mac,
-            w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" : "secured",
-            w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" : "ciphered",
+            w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" :
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA_PSK ? "WPA2-Personal" : "secured",
+            w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" :
+            w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_CCMP ? "CCMP" : "ciphered",
             w->assoc.WMMQoSEnabled ? "on" : "off");
+    if (rsna) {
+        r = handshake_locked(w, buf);
+        w->handshaking = false;
+        if (r != WLAN_OK) {
+            disconnect_locked(w, buf, false);
+            unlock(w);
+            kfree(buf);
+            return r;
+        }
+        kprintf("[WPA] %s: 4-way handshake done: the port is authorized\n", w->info.service);
+    }
     if (!g_net_host) {                              /* (the stack's adapter now: DHCP runs over Wi-Fi) */
         g_net_host = w;
         NetAttach(&g_wifi_ops);
@@ -1200,7 +1506,7 @@ enum { BG_SCAN, BG_CONNECT, BG_DISCONNECT };
 static volatile bool g_bg_busy, g_bg_done;
 static int           g_bg_kind, g_bg_adapter, g_bg_n;
 static UINT32        g_bg_status;
-static char          g_bg_ssid[33];
+static char          g_bg_ssid[33], g_bg_key[65];
 static WlanBss       g_scan_bss[WLAN_MAX_BSS];
 
 static void bg_thread(void *arg)
@@ -1208,8 +1514,9 @@ static void bg_thread(void *arg)
     (void)arg;
     UINT32 st = 0;
     if (g_bg_kind == BG_SCAN) g_bg_n = WlanScan(g_bg_adapter, g_scan_bss, WLAN_MAX_BSS, &st);
-    else if (g_bg_kind == BG_CONNECT) g_bg_n = WlanConnect(g_bg_adapter, g_bg_ssid, &st);
+    else if (g_bg_kind == BG_CONNECT) g_bg_n = WlanConnect(g_bg_adapter, g_bg_ssid, g_bg_key, &st);
     else g_bg_n = WlanDisconnect(g_bg_adapter, &st);
+    memset(g_bg_key, 0, sizeof(g_bg_key));             /* (the passphrase is not kept) */
     g_bg_status = st;
     __atomic_store_n(&g_bg_done, true, __ATOMIC_RELEASE);
 }
@@ -1251,12 +1558,14 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status)
     return bg_done(BG_SCAN);
 }
 
-bool WlanConnectStart(int i, const char *ssid)
+bool WlanConnectStart(int i, const char *ssid, const char *key)
 {
     if (__atomic_load_n(&g_bg_busy, __ATOMIC_ACQUIRE) && !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
     if (ssid) {
         strncpy(g_bg_ssid, ssid, sizeof(g_bg_ssid) - 1);
         g_bg_ssid[sizeof(g_bg_ssid) - 1] = 0;
+        memset(g_bg_key, 0, sizeof(g_bg_key));
+        if (key) strncpy(g_bg_key, key, sizeof(g_bg_key) - 1);
     }
     return bg_start(ssid ? BG_CONNECT : BG_DISCONNECT, i);
 }

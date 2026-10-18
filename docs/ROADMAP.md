@@ -1000,8 +1000,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   built and linked with `CDependencyObject`, stand-ins for the composition
   tree's `CompositionHelper.h`, and a `DependencyObjectCollection` filled,
   searched and emptied in `xamlbasetest` on Microsoft's unit-test stubs.
-  Next: the resources and the parser, then the rest of the core and
-  `dxaml/lib` as `Windows.UI.Xaml.dll`.
+  Sixth part done: the resources (resource keys, dictionaries' maps, the
+  theme walk's cache) and the XAML markup parser (`core/Parser`) built,
+  reading XML through NovaOS's new `xmllite.dll` (over libxml2's reader),
+  with `IUriBuilder` in urlmon; a page, `{StaticResource}`, a
+  `ResourceDictionary` and bad markup parsed in `xamlparsetest`.  Next:
+  `CResourceDictionary` and the object writer, then the rest of the core
+  and `dxaml/lib` as `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

@@ -246,9 +246,34 @@ vendors.
      sources needed below them: `thread_local` destructors (`__tlregdtor`
      in `userland/lib/tlregdtr.c`, linked only into C++ programs that have one), the UCRT's `_MAX_*TOSTR_*_COUNT` sizes,
      and `windowsnumerics.h`'s `invert` (MinGW-w64 declares it only).
-   - *Next.*  The resources (`resources`, whose `ResourceResolver` needs
-     the parser) and the parser, then the rest of the core and
-     `dxaml/lib` compiled as `Windows.UI.Xaml.dll`, until
+   - *The resources and the parser (done so far).*  The `resources`,
+     `deferral`, `legacy`, `colors` and `winuri` components join
+     `xaml_components.lib`, and the markup parser (`core/Parser`, built
+     as Microsoft builds it: the core's include path read from its
+     `sources.props` and the `.props` files it imports, its own
+     precompiled header, C++ exceptions on) with the `pal/common`
+     pieces it calls (`MemoryStream`, `xstrlen`, the resource helpers;
+     `src/pal.cpp`).  The parser reads XML through XmlLite, so NovaOS
+     now has `xmllite.dll` (`userland/xmllite`): `IXmlReader` over
+     libxml2's `xmlTextReader` (third_party/libxml2, MIT), each node and
+     its attributes, namespace declarations among them, copied out as
+     UTF-16 until the next `Read`, with the encodings XmlLite infers.
+     WinURI's `CWinUriFactory` needed urlmon's `IUriBuilder`, now in
+     `userland/urlmon`.  Stand-ins for `windows.graphics.interop.h`,
+     `d2d1svg.h` (declared, empty) and a `tchar.h` that lets WinURI
+     include `strsafe.h` after it.  The heap's `HeapSize` now gives the
+     size asked for, as Windows' does, not its size class
+     (`CreateStreamOnHGlobal` streams were as long as the class).
+     `xamlparsetest` (`"xaml": "parser"`, on Microsoft's mock parser
+     services from its isolated parser unit tests) reads XML with
+     XmlLite, parses XAML into the node stream (namespaces, objects,
+     implicit collections, content properties, `x:String`,
+     `mc:Ignorable`, `{StaticResource}`, a `ResourceDictionary` with
+     `x:Key`), reports bad XML and bad markup extensions, and looks up
+     resource keys in a dictionary's map and the theme walk's cache.
+   - *Next.*  `CResourceDictionary` (`core/core/elements/Resources.cpp`)
+     and the parser's object writer (`Parser.Runtime`), then the rest of
+     the core and `dxaml/lib` compiled as `Windows.UI.Xaml.dll`, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:

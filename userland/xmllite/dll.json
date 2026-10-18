@@ -1,0 +1,4 @@
+{
+  "deps": ["bcrypt", "ole32", "msvcrt", "kernel32", "ntdll"],
+  "entry": "DllMain"
+}

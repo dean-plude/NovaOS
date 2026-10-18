@@ -495,7 +495,7 @@ typedef struct Block {
                                 * filled its class exactly overwrote the next
                                 * block's size; see the carve below too) */
 #endif
-    SIZE_T        size;        /* usable bytes (class size, or the large size) */
+    SIZE_T        size;        /* the bytes asked for, which HeapSize reports as Windows' does */
     SIZE_T        tag;         /* HEAP_MAGIC with the arena and class in its low bytes, or HEAP_LARGE */
 } Block;                       /* 16 bytes: user data stays 16-byte aligned */
 
@@ -638,7 +638,7 @@ NTSYSAPI PVOID NTAPI RtlAllocateHeap(PVOID heap, ULONG flags, SIZE_T n)
         spin_unlock(&carve_lock);
     }
     if (!b) return 0;
-    b->size = class_size[c];
+    b->size = n;
     b->tag = (HEAP_MAGIC & ~(SIZE_T)0xFFFF) | (SIZE_T)a << 8 | (SIZE_T)c;  /* (the magic's own low bytes would hide them) */
     if (flags & HEAP_ZERO_MEMORY) memset(b + 1, 0, class_size[c]);
     return b + 1;
@@ -719,8 +719,13 @@ NTSYSAPI ULONG NTAPI RtlGetProcessHeaps(ULONG n, PVOID *heaps)
 NTSYSAPI PVOID NTAPI RtlReAllocateHeap(PVOID heap, ULONG flags, PVOID p, SIZE_T n)
 {
     if (!p) return RtlAllocateHeap(heap, flags, n);
-    SIZE_T old = RtlSizeHeap(heap, 0, p);
-    if (n <= old && ((Block *)p - 1)->tag != HEAP_LARGE) return p;
+    Block *b = (Block *)p - 1;
+    SIZE_T old = b->size;
+    if (b->tag != HEAP_LARGE && n && n <= class_size[b->tag & 0xFF]) {
+        if (flags & HEAP_ZERO_MEMORY && n > old) memset((UCHAR *)p + old, 0, n - old);
+        b->size = n;                                /* (it still fits its class) */
+        return p;
+    }
     PVOID q = RtlAllocateHeap(heap, flags, n);
     if (!q) return 0;
     memcpy(q, p, old < n ? old : n);

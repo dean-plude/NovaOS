@@ -3,9 +3,10 @@
 // classes the component libraries call before the core builds:
 // CDependencyObject's property system asks an element for its logical and
 // templated parents and its popup, the resource lookup for an element's
-// class name and resources; and of the resource lookup's, which the
-// components' theme resources call (components/resources, which needs the
-// XAML parser).  Linked only by programs that test the
+// class name and resources and a visual state's group (setters in visual
+// states); and the platform services, which the core's DLL sets up and
+// which stay null here, as in Microsoft's stubs (DCompVisual_Stub.cpp).
+// Linked only by programs that test the
 // components on their own (xaml_teststubs.lib); none of them makes an
 // element.  Microsoft's UIElement_Stub.cpp has OnAssociationFailure but
 // needs the rest of the element tree with it.  Also XAML's zero-filling
@@ -14,9 +15,9 @@
 #include "theming\inc\Theme.h"
 #include <Framework.h>
 #include <Popup.h>
+#include <vsm/inc/CVisualStateManager2.h>
+#include <EncodedPtr.h>
 #include <string.h>
-#include <ResourceLookupLogger.h>
-#include <ResourceResolver.h>
 
 xstring_ptr CFrameworkElement::GetClassName()
 {
@@ -43,26 +44,16 @@ CPopup *CPopupRoot::GetOpenPopupWithChild(_In_ const CUIElement *const, bool) co
     return nullptr;
 }
 
+xref_ptr<CVisualStateGroupCollection> CVisualStateManager2::GetGroupCollectionFromVisualState(_In_ const CVisualState *)
+{
+    return nullptr;
+}
+
+EncodedPtr<IPlatformServices> gps;
+
 _Check_return_ HRESULT CUIElement::OnAssociationFailure()
 {
     return E_NOTIMPL;
-}
-
-_Check_return_ HRESULT Diagnostics::ResourceLookupLogger::Start(const xstring_ptr_view &, const xstring_ptr_view &)
-{
-    return S_OK;
-}
-
-_Check_return_ HRESULT Diagnostics::ResourceLookupLogger::Stop(const xstring_ptr_view &, xstring_ptr &)
-{
-    return S_OK;
-}
-
-_Check_return_ HRESULT Resources::ResourceResolver::FindNextResolvedValueNoRef(
-    _In_ CDependencyObject *, _In_ CThemeResource *, bool, _Out_ CDependencyObject **resultNoRef)
-{
-    *resultNoRef = nullptr;
-    return S_OK;
 }
 
 void *__cdecl operator new(size_t size, ZeroMemAllocationPolicy)

@@ -532,7 +532,7 @@ def build_pass(arch, all_tasks):
         objs = [obj]
         if src.endswith('.cpp') and prog.get('msstl'):  # C++ on the standard library (msvcp140)
             top = os.path.dirname(HERE)
-            flags = (XAML.program_flags(me) if prog.get('xaml') else HOOKS['msvcp140'].program_flags(me)) + \
+            flags = (XAML.program_flags(me, prog) if prog.get('xaml') else HOOKS['msvcp140'].program_flags(me)) + \
                 [f for d in prog.get('include', []) for f in ('-I', os.path.join(top, d))] + \
                 [f for h in prog.get('force_include', []) for f in ('-include', os.path.join(top, h))] + \
                 prog.get('cflags', [])

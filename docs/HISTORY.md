@@ -14234,6 +14234,52 @@ compiles them, and the first of them are built and tested.
 New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
 weak references, delegates, events, strings) and the built components.
 
+## Accounts in Settings, and fast user switching
+
+Second part of roadmap step 33.1 ([design](../design/accounts.md)).
+Accounts could be made only by programs (`NetUserAdd`), and the lock
+screen offered only the account that locked it.  Now Settings has
+Windows 11's Accounts page: your info with your picture, type and
+password (change it, or pick a picture from the wallpaper folder), and
+the other users, where an administrator adds an account (name, password
+twice, Standard user or Administrator), changes an account's type or
+removes it with its files.  The Start menu's account button opens a menu
+with "Change account settings", Lock, Sign out and the other accounts.
+
+Every program now runs in the sign-in of the account it started under,
+and every window belongs to its program's sign-in.  Signing in as a
+second account from the lock screen or the sign-in screen switches: the
+first account's windows are put away with their programs still running,
+and come back with their focus when it signs in again.  Sign-out (Start,
+or `ExitWindowsEx` with `EWX_LOGOFF`) ends an account's programs and
+closes its windows; an account that is signed in cannot be deleted.
+Services run in no account's sign-in, so a sign-out leaves them alone.
+
+The new core self-test `switchtest` does it as a person would: it adds
+an account in Settings by typing into the form, switches to it from the
+lock screen (a wrong password refused first) while its own program keeps
+running, checks the new profile and hive, switches back and signs the
+second account out.
+
+## A failed update comes back on its own
+
+First part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+update whose kernel stopped during its first start (a panic, a failed
+assertion, a fatal CPU exception) used to print its report and halt, and
+the PC stayed there until someone pressed reset; only then did the boot
+loader go back to the previous kernel.  Now every fatal stop calls
+`KeFatalStop` (`kernel/fs/update.c`), which on an unfinished trial start
+logs that the update stopped, waits three seconds and resets the machine,
+as Windows restarts after a stop error; the trying mark is still on the
+ESP, so the next start is the previous version, which removes the update.
+A stop on any other start still halts.
+
+To test it without a broken build, a kernel image has a second marked
+field beside its version stamp, empty in every build:
+`tools/mkupdate.py --fail-boot panic` stamps a copy that stops just before
+it counts as started.  The devices suite's `update` boot stages one as a
+v3 and checks that the machine comes back as v1 with no reset from outside.
+
 ## A Windows render driver registers
 
 `\Device\DxgKrnl` took only display-only drivers, the

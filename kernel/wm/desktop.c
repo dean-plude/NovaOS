@@ -26,6 +26,7 @@
 #include "../apps/iconset.h"
 #include "../hal/display.h"
 #include "../fs/setup.h"
+#include "../fs/update.h"
 #include "wm.h"
 #include "input.h"
 #include "kbdlayout.h"
@@ -2128,6 +2129,7 @@ void DesktopRun(void *arg)
 
     UINT64 last_desk_check = 0;
     UINT64 desk_sig = 0;
+    bool   signed_in = false;                   /* the first sign-in happened */
     for (;;) {
         g_desktop_beat = sched_ticks();
         /* The window system's lock; the file system's (which program
@@ -2135,10 +2137,14 @@ void DesktopRun(void *arg)
         DesktopLockAlone();
         LogonPoll();
         if (services && LogonTakeFirstSignIn()) {
+            signed_in = true;
             RamNode *svc = RamfsResolve(NULL, "\\Windows\\System32\\services.exe");
             if (!svc || !UmSpawnDetached(svc, "services /autostart", svc->parent))
                 kprintf("[SVC] Cannot start services.exe: %s\n", svc ? "out of memory" : "not installed");
         }
+        /* an update's first start counts as good once this loop answers
+         * with someone signed in or the sign-in screen up (fs/update.h) */
+        UpdateDesktopTurn(signed_in || LogonActive());
         ps2_poll();
         VirtioInputPoll();
         monitors_poll();

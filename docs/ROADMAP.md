@@ -1093,7 +1093,7 @@ servicing and print models Windows apps and drivers already expect.
   boot loader offers "Windows Boot Manager" in a boot menu and starts it;
   shrinking NTFS and reinstalling over NovaOS with the data kept are the
   next parts.
-- [ ] **33.5 Printing.** The Windows print model: a spooler service
+- [x] **33.5 Printing.** The Windows print model: a spooler service
   (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
   Print Management, real printer drivers loaded unchanged where they are
   user mode, driverless IPP network printing, and an XPS/PDF print path with
@@ -1106,9 +1106,13 @@ servicing and print models Windows apps and drivers already expect.
   printing (IPP ports in the spooler sending PDF or PWG Raster, offline
   printers keeping their jobs) and Settings > Printers (add a network
   printer by address, named after its model; default; remove), tested
-  against a fake IPP printer on the CI host (`spooltest ipp`). Next: the
-  Notepad and SumatraPDF check in the app corpus
-  ([design/printing.md](design/printing.md)).
+  against a fake IPP printer on the CI host (`spooltest ipp`). Part 3:
+  the app corpus's Notepad++ and SumatraPDF print their document from
+  their own Print dialog to the IPP printer on the corpus host (the page
+  it gets matches `tests/reference/NAME-print.png`) and to Microsoft
+  Print to PDF (the saved file is the same PDF, `spooltest same`)
+  ([design/printing.md](design/printing.md)). Notepad++ stands in for
+  Notepad: Windows' Notepad is not redistributable.
 
 ## Cross-cutting (maintain throughout)
 

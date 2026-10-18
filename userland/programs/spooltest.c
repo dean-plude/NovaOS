@@ -18,6 +18,13 @@
  *   - the Print dialog: chosen copies come back (and Cancel cancels), and
  *     PageSetupDlg's defaults are Letter in thousandths of an inch
  * Prints "spooltest: N passed, 0 failed".
+ *
+ * For the app corpus's print check (tests/appcorpus, Phase 33.5):
+ *   spooltest add NAME PORT   adds an IPP printer as AddPrinter does
+ *   spooltest same FILE BASE  FILE (what a program printed to Microsoft
+ *                             Print to PDF) is a PDF of one page or more
+ *                             and is byte for byte what the fake IPP
+ *                             printer at BASE got last
  */
 #include <windows.h>
 #include <winspool.h>
@@ -720,7 +727,30 @@ int main(int argc, char **argv)
         if (!up) Sleep(250);
     }
     if (!up) printf("spooltest: the spooler's pipe is not there\n");
-    if (argc >= 3 && !strcmp(argv[1], "ipp")) {
+    if (argc >= 4 && !strcmp(argv[1], "add")) {
+        WCHAR name[200], port[300];
+        MultiByteToWideChar(CP_ACP, 0, argv[2], -1, name, 200);
+        MultiByteToWideChar(CP_ACP, 0, argv[3], -1, port, 300);
+        HANDLE h = NULL;
+        if (!OpenPrinterW(name, &h, NULL)) h = add_ipp(name, port);     /* (once per boot) */
+        CHECK("AddPrinter", h != NULL);
+        if (h) ClosePrinter(h);
+    } else if (argc >= 4 && !strcmp(argv[1], "same")) {
+        WCHAR file[MAX_PATH], base[200];
+        MultiByteToWideChar(CP_ACP, 0, argv[2], -1, file, MAX_PATH);
+        MultiByteToWideChar(CP_ACP, 0, argv[3], -1, base, 200);
+        DWORD fn = 0, n = 0;
+        BYTE *mine = slurp(file, &fn), *got = received(base, L"print.bin", &n);
+        int pages = 0;                       /* (the page tree is written last, after the images) */
+        for (DWORD i = fn > 7 ? fn - 7 : 0; mine && i > 0 && !pages; i--)
+            if (!memcmp(mine + i, "/Count ", 7)) pages = atoi((char *)mine + i + 7);
+        printf("spooltest: %ls is %lu bytes, %d page(s); the IPP printer got %lu bytes\n", file,
+               (unsigned long)fn, pages, (unsigned long)n);
+        CHECK("the PDF printer's file is a PDF", mine && fn > 1000 && !memcmp(mine, "%PDF-", 5) && pages >= 1);
+        CHECK("the IPP printer got the same PDF", mine && got && n == fn && !memcmp(mine, got, n));
+        free(mine);
+        free(got);
+    } else if (argc >= 3 && !strcmp(argv[1], "ipp")) {
         WCHAR base[200];
         MultiByteToWideChar(CP_ACP, 0, argv[2], -1, base, 200);
         test_ipp(base);

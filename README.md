@@ -170,7 +170,7 @@ A short tour; [docs/inside.md](docs/inside.md) has the full one, and
 - **Graphics**: a CPU-rendered GDI and desktop, OpenGL 4.5 on Mesa's llvmpipe built in, and Vulkan, DXVK and VKD3D-Proton from the App Store, on the CPU or, under QEMU, on the host's GPU through virtio-gpu.
 - **Program support**: the PE loader, 32-bit programs through a WoW64-style `ntdll`, x64 and x86 structured exceptions, consoles and ConPTY, COM between processes, Windows Installer, services and scheduled tasks.
 - **Apps and updates**: the App Store downloads open-source Windows programs and runtimes (with a badge for each one the nightly tests verify), `winget` installs them and packages from the winget community repository from the command line, Firefox is bundled as the default browser, and installed systems update themselves from an update channel that can be signed (the release key is not shipped yet) and go back to the previous version on their own when an update stops, hangs or stalls while it first starts; the boot loader's Advanced startup menu (F8, `shutdown /r /o`, or by itself after two failed starts) offers the previous version, safe mode and startup repair.
-- **Printing**: the Windows print spooler and API, Microsoft Print to PDF, and the Print dialogs; network printing comes next.
+- **Printing**: the Windows print spooler and API, Microsoft Print to PDF, the Print dialogs and driverless network (IPP) printers; Notepad++ and SumatraPDF print in the app corpus.
 
 <!-- END generated:inside -->
 

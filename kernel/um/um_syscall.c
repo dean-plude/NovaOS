@@ -539,8 +539,16 @@ UINT64 um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32
 }
 
 /* The object behind @h (with a reference the caller drops), or NULL.
- * NtCurrentThread() (-2) names the calling thread; type 0 matches any. */
-UmObject *um_handle_object(UmProcess *p, UINT64 hv, UmObType type)
+ * NtCurrentThread() (-2) names the calling thread; type 0 matches any.
+ * A handle to a process or thread of a higher integrity level (opened
+ * with only SYNCHRONIZE and the limited query right: um_integrity_gate)
+ * gives the object only to the callers that ask for no more
+ * (um_handle_object_limited: waiting, the exit code, the basic query) */
+static UmObject *handle_object(UmProcess *p, UINT64 hv, UmObType type, bool limited_ok);
+UmObject *um_handle_object(UmProcess *p, UINT64 hv, UmObType type) { return handle_object(p, hv, type, false); }
+UmObject *um_handle_object_limited(UmProcess *p, UINT64 hv, UmObType type) { return handle_object(p, hv, type, true); }
+
+static UmObject *handle_object(UmProcess *p, UINT64 hv, UmObType type, bool limited_ok)
 {
     UmObject *o = NULL;
     if (hv == UINT64_C(0xFFFFFFFFFFFFFFFE)) {
@@ -550,8 +558,10 @@ UmObject *um_handle_object(UmProcess *p, UINT64 hv, UmObType type)
     um_lock_shared(&p->lock);
     int i = slot_lock(p, hv);
     UmHandle *h = i < 0 ? NULL : handle(p, hv);
-    if (h && h->kind == H_OBJECT && (!type || h->obj->type == type)) o = um_ob_ref(h->obj);
-    else if (h && h->kind == H_CON_IN && (!type || type == UO_CONSOLE)) o = um_console_object(p->con);
+    if (h && h->kind == H_OBJECT && (!type || h->obj->type == type)) {
+        bool limited = h->access_known && (h->obj->type == UO_PROCESS || h->obj->type == UO_THREAD);
+        if (!limited || limited_ok || !type) o = um_ob_ref(h->obj);
+    } else if (h && h->kind == H_CON_IN && (!type || type == UO_CONSOLE)) o = um_console_object(p->con);
     if (i >= 0) slot_unlock(p, i);
     um_unlock_shared(&p->lock);
     return o;
@@ -2487,7 +2497,9 @@ static UINT64 sys_nova_create_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
         c = um_spawn_image(exe, cwd, con, true, err, sizeof(err));
         if (!c) {
             kprintf("[UM] %s (PID %u): CreateProcess(%s) failed: %s\n", p->name, p->pid, image, err);
-            st = strstr(err, "not found") ? 0xC0000135u : strstr(err, "memory") ? ST_NO_MEMORY : 0xC000007Bu;
+            st = strstr(err, "not found") ? 0xC0000135u : strstr(err, "memory") ? ST_NO_MEMORY :
+                 strstr(err, "canceled by the user") ? 0xC000042Cu :      /* STATUS_ELEVATION_REQUIRED: No at UAC's prompt */
+                 strstr(err, "(UAC)") ? 0xC0000022u : 0xC000007Bu;
         }
     }
     um_lock_excl(&p->lock);                              /* the handles stay put while they are copied */
@@ -2569,7 +2581,7 @@ static UINT64 sys_nova_process_info(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (a1 == UINT64_C(0xFFFFFFFFFFFFFFFF)) {
         out[0] = p->pid; out[1] = 0x103; out[2] = 0;
     } else {
-        UmObject *o = um_handle_object(p, a1, UO_PROCESS);
+        UmObject *o = um_handle_object_limited(p, a1, UO_PROCESS);   /* (waiting, the exit code: SYNCHRONIZE, the limited query) */
         if (!o) return ST_INVALID_HANDLE;
         IrqState s = ob_lock();
         UmProcess *c = o->proc;
@@ -2645,6 +2657,10 @@ static UINT64 sys_terminate_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmProcess *p = UmCurrent();
     if (a1 != 0 && a1 != UINT64_C(0xFFFFFFFFFFFFFFFF)) {
         UmObject *o = um_handle_object(p, a1, UO_PROCESS);
+        if (!o && (o = um_handle_object_limited(p, a1, UO_PROCESS))) {   /* (no PROCESS_TERMINATE: a higher level's) */
+            um_ob_unref(o);
+            return ST_ACCESS_DENIED;
+        }
         if (!o) return ST_INVALID_HANDLE;
         if (o->proc) UmKill(o->proc, (UINT32)a2);
         um_ob_unref(o);
@@ -2974,13 +2990,16 @@ bool um_handle_object_exists(UmProcess *p, UINT64 hv)
 /* NtOpenProcess(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PCLIENT_ID) */
 static UINT64 sys_open_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
-    (void)a2; (void)a3;
+    (void)a3;
     UmProcess *p = UmCurrent();
     UINT64 cid[2];
     if (!a4 || !NT_SUCCESS(CopyFromUser(cid, (const void *)(uintptr_t)a4, sizeof(cid)))) return UM_STATUS_ACCESS_VIOLATION;
     UmObject *o = um_open_process((UINT32)cid[0]);
     if (!o) return ST_INVALID_PARAMETER;                       /* (as Windows: no such process) */
-    UINT64 h = um_handle_new_object(p, o);
+    bool limited;
+    UINT32 granted, st = um_integrity_gate(o, (UINT32)a2, &limited, &granted);
+    if (st) { um_ob_unref(o); return st; }
+    UINT64 h = um_handle_new_object_access(p, o, limited, granted);
     um_ob_unref(o);
     if (!h) return ST_TOO_MANY_HANDLES;
     return put_u64(a1, h) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;
@@ -2989,12 +3008,15 @@ static UINT64 sys_open_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 /* NtOpenThread(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, CLIENT_ID *) */
 static UINT64 sys_open_thread(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
-    (void)a2; (void)a3;
+    (void)a3;
     UINT64 cid[2];
     if (!a4 || !NT_SUCCESS(CopyFromUser(cid, (const void *)(uintptr_t)a4, sizeof(cid)))) return UM_STATUS_ACCESS_VIOLATION;
     UmObject *o = um_open_thread((UINT32)cid[1]);
     if (!o) return ST_INVALID_PARAMETER;
-    UINT64 h = um_handle_new_object(UmCurrent(), o);
+    bool limited;
+    UINT32 granted, st = um_integrity_gate(o, (UINT32)a2, &limited, &granted);
+    if (st) { um_ob_unref(o); return st; }
+    UINT64 h = um_handle_new_object_access(UmCurrent(), o, limited, granted);
     um_ob_unref(o);
     if (!h) return ST_TOO_MANY_HANDLES;
     return put_u64(a1, h) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;

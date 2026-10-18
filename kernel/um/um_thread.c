@@ -1078,7 +1078,7 @@ static UINT64 sys_set_info_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 static UINT64 sys_query_info_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     UmObject *ob;
-    UmProcess *p = um_proc_of(UmCurrent(), a1, &ob);          /* this process or another (a launcher's child) */
+    UmProcess *p = um_proc_of_query(UmCurrent(), a1, &ob);    /* this process or another (a launcher's child) */
     if (!p) return ST_INVALID_HANDLE;
     UINT64 r = query_info_process(p, a2, a3, a4);
     if (ob) um_ob_unref(ob);
@@ -1225,16 +1225,20 @@ static UINT64 query_info_process(UmProcess *p, UINT64 a2, UINT64 a3, UINT64 a4)
 
 /* A process named by a handle (-1: the caller); referenced by @ob if not
  * the caller */
-UmProcess *um_proc_of(UmProcess *self, UINT64 h, UmObject **ob)
+static UmProcess *proc_of(UmProcess *self, UINT64 h, UmObject **ob, bool limited_ok)
 {
     *ob = NULL;
     if (h == UINT64_C(0xFFFFFFFFFFFFFFFF)) return self;
-    UmObject *o = um_handle_object(self, h, UO_PROCESS);
+    UmObject *o = limited_ok ? um_handle_object_limited(self, h, UO_PROCESS) : um_handle_object(self, h, UO_PROCESS);
     if (!o) return NULL;
     if (!o->proc || o->proc->reclaimed) { um_ob_unref(o); return NULL; }
     *ob = o;
     return o->proc;
 }
+
+UmProcess *um_proc_of(UmProcess *self, UINT64 h, UmObject **ob) { return proc_of(self, h, ob, false); }
+/* ... for asking about it only (a handle with PROCESS_QUERY_LIMITED_INFORMATION will do) */
+UmProcess *um_proc_of_query(UmProcess *self, UINT64 h, UmObject **ob) { return proc_of(self, h, ob, true); }
 
 /* NtDuplicateObject(HANDLE SourceProcess, HANDLE Source, HANDLE TargetProcess,
  *                   PHANDLE Target, ACCESS_MASK, ULONG Attributes, ULONG Options)
@@ -1284,7 +1288,17 @@ static UINT64 sys_duplicate_object(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         }
         um_unlock_excl(&sp->lock);
         if (!ok) st = ST_INVALID_HANDLE;
-        else if (tp && !(options & 2) && src.kind == H_OBJECT && src.access_known) {
+        else if (tp && src.kind == H_OBJECT && (src.obj->type == UO_PROCESS || src.obj->type == UO_THREAD)) {
+            /* a process or thread: the duplicate may have only what opening
+             * it would give (a higher integrity level's: no more than the
+             * limited rights, um_integrity_gate) */
+            bool limited = false;
+            UINT32 granted = 0;
+            if (!(options & 2)) st = um_integrity_gate(src.obj, (UINT32)um_stack_arg(5), &limited, &granted);
+            else if (src.access_known) { limited = true; granted = src.access; }   /* (DUPLICATE_SAME_ACCESS: what it had) */
+            src.access_known = limited;
+            src.access = granted;
+        } else if (tp && !(options & 2) && src.kind == H_OBJECT && src.access_known) {
             /* Rights of its own (not DUPLICATE_SAME_ACCESS): within what the
              * source handle was granted they are given; more is an open of
              * the object, checked against its descriptor */

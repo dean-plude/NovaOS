@@ -113,6 +113,19 @@ bool   NtfsSecurityById(NtfsVol *v, UINT32 id, void *buf, UINT32 cap, UINT32 *le
 UINT32 NtfsAddSecurity(NtfsVol *v, const void *sd, UINT32 len);
 bool   NtfsSetSecurityId(NtfsVol *v, UINT64 mft, UINT32 id);
 
+/* Shrinking (Setup making room beside Windows; docs/design/installer.md).
+ * NtfsShrinkLimit, on a volume read-only or not: the smallest partition
+ * it could shrink to (what it uses, 10% more and 256 MiB, and never below
+ * the end of the MFT, which can't move) and the bytes in use; false, with
+ * @why, if Windows did not leave it clean (hibernated, Fast Startup, a
+ * chkdsk pending).  NtfsShrink, on a writable volume: move every cluster
+ * past the new end below it and cut the volume to fit a partition of
+ * @bytes (the partition table is the caller's); left marked dirty, so it
+ * is checked when next mounted.  False with @why if it can't (still a
+ * valid volume of the old size). */
+bool   NtfsShrinkLimit(NtfsVol *v, UINT64 *min_bytes, UINT64 *used_bytes, const char **why);
+bool   NtfsShrink(NtfsVol *v, UINT64 bytes, const char **why);
+
 /* Make a new, empty NTFS volume of @sectors at @lba on @dev, labelled
  * @label (UTF-8), with serial number @serial. */
 bool   NtfsFormat(BlockDev *dev, UINT64 lba, UINT64 sectors, const char *label, UINT64 serial);

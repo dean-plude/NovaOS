@@ -404,6 +404,7 @@ NTSYSAPI ULONG NTAPI RtlNtStatusToDosError(NTSTATUS s)
     case 0xC00000B5: return 121;                          /* ERROR_SEM_TIMEOUT */
     case 0xC000014B: return 109;                          /* ERROR_BROKEN_PIPE */
     case 0xC0000120: return 995;                          /* ERROR_OPERATION_ABORTED */
+    case 0xC000042C: return 740;                          /* STATUS_ELEVATION_REQUIRED: ERROR_ELEVATION_REQUIRED */
     case 0xC0000236: return 1225;                         /* STATUS_CONNECTION_REFUSED: ERROR_CONNECTION_REFUSED */
     case 0xC000020D: case 0xC000013B: return 64;          /* connection reset, local disconnect: ERROR_NETNAME_DELETED */
     case 0xC0000241: return 1236;                         /* ERROR_CONNECTION_ABORTED */

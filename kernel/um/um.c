@@ -1395,10 +1395,12 @@ UINT16 um_pe_dll_characteristics(RamNode *f)
     return rd16(d + nt + 24 + 70);
 }
 
-/* Whether PE file @f's manifest (resource type 24, its first one) asks
- * to run as administrator: requestedExecutionLevel requireAdministrator or
- * highestAvailable, which Windows elevates on start (installers mostly) */
-bool um_pe_wants_admin(RamNode *f)
+/* What PE file @f's manifest (resource type 24, its first one) asks for
+ * in requestedExecutionLevel: UM_EXEC_REQUIRE_ADMIN (requireAdministrator,
+ * installers mostly), UM_EXEC_HIGHEST (highestAvailable: administrator for
+ * an administrator, as is for a standard user) or UM_EXEC_AS_INVOKER (0:
+ * no manifest, asInvoker, or anything else) */
+int um_pe_exec_level(RamNode *f)
 {
     if (!RamfsLoad(f) || !um_pe_machine(f)) return false;
     const UINT8 *d = (const UINT8 *)f->data;
@@ -1449,10 +1451,12 @@ bool um_pe_wants_admin(RamNode *f)
     for (int k = 0; k < 2; k++) {
         UINT32 l = (UINT32)strlen(levels[k]);
         for (UINT32 i = 0; i + l <= len; i++)
-            if (!memcmp(d + off + i, levels[k], l)) return true;
+            if (!memcmp(d + off + i, levels[k], l)) return k ? UM_EXEC_HIGHEST : UM_EXEC_REQUIRE_ADMIN;
     }
-    return false;
+    return UM_EXEC_AS_INVOKER;
 }
+
+bool um_pe_wants_admin(RamNode *f) { return um_pe_exec_level(f) != UM_EXEC_AS_INVOKER; }
 
 /* Find a DLL: a path as given, else the program's directory, then the
  * system folder (System32, or SysWOW64 for 32-bit programs) */
@@ -2861,10 +2865,34 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
     p->con = um_console_ref(con);
     p->token = um_token_for_process(UmCurrent());        /* its creator's user (the desktop's: the default) */
     p->session = UmCurrent() ? UmCurrent()->session : um_session_rid();   /* its creator's sign-in, or the screen's */
-    /* a program whose manifest asks for administrator runs elevated, as
-     * Windows starts it after its consent prompt (NovaOS asks nobody yet) */
-    if (p->token && !um_token_elevated(p->token) && um_pe_wants_admin(exe) && um_elevate_process(p))
+    /* A program whose manifest asks for administrator runs elevated once
+     * UAC's prompt (wm/consent.c) agrees: Yes from an administrator, an
+     * administrator's password from a standard user (who then runs it as
+     * that administrator).  highestAvailable asks only an administrator.
+     * The prompt waits for the person, so the desktop lock is let go
+     * meanwhile (@yield; without it, the Store starting an installer,
+     * nobody can be asked and it runs elevated as before) */
+    int level = p->token && !um_token_elevated(p->token) ? um_pe_exec_level(exe) : UM_EXEC_AS_INVOKER;
+    if (level == UM_EXEC_HIGHEST && !um_token_split(p->token)) level = UM_EXEC_AS_INVOKER;
+    if (level != UM_EXEC_AS_INVOKER && !yield) {
+        if (um_elevate_process(p)) kprintf("[UM] %s runs as administrator (its manifest asks to)\n", exe->name);
+    } else if (level != UM_EXEC_AS_INVOKER) {
+        char path[RAMFS_PATH_MAX];
+        RamfsPath(exe, path, sizeof(path));
+        UmObject *old = p->token;
+        DesktopUnlock();
+        UINT32 st;
+        UmObject *e = um_uac_elevate(old, path, &st);
+        DesktopLock();
+        if (!e) {
+            destroy(p);
+            ksnprintf(err, err_cap, st == 0xC0000120u ? "The operation was canceled by the user." : "Access is denied (UAC)");
+            return NULL;
+        }
+        p->token = e;
+        um_ob_unref(old);
         kprintf("[UM] %s runs as administrator (its manifest asks to)\n", exe->name);
+    }
     /* NORMAL_PRIORITY_CLASS, or an IDLE or BELOW_NORMAL creator's class,
      * as on Windows (CreateProcess's *_PRIORITY_CLASS flags set it after) */
     p->prio_class = 2;

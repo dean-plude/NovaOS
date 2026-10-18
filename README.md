@@ -107,8 +107,10 @@ NovaOS starts live from the disc and offers **Install NovaOS**, which
 partitions `disk.img` (GPT, an EFI System Partition and a data partition
 for drive C:).  On a disk that already holds Windows, Setup can instead
 install NovaOS beside it in the disk's free space and keep Windows'
-partitions as they are; NovaOS then starts first and its boot menu offers
-Windows ([docs/design/installer.md](docs/design/installer.md)).  Afterwards, run the same command without `-cdrom nova.iso`
+partitions as they are (shrinking Windows' volume to make room when the
+disk has no free space), or reinstall NovaOS keeping drive C:; NovaOS then
+starts first and its boot menu offers Windows
+([docs/design/installer.md](docs/design/installer.md)).  Afterwards, run the same command without `-cdrom nova.iso`
 to start the installed system; the first start walks you through your
 name, time zone, keyboard layout and display resolution.
 

@@ -256,6 +256,15 @@ A graphical program started from Start, the App Store, File Explorer or a
 shortcut opens in its own window.  Only a console (command-line) program
 gets a Terminal window, as its console.
 
+An installer that needs administrator rights (as most do) dims the
+screen first and asks **Do you want to allow this app to make changes to
+your device?**, as User Account Control does on Windows: **Yes** (or
+Alt+Y) runs it as administrator, **No** (Alt+N, Esc) does not run it.
+On a standard user's account the same dialog asks for an administrator's
+user name and password instead.  Nothing else on the screen takes the
+keyboard or the mouse while it shows.  Starting a program with **Run as
+administrator** (ShellExecute's `runas`) asks the same way.
+
 Programs from anywhere else install as on Windows: download the installer,
 `.msi` or archive, then run the installer, or unpack the archive (with
 7-Zip from the App Store) and run the program.  NovaOS does not yet

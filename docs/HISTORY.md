@@ -14307,6 +14307,26 @@ NovaOS and Windows Boot Manager, which it starts with `LoadImage` and
 `StartImage`.  The devices suite's `beside` boot checks all of it, with a
 small UEFI application standing in for Windows' boot manager.
 
+## Setup makes room by shrinking Windows, and reinstalls keeping drive C:
+
+Third and last part of roadmap step 33.4 ([design](../design/installer.md)),
+which completes it.  Most PCs sold with Windows have no free space: Windows'
+volume runs up to its recovery partition.  Setup now offers "Beside Windows,
+shrinking it from X to Y": NovaOS's NTFS driver checks Windows left the
+volume clean (no hibernation or Fast Startup, no chkdsk pending), moves every
+cluster past the new end below it (files, index blocks, `$LogFile`,
+`$MFTMirr`), rewriting each attribute's mapping pairs, then cuts `$Bitmap`
+and `$BadClus` and writes the new size into the boot sector and its backup;
+Setup makes the partition smaller and installs NovaOS in the room.  It is
+written from the on-disk format (ntfsresize is GPL, and no permissively
+licensed NTFS resizer exists), leaves the volume marked for checking, and a
+shrink cut off part way leaves a volume that mounts at its old size or its
+new one.  On a disk NovaOS is already on, "Reinstall NovaOS, keeping drive
+C: and your files" formats only its EFI System Partition again and keeps
+`NOVADATA` (`C:\Users`) as it is.  A host test cuts the shrink off at every
+write; the devices suite's `shrink` boot shrinks a 2400 MiB volume made by
+mkntfs, reinstalls, and checks every Windows file byte for byte from the host.
+
 ## Printing: Notepad++ and SumatraPDF print in the app corpus
 
 Third and last part of roadmap step 33.5 ([design](../design/printing.md)),
@@ -14382,6 +14402,29 @@ way:
   must be exactly what GDI draws.
 
 Next: IPP Everywhere network printing, then Settings' Printers page.
+
+## Programs ask before they run as administrator
+
+First part of roadmap step 33.2 ([design](../design/uac.md)).  A program
+whose manifest asks for administrator, and ShellExecute's `runas`, used to
+get the elevated half of the administrator's token at once, as if UAC
+were set to "never notify".  Now the screen dims and User Account
+Control's prompt asks first (`kernel/wm/consent.c`, Windows'
+`consent.exe`): an administrator answers Yes or No, a standard user types
+an administrator's user name and password, and a wrong one is refused.
+No fails `runas` with `ERROR_CANCELLED` and an installer's start with
+`ERROR_ELEVATION_REQUIRED`; the policy values Windows uses
+(`ConsentPromptBehaviorAdmin`, `ConsentPromptBehaviorUser`, `EnableLUA`)
+decide whether it asks.  Only the keyboard and the mouse reach the
+prompt, never a program's input, as on the secure desktop.
+
+Tokens now say their integrity level (system, high, medium), and a
+process of a lower level cannot open one of a higher level for more than
+waiting on it and asking its exit code: an elevated program cannot be
+written, read or ended from an unelevated one.  The self-test harness
+presses Alt+Y at each prompt for the tests that start installers, as the
+person at the keyboard would; the new `uactest` answers its prompts
+itself.
 
 ## A failed update comes back on its own
 

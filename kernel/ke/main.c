@@ -445,6 +445,12 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
         kprintf("[NovaOS] No framebuffer present; running headless\n");
     }
 
+    /* A test build stamped to fail its start (tools/mkupdate.py --fail-boot):
+     * the self-tests' broken update stops here, before the desktop counts
+     * as reached, and KeFatalStop takes it back to the previous version */
+    if (!strcmp(NovaTestFault(), "panic"))
+        KPANIC("This kernel is stamped with the test fault \"panic\" (tools/mkupdate.py --fail-boot): it stops before reaching the desktop");
+
     kprintf("\n[NovaOS] Phase 7 initialized. Enabling interrupts...\n");
     sti();
 

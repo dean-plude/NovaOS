@@ -79,6 +79,11 @@ const char *klog_boot_text(size_t *len);
  * Kernel assertion with descriptive panic message.
  */
 void KsymBacktraceHere(void);                 /* ke/ksym.c */
+/* The kernel cannot go on (a panic, a failed assertion, a fatal CPU
+ * exception), just before it halts: the first start of an update restarts
+ * the machine instead, so that the boot loader goes back to the previous
+ * version (fs/update.c); otherwise this returns and the caller halts */
+void KeFatalStop(void);
 
 #define KASSERT(cond)  do {                                          \
     if (__builtin_expect(!(cond), 0)) {                             \
@@ -86,6 +91,7 @@ void KsymBacktraceHere(void);                 /* ke/ksym.c */
                 "  at %s:%d in %s()\n",                             \
                 #cond, __FILE__, __LINE__, __func__);                \
         KsymBacktraceHere();                                        \
+        KeFatalStop();                                              \
         for (;;) { __asm__ volatile ("cli; hlt"); }                 \
     }                                                                \
 } while (0)
@@ -95,5 +101,6 @@ void KsymBacktraceHere(void);                 /* ke/ksym.c */
     kprintf("  " fmt "\n", ##__VA_ARGS__);                          \
     kprintf("  at %s:%d in %s()\n", __FILE__, __LINE__, __func__);  \
     KsymBacktraceHere();                                             \
+    KeFatalStop();                                                   \
     for (;;) { __asm__ volatile ("cli; hlt"); }                     \
 } while (0)

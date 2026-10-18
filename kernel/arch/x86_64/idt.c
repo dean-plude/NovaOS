@@ -234,6 +234,7 @@ static void handle_page_fault(InterruptFrame *f)
         kprintf("KERNEL PAGE FAULT — halting\n");
         BootLogPanic();
         UmCrashKernel();                    /* the report, for C:\NovaOS\Crashes at the next start */
+        KeFatalStop();                      /* (an update's first start restarts: back to the previous version) */
         cpu_halt_forever();
     }
 
@@ -292,6 +293,7 @@ static void dispatch(InterruptFrame *frame)
         if (!(frame->cs & 3)) KsymBacktrace(frame->rip, frame->rbp, frame->rsp);
         if (vector == EXC_DOUBLE_FAULT) {
             kprintf("DOUBLE FAULT — system halted\n");
+            KeFatalStop();
             cpu_halt_forever();
         }
 
@@ -300,6 +302,7 @@ static void dispatch(InterruptFrame *frame)
             kprintf("Unhandled kernel exception — halting\n");
             BootLogPanic();                 /* (a PC without a serial port: the USB stick NovaOS started from) */
             UmCrashKernel();
+            KeFatalStop();
             cpu_halt_forever();
         }
         /* (a program's exceptions went to its SEH handlers above,

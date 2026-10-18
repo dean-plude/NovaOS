@@ -19,6 +19,8 @@
 #include "../ke/scheduler.h"
 #include "../um/um.h"
 #include "../hal/fwcfg.h"
+#include "../hal/acpi.h"
+#include "../arch/x86_64/apic.h"
 #include "mbedtls/sha256.h"
 #include "monocypher-ed25519.h"
 
@@ -38,6 +40,7 @@ _Static_assert(sizeof(UPDATE_SIGNING_KEY) == 1 || sizeof(UPDATE_SIGNING_KEY) == 
 #define F_LOADER     "BOOTX64.EFI"       /* in BOOT_DIR */
 
 static UINT64 g_boot_flags;
+static volatile bool g_trial_finished;   /* this trial start made the update the installed version */
 static char   g_notice[160];
 
 static volatile UpdateStatus g_st;
@@ -634,6 +637,7 @@ static void finish(FatVol *esp, UINT32 dir, const char *info)
     FatDelete(esp, dir, F_INFO);
     FatDelete(esp, dir, F_TRYING);                      /* last: the update is done */
     sync(esp);
+    g_trial_finished = true;
     kprintf("[UPDATE] Updated NovaOS from %s to %s (the previous kernel is kept as \\EFI\\NOVA\\kernel.old)\n",
             from[0] ? from : "?", NovaVersion());
     ksnprintf(g_notice, sizeof(g_notice), "NovaOS was updated from %s to %s.", from[0] ? from : "?", NovaVersion());
@@ -670,6 +674,23 @@ static void boot_thread(void *arg)
     }
     kfree(info);
     FatUnmount(esp);
+}
+
+/* The kernel stopped (printf.h).  On the update's first start, before it
+ * finished, the trying mark is still on the ESP: restart, and the boot
+ * loader starts the previous kernel, which throws the update away, as
+ * Windows restarts after a stop error and rolls a failed update back.
+ * A PC left halted on a broken update would wait for someone to press
+ * reset; this one comes back on its own. */
+void KeFatalStop(void)
+{
+    static volatile int once;
+    if (!(g_boot_flags & BOOT_FLAG_UPDATE_TRIAL) || g_trial_finished || __atomic_exchange_n(&once, 1, __ATOMIC_SEQ_CST))
+        return;
+    kprintf("[UPDATE] The updated NovaOS %s stopped while starting: restarting to go back to the previous version\n",
+            NovaVersion());
+    udelay(3000000);                                    /* (the stop's report stays on the screen for a moment) */
+    AcpiReset();
 }
 
 void UpdateBootDone(void)

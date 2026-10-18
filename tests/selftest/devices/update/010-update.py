@@ -7,8 +7,12 @@
 # kernel.new once and the new kernel makes it the installed one), and
 # restarts cleanly again.  Then v2's update is staged, and the machine is
 # reset while the new kernel is still starting: the next start goes back
-# to the v1 kernel and throws the update away.  Every channel is signed
-# with the self-tests' key (005-signature.py).
+# to the v1 kernel and throws the update away.  Last, broken/ is a v3
+# whose kernel is stamped to stop before it reaches the desktop
+# (tools/mkupdate.py --fail-boot panic): restarting into it, the machine
+# restarts on its own after the stop and comes back as v1, with no reset
+# from outside (docs/design/recovery.md).  Every channel is signed with the
+# self-tests' key (005-signature.py).
 #
 # Version order around the rolling build's channel (docs/updates.md): first
 # a channel of this very version (same/) is up to date and a development
@@ -17,11 +21,12 @@
 import os, re, time
 
 DOC = ('an installed NovaOS updating itself from an update channel to a newer test build, restarting into it '
-       'twice, and going back to that version when the next update is reset while it first starts')
+       'twice, and going back to that version when the next update is reset while it first starts, or stops '
+       'while it first starts')
 
 
 def _version():
-    """The built kernel's stamped version (kernel/ke/version.c), and the next two"""
+    """The built kernel's stamped version (kernel/ke/version.c), and the next three"""
     try:
         data = open(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'build', 'kernel.elf'), 'rb').read()
         at = data.index(b'NovaOS-version-stamp:') + 21
@@ -30,10 +35,10 @@ def _version():
         ver = '0.1.0'
     nums = [int(x) for x in re.match(r'[0-9.]+', ver).group(0).strip('.').split('.')]
     nums += [0] * (3 - len(nums))
-    return ver, '.'.join(map(str, nums[:2] + [nums[2] + 1])) + '-test', '.'.join(map(str, nums[:2] + [nums[2] + 2])) + '-test'
+    return (ver,) + tuple('.'.join(map(str, nums[:2] + [nums[2] + n])) + '-test' for n in (1, 2, 3))
 
 
-VER, V1, V2 = _version()
+VER, V1, V2, V3 = _version()
 DEV = VER + '+dev.20261004125600'
 CHANNEL = 'http://10.0.2.2:18090/{}/novaos-update.txt'
 
@@ -91,5 +96,15 @@ TESTS = [
                       rf'\[UPDATE\] The update to NovaOS {E(V2)} did not finish starting, so NovaOS {E(V1)} started again']),
     Test('offered again', 'update', [rf'The update to NovaOS {E(V2)} did not start, so NovaOS went back to {E(V1)}',
                                      rf'NovaOS {E(V2)} is available \('], builtin=True, timeout=120),
+    Test('broken channel', f'update channel {CHANNEL.format("broken")}',
+         [r'Update channel: http://10\.0\.2\.2:18090/broken/'], builtin=True),
+    Test('stage broken update', 'update install', [rf'NovaOS {E(V3)} is ready: restart'], builtin=True, timeout=900),
+    # (the stop is a kernel panic on purpose: quoted, not this test's failure)
+    Test('broken update rolls back', 'shutdown /r',
+         [rf"\[UPDATE\] This is the update's first start \(NovaOS {E(V3)}", r'stamped with the test fault "panic"',
+          rf'\[UPDATE\] The updated NovaOS {E(V3)} stopped while starting: restarting',
+          rf'\[version {E(V1)}\]'], reboot=True, timeout=900, quotes_panic=True),
+    Test('rolled back', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True,
+         boot_expect=[rf'\[UPDATE\] The update to NovaOS {E(V3)} did not finish starting, so NovaOS {E(V1)} started again']),
     Test('store updates', 'store updates', [r"Opened the App Store's updates"], builtin=True),
 ]

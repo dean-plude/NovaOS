@@ -22,8 +22,11 @@
 #
 # So far the XAML core's lowest layers build: the component libraries in
 # LIBRARIES, as one static library (xaml_components.lib) that the
-# self-test xamlbasetest links, up to the type metadata and
-# CDependencyObject's property system.  inc/ also stands in for the closed
+# self-tests xamlbasetest and xamlparsetest link, up to the type metadata,
+# CDependencyObject's property system, the collections and the resources,
+# and the markup parser (CORE_LIBRARIES: core/Parser, compiled with the
+# core's include path, its precompiled header and C++ exceptions, for
+# programs that say "xaml": "parser").  inc/ also stands in for the closed
 # Windows App SDK headers those include (FrameworkUdk's helpers, the lifted
 # IXP interop headers); the rest of the core links as it builds.
 import os, re, threading
@@ -67,17 +70,35 @@ flyweight/lib/Microsoft.UI.Xaml.Flyweight.vcxproj
 primitiveDependencyObjects/lib/Microsoft.UI.Xaml.PrimitiveDependencyObjects.vcxproj
 math/lib/Microsoft.UI.Xaml.Math.vcxproj
 theming/lib/Microsoft.UI.Xaml.Theming.vcxproj
-Collection/Lib/Microsoft.UI.Xaml.Collection.vcxproj'''.split()
+Collection/Lib/Microsoft.UI.Xaml.Collection.vcxproj
+resources/lib/Microsoft.UI.Xaml.XamlResources.vcxproj
+legacy/lib/Microsoft.UI.Xaml.Legacy.vcxproj
+deferral/lib/Microsoft.UI.Xaml.Deferral.vcxproj
+winuri/lib/winuri.vcxproj
+colors/lib/Microsoft.UI.Xaml.Colors.vcxproj'''.split()
+
+# The XAML core's libraries built so far (dxaml/xcp/core/...): the markup
+# parser.  Each is a project, the sources.props its sources share (whose
+# include path, with the props files it imports, is theirs), its
+# precompiled header and sources compiled with it that it does not list
+# (src/pal.cpp: the platform layer's the parser calls).  The core is
+# compiled with C++ exceptions, as Microsoft compiles it (/EHsc,
+# _HAS_EXCEPTIONS=1, WIL's exceptions on).
+CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.props', 'core/Parser/pch/precomp.h',
+                   [os.path.join(HERE, 'src', 'pal.cpp')])]
+EXCEPTIONS = ['-fcxx-exceptions', '-fexceptions', '-U_HAS_EXCEPTIONS', '-D_HAS_EXCEPTIONS=1',
+              '-UWIL_SUPPRESS_EXCEPTIONS']
 
 # Sources compiled in place of Microsoft's, where clang has to be told what
 # MSVC does on its own (src/, each says what)
 REPLACED = {'CValue/CValueStores.cpp': os.path.join(HERE, 'src', 'CValueStores.cpp')}
-# Sources compiled with a project's that it does not list: two of the
-# platform layer's the components call (pal/common: character classes, the
-# 2D matrix), and NovaOS's definitions of what MSVC defines from a
-# declaration (src/definitions.cpp)
+# Sources compiled with a project's that it does not list: the platform
+# layer's the components call (pal/common: character classes, the 2D
+# matrix; the URI string getters, with the URI library), and NovaOS's
+# definitions of what MSVC defines from a declaration (src/definitions.cpp)
 ADDED = {'math/lib/Microsoft.UI.Xaml.Math.vcxproj': [os.path.join(XCP, 'pal', 'common', 'ctypes.cpp'),
                                                      os.path.join(XCP, 'pal', 'common', 'matrix.cpp')],
+         'winuri/lib/winuri.vcxproj': [os.path.join(XCP, 'pal', 'common', 'UriXStringGetters.cpp')],
          'DependencyObject/lib/Microsoft.UI.Xaml.DependencyObject.vcxproj': [os.path.join(HERE, 'src', 'definitions.cpp')]}
 
 # The include directories every component sees (components/base.props,
@@ -111,8 +132,9 @@ TEST_STUBS = [('unittests/stubs/Microsoft.UI.Xaml.Stubs.vcxproj',
               ('metadata/mocks/Microsoft.UI.Xaml.Tests.Isolated.Mocks.Framework.Metadata.vcxproj', (),
                ['-fno-access-control', '-I', os.path.join(XCP, 'components', 'metadata', 'mocks')])]
 PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
-# the DLLs XAML's sources call beyond a program's usual ones
-LIBS = ['dbghelp', 'shlwapi']
+# the DLLs XAML's sources call beyond a program's usual ones (the parser
+# reads XML with XmlLite, the URI library builds URIs with urlmon)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -137,7 +159,7 @@ def generated(b):
             p = os.path.join(d, 'winrt_abi.h')
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
-            fold(os.path.join(d, 'fold'), component_includes() + project_includes() +
+            fold(os.path.join(d, 'fold'), component_includes() + project_includes() + core_includes() + source_dirs() +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
@@ -153,6 +175,34 @@ def component_includes():
 def project_includes():
     """the include directories LIBRARIES' projects add"""
     return [i for proj in LIBRARIES for i in vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)['includes']]
+
+
+def source_dirs():
+    """the directories of LIBRARIES' sources (which include headers beside
+    them by spellings of their own: deferral's "ICustomWriter.h")"""
+    out = []
+    for proj in LIBRARIES:
+        for src in vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)['sources']:
+            if os.path.dirname(src) not in out:
+                out.append(os.path.dirname(src))
+    return out
+
+
+def core_includes(props=None):
+    """the include path of CORE_LIBRARIES' sources (of one, @props)"""
+    out = []
+    for _, sp, _, _ in CORE_LIBRARIES:
+        if props in (None, sp):
+            out += [d for d in vcxproj.include_path(os.path.join(XCP, sp), PROPS) if d not in out]
+    return out
+
+
+def core_flags(proj, sources, pch, added=()):
+    """what a CORE_LIBRARIES entry's sources add to flags()"""
+    p = vcxproj.read(os.path.join(XCP, proj), PROPS)
+    inc = core_includes(sources) + p['includes']
+    return [x for d in inc for x in ('-I', d)] + ['-D' + d for d in p['defines']] + EXCEPTIONS + \
+        ['-include', os.path.join(XCP, pch)]
 
 
 def fold(out, dirs):
@@ -215,7 +265,8 @@ def library(b, odir):
     with _LIB:
         f = flags(b)
         headers = [os.path.join(r, h) for r, _, fs in os.walk(INC) for h in fs if h.endswith('.h')] + \
-                  [os.path.abspath(__file__)] + list(REPLACED.values()) + [x for v in ADDED.values() for x in v]
+                  [os.path.abspath(__file__)] + list(REPLACED.values()) + [x for v in ADDED.values() for x in v] + \
+                  [x for c in CORE_LIBRARIES for x in c[3]]
         objs = []
         for proj in LIBRARIES:
             p = vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)
@@ -224,6 +275,11 @@ def library(b, odir):
             srcs = [REPLACED.get(os.path.relpath(s, os.path.join(XCP, 'components')).replace(os.sep, '/'), s)
                     for s in p['sources']] + ADDED.get(proj, [])
             objs += b.compile_many(srcs, odir, prefix, f + extra, headers, compiler='clang++')
+        for proj, sources, pch, added in CORE_LIBRARIES:
+            p = vcxproj.read(os.path.join(XCP, proj), PROPS)
+            prefix = 'xaml_' + proj.replace('/', '_').rsplit('_', 1)[0] + '_'
+            objs += b.compile_many(p['sources'] + added, odir, prefix, f + core_flags(proj, sources, pch), headers,
+                                   compiler='clang++')
         if not os.path.exists(lib) or any(os.path.getmtime(o) > os.path.getmtime(lib) for o in objs):
             b.run(['lld-link', '/lib', f'/out:{lib}'] + objs)
     return lib
@@ -252,8 +308,12 @@ def test_stubs(b, odir):
     return lib
 
 
-def program_flags(b):
-    """for a C++ program built against XAML's sources ("xaml" in its NAME.json)"""
+def program_flags(b, prog=None):
+    """for a C++ program built against XAML's sources ("xaml" in its
+    NAME.json): the components', or with "xaml": "parser" the parser's
+    (CORE_LIBRARIES' first), as the parser's own unit tests are built"""
+    if prog and prog.get('xaml') == 'parser':
+        return flags(b) + core_flags(*CORE_LIBRARIES[0])
     return flags(b) + ['-include', PCH]
 
 

@@ -15,16 +15,22 @@ metadata/DynamicMetadataStorage;
 CDependencyObject's property system, DependencyObject and its minimal
 DependencyObject/minlib; the value types CValue, flyweight,
 primitiveDependencyObjects, math and theming; the collections, Collection;
-with their MSBuild projects), pal/common's ctypes.cpp and matrix.cpp (the
-math library's geometry helpers), the isolated unit tests' stubs and
+with their MSBuild projects; the resources, deferral, legacy, colors and
+winuri components and the markup parser, core/Parser, with the .props
+files its sources.props imports), pal/common's ctypes.cpp and matrix.cpp (the
+math library's geometry helpers) and MemoryStream, MemoryStreamBuffer,
+refcounting, MsResourceHelpers and UriXStringGetters (the parser's and
+WinURI's), core/dll/services.cpp, the isolated unit tests' stubs and
 metadata mocks (components/unittests/stubs, less four stubs NovaOS does
 not link, and components/metadata/mocks; xaml_teststubs.lib, linked by
-xamlbasetest), the components'
+xamlbasetest), the isolated parser unit tests' mock core services
+(components/parser/unittests, linked by xamlparsetest, with
+dxaml/test/native/inc/XamlLogging.h), the components'
 precompiled header (components/pch), headers from dxaml/xcp/inc, core/inc,
 pal and the components' inc directories those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
-dxaml (the core above CDependencyObject, the parser and controls) joins as
+dxaml (the rest of the core, the parser's object writer and controls) joins as
 the build takes it in (docs/design/windows-ui-xaml.md).
 
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would

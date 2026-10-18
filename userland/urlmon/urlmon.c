@@ -1,6 +1,6 @@
 /*
- * urlmon.dll — URL parsing for programs: CreateUri (IUri) and
- * CoInternetParseUrl.  No MIT/BSD urlmon exists (Wine's is LGPL), so this
+ * urlmon.dll — URL parsing for programs: CreateUri (IUri), CreateIUriBuilder
+ * (IUriBuilder) and CoInternetParseUrl.  No MIT/BSD urlmon exists (Wine's is LGPL), so this
  * is NovaOS's own: a URI is split once into scheme, user info, host, port,
  * path, query and fragment, and every property is read from those parts.
  * The download and moniker side of urlmon is not here yet.
@@ -18,9 +18,11 @@ HRESULT WINAPI UrlCreateFromPathW(LPCWSTR path, LPWSTR url, LPDWORD n, DWORD res
 HRESULT WINAPI PathCreateFromUrlW(LPCWSTR url, LPWSTR path, LPDWORD n, DWORD flags);
 HRESULT WINAPI UrlCanonicalizeW(LPCWSTR in, LPWSTR out, LPDWORD n, DWORD flags);
 #define INET_E_DEFAULT_ACTION_ ((HRESULT)0x800C0011L)
+#define INET_E_INVALID_URL_ ((HRESULT)0x800C0002L)
 
 static const GUID IID_IUnknown_ = { 0x00000000, 0x0000, 0x0000, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID IID_IUri_     = { 0xa39ee748, 0x6a27, 0x4817, { 0xa6, 0xf2, 0x13, 0x91, 0x4b, 0xef, 0x58, 0x90 } };
+static const GUID IID_IUriBuilder_ = { 0x4221b2e1, 0x8955, 0x46c0, { 0xbd, 0x5b, 0xde, 0x98, 0x97, 0x56, 0x5d, 0xe7 } };
 
 /* (ASCII is all a scheme or an address uses) */
 static int is_alpha(WCHAR c) { return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'); }
@@ -307,6 +309,243 @@ URLMONAPI HRESULT WINAPI CreateUriWithFragment(LPCWSTR uri, LPCWSTR frag, DWORD 
     HRESULT hr = CreateUri(s, flags, reserved, out);
     HeapFree(GetProcessHeap(), 0, s);
     return hr;
+}
+
+/* ---- IUriBuilder: a URI's parts, set one by one, made into an IUri ---- */
+enum { B_SCHEME, B_USER, B_PASS, B_HOST, B_PATH, B_QUERY, B_FRAG, B_COUNT };
+typedef struct Builder Builder;
+typedef HRESULT (WINAPI *BGet)(Builder *, DWORD *, LPCWSTR *);
+typedef HRESULT (WINAPI *BSet)(Builder *, LPCWSTR);
+typedef struct {
+    HRESULT (WINAPI *QueryInterface)(Builder *, const GUID *, void **);
+    ULONG   (WINAPI *AddRef)(Builder *);
+    ULONG   (WINAPI *Release)(Builder *);
+    HRESULT (WINAPI *CreateUriSimple)(Builder *, DWORD, DWORD_PTR, Uri **);
+    HRESULT (WINAPI *CreateUri)(Builder *, DWORD, DWORD, DWORD_PTR, Uri **);
+    HRESULT (WINAPI *CreateUriWithFlags)(Builder *, DWORD, DWORD, DWORD, DWORD_PTR, Uri **);
+    HRESULT (WINAPI *GetIUri)(Builder *, Uri **);
+    HRESULT (WINAPI *SetIUri)(Builder *, Uri *);
+    BGet GetFragment, GetHost, GetPassword, GetPath;
+    HRESULT (WINAPI *GetPort)(Builder *, BOOL *, DWORD *);
+    BGet GetQuery, GetSchemeName, GetUserName;
+    BSet SetFragment, SetHost, SetPassword, SetPath;
+    HRESULT (WINAPI *SetPort)(Builder *, BOOL, DWORD);
+    BSet SetQuery, SetSchemeName, SetUserName;
+    HRESULT (WINAPI *RemoveProperties)(Builder *, DWORD);
+    HRESULT (WINAPI *HasBeenModified)(Builder *, BOOL *);
+} BuilderVtbl;
+struct Builder {
+    const BuilderVtbl *vtbl;
+    LONG refs;
+    WCHAR *part[B_COUNT];         /* (NULL: not there) */
+    BOOL has_port, authority, modified;
+    DWORD port;
+    Uri *uri;                     /* the IUri it was made from, while unchanged */
+};
+
+static WCHAR *wdup(const WCHAR *s, int n)
+{
+    if (n < 0) n = (int)wcslen(s);
+    WCHAR *d = HeapAlloc(GetProcessHeap(), 0, (n + 1) * sizeof(WCHAR));
+    if (d) { memcpy(d, s, n * sizeof(WCHAR)); d[n] = 0; }
+    return d;
+}
+
+static void b_clear(Builder *b)
+{
+    for (int i = 0; i < B_COUNT; i++) { HeapFree(GetProcessHeap(), 0, b->part[i]); b->part[i] = NULL; }
+    b->has_port = b->authority = FALSE;
+    b->port = 0;
+    if (b->uri) b->uri->vtbl->Release(b->uri);
+    b->uri = NULL;
+}
+
+/* @u's parts (a NovaOS IUri: its spans; another: its properties) */
+static void b_load(Builder *b, Uri *u)
+{
+    static const DWORD props[B_COUNT] = { P_SCHEME_NAME, P_USER_NAME, P_PASSWORD, P_HOST, P_PATH, P_QUERY, P_FRAGMENT };
+    b_clear(b);
+    if (!u) return;
+    u->vtbl->AddRef(u);
+    b->uri = u;
+    for (int i = 0; i < B_COUNT; i++) {
+        BSTR v = NULL;
+        if (u->vtbl->GetPropertyBSTR(u, props[i], &v, 0) == S_OK && v) b->part[i] = wdup(v, (int)SysStringLen(v));
+        SysFreeString(v);
+    }
+    BOOL has = FALSE;
+    if (u->vtbl == &g_uri) {
+        b->authority = u->p.authority;
+        b->has_port = u->p.port.e > u->p.port.s;
+        b->port = u->p.port_num;
+    } else {
+        b->authority = b->part[B_HOST] != NULL;
+        if (SUCCEEDED(u->vtbl->HasProperty(u, P_PORT, &has)) && has) {
+            b->has_port = TRUE;
+            u->vtbl->GetPropertyDWORD(u, P_PORT, &b->port, 0);
+        }
+    }
+}
+
+static HRESULT WINAPI b_qi(Builder *b, const GUID *iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!memcmp(iid, &IID_IUnknown_, sizeof(GUID)) || !memcmp(iid, &IID_IUriBuilder_, sizeof(GUID))) {
+        InterlockedIncrement(&b->refs);
+        *out = b;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG WINAPI b_addref(Builder *b) { return InterlockedIncrement(&b->refs); }
+static ULONG WINAPI b_release(Builder *b)
+{
+    LONG n = InterlockedDecrement(&b->refs);
+    if (!n) {
+        b_clear(b);
+        HeapFree(GetProcessHeap(), 0, b);
+    }
+    return n;
+}
+
+/* scheme:[//[user[:password]@]host[:port]]path[?query][#fragment] */
+static HRESULT WINAPI b_createflags(Builder *b, DWORD create, DWORD builder, DWORD allow, DWORD_PTR reserved, Uri **out)
+{
+    (void)builder; (void)allow;
+    if (!out) return E_POINTER;
+    *out = NULL;
+    if (!b->modified && b->uri) {
+        b->uri->vtbl->AddRef(b->uri);
+        *out = b->uri;
+        return S_OK;
+    }
+    if (!b->part[B_SCHEME]) return INET_E_INVALID_URL_;
+    size_t n = 32;
+    for (int i = 0; i < B_COUNT; i++) n += b->part[i] ? wcslen(b->part[i]) : 0;
+    WCHAR *s = HeapAlloc(GetProcessHeap(), 0, n * sizeof(WCHAR)), *w = s;
+    if (!s) return E_OUTOFMEMORY;
+#define PUT(str) do { size_t l_ = wcslen(str); memcpy(w, str, l_ * sizeof(WCHAR)); w += l_; } while (0)
+    PUT(b->part[B_SCHEME]);
+    *w++ = L':';
+    if (b->authority || b->part[B_HOST] || b->part[B_USER]) {
+        PUT(L"//");
+        if (b->part[B_USER]) {
+            PUT(b->part[B_USER]);
+            if (b->part[B_PASS]) { *w++ = L':'; PUT(b->part[B_PASS]); }
+            *w++ = L'@';
+        }
+        if (b->part[B_HOST]) PUT(b->part[B_HOST]);
+        if (b->has_port) {
+            WCHAR digits[12];
+            int k = 0;
+            DWORD v = b->port;
+            do { digits[k++] = (WCHAR)(L'0' + v % 10); v /= 10; } while (v);
+            *w++ = L':';
+            while (k) *w++ = digits[--k];
+        }
+        if (b->part[B_PATH] && b->part[B_PATH][0] && b->part[B_PATH][0] != L'/') *w++ = L'/';
+    }
+    if (b->part[B_PATH]) PUT(b->part[B_PATH]);
+    if (b->part[B_QUERY]) { if (b->part[B_QUERY][0] != L'?') *w++ = L'?'; PUT(b->part[B_QUERY]); }
+    if (b->part[B_FRAG]) { if (b->part[B_FRAG][0] != L'#') *w++ = L'#'; PUT(b->part[B_FRAG]); }
+#undef PUT
+    *w = 0;
+    HRESULT hr = CreateUri(s, create, reserved, (void **)out);
+    HeapFree(GetProcessHeap(), 0, s);
+    return hr;
+}
+static HRESULT WINAPI b_create(Builder *b, DWORD create, DWORD allow, DWORD_PTR reserved, Uri **out)
+{
+    return b_createflags(b, create, 0, allow, reserved, out);
+}
+static HRESULT WINAPI b_simple(Builder *b, DWORD allow, DWORD_PTR reserved, Uri **out)
+{
+    return b_createflags(b, 0, 0, allow, reserved, out);
+}
+static HRESULT WINAPI b_getiuri(Builder *b, Uri **out)
+{
+    if (!out) return E_POINTER;
+    if (b->modified || !b->uri) return b_create(b, 0, 0, 0, out);
+    b->uri->vtbl->AddRef(b->uri);
+    *out = b->uri;
+    return S_OK;
+}
+static HRESULT WINAPI b_setiuri(Builder *b, Uri *u)
+{
+    b_load(b, u);
+    b->modified = FALSE;
+    return S_OK;
+}
+static HRESULT b_get(Builder *b, int i, DWORD *n, LPCWSTR *out)
+{
+    if (!n || !out) return E_POINTER;
+    *out = b->part[i];
+    *n = b->part[i] ? (DWORD)wcslen(b->part[i]) : 0;
+    return b->part[i] ? S_OK : S_FALSE;
+}
+static HRESULT b_set(Builder *b, int i, LPCWSTR v)
+{
+    WCHAR *d = v ? wdup(v, -1) : NULL;
+    if (v && !d) return E_OUTOFMEMORY;
+    HeapFree(GetProcessHeap(), 0, b->part[i]);
+    b->part[i] = d;
+    b->modified = TRUE;
+    return S_OK;
+}
+#define PART(get, set, i) \
+    static HRESULT WINAPI get(Builder *b, DWORD *n, LPCWSTR *out) { return b_get(b, i, n, out); } \
+    static HRESULT WINAPI set(Builder *b, LPCWSTR v) { return b_set(b, i, v); }
+PART(b_getfrag, b_setfrag, B_FRAG) PART(b_gethost, b_sethost, B_HOST) PART(b_getpass, b_setpass, B_PASS)
+PART(b_getpath, b_setpath, B_PATH) PART(b_getquery, b_setquery, B_QUERY) PART(b_getscheme, b_setscheme, B_SCHEME)
+PART(b_getuser, b_setuser, B_USER)
+static HRESULT WINAPI b_getport(Builder *b, BOOL *has, DWORD *port)
+{
+    if (!has || !port) return E_POINTER;
+    *has = b->has_port;
+    *port = b->port;
+    return S_OK;
+}
+static HRESULT WINAPI b_setport(Builder *b, BOOL has, DWORD port)
+{
+    b->has_port = has;
+    b->port = has ? port : 0;
+    b->modified = TRUE;
+    return S_OK;
+}
+static HRESULT WINAPI b_remove(Builder *b, DWORD mask)
+{
+    static const DWORD props[B_COUNT] = { P_SCHEME_NAME, P_USER_NAME, P_PASSWORD, P_HOST, P_PATH, P_QUERY, P_FRAGMENT };
+    for (int i = 0; i < B_COUNT; i++)
+        if (mask & (1u << props[i])) b_set(b, i, NULL);
+    if (mask & (1u << P_PORT)) b_setport(b, FALSE, 0);
+    return S_OK;
+}
+static HRESULT WINAPI b_modified(Builder *b, BOOL *mod)
+{
+    if (!mod) return E_POINTER;
+    *mod = b->modified;
+    return S_OK;
+}
+static const BuilderVtbl g_builder = {
+    b_qi, b_addref, b_release, b_simple, b_create, b_createflags, b_getiuri, b_setiuri,
+    b_getfrag, b_gethost, b_getpass, b_getpath, b_getport, b_getquery, b_getscheme, b_getuser,
+    b_setfrag, b_sethost, b_setpass, b_setpath, b_setport, b_setquery, b_setscheme, b_setuser,
+    b_remove, b_modified,
+};
+
+URLMONAPI HRESULT WINAPI CreateIUriBuilder(void *uri, DWORD flags, DWORD_PTR reserved, void **out)
+{
+    (void)flags; (void)reserved;
+    if (!out) return E_POINTER;
+    *out = NULL;
+    Builder *b = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*b));
+    if (!b) return E_OUTOFMEMORY;
+    b->vtbl = &g_builder;
+    b->refs = 1;
+    b_load(b, uri);
+    *out = b;
+    return S_OK;
 }
 
 /* PARSE_ACTION numbers */

@@ -71,3 +71,46 @@ def read(path, props):
             if d and not d.startswith('$('):
                 res['defines'].append(d)
     return res
+
+
+def include_path(path, props):
+    """the include directories a props file (and the props files it
+    imports, before it as MSBuild reads them) sets ProjectIncludeDirectories
+    to, in order: what the core's sources.props files give the core's
+    projects (core/common.props, common.props, components/includes.props'
+    CompIncludes).  Entries naming a property NovaOS does not have (the
+    lifted IXP's, the build output's) are left out."""
+    state = {'ProjectIncludeDirectories': '', 'CompIncludes': ''}
+
+    def run(p):
+        text = open(p, encoding='utf-8-sig').read()
+        here = os.path.dirname(p)
+        for m in re.finditer(r'<Import\s+Project="([^"]+)"|<(ProjectIncludeDirectories|CompIncludes)>(.*?)</\2>',
+                             text, re.S):
+            if m.group(1):
+                f = expand(m.group(1), dict(props, MSBuildThisFileDirectory=here + os.sep))
+                f = f and find_case(os.path.join(here, f.replace('\\', '/')))
+                if f and os.path.isfile(f) and f.endswith('.props'):
+                    run(f)
+                continue
+            out = []
+            for d in m.group(3).split(';'):
+                d = d.strip()
+                if not d:
+                    continue
+                name = re.fullmatch(r'\$\((\w+)\)', d)
+                if name and name.group(1) in state:
+                    out += [x for x in state[name.group(1)].split(';') if x]
+                    continue
+                v = expand(d, props)
+                v = v and find_case(os.path.join(here, v.replace('\\', '/')))
+                if v and os.path.isdir(v):
+                    out.append(v)
+            state[m.group(2)] = ';'.join(out)
+
+    run(path)
+    seen = []
+    for d in state['ProjectIncludeDirectories'].split(';'):
+        if d and d not in seen:
+            seen.append(d)
+    return seen

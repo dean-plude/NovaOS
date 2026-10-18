@@ -166,3 +166,8 @@ static inline void blend(NOVA_DC *d, int x, int y, COLORREF c, int a)
     int b = (GetBValue(c) * a + GetBValue(t) * (255 - a) + 127) / 255;
     *p = to_native(d, RGB(r, g, b));
 }
+
+/* print.c: printer DCs */
+HDC  print_create(LPCWSTR name, const DEVMODEW *mode);
+void print_delete(HDC h);
+int  print_caps(HDC h, int index);

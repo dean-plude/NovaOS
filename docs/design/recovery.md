@@ -11,8 +11,9 @@ and reset. How updates are fetched and staged is in
 | Windows | NovaOS |
 |---|---|
 | The previous build kept for rollback (`Windows.old`, the servicing stack's pending.xml rollback) | `\EFI\NOVA\kernel.old`, the kernel an update replaced |
-| Boot Manager's boot status: a boot that never reached logon counts as failed | the trying mark `\EFI\NOVA\update.try`, deleted only once the new kernel has started |
+| Boot Manager's boot status: a boot that never reached logon counts as failed | the trying mark `\EFI\NOVA\update.try`, deleted only once the new kernel's desktop is up with someone signed in or the sign-in screen showing |
 | "Automatically restart" after a stop error (on by default) | `KeFatalStop`: on an update's first start, a kernel stop restarts the machine |
+| The hardware watchdog timer (WDAT), reset when the system stops answering | the chipset's TCO timer (`kernel/hal/tco.c`), running while an update first starts |
 | Rollback of a feature update that fails to start | the boot loader starts the previous kernel, which removes the update |
 | Windows Recovery Environment (WinRE) after two failed boots, F8 / Shift+Restart menu | the recovery menu in `BOOTX64.EFI` (to do) |
 | Safe mode, Last Known Good Configuration, Startup Repair, Reset this PC | recovery menu entries (to do) |
@@ -52,15 +53,53 @@ it stages it, restarts, and passes when the broken kernel's stop, the
 automatic restart and the previous version's start all appear in the serial
 log with no reset from the test ([updates.md](../updates.md#the-self-test)).
 
+## Done: an update that hangs or stalls comes back too
+
+A kernel that hangs instead of stopping used to wait for a reset, and a
+start counted as good as soon as the kernel enabled interrupts, long before
+the desktop was up. Now an update's first start is watched until it
+reaches the desktop:
+
+1. **The point where a start counts as good** is the desktop: its loop has
+   answered for three seconds with an account signed in or the sign-in
+   screen showing (`UpdateDesktopTurn`, called from the desktop loop in
+   `kernel/wm/desktop.c`), as Windows counts a boot as good at logon. Only
+   then does the new kernel make itself the installed one and delete the
+   trying mark. A PC with no screen counts as good once interrupts are on.
+2. **A hang.** Right after the PCI scan, the trial start starts the
+   chipset's watchdog timer (`kernel/hal/tco.c`, the TCO timer of Intel's
+   ICH9 family, which QEMU's q35 machine has): it resets the PC
+   `UPDATE_HANG_SECONDS` (60) after it was last reloaded. The kernel
+   reloads it at each step of its start (ACPI and the display, the disks,
+   the network and sound, the other processors, the desktop's start), and
+   once threads run, the `update watch` thread reloads it every second. So
+   the chipset resets the PC only when the kernel stops running its threads
+   at all: a hang with interrupts off, or a deadlock that holds every
+   processor. The timer is halted again once the update is finished.
+3. **A stall.** A start that keeps running but never gets to the desktop (a
+   driver waiting for a device forever, the desktop failing to come up) is
+   caught by the same thread: when the start has made no step forward for
+   `UPDATE_STALL_SECONDS` (90) it logs
+   `[UPDATE] The updated NovaOS X made no progress for 90 s while starting (last step: ...)`
+   and restarts the PC.
+
+Either way the trying mark is still on the ESP, so the next start is the
+previous version, which removes the update. On a PC whose chipset is not
+of that family, or whose firmware locked the timer (the boot log says
+`No hardware watchdog on this PC`), the stall check and the restart after a
+stop still work; a hang with interrupts off then waits for a reset as
+before.
+
+The self-tests stamp two more test faults (`tools/mkupdate.py --fail-boot`):
+`hang` hangs with interrupts off where `panic` stops, and `stall` never
+starts the desktop. The devices suite's `update` boot stages each and checks
+that the machine comes back as the previous version with no reset from
+outside ([updates.md](../updates.md#the-self-test)).
+
 ## To do (the next pieces of 33.3)
 
-1. **Hangs.** A kernel that hangs instead of stopping still waits for a
-   reset. A trial start should arm a hardware watchdog (the ICH9 TCO timer
-   QEMU's q35 and Intel PCs have, or the ACPI WDAT table where firmware
-   describes one) that resets the PC unless the update finishes, and the
-   point where a start counts as good should move from "interrupts enabled"
-   to "the desktop and shell are running", as Windows counts a boot as good
-   at logon.
+1. **The ACPI WDAT table.** Drive the watchdog Windows uses where firmware
+   describes one, beside the ICH9 TCO timer.
 2. **The known-good set and the boot menu.** Keep the previous boot loader
    (`bootx64.old`) beside `kernel.old`, and give `BOOTX64.EFI` a menu
    (shown when a key is held at start, or by itself after two starts in a

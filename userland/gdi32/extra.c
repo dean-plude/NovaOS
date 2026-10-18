@@ -184,23 +184,8 @@ GDIAPI BOOL GdiAlphaBlend(HDC dst, int x, int y, int w, int h, HDC src, int sx, 
 GDIAPI BOOL GdiTransparentBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, int sw, int sh, UINT key)
 { return TransparentBlt(dst, x, y, w, h, src, sx, sy, sw, sh, key); }
 
-/* -----------------------------------------------------------------------
- * Printing: NovaOS has no printers, so no print job starts
- * ----------------------------------------------------------------------- */
-#define SP_ERROR_ (-1)
-GDIAPI int StartDocW(HDC h, const void *di) { (void)h; (void)di; SetLastError(ERROR_INVALID_HANDLE); return SP_ERROR_; }
-GDIAPI int StartDocA(HDC h, const void *di) { (void)h; (void)di; SetLastError(ERROR_INVALID_HANDLE); return SP_ERROR_; }
-GDIAPI int EndDoc(HDC h) { (void)h; return SP_ERROR_; }
-GDIAPI int AbortDoc(HDC h) { (void)h; return SP_ERROR_; }
-GDIAPI int StartPage(HDC h) { (void)h; return SP_ERROR_; }
-GDIAPI int EndPage(HDC h) { (void)h; return SP_ERROR_; }
-GDIAPI int SetAbortProc(HDC h, PVOID proc) { (void)h; (void)proc; return SP_ERROR_; }
-
 GDIAPI int GetPolyFillMode(HDC h) { (void)h; return 1; }              /* ALTERNATE */
 GDIAPI int GetStretchBltMode(HDC h) { (void)h; return 1; }            /* BLACKONWHITE */
-
-/* printer escapes: none are supported (QUERYESCSUPPORT says so) */
-GDIAPI int Escape(HDC h, int code, int n, LPCSTR in, LPVOID out) { (void)h; (void)code; (void)n; (void)in; (void)out; return 0; }
 
 /* Metafiles are not recorded (see shapes.c); the ANSI reader fails like the wide one */
 GDIAPI HMETAFILE GetMetaFileA(LPCSTR file) { (void)file; SetLastError(ERROR_NOT_SUPPORTED); return 0; }

@@ -3,7 +3,7 @@
 
     tools/mkupdate.py OUTDIR [--kernel build/kernel.elf] [--loader build/bootx64.efi]
                       [--version V] [--notes TEXT] [--base URL] [--no-loader]
-                      [--sign KEYFILE | --sign-env NAME] [--fail-boot panic]
+                      [--sign KEYFILE | --sign-env NAME] [--fail-boot panic|hang|stall]
     tools/mkupdate.py --new-key KEYFILE
     tools/mkupdate.py --public-key KEYFILE
 
@@ -25,7 +25,9 @@ main stamps a development version, NOVA_VERSION+dev.YYYYMMDDHHMMSS
 
 --fail-boot stamps a test fault into the kernel copy's second marked
 field (kernel/ke/version.h): with "panic" the kernel stops before it
-reaches the desktop.  Only the self-tests use it, to serve an update
+reaches the desktop, with "hang" it hangs there with interrupts off (the
+chipset's watchdog must reset it), and with "stall" it runs on but never
+starts its desktop (the update's watching thread must restart it).  Only the self-tests use it, to serve an update
 that fails its first start and must be rolled back
 (docs/design/recovery.md).
 
@@ -48,7 +50,7 @@ MARK = b'NovaOS-version-stamp:'      # kernel/ke/version.h: NOVA_STAMP_MARK_LEN
 VER_MAX = 27                         # NOVA_STAMP_VER_MAX (with the NUL)
 FAULT_MARK = b'NovaOS-test-fault:'   # NOVA_FAULT_MARK_LEN
 FAULT_MAX = 16                       # NOVA_FAULT_MAX (with the NUL)
-FAULTS = ('panic',)
+FAULTS = ('panic', 'hang', 'stall')
 
 
 def stamp_offset(data):

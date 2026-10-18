@@ -1067,9 +1067,14 @@ servicing and print models Windows apps and drivers already expect.
   Part 1: a kernel stop during an update's first start restarts the PC,
   which goes back to the previous kernel on its own; the devices suite's
   `update` boot stages a kernel stamped to stop (`tools/mkupdate.py
-  --fail-boot panic`) and checks it. Next: a hardware watchdog for hangs,
-  the boot menu with the known-good set, safe mode and startup repair
-  (design in [design/recovery.md](design/recovery.md)).
+  --fail-boot panic`) and checks it.
+  Part 2: an update's first start counts as good only once the desktop is
+  up with someone signed in or the sign-in screen showing; until then the
+  chipset's TCO watchdog resets a kernel that hangs, and a start that makes
+  no progress for 90 seconds restarts itself, both going back to the
+  previous kernel (checked with `--fail-boot hang` and `stall`). Next: the
+  boot menu with the known-good set, safe mode and startup repair, and the
+  ACPI WDAT watchdog (design in [design/recovery.md](design/recovery.md)).
 - [ ] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an
   existing NTFS partition, adds NovaOS to the firmware boot menu (and chains

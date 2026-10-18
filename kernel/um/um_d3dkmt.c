@@ -200,7 +200,7 @@ static void fence_unref(void *f_)
 {
     Fence *f = f_;
     if (__atomic_sub_fetch(&f->refs, 1, __ATOMIC_ACQ_REL)) return;
-    if (f->page) um_free_frames(&f->page, 1);
+    if (f->page) pmm_free_page(f->page);     /* (not um_free_frames: that frees its array too) */
     kfree(f);
 }
 

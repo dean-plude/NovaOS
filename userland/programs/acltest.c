@@ -659,9 +659,16 @@ static void root_tests(PSID me, PSID users, PSID admins, PSID system)
     LocalFree(sd);
     dacl = 0;
     sd = 0;
-    CHECK("C:\\Windows inherits it (CREATOR OWNER as the user)",
+    /* C:\Windows keeps Windows' own protected DACL, not C:\'s: Users read
+     * and execute, never change (UAC, docs/design/uac.md) */
+    SECURITY_DESCRIPTOR_CONTROL wctl = 0;
+    DWORD wrev = 0;
+    CHECK("C:\\Windows: Windows' protected DACL (TrustedInstaller, SYSTEM, Administrators, Users read)",
           GetNamedSecurityInfoW(L"C:\\Windows", SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, 0, 0, &dacl, 0, &sd) == 0 &&
-          has_ace(dacl, INHERITED_ACE | 3, GENERIC_ALL, me) && has_ace(dacl, INHERITED_ACE | 3, 0x1200A9, users));
+          dacl && dacl->AceCount == 4 && GetSecurityDescriptorControl(sd, &wctl, &wrev) && (wctl & SE_DACL_PROTECTED) &&
+          ace_is(dacl, 1, ACCESS_ALLOWED_ACE_TYPE, 3, FILE_ALL_ACCESS_, system) &&
+          ace_is(dacl, 2, ACCESS_ALLOWED_ACE_TYPE, 3, FILE_ALL_ACCESS_, admins) &&
+          ace_is(dacl, 3, ACCESS_ALLOWED_ACE_TYPE, 3, 0x1200A9, users) && !has_ace(dacl, INHERITED_ACE | 3, GENERIC_ALL, me));
     LocalFree(sd);
     FreeSid(auth_users);
     FreeSid(creator_owner);

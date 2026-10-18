@@ -79,6 +79,11 @@ static WND *g_welcome;
  * ------------------------------------------------------------------------- */
 void AppUserName(char *out, int cap)
 {
+    UmAccount a;                                        /* the account signed in (um_accounts.c) */
+    if (um_account_get(um_session_rid(), &a) && (a.full[0] || a.name[0])) {
+        ksnprintf(out, (size_t)cap, "%s", a.full[0] ? a.full : a.name);
+        return;
+    }
     if (!um_registry_get_sz(UM_SETUP_KEY, "UserName", out, cap) || !out[0])
         ksnprintf(out, (size_t)cap, "Dean Plude");
 }
@@ -502,6 +507,7 @@ static void finish(WND *w)
     char nm[NAME_MAX + 1];
     if (!name_ok(s, nm)) return;
     um_registry_set_sz(UM_SETUP_KEY, "UserName", nm);
+    um_account_rename(um_session_rid(), nm);           /* (the account signed in: the first, um_accounts.c) */
     um_registry_set_sz(OWNER_KEY, "RegisteredOwner", nm);
     um_registry_set_sz(OWNER_KEY_WOW, "RegisteredOwner", nm);
     um_registry_set_dword(UM_SETUP_KEY, "FirstBootDone", 1);

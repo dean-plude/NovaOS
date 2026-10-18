@@ -205,6 +205,7 @@ set(KERNEL_C_SOURCES
     um/um_services.c
     um/um_driver.c
     um/um_registry.c
+    um/um_accounts.c
     um/um_crash.c
     um/um_eventlog.c
     um/um_security.c
@@ -274,6 +275,7 @@ set(KERNEL_C_SOURCES
     gdi/font_inter.c
     wm/wm.c
     wm/desktop.c
+    wm/logon.c
     wm/wallpaper.c
     wm/clipboard.c
     wm/input.c

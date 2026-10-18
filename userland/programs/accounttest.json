@@ -1,0 +1,4 @@
+{
+  "selftest": true,
+  "libs": ["netapi32", "userenv", "advapi32", "user32"]
+}

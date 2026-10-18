@@ -2438,7 +2438,7 @@ static void env_from_registry(void *ctx, const char *name, const char *value, bo
     }
     env_set(r->e, name, v);
 }
-static char *default_environment(const char *const *base, UINT32 *len)
+static char *default_environment(const char *const *base, const char *sid, UINT32 *len)
 {
     EnvB e = { 0 };
     for (int i = 0; base[i]; i++) {
@@ -2453,7 +2453,7 @@ static char *default_environment(const char *const *base, UINT32 *len)
     EnvReg r;
     memset(&r, 0, sizeof(r));
     r.e = &e;
-    um_registry_environment(env_from_registry, &r);
+    um_registry_environment(sid, env_from_registry, &r);
     if (r.sys_path[0] || r.user_path[0]) {
         char path[2100];
         const char *sp = r.sys_path[0] ? r.sys_path : env_get(&e, "PATH", 4);
@@ -2492,24 +2492,40 @@ static bool setup_environment(UmProcess *p, UINT64 image_base, const char *image
              (put_ustr(pp, sz, &off, pp + L->cmdline, cmdline, pva, L, w) ||         /* CommandLine */
               put_ustr_region(p, pp + L->cmdline, cmdline, L, w));
         /* Environment block: the creator's, or the default one */
-        char ncpu[32], user[48] = "USERNAME=";
+        char ncpu[32];
         ksnprintf(ncpu, sizeof(ncpu), "NUMBER_OF_PROCESSORS=%u", (unsigned)g_cpu_count);
-        if (!um_registry_get_sz(UM_SETUP_KEY, "UserName", user + 9, (int)sizeof(user) - 9) || !user[9])
-            strcpy(user + 9, "dean");               /* the name given at first boot (apps/welcome.c) */
+        /* the account it runs as (um_accounts.c): its name and profile.
+         * The first account's profile is C:\\ (with C:\\AppData and
+         * C:\\Temp), as before accounts; the others' are C:\\Users\\<name> */
+        UmAccount acct;
+        UINT32 rid = um_token_rid(p->token);
+        if (!um_account_get(rid ? rid : um_session_rid(), &acct)) { memset(&acct, 0, sizeof(acct)); acct.rid = 1001; strcpy(acct.name, "dean"); }
+        if (!acct.profile[0]) ksnprintf(acct.profile, sizeof(acct.profile), "C:\\Users\\%s", acct.name);   /* (made at its sign-in) */
+        bool legacy = !strcmp(acct.profile, "C:\\");
+        char sid[48], user[48], home[112], homepath[104], appdata[128], local[128], temp[136], tmp[136];
+        um_account_sid_string(acct.rid, sid, sizeof(sid));
+        ksnprintf(user, sizeof(user), "USERNAME=%s", acct.name);
+        ksnprintf(home, sizeof(home), "USERPROFILE=%s", legacy ? "C:\\" : acct.profile);
+        ksnprintf(homepath, sizeof(homepath), "HOMEPATH=%s", legacy ? "\\" : acct.profile + 2);
+        ksnprintf(appdata, sizeof(appdata), "APPDATA=%s\\AppData\\Roaming", legacy ? "C:" : acct.profile);
+        ksnprintf(local, sizeof(local), "LOCALAPPDATA=%s\\AppData\\Local", legacy ? "C:" : acct.profile);
+        ksnprintf(temp, sizeof(temp), "TEMP=%s", legacy ? "C:\\Temp" : "");
+        if (!legacy) ksnprintf(temp, sizeof(temp), "TEMP=%s\\AppData\\Local\\Temp", acct.profile);
+        ksnprintf(tmp, sizeof(tmp), "TMP=%s", temp + 5);
         const char *env[] = {
-            "ALLUSERSPROFILE=C:\\ProgramData", "APPDATA=C:\\AppData\\Roaming", "COMPUTERNAME=NOVA-PC",
+            "ALLUSERSPROFILE=C:\\ProgramData", appdata, "COMPUTERNAME=NOVA-PC",
             "ComSpec=C:\\Windows\\System32\\cmd.exe",
-            "HOMEDRIVE=C:", "HOMEPATH=\\", "LOCALAPPDATA=C:\\AppData\\Local", ncpu, "OS=Windows_NT",
+            "HOMEDRIVE=C:", homepath, local, ncpu, "OS=Windows_NT",
             "PATH=C:\\Programs;C:\\Windows\\System32;C:\\Windows", "PATHEXT=.COM;.EXE;.BAT;.CMD",
             w ? "PROCESSOR_ARCHITECTURE=x86" : "PROCESSOR_ARCHITECTURE=AMD64",
             w ? "PROCESSOR_ARCHITEW6432=AMD64" : "ProgramW6432=C:\\Programs",
             "ProgramData=C:\\ProgramData", "ProgramFiles=C:\\Programs", "ProgramFiles(x86)=C:\\Programs",
             "PROMPT=$P$G", "SystemDrive=C:", "SystemRoot=C:\\Windows",
-            "TEMP=C:\\Temp", "TMP=C:\\Temp", user, "USERPROFILE=C:\\", "windir=C:\\Windows", NULL
+            temp, tmp, user, home, "windir=C:\\Windows", NULL
         };
         char *def = NULL;
         if (!envp) {
-            def = default_environment(env, &env_len);
+            def = default_environment(env, sid, &env_len);
             if (!def) ok = false;
             else envp = def;
         }

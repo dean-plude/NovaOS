@@ -1034,6 +1034,12 @@ servicing and print models Windows apps and drivers already expect.
   profile and registry hive, switches with the first account's apps still
   running, and a wrong password is refused (self-test `accounttest`, plus a
   screenshot of the sign-in screen).
+  *Progress:* local accounts in the SAM with Argon2id passwords, a token,
+  profile and `HKCU` hive per account, `LogonUser`, `NetUserAdd` and the
+  rest of `netapi32`, `LoadUserProfile`, the sign-in screen at boot and the
+  lock screen (Win+L, `LockWorkStation`) are in, tested by `accounttest`.
+  Still to do: the Settings page, sign-out and fast user switching
+  ([design/accounts.md](design/accounts.md)).
 - [ ] **33.2 Standard-user security and UAC.** New accounts are standard
   users with a filtered token and integrity levels; `consent.exe` shows the
   real UAC consent flow on a secure desktop for elevation. Done when a

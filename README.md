@@ -228,6 +228,7 @@ PC or on Microsoft Hyper-V.  The next phases are:
 | 28 | Laptop hardware: Wi-Fi, Bluetooth, camera, battery life, a second reference PC |
 | 29 | NovaOS 0.2 on both reference PCs |
 | 31 | DOS programs: MS-DOS 4.0 built from Microsoft's source, on a real-mode CPU in a NovaOS console window, as NTVDM did |
+| 33 | Everyday OS: accounts and sign-in, standard users and UAC, update rollback and recovery, an installer beside Windows, printing |
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has every step, what has been done and
 what counts as done.

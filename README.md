@@ -105,7 +105,9 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
 
 NovaOS starts live from the disc and offers **Install NovaOS**, which
 partitions `disk.img` (GPT, an EFI System Partition and a data partition
-for drive C:).  Afterwards, run the same command without `-cdrom nova.iso`
+for drive C:).  On a disk that already holds Windows, Setup can instead
+install NovaOS beside it in the disk's free space and keep Windows'
+partitions as they are ([docs/design/installer.md](docs/design/installer.md)).  Afterwards, run the same command without `-cdrom nova.iso`
 to start the installed system; the first start walks you through your
 name, time zone, keyboard layout and display resolution.
 

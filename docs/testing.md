@@ -336,6 +336,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `monitors` | one virtio-vga card with three outputs; monitors plugged in and out while NovaOS runs (`montest hotplug`) |
 | `usbboot` | `nova.iso` written to a USB stick, with only the firmware's GOP display: starts live and writes its boot log (and a kernel fault) to the stick |
 | `cdboot` | `nova.iso` as a disc in a SATA DVD drive: starts live |
+| `beside` | a PC with Windows on its NVMe disk (ESP, Microsoft reserved, NTFS volume, free space) and nova.iso on a USB stick: Setup's window installs NovaOS beside Windows in the free space, NovaOS starts from the disk, and the host checks that Windows' partitions are where they were, its reserved partition unchanged byte for byte, its ESP's files unchanged and its NTFS volume and file intact ([design/installer.md](design/installer.md)) |
 | `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there |
 | `update` | an installed NovaOS updating itself from signed test channels, refusing bad ones, and going back after a reset ([updates.md](updates.md#the-self-test)) |
 | `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |

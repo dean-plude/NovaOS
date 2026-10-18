@@ -51,10 +51,66 @@ bool SetupLiveFromUsb(void) { return g_live_usb; }
 /* ---------------------------------------------------------------------------
  * Disks
  * ------------------------------------------------------------------------- */
+#define MIB_SECTORS 2048ull
+static UINT64 align_up(UINT64 v)   { return (v + MIB_SECTORS - 1) & ~(MIB_SECTORS - 1); }
+static UINT64 align_down(UINT64 v) { return v & ~(MIB_SECTORS - 1); }
+
+/* What Setup calls partition @p: its volume's label and file system, or
+ * its kind ("Windows (NTFS)", "SYSTEM (EFI System)", "Microsoft reserved") */
+static void part_name(BlockDev *d, const DiskLayout *l, const DiskPart *p, const DriveVolume *vols, int nvols,
+                      char *out, int cap)
+{
+    const DriveVolume *v = NULL;
+    for (int i = 0; i < nvols && !v; i++)
+        if (vols[i].dev == d && vols[i].lba == p->lba) v = &vols[i];
+    const char *kind = DiskIsEsp(l, p) ? "EFI System"
+                     : l->style == DISK_GPT && !memcmp(p->type, DISK_TYPE_MSR, 16) ? "Microsoft reserved"
+                     : l->style == DISK_GPT && !memcmp(p->type, DISK_TYPE_RECOVERY, 16) ? "Windows recovery"
+                     : v && v->fs[0] ? v->fs : NULL;
+    if (v && v->label[0]) ksnprintf(out, (size_t)cap, "%s (%s)", v->label, kind ? kind : "unknown");
+    else if (kind)        ksnprintf(out, (size_t)cap, "%s", kind);
+    else                  ksnprintf(out, (size_t)cap, "Partition %u", p->number);
+}
+
+/* @l's partitions and free spaces in disk order into @s, and its largest
+ * free space (whole MiB) */
+static void map_disk(SetupDisk *s, const DiskLayout *l, const DriveVolume *vols, int nvols)
+{
+    int order[DISK_MAX_PARTS], n = 0;
+    for (int i = 0; i < l->count; i++) {                  /* (sorted by where they start) */
+        int k = n++;
+        while (k > 0 && l->part[order[k - 1]].lba > l->part[i].lba) { order[k] = order[k - 1]; k--; }
+        order[k] = i;
+    }
+    UINT64 at = align_up(l->first);
+    for (int i = 0; i <= n; i++) {
+        const DiskPart *p = i < n ? &l->part[order[i]] : NULL;
+        UINT64 end = p ? align_down(p->lba) : align_down(l->last + 1);
+        if (end > at && end - at >= 16 * MIB_SECTORS) {   /* free space worth showing */
+            if (end - at > s->free_sectors) { s->free_lba = at; s->free_sectors = end - at; }
+            if (s->nparts < SETUP_MAX_PARTS) {
+                SetupPart *f = &s->parts[s->nparts++];
+                f->lba = at; f->sectors = end - at; f->free = true;
+                ksnprintf(f->name, sizeof(f->name), "Free space");
+            }
+        }
+        if (!p) break;
+        if (s->nparts < SETUP_MAX_PARTS) {
+            SetupPart *q = &s->parts[s->nparts++];
+            q->lba = p->lba; q->sectors = p->sectors;
+            part_name(s->dev, l, p, vols, nvols, q->name, sizeof(q->name));
+        }
+        if (align_up(p->lba + p->sectors) > at) at = align_up(p->lba + p->sectors);
+    }
+}
+
 int SetupListDisks(SetupDisk *out, int max)
 {
     int n = 0;
     BlockDev *cdev = PersistDevice();
+    DiskLayout *l = kmalloc(sizeof(DiskLayout));
+    DriveVolume *vols = kmalloc(32 * sizeof(DriveVolume));
+    int nvols = vols ? DrivesVolumes(vols, 32) : 0;
     for (int i = 0; i < BlockCount() && n < max; i++) {
         BlockDev *d = BlockGet(i);
         SetupDisk *s = &out[n++];
@@ -71,16 +127,27 @@ int SetupListDisks(SetupDisk *out, int max)
             FatEntry e;
             /* (from the disc, a disk with NovaOS on it is not what booted) */
             if (!g_live && FatLookupPath(v[k], "\\EFI\\NOVA\\kernel.elf", &e) && !e.dir) s->boot = true;
+            if (FatLookupPath(v[k], "\\EFI\\Microsoft\\Boot\\bootmgfw.efi", &e) && !e.dir) s->windows = true;
             FatUnmount(v[k]);
         }
         char labels[48];
         int nv = PersistDiskLabels(d, labels, sizeof(labels), &blank);
-        bool nova = strstr(labels, "NOVA_EFI") && strstr(labels, "NOVADATA");
+        s->nova = strstr(labels, "NOVA_EFI") && strstr(labels, "NOVADATA");
         if (blank)             ksnprintf(s->contents, sizeof(s->contents), "Empty");
-        else if (nova)         ksnprintf(s->contents, sizeof(s->contents), "NovaOS is installed on it");
+        else if (s->nova)      ksnprintf(s->contents, sizeof(s->contents), "NovaOS is installed on it");
         else if (nv)           ksnprintf(s->contents, sizeof(s->contents), "Volumes: %s", labels[0] ? labels : "no label");
         else                   ksnprintf(s->contents, sizeof(s->contents), "Unknown contents");
+        if (l && !blank && DiskReadLayout(d, l) && l->style == DISK_GPT) {
+            s->gpt = true;
+            for (int k = 0; k < l->count; k++)
+                if (!memcmp(l->part[k].type, DISK_TYPE_MSR, 16)) s->windows = true;
+            map_disk(s, l, vols, nvols);
+            s->can_beside = !s->boot && !s->holds_c && !s->nova &&
+                            s->free_sectors * BLOCK_SECTOR >= SetupBesideBytes();
+        }
     }
+    kfree(vols);
+    kfree(l);
     return n;
 }
 
@@ -90,6 +157,7 @@ int SetupListDisks(SetupDisk *out, int max)
 static volatile SetupStatus g_status;
 static BlockDev *g_target;
 static bool      g_ntfs;                  /* drive C: on NTFS */
+static bool      g_beside;                /* in the free space, keeping the disk's partitions */
 
 void SetupGetStatus(SetupStatus *out)
 {
@@ -204,6 +272,13 @@ static UINT64 setup_esp_sectors(UINT32 kernel_size, UINT32 loader_size, UINT64 f
     return mb * 2048;
 }
 
+UINT64 SetupBesideBytes(void)
+{
+    /* (installed, not live: the system's size as the disc's, about 256 MiB) */
+    UINT64 k = g_media_kernel ? g_media_kernel_size : 256ull << 20, l = g_media_kernel ? g_media_loader_size : 1ull << 20;
+    return (setup_esp_sectors((UINT32)k, (UINT32)l, BootFilesBytes()) + 512 * MIB_SECTORS) * BLOCK_SECTOR;
+}
+
 /* Validate geometry before detaching volumes or erasing any disk sectors. */
 static bool setup_layout(UINT64 sectors, UINT64 esp_sectors,
                          UINT64 *esp_lba, UINT64 *data_lba, UINT64 *data_sectors)
@@ -295,6 +370,46 @@ static bool write_gpt(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sectors, UINT64 
     return ok;
 }
 
+/* Beside the systems on @d: NovaOS's ESP and data partition in its largest
+ * free space, added to its GPT in the first unused entries; every
+ * partition already there keeps its entry, place and GUIDs.  Nothing is
+ * written here: *@l is the new table. */
+static bool beside_layout(BlockDev *d, DiskLayout *l, UINT64 esp_sectors,
+                          UINT64 *esp_lba, UINT64 *data_lba, UINT64 *data_sectors)
+{
+    SetupDisk s;
+    memset(&s, 0, sizeof(s));
+    s.dev = d;
+    if (!DiskReadLayout(d, l) || l->style != DISK_GPT) return false;
+    map_disk(&s, l, NULL, 0);
+    if (s.free_sectors < esp_sectors + 512 * MIB_SECTORS) return false;    /* (drive C: gets 512 MiB at least) */
+    *esp_lba = s.free_lba;
+    *data_lba = s.free_lba + esp_sectors;
+    *data_sectors = s.free_lba + s.free_sectors - *data_lba;
+    if (!g_ntfs && *data_sectors > (1ull << 31)) *data_sectors = 1ull << 31;
+    UINT32 nums[2] = { 0, 0 };
+    for (UINT32 num = 1, k = 0; num <= l->max && k < 2; num++) {
+        bool used = false;
+        for (int i = 0; i < l->count && !used; i++) used = l->part[i].number == num;
+        if (!used) nums[k++] = num;
+    }
+    if (!nums[1] || l->count + 2 > DISK_MAX_PARTS) return false;
+    const UINT8 *types[2] = { DISK_TYPE_ESP, DISK_TYPE_BASIC };
+    const char *names[2] = { "EFI System Partition", "NovaOS" };
+    UINT64 at[2] = { *esp_lba, *data_lba }, len[2] = { esp_sectors, *data_sectors };
+    for (int k = 0; k < 2; k++) {
+        DiskPart *p = &l->part[l->count++];
+        memset(p, 0, sizeof(*p));
+        p->lba = at[k];
+        p->sectors = len[k];
+        p->number = nums[k];
+        memcpy(p->type, types[k], 16);
+        random_guid(p->id);
+        for (int i = 0; names[k][i]; i++) p->name[i] = (UINT16)names[k][i];
+    }
+    return DiskCheckLayout(d, l);
+}
+
 /* Zero the start of each partition's area and the old partition tables so
  * no stale volume or GPT is found there */
 static bool wipe(BlockDev *d, UINT64 esp_lba, UINT64 data_lba)
@@ -357,7 +472,18 @@ static void setup_thread(void *arg)
     }
 
     UINT64 esp_lba, esp_sec = setup_esp_sectors(ksize, lsize, BootFilesBytes()), data_lba, data_sec;
-    if (!setup_layout(d->sectors, esp_sec, &esp_lba, &data_lba, &data_sec)) {
+    DiskLayout *layout = NULL;
+    if (g_beside) {
+        layout = kmalloc(sizeof(DiskLayout));
+        if (!layout || !beside_layout(d, layout, esp_sec, &esp_lba, &data_lba, &data_sec)) {
+            kfree(layout);
+            failed("There is not enough free space on the disk for NovaOS beside what is on it.");
+            return;
+        }
+        kprintf("[SETUP] Beside the %d partition%s on %s: EFI System Partition at %u MiB (%u MiB), "
+                "NovaOS at %u MiB (%u MiB)\n", layout->count - 2, layout->count == 3 ? "" : "s", d->name,
+                (unsigned)(esp_lba >> 11), (unsigned)(esp_sec >> 11), (unsigned)(data_lba >> 11), (unsigned)(data_sec >> 11));
+    } else if (!setup_layout(d->sectors, esp_sec, &esp_lba, &data_lba, &data_sec)) {
         failed("The disk is too small for NovaOS and a staged update.");
         return;
     }
@@ -371,7 +497,16 @@ static void setup_thread(void *arg)
 
     DrivesDetach(d);                                             /* (its volumes are not D:, E:, ... any more) */
     step(10, "Creating partitions");
-    if (!wipe(d, esp_lba, data_lba) || !write_gpt(d, &esp_lba, &esp_sec, &data_lba, &data_sec)) {
+    bool parted;
+    if (layout) {                     /* (only the new partitions' first sectors are cleared) */
+        UINT8 *z = kzalloc(64 * BLOCK_SECTOR);
+        parted = z && d->write(d, esp_lba, 64, z) && d->write(d, data_lba, 64, z) && DiskWriteLayout(d, layout);
+        kfree(z);
+        kfree(layout);
+    } else
+        parted = wipe(d, esp_lba, data_lba) && write_gpt(d, &esp_lba, &esp_sec, &data_lba, &data_sec);
+    if (!parted) {
+        if (g_beside) DrivesAttach(d);
         failed("Could not write the partition table (a disk error, or the disk is too small).");
         return;
     }
@@ -435,19 +570,21 @@ static void setup_thread(void *arg)
     if (d->flush) d->flush(d);
     if (g_kernel_copy) { kfree(g_kernel_copy); g_kernel_copy = NULL; }
     if (g_loader_copy) { kfree(g_loader_copy); g_loader_copy = NULL; }
+    if (g_beside) DrivesAttach(d);                               /* (the other systems' volumes again) */
     step(100, "NovaOS is installed");
     g_status.state = SETUP_DONE;
 }
 
-bool SetupStart(BlockDev *dev, bool ntfs)
+bool SetupStart(BlockDev *dev, bool ntfs, bool beside)
 {
     if (g_status.state == SETUP_RUNNING || !dev) return false;
     memset((void *)&g_status, 0, sizeof(g_status));
     g_status.state = SETUP_RUNNING;
     g_target = dev;
     g_ntfs = ntfs;
-    kprintf("[SETUP] Installing NovaOS on %s (%s, %u MiB), drive C: on %s\n", dev->name, dev->model,
-            (unsigned)(dev->sectors >> 11), ntfs ? "NTFS" : "FAT32");
+    g_beside = beside;
+    kprintf("[SETUP] Installing NovaOS %s %s (%s, %u MiB), drive C: on %s\n", beside ? "beside the other systems on" : "on",
+            dev->name, dev->model, (unsigned)(dev->sectors >> 11), ntfs ? "NTFS" : "FAT32");
     if (!sched_create_thread("setup", setup_thread, NULL, PRIO_SERVICE)) {
         g_status.state = SETUP_FAILED;
         strncpy((char *)g_status.error, "Could not start the installer.", sizeof(g_status.error) - 1);

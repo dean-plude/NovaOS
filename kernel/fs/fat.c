@@ -51,6 +51,7 @@ struct FatVol {
     UINT32    fsinfo;           /* FAT32: FSInfo sector, 0 if none */
     UINT32    next_free;
     INT64     free_count;       /* -1: not counted yet */
+    bool      changed;          /* something was written to it since it was mounted */
     char      label[12];
     UINT32    clock;
     UINT32    stamp;            /* FatSetStamp */
@@ -123,6 +124,7 @@ static bool cache_writeback(FatVol *v, CacheEnt *c)
     if (!c->valid || !c->dirty) return true;              /* (set_clean wrote FAT[1]'s sector) */
     if (!is_fat_sector(v, c->lba) && !fat_writeback(v)) return false;
     bool ok = dev_write(v, c->lba, 1, c->data);
+    if (c->lba != v->fsinfo) v->changed = true;
     if (is_fat_sector(v, c->lba))                                              /* mirror the FAT */
         for (UINT32 k = 1; k < v->nfats; k++) ok = dev_write(v, c->lba + k * v->fat_sectors, 1, c->data) && ok;
     if (ok) c->dirty = false;
@@ -173,7 +175,9 @@ bool FatSync(FatVol *v)
     }
     if (v->fsinfo) {
         CacheEnt *c = cache_get(v, v->fsinfo, true);
-        if (c && *(UINT32 *)c->data == 0x41615252u) {
+        /* (only on a volume written to: one that was only read, such as
+         * Windows' ESP looked at by Setup, is left exactly as it was) */
+        if (c && *(UINT32 *)c->data == 0x41615252u && v->changed) {
             *(UINT32 *)(c->data + 488) = v->free_count >= 0 ? (UINT32)v->free_count : 0xFFFFFFFFu;
             *(UINT32 *)(c->data + 492) = v->next_free;
             c->dirty = true;

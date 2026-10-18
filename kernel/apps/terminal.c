@@ -1164,39 +1164,63 @@ static bool job_resolve(Term *t, const char *host)
     return true;
 }
 
-/* install [disk [/fat]]: what the Setup app does, from the keyboard (and
- * the self-tests): NovaOS onto @disk with drive C: on NTFS, or FAT32 */
+/* install [disk [/beside] [/fat]]: what the Setup app does, from the
+ * keyboard (and the self-tests): NovaOS onto @disk with drive C: on NTFS,
+ * or FAT32; erasing it, or with /beside in its free space next to the
+ * systems already on it */
 static void cmd_install(Term *t, int argc, char **argv)
 {
-    SetupDisk d[8];
+    SetupDisk *d = kmalloc(8 * sizeof(SetupDisk));
+    if (!d) { terr(t, "Out of memory."); return; }
     int n = SetupListDisks(d, 8);
     if (argc < 2) {
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n; i++) {
             tprintf(t, "  %s  %u MiB  %s  %s%s%s", d[i].dev->name, (unsigned)(d[i].bytes >> 20), d[i].dev->model,
                     d[i].contents, d[i].boot ? "  (NovaOS is running from it)" : "",
                     d[i].too_small ? "  (too small)" : "");
+            for (int k = 0; k < d[i].nparts; k++)
+                tprintf(t, "      %s: %u MiB at %u MiB", d[i].parts[k].name, (unsigned)(d[i].parts[k].sectors >> 11),
+                        (unsigned)(d[i].parts[k].lba >> 11));
+            if (d[i].can_beside)
+                tprintf(t, "      NovaOS can go beside %s in %u MiB of free space (install %s /beside)",
+                        d[i].windows ? "Windows" : "what is there", (unsigned)(d[i].free_sectors >> 11), d[i].dev->name);
+        }
         if (!n) tprint(t, "There are no disks to install on.");
         if (NvmeBehindVmd())
             tprint(t, "Intel VMD (RST) hides the NVMe disks: turn it off in the firmware setup.");
-        tprint(t, "Usage: install <disk> [/fat]   (drive C: on NTFS, or on FAT32 with /fat)");
+        tprint(t, "Usage: install <disk> [/beside] [/fat]   (drive C: on NTFS, or on FAT32 with /fat;");
+        tprint(t, "       /beside keeps what is on the disk and uses its free space, else it is erased)");
+        kfree(d);
         return;
     }
     SetupDisk *pick = NULL;
+    bool fat = false, beside = false;
+    for (int i = 2; i < argc; i++) {
+        if (is(argv[i], "/fat") || is(argv[i], "fat")) fat = true;
+        if (is(argv[i], "/beside") || is(argv[i], "beside")) beside = true;
+    }
     for (int i = 0; i < n && !pick; i++) if (is(argv[1], d[i].dev->name)) pick = &d[i];
-    if (!pick) { tprintf(t, "There is no disk named %s. Type 'install' to list them.", argv[1]); return; }
-    if (pick->boot) { terr(t, "NovaOS is running from that disk."); return; }
-    if (pick->too_small) { terr(t, "That disk is too small for NovaOS."); return; }
-    bool fat = argc > 2 && (is(argv[2], "/fat") || is(argv[2], "fat"));
-    if (!SetupStart(pick->dev, !fat)) {
+    const char *why = !pick ? NULL : pick->boot ? "NovaOS is running from that disk."
+                    : pick->too_small ? "That disk is too small for NovaOS."
+                    : beside && !pick->gpt ? "That disk has no GPT: NovaOS goes beside other systems on GPT disks only."
+                    : beside && pick->nova ? "NovaOS is already installed on that disk."
+                    : beside && pick->holds_c ? "Drive C: is kept on that disk now."
+                    : beside && !pick->can_beside ? "That disk has too little free space for NovaOS (see 'install')."
+                    : NULL;
+    if (!pick) tprintf(t, "There is no disk named %s. Type 'install' to list them.", argv[1]);
+    else if (why) terr(t, why);
+    else if (!SetupStart(pick->dev, !fat, beside)) {
         SetupStatus st;
         SetupGetStatus(&st);
         terr(t, st.error[0] ? st.error : "The installer is already running.");
-        return;
+    } else {
+        Job *j = &t->job;
+        memset(j, 0, sizeof(*j));
+        j->kind = JOB_SETUP;
+        tprintf(t, beside ? "Installing NovaOS beside the other systems on %s (their partitions are kept)..."
+                          : "Installing NovaOS on %s (everything on it is erased)...", pick->dev->name);
     }
-    Job *j = &t->job;
-    memset(j, 0, sizeof(*j));
-    j->kind = JOB_SETUP;
-    tprintf(t, "Installing NovaOS on %s (everything on it is erased)...", pick->dev->name);
+    kfree(d);
 }
 
 /* update [check | install | channel [<url> | default]]: NovaOS's own

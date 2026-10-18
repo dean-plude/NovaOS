@@ -18,7 +18,10 @@ the GUI and the drivers they expect.
 ## Where we are
 
 NovaOS 0.1.0, the first release, was published on 2026-10-04 from the
-`v0.1.0` tag ([release notes](releases/0.1.0.md)). Since then every green
+`v0.1.0` tag ([release notes](releases/0.1.0.md)). NovaOS 0.2 "Kepler"
+(`0.2.0`, [release notes](releases/0.2.0.md)) is cut after Phase 33, the
+everyday-OS phase; it is tagged `v0.2.0` by the repository owner once main's
+CI is green (step 29.1). Since 0.1 every green
 CI run on a push to `main` republishes a rolling **latest** release with
 that commit's `nova.iso`. The release closed Phase 22 except its checks
 on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
@@ -859,7 +862,10 @@ tagged `v0.2.0` passes the full CI suite and T14 checks.
 
 - [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
-  must boot in QEMU and on both reference PCs.
+  must boot in QEMU and on both reference PCs. The version (0.2.0, code name
+  "Kepler") and [the release notes](releases/0.2.0.md) are in; ticks when
+  `v0.2.0` is published and its ISO boots on the T14 (the second reference
+  PC, 28.5, is not picked yet).
 
 ### Phase 30: Windows drivers
 

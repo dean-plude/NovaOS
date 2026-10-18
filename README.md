@@ -216,10 +216,13 @@ these decisions and why it was made.
 
 ## Status and roadmap
 
-**NovaOS 0.1.0** was released on 4 October 2026, and the rolling `latest`
-build follows `main`.  Since then the kernel's console and NTFS work and the
-Windows driver model have been finished, and a performance budget guards
-boot time and Firefox start-up in CI.
+**NovaOS 0.2 "Kepler"** (version 0.2.0) is the current release
+([release notes](docs/releases/0.2.0.md)); 0.1.0 was released on 4 October
+2026 ([notes](docs/releases/0.1.0.md)).  The rolling `latest` build follows
+`main`.  Kepler is the everyday-OS release: accounts and sign-in, UAC,
+updates that roll back, an installer that works beside Windows, printing,
+and the Windows driver model.  A performance budget guards boot time and
+Firefox start-up in CI.
 
 What 0.1 still owes is a boot on the reference PC, a ThinkPad T14 Gen 4: all
 testing so far has been in QEMU (and in CI), and nothing has yet run on a real

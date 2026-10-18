@@ -272,13 +272,6 @@ static UINT64 setup_esp_sectors(UINT32 kernel_size, UINT32 loader_size, UINT64 f
     return mb * 2048;
 }
 
-UINT64 SetupBesideBytes(void)
-{
-    /* (installed, not live: the system's size as the disc's, about 256 MiB) */
-    UINT64 k = g_media_kernel ? g_media_kernel_size : 256ull << 20, l = g_media_kernel ? g_media_loader_size : 1ull << 20;
-    return (setup_esp_sectors((UINT32)k, (UINT32)l, BootFilesBytes()) + 512 * MIB_SECTORS) * BLOCK_SECTOR;
-}
-
 /* Validate geometry before detaching volumes or erasing any disk sectors. */
 static bool setup_layout(UINT64 sectors, UINT64 esp_sectors,
                          UINT64 *esp_lba, UINT64 *data_lba, UINT64 *data_sectors)
@@ -368,6 +361,13 @@ static bool write_gpt(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sectors, UINT64 
     kfree(bh);
     kfree(buf);
     return ok;
+}
+
+UINT64 SetupBesideBytes(void)
+{
+    /* (installed, not live: the system's size as the disc's, about 256 MiB) */
+    UINT64 k = g_media_kernel ? g_media_kernel_size : 256ull << 20, l = g_media_kernel ? g_media_loader_size : 1ull << 20;
+    return (setup_esp_sectors((UINT32)k, (UINT32)l, BootFilesBytes()) + 512 * MIB_SECTORS) * BLOCK_SECTOR;
 }
 
 /* Beside the systems on @d: NovaOS's ESP and data partition in its largest

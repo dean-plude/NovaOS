@@ -189,6 +189,14 @@ static void slab_free(void *ptr, size_t obj_size)
         return;
     }
 
+    /* Not where an object starts (inside one): freeing it would hand the
+     * same bytes out twice */
+    if (((uintptr_t)ptr - page_base) % obj_size || (uintptr_t)ptr - page_base < sizeof(Slab)) {
+        kprintf("[VMM] BUG: kfree(%p) is not the start of a %zu-byte object\n", ptr, obj_size);
+        KsymBacktraceHere();
+        return;
+    }
+
     /* Find the cache for this size */
     SlabCache *c = NULL;
     for (int i = 0; i < SLAB_SIZES_COUNT; i++) {

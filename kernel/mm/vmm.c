@@ -43,8 +43,12 @@ static const size_t slab_sizes[SLAB_SIZES_COUNT] = {
 };
 
 /* A free object — when free, its first 8 bytes hold a pointer to the
- * next free object in the same slab page. */
-typedef struct FreeObj { struct FreeObj *next; } FreeObj;
+ * next free object in the same slab page, and (objects of 16 bytes or
+ * more) the next 8 a tag: a kfree of an object already free, or a write
+ * into one, is caught (logged with a backtrace) instead of handing the
+ * same memory to two owners. */
+typedef struct FreeObj { struct FreeObj *next; uint64_t tag; } FreeObj;
+#define FREE_TAG UINT64_C(0xF5EEF5EE0BADF00D)
 
 /* One slab: a single 4 KiB page subdivided into objects of a fixed size. */
 typedef struct Slab {
@@ -112,6 +116,7 @@ static Slab *slab_create(size_t obj_size)
     for (uintptr_t addr = obj_start; addr + obj_size <= page_end; addr += obj_size) {
         FreeObj *obj = (FreeObj *)addr;
         obj->next    = prev;
+        if (obj_size >= sizeof(FreeObj)) obj->tag = FREE_TAG;
         prev         = obj;
         slab->free_count++;
     }
@@ -124,6 +129,20 @@ static Slab *slab_create(size_t obj_size)
  * Slab allocation / deallocation
  * ----------------------------------------------------------------------- */
 
+/* @o leaves the free objects: its tag must still be there */
+static void *taken(SlabCache *c, void *o)
+{
+    if (c->obj_size < sizeof(FreeObj)) return o;
+    FreeObj *f = o;
+    if (f->tag != FREE_TAG) {
+        kprintf("[VMM] BUG: %zu-byte object %p was written after it was freed (0x%lx 0x%lx)\n",
+                c->obj_size, o, (unsigned long)(uintptr_t)f->next, (unsigned long)f->tag);
+        KsymBacktraceHere();
+    }
+    f->tag = 0;
+    return o;
+}
+
 static void *slab_alloc(SlabCache *c)
 {
     if (g_mag_on) {
@@ -131,7 +150,7 @@ static void *slab_alloc(SlabCache *c)
         Magazine *m = mag_of(c);
         void *o = m->n ? m->obj[--m->n] : NULL;
         irq_restore(is);
-        if (o) return o;
+        if (o) return taken(c, o);
     }
     IrqState s = cache_lock(c);
 
@@ -154,7 +173,7 @@ static void *slab_alloc(SlabCache *c)
     if (--slab->free_count == 0) c->slabs = slab->next;    /* full: off the list until a free */
 
     cache_unlock(c, s);
-    return (void *)obj;
+    return taken(c, obj);
 }
 
 static void slab_free(void *ptr, size_t obj_size)
@@ -176,6 +195,16 @@ static void slab_free(void *ptr, size_t obj_size)
         if (caches[i].obj_size == obj_size) { c = &caches[i]; break; }
     }
     if (!c) return;
+
+    if (obj_size >= sizeof(FreeObj)) {
+        FreeObj *f = ptr;
+        if (f->tag == FREE_TAG) {                         /* (already free: keep it once) */
+            kprintf("[VMM] BUG: kfree(%p): the %zu-byte object is free already\n", ptr, obj_size);
+            KsymBacktraceHere();
+            return;
+        }
+        f->tag = FREE_TAG;
+    }
 
     if (g_mag_on) {
         IrqState is = irq_save();

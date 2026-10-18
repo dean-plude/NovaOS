@@ -2,7 +2,8 @@
  * setup.c — "Install NovaOS": the installer's window
  *
  * Welcome, choose a disk, choose where on it (beside the systems already
- * there, in its free space, or the whole disk erased: the disk's
+ * there, in its free space or in room made by shrinking Windows' volume;
+ * over NovaOS, keeping drive C:; or the whole disk erased: the disk's
  * partitions are drawn as a map), confirm (and choose drive C:'s file
  * system: NTFS, which keeps file permissions, or FAT32), watch the
  * progress, then restart into the installed system.  The work happens in
@@ -34,7 +35,7 @@ typedef struct {
     int       ndisks;
     int       sel;                 /* chosen disk, or -1 */
     bool      fat;                 /* drive C: on FAT32 (else NTFS) */
-    bool      beside;              /* in the free space, keeping what is on the disk */
+    bool      beside;              /* keeping what is on the disk (keep_how), not erasing it */
     SetupStatus st;
 } Setup;
 
@@ -61,6 +62,16 @@ static bool disk_usable(const SetupDisk *d) { return !d->too_small; }
 
 /* The disk has partitions to keep: Setup asks where NovaOS goes */
 static bool asks_where(const SetupDisk *d) { return d->gpt && d->nparts > 0; }
+
+/* How NovaOS goes on @d keeping what is there: over NovaOS keeping drive
+ * C:, in its free space, or in room made by shrinking Windows; SETUP_ERASE
+ * if it can't */
+static SetupHow keep_how(const SetupDisk *d)
+{
+    return d->can_reinstall ? SETUP_REINSTALL : d->can_beside ? SETUP_BESIDE : d->can_shrink ? SETUP_SHRINK : SETUP_ERASE;
+}
+
+static SetupHow chosen(const Setup *s) { return s->beside ? keep_how(&s->disks[s->sel]) : SETUP_ERASE; }
 
 /* ---------------------------------------------------------------------------
  * Painting
@@ -114,10 +125,12 @@ static GdiColor part_color(const SetupPart *p, bool nova)
 }
 
 /* @d's partitions as a bar, in disk order and to scale (a narrow one still
- * shows), with a line for each below; @beside: NovaOS drawn in the free
- * space it would take.  Returns the y below the list. */
-static int partition_map(const SetupDisk *d, int x, int y, int w, bool beside)
+ * shows), with a line for each below; NovaOS drawn where @how puts it: in
+ * the free space, or (SETUP_SHRINK) after Windows' volume at its new size.
+ * Returns the y below the list. */
+static int partition_map(const SetupDisk *d, int x, int y, int w, SetupHow how)
 {
+    bool beside = how == SETUP_BESIDE;
     UINT64 total = 0;
     for (int i = 0; i < d->nparts; i++) total += d->parts[i].sectors;
     if (!total) return y;
@@ -129,7 +142,10 @@ static int partition_map(const SetupDisk *d, int x, int y, int w, bool beside)
         int pw = i == d->nparts - 1 ? left : (int)(p->sectors * (UINT64)w / total);
         if (pw < 6) pw = 6;
         if (pw > left) pw = left;
-        if (pw > 2) GdiFillRect(RECT(px + 1, y + 1, pw - 2, 34), part_color(p, nova));
+        int nw = how == SETUP_SHRINK && !p->free && p->lba == d->shrink_lba
+               ? (int)((UINT64)pw * (d->shrink_from - d->shrink_to) / d->shrink_from) : 0;
+        if (pw > 2) GdiFillRect(RECT(px + 1, y + 1, pw - 2 - nw, 34), part_color(p, nova));
+        if (nw > 2) GdiFillRect(RECT(px + pw - nw, y + 1, nw - 1, 34), UI_ACCENT);   /* (NovaOS in the room made) */
         px += pw;
         left -= pw;
     }
@@ -140,9 +156,22 @@ static int partition_map(const SetupDisk *d, int x, int y, int w, bool beside)
         bool nova = beside && p->free && p->lba == d->free_lba;
         GdiFillRect(RECT(x, y + 4, 12, 12), part_color(p, nova));
         format_bytes(p->sectors * BLOCK_SECTOR, sz, sizeof(sz));
-        ksnprintf(buf, sizeof(buf), "%s  -  %s", nova ? "NovaOS (new)" : p->name, sz);
+        bool shrunk = how == SETUP_SHRINK && !p->free && p->lba == d->shrink_lba;
+        if (shrunk) {
+            char to[24];
+            format_bytes(d->shrink_to * BLOCK_SECTOR, to, sizeof(to));
+            ksnprintf(buf, sizeof(buf), "%s  -  %s, shrunk to %s", p->name, sz, to);
+        } else
+            ksnprintf(buf, sizeof(buf), "%s  -  %s", nova ? "NovaOS (new)" : p->name, sz);
         GdiTextT(x + 20, y, buf, nova ? UI_TEXT : UI_TEXT2);
         y += 21;
+        if (shrunk) {
+            GdiFillRect(RECT(x, y + 4, 12, 12), UI_ACCENT);
+            format_bytes((d->shrink_from - d->shrink_to) * BLOCK_SECTOR, sz, sizeof(sz));
+            ksnprintf(buf, sizeof(buf), "NovaOS (new)  -  %s", sz);
+            GdiTextT(x + 20, y, buf, UI_TEXT);
+            y += 21;
+        }
     }
     return y;
 }
@@ -209,10 +238,14 @@ static void setup_paint(WND *w)
             GdiTextBold(r.x + 68, r.y + 12, buf, usable ? UI_TEXT : UI_TEXT3);
             if (d->too_small)  ksnprintf(buf, sizeof(buf), "%s: too small (needs 256 MB)", d->dev->name);
             else if (d->boot)  ksnprintf(buf, sizeof(buf), "%s: NovaOS started from this disk", d->dev->name);
+            else if (d->can_reinstall) ksnprintf(buf, sizeof(buf), "%s: NovaOS is installed on it", d->dev->name);
             else if (d->holds_c) ksnprintf(buf, sizeof(buf), "%s: drive C: is kept here now", d->dev->name);
             else if (d->can_beside) {
                 format_bytes(d->free_sectors * BLOCK_SECTOR, sz, sizeof(sz));
                 ksnprintf(buf, sizeof(buf), "%s: %s, %s free", d->dev->name, d->windows ? "Windows" : d->contents, sz);
+            } else if (d->can_shrink) {
+                format_bytes((d->shrink_from - d->shrink_to) * BLOCK_SECTOR, sz, sizeof(sz));
+                ksnprintf(buf, sizeof(buf), "%s: %s, %s can be made free", d->dev->name, d->windows ? "Windows" : d->contents, sz);
             } else             ksnprintf(buf, sizeof(buf), "%s: %s", d->dev->name, d->contents);
             GdiSetClip(RECT(r.x, r.y, r.w - 12, r.h));
             GdiTextT(r.x + 68, r.y + 36, buf, UI_TEXT3);
@@ -228,31 +261,44 @@ static void setup_paint(WND *w)
         format_bytes(d->bytes, sz, sizeof(sz));
         ksnprintf(buf, sizeof(buf), "%s (%s), %s:", d->dev->model[0] ? d->dev->model : "Disk", d->dev->name, sz);
         GdiTextT(x, y + 40, buf, UI_TEXT2);
-        partition_map(d, x, y + 68, tw, s->beside);
+        SetupHow keep = keep_how(d);
+        partition_map(d, x, y + 68, tw, chosen(s));
         char opt[2][128];
         format_bytes(d->free_sectors * BLOCK_SECTOR, sz, sizeof(sz));
-        if (d->can_beside) ksnprintf(opt[0], sizeof(opt[0]), "Beside %s, in the %s of free space",
-                                     d->windows ? "Windows" : "what is there", sz);
-        else {
+        if (keep == SETUP_REINSTALL)
+            ksnprintf(opt[0], sizeof(opt[0]), "Reinstall NovaOS, keeping drive C: and your files");
+        else if (keep == SETUP_BESIDE)
+            ksnprintf(opt[0], sizeof(opt[0]), "Beside %s, in the %s of free space", d->windows ? "Windows" : "what is there", sz);
+        else if (keep == SETUP_SHRINK) {
+            char to[24];
+            format_bytes(d->shrink_from * BLOCK_SECTOR, sz, sizeof(sz));
+            format_bytes(d->shrink_to * BLOCK_SECTOR, to, sizeof(to));
+            ksnprintf(opt[0], sizeof(opt[0]), "Beside %s, shrinking it from %s to %s", d->windows ? "Windows" : "it", sz, to);
+        } else {
             format_bytes(SetupBesideBytes(), sz, sizeof(sz));
             ksnprintf(opt[0], sizeof(opt[0]), "Beside what is there (needs %s of free space)", sz);
         }
         ksnprintf(opt[1], sizeof(opt[1]), "Erase the disk and give all of it to NovaOS");
         for (int i = 0; i < 2; i++) {
             GdiRect r = off(r_how(i), c);
-            bool on = s->beside == (i == 0), can = i || d->can_beside;
+            bool on = s->beside == (i == 0), can = i || keep != SETUP_ERASE;
             GdiFillCircle(r.x + 8, r.y + 12, 7, on ? UI_ACCENT : UI_LINE);
             if (on) GdiFillCircle(r.x + 8, r.y + 12, 3, UI_BG);
             GdiTextT(r.x + 24, r.y + 4, opt[i], !can ? UI_TEXT3 : on ? UI_TEXT : UI_TEXT2);
         }
+        if (keep == SETUP_ERASE && d->shrink_why[0])
+            wrap(x, off(r_how(1), c).y + 34, tw, d->shrink_why, UI_TEXT3);
         button(off(r_next(c), c), "Next", true, true);
         button(off(r_back(c), c), "Back", false, true);
         break; }
 
     case PG_CONFIRM: {
         const SetupDisk *d = &s->disks[s->sel];
-        GdiTextLarge(x, y, s->beside ? (d->windows ? "Install beside Windows?" : "Install beside what is there?")
-                                     : "Erase this disk?", UI_TEXT);
+        SetupHow how = chosen(s);
+        GdiTextLarge(x, y, how == SETUP_REINSTALL ? "Reinstall NovaOS?"
+                         : how == SETUP_SHRINK ? (d->windows ? "Shrink Windows and install?" : "Shrink and install?")
+                         : s->beside ? (d->windows ? "Install beside Windows?" : "Install beside what is there?")
+                         : "Erase this disk?", UI_TEXT);
         GdiRect card = RECT(x, y + 52, tw, 76);
         GdiRoundRect(card, 6, UI_CARD, GDI_TRANSPARENT);
         drive_icon(card.x + 14, card.y + 18, 40, true);
@@ -261,29 +307,41 @@ static void setup_paint(WND *w)
         GdiTextBold(card.x + 68, card.y + 18, buf, UI_TEXT);
         ksnprintf(buf, sizeof(buf), "%s: %s", d->dev->name, d->contents);
         GdiTextT(card.x + 68, card.y + 42, buf, UI_TEXT3);
-        GdiTextT(x, y + 144, "Drive C: is kept as", UI_TEXT2);
+        if (how != SETUP_REINSTALL) GdiTextT(x, y + 144, "Drive C: is kept as", UI_TEXT2);
         static const char *const fs[2] = { "NTFS: keeps file permissions (recommended)",
                                            "FAT32: simpler, read by any system" };
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 2 && how != SETUP_REINSTALL; i++) {
             GdiRect r = off(r_fs(i), c);
             bool on = s->fat == (i == 1);
             GdiFillCircle(r.x + 8, r.y + 12, 7, on ? UI_ACCENT : UI_LINE);
             if (on) GdiFillCircle(r.x + 8, r.y + 12, 3, UI_BG);
             GdiTextT(r.x + 24, r.y + 4, fs[i], on ? UI_TEXT : UI_TEXT2);
         }
-        char warn[200];
-        if (s->beside) {
+        char warn[300];
+        if (how == SETUP_BESIDE) {
             format_bytes(d->free_sectors * BLOCK_SECTOR, sz, sizeof(sz));
             ksnprintf(warn, sizeof(warn), "NovaOS takes the %s of free space. The partitions already on the disk, "
                       "and their files, are kept as they are.", sz);
-        }
-        int ny = s->beside ? wrap(x, y + 236, tw, warn, UI_TEXT2)
-                           : wrap(x, y + 236, tw, "Everything on this disk will be deleted. This cannot be undone.",
-                                  GDI_C(0xFF, 0xB0, 0x60));
-        wrap(x, ny + 12, tw, d->holds_c || !PersistActive()
-                               ? "The files you have on drive C: now are copied to the new installation."
-                               : "Drive C: stays saved on the disk it is on now.", UI_TEXT2);
-        button(off(r_next(c), c), s->beside ? "Install" : "Erase and install", true, true);
+        } else if (how == SETUP_SHRINK) {
+            char to[24], used[24];
+            format_bytes(d->shrink_to * BLOCK_SECTOR, to, sizeof(to));
+            format_bytes(d->shrink_used, used, sizeof(used));
+            ksnprintf(warn, sizeof(warn), "Windows' volume is made %s (its files use %s): files past its new end are "
+                      "moved, none are changed. NovaOS takes the room after it. Windows checks the volume when it next "
+                      "starts. Back up first if you can.", to, used);
+        } else if (how == SETUP_REINSTALL)
+            ksnprintf(warn, sizeof(warn), "NovaOS's system files are replaced. Drive C: (the NOVADATA partition), with "
+                      "C:\\Users and all your files, is kept as it is.");
+        int ny = how == SETUP_REINSTALL ? wrap(x, y + 144, tw, warn, UI_TEXT2)
+               : s->beside ? wrap(x, y + 236, tw, warn, UI_TEXT2)
+               : wrap(x, y + 236, tw, "Everything on this disk will be deleted. This cannot be undone.",
+                      GDI_C(0xFF, 0xB0, 0x60));
+        if (how != SETUP_REINSTALL)
+            wrap(x, ny + 12, tw, d->holds_c || !PersistActive()
+                                   ? "The files you have on drive C: now are copied to the new installation."
+                                   : "Drive C: stays saved on the disk it is on now.", UI_TEXT2);
+        button(off(r_next(c), c), how == SETUP_REINSTALL ? "Reinstall" : how == SETUP_SHRINK ? "Shrink and install"
+                                  : s->beside ? "Install" : "Erase and install", true, true);
         button(off(r_back(c), c), "Back", false, true);
         break; }
 
@@ -305,7 +363,8 @@ static void setup_paint(WND *w)
         ksnprintf(buf, sizeof(buf), "NovaOS is on %s (%s). ", d->dev->name, d->dev->model[0] ? d->dev->model : "disk");
         char msg[512];
         ksnprintf(msg, sizeof(msg), "%s%s%s", buf,
-                  s->st.moved_c ? "Your files from this session were copied to it, and drive C: is saved there from now on.\n"
+                  s->st.kept_c ? "Drive C: and your files on it were kept.\n"
+                  : s->st.moved_c ? "Your files from this session were copied to it, and drive C: is saved there from now on.\n"
                                 : "Drive C: will be saved there once you start from it.\n",
                   !SetupIsLive() ? "Restart and choose that disk in the firmware's boot menu to start from it."
                   : strcmp(SetupMediaName(), "disc") ? "Remove the installation USB stick, then restart to start NovaOS from the disk."
@@ -342,12 +401,12 @@ static void next(WND *w)
     case PG_WELCOME:  refresh_disks(s); s->page = PG_DISK; break;
     case PG_DISK:
         if (s->sel < 0) break;
-        s->beside = s->disks[s->sel].can_beside;           /* (keeping what is there, when it fits) */
+        s->beside = keep_how(&s->disks[s->sel]) != SETUP_ERASE;   /* (keeping what is there, when it can) */
         s->page = asks_where(&s->disks[s->sel]) ? PG_HOW : PG_CONFIRM;
         break;
     case PG_HOW:      s->page = PG_CONFIRM; break;
     case PG_CONFIRM:
-        if (SetupStart(s->disks[s->sel].dev, !s->fat, s->beside)) { s->page = PG_PROGRESS; SetupGetStatus(&s->st); }
+        if (SetupStart(s->disks[s->sel].dev, !s->fat, chosen(s))) { s->page = PG_PROGRESS; SetupGetStatus(&s->st); }
         else { SetupGetStatus(&s->st); s->page = PG_FAILED; }
         break;
     case PG_DONE:     DesktopRestart(); break;
@@ -381,12 +440,12 @@ static void setup_mouse(WND *w, WmMouseMsg msg, int x, int y)
                 return;
             }
     }
-    if (s->page == PG_CONFIRM && msg == WM_MOUSE_DOWN)
+    if (s->page == PG_CONFIRM && msg == WM_MOUSE_DOWN && chosen(s) != SETUP_REINSTALL)
         for (int i = 0; i < 2; i++)
             if (UiHit(r_fs(i), x, y)) { s->fat = i == 1; return; }
     if (s->page == PG_HOW && msg == WM_MOUSE_DOWN)
         for (int i = 0; i < 2; i++)
-            if (UiHit(r_how(i), x, y) && (i || s->disks[s->sel].can_beside)) { s->beside = i == 0; return; }
+            if (UiHit(r_how(i), x, y) && (i || keep_how(&s->disks[s->sel]) != SETUP_ERASE)) { s->beside = i == 0; return; }
     if (msg != WM_MOUSE_UP || s->page == PG_PROGRESS) return;
     bool has_back = s->page != PG_FAILED;
     if (UiHit(r_next(cl), x, y)) { if (s->page != PG_DISK || s->sel >= 0) next(w); }
@@ -404,7 +463,7 @@ static void setup_key(WND *w, const KeyEvent *k)
         return;
     }
     if (s->page == PG_HOW && k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN)) {
-        s->beside = k->scancode == KEY_UP && s->disks[s->sel].can_beside;
+        s->beside = k->scancode == KEY_UP && keep_how(&s->disks[s->sel]) != SETUP_ERASE;
         return;
     }
     if (s->page == PG_DISK && k->extended && s->ndisks) {

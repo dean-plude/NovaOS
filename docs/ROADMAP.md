@@ -1069,7 +1069,7 @@ servicing and print models Windows apps and drivers already expect.
   previous kernel (checked with `--fail-boot hang` and `stall`). Next: the
   boot menu with the known-good set, safe mode and startup repair, and the
   ACPI WDAT watchdog (design in [design/recovery.md](design/recovery.md)).
-- [ ] **33.4 A graphical installer that installs beside Windows.** Replace
+- [x] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an
   existing NTFS partition, adds NovaOS to the firmware boot menu (and chains
   Windows Boot Manager so a boot menu lists both), and keeps user data on a
@@ -1077,15 +1077,21 @@ servicing and print models Windows apps and drivers already expect.
   Windows-style NTFS volume leaves that volume's files intact, boots NovaOS
   and offers the other system in the boot menu; a screenshot of each
   installer page is in `docs/screenshots/`.
-  *Part 1 (in progress, [design](design/installer.md)):* Setup's window
+  *Part 1 ([design](design/installer.md)):* Setup's window
   shows each disk's partitions and free space and installs NovaOS beside
   them in the free space (its own ESP and data partition; Windows'
   partitions untouched), tested by the devices suite's `beside` boot;
-  *Part 2 (in progress):* Setup adds the firmware boot entry "NovaOS"
+  *Part 2:* Setup adds the firmware boot entry "NovaOS"
   first in `BootOrder` through the UEFI runtime services, and NovaOS's
   boot loader offers "Windows Boot Manager" in a boot menu and starts it;
-  shrinking NTFS and reinstalling over NovaOS with the data kept are the
-  next parts.
+  *Part 3:* on a disk Windows fills, Setup shrinks Windows' NTFS volume to
+  make room (NovaOS's own NTFS driver moves the files past the new end,
+  then cuts `$Bitmap`, `$BadClus` and the boot sector; the partition entry
+  is made smaller), and reinstalling over NovaOS formats only its ESP and
+  keeps drive C: (`NOVADATA`, `C:\Users`); tested on the host
+  (`tests/host/ntfs_shrink.c`, cut off at every point) and by the devices
+  suite's `shrink` boot, which checks every Windows file byte for byte;
+  each Setup page's screenshot is listed in the design.
 - [ ] **33.5 Printing.** The Windows print model: a spooler service
   (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
   Print Management, real printer drivers loaded unchanged where they are

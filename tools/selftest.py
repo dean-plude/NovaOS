@@ -68,7 +68,11 @@ order; --list prints them):
             volume, free space): Setup's window installs NovaOS beside
             Windows in the free space and NovaOS starts from the disk,
             and the host checks Windows' partitions were left as they
-            were; "update", an installed NovaOS on a
+            were; "shrink", the same PC with Windows' volume filling the
+            disk up to its recovery partition: Setup shrinks it to make
+            room (files past its new end moved) and installs NovaOS there,
+            then reinstalls NovaOS keeping drive C:, and the host checks
+            Windows' files byte for byte; "update", an installed NovaOS on a
             network serving update channels (tools/mkupdate.py): it
             orders a development build of its version after it,
             refuses channels that are unsigned, signed with another key
@@ -379,6 +383,7 @@ USBBOOT = load_suite('devices/usbboot')
 CDBOOT = load_suite('devices/cdboot')
 LAPTOP = load_suite('devices/laptop')
 BESIDE = load_suite('devices/beside')
+SHRINK = load_suite('devices/shrink')
 UPDATE = load_suite('devices/update')
 DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
@@ -907,6 +912,101 @@ def beside_boot(work):
             '-device', 'usb-storage,bus=xhci.0,drive=stick,bootindex=1'], [], {'img': False}
 
 
+# The disk of a PC whose Windows volume takes all the room, as a PC sold with
+# Windows has it: ESP, Microsoft reserved, Windows' NTFS volume, then its
+# recovery partition at the end (the shrink boot).  Windows' files lie past
+# the middle of the volume (written while a filler took the room before them),
+# so shrinking it moves them.
+SHRINK_NTFS_MB, SHRINK_RECOVERY_MB, SHRINK_DISK_MB, SHRINK_FILLER_MB = 2400, 500, 3072, 1500
+SHRINK_FILES = 48
+
+
+def shrink_disk(path):
+    """The disk at @path (SHRINK_*): returns what nothing may change, the
+    sha256 of its Microsoft reserved and recovery partitions, each file on
+    its ESP and each file on its NTFS volume ("<sha256>  <name>" lines)"""
+    import hashlib
+    import random
+    esp, ntfs, rec = path + '.esp', path + '.ntfs', path + '.recovery'
+    with open(esp, 'wb') as f:
+        f.truncate(BESIDE_ESP_MB << 20)
+    mkfs = shutil.which('mkfs.fat') or '/usr/sbin/mkfs.fat'
+    subprocess.run([mkfs, '-F', '32', '-n', 'SYSTEM', '-h', '2048', esp], check=True, stdout=subprocess.DEVNULL)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    for d in ('::/EFI', '::/EFI/Microsoft', '::/EFI/Microsoft/Boot'):
+        subprocess.run(['mmd', '-i', esp, d], check=True, env=env)
+    stub = esp + '.bootmgfw'
+    with open(stub, 'wb') as f:
+        f.write(bootmgfw_standin())
+    subprocess.run(['mcopy', '-i', esp, stub, '::/EFI/Microsoft/Boot/bootmgfw.efi'], check=True, env=env)
+    os.unlink(stub)
+    kept = esp_files(esp)
+    rnd = random.Random(33)
+    with open(rec, 'wb') as f:                   # (Windows RE: marked at its start and end)
+        f.truncate(SHRINK_RECOVERY_MB << 20)
+        f.write(rnd.randbytes(1 << 20))
+        f.seek((SHRINK_RECOVERY_MB - 1) << 20)
+        f.write(rnd.randbytes(1 << 20))
+    with open(ntfs, 'wb') as f:
+        f.truncate(SHRINK_NTFS_MB << 20)
+    first = 1 + BESIDE_ESP_MB + BESIDE_MSR_MB
+    mkntfs = shutil.which('mkntfs') or '/usr/sbin/mkntfs'
+    ntfscp = shutil.which('ntfscp') or '/usr/bin/ntfscp'
+    subprocess.run([mkntfs, '-F', '-Q', '-L', 'Windows', '-p', str(first << 11), '-H', '255', '-S', '63', ntfs],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def put(name, data):
+        src = ntfs + '.file'
+        with open(src, 'wb') as f:
+            f.write(data)
+        subprocess.run([ntfscp, '-f', ntfs, src, name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.unlink(src)
+    filler = ntfs + '.filler'
+    with open(filler, 'wb') as f:
+        f.truncate(SHRINK_FILLER_MB << 20)
+    subprocess.run([ntfscp, '-f', ntfs, filler, 'filler.bin'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.unlink(filler)
+    files = {BESIDE_FILE[0]: BESIDE_FILE[1].replace('\n', '\r\n').encode()}
+    for i in range(SHRINK_FILES):                # (after the filler: past the volume's middle)
+        files[f'file{i:02}.bin'] = rnd.randbytes(rnd.choice((300, 5000, 70000, 400000, 2500000)))
+    for name, data in files.items():
+        put(name, data)
+    put('filler.bin', b'gone')                   # (ntfscp truncates: the room before them is free again)
+    files['filler.bin'] = b'gone'
+    ntfs_sums = ''.join(f'{hashlib.sha256(d).hexdigest()}  {n}\n' for n, d in sorted(files.items()))
+    gpt_disk(path, SHRINK_DISK_MB, [
+        ('c12a7328-f81f-11d2-ba4b-00a0c93ec93b', 'EFI system partition', 1, BESIDE_ESP_MB, esp),
+        ('e3c9e316-0b5c-4db8-817d-f92df00215ae', 'Microsoft reserved partition', 1 + BESIDE_ESP_MB, BESIDE_MSR_MB, None),
+        ('ebd0a0a2-b9e5-4433-87c0-68b6b72699c7', 'Basic data partition', first, SHRINK_NTFS_MB, ntfs),
+        ('de94bba4-06d1-4d40-a16a-bfd50179d6ac', 'Recovery', first + SHRINK_NTFS_MB, SHRINK_RECOVERY_MB, rec)])
+    with open(path, 'rb') as f:
+        f.seek((1 + BESIDE_ESP_MB) << 20)
+        msr = hashlib.sha256(f.read(BESIDE_MSR_MB << 20)).hexdigest()
+        f.seek((first + SHRINK_NTFS_MB) << 20)
+        recovery = hashlib.sha256(f.read(SHRINK_RECOVERY_MB << 20)).hexdigest()
+    return f'{msr}  (Microsoft reserved)\n{recovery}  (recovery)\n' + kept, ntfs_sums
+
+
+def shrink_boot(work):
+    """The PC of shrink_disk on its NVMe disk and nova.iso on a USB stick that
+    starts first: Setup shrinks Windows' volume to make room and installs
+    NovaOS there, then (started from the stick again) reinstalls it keeping
+    drive C:; the disk stays in work/windows.img for the check
+    (tests/selftest/devices/shrink)"""
+    stick, disk = os.path.join(work, 'stick.img'), os.path.join(work, 'windows.img')
+    shutil.copy(iso_path(work), stick)
+    with open(stick, 'r+b') as f:
+        f.truncate(2 << 30)
+    kept, files = shrink_disk(disk)
+    with open(os.path.join(work, 'windows.sha256'), 'w') as f:
+        f.write(kept)
+    with open(os.path.join(work, 'windows-files.sha256'), 'w') as f:
+        f.write(files)
+    return ['-drive', f'if=none,id=nvm,format=raw,file={disk}', '-device', 'nvme,drive=nvm,serial=win0,bootindex=1',
+            '-device', 'qemu-xhci,id=xhci', '-drive', f'if=none,id=stick,format=raw,file={stick}',
+            '-device', 'usb-storage,bus=xhci.0,drive=stick,bootindex=0'], [], {'img': False}
+
+
 def iso_path(work):
     """build/nova.iso, or one made from the build in @work"""
     iso = os.path.join(ROOT, 'build', 'nova.iso')
@@ -1095,7 +1195,7 @@ BOOTS = {
                 ('usbheadset', USBHEADSET, usbheadset_boot), ('driversearch', DRIVERSEARCH, driversearch_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
                 ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot),
-                ('beside', BESIDE, beside_boot), ('update', UPDATE, update_boot),
+                ('beside', BESIDE, beside_boot), ('shrink', SHRINK, shrink_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
                 ('isocam', ISOCAM, isocam_boot), ('composite', COMPOSITE, composite_boot),
                 ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),

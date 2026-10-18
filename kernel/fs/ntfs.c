@@ -1,5 +1,5 @@
 /*
- * ntfs.c — NTFS, read-only (see ntfs.h)
+ * ntfs.c — NTFS (see ntfs.h)
  *
  * Structures follow the on-disk format as documented by the Linux-NTFS
  * project ("NTFS Documentation", Richard Russon and Yuval Fledel).  Every
@@ -3225,4 +3225,299 @@ bool NtfsLookup(NtfsVol *v, UINT64 dir, const char *name, UINT64 *mft, bool *is_
     if (!NtfsList(v, dir, lookup_one, &l) && !l.found) return false;
     if (l.found) { *mft = l.mft; if (is_dir) *is_dir = l.dir; }
     return l.found;
+}
+
+/* ===========================================================================
+ * Shrinking: Setup making room for NovaOS beside Windows
+ *
+ * What ntfsresize and Windows' own "Shrink Volume" do, written here from
+ * the on-disk format (ntfsresize is GPL): every cluster in use past the new
+ * end is copied into free space below it and the attribute's mapping pairs
+ * rewritten, piece by piece (an attribute kept in several records through
+ * an $ATTRIBUTE_LIST has a piece, with its own mapping pairs, in each);
+ * then $Bitmap and $BadClus's $Bad are cut to the new size, and the boot
+ * sector (and its backup, in the new last sector) says the new size.
+ * $MFT's own data can't move (as Windows' shrink can't): it bounds how
+ * small the volume can get.  Everything before the boot sector is written
+ * leaves a valid volume of the old size, so a cut-off shrink loses nothing;
+ * the volume is marked dirty first and left so, so the next system to mount
+ * it checks it (Windows' autochk, or NovaOS's repair()).
+ * ========================================================================= */
+
+#define SHRINK_SPARE  (256ull << 20)     /* free space Windows keeps beyond 10% of what it uses */
+#define SHRINK_COPY   (1u << 20)
+
+static const UINT16 BAD[4] = { '$', 'B', 'a', 'd' };
+
+/* Clusters in use (from $Bitmap) and the end of $MFT's data, which can't move */
+static bool shrink_scan(NtfsVol *v, UINT64 *used, UINT64 *fixed_end)
+{
+    UINT64 clusters = v->total / v->cluster;
+    *fixed_end = 1;                                              /* ($Boot) */
+    for (UINT32 i = 0; i < v->mft.nruns; i++)
+        if (v->mft.runs[i].lcn != SPARSE && v->mft.runs[i].lcn + v->mft.runs[i].len > *fixed_end)
+            *fixed_end = v->mft.runs[i].lcn + v->mft.runs[i].len;
+    UINT8 *map = v->cmap;
+    if (!map) {
+        Stream bm;
+        if (!open_stream(v, 6, AT_DATA, NULL, 0, &bm)) return false;
+        bool ok = !bm.resident && bm.size >= (clusters + 7) / 8 && bm.size <= (512u << 20) &&
+                  (map = kmalloc(bm.size)) && stream_read(v, &bm, 0, map, bm.size);
+        stream_free(&bm);
+        if (!ok) { kfree(map); return false; }
+    }
+    *used = 0;
+    for (UINT64 c = 0; c < clusters; c++) if (bit(map, c)) (*used)++;
+    if (map != v->cmap) kfree(map);
+    return true;
+}
+
+bool NtfsShrinkLimit(NtfsVol *v, UINT64 *min_bytes, UINT64 *used_bytes, const char **why)
+{
+    bool cut;
+    if ((*why = unclean(v, &cut))) return false;
+    UINT64 used, fixed;
+    if (!shrink_scan(v, &used, &fixed)) { *why = "its allocation bitmap can't be read"; return false; }
+    UINT64 need = used + used / 10 + SHRINK_SPARE / v->cluster;
+    if (need < fixed) need = fixed;
+    /* (and a sector for the boot sector's backup), in whole MiB */
+    *min_bytes = (need * v->cluster + 4096 + (1u << 20) - 1) & ~(UINT64)((1u << 20) - 1);
+    *used_bytes = used * v->cluster;
+    return true;
+}
+
+/* Replace the mapping pairs of non-resident attribute @a in @rec with @r
+ * (from its lowest VCN); false if the record has no room for them */
+static bool set_mapping(NtfsVol *v, UINT8 *rec, UINT8 *a, const Run *r, UINT32 n)
+{
+    UINT8 *enc = kmalloc(v->rec_size);
+    int len = enc ? encode_runs(r, n, enc, (int)v->rec_size) : -1;
+    UINT32 mp = rd16(a + 0x20), old = rd32(a + 4), nl = len < 0 ? 0 : align8(mp + (UINT32)len);
+    UINT32 used = rec_used(rec), at = (UINT32)(a - rec);
+    bool ok = len >= 0 && used - old + nl <= v->rec_size;
+    if (ok) {
+        memmove(a + nl, a + old, used - at - old);
+        memcpy(a + mp, enc, (UINT32)len);
+        memset(a + mp + len, 0, nl - mp - (UINT32)len);
+        wr32(a + 4, nl);
+        wr32(rec + 0x18, used - old + nl);
+        UINT64 lo = rd64(a + 0x10);
+        wr64(a + 0x18, n ? r[n - 1].vcn + r[n - 1].len - 1 : lo - 1);
+    }
+    kfree(enc);
+    return ok;
+}
+
+/* Copy each cluster of VCNs [@vcn, @vcn+@len) from @lcn on to where @to maps it */
+static bool copy_moved(NtfsVol *v, const Stream *to, UINT64 vcn, UINT64 lcn, UINT64 len, UINT8 *buf, UINT64 cap)
+{
+    UINT64 per = cap / v->cluster;
+    while (len) {
+        UINT64 count, dst = map_vcn(to, vcn, &count);
+        if (!count || dst == SPARSE) return false;
+        if (count > len) count = len;
+        if (count > per) count = per;
+        if (!dev_read(v, lcn * v->cluster, count * v->cluster, buf) ||
+            !dev_write(v, dst * v->cluster, count * v->cluster, buf)) return false;
+        vcn += count; lcn += count; len -= count;
+    }
+    return true;
+}
+
+/* Every in-use MFT record: (@move false) check each can be read and
+ * count the clusters past @newc, or (@move) move them below it */
+static const char *shrink_records(NtfsVol *v, UINT64 newc, bool move, UINT64 *past, UINT64 *files)
+{
+    const char *why = NULL;
+    UINT64 nrec = v->mft.size / v->rec_size;
+    UINT32 chunk = BOUNCE / v->rec_size;
+    UINT64 cap = v->cluster > SHRINK_COPY ? v->cluster : SHRINK_COPY;
+    UINT8 *buf = kmalloc(BOUNCE), *rec = kmalloc(v->rec_size), *copy = move ? kmalloc(cap) : NULL;
+    *past = *files = 0;
+    if (!buf || !rec || (move && !copy)) { why = "out of memory"; goto out; }
+    for (UINT64 r0 = 0; r0 < nrec && !why; r0 += chunk) {
+        UINT32 k = nrec - r0 < chunk ? (UINT32)(nrec - r0) : chunk;
+        if (!stream_read(v, &v->mft, r0 * v->rec_size, buf, (UINT64)k * v->rec_size)) { why = "the MFT can't be read"; break; }
+        for (UINT32 i = 0; i < k && !why; i++) {
+            UINT64 r = r0 + i;
+            memcpy(rec, buf + (UINT64)i * v->rec_size, v->rec_size);
+            if (memcmp(rec, "FILE", 4) || !(rd16(rec + 0x16) & REC_IN_USE)) continue;
+            if (!fixup(rec, v->rec_size, "FILE") || rd16(rec + 0x14) < 0x18 || rec_used(rec) > v->rec_size) {
+                why = "a record can't be read (torn or damaged)";
+                break;
+            }
+            bool changed = false;
+            UINT32 at = rd16(rec + 0x14);
+            while (!why && at + 16 <= rec_used(rec)) {
+                UINT8 *a = rec + at;
+                UINT32 t = rd32(a), len = rd32(a + 4);
+                if (t == AT_END) break;
+                if (len < 16 || (len & 7) || at + len > rec_used(rec) || (a[8] && len < 0x40)) {
+                    why = "a record's attributes are damaged";
+                    break;
+                }
+                if (a[8] && !(r == 8 && t == AT_DATA && name_eq(a, BAD, 4))) {   /* ($Bad is cut, not moved) */
+                    Stream s, out;
+                    memset(&s, 0, sizeof(s));
+                    memset(&out, 0, sizeof(out));
+                    if (!decode_runs(v, &s, a)) why = "a record's runs are damaged";
+                    UINT64 n = 0;
+                    for (UINT32 j = 0; !why && j < s.nruns; j++)
+                        if (s.runs[j].lcn != SPARSE && s.runs[j].lcn + s.runs[j].len > newc)
+                            n += s.runs[j].lcn + s.runs[j].len - (s.runs[j].lcn > newc ? s.runs[j].lcn : newc);
+                    if (n && r == 0 && t == AT_DATA && !a[9]) why = "the MFT lies past the new end";
+                    if (n && !why) {
+                        *past += n;
+                        (*files)++;
+                    }
+                    for (UINT32 j = 0; n && move && !why && j < s.nruns; j++) {
+                        Run q = s.runs[j];
+                        if (q.lcn == SPARSE || q.lcn + q.len <= newc) {
+                            if (!add_run(&out, q.vcn, q.lcn, q.len)) why = "out of memory";
+                            continue;
+                        }
+                        UINT64 keep = q.lcn < newc ? newc - q.lcn : 0;
+                        if (keep && !add_run(&out, q.vcn, q.lcn, keep)) { why = "out of memory"; break; }
+                        if (!alloc_clusters(v, &out, q.vcn + keep, q.len - keep)) { why = "there is no free space left below the new end"; break; }
+                        if (!copy_moved(v, &out, q.vcn + keep, q.lcn + keep, q.len - keep, copy, cap)) why = "a disk error while moving data";
+                    }
+                    if (n && move && !why) {
+                        if (!set_mapping(v, rec, a, out.runs, out.nruns)) why = "a file is too fragmented to move";
+                        changed = true;
+                    }
+                    stream_free(&s);
+                    stream_free(&out);
+                }
+                at += rd32(rec + at + 4);
+            }
+            if (!changed || why) continue;
+            if (!write_record(v, r, rec)) { why = "a disk error writing the MFT"; break; }
+            /* What NovaOS keeps of the records it moved: $MFT's bitmap, $MFTMirr, $Bitmap */
+            if (r == 0) {
+                stream_free(&v->mbm);
+                if (!open_stream(v, 0, AT_BITMAP, NULL, 0, &v->mbm)) why = "the MFT's bitmap can't be read after moving it";
+            } else if (r == 1) {
+                Stream mm;
+                if (!open_stream(v, 1, AT_DATA, NULL, 0, &mm) || mm.resident || !mm.nruns) why = "$MFTMirr can't be read after moving it";
+                else v->mirr_lcn = mm.runs[0].lcn;
+                stream_free(&mm);
+                for (UINT64 m = 0; !why && m < v->mirr_n; m++)          /* (records 0-3 to the new copy) */
+                    if (!read_record_any(v, m, rec) || !write_record(v, m, rec)) why = "a disk error writing $MFTMirr";
+            } else if (r == 6) {
+                stream_free(&v->cbm);
+                if (!open_stream(v, 6, AT_DATA, NULL, 0, &v->cbm) || v->cbm.resident ||
+                    !write_raw(v, &v->cbm, 0, v->cmap, v->cbm.size)) why = "$Bitmap can't be written after moving it";
+            }
+        }
+    }
+out:
+    kfree(buf);
+    kfree(rec);
+    kfree(copy);
+    return why;
+}
+
+/* Cut record @r's attribute (@type, @name) to @vcns clusters (a sparse run
+ * covers what its runs don't) and @size bytes; clusters it gives up below
+ * the end are freed */
+static bool trim_attr(NtfsVol *v, UINT64 r, UINT32 type, const UINT16 *name, UINT32 nlen, UINT64 vcns, UINT64 size)
+{
+    UINT8 *rec = kmalloc(v->rec_size);
+    bool ok = rec && read_record(v, r, rec) && !next_attr(rec, v->rec_size, NULL, AT_ATTRIBUTE_LIST);
+    UINT8 *a = ok ? find_attr(rec, v->rec_size, type, name, nlen) : NULL;
+    Stream s, out;
+    memset(&s, 0, sizeof(s));
+    memset(&out, 0, sizeof(out));
+    ok = a && a[8] && rd64(a + 0x10) == 0 && decode_runs(v, &s, a);
+    UINT64 end = 0;
+    for (UINT32 j = 0; ok && j < s.nruns; j++) {
+        Run q = s.runs[j];
+        UINT64 keep = q.vcn >= vcns ? 0 : q.vcn + q.len > vcns ? vcns - q.vcn : q.len;
+        if (q.lcn != SPARSE)
+            for (UINT64 c = q.lcn + keep; c < q.lcn + q.len; c++)
+                if (c < v->clusters && bit(v->cmap, c)) { set_bit(v->cmap, c, false); v->nfree++; }
+        if (keep) { ok = add_run(&out, q.vcn, q.lcn, keep); end = q.vcn + keep; }
+    }
+    if (ok && end < vcns) ok = add_run(&out, end, SPARSE, vcns - end);
+    if (ok) {
+        UINT64 old_size = rd64(a + 0x30), old_init = rd64(a + 0x38);
+        ok = set_mapping(v, rec, a, out.runs, out.nruns);
+        if (ok) {
+            wr64(a + 0x28, vcns * v->cluster);
+            wr64(a + 0x30, size);
+            wr64(a + 0x38, old_init >= old_size || old_init > size ? size : old_init);
+            ok = write_record(v, r, rec);
+        }
+    }
+    stream_free(&s);
+    stream_free(&out);
+    kfree(rec);
+    return ok;
+}
+
+bool NtfsShrink(NtfsVol *v, UINT64 bytes, const char **why)
+{
+    *why = NULL;
+    if (!v->rw) { *why = "it is not writable"; return false; }
+    UINT8 *bs = kmalloc(4096);
+    if (!bs || !dev_read(v, 0, BLOCK_SECTOR, bs)) { kfree(bs); *why = "its boot sector can't be read"; return false; }
+    UINT16 bps = rd16(bs + 0x0B);
+    if (bps > BLOCK_SECTOR && !dev_read(v, 0, bps, bs)) { kfree(bs); *why = "its boot sector can't be read"; return false; }
+    UINT64 nsec = bytes / bps - 1;                    /* (the partition's last sector keeps the boot sector's backup) */
+    UINT64 newc = nsec * bps / v->cluster, oldc = v->clusters, used, fixed, past, files;
+    UINT64 free_below = 0;
+    if (!shrink_scan(v, &used, &fixed)) *why = "its allocation bitmap can't be read";
+    else if (newc >= oldc) *why = "the new size is not smaller";
+    else if (fixed > newc) *why = "the MFT lies past the new end (Windows can't move it either)";
+    else {
+        for (UINT64 c = 0; c < newc; c++) if (!bit(v->cmap, c)) free_below++;
+        *why = shrink_records(v, newc, false, &past, &files);
+        if (!*why && past > free_below) *why = "the files don't fit in the new size";
+    }
+    if (*why) { kfree(bs); return false; }
+    kprintf("[NTFS] %s: shrinking \"%s\" from %llu to %llu MiB: %llu MiB of %llu attribute%s to move\n",
+            v->dev->name, v->label, (unsigned long long)(v->total >> 20), (unsigned long long)(nsec * bps >> 20),
+            (unsigned long long)(past * v->cluster >> 20), (unsigned long long)files, files == 1 ? "" : "s");
+
+    /* Dirty first: whatever happens next, the volume is checked when next mounted */
+    if (!set_dirty(v, true)) { kfree(bs); *why = "it can't be marked dirty"; return false; }
+    v->clusters = newc;                               /* (new clusters come from below the end only) */
+    v->nfree = free_below;
+    v->hint = 0;
+    *why = shrink_records(v, newc, true, &past, &files);
+    if (*why) {                                       /* (still a valid volume of the old size) */
+        v->clusters = oldc;
+        v->nfree = 0;
+        for (UINT64 c = 0; c < oldc; c++) if (!bit(v->cmap, c)) v->nfree++;
+        kfree(bs);
+        return false;
+    }
+
+    /* Each step from here leaves a volume that mounts: first the bitmap
+     * with nothing in use past the new end (still valid for the old size) */
+    for (UINT64 c = newc; c < oldc; c++) set_bit(v->cmap, c, false);
+    bool ok = write_raw(v, &v->cbm, 0, v->cmap, v->cbm.size) && flush_dev(v);
+    /* Then the boot sector and its backup in the new last sector: the new
+     * size (with a $Bitmap and a $Bad longer than it needs) */
+    if (ok) {
+        wr64(bs + 0x28, nsec);
+        wr64(bs + 0x38, v->mirr_lcn);
+        ok = dev_write(v, 0, bps, bs) && dev_write(v, nsec * bps, bps, bs) && flush_dev(v);
+    }
+    kfree(bs);
+    /* Then $BadClus's $Bad, which covers the volume, and $Bitmap, a bit per cluster */
+    UINT64 bm_bytes = (newc + 63) / 64 * 8, bm_vcns = (bm_bytes + v->cluster - 1) / v->cluster;
+    ok = ok && trim_attr(v, 8, AT_DATA, BAD, 4, newc, newc * v->cluster) &&
+         trim_attr(v, 6, AT_DATA, NULL, 0, bm_vcns, bm_bytes);
+    if (ok) {                                         /* (its bits past the end set, as Windows and mkntfs leave them) */
+        for (UINT64 c = newc; c < bm_bytes * 8; c++) set_bit(v->cmap, c, true);
+        stream_free(&v->cbm);
+        ok = open_stream(v, 6, AT_DATA, NULL, 0, &v->cbm) && !v->cbm.resident &&
+             write_raw(v, &v->cbm, 0, v->cmap, v->cbm.size) && flush_dev(v);
+    }
+    if (!ok) { *why = "a disk error while cutting the volume to its new size"; return false; }
+    v->total = nsec * bps;
+    kprintf("[NTFS] %s: \"%s\" is now %llu MiB (%llu MiB moved); marked for checking\n", v->dev->name, v->label,
+            (unsigned long long)(v->total >> 20), (unsigned long long)(past * v->cluster >> 20));
+    return true;
 }

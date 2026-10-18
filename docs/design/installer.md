@@ -146,20 +146,105 @@ firmware copies its console to the serial port, where the test reads the
 menu. The `laptop` boot checks the same boot entry after a whole-disk
 install.
 
-## To do (the next parts of 33.4)
+## Done (part 3): making room, and reinstalling with the data kept
 
-1. **Shrinking Windows' NTFS volume.** "Make room for NovaOS" on the Where
-   page when the disk has too little free space: the volume is checked as
-   chkdsk would (clean, not hibernated, no Fast Startup), its clusters past
-   the new end are moved down (NovaOS's NTFS driver, `kernel/fs/ntfs.c`,
-   moving data runs and updating `$Bitmap`, `$MFT` runs and the boot
-   sector's sector count, as ntfsresize does; ntfsresize itself is GPL,
-   so the method is reimplemented, not its code), then the partition
-   entry is made smaller.
-2. **Reinstalling keeps the data.** On a disk where NovaOS is installed,
-   "Reinstall NovaOS" replaces the ESP's system files and keeps the
-   `NOVADATA` partition (drive C:, `C:\Users`).
-3. **The step's screenshots**: the Where and confirm pages are in
-   `docs/screenshots/` (`install-where.png`, `install-confirm.png`); the
-   `beside` boot saves every page (`setup-*.png` in its output), and the
-   rest join them once the pages above exist.
+<img src="../screenshots/install-shrink.png" alt="Setup's Where page offering to shrink Windows to make room" width="640">
+
+**Shrinking Windows' volume.** Most PCs sold with Windows have no free
+space: Windows' volume runs up to its recovery partition. When a GPT disk
+has too little free space, `SetupListDisks` mounts each NTFS basic data
+partition read-only and asks `NtfsShrinkLimit` (`kernel/fs/ntfs.c`) how
+small it could get: not at all if Windows did not leave it clean (a
+transaction waiting in `$LogFile`, a chkdsk pending, hibernated or Fast
+Startup, the checks NovaOS already makes before writing to a Windows
+volume), else what its files use plus 10% and 256 MiB, and never below the
+end of `$MFT`'s data, which can't move (Windows' own "Shrink Volume" can't
+move it either). NovaOS gets half the volume's free space, at least what
+it needs and at most 64 GiB, taken from the volume's end, so the free
+space after it grows; the Where page offers "Beside Windows, shrinking it
+from X to Y", draws Windows smaller and NovaOS in the room, and the
+Terminal's `install <disk> /shrink` does the same.
+
+How `NtfsShrink` shrinks a volume (what ntfsresize and Windows do; it is
+written from the on-disk format, ntfsresize being GPL, and no MIT, BSD or
+zlib NTFS resizer was found):
+
+1. Every MFT record in use is read and checked first; any it can't read,
+   or data past the new end that won't fit below it, and nothing is
+   written.
+2. `$Volume` is marked dirty.
+3. For each MFT record, each non-resident attribute piece (an attribute in
+   several records through an `$ATTRIBUTE_LIST` has a piece, with its own
+   mapping pairs, in each) whose runs reach past the new end: new clusters
+   below the end are taken from `$Bitmap`, the data copied there, and the
+   piece's mapping pairs rewritten (a run cut at the end keeps its part
+   below it), then the record is written (and `$MFTMirr` for records 0-3).
+   `$MFTMirr` itself, `$LogFile`, `$Bitmap`, the MFT's own bitmap, index
+   blocks and files all move this way; `$BadClus`'s `$Bad` is cut, not
+   moved.
+4. `$Bitmap` is written with nothing in use past the new end (a valid
+   volume of the old size still), then the boot sector with the new
+   sector count (and `$MFTMirr`'s cluster), and its backup in the new
+   last sector of the partition, then `$Bad` and `$Bitmap` are cut to the
+   new size (`$Bitmap`'s bits past the end set, as Windows and mkntfs
+   leave them).
+5. Setup makes the GPT entry smaller (`DiskWriteLayout`), keeping its
+   place, GUIDs, type and name, and installs beside it as in part 1.
+
+The volume is left marked dirty, so the next system to mount it checks it:
+Windows' autochk, or NovaOS's own check (`repair()`, which mounting it as a
+drive letter runs; on a sound shrink it reports nothing to put right). A
+shrink cut off part way (the power goes) leaves a volume that mounts at
+the old size or the new one with every file whole. Encrypted (BitLocker)
+volumes are not NTFS to NovaOS and are not offered.
+
+**Reinstalling keeps the data.** On a disk NovaOS is on (not the one it is
+running from), the Where page offers "Reinstall NovaOS, keeping drive C:
+and your files" and `install <disk> /reinstall` does the same: Setup finds
+`NOVA_EFI` and `NOVADATA` in the disk's GPT, checks the ESP is big enough
+for this version (else it says to erase instead), formats only the ESP
+again and copies the boot loader, kernel and boot files, leaves
+`NOVADATA` (drive C:, `C:\Users`, settings and programs) as it is, and
+writes the firmware's boot entry again (the one naming that ESP is
+reused). Windows' partitions on the disk are not touched.
+
+**The tests.** `tests/host/ntfs_shrink.c` (run by
+`tests/tools/test_ntfs_shrink.py`) runs the real `ntfs.c` on a RAM disk: a
+96 MiB volume of NovaOS's own format, two thirds full, two in three files
+deleted and a large file written into the holes, shrunk to 44 MiB
+(`$MFTMirr`, `$LogFile` and files move); from a disk cut to the new size
+it must mount, be checked with nothing to put right, hold every file byte
+for byte and pass `scripts/ntfs-check.py`; then the shrink is cut off at
+points through its writes and each disk must do the same at its old size
+or its new one. The devices suite's `shrink` boot
+(`tests/selftest/devices/shrink`) is the PC: an NVMe disk laid out as
+Windows Setup does (ESP, reserved, a 2400 MiB NTFS volume made by mkntfs
+whose 50 files lie past its middle, a 500 MiB recovery partition at the
+end, no free space) and nova.iso on a USB stick that starts first. Setup's
+window shrinks Windows' volume and installs NovaOS in the room; the
+volume, mounted as D:, is checked with nothing to put right; a file is
+written into `\Users` on NovaOS's data partition; started from the stick
+again, Setup's window reinstalls NovaOS and the file is still there. Once
+QEMU has quit the host checks the GPT (only Windows' volume changed, made
+smaller; NovaOS in the room), Windows' reserved and recovery partitions
+and ESP files unchanged, the shrunk volume with `scripts/ntfs-check.py` and
+ntfsresize's own read-only check, every file on it byte for byte against
+its hash from before (`ntfscat`), and the kept file on `NOVADATA`.
+
+<img src="../screenshots/install-reinstall.png" alt="Setup's Where page offering to reinstall NovaOS keeping drive C:" width="640">
+
+## Setup's pages
+
+Each page, as the `beside` and `shrink` boots save them (`setup-*.png` in
+their output):
+
+| Page | Screenshot |
+|---|---|
+| Welcome | [install-welcome.png](../screenshots/install-welcome.png) |
+| Choose a disk | [install-disk.png](../screenshots/install-disk.png) |
+| Where (beside Windows, in the free space) | [install-where.png](../screenshots/install-where.png) |
+| Where (shrinking Windows to make room) | [install-shrink.png](../screenshots/install-shrink.png) |
+| Where (reinstalling, keeping drive C:) | [install-reinstall.png](../screenshots/install-reinstall.png) |
+| Confirm | [install-confirm.png](../screenshots/install-confirm.png) |
+| Installing | [install-progress.png](../screenshots/install-progress.png) |
+| Done | [install-done.png](../screenshots/install-done.png) |

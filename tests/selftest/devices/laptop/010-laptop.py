@@ -4,7 +4,7 @@
 # display adapter NovaOS drives (the firmware's GOP only), nova.iso on a
 # USB stick and an empty NVMe disk.  The lid sleeps it in low-power S0
 # idle and wakes it; then NovaOS installs itself on the NVMe disk and
-# starts from it, adding its firmware boot entry.
+# starts from it, through the firmware boot entry Setup added.
 import time
 
 DOC = ('a laptop without S3 whose lid and battery sit behind an embedded controller (`tests/acpi/laptop.asl`): '
@@ -43,7 +43,8 @@ TESTS = [
                       r'\[ACPI\] LPS0: told the platform the screen is off',
                       r'\[SLEEP\] Woke up after \d+ s \(the lid opened\)', r'\[ACPI\] LPS0: left S0 idle']),
     Test('install on nvme', 'install nvme0n1', [r'NovaOS is installed'], builtin=True, timeout=900,
-         boot_expect=[r'\[SETUP\] Installing NovaOS on nvme0n1']),
-    Test('start from nvme', 'shutdown /r', [r'\[SETUP\] Added the firmware boot entry "NovaOS" for this disk'],
+         boot_expect=[r'\[SETUP\] Installing NovaOS on nvme0n1',
+                      r'\[SETUP\] Added the firmware boot entry Boot[0-9A-F]{4} "NovaOS" for nvme0n1, first in BootOrder']),
+    Test('start from nvme', 'shutdown /r', [r'\[SETUP\] The firmware has a "NovaOS" boot entry for this disk'],
          reboot=True),
 ]

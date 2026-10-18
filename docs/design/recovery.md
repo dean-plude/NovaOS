@@ -104,7 +104,9 @@ outside ([updates.md](../updates.md#the-self-test)).
    (`bootx64.old`) beside `kernel.old`, and give `BOOTX64.EFI` a menu
    (shown when a key is held at start, or by itself after two starts in a
    row that did not reach the desktop, as WinRE does) with "NovaOS", "the
-   previous version", "Safe mode" and "Startup repair".
+   previous version", "Safe mode" and "Startup repair". The menu itself
+   exists since step 33.4 part 2 (`bootloader/src/bootmenu.c`, shown when
+   Windows is on the PC: [installer.md](installer.md)); these lines join it.
 3. **Safe mode and startup repair.** Safe mode starts with only NovaOS's
    own drivers and the firmware framebuffer (no third-party `.sys` packages,
    the Windows driver model's equivalent of Last Known Good drivers);

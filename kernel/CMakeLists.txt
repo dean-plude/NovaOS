@@ -261,6 +261,9 @@ set(KERNEL_C_SOURCES
     nt/storport.c
     nt/usbd.c
     nt/usbvideo.c
+    nt/bthport.c
+    nt/bthusb.c
+    nt/hidbth.c
     nt/win10.c
     nt/win11.c
     nt/zw.c

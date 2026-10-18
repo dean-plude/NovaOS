@@ -836,7 +836,19 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   `wlanapi.dll` and Settings' Wi-Fi page, then scanning and joining a
   network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
-  after sleep.
+  after sleep. Done in QEMU: NovaOS's Bluetooth host stack
+  (`kernel/nt/bthport.c`, the role of Windows' `bthport.sys`: HCI, inquiry,
+  Secure Simple Pairing and PIN pairing, link keys in the registry, L2CAP
+  and an SDP client), its USB transport `bthusb` and HID over Bluetooth
+  (`hidbth`), with `bthprops.cpl`'s radio and device API. The inbox
+  `bth.inf` lets a vendor's radio package such as Intel's `ibtusb` put its
+  driver under `bthusb` as Windows does. Shown with a fake USB radio and a
+  mouse and a headset in range in the devices suite's `bluetooth` boot:
+  inquiry, pairing both, the mouse moving the cursor and reconnecting
+  after a restart, an `ibtusb`-style filter installed with `pnputil`.
+  Still needed: headset audio (SCO and A2DP), reconnects the device
+  starts, Settings' Bluetooth page, and pairing a real mouse and headset
+  on the T14 with Intel's driver, including after sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
   show the built-in webcam in a camera app. Done in QEMU: the UVC class
   driver (`kernel/nt/usbvideo.c`), Media Foundation's capture path

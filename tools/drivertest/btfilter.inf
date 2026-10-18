@@ -1,0 +1,61 @@
+; btfilter.inf - the package of btfilter.sys, a lower filter on a USB
+; Bluetooth radio (tools/drivertest/btfilter.c), laid out as Intel's
+; ibtusb.inf is: bth.inf's BthUsb sections make bthusb the function driver,
+; the .HW section's LowerFilters puts btfilter under it.  The bluetooth
+; self-test installs it with pnputil /add-driver /install.
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Bluetooth
+ClassGuid   = {e0cbf06c-cd8b-4647-bb8a-263b43f0f974}
+Provider    = %ProviderName%
+DriverVer   = 10/18/2026,1.0.0.0
+CatalogFile = btfilter.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+btfilter.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Radio,NTamd64
+
+[Radio.NTamd64]
+%DeviceDesc% = BtFilter, USB\VID_1209&PID_000D
+
+[BtFilter.NT]
+Include   = bth.inf
+Needs     = BthUsb.NT
+CopyFiles = BtFilter_Files
+
+[BtFilter.NT.HW]
+Include = bth.inf
+Needs   = BthUsb.NT.HW
+AddReg  = BtFilter_HW_AddReg
+
+[BtFilter_HW_AddReg]
+HKR,,"LowerFilters",0x00010000,"btfilter"
+
+[BtFilter_Files]
+btfilter.sys
+
+[BtFilter.NT.Services]
+Include    = bth.inf
+Needs      = BthUsb.NT.Services
+AddService = btfilter,, BtFilter_Service
+
+[BtFilter_Service]
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1
+ServiceBinary = %13%\btfilter.sys
+
+[Strings]
+ProviderName     = "NovaOS Test"
+ManufacturerName = "NovaOS Test"
+DiskName         = "NovaOS Bluetooth filter test"
+DeviceDesc       = "NovaOS Test Bluetooth Radio"

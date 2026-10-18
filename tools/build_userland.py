@@ -712,6 +712,13 @@ wddmdir = os.path.join(out, 'wddmdod')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), wddmdir, 'wddmdod'])
 for n in sorted(os.listdir(wddmdir)):
     built.append((f'\\Tests\\Wddm\\{n}', os.path.join(wddmdir, n)))
+# 3a2d. wddmtest.sys and its package, the WDDM render miniport whose "GPU"
+# is software, on a root-enumerated device the wddm self-test makes and
+# installs it on with pnputil (step 3 of docs/design/intel-gpu.md)
+wddmtestdir = os.path.join(out, 'wddmtest')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), wddmtestdir, 'wddmtest'])
+for n in sorted(os.listdir(wddmtestdir)):
+    built.append((f'\\Tests\\WddmTest\\{n}', os.path.join(wddmtestdir, n)))
 # 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
 # MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
 # that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in

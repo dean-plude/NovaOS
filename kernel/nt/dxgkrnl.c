@@ -37,10 +37,33 @@
  * are this file's own, behind the interfaces DxgkCbQueryVidPnInterface
  * returns.  This is step 1 of docs/design/intel-gpu.md: the display-only
  * path, enough for a KMDOD-like driver (tools/drivertest/wddmdod.c drives
- * QEMU's Bochs VBE adapter with it).  Not yet: the render DDIs of a full
- * driver (DxgkInitialize's DRIVER_INITIALIZATION_DATA, step 2 on the
- * T14), interrupts and vertical blanks (a display-only driver on QEMU has
- * none), power states, more than one source, and monitor interfaces.
+ * QEMU's Bochs VBE adapter with it).
+ *
+ * Step 3's second part: a full driver's DRIVER_INITIALIZATION_DATA
+ * (DxgkInitialize), as a render miniport.  At START its segments
+ * (DXGKQAITYPE_QUERYSEGMENT4) are read and it becomes a render adapter with
+ * a LUID, which the D3DKMT* calls (um/um_d3dkmt.c) list beside Basic Render
+ * and reach through DxgkRender* below:
+ *
+ *   D3DKMTCreateDevice      DxgkDdiCreateDevice
+ *   D3DKMTCreateAllocation  DxgkDdiCreateAllocation sizes it and names the
+ *                           segments it may live in; VidMm (here) places it
+ *                           in one with room and opens it on the device
+ *                           (DxgkDdiOpenAllocation, the driver finding its
+ *                           allocation from dxgkrnl's handle through
+ *                           DxgkCbGetHandleData); its pages are system
+ *                           memory the caller gives it
+ *   destroying them         DxgkDdiCloseAllocation, DestroyAllocation,
+ *                           DestroyDevice; whatever a removed adapter still
+ *                           has goes before it stops
+ *
+ * Tested by tools/drivertest/wddmtest.c, a render miniport whose GPU is
+ * software.  Not yet: GPU virtual addresses, paging buffers and residency
+ * (allocations stay where they are placed, never evicted), contexts and
+ * submission, interrupts, fences the GPU signals, preemption and TDR (the
+ * next parts of step 3), and a full driver's display (step 2, on the T14:
+ * its outputs are counted but the desktop is not offered to it), power
+ * states, more than one source, and monitor interfaces.
  */
 #include "ntapi.h"
 #include "dxgk.h"
@@ -50,18 +73,23 @@
 #include "../mm/pmm.h"
 #include "../mm/vmm.h"
 #include "../um/um.h"
+#include "dxgkrender.h"
 
 #define MAX_MODES   DISPLAY_MAX_MODES
 #define MAX_PATHS   4
 #define MAX_IDS     4                      /* sources and targets a VidPN keeps mode sets for */
 #define MAX_CHILDREN 4
 #define MAX_MAPS    8
+#define MAX_SEGS    8
+#define ST_NO_VIDEO_MEMORY ((NT_STATUS)0xC01E0100)   /* STATUS_GRAPHICS_NO_VIDEO_MEMORY */
 
 typedef struct DxgkDriver {
     struct DxgkDriver *next;
     NT_DRIVER_OBJECT  *obj;
     char               service[64];
-    KMDDOD_INITIALIZATION_DATA ddi;
+    KMDDOD_INITIALIZATION_DATA ddi;        /* a display-only driver's, or a full one's entries of the same names */
+    DRIVER_INITIALIZATION_DATA full;       /* a full driver's (render) */
+    bool               render;
     NT_UNICODE_STRING  regpath;
     NT_WCHAR           regbuf[160];
     int                adapters;
@@ -85,11 +113,38 @@ typedef struct DxgkAdapter {
     int                nmodes;
     DisplayMode        cur;
     struct { void *va; UINT64 len; } map[MAX_MAPS];
+    /* a render adapter's */
+    UINT32             luid;               /* (its LowPart; HighPart 0) */
+    int                wddm;               /* DXGK_WDDMVERSION */
+    int                nseg;
+    struct { UINT64 size, used; UINT32 flags; } seg[MAX_SEGS];   /* (segment n + 1) */
+    struct DxgkDev    *devs;
+    struct DxgkAlloc  *allocs;
 } DxgkAdapter;
+
+/* A render adapter's device and allocations: dxgkrnl's handle for each,
+ * and the driver's */
+typedef struct DxgkDev {
+    struct DxgkDev *next;
+    UINT32          handle;
+    void           *kmd;
+} DxgkDev;
+
+typedef struct DxgkAlloc {
+    struct DxgkAlloc *next;
+    UINT32          handle;
+    DxgkDev        *dev;
+    void           *kmd, *devspec;         /* the driver's hAllocation, hDeviceSpecificAllocation */
+    UINT64          size;
+    int             seg;                   /* (an index into seg[]) */
+} DxgkAlloc;
 
 static DxgkDriver  *g_drivers;
 static DxgkAdapter *g_adapters;
 static NT_DRIVER_OBJECT g_dxgk;           /* owns \Device\DxgKrnl */
+static NT_KEVENT    g_render;              /* a mutex: the adapter list, starts and stops, render calls */
+static UINT32       g_handles = 0x40000000u;
+static UINT32       g_luids = 0x2000u;     /* (Basic Render's is 0x1000) */
 
 static DxgkDriver *driver_of(NT_DRIVER_OBJECT *obj)
 {
@@ -99,6 +154,8 @@ static DxgkDriver *driver_of(NT_DRIVER_OBJECT *obj)
 
 static void lock(DxgkAdapter *a) { nt_KeWaitForSingleObject(&a->lock, 0, 0, 0, NULL); }
 static void unlock(DxgkAdapter *a) { nt_KeSetEvent(&a->lock, 0, 0); }
+static void render_lock(void) { nt_KeWaitForSingleObject(&g_render, 0, 0, 0, NULL); }
+static void render_unlock(void) { nt_KeSetEvent(&g_render, 0, 0); }
 
 /* -----------------------------------------------------------------------
  * The VidPN manager: VidPNs, their topology and mode sets
@@ -583,6 +640,17 @@ static NT_API NT_STATUS cb_present(void *h, void *params, unsigned char *present
     return NT_STATUS_SUCCESS;
 }
 
+/* The driver's object behind one of dxgkrnl's handles (called from inside
+ * a DDI the host made, g_render held) */
+static NT_API void *cb_get_handle_data(const DXGKARGCB_GETHANDLEDATA *q)
+{
+    if (!q || q->Type != DXGK_HANDLE_ALLOCATION) return NULL;
+    for (DxgkAdapter *a = g_adapters; a; a = a->next)
+        for (DxgkAlloc *al = a->allocs; al; al = al->next)
+            if (al->handle == q->hObject) return q->Flags & 1 ? al->devspec : al->kmd;
+    return NULL;
+}
+
 static NT_API NT_STATUS cb_unsupported(void) { return NT_STATUS_NOT_SUPPORTED; }
 static NT_API void cb_nothing(void) {}
 
@@ -765,11 +833,89 @@ static void fill_interface(DxgkAdapter *a)
     cb->DxgkCbUnmapMemory = cb_unmap_memory;
     cb->DxgkCbWriteDeviceSpace = cb_write_space;
     cb->DxgkCbIsDevicePresent = cb_present;
+    cb->DxgkCbGetHandleData = cb_get_handle_data;
     cb->DxgkCbNotifyInterrupt = (void *)cb_nothing;
     cb->DxgkCbNotifyDpc = (void *)cb_nothing;
     cb->DxgkCbQueryVidPnInterface = cb_query_vidpn;
     cb->DxgkCbQueryMonitorInterface = (void *)cb_unsupported;
     cb->DxgkCbAcquirePostDisplayOwnership = cb_post_display;
+}
+
+/* A render adapter's segments (DXGKQAITYPE_QUERYSEGMENT4: asked for the
+ * count, then for the descriptors) */
+static void render_start(DxgkAdapter *a)
+{
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    const char *svc = a->drv->service;
+    DXGK_QUERYSEGMENTOUT4 out;
+    memset(&out, 0, sizeof(out));
+    DXGKARG_QUERYADAPTERINFO q = { DXGKQAITYPE_QUERYSEGMENT4, NULL, 0, &out, sizeof(out), 0, NULL };
+    a->nseg = 0;
+    NT_STATUS st = ddi->DxgkDdiQueryAdapterInfo(a->ctx, &q);
+    unsigned int n = out.NbSegment;
+    if (!NT_SUCCESS_(st) || !n) {
+        kprintf("[DXGK] %s: no memory segments (0x%08x): not a render adapter\n", svc, (UINT32)st);
+        return;
+    }
+    if (n > MAX_SEGS) n = MAX_SEGS;
+    DXGK_SEGMENTDESCRIPTOR4 desc[MAX_SEGS];
+    memset(desc, 0, sizeof(desc));
+    out.NbSegment = n;
+    out.pSegmentDescriptor = (unsigned char *)desc;
+    out.SegmentDescriptorStride = sizeof(desc[0]);
+    st = ddi->DxgkDdiQueryAdapterInfo(a->ctx, &q);
+    if (!NT_SUCCESS_(st)) {
+        kprintf("[DXGK] %s: DXGKQAITYPE_QUERYSEGMENT4 failed (0x%08x)\n", svc, (UINT32)st);
+        return;
+    }
+    UINT64 total = 0;
+    bool sys = true;
+    for (unsigned int i = 0; i < n; i++) {
+        a->seg[i].size = desc[i].Size & ~(UINT64)(PAGE_SIZE - 1);
+        a->seg[i].used = 0;
+        a->seg[i].flags = desc[i].Flags;
+        total += a->seg[i].size;
+        sys &= (desc[i].Flags & (DXGK_SEGMENT_POPULATED_FROM_SYSMEM | DXGK_SEGMENT_APERTURE)) != 0;
+    }
+    a->nseg = (int)n;
+    kprintf("[DXGK] %s: render adapter, LUID 0x%x, %d segment(s), %llu MB (%s)\n", svc, a->luid, a->nseg,
+            (unsigned long long)(total >> 20), sys ? "system memory" : "video memory");
+}
+
+static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
+{
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    DXGKARG_CLOSEALLOCATION c = { 1, &al->devspec };
+    if (al->devspec) ddi->DxgkDdiCloseAllocation(al->dev->kmd, &c);
+    DXGKARG_DESTROYALLOCATION d = { 1, &al->kmd, NULL, 0 };
+    ddi->DxgkDdiDestroyAllocation(a->ctx, &d);
+    a->seg[al->seg].used -= al->size;
+    for (DxgkAlloc **pp = &a->allocs; *pp; pp = &(*pp)->next)
+        if (*pp == al) { *pp = al->next; break; }
+    kfree(al);
+}
+
+static void dev_free(DxgkAdapter *a, DxgkDev *d)
+{
+    for (DxgkAlloc *al = a->allocs, *next; al; al = next) {
+        next = al->next;
+        if (al->dev == d) alloc_free(a, al);
+    }
+    a->drv->full.DxgkDdiDestroyDevice(d->kmd);
+    for (DxgkDev **pp = &a->devs; *pp; pp = &(*pp)->next)
+        if (*pp == d) { *pp = d->next; break; }
+    kfree(d);
+}
+
+/* (a stopping adapter: what processes still have of it goes first) */
+static void render_teardown(DxgkAdapter *a)
+{
+    lock(a);
+    int n = 0;
+    while (a->devs) { dev_free(a, a->devs); n++; }
+    a->nseg = 0;
+    unlock(a);
+    if (n) kprintf("[DXGK] %s: %d device(s) destroyed with the adapter\n", a->drv->service, n);
 }
 
 static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
@@ -781,7 +927,7 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
     fill_interface(a);
     DXGK_START_INFO si;
     memset(&si, 0, sizeof(si));
-    si.AdapterLuid.LowPart = 0x4E560000u | ((UINT32)(uintptr_t)a->pdo >> 4 & 0xFFFF);   /* (unique while it runs) */
+    si.AdapterLuid.LowPart = a->luid;
     unsigned int sources = 0, children = 0;
     NT_STATUS st = ddi->DxgkDdiStartDevice(a->ctx, &si, &a->cb, &sources, &children);
     if (!NT_SUCCESS_(st)) {
@@ -798,6 +944,13 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
                 (UINT32)caps.WDDMVersion >> 12, (UINT32)caps.WDDMVersion >> 8 & 0xF);
     else
         kprintf("[DXGK] %s: started, %u source(s), %u output(s)\n", svc, sources, children);
+    a->wddm = caps.WDDMVersion;
+    if (a->drv->render) {
+        render_start(a);
+        if (sources)                              /* (a full driver's display is step 2's) */
+            kprintf("[DXGK] %s: its outputs are not used yet; the screen stays the built-in driver's\n", svc);
+        return NT_STATUS_SUCCESS;
+    }
 
     /* Its outputs: the first connected video output gets source 0 */
     if (children > MAX_CHILDREN) children = MAX_CHILDREN;
@@ -852,6 +1005,7 @@ static NT_STATUS adapter_stop(DxgkAdapter *a, NT_IRP *irp)
 {
     const KMDDOD_INITIALIZATION_DATA *ddi = &a->drv->ddi;
     if (!a->started) return forward(a, irp);
+    if (a->drv->render) render_teardown(a);
     DesktopLockAlone();                               /* (no frame half presented; the desktop's order: it, then us) */
     lock(a);
     DXGK_DISPLAY_INFORMATION info;
@@ -893,7 +1047,9 @@ static NT_STATUS adapter_pnp(DxgkAdapter *a, NT_IRP *irp, NT_IO_STACK_LOCATION *
     switch (sl->MinorFunction) {
     case NT_IRP_MN_START_DEVICE: {
         NT_STATUS st = forward_and_wait(a, irp);
+        render_lock();
         if (NT_SUCCESS_(st)) st = adapter_start(a, sl->Parameters.StartDevice.AllocatedResourcesTranslated);
+        render_unlock();
         return complete(irp, st);
     }
     case NT_IRP_MN_QUERY_REMOVE_DEVICE:
@@ -901,17 +1057,23 @@ static NT_STATUS adapter_pnp(DxgkAdapter *a, NT_IRP *irp, NT_IO_STACK_LOCATION *
     case NT_IRP_MN_CANCEL_REMOVE_DEVICE:
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
         return forward(a, irp);
-    case NT_IRP_MN_SURPRISE_REMOVAL:
+    case NT_IRP_MN_SURPRISE_REMOVAL: {
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
-        return adapter_stop(a, irp);
+        render_lock();
+        NT_STATUS st = adapter_stop(a, irp);
+        render_unlock();
+        return st;
+    }
     case NT_IRP_MN_REMOVE_DEVICE: {
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
+        render_lock();
         NT_STATUS st = adapter_stop(a, irp);
         a->drv->ddi.DxgkDdiRemoveDevice(a->ctx);
         nt_IoDetachDevice(a->lower);
         nt_IoDeleteDevice(a->fdo);
         kprintf("[DXGK] %s: adapter removed\n", a->drv->service);
         adapter_free(a);
+        render_unlock();
         return st;
     }
     default:
@@ -965,8 +1127,11 @@ static NT_API NT_STATUS add_device(NT_DRIVER_OBJECT *obj, NT_DEVICE_OBJECT *pdo)
         kfree(a);
         return NT_STATUS_UNSUCCESSFUL;
     }
+    render_lock();
+    a->luid = g_luids++;
     a->next = g_adapters;
     g_adapters = a;
+    render_unlock();
     d->adapters++;
     fdo->Flags &= ~NT_DO_DEVICE_INITIALIZING;
     return NT_STATUS_SUCCESS;
@@ -985,34 +1150,18 @@ static NT_API void driver_unload(NT_DRIVER_OBJECT *obj)
 /* -----------------------------------------------------------------------
  * \Device\DxgKrnl and the initialisation function
  * ----------------------------------------------------------------------- */
-static NT_API NT_STATUS dpi_initialize(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *init)
+/* The driver object @obj registers @svc's table: dxgkrnl takes its AddDevice,
+ * IRPs and unload */
+static DxgkDriver *driver_register(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, const char *svc)
 {
-    const KMDDOD_INITIALIZATION_DATA *dod = init;
-    if (!obj || !dod) return NT_STATUS_INVALID_PARAMETER;
-    NtDriver *nd = NtIoDriverOf(obj);
-    const char *svc = nd ? nd->service : "display";
-    /* (a display-only driver's table, KMDDOD_INITIALIZATION_DATA, from
-     * Windows 8's interface on: the full DRIVER_INITIALIZATION_DATA of a
-     * render driver is step 2's) */
-    if (dod->Version < DXGKDDI_INTERFACE_VERSION_WIN8) {
-        kprintf("[DXGK] %s: DDI version 0x%x is older than Windows 8's display-only interface\n", svc, dod->Version);
-        return NT_STATUS_NOT_SUPPORTED;
-    }
-    if (!dod->DxgkDdiAddDevice || !dod->DxgkDdiStartDevice || !dod->DxgkDdiStopDevice || !dod->DxgkDdiRemoveDevice ||
-        !dod->DxgkDdiQueryChildRelations || !dod->DxgkDdiQueryChildStatus || !dod->DxgkDdiIsSupportedVidPn ||
-        !dod->DxgkDdiEnumVidPnCofuncModality || !dod->DxgkDdiCommitVidPn || !dod->DxgkDdiPresentDisplayOnly) {
-        kprintf("[DXGK] %s: the driver's DDI table lacks a function a display-only driver must have\n", svc);
-        return NT_STATUS_INVALID_PARAMETER;
-    }
     DxgkDriver *d = driver_of(obj);
     if (!d) {
         d = kzalloc(sizeof(*d));
-        if (!d) return NT_STATUS_INSUFFICIENT_RESOURCES;
+        if (!d) return NULL;
         d->obj = obj;
         d->next = g_drivers;
         g_drivers = d;
     }
-    d->ddi = *dod;
     strncpy(d->service, svc, sizeof(d->service) - 1);
     UINT16 n = reg && reg->Buffer ? reg->Length / 2 : 0;
     if (n > 159) n = 159;
@@ -1023,7 +1172,70 @@ static NT_API NT_STATUS dpi_initialize(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING 
     obj->DriverExtension->AddDevice = add_device;
     for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) obj->MajorFunction[i] = dispatch;
     obj->DriverUnload = driver_unload;
+    return d;
+}
+
+static const char *service_of(NT_DRIVER_OBJECT *obj)
+{
+    NtDriver *nd = NtIoDriverOf(obj);
+    return nd ? nd->service : "display";
+}
+
+/* DxgkInitializeDisplayOnlyDriver's: a KMDDOD_INITIALIZATION_DATA, from
+ * Windows 8's interface on */
+static NT_API NT_STATUS dpi_initialize_dod(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *init)
+{
+    const KMDDOD_INITIALIZATION_DATA *dod = init;
+    if (!obj || !dod) return NT_STATUS_INVALID_PARAMETER;
+    const char *svc = service_of(obj);
+    if (dod->Version < DXGKDDI_INTERFACE_VERSION_WIN8) {
+        kprintf("[DXGK] %s: DDI version 0x%x is older than Windows 8's display-only interface\n", svc, dod->Version);
+        return NT_STATUS_NOT_SUPPORTED;
+    }
+    if (!dod->DxgkDdiAddDevice || !dod->DxgkDdiStartDevice || !dod->DxgkDdiStopDevice || !dod->DxgkDdiRemoveDevice ||
+        !dod->DxgkDdiQueryChildRelations || !dod->DxgkDdiQueryChildStatus || !dod->DxgkDdiIsSupportedVidPn ||
+        !dod->DxgkDdiEnumVidPnCofuncModality || !dod->DxgkDdiCommitVidPn || !dod->DxgkDdiPresentDisplayOnly) {
+        kprintf("[DXGK] %s: the driver's DDI table lacks a function a display-only driver must have\n", svc);
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    DxgkDriver *d = driver_register(obj, reg, svc);
+    if (!d) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    d->ddi = *dod;
+    d->render = false;
     kprintf("[DXGK] %s: display-only miniport registered (DDI version 0x%x)\n", d->service, dod->Version);
+    return NT_STATUS_SUCCESS;
+}
+
+/* DxgkInitialize's: a full driver's DRIVER_INITIALIZATION_DATA, read as far
+ * as its DDI version has it.  WDDM 2.0's interface on (the GPU virtual
+ * memory model step 3 builds); the functions a render adapter needs so far */
+static NT_API NT_STATUS dpi_initialize(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg, void *init)
+{
+    const DRIVER_INITIALIZATION_DATA *in = init;
+    if (!obj || !in) return NT_STATUS_INVALID_PARAMETER;
+    const char *svc = service_of(obj);
+    if (in->Version < DXGKDDI_INTERFACE_VERSION_WDDM2_0) {
+        kprintf("[DXGK] %s: DDI version 0x%x is older than WDDM 2.0's\n", svc, in->Version);
+        return NT_STATUS_NOT_SUPPORTED;
+    }
+    DRIVER_INITIALIZATION_DATA full;
+    memset(&full, 0, sizeof(full));
+    memcpy(&full, in, sizeof(void *) * DxgkInitEntries(in->Version));
+    if (!full.DxgkDdiAddDevice || !full.DxgkDdiStartDevice || !full.DxgkDdiStopDevice || !full.DxgkDdiRemoveDevice ||
+        !full.DxgkDdiQueryAdapterInfo || !full.DxgkDdiCreateDevice || !full.DxgkDdiDestroyDevice ||
+        !full.DxgkDdiCreateAllocation || !full.DxgkDdiDestroyAllocation || !full.DxgkDdiOpenAllocation ||
+        !full.DxgkDdiCloseAllocation) {
+        kprintf("[DXGK] %s: the driver's DDI table lacks a function a render driver must have\n", svc);
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    DxgkDriver *d = driver_register(obj, reg, svc);
+    if (!d) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    d->full = full;
+    d->render = true;
+    /* (the entries the display-only paths share, under the same names) */
+    memset(&d->ddi, 0, sizeof(d->ddi));
+    memcpy(&d->ddi, &full, __builtin_offsetof(KMDDOD_INITIALIZATION_DATA, DxgkDdiSetPalette));
+    kprintf("[DXGK] %s: render miniport registered (DDI version 0x%x)\n", d->service, full.Version);
     return NT_STATUS_SUCCESS;
 }
 
@@ -1039,9 +1251,12 @@ static NT_API NT_STATUS dxgk_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
         st = NT_STATUS_SUCCESS;
         break;
     case 0x0F:                                        /* IRP_MJ_INTERNAL_DEVICE_CONTROL */
-        if (sl->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DDI_FUNC_REGISTER && irp->UserBuffer &&
+        if ((sl->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DDI_FUNC_REGISTER ||
+             sl->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DDI_FUNC_REGISTER_DOD) && irp->UserBuffer &&
             sl->Parameters.DeviceIoControl.OutputBufferLength >= sizeof(DXGKRNL_DPIINITIALIZE)) {
-            *(DXGKRNL_DPIINITIALIZE *)irp->UserBuffer = dpi_initialize;
+            *(DXGKRNL_DPIINITIALIZE *)irp->UserBuffer =
+                sl->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DDI_FUNC_REGISTER ? dpi_initialize
+                                                                                               : dpi_initialize_dod;
             irp->IoStatus.Information = sizeof(DXGKRNL_DPIINITIALIZE);
             st = NT_STATUS_SUCCESS;
         }
@@ -1052,6 +1267,7 @@ static NT_API NT_STATUS dxgk_dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 
 void NtDxgkInit(void)
 {
+    nt_KeInitializeEvent(&g_render, NT_SynchronizationEvent, 1);
     g_dxgk.Type = 4;
     g_dxgk.Size = (short)sizeof(g_dxgk);
     for (int i = 0; i <= NT_IRP_MJ_MAXIMUM_FUNCTION; i++) g_dxgk.MajorFunction[i] = dxgk_dispatch;
@@ -1063,4 +1279,173 @@ void NtDxgkInit(void)
         return;
     }
     dev->Flags &= ~NT_DO_DEVICE_INITIALIZING;
+}
+
+/* -----------------------------------------------------------------------
+ * Render adapters, for the D3DKMT* calls (dxgkrender.h)
+ * ----------------------------------------------------------------------- */
+static DxgkAdapter *render_adapter(UINT64 luid)
+{
+    for (DxgkAdapter *a = g_adapters; a; a = a->next)
+        if (a->drv->render && a->started && a->nseg && a->luid == luid) return a;
+    return NULL;
+}
+
+static void render_info(const DxgkAdapter *a, DxgkRenderInfo *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->luid = a->luid;
+    strncpy(out->service, a->drv->service, sizeof(out->service) - 1);
+    out->wddm = (UINT32)a->wddm;
+    out->system = true;
+    for (int i = 0; i < a->nseg; i++) {
+        out->memory += a->seg[i].size;
+        out->system &= (a->seg[i].flags & (DXGK_SEGMENT_POPULATED_FROM_SYSMEM | DXGK_SEGMENT_APERTURE)) != 0;
+    }
+}
+
+int DxgkRenderList(DxgkRenderInfo *out, int max)
+{
+    int n = 0;
+    render_lock();
+    for (DxgkAdapter *a = g_adapters; a && n < max; a = a->next)
+        if (render_adapter(a->luid) == a) render_info(a, &out[n++]);
+    render_unlock();
+    return n;
+}
+
+bool DxgkRenderFind(UINT64 luid, DxgkRenderInfo *out)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    if (a && out) render_info(a, out);
+    render_unlock();
+    return a != NULL;
+}
+
+static DxgkDev *dev_of(DxgkAdapter *a, UINT32 h)
+{
+    for (DxgkDev *d = a ? a->devs : NULL; d; d = d->next) if (d->handle == h) return d;
+    return NULL;
+}
+
+static UINT32 handle_new(void)
+{
+    if (!++g_handles) g_handles = 0x40000000u;
+    return g_handles;
+}
+
+UINT32 DxgkRenderCreateDevice(UINT64 luid)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkDev *d = a ? kzalloc(sizeof(*d)) : NULL;
+    UINT32 h = 0;
+    if (d) {
+        DXGKARG_CREATEDEVICE cd;
+        memset(&cd, 0, sizeof(cd));
+        cd.hDevice = d;                                   /* (dxgkrnl's handle: the driver passes it back) */
+        lock(a);
+        NT_STATUS st = a->drv->full.DxgkDdiCreateDevice(a->ctx, &cd);
+        unlock(a);
+        if (NT_SUCCESS_(st)) {
+            d->handle = h = handle_new();
+            d->kmd = cd.hDevice;
+            d->next = a->devs;
+            a->devs = d;
+        } else {
+            kprintf("[DXGK] %s: DxgkDdiCreateDevice failed (0x%08x)\n", a->drv->service, (UINT32)st);
+            kfree(d);
+        }
+    }
+    render_unlock();
+    return h;
+}
+
+void DxgkRenderDestroyDevice(UINT64 luid, UINT32 dev)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkDev *d = dev_of(a, dev);
+    if (d) { lock(a); dev_free(a, d); unlock(a); }
+    render_unlock();
+}
+
+/* The segment of @a, among @set's (bit n: segment n + 1) and @pref's first,
+ * with room for @size; -1 if none */
+static int place(DxgkAdapter *a, UINT32 set, UINT32 pref, UINT64 size)
+{
+    int first = (int)(pref & 0x1F) - 1;
+    if (first >= 0 && first < a->nseg && (set >> first & 1) && a->seg[first].used + size <= a->seg[first].size)
+        return first;
+    for (int i = 0; i < a->nseg; i++)
+        if ((set >> i & 1) && a->seg[i].used + size <= a->seg[i].size) return i;
+    return -1;
+}
+
+UINT32 DxgkRenderCreateAllocation(UINT64 luid, UINT32 dev, const void *priv, UINT32 priv_size, UINT64 *size,
+                                  UINT32 *alloc)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkDev *d = dev_of(a, dev);
+    if (!d) { render_unlock(); return (UINT32)NT_STATUS_INVALID_PARAMETER; }
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    DxgkAlloc *al = kzalloc(sizeof(*al));
+    if (!al) { render_unlock(); return (UINT32)NT_STATUS_NO_MEMORY; }
+    lock(a);
+    DXGK_ALLOCATIONINFO ai;
+    memset(&ai, 0, sizeof(ai));
+    ai.pPrivateDriverData = (void *)priv;
+    ai.PrivateDriverDataSize = priv_size;
+    DXGKARG_CREATEALLOCATION ca = { NULL, 0, 1, &ai, NULL, 0 };
+    NT_STATUS st = ddi->DxgkDdiCreateAllocation(a->ctx, &ca);
+    UINT64 bytes = (ai.Size + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1);
+    int seg = -1;
+    if (NT_SUCCESS_(st)) {
+        UINT32 set = ai.SupportedWriteSegmentSet ? ai.SupportedWriteSegmentSet : ai.SupportedReadSegmentSet;
+        seg = bytes ? place(a, set, ai.PreferredSegment, bytes) : -1;
+        if (seg < 0) {                                    /* (no eviction yet: full is full) */
+            DXGKARG_DESTROYALLOCATION da = { 1, &ai.hAllocation, NULL, 0 };
+            ddi->DxgkDdiDestroyAllocation(a->ctx, &da);
+            st = bytes ? ST_NO_VIDEO_MEMORY : NT_STATUS_INVALID_PARAMETER;
+        }
+    }
+    if (NT_SUCCESS_(st)) {
+        al->handle = handle_new();
+        al->dev = d;
+        al->kmd = ai.hAllocation;
+        al->size = bytes;
+        al->seg = seg;
+        a->seg[seg].used += bytes;
+        al->next = a->allocs;
+        a->allocs = al;
+        DXGK_OPENALLOCATIONINFO oi = { al->handle, (void *)priv, priv_size, NULL };
+        DXGKARG_OPENALLOCATION oa;
+        memset(&oa, 0, sizeof(oa));
+        oa.NumAllocations = 1;
+        oa.pOpenAllocation = &oi;
+        oa.Flags = 1;                                     /* Create: opened by its creator */
+        st = ddi->DxgkDdiOpenAllocation(d->kmd, &oa);
+        al->devspec = oi.hDeviceSpecificAllocation;
+        if (!NT_SUCCESS_(st)) {
+            al->devspec = NULL;
+            alloc_free(a, al);
+            al = NULL;
+        }
+    }
+    unlock(a);
+    if (NT_SUCCESS_(st)) { *size = bytes; *alloc = al->handle; }
+    else if (al && !al->handle) kfree(al);
+    render_unlock();
+    return (UINT32)st;
+}
+
+void DxgkRenderDestroyAllocation(UINT64 luid, UINT32 alloc)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    for (DxgkAlloc *al = a ? a->allocs : NULL; al; al = al->next)
+        if (al->handle == alloc) { lock(a); alloc_free(a, al); unlock(a); break; }
+    render_unlock();
 }

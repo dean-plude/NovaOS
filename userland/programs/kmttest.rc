@@ -1,0 +1,2 @@
+/* kmttest: its manifest asks to run as administrator (requireAdministrator), as devcon does: "kmttest create" registers a device */
+1 24 "kmttest.manifest"

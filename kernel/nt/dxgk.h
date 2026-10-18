@@ -15,9 +15,10 @@
  * learn.microsoft.com) and checked below where a member's offset matters
  * to the driver.  Step 1 of the Intel GPU design (docs/design/intel-gpu.md)
  * uses the display-only part (KMDDOD_INITIALIZATION_DATA, as Microsoft's
- * KMDOD sample registers); later steps fill in the render DDIs.  It is
+ * KMDOD sample registers); step 3 the render DDIs (DRIVER_INITIALIZATION_DATA,
+ * allocations and segments so far).  It is
  * shared by the host and NovaOS's test miniport (tools/drivertest/
- * wddmdod.c), so it uses only C's own types and wdm.h's.
+ * wddmdod.c, wddmtest.c), so it uses only C's own types and wdm.h's.
  */
 #pragma once
 
@@ -32,15 +33,25 @@ typedef void *D3DKMDT_HVIDPNTOPOLOGY;
 typedef void *D3DKMDT_HVIDPNSOURCEMODESET;
 typedef void *D3DKMDT_HVIDPNTARGETMODESET;
 typedef unsigned long long DXGK_PHYSICAL_ADDRESS;
+struct DXGKARGCB_GETHANDLEDATA;
 
 /* \Device\DxgKrnl's internal control code that returns dxgkrnl's
- * initialisation function (displib.lib's DxgkInitialize* send it):
- * CTL_CODE(FILE_DEVICE_VIDEO, 0xF, METHOD_NEITHER, FILE_ANY_ACCESS) */
-#define IOCTL_VIDEO_DDI_FUNC_REGISTER  0x0023003Fu
+ * initialisation function, which displib.lib's DxgkInitialize sends and
+ * calls with a DRIVER_INITIALIZATION_DATA:
+ * CTL_CODE(FILE_DEVICE_VIDEO, 0xF, METHOD_NEITHER, FILE_ANY_ACCESS).
+ * What DxgkInitializeDisplayOnlyDriver (Windows 8's, for a
+ * KMDDOD_INITIALIZATION_DATA) sends instead is not documented; NovaOS's
+ * displib stand-in asks for the display-only function with the next
+ * function code (an assumption step 2 checks against a real KMDOD driver) */
+#define IOCTL_VIDEO_DDI_FUNC_REGISTER     0x0023003Fu
+#define IOCTL_VIDEO_DDI_FUNC_REGISTER_DOD 0x00230043u   /* (NovaOS's: function 0x10) */
 
 #define DXGKDDI_INTERFACE_VERSION_WIN8  0x300E
 #define DXGKDDI_INTERFACE_VERSION_WDDM2_0 0x5023
 #define DXGKDDI_WDDMv1_2                0x1200
+#define DXGKDDI_WDDMv2                  0x2000
+#define DXGKDDI_INTERFACE_VERSION_WIN7  0x2005
+#define DXGKDDI_INTERFACE_VERSION_WDDM1_3 0x4002
 
 #define D3DDDIFMT_A8R8G8B8 21
 #define D3DDDIFMT_X8R8G8B8 22
@@ -309,7 +320,8 @@ typedef struct {
     NT_STATUS (NT_API *DxgkCbWriteDeviceSpace)(void *h, unsigned int space, void *buf, unsigned int off,
                                                unsigned int len, unsigned int *done);
     NT_STATUS (NT_API *DxgkCbIsDevicePresent)(void *h, void *params, unsigned char *present);
-    void *DxgkCbGetHandleData, *DxgkCbGetHandleParent, *DxgkCbEnumHandleChildren;
+    void *(NT_API *DxgkCbGetHandleData)(const struct DXGKARGCB_GETHANDLEDATA *);
+    void *DxgkCbGetHandleParent, *DxgkCbEnumHandleChildren;
     void (NT_API *DxgkCbNotifyInterrupt)(void *h, const void *data);
     void (NT_API *DxgkCbNotifyDpc)(void *h);
     NT_STATUS (NT_API *DxgkCbQueryVidPnInterface)(D3DKMDT_HVIDPN, int version, const DXGK_VIDPN_INTERFACE **);
@@ -341,27 +353,41 @@ typedef struct {
 
 #define DXGKQAITYPE_DRIVERCAPS 1
 
-/* DXGK_DRIVERCAPS: the members up to WDDMVersion, which is what the host
- * reads; the rest (virtual addressing, preemption, MPO, ...) is the
- * render path's (step 3), reserved at its size */
+/* DXGK_DRIVERCAPS, through WDDM 2.1's members; the bit-field unions are
+ * UINTs here.  What follows them in later WDKs (MiscCaps, hardware-queued
+ * flips) is reserved at a generous size: dxgkrnl hands the driver its own
+ * structure's size, and a driver checks only that it is big enough */
 typedef struct {
     DXGK_PHYSICAL_ADDRESS HighestAcceptableAddress;
     unsigned int MaxAllocationListSlotId;
     unsigned long long ApertureSegmentCommitLimit;
     unsigned int MaxPointerWidth, MaxPointerHeight;
-    unsigned int PointerCaps;
+    unsigned int PointerCaps;                     /* DXGK_POINTERFLAGS */
     unsigned int InterruptMessageNumber;
     unsigned int NumberOfSwizzlingRanges;
     unsigned int MaxOverlays;
-    unsigned int GammaRampCaps;
-    unsigned int PresentationCaps;
+    unsigned int GammaRampCaps;                   /* (or ColorTransformCaps) */
+    unsigned int PresentationCaps;                /* DXGK_PRESENTATIONCAPS */
     unsigned int MaxQueuedFlipOnVSync;
-    unsigned int FlipCaps;
-    unsigned int SchedulingCaps;
-    unsigned int MemoryManagementCaps;
-    unsigned int GpuEngineTopology;
+    unsigned int FlipCaps;                        /* DXGK_FLIPCAPS */
+    unsigned int SchedulingCaps;                  /* DXGK_VIDSCHCAPS */
+    struct { unsigned int Value, PagingNode; } MemoryManagementCaps;   /* DXGK_VIDMMCAPS */
+    struct { unsigned int NbAsymetricProcessingNodes, Reserved[64]; } GpuEngineTopology;
     int          WDDMVersion;                     /* DXGK_WDDMVERSION */
-    unsigned char Later[176];
+    unsigned int ReservedVirtualAddressCaps[7];   /* (DXGK_VIRTUALADDRESSCAPS_DEPRECATED) */
+    unsigned int ReservedDmaBufferCaps[40];       /* (DXGK_DMABUFFERCAPS_DEPRECATED) */
+    struct { int Graphics, Compute; } PreemptionCaps;   /* D3DKMDT_PREEMPTION_CAPS */
+    unsigned char SupportNonVGA, SupportSmoothRotation, SupportPerEngineTDR, SupportDirectFlip,
+                  SupportMultiPlaneOverlay, SupportRuntimePowerManagement, SupportSurpriseRemovalInHibernation;
+    unsigned char HybridDiscrete;                 /* WDDM 1.3 */
+    unsigned int  MaxOverlayPlanes;
+    unsigned char HybridIntegrated;               /* WDDM 2.0 */
+    unsigned long long InternalGpuVirtualAddressRangeStart, InternalGpuVirtualAddressRangeEnd;
+    unsigned char SupportSurpriseRemoval;
+    unsigned char SupportMultiPlaneOverlayImmediateFlip, CursorScaledWithMultiPlaneOverlayPlane0,
+                  HybridAcpiChainingRequired;     /* WDDM 2.1 */
+    unsigned int  MaxQueuedMultiPlaneOverlayFlipVSync;
+    unsigned char Later[256];
 } DXGK_DRIVERCAPS;
 
 typedef struct { int left, top, right, bottom; } DXGK_RECT;
@@ -414,6 +440,111 @@ typedef struct {
     D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
     unsigned int   VidPnHWCaps;                   /* D3DKMDT_VIDPN_HW_CAPABILITY bit fields */
 } DXGKARG_QUERYVIDPNHWCAPABILITY;
+
+/* -----------------------------------------------------------------------
+ * d3dkmddi.h: the render DDIs' arguments (step 3 of the Intel GPU design)
+ * ----------------------------------------------------------------------- */
+#define DXGKQAITYPE_QUERYSEGMENT4 11
+#define DXGKQAITYPE_GPUMMUCAPS    13
+
+/* DXGK_SEGMENTFLAGS bits */
+#define DXGK_SEGMENT_APERTURE              0x001
+#define DXGK_SEGMENT_CPU_VISIBLE           0x004
+#define DXGK_SEGMENT_CACHE_COHERENT        0x010
+#define DXGK_SEGMENT_POPULATED_FROM_SYSMEM 0x040
+#define DXGK_SEGMENT_USE_64KB_PAGES        0x800
+
+typedef struct {
+    unsigned int  Flags;                          /* DXGK_SEGMENTFLAGS */
+    DXGK_PHYSICAL_ADDRESS BaseAddress;
+    unsigned long long Size, CommitLimit, SystemMemoryEndAddress;
+    union {
+        DXGK_PHYSICAL_ADDRESS CpuTranslatedAddress;
+        struct { unsigned long long PhysicalAddress; unsigned int SizeInPages; } CpuHostAperture;
+    };
+    unsigned int  NumInvalidMemoryRanges;
+    unsigned long long VprRangeStartOffset, VprRangeSize;
+    unsigned int  VprAlignment, NumVprSupported, VprReserveSize, NumUEFIFrameBufferRanges;
+} DXGK_SEGMENTDESCRIPTOR4;
+
+/* Asked twice: with NbSegment 0 for the count, then with the array */
+typedef struct {
+    unsigned int  NbSegment;
+    unsigned char *pSegmentDescriptor;            /* (SegmentDescriptorStride apart) */
+    unsigned int  PagingBufferSegmentId, PagingBufferSize, PagingBufferPrivateDataSize;
+    unsigned long long SegmentDescriptorStride;
+} DXGK_QUERYSEGMENTOUT4;
+
+typedef struct {
+    void        *pPrivateDriverData;              /* in: the user-mode driver's, per allocation */
+    unsigned int PrivateDriverDataSize;
+    unsigned int Alignment;                       /* (or MinimumPageSize, RecommendedPageSize) */
+    unsigned long long Size, PitchAlignedSize;
+    unsigned int HintedBank;                      /* DXGK_SEGMENTBANKPREFERENCE */
+    unsigned int PreferredSegment;                /* DXGK_SEGMENTPREFERENCE: 5-bit segment ids */
+    unsigned int SupportedReadSegmentSet;         /* (or MmuSet) bit n: segment n + 1 */
+    unsigned int SupportedWriteSegmentSet;        /* (WDDM 2: the one VidMm uses) */
+    unsigned int EvictionSegmentSet;
+    unsigned int MaximumRenamingListLength;
+    void        *hAllocation;                     /* out: the driver's */
+    unsigned int Flags;                           /* DXGK_ALLOCATIONINFOFLAGS(_WDDM2_0) */
+    void        *pAllocationUsageHint;
+    unsigned int AllocationPriority;
+    unsigned int Flags2;
+} DXGK_ALLOCATIONINFO;
+
+typedef struct {
+    const void  *pPrivateDriverData;              /* the resource's */
+    unsigned int PrivateDriverDataSize;
+    unsigned int NumAllocations;
+    DXGK_ALLOCATIONINFO *pAllocationInfo;
+    void        *hResource;
+    unsigned int Flags;                           /* DXGK_CREATEALLOCATIONFLAGS: bit 0 Resource */
+} DXGKARG_CREATEALLOCATION;
+
+typedef struct {
+    unsigned int NumAllocations;
+    void *const *pAllocationList;                 /* the driver's hAllocations */
+    void        *hResource;
+    unsigned int Flags;                           /* bit 0 DestroyResource */
+} DXGKARG_DESTROYALLOCATION;
+
+typedef struct {
+    void        *hDevice;                         /* in: dxgkrnl's; out: the driver's */
+    union { unsigned int Flags; void *pInfo; };   /* DXGK_CREATEDEVICEFLAGS: bit 0 SystemDevice, 1 GdiDevice */
+    unsigned int Pasid;
+    void        *hKmdProcess;
+} DXGKARG_CREATEDEVICE;
+
+typedef struct {
+    unsigned int hAllocation;                     /* dxgkrnl's (D3DKMT_HANDLE): DxgkCbGetHandleData finds the driver's */
+    void        *pPrivateDriverData;
+    unsigned int PrivateDriverDataSize;
+    void        *hDeviceSpecificAllocation;       /* out */
+} DXGK_OPENALLOCATIONINFO;
+
+typedef struct {
+    unsigned int NumAllocations;
+    DXGK_OPENALLOCATIONINFO *pOpenAllocation;
+    void        *pPrivateDriverData;
+    unsigned int PrivateDriverSize;
+    unsigned int Flags;                           /* DXGK_OPENALLOCATIONFLAGS: bit 0 Create, 1 ReadOnly */
+    unsigned int SubresourceIndex;
+    unsigned long long SubresourceOffset;
+    unsigned int Pitch;
+} DXGKARG_OPENALLOCATION;
+
+typedef struct {
+    unsigned int NumAllocations;
+    void *const *pOpenHandleList;                 /* the hDeviceSpecificAllocations */
+} DXGKARG_CLOSEALLOCATION;
+
+enum { DXGK_HANDLE_ALLOCATION = 1, DXGK_HANDLE_RESOURCE = 2 };
+typedef struct DXGKARGCB_GETHANDLEDATA {
+    unsigned int hObject;
+    int          Type;                            /* DXGK_HANDLE_TYPE */
+    unsigned int Flags;                           /* bit 0 DeviceSpecific */
+} DXGKARGCB_GETHANDLEDATA;
 
 #define DXGK_DDI(ret, name, ...) ret (NT_API *name)(__VA_ARGS__)
 
@@ -469,6 +600,86 @@ typedef struct {
     DXGK_DDI(NT_STATUS, DxgkDdiPowerRuntimeSetDeviceHandle, void *ctx, void *handle);
 } KMDDOD_INITIALIZATION_DATA;
 
+/* DRIVER_INITIALIZATION_DATA: a full (render, or render and display)
+ * driver's DDI table, which DxgkInitialize hands dxgkrnl, in dispmprt.h's
+ * order.  Its first seventeen entries are KMDDOD's; the functions the host
+ * calls are typed, the rest kept as pointers in their places.  The table
+ * grows with the DDI version (Version): the host reads it only as far as
+ * the version the driver says it was built for has it. */
+typedef struct {
+    unsigned int Version;
+    DXGK_DDI(NT_STATUS, DxgkDdiAddDevice, NT_DEVICE_OBJECT *pdo, void **ctx);
+    DXGK_DDI(NT_STATUS, DxgkDdiStartDevice, void *ctx, DXGK_START_INFO *, DXGKRNL_INTERFACE *, unsigned int *sources,
+             unsigned int *children);
+    DXGK_DDI(NT_STATUS, DxgkDdiStopDevice, void *ctx);
+    DXGK_DDI(NT_STATUS, DxgkDdiRemoveDevice, void *ctx);
+    void *DxgkDdiDispatchIoRequest;
+    DXGK_DDI(unsigned char, DxgkDdiInterruptRoutine, void *ctx, unsigned int msg);
+    DXGK_DDI(void, DxgkDdiDpcRoutine, void *ctx);
+    DXGK_DDI(NT_STATUS, DxgkDdiQueryChildRelations, void *ctx, DXGK_CHILD_DESCRIPTOR *rel, unsigned int size);
+    DXGK_DDI(NT_STATUS, DxgkDdiQueryChildStatus, void *ctx, DXGK_CHILD_STATUS *st, unsigned char nondestructive);
+    DXGK_DDI(NT_STATUS, DxgkDdiQueryDeviceDescriptor, void *ctx, unsigned int uid, DXGK_DEVICE_DESCRIPTOR *d);
+    void *DxgkDdiSetPowerState, *DxgkDdiNotifyAcpiEvent, *DxgkDdiResetDevice;
+    DXGK_DDI(void, DxgkDdiUnload, void);
+    void *DxgkDdiQueryInterface, *DxgkDdiControlEtwLogging;
+    DXGK_DDI(NT_STATUS, DxgkDdiQueryAdapterInfo, void *adapter, const DXGKARG_QUERYADAPTERINFO *);
+    DXGK_DDI(NT_STATUS, DxgkDdiCreateDevice, void *adapter, DXGKARG_CREATEDEVICE *);
+    DXGK_DDI(NT_STATUS, DxgkDdiCreateAllocation, void *adapter, DXGKARG_CREATEALLOCATION *);
+    DXGK_DDI(NT_STATUS, DxgkDdiDestroyAllocation, void *adapter, const DXGKARG_DESTROYALLOCATION *);
+    void *DxgkDdiDescribeAllocation, *DxgkDdiGetStandardAllocationDriverData;
+    void *DxgkDdiAcquireSwizzlingRange, *DxgkDdiReleaseSwizzlingRange;
+    void *DxgkDdiPatch, *DxgkDdiSubmitCommand, *DxgkDdiPreemptCommand, *DxgkDdiBuildPagingBuffer;
+    void *DxgkDdiSetPalette, *DxgkDdiSetPointerPosition, *DxgkDdiSetPointerShape;
+    void *DxgkDdiResetFromTimeout, *DxgkDdiRestartFromTimeout;
+    void *DxgkDdiEscape, *DxgkDdiCollectDbgInfo, *DxgkDdiQueryCurrentFence;
+    DXGK_DDI(NT_STATUS, DxgkDdiIsSupportedVidPn, void *adapter, DXGKARG_ISSUPPORTEDVIDPN *);
+    void *DxgkDdiRecommendFunctionalVidPn;
+    DXGK_DDI(NT_STATUS, DxgkDdiEnumVidPnCofuncModality, void *adapter, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *);
+    void *DxgkDdiSetVidPnSourceAddress;
+    DXGK_DDI(NT_STATUS, DxgkDdiSetVidPnSourceVisibility, void *adapter, const DXGKARG_SETVIDPNSOURCEVISIBILITY *);
+    DXGK_DDI(NT_STATUS, DxgkDdiCommitVidPn, void *adapter, const DXGKARG_COMMITVIDPN *);
+    void *DxgkDdiUpdateActiveVidPnPresentPath, *DxgkDdiRecommendMonitorModes, *DxgkDdiRecommendVidPnTopology;
+    void *DxgkDdiGetScanLine, *DxgkDdiStopCapture, *DxgkDdiControlInterrupt, *DxgkDdiCreateOverlay;
+    DXGK_DDI(NT_STATUS, DxgkDdiDestroyDevice, void *device);
+    DXGK_DDI(NT_STATUS, DxgkDdiOpenAllocation, void *device, const DXGKARG_OPENALLOCATION *);
+    DXGK_DDI(NT_STATUS, DxgkDdiCloseAllocation, void *device, const DXGKARG_CLOSEALLOCATION *);
+    void *DxgkDdiRender, *DxgkDdiPresent;
+    void *DxgkDdiUpdateOverlay, *DxgkDdiFlipOverlay, *DxgkDdiDestroyOverlay;
+    void *DxgkDdiCreateContext, *DxgkDdiDestroyContext;
+    void *DxgkDdiLinkDevice, *DxgkDdiSetDisplayPrivateDriverFormat;
+    /* DXGKDDI_INTERFACE_VERSION_WIN7 */
+    void *DxgkDdiDescribePageTable, *DxgkDdiUpdatePageTable, *DxgkDdiUpdatePageDirectory, *DxgkDdiMovePageDirectory;
+    void *DxgkDdiSubmitRender, *DxgkDdiCreateAllocation2, *DxgkDdiRenderKm, *Reserved;
+    void *DxgkDdiQueryVidPnHWCapability;
+    /* DXGKDDI_INTERFACE_VERSION_WIN8 */
+    void *DxgkDdiSetPowerComponentFState, *DxgkDdiQueryDependentEngineGroup, *DxgkDdiQueryEngineStatus;
+    void *DxgkDdiResetEngine;
+    DXGK_DDI(NT_STATUS, DxgkDdiStopDeviceAndReleasePostDisplayOwnership, void *ctx, D3DDDI_VIDEO_PRESENT_TARGET_ID,
+             DXGK_DISPLAY_INFORMATION *);
+    void *DxgkDdiSystemDisplayEnable, *DxgkDdiSystemDisplayWrite, *DxgkDdiCancelCommand;
+    void *DxgkDdiGetChildContainerId, *DxgkDdiPowerRuntimeControlRequest;
+    void *DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay, *DxgkDdiNotifySurpriseRemoval;
+    /* DXGKDDI_INTERFACE_VERSION_WDDM1_3 */
+    void *DxgkDdiGetNodeMetadata, *DxgkDdiSetPowerPState, *DxgkDdiControlInterrupt2;
+    void *DxgkDdiCheckMultiPlaneOverlaySupport, *DxgkDdiCalibrateGpuClock, *DxgkDdiFormatHistoryBuffer;
+    /* DXGKDDI_INTERFACE_VERSION_WDDM2_0 */
+    void *DxgkDdiRenderGdi, *DxgkDdiSubmitCommandVirtual, *DxgkDdiSetRootPageTable, *DxgkDdiGetRootPageTableSize;
+    void *DxgkDdiMapCpuHostAperture, *DxgkDdiUnmapCpuHostAperture, *DxgkDdiCheckMultiPlaneOverlaySupport2;
+    void *DxgkDdiCreateProcess, *DxgkDdiDestroyProcess, *DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay2;
+    void *Reserved1, *Reserved2;
+    void *DxgkDdiPowerRuntimeSetDeviceHandle, *DxgkDdiSetStablePowerState, *DxgkDdiSetVideoProtectedRegion;
+    /* later versions (WDDM 2.1 to 3.2): the rest of the 193 entries
+     * Windows 11's WDK lists, none called yet, reserved at their size */
+    void *Later[89];
+} DRIVER_INITIALIZATION_DATA;
+
+/* The entries a driver built for DDI version @v has, counting Version as one */
+static inline unsigned int DxgkInitEntries(unsigned int v)
+{
+    return v >= DXGKDDI_INTERFACE_VERSION_WDDM2_0 ? 104 : v >= DXGKDDI_INTERFACE_VERSION_WDDM1_3 ? 89
+         : v >= DXGKDDI_INTERFACE_VERSION_WIN8 ? 83 : v >= DXGKDDI_INTERFACE_VERSION_WIN7 ? 71 : 62;
+}
+
 /* dxgkrnl's initialisation function, which IOCTL_VIDEO_DDI_FUNC_REGISTER returns */
 typedef NT_STATUS (NT_API *DXGKRNL_DPIINITIALIZE)(NT_DRIVER_OBJECT *, NT_UNICODE_STRING *registry, void *init_data);
 
@@ -490,7 +701,29 @@ _Static_assert(DXGK_OFFSET(KMDDOD_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) 
                DXGK_OFFSET(KMDDOD_INITIALIZATION_DATA, DxgkDdiPresentDisplayOnly) == 8 + 8 * 31 &&
                sizeof(KMDDOD_INITIALIZATION_DATA) == 8 + 8 * 41, "KMDDOD_INITIALIZATION_DATA layout");
 _Static_assert(DXGK_OFFSET(DXGK_DEVICE_INFO, TranslatedResourceList) == 32 && sizeof(DXGK_DISPLAY_INFORMATION) == 32 &&
-               sizeof(DXGK_CHILD_DESCRIPTOR) == 28 && DXGK_OFFSET(DXGK_DRIVERCAPS, WDDMVersion) == 76,
-               "dispmprt.h layouts");
+               sizeof(DXGK_CHILD_DESCRIPTOR) == 28, "dispmprt.h layouts");
+_Static_assert(DXGK_OFFSET(DXGK_DRIVERCAPS, MemoryManagementCaps) == 68 && DXGK_OFFSET(DXGK_DRIVERCAPS, WDDMVersion) == 336 &&
+               DXGK_OFFSET(DXGK_DRIVERCAPS, PreemptionCaps) == 528 && DXGK_OFFSET(DXGK_DRIVERCAPS, MaxOverlayPlanes) == 544 &&
+               DXGK_OFFSET(DXGK_DRIVERCAPS, InternalGpuVirtualAddressRangeStart) == 552 &&
+               DXGK_OFFSET(DXGK_DRIVERCAPS, MaxQueuedMultiPlaneOverlayFlipVSync) == 572, "DXGK_DRIVERCAPS layout");
+_Static_assert(sizeof(DXGK_SEGMENTDESCRIPTOR4) == 96 && DXGK_OFFSET(DXGK_SEGMENTDESCRIPTOR4, NumInvalidMemoryRanges) == 56 &&
+               sizeof(DXGK_QUERYSEGMENTOUT4) == 40 && DXGK_OFFSET(DXGK_QUERYSEGMENTOUT4, SegmentDescriptorStride) == 32,
+               "QUERYSEGMENT4 layouts");
+_Static_assert(sizeof(DXGK_ALLOCATIONINFO) == 88 && DXGK_OFFSET(DXGK_ALLOCATIONINFO, hAllocation) == 56 &&
+               sizeof(DXGKARG_CREATEALLOCATION) == 40 && sizeof(DXGKARG_DESTROYALLOCATION) == 32 &&
+               sizeof(DXGKARG_CREATEDEVICE) == 32 && sizeof(DXGK_OPENALLOCATIONINFO) == 32 &&
+               sizeof(DXGKARG_OPENALLOCATION) == 56 && sizeof(DXGKARG_CLOSEALLOCATION) == 16 &&
+               sizeof(DXGKARGCB_GETHANDLEDATA) == 12, "allocation DDI layouts");
+_Static_assert(DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) == 8 * 17 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiIsSupportedVidPn) == 8 * 37 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyDevice) == 8 * 50 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDescribePageTable) == 8 * 62 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetPowerComponentFState) == 8 * 71 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiStopDeviceAndReleasePostDisplayOwnership) == 8 * 75 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 8 * 83 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 8 * 89 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProcess) == 8 * 96 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion) == 8 * 103 &&
+               sizeof(DRIVER_INITIALIZATION_DATA) == 8 * 193, "DRIVER_INITIALIZATION_DATA layout");
 _Static_assert(DXGK_OFFSET(DXGKARG_PRESENT_DISPLAYONLY, pMoves) == 32 &&
                DXGK_OFFSET(DXGKARG_PRESENT_DISPLAYONLY, pDirtyRect) == 48, "DXGKARG_PRESENT_DISPLAYONLY layout");

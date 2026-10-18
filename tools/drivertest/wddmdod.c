@@ -9,7 +9,8 @@
  * dxgkrnl calls (here kernel/nt/dxgkrnl.c).  DxgkInitializeDisplayOnlyDriver
  * is displib.lib's, a static library of the WDK; this file has its own,
  * doing what displib's does: open \Device\DxgKrnl, ask it for its
- * initialisation function with IOCTL_VIDEO_DDI_FUNC_REGISTER, call it.
+ * display-only initialisation function (IOCTL_VIDEO_DDI_FUNC_REGISTER_DOD,
+ * NovaOS's code for it: see dxgk.h), call it.
  *
  *   StartDevice        checks the device is 1234:1111 (DxgkCbReadDeviceSpace),
  *                      takes the screen the firmware or the previous driver
@@ -580,7 +581,9 @@ static NT_STATUS initialize_display_only(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRIN
     NT_KEVENT ev;
     NT_IO_STATUS_BLOCK iosb;
     KeInitializeEvent(&ev, 0 /* NotificationEvent */, 0);
-    NT_IRP *irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_DDI_FUNC_REGISTER, dev, 0, 0, &dpi, sizeof(dpi), 1, &ev, &iosb);
+    /* (the display-only function: NovaOS's code for it, see dxgk.h) */
+    NT_IRP *irp = IoBuildDeviceIoControlRequest(IOCTL_VIDEO_DDI_FUNC_REGISTER_DOD, dev, 0, 0, &dpi, sizeof(dpi), 1, &ev,
+                                                &iosb);
     if (!irp) { ObfDereferenceObject(file); return NT_STATUS_INSUFFICIENT_RESOURCES; }
     st = IofCallDriver(dev, irp);
     if (st == NT_STATUS_PENDING) { KeWaitForSingleObject(&ev, 0, 0, 0, 0); st = iosb.Status; }

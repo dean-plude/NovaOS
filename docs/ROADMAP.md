@@ -731,7 +731,10 @@ measured frame-time gain over the CPU path.
   render miniports register with `DxgkInitialize`: the test driver
   `wddmtest.sys`'s adapter is listed beside Basic Render, with devices and
   allocations the driver sizes in its segment (`kmttest wddm` in the
-  `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)).
+  `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)),
+  and with GPU virtual addresses: per-process page tables VidMm makes and
+  the driver writes through paging buffers
+  ([history](HISTORY.md#gpu-virtual-addresses)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

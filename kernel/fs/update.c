@@ -3,8 +3,10 @@
  *
  * Checking and installing run on a thread of their own ("update"), one
  * request at a time; the App Store and the Terminal's `update` start them
- * and show UpdateGetStatus.  Finishing an update the boot loader started
- * runs on another, once the desktop is up (UpdateBootDone).
+ * and show UpdateGetStatus.  An update the boot loader started is watched
+ * by another ("update watch", UpdateBootWatch) until the desktop is up,
+ * which then finishes it; one that failed is thrown away by a third
+ * (UpdateBootDone).
  */
 
 #include "update.h"
@@ -20,6 +22,7 @@
 #include "../um/um.h"
 #include "../hal/fwcfg.h"
 #include "../hal/acpi.h"
+#include "../hal/tco.h"
 #include "../arch/x86_64/apic.h"
 #include "mbedtls/sha256.h"
 #include "monocypher-ed25519.h"
@@ -41,6 +44,10 @@ _Static_assert(sizeof(UPDATE_SIGNING_KEY) == 1 || sizeof(UPDATE_SIGNING_KEY) == 
 
 static UINT64 g_boot_flags;
 static volatile bool g_trial_finished;   /* this trial start made the update the installed version */
+static volatile bool g_watching;         /* a trial start being watched (UpdateBootWatch) */
+static volatile bool g_start_good;       /* ... reached the desktop */
+static volatile UINT32 g_steps;          /* steps forward the start made (UpdateBootProgress) */
+static const char *volatile g_step = "starting the kernel";
 static char   g_notice[160];
 
 static volatile UpdateStatus g_st;
@@ -676,6 +683,87 @@ static void boot_thread(void *arg)
     FatUnmount(esp);
 }
 
+/* Restart an update's first start that did not make it: the trying mark
+ * is still on the ESP, so the boot loader starts the previous kernel,
+ * which throws the update away */
+static void __attribute__((noreturn)) restart_back(void)
+{
+    udelay(3000000);                                    /* (the report stays on the screen for a moment) */
+    AcpiReset();
+}
+
+/* The update's first start, watched until the desktop is up.  Every
+ * second this thread reloads the hardware watchdog, so the chipset resets
+ * the PC only when the kernel no longer runs its threads (a hang with
+ * interrupts off, or a thread of the highest priority spinning); and it
+ * restarts the PC itself when the start made no step forward for
+ * UPDATE_STALL_SECONDS (a thread the start waits on blocked for good, the
+ * desktop never coming up), as Windows rolls back an update whose first
+ * start does not reach the sign-in. */
+static void watch_thread(void *arg)
+{
+    (void)arg;
+    static volatile uint32_t never;
+    UINT32 seen = g_steps;
+    UINT64 since = sched_ticks();
+    while (!g_start_good) {
+        UINT64 now = sched_ticks();
+        if (g_steps != seen) {
+            seen = g_steps;
+            since = now;
+        } else if (now - since >= UPDATE_STALL_SECONDS * 100ull) {
+            kprintf("[UPDATE] The updated NovaOS %s made no progress for %u s while starting (last step: %s): "
+                    "restarting to go back to the previous version\n", NovaVersion(), UPDATE_STALL_SECONDS, g_step);
+            restart_back();
+        }
+        TcoReload();
+        sched_sleep_until(&never, now + 100);
+    }
+    kprintf("[UPDATE] The updated NovaOS %s reached the desktop: its start counts as good\n", NovaVersion());
+    boot_thread(NULL);                                  /* (finish: the watchdog runs on until it is done) */
+    TcoStop();
+    g_watching = false;
+}
+
+void UpdateBootWatch(void)
+{
+    if (!(g_boot_flags & BOOT_FLAG_UPDATE_TRIAL)) return;
+    if (!TcoStart(UPDATE_HANG_SECONDS))
+        kprintf("[UPDATE] No hardware watchdog on this PC: a hang with interrupts off waits for a reset\n");
+    g_watching = true;
+    if (!sched_create_thread("update watch", watch_thread, NULL, PRIO_DEVICE)) {
+        g_watching = false;                             /* (finished by UpdateBootDone, as before the watch) */
+        TcoStop();
+    }
+}
+
+void UpdateBootProgress(const char *step)
+{
+    if (!g_watching || g_start_good) return;
+    g_step = step;
+    __atomic_add_fetch(&g_steps, 1, __ATOMIC_RELEASE);
+    TcoReload();                                        /* (before interrupts are on, the steps reload it) */
+}
+
+void UpdateBootGood(void)
+{
+    if (g_watching) g_start_good = true;
+}
+
+void UpdateDesktopTurn(bool signed_in)
+{
+    static UINT64 since;
+    if (!g_watching || g_start_good) return;
+    if (!signed_in) return;
+    UINT64 now = sched_ticks();
+    if (!since) {
+        since = now ? now : 1;
+        UpdateBootProgress("the desktop's first turn");
+    } else if (now - since >= 300) {
+        g_start_good = true;                            /* (the watching thread finishes the update) */
+    }
+}
+
 /* The kernel stopped (printf.h).  On the update's first start, before it
  * finished, the trying mark is still on the ESP: restart, and the boot
  * loader starts the previous kernel, which throws the update away, as
@@ -689,14 +777,13 @@ void KeFatalStop(void)
         return;
     kprintf("[UPDATE] The updated NovaOS %s stopped while starting: restarting to go back to the previous version\n",
             NovaVersion());
-    udelay(3000000);                                    /* (the stop's report stays on the screen for a moment) */
-    AcpiReset();
+    restart_back();
 }
 
 void UpdateBootDone(void)
 {
     /* (an update that was written but never marked ready is deleted by
      * the next install: nothing to do at an ordinary start) */
-    if (SetupIsLive() || !g_boot_flags) return;
+    if (SetupIsLive() || !g_boot_flags || g_watching) return;   /* (a watched start finishes on its thread) */
     sched_create_thread("update", boot_thread, NULL, PRIO_SERVICE);
 }

@@ -71,7 +71,9 @@ next start by the boot loader and the new kernel, the same idea as
    pending mark, checks that `kernel.new` begins as an x86-64 ELF kernel
    would, writes the mark `update.try` ("trying"), deletes the pending
    mark, and starts `kernel.new` with `BOOT_FLAG_UPDATE_TRIAL`.
-4. **Finish.** Once the new kernel has reached the desktop, it renames
+4. **Finish.** Once the new kernel has reached the desktop (its loop has
+   answered for three seconds with an account signed in or the sign-in
+   screen showing, as Windows counts a boot as good at logon), it renames
    `kernel.elf` to `kernel.old` and `kernel.new` to `kernel.elf`, replaces
    `BOOTX64.EFI` with the new boot loader, and deletes the trying mark. The
    log says
@@ -84,7 +86,11 @@ CPU exception) during that first start does not wait for someone to press
 reset: it logs
 `[UPDATE] The updated NovaOS 0.1.1 stopped while starting: restarting to go back to the previous version`
 and restarts the PC itself after three seconds, as Windows restarts after a
-stop error ([design/recovery.md](design/recovery.md)). The boot loader then deletes it and starts the old
+stop error. A kernel that hangs with its interrupts off is reset by the
+chipset's watchdog timer (on Intel ICH9-family chipsets such as QEMU's q35),
+and one that runs on but makes no progress towards the desktop for 90
+seconds restarts the PC itself
+([design/recovery.md](design/recovery.md)). The boot loader then deletes it and starts the old
 `kernel.elf` with `BOOT_FLAG_UPDATE_FAILED`, and the old NovaOS deletes the
 update's files and says so on the Updates page. The steps are ordered so
 that a power cut at any point leaves a system that starts: the pending mark
@@ -278,20 +284,29 @@ public, so no real NovaOS trusts it), whose public half QEMU passes as
    desktop (`tools/mkupdate.py --fail-boot panic`), is staged and started:
    it stops, restarts the machine on its own, and the next start is v1
    again, which removes it. Nothing outside the VM resets it.
-7. `store updates` shows the App Store's Updates page (screenshot
+7. `hung/`, a v4 stamped to hang there with interrupts off
+   (`--fail-boot hang`), is staged and started: the chipset's watchdog
+   (QEMU's ICH9 TCO timer) resets the machine a minute later, and the next
+   start is v1.
+8. `stalled/`, a v5 stamped never to start its desktop
+   (`--fail-boot stall`), is staged and started: after 90 seconds without
+   progress its `update watch` thread restarts the machine, and the next
+   start is v1.
+9. `store updates` shows the App Store's Updates page (screenshot
    `store-updates.png`).
 
 To run just this boot after a build:
 
 ```bash
-python3 tools/selftest.py --suite devices --only 'unsigned channel,unsigned refused,other key channel,other key refused,changed channel,changed refused,same channel,same version up to date,dev channel,dev build newer,update channel,update check,update install,restart into it,updated,restart again,up to date,dev channel again,dev build older,next update,stage it,reset while trying,offered again,broken channel,stage broken update,broken update rolls back,rolled back,store updates'
+python3 tools/selftest.py --suite devices --only 'unsigned channel,unsigned refused,other key channel,other key refused,changed channel,changed refused,same channel,same version up to date,dev channel,dev build newer,update channel,update check,update install,restart into it,updated,restart again,up to date,dev channel again,dev build older,next update,stage it,reset while trying,offered again,broken channel,stage broken update,broken update rolls back,rolled back,hung channel,stage hung update,hung update rolls back,back from the hang,stalled channel,stage stalled update,stalled update rolls back,store updates'
 ```
 
 ## Not done yet
 
-- **Hangs, the boot menu and recovery.** An update whose kernel hangs
-  rather than stops still needs a reset to go back, and there is no boot
-  menu, safe mode or startup repair yet: the rest of roadmap step 33.3
+- **The boot menu and recovery.** There is no boot menu, safe mode or
+  startup repair yet, and the ACPI WDAT watchdog table is not read (a hang
+  with interrupts off is caught only on ICH9-family chipsets): the rest of
+  roadmap step 33.3
   ([design/recovery.md](design/recovery.md#to-do-the-next-pieces-of-333)).
 
 - **The release key.** No key is built in yet (roadmap step 23.5), so

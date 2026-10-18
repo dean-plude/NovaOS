@@ -30,15 +30,21 @@
  *    update as ready.  Nothing the running system uses has changed yet.
  * 3. Restart: the boot loader sees the mark, turns it into update.try
  *    ("trying") and starts kernel.new once.
- * 4. The new kernel reaches the desktop and finishes the update: kernel.elf
- *    becomes kernel.old, kernel.new becomes kernel.elf, the new loader
- *    replaces BOOTX64.EFI, and the mark is deleted.
+ * 4. The new kernel reaches the desktop (its loop answering, and an
+ *    account signed in or the sign-in screen up, as Windows counts a
+ *    boot as good at logon) and finishes the update: kernel.elf becomes
+ *    kernel.old, kernel.new becomes kernel.elf, the new loader replaces
+ *    BOOTX64.EFI, and the mark is deleted.
  *
- * If the new kernel never gets that far (it stops, or the PC is reset),
- * the boot loader finds the "trying" mark at the next start, starts the
- * old kernel.elf again and tells it so, and the old NovaOS throws the
- * update away.  Live from the installation disc or stick there is
- * nothing to update.
+ * If the new kernel never gets that far (it stops, hangs, stops making
+ * progress, or the PC is reset), the boot loader finds the "trying" mark
+ * at the next start, starts the old kernel.elf again and tells it so,
+ * and the old NovaOS throws the update away.  While it starts, the
+ * update's kernel is watched: a stop restarts the PC (KeFatalStop), the
+ * chipset's watchdog timer (hal/tco.h) resets it when the kernel hangs
+ * with its interrupts off, and a start that makes no progress for
+ * UPDATE_STALL_SECONDS restarts it too.  Live from the installation disc
+ * or stick there is nothing to update.
  */
 
 #pragma once
@@ -71,10 +77,31 @@ typedef struct {
     char   error[192];
 } UpdateStatus;
 
+/* An update's first start that has not reached the desktop for this long
+ * since its last step forward is restarted (and so rolled back) */
+#define UPDATE_STALL_SECONDS   90
+/* ... and the hardware watchdog resets it this long after the kernel
+ * last answered (the watching thread reloads it every second) */
+#define UPDATE_HANG_SECONDS    60
+
 /* Early boot: the update flags the boot loader passed */
 void UpdateBootInfo(const BootInfo *info);
-/* The desktop is up: finish the update this start tried, or throw away
- * one that failed (on a thread of its own) */
+/* PCI is enumerated and threads can be made: on an update's first start,
+ * start the hardware watchdog and the thread that watches the start */
+void UpdateBootWatch(void);
+/* The start moved on to @step (a string that lives forever): on an
+ * update's first start, the watchdogs count from now */
+void UpdateBootProgress(const char *step);
+/* Each turn of the desktop's loop; @signed_in: an account is signed in,
+ * or the sign-in screen waits for one.  On an update's first start, the
+ * start counts as good once the desktop has answered for 3 s with
+ * @signed_in, and the update is finished (on the watching thread) */
+void UpdateDesktopTurn(bool signed_in);
+/* The start counts as good now (a PC with no screen has no desktop to
+ * wait for) */
+void UpdateBootGood(void);
+/* Interrupts are on: throw away an update that failed to start (on a
+ * thread of its own) */
 void UpdateBootDone(void);
 /* What happened to the last update at this start ("" if nothing):
  * "NovaOS was updated from 0.1.0 to 0.1.1." or why it was not */

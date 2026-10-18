@@ -430,6 +430,12 @@ static UINT64 sys_raise_exception(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  * ----------------------------------------------------------------------- */
 #define CONTEXT_CIS 0x00100007u              /* AMD64 | CONTROL | INTEGER | SEGMENTS */
 
+static bool stopped(UmThread *t)
+{
+    return t->park && (__atomic_load_n(&t->fpu_parked, __ATOMIC_ACQUIRE) || !t->kt ||
+                       !__atomic_load_n(&t->kt->on_cpu, __ATOMIC_ACQUIRE));
+}
+
 /* The target, stopped: suspended and parked in the kernel.  NtSuspendThread
  * takes effect on the thread's way back to user mode, so let it get there. */
 static UmThread *stopped_thread(UINT64 h, UmObject **ref)
@@ -439,9 +445,12 @@ static UmThread *stopped_thread(UINT64 h, UmObject **ref)
     UmThread *t = (UmThread *)o;
     if (t == UmCurrentThread() || t->suspend <= 0) { um_ob_unref(o); return NULL; }
     /* (a thread running in user mode parks at its CPU's next timer tick:
-     * wait by time, not by yields, which may come straight back) */
-    for (UINT64 end = sched_ticks() + 100; !t->park && !t->exited && sched_ticks() < end; ) sched_yield();
-    if (!t->park || t->exited) { um_ob_unref(o); return NULL; }
+     * wait by time, not by yields, which may come straight back).  Its
+     * x87/SSE/AVX state is in kt->fpu once it is off its CPU (blocked in a
+     * system call) or parked with them saved: until then, another CPU may
+     * still hold them live */
+    for (UINT64 end = sched_ticks() + 100; !stopped(t) && !t->exited && sched_ticks() < end; ) sched_yield();
+    if (!stopped(t) || t->exited) { um_ob_unref(o); return NULL; }
     *ref = o;
     return t;
 }

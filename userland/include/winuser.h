@@ -1904,8 +1904,16 @@ typedef struct {
     WCHAR dmDeviceName[32];
     WORD  dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
     DWORD dmFields;
-    struct { LONG x, y; } dmPosition;
-    DWORD dmDisplayOrientation, dmDisplayFixedOutput;
+    union {
+        struct {                    /* a printer's */
+            short dmOrientation, dmPaperSize, dmPaperLength, dmPaperWidth, dmScale, dmCopies,
+                  dmDefaultSource, dmPrintQuality;
+        };
+        struct {                    /* a display's */
+            struct { LONG x, y; } dmPosition;
+            DWORD dmDisplayOrientation, dmDisplayFixedOutput;
+        };
+    };
     short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
     WCHAR dmFormName[32];
     WORD  dmLogPixels;
@@ -1917,8 +1925,16 @@ typedef struct {
     BYTE  dmDeviceName[32];
     WORD  dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
     DWORD dmFields;
-    struct { LONG x, y; } dmPosition;
-    DWORD dmDisplayOrientation, dmDisplayFixedOutput;
+    union {
+        struct {                    /* a printer's */
+            short dmOrientation, dmPaperSize, dmPaperLength, dmPaperWidth, dmScale, dmCopies,
+                  dmDefaultSource, dmPrintQuality;
+        };
+        struct {                    /* a display's */
+            struct { LONG x, y; } dmPosition;
+            DWORD dmDisplayOrientation, dmDisplayFixedOutput;
+        };
+    };
     short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
     BYTE  dmFormName[32];
     WORD  dmLogPixels;

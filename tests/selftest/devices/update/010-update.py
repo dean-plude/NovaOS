@@ -11,7 +11,11 @@
 # whose kernel is stamped to stop before it reaches the desktop
 # (tools/mkupdate.py --fail-boot panic): restarting into it, the machine
 # restarts on its own after the stop and comes back as v1, with no reset
-# from outside (docs/design/recovery.md).  Every channel is signed with the
+# from outside (docs/design/recovery.md).  hung/ is a v4 that hangs there
+# with interrupts off (--fail-boot hang): the chipset's watchdog (QEMU's
+# ICH9 TCO timer) resets it.  stalled/ is a v5 whose desktop never starts
+# (--fail-boot stall): the update's watching thread restarts it once it
+# has made no progress for UPDATE_STALL_SECONDS.  Both come back as v1.  Every channel is signed with the
 # self-tests' key (005-signature.py).
 #
 # Version order around the rolling build's channel (docs/updates.md): first
@@ -21,12 +25,12 @@
 import os, re, time
 
 DOC = ('an installed NovaOS updating itself from an update channel to a newer test build, restarting into it '
-       'twice, and going back to that version when the next update is reset while it first starts, or stops '
-       'while it first starts')
+       'twice, and going back to that version when the next update is reset while it first starts, or stops, '
+       'hangs or stalls while it first starts')
 
 
 def _version():
-    """The built kernel's stamped version (kernel/ke/version.c), and the next three"""
+    """The built kernel's stamped version (kernel/ke/version.c), and the next five"""
     try:
         data = open(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'build', 'kernel.elf'), 'rb').read()
         at = data.index(b'NovaOS-version-stamp:') + 21
@@ -35,10 +39,10 @@ def _version():
         ver = '0.1.0'
     nums = [int(x) for x in re.match(r'[0-9.]+', ver).group(0).strip('.').split('.')]
     nums += [0] * (3 - len(nums))
-    return (ver,) + tuple('.'.join(map(str, nums[:2] + [nums[2] + n])) + '-test' for n in (1, 2, 3))
+    return (ver,) + tuple('.'.join(map(str, nums[:2] + [nums[2] + n])) + '-test' for n in (1, 2, 3, 4, 5))
 
 
-VER, V1, V2, V3 = _version()
+VER, V1, V2, V3, V4, V5 = _version()
 DEV = VER + '+dev.20261004125600'
 CHANNEL = 'http://10.0.2.2:18090/{}/novaos-update.txt'
 
@@ -61,6 +65,33 @@ def reset_while_trying(nova):
     nova.start()
 
 
+def wait_serial(nova, regex, timeout, since=0):
+    """Until the serial log after @since matches @regex (False: it didn't in time)"""
+    end = time.time() + timeout
+    while not re.search(regex, _serial(nova)[since:]):
+        if time.time() > end:
+            return False
+        time.sleep(0.25)
+    return True
+
+
+def finished(nova):
+    """The update's first start finishes it once the desktop has been up a
+    moment (kernel/fs/update.h): wait for that before looking"""
+    wait_serial(nova, r'\[UPDATE\] Updated NovaOS from', 60)
+
+
+def stall_then_back(nova):
+    """Restart into the staged update whose desktop never starts, wait for
+    its watching thread to give up on it, then for the next start"""
+    nova.sr.read_new()
+    seen = len(_serial(nova))
+    nova.qmp.type('shutdown /r\n')
+    wait_serial(nova, r'made no progress for \d+ s while starting', 600, seen)
+    nova.sr.read_new()
+    nova.start()
+
+
 def E(v):
     return re.escape(v)
 
@@ -80,7 +111,7 @@ TESTS = [
          boot_expect=[rf'\[UPDATE\] NovaOS {E(V1)} is staged']),
     Test('restart into it', 'shutdown /r', [rf"\[UPDATE\] This is the update's first start \(NovaOS {E(V1)}",
                                              rf'\[version {E(V1)}\]'], reboot=True, timeout=600),
-    Test('updated', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True,
+    Test('updated', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True, before=finished,
          boot_expect=[rf'\[UPDATE\] Updated NovaOS from {E(VER)} to {E(V1)}']),
     Test('restart again', 'shutdown /r', [rf'\[version {E(V1)}\]'], reboot=True, timeout=600),
     Test('up to date', 'update', [rf'NovaOS {E(V1)} is up to date'], builtin=True, timeout=120),
@@ -106,5 +137,21 @@ TESTS = [
           rf'\[version {E(V1)}\]'], reboot=True, timeout=900, quotes_panic=True),
     Test('rolled back', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True,
          boot_expect=[rf'\[UPDATE\] The update to NovaOS {E(V3)} did not finish starting, so NovaOS {E(V1)} started again']),
+    Test('hung channel', f'update channel {CHANNEL.format("hung")}',
+         [r'Update channel: http://10\.0\.2\.2:18090/hung/'], builtin=True),
+    Test('stage hung update', 'update install', [rf'NovaOS {E(V4)} is ready: restart'], builtin=True, timeout=900),
+    Test('hung update rolls back', 'shutdown /r',
+         [rf"\[UPDATE\] This is the update's first start \(NovaOS {E(V4)}", r'\[TCO\] Watchdog running',
+          r'stamped with the test fault "hang"', rf'\[version {E(V1)}\]'], reboot=True, timeout=900),
+    Test('back from the hang', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True,
+         boot_expect=[rf'\[UPDATE\] The update to NovaOS {E(V4)} did not finish starting, so NovaOS {E(V1)} started again']),
+    Test('stalled channel', f'update channel {CHANNEL.format("stalled")}',
+         [r'Update channel: http://10\.0\.2\.2:18090/stalled/'], builtin=True),
+    Test('stage stalled update', 'update install', [rf'NovaOS {E(V5)} is ready: restart'], builtin=True, timeout=900),
+    Test('stalled update rolls back', 'ver', [rf'NovaOS \[Version {E(V1)}\]'], builtin=True, before=stall_then_back,
+         timeout=900,
+         boot_expect=[r'stamped with the test fault "stall"',
+                      rf'\[UPDATE\] The updated NovaOS {E(V5)} made no progress for \d+ s while starting \(last step: ',
+                      rf'\[UPDATE\] The update to NovaOS {E(V5)} did not finish starting, so NovaOS {E(V1)} started again']),
     Test('store updates', 'store updates', [r"Opened the App Store's updates"], builtin=True),
 ]

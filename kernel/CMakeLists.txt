@@ -140,6 +140,7 @@ set(KERNEL_C_SOURCES
     hal/gpio.c
     hal/ioapic.c
     hal/hpet.c
+    hal/tco.c
     hal/display.c
     hal/firmware.c
     hal/efi.c

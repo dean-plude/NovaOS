@@ -81,14 +81,18 @@ static void test_winspool(void)
     BOOL (WINAPI *enum_w)(DWORD, LPWSTR, DWORD, LPBYTE, DWORD, LPDWORD, LPDWORD) = (void *)GetProcAddress(m, "EnumPrintersW");
     BOOL (WINAPI *def_w)(LPWSTR, LPDWORD) = (void *)GetProcAddress(m, MAKEINTRESOURCEA(203));
     BOOL (WINAPI *open_w)(LPWSTR, LPHANDLE, LPVOID) = (void *)GetProcAddress(m, "OpenPrinterW");
-    CHECK("winspool exports", enum_w && def_w && open_w && def_w == (void *)GetProcAddress(m, "GetDefaultPrinterW"));
-    if (!enum_w || !def_w || !open_w) return;
-    DWORD need = 1, count = 1;
-    CHECK("EnumPrintersW: none", enum_w(6, 0, 4, 0, 0, &need, &count) && count == 0);
+    BOOL (WINAPI *close_p)(HANDLE) = (void *)GetProcAddress(m, "ClosePrinter");
+    CHECK("winspool exports", enum_w && def_w && open_w && close_p && def_w == (void *)GetProcAddress(m, "GetDefaultPrinterW"));
+    if (!enum_w || !def_w || !open_w || !close_p) return;
+    /* Microsoft Print to PDF is installed (as on Windows), so the size query asks for room. */
+    DWORD need = 0, count = 1;
+    CHECK("EnumPrintersW asks for room", !enum_w(6, 0, 4, 0, 0, &need, &count) &&
+          GetLastError() == ERROR_INSUFFICIENT_BUFFER && need > 0 && count == 0);
     WCHAR name[64]; DWORD n = 64;
-    CHECK("GetDefaultPrinterW: none", !def_w(name, &n) && GetLastError() == ERROR_FILE_NOT_FOUND);
-    HANDLE h = (HANDLE)1;
-    CHECK("OpenPrinterW fails", !open_w(L"Microsoft Print to PDF", &h, 0) && !h);
+    CHECK("GetDefaultPrinterW", def_w(name, &n) && name[0]);
+    HANDLE h = 0;
+    CHECK("OpenPrinterW Microsoft Print to PDF", open_w(L"Microsoft Print to PDF", &h, 0) && h);
+    if (h) close_p(h);
 }
 
 static void test_others(void)

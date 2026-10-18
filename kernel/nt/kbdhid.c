@@ -489,6 +489,14 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *fdo, NT_IRP *irp)
 {
     Kdev *k = kdev(fdo);
     NT_IO_STACK_LOCATION *sl = NtIrpCurrentStack(irp);
+    if (!k->lower) {                            /* removed, a program's handle still open: its */
+        NT_STATUS st = sl->MajorFunction == NT_IRP_MJ_CLEANUP || sl->MajorFunction == NT_IRP_MJ_CLOSE ?
+                       NT_STATUS_SUCCESS : NT_STATUS_DELETE_PENDING;   /* (the collection may be gone) */
+        irp->IoStatus.Status = st;
+        irp->IoStatus.Information = 0;
+        nt_IofCompleteRequest(irp, 0);
+        return st;
+    }
     if (sl->MajorFunction != NT_IRP_MJ_PNP) return pass_down(k, irp);
     switch (sl->MinorFunction) {
     case NT_IRP_MN_START_DEVICE: {
@@ -512,6 +520,7 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *fdo, NT_IRP *irp)
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
         NT_STATUS st = pass_down(k, irp);
         nt_IoDetachDevice(k->lower);
+        k->lower = NULL;                        /* (the collection's PDO goes now; this FDO at the last close) */
         nt_IoDeleteDevice(fdo);
         return st;
     }

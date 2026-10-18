@@ -965,8 +965,10 @@ def update_boot(work):
     across restarts) on QEMU's user-mode network, where 10.0.2.2:18090
     serves update channels made with tools/mkupdate.py from this build:
     v1/ stamped one version newer, v2/ two, same/ this version, dev/ a
-    development build of it and broken/ a v3 stamped to stop before it
-    reaches the desktop (mkupdate.py --fail-boot panic), all signed with the self-tests' key, whose
+    development build of it, broken/ a v3 stamped to stop before it
+    reaches the desktop (mkupdate.py --fail-boot panic), hung/ a v4 that
+    hangs there (--fail-boot hang) and stalled/ a v5 whose desktop never
+    starts (--fail-boot stall), all signed with the self-tests' key, whose
     public half QEMU hands to NovaOS (fw_cfg); and v1's channel unsigned/,
     signed with another key (otherkey/) and changed after it was signed
     (changed/) (tests/selftest/devices/update)"""
@@ -983,10 +985,12 @@ def update_boot(work):
             f.write(ed25519.new_secret().hex() + '\n')
     for sub, ver, sign in (('v1', ns['V1'], key), ('v2', ns['V2'], key), ('unsigned', ns['V1'], None),
                            ('otherkey', ns['V1'], other), ('changed', ns['V1'], key),
-                           ('same', ns['VER'], key), ('dev', ns['DEV'], key), ('broken', ns['V3'], key)):
+                           ('same', ns['VER'], key), ('dev', ns['DEV'], key), ('broken', ns['V3'], key),
+                           ('hung', ns['V4'], key), ('stalled', ns['V5'], key)):
+        fault = {'broken': 'panic', 'hung': 'hang', 'stalled': 'stall'}.get(sub)
         subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkupdate.py'), os.path.join(root, sub),
                         '--version', ver, '--notes', f'Self-test build {ver}'] + (['--sign', sign] if sign else []) +
-                       (['--fail-boot', 'panic'] if sub == 'broken' else []),
+                       (['--fail-boot', fault] if fault else []),
                        check=True, stdout=subprocess.DEVNULL)
     changed = os.path.join(root, 'changed', 'novaos-update.txt')
     data = open(changed, 'rb').read()

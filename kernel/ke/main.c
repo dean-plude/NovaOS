@@ -406,18 +406,22 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
 
     /* Devices and networking: PCI scan, e1000 NIC, lwIP + DHCP */
     PciInitialize();
+    UpdateBootWatch();                    /* an update's first start: the watchdogs (fs/update.h) */
     PnpInit();                            /* the Plug and Play device tree: root, PCI functions */
     AcpiInitialize(rsdp);                 /* power-off, reset, the power button; MADT for SMP */
     IoApicInit();                         /* (masked; the SCI is routed when the interpreter loads) */
     AmlInitialize();                      /* the AML interpreter (a thread): batteries, buttons */
     DisplayInit(&boot_fb);               /* display adapter: modes, page flipping */
+    UpdateBootProgress("ACPI and the display");
     VmbusInit();                          /* Hyper-V's devices: disks, input, services (CPU 0, interrupts off) */
     VmbusStart();                         /* (their interrupts, devices added and removed: the "vmbus" thread) */
     PersistInit();                        /* SATA disks; the volume that keeps drive C: */
     DrivesInit();                         /* their NTFS volumes: drives D:, E:, ... */
+    UpdateBootProgress("the disks");
     if (!NetInitialize())
         kprintf("[NET] No network (no supported adapter)\n");
     AudioInit();                          /* HD Audio and the system mixer */
+    UpdateBootProgress("the network and sound");
 
     /* Windows programs: SSE for user code, NT services, loader */
     UmInit();
@@ -428,6 +432,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
      * go of the kernel lock */
     kprintf("=== SMP ===\n");
     um_registry_add_cpus(smp_start());
+    UpdateBootProgress("the other processors");
 
     DesktopRestoreDisplayMode();          /* the resolution chosen before the restart */
     if (GdiInitialize()) {
@@ -439,19 +444,32 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
         UsbInit();                        /* USB keyboards, mice, hubs and sticks */
         I2cHidInit();                     /* touchpads on I2C (a thread, once ACPI is loaded) */
         sched_create_thread("devpoll", device_poll_thread, NULL, PRIO_DEVICE);   /* (above programs and the desktop) */
-        sched_create_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP);   /* (above any program thread, boosted or not) */
+        /* (a test build stamped "stall" never starts its desktop: the
+         * watching thread finds the start stuck and rolls it back) */
+        if (strcmp(NovaTestFault(), "stall"))
+            sched_create_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP);   /* (above any program thread, boosted or not) */
+        else
+            kprintf("[NovaOS] This kernel is stamped with the test fault \"stall\": its desktop never starts\n");
         kprintf_set_fb_enabled(false);    /* WM owns the screen; logs → serial */
         kprintf("[NovaOS] Desktop event loop started (%dx%d)\n",
                 GdiScreenW(), GdiScreenH());
+        UpdateBootProgress("the desktop's start");
     } else {
         kprintf("[NovaOS] No framebuffer present; running headless\n");
+        UpdateBootGood();                 /* (no desktop to wait for) */
     }
 
     /* A test build stamped to fail its start (tools/mkupdate.py --fail-boot):
      * the self-tests' broken update stops here, before the desktop counts
-     * as reached, and KeFatalStop takes it back to the previous version */
+     * as reached, and KeFatalStop takes it back to the previous version;
+     * the hung one stops answering with interrupts off, and the chipset's
+     * watchdog resets the PC (fs/update.h) */
     if (!strcmp(NovaTestFault(), "panic"))
         KPANIC("This kernel is stamped with the test fault \"panic\" (tools/mkupdate.py --fail-boot): it stops before reaching the desktop");
+    if (!strcmp(NovaTestFault(), "hang")) {
+        kprintf("[NovaOS] This kernel is stamped with the test fault \"hang\": it hangs with interrupts off\n");
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
 
     kprintf("\n[NovaOS] Phase 7 initialized. Enabling interrupts...\n");
     sti();

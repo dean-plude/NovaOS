@@ -350,6 +350,11 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   installs only channels signed with it (Ed25519). The default channel is
   the newest tagged release; each green CI run on `main` also publishes a
   channel of its own with the rolling `latest` build.
+- **Printing**: the Print Spooler service (`spoolsv.exe`) and
+  `winspool.drv` with the Windows spooler API, the Microsoft Print to PDF
+  printer (a GDI printer DC whose pages become a PDF), and the Print, Print
+  Setup and Page Setup dialogs ([printing.md](design/printing.md)). Network
+  printing (IPP Everywhere) is next.
 - **Firefox**: Mozilla's unmodified Firefox 157.0 for Windows x64 is in the
   image (`tools/bundle_firefox.py` downloads it and checks it against
   Mozilla's SHA-512 sums) at `C:\Programs\Mozilla Firefox\core`, and opens

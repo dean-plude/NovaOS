@@ -21,6 +21,7 @@
 
 #include "../um/um.h"
 #include "desktop.h"
+#include "logon.h"
 #include "wallpaper.h"
 #include "../apps/iconset.h"
 #include "../hal/display.h"
@@ -1353,6 +1354,7 @@ static void shell_overlay(void)
     if (!dock_hidden()) draw_dock();
     draw_menu();
     draw_switcher();
+    LogonDraw();                                        /* (the sign-in or lock screen: over everything) */
 }
 
 /* -----------------------------------------------------------------------
@@ -1382,7 +1384,7 @@ bool DesktopAvailable(void) { return g_ready; }
 
 bool DesktopOverlayCovers(GdiRect r)
 {
-    if (g_start_open || g_menu.open || g_switch.on) return true;
+    if (g_start_open || g_menu.open || g_switch.on || LogonActive()) return true;
     if (dock_hidden()) return false;
     int top = L_dock.y - 64;                    /* (the dock, its tooltips and the tray's: the primary's) */
     return r.y + r.h > top && r.x < GdiScreenW() && r.x + r.w > 0;
@@ -2006,6 +2008,10 @@ static void desktop_key(const KeyEvent *k)
             WmShowDesktopToggle();
         } else if ((k->ch | 0x20) == 's') {
             start_open(true);
+        } else if ((k->ch | 0x20) == 'l') {             /* lock the screen */
+            close_popups();
+            start_open(false);
+            LogonLock();
         }
         WmInvalidate();
         return;
@@ -2096,14 +2102,16 @@ void DesktopRun(void *arg)
 
     update_clock();
     /* Started from the installation disc: offer to install */
+    bool services = false;
     if (SetupIsLive()) AppLaunch(APP_SETUP);
     else {
         /* Installed and started for the first time: the first-boot setup */
         if (WelcomeNeeded()) WelcomeFirstBoot();
-        /* An installed system starts its automatic services (services.c) */
-        RamNode *svc = RamfsResolve(NULL, "\\Windows\\System32\\services.exe");
-        if (!svc || !UmSpawnDetached(svc, "services /autostart", svc->parent))
-            kprintf("[SVC] Cannot start services.exe: %s\n", svc ? "out of memory" : "not installed");
+        /* The sign-in screen when an account must be chosen or its
+         * password typed (logon.c); the automatic services start once an
+         * account is signed in, running as it (services.c) */
+        LogonStart();
+        services = true;
     }
     VirtioInputInit();                          /* touch screens (polled here) */
     WmComposite();
@@ -2125,6 +2133,12 @@ void DesktopRun(void *arg)
         /* The window system's lock; the file system's (which program
          * threads take around file access) only for what may use files */
         DesktopLockAlone();
+        LogonPoll();
+        if (services && LogonTakeFirstSignIn()) {
+            RamNode *svc = RamfsResolve(NULL, "\\Windows\\System32\\services.exe");
+            if (!svc || !UmSpawnDetached(svc, "services /autostart", svc->parent))
+                kprintf("[SVC] Cannot start services.exe: %s\n", svc ? "out of memory" : "not installed");
+        }
         ps2_poll();
         VirtioInputPoll();
         monitors_poll();
@@ -2143,7 +2157,15 @@ void DesktopRun(void *arg)
         bool input = InputPoll(&ev), files = input;
         if (files) FsLock();                    /* (a click may open a file) */
         for (; input; input = InputPoll(&ev)) {
-            if (ev.type == INPUT_MOUSE) {
+            if (ev.type == INPUT_MOUSE && LogonActive()) {     /* (signing in: the mouse is the screen's) */
+                if (ev.absolute) WmCursorMoveAbs(ev.dx, ev.dy);
+                else if (ev.dx || ev.dy) WmCursorMoveBy(ev.dx, ev.dy);
+                bool left = (ev.buttons & MOUSE_LEFT) != 0;
+                if (left && !prev_left) LogonPress(WmCursorX(), WmCursorY());
+                prev_left = left;
+                prev_right = (ev.buttons & MOUSE_RIGHT) != 0;
+                prev_mid = (ev.buttons & MOUSE_MIDDLE) != 0;
+            } else if (ev.type == INPUT_MOUSE) {
                 raw_mouse(&ev);
                 UmSetInputPen(ev.from_pen ? pen_serial : 0);    /* (programs get WM_POINTER* for a pen's) */
                 if (ev.absolute) {
@@ -2187,7 +2209,7 @@ void DesktopRun(void *arg)
                 prev_right = right;
                 UmSetInputPen(0);
             } else if (ev.type == INPUT_TOUCH) {
-                touch_event(&ev);
+                if (!LogonActive()) touch_event(&ev);
             } else if (ev.type == INPUT_PEN) {
                 pen_serial = TabletPacketIn(&ev);
                 if (!ev.pressed && pen_near) {
@@ -2201,6 +2223,11 @@ void DesktopRun(void *arg)
             } else if (ev.type == INPUT_KEY) {
                 KeyEvent k;
                 bool key = InputTranslateKey(&ev, &k);
+                if (LogonActive()) {                    /* (the keyboard too) */
+                    if (key && k.extended && k.scancode == KEY_LWIN && !k.pressed) g_win_down = false;   /* (Win+L's) */
+                    if (key) { system_key(&k); LogonKey(&k); }
+                    continue;
+                }
                 raw_key(&ev, key ? &k : NULL);
                 if (key) desktop_key(&k);
             }

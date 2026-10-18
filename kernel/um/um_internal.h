@@ -578,6 +578,11 @@ void       um_abandon_mutants(UmProcess *p, UmThread *t);
 /* um_security.c: tokens, security descriptors, access checks */
 void       um_security_syscalls_init(void);
 void       um_services_init(void);              /* um_services.c */
+void       um_accounts_syscalls_init(void);     /* um_accounts.c: NtNovaAccount */
+UmObject  *um_token_new_user(UINT32 rid, bool elevated);   /* a new primary token for account @rid (LogonUser) */
+UINT32     um_token_rid(UmObject *token);              /* the local account a token is (0: none, e.g. SYSTEM) */
+UINT32     um_caller_rid(void);                        /* ... the calling thread's effective token is */
+bool       um_caller_is_admin(void);                   /* that token has Administrators enabled (elevated), or is SYSTEM */
 UmObject  *um_token_for_process(UmProcess *creator);   /* a new process's primary token (referenced) */
 bool       um_token_elevated(UmObject *token);         /* the elevated (full administrator) token? */
 bool       um_elevate_process(UmProcess *p);           /* give @p the elevated token */
@@ -611,5 +616,6 @@ void       um_registry_poll(void);   /* save the hive after changes (desktop thr
 void       um_registry_flush(void);  /* save the hive now if it changed */
 void       um_registry_pending_renames(void);   /* MoveFileEx(DELAY_UNTIL_REBOOT) operations, at boot */
 void       um_registry_process_gone(UmProcess *p);   /* drop the process's change watches */
-void       um_registry_environment(void (*cb)(void *ctx, const char *name, const char *value, bool user, bool expand),
+void       um_registry_environment(const char *sid,     /* the user's (HKEY_USERS\\<sid>\\Environment) */
+                                   void (*cb)(void *ctx, const char *name, const char *value, bool user, bool expand),
                                    void *ctx);

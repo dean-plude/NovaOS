@@ -209,6 +209,8 @@
 #define SYSCALL_NtNovaDxgkCtl                     0x0264
 /* NovaOS: SystemFirmwareTableInformation's kernel half (hal/firmware.h) */
 #define SYSCALL_NtNovaFirmwareTable               0x0270
+/* NovaOS: local accounts, LogonUser, profiles and the sign-in screen (um_accounts.c) */
+#define SYSCALL_NtNovaAccount                     0x0271
 /* Registry services Windows 10 numbers elsewhere */
 #define SYSCALL_NtDeleteKey                       0x00CF
 #define SYSCALL_NtDeleteValueKey                  0x00D2

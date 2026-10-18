@@ -263,57 +263,97 @@ static void sid_set(SidAttr *s, const UINT8 *sid, UINT32 attrs)
     s->attrs = attrs;
 }
 
-/* The desktop user's token: a standard user, member of Users, with
- * Administrators only for denying (not elevated: the "limited" half of
- * an administrator's split token, as with UAC on Windows) */
-static UmObject *default_token(void)
+/* Account @rid's token.  An administrator's is split, as with UAC on
+ * Windows: the "limited" half, with Administrators only for denying, is
+ * what programs get; the "full" half (@elevated) has Administrators
+ * enabled (and the owner of what it creates), high integrity, and an
+ * administrator's privileges held (most off until enabled, as on
+ * Windows).  A standard user's token has no Administrators at all and is
+ * the same either way (TokenElevationTypeDefault).  Each token is a new
+ * logon session (the logon SID S-1-5-5-0-<LUID>). */
+static bool account_is_admin(UINT32 rid)
 {
-    static UmObject *g;
-    if (g) return g;
+    UmAccount a;
+    return !um_account_get(rid, &a) || (a.flags & UM_ACCT_ADMIN);   /* (unknown: as before accounts) */
+}
+
+UmObject *um_token_new_user(UINT32 rid, bool elevated)
+{
+    bool admin = account_is_admin(rid);
     UmToken t;
     memset(&t, 0, sizeof(t));
-    sid_set(&t.user, g_user_sid, 0);
-    const UINT8 *gs[] = { g_everyone_sid, g_users_sid, g_admins_sid, g_interactive_sid, g_auth_users_sid, g_logon_sid };
-    const UINT32 ga[] = { GRP_ON, GRP_ON, GRP_DENY_ONLY, GRP_ON, GRP_ON, GRP_ON | 0xC0000000u /* LOGON_ID */ };
-    for (int i = 0; i < 6; i++) sid_set(&t.groups[t.ngroups++], gs[i], ga[i]);
+    UINT8 user[28], logon[sizeof(g_logon_sid)];
+    um_account_sid(rid, user);
+    sid_set(&t.user, user, 0);
+    memcpy(logon, g_logon_sid, sizeof(logon));
+    UINT32 luid = next_luid();
+    memcpy(logon + 16, &luid, 4);
+    sid_set(&t.groups[t.ngroups++], g_everyone_sid, GRP_ON);
+    sid_set(&t.groups[t.ngroups++], g_users_sid, GRP_ON);
+    if (admin) sid_set(&t.groups[t.ngroups++], g_admins_sid, elevated ? GRP_ON | 0x08u /* SE_GROUP_OWNER */ : GRP_DENY_ONLY);
+    sid_set(&t.groups[t.ngroups++], g_interactive_sid, GRP_ON);
+    sid_set(&t.groups[t.ngroups++], g_auth_users_sid, GRP_ON);
+    sid_set(&t.groups[t.ngroups++], logon, GRP_ON | 0xC0000000u /* LOGON_ID */);
     t.privs = t.privs_on = 1ull << SE_CHANGE_NOTIFY;
     t.privs |= 1ull << 19 | 1ull << 25 | 1ull << 33 | 1ull << 34;  /* Shutdown, Undock, IncreaseWorkingSet, TimeZone (off) */
     t.type = 1;
-    t.elevation = 3;
-    UmObject *o = token_new(&t);
-    if (o && __atomic_compare_exchange_n(&g, &(UmObject *){ NULL }, o, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return o;
-    if (o) um_ob_unref(o);
-    return g;
+    t.elevation = !admin ? 1 : elevated ? 2 : 3;
+    if (admin && elevated) {
+        /* IncreaseQuota 5, Security 8, TakeOwnership 9, LoadDriver 10, SystemProfile 11, Systemtime 12,
+         * ProfileSingleProcess 13, IncreaseBasePriority 14, CreatePagefile 15, Backup 17, Restore 18,
+         * Debug 20, SystemEnvironment 22, RemoteShutdown 24, ManageVolume 28, Impersonate 29,
+         * CreateGlobal 30, CreateSymbolicLink 35 */
+        static const UINT8 priv[] = { 5, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 20, 22, 24, 28, 29, 30, 35 };
+        for (unsigned i = 0; i < sizeof(priv); i++) t.privs |= 1ull << priv[i];
+        t.privs_on |= 1ull << 29 | 1ull << 30;                 /* Impersonate, CreateGlobal: on by default */
+    }
+    return token_new(&t);
 }
 
-/* The same user elevated (the "full" half of the split token): what a
- * program gets that asks to run as administrator (ShellExecute's "runas",
- * or requireAdministrator / highestAvailable in its manifest).  NovaOS
- * has one user and no consent prompt yet, so asking is enough, as with
- * UAC's "never notify".  Administrators is enabled (and the owner of what
- * it creates), integrity is high, and an administrator's privileges are
- * held (most off until enabled, as on Windows). */
-static UmObject *elevated_token(void)
+/* The tokens of the accounts that signed in on the screen (um_accounts.c's
+ * session): what the desktop's programs get.  A pair per account, kept
+ * for the boot (programs started earlier hold theirs anyway) */
+#define SESSION_TOKENS 16
+static struct { UINT32 rid; UmObject *tok[2]; } g_session_tok[SESSION_TOKENS];
+static KSpinLock g_session_tok_lock = KSPINLOCK_INIT;
+
+static UmObject *session_token_for(UINT32 rid, bool elevated)
 {
-    static UmObject *g;
-    if (g) return g;
-    UmObject *d = default_token();
-    if (!d) return NULL;
-    UmToken t = *(const UmToken *)d->ptr;
-    for (int i = 0; i < t.ngroups; i++)
-        if (!memcmp(t.groups[i].sid, g_admins_sid, sizeof(g_admins_sid))) t.groups[i].attrs = GRP_ON | 0x08u;   /* SE_GROUP_OWNER */
-    /* IncreaseQuota 5, Security 8, TakeOwnership 9, LoadDriver 10, SystemProfile 11, Systemtime 12,
-     * ProfileSingleProcess 13, IncreaseBasePriority 14, CreatePagefile 15, Backup 17, Restore 18,
-     * Debug 20, SystemEnvironment 22, RemoteShutdown 24, ManageVolume 28, Impersonate 29,
-     * CreateGlobal 30, CreateSymbolicLink 35 */
-    static const UINT8 admin[] = { 5, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 20, 22, 24, 28, 29, 30, 35 };
-    for (unsigned i = 0; i < sizeof(admin); i++) t.privs |= 1ull << admin[i];
-    t.privs_on |= 1ull << 29 | 1ull << 30;                     /* Impersonate, CreateGlobal: on by default */
-    t.elevation = 2;
-    UmObject *o = token_new(&t);
-    if (o && __atomic_compare_exchange_n(&g, &(UmObject *){ NULL }, o, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return o;
-    if (o) um_ob_unref(o);
-    return g;
+    IrqState s = spin_lock_irqsave(&g_session_tok_lock);
+    UmObject *o = NULL;
+    for (int i = 0; i < SESSION_TOKENS && !o; i++)
+        if (g_session_tok[i].rid == rid) o = g_session_tok[i].tok[elevated];
+    spin_unlock_irqrestore(&g_session_tok_lock, s);
+    if (o) return o;
+    UmObject *n = um_token_new_user(rid, elevated);
+    if (!n) return NULL;
+    s = spin_lock_irqsave(&g_session_tok_lock);
+    int slot = -1;
+    for (int i = 0; i < SESSION_TOKENS && slot < 0; i++) if (g_session_tok[i].rid == rid) slot = i;
+    for (int i = 0; i < SESSION_TOKENS && slot < 0; i++) if (!g_session_tok[i].rid) slot = i;
+    if (slot >= 0) {
+        g_session_tok[slot].rid = rid;
+        if (!g_session_tok[slot].tok[elevated]) { g_session_tok[slot].tok[elevated] = n; n = NULL; }
+        o = g_session_tok[slot].tok[elevated];
+    }
+    spin_unlock_irqrestore(&g_session_tok_lock, s);
+    if (slot < 0) return n;                                    /* (all taken: one of its own, kept like them) */
+    if (n) um_ob_unref(n);
+    return o;
+}
+
+static UmObject *default_token(void) { return session_token_for(um_session_rid(), false); }
+
+UINT32 um_token_rid(UmObject *t)
+{
+    return t && t->type == UO_TOKEN ? um_account_rid_of_sid(((const UmToken *)t->ptr)->user.sid) : 0;
+}
+
+/* The elevated token of the account @t is (the session's when @t is no account's) */
+static UmObject *elevated_token_for(UmObject *t)
+{
+    UINT32 rid = um_token_rid(t);
+    return session_token_for(rid ? rid : um_session_rid(), true);
 }
 
 bool um_token_elevated(UmObject *t)
@@ -325,7 +365,7 @@ bool um_token_elevated(UmObject *t)
  * elevated token; false when out of memory */
 bool um_elevate_process(UmProcess *p)
 {
-    UmObject *e = elevated_token();
+    UmObject *e = elevated_token_for(p->token);
     if (!e) return false;
     um_ob_ref(e);
     IrqState s = ob_lock();
@@ -385,6 +425,31 @@ bool um_privilege_held(UINT32 luid)
     bool held = o && luid < 64 && (((const UmToken *)o->ptr)->privs >> luid & 1);
     if (o) um_ob_unref(o);
     return held;
+}
+
+UINT32 um_caller_rid(void)
+{
+    UmObject *o = effective_token();
+    UINT32 rid = um_token_rid(o);
+    if (o) um_ob_unref(o);
+    return rid;
+}
+
+/* Kernel threads (no program) count as SYSTEM */
+bool um_caller_is_admin(void)
+{
+    if (!UmCurrent()) return true;
+    UmObject *o = effective_token();
+    bool yes = false;
+    if (o) {
+        const UmToken *t = o->ptr;
+        yes = sid_eq(t->user.sid, g_system_sid);
+        for (int i = 0; i < t->ngroups && !yes; i++)
+            if (sid_eq(t->groups[i].sid, g_admins_sid) && (t->groups[i].attrs & GRP_ENABLED) && !(t->groups[i].attrs & GRP_DENY_ONLY))
+                yes = true;
+        um_ob_unref(o);
+    }
+    return yes;
 }
 
 void um_thread_drop_token(UmThread *t)
@@ -797,7 +862,8 @@ static UINT64 sys_query_token(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         if (t.elevation != 2 && t.elevation != 3) return ST_NO_TOKEN;
         if (ret_ptr && !put_u32(ret_ptr, ps)) return ST_ACCESS_VIOLATION;
         if ((UINT32)a4 < ps) return ST_BUFFER_TOO_SMALL;
-        UmObject *l = t.elevation == 3 ? elevated_token() : default_token();
+        UINT32 rid = um_account_rid_of_sid(t.user.sid);
+        UmObject *l = session_token_for(rid ? rid : um_session_rid(), t.elevation == 3);
         return l ? give_handle(l, a3, 0) : ST_NO_MEMORY;
     }
     UINT32 cap = (UINT32)a4 < 4096 ? (UINT32)a4 : 4096;

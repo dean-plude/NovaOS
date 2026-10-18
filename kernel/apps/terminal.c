@@ -519,12 +519,13 @@ static void cmd_date(Term *t, bool time)
                       r.year, r.month, r.day);
 }
 
-/* whoami: as Windows prints it, nova-pc\name in lower case (USERNAME: the
- * name given at first boot, apps/welcome.c) */
+/* whoami: as Windows prints it, nova-pc\name in lower case (the account
+ * signed in, um_accounts.c) */
 static void cmd_whoami(Term *t)
 {
     char user[40] = "dean", line[64];
-    um_registry_get_sz(UM_SETUP_KEY, "UserName", user, sizeof(user));
+    UmAccount a;
+    if (um_account_get(um_session_rid(), &a)) ksnprintf(user, sizeof(user), "%s", a.name);
     ksnprintf(line, sizeof(line), "nova-pc\\%s", user[0] ? user : "dean");
     for (char *p = line; *p; p++) if (*p >= 'A' && *p <= 'Z') *p = (char)(*p + 32);
     tprint(t, line);

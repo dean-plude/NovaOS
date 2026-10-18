@@ -240,6 +240,8 @@ void um_registry_set_value(const char *path, const char *name, UINT32 type, cons
 bool um_registry_delete_value(const char *path, const char *name);
 bool um_registry_delete_tree(const char *path);    /* a key and everything below it */
 bool um_registry_create_key(const char *path);
+/* Back to the defaults except the keys in @keep (Reset this PC, at boot: fs/reset.c) */
+void um_registry_reset(const char *const *keep, int n);
 bool um_registry_key_exists(const char *path);
 /* Enumeration for kernel-mode ZwQueryKey / ZwEnumerateKey / ZwEnumerateValueKey */
 typedef struct {

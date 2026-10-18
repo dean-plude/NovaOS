@@ -8,8 +8,9 @@
  * chipsets of that family do.  NovaOS arms it while an update's kernel
  * starts for the first time (kernel/fs/update.c), so a kernel that hangs
  * with its interrupts off is still reset and rolled back.  Windows uses
- * such a timer through the ACPI WDAT table where firmware describes one;
- * that table is not read yet (docs/design/recovery.md).
+ * such a timer through the ACPI WDAT table where firmware describes one,
+ * and so does NovaOS (wdat.h): this driver is for PCs without the table
+ * (watchdog.h chooses).
  */
 
 #pragma once
@@ -23,6 +24,10 @@ bool TcoStart(UINT32 seconds);
 
 /* The watchdog is running */
 bool TcoRunning(void);
+
+/* The chipset is one of the family (whether its reset can be used is
+ * found when it starts) */
+bool TcoPresent(void);
 
 /* Start the count again (nothing when it isn't running) */
 void TcoReload(void);

@@ -136,6 +136,18 @@ static void add_removed(const char *path)
 
 static void removed_hook(const char *path) { add_removed(path); }
 
+void PersistForgetDeleted(bool (*keep)(const char *path))
+{
+    for (Removed **pp = &g_removed; *pp;) {
+        if (!keep((*pp)->path)) {
+            Removed *r = *pp;
+            *pp = r->next;
+            kfree(r);
+            g_removed_dirty = true;
+        } else pp = &(*pp)->next;
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Choosing the volume
  * ------------------------------------------------------------------------- */

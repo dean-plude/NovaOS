@@ -13,14 +13,15 @@ and reset. How updates are fetched and staged is in
 | The previous build kept for rollback (`Windows.old`, the servicing stack's pending.xml rollback) | `\EFI\NOVA\kernel.old`, the kernel an update replaced |
 | Boot Manager's boot status: a boot that never reached logon counts as failed | the trying mark `\EFI\NOVA\update.try`, deleted only once the new kernel's desktop is up with someone signed in or the sign-in screen showing |
 | "Automatically restart" after a stop error (on by default) | `KeFatalStop`: on an update's first start, a kernel stop restarts the machine |
-| The hardware watchdog timer (WDAT), reset when the system stops answering | the chipset's TCO timer (`kernel/hal/tco.c`), running while an update first starts |
+| The hardware watchdog timer (WDAT), reset when the system stops answering | the firmware's watchdog through its ACPI WDAT table (`kernel/hal/wdat.c`), else the chipset's TCO timer (`kernel/hal/tco.c`), running while an update first starts |
 | Rollback of a feature update that fails to start | the boot loader starts the previous kernel, which removes the update |
 | Windows Recovery Environment (WinRE) after two failed boots, F8, `shutdown /r /o` | the Advanced startup menu in `BOOTX64.EFI` (`bootloader/src/recovery.c`), after two failed starts (`\EFI\NOVA\starts.cnt`), F8 or `shutdown /r /o` |
 | Boot manager's `bootstat.dat` (boots that never reached logon) | `\EFI\NOVA\starts.cnt`, one more at each start, deleted at the desktop |
 | Safe mode (`SafeBoot\Minimal`: inbox drivers, Basic Display) | safe mode: NovaOS's own drivers, the firmware's framebuffer |
 | Last Known Good, "Uninstall latest update" | "Start the previous version of NovaOS": `bootx64.old` starting `kernel.old` |
 | Startup Repair (`SrtTrail.txt`) | startup repair, report in `C:\Windows\System32\LogFiles\Srt\SrtTrail.txt` |
-| Reset this PC | (to do) |
+| Reset this PC: Keep my files | Reset this PC (`kernel/fs/reset.c`): apps, drivers and settings removed, accounts and their files kept |
+| Settings > System > Recovery | the same page: Reset PC, and Advanced startup's Restart now |
 
 ## Done: a failed update comes back on its own
 
@@ -176,14 +177,60 @@ they reach the desktop: the third shows the menu by itself and runs
 startup repair. Together with the `update` boot's broken updates, this is
 33.3's "Done when".
 
-## To do
+## Done: the firmware's watchdog, Reset this PC and the Settings buttons
 
-1. **The ACPI WDAT table.** Drive the watchdog Windows uses where firmware
-   describes one, beside the ICH9 TCO timer.
-2. **Reset this PC**: reinstall from the running kernel and keep
-   `C:\Users`.
-3. **Settings > System > Recovery**: an "Advanced startup: Restart now"
-   button (today `shutdown /r /o` in the Terminal).
+**The ACPI WDAT watchdog** (`kernel/hal/wdat.c`, from Microsoft's Hardware
+Watchdog Timers Design Specification). Firmware that has a watchdog for
+the OS lists it in the WDAT table as register operations per action
+(stop, set the count, reload, start, reboot on expiry); Windows' WdatWdt
+runs them without knowing the chipset, and so does NovaOS. An update's
+first start now runs under `hal/watchdog.h`: the WDAT watchdog when the
+table is there and enabled, else the ICH9 TCO timer as before. The
+operations reach memory, I/O ports and PCI configuration space of bus 0
+(the Generic Address Structure's space 2). `UpdateBootWatch` moved after
+`AcpiInitialize`, since the table is found through the RSDP. The
+Terminal's `watchdog` says which one NovaOS would use; `watchdog test`
+starts it and never reloads it, so the PC resets.
+
+**Reset this PC, keeping your files** (`kernel/fs/reset.c`), as Windows'
+"Keep my files": `systemreset /keep` in the Terminal, or Reset PC in
+Settings > System > Recovery, leaves `C:\Windows\System32\Recovery\ResetPC.req`
+and restarts. The next start, before any program runs and right after
+the registry loads:
+
+1. Drive C: loses everything outside the profiles: `C:\Users`, and the
+   first account's folders at the top of C: (`Desktop`, `Documents`, ...,
+   `AppData`, since its profile is `C:\` itself: `um_accounts.c`). NovaOS's
+   own files (sealed: they come from the OS image at every start) stay,
+   and starter files are removed without being remembered as deleted, so
+   they come back as they were. Starter files the user deleted outside the
+   profiles come back too.
+2. The registry goes back to its defaults except the accounts
+   (`HKLM\SAM`), their `ProfileList`, the last account signed in
+   (`LogonUI`) and Setup's first-boot answers, so the Welcome screens do
+   not run again (`um_registry_reset`).
+3. A report goes to `C:\Windows\Logs\SystemReset\ResetReport.txt`, and
+   once interrupts are on the PC restarts once more (the failed-start
+   count cleared first, since this start restarts before the desktop on
+   purpose).
+
+The kernel on the EFI System Partition stays the version installed:
+reinstalling NovaOS itself, keeping drive C:, or erasing everything is
+Setup's job ([installer.md](installer.md)). "Remove everything" and a
+cloud download are not offered.
+
+**Settings > System > Recovery** has two rows: Reset this PC (Reset PC,
+then Reset to confirm) and Advanced startup (Restart now: the same
+request as `shutdown /r /o`, `RecoveryRequestMenu`, then a restart).
+
+### The boot test, continued
+
+`rollbacktest` now also hands QEMU a WDAT table describing the ICH9 TCO
+timer (`tools/mkwdat.py`, as firmware on such boards describes it): the
+Terminal's `watchdog` reports it, and `watchdog test` resets the PC
+through it. Then a file goes into `C:\Documents`, a folder at the top of
+C: and a changed update channel, `systemreset /keep` restarts twice, and
+the file is still there while the folder and the setting are gone.
 
 The Advanced startup menu is separate from the boot menu step 33.4 part 2
 added (`bootloader/src/bootmenu.c`, which lists Windows Boot Manager when

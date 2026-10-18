@@ -1084,8 +1084,12 @@ servicing and print models Windows apps and drivers already expect.
   safe mode (NovaOS's own drivers and the firmware's framebuffer) and
   startup repair (boot files put back from the known-good set, an
   unfinished update removed, a report in `SrtTrail.txt`); the devices
-  suite's `rollbacktest` boot starts each. Later: Reset this PC, the ACPI
-  WDAT watchdog and a Settings button for Advanced startup (design in
+  suite's `rollbacktest` boot starts each.
+  Leftovers: the firmware's ACPI WDAT watchdog drives the hang watch where
+  the firmware describes one (else the TCO timer), Reset this PC removes
+  apps and settings and keeps the accounts and their files, and Settings >
+  System > Recovery has Reset PC and Advanced startup's Restart now; the
+  `rollbacktest` boot checks the first two (design in
   [design/recovery.md](design/recovery.md)).
 - [x] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an

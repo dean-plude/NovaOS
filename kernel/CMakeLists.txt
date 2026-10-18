@@ -141,6 +141,8 @@ set(KERNEL_C_SOURCES
     hal/ioapic.c
     hal/hpet.c
     hal/tco.c
+    hal/wdat.c
+    hal/watchdog.c
     hal/display.c
     hal/firmware.c
     hal/efi.c
@@ -183,6 +185,7 @@ set(KERNEL_C_SOURCES
     fs/bootfiles.c
     fs/update.c
     fs/recovery.c
+    fs/reset.c
     fs/bootlog.c
     net/net.c
     net/tls.c

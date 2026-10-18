@@ -112,6 +112,12 @@ bool TcoStart(UINT32 seconds)
 
 bool TcoRunning(void) { return g_running; }
 
+bool TcoPresent(void)
+{
+    PciDevice d;
+    return g_tco || PciFind(0x8086, g_lpc_ids, (int)(sizeof(g_lpc_ids) / sizeof(g_lpc_ids[0])), &d);
+}
+
 void TcoReload(void)
 {
     if (!g_running) return;

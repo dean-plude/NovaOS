@@ -1,6 +1,7 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
  *               storage, network, accounts, time & language, printers and about pages
+ *               (System has Recovery: Reset this PC and Advanced startup)
  */
 
 #include "apps.h"
@@ -14,6 +15,8 @@
 #include "../wm/desktop.h"
 #include "../wm/kbdlayout.h"
 #include "../fs/persist.h"
+#include "../fs/recovery.h"
+#include "../fs/reset.h"
 #include "../hal/display.h"
 #include "../um/um.h"
 #include "../drivers/audio.h"
@@ -63,6 +66,8 @@ typedef struct {
     char acc_text[3][UM_PASSWORD_MAX + 1];   /* ... its fields (wiped when it closes) */
     char acc_err[96];                /* ... why it was refused */
     char acc_note[96];               /* ... what the last change did */
+    bool rec_ask;                    /* System, Recovery: "Reset this PC" waits for its confirmation */
+    char rec_note[96];               /* ... why a button did nothing */
     UINT32 prn_gen;                  /* Printers: the registry generation shown */
     bool prn_focus;                  /* ... typing an address to add */
     char prn_text[160];              /* ... the address */
@@ -119,6 +124,60 @@ static void page_system(int x, int y, int w)
     row(x, y, w, "Installed memory", mem);    y += 50;
     row(x, y, w, "System type", "64-bit operating system, x64 processor"); y += 50;
     row(x, y, w, "Uptime", up);
+}
+
+/* System's Recovery, REC_DY below the page's top (set_mouse finds its
+ * buttons with the same numbers): Reset this PC (keeping your files,
+ * fs/reset.h) and Advanced startup (the boot loader's menu, fs/recovery.h),
+ * as in Windows' Settings > System > Recovery */
+#define REC_DY 324
+#define REC_BTN_W 120
+
+static GdiRect r_rec_reset(int x, int y, int w)   { return RECT(x + w - 8 - REC_BTN_W, y + REC_DY + 28 + 6, REC_BTN_W, 32); }
+static GdiRect r_rec_cancel(int x, int y, int w)  { return RECT(x + w - 16 - 2 * REC_BTN_W, y + REC_DY + 28 + 6, REC_BTN_W, 32); }
+static GdiRect r_rec_restart(int x, int y, int w) { return RECT(x + w - 8 - REC_BTN_W, y + REC_DY + 28 + 50 + 6, REC_BTN_W, 32); }
+
+static void rec_row(int x, int y, int w, const char *label, const char *about, int buttons)
+{
+    GdiRoundRect(RECT(x, y, w, 44), 6, UI_CARD, GDI_TRANSPARENT);
+    GdiTextT(x + 16, y + 14, label, UI_TEXT);
+    int ax = x + 16 + GdiTextW(label) + 16;
+    if (ax + GdiTextW(about) < x + w - 16 - buttons * (REC_BTN_W + 8)) GdiTextT(ax, y + 14, about, UI_TEXT2);
+}
+
+static void page_recovery(Settings *st, int x, int y, int w)
+{
+    int ry = y + REC_DY;
+    GdiTextT(x, ry, "Recovery", UI_TEXT);
+    ry += 28;
+    if (st->rec_ask) {
+        rec_row(x, ry, w, "Reset this PC?", "Apps and settings are removed; your files and accounts stay.", 2);
+        UiButton(r_rec_cancel(x, y, w), "Cancel", false);
+        UiButton(r_rec_reset(x, y, w), "Reset", true);
+    } else {
+        rec_row(x, ry, w, "Reset this PC", "Remove apps and settings, keep your files", 1);
+        UiButton(r_rec_reset(x, y, w), "Reset PC", false);
+    }
+    ry += 50;
+    rec_row(x, ry, w, "Advanced startup", "Restart into safe mode, startup repair or the previous version", 1);
+    UiButton(r_rec_restart(x, y, w), "Restart now", false);
+    if (st->rec_note[0]) GdiTextT(x, ry + 54, st->rec_note, UI_TEXT2);
+}
+
+static void recovery_click(Settings *st, int x, int y, int px, int py, int pw)
+{
+    if (UiHit(r_rec_restart(px, py, pw), x, y)) {
+        st->rec_ask = false;
+        if (RecoveryRequestMenu()) DesktopPowerRequest(POWER_RESTART);
+        else ksnprintf(st->rec_note, sizeof(st->rec_note), "Advanced startup needs NovaOS installed on a disk.");
+    } else if (UiHit(r_rec_reset(px, py, pw), x, y)) {
+        if (!st->rec_ask) { st->rec_ask = true; st->rec_note[0] = '\0'; return; }
+        st->rec_ask = false;
+        if (ResetRequest()) DesktopPowerRequest(POWER_RESTART);
+        else ksnprintf(st->rec_note, sizeof(st->rec_note), "Drive C: is not kept on a disk: there is nothing to reset.");
+    } else if (st->rec_ask && UiHit(r_rec_cancel(px, py, pw), x, y)) {
+        st->rec_ask = false;
+    }
 }
 
 /* Display page: with more than one monitor, an arrangement of them on top
@@ -1527,7 +1586,7 @@ static void set_paint(WND *w)
     GdiTextLarge(x, y, g_pages[st->page], UI_TEXT);
     y += 52;
     switch (st->page) {
-    case SETTINGS_SYSTEM:      page_system(x, y, w2);     break;
+    case SETTINGS_SYSTEM:      page_system(x, y, w2); page_recovery(st, x, y, w2); break;
     case SETTINGS_DISPLAY:     page_display(st, x, y, w2); break;
     case SETTINGS_SOUND:       page_sound(st, x, y, w2);   break;
     case SETTINGS_PERSONALIZE: page_personalize(st, c, x, y, w2); break;
@@ -1626,12 +1685,16 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
             set_locale(g_formats[i].name);
             return;
         }
+        if (st->page == SETTINGS_SYSTEM) recovery_click(st, x, y, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56);
         if (st->page == SETTINGS_PERSONALIZE) personalize_click(st, x, y);
         if (st->page == SETTINGS_ACCOUNTS) accounts_click(st, x, y);
         return;
     }
     int i = (y - 64) / ITEM_H;
-    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; st->prn_focus = false; if (st->acc_form) acc_close(st, NULL); }
+    if (y >= 64 && i >= 0 && i < N_PAGES) {
+        st->page = i; st->net_edit = false; st->prn_focus = false; st->rec_ask = false;
+        if (st->acc_form) acc_close(st, NULL);
+    }
 }
 
 static void set_key(WND *w, const KeyEvent *k)

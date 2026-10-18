@@ -72,6 +72,7 @@
 #include "../fs/initrd.h"
 #include "../fs/update.h"
 #include "../fs/recovery.h"
+#include "../fs/reset.h"
 #include "../fs/setup.h"
 #include "../fs/bootfiles.h"
 #include "../fs/ramfs.h"
@@ -408,9 +409,9 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
 
     /* Devices and networking: PCI scan, e1000 NIC, lwIP + DHCP */
     PciInitialize();
-    UpdateBootWatch();                    /* an update's first start: the watchdogs (fs/update.h) */
     PnpInit();                            /* the Plug and Play device tree: root, PCI functions */
     AcpiInitialize(rsdp);                 /* power-off, reset, the power button; MADT for SMP */
+    UpdateBootWatch();                    /* an update's first start: the watchdogs (fs/update.h; WDAT needs ACPI) */
     IoApicInit();                         /* (masked; the SCI is routed when the interpreter loads) */
     AmlInitialize();                      /* the AML interpreter (a thread): batteries, buttons */
     DisplayInit(&boot_fb);               /* display adapter: modes, page flipping */
@@ -478,6 +479,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
 
     UpdateBootDone();                     /* finish (or undo) the update this start tried */
     RecoveryBootDone();                   /* startup repair, when it was chosen */
+    ResetBootDone();                      /* the restart after Reset this PC */
     kprintf("[NovaOS] Entering kernel main loop\n");
 
     bkl_release();                        /* the idle loop needs no lock */

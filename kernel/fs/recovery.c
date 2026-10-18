@@ -55,9 +55,8 @@ bool RecoverySafeMode(void) { return (g_flags & BOOT_FLAG_SAFE_MODE) != 0; }
 /* ---------------------------------------------------------------------------
  * The failed-start count and the request for the menu
  * ------------------------------------------------------------------------- */
-static void good_thread(void *arg)
+void RecoveryClearFailedStarts(void)
 {
-    (void)arg;
     UINT32 dir;
     FatVol *esp = UpdateEspOpen(&dir);
     if (!esp) return;
@@ -71,6 +70,12 @@ static void good_thread(void *arg)
         kprintf("[RECOVERY] NovaOS reached the desktop: the failed-start count is cleared\n");
     }
     UpdateEspClose(esp);
+}
+
+static void good_thread(void *arg)
+{
+    (void)arg;
+    RecoveryClearFailedStarts();
 }
 
 void RecoveryStartGood(void)

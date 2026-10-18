@@ -40,6 +40,10 @@ void PersistPoll(void);
  * changed, not while the disk is written. */
 bool PersistSync(void);
 
+/* Reset this PC (fs/reset.c): forget the deleted starter files @keep
+ * says no to, so they come back at the next start */
+void PersistForgetDeleted(bool (*keep)(const char *path));
+
 /* One line describing where C: is saved, e.g. "sata0 FAT32 NOVADATA, 12 MiB free" */
 void PersistDescribe(char *buf, int cap);
 bool PersistActive(void);

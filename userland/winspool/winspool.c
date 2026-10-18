@@ -1031,6 +1031,7 @@ SPLAPI BOOL WINAPI AbortPrinter(HANDLE h)
 
 static const WCHAR *job_status_text(DWORD st)
 {
+    if (st & JOB_STATUS_OFFLINE) return L"Printer offline";
     if (st & JOB_STATUS_ERROR) return L"Error";
     if (st & JOB_STATUS_PAUSED) return L"Paused";
     if (st & JOB_STATUS_PRINTING) return L"Printing";

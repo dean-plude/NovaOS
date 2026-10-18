@@ -15,9 +15,17 @@
  *                       winspool asked for one with Save As)
  *   a file path         that file (a local port named after a file)
  *   nul:                nowhere
- * Any other port (a network printer's) leaves the job in the queue with
- * an error: IPP printing is the next piece (docs/design/printing.md).
- * A paused printer or job keeps its jobs waiting.
+ *   http://, https://,  an IPP printer on the network (spoolsv/ipp.c): the
+ *   ipp://, ipps://     job goes with Print-Job, as PDF or PWG Raster; a
+ *                       printer that does not answer keeps the job, which
+ *                       is tried again every 30 s
+ * Any other port leaves the job in the queue with an error.  A paused
+ * printer or job keeps its jobs waiting.
+ *
+ * Printers added by Settings > Printers carry "Pending Setup": the spooler
+ * asks such a printer for its attributes (Get-Printer-Attributes), names
+ * it after its make and model, as Windows' "Add a printer" does, and
+ * records its location.
  *
  * The kernel makes the service's key at boot (automatic start), and the
  * Microsoft Print to PDF printer's key.
@@ -30,6 +38,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include <stdlib.h>
+#include "spoolsv/ipp.h"
 
 static SERVICE_STATUS_HANDLE g_status;
 static SERVICE_STATUS g_st;
@@ -39,6 +49,10 @@ static HANDLE g_work;                      /* set: a job may be ready to print *
 static SplJob g_jobs[NOVA_SPL_MAX_JOBS];
 static int g_njobs;
 static DWORD g_next_id = 1;
+static DWORD g_retry_at;                   /* GetTickCount when network jobs are tried again */
+
+#define RETRY_MS 30000
+#define DEVICE_KEY L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows"
 
 static void say(const char *fmt, ...)
 {
@@ -121,6 +135,7 @@ static void reload(void)
         if (ok && j.id >= g_next_id) g_next_id = j.id + 1;
         if (ok && j.complete && g_njobs < NOVA_SPL_MAX_JOBS) {
             j.status &= ~(JOB_STATUS_PRINTING | JOB_STATUS_SPOOLING);
+            if (j.status & JOB_STATUS_OFFLINE) j.status &= ~(JOB_STATUS_ERROR | JOB_STATUS_OFFLINE);   /* (tried again) */
             g_jobs[g_njobs++] = j;
             say("Job %lu \"%ls\" from before the last stop waits to print", (unsigned long)j.id, j.document);
         } else if (ok) {
@@ -158,6 +173,57 @@ static BOOL path_port(const WCHAR *p)
     return (p[0] && p[1] == ':' && (p[2] == '\\' || p[2] == '/')) || (p[0] == '\\' && p[1] == '\\');
 }
 
+/* Set or clear @bit of a printer's Status (PRINTER_STATUS_OFFLINE...) */
+static void printer_status(const WCHAR *name, DWORD bit, BOOL on)
+{
+    WCHAR path[300];
+    HKEY k;
+    swprintf(path, 300, L"%ls\\%ls", NOVA_SPL_PRINTERS, name);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_WRITE, &k)) return;
+    DWORD st = 0, type, cb = sizeof st;
+    if (RegQueryValueExW(k, L"Status", 0, &type, (BYTE *)&st, &cb) || type != REG_DWORD) st = 0;
+    DWORD ns = on ? st | bit : st & ~bit;
+    if (ns != st) RegSetValueExW(k, L"Status", 0, REG_DWORD, (const BYTE *)&ns, sizeof ns);
+    RegCloseKey(k);
+}
+
+/* A job on an IPP printer: 1 printed, 2 printed and kept, 0 failed, 3 the
+ * printer did not answer (tried again later) */
+static int print_ipp(const SplJob *j, const WCHAR *port, const WCHAR *spl, DWORD attrs)
+{
+    HANDLE f = CreateFileW(spl, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        say("Job %lu \"%ls\": its spool file is gone", (unsigned long)j->id, j->document);
+        return 0;
+    }
+    DWORD size = GetFileSize(f, NULL), got = 0;
+    BYTE *data = malloc(size ? size : 1);
+    BOOL ok = data && ReadFile(f, data, size, &got, NULL) && got == size;
+    CloseHandle(f);
+    if (!ok) {
+        free(data);
+        say("Job %lu \"%ls\": its spool file cannot be read", (unsigned long)j->id, j->document);
+        return 0;
+    }
+    IppPrinter pr;
+    char why[300];
+    const char *format = "";
+    DWORD err = ipp_attributes(port, &pr, why, sizeof why);
+    if (!err) err = ipp_print(port, &pr, j->document, j->user, data, size, &format, why, sizeof why);
+    free(data);
+    BOOL unreachable = err && err != ERROR_NOT_SUPPORTED && err != ERROR_INVALID_DATA && err != ERROR_BAD_NET_RESP &&
+                       err != ERROR_NOT_ENOUGH_MEMORY;
+    printer_status(j->printer, PRINTER_STATUS_OFFLINE, unreachable);
+    if (err) {
+        say("Job %lu \"%ls\" on %ls: %s%s", (unsigned long)j->id, j->document, j->printer, why,
+            unreachable ? " (tried again in 30 s)" : "");
+        return unreachable ? 3 : 0;
+    }
+    say("Printed job %lu \"%ls\" on %ls: %lu pages, %lu bytes to %ls as %s", (unsigned long)j->id, j->document,
+        j->printer, (unsigned long)j->pages, (unsigned long)size, port, format);
+    return (attrs & PRINTER_ATTRIBUTE_KEEPPRINTEDJOBS) ? 2 : 1;
+}
+
 /* Send job @j (a copy) to its port: 1 printed, 0 failed (stays, with an error), -1 not yet */
 static int print_job(const SplJob *j)
 {
@@ -174,6 +240,7 @@ static int print_job(const SplJob *j)
     else if (path_port(port)) dest = j->output[0] ? j->output : port;
     else if (!_wcsicmp(port, L"nul:") || !_wcsicmp(port, L"NUL")) dest = L"";
     else if (j->output[0]) dest = j->output;          /* (printing to a file instead of the port) */
+    else if (ipp_is_port(port)) return print_ipp(j, port, spl, attrs);
     if (!dest) {
         say("Job %lu \"%ls\": port %ls is not supported yet", (unsigned long)j->id, j->document, port);
         return 0;
@@ -188,11 +255,113 @@ static int print_job(const SplJob *j)
     return (attrs & PRINTER_ATTRIBUTE_KEEPPRINTEDJOBS) ? 2 : 1;
 }
 
+/* -----------------------------------------------------------------------
+ * Network printers Settings added ("Pending Setup")
+ * ----------------------------------------------------------------------- */
+/* Rename printer @from to @to (its key and, if it was, the default) */
+static BOOL rename_printer(const WCHAR *from, const WCHAR *to)
+{
+    HKEY root, src, dst;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, NOVA_SPL_PRINTERS, 0, KEY_ALL_ACCESS, &root)) return FALSE;
+    BOOL ok = FALSE;
+    if (!RegOpenKeyExW(root, to, 0, KEY_READ, &dst)) { RegCloseKey(dst); RegCloseKey(root); return FALSE; }
+    if (!RegOpenKeyExW(root, from, 0, KEY_READ, &src)) {
+        if (!RegCreateKeyExW(root, to, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &dst, NULL)) {
+            ok = !RegCopyTreeW(src, NULL, dst);
+            if (ok) RegSetValueExW(dst, L"Name", 0, REG_SZ, (const BYTE *)to, (DWORD)(wcslen(to) + 1) * sizeof(WCHAR));
+            RegCloseKey(dst);
+        }
+        RegCloseKey(src);
+    }
+    if (ok) RegDeleteTreeW(root, from);
+    else RegDeleteTreeW(root, to);
+    RegCloseKey(root);
+    HKEY k;
+    if (ok && !RegOpenKeyExW(HKEY_CURRENT_USER, DEVICE_KEY, 0, KEY_READ | KEY_WRITE, &k)) {
+        WCHAR dev[400], type_name[NOVA_SPL_NAME + 2];
+        DWORD type, cb = sizeof dev;
+        swprintf(type_name, NOVA_SPL_NAME + 2, L"%ls,", from);
+        if (!RegQueryValueExW(k, L"Device", 0, &type, (BYTE *)dev, &cb) && type == REG_SZ &&
+            !_wcsnicmp(dev, type_name, wcslen(type_name))) {
+            WCHAR nd[400];
+            swprintf(nd, 400, L"%ls%ls", to, dev + wcslen(from));
+            RegSetValueExW(k, L"Device", 0, REG_SZ, (const BYTE *)nd, (DWORD)(wcslen(nd) + 1) * sizeof(WCHAR));
+        }
+        RegCloseKey(k);
+    }
+    return ok;
+}
+
+static void setup_printer(const WCHAR *name)
+{
+    WCHAR path[300], port[MAX_PATH];
+    DWORD status, attrs;
+    HKEY k;
+    if (!printer_info(name, port, &status, &attrs)) return;
+    swprintf(path, 300, L"%ls\\%ls", NOVA_SPL_PRINTERS, name);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_WRITE, &k)) return;
+    RegDeleteValueW(k, L"Pending Setup");
+    IppPrinter pr;
+    char why[300];
+    DWORD err = ipp_is_port(port) ? ipp_attributes(port, &pr, why, sizeof why) : ERROR_NOT_SUPPORTED;
+    if (err) {
+        RegCloseKey(k);
+        printer_status(name, PRINTER_STATUS_OFFLINE, TRUE);
+        say("Network printer \"%ls\" at %ls: %s", name, port, err == ERROR_NOT_SUPPORTED ? "not an IPP printer" : why);
+        return;
+    }
+    WCHAR loc[128], model[NOVA_SPL_NAME - 8];
+    MultiByteToWideChar(CP_UTF8, 0, pr.location, -1, loc, 128);
+    MultiByteToWideChar(CP_UTF8, 0, pr.model[0] ? pr.model : pr.info, -1, model, NOVA_SPL_NAME - 8);
+    if (loc[0]) RegSetValueExW(k, L"Location", 0, REG_SZ, (const BYTE *)loc, (DWORD)(wcslen(loc) + 1) * sizeof(WCHAR));
+    RegCloseKey(k);
+    printer_status(name, PRINTER_STATUS_OFFLINE, FALSE);
+    /* named after its make and model ("... (2)" when that name is taken) */
+    WCHAR want[NOVA_SPL_NAME];
+    BOOL named = FALSE;
+    for (int i = 1; model[0] && i < 10 && !named; i++) {
+        if (i == 1) swprintf(want, NOVA_SPL_NAME, L"%ls", model);
+        else swprintf(want, NOVA_SPL_NAME, L"%ls (%d)", model, i);
+        named = !_wcsicmp(want, name) || rename_printer(name, want);
+    }
+    say("Added network printer \"%ls\" at %ls: %s%s%s", named ? want : name, port,
+        pr.pdf ? "PDF" : pr.pwg ? "PWG Raster" : "raw data", pr.location[0] ? ", in " : "", pr.location);
+}
+
+static void setup_printers(void)
+{
+    WCHAR names[16][NOVA_SPL_NAME];
+    int n = 0;
+    HKEY root;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, NOVA_SPL_PRINTERS, 0, KEY_READ, &root)) return;
+    for (DWORD i = 0; n < 16; i++) {
+        WCHAR name[NOVA_SPL_NAME];
+        DWORD cch = NOVA_SPL_NAME, v = 0, type, cb = sizeof v;
+        HKEY k;
+        if (RegEnumKeyExW(root, i, name, &cch, 0, 0, 0, 0)) break;
+        if (RegOpenKeyExW(root, name, 0, KEY_READ, &k)) continue;
+        if (!RegQueryValueExW(k, L"Pending Setup", 0, &type, (BYTE *)&v, &cb) && type == REG_DWORD && v)
+            memcpy(names[n++], name, sizeof name);
+        RegCloseKey(k);
+    }
+    RegCloseKey(root);
+    for (int i = 0; i < n; i++) setup_printer(names[i]);
+}
+
 static DWORD WINAPI worker(LPVOID arg)
 {
     (void)arg;
     while (!g_stop) {
         WaitForSingleObject(g_work, 2000);
+        setup_printers();
+        if (g_retry_at && (LONG)(GetTickCount() - g_retry_at) >= 0) {
+            /* network printers that did not answer: their jobs again */
+            g_retry_at = 0;
+            EnterCriticalSection(&g_lock);
+            for (int i = 0; i < g_njobs; i++)
+                if (g_jobs[i].status & JOB_STATUS_OFFLINE) g_jobs[i].status &= ~(JOB_STATUS_ERROR | JOB_STATUS_OFFLINE);
+            LeaveCriticalSection(&g_lock);
+        }
         for (;;) {
             SplJob j;
             BOOL have = FALSE;
@@ -215,6 +384,11 @@ static DWORD WINAPI worker(LPVOID arg)
                 if (r == 1 || (c->status & JOB_STATUS_DELETING)) remove_job(j.id);
                 else if (r == 2) { c->status |= JOB_STATUS_PRINTED; save_shadow(c); }
                 else if (r == 0) { c->status |= JOB_STATUS_ERROR; save_shadow(c); }
+                else if (r == 3) {
+                    c->status |= JOB_STATUS_ERROR | JOB_STATUS_OFFLINE;
+                    save_shadow(c);
+                    if (!g_retry_at) g_retry_at = GetTickCount() + RETRY_MS;
+                }
             }
             LeaveCriticalSection(&g_lock);
             if (r < 0) break;                      /* (a paused printer: look again later) */

@@ -27,9 +27,10 @@ winspool.drv ── \\.\pipe\spoolss (novaspool.h) ──> spoolsv.exe ─┘
   `NNNNN.SHD` holding the job), counts their pages and, when a job is
   complete, sends it to its printer's port and deletes it. Jobs that were
   complete when the computer stopped print after the next start, as on
-  Windows. A paused printer or job keeps its jobs waiting. The ports it
-  sends to so far: `PORTPROMPT:` and `FILE:` (the job's output file), a file
-  path (a local port named after a file) and `nul:`.
+  Windows. A paused printer or job keeps its jobs waiting. The local ports
+  it sends to: `PORTPROMPT:` and `FILE:` (the job's output file), a file
+  path (a local port named after a file) and `nul:`; network printers are
+  below.
 - **`winspool.drv`** (`userland/winspool/winspool.c`): the printers are the
   keys under `HKLM\SYSTEM\CurrentControlSet\Control\Print\Printers`, as on
   Windows (`Name`, `Port`, `Printer Driver`, `Attributes`...), and the
@@ -78,6 +79,63 @@ winspool.drv ── \\.\pipe\spoolss (novaspool.h) ──> spoolsv.exe ─┘
   checks that the installed PDF printer is listed, is the default and
   opens.
 
+## Network printers (part 2)
+
+```
+spoolsv.exe ── an ipp:// ipps:// http:// https:// port (spoolsv/ipp.c)
+   │  Get-Printer-Attributes: make and model, location, state,
+   │      document formats, PWG Raster resolutions and colour spaces
+   └─ Print-Job over WinHTTP (POST application/ipp):
+        PDF printer      the job's PDF as it is
+        PWG Raster only  the PDF's page images ─ inflate ─ scale to a
+                         resolution the printer has ─ PWG Raster lines
+        raw job          application/octet-stream
+```
+
+- **The IPP port** (`userland/programs/spoolsv/ipp.c`). A printer whose
+  port is an `ipp://`, `ipps://`, `http://` or `https://` URL is an IPP
+  printer (RFC 8010/8011; IPP Everywhere, PWG 5100.14), Windows'
+  "Microsoft IPP Class Driver". `ipp://host/path` is `http://host:631/path`
+  and `ipps://` the same over TLS; a printer's self-signed certificate is
+  accepted, as CUPS and Windows accept them. Before each job the spooler
+  asks the printer for its attributes, then sends the job with
+  `Print-Job`: a PDF as it is when `document-format-supported` has
+  `application/pdf`, else PWG Raster (PWG 5102.4) when it has
+  `image/pwg-raster`, at the printer's resolution nearest the page's
+  (pixels scaled), sRGB or, for a grey-only printer, sGray; raw jobs go
+  as `application/octet-stream`. A printer that does not answer marks the
+  printer offline (`PRINTER_STATUS_OFFLINE`) and its job
+  `JOB_STATUS_ERROR | JOB_STATUS_OFFLINE`; the spooler tries such jobs
+  again every 30 seconds. A printer that refuses a job (a format it does
+  not take) leaves it in error.
+- **PWG Raster from the PDF.** gdi32's driver writes each page as one RGB
+  image (Flate), so the spooler reads its own PDFs back: each page's
+  MediaBox and image, inflated with stb_image's zlib decoder (public
+  domain/MIT, `third_party/stb`, already in the tree). Lines are encoded
+  as PWG Raster's runs (a repeated pixel or up to 128 literal pixels) with
+  a repeat count for equal lines, so a mostly white page is small. Only
+  NovaOS's own PDFs (its producer string) are turned into raster; a PDF
+  from elsewhere goes to a PDF printer only.
+- **Settings > Printers** (`kernel/apps/settings.c`) lists the printers
+  with their state (Ready, Paused, Offline, Setting up) and location, sets
+  the default (`HKCU ...\Windows` `Device`), removes a printer (its key)
+  and adds a network printer by its IP address, host name or URL: the
+  printer's key on the IPP port with the IPP class driver and a
+  `Pending Setup` value. The spooler sees that value within two seconds,
+  asks the printer for its attributes, renames the key after
+  `printer-make-and-model` ("... (2)" when taken), records
+  `printer-location` and keeps the default pointing at it, as Windows' Add
+  a printer names a printer after its model.
+- **The test**: `spooltest ipp http://10.0.2.2:18631` in the network
+  suite, against `tools/ippprinter.py` on the CI host (two fake IPP
+  Everywhere printers that hand back what they printed): a printer added
+  with `AddPrinter` gets the PDF of two GDI pages byte for byte (the same
+  bytes Microsoft Print to PDF writes for the same pages) and a raw job
+  unchanged; a printer added the way Settings adds one is renamed after
+  its model and, taking only PWG Raster, gets a page whose decoded pixels
+  must be exactly what GDI draws; a printer nobody answers for keeps its
+  job, offline.
+
 ### Choices
 
 - **The spooler protocol.** Windows' winspool speaks MS-RPRN RPC to the
@@ -104,21 +162,16 @@ winspool.drv ── \\.\pipe\spoolss (novaspool.h) ──> spoolsv.exe ─┘
 
 ## To do
 
-1. **IPP Everywhere / driverless network printing** (Windows' "Microsoft
-   IPP Class Driver", its default for modern printers since 2022): an
-   `http://` or `ipp://` port in the spooler sends the job with an IPP
-   Print-Job request over NovaOS's TCP stack (as PDF, or PWG Raster when
-   the printer takes only that), reads the printer's attributes
-   (`Get-Printer-Attributes`) for its paper sizes and status, and finds
-   printers with DNS-SD (`_ipp._tcp`). Test: a fake IPP printer served by
-   the CI host takes a job and the test compares what it got with a
-   reference file.
-2. **Settings > Printers**: the printers, the default, adding an IPP
-   printer by address, the queue (pause, cancel), print a test page.
-3. **The "Done when" check**: Notepad and SumatraPDF list the printer and
-   print a page to the PDF printer and to the IPP printer in the app
-   corpus, and the output matches a reference file.
-4. **Later**: EMF spooling and a PDF with real text (selectable, smaller);
+1. **The "Done when" check**: Notepad and SumatraPDF list the printer and
+   print a page to the PDF printer and to the IPP printer (the test host's
+   `tools/ippprinter.py`) in the app corpus, and the output matches a
+   reference file. This ticks step 33.5.
+2. **Finding printers**: DNS-SD (`_ipp._tcp`, `_ipps._tcp` over mDNS) and
+   WS-Discovery, so Settings lists the printers on the network instead of
+   asking for an address; the queue in Settings (pause, cancel) and a test
+   page; Apple's URF raster for AirPrint-only printers; IPP job state
+   (`Get-Job-Attributes`) shown in the queue.
+3. **Later**: EMF spooling and a PDF with real text (selectable, smaller);
    real user-mode vendor drivers (v4 / XPS print path) under the Windows
    driver model rules ([windows-drivers.md](windows-drivers.md)); print
    processors; WIA scanning.

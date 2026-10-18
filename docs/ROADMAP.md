@@ -1087,6 +1087,14 @@ servicing and print models Windows apps and drivers already expect.
   print a page to the PDF printer and to an IPP printer served by a test
   host in CI, and the output matches a reference file (self-test
   `spooltest`); WIA scanning is a follow-up.
+  Part 1: the Print Spooler service, `winspool.drv`, Microsoft Print to
+  PDF and the print dialogs (`spooltest`). Part 2: driverless network
+  printing (IPP ports in the spooler sending PDF or PWG Raster, offline
+  printers keeping their jobs) and Settings > Printers (add a network
+  printer by address, named after its model; default; remove), tested
+  against a fake IPP printer on the CI host (`spooltest ipp`). Next: the
+  Notepad and SumatraPDF check in the app corpus
+  ([design/printing.md](design/printing.md)).
 
 ## Cross-cutting (maintain throughout)
 

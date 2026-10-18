@@ -1,6 +1,6 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, time & language and about pages
+ *               storage, network, time & language, printers and about pages
  */
 
 #include "apps.h"
@@ -53,10 +53,16 @@ typedef struct {
     UINT32 thumbs_gen;               /* ... the wallpaper thumbnails shown (repainted when more are ready) */
     int nhits;                       /* ... what a click there does (set_paint records it) */
     PHit hits[PHITS_MAX];
+    UINT32 prn_gen;                  /* Printers: the registry generation shown */
+    bool prn_focus;                  /* ... typing an address to add */
+    char prn_text[160];              /* ... the address */
+    char prn_err[96];                /* ... why it was refused */
 } Settings;
 
-static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Time & language", "About" };
-static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_GEAR, GL_NOVA };
+static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Time & language",
+                                 "Printers", "About" };
+static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_GEAR, GL_PRINTER,
+                                       GL_NOVA };
 #define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
 
 /* A labelled row inside a card: "Label ........ value" */
@@ -624,6 +630,8 @@ static bool set_tick(WND *w)
         st->thumbs_gen = g;
         return true;
     }
+    if (st && st->page == SETTINGS_PRINTERS)                  /* a printer added, named, removed... */
+        return um_registry_generation() != st->prn_gen;
     if (st && st->page == SETTINGS_SOUND) {                   /* a device plugged in or out */
         SoundDevs d;
         sound_devs(&d);
@@ -930,6 +938,206 @@ static void set_locale(const char *name)
         kprintf("[SETTINGS] Cannot start intl.exe: %s\n", exe ? "out of memory" : "not installed");
 }
 
+/* Printers: the printers (the keys under HKLM\SYSTEM\CurrentControlSet\
+ * Control\Print\Printers, which winspool.drv and the Print Spooler keep),
+ * the default (HKCU ...\Windows NT\CurrentVersion\Windows "Device"), and
+ * a network printer added by its address: its key, on an IPP port with
+ * the Microsoft IPP Class Driver and "Pending Setup", after which the
+ * spooler asks the printer for its make and model, names it after them and
+ * records where it is (userland/programs/spoolsv.c).  Layout shared by
+ * set_paint + set_mouse. */
+#define PRN_KEY    "Machine\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers"
+#define PRN_DEVICE "User\\" UM_USER_SID "\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows"
+#define PRN_MAX    32
+#define PRN_SHOWN  5                 /* (the rows that fit above the Add form) */
+#define PRN_ROW_H  60
+typedef struct { char name[128], port[160], location[96]; UINT32 status; bool pending; } Prn;
+static Prn g_prn[PRN_MAX];
+
+static int prn_list(Prn *p, int cap)
+{
+    int n = 0;
+    for (UINT32 i = 0; n < cap; i++) {
+        UINT16 w[128];
+        int len = um_registry_enum_key(PRN_KEY, i, w, 127, NULL);
+        if (len < 0) break;
+        if (len > 127) continue;
+        Prn *q = &p[n];
+        memset(q, 0, sizeof(*q));
+        bool ascii = true;
+        for (int k = 0; k < len; k++) { if (w[k] < 0x20 || w[k] > 0x7E) ascii = false; q->name[k] = (char)w[k]; }
+        if (!ascii) continue;                   /* (the kernel's registry paths are ASCII) */
+        char path[300];
+        ksnprintf(path, sizeof(path), PRN_KEY "\\%s", q->name);
+        um_registry_get_sz(path, "Port", q->port, sizeof(q->port));
+        um_registry_get_sz(path, "Location", q->location, sizeof(q->location));
+        UINT32 v = 0;
+        if (um_registry_get_dword(path, "Status", &v)) q->status = v;
+        q->pending = um_registry_get_dword(path, "Pending Setup", &v) && v;
+        n++;
+    }
+    return n;
+}
+
+/* The default printer's name (as winspool.drv picks it: "Device", else the first printer) */
+static void prn_default(const Prn *p, int n, char *out, int cap)
+{
+    char dev[300];
+    out[0] = '\0';
+    if (um_registry_get_sz(PRN_DEVICE, "Device", dev, sizeof(dev))) {
+        char *comma = strchr(dev, ',');
+        if (comma) *comma = '\0';
+        for (int i = 0; i < n; i++) if (!strcmp(p[i].name, dev)) { strncpy(out, dev, (size_t)cap - 1); out[cap - 1] = '\0'; return; }
+    }
+    if (n) { strncpy(out, p[0].name, (size_t)cap - 1); out[cap - 1] = '\0'; }
+}
+
+static GdiRect r_prn_remove(int x, int y, int w, int i)  { return RECT(x + w - 16 - 96, y + i * PRN_ROW_H + 12, 96, 32); }
+static GdiRect r_prn_default(int x, int y, int w, int i) { return RECT(x + w - 16 - 96 - 12 - 136, y + i * PRN_ROW_H + 12, 136, 32); }
+static int prn_add_y(int y, int n) { return y + (n < 1 ? 1 : n > PRN_SHOWN ? PRN_SHOWN + 1 : n) * PRN_ROW_H + 8; }
+static GdiRect r_prn_box(int x, int ay, int w) { return RECT(x, ay + 70, w - 112, 32); }
+static GdiRect r_prn_add(int x, int ay, int w) { return RECT(x + w - 100, ay + 70, 100, 32); }
+
+static void page_printers(Settings *st, int x, int y, int w)
+{
+    Prn *p = g_prn;
+    int n = prn_list(p, PRN_MAX);
+    char def[128];
+    prn_default(p, n, def, sizeof(def));
+    st->prn_gen = um_registry_generation();
+    for (int i = 0; i < n && i < PRN_SHOWN; i++) {
+        int ry = y + i * PRN_ROW_H;
+        bool is_def = !strcmp(p[i].name, def);
+        GdiRoundRect(RECT(x, ry, w, PRN_ROW_H - 8), 8, UI_CARD, GDI_TRANSPARENT);
+        AppDrawGlyph(GL_PRINTER, x + 16, ry + 14, 24, UI_TEXT2);
+        GdiTextBold(x + 52, ry + 8, p[i].name, UI_TEXT);
+        char line[300];
+        const char *state = p[i].pending ? "Setting up..." : (p[i].status & 0x80) ? "Offline" :
+                            (p[i].status & 0x1) ? "Paused" : "Ready";
+        /* "Default - Ready - where it is" (or its port when it says nowhere) */
+        const char *where = p[i].location[0] ? p[i].location : strcmp(p[i].port, "PORTPROMPT:") ? p[i].port : "";
+        ksnprintf(line, sizeof(line), "%s%s%s%s", is_def ? "Default  -  " : "", state, where[0] ? "  -  " : "", where);
+        GdiTextT(x + 52, ry + 30, line, UI_TEXT2);
+        if (!is_def) UiButton(r_prn_default(x, y, w, i), "Set as default", false);
+        UiButton(r_prn_remove(x, y, w, i), "Remove", false);
+    }
+    if (!n) GdiTextT(x, y + 8, "No printers.", UI_TEXT2);
+    if (n > PRN_SHOWN) {
+        char more[64];
+        ksnprintf(more, sizeof(more), "and %d more", n - PRN_SHOWN);
+        GdiTextT(x + 16, y + PRN_SHOWN * PRN_ROW_H + 12, more, UI_TEXT2);
+    }
+    int ay = prn_add_y(y, n);
+    GdiTextBold(x, ay, "Add a network printer", UI_TEXT);
+    GdiTextT(x, ay + 24, "Its IP address or host name, or an ipp://, ipps:// or http:// address.", UI_TEXT2);
+    GdiTextT(x, ay + 44, "Printers that support IPP Everywhere (Mopria) print without a driver.", UI_TEXT2);
+    GdiRect b = r_prn_box(x, ay, w);
+    GdiRoundRect(b, 6, UI_BG, GDI_TRANSPARENT);
+    GdiRoundBorderAlpha(b, 6, st->prn_focus ? UI_ACCENT : GDI_WHITE, st->prn_focus ? 200 : 30);
+    if (st->prn_text[0] || st->prn_focus) GdiTextT(b.x + 10, b.y + (b.h - GDI_FONT_H) / 2, st->prn_text, UI_TEXT);
+    else GdiTextT(b.x + 10, b.y + (b.h - GDI_FONT_H) / 2, "192.168.1.20", UI_TEXT2);
+    if (st->prn_focus) GdiFillRect(RECT(b.x + 10 + GdiTextW(st->prn_text) + 1, b.y + 7, 2, b.h - 14), UI_ACCENT);
+    UiButton(r_prn_add(x, ay, w), "Add", true);
+    if (st->prn_err[0]) GdiTextT(x, ay + 112, st->prn_err, GDI_C(0xE0, 0x60, 0x60));
+}
+
+/* Add the printer whose address was typed */
+static void prn_add(Settings *st)
+{
+    char *t = st->prn_text;
+    while (*t == ' ') t++;
+    size_t tl = strlen(t);
+    while (tl && t[tl - 1] == ' ') t[--tl] = '\0';
+    st->prn_err[0] = '\0';
+    if (!*t) { strcpy(st->prn_err, "Type the printer's address."); return; }
+    char url[200];
+    const char *sep = strstr(t, "://");
+    if (sep) {
+        if (strncmp(t, "ipp://", 6) && strncmp(t, "ipps://", 7) && strncmp(t, "http://", 7) && strncmp(t, "https://", 8)) {
+            strcpy(st->prn_err, "The address must start with ipp://, ipps://, http:// or https://.");
+            return;
+        }
+        ksnprintf(url, sizeof(url), "%s", t);
+    } else {
+        ksnprintf(url, sizeof(url), strchr(t, '/') ? "ipp://%s" : "ipp://%s/ipp/print", t);
+    }
+    const char *host = strstr(url, "://") + 3;
+    char h[96];
+    int hn = 0;
+    while (host[hn] && host[hn] != '/' && host[hn] != ':' && hn < 95) { h[hn] = host[hn]; hn++; }
+    h[hn] = '\0';
+    if (!hn) { strcpy(st->prn_err, "The address has no host name."); return; }
+    for (const char *c = url; *c; c++)
+        if (*c == '\\' || *c == ',' || *c == ' ' || *c < 0x20 || *c > 0x7E) {
+            strcpy(st->prn_err, "The address cannot have spaces, commas or backslashes.");
+            return;
+        }
+    Prn *p = g_prn;
+    int n = prn_list(p, PRN_MAX);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(p[i].port, url)) { strcpy(st->prn_err, "That printer is already added."); return; }
+    char name[128], path[300];
+    for (int k = 1; k < 10; k++) {
+        if (k == 1) ksnprintf(name, sizeof(name), "Printer at %s", h);
+        else ksnprintf(name, sizeof(name), "Printer at %s (%d)", h, k);
+        ksnprintf(path, sizeof(path), PRN_KEY "\\%s", name);
+        if (!um_registry_key_exists(path)) break;
+    }
+    um_registry_set_sz(path, "Name", name);
+    um_registry_set_sz(path, "Port", url);
+    um_registry_set_sz(path, "Printer Driver", "Microsoft IPP Class Driver");
+    um_registry_set_sz(path, "Print Processor", "winprint");
+    um_registry_set_sz(path, "Datatype", "RAW");
+    um_registry_set_sz(path, "Description", "");
+    um_registry_set_sz(path, "Location", "");
+    um_registry_set_dword(path, "Attributes", 0x10);         /* PRINTER_ATTRIBUTE_NETWORK */
+    um_registry_set_dword(path, "Priority", 1);
+    um_registry_set_dword(path, "Pending Setup", 1);         /* (the spooler names it) */
+    kprintf("[SETTINGS] Added printer \"%s\" on %s\n", name, url);
+    st->prn_text[0] = '\0';
+    st->prn_focus = false;
+}
+
+static void prn_mouse(Settings *st, int x, int y, int w, int mx, int my)
+{
+    Prn *p = g_prn;
+    int n = prn_list(p, PRN_MAX);
+    char def[128];
+    prn_default(p, n, def, sizeof(def));
+    int ay = prn_add_y(y, n);
+    st->prn_focus = UiHit(r_prn_box(x, ay, w), mx, my);
+    if (UiHit(r_prn_add(x, ay, w), mx, my)) { prn_add(st); return; }
+    for (int i = 0; i < n && i < PRN_SHOWN; i++) {
+        char path[300];
+        ksnprintf(path, sizeof(path), PRN_KEY "\\%s", p[i].name);
+        bool is_def = !strcmp(p[i].name, def);
+        if (!is_def && UiHit(r_prn_default(x, y, w, i), mx, my)) {
+            char dev[300];
+            ksnprintf(dev, sizeof(dev), "%s,winspool,%s", p[i].name, p[i].port);
+            um_registry_set_sz(PRN_DEVICE, "Device", dev);
+            return;
+        }
+        if (UiHit(r_prn_remove(x, y, w, i), mx, my)) {
+            um_registry_delete_tree(path);
+            if (is_def) um_registry_delete_value(PRN_DEVICE, "Device");
+            kprintf("[SETTINGS] Removed printer \"%s\"\n", p[i].name);
+            return;
+        }
+    }
+}
+
+static void prn_key(Settings *st, const KeyEvent *k)
+{
+    if (k->scancode == KEY_ESC) { st->prn_focus = false; return; }
+    if (k->scancode == KEY_ENTER && !k->extended) { prn_add(st); return; }
+    size_t n = strlen(st->prn_text);
+    if (k->ch == '\b') { if (n) st->prn_text[n - 1] = '\0'; }
+    else if (!k->ctrl && !k->alt && k->ch > ' ' && k->ch < 0x7F && n < sizeof(st->prn_text) - 1) {
+        st->prn_text[n] = k->ch;
+        st->prn_text[n + 1] = '\0';
+    }
+}
+
 static void page_about(int x, int y, int w)
 {
     GdiTextLarge(x, y, "NovaOS", UI_TEXT);             y += 40;
@@ -971,6 +1179,7 @@ static void set_paint(WND *w)
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
     case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
+    case SETTINGS_PRINTERS:    page_printers(st, x, y, w2); break;
     case SETTINGS_ABOUT:       page_about(x, y, w2);      break;
     }
 }
@@ -1018,6 +1227,10 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
         net_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
         return;
     }
+    if (x >= SIDE_W && st->page == SETTINGS_PRINTERS) {
+        prn_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+        return;
+    }
     if (x >= SIDE_W) {
         if (st->page == SETTINGS_DISPLAY) {
             /* resolution chips (layout matches set_paint + page_display) */
@@ -1061,13 +1274,14 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
         return;
     }
     int i = (y - 64) / ITEM_H;
-    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; }
+    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; st->prn_focus = false; }
 }
 
 static void set_key(WND *w, const KeyEvent *k)
 {
     Settings *st = w->user;
     if (st->page == SETTINGS_NETWORK && st->net_edit) { if (k->pressed) net_key(st, k); return; }
+    if (st->page == SETTINGS_PRINTERS && st->prn_focus) { if (k->pressed) prn_key(st, k); return; }
     if (!k->extended) return;
     if (k->scancode == KEY_UP && st->page > 0) st->page--;
     if (k->scancode == KEY_DOWN && st->page < N_PAGES - 1) st->page++;

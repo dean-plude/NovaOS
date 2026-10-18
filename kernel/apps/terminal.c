@@ -59,7 +59,7 @@ static void mirror(const char *s, int n)
 }
 
 /* A network command in progress (advanced by term_tick) */
-typedef enum { JOB_NONE, JOB_PING, JOB_LOOKUP, JOB_FETCH, JOB_PROC, JOB_SETUP, JOB_UPDATE, JOB_WLAN } JobKind;
+typedef enum { JOB_NONE, JOB_PING, JOB_LOOKUP, JOB_FETCH, JOB_PROC, JOB_SETUP, JOB_UPDATE, JOB_WLAN, JOB_WLAN_CONNECT } JobKind;
 enum { PH_RESOLVE, PH_SEND, PH_WAIT, PH_SLEEP, PH_FETCH };
 
 typedef struct {
@@ -271,6 +271,7 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
+        "  netsh wlan connect name=SSID | disconnect  join an open Wi-Fi network, or leave it\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
         "  wget <url> [url...] download web pages to C:\\Downloads\n"
@@ -752,7 +753,7 @@ static void cmd_ipconfig(Term *t, const char *a1)
     }
     NetStatus st;
     NetGetStatus(&st);
-    tprint(t, "Ethernet adapter Ethernet:\n");
+    tprint(t, WlanCarriesNet() ? "Wireless LAN adapter Wi-Fi:\n" : "Ethernet adapter Ethernet:\n");
     if (st.dns_suffix[0]) {                                  /* (the first name of the search list) */
         char first[128];
         strncpy(first, st.dns_suffix, sizeof(first) - 1);
@@ -897,7 +898,22 @@ static void wlan_interfaces(Term *t)
         tprintf(t, "    Physical address       : %02x:%02x:%02x:%02x:%02x:%02x", w.mac[0], w.mac[1], w.mac[2],
                 w.mac[3], w.mac[4], w.mac[5]);
         tprintf(t, "    Interface type         : Primary");
-        tprintf(t, "    State                  : %s", w.port ? "disconnected" : "not ready");
+        tprintf(t, "    State                  : %s", w.connected ? "connected" : w.port ? "disconnected" : "not ready");
+        if (w.connected) {
+            WlanBss *b = &w.bss;
+            tprintf(t, "    SSID                   : %s", b->ssid);
+            tprintf(t, "    AP BSSID               : %02x:%02x:%02x:%02x:%02x:%02x", b->bssid[0], b->bssid[1],
+                    b->bssid[2], b->bssid[3], b->bssid[4], b->bssid[5]);
+            tprintf(t, "    Band                   : %s", b->band == 2 ? "5 GHz" : b->band == 5 ? "6 GHz" : "2.4 GHz");
+            tprintf(t, "    Channel                : %u", b->channel);
+            tprintf(t, "    Network type           : Infrastructure");
+            tprintf(t, "    Radio type             : %s", b->radio);
+            tprintf(t, "    Authentication         : %s", b->auth);
+            tprintf(t, "    Cipher                 : %s", b->cipher);
+            tprintf(t, "    Signal                 : %u%% ", b->quality);
+            tprintf(t, "    Frames sent/received   : %llu/%llu", (unsigned long long)w.tx_frames,
+                    (unsigned long long)w.rx_frames);
+        }
         tprintf(t, "    Radio status           : Hardware %s", w.hw_radio ? "On" : "Off");
         tprintf(t, "                             Software %s", w.sw_radio ? "On" : "Off");
         tprintf(t, "    Driver                 : %s (firmware %s)", w.service, w.firmware[0] ? w.firmware : "unknown");
@@ -947,10 +963,74 @@ static void wlan_networks(Term *t, int adapter, bool bssid, int n, UINT32 status
     }
 }
 
+/* The adapter an interface=NAME argument names (-1 if none has it) */
+static int wlan_adapter(const char *v)
+{
+    int n = WlanCount();
+    for (int a = 0; a < n; a++) {
+        char name[16];
+        wlan_name(a, name, sizeof(name));
+        if (is(v, name)) return a;
+    }
+    return -1;
+}
+
+/* netsh wlan connect name=SSID [interface=Wi-Fi] | disconnect [interface=Wi-Fi]:
+ * in the background (JOB_WLAN_CONNECT).  There are no profiles yet: name
+ * is the network's SSID, and only open networks connect */
+static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
+{
+    static const char usage[] = "Usage: netsh wlan connect [name=]SSID [interface=Wi-Fi]\n"
+                                "       netsh wlan disconnect [interface=Wi-Fi]";
+    const char *ssid = NULL;
+    int adapter = 0;
+    for (int i = 3; i < argc; i++) {
+        const char *v;
+        if ((v = netsh_value(argv[i], "interface"))) {
+            if ((adapter = wlan_adapter(v)) < 0) { tprint(t, "There is no such wireless interface on the system."); return; }
+        } else if (connect && ((v = netsh_value(argv[i], "name")) || (v = netsh_value(argv[i], "ssid")))) ssid = v;
+        else if (connect && !strchr(argv[i], '=') && !ssid) ssid = argv[i];
+        else { terr(t, usage); return; }
+    }
+    if (connect && !ssid) { terr(t, usage); return; }
+    if (!WlanCount()) { tprint(t, "\nThere is no wireless interface on the system."); return; }
+    if (!WlanConnectStart(adapter, connect ? ssid : NULL)) { terr(t, "The wireless adapter is busy; try again."); return; }
+    Job *j = &t->job;
+    memset(j, 0, sizeof(*j));
+    j->kind = JOB_WLAN_CONNECT;
+    j->count = connect;
+    j->cur = adapter;
+    strncpy(j->path, connect ? ssid : "", sizeof(j->path) - 1);
+}
+
+static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ssid, int r, UINT32 st)
+{
+    char name[16];
+    wlan_name(adapter, name, sizeof(name));
+    switch (r) {
+    case WLAN_OK:
+        if (connect) tprint(t, "Connection request was completed successfully.");
+        else tprintf(t, "Disconnection request was completed successfully for interface \"%s\".", name);
+        break;
+    case WLAN_NO_NETWORK:   tprintf(t, "The network \"%s\" is not available to connect.", ssid); break;
+    case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured; NovaOS connects to open networks only so far.",
+                                    ssid); break;
+    case WLAN_NOT_CONNECTED: tprintf(t, "The interface \"%s\" is not connected.", name); break;
+    case WLAN_NO_ADAPTER:   tprint(t, "The wireless interface is not ready."); break;
+    default:                tprintf(t, "The %s request failed (0x%08x).", connect ? "connection" : "disconnection", st);
+    }
+}
+
 static void cmd_netsh_wlan(Term *t, int argc, char **argv)
 {
     static const char usage[] = "Usage: netsh wlan show interfaces\n"
-                                "       netsh wlan show networks [interface=]Wi-Fi [mode=bssid]";
+                                "       netsh wlan show networks [interface=]Wi-Fi [mode=bssid]\n"
+                                "       netsh wlan connect [name=]SSID [interface=Wi-Fi]\n"
+                                "       netsh wlan disconnect [interface=Wi-Fi]";
+    if (argc >= 3 && (is(argv[2], "connect") || is(argv[2], "disconnect"))) {
+        cmd_netsh_wlan_connect(t, argc, argv, is(argv[2], "connect"));
+        return;
+    }
     if (argc < 4 || !is(argv[2], "show")) { terr(t, usage); return; }
     if (is(argv[3], "interfaces") || is(argv[3], "interface")) { wlan_interfaces(t); return; }
     if (!is(argv[3], "networks") && !is(argv[3], "network")) { terr(t, usage); return; }
@@ -960,13 +1040,7 @@ static void cmd_netsh_wlan(Term *t, int argc, char **argv)
         const char *v;
         if ((v = netsh_value(argv[i], "mode"))) bssid = is(v, "bssid");
         else if ((v = netsh_value(argv[i], "interface"))) {
-            int n = WlanCount();
-            for (adapter = 0; adapter < n; adapter++) {
-                char name[16];
-                wlan_name(adapter, name, sizeof(name));
-                if (is(v, name)) break;
-            }
-            if (adapter == n) { tprintf(t, "There is no such wireless interface on the system."); return; }
+            if ((adapter = wlan_adapter(v)) < 0) { tprintf(t, "There is no such wireless interface on the system."); return; }
         } else { terr(t, usage); return; }
     }
     if (!WlanCount()) { tprint(t, "\nThere is no wireless interface on the system."); return; }
@@ -987,7 +1061,8 @@ static void cmd_netsh(Term *t, int argc, char **argv)
         "       netsh interface ipv4 set dnsservers [name=]Ethernet [source=]dhcp | static [address=]IP\n"
         "       netsh interface ipv4 add dnsservers [name=]Ethernet [address=]IP [index=2]\n"
         "       netsh interface ipv4 show config\n"
-        "       netsh wlan show interfaces | networks [mode=bssid]";
+        "       netsh wlan show interfaces | networks [mode=bssid]\n"
+        "       netsh wlan connect name=SSID | disconnect";
     if (argc < 4 || !(is(argv[1], "interface") || is(argv[1], "int")) ||
         !(is(argv[2], "ipv4") || is(argv[2], "ip"))) { terr(t, usage); return; }
     if (is(argv[3], "show")) { netsh_show(t); return; }
@@ -1445,6 +1520,14 @@ static bool term_tick_files(WND *w)
         UINT32 st;
         if (!WlanScanDone(g_wlan_bss, WLAN_MAX_BSS, &n, &st)) return false;
         wlan_networks(t, j->cur, j->count, n, st);
+        job_end(t);
+        return true;
+    }
+    if (j->kind == JOB_WLAN_CONNECT) {
+        int r;
+        UINT32 st;
+        if (!WlanConnectDone(&r, &st)) return false;
+        wlan_connect_done(t, j->cur, j->count, j->path, r, st);
         job_end(t);
         return true;
     }

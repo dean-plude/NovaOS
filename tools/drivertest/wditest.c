@@ -9,18 +9,34 @@
  * points.  It answers the WDI messages NovaOS's upper edge sends as an IHV
  * driver must: OID requests of type NdisRequestMethod whose buffer is a
  * WDI_MESSAGE_HEADER and TLVs (kernel/nt/wdi.h), the answer written into
- * the same buffer; a task (create port, scan, delete port) is finished by
+ * the same buffer; a task (create port, scan, connect, disconnect, delete
+ * port) is finished by
  * an NDIS_STATUS_WDI_INDICATION_*_COMPLETE status indication with the
  * task's TransactionId, from a timer, after the OID request; a scan pends
  * its OID request, indicates the access points it "hears" (WDI_TLV_BSS_ENTRY:
  * BSSID, signal, channel and the beacon's frame body), completes the
  * request with NdisMOidRequestComplete and then indicates the scan's end.
+ *
+ * Its data path is a WDI TAL's (MiniportWdiTalTxRxInitialize's handlers):
+ * NovaOS's TxMgr says frames are queued (TxDataSend) and the driver takes
+ * them (TxDequeueIndication), "transmits" them and gives them back
+ * (TxTransferCompleteIndication); frames it "receives" it indicates
+ * (RxInorderDataIndication, from a timer as from an interrupt), the upper
+ * edge takes them (RxGetMpdus) and returns them (RxReturnFrames).  The open
+ * network, NovaGuest, connects (OID_WDI_TASK_CONNECT: the driver indicates
+ * its peer, the access point, and the association's result); behind it is
+ * the smallest of routers, at 192.168.77.1, which the driver plays itself:
+ * it answers ARP for that address, offers and acknowledges 192.168.77.100
+ * by DHCP, and answers pings.  So DHCP and ping in NovaOS go through the
+ * whole data path, 802.11 frames both ways.
+ *
  * Each check it makes of what it is sent goes to the debugger (DbgPrint),
  * where the wifi self-test reads it.
  *
  * Built by tools/drivertest/mksys.py; the wifi self-test installs it with
- * "pnputil /add-driver wditest.inf /install" and scans with
- * "netsh wlan show networks mode=bssid".
+ * "pnputil /add-driver wditest.inf /install", scans with
+ * "netsh wlan show networks mode=bssid" and connects with
+ * "netsh wlan connect name=NovaGuest".
  */
 #include "../../kernel/nt/ndis.h"
 #include "../../kernel/nt/wdi.h"
@@ -35,6 +51,11 @@ IMPORT void       *NdisAllocateMemoryWithTagPriority(void *h, unsigned int len, 
 IMPORT void        NdisFreeMemoryWithTagPriority(void *h, void *p, unsigned int tag);
 IMPORT void        NdisMIndicateStatusEx(void *h, NDIS_STATUS_INDICATION *ind);
 IMPORT void        NdisMOidRequestComplete(void *h, NDIS_OID_REQUEST *r, NDIS_STATUS st);
+IMPORT void       *NdisAllocateNetBufferListPool(void *h, NET_BUFFER_LIST_POOL_PARAMETERS *p);
+IMPORT void        NdisFreeNetBufferListPool(void *pool);
+IMPORT NET_BUFFER_LIST *NdisAllocateNetBufferAndNetBufferList(void *pool, unsigned short ctx, unsigned short backfill,
+                                                              NT_MDL *mdl, unsigned int off, unsigned long long len);
+IMPORT void        NdisFreeNetBufferList(NET_BUFFER_LIST *nbl);
 
 typedef void (NT_API *TIMER_FN)(void *ss1, void *ctx, void *ss2, void *ss3);
 typedef struct {
@@ -102,17 +123,35 @@ static const Ap APS[] = {
 };
 #define NAPS (int)(sizeof(APS) / sizeof(APS[0]))
 
+#define NGUEST    2                 /* APS[NGUEST]: the open network, which connects */
+#define PEER      1                 /* its peer ID */
+#define RXQ       16
+
+/* the router behind NovaGuest, which this driver plays (its MAC is the AP's BSSID) */
+static const unsigned char ROUTER_IP[4] = { 192, 168, 77, 1 }, CLIENT_IP[4] = { 192, 168, 77, 100 },
+                           MASK[4] = { 255, 255, 255, 0 };
+
 /* ---- the adapter ---- */
 typedef struct {
     void             *handle;       /* NDIS's adapter handle */
     COMPLETE_FN       open_done, close_done;
-    void             *timer;
+    void             *timer, *rx_timer;
     /* the task the timer finishes */
     unsigned int      task, tid;
     unsigned short    port;
     NDIS_OID_REQUEST *pending;      /* a scan's OID request, completed by the timer */
-    int               port_up;
+    int               port_up, connected;
     unsigned char     ind[2048];
+    /* the data path */
+    void             *dp;           /* the upper edge's NdisMiniportDataPathHandle */
+    NDIS_WDI_DATA_API *api;
+    void             *pool;         /* NBLs for received frames */
+    int               started, dp_port;
+    volatile int      rx_lock;
+    NET_BUFFER_LIST  *rxq[RXQ];     /* received frames waiting for RxGetMpdus */
+    int               nrx;
+    unsigned int      tx_frames, rx_frames, arps, dhcps, pings, dhcp_said, ping_said;
+    unsigned char     frame[2048], reply[1600];
 } Adapter;
 
 static void *zero(void *p, unsigned long long n)
@@ -195,6 +234,354 @@ static unsigned int bss_entry(unsigned char *buf, unsigned int off, const Ap *ap
     return put(buf, off, WDI_TLV_BSS_ENTRY, e, n);
 }
 
+/* ---- the data path: a TAL ---- */
+typedef void (NT_API *DEQUEUE_FN)(void *dp, unsigned int quantum, unsigned char max, unsigned short credit,
+                                  NET_BUFFER_LIST **out);
+typedef void (NT_API *TRANSFER_DONE_FN)(void *dp, unsigned int status, NET_BUFFER_LIST *nbl);
+typedef void (NT_API *RX_IND_FN)(void *dp, unsigned int level, WDI_PEER_ID peer, unsigned char tid,
+                                 NDIS_RECEIVE_THROTTLE_PARAMETERS *thr, NDIS_STATUS *st);
+typedef void (NT_API *PEER_CREATE_FN)(void *dp, unsigned short port, WDI_PEER_ID peer, WDI_MAC_ADDRESS mac);
+typedef void (NT_API *PEER_DELETE_FN)(void *dp, unsigned short port, WDI_PEER_ID peer, NDIS_STATUS *st);
+typedef WDI_FRAME_METADATA *(NT_API *ALLOC_META_FN)(void *dp);
+typedef void (NT_API *FREE_META_FN)(void *dp, WDI_FRAME_METADATA *m);
+
+static unsigned char *mdl_va(NT_MDL *m)
+{
+    if (m->MdlFlags & 0x5) return m->MappedSystemVa;   /* (MDL_MAPPED_TO_SYSTEM_VA, MDL_SOURCE_IS_NONPAGED_POOL) */
+    return (unsigned char *)m->StartVa + m->ByteOffset;
+}
+
+static void lock(volatile int *l)   { while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {} }
+static void unlock(volatile int *l) { __atomic_store_n(l, 0, __ATOMIC_RELEASE); }
+
+static int same(const unsigned char *a, const unsigned char *b, int n)
+{
+    while (n--) if (*a++ != *b++) return 0;
+    return 1;
+}
+
+static unsigned short csum(const unsigned char *p, unsigned int n)
+{
+    unsigned int s = 0;
+    for (unsigned int i = 0; i + 1 < n; i += 2) s += (unsigned int)(p[i] << 8 | p[i + 1]);
+    if (n & 1) s += (unsigned int)p[n - 1] << 8;
+    while (s >> 16) s = (s & 0xFFFF) + (s >> 16);
+    return (unsigned short)~s;
+}
+
+/* Queue an Ethernet-style frame (@dst, the router as source, @type, @payload)
+ * as a received 802.11 MSDU from the access point (FromDS: address 1 the
+ * destination, 2 the BSSID, 3 the source); the RX timer indicates it */
+static void receive(Adapter *a, const unsigned char *dst, unsigned short type, const unsigned char *payload,
+                    unsigned int n)
+{
+    const unsigned char *bssid = APS[NGUEST].bssid;
+    NET_BUFFER_LIST *nbl = NdisAllocateNetBufferAndNetBufferList(a->pool, 0, 0, 0, 0, 24 + 8 + n);
+    WDI_FRAME_METADATA *m = nbl ? ((ALLOC_META_FN)a->api->AllocateWiFiFrameMetaData)(a->dp) : 0;
+    if (!m) {
+        if (nbl) NdisFreeNetBufferList(nbl);
+        DbgPrint("wditest: no room for a received frame\n");
+        return;
+    }
+    NET_BUFFER *nb = nbl->FirstNetBuffer;
+    unsigned char *f = mdl_va(nb->MdlChain) + nb->DataOffset;
+    zero(f, 24);
+    f[0] = DOT11_FC0_DATA;
+    f[1] = DOT11_FC1_FROM_DS;
+    copy(f + 4, dst, 6);
+    copy(f + 10, bssid, 6);
+    copy(f + 16, bssid, 6);
+    static const unsigned char snap[6] = { 0xAA, 0xAA, 0x03, 0, 0, 0 };
+    copy(f + 24, snap, 6);
+    f[30] = (unsigned char)(type >> 8);
+    f[31] = (unsigned char)type;
+    copy(f + 32, payload, n);
+    m->pNBL = nbl;
+    m->u.rxPayloadType = WDI_FRAME_MSDU;
+    nbl->MiniportReserved[0] = m;
+    lock(&a->rx_lock);
+    int ok = a->nrx < RXQ;
+    if (ok) a->rxq[a->nrx++] = nbl;
+    unlock(&a->rx_lock);
+    if (!ok) {
+        ((FREE_META_FN)a->api->FreeWiFiFrameMetaData)(a->dp, m);
+        NdisFreeNetBufferList(nbl);
+        return;
+    }
+    NdisSetTimerObject(a->rx_timer, -10000, 0, a);     /* (1 ms: as the hardware's interrupt would) */
+}
+
+static NT_API void rx_timer(void *ss1, void *ctx, void *ss2, void *ss3)
+{
+    (void)ss1; (void)ss2; (void)ss3;
+    Adapter *a = ctx;
+    if (!a->nrx || !a->connected) return;
+    NDIS_RECEIVE_THROTTLE_PARAMETERS thr = { NDIS_INDICATE_ALL_NBLS, 0 };
+    NDIS_STATUS st = NDIS_STATUS_SUCCESS;
+    ((RX_IND_FN)a->api->RxInorderDataIndication)(a->dp, WDI_RX_INDICATION_DISPATCH_GENERAL, PEER, WDI_EXT_TID_NON_QOS,
+                                                 &thr, &st);
+}
+
+/* DHCP (RFC 2131) from the router: an offer or an acknowledgment of CLIENT_IP */
+static void dhcp_reply(Adapter *a, const unsigned char *req, unsigned int n, unsigned char kind)
+{
+    unsigned char *ip = a->reply, *u = ip + 20, *b = u + 8;
+    zero(ip, 20 + 8 + 300);
+    b[0] = 2; b[1] = 1; b[2] = 6;                      /* (a reply, Ethernet addresses) */
+    copy(b + 4, req + 4, 4);                           /* xid */
+    copy(b + 10, req + 10, 2);                         /* flags */
+    copy(b + 16, CLIENT_IP, 4);                        /* yiaddr */
+    copy(b + 20, ROUTER_IP, 4);                        /* siaddr */
+    copy(b + 28, req + 28, 16);                        /* chaddr */
+    static const unsigned char cookie[4] = { 99, 130, 83, 99 };
+    copy(b + 236, cookie, 4);
+    unsigned char *o = b + 240;
+    *o++ = 53; *o++ = 1; *o++ = kind;
+    *o++ = 54; *o++ = 4; copy(o, ROUTER_IP, 4); o += 4;
+    *o++ = 51; *o++ = 4; *o++ = 0; *o++ = 0; *o++ = 0x0e; *o++ = 0x10;     /* (an hour) */
+    *o++ = 1;  *o++ = 4; copy(o, MASK, 4); o += 4;
+    *o++ = 3;  *o++ = 4; copy(o, ROUTER_IP, 4); o += 4;
+    *o++ = 6;  *o++ = 4; copy(o, ROUTER_IP, 4); o += 4;
+    *o++ = 255;
+    unsigned int blen = (unsigned int)(o - b);
+    if (blen < 300) blen = 300;
+    unsigned int ulen = 8 + blen, tot = 20 + ulen;
+    (void)n;
+    ip[0] = 0x45; ip[2] = (unsigned char)(tot >> 8); ip[3] = (unsigned char)tot; ip[8] = 64; ip[9] = 17;
+    copy(ip + 12, ROUTER_IP, 4);
+    ip[16] = ip[17] = ip[18] = ip[19] = 255;          /* (to the broadcast address) */
+    unsigned short c = csum(ip, 20);
+    ip[10] = (unsigned char)(c >> 8); ip[11] = (unsigned char)c;
+    u[1] = 67; u[3] = 68; u[4] = (unsigned char)(ulen >> 8); u[5] = (unsigned char)ulen;   /* (no UDP checksum) */
+    static const unsigned char bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    receive(a, bcast, 0x0800, ip, tot);
+}
+
+/* One frame NovaOS sent: an 802.11 MSDU to the access point.  What the
+ * router behind it answers: ARP for its address, DHCP, pings to it */
+static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
+{
+    WDI_FRAME_METADATA *m = nbl->MiniportReserved[0];
+    NET_BUFFER *nb = nbl->FirstNetBuffer;
+    unsigned int n = 0, off = nb->CurrentMdlOffset, left = nb->DataLength;
+    for (NT_MDL *d = nb->CurrentMdl; d && left && n < sizeof(a->frame); d = d->Next, off = 0) {
+        unsigned int k = d->ByteCount - off;
+        if (k > left) k = left;
+        if (k > sizeof(a->frame) - n) k = sizeof(a->frame) - n;
+        copy(a->frame + n, mdl_va(d) + off, k);
+        n += k;
+        left -= k;
+    }
+    a->tx_frames++;
+    const unsigned char *f = a->frame;
+    if (!m || m->pNBL != nbl || m->u.txMetaData.PortID != PORT || m->u.txMetaData.PeerID != PEER) {
+        DbgPrint("wditest: a frame without its metadata (port %u, peer %u)\n", m ? m->u.txMetaData.PortID : 0,
+                 m ? m->u.txMetaData.PeerID : 0);
+        return;
+    }
+    if (n < 32 || f[0] != DOT11_FC0_DATA || f[1] != DOT11_FC1_TO_DS || !same(f + 4, APS[NGUEST].bssid, 6) ||
+        !same(f + 10, MAC, 6) || f[24] != 0xAA || f[25] != 0xAA || f[26] != 3) {
+        DbgPrint("wditest: not an 802.11 data frame to the access point (fc %02x %02x, %u bytes)\n", f[0], f[1], n);
+        return;
+    }
+    unsigned short type = (unsigned short)(f[30] << 8 | f[31]), ethertype = m->u.txMetaData.Ethertype;
+    const unsigned char *p = f + 32, *src = f + 10;
+    unsigned int pl = n - 32;
+    if (type != ethertype) DbgPrint("wditest: frame metadata says Ethertype %04x, the frame %04x\n", ethertype, type);
+    if (type == 0x0806 && pl >= 28 && p[7] == 1 && same(p + 24, ROUTER_IP, 4)) {     /* ARP: who has the router? */
+        unsigned char r[28];
+        copy(r, p, 6);
+        r[7] = 2;
+        copy(r + 8, APS[NGUEST].bssid, 6);
+        copy(r + 14, ROUTER_IP, 4);
+        copy(r + 18, p + 8, 10);
+        if (!a->arps++) DbgPrint("wditest: ARP: 192.168.77.1 is at the router\n");
+        receive(a, src, 0x0806, r, 28);
+    } else if (type == 0x0800 && pl >= 28 && p[9] == 17 && p[22] == 0 && p[23] == 67 && pl >= 28 + 240) {
+        const unsigned char *b = p + 28;               /* (BOOTP: its options after the cookie) */
+        unsigned char kind = 0;
+        for (unsigned int k = 240; k + 2 < pl - 28 && b[k] != 255; k += b[k] ? 2u + b[k + 1] : 1u)
+            if (b[k] == 53) kind = b[k + 2];
+        a->dhcps++;
+        if (kind == 1 || kind == 3) {
+            DbgPrint("wditest: DHCP %s: %s 192.168.77.100\n", kind == 1 ? "discover" : "request",
+                     kind == 1 ? "offering" : "acknowledging");
+            dhcp_reply(a, b, pl - 28, kind == 1 ? 2 : 5);
+        }
+    } else if (type == 0x0800 && pl >= 28 && p[9] == 1 && same(p + 16, ROUTER_IP, 4) && p[20] == 8) {
+        unsigned int tot = (unsigned int)(p[2] << 8 | p[3]), hl = (p[0] & 15) * 4u;
+        if (tot > pl || tot > sizeof(a->reply) || hl < 20) return;
+        unsigned char *r = a->reply;                   /* the echo reply */
+        copy(r, p, tot);
+        copy(r + 12, p + 16, 4);
+        copy(r + 16, p + 12, 4);
+        r[8] = 64;
+        r[10] = r[11] = 0;
+        unsigned short c = csum(r, hl);
+        r[10] = (unsigned char)(c >> 8); r[11] = (unsigned char)c;
+        r[hl] = 0;
+        r[hl + 2] = r[hl + 3] = 0;
+        c = csum(r + hl, tot - hl);
+        r[hl + 2] = (unsigned char)(c >> 8); r[hl + 3] = (unsigned char)c;
+        if (!a->pings++) DbgPrint("wditest: ping from %u.%u.%u.%u to the router: answering\n", p[12], p[13], p[14], p[15]);
+        receive(a, src, 0x0800, r, tot);
+    }
+}
+
+/* TxDataSend: frames are queued for the access point; take them, "send" them, give them back */
+static NT_API void tx_data_send(void *tal, unsigned short port, WDI_PEER_ID peer, unsigned char tid,
+                                unsigned short queued, unsigned int active, unsigned char robust)
+{
+    (void)queued; (void)active; (void)robust; (void)tid;
+    Adapter *a = tal;
+    if (port != PORT || peer != PEER || !a->connected) {
+        DbgPrint("wditest: send on port %u to peer %u refused\n", port, peer);
+        return;
+    }
+    for (;;) {
+        NET_BUFFER_LIST *nbl = 0;
+        ((DEQUEUE_FN)a->api->TxDequeueIndication)(a->dp, 0xFFFFFFFFu, 8, 0xFFFF, &nbl);
+        if (!nbl) break;
+        for (NET_BUFFER_LIST *x = nbl; x; x = x->Next) {
+            if (x->MiniportReserved[1] != a) DbgPrint("wditest: a frame without its target descriptor\n");
+            transmit(a, x);
+        }
+        ((TRANSFER_DONE_FN)a->api->TxTransferCompleteIndication)(a->dp, WDI_TX_FRAME_STATUS_OK, nbl);
+    }
+}
+
+static NT_API void tx_desc_init(void *tal, NET_BUFFER_LIST *nbl, NDIS_STATUS *st)
+{
+    nbl->MiniportReserved[1] = tal;                    /* (the "target descriptor") */
+    *st = NDIS_STATUS_SUCCESS;
+}
+
+static NT_API void tx_desc_deinit(void *tal, NET_BUFFER_LIST *nbl) { (void)tal; nbl->MiniportReserved[1] = 0; }
+
+/* RxGetMpdus: the frames the last indication announced */
+static NT_API void rx_get_mpdus(void *tal, WDI_PEER_ID peer, unsigned char tid, NET_BUFFER_LIST **out)
+{
+    (void)tid;
+    Adapter *a = tal;
+    *out = 0;
+    if (peer != PEER) return;
+    lock(&a->rx_lock);
+    NET_BUFFER_LIST **tail = out;
+    for (int i = 0; i < a->nrx; i++) {
+        a->rxq[i]->Next = 0;
+        *tail = a->rxq[i];
+        tail = &a->rxq[i]->Next;
+        a->rx_frames++;
+    }
+    a->nrx = 0;
+    unlock(&a->rx_lock);
+}
+
+static NT_API void rx_return(void *tal, NET_BUFFER_LIST *nbl)
+{
+    Adapter *a = tal;
+    for (NET_BUFFER_LIST *next; nbl; nbl = next) {
+        next = nbl->Next;
+        ((FREE_META_FN)a->api->FreeWiFiFrameMetaData)(a->dp, nbl->MiniportReserved[0]);
+        NdisFreeNetBufferList(nbl);
+    }
+}
+
+static NT_API NDIS_STATUS tal_start(void *tal, WDI_TXRX_TARGET_CONFIGURATION *cfg, TAL_TXRX_PARAMETERS *out)
+{
+    Adapter *a = tal;
+    DbgPrint("wditest: data path started: %s, %s queueing, %u port(s), %u peer(s)\n",
+             cfg->TxRxCapabilities.InterconnectType == WDI_INTERCONNECT_MESSAGE_BASED ? "message based" : "memory mapped",
+             cfg->TxRxCapabilities.TargetPriorityQueueing ? "port" : "peer/TID", cfg->MaxNumPorts, cfg->MaxNumPeers);
+    out->MaxOutstandingTransfers = 16;
+    a->started = 1;
+    return NDIS_STATUS_SUCCESS;
+}
+
+static NT_API void tal_stop(void *tal) { ((Adapter *)tal)->started = 0; DbgPrint("wditest: data path stopped\n"); }
+
+static NT_API void tal_add_port(void *tal, unsigned short port, unsigned int mode)
+{
+    ((Adapter *)tal)->dp_port = port;
+    DbgPrint("wditest: data path port %u added (mode 0x%x)\n", port, mode);
+}
+
+static NT_API void tal_delete_port(void *tal, unsigned short port)
+{
+    ((Adapter *)tal)->dp_port = 0;
+    DbgPrint("wditest: data path port %u deleted\n", port);
+}
+
+static NT_API void tal_peer_config(void *tal, unsigned short port, WDI_PEER_ID peer, unsigned int *qos)
+{
+    (void)tal;
+    DbgPrint("wditest: peer %u on port %u configured (QoS %u)\n", peer, port, qos ? *qos : 0);
+}
+
+static NT_API void tal_peer_delete_confirm(void *tal, unsigned short port, WDI_PEER_ID peer)
+{
+    Adapter *a = tal;
+    DbgPrint("wditest: peer %u on port %u deleted (%u frames sent, %u received)\n", peer, port, a->tx_frames,
+             a->rx_frames);
+}
+
+static NT_API void tal_nothing(void *tal) { (void)tal; }
+
+/* MiniportWdiTalTxRxInitialize */
+static NT_API NDIS_STATUS tal_initialize(void *ctx, void *dp, NDIS_WDI_DATA_API *api, void **tal,
+                                         NDIS_MINIPORT_WDI_DATA_HANDLERS *h, unsigned int *extra)
+{
+    Adapter *a = ctx;
+    if (!api || api->Header.Type != NDIS_OBJECT_TYPE_WDI_DATA_API || api->Header.Size < 4 + 16 * 8 ||
+        !api->TxDequeueIndication || !api->RxInorderDataIndication || !api->AllocateWiFiFrameMetaData) {
+        DbgPrint("wditest: the upper edge gave no data path API\n");
+        return NDIS_STATUS_FAILURE;
+    }
+    NET_BUFFER_LIST_POOL_PARAMETERS pp;
+    zero(&pp, sizeof(pp));
+    pp.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    pp.Header.Revision = 1;
+    pp.Header.Size = sizeof(pp);
+    pp.fAllocateNetBuffer = 1;
+    pp.PoolTag = TAG;
+    pp.DataSize = 2048;
+    a->pool = NdisAllocateNetBufferListPool(a->handle, &pp);
+    if (!a->pool) return NDIS_STATUS_RESOURCES;
+    a->dp = dp;
+    a->api = api;
+    h->TxTargetDescInitHandler = (void *)tx_desc_init;
+    h->TxTargetDescDeInitHandler = (void *)tx_desc_deinit;
+    h->TxDataSendHandler = (void *)tx_data_send;
+    h->RxGetMpdusHandler = (void *)rx_get_mpdus;
+    h->RxReturnFramesHandler = (void *)rx_return;
+    h->TalTxRxStartHandler = (void *)tal_start;
+    h->TalTxRxStopHandler = (void *)tal_stop;
+    h->TalTxRxAddPortHandler = (void *)tal_add_port;
+    h->TalTxRxDeletePortHandler = (void *)tal_delete_port;
+    h->TalTxRxPeerConfigHandler = (void *)tal_peer_config;
+    h->TalTxRxPeerDeleteConfirmHandler = (void *)tal_peer_delete_confirm;
+    h->RxResumeHandler = (void *)tal_nothing;
+    *tal = a;
+    *extra = 16;
+    DbgPrint("wditest: data path initialized (API revision %u)\n", api->Header.Revision);
+    return NDIS_STATUS_SUCCESS;
+}
+
+static NT_API void tal_deinitialize(void *tal)
+{
+    Adapter *a = tal;
+    NdisCancelTimerObject(a->rx_timer);
+    lock(&a->rx_lock);
+    NET_BUFFER_LIST *left = 0;
+    for (int i = a->nrx - 1; i >= 0; i--) { a->rxq[i]->Next = left; left = a->rxq[i]; }
+    a->nrx = 0;
+    unlock(&a->rx_lock);
+    rx_return(a, left);
+    NdisFreeNetBufferListPool(a->pool);
+    a->pool = 0;
+    DbgPrint("wditest: data path deinitialized\n");
+}
+
 /* The timer: finish the task the last OID request started */
 static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
 {
@@ -239,6 +626,37 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         DbgPrint("wditest: scan complete: %d BSS entries indicated\n", NAPS);
         break;
     }
+    case WDI_TASK_CONNECT: {
+        /* associated: the peer first (the data path's), then the association's result, then the task's end */
+        a->port = PORT;
+        a->connected = 1;
+        WDI_MAC_ADDRESS mac;
+        copy(mac.Address, APS[NGUEST].bssid, 6);
+        ((PEER_CREATE_FN)a->api->PeerCreateIndication)(a->dp, PORT, PEER, mac);
+        unsigned char r[128];
+        WDI_ASSOCIATION_RESULT_PARAMETERS ap;
+        zero(&ap, sizeof(ap));
+        ap.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
+        ap.AuthAlgorithm = WDI_AUTH_ALGO_80211_OPEN;
+        ap.UnicastCipherAlgorithm = ap.MulticastDataCipherAlgorithm = WDI_CIPHER_ALGO_NONE;
+        ap.PortAuthorized = 1;
+        unsigned int m = put(r, 0, WDI_TLV_BSSID, APS[NGUEST].bssid, 6);
+        m = put(r, m, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ap, sizeof(ap));
+        n = put(t, 0, WDI_TLV_ASSOCIATION_RESULT, r, m);
+        indicate(a, WDI_INDICATION_ASSOCIATION_RESULT, a->tid, n);
+        indicate(a, WDI_INDICATION_CONNECT_COMPLETE, a->tid, 0);
+        DbgPrint("wditest: associated with %s, peer %u\n", APS[NGUEST].ssid, PEER);
+        break;
+    }
+    case WDI_TASK_DISCONNECT: {
+        a->port = PORT;
+        a->connected = 0;
+        NDIS_STATUS st = NDIS_STATUS_SUCCESS;
+        ((PEER_DELETE_FN)a->api->PeerDeleteIndication)(a->dp, PORT, PEER, &st);
+        indicate(a, WDI_INDICATION_DISCONNECT_COMPLETE, a->tid, 0);
+        DbgPrint("wditest: disassociated from %s\n", APS[NGUEST].ssid);
+        break;
+    }
     }
 }
 
@@ -265,10 +683,21 @@ static NDIS_STATUS capabilities(unsigned char *t, unsigned int room, unsigned in
     n = put(ia, n, WDI_TLV_FIRMWARE_VERSION, fw, sizeof(fw));
     unsigned int out = put(t, 0, WDI_TLV_INTERFACE_ATTRIBUTES, ia, n);
     out = put(t, out, WDI_TLV_STATION_ATTRIBUTES, 0, 0);
+    /* a message-based data path (as a USB or SDIO one is), one peer, port queueing */
+    WDI_DATAPATH_CAPABILITIES dc;
+    zero(&dc, sizeof(dc));
+    dc.InterconnectType = WDI_INTERCONNECT_MESSAGE_BASED;
+    dc.MaxNumPeers = 1;
+    dc.TxTargetPriorityQueueing = 1;
+    dc.TxMaxScatterGatherElementsPerFrame = 1;
+    dc.RxMaxThroughput = 100000;
+    unsigned char da[32];
+    unsigned int m = put(da, 0, WDI_TLV_DATAPATH_CAPABILITIES, &dc, sizeof(dc));
+    out = put(t, out, WDI_TLV_DATAPATH_ATTRIBUTES, da, m);
     static const unsigned int bands[] = { WDI_BAND_ID_2400, WDI_BAND_ID_5000 };
     for (int i = 0; i < 2; i++) {
         WDI_BAND_CAPABILITIES bc = { bands[i], 1 };
-        unsigned int m = put(bi, 0, WDI_TLV_BAND_CAPABILITIES, &bc, sizeof(bc));
+        m = put(bi, 0, WDI_TLV_BAND_CAPABILITIES, &bc, sizeof(bc));
         out = put(t, out, WDI_TLV_BAND_INFO, bi, m);
     }
     if (out > room) return NDIS_STATUS_BUFFER_TOO_SHORT;
@@ -345,6 +774,61 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
         start_task(a, msg, h->TransactionId, 200);
         return NDIS_STATUS_PENDING;
     }
+    case WDI_SET_ADAPTER_CONFIGURATION: {
+        const unsigned char *v = find(t, tlen, WDI_TLV_LINK_QUALITY_BAR_MAP, &n);
+        if (!v || !n || n % sizeof(WDI_LINK_QUALITY_BAR_MAP_ENTRY)) { st = NDIS_STATUS_INVALID_PARAMETER; break; }
+        DbgPrint("wditest: adapter configuration: %u signal bars\n", n / (unsigned int)sizeof(WDI_LINK_QUALITY_BAR_MAP_ENTRY));
+        break;
+    }
+    case WDI_TASK_CONNECT: {
+        /* the settings, the SSID and algorithms; then the access points to try */
+        unsigned int cl, sl, al, bl, el;
+        const unsigned char *cp = find(t, tlen, WDI_TLV_CONNECT_PARAMETERS, &cl);
+        const unsigned char *ss = cp ? find(cp, cl, WDI_TLV_SSID, &sl) : 0;
+        const unsigned char *au = cp ? find(cp, cl, WDI_TLV_AUTH_ALGO_LIST, &al) : 0;
+        const unsigned char *be = find(t, tlen, WDI_TLV_CONNECT_BSS_ENTRY, &el);
+        const unsigned char *bs = be ? find(be, el, WDI_TLV_BSSID, &bl) : 0;
+        const unsigned char *bf = be ? find(be, el, WDI_TLV_BEACON_FRAME, &n) : 0;
+        int entries = 0;
+        for (unsigned int off = 0; off + sizeof(WDI_TLV_HEADER) <= tlen;) {
+            const WDI_TLV_HEADER *x = (const WDI_TLV_HEADER *)(t + off);
+            if (off + sizeof(*x) + x->Length > tlen) break;
+            entries += x->Type == WDI_TLV_CONNECT_BSS_ENTRY;
+            off += sizeof(*x) + x->Length;
+        }
+        const char *g = APS[NGUEST].ssid;
+        unsigned int gl = 0;
+        while (g[gl]) gl++;
+        unsigned int algo = 0;
+        if (au && al >= 4) copy(&algo, au, 4);
+        if (h->PortId != PORT || !a->port_up || !ss || !au || !bs || bl != 6 || !bf || a->connected) {
+            DbgPrint("wditest: connect task refused: port %u, SSID %s, auth %s, BSS entry %s, beacon %s\n", h->PortId,
+                     ss ? "yes" : "no", au ? "yes" : "no", bs ? "yes" : "no", bf ? "yes" : "no");
+            st = NDIS_STATUS_INVALID_PARAMETER;
+            break;
+        }
+        DbgPrint("wditest: connect task %u on port %u: SSID %s, auth %u, %d BSS entr%s, first %02x:%02x:%02x:%02x:%02x:%02x\n",
+                 h->TransactionId, h->PortId, sl == gl && same(ss, (const unsigned char *)g, (int)gl) ? g : "(another)",
+                 algo, entries, entries == 1 ? "y" : "ies", bs[0], bs[1], bs[2], bs[3], bs[4], bs[5]);
+        if (sl != gl || !same(ss, (const unsigned char *)g, (int)gl) || !same(bs, APS[NGUEST].bssid, 6) ||
+            algo != WDI_AUTH_ALGO_80211_OPEN) {
+            st = NDIS_STATUS_NOT_SUPPORTED;                /* (only the open network connects) */
+            break;
+        }
+        start_task(a, msg, h->TransactionId, 20);
+        break;
+    }
+    case WDI_TASK_DISCONNECT: {
+        WDI_DISCONNECT_PARAMETERS p;
+        const unsigned char *v = find(t, tlen, WDI_TLV_DISCONNECT_PARAMETERS, &n);
+        if (!v || n < sizeof(p) || !a->connected) { st = NDIS_STATUS_INVALID_PARAMETER; break; }
+        copy(&p, v, sizeof(p));
+        DbgPrint("wditest: disconnect task %u: from %02x:%02x:%02x:%02x:%02x:%02x, reason %u\n", h->TransactionId,
+                 p.MacAddress[0], p.MacAddress[1], p.MacAddress[2], p.MacAddress[3], p.MacAddress[4], p.MacAddress[5],
+                 p.Disassociation80211Reason);
+        start_task(a, msg, h->TransactionId, 10);
+        break;
+    }
     default:
         DbgPrint("wditest: WDI message %u not handled\n", msg);
         st = NDIS_STATUS_NOT_SUPPORTED;
@@ -367,7 +851,13 @@ static NT_API NDIS_STATUS allocate_adapter(void *handle, void *driver_ctx, NDIS_
     a->open_done = (COMPLETE_FN)wdi->OpenAdapterCompleteHandler;
     a->close_done = (COMPLETE_FN)wdi->CloseAdapterCompleteHandler;
     TIMER_CHARACTERISTICS tc = { { NDIS_OBJECT_TYPE_TIMER_CHARACTERISTICS, 1, sizeof(tc) }, TAG, task_timer, a };
+    TIMER_CHARACTERISTICS rc = { { NDIS_OBJECT_TYPE_TIMER_CHARACTERISTICS, 1, sizeof(rc) }, TAG, rx_timer, a };
     if (NdisAllocateTimerObject(handle, &tc, &a->timer) != NDIS_STATUS_SUCCESS) {
+        NdisFreeMemoryWithTagPriority(handle, a, TAG);
+        return NDIS_STATUS_RESOURCES;
+    }
+    if (NdisAllocateTimerObject(handle, &rc, &a->rx_timer) != NDIS_STATUS_SUCCESS) {
+        NdisFreeTimerObject(a->timer);
         NdisFreeMemoryWithTagPriority(handle, a, TAG);
         return NDIS_STATUS_RESOURCES;
     }
@@ -380,6 +870,7 @@ static NT_API void free_adapter(void *ctx)
 {
     Adapter *a = ctx;
     NdisFreeTimerObject(a->timer);
+    NdisFreeTimerObject(a->rx_timer);
     NdisFreeMemoryWithTagPriority(a->handle, a, TAG);
     DbgPrint("wditest: adapter freed\n");
 }
@@ -431,6 +922,8 @@ NT_API NT_STATUS DriverEntry(NT_DRIVER_OBJECT *obj, NT_UNICODE_STRING *reg)
     wdi.FreeAdapterHandler = (void *)free_adapter;
     wdi.OpenAdapterHandler = (void *)open_adapter;
     wdi.CloseAdapterHandler = (void *)close_adapter;
+    wdi.TalTxRxInitializeHandler = (void *)tal_initialize;
+    wdi.TalTxRxDeinitializeHandler = (void *)tal_deinitialize;
     NDIS_STATUS st = NdisMRegisterWdiMiniportDriver(obj, reg, 0, &ch, &wdi, &g_driver);
     DbgPrint("wditest: DriverEntry %08x\n", (unsigned int)st);
     return st == NDIS_STATUS_SUCCESS ? 0 : (NT_STATUS)0xC0000001;

@@ -34,6 +34,7 @@
 #define WDI_TASK_CREATE_PORT                 12
 #define WDI_TASK_DELETE_PORT                 13
 #define WDI_GET_ADAPTER_CAPABILITIES         37
+#define WDI_INDICATION_DISCONNECT_COMPLETE   21
 #define WDI_GET_BSS_ENTRY_LIST               47
 #define WDI_INDICATION_SCAN_COMPLETE         60
 #define WDI_INDICATION_BSS_ENTRY_LIST        62
@@ -41,11 +42,16 @@
 #define WDI_INDICATION_RADIO_STATUS          67
 #define WDI_INDICATION_CREATE_PORT_COMPLETE  68
 #define WDI_INDICATION_DELETE_PORT_COMPLETE  69
+#define WDI_INDICATION_ASSOCIATION_RESULT    76
+#define WDI_SET_ADAPTER_CONFIGURATION        85
 
 #define OID_WDI_TASK_SCAN                    WDI_OID(WDI_TASK_SCAN)
 #define OID_WDI_TASK_CREATE_PORT             WDI_OID(WDI_TASK_CREATE_PORT)
 #define OID_WDI_TASK_DELETE_PORT             WDI_OID(WDI_TASK_DELETE_PORT)
 #define OID_WDI_GET_ADAPTER_CAPABILITIES     WDI_OID(WDI_GET_ADAPTER_CAPABILITIES)
+#define OID_WDI_SET_ADAPTER_CONFIGURATION    WDI_OID(WDI_SET_ADAPTER_CONFIGURATION)
+#define OID_WDI_TASK_CONNECT                 WDI_OID(WDI_TASK_CONNECT)
+#define OID_WDI_TASK_DISCONNECT              WDI_OID(WDI_TASK_DISCONNECT)
 
 #define NdisRequestMethod 12
 
@@ -72,6 +78,7 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_SCAN_MODE                0x06
 #define WDI_TLV_SCAN_DWELL_TIME          0x07
 #define WDI_TLV_BSS_ENTRY                0x08
+#define WDI_TLV_BSS_ENTRY_DEVICE_CONTEXT 0x0D
 #define WDI_TLV_PROBE_RESPONSE_FRAME     0x09
 #define WDI_TLV_BEACON_FRAME             0x0A
 #define WDI_TLV_BSS_ENTRY_SIGNAL_INFO    0x0B
@@ -83,9 +90,22 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_CREATE_PORT_PARAMETERS   0x28
 #define WDI_TLV_PORT_ATTRIBUTES          0x29
 #define WDI_TLV_DELETE_PORT_PARAMETERS   0x2A
+#define WDI_TLV_ASSOCIATION_RESULT_PARAMETERS 0x2D
+#define WDI_TLV_CONNECT_PARAMETERS       0x33
+#define WDI_TLV_CONNECT_BSS_ENTRY        0x34
+#define WDI_TLV_ASSOCIATION_RESULT       0x35
+#define WDI_TLV_DISCONNECT_PARAMETERS    0x36
 #define WDI_TLV_BSS_ENTRY_CHANNEL_INFO   0x3A
 #define WDI_TLV_SSID                     0x3B
+#define WDI_TLV_AUTH_ALGO_LIST           0x3C
+#define WDI_TLV_MULTICAST_CIPHER_ALGO_LIST 0x3D
+#define WDI_TLV_UNICAST_CIPHER_ALGO_LIST 0x3E
+#define WDI_TLV_CONNECTION_SETTINGS      0x3F
+#define WDI_TLV_DATAPATH_ATTRIBUTES      0xB8
+#define WDI_TLV_DATAPATH_CAPABILITIES    0xB9
 #define WDI_TLV_BSS_ENTRY_AGE_INFO       0xBA
+#define WDI_TLV_LINK_QUALITY_BAR_MAP     0xD8
+#define WDI_TLV_PLDR_SUPPORT             0x11A
 #define WDI_TLV_FIRMWARE_VERSION         0xF4
 
 /* WDI_TLV_SCAN_MODE (WDI_SCAN_MODE) */
@@ -151,3 +171,178 @@ typedef struct __attribute__((packed)) {
     unsigned int MaxTxRate, MaxRxRate;    /* kbit/s */
     unsigned char  HardwareRadioState, SoftwareRadioState;
 } WDI_INTERFACE_CAPABILITIES;
+
+/* WDI_TLV_DATAPATH_CAPABILITIES (in WDI_TLV_DATAPATH_ATTRIBUTES, among the
+ * adapter's capabilities): what TalTxRxStart is configured with */
+#define WDI_INTERCONNECT_MEMORY_MAPPED 0
+#define WDI_INTERCONNECT_MESSAGE_BASED 1
+typedef struct __attribute__((packed)) {
+    unsigned int   InterconnectType;
+    unsigned char  MaxNumPeers, TxTargetPriorityQueueing;
+    unsigned short TxMaxScatterGatherElementsPerFrame;
+    unsigned char  TxExplicitSendCompleteFlagRequired;
+    unsigned short TxMinEffectiveFrameSize, TxFrameSizeGranularity;
+    unsigned char  RxTxForwarding;
+    unsigned int   RxMaxThroughput;
+} WDI_DATAPATH_CAPABILITIES;
+
+/* WDI_TLV_LINK_QUALITY_BAR_MAP (OID_WDI_SET_ADAPTER_CONFIGURATION): one entry per signal bar */
+typedef struct __attribute__((packed)) {
+    unsigned char StartRange, EndRange, BarNumber;
+} WDI_LINK_QUALITY_BAR_MAP_ENTRY;
+
+/* OID_WDI_TASK_CONNECT: WDI_TLV_CONNECT_PARAMETERS holds the settings,
+ * the SSID, and the algorithms allowed; each WDI_TLV_CONNECT_BSS_ENTRY an
+ * access point to try (its BSSID, beacon, signal and channel, as a scan
+ * indicated them).  It ends with WDI_INDICATION_ASSOCIATION_RESULT (one
+ * WDI_TLV_ASSOCIATION_RESULT per access point tried), then
+ * WDI_INDICATION_CONNECT_COMPLETE. */
+#define WDI_AUTH_ALGO_80211_OPEN  1
+#define WDI_AUTH_ALGO_RSNA_PSK    7
+#define WDI_AUTH_ALGO_WPA3_SAE    9
+#define WDI_CIPHER_ALGO_NONE      0x00
+#define WDI_CIPHER_ALGO_CCMP      0x04
+typedef struct __attribute__((packed)) {    /* (WDI 1.0.1 and later) */
+    unsigned char  RoamRequest, HiddenNetwork, ExcludeUnencrypted, MFPEnabled, HostFIPSModeEnabled;
+    unsigned int   RoamNeededReason, RoamTrigger;
+    unsigned char  BSSTransitionSupported;
+} WDI_CONNECTION_SETTINGS;
+
+#define WDI_ASSOC_STATUS_SUCCESS  0
+typedef struct __attribute__((packed)) {    /* (its first fields: later ones vary by version) */
+    unsigned int   AssociationStatus, StatusCode;
+    unsigned char  ReAssociation;
+    unsigned int   AuthAlgorithm, UnicastCipherAlgorithm, MulticastDataCipherAlgorithm, MulticastMgmtCipherAlgorithm;
+    unsigned char  FourAddressSupported, PortAuthorized, WMMQoSEnabled;
+} WDI_ASSOCIATION_RESULT_PARAMETERS;
+
+/* WDI_TLV_DISCONNECT_PARAMETERS */
+typedef struct __attribute__((packed)) {
+    unsigned char  MacAddress[6];
+    unsigned short Disassociation80211Reason;
+} WDI_DISCONNECT_PARAMETERS;
+
+/* -----------------------------------------------------------------------
+ * The data path (dot11wdi.h's TAL TX/RX interface).  It is not WDI
+ * messages but calls: the upper edge gives the IHV driver's
+ * MiniportWdiTalTxRxInitialize its NDIS_WDI_DATA_API (the TxMgr and RxMgr:
+ * indications), and gets back the driver's handlers (its TxEngine,
+ * RxEngine and TAL), with the upper edge's data path handle as
+ * NdisMiniportDataPathHandle in every indication.  A frame is an NBL of
+ * one 802.11 MSDU (MAC header, LLC/SNAP, payload; the driver encrypts and
+ * acknowledges); its WDI_FRAME_METADATA is at NBL MiniportReserved[0],
+ * allocated by the upper edge for TX and by the driver
+ * (AllocateWiFiFrameMetaData) for RX.
+ *
+ * TX: TxDataSendHandler says frames are queued for a port and peer; the
+ * driver takes them with TxDequeueIndication (the upper edge calls
+ * TxTargetDescInitHandler on each first), and gives them back with
+ * TxTransferCompleteIndication (and TxSendCompleteIndication by frame ID
+ * when the metadata asked for it).  RX: the driver says frames are ready
+ * with RxInorderDataIndication; the upper edge takes them with
+ * RxGetMpdusHandler and returns them with RxReturnFramesHandler.  Peers
+ * (the access point, once associated) come with PeerCreateIndication.
+ * ----------------------------------------------------------------------- */
+typedef unsigned short WDI_PEER_ID;
+typedef struct { unsigned char Address[6]; } WDI_MAC_ADDRESS;   /* (passed by value: by reference in the x64 ABI) */
+typedef unsigned short WDI_FRAME_ID;
+#define WDI_PEER_ANY        0xFFFF
+#define WDI_EXT_TID_NON_QOS 16
+#define WDI_EXT_TID_UNKNOWN 0x1F
+
+#define WDI_TX_FRAME_STATUS_OK       0
+#define WDI_RX_INDICATION_DISPATCH_GENERAL 0
+#define WDI_FRAME_MSDU               0
+
+typedef struct {
+    unsigned int   InterconnectType;
+    unsigned char  TargetPriorityQueueing;
+    unsigned short MaxScatterGatherElementsPerFrame;
+    unsigned char  ExplicitSendCompleteFlagRequired, Pad;
+    unsigned short MinEffectiveSize, FrameSizeGranularity, Pad2;
+    unsigned char  RxTxForwarding;          /* (ReceiveCapabilities) */
+    unsigned int   MaxThroughput;
+} WDI_TXRX_CAPABILITIES;
+
+typedef struct {
+    WDI_TXRX_CAPABILITIES TxRxCapabilities;  /* (WDI_TXRX_PARAMETERS) */
+    unsigned char  MaxNumPorts, MaxNumPeers;
+} WDI_TXRX_TARGET_CONFIGURATION;
+
+typedef struct {
+    unsigned short MaxOutstandingTransfers;
+} TAL_TXRX_PARAMETERS;
+
+typedef struct {
+    unsigned short PortID;
+    WDI_PEER_ID    PeerID;
+    unsigned char  ExTID, IsUnicast, bAllowLegacyRates;
+    unsigned short Ethertype;
+    unsigned char  bTxCompleteRequired, PnLength;
+    unsigned short TxCost;
+    unsigned int   ExemptionAction;
+    unsigned long long MpduPn[2];
+    unsigned long long ReplayIHVReserved0, ReplayIHVReserved1;
+    unsigned short SeqCtl, wPad;
+} WDI_TX_METADATA;
+
+typedef struct {
+    void          *Flink, *Blink;           /* (LIST_ENTRY Linkage: the upper edge's) */
+    NET_BUFFER_LIST *pNBL;
+    WDI_FRAME_ID   FrameID;
+    unsigned short wPad;
+    unsigned int   dPad;
+    union {
+        WDI_TX_METADATA txMetaData;
+        unsigned int    rxPayloadType;      /* (WDI_RX_METADATA) */
+    } u;
+} WDI_FRAME_METADATA;
+
+#define WDI_FRAME_METADATA_OF(nbl) ((WDI_FRAME_METADATA *)(nbl)->MiniportReserved[0])
+
+/* The upper edge's indications (NDIS_WDI_DATA_API, header type 0xC2,
+ * revision 1; byte-packed as dot11wdi.h declares it) */
+#define NDIS_OBJECT_TYPE_WDI_DATA_API              0xC2
+#define NDIS_OBJECT_TYPE_MINIPORT_WDI_DATA_HANDLERS 0xC1
+typedef struct __attribute__((packed)) {
+    NDIS_OBJECT_HEADER Header;
+    void *TxDequeueIndication, *TxTransferCompleteIndication, *TxSendCompleteIndication, *TxQueryRATIDState,
+         *TxSendPauseIndication, *TxSendRestartIndication, *TxReleaseFrameIndication, *TxInjectFrameIndication,
+         *TxAbortConfirm, *RxInorderDataIndication, *RxStopConfirm, *RxFlushConfirm, *PeerCreateIndication,
+         *PeerDeleteIndication, *AllocateWiFiFrameMetaData, *FreeWiFiFrameMetaData,
+         *TxQuerySuspectFrameCompleteStatus;
+} NDIS_WDI_DATA_API;
+
+/* The driver's (NDIS_MINIPORT_WDI_DATA_HANDLERS, byte-packed) */
+typedef struct __attribute__((packed)) {
+    NDIS_OBJECT_HEADER Header;
+    void *TxAbortHandler, *TxTargetDescInitHandler, *TxTargetDescDeInitHandler, *TxDataSendHandler,
+         *TxTalSendHandler, *TxTalSendCompleteHandler, *TxTalQueueInOrderHandler, *TxPeerBacklogHandler,
+         *RxStopHandler, *RxFlushHandler, *RxRestartHandler, *RxGetMpdusHandler, *RxReturnFramesHandler,
+         *RxResumeHandler, *RxThrottleHandler, *RxPpduRssiHandler, *TalTxRxStartHandler, *TalTxRxStopHandler,
+         *TalTxRxAddPortHandler, *TalTxRxDeletePortHandler, *TalTxRxSetPortOpModeHandler,
+         *TalTxRxResetPortHandler, *TalTxRxPeerConfigHandler, *TalTxRxPeerDeleteConfirmHandler,
+         *TxSuspectFrameAbortHandler;
+} NDIS_MINIPORT_WDI_DATA_HANDLERS;
+
+_Static_assert(sizeof(WDI_TXRX_CAPABILITIES) == 24 && sizeof(WDI_TXRX_TARGET_CONFIGURATION) == 28 &&
+               sizeof(WDI_TX_METADATA) == 64 && sizeof(WDI_FRAME_METADATA) == 96 &&
+               sizeof(NDIS_WDI_DATA_API) == 4 + 17 * 8 && sizeof(NDIS_MINIPORT_WDI_DATA_HANDLERS) == 4 + 25 * 8 &&
+               sizeof(WDI_DATAPATH_CAPABILITIES) == 18 && sizeof(WDI_CONNECTION_SETTINGS) == 14,
+               "WDI data path types");
+
+/* 802.11 data frames as the data path carries them (IEEE 802.11-2020 9.3.2.1) */
+#define DOT11_FC0_DATA      0x08        /* type data, subtype data */
+#define DOT11_FC0_QOS_DATA  0x88
+#define DOT11_FC1_TO_DS     0x01
+#define DOT11_FC1_FROM_DS   0x02
+#define DOT11_FC1_PROTECTED 0x40
+#define DOT11_DATA_HEADER   24
+typedef struct __attribute__((packed)) {
+    unsigned char  FrameControl[2];
+    unsigned short Duration;
+    unsigned char  Address1[6], Address2[6], Address3[6];
+    unsigned short SequenceControl;
+} DOT11_DATA_HEADER_T;
+/* LLC/SNAP before the Ethertype (RFC 1042) */
+#define DOT11_SNAP_LEN 8

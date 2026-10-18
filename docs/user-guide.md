@@ -405,14 +405,21 @@ netsh interface ipv4 show config
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
 
-**Wi-Fi** cannot connect yet.  With a Wi-Fi card whose Windows driver
-NovaOS can open, the Terminal lists the card and the networks in range,
-as on Windows:
+**Wi-Fi** connects to open networks only so far (WPA2 and WPA3 are
+coming).  With a Wi-Fi card whose Windows driver NovaOS can open, the
+Terminal lists the card and the networks in range, joins one and leaves
+it, as on Windows:
 
 ```text
 netsh wlan show interfaces
 netsh wlan show networks mode=bssid
+netsh wlan connect name=CoffeeShop
+netsh wlan disconnect
 ```
+
+While connected, the Wi-Fi card carries NovaOS's network traffic
+(`ipconfig` shows "Wireless LAN adapter Wi-Fi"); when it disconnects, the
+Ethernet card takes over again.
 
 **Sound** plays through the newest output device.  Settings > Sound picks
 another device and sets each device's volume; the choices are kept across

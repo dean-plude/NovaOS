@@ -424,8 +424,9 @@ static bool tx_setup(NdisAdapter *a)
  * the IHV's "open task" (its hardware start: registers, firmware), which
  * completes through NdisWdiOpenAdapterComplete; then WDI commands (TLV
  * messages in NdisRequestMethod OID requests to its MiniportOidRequest:
- * adapter capabilities, ports, scans, connections), which are wdi.c's,
- * the command layer (roadmap step 28.1, docs/drivers.md).
+ * adapter capabilities, ports, scans, connections) and its data path
+ * (the TAL TX/RX calls: 802.11 frames in NBLs), which are wdi.c's (roadmap
+ * step 28.1, docs/drivers.md).
  * ----------------------------------------------------------------------- */
 typedef NDIS_STATUS (NT_API *WDI_ALLOCATE)(void *adapter_handle, void *driver_ctx, NDIS_MINIPORT_INIT_PARAMETERS *,
                                           NDIS_WDI_INIT_PARAMETERS *, NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES *);
@@ -538,7 +539,8 @@ static NT_STATUS wdi_start(NdisAdapter *a)
     ksnprintf(ek, sizeof(ek), ENUM_KEY "%s", inst ? inst : "");
     if (inst) um_registry_get_sz(ek, "DeviceDesc", desc, sizeof(desc));
     const char *semi = strrchr(desc, ';');
-    a->wdi_host = WdiAttach(a, d->service, semi ? semi + 1 : desc, wdi_request);
+    a->wdi_host = WdiAttach(a, d->service, semi ? semi + 1 : desc, wdi_request, a->ctx, d->wdi_ch.TalTxRxInitializeHandler,
+                            d->wdi_ch.TalTxRxDeinitializeHandler);
     return NT_STATUS_SUCCESS;
 }
 

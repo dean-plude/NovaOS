@@ -1,13 +1,13 @@
 /*
- * wdi.c — the WDI command layer: NovaOS's upper edge for a Wi-Fi miniport
- * (roadmap step 28.1)
+ * wdi.c — the WDI upper edge for a Wi-Fi miniport: its command layer and
+ * its data path (roadmap step 28.1)
  *
  * On Windows a Wi-Fi driver such as Intel's Netwtw14.sys is a WDI "lower
  * edge": it does not talk to NDIS's protocols itself, Microsoft's
  * wdiwifi.sys is the NDIS miniport for it and drives it with WDI messages.
  * ndis.c is the part of that upper edge that allocates and opens the
  * adapter (MiniportWdiAllocateAdapter, MiniportWdiOpenAdapter); this file is
- * the rest of what NovaOS has of it so far, the command layer:
+ * the rest of what NovaOS has of it so far.  The command layer:
  *
  *   - a command is an NDIS method OID (OID_WDI_*) whose buffer holds a
  *     WDI_MESSAGE_HEADER and TLVs (wdi.h); ndis.c hands it to the
@@ -18,29 +18,63 @@
  *     both;
  *   - other indications come when the driver has something to say: a
  *     scan's BSS entries (NDIS_STATUS_WDI_INDICATION_BSS_ENTRY_LIST), kept
- *     here as the adapter's list of access points.
+ *     here as the adapter's list of access points; a connection's
+ *     association result.
  *
- * After the open, WdiAttach asks the adapter what it is
- * (OID_WDI_GET_ADAPTER_CAPABILITIES: its MAC address, firmware, radio state
- * and bands) and creates its station port (OID_WDI_TASK_CREATE_PORT); a
- * scan (WlanScan, from netsh wlan show networks) is OID_WDI_TASK_SCAN on
- * that port.  Not yet here (docs/drivers.md): the data path (TAL TX/RX),
- * the adapter configuration, connecting (OID_WDI_TASK_CONNECT and the
- * WPA2/WPA3 handshake), wlanapi.dll and Settings' Wi-Fi page.
+ * The data path is calls, not messages (wdi.h): the driver's TAL takes
+ * 802.11 data frames from the TxMgr here and hands received ones to the
+ * RxMgr here.  Frames the network stack sends (Ethernet, kernel/net) become
+ * 802.11 MSDUs to the access point (ToDS, LLC/SNAP); 802.11 frames the
+ * driver receives become Ethernet frames for the stack again.
+ *
+ * WdiAttach brings the adapter up in the order wdiwifi.sys does: the data
+ * path (MiniportWdiTalTxRxInitialize), the adapter's capabilities
+ * (OID_WDI_GET_ADAPTER_CAPABILITIES: its MAC address, firmware, radio state,
+ * bands and data path attributes), its configuration
+ * (OID_WDI_SET_ADAPTER_CONFIGURATION), the data path's start
+ * (TalTxRxStart), then its station port (OID_WDI_TASK_CREATE_PORT and
+ * TalTxRxAddPort).  A scan (WlanScan, from netsh wlan show networks) is
+ * OID_WDI_TASK_SCAN on that port; a connection (WlanConnect, from netsh
+ * wlan connect) is OID_WDI_TASK_CONNECT with the access points the scan
+ * heard, the driver indicating its peer (the access point) and the
+ * association's result; then the adapter is the stack's (NetAttach) and
+ * DHCP runs over Wi-Fi.  Open networks only so far: not yet here
+ * (docs/drivers.md) are the WPA2 and WPA3 handshakes, wlanapi.dll and
+ * Settings' Wi-Fi page.
  */
 #include "ntapi.h"
 #include "ndis.h"
 #include "wdi.h"
 #include "wlan.h"
+#include "../ke/irql.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
+#include "../net/net.h"
 
 #define WDI_MAX_ADAPTERS  4
 #define CMD_BUF           8192      /* (a command's buffer: its answer comes back in it) */
 #define TASK_WAIT_S       30
 #define SCAN_MAX_MS       4000
+#define CONNECT_WAIT_S    30
+#define BSS_RAW           512       /* (a BSS entry's TLVs, kept for OID_WDI_TASK_CONNECT) */
+#define TX_FRAMES         32        /* frames the stack may have queued or with the driver */
+#define TX_FRAME_BUF      2048
+#define RX_SLOTS          64        /* received frames waiting for the stack */
+#define RX_FRAME          1536
+#define POOL_TAG          0x49445749u   /* 'IWDI' */
+
+/* A frame on its way out: an NBL of one 802.11 MSDU with its metadata */
+typedef struct {
+    NET_BUFFER_LIST    nbl;
+    NET_BUFFER         nb;
+    WDI_FRAME_METADATA meta;
+    NT_MDL            *mdl;
+    UINT8             *buf;
+    volatile int       state;       /* TXF_* */
+} TxFrame;
+enum { TXF_FREE, TXF_QUEUED, TXF_DRIVER };
 
 struct WdiHost {
     bool           used;
@@ -59,7 +93,35 @@ struct WdiHost {
     /* the access points the driver has indicated */
     NT_KSPIN_LOCK  bss_lock;
     WlanBss        bss[WLAN_MAX_BSS];
+    UINT8          bss_raw[WLAN_MAX_BSS][BSS_RAW];
+    UINT16         bss_raw_len[WLAN_MAX_BSS];
     int            nbss;
+    /* the data path: the driver's TAL */
+    void          *mp_ctx;          /* its MiniportAdapterContext */
+    void          *tal_init, *tal_deinit;
+    void          *tal;             /* its TAL_TXRX_HANDLE, once initialized */
+    NDIS_MINIPORT_WDI_DATA_HANDLERS dh;
+    UINT32         meta_extra;      /* (what it wants after each RX metadata) */
+    bool           tal_started, tal_port;
+    WDI_DATAPATH_CAPABILITIES dpcaps;
+    TxFrame       *tx;
+    NT_KSPIN_LOCK  tx_lock;
+    UINT16         txq[TX_FRAMES];  /* queued frames (indices into tx), oldest first */
+    UINT32         txq_head, txq_tail;
+    WDI_FRAME_ID   next_frame;
+    volatile bool  tx_paused;
+    NT_KSPIN_LOCK  rx_lock;
+    UINT8         *rx;              /* RX_SLOTS Ethernet frames of RX_FRAME */
+    UINT16         rx_len[RX_SLOTS];
+    UINT32         rx_head, rx_tail;
+    UINT64         rx_dropped;
+    /* the connection */
+    volatile bool  peer_up;
+    WDI_PEER_ID    peer;
+    UINT8          peer_mac[6];
+    bool           peer_deleted;    /* (the driver deleted it: confirmed after the disconnect) */
+    bool           assoc_seen;
+    WDI_ASSOCIATION_RESULT_PARAMETERS assoc;
 };
 
 /* (hosts are never freed, only reused: netsh can hold one while its
@@ -194,6 +256,13 @@ static bool get_capabilities(WdiHost *w, UINT8 *buf)
             w->info.bands |= 1u << bc.BandID;
         off += sizeof(*t) + t->Length;
     }
+    /* (the data path's: the TxMgr's queueing and how frames complete) */
+    UINT32 dl;
+    const UINT8 *da = tlv_find(m, n, WDI_TLV_DATAPATH_ATTRIBUTES, &dl);
+    memset(&w->dpcaps, 0, sizeof(w->dpcaps));
+    w->dpcaps.MaxNumPeers = 1;
+    w->dpcaps.TxTargetPriorityQueueing = 1;
+    if (da) tlv_get(da, dl, WDI_TLV_DATAPATH_CAPABILITIES, &w->dpcaps, sizeof(w->dpcaps));
     char mac[18];
     mac_str(w->info.mac, mac);
     kprintf("[WDI] %s: adapter capabilities: MAC %s, firmware %s, radio %s/%s, bands%s%s%s\n", w->info.service, mac,
@@ -201,6 +270,23 @@ static bool get_capabilities(WdiHost *w, UINT8 *buf)
             w->info.sw_radio ? "on" : "off", w->info.bands & (1u << WDI_BAND_ID_2400) ? " 2.4" : "",
             w->info.bands & (1u << WDI_BAND_ID_5000) ? " 5" : "", w->info.bands & (1u << WDI_BAND_ID_6000) ? " 6" : "");
     return true;
+}
+
+/* OID_WDI_SET_ADAPTER_CONFIGURATION: how link quality maps to the five
+ * signal bars (the one setting the message must have), no platform-level
+ * device reset */
+static bool set_configuration(WdiHost *w, UINT8 *buf)
+{
+    static const WDI_LINK_QUALITY_BAR_MAP_ENTRY bars[] = {
+        { 0, 19, 1 }, { 20, 39, 2 }, { 40, 59, 3 }, { 60, 79, 4 }, { 80, 100, 5 },
+    };
+    UINT8 pldr = 0;
+    UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER);
+    UINT32 tlen = tlv_put(t, 0, WDI_TLV_LINK_QUALITY_BAR_MAP, bars, sizeof(bars));
+    tlen = tlv_put(t, tlen, WDI_TLV_PLDR_SUPPORT, &pldr, 1);
+    NDIS_STATUS st = command(w, WDI_SET_ADAPTER_CONFIGURATION, WDI_PORT_ID_ADAPTER, buf, tlen, 0, NULL, 0);
+    kprintf("[WDI] %s: adapter configured (0x%08x)\n", w->info.service, (UINT32)st);
+    return st == NDIS_STATUS_SUCCESS;
 }
 
 /* OID_WDI_TASK_CREATE_PORT: the station port scans and connections use */
@@ -335,10 +421,430 @@ static void add_bss(WdiHost *w, const UINT8 *v, UINT32 n)
     for (i = 0; i < w->nbss && memcmp(w->bss[i].bssid, b.bssid, 6); i++) {}
     if (i < WLAN_MAX_BSS) {
         w->bss[i] = b;
+        w->bss_raw_len[i] = (UINT16)(n <= BSS_RAW ? n : 0);
+        if (n <= BSS_RAW) memcpy(w->bss_raw[i], v, n);
         if (i == w->nbss) w->nbss++;
     }
     nt_KeReleaseSpinLock(&w->bss_lock, old);
 }
+
+/* -----------------------------------------------------------------------
+ * The data path: the TxMgr and RxMgr the driver's TAL calls (its
+ * NdisMiniportDataPathHandle is the WdiHost), and the TAL calls made here
+ * ----------------------------------------------------------------------- */
+typedef NDIS_STATUS (NT_API *TAL_INIT)(void *mp_ctx, void *dp, NDIS_WDI_DATA_API *api, void **tal,
+                                       NDIS_MINIPORT_WDI_DATA_HANDLERS *handlers, UINT32 *meta_extra);
+typedef void        (NT_API *TAL_FN)(void *tal);
+typedef NDIS_STATUS (NT_API *TAL_START)(void *tal, WDI_TXRX_TARGET_CONFIGURATION *cfg, TAL_TXRX_PARAMETERS *out);
+typedef void        (NT_API *TAL_ADD_PORT)(void *tal, UINT16 port, UINT32 opmode);
+typedef void        (NT_API *TAL_PORT)(void *tal, UINT16 port);
+typedef void        (NT_API *TAL_PEER_CONFIG)(void *tal, UINT16 port, WDI_PEER_ID peer, UINT32 *qos);
+typedef void        (NT_API *TAL_PEER_DELETE_CONFIRM)(void *tal, UINT16 port, WDI_PEER_ID peer);
+typedef void        (NT_API *TX_DESC_INIT)(void *tal, NET_BUFFER_LIST *nbl, NDIS_STATUS *st);
+typedef void        (NT_API *TX_DESC_DEINIT)(void *tal, NET_BUFFER_LIST *nbl);
+typedef void        (NT_API *TX_DATA_SEND)(void *tal, UINT16 port, WDI_PEER_ID peer, UINT8 tid, UINT16 queued,
+                                           UINT32 active, UINT8 robust);
+typedef void        (NT_API *RX_GET_MPDUS)(void *tal, WDI_PEER_ID peer, UINT8 tid, NET_BUFFER_LIST **out);
+typedef void        (NT_API *RX_RETURN)(void *tal, NET_BUFFER_LIST *nbl);
+
+#define TAL_CALL(w, fn, type, ...) do { if ((w)->dh.fn) ((type)(w)->dh.fn)(__VA_ARGS__); } while (0)
+
+static WdiHost *g_net_host;             /* the connected adapter the stack uses */
+
+static UINT8 *mdl_va(NT_MDL *m)
+{
+    if (m->MdlFlags & (NT_MDL_MAPPED_TO_SYSTEM_VA | NT_MDL_SOURCE_IS_NONPAGED_POOL)) return m->MappedSystemVa;
+    return (UINT8 *)m->StartVa + m->ByteOffset;
+}
+
+/* Copy an NBL's first NET_BUFFER (its MDL chain) into @out: its length */
+static UINT32 nb_copy(NET_BUFFER_LIST *nbl, UINT8 *out, UINT32 cap)
+{
+    NET_BUFFER *nb = nbl->FirstNetBuffer;
+    if (!nb) return 0;
+    UINT32 left = nb->DataLength, off = nb->CurrentMdlOffset, n = 0;
+    for (NT_MDL *m = nb->CurrentMdl; m && left && n < cap; m = m->Next, off = 0) {
+        UINT32 k = m->ByteCount > off ? m->ByteCount - off : 0;
+        if (k > left) k = left;
+        if (k > cap - n) k = cap - n;
+        memcpy(out + n, mdl_va(m) + off, k);
+        n += k;
+        left -= k;
+    }
+    return n;
+}
+
+/* TxMgr: the driver takes queued frames (each given its target descriptor first) */
+static NT_API void dp_tx_dequeue(void *h, UINT32 quantum, UINT8 max, UINT16 credit, NET_BUFFER_LIST **out)
+{
+    (void)quantum; (void)credit;
+    WdiHost *w = h;
+    *out = NULL;
+    NET_BUFFER_LIST *head = NULL, **tail = &head;
+    UINT32 limit = max == 0xFF || !max ? TX_FRAMES : max;
+    for (UINT32 k = 0; k < limit; k++) {
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->tx_lock);
+        TxFrame *f = NULL;
+        if (w->txq_tail != w->txq_head) f = &w->tx[w->txq[w->txq_tail++ % TX_FRAMES]];
+        nt_KeReleaseSpinLock(&w->tx_lock, old);
+        if (!f) break;
+        NDIS_STATUS st = NDIS_STATUS_SUCCESS;
+        TAL_CALL(w, TxTargetDescInitHandler, TX_DESC_INIT, w->tal, &f->nbl, &st);
+        if (st != NDIS_STATUS_SUCCESS) {            /* (no descriptor for it: dropped, as a full queue drops) */
+            __atomic_store_n(&f->state, TXF_FREE, __ATOMIC_RELEASE);
+            continue;
+        }
+        __atomic_store_n(&f->state, TXF_DRIVER, __ATOMIC_RELEASE);
+        f->nbl.Next = NULL;
+        *tail = &f->nbl;
+        tail = &f->nbl.Next;
+    }
+    *out = head;
+}
+
+static TxFrame *tx_frame_of(WdiHost *w, NET_BUFFER_LIST *nbl)
+{
+    TxFrame *f = (TxFrame *)((UINT8 *)nbl - __builtin_offsetof(TxFrame, nbl));
+    return w->tx && f >= w->tx && f < w->tx + TX_FRAMES ? f : NULL;
+}
+
+/* TxMgr: the driver has transferred frames to its hardware (and, as no
+ * frame asks for a send completion, they are done) */
+static NT_API void dp_tx_transfer_complete(void *h, UINT32 status, NET_BUFFER_LIST *nbl)
+{
+    (void)status;
+    WdiHost *w = h;
+    for (NET_BUFFER_LIST *next; nbl; nbl = next) {
+        next = nbl->Next;
+        TxFrame *f = tx_frame_of(w, nbl);
+        if (!f) continue;
+        TAL_CALL(w, TxTargetDescDeInitHandler, TX_DESC_DEINIT, w->tal, nbl);
+        w->info.tx_frames++;
+        __atomic_store_n(&f->state, TXF_FREE, __ATOMIC_RELEASE);
+    }
+}
+
+static NT_API void dp_tx_send_complete(void *h, UINT32 status, UINT16 n, WDI_FRAME_ID *ids, void *data)
+{
+    (void)h; (void)status; (void)n; (void)ids; (void)data;     /* (frames here never ask for one) */
+}
+
+static NT_API void dp_tx_query_ratid(void *h, UINT16 port, WDI_PEER_ID peer, UINT8 tid, NDIS_STATUS *st, UINT16 *qlen)
+{
+    (void)port; (void)peer; (void)tid;
+    WdiHost *w = h;
+    *st = NDIS_STATUS_SUCCESS;
+    *qlen = (UINT16)(w->txq_head - w->txq_tail);
+}
+
+static NT_API void dp_tx_pause(void *h, UINT16 port, WDI_PEER_ID peer, UINT32 tids, UINT32 reason)
+{
+    (void)port; (void)peer; (void)tids; (void)reason;
+    ((WdiHost *)h)->tx_paused = true;
+}
+
+static void tx_kick(WdiHost *w);
+static NT_API void dp_tx_restart(void *h, UINT16 port, WDI_PEER_ID peer, UINT32 tids, UINT32 reason)
+{
+    (void)port; (void)peer; (void)tids; (void)reason;
+    WdiHost *w = h;
+    w->tx_paused = false;
+    tx_kick(w);
+}
+
+static NT_API void dp_tx_release_frames(void *h, UINT16 port, WDI_PEER_ID peer, UINT32 tids, UINT8 max, UINT16 credit,
+                                        NET_BUFFER_LIST **out)
+{
+    (void)port; (void)peer; (void)tids;
+    dp_tx_dequeue(h, 0, max, credit, out);         /* (one queue per port: the same frames) */
+}
+
+static NT_API void dp_tx_inject(void *h, UINT16 port, WDI_PEER_ID peer, UINT8 tid, NET_BUFFER_LIST *nbl, UINT8 unicast,
+                                UINT8 legacy, UINT16 ethertype, UINT32 exemption)
+{
+    (void)h; (void)port; (void)peer; (void)tid; (void)nbl; (void)unicast; (void)legacy; (void)ethertype; (void)exemption;
+    kprintf("[WDI] the driver injected a frame of its own (not supported yet)\n");
+}
+
+static NT_API void dp_confirm(void *h) { (void)h; }   /* (TX abort, RX stop and RX flush: never asked for) */
+
+static void rx_push(WdiHost *w, const UINT8 *f, UINT32 n);
+
+/* RxMgr: the driver has frames from @peer: take them, then give them back */
+static NT_API void dp_rx_inorder(void *h, UINT32 level, WDI_PEER_ID peer, UINT8 tid, NDIS_RECEIVE_THROTTLE_PARAMETERS *thr,
+                                 NDIS_STATUS *st)
+{
+    (void)level; (void)thr;
+    WdiHost *w = h;
+    static UINT8 frame[2400];               /* (RX indications are serialized per adapter: one at a time here) */
+    for (int rounds = 0; rounds < 16; rounds++) {
+        NET_BUFFER_LIST *nbl = NULL;
+        TAL_CALL(w, RxGetMpdusHandler, RX_GET_MPDUS, w->tal, peer, tid, &nbl);
+        if (!nbl) break;
+        for (NET_BUFFER_LIST *x = nbl; x; x = x->Next) {
+            UINT32 n = nb_copy(x, frame, sizeof(frame));
+            rx_push(w, frame, n);
+        }
+        TAL_CALL(w, RxReturnFramesHandler, RX_RETURN, w->tal, nbl);
+    }
+    if (st) *st = NDIS_STATUS_SUCCESS;
+}
+
+/* The driver associated: its peer is the access point */
+static NT_API void dp_peer_create(void *h, UINT16 port, WDI_PEER_ID peer, WDI_MAC_ADDRESS mac)
+{
+    WdiHost *w = h;
+    w->peer = peer;
+    memcpy(w->peer_mac, mac.Address, 6);
+    w->peer_deleted = false;
+    __atomic_store_n(&w->peer_up, true, __ATOMIC_RELEASE);
+    char m[18];
+    mac_str(mac.Address, m);
+    kprintf("[WDI] %s: peer %u on port %u: %s\n", w->info.service, peer, port, m);
+}
+
+static NT_API void dp_peer_delete(void *h, UINT16 port, WDI_PEER_ID peer, NDIS_STATUS *st)
+{
+    WdiHost *w = h;
+    __atomic_store_n(&w->peer_up, false, __ATOMIC_RELEASE);
+    w->peer_deleted = true;
+    kprintf("[WDI] %s: peer %u on port %u deleted\n", w->info.service, peer, port);
+    if (st) *st = NDIS_STATUS_SUCCESS;
+}
+
+static NT_API WDI_FRAME_METADATA *dp_alloc_meta(void *h)
+{
+    WdiHost *w = h;
+    WDI_FRAME_METADATA *m = nt_ExAllocatePoolWithTag(0, sizeof(*m) + w->meta_extra, POOL_TAG);
+    if (m) memset(m, 0, sizeof(*m) + w->meta_extra);
+    return m;
+}
+
+static NT_API void dp_free_meta(void *h, WDI_FRAME_METADATA *m) { (void)h; if (m) nt_ExFreePool(m); }
+
+static NT_API void dp_tx_suspect(void *h, UINT64 ctx, NET_BUFFER_LIST *nbl, UINT8 *transfer, UINT8 *send, NDIS_STATUS *st)
+{
+    (void)h; (void)ctx; (void)nbl;
+    *transfer = 1;
+    *send = 0;
+    *st = NDIS_STATUS_SUCCESS;
+}
+
+static NDIS_WDI_DATA_API g_data_api = {
+    { NDIS_OBJECT_TYPE_WDI_DATA_API, 2, sizeof(NDIS_WDI_DATA_API) },
+    (void *)dp_tx_dequeue, (void *)dp_tx_transfer_complete, (void *)dp_tx_send_complete, (void *)dp_tx_query_ratid,
+    (void *)dp_tx_pause, (void *)dp_tx_restart, (void *)dp_tx_release_frames, (void *)dp_tx_inject,
+    (void *)dp_confirm, (void *)dp_rx_inorder, (void *)dp_confirm, (void *)dp_confirm, (void *)dp_peer_create,
+    (void *)dp_peer_delete, (void *)dp_alloc_meta, (void *)dp_free_meta, (void *)dp_tx_suspect,
+};
+
+static void tx_free_all(WdiHost *w)
+{
+    if (!w->tx) return;
+    for (int i = 0; i < TX_FRAMES; i++) {
+        if (w->tx[i].mdl) nt_IoFreeMdl(w->tx[i].mdl);
+        kfree(w->tx[i].buf);
+    }
+    kfree(w->tx);
+    w->tx = NULL;
+    kfree(w->rx);
+    w->rx = NULL;
+}
+
+/* MiniportWdiTalTxRxInitialize: the driver's data path handlers */
+static bool tal_initialize(WdiHost *w)
+{
+    if (!w->tal_init) {
+        kprintf("[WDI] %s: the driver has no data path (TalTxRxInitialize)\n", w->info.service);
+        return false;
+    }
+    w->tx = kzalloc(sizeof(TxFrame) * TX_FRAMES);
+    w->rx = kzalloc((size_t)RX_SLOTS * RX_FRAME);
+    if (!w->tx || !w->rx) { tx_free_all(w); return false; }
+    for (int i = 0; i < TX_FRAMES; i++) {
+        TxFrame *f = &w->tx[i];
+        f->buf = kzalloc(TX_FRAME_BUF);
+        f->mdl = f->buf ? nt_IoAllocateMdl(f->buf, TX_FRAME_BUF, 0, 0, NULL) : NULL;
+        if (!f->mdl) { tx_free_all(w); return false; }
+        nt_MmBuildMdlForNonPagedPool(f->mdl);
+    }
+    w->txq_head = w->txq_tail = w->rx_head = w->rx_tail = 0;
+    w->tx_lock = w->rx_lock = 0;
+    memset(&w->dh, 0, sizeof(w->dh));
+    w->dh.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_WDI_DATA_HANDLERS;
+    w->dh.Header.Revision = 2;
+    w->dh.Header.Size = sizeof(w->dh);
+    w->meta_extra = 0;
+    w->tal = NULL;
+    NDIS_STATUS st = ((TAL_INIT)w->tal_init)(w->mp_ctx, w, &g_data_api, &w->tal, &w->dh, &w->meta_extra);
+    kprintf("[WDI] %s: data path initialized (0x%08x)%s%s\n", w->info.service, (UINT32)st,
+            w->dh.TxDataSendHandler ? ", TX" : "", w->dh.RxGetMpdusHandler ? ", RX" : "");
+    if (st != NDIS_STATUS_SUCCESS || !w->dh.TxDataSendHandler || !w->dh.RxGetMpdusHandler ||
+        !w->dh.TalTxRxStartHandler) {
+        if (st == NDIS_STATUS_SUCCESS && w->tal_deinit) ((TAL_FN)w->tal_deinit)(w->tal);
+        w->tal = NULL;
+        tx_free_all(w);
+        return false;
+    }
+    return true;
+}
+
+/* TalTxRxStart: the data path configured from the adapter's capabilities */
+static bool tal_start(WdiHost *w)
+{
+    WDI_TXRX_TARGET_CONFIGURATION cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    WDI_TXRX_CAPABILITIES *c = &cfg.TxRxCapabilities;
+    c->InterconnectType = w->dpcaps.InterconnectType;
+    c->TargetPriorityQueueing = w->dpcaps.TxTargetPriorityQueueing;
+    c->MaxScatterGatherElementsPerFrame = w->dpcaps.TxMaxScatterGatherElementsPerFrame;
+    c->ExplicitSendCompleteFlagRequired = w->dpcaps.TxExplicitSendCompleteFlagRequired;
+    c->MinEffectiveSize = w->dpcaps.TxMinEffectiveFrameSize;
+    c->FrameSizeGranularity = w->dpcaps.TxFrameSizeGranularity;
+    c->RxTxForwarding = w->dpcaps.RxTxForwarding;
+    c->MaxThroughput = w->dpcaps.RxMaxThroughput;
+    cfg.MaxNumPorts = 1;
+    cfg.MaxNumPeers = w->dpcaps.MaxNumPeers ? w->dpcaps.MaxNumPeers : 1;
+    TAL_TXRX_PARAMETERS out = { 0 };
+    NDIS_STATUS st = ((TAL_START)w->dh.TalTxRxStartHandler)(w->tal, &cfg, &out);
+    kprintf("[WDI] %s: data path started (0x%08x): %s queueing, %u peer(s), %u transfers at a time\n",
+            w->info.service, (UINT32)st, c->TargetPriorityQueueing ? "port" : "peer/TID", cfg.MaxNumPeers,
+            out.MaxOutstandingTransfers);
+    w->tal_started = st == NDIS_STATUS_SUCCESS;
+    return w->tal_started;
+}
+
+static void tal_shutdown(WdiHost *w)
+{
+    if (!w->tal) return;
+    if (w->tal_started) TAL_CALL(w, TalTxRxStopHandler, TAL_FN, w->tal);
+    w->tal_started = false;
+    if (w->tal_deinit) ((TAL_FN)w->tal_deinit)(w->tal);
+    w->tal = NULL;
+    for (int i = 0; w->tx && i < TX_FRAMES; i++)
+        if (w->tx[i].state == TXF_DRIVER) kprintf("[WDI] %s: a frame was still with the driver\n", w->info.service);
+    tx_free_all(w);
+    kprintf("[WDI] %s: data path stopped (%llu frames sent, %llu received)\n", w->info.service,
+            (unsigned long long)w->info.tx_frames, (unsigned long long)w->info.rx_frames);
+}
+
+/* Tell the driver frames are queued for the access point */
+static void tx_kick(WdiHost *w)
+{
+    if (w->tx_paused || !w->peer_up || w->txq_head == w->txq_tail) return;
+    UINT8 tid = w->assoc.WMMQoSEnabled ? 0 : WDI_EXT_TID_NON_QOS;
+    UINT8 old = nt_KfRaiseIrql(DISPATCH_LEVEL);
+    ((TX_DATA_SEND)w->dh.TxDataSendHandler)(w->tal, w->port_id, w->peer, tid, (UINT16)(w->txq_head - w->txq_tail),
+                                            (UINT32)(w->txq_head - w->txq_tail), 0);
+    nt_KeLowerIrql(old);
+}
+
+/* An Ethernet frame from the stack as an 802.11 MSDU to the access point
+ * (ToDS: address 1 the BSSID, 2 the source, 3 the destination) */
+static bool wifi_transmit(const void *frame, UINT16 len)
+{
+    WdiHost *w = g_net_host;
+    const UINT8 *e = frame;
+    if (!w || !w->tx || !w->peer_up || len < 14 || len - 14u + DOT11_DATA_HEADER + DOT11_SNAP_LEN > TX_FRAME_BUF)
+        return false;
+    TxFrame *f = NULL;
+    for (int i = 0; i < TX_FRAMES && !f; i++)
+        if (__atomic_load_n(&w->tx[i].state, __ATOMIC_ACQUIRE) == TXF_FREE) {
+            int want = TXF_FREE;
+            if (__atomic_compare_exchange_n(&w->tx[i].state, &want, TXF_QUEUED, false, __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE))
+                f = &w->tx[i];
+        }
+    if (!f) return false;
+    DOT11_DATA_HEADER_T *h = (DOT11_DATA_HEADER_T *)f->buf;
+    memset(h, 0, sizeof(*h));
+    h->FrameControl[0] = DOT11_FC0_DATA;
+    h->FrameControl[1] = DOT11_FC1_TO_DS;
+    memcpy(h->Address1, w->peer_mac, 6);
+    memcpy(h->Address2, e + 6, 6);
+    memcpy(h->Address3, e, 6);
+    static const UINT8 snap[6] = { 0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00 };
+    UINT8 *p = f->buf + DOT11_DATA_HEADER;
+    memcpy(p, snap, 6);
+    memcpy(p + 6, e + 12, len - 12u);                   /* (the Ethertype, then the payload) */
+    UINT32 n = DOT11_DATA_HEADER + 6 + (len - 12u);
+    f->mdl->ByteCount = n;
+    memset(&f->meta, 0, sizeof(f->meta));
+    f->meta.pNBL = &f->nbl;
+    f->meta.FrameID = ++w->next_frame ? w->next_frame : ++w->next_frame;
+    WDI_TX_METADATA *t = &f->meta.u.txMetaData;
+    t->PortID = w->port_id;
+    t->PeerID = w->peer;
+    t->ExTID = w->assoc.WMMQoSEnabled ? 0 : WDI_EXT_TID_NON_QOS;
+    t->IsUnicast = !(e[0] & 1);
+    t->Ethertype = (UINT16)(e[12] << 8 | e[13]);
+    memset(&f->nbl, 0, sizeof(f->nbl));
+    memset(&f->nb, 0, sizeof(f->nb));
+    f->nbl.FirstNetBuffer = &f->nb;
+    f->nbl.MiniportReserved[0] = &f->meta;
+    f->nbl.SourceHandle = w;
+    f->nb.MdlChain = f->nb.CurrentMdl = f->mdl;
+    f->nb.DataLength = n;
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->tx_lock);
+    w->txq[w->txq_head++ % TX_FRAMES] = (UINT16)(f - w->tx);
+    nt_KeReleaseSpinLock(&w->tx_lock, old);
+    tx_kick(w);
+    return true;
+}
+
+/* An 802.11 data frame from the driver as an Ethernet frame for the stack */
+static void rx_push(WdiHost *w, const UINT8 *f, UINT32 n)
+{
+    if (n < DOT11_DATA_HEADER + DOT11_SNAP_LEN || (f[0] & 0x0C) != 0x08 || (f[1] & DOT11_FC1_PROTECTED)) {
+        w->rx_dropped++;                                /* (not data, or still encrypted) */
+        return;
+    }
+    bool to = f[1] & DOT11_FC1_TO_DS, from = f[1] & DOT11_FC1_FROM_DS;
+    UINT32 hl = DOT11_DATA_HEADER + (to && from ? 6 : 0);
+    if (f[0] & 0x80) hl += 2 + ((f[1] & 0x80) ? 4 : 0);    /* (QoS control, and HT control with the Order bit) */
+    const UINT8 *da = f + 4, *sa = from ? (to ? f + 24 : f + 16) : f + 10;
+    const UINT8 *l = f + hl;
+    if (n < hl + DOT11_SNAP_LEN || l[0] != 0xAA || l[1] != 0xAA || l[2] != 0x03) { w->rx_dropped++; return; }
+    UINT32 plen = n - hl - 6;                           /* (the Ethertype and the payload) */
+    if (12 + plen > RX_FRAME) { w->rx_dropped++; return; }
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->rx_lock);
+    if (w->rx_head - w->rx_tail < RX_SLOTS) {
+        UINT32 k = w->rx_head % RX_SLOTS;
+        UINT8 *e = w->rx + (UINT64)k * RX_FRAME;
+        memcpy(e, da, 6);
+        memcpy(e + 6, sa, 6);
+        memcpy(e + 12, l + 6, plen);
+        w->rx_len[k] = (UINT16)(12 + plen);
+        w->rx_head++;
+        w->info.rx_frames++;
+    } else {
+        w->rx_dropped++;
+    }
+    nt_KeReleaseSpinLock(&w->rx_lock, old);
+}
+
+static int wifi_receive(void *buf, int cap)
+{
+    WdiHost *w = g_net_host;
+    if (!w || !w->rx) return 0;
+    int n = 0;
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->rx_lock);
+    if (w->rx_tail != w->rx_head) {
+        UINT32 k = w->rx_tail % RX_SLOTS;
+        n = w->rx_len[k] < cap ? w->rx_len[k] : cap;
+        memcpy(buf, w->rx + (UINT64)k * RX_FRAME, (size_t)n);
+        w->rx_tail++;
+    }
+    nt_KeReleaseSpinLock(&w->rx_lock, old);
+    return n;
+}
+
+static const char *wifi_name(void) { return g_net_host ? g_net_host->info.description : "Wi-Fi"; }
+static void wifi_mac(UINT8 mac[6]) { if (g_net_host) memcpy(mac, g_net_host->info.mac, 6); }
+static bool wifi_link(void) { return g_net_host && g_net_host->info.connected && g_net_host->peer_up; }
+static const NetAdapter g_wifi_ops = { wifi_name, wifi_mac, wifi_link, wifi_transmit, wifi_receive };
+
+bool WlanCarriesNet(void) { return g_net_host != NULL; }
 
 /* -----------------------------------------------------------------------
  * Indications (from NdisMIndicateStatusEx, at up to DISPATCH_LEVEL)
@@ -361,6 +867,20 @@ void WdiIndicate(void *adapter, UINT32 code, const void *buf, UINT32 len)
             off += sizeof(*t) + t->Length;
         }
     }
+    if (id == WDI_INDICATION_ASSOCIATION_RESULT) {      /* (one per access point tried: the last one counts) */
+        UINT32 off = 0;
+        while (off + sizeof(WDI_TLV_HEADER) <= n) {
+            const WDI_TLV_HEADER *t = (const WDI_TLV_HEADER *)(m + off);
+            if (off + sizeof(*t) + t->Length > n) break;
+            WDI_ASSOCIATION_RESULT_PARAMETERS ap;
+            if (t->Type == WDI_TLV_ASSOCIATION_RESULT &&
+                tlv_get(m + off + sizeof(*t), t->Length, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ap, sizeof(ap))) {
+                w->assoc = ap;
+                w->assoc_seen = true;
+            }
+            off += sizeof(*t) + t->Length;
+        }
+    }
     UINT32 tid = __atomic_load_n(&w->task_tid, __ATOMIC_ACQUIRE);
     if (tid && h->TransactionId == tid && id == w->task_done_id) {
         if (id == WDI_INDICATION_CREATE_PORT_COMPLETE)
@@ -373,7 +893,10 @@ void WdiIndicate(void *adapter, UINT32 code, const void *buf, UINT32 len)
 /* -----------------------------------------------------------------------
  * Adapters (ndis.c attaches one after its open, detaches it before the close)
  * ----------------------------------------------------------------------- */
-WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequestFn request)
+static void disconnect_locked(WdiHost *w, UINT8 *buf, bool quiet);
+
+WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequestFn request, void *mp_ctx,
+                   void *tal_init, void *tal_deinit)
 {
     WdiHost *w = NULL;
     UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&g_lock);
@@ -391,11 +914,24 @@ WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequ
     strncpy(w->info.description, desc && desc[0] ? desc : service, sizeof(w->info.description) - 1);
     w->request = request;
     w->nbss = 0;
+    w->mp_ctx = mp_ctx;
+    w->tal_init = tal_init;
+    w->tal_deinit = tal_deinit;
+    w->tal_started = w->tal_port = w->peer_up = w->peer_deleted = w->assoc_seen = w->tx_paused = false;
     nt_KeInitializeEvent(&w->cmd_lock, NT_SynchronizationEvent, 0);   /* (taken: the bring-up below holds it) */
     nt_KeInitializeEvent(&w->task_done, NT_NotificationEvent, 0);
     w->bss_lock = 0;
     w->adapter = adapter;
-    if (get_capabilities(w, buf)) create_port(w, buf);
+    /* (wdiwifi.sys's order: the data path, capabilities, configuration, the data path's start, the port) */
+    bool dp = tal_initialize(w);
+    if (get_capabilities(w, buf)) {
+        set_configuration(w, buf);
+        if (dp) tal_start(w);
+        if (create_port(w, buf) && w->tal_started) {        /* (without a data path it still scans) */
+            TAL_CALL(w, TalTxRxAddPortHandler, TAL_ADD_PORT, w->tal, w->port_id, WDI_OPERATION_MODE_STA);
+            w->tal_port = true;
+        }
+    }
     unlock(w);
     kfree(buf);
     return w;
@@ -404,10 +940,14 @@ WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequ
 void WdiDetach(WdiHost *w)
 {
     if (!w) return;
-    lock(w);                    /* (waits for a scan in progress) */
+    lock(w);                    /* (waits for a scan or connection in progress) */
     UINT8 *buf = kmalloc(CMD_BUF);
+    if (buf && w->info.connected) disconnect_locked(w, buf, false);
+    if (w->tal_port) TAL_CALL(w, TalTxRxDeletePortHandler, TAL_PORT, w->tal, w->port_id);
+    w->tal_port = false;
     if (buf && w->info.port) delete_port(w, buf);
     kfree(buf);
+    tal_shutdown(w);
     w->adapter = NULL;
     w->info.port = false;
     unlock(w);
@@ -444,6 +984,28 @@ bool WlanGetInfo(int i, WlanInfo *out)
     return true;
 }
 
+/* OID_WDI_TASK_SCAN on the station port (the caller holds the command
+ * lock): every BSS (the wildcard BSSID and SSID) on every channel, live */
+static NDIS_STATUS scan_locked(WdiHost *w, UINT8 *buf)
+{
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->bss_lock);
+    w->nbss = 0;
+    nt_KeReleaseSpinLock(&w->bss_lock, old);
+    static const UINT8 wildcard[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    WDI_SCAN_MODE mode = { 1, WDI_SCAN_TYPE_AUTO, 1, WDI_SCAN_TRIGGER_MANUAL };
+    WDI_SCAN_DWELL_TIME dwell = { 20, 110, SCAN_MAX_MS };
+    UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER);
+    UINT32 tlen = tlv_put(t, 0, WDI_TLV_BSSID, wildcard, 6);
+    tlen = tlv_put(t, tlen, WDI_TLV_SSID, NULL, 0);
+    tlen = tlv_put(t, tlen, WDI_TLV_SCAN_MODE, &mode, sizeof(mode));
+    tlen = tlv_put(t, tlen, WDI_TLV_SCAN_DWELL_TIME, &dwell, sizeof(dwell));
+    NDIS_STATUS st = command(w, WDI_TASK_SCAN, w->port_id, buf, tlen, WDI_INDICATION_SCAN_COMPLETE, NULL,
+                             SCAN_MAX_MS / 1000 + TASK_WAIT_S);
+    kprintf("[WDI] %s: scan on port %u: 0x%08x, %d access point(s)\n", w->info.service, w->port_id, (UINT32)st,
+            st == NDIS_STATUS_SUCCESS ? w->nbss : 0);
+    return st;
+}
+
 int WlanScan(int i, WlanBss *out, int max, UINT32 *status)
 {
     if (status) *status = (UINT32)NDIS_STATUS_FAILURE;
@@ -455,23 +1017,10 @@ int WlanScan(int i, WlanBss *out, int max, UINT32 *status)
         kfree(buf);
         return -1;
     }
-    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->bss_lock);
-    w->nbss = 0;
-    nt_KeReleaseSpinLock(&w->bss_lock, old);
-    /* every BSS (the wildcard BSSID and SSID) on every channel, live */
-    static const UINT8 wildcard[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-    WDI_SCAN_MODE mode = { 1, WDI_SCAN_TYPE_AUTO, 1, WDI_SCAN_TRIGGER_MANUAL };
-    WDI_SCAN_DWELL_TIME dwell = { 20, 110, SCAN_MAX_MS };
-    UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER);
-    UINT32 tlen = tlv_put(t, 0, WDI_TLV_BSSID, wildcard, 6);
-    tlen = tlv_put(t, tlen, WDI_TLV_SSID, NULL, 0);
-    tlen = tlv_put(t, tlen, WDI_TLV_SCAN_MODE, &mode, sizeof(mode));
-    tlen = tlv_put(t, tlen, WDI_TLV_SCAN_DWELL_TIME, &dwell, sizeof(dwell));
-    NDIS_STATUS st = command(w, WDI_TASK_SCAN, w->port_id, buf, tlen, WDI_INDICATION_SCAN_COMPLETE, NULL,
-                             SCAN_MAX_MS / 1000 + TASK_WAIT_S);
+    NDIS_STATUS st = scan_locked(w, buf);
     int n = -1;
     if (st == NDIS_STATUS_SUCCESS) {
-        old = nt_KeAcquireSpinLockRaiseToDpc(&w->bss_lock);
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->bss_lock);
         n = w->nbss < max ? w->nbss : max;
         memcpy(out, w->bss, (size_t)n * sizeof(*out));
         nt_KeReleaseSpinLock(&w->bss_lock, old);
@@ -483,7 +1032,6 @@ int WlanScan(int i, WlanBss *out, int max, UINT32 *status)
                 out[b - 1] = x;
             }
     }
-    kprintf("[WDI] %s: scan on port %u: 0x%08x, %d access point(s)\n", w->info.service, w->port_id, (UINT32)st, n < 0 ? 0 : n);
     if (status) *status = (UINT32)st;
     unlock(w);
     kfree(buf);
@@ -491,46 +1039,233 @@ int WlanScan(int i, WlanBss *out, int max, UINT32 *status)
 }
 
 /* -----------------------------------------------------------------------
- * A scan in the background, for netsh (the Terminal does not wait)
+ * Connections
  * ----------------------------------------------------------------------- */
-static volatile bool g_scan_busy, g_scan_done;
-static int           g_scan_adapter, g_scan_n;
-static UINT32        g_scan_status;
+
+/* The strongest access point with @ssid the last scan heard, or -1 */
+static int find_bss(WdiHost *w, const char *ssid)
+{
+    int best = -1;
+    for (int i = 0; i < w->nbss; i++)
+        if (!strcmp(w->bss[i].ssid, ssid) && (best < 0 || w->bss[i].quality > w->bss[best].quality)) best = i;
+    return best;
+}
+
+/* OID_WDI_TASK_DISCONNECT from the access point; the stack goes back to
+ * the adapter it had before (the caller holds the command lock) */
+static void disconnect_locked(WdiHost *w, UINT8 *buf, bool quiet)
+{
+    if (g_net_host == w) {
+        NetDetach(&g_wifi_ops);
+        g_net_host = NULL;
+    }
+    WDI_DISCONNECT_PARAMETERS p;
+    memcpy(p.MacAddress, w->info.bss.bssid, 6);
+    p.Disassociation80211Reason = 3;                /* (deauthenticated: the station is leaving) */
+    UINT32 tlen = tlv_put(buf + sizeof(WDI_MESSAGE_HEADER), 0, WDI_TLV_DISCONNECT_PARAMETERS, &p, sizeof(p));
+    NDIS_STATUS st = command(w, WDI_TASK_DISCONNECT, w->port_id, buf, tlen, WDI_INDICATION_DISCONNECT_COMPLETE, NULL,
+                             TASK_WAIT_S);
+    if (w->peer_deleted || w->peer_up) TAL_CALL(w, TalTxRxPeerDeleteConfirmHandler, TAL_PEER_DELETE_CONFIRM, w->tal,
+                                                w->port_id, w->peer);
+    __atomic_store_n(&w->peer_up, false, __ATOMIC_RELEASE);
+    w->peer_deleted = false;
+    w->info.connected = false;
+    /* (frames still queued are dropped; those with the driver came back with its peer) */
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->tx_lock);
+    while (w->tx && w->txq_tail != w->txq_head) w->tx[w->txq[w->txq_tail++ % TX_FRAMES]].state = TXF_FREE;
+    nt_KeReleaseSpinLock(&w->tx_lock, old);
+    if (!quiet) kprintf("[WDI] %s: disconnected from %s (0x%08x)\n", w->info.service, w->info.bss.ssid, (UINT32)st);
+}
+
+/* One WDI_TLV_CONNECT_BSS_ENTRY from a scan's BSS entry: the TLVs a
+ * connect entry has (BSSID, beacon or probe response, signal, channel) */
+static UINT32 connect_entry(UINT8 *out, UINT32 off, const UINT8 *raw, UINT32 n)
+{
+    UINT32 start = off + sizeof(WDI_TLV_HEADER), len = 0;
+    for (UINT32 k = 0; k + sizeof(WDI_TLV_HEADER) <= n;) {
+        const WDI_TLV_HEADER *t = (const WDI_TLV_HEADER *)(raw + k);
+        if (k + sizeof(*t) + t->Length > n) break;
+        if (t->Type == WDI_TLV_BSSID || t->Type == WDI_TLV_BEACON_FRAME || t->Type == WDI_TLV_PROBE_RESPONSE_FRAME ||
+            t->Type == WDI_TLV_BSS_ENTRY_SIGNAL_INFO || t->Type == WDI_TLV_BSS_ENTRY_CHANNEL_INFO ||
+            t->Type == WDI_TLV_BSS_ENTRY_DEVICE_CONTEXT)
+            len = tlv_put(out + start, len, t->Type, raw + k + sizeof(*t), t->Length);
+        k += sizeof(*t) + t->Length;
+    }
+    WDI_TLV_HEADER h = { WDI_TLV_CONNECT_BSS_ENTRY, (UINT16)len };
+    memcpy(out + off, &h, sizeof(h));
+    return start + len;
+}
+
+int WlanConnect(int i, const char *ssid, UINT32 *status)
+{
+    if (status) *status = (UINT32)NDIS_STATUS_FAILURE;
+    UINT8 *buf = kmalloc(CMD_BUF);
+    if (!buf) return WLAN_FAILED;
+    WdiHost *w = host_locked(i);
+    if (!w || !w->info.port || !w->tal_port) {
+        if (w) unlock(w);
+        kfree(buf);
+        return WLAN_NO_ADAPTER;
+    }
+    int b = find_bss(w, ssid);
+    if (b < 0 && scan_locked(w, buf) == NDIS_STATUS_SUCCESS) b = find_bss(w, ssid);
+    int r = WLAN_OK;
+    if (b < 0) r = WLAN_NO_NETWORK;
+    else if (strcmp(w->bss[b].auth, "Open") || w->bss[b].privacy) r = WLAN_NEEDS_KEY;
+    if (r != WLAN_OK) {
+        unlock(w);
+        kfree(buf);
+        return r;
+    }
+    if (w->info.connected) disconnect_locked(w, buf, false);
+    WlanBss bss = w->bss[b];
+    /* WDI_TLV_CONNECT_PARAMETERS: the settings, the SSID, open authentication, no ciphers */
+    UINT8 *t = buf + sizeof(WDI_MESSAGE_HEADER), cp[160];
+    WDI_CONNECTION_SETTINGS cs;
+    memset(&cs, 0, sizeof(cs));
+    UINT32 auth = WDI_AUTH_ALGO_80211_OPEN, cipher = WDI_CIPHER_ALGO_NONE;
+    UINT32 n = tlv_put(cp, 0, WDI_TLV_CONNECTION_SETTINGS, &cs, sizeof(cs));
+    n = tlv_put(cp, n, WDI_TLV_SSID, bss.ssid, (UINT16)strlen(bss.ssid));
+    n = tlv_put(cp, n, WDI_TLV_AUTH_ALGO_LIST, &auth, sizeof(auth));
+    n = tlv_put(cp, n, WDI_TLV_MULTICAST_CIPHER_ALGO_LIST, &cipher, sizeof(cipher));
+    n = tlv_put(cp, n, WDI_TLV_UNICAST_CIPHER_ALGO_LIST, &cipher, sizeof(cipher));
+    UINT32 tlen = tlv_put(t, 0, WDI_TLV_CONNECT_PARAMETERS, cp, (UINT16)n);
+    /* the access points to try, strongest first */
+    for (int pass = 0; pass < 2; pass++)
+        for (int k = 0; k < w->nbss; k++)
+            if (!strcmp(w->bss[k].ssid, bss.ssid) && (k == b) == !pass && w->bss_raw_len[k] &&
+                tlen + w->bss_raw_len[k] + 64 < CMD_BUF - sizeof(WDI_MESSAGE_HEADER))
+                tlen = connect_entry(t, tlen, w->bss_raw[k], w->bss_raw_len[k]);
+    w->assoc_seen = false;
+    memset(&w->assoc, 0, sizeof(w->assoc));
+    NDIS_STATUS st = command(w, WDI_TASK_CONNECT, w->port_id, buf, tlen, WDI_INDICATION_CONNECT_COMPLETE, NULL,
+                             CONNECT_WAIT_S);
+    if (st == NDIS_STATUS_SUCCESS && (!w->assoc_seen || w->assoc.AssociationStatus != WDI_ASSOC_STATUS_SUCCESS))
+        st = NDIS_STATUS_FAILURE;
+    if (st == NDIS_STATUS_SUCCESS && !w->peer_up) {
+        kprintf("[WDI] %s: associated, but the driver indicated no peer\n", w->info.service);
+        st = NDIS_STATUS_FAILURE;
+    }
+    char mac[18];
+    mac_str(bss.bssid, mac);
+    if (st != NDIS_STATUS_SUCCESS) {
+        kprintf("[WDI] %s: connecting to %s (%s) failed (0x%08x, association status %u)\n", w->info.service, bss.ssid,
+                mac, (UINT32)st, w->assoc_seen ? w->assoc.AssociationStatus : 0xFFFFFFFFu);
+        if (w->peer_up || w->peer_deleted) disconnect_locked(w, buf, true);
+        if (status) *status = (UINT32)st;
+        unlock(w);
+        kfree(buf);
+        return WLAN_FAILED;
+    }
+    UINT32 qos = w->assoc.WMMQoSEnabled ? 1 : 0;    /* (WDI_TXRX_PEER_CFG: QoS capable or not) */
+    TAL_CALL(w, TalTxRxPeerConfigHandler, TAL_PEER_CONFIG, w->tal, w->port_id, w->peer, &qos);
+    w->info.bss = bss;
+    w->info.connected = true;
+    w->tx_paused = false;
+    kprintf("[WDI] %s: connected to %s (%s) on port %u, peer %u: %s, %s, WMM %s\n", w->info.service, bss.ssid, mac,
+            w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" : "secured",
+            w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" : "ciphered",
+            w->assoc.WMMQoSEnabled ? "on" : "off");
+    if (!g_net_host) {                              /* (the stack's adapter now: DHCP runs over Wi-Fi) */
+        g_net_host = w;
+        NetAttach(&g_wifi_ops);
+    }
+    if (status) *status = NDIS_STATUS_SUCCESS;
+    unlock(w);
+    kfree(buf);
+    return WLAN_OK;
+}
+
+int WlanDisconnect(int i, UINT32 *status)
+{
+    if (status) *status = (UINT32)NDIS_STATUS_FAILURE;
+    UINT8 *buf = kmalloc(CMD_BUF);
+    if (!buf) return WLAN_FAILED;
+    WdiHost *w = host_locked(i);
+    int r = !w ? WLAN_NO_ADAPTER : !w->info.connected ? WLAN_NOT_CONNECTED : WLAN_OK;
+    if (r == WLAN_OK) {
+        disconnect_locked(w, buf, false);
+        if (status) *status = NDIS_STATUS_SUCCESS;
+    }
+    if (w) unlock(w);
+    kfree(buf);
+    return r;
+}
+
+/* -----------------------------------------------------------------------
+ * A scan or a connection in the background, for netsh (the Terminal does
+ * not wait): one at a time
+ * ----------------------------------------------------------------------- */
+enum { BG_SCAN, BG_CONNECT, BG_DISCONNECT };
+static volatile bool g_bg_busy, g_bg_done;
+static int           g_bg_kind, g_bg_adapter, g_bg_n;
+static UINT32        g_bg_status;
+static char          g_bg_ssid[33];
 static WlanBss       g_scan_bss[WLAN_MAX_BSS];
 
-static void scan_thread(void *arg)
+static void bg_thread(void *arg)
 {
     (void)arg;
     UINT32 st = 0;
-    g_scan_n = WlanScan(g_scan_adapter, g_scan_bss, WLAN_MAX_BSS, &st);
-    g_scan_status = st;
-    __atomic_store_n(&g_scan_done, true, __ATOMIC_RELEASE);
+    if (g_bg_kind == BG_SCAN) g_bg_n = WlanScan(g_bg_adapter, g_scan_bss, WLAN_MAX_BSS, &st);
+    else if (g_bg_kind == BG_CONNECT) g_bg_n = WlanConnect(g_bg_adapter, g_bg_ssid, &st);
+    else g_bg_n = WlanDisconnect(g_bg_adapter, &st);
+    g_bg_status = st;
+    __atomic_store_n(&g_bg_done, true, __ATOMIC_RELEASE);
 }
 
-bool WlanScanStart(int i)
+static bool bg_start(int kind, int i)
 {
     /* (a result nobody collected, its netsh stopped with Ctrl+C: dropped) */
-    if (__atomic_load_n(&g_scan_done, __ATOMIC_ACQUIRE)) {
-        g_scan_done = false;
-        __atomic_store_n(&g_scan_busy, false, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) {
+        g_bg_done = false;
+        __atomic_store_n(&g_bg_busy, false, __ATOMIC_RELEASE);
     }
-    if (i < 0 || i >= WlanCount() || __atomic_exchange_n(&g_scan_busy, true, __ATOMIC_ACQ_REL)) return false;
-    g_scan_adapter = i;
-    g_scan_done = false;
-    if (!sched_create_thread("wlanscan", scan_thread, NULL, PRIO_SERVICE)) {
-        g_scan_busy = false;
+    if (i < 0 || i >= WlanCount() || __atomic_exchange_n(&g_bg_busy, true, __ATOMIC_ACQ_REL)) return false;
+    g_bg_kind = kind;
+    g_bg_adapter = i;
+    g_bg_done = false;
+    if (!sched_create_thread("wlanop", bg_thread, NULL, PRIO_SERVICE)) {
+        g_bg_busy = false;
         return false;
     }
     return true;
 }
 
+static bool bg_done(int kind)
+{
+    if (g_bg_kind != kind || !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
+    g_bg_done = false;
+    __atomic_store_n(&g_bg_busy, false, __ATOMIC_RELEASE);
+    return true;
+}
+
+bool WlanScanStart(int i) { return bg_start(BG_SCAN, i); }
+
 bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status)
 {
-    if (!__atomic_load_n(&g_scan_done, __ATOMIC_ACQUIRE)) return false;
-    *n = g_scan_n < max ? g_scan_n : max;
+    if (g_bg_kind != BG_SCAN || !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
+    *n = g_bg_n < max ? g_bg_n : max;
     if (*n > 0) memcpy(out, g_scan_bss, (size_t)*n * sizeof(*out));
-    if (status) *status = g_scan_status;
-    g_scan_done = false;
-    __atomic_store_n(&g_scan_busy, false, __ATOMIC_RELEASE);
-    return true;
+    if (status) *status = g_bg_status;
+    return bg_done(BG_SCAN);
+}
+
+bool WlanConnectStart(int i, const char *ssid)
+{
+    if (__atomic_load_n(&g_bg_busy, __ATOMIC_ACQUIRE) && !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
+    if (ssid) {
+        strncpy(g_bg_ssid, ssid, sizeof(g_bg_ssid) - 1);
+        g_bg_ssid[sizeof(g_bg_ssid) - 1] = 0;
+    }
+    return bg_start(ssid ? BG_CONNECT : BG_DISCONNECT, i);
+}
+
+bool WlanConnectDone(int *result, UINT32 *status)
+{
+    int kind = g_bg_kind;
+    if (kind == BG_SCAN || !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
+    *result = g_bg_n;
+    if (status) *status = g_bg_status;
+    return bg_done(kind);
 }

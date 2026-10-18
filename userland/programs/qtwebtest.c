@@ -142,7 +142,9 @@ static void bluetooth(void)
     check("BluetoothFindFirstRadio: no radio (ERROR_NO_MORE_ITEMS)", !f && !radio && GetLastError() == ERROR_NO_MORE_ITEMS);
     f = BluetoothFindFirstRadio(&bad, &radio);
     check("BluetoothFindFirstRadio: a wrong dwSize is ERROR_REVISION_MISMATCH", !f && GetLastError() == 1306);
-    BYTE search[64] = { 40 }, info[600] = { 0 };
+    /* BLUETOOTH_DEVICE_SEARCH_PARAMS (40 bytes on x64, 32 on x86) and
+     * BLUETOOTH_DEVICE_INFO (560), each with its dwSize as Qt fills it in */
+    DWORD search[16] = { sizeof(void *) == 8 ? 40 : 32 }, info[150] = { 560 };
     f = BluetoothFindFirstDevice(search, info);
     check("BluetoothFindFirstDevice: no device", !f && GetLastError() == ERROR_NO_MORE_ITEMS);
     check("BluetoothIsConnectable: no", !BluetoothIsConnectable(0));

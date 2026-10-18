@@ -472,6 +472,51 @@ controls (brightness, focus), still images, frame-based formats (H.264),
 Media Foundation's media session and source events, and AVStream
 (`ks.sys`) for a vendor's own camera driver.
 
+### Bluetooth: bthusb and the host stack
+
+A USB Bluetooth radio (`USB\Class_E0&SubClass_01&Prot_01`, as Intel's
+are) gets `bthusb` (`kernel/nt/bthusb.c`), the USB transport, and
+NovaOS's Bluetooth host stack (`kernel/nt/bthport.c`), built into the
+kernel in place of Windows' `bthusb.sys` and `bthport.sys`. Both are
+written from the Bluetooth Core Specification 5.3 (BlueZ is GPL and stays
+out). `bthusb` sends HCI commands as class requests to the device and
+reads events on the interrupt endpoint and ACL data on the bulk ones. The
+host stack brings the controller up (reset, version, features, buffer
+sizes, address, the computer's name, page scan), inquires, pairs with
+Secure Simple Pairing (Just Works) or the legacy PIN 0000, keeps link
+keys where Windows does
+(`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Keys`),
+authenticates and encrypts links, and runs L2CAP's basic mode and an SDP
+client that reads a device's service records. It turns on
+`GUID_BTHPORT_DEVICE_INTERFACE`; `bthprops.cpl` reaches it through it
+(`BluetoothFindFirstRadio`, `BluetoothFindFirstDevice` with an inquiry,
+`BluetoothAuthenticateDeviceEx`, `BluetoothEnumerateInstalledServices`,
+`BluetoothSetServiceState`, `BluetoothRemoveDevice`, and
+`IOCTL_BTH_GET_LOCAL_INFO` and `IOCTL_BTH_GET_DEVICE_INFO`).
+
+Turning a paired device's HID service on gives it a `BTHENUM` node
+(`BTHENUM\{00001124-0000-1000-8000-00805f9b34fb}_VID&0002...`, as
+Windows names it), which gets `hidbth` (`kernel/nt/hidbth.c`), a HID
+minidriver under the HID class driver: it opens the HID control and
+interrupt channels with the report descriptor the SDP record carries, so
+a Bluetooth mouse or keyboard works as a USB one does. After a restart
+the paired devices come back from the registry and `hidbth` reconnects
+by the stored link key.
+
+A vendor's radio package is installed as on Windows: the inbox
+`bth.inf` has the `BthUsb.NT`, `.HW` and `.Services` sections that
+Intel's `ibtusb.inf` includes (`Include = bth.inf`, `Needs =
+BthUsb.NT...`), so `bthusb` stays the function driver and Intel's
+`ibtusb.sys`, which loads the radio's firmware, sits under it as a lower
+filter (its `.HW` section's `LowerFilters`). The `bluetooth` self-test
+installs a filter packaged the same way and checks the radio's traffic
+goes through it. Not done yet: headset audio (SCO links, A2DP and the
+hands-free profile: turning those services on returns
+`ERROR_NOT_SUPPORTED`), connections a device starts (a mouse that wakes
+up is reconnected from NovaOS's side within 10 seconds), Bluetooth Low
+Energy, the BRB interface (`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party
+profile driver uses, and Settings' Bluetooth page.
+
 ### Network drivers (NDIS)
 
 A Windows NDIS 6 miniport runs a network card on NovaOS's own NDIS host
@@ -809,7 +854,7 @@ with each set's licence file under `C:\Windows\Firmware\LICENSES`.
 |---|---|---|---|---|
 | `intel-graphics` | Intel Iris Xe and UHD graphics, Alder Lake-P and Raptor Lake-P (the T14 Gen 4) | `i915` | DMC `adlp_dmc.bin`, GuC `adlp_guc_70.bin`, HuC `tgl_huc.bin`; 1 MB | no. The chosen GPU design runs Intel's Windows driver, which carries its own firmware ([design/intel-gpu.md](design/intel-gpu.md)); the files are kept for the native fallback |
 | `intel-wifi` | Intel Wi-Fi 6E AX211 | `iwlwifi` | `intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode` and its `.pnvm`; 1.7 MB | no. Intel's Windows driver uses its own `netwfw14.dat` from its package |
-| `intel-bluetooth` | Intel AX211 Bluetooth | `btintel` | `intel/ibt-0040-0041.sfi` and `.ddc`; 0.7 MB | no (no Bluetooth driver) |
+| `intel-bluetooth` | Intel AX211 Bluetooth | `btintel` | `intel/ibt-0040-0041.sfi` and `.ddc`; 0.7 MB | no. Intel's Windows filter driver (`ibtusb`) loads the radio's firmware from its own package |
 | `qualcomm-wifi` | Qualcomm WCN6855 Wi-Fi 6E (NFA725A, the T14 Gen 4's other card option) | `ath11k` | `ath11k/WCN6855/hw2.0/` `amss.bin`, `m3.bin`, `board-2.bin`, `regdb.bin`; 12 MB | no |
 | `qualcomm-bluetooth` | Qualcomm WCN6855 Bluetooth | `btqca` | `qca/wcnhpbtfw21.tlv`, `qca/wcnhpnv21.bin`; 0.2 MB | no |
 | Sound Open Firmware | Intel's audio DSP, Tiger Lake to Raptor Lake | `sof-audio-pci-intel-tgl` | `C:\Windows\Firmware\Intel\sof-ipc4\<platform>\sof-<platform>.ri` | yes: `kernel/drivers/sof.c` ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)) |

@@ -1,7 +1,8 @@
 /*
  * comdlg32.dll — common dialogs.  The file dialogs are in filedlg.c
  * (GetOpenFileName, GetSaveFileName) and ifiledlg.c (IFileOpenDialog,
- * IFileSaveDialog).  The colour, font, print and find dialogs are not
+ * IFileSaveDialog), the print dialogs in printdlg.c (PrintDlg,
+ * PrintDlgEx, PageSetupDlg).  The colour, font and find dialogs are not
  * there yet: they return as if the user cancelled them (FALSE with
  * CommDlgExtendedError() == 0), which programs handle.
  */
@@ -14,10 +15,6 @@ CDAPI BOOL WINAPI ChooseColorW(void *cc) { (void)cc; return FALSE; }
 CDAPI BOOL WINAPI ChooseColorA(void *cc) { (void)cc; return FALSE; }
 CDAPI BOOL WINAPI ChooseFontW(void *cf) { (void)cf; return FALSE; }
 CDAPI BOOL WINAPI ChooseFontA(void *cf) { (void)cf; return FALSE; }
-CDAPI BOOL WINAPI PrintDlgW(void *pd) { (void)pd; return FALSE; }
-CDAPI BOOL WINAPI PrintDlgA(void *pd) { (void)pd; return FALSE; }
-CDAPI HRESULT WINAPI PrintDlgExW(void *pd) { (void)pd; return (HRESULT)0x80004005L; }
-CDAPI BOOL WINAPI PageSetupDlgW(void *psd) { (void)psd; return FALSE; }
 CDAPI HWND WINAPI FindTextW(void *fr) { (void)fr; return 0; }
 CDAPI HWND WINAPI ReplaceTextW(void *fr) { (void)fr; return 0; }
 

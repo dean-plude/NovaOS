@@ -786,14 +786,61 @@ GDIAPI HDC CreateCompatibleDC(HDC h)
     return (HDC)d;
 }
 
-GDIAPI HDC CreateDCW(LPCWSTR drv, LPCWSTR dev, LPCWSTR port, const void *mode) { (void)drv; (void)dev; (void)port; (void)mode; return CreateCompatibleDC(0); }
-GDIAPI HDC CreateDCA(LPCSTR drv, LPCSTR dev, LPCSTR port, const void *mode) { (void)drv; (void)dev; (void)port; (void)mode; return CreateCompatibleDC(0); }
+/* A display's name ("DISPLAY", "\\.\DISPLAY1") or none: a DC on the screen's pixels */
+static BOOL display_name(LPCWSTR s)
+{
+    static const WCHAR disp[] = L"DISPLAY", dotdisp[] = L"\\\\.\\DISPLAY";
+    if (!s || !*s) return TRUE;
+    int i = 0;
+    for (; disp[i] && (s[i] | 0x20) == (disp[i] | 0x20); i++) {}
+    if (!disp[i] && !s[i]) return TRUE;
+    for (i = 0; dotdisp[i] && (s[i] == dotdisp[i] || (s[i] | 0x20) == (dotdisp[i] | 0x20)); i++) {}
+    return !dotdisp[i];
+}
+
+/* CreateDC: a printer's name makes a printer DC (print.c); anything else a
+ * DC on the display, as before */
+GDIAPI HDC CreateDCW(LPCWSTR drv, LPCWSTR dev, LPCWSTR port, const void *mode)
+{
+    (void)port;
+    if (!display_name(drv) && display_name(dev)) dev = drv;        /* CreateDC(L"Printer Name", NULL, ...) */
+    if (!display_name(dev)) {
+        HDC p = print_create(dev, (const DEVMODEW *)mode);
+        if (p) return p;
+    }
+    return CreateCompatibleDC(0);
+}
+
+static WCHAR *dc_a2w(LPCSTR s, WCHAR *buf, int cap)
+{
+    if (!s) return NULL;
+    if (!MultiByteToWideChar(CP_ACP, 0, s, -1, buf, cap)) buf[0] = 0;
+    buf[cap - 1] = 0;
+    return buf;
+}
+
+GDIAPI HDC CreateDCA(LPCSTR drv, LPCSTR dev, LPCSTR port, const void *mode)
+{
+    WCHAR d1[260], d2[260];
+    DEVMODEW wm;
+    const DEVMODEA *am = mode;
+    if (am) {                                               /* (the fields after the two names line up) */
+        memset(&wm, 0, sizeof wm);
+        MultiByteToWideChar(CP_ACP, 0, (LPCSTR)am->dmDeviceName, 32, wm.dmDeviceName, 32);
+        memcpy(&wm.dmSpecVersion, &am->dmSpecVersion, offsetof(DEVMODEA, dmFormName) - offsetof(DEVMODEA, dmSpecVersion));
+        MultiByteToWideChar(CP_ACP, 0, (LPCSTR)am->dmFormName, 32, wm.dmFormName, 32);
+        wm.dmSize = sizeof wm;
+    }
+    (void)port;
+    return CreateDCW(dc_a2w(drv, d1, 260), dc_a2w(dev, d2, 260), NULL, am ? &wm : NULL);
+}
 GDIAPI HDC CreateICW(LPCWSTR drv, LPCWSTR dev, LPCWSTR port, const void *mode) { return CreateDCW(drv, dev, port, mode); }
 
 GDIAPI BOOL DeleteDC(HDC h)
 {
     NOVA_DC *d = dc_of(h);
     if (!d || !d->mem) return FALSE;
+    if (d->print) print_delete(h);
     dc_sync(d);
     while (d->saved) { NOVA_DC *s = d->saved; d->saved = s->saved; HeapFree(GetProcessHeap(), 0, s); }
     HeapFree(GetProcessHeap(), 0, d);
@@ -1402,9 +1449,11 @@ GDIAPI BOOL RestoreDC(HDC h, int which)
     }
     NOVA_DC *keep = d->saved;
     void *bits = d->bits; int w = d->w, hh = d->h, stride = d->stride;   /* the surface stays */
+    void *bitmap = d->bitmap;
     *d = *s;
     d->saved = keep;
-    if (!d->mem) { d->bits = bits; d->w = w; d->h = hh; d->stride = stride; }
+    if (!d->mem || d->print) { d->bits = bits; d->w = w; d->h = hh; d->stride = stride; }
+    if (d->print) d->bitmap = bitmap;                       /* (a printer DC's page) */
     HeapFree(GetProcessHeap(), 0, s);
     return TRUE;
 }
@@ -1427,6 +1476,7 @@ static int sys_dpi_k(void)
 GDIAPI int GetDeviceCaps(HDC h, int index)
 {
     NOVA_DC *d = dc_of(h);
+    if (d && d->print) return print_caps(h, index);
     ULONG sw = 1280, sh = 800;
     NtNovaGuiScreenSize(&sw, &sh);
     int k = index == 8 || index == 10 || index == 88 || index == 90 || index == 117 || index == 118 ? sys_dpi_k() : 1;

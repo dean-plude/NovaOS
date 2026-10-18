@@ -1,10 +1,11 @@
 # Accounts and sign-in, the Windows way
 
-Status: roadmap step 33.1, first part (2026-10-18).  Local accounts, their
-tokens and profiles, `LogonUser`, the `NetUser*` calls, the sign-in screen
-at boot and the lock screen are in.  The Settings page for accounts,
-sign-out, fast user switching and moving the first account's files to
-`C:\Users` are the next parts (below).  UAC's consent prompt is step 33.2
+Status: roadmap step 33.1 (2026-10-18).  Local accounts, their tokens and
+profiles, `LogonUser`, the `NetUser*` calls, the sign-in screen at boot and
+the lock screen came first; Settings' Accounts page, account pictures,
+sign-out and fast user switching second.  Per-user desktop settings and
+moving the first account's files to `C:\Users` are the next parts (below).
+UAC's consent prompt is step 33.2
 ([uac.md](uac.md)).
 
 **The decision.**  NovaOS keeps accounts where Windows keeps them and hands
@@ -78,18 +79,62 @@ find, add, delete, set or change a password, logon, load or delete a
 profile, lock, session); `advapi32`, `netapi32`, `userenv` and `user32`
 build the Windows calls on it.
 
+## Settings, Accounts
+
+Windows 11's page (Start, the account button, "Change account settings",
+or a search for "accounts" or "add an account"):
+
+- **Your info**: the account's picture, name, type and whether it has a
+  password, with "Change password" (the current one, the new one twice;
+  blank removes it) and "Change picture".
+- **Pictures** are PNG files from `C:\Windows\Web\Wallpaper` (add more
+  in Personalization), or none (the initial in a circle).  The choice is
+  kept where Windows keeps it,
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AccountPicture\Users\<SID>`
+  (`Image192`, `Image96`), and shows in Settings, on the Start menu's
+  account button and on the sign-in screen.
+- **Other users**: every other account with its type and whether it is
+  signed in, and for an administrator "Add account" (Windows' "Create a
+  user for this PC": the name, the password twice, Standard user or
+  Administrator), "Change account type" and "Remove" ("Delete account and
+  data": the account, its profile folder and its hive; refused while it
+  is signed in).  The last administrator stays one.
+
+A standard user sees the page without the buttons that change other
+accounts.  Step 33.2 puts a consent prompt in front of those changes.
+
+## Fast user switching and sign-out
+
+A sign-in is a session, as on Windows: every program runs in the sign-in
+of the account it started under (its creator's; the screen's when the
+desktop starts it; services in none), and every window belongs to its
+program's sign-in.  Signing in as another account while one is signed in
+switches: the first account's windows are put away (hidden, their
+programs still running, timers and all) and the new account gets an empty
+desktop of its own, its profile and hive made at its first sign-in.
+Signing in as the first account again brings its windows back, the one
+that had the focus with it.
+
+- **Switching**: the lock screen (Win+L) and the sign-in screen list every
+  account in the corner, with "Signed in" under those switched away from;
+  Up, Down or Tab choose one.  The Start menu's account button lists the
+  other accounts too, and choosing one opens the sign-in screen on it.
+- **Sign out**: the Start menu's account button, or `ExitWindowsEx`
+  with `EWX_LOGOFF` from a program, ends the account's programs, closes
+  its windows and shows the sign-in screen.  An administrator can sign
+  another account out (`NtNovaAccount`'s sign-out with its RID).
+- An account that is signed in cannot be deleted.
+
 ## Next parts
 
-1. Settings, Accounts: add, remove and rename accounts, set a password or a
-   PIN (the "Done when" creates the second account there).
-2. Sign-out and fast user switching: a session per signed-in account, each
-   with its own desktop and programs, the first account's apps still
-   running while the second is signed in.
-3. Per-user desktop settings (wallpaper, theme, Start pins) from the
+1. Per-user desktop settings (wallpaper, theme, Start pins) from the
    account's hive instead of one machine-wide set, and `NTUSER.DAT` per
    profile.
-4. Move the first account's files to `C:\Users\<name>` with a junction at
+2. Move the first account's files to `C:\Users\<name>` with a junction at
    the old paths.
+3. Session IDs for the Terminal Services calls (`WTSEnumerateSessions`,
+   `ProcessIdToSessionId`, `WTSLogoffSession`), which still report one
+   console session.
 
 Step 33.2 adds the consent prompt on a secure desktop and integrity
 levels to the tokens above ([uac.md](uac.md)); nothing here assumes the

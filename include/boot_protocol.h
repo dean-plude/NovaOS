@@ -19,7 +19,7 @@
 
 /* Increment BOOT_PROTOCOL_VERSION when the struct layout changes. */
 #define BOOT_MAGIC            UINT64_C(0x4E4F564100424F4F)   /* "NOVA\0BOO" */
-#define BOOT_PROTOCOL_VERSION 5
+#define BOOT_PROTOCOL_VERSION 6
 
 /* -----------------------------------------------------------------------
  * Memory map — mirrors UEFI EFI_MEMORY_DESCRIPTOR, but uses our own
@@ -129,6 +129,12 @@ typedef struct {
      * C:\X\Y and gives the pages back.  0/0 when there are none. */
     uint64_t         files_base;           /* BootFile[files_count] (physical) */
     uint64_t         files_count;
+
+    /* Version 6: the firmware's EFI_RUNTIME_SERVICES table (physical; the
+     * firmware's own pointer, as NovaOS never calls SetVirtualAddressMap),
+     * for its variable services (kernel/hal/efi.h).  0 when not booted by
+     * UEFI firmware. */
+    uint64_t         efi_runtime;
 } BootInfo;
 
 #define BOOT_FILE_PATH_MAX 232

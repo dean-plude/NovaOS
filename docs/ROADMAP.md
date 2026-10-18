@@ -1027,18 +1027,22 @@ Each step follows the Windows way: the same account, token, elevation,
 servicing and print models Windows apps and drivers already expect.
 **Gate:** after 0.2 (Phase 29); starts once the gap list ahead of it is done.
 
-- [ ] **33.1 User accounts and sign-in.** Local accounts in a SAM/LSA
+- [x] **33.1 User accounts and sign-in.** Local accounts in a SAM/LSA
   store, a sign-in and lock screen (password or PIN), `LogonUser`,
   per-user profiles with their own `HKCU` hive, and fast user switching.
   Done when a second account is created in Settings, signs in, gets its own
   profile and registry hive, switches with the first account's apps still
   running, and a wrong password is refused (self-test `accounttest`, plus a
   screenshot of the sign-in screen).
-  *Progress:* local accounts in the SAM with Argon2id passwords, a token,
+  Done: local accounts in the SAM with Argon2id passwords, a token,
   profile and `HKCU` hive per account, `LogonUser`, `NetUserAdd` and the
   rest of `netapi32`, `LoadUserProfile`, the sign-in screen at boot and the
-  lock screen (Win+L, `LockWorkStation`) are in, tested by `accounttest`.
-  Still to do: the Settings page, sign-out and fast user switching
+  lock screen (Win+L, `LockWorkStation`), tested by `accounttest`;
+  Settings' Accounts page (add, remove, account type, password, picture),
+  fast user switching from the lock and sign-in screens and the Start
+  menu's account button, and sign-out, tested by `switchtest`, whose
+  screenshot is the sign-in screen with both accounts.  Per-user desktop
+  settings and moving the first profile to `C:\Users` follow
   ([design/accounts.md](design/accounts.md)).
 - [ ] **33.2 Standard-user security and UAC.** New accounts are standard
   users with a filtered token and integrity levels; `consent.exe` shows the
@@ -1087,8 +1091,11 @@ servicing and print models Windows apps and drivers already expect.
   shows each disk's partitions and free space and installs NovaOS beside
   them in the free space (its own ESP and data partition; Windows'
   partitions untouched), tested by the devices suite's `beside` boot;
-  shrinking NTFS, the boot menu entry for Windows and reinstalling over
-  NovaOS with the data kept are the next parts.
+  *Part 2 (in progress):* Setup adds the firmware boot entry "NovaOS"
+  first in `BootOrder` through the UEFI runtime services, and NovaOS's
+  boot loader offers "Windows Boot Manager" in a boot menu and starts it;
+  shrinking NTFS and reinstalling over NovaOS with the data kept are the
+  next parts.
 - [ ] **33.5 Printing.** The Windows print model: a spooler service
   (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
   Print Management, real printer drivers loaded unchanged where they are

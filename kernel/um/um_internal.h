@@ -327,6 +327,8 @@ struct UmProcess {
     bool            released;   /* spawner is done with it */
     UmObject       *exit_ob;    /* UO_PROCESS object of a program-created process (not referenced) */
     UmObject       *token;      /* its primary token (referenced) */
+    UINT32          session;    /* the RID of the account whose sign-in it runs in (its
+                                 * creator's, or the screen's); 0: none (services) */
     bool            reclaimed;  /* memory and handles freed */
     /* Priority (um_thread.c): PROCESS_PRIORITY_CLASS_* (1 IDLE, 2 NORMAL,
      * 3 HIGH, 4 REALTIME, 5 BELOW_NORMAL, 6 ABOVE_NORMAL; 0 is NORMAL),

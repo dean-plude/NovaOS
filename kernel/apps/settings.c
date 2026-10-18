@@ -1,6 +1,6 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, time & language and about pages
+ *               storage, network, accounts, time & language and about pages
  */
 
 #include "apps.h"
@@ -25,7 +25,10 @@
 
 /* Personalization's clickable parts, recorded as they are drawn (client
  * coordinates) */
-typedef enum { PH_TAB, PH_THEME, PH_PICTURE, PH_ADD_PICTURE, PH_ICONSET, PH_ADD_ICONSET } PHitKind;
+typedef enum { PH_TAB, PH_THEME, PH_PICTURE, PH_ADD_PICTURE, PH_ICONSET, PH_ADD_ICONSET,
+               /* (and Accounts': i is the account, field or choice) */
+               AH_ADD, AH_PASSWORD, AH_PICTURE, AH_TYPE, AH_REMOVE, AH_FIELD, AH_CHIP, AH_OK, AH_CANCEL,
+               AH_PIC, AH_PIC_NONE } PHitKind;
 typedef struct {
     GdiRect  r;
     PHitKind kind;
@@ -53,10 +56,17 @@ typedef struct {
     UINT32 thumbs_gen;               /* ... the wallpaper thumbnails shown (repainted when more are ready) */
     int nhits;                       /* ... what a click there does (set_paint records it) */
     PHit hits[PHITS_MAX];
+    int acc_form;                    /* Accounts: the form open (ACC_*), or 0 */
+    UINT32 acc_rid;                  /* ... the account it is about */
+    int acc_focus;                   /* ... the field typed into */
+    bool acc_admin;                  /* ... the account type chosen */
+    char acc_text[3][UM_PASSWORD_MAX + 1];   /* ... its fields (wiped when it closes) */
+    char acc_err[96];                /* ... why it was refused */
+    char acc_note[96];               /* ... what the last change did */
 } Settings;
 
-static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Time & language", "About" };
-static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_GEAR, GL_NOVA };
+static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Accounts", "Time & language", "About" };
+static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_PERSON, GL_GEAR, GL_NOVA };
 #define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
 
 /* A labelled row inside a card: "Label ........ value" */
@@ -618,7 +628,7 @@ static bool set_tick(WND *w)
         st->kbd = kbd;
         return true;
     }
-    if (st && st->page == SETTINGS_PERSONALIZE) {             /* wallpaper thumbnails made */
+    if (st && (st->page == SETTINGS_PERSONALIZE || st->page == SETTINGS_ACCOUNTS)) {   /* wallpaper thumbnails made */
         UINT32 g = WallpaperThumbsGen();
         if (g == st->thumbs_gen) return false;
         st->thumbs_gen = g;
@@ -839,6 +849,7 @@ static void personalize_click(Settings *st, int x, int y)
             break; }
         case PH_ICONSET:     IconSetChoose(n ? n->name : ""); break;
         case PH_ADD_ICONSET: if (n) IconSetInstall(n); break;
+        default: break;                                  /* (Accounts' kinds) */
         }
         return;
     }
@@ -930,6 +941,350 @@ static void set_locale(const char *name)
         kprintf("[SETTINGS] Cannot start intl.exe: %s\n", exe ? "out of memory" : "not installed");
 }
 
+/* -----------------------------------------------------------------------
+ * Accounts: Windows 11's Accounts page.  "Your info" (the account signed
+ * in: its picture, type, password), then "Other users": each with
+ * "Change account type" and "Remove", and "Add account" (Windows' "Create
+ * a user for this PC": name, password twice, Standard user or
+ * Administrator).  Only an administrator changes other accounts (step
+ * 33.2 asks for consent first).  The forms take the keyboard: Tab between
+ * the fields, Enter to go on, Esc to cancel.  Clicks go by st->hits.
+ * ----------------------------------------------------------------------- */
+enum { ACC_NONE, ACC_ADD, ACC_PASSWORD, ACC_PICTURE, ACC_TYPE, ACC_REMOVE };
+#define ACC_ROW_H 60
+
+static bool acc_me(UmAccount *a) { return um_account_get(um_session_rid(), a); }
+static bool acc_can_manage(void)
+{
+    UmAccount me;
+    return acc_me(&me) && (me.flags & UM_ACCT_ADMIN);
+}
+
+static const char *acc_type(const UmAccount *a) { return (a->flags & UM_ACCT_ADMIN) ? "Administrator" : "Standard user"; }
+
+/* The account's picture (a PNG's thumbnail) or its initial in a circle */
+static void acc_avatar(const UmAccount *a, int x, int y, int size)
+{
+    char pic[96];
+    RamNode *f = um_account_picture(a->rid, pic, sizeof(pic)) ? RamfsResolve(NULL, pic + 2) : NULL;
+    if (f && !f->dir && WallpaperDrawThumb(f, RECT(x, y, size, size))) return;
+    GdiFillCircle(x + size / 2, y + size / 2, size / 2, UI_ACCENT_BG);
+    char ini[2] = { a->name[0] >= 'a' && a->name[0] <= 'z' ? (char)(a->name[0] - 32) : a->name[0], 0 };
+    if (size >= 48) GdiTextLarge(x + (size - GdiTextLargeW(ini)) / 2, y + (size - GDI_LARGE_H) / 2, ini, GDI_WHITE);
+    else GdiTextCenter(x, y + (size - GDI_FONT_H) / 2, size, ini, GDI_WHITE);
+}
+
+static void acc_wipe(Settings *st)
+{
+    volatile char *p = &st->acc_text[0][0];
+    for (size_t i = 0; i < sizeof(st->acc_text); i++) p[i] = 0;
+}
+
+static void acc_open(Settings *st, int form, UINT32 rid)
+{
+    acc_wipe(st);
+    st->acc_form = form;
+    st->acc_rid = rid;
+    st->acc_focus = 0;
+    st->acc_err[0] = 0;
+    st->acc_note[0] = 0;
+    UmAccount a;
+    st->acc_admin = form == ACC_TYPE && um_account_get(rid, &a) && (a.flags & UM_ACCT_ADMIN);
+    if (form == ACC_PASSWORD && um_account_get(rid, &a) && !a.password) st->acc_focus = 1;   /* (no current one to type) */
+}
+
+static void acc_close(Settings *st, const char *note)
+{
+    acc_wipe(st);
+    st->acc_form = ACC_NONE;
+    st->acc_err[0] = 0;
+    ksnprintf(st->acc_note, sizeof(st->acc_note), "%s", note ? note : "");
+}
+
+/* The form's text fields: their labels, and whether one is shown */
+static const char *acc_label(const Settings *st, int f)
+{
+    if (st->acc_form == ACC_ADD) return f == 0 ? "User name" : f == 1 ? "Password" : "Confirm password";
+    return f == 0 ? "Current password" : f == 1 ? "New password" : "Confirm new password";
+}
+static bool acc_field_shown(const Settings *st, int f)
+{
+    UmAccount a;
+    if (st->acc_form == ACC_ADD) return true;
+    if (st->acc_form != ACC_PASSWORD) return false;
+    return f || (um_account_get(st->acc_rid, &a) && a.password);
+}
+static GdiRect acc_box(int x, int y, int w, int f) { return RECT(x + w - 16 - 260, y + 40 + f * 50 + 6, 260, 32); }
+
+static void acc_status(UINT32 st, char *out, int cap, const char *name)
+{
+    const char *why = st == 0xC0000062u ? "That user name isn't allowed (1-20 characters, none of \" / \\ [ ] : ; | = , + * ? < > @)." :
+                      st == 0xC0000063u ? "There is already an account with that name." :
+                      st == 0xC0000069u ? "This is the last administrator: another account has to be one first." :
+                      st == 0xC0000022u ? "That account is signed in: sign it out first." :
+                      st == 0xC000006Cu ? "The password is too long." : NULL;
+    if (why) ksnprintf(out, (size_t)cap, "%s", why);
+    else ksnprintf(out, (size_t)cap, "Couldn't change %s (status 0x%08X).", name, st);
+}
+
+static void acc_submit(Settings *st)
+{
+    char (*t)[UM_PASSWORD_MAX + 1] = st->acc_text;
+    UmAccount a;
+    if (st->acc_form == ACC_ADD) {
+        if (!um_account_name_ok(t[0])) { acc_status(0xC0000062u, st->acc_err, sizeof(st->acc_err), t[0]); st->acc_focus = 0; return; }
+        if (strcmp(t[1], t[2])) { strcpy(st->acc_err, "The passwords don't match."); st->acc_focus = 2; return; }
+        UINT32 rid = 0, r = um_account_add(t[0], t[1], st->acc_admin ? UM_ACCT_ADMIN : 0, &rid);
+        if (r) { acc_status(r, st->acc_err, sizeof(st->acc_err), t[0]); return; }
+        kprintf("[SETTINGS] Added account %s (%s)\n", t[0], st->acc_admin ? "administrator" : "standard user");
+        char note[96];
+        ksnprintf(note, sizeof(note), "%s can sign in now: Start, your account, %s.", t[0], t[0]);
+        acc_close(st, note);
+        return;
+    }
+    if (st->acc_form == ACC_PASSWORD) {
+        if (!um_account_get(st->acc_rid, &a)) { acc_close(st, NULL); return; }
+        if (a.password && !um_account_check(a.rid, t[0])) { strcpy(st->acc_err, "The current password is incorrect."); st->acc_focus = 0; t[0][0] = 0; return; }
+        if (strcmp(t[1], t[2])) { strcpy(st->acc_err, "The passwords don't match."); st->acc_focus = 2; return; }
+        UINT32 r = um_account_set_password(a.rid, t[1]);
+        if (r) { acc_status(r, st->acc_err, sizeof(st->acc_err), a.name); return; }
+        kprintf("[SETTINGS] %s's password %s\n", a.name, t[1][0] ? "changed" : "removed");
+        acc_close(st, t[1][0] ? "Your password was changed." : "Your password was removed.");
+        return;
+    }
+    if (st->acc_form == ACC_TYPE) {
+        if (!um_account_get(st->acc_rid, &a)) { acc_close(st, NULL); return; }
+        UINT32 r = um_account_set_flags(a.rid, (a.flags & ~UM_ACCT_ADMIN) | (st->acc_admin ? UM_ACCT_ADMIN : 0));
+        if (r) { acc_status(r, st->acc_err, sizeof(st->acc_err), a.name); return; }
+        char note[96];
+        ksnprintf(note, sizeof(note), "%s is now %s.", a.name, st->acc_admin ? "an administrator" : "a standard user");
+        acc_close(st, note);
+        return;
+    }
+    if (st->acc_form == ACC_REMOVE) {
+        if (!um_account_get(st->acc_rid, &a)) { acc_close(st, NULL); return; }
+        UINT32 r = um_account_delete(a.rid);
+        if (r) { acc_status(r, st->acc_err, sizeof(st->acc_err), a.name); return; }
+        um_account_delete_profile(a.rid);                           /* ("Delete account and data") */
+        kprintf("[SETTINGS] Removed account %s\n", a.name);
+        char note[96];
+        ksnprintf(note, sizeof(note), "%s's account and files were removed.", a.name);
+        acc_close(st, note);
+    }
+}
+
+static void acc_buttons(Settings *st, GdiRect c, int x, int y, const char *ok)
+{
+    GdiRect b = RECT(x, y, GdiTextW(ok) + 40 > 100 ? GdiTextW(ok) + 40 : 100, 32);
+    UiButton(b, ok, true);
+    hit(st, b, c, AH_OK, 0, NULL);
+    GdiRect k = RECT(b.x + b.w + 12, y, 100, 32);
+    UiButton(k, "Cancel", false);
+    hit(st, k, c, AH_CANCEL, 0, NULL);
+    if (st->acc_err[0]) GdiTextT(x, y + 44, st->acc_err, GDI_C(0xE0, 0x60, 0x60));
+}
+
+static void acc_chips(Settings *st, GdiRect c, int x, int y)
+{
+    static const char *const kinds[2] = { "Standard user", "Administrator" };
+    for (int i = 0; i < 2; i++) {
+        GdiRect r = RECT(x + i * (NET_CHIP_W + CHIP_GAP), y, NET_CHIP_W, CHIP_H);
+        bool on = st->acc_admin == (i == 1);
+        GdiRoundRect(r, 6, on ? UI_ACCENT : UI_CARD, GDI_TRANSPARENT);
+        GdiTextCenter(r.x, r.y + 8, r.w, kinds[i], on ? GDI_WHITE : UI_TEXT);
+        hit(st, r, c, AH_CHIP, i, NULL);
+    }
+}
+
+static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
+{
+    UmAccount a;
+    bool known = um_account_get(st->acc_rid, &a);
+    if (st->acc_form == ACC_ADD || st->acc_form == ACC_PASSWORD) {
+        GdiTextBold(x, y, st->acc_form == ACC_ADD ? "Create a user for this PC" : "Change your password", UI_TEXT);
+        for (int f = 0; f < 3; f++) {
+            if (!acc_field_shown(st, f)) continue;
+            int ry = y + 40 + f * 50;
+            GdiRoundRect(RECT(x, ry, w, 44), 6, UI_CARD, GDI_TRANSPARENT);
+            GdiTextT(x + 16, ry + 14, acc_label(st, f), UI_TEXT);
+            GdiRect b = acc_box(x, y, w, f);
+            GdiRoundRect(b, 6, UI_BG, GDI_TRANSPARENT);
+            GdiRoundBorderAlpha(b, 6, f == st->acc_focus ? UI_ACCENT : GDI_WHITE, f == st->acc_focus ? 200 : 30);
+            int n = (int)strlen(st->acc_text[f]), tx = b.x + 10;
+            if (f == 0 && st->acc_form == ACC_ADD) { GdiTextT(tx, b.y + (b.h - GDI_FONT_H) / 2, st->acc_text[f], UI_TEXT); tx += GdiTextW(st->acc_text[f]); }
+            else { for (int i = 0; i < n && i < 28; i++) GdiFillCircle(b.x + 14 + i * 8, b.y + b.h / 2, 3, UI_TEXT); tx = b.x + 10 + (n < 28 ? n : 28) * 8; }
+            if (f == st->acc_focus) GdiFillRect(RECT(tx + 1, b.y + 7, 2, b.h - 14), UI_ACCENT);
+            hit(st, b, c, AH_FIELD, f, NULL);
+        }
+        int ey = y + 40 + 3 * 50 + 8;
+        if (st->acc_form == ACC_ADD) {
+            GdiTextBold(x, ey, "Account type", UI_TEXT);
+            acc_chips(st, c, x, ey + 26);
+            ey += 26 + CHIP_H + 16;
+            GdiTextT(x, ey, "Leave the password blank to sign in without one.", UI_TEXT2);
+        } else GdiTextT(x, ey, "Leave the new password blank to sign in without one.", UI_TEXT2);
+        acc_buttons(st, c, x, ey + 30, st->acc_form == ACC_ADD ? "Create" : "Save");
+        return;
+    }
+    if (!known) { st->acc_form = ACC_NONE; return; }
+    if (st->acc_form == ACC_TYPE) {
+        char t[64];
+        ksnprintf(t, sizeof(t), "Change account type: %s", a.full[0] ? a.full : a.name);
+        GdiTextBold(x, y, t, UI_TEXT);
+        acc_chips(st, c, x, y + 32);
+        GdiTextT(x, y + 32 + CHIP_H + 16, "An administrator can change settings, install programs and manage other accounts.", UI_TEXT2);
+        acc_buttons(st, c, x, y + 32 + CHIP_H + 48, "OK");
+        return;
+    }
+    if (st->acc_form == ACC_REMOVE) {
+        char t[64], l[160];
+        ksnprintf(t, sizeof(t), "Delete account and data? (%s)", a.name);
+        GdiTextBold(x, y, t, UI_TEXT);
+        ksnprintf(l, sizeof(l), "Deleting %s's account removes their files from this PC: %s.", a.name, a.profile[0] ? a.profile : "C:\\Users\\...");
+        GdiTextT(x, y + 32, l, UI_TEXT2);
+        GdiTextT(x, y + 56, "Back up anything you want to keep before you delete it.", UI_TEXT2);
+        acc_buttons(st, c, x, y + 92, "Delete account and data");
+        return;
+    }
+    /* ACC_PICTURE: the pictures in C:\Windows\Web\Wallpaper, or none */
+    GdiTextBold(x, y, "Choose your picture", UI_TEXT);
+    GdiTextT(x, y + 22, "PNG pictures in C:\\Windows\\Web\\Wallpaper (add more in Personalization)", UI_TEXT2);
+    y += 52;
+    int sz = 88, cols = (w + 12) / (sz + 12);
+    if (cols < 1) cols = 1;
+    GdiRect none = RECT(x, y, sz, sz);
+    GdiRoundRect(none, 8, UI_CARD, GDI_TRANSPARENT);
+    UmAccount plain = a;
+    char pic[96];
+    um_account_picture(a.rid, pic, sizeof(pic));
+    GdiFillCircle(x + sz / 2, y + sz / 2 - 6, 26, UI_ACCENT_BG);
+    char ini[2] = { plain.name[0] >= 'a' && plain.name[0] <= 'z' ? (char)(plain.name[0] - 32) : plain.name[0], 0 };
+    GdiTextCenter(x, y + sz / 2 - 14, sz, ini, GDI_WHITE);
+    GdiTextCenter(x, y + sz - 20, sz, "None", UI_TEXT2);
+    if (!pic[0]) GdiRoundBorderAlpha(none, 8, UI_ACCENT, 255);
+    hit(st, none, c, AH_PIC_NONE, 0, NULL);
+    RamNode *pics[24];
+    int np = WallpaperList(pics, 24);
+    for (int i = 0; i < np; i++) {
+        int k = i + 1;
+        GdiRect r = RECT(x + (k % cols) * (sz + 12), y + (k / cols) * (sz + 12), sz, sz);
+        if (!WallpaperDrawThumb(pics[i], r)) GdiRoundRect(r, 8, UI_HOVER, GDI_TRANSPARENT);
+        char path[RAMFS_PATH_MAX];
+        RamfsPath(pics[i], path, sizeof(path));
+        if (pic[0] && !strcmp(path, pic)) GdiRoundBorderAlpha(r, 8, UI_ACCENT, 255);
+        hit(st, r, c, AH_PIC, 0, pics[i]);
+    }
+    int ey = y + ((np + 1 + cols - 1) / cols) * (sz + 12) + 8;
+    GdiRect k = RECT(x, ey, 100, 32);
+    UiButton(k, "Cancel", false);
+    hit(st, k, c, AH_CANCEL, 0, NULL);
+}
+
+static void page_accounts(Settings *st, GdiRect c, int x, int y, int w)
+{
+    st->nhits = 0;
+    if (st->acc_form) { acc_form(st, c, x, y, w); return; }
+    UmAccount me;
+    if (!acc_me(&me)) return;
+    bool admin = me.flags & UM_ACCT_ADMIN;
+
+    /* Your info */
+    GdiRoundRect(RECT(x, y, w, 104), 8, UI_CARD, GDI_TRANSPARENT);
+    acc_avatar(&me, x + 20, y + 20, 64);
+    GdiTextLarge(x + 104, y + 20, me.full[0] ? me.full : me.name, UI_TEXT);
+    char sub[96];
+    ksnprintf(sub, sizeof(sub), "Local account  -  %s  -  %s", acc_type(&me), me.password ? "Password set" : "No password");
+    GdiTextT(x + 104, y + 58, sub, UI_TEXT2);
+    GdiRect bp = RECT(x + w - 16 - 150, y + 16, 150, 32), bi = RECT(x + w - 16 - 150, y + 56, 150, 32);
+    UiButton(bp, me.password ? "Change password" : "Add a password", false);
+    hit(st, bp, c, AH_PASSWORD, (int)me.rid, NULL);
+    UiButton(bi, "Change picture", false);
+    hit(st, bi, c, AH_PICTURE, (int)me.rid, NULL);
+    y += 104 + 14;
+    if (st->acc_note[0]) { GdiTextT(x, y, st->acc_note, UI_ACCENT); y += 24; }
+
+    /* Other users */
+    GdiTextBold(x, y, "Other users", UI_TEXT);
+    y += 26;
+    GdiRoundRect(RECT(x, y, w, 52), 6, UI_CARD, GDI_TRANSPARENT);
+    GdiTextT(x + 16, y + 17, "Add other user", UI_TEXT);
+    if (admin) {
+        GdiRect b = RECT(x + w - 16 - 130, y + 10, 130, 32);
+        UiButton(b, "Add account", true);
+        hit(st, b, c, AH_ADD, 0, NULL);
+    } else GdiTextT(x + w - 16 - GdiTextW("An administrator adds accounts"), y + 17, "An administrator adds accounts", UI_TEXT3);
+    y += 58;
+    static UmAccount all[16];
+    int n = um_accounts_list(all, 16), shown = 0;
+    for (int i = 0; i < n; i++) {
+        const UmAccount *a = &all[i];
+        if (a->rid == me.rid) continue;
+        shown++;
+        GdiRoundRect(RECT(x, y, w, ACC_ROW_H - 6), 6, UI_CARD, GDI_TRANSPARENT);
+        acc_avatar(a, x + 14, y + 9, 36);
+        GdiTextT(x + 62, y + 8, a->full[0] ? a->full : a->name, UI_TEXT);
+        ksnprintf(sub, sizeof(sub), "%s%s%s", acc_type(a), (a->flags & UM_ACCT_DISABLED) ? "  -  Disabled" : "",
+                  um_session_signed_in(a->rid) ? "  -  Signed in" : "");
+        GdiTextT(x + 62, y + 28, sub, UI_TEXT2);
+        if (admin) {
+            GdiRect rm = RECT(x + w - 16 - 90, y + 11, 90, 32), ty = RECT(rm.x - 12 - 190, y + 11, 190, 32);
+            UiButton(ty, "Change account type", false);
+            hit(st, ty, c, AH_TYPE, (int)a->rid, NULL);
+            UiButton(rm, "Remove", false);
+            hit(st, rm, c, AH_REMOVE, (int)a->rid, NULL);
+        }
+        y += ACC_ROW_H;
+    }
+    if (!shown) GdiTextT(x, y + 4, "No other accounts on this PC yet.", UI_TEXT2);
+}
+
+static void accounts_click(Settings *st, int x, int y)
+{
+    for (int i = st->nhits - 1; i >= 0; i--) {
+        PHit *h = &st->hits[i];
+        if (!UiHit(h->r, x, y)) continue;
+        switch (h->kind) {
+        case AH_ADD:      acc_open(st, ACC_ADD, 0); break;
+        case AH_PASSWORD: acc_open(st, ACC_PASSWORD, (UINT32)h->i); break;
+        case AH_PICTURE:  acc_open(st, ACC_PICTURE, (UINT32)h->i); break;
+        case AH_TYPE:     acc_open(st, ACC_TYPE, (UINT32)h->i); break;
+        case AH_REMOVE:   acc_open(st, ACC_REMOVE, (UINT32)h->i); break;
+        case AH_FIELD:    st->acc_focus = h->i; break;
+        case AH_CHIP:     st->acc_admin = h->i == 1; break;
+        case AH_OK:       acc_submit(st); break;
+        case AH_CANCEL:   acc_close(st, NULL); break;
+        case AH_PIC_NONE: um_account_set_picture(st->acc_rid, ""); acc_close(st, "Your picture was removed."); break;
+        case AH_PIC: {
+            char path[RAMFS_PATH_MAX + 2];
+            ksnprintf(path, sizeof(path), "C:%s", h->path);
+            um_account_set_picture(st->acc_rid, path);
+            kprintf("[SETTINGS] Account picture %s\n", path);
+            acc_close(st, "Your picture was changed.");
+            break; }
+        default: break;
+        }
+        return;
+    }
+}
+
+static void accounts_key(Settings *st, const KeyEvent *k)
+{
+    if (k->scancode == KEY_ESC) { acc_close(st, NULL); return; }
+    if (k->scancode == KEY_ENTER && !k->extended) { acc_submit(st); return; }
+    if (st->acc_form != ACC_ADD && st->acc_form != ACC_PASSWORD) return;
+    if (k->scancode == KEY_TAB || (k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN))) {
+        int d = (k->scancode == KEY_UP || (k->scancode == KEY_TAB && k->shift)) ? -1 : 1, f = st->acc_focus;
+        do f = (f + d + 3) % 3; while (!acc_field_shown(st, f));
+        st->acc_focus = f;
+        return;
+    }
+    char *t = st->acc_text[st->acc_focus];
+    size_t n = strlen(t), cap = st->acc_form == ACC_ADD && st->acc_focus == 0 ? UM_ACCOUNT_NAME_MAX : UM_PASSWORD_MAX;
+    if (k->ch == '\b') { if (n) t[n - 1] = '\0'; }
+    else if (!k->ctrl && !k->alt && (UINT8)k->ch >= 0x20 && (UINT8)k->ch < 0x7F && n < cap) { t[n] = k->ch; t[n + 1] = '\0'; }
+    st->acc_err[0] = 0;
+}
+
 static void page_about(int x, int y, int w)
 {
     GdiTextLarge(x, y, "NovaOS", UI_TEXT);             y += 40;
@@ -970,6 +1325,7 @@ static void set_paint(WND *w)
     case SETTINGS_PERSONALIZE: page_personalize(st, c, x, y, w2); break;
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
     case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
+    case SETTINGS_ACCOUNTS:    page_accounts(st, c, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
     case SETTINGS_ABOUT:       page_about(x, y, w2);      break;
     }
@@ -1058,22 +1414,30 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
             return;
         }
         if (st->page == SETTINGS_PERSONALIZE) personalize_click(st, x, y);
+        if (st->page == SETTINGS_ACCOUNTS) accounts_click(st, x, y);
         return;
     }
     int i = (y - 64) / ITEM_H;
-    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; }
+    if (y >= 64 && i >= 0 && i < N_PAGES) { st->page = i; st->net_edit = false; if (st->acc_form) acc_close(st, NULL); }
 }
 
 static void set_key(WND *w, const KeyEvent *k)
 {
     Settings *st = w->user;
     if (st->page == SETTINGS_NETWORK && st->net_edit) { if (k->pressed) net_key(st, k); return; }
+    if (st->page == SETTINGS_ACCOUNTS && st->acc_form) { if (k->pressed) accounts_key(st, k); return; }
     if (!k->extended) return;
     if (k->scancode == KEY_UP && st->page > 0) st->page--;
     if (k->scancode == KEY_DOWN && st->page < N_PAGES - 1) st->page++;
 }
 
-static void set_close(WND *w) { kfree(w->user); w->user = NULL; }
+static void set_close(WND *w)
+{
+    Settings *st = w->user;
+    if (st) acc_wipe(st);                     /* (passwords typed) */
+    kfree(w->user);
+    w->user = NULL;
+}
 
 void SettingsOpen(void)
 {
@@ -1099,7 +1463,10 @@ void SettingsOpenPage(int page)
         if (!w) return;
     }
     Settings *st = w->user;
-    if (st && page >= 0 && page < N_PAGES) st->page = page;
+    if (st && page == SETTINGS_ACCOUNTS_ADD) {                /* (Start's "Add an account") */
+        st->page = SETTINGS_ACCOUNTS;
+        if (acc_can_manage()) acc_open(st, ACC_ADD, 0);
+    } else if (st && page >= 0 && page < N_PAGES) st->page = page;
     WmSetActive(w);
     WmInvalidate();
 }

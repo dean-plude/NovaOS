@@ -16,6 +16,7 @@
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
 #include "../hal/rtc.h"
+#include "../hal/efi.h"
 #include "../arch/x86_64/cpu.h"
 
 #define PHYSMAP(p) ((const void *)(uintptr_t)(PHYSMAP_BASE + (p)))
@@ -287,7 +288,8 @@ static bool setup_layout(UINT64 sectors, UINT64 esp_sectors,
 }
 
 /* Write a protective MBR and primary + backup GPTs with the two partitions. */
-static bool write_gpt(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sectors, UINT64 *data_lba, UINT64 *data_sectors)
+static bool write_gpt(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sectors, UINT64 *data_lba, UINT64 *data_sectors,
+                      UINT8 esp_id[16])
 {
     UINT64 last = d->sectors - 1;
     UINT64 first_usable = 2 + GPT_TABLE_SEC, last_usable = last - 1 - GPT_TABLE_SEC;
@@ -313,6 +315,7 @@ static bool write_gpt(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sectors, UINT64 
     UINT8 *e0 = ent, *e1 = ent + GPT_ESIZE;
     guid_bytes(e0, 0xC12A7328, 0xF81F, 0x11D2, esp4);            /* EFI System Partition */
     random_guid(e0 + 16);
+    memcpy(esp_id, e0 + 16, 16);
     UINT64 a = *esp_lba, b = *esp_lba + *esp_sectors - 1;
     memcpy(e0 + 32, &a, 8);
     memcpy(e0 + 40, &b, 8);
@@ -454,6 +457,146 @@ static bool copy_files(FatVol *esp)
     return true;
 }
 
+/* ---------------------------------------------------------------------------
+ * The firmware's boot entry.  As Windows Setup adds "Windows Boot Manager",
+ * Setup adds "NovaOS" for \EFI\BOOT\BOOTX64.EFI on the new ESP and puts it
+ * first in BootOrder, keeping every other entry ("Windows Boot Manager"
+ * second), so the PC starts NovaOS, whose boot menu offers Windows.  The
+ * path is the short form UEFI firmware expands itself (UEFI 2.10, 3.1.2):
+ * the partition by its GPT entry, place and unique GUID, then the file.
+ * Not fatal: without it the boot loader adds the entry on NovaOS's first
+ * start, once it is started from the firmware's boot menu.
+ * ------------------------------------------------------------------------- */
+#define LOAD_OPTION_ACTIVE 1u
+
+static void var16(UINT16 *out, const char *s)
+{
+    while ((*out++ = (UINT8)*s++)) {}
+}
+
+static UINT32 boot_option(UINT8 *o, UINT32 num, UINT64 lba, UINT64 sectors, const UINT8 id[16])
+{
+    static const char desc[] = "NovaOS", file[] = "\\EFI\\BOOT\\BOOTX64.EFI";
+    UINT32 n = 6;
+    UINT32 attrs = LOAD_OPTION_ACTIVE;
+    memcpy(o, &attrs, 4);
+    for (int i = 0; i <= (int)sizeof(desc) - 1; i++, n += 2) { o[n] = (UINT8)desc[i]; o[n + 1] = 0; }
+    UINT32 path = n;
+    UINT8 *hd = o + n;                                  /* HARDDRIVE_DEVICE_PATH */
+    hd[0] = 4; hd[1] = 1; hd[2] = 42; hd[3] = 0;
+    memcpy(hd + 4, &num, 4);
+    memcpy(hd + 8, &lba, 8);
+    memcpy(hd + 16, &sectors, 8);
+    memcpy(hd + 24, id, 16);
+    hd[40] = 2;                                         /* GPT */
+    hd[41] = 2;                                         /* a GUID signature */
+    n += 42;
+    UINT8 *fp = o + n;                                  /* FILEPATH_DEVICE_PATH */
+    UINT16 flen = (UINT16)(4 + 2 * sizeof(file));
+    fp[0] = 4; fp[1] = 4; memcpy(fp + 2, &flen, 2);
+    for (int i = 0; i < (int)sizeof(file); i++) { fp[4 + 2 * i] = (UINT8)file[i]; fp[5 + 2 * i] = 0; }
+    n += flen;
+    o[n] = 0x7F; o[n + 1] = 0xFF; o[n + 2] = 4; o[n + 3] = 0;   /* the end */
+    n += 4;
+    UINT16 plen = (UINT16)(n - path);
+    memcpy(o + 4, &plen, 2);
+    return n;
+}
+
+/* An entry's HARDDRIVE node, or NULL */
+static const UINT8 *option_hd(const UINT8 *o, UINT64 len)
+{
+    if (len < 6) return NULL;
+    UINT16 plen;
+    memcpy(&plen, o + 4, 2);
+    UINT64 at = 6;
+    while (at + 1 < len && (o[at] | o[at + 1])) at += 2;      /* past the description */
+    at += 2;
+    for (UINT64 end = at + plen; at + 4 <= end && end <= len; ) {
+        UINT16 nl;
+        memcpy(&nl, o + at + 2, 2);
+        if (nl < 4 || o[at] == 0x7F) break;
+        if (o[at] == 4 && o[at + 1] == 1 && nl == 42 && at + 42 <= end) return o + at;
+        at += nl;
+    }
+    return NULL;
+}
+
+static void add_boot_entry(BlockDev *d, UINT32 num, UINT64 lba, UINT64 sectors, const UINT8 id[16])
+{
+    if (!EfiRuntimeAvailable()) {
+        kprintf("[SETUP] No firmware variable services: NovaOS adds its boot entry on its first start\n");
+        return;
+    }
+    UINT8 *opt = kzalloc(256), *cur = kmalloc(1024);
+    UINT16 *order = kmalloc(512 * sizeof(UINT16));
+    if (!opt || !cur || !order) { kfree(opt); kfree(cur); kfree(order); return; }
+    UINT32 len = boot_option(opt, num, lba, sectors, id);
+
+    /* The entry for this partition already there (a reinstall), else the
+     * first free Boot#### */
+    UINT16 name[16];
+    int use = -1, free_num = -1;
+    for (int n = 0; n < 0x100 && use < 0; n++) {
+        char a[16];
+        ksnprintf(a, sizeof(a), "Boot%04X", n);
+        var16(name, a);
+        UINT64 sz = 1024;
+        UINT64 st = EfiGetVariable(name, EFI_GLOBAL_GUID, NULL, &sz, cur);
+        if (st == EFI_NOT_FOUND_ERR) { if (free_num < 0) free_num = n; continue; }
+        const UINT8 *hd = st == EFI_OK ? option_hd(cur, sz) : NULL;
+        if (hd && !memcmp(hd + 24, id, 16)) use = n;
+    }
+    if (use < 0) use = free_num;
+    char a[16], entry[16];
+    ksnprintf(entry, sizeof(entry), "Boot%04X", use);
+    var16(name, entry);
+    UINT64 st = use < 0 ? EFI_ERR(9) : EfiSetVariable(name, EFI_GLOBAL_GUID, EFI_VAR_NV_BS_RT, len, opt);
+    if (st != EFI_OK) {
+        kprintf("[SETUP] Could not add the firmware boot entry (EFI status %llx): NovaOS adds it on its first start\n",
+                (unsigned long long)st);
+        goto out;
+    }
+
+    /* First in BootOrder, every other entry kept after it */
+    UINT16 bo[16];
+    var16(bo, "BootOrder");
+    UINT64 osz = 511 * sizeof(UINT16);
+    if (EfiGetVariable(bo, EFI_GLOBAL_GUID, NULL, &osz, order + 1) != EFI_OK) osz = 0;
+    UINT32 k = 1;
+    for (UINT32 i = 1; i <= osz / 2; i++)
+        if (order[i] != use) order[k++] = order[i];
+    order[0] = (UINT16)use;
+    st = EfiSetVariable(bo, EFI_GLOBAL_GUID, EFI_VAR_NV_BS_RT, k * sizeof(UINT16), order);
+
+    /* Read it back, and say what comes next (Windows' entry, on a PC) */
+    UINT64 back = 511 * sizeof(UINT16);
+    bool first = st == EFI_OK && EfiGetVariable(bo, EFI_GLOBAL_GUID, NULL, &back, order) == EFI_OK &&
+                 back >= 2 && order[0] == use;
+    char next[64] = "";
+    if (first && back >= 4) {
+        ksnprintf(a, sizeof(a), "Boot%04X", order[1]);
+        var16(name, a);
+        UINT64 sz = 1024;
+        if (EfiGetVariable(name, EFI_GLOBAL_GUID, NULL, &sz, cur) == EFI_OK && sz > 8) {
+            int j = 0;
+            for (UINT64 i = 6; i + 1 < sz && (cur[i] | cur[i + 1]) && j < 40; i += 2)
+                next[j++] = cur[i + 1] || cur[i] < 0x20 ? '?' : (char)cur[i];
+            next[j] = 0;
+        }
+    }
+    if (first)
+        kprintf("[SETUP] Added the firmware boot entry %s \"NovaOS\" for %s, first in BootOrder%s%s%s\n",
+                entry, d->name, next[0] ? " (then \"" : "", next, next[0] ? "\")" : "");
+    else
+        kprintf("[SETUP] Added the firmware boot entry %s \"NovaOS\" for %s, but could not put it first in BootOrder\n",
+                entry, d->name);
+out:
+    kfree(opt);
+    kfree(cur);
+    kfree(order);
+}
+
 static void setup_thread(void *arg)
 {
     (void)arg;
@@ -472,6 +615,8 @@ static void setup_thread(void *arg)
     }
 
     UINT64 esp_lba, esp_sec = setup_esp_sectors(ksize, lsize, BootFilesBytes()), data_lba, data_sec;
+    UINT8 esp_id[16];
+    UINT32 esp_num = 1;                                          /* (the ESP's GPT entry, for its boot entry) */
     DiskLayout *layout = NULL;
     if (g_beside) {
         layout = kmalloc(sizeof(DiskLayout));
@@ -480,6 +625,8 @@ static void setup_thread(void *arg)
             failed("There is not enough free space on the disk for NovaOS beside what is on it.");
             return;
         }
+        esp_num = layout->part[layout->count - 2].number;
+        memcpy(esp_id, layout->part[layout->count - 2].id, 16);
         kprintf("[SETUP] Beside the %d partition%s on %s: EFI System Partition at %u MiB (%u MiB), "
                 "NovaOS at %u MiB (%u MiB)\n", layout->count - 2, layout->count == 3 ? "" : "s", d->name,
                 (unsigned)(esp_lba >> 11), (unsigned)(esp_sec >> 11), (unsigned)(data_lba >> 11), (unsigned)(data_sec >> 11));
@@ -504,7 +651,7 @@ static void setup_thread(void *arg)
         kfree(z);
         kfree(layout);
     } else
-        parted = wipe(d, esp_lba, data_lba) && write_gpt(d, &esp_lba, &esp_sec, &data_lba, &data_sec);
+        parted = wipe(d, esp_lba, data_lba) && write_gpt(d, &esp_lba, &esp_sec, &data_lba, &data_sec, esp_id);
     if (!parted) {
         if (g_beside) DrivesAttach(d);
         failed("Could not write the partition table (a disk error, or the disk is too small).");
@@ -571,6 +718,8 @@ static void setup_thread(void *arg)
     if (g_kernel_copy) { kfree(g_kernel_copy); g_kernel_copy = NULL; }
     if (g_loader_copy) { kfree(g_loader_copy); g_loader_copy = NULL; }
     if (g_beside) DrivesAttach(d);                               /* (the other systems' volumes again) */
+    step(95, "Adding NovaOS to the firmware's boot menu");
+    add_boot_entry(d, esp_num, esp_lba, esp_sec, esp_id);
     step(100, "NovaOS is installed");
     g_status.state = SETUP_DONE;
 }

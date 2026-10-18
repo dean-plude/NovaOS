@@ -9,6 +9,13 @@
  * the right one signs the account in
  * (um_session_set: its profile and token for what the desktop starts
  * from then on) or, on a locked screen, gives the desktop back.
+ *
+ * Fast user switching: with more than one account the others are listed
+ * in the corner, on the lock screen too.  Signing in as another while one
+ * is signed in switches (WmSetSession): the first one's windows are put
+ * away with their programs still running, and come back when it signs in
+ * again.  Sign-out (Start's account menu, ExitWindowsEx) ends an
+ * account's programs (UmEndSession) and closes its windows.
  */
 
 #include "logon.h"
@@ -19,6 +26,8 @@
 #include "../ke/timezone.h"
 #include "../lib/string.h"
 #include "../um/um.h"
+#include "../fs/ramfs.h"
+#include "wallpaper.h"
 
 enum { MODE_OFF, MODE_BOOT, MODE_LOCK };
 #define MAX_TILES 8
@@ -27,7 +36,10 @@ static int g_mode;
 static volatile bool g_lock_req;
 static bool g_first_done;
 static UmAccount g_acct[MAX_TILES];
+static char g_pic[MAX_TILES][96];           /* their pictures' C: paths ("": the initial) */
+static bool g_on[MAX_TILES];                /* signed in already (switched away from) */
 static int g_n, g_sel;
+static volatile UINT32 g_signout_req;      /* an account to sign out (LogonSignOut) */
 static char g_pw[UM_PASSWORD_MAX + 1];
 static int g_pwlen;
 static const char *g_msg;
@@ -46,36 +58,43 @@ static void wipe(void)
     g_pwlen = 0;
 }
 
-static void load_accounts(void)
+/* Every account that may sign in; @pick (or else the one on the screen)
+ * chosen.  Locked, the others are there too: one of them may switch in
+ * while the one that locked it stays signed in, as on Windows. */
+static void load_accounts(UINT32 pick)
 {
     static UmAccount all[32];                                      /* (the desktop thread's) */
     int n = um_accounts_list(all, 32);
-    UINT32 me = um_session_rid();
+    UINT32 me = pick ? pick : um_session_rid();
     g_n = 0;
     g_sel = 0;
     for (int i = 0; i < n && g_n < MAX_TILES; i++) {
         if (all[i].flags & UM_ACCT_DISABLED) continue;
-        if (g_mode == MODE_LOCK && all[i].rid != me) continue;     /* (locked: only who locked it) */
         if (all[i].rid == me) g_sel = g_n;
+        um_account_picture(all[i].rid, g_pic[g_n], sizeof(g_pic[0]));
+        g_on[g_n] = um_session_signed_in(all[i].rid);
         g_acct[g_n++] = all[i];
     }
 }
 
-static void show(int mode)
+static void show_for(int mode, UINT32 pick)
 {
     g_mode = mode;
     wipe();
     g_msg = NULL;
-    load_accounts();
+    load_accounts(pick);
     if (!g_n) { g_mode = MODE_OFF; return; }                       /* (nothing to sign in as) */
     kprintf("[LOGON] %s screen (%s)\n", mode == MODE_LOCK ? "Lock" : "Sign-in", g_acct[g_sel].name);
     WmInvalidate();
 }
 
+static void show(int mode) { show_for(mode, 0); }
+
 bool LogonStart(void)
 {
     if (!um_account_signin_required()) {
         um_session_set(um_session_rid());
+        WmSetSession(um_session_rid());
         g_first_done = true;
         return true;
     }
@@ -96,8 +115,32 @@ bool LogonActive(void) { return g_mode != MODE_OFF; }
 
 void LogonLock(void) { __atomic_store_n(&g_lock_req, true, __ATOMIC_RELEASE); }
 
+void LogonSwitchTo(UINT32 rid)
+{
+    if (g_mode == MODE_OFF) show_for(MODE_BOOT, rid);
+}
+
+void LogonSignOut(UINT32 rid) { __atomic_store_n(&g_signout_req, rid, __ATOMIC_RELEASE); }
+
+/* Sign-out: the account's programs are ended and its windows closed;
+ * the sign-in screen follows when it was the one on the screen */
+static void sign_out(UINT32 rid)
+{
+    UmAccount a;
+    if (!um_session_signed_in(rid) || !um_account_get(rid, &a)) return;
+    int n = UmEndSession(rid);
+    WmCloseSession(rid);
+    um_session_end(rid);
+    kprintf("[LOGON] %s signed out (%d programs ended)\n", a.name, n);
+    if (rid == um_session_rid() && g_mode == MODE_OFF) show(MODE_BOOT);
+    else if (g_mode != MODE_OFF) load_accounts(g_acct[g_sel].rid);
+    WmInvalidate();
+}
+
 void LogonPoll(void)
 {
+    UINT32 out = __atomic_exchange_n(&g_signout_req, 0, __ATOMIC_ACQ_REL);
+    if (out) sign_out(out);
     if (!__atomic_exchange_n(&g_lock_req, false, __ATOMIC_ACQ_REL)) return;
     if (g_mode == MODE_OFF) show(MODE_LOCK);
 }
@@ -124,8 +167,16 @@ static char initial(const UmAccount *a)
     return c >= 'a' && c <= 'z' ? (char)(c - 32) : c;
 }
 
-static void avatar(int x, int y, int rad, const UmAccount *a, bool large)
+static void avatar(int x, int y, int rad, int i, bool large)
 {
+    const UmAccount *a = &g_acct[i];
+    if (g_pic[i][0]) {                                             /* its picture (Settings, Accounts) */
+        FsLock();
+        RamNode *f = RamfsResolve(NULL, g_pic[i] + 2);
+        bool drawn = f && !f->dir && WallpaperDrawThumb(f, RECT(x - rad, y - rad, 2 * rad, 2 * rad));
+        FsUnlock();
+        if (drawn) { GdiRoundBorderAlpha(RECT(x - rad, y - rad, 2 * rad, 2 * rad), rad / 4, 0xFFFFFF, 140); return; }
+    }
     GdiFillCircle(x, y, rad, C_ACCENT);
     char s[2] = { initial(a), 0 };
     if (large) GdiTextLarge(x - GdiTextLargeW(s) / 2, y - GDI_LARGE_H / 2, s, C_TEXT);
@@ -161,7 +212,7 @@ void LogonDraw(void)
 
     /* the chosen account */
     const UmAccount *a = &g_acct[g_sel];
-    avatar(cx(), cy() - 64, 56, a, true);
+    avatar(cx(), cy() - 64, 56, g_sel, true);
     const char *nm = shown_name(a);
     GdiTextLarge(cx() - GdiTextLargeW(nm) / 2, cy() + 6, nm, C_TEXT);
     if (a->password) {
@@ -180,18 +231,23 @@ void LogonDraw(void)
         GdiRect b = r_button();
         GdiRoundAlpha(b, 6, 0xFFFFFF, 46);
         GdiRoundBorderAlpha(b, 6, 0xFFFFFF, 110);
-        GdiTextCenter(b.x, b.y + (FIELD_H - GDI_FONT_H) / 2, b.w, g_mode == MODE_LOCK ? "Unlock" : "Sign in", C_TEXT);
+        GdiTextCenter(b.x, b.y + (FIELD_H - GDI_FONT_H) / 2, b.w, g_mode == MODE_LOCK && a->rid == um_session_rid() ? "Unlock" : "Sign in", C_TEXT);
     }
     if (g_msg) GdiTextShadowCenter(0, r_field().y + FIELD_H + 16, w, g_msg, C_ERROR, 140);
-    if (g_mode == MODE_LOCK) GdiTextShadowCenter(0, r_field().y + FIELD_H + 40, w, "Locked", C_DIM, 120);
+    bool mine = a->rid == um_session_rid();
+    if (g_mode == MODE_LOCK && mine) GdiTextShadowCenter(0, r_field().y + FIELD_H + 40, w, "Locked", C_DIM, 120);
+    else if (g_on[g_sel] && !mine) GdiTextShadowCenter(0, r_field().y + FIELD_H + 40, w, "Signed in", C_DIM, 120);
 
-    /* the other accounts (choosing one at boot) */
-    if (g_mode == MODE_BOOT && g_n > 1)
+    /* the accounts to choose from (another one switches in: its own
+     * desktop, the others' programs still running behind it) */
+    if (g_n > 1)
         for (int i = 0; i < g_n; i++) {
             GdiRect r = r_tile(i);
             GdiRoundAlpha(r, 6, 0xFFFFFF, i == g_sel ? 60 : 22);
-            avatar(r.x + 24, r.y + TILE_H / 2, 16, &g_acct[i], false);
-            GdiTextT(r.x + 52, r.y + (TILE_H - GDI_FONT_H) / 2, shown_name(&g_acct[i]), C_TEXT);
+            avatar(r.x + 24, r.y + TILE_H / 2, 16, i, false);
+            int ty = g_on[i] ? r.y + 6 : r.y + (TILE_H - GDI_FONT_H) / 2;
+            GdiTextT(r.x + 52, ty, shown_name(&g_acct[i]), C_TEXT);
+            if (g_on[i]) GdiTextT(r.x + 52, ty + GDI_FONT_H + 1, "Signed in", C_DIM);
         }
 }
 
@@ -211,8 +267,17 @@ static void submit(void)
         return;
     }
     wipe();
-    if (g_mode == MODE_BOOT || a->rid != um_session_rid()) um_session_set(a->rid);
-    else kprintf("[LOGON] %s unlocked the screen\n", a->name);
+    UINT32 was = um_session_rid();
+    if (g_mode == MODE_LOCK && a->rid == was && um_session_signed_in(was)) kprintf("[LOGON] %s unlocked the screen\n", a->name);
+    else {
+        bool other = g_first_done && a->rid != was && um_session_signed_in(was);
+        um_session_set(a->rid);
+        WmSetSession(a->rid);
+        if (other) {
+            UmAccount o;
+            kprintf("[LOGON] Switched to %s (%s stays signed in)\n", a->name, um_account_get(was, &o) ? o.name : "?");
+        }
+    }
     if (g_mode == MODE_BOOT) g_first_done = true;
     g_mode = MODE_OFF;
     g_msg = NULL;
@@ -235,7 +300,7 @@ void LogonKey(const KeyEvent *k)
     if (k->scancode == KEY_ENTER && !k->alt) { submit(); return; }
     if (k->scancode == KEY_ESC) { wipe(); g_msg = NULL; WmInvalidate(); return; }
     if (k->scancode == KEY_BACKSPACE) { if (g_pwlen) g_pw[--g_pwlen] = 0; WmInvalidate(); return; }
-    if (g_mode == MODE_BOOT && ((k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN)) || k->scancode == KEY_TAB)) {
+    if (g_n > 1 && ((k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN)) || k->scancode == KEY_TAB)) {
         bool up = k->extended && k->scancode == KEY_UP;
         choose(((g_sel + (up ? -1 : 1)) % g_n + g_n) % g_n);
         return;
@@ -253,7 +318,7 @@ void LogonKey(const KeyEvent *k)
 void LogonPress(int x, int y)
 {
     if (g_mode == MODE_OFF) return;
-    if (g_mode == MODE_BOOT && g_n > 1)
+    if (g_n > 1)
         for (int i = 0; i < g_n; i++) if (in(r_tile(i), x, y)) { choose(i); return; }
     if (g_acct[g_sel].password ? in(r_arrow(), x, y) : in(r_button(), x, y)) submit();
 }

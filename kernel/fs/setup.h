@@ -20,7 +20,10 @@
  * Or, beside the systems already on a GPT disk (Windows), the same two
  * partitions go into the disk's largest free space and every partition
  * already there is left as it is: NovaOS gets an ESP of its own rather
- * than writing into Windows' (docs/design/installer.md).
+ * than writing into Windows' (docs/design/installer.md).  When the free
+ * space is too small, Windows' NTFS volume is shrunk first to make room
+ * (fs/ntfs.c NtfsShrink).  On a disk NovaOS is already on, a reinstall
+ * formats only its ESP again and keeps NOVADATA (drive C:, C:\Users).
  */
 
 #pragma once
@@ -63,6 +66,13 @@ typedef struct {
     SetupPart parts[SETUP_MAX_PARTS];
     UINT64    free_lba, free_sectors;      /* its largest free space (1 MiB aligned) */
     bool      can_beside;      /* NovaOS fits in that free space beside the rest */
+    /* Too little free space, but an NTFS volume (Windows') can shrink to
+     * make room: the partition at shrink_lba, shrink_from sectors now,
+     * shrink_to after (its files use shrink_used bytes) */
+    bool      can_shrink;
+    UINT64    shrink_lba, shrink_from, shrink_to, shrink_used;
+    char      shrink_why[80];  /* why none can, when an NTFS volume is there */
+    bool      can_reinstall;   /* NovaOS is on it: reinstall, keeping drive C: (NOVADATA) */
 } SetupDisk;
 
 /* The free space NovaOS needs beside other systems: its ESP (the system
@@ -72,10 +82,17 @@ UINT64 SetupBesideBytes(void);
 /* The disks NovaOS could be installed on; returns how many (<= max) */
 int SetupListDisks(SetupDisk *out, int max);
 
-/* Start installing on @dev in the background, with drive C: on NTFS (or
- * FAT32): erasing it, or (@beside) in its largest free space with every
- * partition on it kept; false if one is running */
-bool SetupStart(BlockDev *dev, bool ntfs, bool beside);
+/* How Setup installs on a disk */
+typedef enum {
+    SETUP_ERASE,               /* the whole disk, erased */
+    SETUP_BESIDE,              /* in its largest free space, every partition on it kept */
+    SETUP_SHRINK,              /* the same, after shrinking an NTFS volume to make room (can_shrink) */
+    SETUP_REINSTALL,           /* over NovaOS: its ESP again, drive C: (NOVADATA) kept (can_reinstall) */
+} SetupHow;
+
+/* Start installing on @dev in the background, @how, with a new drive C:
+ * on NTFS (or FAT32); false if one is running */
+bool SetupStart(BlockDev *dev, bool ntfs, SetupHow how);
 
 typedef enum { SETUP_IDLE, SETUP_RUNNING, SETUP_DONE, SETUP_FAILED } SetupState;
 typedef struct {
@@ -84,6 +101,7 @@ typedef struct {
     char       step[96];       /* what it is doing now */
     char       error[128];     /* when SETUP_FAILED */
     bool       moved_c;        /* this session's files were copied to the new disk */
+    bool       kept_c;         /* a reinstall: drive C: on the disk was kept */
 } SetupStatus;
 
 void SetupGetStatus(SetupStatus *out);

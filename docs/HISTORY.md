@@ -14577,6 +14577,43 @@ ping through the whole data path, 802.11 frames both ways.  Only open
 networks connect so far.  WPA2 and WPA3 come next, then `wlanapi.dll`
 and Settings' Wi-Fi page.
 
+## Wi-Fi: WPA2-Personal networks connect
+
+Third part of roadmap step 28.1.  NovaOS's WDI upper edge joined open
+networks only.  Now it joins WPA2-Personal networks too, as Windows'
+`wdiwifi.sys` does, with the driver doing the encryption:
+
+- **`netsh wlan connect name=SSID key=PASSPHRASE`**: the passphrase (8 to
+  63 characters, or the 64 hexadecimal digits of the key itself) becomes
+  the pairwise master key (PBKDF2-HMAC-SHA1 over the SSID, through Mbed
+  TLS).  The connect task asks for RSNA-PSK authentication with CCMP and
+  for unencrypted frames to be excluded.
+- **The 4-way handshake** (`kernel/nt/wpa.c`, a supplicant written for
+  NovaOS on Mbed TLS: IEEE 802.11-2020 12.7): it derives the PTK, checks
+  each EAPOL-Key frame's replay counter and MIC, unwraps the group key
+  (AES key wrap) and checks that message 3's RSN element is the beacon's,
+  so a downgrade is refused.  Group key rekeys are answered while
+  connected.
+- **The keys to the driver**: before connecting, NovaOS exempts EAPOL
+  from encryption (`OID_WDI_SET_PRIVACY_EXEMPTION_LIST`), and after
+  message 3 it installs the pairwise and group keys
+  (`OID_WDI_SET_ADD_CIPHER_KEYS`).  Until then, no data frame but EAPOL
+  goes out or comes in.
+- **Clear errors**: a wrong passphrase ("The network security key isn't
+  correct"), a missing one, one of the wrong length, and networks NovaOS
+  cannot join yet (WPA3, WPA, WEP, Enterprise, management frame
+  protection required) each get their own message.
+
+The `wifi` boot's `wditest.sys` is now a WPA2 access point as well: its
+own SHA-1, HMAC and AES (`tools/drivertest/wpaap.h`, independent of Mbed
+TLS) run the authenticator's side, refuse a wrong passphrase, check the
+exemption and keys NovaOS installs, drop data before the keys and rekey
+the group key once.  The test connects with a wrong key, then the right
+one, and gets DHCP and pings over the secured network.  A host test
+(`tests/tools/test_wpa_handshake.py`) checks both implementations
+against the standard's vectors and Python's `hashlib`.  WPA3 (SAE) comes
+next, then `wlanapi.dll` and Settings' Wi-Fi page.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

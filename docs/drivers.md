@@ -760,8 +760,6 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer and data path: capabilities, the station port, a scan and its BSS entries, connecting to an open network, DHCP and ping over the TAL TX/RX path, `netsh wlan` |
-| `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
-| `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer: capabilities, the station port, a scan and its BSS entries, `netsh wlan` |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver), then `wddmtest.sys` (its render miniport) | QEMU's standard VGA; a root-enumerated device | the dxgkrnl host, mode changes, the screen handed back on disable; a render adapter's devices and allocations |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |

@@ -89,6 +89,7 @@ static bool NetParseUrl(const char *url, char *host, int host_cap, UINT16 *port,
 #define E_NOT_FOUND        0x8A150014u
 #define E_MULTIPLE         0x8A150015u
 #define E_SOURCE_FAILED    0x8A15000Fu
+#define E_REQUIRES_ADMIN   0x8A150019u
 #define E_INSTALL_FAILED   0x8A150101u
 #define E_NO_UPGRADE       0x8A15002Bu
 #define E_UNINSTALL_FAILED 0x8A150030u
@@ -2186,7 +2187,13 @@ static int cmd_source(int argc, char **argv)
         char key[200];
         snprintf(key, sizeof(key), KEY_SOURCES "\\%s", name);
         HKEY k;
-        if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL) == ERROR_SUCCESS) {
+        LSTATUS r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL);
+        if (r == ERROR_ACCESS_DENIED) {
+            printf("This command requires administrator privileges to execute.\n");
+            node_free(info);
+            return (int)E_REQUIRES_ADMIN;
+        }
+        if (r == ERROR_SUCCESS) {
             char clean[600];
             snprintf(clean, sizeof(clean), "%.*s", (int)(n && arg[n - 1] == '/' ? n - 1 : n), arg);
             reg_set(k, "Arg", clean);

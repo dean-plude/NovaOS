@@ -1,0 +1,7 @@
+{"selftest": true, "xaml": "elements",
+ "include": ["third_party/microsoft-ui-xaml/dxaml/xcp/components/parser/unittests",
+             "third_party/microsoft-ui-xaml/dxaml/xcp/components/theming/unittests",
+             "third_party/microsoft-ui-xaml/dxaml/test/native/inc"],
+ "sources": ["third_party/microsoft-ui-xaml/dxaml/xcp/components/parser/unittests/MockParserCoreServices.cpp",
+             "third_party/microsoft-ui-xaml/dxaml/xcp/components/theming/unittests/TestThemingInterop.cpp"],
+ "cflags": ["-D__XAML_UNITTESTS__"]}

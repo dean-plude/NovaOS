@@ -539,6 +539,100 @@ typedef struct {
     void *const *pOpenHandleList;                 /* the hDeviceSpecificAllocations */
 } DXGKARG_CLOSEALLOCATION;
 
+/* GPU virtual addresses (WDDM 2.0's GpuMmu model): the driver describes
+ * its page tables, VidMm owns them and asks the driver to write their
+ * entries through DxgkDdiBuildPagingBuffer */
+#define DXGKQAITYPE_PAGETABLELEVELDESC 14
+#define DXGK_VIDMMCAPS_GPUMMU          0x40       /* DXGK_VIDMMCAPS.GpuMmuSupported */
+enum { DXGK_PAGETABLEUPDATE_CPU_VIRTUAL, DXGK_PAGETABLEUPDATE_GPU_VIRTUAL, DXGK_PAGETABLEUPDATE_GPU_PHYSICAL };
+
+typedef struct {
+    unsigned int Flags;                           /* ReadOnlyMemorySupported, NoExecuteMemorySupported, ... */
+    int          PageTableUpdateMode;             /* DXGK_PAGETABLEUPDATEMODE */
+    unsigned int VirtualAddressBitCount;
+    unsigned int LeafPageTableSizeFor64KPagesInBytes;
+    unsigned int PageTableLevelCount;             /* 2 to 4; with 2 the root is sized by DxgkDdiGetRootPageTableSize */
+    unsigned int LegacyBehaviors;
+} DXGK_GPUMMUCAPS;
+
+/* Asked once per level, the level (a UINT, 0 the root) as input */
+typedef struct {
+    unsigned int PageTableIndexBitCount;
+    unsigned int PageTableSegmentId;              /* 0: system memory (then at most 4 KiB a table) */
+    unsigned int PagingProcessPageTableSegmentId;
+    unsigned int PageTableSizeInBytes;
+    unsigned int PageTableAlignmentInBytes;
+} DXGK_PAGE_TABLE_LEVEL_DESC;
+
+/* d3dukmdt.h's DXGK_PTE: VidMm's description of an entry, which the driver
+ * turns into its own format */
+#define DXGK_PTE_VALID          0x01ull
+#define DXGK_PTE_ZERO           0x02ull
+#define DXGK_PTE_CACHE_COHERENT 0x04ull
+#define DXGK_PTE_READ_ONLY      0x08ull
+#define DXGK_PTE_NO_EXECUTE     0x10ull
+#define DXGK_PTE_SEGMENT(s)     ((unsigned long long)(s) << 5)
+typedef struct {
+    unsigned long long Flags;
+    unsigned long long PageAddress;               /* (or PageTableAddress) the physical address >> 12 */
+} DXGK_PTE;
+
+typedef struct {
+    void        *hDxgkProcess;
+    void        *hKmdProcess;                     /* out */
+    unsigned int Flags;                           /* DXGK_CREATEPROCESSFLAGS: bit 0 SystemProcess, 1 GdiProcess */
+    unsigned int NumPasid;
+    unsigned int *pPasid;
+    void        *hKmdVmWorkerProcess;
+    unsigned int ProcessNameLength;
+    NT_WCHAR    *pProcessName;
+} DXGKARG_CREATEPROCESS;
+
+typedef struct { unsigned int NumberOfPte, PhysicalAdapterIndex; } DXGKARG_GETROOTPAGETABLESIZE;
+
+#define DXGK_OPERATION_UPDATE_PAGE_TABLE 11
+#define DXGK_OPERATION_FLUSH_TLB         12
+/* DXGK_UPDATEPAGETABLEFLAGS bits */
+#define DXGK_UPDATEPT_REPEAT         0x1
+#define DXGK_UPDATEPT_INITIAL_UPDATE 0x2
+
+typedef struct {
+    unsigned int PageTableLevel;
+    void        *hAllocation;                     /* the driver's; NULL for page tables */
+    union { void *CpuVirtual; unsigned long long GpuPhysical, GpuVirtual; } PageTableAddress;
+    DXGK_PTE    *pPageTableEntries;
+    unsigned int StartIndex, NumPageTableEntries, Reserved0;
+    unsigned int Flags;                           /* DXGK_UPDATEPAGETABLEFLAGS */
+    unsigned long long DriverProtection, AllocationOffsetInBytes;
+    void        *hProcess;                        /* the driver's (DxgkDdiCreateProcess) */
+    int          UpdateMode;                      /* DXGK_PAGETABLEUPDATEMODE */
+    DXGK_PTE    *pPageTableEntries64KB;
+    unsigned long long FirstPteVirtualAddress;
+} DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE;
+
+typedef struct {
+    unsigned long long RootPageTableAddress;      /* physical */
+    void        *hProcess;
+    unsigned long long StartVirtualAddress, EndVirtualAddress;
+} DXGK_BUILDPAGINGBUFFER_FLUSHTLB;
+
+typedef struct {
+    void        *pDmaBuffer;                      /* in/out: the paging buffer's next free byte */
+    unsigned int DmaSize;
+    void        *pDmaBufferPrivateData;
+    unsigned int DmaBufferPrivateDataSize;
+    int          Operation;                       /* DXGK_BUILDPAGINGBUFFER_OPERATION */
+    unsigned int MultipassOffset;
+    union {
+        DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE UpdatePageTable;
+        DXGK_BUILDPAGINGBUFFER_FLUSHTLB        FlushTlb;
+        unsigned int Reserved[64];                /* (the other operations' structures) */
+    };
+    void        *hSystemContext;
+    unsigned long long DmaBufferGpuVirtualAddress;
+    unsigned int DmaBufferWriteOffset;
+} DXGKARG_BUILDPAGINGBUFFER;
+
 enum { DXGK_HANDLE_ALLOCATION = 1, DXGK_HANDLE_RESOURCE = 2 };
 typedef struct DXGKARGCB_GETHANDLEDATA {
     unsigned int hObject;
@@ -628,7 +722,8 @@ typedef struct {
     DXGK_DDI(NT_STATUS, DxgkDdiDestroyAllocation, void *adapter, const DXGKARG_DESTROYALLOCATION *);
     void *DxgkDdiDescribeAllocation, *DxgkDdiGetStandardAllocationDriverData;
     void *DxgkDdiAcquireSwizzlingRange, *DxgkDdiReleaseSwizzlingRange;
-    void *DxgkDdiPatch, *DxgkDdiSubmitCommand, *DxgkDdiPreemptCommand, *DxgkDdiBuildPagingBuffer;
+    void *DxgkDdiPatch, *DxgkDdiSubmitCommand, *DxgkDdiPreemptCommand;
+    DXGK_DDI(NT_STATUS, DxgkDdiBuildPagingBuffer, void *adapter, DXGKARG_BUILDPAGINGBUFFER *);
     void *DxgkDdiSetPalette, *DxgkDdiSetPointerPosition, *DxgkDdiSetPointerShape;
     void *DxgkDdiResetFromTimeout, *DxgkDdiRestartFromTimeout;
     void *DxgkDdiEscape, *DxgkDdiCollectDbgInfo, *DxgkDdiQueryCurrentFence;
@@ -663,9 +758,12 @@ typedef struct {
     void *DxgkDdiGetNodeMetadata, *DxgkDdiSetPowerPState, *DxgkDdiControlInterrupt2;
     void *DxgkDdiCheckMultiPlaneOverlaySupport, *DxgkDdiCalibrateGpuClock, *DxgkDdiFormatHistoryBuffer;
     /* DXGKDDI_INTERFACE_VERSION_WDDM2_0 */
-    void *DxgkDdiRenderGdi, *DxgkDdiSubmitCommandVirtual, *DxgkDdiSetRootPageTable, *DxgkDdiGetRootPageTableSize;
+    void *DxgkDdiRenderGdi, *DxgkDdiSubmitCommandVirtual, *DxgkDdiSetRootPageTable;
+    DXGK_DDI(unsigned long long, DxgkDdiGetRootPageTableSize, void *adapter, DXGKARG_GETROOTPAGETABLESIZE *);
     void *DxgkDdiMapCpuHostAperture, *DxgkDdiUnmapCpuHostAperture, *DxgkDdiCheckMultiPlaneOverlaySupport2;
-    void *DxgkDdiCreateProcess, *DxgkDdiDestroyProcess, *DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay2;
+    DXGK_DDI(NT_STATUS, DxgkDdiCreateProcess, void *ctx, DXGKARG_CREATEPROCESS *);
+    DXGK_DDI(NT_STATUS, DxgkDdiDestroyProcess, void *adapter, void *kmd_process);
+    void *DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay2;
     void *Reserved1, *Reserved2;
     void *DxgkDdiPowerRuntimeSetDeviceHandle, *DxgkDdiSetStablePowerState, *DxgkDdiSetVideoProtectedRegion;
     /* later versions (WDDM 2.1 to 3.2): the rest of the 193 entries
@@ -722,8 +820,23 @@ _Static_assert(DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) 
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiStopDeviceAndReleasePostDisplayOwnership) == 8 * 75 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 8 * 83 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 8 * 89 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiBuildPagingBuffer) == 8 * 28 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetRootPageTableSize) == 8 * 92 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProcess) == 8 * 96 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProcess) == 8 * 97 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion) == 8 * 103 &&
                sizeof(DRIVER_INITIALIZATION_DATA) == 8 * 193, "DRIVER_INITIALIZATION_DATA layout");
 _Static_assert(DXGK_OFFSET(DXGKARG_PRESENT_DISPLAYONLY, pMoves) == 32 &&
                DXGK_OFFSET(DXGKARG_PRESENT_DISPLAYONLY, pDirtyRect) == 48, "DXGKARG_PRESENT_DISPLAYONLY layout");
+_Static_assert(sizeof(DXGK_GPUMMUCAPS) == 24 && sizeof(DXGK_PAGE_TABLE_LEVEL_DESC) == 20 && sizeof(DXGK_PTE) == 16 &&
+               sizeof(DXGKARG_CREATEPROCESS) == 56 && DXGK_OFFSET(DXGKARG_CREATEPROCESS, pProcessName) == 48 &&
+               sizeof(DXGKARG_GETROOTPAGETABLESIZE) == 8, "GpuMmu layouts");
+_Static_assert(sizeof(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE) == 96 &&
+               DXGK_OFFSET(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE, Flags) == 44 &&
+               DXGK_OFFSET(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE, hProcess) == 64 &&
+               DXGK_OFFSET(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE, FirstPteVirtualAddress) == 88 &&
+               sizeof(DXGK_BUILDPAGINGBUFFER_FLUSHTLB) == 32 &&
+               DXGK_OFFSET(DXGKARG_BUILDPAGINGBUFFER, Operation) == 28 &&
+               DXGK_OFFSET(DXGKARG_BUILDPAGINGBUFFER, UpdatePageTable) == 40 &&
+               DXGK_OFFSET(DXGKARG_BUILDPAGINGBUFFER, hSystemContext) == 296 && sizeof(DXGKARG_BUILDPAGINGBUFFER) == 320,
+               "DXGKARG_BUILDPAGINGBUFFER layout");

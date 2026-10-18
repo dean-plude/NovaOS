@@ -472,6 +472,51 @@ controls (brightness, focus), still images, frame-based formats (H.264),
 Media Foundation's media session and source events, and AVStream
 (`ks.sys`) for a vendor's own camera driver.
 
+### Bluetooth: bthusb and the host stack
+
+A USB Bluetooth radio (`USB\Class_E0&SubClass_01&Prot_01`, as Intel's
+are) gets `bthusb` (`kernel/nt/bthusb.c`), the USB transport, and
+NovaOS's Bluetooth host stack (`kernel/nt/bthport.c`), built into the
+kernel in place of Windows' `bthusb.sys` and `bthport.sys`. Both are
+written from the Bluetooth Core Specification 5.3 (BlueZ is GPL and stays
+out). `bthusb` sends HCI commands as class requests to the device and
+reads events on the interrupt endpoint and ACL data on the bulk ones. The
+host stack brings the controller up (reset, version, features, buffer
+sizes, address, the computer's name, page scan), inquires, pairs with
+Secure Simple Pairing (Just Works) or the legacy PIN 0000, keeps link
+keys where Windows does
+(`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Keys`),
+authenticates and encrypts links, and runs L2CAP's basic mode and an SDP
+client that reads a device's service records. It turns on
+`GUID_BTHPORT_DEVICE_INTERFACE`; `bthprops.cpl` reaches it through it
+(`BluetoothFindFirstRadio`, `BluetoothFindFirstDevice` with an inquiry,
+`BluetoothAuthenticateDeviceEx`, `BluetoothEnumerateInstalledServices`,
+`BluetoothSetServiceState`, `BluetoothRemoveDevice`, and
+`IOCTL_BTH_GET_LOCAL_INFO` and `IOCTL_BTH_GET_DEVICE_INFO`).
+
+Turning a paired device's HID service on gives it a `BTHENUM` node
+(`BTHENUM\{00001124-0000-1000-8000-00805f9b34fb}_VID&0002...`, as
+Windows names it), which gets `hidbth` (`kernel/nt/hidbth.c`), a HID
+minidriver under the HID class driver: it opens the HID control and
+interrupt channels with the report descriptor the SDP record carries, so
+a Bluetooth mouse or keyboard works as a USB one does. After a restart
+the paired devices come back from the registry and `hidbth` reconnects
+by the stored link key.
+
+A vendor's radio package is installed as on Windows: the inbox
+`bth.inf` has the `BthUsb.NT`, `.HW` and `.Services` sections that
+Intel's `ibtusb.inf` includes (`Include = bth.inf`, `Needs =
+BthUsb.NT...`), so `bthusb` stays the function driver and Intel's
+`ibtusb.sys`, which loads the radio's firmware, sits under it as a lower
+filter (its `.HW` section's `LowerFilters`). The `bluetooth` self-test
+installs a filter packaged the same way and checks the radio's traffic
+goes through it. Not done yet: headset audio (SCO links, A2DP and the
+hands-free profile: turning those services on returns
+`ERROR_NOT_SUPPORTED`), connections a device starts (a mouse that wakes
+up is reconnected from NovaOS's side within 10 seconds), Bluetooth Low
+Energy, the BRB interface (`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party
+profile driver uses, and Settings' Bluetooth page.
+
 ### Network drivers (NDIS)
 
 A Windows NDIS 6 miniport runs a network card on NovaOS's own NDIS host
@@ -556,12 +601,17 @@ scan heard). The driver indicates the access point as its peer
 becomes the network stack's. Ethernet frames go out as 802.11 frames to
 the access point (ToDS, LLC/SNAP), and the answers come back the same
 way, so DHCP and the rest of TCP/IP run over Wi-Fi. `netsh wlan
+connect name=SSID key=PASSPHRASE` joins a WPA2-Personal network (CCMP):
+NovaOS exempts EAPOL from encryption
+(`OID_WDI_SET_PRIVACY_EXEMPTION_LIST`), connects with RSNA-PSK
+authentication, runs the 4-way handshake itself (`kernel/nt/wpa.c` on
+Mbed TLS, with group rekeys) and installs the pairwise and group keys
+(`OID_WDI_SET_ADD_CIPHER_KEYS`); the driver encrypts and decrypts. `netsh wlan
 disconnect` leaves (`OID_WDI_TASK_DISCONNECT`) and the stack goes back to
 the card it had. Disabling the device disconnects, deletes the port and
 stops the data path before the adapter closes.
 
-What is missing: WPA2 and WPA3 (the 4-way handshake and SAE, and
-`OID_WDI_SET_ADD_CIPHER_KEYS`), frames the driver injects itself,
+What is missing: WPA3 (SAE), WPA2-Enterprise, frames the driver injects itself,
 `wlanapi.dll` for programs and Settings' Wi-Fi page. That is the rest of
 roadmap step 28.1; scanning and joining on the real card needs the T14.
 
@@ -574,7 +624,12 @@ The test installs it with `pnputil` and checks the messages and data
 path calls from both sides (the driver reports what it was sent): the
 capabilities, configuration and port, the scan and the two `netsh wlan`
 listings. It also connects to the open network, gets 192.168.77.100 by
-DHCP and pings the router over the data path. Then it disconnects, and on
+DHCP and pings the router over the data path. Then it joins the WPA2
+network: a wrong passphrase is refused, and with the right one the
+driver's access point (its own SHA-1 and AES, `tools/drivertest/wpaap.h`)
+runs the 4-way handshake, checks the EAPOL exemption and the keys NovaOS
+installs, drops data before the keys and rekeys the group key once while
+NovaOS pings. Then it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 
@@ -615,8 +670,13 @@ start and lists them as render adapters to the `D3DKMT*` calls, which
 create devices and allocations through the driver
 (`DxgkDdiCreateDevice`, `CreateAllocation`, `OpenAllocation`). The test
 driver is `wddmtest.sys` (`tools/drivertest/wddmtest.c`), a render-only
-miniport whose GPU is software, on a root-enumerated device. Not there
-yet: GPU virtual addresses, command submission and the scheduler,
+miniport whose GPU is software, on a root-enumerated device. A driver
+with a GPU MMU (WDDM 2.0's GpuMmu) also gets GPU virtual addresses: a
+process object (`DxgkDdiCreateProcess`) and an address space per process,
+whose page tables VidMm keeps in system memory and the driver writes
+(`DxgkDdiBuildPagingBuffer`'s `UPDATE_PAGE_TABLE` and `FLUSH_TLB`, done
+with the CPU for now). Not there yet: page tables the GPU updates,
+command submission and the scheduler,
 interrupts and vertical blanks, a full driver's display, power states,
 and more than one source.
 
@@ -794,7 +854,7 @@ with each set's licence file under `C:\Windows\Firmware\LICENSES`.
 |---|---|---|---|---|
 | `intel-graphics` | Intel Iris Xe and UHD graphics, Alder Lake-P and Raptor Lake-P (the T14 Gen 4) | `i915` | DMC `adlp_dmc.bin`, GuC `adlp_guc_70.bin`, HuC `tgl_huc.bin`; 1 MB | no. The chosen GPU design runs Intel's Windows driver, which carries its own firmware ([design/intel-gpu.md](design/intel-gpu.md)); the files are kept for the native fallback |
 | `intel-wifi` | Intel Wi-Fi 6E AX211 | `iwlwifi` | `intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode` and its `.pnvm`; 1.7 MB | no. Intel's Windows driver uses its own `netwfw14.dat` from its package |
-| `intel-bluetooth` | Intel AX211 Bluetooth | `btintel` | `intel/ibt-0040-0041.sfi` and `.ddc`; 0.7 MB | no (no Bluetooth driver) |
+| `intel-bluetooth` | Intel AX211 Bluetooth | `btintel` | `intel/ibt-0040-0041.sfi` and `.ddc`; 0.7 MB | no. Intel's Windows filter driver (`ibtusb`) loads the radio's firmware from its own package |
 | `qualcomm-wifi` | Qualcomm WCN6855 Wi-Fi 6E (NFA725A, the T14 Gen 4's other card option) | `ath11k` | `ath11k/WCN6855/hw2.0/` `amss.bin`, `m3.bin`, `board-2.bin`, `regdb.bin`; 12 MB | no |
 | `qualcomm-bluetooth` | Qualcomm WCN6855 Bluetooth | `btqca` | `qca/wcnhpbtfw21.tlv`, `qca/wcnhpnv21.bin`; 0.2 MB | no |
 | Sound Open Firmware | Intel's audio DSP, Tiger Lake to Raptor Lake | `sof-audio-pci-intel-tgl` | `C:\Windows\Firmware\Intel\sof-ipc4\<platform>\sof-<platform>.ri` | yes: `kernel/drivers/sof.c` ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)) |

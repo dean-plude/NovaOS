@@ -422,7 +422,7 @@ netsh interface ipv4 show config
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
 
-**Wi-Fi** connects to open networks only so far (WPA2 and WPA3 are
+**Wi-Fi** connects to open and WPA2-Personal networks so far (WPA3 is
 coming).  With a Wi-Fi card whose Windows driver NovaOS can open, the
 Terminal lists the card and the networks in range, joins one and leaves
 it, as on Windows:
@@ -431,6 +431,7 @@ it, as on Windows:
 netsh wlan show interfaces
 netsh wlan show networks mode=bssid
 netsh wlan connect name=CoffeeShop
+netsh wlan connect name=HomeNetwork key=MyPassphrase
 netsh wlan disconnect
 ```
 

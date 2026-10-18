@@ -271,9 +271,54 @@ vendors.
      `mc:Ignorable`, `{StaticResource}`, a `ResourceDictionary` with
      `x:Key`), reports bad XML and bad markup extensions, and looks up
      resource keys in a dictionary's map and the theme walk's cache.
-   - *Next.*  `CResourceDictionary` (`core/core/elements/Resources.cpp`)
-     and the parser's object writer (`Parser.Runtime`), then the rest of
-     the core and `dxaml/lib` compiled as `Windows.UI.Xaml.dll`, until
+   - *The resource dictionary and the object writer (done so far).*
+     Two more of the core's libraries in `CORE_LIBRARIES`: the parser's
+     object writer runtime (`core/Parser/runtime`: `XamlNativeRuntime`,
+     which creates the core's objects through the type table's
+     constructors and sets their properties, collections and dictionary
+     entries; the managed runtime; the binary object writer) and the
+     elements' exception-built library (`elements.except.vcxproj`:
+     `Resources.cpp`'s `CResourceDictionary`, `ThemeResourceExtension`, `VisualTransition`,
+     `XamlPredicate`), each with its project's precompiled header, and
+     two small components they call (`simple`'s simple properties and
+     `namescope`'s name scopes) and the elements' `DeferredKeys.cpp`.
+     What they call further up the core (`CCoreServices`' resource
+     loading and theming, templates, bindings, the visual state manager,
+     the framework callbacks) has stand-ins in `src/elements_stubs.cpp`
+     that report it absent; two of Microsoft's unit-test stubs answer
+     where the core's own code is wanted (`AddPeerReferenceToItem` says
+     `E_NOTIMPL`, which fails every collection add, and no resource
+     lookup logger), so `build.py`'s `STUB_RENAMES` renames them out of
+     their stub files and the core's bodies stand in.
+     Stand-ins for the closed or missing headers they include:
+     `WinUIEdit.h` (the Windows App SDK's RichEdit, here the SDK's
+     RichEdit, text services and TOM headers), `mfmediaengine.h`,
+     `MFSharingEngine.h` and `castinginterop.h` (the media engine
+     callback, the sharing engine factory and the casting interfaces,
+     declared from their documentation) and
+     `CompHelper/CompositionSurfaceHelper.h` (declared as
+     `DCompSurface.cpp` calls it).  The SDK's namespace headers include
+     the namespaces they import; `abigen.py`'s only declare them, which
+     compiles each XAML source in about 60% of the time, so the elements
+     are given the two namespaces whose interfaces their headers use
+     whole (`Windows.ApplicationModel`, `Windows.Devices.Input`) first.
+     `xamlloadtest` (`"xaml": "elements"`) loads XAML text into objects:
+     XmlLite, the parser and the object writer make a live
+     `CResourceDictionary` of `x:String`, `x:Double`, `x:Int32`,
+     `x:Boolean` and `Color` resources, and refuse malformed markup; it
+     also adds, finds, refuses and removes keys directly.  Until
+     `CCoreServices` builds, its core is Microsoft's mock parser services
+     laid where a `CCoreServices` holds them, with the few fields the
+     dictionary reads set as the core's constructor sets them (through
+     `DxamlCoreTestHooks`, the core's friend; theming over Microsoft's
+     `TestThemingInterop`), and its type table constructs the six types
+     it uses.  Merged and theme dictionaries are field-backed properties,
+     whose offsets come with the core's metadata tables (`core/metadata`),
+     so they load with the core services.
+   - *Next.*  The core services (`CCoreServices`, `core/dll/xcpcore.cpp`)
+     with the core's metadata tables (`core/metadata`), and the rest of the
+     core, then `dxaml/lib` compiled as
+     `Windows.UI.Xaml.dll`, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:

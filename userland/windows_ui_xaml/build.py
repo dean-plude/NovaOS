@@ -75,17 +75,38 @@ resources/lib/Microsoft.UI.Xaml.XamlResources.vcxproj
 legacy/lib/Microsoft.UI.Xaml.Legacy.vcxproj
 deferral/lib/Microsoft.UI.Xaml.Deferral.vcxproj
 winuri/lib/winuri.vcxproj
-colors/lib/Microsoft.UI.Xaml.Colors.vcxproj'''.split()
+colors/lib/Microsoft.UI.Xaml.Colors.vcxproj
+simple/lib/Microsoft.UI.Xaml.Framework.SimpleProperties.vcxproj
+namescope/lib/Microsoft.UI.Xaml.NameScope.vcxproj'''.split()
 
 # The XAML core's libraries built so far (dxaml/xcp/core/...): the markup
-# parser.  Each is a project, the sources.props its sources share (whose
-# include path, with the props files it imports, is theirs), its
-# precompiled header and sources compiled with it that it does not list
-# (src/pal.cpp: the platform layer's the parser calls).  The core is
+# parser, its object writer runtime (which makes the core's objects from
+# the node stream) and the elements built with exceptions (the resource
+# dictionary, CResourceDictionary, among them).  Each is a project, the
+# sources.props its sources share (whose include path, with the props files
+# it imports, is theirs), its precompiled header and sources compiled with
+# it that it does not list (src/pal.cpp: the platform layer's the parser
+# calls; the deferred resource keys a dictionary keeps, from the elements'
+# other library).  The core is
 # compiled with C++ exceptions, as Microsoft compiles it (/EHsc,
 # _HAS_EXCEPTIONS=1, WIL's exceptions on).
 CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.props', 'core/Parser/pch/precomp.h',
-                   [os.path.join(HERE, 'src', 'pal.cpp')])]
+                   [os.path.join(HERE, 'src', 'pal.cpp')]),
+                  ('core/Parser/runtime/Parser.Runtime.vcxproj', 'core/Parser/sources.props', 'core/Parser/pch/precomp.h',
+                   []),
+                  ('core/core/elements/libexcept/elements.except.vcxproj', 'core/core/elements/sources.props',
+                   'core/core/elements/pchexcept/precomp.h',
+                   [os.path.join(XCP, 'core', 'core', 'elements', 'DeferredKeys.cpp')])]
+# The Windows SDK's namespace headers include the namespaces they import in
+# full; tools/winrt/abigen.py's declare them only (a fraction of the
+# compile time), so a library whose headers use an imported namespace's
+# interfaces as complete types is given those headers first: the elements'
+# DXamlCore.h wraps Windows.ApplicationModel's suspending operation and
+# holds Windows.Devices.Input's keyboard capabilities
+CORE_FIRST = {'core/core/elements/libexcept/elements.except.vcxproj': ['windows.applicationmodel.h', 'windows.devices.input.h']}
+# a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
+# flags it is built with, as Microsoft builds that library's unit tests
+PROGRAM_CORE = {'parser': 0, 'elements': 2}
 EXCEPTIONS = ['-fcxx-exceptions', '-fexceptions', '-U_HAS_EXCEPTIONS', '-D_HAS_EXCEPTIONS=1',
               '-UWIL_SUPPRESS_EXCEPTIONS']
 
@@ -122,15 +143,25 @@ _HAS_FUNCTION_ALLOCATOR_SUPPORT=1'''.split()
 # test the components on their own (xamlbasetest): Microsoft's isolated unit
 # tests' stubs and metadata mocks (built as Microsoft builds them, with
 # __XAML_UNITTESTS__; MSVC lets the mocks reach a base class's protected
-# members through another object), less the stubs of the element tree,
-# and NovaOS's stand-ins for the few element members the libraries call
+# members through another object), less the stubs of the element tree and
+# of what now builds for real (the resource dictionary, theme resources,
+# the parser's runtimes), and NovaOS's stand-ins for the few element
+# members the libraries call
 # (src/core_stubs.cpp, compiled with the collections' include
 # directories).  As a library, a program takes only the stubs it needs; it
 # shrinks as the core builds.
 TEST_STUBS = [('unittests/stubs/Microsoft.UI.Xaml.Stubs.vcxproj',
-               ('UIElement_Stub.cpp', 'DCompVisual_Stub.cpp', 'Geometry_Stub.cpp', 'VisualStateManager_Stub.cpp'), []),
+               ('UIElement_Stub.cpp', 'DCompVisual_Stub.cpp', 'Geometry_Stub.cpp', 'VisualStateManager_Stub.cpp',
+                'ResourceDictionary_Stub.cpp', 'ThemeResourceExtension_Stub.cpp', 'Parser_Stub.cpp'), []),
               ('metadata/mocks/Microsoft.UI.Xaml.Tests.Isolated.Mocks.Framework.Metadata.vcxproj', (),
                ['-fno-access-control', '-I', os.path.join(XCP, 'components', 'metadata', 'mocks')])]
+# stubs whose answer the resource dictionary cannot work with (Microsoft's
+# say E_NOTIMPL where the core says S_OK for an object with no managed peer,
+# which fails every collection add, and give no resource lookup logger, which
+# every lookup reads): renamed out of the stub file, as the core has them in
+# src/elements_stubs.cpp
+STUB_RENAMES = {'DependencyObject_Stub.cpp': ('AddPeerReferenceToItem', 'RemovePeerReferenceToItem'),
+                'CoreServices_Stub.cpp': ('GetResourceLookupLogger',)}
 PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # the DLLs XAML's sources call beyond a program's usual ones (the parser
 # reads XML with XmlLite, the URI library builds URIs with urlmon)
@@ -202,7 +233,7 @@ def core_flags(proj, sources, pch, added=()):
     p = vcxproj.read(os.path.join(XCP, proj), PROPS)
     inc = core_includes(sources) + p['includes']
     return [x for d in inc for x in ('-I', d)] + ['-D' + d for d in p['defines']] + EXCEPTIONS + \
-        ['-include', os.path.join(XCP, pch)]
+        [x for h in CORE_FIRST.get(proj, []) for x in ('-include', h)] + ['-include', os.path.join(XCP, pch)]
 
 
 def fold(out, dirs):
@@ -270,7 +301,9 @@ def library(b, odir):
         objs = []
         for proj in LIBRARIES:
             p = vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)
-            extra = [x for i in p['includes'] for x in ('-I', i)] + ['-D' + d for d in p['defines']] + ['-include', PCH]
+            # (MSBuild adds the project's own directory: Xaml.NTLegacy.Cpp.props)
+            extra = [x for i in p['includes'] + [os.path.dirname(os.path.join(XCP, 'components', proj))] for x in ('-I', i)] + \
+                ['-D' + d for d in p['defines']] + ['-include', PCH]
             prefix = 'xaml_' + proj.split('/')[0] + '_'
             srcs = [REPLACED.get(os.path.relpath(s, os.path.join(XCP, 'components')).replace(os.sep, '/'), s)
                     for s in p['sources']] + ADDED.get(proj, [])
@@ -302,7 +335,21 @@ def test_stubs(b, odir):
                 ['-include', PCH]
             srcs = [os.path.join(HERE, 'src', 'core_stubs.cpp')] if skip is None else \
                 [s for s in p['sources'] if os.path.basename(s) not in skip]
-            objs += b.compile_many(srcs, odir, 'xamlstub_', f + extra, headers, compiler='clang++')
+            renamed = [x for x in srcs if os.path.basename(x) in STUB_RENAMES]
+            objs += b.compile_many([x for x in srcs if x not in renamed], odir, 'xamlstub_', f + extra, headers,
+                                   compiler='clang++')
+            for x in renamed:
+                objs += b.compile_many([x], odir, 'xamlstub_', f + extra + [
+                    f'-D{n}={n}_stub' for n in STUB_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
+        # and those of what the resource dictionary calls in the core above
+        # it (src/elements_stubs.cpp), with the elements' flags
+        # (and, each alone, the empty type table for programs that make no
+        # objects and the absent error service, src/type_activations.cpp and
+        # src/error_service.cpp)
+        objs += b.compile_many([os.path.join(HERE, 'src', 'elements_stubs.cpp'),
+                                os.path.join(HERE, 'src', 'type_activations.cpp'),
+                                os.path.join(HERE, 'src', 'error_service.cpp')], odir, 'xamlstub_',
+                               f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]), headers, compiler='clang++')
         if not os.path.exists(lib) or any(os.path.getmtime(o) > os.path.getmtime(lib) for o in objs):
             b.run(['lld-link', '/lib', f'/out:{lib}'] + objs)
     return lib
@@ -312,8 +359,8 @@ def program_flags(b, prog=None):
     """for a C++ program built against XAML's sources ("xaml" in its
     NAME.json): the components', or with "xaml": "parser" the parser's
     (CORE_LIBRARIES' first), as the parser's own unit tests are built"""
-    if prog and prog.get('xaml') == 'parser':
-        return flags(b) + core_flags(*CORE_LIBRARIES[0])
+    if prog and prog.get('xaml') in PROGRAM_CORE:
+        return flags(b) + core_flags(*CORE_LIBRARIES[PROGRAM_CORE[prog['xaml']]])
     return flags(b) + ['-include', PCH]
 
 

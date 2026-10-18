@@ -254,6 +254,7 @@ set(KERNEL_C_SOURCES
     nt/mm.c
     nt/ndis.c
     nt/wdi.c
+    nt/wpa.c
     nt/ntoskrnl.c
     nt/pnp.c
     nt/po.c
@@ -263,6 +264,9 @@ set(KERNEL_C_SOURCES
     nt/storport.c
     nt/usbd.c
     nt/usbvideo.c
+    nt/bthport.c
+    nt/bthusb.c
+    nt/hidbth.c
     nt/win10.c
     nt/win11.c
     nt/zw.c

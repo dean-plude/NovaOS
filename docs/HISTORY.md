@@ -14335,6 +14335,38 @@ Not yet: PoFx runtime idle, `_LPI`, NovaOS's built-in drivers' own
 device power, the first CPU's tick, and the battery measurement on the
 T14 that finishes step 28.4.
 
+## Bluetooth: the host stack, pairing and HID over Bluetooth
+
+First part of roadmap step 28.2.  NovaOS had no Bluetooth at all.  Now a
+USB Bluetooth radio comes up, finds devices, pairs with them and runs a
+Bluetooth mouse, the Windows way:
+
+- **`bthusb` and the host stack** (`kernel/nt/bthusb.c`, `bthport.c`, in
+  place of Windows' `bthusb.sys` and `bthport.sys`, written from the Core
+  Specification 5.3): HCI over USB (class requests, the interrupt and bulk
+  endpoints), controller bring-up, inquiry with names and classes, Secure
+  Simple Pairing and legacy PIN pairing, link keys in
+  `BTHPORT\Parameters\Keys`, authentication and encryption, L2CAP and an
+  SDP client.
+- **`bthprops.cpl`**: the radio and device API programs use (find radios
+  and devices, inquire, pair, list and turn services on, remove).
+- **HID over Bluetooth** (`kernel/nt/hidbth.c`): a paired device's HID
+  service gets a `BTHENUM` node and a HID minidriver, so a Bluetooth mouse
+  moves the cursor as a USB one does, and comes back after a restart by
+  its link key.
+- **Vendor radio packages**: the inbox `bth.inf` has the sections
+  Intel's `ibtusb.inf` includes, and setupapi now writes a `.HW`
+  section's `LowerFilters` into the device's key, so Intel's filter
+  driver goes under `bthusb` as on Windows.
+- **Tested** in the devices suite's new `bluetooth` boot: a fake radio
+  (`tools/btpeer.py`, behind QEMU's usb-redir) with a mouse and a headset
+  in range, `bttest`, a restart, and `btfilter.sys`, a test filter laid
+  out as `ibtusb` is.
+
+Not yet: headset audio (SCO, A2DP, hands-free), connections the device
+starts, Bluetooth Low Energy, Settings' Bluetooth page, and Intel's
+driver on the T14's real radio.
+
 ## NovaOS starts first beside Windows, and offers Windows
 
 Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
@@ -14355,6 +14387,34 @@ The boot loader then looks on the PC's other volumes for Windows'
 NovaOS and Windows Boot Manager, which it starts with `LoadImage` and
 `StartImage`.  The devices suite's `beside` boot checks all of it, with a
 small UEFI application standing in for Windows' boot manager.
+
+## GPU virtual addresses
+
+A render miniport's allocations had memory and a CPU mapping, but no GPU
+virtual address: nothing a GPU, which reads memory through its own page
+tables, could use, and WDDM 2.0 drivers such as Intel's expect VidMm to
+keep those tables.
+
+Now, as the third part of step 3 of the Intel GPU design
+([design/intel-gpu.md](design/intel-gpu.md)), a driver that says
+`GpuMmuSupported` describes its page tables (levels, entries per level, the
+root's size), each process gets the driver's process object
+(`DxgkDdiCreateProcess`) and one GPU address space per adapter, and
+`D3DKMTReserveGpuVirtualAddress`, `MapGpuVirtualAddress` and
+`FreeGpuVirtualAddress` work on it.  VidMm picks or checks the ranges,
+makes the page tables in system memory, and has the driver write their
+entries from its `DXGK_PTE`s through `DxgkDdiBuildPagingBuffer`
+(`UPDATE_PAGE_TABLE`, then `FLUSH_TLB`).  A paging queue's monitored fence
+is already signalled when each call returns; `D3DKMTMakeResident` and
+`Evict` count residency against the budget.  Destroying a mapped
+allocation unmaps it.
+
+The test driver `wddmtest.sys` now has a GPU MMU of two levels in its own
+entry format, and reads each new mapping's first word back through its
+tables as its GPU would; `kmttest wddm` maps, reserves, remaps, evicts and
+frees, and the "wddm" boot checks the words the driver read.  Only drivers
+that update their page tables with the CPU are served yet; one whose
+paging buffers hold GPU commands waits for submission, the next part.
 
 ## Setup makes room by shrinking Windows, and reinstalls keeping drive C:
 
@@ -14451,6 +14511,17 @@ way:
   must be exactly what GDI draws.
 
 Next: IPP Everywhere network printing, then Settings' Printers page.
+
+## NovaOS 0.2 "Kepler" is prepared
+
+Phase 33 (accounts, UAC, rollback and recovery, install beside Windows,
+printing) closed the everyday-OS phase, and the version moves from 0.1.0 to
+0.2.0 (`kernel/ke/version.h`, `CMakeLists.txt`), code name "Kepler".
+[docs/releases/0.2.0.md](../releases/0.2.0.md) is the release's text: what
+is new since 0.1, how to start it and its known limits, which include the
+checks that still need a real PC (the T14 boot of the ISO, Hyper-V, the
+update signing key).  Tagging `v0.2.0` runs the release workflow as for
+0.1.0 ([releasing.md](../releasing.md)); the tag is the owner's to push.
 
 ## Reset this PC, the firmware's watchdog and Recovery in Settings
 
@@ -14625,6 +14696,43 @@ out 192.168.77.100 by DHCP and answers pings, so the test runs DHCP and
 ping through the whole data path, 802.11 frames both ways.  Only open
 networks connect so far.  WPA2 and WPA3 come next, then `wlanapi.dll`
 and Settings' Wi-Fi page.
+
+## Wi-Fi: WPA2-Personal networks connect
+
+Third part of roadmap step 28.1.  NovaOS's WDI upper edge joined open
+networks only.  Now it joins WPA2-Personal networks too, as Windows'
+`wdiwifi.sys` does, with the driver doing the encryption:
+
+- **`netsh wlan connect name=SSID key=PASSPHRASE`**: the passphrase (8 to
+  63 characters, or the 64 hexadecimal digits of the key itself) becomes
+  the pairwise master key (PBKDF2-HMAC-SHA1 over the SSID, through Mbed
+  TLS).  The connect task asks for RSNA-PSK authentication with CCMP and
+  for unencrypted frames to be excluded.
+- **The 4-way handshake** (`kernel/nt/wpa.c`, a supplicant written for
+  NovaOS on Mbed TLS: IEEE 802.11-2020 12.7): it derives the PTK, checks
+  each EAPOL-Key frame's replay counter and MIC, unwraps the group key
+  (AES key wrap) and checks that message 3's RSN element is the beacon's,
+  so a downgrade is refused.  Group key rekeys are answered while
+  connected.
+- **The keys to the driver**: before connecting, NovaOS exempts EAPOL
+  from encryption (`OID_WDI_SET_PRIVACY_EXEMPTION_LIST`), and after
+  message 3 it installs the pairwise and group keys
+  (`OID_WDI_SET_ADD_CIPHER_KEYS`).  Until then, no data frame but EAPOL
+  goes out or comes in.
+- **Clear errors**: a wrong passphrase ("The network security key isn't
+  correct"), a missing one, one of the wrong length, and networks NovaOS
+  cannot join yet (WPA3, WPA, WEP, Enterprise, management frame
+  protection required) each get their own message.
+
+The `wifi` boot's `wditest.sys` is now a WPA2 access point as well: its
+own SHA-1, HMAC and AES (`tools/drivertest/wpaap.h`, independent of Mbed
+TLS) run the authenticator's side, refuse a wrong passphrase, check the
+exemption and keys NovaOS installs, drop data before the keys and rekey
+the group key once.  The test connects with a wrong key, then the right
+one, and gets DHCP and pings over the secured network.  A host test
+(`tests/tools/test_wpa_handshake.py`) checks both implementations
+against the standard's vectors and Python's `hashlib`.  WPA3 (SAE) comes
+next, then `wlanapi.dll` and Settings' Wi-Fi page.
 
 <!-- END generated:history -->
 

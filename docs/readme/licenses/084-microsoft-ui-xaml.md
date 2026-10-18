@@ -1,1 +1,1 @@
-Microsoft's XAML framework, WinUI (`third_party/microsoft-ui-xaml`, its IDL and the XAML core's lower layers so far: the lowest components, the type metadata and `CDependencyObject`'s property system): MIT
+Microsoft's XAML framework, WinUI (`third_party/microsoft-ui-xaml`, its IDL and the XAML core's lower layers so far: the lowest components, the type metadata, `CDependencyObject`'s property system, the collections, the resources and resource dictionaries, and the markup parser with its object writer): MIT

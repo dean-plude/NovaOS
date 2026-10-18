@@ -149,7 +149,12 @@ order; --list prints them):
             USB Video Class camera on xHCI (tools/campeer.py): the kernel's
             UVC driver runs it, camtest lists it with Media Foundation and
             reads frames in each of its formats through a source reader,
-            and the Camera app shows it; "isocam", the same camera as
+            and the Camera app shows it; "bluetooth", a USB Bluetooth
+            radio on xHCI (tools/btpeer.py) with a mouse and a headset in
+            range: bthusb and NovaOS's host stack run it, bttest inquires,
+            pairs both and turns the mouse's HID service on (hidbth), the
+            mouse reconnects after a restart, and a lower filter packaged
+            as Intel's ibtusb is installs under bthusb; "isocam", the same camera as
             most laptops have it (tools/campeer.py --iso): an
             isochronous endpoint in two alternate settings and MJPEG
             frames, which the UVC driver reads through isochronous URBs
@@ -407,6 +412,7 @@ DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
 HID = load_suite('devices/hid')
 CAMERA = load_suite('devices/camera')
+BLUETOOTH = load_suite('devices/bluetooth')
 ISOCAM = load_suite('devices/isocam')
 COMPOSITE = load_suite('devices/composite')
 PNP = load_suite('devices/pnp')
@@ -584,6 +590,21 @@ def camera_boot(work):
         time.sleep(0.05)
     return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=cam,host=127.0.0.1,port=10714',
             '-device', 'usb-redir,id=cam,chardev=cam,bus=xhci.0'], [p]
+
+
+def bluetooth_boot(work):
+    """A USB Bluetooth radio on an xHCI controller, tools/btpeer.py behind a
+    QEMU usb-redir device (port 10718, control port 10818), with a mouse and
+    a headset in range (tests/selftest/devices/bluetooth)"""
+    log = os.path.join(work, 'btpeer.log')
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'btpeer.py'), '--port', '10718'],
+                         stdout=open(log, 'w'), stderr=subprocess.STDOUT)
+    for _ in range(100):
+        if 'listening' in open(log).read() or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    return ['-device', 'qemu-xhci,id=xhci', '-chardev', 'socket,id=bt,host=127.0.0.1,port=10718',
+            '-device', 'usb-redir,id=bt,chardev=bt,bus=xhci.0'], [p]
 
 
 def isocam_boot(work):
@@ -1248,6 +1269,7 @@ BOOTS = {
                 ('beside', BESIDE, beside_boot), ('shrink', SHRINK, shrink_boot), ('update', UPDATE, update_boot),
                 ('rollbacktest', ROLLBACK, rollbacktest_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
+                ('bluetooth', BLUETOOTH, bluetooth_boot),
                 ('isocam', ISOCAM, isocam_boot), ('composite', COMPOSITE, composite_boot),
                 ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),
                 ('wdm', WDM, wdm_boot), ('edu', EDU, edu_boot), ('vioser', VIOSER, vioser_boot),
@@ -1362,7 +1384,7 @@ def main():
                     p.kill()
                 for log in ['h2server.log', 'ippprinter.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
                         + [f'padpeer-{p}.log' for p in (10710, 10711, 10712, 10713, 10717)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
-                                                                                 'isocampeer.log', 'compositepeer.log']:
+                                                                                 'isocampeer.log', 'compositepeer.log', 'btpeer.log']:
                     if os.path.exists(os.path.join(work, log)):
                         shutil.copy(os.path.join(work, log), a.out)
                 shutil.rmtree(work, ignore_errors=True)

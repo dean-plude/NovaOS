@@ -3,8 +3,9 @@
  * kernel (NovaOS's is kernel/um/um_d3dkmt.c)
  *
  * The structures are Windows', written from the WDK's public documentation
- * of d3dkmthk.h and d3dukmdt.h (learn.microsoft.com), only the ones NovaOS
- * implements.  On x64 the kernel reads them as they are (abitest-style
+ * of d3dkmthk.h and d3dukmdt.h (learn.microsoft.com; the GPU virtual
+ * address ones checked against Microsoft's MIT-licensed libdxg headers),
+ * only the ones NovaOS implements.  On x64 the kernel reads them as they are (abitest-style
  * offsets are checked in the kernel's copy); 32-bit programs get
  * STATUS_NOT_SUPPORTED for now.
  */
@@ -218,6 +219,93 @@ typedef struct _D3DKMT_QUERYVIDEOMEMORYINFO {
     UINT                        PhysicalAdapterIndex;
 } D3DKMT_QUERYVIDEOMEMORYINFO;
 
+/* GPU virtual addresses (WDDM 2.0) */
+typedef enum D3DDDI_PAGINGQUEUE_PRIORITY {
+    D3DDDI_PAGINGQUEUE_PRIORITY_BELOW_NORMAL = -1,
+    D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL = 0,
+    D3DDDI_PAGINGQUEUE_PRIORITY_ABOVE_NORMAL = 1,
+} D3DDDI_PAGINGQUEUE_PRIORITY;
+
+typedef struct _D3DKMT_CREATEPAGINGQUEUE {
+    D3DKMT_HANDLE               hDevice;
+    D3DDDI_PAGINGQUEUE_PRIORITY Priority;
+    D3DKMT_HANDLE               hPagingQueue;                 /* out */
+    D3DKMT_HANDLE               hSyncObject;                  /* out: its monitored fence */
+    VOID                       *FenceValueCPUVirtualAddress;  /* out: the fence's value, read-only */
+    UINT                        PhysicalAdapterIndex;
+} D3DKMT_CREATEPAGINGQUEUE;
+
+typedef struct D3DDDI_DESTROYPAGINGQUEUE {
+    D3DKMT_HANDLE hPagingQueue;
+} D3DDDI_DESTROYPAGINGQUEUE;
+
+typedef struct _D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE {
+    union {
+        struct { UINT64 Write : 1, Execute : 1, Zero : 1, NoAccess : 1, SystemUseOnly : 1, Reserved : 59; };
+        UINT64 Value;
+    };
+} D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE;
+
+typedef enum _D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE {
+    D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_ACCESS = 0,
+    D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO = 1,
+    D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_COMMIT = 2,
+} D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE;
+
+typedef UINT64 D3DGPU_SIZE_T;
+
+typedef struct D3DDDI_MAPGPUVIRTUALADDRESS {
+    D3DKMT_HANDLE                          hPagingQueue;
+    D3DGPU_VIRTUAL_ADDRESS                 BaseAddress;       /* 0: VidMm picks, in [Minimum, Maximum) */
+    D3DGPU_VIRTUAL_ADDRESS                 MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS                 MaximumAddress;
+    D3DKMT_HANDLE                          hAllocation;
+    D3DGPU_SIZE_T                          OffsetInPages;     /* 4 KiB pages */
+    D3DGPU_SIZE_T                          SizeInPages;
+    D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+    UINT64                                 DriverProtection;
+    UINT                                   Reserved0;
+    UINT64                                 Reserved1;
+    D3DGPU_VIRTUAL_ADDRESS                 VirtualAddress;    /* out */
+    UINT64                                 PagingFenceValue;  /* out */
+} D3DDDI_MAPGPUVIRTUALADDRESS;
+
+typedef struct D3DDDI_RESERVEGPUVIRTUALADDRESS {
+    union { D3DKMT_HANDLE hPagingQueue; D3DKMT_HANDLE hAdapter; };
+    D3DGPU_VIRTUAL_ADDRESS BaseAddress;
+    D3DGPU_VIRTUAL_ADDRESS MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS MaximumAddress;
+    D3DGPU_SIZE_T          Size;
+    union { D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE ReservationType; UINT Reserved0; };
+    union { UINT64 DriverProtection; UINT64 Reserved1; };
+    D3DGPU_VIRTUAL_ADDRESS VirtualAddress;                    /* out */
+    union { UINT64 PagingFenceValue; UINT64 Reserved2; };     /* out */
+} D3DDDI_RESERVEGPUVIRTUALADDRESS;
+
+typedef struct _D3DKMT_FREEGPUVIRTUALADDRESS {
+    D3DKMT_HANDLE          hAdapter;
+    D3DGPU_VIRTUAL_ADDRESS BaseAddress;
+    D3DGPU_SIZE_T          Size;
+} D3DKMT_FREEGPUVIRTUALADDRESS;
+
+typedef struct D3DDDI_MAKERESIDENT {
+    D3DKMT_HANDLE        hPagingQueue;
+    UINT                 NumAllocations;
+    const D3DKMT_HANDLE *AllocationList;
+    const UINT          *PriorityList;
+    UINT                 Flags;                   /* D3DDDI_MAKERESIDENT_FLAGS */
+    UINT64               PagingFenceValue;        /* out */
+    UINT64               NumBytesToTrim;          /* out */
+} D3DDDI_MAKERESIDENT;
+
+typedef struct _D3DKMT_EVICT {
+    D3DKMT_HANDLE        hDevice;
+    UINT                 NumAllocations;
+    const D3DKMT_HANDLE *AllocationList;
+    UINT                 Flags;                   /* D3DDDI_EVICT_FLAGS */
+    UINT64               NumBytesToTrim;          /* out */
+} D3DKMT_EVICT;
+
 #ifndef NOVA_BUILD_GDI32
 #define KMTAPI __declspec(dllimport) LONG __stdcall
 KMTAPI D3DKMTEnumAdapters2(D3DKMT_ENUMADAPTERS2 *);
@@ -235,5 +323,12 @@ KMTAPI D3DKMTDestroySynchronizationObject(const D3DKMT_DESTROYSYNCHRONIZATIONOBJ
 KMTAPI D3DKMTSignalSynchronizationObjectFromCpu(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *);
 KMTAPI D3DKMTWaitForSynchronizationObjectFromCpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *);
 KMTAPI D3DKMTQueryVideoMemoryInfo(D3DKMT_QUERYVIDEOMEMORYINFO *);
+KMTAPI D3DKMTCreatePagingQueue(D3DKMT_CREATEPAGINGQUEUE *);
+KMTAPI D3DKMTDestroyPagingQueue(D3DDDI_DESTROYPAGINGQUEUE *);
+KMTAPI D3DKMTReserveGpuVirtualAddress(D3DDDI_RESERVEGPUVIRTUALADDRESS *);
+KMTAPI D3DKMTMapGpuVirtualAddress(D3DDDI_MAPGPUVIRTUALADDRESS *);
+KMTAPI D3DKMTFreeGpuVirtualAddress(const D3DKMT_FREEGPUVIRTUALADDRESS *);
+KMTAPI D3DKMTMakeResident(D3DDDI_MAKERESIDENT *);
+KMTAPI D3DKMTEvict(D3DKMT_EVICT *);
 #undef KMTAPI
 #endif

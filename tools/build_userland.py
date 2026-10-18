@@ -719,6 +719,16 @@ wddmtestdir = os.path.join(out, 'wddmtest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), wddmtestdir, 'wddmtest'])
 for n in sorted(os.listdir(wddmtestdir)):
     built.append((f'\\Tests\\WddmTest\\{n}', os.path.join(wddmtestdir, n)))
+# 3a2d. btfilter.sys and its package, a lower filter on the test Bluetooth
+# radio laid out as Intel's ibtusb is (Include = bth.inf, Needs =
+# BthUsb.NT...), the bluetooth self-test installs with pnputil (step 28.2),
+# and bth.inf, the inbox INF such packages include (bthusb is built into the
+# kernel: kernel/nt/bthusb.c)
+btfdir = os.path.join(out, 'btfilter')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mksys.py'), btfdir, 'btfilter'])
+for n in sorted(os.listdir(btfdir)):
+    built.append((f'\\Tests\\BtFilter\\{n}', os.path.join(btfdir, n)))
+built.append(('\\Windows\\INF\\bth.inf', os.path.join(os.path.dirname(HERE), 'kernel', 'nt', 'bth.inf')))
 # 3a2d. KMDF (step 30.4): Wdf01000.sys, the framework, built from Microsoft's
 # MIT-licensed Windows-Driver-Frameworks source, and WdfLdr.sys, the loader
 # that binds KMDF drivers to it (tools/kmdf/build_kmdf.py), in

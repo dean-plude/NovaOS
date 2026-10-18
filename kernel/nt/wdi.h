@@ -33,6 +33,8 @@
 #define WDI_TASK_SET_RADIO_STATE             11
 #define WDI_TASK_CREATE_PORT                 12
 #define WDI_TASK_DELETE_PORT                 13
+#define WDI_SET_PRIVACY_EXEMPTION_LIST       28
+#define WDI_SET_ADD_CIPHER_KEYS              29
 #define WDI_GET_ADAPTER_CAPABILITIES         37
 #define WDI_INDICATION_DISCONNECT_COMPLETE   21
 #define WDI_GET_BSS_ENTRY_LIST               47
@@ -52,6 +54,8 @@
 #define OID_WDI_SET_ADAPTER_CONFIGURATION    WDI_OID(WDI_SET_ADAPTER_CONFIGURATION)
 #define OID_WDI_TASK_CONNECT                 WDI_OID(WDI_TASK_CONNECT)
 #define OID_WDI_TASK_DISCONNECT              WDI_OID(WDI_TASK_DISCONNECT)
+#define OID_WDI_SET_PRIVACY_EXEMPTION_LIST   WDI_OID(WDI_SET_PRIVACY_EXEMPTION_LIST)
+#define OID_WDI_SET_ADD_CIPHER_KEYS          WDI_OID(WDI_SET_ADD_CIPHER_KEYS)
 
 #define NdisRequestMethod 12
 
@@ -91,6 +95,7 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_PORT_ATTRIBUTES          0x29
 #define WDI_TLV_DELETE_PORT_PARAMETERS   0x2A
 #define WDI_TLV_ASSOCIATION_RESULT_PARAMETERS 0x2D
+#define WDI_TLV_ASSOCIATION_REQUEST_FRAME 0x2E
 #define WDI_TLV_CONNECT_PARAMETERS       0x33
 #define WDI_TLV_CONNECT_BSS_ENTRY        0x34
 #define WDI_TLV_ASSOCIATION_RESULT       0x35
@@ -101,6 +106,13 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_MULTICAST_CIPHER_ALGO_LIST 0x3D
 #define WDI_TLV_UNICAST_CIPHER_ALGO_LIST 0x3E
 #define WDI_TLV_CONNECTION_SETTINGS      0x3F
+#define WDI_TLV_PRIVACY_EXEMPTION_ENTRY  0x48
+#define WDI_TLV_PEER_MAC_ADDRESS         0x4C
+#define WDI_TLV_CIPHER_KEY_ID            0x4D
+#define WDI_TLV_CIPHER_KEY_TYPE_INFO     0x4E
+#define WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT 0x4F
+#define WDI_TLV_CIPHER_KEY_CCMP_KEY      0x50
+#define WDI_TLV_SET_CIPHER_KEY_INFO      0x52
 #define WDI_TLV_DATAPATH_ATTRIBUTES      0xB8
 #define WDI_TLV_DATAPATH_CAPABILITIES    0xB9
 #define WDI_TLV_BSS_ENTRY_AGE_INFO       0xBA
@@ -216,6 +228,38 @@ typedef struct __attribute__((packed)) {    /* (its first fields: later ones var
     unsigned char  FourAddressSupported, PortAuthorized, WMMQoSEnabled;
 } WDI_ASSOCIATION_RESULT_PARAMETERS;
 
+/* OID_WDI_SET_PRIVACY_EXEMPTION_LIST: frames of an Ethertype (EAPOL's,
+ * 0x888E) that may go and come unencrypted on a secured connection; one
+ * WDI_TLV_PRIVACY_EXEMPTION_ENTRY each.  A frame's own exemption is in its
+ * WDI_TX_METADATA. */
+#define WDI_EXEMPT_NO_EXEMPTION                  0
+#define WDI_EXEMPT_ALWAYS                        1
+#define WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE 2   /* (unencrypted until there is a pairwise key) */
+#define WDI_EXEMPT_PACKET_TYPE_UNICAST   1
+#define WDI_EXEMPT_PACKET_TYPE_MULTICAST 2
+#define WDI_EXEMPT_PACKET_TYPE_BOTH      3
+typedef struct __attribute__((packed)) {
+    unsigned short EtherType;       /* (big-endian) */
+    unsigned int   ExemptionActionType, ExemptionPacketType;
+} WDI_PRIVACY_EXEMPTION_PARAMETERS;
+
+/* OID_WDI_SET_ADD_CIPHER_KEYS: one WDI_TLV_SET_CIPHER_KEY_INFO per key,
+ * holding WDI_TLV_PEER_MAC_ADDRESS (a pairwise key's peer),
+ * WDI_TLV_CIPHER_KEY_ID (a group key's index, a UINT32),
+ * WDI_TLV_CIPHER_KEY_TYPE_INFO, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT
+ * (the 48-bit packet number to start from) and the key itself
+ * (WDI_TLV_CIPHER_KEY_CCMP_KEY) */
+#define WDI_CIPHER_KEY_DIRECTION_INBOUND  1
+#define WDI_CIPHER_KEY_DIRECTION_OUTBOUND 2
+#define WDI_CIPHER_KEY_DIRECTION_BOTH     3
+#define WDI_CIPHER_KEY_TYPE_PAIRWISE_KEY  1
+#define WDI_CIPHER_KEY_TYPE_GROUP_KEY     2
+typedef struct __attribute__((packed)) {
+    unsigned int   CipherAlgorithm, Direction;
+    unsigned char  Static;          /* (kept across a roam) */
+    unsigned int   KeyType;
+} WDI_CIPHER_KEY_TYPE_INFO;
+
 /* WDI_TLV_DISCONNECT_PARAMETERS */
 typedef struct __attribute__((packed)) {
     unsigned char  MacAddress[6];
@@ -328,7 +372,8 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(WDI_TXRX_CAPABILITIES) == 24 && sizeof(WDI_TXRX_TARGET_CONFIGURATION) == 28 &&
                sizeof(WDI_TX_METADATA) == 64 && sizeof(WDI_FRAME_METADATA) == 96 &&
                sizeof(NDIS_WDI_DATA_API) == 4 + 17 * 8 && sizeof(NDIS_MINIPORT_WDI_DATA_HANDLERS) == 4 + 25 * 8 &&
-               sizeof(WDI_DATAPATH_CAPABILITIES) == 18 && sizeof(WDI_CONNECTION_SETTINGS) == 14,
+               sizeof(WDI_DATAPATH_CAPABILITIES) == 18 && sizeof(WDI_CONNECTION_SETTINGS) == 14 &&
+               sizeof(WDI_CIPHER_KEY_TYPE_INFO) == 13 && sizeof(WDI_PRIVACY_EXEMPTION_PARAMETERS) == 10,
                "WDI data path types");
 
 /* 802.11 data frames as the data path carries them (IEEE 802.11-2020 9.3.2.1) */
@@ -346,3 +391,5 @@ typedef struct __attribute__((packed)) {
 } DOT11_DATA_HEADER_T;
 /* LLC/SNAP before the Ethertype (RFC 1042) */
 #define DOT11_SNAP_LEN 8
+#define DOT11_CCMP_HEADER 8             /* (the PN and key ID a protected frame has before its LLC) */
+#define ETHERTYPE_EAPOL 0x888E

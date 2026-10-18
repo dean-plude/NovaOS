@@ -595,10 +595,16 @@ static UINT32 fill_iface(UsbdDev *v, UsbdIfaceInfo *info)
         const UINT8 *e = d->cfg + o;
         if (e[1] != USB_DT_ENDPOINT || e[0] < 7 || k >= want || k >= room) continue;
         UINT8 idx = (UINT8)((e[2] & 0xF) * 2 + ((e[2] & 0x80) ? 1 : 0));
-        UsbPipe *up = UsbOpenPipe(d, e, PIPE_BUF);
-        if (!up) return USBD_STATUS_NOT_SUPPORTED;
-        up->patient = true;
-        up->keep = up->xfer == 3;                                /* interrupt: as on Windows, a transfer stays queued */
+        /* an endpoint with no bandwidth (a Bluetooth radio's isochronous
+         * voice endpoints at their first setting) has a handle and no pipe,
+         * as on Windows: transfers on it fail */
+        UsbPipe *up = NULL;
+        if (e[4] | e[5] << 8) {
+            up = UsbOpenPipe(d, e, PIPE_BUF);
+            if (!up) return USBD_STATUS_NOT_SUPPORTED;
+            up->patient = true;
+            up->keep = up->xfer == 3;                            /* interrupt: as on Windows, a transfer stays queued */
+        }
         UsbdPipe *p = v->pipes[idx];
         if (!p) {
             p = kzalloc(sizeof(*p));
@@ -703,7 +709,7 @@ static NT_STATUS submit_urb(UsbdDev *v, NT_IRP *irp, UrbHeader *u)
     case URB_FUNCTION_SYNC_RESET_PIPE:
     case URB_FUNCTION_SYNC_CLEAR_STALL: {
         UsbdPipe *p = pipe_of(v, ((UrbPipe *)u)->PipeHandle);
-        if (!p) return urb_status(u, USBD_STATUS_INVALID_PIPE_HANDLE);
+        if (!p || !p->pipe) return urb_status(u, USBD_STATUS_INVALID_PIPE_HANDLE);
         if (!passive) return enqueue(&v->ep0, irp);              /* (it is PASSIVE_LEVEL only on Windows too) */
         return urb_status(u, UsbPipeReset(p->pipe) ? USBD_STATUS_SUCCESS : USBD_STATUS_STALL_PID);
     }

@@ -12,7 +12,8 @@
  *                  flagged SPSVCINST_ASSOCSERVICE (2) runs the device
  *   AddReg         HKR lines into the device's driver key (an NDIS
  *                  miniport's parameters: NdisReadConfiguration reads them)
- *   .HW AddReg     HKR lines into the device's Device Parameters key
+ *   .HW AddReg     HKR lines into the device's Device Parameters key (its
+ *                  LowerFilters/UpperFilters into its Enum key)
  *   .Filters       AddFilter = name, flags, section: a filter driver on the
  *                  device's stack, below its function driver (the
  *                  section's FilterPosition = Lower) or above it (Upper),
@@ -271,6 +272,7 @@ static BOOL service_line(const WCHAR *key, const WCHAR *value, void *ctx)
 typedef struct {
     HKEY key;                                   /* HKR: the device's Device Parameters, or its driver key */
     const Inf *inf;
+    HKEY dev;                                   /* (.HW: the device's Enum key, for its filters) */
 } Reg;
 
 /* "HKR, [subkey], [value], [flags], [data]" */
@@ -287,6 +289,10 @@ static BOOL addreg_line(const WCHAR *key, const WCHAR *value, void *ctx)
     inf_field(line, 3, fl, 32);
     inf_field(line, 4, data, 256);
     HKEY k = r->key;
+    /* a .HW section's LowerFilters/UpperFilters are the device's own
+     * properties, in its Enum key, as SetupAPI writes them (how a vendor
+     * filter such as Intel's ibtusb puts itself on the stack) */
+    if (r->dev && !sub[0] && (ieq_w(name, L"LowerFilters") || ieq_w(name, L"UpperFilters"))) k = r->dev;
     if (sub[0] && RegCreateKeyExW(r->key, sub, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return TRUE;
     DWORD flags = num_w(fl);
     if ((flags & 0x00010001) == 0x00010001) {               /* FLG_ADDREG_TYPE_DWORD */
@@ -299,7 +305,7 @@ static BOOL addreg_line(const WCHAR *key, const WCHAR *value, void *ctx)
     } else {
         RegSetValueExW(k, name[0] ? name : NULL, 0, REG_SZ, (const BYTE *)data, (DWORD)((lstrlenW(data) + 1) * sizeof(WCHAR)));
     }
-    if (k != r->key) RegCloseKey(k);
+    if (k != r->key && k != r->dev) RegCloseKey(k);
     return TRUE;
 }
 
@@ -676,7 +682,7 @@ SETUPAPI BOOL WINAPI NovaInstallDeviceDriverW(LPCWSTR inf_path, LPCWSTR instance
     else RegDeleteValueW(dev, L"UpperFilters");
     HKEY params;
     if (!RegCreateKeyExW(dev, L"Device Parameters", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &params, NULL)) {
-        Reg r = { params, inf };
+        Reg r = { params, inf, dev };
         lstrcpyW(sect, ddi);
         lstrcatW(sect, L".HW");
         Part hp[8];

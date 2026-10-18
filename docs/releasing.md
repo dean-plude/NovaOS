@@ -5,7 +5,9 @@ A release is made by pushing a version tag. The tag starts
 tagged commit and, only if every job passes, publishes the GitHub release.
 Nothing is uploaded by hand.
 
-NovaOS 0.1.0 (`v0.1.0`) was released this way on 2026-10-04. Separately,
+NovaOS 0.1.0 (`v0.1.0`) was released this way on 2026-10-04, and 0.2.0,
+code name "Kepler" (`v0.2.0`, [notes](releases/0.2.0.md)), is prepared the
+same way. Separately,
 every green push to `main` republishes a rolling pre-release tagged
 `latest` ([ci.md](ci.md#the-rolling-latest-release)); that is not a
 release in the sense of this page.

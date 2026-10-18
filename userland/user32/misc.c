@@ -802,15 +802,18 @@ USERAPI BOOL GetUserObjectInformationW(HANDLE h, int index, PVOID p, DWORD n, LP
     SetLastError(ERROR_INVALID_PARAMETER);
     return FALSE;
 }
-/* ExitWindowsEx: shut down or restart (the shell saves drive C: first);
- * there is one session and no log-on screen, so no log-off */
+/* ExitWindowsEx: shut down or restart (the shell saves drive C: first),
+ * or sign out (EWX_LOGOFF, 0): the caller's account's programs end and
+ * the sign-in screen follows (kernel/wm/logon.c) */
 USERAPI BOOL ExitWindowsEx(UINT flags, DWORD reason)
 {
     (void)reason;
     if (flags & EWX_REBOOT) return NtShutdownSystem(1) == 0;
     if (flags & (EWX_SHUTDOWN | EWX_POWEROFF)) return NtShutdownSystem(2) == 0;
-    SetLastError(ERROR_NOT_SUPPORTED);
-    return FALSE;
+    NOVA_ACCOUNT_REQUEST rq = { 0 };                       /* EWX_LOGOFF (with EWX_FORCE and the like) */
+    NTSTATUS st = NtNovaAccount(NOVA_ACCOUNT_SIGN_OUT, &rq, sizeof(rq), 0, 0, 0);
+    if (st) { SetLastError(RtlNtStatusToDosError(st)); return FALSE; }
+    return TRUE;
 }
 /* The lock screen (kernel/wm/logon.c): it shows once the desktop next
  * comes round, as Windows' does once LockWorkStation has returned */

@@ -85,6 +85,13 @@
  * so not a spinlock) */
 static UmLock g_lock;
 static volatile UINT32 g_session_rid;      /* 0: not read yet */
+/* The accounts signed in (fast user switching: one on the screen, the
+ * others switched away from with their programs still running), in the
+ * order they signed in; g_lock */
+#define MAX_SESSIONS 8
+static UINT32 g_signed[MAX_SESSIONS];
+static int g_nsigned;
+#define PICTURE_KEY "Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AccountPicture\\Users"
 
 static void users_key(UINT32 rid, char *out, int cap) { ksnprintf(out, (size_t)cap, USERS_KEY "\\%08X", rid); }
 
@@ -390,6 +397,50 @@ bool um_account_rename(UINT32 rid, const char *name)
     return true;
 }
 
+/* The account type (Settings, Accounts): the last administrator stays one */
+UINT32 um_account_set_flags(UINT32 rid, UINT32 flags)
+{
+    UmAccount a;
+    flags &= UM_ACCT_ADMIN | UM_ACCT_DISABLED;
+    if (!um_account_get(rid, &a)) return ST_NO_SUCH_USER;
+    bool was = (a.flags & UM_ACCT_ADMIN) && !(a.flags & UM_ACCT_DISABLED);
+    bool stays = (flags & UM_ACCT_ADMIN) && !(flags & UM_ACCT_DISABLED);
+    if (was && !stays) {
+        UmAccount *all = kmalloc(sizeof(UmAccount) * MAX_ACCOUNTS);
+        if (!all) return ST_NO_MEMORY;
+        int n = um_accounts_list(all, MAX_ACCOUNTS), admins = 0;
+        for (int i = 0; i < n; i++) if ((all[i].flags & UM_ACCT_ADMIN) && !(all[i].flags & UM_ACCT_DISABLED)) admins++;
+        kfree(all);
+        if (admins <= 1) return ST_LAST_ADMIN;
+    }
+    char k[96];
+    users_key(rid, k, sizeof(k));
+    um_lock(&g_lock);
+    um_registry_set_dword(k, "Flags", flags);
+    um_unlock(&g_lock);
+    kprintf("[ACCT] %s is now %s%s\n", a.name, (flags & UM_ACCT_ADMIN) ? "an administrator" : "a standard user",
+            (flags & UM_ACCT_DISABLED) ? " (disabled)" : "");
+    return ST_SUCCESS;
+}
+
+bool um_account_picture(UINT32 rid, char *path, int cap)
+{
+    char sid[48], pk[160];
+    um_account_sid_string(rid, sid, sizeof(sid));
+    ksnprintf(pk, sizeof(pk), PICTURE_KEY "\\%s", sid);
+    if (!um_registry_get_sz(pk, "Image192", path, cap) || !path[0]) { if (cap) path[0] = 0; return false; }
+    return true;
+}
+
+void um_account_set_picture(UINT32 rid, const char *path)
+{
+    char sid[48], pk[160];
+    um_account_sid_string(rid, sid, sizeof(sid));
+    ksnprintf(pk, sizeof(pk), PICTURE_KEY "\\%s", sid);
+    if (!path || !path[0]) um_registry_delete_tree(pk);
+    else { um_registry_set_sz(pk, "Image192", path); um_registry_set_sz(pk, "Image96", path); }
+}
+
 /* Delete @dir and everything in it; caller holds FsLock */
 static void delete_tree(RamNode *dir)
 {
@@ -401,7 +452,7 @@ UINT32 um_account_delete(UINT32 rid)
 {
     UmAccount a;
     if (!um_account_get(rid, &a)) return ST_NO_SUCH_USER;
-    if (rid == um_session_rid()) return ST_ACCESS_DENIED;          /* (signed in) */
+    if (rid == um_session_rid() || um_session_signed_in(rid)) return ST_ACCESS_DENIED;   /* (signed in) */
     if (a.flags & UM_ACCT_ADMIN) {
         UmAccount *all = kmalloc(sizeof(UmAccount) * MAX_ACCOUNTS);
         if (!all) return ST_NO_MEMORY;
@@ -415,6 +466,10 @@ UINT32 um_account_delete(UINT32 rid)
     um_lock(&g_lock);
     um_registry_delete_tree(k);
     um_unlock(&g_lock);
+    char sid[48], pk[160];
+    um_account_sid_string(rid, sid, sizeof(sid));
+    ksnprintf(pk, sizeof(pk), PICTURE_KEY "\\%s", sid);
+    um_registry_delete_tree(pk);
     kprintf("[ACCT] Account %s deleted\n", a.name);
     return ST_SUCCESS;
 }
@@ -423,7 +478,7 @@ UINT32 um_account_delete(UINT32 rid)
  * entry of @rid (whose account may be gone already) */
 UINT32 um_account_delete_profile(UINT32 rid)
 {
-    if (rid == um_session_rid()) return ST_ACCESS_DENIED;
+    if (rid == um_session_rid() || um_session_signed_in(rid)) return ST_ACCESS_DENIED;
     char sid[48], pk[160], hk[80], path[96];
     um_account_sid_string(rid, sid, sizeof(sid));
     ksnprintf(pk, sizeof(pk), PROFILE_LIST "\\%s", sid);
@@ -561,7 +616,40 @@ void um_session_set(UINT32 rid)
     um_registry_set_sz(LOGONUI_KEY, "LastLoggedOnUserSID", sid);
     um_registry_set_sz(LOGONUI_KEY, "LastLoggedOnSAMUser", last);
     um_account_load_profile(rid, NULL, 0);
-    kprintf("[ACCT] %s signed in (%s)\n", a.name, sid);
+    um_lock(&g_lock);
+    bool had = false;
+    for (int i = 0; i < g_nsigned; i++) had |= g_signed[i] == rid;
+    if (!had && g_nsigned < MAX_SESSIONS) g_signed[g_nsigned++] = rid;
+    um_unlock(&g_lock);
+    kprintf(had ? "[ACCT] Switched to %s (%s)\n" : "[ACCT] %s signed in (%s)\n", a.name, sid);
+}
+
+bool um_session_signed_in(UINT32 rid)
+{
+    um_lock(&g_lock);
+    bool yes = false;
+    for (int i = 0; i < g_nsigned; i++) yes |= g_signed[i] == rid;
+    um_unlock(&g_lock);
+    return yes;
+}
+
+int um_sessions(UINT32 *rids, int cap)
+{
+    um_lock(&g_lock);
+    int n = 0;
+    for (int i = 0; i < g_nsigned && n < cap; i++) rids[n++] = g_signed[i];
+    um_unlock(&g_lock);
+    return n;
+}
+
+void um_session_end(UINT32 rid)
+{
+    UmAccount a;
+    um_lock(&g_lock);
+    for (int i = 0; i < g_nsigned; i++)
+        if (g_signed[i] == rid) { g_signed[i] = g_signed[--g_nsigned]; break; }
+    um_unlock(&g_lock);
+    if (um_account_get(rid, &a)) kprintf("[ACCT] %s signed out\n", a.name);
 }
 
 /* Whether the sign-in screen must come before the desktop: the last
@@ -591,7 +679,7 @@ bool um_account_signin_required(void)
  * ----------------------------------------------------------------------- */
 enum {
     ACCT_LIST, ACCT_GET, ACCT_FIND, ACCT_ADD, ACCT_DELETE, ACCT_SET_PASSWORD, ACCT_CHANGE_PASSWORD,
-    ACCT_LOGON, ACCT_LOAD_PROFILE, ACCT_LOCK, ACCT_DELETE_PROFILE, ACCT_SESSION,
+    ACCT_LOGON, ACCT_LOAD_PROFILE, ACCT_LOCK, ACCT_DELETE_PROFILE, ACCT_SESSION, ACCT_SIGN_OUT, ACCT_SESSIONS,
 };
 
 typedef struct { UINT32 rid, flags; char name[UM_ACCOUNT_NAME_MAX + 1], password[UM_PASSWORD_MAX + 1], old[UM_PASSWORD_MAX + 1]; } AcctRequest;
@@ -628,7 +716,7 @@ static UINT64 sys_nova_account(UINT64 op, UINT64 in_p, UINT64 in_len, UINT64 out
         rq->name[UM_ACCOUNT_NAME_MAX] = 0;
         rq->password[UM_PASSWORD_MAX] = 0;
         rq->old[UM_PASSWORD_MAX] = 0;
-    } else if (op != ACCT_LIST && op != ACCT_LOCK && op != ACCT_SESSION) {
+    } else if (op != ACCT_LIST && op != ACCT_LOCK && op != ACCT_SESSION && op != ACCT_SESSIONS) {
         kfree(rq);
         return ST_INVALID_PARAMETER;
     }
@@ -702,6 +790,19 @@ static UINT64 sys_nova_account(UINT64 op, UINT64 in_p, UINT64 in_len, UINT64 out
     case ACCT_SESSION: {                                            /* who is signed in, and whether the screen is locked */
         UINT32 s[2] = { um_session_rid(), LogonActive() ? 1u : 0u };
         st = give(out_p, out_len, s, sizeof(s), ret);
+        break;
+    }
+    case ACCT_SIGN_OUT: {                                           /* ExitWindowsEx(EWX_LOGOFF): own (Rid 0), or any for an administrator */
+        UINT32 rid = rq->rid ? rq->rid : UmCurrentSession();
+        if (rid != um_caller_rid() && !admin) { st = ST_ACCESS_DENIED; break; }
+        if (!um_session_signed_in(rid)) { st = ST_NO_SUCH_USER; break; }
+        LogonSignOut(rid);
+        break;
+    }
+    case ACCT_SESSIONS: {                                           /* the accounts signed in (WTSEnumerateSessions' list) */
+        UINT32 rids[MAX_SESSIONS];
+        int n = um_sessions(rids, MAX_SESSIONS);
+        st = give(out_p, out_len, rids, (UINT32)(n * sizeof(UINT32)), ret);
         break;
     }
     default:

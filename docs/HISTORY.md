@@ -14234,6 +14234,46 @@ compiles them, and the first of them are built and tested.
 New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
 weak references, delegates, events, strings) and the built components.
 
+## NovaOS starts first beside Windows, and offers Windows
+
+Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
+PC with Windows already has "Windows Boot Manager" first in the
+firmware's `BootOrder`, so NovaOS installed beside it was only reachable
+through the firmware's boot menu.  Setup now finishes by adding a
+"NovaOS" boot entry for its own EFI System Partition and putting it first,
+with every other entry kept after it, as Windows Setup does.  The kernel
+calls the firmware's variable services for that (`kernel/hal/efi.c`): the
+boot loader hands over the runtime services table (boot protocol 6) and
+each call runs in physical mode, on page tables that map the firmware's
+memory one to one, with interrupts off and the FPU state kept.  The entry
+is the short form `HD(...)/\EFI\BOOT\BOOTX64.EFI`, and the boot loader
+recognises it instead of adding a second entry on the first start.
+
+The boot loader then looks on the PC's other volumes for Windows'
+`bootmgfw.efi` and, when it finds it, shows a boot menu for five seconds:
+NovaOS and Windows Boot Manager, which it starts with `LoadImage` and
+`StartImage`.  The devices suite's `beside` boot checks all of it, with a
+small UEFI application standing in for Windows' boot manager.
+
+## A failed update comes back on its own
+
+First part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+update whose kernel stopped during its first start (a panic, a failed
+assertion, a fatal CPU exception) used to print its report and halt, and
+the PC stayed there until someone pressed reset; only then did the boot
+loader go back to the previous kernel.  Now every fatal stop calls
+`KeFatalStop` (`kernel/fs/update.c`), which on an unfinished trial start
+logs that the update stopped, waits three seconds and resets the machine,
+as Windows restarts after a stop error; the trying mark is still on the
+ESP, so the next start is the previous version, which removes the update.
+A stop on any other start still halts.
+
+To test it without a broken build, a kernel image has a second marked
+field beside its version stamp, empty in every build:
+`tools/mkupdate.py --fail-boot panic` stamps a copy that stops just before
+it counts as started.  The devices suite's `update` boot stages one as a
+v3 and checks that the machine comes back as v1 with no reset from outside.
+
 ## A Windows render driver registers
 
 `\Device\DxgKrnl` took only display-only drivers, the

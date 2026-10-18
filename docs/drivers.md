@@ -615,8 +615,13 @@ start and lists them as render adapters to the `D3DKMT*` calls, which
 create devices and allocations through the driver
 (`DxgkDdiCreateDevice`, `CreateAllocation`, `OpenAllocation`). The test
 driver is `wddmtest.sys` (`tools/drivertest/wddmtest.c`), a render-only
-miniport whose GPU is software, on a root-enumerated device. Not there
-yet: GPU virtual addresses, command submission and the scheduler,
+miniport whose GPU is software, on a root-enumerated device. A driver
+with a GPU MMU (WDDM 2.0's GpuMmu) also gets GPU virtual addresses: a
+process object (`DxgkDdiCreateProcess`) and an address space per process,
+whose page tables VidMm keeps in system memory and the driver writes
+(`DxgkDdiBuildPagingBuffer`'s `UPDATE_PAGE_TABLE` and `FLUSH_TLB`, done
+with the CPU for now). Not there yet: page tables the GPU updates,
+command submission and the scheduler,
 interrupts and vertical blanks, a full driver's display, power states,
 and more than one source.
 

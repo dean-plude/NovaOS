@@ -115,7 +115,9 @@ order; --list prints them):
             which pnputil installs a WDDM display-only driver
             (wddmdod.sys) that takes the desktop over from the built-in
             driver through NovaOS's dxgkrnl host, changes mode as
-            Settings asks and gives the screen back when disabled;
+            Settings asks and gives the screen back when disabled, then
+            a WDDM render miniport (wddmtest.sys) on a root-enumerated
+            device, whose adapter kmttest drives through D3DKMT*;
             "hid", a vendor-defined USB HID device on xHCI
             (tools/padpeer.py --kind vendor): the kernel's HID class
             driver runs it on its USB minidriver, and hidclasstest opens
@@ -622,7 +624,9 @@ def umdf_boot(work):
 
 def wddm_boot(work):
     """The device boots' own standard VGA (PCI 1234:1111), on which pnputil
-    installs a WDDM display-only driver, wddmdod.sys (tests/selftest/devices/wddm)"""
+    installs a WDDM display-only driver, wddmdod.sys, and a root-enumerated
+    device it installs the render miniport wddmtest.sys on
+    (tests/selftest/devices/wddm)"""
     return [], []
 
 

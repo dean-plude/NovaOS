@@ -591,7 +591,7 @@ opened and reaches its hardware probe. The `edu` card is not an AX211, so
 the probe fails there; that is where the stand-in stops. The probe on the
 real card has not been tried.
 
-### Display drivers (WDDM, display-only)
+### Display drivers (WDDM)
 
 Windows display drivers are miniports of `dxgkrnl.sys`. NovaOS has the
 display-only half of a stand-in (`kernel/nt/dxgkrnl.c`, step 1 of
@@ -607,8 +607,17 @@ in the mode the driver left, when the driver is disabled or removed.
 
 The test driver is `wddmdod.sys` (`tools/drivertest/wddmdod.c`), a
 display-only driver for QEMU's standard VGA modelled on Microsoft's KMDOD
-sample. Not there yet: render drivers (the full `DxgkInitialize`, which
-Intel's GPU driver needs), interrupts and vertical blanks, power states,
+sample.
+
+Render drivers hand `DxgkInitialize` the full `DRIVER_INITIALIZATION_DATA`
+(step 3 of the design, begun): the host reads their memory segments at
+start and lists them as render adapters to the `D3DKMT*` calls, which
+create devices and allocations through the driver
+(`DxgkDdiCreateDevice`, `CreateAllocation`, `OpenAllocation`). The test
+driver is `wddmtest.sys` (`tools/drivertest/wddmtest.c`), a render-only
+miniport whose GPU is software, on a root-enumerated device. Not there
+yet: GPU virtual addresses, command submission and the scheduler,
+interrupts and vertical blanks, a full driver's display, power states,
 and more than one source.
 
 ## Downloading drivers by hardware ID
@@ -752,6 +761,8 @@ kept in the repository or the image.
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer and data path: capabilities, the station port, a scan and its BSS entries, connecting to an open network, DHCP and ping over the TAL TX/RX path, `netsh wlan` |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
+| `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer: capabilities, the station port, a scan and its BSS entries, `netsh wlan` |
+| `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver), then `wddmtest.sys` (its render miniport) | QEMU's standard VGA; a root-enumerated device | the dxgkrnl host, mode changes, the screen handed back on disable; a render adapter's devices and allocations |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |
 | `touch` | `HidUsb`, `hiddigi` and `mouhid` on a USB digitizer (and virtio-input for QEMU's own) | a virtio multi-touch screen and tablet, and a USB touch screen, pen and precision touchpad in one device (`tools/padpeer.py --kind digitizer`) | `touchtest` on the virtio screen; `digitest`: each collection on its class driver, Raw Input's digitizer devices, a touch, the pen with its pressure, the touchpad moving the pointer, a tap and two-finger scrolling, unplugging |

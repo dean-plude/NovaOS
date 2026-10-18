@@ -21,12 +21,18 @@
  * returns when every fence (or, with WaitAny, one) reached its value, or,
  * given an event, sets the event then and returns at once.
  *
+ * Step 3's second part adds the render miniports' adapters (nt/dxgkrnl.c,
+ * dxgkrender.h), listed first as Windows lists hardware before Basic
+ * Render: their devices are the driver's (DxgkDdiCreateDevice), and each
+ * allocation is sized and placed by the driver and VidMm (its private
+ * driver data goes to DxgkDdiCreateAllocation as it came), its pages still
+ * system memory given here, its budget the adapter's segments.
+ *
  * Not yet (the next parts of step 3, with wddmtest.sys, a render miniport
- * whose "GPU" runs in software): render miniports' adapters and their DDIs
- * (DxgkDdiCreateAllocation, BuildPagingBuffer, SubmitCommandVirtual), GPU
- * virtual addresses and residency, contexts and submission, the scheduler,
- * fences the GPU signals, preemption and TDR, shared resources and 32-bit
- * programs' structures.
+ * whose "GPU" runs in software): GPU virtual addresses, paging buffers and
+ * residency, contexts and submission, the scheduler, fences the GPU
+ * signals, preemption and TDR, shared resources and 32-bit programs'
+ * structures.
  *
  * Handles (D3DKMT_HANDLE) are the process's own, as Windows' are; a
  * process's objects go with it (um_d3dkmt_process_gone).  A view the
@@ -38,6 +44,7 @@
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
+#include "../nt/dxgkrender.h"
 
 #define ST_OK               0x00000000u
 #define ST_ACCESS_VIOLATION 0xC0000005u
@@ -50,6 +57,8 @@
 #define MAX_OBJECTS   4096            /* D3DKMT handles one process may hold */
 #define MAX_LIST      64              /* allocations or fences one call may name */
 #define MAX_ALLOC     (1ull << 30)    /* the largest allocation */
+#define MAX_PRIV      512             /* private driver data, per allocation */
+#define MAX_ADAPTERS  8
 #define HANDLE_BASE   0x40000000u     /* (handle = base | index << 6, as Windows' look) */
 
 /* The Basic Render adapter */
@@ -146,6 +155,8 @@ typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC } Kind;
 
 typedef struct {
     Kind     kind;
+    UINT64   luid;                    /* the adapter's: Basic Render's, or a render miniport's */
+    UINT32   kmd;                     /* a device's or allocation's handle in dxgkrnl (a miniport's) */
     UINT32   device;                  /* an allocation's or fence's device (its handle) */
     Memory  *mem;
     Fence   *fence;
@@ -158,7 +169,7 @@ typedef struct Proc {
     UmProcess   *p;
     Object      *obj;
     int          nobj;
-    UINT64       usage;               /* bytes of allocations (all resident) */
+    UINT64       usage;               /* bytes of Basic Render allocations (all resident) */
 } Proc;
 
 /* A wait that sets an event when its fences are reached */
@@ -277,8 +288,11 @@ static void object_free(Proc *q, Object *o, UmProcess *p)
 {
     if (o->kind == K_ALLOC) {
         if (o->va && p) um_unmap_view_at(p, o->va, o->mem);
-        q->usage -= o->mem->size;
+        if (o->luid == BASIC_LUID_LO) q->usage -= o->mem->size;
+        else DxgkRenderDestroyAllocation(o->luid, o->kmd);
         mem_unref(o->mem);
+    } else if (o->kind == K_DEVICE) {
+        if (o->luid != BASIC_LUID_LO) DxgkRenderDestroyDevice(o->luid, o->kmd);
     } else if (o->kind == K_SYNC) {
         if (o->va && p) um_unmap_view_at(p, o->va, o->fence);
         fence_unref(o->fence);
@@ -289,30 +303,60 @@ static void object_free(Proc *q, Object *o, UmProcess *p)
 /* -----------------------------------------------------------------------
  * The calls (each with its structure copied in; g_lock held)
  * ----------------------------------------------------------------------- */
-static UINT32 enum_adapters2(Proc *q, EnumAdapters2 *a, AdapterInfo *out)
+static bool adapter_known(UINT64 luid, DxgkRenderInfo *info)
 {
-    if (!a->adapters) { a->n = 1; return ST_OK; }
-    if (a->n < 1) { a->n = 1; return ST_BUFFER_TOO_SMALL; }
-    UINT32 h = handle_new(q, K_ADAPTER);
-    if (!h) return ST_NO_MEMORY;
-    *out = (AdapterInfo){ h, { BASIC_LUID_LO, 0 }, 0, 0 };
-    a->n = 1;
+    return luid == BASIC_LUID_LO || DxgkRenderFind(luid, info);
+}
+
+static UINT32 enum_adapters2(Proc *q, EnumAdapters2 *a, AdapterInfo *out, int *nout)
+{
+    DxgkRenderInfo r[MAX_ADAPTERS - 1];
+    int n = DxgkRenderList(r, MAX_ADAPTERS - 1);
+    *nout = 0;
+    if (!a->adapters) { a->n = (UINT32)n + 1; return ST_OK; }
+    if (a->n < (UINT32)n + 1) { a->n = (UINT32)n + 1; return ST_BUFFER_TOO_SMALL; }
+    for (int i = 0; i <= n; i++) {           /* (the miniports' first, Basic Render last) */
+        UINT32 h = handle_new(q, K_ADAPTER);
+        if (!h) {
+            while (i--) memset(object(q, out[i].h, K_ADAPTER), 0, sizeof(Object));
+            return ST_NO_MEMORY;
+        }
+        UINT64 luid = i < n ? r[i].luid : BASIC_LUID_LO;
+        object(q, h, K_ADAPTER)->luid = luid;
+        out[i] = (AdapterInfo){ h, { (UINT32)luid, 0 }, 0, 0 };
+    }
+    a->n = (UINT32)n + 1;
+    *nout = n + 1;
     return ST_OK;
 }
 
 static UINT32 open_from_luid(Proc *q, OpenFromLuid *a)
 {
-    if (a->luid.lo != BASIC_LUID_LO || a->luid.hi != 0) return ST_INVALID_PARAM;
-    return (a->h = handle_new(q, K_ADAPTER)) ? ST_OK : ST_NO_MEMORY;
+    if (a->luid.hi != 0 || !adapter_known(a->luid.lo, NULL)) return ST_INVALID_PARAM;
+    if (!(a->h = handle_new(q, K_ADAPTER))) return ST_NO_MEMORY;
+    object(q, a->h, K_ADAPTER)->luid = a->luid.lo;
+    return ST_OK;
 }
+
+/* KMT_DRIVERVERSION from DXGK_WDDMVERSION (0x2100 is WDDM 2.1: 2100) */
+static UINT32 kmt_version(UINT32 wddm) { return (wddm >> 12) * 1000 + (wddm >> 8 & 0xF) * 100; }
 
 static UINT32 query_adapter_info(Proc *q, const QueryAdapterInfo *a, UINT64 *out, UINT32 *len)
 {
-    if (!object(q, a->h, K_ADAPTER)) return ST_INVALID_PARAM;
+    Object *o = object(q, a->h, K_ADAPTER);
+    if (!o) return ST_INVALID_PARAM;
+    DxgkRenderInfo r;
+    bool basic = o->luid == BASIC_LUID_LO;
+    if (!basic && !DxgkRenderFind(o->luid, &r)) return ST_INVALID_PARAM;   /* (its adapter has gone) */
     switch (a->type) {
-    case QAI_ADAPTERTYPE: out[0] = ADAPTERTYPE_RENDER | ADAPTERTYPE_SOFTWARE; *len = 4; break;
-    case QAI_DRIVERVERSION: out[0] = DRIVERVERSION_WDDM_2_0; *len = 4; break;
-    case QAI_GETSEGMENTSIZE: out[0] = 0; out[1] = 0; out[2] = g_budget; *len = 24; break;
+    case QAI_ADAPTERTYPE: out[0] = basic ? ADAPTERTYPE_RENDER | ADAPTERTYPE_SOFTWARE : ADAPTERTYPE_RENDER; *len = 4; break;
+    case QAI_DRIVERVERSION: out[0] = basic ? DRIVERVERSION_WDDM_2_0 : kmt_version(r.wddm); *len = 4; break;
+    case QAI_GETSEGMENTSIZE:
+        out[0] = basic || r.system ? 0 : r.memory;              /* dedicated video memory */
+        out[1] = 0;                                             /* dedicated system memory */
+        out[2] = basic ? g_budget : r.system ? r.memory : 0;    /* shared system memory */
+        *len = 24;
+        break;
     default: return ST_NOT_SUPPORTED;
     }
     return a->size == *len ? ST_OK : ST_INVALID_PARAM;
@@ -320,8 +364,19 @@ static UINT32 query_adapter_info(Proc *q, const QueryAdapterInfo *a, UINT64 *out
 
 static UINT32 create_device(Proc *q, CreateDevice *a)
 {
-    if (!object(q, (UINT32)a->adapter, K_ADAPTER)) return ST_INVALID_PARAM;
-    return (a->device = handle_new(q, K_DEVICE)) ? ST_OK : ST_NO_MEMORY;
+    Object *ad = object(q, (UINT32)a->adapter, K_ADAPTER);
+    if (!ad) return ST_INVALID_PARAM;
+    UINT64 luid = ad->luid;                     /* (handle_new may move the table) */
+    UINT32 kmd = 0;
+    if (luid != BASIC_LUID_LO && !(kmd = DxgkRenderCreateDevice(luid))) return ST_INVALID_PARAM;
+    if (!(a->device = handle_new(q, K_DEVICE))) {
+        if (kmd) DxgkRenderDestroyDevice(luid, kmd);
+        return ST_NO_MEMORY;
+    }
+    Object *d = object(q, a->device, K_DEVICE);
+    d->luid = luid;
+    d->kmd = kmd;
+    return ST_OK;
 }
 
 /* A device goes with its allocations and fences */
@@ -332,38 +387,58 @@ static UINT32 destroy_device(Proc *q, UINT32 dev, UmProcess *p)
     for (int i = 0; i < q->nobj; i++)
         if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC) && q->obj[i].device == dev)
             object_free(q, &q->obj[i], p);
-    memset(d, 0, sizeof(*d));
+    object_free(q, d, p);
     return ST_OK;
 }
 
-/* Each allocation of @a (@info: its D3DDDI_ALLOCATIONINFO2s, filled in) */
-static UINT32 create_allocation2(Proc *q, const CreateAllocation *a, AllocInfo2 *info, const NovaAllocation *spec)
+/* Each allocation of @a (@info: its D3DDDI_ALLOCATIONINFO2s, filled in;
+ * @priv: their private driver data, MAX_PRIV bytes apart) */
+static UINT32 create_allocation2(Proc *q, const CreateAllocation *a, AllocInfo2 *info, const UINT8 *priv)
 {
-    if (!object(q, a->device, K_DEVICE)) return ST_INVALID_PARAM;
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d) return ST_INVALID_PARAM;
     if (a->flags & ALLOC_FLAGS_UNSUPPORTED) return ST_NOT_SUPPORTED;
+    const UINT64 luid = d->luid;                /* (handle_new may move the table) */
+    const UINT32 kdev = d->kmd;
+    bool basic = luid == BASIC_LUID_LO;
     UINT32 made[MAX_LIST];
     UINT32 i;
     UINT32 st = ST_OK;
     for (i = 0; i < a->num && st == ST_OK; i++) {
-        UINT64 n = (spec[i].size + PAGE_SIZE - 1) / PAGE_SIZE;
-        if (!spec[i].size || spec[i].size > MAX_ALLOC || q->usage + n * PAGE_SIZE > g_budget) { st = ST_INVALID_PARAM; break; }
+        const UINT8 *pd = priv + (size_t)i * MAX_PRIV;
+        UINT64 bytes = 0;
+        UINT32 kmd = 0;
+        if (basic) {                            /* NOVA_KMT_ALLOCATION */
+            const NovaAllocation *spec = (const NovaAllocation *)pd;
+            if (info[i].priv_size != sizeof(*spec)) { st = ST_INVALID_PARAM; break; }
+            bytes = (spec->size + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1);
+            if (!spec->size || spec->size > MAX_ALLOC || q->usage + bytes > g_budget) { st = ST_INVALID_PARAM; break; }
+        } else {                                /* the driver's to read */
+            st = DxgkRenderCreateAllocation(luid, kdev, pd, info[i].priv_size, &bytes, &kmd);
+            if (st != ST_OK) break;
+            if (bytes > MAX_ALLOC) { DxgkRenderDestroyAllocation(luid, kmd); st = ST_INVALID_PARAM; break; }
+        }
+        UINT64 n = bytes / PAGE_SIZE;
         Memory *m = kzalloc(sizeof(*m));
         if (m && !(m->f = um_alloc_frames(n))) { kfree(m); m = NULL; }
         UINT32 h = m ? handle_new(q, K_ALLOC) : 0;
         if (!h) {
             if (m) { um_free_frames(m->f, n); kfree(m); }
+            if (kmd) DxgkRenderDestroyAllocation(luid, kmd);
             st = ST_NO_MEMORY;
             break;
         }
         m->refs = 1;
         m->n = n;
-        m->size = n * PAGE_SIZE;
+        m->size = bytes;
         Object *o = object(q, h, K_ALLOC);
         o->device = a->device;
+        o->luid = luid;
+        o->kmd = kmd;
         o->mem = m;
-        q->usage += m->size;
+        if (basic) q->usage += m->size;
         info[i].alloc = made[i] = h;
-        info[i].gpu_va = 0;                     /* (no GPU virtual addresses on this adapter yet) */
+        info[i].gpu_va = 0;                     /* (no GPU virtual addresses yet) */
     }
     if (st != ST_OK)                            /* all or nothing */
         while (i--) object_free(q, object(q, made[i], K_ALLOC), q->p);
@@ -521,13 +596,14 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
     switch (op) {
     case OP_ENUM_ADAPTERS2: {
         EnumAdapters2 a;
-        AdapterInfo info;
+        AdapterInfo info[MAX_ADAPTERS];
+        int n = 0;
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
         um_lock(&g_lock);
         Proc *q = proc_of(p, true);
-        UINT32 st = q ? enum_adapters2(q, &a, &info) : ST_NO_MEMORY;
+        UINT32 st = q ? enum_adapters2(q, &a, info, &n) : ST_NO_MEMORY;
         um_unlock(&g_lock);
-        if ((st == ST_OK && a.adapters && !out(a.adapters, &info, sizeof(info))) || !out(args, &a, sizeof(a)))
+        if ((st == ST_OK && n && !out(a.adapters, info, sizeof(info[0]) * (UINT64)n)) || !out(args, &a, sizeof(a)))
             return ST_ACCESS_VIOLATION;
         return st;
     }
@@ -537,13 +613,13 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
         um_lock(&g_lock);
         Object *o = object(proc_of(p, false), a.h, K_ADAPTER);
-        if (o) o->kind = K_FREE;
+        if (o) memset(o, 0, sizeof(*o));
         um_unlock(&g_lock);
         return o ? ST_OK : ST_INVALID_PARAM;
     }
     case OP_QUERY_ADAPTER_INFO: {
         QueryAdapterInfo a;
-        UINT64 res[3];
+        UINT64 res[3] = { 0, 0, 0 };
         UINT32 len = 0;
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
         um_lock(&g_lock);
@@ -566,16 +642,21 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
     case OP_CREATE_ALLOCATION2: {
         CreateAllocation a;
         AllocInfo2 info[MAX_LIST];
-        NovaAllocation spec[MAX_LIST];
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
         if (!a.num || a.num > MAX_LIST || !in(info, a.info, sizeof(info[0]) * a.num)) return ST_INVALID_PARAM;
+        UINT8 *priv = kzalloc((size_t)a.num * MAX_PRIV);
+        if (!priv) return ST_NO_MEMORY;
         for (UINT32 i = 0; i < a.num; i++)
-            if (info[i].priv_size != sizeof(spec[i]) || !in(&spec[i], info[i].priv, sizeof(spec[i])))
+            if (info[i].priv_size > MAX_PRIV || (info[i].priv_size && !in(priv + (size_t)i * MAX_PRIV, info[i].priv,
+                                                                          info[i].priv_size))) {
+                kfree(priv);
                 return ST_INVALID_PARAM;
+            }
         um_lock(&g_lock);
         Proc *q = proc_of(p, true);
-        UINT32 st = q ? create_allocation2(q, &a, info, spec) : ST_NO_MEMORY;
+        UINT32 st = q ? create_allocation2(q, &a, info, priv) : ST_NO_MEMORY;
         um_unlock(&g_lock);
+        kfree(priv);
         if (st == ST_OK && !out(a.info, info, sizeof(info[0]) * a.num)) return ST_ACCESS_VIOLATION;
         return st;
     }
@@ -631,13 +712,18 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         if (a.process && a.process != (UINT64)-1) return ST_NOT_SUPPORTED;   /* (another process's: not yet) */
         um_lock(&g_lock);
         Proc *q = proc_of(p, false);
-        bool ok = object(q, a.adapter, K_ADAPTER) && a.group <= 1 && !a.index;
+        Object *ad = object(q, a.adapter, K_ADAPTER);
+        DxgkRenderInfo r;
+        bool ok = ad && a.group <= 1 && !a.index && adapter_known(ad->luid, &r);
         if (ok) {
             bool local = a.group == 0;          /* (an integrated GPU's "local" memory is its shared system memory) */
-            a.budget = local ? g_budget : 0;
-            a.usage = local ? q->usage : 0;
+            UINT64 budget = ad->luid == BASIC_LUID_LO ? g_budget : r.memory, used = 0;
+            for (int i = 0; i < q->nobj; i++)
+                if (q->obj[i].kind == K_ALLOC && q->obj[i].luid == ad->luid) used += q->obj[i].mem->size;
+            a.budget = local ? budget : 0;
+            a.usage = local ? used : 0;
             a.reservation = 0;
-            a.available = local ? g_budget : 0;
+            a.available = local ? budget : 0;
         }
         um_unlock(&g_lock);
         if (ok && !out(args, &a, sizeof(a))) return ST_ACCESS_VIOLATION;
@@ -660,7 +746,9 @@ void um_d3dkmt_process_gone(UmProcess *p)
         Proc *q = *pp;
         if (q->p != p) continue;
         *pp = q->next;
-        for (int i = 0; i < q->nobj; i++) object_free(q, &q->obj[i], NULL);   /* (the views go with the process) */
+        for (int i = 0; i < q->nobj; i++)       /* (the views go with the process; devices after the rest) */
+            if (q->obj[i].kind != K_DEVICE) object_free(q, &q->obj[i], NULL);
+        for (int i = 0; i < q->nobj; i++) object_free(q, &q->obj[i], NULL);
         kfree(q->obj);
         kfree(q);
         break;

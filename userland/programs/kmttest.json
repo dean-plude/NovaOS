@@ -1,3 +1,4 @@
 {
-  "selftest": true
+  "selftest": true,
+  "libs": ["setupapi", "cfgmgr32"]
 }

@@ -142,6 +142,7 @@ struct UmThread {
      * NtGetContextThread: 0 unknown, 1 in a system call (user_rsp),
      * 2 at an interrupt (uframe) */
     volatile UINT8  park;
+    volatile UINT8  fpu_parked;     /* suspended: its x87/SSE/AVX state saved to kt->fpu (UmReturnToUser) */
     void           *uframe;
     UINT16          last_sys;       /* the latest system call (diagnostics) */
     UINT32          oa_attrs;       /* OBJECT_ATTRIBUTES.Attributes of its latest path (um_syscall.c) */

@@ -14234,6 +14234,51 @@ compiles them, and the first of them are built and tested.
 New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
 weak references, delegates, events, strings) and the built components.
 
+## Printing: the print spooler, Microsoft Print to PDF and the print dialogs
+
+First part of roadmap step 33.5 ([design](../design/printing.md)).
+NovaOS had no printers: `winspool.drv` was 113 lines of stubs and every
+print menu said no printer was installed. Now programs print the Windows
+way:
+
+- **The Print Spooler service** (`spoolsv.exe`, service `Spooler`) keeps
+  the queue in `C:\Windows\System32\spool\PRINTERS` and sends finished
+  jobs to their printer's port; jobs complete at a shutdown print after
+  the next start, and a paused printer or job keeps its jobs waiting.
+- **`winspool.drv`** is the real API: printers are their registry keys,
+  `EnumPrinters`, `GetPrinter`, `AddPrinter`, the default printer, the job
+  calls, `EnumJobs`/`SetJob`, `DocumentProperties` and
+  `DeviceCapabilities`. It is built under its Windows name.
+- **Microsoft Print to PDF** is installed: a printer DC (`CreateDC` with
+  the printer's name) is a 300 dpi page, and each page drawn on it becomes
+  a page of a PDF (asked for with Save As when the program names no file).
+- **`PrintDlg`, `PrintDlgEx` and `PageSetupDlg`** show the Print, Print
+  Setup and Page Setup dialogs and hand back the DEVMODE, DEVNAMES and DC.
+- **DEVMODE** has its printer fields (`dmPaperSize`, `dmCopies`...).
+- New self-test `spooltest` (64- and 32-bit): a GDI page printed to PDF
+  must be exactly what GDI draws.
+
+Next: IPP Everywhere network printing, then Settings' Printers page.
+
+## A failed update comes back on its own
+
+First part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+update whose kernel stopped during its first start (a panic, a failed
+assertion, a fatal CPU exception) used to print its report and halt, and
+the PC stayed there until someone pressed reset; only then did the boot
+loader go back to the previous kernel.  Now every fatal stop calls
+`KeFatalStop` (`kernel/fs/update.c`), which on an unfinished trial start
+logs that the update stopped, waits three seconds and resets the machine,
+as Windows restarts after a stop error; the trying mark is still on the
+ESP, so the next start is the previous version, which removes the update.
+A stop on any other start still halts.
+
+To test it without a broken build, a kernel image has a second marked
+field beside its version stamp, empty in every build:
+`tools/mkupdate.py --fail-boot panic` stamps a copy that stops just before
+it counts as started.  The devices suite's `update` boot stages one as a
+v3 and checks that the machine comes back as v1 with no reset from outside.
+
 ## A Windows render driver registers
 
 `\Device\DxgKrnl` took only display-only drivers, the

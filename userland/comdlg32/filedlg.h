@@ -19,6 +19,8 @@
 #define FOS_NOREADONLYRETURN  0x00008000
 #define FOS_FORCESHOWHIDDEN   0x10000000
 
+extern DWORD g_error;                   /* CommDlgExtendedError */
+
 #define FD_NAMES 32768                  /* characters of chosen names kept */
 
 typedef struct { WCHAR *name, *spec; } FdFilter;

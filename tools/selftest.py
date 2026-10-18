@@ -812,6 +812,34 @@ def gpt_disk(path, mb, parts):
                 os.unlink(vol)
 
 
+BESIDE_STANDIN = 'Windows Boot Manager stand-in started (NovaOS self-tests)'
+
+
+def bootmgfw_standin():
+    """A stand-in for Windows' bootmgfw.efi: a UEFI application (PE32+,
+    x86-64, one section, nothing to relocate) that prints BESIDE_STANDIN on
+    the firmware's console and returns EFI_SUCCESS, so NovaOS's boot menu
+    can be seen to start it (tests/selftest/devices/beside)"""
+    text = (BESIDE_STANDIN + '\r\n').encode('utf-16-le') + b'\0\0'
+    code = bytes.fromhex('4883ec28'          # sub rsp, 0x28
+                         '488b4a40'          # mov rcx, [rdx+0x40]   SystemTable->ConOut
+                         '488d1511000000'    # lea rdx, [rip+0x11]   the text, at 32
+                         'ff5108'            # call [rcx+8]          ConOut->OutputString
+                         '31c0'              # xor eax, eax          EFI_SUCCESS
+                         '4883c428'          # add rsp, 0x28
+                         'c3').ljust(32, b'\xcc') + text
+    raw = code.ljust(0x200, b'\0')
+    opt = struct.pack('<HBBIIIII', 0x20B, 0, 0, len(raw), 0, 0, 0x1000, 0x1000) + \
+        struct.pack('<QIIHHHHHHIIIIHHQQQQII', 0x10000000, 0x1000, 0x200, 0, 0, 0, 0, 0, 0, 0, 0x2000, 0x200, 0,
+                    10, 0, 0x10000, 0x1000, 0x10000, 0x1000, 0, 16) + bytes(16 * 8)     # (subsystem 10: EFI application)
+    coff = struct.pack('<HHIIIHH', 0x8664, 1, 0, 0, 0, len(opt), 0x0022)
+    sect = struct.pack('<8sIIIIIIHHI', b'.text', len(code), 0x1000, len(raw), 0x200, 0, 0, 0, 0, 0x60000020)
+    head = bytearray(0x40)
+    head[:2] = b'MZ'
+    head[0x3C:0x40] = struct.pack('<I', 0x40)
+    return (bytes(head) + b'PE\0\0' + coff + opt + sect).ljust(0x200, b'\0') + raw
+
+
 def windows_disk(path):
     """The disk of a PC with Windows on it at @path (BESIDE_*): returns what
     nothing may change, the sha256 of its Microsoft reserved partition and
@@ -827,7 +855,7 @@ def windows_disk(path):
         subprocess.run(['mmd', '-i', esp, d], check=True, env=env)
     stub = esp + '.bootmgfw'
     with open(stub, 'wb') as f:                  # (a stand-in: no firmware starts it on its own)
-        f.write(b'MZ' + b'Windows Boot Manager stand-in for the NovaOS self-tests'.ljust(4094, b'.'))
+        f.write(bootmgfw_standin())
     subprocess.run(['mcopy', '-i', esp, stub, '::/EFI/Microsoft/Boot/bootmgfw.efi'], check=True, env=env)
     os.unlink(stub)
     kept = esp_files(esp)

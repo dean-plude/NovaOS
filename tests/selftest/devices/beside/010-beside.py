@@ -31,6 +31,7 @@ ESP = bytes.fromhex('28732ac11ff8d211ba4b00a0c93ec93b')       # (the GUIDs as st
 MSR = bytes.fromhex('16e3c9e35c0bb84d817df92df00215ae')
 BASIC = bytes.fromhex('a2a0d0ebe5b9334487c068b6b72699c7')
 NAME, TEXT = 'novaos-beside.txt', 'Written by the NovaOS self-tests beside Windows\n'
+STANDIN = 'Windows Boot Manager stand-in started (NovaOS self-tests)'       # (tools/selftest.py BESIDE_STANDIN)
 
 
 def _serial(nova):
@@ -59,6 +60,33 @@ def setup_window(nova):
         time.sleep(1)
     _page(nova, '5-done', keys=('esc',))           # (closes the window: the Terminal is in front again)
     time.sleep(1)
+
+
+def boot_menu(nova):
+    """Restart, and in NovaOS's boot menu (Windows' ESP has bootmgfw.efi,
+    here tools/selftest.py's stand-in) choose Windows Boot Manager: the
+    stand-in starts, prints STANDIN and comes back to the menu; then choose
+    NovaOS, which starts (a screenshot of the menu as boot-menu.png)"""
+    nova.sr.read_new()
+    nova.qmp.type('shutdown /r\n')
+    got, end = '', time.time() + 300
+    while time.time() < end and 'starts in' not in got:
+        time.sleep(0.5)
+        got += nova.sr.read_new()
+    time.sleep(1)
+    nova.shot(os.path.join(getattr(sys.modules['__main__'], 'OUT', nova.work), 'boot-menu.png'))
+    for k in ('down', 'ret'):
+        nova.qmp.key(k)
+        time.sleep(0.5)
+    end = time.time() + 60
+    while time.time() < end and 'returned (status' not in got:
+        time.sleep(0.5)
+        got += nova.sr.read_new()
+    time.sleep(3)                                  # (the menu again)
+    for k in ('up', 'ret'):
+        nova.qmp.key(k)
+        time.sleep(0.5)
+    nova.start(300)
 
 
 def _gpt(disk):
@@ -132,9 +160,13 @@ TESTS = [
          builtin=True, before=setup_window, timeout=60,
          boot_expect=[r'\[SETUP\] Installing NovaOS beside the other systems on nvme0n1',
                       r'\[SETUP\] Beside the 3 partitions on nvme0n1: EFI System Partition at 1141 MiB',
+                      r'\[SETUP\] Added the firmware boot entry Boot[0-9A-F]{4} "NovaOS" for nvme0n1, first in BootOrder',
                       r'\[SETUP\] 100% NovaOS is installed']),
-    Test('start from the disk', 'shutdown /r', [r'\[SETUP\] Added the firmware boot entry "NovaOS" for this disk'],
+    Test('start from the disk', 'shutdown /r', [r'\[SETUP\] The firmware has a "NovaOS" boot entry for this disk'],
          reboot=True),
+    Test('boot menu offers windows', 'ver', [r'NovaOS \[Version'], builtin=True, before=boot_menu, timeout=30,
+         boot_expect=[r'Other systems on this PC: Windows Boot Manager', r'Starting Windows Boot Manager\.\.\.',
+                      re.escape(STANDIN), r'Windows Boot Manager returned \(status 0x0+\)', r'Starting NovaOS']),
     Test('windows files kept', r'type D:\novaos-beside.txt', [r'Written by the NovaOS self-tests beside Windows'],
          builtin=True, check=_disk_ok),
 ]

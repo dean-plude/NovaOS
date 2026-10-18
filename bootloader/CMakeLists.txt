@@ -82,6 +82,7 @@ set(BOOTLOADER_SOURCES
     src/elf_loader.c
     src/paging.c
     src/console.c
+    src/bootmenu.c
     src/recovery.c
 )
 

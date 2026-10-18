@@ -62,6 +62,8 @@ void        UmSpawnAbandon(UmSpawnJob *j);
 /* Start a program to run on its own (UmSpawn + UmDetach) without waiting
  * for it to load; a failure is logged.  False if out of memory. */
 bool        UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd);
+/* ... as a service: in no account's sign-in, so a sign-out leaves it running */
+bool        UmSpawnService(RamNode *exe, const char *cmdline, RamNode *cwd);
 /* Whether @f is a 16-bit DOS program: an MZ image with no Windows header
  * after its DOS one, or a .COM file that is not an MZ image */
 bool        UmIsDosProgram(RamNode *f);
@@ -113,6 +115,12 @@ typedef struct {
 int  UmThreadList(UINT32 pid, UmThreadInfo *out, int max);
 /* taskkill: false if no running process has @pid. */
 bool UmKillPid(UINT32 pid);
+/* Fast user switching: a process runs in the sign-in of the account it
+ * started under (its creator's, or the screen's when the desktop starts
+ * it; services in none).  The caller's (the screen's for a kernel thread),
+ * and ending every program of @rid's sign-in (how many) */
+UINT32 UmCurrentSession(void);
+int  UmEndSession(UINT32 rid);
 void UmKillConsole(UmConsole *con, UINT32 status);   /* every program on @con */
 
 /* -----------------------------------------------------------------------
@@ -268,7 +276,15 @@ void   um_account_sid(UINT32 rid, UINT8 sid[28]);
 void   um_account_sid_string(UINT32 rid, char *out, int cap);
 UINT32 um_account_rid_of_sid(const UINT8 *sid);              /* 0: not a local account */
 UINT32 um_session_rid(void);              /* the account signed in on the screen */
-void   um_session_set(UINT32 rid);        /* ... signs in (wm/logon.c) */
+void   um_session_set(UINT32 rid);        /* ... signs in, or is switched to (wm/logon.c) */
+bool   um_session_signed_in(UINT32 rid);  /* @rid has a sign-in (on the screen, or switched away from) */
+int    um_sessions(UINT32 *rids, int cap);   /* the accounts signed in, in the order they did */
+void   um_session_end(UINT32 rid);        /* @rid signed out (wm/logon.c, once its programs are ended) */
+UINT32 um_account_set_flags(UINT32 rid, UINT32 flags);       /* the account type (UM_ACCT_ADMIN) or disabled; NTSTATUS */
+/* The account picture: a PNG's C: path ("" for none: the initial in a
+ * circle), as Windows keeps it under ...\AccountPicture\Users\<SID> */
+bool   um_account_picture(UINT32 rid, char *path, int cap);
+void   um_account_set_picture(UINT32 rid, const char *path);
 bool   um_account_signin_required(void);  /* the sign-in screen comes before the desktop */
 void UmFault(UINT32 status, UINT64 rip, UINT64 addr) __attribute__((noreturn));
 void UmFaultAt(UINT32 status, UINT64 rip, UINT64 addr, UINT64 sp) __attribute__((noreturn));

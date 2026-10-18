@@ -54,16 +54,29 @@ off in the firmware setup.`, and turning VMD off shows the disk. (A
 Windows installed with VMD on may need its storage driver changed before
 it starts with VMD off; installing NovaOS replaces it anyway.)
 
-**The firmware's boot entry.** The installer only writes the
-removable-media path `\EFI\BOOT\BOOTX64.EFI`. Firmware starts that from a
-disk it has no entry for, and its boot menu (F12 on a ThinkPad) lists the
-disk. The first time NovaOS starts from the disk, its boot loader adds a
-`Boot####` variable named "NovaOS" and puts it first in `BootOrder`, so
-the machine keeps starting NovaOS once the stick is out. The log says
-`[SETUP] Added the firmware boot entry "NovaOS" for this disk`, and on
-later starts `[SETUP] The firmware has a "NovaOS" boot entry for this
-disk`. An old "Windows Boot Manager" entry stays in the list, pointing at
-a partition that is gone; firmware skips it.
+**The firmware's boot entry.** As Windows Setup adds "Windows Boot
+Manager", Setup adds a `Boot####` variable named "NovaOS" for
+`\EFI\BOOT\BOOTX64.EFI` on NovaOS's EFI System Partition and puts it
+first in `BootOrder`, keeping every other entry after it, through the
+firmware's runtime services (`SetVariable`, `kernel/hal/efi.c`). The entry
+names the partition by its GPT entry, place and unique GUID (the short
+form firmware expands itself, as `bcdedit` and `efibootmgr` write it). The
+log says `[SETUP] Added the firmware boot entry Boot0003 "NovaOS" for
+nvme0n1, first in BootOrder (then "Windows Boot Manager")`, and every
+start from the disk after that `[SETUP] The firmware has a "NovaOS" boot
+entry for this disk`. If the firmware refuses the variable (some lock
+`BootOrder` in their setup), the boot loader adds the entry on NovaOS's
+first start from the disk, once it is started from the firmware's boot
+menu (F12 on a ThinkPad); the log then says `[SETUP] Added the firmware
+boot entry "NovaOS" for this disk`. After a whole-disk install an old
+"Windows Boot Manager" entry stays in the list, pointing at a partition
+that is gone; firmware skips it.
+
+**The boot menu.** When another system's boot manager is on the PC
+(Windows' `\EFI\Microsoft\Boot\bootmgfw.efi` on its ESP), NovaOS's boot
+loader shows a menu with NovaOS and "Windows Boot Manager" for five
+seconds before NovaOS starts; Up and Down or the line's number choose,
+Enter starts ([design/installer.md](design/installer.md)).
 
 ## The embedded controller
 

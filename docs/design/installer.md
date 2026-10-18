@@ -12,8 +12,8 @@ recovery boot belong to step 33.3 ([recovery.md](recovery.md)).
 | "Where do you want to install Windows?": each disk's partitions and unallocated space | "Where should NovaOS go?": the disk's partitions and free space drawn as a map, with what NovaOS would take |
 | Installs into unallocated space, keeping the other partitions | "Beside Windows": NovaOS's partitions in the largest free space, every other partition kept |
 | Shares the disk's ESP, adds its files under `\EFI\Microsoft` | An ESP of its own, `NOVA_EFI` (see below) |
-| Adds "Windows Boot Manager" to the firmware's boot entries | The boot loader adds "NovaOS" on its first start (to do: Setup adds it, below) |
-| Boot Manager lists the other systems | NovaOS's boot menu lists "Windows Boot Manager" (to do, with 33.3's menu) |
+| Adds "Windows Boot Manager" to the firmware's boot entries | Adds "NovaOS" to them, first in `BootOrder`, Windows' entry kept after it |
+| Boot Manager lists the other systems | NovaOS's boot menu lists "Windows Boot Manager" and starts it |
 
 ## Done (part 1): installing into the free space
 
@@ -86,27 +86,70 @@ cluster count "unknown". `FatSync` (`kernel/fs/fat.c`) now updates FSInfo
 only on a volume something was written to, so listing the disks in Setup
 leaves Windows' ESP as it was.
 
-In QEMU the firmware has no boot entries, finds no `\EFI\BOOT\BOOTX64.EFI`
-on Windows' ESP and starts NovaOS's from the second ESP, and NovaOS's boot
-loader then adds its "NovaOS" entry. A real PC already has a "Windows Boot
-Manager" entry first in `BootOrder`, so until Setup adds NovaOS's entry
-itself (below), the first start of NovaOS there is through the firmware's
-boot menu (F12 on a ThinkPad: the disk's NovaOS partition, or "Boot from
-file" `\EFI\BOOT\BOOTX64.EFI` on `NOVA_EFI`).
+## Done (part 2): the firmware's boot entry and the boot menu
+
+**The firmware boot entry from Setup.** A real PC already has "Windows
+Boot Manager" first in `BootOrder`, so NovaOS's ESP alone would not be
+started. As the last step of an installation (beside Windows or on the
+whole disk) Setup calls the firmware's runtime services, `GetVariable` and
+`SetVariable` (`kernel/hal/efi.c`, as Windows'
+`SetFirmwareEnvironmentVariable` and `bcdedit /set {fwbootmgr}` do): it
+writes `Boot####` "NovaOS" for `\EFI\BOOT\BOOTX64.EFI` on `NOVA_EFI`
+(reusing the entry that already names that partition on a reinstall, else
+the first free number) and puts it first in `BootOrder` with every other
+entry after it, Windows' included. The entry's path is the short form
+`HD(entry, GPT, unique GUID, start, size)/\EFI\BOOT\BOOTX64.EFI`, which
+firmware expands to the disk wherever it is attached (UEFI 2.10, 3.1.2);
+the boot loader's own check for its entry (`ensure_boot_entry`,
+`bootloader/src/main.c`) accepts that form as well as its full one, so
+the first start from the disk finds Setup's entry instead of adding a
+second.
+
+How the kernel calls the runtime services: the boot loader hands over the
+firmware's `EFI_RUNTIME_SERVICES` table (boot protocol 6). NovaOS never
+calls `SetVirtualAddressMap`, so the services run in physical mode, as the
+specification allows: for each call the kernel switches to page tables that
+map the first 4 GiB and every runtime or MMIO region the firmware listed
+one to one (2 MiB pages, built on the first call) and its own half of the
+address space as it is, with interrupts off, one CPU at a time, and the
+caller's x87/SSE/AVX state saved around the call (the firmware is free to
+use SSE). A firmware that refuses the variable leaves the old behaviour:
+the boot loader adds its entry on the first start from the disk, through
+the firmware's boot menu (F12 on a ThinkPad).
+
+<img src="../screenshots/boot-menu.png" alt="NovaOS's boot menu offering NovaOS and Windows Boot Manager" width="640">
+
+**Windows in NovaOS's boot menu.** On an installed disk the boot loader
+(`bootloader/src/bootmenu.c`) looks on every other volume the firmware can
+read for `\EFI\Microsoft\Boot\bootmgfw.efi`. When it finds one it shows
+the boot menu before anything else (the update and rollback choice comes
+after it): "1. NovaOS" and "2. Windows Boot Manager", with "NovaOS starts
+in 5 s"; Up, Down or a line's number choose and stop the countdown, Enter
+starts. Windows' boot manager is started as the firmware's boot manager
+would start an entry: `LoadImage` from its volume's device path and file,
+the firmware's watchdog armed, `StartImage`. If it returns (or cannot be
+loaded) the menu shows again. One "Windows Boot Manager" line is enough:
+it lists every Windows itself. Step 33.3's recovery choices (previous
+version, safe mode, startup repair) are a menu of their own that follows
+it, Advanced startup ([recovery.md](recovery.md)).
+
+**The test.** The `beside` boot's stand-in `bootmgfw.efi` is a small UEFI
+application (`bootmgfw_standin` in `tools/selftest.py`, a PE32+ the host
+writes byte by byte) that prints a line on the firmware's console and
+returns. After Setup the log must show its `Added the firmware boot entry
+Boot#### "NovaOS" for nvme0n1, first in BootOrder` (read back after
+writing); the first start from the disk must say `The firmware has a
+"NovaOS" boot entry for this disk` (Setup's entry kept by the firmware
+across the restart, and recognised); then a restart through the boot menu
+(screenshot `boot-menu.png`) chooses Windows Boot Manager, the stand-in's
+line appears, the menu comes back, and NovaOS is chosen and starts. QEMU's
+firmware copies its console to the serial port, where the test reads the
+menu. The `laptop` boot checks the same boot entry after a whole-disk
+install.
 
 ## To do (the next parts of 33.4)
 
-1. **The firmware boot entry from Setup.** NovaOS calls the UEFI runtime
-   services' `SetVariable` (as Windows' `SetFirmwareEnvironmentVariable`
-   and `bcdedit /set {fwbootmgr}` do) to add "NovaOS" for
-   `\EFI\BOOT\BOOTX64.EFI` on `NOVA_EFI` and put it first in `BootOrder`,
-   keeping "Windows Boot Manager" in the list.
-2. **Windows in NovaOS's boot menu.** The boot loader finds
-   `\EFI\Microsoft\Boot\bootmgfw.efi` on the disk's other ESPs and lists
-   "Windows Boot Manager" in step 33.3's boot menu, starting it with
-   `LoadImage`/`StartImage`; the test boot then checks the stand-in is
-   offered (the step's "offers the other system in the boot menu").
-3. **Shrinking Windows' NTFS volume.** "Make room for NovaOS" on the Where
+1. **Shrinking Windows' NTFS volume.** "Make room for NovaOS" on the Where
    page when the disk has too little free space: the volume is checked as
    chkdsk would (clean, not hibernated, no Fast Startup), its clusters past
    the new end are moved down (NovaOS's NTFS driver, `kernel/fs/ntfs.c`,
@@ -114,10 +157,10 @@ file" `\EFI\BOOT\BOOTX64.EFI` on `NOVA_EFI`).
    sector's sector count, as ntfsresize does; ntfsresize itself is GPL,
    so the method is reimplemented, not its code), then the partition
    entry is made smaller.
-4. **Reinstalling keeps the data.** On a disk where NovaOS is installed,
+2. **Reinstalling keeps the data.** On a disk where NovaOS is installed,
    "Reinstall NovaOS" replaces the ESP's system files and keeps the
    `NOVADATA` partition (drive C:, `C:\Users`).
-5. **The step's screenshots**: the Where and confirm pages are in
+3. **The step's screenshots**: the Where and confirm pages are in
    `docs/screenshots/` (`install-where.png`, `install-confirm.png`); the
    `beside` boot saves every page (`setup-*.png` in its output), and the
    rest join them once the pages above exist.

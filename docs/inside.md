@@ -22,12 +22,16 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
   - The ISO is both the live system and the installer. Started from a USB
     stick, NovaOS also writes its log to `\EFI\NOVA\bootlog.txt` on the
     stick.
-  - On an installed disk the bootloader adds a "NovaOS" firmware boot
-    entry, and starts a newly downloaded kernel once, falling back to the
-    previous one if the new one never reaches the desktop
-    ([updates.md](updates.md)).
-  - It hands the kernel the memory map, the GOP framebuffer, the ACPI RSDP
-    and a copy of the SMBIOS tables ([phase1-architecture.md](phase1-architecture.md)).
+  - On an installed disk the bootloader checks for its "NovaOS" firmware
+    boot entry (Setup adds it; the bootloader adds it when it is missing),
+    offers Windows in a boot menu when Windows is on the PC
+    ([design/installer.md](design/installer.md)), and starts a newly
+    downloaded kernel once, falling back to the previous one if the new
+    one never reaches the desktop ([updates.md](updates.md)).
+  - It hands the kernel the memory map, the GOP framebuffer, the ACPI RSDP,
+    a copy of the SMBIOS tables ([phase1-architecture.md](phase1-architecture.md))
+    and the firmware's runtime services table (boot protocol version 6),
+    which the kernel calls for firmware variables (`kernel/hal/efi.c`).
   - It also reads every file under `\EFI\NOVA\Files` (wallpapers, icon
     sets, sample pictures: content kept out of `kernel.elf`) and lists them
     for the kernel (boot protocol version 5), which installs

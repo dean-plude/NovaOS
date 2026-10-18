@@ -36,6 +36,8 @@ static UINTN  str16len(const CHAR16 *s);
 void console_init(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *conout);
 void console_puts(const char *s);
 void console_printf(const char *fmt, ...);
+/* bootmenu.c: the other systems on the PC, offered before NovaOS starts */
+void boot_menu(EFI_HANDLE image, EFI_SYSTEM_TABLE *st, EFI_HANDLE self);
 
 /* -----------------------------------------------------------------------
  * Panic — print message and triple-fault / spin
@@ -190,6 +192,43 @@ static BOOLEAN bytes_equal(const UINT8 *a, const UINT8 *b, UINTN n)
     return TRUE;
 }
 
+/* The last HARDDRIVE node of device path @dp, or NULL */
+static const UINT8 *dp_hd(const UINT8 *dp)
+{
+    const UINT8 *hd = NULL;
+    for (int k = 0; k < 64; k++) {
+        UINT16 len = (UINT16)(dp[2] | dp[3] << 8);
+        if (dp[0] == DP_TYPE_END || len < 4) break;
+        if (dp[0] == DP_TYPE_MEDIA && dp[1] == 1 && len == 42) hd = dp;
+        dp += len;
+    }
+    return hd;
+}
+
+/* Whether load option @o (@len bytes) starts @file (@fsz bytes, with its
+ * end node) on the partition of HARDDRIVE node @hd: Setup's entry
+ * (kernel/fs/setup.c) has the short form, the partition's node then the
+ * file, which the firmware expands; the file's name in any case */
+static BOOLEAN option_starts(const UINT8 *o, UINTN len, const UINT8 *hd, const UINT8 *file, UINTN fsz)
+{
+    if (!hd || len < 6) return FALSE;
+    UINTN at = 6;
+    while (at + 1 < len && (o[at] | o[at + 1])) at += 2;     /* past the description */
+    at += 2;
+    if (at + 42 + fsz > len) return FALSE;
+    const UINT8 *ohd = dp_hd(o + at);
+    if (!ohd || !bytes_equal(ohd, hd, 42)) return FALSE;
+    const UINT8 *rest = ohd + 42;
+    if ((UINTN)(rest - o) + fsz > len) return FALSE;
+    for (UINTN i = 0; i < fsz; i++) {
+        UINT8 a = rest[i], b = file[i];
+        if (a >= 'a' && a <= 'z') a = (UINT8)(a - 32);
+        if (b >= 'a' && b <= 'z') b = (UINT8)(b - 32);
+        if (a != b) return FALSE;
+    }
+    return TRUE;
+}
+
 /* BOOT_FLAG_BOOT_ENTRY (| BOOT_FLAG_ENTRY_ADDED), or 0 if there is none */
 static UINT64 ensure_boot_entry(void)
 {
@@ -229,7 +268,9 @@ static UINT64 ensure_boot_entry(void)
         UINTN sz = sizeof(cur);
         EFI_STATUS st = rt->GetVariable(name, &gv, &va, &sz, cur);
         if (st == EFI_NOT_FOUND) { if (free_num < 0) free_num = num; continue; }
-        if (!EFI_ERROR(st) && sz == opt_len && bytes_equal(cur + 4, opt + 4, opt_len - 4)) return BOOT_FLAG_BOOT_ENTRY;
+        if (!EFI_ERROR(st) && ((sz == opt_len && bytes_equal(cur + 4, opt + 4, opt_len - 4)) ||
+                               option_starts(cur, sz, dp_hd(dev), (const UINT8 *)li->FilePath, fsz)))
+            return BOOT_FLAG_BOOT_ENTRY;
     }
     if (free_num < 0) return 0;
 
@@ -847,6 +888,8 @@ EFI_STATUS __attribute__((ms_abi)) efi_main(
                                       EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
         g_boot_device = self->DeviceHandle;
     BOOLEAN live = booted_from_cd() || boot_file_exists(BOOTLOG_PATH);
+    if (!live)
+        boot_menu(ImageHandle, SystemTable, g_boot_device);   /* (Windows beside NovaOS) */
     CHAR16 *kernel_path = KERNEL_PATH;
     UINT64 recovery_flags = 0;
     int recovery = live ? RECOVERY_NORMAL : recovery_start(ImageHandle, SystemTable, g_boot_device, &recovery_flags);
@@ -960,6 +1003,7 @@ EFI_STATUS __attribute__((ms_abi)) efi_main(
     bi->smbios_size          = smbios_size;
     bi->files_base           = files;
     bi->files_count          = files_count;
+    bi->efi_runtime          = (UINT64)(UINTN)g_st->RuntimeServices;
 
     /* 9. The kernel entry expects the PHYSICAL address of BootInfo and
      *    derefs it through the physmap itself (PHYSMAP_BASE + phys).  All

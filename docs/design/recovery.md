@@ -184,3 +184,9 @@ startup repair. Together with the `update` boot's broken updates, this is
    `C:\Users`.
 3. **Settings > System > Recovery**: an "Advanced startup: Restart now"
    button (today `shutdown /r /o` in the Terminal).
+
+The Advanced startup menu is separate from the boot menu step 33.4 part 2
+added (`bootloader/src/bootmenu.c`, which lists Windows Boot Manager when
+Windows is on the PC: [installer.md](installer.md)), as Windows keeps its
+boot manager and its Advanced options apart: that menu shows first, and
+the Advanced startup menu after it when it is asked for.

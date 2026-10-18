@@ -2860,6 +2860,7 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
     p->exe_dir = exe->parent;
     p->con = um_console_ref(con);
     p->token = um_token_for_process(UmCurrent());        /* its creator's user (the desktop's: the default) */
+    p->session = UmCurrent() ? UmCurrent()->session : um_session_rid();   /* its creator's sign-in, or the screen's */
     /* a program whose manifest asks for administrator runs elevated, as
      * Windows starts it after its consent prompt (NovaOS asks nobody yet) */
     if (p->token && !um_token_elevated(p->token) && um_pe_wants_admin(exe) && um_elevate_process(p))
@@ -3266,6 +3267,7 @@ struct UmSpawnJob {
     UmProcess *proc;
     char       err[160];
     bool       done, abandoned, detached;
+    bool       service;                     /* in no account's sign-in (services.exe) */
 };
 
 static void spawn_free(UmSpawnJob *j)
@@ -3281,6 +3283,7 @@ static void spawn_free(UmSpawnJob *j)
 static void spawn_run(UmSpawnJob *j, bool yield)
 {
     UmProcess *p = um_spawn_image(j->exe, j->cwd, j->con, yield, j->err, sizeof(j->err));
+    if (p && j->service) p->session = 0;
     if (p) p = um_spawn_finish(p, j->exe, j->cmdline, NULL, j->err, sizeof(j->err));
     j->proc = p;
     j->done = true;
@@ -3302,7 +3305,7 @@ static void spawn_thread(void *arg)
     DesktopUnlock();
 }
 
-static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con, bool detached)
+static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con, bool detached, bool service)
 {
     UmSpawnJob *j = kzalloc(sizeof(*j));
     if (!j) return NULL;
@@ -3315,6 +3318,7 @@ static UmSpawnJob *spawn_start(RamNode *exe, const char *cmdline, RamNode *cwd, 
     j->cwd = cwd ? cwd : RamfsRoot();
     j->con = um_console_ref(con);
     j->detached = detached;
+    j->service = service;
     RamfsPin(exe);
     RamfsRef(j->cwd);
     if (!sched_create_thread_ex("spawn", spawn_thread, j, PRIO_DESKTOP, 64 * 1024)) {
@@ -3337,12 +3341,17 @@ bool UmIsGuiProgram(RamNode *exe)
 
 UmSpawnJob *UmSpawnStart(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con)
 {
-    return spawn_start(exe, cmdline, cwd, con, false);
+    return spawn_start(exe, cmdline, cwd, con, false, false);
 }
 
 bool UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd)
 {
-    return spawn_start(exe, cmdline, cwd, NULL, true) != NULL;
+    return spawn_start(exe, cmdline, cwd, NULL, true, false) != NULL;
+}
+
+bool UmSpawnService(RamNode *exe, const char *cmdline, RamNode *cwd)
+{
+    return spawn_start(exe, cmdline, cwd, NULL, true, true) != NULL;
 }
 
 bool UmSpawnPoll(UmSpawnJob *j, UmProcess **proc, char *err, int err_cap)
@@ -3594,6 +3603,23 @@ void UmKillConsole(UmConsole *con, UINT32 status)
         UmProcess *p = g_procs[i];
         if (p && p->con == con && !p->exited) UmKill(p, status);
     }
+}
+
+/* Sign-out: every program running in @rid's sign-in is ended */
+int UmEndSession(UINT32 rid)
+{
+    int n = 0;
+    for (int i = 0; i < UM_MAX_PROCS && rid; i++) {
+        UmProcess *p = g_procs[i];
+        if (p && p->session == rid && !p->exited) { UmKill(p, 1); n++; }
+    }
+    return n;
+}
+
+UINT32 UmCurrentSession(void)
+{
+    UmProcess *p = UmCurrent();
+    return p ? p->session : um_session_rid();
 }
 
 bool UmKillPid(UINT32 pid)

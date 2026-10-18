@@ -218,7 +218,7 @@ static void draw_wallpaper_in(const Theme *t, GdiRect r)
  * ----------------------------------------------------------------------- */
 typedef enum {
     ACT_NONE, ACT_APP, ACT_START, ACT_SEARCH, ACT_ICON, ACT_TASK, ACT_CLOCK,
-    ACT_PROG, ACT_RECENT, ACT_RESULT, ACT_POWER, ACT_MENU, ACT_SWALLOW, ACT_NET, ACT_WORKSPACE,
+    ACT_PROG, ACT_RECENT, ACT_RESULT, ACT_POWER, ACT_MENU, ACT_SWALLOW, ACT_NET, ACT_WORKSPACE, ACT_USER,
 } ActKind;
 
 typedef struct { GdiRect r; ActKind kind; int arg; } Hot;
@@ -391,6 +391,7 @@ typedef enum {
     MA_NONE, MA_OPEN_ICON, MA_EXPLORER_AT, MA_TERMINAL_AT, MA_SETTINGS_PAGE, MA_APP,
     MA_CLOSE_APP, MA_WIN_CLOSE, MA_WIN_MIN, MA_WIN_MAX, MA_WIN_RESTORE, MA_WIN_SNAP_L,
     MA_WIN_SNAP_R, MA_SHOW_DESKTOP, MA_THEME_NEXT, MA_SLEEP, MA_RESTART, MA_SHUTDOWN,
+    MA_LOCK, MA_SIGN_OUT, MA_SWITCH_USER,
 } MenuAct;
 
 typedef struct {
@@ -583,6 +584,9 @@ static void run_menu_item(const MenuItem *m)
     case MA_SLEEP:          power_sleep(); break;
     case MA_RESTART:        power_restart(); break;
     case MA_SHUTDOWN:       power_shutdown(); break;
+    case MA_LOCK:           LogonLock(); break;
+    case MA_SIGN_OUT:       LogonSignOut(um_session_rid()); break;
+    case MA_SWITCH_USER:    LogonSwitchTo((UINT32)m->arg); break;
     default: break;
     }
 }
@@ -714,6 +718,8 @@ static const struct { const char *name; const char *keys; int page; } g_setting_
     { "Personalization", "personalization wallpaper background theme colors", SETTINGS_PERSONALIZE },
     { "Storage",         "storage disk drive space memory ram",               SETTINGS_STORAGE },
     { "Network",         "network ethernet internet ip dns wifi certificates", SETTINGS_NETWORK },
+    { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
+    { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
     { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
     { "About",           "about version fonts licence",                       SETTINGS_ABOUT },
 };
@@ -986,8 +992,15 @@ static void draw_start_menu(void)
         initials[n++] = user[i] >= 'a' && user[i] <= 'z' ? (char)(user[i] - 32) : user[i];
         initials[n] = '\0';
     }
-    GdiFillCircle(cx + 18, by + 31, 17, GDI_C(0x6A, 0x4A, 0xC8));
-    GdiTextCenter(cx + 1, by + 24, 36, initials, GDI_WHITE);
+    GdiRect ub = RECT(cx - 6, by + 8, 46 + 12 + GdiTextW(greet) + 60, 46);   /* the account button: its menu */
+    if (hovered(ACT_USER, 0)) GdiRoundAlpha(ub, 8, GDI_WHITE, HOVER_ALPHA);
+    HOT_OV(ub, ACT_USER, 0);
+    char pic[96];
+    RamNode *pf = um_account_picture(um_session_rid(), pic, sizeof(pic)) ? RamfsResolve(NULL, pic + 2) : NULL;
+    if (!pf || pf->dir || !WallpaperDrawThumb(pf, RECT(cx + 1, by + 14, 34, 34))) {   /* (its picture: Settings, Accounts) */
+        GdiFillCircle(cx + 18, by + 31, 17, GDI_C(0x6A, 0x4A, 0xC8));
+        GdiTextCenter(cx + 1, by + 24, 36, initials, GDI_WHITE);
+    }
     GdiTextT(cx + 46, by + 14, greet, SH_TEXT2);
     GdiTextBold(cx + 46, by + 31, user, SH_TEXT);
 
@@ -1691,6 +1704,24 @@ static void run_action(const Hot *h)
         /* open upwards from the button */
         g_menu.y = r.y - (8 + g_menu.n * MENU_ROW) - 6;
         break; }
+    case ACT_USER: {                        /* Windows 11's account menu: settings, lock, sign out, the other accounts */
+        GdiRect r = h->r;
+        menu_begin(r.x, r.y - 4);
+        menu_add("Change account settings", MA_SETTINGS_PAGE, SETTINGS_ACCOUNTS, NULL, false);
+        menu_add("Lock", MA_LOCK, 0, NULL, false);
+        menu_add("Sign out", MA_SIGN_OUT, 0, NULL, false);
+        static UmAccount all[16];
+        int n = um_accounts_list(all, 16), seps = 0;
+        UINT32 me = um_session_rid();
+        for (int i = 0; i < n && g_menu.n < MENU_MAX; i++) {
+            if (all[i].rid == me || (all[i].flags & UM_ACCT_DISABLED)) continue;
+            char label[40];
+            ksnprintf(label, sizeof(label), "%s%s", all[i].full[0] ? all[i].full : all[i].name,
+                      um_session_signed_in(all[i].rid) ? " (signed in)" : "");
+            menu_add(label, MA_SWITCH_USER, (int)all[i].rid, NULL, !seps++);
+        }
+        g_menu.y = r.y - (8 + g_menu.n * MENU_ROW + (seps ? 9 : 0)) - 6;
+        break; }
     default: break;
     }
 }
@@ -2154,7 +2185,7 @@ void DesktopRun(void *arg)
         if (services && LogonTakeFirstSignIn()) {
             signed_in = true;
             RamNode *svc = RamfsResolve(NULL, "\\Windows\\System32\\services.exe");
-            if (!svc || !UmSpawnDetached(svc, "services /autostart", svc->parent))
+            if (!svc || !UmSpawnService(svc, "services /autostart", svc->parent))
                 kprintf("[SVC] Cannot start services.exe: %s\n", svc ? "out of memory" : "not installed");
         }
         /* an update's first start counts as good once this loop answers

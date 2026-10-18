@@ -23,7 +23,7 @@ ROOT_ID = r'ROOT\\HIDCLASS\\0000'
 _WORKING = r'[^\n]*\] This device is working properly\.'
 TESTS = [
     Test('vhidmini test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('vhidmini restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('vhidmini create device', 'vhidtest create',
          [r'vhidtest: registered ' + ROOT_ID, r'vhidtest create: \d+ passed, 0 failed']),

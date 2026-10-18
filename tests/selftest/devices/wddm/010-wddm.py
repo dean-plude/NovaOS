@@ -22,7 +22,7 @@ DOC = ('a WDDM display-only driver (wddmdod.sys) on QEMU\'s standard VGA, instal
 VGA_ID = '"PCI\\VEN_1234&DEV_1111"'
 TESTS = [
     Test('wddm test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('wddm restart', 'shutdown /r /t 0', [r'\[NT\] Test signing on'], reboot=True),
     Test('wddm install', r'pnputil /add-driver C:\Tests\Wddm\wddmdod.inf /install',
          [r'Driver package installed on device: PCI\\VEN_1234&DEV_1111',

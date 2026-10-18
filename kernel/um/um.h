@@ -50,6 +50,10 @@ RamNode   *UmFindProgram(RamNode *cwd, const char *name);
  * at end of file).  NULL with @err set on failure. */
 UmProcess *UmSpawn(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
                    char *err, int err_cap);
+/* UmSpawn as administrator without asking: the App Store's installers and
+ * unpacking (Windows' Store installs as the system) */
+UmProcess *UmSpawnElevated(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
+                           char *err, int err_cap);
 /* UmSpawn without waiting (from the desktop thread, under the desktop
  * lock): the program is mapped on a worker thread.  Poll with UmSpawnPoll
  * until it returns true (then *proc is the process, or NULL with @err set;
@@ -57,11 +61,16 @@ UmProcess *UmSpawn(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *c
  * if it started).  NULL if out of memory. */
 typedef struct UmSpawnJob UmSpawnJob;
 UmSpawnJob *UmSpawnStart(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con);
+/* ... run as administrator once UAC's prompt agrees (the Terminal's sudo,
+ * as Windows 11's sudo runs a command in the same window) */
+UmSpawnJob *UmSpawnStartElevated(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con);
 bool        UmSpawnPoll(UmSpawnJob *j, UmProcess **proc, char *err, int err_cap);
 void        UmSpawnAbandon(UmSpawnJob *j);
 /* Start a program to run on its own (UmSpawn + UmDetach) without waiting
  * for it to load; a failure is logged.  False if out of memory. */
 bool        UmSpawnDetached(RamNode *exe, const char *cmdline, RamNode *cwd);
+/* ... as administrator once UAC's prompt agrees (an .msi opened from the desktop) */
+bool        UmSpawnDetachedElevated(RamNode *exe, const char *cmdline, RamNode *cwd);
 /* ... as a service: in no account's sign-in, so a sign-out leaves it running */
 bool        UmSpawnService(RamNode *exe, const char *cmdline, RamNode *cwd);
 /* Whether @f is a 16-bit DOS program: an MZ image with no Windows header

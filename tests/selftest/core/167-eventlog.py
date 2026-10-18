@@ -39,7 +39,7 @@ def _from_start_menu(nova):
 
 
 TESTS = [
-    Test('evtlogtest', 'evtlogtest', [r'evtlogtest: \d+ passed, 0 failed'], timeout=120),
+    Test('evtlogtest', 'evtlogtest', [r'evtlogtest: \d+ passed, 0 failed'], timeout=120, elevated=True),
     Test('event viewer start menu', 'eventvwr --check NovaEventTest 4321 "NovaOS event log test"',
          [r'eventvwr: \d+ passed, 0 failed',
           r'eventvwr: System: The Application log file was cleared\.'],

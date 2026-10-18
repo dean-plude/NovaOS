@@ -9,6 +9,6 @@
 DOC = '`svctest` (a real service: start with arguments, status handshake, controls, stop and delete; a LocalSystem service runs elevated; CopyFile keeps file times; 64- and 32-bit)'
 
 TESTS = [
-    Test('service x64', 'svctest', [r'svctest: \d+ passed, 0 failed']),
-    Test('service x86', r'C:\Programs\x86\svctest.exe', [r'svctest: \d+ passed, 0 failed']),
+    Test('service x64', 'svctest', [r'svctest: \d+ passed, 0 failed'], elevated=True),
+    Test('service x86', r'C:\Programs\x86\svctest.exe', [r'svctest: \d+ passed, 0 failed'], elevated=True),
 ]

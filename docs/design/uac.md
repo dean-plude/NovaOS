@@ -1,10 +1,12 @@
 # Standard users and UAC, the Windows way (roadmap step 33.2)
 
-Status: first part (2026-10-18).  The consent prompt on the secure
-desktop, the policy that decides whether it asks, and integrity levels on
-tokens and processes are in; protecting `C:\Windows`, `C:\Programs` and
-`HKLM` from unelevated programs is the next part (below).  Accounts,
-tokens and sign-in are in [accounts.md](accounts.md).
+Status: done (2026-10-18), in two parts.  The consent prompt on the
+secure desktop, the policy that decides whether it asks and integrity
+levels on tokens and processes came first; the second part keeps
+programs that are not elevated from changing `C:\Windows`, `C:\Programs`
+and `HKLM` and adds the Terminal's `sudo`.  Windows' virtualization of
+those writes for old programs and the rest under "Next parts" follow.
+Accounts, tokens and sign-in are in [accounts.md](accounts.md).
 
 **The decision.**  NovaOS elevates exactly where Windows does and asks
 the way Windows asks: a program runs as administrator only after User
@@ -76,16 +78,51 @@ threads, ending it, its token's process, duplicating it into more) is
 refused.  The serial log says `[SEC] Integrity: <program> (level 2000) may
 not open process <pid> (level 3000) ...`.
 
+## The system's folders and keys
+
+A program that is not elevated (an administrator's limited half, or a
+standard user's) may read `C:\Windows`, `C:\Programs` (Program Files)
+and `HKEY_LOCAL_MACHINE` but not change them; an elevated program,
+services (SYSTEM) and the kernel may.  The refusal is Windows' own:
+`ACCESS_DENIED` (`ERROR_ACCESS_DENIED`), from the same checks.
+
+| Windows | NovaOS |
+|---|---|
+| `C:\Windows`, `C:\Program Files`: owner TrustedInstaller; TrustedInstaller, SYSTEM, Administrators full control, Users read and execute, protected from C:\'s | the same DACL for `C:\Windows` and `C:\Programs` when they have no descriptor of their own (`kernel/fs/fsec.c`), inherited by everything in them; a limited token has Administrators only for denying, so only Users' read and execute apply |
+| `C:\Windows\Temp`, `System32\Tasks`, `System32\spool\PRINTERS`: users may create files | the same, as C:\ has it (Authenticated Users change); also `System32\CertStore`, crypt32's stores, the user's ROOT store among them (Windows keeps it in HKCU) |
+| `HKLM` keys: SYSTEM and Administrators full control, Users read | `kernel/um/um_registry.c`: an open or create asking for a write right (`KEY_SET_VALUE`, `KEY_CREATE_SUB_KEY`, `DELETE`, ...) below `\Registry\Machine` by a caller that is not elevated is refused and a missing key is not made; `MAXIMUM_ALLOWED` and read opens give a handle that cannot set or delete values, delete or rename the key |
+| The Task Scheduler service writes its cache, lsass the machine's DPAPI key, the kernel the time zone (SeTimeZonePrivilege, every user's) | `taskschd.dll`, `crypt32` and `kernel32` write those keys in the program, so `...\Schedule\TaskCache`, `...\Cryptography\Protect` and `TimeZoneInformation` stay open to everyone |
+
+The serial log says `[SEC] Registry: <program> (not elevated) may not
+change machine key <name>` for each refused open.  `kernel32`'s
+`RegOpenKey`, `RegCreateKey`, the predefined keys and the helpers that
+open a subkey ask for `MAXIMUM_ALLOWED`, as Windows' do, so reading HKLM
+works for everyone.  `oleaut32`'s `LoadTypeLib` still loads a library it
+could not register (HKCR is HKLM's `SOFTWARE\Classes` here, with no
+per-user merge yet); `advapi32`'s service queries read the state without
+asking to write.
+
+Who runs elevated without the person asking: the App Store's installers
+and its 7-Zip unpacking (`UmSpawnElevated`, as Windows' Store installs as
+the system).  An `.msi` opened from File Explorer asks first (Windows'
+installer service elevates a per-machine install the same way).  In the
+Terminal, `sudo <command>` asks and runs the command's program as
+administrator in the same window, as Windows 11's `sudo` in its inline
+mode; the self-tests that change the machine (`regtest`, the MSI,
+service, printer, COM registration and driver tests, `reg add HKLM...`)
+are typed that way (`Test(elevated=True)` in `tools/selftest.py`) and the
+harness answers Yes, as one runs them on Windows.
+
 ## Next parts
 
-1. Protection of the system's folders and keys: `C:\Windows` and
-   `C:\Programs` get Windows' DACLs (SYSTEM, Administrators and
-   TrustedInstaller full control, Users read and execute), `HKLM` keys get
-   security descriptors checked on open, and Windows' UAC virtualization
-   sends an unelevated old 32-bit program's writes there to
+1. Windows' UAC virtualization: an old 32-bit program (no
+   `requestedExecutionLevel` in its manifest) that is not elevated has its
+   writes to `C:\Windows`, `C:\Programs` and `HKLM\SOFTWARE` sent to
    `C:\Users\<name>\AppData\Local\VirtualStore` and
-   `HKCU\Software\Classes\VirtualStore` instead.  The step's "Done when"
-   needs this.
+   `HKCU\Software\Classes\VirtualStore` instead of refused; HKCR merging
+   `HKCU\Software\Classes` for per-user COM registration; security
+   descriptors on registry keys (`RegSetKeySecurity`) in place of the
+   fixed rule.
 2. `TokenLinkedToken` at identification level for a caller that is not
    elevated (it is a usable token today; `shell32` no longer uses it, but
    `acltest` and `advapi32`'s service start do, and need a kernel path of

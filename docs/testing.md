@@ -333,7 +333,9 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   elevating to high integrity; a standard user's credential prompt
   refusing a wrong administrator password and running the installer and
   runas as the administrator; a medium-integrity process kept from
-  writing, reading or ending a high-integrity one), programs started
+  writing, reading or ending a high-integrity one; programs that are not
+  elevated refused changes to `C:\Windows`, `C:\Programs` and `HKLM`,
+  which they read, and the elevated one making them), programs started
   from the Start menu (Win+S, the name, Enter): `winhello`, a GUI
   program, with no Terminal window, and `hello`, a console program, in a
   Terminal, `crash kernel`, a deliberate kernel fault whose serial log

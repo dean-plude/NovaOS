@@ -26,7 +26,7 @@ SOURCE = 'http://10.0.2.2:18093'
 AX211 = r'PCI\\VEN_8086&DEV_51F1&SUBSYS_00948086'
 TESTS = [
     Test('ax211 test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
-         [r'completed successfully'], settle=2),
+         [r'completed successfully'], settle=2, elevated=True),
     Test('ax211 restart', 'shutdown /r /t 0',
          [r'\[PCI\] [0-9a-f:.]+ 1234:11e8 stands in for 8086:51f1, subsystem 00948086', r'\[NT\] Test signing on'],
          reboot=True),

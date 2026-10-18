@@ -553,7 +553,7 @@ static UINT16 pe_machine(RamNode *f)
 static void spawn(Store *s, int i, RamNode *exe, const char *cmdline, RamNode *cwd)
 {
     char err[160];
-    UmProcess *p = UmSpawn(exe, cmdline, cwd, NULL, err, sizeof(err));
+    UmProcess *p = UmSpawnElevated(exe, cmdline, cwd, NULL, err, sizeof(err));
     if (!p) {
         char m[96];
         ksnprintf(m, sizeof(m), "Could not start: %s", err);
@@ -605,7 +605,7 @@ static void unpack(Store *s, int i, RamNode *f)
         }
         cmd[n] = '\0';
     }
-    UmProcess *p = UmSpawn(z, cmd, f->parent, NULL, err, sizeof(err));
+    UmProcess *p = UmSpawnElevated(z, cmd, f->parent, NULL, err, sizeof(err));
     if (!p) {
         char m[96];
         ksnprintf(m, sizeof(m), "Could not start 7-Zip: %s", err);

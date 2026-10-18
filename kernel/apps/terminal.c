@@ -117,6 +117,7 @@ typedef struct {
     /* a selection (mouse drag): lines of the whole buffer, the prompt line last */
     bool     selecting, has_sel;
     int      sel_l0, sel_c0, sel_l1, sel_c1;
+    bool     sudo;              /* the line being run began "sudo": its program runs as administrator */
 } Term;
 
 /* -----------------------------------------------------------------------
@@ -260,6 +261,7 @@ static void cmd_help(Term *t)
         "  store close         close the App Store window\n"
         "  store updates       open the App Store's updates for NovaOS\n"
         "  winget search|install|list|upgrade|uninstall  the Windows Package Manager\n"
+        "  sudo <command>      run a program as administrator (UAC asks first)\n"
         "  mem  uptime  date  time  ver  whoami  sysinfo  dmesg\n"
         "  devices             the PCI devices and the driver each one has (also: lspci)\n"
         "  hwcheck             test the laptop drivers on modelled devices (codec, DSP, touchpad)\n"
@@ -2002,7 +2004,7 @@ static bool start_program(Term *t, RamNode *exe, const char *cmdline)
     UmConsoleSetSize(j->con, term_cols(t), term_rows(t));
     /* mapped on a worker thread, so a large program does not hold up the
      * desktop; term_tick picks the process up */
-    j->starting = UmSpawnStart(exe, cmdline, t->cwd, j->con);
+    j->starting = t->sudo ? UmSpawnStartElevated(exe, cmdline, t->cwd, j->con) : UmSpawnStart(exe, cmdline, t->cwd, j->con);
     if (!j->starting) {
         terr(t, "Not enough memory.");
         job_end(t);
@@ -2166,12 +2168,29 @@ static bool run_in_cmd(Term *t, const char *line)
 
 static void run_cmd_line(Term *t, char *cmdline, const char *original);
 
+/* "sudo COMMAND": COMMAND's program runs as administrator once UAC's
+ * prompt agrees, in this window, as Windows 11's sudo does inline */
+static char *sudo_rest(char *line)
+{
+    while (*line == ' ') line++;
+    if ((line[0] | 0x20) != 's' || (line[1] | 0x20) != 'u' || (line[2] | 0x20) != 'd' || (line[3] | 0x20) != 'o' ||
+        (line[4] && line[4] != ' ')) return NULL;
+    line += 4;
+    while (*line == ' ') line++;
+    return line;
+}
+
 static void run_cmd(Term *t, char *cmdline)
 {
+    char *rest = sudo_rest(cmdline);
+    if (rest && !*rest) { terr(t, "Usage: sudo <command>  (runs it as administrator, after UAC's prompt)"); return; }
+    if (rest) cmdline = rest;
     char *original = kmalloc((UINT32)strlen(cmdline) + 1);    /* (the line as typed, for programs) */
     if (!original) { terr(t, "Not enough memory."); return; }
     strcpy(original, cmdline);
+    t->sudo = rest != NULL;
     run_cmd_line(t, cmdline, original);
+    t->sudo = false;
     kfree(original);
 }
 

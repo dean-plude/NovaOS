@@ -3,7 +3,7 @@
 DOC = ('an installer that replaces a running program and finishes after a restart (`filetest install`, '
        '`shutdown /r`, `filetest installed`)')
 TESTS = [
-    Test('install in use', 'filetest install', [r'filetest install: \d+ passed, 0 failed']),
+    Test('install in use', 'filetest install', [r'filetest install: \d+ passed, 0 failed'], elevated=True),
     Test('restart', 'shutdown /r', [r'Pending file operations at boot: 2 done, 0 failed'], reboot=True),
-    Test('installed', 'filetest installed', [r'filetest installed: \d+ passed, 0 failed']),
+    Test('installed', 'filetest installed', [r'filetest installed: \d+ passed, 0 failed'], elevated=True),
 ]

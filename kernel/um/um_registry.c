@@ -753,6 +753,10 @@ static void wow_defaults(void)
 
 static void defaults(void)
 {
+    /* HKEY_CURRENT_CONFIG and HKEY_CLASSES_ROOT are there for every program
+     * to open (one not elevated may not make them) */
+    kpath("Machine\\SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current", false);
+    kpath("Machine\\SOFTWARE\\Classes", false);
     /* HKLM\SOFTWARE */
     RegKey *nt = kpath("Machine\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", false);
     if (!has_value(nt, "ProductName")) {
@@ -1201,7 +1205,7 @@ static void key_ob_destroy(UmObject *o)
 
 /* Lock order: a process's handle lock, then g_reg (closing a key handle
  * takes g_reg under it) — so handles are looked up and made without g_reg. */
-static UINT64 new_key_handle(UmProcess *p, RegKey *k, UINT32 reg_view)
+static UINT64 new_key_handle(UmProcess *p, RegKey *k, UINT32 reg_view, bool known, UINT32 granted)
 {
     UmObject *o = kzalloc(sizeof(*o));
     if (!o) { um_lock_shared(&g_reg); key_unref(k); um_unlock_shared(&g_reg); return 0; }
@@ -1212,7 +1216,7 @@ static UINT64 new_key_handle(UmProcess *p, RegKey *k, UINT32 reg_view)
     o->reg_view = reg_view;
     o->destroy = key_ob_destroy;                            /* the caller referenced @k for us */
     o->free_unlocked = true;                                /* (g_reg) */
-    UINT64 h = um_handle_new_object(p, o);
+    UINT64 h = um_handle_new_object_access(p, o, known, granted);
     um_ob_unref(o);                                         /* the handle holds it (or it goes now) */
     return h;
 }
@@ -1224,6 +1228,14 @@ static RegKey *key_of(UINT64 h, UmObject **ob)
     if (!o) return NULL;
     *ob = o;
     return (RegKey *)o->ptr;
+}
+
+/* Whether handle @h may @right (a handle opened for reading on a machine
+ * key may not change it; others' rights are not recorded) */
+static bool key_may(UINT64 h, UINT32 right)
+{
+    UINT32 granted;
+    return !um_handle_granted(UmCurrent(), h, &granted) || (granted & right);
 }
 
 /* -----------------------------------------------------------------------
@@ -1324,6 +1336,76 @@ static bool in_sam(const RegKey *k)
 
 static UINT32 view_path(RegKey *start, const UINT16 *path, UINT32 n, UINT32 reg_view, bool leave_wow,
                         UINT16 **out, UINT32 *out_n);
+static UINT32 full_name(RegKey *k, UINT16 *w, UINT32 cap);
+static bool path_prefix(const UINT16 *path, UINT32 n, const char *prefix, UINT32 pn);
+
+/* HKEY_LOCAL_MACHINE is the machine's.  Windows' DACLs on its keys give
+ * SYSTEM and Administrators full control and Users read, so a program
+ * that is not elevated may open and read any of it but not change it:
+ * write rights on an open are refused (ACCESS_DENIED), a key that is not
+ * there is not made, and a handle opened for reading (MAXIMUM_ALLOWED
+ * among them) cannot set or delete values or the key.  The keys below
+ * are written in the program by NovaOS DLLs where Windows' own service
+ * writes them for every user (the Task Scheduler's cache, the machine's
+ * DPAPI key that lsass keeps, the time zone the kernel sets for a user
+ * holding SeTimeZonePrivilege), so they stay open to everyone. */
+#define KEY_WRITE_RIGHTS 0x000D0026u    /* KEY_SET_VALUE, KEY_CREATE_SUB_KEY, KEY_CREATE_LINK, DELETE, WRITE_DAC, WRITE_OWNER */
+#define KEY_READ_RIGHTS  0x00020019u    /* KEY_READ */
+
+static UINT32 key_rights(UINT32 access)
+{
+    UINT32 m = access & 0x00FF00FFu & ~0x0300u;             /* (the WOW64 view bits are no right) */
+    if (access & 0x80000000u) m |= KEY_READ_RIGHTS;
+    if (access & 0x40000000u) m |= 0x00020006u;             /* KEY_WRITE */
+    if (access & 0x20000000u) m |= KEY_READ_RIGHTS;
+    if (access & 0x10000000u) m |= 0x000F003Fu;             /* KEY_ALL_ACCESS */
+    return m;
+}
+
+static bool machine_open_key(const UINT16 *full, UINT32 n)
+{
+    static const char *const open[] = {
+        "Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache",
+        "Microsoft\\Cryptography\\Protect",
+    };
+    if (path_prefix(full, n, "Machine\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation",
+                    (UINT32)strlen("Machine\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation"))) return true;
+    if (!path_prefix(full, n, "Machine\\SOFTWARE", 16) || n <= 17) return false;
+    const UINT16 *sub = full + 17;
+    UINT32 len = n - 17;
+    if (path_prefix(sub, len, "WOW6432Node", 11)) { if (len <= 12) return false; sub += 12; len -= 12; }
+    for (unsigned i = 0; i < sizeof(open) / sizeof(open[0]); i++)
+        if (path_prefix(sub, len, open[i], (UINT32)strlen(open[i]))) return true;
+    return false;
+}
+
+/* Whether the key @path names below @start (or @resolved below the root,
+ * the view's path) is one of HKLM's that the caller may not change.  Under
+ * g_reg (shared) */
+static bool machine_locked(RegKey *start, const UINT16 *path, UINT32 n, const UINT16 *resolved, UINT32 rn)
+{
+    UINT32 cap = (resolved ? rn : n) + 1;
+    if (!resolved) for (RegKey *k = start; k; k = k->parent) cap += k->nlen + 1;
+    UINT16 *raw = kmalloc(2 * (size_t)cap * 2), *full = raw ? raw + cap : NULL;
+    if (!raw) return true;                                  /* (no memory: refused) */
+    UINT32 rawn = 0;
+    if (resolved) { memcpy(raw, resolved, 2 * (size_t)rn); rawn = rn; }
+    else {
+        rawn = full_name(start, raw, cap);
+        raw[rawn++] = '\\';
+        memcpy(raw + rawn, path, 2 * (size_t)n);
+        rawn += n;
+    }
+    /* one backslash between names, none in front; "\REGISTRY\" left out */
+    UINT32 fn = 0;
+    for (UINT32 i = 0; i < rawn; i++)
+        if (raw[i] != '\\' || (fn && full[fn - 1] != '\\')) full[fn++] = raw[i];
+    if (fn && full[fn - 1] == '\\') fn--;
+    UINT32 skip = path_prefix(full, fn, "REGISTRY", 8) && !resolved ? (fn > 8 ? 9 : 8) : 0;
+    bool locked = path_prefix(full + skip, fn - skip, "Machine", 7) && !machine_open_key(full + skip, fn - skip);
+    kfree(raw);
+    return locked;
+}
 
 static UINT32 open_or_create(UINT64 handle_ptr, UINT64 oa_ptr, bool create, UINT32 options, UINT32 access, UINT64 disp_ptr)
 {
@@ -1339,6 +1421,8 @@ static UINT32 open_or_create(UINT64 handle_ptr, UINT64 oa_ptr, bool create, UINT
     UINT32 reg_view = (access & 0x0200) ? 32 : (access & 0x0100) ? 64 :
                       rob && rob->reg_view ? rob->reg_view : p->wow ? 32 : 64;
     bool leave_wow = (access & 0x0100) && rob && rob->reg_view == 32;
+    UINT32 want = key_rights(access);
+    bool admin = um_caller_is_admin();                      /* (before g_reg: it may read the accounts) */
     /* A key that is there: found side by side with other readers */
     um_lock_shared(&g_reg);
     if (!st && start->deleted) st = ST_KEY_DELETED;
@@ -1346,8 +1430,13 @@ static UINT32 open_or_create(UINT64 handle_ptr, UINT64 oa_ptr, bool create, UINT
     UINT32 rn = 0;
     if (!st && (p->wow || (rob && rob->reg_view) || (access & 0x0300)))
         st = view_path(start, path, n, reg_view, leave_wow, &resolved, &rn);
+    /* HKLM: refused write rights for a caller that is not elevated, and
+     * not made (a missing key opened is not found, as on Windows) */
+    bool locked = !st && !admin && machine_locked(start, path, n, resolved, rn);
     UINT32 found = st ? st : resolved ? walk(g_root, resolved, rn, false, false, &k, NULL)
                                       : walk(start, path, n, false, false, &k, NULL);
+    if (locked && ((!found && (want & KEY_WRITE_RIGHTS)) || (found == ST_OBJECT_NAME_NOT_FOUND && create)))
+        found = st = ST_ACCESS_DENIED;
     if (!found) __atomic_add_fetch(&k->refs, 1, __ATOMIC_RELAXED);   /* for the new handle */
     kfree(resolved);
     resolved = NULL;
@@ -1369,10 +1458,20 @@ static UINT32 open_or_create(UINT64 handle_ptr, UINT64 oa_ptr, bool create, UINT
         um_unlock_shared(&g_reg);
         if (sam) { key_unref(k); st = ST_ACCESS_DENIED; }
     }
+    if (st == ST_ACCESS_DENIED && locked) {
+        char name[128];
+        int o = 0;
+        for (UINT32 i = 0; i < n && o < (int)sizeof(name) - 1; i++) name[o++] = path[i] < 0x80 ? (char)path[i] : '?';
+        name[o] = '\0';
+        kprintf("[SEC] Registry: %s (not elevated) may not change machine key %s\n", p->name, name);
+    }
     if (path != small) kfree(path);
     if (rob) um_ob_unref(rob);
     UINT64 h = 0;
-    if (!st) { h = new_key_handle(p, k, reg_view); if (!h) st = ST_TOO_MANY_HANDLES; }
+    if (!st) {                                              /* (a locked key's handle: for reading only) */
+        h = new_key_handle(p, k, reg_view, locked, (access & 0x02000000u ? KEY_READ_RIGHTS : want) & ~KEY_WRITE_RIGHTS);
+        if (!h) st = ST_TOO_MANY_HANDLES;
+    }
     if (st) return st;
     UINT32 disp = created ? 1 : 2;                          /* REG_CREATED_NEW_KEY / REG_OPENED_EXISTING_KEY */
     if (!NT_SUCCESS(CopyToUser((void *)(uintptr_t)handle_ptr, &h, 8)) || !put_ret(disp_ptr, disp)) {
@@ -1398,8 +1497,10 @@ static UINT64 sys_delete_key(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     (void)a2; (void)a3; (void)a4;
     UmObject *o;
     RegKey *k = key_of(a1, &o);
+    bool may = key_may(a1, 0x10000u /* DELETE */);           /* (the handle lock before g_reg) */
     um_lock_excl(&g_reg);
-    UINT32 st = !k ? ST_INVALID_HANDLE : k->deleted ? ST_KEY_DELETED : (k->child || k == g_root || k->parent == g_root) ? ST_CANNOT_DELETE : ST_SUCCESS;
+    UINT32 st = !k ? ST_INVALID_HANDLE : !may ? ST_ACCESS_DENIED :
+                k->deleted ? ST_KEY_DELETED : (k->child || k == g_root || k->parent == g_root) ? ST_CANNOT_DELETE : ST_SUCCESS;
     if (!st) detach(k);
     um_unlock_excl(&g_reg);
     if (k) um_ob_unref(o);
@@ -1421,9 +1522,11 @@ static UINT64 sys_set_value_key(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *o;
     UINT32 n, st = get_ustr(a2, name, name_cap(name, small), &n);
     RegKey *k = st ? NULL : key_of(a1, &o);
+    bool may = key_may(a1, 0x2u /* KEY_SET_VALUE */);
     um_lock_shared(&g_reg);
     if (k) um_lock(key_lock(k));
-    if (!st) st = !k ? ST_INVALID_HANDLE : k->deleted ? ST_KEY_DELETED : set_value(k, name, n, (UINT32)a4, data, size) ? ST_SUCCESS : ST_NO_MEMORY;
+    if (!st) st = !k ? ST_INVALID_HANDLE : !may ? ST_ACCESS_DENIED :
+                  k->deleted ? ST_KEY_DELETED : set_value(k, name, n, (UINT32)a4, data, size) ? ST_SUCCESS : ST_NO_MEMORY;
     if (k) um_unlock(key_lock(k));
     um_unlock_shared(&g_reg);
     if (k) um_ob_unref(o);
@@ -1528,9 +1631,11 @@ static UINT64 sys_delete_value_key(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *o;
     UINT32 n, st = get_ustr(a2, name, name_cap(name, small), &n);
     RegKey *k = st ? NULL : key_of(a1, &o);
+    bool may = key_may(a1, 0x2u /* KEY_SET_VALUE */);
     um_lock_shared(&g_reg);
     if (!st) {
         if (!k) st = ST_INVALID_HANDLE;
+        else if (!may) st = ST_ACCESS_DENIED;
         else if (k->deleted) st = ST_KEY_DELETED;
         else {
             um_lock(key_lock(k));
@@ -1768,9 +1873,11 @@ static UINT64 sys_rename_key(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     UmObject *o;
     UINT32 n, st = get_ustr(a2, name, NAME_MAX_CHARS, &n);
     RegKey *k = st ? NULL : key_of(a1, &o);
+    bool may = key_may(a1, 0x6u /* KEY_WRITE */);
     um_lock_excl(&g_reg);
     if (!st) {
         if (!k) st = ST_INVALID_HANDLE;
+        else if (!may) st = ST_ACCESS_DENIED;
         else if (k->deleted || !k->parent) st = ST_KEY_DELETED;
         else if (!n) st = ST_OBJECT_NAME_INVALID;
         else if (find_child(k->parent, name, n)) st = ST_OBJECT_NAME_COLLISION;

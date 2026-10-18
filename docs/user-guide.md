@@ -265,6 +265,14 @@ user name and password instead.  Nothing else on the screen takes the
 keyboard or the mouse while it shows.  Starting a program with **Run as
 administrator** (ShellExecute's `runas`) asks the same way.
 
+Programs that are not elevated may read `C:\Windows`, `C:\Programs` and
+`HKEY_LOCAL_MACHINE` but not change them, as on Windows: only an
+installer or a program run as administrator writes there.  In the
+Terminal, `sudo <command>` runs a program as administrator in the same
+window after the same prompt, as Windows 11's `sudo` does.  Programs the
+App Store installs, and `.msi` packages opened from File Explorer (after
+the prompt), install as administrator.
+
 Programs from anywhere else install as on Windows: download the installer,
 `.msi` or archive, then run the installer, or unpack the archive (with
 7-Zip from the App Store) and run the program.  NovaOS does not yet

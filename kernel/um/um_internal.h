@@ -453,6 +453,7 @@ UINT64     um_handle_new_object(UmProcess *p, UmObject *o);   /* takes a referen
 /* The same remembering the access it was granted (when @known), set
  * before the handle can be seen: no second trip through the process lock */
 UINT64     um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32 granted);
+bool       um_handle_granted(UmProcess *p, UINT64 hv, UINT32 *granted);   /* false: the handle's rights are not recorded (all) */
 void       um_handles_full(UmProcess *p);  /* @p's handle table is full: say once in the log what holds it */
 UmObject  *um_handle_object(UmProcess *p, UINT64 h, UmObType type);   /* referenced; NULL if bad */
 /* ... also from a handle with only SYNCHRONIZE and the limited query right
@@ -483,12 +484,16 @@ typedef struct {
     const UINT8    *runtime;            /* STARTUPINFO's lpReserved2 bytes (the C runtime's), or NULL */
     UINT32          runtime_len;
     bool            suspended;          /* CREATE_SUSPENDED: the first thread waits for NtResumeThread */
+    bool            elevated;           /* as administrator, nobody asked (UmSpawnElevated) */
 } UmSpawnOpts;
 UmProcess *um_spawn_ex(RamNode *exe, const char *cmdline, RamNode *cwd, UmConsole *con,
                        const UmSpawnOpts *o, char *err, int err_cap);
 /* um_spawn_ex in two steps: map the images (with @yield, the desktop lock
  * is let go meanwhile; see um.c), then finish under the caller's locks */
-UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield, char *err, int err_cap);
+/* @elevate: UM_ELEVATE_MANIFEST as the program's manifest asks, UM_ELEVATE_ASK
+ * UAC's prompt as for requireAdministrator, UM_ELEVATE_SILENT as administrator without asking */
+enum { UM_ELEVATE_MANIFEST, UM_ELEVATE_ASK, UM_ELEVATE_SILENT };
+UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield, int elevate, char *err, int err_cap);
 UmProcess *um_spawn_finish(UmProcess *p, RamNode *exe, const char *cmdline, const UmSpawnOpts *o,
                            char *err, int err_cap);
 /* A path from OBJECT_ATTRIBUTES (UTF-8, NT prefix removed); *attrs gets

@@ -526,7 +526,8 @@ bool AppRunMsi(RamNode *msi)
     char path[RAMFS_PATH_MAX], cmd[RAMFS_PATH_MAX + 32];
     RamfsPath(msi, path, sizeof(path));
     ksnprintf(cmd, sizeof(cmd), "msiexec /i \"%s\"", path);
-    return UmSpawnDetached(exe, cmd, msi->parent);
+    /* (installing for the machine: UAC asks, as Windows' installer service does) */
+    return UmSpawnDetachedElevated(exe, cmd, msi->parent);
 }
 
 void AppRunProgram(RamNode *exe, const char *cmdline)

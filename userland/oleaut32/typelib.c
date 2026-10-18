@@ -907,6 +907,9 @@ TLAPI HRESULT WINAPI LoadTypeLibEx(LPCOLESTR file, REGKIND kind, ITypeLib **out)
     if (kind == REGKIND_REGISTER || (kind == REGKIND_DEFAULT && !fullpath)) {
         if (!lib->builtin) {
             hr = RegisterTypeLib(*out, lib->path, 0);
+            /* (REGKIND_DEFAULT: a program that is not elevated may not write
+             * HKCR, which is HKLM's here; the library still loads) */
+            if (FAILED(hr) && kind == REGKIND_DEFAULT) hr = S_OK;
             if (FAILED(hr)) { ITypeLib_Release(*out); *out = 0; }
         }
     }

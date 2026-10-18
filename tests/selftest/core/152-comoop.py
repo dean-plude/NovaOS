@@ -8,6 +8,6 @@
 # and the class object path.  Each bitness talks to both servers.
 DOC = '`comoop` (cross-process COM: LocalServer32 activation, the standard marshaler and RPC channel, the IDispatch proxy/stub, BSTR/VARIANT marshalling; 64- and 32-bit clients and servers)'
 TESTS = [
-    Test('comoop x64', 'comoop', [r'comoop: \d+ passed, 0 failed \(64-bit\)'], timeout=300),
-    Test('comoop x86', r'C:\Programs\x86\comoop.exe', [r'comoop: \d+ passed, 0 failed \(32-bit\)'], timeout=300),
+    Test('comoop x64', 'comoop', [r'comoop: \d+ passed, 0 failed \(64-bit\)'], timeout=300, elevated=True),
+    Test('comoop x86', r'C:\Programs\x86\comoop.exe', [r'comoop: \d+ passed, 0 failed \(32-bit\)'], timeout=300, elevated=True),
 ]

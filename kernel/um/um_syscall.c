@@ -538,6 +538,18 @@ UINT64 um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32
     return hv;
 }
 
+bool um_handle_granted(UmProcess *p, UINT64 hv, UINT32 *granted)
+{
+    bool known = false;
+    um_lock_shared(&p->lock);
+    int i = slot_lock(p, hv);
+    UmHandle *h = i < 0 ? NULL : handle(p, hv);
+    if (h && h->access_known) { known = true; *granted = h->access; }
+    if (i >= 0) slot_unlock(p, i);
+    um_unlock_shared(&p->lock);
+    return known;
+}
+
 /* The object behind @h (with a reference the caller drops), or NULL.
  * NtCurrentThread() (-2) names the calling thread; type 0 matches any.
  * A handle to a process or thread of a higher integrity level (opened
@@ -2494,7 +2506,7 @@ static UINT64 sys_nova_create_process(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
         RamfsPin(exe);
         RamfsRef(cwd);
         pinned = true;
-        c = um_spawn_image(exe, cwd, con, true, err, sizeof(err));
+        c = um_spawn_image(exe, cwd, con, true, UM_ELEVATE_MANIFEST, err, sizeof(err));
         if (!c) {
             kprintf("[UM] %s (PID %u): CreateProcess(%s) failed: %s\n", p->name, p->pid, image, err);
             st = strstr(err, "not found") ? 0xC0000135u : strstr(err, "memory") ? ST_NO_MEMORY :

@@ -9,6 +9,6 @@ DOC = ('`msiqtest` (Windows Installer: 32-bit packages into SysWOW64, product in
        'source lists, patch applicability; 64- and 32-bit)')
 
 TESTS = [
-    Test('msi queries x64', 'msiqtest', [r'msiqtest: \d+ passed, 0 failed']),
-    Test('msi queries x86', r'C:\Programs\x86\msiqtest.exe', [r'msiqtest: \d+ passed, 0 failed']),
+    Test('msi queries x64', 'msiqtest', [r'msiqtest: \d+ passed, 0 failed'], elevated=True),
+    Test('msi queries x86', r'C:\Programs\x86\msiqtest.exe', [r'msiqtest: \d+ passed, 0 failed'], elevated=True),
 ]

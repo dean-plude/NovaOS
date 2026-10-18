@@ -39,6 +39,67 @@ static const UINT8 g_root_dacl[] = {
 };
 _Static_assert(sizeof(g_root_dacl) == 116, "the root's DACL size");
 
+/* The system's folders, C:\Windows and C:\Programs (Program Files), when
+ * they have no descriptor of their own: Windows' DACL for them, protected
+ * from the root's, owned by TrustedInstaller.  TrustedInstaller, SYSTEM
+ * and Administrators have full control, Users read and execute, so a
+ * program that is not elevated (Administrators only for denying in its
+ * token, kernel/um/um_security.c) may not change anything in them, as on
+ * Windows.  (Windows' CREATOR OWNER entry is left out: here every node's
+ * creator would be the first account.) */
+static const UINT8 g_trusted_installer[] = {        /* S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464 */
+    1, 6, 0, 0, 0, 0, 0, 5, 80, 0, 0, 0, 0xB5, 0x89, 0xFB, 0x38, 0x19, 0x84, 0xC2, 0xCB,
+    0x5C, 0x6C, 0x23, 0x6D, 0x57, 0x00, 0x77, 0x6E, 0xC0, 0x02, 0x64, 0x87 };
+static const UINT8 g_system_dacl[] = {
+    2, 0, 116, 0, 4, 0, 0, 0,
+    ROOT_ACE(0x03, 40, 0x001F01FFu), 1, 6, 0, 0, 0, 0, 0, 5, 80, 0, 0, 0, 0xB5, 0x89, 0xFB, 0x38, 0x19, 0x84, 0xC2, 0xCB,
+                                     0x5C, 0x6C, 0x23, 0x6D, 0x57, 0x00, 0x77, 0x6E, 0xC0, 0x02, 0x64, 0x87,  /* TrustedInstaller */
+    ROOT_ACE(0x03, 20, 0x001F01FFu), 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0,                   /* SYSTEM */
+    ROOT_ACE(0x03, 24, 0x001F01FFu), 1, 2, 0, 0, 0, 0, 0, 5, 0x20, 0, 0, 0, 0x20, 2, 0, 0,  /* Administrators */
+    ROOT_ACE(0x03, 24, 0x001200A9u), 1, 2, 0, 0, 0, 0, 0, 5, 0x20, 0, 0, 0, 0x21, 2, 0, 0,  /* Users: read and execute */
+};
+_Static_assert(sizeof(g_system_dacl) == 116, "the system folders' DACL size");
+
+/* The folders in them that Windows lets every user write: C:\Windows\Temp,
+ * System32\Tasks (the Task Scheduler's, which taskschd.dll writes in the
+ * program here), System32\CertStore (crypt32's certificate stores, the
+ * user's ROOT store among them, which Windows keeps in HKCU) and
+ * System32\spool\PRINTERS (spool files, written by winspool.drv in the
+ * printing program).  As C:\ has it: Authenticated
+ * Users change. */
+static const UINT8 g_shared_dacl[] = {
+    2, 0, 96, 0, 4, 0, 0, 0,
+    ROOT_ACE(0x03, 20, 0x001F01FFu), 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0,                   /* SYSTEM */
+    ROOT_ACE(0x03, 24, 0x001F01FFu), 1, 2, 0, 0, 0, 0, 0, 5, 0x20, 0, 0, 0, 0x20, 2, 0, 0,  /* Administrators */
+    ROOT_ACE(0x03, 20, 0x001301BFu), 1, 1, 0, 0, 0, 0, 0, 5, 11, 0, 0, 0,                   /* Authenticated Users */
+    ROOT_ACE(0x03, 24, 0x001200A9u), 1, 2, 0, 0, 0, 0, 0, 5, 0x20, 0, 0, 0, 0x21, 2, 0, 0,  /* Users */
+};
+_Static_assert(sizeof(g_shared_dacl) == 96, "the shared folders' DACL size");
+
+static bool named(const RamNode *n, const char *s)
+{
+    const char *a = n->name;
+    for (; *a && *s; a++, s++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a, y = *s >= 'A' && *s <= 'Z' ? (char)(*s + 32) : *s;
+        if (x != y) return false;
+    }
+    return !*a && !*s;
+}
+
+/* @n's built-in DACL (above), if it is one of those folders on C: */
+static const UINT8 *builtin_dacl(const RamNode *n)
+{
+    if (!n->dir || !n->parent) return NULL;
+    const RamNode *p = n->parent, *g = p->parent, *gg = g ? g->parent : NULL;
+    if (p == RamfsRoot()) return named(n, "Windows") || named(n, "Programs") ? g_system_dacl : NULL;
+    if (g == RamfsRoot() && named(p, "Windows")) return named(n, "Temp") ? g_shared_dacl : NULL;
+    if (gg == RamfsRoot() && named(g, "Windows") && named(p, "System32"))
+        return named(n, "Tasks") || named(n, "CertStore") ? g_shared_dacl : NULL;
+    if (gg && gg->parent == RamfsRoot() && named(gg, "Windows") && named(g, "System32") && named(p, "spool"))
+        return named(n, "PRINTERS") ? g_shared_dacl : NULL;
+    return NULL;
+}
+
 #define GENERIC_READ    0x80000000u
 #define GENERIC_WRITE   0x40000000u
 #define GENERIC_EXECUTE 0x20000000u
@@ -195,10 +256,22 @@ static bool view_of(RamNode *n, View *v, UINT8 *buf)
     v->group = g_users;
     v->dacl_present = true;
     if (!n->parent) { v->dacl = g_root_dacl; return true; }     /* the root's own */
+    const UINT8 *own = builtin_dacl(n);
+    if (own) {                                                  /* a system folder's */
+        v->owner = g_trusted_installer;
+        v->dacl = own;
+        v->control = SE_DACL_PROTECTED;
+        return true;
+    }
     v->control = SE_DACL_AUTO_INHERITED;
     int depth = 1;
     RamNode *a = n->parent;
-    for (; a->parent && !a->sd; a = a->parent) depth++;
+    const UINT8 *from = NULL;
+    for (; a->parent && !a->sd && !(from = builtin_dacl(a)); a = a->parent) depth++;
+    if (from) {                                                 /* below a system folder: its owner too */
+        v->owner = g_trusted_installer;
+        return inherit(n, from, depth, buf, DACL_MAX, &v->dacl);
+    }
     if (!a->sd) return inherit(n, g_root_dacl, depth, buf, DACL_MAX, &v->dacl);
     View f;
     parse(a->sd, &f);

@@ -162,10 +162,15 @@ spoolsv.exe ── an ipp:// ipps:// http:// https:// port (spoolsv/ipp.c)
 
 ## To do
 
-1. **The "Done when" check**: Notepad and SumatraPDF list the printer and
-   print a page to the PDF printer and to the IPP printer (the test host's
-   `tools/ippprinter.py`) in the app corpus, and the output matches a
-   reference file. This ticks step 33.5.
+1. ~~**The "Done when" check**~~ Done: in the app corpus
+   (`tools/appcorpus.py`, `App(printer=True)`), Notepad++ (Windows'
+   Notepad is not redistributable) and SumatraPDF print from their Print
+   dialog (Ctrl+P; the printer chosen in its list) to the corpus host's
+   `tools/ippprinter.py`, whose page must match
+   `tests/reference/notepad++-print.png` / `sumatrapdf-print.png`, and to
+   Microsoft Print to PDF through its Save As box; `spooltest same` checks
+   the saved PDF is byte for byte what the IPP printer got. Step 33.5 is
+   done.
 2. **Finding printers**: DNS-SD (`_ipp._tcp`, `_ipps._tcp` over mDNS) and
    WS-Discovery, so Settings lists the printers on the network instead of
    asking for an address; the queue in Settings (pause, cancel) and a test

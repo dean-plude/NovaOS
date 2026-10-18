@@ -1,5 +1,12 @@
 {
-  "deps": ["msvcrt", "kernel32", "ntdll"],
+  "deps": [
+    "advapi32",
+    "user32",
+    "msvcrt",
+    "kernel32",
+    "ntdll"
+  ],
+  "file": "winspool.drv",
   "ordinals": {
     "GetDefaultPrinterA": 201,
     "SetDefaultPrinterA": 202,

@@ -14234,6 +14234,54 @@ compiles them, and the first of them are built and tested.
 New core self-test `xamlbasetest` (64-bit, 46 checks) checks NovaOS's WRL (QueryInterface,
 weak references, delegates, events, strings) and the built components.
 
+## Accounts in Settings, and fast user switching
+
+Second part of roadmap step 33.1 ([design](../design/accounts.md)).
+Accounts could be made only by programs (`NetUserAdd`), and the lock
+screen offered only the account that locked it.  Now Settings has
+Windows 11's Accounts page: your info with your picture, type and
+password (change it, or pick a picture from the wallpaper folder), and
+the other users, where an administrator adds an account (name, password
+twice, Standard user or Administrator), changes an account's type or
+removes it with its files.  The Start menu's account button opens a menu
+with "Change account settings", Lock, Sign out and the other accounts.
+
+Every program now runs in the sign-in of the account it started under,
+and every window belongs to its program's sign-in.  Signing in as a
+second account from the lock screen or the sign-in screen switches: the
+first account's windows are put away with their programs still running,
+and come back with their focus when it signs in again.  Sign-out (Start,
+or `ExitWindowsEx` with `EWX_LOGOFF`) ends an account's programs and
+closes its windows; an account that is signed in cannot be deleted.
+Services run in no account's sign-in, so a sign-out leaves them alone.
+
+The new core self-test `switchtest` does it as a person would: it adds
+an account in Settings by typing into the form, switches to it from the
+lock screen (a wrong password refused first) while its own program keeps
+running, checks the new profile and hive, switches back and signs the
+second account out.
+
+## NovaOS starts first beside Windows, and offers Windows
+
+Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
+PC with Windows already has "Windows Boot Manager" first in the
+firmware's `BootOrder`, so NovaOS installed beside it was only reachable
+through the firmware's boot menu.  Setup now finishes by adding a
+"NovaOS" boot entry for its own EFI System Partition and putting it first,
+with every other entry kept after it, as Windows Setup does.  The kernel
+calls the firmware's variable services for that (`kernel/hal/efi.c`): the
+boot loader hands over the runtime services table (boot protocol 6) and
+each call runs in physical mode, on page tables that map the firmware's
+memory one to one, with interrupts off and the FPU state kept.  The entry
+is the short form `HD(...)/\EFI\BOOT\BOOTX64.EFI`, and the boot loader
+recognises it instead of adding a second entry on the first start.
+
+The boot loader then looks on the PC's other volumes for Windows'
+`bootmgfw.efi` and, when it finds it, shows a boot menu for five seconds:
+NovaOS and Windows Boot Manager, which it starts with `LoadImage` and
+`StartImage`.  The devices suite's `beside` boot checks all of it, with a
+small UEFI application standing in for Windows' boot manager.
+
 ## Printing: network printers (IPP) and Settings > Printers
 
 Second part of roadmap step 33.5 ([design](../design/printing.md)).

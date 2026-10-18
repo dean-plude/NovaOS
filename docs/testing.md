@@ -320,16 +320,20 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   a wrong password and signing in with the right one, the account's own
   SID, token, profile in C:\Users, HKEY_CURRENT_USER and environment,
   CreateProcessAsUser, DeleteProfile; the lock screen refusing a wrong
-  password and unlocking with the right one), `spooltest` (the print
-  spooler and `winspool.drv`: printers, raw jobs, the queue, AddPrinter;
-  a GDI page printed to Microsoft Print to PDF matching what GDI draws;
-  PrintDlg and PageSetupDlg; 64- and 32-bit), programs started from the
-  Start menu (Win+S, the name, Enter): `winhello`, a GUI program, with
-  no Terminal window, and `hello`, a console program, in a Terminal,
-  `crash kernel`, a deliberate kernel fault whose serial log must show a
-  backtrace with function names, and last the kernel crash report: after
-  `crash kernel` and a reset, `crashes last` shows the fault's
-  backtrace.<!-- END generated:core-tests -->
+  password and unlocking with the right one), `switchtest` (Settings,
+  Accounts: an account added there by the test, typing as a person
+  would; fast user switching from the lock screen to it, a wrong
+  password refused, while the first account's program keeps running; its
+  profile and hive; back to the first account; signing the second out),
+  `spooltest` (the print spooler and `winspool.drv`: printers, raw jobs,
+  the queue, AddPrinter; a GDI page printed to Microsoft Print to PDF
+  matching what GDI draws; PrintDlg and PageSetupDlg; 64- and 32-bit),
+  programs started from the Start menu (Win+S, the name, Enter):
+  `winhello`, a GUI program, with no Terminal window, and `hello`, a
+  console program, in a Terminal, `crash kernel`, a deliberate kernel
+  fault whose serial log must show a backtrace with function names, and
+  last the kernel crash report: after `crash kernel` and a reset,
+  `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 
@@ -345,8 +349,8 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `monitors` | one virtio-vga card with three outputs; monitors plugged in and out while NovaOS runs (`montest hotplug`) |
 | `usbboot` | `nova.iso` written to a USB stick, with only the firmware's GOP display: starts live and writes its boot log (and a kernel fault) to the stick |
 | `cdboot` | `nova.iso` as a disc in a SATA DVD drive: starts live |
-| `beside` | a PC with Windows on its NVMe disk (ESP, Microsoft reserved, NTFS volume, free space) and nova.iso on a USB stick: Setup's window installs NovaOS beside Windows in the free space, NovaOS starts from the disk, and the host checks that Windows' partitions are where they were, its reserved partition unchanged byte for byte, its ESP's files unchanged and its NTFS volume and file intact ([design/installer.md](design/installer.md)) |
-| `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there |
+| `beside` | a PC with Windows on its NVMe disk (ESP, Microsoft reserved, NTFS volume, free space) and nova.iso on a USB stick: Setup's window installs NovaOS beside Windows in the free space and adds its firmware boot entry, NovaOS starts from the disk through it, its boot menu offers Windows Boot Manager and starts it (a stand-in UEFI application) and NovaOS after it, and the host checks that Windows' partitions are where they were, its reserved partition unchanged byte for byte, its ESP's files unchanged and its NTFS volume and file intact ([design/installer.md](design/installer.md)) |
+| `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there, through the firmware boot entry Setup added |
 | `update` | an installed NovaOS updating itself from signed test channels, refusing bad ones, and going back after a reset ([updates.md](updates.md#the-self-test)) |
 | `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |
 | `hid` | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`): the HID class driver on its USB minidriver; `hidclasstest` through setupapi and `hid.dll` (strings, preparsed data, feature, input and output reports), Raw Input (`WM_INPUT` and the device list), unplugging |
@@ -433,7 +437,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xamlbasetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xamlbasetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

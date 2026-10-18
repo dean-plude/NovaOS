@@ -1068,6 +1068,12 @@ servicing and print models Windows apps and drivers already expect.
   Windows-style NTFS volume leaves that volume's files intact, boots NovaOS
   and offers the other system in the boot menu; a screenshot of each
   installer page is in `docs/screenshots/`.
+  *Part 1 (in progress, [design](design/installer.md)):* Setup's window
+  shows each disk's partitions and free space and installs NovaOS beside
+  them in the free space (its own ESP and data partition; Windows'
+  partitions untouched), tested by the devices suite's `beside` boot;
+  shrinking NTFS, the boot menu entry for Windows and reinstalling over
+  NovaOS with the data kept are the next parts.
 - [ ] **33.5 Printing.** The Windows print model: a spooler service
   (`spoolsv`), `winspool.drv` and the `winspool` API fully implemented,
   Print Management, real printer drivers loaded unchanged where they are

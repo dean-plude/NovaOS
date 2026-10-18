@@ -63,7 +63,12 @@ order; --list prints them):
             are behind an embedded controller (tests/acpi/laptop.asl): the
             battery, the lid sleeping it in low-power S0 idle and waking
             it, then NovaOS installed from a USB stick onto an NVMe disk
-            and started from there; "update", an installed NovaOS on a
+            and started from there; "beside", a PC with Windows on its
+            NVMe disk (its ESP, a Microsoft reserved partition, an NTFS
+            volume, free space): Setup's window installs NovaOS beside
+            Windows in the free space and NovaOS starts from the disk,
+            and the host checks Windows' partitions were left as they
+            were; "update", an installed NovaOS on a
             network serving update channels (tools/mkupdate.py): it
             orders a development build of its version after it,
             refuses channels that are unsigned, signed with another key
@@ -373,6 +378,7 @@ MONITORS = load_suite('devices/monitors')
 USBBOOT = load_suite('devices/usbboot')
 CDBOOT = load_suite('devices/cdboot')
 LAPTOP = load_suite('devices/laptop')
+BESIDE = load_suite('devices/beside')
 UPDATE = load_suite('devices/update')
 DRIVERSEARCH = load_suite('devices/driversearch')
 GAMEPAD = load_suite('devices/gamepad')
@@ -758,6 +764,121 @@ def monitors_boot(work):
         [x for n in (1, 2) for x in ('-vnc', f'unix:{os.path.join(work, f"vnc{n}.sock")},id=vnc{n},display=gpu,head={n}')], []
 
 
+# The disk of a PC with Windows on it, as Windows Setup lays one out: its ESP
+# (FAT32 "SYSTEM", \\EFI\\Microsoft\\Boot\\bootmgfw.efi), a Microsoft reserved
+# partition, Windows' NTFS volume, and free space after them (the beside boot)
+BESIDE_ESP_MB, BESIDE_MSR_MB, BESIDE_NTFS_MB, BESIDE_DISK_MB = 100, 16, 1024, 3072
+BESIDE_FILE = ('novaos-beside.txt', 'Written by the NovaOS self-tests beside Windows\n')
+
+
+def gpt_disk(path, mb, parts):
+    """A disk image of @mb MiB at @path with a GPT (protective MBR, primary
+    and backup) holding @parts: (type GUID, name, first MiB, MiB, volume
+    file or None) each; the volumes are copied into place"""
+    import uuid
+    import zlib
+    sectors = mb << 11
+    ents = bytearray(128 * 128)
+    for i, (typ, name, at, size, vol) in enumerate(parts):
+        ents[i * 128:(i + 1) * 128] = struct.pack('<16s16sQQQ72s', uuid.UUID(typ).bytes_le, uuid.uuid4().bytes_le,
+                                                  at << 11, ((at + size) << 11) - 1, 0, name.encode('utf-16-le'))
+    disk_guid = uuid.uuid4().bytes_le
+
+    def header(me, other, table):
+        h = bytearray(struct.pack('<8sIIIIQQQQ16sQIII', b'EFI PART', 0x10000, 92, 0, 0, me, other, 34, sectors - 34,
+                                  disk_guid, table, 128, 128, zlib.crc32(ents)))
+        h[16:20] = struct.pack('<I', zlib.crc32(h))
+        return bytes(h) + bytes(512 - len(h))
+    mbr = bytearray(512)
+    mbr[446:462] = struct.pack('<B3sB3sII', 0, b'\x00\x02\x00', 0xEE, b'\xff\xff\xff', 1, min(sectors - 1, 0xFFFFFFFF))
+    mbr[510:512] = b'\x55\xaa'
+    with open(path, 'wb') as f:
+        f.truncate(sectors * 512)
+        f.write(mbr + header(1, sectors - 1, 2) + ents)
+        f.seek((sectors - 33) * 512)
+        f.write(ents + header(sectors - 1, 1, sectors - 33))
+        for _, _, at, _, vol in parts:
+            if vol:
+                f.seek(at << 20)
+                with open(vol, 'rb') as src:
+                    shutil.copyfileobj(src, f)
+                os.unlink(vol)
+
+
+def windows_disk(path):
+    """The disk of a PC with Windows on it at @path (BESIDE_*): returns what
+    nothing may change, the sha256 of its Microsoft reserved partition and
+    of each file on its ESP ("<sha256>  <path>" lines)"""
+    import hashlib
+    esp, ntfs = path + '.esp', path + '.ntfs'
+    with open(esp, 'wb') as f:
+        f.truncate(BESIDE_ESP_MB << 20)
+    mkfs = shutil.which('mkfs.fat') or '/usr/sbin/mkfs.fat'
+    subprocess.run([mkfs, '-F', '32', '-n', 'SYSTEM', '-h', '2048', esp], check=True, stdout=subprocess.DEVNULL)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    for d in ('::/EFI', '::/EFI/Microsoft', '::/EFI/Microsoft/Boot'):
+        subprocess.run(['mmd', '-i', esp, d], check=True, env=env)
+    stub = esp + '.bootmgfw'
+    with open(stub, 'wb') as f:                  # (a stand-in: no firmware starts it on its own)
+        f.write(b'MZ' + b'Windows Boot Manager stand-in for the NovaOS self-tests'.ljust(4094, b'.'))
+    subprocess.run(['mcopy', '-i', esp, stub, '::/EFI/Microsoft/Boot/bootmgfw.efi'], check=True, env=env)
+    os.unlink(stub)
+    kept = esp_files(esp)
+    mkntfs = shutil.which('mkntfs') or '/usr/sbin/mkntfs'
+    with open(ntfs, 'wb') as f:
+        f.truncate(BESIDE_NTFS_MB << 20)
+    first = 1 + BESIDE_ESP_MB + BESIDE_MSR_MB
+    subprocess.run([mkntfs, '-F', '-Q', '-L', 'Windows', '-p', str(first << 11), '-H', '255', '-S', '63', ntfs],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    src = ntfs + '.file'
+    with open(src, 'w', newline='\r\n') as f:
+        f.write(BESIDE_FILE[1])
+    subprocess.run([shutil.which('ntfscp') or '/usr/bin/ntfscp', '-f', ntfs, src, BESIDE_FILE[0]], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.unlink(src)
+    gpt_disk(path, BESIDE_DISK_MB, [
+        ('c12a7328-f81f-11d2-ba4b-00a0c93ec93b', 'EFI system partition', 1, BESIDE_ESP_MB, esp),
+        ('e3c9e316-0b5c-4db8-817d-f92df00215ae', 'Microsoft reserved partition', 1 + BESIDE_ESP_MB, BESIDE_MSR_MB, None),
+        ('ebd0a0a2-b9e5-4433-87c0-68b6b72699c7', 'Basic data partition', first, BESIDE_NTFS_MB, ntfs)])
+    with open(path, 'rb') as f:
+        f.seek((1 + BESIDE_ESP_MB) << 20)
+        return f'{hashlib.sha256(f.read(BESIDE_MSR_MB << 20)).hexdigest()}  (Microsoft reserved)\n' + kept
+
+
+def esp_files(esp, offset=0):
+    """"<sha256>  <path>" for each file on the FAT volume at @offset in the
+    image @esp (mtools), sorted, except OVMF's NvVars (QEMU's firmware keeps
+    its variables in that file on the first ESP it finds when it has no
+    flash store for them; a PC's firmware does not)"""
+    import hashlib
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    img = f'{esp}@@{offset}' if offset else esp
+    names = subprocess.run(['mdir', '-i', img, '-/', '-b', '::/'], capture_output=True, text=True, env=env).stdout.split()
+    out = []
+    for name in sorted(n for n in names if not n.endswith('/') and n.upper() != '::/NVVARS'):
+        data = subprocess.run(['mtype', '-i', img, name], capture_output=True, env=env).stdout
+        out.append(f'{hashlib.sha256(data).hexdigest()}  {name}')
+    return ''.join(l + '\n' for l in out)
+
+
+def beside_boot(work):
+    """A PC with Windows on its NVMe disk (windows_disk: ESP, Microsoft
+    reserved, NTFS, then 1.9 GiB free) and nova.iso on a USB stick
+    (build/nova.iso, or one made from the build): NovaOS's Setup installs
+    beside Windows in the free space and starts from the disk; the disk
+    stays in work/windows.img for the tests' check once QEMU has quit
+    (tests/selftest/devices/beside)"""
+    stick, disk = os.path.join(work, 'stick.img'), os.path.join(work, 'windows.img')
+    shutil.copy(iso_path(work), stick)
+    with open(stick, 'r+b') as f:
+        f.truncate(2 << 30)
+    with open(os.path.join(work, 'windows.sha256'), 'w') as f:
+        f.write(windows_disk(disk))
+    return ['-drive', f'if=none,id=nvm,format=raw,file={disk}', '-device', 'nvme,drive=nvm,serial=win0,bootindex=0',
+            '-device', 'qemu-xhci,id=xhci', '-drive', f'if=none,id=stick,format=raw,file={stick}',
+            '-device', 'usb-storage,bus=xhci.0,drive=stick,bootindex=1'], [], {'img': False}
+
+
 def iso_path(work):
     """build/nova.iso, or one made from the build in @work"""
     iso = os.path.join(ROOT, 'build', 'nova.iso')
@@ -941,7 +1062,8 @@ BOOTS = {
     'devices': [('touch', TOUCH, touch_boot), ('usbaudio', USBAUDIO, usbaudio_boot),
                 ('usbheadset', USBHEADSET, usbheadset_boot), ('driversearch', DRIVERSEARCH, driversearch_boot),
                 ('monitors', MONITORS, monitors_boot), ('usbboot', USBBOOT, usbboot_boot),
-                ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot), ('update', UPDATE, update_boot),
+                ('cdboot', CDBOOT, cdboot_boot), ('laptop', LAPTOP, laptop_boot),
+                ('beside', BESIDE, beside_boot), ('update', UPDATE, update_boot),
                 ('gamepad', GAMEPAD, gamepad_boot), ('hid', HID, hid_boot), ('camera', CAMERA, camera_boot),
                 ('isocam', ISOCAM, isocam_boot), ('composite', COMPOSITE, composite_boot),
                 ('pnp', PNP, pnp_boot), ('ntfs', NTFS, ntfs_boot),

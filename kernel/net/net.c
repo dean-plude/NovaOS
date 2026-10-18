@@ -92,6 +92,10 @@ static bool        ext_link_up(void) { return g_ext && g_ext->link_up(); }
 static bool        ext_transmit(const void *frame, UINT16 len) { return g_ext && g_ext->transmit(frame, len); }
 static int         ext_receive(void *buf, int cap) { return g_ext ? g_ext->receive(buf, cap) : 0; }
 static const Nic g_external = { ext_present, ext_name, ext_mac, ext_link_up, ext_transmit, ext_receive, none_resume };
+/* What the last NetAttach replaced, which NetDetach puts back (a Wi-Fi
+ * connection over the Ethernet card: when it ends, the card again) */
+static const Nic        *g_prev_nic;
+static const NetAdapter *g_prev_ext;
 
 /* -----------------------------------------------------------------------
  * Platform hooks for lwIP (port/arch/cc.h)
@@ -777,6 +781,7 @@ static bool virtio_set_aside(void)
         g_nic = &g_none;
         adapter_changed();
     }
+    if (g_prev_nic == &g_virtio) g_prev_nic = &g_none;
     net_unlock();
     VirtioNetStop();
     return true;
@@ -785,6 +790,10 @@ static bool virtio_set_aside(void)
 void NetAttach(const NetAdapter *a)
 {
     net_lock();
+    if (g_ext != a) {
+        g_prev_nic = g_nic;
+        g_prev_ext = g_ext;
+    }
     g_ext = a;
     g_nic = &g_external;
     UINT8 mac[6];
@@ -799,10 +808,17 @@ void NetDetach(const NetAdapter *a)
 {
     net_lock();
     if (g_ext == a) {
-        g_nic = &g_none;
+        const char *gone = a->name();
+        g_ext = g_prev_ext;
+        g_nic = g_prev_nic && (g_prev_nic != &g_external || g_prev_ext) ? g_prev_nic : &g_none;
+        g_prev_nic = &g_none;
+        g_prev_ext = NULL;
         adapter_changed();
-        g_ext = NULL;
-        kprintf("[NET] Adapter %s gone: loopback only\n", a->name());
+        if (g_nic == &g_none) kprintf("[NET] Adapter %s gone: loopback only\n", gone);
+        else kprintf("[NET] Adapter %s gone: back to %s\n", gone, g_nic->name());
+    } else if (g_prev_ext == a) {               /* (the one a later NetAttach replaced) */
+        g_prev_ext = NULL;
+        if (g_prev_nic == &g_external) g_prev_nic = &g_none;
     }
     net_unlock();
 }

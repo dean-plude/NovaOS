@@ -531,28 +531,52 @@ and TLVs (`kernel/nt/wdi.h`); a task is accepted by its request and
 finished by an `NDIS_STATUS_WDI_INDICATION_*_COMPLETE` status indication
 carrying its transaction ID. NovaOS asks the adapter's capabilities
 (`OID_WDI_GET_ADAPTER_CAPABILITIES`: MAC address, firmware, radio state,
-bands), creates its station port (`OID_WDI_TASK_CREATE_PORT`) and scans
-on it (`OID_WDI_TASK_SCAN`): the BSS entries the driver indicates, each
-with the access point's beacon or probe response, become the list
-`netsh wlan show networks [mode=bssid]` prints (SSID, WPA2 or WPA3 from
-the RSN element, cipher, signal, radio type, band, channel). `netsh wlan
-show interfaces` lists the adapters. Disabling the device deletes the
-port before the adapter closes.
+bands, data path attributes), configures it
+(`OID_WDI_SET_ADAPTER_CONFIGURATION`), creates its station port
+(`OID_WDI_TASK_CREATE_PORT`) and scans on it (`OID_WDI_TASK_SCAN`). The
+BSS entries the driver indicates, each with the access point's beacon or
+probe response, become the list `netsh wlan show networks [mode=bssid]`
+prints (SSID, WPA2 or WPA3 from the RSN element, cipher, signal, radio
+type, band, channel). `netsh wlan show interfaces` lists the adapters and
+their connection.
 
-What is missing: the data path (`MiniportWdiTalTxRxInitialize` and the
-TAL transmit and receive handlers), `OID_WDI_SET_ADAPTER_CONFIGURATION`,
-connecting (`OID_WDI_TASK_CONNECT`, the WPA2/WPA3 handshake and keys),
-the adapter as the network stack's, `wlanapi.dll` for programs and
-Settings' Wi-Fi page. That is the rest of roadmap step 28.1; scanning and
-joining on the real card needs the T14.
+The data path is the driver's TAL, set up as `wdiwifi.sys` does it:
+`MiniportWdiTalTxRxInitialize` before the capabilities, `TalTxRxStart`
+after the configuration, `TalTxRxAddPort` after the port. NovaOS's side
+is the TxMgr and RxMgr (`NDIS_WDI_DATA_API`). Each frame is an NBL of one
+802.11 MSDU with its `WDI_FRAME_METADATA` at `MiniportReserved[0]`. To
+send, NovaOS queues the frame and calls `TxDataSend`; the driver takes it
+with `TxDequeueIndication` and completes it with
+`TxTransferCompleteIndication`. To receive, the driver indicates
+`RxInorderDataIndication`, and NovaOS takes the frames with `RxGetMpdus`
+and returns them with `RxReturnFrames`. `netsh wlan connect name=SSID`
+joins an open network (`OID_WDI_TASK_CONNECT` with the access points the
+scan heard). The driver indicates the access point as its peer
+(`PeerCreateIndication`) and the association's result; the adapter then
+becomes the network stack's. Ethernet frames go out as 802.11 frames to
+the access point (ToDS, LLC/SNAP), and the answers come back the same
+way, so DHCP and the rest of TCP/IP run over Wi-Fi. `netsh wlan
+disconnect` leaves (`OID_WDI_TASK_DISCONNECT`) and the stack goes back to
+the card it had. Disabling the device disconnects, deletes the port and
+stops the data path before the adapter closes.
+
+What is missing: WPA2 and WPA3 (the 4-way handshake and SAE, and
+`OID_WDI_SET_ADD_CIPHER_KEYS`), frames the driver injects itself,
+`wlanapi.dll` for programs and Settings' Wi-Fi page. That is the rest of
+roadmap step 28.1; scanning and joining on the real card needs the T14.
 
 QEMU has no Wi-Fi card of any kind, so the `wifi` self-test brings its
 own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
 QEMU's `edu` card whose radio hears three access points (WPA2-Personal on
-2.4 GHz, WPA3-Personal on 5 GHz, an open network). The test installs it
-with `pnputil`, checks the capabilities, port and scan messages from both
-sides (the driver reports what it was sent), the two `netsh wlan`
-listings, and the port deleted and the adapter closed on disable.
+2.4 GHz, WPA3-Personal on 5 GHz, an open network), and whose TAL plays a
+small router at 192.168.77.1 behind the open network (ARP, DHCP, ping).
+The test installs it with `pnputil` and checks the messages and data
+path calls from both sides (the driver reports what it was sent): the
+capabilities, configuration and port, the scan and the two `netsh wlan`
+listings. It also connects to the open network, gets 192.168.77.100 by
+DHCP and pings the router over the data path. Then it disconnects, and on
+disable checks that the port is deleted, the data path stopped and the
+adapter closed.
 
 QEMU has no Intel Wi-Fi card, so the `ax211` self-test uses a PCI
 stand-in: the QEMU firmware config file `opt/novaos/pci-standin`
@@ -735,6 +759,8 @@ kept in the repository or the image.
 | `driversearch` | a NovaOS test package (`novaser.inf`) behind recorded Catalog pages | virtio-serial, with problem code 28 | `pnputil /scan-devices /search-online`: ranking, a bad SHA-256 refused, staging, no second download |
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
+| `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer and data path: capabilities, the station port, a scan and its BSS entries, connecting to an open network, DHCP and ping over the TAL TX/RX path, `netsh wlan` |
+| `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver) | QEMU's standard VGA | the dxgkrnl host, mode changes, the screen handed back on disable |
 | `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer: capabilities, the station port, a scan and its BSS entries, `netsh wlan` |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver), then `wddmtest.sys` (its render miniport) | QEMU's standard VGA; a root-enumerated device | the dxgkrnl host, mode changes, the screen handed back on disable; a render adapter's devices and allocations |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |

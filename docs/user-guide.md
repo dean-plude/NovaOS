@@ -256,6 +256,15 @@ A graphical program started from Start, the App Store, File Explorer or a
 shortcut opens in its own window.  Only a console (command-line) program
 gets a Terminal window, as its console.
 
+An installer that needs administrator rights (as most do) dims the
+screen first and asks **Do you want to allow this app to make changes to
+your device?**, as User Account Control does on Windows: **Yes** (or
+Alt+Y) runs it as administrator, **No** (Alt+N, Esc) does not run it.
+On a standard user's account the same dialog asks for an administrator's
+user name and password instead.  Nothing else on the screen takes the
+keyboard or the mouse while it shows.  Starting a program with **Run as
+administrator** (ShellExecute's `runas`) asks the same way.
+
 Programs from anywhere else install as on Windows: download the installer,
 `.msi` or archive, then run the installer, or unpack the archive (with
 7-Zip from the App Store) and run the program.  NovaOS does not yet
@@ -427,6 +436,24 @@ restarts.  On the reference laptop (ThinkPad T14 Gen 4), the built-in
 microphones sit behind Intel's audio DSP and appear as "Microphone Array
 (DSP)" when the DSP firmware is included in the build
 ([hardware.md](hardware.md#the-digital-microphones-behind-the-audio-dsp)).
+
+## Printing
+
+Programs print the Windows way: their **Print** command shows the Print
+dialog with your printers. **Microsoft Print to PDF** is installed and
+saves each page to a PDF file.
+
+**Network printers** print without a driver when they support IPP
+Everywhere (driverless printing, also sold as Mopria). In **Settings >
+Printers**, type the printer's IP address or host name (or an `ipp://`
+address) under **Add a network printer** and choose **Add**. NovaOS asks
+the printer for its make and model and names it after them; jobs go to
+it as PDF, or as PWG Raster when the printer takes nothing else. A
+printer that is switched off keeps its jobs and prints them when it
+answers again. The same page sets the default printer and removes
+printers.
+
+![Settings > Printers](screenshots/settings-printers.png)
 
 ## Updating NovaOS
 

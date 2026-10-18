@@ -785,6 +785,12 @@ static void defaults(void)
     for (int i = 0; i < 2; i++) {
         RegKey *pol = kpath(lua[i], false);
         if (!has_value(pol, "EnableLUA")) kset_dword(pol, "EnableLUA", 1);
+        /* UAC's prompt (um_security.c, wm/consent.c), Windows 11's defaults:
+         * administrators are asked Yes or No, standard users for an
+         * administrator's password, on the secure desktop */
+        if (!has_value(pol, "ConsentPromptBehaviorAdmin")) kset_dword(pol, "ConsentPromptBehaviorAdmin", 5);
+        if (!has_value(pol, "ConsentPromptBehaviorUser")) kset_dword(pol, "ConsentPromptBehaviorUser", 3);
+        if (!has_value(pol, "PromptOnSecureDesktop")) kset_dword(pol, "PromptOnSecureDesktop", 1);
     }
     kpath("Machine\\SOFTWARE\\Classes\\CLSID", false);
     kpath("Machine\\SOFTWARE\\Classes\\Interface", false);

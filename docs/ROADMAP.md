@@ -1051,6 +1051,16 @@ servicing and print models Windows apps and drivers already expect.
   administrator password is refused, an unelevated process cannot write to
   `C:\Windows` or `HKLM`, and a medium-integrity process cannot open a
   high-integrity one (self-test `uactest`).
+  *Progress:* UAC's prompt on the secure desktop is in: `runas` and a
+  manifest's `requireAdministrator` or `highestAvailable` ask an
+  administrator Yes or No and a standard user for an administrator's
+  password (a wrong one refused), as the Windows policy values say; tokens
+  carry integrity levels and a medium process cannot open a high one for
+  more than waiting on it, tested by `uactest`.  Still to do: protecting
+  `C:\Windows`, `C:\Programs` and `HKLM` from unelevated writes (with
+  Windows' virtualization for old programs), the linked token at
+  identification level, and the publisher from the signature
+  ([design/uac.md](design/uac.md)).
 - [x] **33.3 Update rollback and a recovery boot.** Updates install into a
   new boot image beside the running one (A/B or snapshot) and roll back
   automatically when the new image fails to reach the desktop; a recovery
@@ -1105,6 +1115,14 @@ servicing and print models Windows apps and drivers already expect.
   print a page to the PDF printer and to an IPP printer served by a test
   host in CI, and the output matches a reference file (self-test
   `spooltest`); WIA scanning is a follow-up.
+  Part 1: the Print Spooler service, `winspool.drv`, Microsoft Print to
+  PDF and the print dialogs (`spooltest`). Part 2: driverless network
+  printing (IPP ports in the spooler sending PDF or PWG Raster, offline
+  printers keeping their jobs) and Settings > Printers (add a network
+  printer by address, named after its model; default; remove), tested
+  against a fake IPP printer on the CI host (`spooltest ipp`). Next: the
+  Notepad and SumatraPDF check in the app corpus
+  ([design/printing.md](design/printing.md)).
 
 ## Cross-cutting (maintain throughout)
 

@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <winhttp.h>
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -347,6 +348,37 @@ static long find(const BYTE *b, DWORD n, const char *what, DWORD from)
     return -1;
 }
 
+/* How many pixels of @rgb (w x h, 8-bit RGB) differ from page 1 drawn by
+ * GDI on a bitmap of that size (-1: no bitmap) */
+static long page_diff(const BYTE *rgb, int w, int h)
+{
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof bi);
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void *bits = NULL;
+    HDC mem = CreateCompatibleDC(NULL);
+    HBITMAP bm = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!bm || !bits) { DeleteDC(mem); return -1; }
+    HGDIOBJ old = SelectObject(mem, bm);
+    memset(bits, 0xFF, (size_t)w * h * 4);
+    draw_page(mem, 1);
+    GdiFlush();
+    long diff = 0;
+    const DWORD *px = bits;
+    for (long i = 0; i < (long)w * h; i++) {
+        DWORD p = px[i];
+        if (rgb[i * 3] != (BYTE)(p >> 16) || rgb[i * 3 + 1] != (BYTE)(p >> 8) || rgb[i * 3 + 2] != (BYTE)p) diff++;
+    }
+    SelectObject(mem, old);
+    DeleteObject(bm);
+    DeleteDC(mem);
+    return diff;
+}
+
 static void test_gdi(void)
 {
     PRINTDLGW pd;
@@ -412,27 +444,8 @@ static void test_gdi(void)
     char *pix = st >= 0 && zlen > 0 ? stbi_zlib_decode_malloc_guesssize((const char *)b + st + 7, zlen, w * h * 3, &outlen) : NULL;
     CHECK("page 1's image inflates", pix && outlen == w * h * 3);
     if (pix && outlen == w * h * 3) {
-        BITMAPINFO bi;
-        memset(&bi, 0, sizeof bi);
-        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        void *bits = NULL;
-        HDC mem = CreateCompatibleDC(NULL);
-        HBITMAP bm = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-        HGDIOBJ old = SelectObject(mem, bm);
-        memset(bits, 0xFF, (size_t)w * h * 4);
-        draw_page(mem, 1);
-        GdiFlush();
-        long diff = 0;
-        const DWORD *px = bits;
         const BYTE *rgb = (const BYTE *)pix;
-        for (long i = 0; i < (long)w * h; i++) {
-            DWORD p = px[i];
-            if (rgb[i * 3] != (BYTE)(p >> 16) || rgb[i * 3 + 1] != (BYTE)(p >> 8) || rgb[i * 3 + 2] != (BYTE)p) diff++;
-        }
+        long diff = page_diff(rgb, w, h);
         CHECK("page 1 is exactly what GDI draws", diff == 0);
         if (diff) printf("spooltest: %ld pixels differ\n", diff);
         const BYTE *c = rgb + ((size_t)600 * w + 750) * 3;
@@ -442,12 +455,206 @@ static void test_gdi(void)
         long dark = 0;
         for (int y = 1300; y < 1420; y++) for (int x = 300; x < 1500; x++) if (rgb[((size_t)y * w + x) * 3] < 100) dark++;
         CHECK("the text", dark > 2000);
-        SelectObject(mem, old);
-        DeleteObject(bm);
-        DeleteDC(mem);
     }
     free(pix);
     free(b);
+}
+
+/* -----------------------------------------------------------------------
+ * Network printing: "spooltest ipp BASE" against tools/ippprinter.py at
+ * BASE (http://10.0.2.2:18631), which hands back what it printed
+ * ----------------------------------------------------------------------- */
+#define IPP_PDF  L"NovaOS IPP Test"                    /* AddPrinter's printer, on BASE/ipp/print */
+#define IPP_NEW  L"Printer at 10.0.2.2"                /* Settings' new printer, before the spooler names it */
+#define IPP_RAST L"NovaOS Raster Printer"              /* ... and after (its make and model) */
+#define IPP_DOWN L"NovaOS Unreachable Printer"
+#define OUT_IPPREF L"C:\\Temp\\spooltest-ipp-reference.pdf"
+
+/* GET @url: its body (malloc'd) or NULL; *n its size */
+static BYTE *http_get(const WCHAR *url, DWORD *n)
+{
+    WCHAR host[128], path[256];
+    URL_COMPONENTS uc;
+    memset(&uc, 0, sizeof uc);
+    uc.dwStructSize = sizeof uc;
+    uc.lpszHostName = host; uc.dwHostNameLength = 128;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 256;
+    *n = 0;
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return NULL;
+    HINTERNET s = WinHttpOpen(L"spooltest", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    HINTERNET c = s ? WinHttpConnect(s, host, uc.nPort, 0) : NULL;
+    HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, NULL, NULL, NULL, 0) : NULL;
+    BYTE *b = NULL;
+    DWORD status = 0, sn = sizeof status, cap = 0;
+    if (r && WinHttpSendRequest(r, NULL, 0, NULL, 0, 0, 0) && WinHttpReceiveResponse(r, NULL) &&
+        WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &sn, NULL) &&
+        status == 200) {
+        for (;;) {
+            DWORD got = 0;
+            if (*n + 65536 + 1 > cap) {
+                BYTE *nb = realloc(b, cap = cap ? cap * 2 : 1 << 20);
+                if (!nb) break;
+                b = nb;
+            }
+            if (!WinHttpReadData(r, b + *n, 65536, &got) || !got) break;
+            *n += got;
+        }
+        if (b) b[*n] = 0;
+    }
+    if (r) WinHttpCloseHandle(r);
+    if (c) WinHttpCloseHandle(c);
+    if (s) WinHttpCloseHandle(s);
+    return b;
+}
+
+/* What the fake printer @what (print.bin, raster.ppm, NAME.txt) got */
+static BYTE *received(const WCHAR *base, const WCHAR *what, DWORD *n)
+{
+    WCHAR url[300];
+    swprintf(url, 300, L"%ls/received/%ls", base, what);
+    return http_get(url, n);
+}
+
+/* @pages of the test page printed on @printer as document @doc (to @output if set) */
+static BOOL print_pages(const WCHAR *printer, const WCHAR *doc, const WCHAR *output, int pages)
+{
+    HDC dc = CreateDCW(NULL, printer, NULL, NULL);
+    if (!dc || GetDeviceCaps(dc, TECHNOLOGY) != DT_RASPRINTER) { if (dc) DeleteDC(dc); return FALSE; }
+    DOCINFOW di = { sizeof di, doc, output, NULL, 0 };
+    BOOL ok = StartDocW(dc, &di) > 0;
+    for (int i = 1; ok && i <= pages; i++) {
+        ok = StartPage(dc) > 0;
+        if (ok) draw_page(dc, i);
+        ok = ok && EndPage(dc) > 0;
+    }
+    ok = ok && EndDoc(dc) > 0;
+    DeleteDC(dc);
+    return ok;
+}
+
+static HANDLE add_ipp(const WCHAR *name, const WCHAR *port)
+{
+    PRINTER_INFO_2W pi;
+    memset(&pi, 0, sizeof pi);
+    pi.pPrinterName = (LPWSTR)name;
+    pi.pPortName = (LPWSTR)port;
+    pi.pDriverName = (LPWSTR)L"Microsoft IPP Class Driver";
+    pi.Attributes = PRINTER_ATTRIBUTE_NETWORK;
+    return AddPrinterW(NULL, 2, (LPBYTE)&pi);
+}
+
+/* A printer as Settings > Printers adds one (kernel/apps/settings.c): its
+ * key, with "Pending Setup" for the spooler */
+static BOOL add_like_settings(const WCHAR *name, const WCHAR *port)
+{
+    WCHAR path[300];
+    HKEY k;
+    swprintf(path, 300, L"SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%ls", name);
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &k, NULL)) return FALSE;
+    DWORD attrs = PRINTER_ATTRIBUTE_NETWORK, one = 1;
+    RegSetValueExW(k, L"Name", 0, REG_SZ, (const BYTE *)name, (DWORD)(wcslen(name) + 1) * 2);
+    RegSetValueExW(k, L"Port", 0, REG_SZ, (const BYTE *)port, (DWORD)(wcslen(port) + 1) * 2);
+    RegSetValueExW(k, L"Printer Driver", 0, REG_SZ, (const BYTE *)L"Microsoft IPP Class Driver", 54);
+    RegSetValueExW(k, L"Attributes", 0, REG_DWORD, (const BYTE *)&attrs, 4);
+    RegSetValueExW(k, L"Pending Setup", 0, REG_DWORD, (const BYTE *)&one, 4);
+    RegCloseKey(k);
+    return TRUE;
+}
+
+static void test_ipp(const WCHAR *base)
+{
+    WCHAR port[300];
+    DWORD n = 0, rn = 0;
+    BYTE buf[8192];
+
+    /* a printer that takes PDF: the job goes as the PDF itself */
+    swprintf(port, 300, L"%ls/ipp/print", base);
+    HANDLE h = add_ipp(IPP_PDF, port);
+    CHECK("AddPrinter with the IPP class driver", h != NULL);
+    if (!h) return;
+    DWORD need = 0;
+    CHECK("its port is an IPP port", GetPrinterW(h, 2, buf, sizeof buf, &need) &&
+          !wcscmp(((PRINTER_INFO_2W *)buf)->pPortName, port));
+    CHECK("print two pages on it", print_pages(IPP_PDF, L"NovaOS spooltest IPP", NULL, 2));
+    CHECK("the spooler sends the job", drained(IPP_PDF, 60000));
+    DeleteFileW(OUT_IPPREF);
+    CHECK("the same pages to Microsoft Print to PDF", print_pages(PDF, L"NovaOS spooltest IPP", OUT_IPPREF, 2) &&
+          drained(PDF, 60000));
+    BYTE *ref = slurp(OUT_IPPREF, &rn), *got = received(base, L"print.bin", &n);
+    printf("spooltest: the IPP printer got %lu bytes (the PDF printer wrote %lu)\n", (unsigned long)n, (unsigned long)rn);
+    CHECK("the IPP printer got the PDF, byte for byte", ref && got && rn > 1000 && n == rn && !memcmp(ref, got, n));
+    free(ref);
+    free(got);
+    char *txt = (char *)received(base, L"print.txt", &n);
+    CHECK("as application/pdf, named", txt && strstr(txt, "document-format=application/pdf") &&
+          strstr(txt, "job-name=NovaOS spooltest IPP"));
+    free(txt);
+    const char *raw = "NovaOS raw job to an IPP printer\r\n";
+    CHECK("a raw job on it", raw_job(h, L"spooltest IPP raw", NULL, raw) != 0 && drained(IPP_PDF, 30000));
+    got = received(base, L"print.bin", &n);
+    CHECK("goes as it is", got && n == strlen(raw) && !memcmp(got, raw, n));
+    free(got);
+    txt = (char *)received(base, L"print.txt", &n);
+    CHECK("as application/octet-stream", txt && strstr(txt, "document-format=application/octet-stream"));
+    free(txt);
+    CHECK("DeletePrinter", DeletePrinter(h));
+    ClosePrinter(h);
+
+    /* a printer Settings adds that takes only PWG Raster: the spooler names
+     * it after its make and model, and turns the pages into raster lines */
+    swprintf(port, 300, L"%ls/ipp/raster", base);
+    CHECK("a printer added as Settings adds one", add_like_settings(IPP_NEW, port));
+    BOOL named = FALSE;
+    for (int i = 0; i < 300 && !named; i++) {
+        if (OpenPrinterW((LPWSTR)IPP_RAST, &h, NULL)) named = TRUE;
+        else Sleep(100);
+    }
+    CHECK("the spooler names it after its make and model", named);
+    if (!named) return;
+    HANDLE old;
+    CHECK("the first name is gone", !OpenPrinterW((LPWSTR)IPP_NEW, &old, NULL));
+    PRINTER_INFO_2W *pi = (PRINTER_INFO_2W *)buf;
+    CHECK("its location", GetPrinterW(h, 2, buf, sizeof buf, &need) && pi->pLocation &&
+          !wcscmp(pi->pLocation, L"CI host, desk 2") && !(pi->Status & PRINTER_STATUS_OFFLINE));
+    CHECK("print a page on it", print_pages(IPP_RAST, L"NovaOS spooltest raster", NULL, 1));
+    CHECK("the spooler sends it", drained(IPP_RAST, 60000));
+    txt = (char *)received(base, L"raster.txt", &n);
+    if (txt) printf("spooltest: the raster printer got:\n%s", txt);
+    CHECK("as PWG Raster: one 300 dpi Letter page", txt && strstr(txt, "document-format=image/pwg-raster") &&
+          strstr(txt, "pages=1") && strstr(txt, "xdpi:300") && strstr(txt, "Width:2550 Height:3300") &&
+          strstr(txt, "ColorSpace:19") && strstr(txt, "PageSizeName:na_letter_8.5x11in") && !strstr(txt, "error="));
+    free(txt);
+    got = received(base, L"raster.ppm", &n);
+    const char *ppm_head = "P6\n2550 3300\n255\n";
+    size_t hl = strlen(ppm_head);
+    CHECK("its page", got && n == hl + 2550 * 3300 * 3 && !memcmp(got, ppm_head, hl));
+    if (got && n == hl + 2550 * 3300 * 3) {
+        long diff = page_diff(got + hl, 2550, 3300);
+        CHECK("the raster page is exactly what GDI draws", diff == 0);
+        if (diff) printf("spooltest: %ld pixels of the raster page differ\n", diff);
+    }
+    free(got);
+    CHECK("DeletePrinter", DeletePrinter(h));
+    ClosePrinter(h);
+
+    /* a printer that does not answer: the job waits, offline */
+    HANDLE d = add_ipp(IPP_DOWN, L"ipp://10.0.2.2:18639/ipp/print");
+    CHECK("AddPrinter: a printer that is off", d != NULL);
+    if (!d) return;
+    DWORD job = raw_job(d, L"spooltest offline", NULL, "waits\r\n");
+    JOB_INFO_1W ji;
+    memset(&ji, 0, sizeof ji);
+    BOOL waits = FALSE;
+    for (int i = 0; i < 300 && !waits; i++) {
+        if (jobs(d, &ji) == 1 && (ji.Status & JOB_STATUS_ERROR)) waits = TRUE;
+        else Sleep(100);
+    }
+    CHECK("its job waits with an error", job && waits && ji.JobId == job && (ji.Status & JOB_STATUS_OFFLINE));
+    CHECK("the printer is offline", GetPrinterW(d, 2, buf, sizeof buf, &need) && (pi->Status & PRINTER_STATUS_OFFLINE) &&
+          pi->cJobs == 1);
+    CHECK("SetJob deletes it", SetJobW(d, job, 0, NULL, JOB_CONTROL_DELETE) && jobs(d, NULL) == 0);
+    CHECK("DeletePrinter", DeletePrinter(d));
+    ClosePrinter(d);
 }
 
 static void test_dialogs(void)
@@ -503,7 +710,7 @@ static void test_dialogs(void)
     if (ps.hDevNames) GlobalFree(ps.hDevNames);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     CreateDirectoryW(L"C:\\Temp", NULL);
     /* the spooler starts with the desktop's services */
@@ -513,12 +720,18 @@ int main(void)
         if (!up) Sleep(250);
     }
     if (!up) printf("spooltest: the spooler's pipe is not there\n");
-    test_printers();
-    test_raw();
-    test_add();
-    test_ask();
-    test_gdi();
-    test_dialogs();
+    if (argc >= 3 && !strcmp(argv[1], "ipp")) {
+        WCHAR base[200];
+        MultiByteToWideChar(CP_ACP, 0, argv[2], -1, base, 200);
+        test_ipp(base);
+    } else {
+        test_printers();
+        test_raw();
+        test_add();
+        test_ask();
+        test_gdi();
+        test_dialogs();
+    }
     printf("spooltest: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

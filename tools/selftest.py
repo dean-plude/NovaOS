@@ -32,7 +32,8 @@ order; --list prints them):
             server, a redirect to a ~1,000-character signed address, a 503
             the Store tries again after, a body trickled over more than 30
             s), all against tools/h2server.js
-            (needs node and openssl).  IPv6 on an IPv6-only
+            (needs node and openssl), and network printing to a fake IPP
+            printer, tools/ippprinter.py (spooltest ipp).  IPv6 on an IPv6-only
             network that is tools/v6peer.py: SLAAC and RDNSS (ipconfig),
             ping -6, curl -6 and Winsock over IPv6 (netcat), stateful
             DHCPv6 (ipconfig /all, dhcp6test, rebind and renew,
@@ -205,14 +206,18 @@ class Test:
     once it has been quiet for a second).  @before: function(nova) run
     before the command is typed (e.g. plug a device in).  @quotes_panic: the
     output may quote a kernel panic's log (a crash report shown), which is
-    then not taken for a panic of this boot."""
+    then not taken for a panic of this boot.  @uac_auto: UAC's consent
+    prompt is answered Yes (Alt+Y) whenever it shows, as by the person at
+    the keyboard (tools/novarun.py); False when the test answers it itself
+    (its @acts)."""
     def __init__(self, name, cmd, expect=(), timeout=180, check=None, store=None, shot=None, crash=False, reboot=False,
                  acts=(), boot_expect=(), builtin=False, settle=0, before=None, restart=False,
-                 quotes_panic=False, cut=None):
+                 quotes_panic=False, cut=None, uac_auto=True):
         self.name, self.cmd, self.expect, self.timeout, self.check = name, cmd, expect, timeout, check
         self.store, self.shot, self.crash, self.reboot = store, shot, crash, reboot
         self.acts, self.boot_expect, self.builtin, self.settle = acts, boot_expect, builtin, settle
         self.before, self.restart, self.quotes_panic, self.cut = before, restart, quotes_panic, cut
+        self.uac_auto = uac_auto
 
 
 def tones(*hz, wav=None, only=False):
@@ -360,7 +365,8 @@ def venus_gpu():
 # The network suite's two boots, each with a virtio-net adapter.  IPv4 and
 # HTTP/2: QEMU's user-mode network, where 10.0.2.2 is this machine and
 # tools/h2server.js serves HTTPS (HTTP/2 by ALPN, self-signed) on 18443 and
-# HTTP/1.1 on 18080.  IPv6: an IPv6-only network that is tools/v6peer.py (a
+# HTTP/1.1 on 18080, and tools/ippprinter.py is a network printer (IPP) on
+# 18631.  IPv6: an IPv6-only network that is tools/v6peer.py (a
 # router with SLAAC and RDNSS, a stateful DHCPv6 server, DNS for nova6.test,
 # HTTP on port 80), over a QEMU datagram netdev.
 NET4 = load_suite('network4')
@@ -375,7 +381,7 @@ def renamed(t, suffix):
 
 # The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store'))]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store', 'spooltest'))]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)
@@ -421,7 +427,9 @@ def net4_boot(work):
                    check=True, capture_output=True)
     srv = subprocess.Popen(['node', os.path.join(ROOT, 'tools', 'h2server.js'), cert, key, '18443', '18080'],
                            stdout=open(os.path.join(work, 'h2server.log'), 'w'), stderr=subprocess.STDOUT)
-    return ['-nic', 'user,model=virtio-net-pci'], [srv]
+    ipp = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'ippprinter.py'), '--port', '18631'],
+                           stdout=open(os.path.join(work, 'ippprinter.log'), 'w'), stderr=subprocess.STDOUT)
+    return ['-nic', 'user,model=virtio-net-pci'], [srv, ipp]
 
 
 def net6_boot(work):
@@ -1247,7 +1255,7 @@ def main():
             finally:
                 for p in procs:
                     p.kill()
-                for log in ['h2server.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
+                for log in ['h2server.log', 'ippprinter.log', 'v6peer.log', 'http.log'] + [f'usbredirpeer-{p}.log' for p in range(10700, 10710)] \
                         + [f'padpeer-{p}.log' for p in (10710, 10711, 10712, 10713, 10717)] + ['serialpeer.log', 'catalog.log', 'campeer.log',
                                                                                  'isocampeer.log', 'compositepeer.log']:
                     if os.path.exists(os.path.join(work, log)):
@@ -1358,7 +1366,9 @@ def run_boot(a, tests, work, label, **nova_args):
                 if t.before:
                     t.before(nova)
                     full_log += nova.sr.read_new()          # (what the kernel said meanwhile)
+                nova.uac_auto = t.uac_auto
                 out, ok = nova.run(t.cmd, t.timeout, shot=(t.shot, png) if t.shot else None, acts=t.acts)
+                nova.uac_auto = True
             if t.crash:
                 miss = [e for e in t.expect if not re.search(e, out)]
                 why = None if ok and not miss else ('no kernel fault' if not ok else 'no symbolized backtrace')

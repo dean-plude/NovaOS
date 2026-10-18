@@ -22,6 +22,7 @@
 #include "../um/um.h"
 #include "desktop.h"
 #include "logon.h"
+#include "consent.h"
 #include "wallpaper.h"
 #include "../apps/iconset.h"
 #include "../hal/display.h"
@@ -721,6 +722,7 @@ static const struct { const char *name; const char *keys; int page; } g_setting_
     { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
     { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
     { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
+    { "Printers",        "printers printing printer scanner ipp default add network", SETTINGS_PRINTERS },
     { "About",           "about version fonts licence",                       SETTINGS_ABOUT },
 };
 #define N_SETTING_ITEMS ((int)(sizeof(g_setting_items) / sizeof(g_setting_items[0])))
@@ -1384,6 +1386,7 @@ static void shell_overlay(void)
     draw_menu();
     draw_switcher();
     LogonDraw();                                        /* (the sign-in or lock screen: over everything) */
+    ConsentDraw();                                      /* (UAC's prompt: over everything too) */
 }
 
 /* -----------------------------------------------------------------------
@@ -1411,9 +1414,13 @@ void DesktopInitialize(void)
 
 bool DesktopAvailable(void) { return g_ready; }
 
+static UINT8 g_secure_keys[32];                 /* keys pressed while UAC's prompt showed, by scancode (+128: E0) */
+static UINT8 g_secure_stale[32];                /* of those, the ones held when the prompt now showing opened */
+static UINT32 g_secure_seen;                    /* (the prompt showing at the last key: ConsentSerial) */
+
 bool DesktopOverlayCovers(GdiRect r)
 {
-    if (g_start_open || g_menu.open || g_switch.on || LogonActive()) return true;
+    if (g_start_open || g_menu.open || g_switch.on || LogonActive() || ConsentActive()) return true;
     if (dock_hidden()) return false;
     int top = L_dock.y - 64;                    /* (the dock, its tooltips and the tray's: the primary's) */
     return r.y + r.h > top && r.x < GdiScreenW() && r.x + r.w > 0;
@@ -2182,6 +2189,7 @@ void DesktopRun(void *arg)
          * threads take around file access) only for what may use files */
         DesktopLockAlone();
         LogonPoll();
+        ConsentPoll();                          /* (a program asking to run as administrator) */
         if (services && LogonTakeFirstSignIn()) {
             signed_in = true;
             RamNode *svc = RamfsResolve(NULL, "\\Windows\\System32\\services.exe");
@@ -2209,11 +2217,14 @@ void DesktopRun(void *arg)
         bool input = InputPoll(&ev), files = input;
         if (files) FsLock();                    /* (a click may open a file) */
         for (; input; input = InputPoll(&ev)) {
-            if (ev.type == INPUT_MOUSE && LogonActive()) {     /* (signing in: the mouse is the screen's) */
+            if (ev.type == INPUT_MOUSE && (LogonActive() || ConsentActive())) {   /* (signing in, UAC: the mouse is the screen's) */
                 if (ev.absolute) WmCursorMoveAbs(ev.dx, ev.dy);
                 else if (ev.dx || ev.dy) WmCursorMoveBy(ev.dx, ev.dy);
                 bool left = (ev.buttons & MOUSE_LEFT) != 0;
-                if (left && !prev_left) LogonPress(WmCursorX(), WmCursorY());
+                if (left && !prev_left) {
+                    if (LogonActive()) LogonPress(WmCursorX(), WmCursorY());
+                    else ConsentPress(WmCursorX(), WmCursorY());
+                }
                 prev_left = left;
                 prev_right = (ev.buttons & MOUSE_RIGHT) != 0;
                 prev_mid = (ev.buttons & MOUSE_MIDDLE) != 0;
@@ -2261,7 +2272,7 @@ void DesktopRun(void *arg)
                 prev_right = right;
                 UmSetInputPen(0);
             } else if (ev.type == INPUT_TOUCH) {
-                if (!LogonActive()) touch_event(&ev);
+                if (!LogonActive() && !ConsentActive()) touch_event(&ev);
             } else if (ev.type == INPUT_PEN) {
                 pen_serial = TabletPacketIn(&ev);
                 if (!ev.pressed && pen_near) {
@@ -2278,6 +2289,25 @@ void DesktopRun(void *arg)
                 if (LogonActive()) {                    /* (the keyboard too) */
                     if (key && k.extended && k.scancode == KEY_LWIN && !k.pressed) g_win_down = false;   /* (Win+L's) */
                     if (key) { system_key(&k); LogonKey(&k); }
+                    continue;
+                }
+                /* (the secure desktop: only the dialog hears it, and a key
+                 * pressed there is its until released, repeats too, so
+                 * Alt+Y types no y once the dialog has gone and a held
+                 * Alt+N or Enter does not answer the next one) */
+                UINT32 kix = (UINT32)(ev.scancode & 0x7F) | (ev.extended ? 0x80u : 0);
+                UINT8 bit = (UINT8)(1u << (kix % 8));
+                bool held_here = (g_secure_keys[kix / 8] & bit) != 0, on = ConsentActive();
+                if (on && ConsentSerial() != g_secure_seen) {   /* (a new prompt: keys held from the last one are not its) */
+                    for (int i = 0; i < 32; i++) g_secure_stale[i] = g_secure_keys[i];
+                    g_secure_seen = ConsentSerial();
+                }
+                if (on || held_here) {
+                    bool stale = (g_secure_stale[kix / 8] & bit) != 0;
+                    if (ev.pressed) g_secure_keys[kix / 8] |= bit;
+                    else { g_secure_keys[kix / 8] &= (UINT8)~bit; g_secure_stale[kix / 8] &= (UINT8)~bit; }
+                    if (key && k.extended && k.scancode == KEY_LWIN && !k.pressed) g_win_down = false;
+                    if (key && !(stale && k.pressed)) ConsentKey(&k);   /* (no repeats of a key pressed before it opened) */
                     continue;
                 }
                 raw_key(&ev, key ? &k : NULL);

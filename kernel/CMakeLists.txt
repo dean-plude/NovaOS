@@ -282,6 +282,7 @@ set(KERNEL_C_SOURCES
     wm/wm.c
     wm/desktop.c
     wm/logon.c
+    wm/consent.c
     wm/wallpaper.c
     wm/clipboard.c
     wm/input.c

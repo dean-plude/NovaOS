@@ -17,20 +17,26 @@ DependencyObject/minlib; the value types CValue, flyweight,
 primitiveDependencyObjects, math and theming; the collections, Collection;
 with their MSBuild projects; the resources, deferral, legacy, colors and
 winuri components and the markup parser, core/Parser, with the .props
-files its sources.props imports), pal/common's ctypes.cpp and matrix.cpp (the
+files its sources.props imports; the parser's object writer runtime,
+core/Parser/runtime, and the core's resource dictionary,
+core/core/elements' Resources.cpp with the other sources of
+elements.except.vcxproj and its sources.props, and DeferredKeys.cpp; the
+simple properties and name scopes, components/simple and
+components/namescope), pal/common's ctypes.cpp and matrix.cpp (the
 math library's geometry helpers) and MemoryStream, MemoryStreamBuffer,
 refcounting, MsResourceHelpers and UriXStringGetters (the parser's and
 WinURI's), core/dll/services.cpp, the isolated unit tests' stubs and
-metadata mocks (components/unittests/stubs, less four stubs NovaOS does
+metadata mocks (components/unittests/stubs, less seven stubs NovaOS does
 not link, and components/metadata/mocks; xaml_teststubs.lib, linked by
 xamlbasetest), the isolated parser unit tests' mock core services
-(components/parser/unittests, linked by xamlparsetest, with
+(components/parser/unittests, linked by xamlparsetest and xamlloadtest, and
+components/theming/unittests' TestThemingInterop, linked by xamlloadtest, with
 dxaml/test/native/inc/XamlLogging.h), the components'
 precompiled header (components/pch), headers from dxaml/xcp/inc, core/inc,
 pal and the components' inc directories those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
-dxaml (the rest of the core, the parser's object writer and controls) joins as
+dxaml (the rest of the core and the controls) joins as
 the build takes it in (docs/design/windows-ui-xaml.md).
 
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would

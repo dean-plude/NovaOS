@@ -1033,9 +1033,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   theme walk's cache) and the XAML markup parser (`core/Parser`) built,
   reading XML through NovaOS's new `xmllite.dll` (over libxml2's reader),
   with `IUriBuilder` in urlmon; a page, `{StaticResource}`, a
-  `ResourceDictionary` and bad markup parsed in `xamlparsetest`.  Next:
-  `CResourceDictionary` and the object writer, then the rest of the core
-  and `dxaml/lib` as `Windows.UI.Xaml.dll`.
+  `ResourceDictionary` and bad markup parsed in `xamlparsetest`.  Seventh
+  part done: `CResourceDictionary` (`core/core/elements/Resources.cpp`)
+  and the parser's object writer runtime (`core/Parser/runtime`) built,
+  so XAML text loads into the core's objects: a `ResourceDictionary` of
+  strings, numbers, booleans and colours, looked up by key, in
+  `xamlloadtest`.  Next: the core services (`CCoreServices`) with the
+  core's metadata tables (merged and theme dictionaries load with them)
+  and the rest of the core, then `dxaml/lib` as
+  `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

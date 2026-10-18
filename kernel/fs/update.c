@@ -23,7 +23,7 @@
 #include "../um/um.h"
 #include "../hal/fwcfg.h"
 #include "../hal/acpi.h"
-#include "../hal/tco.h"
+#include "../hal/watchdog.h"
 #include "../arch/x86_64/apic.h"
 #include "mbedtls/sha256.h"
 #include "monocypher-ed25519.h"
@@ -752,24 +752,24 @@ static void watch_thread(void *arg)
                     "restarting to go back to the previous version\n", NovaVersion(), UPDATE_STALL_SECONDS, g_step);
             restart_back();
         }
-        TcoReload();
+        WatchdogReload();
         sched_sleep_until(&never, now + 100);
     }
     kprintf("[UPDATE] The updated NovaOS %s reached the desktop: its start counts as good\n", NovaVersion());
     boot_thread(NULL);                                  /* (finish: the watchdog runs on until it is done) */
-    TcoStop();
+    WatchdogStop();
     g_watching = false;
 }
 
 void UpdateBootWatch(void)
 {
     if (!(g_boot_flags & BOOT_FLAG_UPDATE_TRIAL)) return;
-    if (!TcoStart(UPDATE_HANG_SECONDS))
+    if (!WatchdogStart(UPDATE_HANG_SECONDS))
         kprintf("[UPDATE] No hardware watchdog on this PC: a hang with interrupts off waits for a reset\n");
     g_watching = true;
     if (!sched_create_thread("update watch", watch_thread, NULL, PRIO_DEVICE)) {
         g_watching = false;                             /* (finished by UpdateBootDone, as before the watch) */
-        TcoStop();
+        WatchdogStop();
     }
 }
 
@@ -778,7 +778,7 @@ void UpdateBootProgress(const char *step)
     if (!g_watching || g_start_good) return;
     g_step = step;
     __atomic_add_fetch(&g_steps, 1, __ATOMIC_RELEASE);
-    TcoReload();                                        /* (before interrupts are on, the steps reload it) */
+    WatchdogReload();                                        /* (before interrupts are on, the steps reload it) */
 }
 
 void UpdateBootGood(void)

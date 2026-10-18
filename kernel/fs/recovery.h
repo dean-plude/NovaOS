@@ -32,6 +32,9 @@ void RecoveryBootInfo(const BootInfo *info);
 bool RecoverySafeMode(void);
 /* The start reached the desktop (fs/update.h): clear the failed-start count */
 void RecoveryStartGood(void);
+/* ... the same now, on this thread (a start that restarts on purpose
+ * before the desktop: fs/reset.c) */
+void RecoveryClearFailedStarts(void);
 /* Interrupts are on: run startup repair, if it was chosen (a thread) */
 void RecoveryBootDone(void);
 /* Show the Advanced startup menu at the next start (shutdown /r /o);

@@ -41,7 +41,8 @@
  * at the next start, starts the old kernel.elf again and tells it so,
  * and the old NovaOS throws the update away.  While it starts, the
  * update's kernel is watched: a stop restarts the PC (KeFatalStop), the
- * chipset's watchdog timer (hal/tco.h) resets it when the kernel hangs
+ * hardware watchdog (hal/watchdog.h: the firmware's WDAT one, else the
+ * chipset's TCO timer) resets it when the kernel hangs
  * with its interrupts off, and a start that makes no progress for
  * UPDATE_STALL_SECONDS restarts it too.  Live from the installation disc
  * or stick there is nothing to update.

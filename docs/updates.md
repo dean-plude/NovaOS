@@ -305,12 +305,6 @@ python3 tools/selftest.py --suite devices --only 'unsigned channel,unsigned refu
 
 ## Not done yet
 
-- **The boot menu and recovery.** There is no boot menu, safe mode or
-  startup repair yet, and the ACPI WDAT watchdog table is not read (a hang
-  with interrupts off is caught only on ICH9-family chipsets): the rest of
-  roadmap step 33.3
-  ([design/recovery.md](design/recovery.md#to-do-the-next-pieces-of-333)).
-
 - **The release key.** No key is built in yet (roadmap step 23.5), so
   updates are not authenticated.
 - **Changing the key.** A NovaOS trusts only the key it was built with, so

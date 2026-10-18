@@ -11,10 +11,16 @@
 # two starts are reset before they reach the desktop, and the third shows
 # the menu by itself with startup repair chosen.  (A broken update rolling
 # back by itself is the update boot's: tests/selftest/devices/update.)
+# QEMU hands NovaOS an ACPI WDAT table describing the chipset's TCO
+# watchdog (tools/mkwdat.py), as firmware does: `watchdog test` starts it
+# through the table and lets it run out, and it resets the PC.  Last,
+# Reset this PC (systemreset /keep, Settings > System > Recovery): a folder
+# outside the profiles and a changed setting go, a file in Documents stays.
 import os, re, sys, time
 
 DOC = ("the boot loader's Advanced startup menu: safe mode, startup repair and the previous version, "
-       'asked for with shutdown /r /o and coming up by itself after two failed starts')
+       'asked for with shutdown /r /o and coming up by itself after two failed starts; the firmware\'s WDAT watchdog '
+       'resetting the PC; and Reset this PC keeping the files and accounts')
 
 PREVIOUS = '0.0.9-test'
 REPORT = r'C:\Windows\System32\LogFiles\Srt\SrtTrail.txt'
@@ -78,6 +84,27 @@ def failed_starts(nova):
     _wait(nova, '[REPAIR] Startup repair finished', 60, seen)
 
 
+def watchdog_runs_out(nova):
+    """The watchdog started through the WDAT table and never reloaded: the
+    PC resets by itself"""
+    nova.sr.read_new()
+    seen = len(_serial(nova))
+    nova.qmp.type('watchdog test\n')
+    _wait(nova, '[WDAT] Watchdog running', 60, seen)
+    nova.sr.read_new()
+    nova.start(300)
+
+
+def reset_pc(nova):
+    """systemreset /keep: the next start resets, then restarts by itself"""
+    nova.sr.read_new()
+    seen = len(_serial(nova))
+    nova.qmp.type('systemreset /keep\n')
+    _wait(nova, '[RESET] Reset this PC finished: restarting', 600, seen)
+    nova.sr.read_new()
+    nova.start(300)
+
+
 def E(v):
     return re.escape(v)
 
@@ -104,4 +131,19 @@ TESTS = [
                       r'\[RECOVERY\] The last starts did not reach the desktop']),
     Test('count cleared', 'ver', [r'NovaOS \[Version'], builtin=True, timeout=60,
          before=lambda nova: _wait(nova, 'the failed-start count is cleared', 60)),
+    Test('firmware watchdog', 'watchdog', [r'Hardware watchdog: ACPI WDAT: counts of 1200 ms, 4 to 1023, resets the PC'],
+         builtin=True),
+    Test('watchdog resets the PC', 'ver', [r'NovaOS \[Version'], builtin=True, before=watchdog_runs_out, timeout=60,
+         boot_expect=[r'\[WDAT\] Watchdog running \(the firmware\'s WDAT table\): the PC resets 6\.0 s after']),
+    Test('a file to keep', r'echo kept through the reset > C:\Documents\resetkeep.txt', [], builtin=True, settle=2),
+    Test('a folder to remove', r'mkdir C:\ResetJunk', [], builtin=True, settle=2),
+    Test('a setting to undo', 'update channel http://10.0.2.2:1/reset-test/novaos-update.txt',
+         [r'Update channel: http://10\.0\.2\.2:1/reset-test/'], builtin=True, settle=2),
+    Test('reset this PC', r'type C:\Windows\Logs\SystemReset\ResetReport.txt',
+         [r'Reset this PC \(keep my files\)', r'Removed: [1-9]\d* file\(s\) and folder\(s\)'],
+         builtin=True, before=reset_pc, timeout=60,
+         boot_expect=[r'\[RESET\] Resetting this PC', r'\[REG\] Reset to the defaults, keeping the accounts']),
+    Test('files kept', r'type C:\Documents\resetkeep.txt', [r'kept through the reset'], builtin=True),
+    Test('apps removed', r'dir C:\ResetJunk', [r'The system cannot find the path specified'], builtin=True),
+    Test('settings undone', 'update channel', [r'Update channel: (?!http://10\.0\.2\.2:1/)'], builtin=True),
 ]

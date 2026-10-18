@@ -32,6 +32,9 @@
 #include "../hal/pci.h"
 #include "../fs/setup.h"
 #include "../fs/update.h"
+#include "../fs/reset.h"
+#include "../hal/watchdog.h"
+#include "../wm/desktop.h"
 #include "../drivers/nvme.h"
 #include "vterm.h"
 
@@ -268,6 +271,8 @@ static void cmd_help(Term *t)
         "  install [disk] [/fat]  install NovaOS on a disk (no disk: list them)\n"
         "  update [install]    check for a newer NovaOS (and install it)\n"
         "  update channel [url]  where updates come from\n"
+        "  systemreset /keep   reset this PC: remove apps and settings, keep your files (restarts)\n"
+        "  watchdog [test]     the hardware watchdog NovaOS uses (test: let it reset the PC)\n"
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
@@ -1226,6 +1231,38 @@ static void cmd_install(Term *t, int argc, char **argv)
 
 /* update [check | install | channel [<url> | default]]: NovaOS's own
  * updates (fs/update.c), as the App Store's Updates page has them */
+/* systemreset /keep: Reset this PC, keeping your files (fs/reset.h), as
+ * Windows' systemreset.exe opens it; it restarts at once */
+static void cmd_systemreset(Term *t, int argc, char **argv)
+{
+    if (argc != 2 || (!is(argv[1], "/keep") && !is(argv[1], "-keep"))) {
+        terr(t, "Usage: systemreset /keep   (removes the apps and settings, keeps your files; restarts now)");
+        return;
+    }
+    if (!ResetRequest()) {
+        terr(t, "Drive C: is not kept on a disk (NovaOS runs live): there is nothing to reset.");
+        return;
+    }
+    tprint(t, "Restarting to reset this PC. Your files and accounts stay.");
+    DesktopPowerRequest(POWER_RESTART);
+}
+
+/* watchdog: which hardware watchdog an update's first start runs under;
+ * watchdog test: start it and never reload it, so it resets the PC */
+static void cmd_watchdog(Term *t, int argc, char **argv)
+{
+    char d[128];
+    WatchdogDescribe(d, sizeof(d));
+    if (argc < 2) {
+        tprintf(t, d[0] ? "Hardware watchdog: %s" : "No hardware watchdog NovaOS can use on this PC.", d);
+        return;
+    }
+    if (!is(argv[1], "test")) { terr(t, "Usage: watchdog [test]"); return; }
+    UmSaveAll();                                /* (the reset loses nothing) */
+    if (!WatchdogStart(5)) { terr(t, "No hardware watchdog NovaOS can use on this PC."); return; }
+    tprintf(t, "%s is running and is not reloaded: the PC resets in a few seconds.", d);
+}
+
 static void cmd_update(Term *t, int argc, char **argv)
 {
     const char *sub = argc > 1 ? argv[1] : "check";
@@ -2257,6 +2294,8 @@ static void run_cmd_line(Term *t, char *cmdline, const char *original)
     else if (is(c, "devices") || is(c, "lspci")) cmd_devices(t);
     else if (is(c, "install"))                  cmd_install(t, argc, argv);
     else if (is(c, "update"))                   cmd_update(t, argc, argv);
+    else if (is(c, "systemreset"))              cmd_systemreset(t, argc, argv);
+    else if (is(c, "watchdog"))                 cmd_watchdog(t, argc, argv);
     else if (is(c, "taskkill"))                 cmd_taskkill(t, argc, argv);
     else if (is(c, "exit"))                     WmDestroyWindow(t->w);
     else {

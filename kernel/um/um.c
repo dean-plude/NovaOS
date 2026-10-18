@@ -30,6 +30,7 @@
 #include "../wm/kbdlayout.h"
 #include "../fs/bootlog.h"
 #include "../fs/bootfiles.h"
+#include "../fs/reset.h"
 #include "../arch/x86_64/idt.h"
 #include "um_internal.h"
 #include "../ke/syscall.h"
@@ -283,6 +284,7 @@ void UmInit(void)
     free_unpacked();
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     um_registry_init();
+    ResetBoot();                                    /* Reset this PC, when it was asked for (fs/reset.h) */
     EvLogBoot();                                    /* (the System log's first event of this boot) */
     DrivesRestoreLetters();                         /* the drive letters chosen before (HKLM\SYSTEM\MountedDevices) */
     NtDrvBootOptions();                             /* (test signing: kernel drivers, nt/ldr.c) */

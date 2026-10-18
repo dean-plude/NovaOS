@@ -1183,6 +1183,72 @@ void um_registry_init(void)
     kprintf("[REG] Registry ready (%s)\n", loaded ? "loaded from C:\\Windows\\System32\\config" : "defaults");
 }
 
+/* Reset this PC (fs/reset.c), at boot before any program runs: the tree
+ * goes back to the defaults except the keys in @keep (ASCII paths without
+ * "\Registry\", e.g. the SAM), which stay as they are with everything
+ * below them.  Saved a moment later, as any change. */
+static void save_path(Buf *b, RegKey *k)
+{
+    RegKey *chain[64];
+    UINT32 n = 0;
+    for (RegKey *a = k; a && n < 64; a = a->parent) chain[n++] = a;
+    for (UINT32 d = n - 1; d > 0; d--) {                    /* (its ancestors, without their values) */
+        RegKey *a = chain[d];
+        if (a->vol) return;
+        put(b, "K", 1);
+        put32(b, n - 1 - d);
+        put32(b, a->nlen);
+        put(b, a->name, 2 * a->nlen);
+    }
+    save_key(b, k, n - 1);
+}
+
+static bool holds_vol(const RegKey *k)
+{
+    if (k->vol) return true;
+    for (const RegKey *c = k->child; c; c = c->next) if (holds_vol(c)) return true;
+    return false;
+}
+
+/* Everything saved below @k goes (volatile keys, e.g. HARDWARE, stay) */
+static void prune(RegKey *k)
+{
+    for (RegKey *c = k->child, *nx; c; c = nx) {
+        nx = c->next;
+        if (c->vol) continue;
+        if (holds_vol(c)) prune(c);
+        else detach(c);
+    }
+    if (k->vol) return;
+    for (RegValue *v = k->values, *nx; v; v = nx) { nx = v->next; free_value(v); }
+    k->values = NULL;
+}
+
+void um_registry_reset(const char *const *keep, int n)
+{
+    Buf b = { 0 };
+    put(&b, "NOVAREG1", 8);
+    put(&b, "K", 1); put32(&b, 0); put32(&b, g_root->nlen); put(&b, g_root->name, 2 * g_root->nlen);
+    for (int i = 0; i < n; i++) {
+        UINT16 w[256];
+        UINT32 len = 0;
+        for (; keep[i][len] && len < 255; len++) w[len] = (UINT8)keep[i][len];
+        RegKey *k = NULL;
+        if (walk(g_root, w, len, false, false, &k, NULL) == ST_SUCCESS && k && k != g_root) save_path(&b, k);
+    }
+    put(&b, "E", 1);
+    if (b.bad) { kprintf("[REG] Reset: the keys to keep are too large; the registry is left as it is\n"); kfree(b.p); return; }
+    um_lock_excl(&g_reg);
+    prune(g_root);
+    bool ok = load_hive(b.p, b.n);
+    um_unlock_excl(&g_reg);
+    kfree(b.p);
+    defaults();
+    g_dirty = true;
+    g_dirty_ticks = 0;
+    kprintf("[REG] Reset to the defaults%s\n", ok ? ", keeping the accounts and their profiles" : " (the kept keys were lost)");
+}
+
 /* -----------------------------------------------------------------------
  * Key handles: kernel objects referencing a key
  * ----------------------------------------------------------------------- */

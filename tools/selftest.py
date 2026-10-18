@@ -81,7 +81,9 @@ order; --list prints them):
             loader's Advanced startup menu, asked for with shutdown /r /o,
             starts safe mode, startup repair and the previous version, and
             comes up by itself after two starts that did not reach the
-            desktop; "driversearch", QEMU's
+            desktop; the firmware's WDAT watchdog resets the PC; and Reset
+            this PC removes apps and settings, keeping the files and
+            accounts; "driversearch", QEMU's
             virtio-serial port, which has no NovaOS driver, on a network
             answering as the Microsoft Update Catalog does from recorded
             pages (tools/drivertest/catalog_fixture.py): pnputil
@@ -1017,7 +1019,8 @@ def rollbacktest_boot(work):
     kernel stamped as version 0.0.9-test (tools/mkupdate.py), and
     bootx64.old, this build's boot loader; and the files of an update that
     never finished (kernel.new and update.txt with no mark), for startup
-    repair to find (tests/selftest/devices/rollbacktest)"""
+    repair to find; and an ACPI WDAT table describing the chipset's watchdog
+    (tools/mkwdat.py), as firmware does (tests/selftest/devices/rollbacktest)"""
     img = os.path.join(work, 'rollback.img')
     subprocess.run(['cp', '--sparse=always', os.path.join(ROOT, 'build', 'nova.img'), img], check=True)
     prev = os.path.join(work, 'previous')
@@ -1033,7 +1036,9 @@ def rollbacktest_boot(work):
     for src, dst in ((os.path.join(prev, 'kernel.elf'), 'kernel.old'), (os.path.join(ROOT, 'build', 'bootx64.efi'), 'bootx64.old'),
                      (stale, 'update.txt'), (junk, 'kernel.new')):
         subprocess.run(['mcopy', '-o', '-i', img, src, '::/EFI/NOVA/' + dst], check=True, env=env)
-    return [], [], {'img': img}
+    wdat = os.path.join(work, 'wdat.dat')
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkwdat.py'), wdat], check=True)
+    return ['-acpitable', f'file={wdat}'], [], {'img': img}
 
 
 def driversearch_boot(work):

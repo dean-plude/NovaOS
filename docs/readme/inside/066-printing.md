@@ -1,1 +1,1 @@
-- **Printing**: the Windows print spooler and API, Microsoft Print to PDF, and the Print dialogs; network printing comes next.
+- **Printing**: the Windows print spooler and API, Microsoft Print to PDF, the Print dialogs and driverless network (IPP) printers; Notepad++ and SumatraPDF print in the app corpus.

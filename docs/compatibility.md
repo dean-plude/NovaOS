@@ -64,9 +64,9 @@ planned (roadmap item 27.5).
 
 | Rating | Programs | Games and game stores | Command-line and developer tools | Runtimes, graphics drivers and installers | All |
 |---|---:|---:|---:|---:|---:|
-| Platinum | 7 | 7 | 9 | 6 | 29 |
+| Platinum | 8 | 7 | 9 | 6 | 30 |
 | Gold | 0 | 3 | 1 | 1 | 5 |
-| Silver | 5 | 1 | 0 | 1 | 7 |
+| Silver | 4 | 1 | 0 | 1 | 6 |
 | Bronze | 18 | 2 | 1 | 2 | 23 |
 | Borked | 1 | 1 | 0 | 0 | 2 |
 | Untested | 0 | 0 | 1 | 3 | 4 |
@@ -77,13 +77,13 @@ planned (roadmap item 27.5).
 | Program | Rating | What works | Problems and gaps | Checked by |
 |---|---|---|---|---|
 | **7-Zip 26.03** (x64) | Platinum | Installs from its own setup; the file manager, the add and extract dialogs, dragging files out of archives; `7z.exe` packs and tests archives | — | nightly corpus ([`040-7zip.py`](../tests/appcorpus/040-7zip.py)) |
-| **Notepad++ 8.8.3** (x64 portable) | Platinum | Opens, edits and saves files through the Open and Save As dialogs | — | nightly corpus ([`900-notepad++.py`](../tests/appcorpus/900-notepad++.py)) |
+| **Notepad++ 8.8.3** (x64 portable) | Platinum | Opens, edits and saves files through the Open and Save As dialogs; prints from its Print dialog to a network (IPP) printer and to Microsoft Print to PDF | — | nightly corpus ([`900-notepad++.py`](../tests/appcorpus/900-notepad++.py)) |
+| **SumatraPDF 3.4.6** (x86 portable) | Platinum | Opens a PDF and renders its pages; prints it from its Print dialog to a network (IPP) printer and to Microsoft Print to PDF ([printing.md](design/printing.md)) | — | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
 | **WinMerge 2.16.50** | Platinum | Compares two files side by side | Folder compare and plugins not checked | nightly corpus ([`860-winmerge.py`](../tests/appcorpus/860-winmerge.py)) |
 | **VLC 3.0.21** (Qt 5) | Platinum | Plays an H.264 and AAC MP4 with sound in its window and closes cleanly | Other formats and streaming not checked | nightly corpus ([`870-vlc.py`](../tests/appcorpus/870-vlc.py)) |
 | **Audacity 3.7.4** (wxWidgets) | Platinum | Records from the microphone without dropouts, draws the waveform and saves an `.aup3` project | Effects and export not checked | nightly corpus ([`880-audacity.py`](../tests/appcorpus/880-audacity.py)) |
 | **Inkscape 0.91** (GTK 2) | Platinum | Opens, edits and saves an SVG | Inkscape 1.x not checked (its downloads are out of the test network's reach) | nightly corpus ([`880-inkscape.py`](../tests/appcorpus/880-inkscape.py)) |
 | **Firefox 157** and **Floorp 12.19** | Platinum | Built into NovaOS as its default browser and also in the App Store; installs from the App Store, loads pages over HTTP and HTTPS, scrolls and takes typing in forms | A publicly trusted HTTPS site not checked (the test network is offline) | nightly corpus (Firefox, [`890-firefox.py`](../tests/appcorpus/890-firefox.py)), by hand in QEMU (Floorp) |
-| **SumatraPDF 3.4.6** (x86 portable) | Silver | Opens a PDF and renders its pages | Printing is not checked yet (NovaOS now has the Microsoft Print to PDF printer; [printing.md](design/printing.md)) | nightly corpus ([`850-sumatrapdf.py`](../tests/appcorpus/850-sumatrapdf.py)) |
 | **KeePassXC 2.7.12** (Qt 5) | Silver | Opens and unlocks a KDBX 4 database and shows its entries | Windows Hello unlock reports "not supported" | nightly corpus ([`870-keepassxc.py`](../tests/appcorpus/870-keepassxc.py)) |
 | **Krita 5.3.4** (App Store; Qt 5, portable zip) | Silver | Installs from the App Store (the Store unpacks its zip), opens a new image on the built-in OpenGL (Mesa's llvmpipe; nothing else to install), paints a stroke with the default brush and saves it as a `.kra` through its Save dialog; the saved file holds the document, its layers and the merged image ([history](history/2026-10-14-krita-saves.md)) | Under QEMU without KVM it takes about ten minutes from start to a saved image; exporting to other formats (PNG, JPEG) and opening a saved file again not checked | nightly corpus ([`885-krita.py`](../tests/appcorpus/885-krita.py)) |
 | **PhotoCraft 0.7.0** (ArtCraft; Rust, egui on wgpu) | Silver | Installs from the App Store, opens its editor window on the built-in OpenGL (llvmpipe) and makes a new document | On software graphics (llvmpipe) it composites on the CPU by its own design and says so in a box at start; its GPU compositor ran on NovaOS's OpenGL in a test, but no hardware adapter has been tried. Editing not checked | nightly corpus ([`886-photocraft.py`](../tests/appcorpus/886-photocraft.py)) |

@@ -105,6 +105,55 @@ static void map_disk(SetupDisk *s, const DiskLayout *l, const DriveVolume *vols,
     }
 }
 
+/* Room for NovaOS by shrinking an NTFS volume (Windows' C:), when the free
+ * space is too small: NovaOS gets half the volume's free space (at least
+ * what it needs, at most 64 GiB, less if the volume can't give that much),
+ * taken from its end, so the free space after it grows; of the NTFS
+ * volumes on the disk, the one that leaves the most room.  Read-only. */
+#define SHRINK_MAX_SECTORS ((64ull << 30) / BLOCK_SECTOR)
+
+static void shrink_plan(SetupDisk *s, const DiskLayout *l)
+{
+    UINT64 need = (SetupBesideBytes() + BLOCK_SECTOR - 1) / BLOCK_SECTOR, best = 0;
+    for (int i = 0; i < l->count; i++) {
+        const DiskPart *p = &l->part[i];
+        if (memcmp(p->type, DISK_TYPE_BASIC, 16)) continue;
+        NtfsVol *v = NtfsMount(s->dev, p->lba);
+        if (!v) continue;
+        UINT64 min = 0, used = 0, total = NtfsTotalBytes(v);
+        const char *why = NULL;
+        bool ok = NtfsShrinkLimit(v, &min, &used, &why);
+        NtfsUnmount(v);
+        if (!ok) {
+            ksnprintf(s->shrink_why, sizeof(s->shrink_why), "Windows' volume can't be shrunk: %s.", why);
+            continue;
+        }
+        UINT64 next = l->last + 1;                        /* (the room ends where the next partition starts) */
+        for (int k = 0; k < l->count; k++)
+            if (l->part[k].lba > p->lba && l->part[k].lba < next) next = l->part[k].lba;
+        UINT64 end = align_down(next), to = 0;
+        UINT64 want = total > used ? (total - used) / 2 / BLOCK_SECTOR : 0;
+        if (want > SHRINK_MAX_SECTORS) want = SHRINK_MAX_SECTORS;
+        if (want < need) want = need;
+        for (int pass = 0; pass < 2 && !to; pass++, want = need) {
+            UINT64 at = end > want ? align_down(end - want) : 0;
+            if (at > p->lba && (at - p->lba) * BLOCK_SECTOR >= min && at - p->lba < p->sectors) to = at - p->lba;
+        }
+        if (!to) {
+            ksnprintf(s->shrink_why, sizeof(s->shrink_why), "Windows' volume is too full to make room for NovaOS.");
+            continue;
+        }
+        UINT64 room = end - align_up(p->lba + to);
+        if (room <= best) continue;
+        best = room;
+        s->can_shrink = true;
+        s->shrink_lba = p->lba;
+        s->shrink_from = p->sectors;
+        s->shrink_to = to;
+        s->shrink_used = used;
+    }
+}
+
 int SetupListDisks(SetupDisk *out, int max)
 {
     int n = 0;
@@ -145,6 +194,8 @@ int SetupListDisks(SetupDisk *out, int max)
             map_disk(s, l, vols, nvols);
             s->can_beside = !s->boot && !s->holds_c && !s->nova &&
                             s->free_sectors * BLOCK_SECTOR >= SetupBesideBytes();
+            if (!s->boot && !s->holds_c && !s->nova && !s->can_beside) shrink_plan(s, l);
+            s->can_reinstall = s->nova && !s->boot;          /* (drive C: may be kept there: it stays) */
         }
     }
     kfree(vols);
@@ -158,6 +209,7 @@ int SetupListDisks(SetupDisk *out, int max)
 static volatile SetupStatus g_status;
 static BlockDev *g_target;
 static bool      g_ntfs;                  /* drive C: on NTFS */
+static SetupHow  g_how;
 static bool      g_beside;                /* in the free space, keeping the disk's partitions */
 
 void SetupGetStatus(SetupStatus *out)
@@ -597,6 +649,88 @@ out:
     kfree(order);
 }
 
+/* Shrink the NTFS volume shrink_plan picks, then its partition, so the
+ * free space after it takes NovaOS (SETUP_SHRINK).  Windows' volumes on
+ * the disk are detached first.  Nothing but that volume and its GPT entry
+ * is written. */
+static bool make_room(BlockDev *d)
+{
+    SetupDisk s;
+    memset(&s, 0, sizeof(s));
+    s.dev = d;
+    DiskLayout *l = kmalloc(sizeof(DiskLayout));
+    if (!l || !DiskReadLayout(d, l) || l->style != DISK_GPT) {
+        kfree(l);
+        failed("The disk's partition table could not be read.");
+        return false;
+    }
+    shrink_plan(&s, l);
+    if (!s.can_shrink) {
+        kfree(l);
+        failed(s.shrink_why[0] ? s.shrink_why : "No volume on the disk can be shrunk to make room for NovaOS.");
+        return false;
+    }
+    step(4, "Making room: shrinking Windows' volume (files past its new end are moved)");
+    NtfsVol *v = NtfsMount(d, s.shrink_lba);
+    const char *why = "it could not be opened";
+    bool ok = v && NtfsEnableWrite(v);
+    if (v && !ok) why = "Windows did not leave it closed cleanly (turn off Fast Startup, shut down fully)";
+    ok = ok && NtfsShrink(v, s.shrink_to * BLOCK_SECTOR, &why);
+    if (v) NtfsUnmount(v);
+    if (ok) {
+        for (int k = 0; k < l->count; k++)
+            if (l->part[k].lba == s.shrink_lba) l->part[k].sectors = s.shrink_to;
+        ok = DiskWriteLayout(d, l);
+        if (!ok) why = "the partition table could not be written";
+        if (d->flush) d->flush(d);
+    }
+    kfree(l);
+    if (!ok) {
+        char msg[128];
+        ksnprintf(msg, sizeof(msg), "Windows' volume could not be shrunk: %s.", why);
+        failed(msg);
+        return false;
+    }
+    kprintf("[SETUP] Shrank the NTFS volume at %u MiB on %s from %u MiB to %u MiB to make room for NovaOS\n",
+            (unsigned)(s.shrink_lba >> 11), d->name, (unsigned)(s.shrink_from >> 11), (unsigned)(s.shrink_to >> 11));
+    return true;
+}
+
+/* A label of the volume at @lba ("" if none is recognised) */
+static void volume_label(BlockDev *d, UINT64 lba, char *out, int cap)
+{
+    out[0] = 0;
+    FatVol *f = FatMount(d, lba);
+    if (f) { ksnprintf(out, (size_t)cap, "%s", FatLabel(f)); FatUnmount(f); return; }
+    NtfsVol *n = NtfsMount(d, lba);
+    if (n) { ksnprintf(out, (size_t)cap, "%s", NtfsLabel(n)); NtfsUnmount(n); }
+}
+
+/* Reinstalling (SETUP_REINSTALL): NovaOS's ESP (NOVA_EFI) and data
+ * partition (NOVADATA) on @d; nothing is written */
+static bool reinstall_layout(BlockDev *d, UINT64 *esp_lba, UINT64 *esp_sec, UINT32 *esp_num, UINT8 esp_id[16],
+                             UINT64 *data_lba, UINT64 *data_sec)
+{
+    DiskLayout *l = kmalloc(sizeof(DiskLayout));
+    bool esp = false, data = false;
+    if (l && DiskReadLayout(d, l) && l->style == DISK_GPT)
+        for (int i = 0; i < l->count; i++) {
+            const DiskPart *p = &l->part[i];
+            char label[40];
+            volume_label(d, p->lba, label, sizeof(label));
+            if (!esp && DiskIsEsp(l, p) && !strcmp(label, "NOVA_EFI")) {
+                *esp_lba = p->lba; *esp_sec = p->sectors; *esp_num = p->number;
+                memcpy(esp_id, p->id, 16);
+                esp = true;
+            } else if (!data && !strcmp(label, "NOVADATA")) {
+                *data_lba = p->lba; *data_sec = p->sectors;
+                data = true;
+            }
+        }
+    kfree(l);
+    return esp && data;
+}
+
 static void setup_thread(void *arg)
 {
     (void)arg;
@@ -618,10 +752,29 @@ static void setup_thread(void *arg)
     UINT8 esp_id[16];
     UINT32 esp_num = 1;                                          /* (the ESP's GPT entry, for its boot entry) */
     DiskLayout *layout = NULL;
-    if (g_beside) {
+    bool keep = g_how == SETUP_REINSTALL;                        /* (drive C:'s partition as it is) */
+    if (g_how == SETUP_SHRINK) {
+        DrivesDetach(d);
+        if (!make_room(d)) { DrivesAttach(d); return; }
+    }
+    if (keep) {
+        UINT64 need = esp_sec;
+        if (!reinstall_layout(d, &esp_lba, &esp_sec, &esp_num, esp_id, &data_lba, &data_sec)) {
+            failed("NovaOS's partitions (NOVA_EFI and NOVADATA) were not found on the disk.");
+            return;
+        }
+        if (esp_sec < need) {
+            failed("NovaOS's EFI System Partition on the disk is too small for this version: erase the disk instead.");
+            return;
+        }
+        kprintf("[SETUP] Reinstalling NovaOS on %s: EFI System Partition at %u MiB (%u MiB) formatted again, "
+                "NOVADATA at %u MiB (%u MiB) kept\n", d->name, (unsigned)(esp_lba >> 11), (unsigned)(esp_sec >> 11),
+                (unsigned)(data_lba >> 11), (unsigned)(data_sec >> 11));
+    } else if (g_beside) {
         layout = kmalloc(sizeof(DiskLayout));
         if (!layout || !beside_layout(d, layout, esp_sec, &esp_lba, &data_lba, &data_sec)) {
             kfree(layout);
+            if (g_how == SETUP_SHRINK) DrivesAttach(d);
             failed("There is not enough free space on the disk for NovaOS beside what is on it.");
             return;
         }
@@ -636,16 +789,18 @@ static void setup_thread(void *arg)
     }
 
     /* C: may be saved on this very disk: stop that before erasing it */
-    bool had_c = PersistActive(), c_here = PersistDevice() == d;
+    bool had_c = PersistActive(), c_here = PersistDevice() == d && !keep;
     if (c_here) {
         step(6, "Saving this session's files for the move");
         PersistDetach();
     }
 
     DrivesDetach(d);                                             /* (its volumes are not D:, E:, ... any more) */
-    step(10, "Creating partitions");
+    step(10, keep ? "Keeping the disk's partitions as they are" : "Creating partitions");
     bool parted;
-    if (layout) {                     /* (only the new partitions' first sectors are cleared) */
+    if (keep)                         /* (the partitions stay as they are) */
+        parted = true;
+    else if (layout) {                /* (only the new partitions' first sectors are cleared) */
         UINT8 *z = kzalloc(64 * BLOCK_SECTOR);
         parted = z && d->write(d, esp_lba, 64, z) && d->write(d, data_lba, 64, z) && DiskWriteLayout(d, layout);
         kfree(z);
@@ -653,13 +808,13 @@ static void setup_thread(void *arg)
     } else
         parted = wipe(d, esp_lba, data_lba) && write_gpt(d, &esp_lba, &esp_sec, &data_lba, &data_sec, esp_id);
     if (!parted) {
-        if (g_beside) DrivesAttach(d);
+        if (g_beside || keep) DrivesAttach(d);
         failed("Could not write the partition table (a disk error, or the disk is too small).");
         return;
     }
     if (d->flush) d->flush(d);
 
-    step(18, "Formatting the EFI System Partition");
+    step(18, keep ? "Formatting NovaOS's EFI System Partition again" : "Formatting the EFI System Partition");
     FatVol *esp = FatFormat(d, esp_lba, esp_sec, "NOVA_EFI");
     if (!esp) { failed("Could not format the EFI System Partition."); return; }
     UINT32 dir;
@@ -695,7 +850,10 @@ static void setup_thread(void *arg)
     FatUnmount(esp);
     if (!good) { failed("The copied system files did not read back correctly."); return; }
 
-    if (g_ntfs) {
+    if (keep) {
+        step(80, "Keeping drive C: (NOVADATA) and your files as they are");
+        g_status.kept_c = true;
+    } else if (g_ntfs) {
         step(80, "Formatting the data partition for drive C: (NTFS)");
         if (!NtfsFormat(d, data_lba, data_sec, "NOVADATA", rnd())) { failed("Could not format the data partition."); return; }
     } else {
@@ -710,30 +868,33 @@ static void setup_thread(void *arg)
 
     /* This session's files go to the new disk when C: has nowhere else to
      * be saved; a C: kept on another disk stays there */
-    if (c_here || !had_c) {
+    if (!keep && (c_here || !had_c)) {
         step(88, "Copying your files to the new disk");
         g_status.moved_c = PersistAdopt(d, data_lba);
     }
     if (d->flush) d->flush(d);
     if (g_kernel_copy) { kfree(g_kernel_copy); g_kernel_copy = NULL; }
     if (g_loader_copy) { kfree(g_loader_copy); g_loader_copy = NULL; }
-    if (g_beside) DrivesAttach(d);                               /* (the other systems' volumes again) */
+    if (g_beside || keep) DrivesAttach(d);                       /* (the other systems' volumes again) */
     step(95, "Adding NovaOS to the firmware's boot menu");
     add_boot_entry(d, esp_num, esp_lba, esp_sec, esp_id);
     step(100, "NovaOS is installed");
     g_status.state = SETUP_DONE;
 }
 
-bool SetupStart(BlockDev *dev, bool ntfs, bool beside)
+bool SetupStart(BlockDev *dev, bool ntfs, SetupHow how)
 {
+    static const char *const what[] = { "on", "beside the other systems on", "beside the other systems, making room, on",
+                                        "again, keeping drive C:, on" };
     if (g_status.state == SETUP_RUNNING || !dev) return false;
     memset((void *)&g_status, 0, sizeof(g_status));
     g_status.state = SETUP_RUNNING;
     g_target = dev;
     g_ntfs = ntfs;
-    g_beside = beside;
-    kprintf("[SETUP] Installing NovaOS %s %s (%s, %u MiB), drive C: on %s\n", beside ? "beside the other systems on" : "on",
-            dev->name, dev->model, (unsigned)(dev->sectors >> 11), ntfs ? "NTFS" : "FAT32");
+    g_how = how;
+    g_beside = how == SETUP_BESIDE || how == SETUP_SHRINK;
+    kprintf("[SETUP] Installing NovaOS %s %s (%s, %u MiB), drive C: on %s\n", what[how],
+            dev->name, dev->model, (unsigned)(dev->sectors >> 11), how == SETUP_REINSTALL ? "NOVADATA, kept" : ntfs ? "NTFS" : "FAT32");
     if (!sched_create_thread("setup", setup_thread, NULL, PRIO_SERVICE)) {
         g_status.state = SETUP_FAILED;
         strncpy((char *)g_status.error, "Could not start the installer.", sizeof(g_status.error) - 1);

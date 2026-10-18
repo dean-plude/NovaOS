@@ -165,7 +165,7 @@ A short tour; [docs/inside.md](docs/inside.md) has the full one, and
 - **Boot**: a UEFI bootloader loads the ELF kernel from the EFI System Partition or the ISO; the same ISO runs live and installs NovaOS to a SATA or NVMe disk.
 - **Kernel** (`kernel/`): an NT-style executive with objects and handles, processes and threads, virtual memory, security, a registry, the Windows 10 1903 system-call table and an SMP scheduler with NT's priorities.
 - **Built-in drivers**: SATA and NVMe disks, GPT, FAT and NTFS, USB (xHCI to UHCI: HID, storage, audio, game controllers, UVC cameras), Intel and virtio networking, HD Audio, display adapters, ACPI power management and a Plug and Play device tree.
-- **Windows drivers** (`kernel/nt/`): unmodified Windows `.inf`/`.sys` packages on an NT driver interface (WDM, KMDF, UMDF, NDIS, Storport, USB, display-only WDDM, with the WDDM render path begun: `D3DKMT*` calls, video memory and fences on a Basic Render adapter, render miniports' adapters, devices and allocations), matched and downloaded by hardware ID and checked against Windows' signing policy.
+- **Windows drivers** (`kernel/nt/`): unmodified Windows `.inf`/`.sys` packages on an NT driver interface (WDM, KMDF, UMDF, NDIS, Storport, USB, display-only WDDM, with the WDDM render path begun: `D3DKMT*` calls, video memory and fences on a Basic Render adapter, render miniports' adapters, devices, allocations and GPU virtual addresses), matched and downloaded by hardware ID and checked against Windows' signing policy.
 - **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC, stateful and stateless DHCPv6 and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2.
 - **Desktop** (`kernel/wm/`, `kernel/apps/`): a software-rendered window manager and shell with a dock, Start menu search, File Explorer, Terminal, Settings, Task Manager, Disk Management, Calculator and the App Store.
 - **Windows userland** (`userland/`): about 115 system DLLs written for NovaOS, 64- and 32-bit, from `ntdll`, `kernel32`, `user32` and `gdi32` to COM, the C and C++ runtimes, Windows Installer, Schannel, DirectWrite, Direct2D and ICU.
@@ -216,10 +216,13 @@ these decisions and why it was made.
 
 ## Status and roadmap
 
-**NovaOS 0.1.0** was released on 4 October 2026, and the rolling `latest`
-build follows `main`.  Since then the kernel's console and NTFS work and the
-Windows driver model have been finished, and a performance budget guards
-boot time and Firefox start-up in CI.
+**NovaOS 0.2 "Kepler"** (version 0.2.0) is the current release
+([release notes](docs/releases/0.2.0.md)); 0.1.0 was released on 4 October
+2026 ([notes](docs/releases/0.1.0.md)).  The rolling `latest` build follows
+`main`.  Kepler is the everyday-OS release: accounts and sign-in, UAC,
+updates that roll back, an installer that works beside Windows, printing,
+and the Windows driver model.  A performance budget guards boot time and
+Firefox start-up in CI.
 
 What 0.1 still owes is a boot on the reference PC, a ThinkPad T14 Gen 4: all
 testing so far has been in QEMU (and in CI), and nothing has yet run on a real
@@ -294,6 +297,7 @@ before new code is written.
 | [Drivers](docs/drivers.md) and [Windows driver design](docs/design/windows-drivers.md) | Running Windows driver packages |
 | [Desktop design](docs/design/native-desktop.md) | How the Aurora desktop maps its design reference onto the native shell |
 | [Intel GPU design](docs/design/intel-gpu.md) | The plan for the reference laptop's GPU |
+| [Anti-cheat and DRM](docs/design/anti-cheat-drm.md) | What game anti-cheat and DRM need from the OS, and what NovaOS has |
 | [Ethernet](docs/ethernet.md) | The Intel Ethernet driver |
 | [Building Firefox](docs/building-firefox.md) | How the bundled Firefox is fetched and packaged |
 | [Roadmap](docs/ROADMAP.md) and [History](docs/HISTORY.md) | What comes next, and what every phase added |

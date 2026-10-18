@@ -196,7 +196,7 @@ void UsbPnpDevice(UsbDev *d, UINT8 dev_class, const UsbPnpFn *fn, int nfn)
         if (n && fn[i].cls == 0x0E && fn[i].sub == 2 && f[n - 1].cls == 0x0E) { f[n - 1].ifaces |= bit; continue; }
         if (n < USBPNP_MAX_FN) { f[n] = fn[i]; f[n++].ifaces = bit; }
     }
-    bool composite = n > 1 && dev_class != 0xFF && dev_class != 0x09;
+    bool composite = n > 1 && dev_class != 0xFF && dev_class != 0x09 && dev_class != 0xE0;   /* (a Bluetooth radio: one function, bthusb's) */
     if (!composite) {
         UsbPnpFn one = f[0];
         for (int i = 1; i < n && !one.driver; i++) if (f[i].driver) one = f[i];

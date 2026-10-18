@@ -23,10 +23,20 @@
  *   OpenAllocation     finds its allocation from dxgkrnl's handle
  *                      (DxgkCbGetHandleData) and gives the device its own
  *                      handle for it; CloseAllocation, DestroyAllocation
+ *   its GPU MMU        GpuMmuSupported: two levels of page tables in system
+ *                      memory (DXGKQAITYPE_GPUMMUCAPS, PAGETABLELEVELDESC),
+ *                      a 30-bit (1 GiB) GPU address space per process, the
+ *                      root sized by GetRootPageTableSize; entries are its
+ *                      own 8-byte format (the page's physical address, bit
+ *                      0 valid, bit 1 read-only), which BuildPagingBuffer's
+ *                      UPDATE_PAGE_TABLE writes with the CPU from VidMm's
+ *                      DXGK_PTEs; CreateProcess and DestroyProcess keep a
+ *                      process object that learns its root table
  *
- * The next parts of step 3 give its GPU the rest: GPU virtual addresses
- * and paging buffers, a command format a kernel thread runs, its
- * interrupt, fences, preemption and TDR.  Its DbgPrint lines and counts
+ * After each mapping it reads the mapping's first word back through its
+ * own page tables, as its GPU would: the self-test checks that word.  The
+ * next parts of step 3 give its GPU the rest: a command format a kernel
+ * thread runs, its interrupt, fences, preemption and TDR.  Its DbgPrint lines and counts
  * are what the wddm self-test (tests/selftest/devices/wddm) checks.  Built
  * by tools/drivertest/mksys.py with its package (wddmtest.inf, a
  * test-signed catalog) into C:\Tests\WddmTest.
@@ -46,6 +56,8 @@ IMPORT NT_STATUS KeWaitForSingleObject(void *obj, int reason, char mode, unsigne
 IMPORT void      ObfDereferenceObject(void *obj);
 IMPORT void     *ExAllocatePoolWithTag(int type, unsigned long long size, unsigned int tag);
 IMPORT void      ExFreePoolWithTag(void *p, unsigned int tag);
+IMPORT void     *MmMapIoSpaceEx(long long pa, unsigned long long size, unsigned int protect);
+IMPORT void      MmUnmapIoSpace(void *va, unsigned long long size);
 
 #define NonPagedPoolNx      512
 #define TAG_WDT             0x54644457u           /* 'WDdT' */
@@ -53,6 +65,11 @@ IMPORT void      ExFreePoolWithTag(void *p, unsigned int tag);
 #define SEGMENT_SIZE        (256ull << 20)
 #define GPU_PAGE            65536ull
 #define PRIORITY_NORMAL     0x78000000u           /* D3DDDI_ALLOCATIONPRIORITY_NORMAL */
+#define VA_BITS             30                    /* its GPU virtual addresses */
+#define PT_BITS             9                     /* each level's index: 512 8-byte entries, a 4 KiB table */
+#define PTE_VALID           1ull
+#define PTE_READ_ONLY       2ull
+#define PAGE_READWRITE      0x04
 
 /* The user-mode side's private data for an allocation (userland's
  * NOVA_KMT_ALLOCATION) */
@@ -61,9 +78,11 @@ typedef struct { unsigned long long Size; unsigned int Flags, Reserved; } AllocS
 typedef struct {
     NT_DEVICE_OBJECT  *pdo;
     DXGKRNL_INTERFACE  cb;
-    int                devices, allocations;      /* (live: counted for the log) */
+    int                devices, allocations, processes;   /* (live: counted for the log) */
     unsigned long long bytes;
 } Gpu;
+
+typedef struct { Gpu *gpu; unsigned long long *root; } Process;   /* (root: its root table, as the CPU sees it) */
 
 typedef struct { Gpu *gpu; void *dxgk; } Device;
 typedef struct { unsigned long long size; } Allocation;
@@ -143,10 +162,31 @@ static NT_API NT_STATUS wt_query_adapter_info(void *adapter, const DXGKARG_QUERY
         mzero(caps, sizeof(*caps));
         caps->HighestAcceptableAddress = ~0ull;
         caps->MaxAllocationListSlotId = 16;
-        caps->MemoryManagementCaps.Value = 1u << 6;       /* GpuMmuSupported (part 3 uses it) */
+        caps->MemoryManagementCaps.Value = DXGK_VIDMMCAPS_GPUMMU;
         caps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
         caps->WDDMVersion = DXGKDDI_WDDMv2;
         caps->SupportNonVGA = 1;
+        return NT_STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_GPUMMUCAPS: {
+        if (q->OutputDataSize < sizeof(DXGK_GPUMMUCAPS)) return NT_STATUS_BUFFER_TOO_SMALL;
+        DXGK_GPUMMUCAPS *mmu = q->pOutputData;
+        mzero(mmu, sizeof(*mmu));
+        mmu->Flags = 1;                                   /* ReadOnlyMemorySupported */
+        mmu->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;   /* (a software GPU: the CPU writes them) */
+        mmu->VirtualAddressBitCount = VA_BITS;
+        mmu->LeafPageTableSizeFor64KPagesInBytes = 4096;
+        mmu->PageTableLevelCount = 2;
+        return NT_STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_PAGETABLELEVELDESC: {
+        if (q->OutputDataSize < sizeof(DXGK_PAGE_TABLE_LEVEL_DESC) || !q->pInputData) return NT_STATUS_INVALID_PARAMETER;
+        unsigned int level = *(const unsigned int *)q->pInputData;
+        if (level > 1) return NT_STATUS_INVALID_PARAMETER;
+        DXGK_PAGE_TABLE_LEVEL_DESC *d = q->pOutputData;
+        mzero(d, sizeof(*d));
+        d->PageTableIndexBitCount = PT_BITS;              /* (the root's: its size comes from GetRootPageTableSize) */
+        d->PageTableSizeInBytes = d->PageTableAlignmentInBytes = 4096;   /* segment 0: system memory */
         return NT_STATUS_SUCCESS;
     }
     case DXGKQAITYPE_QUERYSEGMENT4: {
@@ -268,6 +308,89 @@ static NT_API NT_STATUS wt_close_allocation(void *device, const DXGKARG_CLOSEALL
 }
 
 /* -----------------------------------------------------------------------
+ * Its GPU MMU: processes, page tables
+ * ----------------------------------------------------------------------- */
+static NT_API NT_STATUS wt_create_process(void *ctx, DXGKARG_CREATEPROCESS *a)
+{
+    Gpu *g = ctx;
+    Process *p = alloc(sizeof(*p));
+    if (!p) return NT_STATUS_NO_MEMORY;
+    p->gpu = g;
+    a->hKmdProcess = p;
+    g->processes++;
+    DbgPrint("wddmtest: process created (%d)\n", g->processes);
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API NT_STATUS wt_destroy_process(void *adapter, void *process)
+{
+    Gpu *g = adapter;
+    g->processes--;
+    DbgPrint("wddmtest: process destroyed (%d left)\n", g->processes);
+    release(process);
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API unsigned long long wt_root_size(void *adapter, DXGKARG_GETROOTPAGETABLESIZE *a)
+{
+    (void)adapter;
+    unsigned int n = (a->NumberOfPte + 511) & ~511u;      /* (whole 4 KiB pages of entries) */
+    a->NumberOfPte = n;
+    return (unsigned long long)n * 8;
+}
+
+/* The 32-bit word at GPU virtual address @va of @p, read as the GPU reads
+ * it: through the root and leaf tables to the page; 0xFFFFFFFF if unmapped */
+static unsigned int gpu_read(Process *p, unsigned long long va)
+{
+    unsigned long long dir = p->root ? p->root[va >> 21 & 511] : 0, pte = 0;
+    if (!(dir & PTE_VALID)) return 0xFFFFFFFFu;
+    unsigned long long *leaf = MmMapIoSpaceEx((long long)(dir & ~0xFFFull), 4096, PAGE_READWRITE);
+    if (leaf) { pte = leaf[va >> 12 & 511]; MmUnmapIoSpace(leaf, 4096); }
+    if (!(pte & PTE_VALID)) return 0xFFFFFFFFu;
+    unsigned char *page = MmMapIoSpaceEx((long long)(pte & ~0xFFFull), 4096, PAGE_READWRITE);
+    if (!page) return 0xFFFFFFFFu;
+    unsigned int v = *(volatile unsigned int *)(page + (va & 0xFFF));
+    MmUnmapIoSpace(page, 4096);
+    return v;
+}
+
+/* VidMm's page table updates, done here with the CPU (nothing goes in the
+ * paging buffer) */
+static NT_API NT_STATUS wt_build_paging_buffer(void *adapter, DXGKARG_BUILDPAGINGBUFFER *a)
+{
+    (void)adapter;
+    if (a->Operation == DXGK_OPERATION_FLUSH_TLB) return NT_STATUS_SUCCESS;   /* (no TLB: it walks the tables each time) */
+    if (a->Operation != DXGK_OPERATION_UPDATE_PAGE_TABLE) return NT_STATUS_NOT_SUPPORTED;
+    DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *u = &a->UpdatePageTable;
+    Process *p = u->hProcess;
+    if (!p || u->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL || u->PageTableLevel > 1 ||
+        u->StartIndex + u->NumPageTableEntries > 512)
+        return NT_STATUS_INVALID_PARAMETER;
+    unsigned long long *t = u->PageTableAddress.CpuVirtual;
+    int valid = 0;
+    for (unsigned int i = 0; i < u->NumPageTableEntries; i++) {
+        const DXGK_PTE *e = &u->pPageTableEntries[u->Flags & DXGK_UPDATEPT_REPEAT ? 0 : i];
+        unsigned long long own = 0;
+        if (e->Flags & DXGK_PTE_VALID) {
+            own = e->PageAddress << 12 | PTE_VALID | (e->Flags & DXGK_PTE_READ_ONLY ? PTE_READ_ONLY : 0);
+            valid++;
+        }
+        t[u->StartIndex + i] = own;
+    }
+    if (u->PageTableLevel == 0 && (u->Flags & DXGK_UPDATEPT_INITIAL_UPDATE)) p->root = t;   /* (its root: made first) */
+    if (u->PageTableLevel != 1 || !u->hAllocation) {
+        if (u->PageTableLevel == 1 && !valid && !(u->Flags & DXGK_UPDATEPT_INITIAL_UPDATE))
+            DbgPrint("wddmtest: unmapped %u page(s) at GPU VA 0x%llx\n", u->NumPageTableEntries, u->FirstPteVirtualAddress);
+        return NT_STATUS_SUCCESS;
+    }
+    DbgPrint("wddmtest: mapped %d page(s) at GPU VA 0x%llx (allocation offset %llu KiB)\n", valid,
+             u->FirstPteVirtualAddress, u->AllocationOffsetInBytes >> 10);
+    DbgPrint("wddmtest: GPU read at 0x%llx: 0x%08x\n", u->FirstPteVirtualAddress, gpu_read(p, u->FirstPteVirtualAddress));
+    return NT_STATUS_SUCCESS;
+}
+
+/* -----------------------------------------------------------------------
  * DriverEntry, and displib.lib's DxgkInitialize
  * ----------------------------------------------------------------------- */
 static NT_STATUS initialize(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg, DRIVER_INITIALIZATION_DATA *init)
@@ -310,6 +433,10 @@ NT_API NT_STATUS DriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
     init.DxgkDdiDestroyAllocation = wt_destroy_allocation;
     init.DxgkDdiOpenAllocation = wt_open_allocation;
     init.DxgkDdiCloseAllocation = wt_close_allocation;
+    init.DxgkDdiCreateProcess = wt_create_process;
+    init.DxgkDdiDestroyProcess = wt_destroy_process;
+    init.DxgkDdiGetRootPageTableSize = wt_root_size;
+    init.DxgkDdiBuildPagingBuffer = wt_build_paging_buffer;
     NT_STATUS st = initialize(drv, reg, &init);
     DbgPrint("wddmtest: DxgkInitialize returned 0x%08x\n", (unsigned int)st);
     return st;

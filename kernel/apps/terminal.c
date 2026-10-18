@@ -278,7 +278,7 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
-        "  netsh wlan connect name=SSID | disconnect  join an open Wi-Fi network, or leave it\n"
+        "  netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect  join a Wi-Fi network (open or WPA2), or leave it\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
         "  wget <url> [url...] download web pages to C:\\Downloads\n"
@@ -983,26 +983,30 @@ static int wlan_adapter(const char *v)
     return -1;
 }
 
-/* netsh wlan connect name=SSID [interface=Wi-Fi] | disconnect [interface=Wi-Fi]:
- * in the background (JOB_WLAN_CONNECT).  There are no profiles yet: name
- * is the network's SSID, and only open networks connect */
+/* netsh wlan connect name=SSID [key=PASSPHRASE] [interface=Wi-Fi] |
+ * disconnect [interface=Wi-Fi]: in the background (JOB_WLAN_CONNECT).
+ * There are no profiles yet (Windows' netsh connects to a saved profile):
+ * name is the network's SSID, and a WPA2-Personal network's passphrase
+ * comes with key=, NovaOS's own addition, used for that connection only */
 static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
 {
-    static const char usage[] = "Usage: netsh wlan connect [name=]SSID [interface=Wi-Fi]\n"
+    static const char usage[] = "Usage: netsh wlan connect [name=]SSID [key=PASSPHRASE] [interface=Wi-Fi]\n"
                                 "       netsh wlan disconnect [interface=Wi-Fi]";
-    const char *ssid = NULL;
+    const char *ssid = NULL, *key = NULL;
     int adapter = 0;
     for (int i = 3; i < argc; i++) {
         const char *v;
         if ((v = netsh_value(argv[i], "interface"))) {
             if ((adapter = wlan_adapter(v)) < 0) { tprint(t, "There is no such wireless interface on the system."); return; }
         } else if (connect && ((v = netsh_value(argv[i], "name")) || (v = netsh_value(argv[i], "ssid")))) ssid = v;
+        else if (connect && (v = netsh_value(argv[i], "key"))) key = v;
         else if (connect && !strchr(argv[i], '=') && !ssid) ssid = argv[i];
         else { terr(t, usage); return; }
     }
     if (connect && !ssid) { terr(t, usage); return; }
     if (!WlanCount()) { tprint(t, "\nThere is no wireless interface on the system."); return; }
-    if (!WlanConnectStart(adapter, connect ? ssid : NULL)) { terr(t, "The wireless adapter is busy; try again."); return; }
+    if (key && strlen(key) > 64) { terr(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits."); return; }
+    if (!WlanConnectStart(adapter, connect ? ssid : NULL, key)) { terr(t, "The wireless adapter is busy; try again."); return; }
     Job *j = &t->job;
     memset(j, 0, sizeof(*j));
     j->kind = JOB_WLAN_CONNECT;
@@ -1021,8 +1025,12 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
         else tprintf(t, "Disconnection request was completed successfully for interface \"%s\".", name);
         break;
     case WLAN_NO_NETWORK:   tprintf(t, "The network \"%s\" is not available to connect.", ssid); break;
-    case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured; NovaOS connects to open networks only so far.",
-                                    ssid); break;
+    case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured: give its passphrase with key=PASSPHRASE.", ssid);
+                            break;
+    case WLAN_BAD_KEY:      tprintf(t, "The network security key isn't correct: \"%s\" did not accept it.", ssid); break;
+    case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits."); break;
+    case WLAN_UNSUPPORTED:  tprintf(t, "The network \"%s\" uses security NovaOS does not support yet (WPA2-Personal "
+                                    "with CCMP connects; WPA3, WPA, WEP and Enterprise do not).", ssid); break;
     case WLAN_NOT_CONNECTED: tprintf(t, "The interface \"%s\" is not connected.", name); break;
     case WLAN_NO_ADAPTER:   tprint(t, "The wireless interface is not ready."); break;
     default:                tprintf(t, "The %s request failed (0x%08x).", connect ? "connection" : "disconnection", st);
@@ -1033,7 +1041,7 @@ static void cmd_netsh_wlan(Term *t, int argc, char **argv)
 {
     static const char usage[] = "Usage: netsh wlan show interfaces\n"
                                 "       netsh wlan show networks [interface=]Wi-Fi [mode=bssid]\n"
-                                "       netsh wlan connect [name=]SSID [interface=Wi-Fi]\n"
+                                "       netsh wlan connect [name=]SSID [key=PASSPHRASE] [interface=Wi-Fi]\n"
                                 "       netsh wlan disconnect [interface=Wi-Fi]";
     if (argc >= 3 && (is(argv[2], "connect") || is(argv[2], "disconnect"))) {
         cmd_netsh_wlan_connect(t, argc, argv, is(argv[2], "connect"));
@@ -1070,7 +1078,7 @@ static void cmd_netsh(Term *t, int argc, char **argv)
         "       netsh interface ipv4 add dnsservers [name=]Ethernet [address=]IP [index=2]\n"
         "       netsh interface ipv4 show config\n"
         "       netsh wlan show interfaces | networks [mode=bssid]\n"
-        "       netsh wlan connect name=SSID | disconnect";
+        "       netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect";
     if (argc < 4 || !(is(argv[1], "interface") || is(argv[1], "int")) ||
         !(is(argv[2], "ipv4") || is(argv[2], "ip"))) { terr(t, usage); return; }
     if (is(argv[3], "show")) { netsh_show(t); return; }

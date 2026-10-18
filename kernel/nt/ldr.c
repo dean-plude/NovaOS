@@ -40,7 +40,9 @@
  * usbvideo.c's "usbvideo", usbvideo.inf's usbvideo.sys, mshidkmdf.c's
  * "mshidkmdf", the minidriver under a KMDF HID driver, and kbdhid.c's
  * "kbdhid", "mouhid" and "hiddigi", the keyboard, mouse and digitizer
- * class drivers on HID collections):
+ * class drivers on HID collections, and the Bluetooth drivers, bthusb.c's
+ * "BTHUSB", bth.inf's bthusb.sys with the host stack bthport.c in it, and
+ * hidbth.c's "HidBth", hidbth.inf's hidbth.sys):
  * NtDrvLoad gives them a driver object and calls their DriverEntry the
  * same way, with no image to map or check; they are never unloaded.
  *
@@ -50,6 +52,7 @@
 #include "ci.h"
 #include "hidclass.h"
 #include "usbvideo.h"
+#include "bthport.h"
 #include "../ldr/ldr.h"
 #include "../ke/printf.h"
 #include "../fs/recovery.h"
@@ -533,6 +536,8 @@ static NtDriver *load_export_driver(const char *image)
 static const struct { const char *service, *image; NT_DRIVER_INITIALIZE entry; } g_builtin[] = {
     { "HidUsb", "hidusb.sys", HidUsbDriverEntry },
     { "usbvideo", "usbvideo.sys", UsbVideoDriverEntry },
+    { "BTHUSB", "bthusb.sys", BthUsbDriverEntry },
+    { "HidBth", "hidbth.sys", HidBthDriverEntry },
     { "mshidkmdf", "mshidkmdf.sys", MsHidKmdfDriverEntry },
     { "kbdhid", "kbdhid.sys", KbdHidDriverEntry },
     { "mouhid", "mouhid.sys", MouHidDriverEntry },

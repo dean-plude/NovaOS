@@ -1,0 +1,40 @@
+; bth.inf - NovaOS's inbox INF for Bluetooth radios.  As on Windows, a
+; vendor's radio package (Intel's ibtusb.inf among them) says "Include =
+; bth.inf" and "Needs = BthUsb.NT[.HW|.Services]": bthusb becomes the
+; radio's function driver and the vendor's driver sits under it as a lower
+; filter.  NovaOS builds bthusb.sys (and the host stack, bthport) into its
+; kernel (kernel/nt/bthusb.c, bthport.c), so there is no file to copy; a
+; radio with no vendor package gets bthusb by its class (pnp.c).
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Bluetooth
+ClassGuid={e0cbf06c-cd8b-4647-bb8a-263b43f0f974}
+Provider=%NovaOS%
+DriverVer=10/18/2026,10.0.0.1
+
+[Manufacturer]
+%Generic% = Generic,NTamd64
+
+[Generic.NTamd64]
+%BthUsb.DeviceDesc% = BthUsb, USB\Class_E0&SubClass_01&Prot_01
+
+[BthUsb.NT]
+
+[BthUsb.NT.HW]
+
+[BthUsb.NT.Services]
+AddService = BTHUSB, 0x00000002, BthUsb_Service_Inst
+
+[BthUsb_Service_Inst]
+DisplayName   = %BthUsb.SvcDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\bthusb.sys
+
+[Strings]
+NovaOS = "NovaOS"
+Generic = "Generic"
+BthUsb.DeviceDesc = "Generic Bluetooth Radio"
+BthUsb.SvcDesc = "Bluetooth Radio USB Driver"

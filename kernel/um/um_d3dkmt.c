@@ -28,9 +28,20 @@
  * driver data goes to DxgkDdiCreateAllocation as it came), its pages still
  * system memory given here, its budget the adapter's segments.
  *
+ * Step 3's third part: GPU virtual addresses on a miniport adapter whose
+ * driver has a GPU MMU.  A paging queue (D3DKMTCreatePagingQueue) is a
+ * device's, with a monitored fence; D3DKMTReserveGpuVirtualAddress,
+ * D3DKMTMapGpuVirtualAddress (an allocation's pages, by 4 KiB page) and
+ * D3DKMTFreeGpuVirtualAddress go to VidMm (nt/dxgkrnl.c), which has the
+ * driver write the process's page tables; the work is done when the call
+ * returns, so the paging fence value each returns is already signalled.
+ * D3DKMTMakeResident and D3DKMTEvict count each allocation's residency (its
+ * pages never leave memory yet): an evicted one is left out of
+ * D3DKMTQueryVideoMemoryInfo's usage.
+ *
  * Not yet (the next parts of step 3, with wddmtest.sys, a render miniport
- * whose "GPU" runs in software): GPU virtual addresses, paging buffers and
- * residency, contexts and submission, the scheduler, fences the GPU
+ * whose "GPU" runs in software): GPU virtual addresses on Basic Render,
+ * eviction, contexts and submission, the scheduler, fences the GPU
  * signals, preemption and TDR, shared resources and 32-bit programs'
  * structures.
  *
@@ -98,6 +109,13 @@ typedef struct { UINT32 device, count; UINT64 handles, values; UINT32 flags, pad
 typedef struct { UINT32 device, count; UINT64 handles, values, event; UINT32 flags, pad; } WaitFromCpu;
 typedef struct { UINT64 process; UINT32 adapter, group; UINT64 budget, usage, reservation, available;
                  UINT32 index, pad; } VideoMemoryInfo;
+typedef struct { UINT32 device; INT32 priority; UINT32 queue, sync; UINT64 cpu_va; UINT32 index, pad; } CreatePagingQueue;
+typedef struct { UINT32 queue, pad; UINT64 base, min, max; UINT32 alloc, pad2; UINT64 first, pages, prot, driver_prot;
+                 UINT32 reserved0, pad3; UINT64 reserved1, va, fence; } MapGpuVa;      /* D3DDDI_MAPGPUVIRTUALADDRESS */
+typedef struct { UINT32 h, pad; UINT64 base, min, max, size; UINT32 type, pad2; UINT64 driver_prot, va, fence; } ReserveGpuVa;
+typedef struct { UINT32 adapter, pad; UINT64 base, size; } FreeGpuVa;
+typedef struct { UINT32 queue, num; UINT64 list, priorities; UINT32 flags, pad; UINT64 fence, trim; } MakeResident;
+typedef struct { UINT32 device, num; UINT64 list; UINT32 flags, pad; UINT64 trim; } Evict;
 
 #define OFF(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(AdapterInfo) == 20 && sizeof(EnumAdapters2) == 16 && sizeof(OpenFromLuid) == 12 &&
@@ -111,12 +129,20 @@ _Static_assert(sizeof(CreateSync2) == 96 && OFF(CreateSync2, mf.cpu_va) == 24 &&
                OFF(CreateSync2, sync) == 88, "D3DKMT_CREATESYNCHRONIZATIONOBJECT2");
 _Static_assert(sizeof(SignalFromCpu) == 32 && sizeof(WaitFromCpu) == 40 && sizeof(VideoMemoryInfo) == 56,
                "fence and memory structures");
+_Static_assert(sizeof(CreatePagingQueue) == 32 && OFF(CreatePagingQueue, cpu_va) == 16, "D3DKMT_CREATEPAGINGQUEUE");
+_Static_assert(sizeof(MapGpuVa) == 104 && OFF(MapGpuVa, alloc) == 32 && OFF(MapGpuVa, prot) == 56 &&
+               OFF(MapGpuVa, va) == 88, "D3DDDI_MAPGPUVIRTUALADDRESS");
+_Static_assert(sizeof(ReserveGpuVa) == 72 && OFF(ReserveGpuVa, type) == 40 && OFF(ReserveGpuVa, va) == 56,
+               "D3DDDI_RESERVEGPUVIRTUALADDRESS");
+_Static_assert(sizeof(FreeGpuVa) == 24 && sizeof(MakeResident) == 48 && OFF(MakeResident, fence) == 32 &&
+               sizeof(Evict) == 32, "D3DKMT_FREEGPUVIRTUALADDRESS, D3DDDI_MAKERESIDENT, D3DKMT_EVICT");
 
 enum {
     OP_ENUM_ADAPTERS2, OP_OPEN_ADAPTER_FROM_LUID, OP_CLOSE_ADAPTER, OP_QUERY_ADAPTER_INFO,
     OP_CREATE_DEVICE, OP_DESTROY_DEVICE, OP_CREATE_ALLOCATION2, OP_DESTROY_ALLOCATION2,
     OP_LOCK2, OP_UNLOCK2, OP_CREATE_SYNC2, OP_DESTROY_SYNC, OP_SIGNAL_FROM_CPU, OP_WAIT_FROM_CPU,
-    OP_QUERY_VIDEO_MEMORY_INFO,
+    OP_QUERY_VIDEO_MEMORY_INFO, OP_CREATE_PAGING_QUEUE, OP_DESTROY_PAGING_QUEUE, OP_RESERVE_GPU_VA,
+    OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT,
 };
 
 #define QAI_GETSEGMENTSIZE 3
@@ -151,13 +177,15 @@ typedef struct {
     PADDR    page;                    /* (monitored: 0 otherwise) */
 } Fence;
 
-typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC } Kind;
+typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC, K_PQUEUE } Kind;
 
 typedef struct {
     Kind     kind;
     UINT64   luid;                    /* the adapter's: Basic Render's, or a render miniport's */
     UINT32   kmd;                     /* a device's or allocation's handle in dxgkrnl (a miniport's) */
-    UINT32   device;                  /* an allocation's or fence's device (its handle) */
+    UINT32   device;                  /* an allocation's, fence's or paging queue's device (its handle) */
+    UINT32   sync;                    /* a paging queue's monitored fence (its handle) */
+    int      resident;                /* a miniport allocation's residency count (MakeResident, Evict) */
     Memory  *mem;
     Fence   *fence;
     UINT64   va;                      /* an allocation's view while locked; a monitored fence's value page */
@@ -296,6 +324,11 @@ static void object_free(Proc *q, Object *o, UmProcess *p)
     } else if (o->kind == K_SYNC) {
         if (o->va && p) um_unmap_view_at(p, o->va, o->fence);
         fence_unref(o->fence);
+    } else if (o->kind == K_PQUEUE) {                    /* (its fence goes with it, if still there) */
+        Object *f = object(q, o->sync, K_SYNC);
+        UINT32 dev = o->device;
+        memset(o, 0, sizeof(*o));
+        if (f && f->device == dev) object_free(q, f, p);
     }
     memset(o, 0, sizeof(*o));
 }
@@ -368,7 +401,7 @@ static UINT32 create_device(Proc *q, CreateDevice *a)
     if (!ad) return ST_INVALID_PARAM;
     UINT64 luid = ad->luid;                     /* (handle_new may move the table) */
     UINT32 kmd = 0;
-    if (luid != BASIC_LUID_LO && !(kmd = DxgkRenderCreateDevice(luid))) return ST_INVALID_PARAM;
+    if (luid != BASIC_LUID_LO && !(kmd = DxgkRenderCreateDevice(luid, q->p))) return ST_INVALID_PARAM;
     if (!(a->device = handle_new(q, K_DEVICE))) {
         if (kmd) DxgkRenderDestroyDevice(luid, kmd);
         return ST_NO_MEMORY;
@@ -385,7 +418,8 @@ static UINT32 destroy_device(Proc *q, UINT32 dev, UmProcess *p)
     Object *d = object(q, dev, K_DEVICE);
     if (!d) return ST_INVALID_PARAM;
     for (int i = 0; i < q->nobj; i++)
-        if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC) && q->obj[i].device == dev)
+        if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC || q->obj[i].kind == K_PQUEUE) &&
+            q->obj[i].device == dev)
             object_free(q, &q->obj[i], p);
     object_free(q, d, p);
     return ST_OK;
@@ -436,6 +470,7 @@ static UINT32 create_allocation2(Proc *q, const CreateAllocation *a, AllocInfo2 
         o->luid = luid;
         o->kmd = kmd;
         o->mem = m;
+        o->resident = 1;                        /* (created resident, as WDDM 2 allocations are) */
         if (basic) q->usage += m->size;
         info[i].alloc = made[i] = h;
         info[i].gpu_va = 0;                     /* (no GPU virtual addresses yet) */
@@ -528,6 +563,112 @@ static bool fences(Proc *q, UINT32 dev, const UINT32 *list, UINT32 n, Fence **f)
     }
     for (UINT32 i = 0; i < n; i++) __atomic_add_fetch(&f[i]->refs, 1, __ATOMIC_ACQ_REL);
     return true;
+}
+
+/* -----------------------------------------------------------------------
+ * GPU virtual addresses and residency (a miniport adapter with a GPU MMU)
+ * ----------------------------------------------------------------------- */
+static bool has_gpu_va(UINT64 luid)
+{
+    DxgkRenderInfo r;
+    return luid != BASIC_LUID_LO && DxgkRenderFind(luid, &r) && r.va_bits;
+}
+
+static UINT32 create_paging_queue(Proc *q, CreatePagingQueue *a, UmProcess *p)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d) return ST_INVALID_PARAM;
+    if (!has_gpu_va(d->luid)) return ST_NOT_SUPPORTED;
+    const UINT64 luid = d->luid;                /* (handle_new may move the table) */
+    CreateSync2 cs;
+    memset(&cs, 0, sizeof(cs));
+    cs.device = a->device;
+    cs.type = SYNC_MONITORED_FENCE;
+    UINT32 st = create_sync2(q, &cs, p);
+    if (st != ST_OK) return st;
+    UINT32 h = handle_new(q, K_PQUEUE);
+    if (!h) { object_free(q, object(q, cs.sync, K_SYNC), p); return ST_NO_MEMORY; }
+    Object *o = object(q, h, K_PQUEUE);
+    o->device = a->device;
+    o->luid = luid;
+    o->sync = cs.sync;
+    a->queue = h;
+    a->sync = cs.sync;
+    a->cpu_va = cs.mf.cpu_va;
+    return ST_OK;
+}
+
+/* A paging queue's work is done when its call returns: its fence's next
+ * value, signalled now */
+static UINT64 paging_done(Proc *q, Object *pq)
+{
+    Object *f = object(q, pq->sync, K_SYNC);
+    if (!f) return 0;
+    UINT64 v = f->fence->value + 1;
+    fence_write(f->fence, v);
+    waiters_check();
+    return v;
+}
+
+static UINT32 reserve_gpu_va(Proc *q, ReserveGpuVa *a)
+{
+    Object *pq = object(q, a->h, K_PQUEUE), *ad = pq ? NULL : object(q, a->h, K_ADAPTER);
+    UINT64 luid = pq ? pq->luid : ad ? ad->luid : 0;
+    if (!luid) return ST_INVALID_PARAM;
+    if (!has_gpu_va(luid)) return ST_NOT_SUPPORTED;
+    UINT32 st = DxgkRenderReserveVa(luid, q->p, a->base, a->min, a->max, a->size, &a->va);
+    if (st == ST_OK) a->fence = pq ? paging_done(q, pq) : 0;
+    return st;
+}
+
+static UINT32 map_gpu_va(Proc *q, MapGpuVa *a)
+{
+    Object *pq = object(q, a->queue, K_PQUEUE), *o = object(q, a->alloc, K_ALLOC);
+    if (!pq || !o || o->luid != pq->luid || !a->pages || a->first >= o->mem->n || a->pages > o->mem->n - a->first)
+        return ST_INVALID_PARAM;
+    UINT32 st = DxgkRenderMapVa(pq->luid, q->p, o->kmd, o->mem->f, a->first, a->pages, a->base, a->min, a->max,
+                                a->prot, &a->va);
+    if (st == ST_OK) a->fence = paging_done(q, pq);
+    return st;
+}
+
+static UINT32 free_gpu_va(Proc *q, const FreeGpuVa *a)
+{
+    Object *ad = object(q, a->adapter, K_ADAPTER);
+    if (!ad || !a->size) return ST_INVALID_PARAM;
+    return has_gpu_va(ad->luid) ? DxgkRenderFreeVa(ad->luid, q->p, a->base, a->size) : ST_NOT_SUPPORTED;
+}
+
+/* The allocations of @list on adapter @luid (and device @dev, if given) */
+static bool allocs(Proc *q, UINT64 luid, UINT32 dev, const UINT32 *list, UINT32 n)
+{
+    for (UINT32 i = 0; i < n; i++) {
+        Object *o = object(q, list[i], K_ALLOC);
+        if (!o || o->luid != luid || (dev && o->device != dev)) return false;
+    }
+    return true;
+}
+
+static UINT32 make_resident(Proc *q, MakeResident *a, const UINT32 *list)
+{
+    Object *pq = object(q, a->queue, K_PQUEUE);
+    if (!pq || !a->num || !allocs(q, pq->luid, 0, list, a->num)) return ST_INVALID_PARAM;
+    for (UINT32 i = 0; i < a->num; i++) object(q, list[i], K_ALLOC)->resident++;
+    a->fence = paging_done(q, pq);
+    a->trim = 0;
+    return ST_OK;
+}
+
+static UINT32 evict(Proc *q, Evict *a, const UINT32 *list)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d || !a->num || !allocs(q, d->luid, a->device, list, a->num)) return ST_INVALID_PARAM;
+    for (UINT32 i = 0; i < a->num; i++) {
+        Object *o = object(q, list[i], K_ALLOC);
+        if (o->resident) o->resident--;
+    }
+    a->trim = 0;
+    return ST_OK;
 }
 
 /* -----------------------------------------------------------------------
@@ -680,6 +821,8 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         um_lock(&g_lock);
         Proc *q = proc_of(p, false);
         Object *o = object(q, a.h, K_SYNC);
+        for (int i = 0; o && i < q->nobj; i++)          /* (a paging queue's goes with the queue) */
+            if (q->obj[i].kind == K_PQUEUE && q->obj[i].sync == a.h) o = NULL;
         if (o) object_free(q, o, p);
         um_unlock(&g_lock);
         return o ? ST_OK : ST_INVALID_PARAM;
@@ -706,6 +849,45 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         return ok ? ST_OK : ST_INVALID_PARAM;
     }
     case OP_WAIT_FROM_CPU: return wait_from_cpu(p, args);
+    case OP_CREATE_PAGING_QUEUE: SIMPLE(CreatePagingQueue, create_paging_queue(q_, &a_, p));
+    case OP_DESTROY_PAGING_QUEUE: {
+        HandleOnly a;
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        Object *o = object(q, a.h, K_PQUEUE);
+        if (o) object_free(q, o, p);
+        waiters_check();
+        um_unlock(&g_lock);
+        return o ? ST_OK : ST_INVALID_PARAM;
+    }
+    case OP_RESERVE_GPU_VA: SIMPLE(ReserveGpuVa, reserve_gpu_va(q_, &a_));
+    case OP_MAP_GPU_VA: SIMPLE(MapGpuVa, map_gpu_va(q_, &a_));
+    case OP_FREE_GPU_VA: {
+        FreeGpuVa a;
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        UINT32 st = q ? free_gpu_va(q, &a) : ST_INVALID_PARAM;
+        um_unlock(&g_lock);
+        return st;
+    }
+    case OP_MAKE_RESIDENT:
+    case OP_EVICT: {
+        union { MakeResident mr; Evict ev; } a;
+        UINT64 size = op == OP_EVICT ? sizeof(a.ev) : sizeof(a.mr);
+        UINT32 list[MAX_LIST];
+        if (!in(&a, args, size)) return ST_ACCESS_VIOLATION;
+        UINT32 num = op == OP_EVICT ? a.ev.num : a.mr.num;
+        UINT64 ul = op == OP_EVICT ? a.ev.list : a.mr.list;
+        if (!num || num > MAX_LIST || !in(list, ul, num * 4ull)) return ST_INVALID_PARAM;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        UINT32 st = !q ? ST_INVALID_PARAM : op == OP_EVICT ? evict(q, &a.ev, list) : make_resident(q, &a.mr, list);
+        um_unlock(&g_lock);
+        if (st == ST_OK && !out(args, &a, size)) return ST_ACCESS_VIOLATION;
+        return st;
+    }
     case OP_QUERY_VIDEO_MEMORY_INFO: {
         VideoMemoryInfo a;
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
@@ -719,7 +901,8 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
             bool local = a.group == 0;          /* (an integrated GPU's "local" memory is its shared system memory) */
             UINT64 budget = ad->luid == BASIC_LUID_LO ? g_budget : r.memory, used = 0;
             for (int i = 0; i < q->nobj; i++)
-                if (q->obj[i].kind == K_ALLOC && q->obj[i].luid == ad->luid) used += q->obj[i].mem->size;
+                if (q->obj[i].kind == K_ALLOC && q->obj[i].luid == ad->luid && q->obj[i].resident)
+                    used += q->obj[i].mem->size;
             a.budget = local ? budget : 0;
             a.usage = local ? used : 0;
             a.reservation = 0;

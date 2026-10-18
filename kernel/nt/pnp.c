@@ -1280,7 +1280,7 @@ static bool inbox_input(PnpNode *n, const char *key)
 static bool inbox_class_driver(const char *service)
 {
     return !strcmp(service, "kbdhid") || !strcmp(service, "mouhid") || !strcmp(service, "hiddigi") ||
-           !strcmp(service, "gamehid");
+           !strcmp(service, "gamehid") || !strcmp(service, "HidBth");
 }
 
 /* A service NovaOS no longer runs these devices with: usbhid.c ran USB
@@ -1305,6 +1305,20 @@ static bool inbox_video(const PnpNode *n, const char *key)
     return true;
 }
 
+/* A USB Bluetooth radio no NovaOS driver took and nothing was installed
+ * on: NovaOS's own transport and host stack (bthusb.c, bthport.c), as
+ * Windows' bth.inf installs bthusb.sys on USB\Class_E0&SubClass_01&Prot_01 */
+static bool inbox_bluetooth(const PnpNode *n, const char *key)
+{
+    bool radio = false;
+    for (const char *c = n->compat; *c && !radio; c += strlen(c) + 1) radio = !strcmp(c, "USB\\Class_E0&SubClass_01&Prot_01");
+    if (!radio) return false;
+    um_registry_set_sz(key, "Service", "BTHUSB");
+    um_registry_set_sz(key, "Class", "Bluetooth");
+    um_registry_set_sz(key, "ClassGUID", "{e0cbf06c-cd8b-4647-bb8a-263b43f0f974}");
+    return true;
+}
+
 static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
 {
     (void)dev;
@@ -1317,7 +1331,7 @@ static NT_API void work_routine(NT_DEVICE_OBJECT *dev, void *ctx)
             UINT32 disabled = 0;
             if (um_registry_get_dword(key, "ConfigFlags", &disabled) && (disabled & 1)) PnpSetProblem(k->node, PROB_DISABLED);
             else if ((um_registry_get_sz(key, "Service", service, sizeof(service)) && service[0] && !stale_service(service)) ||
-                     inbox_hid(n, key) || inbox_video(n, key))
+                     inbox_hid(n, key) || inbox_video(n, key) || inbox_bluetooth(n, key))
                 NtPnpStart(k->node);
         }
         kfree(n);
@@ -1543,6 +1557,16 @@ static NtPdo *child_new(NtPdo *bus, NT_DEVICE_OBJECT *pdo)
     strcpy(n->instance, c->instance);
     if (!n->hwids[0]) strncpy(n->hwids, dev, sizeof(n->hwids) - 2);
     if (!n->desc[0]) strncpy(n->desc, dev, sizeof(n->desc) - 1);
+    if (!strncmp(dev, "BTHENUM\\{00001124-", 18)) {         /* (a Bluetooth device's HID service, as hidbth.inf files it) */
+        char key[200], service[64] = "";
+        ksnprintf(key, sizeof(key), ENUM_KEY "\\%s", c->instance);
+        if (!um_registry_get_sz(key, "Service", service, sizeof(service)) || !service[0]) {
+            um_registry_set_sz(key, "Service", "HidBth");
+            um_registry_set_sz(key, "Class", "HIDClass");
+            um_registry_set_sz(key, "ClassGUID", "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}");
+        }
+        strcpy(n->cls, "HIDClass");
+    }
     if (!strncmp(dev, "HID\\", 4)) {                       /* (a HID collection, as input.inf files it) */
         char key[200], service[64] = "";
         strcpy(n->cls, "HIDClass");

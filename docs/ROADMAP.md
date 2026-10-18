@@ -1043,6 +1043,12 @@ servicing and print models Windows apps and drivers already expect.
   Done when CI applies a deliberately broken update in QEMU and the next boot
   returns to the previous image on its own, and the recovery menu starts safe
   mode and a repair run (boot test `rollbacktest`).
+  Part 1: a kernel stop during an update's first start restarts the PC,
+  which goes back to the previous kernel on its own; the devices suite's
+  `update` boot stages a kernel stamped to stop (`tools/mkupdate.py
+  --fail-boot panic`) and checks it. Next: a hardware watchdog for hangs,
+  the boot menu with the known-good set, safe mode and startup repair
+  (design in [design/recovery.md](design/recovery.md)).
 - [ ] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an
   existing NTFS partition, adds NovaOS to the firmware boot menu (and chains

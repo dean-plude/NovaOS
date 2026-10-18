@@ -452,9 +452,13 @@ UINT64     um_handle_new_object(UmProcess *p, UmObject *o);   /* takes a referen
 UINT64     um_handle_new_object_access(UmProcess *p, UmObject *o, bool known, UINT32 granted);
 void       um_handles_full(UmProcess *p);  /* @p's handle table is full: say once in the log what holds it */
 UmObject  *um_handle_object(UmProcess *p, UINT64 h, UmObType type);   /* referenced; NULL if bad */
+/* ... also from a handle with only SYNCHRONIZE and the limited query right
+ * to a process or thread of a higher integrity level (waiting, exit codes) */
+UmObject  *um_handle_object_limited(UmProcess *p, UINT64 h, UmObType type);
 /* The process a handle names (-1: @self); @ob holds a reference to drop
  * (um_ob_unref) when it is another process.  NULL if bad or gone. */
 UmProcess *um_proc_of(UmProcess *self, UINT64 h, UmObject **ob);
+UmProcess *um_proc_of_query(UmProcess *self, UINT64 h, UmObject **ob);   /* ... only to ask about it */
 bool       um_handle_object_exists(UmProcess *p, UINT64 h);           /* any open handle */
 UmObject  *um_open_process(UINT32 pid);          /* OpenProcess: referenced, or NULL */
 UmObject  *um_open_thread(UINT32 tid);           /* OpenThread: referenced, or NULL */
@@ -588,6 +592,23 @@ bool       um_token_elevated(UmObject *token);         /* the elevated (full adm
 bool       um_elevate_process(UmProcess *p);           /* give @p the elevated token */
 UINT32     um_set_process_token(UmProcess *p, UINT64 buf, UINT64 len);   /* ProcessAccessToken */
 bool       um_pe_wants_admin(RamNode *f);              /* its manifest asks to run as administrator */
+enum { UM_EXEC_AS_INVOKER, UM_EXEC_HIGHEST, UM_EXEC_REQUIRE_ADMIN };
+int        um_pe_exec_level(RamNode *f);               /* its manifest's requestedExecutionLevel (UM_EXEC_*) */
+bool       um_token_split(UmObject *token);            /* an administrator's limited half (TokenElevationTypeLimited) */
+/* UAC: a referenced elevated token for running program @path when
+ * @token's holder asks to run it as administrator, after the prompt
+ * (wm/consent.c) as the policy says; NULL with *st STATUS_CANCELLED (No)
+ * or STATUS_ACCESS_DENIED (a standard user's policy refuses).  Blocks:
+ * never with the desktop lock held */
+UmObject  *um_uac_elevate(UmObject *token, const char *path, UINT32 *st);
+/* Integrity level of a token: 0x1000 low, 0x2000 medium, 0x3000 high, 0x4000 system */
+UINT32     um_token_integrity(UmObject *token);
+/* Opening process or thread object @o for @want from a lower integrity
+ * level than its process's (NO_READ_UP | NO_WRITE_UP): ACCESS_DENIED
+ * unless only SYNCHRONIZE and the limited query right are asked for; then
+ * *limited and *granted say what the handle holds (um_handle_object gives
+ * such a handle's object only to waiting and asking) */
+UINT32     um_integrity_gate(UmObject *o, UINT32 want, bool *limited, UINT32 *granted);
 void       um_thread_drop_token(UmThread *t);          /* stop impersonating (the thread ended) */
 UINT32     um_set_thread_token(UmThread *t, UINT64 buf, UINT32 len);   /* ThreadImpersonationToken */
 bool       um_privilege_held(UINT32 luid);    /* the caller's token holds privilege @luid */

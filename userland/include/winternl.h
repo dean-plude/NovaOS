@@ -362,13 +362,16 @@ NTSYSAPI NTSTATUS NTAPI NtNovaConsole(HANDLE h, ULONG op, PVOID buf, ULONG len, 
  * advapi32, netapi32, userenv and user32's kernel half.  @in is a
  * NOVA_ACCOUNT_REQUEST (none for LIST, LOCK, SESSION); @out gets NOVA_ACCOUNT
  * records (LIST: one per account), a token HANDLE (LOGON) or { session RID,
- * locked } (SESSION). */
+ * locked } (SESSION).  ELEVATE: @in is a handle to a suspended child; UAC's
+ * prompt asks and, on Yes, the child runs as administrator
+ * (STATUS_CANCELLED for No). */
 typedef struct { ULONG Rid, Flags; CHAR Name[21], Password[257], OldPassword[257]; } NOVA_ACCOUNT_REQUEST;
 typedef struct { ULONG Rid, Flags, HasPassword; CHAR Name[21], FullName[64], Profile[96]; } NOVA_ACCOUNT;
 enum {
     NOVA_ACCOUNT_LIST, NOVA_ACCOUNT_GET, NOVA_ACCOUNT_FIND, NOVA_ACCOUNT_ADD, NOVA_ACCOUNT_DELETE,
     NOVA_ACCOUNT_SET_PASSWORD, NOVA_ACCOUNT_CHANGE_PASSWORD, NOVA_ACCOUNT_LOGON,
     NOVA_ACCOUNT_LOAD_PROFILE, NOVA_ACCOUNT_LOCK, NOVA_ACCOUNT_DELETE_PROFILE, NOVA_ACCOUNT_SESSION,
+    NOVA_ACCOUNT_ELEVATE,
 };
 #define NOVA_ACCOUNT_ADMIN    0x1
 #define NOVA_ACCOUNT_DISABLED 0x2

@@ -95,6 +95,7 @@ class Qmp:
 class Serial:
     def __init__(self, path):
         self.path, self.pos = path, 0
+        self.watch = None                   # function(text): sees everything read (Nova's UAC answer)
 
     def read_new(self):
         try:
@@ -104,7 +105,10 @@ class Serial:
         except FileNotFoundError:
             return ''
         self.pos += len(d)
-        return d.decode('latin-1')
+        text = d.decode('latin-1')
+        if self.watch and text:
+            self.watch(text)
+        return text
 
     def wait(self, needle, timeout):
         buf, end = '', time.time() + timeout
@@ -216,8 +220,14 @@ class Nova:
                                   audio +
                                   (['-s'] if os.environ.get('NOVARUN_GDB') else []) +   # gdb server on :1234
                                   list(extra_args), env=env)
+        # UAC's consent prompt (kernel/wm/consent.c): a program asking to run
+        # as administrator is let, as the person at the keyboard would
+        # (Alt+Y), unless a test answers it itself (uac_auto False)
+        self.uac_auto = True
+        self._uac_tail = ''
         try:
             self.sr = Serial(self.serial_path)
+            self.sr.watch = self._uac_watch
             self.sock = sock
             self.start(boot_timeout)
         except BaseException:
@@ -246,6 +256,17 @@ class Nova:
         self.sr.read_new()
         self.qmp.type('serial on\n')
         self.sr.wait('[TERM-DONE]', 30)
+
+    def _uac_watch(self, text):
+        old = self._uac_tail
+        seen = old + text
+        self._uac_tail = seen[-300:]
+        if not self.uac_auto or not self.qmp:
+            return
+        for m in re.finditer(r'\[UAC\] Consent prompt for [^\n]*\n', seen):
+            if m.end() > len(old):            # (a line not answered already: it ends in the new text)
+                time.sleep(0.5)
+                self.qmp.key('alt', 'y')
 
     def reboot(self, boot_timeout=300):
         """Restart NovaOS (shutdown /r) and open the Terminal again; the

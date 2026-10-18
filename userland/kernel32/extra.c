@@ -1109,7 +1109,6 @@ WINBASEAPI BOOL WINAPI CreateProcessW(LPCWSTR app, LPWSTR cmd, LPSECURITY_ATTRIB
 
 WINBASEAPI HANDLE WINAPI OpenProcess(DWORD access, BOOL inherit, DWORD pid)
 {
-    (void)access;
     OBJECT_ATTRIBUTES oa;
     memset(&oa, 0, sizeof(oa));
     oa.Length = sizeof(oa);
@@ -1121,7 +1120,7 @@ WINBASEAPI HANDLE WINAPI OpenProcess(DWORD access, BOOL inherit, DWORD pid)
     NTSTATUS s = NtOpenProcess(&h, access, &oa, &cid);
     if (!NT_SUCCESS(s)) {
         if (pid == GetCurrentProcessId()) return GetCurrentProcess();   /* (this process has no exit object) */
-        SetLastError(ERROR_INVALID_PARAMETER);
+        SetLastError(s == (NTSTATUS)0xC0000022 ? ERROR_ACCESS_DENIED : ERROR_INVALID_PARAMETER);   /* (a higher integrity level's) */
         return 0;
     }
     return h;

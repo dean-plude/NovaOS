@@ -197,14 +197,18 @@ class Test:
     once it has been quiet for a second).  @before: function(nova) run
     before the command is typed (e.g. plug a device in).  @quotes_panic: the
     output may quote a kernel panic's log (a crash report shown), which is
-    then not taken for a panic of this boot."""
+    then not taken for a panic of this boot.  @uac_auto: UAC's consent
+    prompt is answered Yes (Alt+Y) whenever it shows, as by the person at
+    the keyboard (tools/novarun.py); False when the test answers it itself
+    (its @acts)."""
     def __init__(self, name, cmd, expect=(), timeout=180, check=None, store=None, shot=None, crash=False, reboot=False,
                  acts=(), boot_expect=(), builtin=False, settle=0, before=None, restart=False,
-                 quotes_panic=False, cut=None):
+                 quotes_panic=False, cut=None, uac_auto=True):
         self.name, self.cmd, self.expect, self.timeout, self.check = name, cmd, expect, timeout, check
         self.store, self.shot, self.crash, self.reboot = store, shot, crash, reboot
         self.acts, self.boot_expect, self.builtin, self.settle = acts, boot_expect, builtin, settle
         self.before, self.restart, self.quotes_panic, self.cut = before, restart, quotes_panic, cut
+        self.uac_auto = uac_auto
 
 
 def tones(*hz, wav=None, only=False):
@@ -1288,7 +1292,9 @@ def run_boot(a, tests, work, label, **nova_args):
                 if t.before:
                     t.before(nova)
                     full_log += nova.sr.read_new()          # (what the kernel said meanwhile)
+                nova.uac_auto = t.uac_auto
                 out, ok = nova.run(t.cmd, t.timeout, shot=(t.shot, png) if t.shot else None, acts=t.acts)
+                nova.uac_auto = True
             if t.crash:
                 miss = [e for e in t.expect if not re.search(e, out)]
                 why = None if ok and not miss else ('no kernel fault' if not ok else 'no symbolized backtrace')

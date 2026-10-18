@@ -10,7 +10,11 @@ and a machine key opened for writing by a program that is not elevated
 is refused with `ACCESS_DENIED`, while reading both works as before.
 Elevated programs, services and the App Store's installers still change
 them, and `C:\Windows\Temp`, the Task Scheduler's folder and the print
-spool stay open to every user, as on Windows.
+spool stay open to every user, as on Windows.  Installers elevate as
+they do there: `msiexec` asks for administrator, an old 32-bit
+`setup.exe` with no execution level in its manifest is taken for an
+installer, and a portable program the Store unpacks may write its own
+folder.
 
 The Terminal has `sudo <command>`, as Windows 11 does: UAC asks, then the
 program runs as administrator in the same window.  The self-tests that

@@ -305,6 +305,19 @@ UINT32 FsecQuery(RamNode *n, UINT32 info, void *out, UINT32 cap)
     return len;
 }
 
+bool FsecShareFolder(RamNode *n)
+{
+    UINT32 need = build(NULL, 0, g_trusted_installer, g_users, true, g_shared_dacl, SE_DACL_PROTECTED);
+    UINT8 *sd = kmalloc(need);
+    if (!sd) return false;
+    build(sd, need, g_trusted_installer, g_users, true, g_shared_dacl, SE_DACL_PROTECTED);
+    kfree(n->sd);
+    n->sd = sd;
+    n->sdlen = need;
+    RamfsMarkChanged(n);
+    return true;
+}
+
 bool FsecSet(RamNode *n, UINT32 info, const void *sd, UINT32 len)
 {
     UINT32 used;

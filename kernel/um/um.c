@@ -1410,8 +1410,9 @@ UINT16 um_pe_dll_characteristics(RamNode *f)
  * installers mostly), UM_EXEC_HIGHEST (highestAvailable: administrator for
  * an administrator, as is for a standard user) or UM_EXEC_AS_INVOKER (0:
  * no manifest, asInvoker, or anything else) */
-int um_pe_exec_level(RamNode *f)
+static int exec_level(RamNode *f, bool *stated)
 {
+    if (stated) *stated = false;
     if (!RamfsLoad(f) || !um_pe_machine(f)) return false;
     const UINT8 *d = (const UINT8 *)f->data;
     UINT32 size = f->size, nt = rd32(d + 0x3C);
@@ -1457,13 +1458,37 @@ int um_pe_exec_level(RamNode *f)
     RVA_OFF(rd32(d + dir), off);
     #undef RVA_OFF
     if (!off || off >= size || len > size - off || len > 65536) return false;
-    static const char *const levels[] = { "requireAdministrator", "highestAvailable" };
-    for (int k = 0; k < 2; k++) {
+    static const char *const levels[] = { "requireAdministrator", "highestAvailable", "requestedExecutionLevel" };
+    for (int k = 0; k < 3; k++) {
         UINT32 l = (UINT32)strlen(levels[k]);
         for (UINT32 i = 0; i + l <= len; i++)
-            if (!memcmp(d + off + i, levels[k], l)) return k ? UM_EXEC_HIGHEST : UM_EXEC_REQUIRE_ADMIN;
+            if (!memcmp(d + off + i, levels[k], l)) {
+                if (stated) *stated = true;
+                return k == 2 ? UM_EXEC_AS_INVOKER : k ? UM_EXEC_HIGHEST : UM_EXEC_REQUIRE_ADMIN;
+            }
     }
     return UM_EXEC_AS_INVOKER;
+}
+
+int um_pe_exec_level(RamNode *f) { return exec_level(f, NULL); }
+
+/* Windows' installer detection: a 32-bit program whose manifest states no
+ * requestedExecutionLevel and whose name has "install", "setup" or
+ * "update" in it is taken for an installer that predates UAC, and asks for
+ * administrator as if its manifest said requireAdministrator (an Inno
+ * Setup 4 or an old NSIS setup.exe writes C:\Programs and HKLM) */
+static bool installer_detected(RamNode *f)
+{
+    bool stated;
+    if (exec_level(f, &stated) != UM_EXEC_AS_INVOKER || stated || um_pe_machine(f) != 0x014C) return false;
+    static const char *const words[] = { "install", "setup", "update" };
+    for (int k = 0; k < 3; k++)
+        for (const char *n = f->name; *n; n++) {
+            int i = 0;
+            while (words[k][i] && n[i] && (n[i] >= 'A' && n[i] <= 'Z' ? n[i] + 32 : n[i]) == words[k][i]) i++;
+            if (!words[k][i]) return true;
+        }
+    return false;
 }
 
 bool um_pe_wants_admin(RamNode *f) { return um_pe_exec_level(f) != UM_EXEC_AS_INVOKER; }
@@ -2893,6 +2918,10 @@ UmProcess *um_spawn_image(RamNode *exe, RamNode *cwd, UmConsole *con, bool yield
      * meanwhile (@yield; without it, the Store starting an installer,
      * nobody can be asked and it runs elevated as before) */
     int level = p->token && !um_token_elevated(p->token) ? um_pe_exec_level(exe) : UM_EXEC_AS_INVOKER;
+    if (level == UM_EXEC_AS_INVOKER && p->token && !um_token_elevated(p->token) && installer_detected(exe)) {
+        level = UM_EXEC_REQUIRE_ADMIN;
+        kprintf("[UAC] %s looks like an installer (no requested execution level in its manifest)\n", exe->name);
+    }
     if (level == UM_EXEC_HIGHEST && !um_token_split(p->token)) level = UM_EXEC_AS_INVOKER;
     if (elevate == UM_ELEVATE_ASK && p->token && !um_token_elevated(p->token)) level = UM_EXEC_REQUIRE_ADMIN;
     if (elevate == UM_ELEVATE_SILENT && level == UM_EXEC_AS_INVOKER && p->token && !um_token_elevated(p->token))

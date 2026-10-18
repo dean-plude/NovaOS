@@ -105,7 +105,19 @@ asking to write.
 Who runs elevated without the person asking: the App Store's installers
 and its 7-Zip unpacking (`UmSpawnElevated`, as Windows' Store installs as
 the system).  An `.msi` opened from File Explorer asks first (Windows'
-installer service elevates a per-machine install the same way).  In the
+installer service elevates a per-machine install the same way), and so
+does `msiexec.exe` typed in the Terminal: its manifest asks for
+administrator, since every NovaOS install is per-machine (`ALLUSERS=1`)
+and there is no installer service to elevate for it.  Windows' installer
+detection is there too: a 32-bit program whose manifest states no
+`requestedExecutionLevel` and whose name has `install`, `setup` or
+`update` in it asks as if it said `requireAdministrator` (SuperTux's Inno
+Setup 4 `setup.exe`; the serial log says `[UAC] NAME looks like an
+installer`); NovaOS's own `setuptest` and `wvsetuptest` say `asInvoker`
+to stay out of it.  A program the Store unpacks from an archive (a
+portable one, such as ShareX, which keeps its settings beside it) gets a
+folder in `C:\Programs` that users may change, as its installer's
+users-modify permission would make it (`FsecShareFolder`).  In the
 Terminal, `sudo <command>` asks and runs the command's program as
 administrator in the same window, as Windows 11's `sudo` in its inline
 mode; the self-tests that change the machine (`regtest`, the MSI,

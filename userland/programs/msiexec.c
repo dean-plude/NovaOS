@@ -10,7 +10,9 @@
  *   /qn  no UI    /qb  progress only    /passive  progress only
  *   /l*v FILE  or  /log FILE            write a log
  *
- * The work is in msi.dll (MsiRunInstall).
+ * The work is in msi.dll (MsiRunInstall).  Its manifest asks for
+ * administrator (msiexec.manifest): installs are per-machine here and there
+ * is no installer service to elevate them, as Windows' does (UAC).
  */
 #include <windows.h>
 #include <stdio.h>

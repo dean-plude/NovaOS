@@ -25,8 +25,9 @@ The Setup app (Install NovaOS on the live desktop) and the Terminal's
 C:\Documents> install
   nvme0n1  488386 MiB  SAMSUNG MZVL2512HCJQ-00BL7  Volumes: SYSTEM, Windows
   usb0  14800 MiB  SanDisk Ultra  Volumes: NOVA_EFI  (NovaOS is running from it)
-Usage: install <disk> [/beside] [/fat]   (drive C: on NTFS, or on FAT32 with /fat;
-       /beside keeps what is on the disk and uses its free space, else it is erased)
+Usage: install <disk> [/beside | /shrink | /reinstall] [/fat]   (drive C: on NTFS, or FAT32 with /fat;
+       /beside keeps what is on the disk and uses its free space, /shrink first shrinks Windows'
+       volume to make that space, /reinstall replaces NovaOS keeping drive C:; else the disk is erased)
 ```
 
 `install nvme0n1` erases that disk, makes a GPT with an EFI System
@@ -40,10 +41,26 @@ its free space. `install nvme0n1 /beside` (or "Beside Windows" on Setup's
 NovaOS's own EFI System Partition and drive C:'s partition in the largest
 free space, which must hold NovaOS's ESP and 512 MiB for drive C:
 (about 1.1 GB today; the Where page says how much). Windows' ESP, its reserved and
-recovery partitions and its NTFS volume are not written to. On a laptop
-whose disk Windows fills, shrink the Windows volume first (Disk
-Management in Windows, "Shrink Volume"); Setup shrinking it itself is the
-next part of roadmap step 33.4 ([design/installer.md](design/installer.md)).
+recovery partitions and its NTFS volume are not written to.
+
+**Making room.** On a disk Windows fills (as on most PCs sold with it),
+`install` says how far Windows' volume can shrink, and `install nvme0n1
+/shrink` (or "Beside Windows, shrinking it from ... to ..." on the Where
+page) shrinks it first: NovaOS gets half of Windows' free space (at least
+what it needs, at most 64 GiB), files past the volume's new end are moved
+below it, then the partition is made smaller and NovaOS goes in the room
+after it. Windows must have been shut down fully: a hibernated Windows,
+Fast Startup or a pending chkdsk leaves the volume as it is (turn Fast
+Startup off in Windows' power options, or hold Shift while choosing Shut
+down). A BitLocker-encrypted volume can't be shrunk from NovaOS: shrink it
+in Windows' Disk Management. Back up first; see
+[design/installer.md](design/installer.md) for how it is done.
+
+**Reinstalling.** On a disk NovaOS is on, `install nvme0n1 /reinstall`
+(or "Reinstall NovaOS, keeping drive C: and your files") formats only
+NovaOS's EFI System Partition again with this system's files and keeps
+drive C:'s partition, `NOVADATA`, as it is: `C:\Users`, your files,
+settings and programs stay, and the firmware's "NovaOS" entry is reused.
 
 **Intel VMD.** With VMD on (the RAID or "Intel RST" storage setting of
 many laptops' firmware), the NVMe disk sits behind the VMD controller and

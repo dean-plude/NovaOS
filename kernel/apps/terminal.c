@@ -1165,10 +1165,11 @@ static bool job_resolve(Term *t, const char *host)
     return true;
 }
 
-/* install [disk [/beside] [/fat]]: what the Setup app does, from the
- * keyboard (and the self-tests): NovaOS onto @disk with drive C: on NTFS,
- * or FAT32; erasing it, or with /beside in its free space next to the
- * systems already on it */
+/* install [disk [/beside | /shrink | /reinstall] [/fat]]: what the Setup
+ * app does, from the keyboard (and the self-tests): NovaOS onto @disk with
+ * drive C: on NTFS, or FAT32; erasing it, or with /beside in its free space
+ * next to the systems already on it (/shrink: after shrinking Windows'
+ * volume to make that space), or /reinstall over NovaOS keeping drive C: */
 static void cmd_install(Term *t, int argc, char **argv)
 {
     SetupDisk *d = kmalloc(8 * sizeof(SetupDisk));
@@ -1185,32 +1186,50 @@ static void cmd_install(Term *t, int argc, char **argv)
             if (d[i].can_beside)
                 tprintf(t, "      NovaOS can go beside %s in %u MiB of free space (install %s /beside)",
                         d[i].windows ? "Windows" : "what is there", (unsigned)(d[i].free_sectors >> 11), d[i].dev->name);
+            if (d[i].can_shrink)
+                tprintf(t, "      NovaOS can go beside %s by shrinking its volume from %u MiB to %u MiB (%u MiB used) "
+                        "(install %s /shrink)", d[i].windows ? "Windows" : "what is there",
+                        (unsigned)(d[i].shrink_from >> 11), (unsigned)(d[i].shrink_to >> 11),
+                        (unsigned)(d[i].shrink_used >> 20), d[i].dev->name);
+            else if (d[i].shrink_why[0] && !d[i].can_beside)
+                tprintf(t, "      %s", d[i].shrink_why);
+            if (d[i].can_reinstall)
+                tprintf(t, "      NovaOS can be reinstalled there, keeping drive C: and your files (install %s /reinstall)",
+                        d[i].dev->name);
         }
         if (!n) tprint(t, "There are no disks to install on.");
         if (NvmeBehindVmd())
             tprint(t, "Intel VMD (RST) hides the NVMe disks: turn it off in the firmware setup.");
-        tprint(t, "Usage: install <disk> [/beside] [/fat]   (drive C: on NTFS, or on FAT32 with /fat;");
-        tprint(t, "       /beside keeps what is on the disk and uses its free space, else it is erased)");
+        tprint(t, "Usage: install <disk> [/beside | /shrink | /reinstall] [/fat]   (drive C: on NTFS, or FAT32 with /fat;");
+        tprint(t, "       /beside keeps what is on the disk and uses its free space, /shrink first shrinks Windows'");
+        tprint(t, "       volume to make that space, /reinstall replaces NovaOS keeping drive C:; else the disk is erased)");
         kfree(d);
         return;
     }
     SetupDisk *pick = NULL;
-    bool fat = false, beside = false;
+    bool fat = false;
+    SetupHow how = SETUP_ERASE;
     for (int i = 2; i < argc; i++) {
         if (is(argv[i], "/fat") || is(argv[i], "fat")) fat = true;
-        if (is(argv[i], "/beside") || is(argv[i], "beside")) beside = true;
+        if (is(argv[i], "/beside") || is(argv[i], "beside")) how = SETUP_BESIDE;
+        if (is(argv[i], "/shrink") || is(argv[i], "shrink")) how = SETUP_SHRINK;
+        if (is(argv[i], "/reinstall") || is(argv[i], "reinstall")) how = SETUP_REINSTALL;
     }
+    bool beside = how == SETUP_BESIDE || how == SETUP_SHRINK;
     for (int i = 0; i < n && !pick; i++) if (is(argv[1], d[i].dev->name)) pick = &d[i];
     const char *why = !pick ? NULL : pick->boot ? "NovaOS is running from that disk."
                     : pick->too_small ? "That disk is too small for NovaOS."
                     : beside && !pick->gpt ? "That disk has no GPT: NovaOS goes beside other systems on GPT disks only."
                     : beside && pick->nova ? "NovaOS is already installed on that disk."
                     : beside && pick->holds_c ? "Drive C: is kept on that disk now."
-                    : beside && !pick->can_beside ? "That disk has too little free space for NovaOS (see 'install')."
+                    : how == SETUP_BESIDE && !pick->can_beside ? "That disk has too little free space for NovaOS (see 'install')."
+                    : how == SETUP_SHRINK && !pick->can_shrink ? (pick->shrink_why[0] ? pick->shrink_why
+                                                                  : "No volume on that disk can be shrunk to make room (see 'install').")
+                    : how == SETUP_REINSTALL && !pick->can_reinstall ? "NovaOS is not installed on that disk."
                     : NULL;
     if (!pick) tprintf(t, "There is no disk named %s. Type 'install' to list them.", argv[1]);
     else if (why) terr(t, why);
-    else if (!SetupStart(pick->dev, !fat, beside)) {
+    else if (!SetupStart(pick->dev, !fat, how)) {
         SetupStatus st;
         SetupGetStatus(&st);
         terr(t, st.error[0] ? st.error : "The installer is already running.");
@@ -1218,8 +1237,10 @@ static void cmd_install(Term *t, int argc, char **argv)
         Job *j = &t->job;
         memset(j, 0, sizeof(*j));
         j->kind = JOB_SETUP;
-        tprintf(t, beside ? "Installing NovaOS beside the other systems on %s (their partitions are kept)..."
-                          : "Installing NovaOS on %s (everything on it is erased)...", pick->dev->name);
+        tprintf(t, how == SETUP_REINSTALL ? "Reinstalling NovaOS on %s (drive C: and your files are kept)..."
+                 : how == SETUP_SHRINK ? "Installing NovaOS beside the other systems on %s, shrinking Windows' volume to make room..."
+                 : beside ? "Installing NovaOS beside the other systems on %s (their partitions are kept)..."
+                 : "Installing NovaOS on %s (everything on it is erased)...", pick->dev->name);
     }
     kfree(d);
 }

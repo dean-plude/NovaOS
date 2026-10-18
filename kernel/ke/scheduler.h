@@ -88,7 +88,7 @@ typedef struct Thread {
     uint8_t         boost_ticks;    /* ticks run while boosted since the last decay step */
     bool            balance_boost;  /* raised for starving (sched_tick): back to base after a quantum */
     bool            no_boost;       /* no wake-up boosts (SetThreadPriorityBoost) */
-    bool            pinned;         /* stays on the CPU it started on (never stolen or handed off) */
+    bool            pinned;         /* stays on CPU 0 (never stolen or handed off): sched_create_pinned_thread */
     uint64_t        ready_tick;     /* when it was last queued (the balance-set boost) */
     /* The Multimedia Class Scheduler (sched_set_mmcss): the real-time
      * priority it runs at (0: not registered), its own base for when it
@@ -246,6 +246,8 @@ Thread *sched_create_thread_ex(const char *name, ThreadEntry entry,
  * run (on another CPU, the moment it is queued): create it, then start it. */
 Thread *sched_new_thread(const char *name, ThreadEntry entry,
                          void *arg, uint8_t priority, size_t stack_size);
+Thread *sched_create_pinned_thread(const char *name, ThreadEntry entry, void *arg, uint8_t priority,
+                                   size_t stack_size);   /* (on CPU 0: scheduler.c) */
 void sched_start_thread(Thread *t);
 
 /* End the current thread (never returns).  Its stack and Thread are

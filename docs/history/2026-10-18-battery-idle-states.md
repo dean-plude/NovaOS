@@ -35,9 +35,11 @@ that asked for its device to be powered down got `STATUS_NOT_IMPLEMENTED`.
 - **Tests**: the devices suite's `laptop` boot gives its processors
   `_PDC` and a three-state `_CST` (`tests/acpi/laptop.asl`) on a CPU with
   MWAIT, and `idletest` checks the states, both CPUs entering the deepest,
-  and CPU 1's tick stopping (the keyboard and mouse poll thread now stays
-  on CPU 0, whose tick wakes it anyway, so it no longer keeps CPU 1's
-  tick running).  `kmdfedu.sys` now asks KMDF for S0 idle
+  and CPU 1's tick stopping (the kernel threads that poll on the tick,
+  the desktop, network, audio mixer, USB and keyboard and mouse polls, now
+  stay on CPU 0, whose tick wakes them anyway, so they no longer keep CPU
+  1's tick running).  On a CPU without MWAIT (a KVM guest's, CI's) the
+  test firmware offers C1 with HLT and C2 through the port instead.  `kmdfedu.sys` now asks KMDF for S0 idle
   after 2 s: `edutest idle` sees the framework power the device to D3
   (`EvtDeviceD0Exit`, the PDO's D3), and the next request brings it back.
 

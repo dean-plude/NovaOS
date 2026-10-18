@@ -628,7 +628,7 @@ static char g_hda_in_name[96];
 
 bool AudioInit(void)
 {
-    if (!sched_create_thread("audio", mixer_thread, NULL, PRIO_DEVICE)) {   /* (above programs and the desktop) */
+    if (!sched_create_pinned_thread("audio", mixer_thread, NULL, PRIO_DEVICE, THREAD_STACK_SIZE)) {   /* (above programs and the desktop; on the tick: CPU 0) */
         kprintf("[AUDIO] Could not start the mixer\n");
         return false;
     }

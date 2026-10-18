@@ -584,11 +584,23 @@ Thread *sched_create_thread_ex(const char *name, ThreadEntry entry,
 void sched_start_thread(Thread *t)
 {
     IrqState irq = irq_save();
-    t->cpu = this_cpu();                      /* starts in the creator's queue */
+    t->cpu = t->pinned ? 0 : this_cpu();      /* starts in the creator's queue (a pinned one in CPU 0's) */
     RunQueue *rq = &g_rq[t->cpu];
     spin_lock(&rq->lock);
     ready_wake(rq, t);
     spin_unlock_irqrestore(&rq->lock, irq);
+}
+
+/* A kernel thread that polls on the tick (the desktop, the network, the
+ * mixer, the device polls): kept on CPU 0, whose tick runs anyway (the
+ * global tick), so that it never wakes another CPU each tick and stops
+ * that CPU's tickless idle (sched_idle_stop_tick) */
+Thread *sched_create_pinned_thread(const char *name, ThreadEntry entry, void *arg, uint8_t priority,
+                                   size_t stack_size)
+{
+    Thread *t = sched_new_thread(name, entry, arg, priority, stack_size);
+    if (t) { t->pinned = true; sched_start_thread(t); }
+    return t;
 }
 
 Thread *sched_new_thread(const char *name, ThreadEntry entry,

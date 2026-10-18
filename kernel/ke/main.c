@@ -448,14 +448,13 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
         ps2_init();
         UsbInit();                        /* USB keyboards, mice, hubs and sticks */
         I2cHidInit();                     /* touchpads on I2C (a thread, once ACPI is loaded) */
-        {   /* (above programs and the desktop; kept on CPU 0, whose tick wakes it, so the others can stop theirs) */
-            Thread *poll = sched_new_thread("devpoll", device_poll_thread, NULL, PRIO_DEVICE, THREAD_STACK_SIZE);
-            if (poll) { poll->pinned = true; sched_start_thread(poll); }
-        }
+        /* (above programs and the desktop; kept on CPU 0, whose tick wakes it, so the others can stop theirs) */
+        sched_create_pinned_thread("devpoll", device_poll_thread, NULL, PRIO_DEVICE, THREAD_STACK_SIZE);
         /* (a test build stamped "stall" never starts its desktop: the
          * watching thread finds the start stuck and rolls it back) */
         if (strcmp(NovaTestFault(), "stall"))
-            sched_create_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP);   /* (above any program thread, boosted or not) */
+            sched_create_pinned_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP,   /* (above any program thread, boosted or not; */
+                                       THREAD_STACK_SIZE);                       /* it polls on the tick: CPU 0) */
         else
             kprintf("[NovaOS] This kernel is stamped with the test fault \"stall\": its desktop never starts\n");
         kprintf_set_fb_enabled(false);    /* WM owns the screen; logs → serial */

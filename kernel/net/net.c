@@ -868,7 +868,7 @@ bool NetInitialize(void)
     if (g_nic != &g_none && dhcp_start(&g_netif) != ERR_OK) kprintf("[NET] DHCP could not start\n");
     g_up = true;
 
-    sched_create_thread_ex("net", net_thread, NULL, PRIO_DEVICE_IO, NET_STACK);   /* (above programs: scheduler.h) */
+    sched_create_pinned_thread("net", net_thread, NULL, PRIO_DEVICE_IO, NET_STACK);   /* (above programs; it polls on the tick: CPU 0) */
     if (g_nic == &g_none) kprintf("[NET] lwIP %s ready; no network adapter, loopback only\n", LWIP_VERSION_STRING);
     else kprintf("[NET] lwIP %s ready; requesting an address via DHCP\n", LWIP_VERSION_STRING);
     return true;

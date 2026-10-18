@@ -216,7 +216,10 @@ waits in a C-state (`kernel/ke/idle.c`):
 - CPUs other than the first stop their 10 ms tick while idle: the timer
   is armed for the CPU's next timed sleeper (at most a second ahead), and
   any interrupt starts the tick again. The first CPU keeps ticking for the
-  whole machine (timers, drivers' KTIMERs, load balancing).
+  whole machine (timers, drivers' KTIMERs, load balancing), and the
+  kernel threads that poll on the tick (the desktop, the network stack,
+  the audio mixer, USB and the keyboard and mouse poll) stay on it, so
+  they never wake another CPU each tick.
 - The log has `[IDLE] MWAIT ...` and one `[IDLE] CPU n: C1 (...), C2
   (...) ..., from \_SB_...._CST` line per CPU.
   `NtQuerySystemInformation(SystemProcessorIdleInformation)` gives each

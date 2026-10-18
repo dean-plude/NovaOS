@@ -1061,7 +1061,7 @@ def laptop_boot(work):
     """A Modern Standby laptop (tests/selftest/devices/laptop): QEMU without
     \\_S3 or an HPET, and with tests/acpi/laptop.asl (its embedded controller, lid,
     battery, LPS0 device and processor C-states; a CPU with MWAIT, as
-    laptops' are) and
+    laptops' are, when the host allows it: a KVM host may not) and
     pc-testdev for the lid; nova.iso on a USB
     stick (build/nova.iso, or one made from the build) and an empty 2 GiB
     NVMe disk that is the first boot device (OVMF passes over it until

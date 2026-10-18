@@ -2,13 +2,14 @@
  * idletest.exe — processor idle states and the idle CPUs' tick (step 28.4)
  *
  * Run by the devices suite's "laptop" boot, whose processors describe
- * three C-states in _CST (tests/acpi/laptop.asl: C1 and C3 through MWAIT,
- * C2 through a port) on a CPU with MWAIT.
+ * their C-states in _CST (tests/acpi/laptop.asl): C1 and C3 through MWAIT
+ * and C2 through a port on a CPU with MWAIT, else C1 with HLT and C2
+ * through the port (a KVM guest has no MWAIT).
  *
- *   idletest N   every CPU reports N as its deepest idle state
- *                (ProcessorInformation's MaxIdleState: three states, N = 2);
- *                while this program sleeps 3 s, both CPUs enter
- *                and leave their deepest state (C3 transitions in
+ *   idletest N   every CPU reports the same deepest idle state, N or
+ *                deeper (ProcessorInformation's MaxIdleState: 1 for C2,
+ *                2 for C3); while this program sleeps 3 s, both CPUs enter
+ *                and leave that state (its transitions in
  *                SystemProcessorIdleInformation), the CPUs together spend
  *                over a second in C-states, CPU 1 stops its tick while
  *                idle (NovaOS counts the stops in SystemProcessorIdle-
@@ -44,7 +45,7 @@ static void check(const char *what, BOOL ok)
 
 int main(int argc, char **argv)
 {
-    ULONG deepest = argc > 1 ? (ULONG)atoi(argv[1]) : 2;
+    ULONG least = argc > 1 ? (ULONG)atoi(argv[1]) : 1;
     HMODULE pp = LoadLibraryA("powrprof.dll");
     CallNtPowerInformationFn cnpi = pp ? (CallNtPowerInformationFn)GetProcAddress(pp, "CallNtPowerInformation") : NULL;
     NtQuerySystemInformationFn nqsi =
@@ -58,11 +59,13 @@ int main(int argc, char **argv)
 
     PPI p[64];
     check("ProcessorInformation", cnpi(11, NULL, 0, p, n * sizeof(PPI)) == 0);
-    BOOL all = TRUE;
+    ULONG deepest = p[0].MaxIdleState;
+    BOOL all = deepest >= least && deepest <= 2;
     for (ULONG i = 0; i < n; i++) {
         printf("CPU %lu: deepest idle state %lu, last entered %lu\n", i, p[i].MaxIdleState, p[i].CurrentIdleState);
         all &= p[i].MaxIdleState == deepest;
     }
+    if (deepest < 1 || deepest > 2) deepest = 2;
     check("every CPU has the C-states _CST describes", all);
 
     Sleep(100);
@@ -85,8 +88,9 @@ int main(int argc, char **argv)
         printf("CPU %lu over %lu ms: C1 %lu, C2 %lu, C3 %lu times, %llu ms in C-states, %lu interrupts, tick stopped %lu times\n",
                i, ms, c1, c2, c3, t / 10000, irq, b[i].Padding - a[i].Padding);
     }
-    check("CPU 0 entered and left its deepest state", b[0].C3Transitions > a[0].C3Transitions);
-    check("CPU 1 entered and left its deepest state", b[1].C3Transitions > a[1].C3Transitions);
+#define DEEPEST(x) (deepest == 2 ? (x).C3Transitions : (x).C2Transitions)
+    check("CPU 0 entered and left its deepest state", DEEPEST(b[0]) > DEEPEST(a[0]));
+    check("CPU 1 entered and left its deepest state", DEEPEST(b[1]) > DEEPEST(a[1]));
     check("over a second in C-states", cstate > 10000000);
     check("CPU 0 kept its tick", b[0].Padding == a[0].Padding);
     check("CPU 1 stopped its tick while idle", b[1].Padding > a[1].Padding);

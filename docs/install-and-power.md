@@ -269,14 +269,15 @@ starts QEMU without `\_S3` or an HPET, with `tests/acpi/laptop.asl`: an
 embedded controller holding the lid, a battery and the charger, an LPS0
 device, a thermal zone that passes the lid position the test sets to
 the controller, and processor C-states (`_PDC`, then a `_CST` with C1
-and C3 through MWAIT and C2 through a port, on a CPU with MWAIT). QEMU emulates no embedded controller, so for the one with
+and C3 through MWAIT and C2 through a port on a CPU with MWAIT, or C1
+with HLT and C2 through the port on one without, as a KVM guest's CPU is). QEMU emulates no embedded controller, so for the one with
 `_HID` `NOVA0EC1` NovaOS serves a model of one in `ec.c` (the real command
 and status protocol, with an event the AML can raise). The boot has the
 ISO on a USB stick and an empty NVMe disk:
 
 - `battery` reads 60% and 4 hours through the controller;
-- `idletest 2` finds three C-states on each CPU, both CPUs entering and
-  leaving the deepest while idle, and CPU 1 (not CPU 0) stopping its tick;
+- `idletest 1` finds the same C-states (C2 or deeper) on each CPU, both
+  CPUs entering and leaving the deepest while idle, and CPU 1 (not CPU 0) stopping its tick;
 - the lid closes, NovaOS sleeps in S0 idle (with the LPS0 calls), and
   opening it wakes the machine;
 - `install nvme0n1` installs NovaOS on the NVMe disk, and after a restart

@@ -22,10 +22,10 @@ TESTS = [
           r'\[STOR\] viostor: Storport miniport registered',
           r'\[STOR\] viostor: adapter running',
           r'\[PNP\] PCI\\VEN_1AF4&DEV_1001\S*: started \(driver viostor\)',
-          r'\[STOR\] viostor: disk "[^"]*" on LUN 0:0:0, \d+ MiB, through Storport',
-          VOLUME], timeout=180),
+          r'\[STOR\] viostor: disk "[^"]*" on LUN 0:0:0, \d+ MiB, through Storport'], timeout=180),
     Test('viostor devices', 'pnputil /enum-devices /deviceid ' + BLK_ID, [r'Status: +Started', r'Driver Name: +viostor']),
-    Test('viostor read', r'cmd.exe /c type D:\viostor.txt', [r'NovaOS reads this file through viostor\.sys']),
+    Test('viostor read', r'cmd.exe /c type D:\viostor.txt', [r'NovaOS reads this file through viostor\.sys'],
+         boot_expect=[VOLUME]),     # (the volume mounts after pnputil has returned)
     Test('viostor write', r'cmd.exe /c "echo written through Storport> D:\written.txt & type D:\written.txt"',
          [r'written through Storport']),
     Test('viostor start at boot', 'shutdown /r /t 0',

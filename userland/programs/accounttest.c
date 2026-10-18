@@ -73,10 +73,13 @@ static DWORD rid_of(const WCHAR *name)
 
 static void remove_test_account(void)
 {
-    DWORD rid = rid_of(USER);
-    if (rid) NetUserDel(0, USER);
     WCHAR sid[64];
-    if (rid) { swprintf(sid, 64, L"S-1-5-21-1000-2000-3000-%lu", rid); DeleteProfileW(sid, 0, 0); }
+    for (int i = 0; i < 8; i++) {                           /* (all of them, should a bug have made two) */
+        DWORD rid = rid_of(USER);
+        if (!rid || NetUserDel(0, USER)) break;
+        swprintf(sid, 64, L"S-1-5-21-1000-2000-3000-%lu", rid);
+        DeleteProfileW(sid, 0, 0);
+    }
 }
 
 static PSID token_user(HANDLE t, BYTE *buf, DWORD n)
@@ -272,6 +275,7 @@ int main(int argc, char **argv)
     check("DeleteProfile", DeleteProfileW(want, 0, 0));
     check("... takes its folder", GetFileAttributesW(prof) == INVALID_FILE_ATTRIBUTES);
     CloseHandle(mine);
+    remove_test_account();                                  /* (nothing left behind for the next boot) */
 
     printf("accounttest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

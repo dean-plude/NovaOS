@@ -102,6 +102,21 @@ static NET_API_STATUS net_status(NTSTATUS st)
 /* @user's account (name, any case); false when there is none */
 static BOOL find_user(const WCHAR *user, NOVA_ACCOUNT *a) { return user && !acct_call(NOVA_ACCOUNT_FIND, 0, user, 0, 0, a); }
 
+/* USER_INFO_1 (lmaccess.h), laid out for the build's pointer size */
+typedef struct {
+    LPWSTR name, password;
+    DWORD password_age, priv;
+    LPWSTR home_dir, comment;
+    DWORD flags;
+    LPWSTR script_path;
+} UserInfo1;
+
+/* USER_INFO_20 */
+typedef struct {
+    LPWSTR name, full_name, comment;
+    DWORD flags, user_id;
+} UserInfo20;
+
 /* Every account; the caller frees the list */
 static NOVA_ACCOUNT *all_users(int *n)
 {
@@ -307,7 +322,7 @@ NETAPI NET_API_STATUS WINAPI NetUserEnum(LPCWSTR server, DWORD level, DWORD filt
     int n;
     NOVA_ACCOUNT *list = all_users(&n);
     if (!list) return ERROR_NOT_ENOUGH_MEMORY;
-    DWORD each = level == 0 ? sizeof(LPWSTR) : level == 1 ? 8 * sizeof(LPWSTR) : 5 * sizeof(LPWSTR);
+    DWORD each = level == 0 ? sizeof(LPWSTR) : level == 1 ? sizeof(UserInfo1) : sizeof(UserInfo20);
     Pack p;
     if (!pack_new(&p, each * (DWORD)n, (DWORD)n * 2 * (21 + 64 + 96 + 8))) { HeapFree(GetProcessHeap(), 0, list); return ERROR_NOT_ENOUGH_MEMORY; }
     for (int i = 0; i < n; i++) {
@@ -317,19 +332,21 @@ NETAPI NET_API_STATUS WINAPI NetUserEnum(LPCWSTR server, DWORD level, DWORD filt
         BYTE *e = p.base + each * (DWORD)i;
         LPWSTR *s = (LPWSTR *)e;
         s[0] = pack_str(&p, name);
-        if (level == 1) {                                   /* USER_INFO_1 */
-            s[1] = 0;
-            ((DWORD *)(s + 2))[0] = 0;                      /* password_age */
-            ((DWORD *)(s + 2))[1] = (list[i].Flags & NOVA_ACCOUNT_ADMIN) ? 2 : 1;
-            s[4] = pack_str(&p, L"");                       /* home_dir */
-            s[5] = pack_str(&p, L"");                       /* comment */
-            *(DWORD *)(s + 6) = user_flags(&list[i]);
-            s[7] = pack_str(&p, L"");                       /* script_path */
-        } else if (level == 20) {                           /* USER_INFO_20 */
-            s[1] = pack_str(&p, full);
-            s[2] = pack_str(&p, L"");
-            ((DWORD *)(s + 3))[0] = user_flags(&list[i]);
-            ((DWORD *)(s + 3))[1] = list[i].Rid;
+        if (level == 1) {
+            UserInfo1 *u = (UserInfo1 *)e;
+            u->password = 0;
+            u->password_age = 0;
+            u->priv = (list[i].Flags & NOVA_ACCOUNT_ADMIN) ? 2 : 1;
+            u->home_dir = pack_str(&p, L"");
+            u->comment = pack_str(&p, L"");
+            u->flags = user_flags(&list[i]);
+            u->script_path = pack_str(&p, L"");
+        } else if (level == 20) {
+            UserInfo20 *u = (UserInfo20 *)e;
+            u->full_name = pack_str(&p, full);
+            u->comment = pack_str(&p, L"");
+            u->flags = user_flags(&list[i]);
+            u->user_id = list[i].Rid;
         }
     }
     HeapFree(GetProcessHeap(), 0, list);
@@ -348,12 +365,11 @@ NETAPI NET_API_STATUS WINAPI NetUserAdd(LPCWSTR server, DWORD level, LPBYTE buf,
     if (parm_err) *parm_err = 0;
     if (level < 1 || level > 4) return ERROR_INVALID_LEVEL;
     if (!buf) return ERROR_INVALID_PARAMETER;
-    LPWSTR *s = (LPWSTR *)buf;
-    DWORD priv = ((DWORD *)(s + 2))[1], flags = *(DWORD *)(s + 6);
-    if (priv > 2) { if (parm_err) *parm_err = 5; return ERROR_INVALID_PARAMETER; }   /* USER_PRIV_PARMNUM */
-    if (!s[0] || !s[0][0]) { if (parm_err) *parm_err = 1; return NERR_BadUsername; }
-    ULONG f = (priv == 2 ? NOVA_ACCOUNT_ADMIN : 0) | ((flags & UF_ACCOUNTDISABLE) ? NOVA_ACCOUNT_DISABLED : 0);
-    return net_status(acct_call(NOVA_ACCOUNT_ADD, 0, s[0], s[1] ? s[1] : L"", f, 0));
+    const UserInfo1 *u = (const UserInfo1 *)buf;
+    if (u->priv > 2) { if (parm_err) *parm_err = 5; return ERROR_INVALID_PARAMETER; }   /* USER_PRIV_PARMNUM */
+    if (!u->name || !u->name[0]) { if (parm_err) *parm_err = 1; return NERR_BadUsername; }
+    ULONG f = (u->priv == 2 ? NOVA_ACCOUNT_ADMIN : 0) | ((u->flags & UF_ACCOUNTDISABLE) ? NOVA_ACCOUNT_DISABLED : 0);
+    return net_status(acct_call(NOVA_ACCOUNT_ADD, 0, u->name, u->password ? u->password : L"", f, 0));
 }
 
 NETAPI NET_API_STATUS WINAPI NetUserDel(LPCWSTR server, LPCWSTR user)

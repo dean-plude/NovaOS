@@ -181,9 +181,8 @@ static bool read_account(UINT32 rid, UmAccount *a)
 /* -----------------------------------------------------------------------
  * Lookups
  * ----------------------------------------------------------------------- */
-int um_accounts_list(UmAccount *out, int cap)
+static int list_locked(UmAccount *out, int cap)
 {
-    um_lock(&g_lock);
     ensure_first();
     int n = 0;
     UINT16 w[64];
@@ -206,6 +205,13 @@ int um_accounts_list(UmAccount *out, int cap)
         out[j] = t;
         n++;
     }
+    return n;
+}
+
+int um_accounts_list(UmAccount *out, int cap)
+{
+    um_lock(&g_lock);
+    int n = list_locked(out, cap);
     um_unlock(&g_lock);
     return n;
 }
@@ -219,16 +225,24 @@ bool um_account_get(UINT32 rid, UmAccount *a)
     return ok;
 }
 
-bool um_account_find(const char *name, UmAccount *a)
+/* (g_lock held) 1 found, 0 not, -1 out of memory */
+static int find_locked(const char *name, UmAccount *a)
 {
     UmAccount *all = kmalloc(sizeof(UmAccount) * MAX_ACCOUNTS);
-    if (!all) return false;
-    int n = um_accounts_list(all, MAX_ACCOUNTS);
-    bool ok = false;
-    for (int i = 0; i < n && !ok; i++)
-        if (ieq(all[i].name, name)) { *a = all[i]; ok = true; }
+    if (!all) return -1;
+    int n = list_locked(all, MAX_ACCOUNTS), found = 0;
+    for (int i = 0; i < n && !found; i++)
+        if (ieq(all[i].name, name)) { *a = all[i]; found = 1; }
     kfree(all);
-    return ok;
+    return found;
+}
+
+bool um_account_find(const char *name, UmAccount *a)
+{
+    um_lock(&g_lock);
+    int found = find_locked(name, a);
+    um_unlock(&g_lock);
+    return found > 0;
 }
 
 /* -----------------------------------------------------------------------
@@ -329,8 +343,9 @@ UINT32 um_account_add(const char *name, const char *pw, UINT32 flags, UINT32 *ri
     if (!um_account_name_ok(name)) return ST_INVALID_ACCOUNT_NAME;
     if (strlen(pw) > UM_PASSWORD_MAX) return ST_PASSWORD_RESTRICTION;
     UmAccount a;
-    if (um_account_find(name, &a)) return ST_USER_EXISTS;
-    um_lock(&g_lock);
+    um_lock(&g_lock);                                               /* (the name checked and taken at once) */
+    int found = find_locked(name, &a);
+    if (found) { um_unlock(&g_lock); return found < 0 ? ST_NO_MEMORY : ST_USER_EXISTS; }
     UINT32 rid = FIRST_RID + 1;
     um_registry_get_dword(SAM_KEY, "NextRid", &rid);
     if (rid <= FIRST_RID) rid = FIRST_RID + 1;

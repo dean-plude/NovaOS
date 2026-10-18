@@ -182,6 +182,7 @@ set(KERNEL_C_SOURCES
     fs/setup.c
     fs/bootfiles.c
     fs/update.c
+    fs/recovery.c
     fs/bootlog.c
     net/net.c
     net/tls.c

@@ -83,6 +83,16 @@ WINBASEAPI BOOL WINAPI InitiateSystemShutdownExW(LPWSTR machine, LPWSTR msg, DWO
 WINBASEAPI BOOL WINAPI InitiateSystemShutdownExA(LPSTR machine, LPSTR msg, DWORD timeout, BOOL force, BOOL reboot, DWORD reason);
 WINBASEAPI BOOL WINAPI InitiateSystemShutdownW(LPWSTR machine, LPWSTR msg, DWORD timeout, BOOL force, BOOL reboot);
 WINBASEAPI BOOL WINAPI InitiateSystemShutdownA(LPSTR machine, LPSTR msg, DWORD timeout, BOOL force, BOOL reboot);
+#define SHUTDOWN_FORCE_OTHERS         0x00000001
+#define SHUTDOWN_FORCE_SELF           0x00000002
+#define SHUTDOWN_RESTART              0x00000004
+#define SHUTDOWN_POWEROFF             0x00000008
+#define SHUTDOWN_NOREBOOT             0x00000010
+#define SHUTDOWN_RESTARTAPPS          0x00000080
+#define SHUTDOWN_HYBRID               0x00000200
+#define SHUTDOWN_RESTART_BOOTOPTIONS  0x00000400
+WINBASEAPI DWORD WINAPI InitiateShutdownW(LPWSTR machine, LPWSTR msg, DWORD grace, DWORD flags, DWORD reason);
+WINBASEAPI DWORD WINAPI InitiateShutdownA(LPSTR machine, LPSTR msg, DWORD grace, DWORD flags, DWORD reason);
 WINBASEAPI BOOL WINAPI AbortSystemShutdownW(LPWSTR machine);
 WINBASEAPI BOOL WINAPI AbortSystemShutdownA(LPSTR machine);
 WINBASEAPI LSTATUS WINAPI RegSetKeyValueW(HKEY key, LPCWSTR sub, LPCWSTR name, DWORD type, LPCVOID data, DWORD n);

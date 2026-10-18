@@ -1051,7 +1051,7 @@ servicing and print models Windows apps and drivers already expect.
   administrator password is refused, an unelevated process cannot write to
   `C:\Windows` or `HKLM`, and a medium-integrity process cannot open a
   high-integrity one (self-test `uactest`).
-- [ ] **33.3 Update rollback and a recovery boot.** Updates install into a
+- [x] **33.3 Update rollback and a recovery boot.** Updates install into a
   new boot image beside the running one (A/B or snapshot) and roll back
   automatically when the new image fails to reach the desktop; a recovery
   boot offers safe mode, last known good drivers, startup repair and reset.
@@ -1066,9 +1066,16 @@ servicing and print models Windows apps and drivers already expect.
   up with someone signed in or the sign-in screen showing; until then the
   chipset's TCO watchdog resets a kernel that hangs, and a start that makes
   no progress for 90 seconds restarts itself, both going back to the
-  previous kernel (checked with `--fail-boot hang` and `stall`). Next: the
-  boot menu with the known-good set, safe mode and startup repair, and the
-  ACPI WDAT watchdog (design in [design/recovery.md](design/recovery.md)).
+  previous kernel (checked with `--fail-boot hang` and `stall`).
+  Part 3: the boot loader's Advanced startup menu (F8, `shutdown /r /o`, or
+  by itself after two starts that did not reach the desktop) starts the
+  previous version (the known-good set: `kernel.old` with `bootx64.old`),
+  safe mode (NovaOS's own drivers and the firmware's framebuffer) and
+  startup repair (boot files put back from the known-good set, an
+  unfinished update removed, a report in `SrtTrail.txt`); the devices
+  suite's `rollbacktest` boot starts each. Later: Reset this PC, the ACPI
+  WDAT watchdog and a Settings button for Advanced startup (design in
+  [design/recovery.md](design/recovery.md)).
 - [ ] **33.4 A graphical installer that installs beside Windows.** Replace
   the whole-disk `install` command with a graphical installer that shrinks an
   existing NTFS partition, adds NovaOS to the firmware boot menu (and chains

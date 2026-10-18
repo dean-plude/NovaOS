@@ -36,7 +36,7 @@ struct FdEntry {
     FILETIME mtime;
 };
 
-static DWORD g_error;                   /* CommDlgExtendedError */
+DWORD g_error;                          /* CommDlgExtendedError (printdlg.c sets it too) */
 
 static int wlen(const WCHAR *s) { int n = 0; if (s) while (s[n]) n++; return n; }
 static void wcopy(WCHAR *d, const WCHAR *s, int cap)

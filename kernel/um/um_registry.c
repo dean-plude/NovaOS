@@ -949,6 +949,33 @@ static void defaults(void)
     kset_dword(wudf, "Type", 0x10);                        /* SERVICE_WIN32_OWN_PROCESS */
     kset_dword(wudf, "ErrorControl", 1);
     if (!has_value(wudf, "Start")) kset_dword(wudf, "Start", 2);
+    /* The print spooler (spoolsv.exe): the print queue (novaspool.h) */
+    RegKey *spl = kpath("Machine\\SYSTEM\\CurrentControlSet\\Services\\Spooler", false);
+    kset_sz(spl, "ImagePath", "C:\\Windows\\System32\\spoolsv.exe", 2);
+    kset_sz(spl, "DisplayName", "Print Spooler", 1);
+    kset_sz(spl, "Description", "This service spools print jobs and handles interaction with the printer.  "
+            "If you turn off this service, you won't be able to print or see your printers.", 1);
+    kset_sz(spl, "ObjectName", "LocalSystem", 1);
+    kset_dword(spl, "Type", 0x10);                         /* SERVICE_WIN32_OWN_PROCESS */
+    kset_dword(spl, "ErrorControl", 1);
+    if (!has_value(spl, "Start")) kset_dword(spl, "Start", 2);
+    /* The built-in printer, Microsoft Print to PDF (gdi32's printer DC
+     * writes the PDF; its port asks where to save it), made once: a
+     * printer deleted since stays deleted */
+    RegKey *print = kpath("Machine\\SYSTEM\\CurrentControlSet\\Control\\Print", false);
+    if (!has_value(print, "MajorVersion")) {
+        RegKey *pdf = kpath("Machine\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\Microsoft Print to PDF", false);
+        kset_sz(pdf, "Name", "Microsoft Print to PDF", 1);
+        kset_sz(pdf, "Port", "PORTPROMPT:", 1);
+        kset_sz(pdf, "Printer Driver", "Microsoft Print To PDF", 1);
+        kset_sz(pdf, "Print Processor", "winprint", 1);
+        kset_sz(pdf, "Datatype", "RAW", 1);
+        kset_sz(pdf, "Description", "", 1);
+        kset_sz(pdf, "Location", "", 1);
+        kset_dword(pdf, "Attributes", 0x00000A40);         /* LOCAL | ENABLE_BIDI | DO_COMPLETE_FIRST */
+        kset_dword(pdf, "Priority", 1);
+        kset_dword(print, "MajorVersion", 3);
+    }
 
     /* HKLM\HARDWARE: rebuilt every boot */
     add_cpus(1);                           /* the others once they start */

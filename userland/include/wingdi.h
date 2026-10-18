@@ -48,6 +48,7 @@ typedef struct NOVA_DC {
     RECT     clip_rects[NOVA_DC_CLIP_RECTS];
     int      arc_dir;      /* AD_CLOCKWISE (2), or 0 for counterclockwise */
     int      screen;       /* the screen's DC (GetDC(NULL)): BitBlt from it reads what the screen shows */
+    void    *print;        /* a printer DC's printer and job (gdi32's print.c) */
 } NOVA_DC;
 
 #define TRANSPARENT 1
@@ -301,5 +302,36 @@ typedef HANDLE HENHMETAFILE;
 #endif
 typedef struct tagFONTSIGNATURE { DWORD fsUsb[4]; DWORD fsCsb[2]; } FONTSIGNATURE, *PFONTSIGNATURE, *LPFONTSIGNATURE;
 typedef struct tagCHARSETINFO { UINT ciCharset; UINT ciACP; FONTSIGNATURE fs; } CHARSETINFO, *PCHARSETINFO, *LPCHARSETINFO;
+
+/* Printing: a printer DC (CreateDC with a printer's name) and its job */
+typedef struct _DOCINFOW { int cbSize; LPCWSTR lpszDocName, lpszOutput, lpszDatatype; DWORD fwType; } DOCINFOW, *LPDOCINFOW;
+typedef struct _DOCINFOA { int cbSize; LPCSTR lpszDocName, lpszOutput, lpszDatatype; DWORD fwType; } DOCINFOA, *LPDOCINFOA;
+typedef BOOL (__stdcall *ABORTPROC)(HDC, int);
+GDIAPI HDC CreateDCW(LPCWSTR driver, LPCWSTR device, LPCWSTR port, const void *mode);
+GDIAPI HDC CreateDCA(LPCSTR driver, LPCSTR device, LPCSTR port, const void *mode);
+GDIAPI HDC CreateICW(LPCWSTR driver, LPCWSTR device, LPCWSTR port, const void *mode);
+GDIAPI int GetDeviceCaps(HDC dc, int index);
+GDIAPI int StartDocW(HDC dc, const DOCINFOW *di);
+GDIAPI int StartDocA(HDC dc, const DOCINFOA *di);
+GDIAPI int StartPage(HDC dc);
+GDIAPI int EndPage(HDC dc);
+GDIAPI int EndDoc(HDC dc);
+GDIAPI int AbortDoc(HDC dc);
+GDIAPI int SetAbortProc(HDC dc, ABORTPROC proc);
+GDIAPI int Escape(HDC dc, int code, int n, LPCSTR in, LPVOID out);
+#define SP_ERROR (-1)
+#ifndef TECHNOLOGY
+#define TECHNOLOGY 2
+#define DT_RASDISPLAY 1
+#define DT_RASPRINTER 2
+#define PHYSICALWIDTH 110
+#define PHYSICALHEIGHT 111
+#define PHYSICALOFFSETX 112
+#define PHYSICALOFFSETY 113
+#endif
+#ifndef HORZSIZE
+#define HORZSIZE 4
+#define VERTSIZE 6
+#endif
 
 _NOVA_END

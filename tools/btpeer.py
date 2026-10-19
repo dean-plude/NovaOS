@@ -2,7 +2,7 @@
 """A USB Bluetooth radio, with two Bluetooth devices in range, for testing
 NovaOS, as a QEMU usb-redir device.
 
-    tools/btpeer.py --port 10718 [--ctl PORT]
+    tools/btpeer.py --port 10718 [--ctl PORT] [--audio DIR]
 
 QEMU has no Bluetooth radio of its own any more (its old usb-bt-dongle
 went in QEMU 5), so this program is one, behind QEMU's usb-redir device
@@ -16,15 +16,20 @@ Specification's USB transport (Vol 4, Part B) lays one out, the way Intel's
 AX211 combo card shows its Bluetooth half: device class E0/01/01
 (1209:000d, "NovaOS Test Bluetooth Radio"), interface 0 with HCI events on
 interrupt IN endpoint 0x81 and ACL data on bulk endpoints 0x82 (IN) and
-0x02 (OUT), interface 1 for SCO (isochronous 0x83/0x03, setting 0 without
-bandwidth); HCI commands arrive as class requests to the device on the
-control endpoint.  It answers the commands a host sends to bring a radio
-up and use it (Vol 4, Part E, 7): Reset, the local version, features,
-buffer sizes and address, the event mask, name, class of device, scan
-and inquiry modes and Simple Pairing, then Inquiry, Remote Name Request,
-Create Connection, Authentication Requested, Set Connection Encryption
-and Disconnect, and the replies a host gives the controller's pairing
-questions (link key, PIN code, IO capability, user confirmation).
+0x02 (OUT), interface 1 for SCO voice (isochronous 0x83/0x03, the
+specification's six settings: 0 without bandwidth, then 9, 17, 25, 33 and
+49-byte packets every millisecond); HCI commands arrive as class requests
+to the device on the control endpoint.  It answers the commands a host
+sends to bring a radio up and use it (Vol 4, Part E, 7): Reset, the local
+version, features, buffer sizes and address, the event mask, name, class
+of device, scan and inquiry modes, voice setting and Simple Pairing, then
+Inquiry, Remote Name Request, Create Connection, Authentication
+Requested, Set Connection Encryption, Setup Synchronous Connection (an
+eSCO link, CVSD) and Disconnect, and the replies a host gives the
+controller's pairing questions (link key, PIN code, IO capability, user
+confirmation).  SCO data goes in isochronous packets: the host's SCO
+packets are put back together from interface 1's OUT endpoint, and the
+headset's are sent on its IN endpoint, a packet every millisecond.
 
 In range, as the radio's inquiry finds them, are:
 
@@ -36,9 +41,20 @@ In range, as the radio's inquiry finds them, are:
                      (VID 1209 from the USB list, PID 000e), and HID's two
                      L2CAP channels (PSM 0x11 control, 0x13 interrupt);
   4E:4F:56:41:00:02  "NovaOS Test Headset": a headset (0x240404) that pairs
-                     the legacy way with PIN 0000 and lists Hands-Free and
-                     Audio Sink services (no audio yet: step 28.2's next
-                     slice).
+                     the legacy way with PIN 0000 and lists Hands-Free
+                     (RFCOMM channel 1) and Audio Sink services.  As a
+                     hands-free unit it answers RFCOMM (TS 07.10's
+                     multiplexer, parameter negotiation with credit-based
+                     flow control, modem status) on PSM 3 and sets up the
+                     service level connection with AT commands (AT+BRSF,
+                     AT+CIND=?, AT+CIND?, AT+CMER, then AT+VGS); on the
+                     voice link its microphone hears a 600 Hz tone and
+                     what the host sends is written to DIR/bt-hfp.wav (8
+                     kHz mono).  As an A2DP sink it answers AVDTP on PSM
+                     0x19 (one SBC sink end point: 44.1 or 48 kHz, every
+                     channel mode, block length and allocation, 8 or 4
+                     subbands, bitpool 2-53) and decodes the stream's SBC
+                     frames into DIR/bt-a2dp.wav.
 
 The controller half is emulated here, and so is each device's own host
 half: its L2CAP signalling (connection, configuration, disconnection),
@@ -54,21 +70,26 @@ sent on the HID interrupt channel ("error not connected" when it is not
 open): buttons (bit 0 left, 1 right, 2 middle), dx, dy (-127..127),
 wheel.  What happens is printed: commands by name, "inquiry", "paired
 ADDR (ssp|pin)", "connected ADDR", "l2cap PSM open", "sdp ADDR",
-"hid open", "disconnected ADDR".
+"hid open", "disconnected ADDR", "rfcomm DLCI open", "hfp slc",
+"voice link HANDLE open", "a2dp configured ...", "a2dp start".
 """
-import argparse, os, socket, struct, sys, threading
+import argparse, math, os, socket, struct, sys, threading, time
 
 HELLO, DEVICE_CONNECT, RESET, INTERFACE_INFO, EP_INFO = 0, 1, 3, 4, 5
 SET_CONFIGURATION, GET_CONFIGURATION, CONFIGURATION_STATUS = 6, 7, 8
 SET_ALT_SETTING, GET_ALT_SETTING, ALT_SETTING_STATUS = 9, 10, 11
 START_INTERRUPT_RECEIVING, STOP_INTERRUPT_RECEIVING, INTERRUPT_RECEIVING_STATUS = 15, 16, 17
+START_ISO_STREAM, STOP_ISO_STREAM, ISO_STREAM_STATUS = 12, 13, 14
 CANCEL_DATA_PACKET = 21
-CONTROL_PACKET, BULK_PACKET, INTERRUPT_PACKET = 100, 101, 103
+CONTROL_PACKET, BULK_PACKET, ISO_PACKET, INTERRUPT_PACKET = 100, 101, 102, 103
 CAPS = (1 << 1) | (1 << 4) | (1 << 5) | (1 << 6)
 CAP_64BIT_IDS, CAP_32BIT_BULK = 1 << 5, 1 << 6
 SPEED_FULL = 1
 OK, CANCELLED, STALL = 0, 1, 4
-EP_EVT, EP_ACL_IN, EP_ACL_OUT = 0x81, 0x82, 0x02
+EP_EVT, EP_ACL_IN, EP_ACL_OUT, EP_SCO_IN, EP_SCO_OUT = 0x81, 0x82, 0x02, 0x83, 0x03
+SCO_MPS = [0, 9, 17, 25, 33, 49]                                # interface 1's settings (Vol 4, Part B, 2.1.1)
+MIC_HZ = 600                                                    # what the headset's microphone hears
+AUDIO_DIR = None                                                # --audio
 VID, PID = 0x1209, 0x000D
 EVT_MPS, ACL_MPS = 64, 64
 ACL_LEN, ACL_PKTS = 310, 8
@@ -85,6 +106,165 @@ MOUSE_REPORT = bytes([
 
 def addr_text(a):
     return ':'.join(f'{b:02X}' for b in reversed(a))
+
+
+class Wav:
+    """A 16-bit WAV file, its header kept current as samples come"""
+
+    def __init__(self, path, rate, channels):
+        self.f, self.rate, self.ch, self.n = open(path, 'wb'), rate, channels, 0
+        self.header()
+
+    def header(self):
+        self.f.seek(0)
+        self.f.write(b'RIFF' + struct.pack('<I', 36 + self.n) + b'WAVEfmt ' +
+                     struct.pack('<IHHIIHH', 16, 1, self.ch, self.rate, self.rate * 2 * self.ch, 2 * self.ch, 16) +
+                     b'data' + struct.pack('<I', self.n))
+        self.f.seek(0, 2)
+
+    def add(self, pcm):
+        self.f.write(pcm)
+        self.n += len(pcm)
+        self.header()
+        self.f.flush()
+
+
+SBC_H = [0.0, 1.56575398E-04, 3.43256425E-04, 5.54620202E-04, 8.23919506E-04, 1.13992507E-03, 1.47640169E-03,
+         1.78371725E-03, 2.01182542E-03, 2.10371989E-03, 1.99454554E-03, 1.61656283E-03, 9.02154502E-04,
+         -1.78805361E-04, -1.64973098E-03, -3.49717454E-03, -5.65949473E-03, -8.02941163E-03, -1.04584443E-02,
+         -1.27472335E-02, -1.46525263E-02, -1.59045603E-02, -1.62208471E-02, -1.53184106E-02, -1.29371806E-02,
+         -8.85757540E-03, -2.92408442E-03, 4.91578024E-03, 1.46404076E-02, 2.61098752E-02, 3.90751381E-02,
+         5.31873032E-02, 6.79989431E-02, 8.29847578E-02, 9.75753918E-02, 1.11196689E-01, 1.23264548E-01,
+         1.33264415E-01, 1.40753505E-01, 1.45389847E-01, 1.46955068E-01]
+
+
+class SbcDecoder:
+    """SBC frames (8 subbands) to 16-bit PCM, after the A2DP specification's
+    decoder (12.6, and the synthesis filter of its Appendix B): what the
+    headset hears, for the test to check"""
+
+    OFFSET8 = [[-2, 0, 0, 0, 0, 0, 0, 1], [-3, 0, 0, 0, 0, 0, 1, 2], [-4, 0, 0, 0, 0, 0, 1, 2], [-4, 0, 0, 0, 0, 0, 1, 2]]
+    RATES = [16000, 32000, 44100, 48000]
+
+    def __init__(self):
+        h = SBC_H + [SBC_H[80 - n] for n in range(41, 80)]
+        self.d = [-8 * h[i] * (-1 if (i // 16) % 2 else 1) for i in range(80)]
+        self.n = [[math.cos((i + 0.5) * (k + 4) * math.pi / 8) for i in range(8)] for k in range(16)]
+        self.v = [[0.0] * 160, [0.0] * 160]
+        self.rate, self.channels = 0, 0
+
+    def allocate(self, mode, snr, ri, bitpool, sf, nch):
+        need = [[0] * 8 for _ in range(nch)]
+        for ch in range(nch):
+            for sb in range(8):
+                if snr:
+                    need[ch][sb] = sf[ch][sb]
+                elif sf[ch][sb] == 0:
+                    need[ch][sb] = -5
+                else:
+                    loud = sf[ch][sb] - self.OFFSET8[ri][sb]
+                    need[ch][sb] = loud // 2 if loud > 0 else loud
+        bits = [[0] * 8 for _ in range(nch)]
+        groups = [[c] for c in range(nch)] if mode < 2 else [list(range(nch))]
+        for g in groups:
+            maxneed = max(need[c][s] for c in g for s in range(8))
+            count, slices, sl = 0, 0, maxneed + 1
+            while True:
+                sl -= 1
+                count += slices
+                slices = 0
+                for c in g:
+                    for s in range(8):
+                        if sl + 1 < need[c][s] < sl + 16:
+                            slices += 1
+                        elif need[c][s] == sl + 1:
+                            slices += 2
+                if count + slices >= bitpool:
+                    break
+            if count + slices == bitpool:
+                count += slices
+                sl -= 1
+            for c in g:
+                for s in range(8):
+                    bits[c][s] = 0 if need[c][s] < sl + 2 else min(need[c][s] - sl, 16)
+            for second in (False, True):
+                i, s = 0, 0
+                while count < bitpool and s < 8:
+                    c = g[i]
+                    if second:
+                        if bits[c][s] < 16:
+                            bits[c][s] += 1
+                            count += 1
+                    elif 2 <= bits[c][s] < 16:
+                        bits[c][s] += 1
+                        count += 1
+                    elif need[c][s] == sl + 1 and bitpool > count + 1:
+                        bits[c][s] = 2
+                        count += 2
+                    if i == len(g) - 1:
+                        i, s = 0, s + 1
+                    else:
+                        i += 1
+        return bits
+
+    def frame(self, data):
+        """One frame at the start of @data: (its length, its PCM as
+        interleaved samples), or (0, None) if it is not one"""
+        if len(data) < 4 or data[0] != 0x9C:
+            return 0, None
+        ri, blocks, mode = data[1] >> 6, ((data[1] >> 4) & 3) * 4 + 4, (data[1] >> 2) & 3
+        snr, nsb, bitpool = (data[1] >> 1) & 1, 8 if data[1] & 1 else 4, data[2]
+        if nsb != 8:
+            return 0, None
+        nch = 1 if mode == 0 else 2
+        self.rate, self.channels = self.RATES[ri], nch
+        pos = 32
+        bitbuf = int.from_bytes(data, 'big')
+        total = len(data) * 8
+
+        def get(n):
+            nonlocal pos
+            v = (bitbuf >> (total - pos - n)) & ((1 << n) - 1)
+            pos += n
+            return v
+        join = get(8) if mode == 3 else 0
+        sf = [[get(4) for _ in range(8)] for _ in range(nch)]
+        bits = self.allocate(mode, snr, ri, bitpool, sf, nch)
+        sb = [[[0.0] * 8 for _ in range(nch)] for _ in range(blocks)]
+        for blk in range(blocks):
+            for ch in range(nch):
+                for s in range(8):
+                    n = bits[ch][s]
+                    if n:
+                        q = get(n)
+                        scale = 2.0 ** (sf[ch][s] + 1)
+                        sb[blk][ch][s] = scale * ((q * 2 + 1) / ((1 << n) - 1) - 1)
+        length = (pos + 7) // 8
+        out = []
+        for blk in range(blocks):
+            if mode == 3:
+                for s in range(8):
+                    if join & (0x80 >> s):
+                        m, d = sb[blk][0][s], sb[blk][1][s]
+                        sb[blk][0][s], sb[blk][1][s] = m + d, m - d
+            pcm = [self.synth(ch, sb[blk][ch]) for ch in range(nch)]
+            for j in range(8):
+                for ch in range(nch):
+                    out.append(max(-32768, min(32767, int(round(pcm[ch][j])))))
+        return length, out
+
+    def synth(self, ch, s):
+        v = [sum(nk[i] * s[i] for i in range(8)) for nk in self.n] + self.v[ch][:144]
+        self.v[ch] = v
+        d = self.d
+        out = []
+        for j in range(8):
+            acc = 0.0
+            for i in range(5):
+                acc += v[i * 32 + j] * d[i * 16 + j] + v[i * 32 + 24 + j] * d[i * 16 + 8 + j]
+            out.append(acc)
+        return out
+
 
 
 def log(text):
@@ -200,8 +380,185 @@ class Remote:
 
 REMOTES = [
     Remote('4E:4F:56:41:00:01', 'NovaOS Test Mouse', 0x002580, True, mouse_records(), (0x01, 0x11, 0x13)),
-    Remote('4E:4F:56:41:00:02', 'NovaOS Test Headset', 0x240404, False, headset_records(), (0x01,)),
+    Remote('4E:4F:56:41:00:02', 'NovaOS Test Headset', 0x240404, False, headset_records(), (0x01, 0x03, 0x19)),
 ]
+
+
+def rfcomm_fcs(data):
+    """TS 07.10's frame check sequence (CRC-8, reflected 0xE0, from 0xFF)"""
+    f = 0xFF
+    for b in data:
+        f ^= b
+        for _ in range(8):
+            f = (f >> 1) ^ 0xE0 if f & 1 else f >> 1
+    return 0xFF - f
+
+
+class HandsFree:
+    """The headset's hands-free unit: RFCOMM's responding side (the host
+    started the session: its commands carry C/R 1, ours 0) and HFP's
+    service level connection, which the hands-free unit drives"""
+
+    FEATURES = 0x1F                         # (EC/NR, three-way calling, CLI, voice recognition, remote volume)
+    SLC = ['AT+BRSF=%d' % FEATURES, 'AT+CIND=?', 'AT+CIND?', 'AT+CMER=3,0,0,1', 'AT+VGS=15']
+
+    def __init__(self, radio, link, cid):
+        self.radio, self.link, self.cid = radio, link, cid
+        self.dlci, self.cfc, self.credits, self.given = None, False, 0, 0
+        self.msc_in = self.msc_out = False
+        self.step, self.text, self.queue = -1, b'', []
+
+    def send(self, dlci, ctl, info=b'', cr=False, credits=None):
+        addr = dlci << 2 | (2 if cr else 0) | 1
+        ln = bytes([len(info) << 1 | 1]) if len(info) < 128 else bytes([(len(info) << 1) & 0xFE, len(info) >> 7])
+        body = bytes([addr, ctl | (0x10 if credits is not None else 0)]) + ln + \
+            (bytes([credits]) if credits is not None else b'') + info
+        self.radio.acl(self.link, self.cid, body + bytes([rfcomm_fcs(body[:2] if ctl & 0xEF == 0xEF else body[:3])]))
+
+    def frame(self, data):
+        if len(data) < 4:
+            return
+        dlci, ctl, pf = data[0] >> 2, data[1] & 0xEF, data[1] & 0x10
+        ln, k = data[2] >> 1, 3
+        if not data[2] & 1:
+            ln, k = ln | data[3] << 7, 4
+        if ctl == 0x2F:                                         # SABM: UA
+            self.send(dlci, 0x73, cr=True)
+            if dlci:
+                self.dlci = dlci
+                log(f'rfcomm {dlci} open')
+        elif ctl == 0x43:                                       # DISC: UA
+            self.send(dlci, 0x73, cr=True)
+            if dlci == self.dlci:
+                self.dlci = None
+                log(f'rfcomm {dlci} closed')
+        elif ctl == 0xEF:                                       # UIH
+            if pf and self.cfc and dlci:
+                self.credits += data[k]
+                k += 1
+            info = data[k:k + ln]
+            if dlci == 0:
+                self.mux(info)
+            elif dlci == self.dlci and info:
+                self.data(info)
+            self.flush()
+
+    def mux(self, m):
+        if len(m) < 2:
+            return
+        typ, cmd, n = m[0] & 0xFC, m[0] & 2, m[1] >> 1
+        v = m[2:2 + n]
+        if typ == 0x80 and cmd and n >= 8:                      # PN: credit-based flow control if asked
+            self.cfc = v[1] & 0xF0 == 0xF0
+            self.credits = v[7] & 7 if self.cfc else 0
+            r = bytearray(v)
+            r[1] = (r[1] & 0x0F) | (0xE0 if self.cfc else 0)
+            r[7] = 7
+            self.given = 7
+            self.send(0, 0xEF, bytes([0x81, m[1]]) + bytes(r))
+        elif typ == 0xE0 and cmd:                               # MSC: answered, and ours
+            self.send(0, 0xEF, bytes([0xE1, m[1]]) + v)
+            self.send(0, 0xEF, bytes([0xE3, 0x05, v[0], 0x8D]))
+            self.msc_in = True
+        elif typ == 0xE0:
+            self.msc_out = True
+        elif cmd:
+            self.send(0, 0xEF, bytes([0x11, 0x03, m[0]]))       # (NSC)
+        if self.msc_in and self.msc_out and self.step < 0:
+            self.step = 0
+            self.at(self.SLC[0])
+
+    def at(self, text):
+        self.queue.append((text + '\r').encode())
+
+    def flush(self):
+        while self.queue and self.dlci and (not self.cfc or self.credits > 0):
+            if self.cfc:
+                self.credits -= 1
+            self.send(self.dlci, 0xEF, self.queue.pop(0))
+
+    def data(self, info):
+        if self.cfc:
+            self.given -= 1
+            if self.given <= 2:
+                self.send(self.dlci, 0xEF, credits=5)
+                self.given += 5
+        self.text += info
+        while b'\r\n' in self.text:
+            line, self.text = self.text.split(b'\r\n', 1)
+            line = line.decode('latin-1').strip()
+            if not line:
+                continue
+            log(f'hfp: {line}')
+            if line in ('OK', 'ERROR') and 0 <= self.step < len(self.SLC):
+                if line == 'ERROR':
+                    log(f'hfp: {self.SLC[self.step]} refused')
+                if self.SLC[self.step].startswith('AT+CMER'):
+                    log('hfp slc')
+                self.step += 1
+                if self.step < len(self.SLC):
+                    self.at(self.SLC[self.step])
+
+
+class Sink:
+    """The headset's A2DP sink: AVDTP's accepting side, one SBC stream
+    end point, and the stream decoded into bt-a2dp.wav"""
+
+    def __init__(self, radio, link):
+        self.radio, self.link = radio, link
+        self.sig = self.media = None                         # (the host's CIDs)
+        self.dec, self.wav, self.packets = SbcDecoder(), None, 0
+
+    def signal(self, f):
+        if len(f) < 2 or f[0] & 3:                              # (commands only: the host asks nothing of ours)
+            return
+        label, sig, p = f[0] >> 4, f[1] & 0x3F, f[2:]
+
+        def answer(body=b'', kind=2):
+            self.radio.acl(self.link, self.sig, bytes([label << 4 | kind, sig]) + body)
+        if sig == 0x01:                                         # DISCOVER: SEID 1, audio, sink
+            answer(bytes([1 << 2, 0 << 4 | 1 << 3]))
+        elif sig in (0x02, 0x0C):                               # GET_(ALL_)CAPABILITIES
+            answer(bytes([0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0x3F, 0xFF, 0x02, 53]))
+        elif sig == 0x03:                                       # SET_CONFIGURATION
+            i, c = 2, None
+            while i + 2 <= len(p):
+                if p[i] == 0x07 and p[i + 1] >= 6:
+                    c = p[i + 4:i + 8]
+                i += 2 + p[i + 1]
+            if not c:
+                answer(bytes([0x07, 0x29]), 3)                  # (unsupported configuration)
+                return
+            rate = {0x80: 16000, 0x40: 32000, 0x20: 44100, 0x10: 48000}.get(c[0] & 0xF0)
+            mode = {8: 'mono', 4: 'dual', 2: 'stereo', 1: 'joint'}.get(c[0] & 0x0F)
+            log(f'a2dp configured: SBC {rate} Hz {mode}, blocks {c[1] >> 4:x}, subbands {c[1] >> 2 & 3:x}, '
+                f'allocation {c[1] & 3:x}, bitpool {c[2]}-{c[3]}')
+            answer()
+        elif sig == 0x07:
+            log('a2dp start')
+            answer()
+        elif sig == 0x09:
+            log(f'a2dp suspend ({self.packets} packets)')
+            answer()
+        else:                                                   # OPEN, CLOSE, ABORT, DELAY_REPORT, ...
+            answer()
+
+    def media_in(self, f):
+        if len(f) < 13:
+            return
+        off = 12 + 4 * (f[0] & 0x0F)
+        data, pcm = f[off + 1:], []
+        self.packets += 1
+        while data:
+            n, out = self.dec.frame(data)
+            if not n:
+                break
+            pcm += out
+            data = data[n:]
+        if pcm and AUDIO_DIR:
+            if not self.wav:
+                self.wav = Wav(os.path.join(AUDIO_DIR, 'bt-a2dp.wav'), self.dec.rate, self.dec.channels)
+            self.wav.add(struct.pack('<%dh' % len(pcm), *pcm))
 
 
 class Link:
@@ -215,6 +572,8 @@ class Link:
         self.ident = 0x80
         self.auth = False
         self.pending_auth = None                          # ('ssp'|'pin') while pairing
+        self.hf = self.sink = None
+        self.sco = None                                   # its voice link's handle
 
 
 class Radio:
@@ -226,6 +585,9 @@ class Radio:
         self.next_handle = 0x0001
         self.scan = 0
         self.lock = threading.RLock()
+        self.sco = {}                                     # voice link handle -> Link
+        self.sco_rx, self.mic_buf, self.mic_t = b'', b'', 0
+        self.hfp_wav = None
 
     # -- events and ACL to the host --
     def event(self, code, params):
@@ -276,10 +638,12 @@ class Radio:
                 0x040B: 'link key reply', 0x040C: 'link key negative reply', 0x040D: 'pin code reply',
                 0x040E: 'pin code negative reply', 0x042B: 'io capability reply',
                 0x042C: 'user confirmation reply', 0x042D: 'user confirmation negative reply',
-                0x0C05: 'set event filter', 0x0C33: 'host buffer size'}.get(opcode, f'command {opcode:04x}')
+                0x0C05: 'set event filter', 0x0C33: 'host buffer size', 0x0C26: 'write voice setting',
+                0x0428: 'setup synchronous connection'}.get(opcode, f'command {opcode:04x}')
         log(name)
         if opcode == 0x0C03:                                       # Reset
             self.links.clear()
+            self.sco.clear()
             self.scan = 0
             self.complete(opcode)
         elif opcode == 0x1001:                                     # Read Local Version Information
@@ -331,9 +695,29 @@ class Radio:
             self.links[h] = link
             log('connected ' + addr_text(addr))
             self.event(0x03, b'\x00' + struct.pack('<H', h) + addr + b'\x01\x00')
+        elif opcode == 0x0428:                                     # Setup Synchronous Connection: eSCO, CVSD
+            link = self.links.get(struct.unpack('<H', p[:2])[0] & 0x0FFF)
+            self.status(opcode, 0 if link else 0x02)
+            if link:
+                h = self.next_handle
+                self.next_handle += 1
+                self.sco[h] = link
+                link.sco = h
+                log(f'voice link {h:03x} open')
+                self.event(0x2C, b'\x00' + struct.pack('<H', h) + link.remote.addr + bytes([2, 0x0C, 0x02]) +
+                           struct.pack('<HH', 60, 60) + b'\x02')
+        elif opcode == 0x0406 and (struct.unpack('<H', p[:2])[0] & 0x0FFF) in self.sco:   # Disconnect: a voice link
+            h = struct.unpack('<H', p[:2])[0] & 0x0FFF
+            self.sco.pop(h).sco = None
+            self.status(opcode)
+            log(f'voice link {h:03x} closed')
+            self.event(0x05, b'\x00' + struct.pack('<HB', h, 0x16))
         elif opcode == 0x0406:                                     # Disconnect
             h, reason = struct.unpack('<HB', p[:3])
             link = self.links.pop(h & 0x0FFF, None)
+            if link and link.sco is not None:
+                self.sco.pop(link.sco, None)
+                self.event(0x05, b'\x00' + struct.pack('<HB', link.sco, 0x16))
             self.status(opcode, 0 if link else 0x02)
             if link:
                 log('disconnected ' + addr_text(link.remote.addr))
@@ -443,6 +827,12 @@ class Radio:
             return
         if ch[0] == 0x01:
             self.sdp(link, cid, frame)
+        elif ch[0] == 0x03 and link.hf:
+            link.hf.frame(frame)
+        elif ch[0] == 0x19 and link.sink and ch[3] == 'sig':
+            link.sink.signal(frame)
+        elif ch[0] == 0x19 and link.sink:
+            link.sink.media_in(frame)
         elif ch[0] == 0x11 and frame:                               # HID control: HANDSHAKE successful
             log(f'hid control {frame.hex()}')
             self.acl(link, ch[1], b'\x00')
@@ -460,7 +850,16 @@ class Radio:
                 return
             dcid = link.next_cid
             link.next_cid += 1
-            link.chans[dcid] = [psm, scid, False]
+            role = None
+            if psm == 0x03:
+                link.hf = HandsFree(self, link, scid)
+            elif psm == 0x19:                                       # (AVDTP: signalling first, then the media channel)
+                if not link.sink or link.sink.sig is None:
+                    link.sink = link.sink or Sink(self, link)
+                    link.sink.sig, role = scid, 'sig'
+                else:
+                    link.sink.media, role = scid, 'media'
+            link.chans[dcid] = [psm, scid, False, role]
             self.sig(link, 0x03, ident, struct.pack('<HHHH', dcid, scid, 0, 0))
             link.ident = (link.ident + 1) & 0xFF or 1
             self.sig(link, 0x04, link.ident, struct.pack('<HH', scid, 0) + bytes([0x01, 2]) + struct.pack('<H', 672))
@@ -477,6 +876,12 @@ class Radio:
             self.sig(link, 0x07, ident, struct.pack('<HH', dcid, scid))
             if ch:
                 log(f'l2cap {ch[0]:#04x} closed')
+                if ch[0] == 0x19 and link.sink and ch[3] == 'sig':
+                    link.sink = None
+                elif ch[0] == 0x19 and link.sink:
+                    link.sink.media = None
+                elif ch[0] == 0x03:
+                    link.hf = None
         elif code == 0x0A:                                          # Information Request
             info = struct.unpack('<H', body[:2])[0]
             if info == 2:
@@ -505,6 +910,34 @@ class Radio:
         self.acl(link, dst, bytes([0x07]) + struct.pack('>HH', tid, len(lists) + 3) +
                  struct.pack('>H', len(lists)) + lists + b'\x00')
 
+    # -- SCO --
+    def sco_out(self, data):
+        """Interface 1's OUT packets: SCO packets put back together; the
+        voice link's samples into bt-hfp.wav"""
+        self.sco_rx += data
+        while len(self.sco_rx) >= 3 and len(self.sco_rx) >= 3 + self.sco_rx[2]:
+            n = 3 + self.sco_rx[2]
+            pkt, self.sco_rx = self.sco_rx[:n], self.sco_rx[n:]
+            if (struct.unpack('<H', pkt[:2])[0] & 0x0FFF) in self.sco and AUDIO_DIR:
+                if not self.hfp_wav:
+                    self.hfp_wav = Wav(os.path.join(AUDIO_DIR, 'bt-hfp.wav'), 8000, 1)
+                self.hfp_wav.add(pkt[3:])
+
+    def mic_bytes(self, n):
+        """The next @n bytes of the IN endpoint's SCO packets (the
+        microphone's tone, 24 samples a packet), or None while no voice link
+        is up"""
+        h = next(iter(self.sco), None)
+        if h is None:
+            self.mic_buf = b''
+            return None
+        while len(self.mic_buf) < n:
+            s = [int(12000 * math.sin(2 * math.pi * MIC_HZ * (self.mic_t + i) / 8000)) for i in range(24)]
+            self.mic_t = (self.mic_t + 24) % 8000
+            self.mic_buf += struct.pack('<HB', h, 48) + struct.pack('<24h', *s)
+        out, self.mic_buf = self.mic_buf[:n], self.mic_buf[n:]
+        return out
+
     def mouse_report(self, buttons, dx, dy, wheel):
         with self.lock:
             link = self.link_by_addr(REMOTES[0].addr)
@@ -527,6 +960,8 @@ class Conn:
         self.held_evt = []
         self.held_in = []                      # the host's bulk IN requests: (id, length)
         self.acl_queue = []                    # ACL packets for the host, waiting for a request
+        self.alt1 = 0                          # interface 1's setting
+        self.mic_on = False
         self.radio = Radio(self)
 
     def send(self, ptype, hdr=b'', data=b'', pid=0):
@@ -552,9 +987,10 @@ class Conn:
         d += bytes([7, 5, EP_EVT, 3]) + struct.pack('<H', EVT_MPS) + bytes([1])
         d += bytes([7, 5, EP_ACL_IN, 2]) + struct.pack('<H', ACL_MPS) + bytes([0])
         d += bytes([7, 5, EP_ACL_OUT, 2]) + struct.pack('<H', ACL_MPS) + bytes([0])
-        d += bytes([9, 4, 1, 0, 2, 0xE0, 0x01, 0x01, 0])
-        d += bytes([7, 5, 0x83, 1]) + struct.pack('<H', 0) + bytes([1])
-        d += bytes([7, 5, 0x03, 1]) + struct.pack('<H', 0) + bytes([1])
+        for alt, mps in enumerate(SCO_MPS):
+            d += bytes([9, 4, 1, alt, 2, 0xE0, 0x01, 0x01, 0])
+            d += bytes([7, 5, EP_SCO_IN, 1]) + struct.pack('<H', mps) + bytes([1])
+            d += bytes([7, 5, EP_SCO_OUT, 1]) + struct.pack('<H', mps) + bytes([1])
         return bytes([9, 2]) + struct.pack('<H', 9 + len(d)) + bytes([2, 1, 0, 0xE0, 50]) + d
 
     def string(self, i):
@@ -570,7 +1006,7 @@ class Conn:
         eps = [(0x00, 0, 0, 0, 64), (0x80, 0, 0, 0, 64)]
         if self.config:
             eps += [(EP_EVT, 3, 1, 0, EVT_MPS), (EP_ACL_IN, 2, 0, 0, ACL_MPS), (EP_ACL_OUT, 2, 0, 0, ACL_MPS),
-                    (0x83, 1, 1, 1, 0), (0x03, 1, 1, 1, 0)]
+                    (EP_SCO_IN, 1, 1, 1, SCO_MPS[self.alt1]), (EP_SCO_OUT, 1, 1, 1, SCO_MPS[self.alt1])]
         return eps
 
     def send_info(self):
@@ -617,6 +1053,25 @@ class Conn:
                     pkt = pkt[:want]
             self.bulk_reply(pid, EP_ACL_IN, OK, pkt)
 
+    def mic_loop(self):
+        """Interface 1's IN endpoint while its stream runs: a packet every
+        millisecond (the voice link's, while one is up)"""
+        t0, sent = time.monotonic(), 0
+        while self.mic_on:
+            due = int((time.monotonic() - t0) * 1000)
+            if due - sent > 200:                        # (stalled: don't flood)
+                sent = due - 20
+            try:
+                for _ in range(due - sent):
+                    with self.radio.lock:
+                        data = self.radio.mic_bytes(SCO_MPS[self.alt1]) if self.alt1 else None
+                    if data is not None:
+                        self.send(ISO_PACKET, struct.pack('<BBH', EP_SCO_IN, OK, len(data)), data)
+            except OSError:
+                return
+            sent = due
+            time.sleep(0.002)
+
     def control(self, pid, hdr, data):
         ep, req, rtype, _, value, index, length = struct.unpack('<BBBBHHH', hdr)
         reply, status = b'', OK
@@ -662,9 +1117,29 @@ class Conn:
             elif ptype == GET_CONFIGURATION:
                 self.send(CONFIGURATION_STATUS, bytes([OK, self.config]), pid=pid)
             elif ptype == SET_ALT_SETTING:
-                self.send(ALT_SETTING_STATUS, bytes([OK if body[1] == 0 else STALL, body[0], body[1]]), pid=pid)
+                iface, alt = body[0], body[1]
+                ok = alt == 0 or (iface == 1 and alt < len(SCO_MPS))
+                if ok and iface == 1:
+                    self.alt1 = alt
+                    log(f'interface 1 setting {alt}')
+                    self.send_info()                    # (before the status: QEMU takes the endpoints' sizes from it)
+                self.send(ALT_SETTING_STATUS, bytes([OK if ok else STALL, iface, alt]), pid=pid)
             elif ptype == GET_ALT_SETTING:
-                self.send(ALT_SETTING_STATUS, bytes([OK, body[0], 0]), pid=pid)
+                self.send(ALT_SETTING_STATUS, bytes([OK, body[0], self.alt1 if body[0] == 1 else 0]), pid=pid)
+            elif ptype == START_ISO_STREAM:
+                self.send(ISO_STREAM_STATUS, bytes([OK, body[0]]), pid=pid)
+                if body[0] == EP_SCO_IN and not self.mic_on:
+                    self.mic_on = True
+                    threading.Thread(target=self.mic_loop, daemon=True).start()
+            elif ptype == STOP_ISO_STREAM:
+                if body[0] == EP_SCO_IN:
+                    self.mic_on = False
+                self.send(ISO_STREAM_STATUS, bytes([OK, body[0]]), pid=pid)
+            elif ptype == ISO_PACKET:
+                ep, st, n = struct.unpack('<BBH', body[:4])
+                if ep == EP_SCO_OUT and n:
+                    with self.radio.lock:
+                        self.radio.sco_out(body[4:4 + n])
             elif ptype == START_INTERRUPT_RECEIVING:
                 self.send(INTERRUPT_RECEIVING_STATUS, bytes([OK, body[0]]), pid=pid)
                 if body[0] == EP_EVT and not self.listening:
@@ -696,8 +1171,11 @@ class Conn:
                 if hit:
                     self.bulk_reply(pid, EP_ACL_IN, CANCELLED)
             elif ptype == RESET:
+                self.alt1 = 0
+                self.mic_on = False
                 with self.radio.lock:
                     self.radio.links.clear()
+                    self.radio.sco.clear()
                 with self.wlock:
                     self.acl_queue = []
 
@@ -731,7 +1209,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--ctl', type=int)
+    ap.add_argument('--audio', help='where the headset writes what it hears (bt-hfp.wav, bt-a2dp.wav)')
     a = ap.parse_args()
+    global AUDIO_DIR
+    AUDIO_DIR = a.audio
     conns = []
     threading.Thread(target=ctl_loop, args=(a.ctl or a.port + 100, conns), daemon=True).start()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

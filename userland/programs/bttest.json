@@ -1,4 +1,4 @@
 {
   "selftest": true,
-  "libs": ["bthprops", "user32", "cfgmgr32"]
+  "libs": ["bthprops", "user32", "cfgmgr32", "winmm"]
 }

@@ -42,11 +42,20 @@
  *   - services (IOCTL_NOVABTH_SET_SERVICE): a service switched on gets a
  *     child PDO, as bthenum gives one; HID's (BTHENUM\{00001124-...})
  *     gets NovaOS's hidbth (hidbth.c), which connects through
- *     BthHidConnect when it starts.
+ *     BthHidConnect when it starts.  A headset's Hands-Free (0x111E) and
+ *     Audio Sink (0x110B) services go to bthaudio.c (the part of Windows'
+ *     BthHFAud and BthA2dp drivers), which connects them over the links
+ *     below (BthDevLink, BthChanOpen) and gives the mixer its outputs and
+ *     microphone;
+ *   - voice (Vol 4, Part E, 7.1.26): Setup Synchronous Connection, eSCO
+ *     with Hands-Free's S3 settings and plain SCO if the device refuses,
+ *     CVSD on the air and 16-bit linear samples at 8 kHz to and from the
+ *     host (Write Voice Setting 0x0060), whose SCO data packets the
+ *     transport carries (a USB radio's isochronous interface 1).
  *
  * Not done yet: devices that connect to us (a mouse reconnecting after
- * sleep: Connection Request is refused), LE, SCO audio, RFCOMM, BRBs for
- * third-party profile drivers (IOCTL_INTERNAL_BTH_SUBMIT_BRB).
+ * sleep: Connection Request is refused), LE, wideband speech (mSBC), BRBs
+ * for third-party profile drivers (IOCTL_INTERNAL_BTH_SUBMIT_BRB).
  */
 #include "ntapi.h"
 #include "bthport.h"
@@ -73,6 +82,9 @@ NT_API void nt_PoStartNextPowerIrp(NT_IRP *irp);
 #define SVC_MAGIC     0x48544231u      /* 'BTH1': a service PDO's extension */
 #define UUID_HID      0x1124
 #define UUID_PNP      0x1200
+#define UUID_HFP      0x111E           /* Hands-Free (the headset's side) */
+#define UUID_SINK     0x110B           /* Audio Sink (A2DP) */
+#define SCO_DATA      48               /* samples' bytes an SCO packet: 3 ms, three 17-byte USB packets with its header */
 #define FILE_DEVICE_BLUETOOTH 0x41
 #define ST_DEVICE_NOT_CONNECTED ((NT_STATUS)0xC000009D)
 #define ST_IO_TIMEOUT           ((NT_STATUS)0xC00000B5)
@@ -110,6 +122,15 @@ struct BthDev {
     UINT16   rdesc_len;
     bool     hid_on;
     NT_DEVICE_OBJECT *hid_pdo;
+    UINT8    hf_chan;                  /* (the Hands-Free service's RFCOMM channel) */
+    bool     hfp_on, a2dp_on;
+    BthAudio *audio;
+    /* the voice link: volatile, the event thread sets them */
+    volatile int sco;                  /* 0 none, 1 connecting, 2 up */
+    volatile UINT8 sco_status, sco_type;
+    UINT16   sco_handle;
+    BthRx    sco_rx;
+    void    *sco_ctx;
 };
 
 struct BthChan {
@@ -146,6 +167,8 @@ struct BthRadio {
     UINT8    features[8];
     UINT16   acl_mtu;
     volatile int acl_free;
+    UINT8    sco_mtu;
+    UINT16   sco_pkts;
     UINT8    scan;
     volatile bool inquiring;
     BthDev   dev[MAX_DEVS];
@@ -298,6 +321,9 @@ static void dev_save(BthRadio *r, BthDev *d)
     um_registry_set_dword(path, "PID", d->pid);
     um_registry_set_dword(path, "Version", d->version);
     um_registry_set_dword(path, "HidEnabled", d->hid_on);
+    um_registry_set_dword(path, "HandsFreeChannel", d->hf_chan);
+    um_registry_set_dword(path, "HandsFreeEnabled", d->hfp_on);
+    um_registry_set_dword(path, "A2dpEnabled", d->a2dp_on);
     if (d->paired) {
         dev_key_path(r, path, sizeof(path));
         addr_hex(d->addr, a);
@@ -345,12 +371,16 @@ static void devs_load(BthRadio *r)
         if (um_registry_get_dword(path, "PID", &v)) d->pid = (UINT16)v;
         if (um_registry_get_dword(path, "Version", &v)) d->version = (UINT16)v;
         if (um_registry_get_dword(path, "HidEnabled", &v)) d->hid_on = v != 0;
+        if (um_registry_get_dword(path, "HandsFreeChannel", &v)) d->hf_chan = (UINT8)v;
+        if (um_registry_get_dword(path, "HandsFreeEnabled", &v)) d->hfp_on = v != 0;
+        if (um_registry_get_dword(path, "A2dpEnabled", &v)) d->a2dp_on = v != 0;
         int sn = um_registry_get_bin(path, "CachedServices", d->svc, sizeof(d->svc));
         d->nsvc = sn > 0 ? sn / 2 : 0;
         UINT8 *buf = kmalloc(1024);
         int rn = buf ? um_registry_get_bin(path, "HidDescriptor", buf, 1024) : -1;
         if (rn > 0) { d->rdesc = buf; d->rdesc_len = (UINT16)rn; } else kfree(buf);
-        kprintf("[BTH] paired before: %s \"%s\"%s\n", addr_text(d->addr, path), d->name, d->hid_on ? ", HID on" : "");
+        kprintf("[BTH] paired before: %s \"%s\"%s%s%s\n", addr_text(d->addr, path), d->name, d->hid_on ? ", HID on" : "",
+                d->hfp_on ? ", Hands-Free on" : "", d->a2dp_on ? ", Audio Sink on" : "");
     }
 }
 
@@ -518,8 +548,9 @@ static void l2_input(BthRadio *r, BthDev *d, UINT16 cid, const UINT8 *p, UINT16 
 }
 
 /* Channel @psm to @d (its ACL link up): the request, then both sides'
- * configuration; NULL if it did not open */
-static BthChan *l2_open(BthRadio *r, BthDev *d, UINT16 psm)
+ * configuration; NULL if it did not open.  @rx (may be NULL) gets its
+ * frames from when it opens. */
+static BthChan *l2_open_rx(BthRadio *r, BthDev *d, UINT16 psm, BthRx rx, void *ctx)
 {
     BthChan *c = NULL;
     lock(r);
@@ -533,6 +564,8 @@ static BthChan *l2_open(BthRadio *r, BthDev *d, UINT16 psm)
             c->lcid = r->next_cid++;
             if (r->next_cid < 0x40) r->next_cid = 0x40;
             c->rmtu = 672;
+            c->rx = rx;
+            c->ctx = ctx;
             c->state = 1;
             c->ident = (UINT8)(++d->ident ? d->ident : ++d->ident);
         }
@@ -548,6 +581,8 @@ static BthChan *l2_open(BthRadio *r, BthDev *d, UINT16 psm)
     chan_free(r, c);
     return NULL;
 }
+
+static BthChan *l2_open(BthRadio *r, BthDev *d, UINT16 psm) { return l2_open_rx(r, d, psm, NULL, NULL); }
 
 static void l2_close(BthRadio *r, BthChan *c)
 {
@@ -666,13 +701,25 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
         d->rx_len = 0;
         d->conn = p[0] ? 0 : 2;
         break;
+    case 0x2C:                                                  /* Synchronous Connection Complete */
+        if (n < 17 || !(d = dev_find(r, p + 3)) || d->sco != 1) break;
+        d->sco_status = p[0];
+        d->sco_handle = le16(p + 1) & 0x0FFF;
+        d->sco_type = p[9];
+        d->sco = p[0] ? 0 : 2;
+        break;
     case 0x05:                                                  /* Disconnection Complete */
         if (n < 4 || p[0]) break;
         for (int i = 0; i < MAX_DEVS; i++) {
             d = &r->dev[i];
+            if (d->used && d->sco == 2 && d->sco_handle == (le16(p + 1) & 0x0FFF)) {
+                d->sco = 0;
+                kprintf("[BTH] %s: voice link closed (reason %02x)\n", addr_text(d->addr, t), p[3]);
+            }
             if (!d->used || d->conn != 2 || d->handle != (le16(p + 1) & 0x0FFF)) continue;
             d->conn = 0;
             d->auth = d->enc = 0;
+            d->sco = 0;
             for (int c = 0; c < MAX_CHANS; c++) if (r->chan[c].used && r->chan[c].dev == d) r->chan[c].state = 0;
             kprintf("[BTH] %s disconnected (reason %02x)\n", addr_text(d->addr, t), p[3]);
         }
@@ -757,6 +804,18 @@ void BthRadioAcl(BthRadio *r, const UINT8 *pkt, UINT32 len)
         l2_input(r, d, le16(d->rx + 2), d->rx + 4, flen);
         d->rx_len -= 4u + flen;
         memmove(d->rx, d->rx + 4 + flen, d->rx_len);
+    }
+}
+
+/* An SCO data packet from the transport: its samples to the voice link's
+ * receiver */
+void BthRadioSco(BthRadio *r, const UINT8 *pkt, UINT32 len)
+{
+    if (!r || len < 3 || 3u + pkt[2] > len) return;
+    UINT16 h = le16(pkt) & 0x0FFF;
+    for (int i = 0; i < MAX_DEVS; i++) {
+        BthDev *d = &r->dev[i];
+        if (d->used && d->sco == 2 && d->sco_handle == h && d->sco_rx) { d->sco_rx(d->sco_ctx, pkt + 3, pkt[2]); return; }
     }
 }
 
@@ -854,7 +913,7 @@ static void sdp_record(BthDev *d, const UINT8 *p, UINT32 n)
     const UINT8 *hid = NULL;
     UINT32 hid_len = 0;
     UINT16 vid = 0, pid = 0, ver = 0;
-    UINT8 country = 0;
+    UINT8 country = 0, rfcomm = 0;
     for (UINT32 o = 0; o < n; ) {
         UINT8 t, vt;
         const UINT8 *id, *v;
@@ -871,6 +930,15 @@ static void sdp_record(BthDev *d, const UINT8 *p, UINT32 n)
             UINT32 ul;
             if (de(v, vl, &ut, &u, &ul) && ut == 3 && ul == 2) svc = be16(u);
             else if (ut == 3 && ul == 16 && !u[0] && !u[1]) svc = be16(u + 2);
+        } else if (attr == 0x0004 && vt == 6) {                 /* ProtocolDescriptorList: RFCOMM's channel */
+            UINT8 lt, ut, ct;
+            const UINT8 *l, *u, *c;
+            UINT32 ll, ul, cl, k;
+            for (UINT32 lo = 0; (k = de(v + lo, vl - lo, &lt, &l, &ll)); lo += k) {
+                UINT32 h = lt == 6 ? de(l, ll, &ut, &u, &ul) : 0;
+                if (h && ut == 3 && ul == 2 && be16(u) == 0x0003 && de(l + h, ll - h, &ct, &c, &cl) && ct == 1 && cl == 1)
+                    rfcomm = c[0];
+            }
         } else if (attr == 0x0206 && vt == 6) {                 /* HIDDescriptorList: { { 0x22, descriptor } } */
             UINT8 st, ct, rt;
             const UINT8 *s, *c, *rd;
@@ -903,6 +971,8 @@ static void sdp_record(BthDev *d, const UINT8 *p, UINT32 n)
         d->vid = vid;
         d->pid = pid;
         d->version = ver;
+    } else if (svc == UUID_HFP && rfcomm) {
+        d->hf_chan = rfcomm;
     }
 }
 
@@ -1216,6 +1286,113 @@ bool BthHidConnected(NT_DEVICE_OBJECT *pdo)
     return s && s->intr && s->intr->state == 3 && s->ctrl && s->ctrl->state == 3 && !s->r->gone;
 }
 
+/* ---- for the audio profiles ---- */
+
+NT_STATUS BthDevLink(BthRadio *r, BthDev *d)
+{
+    if (!r->up || r->gone) return ST_DEVICE_NOT_CONNECTED;
+    if (d->conn == 2 && d->enc == 2 && !d->enc_status) return NT_STATUS_SUCCESS;
+    NT_STATUS st = connect(r, d);
+    if (NT_SUCCESS(st)) st = secure(r, d);
+    return st;
+}
+
+bool BthDevUp(BthRadio *r, BthDev *d) { return d->conn == 2 && r->up && !r->gone; }
+
+BthChan *BthChanOpen(BthRadio *r, BthDev *d, UINT16 psm, BthRx rx, void *ctx)
+{
+    return d->conn == 2 && !r->gone ? l2_open_rx(r, d, psm, rx, ctx) : NULL;
+}
+
+NT_STATUS BthChanSend(BthRadio *r, BthChan *c, const UINT8 *data, UINT32 len) { return l2_send(r, c, data, len); }
+UINT16    BthChanMtu(const BthChan *c) { return c->rmtu; }
+bool      BthChanIsOpen(const BthChan *c) { return c && c->state == 3; }
+
+void BthChanClose(BthRadio *r, BthChan *c)
+{
+    if (!c) return;
+    c->rx = NULL;
+    l2_close(r, c);
+}
+
+bool BthScoIsOpen(const BthDev *d) { return d->sco == 2; }
+
+NT_STATUS BthScoOpen(BthRadio *r, BthDev *d, BthRx rx, void *ctx)
+{
+    static const struct { UINT16 latency, types; UINT8 retx; } tries[] = {
+        { 0x000A, 0x0388, 0x01 },                               /* Hands-Free's S3: eSCO, EV3 or 2-EV3, 10 ms */
+        { 0xFFFF, 0x03C5, 0xFF },                               /* D1: SCO, HV1 or HV3 */
+    };
+    char t[18];
+    if (d->sco == 2) return NT_STATUS_SUCCESS;
+    if (d->conn != 2 || r->gone || !r->t.send_sco) return ST_DEVICE_NOT_CONNECTED;
+    d->sco_rx = rx;
+    d->sco_ctx = ctx;
+    for (UINT32 i = 0; i < sizeof(tries) / sizeof(tries[0]) && d->sco != 2; i++) {
+        UINT8 p[17];
+        put16(p, d->handle);
+        UINT32 bw = 8000;                                       /* (bytes a second each way: 64 kbit/s) */
+        memcpy(p + 2, &bw, 4);
+        memcpy(p + 6, &bw, 4);
+        put16(p + 10, tries[i].latency);
+        put16(p + 12, 0x0060);                                  /* linear 16-bit two's complement in, CVSD on the air */
+        p[14] = tries[i].retx;
+        put16(p + 15, tries[i].types);
+        d->sco = 1;
+        int st = cmd(r, 0x0428, p, 17, NULL, 0);
+        if (st) { d->sco = 0; d->sco_status = (UINT8)st; continue; }
+        if (!WAIT_FOR(r, d->sco != 1, 10000)) d->sco = 0;
+    }
+    if (d->sco != 2) {
+        kprintf("[BTH] %s: no voice link (%02x)\n", addr_text(d->addr, t), d->sco_status);
+        return ST_DEVICE_NOT_CONNECTED;
+    }
+    if (r->t.sco_links) r->t.sco_links(r->ctx, 1);
+    kprintf("[BTH] %s: voice link %03x (%s), CVSD on the air, 16-bit 8 kHz to the host\n", addr_text(d->addr, t),
+            d->sco_handle, d->sco_type == 2 ? "eSCO" : "SCO");
+    return NT_STATUS_SUCCESS;
+}
+
+/* @len bytes of samples on the voice link, SCO_DATA (or the controller's
+ * less) an SCO packet */
+NT_STATUS BthScoSend(BthRadio *r, BthDev *d, const UINT8 *pcm, UINT32 len)
+{
+    UINT32 mtu = r->sco_mtu && r->sco_mtu < SCO_DATA ? r->sco_mtu & ~1u : SCO_DATA;
+    UINT8 pkt[3 + SCO_DATA];
+    for (UINT32 off = 0; off < len; off += mtu) {
+        if (d->sco != 2 || r->gone) return ST_DEVICE_NOT_CONNECTED;
+        UINT32 n = len - off < mtu ? len - off : mtu;
+        put16(pkt, d->sco_handle);
+        pkt[2] = (UINT8)n;
+        memcpy(pkt + 3, pcm + off, n);
+        NT_STATUS st = r->t.send_sco(r->ctx, pkt, 3 + n);
+        if (!NT_SUCCESS(st)) return st;
+    }
+    return NT_STATUS_SUCCESS;
+}
+
+void BthScoClose(BthRadio *r, BthDev *d)
+{
+    if (d->sco == 2 && !r->gone) {
+        UINT8 p[3];
+        put16(p, d->sco_handle);
+        p[2] = 0x13;
+        if (!cmd(r, 0x0406, p, 3, NULL, 0)) WAIT_FOR(r, d->sco != 2, 3000);
+    }
+    d->sco = 0;
+    d->sco_rx = NULL;
+    if (r->t.sco_links && !r->gone) r->t.sco_links(r->ctx, 0);
+}
+
+/* A headset's audio services: bthaudio.c runs them while they are on */
+static void audio_update(BthRadio *r, BthDev *d)
+{
+    if (d->audio) { BthAudioStop(d->audio); d->audio = NULL; }
+    if (r->gone || !d->paired) return;
+    bool hfp = d->hfp_on && d->hf_chan;
+    if (hfp || d->a2dp_on) d->audio = BthAudioStart(r, d, d->named ? d->name : "Bluetooth Headset", hfp, d->hf_chan, d->a2dp_on);
+}
+
 /* ---- the radio ---- */
 
 static void radio_up(void *arg)
@@ -1233,7 +1410,9 @@ static void radio_up(void *arg)
     r->acl_free = 1;
     if (!cmd(r, 0x1005, NULL, 0, ret, sizeof(ret))) {            /* Read Buffer Size */
         r->acl_mtu = le16(ret + 1) ? le16(ret + 1) : 27;
+        r->sco_mtu = ret[3];
         r->acl_free = le16(ret + 4) ? le16(ret + 4) : 1;
+        r->sco_pkts = le16(ret + 6);
     }
     if (cmd(r, 0x1009, NULL, 0, ret, sizeof(ret))) { kprintf("[BTH] no BD_ADDR\n"); return; }
     memcpy(r->addr, ret + 1, 6);
@@ -1250,6 +1429,8 @@ static void radio_up(void *arg)
     if (r->features[6] & 0x08) cmd(r, 0x0C56, p, 1, NULL, 0);    /* Write Simple Pairing Mode: on */
     p[0] = 1;
     cmd(r, 0x0C45, p, 1, NULL, 0);                              /* Write Inquiry Mode: with RSSI */
+    put16(p, 0x0060);
+    cmd(r, 0x0C26, p, 2, NULL, 0);                              /* Write Voice Setting: 16-bit linear, CVSD */
     r->scan = 0x02;
     cmd(r, 0x0C1A, &r->scan, 1, NULL, 0);                       /* Write Scan Enable: page scan */
     lock(r);
@@ -1260,6 +1441,7 @@ static void radio_up(void *arg)
             addr_text(r->addr, t), r->hci_ver, r->hci_rev, r->lmp_ver, r->mfg, r->acl_mtu, r->acl_free, r->name);
     if (r->iface.Buffer) nt_IoSetDeviceInterfaceState(&r->iface, 1);
     for (int i = 0; i < MAX_DEVS; i++) if (r->dev[i].used) hid_node(r, &r->dev[i]);
+    for (int i = 0; i < MAX_DEVS; i++) if (r->dev[i].used) audio_update(r, &r->dev[i]);
 }
 
 BthRadio *BthRadioCreate(NT_DEVICE_OBJECT *fdo, NT_DEVICE_OBJECT *pdo, const BthTransport *t, void *ctx)
@@ -1288,7 +1470,11 @@ void BthRadioStop(BthRadio *r)
     r->gone = true;
     r->up = false;
     if (r->iface.Buffer) nt_IoSetDeviceInterfaceState(&r->iface, 0);
-    for (int i = 0; i < MAX_DEVS; i++) r->dev[i].conn = 0;
+    for (int i = 0; i < MAX_DEVS; i++) {
+        if (r->dev[i].audio) { BthAudioStop(r->dev[i].audio); r->dev[i].audio = NULL; }
+        r->dev[i].conn = 0;
+        r->dev[i].sco = 0;
+    }
 }
 
 void BthRadioFree(BthRadio *r)
@@ -1358,7 +1544,7 @@ static NT_STATUS pair(BthRadio *r, BthDev *d)
         dev_save(r, d);
         unlock(r);
     }
-    if (!d->hid_pdo) disconnect(r, d);                          /* (HID keeps it: its driver's channels) */
+    if (!d->hid_pdo && !d->audio) disconnect(r, d);             /* (HID and audio keep it: their channels) */
     return st;
 }
 
@@ -1370,6 +1556,7 @@ static NT_STATUS forget(BthRadio *r, BthDev *d)
         d->hid_on = false;
         hid_node(r, d);
     }
+    if (d->audio) { BthAudioStop(d->audio); d->audio = NULL; }
     disconnect(r, d);
     dev_key_path(r, path, sizeof(path));
     addr_hex(d->addr, a);
@@ -1458,7 +1645,8 @@ NT_STATUS BthRadioIoctl(BthRadio *r, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
         memset(o, 0, sizeof(*o));
         for (int i = 0; i < d->nsvc; i++) {
             o->uuid[i] = d->svc[i];
-            o->enabled[i] = d->svc[i] == UUID_HID && d->hid_on;
+            o->enabled[i] = (d->svc[i] == UUID_HID && d->hid_on) || (d->svc[i] == UUID_HFP && d->hfp_on) ||
+                            (d->svc[i] == UUID_SINK && d->a2dp_on);
         }
         o->count = (UINT32)d->nsvc;
         *info = sizeof(*o);
@@ -1470,6 +1658,17 @@ NT_STATUS BthRadioIoctl(BthRadio *r, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
         bool has = false;
         for (int i = 0; i < d->nsvc; i++) has |= d->svc[i] == q->uuid;
         if (!has || !d->paired) return ST_NOT_FOUND;
+        if (q->uuid == UUID_HFP || q->uuid == UUID_SINK) {     /* (a headset's: bthaudio.c) */
+            if (q->uuid == UUID_HFP && !d->hf_chan) return NT_STATUS_UNSUCCESSFUL;
+            if (q->uuid == UUID_HFP) d->hfp_on = q->enable != 0;
+            else d->a2dp_on = q->enable != 0;
+            lock(r);
+            dev_save(r, d);
+            unlock(r);
+            audio_update(r, d);
+            if (!d->audio && !d->hid_pdo) disconnect(r, d);
+            return NT_STATUS_SUCCESS;
+        }
         if (q->uuid != UUID_HID) return NT_STATUS_NOT_SUPPORTED;   /* (no driver for the others yet) */
         if (!d->rdesc_len) return NT_STATUS_UNSUCCESSFUL;
         if (!q->enable && d->hid_pdo) BthHidDisconnect(d->hid_pdo);

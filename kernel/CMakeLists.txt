@@ -202,6 +202,7 @@ set(KERNEL_C_SOURCES
     um/um_gpfault.c
     um/um_socket.c
     um/um_afd.c
+    um/um_wlan.c
     um/um_audio.c
     um/um_d3dkmt.c
     um/um_gpu.c

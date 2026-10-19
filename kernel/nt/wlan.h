@@ -47,12 +47,15 @@ typedef struct {
 /* How many Wi-Fi adapters are open; the @i'th one's details */
 int  WlanCount(void);
 bool WlanGetInfo(int i, WlanInfo *out);
+/* The same without waiting: false while a scan or connection holds the
+ * adapter (a window's paint or tick must not wait seconds for one) */
+bool WlanPeekInfo(int i, WlanInfo *out);
 /* Scan with the @i'th adapter (OID_WDI_TASK_SCAN): up to @max access points
  * it found, strongest first, or -1 if the scan failed (*@status says why) */
 int  WlanScan(int i, WlanBss *out, int max, UINT32 *status);
-/* The same in the background (netsh's): start one (false if there is no
- * such adapter or a scan is running), then poll for its outcome (false
- * while it runs; then *@n is WlanScan's answer) */
+/* The same in the background (netsh's and Settings' Wi-Fi page): start
+ * one (false if there is no such adapter or a scan is running), then poll
+ * for its outcome (false while it runs; then *@n is WlanScan's answer) */
 bool WlanScanStart(int i);
 bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status);
 
@@ -74,7 +77,7 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status);
 #define WLAN_KEY_FORMAT  (-8)  /* @key is not 8 to 63 characters or 64 hex digits */
 int  WlanConnect(int i, const char *ssid, const char *key, UINT32 *status);
 int  WlanDisconnect(int i, UINT32 *status);
-/* The same in the background (netsh's), sharing the scan's: @ssid NULL
+/* The same in the background (netsh's and Settings'), sharing the scan's: @ssid NULL
  * disconnects; then poll for the answer */
 bool WlanConnectStart(int i, const char *ssid, const char *key);
 bool WlanConnectDone(int *result, UINT32 *status);

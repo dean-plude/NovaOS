@@ -651,10 +651,26 @@ disconnect` leaves (`OID_WDI_TASK_DISCONNECT`) and the stack goes back to
 the card it had. Disabling the device disconnects, deletes the port and
 stops the data path before the adapter closes.
 
+Settings' Wi-Fi page lists the networks the last scan heard and joins
+one with its password, through the same background scan and connection
+`netsh` uses. Programs use the Native Wifi API: `wlanapi.dll`
+(`userland/wlanapi`) asks the kernel through `NtNovaSockCtl` (ops 18 to
+21, `kernel/um/um_wlan.c`, layouts in `userland/include/novawlan.h`)
+where Windows' asks the WLAN AutoConfig service. It has
+`WlanOpenHandle`, `WlanEnumInterfaces`, `WlanScan`,
+`WlanGetAvailableNetworkList`, `WlanGetNetworkBssList`, `WlanConnect`
+(a saved profile, a temporary profile's XML, or an open network by its
+SSID), `WlanDisconnect`, `WlanQueryInterface`, the profile calls (kept in
+the registry under `Software\NovaOS\Wlan\Profiles`, HKLM or, for
+`WLAN_PROFILE_USER`, HKCU) and the AutoConfig notifications a program
+waits for (scan complete, connection start, complete and failed,
+disconnected). As on Windows, `WlanScan` and `WlanConnect` return at once
+and notify when they finish.
+
 What is missing: SAE's hash-to-element and groups other than P-256,
-WPA2- and WPA3-Enterprise, frames the driver injects itself,
-`wlanapi.dll` for programs and Settings' Wi-Fi page. That is the rest of
-roadmap step 28.1; scanning and joining on the real card needs the T14.
+WPA2- and WPA3-Enterprise, frames the driver injects itself, and the
+information elements in `WlanGetNetworkBssList`'s entries. Scanning and
+joining on the real card, the rest of roadmap step 28.1, needs the T14.
 
 QEMU has no Wi-Fi card of any kind, so the `wifi` self-test brings its
 own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
@@ -675,7 +691,11 @@ NovaOS pings. Then it joins the WPA3 network: the driver's access point
 does its own SAE (`tools/drivertest/saeap.h`: its own P-256), so a wrong
 password fails at the confirm, and with the right one it checks the
 pairwise, group and management group keys and rekeys both group keys.
-Then it disconnects, and on
+Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
+notification, the network and BSS lists, a profile, a wrong passphrase
+refused with the key-mismatch reason, joining by profile and by SSID),
+and the test joins the WPA2 network in Settings' Wi-Fi page by typing,
+as a person would. Then it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 

@@ -175,7 +175,7 @@ Keyboard shortcuts:
 |---|---|
 | **File Explorer** | Shows This PC (every drive and its free space) and the folders Documents, Downloads, Pictures, Personal, Projects and Windows.  Double-click a program (`.exe`) to run it, a Windows Installer package (`.msi`) to install it, a picture (`.png`, `.ico`, `.cur`) to see it in Photos, a shortcut (`.lnk`) to open its target, and anything else to read it in Notepad.  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also to and from Windows programs; Delete deletes. |
 | **Terminal** | The command line (below). |
-| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Time & language, and About. |
+| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Wi-Fi (the networks in range; joining one with its password), Accounts, Time & language, Printers, and About. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
@@ -423,8 +423,12 @@ Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
 
 **Wi-Fi** connects to open, WPA2-Personal and WPA3-Personal networks.
-With a Wi-Fi card whose Windows driver NovaOS can open, the Terminal lists the card and the networks in range, joins one and leaves
-it, as on Windows:
+With a Wi-Fi card whose Windows driver NovaOS can open, **Settings >
+Wi-Fi** shows the card and whether it is connected, and lists the
+networks in range with their security and signal (Refresh, or F5, looks
+again).  Click a network (or press Down to choose one), type its
+password if it has one, and press **Connect** (or Enter); **Disconnect**
+leaves it.  The Terminal does the same, as on Windows:
 
 ```text
 netsh wlan show interfaces
@@ -436,6 +440,10 @@ netsh wlan disconnect
 
 `key=` is the network's passphrase (WPA2) or password (WPA3, which
 NovaOS uses whenever the network offers it).
+
+Windows programs that manage Wi-Fi use the Native Wifi API
+(`wlanapi.dll`): the adapters, scans, the networks and access points in
+range, profiles, connecting and disconnecting, with their notifications.
 
 While connected, the Wi-Fi card carries NovaOS's network traffic
 (`ipconfig` shows "Wireless LAN adapter Wi-Fi"); when it disconnects, the

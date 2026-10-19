@@ -1,6 +1,6 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, accounts, time & language, printers and about pages
+ *               storage, network, Wi-Fi, accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  */
 
@@ -12,6 +12,7 @@
 #include "../ke/printf.h"
 #include "../ke/timezone.h"
 #include "../net/net.h"
+#include "../nt/wlan.h"
 #include "../wm/desktop.h"
 #include "../wm/kbdlayout.h"
 #include "../fs/persist.h"
@@ -72,12 +73,20 @@ typedef struct {
     bool prn_focus;                  /* ... typing an address to add */
     char prn_text[160];              /* ... the address */
     char prn_err[96];                /* ... why it was refused */
+    int wifi_job;                    /* Wi-Fi: 0, or the scan (1) or connection (2, 3 disconnect) running */
+    bool wifi_scanned;               /* ... a scan has run since the page opened */
+    int wifi_n, wifi_sel;            /* ... the networks heard; the one chosen (-1 none) */
+    WlanBss wifi_bss[WLAN_MAX_BSS];
+    char wifi_ssid[33];              /* ... the network being joined */
+    char wifi_key[64];               /* ... its passphrase, as typed (wiped once used) */
+    char wifi_note[160];             /* ... what the last connection did */
+    WlanInfo wifi_info;              /* ... the adapter, as last seen (WlanPeekInfo: never waits) */
 } Settings;
 
-static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Accounts",
-                                 "Time & language", "Printers", "About" };
-static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_PERSON, GL_GEAR,
-                                       GL_PRINTER, GL_NOVA };
+static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Wi-Fi",
+                                 "Accounts", "Time & language", "Printers", "About" };
+static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_NETWORK,
+                                       GL_PERSON, GL_GEAR, GL_PRINTER, GL_NOVA };
 #define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
 
 /* A labelled row inside a card: "Label ........ value" */
@@ -676,6 +685,220 @@ static void page_network(Settings *st, int x, int y, int w)
     row(x, y, w, "Trusted root certificates (HTTPS)", roots);
 }
 
+/* Wi-Fi: the adapter's state, the networks its last scan heard (a scan
+ * runs when the page opens and on Refresh), and joining one: choose it
+ * (a click, or Up and Down), type its passphrase if it is secured, then
+ * Connect (or Enter).  Scans and connections run in the background
+ * through NovaOS's WDI upper edge (kernel/nt/wdi.c), as netsh wlan's do.
+ * Layout shared by set_paint + set_mouse. */
+#define WIFI_ROW_H   56
+#define WIFI_SHOWN   6
+#define WIFI_FORM_H  52              /* (below the chosen row: the passphrase and Connect) */
+static GdiRect r_wifi_refresh(int x, int y, int w)    { return RECT(x + w - 16 - 96, y + 20, 96, 32); }
+static GdiRect r_wifi_disconnect(int x, int y, int w) { return RECT(x + w - 16 - 96 - 12 - 120, y + 20, 120, 32); }
+static int wifi_row_y(const Settings *st, int y, int i)
+{
+    return y + 88 + i * WIFI_ROW_H + (st->wifi_sel >= 0 && i > st->wifi_sel ? WIFI_FORM_H : 0);
+}
+static bool wifi_secured(const WlanBss *b) { return b->privacy || b->rsn_len; }
+static GdiRect r_wifi_key(const Settings *st, int x, int y, int w)
+{
+    return RECT(x + 16, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, w - 32 - 112, 32);
+}
+static GdiRect r_wifi_connect(const Settings *st, int x, int y, int w)
+{
+    return RECT(x + w - 16 - 100, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, 100, 32);
+}
+
+static void wifi_scan(Settings *st)
+{
+    if (st->wifi_job || !WlanCount()) return;
+    if (WlanScanStart(0)) st->wifi_job = 1;
+}
+
+static void wifi_connect(Settings *st)
+{
+    if (st->wifi_job || st->wifi_sel < 0 || st->wifi_sel >= st->wifi_n) return;
+    const WlanBss *b = &st->wifi_bss[st->wifi_sel];
+    if (wifi_secured(b) && !st->wifi_key[0]) {
+        ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", b->ssid);
+        return;
+    }
+    strcpy(st->wifi_ssid, b->ssid);
+    if (!WlanConnectStart(0, st->wifi_ssid, wifi_secured(b) ? st->wifi_key : NULL)) {
+        strcpy(st->wifi_note, "The wireless adapter is busy; try again.");
+        return;
+    }
+    memset(st->wifi_key, 0, sizeof(st->wifi_key));
+    st->wifi_note[0] = '\0';
+    st->wifi_job = 2;
+}
+
+static void wifi_disconnect(Settings *st)
+{
+    if (st->wifi_job) return;
+    if (WlanConnectStart(0, NULL, NULL)) { st->wifi_job = 3; st->wifi_note[0] = '\0'; }
+}
+
+/* A background scan or connection finished: true if the page changed */
+static bool wifi_poll(Settings *st)
+{
+    if (st->wifi_job == 1) {
+        int n;
+        UINT32 status;
+        if (!WlanScanDone(st->wifi_bss, WLAN_MAX_BSS, &n, &status)) return false;
+        char chosen[33] = "";
+        if (st->wifi_sel >= 0 && st->wifi_sel < st->wifi_n) strcpy(chosen, st->wifi_bss[st->wifi_sel].ssid);
+        st->wifi_n = n < 0 ? 0 : n;
+        st->wifi_sel = -1;
+        for (int i = 0; i < st->wifi_n; i++) if (chosen[0] && !strcmp(st->wifi_bss[i].ssid, chosen)) st->wifi_sel = i;
+        if (n < 0) ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The scan failed (0x%08x).", status);
+        kprintf("[SETTINGS] Wi-Fi: %d network(s) found\n", st->wifi_n);
+        st->wifi_job = 0;
+        st->wifi_scanned = true;
+        return true;
+    }
+    if (st->wifi_job == 2 || st->wifi_job == 3) {
+        int r;
+        UINT32 status;
+        if (!WlanConnectDone(&r, &status)) return false;
+        const char *s = st->wifi_ssid;
+        switch (r) {
+        case WLAN_OK:
+            if (st->wifi_job == 2) kprintf("[SETTINGS] Wi-Fi: connected to %s\n", s);
+            else kprintf("[SETTINGS] Wi-Fi: disconnected\n");
+            st->wifi_note[0] = '\0';
+            st->wifi_sel = -1;
+            break;
+        case WLAN_NO_NETWORK:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is not in range now.", s); break;
+        case WLAN_BAD_KEY:     ksnprintf(st->wifi_note, sizeof(st->wifi_note),
+                                         "The network security key isn't correct: \"%s\" did not accept it.", s); break;
+        case WLAN_KEY_FORMAT:  strcpy(st->wifi_note, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal "
+                                                     "digits; a WPA3 password 8 to 63 characters."); break;
+        case WLAN_NEEDS_KEY:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", s);
+                               break;
+        case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
+                                         "support yet (WEP, WPA or Enterprise).", s); break;
+        default:               ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Can't connect to \"%s\" (0x%08x).", s, status);
+        }
+        if (r != WLAN_OK) kprintf("[SETTINGS] Wi-Fi: %s\n", st->wifi_note);
+        st->wifi_job = 0;
+        return true;
+    }
+    return false;
+}
+
+/* Four signal bars, @q (0-100) of them lit */
+static void wifi_bars(int x, int y, UINT32 q)
+{
+    for (int i = 0; i < 4; i++) {
+        int h = 5 + i * 4;
+        bool on = q > (UINT32)(i * 25);
+        GdiFillRect(RECT(x + i * 6, y + 18 - h, 4, h), on ? UI_TEXT : UI_LINE);
+    }
+}
+
+static void page_wifi(Settings *st, int x, int y, int w)
+{
+    bool have = WlanCount() > 0;
+    if (have) WlanPeekInfo(0, &st->wifi_info);
+    const WlanInfo info = st->wifi_info;
+    GdiRoundRect(RECT(x, y, w, 72), 8, UI_CARD, GDI_TRANSPARENT);
+    GdiTextBold(x + 16, y + 14, have && info.description[0] ? info.description : "Wi-Fi", UI_TEXT);
+    char state[96];
+    if (!have) strcpy(state, "No Wi-Fi adapter found");
+    else if (st->wifi_job == 2) ksnprintf(state, sizeof(state), "Connecting to %s...", st->wifi_ssid);
+    else if (st->wifi_job == 3) strcpy(state, "Disconnecting...");
+    else if (info.connected) ksnprintf(state, sizeof(state), "Connected to %s (%s)", info.bss.ssid, info.bss.auth);
+    else if (st->wifi_job == 1) strcpy(state, "Looking for networks...");
+    else strcpy(state, "Not connected");
+    GdiColor dot = !have ? GDI_C(0xD0, 0x40, 0x40) : info.connected ? GDI_C(0x2E, 0xB8, 0x5C) : GDI_C(0xE8, 0xA8, 0x20);
+    GdiRoundRect(RECT(x + 16, y + 44, 10, 10), 5, dot, GDI_TRANSPARENT);
+    GdiTextT(x + 34, y + 40, state, UI_TEXT2);
+    if (!have) return;
+    UiButton(r_wifi_refresh(x, y, w), "Refresh", false);
+    if (info.connected) UiButton(r_wifi_disconnect(x, y, w), "Disconnect", false);
+    int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
+    if (!n) GdiTextT(x, y + 96, st->wifi_scanned ? "No networks in range." : "Looking for networks...", UI_TEXT2);
+    for (int i = 0; i < n; i++) {
+        const WlanBss *b = &st->wifi_bss[i];
+        int ry = wifi_row_y(st, y, i);
+        bool sel = i == st->wifi_sel, here = info.connected && !strcmp(info.bss.ssid, b->ssid);
+        GdiRoundRect(RECT(x, ry, w, WIFI_ROW_H - 8 + (sel ? WIFI_FORM_H : 0)), 8, sel ? UI_HOVER : UI_CARD, GDI_TRANSPARENT);
+        wifi_bars(x + 16, ry + 12, b->quality);
+        GdiTextBold(x + 52, ry + 6, b->ssid[0] ? b->ssid : "(hidden network)", UI_TEXT);
+        char line[128];
+        ksnprintf(line, sizeof(line), "%s%s  -  Signal %u%%  -  %s GHz, channel %u", here ? "Connected  -  " : "",
+                  wifi_secured(b) ? b->auth : "Open", b->quality,
+                  b->band == 1 ? "2.4" : b->band == 2 ? "5" : "6", b->channel);
+        GdiTextT(x + 52, ry + 26, line, UI_TEXT2);
+        if (!sel || here) continue;
+        if (wifi_secured(b)) {
+            GdiRect k = r_wifi_key(st, x, y, w);
+            GdiRoundRect(k, 6, UI_BG, GDI_TRANSPARENT);
+            GdiRoundBorderAlpha(k, 6, UI_ACCENT, 200);
+            char dots[64];
+            size_t kl = strlen(st->wifi_key);
+            for (size_t c = 0; c < kl; c++) dots[c] = '*';
+            dots[kl] = '\0';
+            if (kl) GdiTextT(k.x + 10, k.y + (k.h - GDI_FONT_H) / 2, dots, UI_TEXT);
+            else GdiTextT(k.x + 10, k.y + (k.h - GDI_FONT_H) / 2, "Network security key", UI_TEXT2);
+            GdiFillRect(RECT(k.x + 10 + GdiTextW(dots) + 1, k.y + 7, 2, k.h - 14), UI_ACCENT);
+        }
+        UiButton(r_wifi_connect(st, x, y, w), "Connect", true);
+    }
+    int ny = wifi_row_y(st, y, n) + 4;
+    if (st->wifi_n > WIFI_SHOWN) {
+        char more[64];
+        ksnprintf(more, sizeof(more), "and %d more", st->wifi_n - WIFI_SHOWN);
+        GdiTextT(x + 16, ny, more, UI_TEXT2);
+        ny += 24;
+    }
+    if (st->wifi_note[0]) GdiTextT(x, ny, st->wifi_note, GDI_C(0xE0, 0x60, 0x60));
+}
+
+static void wifi_choose(Settings *st, int i)
+{
+    if (i != st->wifi_sel) memset(st->wifi_key, 0, sizeof(st->wifi_key));
+    st->wifi_sel = i;
+    st->wifi_note[0] = '\0';
+}
+
+static void wifi_mouse(Settings *st, int x, int y, int w, int mx, int my)
+{
+    if (!WlanCount()) return;
+    if (UiHit(r_wifi_refresh(x, y, w), mx, my)) { wifi_scan(st); return; }
+    bool connected = st->wifi_info.connected;
+    if (connected && UiHit(r_wifi_disconnect(x, y, w), mx, my)) { wifi_disconnect(st); return; }
+    if (st->wifi_sel >= 0 && UiHit(r_wifi_connect(st, x, y, w), mx, my)) { wifi_connect(st); return; }
+    if (st->wifi_sel >= 0 && UiHit(r_wifi_key(st, x, y, w), mx, my)) return;
+    int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
+    for (int i = 0; i < n; i++)
+        if (UiHit(RECT(x, wifi_row_y(st, y, i), w, WIFI_ROW_H - 8), mx, my)) { wifi_choose(st, i == st->wifi_sel ? -1 : i); return; }
+}
+
+/* Up and Down choose a network, typing goes to its passphrase, Enter
+ * connects, F5 scans again, Esc lets go (then Up and Down move between pages
+ * again); false: not the page's key */
+static bool wifi_key(Settings *st, const KeyEvent *k)
+{
+    int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
+    if (k->extended && k->scancode == KEY_DOWN && n) { wifi_choose(st, st->wifi_sel + 1 < n ? st->wifi_sel + 1 : n - 1); return true; }
+    if (k->extended && k->scancode == KEY_UP && st->wifi_sel >= 0) { wifi_choose(st, st->wifi_sel > 0 ? st->wifi_sel - 1 : 0); return true; }
+    if (k->scancode == 0x3F && !k->extended) { wifi_scan(st); return true; }   /* (F5) */
+    if (st->wifi_sel < 0) return false;
+    if (k->scancode == KEY_ESC) { wifi_choose(st, -1); return true; }
+    if (k->scancode == KEY_ENTER && !k->extended) { wifi_connect(st); return true; }
+    size_t kl = strlen(st->wifi_key);
+    if (k->ch == '\b') { if (kl) st->wifi_key[kl - 1] = '\0'; return true; }
+    if (!k->ctrl && !k->alt && k->ch >= ' ' && k->ch < 0x7F && kl < sizeof(st->wifi_key) - 1) {
+        st->wifi_key[kl] = k->ch;
+        st->wifi_key[kl + 1] = '\0';
+        return true;
+    }
+    return false;
+}
+
 static void current_locale(char *out, int cap);
 
 /* Repaint the Network page when the connection state changes (and Time &
@@ -683,6 +906,7 @@ static void current_locale(char *out, int cap);
 static bool set_tick(WND *w)
 {
     Settings *st = w->user;
+    if (st && st->wifi_job && wifi_poll(st)) return true;    /* (a Wi-Fi scan or connection finished, on any page) */
     if (st && st->page == SETTINGS_TIME_LANGUAGE) {           /* intl.exe has written the choice */
         char cur[32];
         current_locale(cur, sizeof(cur));
@@ -705,6 +929,17 @@ static bool set_tick(WND *w)
         SoundDevs d;
         sound_devs(&d);
         return sound_sig(&d) != st->sound_sig;
+    }
+    if (st && st->page == SETTINGS_WIFI) {                    /* the first scan; the adapter's state */
+        if (!st->wifi_scanned && !st->wifi_job) { wifi_scan(st); return st->wifi_job != 0; }
+        UINT32 sig = WlanCount() ? 1u : 0;
+        if (sig && WlanPeekInfo(0, &st->wifi_info)) {
+            const WlanInfo *info = &st->wifi_info;
+            sig |= (info->connected ? 2u : 0) ^ ((UINT32)info->bss.quality << 2) ^ ((UINT32)info->bss.ssid[0] << 9);
+        } else if (sig) sig = st->net_sig;                    /* (busy: nothing new to show) */
+        if (sig == st->net_sig) return false;
+        st->net_sig = sig;
+        return true;
     }
     if (!st || st->page != SETTINGS_NETWORK) return false;
     NetStatus ns;
@@ -1592,6 +1827,7 @@ static void set_paint(WND *w)
     case SETTINGS_PERSONALIZE: page_personalize(st, c, x, y, w2); break;
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
     case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
+    case SETTINGS_WIFI:        page_wifi(st, x, y, w2);    break;
     case SETTINGS_ACCOUNTS:    page_accounts(st, c, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
     case SETTINGS_PRINTERS:    page_printers(st, x, y, w2); break;
@@ -1640,6 +1876,10 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
     if (msg != WM_MOUSE_DOWN) return;
     if (x >= SIDE_W && st->page == SETTINGS_NETWORK) {
         net_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+        return;
+    }
+    if (x >= SIDE_W && st->page == SETTINGS_WIFI) {
+        wifi_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
         return;
     }
     if (x >= SIDE_W && st->page == SETTINGS_PRINTERS) {
@@ -1692,7 +1932,9 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
     }
     int i = (y - 64) / ITEM_H;
     if (y >= 64 && i >= 0 && i < N_PAGES) {
+        if (i != st->page) st->wifi_scanned = false;          /* (Wi-Fi scans again when it opens) */
         st->page = i; st->net_edit = false; st->prn_focus = false; st->rec_ask = false;
+        wifi_choose(st, -1);
         if (st->acc_form) acc_close(st, NULL);
     }
 }
@@ -1703,6 +1945,7 @@ static void set_key(WND *w, const KeyEvent *k)
     if (st->page == SETTINGS_NETWORK && st->net_edit) { if (k->pressed) net_key(st, k); return; }
     if (st->page == SETTINGS_ACCOUNTS && st->acc_form) { if (k->pressed) accounts_key(st, k); return; }
     if (st->page == SETTINGS_PRINTERS && st->prn_focus) { if (k->pressed) prn_key(st, k); return; }
+    if (st->page == SETTINGS_WIFI && k->pressed && wifi_key(st, k)) return;
     if (!k->extended) return;
     if (k->scancode == KEY_UP && st->page > 0) st->page--;
     if (k->scancode == KEY_DOWN && st->page < N_PAGES - 1) st->page++;
@@ -1712,6 +1955,7 @@ static void set_close(WND *w)
 {
     Settings *st = w->user;
     if (st) acc_wipe(st);                     /* (passwords typed) */
+    if (st) memset(st->wifi_key, 0, sizeof(st->wifi_key));
     kfree(w->user);
     w->user = NULL;
 }
@@ -1722,6 +1966,7 @@ void SettingsOpen(void)
     if (!st) return;
     WND *w = AppCreateWindow(APP_SETTINGS, "Settings", 860, 580, UI_BG);
     if (!w) { kfree(st); return; }
+    st->wifi_sel = -1;
     w->user     = st;
     w->on_paint = set_paint;
     w->on_mouse = set_mouse;
@@ -1743,7 +1988,10 @@ void SettingsOpenPage(int page)
     if (st && page == SETTINGS_ACCOUNTS_ADD) {                /* (Start's "Add an account") */
         st->page = SETTINGS_ACCOUNTS;
         if (acc_can_manage()) acc_open(st, ACC_ADD, 0);
-    } else if (st && page >= 0 && page < N_PAGES) st->page = page;
+    } else if (st && page >= 0 && page < N_PAGES) {
+        if (page != st->page) st->wifi_scanned = false;
+        st->page = page;
+    }
     WmSetActive(w);
     WmInvalidate();
 }

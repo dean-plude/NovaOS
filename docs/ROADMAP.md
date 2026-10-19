@@ -842,7 +842,7 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   own Windows driver (`Netwtw14.sys`) already downloads by hardware ID,
   installs and registers with NovaOS's NDIS host on a stand-in device in
   QEMU (step 30.9). NovaOS's WDI upper edge (`kernel/nt/wdi.c`) has
-  four parts done. The first is the command layer: adapter capabilities,
+  five parts done. The first is the command layer: adapter capabilities,
   the station port and scans, with `netsh wlan show interfaces` and
   `netsh wlan show networks`. The second is the data path: the TAL TX/RX
   interface, so 802.11 frames go both ways, plus joining open networks
@@ -852,10 +852,13 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   exemption and the keys handed to the driver
   (`OID_WDI_SET_ADD_CIPHER_KEYS`). The fourth is WPA3-Personal: SAE in
   `kernel/nt/sae.c` through the driver's `SAE_AUTH_PARAMS` messages, then
-  the WPA3 4-way handshake with management frame protection's IGTK. All
-  four are tested with NovaOS's own WDI miniport on QEMU's `edu` device
-  (the devices suite's `wifi` boot). Still needed: `wlanapi.dll` and
-  Settings' Wi-Fi page, then scanning and joining a network on the T14's
+  the WPA3 4-way handshake with management frame protection's IGTK. The
+  fifth is for people and programs: Settings' Wi-Fi page lists the
+  networks and joins one with its password, and `wlanapi.dll` (the Native
+  Wifi API) gives programs the adapters, scans, network lists, profiles
+  and connections with their notifications. All five are tested with
+  NovaOS's own WDI miniport on QEMU's `edu` device (the devices suite's
+  `wifi` boot). Still needed: scanning and joining a network on the T14's
   card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep. Done in QEMU: NovaOS's Bluetooth host stack

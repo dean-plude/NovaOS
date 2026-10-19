@@ -19,9 +19,9 @@ the GUI and the drivers they expect.
 
 NovaOS 0.1.0, the first release, was published on 2026-10-04 from the
 `v0.1.0` tag ([release notes](releases/0.1.0.md)). NovaOS 0.2 "Kepler"
-(`0.2.0`, [release notes](releases/0.2.0.md)) is cut after Phase 33, the
-everyday-OS phase; it is tagged `v0.2.0` by the repository owner once main's
-CI is green (step 29.1). Since 0.1 every green
+(`0.2.0`, [release notes](releases/0.2.0.md)) was published on 2026-10-19
+from the `v0.2.0` tag, after Phase 33, the everyday-OS phase (step 29.1 stays
+open until its ISO boots on the T14). Since 0.1 every green
 CI run on a push to `main` republishes a rolling **latest** release with
 that commit's `nova.iso`. The release closed Phase 22 except its checks
 on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
@@ -670,8 +670,10 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
 - [ ] **23.2 First missing T14 driver.** Use the 23.1 log to choose and fix
   the first device that does not work, keeping a QEMU regression test for
   it.
-- [ ] **23.3 A clean nightly week.** Fix failures until seven scheduled
-  nightly runs in a row pass; this also completes 15.4 and 17.7.
+- [x] **23.3 A clean nightly week.** Fix failures until seven scheduled
+  nightly runs in a row pass; this also completes 15.4 and 17.7. Done
+  2026-10-18: every scheduled run from 2026-10-14 on passed (13 in a row by
+  the evening of the 18th), and `v0.2.0` was released from that state.
 - [ ] **23.4 Hyper-V.** Check VMBus keyboard and mouse in a Hyper-V
   Generation 2 VM. Done when NovaOS reaches the desktop and accepts input.
   The synthetic mouse's attach fault and the VMBus handshake were fixed in
@@ -893,9 +895,9 @@ tagged `v0.2.0` passes the full CI suite and T14 checks.
 
 - [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
-  must boot in QEMU and on both reference PCs. The version (0.2.0, code name
-  "Kepler") and [the release notes](releases/0.2.0.md) are in; ticks when
-  `v0.2.0` is published and its ISO boots on the T14 (the second reference
+  must boot in QEMU and on both reference PCs. `v0.2.0` ("Kepler",
+  [release notes](releases/0.2.0.md)) was published on 2026-10-19; ticks when
+  its ISO boots on the T14 (the second reference
   PC, 28.5, is not picked yet).
 
 ### Phase 30: Windows drivers
@@ -1049,10 +1051,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and the parser's object writer runtime (`core/Parser/runtime`) built,
   so XAML text loads into the core's objects: a `ResourceDictionary` of
   strings, numbers, booleans and colours, looked up by key, in
-  `xamlloadtest`.  Next: the core services (`CCoreServices`) with the
-  core's metadata tables (merged and theme dictionaries load with them)
-  and the rest of the core, then `dxaml/lib` as
-  `Windows.UI.Xaml.dll`.
+  `xamlloadtest`.  Eighth part done: the properties' runtime data (the
+  field offsets the core's metadata tables give field-backed properties)
+  for the classes that build, so a `ResourceDictionary`'s
+  `MergedDictionaries` and `ThemeDictionaries` load from XAML and lookup
+  searches them (last merged dictionary first, then the theme's) in
+  `xamlloadtest`.  Next: the core services (`CCoreServices`) and the rest
+  of the core, then `dxaml/lib` as `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

@@ -159,9 +159,17 @@ TEST_STUBS = [('unittests/stubs/Microsoft.UI.Xaml.Stubs.vcxproj',
 # say E_NOTIMPL where the core says S_OK for an object with no managed peer,
 # which fails every collection add, and give no resource lookup logger, which
 # every lookup reads): renamed out of the stub file, as the core has them in
-# src/elements_stubs.cpp
+# src/elements_stubs.cpp; and the metadata mocks' property getters, which
+# know no field offsets (so a field-backed property, a dictionary's merged
+# and theme dictionaries, read the object's vtable) and make no default
+# objects, and their class's core constructor (asked of a test's callbacks,
+# where the core reads the type table), as the core has them in
+# src/property_data.cpp
 STUB_RENAMES = {'DependencyObject_Stub.cpp': ('AddPeerReferenceToItem', 'RemovePeerReferenceToItem'),
-                'CoreServices_Stub.cpp': ('GetResourceLookupLogger',)}
+                'CoreServices_Stub.cpp': ('GetResourceLookupLogger',),
+                'MockDependencyProperty.cpp': ('GetPropertyMethod', 'GetOffset', 'GetGroupOffset', 'GetGroupCreator',
+                                               'GetRenderChangedHandler', 'CreateDefaultValueObject'),
+                'MockClassInfo.cpp': ('GetCoreConstructor',)}
 PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # the DLLs XAML's sources call beyond a program's usual ones (the parser
 # reads XML with XmlLite, the URI library builds URIs with urlmon)
@@ -342,11 +350,12 @@ def test_stubs(b, odir):
                 objs += b.compile_many([x], odir, 'xamlstub_', f + extra + [
                     f'-D{n}={n}_stub' for n in STUB_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
         # and those of what the resource dictionary calls in the core above
-        # it (src/elements_stubs.cpp), with the elements' flags
-        # (and, each alone, the empty type table for programs that make no
+        # it (src/elements_stubs.cpp) and the properties' runtime data
+        # (src/property_data.cpp), with the elements' flags (and, each alone, the empty type table for programs that make no
         # objects and the absent error service, src/type_activations.cpp and
         # src/error_service.cpp)
         objs += b.compile_many([os.path.join(HERE, 'src', 'elements_stubs.cpp'),
+                                os.path.join(HERE, 'src', 'property_data.cpp'),
                                 os.path.join(HERE, 'src', 'type_activations.cpp'),
                                 os.path.join(HERE, 'src', 'error_service.cpp')], odir, 'xamlstub_',
                                f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]), headers, compiler='clang++')

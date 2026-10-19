@@ -14765,6 +14765,13 @@ read-only page; the "wddm" boot checks what the GPU did.  Not yet:
 preemption and recovery from a hung GPU (TDR), the next part, and paging
 buffers the GPU runs.
 
+## HID class test: waits for cfgmgr32 to drop an unplugged device
+
+`hidclasstest` waited for setupapi to stop listing an unplugged device but
+checked cfgmgr32 once, so it sometimes looked a moment before the
+interface was gone (one CI run). It now waits for cfgmgr32 the same way,
+up to 10 s, as an app would on Windows. Test-only change.
+
 ## The 0.2 "Kepler" notes cover the last push
 
 Before the tag, [docs/releases/0.2.0.md](../releases/0.2.0.md) gained what
@@ -14774,6 +14781,23 @@ processor idle states and idle devices in D3 (the first parts of steps
 core's resource dictionary and object writer, and the anti-cheat and DRM
 notes (step 24.7).  Its known limits now say that Wi-Fi, Bluetooth and
 power management are checked against modelled devices only.
+
+## XAML's merged and theme dictionaries
+
+Eighth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): a `ResourceDictionary` loaded
+from XAML now keeps its `MergedDictionaries` and `ThemeDictionaries`,
+and looking a key up searches them as Windows does.
+
+- **Field-backed properties:** the field offsets, default objects and
+  getters the core's generated metadata gives a property
+  (`c_aDependencyPropertyRuntimeData`, `ReflectionAPI.cpp`,
+  `DependencyProperty.cpp`), copied from Microsoft's for the classes that
+  build (`userland/windows_ui_xaml/src/property_data.cpp`), in place of
+  the metadata mocks', which knew no offsets.
+- `xamlloadtest` loads two merged dictionaries (the last one wins a
+  shared key, the first still answers its own) and `Light` and `Dark`
+  theme dictionaries, and finds the Dark theme's resource.
 
 <!-- END generated:history -->
 

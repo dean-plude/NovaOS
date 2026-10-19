@@ -15,7 +15,15 @@
 # 3's third part): the device's process gets the driver's process object
 # and page tables VidMm makes and the driver writes; after each mapping
 # the driver reads the mapping's first word back through its own tables,
-# which must be what kmttest wrote there through Lock2.
+# which must be what kmttest wrote there through Lock2.  Step 3's fourth
+# part: the driver takes submissions, so dxgkrnl runs a scheduler for it;
+# kmttest makes a context (DxgkDdiCreateContext, SetRootPageTable) and
+# submits DMA buffers in the driver's command format, which its software
+# GPU's thread runs through the page tables, reporting each buffer's fence
+# ID through its interrupt routine and DPC: a write, a copy and a monitored
+# fence written at its GPU address; a fence the scheduler signals after a
+# buffer; a wait from the GPU holding a buffer until the CPU signals; a
+# write to a read-only page, which faults (dxgkrnl logs it).
 VGA_ID = '"PCI\\VEN_1234&DEV_1111"'
 ROOT_ID = r'ROOT\\DISPLAY\\0000'
 TESTS = [
@@ -28,6 +36,7 @@ TESTS = [
           r'\[DXGK\] WddmTest: started, 0 source\(s\), 0 output\(s\), WDDM 2\.0',
           r'\[DXGK\] WddmTest: render adapter, LUID 0x[0-9a-f]+, 1 segment\(s\), 256 MB \(system memory\)',
           r'\[DXGK\] WddmTest: GPU MMU, 2 page table levels, 30-bit GPU virtual addresses',
+          r'\[DXGK\] WddmTest: scheduler running, 1 node\(s\)',
           r'\[PNP\] ' + ROOT_ID + r': started \(driver WddmTest\)'], settle=3),
     Test('wddmtest d3dkmt', 'kmttest wddm',
          [r'kmttest: render adapter LUID 00000000:0000[0-9a-f]+',
@@ -41,6 +50,15 @@ TESTS = [
           r'\[DbgPrint\] wddmtest: GPU read at 0x[0-9a-f]+: 0x5ecd0a6e',
           r'\[DbgPrint\] wddmtest: unmapped 16 page\(s\) at GPU VA 0x[0-9a-f]+',
           r'\[DbgPrint\] wddmtest: unmapped 32 page\(s\) at GPU VA 0x[0-9a-f]+',
+          r'\[DbgPrint\] wddmtest: context created on node 0 \(1\)',
+          r"\[DbgPrint\] wddmtest: context's root page table set \(512 entries, segment 0\)",
+          r'\[DbgPrint\] wddmtest: ran \d+ bytes at GPU VA 0x[0-9a-f]+ \(fence 1\): 3 command\(s\)',
+          r'\[DbgPrint\] wddmtest: GPU wrote fence value 5',
+          r'\[DbgPrint\] wddmtest: ran 16 bytes at GPU VA 0x[0-9a-f]+ \(fence 2\): 1 command\(s\)',
+          r'\[DbgPrint\] wddmtest: ran 16 bytes at GPU VA 0x[0-9a-f]+ \(fence 3\): 1 command\(s\)',
+          r'\[DbgPrint\] wddmtest: GPU page fault at 0x[0-9a-f]+ \(fence 4\)',
+          r'\[DXGK\] WddmTest: the GPU faulted at fence 4 ',
+          r'\[DbgPrint\] wddmtest: context destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: device destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: process destroyed \(0 left\)',
           r'kmttest wddm: \d+ passed, 0 failed']),

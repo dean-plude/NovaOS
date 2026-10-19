@@ -306,6 +306,85 @@ typedef struct _D3DKMT_EVICT {
     UINT64               NumBytesToTrim;          /* out */
 } D3DKMT_EVICT;
 
+/* Contexts and submission (WDDM 2.0) */
+typedef struct _D3DDDI_CREATECONTEXTFLAGS {
+    union { struct { UINT NullRendering : 1, InitialData : 1, DisableGpuTimeout : 1, SynchronizationOnly : 1,
+                          HwQueueSupported : 1, NoKmdAccess : 1, Reserved : 26; }; UINT Value; };
+} D3DDDI_CREATECONTEXTFLAGS;
+
+typedef enum _D3DKMT_CLIENTHINT {
+    D3DKMT_CLIENTHINT_UNKNOWN = 0, D3DKMT_CLIENTHINT_OPENGL = 1, D3DKMT_CLIENTHINT_CDD = 2,
+    D3DKMT_CLIENTHINT_DX7 = 7, D3DKMT_CLIENTHINT_DX8 = 8, D3DKMT_CLIENTHINT_DX9 = 9, D3DKMT_CLIENTHINT_DX10 = 10,
+    D3DKMT_CLIENTHINT_DX11 = 11, D3DKMT_CLIENTHINT_DX12 = 12, D3DKMT_CLIENTHINT_VULKAN = 14,
+} D3DKMT_CLIENTHINT;
+
+typedef struct _D3DKMT_CREATECONTEXTVIRTUAL {
+    D3DKMT_HANDLE             hDevice;
+    UINT                      NodeOrdinal;
+    UINT                      EngineAffinity;
+    D3DDDI_CREATECONTEXTFLAGS Flags;
+    VOID                     *pPrivateDriverData;
+    UINT                      PrivateDriverDataSize;
+    D3DKMT_CLIENTHINT         ClientHint;
+    D3DKMT_HANDLE             hContext;            /* out */
+} D3DKMT_CREATECONTEXTVIRTUAL;
+
+typedef struct _D3DKMT_DESTROYCONTEXT {
+    D3DKMT_HANDLE hContext;
+} D3DKMT_DESTROYCONTEXT;
+
+#define D3DDDI_MAX_BROADCAST_CONTEXT 64
+#define D3DDDI_MAX_WRITTEN_PRIMARIES 16
+
+typedef struct _D3DKMT_SUBMITCOMMANDFLAGS {
+    UINT NullRendering : 1, PresentRedirected : 1, NoKmdAccess : 1, Reserved : 29;
+} D3DKMT_SUBMITCOMMANDFLAGS;
+
+typedef struct _D3DKMT_SUBMITCOMMAND {
+    D3DGPU_VIRTUAL_ADDRESS    Commands;            /* the DMA buffer, in the context's GPU address space */
+    UINT                      CommandLength;
+    D3DKMT_SUBMITCOMMANDFLAGS Flags;
+    UINT64                    PresentHistoryToken;
+    UINT                      BroadcastContextCount;
+    D3DKMT_HANDLE             BroadcastContext[D3DDDI_MAX_BROADCAST_CONTEXT];
+    VOID                     *pPrivateDriverData;
+    UINT                      PrivateDriverDataSize;
+    UINT                      NumPrimaries;
+    D3DKMT_HANDLE             WrittenPrimaries[D3DDDI_MAX_WRITTEN_PRIMARIES];
+    UINT                      NumHistoryBuffers;
+    D3DKMT_HANDLE            *HistoryBufferArray;
+} D3DKMT_SUBMITCOMMAND;
+
+typedef struct _D3DDDICB_SIGNALFLAGS {
+    union { struct { UINT SignalAtSubmission : 1, EnqueueCpuEvent : 1, AllowFenceRewind : 1, Reserved : 28,
+                          DXGK_SIGNAL_FLAG_INTERNAL0 : 1; }; UINT Value; };
+} D3DDDICB_SIGNALFLAGS;
+
+typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 {
+    UINT                 ObjectCount;
+    const D3DKMT_HANDLE *ObjectHandleArray;
+    D3DDDICB_SIGNALFLAGS Flags;
+    ULONG                BroadcastContextCount;
+    const D3DKMT_HANDLE *BroadcastContextArray;
+    union {
+        UINT64        FenceValue;                  /* (a fence) */
+        HANDLE        CpuEventHandle;
+        const UINT64 *MonitoredFenceValueArray;    /* (monitored fences) */
+        UINT64        Reserved[8];
+    };
+} D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2;
+
+typedef struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU {
+    D3DKMT_HANDLE        hContext;
+    UINT                 ObjectCount;
+    const D3DKMT_HANDLE *ObjectHandleArray;
+    union {
+        const UINT64 *MonitoredFenceValueArray;
+        UINT64        FenceValue;
+        UINT64        Reserved[8];
+    };
+} D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU;
+
 #ifndef NOVA_BUILD_GDI32
 #define KMTAPI __declspec(dllimport) LONG __stdcall
 KMTAPI D3DKMTEnumAdapters2(D3DKMT_ENUMADAPTERS2 *);
@@ -330,5 +409,10 @@ KMTAPI D3DKMTMapGpuVirtualAddress(D3DDDI_MAPGPUVIRTUALADDRESS *);
 KMTAPI D3DKMTFreeGpuVirtualAddress(const D3DKMT_FREEGPUVIRTUALADDRESS *);
 KMTAPI D3DKMTMakeResident(D3DDDI_MAKERESIDENT *);
 KMTAPI D3DKMTEvict(D3DKMT_EVICT *);
+KMTAPI D3DKMTCreateContextVirtual(D3DKMT_CREATECONTEXTVIRTUAL *);
+KMTAPI D3DKMTDestroyContext(const D3DKMT_DESTROYCONTEXT *);
+KMTAPI D3DKMTSubmitCommand(const D3DKMT_SUBMITCOMMAND *);
+KMTAPI D3DKMTSignalSynchronizationObjectFromGpu2(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *);
+KMTAPI D3DKMTWaitForSynchronizationObjectFromGpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *);
 #undef KMTAPI
 #endif

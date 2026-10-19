@@ -675,10 +675,18 @@ with a GPU MMU (WDDM 2.0's GpuMmu) also gets GPU virtual addresses: a
 process object (`DxgkDdiCreateProcess`) and an address space per process,
 whose page tables VidMm keeps in system memory and the driver writes
 (`DxgkDdiBuildPagingBuffer`'s `UPDATE_PAGE_TABLE` and `FLUSH_TLB`, done
-with the CPU for now). Not there yet: page tables the GPU updates,
-command submission and the scheduler,
-interrupts and vertical blanks, a full driver's display, power states,
-and more than one source.
+with the CPU for now). A driver that takes submissions
+(`DxgkDdiCreateContext`, `DxgkDdiSubmitCommandVirtual`) gets a scheduler:
+each context's DMA buffers go to the driver in order with a fence ID per
+engine, finished when its interrupt routine reports that ID
+(`DxgkCbNotifyInterrupt`, then `DxgkCbNotifyDpc` from its DPC); fences
+queued behind them are signalled once the work before them is done, and
+waits from the GPU hold a context's later work. Its interrupt line, when
+the PnP manager gives one, is connected line-based (`DxgkDdiInterruptRoutine`).
+Not there yet: page tables the GPU updates (paging buffers it runs),
+preemption and timeout recovery (TDR), message-signalled interrupts,
+vertical blanks, a full driver's display, power states, and more than one
+source.
 
 ## Downloading drivers by hardware ID
 

@@ -34,9 +34,25 @@
  *                      process object that learns its root table
  *
  * After each mapping it reads the mapping's first word back through its
- * own page tables, as its GPU would: the self-test checks that word.  The
- * next parts of step 3 give its GPU the rest: a command format a kernel
- * thread runs, its interrupt, fences, preemption and TDR.  Its DbgPrint lines and counts
+ * own page tables, as its GPU would: the self-test checks that word.
+ *
+ *   its GPU            (step 3's fourth part) a kernel thread that runs DMA
+ *                      buffers in the order SubmitCommandVirtual queues
+ *                      them, reading each through the context's page tables
+ *                      from the root SetRootPageTable gave (physical
+ *                      addresses only, as a GPU has); its commands are
+ *                      32-bit words: WRITE va value, COPY src dst words,
+ *                      FENCE va value64 (a monitored fence's GPU address:
+ *                      the GPU writes the value there), NOP.  A buffer done,
+ *                      it raises its "interrupt": with no interrupt line
+ *                      (a root device) the thread calls the driver's
+ *                      interrupt routine itself, which reports the buffer's
+ *                      fence ID (DXGK_INTERRUPT_DMA_COMPLETED, or DMA_FAULTED
+ *                      for a write to a read-only or unmapped page; and
+ *                      MONITORED_FENCE_SIGNALED after a FENCE) and queues the
+ *                      DPC, whose routine tells dxgkrnl (DxgkCbNotifyDpc)
+ *
+ * The next parts of step 3 give its GPU preemption and TDR.  Its DbgPrint lines and counts
  * are what the wddm self-test (tests/selftest/devices/wddm) checks.  Built
  * by tools/drivertest/mksys.py with its package (wddmtest.inf, a
  * test-signed catalog) into C:\Tests\WddmTest.
@@ -58,6 +74,13 @@ IMPORT void     *ExAllocatePoolWithTag(int type, unsigned long long size, unsign
 IMPORT void      ExFreePoolWithTag(void *p, unsigned int tag);
 IMPORT void     *MmMapIoSpaceEx(long long pa, unsigned long long size, unsigned int protect);
 IMPORT void      MmUnmapIoSpace(void *va, unsigned long long size);
+IMPORT NT_STATUS PsCreateSystemThread(void **thread, unsigned int access, void *attrs, void *process, void *client,
+                                      void (NT_API *routine)(void *), void *ctx);
+IMPORT NT_STATUS PsTerminateSystemThread(NT_STATUS st);
+IMPORT NT_STATUS ZwClose(void *h);
+IMPORT int       KeSetEvent(NT_KEVENT *ev, int increment, unsigned char wait);
+IMPORT unsigned char KeAcquireSpinLockRaiseToDpc(NT_KSPIN_LOCK *l);
+IMPORT void      KeReleaseSpinLock(NT_KSPIN_LOCK *l, unsigned char old);
 
 #define NonPagedPoolNx      512
 #define TAG_WDT             0x54644457u           /* 'WDdT' */
@@ -70,21 +93,39 @@ IMPORT void      MmUnmapIoSpace(void *va, unsigned long long size);
 #define PTE_VALID           1ull
 #define PTE_READ_ONLY       2ull
 #define PAGE_READWRITE      0x04
+#define RING                32                    /* DMA buffers its GPU holds */
+#define GPU_WRITE           1u                    /* its commands */
+#define GPU_COPY            2u
+#define GPU_FENCE           3u
+#define GPU_NOP             0u
+#define ST_FAULT            ((NT_STATUS)0xC01E0003)   /* (STATUS_GRAPHICS_... : the faulted buffer's status) */
 
 /* The user-mode side's private data for an allocation (userland's
  * NOVA_KMT_ALLOCATION) */
 typedef struct { unsigned long long Size; unsigned int Flags, Reserved; } AllocSpec;
 
+struct Context;
+typedef struct { struct Context *ctx; unsigned long long va; unsigned int size, fence; } Job;
+
 typedef struct {
     NT_DEVICE_OBJECT  *pdo;
     DXGKRNL_INTERFACE  cb;
-    int                devices, allocations, processes;   /* (live: counted for the log) */
+    int                devices, allocations, processes, contexts;   /* (live: counted for the log) */
     unsigned long long bytes;
+    /* its GPU: the ring the thread takes DMA buffers from, and its
+     * "interrupt status register" (what the interrupt routine reports) */
+    NT_KSPIN_LOCK      ring_lock;
+    Job                ring[RING];
+    unsigned int       head, tail;
+    NT_KEVENT          work, exited;
+    volatile int       stop, running;
+    volatile unsigned int irq_done, irq_fault, irq_fence;   /* (a fence ID; 0: none) */
 } Gpu;
 
 typedef struct { Gpu *gpu; unsigned long long *root; } Process;   /* (root: its root table, as the CPU sees it) */
 
 typedef struct { Gpu *gpu; void *dxgk; } Device;
+typedef struct Context { Gpu *gpu; unsigned int node; unsigned long long root; } Context;   /* (root: its root table's physical address) */
 typedef struct { unsigned long long size; } Allocation;
 typedef struct { Allocation *alloc; Device *dev; } Opened;   /* an allocation as a device has it */
 
@@ -105,6 +146,8 @@ static NT_API NT_STATUS wt_add_device(NT_DEVICE_OBJECT *pdo, void **ctx)
     return NT_STATUS_SUCCESS;
 }
 
+static NT_API void gpu_thread(void *arg);
+
 static NT_API NT_STATUS wt_start_device(void *ctx, DXGK_START_INFO *si, DXGKRNL_INTERFACE *cb, unsigned int *sources,
                                         unsigned int *children)
 {
@@ -116,6 +159,14 @@ static NT_API NT_STATUS wt_start_device(void *ctx, DXGK_START_INFO *si, DXGKRNL_
     if (!NT_SUCCESS_(cb->DxgkCbGetDeviceInformation(cb->DeviceHandle, &info))) return NT_STATUS_UNSUCCESSFUL;
     *sources = 0;
     *children = 0;
+    KeInitializeEvent(&g->work, 1 /* SynchronizationEvent */, 0);
+    KeInitializeEvent(&g->exited, 0 /* NotificationEvent */, 0);
+    g->stop = 0;
+    g->head = g->tail = 0;
+    void *th;
+    if (!NT_SUCCESS_(PsCreateSystemThread(&th, 0, 0, 0, 0, gpu_thread, g))) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    ZwClose(th);
+    g->running = 1;
     DbgPrint("wddmtest: started, LUID %x, a software GPU in %llu MiB of RAM\n", si->AdapterLuid.LowPart,
              (unsigned long long)info.SystemMemorySize >> 20);
     return NT_STATUS_SUCCESS;
@@ -124,6 +175,12 @@ static NT_API NT_STATUS wt_start_device(void *ctx, DXGK_START_INFO *si, DXGKRNL_
 static NT_API NT_STATUS wt_stop_device(void *ctx)
 {
     Gpu *g = ctx;
+    if (g->running) {                                     /* (its GPU's thread, told to stop) */
+        g->stop = 1;
+        KeSetEvent(&g->work, 0, 0);
+        KeWaitForSingleObject(&g->exited, 0, 0, 0, 0);
+        g->running = 0;
+    }
     DbgPrint("wddmtest: stopped (%d device(s), %d allocation(s) left)\n", g->devices, g->allocations);
     return NT_STATUS_SUCCESS;
 }
@@ -391,6 +448,195 @@ static NT_API NT_STATUS wt_build_paging_buffer(void *adapter, DXGKARG_BUILDPAGIN
 }
 
 /* -----------------------------------------------------------------------
+ * Its GPU: contexts, submission, the thread that runs DMA buffers, and its
+ * interrupt
+ * ----------------------------------------------------------------------- */
+static NT_API NT_STATUS wt_create_context(void *device, DXGKARG_CREATECONTEXT *a)
+{
+    Device *d = device;
+    if (a->NodeOrdinal != 0 || !(a->Flags & DXGK_CONTEXT_VIRTUAL_ADDRESSING)) return NT_STATUS_INVALID_PARAMETER;
+    Context *c = alloc(sizeof(*c));
+    if (!c) return NT_STATUS_NO_MEMORY;
+    c->gpu = d->gpu;
+    c->node = a->NodeOrdinal;
+    a->hContext = c;
+    a->ContextInfo.DmaBufferSize = 4096;
+    a->ContextInfo.DmaBufferPrivateDataSize = 16;
+    a->ContextInfo.Caps = 1;                              /* NoPatchingRequired */
+    d->gpu->contexts++;
+    DbgPrint("wddmtest: context created on node %u (%d)\n", c->node, d->gpu->contexts);
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API NT_STATUS wt_destroy_context(void *context)
+{
+    Context *c = context;
+    c->gpu->contexts--;
+    DbgPrint("wddmtest: context destroyed (%d left)\n", c->gpu->contexts);
+    release(c);
+    return NT_STATUS_SUCCESS;
+}
+
+static NT_API void wt_set_root(void *adapter, const DXGKARG_SETROOTPAGETABLE *a)
+{
+    (void)adapter;
+    Context *c = a->hContext;
+    c->root = a->Address.SegmentOffset;
+    DbgPrint("wddmtest: context's root page table set (%u entries, segment %u)\n", a->NumEntries, a->Address.SegmentId);
+}
+
+static NT_API NT_STATUS wt_submit(void *adapter, const DXGKARG_SUBMITCOMMANDVIRTUAL *a)
+{
+    Gpu *g = adapter;
+    if (!a->hContext || (a->Flags & DXGK_SUBMIT_PAGING)) return NT_STATUS_INVALID_PARAMETER;   /* (no paging buffers: the CPU writes its tables) */
+    unsigned char irql = KeAcquireSpinLockRaiseToDpc(&g->ring_lock);
+    int full = g->head - g->tail >= RING;
+    if (!full) g->ring[g->head++ % RING] = (Job){ a->hContext, a->DmaBufferVirtualAddress, a->DmaBufferSize, a->SubmissionFenceId };
+    KeReleaseSpinLock(&g->ring_lock, irql);
+    if (full) return NT_STATUS_INSUFFICIENT_RESOURCES;
+    KeSetEvent(&g->work, 0, 0);
+    return NT_STATUS_SUCCESS;
+}
+
+/* The page holding GPU virtual address @va in the address space whose
+ * root table is at physical @root, mapped for the CPU: its GPU's view, from
+ * the page tables alone; NULL if unmapped (or read-only, for @write) */
+static unsigned char *gpu_page(unsigned long long root, unsigned long long va, int write)
+{
+    if (!root || va >> VA_BITS) return 0;
+    unsigned long long *t = MmMapIoSpaceEx((long long)root, 4096, PAGE_READWRITE), e;
+    if (!t) return 0;
+    e = t[va >> 21 & 511];
+    MmUnmapIoSpace(t, 4096);
+    if (!(e & PTE_VALID) || !(t = MmMapIoSpaceEx((long long)(e & ~0xFFFull), 4096, PAGE_READWRITE))) return 0;
+    e = t[va >> 12 & 511];
+    MmUnmapIoSpace(t, 4096);
+    if (!(e & PTE_VALID) || (write && (e & PTE_READ_ONLY))) return 0;
+    return MmMapIoSpaceEx((long long)(e & ~0xFFFull), 4096, PAGE_READWRITE);
+}
+
+static int gpu_load(unsigned long long root, unsigned long long va, unsigned int *v)
+{
+    unsigned char *p = (va & 3) ? 0 : gpu_page(root, va, 0);
+    if (!p) return 0;
+    *v = *(volatile unsigned int *)(p + (va & 0xFFF));
+    MmUnmapIoSpace(p, 4096);
+    return 1;
+}
+
+static int gpu_store(unsigned long long root, unsigned long long va, unsigned int v)
+{
+    unsigned char *p = (va & 3) ? 0 : gpu_page(root, va, 1);
+    if (!p) return 0;
+    *(volatile unsigned int *)(p + (va & 0xFFF)) = v;
+    MmUnmapIoSpace(p, 4096);
+    return 1;
+}
+
+static unsigned long long addr(const unsigned int *w) { return w[0] | (unsigned long long)w[1] << 32; }
+
+/* One DMA buffer: its commands, fetched through the page tables.  0 if it
+ * ran; else the GPU address it faulted at */
+static unsigned long long gpu_run(Gpu *g, const Job *j, int *commands)
+{
+    unsigned long long root = j->ctx->root, at = j->va, end = j->va + j->size;
+    *commands = 0;
+    while (at < end) {
+        unsigned int w[6] = { 0 }, n;
+        if (!gpu_load(root, at, &w[0])) return at;
+        n = w[0] == GPU_WRITE ? 4 : w[0] == GPU_COPY ? 6 : w[0] == GPU_FENCE ? 5 : 1;
+        if (w[0] > GPU_FENCE || at + 4ull * n > end) return at;    /* (an unknown or cut command: a fault too) */
+        for (unsigned int i = 1; i < n; i++)
+            if (!gpu_load(root, at + 4ull * i, &w[i])) return at + 4ull * i;
+        if (w[0] == GPU_WRITE && !gpu_store(root, addr(&w[1]), w[3])) return addr(&w[1]);
+        if (w[0] == GPU_COPY)
+            for (unsigned int i = 0; i < w[5]; i++) {
+                unsigned int v;
+                if (!gpu_load(root, addr(&w[1]) + 4ull * i, &v)) return addr(&w[1]) + 4ull * i;
+                if (!gpu_store(root, addr(&w[3]) + 4ull * i, v)) return addr(&w[3]) + 4ull * i;
+            }
+        if (w[0] == GPU_FENCE) {                          /* (the high word first: the value only rises) */
+            if (!gpu_store(root, addr(&w[1]) + 4, w[4]) || !gpu_store(root, addr(&w[1]), w[3])) return addr(&w[1]);
+            DbgPrint("wddmtest: GPU wrote fence value %llu\n", addr(&w[3]));
+            g->irq_fence = 1;
+        }
+        if (w[0] != GPU_NOP) (*commands)++;
+        at += 4ull * n;
+    }
+    return 0;
+}
+
+/* Its interrupt routine (DxgkDdiInterruptRoutine): what the GPU did, to dxgkrnl */
+static NT_API unsigned char wt_interrupt(void *ctx, unsigned int msg)
+{
+    (void)msg;
+    Gpu *g = ctx;
+    unsigned int done = __atomic_exchange_n(&g->irq_done, 0, __ATOMIC_ACQ_REL);
+    unsigned int fault = __atomic_exchange_n(&g->irq_fault, 0, __ATOMIC_ACQ_REL);
+    unsigned int fence = __atomic_exchange_n(&g->irq_fence, 0, __ATOMIC_ACQ_REL);
+    if (!done && !fault && !fence) return 0;
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA d;
+    if (fence) {
+        mzero(&d, sizeof(d));
+        d.InterruptType = DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED;
+        g->cb.DxgkCbNotifyInterrupt(g->cb.DeviceHandle, &d);
+    }
+    if (fault) {
+        mzero(&d, sizeof(d));
+        d.InterruptType = DXGK_INTERRUPT_DMA_FAULTED;
+        d.DmaFaulted.FaultedFenceId = fault;
+        d.DmaFaulted.Status = ST_FAULT;
+        g->cb.DxgkCbNotifyInterrupt(g->cb.DeviceHandle, &d);
+    }
+    if (done) {
+        mzero(&d, sizeof(d));
+        d.InterruptType = DXGK_INTERRUPT_DMA_COMPLETED;
+        d.DmaCompleted.SubmissionFenceId = done;
+        g->cb.DxgkCbNotifyInterrupt(g->cb.DeviceHandle, &d);
+    }
+    g->cb.DxgkCbQueueDpc(g->cb.DeviceHandle);
+    return 1;
+}
+
+static NT_API void wt_dpc(void *ctx)
+{
+    Gpu *g = ctx;
+    g->cb.DxgkCbNotifyDpc(g->cb.DeviceHandle);
+}
+
+static NT_API unsigned char raise_interrupt(void *ctx) { return wt_interrupt(ctx, 0); }
+
+static NT_API void gpu_thread(void *arg)
+{
+    Gpu *g = arg;
+    while (!g->stop) {
+        KeWaitForSingleObject(&g->work, 0, 0, 0, 0);
+        for (;;) {
+            unsigned char irql = KeAcquireSpinLockRaiseToDpc(&g->ring_lock);
+            int any = g->tail != g->head;
+            Job j = any ? g->ring[g->tail++ % RING] : (Job){ 0 };
+            KeReleaseSpinLock(&g->ring_lock, irql);
+            if (!any) break;
+            int commands;
+            unsigned long long fault = gpu_run(g, &j, &commands);
+            if (fault) {
+                DbgPrint("wddmtest: GPU page fault at 0x%llx (fence %u)\n", fault, j.fence);
+                __atomic_store_n(&g->irq_fault, j.fence, __ATOMIC_RELEASE);
+            } else {
+                DbgPrint("wddmtest: ran %u bytes at GPU VA 0x%llx (fence %u): %d command(s)\n", j.size, j.va, j.fence,
+                         commands);
+                __atomic_store_n(&g->irq_done, j.fence, __ATOMIC_RELEASE);
+            }
+            /* (no interrupt line: the routine runs as the line would run it, under its lock) */
+            unsigned char r;
+            g->cb.DxgkCbSynchronizeExecution(g->cb.DeviceHandle, raise_interrupt, g, 0, &r);
+        }
+    }
+    KeSetEvent(&g->exited, 0, 0);
+    PsTerminateSystemThread(0);
+}
+
+/* -----------------------------------------------------------------------
  * DriverEntry, and displib.lib's DxgkInitialize
  * ----------------------------------------------------------------------- */
 static NT_STATUS initialize(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg, DRIVER_INITIALIZATION_DATA *init)
@@ -437,6 +683,12 @@ NT_API NT_STATUS DriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
     init.DxgkDdiDestroyProcess = wt_destroy_process;
     init.DxgkDdiGetRootPageTableSize = wt_root_size;
     init.DxgkDdiBuildPagingBuffer = wt_build_paging_buffer;
+    init.DxgkDdiInterruptRoutine = wt_interrupt;
+    init.DxgkDdiDpcRoutine = wt_dpc;
+    init.DxgkDdiCreateContext = wt_create_context;
+    init.DxgkDdiDestroyContext = wt_destroy_context;
+    init.DxgkDdiSetRootPageTable = wt_set_root;
+    init.DxgkDdiSubmitCommandVirtual = wt_submit;
     NT_STATUS st = initialize(drv, reg, &init);
     DbgPrint("wddmtest: DxgkInitialize returned 0x%08x\n", (unsigned int)st);
     return st;

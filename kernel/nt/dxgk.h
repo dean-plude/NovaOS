@@ -640,6 +640,69 @@ typedef struct DXGKARGCB_GETHANDLEDATA {
     unsigned int Flags;                           /* bit 0 DeviceSpecific */
 } DXGKARGCB_GETHANDLEDATA;
 
+/* Contexts and submission (WDDM 2.0's GPU virtual addressing model) */
+typedef struct {
+    unsigned int DmaBufferSize, DmaBufferSegmentSet, DmaBufferPrivateDataSize;
+    unsigned int AllocationListSize, PatchLocationListSize, Reserved;
+    unsigned int Caps;                            /* DXGK_CONTEXTINFO_CAPS */
+    unsigned int PagingCompanionNodeId;
+} DXGK_CONTEXTINFO;
+
+/* DXGK_CREATECONTEXTFLAGS bits */
+#define DXGK_CONTEXT_SYSTEM             0x1
+#define DXGK_CONTEXT_VIRTUAL_ADDRESSING 0x4
+
+typedef struct {
+    void            *hContext;                    /* out: the driver's */
+    unsigned int     NodeOrdinal, EngineAffinity;
+    unsigned int     Flags;                       /* DXGK_CREATECONTEXTFLAGS */
+    void            *pPrivateDriverData;
+    unsigned int     PrivateDriverDataSize;
+    DXGK_CONTEXTINFO ContextInfo;                 /* out */
+} DXGKARG_CREATECONTEXT;
+
+typedef struct { unsigned int SegmentId, Padding; unsigned long long SegmentOffset; } D3DGPU_PHYSICAL_ADDRESS;
+
+typedef struct {
+    void                   *hContext;             /* the driver's */
+    D3DGPU_PHYSICAL_ADDRESS Address;              /* the root page table: segment 0 is system memory */
+    unsigned int            NumEntries;
+} DXGKARG_SETROOTPAGETABLE;
+
+/* DXGK_SUBMITCOMMANDFLAGS bits */
+#define DXGK_SUBMIT_PAGING 0x1
+
+typedef struct {
+    void              *hContext;                  /* the driver's */
+    unsigned long long DmaBufferVirtualAddress;   /* (in the context's process's GPU address space) */
+    unsigned int       DmaBufferSize;
+    void              *pDmaBufferPrivateData;
+    unsigned int       DmaBufferPrivateDataSize, DmaBufferUmdPrivateDataSize;
+    unsigned int       SubmissionFenceId;         /* the node's: rises by one each submission */
+    unsigned int       VidPnSourceId;
+    int                FlipInterval;
+    unsigned int       Flags;                     /* DXGK_SUBMITCOMMANDFLAGS */
+    unsigned int       EngineOrdinal, NodeOrdinal;
+} DXGKARG_SUBMITCOMMANDVIRTUAL;
+
+/* DXGK_INTERRUPT_TYPE: what DxgkCbNotifyInterrupt reports */
+#define DXGK_INTERRUPT_DMA_COMPLETED            1
+#define DXGK_INTERRUPT_DMA_PREEMPTED            2
+#define DXGK_INTERRUPT_DMA_FAULTED              4
+#define DXGK_INTERRUPT_DMA_PAGE_FAULTED         9
+#define DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED 11
+
+typedef struct {
+    int InterruptType;                            /* DXGK_INTERRUPT_TYPE */
+    union {
+        struct { unsigned int SubmissionFenceId, NodeOrdinal, EngineOrdinal; } DmaCompleted;
+        struct { unsigned int FaultedFenceId; NT_STATUS Status; unsigned int NodeOrdinal, EngineOrdinal; } DmaFaulted;
+        struct { unsigned int NodeOrdinal, EngineOrdinal; } MonitoredFenceSignaled;
+        unsigned long long Reserved[8];           /* (the other interrupts' structures) */
+    };
+    unsigned int Flags;                           /* DXGKCB_NOTIFY_INTERRUPT_DATA_FLAGS */
+} DXGKARGCB_NOTIFY_INTERRUPT_DATA;
+
 #define DXGK_DDI(ret, name, ...) ret (NT_API *name)(__VA_ARGS__)
 
 /* KMDDOD_INITIALIZATION_DATA: a display-only driver's DDI table, in the
@@ -740,7 +803,8 @@ typedef struct {
     DXGK_DDI(NT_STATUS, DxgkDdiCloseAllocation, void *device, const DXGKARG_CLOSEALLOCATION *);
     void *DxgkDdiRender, *DxgkDdiPresent;
     void *DxgkDdiUpdateOverlay, *DxgkDdiFlipOverlay, *DxgkDdiDestroyOverlay;
-    void *DxgkDdiCreateContext, *DxgkDdiDestroyContext;
+    DXGK_DDI(NT_STATUS, DxgkDdiCreateContext, void *device, DXGKARG_CREATECONTEXT *);
+    DXGK_DDI(NT_STATUS, DxgkDdiDestroyContext, void *context);
     void *DxgkDdiLinkDevice, *DxgkDdiSetDisplayPrivateDriverFormat;
     /* DXGKDDI_INTERFACE_VERSION_WIN7 */
     void *DxgkDdiDescribePageTable, *DxgkDdiUpdatePageTable, *DxgkDdiUpdatePageDirectory, *DxgkDdiMovePageDirectory;
@@ -758,7 +822,9 @@ typedef struct {
     void *DxgkDdiGetNodeMetadata, *DxgkDdiSetPowerPState, *DxgkDdiControlInterrupt2;
     void *DxgkDdiCheckMultiPlaneOverlaySupport, *DxgkDdiCalibrateGpuClock, *DxgkDdiFormatHistoryBuffer;
     /* DXGKDDI_INTERFACE_VERSION_WDDM2_0 */
-    void *DxgkDdiRenderGdi, *DxgkDdiSubmitCommandVirtual, *DxgkDdiSetRootPageTable;
+    void *DxgkDdiRenderGdi;
+    DXGK_DDI(NT_STATUS, DxgkDdiSubmitCommandVirtual, void *adapter, const DXGKARG_SUBMITCOMMANDVIRTUAL *);
+    DXGK_DDI(void, DxgkDdiSetRootPageTable, void *adapter, const DXGKARG_SETROOTPAGETABLE *);
     DXGK_DDI(unsigned long long, DxgkDdiGetRootPageTableSize, void *adapter, DXGKARG_GETROOTPAGETABLESIZE *);
     void *DxgkDdiMapCpuHostAperture, *DxgkDdiUnmapCpuHostAperture, *DxgkDdiCheckMultiPlaneOverlaySupport2;
     DXGK_DDI(NT_STATUS, DxgkDdiCreateProcess, void *ctx, DXGKARG_CREATEPROCESS *);
@@ -821,6 +887,9 @@ _Static_assert(DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) 
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 8 * 83 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 8 * 89 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiBuildPagingBuffer) == 8 * 28 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateContext) == 8 * 58 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSubmitCommandVirtual) == 8 * 90 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetRootPageTable) == 8 * 91 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetRootPageTableSize) == 8 * 92 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProcess) == 8 * 96 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProcess) == 8 * 97 &&
@@ -840,3 +909,12 @@ _Static_assert(sizeof(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE) == 96 &&
                DXGK_OFFSET(DXGKARG_BUILDPAGINGBUFFER, UpdatePageTable) == 40 &&
                DXGK_OFFSET(DXGKARG_BUILDPAGINGBUFFER, hSystemContext) == 296 && sizeof(DXGKARG_BUILDPAGINGBUFFER) == 320,
                "DXGKARG_BUILDPAGINGBUFFER layout");
+_Static_assert(sizeof(DXGK_CONTEXTINFO) == 32 && DXGK_OFFSET(DXGKARG_CREATECONTEXT, pPrivateDriverData) == 24 &&
+               DXGK_OFFSET(DXGKARG_CREATECONTEXT, ContextInfo) == 36 && sizeof(DXGKARG_CREATECONTEXT) == 72 &&
+               sizeof(DXGKARG_SETROOTPAGETABLE) == 32 && DXGK_OFFSET(DXGKARG_SETROOTPAGETABLE, NumEntries) == 24 &&
+               DXGK_OFFSET(DXGKARG_SUBMITCOMMANDVIRTUAL, pDmaBufferPrivateData) == 24 &&
+               DXGK_OFFSET(DXGKARG_SUBMITCOMMANDVIRTUAL, SubmissionFenceId) == 40 &&
+               DXGK_OFFSET(DXGKARG_SUBMITCOMMANDVIRTUAL, NodeOrdinal) == 60 && sizeof(DXGKARG_SUBMITCOMMANDVIRTUAL) == 64 &&
+               DXGK_OFFSET(DXGKARGCB_NOTIFY_INTERRUPT_DATA, DmaCompleted.NodeOrdinal) == 12 &&
+               DXGK_OFFSET(DXGKARGCB_NOTIFY_INTERRUPT_DATA, Flags) == 72 && sizeof(DXGKARGCB_NOTIFY_INTERRUPT_DATA) == 80,
+               "context and submission layouts");

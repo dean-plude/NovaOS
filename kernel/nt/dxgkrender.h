@@ -17,6 +17,7 @@ typedef struct {
     UINT64 memory;              /* its segments' bytes */
     bool   system;              /* all of it system memory (no VRAM) */
     UINT32 va_bits;             /* its GPU virtual addresses' bits; 0: none (no GpuMmu) */
+    UINT32 nodes;               /* its engines that take submissions; 0: no contexts */
 } DxgkRenderInfo;
 
 int    DxgkRenderList(DxgkRenderInfo *out, int max);
@@ -46,3 +47,35 @@ UINT32 DxgkRenderReserveVa(UINT64 luid, void *owner, UINT64 base, UINT64 min, UI
 UINT32 DxgkRenderMapVa(UINT64 luid, void *owner, UINT32 alloc, const PADDR *frames, UINT64 first, UINT64 pages,
                        UINT64 base, UINT64 min, UINT64 max, UINT64 prot, UINT64 *va);
 UINT32 DxgkRenderFreeVa(UINT64 luid, void *owner, UINT64 base, UINT64 size);
+
+/* A monitored fence's page mapped into @owner's GPU address space (the GPU
+ * writes the value there): NTSTATUS, *va where VidMm put it; DxgkRenderFreeVa
+ * takes it out */
+UINT32 DxgkRenderMapPages(UINT64 luid, void *owner, const PADDR *frames, UINT64 pages, UINT64 prot, UINT64 *va);
+
+/* Contexts and the scheduler (VidSch).  The fences it signals and waits on
+ * are um_d3dkmt.c's, reached through @ops; each fence a packet names comes
+ * with a reference the scheduler drops (release) once done with it */
+typedef struct {
+    void (*signal)(void *fence, UINT64 value);    /* raise it (never lowers it) and wake its waiters */
+    bool (*reached)(void *fence, UINT64 value);
+    void (*release)(void *fence);
+    void (*moved)(void);                          /* the GPU may have written monitored fences: check their waiters */
+} DxgkFenceOps;
+void   DxgkRenderSetFenceOps(const DxgkFenceOps *ops);
+/* DxgkDdiCreateContext on device @dev's engine @node (and
+ * DxgkDdiSetRootPageTable with its process's root): NTSTATUS, *ctx dxgkrnl's
+ * handle */
+UINT32 DxgkRenderCreateContext(UINT64 luid, UINT32 dev, UINT32 node, const void *priv, UINT32 priv_size, UINT32 *ctx);
+/* After its queued work has run (a while at most: a hung GPU is the TDR's) */
+void   DxgkRenderDestroyContext(UINT64 luid, UINT32 ctx);
+/* Queued on the context, each NTSTATUS: a DMA buffer at GPU virtual address
+ * @va (DxgkDdiSubmitCommandVirtual, in order); fences raised once the work
+ * before them has finished; a wait that holds the context's later work until
+ * its fences reach their values.  On success the scheduler has the fences'
+ * references */
+UINT32 DxgkRenderSubmit(UINT64 luid, UINT32 ctx, UINT64 va, UINT32 size, const void *priv, UINT32 priv_size);
+UINT32 DxgkRenderSignal(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values);
+UINT32 DxgkRenderWait(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values);
+/* The CPU raised fences: waits from the GPU may go on */
+void   DxgkRenderFencesMoved(void);

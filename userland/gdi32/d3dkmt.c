@@ -8,7 +8,8 @@
  * adapter, the software adapter Windows always has, and gives its
  * allocations memory, maps them for the CPU, and keeps its fences; a
  * driver's adapter with a GPU MMU also has GPU virtual addresses, paging
- * queues and residency.
+ * queues and residency, and one whose driver takes submissions has
+ * contexts, D3DKMTSubmitCommand and fences the GPU signals and waits on.
  * 32-bit programs, whose structures the kernel does not translate yet,
  * get STATUS_NOT_SUPPORTED, as Windows answers where the kernel graphics
  * subsystem is absent; so do the calls not implemented yet.  VKD3D-Proton
@@ -42,7 +43,8 @@ enum {
     OP_CREATE_DEVICE, OP_DESTROY_DEVICE, OP_CREATE_ALLOCATION2, OP_DESTROY_ALLOCATION2,
     OP_LOCK2, OP_UNLOCK2, OP_CREATE_SYNC2, OP_DESTROY_SYNC, OP_SIGNAL_FROM_CPU, OP_WAIT_FROM_CPU,
     OP_QUERY_VIDEO_MEMORY_INFO, OP_CREATE_PAGING_QUEUE, OP_DESTROY_PAGING_QUEUE, OP_RESERVE_GPU_VA,
-    OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT,
+    OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT, OP_CREATE_CONTEXT_VIRTUAL, OP_DESTROY_CONTEXT,
+    OP_SUBMIT_COMMAND, OP_SIGNAL_FROM_GPU2, OP_WAIT_FROM_GPU,
 };
 
 #ifdef _WIN64
@@ -70,6 +72,18 @@ GDIAPI LONG D3DKMTMapGpuVirtualAddress(D3DDDI_MAPGPUVIRTUALADDRESS *a)   { CALL(
 GDIAPI LONG D3DKMTFreeGpuVirtualAddress(const D3DKMT_FREEGPUVIRTUALADDRESS *a) { CALL(OP_FREE_GPU_VA, a); }
 GDIAPI LONG D3DKMTMakeResident(D3DDDI_MAKERESIDENT *a)                   { CALL(OP_MAKE_RESIDENT, a); }
 GDIAPI LONG D3DKMTEvict(D3DKMT_EVICT *a)                                 { CALL(OP_EVICT, a); }
+GDIAPI LONG D3DKMTCreateContextVirtual(D3DKMT_CREATECONTEXTVIRTUAL *a)   { CALL(OP_CREATE_CONTEXT_VIRTUAL, a); }
+GDIAPI LONG D3DKMTDestroyContext(const D3DKMT_DESTROYCONTEXT *a)         { CALL(OP_DESTROY_CONTEXT, a); }
+GDIAPI LONG D3DKMTSubmitCommand(const D3DKMT_SUBMITCOMMAND *a)           { CALL(OP_SUBMIT_COMMAND, a); }
+GDIAPI LONG D3DKMTSignalSynchronizationObjectFromGpu2(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *a)
+{
+    CALL(OP_SIGNAL_FROM_GPU2, a);
+}
+
+GDIAPI LONG D3DKMTWaitForSynchronizationObjectFromGpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *a)
+{
+    CALL(OP_WAIT_FROM_GPU, a);
+}
 
 GDIAPI LONG D3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *a)
 {

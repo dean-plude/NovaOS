@@ -312,9 +312,27 @@ vendors.
      dictionary reads set as the core's constructor sets them (through
      `DxamlCoreTestHooks`, the core's friend; theming over Microsoft's
      `TestThemingInterop`), and its type table constructs the six types
-     it uses.  Merged and theme dictionaries are field-backed properties,
-     whose offsets come with the core's metadata tables (`core/metadata`),
-     so they load with the core services.
+     it uses.
+   - *Part 8: merged and theme dictionaries.*  `MergedDictionaries` and
+     `ThemeDictionaries` are field-backed properties: the object writer
+     reads and sets the field at the offset the core's generated metadata
+     (`core/metadata/DynamicMetadata.g.cpp`,
+     `c_aDependencyPropertyRuntimeData`) gives the property.  That table
+     has a row for every property of every element and names every
+     element class, so it cannot compile before the elements do.
+     `src/property_data.cpp` keeps Microsoft's rows for the classes that
+     build (the `ResourceDictionary`'s three, so far), found by property
+     index, with `ReflectionAPI.cpp`'s getters over them (and its
+     `CClassInfo::GetCoreConstructor`, from the type table) and
+     `DependencyProperty.cpp`'s `CreateDefaultValueObject` (a property's
+     default object made by its type's constructor: the merged
+     dictionaries' collection, and the theme dictionaries' dictionary,
+     marked as one); `build.py` renames the metadata mocks' versions out
+     of the way.  A row is added as its class builds, until the whole
+     table compiles with the core.  `xamlloadtest` loads a dictionary
+     with two merged dictionaries (the last one wins a shared key) and
+     `Light` and `Dark` theme dictionaries, and looks keys up through
+     them.
    - *Next.*  The core services (`CCoreServices`, `core/dll/xcpcore.cpp`)
      with the core's metadata tables (`core/metadata`), and the rest of the
      core, then `dxaml/lib` compiled as

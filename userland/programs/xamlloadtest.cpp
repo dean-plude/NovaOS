@@ -7,7 +7,10 @@
  * them to collections and dictionaries), so XAML text is loaded into a live
  * object tree: a ResourceDictionary of strings, numbers, booleans and
  * colours, read by XmlLite, parsed into the node stream and written into
- * objects.
+ * objects; and (part 8) a dictionary's merged dictionaries and theme
+ * dictionaries, set through field-backed properties whose offsets come
+ * from the core's property runtime data
+ * (userland/windows_ui_xaml/src/property_data.cpp), searched by lookup.
  *
  * Until the XAML core (CCoreServices) builds, the parser's core services
  * are Microsoft's mock from its parser unit tests, laid where the core's
@@ -58,6 +61,7 @@ static HRESULT create_dictionary(CDependencyObject **out, CREATEPARAMETERS *crea
 #define ACT(type, fn) [static_cast<int>(KnownTypeIndex::type)] = { fn, nullptr }
 extern const MetaDataTypeActivation c_aTypeActivations[KnownTypeCount] = {
     ACT(ResourceDictionary, &create_dictionary),
+    ACT(ResourceDictionaryCollection, &CResourceDictionaryCollection::Create),
     ACT(String, &CString::Create),
     ACT(Double, &CDouble::Create),
     ACT(Int32, &CInt32::Create),
@@ -257,9 +261,36 @@ static void test_load()
     }
     root->Release();
 
-    /* (merged and theme dictionaries are set through field-backed
-     * properties, whose offsets come with the core's metadata tables,
-     * core/metadata: the next part) */
+    /* merged dictionaries and theme dictionaries */
+    root = load(
+        L"<ResourceDictionary " XMLNS XMLNS_X L">"
+        L"<ResourceDictionary.MergedDictionaries>"
+        L"<ResourceDictionary><x:String x:Key='Shared'>first</x:String><x:String x:Key='Deep'>deep</x:String></ResourceDictionary>"
+        L"<ResourceDictionary><x:String x:Key='Shared'>second</x:String></ResourceDictionary>"
+        L"</ResourceDictionary.MergedDictionaries>"
+        L"<ResourceDictionary.ThemeDictionaries>"
+        L"<ResourceDictionary x:Key='Light'><x:String x:Key='Themed'>light</x:String></ResourceDictionary>"
+        L"<ResourceDictionary x:Key='Dark'><x:String x:Key='Themed'>dark</x:String></ResourceDictionary>"
+        L"</ResourceDictionary.ThemeDictionaries>"
+        L"<x:String x:Key='Own'>own</x:String>"
+        L"</ResourceDictionary>", &hr);
+    CHECK("load merged and theme dictionaries", root != nullptr);
+    if (!root) {
+        printf("  hr %08lx\n", (unsigned long)hr);
+        return;
+    }
+    d = do_pointer_cast<CResourceDictionary>(root);
+    if (d) {
+        CHECK("own resource", string_of(lookup(d, L"Own")) == "own");
+        CHECK("two merged dictionaries", d->GetMergedDictionaries() && d->GetMergedDictionaries()->GetCount() == 2);
+        CHECK("the last merged dictionary wins", string_of(lookup(d, L"Shared")) == "second");
+        CHECK("found in the first merged dictionary", string_of(lookup(d, L"Deep")) == "deep");
+        CResourceDictionary *themes = d->GetThemeDictionaries();
+        CHECK("theme dictionaries", themes && themes->IsThemeDictionaries() && themes->GetCount() == 2);
+        CResourceDictionary *dark = themes ? do_pointer_cast<CResourceDictionary>(lookup(themes, L"Dark")) : nullptr;
+        CHECK("the Dark theme's dictionary", dark && string_of(lookup(dark, L"Themed")) == "dark");
+    }
+    root->Release();
 
     /* malformed XAML fails to load, it does not crash */
     root = load(L"<ResourceDictionary " XMLNS XMLNS_X L"><x:String x:Key='a'>unclosed</x:String>", &hr);

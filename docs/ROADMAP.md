@@ -1047,10 +1047,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and the parser's object writer runtime (`core/Parser/runtime`) built,
   so XAML text loads into the core's objects: a `ResourceDictionary` of
   strings, numbers, booleans and colours, looked up by key, in
-  `xamlloadtest`.  Next: the core services (`CCoreServices`) with the
-  core's metadata tables (merged and theme dictionaries load with them)
-  and the rest of the core, then `dxaml/lib` as
-  `Windows.UI.Xaml.dll`.
+  `xamlloadtest`.  Eighth part done: the properties' runtime data (the
+  field offsets the core's metadata tables give field-backed properties)
+  for the classes that build, so a `ResourceDictionary`'s
+  `MergedDictionaries` and `ThemeDictionaries` load from XAML and lookup
+  searches them (last merged dictionary first, then the theme's) in
+  `xamlloadtest`.  Next: the core services (`CCoreServices`) and the rest
+  of the core, then `dxaml/lib` as `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

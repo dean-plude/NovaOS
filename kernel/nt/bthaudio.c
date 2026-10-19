@@ -58,6 +58,7 @@
 #define HF_FRAMES    2048              /* the hands-free output's ring (stereo) and the microphone's (mono) */
 #define SCO_CHUNK    24                /* samples sent on the voice link at a time (48 bytes) */
 #define MAX_PKT      1024              /* a media packet */
+#define BITPOOL_FLOOR 16               /* the lowest bitpool a congested stream drops to */
 #define PSM_RFCOMM   0x0003
 #define PSM_AVDTP    0x0019
 
@@ -128,6 +129,10 @@ struct BthAudio {
     volatile bool rec;                 /* the microphone records */
     UINT64    t0, adone, hdone;        /* when the devices came, frames taken from each ring since */
     UINT64    a_heard, h_heard;        /* when something last played */
+    UINT64    a_since, a_frames;       /* the stream: when it started, the frames sent */
+    UINT64    t_enc, t_send;           /* (100 ns spent encoding, sending) */
+    UINT8     bp_min, bp_max, bp_low;  /* the bitpools configured, and the stream's lowest */
+    UINT64    bp_when;                 /* when the bitpool last changed */
     INT16     pend[2 * 128];           /* stereo frames for the next SBC frame */
     UINT32    npend;
     UINT8     pkt[MAX_PKT];            /* the media packet being filled */
@@ -502,6 +507,9 @@ static bool a2dp_connect(BthAudio *a)
         e->subbands = c[1] & 0x04 ? 8 : 0;
         e->snr = c[1] & 0x01 ? 0 : 1;
         e->bitpool = c[3] < 53 ? c[3] : 53;
+        a->bp_max = e->bitpool;
+        a->bp_min = c[2] > BITPOOL_FLOOR ? c[2] : BITPOOL_FLOOR;
+        if (a->bp_min > a->bp_max) a->bp_min = a->bp_max;
         if (e->bitpool < c[2] || e->mode == 0xFF || !SbcInit(e)) {
             kprintf("[BTHAUD] %s: SEID %u: no SBC this source can make (%02x %02x %u-%u)\n", a->name, seid, c[0], c[1], c[2], c[3]);
             continue;
@@ -509,7 +517,7 @@ static bool a2dp_connect(BthAudio *a)
         UINT8 cfg[12] = { (UINT8)(seid << 2), 1 << 2, 0x01, 0x00, 0x07, 0x06, 0x00, 0x00,
                           (UINT8)((e->rate == 48000 ? 0x10 : 0x20) | (e->mode == SBC_JOINT ? 0x01 : e->mode == SBC_STEREO ? 0x02 : 0x08)),
                           (UINT8)((e->blocks == 16 ? 0x10 : e->blocks == 12 ? 0x20 : e->blocks == 8 ? 0x40 : 0x80) | 0x04 |
-                                  (e->snr ? 0x02 : 0x01)), e->bitpool, e->bitpool };
+                                  (e->snr ? 0x02 : 0x01)), a->bp_min, e->bitpool };
         if (!av_cmd(a, AV_SET_CONFIG, cfg, sizeof(cfg)) || !av_cmd(a, AV_OPEN, &q, 1)) return false;
         a->media = BthChanOpen(a->r, a->d, PSM_AVDTP, NULL, NULL);
         if (!a->media) return false;
@@ -535,7 +543,9 @@ static void a2dp_flush(BthAudio *a)
     p[4] = (UINT8)(a->ts >> 24); p[5] = (UINT8)(a->ts >> 16); p[6] = (UINT8)(a->ts >> 8); p[7] = (UINT8)a->ts;
     p[8] = p[9] = p[10] = 0; p[11] = 1;                         /* (SSRC) */
     p[12] = (UINT8)a->pkt_frames;
+    UINT64 t = sched_tsc_100ns(rdtsc());
     BthChanSend(a->r, a->media, p, a->pkt_len);
+    a->t_send += sched_tsc_100ns(rdtsc()) - t;
     a->seq++;
     a->ts += a->pkt_frames * SbcFrameSamples(&a->sbc);
     a->pkt_len = 13;
@@ -547,7 +557,9 @@ static void a2dp_frame(BthAudio *a)
     UINT32 len = SbcFrameLength(&a->sbc), mtu = BthChanMtu(a->media);
     if (mtu > MAX_PKT) mtu = MAX_PKT;
     if (a->pkt_len + len > mtu || a->pkt_frames == 15) a2dp_flush(a);
+    UINT64 t = sched_tsc_100ns(rdtsc());
     SbcEncode(&a->sbc, a->pend, a->pkt + a->pkt_len);
+    a->t_enc += sched_tsc_100ns(rdtsc()) - t;
     a->pkt_len += len;
     a->pkt_frames++;
 }
@@ -599,14 +611,40 @@ static void detach(BthAudio *a)
 }
 
 /* The frames an output's device has played by now (its rate since the
- * devices came): how many to take from its ring this time */
+ * devices came): how many to take from its ring this time.  A thread held
+ * up catches up three ticks at a time, never more: the mixer fills the
+ * ring only 80 ms ahead of the position, and taking a long wait's worth
+ * at once would read past it into silence.  Held up for over 250 ms, what
+ * fell behind is dropped. */
 static UINT32 due(BthAudio *a, UINT64 now, UINT32 rate, UINT64 *done)
 {
-    UINT64 want = (now - a->t0) * rate / 1000;
-    if (want - *done > rate / 4) *done = want - rate / 50;      /* (held up: what fell behind is gone) */
-    UINT32 n = (UINT32)(want - *done);
-    *done = want;
-    return n;
+    UINT64 want = (now - a->t0) * rate / 1000, most = rate * 3 * TICK_MS / 1000;
+    if (want - *done > rate / 4) *done = want - rate / 50;
+    UINT64 n = want - *done;
+    if (n > most) n = most;
+    *done += n;
+    return (UINT32)n;
+}
+
+/* The bitpool to the link: while sending falls behind (the radio's link
+ * or its USB transfers too slow for the stream), fewer bits a frame, down
+ * to the lowest the headset was configured with; back up once it keeps up
+ * (as Android's and BlueZ's sources adapt theirs).  Each frame's header
+ * carries its bitpool, so the headset follows. */
+static void a2dp_adapt(BthAudio *a, UINT64 now)
+{
+    UINT32 rate = a->sbc.rate;
+    UINT64 lag = (now - a->t0) * rate / 1000 - a->adone;
+    UINT8 bp = a->sbc.bitpool;
+    if (lag > rate / 25 && now - a->bp_when >= 100 && bp > a->bp_min)            /* 40 ms behind */
+        bp = bp - 6 > a->bp_min ? bp - 6 : a->bp_min;
+    else if (lag < rate / 100 && now - a->bp_when >= 2000 && bp < a->bp_max)      /* keeping up for 2 s */
+        bp = bp + 2 < a->bp_max ? bp + 2 : a->bp_max;
+    if (bp == a->sbc.bitpool) return;
+    a2dp_flush(a);
+    a->sbc.bitpool = bp;
+    a->bp_when = now;
+    if (bp < a->bp_low) a->bp_low = bp;
 }
 
 static void a2dp_pump(BthAudio *a, UINT64 now)
@@ -617,6 +655,7 @@ static void a2dp_pump(BthAudio *a, UINT64 now)
         INT16 *f = a->aring + 2 * pos;
         sound |= f[0] || f[1];
         if (a->streaming) {
+            a->a_frames++;
             a->pend[2 * a->npend] = f[0];
             a->pend[2 * a->npend + 1] = f[1];
             if (++a->npend == SbcFrameSamples(&a->sbc)) { a2dp_frame(a); a->npend = 0; }
@@ -624,18 +663,25 @@ static void a2dp_pump(BthAudio *a, UINT64 now)
         pos = (pos + 1) % A2DP_FRAMES;
     }
     __atomic_store_n(&a->apos, pos * 4, __ATOMIC_RELEASE);
-    if (a->streaming) a2dp_flush(a);
+    if (a->streaming) a2dp_adapt(a, now);
     if (sound) a->a_heard = now;
     UINT8 q = (UINT8)(a->acp << 2);
     if (sound && !a->streaming) {
         if (av_cmd(a, AV_START, &q, 1)) {
             a->streaming = true;
             a->npend = 0;
+            a->a_since = now_ms();
+            a->a_frames = a->t_enc = a->t_send = 0;
+            a->bp_low = a->sbc.bitpool;
             kprintf("[BTHAUD] %s: A2DP stream started\n", a->name);
         }
     } else if (!sound && a->streaming && now - a->a_heard > IDLE_MS) {
         a->streaming = false;
-        if (av_cmd(a, AV_SUSPEND, &q, 1)) kprintf("[BTHAUD] %s: A2DP stream suspended (%u packets)\n", a->name, a->seq);
+        if (av_cmd(a, AV_SUSPEND, &q, 1))
+            kprintf("[BTHAUD] %s: A2DP stream suspended (%u packets; %u ms of sound in %u ms, %u ms of it encoding and %u "
+                    "sending; bitpool %u, %u at the lowest)\n", a->name, a->seq, (UINT32)(a->a_frames * 1000 / a->sbc.rate),
+                    (UINT32)(now_ms() - a->a_since), (UINT32)(a->t_enc / 10000), (UINT32)(a->t_send / 10000),
+                    a->sbc.bitpool, a->bp_low);
     }
 }
 

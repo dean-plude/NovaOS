@@ -523,7 +523,10 @@ Sound page see them:
   (48 kHz, or 44.1 kHz, joint stereo, the largest bitpool it takes up to
   53) and sends SBC frames in RTP packets on a second L2CAP channel. The
   encoder (`kernel/nt/sbc.c`) is NovaOS's own, written from the A2DP
-  specification in fixed point (the kernel has no floating point). The
+  specification in fixed point (the kernel has no floating point). When
+  sending falls behind (a slow link or radio), it lowers the bitpool, down
+  to 16, and raises it again once it keeps up, as Android's and BlueZ's
+  sources do; each frame says its bitpool, so the headset follows. The
   stream starts when something plays and is suspended after two seconds
   of silence. This output becomes the default.
 - **"Headset (NAME Hands-Free)"**, an output and a microphone: the

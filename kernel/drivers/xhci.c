@@ -592,9 +592,11 @@ wait:;
             if (done && (xp->code == CC_SUCCESS || xp->code == CC_SHORT_PACKET)) return (int)xp->moved;
             return USB_TIMED_OUT;
         }
-        /* A pipe that may wait long sleeps a tick between polls once a
-         * millisecond has gone by, rather than spin */
-        if (p->patient && rdtsc() - start > g_tsc_per_tick / 10) UsbDelay(1);
+        /* A pipe that may wait long sleeps until the next tick between
+         * polls once a millisecond has gone by, rather than spin
+         * (UsbDelay(1) would sleep two: a Bluetooth radio, which takes a
+         * transfer per ACL packet, could not keep up with an A2DP stream) */
+        if (p->patient && rdtsc() - start > g_tsc_per_tick / 10) UsbDelay(0);
         else pause_cpu();
     }
 }

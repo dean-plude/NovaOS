@@ -3,6 +3,7 @@
 NovaOS, as a QEMU usb-redir device.
 
     tools/btpeer.py --port 10718 [--ctl PORT] [--audio DIR]
+    tools/btpeer.py --decode DIR/bt-a2dp.sbc DIR/bt-a2dp.wav
 
 QEMU has no Bluetooth radio of its own any more (its old usb-bt-dongle
 went in QEMU 5), so this program is one, behind QEMU's usb-redir device
@@ -53,8 +54,10 @@ In range, as the radio's inquiry finds them, are:
                      kHz mono).  As an A2DP sink it answers AVDTP on PSM
                      0x19 (one SBC sink end point: 44.1 or 48 kHz, every
                      channel mode, block length and allocation, 8 or 4
-                     subbands, bitpool 2-53) and decodes the stream's SBC
-                     frames into DIR/bt-a2dp.wav.
+                     subbands, bitpool 2-53) and writes the stream's SBC
+                     frames to DIR/bt-a2dp.sbc, which --decode turns into a
+                     WAV file afterwards (decoding SBC in Python while the
+                     stream runs would slow the radio down).
 
 The controller half is emulated here, and so is each device's own host
 half: its L2CAP signalling (connection, configuration, disconnection),
@@ -92,7 +95,7 @@ MIC_HZ = 600                                                    # what the heads
 AUDIO_DIR = None                                                # --audio
 VID, PID = 0x1209, 0x000D
 EVT_MPS, ACL_MPS = 64, 64
-ACL_LEN, ACL_PKTS = 310, 8
+ACL_LEN, ACL_PKTS = 1021, 8                                     # (as Intel's radios)
 RADIO_ADDR = bytes([0x00, 0x00, 0x41, 0x56, 0x4F, 0x4E])      # 4E:4F:56:41:00:00, little-endian as HCI sends it
 
 MOUSE_REPORT = bytes([
@@ -507,7 +510,7 @@ class Sink:
     def __init__(self, radio, link):
         self.radio, self.link = radio, link
         self.sig = self.media = None                         # (the host's CIDs)
-        self.dec, self.wav, self.packets = SbcDecoder(), None, 0
+        self.sbc, self.packets = None, 0
 
     def signal(self, f):
         if len(f) < 2 or f[0] & 3:                              # (commands only: the host asks nothing of ours)
@@ -546,19 +549,24 @@ class Sink:
     def media_in(self, f):
         if len(f) < 13:
             return
-        off = 12 + 4 * (f[0] & 0x0F)
-        data, pcm = f[off + 1:], []
         self.packets += 1
-        while data:
-            n, out = self.dec.frame(data)
-            if not n:
-                break
-            pcm += out
-            data = data[n:]
-        if pcm and AUDIO_DIR:
-            if not self.wav:
-                self.wav = Wav(os.path.join(AUDIO_DIR, 'bt-a2dp.wav'), self.dec.rate, self.dec.channels)
-            self.wav.add(struct.pack('<%dh' % len(pcm), *pcm))
+        if AUDIO_DIR:
+            if not self.sbc:
+                self.sbc = open(os.path.join(AUDIO_DIR, 'bt-a2dp.sbc'), 'wb')
+            self.sbc.write(f[12 + 4 * (f[0] & 0x0F) + 1:])     # (the frames, after RTP's header and SBC's)
+            self.sbc.flush()
+
+
+def decode(src, dst):
+    """An SBC stream (frames back to back) into a 16-bit WAV file"""
+    data, dec, pcm = open(src, 'rb').read(), SbcDecoder(), []
+    while data:
+        n, out = dec.frame(data)
+        if not n:
+            break
+        data = data[n:]
+        pcm += out
+    Wav(dst, dec.rate or 48000, dec.channels or 2).add(struct.pack('<%dh' % len(pcm), *pcm))
 
 
 class Link:
@@ -862,7 +870,8 @@ class Radio:
             link.chans[dcid] = [psm, scid, False, role]
             self.sig(link, 0x03, ident, struct.pack('<HHHH', dcid, scid, 0, 0))
             link.ident = (link.ident + 1) & 0xFF or 1
-            self.sig(link, 0x04, link.ident, struct.pack('<HH', scid, 0) + bytes([0x01, 2]) + struct.pack('<H', 672))
+            mtu = 895 if role == 'media' else 672                  # (a media channel takes bigger packets, as headsets' do)
+            self.sig(link, 0x04, link.ident, struct.pack('<HH', scid, 0) + bytes([0x01, 2]) + struct.pack('<H', mtu))
             log(f'l2cap {psm:#04x} open')
             if psm == 0x13:
                 log('hid open')
@@ -1207,9 +1216,12 @@ def ctl_loop(port, conns):
 
 def main():
     ap = argparse.ArgumentParser()
+    if sys.argv[1:2] == ['--decode']:
+        decode(sys.argv[2], sys.argv[3])
+        return
     ap.add_argument('--port', type=int, required=True)
     ap.add_argument('--ctl', type=int)
-    ap.add_argument('--audio', help='where the headset writes what it hears (bt-hfp.wav, bt-a2dp.wav)')
+    ap.add_argument('--audio', help='where the headset writes what it hears (bt-hfp.wav, bt-a2dp.sbc)')
     a = ap.parse_args()
     global AUDIO_DIR
     AUDIO_DIR = a.audio

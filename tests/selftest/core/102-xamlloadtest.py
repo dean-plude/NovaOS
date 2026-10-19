@@ -1,5 +1,5 @@
 # xamlloadtest: Microsoft's XAML resource dictionaries and object writer
-# built for NovaOS (roadmap step 32.3, part 7): XAML text read by XmlLite,
+# built for NovaOS (roadmap step 32.3, parts 7 and 8): XAML text read by XmlLite,
 # parsed and written by the parser's object writer runtime into the core's
 # objects, a live CResourceDictionary with merged and theme dictionaries
 DOC = ('`xamlloadtest` (Microsoft\'s XAML object writer and `CResourceDictionary`, built from its sources: '

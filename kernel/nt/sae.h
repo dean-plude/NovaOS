@@ -41,6 +41,10 @@ typedef struct {
  * secret and mask, the scalar and element.  False if no element was
  * found (a password, in theory) or Mbed TLS failed. */
 bool SaeCommit(SaeState *s, const char *password, const UINT8 sta[6], const UINT8 ap[6]);
+/* The same with the secret @rand and @mask given (SAE_PRIME_LEN bytes each,
+ * big-endian): the known-answer test's (tests/host/sae_handshake.c) */
+bool SaeCommitWith(SaeState *s, const char *password, const UINT8 sta[6], const UINT8 ap[6], const UINT8 *rand,
+                   const UINT8 *mask);
 /* The access point's commit (@scalar, @element: big-endian, as in its
  * frame) checked (in range, on the curve, not the station's own sent back)
  * and the shared secret's KCK, PMK and PMKID derived */

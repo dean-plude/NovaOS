@@ -255,6 +255,7 @@ set(KERNEL_C_SOURCES
     nt/ndis.c
     nt/wdi.c
     nt/wpa.c
+    nt/sae.c
     nt/ntoskrnl.c
     nt/pnp.c
     nt/po.c

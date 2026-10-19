@@ -82,6 +82,6 @@ static inline const UINT8 *WpaTk(const WpaSupplicant *s) { return s->ptk + WPA_K
 /* The PTK for @akm (WPA_AKM_*) from @pmk, both addresses and both nonces:
  * the 802.11 PRF-384 (HMAC-SHA1) for PSK, KDF-SHA256-384 for SAE */
 void WpaDerivePtk(UINT8 akm, const UINT8 *pmk, const UINT8 aa[6], const UINT8 spa[6], const UINT8 *anonce,
-                  const UINT8 *snonce, UINT8 ptk[WPA_KCK_LEN + WPA_KEK_LEN + WPA_TK_LEN]);
+                  const UINT8 *snonce, UINT8 *ptk);
 /* Forget every key */
 void WpaClear(WpaSupplicant *s);

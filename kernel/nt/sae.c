@@ -22,6 +22,7 @@
  * standard's newer PWE) and the other groups are not here: an access point
  * that insists on them is refused with a clear reason.
  */
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS              /* (a point's coordinates, a group's P, B and N) */
 #include "sae.h"
 #include "../lib/string.h"
 #include "../net/tls.h"
@@ -168,6 +169,12 @@ static bool derive_pwe(Ctx *c, const char *password, const UINT8 sta[6], const U
 
 bool SaeCommit(SaeState *s, const char *password, const UINT8 sta[6], const UINT8 ap[6])
 {
+    return SaeCommitWith(s, password, sta, ap, NULL, NULL);
+}
+
+bool SaeCommitWith(SaeState *s, const char *password, const UINT8 sta[6], const UINT8 ap[6], const UINT8 *rand,
+                   const UINT8 *mask)
+{
     UINT8 token[SAE_TOKEN_MAX], token_len = s->token_len;
     memcpy(token, s->token, token_len);
     SaeClear(s);
@@ -178,9 +185,11 @@ bool SaeCommit(SaeState *s, const char *password, const UINT8 sta[6], const UINT
     ok = ok && derive_pwe(&c, password, sta, ap) && point_write(&c.P, s->pwe);
     /* rand and mask (c.a, c.b); scalar = rand + mask mod r, which must be more than 1 */
     for (int tries = 0; ok && tries < 8; tries++) {
-        ok = random_scalar(&c, &c.a) && random_scalar(&c, &c.b) && !mbedtls_mpi_add_mpi(&c.t, &c.a, &c.b) &&
-             !mbedtls_mpi_mod_mpi(&c.t, &c.t, &c.grp.N);
+        ok = rand ? !mbedtls_mpi_read_binary(&c.a, rand, SAE_PRIME_LEN) && !mbedtls_mpi_read_binary(&c.b, mask, SAE_PRIME_LEN)
+                  : random_scalar(&c, &c.a) && random_scalar(&c, &c.b);
+        ok = ok && !mbedtls_mpi_add_mpi(&c.t, &c.a, &c.b) && !mbedtls_mpi_mod_mpi(&c.t, &c.t, &c.grp.N);
         if (ok && mbedtls_mpi_cmp_int(&c.t, 1) > 0) break;
+        if (rand) ok = false;
     }
     /* element = -(mask * PWE) */
     ok = ok && !mbedtls_ecp_mul(&c.grp, &c.Q, &c.b, &c.P, rng, NULL) &&

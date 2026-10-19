@@ -1,5 +1,5 @@
 /* xamlloadtest.exe — Microsoft's XAML resource dictionaries and object
- * writer built for NovaOS (roadmap step 32.3, parts 7 to 9;
+ * writer built for NovaOS (roadmap step 32.3, parts 7 to 10;
  * docs/design/windows-ui-xaml.md): CResourceDictionary from
  * dxaml/xcp/core/core/elements (Resources.cpp: keyed resources and their
  * lookup) and the parser's object writer runtime from dxaml/xcp/core/Parser
@@ -13,7 +13,9 @@
  * (userland/windows_ui_xaml/src/property_data.cpp), searched by lookup;
  * and (part 9) all of it on the XAML core's own core services
  * (CCoreServices, core/dll/xcpcore.cpp), which load the XAML as
- * XamlReader.Load has them load it (CCoreServices::ParseXaml).
+ * XamlReader.Load has them load it (CCoreServices::ParseXaml); and
+ * (part 10) the core made as the framework makes it, by
+ * CCoreServices::Create on the platform layer's services.
  *
  * Until the core's generated type table builds, the table here activates
  * the handful of types the cases use (below).
@@ -33,9 +35,7 @@
 #include <TypeTableStructsPrivate.h>
 #include <CStaticLock.h>
 #include <ParserAPI.h>
-#include <FrameworkTheming.h>
-#include <ThemeWalkResourceCache.h>
-#include "TestThemingInterop.h"
+#include <SystemThemingInterop.h>
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
@@ -69,29 +69,26 @@ static std::string narrow(const xstring_ptr_view &s)
 }
 
 /* the core: the XAML core's own core services (CCoreServices,
- * core/dll/xcpcore.cpp, built since part 9), made by its own constructor;
- * the objects it makes name it, and the parser reads it through its
- * IParserCoreServices.  CCoreServices::Create sets up the rest of the
- * core's services, the platform layer's queues and work items, the media
- * queue, the text core and render target bitmaps, which do not build yet:
- * what the resource dictionary reads of what Create sets is set here as
- * Create sets it, through the test hooks class the core names as its
- * friend (the core's thread: collections check their items against it;
- * the theme cache and the theming, here over Microsoft's test theming,
- * system theme Dark).  XamlReader.Load loads XAML as load() does, through
- * CCoreServices::ParseXaml. */
-namespace DirectUI {
-class DxamlCoreTestHooks {
-public:
-    static CCoreServices *Make()
-    {
-        CCoreServices *c = new CCoreServices;
-        c->m_nThreadID = GetCurrentThreadId();
-        c->m_spTheming.reset(new FrameworkTheming(std::make_shared<TestThemingInterop>(), []() { return S_OK; }));
-        c->m_themeWalkResourceCache.reset(new ThemeWalkResourceCache());
-        return c;
-    }
-};
+ * core/dll/xcpcore.cpp, built since part 9), made as the framework makes
+ * them (DXamlCore::InitializeInstance): the platform layer's services
+ * (CWindowsServices, plat/win/browserdesktop/xcpwin.cpp, built since
+ * part 10: its queues, work items and security token), handed to
+ * ObtainCoreServices, which has CCoreServices::Create set up the rest (the
+ * theming over the system's, the theme cache, the media queue, the text
+ * core and render target bitmaps); the system theme is fixed at Dark
+ * through the theming's own test hook, so the cases do not depend on the
+ * machine's.  The objects the core makes name it, and the parser reads it
+ * through its IParserCoreServices; XamlReader.Load loads XAML as load()
+ * does, through CCoreServices::ParseXaml. */
+static CCoreServices *make_core()
+{
+    IPlatformServices *pal = nullptr;
+    CCoreServices *c = nullptr;
+    SystemThemingInterop::OverrideSystemTheme(Theming::Theme::Dark);
+    CHECK_HR("ObtainPlatformServices", ObtainPlatformServices(&pal));
+    CHECK_HR("ObtainCoreServices (CCoreServices::Create)", pal ? ObtainCoreServices(pal, &c) : E_POINTER);
+    CHECK("the core services", c != nullptr);
+    return c;
 }
 
 static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out = nullptr);
@@ -110,7 +107,8 @@ static CCoreServices *core()
 {
     static CCoreServices *c;
     if (!c) {
-        c = DirectUI::DxamlCoreTestHooks::Make();
+        c = make_core();
+        if (!c) return nullptr;
         CDependencyObject *theme = load(c_themeResources);
         c->SetThemeResources(do_pointer_cast<CResourceDictionary>(theme));
         ReleaseInterface(theme);
@@ -127,7 +125,7 @@ static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out)
     buffer.m_count = (uint32_t)(wcslen(xaml) * sizeof(wchar_t));
     buffer.m_buffer = reinterpret_cast<const BYTE *>(xaml);
     CDependencyObject *root = nullptr;
-    HRESULT hr = core()->ParseXaml(buffer, /* bForceUtf16 */ true, /* bCreatePermanentNamescope */ false,
+    HRESULT hr = !core() ? E_FAIL : core()->ParseXaml(buffer, /* bForceUtf16 */ true, /* bCreatePermanentNamescope */ false,
                                    /* bRequiresDefaultNamespace */ false, &root);
     if (SUCCEEDED(hr) && !root) hr = E_POINTER;
     if (hr_out) *hr_out = hr;

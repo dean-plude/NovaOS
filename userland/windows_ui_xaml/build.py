@@ -79,7 +79,8 @@ deferral/lib/Microsoft.UI.Xaml.Deferral.vcxproj
 winuri/lib/winuri.vcxproj
 colors/lib/Microsoft.UI.Xaml.Colors.vcxproj
 simple/lib/Microsoft.UI.Xaml.Framework.SimpleProperties.vcxproj
-namescope/lib/Microsoft.UI.Xaml.NameScope.vcxproj'''.split()
+namescope/lib/Microsoft.UI.Xaml.NameScope.vcxproj
+theminginterop/lib/Microsoft.UI.Xaml.ThemingInterop.vcxproj'''.split()
 
 # The XAML core's libraries built so far (dxaml/xcp/core/...): the markup
 # parser, its object writer runtime (which makes the core's objects from
@@ -99,14 +100,36 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
                   ('core/core/elements/libexcept/elements.except.vcxproj', 'core/core/elements/sources.props',
                    'core/core/elements/pchexcept/precomp.h',
                    [os.path.join(XCP, 'core', 'core', 'elements', 'DeferredKeys.cpp')]),
-                  ('core/xcpcore.vcxproj', 'core/common.props', 'core/precomp.h',
-                   [os.path.join(XCP, 'core', 'hw', f) for f in ('MaxTextureSizeProvider.cpp', 'AtlasRequestProvider.cpp')])]
+                  ('core/xcpcore.vcxproj', 'core/common.props', os.path.join(HERE, 'src', 'core_precomp.h'),
+                   [os.path.join(XCP, 'core', 'hw', f) for f in ('MaxTextureSizeProvider.cpp', 'AtlasRequestProvider.cpp')] +
+                   [os.path.join(XCP, 'core', 'text', 'common', 'TextCore.cpp')]),
+                  ('core/native/text/Common/Native.Text.Common.vcxproj', 'core/common.props',
+                   'core/native/text/Common/precomp.h', []),
+                  ('core/core/elements/lib/elements.vcxproj', 'core/core/elements/sources.props',
+                   'core/core/elements/pch/precomp.h', []),
+                  ('plat/win/browserdesktop/platwinbrowserdesktop.vcxproj', 'plat/win/browserdesktop/sources.props',
+                   'plat/win/browserdesktop/precomp.h', [])]
 # the sources of a CORE_LIBRARIES project built so far, when not all of
-# them: of the core's own library (xcpcore.vcxproj), the core services,
-# CCoreServices (dll/xcpcore.cpp, with its name scopes; and, from the
-# hardware rendering's library, core/hw, the two providers it holds); what
-# they call in the rest of the core stands in until it builds (unbuilt())
-CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namescope.cpp')}
+# them, which make xaml_core.lib: of the core's own library
+# (xcpcore.vcxproj), the core services, CCoreServices (dll/xcpcore.cpp,
+# with its name scopes; and, from the hardware rendering's library,
+# core/hw, the two providers it holds), and what CCoreServices::Create
+# makes: the media queue manager and the render target bitmap manager;
+# the text core, CTextCore (core/text's TextCore.cpp, compiled with the
+# core's sources, src/core_precomp.h: the text core's own precompiled
+# header includes the closed Page/Table Layout Services' header), and its
+# Windows half, WinTextCore (core/native/text);
+# the geometry builder, CGeometryBuilder (the elements' geometry.cpp); and
+# the platform layer, CWindowsServices (plat/win/browserdesktop: gps, the
+# platform services ObtainPlatformServices hands the core, with its
+# thread pool work items).  What they call in the rest of the core stands
+# in until it builds (unbuilt())
+CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namescope.cpp', 'dll/rendertargetbitmapmgr.cpp',
+                                         'dethunk/elements/MediaQueue.cpp'),
+                'core/native/text/Common/Native.Text.Common.vcxproj': ('WinTextCore.cpp',),
+                'core/core/elements/lib/elements.vcxproj': ('../geometry.cpp',),
+                'plat/win/browserdesktop/platwinbrowserdesktop.vcxproj': ('xcpwin.cpp', 'PlatformServices.cpp',
+                                                                          'WinThreadPool.cpp', 'early_init.cpp')}
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
@@ -115,7 +138,14 @@ CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namesco
 # holds Windows.Devices.Input's keyboard capabilities
 CORE_FIRST = {'core/core/elements/libexcept/elements.except.vcxproj': ['windows.applicationmodel.h', 'windows.devices.input.h'],
               'core/xcpcore.vcxproj': ['windows.ui.viewmanagement.h', 'windows.applicationmodel.h',
-                                       'windows.devices.input.h']}
+                                       'windows.devices.input.h'],
+              'core/core/elements/lib/elements.vcxproj': ['windows.applicationmodel.h', 'windows.devices.input.h']}
+# (and the native text's and the platform layer's as the core's, with the
+# composition's compositor, which they hold through their DirectManipulation
+# service's header)
+CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] = \
+    CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj'] = \
+    CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
 PROGRAM_CORE = {'parser': 0, 'elements': 2, 'core': 3}
@@ -332,6 +362,7 @@ def library(b, odir):
             srcs = [REPLACED.get(os.path.relpath(s, os.path.join(XCP, 'components')).replace(os.sep, '/'), s)
                     for s in p['sources']] + ADDED.get(proj, [])
             objs += b.compile_many(srcs, odir, prefix, f + extra, headers, compiler='clang++')
+        _core_objs[:] = []
         for proj, sources, pch, added in CORE_LIBRARIES:
             p = vcxproj.read(os.path.join(XCP, proj), PROPS)
             prefix = 'xaml_' + proj.replace('/', '_').rsplit('_', 1)[0] + '_'
@@ -340,7 +371,7 @@ def library(b, odir):
             built = b.compile_many(srcs + added, odir, prefix, f + core_flags(proj, sources, pch), headers,
                                    compiler='clang++')
             if proj in CORE_SOURCES:
-                _core_objs[:] = built
+                _core_objs.extend(built)
             else:
                 objs += built
         for out, members in ((lib, objs), (core_lib, _core_objs)):
@@ -492,14 +523,14 @@ def unbuilt(b, odir, libs):
         asm = ['.text']
         for kind, ret in (('hr', ['movl $0x80004001, %eax']), ('zero', ['xorl %eax, %eax', 'xorps %xmm0, %xmm0']),
                           ('void', []), ('stop', None)):
-            asm += [f'nova_xaml_unbuilt_{kind}:', '    subq $40, %rsp', '    movq %r11, %rcx']
+            asm += [f'nova_xaml_unbuilt_as_{kind}:', '    subq $40, %rsp', '    movq %r11, %rcx']
             asm += ['    callq nova_xaml_unbuilt_stop'] if ret is None else \
                 ['    callq nova_xaml_unbuilt_report', '    addq $40, %rsp'] + ['    ' + x for x in ret] + ['    retq']
         directives = []
         for i, n in enumerate(names):
             asm += [f'.globl nova_xaml_unbuilt_{i}', f'nova_xaml_unbuilt_{i}:',
                     f'    leaq nova_xaml_unbuilt_name_{i}(%rip), %r11',
-                    f'    jmp nova_xaml_unbuilt_{_undecorated_kind(n, demangled.get(n, ""))}']
+                    f'    jmp nova_xaml_unbuilt_as_{_undecorated_kind(n, demangled.get(n, ""))}']
             directives.append(f'/alternatename:{n}=nova_xaml_unbuilt_{i}')
         asm += ['.section .rdata,"dr"'] + [f'nova_xaml_unbuilt_name_{i}: .asciz "{n}"' for i, n in enumerate(names)]
         asm += ['.section .drectve,"yn"'] + [f'    .ascii " {d}"' for d in directives]

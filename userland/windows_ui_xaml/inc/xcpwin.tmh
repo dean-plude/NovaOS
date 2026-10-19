@@ -1,0 +1,11 @@
+// NovaOS: what the WPP preprocessor (tracewpp.exe) generates for
+// plat/win/browserdesktop/xcpwin.cpp, its software tracing: compiled out,
+// as TraceLogging is (TraceLoggingProvider.h); no level or flag is ever
+// enabled.
+#pragma once
+#include <evntrace.h> // TRACE_LEVEL_*
+
+#define WPP_INIT_TRACING(name) ((void)0)
+#define WPP_CLEANUP() ((void)0)
+#define WPP_LEVEL_FLAGS_ENABLED(level, flags) (false)
+#define DoTraceLevelMessage(level, flags, ...) ((void)0)

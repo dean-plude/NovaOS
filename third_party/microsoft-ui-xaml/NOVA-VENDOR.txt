@@ -29,14 +29,20 @@ WinURI's), core/dll/services.cpp, the isolated unit tests' stubs and
 metadata mocks (components/unittests/stubs, less seven stubs NovaOS does
 not link, and components/metadata/mocks; xaml_teststubs.lib, linked by
 xamlbasetest), the isolated parser unit tests' mock core services
-(components/parser/unittests, linked by xamlparsetest, and
-components/theming/unittests' TestThemingInterop, linked by xamlloadtest, with
+(components/parser/unittests, linked by xamlparsetest, with
 dxaml/test/native/inc/XamlLogging.h), the components'
 precompiled header (components/pch), headers from dxaml/xcp/inc, core/inc,
 pal and the components' inc directories those include, the core services
 (core/dll/xcpcore.cpp and xcpcore_namescope.cpp, with core/xcpcore.vcxproj,
 core/hw's MaxTextureSizeProvider.cpp and AtlasRequestProvider.cpp, and the
-headers they include), external/inc's gsl
+headers they include), what CCoreServices::Create makes (core/dll's
+rendertargetbitmapmgr.cpp, core/dethunk/elements/MediaQueue.cpp,
+core/text/common/TextCore.cpp, core/native/text/Common/WinTextCore.cpp with
+its project and precompiled header, core/core/elements/geometry.cpp with
+the elements' lib/elements.vcxproj, components/theminginterop), the
+platform layer (plat/win/browserdesktop's xcpwin.cpp, PlatformServices.cpp,
+WinThreadPool.cpp and early_init.cpp, with its project, sources.props and
+precompiled header) and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

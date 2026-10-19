@@ -595,9 +595,11 @@ def camera_boot(work):
 def bluetooth_boot(work):
     """A USB Bluetooth radio on an xHCI controller, tools/btpeer.py behind a
     QEMU usb-redir device (port 10718, control port 10818), with a mouse and
-    a headset in range (tests/selftest/devices/bluetooth)"""
+    a headset in range (tests/selftest/devices/bluetooth); what the headset
+    plays goes to bt-a2dp.wav and bt-hfp.wav in @work"""
     log = os.path.join(work, 'btpeer.log')
-    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'btpeer.py'), '--port', '10718'],
+    p = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'btpeer.py'), '--port', '10718',
+                          '--audio', work],
                          stdout=open(log, 'w'), stderr=subprocess.STDOUT)
     for _ in range(100):
         if 'listening' in open(log).read() or p.poll() is not None:

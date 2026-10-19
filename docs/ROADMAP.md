@@ -868,9 +868,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   mouse and a headset in range in the devices suite's `bluetooth` boot:
   inquiry, pairing both, the mouse moving the cursor and reconnecting
   after a restart, an `ibtusb`-style filter installed with `pnputil`.
-  Still needed: headset audio (SCO and A2DP), reconnects the device
-  starts, Settings' Bluetooth page, and pairing a real mouse and headset
-  on the T14 with Intel's driver, including after sleep.
+  Headset audio is done in QEMU too (`kernel/nt/bthaudio.c`): A2DP stereo
+  with NovaOS's own SBC encoder and the hands-free profile's voice link
+  (eSCO on the radio's isochronous endpoints) give a paired headset two
+  outputs and a microphone, as a USB headset has; the `bluetooth` boot
+  plays a tone through each and records from the headset. Still needed:
+  reconnects the device starts, Settings' Bluetooth page, and pairing a
+  real mouse and headset on the T14 with Intel's driver, including after
+  sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
   show the built-in webcam in a camera app. Done in QEMU: the UVC class
   driver (`kernel/nt/usbvideo.c`), Media Foundation's capture path

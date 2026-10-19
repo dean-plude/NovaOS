@@ -52,8 +52,12 @@
  * wait in the ring until it is full (then the newest are dropped, as a
  * controller with no transfer scheduled would miss them).  Aborting the
  * pipe or selecting another alternate setting stops the stream.
- * Isochronous OUT is not supported yet (USB audio is NovaOS's own
- * driver, drivers/usbaudio.c).  When the device is unplugged its
+ * Isochronous OUT (a Bluetooth radio's SCO voice, bthusb.c) runs the
+ * other way: an URB's packets go into the pipe's ring, waiting while it is
+ * full (so a client is held to the stream's pace), and the core's stream
+ * takes them as it queues each transfer, an empty packet when no URB has
+ * one waiting.  (USB audio devices are NovaOS's own driver,
+ * drivers/usbaudio.c, not URBs.)  When the device is unplugged its
  * requests fail with USBD_STATUS_DEVICE_GONE and the PnP manager is told
  * (surprise removal).
  */
@@ -103,11 +107,12 @@ typedef struct {
     NT_KEVENT      wake, idle;         /* work for the thread; nothing active */
     volatile bool  abort;              /* ABORT_PIPE: the active transfer gives up */
     bool           thread;
-    /* isochronous IN: packets the core's stream received, waiting for URBs */
+    /* isochronous: packets the core's stream received, waiting for URBs (IN),
+     * or URBs' packets waiting for the stream (OUT) */
     UINT8         *ring;               /* ISO_RING packets of psize bytes */
     UINT16        *ring_len;
     UINT32         psize;
-    volatile UINT32 wr, rd;            /* packets put in (the callback), taken out (the thread) */
+    volatile UINT32 wr, rd;            /* packets put in, taken out (IN: the callback, the thread; OUT: the other way) */
     UINT32         dropped;
 } UsbdPipe;
 
@@ -361,7 +366,7 @@ out:
     return st;
 }
 
-/* ---- isochronous IN ---- */
+/* ---- isochronous ---- */
 
 /* The core's stream: a finished transfer's packets into the ring
  * (interrupts off, the core's lock held: copy and go) */
@@ -377,6 +382,23 @@ static void iso_in(UsbPipe *up, UINT8 *data, UINT16 *lens, int packets, void *ct
         memcpy(p->ring + (size_t)slot * p->psize, data + (size_t)i * psize, n);
         p->ring_len[slot] = (UINT16)n;
         __atomic_store_n(&p->wr, wr + 1, __ATOMIC_RELEASE);
+    }
+}
+
+/* The core's stream (OUT): each packet of a transfer about to be queued,
+ * from the ring; an empty one when no URB has a packet waiting
+ * (interrupts off, the core's lock held) */
+static void iso_out(UsbPipe *up, UINT8 *data, UINT16 *lens, int packets, void *ctx)
+{
+    UsbdPipe *p = ctx;
+    UINT32 psize = UsbIsoPacketSize(up);
+    for (int i = 0; i < packets; i++) {
+        UINT32 rd = p->rd;
+        if (__atomic_load_n(&p->wr, __ATOMIC_ACQUIRE) == rd) { lens[i] = 0; continue; }
+        UINT32 slot = rd % ISO_RING, n = p->ring_len[slot] < psize ? p->ring_len[slot] : psize;
+        memcpy(data + (size_t)i * psize, p->ring + (size_t)slot * p->psize, n);
+        lens[i] = (UINT16)n;
+        __atomic_store_n(&p->rd, rd + 1, __ATOMIC_RELEASE);
     }
 }
 
@@ -400,7 +422,7 @@ static UINT32 iso_start(UsbdPipe *p)
     p->ring = kmalloc((size_t)ISO_RING * p->psize);
     p->ring_len = kzalloc(ISO_RING * sizeof(UINT16));
     p->wr = p->rd = p->dropped = 0;
-    if (!p->ring || !p->ring_len || !UsbIsoStart(p->pipe, ISO_XFERS, ISO_PACKETS, iso_in, p)) {
+    if (!p->ring || !p->ring_len || !UsbIsoStart(p->pipe, ISO_XFERS, ISO_PACKETS, p->addr & 0x80 ? iso_in : iso_out, p)) {
         kfree(p->ring);
         kfree(p->ring_len);
         p->ring = NULL;
@@ -412,9 +434,10 @@ static UINT32 iso_start(UsbdPipe *p)
     return USBD_STATUS_SUCCESS;
 }
 
-/* An ISOCH_TRANSFER URB (IN): each of its packets is the stream's next
+/* An ISOCH_TRANSFER URB.  IN: each of its packets is the stream's next
  * packet, at its offset in the buffer (cut to the room up to the next
- * packet's offset) */
+ * packet's offset).  OUT: each packet (from its offset to the next one's)
+ * goes into the ring, for the stream to send in its turn. */
 static UINT32 run_iso(UsbdPipe *p, UrbIso *u, NT_IRP *irp)
 {
     UsbdDev *v = p->dev;
@@ -422,12 +445,33 @@ static UINT32 run_iso(UsbdPipe *p, UrbIso *u, NT_IRP *irp)
     UINT32 len = u->TransferBufferLength, n = u->NumberOfPackets, total = 0;
     if (!buf || !n || n > 1024 || u->Hdr.Length < sizeof(UrbIso) + (n - 1) * sizeof(UsbdIsoPacket))
         return USBD_STATUS_INVALID_PARAMETER;
-    if (!(p->addr & 0x80)) return USBD_STATUS_NOT_SUPPORTED;
     UINT32 st = iso_start(p);
     if (st) return st;
     u->StartFrame = (UINT32)(sched_ticks() * 10);
     u->ErrorCount = 0;
     UINT32 i;
+    if (!(p->addr & 0x80)) {
+        for (i = 0; i < n; i++) {
+            UsbdIsoPacket *k = &u->IsoPacket[i];
+            UINT32 end = i + 1 < n ? u->IsoPacket[i + 1].Offset : len;
+            UINT32 size = k->Offset < end && end <= len ? end - k->Offset : 0;
+            for (;;) {                                           /* (room comes as the stream sends) */
+                if (v->gone || v->usb->gone) { st = USBD_STATUS_DEVICE_GONE; goto out; }
+                if (p->abort || irp->Cancel) { st = USBD_STATUS_CANCELED; goto out; }
+                if (p->wr - __atomic_load_n(&p->rd, __ATOMIC_ACQUIRE) < ISO_RING) break;
+                sched_sleep_tick();
+            }
+            if (size > p->psize) { size = p->psize; k->Status = USBD_STATUS_ISOCH_REQUEST_FAILED; u->ErrorCount++; }
+            else k->Status = USBD_STATUS_SUCCESS;
+            UINT32 slot = p->wr % ISO_RING;
+            memcpy(p->ring + (size_t)slot * p->psize, buf + k->Offset, size);
+            p->ring_len[slot] = (UINT16)size;
+            k->Length = 0;
+            total += size;
+            __atomic_store_n(&p->wr, p->wr + 1, __ATOMIC_RELEASE);
+        }
+        goto out;
+    }
     for (i = 0; i < n; i++) {
         UsbdIsoPacket *k = &u->IsoPacket[i];
         UINT32 end = i + 1 < n ? u->IsoPacket[i + 1].Offset : len;

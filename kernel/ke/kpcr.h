@@ -66,7 +66,8 @@ typedef struct _KPCR {
     volatile UINT32 InIsr;       /* +0x58 running Windows drivers' interrupt routines (nt/intr.c) */
     volatile UINT32 DpcPending;  /* +0x5C a DPC interrupt asked for meanwhile, sent once they return */
     volatile UINT32 EoiSent;     /* +0x60 the interrupt being handled was ended already (nt/intr.c) */
-    UINT8         Reserved[0x184 - 0x64];
+    UINT32        Interrupts;    /* +0x64 interrupts taken (interrupt_dispatch) */
+    UINT8         Reserved[0x184 - 0x68];
     /* Where Windows drivers look (the WDK inlines read them through GS):
      * KeGetCurrentProcessorNumber gs:0x184, KeGetCurrentThread gs:0x188
      * (KPRCB.Number and KPRCB.CurrentThread in Windows' KPCR) */

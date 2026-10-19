@@ -24,6 +24,7 @@
 #include "gpio.h"
 #include "pci.h"
 #include "throttle.h"
+#include "cstate.h"
 #include "ioapic.h"
 #include "../arch/x86_64/idt.h"
 #include "../arch/x86_64/cpu.h"
@@ -1501,6 +1502,7 @@ static bool load(void)
     GpioProbe();                         /* (before the devices whose interrupts are its pins) */
     uacpi_find_devices("PNP0C50", found_i2c_hid, NULL);
     uacpi_find_devices("ACPI0C50", found_i2c_hid, NULL);
+    CStateProbe();                       /* (the processors' _OSC/_PDC, then their _CST: ke/idle.c) */
     ThrottleProbe();                     /* (before the thermal zones that slow the processors) */
     uacpi_namespace_for_each_child(uacpi_namespace_root(), found_zone, NULL,
                                    UACPI_OBJECT_THERMAL_ZONE_BIT, UACPI_MAX_DEPTH_ANY, NULL);

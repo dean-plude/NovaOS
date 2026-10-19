@@ -32,6 +32,7 @@
 #include "../fs/fsec.h"
 #include "../ke/sleep.h"
 #include "../ke/kpcr.h"
+#include "../ke/idle.h"
 #include "../fs/recovery.h"
 
 #define ST_SUCCESS                 0x00000000u
@@ -2759,7 +2760,8 @@ static UINT64 sys_power_action(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  * PVOID Out, ULONG OutLength): SystemPowerCapabilities (4),
  * SystemBatteryState (5) from the ACPI batteries and AC adapters,
  * ProcessorInformation (11): each CPU's speed (the TSC's) and, while a
- * thermal zone throttles it (hal/throttle.c), the lower MhzLimit,
+ * thermal zone throttles it (hal/throttle.c), the lower MhzLimit, and
+ * its deepest and last idle state (ke/idle.c: MaxIdleState, CurrentIdleState),
  * ThermalInformation (12) of the first thermal zone, LastWakeTime (14) and
  * LastSleepTime (15).  powrprof answers the other levels itself. */
 static UINT64 sys_power_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
@@ -2812,7 +2814,9 @@ static UINT64 sys_power_information(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         if (cap < n * sizeof(p[0])) return ST_BUFFER_TOO_SMALL;
         for (UINT32 i = 0; i < n; i++) {
             UINT32 limit = mhz * ThrottlePercent(i) / 100;
-            p[i] = (Ppi){ i, mhz, limit, limit, 0, 0 };
+            IdleStats st;
+            IdleGetStats(i, &st);
+            p[i] = (Ppi){ i, mhz, limit, limit, st.states - 1, st.last };   /* (idle states: ke/idle.c) */
         }
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, p, n * sizeof(p[0]))) ? ST_SUCCESS : UM_STATUS_ACCESS_VIOLATION;
     }

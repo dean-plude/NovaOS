@@ -10,6 +10,7 @@ NovaOS and for its power handling:
 | The firmware starts what is in its boot entries | The installer writes `\EFI\BOOT\BOOTX64.EFI`, which firmware starts from a disk it has no entry for; the first start from the disk adds a "NovaOS" boot entry and puts it first |
 | The lid, battery and charger sit behind the embedded controller | The ACPI embedded controller driver (`kernel/hal/ec.c`) gives uACPI the controller's registers and runs its events |
 | No S3 sleep (Modern Standby firmware), and maybe no HPET | Sleep is low-power S0 idle with the LPS0 device's calls; the timers come from CPUID leaf 0x15 when there is no HPET |
+| Deep processor C-states, described in `_CST` as MWAIT hints | Idle CPUs wait in the deepest one that suits, CPUs other than the first stop their tick while idle, and idle Windows-driver devices go to D3 ([below](#processor-idle-states-and-device-power)) |
 
 **Status:** all of this is tested in QEMU (the devices suite's `laptop`
 boot, [below](#the-qemu-test)). None of it has run on the T14 or any
@@ -195,6 +196,57 @@ calls, and the screen's picture, not the backlight (that needs a graphics
 driver). `GetPwrCapabilities` reports `AoAc` (Modern Standby) there
 instead of S3. On firmware that has S3, sleep is S3.
 
+## Processor idle states and device power
+
+Roadmap step 28.4 (battery life), first part. A CPU with nothing to run
+waits in a C-state (`kernel/ke/idle.c`):
+
+- Each processor object is told what NovaOS can do (`_OSC` with Intel's
+  processor UUID, else `_PDC`: C1 with HLT, C2/C3 through I/O, C1-C3
+  through MWAIT) and its `_CST` is read (`kernel/hal/cstate.c`), as
+  Windows and Linux do. A state is entered with MWAIT and its hint
+  (FFixedHW), by reading its P_LVLx port (System I/O) or with HLT. With no
+  `_CST`, the MWAIT sub-states CPUID leaf 5 lists are used (not in a
+  virtual machine), else HLT.
+- Each time, the CPU takes the deepest state whose exit latency is well
+  inside the time until its timer is next due (twice the latency).
+  States deeper than C1 need an APIC timer that keeps running (ARAT) and
+  C3 an invariant TSC, on bare metal; C3-type I/O states, which need bus
+  master control, are left out.
+- CPUs other than the first stop their 10 ms tick while idle: the timer
+  is armed for the CPU's next timed sleeper (at most a second ahead), and
+  any interrupt starts the tick again. The first CPU keeps ticking for the
+  whole machine (timers, drivers' KTIMERs, load balancing), and the
+  kernel threads that poll on the tick (the desktop, the network stack,
+  the audio mixer, USB and the keyboard and mouse poll) stay on it, so
+  they never wake another CPU each tick.
+- The log has `[IDLE] MWAIT ...` and one `[IDLE] CPU n: C1 (...), C2
+  (...) ..., from \_SB_...._CST` line per CPU.
+  `NtQuerySystemInformation(SystemProcessorIdleInformation)` gives each
+  CPU's time and entries per C-state type, `CallNtPowerInformation
+  (ProcessorInformation)` the deepest and last idle state, and
+  `SystemProcessorPerformanceInformation` each CPU's interrupt count.
+
+Idle devices go to D3 through the NT power IRPs Windows drivers expect
+(`kernel/nt/po.c`): `PoRequestPowerIrp` sends a device power IRP down the
+device's whole stack from the power manager's own thread, `PoSetPowerState`
+records the state, and the PCI bus driver (`kernel/nt/pnp.c`) moves a
+function with PCI power management to D3hot and back through its PMCSR,
+restoring its configuration if D3hot reset it. A KMDF driver that asks for
+S0 idle (`WdfDeviceAssignS0IdleSettings`) is powered down when idle and
+back up for its next request, by the framework, unchanged; a WDM driver
+can use `PoRegisterDeviceForIdleDetection` and `PoSetDeviceBusy`.
+
+Under QEMU an idle CPU still wakes over a hundred times a second (timed
+sleepers, IPIs between CPUs), tick or no tick; which threads do it on the
+T14 is the next thing to look at if its idle drain is too high.
+
+Not yet: the power framework's runtime idle (PoFx components and "device
+power not required"), `_LPI` low-power idle states, NovaOS's own built-in
+drivers powering their devices down, the first CPU stopping its tick, and
+measuring the battery drain on the T14 (the [check](#checks-on-the-t14)
+below).
+
 ## Timers without an HPET
 
 NovaOS calibrates the TSC and the local APIC timer against the HPET. Some
@@ -218,20 +270,24 @@ the CPUID path has had little testing.
 The devices suite's `laptop` boot (`tests/selftest/devices/laptop`)
 starts QEMU without `\_S3` or an HPET, with `tests/acpi/laptop.asl`: an
 embedded controller holding the lid, a battery and the charger, an LPS0
-device, and a thermal zone that passes the lid position the test sets to
-the controller. QEMU emulates no embedded controller, so for the one with
+device, a thermal zone that passes the lid position the test sets to
+the controller, and processor C-states (`_PDC`, then a `_CST` with C1
+and C3 through MWAIT and C2 through a port on a CPU with MWAIT, or C1
+with HLT and C2 through the port on one without, as a KVM guest's CPU is). QEMU emulates no embedded controller, so for the one with
 `_HID` `NOVA0EC1` NovaOS serves a model of one in `ec.c` (the real command
 and status protocol, with an event the AML can raise). The boot has the
 ISO on a USB stick and an empty NVMe disk:
 
 - `battery` reads 60% and 4 hours through the controller;
+- `idletest 1` finds the same C-states (C2 or deeper) on each CPU, both
+  CPUs entering and leaving the deepest while idle, and CPU 1 (not CPU 0) stopping its tick;
 - the lid closes, NovaOS sleeps in S0 idle (with the LPS0 calls), and
   opening it wakes the machine;
 - `install nvme0n1` installs NovaOS on the NVMe disk, and after a restart
   the machine starts from that disk and adds its boot entry.
 
 ```bash
-python3 tools/selftest.py --suite devices --only 'ec battery,lid sleep (S0 idle),install on nvme,start from nvme'
+python3 tools/selftest.py --suite devices --only 'ec battery,idle states,lid sleep (S0 idle),install on nvme,start from nvme'
 ```
 
 ## Checks on the T14
@@ -265,8 +321,15 @@ installed system the Terminal's `dmesg` shows it.
    entry "NovaOS" for this disk`. If the firmware starts something else,
    choose the disk in the F12 menu once.
 6. **Sleep again, installed.** Repeat check 4 on the installed system.
+7. **Idle states and battery drain (step 28.4).** `dmesg` has `[IDLE]
+   MWAIT yes` with `ARAT yes, invariant TSC yes`, and an `[IDLE] CPU n:`
+   line per CPU naming states deeper than C1 from a `_CST`. Then, on
+   battery with the screen at the same brightness, leave the desktop idle
+   for 30 minutes and note the charge used (`battery` before and after);
+   do the same under Windows. NovaOS should use no more than 1.5 times
+   what Windows uses.
 
-If a check fails, the `[EC]`, `[ACPI]`, `[SLEEP]`, `[APIC]` and `[SETUP]`
+If a check fails, the `[EC]`, `[ACPI]`, `[IDLE]`, `[SLEEP]`, `[APIC]` and `[SETUP]`
 lines of the log (or `bootlog.txt` from the stick) say how far it got.
 The audio, touchpad and microphone checks are in
 [hardware.md](hardware.md#checking-audio-and-the-touchpad-on-the-t14-step-214),

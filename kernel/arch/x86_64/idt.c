@@ -16,6 +16,7 @@
 #include "../../ke/printf.h"
 #include "../../ke/syscall.h"
 #include "../../ke/scheduler.h"
+#include "../../ke/idle.h"
 #include "../../ke/sleep.h"
 #include "../../ps/ps.h"
 #include "../../hal/ps2.h"
@@ -407,6 +408,13 @@ void __attribute__((noreturn)) gs_mismatch(InterruptFrame *f, int where)
 void interrupt_dispatch(InterruptFrame *frame)
 {
     uint64_t vector = frame->vector;
+    /* A device, the timer or an IPI: counted per CPU (SystemProcessor-
+     * PerformanceInformation's InterruptCount), and it ends a C-state and
+     * a stopped tick (ke/idle.c) */
+    if (vector >= 32 && vector != VECTOR_SYSCALL) {
+        KiGetCurrentKpcr()->Interrupts++;
+        IdleWake();
+    }
     /* IPIs need nothing the kernel lock guards: handle them without it
      * (another CPU may hold it while it waits for us to flush). */
     if (vector == IPI_WAKE || vector == IPI_TLB) {

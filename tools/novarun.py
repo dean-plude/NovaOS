@@ -169,7 +169,9 @@ class Nova:
     """One NovaOS boot in QEMU with its Terminal open and mirrored to serial"""
 
     def __init__(self, img=None, work=None, puts=(), mem=2048, smp=2, data_mb=1024, wav=None,
-                 extra_args=(), boot_timeout=300, net=False, keep_data=False, vga=('-vga', 'std'), rec=None, serial_path=None):
+                 extra_args=(), boot_timeout=300, net=False, keep_data=False, vga=('-vga', 'std'), rec=None, serial_path=None,
+                 cpu_flags=''):
+        # cpu_flags: more CPU features for this boot (",+monitor": tests/selftest/devices/laptop's C-states)
         self.work = work or tempfile.mkdtemp(prefix='novarun')
         # more monitors: QEMU display devices with an id (-device secondary-vga,id=head2), and
         # each further output of a virtio GPU with an id (-device virtio-vga,max_outputs=3,id=gpu)
@@ -207,7 +209,7 @@ class Nova:
         else:
             audio = []
         self.launched = time.time()
-        self.q = subprocess.Popen([qemu_binary(), '-machine', 'q35'] + accel_args() + ['-cpu', 'qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,+avx,+f16c',
+        self.q = subprocess.Popen([qemu_binary(), '-machine', 'q35'] + accel_args() + ['-cpu', 'qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,+avx,+f16c' + cpu_flags,
                                    '-m', str(mem), '-smp', str(smp),
                                    '-drive', f'if=pflash,format=raw,readonly=on,file={OVMF}',
                                    *([] if img is False else      # img=False: no boot disk (the boot device is in extra_args)

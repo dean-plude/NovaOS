@@ -15,11 +15,15 @@
 # the driver unloads) and enables it again.  "edutest msi 1" opts the device
 # in to MSI as the edu suite does: after a restart of the device the
 # framework connects the interrupt object to the message, also after a
-# restart of the machine, where the driver starts at boot.
+# restart of the machine, where the driver starts at boot.  The driver
+# asks for S0 idle (2 s): left alone, the framework sends a D3 IRP down the
+# device's stack (PoRequestPowerIrp, EvtDeviceD0Exit, the PDO records D3)
+# and the next request brings it back to D0 (step 28.4).
 DOC = ('a KMDF driver (kmdfedu.sys) on QEMU\'s edu PCI device, installed with `pnputil /add-driver /install`: '
        'Microsoft\'s framework (Wdf01000.sys) hands it the memory BAR, connects its interrupt object (line, then MSI) '
        'and runs its DMA transactions and common buffer; `edutest` computes a factorial through the interrupt and '
-       'moves buffers by DMA, removal is vetoed while open, then it is disabled, enabled and started at boot')
+       'moves buffers by DMA, left idle it goes to D3 (S0 idle) and the next request brings it back, removal is '
+       'vetoed while open, then it is disabled, enabled and started at boot')
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 TESTS = [
     Test('kmdfedu test signing on', r'reg add HKLM\SYSTEM\CurrentControlSet\Control\NovaOS /v TestSigning /t REG_DWORD /d 1 /f',
@@ -37,6 +41,12 @@ TESTS = [
     Test('kmdfedu driver', 'edutest line', [r'edu: a KMDF 1\.33 driver, its interrupt object on the line',
                                             r'factorial 12 = 479001600', r'dma 4096 bytes: .* ok, .* ok',
                                             r'dma 1500 bytes: .* ok, .* ok', r'edutest: \d+ passed, 0 failed']),
+    Test('kmdfedu idle', 'edutest idle',
+         [r'\[DbgPrint\] kmdfedu: D0Exit to D3', r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: D3 \(no PCI power management, D0 before\)',
+          r'edutest idle: \d+ passed, 0 failed']),
+    Test('kmdfedu after idle', 'edutest line',
+         [r'\[PNP\] PCI\\VEN_1234&DEV_11E8\S*: D0 \(no PCI power management, D3 before\)',
+          r'\[DbgPrint\] kmdfedu: started from D3, line interrupt', r'factorial 12 = 479001600', r'edutest: \d+ passed, 0 failed']),
     Test('kmdfedu removal vetoed', 'edutest veto',
          [r'\[DbgPrint\] kmdfedu: removal vetoed, 1 handle\(s\) open', r'edutest veto: \d+ passed, 0 failed']),
     Test('kmdfedu disable', 'pnputil /disable-device /deviceid ' + EDU_ID,

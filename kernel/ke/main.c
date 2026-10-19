@@ -53,6 +53,7 @@
 #include "../arch/x86_64/cpu.h"
 #include "printf.h"
 #include "scheduler.h"
+#include "idle.h"
 #include "kpcr.h"
 #include "smp.h"
 #include "../lib/string.h"
@@ -434,6 +435,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
      * UmInit's SSE setup); they start scheduling once this CPU first lets
      * go of the kernel lock */
     kprintf("=== SMP ===\n");
+    IdleInit();                           /* C-states: what the CPU offers (ACPI's _CST later, hal/cstate.c) */
     um_registry_add_cpus(smp_start());
     UpdateBootProgress("the other processors");
 
@@ -446,11 +448,13 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
         ps2_init();
         UsbInit();                        /* USB keyboards, mice, hubs and sticks */
         I2cHidInit();                     /* touchpads on I2C (a thread, once ACPI is loaded) */
-        sched_create_thread("devpoll", device_poll_thread, NULL, PRIO_DEVICE);   /* (above programs and the desktop) */
+        /* (above programs and the desktop; kept on CPU 0, whose tick wakes it, so the others can stop theirs) */
+        sched_create_pinned_thread("devpoll", device_poll_thread, NULL, PRIO_DEVICE, THREAD_STACK_SIZE);
         /* (a test build stamped "stall" never starts its desktop: the
          * watching thread finds the start stuck and rolls it back) */
         if (strcmp(NovaTestFault(), "stall"))
-            sched_create_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP);   /* (above any program thread, boosted or not) */
+            sched_create_pinned_thread("desktop", DesktopRun, NULL, PRIO_DESKTOP,   /* (above any program thread, boosted or not; */
+                                       THREAD_STACK_SIZE);                       /* it polls on the tick: CPU 0) */
         else
             kprintf("[NovaOS] This kernel is stamped with the test fault \"stall\": its desktop never starts\n");
         kprintf_set_fb_enabled(false);    /* WM owns the screen; logs → serial */

@@ -20,6 +20,10 @@
  *                            28-bit DMA: scatter/gather and packet
  *   EvtDeviceQueryRemove     refused while a handle is open
  *   EvtDeviceReleaseHardware unmaps the BAR
+ *   S0 idle                  WdfDeviceAssignS0IdleSettings, 2 s: the
+ *                            framework powers the device down to D3 when
+ *                            no request came for that long (EvtDeviceD0Exit),
+ *                            and back up for the next one (step 28.4)
  *
  * The ISR (EvtInterruptIsr) acknowledges the device and queues the
  * interrupt's DPC (WdfInterruptQueueDpcForIsr), which wakes the waiting
@@ -211,6 +215,15 @@ static NTSTATUS EvtDeviceD0EntryPostInterruptsEnabled(WDFDEVICE device, WDF_POWE
     x->info.message_irql = ii.Irql;
     DbgPrint("kmdfedu: started from D%d, %s interrupt vector %u at IRQL %u\n", (int)previous - 1,
              ii.MessageSignaled ? "message" : "line", ii.Vector, ii.Irql);
+    return STATUS_SUCCESS;
+}
+
+/* Leaving D0: idle (S0 idle, WdfDeviceAssignS0IdleSettings below), the
+ * machine sleeping, or the device stopping */
+static NTSTATUS EvtDeviceD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
+{
+    UNREFERENCED_PARAMETER(device);
+    DbgPrint("kmdfedu: D0Exit to D%d\n", (int)target - 1);
     return STATUS_SUCCESS;
 }
 
@@ -447,6 +460,7 @@ static NTSTATUS EvtDriverDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     pnp.EvtDevicePrepareHardware = EvtDevicePrepareHardware;
     pnp.EvtDeviceReleaseHardware = EvtDeviceReleaseHardware;
     pnp.EvtDeviceD0EntryPostInterruptsEnabled = EvtDeviceD0EntryPostInterruptsEnabled;
+    pnp.EvtDeviceD0Exit = EvtDeviceD0Exit;
     pnp.EvtDeviceQueryRemove = EvtDeviceQueryRemove;
     WdfDeviceInitSetPnpPowerEventCallbacks(init, &pnp);
     WDF_FILEOBJECT_CONFIG_INIT(&file, EvtFileCreate, EvtFileClose, WDF_NO_EVENT_CALLBACK);
@@ -479,6 +493,18 @@ static NTSTATUS EvtDriverDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     attr.ExecutionLevel = WdfExecutionLevelPassive;
     st = WdfIoQueueCreate(device, &qcfg, &attr, WDF_NO_HANDLE);
     if (!NT_SUCCESS(st)) return st;
+
+    /* Power the device down when idle (no request for 2 s), as laptop
+     * drivers do: the framework asks for D3 (PoRequestPowerIrp), and a
+     * request on the (power-managed) queue brings it back to D0 */
+    WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS idle;
+    WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS_INIT(&idle, IdleCannotWakeFromS0);
+    idle.IdleTimeout = 2000;
+    st = WdfDeviceAssignS0IdleSettings(device, &idle);
+    if (!NT_SUCCESS(st)) {
+        DbgPrint("kmdfedu: WdfDeviceAssignS0IdleSettings failed (%08x)\n", st);
+        return st;
+    }
     DbgPrint("kmdfedu: EvtDriverDeviceAdd: device, interface, interrupt and queue created\n");
     return STATUS_SUCCESS;
 }

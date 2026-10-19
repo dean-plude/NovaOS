@@ -896,12 +896,12 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
 **Goal:** a release that runs games and works on real laptops. **Gate:** a
 tagged `v0.2.0` passes the full CI suite and T14 checks.
 
-- [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
+- [x] **29.1 Release.** Tag the release, attach the ISO and checksums, and
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
   must boot in QEMU and on both reference PCs. `v0.2.0` ("Kepler",
-  [release notes](releases/0.2.0.md)) was published on 2026-10-19; ticks when
-  its ISO boots on the T14 (the second reference
-  PC, 28.5, is not picked yet).
+  [release notes](releases/0.2.0.md)) was published on 2026-10-19 and its ISO
+  was confirmed to boot on the T14 the same day. Ticked on that; the second
+  reference PC (28.5) is not picked yet, so the ISO has not booted there.
 
 ### Phase 30: Windows drivers
 

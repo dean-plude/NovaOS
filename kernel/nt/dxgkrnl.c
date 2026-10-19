@@ -74,11 +74,21 @@
  * An allocation destroyed while mapped leaves its range reserved but
  * unmapped.
  *
+ * Step 3's fourth part: contexts and submission.  A driver that takes
+ * submissions gets a scheduler (VidSch, a thread per adapter): a context
+ * (DxgkDdiCreateContext, DxgkDdiSetRootPageTable) queues DMA buffers at GPU
+ * virtual addresses, fences to signal and fences to wait for; the thread
+ * gives the buffers to DxgkDdiSubmitCommandVirtual in order with a fence ID
+ * per node and retires them when the driver's interrupt routine reports
+ * that ID (DxgkCbNotifyInterrupt, then DxgkCbNotifyDpc from its DPC), then
+ * raises the fences queued after them (um_d3dkmt.c's, through
+ * DxgkFenceOps).  Its interrupt line, if it has one, is connected here.
+ *
  * Tested by tools/drivertest/wddmtest.c, a render miniport whose GPU is
  * software.  Not yet: eviction (allocations stay where they are placed;
- * residency is counted, um_d3dkmt.c), paging buffers the GPU runs, contexts
- * and submission, interrupts, fences the GPU signals, preemption and TDR (the
- * next parts of step 3), and a full driver's display (step 2, on the T14:
+ * residency is counted, um_d3dkmt.c), paging buffers the GPU runs,
+ * message-signalled interrupts, preemption and TDR (the next part of step
+ * 3: a fault is logged and the buffer dropped), and a full driver's display (step 2, on the T14:
  * its outputs are counted but the desktop is not offered to it), power
  * states, more than one source, and monitor interfaces.
  */
@@ -86,6 +96,7 @@
 #include "dxgk.h"
 #include "../hal/display.h"
 #include "../ke/printf.h"
+#include "../ke/scheduler.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
 #include "../mm/vmm.h"
@@ -101,6 +112,10 @@
 #define MAX_LEVELS  4                      /* page table levels (DXGK_MAX_PAGE_TABLE_LEVEL_COUNT) */
 #define VA_ALIGN    0x10000ull             /* ranges VidMm picks: 64 KiB aligned, as Windows' are */
 #define ST_NO_VIDEO_MEMORY ((NT_STATUS)0xC01E0100)   /* STATUS_GRAPHICS_NO_VIDEO_MEMORY */
+#define MAX_NODES   8                      /* engines (DXGK_DRIVERCAPS' GpuEngineTopology) */
+#define MAX_INFLIGHT 16                    /* DMA buffers one node has at the driver at once */
+#define MAX_DMA_PRIV 4096                  /* a submission's private driver data */
+#define RANGE_PAGES 0xFFFFFFFFu            /* a range's "allocation": pages VidMm mapped itself (a fence's) */
 
 typedef struct DxgkDriver {
     struct DxgkDriver *next;
@@ -148,6 +163,23 @@ typedef struct DxgkAdapter {
     void              *pbuf;               /* the paging buffer DxgkDdiBuildPagingBuffer writes into */
     UINT32             pbuf_size;
     struct DxgkProc   *procs;
+    /* its scheduler (VidSch): contexts, each node's DMA buffers at the
+     * driver (in fence order), and the thread that runs them */
+    void              *intr;               /* its interrupt, connected (IoConnectInterruptEx) */
+    bool               sched;
+    int                nodes;
+    struct DxgkCtx    *ctxs;
+    struct {
+        UINT32             next_id;        /* the last SubmissionFenceId given */
+        volatile UINT32    done;           /* the last one the driver reported (DMA_COMPLETED) */
+        struct DxgkPacket *head, *tail;
+        int                n;
+    } node[MAX_NODES];
+    volatile int       moved;              /* the GPU wrote monitored fences (an interrupt said so) */
+    volatile UINT32    fault_id;           /* a DMA_FAULTED's fence, for the log (0: none) */
+    NT_KEVENT          sch_lock;           /* a mutex: the contexts' queues and the nodes' lists */
+    NT_KEVENT          sch_ev, sch_progress, sch_dead;
+    volatile bool      sch_stop;
 } DxgkAdapter;
 
 /* A page table VidMm made: one page of system memory, and (above the
@@ -185,6 +217,32 @@ typedef struct DxgkDev {
     DxgkProc       *proc;
 } DxgkDev;
 
+/* A context's queued work: a DMA buffer, fences to signal, or fences to wait for */
+enum { PK_DMA, PK_SIGNAL, PK_WAIT };
+typedef struct DxgkPacket {
+    struct DxgkPacket *next;
+    struct DxgkCtx    *ctx;                /* (NULL: its context went while the GPU had it) */
+    int                kind;
+    UINT64             va;                 /* PK_DMA: the buffer */
+    UINT32             size, fence_id;
+    void              *priv;
+    UINT32             priv_size;
+    int                n;                  /* PK_SIGNAL, PK_WAIT: the fences (referenced) and their values */
+    void             **fence;
+    UINT64            *value;
+} DxgkPacket;
+
+typedef struct DxgkCtx {
+    struct DxgkCtx *next;
+    UINT32          handle;
+    struct DxgkDev *dev;
+    void           *kmd;                   /* the driver's (DxgkDdiCreateContext) */
+    UINT32          node, priv_max;
+    DxgkPacket     *head, *tail;           /* queued, not yet at the driver */
+    int             inflight;              /* its DMA buffers at the driver */
+    bool            closing;
+} DxgkCtx;
+
 typedef struct DxgkAlloc {
     struct DxgkAlloc *next;
     UINT32          handle;
@@ -198,6 +256,7 @@ static DxgkDriver  *g_drivers;
 static DxgkAdapter *g_adapters;
 static NT_DRIVER_OBJECT g_dxgk;           /* owns \Device\DxgKrnl */
 static NT_KEVENT    g_render;              /* a mutex: the adapter list, starts and stops, render calls */
+static const DxgkFenceOps *g_fops;        /* um_d3dkmt.c's fences */
 static UINT32       g_handles = 0x40000000u;
 static UINT32       g_luids = 0x2000u;     /* (Basic Render's is 0x1000) */
 
@@ -211,6 +270,8 @@ static void lock(DxgkAdapter *a) { nt_KeWaitForSingleObject(&a->lock, 0, 0, 0, N
 static void unlock(DxgkAdapter *a) { nt_KeSetEvent(&a->lock, 0, 0); }
 static void render_lock(void) { nt_KeWaitForSingleObject(&g_render, 0, 0, 0, NULL); }
 static void render_unlock(void) { nt_KeSetEvent(&g_render, 0, 0); }
+static void sch_lock(DxgkAdapter *a) { nt_KeWaitForSingleObject(&a->sch_lock, 0, 0, 0, NULL); }
+static void sch_unlock(DxgkAdapter *a) { nt_KeSetEvent(&a->sch_lock, 0, 0); }
 
 /* -----------------------------------------------------------------------
  * The VidPN manager: VidPNs, their topology and mode sets
@@ -671,13 +732,53 @@ static NT_API unsigned char cb_queue_dpc(void *h)
     return a ? nt_KeInsertQueueDpc(&a->dpc, NULL, NULL) : 0;
 }
 
-/* (no interrupt connected yet: the routine runs as it is) */
+/* Under its interrupt's lock, at its IRQL (a driver without one: as it is) */
 static NT_API NT_STATUS cb_synchronize(void *h, PKSYNCHRONIZE_ROUTINE fn, void *ctx, unsigned int msg, unsigned char *ret)
 {
-    (void)h; (void)msg;
-    unsigned char r = fn(ctx);
+    (void)msg;
+    DxgkAdapter *a = adapter_of(h);
+    unsigned char r = a && a->intr ? nt_KeSynchronizeExecution(a->intr, (NT_KSYNCHRONIZE_ROUTINE)fn, ctx) : fn(ctx);
     if (ret) *ret = r;
     return NT_STATUS_SUCCESS;
+}
+
+/* The driver's interrupt routine says what its GPU did (at the interrupt's
+ * IRQL: only noted here; the scheduler's thread acts on it after the DPC) */
+static NT_API void cb_notify_interrupt(void *h, const void *data)
+{
+    DxgkAdapter *a = h;
+    const DXGKARGCB_NOTIFY_INTERRUPT_DATA *d = data;
+    if (!a || !d) return;
+    switch (d->InterruptType) {
+    case DXGK_INTERRUPT_DMA_COMPLETED:              /* (WDDM 2.0: monitored fences are looked at on each) */
+        if (d->DmaCompleted.NodeOrdinal < MAX_NODES)
+            __atomic_store_n(&a->node[d->DmaCompleted.NodeOrdinal].done, d->DmaCompleted.SubmissionFenceId, __ATOMIC_RELEASE);
+        a->moved = 1;
+        break;
+    case DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED:
+        a->moved = 1;
+        break;
+    case DXGK_INTERRUPT_DMA_FAULTED:                /* (recovery is the TDR's, the next part: it counts as done) */
+        if (d->DmaFaulted.NodeOrdinal < MAX_NODES)
+            __atomic_store_n(&a->node[d->DmaFaulted.NodeOrdinal].done, d->DmaFaulted.FaultedFenceId, __ATOMIC_RELEASE);
+        a->fault_id = d->DmaFaulted.FaultedFenceId;
+        a->moved = 1;
+        break;
+    }
+}
+
+/* The driver's DPC routine is done with what its interrupts reported */
+static NT_API void cb_notify_dpc(void *h)
+{
+    DxgkAdapter *a = h;
+    if (a && a->sched) nt_KeSetEvent(&a->sch_ev, 0, 0);
+}
+
+static NT_API unsigned char isr(void *intr, void *ctx)
+{
+    (void)intr;
+    DxgkAdapter *a = ctx;
+    return a->drv->ddi.DxgkDdiInterruptRoutine(a->ctx, 0);
 }
 
 static NT_API NT_STATUS cb_indicate_child(void *h, DXGK_CHILD_STATUS *st)
@@ -707,7 +808,6 @@ static NT_API void *cb_get_handle_data(const DXGKARGCB_GETHANDLEDATA *q)
 }
 
 static NT_API NT_STATUS cb_unsupported(void) { return NT_STATUS_NOT_SUPPORTED; }
-static NT_API void cb_nothing(void) {}
 
 static NT_API NT_STATUS cb_query_vidpn(D3DKMDT_HVIDPN v, int version, const DXGK_VIDPN_INTERFACE **out)
 {
@@ -889,8 +989,8 @@ static void fill_interface(DxgkAdapter *a)
     cb->DxgkCbWriteDeviceSpace = cb_write_space;
     cb->DxgkCbIsDevicePresent = cb_present;
     cb->DxgkCbGetHandleData = cb_get_handle_data;
-    cb->DxgkCbNotifyInterrupt = (void *)cb_nothing;
-    cb->DxgkCbNotifyDpc = (void *)cb_nothing;
+    cb->DxgkCbNotifyInterrupt = cb_notify_interrupt;
+    cb->DxgkCbNotifyDpc = cb_notify_dpc;
     cb->DxgkCbQueryVidPnInterface = cb_query_vidpn;
     cb->DxgkCbQueryMonitorInterface = (void *)cb_unsupported;
     cb->DxgkCbAcquirePostDisplayOwnership = cb_post_display;
@@ -949,9 +1049,12 @@ static bool gpummu_start(DxgkAdapter *a)
     return true;
 }
 
+static void sch_start(DxgkAdapter *a, unsigned int nodes);
+
 /* A render adapter's segments (DXGKQAITYPE_QUERYSEGMENT4: asked for the
- * count, then for the descriptors), and its GPU virtual addresses */
-static void render_start(DxgkAdapter *a, UINT32 mmcaps)
+ * count, then for the descriptors), its GPU virtual addresses and its
+ * scheduler */
+static void render_start(DxgkAdapter *a, UINT32 mmcaps, unsigned int nodes)
 {
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
     const char *svc = a->drv->service;
@@ -993,6 +1096,7 @@ static void render_start(DxgkAdapter *a, UINT32 mmcaps)
     a->pbuf_size = out.PagingBufferSize < PAGE_SIZE ? PAGE_SIZE : out.PagingBufferSize > 0x10000 ? 0x10000 : out.PagingBufferSize;
     if (!a->pbuf) a->pbuf = kzalloc(0x10000);
     a->gpummu = a->pbuf && gpummu_start(a);
+    sch_start(a, nodes);
 }
 
 /* -----------------------------------------------------------------------
@@ -1227,6 +1331,208 @@ static DxgkProc *proc_get(DxgkAdapter *a, void *owner)
     return p;
 }
 
+/* -----------------------------------------------------------------------
+ * The scheduler (VidSch): each context's work in order, DMA buffers to the
+ * driver (DxgkDdiSubmitCommandVirtual) with a fence ID per node, finished
+ * when its interrupt reports that ID (DxgkCbNotifyInterrupt, then
+ * DxgkCbNotifyDpc), fences signalled once the work before them is done,
+ * and waits from the GPU holding a context until their fences are reached.
+ * One thread per adapter runs it; it takes no lock but sch_lock, and the
+ * fences' calls (g_fops) none of the callers' either.
+ * ----------------------------------------------------------------------- */
+static void packets_free(DxgkPacket *p, bool signal)
+{
+    while (p) {
+        DxgkPacket *next = p->next;
+        for (int i = 0; i < p->n; i++) {
+            if (signal && p->kind == PK_SIGNAL) g_fops->signal(p->fence[i], p->value[i]);
+            g_fops->release(p->fence[i]);
+        }
+        kfree(p);
+        p = next;
+    }
+}
+
+static bool waits_reached(const DxgkPacket *p)
+{
+    for (int i = 0; i < p->n; i++)
+        if (!g_fops->reached(p->fence[i], p->value[i])) return false;
+    return true;
+}
+
+/* One pass: finished DMA buffers retired, each context's queue run as far as
+ * it can go; true if fences rose (another pass may unblock a wait) */
+static bool sch_run(DxgkAdapter *a)
+{
+    DxgkPacket *done = NULL, **dtail = &done;
+    bool moved = __atomic_exchange_n(&a->moved, 0, __ATOMIC_ACQ_REL) != 0;
+    UINT32 fault = __atomic_exchange_n(&a->fault_id, 0, __ATOMIC_ACQ_REL);
+    if (fault) kprintf("[DXGK] %s: the GPU faulted at fence %u (the work is dropped; recovery is not done yet)\n",
+                       a->drv->service, fault);
+    sch_lock(a);
+    for (int i = 0; i < a->nodes; i++) {
+        UINT32 id = __atomic_load_n(&a->node[i].done, __ATOMIC_ACQUIRE);
+        DxgkPacket *p;
+        while ((p = a->node[i].head) && (INT32)(id - p->fence_id) >= 0) {
+            a->node[i].head = p->next;
+            if (!p->next) a->node[i].tail = NULL;
+            a->node[i].n--;
+            if (p->ctx) p->ctx->inflight--;
+            p->next = NULL;
+            *dtail = p;
+            dtail = &p->next;
+        }
+    }
+    for (DxgkCtx *c = a->ctxs; c; c = c->next) {
+        DxgkPacket *p;
+        while ((p = c->head)) {
+            if (p->kind == PK_SIGNAL && c->inflight) break;          /* (after the work before it) */
+            if (p->kind == PK_WAIT && !c->closing && !waits_reached(p)) break;
+            if (p->kind == PK_DMA && a->node[c->node].n >= MAX_INFLIGHT) break;
+            c->head = p->next;
+            if (!c->head) c->tail = NULL;
+            p->next = NULL;
+            if (p->kind == PK_DMA) {
+                DXGKARG_SUBMITCOMMANDVIRTUAL sc;
+                memset(&sc, 0, sizeof(sc));
+                if (!++a->node[c->node].next_id) a->node[c->node].next_id = 1;
+                p->fence_id = a->node[c->node].next_id;
+                sc.hContext = c->kmd;
+                sc.DmaBufferVirtualAddress = p->va;
+                sc.DmaBufferSize = p->size;
+                sc.pDmaBufferPrivateData = p->priv;
+                sc.DmaBufferPrivateDataSize = p->priv_size;
+                sc.SubmissionFenceId = p->fence_id;
+                sc.NodeOrdinal = c->node;
+                NT_STATUS st = a->drv->full.DxgkDdiSubmitCommandVirtual(a->ctx, &sc);
+                if (NT_SUCCESS_(st)) {
+                    if (a->node[c->node].tail) a->node[c->node].tail->next = p;
+                    else a->node[c->node].head = p;
+                    a->node[c->node].tail = p;
+                    a->node[c->node].n++;
+                    c->inflight++;
+                    continue;
+                }
+                kprintf("[DXGK] %s: DxgkDdiSubmitCommandVirtual failed (0x%08x): the buffer is dropped\n",
+                        a->drv->service, (UINT32)st);
+            }
+            *dtail = p;
+            dtail = &p->next;
+        }
+    }
+    sch_unlock(a);
+    bool signalled = false;
+    for (DxgkPacket *p = done; p; p = p->next) signalled |= p->kind == PK_SIGNAL;
+    if (moved) g_fops->moved();
+    packets_free(done, true);
+    return signalled || moved;
+}
+
+static void sch_worker(void *arg)
+{
+    DxgkAdapter *a = arg;
+    while (!a->sch_stop) {
+        nt_KeWaitForSingleObject(&a->sch_ev, 0, 0, 0, NULL);
+        while (!a->sch_stop && sch_run(a)) {}
+        nt_KeSetEvent(&a->sch_progress, 0, 0);
+    }
+    nt_KeSetEvent(&a->sch_dead, 0, 0);
+}
+
+/* A render adapter whose driver takes submissions: its nodes and its thread */
+static void sch_start(DxgkAdapter *a, unsigned int nodes)
+{
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    a->sched = false;
+    if (!a->gpummu || !g_fops || !ddi->DxgkDdiCreateContext || !ddi->DxgkDdiDestroyContext ||
+        !ddi->DxgkDdiSubmitCommandVirtual)
+        return;
+    a->nodes = nodes < 1 ? 1 : nodes > MAX_NODES ? MAX_NODES : (int)nodes;
+    memset(a->node, 0, sizeof(a->node));
+    a->moved = 0;
+    a->fault_id = 0;
+    a->sch_stop = false;
+    nt_KeInitializeEvent(&a->sch_lock, NT_SynchronizationEvent, 1);
+    nt_KeInitializeEvent(&a->sch_ev, NT_SynchronizationEvent, 0);
+    nt_KeInitializeEvent(&a->sch_progress, NT_SynchronizationEvent, 0);
+    nt_KeInitializeEvent(&a->sch_dead, NT_NotificationEvent, 0);
+    if (!sched_create_thread_ex("dxgk-vidsch", sch_worker, a, PRIO_DEVICE, 16 * 1024)) {
+        kprintf("[DXGK] %s: no scheduler thread\n", a->drv->service);
+        return;
+    }
+    a->sched = true;
+    kprintf("[DXGK] %s: scheduler running, %d node(s)%s\n", a->drv->service, a->nodes,
+            a->intr ? ", interrupt connected" : "");
+}
+
+static void sch_stop(DxgkAdapter *a)
+{
+    if (!a->sched) return;
+    a->sched = false;
+    a->sch_stop = true;
+    nt_KeSetEvent(&a->sch_ev, 0, 0);
+    nt_KeWaitForSingleObject(&a->sch_dead, 0, 0, 0, NULL);
+    for (int i = 0; i < a->nodes; i++) {            /* (what the driver never finished: its contexts are gone) */
+        packets_free(a->node[i].head, false);
+        a->node[i].head = a->node[i].tail = NULL;
+        a->node[i].n = 0;
+    }
+}
+
+static DxgkCtx *ctx_of(DxgkAdapter *a, UINT32 h)
+{
+    for (DxgkCtx *c = a ? a->ctxs : NULL; c; c = c->next) if (c->handle == h) return c;
+    return NULL;
+}
+
+static NT_STATUS ctx_queue(DxgkAdapter *a, DxgkCtx *c, DxgkPacket *p)
+{
+    sch_lock(a);
+    bool ok = !c->closing;
+    if (ok) {
+        p->ctx = c;
+        if (c->tail) c->tail->next = p;
+        else c->head = p;
+        c->tail = p;
+    }
+    sch_unlock(a);
+    if (ok) nt_KeSetEvent(&a->sch_ev, 0, 0);
+    return ok ? NT_STATUS_SUCCESS : NT_STATUS_INVALID_PARAMETER;
+}
+
+/* Its queued work run (waits from the GPU let go), for 2 s at most (a hung
+ * GPU: the rest is dropped, recovery being the TDR's), then DxgkDdiDestroyContext */
+static void ctx_destroy(DxgkAdapter *a, DxgkCtx *c)
+{
+    sch_lock(a);
+    c->closing = true;
+    sch_unlock(a);
+    nt_KeSetEvent(&a->sch_ev, 0, 0);
+    for (int i = 0; i < 200; i++) {
+        sch_lock(a);
+        bool idle = !c->head && !c->inflight;
+        sch_unlock(a);
+        if (idle) break;
+        INT64 t = -10000LL * 10;
+        nt_KeWaitForSingleObject(&a->sch_progress, 0, 0, 0, &t);
+    }
+    sch_lock(a);
+    DxgkPacket *drop = c->head;
+    c->head = c->tail = NULL;
+    if (c->inflight) {
+        kprintf("[DXGK] %s: a context destroyed with %d DMA buffer(s) still at the GPU\n", a->drv->service, c->inflight);
+        for (int i = 0; i < a->nodes; i++)
+            for (DxgkPacket *p = a->node[i].head; p; p = p->next)
+                if (p->ctx == c) p->ctx = NULL;
+    }
+    for (DxgkCtx **pp = &a->ctxs; *pp; pp = &(*pp)->next)
+        if (*pp == c) { *pp = c->next; break; }
+    sch_unlock(a);
+    packets_free(drop, false);
+    a->drv->full.DxgkDdiDestroyContext(c->kmd);
+    kfree(c);
+}
+
 static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
 {
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
@@ -1244,6 +1550,10 @@ static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
 
 static void dev_free(DxgkAdapter *a, DxgkDev *d)
 {
+    for (DxgkCtx *c = a->ctxs, *next; c; c = next) {
+        next = c->next;
+        if (c->dev == d) ctx_destroy(a, c);
+    }
     for (DxgkAlloc *al = a->allocs, *next; al; al = next) {
         next = al->next;
         if (al->dev == d) alloc_free(a, al);
@@ -1263,7 +1573,16 @@ static void render_teardown(DxgkAdapter *a)
     while (a->devs) { dev_free(a, a->devs); n++; }
     a->nseg = 0;
     unlock(a);
+    sch_stop(a);
     if (n) kprintf("[DXGK] %s: %d device(s) destroyed with the adapter\n", a->drv->service, n);
+}
+
+static void intr_disconnect(DxgkAdapter *a)
+{
+    if (!a->intr) return;
+    NT_IO_DISCONNECT_INTERRUPT_PARAMETERS p = { NT_CONNECT_LINE_BASED, a->intr };
+    nt_IoDisconnectInterruptEx(&p);
+    a->intr = NULL;
 }
 
 static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
@@ -1273,6 +1592,16 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
     kfree(a->xlat);
     a->xlat = copy_resources(xlat);
     fill_interface(a);
+    if (ddi->DxgkDdiInterruptRoutine && !a->intr) {      /* (its line, if the PnP manager gave it one) */
+        NT_IO_CONNECT_INTERRUPT_PARAMETERS p;
+        memset(&p, 0, sizeof(p));
+        p.Version = NT_CONNECT_LINE_BASED;
+        p.LineBased.PhysicalDeviceObject = a->pdo;
+        p.LineBased.InterruptObject = &a->intr;
+        p.LineBased.ServiceRoutine = isr;
+        p.LineBased.ServiceContext = a;
+        if (!NT_SUCCESS_(nt_IoConnectInterruptEx(&p))) a->intr = NULL;
+    }
     DXGK_START_INFO si;
     memset(&si, 0, sizeof(si));
     si.AdapterLuid.LowPart = a->luid;
@@ -1280,6 +1609,7 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
     NT_STATUS st = ddi->DxgkDdiStartDevice(a->ctx, &si, &a->cb, &sources, &children);
     if (!NT_SUCCESS_(st)) {
         kprintf("[DXGK] %s: DxgkDdiStartDevice failed (0x%08x)\n", svc, (UINT32)st);
+        intr_disconnect(a);
         return st;
     }
     a->started = true;
@@ -1294,7 +1624,7 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
         kprintf("[DXGK] %s: started, %u source(s), %u output(s)\n", svc, sources, children);
     a->wddm = caps.WDDMVersion;
     if (a->drv->render) {
-        render_start(a, caps.MemoryManagementCaps.Value);
+        render_start(a, caps.MemoryManagementCaps.Value, caps.GpuEngineTopology.NbAsymetricProcessingNodes);
         if (sources)                              /* (a full driver's display is step 2's) */
             kprintf("[DXGK] %s: its outputs are not used yet; the screen stays the built-in driver's\n", svc);
         return NT_STATUS_SUCCESS;
@@ -1371,6 +1701,7 @@ static NT_STATUS adapter_stop(DxgkAdapter *a, NT_IRP *irp)
         kprintf("[DXGK] %s: stopped\n", a->drv->service);
     }
     a->started = false;
+    intr_disconnect(a);
     st = forward(a, irp);
     if (a->shown) DisplayWddmWithdraw(&a->disp, (DisplayMode){ (int)info.Width, (int)info.Height });
     a->shown = false;
@@ -1448,7 +1779,7 @@ static NT_API NT_STATUS dispatch(NT_DEVICE_OBJECT *dev, NT_IRP *irp)
 
 static NT_API NT_STATUS add_device(NT_DRIVER_OBJECT *obj, NT_DEVICE_OBJECT *pdo)
 {
-    NtPnpLineOnly(pdo);                                   /* (no interrupts connected by this host yet) */
+    NtPnpLineOnly(pdo);                                   /* (its interrupt is connected line-based: no MSI yet) */
     DxgkDriver *d = driver_of(obj);
     if (!d) return NT_STATUS_INVALID_DEVICE_REQUEST;
     DxgkAdapter *a = kzalloc(sizeof(*a));
@@ -1647,6 +1978,7 @@ static void render_info(const DxgkAdapter *a, DxgkRenderInfo *out)
     strncpy(out->service, a->drv->service, sizeof(out->service) - 1);
     out->wddm = (UINT32)a->wddm;
     out->va_bits = a->gpummu ? a->vabits : 0;
+    out->nodes = a->sched ? (UINT32)a->nodes : 0;
     out->system = true;
     for (int i = 0; i < a->nseg; i++) {
         out->memory += a->seg[i].size;
@@ -1681,7 +2013,7 @@ static DxgkDev *dev_of(DxgkAdapter *a, UINT32 h)
 
 static UINT32 handle_new(void)
 {
-    if (!++g_handles) g_handles = 0x40000000u;
+    if (!++g_handles || g_handles == RANGE_PAGES) g_handles = 0x40000000u;
     return g_handles;
 }
 
@@ -1883,4 +2215,154 @@ UINT32 DxgkRenderFreeVa(UINT64 luid, void *owner, UINT64 base, UINT64 size)
     if (p) unlock(a);
     render_unlock();
     return n ? 0 : (UINT32)NT_STATUS_INVALID_PARAMETER;
+}
+
+UINT32 DxgkRenderMapPages(UINT64 luid, void *owner, const PADDR *frames, UINT64 pages, UINT64 prot, UINT64 *va)
+{
+    if (!pages) return (UINT32)NT_STATUS_INVALID_PARAMETER;
+    render_lock();
+    DxgkAdapter *a;
+    DxgkProc *p = va_space(luid, owner, &a);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (p) {
+        UINT64 size = pages * PAGE_SIZE, base = va_find(a, p, 0, 0, size);
+        DxgkRange *r = base ? range_add(p, base, size) : NULL;
+        if (!r) st = ST_NO_VIDEO_MEMORY;
+        else if (NT_SUCCESS_(st = va_write(a, p, base, pages, frames, prot, NULL, 0))) {
+            r->alloc = RANGE_PAGES;
+            *va = base;
+        } else {
+            va_write(a, p, base, pages, NULL, 0, NULL, 0);
+            for (DxgkRange **pp = &p->ranges; *pp; pp = &(*pp)->next)
+                if (*pp == r) { *pp = r->next; kfree(r); break; }
+        }
+        unlock(a);
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+void DxgkRenderSetFenceOps(const DxgkFenceOps *ops) { g_fops = ops; }
+
+UINT32 DxgkRenderCreateContext(UINT64 luid, UINT32 dev, UINT32 node, const void *priv, UINT32 priv_size, UINT32 *ctx)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkDev *d = dev_of(a, dev);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (d && a->sched && node < (UINT32)a->nodes) {
+        DxgkCtx *c = kzalloc(sizeof(*c));
+        st = c ? NT_STATUS_SUCCESS : NT_STATUS_NO_MEMORY;
+        lock(a);
+        DXGKARG_CREATECONTEXT cc;
+        memset(&cc, 0, sizeof(cc));
+        cc.NodeOrdinal = node;
+        cc.EngineAffinity = 1;
+        cc.Flags = DXGK_CONTEXT_VIRTUAL_ADDRESSING;
+        cc.pPrivateDriverData = (void *)priv;
+        cc.PrivateDriverDataSize = priv_size;
+        if (c) st = a->drv->full.DxgkDdiCreateContext(d->kmd, &cc);
+        if (NT_SUCCESS_(st)) {
+            c->kmd = cc.hContext;
+            c->dev = d;
+            c->node = node;
+            c->priv_max = cc.ContextInfo.DmaBufferPrivateDataSize > MAX_DMA_PRIV ? MAX_DMA_PRIV
+                                                                                 : cc.ContextInfo.DmaBufferPrivateDataSize;
+            c->handle = *ctx = handle_new();
+            if (d->proc && d->proc->root && a->drv->full.DxgkDdiSetRootPageTable) {   /* (before its first submission) */
+                DXGKARG_SETROOTPAGETABLE r = { c->kmd, { 0, 0, d->proc->root->pa }, a->lvl[0].entries };
+                a->drv->full.DxgkDdiSetRootPageTable(a->ctx, &r);
+            }
+            sch_lock(a);
+            c->next = a->ctxs;
+            a->ctxs = c;
+            sch_unlock(a);
+        } else {
+            if (c) kprintf("[DXGK] %s: DxgkDdiCreateContext failed (0x%08x)\n", a->drv->service, (UINT32)st);
+            kfree(c);
+        }
+        unlock(a);
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+void DxgkRenderDestroyContext(UINT64 luid, UINT32 ctx)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkCtx *c = ctx_of(a, ctx);
+    if (c) { lock(a); ctx_destroy(a, c); unlock(a); }
+    render_unlock();
+}
+
+/* A packet for @n fences and @priv bytes, all in one block */
+static DxgkPacket *packet_new(int kind, int n, const void *priv, UINT32 priv_size)
+{
+    DxgkPacket *p = kzalloc(sizeof(*p) + (size_t)n * (sizeof(void *) + sizeof(UINT64)) + priv_size);
+    if (!p) return NULL;
+    p->kind = kind;
+    p->n = n;
+    p->fence = (void **)(p + 1);
+    p->value = (UINT64 *)(p->fence + n);
+    p->priv = priv_size ? (void *)(p->value + n) : NULL;
+    p->priv_size = priv_size;
+    if (priv_size) memcpy(p->priv, priv, priv_size);
+    return p;
+}
+
+UINT32 DxgkRenderSubmit(UINT64 luid, UINT32 ctx, UINT64 va, UINT32 size, const void *priv, UINT32 priv_size)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkCtx *c = ctx_of(a, ctx);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (c && va && size && priv_size <= c->priv_max) {
+        DxgkPacket *p = packet_new(PK_DMA, 0, priv, priv_size);
+        st = NT_STATUS_NO_MEMORY;
+        if (p) {
+            p->va = va;
+            p->size = size;
+            if (!NT_SUCCESS_(st = ctx_queue(a, c, p))) kfree(p);
+        }
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+static UINT32 fences_queue(UINT64 luid, UINT32 ctx, int kind, int n, void *const *fences, const UINT64 *values)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkCtx *c = ctx_of(a, ctx);
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (c && n > 0) {
+        DxgkPacket *p = packet_new(kind, n, NULL, 0);
+        st = NT_STATUS_NO_MEMORY;
+        if (p) {
+            memcpy(p->fence, fences, sizeof(void *) * (size_t)n);
+            memcpy(p->value, values, sizeof(UINT64) * (size_t)n);
+            if (!NT_SUCCESS_(st = ctx_queue(a, c, p))) kfree(p);   /* (the references stay the caller's) */
+        }
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+UINT32 DxgkRenderSignal(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values)
+{
+    return fences_queue(luid, ctx, PK_SIGNAL, n, fences, values);
+}
+
+UINT32 DxgkRenderWait(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values)
+{
+    return fences_queue(luid, ctx, PK_WAIT, n, fences, values);
+}
+
+void DxgkRenderFencesMoved(void)
+{
+    render_lock();
+    for (DxgkAdapter *a = g_adapters; a; a = a->next)
+        if (a->sched) nt_KeSetEvent(&a->sch_ev, 0, 0);
+    render_unlock();
 }

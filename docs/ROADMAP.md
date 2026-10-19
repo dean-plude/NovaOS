@@ -738,7 +738,10 @@ measured frame-time gain over the CPU path.
   `wddm` boot; [history](HISTORY.md#a-windows-render-driver-registers)),
   and with GPU virtual addresses: per-process page tables VidMm makes and
   the driver writes through paging buffers
-  ([history](HISTORY.md#gpu-virtual-addresses)).
+  ([history](HISTORY.md#gpu-virtual-addresses)), and command submission:
+  contexts, a scheduler that runs their DMA buffers in order through the
+  driver, its interrupt and DPC, and fences the GPU signals and waits on
+  ([history](HISTORY.md#command-submission-and-gpu-fences)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

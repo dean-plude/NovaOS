@@ -40,6 +40,16 @@
  *                 the range and destroying the allocation unmap them (the
  *                 driver reads each mapping's first word back through its
  *                 page tables, which the self-test checks in its log)
+ *   submission    (step 3's fourth part) a context on the driver's one node
+ *                 (another node refused); DMA buffers in wddmtest's command
+ *                 format written through Lock2 and submitted at their GPU
+ *                 addresses: the GPU writes and copies through the page
+ *                 tables and writes a monitored fence at its GPU address;
+ *                 SignalSynchronizationObjectFromGpu2 raises a fence once the
+ *                 work before it is done; WaitForSynchronizationObjectFromGpu
+ *                 holds the context's later work until the CPU signals; a
+ *                 write to a read-only mapping faults and the context goes
+ *                 on; a destroyed context's handle is refused
  */
 #include <windows.h>
 #include <stdio.h>
@@ -241,6 +251,169 @@ static void gpu_va(D3DKMT_HANDLE adapter, D3DKMT_HANDLE dev)
     check(D3DKMTDestroyPagingQueue(&dq) == 0, "DestroyPagingQueue");
 }
 
+/* ---- "kmttest wddm": contexts and submission (the driver's software GPU) ---- */
+#define GPU_WRITE 1u
+#define GPU_COPY  2u
+#define GPU_FENCE 3u
+
+static UINT *put_write(UINT *w, UINT64 va, UINT v) { *w++ = GPU_WRITE; *w++ = (UINT)va; *w++ = (UINT)(va >> 32); *w++ = v; return w; }
+
+static UINT *put_copy(UINT *w, UINT64 src, UINT64 dst, UINT n)
+{
+    *w++ = GPU_COPY; *w++ = (UINT)src; *w++ = (UINT)(src >> 32); *w++ = (UINT)dst; *w++ = (UINT)(dst >> 32); *w++ = n;
+    return w;
+}
+
+static UINT *put_fence(UINT *w, UINT64 va, UINT64 v)
+{
+    *w++ = GPU_FENCE; *w++ = (UINT)va; *w++ = (UINT)(va >> 32); *w++ = (UINT)v; *w++ = (UINT)(v >> 32);
+    return w;
+}
+
+static UINT64 map(D3DKMT_HANDLE pq, D3DKMT_HANDLE alloc, UINT pages, int write)
+{
+    D3DDDI_MAPGPUVIRTUALADDRESS m;
+    memset(&m, 0, sizeof(m));
+    m.hPagingQueue = pq;
+    m.hAllocation = alloc;
+    m.SizeInPages = pages;
+    m.Protection.Write = write;
+    return D3DKMTMapGpuVirtualAddress(&m) ? 0 : m.VirtualAddress;
+}
+
+static LONG submit(D3DKMT_HANDLE ctx, UINT64 va, UINT bytes)
+{
+    D3DKMT_SUBMITCOMMAND sc;
+    memset(&sc, 0, sizeof(sc));
+    sc.Commands = va;
+    sc.CommandLength = bytes;
+    sc.BroadcastContextCount = 1;
+    sc.BroadcastContext[0] = ctx;
+    return D3DKMTSubmitCommand(&sc);
+}
+
+static LONG signal_gpu(D3DKMT_HANDLE ctx, D3DKMT_HANDLE fence, UINT64 v)
+{
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 s;
+    memset(&s, 0, sizeof(s));
+    s.ObjectCount = 1;
+    s.ObjectHandleArray = &fence;
+    s.BroadcastContextCount = 1;
+    s.BroadcastContextArray = &ctx;
+    s.MonitoredFenceValueArray = &v;
+    return D3DKMTSignalSynchronizationObjectFromGpu2(&s);
+}
+
+/* Whether @fence reaches @v within @ms (a wait that sets an event: a broken GPU cannot hang the test) */
+static int reaches(D3DKMT_HANDLE dev, D3DKMT_HANDLE fence, UINT64 v, DWORD ms)
+{
+    HANDLE ev = CreateEventA(NULL, TRUE, FALSE, NULL);
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU w = { dev, 1, &fence, &v, ev, 0 };
+    int ok = D3DKMTWaitForSynchronizationObjectFromCpu(&w) == 0 && WaitForSingleObject(ev, ms) == WAIT_OBJECT_0;
+    CloseHandle(ev);
+    return ok;
+}
+
+static D3DKMT_HANDLE monitored(D3DKMT_HANDLE dev, volatile UINT64 **cpu, UINT64 *gpu)
+{
+    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 cs;
+    memset(&cs, 0, sizeof(cs));
+    cs.hDevice = dev;
+    cs.Info.Type = D3DDDI_MONITORED_FENCE;
+    if (D3DKMTCreateSynchronizationObject2(&cs)) return 0;
+    *cpu = cs.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+    *gpu = cs.Info.MonitoredFence.FenceValueGPUVirtualAddress;
+    return cs.hSyncObject;
+}
+
+static void submission(D3DKMT_HANDLE dev)
+{
+    LONG st;
+    D3DKMT_CREATEPAGINGQUEUE pq;
+    memset(&pq, 0, sizeof(pq));
+    pq.hDevice = dev;
+    check(D3DKMTCreatePagingQueue(&pq) == 0, "a paging queue for the buffers' mappings");
+    D3DKMT_HANDLE cmd = allocate(dev, 65536, &st), dst = allocate(dev, 65536, &st);
+    UINT64 cva = map(pq.hPagingQueue, cmd, 16, 1), dva = map(pq.hPagingQueue, dst, 16, 1), rova = map(pq.hPagingQueue, dst, 16, 0);
+    check(cmd && dst && cva && dva && rova, "a command buffer and a target mapped (the target twice, once read-only)");
+    volatile UINT64 *fcpu = NULL, *f2cpu = NULL;
+    UINT64 fgpu = 0, f2gpu = 0;
+    D3DKMT_HANDLE fence = monitored(dev, &fcpu, &fgpu), fence2 = monitored(dev, &f2cpu, &f2gpu);
+    check(fence && fence2 && fcpu && fgpu && f2gpu && fgpu != f2gpu,
+          "monitored fences have GPU virtual addresses (their value pages, mapped for the GPU)");
+
+    D3DKMT_CREATECONTEXTVIRTUAL cc;
+    memset(&cc, 0, sizeof(cc));
+    cc.hDevice = dev;
+    cc.NodeOrdinal = 1;
+    check(D3DKMTCreateContextVirtual(&cc) != 0, "a context on a node the GPU does not have is refused");
+    cc.NodeOrdinal = 0;
+    cc.ClientHint = D3DKMT_CLIENTHINT_VULKAN;
+    check(D3DKMTCreateContextVirtual(&cc) == 0 && cc.hContext, "CreateContextVirtual (DxgkDdiCreateContext, SetRootPageTable)");
+    D3DKMT_HANDLE ctx = cc.hContext;
+
+    D3DKMT_LOCK2 lk = { dev, cmd, 0, NULL }, ld = { dev, dst, 0, NULL };
+    UINT *cw = NULL, *dw = NULL;
+    if (D3DKMTLock2(&lk) == 0) cw = lk.pData;
+    if (D3DKMTLock2(&ld) == 0) dw = ld.pData;
+    check(cw && dw, "both locked for the CPU");
+    if (!cw || !dw || !fcpu || !ctx) return;
+    for (int i = 0; i < 8; i++) cw[0x3000 / 4 + i] = 0xA0000000u + (UINT)i;   /* (what the GPU copies) */
+
+    /* a buffer: a write, a copy, then the fence written at its GPU address */
+    UINT *w = put_write(cw, dva, 0xC0FFEE01u);
+    w = put_copy(w, cva + 0x3000, dva + 0x100, 8);
+    w = put_fence(w, fgpu, 5);
+    check(submit(ctx, cva, (UINT)((char *)w - (char *)cw)) == 0, "SubmitCommand (DxgkDdiSubmitCommandVirtual)");
+    check(reaches(dev, fence, 5, 5000) && *fcpu == 5, "the GPU wrote the fence: the CPU's wait for 5 returns");
+    check(dw[0] == 0xC0FFEE01u, "the GPU's write landed in the target, through the page tables");
+    check(dw[0x40] == 0xA0000000u && dw[0x47] == 0xA0000007u, "and its copy");
+
+    /* a buffer, then a fence the scheduler signals once it is done */
+    w = put_write(cw + 0x1000 / 4, dva + 4, 0x5161A1EDu);
+    check(submit(ctx, cva + 0x1000, (UINT)((char *)w - (char *)(cw + 0x1000 / 4))) == 0 && signal_gpu(ctx, fence, 6) == 0,
+          "SubmitCommand and SignalSynchronizationObjectFromGpu2");
+    check(reaches(dev, fence, 6, 5000) && dw[1] == 0x5161A1EDu, "the fence rose after the buffer ran");
+
+    /* a wait from the GPU holds what comes after it */
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU wg;
+    memset(&wg, 0, sizeof(wg));
+    UINT64 one = 1;
+    wg.hContext = ctx;
+    wg.ObjectCount = 1;
+    wg.ObjectHandleArray = &fence2;
+    wg.MonitoredFenceValueArray = &one;
+    check(D3DKMTWaitForSynchronizationObjectFromGpu(&wg) == 0, "WaitForSynchronizationObjectFromGpu");
+    w = put_write(cw + 0x2000 / 4, dva + 8, 0x3A17EDu);
+    check(submit(ctx, cva + 0x2000, (UINT)((char *)w - (char *)(cw + 0x2000 / 4))) == 0 && signal_gpu(ctx, fence, 7) == 0,
+          "work queued behind the wait");
+    check(!reaches(dev, fence, 7, 300) && dw[2] == 0, "it waits for the other fence");
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU sg = { dev, 1, &fence2, &one, 0 };
+    check(D3DKMTSignalSynchronizationObjectFromCpu(&sg) == 0 && reaches(dev, fence, 7, 5000) && dw[2] == 0x3A17EDu,
+          "signalled from the CPU, the context goes on");
+
+    /* a write to the read-only mapping: a page fault, and the context goes on */
+    w = put_write(cw + 0x2800 / 4, rova + 12, 0xBADu);
+    check(submit(ctx, cva + 0x2800, (UINT)((char *)w - (char *)(cw + 0x2800 / 4))) == 0 && signal_gpu(ctx, fence, 8) == 0 &&
+          reaches(dev, fence, 8, 5000) && dw[3] == 0, "a write to a read-only page faults and writes nothing");
+
+    D3DKMT_UNLOCK2 ul = { dev, cmd }, ud = { dev, dst };
+    D3DKMTUnlock2(&ul);
+    D3DKMTUnlock2(&ud);
+    D3DKMT_DESTROYCONTEXT dc = { ctx };
+    check(D3DKMTDestroyContext(&dc) == 0, "DestroyContext (DxgkDdiDestroyContext)");
+    check(D3DKMTDestroyContext(&dc) != 0 && submit(ctx, cva, 16) != 0, "its handle is refused after");
+    D3DKMT_DESTROYSYNCHRONIZATIONOBJECT ds = { fence };
+    D3DKMTDestroySynchronizationObject(&ds);
+    ds.hSyncObject = fence2;
+    D3DKMTDestroySynchronizationObject(&ds);
+    D3DKMT_HANDLE both[2] = { cmd, dst };
+    D3DKMT_DESTROYALLOCATION2 da = { dev, 0, both, 2, 0 };
+    check(D3DKMTDestroyAllocation2(&da) == 0, "the buffers given back");
+    D3DDDI_DESTROYPAGINGQUEUE dq = { pq.hPagingQueue };
+    D3DKMTDestroyPagingQueue(&dq);
+}
+
 /* ---- "kmttest wddm": the adapter of wddmtest.sys ---- */
 static int wddm(void)
 {
@@ -310,6 +483,8 @@ static int wddm(void)
           "DestroyAllocation2 gives it back (DxgkDdiCloseAllocation, DxgkDdiDestroyAllocation)");
     gpu_va(adapter, dev);
     check(usage(adapter) == 65536, "the mapped allocation's memory is back");
+    submission(dev);
+    check(usage(adapter) == 65536, "the buffers' memory is back");
     D3DKMT_DESTROYDEVICE dd = { dev };
     check(D3DKMTDestroyDevice(&dd) == 0 && usage(adapter) == 0, "DestroyDevice takes the other with it");
     D3DKMT_CLOSEADAPTER close = { adapter };

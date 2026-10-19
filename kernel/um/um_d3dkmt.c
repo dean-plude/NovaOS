@@ -39,11 +39,19 @@
  * pages never leave memory yet): an evicted one is left out of
  * D3DKMTQueryVideoMemoryInfo's usage.
  *
+ * Step 3's fourth part: on a miniport adapter whose driver takes
+ * submissions, D3DKMTCreateContextVirtual, D3DKMTSubmitCommand (a DMA
+ * buffer at a GPU virtual address), D3DKMTSignalSynchronizationObjectFromGpu2
+ * and D3DKMTWaitForSynchronizationObjectFromGpu go to nt/dxgkrnl.c's
+ * scheduler, which raises and reads this file's fences (a monitored fence
+ * also gets a GPU virtual address there: its value page, which the GPU
+ * writes).  The scheduler's thread wakes the waits without g_lock, so the
+ * waiters have their own lock.
+ *
  * Not yet (the next parts of step 3, with wddmtest.sys, a render miniport
  * whose "GPU" runs in software): GPU virtual addresses on Basic Render,
- * eviction, contexts and submission, the scheduler, fences the GPU
- * signals, preemption and TDR, shared resources and 32-bit programs'
- * structures.
+ * eviction, preemption and TDR, contexts broadcast to several engines,
+ * shared resources and 32-bit programs' structures.
  *
  * Handles (D3DKMT_HANDLE) are the process's own, as Windows' are; a
  * process's objects go with it (um_d3dkmt_process_gone).  A view the
@@ -52,6 +60,7 @@
 #include "um_internal.h"
 #include "../ke/printf.h"
 #include "../ke/probe.h"
+#include "../ke/spinlock.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
@@ -116,6 +125,12 @@ typedef struct { UINT32 h, pad; UINT64 base, min, max, size; UINT32 type, pad2; 
 typedef struct { UINT32 adapter, pad; UINT64 base, size; } FreeGpuVa;
 typedef struct { UINT32 queue, num; UINT64 list, priorities; UINT32 flags, pad; UINT64 fence, trim; } MakeResident;
 typedef struct { UINT32 device, num; UINT64 list; UINT32 flags, pad; UINT64 trim; } Evict;
+typedef struct { UINT32 device, node, affinity, flags; UINT64 priv; UINT32 priv_size, hint, context, pad; } CreateContextVirtual;
+typedef struct { UINT64 commands; UINT32 length, flags; UINT64 history; UINT32 nbroadcast, broadcast[64]; UINT64 priv;
+                 UINT32 priv_size, nprimaries, primaries[16], nhistory, pad; UINT64 history_array; } SubmitCommand;
+typedef struct { UINT32 count, pad; UINT64 handles; UINT32 flags, ncontexts; UINT64 contexts;
+                 union { UINT64 value; UINT64 values; UINT64 reserved[8]; }; } SignalFromGpu2;
+typedef struct { UINT32 context, count; UINT64 handles; union { UINT64 values; UINT64 value; UINT64 reserved[8]; }; } WaitFromGpu;
 
 #define OFF(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(AdapterInfo) == 20 && sizeof(EnumAdapters2) == 16 && sizeof(OpenFromLuid) == 12 &&
@@ -136,13 +151,22 @@ _Static_assert(sizeof(ReserveGpuVa) == 72 && OFF(ReserveGpuVa, type) == 40 && OF
                "D3DDDI_RESERVEGPUVIRTUALADDRESS");
 _Static_assert(sizeof(FreeGpuVa) == 24 && sizeof(MakeResident) == 48 && OFF(MakeResident, fence) == 32 &&
                sizeof(Evict) == 32, "D3DKMT_FREEGPUVIRTUALADDRESS, D3DDDI_MAKERESIDENT, D3DKMT_EVICT");
+_Static_assert(sizeof(CreateContextVirtual) == 40 && OFF(CreateContextVirtual, priv) == 16 &&
+               OFF(CreateContextVirtual, context) == 32, "D3DKMT_CREATECONTEXTVIRTUAL");
+_Static_assert(sizeof(SubmitCommand) == 384 && OFF(SubmitCommand, broadcast) == 28 && OFF(SubmitCommand, priv) == 288 &&
+               OFF(SubmitCommand, primaries) == 304 && OFF(SubmitCommand, nhistory) == 368 &&
+               OFF(SubmitCommand, history_array) == 376, "D3DKMT_SUBMITCOMMAND");
+_Static_assert(sizeof(SignalFromGpu2) == 96 && OFF(SignalFromGpu2, contexts) == 24 && OFF(SignalFromGpu2, values) == 32 &&
+               sizeof(WaitFromGpu) == 80 && OFF(WaitFromGpu, values) == 16,
+               "D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2, D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU");
 
 enum {
     OP_ENUM_ADAPTERS2, OP_OPEN_ADAPTER_FROM_LUID, OP_CLOSE_ADAPTER, OP_QUERY_ADAPTER_INFO,
     OP_CREATE_DEVICE, OP_DESTROY_DEVICE, OP_CREATE_ALLOCATION2, OP_DESTROY_ALLOCATION2,
     OP_LOCK2, OP_UNLOCK2, OP_CREATE_SYNC2, OP_DESTROY_SYNC, OP_SIGNAL_FROM_CPU, OP_WAIT_FROM_CPU,
     OP_QUERY_VIDEO_MEMORY_INFO, OP_CREATE_PAGING_QUEUE, OP_DESTROY_PAGING_QUEUE, OP_RESERVE_GPU_VA,
-    OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT,
+    OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT, OP_CREATE_CONTEXT_VIRTUAL, OP_DESTROY_CONTEXT,
+    OP_SUBMIT_COMMAND, OP_SIGNAL_FROM_GPU2, OP_WAIT_FROM_GPU,
 };
 
 #define QAI_GETSEGMENTSIZE 3
@@ -169,15 +193,16 @@ typedef struct {
     UINT64  n, size;
 } Memory;
 
-/* A fence: its value, and a monitored fence's page holding it */
+/* A fence: its value, on a monitored fence's page (where the GPU writes it
+ * too), or here */
 typedef struct {
     volatile int refs;
     int      type;
-    volatile UINT64 value;
+    volatile UINT64 value;            /* (not monitored) */
     PADDR    page;                    /* (monitored: 0 otherwise) */
 } Fence;
 
-typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC, K_PQUEUE } Kind;
+typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC, K_PQUEUE, K_CONTEXT } Kind;
 
 typedef struct {
     Kind     kind;
@@ -189,6 +214,7 @@ typedef struct {
     Memory  *mem;
     Fence   *fence;
     UINT64   va;                      /* an allocation's view while locked; a monitored fence's value page */
+    UINT64   gpu_va;                  /* a monitored fence's value page, in the GPU's view (a miniport's) */
     int      locks;
 } Object;
 
@@ -213,6 +239,7 @@ typedef struct Waiter {
 
 static UmLock  g_lock;                /* everything below (never held across user memory) */
 static Proc   *g_procs;
+static KSpinLock g_wlock = KSPINLOCK_INIT;   /* g_waiters (the GPU scheduler's thread checks them, without g_lock) */
 static Waiter *g_waiters;
 static UINT64  g_budget;
 
@@ -271,16 +298,22 @@ static Object *object(Proc *q, UINT32 h, Kind kind)
     return i < (UINT32)q->nobj && q->obj[i].kind == kind ? &q->obj[i] : NULL;
 }
 
-static void fence_write(Fence *f, UINT64 v)
+static volatile UINT64 *fence_slot(Fence *f) { return f->page ? (volatile UINT64 *)um_frame_ptr(f->page) : &f->value; }
+static UINT64 fence_value(Fence *f) { return __atomic_load_n(fence_slot(f), __ATOMIC_ACQUIRE); }
+static void fence_write(Fence *f, UINT64 v) { __atomic_store_n(fence_slot(f), v, __ATOMIC_RELEASE); }
+
+/* (a fence never goes back: the CPU and the GPU's scheduler may raise it at once) */
+static void fence_raise(Fence *f, UINT64 v)
 {
-    f->value = v;
-    if (f->page) *(volatile UINT64 *)um_frame_ptr(f->page) = v;
+    volatile UINT64 *s = fence_slot(f);
+    UINT64 old = __atomic_load_n(s, __ATOMIC_ACQUIRE);
+    while (v > old && !__atomic_compare_exchange_n(s, &old, v, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {}
 }
 
 static bool reached(Fence *const *f, const UINT64 *v, int n, bool any)
 {
     int done = 0;
-    for (int i = 0; i < n; i++) done += f[i]->value >= v[i];
+    for (int i = 0; i < n; i++) done += fence_value(f[i]) >= v[i];
     return any ? done > 0 || !n : done == n;
 }
 
@@ -299,13 +332,22 @@ static void waiter_free(Waiter *w)
     kfree(w);
 }
 
-/* Fences rose: set the events of the waits they finished (under g_lock) */
+/* Fences rose: set the events of the waits they finished */
 static void waiters_check(void)
 {
+    Waiter *done = NULL;
+    IrqState s = spin_lock_irqsave(&g_wlock);
     for (Waiter **pp = &g_waiters; *pp;) {
         Waiter *w = *pp;
         if (!reached(w->fence, w->value, w->n, w->any)) { pp = &w->next; continue; }
         *pp = w->next;
+        w->next = done;
+        done = w;
+    }
+    spin_unlock_irqrestore(&g_wlock, s);
+    while (done) {
+        Waiter *w = done;
+        done = w->next;
         set_event(w->event);
         waiter_free(w);
     }
@@ -323,7 +365,10 @@ static void object_free(Proc *q, Object *o, UmProcess *p)
         if (o->luid != BASIC_LUID_LO) DxgkRenderDestroyDevice(o->luid, o->kmd);
     } else if (o->kind == K_SYNC) {
         if (o->va && p) um_unmap_view_at(p, o->va, o->fence);
+        if (o->gpu_va) DxgkRenderFreeVa(o->luid, q->p, o->gpu_va, PAGE_SIZE);
         fence_unref(o->fence);
+    } else if (o->kind == K_CONTEXT) {
+        DxgkRenderDestroyContext(o->luid, o->kmd);
     } else if (o->kind == K_PQUEUE) {                    /* (its fence goes with it, if still there) */
         Object *f = object(q, o->sync, K_SYNC);
         UINT32 dev = o->device;
@@ -417,6 +462,8 @@ static UINT32 destroy_device(Proc *q, UINT32 dev, UmProcess *p)
 {
     Object *d = object(q, dev, K_DEVICE);
     if (!d) return ST_INVALID_PARAM;
+    for (int i = 0; i < q->nobj; i++)                   /* (its contexts' work first: it uses the rest) */
+        if (q->obj[i].kind == K_CONTEXT && q->obj[i].device == dev) object_free(q, &q->obj[i], p);
     for (int i = 0; i < q->nobj; i++)
         if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC || q->obj[i].kind == K_PQUEUE) &&
             q->obj[i].device == dev)
@@ -516,9 +563,13 @@ static UINT32 unlock2(Proc *q, const Unlock2 *a, UmProcess *p)
     return ST_OK;
 }
 
+static bool has_gpu_va(UINT64 luid);
+
 static UINT32 create_sync2(Proc *q, CreateSync2 *a, UmProcess *p)
 {
-    if (!object(q, a->device, K_DEVICE)) return ST_INVALID_PARAM;
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d) return ST_INVALID_PARAM;
+    const UINT64 luid = d->luid;                /* (handle_new may move the table) */
     if (a->type != SYNC_FENCE && a->type != SYNC_MONITORED_FENCE) return ST_NOT_SUPPORTED;
     if (a->flags & 1) return ST_NOT_SUPPORTED;                     /* Shared: not yet */
     Fence *f = kzalloc(sizeof(*f));
@@ -537,17 +588,22 @@ static UINT32 create_sync2(Proc *q, CreateSync2 *a, UmProcess *p)
         if (!va) { fence_unref(f); return ST_NO_MEMORY; }
     } else
         fence_write(f, a->fence_value);
+    UINT64 gpu_va = 0;                          /* (and in the GPU's view, read-write, where it has one) */
+    if (va && has_gpu_va(luid) && DxgkRenderMapPages(luid, q->p, &f->page, 1, 1, &gpu_va) != ST_OK) gpu_va = 0;
     UINT32 h = handle_new(q, K_SYNC);
     if (!h) {
+        if (gpu_va) DxgkRenderFreeVa(luid, q->p, gpu_va, PAGE_SIZE);
         if (va) um_unmap_view_at(p, va, f);
         fence_unref(f);
         return ST_NO_MEMORY;
     }
     Object *o = object(q, h, K_SYNC);
     o->device = a->device;
+    o->luid = luid;
     o->fence = f;
     o->va = va;
-    if (va) { a->mf.cpu_va = va; a->mf.gpu_va = 0; }
+    o->gpu_va = gpu_va;
+    if (va) { a->mf.cpu_va = va; a->mf.gpu_va = gpu_va; }
     a->sync = h;
     return ST_OK;
 }
@@ -604,7 +660,7 @@ static UINT64 paging_done(Proc *q, Object *pq)
 {
     Object *f = object(q, pq->sync, K_SYNC);
     if (!f) return 0;
-    UINT64 v = f->fence->value + 1;
+    UINT64 v = fence_value(f->fence) + 1;
     fence_write(f->fence, v);
     waiters_check();
     return v;
@@ -672,6 +728,74 @@ static UINT32 evict(Proc *q, Evict *a, const UINT32 *list)
 }
 
 /* -----------------------------------------------------------------------
+ * Contexts, submission and fences the GPU signals (a miniport adapter whose
+ * driver takes submissions: nt/dxgkrnl.c's scheduler)
+ * ----------------------------------------------------------------------- */
+static UINT32 create_context_virtual(Proc *q, CreateContextVirtual *a, const UINT8 *priv)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    DxgkRenderInfo r;
+    if (!d) return ST_INVALID_PARAM;
+    if (d->luid == BASIC_LUID_LO || !DxgkRenderFind(d->luid, &r) || !r.nodes) return ST_NOT_SUPPORTED;
+    if (a->node >= r.nodes) return ST_INVALID_PARAM;
+    const UINT64 luid = d->luid;
+    const UINT32 kdev = d->kmd;
+    UINT32 h = handle_new(q, K_CONTEXT), kmd = 0;
+    if (!h) return ST_NO_MEMORY;
+    UINT32 st = DxgkRenderCreateContext(luid, kdev, a->node, priv, a->priv_size, &kmd);
+    Object *o = object(q, h, K_CONTEXT);
+    if (st != ST_OK) { memset(o, 0, sizeof(*o)); return st; }
+    o->luid = luid;
+    o->device = a->device;
+    o->kmd = kmd;
+    a->context = h;
+    return ST_OK;
+}
+
+/* The one context a call names (broadcasts to several: not yet) */
+static Object *context(Proc *q, UINT32 n, UINT32 h) { return n == 1 ? object(q, h, K_CONTEXT) : NULL; }
+
+static UINT32 submit_command(Proc *q, const SubmitCommand *a, const UINT8 *priv)
+{
+    Object *c = context(q, a->nbroadcast, a->broadcast[0]);
+    if (!c || !a->commands || !a->length) return ST_INVALID_PARAM;
+    return DxgkRenderSubmit(c->luid, c->kmd, a->commands, a->length, priv, a->priv_size);
+}
+
+/* The fences of @list on @c's adapter, referenced into @f (any of its
+ * process's devices on that adapter); false if one is not */
+static bool gpu_fences(Proc *q, const Object *c, const UINT32 *list, UINT32 n, Fence **f)
+{
+    for (UINT32 i = 0; i < n; i++) {
+        Object *o = object(q, list[i], K_SYNC);
+        if (!o || o->luid != c->luid) return false;
+        f[i] = o->fence;
+    }
+    for (UINT32 i = 0; i < n; i++) __atomic_add_fetch(&f[i]->refs, 1, __ATOMIC_ACQ_REL);
+    return true;
+}
+
+/* @values: each fence's (monitored), or @value for all */
+static UINT32 fences_on_gpu(Proc *q, const Object *c, bool signal, const UINT32 *list, UINT32 n, const UINT64 *values,
+                            UINT64 value)
+{
+    Fence *f[MAX_LIST];
+    UINT64 v[MAX_LIST];
+    if (!c || !n || !gpu_fences(q, c, list, n, f)) return ST_INVALID_PARAM;
+    for (UINT32 i = 0; i < n; i++) v[i] = f[i]->type == SYNC_MONITORED_FENCE ? values[i] : value;
+    UINT32 st = signal ? DxgkRenderSignal(c->luid, c->kmd, (int)n, (void *const *)f, v)
+                       : DxgkRenderWait(c->luid, c->kmd, (int)n, (void *const *)f, v);
+    if (st != ST_OK)
+        for (UINT32 i = 0; i < n; i++) fence_unref(f[i]);
+    return st;
+}
+
+/* The scheduler's view of the fences (it holds a reference to each) */
+static void gpu_signal(void *f, UINT64 v) { fence_raise(f, v); waiters_check(); }
+static bool gpu_reached(void *f, UINT64 v) { return fence_value(f) >= v; }
+static const DxgkFenceOps g_fence_ops = { gpu_signal, gpu_reached, fence_unref, waiters_check };
+
+/* -----------------------------------------------------------------------
  * NtNovaDxgkCtl(op, args): NTSTATUS
  * ----------------------------------------------------------------------- */
 static bool in(void *k, UINT64 u, UINT64 n) { return u && NT_SUCCESS(CopyFromUser(k, (const void *)(uintptr_t)u, n)); }
@@ -708,8 +832,11 @@ static UINT64 wait_from_cpu(UmProcess *p, UINT64 args)
     um_lock(&g_lock);
     bool ok = fences(proc_of(p, false), a.device, list, a.count, w->fence);
     if (ok && w->event) {                       /* set the event when reached; return now */
-        if (reached(w->fence, w->value, w->n, w->any)) { set_event(w->event); waiter_free(w); }
-        else { w->next = g_waiters; g_waiters = w; }
+        IrqState s = spin_lock_irqsave(&g_wlock);
+        bool now = reached(w->fence, w->value, w->n, w->any);
+        if (!now) { w->next = g_waiters; g_waiters = w; }
+        spin_unlock_irqrestore(&g_wlock, s);
+        if (now) { set_event(w->event); waiter_free(w); }
         w = NULL;
     }
     um_unlock(&g_lock);
@@ -840,10 +967,11 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         bool ok = fences(proc_of(p, false), a.device, list, a.count, f);
         if (ok) {
             for (UINT32 i = 0; i < a.count; i++) {
-                if (vals[i] > f[i]->value) fence_write(f[i], vals[i]);   /* (a fence never goes back) */
+                fence_raise(f[i], vals[i]);
                 fence_unref(f[i]);
             }
             waiters_check();
+            DxgkRenderFencesMoved();                    /* (waits from the GPU on them) */
         }
         um_unlock(&g_lock);
         return ok ? ST_OK : ST_INVALID_PARAM;
@@ -888,6 +1016,64 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         if (st == ST_OK && !out(args, &a, size)) return ST_ACCESS_VIOLATION;
         return st;
     }
+    case OP_CREATE_CONTEXT_VIRTUAL: {
+        CreateContextVirtual a;
+        UINT8 priv[MAX_PRIV];
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        if (a.priv_size > MAX_PRIV || (a.priv_size && !in(priv, a.priv, a.priv_size))) return ST_INVALID_PARAM;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, true);
+        UINT32 st = q ? create_context_virtual(q, &a, priv) : ST_NO_MEMORY;
+        um_unlock(&g_lock);
+        if (st == ST_OK && !out(args, &a, sizeof(a))) return ST_ACCESS_VIOLATION;
+        return st;
+    }
+    case OP_DESTROY_CONTEXT: {
+        HandleOnly a;
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        Object *o = object(q, a.h, K_CONTEXT);
+        if (o) object_free(q, o, p);
+        um_unlock(&g_lock);
+        return o ? ST_OK : ST_INVALID_PARAM;
+    }
+    case OP_SUBMIT_COMMAND: {
+        SubmitCommand a;
+        UINT8 priv[MAX_PRIV];
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        if (a.priv_size > MAX_PRIV || (a.priv_size && !in(priv, a.priv, a.priv_size))) return ST_INVALID_PARAM;
+        um_lock(&g_lock);
+        UINT32 st = submit_command(proc_of(p, false), &a, priv);
+        um_unlock(&g_lock);
+        return st;
+    }
+    case OP_SIGNAL_FROM_GPU2:
+    case OP_WAIT_FROM_GPU: {
+        union { SignalFromGpu2 s; WaitFromGpu w; } a;
+        bool signal = op == OP_SIGNAL_FROM_GPU2;
+        UINT32 list[MAX_LIST], ctx = 0;
+        UINT64 vals[MAX_LIST];
+        if (!in(&a, args, signal ? sizeof(a.s) : sizeof(a.w))) return ST_ACCESS_VIOLATION;
+        UINT32 n = signal ? a.s.count : a.w.count;
+        UINT64 handles = signal ? a.s.handles : a.w.handles, values = signal ? a.s.values : a.w.values;
+        if (!n || n > MAX_LIST || !in(list, handles, n * 4ull)) return ST_INVALID_PARAM;
+        if (signal && (a.s.ncontexts != 1 || !in(&ctx, a.s.contexts, 4))) return ST_INVALID_PARAM;
+        if (!signal) ctx = a.w.context;
+        bool have = in(vals, values, n * 8ull);         /* (monitored fences' values; a plain fence's is the value itself) */
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        Object *c = object(q, ctx, K_CONTEXT);
+        UINT32 st = ST_INVALID_PARAM;
+        bool ok = c != NULL;
+        for (UINT32 i = 0; ok && i < n; i++) {
+            Object *f = object(q, list[i], K_SYNC);
+            ok = f && (f->fence->type != SYNC_MONITORED_FENCE || have);
+        }
+        if (ok) st = fences_on_gpu(q, c, signal, list, n, vals, values);
+        um_unlock(&g_lock);
+        return st;
+    }
     case OP_QUERY_VIDEO_MEMORY_INFO: {
         VideoMemoryInfo a;
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
@@ -919,17 +1105,24 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
 void um_d3dkmt_process_gone(UmProcess *p)
 {
     um_lock(&g_lock);
+    Waiter *gone = NULL;
+    IrqState s = spin_lock_irqsave(&g_wlock);
     for (Waiter **pp = &g_waiters; *pp;) {
         Waiter *w = *pp;
         if (w->p != p) { pp = &w->next; continue; }
         *pp = w->next;
-        waiter_free(w);
+        w->next = gone;
+        gone = w;
     }
+    spin_unlock_irqrestore(&g_wlock, s);
+    while (gone) { Waiter *w = gone; gone = w->next; waiter_free(w); }
     for (Proc **pp = &g_procs; *pp; pp = &(*pp)->next) {
         Proc *q = *pp;
         if (q->p != p) continue;
         *pp = q->next;
-        for (int i = 0; i < q->nobj; i++)       /* (the views go with the process; devices after the rest) */
+        for (int i = 0; i < q->nobj; i++)       /* (the views go with the process; contexts first, devices last) */
+            if (q->obj[i].kind == K_CONTEXT) object_free(q, &q->obj[i], NULL);
+        for (int i = 0; i < q->nobj; i++)
             if (q->obj[i].kind != K_DEVICE) object_free(q, &q->obj[i], NULL);
         for (int i = 0; i < q->nobj; i++) object_free(q, &q->obj[i], NULL);
         kfree(q->obj);
@@ -944,5 +1137,6 @@ void um_d3dkmt_syscalls_init(void)
     g_budget = (UINT64)pmm_ram_pages() * PAGE_SIZE / 2;
     kprintf("[DXGK] Basic Render adapter (software, render only): LUID 0x%x, %llu MB of shared memory\n",
             BASIC_LUID_LO, (unsigned long long)(g_budget >> 20));
+    DxgkRenderSetFenceOps(&g_fence_ops);
     um_install(SYSCALL_NtNovaDxgkCtl, sys_dxgk);
 }

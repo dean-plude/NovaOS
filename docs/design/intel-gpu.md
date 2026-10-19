@@ -333,11 +333,28 @@ Each is one pull request off main.
       evicting pages from memory, and GPU addresses on Basic Render.  An
       assumption step 2 checks: VidMm gives system memory pages as
       `DXGK_PTE`s with segment 0.
-   4. **Contexts and submission**: `D3DKMTCreateContextVirtual`,
-      `D3DKMTSubmitCommand`, the scheduler calling
-      `DxgkDdiSubmitCommandVirtual` in order, the miniport's interrupt and
-      DPC (`DxgkCbNotifyInterrupt`), fences the GPU signals
-      (`D3DKMTSignalSynchronizationObjectFromGpu2`, waits from the GPU).
+   4. **Contexts and submission** (done): `D3DKMTCreateContextVirtual`
+      (`DxgkDdiCreateContext` on one of the driver's nodes, then
+      `DxgkDdiSetRootPageTable` with the process's root), and
+      `D3DKMTSubmitCommand`: a scheduler thread per adapter gives each
+      context's DMA buffers to `DxgkDdiSubmitCommandVirtual` in order, a
+      submission fence ID per node, and retires them when the miniport's
+      interrupt routine reports that ID (`DxgkCbNotifyInterrupt` with
+      `DMA_COMPLETED`, then `DxgkCbNotifyDpc` from its DPC; its line
+      connected when the PnP manager gives one).  Fences queued on a
+      context (`D3DKMTSignalSynchronizationObjectFromGpu2`) are raised
+      once the work before them is done, waits from the GPU
+      (`D3DKMTWaitForSynchronizationObjectFromGpu`) hold the context's
+      later work, and a monitored fence has a GPU virtual address (its
+      value page mapped for the GPU), which the GPU writes; monitored
+      fences are looked at after each `DMA_COMPLETED` or
+      `MONITORED_FENCE_SIGNALED`.  Checked by `kmttest wddm`, with
+      `wddmtest.sys`'s software GPU (a kernel thread running a small
+      command format through the page tables from the physical root).
+      Not in it: paging buffers the GPU runs (a driver that needs them
+      still gets "not yet"), broadcast to several contexts, priorities
+      between contexts, message-signalled interrupts, and recovering
+      from a fault (logged, the buffer dropped: part 5).
    5. **Preemption and TDR**: `DxgkDdiPreemptCommand`, the timeout,
       `DxgkDdiResetFromTimeout`/`RestartFromTimeout`, the offending
       context lost and the rest going on.

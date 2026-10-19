@@ -14744,6 +14744,48 @@ core's resource dictionary and object writer, and the anti-cheat and DRM
 notes (step 24.7).  Its known limits now say that Wi-Fi, Bluetooth and
 power management are checked against modelled devices only.
 
+## Wi-Fi: WPA3-Personal networks connect
+
+Fourth part of roadmap step 28.1.  NovaOS's WDI upper edge joined open
+and WPA2-Personal networks.  Now it joins WPA3-Personal networks too,
+the way Windows does it: the driver sends and receives the
+authentication frames, and the OS makes and checks what is in them.
+
+- **`netsh wlan connect name=SSID key=PASSWORD`** on a WPA3 network
+  (SAE, CCMP, management frame protection) connects with SAE
+  authentication and management frame protection on.  A transition-mode
+  network that offers WPA2 and WPA3 gets WPA3.
+- **SAE** (`kernel/nt/sae.c`, IEEE 802.11-2020 12.4, on Mbed TLS's P-256):
+  the password element by hunting and pecking (all 40 rounds run, so the
+  time it takes says nothing about the password), the commit, the shared
+  secret's KCK and PMK, and the confirm.  It refuses an access point
+  that sends the station's own commit back, an element off the curve and
+  an out-of-range scalar, and it commits again when the access point
+  asks for an anti-clogging token.
+- **Through the driver**: while the connect task runs, the driver asks
+  for each step (`NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED`: the
+  commit, then here is the access point's commit or confirm) and NovaOS
+  answers with `OID_WDI_SET_SAE_AUTH_PARAMS`.
+- **The 4-way handshake, WPA3's way** (`kernel/nt/wpa.c`): it starts
+  from SAE's PMK, with key descriptor version 0 (KDF-SHA256 for the PTK,
+  AES-128-CMAC MICs).  Message 3 and every group rekey also bring the
+  IGTK, management frames' group key (BIP-CMAC-128), which goes to the
+  driver with the other keys.
+- **Clear errors**: a wrong password stops at SAE's confirm ("The network
+  security key isn't correct"), and an access point that wants an SAE
+  group other than P-256 is named as such in the log.
+
+The `wifi` boot's `NovaNet-5G` is now a WPA3 access point: `wditest.sys`
+carries SAE as a WDI driver does, and its access point side has its own
+P-256, SHA-256 and CMAC (`tools/drivertest/saeap.h` and `wpaap.h`,
+independent of Mbed TLS).  The test connects with a wrong password, then
+the right one, checks every key NovaOS installs and gets DHCP, pings and
+a rekey of both group keys over the connection.  A host test
+(`tests/tools/test_sae_handshake.py`) checks both SAE implementations
+against the standard's Annex J.10 vector and runs the whole exchange
+between them.  Not yet: SAE's hash-to-element and its other groups,
+`wlanapi.dll` and Settings' Wi-Fi page; the real card needs the T14.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

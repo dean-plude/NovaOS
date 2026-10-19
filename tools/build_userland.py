@@ -112,7 +112,10 @@ def cflags():
 #   xaml      true: a C++ program built against Microsoft's XAML sources
 #             as they are compiled (third_party/microsoft-ui-xaml, WIL,
 #             NovaOS's WRL) and linked with the XAML components built so
-#             far (userland/windows_ui_xaml/build.py); implies msstl
+#             far (userland/windows_ui_xaml/build.py); implies msstl.
+#             "parser" or "elements": built with that core library's flags;
+#             "core": also linked with the core services (CCoreServices)
+#             and stand-ins for the parts of the core not built yet
 #   sources   more files compiled into it with its own flags (paths or
 #             globs from the repository root, e.g. a vendored library's
 #             under third_party/); with "include" (directories searched),
@@ -561,7 +564,7 @@ def build_pass(arch, all_tasks):
     def link_prog(src, name, prog):
         exe = os.path.join(odir, f'{name}.exe')
         objs, res = compiled[name]
-        stl = ((xamlobjs if prog.get('xaml') else []) + stlobjs + [tlregdtr] + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
+        stl = ((XAML.program_link(prog, xamlobjs) if prog.get('xaml') else []) + stlobjs + [tlregdtr] + [os.path.join(odir, l + '.lib') for l in stl_libs]) \
             if src.endswith('.cpp') and prog.get('msstl') else []
         libs = PROGRAM_LIBS + [l for l in prog.get('libs', []) if l not in PROGRAM_LIBS]
         run(['lld-link', '/subsystem:' + ('windows' if prog.get('gui') else 'console'),

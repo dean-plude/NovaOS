@@ -1,5 +1,5 @@
 /* xamlloadtest.exe — Microsoft's XAML resource dictionaries and object
- * writer built for NovaOS (roadmap step 32.3, part 7;
+ * writer built for NovaOS (roadmap step 32.3, parts 7 to 9;
  * docs/design/windows-ui-xaml.md): CResourceDictionary from
  * dxaml/xcp/core/core/elements (Resources.cpp: keyed resources and their
  * lookup) and the parser's object writer runtime from dxaml/xcp/core/Parser
@@ -10,19 +10,19 @@
  * objects; and (part 8) a dictionary's merged dictionaries and theme
  * dictionaries, set through field-backed properties whose offsets come
  * from the core's property runtime data
- * (userland/windows_ui_xaml/src/property_data.cpp), searched by lookup.
+ * (userland/windows_ui_xaml/src/property_data.cpp), searched by lookup;
+ * and (part 9) all of it on the XAML core's own core services
+ * (CCoreServices, core/dll/xcpcore.cpp), which load the XAML as
+ * XamlReader.Load has them load it (CCoreServices::ParseXaml).
  *
- * Until the XAML core (CCoreServices) builds, the parser's core services
- * are Microsoft's mock from its parser unit tests, laid where the core's
- * object would hold them, and the type table activates the handful of
- * types the cases use (below).
+ * Until the core's generated type table builds, the table here activates
+ * the handful of types the cases use (below).
  *
  *   xamlloadtest       the self-test runs it with no arguments
  */
 #include <stdio.h>
 #include <string.h>
 #include <new>
-#include "MockParserCoreServices.h"
 #include <corep.h>
 #include <CDependencyObject.h>
 #include <Resources.h>
@@ -31,14 +31,8 @@
 #include <primitives.h>
 #include <CColor.h>
 #include <TypeTableStructsPrivate.h>
-#include <XamlSchemaContext.h>
-#include <XamlTextReader.h>
-#include <XamlTextReaderSettings.h>
-#include <ObjectWriter.h>
-#include <ObjectWriterSettings.h>
-#include <XamlQualifiedObject.h>
-#include <ParserErrorService.h>
 #include <CStaticLock.h>
+#include <ParserAPI.h>
 #include <FrameworkTheming.h>
 #include <ThemeWalkResourceCache.h>
 #include "TestThemingInterop.h"
@@ -47,8 +41,6 @@ static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
 #define CHECK_HR(what, expr) do { HRESULT h_ = (expr); if (SUCCEEDED(h_)) pass++; else { fail++; \
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
-
-using Microsoft::UI::Xaml::Tests::Parser::MockParserCoreServices;
 
 /* the types the object writer may create here, by the core's own
  * constructors (the XAML core's generated table, core/metadata
@@ -76,90 +68,71 @@ static std::string narrow(const xstring_ptr_view &s)
     return out;
 }
 
-/* the parser's errors, printed (the core's own reporter shows them to the app) */
-class PrintingErrorReporter final : public ParserErrorReporter
-{
-protected:
-    HRESULT ReportError(XUINT32 code, XUINT32 line, XUINT32 column, XUINT32, XUINT32, const xstring_ptr &message) override
-    {
-        printf("  parser error %u at %u:%u: %s\n", code, line, column, narrow(message).c_str());
-        return S_OK;
-    }
-};
-
-/* the core: the parser hands its objects the CCoreServices its schema
- * context was made with, cast from IParserCoreServices.  The mock is placed
- * where a CCoreServices holds that interface, in zeroed storage the size of
- * the core, so what the code reads of the core is the empty state.  What the
- * resource dictionary reads beyond that is set as CCoreServices' constructor
- * and initialisation set it, through the test hooks class the core names as
- * its friend: the objects' shared default state (which names the core), the
- * core's thread (collections check their items against it), the theme cache
- * and the theming, here over Microsoft's test theming (system theme Dark) */
+/* the core: the XAML core's own core services (CCoreServices,
+ * core/dll/xcpcore.cpp, built since part 9), made by its own constructor;
+ * the objects it makes name it, and the parser reads it through its
+ * IParserCoreServices.  CCoreServices::Create sets up the rest of the
+ * core's services, the platform layer's queues and work items, the media
+ * queue, the text core and render target bitmaps, which do not build yet:
+ * what the resource dictionary reads of what Create sets is set here as
+ * Create sets it, through the test hooks class the core names as its
+ * friend (the core's thread: collections check their items against it;
+ * the theme cache and the theming, here over Microsoft's test theming,
+ * system theme Dark).  XamlReader.Load loads XAML as load() does, through
+ * CCoreServices::ParseXaml. */
 namespace DirectUI {
 class DxamlCoreTestHooks {
 public:
-    static void SetUp(CCoreServices *c)
+    static CCoreServices *Make()
     {
-        new (&c->m_flyweightState) CoreState(CDOSharedState(c, CDOSharedState::s_defaultRenderChangedHandler,
-                                                            CDOSharedState::s_defaultBaseUri, xref::weakref_ptr<VisualTree>()));
+        CCoreServices *c = new CCoreServices;
         c->m_nThreadID = GetCurrentThreadId();
         c->m_spTheming.reset(new FrameworkTheming(std::make_shared<TestThemingInterop>(), []() { return S_OK; }));
         c->m_themeWalkResourceCache.reset(new ThemeWalkResourceCache());
+        return c;
     }
 };
 }
+
+static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out = nullptr);
+
+/* the core's own theme resources, which the framework loads on first
+ * lookup (FrameworkCallbacks_LoadThemeResources, from its built-in theme
+ * dictionaries) and a dictionary's lookup falls back on; until the
+ * framework builds, a small dictionary of this test's, loaded through the
+ * core and given it as the framework gives it its own */
+static const wchar_t c_themeResources[] =
+    L"<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+    L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>"
+    L"<x:String x:Key='FromTheme'>theme</x:String></ResourceDictionary>";
 
 static CCoreServices *core()
 {
     static CCoreServices *c;
     if (!c) {
-        const uintptr_t probe = 0x10000;
-        size_t at = reinterpret_cast<uintptr_t>(static_cast<IParserCoreServices *>(reinterpret_cast<CCoreServices *>(probe))) - probe;
-        void *mem = calloc(1, sizeof(CCoreServices) + sizeof(MockParserCoreServices));
-        new (static_cast<char *>(mem) + at) MockParserCoreServices();
-        c = static_cast<CCoreServices *>(mem);
-        DirectUI::DxamlCoreTestHooks::SetUp(c);
+        c = DirectUI::DxamlCoreTestHooks::Make();
+        CDependencyObject *theme = load(c_themeResources);
+        c->SetThemeResources(do_pointer_cast<CResourceDictionary>(theme));
+        ReleaseInterface(theme);
     }
     return c;
 }
 
-static std::shared_ptr<XamlSchemaContext> schema()
+/* XAML text @xaml loaded into objects by the core (CCoreServices::ParseXaml:
+ * read by XmlLite, parsed into the node stream, written into objects): the
+ * root (referenced), or null with the failing HRESULT in *@hr */
+static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out)
 {
-    static std::shared_ptr<XamlSchemaContext> ctx;
-    if (!ctx) {
-        std::shared_ptr<ParserErrorReporter> reporter = std::make_shared<PrintingErrorReporter>();
-        if (FAILED(XamlSchemaContext::Create(static_cast<IParserCoreServices *>(core()), reporter, ctx))) return nullptr;
-    }
-    return ctx;
-}
-
-/* XAML text @xaml loaded into objects: the root (referenced), or null
- * with the failing HRESULT in *@hr */
-static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out = nullptr)
-{
-    std::shared_ptr<XamlSchemaContext> ctx = schema();
-    std::shared_ptr<XamlTextReader> reader;
-    std::shared_ptr<ObjectWriter> writer;
-    HRESULT hr = ctx ? S_OK : E_FAIL;
-    if (SUCCEEDED(hr))
-        hr = XamlTextReader::Create(ctx, XamlTextReaderSettings(false, true, false), (XUINT32)(wcslen(xaml) * 2),
-                                    reinterpret_cast<const XUINT8 *>(xaml), reader);
-    ObjectWriterSettings settings;
-    if (SUCCEEDED(hr)) hr = ObjectWriter::Create(ctx, settings, writer);
-    while (SUCCEEDED(hr) && (hr = reader->Read()) == S_OK)
-        hr = writer->WriteNode(reader->CurrentNode());
+    Parser::XamlBuffer buffer;
+    buffer.m_count = (uint32_t)(wcslen(xaml) * sizeof(wchar_t));
+    buffer.m_buffer = reinterpret_cast<const BYTE *>(xaml);
     CDependencyObject *root = nullptr;
-    if (SUCCEEDED(hr)) {
-        std::shared_ptr<XamlQualifiedObject> result = writer->get_Result();
-        root = result ? result->GetDependencyObject() : nullptr;
-        if (root) root->AddRef();
-        else hr = E_POINTER;
-    }
+    HRESULT hr = core()->ParseXaml(buffer, /* bForceUtf16 */ true, /* bCreatePermanentNamescope */ false,
+                                   /* bRequiresDefaultNamespace */ false, &root);
+    if (SUCCEEDED(hr) && !root) hr = E_POINTER;
     if (hr_out) *hr_out = hr;
     return root;
 }
-
 
 static std::string string_of(CDependencyObject *o)
 {
@@ -209,6 +182,7 @@ static void test_dictionary()
     CHECK("lookup a", string_of(lookup(d, L"a")) == "apple");
     CHECK("lookup b", string_of(lookup(d, L"b")) == "banana");
     CHECK("missing key", lookup(d, L"c") == nullptr);
+    CHECK("the core's theme resources", string_of(lookup(d, L"FromTheme")) == "theme");
     v.WrapObjectNoRef(a);
     CHECK("a duplicate key is refused", FAILED(d->Add(str(L"a"), &v, nullptr, false)));
     CHECK("Remove b", SUCCEEDED(d->Remove(str(L"b"))) && d->GetCount() == 1 && lookup(d, L"b") == nullptr);

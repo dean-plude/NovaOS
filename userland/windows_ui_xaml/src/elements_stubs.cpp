@@ -1,21 +1,18 @@
 // NovaOS: stand-ins, in the manner of Microsoft's isolated-test stubs
 // (components/unittests/stubs), for what the core's resource dictionary
 // (core/core/elements/Resources.cpp) calls in the parts of the core that do
-// not build yet: the core services (CCoreServices, core/dll/xcpcore.cpp:
-// the application's and the system colours' dictionaries, loading a
-// dictionary's Source, implicit-style invalidation, the resource lookup
-// logger), the framework's DXamlCore, CApplication's base URIs, the error
-// service and eight of CDependencyObject's members from
+// not build yet: the framework's DXamlCore, CApplication's base URIs, the
+// error service's invalid-operation errors, implicit-style invalidation and
+// eight of CDependencyObject's members from
 // core/core/elements/depends.cpp; and for the object writer runtime, the
 // framework's callbacks for app-defined (managed) types, the elements
 // markup reaches beyond resources (templates, styles, bindings, x:Type and
 // Setter targets, visual states, deferred names) and the simple
-// properties' value conversions.  With no core they say "nothing here": no
-// application or system dictionaries, no theme requested, no custom
-// resource loader, no managed peers; Source loading, templates, styles and
+// properties' value conversions.  (The core services themselves,
+// CCoreServices, build for real since part 9: core/dll/xcpcore.cpp.)
+// They say "nothing here": no managed peers; templates, styles and
 // bindings not available.  Compiled with the elements' flags into
-// xaml_teststubs.lib, so only programs that test the libraries on their own
-// link them; they go as the core builds.
+// xaml_teststubs.lib; they go as the core builds.
 #include <corep.h>
 #include <CDependencyObject.h>
 #include <Resources.h>
@@ -41,56 +38,6 @@
 #include <vsm/inc/CVisualStateManager2.h>
 #include <DeferredNameScopeEntry.h>
 #include <namescope/inc/NameScopeRoot.h>
-
-bool CCoreServices::IsThemeRequestedForSubTree() const
-{
-    return false;
-}
-
-xstringmap<bool> &CCoreServices::GetResourceDictionaryUriCache()
-{
-    static xstringmap<bool> cache;
-    return cache;
-}
-
-_Check_return_ HRESULT CCoreServices::GetSystemColorsResources(_Out_ CResourceDictionary **ppSystemColorsResources)
-{
-    *ppSystemColorsResources = nullptr;
-    return S_OK;
-}
-
-_Check_return_ HRESULT CCoreServices::InvalidateImplicitStylesOnRoots(_In_opt_ CResourceDictionary *)
-{
-    return S_OK;
-}
-
-_Check_return_ HRESULT CCoreServices::LoadXamlResource(_In_ IPALUri *, _Out_ bool *pfHasBinaryFile, _Outptr_ IPALMemory **ppMemory,
-                                                       _Out_opt_ Parser::XamlBuffer *, _Outptr_opt_ IPALUri **ppPhysicalUri)
-{
-    *pfHasBinaryFile = false;
-    *ppMemory = nullptr;
-    if (ppPhysicalUri) *ppPhysicalUri = nullptr;
-    return E_NOTIMPL;
-}
-
-_Check_return_ HRESULT CCoreServices::ParseXamlWithExistingFrameworkRoot(_In_ const Parser::XamlBuffer &, _In_ CDependencyObject *,
-                                                                         _In_ const xstring_ptr_view &, _In_ const xstring_ptr_view &,
-                                                                         _In_ const bool, _Outptr_ CDependencyObject **ppDependencyObject)
-{
-    *ppDependencyObject = nullptr;
-    return E_NOTIMPL;
-}
-
-_Check_return_ ICustomResourceLoader *CCoreServices::GetCustomResourceLoader()
-{
-    return nullptr;
-}
-
-_Check_return_ HRESULT CCoreServices::GetResourceManager(_Outptr_ IPALResourceManager **ppResourceManager)
-{
-    *ppResourceManager = nullptr;
-    return E_NOTIMPL;
-}
 
 _Check_return_ HRESULT CFrameworkElement::InvalidateImplicitStyles(_In_ CUIElement *, _In_opt_ CResourceDictionary *)
 {
@@ -150,12 +97,6 @@ CDeferredStorage &CDependencyObject::EnsureAndGetScopeDeferredStorage()
     return CDeferredMapping::EnsureScopeDeferredStorage(this);
 }
 
-_Check_return_ HRESULT CCoreServices::ShimGetResourcePropertyBagRaw(_In_ const xstring_ptr &, _In_ const xref_ptr<IPALUri> &,
-                                                                    _Out_ std::vector<std::pair<xstring_ptr, xstring_ptr>> &)
-{
-    return E_NOTIMPL;
-}
-
 void Diagnostics::ResourceGraph::CacheMarkupExtensionToTarget(_In_ CMarkupExtensionBase *, _In_ KnownPropertyIndex, _In_ CDependencyObject *)
 {
 }
@@ -175,17 +116,6 @@ _Check_return_ HRESULT CTemplateContent::RecordXaml(_In_ const std::shared_ptr<X
                                                     _In_ const std::vector<std::pair<bool, xstring_ptr>> &)
 {
     return E_NOTIMPL;
-}
-
-// as core/dll/xcpcore.cpp and core/core/elements/depends.cpp have them
-// (build.py's STUB_RENAMES)
-Diagnostics::ResourceLookupLogger *CCoreServices::GetResourceLookupLogger()
-{
-    if (!m_resourceLookupLogger)
-    {
-        m_resourceLookupLogger = std::make_unique<Diagnostics::ResourceLookupLogger>();
-    }
-    return m_resourceLookupLogger.get();
 }
 
 _Check_return_ HRESULT CDependencyObject::AddPeerReferenceToItem(_In_ CDependencyObject *pChild)
@@ -368,11 +298,4 @@ xref_ptr<CDependencyObject> Jupiter::VisualStateManager::DeferredNameScopeEntry:
 
 void CFrameworkTemplate::SetParentXBindConnector(const std::shared_ptr<XamlQualifiedObject> &)
 {
-}
-
-// the core's names (one root of name scopes for the program)
-Jupiter::NameScoping::NameScopeRoot &CCoreServices::GetNameScopeRoot()
-{
-    static Jupiter::NameScoping::NameScopeRoot root;
-    return root;
 }

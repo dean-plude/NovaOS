@@ -29,11 +29,14 @@ WinURI's), core/dll/services.cpp, the isolated unit tests' stubs and
 metadata mocks (components/unittests/stubs, less seven stubs NovaOS does
 not link, and components/metadata/mocks; xaml_teststubs.lib, linked by
 xamlbasetest), the isolated parser unit tests' mock core services
-(components/parser/unittests, linked by xamlparsetest and xamlloadtest, and
+(components/parser/unittests, linked by xamlparsetest, and
 components/theming/unittests' TestThemingInterop, linked by xamlloadtest, with
 dxaml/test/native/inc/XamlLogging.h), the components'
 precompiled header (components/pch), headers from dxaml/xcp/inc, core/inc,
-pal and the components' inc directories those include, external/inc's gsl
+pal and the components' inc directories those include, the core services
+(core/dll/xcpcore.cpp and xcpcore_namescope.cpp, with core/xcpcore.vcxproj,
+core/hw's MaxTextureSizeProvider.cpp and AtlasRequestProvider.cpp, and the
+headers they include), external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

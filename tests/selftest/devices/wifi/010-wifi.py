@@ -24,8 +24,7 @@
 # access point, and its answers come back as 802.11 frames
 # (RxInorderDataIndication, RxGetMpdus, RxReturnFrames).  Disconnecting
 # gives the stack its Ethernet card back.  NovaNet is WPA2-Personal:
-# without a key netsh says so, WPA3-only NovaNet-5G is refused as not yet
-# supported, and "netsh wlan connect name=NovaNet key=..." runs the 4-way
+# without a key netsh says so, and "netsh wlan connect name=NovaNet key=..." runs the 4-way
 # handshake (kernel/nt/wpa.c) with the access point the driver plays: EAPOL
 # exempted from encryption first (OID_WDI_SET_PRIVACY_EXEMPTION_LIST), the
 # EAPOL-Key frames up and down the data path, then the pairwise and group
@@ -34,6 +33,17 @@
 # security key isn't correct").  With the right one DHCP and ping run over
 # the secured connection, the access point's group key handshake replaces
 # the group key mid-ping, and netsh shows WPA2-Personal with CCMP.
+# NovaNet-5G is WPA3-Personal: "netsh wlan connect name=NovaNet-5G key=..."
+# runs SAE (kernel/nt/sae.c) through the driver as Windows does, the
+# driver asking for the station's commit and passing up the access
+# point's commit and confirm (NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED),
+# NovaOS answering with OID_WDI_SET_SAE_AUTH_PARAMS; the driver checks
+# each against its own SAE (tools/drivertest/saeap.h).  A wrong password
+# fails at the station's confirm ("The network security key isn't
+# correct"); the right one associates, the 4-way handshake runs WPA3's
+# way from SAE's PMK and brings the management frame protection key
+# (IGTK) with the group key, both checked by the driver, and DHCP, ping
+# and a rekey of both group keys run over it.
 # Disabling the device deletes the port, stops the data path and closes the
 # adapter, and the interface is gone.
 DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with `pnputil /add-driver /install`: '
@@ -45,7 +55,11 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        '`netsh wlan connect name=NovaNet key=...` joins the WPA2-Personal one (EAPOL exempted, the 4-way handshake '
        'over the data path, the pairwise and group keys given to the driver with OID_WDI_SET_ADD_CIPHER_KEYS and '
        'checked by it), a wrong passphrase is refused at message 2, and DHCP, ping and a group key handshake run over '
-       'the secured connection; disabling the device deletes the port, stops the data path and closes the adapter')
+       'the secured connection; `netsh wlan connect name=NovaNet-5G key=...` joins the WPA3-Personal one (SAE through '
+       'the driver: its SAE_AUTH_PARAMS_NEEDED indications answered with OID_WDI_SET_SAE_AUTH_PARAMS, then the WPA3 '
+       '4-way handshake with management frame protection\'s IGTK), a wrong password is refused at SAE\'s confirm, and '
+       'DHCP, ping and a rekey run over it; disabling the device deletes the port, stops the data path and closes the '
+       'adapter')
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 def _dhcp(nova):
     """wait for the lease: lwIP probes the offered address with ARP (ACD)
@@ -55,13 +69,18 @@ def _dhcp(nova):
         nova.sr.wait(lease, 60)
 
 
-def _dhcp_again(nova):
-    """the same for the second connection (NovaNet's): its own lease"""
-    lease = '[NET] DHCP: address 192.168.77.100, gateway 192.168.77.1, DNS 192.168.77.1'
-    for _ in range(240):
-        if open(nova.serial_path, 'rb').read().decode('latin-1').count(lease) >= 2:
-            return
-        nova.sr.wait(lease, 0.25)
+def _leases(n):
+    """the same for a later connection: the @n-th lease"""
+    def wait(nova):
+        lease = '[NET] DHCP: address 192.168.77.100, gateway 192.168.77.1, DNS 192.168.77.1'
+        for _ in range(240):
+            if open(nova.serial_path, 'rb').read().decode('latin-1').count(lease) >= n:
+                return
+            nova.sr.wait(lease, 0.25)
+    return wait
+
+
+_dhcp_again = _leases(2)        # (NovaNet's connection)
 
 
 TESTS = [
@@ -112,10 +131,9 @@ TESTS = [
           r' +Authentication +: WPA3-Personal\n +Encryption +: CCMP\n'], builtin=True),
     Test('wifi secured', 'netsh wlan connect name=NovaNet',
          [r'The network "NovaNet" is secured: give its passphrase with key=PASSPHRASE\.'], builtin=True),
-    Test('wifi wpa3', 'netsh wlan connect name=NovaNet-5G key=nova-wpa2-passphrase',
-         [r'The network "NovaNet-5G" uses security NovaOS does not support yet'], builtin=True),
     Test('wifi short key', 'netsh wlan connect name=NovaNet key=short',
-         [r'A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits\.'], builtin=True),
+         [r'A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 password 8 to 63 characters\.'],
+         builtin=True),
     Test('wifi connect', 'netsh wlan connect name=NovaGuest',
          [r'\[DbgPrint\] wditest: connect task \d+ on port 1: SSID NovaGuest, auth 1, 1 BSS entry, first 02:4e:6f:76:61:03',
           r'\[WDI\] WdiTest: peer 1 on port 1: 02:4e:6f:76:61:03',
@@ -181,6 +199,47 @@ TESTS = [
           r' +Authentication +: WPA2-Personal\n +Cipher +: CCMP\n'], builtin=True),
     Test('wifi wpa2 disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaNet \(0x00000000\)',
+          r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    Test('wifi wpa3 wrong password', 'netsh wlan connect name=NovaNet-5G key=not-the-password',
+         [r'\[DbgPrint\] wditest: connect to NovaNet-5G: auth 9, ciphers 4/4, exclude unencrypted 1, MFP 1, '
+          r'EAPOL exempted yes',
+          r'\[DbgPrint\] wditest: SAE: asked the host for the station\'s commit',
+          r'\[SAE\] WdiTest: commit \(group 19\) to the access point',
+          r'\[DbgPrint\] wditest: SAE: the station\'s commit \(group 19\): good',
+          r'\[DbgPrint\] wditest: SAE: the access point\'s commit to the host',
+          r'\[SAE\] WdiTest: the access point\'s commit is good: confirm to it',
+          r'\[DbgPrint\] wditest: SAE: the station\'s confirm: the station\'s confirm is wrong \(not the password\)',
+          r'\[DbgPrint\] wditest: SAE with NovaNet-5G failed: not associated',
+          r'\[SAE\] WdiTest: no confirm from the access point: the password is not NovaNet-5G\'s',
+          r'The network security key isn\'t correct: "NovaNet-5G" did not accept it\.'], builtin=True),
+    Test('wifi wpa3 connect', 'netsh wlan connect name=NovaNet-5G key=nova-wpa3-password',
+         [r'\[DbgPrint\] wditest: connect task \d+ on port 1: SSID NovaNet-5G, auth 9, 1 BSS entry, first 02:4e:6f:76:61:02',
+          r'\[DbgPrint\] wditest: SAE: the station\'s commit \(group 19\): good',
+          r'\[DbgPrint\] wditest: SAE: the station\'s confirm: good \(the password\)',
+          r'\[DbgPrint\] wditest: SAE: the access point\'s confirm to the host',
+          r'\[SAE\] WdiTest: the access point\'s confirm is good: authenticated',
+          r'\[DbgPrint\] wditest: SAE: the host says success: associating',
+          r'\[WDI\] WdiTest: connected to NovaNet-5G \(02:4e:6f:76:61:02\) on port 1, peer 1: WPA3-Personal, CCMP, '
+          r'WMM off',
+          r'\[DbgPrint\] wditest: 4-way handshake message 1 \(ANonce\) to the station \(WPA3: from SAE\'s PMK\)',
+          r'\[DbgPrint\] wditest: 4-way handshake message 2: MIC good, RSN element its association\'s; sending message 3',
+          r'\[DbgPrint\] wditest: 4-way handshake message 4: MIC good; the handshake is done',
+          r'\[DbgPrint\] wditest: pairwise key for 02:4e:6f:76:61:02: the 4-way handshake\'s',
+          r'\[DbgPrint\] wditest: management group key \(IGTK\) 4: the access point\'s',
+          r'\[WPA\] WdiTest: pairwise key and group key 1 and management group key 4 installed \(0x00000000\)',
+          r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
+          r'Connection request was completed successfully\.'], builtin=True),
+    Test('wifi wpa3 ping', 'ping 192.168.77.1',
+         [r'\[DbgPrint\] wditest: group key handshake: sending group key 2',
+          r'\[DbgPrint\] wditest: management group key \(IGTK\) 5: the access point\'s',
+          r'\[WPA\] WdiTest: group key 2 and management group key 5 installed \(0x00000000\)',
+          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_leases(3)),
+    Test('wifi wpa3 connected', 'netsh wlan show interfaces',
+         [r'State +: connected\n +SSID +: NovaNet-5G\n +AP BSSID +: 02:4e:6f:76:61:02\n +Band +: 5 GHz\n'
+          r' +Channel +: 36\n +Network type +: Infrastructure\n +Radio type +: 802\.11ax\n'
+          r' +Authentication +: WPA3-Personal\n +Cipher +: CCMP\n'], builtin=True),
+    Test('wifi wpa3 disconnect', 'netsh wlan disconnect',
+         [r'\[WDI\] WdiTest: disconnected from NovaNet-5G \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] wditest: station port 1 deleted',

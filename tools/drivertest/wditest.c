@@ -43,6 +43,20 @@
  * it replaces the group key (the group key handshake) and checks the new
  * one comes back too.
  *
+ * NovaNet-5G is WPA3-Personal (password "nova-wpa3-password"; SAE,
+ * management frame protection required): the driver carries SAE's
+ * authentication frames as a WDI driver does and is the access point's
+ * SAE half too (tools/drivertest/saeap.h, its own P-256).  During the
+ * connect task it asks for the station's commit
+ * (NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED), checks the commit
+ * that comes in OID_WDI_SET_SAE_AUTH_PARAMS, indicates the access point's
+ * commit, checks the station's confirm (a wrong password stops there: no
+ * confirm back, and the connect ends with no authentication response),
+ * indicates its own confirm and, on the station's success, associates.
+ * The 4-way handshake then starts from SAE's PMK, WPA3's way (wpaap.h),
+ * and brings the IGTK, which must come back in OID_WDI_SET_ADD_CIPHER_KEYS
+ * with the other keys.
+ *
  * Each check it makes of what it is sent goes to the debugger (DbgPrint),
  * where the wifi self-test reads it.
  *
@@ -53,7 +67,7 @@
  */
 #include "../../kernel/nt/ndis.h"
 #include "../../kernel/nt/wdi.h"
-#include "wpaap.h"
+#include "saeap.h"
 
 #define IMPORT __declspec(dllimport) NT_API
 IMPORT unsigned int DbgPrint(const char *fmt, ...);
@@ -138,6 +152,7 @@ static const Ap APS[] = {
 #define NAPS (int)(sizeof(APS) / sizeof(APS[0]))
 
 #define NNET      0                 /* APS[NNET]: the WPA2-Personal network, which connects with its passphrase */
+#define NNET5     1                 /* APS[NNET5]: the WPA3-Personal network, which connects with SAE */
 #define NGUEST    2                 /* APS[NGUEST]: the open network, which connects */
 #define PEER      1                 /* its peer ID */
 #define RXQ       16
@@ -156,6 +171,12 @@ static const unsigned char STA_RSN[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1,
                                            0x00, 0x0f, 0xac, 2, 0, 0 };
 #define AP_RSN (IES_WPA2 + 13)      /* (NovaNet's beacon's RSN element: after its rates and DS parameter set) */
 #define AP_RSN_LEN 22
+/* NovaNet-5G's: its password, the RSN element the driver associates with (SAE, CCMP, MFP capable and
+ * required), its beacon's (after its rates) */
+static const char SAE_PASSWORD[] = "nova-wpa3-password";
+static const unsigned char STA_RSN3[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
+                                            0x00, 0x0f, 0xac, 8, 0xc0, 0 };
+#define AP_RSN3 (IES_WPA3 + 10)
 
 /* ---- the adapter ---- */
 typedef struct {
@@ -181,9 +202,16 @@ typedef struct {
     /* the connection: which access point; WPA2's state */
     int               ap, wpa2, exempt, hs, port_open, rekeyed, dropped;
     WpaAp             wpa;
+    /* WPA3: SAE during the connect task (wpa2 is set too: the same secured data path) */
+    int               wpa3, sae, igtk_ok;
+    unsigned int      sae_tid;
+    SaeAp             sap;
     unsigned char     eapol[512];
 } Adapter;
 enum { HS_NONE, HS_MSG1, HS_MSG3, HS_DONE, HS_GROUP1 };
+/* (SAE: what the timer indicates next, or what the station's next answer should be) */
+enum { SAE_NONE, SAE_ASK, SAE_WAIT_COMMIT, SAE_SEND_COMMIT, SAE_WAIT_CONFIRM, SAE_SEND_CONFIRM, SAE_WAIT_SUCCESS,
+       SAE_OK, SAE_FAIL };
 
 static void *zero(void *p, unsigned long long n)
 {
@@ -501,6 +529,11 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
             for (int i = 0; i < 16; i++) a->wpa.gtk[i] = (unsigned char)(0xB0 + i);
             a->wpa.gtk_id = 2;
             a->wpa.rsc[0] = 0;
+            if (a->wpa3) {
+                for (int i = 0; i < 16; i++) a->wpa.igtk[i] = (unsigned char)(0xD0 + i);
+                a->wpa.igtk_id = 5;
+                a->igtk_ok = 0;
+            }
             unsigned int k = ap_group1(&a->wpa, a->eapol);
             a->hs = HS_GROUP1;
             DbgPrint("wditest: group key handshake: sending group key 2\n");
@@ -708,9 +741,59 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         break;
     }
     case WDI_TASK_CONNECT: {
+        const Ap *ap = &APS[a->ap];
+        if (a->wpa3 && a->sae != SAE_OK) {
+            /* SAE first: ask for the station's commit, send the access point's commit or confirm, or end it */
+            unsigned char fr[2 + 96];
+            unsigned int ty = 0, k = 0;
+            a->port = PORT;
+            if (a->sae == SAE_FAIL) {
+                WDI_ASSOCIATION_RESULT_PARAMETERS ar;
+                unsigned char r[64];
+                zero(&ar, sizeof(ar));
+                ar.AssociationStatus = WDI_ASSOC_STATUS_NO_AUTH_RESPONSE;
+                ar.AuthAlgorithm = WDI_AUTH_ALGO_WPA3_SAE;
+                unsigned int m = put(r, 0, WDI_TLV_BSSID, ap->bssid, 6);
+                m = put(r, m, WDI_TLV_ASSOCIATION_RESULT_PARAMETERS, &ar, sizeof(ar));
+                n = put(t, 0, WDI_TLV_ASSOCIATION_RESULT, r, m);
+                indicate(a, WDI_INDICATION_ASSOCIATION_RESULT, a->tid, n);
+                indicate(a, WDI_INDICATION_CONNECT_COMPLETE, a->tid, 0);
+                DbgPrint("wditest: SAE with %s failed: not associated\n", ap->ssid);
+                a->wpa3 = a->wpa2 = 0;
+                a->sae = SAE_NONE;
+                break;
+            }
+            n = put(t, 0, WDI_TLV_BSSID, ap->bssid, 6);
+            if (a->sae == SAE_ASK) {
+                ty = WDI_SAE_INDICATION_TYPE_COMMIT_REQUEST_PARAMS_NEEDED;
+                a->sae = SAE_WAIT_COMMIT;
+            } else if (a->sae == SAE_SEND_COMMIT) {
+                ty = WDI_SAE_INDICATION_TYPE_COMMIT_RESPONSE;
+                fr[0] = 19; fr[1] = 0;                      /* (the frame body after the authentication header) */
+                copy(fr + 2, a->sap.scalar, 32);
+                copy(fr + 34, a->sap.element, 64);
+                k = 2 + 96;
+                a->sae = SAE_WAIT_CONFIRM;
+            } else if (a->sae == SAE_SEND_CONFIRM) {
+                ty = WDI_SAE_INDICATION_TYPE_CONFIRM_RESPONSE;
+                fr[0] = 1; fr[1] = 0;                       /* (send-confirm, then the confirm) */
+                saeap_confirm(&a->sap, 1, 1, fr + 2);
+                k = 2 + 32;
+                a->sae = SAE_WAIT_SUCCESS;
+            } else {
+                break;
+            }
+            n = put(t, n, WDI_TLV_SAE_INDICATION_TYPE, &ty, sizeof(ty));
+            if (k) n = put(t, n, ty == WDI_SAE_INDICATION_TYPE_COMMIT_RESPONSE ? WDI_TLV_SAE_COMMIT_RESPONSE :
+                                                                                  WDI_TLV_SAE_CONFIRM_RESPONSE, fr, k);
+            indicate(a, WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED, a->tid, n);
+            DbgPrint("wditest: SAE: %s\n", ty == WDI_SAE_INDICATION_TYPE_COMMIT_REQUEST_PARAMS_NEEDED ?
+                     "asked the host for the station's commit" : ty == WDI_SAE_INDICATION_TYPE_COMMIT_RESPONSE ?
+                     "the access point's commit to the host" : "the access point's confirm to the host");
+            break;
+        }
         /* associated: the peer first (the data path's), then the association's result (with the
          * association request the driver sent: its RSN element), then the task's end */
-        const Ap *ap = &APS[a->ap];
         a->port = PORT;
         a->connected = 1;
         WDI_MAC_ADDRESS mac;
@@ -720,7 +803,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         WDI_ASSOCIATION_RESULT_PARAMETERS ar;
         zero(&ar, sizeof(ar));
         ar.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
-        ar.AuthAlgorithm = a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+        ar.AuthAlgorithm = a->wpa3 ? WDI_AUTH_ALGO_WPA3_SAE : a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
         ar.UnicastCipherAlgorithm = ar.MulticastDataCipherAlgorithm = a->wpa2 ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
         ar.PortAuthorized = !a->wpa2;
         unsigned int m = put(r, 0, WDI_TLV_BSSID, ap->bssid, 6);
@@ -733,7 +816,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
             q[k++] = 0; q[k++] = (unsigned char)sl;
             copy(q + k, ap->ssid, sl);
             k += sl;
-            copy(q + k, STA_RSN, sizeof(STA_RSN));
+            copy(q + k, a->wpa3 ? STA_RSN3 : STA_RSN, sizeof(STA_RSN));
             k += sizeof(STA_RSN);
             m = put(r, m, WDI_TLV_ASSOCIATION_REQUEST_FRAME, q, k);
         }
@@ -744,20 +827,26 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         if (a->wpa2) {                                      /* the 4-way handshake: message 1 */
             WpaAp *w = &a->wpa;
             zero(w, sizeof(*w));
-            copy(w->pmk, PMK, 32);
+            copy(w->pmk, a->wpa3 ? a->sap.pmk : PMK, 32);
             copy(w->aa, ap->bssid, 6);
             copy(w->spa, MAC, 6);
-            w->ap_ie = AP_RSN;
+            w->ap_ie = a->wpa3 ? AP_RSN3 : AP_RSN;
             w->ap_ie_len = AP_RSN_LEN;
-            w->sta_ie = STA_RSN;
+            w->sta_ie = a->wpa3 ? STA_RSN3 : STA_RSN;
             w->sta_ie_len = sizeof(STA_RSN);
+            if (a->wpa3) {                                  /* (WPA3: version 0, and the IGTK) */
+                w->sae = 1;
+                for (int i = 0; i < 16; i++) w->igtk[i] = (unsigned char)(0xC0 + i);
+                w->igtk_id = 4;
+                w->ipn[0] = 1;
+            }
             for (int i = 0; i < 32; i++) w->anonce[i] = (unsigned char)(a->tid * 31 + i * 7);
             for (int i = 0; i < 16; i++) w->gtk[i] = (unsigned char)(0xA0 + i);
             w->gtk_id = 1;
             w->rsc[0] = 5;
             unsigned int k = ap_msg1(w, a->eapol);
             a->hs = HS_MSG1;
-            DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station\n");
+            DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station%s\n", a->wpa3 ? " (WPA3: from SAE's PMK)" : "");
             receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
         }
         break;
@@ -766,7 +855,10 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         a->port = PORT;
         a->connected = 0;
         a->port_open = a->hs = a->rekeyed = a->dropped = 0;    /* (and the connection's keys are gone) */
+        a->wpa3 = a->igtk_ok = 0;
+        a->sae = SAE_NONE;
         zero(&a->wpa, sizeof(a->wpa));
+        zero(&a->sap, sizeof(a->sap));
         NDIS_STATUS st = NDIS_STATUS_SUCCESS;
         ((PEER_DELETE_FN)a->api->PeerDeleteIndication)(a->dp, PORT, PEER, &st);
         indicate(a, WDI_INDICATION_DISCONNECT_COMPLETE, a->tid, 0);
@@ -841,6 +933,19 @@ static NDIS_STATUS add_keys(Adapter *a, WDI_MESSAGE_HEADER *h, const unsigned ch
         const unsigned char *id = find(k, kl, WDI_TLV_CIPHER_KEY_ID, &il);
         const unsigned char *rsc = find(k, kl, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT, &rl);
         const unsigned char *ccmp = find(k, kl, WDI_TLV_CIPHER_KEY_CCMP_KEY, &cl);
+        if (ty && n >= sizeof(ti) && (copy(&ti, ty, sizeof(ti)), ti.KeyType == WDI_CIPHER_KEY_TYPE_IGTK)) {
+            unsigned int kid = 99, bl = 0;
+            const unsigned char *bip = find(k, kl, WDI_TLV_CIPHER_KEY_BIP_KEY, &bl);
+            if (id && il >= 4) copy(&kid, id, 4);
+            int ok = a->wpa3 && ti.CipherAlgorithm == WDI_CIPHER_ALGO_BIP &&
+                     ti.Direction == WDI_CIPHER_KEY_DIRECTION_INBOUND && kid == a->wpa.igtk_id && bip && bl == 16 &&
+                     same(bip, a->wpa.igtk, 16) && rsc && rl == 6 && same(rsc, a->wpa.ipn, 6);
+            DbgPrint("wditest: management group key (IGTK) %u: %s\n", kid, ok ? "the access point's" :
+                     "NOT the access point's");
+            if (!ok) return NDIS_STATUS_INVALID_PARAMETER;
+            a->igtk_ok = 1;
+            continue;
+        }
         if (!ty || n < sizeof(ti) || !ccmp || cl != 16) {
             DbgPrint("wditest: a cipher key without its type or CCMP key\n");
             return NDIS_STATUS_INVALID_PARAMETER;
@@ -866,6 +971,10 @@ static NDIS_STATUS add_keys(Adapter *a, WDI_MESSAGE_HEADER *h, const unsigned ch
             DbgPrint("wditest: a cipher key of type %u\n", ti.KeyType);
             return NDIS_STATUS_NOT_SUPPORTED;
         }
+    }
+    if (a->wpa3 && !a->igtk_ok) {                       /* (WPA3: the IGTK comes with the group key) */
+        DbgPrint("wditest: WPA3 keys without the management group key (IGTK)\n");
+        return NDIS_STATUS_INVALID_PARAMETER;
     }
     return NDIS_STATUS_SUCCESS;
 }
@@ -999,14 +1108,36 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = 1;
+            a->wpa3 = 0;
+        } else if (target == NNET5) {
+            /* NovaNet-5G: WPA3-Personal, SAE, CCMP, management frame protection; EAPOL exempted first */
+            WDI_CONNECTION_SETTINGS cs;
+            unsigned int ul, ml, csl, uc = 0, mc = 0;
+            const unsigned char *u = find(cp, cl, WDI_TLV_UNICAST_CIPHER_ALGO_LIST, &ul);
+            const unsigned char *mu = find(cp, cl, WDI_TLV_MULTICAST_CIPHER_ALGO_LIST, &ml);
+            const unsigned char *c = find(cp, cl, WDI_TLV_CONNECTION_SETTINGS, &csl);
+            if (u && ul >= 4) copy(&uc, u, 4);
+            if (mu && ml >= 4) copy(&mc, mu, 4);
+            zero(&cs, sizeof(cs));
+            if (c && csl >= sizeof(cs)) copy(&cs, c, sizeof(cs));
+            DbgPrint("wditest: connect to NovaNet-5G: auth %u, ciphers %u/%u, exclude unencrypted %u, MFP %u, "
+                     "EAPOL exempted %s\n", algo, uc, mc, cs.ExcludeUnencrypted, cs.MFPEnabled, a->exempt ? "yes" : "no");
+            if (algo != WDI_AUTH_ALGO_WPA3_SAE || uc != WDI_CIPHER_ALGO_CCMP || mc != WDI_CIPHER_ALGO_CCMP ||
+                !cs.ExcludeUnencrypted || !cs.MFPEnabled || !a->exempt) {
+                st = NDIS_STATUS_NOT_SUPPORTED;
+                break;
+            }
+            a->wpa2 = a->wpa3 = 1;
+            a->sae = SAE_ASK;
+            a->sae_tid = h->TransactionId;
         } else if (target == NGUEST && algo == WDI_AUTH_ALGO_80211_OPEN) {
-            a->wpa2 = 0;
+            a->wpa2 = a->wpa3 = 0;
         } else {
-            st = NDIS_STATUS_NOT_SUPPORTED;                /* (NovaNet-5G is WPA3's SAE: not here) */
+            st = NDIS_STATUS_NOT_SUPPORTED;
             break;
         }
         a->ap = target;
-        a->port_open = a->hs = a->rekeyed = a->dropped = 0;
+        a->port_open = a->hs = a->rekeyed = a->dropped = a->igtk_ok = 0;
         start_task(a, msg, h->TransactionId, 20);
         break;
     }
@@ -1025,6 +1156,62 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
     case WDI_SET_ADD_CIPHER_KEYS:
         st = add_keys(a, h, t, tlen);
         break;
+    case WDI_SET_SAE_AUTH_PARAMS: {
+        /* the station's half of SAE: its commit, its confirm, or how it ended */
+        unsigned int type = 99, bl = 0, cl = 0, gl = 0, sl = 0, el = 0;
+        const unsigned char *ty = find(t, tlen, WDI_TLV_SAE_REQUEST_TYPE, &n);
+        const unsigned char *bs = find(t, tlen, WDI_TLV_BSSID, &bl);
+        if (ty && n >= 4) copy(&type, ty, 4);
+        if (!a->wpa3 || h->PortId != PORT || !bs || bl != 6 || !same(bs, APS[NNET5].bssid, 6)) {
+            DbgPrint("wditest: SAE parameters refused: port %u, BSSID %s, %s\n", h->PortId, bs ? "given" : "missing",
+                     a->wpa3 ? "connecting with SAE" : "no SAE connect running");
+            st = NDIS_STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (type == WDI_SAE_REQUEST_TYPE_COMMIT_REQUEST && a->sae == SAE_WAIT_COMMIT) {
+            const unsigned char *c = find(t, tlen, WDI_TLV_SAE_COMMIT_REQUEST, &cl);
+            const unsigned char *g = c ? find(c, cl, WDI_TLV_SAE_FINITE_CYCLIC_GROUP, &gl) : 0;
+            const unsigned char *sc = c ? find(c, cl, WDI_TLV_SAE_SCALAR, &sl) : 0;
+            const unsigned char *el2 = c ? find(c, cl, WDI_TLV_SAE_ELEMENT, &el) : 0;
+            unsigned char rnd[32], mask[32];
+            for (int i = 0; i < 32; i++) {                  /* (this access point's secrets: from the task's id) */
+                rnd[i] = (unsigned char)(a->sae_tid * 13 + i * 5 + 1);
+                mask[i] = (unsigned char)(a->sae_tid * 7 + i * 11 + 3);
+            }
+            rnd[0] = 0x3c;
+            mask[0] = 0x45;
+            zero(&a->sap, sizeof(a->sap));
+            int ok = g && gl == 2 && g[0] == 19 && !g[1] && sc && sl == 32 && el2 && el == 64 &&
+                     saeap_pwe(&a->sap, SAE_PASSWORD, APS[NNET5].bssid, MAC) && saeap_commit(&a->sap, rnd, mask) &&
+                     saeap_process(&a->sap, sc, el2);
+            DbgPrint("wditest: SAE: the station's commit (group %u): %s\n", g && gl == 2 ? g[0] | g[1] << 8 : 0,
+                     ok ? "good" : a->sap.why ? a->sap.why : "malformed");
+            a->sae = ok ? SAE_SEND_COMMIT : SAE_FAIL;
+        } else if (type == WDI_SAE_REQUEST_TYPE_CONFIRM_REQUEST && a->sae == SAE_WAIT_CONFIRM) {
+            const unsigned char *c = find(t, tlen, WDI_TLV_SAE_CONFIRM_REQUEST, &cl);
+            const unsigned char *sc = c ? find(c, cl, WDI_TLV_SAE_SEND_CONFIRM, &sl) : 0;
+            const unsigned char *cf = c ? find(c, cl, WDI_TLV_SAE_CONFIRM, &gl) : 0;
+            int ok = sc && sl == 2 && cf && gl == 32 && saeap_verify(&a->sap, (unsigned int)(sc[0] | sc[1] << 8), cf);
+            DbgPrint("wditest: SAE: the station's confirm: %s\n", ok ? "good (the password)" :
+                     a->sap.why ? a->sap.why : "malformed");
+            a->sae = ok ? SAE_SEND_CONFIRM : SAE_FAIL;     /* (a wrong password: no confirm back) */
+        } else if (type == WDI_SAE_REQUEST_TYPE_SUCCESS && a->sae == SAE_WAIT_SUCCESS) {
+            DbgPrint("wditest: SAE: the host says success: associating\n");
+            a->sae = SAE_OK;
+        } else if (type == WDI_SAE_REQUEST_TYPE_FAILURE) {
+            unsigned int status = 0, ql = 0;
+            const unsigned char *q = find(t, tlen, WDI_TLV_SAE_STATUS, &ql);
+            if (q && ql >= 4) copy(&status, q, 4);
+            DbgPrint("wditest: SAE: the host gave up (status %u)\n", status);
+            a->sae = SAE_FAIL;
+        } else {
+            DbgPrint("wditest: SAE parameters of type %u out of turn (stage %d)\n", type, a->sae);
+            st = NDIS_STATUS_INVALID_PARAMETER;
+            break;
+        }
+        start_task(a, WDI_TASK_CONNECT, a->sae_tid, 10);
+        break;
+    }
     case WDI_TASK_DISCONNECT: {
         WDI_DISCONNECT_PARAMETERS p;
         const unsigned char *v = find(t, tlen, WDI_TLV_DISCONNECT_PARAMETERS, &n);

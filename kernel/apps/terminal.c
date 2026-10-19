@@ -278,7 +278,7 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
-        "  netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect  join a Wi-Fi network (open or WPA2), or leave it\n"
+        "  netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect  join a Wi-Fi network (open, WPA2 or WPA3), or leave it\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
         "  wget <url> [url...] download web pages to C:\\Downloads\n"
@@ -987,7 +987,8 @@ static int wlan_adapter(const char *v)
  * disconnect [interface=Wi-Fi]: in the background (JOB_WLAN_CONNECT).
  * There are no profiles yet (Windows' netsh connects to a saved profile):
  * name is the network's SSID, and a WPA2-Personal network's passphrase
- * comes with key=, NovaOS's own addition, used for that connection only */
+ * or a WPA3-Personal network's password comes with key=, NovaOS's own
+ * addition, used for that connection only */
 static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
 {
     static const char usage[] = "Usage: netsh wlan connect [name=]SSID [key=PASSPHRASE] [interface=Wi-Fi]\n"
@@ -1005,7 +1006,10 @@ static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
     }
     if (connect && !ssid) { terr(t, usage); return; }
     if (!WlanCount()) { tprint(t, "\nThere is no wireless interface on the system."); return; }
-    if (key && strlen(key) > 64) { terr(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits."); return; }
+    if (key && strlen(key) > 64) {
+        terr(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 password 8 to 63 characters.");
+        return;
+    }
     if (!WlanConnectStart(adapter, connect ? ssid : NULL, key)) { terr(t, "The wireless adapter is busy; try again."); return; }
     Job *j = &t->job;
     memset(j, 0, sizeof(*j));
@@ -1028,9 +1032,10 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
     case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured: give its passphrase with key=PASSPHRASE.", ssid);
                             break;
     case WLAN_BAD_KEY:      tprintf(t, "The network security key isn't correct: \"%s\" did not accept it.", ssid); break;
-    case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits."); break;
-    case WLAN_UNSUPPORTED:  tprintf(t, "The network \"%s\" uses security NovaOS does not support yet (WPA2-Personal "
-                                    "with CCMP connects; WPA3, WPA, WEP and Enterprise do not).", ssid); break;
+    case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 "
+                                   "password 8 to 63 characters."); break;
+    case WLAN_UNSUPPORTED:  tprintf(t, "The network \"%s\" uses security NovaOS does not support yet (WPA2- and "
+                                    "WPA3-Personal with CCMP connect; WPA, WEP and Enterprise do not).", ssid); break;
     case WLAN_NOT_CONNECTED: tprintf(t, "The interface \"%s\" is not connected.", name); break;
     case WLAN_NO_ADAPTER:   tprint(t, "The wireless interface is not ready."); break;
     default:                tprintf(t, "The %s request failed (0x%08x).", connect ? "connection" : "disconnection", st);

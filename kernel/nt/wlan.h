@@ -47,6 +47,9 @@ typedef struct {
 /* How many Wi-Fi adapters are open; the @i'th one's details */
 int  WlanCount(void);
 bool WlanGetInfo(int i, WlanInfo *out);
+/* The same without waiting: false while a scan or connection holds the
+ * adapter (a window's paint or tick must not wait seconds for one) */
+bool WlanPeekInfo(int i, WlanInfo *out);
 /* Scan with the @i'th adapter (OID_WDI_TASK_SCAN): up to @max access points
  * it found, strongest first, or -1 if the scan failed (*@status says why) */
 int  WlanScan(int i, WlanBss *out, int max, UINT32 *status);

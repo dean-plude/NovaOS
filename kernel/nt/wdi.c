@@ -1265,6 +1265,21 @@ bool WlanGetInfo(int i, WlanInfo *out)
     return true;
 }
 
+bool WlanPeekInfo(int i, WlanInfo *out)
+{
+    for (int k = 0, n = 0; k < WDI_MAX_ADAPTERS; k++) {
+        WdiHost *w = &g_hosts[k];
+        if (!w->used || !w->adapter || n++ != i) continue;
+        INT64 now = 0;
+        if (nt_KeWaitForSingleObject(&w->cmd_lock, 0, 0, 0, &now) != 0) return false;   /* (STATUS_TIMEOUT: busy) */
+        bool ok = w->adapter != NULL;
+        if (ok) *out = w->info;
+        unlock(w);
+        return ok;
+    }
+    return false;
+}
+
 /* OID_WDI_TASK_SCAN on the station port (the caller holds the command
  * lock): every BSS (the wildcard BSSID and SSID) on every channel, live */
 static NDIS_STATUS scan_locked(WdiHost *w, UINT8 *buf)

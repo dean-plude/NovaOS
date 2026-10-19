@@ -14,8 +14,11 @@
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 #include "../nt/wlan.h"
-#include "../nt/wdi.h"
 #include "../../userland/include/novawlan.h"
+
+/* WlanBss.band: nt/wdi.h's WDI_BAND_ID_* (that header needs the NDIS types) */
+#define WDI_BAND_ID_2400 1
+#define WDI_BAND_ID_6000 5
 
 static UINT32 freq_khz(UINT32 band, UINT32 ch)
 {

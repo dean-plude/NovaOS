@@ -80,6 +80,7 @@ typedef struct {
     char wifi_ssid[33];              /* ... the network being joined */
     char wifi_key[64];               /* ... its passphrase, as typed (wiped once used) */
     char wifi_note[160];             /* ... what the last connection did */
+    WlanInfo wifi_info;              /* ... the adapter, as last seen (WlanPeekInfo: never waits) */
 } Settings;
 
 static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Wi-Fi",
@@ -799,10 +800,11 @@ static void wifi_bars(int x, int y, UINT32 q)
 
 static void page_wifi(Settings *st, int x, int y, int w)
 {
-    WlanInfo info;
-    bool have = WlanCount() > 0 && WlanGetInfo(0, &info);
+    bool have = WlanCount() > 0;
+    if (have) WlanPeekInfo(0, &st->wifi_info);
+    const WlanInfo info = st->wifi_info;
     GdiRoundRect(RECT(x, y, w, 72), 8, UI_CARD, GDI_TRANSPARENT);
-    GdiTextBold(x + 16, y + 14, have ? info.description : "Wi-Fi", UI_TEXT);
+    GdiTextBold(x + 16, y + 14, have && info.description[0] ? info.description : "Wi-Fi", UI_TEXT);
     char state[96];
     if (!have) strcpy(state, "No Wi-Fi adapter found");
     else if (st->wifi_job == 2) ksnprintf(state, sizeof(state), "Connecting to %s...", st->wifi_ssid);
@@ -866,8 +868,7 @@ static void wifi_mouse(Settings *st, int x, int y, int w, int mx, int my)
 {
     if (!WlanCount()) return;
     if (UiHit(r_wifi_refresh(x, y, w), mx, my)) { wifi_scan(st); return; }
-    WlanInfo info;
-    bool connected = WlanGetInfo(0, &info) && info.connected;
+    bool connected = st->wifi_info.connected;
     if (connected && UiHit(r_wifi_disconnect(x, y, w), mx, my)) { wifi_disconnect(st); return; }
     if (st->wifi_sel >= 0 && UiHit(r_wifi_connect(st, x, y, w), mx, my)) { wifi_connect(st); return; }
     if (st->wifi_sel >= 0 && UiHit(r_wifi_key(st, x, y, w), mx, my)) return;
@@ -905,6 +906,7 @@ static void current_locale(char *out, int cap);
 static bool set_tick(WND *w)
 {
     Settings *st = w->user;
+    if (st && st->wifi_job && wifi_poll(st)) return true;    /* (a Wi-Fi scan or connection finished, on any page) */
     if (st && st->page == SETTINGS_TIME_LANGUAGE) {           /* intl.exe has written the choice */
         char cur[32];
         current_locale(cur, sizeof(cur));
@@ -928,12 +930,13 @@ static bool set_tick(WND *w)
         sound_devs(&d);
         return sound_sig(&d) != st->sound_sig;
     }
-    if (st && st->wifi_job && wifi_poll(st)) return true;    /* (a scan or connection finished, on any page) */
     if (st && st->page == SETTINGS_WIFI) {                    /* the first scan; the adapter's state */
         if (!st->wifi_scanned && !st->wifi_job) { wifi_scan(st); return st->wifi_job != 0; }
-        WlanInfo info;
         UINT32 sig = WlanCount() ? 1u : 0;
-        if (sig && WlanGetInfo(0, &info)) sig |= (info.connected ? 2u : 0) ^ ((UINT32)info.bss.quality << 2) ^ ((UINT32)info.bss.ssid[0] << 9);
+        if (sig && WlanPeekInfo(0, &st->wifi_info)) {
+            const WlanInfo *info = &st->wifi_info;
+            sig |= (info->connected ? 2u : 0) ^ ((UINT32)info->bss.quality << 2) ^ ((UINT32)info->bss.ssid[0] << 9);
+        } else if (sig) sig = st->net_sig;                    /* (busy: nothing new to show) */
         if (sig == st->net_sig) return false;
         st->net_sig = sig;
         return true;

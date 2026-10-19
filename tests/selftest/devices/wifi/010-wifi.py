@@ -44,6 +44,13 @@
 # way from SAE's PMK and brings the management frame protection key
 # (IGTK) with the group key, both checked by the driver, and DHCP, ping
 # and a rekey of both group keys run over it.
+# wlanapi.dll (wlantest.exe) does the same as a Windows program does: the
+# adapter and its GUID, a scan and its notification, the networks and
+# access points, a profile saved in the registry, a wrong passphrase
+# refused with the key-mismatch reason, joining NovaNet by its profile and
+# NovaGuest by its SSID, the connection's details.  Then the test joins
+# NovaNet in Settings' Wi-Fi page as a person would (Start, "wi-fi", Down,
+# its passphrase, Enter) and wlantest sees the connection.
 # Disabling the device deletes the port, stops the data path and closes the
 # adapter, and the interface is gone.
 DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with `pnputil /add-driver /install`: '
@@ -58,8 +65,13 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        'the secured connection; `netsh wlan connect name=NovaNet-5G key=...` joins the WPA3-Personal one (SAE through '
        'the driver: its SAE_AUTH_PARAMS_NEEDED indications answered with OID_WDI_SET_SAE_AUTH_PARAMS, then the WPA3 '
        '4-way handshake with management frame protection\'s IGTK), a wrong password is refused at SAE\'s confirm, and '
-       'DHCP, ping and a rekey run over it; disabling the device deletes the port, stops the data path and closes the '
+       'DHCP, ping and a rekey run over it; `wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
+       'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
+       'reason, joining by profile and by SSID, the current connection); Settings\' Wi-Fi page lists the networks and '
+       'joins NovaNet with its passphrase typed as a person would; disabling the device deletes the port, stops the data path and closes the '
        'adapter')
+import time
+
 EDU_ID = '"PCI\\VEN_1234&DEV_11E8"'
 def _dhcp(nova):
     """wait for the lease: lwIP probes the offered address with ARP (ACD)
@@ -78,6 +90,26 @@ def _leases(n):
                 return
             nova.sr.wait(lease, 0.25)
     return wait
+
+
+def _join_in_settings(nova):
+    """Start, "wi-fi": Settings opens on its Wi-Fi page and scans; Down
+    chooses the strongest network (NovaNet), its passphrase, Enter"""
+    nova.qmp.key('meta_l', 's')
+    time.sleep(2)
+    nova.qmp.type('wi-fi')
+    time.sleep(2)
+    nova.qmp.key('ret')
+    nova.sr.wait('[SETTINGS] Wi-Fi: 3 network(s) found', 60)
+    time.sleep(1)
+    nova.qmp.key('down')
+    time.sleep(1)
+    nova.qmp.type('nova-wpa2-passphrase\n')
+
+
+def _close_settings(nova):
+    time.sleep(1)
+    nova.qmp.key('alt', 'f4')                   # (Settings closes: the keys are the Terminal's again)
 
 
 _dhcp_again = _leases(2)        # (NovaNet's connection)
@@ -241,6 +273,11 @@ TESTS = [
     Test('wifi wpa3 disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaNet-5G \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    Test('wifi wlanapi', 'wlantest', [r'wlantest: \d+ passed, 0 failed'], timeout=300, elevated=True),
+    Test('wifi settings', 'wlantest settings', [r'wlantest settings: \d+ passed, 0 failed'], timeout=300,
+         acts=[(r'wlantest: join NovaNet in Settings', _join_in_settings),
+               (r'wlantest: connected through Settings', _close_settings)],
+         boot_expect=[r'\[SETTINGS\] Wi-Fi: 3 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
     Test('wifi disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] wditest: station port 1 deleted',
           r'\[DbgPrint\] wditest: data path port 1 deleted',

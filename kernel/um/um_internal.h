@@ -553,6 +553,7 @@ UINT32     um_afd_ioctl(UmObject *o, UINT64 event, UINT64 ctx, UINT64 iosb, UINT
                         UINT64 in, UINT32 in_len, UINT64 out, UINT32 out_len);
 UINT32     um_afd_cancel(UmObject *o, UINT64 iosb);
 INT64      um_afd_ctl(UINT64 h, UINT64 op, UINT64 arg, UINT64 out);
+INT64      um_wlan_ctl(UINT64 op, UINT64 arg, UINT64 out);   /* NtNovaSockCtl ops 18-21: Wi-Fi (um_wlan.c) */
 
 /* um_thread.c: threads, synchronization objects, waits */
 void       um_thread_syscalls_init(void);

@@ -14734,6 +14734,13 @@ one, and gets DHCP and pings over the secured network.  A host test
 against the standard's vectors and Python's `hashlib`.  WPA3 (SAE) comes
 next, then `wlanapi.dll` and Settings' Wi-Fi page.
 
+## HID class test: waits for cfgmgr32 to drop an unplugged device
+
+`hidclasstest` waited for setupapi to stop listing an unplugged device but
+checked cfgmgr32 once, so it sometimes looked a moment before the
+interface was gone (one CI run). It now waits for cfgmgr32 the same way,
+up to 10 s, as an app would on Windows. Test-only change.
+
 ## The 0.2 "Kepler" notes cover the last push
 
 Before the tag, [docs/releases/0.2.0.md](../releases/0.2.0.md) gained what

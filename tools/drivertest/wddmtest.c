@@ -51,8 +51,22 @@
  *                      for a write to a read-only or unmapped page; and
  *                      MONITORED_FENCE_SIGNALED after a FENCE) and queues the
  *                      DPC, whose routine tells dxgkrnl (DxgkCbNotifyDpc)
+ *   preemption, TDR    (the fifth part) PreemptionCaps at primitive
+ *                      boundaries: PreemptCommand makes the GPU stop
+ *                      between two commands (or inside a stoppable SPIN),
+ *                      remember where the context was, drop the buffers it
+ *                      had not started and report DMA_PREEMPTED; a buffer
+ *                      given again resumes where it stopped.
+ *                      SupportPerEngineTDR: ResetEngine stops whatever it
+ *                      runs (a SPIN that cannot be stopped included), drops
+ *                      its queue and says the last fence ID it aborted
+ *                      (ResetFromTimeout and RestartFromTimeout do the same
+ *                      for the adapter).  SPIN flags is the command that
+ *                      provokes them: it runs until the GPU is preempted
+ *                      (flags bit 0, "a long draw") or reset (a shader in
+ *                      an endless loop)
  *
- * The next parts of step 3 give its GPU preemption and TDR.  Its DbgPrint lines and counts
+ * Its DbgPrint lines and counts
  * are what the wddm self-test (tests/selftest/devices/wddm) checks.  Built
  * by tools/drivertest/mksys.py with its package (wddmtest.inf, a
  * test-signed catalog) into C:\Tests\WddmTest.
@@ -97,6 +111,8 @@ IMPORT void      KeReleaseSpinLock(NT_KSPIN_LOCK *l, unsigned char old);
 #define GPU_WRITE           1u                    /* its commands */
 #define GPU_COPY            2u
 #define GPU_FENCE           3u
+#define GPU_SPIN            4u                    /* SPIN flags: until preempted (bit 0) or reset */
+#define SPIN_PREEMPTIBLE    1u
 #define GPU_NOP             0u
 #define ST_FAULT            ((NT_STATUS)0xC01E0003)   /* (STATUS_GRAPHICS_... : the faulted buffer's status) */
 
@@ -106,6 +122,7 @@ typedef struct { unsigned long long Size; unsigned int Flags, Reserved; } AllocS
 
 struct Context;
 typedef struct { struct Context *ctx; unsigned long long va; unsigned int size, fence; } Job;
+enum { RAN, FAULTED, PREEMPTED, RESET };          /* how a DMA buffer's run ended */
 
 typedef struct {
     NT_DEVICE_OBJECT  *pdo;
@@ -117,15 +134,20 @@ typedef struct {
     NT_KSPIN_LOCK      ring_lock;
     Job                ring[RING];
     unsigned int       head, tail;
-    NT_KEVENT          work, exited;
+    NT_KEVENT          work, exited, reset_done;
     volatile int       stop, running;
-    volatile unsigned int irq_done, irq_fault, irq_fence;   /* (a fence ID; 0: none) */
+    volatile unsigned int irq_done, irq_fault, irq_fence, irq_preempt;   /* (a fence ID; 0: none) */
+    /* preemption and reset, asked for by dxgkrnl (PreemptCommand, ResetEngine) */
+    volatile unsigned int preempt_fence, reset;
+    unsigned int       last_done, last_given;     /* fence IDs: the last it finished, the last it was given */
 } Gpu;
 
 typedef struct { Gpu *gpu; unsigned long long *root; } Process;   /* (root: its root table, as the CPU sees it) */
 
 typedef struct { Gpu *gpu; void *dxgk; } Device;
-typedef struct Context { Gpu *gpu; unsigned int node; unsigned long long root; } Context;   /* (root: its root table's physical address) */
+/* (root: its root table's physical address; resume_*: where a preemption
+ * stopped it, inside the buffer at resume_buf) */
+typedef struct Context { Gpu *gpu; unsigned int node; unsigned long long root, resume_buf, resume_at; } Context;
 typedef struct { unsigned long long size; } Allocation;
 typedef struct { Allocation *alloc; Device *dev; } Opened;   /* an allocation as a device has it */
 
@@ -161,6 +183,7 @@ static NT_API NT_STATUS wt_start_device(void *ctx, DXGK_START_INFO *si, DXGKRNL_
     *children = 0;
     KeInitializeEvent(&g->work, 1 /* SynchronizationEvent */, 0);
     KeInitializeEvent(&g->exited, 0 /* NotificationEvent */, 0);
+    KeInitializeEvent(&g->reset_done, 1, 0);
     g->stop = 0;
     g->head = g->tail = 0;
     void *th;
@@ -223,6 +246,9 @@ static NT_API NT_STATUS wt_query_adapter_info(void *adapter, const DXGKARG_QUERY
         caps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
         caps->WDDMVersion = DXGKDDI_WDDMv2;
         caps->SupportNonVGA = 1;
+        caps->PreemptionCaps.Graphics = D3DKMDT_GRAPHICS_PREEMPTION_PRIMITIVE_BOUNDARY;   /* (between commands) */
+        caps->PreemptionCaps.Compute = D3DKMDT_COMPUTE_PREEMPTION_DISPATCH_BOUNDARY;
+        caps->SupportPerEngineTDR = 1;
         return NT_STATUS_SUCCESS;
     }
     case DXGKQAITYPE_GPUMMUCAPS: {
@@ -491,7 +517,10 @@ static NT_API NT_STATUS wt_submit(void *adapter, const DXGKARG_SUBMITCOMMANDVIRT
     if (!a->hContext || (a->Flags & DXGK_SUBMIT_PAGING)) return NT_STATUS_INVALID_PARAMETER;   /* (no paging buffers: the CPU writes its tables) */
     unsigned char irql = KeAcquireSpinLockRaiseToDpc(&g->ring_lock);
     int full = g->head - g->tail >= RING;
-    if (!full) g->ring[g->head++ % RING] = (Job){ a->hContext, a->DmaBufferVirtualAddress, a->DmaBufferSize, a->SubmissionFenceId };
+    if (!full) {
+        g->ring[g->head++ % RING] = (Job){ a->hContext, a->DmaBufferVirtualAddress, a->DmaBufferSize, a->SubmissionFenceId };
+        g->last_given = a->SubmissionFenceId;
+    }
     KeReleaseSpinLock(&g->ring_lock, irql);
     if (full) return NT_STATUS_INSUFFICIENT_RESOURCES;
     KeSetEvent(&g->work, 0, 0);
@@ -535,35 +564,59 @@ static int gpu_store(unsigned long long root, unsigned long long va, unsigned in
 
 static unsigned long long addr(const unsigned int *w) { return w[0] | (unsigned long long)w[1] << 32; }
 
-/* One DMA buffer: its commands, fetched through the page tables.  0 if it
- * ran; else the GPU address it faulted at */
-static unsigned long long gpu_run(Gpu *g, const Job *j, int *commands)
+/* One DMA buffer: its commands, fetched through the page tables, from
+ * where a preemption stopped its context if it was stopped inside it.
+ * RAN, PREEMPTED (where is kept in the context), RESET, or FAULTED (*fault:
+ * the GPU address) */
+static int gpu_run(Gpu *g, const Job *j, int *commands, unsigned long long *fault)
 {
-    unsigned long long root = j->ctx->root, at = j->va, end = j->va + j->size;
+    Context *c = j->ctx;
+    unsigned long long root = c->root, at = j->va, end = j->va + j->size;
+    if (c->resume_buf == j->va && c->resume_at >= j->va && c->resume_at < end) {
+        at = c->resume_at;
+        DbgPrint("wddmtest: resumed at GPU VA 0x%llx (fence %u)\n", at, j->fence);
+    }
+    c->resume_buf = c->resume_at = 0;
     *commands = 0;
+    *fault = 0;
     while (at < end) {
         unsigned int w[6] = { 0 }, n;
-        if (!gpu_load(root, at, &w[0])) return at;
-        n = w[0] == GPU_WRITE ? 4 : w[0] == GPU_COPY ? 6 : w[0] == GPU_FENCE ? 5 : 1;
-        if (w[0] > GPU_FENCE || at + 4ull * n > end) return at;    /* (an unknown or cut command: a fault too) */
+        if (g->reset) return RESET;
+        if (g->preempt_fence) { c->resume_buf = j->va; c->resume_at = at; return PREEMPTED; }   /* (a primitive boundary) */
+        if (!gpu_load(root, at, &w[0])) { *fault = at; return FAULTED; }
+        n = w[0] == GPU_WRITE ? 4 : w[0] == GPU_COPY ? 6 : w[0] == GPU_FENCE ? 5 : w[0] == GPU_SPIN ? 2 : 1;
+        if (w[0] > GPU_SPIN || at + 4ull * n > end) { *fault = at; return FAULTED; }   /* (an unknown or cut command: a fault too) */
         for (unsigned int i = 1; i < n; i++)
-            if (!gpu_load(root, at + 4ull * i, &w[i])) return at + 4ull * i;
-        if (w[0] == GPU_WRITE && !gpu_store(root, addr(&w[1]), w[3])) return addr(&w[1]);
+            if (!gpu_load(root, at + 4ull * i, &w[i])) { *fault = at + 4ull * i; return FAULTED; }
+        if (w[0] == GPU_WRITE && !gpu_store(root, addr(&w[1]), w[3])) { *fault = addr(&w[1]); return FAULTED; }
         if (w[0] == GPU_COPY)
             for (unsigned int i = 0; i < w[5]; i++) {
                 unsigned int v;
-                if (!gpu_load(root, addr(&w[1]) + 4ull * i, &v)) return addr(&w[1]) + 4ull * i;
-                if (!gpu_store(root, addr(&w[3]) + 4ull * i, v)) return addr(&w[3]) + 4ull * i;
+                if (!gpu_load(root, addr(&w[1]) + 4ull * i, &v)) { *fault = addr(&w[1]) + 4ull * i; return FAULTED; }
+                if (!gpu_store(root, addr(&w[3]) + 4ull * i, v)) { *fault = addr(&w[3]) + 4ull * i; return FAULTED; }
             }
         if (w[0] == GPU_FENCE) {                          /* (the high word first: the value only rises) */
-            if (!gpu_store(root, addr(&w[1]) + 4, w[4]) || !gpu_store(root, addr(&w[1]), w[3])) return addr(&w[1]);
+            if (!gpu_store(root, addr(&w[1]) + 4, w[4]) || !gpu_store(root, addr(&w[1]), w[3])) {
+                *fault = addr(&w[1]);
+                return FAULTED;
+            }
             DbgPrint("wddmtest: GPU wrote fence value %llu\n", addr(&w[3]));
             g->irq_fence = 1;
+        }
+        if (w[0] == GPU_SPIN) {                           /* (its "work": the GPU's clock ticks, 10 ms each) */
+            DbgPrint("wddmtest: GPU spinning at 0x%llx (fence %u, %s)\n", at, j->fence,
+                     w[1] & SPIN_PREEMPTIBLE ? "until preempted" : "until reset");
+            for (;;) {
+                long long t = -10000ll * 10;
+                if (g->reset) return RESET;
+                if ((w[1] & SPIN_PREEMPTIBLE) && g->preempt_fence) { c->resume_buf = j->va; c->resume_at = at; return PREEMPTED; }
+                KeWaitForSingleObject(&g->work, 0, 0, 0, &t);
+            }
         }
         if (w[0] != GPU_NOP) (*commands)++;
         at += 4ull * n;
     }
-    return 0;
+    return RAN;
 }
 
 /* Its interrupt routine (DxgkDdiInterruptRoutine): what the GPU did, to dxgkrnl */
@@ -574,7 +627,8 @@ static NT_API unsigned char wt_interrupt(void *ctx, unsigned int msg)
     unsigned int done = __atomic_exchange_n(&g->irq_done, 0, __ATOMIC_ACQ_REL);
     unsigned int fault = __atomic_exchange_n(&g->irq_fault, 0, __ATOMIC_ACQ_REL);
     unsigned int fence = __atomic_exchange_n(&g->irq_fence, 0, __ATOMIC_ACQ_REL);
-    if (!done && !fault && !fence) return 0;
+    unsigned int preempt = __atomic_exchange_n(&g->irq_preempt, 0, __ATOMIC_ACQ_REL);
+    if (!done && !fault && !fence && !preempt) return 0;
     DXGKARGCB_NOTIFY_INTERRUPT_DATA d;
     if (fence) {
         mzero(&d, sizeof(d));
@@ -594,6 +648,13 @@ static NT_API unsigned char wt_interrupt(void *ctx, unsigned int msg)
         d.DmaCompleted.SubmissionFenceId = done;
         g->cb.DxgkCbNotifyInterrupt(g->cb.DeviceHandle, &d);
     }
+    if (preempt) {                                        /* (after what it finished before it stopped) */
+        mzero(&d, sizeof(d));
+        d.InterruptType = DXGK_INTERRUPT_DMA_PREEMPTED;
+        d.DmaPreempted.PreemptionFenceId = preempt;
+        d.DmaPreempted.LastCompletedFenceId = g->last_done;
+        g->cb.DxgkCbNotifyInterrupt(g->cb.DeviceHandle, &d);
+    }
     g->cb.DxgkCbQueueDpc(g->cb.DeviceHandle);
     return 1;
 }
@@ -606,35 +667,118 @@ static NT_API void wt_dpc(void *ctx)
 
 static NT_API unsigned char raise_interrupt(void *ctx) { return wt_interrupt(ctx, 0); }
 
+/* Its interrupt raised (no interrupt line: the routine runs as the line would run it, under its lock) */
+static void interrupt(Gpu *g)
+{
+    unsigned char r;
+    g->cb.DxgkCbSynchronizeExecution(g->cb.DeviceHandle, raise_interrupt, g, 0, &r);
+}
+
+/* The buffers not started dropped (a preemption's, or a reset's): how many */
+static unsigned int ring_drop(Gpu *g)
+{
+    unsigned char irql = KeAcquireSpinLockRaiseToDpc(&g->ring_lock);
+    unsigned int n = g->head - g->tail;
+    g->tail = g->head;
+    KeReleaseSpinLock(&g->ring_lock, irql);
+    return n;
+}
+
+static void preempted(Gpu *g)
+{
+    unsigned int f = g->preempt_fence, n = ring_drop(g);
+    g->preempt_fence = 0;
+    DbgPrint("wddmtest: preempted (fence %u): %u buffer(s) not started dropped, the last finished %u\n", f, n,
+             g->last_done);
+    __atomic_store_n(&g->irq_preempt, f, __ATOMIC_RELEASE);
+    interrupt(g);
+}
+
+static void reset_done(Gpu *g)
+{
+    unsigned int n = ring_drop(g);
+    g->preempt_fence = 0;
+    g->reset = 0;
+    DbgPrint("wddmtest: engine reset, %u buffer(s) not started dropped\n", n);
+    KeSetEvent(&g->reset_done, 0, 0);
+}
+
 static NT_API void gpu_thread(void *arg)
 {
     Gpu *g = arg;
     while (!g->stop) {
         KeWaitForSingleObject(&g->work, 0, 0, 0, 0);
         for (;;) {
+            if (g->reset) reset_done(g);
+            if (g->preempt_fence) preempted(g);
             unsigned char irql = KeAcquireSpinLockRaiseToDpc(&g->ring_lock);
             int any = g->tail != g->head;
             Job j = any ? g->ring[g->tail++ % RING] : (Job){ 0 };
             KeReleaseSpinLock(&g->ring_lock, irql);
             if (!any) break;
             int commands;
-            unsigned long long fault = gpu_run(g, &j, &commands);
-            if (fault) {
+            unsigned long long fault;
+            int how = gpu_run(g, &j, &commands, &fault);
+            if (how == RESET) {
+                DbgPrint("wddmtest: GPU stopped by a reset (fence %u)\n", j.fence);
+                j.ctx->resume_buf = j.ctx->resume_at = 0;
+                reset_done(g);
+                continue;
+            }
+            if (how == PREEMPTED) {
+                DbgPrint("wddmtest: GPU stopped at 0x%llx by a preemption (fence %u)\n", j.ctx->resume_at, j.fence);
+                preempted(g);
+                continue;
+            }
+            if (how == FAULTED) {
                 DbgPrint("wddmtest: GPU page fault at 0x%llx (fence %u)\n", fault, j.fence);
                 __atomic_store_n(&g->irq_fault, j.fence, __ATOMIC_RELEASE);
             } else {
                 DbgPrint("wddmtest: ran %u bytes at GPU VA 0x%llx (fence %u): %d command(s)\n", j.size, j.va, j.fence,
                          commands);
+                g->last_done = j.fence;
                 __atomic_store_n(&g->irq_done, j.fence, __ATOMIC_RELEASE);
             }
-            /* (no interrupt line: the routine runs as the line would run it, under its lock) */
-            unsigned char r;
-            g->cb.DxgkCbSynchronizeExecution(g->cb.DeviceHandle, raise_interrupt, g, 0, &r);
+            interrupt(g);
         }
     }
     KeSetEvent(&g->exited, 0, 0);
     PsTerminateSystemThread(0);
 }
+
+/* DxgkDdiPreemptCommand: the GPU stops at its next primitive boundary */
+static NT_API NT_STATUS wt_preempt(void *adapter, const DXGKARG_PREEMPTCOMMAND *a)
+{
+    Gpu *g = adapter;
+    if (a->NodeOrdinal != 0) return NT_STATUS_INVALID_PARAMETER;
+    DbgPrint("wddmtest: preemption asked for (fence %u, the last finished %u)\n", a->PreemptionFenceId,
+             a->LastCompletedFenceId);
+    g->preempt_fence = a->PreemptionFenceId;
+    KeSetEvent(&g->work, 0, 0);
+    return NT_STATUS_SUCCESS;
+}
+
+/* DxgkDdiResetEngine: whatever the GPU runs stopped, its queue dropped */
+static NT_API NT_STATUS wt_reset_engine(void *adapter, DXGKARG_RESETENGINE *a)
+{
+    Gpu *g = adapter;
+    if (a->NodeOrdinal != 0) return NT_STATUS_INVALID_PARAMETER;
+    long long t = -10000ll * 1000;
+    g->reset = 1;
+    KeSetEvent(&g->work, 0, 0);
+    NT_STATUS st = KeWaitForSingleObject(&g->reset_done, 0, 0, 0, &t);
+    a->LastAbortedFenceId = g->last_given;
+    return st == 0 ? NT_STATUS_SUCCESS : NT_STATUS_UNSUCCESSFUL;
+}
+
+/* DxgkDdiResetFromTimeout, DxgkDdiRestartFromTimeout: the adapter's one engine */
+static NT_API NT_STATUS wt_reset_from_timeout(void *adapter)
+{
+    DXGKARG_RESETENGINE r = { 0, 0, 0 };
+    return wt_reset_engine(adapter, &r);
+}
+
+static NT_API NT_STATUS wt_restart_from_timeout(void *adapter) { (void)adapter; return NT_STATUS_SUCCESS; }
 
 /* -----------------------------------------------------------------------
  * DriverEntry, and displib.lib's DxgkInitialize
@@ -689,6 +833,10 @@ NT_API NT_STATUS DriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg)
     init.DxgkDdiDestroyContext = wt_destroy_context;
     init.DxgkDdiSetRootPageTable = wt_set_root;
     init.DxgkDdiSubmitCommandVirtual = wt_submit;
+    init.DxgkDdiPreemptCommand = wt_preempt;
+    init.DxgkDdiResetEngine = wt_reset_engine;
+    init.DxgkDdiResetFromTimeout = wt_reset_from_timeout;
+    init.DxgkDdiRestartFromTimeout = wt_restart_from_timeout;
     NT_STATUS st = initialize(drv, reg, &init);
     DbgPrint("wddmtest: DxgkInitialize returned 0x%08x\n", (unsigned int)st);
     return st;

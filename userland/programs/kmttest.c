@@ -48,8 +48,16 @@
  *                 SignalSynchronizationObjectFromGpu2 raises a fence once the
  *                 work before it is done; WaitForSynchronizationObjectFromGpu
  *                 holds the context's later work until the CPU signals; a
- *                 write to a read-only mapping faults and the context goes
- *                 on; a destroyed context's handle is refused
+ *                 write to a read-only mapping faults: the context is lost
+ *                 (its fence raised to the maximum, its next submission
+ *                 refused); a destroyed context's handle is refused
+ *   preemption,   (step 3's fifth part) a context whose buffer spins on the
+ *   TDR           GPU (wddmtest's SPIN) while another context's work waits
+ *                 is preempted, the other's runs, and destroying the
+ *                 spinning one does not hang; a spin the GPU cannot stop is
+ *                 reset after the timeout: that context is lost (its fence
+ *                 raised to the maximum, STATUS_DEVICE_REMOVED after) and the
+ *                 other context goes on
  */
 #include <windows.h>
 #include <stdio.h>
@@ -58,6 +66,7 @@
 #include <d3dkmthk.h>
 
 #define ST_INVALID_PARAMETER ((LONG)0xC000000D)
+#define ST_DEVICE_REMOVED    ((LONG)0xC00002B6)
 
 static int g_pass, g_fail;
 
@@ -255,6 +264,7 @@ static void gpu_va(D3DKMT_HANDLE adapter, D3DKMT_HANDLE dev)
 #define GPU_WRITE 1u
 #define GPU_COPY  2u
 #define GPU_FENCE 3u
+#define GPU_SPIN  4u
 
 static UINT *put_write(UINT *w, UINT64 va, UINT v) { *w++ = GPU_WRITE; *w++ = (UINT)va; *w++ = (UINT)(va >> 32); *w++ = v; return w; }
 
@@ -392,10 +402,12 @@ static void submission(D3DKMT_HANDLE dev)
     check(D3DKMTSignalSynchronizationObjectFromCpu(&sg) == 0 && reaches(dev, fence, 7, 5000) && dw[2] == 0x3A17EDu,
           "signalled from the CPU, the context goes on");
 
-    /* a write to the read-only mapping: a page fault, and the context goes on */
+    /* a write to the read-only mapping: a page fault, which loses the context */
     w = put_write(cw + 0x2800 / 4, rova + 12, 0xBADu);
     check(submit(ctx, cva + 0x2800, (UINT)((char *)w - (char *)(cw + 0x2800 / 4))) == 0 && signal_gpu(ctx, fence, 8) == 0 &&
           reaches(dev, fence, 8, 5000) && dw[3] == 0, "a write to a read-only page faults and writes nothing");
+    check(*fcpu == ~0ull, "the faulting context is lost: the fence it would signal is raised to the maximum");
+    check(submit(ctx, cva, 16) == ST_DEVICE_REMOVED, "its next submission fails (STATUS_DEVICE_REMOVED)");
 
     D3DKMT_UNLOCK2 ul = { dev, cmd }, ud = { dev, dst };
     D3DKMTUnlock2(&ul);
@@ -410,6 +422,92 @@ static void submission(D3DKMT_HANDLE dev)
     D3DKMT_HANDLE both[2] = { cmd, dst };
     D3DKMT_DESTROYALLOCATION2 da = { dev, 0, both, 2, 0 };
     check(D3DKMTDestroyAllocation2(&da) == 0, "the buffers given back");
+    D3DDDI_DESTROYPAGINGQUEUE dq = { pq.hPagingQueue };
+    D3DKMTDestroyPagingQueue(&dq);
+}
+
+/* ---- "kmttest wddm": preemption and TDR (wddmtest's SPIN command) ---- */
+static UINT *put_spin(UINT *w, UINT flags) { *w++ = GPU_SPIN; *w++ = flags; return w; }
+
+static D3DKMT_HANDLE context(D3DKMT_HANDLE dev)
+{
+    D3DKMT_CREATECONTEXTVIRTUAL cc;
+    memset(&cc, 0, sizeof(cc));
+    cc.hDevice = dev;
+    cc.ClientHint = D3DKMT_CLIENTHINT_VULKAN;
+    return D3DKMTCreateContextVirtual(&cc) ? 0 : cc.hContext;
+}
+
+static void tdr(D3DKMT_HANDLE dev)
+{
+    LONG st;
+    D3DKMT_CREATEPAGINGQUEUE pq;
+    memset(&pq, 0, sizeof(pq));
+    pq.hDevice = dev;
+    D3DKMTCreatePagingQueue(&pq);
+    D3DKMT_HANDLE cmd = allocate(dev, 65536, &st), dst = allocate(dev, 65536, &st);
+    UINT64 cva = map(pq.hPagingQueue, cmd, 16, 1), dva = map(pq.hPagingQueue, dst, 16, 1);
+    volatile UINT64 *fa_cpu = NULL, *fb_cpu = NULL, *fc_cpu = NULL;
+    UINT64 fa_gpu, fb_gpu, fc_gpu;
+    D3DKMT_HANDLE fa = monitored(dev, &fa_cpu, &fa_gpu), fb = monitored(dev, &fb_cpu, &fb_gpu),
+                  fc = monitored(dev, &fc_cpu, &fc_gpu);
+    D3DKMT_HANDLE spin = context(dev), other = context(dev);
+    D3DKMT_LOCK2 lk = { dev, cmd, 0, NULL }, ld = { dev, dst, 0, NULL };
+    UINT *cw = NULL, *dw = NULL;
+    if (D3DKMTLock2(&lk) == 0) cw = lk.pData;
+    if (D3DKMTLock2(&ld) == 0) dw = ld.pData;
+    check(cmd && dst && cva && dva && fa && fb && fc && spin && other && cw && dw,
+          "two contexts, buffers and fences for the preemption checks");
+    if (!cw || !dw || !spin || !other || !fc_cpu) return;
+
+    /* a spin the GPU can stop: another context's work preempts it */
+    UINT *w = put_spin(cw, 1);
+    w = put_write(w, dva, 0xA11u);
+    check(submit(spin, cva, (UINT)((char *)w - (char *)cw)) == 0 && signal_gpu(spin, fa, 1) == 0,
+          "a buffer that spins until preempted");
+    Sleep(100);
+    w = put_write(cw + 0x1000 / 4, dva + 4, 0xB0Bu);
+    check(submit(other, cva + 0x1000, (UINT)((char *)w - (char *)(cw + 0x1000 / 4))) == 0 && signal_gpu(other, fb, 1) == 0,
+          "another context's work queued behind it");
+    check(reaches(dev, fb, 1, 10000) && dw[1] == 0xB0Bu, "the spin is preempted (DxgkDdiPreemptCommand): the other runs");
+    check(!reaches(dev, fa, 1, 300) && dw[0] == 0, "the preempted context is given the GPU again and spins on");
+    D3DKMT_DESTROYCONTEXT dc = { spin };
+    DWORD t0 = GetTickCount();
+    check(D3DKMTDestroyContext(&dc) == 0 && GetTickCount() - t0 < 4000, "destroying it preempts its spin: no wait for a TDR");
+
+    /* a spin the GPU cannot stop: the timeout resets the engine */
+    spin = context(dev);
+    w = put_spin(cw + 0x2000 / 4, 0);
+    check(spin && submit(spin, cva + 0x2000, (UINT)((char *)w - (char *)(cw + 0x2000 / 4))) == 0 &&
+          signal_gpu(spin, fc, 1) == 0, "a buffer that spins until the GPU is reset");
+    Sleep(100);
+    w = put_write(cw + 0x3000 / 4, dva + 8, 0xB0B2u);
+    check(submit(other, cva + 0x3000, (UINT)((char *)w - (char *)(cw + 0x3000 / 4))) == 0 && signal_gpu(other, fb, 2) == 0,
+          "the other context's work queued behind it");
+    check(reaches(dev, fb, 2, 15000) && dw[2] == 0xB0B2u,
+          "no preemption in 2 s: the engine is reset (DxgkDdiResetEngine) and the other context's work runs");
+    check(reaches(dev, fc, 1, 1000) && *fc_cpu == ~0ull, "the hung context is lost: its fence is raised to the maximum");
+    check(submit(spin, cva + 0x2000, 8) == ST_DEVICE_REMOVED && signal_gpu(spin, fc, 2) == ST_DEVICE_REMOVED,
+          "its later calls fail (STATUS_DEVICE_REMOVED)");
+    w = put_write(cw + 0x3800 / 4, dva + 12, 0xB0B3u);
+    check(submit(other, cva + 0x3800, (UINT)((char *)w - (char *)(cw + 0x3800 / 4))) == 0 && signal_gpu(other, fb, 3) == 0 &&
+          reaches(dev, fb, 3, 5000) && dw[3] == 0xB0B3u, "the other context goes on");
+    dc.hContext = spin;
+    check(D3DKMTDestroyContext(&dc) == 0, "the lost context is destroyed");
+    dc.hContext = other;
+    D3DKMTDestroyContext(&dc);
+
+    D3DKMT_UNLOCK2 ul = { dev, cmd }, ud = { dev, dst };
+    D3DKMTUnlock2(&ul);
+    D3DKMTUnlock2(&ud);
+    D3DKMT_HANDLE fences[3] = { fa, fb, fc };
+    for (int i = 0; i < 3; i++) {
+        D3DKMT_DESTROYSYNCHRONIZATIONOBJECT ds = { fences[i] };
+        D3DKMTDestroySynchronizationObject(&ds);
+    }
+    D3DKMT_HANDLE both[2] = { cmd, dst };
+    D3DKMT_DESTROYALLOCATION2 da = { dev, 0, both, 2, 0 };
+    D3DKMTDestroyAllocation2(&da);
     D3DDDI_DESTROYPAGINGQUEUE dq = { pq.hPagingQueue };
     D3DKMTDestroyPagingQueue(&dq);
 }
@@ -485,6 +583,8 @@ static int wddm(void)
     check(usage(adapter) == 65536, "the mapped allocation's memory is back");
     submission(dev);
     check(usage(adapter) == 65536, "the buffers' memory is back");
+    tdr(dev);
+    check(usage(adapter) == 65536, "and after the preemption and TDR checks");
     D3DKMT_DESTROYDEVICE dd = { dev };
     check(D3DKMTDestroyDevice(&dd) == 0 && usage(adapter) == 0, "DestroyDevice takes the other with it");
     D3DKMT_CLOSEADAPTER close = { adapter };

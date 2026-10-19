@@ -698,8 +698,16 @@ engine, finished when its interrupt routine reports that ID
 queued behind them are signalled once the work before them is done, and
 waits from the GPU hold a context's later work. Its interrupt line, when
 the PnP manager gives one, is connected line-based (`DxgkDdiInterruptRoutine`).
-Not there yet: page tables the GPU updates (paging buffers it runs),
-preemption and timeout recovery (TDR), message-signalled interrupts,
+A node whose buffer runs 200 ms while another context's work waits (or 2 s
+alone) is preempted (`DxgkDdiPreemptCommand`, for a driver whose
+`PreemptionCaps` allow it; `DMA_PREEMPTED` gives its unfinished buffers
+back to their contexts), and one that does not stop within 2 s, or that
+reports `DMA_FAULTED`, is reset (`DxgkDdiResetEngine` with
+`SupportPerEngineTDR`, else `DxgkDdiResetFromTimeout` and
+`RestartFromTimeout`): the context at fault is lost (`STATUS_DEVICE_REMOVED`,
+its fences raised to the maximum) and the others' buffers are submitted
+again. Not there yet: page tables the GPU updates (paging buffers it runs),
+priorities between contexts, message-signalled interrupts,
 vertical blanks, a full driver's display, power states, and more than one
 source.
 

@@ -23,7 +23,15 @@
 # ID through its interrupt routine and DPC: a write, a copy and a monitored
 # fence written at its GPU address; a fence the scheduler signals after a
 # buffer; a wait from the GPU holding a buffer until the CPU signals; a
-# write to a read-only page, which faults (dxgkrnl logs it).
+# write to a read-only page, which faults: the engine is reset and the
+# context lost.  Step 3's fifth part, preemption and TDR: the driver says
+# it can be preempted inside a DMA buffer and reset per engine; a buffer
+# spinning on its GPU while another context's work waits is preempted
+# (DxgkDdiPreemptCommand, DMA_PREEMPTED) and given the GPU again after the
+# other's, resuming where it stopped; a spin the GPU cannot stop gets no
+# preemption in 2 s, so the engine is reset (DxgkDdiResetEngine): that
+# context is lost, its fence raised to the maximum, and the other
+# context's buffer is submitted again and runs.
 VGA_ID = '"PCI\\VEN_1234&DEV_1111"'
 ROOT_ID = r'ROOT\\DISPLAY\\0000'
 TESTS = [
@@ -36,7 +44,7 @@ TESTS = [
           r'\[DXGK\] WddmTest: started, 0 source\(s\), 0 output\(s\), WDDM 2\.0',
           r'\[DXGK\] WddmTest: render adapter, LUID 0x[0-9a-f]+, 1 segment\(s\), 256 MB \(system memory\)',
           r'\[DXGK\] WddmTest: GPU MMU, 2 page table levels, 30-bit GPU virtual addresses',
-          r'\[DXGK\] WddmTest: scheduler running, 1 node\(s\)',
+          r'\[DXGK\] WddmTest: scheduler running, 1 node\(s\); preemption inside DMA buffers, TDR per engine',
           r'\[PNP\] ' + ROOT_ID + r': started \(driver WddmTest\)'], settle=3),
     Test('wddmtest d3dkmt', 'kmttest wddm',
          [r'kmttest: render adapter LUID 00000000:0000[0-9a-f]+',
@@ -57,7 +65,20 @@ TESTS = [
           r'\[DbgPrint\] wddmtest: ran 16 bytes at GPU VA 0x[0-9a-f]+ \(fence 2\): 1 command\(s\)',
           r'\[DbgPrint\] wddmtest: ran 16 bytes at GPU VA 0x[0-9a-f]+ \(fence 3\): 1 command\(s\)',
           r'\[DbgPrint\] wddmtest: GPU page fault at 0x[0-9a-f]+ \(fence 4\)',
-          r'\[DXGK\] WddmTest: the GPU faulted at fence 4 ',
+          r'\[DXGK\] WddmTest: the GPU faulted at fence 4 on node 0 ',
+          r'\[DXGK\] WddmTest: node 0 reset \(a GPU fault; DxgkDdiResetEngine 0x00000000',
+          r'\[DXGK\] WddmTest: a context on node 0 is lost \(a GPU fault\)',
+          r'\[DbgPrint\] wddmtest: GPU spinning at 0x[0-9a-f]+ \(fence \d+, until preempted\)',
+          r'\[DbgPrint\] wddmtest: preemption asked for \(fence \d+, the last finished \d+\)',
+          r'\[DbgPrint\] wddmtest: GPU stopped at 0x[0-9a-f]+ by a preemption \(fence \d+\)',
+          r'\[DXGK\] WddmTest: node 0 preempted \(fence \d+\): [12] buffer\(s\) back in their contexts\' queues',
+          r'\[DbgPrint\] wddmtest: resumed at GPU VA 0x[0-9a-f]+ \(fence \d+\)',
+          r'\[DbgPrint\] wddmtest: GPU spinning at 0x[0-9a-f]+ \(fence \d+, until reset\)',
+          r'\[DXGK\] WddmTest: node 0 timed out: no preemption in 2 s \(fence \d+\)',
+          r'\[DbgPrint\] wddmtest: GPU stopped by a reset \(fence \d+\)',
+          r'\[DXGK\] WddmTest: node 0 reset \(a timeout; DxgkDdiResetEngine 0x00000000',
+          r'\[DXGK\] WddmTest: a context on node 0 is lost \(a timeout\)',
+          r'\[DXGK\] WddmTest: node 0: 1 buffer\(s\) of other contexts submitted again',
           r'\[DbgPrint\] wddmtest: context destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: device destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: process destroyed \(0 left\)',

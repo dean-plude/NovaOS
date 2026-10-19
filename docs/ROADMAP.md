@@ -743,7 +743,11 @@ measured frame-time gain over the CPU path.
   ([history](HISTORY.md#gpu-virtual-addresses)), and command submission:
   contexts, a scheduler that runs their DMA buffers in order through the
   driver, its interrupt and DPC, and fences the GPU signals and waits on
-  ([history](HISTORY.md#command-submission-and-gpu-fences)).
+  ([history](HISTORY.md#command-submission-and-gpu-fences)), and
+  preemption and timeout recovery: a buffer that runs too long is
+  preempted, one that will not stop (or faults) has its engine reset and
+  its context lost while the others go on
+  ([history](HISTORY.md#gpu-preemption-and-timeout-recovery)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

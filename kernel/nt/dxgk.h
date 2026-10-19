@@ -696,12 +696,34 @@ typedef struct {
     int InterruptType;                            /* DXGK_INTERRUPT_TYPE */
     union {
         struct { unsigned int SubmissionFenceId, NodeOrdinal, EngineOrdinal; } DmaCompleted;
+        struct { unsigned int PreemptionFenceId, LastCompletedFenceId, NodeOrdinal, EngineOrdinal; } DmaPreempted;
         struct { unsigned int FaultedFenceId; NT_STATUS Status; unsigned int NodeOrdinal, EngineOrdinal; } DmaFaulted;
         struct { unsigned int NodeOrdinal, EngineOrdinal; } MonitoredFenceSignaled;
         unsigned long long Reserved[8];           /* (the other interrupts' structures) */
     };
     unsigned int Flags;                           /* DXGKCB_NOTIFY_INTERRUPT_DATA_FLAGS */
 } DXGKARGCB_NOTIFY_INTERRUPT_DATA;
+
+/* DxgkDdiPreemptCommand: the GPU is to stop the node's work at its next
+ * preemption point and report DMA_PREEMPTED with PreemptionFenceId (a new
+ * ID of the node's) and the last buffer it finished */
+typedef struct {
+    unsigned int PreemptionFenceId, LastCompletedFenceId, NodeOrdinal, EngineOrdinal;
+} DXGKARG_PREEMPTCOMMAND;
+
+/* DxgkDdiResetEngine (WDDM 1.2, per-engine TDR): the engine reset, its
+ * queue dropped; the driver says the last fence ID it aborted */
+typedef struct {
+    unsigned int NodeOrdinal, EngineOrdinal, LastAbortedFenceId;
+} DXGKARG_RESETENGINE;
+
+/* D3DKMDT_GRAPHICS_PREEMPTION_GRANULARITY, D3DKMDT_COMPUTE_PREEMPTION_GRANULARITY */
+#define D3DKMDT_GRAPHICS_PREEMPTION_NONE                0
+#define D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY 100
+#define D3DKMDT_GRAPHICS_PREEMPTION_PRIMITIVE_BOUNDARY  200
+#define D3DKMDT_COMPUTE_PREEMPTION_NONE                 0
+#define D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY  100
+#define D3DKMDT_COMPUTE_PREEMPTION_DISPATCH_BOUNDARY    200
 
 #define DXGK_DDI(ret, name, ...) ret (NT_API *name)(__VA_ARGS__)
 
@@ -785,10 +807,12 @@ typedef struct {
     DXGK_DDI(NT_STATUS, DxgkDdiDestroyAllocation, void *adapter, const DXGKARG_DESTROYALLOCATION *);
     void *DxgkDdiDescribeAllocation, *DxgkDdiGetStandardAllocationDriverData;
     void *DxgkDdiAcquireSwizzlingRange, *DxgkDdiReleaseSwizzlingRange;
-    void *DxgkDdiPatch, *DxgkDdiSubmitCommand, *DxgkDdiPreemptCommand;
+    void *DxgkDdiPatch, *DxgkDdiSubmitCommand;
+    DXGK_DDI(NT_STATUS, DxgkDdiPreemptCommand, void *adapter, const DXGKARG_PREEMPTCOMMAND *);
     DXGK_DDI(NT_STATUS, DxgkDdiBuildPagingBuffer, void *adapter, DXGKARG_BUILDPAGINGBUFFER *);
     void *DxgkDdiSetPalette, *DxgkDdiSetPointerPosition, *DxgkDdiSetPointerShape;
-    void *DxgkDdiResetFromTimeout, *DxgkDdiRestartFromTimeout;
+    DXGK_DDI(NT_STATUS, DxgkDdiResetFromTimeout, void *adapter);
+    DXGK_DDI(NT_STATUS, DxgkDdiRestartFromTimeout, void *adapter);
     void *DxgkDdiEscape, *DxgkDdiCollectDbgInfo, *DxgkDdiQueryCurrentFence;
     DXGK_DDI(NT_STATUS, DxgkDdiIsSupportedVidPn, void *adapter, DXGKARG_ISSUPPORTEDVIDPN *);
     void *DxgkDdiRecommendFunctionalVidPn;
@@ -812,7 +836,7 @@ typedef struct {
     void *DxgkDdiQueryVidPnHWCapability;
     /* DXGKDDI_INTERFACE_VERSION_WIN8 */
     void *DxgkDdiSetPowerComponentFState, *DxgkDdiQueryDependentEngineGroup, *DxgkDdiQueryEngineStatus;
-    void *DxgkDdiResetEngine;
+    DXGK_DDI(NT_STATUS, DxgkDdiResetEngine, void *adapter, DXGKARG_RESETENGINE *);
     DXGK_DDI(NT_STATUS, DxgkDdiStopDeviceAndReleasePostDisplayOwnership, void *ctx, D3DDDI_VIDEO_PRESENT_TARGET_ID,
              DXGK_DISPLAY_INFORMATION *);
     void *DxgkDdiSystemDisplayEnable, *DxgkDdiSystemDisplayWrite, *DxgkDdiCancelCommand;
@@ -867,7 +891,8 @@ _Static_assert(DXGK_OFFSET(KMDDOD_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) 
 _Static_assert(DXGK_OFFSET(DXGK_DEVICE_INFO, TranslatedResourceList) == 32 && sizeof(DXGK_DISPLAY_INFORMATION) == 32 &&
                sizeof(DXGK_CHILD_DESCRIPTOR) == 28, "dispmprt.h layouts");
 _Static_assert(DXGK_OFFSET(DXGK_DRIVERCAPS, MemoryManagementCaps) == 68 && DXGK_OFFSET(DXGK_DRIVERCAPS, WDDMVersion) == 336 &&
-               DXGK_OFFSET(DXGK_DRIVERCAPS, PreemptionCaps) == 528 && DXGK_OFFSET(DXGK_DRIVERCAPS, MaxOverlayPlanes) == 544 &&
+               DXGK_OFFSET(DXGK_DRIVERCAPS, PreemptionCaps) == 528 && DXGK_OFFSET(DXGK_DRIVERCAPS, SupportPerEngineTDR) == 538 &&
+               DXGK_OFFSET(DXGK_DRIVERCAPS, MaxOverlayPlanes) == 544 &&
                DXGK_OFFSET(DXGK_DRIVERCAPS, InternalGpuVirtualAddressRangeStart) == 552 &&
                DXGK_OFFSET(DXGK_DRIVERCAPS, MaxQueuedMultiPlaneOverlayFlipVSync) == 572, "DXGK_DRIVERCAPS layout");
 _Static_assert(sizeof(DXGK_SEGMENTDESCRIPTOR4) == 96 && DXGK_OFFSET(DXGK_SEGMENTDESCRIPTOR4, NumInvalidMemoryRanges) == 56 &&
@@ -886,7 +911,11 @@ _Static_assert(DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryAdapterInfo) 
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiStopDeviceAndReleasePostDisplayOwnership) == 8 * 75 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 8 * 83 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 8 * 89 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiPreemptCommand) == 8 * 27 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiBuildPagingBuffer) == 8 * 28 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetFromTimeout) == 8 * 32 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRestartFromTimeout) == 8 * 33 &&
+               DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetEngine) == 8 * 74 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateContext) == 8 * 58 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSubmitCommandVirtual) == 8 * 90 &&
                DXGK_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetRootPageTable) == 8 * 91 &&

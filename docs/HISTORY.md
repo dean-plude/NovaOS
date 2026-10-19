@@ -14734,6 +14734,33 @@ one, and gets DHCP and pings over the secured network.  A host test
 against the standard's vectors and Python's `hashlib`.  WPA3 (SAE) comes
 next, then `wlanapi.dll` and Settings' Wi-Fi page.
 
+## Bluetooth: headset audio (A2DP and hands-free)
+
+Second part of roadmap step 28.2.  A paired Bluetooth headset now plays
+and records, the way a USB headset does:
+
+- **A2DP stereo** (`kernel/nt/bthaudio.c`): NovaOS is the source.  It
+  configures the headset's SBC stream endpoint over AVDTP (48 kHz joint
+  stereo) and streams SBC frames in RTP packets, encoded by NovaOS's own
+  fixed-point SBC encoder (`kernel/nt/sbc.c`, written from the A2DP
+  specification and checked against ffmpeg's decoder), with fewer bits a
+  frame while the link cannot keep up.  The headset shows up as
+  "Headphones (NAME)", the default output.
+- **Hands-free voice**: HFP 1.8 with NovaOS as the audio gateway, over
+  RFCOMM with credit-based flow control.  Playing to "Headset (NAME
+  Hands-Free)" or recording from its microphone opens an eSCO voice link,
+  which `bthusb` carries on the radio's isochronous endpoints (interface 1
+  at the setting the link needs); `usbd` gained isochronous OUT transfers
+  for it, and a Windows driver's bulk transfer that waits now sleeps one
+  tick between polls, not two.
+- **Tested** in the devices suite's `bluetooth` boot: `tools/btpeer.py`'s
+  headset now answers HFP and A2DP, decodes what it is sent into WAV files
+  and sends a tone from its microphone; `soundtest` plays through both
+  outputs and records from the headset.
+
+Not yet: connections the headset starts, wide-band speech (mSBC), other
+A2DP codecs, the headset's buttons, and a real headset on the T14.
+
 ## Command submission and GPU fences
 
 A render miniport's process had GPU virtual addresses, but nothing ran on
@@ -14764,6 +14791,37 @@ submits buffers, signals and waits from the GPU, and makes it fault on a
 read-only page; the "wddm" boot checks what the GPU did.  Not yet:
 preemption and recovery from a hung GPU (TDR), the next part, and paging
 buffers the GPU runs.
+
+## GPU preemption and timeout recovery
+
+A render miniport's GPU ran each context's DMA buffers in order, but one
+buffer that never finished held the engine for everyone, and a GPU fault
+was only logged: the buffer was dropped and its context carried on as if
+nothing had happened.
+
+Now, as the fifth part of step 3 of the Intel GPU design
+([design/intel-gpu.md](design/intel-gpu.md)), the scheduler watches each
+engine's clock.  A buffer that has run 200 ms while another context's work
+waits (or 2 s with none waiting) is preempted through the driver
+(`DxgkDdiPreemptCommand`, when its `PreemptionCaps` allow it); when the
+driver's interrupt reports `DMA_PREEMPTED`, the buffers it did not finish
+go back to their contexts' queues and the preempted context waits its turn
+behind the others.  An engine that does not stop within Windows' timeout
+of 2 s, or that reports a fault, is reset (`DxgkDdiResetEngine`, or
+`DxgkDdiResetFromTimeout` and `RestartFromTimeout` for a driver without
+per-engine reset): the context whose buffer hung or faulted is lost, its
+later calls fail with `STATUS_DEVICE_REMOVED` and the fences it would
+have signalled are raised to the maximum so nothing waits on it forever,
+while the other contexts' unfinished buffers are submitted again.
+Destroying a context whose buffer is still running preempts it instead of
+waiting.
+
+The test driver `wddmtest.sys` can now be preempted between its commands
+(a preempted buffer resumes where it stopped), reset per engine, and has a
+`SPIN` command that runs until it is preempted or until the engine is
+reset.  `kmttest wddm` uses it to show a spinning context preempted for
+another one, and an unstoppable spin reset with its context lost while the
+other context keeps running.
 
 ## HID class test: waits for cfgmgr32 to drop an unplugged device
 
@@ -14856,6 +14914,27 @@ a rekey of both group keys over the connection.  A host test
 against the standard's Annex J.10 vector and runs the whole exchange
 between them.  Not yet: SAE's hash-to-element and its other groups,
 `wlanapi.dll` and Settings' Wi-Fi page; the real card needs the T14.
+
+## XAML's core services
+
+Ninth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the XAML core's own core
+services, `CCoreServices` (`core/dll/xcpcore.cpp`), now build from
+Microsoft's sources, and XAML text loads through them as
+`XamlReader.Load` loads it (`CCoreServices::ParseXaml`).
+
+- **The core services:** `xcpcore.cpp` and its name scopes compiled with
+  the core's own project (`xcpcore.vcxproj`) into `xaml_core.lib`, for
+  programs that say `"xaml": "core"`; one new stand-in for a closed
+  header (FrameworkUdk's `CoreWindowIntegrationInterface.h`).
+- **The parts not built yet:** every function the built core calls in the
+  rest of the core (rendering, input, layout, text, media) gets a
+  generated stand-in at each build that says which function it is, once,
+  and answers "not implemented"; a real definition always wins, so the
+  list shrinks as the core builds.
+- `xamlloadtest` runs on a real `CCoreServices` (Microsoft's parser mock
+  is gone from it) with the core's theme resources, which a dictionary's
+  lookup falls back on: 31 checks.
 
 ## XAML's merged and theme dictionaries
 

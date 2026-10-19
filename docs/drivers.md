@@ -510,11 +510,42 @@ BthUsb.NT...`), so `bthusb` stays the function driver and Intel's
 `ibtusb.sys`, which loads the radio's firmware, sits under it as a lower
 filter (its `.HW` section's `LowerFilters`). The `bluetooth` self-test
 installs a filter packaged the same way and checks the radio's traffic
-goes through it. Not done yet: headset audio (SCO links, A2DP and the
-hands-free profile: turning those services on returns
-`ERROR_NOT_SUPPORTED`), connections a device starts (a mouse that wakes
-up is reconnected from NovaOS's side within 10 seconds), Bluetooth Low
-Energy, the BRB interface (`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party
+goes through it.
+
+Turning a paired headset's Hands-Free (`0x111E`) or Audio Sink
+(`0x110B`) service on gives it sound devices (`kernel/nt/bthaudio.c`, in
+place of Windows' `BthA2dp.sys` and `BthHfAud.sys`), registered with the
+kernel mixer as a USB headset's are, so `winmm`, WASAPI and Settings'
+Sound page see them:
+
+- **"Headphones (NAME)"**: A2DP stereo. NovaOS is the A2DP source: it
+  finds the headset's SBC stream endpoint over AVDTP, configures it
+  (48 kHz, or 44.1 kHz, joint stereo, the largest bitpool it takes up to
+  53) and sends SBC frames in RTP packets on a second L2CAP channel. The
+  encoder (`kernel/nt/sbc.c`) is NovaOS's own, written from the A2DP
+  specification in fixed point (the kernel has no floating point). When
+  sending falls behind (a slow link or radio), it lowers the bitpool, down
+  to 16, and raises it again once it keeps up, as Android's and BlueZ's
+  sources do; each frame says its bitpool, so the headset follows. The
+  stream starts when something plays and is suspended after two seconds
+  of silence. This output becomes the default.
+- **"Headset (NAME Hands-Free)"**, an output and a microphone: the
+  hands-free profile (HFP 1.8), with NovaOS as the audio gateway. It
+  opens RFCOMM on the channel the headset's SDP record names (credit-based
+  flow control), answers the headset's AT commands until the service
+  level connection is up, and when something plays or records opens a
+  voice link (eSCO, falling back to SCO; CVSD on the air, 16-bit 8 kHz
+  to the host). `bthusb` carries it on the radio's isochronous endpoints
+  (interface 1 at the setting the link needs, setting 2 for one link) and
+  closes it after two seconds idle. The microphone becomes the default
+  input.
+
+A headset whose services are on is connected again after a restart, and
+every 10 seconds while it is out of reach. Not done yet: connections a
+device starts (a mouse or headset that wakes up is reconnected from
+NovaOS's side within 10 seconds), wide-band speech (mSBC), AAC and other
+A2DP codecs, the headset's volume and call buttons, Bluetooth Low Energy,
+the BRB interface (`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party
 profile driver uses, and Settings' Bluetooth page.
 
 ### Network drivers (NDIS)
@@ -718,8 +749,16 @@ engine, finished when its interrupt routine reports that ID
 queued behind them are signalled once the work before them is done, and
 waits from the GPU hold a context's later work. Its interrupt line, when
 the PnP manager gives one, is connected line-based (`DxgkDdiInterruptRoutine`).
-Not there yet: page tables the GPU updates (paging buffers it runs),
-preemption and timeout recovery (TDR), message-signalled interrupts,
+A node whose buffer runs 200 ms while another context's work waits (or 2 s
+alone) is preempted (`DxgkDdiPreemptCommand`, for a driver whose
+`PreemptionCaps` allow it; `DMA_PREEMPTED` gives its unfinished buffers
+back to their contexts), and one that does not stop within 2 s, or that
+reports `DMA_FAULTED`, is reset (`DxgkDdiResetEngine` with
+`SupportPerEngineTDR`, else `DxgkDdiResetFromTimeout` and
+`RestartFromTimeout`): the context at fault is lost (`STATUS_DEVICE_REMOVED`,
+its fences raised to the maximum) and the others' buffers are submitted
+again. Not there yet: page tables the GPU updates (paging buffers it runs),
+priorities between contexts, message-signalled interrupts,
 vertical blanks, a full driver's display, power states, and more than one
 source.
 

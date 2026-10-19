@@ -267,6 +267,8 @@ set(KERNEL_C_SOURCES
     nt/usbd.c
     nt/usbvideo.c
     nt/bthport.c
+    nt/bthaudio.c
+    nt/sbc.c
     nt/bthusb.c
     nt/hidbth.c
     nt/win10.c

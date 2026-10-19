@@ -20,8 +20,7 @@
  *  - BluetoothAuthenticateDeviceEx pairing each (the mouse "Just Works",
  *    the headset by PIN), then BluetoothGetDeviceInfo saying so;
  *  - BluetoothSetServiceState switching the mouse's HID service on
- *    (BluetoothEnumerateInstalledServices lists it), and refusing the
- *    headset's Hands-Free one (no driver yet);
+ *    (BluetoothEnumerateInstalledServices lists it);
  *  - the mouse's HID collection under hidbth (a HID interface of
  *    1209:000e turned on, which mouhid runs), and, at "[BT] step: move", the test moving the mouse
  *    through tools/btpeer.py: the cursor must move.
@@ -30,6 +29,14 @@
  * mouse back (reconnected with its stored link key) and moving.
  * "bttest remove": BluetoothRemoveDevice forgets both; the device list
  * no longer has them paired and the mouse's HID collection is gone.
+ * "bttest audio": the headset again (an inquiry, pairing by PIN), its
+ * Hands-Free and Audio Sink services switched on and listed, and its sound
+ * devices in winmm: the outputs "Headphones (NovaOS Test Headset)" (A2DP
+ * stereo) and "Headset (NovaOS Test Headset Hands-Free)" (the voice link)
+ * and the input "Headset (...)" (its microphone).  soundtest then plays and
+ * records through them (tests/selftest/devices/bluetooth/020-*).
+ * "bttest audio-remove": BluetoothRemoveDevice forgets the headset and its
+ * sound devices go.
  */
 #include <windows.h>
 #include <stdio.h>
@@ -78,10 +85,18 @@ __declspec(dllimport) DWORD WINAPI BluetoothSetServiceState(HANDLE, const BLUETO
 __declspec(dllimport) DWORD WINAPI BluetoothEnumerateInstalledServices(HANDLE, const BLUETOOTH_DEVICE_INFO_ *, DWORD *, GUID *);
 __declspec(dllimport) DWORD WINAPI BluetoothRemoveDevice(const ULONGLONG *);
 
+typedef struct { WORD wMid, wPid; UINT vDriverVersion; WCHAR szPname[32]; DWORD dwFormats; WORD wChannels, wReserved1; DWORD dwSupport; } WAVEOUTCAPSW_;
+typedef struct { WORD wMid, wPid; UINT vDriverVersion; WCHAR szPname[32]; DWORD dwFormats; WORD wChannels, wReserved1; } WAVEINCAPSW_;
+__declspec(dllimport) UINT WINAPI waveOutGetNumDevs(void);
+__declspec(dllimport) UINT WINAPI waveInGetNumDevs(void);
+__declspec(dllimport) UINT WINAPI waveOutGetDevCapsW(UINT_PTR, WAVEOUTCAPSW_ *, UINT);
+__declspec(dllimport) UINT WINAPI waveInGetDevCapsW(UINT_PTR, WAVEINCAPSW_ *, UINT);
+
 #define MOUSE   0x4E4F56410001ULL
 #define HEADSET 0x4E4F56410002ULL
 static const GUID g_hid = { 0x00001124, 0x0000, 0x1000, { 0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB } };
 static const GUID g_hfp = { 0x0000111E, 0x0000, 0x1000, { 0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB } };
+static const GUID g_sink = { 0x0000110B, 0x0000, 0x1000, { 0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB } };
 
 static int g_pass, g_fail;
 
@@ -190,13 +205,93 @@ static void mouse_checks(void)
     check(moved, "the Bluetooth mouse moved the cursor (%ld,%ld -> %ld,%ld)", a.x, a.y, b.x, b.y);
 }
 
-static BOOL hid_installed(HANDLE r, const BLUETOOTH_DEVICE_INFO_ *d)
+static BOOL installed(HANDLE r, const BLUETOOTH_DEVICE_INFO_ *d, const GUID *s)
 {
     GUID g[8];
     DWORD n = 8;
     if (BluetoothEnumerateInstalledServices(r, d, &n, g)) return FALSE;
-    for (DWORD i = 0; i < n; i++) if (!memcmp(&g[i], &g_hid, sizeof(GUID))) return TRUE;
+    for (DWORD i = 0; i < n; i++) if (!memcmp(&g[i], s, sizeof(GUID))) return TRUE;
     return FALSE;
+}
+
+static BOOL hid_installed(HANDLE r, const BLUETOOTH_DEVICE_INFO_ *d) { return installed(r, d, &g_hid); }
+
+/* Whether winmm has an output (@in: input) whose name starts with @name
+ * (szPname holds 31 characters: longer names are cut) */
+static BOOL wave_device(BOOL in, const WCHAR *name)
+{
+    UINT n = in ? waveInGetNumDevs() : waveOutGetNumDevs();
+    for (UINT i = 0; i < n; i++) {
+        WAVEOUTCAPSW_ co;
+        WAVEINCAPSW_ ci;
+        memset(&co, 0, sizeof(co));
+        memset(&ci, 0, sizeof(ci));
+        UINT e = in ? waveInGetDevCapsW(i, &ci, sizeof(ci)) : waveOutGetDevCapsW(i, &co, sizeof(co));
+        if (!e && !wcsncmp(in ? ci.szPname : co.szPname, name, wcslen(name))) return TRUE;
+    }
+    return FALSE;
+}
+
+static void list_wave(void)
+{
+    for (int in = 0; in < 2; in++) {
+        UINT n = in ? waveInGetNumDevs() : waveOutGetNumDevs();
+        for (UINT i = 0; i < n; i++) {
+            WAVEOUTCAPSW_ co;
+            WAVEINCAPSW_ ci;
+            memset(&co, 0, sizeof(co));
+            memset(&ci, 0, sizeof(ci));
+            if (in) waveInGetDevCapsW(i, &ci, sizeof(ci)); else waveOutGetDevCapsW(i, &co, sizeof(co));
+            printf("  wave%s %u: \"%ls\"\n", in ? "In" : "Out", i, in ? ci.szPname : co.szPname);
+        }
+    }
+}
+
+#define STEREO_OUT L"Headphones (NovaOS Test Headset"
+#define VOICE_OUT  L"Headset (NovaOS Test Headset"
+
+static int audio(HANDLE r, int remove)
+{
+    BLUETOOTH_DEVICE_INFO_ mouse, headset;
+    if (remove) {
+        ULONGLONG a = HEADSET;
+        check(!BluetoothRemoveDevice(&a), "BluetoothRemoveDevice: the headset forgotten");
+        BOOL gone = FALSE;
+        for (int i = 0; i < 100 && !(gone = !wave_device(FALSE, STEREO_OUT) && !wave_device(FALSE, VOICE_OUT) &&
+                                             !wave_device(TRUE, VOICE_OUT)); i++)
+            Sleep(200);
+        check(gone, "its sound devices are gone");
+        list_wave();
+        printf("bttest audio-remove: %d passed, %d failed\n", g_pass, g_fail);
+        return g_fail != 0;
+    }
+    search(r, TRUE, TRUE, &mouse, &headset);
+    check(headset.dwSize != 0, "an inquiry found the headset");
+    if (!headset.dwSize) { printf("bttest audio: %d passed, %d failed\n", g_pass, g_fail); return 1; }
+    DWORD e = 0;
+    if (!headset.fAuthenticated) {
+        e = BluetoothAuthenticateDeviceEx(NULL, r, &headset, NULL, 0);
+        check(!e, "BluetoothAuthenticateDeviceEx: the headset paired (PIN 0000) (error %lu)", e);
+    }
+    e = BluetoothSetServiceState(r, &headset, &g_hfp, 1);
+    check(!e, "BluetoothSetServiceState: the headset's Hands-Free service on (error %lu)", e);
+    e = BluetoothSetServiceState(r, &headset, &g_sink, 1);
+    check(!e, "BluetoothSetServiceState: its Audio Sink service on (error %lu)", e);
+    check(installed(r, &headset, &g_hfp) && installed(r, &headset, &g_sink),
+          "BluetoothEnumerateInstalledServices lists Hands-Free and Audio Sink");
+    BOOL stereo = FALSE, voice = FALSE, mic = FALSE;
+    for (int i = 0; i < 150 && !(stereo && voice && mic); i++) {
+        if (i) Sleep(200);
+        stereo = wave_device(FALSE, STEREO_OUT);
+        voice = wave_device(FALSE, VOICE_OUT);
+        mic = wave_device(TRUE, VOICE_OUT);
+    }
+    list_wave();
+    check(stereo, "waveOut has the headset's stereo output (A2DP)");
+    check(voice, "waveOut has its hands-free output (the voice link)");
+    check(mic, "waveIn has its microphone");
+    printf("bttest audio: %d passed, %d failed\n", g_pass, g_fail);
+    return g_fail != 0;
 }
 
 int main(int argc, char **argv)
@@ -205,6 +300,7 @@ int main(int argc, char **argv)
     BLUETOOTH_DEVICE_INFO_ mouse, headset;
     HANDLE r = radio();
     if (!r) { printf("bttest: %d passed, %d failed\n", g_pass, g_fail); return 1; }
+    if (!strcmp(mode, "audio") || !strcmp(mode, "audio-remove")) return audio(r, mode[5] != 0);
     if (!strcmp(mode, "remove")) {
         ULONGLONG a = MOUSE, b = HEADSET;
         check(!BluetoothRemoveDevice(&a) && !BluetoothRemoveDevice(&b), "BluetoothRemoveDevice: both forgotten");
@@ -250,8 +346,6 @@ int main(int argc, char **argv)
     e = BluetoothSetServiceState(r, &mouse, &g_hid, 1);
     check(!e, "BluetoothSetServiceState: the mouse's HID service on (error %lu)", e);
     check(hid_installed(r, &mouse), "BluetoothEnumerateInstalledServices lists HID");
-    e = BluetoothSetServiceState(r, &headset, &g_hfp, 1);
-    check(e != 0, "the headset's Hands-Free service is refused for now (error %lu)", e);
     mouse_checks();
     printf("bttest: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail != 0;

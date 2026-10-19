@@ -353,11 +353,27 @@ Each is one pull request off main.
       command format through the page tables from the physical root).
       Not in it: paging buffers the GPU runs (a driver that needs them
       still gets "not yet"), broadcast to several contexts, priorities
-      between contexts, message-signalled interrupts, and recovering
-      from a fault (logged, the buffer dropped: part 5).
-   5. **Preemption and TDR**: `DxgkDdiPreemptCommand`, the timeout,
-      `DxgkDdiResetFromTimeout`/`RestartFromTimeout`, the offending
-      context lost and the rest going on.
+      between contexts, and message-signalled interrupts.
+   5. **Preemption and TDR** (done): the driver's `DXGK_DRIVERCAPS`
+      `PreemptionCaps` and `SupportPerEngineTDR` are read at start.  A
+      node whose buffer has run 200 ms while another context's work waits
+      (or 2 s alone, or whose context is being destroyed) is asked to stop
+      (`DxgkDdiPreemptCommand`, with a new fence ID of the node's); when
+      the interrupt reports `DMA_PREEMPTED`, the buffers it did not finish
+      go back to their contexts' queues, the preempted context last.  No
+      preemption within Windows' `TdrDelay` (2 s), or a `DMA_FAULTED`,
+      resets the engine (`DxgkDdiResetEngine`, or for a driver without
+      per-engine TDR `DxgkDdiResetFromTimeout` then
+      `RestartFromTimeout`): the context whose buffer hung or faulted is
+      lost (its later `D3DKMT*` calls fail with `STATUS_DEVICE_REMOVED`,
+      the fences its queue would have signalled are raised to the maximum
+      so their waiters wake) and the other contexts' unfinished buffers
+      are submitted again.  Checked by `kmttest wddm` with `wddmtest.sys`'s
+      `SPIN` command (until preempted, or until reset).  Not in it:
+      priorities between contexts, `DxgkDdiQueryDependentEngineGroup`
+      (engines reset together), device-wide removal
+      (`D3DKMTGetDeviceState`), and the adapter-wide path, which no test
+      driver takes yet.
    6. **Sharing and 32-bit programs**: shared allocations and fences by NT
       handle (`D3DKMTShareObjects`, `OpenResourceFromNtHandle`,
       `OpenSyncObjectFromNtHandle`, which VKD3D-Proton uses), and the x86

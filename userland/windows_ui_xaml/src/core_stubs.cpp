@@ -4,8 +4,7 @@
 // CDependencyObject's property system asks an element for its logical and
 // templated parents and its popup, the resource lookup for an element's
 // class name and resources and a visual state's group (setters in visual
-// states); and the platform services, which the core's DLL sets up and
-// which stay null here, as in Microsoft's stubs (DCompVisual_Stub.cpp).
+// states) (the platform services, null here, in src/platform_services.cpp).
 // Linked only by programs that test the
 // components on their own (xaml_teststubs.lib); none of them makes an
 // element.  Microsoft's UIElement_Stub.cpp has OnAssociationFailure but
@@ -16,7 +15,6 @@
 #include <Framework.h>
 #include <Popup.h>
 #include <vsm/inc/CVisualStateManager2.h>
-#include <EncodedPtr.h>
 #include <string.h>
 
 xstring_ptr CFrameworkElement::GetClassName()
@@ -48,8 +46,6 @@ xref_ptr<CVisualStateGroupCollection> CVisualStateManager2::GetGroupCollectionFr
 {
     return nullptr;
 }
-
-EncodedPtr<IPlatformServices> gps;
 
 _Check_return_ HRESULT CUIElement::OnAssociationFailure()
 {

@@ -84,11 +84,26 @@
  * raises the fences queued after them (um_d3dkmt.c's, through
  * DxgkFenceOps).  Its interrupt line, if it has one, is connected here.
  *
+ * Step 3's fifth part: preemption and timeout detection and recovery (TDR).
+ * A node whose buffer has run a quantum while another context's work waits
+ * (or TDR_TICKS with none waiting, or whose context is being destroyed) is
+ * asked to stop (DxgkDdiPreemptCommand, with a new fence ID of the node's,
+ * for a driver whose DXGK_DRIVERCAPS PreemptionCaps say it can); when its
+ * interrupt reports DMA_PREEMPTED the buffers it did not finish go back to
+ * their contexts' queues, the preempted context last in line.  A
+ * preemption not done in TDR_TICKS (Windows' TdrDelay, 2 s), or a GPU
+ * fault (DMA_FAULTED), resets the engine (DxgkDdiResetEngine when the
+ * driver says SupportPerEngineTDR, else the adapter:
+ * DxgkDdiResetFromTimeout then DxgkDdiRestartFromTimeout): the context
+ * whose buffer hung or faulted is lost (its later submissions fail with
+ * STATUS_DEVICE_REMOVED; the fences its queue would have signalled are
+ * raised to the maximum so their waiters wake) and the other contexts'
+ * unfinished buffers are given to the driver again.
+ *
  * Tested by tools/drivertest/wddmtest.c, a render miniport whose GPU is
  * software.  Not yet: eviction (allocations stay where they are placed;
  * residency is counted, um_d3dkmt.c), paging buffers the GPU runs,
- * message-signalled interrupts, preemption and TDR (the next part of step
- * 3: a fault is logged and the buffer dropped), and a full driver's display (step 2, on the T14:
+ * message-signalled interrupts, and a full driver's display (step 2, on the T14:
  * its outputs are counted but the desktop is not offered to it), power
  * states, more than one source, and monitor interfaces.
  */
@@ -116,6 +131,9 @@
 #define MAX_INFLIGHT 16                    /* DMA buffers one node has at the driver at once */
 #define MAX_DMA_PRIV 4096                  /* a submission's private driver data */
 #define RANGE_PAGES 0xFFFFFFFFu            /* a range's "allocation": pages VidMm mapped itself (a fence's) */
+#define QUANTUM_TICKS 20                   /* a buffer's run before another context's work preempts it (200 ms) */
+#define TDR_TICKS   200                    /* Windows' TdrDelay: 2 s for a preemption, or of one buffer alone */
+#define ST_DEVICE_REMOVED ((NT_STATUS)0xC00002B6)    /* STATUS_DEVICE_REMOVED: a lost context's calls */
 
 typedef struct DxgkDriver {
     struct DxgkDriver *next;
@@ -169,14 +187,22 @@ typedef struct DxgkAdapter {
     bool               sched;
     int                nodes;
     struct DxgkCtx    *ctxs;
+    int                preempt;        /* PreemptionCaps.Graphics (D3DKMDT_GRAPHICS_PREEMPTION_*) */
+    bool               engine_tdr;         /* SupportPerEngineTDR: DxgkDdiResetEngine */
     struct {
         UINT32             next_id;        /* the last SubmissionFenceId given */
         volatile UINT32    done;           /* the last one the driver reported (DMA_COMPLETED) */
         struct DxgkPacket *head, *tail;
         int                n;
+        UINT64             since;          /* (ticks) when the first unfinished buffer's turn began */
+        UINT32             preempt_id;     /* a preemption asked for: its fence ID (0: none) */
+        UINT64             preempt_at;
+        volatile UINT32    preempted;      /* DMA_PREEMPTED's PreemptionFenceId (0: none) */
+        volatile UINT32    fault;          /* DMA_FAULTED's FaultedFenceId (0: none) */
+        volatile NT_STATUS fault_status;
     } node[MAX_NODES];
     volatile int       moved;              /* the GPU wrote monitored fences (an interrupt said so) */
-    volatile UINT32    fault_id;           /* a DMA_FAULTED's fence, for the log (0: none) */
+    volatile bool      busy;               /* buffers at the driver: the thread looks at the clock */
     NT_KEVENT          sch_lock;           /* a mutex: the contexts' queues and the nodes' lists */
     NT_KEVENT          sch_ev, sch_progress, sch_dead;
     volatile bool      sch_stop;
@@ -241,6 +267,7 @@ typedef struct DxgkCtx {
     DxgkPacket     *head, *tail;           /* queued, not yet at the driver */
     int             inflight;              /* its DMA buffers at the driver */
     bool            closing;
+    bool            lost;                  /* its buffer hung or faulted: reset, nothing more runs */
 } DxgkCtx;
 
 typedef struct DxgkAlloc {
@@ -758,10 +785,19 @@ static NT_API void cb_notify_interrupt(void *h, const void *data)
     case DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED:
         a->moved = 1;
         break;
-    case DXGK_INTERRUPT_DMA_FAULTED:                /* (recovery is the TDR's, the next part: it counts as done) */
-        if (d->DmaFaulted.NodeOrdinal < MAX_NODES)
-            __atomic_store_n(&a->node[d->DmaFaulted.NodeOrdinal].done, d->DmaFaulted.FaultedFenceId, __ATOMIC_RELEASE);
-        a->fault_id = d->DmaFaulted.FaultedFenceId;
+    case DXGK_INTERRUPT_DMA_PREEMPTED:              /* (what it finished first, then the preemption's own ID) */
+        if (d->DmaPreempted.NodeOrdinal < MAX_NODES) {
+            unsigned int n = d->DmaPreempted.NodeOrdinal;
+            if ((INT32)(d->DmaPreempted.LastCompletedFenceId - a->node[n].done) > 0)
+                __atomic_store_n(&a->node[n].done, d->DmaPreempted.LastCompletedFenceId, __ATOMIC_RELEASE);
+            __atomic_store_n(&a->node[n].preempted, d->DmaPreempted.PreemptionFenceId, __ATOMIC_RELEASE);
+        }
+        break;
+    case DXGK_INTERRUPT_DMA_FAULTED:                /* (the scheduler resets the engine: its context is lost) */
+        if (d->DmaFaulted.NodeOrdinal < MAX_NODES) {
+            a->node[d->DmaFaulted.NodeOrdinal].fault_status = d->DmaFaulted.Status;
+            __atomic_store_n(&a->node[d->DmaFaulted.NodeOrdinal].fault, d->DmaFaulted.FaultedFenceId, __ATOMIC_RELEASE);
+        }
         a->moved = 1;
         break;
     }
@@ -1340,12 +1376,15 @@ static DxgkProc *proc_get(DxgkAdapter *a, void *owner)
  * One thread per adapter runs it; it takes no lock but sch_lock, and the
  * fences' calls (g_fops) none of the callers' either.
  * ----------------------------------------------------------------------- */
-static void packets_free(DxgkPacket *p, bool signal)
+/* Packets done with: SIG_VALUES raises their signals' fences to the values
+ * queued, SIG_MAX (a lost context's) to the maximum, so that every waiter wakes */
+enum { SIG_NONE, SIG_VALUES, SIG_MAX };
+static void packets_free(DxgkPacket *p, int signal)
 {
     while (p) {
         DxgkPacket *next = p->next;
         for (int i = 0; i < p->n; i++) {
-            if (signal && p->kind == PK_SIGNAL) g_fops->signal(p->fence[i], p->value[i]);
+            if (signal != SIG_NONE && p->kind == PK_SIGNAL) g_fops->signal(p->fence[i], signal == SIG_MAX ? ~0ull : p->value[i]);
             g_fops->release(p->fence[i]);
         }
         kfree(p);
@@ -1360,35 +1399,206 @@ static bool waits_reached(const DxgkPacket *p)
     return true;
 }
 
-/* One pass: finished DMA buffers retired, each context's queue run as far as
- * it can go; true if fences rose (another pass may unblock a wait) */
+/* What one pass of the scheduler collects, freed after sch_lock: retired
+ * packets (signalled), and a lost context's (signalled to the maximum) */
+typedef struct { DxgkPacket *done, **dtail, *lost, **ltail; } SchOut;
+
+static void out_add(DxgkPacket ***tail, DxgkPacket *p)
+{
+    p->next = NULL;
+    **tail = p;
+    *tail = &p->next;
+}
+
+/* Node @n's buffers the driver reported finished (fence ID <= done) */
+static void node_retire(DxgkAdapter *a, int n, SchOut *o)
+{
+    UINT32 id = __atomic_load_n(&a->node[n].done, __ATOMIC_ACQUIRE);
+    DxgkPacket *p;
+    while ((p = a->node[n].head) && (INT32)(id - p->fence_id) >= 0) {
+        a->node[n].head = p->next;
+        if (!p->next) a->node[n].tail = NULL;
+        a->node[n].n--;
+        if (p->ctx) p->ctx->inflight--;
+        a->node[n].since = sched_ticks();
+        out_add(&o->dtail, p);
+    }
+}
+
+/* Node @n's unfinished buffers taken back from the driver: each to the
+ * front of its context's queue, in order, to be submitted again (a lost or
+ * closing context's: dropped); how many went back */
+static int node_take_back(DxgkAdapter *a, int n, SchOut *o)
+{
+    DxgkPacket *list[MAX_INFLIGHT];
+    int k = 0, back = 0;
+    for (DxgkPacket *p = a->node[n].head, *next; p; p = next) {
+        next = p->next;
+        if (p->ctx) p->ctx->inflight--;
+        if (!p->ctx || p->ctx->lost || p->ctx->closing || k == MAX_INFLIGHT) out_add(&o->ltail, p);
+        else list[k++] = p;
+    }
+    a->node[n].head = a->node[n].tail = NULL;
+    a->node[n].n = 0;
+    a->node[n].since = sched_ticks();
+    while (k--) {                                   /* (pushed in reverse: each context keeps its order) */
+        DxgkPacket *p = list[k];
+        DxgkCtx *c = p->ctx;
+        p->next = c->head;
+        c->head = p;
+        if (!c->tail) c->tail = p;
+        back++;
+    }
+    return back;
+}
+
+/* Context @c last in the adapter's list: the others' work is submitted first */
+static void ctx_last(DxgkAdapter *a, DxgkCtx *c)
+{
+    DxgkCtx **pp = &a->ctxs;
+    while (*pp && *pp != c) pp = &(*pp)->next;
+    if (!*pp) return;
+    *pp = c->next;
+    c->next = NULL;
+    while (*pp) pp = &(*pp)->next;
+    *pp = c;
+}
+
+/* @c is lost: what it still has queued is dropped, its signals raised to the maximum */
+static void ctx_lose(DxgkAdapter *a, DxgkCtx *c, const char *why, SchOut *o)
+{
+    if (!c || c->lost) return;
+    c->lost = true;
+    int n = 0;
+    for (DxgkPacket *p = c->head, *next; p; p = next, n++) {
+        next = p->next;
+        out_add(&o->ltail, p);
+    }
+    c->head = c->tail = NULL;
+    kprintf("[DXGK] %s: a context on node %u is lost (%s): %d queued packet(s) dropped, its fences raised to the maximum\n",
+            a->drv->service, c->node, why, n);
+}
+
+/* TDR: node @n reset (DxgkDdiResetEngine, or the adapter: ResetFromTimeout,
+ * RestartFromTimeout), context @guilty lost, the other contexts' unfinished
+ * buffers given back to their queues */
+static void node_reset(DxgkAdapter *a, int n, DxgkCtx *guilty, const char *why, SchOut *o)
+{
+    const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
+    const char *svc = a->drv->service;
+    UINT32 lo = 0, hi = 0;
+    if (ddi->DxgkDdiResetEngine && a->engine_tdr) {
+        DXGKARG_RESETENGINE r = { (unsigned int)n, 0, 0 };
+        NT_STATUS st = ddi->DxgkDdiResetEngine(a->ctx, &r);
+        kprintf("[DXGK] %s: node %d reset (%s; DxgkDdiResetEngine 0x%08x, the driver aborted up to fence %u)\n", svc, n, why,
+                (UINT32)st, r.LastAbortedFenceId);
+        lo = hi = (UINT32)n;
+    } else if (ddi->DxgkDdiResetFromTimeout) {
+        NT_STATUS st = ddi->DxgkDdiResetFromTimeout(a->ctx);
+        NT_STATUS st2 = ddi->DxgkDdiRestartFromTimeout ? ddi->DxgkDdiRestartFromTimeout(a->ctx) : NT_STATUS_NOT_SUPPORTED;
+        kprintf("[DXGK] %s: the adapter reset (%s on node %d; DxgkDdiResetFromTimeout 0x%08x, RestartFromTimeout 0x%08x)\n",
+                svc, why, n, (UINT32)st, (UINT32)st2);
+        lo = 0;
+        hi = (UINT32)a->nodes - 1;
+    } else {
+        kprintf("[DXGK] %s: node %d %s, and the driver cannot reset it: its buffers are dropped\n", svc, n, why);
+        lo = hi = (UINT32)n;
+    }
+    ctx_lose(a, guilty, why, o);
+    for (UINT32 i = lo; i <= hi; i++) {
+        node_retire(a, (int)i, o);                  /* (what it finished before the reset counts) */
+        int back = node_take_back(a, (int)i, o);
+        a->node[i].preempt_id = 0;
+        __atomic_store_n(&a->node[i].preempted, 0, __ATOMIC_RELEASE);
+        if (back) kprintf("[DXGK] %s: node %u: %d buffer(s) of other contexts submitted again\n", svc, i, back);
+    }
+}
+
+/* Whether another context than @c waits for node @n */
+static bool others_wait(DxgkAdapter *a, int n, DxgkCtx *c)
+{
+    for (DxgkPacket *p = a->node[n].head; p; p = p->next)
+        if (p->ctx && p->ctx != c) return true;
+    for (DxgkCtx *x = a->ctxs; x; x = x->next)
+        if (x != c && (int)x->node == n && x->head && !x->lost) return true;
+    return false;
+}
+
+/* Node @n's faults, preemption and clock: the context at fault lost, a
+ * preempted node's buffers back in their queues, a node that ran too long
+ * asked to stop, one that did not stop in TDR_TICKS reset */
+static void node_check(DxgkAdapter *a, int n, SchOut *o)
+{
+    const char *svc = a->drv->service;
+    UINT32 fault = __atomic_exchange_n(&a->node[n].fault, 0, __ATOMIC_ACQ_REL);
+    if (fault) {
+        DxgkCtx *guilty = NULL;
+        for (DxgkPacket *p = a->node[n].head; p; p = p->next)
+            if (p->fence_id == fault) guilty = p->ctx;
+        kprintf("[DXGK] %s: the GPU faulted at fence %u on node %d (0x%08x)\n", svc, fault, n, (UINT32)a->node[n].fault_status);
+        if (guilty) for (DxgkPacket *p = a->node[n].head; p; p = p->next)     /* (its buffer did not finish) */
+            if (p->fence_id == fault) { p->ctx = NULL; guilty->inflight--; }
+        node_reset(a, n, guilty, "a GPU fault", o);
+        return;
+    }
+    node_retire(a, n, o);
+    UINT32 pre = __atomic_exchange_n(&a->node[n].preempted, 0, __ATOMIC_ACQ_REL);
+    if (pre && pre == a->node[n].preempt_id) {
+        DxgkCtx *was = a->node[n].head ? a->node[n].head->ctx : NULL;
+        int back = node_take_back(a, n, o);
+        a->node[n].preempt_id = 0;
+        if (was) ctx_last(a, was);
+        kprintf("[DXGK] %s: node %d preempted (fence %u): %d buffer(s) back in their contexts' queues\n", svc, n, pre, back);
+        return;
+    }
+    if (!a->node[n].n) { a->node[n].preempt_id = 0; return; }
+    UINT64 now = sched_ticks();
+    DxgkCtx *c = a->node[n].head->ctx;
+    if (a->node[n].preempt_id) {
+        if (now - a->node[n].preempt_at >= TDR_TICKS) {
+            kprintf("[DXGK] %s: node %d timed out: no preemption in %d s (fence %u)\n", svc, n, TDR_TICKS / 100,
+                    a->node[n].preempt_id);
+            node_reset(a, n, c, "a timeout", o);
+        }
+        return;
+    }
+    UINT64 ran = now - a->node[n].since;
+    bool want = (c && c->closing) || ran >= TDR_TICKS || (ran >= QUANTUM_TICKS && others_wait(a, n, c));
+    if (!want) return;
+    if (a->preempt == D3DKMDT_GRAPHICS_PREEMPTION_NONE || !a->drv->full.DxgkDdiPreemptCommand) {
+        if (ran >= TDR_TICKS) {                     /* (no preemption: only the timeout) */
+            kprintf("[DXGK] %s: node %d timed out: a buffer ran %d s (fence %u)\n", svc, n, TDR_TICKS / 100,
+                    a->node[n].head->fence_id);
+            node_reset(a, n, c, "a timeout", o);
+        }
+        return;
+    }
+    if (!++a->node[n].next_id) a->node[n].next_id = 1;
+    DXGKARG_PREEMPTCOMMAND pc = { a->node[n].next_id, __atomic_load_n(&a->node[n].done, __ATOMIC_ACQUIRE), (unsigned int)n, 0 };
+    a->node[n].preempt_id = pc.PreemptionFenceId;
+    a->node[n].preempt_at = now;
+    NT_STATUS st = a->drv->full.DxgkDdiPreemptCommand(a->ctx, &pc);
+    if (!NT_SUCCESS_(st)) {
+        kprintf("[DXGK] %s: DxgkDdiPreemptCommand failed (0x%08x)\n", svc, (UINT32)st);
+        a->node[n].preempt_at = now - TDR_TICKS;    /* (reset on the next pass) */
+    }
+}
+
+/* One pass: finished DMA buffers retired, faults, preemptions and timeouts
+ * dealt with, each context's queue run as far as it can go; true if fences
+ * rose (another pass may unblock a wait) */
 static bool sch_run(DxgkAdapter *a)
 {
-    DxgkPacket *done = NULL, **dtail = &done;
+    SchOut o = { NULL, &o.done, NULL, &o.lost };
     bool moved = __atomic_exchange_n(&a->moved, 0, __ATOMIC_ACQ_REL) != 0;
-    UINT32 fault = __atomic_exchange_n(&a->fault_id, 0, __ATOMIC_ACQ_REL);
-    if (fault) kprintf("[DXGK] %s: the GPU faulted at fence %u (the work is dropped; recovery is not done yet)\n",
-                       a->drv->service, fault);
     sch_lock(a);
-    for (int i = 0; i < a->nodes; i++) {
-        UINT32 id = __atomic_load_n(&a->node[i].done, __ATOMIC_ACQUIRE);
-        DxgkPacket *p;
-        while ((p = a->node[i].head) && (INT32)(id - p->fence_id) >= 0) {
-            a->node[i].head = p->next;
-            if (!p->next) a->node[i].tail = NULL;
-            a->node[i].n--;
-            if (p->ctx) p->ctx->inflight--;
-            p->next = NULL;
-            *dtail = p;
-            dtail = &p->next;
-        }
-    }
+    for (int i = 0; i < a->nodes; i++) node_check(a, i, &o);
     for (DxgkCtx *c = a->ctxs; c; c = c->next) {
         DxgkPacket *p;
         while ((p = c->head)) {
             if (p->kind == PK_SIGNAL && c->inflight) break;          /* (after the work before it) */
             if (p->kind == PK_WAIT && !c->closing && !waits_reached(p)) break;
-            if (p->kind == PK_DMA && a->node[c->node].n >= MAX_INFLIGHT) break;
+            if (p->kind == PK_DMA && (a->node[c->node].n >= MAX_INFLIGHT || a->node[c->node].preempt_id)) break;
             c->head = p->next;
             if (!c->head) c->tail = NULL;
             p->next = NULL;
@@ -1406,6 +1616,7 @@ static bool sch_run(DxgkAdapter *a)
                 sc.NodeOrdinal = c->node;
                 NT_STATUS st = a->drv->full.DxgkDdiSubmitCommandVirtual(a->ctx, &sc);
                 if (NT_SUCCESS_(st)) {
+                    if (!a->node[c->node].n) a->node[c->node].since = sched_ticks();
                     if (a->node[c->node].tail) a->node[c->node].tail->next = p;
                     else a->node[c->node].head = p;
                     a->node[c->node].tail = p;
@@ -1416,15 +1627,18 @@ static bool sch_run(DxgkAdapter *a)
                 kprintf("[DXGK] %s: DxgkDdiSubmitCommandVirtual failed (0x%08x): the buffer is dropped\n",
                         a->drv->service, (UINT32)st);
             }
-            *dtail = p;
-            dtail = &p->next;
+            out_add(&o.dtail, p);
         }
     }
+    bool busy = false;
+    for (int i = 0; i < a->nodes; i++) busy |= a->node[i].n != 0;
+    a->busy = busy;
     sch_unlock(a);
-    bool signalled = false;
-    for (DxgkPacket *p = done; p; p = p->next) signalled |= p->kind == PK_SIGNAL;
+    bool signalled = o.lost != NULL;
+    for (DxgkPacket *p = o.done; p; p = p->next) signalled |= p->kind == PK_SIGNAL;
     if (moved) g_fops->moved();
-    packets_free(done, true);
+    packets_free(o.done, SIG_VALUES);
+    packets_free(o.lost, SIG_MAX);
     return signalled || moved;
 }
 
@@ -1432,7 +1646,8 @@ static void sch_worker(void *arg)
 {
     DxgkAdapter *a = arg;
     while (!a->sch_stop) {
-        nt_KeWaitForSingleObject(&a->sch_ev, 0, 0, 0, NULL);
+        INT64 t = -10000LL * 50;                    /* (with buffers at the driver: its clock looked at each 50 ms) */
+        nt_KeWaitForSingleObject(&a->sch_ev, 0, 0, 0, a->busy ? &t : NULL);
         while (!a->sch_stop && sch_run(a)) {}
         nt_KeSetEvent(&a->sch_progress, 0, 0);
     }
@@ -1450,7 +1665,7 @@ static void sch_start(DxgkAdapter *a, unsigned int nodes)
     a->nodes = nodes < 1 ? 1 : nodes > MAX_NODES ? MAX_NODES : (int)nodes;
     memset(a->node, 0, sizeof(a->node));
     a->moved = 0;
-    a->fault_id = 0;
+    a->busy = false;
     a->sch_stop = false;
     nt_KeInitializeEvent(&a->sch_lock, NT_SynchronizationEvent, 1);
     nt_KeInitializeEvent(&a->sch_ev, NT_SynchronizationEvent, 0);
@@ -1461,8 +1676,12 @@ static void sch_start(DxgkAdapter *a, unsigned int nodes)
         return;
     }
     a->sched = true;
-    kprintf("[DXGK] %s: scheduler running, %d node(s)%s\n", a->drv->service, a->nodes,
-            a->intr ? ", interrupt connected" : "");
+    bool pre = a->preempt != D3DKMDT_GRAPHICS_PREEMPTION_NONE && ddi->DxgkDdiPreemptCommand;
+    kprintf("[DXGK] %s: scheduler running, %d node(s)%s; preemption %s, TDR %s\n", a->drv->service, a->nodes,
+            a->intr ? ", interrupt connected" : "",
+            !pre ? "none" : a->preempt == D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY ? "at DMA buffer boundaries"
+                                                                                           : "inside DMA buffers",
+            ddi->DxgkDdiResetEngine && a->engine_tdr ? "per engine" : ddi->DxgkDdiResetFromTimeout ? "per adapter" : "none");
 }
 
 static void sch_stop(DxgkAdapter *a)
@@ -1473,7 +1692,7 @@ static void sch_stop(DxgkAdapter *a)
     nt_KeSetEvent(&a->sch_ev, 0, 0);
     nt_KeWaitForSingleObject(&a->sch_dead, 0, 0, 0, NULL);
     for (int i = 0; i < a->nodes; i++) {            /* (what the driver never finished: its contexts are gone) */
-        packets_free(a->node[i].head, false);
+        packets_free(a->node[i].head, SIG_NONE);
         a->node[i].head = a->node[i].tail = NULL;
         a->node[i].n = 0;
     }
@@ -1488,27 +1707,28 @@ static DxgkCtx *ctx_of(DxgkAdapter *a, UINT32 h)
 static NT_STATUS ctx_queue(DxgkAdapter *a, DxgkCtx *c, DxgkPacket *p)
 {
     sch_lock(a);
-    bool ok = !c->closing;
-    if (ok) {
+    NT_STATUS st = c->lost ? ST_DEVICE_REMOVED : c->closing ? NT_STATUS_INVALID_PARAMETER : NT_STATUS_SUCCESS;
+    if (NT_SUCCESS_(st)) {
         p->ctx = c;
         if (c->tail) c->tail->next = p;
         else c->head = p;
         c->tail = p;
     }
     sch_unlock(a);
-    if (ok) nt_KeSetEvent(&a->sch_ev, 0, 0);
-    return ok ? NT_STATUS_SUCCESS : NT_STATUS_INVALID_PARAMETER;
+    if (NT_SUCCESS_(st)) nt_KeSetEvent(&a->sch_ev, 0, 0);
+    return st;
 }
 
-/* Its queued work run (waits from the GPU let go), for 2 s at most (a hung
- * GPU: the rest is dropped, recovery being the TDR's), then DxgkDdiDestroyContext */
+/* Its queued work run (waits from the GPU let go; a buffer still running is
+ * preempted, or reset after TDR_TICKS), for 2 TDRs at most, then
+ * DxgkDdiDestroyContext */
 static void ctx_destroy(DxgkAdapter *a, DxgkCtx *c)
 {
     sch_lock(a);
     c->closing = true;
     sch_unlock(a);
     nt_KeSetEvent(&a->sch_ev, 0, 0);
-    for (int i = 0; i < 200; i++) {
+    for (int i = 0; i < 2 * TDR_TICKS + 100; i++) {
         sch_lock(a);
         bool idle = !c->head && !c->inflight;
         sch_unlock(a);
@@ -1528,7 +1748,7 @@ static void ctx_destroy(DxgkAdapter *a, DxgkCtx *c)
     for (DxgkCtx **pp = &a->ctxs; *pp; pp = &(*pp)->next)
         if (*pp == c) { *pp = c->next; break; }
     sch_unlock(a);
-    packets_free(drop, false);
+    packets_free(drop, SIG_NONE);
     a->drv->full.DxgkDdiDestroyContext(c->kmd);
     kfree(c);
 }
@@ -1623,6 +1843,8 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
     else
         kprintf("[DXGK] %s: started, %u source(s), %u output(s)\n", svc, sources, children);
     a->wddm = caps.WDDMVersion;
+    a->preempt = caps.PreemptionCaps.Graphics;
+    a->engine_tdr = caps.SupportPerEngineTDR != 0;
     if (a->drv->render) {
         render_start(a, caps.MemoryManagementCaps.Value, caps.GpuEngineTopology.NbAsymetricProcessingNodes);
         if (sources)                              /* (a full driver's display is step 2's) */

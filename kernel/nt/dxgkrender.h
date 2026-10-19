@@ -67,13 +67,15 @@ void   DxgkRenderSetFenceOps(const DxgkFenceOps *ops);
  * DxgkDdiSetRootPageTable with its process's root): NTSTATUS, *ctx dxgkrnl's
  * handle */
 UINT32 DxgkRenderCreateContext(UINT64 luid, UINT32 dev, UINT32 node, const void *priv, UINT32 priv_size, UINT32 *ctx);
-/* After its queued work has run (a while at most: a hung GPU is the TDR's) */
+/* After its queued work has run (a buffer still running is preempted, or
+ * reset by the TDR) */
 void   DxgkRenderDestroyContext(UINT64 luid, UINT32 ctx);
 /* Queued on the context, each NTSTATUS: a DMA buffer at GPU virtual address
  * @va (DxgkDdiSubmitCommandVirtual, in order); fences raised once the work
  * before them has finished; a wait that holds the context's later work until
  * its fences reach their values.  On success the scheduler has the fences'
- * references */
+ * references.  A context lost to a TDR (its buffer hung or faulted) fails
+ * them all with STATUS_DEVICE_REMOVED */
 UINT32 DxgkRenderSubmit(UINT64 luid, UINT32 ctx, UINT64 va, UINT32 size, const void *priv, UINT32 priv_size);
 UINT32 DxgkRenderSignal(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values);
 UINT32 DxgkRenderWait(UINT64 luid, UINT32 ctx, int n, void *const *fences, const UINT64 *values);

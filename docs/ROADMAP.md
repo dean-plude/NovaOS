@@ -743,7 +743,11 @@ measured frame-time gain over the CPU path.
   ([history](HISTORY.md#gpu-virtual-addresses)), and command submission:
   contexts, a scheduler that runs their DMA buffers in order through the
   driver, its interrupt and DPC, and fences the GPU signals and waits on
-  ([history](HISTORY.md#command-submission-and-gpu-fences)).
+  ([history](HISTORY.md#command-submission-and-gpu-fences)), and
+  preemption and timeout recovery: a buffer that runs too long is
+  preempted, one that will not stop (or faults) has its engine reset and
+  its context lost while the others go on
+  ([history](HISTORY.md#gpu-preemption-and-timeout-recovery)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or
@@ -867,9 +871,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   mouse and a headset in range in the devices suite's `bluetooth` boot:
   inquiry, pairing both, the mouse moving the cursor and reconnecting
   after a restart, an `ibtusb`-style filter installed with `pnputil`.
-  Still needed: headset audio (SCO and A2DP), reconnects the device
-  starts, Settings' Bluetooth page, and pairing a real mouse and headset
-  on the T14 with Intel's driver, including after sleep.
+  Headset audio is done in QEMU too (`kernel/nt/bthaudio.c`): A2DP stereo
+  with NovaOS's own SBC encoder and the hands-free profile's voice link
+  (eSCO on the radio's isochronous endpoints) give a paired headset two
+  outputs and a microphone, as a USB headset has; the `bluetooth` boot
+  plays a tone through each and records from the headset. Still needed:
+  reconnects the device starts, Settings' Bluetooth page, and pairing a
+  real mouse and headset on the T14 with Intel's driver, including after
+  sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;
   show the built-in webcam in a camera app. Done in QEMU: the UVC class
   driver (`kernel/nt/usbvideo.c`), Media Foundation's capture path
@@ -899,12 +908,12 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
 **Goal:** a release that runs games and works on real laptops. **Gate:** a
 tagged `v0.2.0` passes the full CI suite and T14 checks.
 
-- [ ] **29.1 Release.** Tag the release, attach the ISO and checksums, and
+- [x] **29.1 Release.** Tag the release, attach the ISO and checksums, and
   write release notes from [HISTORY.md](HISTORY.md). The release page's ISO
   must boot in QEMU and on both reference PCs. `v0.2.0` ("Kepler",
-  [release notes](releases/0.2.0.md)) was published on 2026-10-19; ticks when
-  its ISO boots on the T14 (the second reference
-  PC, 28.5, is not picked yet).
+  [release notes](releases/0.2.0.md)) was published on 2026-10-19 and its ISO
+  was confirmed to boot on the T14 the same day. Ticked on that; the second
+  reference PC (28.5) is not picked yet, so the ISO has not booted there.
 
 ### Phase 30: Windows drivers
 
@@ -1062,8 +1071,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   for the classes that build, so a `ResourceDictionary`'s
   `MergedDictionaries` and `ThemeDictionaries` load from XAML and lookup
   searches them (last merged dictionary first, then the theme's) in
-  `xamlloadtest`.  Next: the core services (`CCoreServices`) and the rest
-  of the core, then `dxaml/lib` as `Windows.UI.Xaml.dll`.
+  `xamlloadtest`.  Ninth part done: the core services (`CCoreServices`,
+  `core/dll/xcpcore.cpp`) built, with generated stand-ins that name each
+  function of the rest of the core it calls until that builds, and XAML
+  loaded through `CCoreServices::ParseXaml` (`XamlReader.Load`'s path) in
+  `xamlloadtest`.  Next: what `CCoreServices::Create` sets up (the
+  platform layer, the text core, the media queue), then `dxaml/lib` as
+  `Windows.UI.Xaml.dll`.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

@@ -470,7 +470,11 @@ int main(int argc, char **argv)
         BOOL listed = TRUE;
         for (int i = 0; i < 100 && (listed = find_device(again, 300)); i++) Sleep(100);
         check(!listed, "setupapi no longer lists the device");
-        check(!cm_lists(path), "nor does cfgmgr32");
+        /* (its interface goes when the removal is done, a little after
+         * the device stops opening: as on Windows, not at once) */
+        BOOL cm = TRUE;
+        for (int i = 0; i < 100 && (cm = cm_lists(path)); i++) Sleep(100);
+        check(!cm, "nor does cfgmgr32");
         check(!HidD_GetAttributes(h, &a) || !HidD_GetFeature(h, g, sizeof(g)), "the old handle's requests fail");
         if (g_raw_dev) {
             PUMP_UNTIL(g_removed);

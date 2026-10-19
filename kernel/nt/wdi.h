@@ -46,6 +46,8 @@
 #define WDI_INDICATION_DELETE_PORT_COMPLETE  69
 #define WDI_INDICATION_ASSOCIATION_RESULT    76
 #define WDI_SET_ADAPTER_CONFIGURATION        85
+#define WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED 134
+#define WDI_SET_SAE_AUTH_PARAMS              135
 
 #define OID_WDI_TASK_SCAN                    WDI_OID(WDI_TASK_SCAN)
 #define OID_WDI_TASK_CREATE_PORT             WDI_OID(WDI_TASK_CREATE_PORT)
@@ -56,6 +58,7 @@
 #define OID_WDI_TASK_DISCONNECT              WDI_OID(WDI_TASK_DISCONNECT)
 #define OID_WDI_SET_PRIVACY_EXEMPTION_LIST   WDI_OID(WDI_SET_PRIVACY_EXEMPTION_LIST)
 #define OID_WDI_SET_ADD_CIPHER_KEYS          WDI_OID(WDI_SET_ADD_CIPHER_KEYS)
+#define OID_WDI_SET_SAE_AUTH_PARAMS          WDI_OID(WDI_SET_SAE_AUTH_PARAMS)
 
 #define NdisRequestMethod 12
 
@@ -112,6 +115,7 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_CIPHER_KEY_TYPE_INFO     0x4E
 #define WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT 0x4F
 #define WDI_TLV_CIPHER_KEY_CCMP_KEY      0x50
+#define WDI_TLV_CIPHER_KEY_BIP_KEY       0x51
 #define WDI_TLV_SET_CIPHER_KEY_INFO      0x52
 #define WDI_TLV_DATAPATH_ATTRIBUTES      0xB8
 #define WDI_TLV_DATAPATH_CAPABILITIES    0xB9
@@ -119,6 +123,19 @@ typedef struct __attribute__((packed)) {
 #define WDI_TLV_LINK_QUALITY_BAR_MAP     0xD8
 #define WDI_TLV_PLDR_SUPPORT             0x11A
 #define WDI_TLV_FIRMWARE_VERSION         0xF4
+#define WDI_TLV_SAE_INDICATION_TYPE      0x14B
+#define WDI_TLV_SAE_STATUS               0x14C
+#define WDI_TLV_SAE_COMMIT_RESPONSE      0x14D
+#define WDI_TLV_SAE_CONFIRM_RESPONSE     0x14E
+#define WDI_TLV_SAE_REQUEST_TYPE         0x14F
+#define WDI_TLV_SAE_COMMIT_REQUEST       0x150
+#define WDI_TLV_SAE_CONFIRM_REQUEST      0x151
+#define WDI_TLV_SAE_FINITE_CYCLIC_GROUP  0x152
+#define WDI_TLV_SAE_SCALAR               0x153
+#define WDI_TLV_SAE_ELEMENT              0x154
+#define WDI_TLV_SAE_ANTI_CLOGGING_TOKEN  0x155
+#define WDI_TLV_SAE_SEND_CONFIRM         0x156
+#define WDI_TLV_SAE_CONFIRM              0x157
 
 /* WDI_TLV_SCAN_MODE (WDI_SCAN_MODE) */
 #define WDI_SCAN_TYPE_ACTIVE_ONLY   1
@@ -214,6 +231,7 @@ typedef struct __attribute__((packed)) {
 #define WDI_AUTH_ALGO_WPA3_SAE    9
 #define WDI_CIPHER_ALGO_NONE      0x00
 #define WDI_CIPHER_ALGO_CCMP      0x04
+#define WDI_CIPHER_ALGO_BIP       0x06      /* (BIP-CMAC-128: management frame protection's group key) */
 typedef struct __attribute__((packed)) {    /* (WDI 1.0.1 and later) */
     unsigned char  RoamRequest, HiddenNetwork, ExcludeUnencrypted, MFPEnabled, HostFIPSModeEnabled;
     unsigned int   RoamNeededReason, RoamTrigger;
@@ -221,6 +239,8 @@ typedef struct __attribute__((packed)) {    /* (WDI 1.0.1 and later) */
 } WDI_CONNECTION_SETTINGS;
 
 #define WDI_ASSOC_STATUS_SUCCESS  0
+#define WDI_ASSOC_STATUS_NO_AUTH_RESPONSE 41
+#define WDI_ASSOC_STATUS_AUTH_FAILED_BY_PEER 44
 typedef struct __attribute__((packed)) {    /* (its first fields: later ones vary by version) */
     unsigned int   AssociationStatus, StatusCode;
     unsigned char  ReAssociation;
@@ -254,11 +274,45 @@ typedef struct __attribute__((packed)) {
 #define WDI_CIPHER_KEY_DIRECTION_BOTH     3
 #define WDI_CIPHER_KEY_TYPE_PAIRWISE_KEY  1
 #define WDI_CIPHER_KEY_TYPE_GROUP_KEY     2
+#define WDI_CIPHER_KEY_TYPE_IGTK          3     /* (with WDI_TLV_CIPHER_KEY_BIP_KEY, key ID 4 or 5) */
 typedef struct __attribute__((packed)) {
     unsigned int   CipherAlgorithm, Direction;
     unsigned char  Static;          /* (kept across a roam) */
     unsigned int   KeyType;
 } WDI_CIPHER_KEY_TYPE_INFO;
+
+/* WPA3-Personal's SAE (Microsoft's "WPA3-SAE authentication", WDI 1.1.8):
+ * the driver sends and receives the authentication frames, the host makes
+ * and checks what is in them.  During OID_WDI_TASK_CONNECT the driver asks
+ * with NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED (WDI_TLV_BSSID,
+ * WDI_TLV_SAE_INDICATION_TYPE, the peer's frame as
+ * WDI_TLV_SAE_COMMIT_RESPONSE or WDI_TLV_SAE_CONFIRM_RESPONSE, or
+ * WDI_TLV_SAE_STATUS) and the host answers with OID_WDI_SET_SAE_AUTH_PARAMS
+ * (WDI_TLV_BSSID, WDI_TLV_SAE_REQUEST_TYPE and WDI_TLV_SAE_COMMIT_REQUEST:
+ * group, scalar, element and the anti-clogging token if the access point
+ * asked for one; or WDI_TLV_SAE_CONFIRM_REQUEST: send-confirm and confirm;
+ * or WDI_TLV_SAE_STATUS).  The enums are four bytes, the group and the
+ * send-confirm two. */
+#define WDI_SAE_INDICATION_TYPE_COMMIT_REQUEST_PARAMS_NEEDED   0
+#define WDI_SAE_INDICATION_TYPE_COMMIT_RESPONSE                1
+#define WDI_SAE_INDICATION_TYPE_CONFIRM_RESPONSE               2
+#define WDI_SAE_INDICATION_TYPE_ERROR                          3
+#define WDI_SAE_INDICATION_TYPE_CONFIRM_REQUEST_RESEND_REQUEST 4
+#define WDI_SAE_REQUEST_TYPE_COMMIT_REQUEST  0
+#define WDI_SAE_REQUEST_TYPE_CONFIRM_REQUEST 1
+#define WDI_SAE_REQUEST_TYPE_FAILURE         2
+#define WDI_SAE_REQUEST_TYPE_SUCCESS         3
+#define WDI_SAE_STATUS_SUCCESS                                 0
+#define WDI_SAE_STATUS_FAILURE                                 1
+#define WDI_SAE_STATUS_INTERNAL_AUTH_FAILURE                   3
+#define WDI_SAE_STATUS_COMMIT_MESSAGE_MALFORMED_AUTH_FRAME     11
+#define WDI_SAE_STATUS_COMMIT_MESSAGE_FAILURE_FROM_PEER        12
+#define WDI_SAE_STATUS_COMMIT_MESSAGE_UNSUPPORTED_FINITE_GROUP 14
+#define WDI_SAE_STATUS_COMMIT_MESSAGE_INVALID_SCALAR_ELEMENT_SIZE 16
+#define WDI_SAE_STATUS_COMMIT_MESSAGE_REFLECTION_ATTACK_DETECTED 17
+#define WDI_SAE_STATUS_CONFIRM_MESSAGE_RECEIVED_IN_INVALID_STATE 30
+#define WDI_SAE_STATUS_CONFIRM_MESSAGE_MALFORMED_AUTH_FRAME    31
+#define WDI_SAE_STATUS_CONFIRM_MESSAGE_VERIFICATION_FAILED     35
 
 /* WDI_TLV_DISCONNECT_PARAMETERS */
 typedef struct __attribute__((packed)) {

@@ -50,14 +50,28 @@
  * (OID_WDI_SET_ADD_CIPHER_KEYS), which encrypts and decrypts with them.
  * Only then does the stack get the adapter; until then, and whenever a
  * frame comes unencrypted, only EAPOL passes.  A later group key handshake
- * (the access point's rekeying) is answered from a work item.  Not yet here
- * (docs/drivers.md): WPA3's SAE, wlanapi.dll and Settings' Wi-Fi page.
+ * (the access point's rekeying) is answered from a work item.
+ *
+ * A WPA3-Personal network (SAE, CCMP, management frame protection; chosen
+ * over WPA2 on a transition-mode network) authenticates with the password
+ * first, as Windows does it: the driver sends and receives SAE's
+ * authentication frames, NovaOS makes and checks what is in them (sae.c).
+ * While OID_WDI_TASK_CONNECT is pending, each of the driver's
+ * NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED (it needs the commit,
+ * here is the access point's commit or confirm, or an error) is queued and
+ * answered with OID_WDI_SET_SAE_AUTH_PARAMS (the commit, the confirm,
+ * success or failure) from the connecting thread.  SAE's PMK then starts
+ * the same 4-way handshake (AKM 8: key descriptor version 0), which also
+ * brings the IGTK, management frames' group key (BIP-CMAC-128).  Not yet
+ * here (docs/drivers.md): SAE's hash-to-element and other groups,
+ * wlanapi.dll and Settings' Wi-Fi page.
  */
 #include "ntapi.h"
 #include "ndis.h"
 #include "wdi.h"
 #include "wlan.h"
 #include "wpa.h"
+#include "sae.h"
 #include "../ke/irql.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
@@ -79,6 +93,9 @@
 #define EAPOL_SLOTS       4         /* EAPOL frames waiting for the supplicant */
 #define EAPOL_MAX         512
 #define HANDSHAKE_MS      8000      /* (an access point resends message 1 a few times, a second apart) */
+#define SAE_SLOTS         4         /* the driver's SAE requests waiting for the connecting thread */
+#define SAE_REQ_MAX       512
+#define SAE_SLICE_MS      20        /* (how often a connect waiting for its task looks at them) */
 
 /* A frame on its way out: an NBL of one 802.11 MSDU with its metadata */
 typedef struct {
@@ -151,7 +168,19 @@ struct WdiHost {
     NT_KEVENT      eapol_event;
     NT_IO_WORKITEM *eapol_work;
     volatile bool  work_queued;
+    /* WPA3: SAE while the connect task runs (sae_service answers the driver's requests) */
+    volatile bool  sae_active;
+    SaeState       sae;
+    char           sae_password[64];
+    int            sae_stage;       /* SAE_* below */
+    UINT8          sae_bssid[6];
+    UINT8         *sae_buf;         /* (its own command buffer: the connect task's is the driver's meanwhile) */
+    NT_KSPIN_LOCK  sae_lock;
+    UINT8          sae_req[SAE_SLOTS][SAE_REQ_MAX];
+    UINT16         sae_req_len[SAE_SLOTS];
+    UINT32         sae_head, sae_tail;
 };
+enum { SAE_IDLE, SAE_COMMITTED, SAE_CONFIRMED, SAE_DONE, SAE_FAILED };
 
 /* (hosts are never freed, only reused: netsh can hold one while its
  * device goes away, and finds it detached when it gets the command lock) */
@@ -209,6 +238,8 @@ static void unlock(WdiHost *w) { nt_KeSetEvent(&w->cmd_lock, 0, 0); }
  * completion indication, non-zero) is waited for until that indication
  * comes.  The answer's TLVs are left in @buf, *@rlen bytes of them; its
  * status is returned.  The caller holds the command lock. */
+static void sae_service(WdiHost *w);
+
 static NDIS_STATUS command(WdiHost *w, UINT32 msg, UINT16 port, UINT8 *buf, UINT32 tlen, UINT32 done_id,
                            UINT32 *rlen, UINT32 wait_s)
 {
@@ -227,8 +258,16 @@ static NDIS_STATUS command(WdiHost *w, UINT32 msg, UINT16 port, UINT8 *buf, UINT
     if (rlen) *rlen = written > sizeof(*h) ? written - sizeof(*h) : 0;
     if (st == NDIS_STATUS_SUCCESS && written >= sizeof(*h) && h->Status != NDIS_STATUS_SUCCESS) st = h->Status;
     if (done_id && st == NDIS_STATUS_SUCCESS) {
-        INT64 t = -(INT64)wait_s * 10000000;
-        if (nt_KeWaitForSingleObject(&w->task_done, 0, 0, 0, &t) != NT_STATUS_SUCCESS) {
+        /* (with SAE running, in slices: between them, the driver's SAE requests are answered) */
+        bool done = false;
+        for (UINT32 waited = 0; !done && waited < wait_s * 1000;) {
+            UINT32 ms = w->sae_active ? SAE_SLICE_MS : wait_s * 1000;
+            INT64 t = -(INT64)ms * 10000;
+            done = nt_KeWaitForSingleObject(&w->task_done, 0, 0, 0, &t) == NT_STATUS_SUCCESS;
+            waited += ms;
+            if (!done && w->sae_active) sae_service(w);
+        }
+        if (!done) {
             kprintf("[WDI] %s: task %u did not complete in %u s\n", w->info.service, msg, wait_s);
             st = NDIS_STATUS_FAILURE;
         } else {
@@ -984,11 +1023,24 @@ static bool install_keys(WdiHost *w, UINT8 *buf, bool pairwise)
     n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT, w->wpa.gtk_rsc, 6);
     n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_CCMP_KEY, w->wpa.gtk, w->wpa.gtk_len);
     tlen = tlv_put(t, tlen, WDI_TLV_SET_CIPHER_KEY_INFO, k, (UINT16)n);
+    UINT32 iid = w->wpa.igtk_id;
+    if (w->wpa.mfp && w->wpa.have_igtk) {               /* (WPA3: management frames' group key, BIP-CMAC-128) */
+        WDI_CIPHER_KEY_TYPE_INFO ii = { WDI_CIPHER_ALGO_BIP, WDI_CIPHER_KEY_DIRECTION_INBOUND, 0,
+                                        WDI_CIPHER_KEY_TYPE_IGTK };
+        n = tlv_put(k, 0, WDI_TLV_CIPHER_KEY_ID, &iid, sizeof(iid));
+        n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_TYPE_INFO, &ii, sizeof(ii));
+        n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_RECEIVE_SEQUENCE_COUNT, w->wpa.igtk_ipn, 6);
+        n = tlv_put(k, n, WDI_TLV_CIPHER_KEY_BIP_KEY, w->wpa.igtk, WPA_IGTK_LEN);
+        tlen = tlv_put(t, tlen, WDI_TLV_SET_CIPHER_KEY_INFO, k, (UINT16)n);
+    }
     memset(k, 0, sizeof(k));
     NDIS_STATUS st = command(w, WDI_SET_ADD_CIPHER_KEYS, w->port_id, buf, tlen, 0, NULL, 0);
     memset(t, 0, tlen);                                 /* (no key material left in the buffer) */
-    if (pairwise) kprintf("[WPA] %s: pairwise key and group key %u installed (0x%08x)\n", w->info.service, id, (UINT32)st);
-    else kprintf("[WPA] %s: group key %u installed (0x%08x)\n", w->info.service, id, (UINT32)st);
+    char igtk[32] = "";
+    if (w->wpa.mfp && w->wpa.have_igtk) ksnprintf(igtk, sizeof(igtk), " and management group key %u", iid);
+    if (pairwise)
+        kprintf("[WPA] %s: pairwise key and group key %u%s installed (0x%08x)\n", w->info.service, id, igtk, (UINT32)st);
+    else kprintf("[WPA] %s: group key %u%s installed (0x%08x)\n", w->info.service, id, igtk, (UINT32)st);
     if (st == NDIS_STATUS_SUCCESS && pairwise) w->keys = true;
     return st == NDIS_STATUS_SUCCESS;
 }
@@ -1094,6 +1146,17 @@ void WdiIndicate(void *adapter, UINT32 code, const void *buf, UINT32 len)
             off += sizeof(*t) + t->Length;
         }
     }
+    if (id == WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED) {     /* (for the connecting thread: sae_service) */
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->sae_lock);
+        if (w->sae_active && n <= SAE_REQ_MAX && w->sae_head - w->sae_tail < SAE_SLOTS) {
+            UINT32 k = w->sae_head++ % SAE_SLOTS;
+            memcpy(w->sae_req[k], m, n);
+            w->sae_req_len[k] = (UINT16)n;
+        } else {
+            kprintf("[SAE] %s: an SAE request dropped (%s)\n", w->info.service, w->sae_active ? "no room" : "no WPA3 connect");
+        }
+        nt_KeReleaseSpinLock(&w->sae_lock, old);
+    }
     UINT32 tid = __atomic_load_n(&w->task_tid, __ATOMIC_ACQUIRE);
     if (tid && h->TransactionId == tid && id == w->task_done_id) {
         if (id == WDI_INDICATION_CREATE_PORT_COMPLETE)
@@ -1135,7 +1198,8 @@ WdiHost *WdiAttach(void *adapter, const char *service, const char *desc, WdiRequ
     nt_KeInitializeEvent(&w->cmd_lock, NT_SynchronizationEvent, 0);   /* (taken: the bring-up below holds it) */
     nt_KeInitializeEvent(&w->task_done, NT_NotificationEvent, 0);
     nt_KeInitializeEvent(&w->eapol_event, NT_SynchronizationEvent, 0);
-    w->bss_lock = w->eapol_lock = 0;
+    w->bss_lock = w->eapol_lock = w->sae_lock = 0;
+    w->sae_active = false;
     w->eapol_head = w->eapol_tail = 0;
     if (!w->eapol_work) w->eapol_work = nt_IoAllocateWorkItem(NULL);   /* (kept with the host: it is reused) */
     w->adapter = adapter;
@@ -1320,18 +1384,148 @@ static UINT32 connect_entry(UINT8 *out, UINT32 off, const UINT8 *raw, UINT32 n)
     return start + len;
 }
 
-/* What @b's security asks of a connection: WLAN_OK and *@rsna false for an
- * open network, *@rsna true for WPA2-Personal with CCMP (also offered by a
- * WPA3 transition-mode network), else why not */
-static int security_of(const WlanBss *b, const char *key, bool *rsna)
+/* What @b's security asks of a connection: WLAN_OK and *@akm 0 for an
+ * open network, WPA_AKM_PSK for WPA2-Personal with CCMP, WPA_AKM_SAE for
+ * WPA3-Personal (SAE, CCMP, management frame protection: taken over PSK
+ * when a transition-mode network offers both), else why not */
+static int security_of(const WlanBss *b, const char *key, UINT8 *akm)
 {
-    *rsna = false;
+    *akm = 0;
     if (!b->rsn_len) return b->privacy ? WLAN_UNSUPPORTED : WLAN_OK;    /* (WEP or WPA without RSN) */
-    if (!(b->akms & (1u << 2)) || !(b->pairwise & (1u << WDI_CIPHER_ALGO_CCMP)) || b->group != WDI_CIPHER_ALGO_CCMP ||
-        (b->rsn_caps & 0x40))                           /* (PSK, CCMP both ways; no required MFP) */
-        return WLAN_UNSUPPORTED;
-    *rsna = true;
+    if (!(b->pairwise & (1u << WDI_CIPHER_ALGO_CCMP)) || b->group != WDI_CIPHER_ALGO_CCMP)
+        return WLAN_UNSUPPORTED;                        /* (CCMP both ways) */
+    if ((b->akms & (1u << WPA_AKM_SAE)) && (b->rsn_caps & 0x80)) *akm = WPA_AKM_SAE;    /* (SAE, MFP capable) */
+    else if ((b->akms & (1u << WPA_AKM_PSK)) && !(b->rsn_caps & 0x40)) *akm = WPA_AKM_PSK;  /* (no required MFP) */
+    else return WLAN_UNSUPPORTED;
     return key && key[0] ? WLAN_OK : WLAN_NEEDS_KEY;
+}
+
+/* ---- WPA3's SAE (sae.c), for the connect task ---- */
+static bool sae_pop(WdiHost *w, UINT8 *out, UINT32 *n)
+{
+    UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->sae_lock);
+    bool got = w->sae_tail != w->sae_head;
+    if (got) {
+        UINT32 k = w->sae_tail++ % SAE_SLOTS;
+        *n = w->sae_req_len[k];
+        memcpy(out, w->sae_req[k], *n);
+    }
+    nt_KeReleaseSpinLock(&w->sae_lock, old);
+    return got;
+}
+
+/* OID_WDI_SET_SAE_AUTH_PARAMS: @type (WDI_SAE_REQUEST_TYPE_*) with the
+ * commit, the confirm or (a failure) @status */
+static void sae_answer(WdiHost *w, UINT32 type, UINT32 status)
+{
+    UINT8 *t = w->sae_buf + sizeof(WDI_MESSAGE_HEADER), in[256];
+    UINT32 tlen = tlv_put(t, 0, WDI_TLV_BSSID, w->sae_bssid, 6), n = 0;
+    tlen = tlv_put(t, tlen, WDI_TLV_SAE_REQUEST_TYPE, &type, sizeof(type));
+    if (type == WDI_SAE_REQUEST_TYPE_COMMIT_REQUEST) {
+        UINT16 group = SAE_GROUP;
+        n = tlv_put(in, 0, WDI_TLV_SAE_FINITE_CYCLIC_GROUP, &group, sizeof(group));
+        n = tlv_put(in, n, WDI_TLV_SAE_SCALAR, w->sae.scalar, SAE_PRIME_LEN);
+        n = tlv_put(in, n, WDI_TLV_SAE_ELEMENT, w->sae.element, 2 * SAE_PRIME_LEN);
+        if (w->sae.token_len) n = tlv_put(in, n, WDI_TLV_SAE_ANTI_CLOGGING_TOKEN, w->sae.token, w->sae.token_len);
+        tlen = tlv_put(t, tlen, WDI_TLV_SAE_COMMIT_REQUEST, in, (UINT16)n);
+    } else if (type == WDI_SAE_REQUEST_TYPE_CONFIRM_REQUEST) {
+        UINT16 sc;
+        UINT8 confirm[32];
+        SaeConfirm(&w->sae, &sc, confirm);
+        n = tlv_put(in, 0, WDI_TLV_SAE_SEND_CONFIRM, &sc, sizeof(sc));
+        n = tlv_put(in, n, WDI_TLV_SAE_CONFIRM, confirm, sizeof(confirm));
+        tlen = tlv_put(t, tlen, WDI_TLV_SAE_CONFIRM_REQUEST, in, (UINT16)n);
+    } else if (type == WDI_SAE_REQUEST_TYPE_FAILURE) {
+        tlen = tlv_put(t, tlen, WDI_TLV_SAE_STATUS, &status, sizeof(status));
+    }
+    NDIS_STATUS st = command(w, WDI_SET_SAE_AUTH_PARAMS, w->port_id, w->sae_buf, tlen, 0, NULL, 0);
+    if (st != NDIS_STATUS_SUCCESS)
+        kprintf("[SAE] %s: the driver refused the SAE answer (0x%08x)\n", w->info.service, (UINT32)st);
+}
+
+static void sae_fail(WdiHost *w, UINT32 status, const char *why)
+{
+    kprintf("[SAE] %s: %s\n", w->info.service, why);
+    w->sae_stage = SAE_FAILED;
+    sae_answer(w, WDI_SAE_REQUEST_TYPE_FAILURE, status);
+}
+
+/* The driver's SAE requests so far, each answered: the commit when it asks
+ * for one (again, with a token, if the access point asked for that), the
+ * confirm after the access point's commit, success after its confirm */
+static void sae_service(WdiHost *w)
+{
+    static UINT8 req[SAE_REQ_MAX];                      /* (under the command lock) */
+    UINT32 n, type, vl;
+    while (w->sae_stage != SAE_FAILED && sae_pop(w, req, &n)) {
+        if (!tlv_get(req, n, WDI_TLV_SAE_INDICATION_TYPE, &type, sizeof(type))) continue;
+        const UINT8 *bssid = tlv_find(req, n, WDI_TLV_BSSID, &vl);
+        if (bssid && vl == 6) memcpy(w->sae_bssid, bssid, 6);
+        SaeFrame f;
+        const UINT8 *v;
+        switch (type) {
+        case WDI_SAE_INDICATION_TYPE_COMMIT_REQUEST_PARAMS_NEEDED:
+            if (!SaeCommit(&w->sae, w->sae_password, w->port_attr.MacAddress, w->sae_bssid)) {
+                sae_fail(w, WDI_SAE_STATUS_INTERNAL_AUTH_FAILURE, w->sae.why ? w->sae.why : "no commit");
+                break;
+            }
+            kprintf("[SAE] %s: commit (group %u) to the access point\n", w->info.service, SAE_GROUP);
+            w->sae_stage = SAE_COMMITTED;
+            sae_answer(w, WDI_SAE_REQUEST_TYPE_COMMIT_REQUEST, 0);
+            break;
+        case WDI_SAE_INDICATION_TYPE_COMMIT_RESPONSE:
+            v = tlv_find(req, n, WDI_TLV_SAE_COMMIT_RESPONSE, &vl);
+            if (!v || !SaeParseCommit(v, vl, &f)) {
+                sae_fail(w, WDI_SAE_STATUS_COMMIT_MESSAGE_MALFORMED_AUTH_FRAME, "the access point's commit is malformed");
+            } else if (f.status == SAE_STATUS_ANTI_CLOGGING) {      /* (busy: the commit again, with its token) */
+                w->sae.token_len = (UINT8)(f.token_len < SAE_TOKEN_MAX ? f.token_len : SAE_TOKEN_MAX);
+                memcpy(w->sae.token, f.token, w->sae.token_len);
+                kprintf("[SAE] %s: the access point asked for an anti-clogging token: committing again\n",
+                        w->info.service);
+                sae_answer(w, WDI_SAE_REQUEST_TYPE_COMMIT_REQUEST, 0);
+            } else if (f.status || f.group != SAE_GROUP) {
+                sae_fail(w, f.status ? WDI_SAE_STATUS_COMMIT_MESSAGE_FAILURE_FROM_PEER :
+                                       WDI_SAE_STATUS_COMMIT_MESSAGE_UNSUPPORTED_FINITE_GROUP,
+                         f.status == SAE_STATUS_GROUP_REFUSED || f.group != SAE_GROUP ?
+                         "the access point does not take SAE group 19 (P-256), the only one NovaOS has" :
+                         "the access point refused the commit");
+            } else if (!SaeProcessCommit(&w->sae, f.scalar, f.element)) {
+                sae_fail(w, WDI_SAE_STATUS_COMMIT_MESSAGE_REFLECTION_ATTACK_DETECTED, w->sae.why);
+            } else {
+                kprintf("[SAE] %s: the access point's commit is good: confirm to it\n", w->info.service);
+                w->sae_stage = SAE_CONFIRMED;
+                sae_answer(w, WDI_SAE_REQUEST_TYPE_CONFIRM_REQUEST, 0);
+            }
+            break;
+        case WDI_SAE_INDICATION_TYPE_CONFIRM_REQUEST_RESEND_REQUEST:
+            if (w->sae_stage == SAE_CONFIRMED) sae_answer(w, WDI_SAE_REQUEST_TYPE_CONFIRM_REQUEST, 0);
+            break;
+        case WDI_SAE_INDICATION_TYPE_CONFIRM_RESPONSE:
+            v = tlv_find(req, n, WDI_TLV_SAE_CONFIRM_RESPONSE, &vl);
+            if (w->sae_stage != SAE_CONFIRMED)
+                sae_fail(w, WDI_SAE_STATUS_CONFIRM_MESSAGE_RECEIVED_IN_INVALID_STATE, "a confirm before the commits");
+            else if (!v || !SaeParseConfirm(v, vl, &f) || f.status || !f.confirm)
+                sae_fail(w, WDI_SAE_STATUS_CONFIRM_MESSAGE_MALFORMED_AUTH_FRAME, "the access point's confirm is malformed");
+            else if (!SaeVerifyConfirm(&w->sae, f.send_confirm, f.confirm))
+                sae_fail(w, WDI_SAE_STATUS_CONFIRM_MESSAGE_VERIFICATION_FAILED, w->sae.why);
+            else {
+                kprintf("[SAE] %s: the access point's confirm is good: authenticated (PMKID %02x%02x%02x%02x...)\n",
+                        w->info.service, w->sae.pmkid[0], w->sae.pmkid[1], w->sae.pmkid[2], w->sae.pmkid[3]);
+                memcpy(w->wpa.pmk, w->sae.pmk, WPA_PMK_LEN);
+                w->sae_stage = SAE_DONE;
+                sae_answer(w, WDI_SAE_REQUEST_TYPE_SUCCESS, 0);
+            }
+            break;
+        case WDI_SAE_INDICATION_TYPE_ERROR: {
+            UINT32 status = 0;
+            tlv_get(req, n, WDI_TLV_SAE_STATUS, &status, sizeof(status));
+            kprintf("[SAE] %s: the driver ended SAE (status %u)\n", w->info.service, status);
+            w->sae_stage = SAE_FAILED;
+            break;
+        }
+        }
+    }
+    memset(req, 0, sizeof(req));
 }
 
 /* OID_WDI_SET_PRIVACY_EXEMPTION_LIST: EAPOL may come and go unencrypted
@@ -1353,8 +1547,15 @@ static int handshake_locked(WdiHost *w, UINT8 *buf)
      * did not say, the one it was asked for: PSK, CCMP) */
     static const UINT8 rsn_psk_ccmp[] = { 48, 20, 1, 0, 0x00, 0x0F, 0xAC, 4, 1, 0, 0x00, 0x0F, 0xAC, 4,
                                           1, 0, 0x00, 0x0F, 0xAC, 2, 0, 0 };
-    if (w->assoc_ie_len) memcpy(w->wpa.own_ie, w->assoc_ie, w->wpa.own_ie_len = w->assoc_ie_len);
-    else memcpy(w->wpa.own_ie, rsn_psk_ccmp, w->wpa.own_ie_len = sizeof(rsn_psk_ccmp));
+    if (w->assoc_ie_len) {
+        memcpy(w->wpa.own_ie, w->assoc_ie, w->wpa.own_ie_len = w->assoc_ie_len);
+    } else {
+        memcpy(w->wpa.own_ie, rsn_psk_ccmp, w->wpa.own_ie_len = sizeof(rsn_psk_ccmp));
+        if (w->wpa.akm == WPA_AKM_SAE) {                /* (SAE; MFP capable, and required if the access point is) */
+            w->wpa.own_ie[19] = WPA_AKM_SAE;
+            w->wpa.own_ie[20] = (UINT8)(0x80 | (w->wpa.ap_ie_len >= 22 ? w->wpa.ap_ie[20] & 0x40 : 0));
+        }
+    }
     bool m1 = false;
     for (int waited = 0; waited < HANDSHAKE_MS; waited += 100) {
         int r = eapol_step(w, buf);
@@ -1381,10 +1582,13 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     }
     int b = find_bss(w, ssid);
     if (b < 0 && scan_locked(w, buf) == NDIS_STATUS_SUCCESS) b = find_bss(w, ssid);
-    bool rsna = false;
-    int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, &rsna);
+    UINT8 akm = 0;
+    int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, &akm);
+    bool rsna = akm != 0, sae = akm == WPA_AKM_SAE;
     UINT8 pmk[WPA_PMK_LEN];
-    if (r == WLAN_OK && rsna && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
+    if (r == WLAN_OK && akm == WPA_AKM_PSK && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
+    if (r == WLAN_OK && sae && (strlen(key) < 8 || strlen(key) >= sizeof(w->sae_password))) r = WLAN_KEY_FORMAT;
+    if (r == WLAN_OK && sae && !w->sae_buf && !(w->sae_buf = kmalloc(CMD_BUF))) r = WLAN_FAILED;
     if (r != WLAN_OK) {
         unlock(w);
         kfree(buf);
@@ -1397,10 +1601,14 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     WDI_CONNECTION_SETTINGS cs;
     memset(&cs, 0, sizeof(cs));
     cs.ExcludeUnencrypted = rsna;
-    UINT32 auth = rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+    cs.MFPEnabled = sae;
+    UINT32 auth = sae ? WDI_AUTH_ALGO_WPA3_SAE : rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
     UINT32 cipher = rsna ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
     if (rsna) {
-        memcpy(w->wpa.pmk, pmk, sizeof(pmk));
+        w->wpa.akm = akm;
+        w->wpa.mfp = sae;
+        if (sae) memset(w->wpa.pmk, 0, sizeof(w->wpa.pmk));     /* (SAE gives it) */
+        else memcpy(w->wpa.pmk, pmk, sizeof(pmk));
         memset(pmk, 0, sizeof(pmk));
         memcpy(w->wpa.aa, bss.bssid, 6);
         memcpy(w->wpa.spa, w->port_attr.MacAddress, 6);
@@ -1429,10 +1637,30 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     w->assoc_seen = false;
     w->assoc_ie_len = 0;
     memset(&w->assoc, 0, sizeof(w->assoc));
+    if (sae) {                                      /* (the driver's SAE requests come during the task) */
+        SaeClear(&w->sae);
+        strcpy(w->sae_password, key);
+        memcpy(w->sae_bssid, bss.bssid, 6);
+        w->sae_stage = SAE_IDLE;
+        UINT8 old = nt_KeAcquireSpinLockRaiseToDpc(&w->sae_lock);
+        w->sae_head = w->sae_tail = 0;
+        w->sae_active = true;
+        nt_KeReleaseSpinLock(&w->sae_lock, old);
+    }
     NDIS_STATUS st = command(w, WDI_TASK_CONNECT, w->port_id, buf, tlen, WDI_INDICATION_CONNECT_COMPLETE, NULL,
                              CONNECT_WAIT_S);
+    if (sae) {
+        sae_service(w);                             /* (anything that came with the task's end) */
+        w->sae_active = false;
+        memset(w->sae_password, 0, sizeof(w->sae_password));
+        SaeClear(&w->sae);
+    }
     if (st == NDIS_STATUS_SUCCESS && (!w->assoc_seen || w->assoc.AssociationStatus != WDI_ASSOC_STATUS_SUCCESS))
         st = NDIS_STATUS_FAILURE;
+    if (st == NDIS_STATUS_SUCCESS && sae && w->sae_stage != SAE_DONE) {
+        kprintf("[SAE] %s: associated without SAE finishing\n", w->info.service);
+        st = NDIS_STATUS_FAILURE;
+    }
     if (st == NDIS_STATUS_SUCCESS && !w->peer_up) {
         kprintf("[WDI] %s: associated, but the driver indicated no peer\n", w->info.service);
         st = NDIS_STATUS_FAILURE;
@@ -1448,6 +1676,13 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
         if (status) *status = (UINT32)st;
         unlock(w);
         kfree(buf);
+        /* (SAE got as far as the confirm and the access point did not take it, or the station did not take
+         * the access point's: not the same password) */
+        if (sae && w->sae_stage == SAE_CONFIRMED) {
+            kprintf("[SAE] %s: no confirm from the access point: the password is not %s's\n", w->info.service,
+                    bss.ssid);
+            return WLAN_BAD_KEY;
+        }
         return WLAN_FAILED;
     }
     UINT32 qos = w->assoc.WMMQoSEnabled ? 1 : 0;    /* (WDI_TXRX_PEER_CFG: QoS capable or not) */
@@ -1457,7 +1692,8 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     w->tx_paused = false;
     kprintf("[WDI] %s: connected to %s (%s) on port %u, peer %u: %s, %s, WMM %s\n", w->info.service, bss.ssid, mac,
             w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" :
-            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA_PSK ? "WPA2-Personal" : "secured",
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA_PSK ? "WPA2-Personal" :
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_WPA3_SAE ? "WPA3-Personal" : "secured",
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" :
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_CCMP ? "CCMP" : "ciphered",
             w->assoc.WMMQoSEnabled ? "on" : "off");

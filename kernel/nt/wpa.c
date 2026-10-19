@@ -1,8 +1,9 @@
 /*
- * wpa.c — the station side of WPA2-Personal (wpa.h): the PSK, the 4-way
- * handshake and the group key handshake, IEEE 802.11-2020 12.7.6 and
- * 12.7.7, over Mbed TLS's HMAC-SHA1, PBKDF2 and AES key wrap
- * (third_party/mbedtls, which the kernel already links)
+ * wpa.c — the station side of WPA2- and WPA3-Personal's key handshakes
+ * (wpa.h): the PSK, the 4-way handshake and the group key handshake, IEEE
+ * 802.11-2020 12.7.6 and 12.7.7, over Mbed TLS's HMAC-SHA1, HMAC-SHA256,
+ * PBKDF2, AES-CMAC and AES key wrap (third_party/mbedtls, which the kernel
+ * already links)
  *
  * An EAPOL-Key frame (802.1X-2020 11.9, 802.11-2020 12.7.2) is the EAPOL
  * header (version, type 3, length) and a key descriptor: type 2 (RSN), Key
@@ -19,7 +20,10 @@
  *   4  MIC                        -> then the TK and the GTK are installed
  *
  * and later the group key handshake (a new GTK, then the reply) at the
- * access point's rekeying interval.  Written here rather than vendored:
+ * access point's rekeying interval.  WPA3-Personal (AKM 8, after SAE gave
+ * the PMK: sae.c) is the same exchange with key descriptor version 0: the
+ * PTK from KDF-SHA256 rather than the SHA-1 PRF, AES-128-CMAC MICs, and an
+ * IGTK KDE beside the GTK (management frame protection is required).  Written here rather than vendored:
  * hostapd's wpa_supplicant (BSD) is a user-mode program built around its
  * own event loop and driver layer, far more than these two exchanges; the
  * cryptography is Mbed TLS's.
@@ -27,13 +31,15 @@
 #include "wpa.h"
 #include "../lib/string.h"
 #include "../net/tls.h"
+#include "mbedtls/cmac.h"
 #include "mbedtls/md.h"
 #include "mbedtls/pkcs5.h"
 #include "mbedtls/nist_kw.h"
 
 #define EAPOL_KEY       3
 #define DESC_RSN        2
-#define KI_VERSION      0x0007      /* Key Information: descriptor version (2: HMAC-SHA1-128, AES key wrap) */
+#define KI_VERSION      0x0007      /* Key Information: descriptor version (2: HMAC-SHA1-128, AES key wrap;
+                                       0: the AKM's, SAE's AES-128-CMAC) */
 #define KI_PAIRWISE     0x0008
 #define KI_INSTALL      0x0040
 #define KI_ACK          0x0080
@@ -83,38 +89,69 @@ bool WpaPassphraseKey(const char *passphrase, const char *ssid, UINT8 pmk[WPA_PM
                                           (const unsigned char *)ssid, strlen(ssid), 4096, WPA_PMK_LEN, pmk);
 }
 
-/* PRF-384 (802.11-2020 12.7.1.2): the PTK from the PMK, "Pairwise key
- * expansion" and Min(AA, SPA) || Max(AA, SPA) || Min(ANonce, SNonce) ||
- * Max(ANonce, SNonce) */
-static void derive_ptk(WpaSupplicant *s, UINT8 *ptk)
+/* The PTK (802.11-2020 12.7.1.3) from the PMK, "Pairwise key expansion"
+ * and Min(AA, SPA) || Max(AA, SPA) || Min(ANonce, SNonce) || Max(ANonce,
+ * SNonce): PRF-384 (12.7.1.2: HMAC-SHA1 of the label, a 0 octet, the data
+ * and a counter from 0) for PSK, KDF-SHA256-384 (12.7.1.7.2: HMAC-SHA256
+ * of a 16-bit counter from 1, the label, the data and the length) for SAE */
+void WpaDerivePtk(UINT8 akm, const UINT8 *pmk, const UINT8 aa[6], const UINT8 spa[6], const UINT8 *anonce,
+                  const UINT8 *snonce, UINT8 *ptk)
 {
     static const char label[] = "Pairwise key expansion";
-    UINT8 in[sizeof(label) + 6 + 6 + 32 + 32 + 1];     /* (the label, its 0 octet, the data, the counter) */
-    UINT32 n = sizeof(label);                          /* (sizeof counts the label's NUL: the 0 octet) */
-    memcpy(in, label, sizeof(label));
-    bool a_first = memcmp(s->aa, s->spa, 6) < 0, an_first = memcmp(s->anonce, s->snonce, WPA_NONCE_LEN) < 0;
-    memcpy(in + n, a_first ? s->aa : s->spa, 6);
-    memcpy(in + n + 6, a_first ? s->spa : s->aa, 6);
-    memcpy(in + n + 12, an_first ? s->anonce : s->snonce, WPA_NONCE_LEN);
-    memcpy(in + n + 44, an_first ? s->snonce : s->anonce, WPA_NONCE_LEN);
-    n += 76;
-    UINT8 out[60];
-    for (UINT8 i = 0; i < 3; i++) {
-        in[n] = i;
-        hmac_sha1(s->pmk, WPA_PMK_LEN, in, n + 1, out + 20 * i);
+    UINT8 data[76], in[2 + sizeof(label) + 76 + 2], out[64];
+    bool a_first = memcmp(aa, spa, 6) < 0, an_first = memcmp(anonce, snonce, WPA_NONCE_LEN) < 0;
+    memcpy(data, a_first ? aa : spa, 6);
+    memcpy(data + 6, a_first ? spa : aa, 6);
+    memcpy(data + 12, an_first ? anonce : snonce, WPA_NONCE_LEN);
+    memcpy(data + 44, an_first ? snonce : anonce, WPA_NONCE_LEN);
+    const UINT32 ll = sizeof(label) - 1, bits = 8 * (WPA_KCK_LEN + WPA_KEK_LEN + WPA_TK_LEN);
+    if (akm == WPA_AKM_SAE) {
+        memcpy(in + 2, label, ll);
+        memcpy(in + 2 + ll, data, sizeof(data));
+        in[2 + ll + 76] = (UINT8)bits;
+        in[3 + ll + 76] = (UINT8)(bits >> 8);
+        for (UINT8 i = 1; i <= 2; i++) {
+            in[0] = i;
+            in[1] = 0;
+            mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), pmk, WPA_PMK_LEN, in, 4 + ll + 76,
+                            out + 32 * (i - 1));
+        }
+    } else {
+        memcpy(in, label, ll + 1);                     /* (the label and its 0 octet) */
+        memcpy(in + ll + 1, data, sizeof(data));
+        for (UINT8 i = 0; i < 3; i++) {
+            in[ll + 1 + 76] = i;
+            hmac_sha1(pmk, WPA_PMK_LEN, in, ll + 1 + 76 + 1, out + 20 * i);
+        }
     }
     memcpy(ptk, out, WPA_KCK_LEN + WPA_KEK_LEN + WPA_TK_LEN);
     memset(out, 0, sizeof(out));
 }
 
-/* The frame's MIC (HMAC-SHA1-128 with @kck over the frame, its MIC field zero) */
-static bool mic_ok(const UINT8 *kck, const UINT8 *f, UINT32 len)
+static void derive_ptk(WpaSupplicant *s, UINT8 *ptk)
 {
-    UINT8 copy[1024], mac[20];
+    WpaDerivePtk(s->akm, s->pmk, s->aa, s->spa, s->anonce, s->snonce, ptk);
+}
+
+/* The MIC of @len bytes of @f with @kck: HMAC-SHA1-128 (PSK) or AES-128-CMAC (SAE) */
+static void mic_of(const WpaSupplicant *s, const UINT8 *kck, const UINT8 *f, UINT32 len, UINT8 mic[16])
+{
+    UINT8 mac[20];
+    if (s->akm == WPA_AKM_SAE)
+        mbedtls_cipher_cmac(mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_128_ECB), kck, 128, f, len, mac);
+    else
+        hmac_sha1(kck, WPA_KCK_LEN, f, len, mac);
+    memcpy(mic, mac, 16);
+}
+
+/* Whether the frame's MIC is right (with @kck over the frame, its MIC field zero) */
+static bool mic_ok(const WpaSupplicant *s, const UINT8 *kck, const UINT8 *f, UINT32 len)
+{
+    UINT8 copy[1024], mac[16];
     if (len > sizeof(copy)) return false;
     memcpy(copy, f, len);
     memset(copy + 4 + OFF_MIC, 0, 16);
-    hmac_sha1(kck, WPA_KCK_LEN, copy, len, mac);
+    mic_of(s, kck, copy, len, mac);
     UINT8 d = 0;
     for (int i = 0; i < 16; i++) d |= (UINT8)(mac[i] ^ f[4 + OFF_MIC + i]);
     return d == 0;
@@ -122,8 +159,8 @@ static bool mic_ok(const UINT8 *kck, const UINT8 *f, UINT32 len)
 
 /* An EAPOL-Key frame from the station: @info, the access point's replay
  * counter, @nonce (or zeros), @data; its MIC with @kck */
-static UINT32 build(UINT8 *out, UINT16 info, const UINT8 *replay, const UINT8 *nonce, const UINT8 *data, UINT32 dlen,
-                    const UINT8 *kck)
+static UINT32 build(const WpaSupplicant *s, UINT8 *out, UINT16 info, const UINT8 *replay, const UINT8 *nonce,
+                    const UINT8 *data, UINT32 dlen, const UINT8 *kck)
 {
     UINT32 len = 4 + DESC_LEN + dlen;
     memset(out, 0, len);
@@ -137,13 +174,12 @@ static UINT32 build(UINT8 *out, UINT16 info, const UINT8 *replay, const UINT8 *n
     if (nonce) memcpy(b + OFF_NONCE, nonce, WPA_NONCE_LEN);
     put16(b + OFF_DATA_LEN, dlen);
     if (dlen) memcpy(b + DESC_LEN, data, dlen);
-    UINT8 mac[20];
-    hmac_sha1(kck, WPA_KCK_LEN, out, len, mac);
-    memcpy(b + OFF_MIC, mac, 16);
+    mic_of(s, kck, out, len, b + OFF_MIC);
     return len;
 }
 
-/* The key data, unwrapped with the KEK (RFC 3394): its RSN element and GTK KDE */
+/* The key data, unwrapped with the KEK (RFC 3394): its RSN element, GTK
+ * KDE and (with management frame protection) IGTK KDE */
 static bool key_data(WpaSupplicant *s, const UINT8 *d, UINT32 n, const UINT8 **ie, UINT32 *ie_len)
 {
     UINT8 plain[256];
@@ -161,6 +197,7 @@ static bool key_data(WpaSupplicant *s, const UINT8 *d, UINT32 n, const UINT8 **i
     *ie = NULL;
     *ie_len = 0;
     s->gtk_len = 0;
+    s->have_igtk = false;
     for (UINT32 off = 0; off + 2 <= pn;) {
         UINT8 id = ies[off], len = ies[off + 1];
         if (id == 0xDD && len == 0) break;              /* (the padding) */
@@ -174,10 +211,20 @@ static bool key_data(WpaSupplicant *s, const UINT8 *d, UINT32 n, const UINT8 **i
             s->gtk_id = e[4] & 3;
             s->gtk_len = (UINT8)(len - 6);
             memcpy(s->gtk, e + 6, s->gtk_len);
+        } else if (id == 0xDD && len == 4 + 2 + 6 + WPA_IGTK_LEN && e[0] == 0x00 && e[1] == 0x0F && e[2] == 0xAC &&
+                   e[3] == 9) {                         /* IGTK KDE: key ID (16-bit), IPN, the IGTK */
+            s->igtk_id = (UINT16)(e[4] | e[5] << 8);
+            memcpy(s->igtk_ipn, e + 6, 6);
+            memcpy(s->igtk, e + 12, WPA_IGTK_LEN);
+            s->have_igtk = true;
         }
         off += 2u + len;
     }
     if (!s->gtk_len) { s->why = "no group key in the key data"; return false; }
+    if (s->mfp && (!s->have_igtk || (s->igtk_id != 4 && s->igtk_id != 5))) {
+        s->why = "no management frame protection key (IGTK) in the key data";
+        return false;
+    }
     return true;
 }
 
@@ -188,6 +235,7 @@ void WpaStart(WpaSupplicant *s)
     s->have_ptk = s->have_tptk = s->have_replay = false;
     s->replay = 0;
     s->gtk_len = 0;
+    s->have_igtk = false;
     s->why = NULL;
 }
 
@@ -196,6 +244,7 @@ void WpaClear(WpaSupplicant *s)
     WpaStart(s);
     memset(s->pmk, 0, sizeof(s->pmk));
     memset(s->gtk, 0, sizeof(s->gtk));
+    memset(s->igtk, 0, sizeof(s->igtk));
 }
 
 int WpaReceive(WpaSupplicant *s, const UINT8 *f, UINT32 len, UINT8 *reply, UINT32 *reply_len)
@@ -209,7 +258,12 @@ int WpaReceive(WpaSupplicant *s, const UINT8 *f, UINT32 len, UINT8 *reply, UINT3
     const UINT8 *b = f + 4;
     if (b[0] != DESC_RSN) { s->why = "not an RSN key descriptor (WPA's?)"; return WPA_DROP; }
     UINT16 info = be16(b + OFF_INFO);
-    if ((info & KI_VERSION) != 2) { s->why = "a key descriptor version other than 2 (HMAC-SHA1, AES key wrap)"; return WPA_DROP; }
+    UINT16 ver = s->akm == WPA_AKM_SAE ? 0 : 2;
+    if ((info & KI_VERSION) != ver) {
+        s->why = ver ? "a key descriptor version other than 2 (HMAC-SHA1, AES key wrap)" :
+                       "a key descriptor version other than 0 (SAE's: AES-CMAC, AES key wrap)";
+        return WPA_DROP;
+    }
     UINT32 dlen = be16(b + OFF_DATA_LEN);
     if (DESC_LEN + dlen > blen) return WPA_DROP;
     if (!(info & KI_ACK)) { s->why = "not from the authenticator"; return WPA_DROP; }
@@ -221,13 +275,14 @@ int WpaReceive(WpaSupplicant *s, const UINT8 *f, UINT32 len, UINT8 *reply, UINT3
         TlsEntropyOutput(s->snonce, WPA_NONCE_LEN);
         derive_ptk(s, s->tptk);
         s->have_tptk = true;
-        *reply_len = build(reply, 2 | KI_PAIRWISE | KI_MIC, b + OFF_REPLAY, s->snonce, s->own_ie, s->own_ie_len, s->tptk);
+        *reply_len = build(s, reply, ver | KI_PAIRWISE | KI_MIC, b + OFF_REPLAY, s->snonce, s->own_ie, s->own_ie_len,
+                           s->tptk);
         return WPA_REPLY;
     }
     if ((info & KI_PAIRWISE) && (info & KI_MIC) && (info & KI_INSTALL)) {
         /* message 3: the MIC proves the PTK (and so the passphrase); the GTK; message 4 */
         if (!s->have_tptk || memcmp(s->anonce, b + OFF_NONCE, WPA_NONCE_LEN)) { s->why = "message 3 without message 1"; return WPA_DROP; }
-        if (!mic_ok(s->tptk, f, len)) { s->why = "message 3's MIC is wrong"; return WPA_DROP; }
+        if (!mic_ok(s, s->tptk, f, len)) { s->why = "message 3's MIC is wrong"; return WPA_DROP; }
         memcpy(s->ptk, s->tptk, sizeof(s->ptk));
         s->have_ptk = true;
         if (!(info & KI_ENCRYPTED)) { s->why = "message 3's key data is not encrypted"; return WPA_DROP; }
@@ -241,20 +296,20 @@ int WpaReceive(WpaSupplicant *s, const UINT8 *f, UINT32 len, UINT8 *reply, UINT3
         memcpy(s->gtk_rsc, b + OFF_RSC, 6);
         s->replay = replay;
         s->have_replay = true;
-        *reply_len = build(reply, 2 | KI_PAIRWISE | KI_MIC | KI_SECURE, b + OFF_REPLAY, NULL, NULL, 0, s->ptk);
+        *reply_len = build(s, reply, ver | KI_PAIRWISE | KI_MIC | KI_SECURE, b + OFF_REPLAY, NULL, NULL, 0, s->ptk);
         return WPA_PAIRWISE;
     }
     if (!(info & KI_PAIRWISE) && (info & KI_MIC) && (info & KI_SECURE)) {
         /* group message 1: a new GTK; group message 2 */
         if (!s->have_ptk) { s->why = "a group key before the pairwise key"; return WPA_DROP; }
-        if (!mic_ok(s->ptk, f, len)) { s->why = "the group message's MIC is wrong"; return WPA_DROP; }
+        if (!mic_ok(s, s->ptk, f, len)) { s->why = "the group message's MIC is wrong"; return WPA_DROP; }
         const UINT8 *ie;
         UINT32 ie_len;
         if (!(info & KI_ENCRYPTED) || !key_data(s, b + DESC_LEN, dlen, &ie, &ie_len)) return WPA_DROP;
         memcpy(s->gtk_rsc, b + OFF_RSC, 6);
         s->replay = replay;
         s->have_replay = true;
-        *reply_len = build(reply, 2 | KI_MIC | KI_SECURE, b + OFF_REPLAY, NULL, NULL, 0, s->ptk);
+        *reply_len = build(s, reply, ver | KI_MIC | KI_SECURE, b + OFF_REPLAY, NULL, NULL, 0, s->ptk);
         return WPA_GROUP;
     }
     s->why = "an EAPOL-Key frame the station does not expect";

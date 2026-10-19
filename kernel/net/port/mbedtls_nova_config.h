@@ -2730,8 +2730,9 @@
  *
  * Requires: MBEDTLS_CIPHER_C, MBEDTLS_AES_C or MBEDTLS_DES_C
  *
+ * NovaOS: on for WPA3-Personal's EAPOL-Key MICs (kernel/nt/wpa.c).
  */
-//#define MBEDTLS_CMAC_C
+#define MBEDTLS_CMAC_C
 
 /**
  * \def MBEDTLS_CTR_DRBG_C

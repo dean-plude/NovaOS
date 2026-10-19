@@ -422,9 +422,8 @@ netsh interface ipv4 show config
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
 
-**Wi-Fi** connects to open and WPA2-Personal networks so far (WPA3 is
-coming).  With a Wi-Fi card whose Windows driver NovaOS can open, the
-Terminal lists the card and the networks in range, joins one and leaves
+**Wi-Fi** connects to open, WPA2-Personal and WPA3-Personal networks.
+With a Wi-Fi card whose Windows driver NovaOS can open, the Terminal lists the card and the networks in range, joins one and leaves
 it, as on Windows:
 
 ```text
@@ -434,6 +433,9 @@ netsh wlan connect name=CoffeeShop
 netsh wlan connect name=HomeNetwork key=MyPassphrase
 netsh wlan disconnect
 ```
+
+`key=` is the network's passphrase (WPA2) or password (WPA3, which
+NovaOS uses whenever the network offers it).
 
 While connected, the Wi-Fi card carries NovaOS's network traffic
 (`ipconfig` shows "Wireless LAN adapter Wi-Fi"); when it disconnects, the

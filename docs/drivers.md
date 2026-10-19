@@ -606,19 +606,30 @@ NovaOS exempts EAPOL from encryption
 (`OID_WDI_SET_PRIVACY_EXEMPTION_LIST`), connects with RSNA-PSK
 authentication, runs the 4-way handshake itself (`kernel/nt/wpa.c` on
 Mbed TLS, with group rekeys) and installs the pairwise and group keys
-(`OID_WDI_SET_ADD_CIPHER_KEYS`); the driver encrypts and decrypts. `netsh wlan
+(`OID_WDI_SET_ADD_CIPHER_KEYS`); the driver encrypts and decrypts. The same
+command with a WPA3-Personal network's password joins it with SAE, as
+Windows does: the driver carries the authentication frames and asks for
+each step during the connect task
+(`NDIS_STATUS_WDI_INDICATION_SAE_AUTH_PARAMS_NEEDED`), and NovaOS answers
+with the commit, the confirm and the outcome
+(`OID_WDI_SET_SAE_AUTH_PARAMS`), computed by `kernel/nt/sae.c` on Mbed
+TLS's P-256 (hunting and pecking). The 4-way handshake then starts from
+SAE's PMK, WPA3's way (KDF-SHA256, AES-CMAC MICs), and also installs the
+IGTK for management frame protection. `netsh wlan
 disconnect` leaves (`OID_WDI_TASK_DISCONNECT`) and the stack goes back to
 the card it had. Disabling the device disconnects, deletes the port and
 stops the data path before the adapter closes.
 
-What is missing: WPA3 (SAE), WPA2-Enterprise, frames the driver injects itself,
+What is missing: SAE's hash-to-element and groups other than P-256,
+WPA2- and WPA3-Enterprise, frames the driver injects itself,
 `wlanapi.dll` for programs and Settings' Wi-Fi page. That is the rest of
 roadmap step 28.1; scanning and joining on the real card needs the T14.
 
 QEMU has no Wi-Fi card of any kind, so the `wifi` self-test brings its
 own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
 QEMU's `edu` card whose radio hears three access points (WPA2-Personal on
-2.4 GHz, WPA3-Personal on 5 GHz, an open network), and whose TAL plays a
+2.4 GHz, WPA3-Personal on 5 GHz, an open network, each one an access point
+it plays), and whose TAL plays a
 small router at 192.168.77.1 behind the open network (ARP, DHCP, ping).
 The test installs it with `pnputil` and checks the messages and data
 path calls from both sides (the driver reports what it was sent): the
@@ -629,7 +640,11 @@ network: a wrong passphrase is refused, and with the right one the
 driver's access point (its own SHA-1 and AES, `tools/drivertest/wpaap.h`)
 runs the 4-way handshake, checks the EAPOL exemption and the keys NovaOS
 installs, drops data before the keys and rekeys the group key once while
-NovaOS pings. Then it disconnects, and on
+NovaOS pings. Then it joins the WPA3 network: the driver's access point
+does its own SAE (`tools/drivertest/saeap.h`: its own P-256), so a wrong
+password fails at the confirm, and with the right one it checks the
+pairwise, group and management group keys and rekeys both group keys.
+Then it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 

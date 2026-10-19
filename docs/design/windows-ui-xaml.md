@@ -333,9 +333,41 @@ vendors.
      with two merged dictionaries (the last one wins a shared key) and
      `Light` and `Dark` theme dictionaries, and looks keys up through
      them.
-   - *Next.*  The core services (`CCoreServices`, `core/dll/xcpcore.cpp`)
-     with the core's metadata tables (`core/metadata`), and the rest of the
-     core, then `dxaml/lib` compiled as
+   - *Part 9: the core services.*  `CCoreServices`
+     (`core/dll/xcpcore.cpp` and `xcpcore_namescope.cpp`, with the two
+     small providers it holds from `core/hw`) compiles with the core's own
+     project, `xcpcore.vcxproj` (`build.py`'s `CORE_SOURCES` names the
+     sources built so far), into `xaml_core.lib`, which programs that say
+     `"xaml": "core"` link; their stubs are Microsoft's and NovaOS's less
+     those that stand in for the core services themselves
+     (`CoreServices_Stub.cpp`, `src/core_services_stubs.cpp`, the error
+     and platform services: `xaml_corestubs.lib`).  It needed 65 more of
+     Microsoft's headers and one more closed one
+     (`FrameworkUdk/CoreWindowIntegrationInterface.h`, the CoreWindow's
+     position listener).  What it calls in the rest of the core (about
+     340 functions: rendering and composition, input, layout, text,
+     media, the element tree) is worked out at each build, the libraries'
+     undefined names less their defined ones (`llvm-nm`), and each gets a
+     generated thunk made the function's alternate name (`lld-link
+     /alternatename`, so a real definition always wins): it reports its
+     name once ("XAML core: function not built yet") and returns what
+     its return type says is "not implemented" (`E_NOTIMPL`, nothing,
+     zero, null; `llvm-undname` reads the type); a constructor or a
+     function returning an object by value stops the program, naming
+     itself.  `xamlloadtest` makes the core with its own constructor and
+     loads XAML through `CCoreServices::ParseXaml`, the path
+     `XamlReader.Load` takes, so the core's own `IParserCoreServices`
+     and schema context serve the parser; what `CCoreServices::Create`
+     sets up that does not build yet (the platform layer's queues, the
+     text core, the media queue) is left out, and the few fields the
+     dictionary reads are set as `Create` sets them (through
+     `DxamlCoreTestHooks`).  The framework would load the core's theme
+     resources on first lookup; the test gives it a small dictionary
+     of its own.
+   - *Next.*  What `CCoreServices::Create` sets up: the platform services
+     (`gps`, `plat/win`'s `CWindowsServices`), the text core and the
+     media queue, with the core's metadata tables (`core/metadata`), and
+     the rest of the core, then `dxaml/lib` compiled as
      `Windows.UI.Xaml.dll`, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.

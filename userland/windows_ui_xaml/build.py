@@ -26,10 +26,12 @@
 # CDependencyObject's property system, the collections and the resources,
 # and the markup parser (CORE_LIBRARIES: core/Parser, compiled with the
 # core's include path, its precompiled header and C++ exceptions, for
-# programs that say "xaml": "parser").  inc/ also stands in for the closed
+# programs that say "xaml": "parser"), and the core services, CCoreServices
+# (xaml_core.lib, for programs that say "xaml": "core", with stand-ins
+# for the rest of the core: unbuilt()).  inc/ also stands in for the closed
 # Windows App SDK headers those include (FrameworkUdk's helpers, the lifted
 # IXP interop headers); the rest of the core links as it builds.
-import os, re, threading
+import os, re, subprocess, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -96,17 +98,27 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
                    []),
                   ('core/core/elements/libexcept/elements.except.vcxproj', 'core/core/elements/sources.props',
                    'core/core/elements/pchexcept/precomp.h',
-                   [os.path.join(XCP, 'core', 'core', 'elements', 'DeferredKeys.cpp')])]
+                   [os.path.join(XCP, 'core', 'core', 'elements', 'DeferredKeys.cpp')]),
+                  ('core/xcpcore.vcxproj', 'core/common.props', 'core/precomp.h',
+                   [os.path.join(XCP, 'core', 'hw', f) for f in ('MaxTextureSizeProvider.cpp', 'AtlasRequestProvider.cpp')])]
+# the sources of a CORE_LIBRARIES project built so far, when not all of
+# them: of the core's own library (xcpcore.vcxproj), the core services,
+# CCoreServices (dll/xcpcore.cpp, with its name scopes; and, from the
+# hardware rendering's library, core/hw, the two providers it holds); what
+# they call in the rest of the core stands in until it builds (unbuilt())
+CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namescope.cpp')}
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
 # interfaces as complete types is given those headers first: the elements'
 # DXamlCore.h wraps Windows.ApplicationModel's suspending operation and
 # holds Windows.Devices.Input's keyboard capabilities
-CORE_FIRST = {'core/core/elements/libexcept/elements.except.vcxproj': ['windows.applicationmodel.h', 'windows.devices.input.h']}
+CORE_FIRST = {'core/core/elements/libexcept/elements.except.vcxproj': ['windows.applicationmodel.h', 'windows.devices.input.h'],
+              'core/xcpcore.vcxproj': ['windows.ui.viewmanagement.h', 'windows.applicationmodel.h',
+                                       'windows.devices.input.h']}
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
-PROGRAM_CORE = {'parser': 0, 'elements': 2}
+PROGRAM_CORE = {'parser': 0, 'elements': 2, 'core': 3}
 EXCEPTIONS = ['-fcxx-exceptions', '-fexceptions', '-U_HAS_EXCEPTIONS', '-D_HAS_EXCEPTIONS=1',
               '-UWIL_SUPPRESS_EXCEPTIONS']
 
@@ -159,7 +171,7 @@ TEST_STUBS = [('unittests/stubs/Microsoft.UI.Xaml.Stubs.vcxproj',
 # say E_NOTIMPL where the core says S_OK for an object with no managed peer,
 # which fails every collection add, and give no resource lookup logger, which
 # every lookup reads): renamed out of the stub file, as the core has them in
-# src/elements_stubs.cpp; and the metadata mocks' property getters, which
+# src/elements_stubs.cpp and src/core_services_stubs.cpp; and the metadata mocks' property getters, which
 # know no field offsets (so a field-backed property, a dictionary's merged
 # and theme dictionaries, read the object's vtable) and make no default
 # objects, and their class's core constructor (asked of a test's callbacks,
@@ -296,11 +308,15 @@ def flags(b):
 
 
 _LIB = threading.Lock()
+_core_objs = []
 
 
 def library(b, odir):
-    """xaml_components.lib: LIBRARIES' sources, built once per architecture"""
+    """xaml_components.lib: LIBRARIES' sources and CORE_LIBRARIES' (less the
+    core's own, CORE_SOURCES', which are xaml_core.lib), built once per
+    architecture; returns both"""
     lib = os.path.join(odir, 'xaml_components.lib')
+    core_lib = os.path.join(odir, 'xaml_core.lib')
     with _LIB:
         f = flags(b)
         headers = [os.path.join(r, h) for r, _, fs in os.walk(INC) for h in fs if h.endswith('.h')] + \
@@ -319,19 +335,36 @@ def library(b, odir):
         for proj, sources, pch, added in CORE_LIBRARIES:
             p = vcxproj.read(os.path.join(XCP, proj), PROPS)
             prefix = 'xaml_' + proj.replace('/', '_').rsplit('_', 1)[0] + '_'
-            objs += b.compile_many(p['sources'] + added, odir, prefix, f + core_flags(proj, sources, pch), headers,
+            srcs = p['sources'] if proj not in CORE_SOURCES else \
+                [os.path.join(os.path.dirname(os.path.join(XCP, proj)), x) for x in CORE_SOURCES[proj]]
+            built = b.compile_many(srcs + added, odir, prefix, f + core_flags(proj, sources, pch), headers,
                                    compiler='clang++')
-        if not os.path.exists(lib) or any(os.path.getmtime(o) > os.path.getmtime(lib) for o in objs):
-            b.run(['lld-link', '/lib', f'/out:{lib}'] + objs)
-    return lib
+            if proj in CORE_SOURCES:
+                _core_objs[:] = built
+            else:
+                objs += built
+        for out, members in ((lib, objs), (core_lib, _core_objs)):
+            if not os.path.exists(out) or any(os.path.getmtime(o) > os.path.getmtime(out) for o in members):
+                b.run(['lld-link', '/lib', f'/out:{out}'] + members)
+    return lib, core_lib
 
 
 _STUBS = threading.Lock()
 
 
+# the stubs that stand in for the core services themselves (the core's
+# own CoreServices_Stub.cpp; NovaOS's core members, error service and
+# platform services), each alone in its object, which a program on the real
+# core ("xaml": "core") does not link
+CORE_SERVICES_STUBS = ('CoreServices_Stub.cpp', 'core_services_stubs.cpp', 'error_service.cpp',
+                       'platform_services.cpp')
+
+
 def test_stubs(b, odir):
-    """xaml_teststubs.lib (TEST_STUBS), built once per architecture"""
+    """xaml_teststubs.lib (TEST_STUBS) and xaml_corestubs.lib (the same
+    less CORE_SERVICES_STUBS), built once per architecture"""
     lib = os.path.join(odir, 'xaml_teststubs.lib')
+    core_lib = os.path.join(odir, 'xaml_corestubs.lib')
     with _STUBS:
         f = flags(b) + ['-D__XAML_UNITTESTS__']
         headers = [os.path.join(r, h) for r, _, fs in os.walk(INC) for h in fs if h.endswith('.h')] + \
@@ -341,7 +374,8 @@ def test_stubs(b, odir):
             p = vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)
             extra = more + [x for i in p['includes'] for x in ('-I', i)] + ['-D' + d for d in p['defines']] + \
                 ['-include', PCH]
-            srcs = [os.path.join(HERE, 'src', 'core_stubs.cpp')] if skip is None else \
+            srcs = [os.path.join(HERE, 'src', 'core_stubs.cpp'), os.path.join(HERE, 'src', 'platform_services.cpp')] \
+                if skip is None else \
                 [s for s in p['sources'] if os.path.basename(s) not in skip]
             renamed = [x for x in srcs if os.path.basename(x) in STUB_RENAMES]
             objs += b.compile_many([x for x in srcs if x not in renamed], odir, 'xamlstub_', f + extra, headers,
@@ -351,17 +385,20 @@ def test_stubs(b, odir):
                     f'-D{n}={n}_stub' for n in STUB_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
         # and those of what the resource dictionary calls in the core above
         # it (src/elements_stubs.cpp) and the properties' runtime data
-        # (src/property_data.cpp), with the elements' flags (and, each alone, the empty type table for programs that make no
-        # objects and the absent error service, src/type_activations.cpp and
+        # (src/property_data.cpp), with the elements' flags (and, each alone,
+        # the empty type table for programs that make no objects and the
+        # core services' members and error service for programs without the
+        # core, src/type_activations.cpp, src/core_services_stubs.cpp and
         # src/error_service.cpp)
-        objs += b.compile_many([os.path.join(HERE, 'src', 'elements_stubs.cpp'),
-                                os.path.join(HERE, 'src', 'property_data.cpp'),
-                                os.path.join(HERE, 'src', 'type_activations.cpp'),
-                                os.path.join(HERE, 'src', 'error_service.cpp')], odir, 'xamlstub_',
-                               f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]), headers, compiler='clang++')
-        if not os.path.exists(lib) or any(os.path.getmtime(o) > os.path.getmtime(lib) for o in objs):
-            b.run(['lld-link', '/lib', f'/out:{lib}'] + objs)
-    return lib
+        objs += b.compile_many([os.path.join(HERE, 'src', x) for x in (
+            'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp', 'core_services_stubs.cpp',
+            'error_service.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
+            headers, compiler='clang++')
+        core_objs = [o for o in objs if not os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' in CORE_SERVICES_STUBS]
+        for out, members in ((lib, objs), (core_lib, core_objs)):
+            if not os.path.exists(out) or any(os.path.getmtime(o) > os.path.getmtime(out) for o in members):
+                b.run(['lld-link', '/lib', f'/out:{out}'] + members)
+    return lib, core_lib
 
 
 def program_flags(b, prog=None):
@@ -374,6 +411,103 @@ def program_flags(b, prog=None):
 
 
 def program_objs(b, odir):
-    """what such a program links besides the C++ library: xaml_components.lib
-    and, after it, xaml_teststubs.lib"""
-    return [library(b, odir), test_stubs(b, odir)]
+    """what XAML's programs link besides the C++ library (program_link()
+    picks a program's)"""
+    components, core = library(b, odir)
+    stubs, core_stubs = test_stubs(b, odir)
+    return [components, stubs, core, core_stubs] + unbuilt(b, odir, [components, core, core_stubs])
+
+
+def program_link(prog, objs):
+    """of program_objs() @objs, what program @prog links: xaml_components.lib
+    and, after it, xaml_teststubs.lib; or, for a program on the core itself
+    ("xaml": "core"), xaml_core.lib, xaml_corestubs.lib and the stand-ins
+    for the core not yet built (unbuilt())"""
+    components, stubs, core, core_stubs = objs[:4]
+    if prog.get('xaml') == 'core':
+        return [components, core, core_stubs] + objs[4:]
+    return [components, stubs]
+
+
+# A function the built core calls in the parts of the core that do not
+# build yet (the rendering and composition, input, layout, text, media and
+# the element tree's classes beyond the resources) answers as an unbuilt
+# part should: it reports its name once (on the debugger's output and the
+# program's) and returns "not implemented" (E_NOTIMPL for an HRESULT),
+# nothing (a void function, a destructor) or zero (a null pointer, false,
+# 0).  A constructor or a function returning an object by value has no such
+# answer: it stops the program, naming itself.  Each is the function's
+# decorated name made an alternate name (lld-link /alternatename) for a
+# thunk here, so a real definition anywhere (a program's, a stub's, the
+# core as it builds) takes its place; and the list is the undefined names
+# of the libraries a program on the core links less every name they
+# define, worked out at each build (llvm-nm, llvm-undname), so it shrinks
+# as the core builds.
+UNBUILT_REPORT = os.path.join(HERE, 'src', 'unbuilt.cpp')
+_UNBUILT = threading.Lock()
+
+
+def _undecorated_kind(name, demangled):
+    """'hr', 'zero', 'void' or 'stop' for a function's answer"""
+    if not name.startswith('?'):
+        return 'hr'
+    d = re.sub(r'^(public|private|protected): ', '', demangled)
+    d = re.sub(r'^(static |virtual )+', '', d)
+    m = re.match(r'(.*?)\s*__cdecl\s', d)
+    ret = m.group(1).strip() if m else ''
+    if re.search(r'::~\w+\(', d):
+        return 'void'
+    if ret in ('long',):
+        return 'hr'
+    if ret == 'void':
+        return 'void'
+    if ret.endswith(('*', '&')) or re.fullmatch(r'(unsigned )?(bool|char|wchar_t|short|int|long|__int64|float|double)'
+                                                 r'( const)?|enum [\w:]+', ret):
+        return 'zero'
+    return 'stop'
+
+
+def unbuilt(b, odir, libs):
+    """the stand-ins above, as objects (a library's member would not be
+    linked, so its alternate names would not apply), x64 (as XAML's
+    programs are)"""
+    if b.ARCH != 'x64':
+        return []
+    with _UNBUILT:
+        nm = b.llvm_tool('llvm-nm')
+        r = subprocess.run([nm, '-u'] + libs, capture_output=True, text=True)
+        undef = {l.split()[-1] for l in r.stdout.splitlines() if l.strip() and not l.endswith(':')}
+        r = subprocess.run([nm, '--defined-only', '--extern-only'] + libs, capture_output=True, text=True)
+        defined = {l.split()[2] for l in r.stdout.splitlines() if len(l.split()) >= 3}
+        # (a name a program's DLLs define, the C runtime's, Windows', the C++
+        # library's, is theirs: an alternate name stands only for one no
+        # library defines; a C one is a Windows-style function returning an
+        # HRESULT, the framework's DllGetActivationFactory)
+        names = sorted(n for n in undef - defined if not n.startswith(('__imp_', '.')))
+        r = subprocess.run([b.llvm_tool('llvm-undname')], input='\n'.join(names) + '\n', capture_output=True, text=True)
+        dem = [l for l in r.stdout.splitlines() if l.strip()]
+        demangled = dict(zip(dem[0::2], dem[1::2]))
+        # the answers: report (src/unbuilt.cpp, the name in r11), then
+        # return E_NOTIMPL, zero (rax and xmm0) or nothing; or stop
+        asm = ['.text']
+        for kind, ret in (('hr', ['movl $0x80004001, %eax']), ('zero', ['xorl %eax, %eax', 'xorps %xmm0, %xmm0']),
+                          ('void', []), ('stop', None)):
+            asm += [f'nova_xaml_unbuilt_{kind}:', '    subq $40, %rsp', '    movq %r11, %rcx']
+            asm += ['    callq nova_xaml_unbuilt_stop'] if ret is None else \
+                ['    callq nova_xaml_unbuilt_report', '    addq $40, %rsp'] + ['    ' + x for x in ret] + ['    retq']
+        directives = []
+        for i, n in enumerate(names):
+            asm += [f'.globl nova_xaml_unbuilt_{i}', f'nova_xaml_unbuilt_{i}:',
+                    f'    leaq nova_xaml_unbuilt_name_{i}(%rip), %r11',
+                    f'    jmp nova_xaml_unbuilt_{_undecorated_kind(n, demangled.get(n, ""))}']
+            directives.append(f'/alternatename:{n}=nova_xaml_unbuilt_{i}')
+        asm += ['.section .rdata,"dr"'] + [f'nova_xaml_unbuilt_name_{i}: .asciz "{n}"' for i, n in enumerate(names)]
+        asm += ['.section .drectve,"yn"'] + [f'    .ascii " {d}"' for d in directives]
+        text = '\n'.join(asm) + '\n'
+        s = os.path.join(odir, 'xaml_unbuilt.s')
+        if not os.path.exists(s) or open(s).read() != text:
+            open(s, 'w').write(text)
+        objs = b.compile_many([s], odir, '', ['--target=' + b.TARGETS[b.ARCH]], [UNBUILT_REPORT])
+        objs += b.compile_many([UNBUILT_REPORT], odir, 'xamlreport_', _msvcp(b).cxx_flags(b), [], compiler='clang++')
+    return objs
+

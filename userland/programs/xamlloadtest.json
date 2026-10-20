@@ -1,5 +1,1 @@
-{"selftest": true, "xaml": "core",
- "include": ["third_party/microsoft-ui-xaml/dxaml/xcp/components/theming/unittests",
-             "third_party/microsoft-ui-xaml/dxaml/test/native/inc"],
- "sources": ["third_party/microsoft-ui-xaml/dxaml/xcp/components/theming/unittests/TestThemingInterop.cpp"],
- "cflags": ["-D__XAML_UNITTESTS__"]}
+{"selftest": true, "xaml": "core"}

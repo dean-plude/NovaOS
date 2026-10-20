@@ -103,3 +103,15 @@ extern "C" HRESULT WINAPI RoGetAgileReference(AgileReferenceOptions options, REF
 #include <cguid.h>
 extern "C" __declspec(selectany) const GUID GUID_NULL = {};
 #endif
+
+/* the device family (the Windows SDK's winnt.h; ntdll exports it): XAML's
+ * system theming reads the system's light or dark theme from UISettings on
+ * Windows Core devices and from the registry elsewhere */
+#ifndef DEVICEFAMILYINFOENUM_WINDOWS_CORE
+#define DEVICEFAMILYINFOENUM_DESKTOP 0x00000003
+#define DEVICEFAMILYINFOENUM_WINDOWS_CORE 0x00000010
+#ifdef __cplusplus
+extern "C"
+#endif
+__declspec(dllimport) void __stdcall RtlGetDeviceFamilyInfoEnum(ULONGLONG *uapInfo, DWORD *deviceFamily, DWORD *deviceForm);
+#endif

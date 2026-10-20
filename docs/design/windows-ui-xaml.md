@@ -364,13 +364,39 @@ vendors.
      `DxamlCoreTestHooks`).  The framework would load the core's theme
      resources on first lookup; the test gives it a small dictionary
      of its own.
-   - *Next.*  What `CCoreServices::Create` sets up: the platform services
-     (`gps`, `plat/win`'s `CWindowsServices`), the text core and the
-     media queue, with the core's metadata tables (`core/metadata`), and
-     the rest of the core, then `dxaml/lib` compiled as
-     `Windows.UI.Xaml.dll`, until
-     `Application.Start` runs and `XamlReader.Load` parses a page, one
-     component seam per pull request.
+   - *Part 10: the core services made as the framework makes them.*
+     `CCoreServices::Create` runs for real: the program hands the core
+     the platform layer's services (`gps`) through
+     `ObtainPlatformServices` and `ObtainCoreServices`, as `DXamlCore`
+     does.  The platform layer is Microsoft's `CWindowsServices`
+     (`plat/win/browserdesktop`: `xcpwin.cpp`, `PlatformServices.cpp`,
+     the thread pool's work items and the one global instance,
+     compiled with its own project and precompiled header), which gives
+     the core its queues, work item factory and security token.  What
+     `Create` makes builds too: the media queue manager, the render
+     target bitmap manager, the geometry builder (the elements'
+     `geometry.cpp`), the text core `CTextCore` with its Windows half
+     `WinTextCore`, and the system theming (`components/theminginterop`,
+     reading the light or dark theme from the registry).  The text core's
+     own precompiled header includes the closed Page/Table Layout
+     Services' header, so `TextCore.cpp` is compiled with the core's
+     sources and a precompiled header of NovaOS's
+     (`src/core_precomp.h`: the core's and the four text headers
+     `CTextCore` names).  New stand-ins for closed or missing headers:
+     ATL's `atlbase.h` (declarations only: the input pane handler's base
+     class, which nothing built instantiates), `atlhost.h`,
+     `shlobj_core.h`, the WPP trace header `xcpwin.tmh` (tracing compiled
+     out), FrameworkUdk's `DirectManipulationHelper.h`, and `d2d1_1.h`,
+     which gives MinGW-w64's Direct2D 1.1 interfaces their IIDs as
+     `__declspec(uuid)` (MinGW-w64's own `__CRT_UUID_DECL` is empty where
+     the compiler has `__uuidof`).  `xamlloadtest` makes its core this
+     way (no test hooks), with the system theme fixed at Dark through the
+     theming's own test hook, and everything else as in part 9.
+   - *Next.*  `dxaml/lib` (`DXamlCore`, `XamlReader`, `Application`)
+     compiled as `Windows.UI.Xaml.dll` on this core, with the core's
+     metadata tables (`core/metadata`) and the rest of the core as they
+     are reached, until `Application.Start` runs and `XamlReader.Load`
+     parses a page, one component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

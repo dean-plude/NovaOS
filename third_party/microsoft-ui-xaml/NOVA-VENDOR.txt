@@ -54,7 +54,21 @@ Window.g.cpp, and DependencyObject.cpp), the control layer
 sl/sources.g.props, sources.props and precomp.h; win/shared's xcpwindow.cpp
 and PendingMessages.cpp with sl/shared.vcxproj, sources.props and precomp.h;
 host/win/browserdesktop/WinBrowserHost.cpp with hostpalplatmisc.vcxproj and
-the top-level precomp.h) and the headers those include, external/inc's gsl
+the top-level precomp.h), the rendering seam under the browser host
+(core/compositor's compositorscheduler.cpp, UIThreadScheduler.cpp,
+windowrendertarget.cpp, RefreshRateInfo.cpp, RefreshAlignedClock.cpp and
+hardwarecommand.cpp; core/hw's CompositorTreeHost.cpp, hwwalk.cpp,
+hwtexturemgr.cpp and hwsurfacecache.cpp with hw.vcxproj and precomp.h;
+core/common/values.cpp; core/error/ErrorService.cpp; plat/win/desktop's
+windowsgraphicsdevicemanager.cpp, d3d11device.cpp, D3D11DeviceInstance.cpp
+and D2DAccelerated.cpp with platwindesktop.vcxproj, but not its precomp.h,
+which names closed headers; components/graphics' WindowsGraphicsDeviceManager.cpp,
+ProjectedShadowManager.cpp and Scheduler.cpp, components/comptree's
+DCompTreeHost.cpp and OfferTracker.cpp and components/brushes'
+WUCBrushManager.cpp, with their lib projects; control/download with its
+project and precomp.hpp; control/common/shared/AsyncDownloadRequestManager.cpp,
+win/shared/UIAHostEnvironmentInfo.cpp and
+host/win/browserdesktop/windwnreq.cpp) and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

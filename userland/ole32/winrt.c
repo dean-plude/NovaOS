@@ -397,6 +397,19 @@ WINOLEAPI RoReportUnhandledError(IUnknown *info)
     OutputDebugStringA("RoReportUnhandledError: an unhandled Windows Runtime error\n");
     return E_NOTIMPL;
 }
+/* A fail fast with the Windows Runtime errors stowed for it (combase's;
+ * XAML's error context calls it, components/base/errorcontext.cpp): the
+ * error goes on the debugger's output and the process ends with it, as
+ * Windows ends it (without the crash report) */
+WINOLEAPI_(void) RoFailFastWithErrorContextInternal2(HRESULT hr, ULONG count, void **stowed)
+{
+    char msg[96];
+    (void)stowed;
+    wsprintfA(msg, "RoFailFastWithErrorContextInternal2: fail fast 0x%08lx (%lu stowed)\n", (unsigned long)hr,
+              (unsigned long)count);
+    OutputDebugStringA(msg);
+    TerminateProcess(GetCurrentProcess(), (UINT)hr);
+}
 /* C++/WinRT's hresult_error reports through this before it throws; there is
  * no debugger to tell, so the error is only thrown (FALSE: not reported) */
 WINOLEAPI_(BOOL) RoOriginateLanguageException(HRESULT hr, HSTRING msg, IUnknown *e) { (void)hr; (void)msg; (void)e; return FALSE; }

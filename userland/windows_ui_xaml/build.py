@@ -207,6 +207,64 @@ CORE_FIRST['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = \
 # platform layer's)
 for _p in ('control/common/shared/sl/controlBase.vcxproj', 'win/shared/sl/shared.vcxproj', 'hostpalplatmisc.vcxproj'):
     CORE_FIRST[_p] = CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj']
+# Part 13: the rendering seam the control's browser host starts
+# (CommonBrowserHost::CreateRenderTarget): the platform layer's graphics
+# device manager (plat/win/desktop: WindowsGraphicsDeviceManager, its
+# Direct3D 11 device and shared device instance, the Direct2D factory, with
+# NovaOS's precompiled header in place of the project's, src/platdesktop;
+# and its half in components/graphics, with the frame scheduler and the
+# projected shadow manager), the composition tree host it makes
+# (components/comptree: DCompTreeHost, OfferTracker, with its brush
+# manager, components/brushes' WUCBrushManager), the core's compositor
+# scheduler and its render thread, the UI thread's frame scheduler, the
+# window render target with its refresh rate and clock
+# (core/compositor), the hardware walk, its texture manager and surface
+# cache and the compositor tree host (core/hw), and the downloaders the
+# browser host makes (control/download's CDownloader,
+# control/common/shared's CAsyncDownloadRequestManager, the download request
+# host/win/browserdesktop/windwnreq.cpp), with what they call on the way: the
+# hardware render commands, the value store (core/common/values.cpp), the
+# error service (core/error) and the UI Automation host's environment info
+# (win/shared/UIAHostEnvironmentInfo.cpp)
+CORE_LIBRARIES += [('core/hw/hw.vcxproj', 'core/common.props', 'core/hw/precomp.h', []),
+                   ('plat/win/desktop/platwindesktop.vcxproj', 'plat/win/desktop/platwindesktop.vcxproj',
+                    os.path.join(HERE, 'src', 'platdesktop', 'precomp.h'), []),
+                   ('components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj',
+                    'components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj', 'components/pch/precomp.h', []),
+                   ('components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj',
+                    'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj', 'components/pch/precomp.h', []),
+                   ('control/download/download.vcxproj', 'control/download/download.vcxproj',
+                    'control/download/precomp.hpp', []),
+                   ('components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj',
+                    'components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj', 'components/pch/precomp.h', [])]
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('compositor/compositorscheduler.cpp', 'compositor/UIThreadScheduler.cpp',
+                                         'compositor/windowrendertarget.cpp', 'compositor/RefreshRateInfo.cpp',
+                                         'compositor/RefreshAlignedClock.cpp', 'compositor/hardwarecommand.cpp',
+                                         'common/values.cpp', 'error/ErrorService.cpp')
+CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../AsyncDownloadRequestManager.cpp',)
+# (and what the control layer's objects make beside it: the UI Automation
+# host's environment, a download request)
+CORE_SOURCES['win/shared/sl/shared.vcxproj'] += ('../UIAHostEnvironmentInfo.cpp',)
+CORE_SOURCES['hostpalplatmisc.vcxproj'] += ('host/win/browserdesktop/windwnreq.cpp',)
+CORE_SOURCES.update({
+    'core/hw/hw.vcxproj': ('CompositorTreeHost.cpp', 'hwwalk.cpp', 'hwtexturemgr.cpp', 'hwsurfacecache.cpp'),
+    'plat/win/desktop/platwindesktop.vcxproj': ('windowsgraphicsdevicemanager.cpp', 'd3d11device.cpp',
+                                                'D3D11DeviceInstance.cpp', 'D2DAccelerated.cpp'),
+    'components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj': ('../WindowsGraphicsDeviceManager.cpp',
+                                                                          '../ProjectedShadowManager.cpp',
+                                                                          '../Scheduler.cpp'),
+    'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj': ('../DCompTreeHost.cpp', '../OfferTracker.cpp'),
+    'control/download/download.vcxproj': ('download.cpp',),
+    'components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj': ('../WUCBrushManager.cpp',)})
+CORE_FIRST['core/hw/hw.vcxproj'] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+for _p in ('plat/win/desktop/platwindesktop.vcxproj', 'components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj',
+           'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj', 'control/download/download.vcxproj',
+           'components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'):
+    CORE_FIRST[_p] = CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj']
+# (the platform layer's headers include each other's by <name>, as MSBuild's
+# project directory lets them: core_flags())
+PROJECT_DIR = ('plat/win/desktop/platwindesktop.vcxproj',)
+
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
 # ("framework": the framework's, dxaml/lib's, linked as "core" is)
@@ -277,8 +335,9 @@ STUB_RENAMES = {'DependencyObject_Stub.cpp': ('AddPeerReferenceToItem', 'RemoveP
 PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # the DLLs XAML's sources call beyond a program's usual ones (the parser
 # reads XML with XmlLite, the URI library builds URIs with urlmon, the
-# framework turns the legacy IMEs off with imm32)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32']
+# framework turns the legacy IMEs off with imm32, the graphics device draws
+# its first text with DirectWrite)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -345,6 +404,15 @@ def core_flags(proj, sources, pch, added=()):
     """what a CORE_LIBRARIES entry's sources add to flags()"""
     p = vcxproj.read(os.path.join(XCP, proj), PROPS)
     inc = core_includes(sources) + p['includes']
+    # (a precompiled header of NovaOS's own named precomp.h stands in for
+    # the project's, which its sources include as "precomp.h": its directory
+    # is searched first)
+    if os.path.basename(pch) == 'precomp.h' and pch.startswith(HERE):
+        inc = [os.path.dirname(pch)] + inc
+    # (and MSBuild's project directory, for the projects whose headers
+    # include each other's by <name>)
+    if proj in PROJECT_DIR:
+        inc = inc + [os.path.dirname(os.path.join(XCP, proj))]
     return [x for d in inc for x in ('-I', d)] + ['-D' + d for d in p['defines']] + EXCEPTIONS + \
         [x for h in CORE_FIRST.get(proj, []) for x in ('-include', h)] + ['-include', os.path.join(XCP, pch)]
 
@@ -451,7 +519,7 @@ _STUBS = threading.Lock()
 # platform services) and for the framework's DXamlCore, each alone in its
 # object, which a program on the real core ("xaml": "core") does not link
 CORE_SERVICES_STUBS = ('CoreServices_Stub.cpp', 'core_services_stubs.cpp', 'error_service.cpp',
-                       'platform_services.cpp', 'framework_stubs.cpp')
+                       'platform_services.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp')
 
 
 def test_stubs(b, odir):
@@ -485,12 +553,13 @@ def test_stubs(b, odir):
         # it (src/elements_stubs.cpp) and the properties' runtime data
         # (src/property_data.cpp), with the elements' flags (and, each alone,
         # the empty type table for programs that make no objects and the
-        # core services' members and error service for programs without the
-        # core, src/type_activations.cpp, src/core_services_stubs.cpp and
-        # src/error_service.cpp)
+        # core services' members, error service and its invalid-operation
+        # errors for programs without the core, src/type_activations.cpp,
+        # src/core_services_stubs.cpp, src/error_service.cpp and
+        # src/invalid_operation.cpp)
         objs += b.compile_many([os.path.join(HERE, 'src', x) for x in (
             'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp', 'core_services_stubs.cpp',
-            'error_service.cpp', 'framework_stubs.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
+            'error_service.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
             headers, compiler='clang++')
         core_objs = [o for o in objs if not os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' in CORE_SERVICES_STUBS]
         # (a stub the core builds part of for real is linked, by a program

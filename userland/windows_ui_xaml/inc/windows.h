@@ -28,6 +28,12 @@
  * warns only) */
 #undef GetCurrentTime
 
+/* DirectComposition's surface error XAML's offer tracker checks (the
+ * Windows SDK's winerror.h) */
+#ifndef DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED
+#define DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED _HRESULT_TYPEDEF_(0x88980801L)
+#endif
+
 /* the Windows Runtime's HRESULTs (the Windows SDK's winerror.h) */
 #ifndef E_BOUNDS
 #define E_BOUNDS _HRESULT_TYPEDEF_(0x8000000BL)

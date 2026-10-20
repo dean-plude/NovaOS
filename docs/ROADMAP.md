@@ -1034,7 +1034,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `coreapptest`.
 - [x] **32.2 Windows.UI.Composition.** The compositor's visuals, brushes
   and drawing surfaces on NovaOS's DirectComposition; CoreWindow's
-  pointer events.  Test `comptest`.
+  pointer events.  Test `comptest`.  Since the Phase 32 push: the later
+  interface versions XAML's compositor tree host asks for (`ICompositor2`
+  to `8`, `IVisual2` to `4`, `ICompositionObject2` to `5`), answered
+  under the Windows App SDK's `Microsoft.UI.Composition` IIDs as well,
+  property sets, key frame animations, animation groups, scoped batches,
+  easing functions and rectangle clips (expression animations are kept,
+  not yet evaluated).
 - [ ] **32.3 The XAML core builds.** The `dxaml` core as
   `Windows.UI.Xaml.dll`: `Application.Start` runs and `XamlReader.Load`
   parses a page.  First part done: Direct2D 1.1's devices and device

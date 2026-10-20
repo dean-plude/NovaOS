@@ -14976,6 +14976,101 @@ and looking a key up searches them as Windows does.
   shared key, the first still answers its own) and `Light` and `Dark`
   theme dictionaries, and finds the Dark theme's resource.
 
+## App packages: .msix and .appx
+
+Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)), first part: Windows app packages
+install, start and read their `resources.pri`.
+
+- **`appx`** (`C:\Windows\System32\appx.exe`) installs a package
+  (`appx install app.msix`), lists, removes and starts them (`appx start
+  <family>!<app>`); opening an `.msix` or `.appx` file runs it.  It
+  checks every 64 KiB of every file against the package's block map
+  (SHA-256, -384 or -512), unpacks into `C:\Programs\WindowsApps\<full
+  name>`, records the package in the user's package repository, registers
+  its in-process Windows Runtime classes and adds its applications to the
+  Start menu.  Full and family names are made as Windows makes them.
+  Installing needs an administrator (UAC asks): Windows' deployment
+  service writes `WindowsApps` as the system, and NovaOS has none yet.
+- **Signatures:** NovaOS does not verify package signatures yet, so a
+  signed package is refused, never installed unchecked; an unsigned one
+  installs as on Windows 11, with `-AllowUnsigned` and a publisher
+  carrying Microsoft's "unsigned" OID.
+- **Package identity:** a process whose program is in an installed
+  package belongs to it (`GetCurrentPackageFullName`, family, path,
+  `GetCurrentApplicationUserModelId`, the app policies).  ole32 finds the
+  package's own Windows Runtime classes for it.
+- **Starting:** twinapi.appcore's `ApplicationActivationManager` starts an
+  application by its user model id, in the package's folder.
+- **`resources.pri`:** `MRM.dll` is Microsoft's MRT Core (MIT), built
+  unchanged; `SHLoadIndirectString` resolves `@{<package>?ms-resource:...}`
+  with it, which names packages and their Start menu entries.
+  `tools/appx/makepri.py` and `makeappx.py` write `.pri` files and
+  packages for tests.
+- `appxtest` installs the test packages (`tools/appx/mktest.py`), refuses
+  the damaged, the signed and the unsigned without the OID, starts the
+  installed one by its user model id (which checks its identity, its
+  strings and its Windows Runtime class) and removes it.
+
+Not yet: bundles (`.msixbundle`), framework dependencies (VCLibs,
+`Microsoft.UI.Xaml`), signature verification, file type and protocol
+activation, the app container.  The Calculator package needs those and
+steps 32.3 to 32.5.
+
+## The composition interfaces XAML's render tree asks for
+
+Part of the Phase 32 push for `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)): `dcomp.dll`'s
+Windows.UI.Composition grows the later interface versions, animations
+and property sets the XAML framework's compositor tree host uses.
+
+- **Both namespaces:** XAML's source asks for the Windows App SDK's
+  `Microsoft.UI.Composition` interfaces, which match Windows' member for
+  member under other IIDs; every composition object now answers both
+  (`ICompositor` and `ICompositionObject`, which differ, get a vtable of
+  their own), and `Microsoft.UI.Composition.Compositor` activates the
+  same compositor.
+- **New interface versions:** `ICompositor2` to `8`, `IVisual2` to `4`
+  (relative offset and size adjustments drawn), `ICompositionObject2`
+  to `5`.
+- **Property sets:** every object's `Properties` and
+  `CreatePropertySet`, with each value type's `Insert` and `TryGet`.
+- **Animations:** key frame animations of scalars, vectors, colours,
+  quaternions and Booleans run on the compositor's thread, with easing
+  (linear, cubic Bezier, step, sine, circle, power); animation groups;
+  scoped batches whose `Completed` comes on the making thread's
+  `DispatcherQueue`; rectangle clips.
+- **Not yet:** expression animations are accepted but not evaluated;
+  lights, shadows, shapes, gradient brushes, effects and implicit
+  animations stay `E_NOTIMPL`.
+- Test: `comptest` checks the new interfaces in both namespaces, a
+  property set, the relative adjustments and a rectangle clip in the
+  pixels, an `Offset` animation in a scoped batch, an animation group
+  fading a visual out and the easing functions.
+
+## Idle CPUs back at PASSIVE_LEVEL
+
+A main-health fix for the devices self-tests, whose "after boot" checks
+(`vioser`, `viostor`) timed out under KVM after a restart with the driver
+starting at boot.
+
+- **What the logs showed:** from the first switch after "Entering kernel
+  main loop", CPU 0's idle thread switched out at IRQL 6 thousands of
+  times (`IRQL_NOT_LESS_OR_EQUAL: thread 'idle' (TID 1) waits at IRQL 6`).
+  `CR8` is the local APIC's task priority, so while CPU 0 idled it kept
+  out its clock tick and every device interrupt up to class 6: the input
+  poll and the desktop, which wait on CPU 0's tick, stalled, and so did a
+  viostor read whose interrupt went to CPU 0 ("SCSI command 0x28 was never
+  completed").  The program dumps (plugplay, services waiting in
+  advapi32) were all on CPU 1 and only waiting.
+- **Fix:** an idle thread about to halt above `PASSIVE_LEVEL` is put back
+  and logged once per CPU (`kernel/ke/smp.c`).
+- **Where it comes from:** not found yet (the container has no KVM).  The
+  first thread switched out at a raised IRQL now prints a backtrace
+  (`kernel/ke/scheduler.c`), and a Windows driver's interrupt taken at an
+  IRQL that masks it is logged once (`kernel/nt/intr.c`), so the next log
+  names the code that left the IRQL raised.
+
 ## XAML's control layer and the DispatcherQueue
 
 Twelfth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,

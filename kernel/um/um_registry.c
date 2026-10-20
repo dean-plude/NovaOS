@@ -857,14 +857,19 @@ static void defaults(void)
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication and CoreWindow (twinapi.appcore.dll; Windows
-     * keeps CoreWindow in Windows.UI.dll), and the DispatcherQueue, Windows'
-     * and the Windows App SDK's (CoreMessaging.dll).  ActivationType 0 = in process,
-     * Threading 0 = both apartments.  As on Windows, the 32-bit view
+     * keeps CoreWindow in Windows.UI.dll), the compositor and its easing
+     * functions, Windows' and the Windows App SDK's (dcomp.dll), and the
+     * DispatcherQueue, Windows' and the Windows App SDK's
+     * (CoreMessaging.dll).  ActivationType 0 = in process, Threading 0 =
+     * both apartments.  As on Windows, the 32-bit view
      * (WOW6432Node) has its own copy, naming the SysWOW64 DLL. */
     static const char *const wrt_classes[][2] = {
         { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
+        { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
+        { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },
+        { "Microsoft.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Windows.System.DispatcherQueue", "CoreMessaging.dll" },
         { "Windows.System.DispatcherQueueController", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueue", "CoreMessaging.dll" },
@@ -881,6 +886,9 @@ static void defaults(void)
             kset_dword(k, "Threading", 0);
         }
     }
+    /* ApplicationActivationManager (twinapi.appcore.dll): starts packaged apps */
+    RegKey *aam = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{45BA127D-10A8-46EA-8AB7-56EA9078943C}\\InprocServer32", false);
+    if (!has_value(aam, "")) { kset_sz(aam, "", "twinapi.appcore.dll", 1); kset_sz(aam, "ThreadingModel", "Both", 1); }
     /* DirectSound and DirectSoundCapture (dsound.dll), so CoCreateInstance finds them */
     static const char *const ds_clsids[] = {
         "{47D4D946-62E8-11CF-93BC-444553540000}", "{3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}",

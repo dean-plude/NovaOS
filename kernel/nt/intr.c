@@ -152,6 +152,13 @@ static void dispatch(void *arg)
 {
     Line *l = arg;
     UINT8 old = KeIrql();
+    /* (the APIC does not deliver a vector its task priority holds back:
+     * taken at such an IRQL, the interrupt would put it back at the end) */
+    if (old >= (l->vector >> 4)) {
+        static bool told;
+        if (!__atomic_exchange_n(&told, true, __ATOMIC_RELAXED))
+            kprintf("[NT] interrupt 0x%02x taken at IRQL %u, which masks it\n", l->vector, old);
+    }
     UINT8 fx[512] __attribute__((aligned(16)));
     __asm__ volatile ("fxsave64 (%0)" : : "r"(fx) : "memory");   /* (driver code may use SSE) */
     PKPCR k = KiGetCurrentKpcr();

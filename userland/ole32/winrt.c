@@ -6,7 +6,8 @@
  * does, by the in-process server the registry names for it:
  * HKLM\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\<class>
  * has DllPath, and that DLL's DllGetActivationFactory makes the factory
- * (twinapi.appcore.dll's CoreApplication, for one).  Others give
+ * (twinapi.appcore.dll's CoreApplication, for one); a packaged app's own
+ * classes are found first, under its package's key.  Others give
  * REGDB_E_CLASSNOTREG, as for a class Windows lacks.
  */
 #define NOVA_BUILD_OLE32
@@ -177,13 +178,18 @@ static const GUID IID_IActivationFactory__ = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0
 /* An in-process server: ActivatableClassId\<class> (ActivationType 0)
  * names the DLL; its DllGetActivationFactory(class, IActivationFactory **)
  * makes the factory, which is then asked for the interface wanted.  The
- * DLL stays loaded, as combase keeps it while the process runs. */
-static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFIID iid, void **out)
+ * DLL stays loaded, as combase keeps it while the process runs.  A
+ * packaged process looks first among its package's classes (the
+ * manifest's windows.activatableClass.inProcessServer extensions, which
+ * the package's installation registered under
+ * HKCU\Software\Classes\ActivatableClasses\Package\<full name>), then
+ * the system's (HKLM\SOFTWARE\Microsoft\WindowsRuntime). */
+static HRESULT registry_factory_in(HKEY hive, const WCHAR *root, HSTRING cls, const WCHAR *name, UINT32 len,
+                                   REFIID iid, void **out)
 {
-    static const WCHAR root[] = L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\";
-    WCHAR key[300], path[MAX_PATH];
+    WCHAR key[400], path[MAX_PATH];
     UINT32 n = 0;
-    for (const WCHAR *r = root; *r; r++) key[n++] = *r;
+    for (const WCHAR *r = root; *r && n < 300; r++) key[n++] = *r;
     if (!len || n + len >= sizeof key / sizeof key[0]) return REGDB_E_CLASSNOTREG;
     for (UINT32 i = 0; i < len; i++) {
         if (!name[i] || name[i] == '\\') return REGDB_E_CLASSNOTREG;
@@ -191,10 +197,10 @@ static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFI
     }
     key[n] = 0;
     DWORD type = 0, size = sizeof type;
-    if (!RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ActivationType", RRF_RT_REG_DWORD, 0, &type, &size) && type != 0)
+    if (!RegGetValueW(hive, key, L"ActivationType", RRF_RT_REG_DWORD, 0, &type, &size) && type != 0)
         return REGDB_E_CLASSNOTREG;                   /* out of process: not served yet */
     size = sizeof path;
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, key, L"DllPath", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, 0, path, &size))
+    if (RegGetValueW(hive, key, L"DllPath", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, 0, path, &size))
         return REGDB_E_CLASSNOTREG;
     HMODULE mod = LoadLibraryExW(path, 0, 0);
     if (!mod) return CO_E_DLLNOTFOUND;
@@ -208,6 +214,24 @@ static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFI
     hr = f->lpVtbl->QueryInterface(f, iid, out);
     f->lpVtbl->Release(f);
     return hr;
+}
+
+LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name);
+static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFIID iid, void **out)
+{
+    static const WCHAR pkg[] = L"Software\\Classes\\ActivatableClasses\\Package\\";
+    WCHAR root[300], full[128];
+    UINT32 n = 128, at = 0;
+    if (!GetCurrentPackageFullName(&n, full)) {
+        for (const WCHAR *r = pkg; *r; r++) root[at++] = *r;
+        for (const WCHAR *r = full; *r; r++) root[at++] = *r;
+        for (const WCHAR *r = L"\\ActivatableClassId\\"; *r; r++) root[at++] = *r;
+        root[at] = 0;
+        HRESULT hr = registry_factory_in(HKEY_CURRENT_USER, root, cls, name, len, iid, out);
+        if (hr != REGDB_E_CLASSNOTREG) return hr;
+    }
+    return registry_factory_in(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\",
+                               cls, name, len, iid, out);
 }
 
 WINOLEAPI_(HRESULT) RoGetActivationFactory(HSTRING cls, REFIID iid, void **f)

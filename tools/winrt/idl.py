@@ -444,6 +444,7 @@ class IdlReader:
         out = [rc]
         groups = {k: Interface(v) for k, v in names.items()}
         order = []                     # (attrs, {kind: Interface}) for member blocks
+        hidden = []                    # the same, of a disabled feature
         counters = {}
         synth = _Synth(self)
         while not self.accept('}'):
@@ -474,6 +475,15 @@ class IdlReader:
                 self.accept(';')
                 if not self.disabled_by(mattrs):
                     order.append((mattrs, bgroups))
+                elif self.keep_disabled_types:
+                    # (a disabled feature's block of members, kept for
+                    # XAML's own build as its interfaces alone: the class
+                    # does not list them, as the public metadata does not)
+                    # (MIDL makes the block's named instance interface
+                    # even when it has no members, a constructor's block)
+                    if bnames['instance'] and 'instance' not in bgroups:
+                        bgroups['instance'] = Interface(self.qualify(bnames['instance']))
+                    hidden.append((mattrs, bgroups))
                 continue
             kind, mem = synth.class_member(rc, mattrs)
             if self.disabled_by(mattrs):
@@ -482,6 +492,7 @@ class IdlReader:
         self.accept(';')
         rc.groups = groups
         rc.blocks = order
+        rc.hidden_blocks = hidden
         rc.class_attrs = attrs
         rc.has_default_attr = any(a.name == 'default_interface' for a in attrs)
         return out
@@ -630,7 +641,10 @@ def finish_classes(types, lookup):
                 fac.methods.append(m)
             else:
                 rc.activatable_default = True
-        if fac.methods:
+        # (an unsealed class with no constructors still has its factory,
+        # empty, as MIDL makes it: the class is composable, UIElement's
+        # IUIElementFactory)
+        if fac.methods or (not rc.sealed and not rc.static):
             made.append(('factory', fac))
         for k in ('static', 'overridable', 'protected'):
             if groups[k].methods:
@@ -658,4 +672,13 @@ def finish_classes(types, lookup):
                     attrs.append(Attribute('Windows.Foundation.Metadata.ProtectedAttribute', []))
                 rc.interfaces.append((TypeRef(it.name), attrs))
             rc.synth = getattr(rc, 'synth', []) + [(k, it.name)]
+        for battrs, bg in getattr(rc, 'hidden_blocks', []):
+            for k, it in bg.items():
+                if k == 'factory' and not rc.sealed:
+                    for m in it.methods:
+                        m.params = m.params + [Param('baseInterface', Prim('Object'), False),
+                                               Param('innerInterface', Prim('Object'), True)]
+                it.exclusive_to = rc.name
+                it.attrs = [a for a in rc.class_attrs if a.name == 'contract']
+                out[it.name] = it
     types.update(out)

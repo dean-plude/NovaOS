@@ -1,7 +1,7 @@
 // NovaOS: stand-ins, in the manner of Microsoft's isolated-test stubs
 // (components/unittests/stubs), for what the core's resource dictionary
 // (core/core/elements/Resources.cpp) calls in the parts of the core that do
-// not build yet: the framework's DXamlCore, CApplication's base URIs, the
+// not build yet: CApplication's base URIs, the
 // error service's invalid-operation errors, implicit-style invalidation and
 // eight of CDependencyObject's members from
 // core/core/elements/depends.cpp; and for the object writer runtime, the
@@ -9,7 +9,8 @@
 // markup reaches beyond resources (templates, styles, bindings, x:Type and
 // Setter targets, visual states, deferred names) and the simple
 // properties' value conversions.  (The core services themselves,
-// CCoreServices, build for real since part 9: core/dll/xcpcore.cpp.)
+// CCoreServices, build for real since part 9: core/dll/xcpcore.cpp; the
+// framework's DXamlCore stands in apart, src/framework_stubs.cpp.)
 // They say "nothing here": no managed peers; templates, styles and
 // bindings not available.  Compiled with the elements' flags into
 // xaml_teststubs.lib; they go as the core builds.
@@ -54,16 +55,6 @@ _Check_return_ HRESULT CErrorService::OriginateInvalidOperationError(_In_ CCoreS
                                                                      _In_ const xstring_ptr_view &, _In_ const xstring_ptr_view &)
 {
     return E_FAIL;
-}
-
-DirectUI::DXamlCore *DirectUI::DXamlCore::GetCurrent()
-{
-    return nullptr;
-}
-
-ctl::ComPtr<DirectUI::NullKeyedResource> DirectUI::DXamlCore::GetCachedNullKeyedResource()
-{
-    return nullptr;
 }
 
 _Check_return_ HRESULT CDependencyObject::SetParticipatesInManagedTreeDefault()

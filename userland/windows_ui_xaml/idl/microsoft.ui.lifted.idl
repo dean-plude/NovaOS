@@ -19,6 +19,15 @@ namespace Microsoft.UI.Input
         NoActivate = 2,
     };
 
+    // how near a touch is to an element (the Windows SDK's
+    // Windows.UI.Input.ProximityEvaluation, lifted): XAML's touch hit
+    // testing (dxaml/lib TouchHitTestingHandler.h) keeps the best one
+    struct ProximityEvaluation
+    {
+        Int32 Score;
+        Windows.Foundation.Point AdjustedPoint;
+    };
+
     // InputPointerSource's newer members (its TouchHitTesting event is left
     // out: XAML's handler for it is disabled in its sources)
     interface IInputPointerSource2

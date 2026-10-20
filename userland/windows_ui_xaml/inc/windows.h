@@ -56,6 +56,9 @@
 #ifndef RO_E_CLOSED
 #define RO_E_CLOSED _HRESULT_TYPEDEF_(0x80000013L)
 #endif
+#ifndef RO_E_CHANGE_NOTIFICATION_IN_PROGRESS
+#define RO_E_CHANGE_NOTIFICATION_IN_PROGRESS _HRESULT_TYPEDEF_(0x80000015L)
+#endif
 #ifndef RO_E_MUST_BE_AGILE
 #define RO_E_MUST_BE_AGILE _HRESULT_TYPEDEF_(0x80000021L)
 #endif
@@ -115,3 +118,10 @@ extern "C"
 #endif
 __declspec(dllimport) void __stdcall RtlGetDeviceFamilyInfoEnum(ULONGLONG *uapInfo, DWORD *deviceFamily, DWORD *deviceForm);
 #endif
+
+/* the Windows SDK's imm.h's ImmDisableLegacyIME (imm32 exports it), which
+ * MinGW-w64's lacks: DXamlCore turns the legacy IMEs off for its thread */
+#ifdef __cplusplus
+extern "C"
+#endif
+__declspec(dllimport) BOOL __stdcall ImmDisableLegacyIME(void);

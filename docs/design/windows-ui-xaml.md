@@ -392,11 +392,37 @@ vendors.
      the compiler has `__uuidof`).  `xamlloadtest` makes its core this
      way (no test hooks), with the system theme fixed at Dark through the
      theming's own test hook, and everything else as in part 9.
-   - *Next.*  `dxaml/lib` (`DXamlCore`, `XamlReader`, `Application`)
-     compiled as `Windows.UI.Xaml.dll` on this core, with the core's
-     metadata tables (`core/metadata`) and the rest of the core as they
-     are reached, until `Application.Start` runs and `XamlReader.Load`
-     parses a page, one component seam per pull request.
+   - *Part 11: the framework's entry points.*  `dxaml/lib`'s first
+     sources build on the core, as their own project
+     (`winrtfoundation/wrtdxamlfoundation.vcxproj`): `DXamlCore` (the
+     per-thread framework core whose `InitializeInstance` calls
+     `ObtainCoreServices`), its instance storage, `DXamlServices`,
+     `comTemplateLibrary`, `XamlReader` and `FrameworkApplication`, with
+     their generated classes (`XamlReader.g.cpp`,
+     `FrameworkApplication.g.cpp`).  The generated ABI headers grew what
+     these sources name: a disabled feature's members become their own
+     interface (`IXxxFeature_...`), unsealed classes always get their
+     factory, generic instances are closed over the interfaces they
+     require, and collection delegates keep their Windows names.  New
+     stand-ins: the restricted error info (`roerrorapi.h`), WRL's
+     `WrlSealed` and activatable class macros (activation goes through
+     the framework's own factories), `ICoreWindowInterop`, the
+     dispatcher's interop header, FrameworkUdk's back button, debug tool
+     and visual diagnostics port headers, Microsoft's TIP telemetry
+     (compiled out), `shobjidl_core.h` and WIL's app model header.
+     NovaOS gains MSVC's dynamic `thread_local` initialisation
+     (`__dyn_tls_init`, which `DXamlCore`'s per-thread storage uses),
+     `AppPolicyGetWindowingModel` and `ImmDisableLegacyIME`.
+     `xamlloadtest` makes `XamlReader`'s activation factory and calls
+     `XamlReader.Load` on a thread with no framework core, which answers
+     `RPC_E_WRONG_THREAD` as Windows does.
+   - *Next.*  What `DXamlCore::InitializeInstance` needs to run: the
+     control layer (`CJupiterControl`, `CXcpDispatcher`), the
+     dispatcher, `Window`, the error helper, the static store, the
+     default styles and the reference tracker, then the value boxer and
+     peers `XamlReader.Load` returns objects through, until
+     `Application.Start` runs and `XamlReader.Load` parses a page, one
+     component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

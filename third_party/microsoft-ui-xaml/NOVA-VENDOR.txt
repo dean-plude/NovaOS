@@ -42,7 +42,12 @@ its project and precompiled header, core/core/elements/geometry.cpp with
 the elements' lib/elements.vcxproj, components/theminginterop), the
 platform layer (plat/win/browserdesktop's xcpwin.cpp, PlatformServices.cpp,
 WinThreadPool.cpp and early_init.cpp, with its project, sources.props and
-precompiled header) and the headers those include, external/inc's gsl
+precompiled header), the framework's entry points (dxaml/lib's
+DXamlCore.cpp, DXamlInstanceStorage.cpp, DXamlServices.cpp,
+comTemplateLibrary.cpp, XamlReader.cpp and FrameworkApplication_Partial.cpp,
+winrtgeneratedclasses' XamlReader.g.cpp and FrameworkApplication.g.cpp, with
+lib/sources.props, lib/precomp.h and winrtfoundation/wrtdxamlfoundation.vcxproj)
+and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

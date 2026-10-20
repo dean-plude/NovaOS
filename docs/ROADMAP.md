@@ -1079,8 +1079,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   real on Microsoft's platform layer (`CWindowsServices`, handed to the
   core through `ObtainPlatformServices`) with the text core, media queue,
   render target bitmaps, geometry builder and system theming it makes,
-  built from their sources, in `xamlloadtest`.  Next: `dxaml/lib`
-  (`DXamlCore`, `XamlReader`, `Application`) as `Windows.UI.Xaml.dll`.
+  built from their sources, in `xamlloadtest`.  Eleventh part done: the
+  framework's entry points from `dxaml/lib` (`DXamlCore`, `XamlReader`,
+  `FrameworkApplication`, the instance storage and `DXamlServices`) built
+  from their sources on that core, with `XamlReader`'s activation factory
+  made and called in `xamlloadtest`.  Next: what
+  `DXamlCore::InitializeInstance` needs to run (the control layer's
+  `CJupiterControl`, the dispatcher, `Window`, the error helper and the
+  framework's static store), then `XamlReader.Load` and
+  `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

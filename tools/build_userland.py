@@ -474,11 +474,13 @@ def build_pass(arch, all_tasks):
     rt = os.path.join(odir, 'x86rt.obj')
     task('crt0', [], lambda: cc(os.path.join(HERE, 'crt', 'crt0.c'), crt0))
     task('tlssup', [], lambda: cc(os.path.join(HERE, 'lib', 'tlssup.c'), tlssup))
-    tlregdtr = os.path.join(odir, 'tlregdtr.lib')   # thread_local destructors, pulled in only where used
+    # thread_local destructors and run-time initializers, pulled in only where used
+    tlregdtr = os.path.join(odir, 'tlregdtr.lib')
     def build_tlregdtr():
-        obj = os.path.join(odir, 'tlregdtr.obj')
-        cc(os.path.join(HERE, 'lib', 'tlregdtr.c'), obj)
-        run(['lld-link', '/lib', f'/out:{tlregdtr}', obj])
+        objs = [os.path.join(odir, n + '.obj') for n in ('tlregdtr', 'tlsdyn')]
+        for o in objs:
+            cc(os.path.join(HERE, 'lib', os.path.basename(o)[:-4] + '.c'), o)
+        run(['lld-link', '/lib', f'/out:{tlregdtr}'] + objs)
     task('tlregdtr', [], build_tlregdtr)
     prelude = ['crt0', 'tlssup', 'tlregdtr']
     if arch == 'x86':                              # 64-bit division helpers the compiler calls

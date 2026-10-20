@@ -104,23 +104,23 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   coordinates converted between awareness contexts), `disptest`,
   `icutest` (ICU and locales, 64- and 32-bit), `comptest`
   (Windows.UI.Composition: visuals, colour and surface brushes, a
-  desktop window target, drawing surfaces on Direct3D 11 and Direct2D;
-  64- and 32-bit), `comtest`, `coreapptest` (CoreApplication.Run,
-  CoreWindow events and dispatcher, RunAsync, a swap chain for a
-  CoreWindow; 64- and 32-bit), `d2dctxtest` (Direct2D device contexts:
-  ID2D1Device on Direct3D 11, bitmaps on DXGI surfaces,
-  DirectComposition surfaces drawn with Direct2D; 64-bit),
-  `dispatchqtest` (the DispatcherQueue: work by priority, timers, the
-  event loop, a dedicated thread, shutdown; 64- and 32-bit), `wictest`,
-  `winrtabitest` (the generated Windows Runtime ABI headers: IIDs, and
-  the Compositor driven through them; 64- and 32-bit), `xamlbasetest`
-  (Microsoft's XAML core, lowest layer, built from its sources, and
-  NovaOS's WRL: ComPtr, RuntimeClass, weak references, Callback,
-  EventSource, HString), `xamlloadtest` (Microsoft's XAML object writer
-  and `CResourceDictionary`, built from its sources: XAML text loaded
-  into a live resource dictionary with merged and theme dictionaries,
-  through the core's own `CCoreServices`, made by
-  `CCoreServices::Create` on the platform layer's services, the
+  desktop window target, drawing surfaces on Direct3D 11 and Direct2D,
+  later interface versions, property sets, animations; 64- and 32-bit),
+  `comtest`, `coreapptest` (CoreApplication.Run, CoreWindow events and
+  dispatcher, RunAsync, a swap chain for a CoreWindow; 64- and 32-bit),
+  `d2dctxtest` (Direct2D device contexts: ID2D1Device on Direct3D 11,
+  bitmaps on DXGI surfaces, DirectComposition surfaces drawn with
+  Direct2D; 64-bit), `dispatchqtest` (the DispatcherQueue: work by
+  priority, timers, the event loop, a dedicated thread, shutdown; 64-
+  and 32-bit), `wictest`, `winrtabitest` (the generated Windows Runtime
+  ABI headers: IIDs, and the Compositor driven through them; 64- and
+  32-bit), `xamlbasetest` (Microsoft's XAML core, lowest layer, built
+  from its sources, and NovaOS's WRL: ComPtr, RuntimeClass, weak
+  references, Callback, EventSource, HString), `xamlloadtest`
+  (Microsoft's XAML object writer and `CResourceDictionary`, built from
+  its sources: XAML text loaded into a live resource dictionary with
+  merged and theme dictionaries, through the core's own `CCoreServices`,
+  made by `CCoreServices::Create` on the platform layer's services, the
   framework's `XamlReader` factory, and the control layer:
   `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create`
   up to the rendering seam), `xamlparsetest` (Microsoft's XAML parser,

@@ -2720,6 +2720,50 @@ K32 HRESULT WINAPI PathCchCombineEx(LPWSTR out, SIZE_T cch, LPCWSTR a, LPCWSTR b
     return hr;
 }
 K32 HRESULT WINAPI PathCchCombine(LPWSTR out, SIZE_T cch, LPCWSTR a, LPCWSTR b) { return PathCchCombineEx(out, cch, a, b, 0); }
+/* The last segment goes ("C:\a\b.exe" -> "C:\a", "C:\a" -> "C:\");
+ * S_FALSE if there was nothing after the root */
+K32 HRESULT WINAPI PathCchRemoveFileSpec(LPWSTR p, SIZE_T cch)
+{
+    if (!p || !cch) return E_INVALIDARG;
+    SIZE_T n = 0, root = (SIZE_T)pcc_root(p);
+    while (n < cch && p[n]) n++;
+    if (n == cch) return E_INVALIDARG;
+    SIZE_T i = n;
+    while (i > root && !pcc_sep(p[i - 1])) i--;
+    while (i > root && pcc_sep(p[i - 1])) i--;
+    if (i == n) return S_FALSE;
+    p[i] = 0;
+    return S_OK;
+}
+/* The extension of the last segment ("." included), or the terminator */
+K32 HRESULT WINAPI PathCchFindExtension(LPCWSTR p, SIZE_T cch, LPCWSTR *ext)
+{
+    if (!ext) return E_INVALIDARG;
+    *ext = 0;
+    if (!p || !cch) return E_INVALIDARG;
+    LPCWSTR dot = 0, s = p;
+    for (; (SIZE_T)(s - p) < cch && *s; s++) {
+        if (pcc_sep(*s) || *s == ' ') dot = 0;
+        else if (*s == '.') dot = s;
+    }
+    if ((SIZE_T)(s - p) == cch) return E_INVALIDARG;
+    *ext = dot ? dot : s;
+    return S_OK;
+}
+/* "b.exe" with @ext ("pri" or ".pri") -> "b.pri" */
+K32 HRESULT WINAPI PathCchRenameExtension(LPWSTR p, SIZE_T cch, LPCWSTR ext)
+{
+    LPCWSTR at;
+    if (!ext || FAILED(PathCchFindExtension(p, cch, &at))) return E_INVALIDARG;
+    SIZE_T o = (SIZE_T)(at - p), el = 0;
+    if (*ext == '.') ext++;
+    while (ext[el]) el++;
+    if (!el) { p[o] = 0; return S_OK; }
+    if (o + 1 + el + 1 > cch) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    p[o++] = '.';
+    memcpy(p + o, ext, (el + 1) * sizeof(WCHAR));
+    return S_OK;
+}
 
 /* No thread has I/O that is pending in the kernel on its behalf */
 K32 BOOL WINAPI GetThreadIOPendingFlag(HANDLE thread, PBOOL pending)
@@ -2780,167 +2824,6 @@ K32 BOOL WINAPI ReplaceFileA(LPCSTR repl, LPCSTR with, LPCSTR backup, DWORD flag
     MultiByteToWideChar(CP_ACP, 0, with, -1, w, MAX_PATH);
     if (backup) MultiByteToWideChar(CP_ACP, 0, backup, -1, k, MAX_PATH);
     return ReplaceFileW(r, w, backup ? k : 0, flags, a, b);
-}
-
-/* Packaged (MSIX) apps: NovaOS runs none, so no process has a package */
-#define APPMODEL_ERROR_NO_PACKAGE     15700
-#define APPMODEL_ERROR_NO_APPLICATION 15703
-K32 LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name) { (void)name; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-K32 LONG WINAPI GetCurrentPackageId(UINT32 *len, BYTE *buf) { (void)buf; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-K32 LONG WINAPI GetCurrentPackageFamilyName(UINT32 *len, PWSTR name) { (void)name; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-K32 LONG WINAPI GetCurrentPackagePath(UINT32 *len, PWSTR path) { (void)path; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-K32 LONG WINAPI GetCurrentApplicationUserModelId(UINT32 *len, PWSTR id) { (void)id; if (len) *len = 0; return APPMODEL_ERROR_NO_APPLICATION; }
-K32 LONG WINAPI GetApplicationUserModelId(HANDLE p, UINT32 *len, PWSTR id) { (void)p; (void)id; if (len) *len = 0; return APPMODEL_ERROR_NO_APPLICATION; }
-K32 LONG WINAPI GetPackageFullName(HANDLE p, UINT32 *len, PWSTR name) { (void)p; (void)name; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-K32 LONG WINAPI GetPackageFamilyName(HANDLE p, UINT32 *len, PWSTR name) { (void)p; (void)name; if (len) *len = 0; return APPMODEL_ERROR_NO_PACKAGE; }
-/* No package is installed either: a family has none, a full name is not
- * found (Chromium asks for the WebView2 runtime's MSIX packages) */
-K32 LONG WINAPI FindPackagesByPackageFamily(PCWSTR family, UINT32 filter, UINT32 *count, PWSTR *names,
-                                            UINT32 *len, WCHAR *buf, UINT32 *props)
-{
-    (void)filter; (void)names; (void)buf; (void)props;
-    if (!family || !count || !len) return ERROR_INVALID_PARAMETER;
-    *count = 0;
-    *len = 0;
-    return ERROR_SUCCESS;
-}
-K32 LONG WINAPI GetPackagePathByFullName(PCWSTR full, UINT32 *len, PWSTR path)
-{
-    (void)path;
-    if (!full || !len) return ERROR_INVALID_PARAMETER;
-    return ERROR_NOT_FOUND;
-}
-K32 LONG WINAPI OpenPackageInfoByFullName(PCWSTR full, UINT32 reserved, void **ref)
-{
-    (void)reserved;
-    if (!full || !ref) return ERROR_INVALID_PARAMETER;
-    *ref = 0;
-    return ERROR_NOT_FOUND;
-}
-K32 LONG WINAPI GetPackageApplicationIds(void *ref, UINT32 *len, BYTE *buf, UINT32 *count)
-{
-    (void)buf;
-    if (len) *len = 0;
-    if (count) *count = 0;
-    return ref ? ERROR_NOT_FOUND : ERROR_INVALID_PARAMETER;   /* no reference was ever handed out */
-}
-K32 LONG WINAPI ClosePackageInfo(void *ref) { return ref ? ERROR_SUCCESS : ERROR_INVALID_PARAMETER; }
-
-/* A package full name is Name_Version_Architecture_ResourceId_PublisherId
- * (the resource id may be empty); its family name is Name_PublisherId */
-static int package_parts(PCWSTR full, PCWSTR part[5], int len[5])
-{
-    int n = 0;
-    PCWSTR s = full;
-    if (!full) return 0;
-    for (PCWSTR p = full;; p++) {
-        if (*p == '_' || !*p) {
-            if (n == 5) return 0;
-            part[n] = s; len[n] = (int)(p - s); n++;
-            if (!*p) break;
-            s = p + 1;
-        }
-    }
-    if (n != 5 || !len[0] || !len[1] || !len[2] || !len[4]) return 0;
-    return 1;
-}
-
-K32 LONG WINAPI PackageFamilyNameFromFullName(PCWSTR full, UINT32 *len, PWSTR out)
-{
-    PCWSTR part[5]; int l[5];
-    if (!len || !package_parts(full, part, l)) return ERROR_INVALID_PARAMETER;
-    UINT32 need = (UINT32)(l[0] + 1 + l[4] + 1);
-    if (!out || *len < need) { *len = need; return ERROR_INSUFFICIENT_BUFFER; }
-    memcpy(out, part[0], l[0] * sizeof(WCHAR));
-    out[l[0]] = '_';
-    memcpy(out + l[0] + 1, part[4], l[4] * sizeof(WCHAR));
-    out[need - 1] = 0;
-    *len = need;
-    return ERROR_SUCCESS;
-}
-
-/* PACKAGE_ID, then its strings; the publisher's full name is only known
- * for an installed package (none is), so it is left out */
-typedef struct { UINT32 reserved, processorArchitecture; UINT64 version; PWSTR name, publisher, resourceId, publisherId; } PackageId;
-
-K32 LONG WINAPI PackageIdFromFullName(PCWSTR full, UINT32 flags, UINT32 *len, BYTE *buf)
-{
-    static const struct { const char *s; UINT32 arch; } archs[] = {
-        { "x86", 0 }, { "arm", 5 }, { "x64", 9 }, { "neutral", 11 }, { "arm64", 12 }, { "x86a64", 14 } };
-    PCWSTR part[5]; int l[5];
-    if (!len || !package_parts(full, part, l)) return ERROR_INVALID_PARAMETER;
-    if (flags & 0x100 /* PACKAGE_INFORMATION_FULL */) return APPMODEL_ERROR_NO_PACKAGE;
-    UINT64 ver = 0; int fields = 0; UINT32 v = 0;
-    for (int i = 0; i <= l[1]; i++) {
-        WCHAR c = i < l[1] ? part[1][i] : '.';
-        if (c == '.') { if (fields == 4 || v > 0xFFFF) return ERROR_INVALID_PARAMETER; ver = ver << 16 | v; v = 0; fields++; }
-        else if (c >= '0' && c <= '9') v = v * 10 + (c - '0');
-        else return ERROR_INVALID_PARAMETER;
-    }
-    if (fields != 4) return ERROR_INVALID_PARAMETER;
-    UINT32 arch = ~0u;
-    for (int i = 0; i < 6; i++) {
-        int k = 0;
-        while (k < l[2] && archs[i].s[k] && (part[2][k] | 32) == archs[i].s[k]) k++;
-        if (k == l[2] && !archs[i].s[k]) arch = archs[i].arch;
-    }
-    if (arch == ~0u) return ERROR_INVALID_PARAMETER;
-    UINT32 need = sizeof(PackageId) + (UINT32)(l[0] + 1 + l[3] + 1 + l[4] + 1) * sizeof(WCHAR);
-    if (!buf || *len < need) { *len = need; return ERROR_INSUFFICIENT_BUFFER; }
-    PackageId *id = (PackageId *)buf;
-    WCHAR *w = (WCHAR *)(id + 1);
-    memset(id, 0, sizeof *id);
-    id->processorArchitecture = arch;
-    id->version = ver;
-    PWSTR *dst[3] = { &id->name, &id->resourceId, &id->publisherId };
-    int which[3] = { 0, 3, 4 };
-    for (int i = 0; i < 3; i++) {
-        *dst[i] = w;
-        memcpy(w, part[which[i]], l[which[i]] * sizeof(WCHAR));
-        w[l[which[i]]] = 0;
-        w += l[which[i]] + 1;
-    }
-    *len = need;
-    return ERROR_SUCCESS;
-}
-
-/* no package is installed, so a family has no members */
-K32 LONG WINAPI GetPackagesByPackageFamily(PCWSTR family, UINT32 *count, PWSTR *names, UINT32 *len, WCHAR *buf)
-{
-    (void)names; (void)buf;
-    if (!family || !count || !len) return ERROR_INVALID_PARAMETER;
-    *count = 0;
-    *len = 0;
-    return ERROR_SUCCESS;
-}
-
-/* an unpackaged desktop process ends with ExitProcess */
-K32 LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, int *policy)
-{
-    (void)token;
-    if (!policy) return ERROR_INVALID_PARAMETER;
-    *policy = 0;                                    /* AppPolicyProcessTerminationMethod_ExitProcess */
-    return ERROR_SUCCESS;
-}
-
-/* and initializes nothing for its threads (a packaged app's threads start
- * in the Windows Runtime's MTA) */
-K32 LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, int *policy)
-{
-    (void)token;
-    if (!policy) return ERROR_INVALID_PARAMETER;
-    *policy = 0;                                    /* AppPolicyThreadInitializationType_None */
-    return ERROR_SUCCESS;
-}
-
-/* and has classic desktop windows (XAML asks before it makes a CoreWindow
- * or a desktop window of its own) */
-K32 LONG WINAPI AppPolicyGetWindowingModel(HANDLE token, int *policy)
-{
-    (void)token;
-    if (!policy) return ERROR_INVALID_PARAMETER;
-    *policy = 2;                                    /* AppPolicyWindowingModel_ClassicDesktop */
-    return ERROR_SUCCESS;
 }
 
 K32 BOOL WINAPI GetProcessHandleCount(HANDLE p, PDWORD n)

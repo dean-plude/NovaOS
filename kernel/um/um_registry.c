@@ -881,6 +881,9 @@ static void defaults(void)
             kset_dword(k, "Threading", 0);
         }
     }
+    /* ApplicationActivationManager (twinapi.appcore.dll): starts packaged apps */
+    RegKey *aam = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{45BA127D-10A8-46EA-8AB7-56EA9078943C}\\InprocServer32", false);
+    if (!has_value(aam, "")) { kset_sz(aam, "", "twinapi.appcore.dll", 1); kset_sz(aam, "ThreadingModel", "Both", 1); }
     /* DirectSound and DirectSoundCapture (dsound.dll), so CoCreateInstance finds them */
     static const char *const ds_clsids[] = {
         "{47D4D946-62E8-11CF-93BC-444553540000}", "{3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}",

@@ -934,7 +934,9 @@ static View g_view = { (const void *const *)view_vt };
 
 /* LaunchActivatedEventArgs: Kind Launch (0), PreviousExecutionState
  * NotRunning (0), no splash screen; Arguments are the command line after
- * the program's name, TileId "App" */
+ * the program's name (ApplicationActivationManager, activation.c, puts the
+ * activation's arguments there), TileId the packaged application's id
+ * ("App" for a program outside a package) */
 typedef struct { const void *const *act; const void *const *launch; LONG refs; HSTRING args; } Launch;
 #define LAUNCH_OF_L(p) ((Launch *)((char *)(p) - __builtin_offsetof(Launch, launch)))
 static HRESULT STDMETHODCALLTYPE la_qi(Launch *l, REFIID iid, void **out)
@@ -962,7 +964,17 @@ static ULONG STDMETHODCALLTYPE ll_addref(void *p) { return la_addref(LAUNCH_OF_L
 static ULONG STDMETHODCALLTYPE ll_release(void *p) { return la_release(LAUNCH_OF_L(p)); }
 static HRESULT STDMETHODCALLTYPE ll_name(void *p, HSTRING *n) { return la_name(LAUNCH_OF_L(p), n); }
 static HRESULT STDMETHODCALLTYPE ll_arguments(void *p, HSTRING *v) { if (!v) return E_POINTER; return WindowsDuplicateString(LAUNCH_OF_L(p)->args, v); }
-static HRESULT STDMETHODCALLTYPE ll_tile(void *p, HSTRING *v) { (void)p; return make_hstring(L"App", v); }
+LONG WINAPI GetCurrentApplicationUserModelId(UINT32 *len, PWSTR id);
+static HRESULT STDMETHODCALLTYPE ll_tile(void *p, HSTRING *v)
+{
+    (void)p;
+    WCHAR id[200];
+    UINT32 n = 200;
+    const WCHAR *app = L"App";
+    if (!GetCurrentApplicationUserModelId(&n, id))
+        for (const WCHAR *s = id; *s; s++) if (*s == '!') app = s + 1;
+    return make_hstring(app, v);
+}
 static const void *const launch_act_vt[] = { (void *)la_qi, (void *)la_addref, (void *)la_release, (void *)no_iids, (void *)la_name,
                                              (void *)base_trust, (void *)la_kind, (void *)la_prev, (void *)la_splash };
 static const void *const launch_vt[] = { (void *)ll_qi, (void *)ll_addref, (void *)ll_release, (void *)no_iids, (void *)ll_name,

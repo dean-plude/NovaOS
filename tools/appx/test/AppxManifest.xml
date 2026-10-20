@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The appx self-test's package (tools/appx/mktest.py): a full trust
+     program (appxtest.exe) and an in-process Windows Runtime class
+     (greeter.dll), its names in resources.pri -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap rescap">
+  <Identity Name="NovaOS.PackageTest"
+            Publisher="CN=NovaOS Package Test, OID.2.25.311729368913984317654407730594956997722=1"
+            Version="1.0.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>ms-resource:AppDisplayName</DisplayName>
+    <PublisherDisplayName>NovaOS</PublisherDisplayName>
+    <Logo>appxtest.exe</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="App" Executable="appxtest.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="ms-resource:AppDisplayName" Description="The appx self-test's package"
+                          BackgroundColor="transparent" Square150x150Logo="appxtest.exe" Square44x44Logo="appxtest.exe" />
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+  <Extensions>
+    <Extension Category="windows.activatableClass.inProcessServer">
+      <InProcessServer>
+        <Path>greeter.dll</Path>
+        <ActivatableClass ActivatableClassId="NovaOS.PackageTest.Greeter" ThreadingModel="both" />
+      </InProcessServer>
+    </Extension>
+  </Extensions>
+</Package>

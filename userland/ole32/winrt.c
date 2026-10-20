@@ -242,8 +242,137 @@ WINOLEAPI_(HRESULT) RoActivateInstance(HSTRING cls, void **inst)
     f->lpVtbl->Release(f);
     return hr;
 }
-WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg) { (void)hr; (void)len; (void)msg; return FALSE; }
-WINOLEAPI_(BOOL) RoOriginateError(HRESULT hr, HSTRING msg) { (void)hr; (void)msg; return FALSE; }
+/* The Windows Runtime's error objects: RoOriginateError makes an
+ * IRestrictedErrorInfo (the error and its message) the thread's, which
+ * GetRestrictedErrorInfo takes (and clears) and SetRestrictedErrorInfo
+ * replaces.  NovaOS keeps no capability SID or reference, and no stack.
+ * RoGetErrorReportingFlags answers RO_ERROR_REPORTING_NONE: originating an
+ * error does not also set the COM error object (SetErrorInfo), so callers
+ * that want one (XAML's error helper) set it themselves, as they do on
+ * Windows under those flags. */
+typedef struct RErr RErr;
+typedef struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(RErr *, REFIID, void **);
+    ULONG   (STDMETHODCALLTYPE *AddRef)(RErr *);
+    ULONG   (STDMETHODCALLTYPE *Release)(RErr *);
+    HRESULT (STDMETHODCALLTYPE *GetErrorDetails)(RErr *, WCHAR **, HRESULT *, WCHAR **, WCHAR **);
+    HRESULT (STDMETHODCALLTYPE *GetReference)(RErr *, WCHAR **);
+} RErrVtbl;
+struct RErr { const RErrVtbl *lpVtbl; LONG refs; HRESULT hr; WCHAR *msg; UINT32 len; };
+static const GUID IID_IRestrictedErrorInfo_ = { 0x82BA7092, 0x4C88, 0x427D, { 0xA7, 0xBC, 0x16, 0xDD, 0x93, 0xFE, 0xB6, 0x7E } };
+static const GUID IID_IUnknown_re = { 0, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static DWORD g_rerr_tls = TLS_OUT_OF_INDEXES;
+static INIT_ONCE g_rerr_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK rerr_tls_init(INIT_ONCE *o, void *p, void **c) { (void)o; (void)p; (void)c; g_rerr_tls = TlsAlloc(); return TRUE; }
+static DWORD rerr_tls(void) { InitOnceExecuteOnce(&g_rerr_once, rerr_tls_init, 0, 0); return g_rerr_tls; }
+/* a WCHAR * as oleaut32 makes them (its length before it, in CoTaskMem) */
+static WCHAR *rerr_bstr(const WCHAR *s, UINT32 n)
+{
+    BYTE *p = CoTaskMemAlloc(sizeof(DWORD) + n * sizeof(WCHAR) + sizeof(WCHAR));
+    if (!p) return 0;
+    *(DWORD *)p = n * sizeof(WCHAR);
+    WCHAR *b = (WCHAR *)(p + sizeof(DWORD));
+    for (UINT32 i = 0; i < n; i++) b[i] = s[i];
+    b[n] = 0;
+    return b;
+}
+static HRESULT STDMETHODCALLTYPE rerr_qi(RErr *e, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown_re) || IsEqualGUID(iid, &IID_IRestrictedErrorInfo_)) {
+        *out = e;
+        InterlockedIncrement(&e->refs);
+        return S_OK;
+    }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE rerr_addref(RErr *e) { return (ULONG)InterlockedIncrement(&e->refs); }
+static ULONG STDMETHODCALLTYPE rerr_release(RErr *e)
+{
+    LONG r = InterlockedDecrement(&e->refs);
+    if (!r) { HeapFree(GetProcessHeap(), 0, e->msg); HeapFree(GetProcessHeap(), 0, e); }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE rerr_details(RErr *e, WCHAR **desc, HRESULT *hr, WCHAR **rdesc, WCHAR **sid)
+{
+    if (!desc || !hr || !rdesc || !sid) return E_POINTER;
+    *hr = e->hr;
+    *desc = rerr_bstr(e->msg ? e->msg : L"", e->msg ? e->len : 0);
+    *rdesc = rerr_bstr(e->msg ? e->msg : L"", e->msg ? e->len : 0);
+    *sid = 0;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE rerr_reference(RErr *e, WCHAR **ref) { (void)e; if (!ref) return E_POINTER; *ref = 0; return S_OK; }
+static const RErrVtbl rerr_vtbl = { rerr_qi, rerr_addref, rerr_release, rerr_details, rerr_reference };
+
+WINOLEAPI SetRestrictedErrorInfo(IUnknown *info)
+{
+    DWORD tls = rerr_tls();
+    if (tls == TLS_OUT_OF_INDEXES) return E_OUTOFMEMORY;
+    IUnknown *old = TlsGetValue(tls);
+    if (info) info->lpVtbl->AddRef(info);
+    TlsSetValue(tls, info);
+    if (old) old->lpVtbl->Release(old);
+    return S_OK;
+}
+WINOLEAPI GetRestrictedErrorInfo(IUnknown **info)
+{
+    if (!info) return E_POINTER;
+    DWORD tls = rerr_tls();
+    *info = tls == TLS_OUT_OF_INDEXES ? 0 : TlsGetValue(tls);
+    if (!*info) return S_FALSE;
+    TlsSetValue(tls, 0);                                /* (the caller now holds the thread's reference) */
+    return S_OK;
+}
+WINOLEAPI RoGetErrorReportingFlags(UINT32 *flags)
+{
+    if (!flags) return E_POINTER;
+    *flags = 0;                                         /* RO_ERROR_REPORTING_NONE */
+    return S_OK;
+}
+/* A message of len characters (0: up to its NUL), as Windows keeps them:
+ * at most 512 characters */
+WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg)
+{
+    if (SUCCEEDED(hr)) return FALSE;
+    RErr *e = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *e);
+    if (!e) return FALSE;
+    e->lpVtbl = &rerr_vtbl;
+    e->refs = 1;
+    e->hr = hr;
+    if (msg) {
+        UINT32 n = 0;
+        while ((len == 0 || n < len) && msg[n] && n < 512) n++;
+        e->msg = HeapAlloc(GetProcessHeap(), 0, (n + 1) * sizeof(WCHAR));
+        if (e->msg) {
+            for (UINT32 i = 0; i < n; i++) e->msg[i] = msg[i];
+            e->msg[n] = 0;
+            e->len = n;
+        }
+    }
+    SetRestrictedErrorInfo((IUnknown *)e);
+    rerr_release(e);
+    return TRUE;
+}
+WINOLEAPI_(BOOL) RoOriginateError(HRESULT hr, HSTRING msg)
+{
+    UINT32 n = 0;
+    const WCHAR *s = msg ? WindowsGetStringRawBuffer(msg, &n) : 0;
+    return RoOriginateErrorW(hr, n, s);
+}
+/* An error no handler took: Windows raises CoreApplication's
+ * UnhandledErrorDetected and FinalUnhandledErrorDetected events, which
+ * NovaOS's CoreApplication does not have yet; so this reports the error on
+ * the debugger's output and fails, which tells the caller the events were
+ * not raised (XAML's error helper then handles the error itself) */
+WINOLEAPI RoReportUnhandledError(IUnknown *info)
+{
+    if (!info) return E_INVALIDARG;
+    OutputDebugStringA("RoReportUnhandledError: an unhandled Windows Runtime error\n");
+    return E_NOTIMPL;
+}
 /* C++/WinRT's hresult_error reports through this before it throws; there is
  * no debugger to tell, so the error is only thrown (FALSE: not reported) */
 WINOLEAPI_(BOOL) RoOriginateLanguageException(HRESULT hr, HSTRING msg, IUnknown *e) { (void)hr; (void)msg; (void)e; return FALSE; }

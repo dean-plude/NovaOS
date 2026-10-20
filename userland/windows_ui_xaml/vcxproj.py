@@ -65,9 +65,9 @@ def read(path, props):
                 p = find_case(os.path.join(here, p.replace('\\', '/')))
                 if p and os.path.isdir(p):
                     res['includes'].append(p)
+    # (a list that extends the inherited one names it first, "$(...) A; B")
     for block in re.findall(r'<ProjectPreprocessorDefinitions>(.*?)</ProjectPreprocessorDefinitions>', text, re.S):
-        for d in block.split(';'):
-            d = d.strip()
+        for d in re.split(r'[;\s]+', block):
             if d and not d.startswith('$('):
                 res['defines'].append(d)
     return res

@@ -38,4 +38,12 @@ test_scope<Test> start_and_watch_errors()
     return test_scope<Test>();
 }
 
+/* the test running on this thread, for a step that happens elsewhere (the
+ * control layer's dispatcher, for DXamlCore's start) */
+template <class Test>
+test_scope<Test> open()
+{
+    return test_scope<Test>();
+}
+
 } // namespace tip

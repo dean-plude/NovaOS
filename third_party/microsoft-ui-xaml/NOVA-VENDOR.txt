@@ -46,8 +46,13 @@ precompiled header), the framework's entry points (dxaml/lib's
 DXamlCore.cpp, DXamlInstanceStorage.cpp, DXamlServices.cpp,
 comTemplateLibrary.cpp, XamlReader.cpp and FrameworkApplication_Partial.cpp,
 winrtgeneratedclasses' XamlReader.g.cpp and FrameworkApplication.g.cpp, with
-lib/sources.props, lib/precomp.h and winrtfoundation/wrtdxamlfoundation.vcxproj)
-and the headers those include, external/inc's gsl
+lib/sources.props, lib/precomp.h and winrtfoundation/wrtdxamlfoundation.vcxproj,
+then ErrorHelper.cpp and JupiterControl.cpp), the control layer
+(control/common/shared's ControlBase.cpp and FrameCounter.cpp with sl/controlBase.vcxproj,
+sl/sources.g.props, sources.props and precomp.h; win/shared's xcpwindow.cpp
+and PendingMessages.cpp with sl/shared.vcxproj, sources.props and precomp.h;
+host/win/browserdesktop/WinBrowserHost.cpp with hostpalplatmisc.vcxproj and
+the top-level precomp.h) and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

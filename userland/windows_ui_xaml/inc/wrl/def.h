@@ -13,6 +13,10 @@
 #ifndef WrlFinal
 #define WrlFinal final
 #endif
+/* (and the Windows SDK's other spelling, XAML's collections') */
+#ifndef WrlSealed
+#define WrlSealed final
+#endif
 
 namespace Microsoft { namespace WRL {
 enum RuntimeClassType

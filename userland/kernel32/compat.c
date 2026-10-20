@@ -2933,6 +2933,16 @@ K32 LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, int *policy)
     return ERROR_SUCCESS;
 }
 
+/* and has classic desktop windows (XAML asks before it makes a CoreWindow
+ * or a desktop window of its own) */
+K32 LONG WINAPI AppPolicyGetWindowingModel(HANDLE token, int *policy)
+{
+    (void)token;
+    if (!policy) return ERROR_INVALID_PARAMETER;
+    *policy = 2;                                    /* AppPolicyWindowingModel_ClassicDesktop */
+    return ERROR_SUCCESS;
+}
+
 K32 BOOL WINAPI GetProcessHandleCount(HANDLE p, PDWORD n)
 {
     if (!n) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }

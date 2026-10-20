@@ -60,6 +60,9 @@ public:
     }
     HSTRING *ReleaseAndGetAddressOf() throw() { return GetAddressOf(); }
     HSTRING Get() const throw() { return hstr_; }
+    /* (as MSVC's WRL is used: an HString passed where an HSTRING is taken,
+     * Application's launch arguments, dxaml/lib FrameworkApplication_Partial.cpp) */
+    operator HSTRING() const throw() { return hstr_; }
     void Release() throw()
     {
         if (hstr_) {

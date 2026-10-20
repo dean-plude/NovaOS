@@ -28,7 +28,9 @@
 # core's include path, its precompiled header and C++ exceptions, for
 # programs that say "xaml": "parser"), and the core services, CCoreServices
 # (xaml_core.lib, for programs that say "xaml": "core", with stand-ins
-# for the rest of the core: unbuilt()).  inc/ also stands in for the closed
+# for the rest of the core: unbuilt()), with the framework's entry points
+# above it (dxaml/lib: DXamlCore, XamlReader, Application; programs that say
+# "xaml": "framework").  inc/ also stands in for the closed
 # Windows App SDK headers those include (FrameworkUdk's helpers, the lifted
 # IXP interop headers); the rest of the core links as it builds.
 import os, re, subprocess, threading
@@ -108,7 +110,10 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
                   ('core/core/elements/lib/elements.vcxproj', 'core/core/elements/sources.props',
                    'core/core/elements/pch/precomp.h', []),
                   ('plat/win/browserdesktop/platwinbrowserdesktop.vcxproj', 'plat/win/browserdesktop/sources.props',
-                   'plat/win/browserdesktop/precomp.h', [])]
+                   'plat/win/browserdesktop/precomp.h', []),
+                  ('dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj', 'dxaml/lib/sources.props', 'dxaml/lib/precomp.h',
+                   [os.path.join(XCP, 'dxaml', 'lib', 'winrtgeneratedclasses', f)
+                    for f in ('XamlReader.g.cpp', 'FrameworkApplication.g.cpp')])]
 # the sources of a CORE_LIBRARIES project built so far, when not all of
 # them, which make xaml_core.lib: of the core's own library
 # (xcpcore.vcxproj), the core services, CCoreServices (dll/xcpcore.cpp,
@@ -122,14 +127,24 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
 # the geometry builder, CGeometryBuilder (the elements' geometry.cpp); and
 # the platform layer, CWindowsServices (plat/win/browserdesktop: gps, the
 # platform services ObtainPlatformServices hands the core, with its
-# thread pool work items).  What they call in the rest of the core stands
-# in until it builds (unbuilt())
+# thread pool work items); and of the framework above the core (dxaml/lib,
+# what becomes Windows.UI.Xaml.dll: the foundation library's
+# wrtdxamlfoundation.vcxproj, with its generated classes'
+# XamlReader.g.cpp and FrameworkApplication.g.cpp), its core per thread,
+# DXamlCore, with the thread's instance storage and DXamlServices, the
+# activation factories' checks (comTemplateLibrary.cpp), XamlReader and
+# Application (FrameworkApplication).  What they call in the rest of the
+# core and the framework stands in until it builds (unbuilt())
 CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namescope.cpp', 'dll/rendertargetbitmapmgr.cpp',
                                          'dethunk/elements/MediaQueue.cpp'),
                 'core/native/text/Common/Native.Text.Common.vcxproj': ('WinTextCore.cpp',),
                 'core/core/elements/lib/elements.vcxproj': ('../geometry.cpp',),
                 'plat/win/browserdesktop/platwinbrowserdesktop.vcxproj': ('xcpwin.cpp', 'PlatformServices.cpp',
-                                                                          'WinThreadPool.cpp', 'early_init.cpp')}
+                                                                          'WinThreadPool.cpp', 'early_init.cpp'),
+                'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj': ('../DXamlCore.cpp', '../DXamlInstanceStorage.cpp',
+                                                                         '../DXamlServices.cpp', '../comTemplateLibrary.cpp',
+                                                                         '../XamlReader.cpp',
+                                                                         '../FrameworkApplication_Partial.cpp')}
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
@@ -146,9 +161,15 @@ CORE_FIRST = {'core/core/elements/libexcept/elements.except.vcxproj': ['windows.
 CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] = \
     CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj'] = \
     CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+# (and the framework's, dxaml/lib, as theirs, with the application's
+# activation arguments and drag and drop's data package, which it holds)
+CORE_FIRST['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = \
+    CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h', 'windows.applicationmodel.activation.h',
+                                          'windows.applicationmodel.datatransfer.h']
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
-PROGRAM_CORE = {'parser': 0, 'elements': 2, 'core': 3}
+# ("framework": the framework's, dxaml/lib's, linked as "core" is)
+PROGRAM_CORE = {'parser': 0, 'elements': 2, 'core': 3, 'framework': 7}
 EXCEPTIONS = ['-fcxx-exceptions', '-fexceptions', '-U_HAS_EXCEPTIONS', '-D_HAS_EXCEPTIONS=1',
               '-UWIL_SUPPRESS_EXCEPTIONS']
 
@@ -214,8 +235,9 @@ STUB_RENAMES = {'DependencyObject_Stub.cpp': ('AddPeerReferenceToItem', 'RemoveP
                 'MockClassInfo.cpp': ('GetCoreConstructor',)}
 PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # the DLLs XAML's sources call beyond a program's usual ones (the parser
-# reads XML with XmlLite, the URI library builds URIs with urlmon)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon']
+# reads XML with XmlLite, the URI library builds URIs with urlmon, the
+# framework turns the legacy IMEs off with imm32)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -385,10 +407,10 @@ _STUBS = threading.Lock()
 
 # the stubs that stand in for the core services themselves (the core's
 # own CoreServices_Stub.cpp; NovaOS's core members, error service and
-# platform services), each alone in its object, which a program on the real
-# core ("xaml": "core") does not link
+# platform services) and for the framework's DXamlCore, each alone in its
+# object, which a program on the real core ("xaml": "core") does not link
 CORE_SERVICES_STUBS = ('CoreServices_Stub.cpp', 'core_services_stubs.cpp', 'error_service.cpp',
-                       'platform_services.cpp')
+                       'platform_services.cpp', 'framework_stubs.cpp')
 
 
 def test_stubs(b, odir):
@@ -423,7 +445,7 @@ def test_stubs(b, odir):
         # src/error_service.cpp)
         objs += b.compile_many([os.path.join(HERE, 'src', x) for x in (
             'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp', 'core_services_stubs.cpp',
-            'error_service.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
+            'error_service.cpp', 'framework_stubs.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
             headers, compiler='clang++')
         core_objs = [o for o in objs if not os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' in CORE_SERVICES_STUBS]
         for out, members in ((lib, objs), (core_lib, core_objs)):
@@ -452,10 +474,10 @@ def program_objs(b, odir):
 def program_link(prog, objs):
     """of program_objs() @objs, what program @prog links: xaml_components.lib
     and, after it, xaml_teststubs.lib; or, for a program on the core itself
-    ("xaml": "core"), xaml_core.lib, xaml_corestubs.lib and the stand-ins
-    for the core not yet built (unbuilt())"""
+    ("xaml": "core", or "framework"), xaml_core.lib, xaml_corestubs.lib
+    and the stand-ins for the core not yet built (unbuilt())"""
     components, stubs, core, core_stubs = objs[:4]
-    if prog.get('xaml') == 'core':
+    if prog.get('xaml') in ('core', 'framework'):
         return [components, core, core_stubs] + objs[4:]
     return [components, stubs]
 

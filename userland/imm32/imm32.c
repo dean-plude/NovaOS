@@ -19,6 +19,8 @@ IMMAPI BOOL WINAPI ImmAssociateContextEx(HWND w, HIMC c, DWORD flags) { (void)w;
 IMMAPI HWND WINAPI ImmGetDefaultIMEWnd(HWND w) { (void)w; return 0; }
 IMMAPI BOOL WINAPI ImmIsIME(HKL_ kl) { (void)kl; return FALSE; }
 IMMAPI BOOL WINAPI ImmDisableIME(DWORD tid) { (void)tid; return TRUE; }
+/* the legacy (pre-TSF) IMEs, of which there are none */
+IMMAPI BOOL WINAPI ImmDisableLegacyIME(void) { return TRUE; }
 IMMAPI BOOL WINAPI ImmDisableTextFrameService(DWORD tid) { (void)tid; return TRUE; }
 IMMAPI UINT WINAPI ImmGetIMEFileNameA(HKL_ kl, LPSTR buf, UINT n) { (void)kl; if (buf && n) buf[0] = 0; return 0; }
 IMMAPI BOOL WINAPI ImmGetOpenStatus(HIMC c) { (void)c; return FALSE; }

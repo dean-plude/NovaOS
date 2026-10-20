@@ -12,6 +12,7 @@
 #include <wrl/def.h>
 #include <wrl/internal.h>
 #include <wrl/client.h>
+#include <roerrorapi.h>
 
 namespace Microsoft { namespace WRL {
 

@@ -15,7 +15,11 @@
  * (CCoreServices, core/dll/xcpcore.cpp), which load the XAML as
  * XamlReader.Load has them load it (CCoreServices::ParseXaml); and
  * (part 10) the core made as the framework makes it, by
- * CCoreServices::Create on the platform layer's services.
+ * CCoreServices::Create on the platform layer's services; and (part 11)
+ * built with the framework above the core (dxaml/lib, what becomes
+ * Windows.UI.Xaml.dll): its per-thread core, DXamlCore, and the public
+ * XamlReader's activation factory, which on a thread without XAML refuses
+ * to load, as Windows' does.
  *
  * Until the core's generated type table builds, the table here activates
  * the handful of types the cases use (below).
@@ -36,6 +40,7 @@
 #include <CStaticLock.h>
 #include <ParserAPI.h>
 #include <SystemThemingInterop.h>
+#include <XamlReader.g.h>
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
@@ -270,11 +275,33 @@ static void test_load()
     if (root) root->Release();
 }
 
+/* the framework (dxaml/lib) on a thread it has not started on: no
+ * DXamlCore, and XamlReader.Load, through its activation factory (the
+ * public IXamlReaderStatics), refuses with RPC_E_WRONG_THREAD before it
+ * parses anything, as Windows.UI.Xaml does on a thread without XAML (the
+ * core's own loading, above, does not need the framework) */
+static void test_framework()
+{
+    CHECK("no framework core on this thread", DirectUI::DXamlCore::GetCurrent() == nullptr);
+    CHECK("the framework is not initialized here", !DirectUI::DXamlServices::IsDXamlCoreInitialized());
+    ctl::ComPtr<DirectUI::XamlReaderFactory> reader;
+    CHECK_HR("XamlReader's activation factory", ctl::ComObject<DirectUI::XamlReaderFactory>::CreateInstance(
+        reader.ReleaseAndGetAddressOf()));
+    if (!reader) return;
+    ctl::ComPtr<xaml_markup::IXamlReaderStatics> statics;
+    CHECK_HR("IXamlReaderStatics", reader.As(&statics));
+    if (!statics) return;
+    IInspectable *obj = reinterpret_cast<IInspectable *>(1);
+    HRESULT hr = statics->Load(wrl_wrappers::HStringReference(L"<x:String " XMLNS_X L">Hello</x:String>").Get(), &obj);
+    CHECK("XamlReader.Load without XAML on the thread: RPC_E_WRONG_THREAD", hr == RPC_E_WRONG_THREAD && obj == nullptr);
+}
+
 int main()
 {
     DirectUI::StaticLockGlobalInit();
     test_dictionary();
     test_load();
+    test_framework();
     printf("xamlloadtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     return fail != 0;

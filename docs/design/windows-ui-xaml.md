@@ -105,6 +105,35 @@ vendors.
    the mouse's messages with a `PointerPoint` (pointer 1, a mouse
    `PointerDevice`) and its `PointerPointProperties`.  Test: `comptest`,
    and `coreapptest`'s pointer and CoreWindow-target checks.
+   - *The interfaces XAML's render tree asks for (Phase 32 push).*
+     XAML's source holds the compositor as `Microsoft.UI.Composition`
+     (`NamespaceAliases.h`'s `WUComp`), and `DCompTreeHost` asks it for
+     `ICompositor2`, `5`, `6` and `ICompositorSwapChainInterop`.  The two
+     namespaces' interfaces have the same members in the same order,
+     only their IIDs differ, but for `ICompositor` (no
+     `CreateTargetForCurrentView` in the Windows App SDK's),
+     `ICompositionObject` (no `Dispatcher`) and the `DispatcherQueue`
+     of `ICompositionObject3` and `ICompositor7`; so each `dcomp.dll`
+     object answers both sets of IIDs (`composition_iids.h`, from
+     `third_party/winmd`), with a vtable of its own where they differ, and
+     `Microsoft.UI.Composition.Compositor` is registered to `dcomp.dll`
+     too.  Added: `ICompositor2` to `8` (animation groups, step easing,
+     `Comment`, `GlobalPlaybackRate`, Boolean key frames, rectangle clips,
+     `DispatcherQueue`; lights, shadows, shapes, gradient brushes and the
+     rest still `E_NOTIMPL`), `IVisual2` to `4` (`RelativeOffsetAdjustment`
+     and `RelativeSizeAdjustment` drawn), `ICompositionObject2` to `5`,
+     each object's `Properties` and `CreatePropertySet` (property sets of
+     every value type), key frame animations of scalars, vectors, colours,
+     quaternions and Booleans run on the compositor's thread (delay,
+     duration, iterations, direction, stop and delay behaviours, the
+     expression key frames `this.StartingValue` and `this.FinalValue`),
+     animation groups started through their animations' `Target`,
+     expression animations (accepted and stopped, their expressions not
+     yet evaluated), scoped and commit batches whose `Completed` is raised
+     on the making thread's `DispatcherQueue`, linear, cubic Bezier,
+     step, sine, circle and power easing (`CompositionEasingFunction`'s
+     statics too; back, bounce, elastic and exponential ease linearly) and
+     rectangle clips (square corners).  Test: `comptest`.
 3. **32.3 The XAML core builds.** `dxaml`'s core, parser and metadata
    built as `Windows.UI.Xaml.dll` against 32.1 and 32.2;
    `Windows.UI.Xaml.Application.Start` runs and `XamlReader.Load` parses a

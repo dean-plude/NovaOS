@@ -10,6 +10,15 @@
  * WARP Direct3D 11 device (ICompositorInterop, BeginDraw/EndDraw), shown by
  * a surface brush stretched (Fill) and not (None), and one of a graphics
  * device on an ID2D1Device, drawn through BeginDraw's ID2D1DeviceContext.
+ * Then the interfaces beyond the first versions, as the XAML framework asks
+ * for them (Microsoft.UI.Composition's IIDs among them): ICompositor2, 5,
+ * 6 and 7, IVisual2 and 3 (relative offset and size adjustments, checked in
+ * the pixels), ICompositionObject2 and 4, a visual's Properties (a property
+ * set: insert, TryGet's statuses), a rectangle clip, a Vector3 key frame
+ * animation of Offset in a scoped batch whose Completed is raised, an
+ * animation group fading a visual out with a cubic Bezier easing function,
+ * an expression animation started and stopped, and the easing function
+ * statics.
  *
  * The compositor draws on its own thread after each change, so each check
  * waits (up to five seconds) for the pixel to show.
@@ -220,6 +229,244 @@ static void drawing_surface(void *children)
 }
 #endif
 
+/* ---- the interfaces beyond the first versions, and animations ---------------- */
+#define G(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7) { a, b, c, { d0, d1, d2, d3, d4, d5, d6, d7 } }
+static const GUID IID_ICompositor2_T = G(0x735081DC, 0x5E24, 0x45DA, 0xA3, 0x8F, 0xE3, 0x2C, 0xC3, 0x49, 0xA9, 0xA0);
+static const GUID IID_ICompositor5_T = G(0x48EA31AD, 0x7FCD, 0x4076, 0xA7, 0x9C, 0x90, 0xCC, 0x4B, 0x85, 0x2C, 0x9B);
+static const GUID IID_ICompositor7_T = G(0xD3483FAD, 0x9A12, 0x53BA, 0xBF, 0xC8, 0x88, 0xB7, 0xFF, 0x79, 0x77, 0xC6);
+static const GUID IID_MUI_ICompositor_T = G(0x95213C13, 0xC4CB, 0x57DE, 0xB2, 0x67, 0xD2, 0x1A, 0xB9, 0x01, 0xAE, 0x38);
+static const GUID IID_MUI_ICompositor2_T = G(0xA9FFEDAD, 0x3982, 0x576D, 0xA3, 0x8A, 0xC8, 0x88, 0xFF, 0x60, 0x58, 0x19);
+static const GUID IID_MUI_ICompositor5_T = G(0xBB52D644, 0xA030, 0x5C19, 0xB8, 0x83, 0x57, 0x7D, 0xED, 0x73, 0x9A, 0xE7);
+static const GUID IID_MUI_ICompositor6_T = G(0x5FD20200, 0xC188, 0x5737, 0xB5, 0x67, 0x5E, 0x61, 0x74, 0x1A, 0xF1, 0x9C);
+static const GUID IID_MUI_ICompositorSwapChainInterop_T = G(0xA0B03594, 0xC413, 0x5F5D, 0xBC, 0x70, 0xCE, 0x93, 0x82, 0xEB, 0x5E, 0x83);
+static const GUID IID_MUI_ICompositionObject_T = G(0x0E583D49, 0xFB5E, 0x5481, 0xA4, 0x26, 0xD3, 0xC4, 0x1E, 0x05, 0x9A, 0x5A);
+static const GUID IID_MUI_IVisual_T = G(0xC0EEAB6C, 0xC897, 0x5AC6, 0xA1, 0xC9, 0x63, 0xAB, 0xD5, 0x05, 0x5B, 0x9B);
+static const GUID IID_IVisual2_T = G(0x3052B611, 0x56C3, 0x4C3E, 0x8B, 0xF3, 0xF6, 0xE1, 0xAD, 0x47, 0x3F, 0x06);
+static const GUID IID_IVisual3_T = G(0x30BE580D, 0xF4B6, 0x4AB7, 0x80, 0xDD, 0x37, 0x38, 0xCB, 0xAC, 0x9F, 0x2C);
+static const GUID IID_ICompositionObject2_T = G(0xEF874EA1, 0x5CFF, 0x4B68, 0x9E, 0x30, 0xA1, 0x51, 0x9D, 0x08, 0xBA, 0x03);
+static const GUID IID_ICompositionObject4_T = G(0x0BB3784C, 0x346B, 0x4A7C, 0x96, 0x6B, 0x73, 0x10, 0x96, 0x65, 0x53, 0xD5);
+static const GUID IID_ICompositionPropertySet2_T = G(0xDE80731E, 0xA211, 0x4455, 0x88, 0x80, 0x7D, 0x0F, 0x3F, 0x6A, 0x44, 0xFD);
+static const GUID IID_IKeyFrameAnimation_T = G(0x126E7F22, 0x3AE9, 0x4540, 0x9A, 0x8A, 0xDE, 0xAE, 0x8A, 0x4A, 0x4A, 0x84);
+static const GUID IID_ICompositionAnimation2_T = G(0x369B603E, 0xA80F, 0x4948, 0x93, 0xE3, 0xED, 0x23, 0xFB, 0x38, 0xC6, 0xCB);
+static const GUID IID_ICompositionEasingFunctionStatics_MUI_T = G(0x17A766B6, 0x2936, 0x53EA, 0xB5, 0xAF, 0xC6, 0x42, 0xF4, 0xA6, 0x10, 0x83);
+#undef G
+
+/* ICompositor (beyond C_*) and the interfaces' members used here */
+enum { C_CUBIC = 10, C_EXPRESSION_WITH = 14, C_PROPERTY_SET = 18, C_SCALAR_KF = 20, C_SCOPED_BATCH = 21, C_VECTOR3_KF = 27 };
+enum { CO_PROPERTIES = 8, CO_START = 9, CO_STOP = 10 };
+enum { PS_INSERT_SCALAR = 10, PS_INSERT_VECTOR3 = 12, PS_TRYGET_SCALAR = 18, PS_TRYGET_VECTOR3 = 20 };
+enum { KA_PUT_DURATION = 9, KA_KEYFRAME_COUNT = 14, KA_INSERT_EXPRESSION = 17, KF_INSERT = 6 };
+enum { SB_IS_ACTIVE = 6, SB_END = 8, SB_ADD_COMPLETED = 11 };
+
+/* a TypedEventHandler<Object, CompositionBatchCompletedEventArgs>: sets an event */
+typedef struct { const void *const *vt; HANDLE ev; } Done;
+static HRESULT STDMETHODCALLTYPE done_qi(void *p, const GUID *iid, void **out) { (void)iid; *out = p; return S_OK; }
+static ULONG STDMETHODCALLTYPE done_ref(void *p) { (void)p; return 1; }
+static HRESULT STDMETHODCALLTYPE done_invoke(void *p, void *sender, void *args)
+{
+    (void)args;
+    if (sender) SetEvent(((Done *)p)->ev);
+    return S_OK;
+}
+static const void *const done_vt[] = { (void *)done_qi, (void *)done_ref, (void *)done_ref, (void *)done_invoke };
+
+static void *qi(void *o, const GUID *iid)
+{
+    void *r = 0;
+    if (o) VT(o, 0, QI_t)(o, iid, &r);
+    return r;
+}
+static HSTRING hs(const WCHAR *s)
+{
+    HSTRING h = 0;
+    WindowsCreateString(s, (UINT32)wcslen(s), &h);
+    return h;
+}
+static int waits(HANDLE ev)
+{
+    for (int i = 0; i < 250; i++) {
+        pump();
+        if (WaitForSingleObject(ev, 20) == WAIT_OBJECT_0) return 1;
+    }
+    return 0;
+}
+
+static void versions(void *children)
+{
+    /* the compositor's interfaces, in both namespaces */
+    void *c2 = qi(g_comp, &IID_ICompositor2_T), *c5 = qi(g_comp, &IID_ICompositor5_T), *c7 = qi(g_comp, &IID_ICompositor7_T);
+    void *mc = qi(g_comp, &IID_MUI_ICompositor_T), *mc2 = qi(g_comp, &IID_MUI_ICompositor2_T);
+    void *mc5 = qi(g_comp, &IID_MUI_ICompositor5_T), *mc6 = qi(g_comp, &IID_MUI_ICompositor6_T);
+    void *swap = qi(g_comp, &IID_MUI_ICompositorSwapChainInterop_T);
+    CHECK("ICompositor2, ICompositor5, ICompositor7", c2 && c5 && c7);
+    CHECK("Microsoft.UI.Composition: ICompositor, 2, 5, 6, ICompositorSwapChainInterop", mc && mc2 && mc5 && mc6 && swap);
+
+    /* a sprite made through Microsoft.UI's ICompositor, seen through both namespaces */
+    void *ms = 0, *mobj = 0, *mcomp = 0;
+    if (mc) VT(mc, C_SPRITE, Get_t)(mc, &ms);
+    CHECK("Microsoft.UI ICompositor::CreateSpriteVisual", ms != 0);
+    void *mv = qi(ms, &IID_MUI_IVisual_T), *v2 = qi(ms, &IID_IVisual2_T), *v3 = qi(ms, &IID_IVisual3_T);
+    void *o2 = qi(ms, &IID_ICompositionObject2_T), *o4 = qi(ms, &IID_ICompositionObject4_T);
+    CHECK("a visual: Microsoft.UI IVisual, IVisual2, IVisual3, ICompositionObject2, ICompositionObject4", mv && v2 && v3 && o2 && o4);
+    mobj = qi(ms, &IID_MUI_ICompositionObject_T);
+    if (mobj) VT(mobj, 6, Get_t)(mobj, &mcomp);                                /* Compositor */
+    CHECK("Microsoft.UI ICompositionObject::Compositor: Microsoft.UI's ICompositor", mcomp && mcomp == mc);
+    BYTE hit = 0;
+    if (v3) VT(v3, 6, Get_t)(v3, &hit);
+    CHECK("IsHitTestVisible: true", hit == 1);
+    RELEASE(mcomp); RELEASE(mobj); RELEASE(mv); RELEASE(v3); RELEASE(o4);
+
+    /* Properties: a property set */
+    void *obj = qi(ms, &IID_ICompositionObject_T), *props = 0, *props2 = 0;
+    if (obj) VT(obj, CO_PROPERTIES, Get_t)(obj, &props);
+    CHECK("Properties", props != 0);
+    HSTRING foo = hs(L"Foo"), bar = hs(L"Bar");
+    if (props) {
+        float f = 0;
+        int st = -1;
+        Vec3 v = { 0 };
+        CHECK("InsertScalar", VT(props, PS_INSERT_SCALAR, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, float))(props, foo, 2.5f) == S_OK);
+        VT(props, PS_TRYGET_SCALAR, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, float *, int *))(props, foo, &f, &st);
+        CHECK("TryGetScalar: the value", st == 0 && f == 2.5f);
+        VT(props, PS_TRYGET_VECTOR3, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, Vec3 *, int *))(props, foo, &v, &st);
+        CHECK("TryGetVector3 of a scalar: TypeMismatch", st == 1);
+        VT(props, PS_TRYGET_SCALAR, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, float *, int *))(props, bar, &f, &st);
+        CHECK("TryGetScalar of none: NotFound", st == 2);
+        CHECK("InsertVector3 over a scalar: E_INVALIDARG",
+              VT(props, PS_INSERT_VECTOR3, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, Vec3))(props, foo, v) == E_INVALIDARG);
+        props2 = qi(props, &IID_ICompositionPropertySet2_T);
+        BYTE b = 0;
+        if (props2) {
+            VT(props2, 6, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, BYTE))(props2, bar, 1);
+            VT(props2, 7, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, BYTE *, int *))(props2, bar, &b, &st);
+        }
+        CHECK("InsertBoolean, TryGetBoolean", props2 && b == 1 && st == 0);
+        void *again = 0;
+        VT(obj, CO_PROPERTIES, Get_t)(obj, &again);
+        CHECK("Properties: the same set each time", again == props);
+        RELEASE(again);
+    }
+    void *ps = 0;
+    VT(g_comp, C_PROPERTY_SET, Get_t)(g_comp, &ps);
+    CHECK("CreatePropertySet", ps != 0);
+    RELEASE(ps);
+
+    /* RelativeOffsetAdjustment and RelativeSizeAdjustment: a band a quarter
+     * of the root wide, from its middle */
+    void *band_v, *band = sprite(0, 128, 0, 0, 20, 0, 200, &band_v), *band2 = qi(band, &IID_IVisual2_T);
+    Vec3 half = { 0.5f, 0, 0 };
+    Vec2 quarter = { 0.25f, 0 };
+    if (band2) {
+        VT(band2, 9, HRESULT (STDMETHODCALLTYPE *)(void *, Vec3))(band2, half);              /* RelativeOffsetAdjustment */
+        VT(band2, 11, HRESULT (STDMETHODCALLTYPE *)(void *, Vec2))(band2, quarter);          /* RelativeSizeAdjustment */
+    }
+    VT(children, VC_INSERT_TOP, Put_t)(children, band_v);
+    CHECK("RelativeOffsetAdjustment, RelativeSizeAdjustment",
+          shows(200, 210, RGB(0, 128, 0)) && shows(150, 210, RGB(255, 255, 255)) && shows(250, 210, RGB(255, 255, 255)));
+
+    /* a rectangle clip (ICompositor7): the left half of a blue sprite cut off */
+    void *rv, *r = sprite(0, 0, 255, 100, 40, 10, 10, &rv), *rclip = 0;
+    if (c7) VT(c7, 9, HRESULT (STDMETHODCALLTYPE *)(void *, float, float, float, float, void **))(c7, 50, 0, 100, 40, &rclip);
+    CHECK("CreateRectangleClip", rclip != 0);
+    VT(rv, V_CLIP, Put_t)(rv, rclip);
+    VT(children, VC_INSERT_TOP, Put_t)(children, rv);
+    CHECK("RectangleClip (left 50)", shows(30, 20, RGB(255, 255, 255)) && shows(80, 20, RGB(0, 0, 255)));
+
+    /* a key frame animation of Offset in a scoped batch: the sprite moves,
+     * and the batch completes */
+    void *batch = 0, *anim = 0, *ka = 0;
+    VT(g_comp, C_SCOPED_BATCH, HRESULT (STDMETHODCALLTYPE *)(void *, int, void **))(g_comp, 1, &batch);
+    CHECK("CreateScopedBatch", batch != 0);
+    BYTE active = 0;
+    if (batch) VT(batch, SB_IS_ACTIVE, Get_t)(batch, &active);
+    CHECK("IsActive", active == 1);
+    Done done = { done_vt, CreateEventW(0, TRUE, FALSE, 0) };
+    EventRegistrationToken tok = { 0 };
+    if (batch) VT(batch, SB_ADD_COMPLETED, HRESULT (STDMETHODCALLTYPE *)(void *, void *, EventRegistrationToken *))(batch, &done, &tok);
+    VT(g_comp, C_VECTOR3_KF, Get_t)(g_comp, &anim);
+    CHECK("CreateVector3KeyFrameAnimation", anim != 0);
+    ka = qi(anim, &IID_IKeyFrameAnimation_T);
+    Vec3 to = { 200, 100, 0 };
+    HSTRING start = hs(L"this.StartingValue"), offset = hs(L"Offset"), nonsense = hs(L"Nonsense");
+    INT32 count = 0;
+    if (ka) {
+        VT(ka, KA_INSERT_EXPRESSION, HRESULT (STDMETHODCALLTYPE *)(void *, float, HSTRING))(ka, 0.0f, start);
+        VT(anim, KF_INSERT, HRESULT (STDMETHODCALLTYPE *)(void *, float, Vec3))(anim, 1.0f, to);
+        VT(ka, KA_PUT_DURATION, HRESULT (STDMETHODCALLTYPE *)(void *, INT64))(ka, 3000000);       /* 300 ms */
+        VT(ka, KA_KEYFRAME_COUNT, Get_t)(ka, &count);
+    }
+    CHECK("InsertExpressionKeyFrame, InsertKeyFrame: KeyFrameCount 2", count == 2);
+    void *mover_v, *mover = sprite(255, 0, 0, 30, 30, 10, 100, &mover_v), *mobj2 = qi(mover, &IID_ICompositionObject_T);
+    VT(children, VC_INSERT_TOP, Put_t)(children, mover_v);
+    CHECK("StartAnimation(Offset)", mobj2 && VT(mobj2, CO_START, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *))(mobj2, offset, anim) == S_OK);
+    CHECK("StartAnimation of no such property: E_INVALIDARG",
+          VT(mobj2, CO_START, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *))(mobj2, nonsense, anim) == E_INVALIDARG);
+    if (batch) VT(batch, SB_END, Call_t)(batch);
+    CHECK("the batch's Completed", waits(done.ev));
+    Vec3 at = { 0 };
+    VT(mover_v, V_OFFSET - 1, HRESULT (STDMETHODCALLTYPE *)(void *, Vec3 *))(mover_v, &at);            /* get_Offset */
+    CHECK("the animation's end: Offset (200, 100)", at.X == 200 && at.Y == 100);
+    CHECK("... drawn there", shows(215, 115, RGB(255, 0, 0)) && shows(25, 115, RGB(255, 255, 255)));
+
+    /* an animation group (ICompositor2) on a visual's Opacity, through
+     * StartAnimationGroup and an animation's Target, with a cubic Bezier
+     * easing function */
+    void *group = 0, *fade = 0, *fade2 = 0, *ease = 0, *mo2 = qi(mover, &IID_ICompositionObject2_T);
+    if (c2) VT(c2, 7, Get_t)(c2, &group);
+    VT(g_comp, C_SCALAR_KF, Get_t)(g_comp, &fade);
+    Vec2 p1 = { 0.4f, 0 }, p2 = { 0.6f, 1 };
+    VT(g_comp, C_CUBIC, HRESULT (STDMETHODCALLTYPE *)(void *, Vec2, Vec2, void **))(g_comp, p1, p2, &ease);
+    CHECK("CreateAnimationGroup, CreateScalarKeyFrameAnimation, CreateCubicBezierEasingFunction", group && fade && ease);
+    HSTRING opacity = hs(L"Opacity");
+    fade2 = qi(fade, &IID_ICompositionAnimation2_T);
+    void *fka = qi(fade, &IID_IKeyFrameAnimation_T);
+    if (fade2 && fka && group && mo2) {
+        VT(fade2, 8, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(fade2, opacity);                   /* put_Target */
+        VT(fade, KF_INSERT + 1, HRESULT (STDMETHODCALLTYPE *)(void *, float, float, void *))(fade, 1.0f, 0.0f, ease);
+        VT(fka, KA_PUT_DURATION, HRESULT (STDMETHODCALLTYPE *)(void *, INT64))(fka, 2000000);
+        VT(group, 7, Put_t)(group, fade);                                                           /* Add */
+        CHECK("StartAnimationGroup", VT(mo2, 10, Put_t)(mo2, group) == S_OK);
+    }
+    float op = 1;
+    for (int i = 0; i < 250 && op != 0.0f; i++) {                    /* (the animation ends after 200 ms) */
+        pump();
+        Sleep(20);
+        VT(mover_v, V_OPACITY - 1, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(mover_v, &op);
+    }
+    CHECK("the group faded the sprite out to Opacity 0", op == 0.0f);
+    CHECK("... not drawn", shows(215, 115, RGB(255, 255, 255)));
+
+    /* an expression animation: accepted on a property and stopped */
+    void *expr = 0;
+    HSTRING text = hs(L"this.Target.Size.X / 2"), offx = hs(L"Offset.X");
+    VT(g_comp, C_EXPRESSION_WITH, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void **))(g_comp, text, &expr);
+    CHECK("CreateExpressionAnimation", expr != 0);
+    CHECK("StartAnimation(Offset.X) with it", VT(mobj2, CO_START, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *))(mobj2, offx, expr) == S_OK);
+    CHECK("StopAnimation", VT(mobj2, CO_STOP, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(mobj2, offx) == S_OK);
+
+    /* CompositionEasingFunction's statics (Microsoft.UI's) and a step easing function */
+    HSTRING ecls = hs(L"Microsoft.UI.Composition.CompositionEasingFunction");
+    void *statics = 0, *linear = 0, *step = 0;
+    RoGetActivationFactory(ecls, &IID_ICompositionEasingFunctionStatics_MUI_T, &statics);
+    if (statics) VT(statics, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void *, void **))(statics, g_comp, &linear);
+    CHECK("CompositionEasingFunction statics: CreateLinearEasingFunction", linear != 0);
+    INT32 steps = 0;
+    if (c2) VT(c2, 18, HRESULT (STDMETHODCALLTYPE *)(void *, int, void **))(c2, 4, &step);
+    if (step) VT(step, 14, Get_t)(step, &steps);
+    CHECK("CreateStepEasingFunction(4): StepCount 4", steps == 4);
+
+    VT(children, VC_REMOVE_ALL, Call_t)(children);
+    WindowsDeleteString(foo); WindowsDeleteString(bar); WindowsDeleteString(start); WindowsDeleteString(offset);
+    WindowsDeleteString(nonsense); WindowsDeleteString(opacity); WindowsDeleteString(text); WindowsDeleteString(offx);
+    WindowsDeleteString(ecls);
+    CloseHandle(done.ev);
+    RELEASE(statics); RELEASE(linear); RELEASE(step); RELEASE(expr); RELEASE(fka); RELEASE(fade2); RELEASE(ease); RELEASE(fade);
+    RELEASE(group); RELEASE(mo2); RELEASE(mobj2); RELEASE(mover_v); RELEASE(mover); RELEASE(ka); RELEASE(anim); RELEASE(batch);
+    RELEASE(rclip); RELEASE(rv); RELEASE(r); RELEASE(band2); RELEASE(band_v); RELEASE(band); RELEASE(props2); RELEASE(props);
+    RELEASE(obj); RELEASE(o2); RELEASE(v2); RELEASE(ms); RELEASE(swap); RELEASE(mc6); RELEASE(mc5); RELEASE(mc2); RELEASE(mc);
+    RELEASE(c7); RELEASE(c5); RELEASE(c2);
+}
+
 int main(void)
 {
     CloseHandle(CreateThread(0, 0, watchdog, 0, 0, 0));
@@ -356,6 +603,8 @@ int main(void)
     CHECK("RemoveAll", VT(children, VC_REMOVE_ALL, Call_t)(children) == S_OK);
     VT(children, VC_COUNT, Get_t)(children, &n);
     CHECK("RemoveAll: none left, the background again", n == 0 && shows(50, 50, RGB(255, 255, 255)) && shows(100, 100, RGB(255, 255, 255)));
+
+    versions(children);
 
     RELEASE(a); RELEASE(b); RELEASE(c); RELEASE(d); RELEASE(e); RELEASE(hid); RELEASE(j); RELEASE(g); RELEASE(f); RELEASE(f_kids);
     RELEASE(a_v); RELEASE(b_v); RELEASE(c_v); RELEASE(d_v); RELEASE(e_v); RELEASE(h_v); RELEASE(j_v); RELEASE(g_v); RELEASE(f_v);

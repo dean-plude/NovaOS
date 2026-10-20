@@ -4,7 +4,12 @@
  * telling a listener that an animated property changed
  * (IExpCompositionPropertyChanged), declared here as XAML's own copy
  * declares it (components/comptree/inc/ExpCompositionPropertyChanged.h,
- * whose static_asserts check the IIDs). */
+ * whose static_asserts check the IIDs); and, of the lifted content
+ * API's experimental half, a XAML island's content island taking its
+ * root visual (IContentIslandExperimental::put_Root, which XAML's
+ * composition tree host calls, DCompTreeHost.cpp): Microsoft publishes
+ * neither its metadata nor its IID, so the IID here is NovaOS's, for
+ * NovaOS's content islands when they come. */
 #pragma once
 #include <microsoft.ui.composition.h>
 
@@ -59,3 +64,12 @@ struct __declspec(uuid("12b579a9-6a27-5cde-a2a1-c557bb7dfdb3")) __declspec(novta
 };
 
 }}}}}
+
+namespace ABI { namespace Microsoft { namespace UI { namespace Content {
+
+struct __declspec(uuid("6e3a4c5b-2b1d-4f2e-9a57-4e6f6f76614e")) __declspec(novtable) IContentIslandExperimental : public IInspectable
+{
+    virtual HRESULT STDMETHODCALLTYPE put_Root(ABI::Microsoft::UI::Composition::IVisual *value) = 0;
+};
+
+}}}}

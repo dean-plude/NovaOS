@@ -1,5 +1,5 @@
 /* xamlloadtest.exe — Microsoft's XAML resource dictionaries and object
- * writer built for NovaOS (roadmap step 32.3, parts 7 to 10;
+ * writer built for NovaOS (roadmap step 32.3, parts 7 to 13;
  * docs/design/windows-ui-xaml.md): CResourceDictionary from
  * dxaml/xcp/core/core/elements (Resources.cpp: keyed resources and their
  * lookup) and the parser's object writer runtime from dxaml/xcp/core/Parser
@@ -25,7 +25,11 @@
  * made on the thread's DispatcherQueue (CoreMessaging.dll) and ticking from
  * its timer, and the Jupiter control, CJupiterControl, which makes the
  * dispatcher and the browser host (CXcpBrowserHost, with the thread's core
- * services) and stops where the rendering, not built yet, begins.
+ * services); and (part 13) the browser host's render target
+ * (CWindowRenderTarget: the hardware walk and compositor tree host on the
+ * graphics device manager, whose Direct3D 11 device and Direct2D device are
+ * made on a thread of their own, with the compositor and UI thread
+ * schedulers), so CJupiterControl::Create succeeds.
  *
  * Until the core's generated type table builds, the table here activates
  * the handful of types the cases use (below).
@@ -380,11 +384,12 @@ static DWORD WINAPI control_thread(void *)
         disp->Release();
     }
 
-    /* the Jupiter control: its dispatcher and browser host, as far as the
-     * render target (the rendering does not build yet: E_NOTIMPL) */
+    /* the Jupiter control: its dispatcher, browser host and render target
+     * (the graphics device, made on its own thread, Direct2D on it and the
+     * compositor and UI thread schedulers) */
     CJupiterControl *control = nullptr;
     HRESULT hr = CJupiterControl::Create(&control);
-    CHECK("CJupiterControl::Create reaches the render target (not built: E_NOTIMPL)", hr == E_NOTIMPL && control == nullptr);
+    CHECK("CJupiterControl::Create makes the control and its render target", SUCCEEDED(hr) && control != nullptr);
     if (control) control->Release();
 
     ctl::ComPtr<msy::IDispatcherQueueController2> controller2;

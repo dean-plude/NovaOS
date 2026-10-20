@@ -1096,8 +1096,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`CJupiterControl`, `CControlBase`, `CXcpDispatcher`, the browser host)
   and the error helper built from their sources, with
   `CJupiterControl::Create` running up to the rendering seam in
-  `xamlloadtest`.  Next: the rendering seam (graphics device manager,
-  compositor scheduler, window render target), the rest of
+  `xamlloadtest`.  Thirteenth part done: the rendering seam (the
+  graphics device manager with its Direct3D 11 and Direct2D devices made
+  on their own thread, the compositor and UI thread schedulers, the
+  window render target with its hardware walk and compositor tree host)
+  built from their sources, so `CJupiterControl::Create` succeeds in
+  `xamlloadtest`, on NovaOS's software Direct3D 11 device without DXVK.
+  Next: the rest of
   `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the static
   store, the default styles, the reference tracker), then
   `XamlReader.Load` and `Application.Start` end to end.

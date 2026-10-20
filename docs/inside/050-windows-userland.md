@@ -26,7 +26,9 @@
     `CoreDispatcher`; DXGI swap chains present into a CoreWindow) and
     `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
     sprite visuals, colour and surface brushes, drawing surfaces on
-    Direct3D 11, targets on a window or a CoreWindow), the first steps
+    Direct3D 11, targets on a window or a CoreWindow, property sets, key
+    frame animations and batches, answering the Windows App SDK's
+    `Microsoft.UI.Composition` IIDs as well), the first steps
     towards `Windows.UI.Xaml` ([design](../design/windows-ui-xaml.md)).
   - **Sound and input**: `winmm` (waveOut, waveIn, MIDI, joysticks),
     `mmdevapi` (WASAPI playback and capture, one endpoint per device),

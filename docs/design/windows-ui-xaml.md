@@ -18,7 +18,7 @@ From the bottom up:
 | App model | `twinapi.appcore.dll` (`CoreApplication`, views), `Windows.UI.dll` (`CoreWindow`, `CoreDispatcher`) | `twinapi.appcore.dll` (`userland/twinapi_appcore`), step 32.1 |
 | Composition | `Windows.UI.Composition` (the system compositor's WinRT API, over DirectComposition and Direct3D 11) | `dcomp.dll` (`userland/dcomp/composition.c`), step 32.2 |
 | XAML | `Windows.UI.Xaml.dll` (system XAML) and WinUI 2 (`Microsoft.UI.Xaml.dll`, controls on top of it) | Microsoft's MIT XAML source, built for NovaOS, steps 32.3 on |
-| Packages | AppX/MSIX deployment, `resources.pri` (MRT), the app container | to write, after XAML draws |
+| Packages | AppX/MSIX deployment, `resources.pri` (MRT), the app container | `appx.exe`, `MRM.dll` (MRT Core, MIT), package identity in kernel32; bundles, frameworks, signatures and the app container to write |
 
 ## Where the XAML framework comes from
 
@@ -105,6 +105,35 @@ vendors.
    the mouse's messages with a `PointerPoint` (pointer 1, a mouse
    `PointerDevice`) and its `PointerPointProperties`.  Test: `comptest`,
    and `coreapptest`'s pointer and CoreWindow-target checks.
+   - *The interfaces XAML's render tree asks for (Phase 32 push).*
+     XAML's source holds the compositor as `Microsoft.UI.Composition`
+     (`NamespaceAliases.h`'s `WUComp`), and `DCompTreeHost` asks it for
+     `ICompositor2`, `5`, `6` and `ICompositorSwapChainInterop`.  The two
+     namespaces' interfaces have the same members in the same order,
+     only their IIDs differ, but for `ICompositor` (no
+     `CreateTargetForCurrentView` in the Windows App SDK's),
+     `ICompositionObject` (no `Dispatcher`) and the `DispatcherQueue`
+     of `ICompositionObject3` and `ICompositor7`; so each `dcomp.dll`
+     object answers both sets of IIDs (`composition_iids.h`, from
+     `third_party/winmd`), with a vtable of its own where they differ, and
+     `Microsoft.UI.Composition.Compositor` is registered to `dcomp.dll`
+     too.  Added: `ICompositor2` to `8` (animation groups, step easing,
+     `Comment`, `GlobalPlaybackRate`, Boolean key frames, rectangle clips,
+     `DispatcherQueue`; lights, shadows, shapes, gradient brushes and the
+     rest still `E_NOTIMPL`), `IVisual2` to `4` (`RelativeOffsetAdjustment`
+     and `RelativeSizeAdjustment` drawn), `ICompositionObject2` to `5`,
+     each object's `Properties` and `CreatePropertySet` (property sets of
+     every value type), key frame animations of scalars, vectors, colours,
+     quaternions and Booleans run on the compositor's thread (delay,
+     duration, iterations, direction, stop and delay behaviours, the
+     expression key frames `this.StartingValue` and `this.FinalValue`),
+     animation groups started through their animations' `Target`,
+     expression animations (accepted and stopped, their expressions not
+     yet evaluated), scoped and commit batches whose `Completed` is raised
+     on the making thread's `DispatcherQueue`, linear, cubic Bezier,
+     step, sine, circle and power easing (`CompositionEasingFunction`'s
+     statics too; back, bounce, elastic and exponential ease linearly) and
+     rectangle clips (square corners).  Test: `comptest`.
 3. **32.3 The XAML core builds.** `dxaml`'s core, parser and metadata
    built as `Windows.UI.Xaml.dll` against 32.1 and 32.2;
    `Windows.UI.Xaml.Application.Start` runs and `XamlReader.Load` parses a
@@ -473,7 +502,21 @@ vendors.
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package
-   (roadmap 27.x leftovers).
+   (roadmap 27.x leftovers).  Done so far: `appx.exe` (userland/programs/
+   appx.c) unpacks an unsigned package into `C:\Programs\WindowsApps\
+   <full name>` after checking it against its block map, and records it
+   in the user's package repository (`HKCU\Software\Classes\Local
+   Settings\...\AppModel\Repository`: `Packages\<full>` with
+   `PackageRootFolder` and `Applications\<id>`, `Families\<family>`),
+   its classes under `HKCU\Software\Classes\ActivatableClasses\
+   Package\<full>`.  kernel32's `package.c` gives a process the package
+   whose folder holds its program; ole32 looks up its classes there
+   first; `ApplicationActivationManager` (twinapi.appcore) starts an
+   application by AUMID.  `MRM.dll` is MRT Core built unchanged, and
+   `SHLoadIndirectString` reads `ms-resource:` strings with it.  A signed
+   package is refused until NovaOS verifies package signatures (PKCS#7
+   over the block map and the chain, as Windows does); bundles and
+   framework packages come with Calculator.
 
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

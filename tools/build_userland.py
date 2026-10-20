@@ -674,6 +674,14 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msitest', 'mk
      os.path.join(out, 'msitest.exe')])
 for n in sorted(os.listdir(msipkg)):
     built.append((f'\\Tests\\Msi\\{n}', os.path.join(msipkg, n)))
+# 3a2. and the app packages the appxtest self-test installs (tools/appx/mktest.py:
+# a copy of appxtest run packaged, its Windows Runtime class and resources.pri)
+appxpkg = os.path.join(out, 'appxtest')
+run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'appx', 'mktest.py'), appxpkg,
+     os.path.join(out, 'appxtest.exe')])
+for n in sorted(os.listdir(appxpkg)):
+    if n.endswith('.msix'):
+        built.append((f'\\Tests\\Appx\\{n}', os.path.join(appxpkg, n)))
 # 3a2a. the driver package the drvtest self-test installs (tools/drivertest/mkdriver.py)
 drvdir = os.path.join(out, 'drivertest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mkdriver.py'), drvdir])

@@ -427,10 +427,81 @@ LWSTDAPI_(HRESULT) GetAcceptLanguagesA(LPSTR buf, DWORD *n)
     return S_OK_;
 }
 
-/* Only plain strings: "@dll,-id" resource references are not resolved */
+/* A package's string: "@{<package full name or .pri file>?ms-resource:...}",
+ * read from the package's resources.pri by MRT (MRM.dll, Microsoft's MRT
+ * Core: userland/mrm).  A short URI ("ms-resource:AppName") is the
+ * package's Resources map's ("ms-resource://<package name>/Resources/AppName"),
+ * as on Windows. */
+typedef HRESULT (WINAPI *MrmCreate)(PCWSTR pri, void **mgr);
+typedef void (WINAPI *MrmDestroy)(void *mgr);
+typedef HRESULT (WINAPI *MrmLoadUri)(void *mgr, void *context, PCWSTR uri, PWSTR *out);
+typedef void (WINAPI *MrmFree)(void *p);
+LONG WINAPI GetPackagePathByFullName(PCWSTR full, UINT32 *len, PWSTR path);
+static WCHAR low(WCHAR c) { return c >= 'A' && c <= 'Z' ? (WCHAR)(c + 32) : c; }
+static HRESULT package_string(LPCWSTR src, LPWSTR out, UINT n)
+{
+    WCHAR pri[MAX_PATH + 16], uri[600], name[128];
+    const WCHAR *q = src + 2, *end = src + wlen(src) - 1;
+    const WCHAR *ask = q;
+    while (ask < end && *ask != '?') ask++;
+    if (*end != '}' || ask == end || ask == q || ask - q >= MAX_PATH) return E_INVALIDARG_;
+    int pl = (int)(ask - q), file = pl > 4 && q[pl - 4] == '.' && low(q[pl - 3]) == 'p' && low(q[pl - 2]) == 'r' &&
+                                    low(q[pl - 1]) == 'i';
+    UINT32 len = MAX_PATH;
+    for (int i = 0; i < pl; i++) pri[i] = q[i];
+    pri[pl] = 0;
+    int nl = 0;                                     /* the package's name: its full name to the first '_' */
+    if (!file) {
+        WCHAR full[MAX_PATH];
+        for (int i = 0; i <= pl; i++) full[i] = pri[i];
+        while (nl < pl && nl < 127 && q[nl] != '_') { name[nl] = q[nl]; nl++; }
+        if (GetPackagePathByFullName(full, &len, pri)) return E_INVALIDARG_;
+        const WCHAR *f = L"\\resources.pri";
+        int at = wlen(pri);
+        while (*f) pri[at++] = *f++;
+        pri[at] = 0;
+    }
+    name[nl] = 0;
+    const WCHAR *u = ask + 1;
+    int ul = (int)(end - u), at = 0;
+    static const WCHAR scheme[] = L"ms-resource:";
+    for (int i = 0; i < 12; i++) if (i >= ul || low(u[i]) != scheme[i]) return E_INVALIDARG_;
+    if (ul >= 14 && u[12] == '/' && u[13] == '/') {          /* full: as written */
+        for (int i = 0; i < ul && at < 590; i++) uri[at++] = u[i];
+    } else {
+        for (const WCHAR *s = L"ms-resource://"; *s; s++) uri[at++] = *s;
+        for (int i = 0; i < nl; i++) uri[at++] = name[i];
+        if (u[12] != '/') for (const WCHAR *s = L"/Resources/"; *s; s++) uri[at++] = *s;
+        for (int i = 12; i < ul && at < 590; i++) uri[at++] = u[i];
+    }
+    uri[at] = 0;
+    HMODULE mrm = LoadLibraryW(L"MRM.dll");
+    if (!mrm) return E_INVALIDARG_;
+    MrmCreate create = (MrmCreate)GetProcAddress(mrm, "MrmCreateResourceManager");
+    MrmDestroy destroy = (MrmDestroy)GetProcAddress(mrm, "MrmDestroyResourceManager");
+    MrmLoadUri load = (MrmLoadUri)GetProcAddress(mrm, "MrmLoadStringResourceFromResourceUri");
+    MrmFree release = (MrmFree)GetProcAddress(mrm, "MrmFreeResource");
+    if (!create || !destroy || !load || !release) return E_INVALIDARG_;
+    void *mgr = 0;
+    PWSTR s = 0;
+    HRESULT hr = create(pri, &mgr);
+    if (hr == S_OK_) hr = load(mgr, 0, uri, &s);
+    if (hr == S_OK_) {
+        UINT l = (UINT)wlen(s);
+        if (l >= n) hr = E_POINTER_;
+        else for (UINT i = 0; i <= l; i++) out[i] = s[i];
+        release(s);
+    }
+    if (mgr) destroy(mgr);
+    return hr;
+}
+
+/* Plain strings, and packages' "@{...?ms-resource:...}" strings; "@dll,-id"
+ * resource references are not resolved */
 LWSTDAPI_(HRESULT) SHLoadIndirectString(LPCWSTR src, LPWSTR out, UINT n, void **reserved)
 {
     (void)reserved;
+    if (src[0] == '@' && src[1] == '{') return package_string(src, out, n);
     if (src[0] == '@') return E_INVALIDARG_;
     UINT l = (UINT)wlen(src);
     if (l >= n) return E_POINTER_;

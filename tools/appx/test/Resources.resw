@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The appx self-test package's strings (tools/appx/mktest.py makes its
+     resources.pri from them with tools/appx/makepri.py) -->
+<root>
+  <data name="AppDisplayName" xml:space="preserve">
+    <value>NovaOS Package Test</value>
+  </data>
+  <data name="Greeting" xml:space="preserve">
+    <value>Hello from resources.pri</value>
+  </data>
+</root>

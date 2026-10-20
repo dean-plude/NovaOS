@@ -53,6 +53,7 @@
 #define MAX_RANGES   8
 #define BOUNCE_SIZE  (64 * 1024)        /* the largest transfer sent at once */
 #define REQ_TIMEOUT  (-30LL * 10000000) /* 30 s, relative */
+#define REQ_POLL_AT  (-2LL * 10000000)  /* the first look for a missed interrupt, 2 s */
 #define BUSY_RETRIES 50
 
 
@@ -142,6 +143,14 @@ static NT_API void done_dpc(NT_KDPC *k, void *ctx, void *a1, void *a2)
     nt_KeSetEvent(&a->done_ev, 0, 0);
 }
 
+/* The miniport's interrupt routine run by hand, under its interrupt lock
+ * (what a delivered interrupt would have done) */
+static NT_API unsigned char poll_sync(void *ctx)
+{
+    StorAdapter *a = ctx;
+    return ((HW_INTERRUPT)a->drv->hw.HwInterrupt)(a->ext);
+}
+
 /* Send @cdb to LUN 0 and wait for its completion: the SRB status (0 when
  * the adapter never answered), *@got the bytes transferred.  @len bytes go
  * through the bounce buffer, in (@out false) or out. */
@@ -189,10 +198,20 @@ static UINT8 srb_run(StorAdapter *a, const UINT8 *cdb, UINT8 cdb_len, UINT32 len
             nt_KeReleaseSpinLockFromDpcLevel(&a->startio_lock);
         }
         nt_KeLowerIrql(old);
-        INT64 timeout = REQ_TIMEOUT;
+        INT64 timeout = REQ_POLL_AT;
         if (nt_KeWaitForSingleObject(&a->done_ev, 0, 0, 0, &timeout) == NT_STATUS_TIMEOUT && !a->done) {
-            kprintf("[STOR] %s: SCSI command 0x%02x was never completed\n", a->drv->service, cdb[0]);
-            return 0;
+            /* Two seconds is a hundred times what a virtual disk needs.  An interrupt that never
+             * reached the miniport (the first one after a restart, now and then, on KVM) is
+             * recovered as Storport recovers a timed-out request: the adapter is asked whether it
+             * has something to report; one that does completes the request. */
+            bool claimed = a->intr && nt_KeSynchronizeExecution(a->intr, poll_sync, a);
+            kprintf("[STOR] %s: SCSI command 0x%02x had no interrupt after 2 s (adapter %s)\n", a->drv->service,
+                    cdb[0], claimed ? "had one pending" : "had none pending");
+            timeout = REQ_TIMEOUT - REQ_POLL_AT;
+            if (nt_KeWaitForSingleObject(&a->done_ev, 0, 0, 0, &timeout) == NT_STATUS_TIMEOUT && !a->done) {
+                kprintf("[STOR] %s: SCSI command 0x%02x was never completed\n", a->drv->service, cdb[0]);
+                return 0;
+            }
         }
         status = SRB_STATUS(srb->SrbStatus);
         if (got) *got = srb->DataTransferLength;

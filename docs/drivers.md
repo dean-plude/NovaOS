@@ -583,6 +583,15 @@ Limits today: one request at a time through a 64 KiB bounce buffer,
 line-based interrupts only (no MSI-X), and a started adapter cannot be
 removed. NovaOS still boots from its own built-in storage drivers.
 
+A request that has not completed after 2 s (a virtual disk needs milliseconds)
+is not left to wait out its 30 s timeout: the host runs the miniport's
+`HwInterrupt` by hand under the interrupt lock, as Storport asks a timed-out
+adapter what it has, and logs whether the adapter had an interrupt pending
+(`SCSI command 0x28 had no interrupt after 2 s`). In CI the first read after a
+restart, on KVM, now and then never got its interrupt; the log line says
+whether the card finished (the interrupt was lost on its way) or not (the
+kick was).
+
 ### Wi-Fi: Intel's AX211 driver (partly)
 
 Intel's Windows Wi-Fi driver for the AX211 in the ThinkPad T14 Gen 4,

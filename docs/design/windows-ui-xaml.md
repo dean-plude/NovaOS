@@ -416,11 +416,36 @@ vendors.
      `xamlloadtest` makes `XamlReader`'s activation factory and calls
      `XamlReader.Load` on a thread with no framework core, which answers
      `RPC_E_WRONG_THREAD` as Windows does.
-   - *Next.*  What `DXamlCore::InitializeInstance` needs to run: the
-     control layer (`CJupiterControl`, `CXcpDispatcher`), the
-     dispatcher, `Window`, the error helper, the static store, the
-     default styles and the reference tracker, then the value boxer and
-     peers `XamlReader.Load` returns objects through, until
+   - *Part 12: the control layer and the DispatcherQueue.*  Every XAML
+     thread runs on a `DispatcherQueue`, so NovaOS gains
+     `CoreMessaging.dll`: the `DispatcherQueue`, its controller and
+     timers for both `Microsoft.UI.Dispatching` (the Windows App SDK's)
+     and `Windows.System`, one queue per thread over a message-only
+     window, with high, normal and low priority work, the shutdown
+     events and their deferrals, `RunEventLoop`, dedicated threads and
+     `CreateDispatcherQueueController` (test `dispatchqtest`).  ole32
+     gains the restricted error info (`RoOriginateError` keeps an
+     `IRestrictedErrorInfo` per thread, `GetRestrictedErrorInfo`,
+     `RoGetErrorReportingFlags`).  Built from Microsoft's sources: the
+     error helper (`ErrorHelper.cpp`), `CJupiterControl`, `CControlBase`,
+     the XAML window's dispatcher `CXcpDispatcher` with its pending
+     messages, and the browser host `CXcpBrowserHost`, on new stand-ins
+     for FrameworkUdk's `FinalUnhandledErrorDetected` and
+     `VisualDiagnosticsPort` functions (`src/framework_udk.cpp`).
+     `xamlloadtest` makes a `CXcpDispatcher` on a thread's
+     `DispatcherQueue` and has it run its tick, then calls
+     `CJupiterControl::Create`, which gets through the platform layer,
+     the dispatcher and the core services and stops at the rendering
+     seam (`CommonBrowserHost::CreateRenderTarget`: the graphics device
+     manager, the compositor and UI thread schedulers and the window
+     render target), not yet built, with `E_NOTIMPL`.
+   - *Next.*  The rendering seam `CJupiterControl` stops at
+     (`WindowsGraphicsDeviceManager`, `DCompTreeHost`,
+     `CompositorScheduler`, `UIThreadScheduler`, `CWindowRenderTarget`),
+     then the rest of `DXamlCore::InitializeInstance`
+     (`DispatcherImpl`, `Window`, the static store, the default styles,
+     the UI affinity release queue and the reference tracker), then the
+     value boxer `XamlReader.Load` returns objects through, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:

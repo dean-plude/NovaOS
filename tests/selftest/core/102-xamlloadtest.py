@@ -8,7 +8,7 @@
 # up to the rendering seam)
 DOC = ('`xamlloadtest` (Microsoft\'s XAML object writer and `CResourceDictionary`, built from its sources: '
        'XAML text loaded into a live resource dictionary with merged and theme dictionaries, through the core\'s own '
-       '`CCoreServices`, made by `CCoreServices::Create` on the platform layer\'s services, the framework\'s `XamlReader` factory, and the control layer: `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create` up to the rendering seam)')
+       '`CCoreServices`, made by `CCoreServices::Create` on the platform layer\'s services, the framework\'s `XamlReader` factory, and the control layer: `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create` up to the rendering seam; and the framework\'s dispatcher and default styles)')
 TESTS = [
     Test('xamlloadtest', 'xamlloadtest', [r'xamlloadtest: \d+ passed, 0 failed \(64-bit\)'], timeout=120),
 ]

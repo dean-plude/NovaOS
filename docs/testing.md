@@ -123,22 +123,23 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `CCoreServices::Create` on the platform layer's services, the
   framework's `XamlReader` factory, and the control layer:
   `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create`
-  up to the rendering seam), `xamlparsetest` (Microsoft's XAML parser,
-  built from its sources: XAML text to XAML's node stream through
-  NovaOS's xmllite.dll, markup extensions, resource keys and maps),
-  `nlstest` (date, time, number and currency formats in German and
-  Japanese, 64- and 32-bit; `nlstest user`), `nlstest calendars`
-  (Japanese eras, Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura
-  and Persian dates; `GetDurationFormat`) and `nlstest override`
-  (`SetLocaleInfo`), 64- and 32-bit, `tlbtest` (type libraries, 64- and
-  32-bit), `usptest` (Arabic and Devanagari shaped through Uniscribe and
-  drawn by `ExtTextOut`, 64- and 32-bit), `cppeh`, `dlgtest` (the common
-  file dialogs: `OPENFILENAME` settings, `IFileDialog` objects),
-  `unwindtest`, `stltest` (the C++ standard library, 64- and 32-bit),
-  `delaytest` (the DLLs Firefox delay-loads), `rttest` (complex math,
-  conio, DLL directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt
-  programs need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello,
-  the process DACL), `battery` (against the battery in
+  up to the rendering seam; and the framework's dispatcher and default
+  styles), `xamlparsetest` (Microsoft's XAML parser, built from its
+  sources: XAML text to XAML's node stream through NovaOS's xmllite.dll,
+  markup extensions, resource keys and maps), `nlstest` (date, time,
+  number and currency formats in German and Japanese, 64- and 32-bit;
+  `nlstest user`), `nlstest calendars` (Japanese eras, Buddhist, Taiwan,
+  Tangun, Hebrew, Hijri, Um Al Qura and Persian dates;
+  `GetDurationFormat`) and `nlstest override` (`SetLocaleInfo`), 64- and
+  32-bit, `tlbtest` (type libraries, 64- and 32-bit), `usptest` (Arabic
+  and Devanagari shaped through Uniscribe and drawn by `ExtTextOut`, 64-
+  and 32-bit), `cppeh`, `dlgtest` (the common file dialogs:
+  `OPENFILENAME` settings, `IFileDialog` objects), `unwindtest`,
+  `stltest` (the C++ standard library, 64- and 32-bit), `delaytest` (the
+  DLLs Firefox delay-loads), `rttest` (complex math, conio, DLL
+  directories, sscanf_s, 64- and 32-bit), `qttest` (what Qt programs
+  need: `GetGlyphOutline`, C++/WinRT `HSTRING`s, Windows Hello, the
+  process DACL), `battery` (against the battery in
   `tests/acpi/battery.asl`), `soundtest` (the recorded WAV must hold the
   tones played), `soundtest godot` (WASAPI through IAudioClient3 as
   Godot plays, 64-bit and 32-bit), `soundtest record`, `capture` and

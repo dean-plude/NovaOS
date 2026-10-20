@@ -6,6 +6,7 @@
 
 #include "smp.h"
 #include "idle.h"
+#include "irql.h"
 #include "kpcr.h"
 #include "printf.h"
 #include "scheduler.h"
@@ -262,6 +263,22 @@ void bkl_relax(void)
 
 void cpu_idle_wait(void)
 {
+    /* An idle thread holds nothing, so it runs at PASSIVE_LEVEL.  Left at a
+     * device IRQL, its CPU's task priority would keep out the timer and
+     * every device interrupt up to that level for as long as it idles: the
+     * threads that wait on CPU 0's tick (the input poll, the desktop) and
+     * the interrupts routed to it would stall.  Say so once per CPU and
+     * put it back. */
+    UINT8 irql = KeIrql();
+    if (irql) {
+        static uint32_t told;
+        uint32_t bit = 1u << KiGetCurrentKpcr()->CpuNumber;
+        if (!(__atomic_fetch_or(&told, bit, __ATOMIC_RELAXED) & bit)) {
+            kprintf("[SMP] CPU %u's idle thread was at IRQL %u: back to PASSIVE_LEVEL\n",
+                    KiGetCurrentKpcr()->CpuNumber, irql);
+        }
+        KeIrqlSet(PASSIVE_LEVEL);
+    }
     IrqState s = irq_save();
     Thread *t = me();
     uint32_t depth = t->bkl_depth;

@@ -439,15 +439,41 @@ vendors.
      seam (`CommonBrowserHost::CreateRenderTarget`: the graphics device
      manager, the compositor and UI thread schedulers and the window
      render target), not yet built, with `E_NOTIMPL`.
-   - *Next.*  The rendering seam `CJupiterControl` stops at
-     (`WindowsGraphicsDeviceManager`, `DCompTreeHost`,
-     `CompositorScheduler`, `UIThreadScheduler`, `CWindowRenderTarget`),
-     then the rest of `DXamlCore::InitializeInstance`
+   - *Part 13: the rendering seam.*  `CJupiterControl::Create` now
+     gets through `CommonBrowserHost::CreateRenderTarget`, built from
+     Microsoft's sources: the graphics device manager
+     (`WindowsGraphicsDeviceManager`, with `DCompTreeHost`,
+     `OfferTracker`, `ProjectedShadowManager` and the refresh rate
+     info), the compositor scheduler with its refresh-aligned clock, the
+     UI thread scheduler, and the window render target
+     (`CWindowRenderTarget`: the hardware walk `HWWalk` with its surface
+     cache and texture manager, and `CompositorTreeHost`), plus what it
+     calls on the way: the error service, the downloader and its async
+     request manager, the value store, `WUCBrushManager` and the
+     hardware render commands.  The device manager makes its Direct3D 11
+     device (`CD3D11Device`, `CD3D11DeviceInstance`) and Direct2D device
+     (`CD2DFactory`) on a thread of its own and draws a first line of
+     text there with DirectWrite.  Without DXVK that device is NovaOS's
+     software device (`userland/d3d11/soft.c`), which gains
+     `IDXGIDevice2`/`3` (offer, reclaim and trim, which have nothing to
+     do in memory), `ID3D10Multithread` (a critical section) and
+     `ID3D11Device4` (device-removed events that never fire); ole32
+     gains combase's `RoFailFastWithErrorContextInternal2`, which XAML's
+     fail-fast paths call.  `plat/win/desktop`'s precompiled header names
+     closed headers (MUI, print preview, the windowless RichEdit host),
+     so NovaOS's own `src/platdesktop/precomp.h` stands in for it.
+     Stand-ins left on this path, stopping if reached:
+     `CJupiterWindow::GetJupiterWindowPhysicalSize` (the window class
+     needs the closed `FrameworkUdk/CoreWindowIntegration.h`; the
+     `Window` start-up builds it).  `xamlloadtest` checks that
+     `CJupiterControl::Create` succeeds with its render target.
+   - *Next.*  The rest of `DXamlCore::InitializeInstance`
      (`DispatcherImpl`, `Window`, the static store, the default styles,
-     the UI affinity release queue and the reference tracker), then the
-     value boxer `XamlReader.Load` returns objects through, until
-     `Application.Start` runs and `XamlReader.Load` parses a page, one
-     component seam per pull request.
+     the UI affinity release queue and the reference tracker), the value
+     boxer `XamlReader.Load` returns objects through, and the
+     composition interfaces in `dcomp`, until `Application.Start` runs
+     and `XamlReader.Load` parses a page, one component seam per pull
+     request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

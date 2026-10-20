@@ -27,3 +27,27 @@ struct __declspec(uuid("62baa2d2-ab54-41b7-b872-787e0106a421")) ID2D1PathGeometr
 struct __declspec(uuid("bb12d362-daee-4b9a-aa1d-14ba401cfa1f")) ID2D1Factory1;
 struct __declspec(uuid("31e6e7bc-e0ff-4d46-8c64-a0a8c41c15d3")) ID2D1Multithread;
 #endif
+
+/* and D2D1::Matrix4x4F, which the Windows SDK's d2d1_1helper.h (included by
+ * its d2d1_1.h) gives and MinGW-w64's lacks: a 4x4 matrix over
+ * D2D1_MATRIX_4X4_F with the product XAML's Direct2D helpers use
+ * (plat/win/desktop/D2DUtils.h) */
+#ifdef __cplusplus
+namespace D2D1 {
+class Matrix4x4F : public D2D1_MATRIX_4X4_F
+{
+public:
+    Matrix4x4F() { for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) m[i][j] = i == j ? 1.0f : 0.0f; }
+    static const Matrix4x4F *ReinterpretBaseType(const D2D1_MATRIX_4X4_F *p) { return static_cast<const Matrix4x4F *>(p); }
+    static Matrix4x4F *ReinterpretBaseType(D2D1_MATRIX_4X4_F *p) { return static_cast<Matrix4x4F *>(p); }
+    Matrix4x4F operator*(const Matrix4x4F &o) const
+    {
+        Matrix4x4F r;
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                r.m[i][j] = m[i][0] * o.m[0][j] + m[i][1] * o.m[1][j] + m[i][2] * o.m[2][j] + m[i][3] * o.m[3][j];
+        return r;
+    }
+};
+}
+#endif

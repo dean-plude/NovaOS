@@ -1,0 +1,19 @@
+Microsoft's MRT Core (Modern Resource Technology), vendored for NovaOS
+=====================================================================
+
+Source: https://github.com/microsoft/WindowsAppSDK (MIT, LICENSE),
+commit 0cf06784786e1e18d25099ca1d2e3dbeefce677e, its dev/MRTCore/mrt tree.
+Kept, unchanged: mrt/mrm/include and mrt/mrm/mrmmin (the resources.pri
+reader: the file and section formats, the hierarchical names, the
+decisions, the resource maps), mrt/Core/src (MRM.dll: the flat C API,
+MrmCreateResourceManager, MrmLoadStringResource...) and LICENSE.  Left
+out: the NuGet packages.config files, the tests, the build-time tools.
+
+userland/mrm/build.py compiles mrmmin.vcxproj's sources and MRM.cpp into
+NovaOS's MRM.dll with MRM.def's exports (one header line clang will not
+take as MSVC does is patched in the build's copy, not here).  shlwapi's
+SHLoadIndirectString reads app packages' "ms-resource:" strings with it;
+tools/appx/makepri.py writes .pri files in the format it reads.
+
+To update: replace mrt/ with a newer commit's (the same three folders)
+and rebuild; build.py fails if its header patch no longer applies.

@@ -1,0 +1,4 @@
+{
+  "deps": ["msvcp140", "ole32", "advapi32", "kernel32", "ntdll"],
+  "file": "MRM.dll"
+}

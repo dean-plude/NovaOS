@@ -210,7 +210,7 @@ static bool has_ext(const char *name, const char *ext)     /* case-insensitive *
     return true;
 }
 
-typedef enum { FT_OTHER, FT_TEXT, FT_ICON, FT_PNG, FT_EXE, FT_DLL, FT_CURSOR, FT_MSI, FT_LINK } FileType;
+typedef enum { FT_OTHER, FT_TEXT, FT_ICON, FT_PNG, FT_EXE, FT_DLL, FT_CURSOR, FT_MSI, FT_APPX, FT_LINK } FileType;
 
 static FileType file_type(const RamNode *f)
 {
@@ -221,6 +221,7 @@ static FileType file_type(const RamNode *f)
     if (has_ext(f->name, ".exe") || has_ext(f->name, ".com")) return FT_EXE;     /* (a DOS .COM runs in ntvdm.exe) */
     if (has_ext(f->name, ".dll")) return FT_DLL;
     if (has_ext(f->name, ".msi")) return FT_MSI;
+    if (has_ext(f->name, ".msix") || has_ext(f->name, ".appx")) return FT_APPX;
     if (has_ext(f->name, ".lnk")) return FT_LINK;
     if (has_ext(f->name, ".txt") || has_ext(f->name, ".md") || has_ext(f->name, ".log") ||
         has_ext(f->name, ".ini") || has_ext(f->name, ".c") || has_ext(f->name, ".h"))
@@ -239,6 +240,7 @@ const char *AppFileTypeName(const RamNode *f)
     case FT_EXE:    return "Application";
     case FT_DLL:    return "Application extension";
     case FT_MSI:    return "Windows Installer Package";
+    case FT_APPX:   return "App Package";
     case FT_LINK:   return "Shortcut";
     case FT_TEXT:   return "Text Document";
     default:        return "File";
@@ -388,6 +390,9 @@ void AppOpenFile(RamNode *file)
     case FT_MSI:
         AppRunMsi(file);
         break;
+    case FT_APPX:
+        AppRunAppx(file);
+        break;
     default:
         NotepadOpen(file);
         break;
@@ -528,6 +533,19 @@ bool AppRunMsi(RamNode *msi)
     ksnprintf(cmd, sizeof(cmd), "msiexec /i \"%s\"", path);
     /* (installing for the machine: UAC asks, as Windows' installer service does) */
     return UmSpawnDetachedElevated(exe, cmd, msi->parent);
+}
+
+/* Install an app package (.msix, .appx): appx.exe as administrator (UAC
+ * asks: it writes C:\Programs\WindowsApps), in a Terminal that shows what
+ * it installed (or why it would not) */
+bool AppRunAppx(RamNode *pkg)
+{
+    if (!pkg || !RamfsResolve(NULL, "\\Windows\\System32\\appx.exe")) return false;
+    char path[RAMFS_PATH_MAX], cmd[RAMFS_PATH_MAX + 32];
+    RamfsPath(pkg, path, sizeof(path));
+    ksnprintf(cmd, sizeof(cmd), "sudo appx install \"%s\"", path);
+    TerminalRun(cmd, pkg->parent);
+    return true;
 }
 
 void AppRunProgram(RamNode *exe, const char *cmdline)

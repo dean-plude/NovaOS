@@ -1105,7 +1105,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
-  then the Calculator package.
+  then the Calculator package.  First part done: `appx` installs,
+  lists, removes and starts unsigned packages (block map checked, signed
+  packages refused until their signatures can be verified), package
+  identity in kernel32, packaged Windows Runtime classes,
+  `ApplicationActivationManager`, `resources.pri` through Microsoft's MRT
+  Core (`MRM.dll`), test `appxtest`.  Next, for Calculator: bundles,
+  framework packages (VCLibs, `Microsoft.UI.Xaml`) and package signature
+  verification, after 32.3 to 32.5.
 
 ---
 

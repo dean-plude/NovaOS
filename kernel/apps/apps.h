@@ -65,6 +65,7 @@ void AppRunProgram(RamNode *exe, const char *cmdline);
 /* Install a .msi package with Windows Installer (msiexec /i); false if
  * msiexec.exe is missing */
 bool AppRunMsi(RamNode *msi);
+bool AppRunAppx(RamNode *pkg);
 
 /* Recently opened documents and folders (newest first), for the Start menu */
 void AppNoteRecentFile(RamNode *node);

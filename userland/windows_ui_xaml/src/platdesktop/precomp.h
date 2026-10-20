@@ -8,7 +8,8 @@
 // platform layer not built yet that are written against the closed SDK
 // (FrameworkUdk's MuiUdk.h; windowless RichEdit's text services and UI
 // Automation sites; printing's preview and document packages; Media
-// Foundation's image sharing engine; the MRT resource providers).
+// Foundation's image sharing engine; the MRT resource providers), and with
+// its headers spelled as they are on disk (a case-sensitive file system).
 #pragma once
 
 #ifndef _WIN32_WINNT
@@ -149,8 +150,8 @@
 #include "UIAWrapper.h"
 #include "UIAPatternProviderWrapper.h"
 
-#include <D2d1.h>
-#include <D3d11.h>
+#include <d2d1.h>
+#include <d3d11.h>
 #include <DWrite_3.h>
 #endif
 
@@ -159,7 +160,7 @@
 #include <d3d11.h>
 #include <d3d11_1.h>
 
-#include "d3d11SharedDeviceGuard.h"
+#include "d3D11SharedDeviceGuard.h"
 #include "d3d11device.h"
 
 #include "elements.h"
@@ -179,7 +180,7 @@
 #include "MsResourceHelpers.h"
 #include "UriXStringGetters.h"
 
-#include "Dwmapi.h"
+#include <dwmapi.h>
 
 #include "BasePALResource.h"
 

@@ -491,18 +491,34 @@ vendors.
      fail-fast paths call.  `plat/win/desktop`'s precompiled header names
      closed headers (MUI, print preview, the windowless RichEdit host),
      so NovaOS's own `src/platdesktop/precomp.h` stands in for it.
-     Stand-ins left on this path, stopping if reached:
+     The one stand-in this path left,
      `CJupiterWindow::GetJupiterWindowPhysicalSize` (the window class
-     needs the closed `FrameworkUdk/CoreWindowIntegration.h`; the
-     `Window` start-up builds it).  `xamlloadtest` checks that
+     needs the closed `FrameworkUdk/CoreWindowIntegration.h`), is now
+     NovaOS's own (below).  `xamlloadtest` checks that
      `CJupiterControl::Create` succeeds with its render target.
-   - *Next.*  The rest of `DXamlCore::InitializeInstance`
-     (`DispatcherImpl`, `Window`, the static store, the default styles,
-     the UI affinity release queue and the reference tracker), the value
-     boxer `XamlReader.Load` returns objects through, and the
-     composition interfaces in `dcomp`, until `Application.Start` runs
-     and `XamlReader.Load` parses a page, one component seam per pull
-     request.
+   - *Phase 32 push, `DXamlCore`'s start-up.*  Built from Microsoft's
+     sources: the XAML dispatcher `DispatcherImpl` (`dispatcher.cpp`),
+     the default control styles' cache `DefaultStyles`, the `Window`
+     (`Window_Partial.cpp` and its generated class) and the framework's
+     peer base class `DirectUI::DependencyObject`.  The isolated tests'
+     `DependencyObject_Stub.cpp` defines two of the peer base's
+     members; programs on the core link it with those renamed out
+     (`CORE_STUB_RENAMES` in `build.py`).  Of the framework's window,
+     `CJupiterWindow`, whose source includes headers Microsoft does not
+     publish, NovaOS writes the one member the control layer calls on a
+     resize, its client size in physical pixels
+     (`src/jupiter_window.cpp`).  `xamlloadtest` makes a
+     `DispatcherImpl` (unconnected, it is no thread's and refuses work)
+     and a `DefaultStyles`.  A `Window` is made only on an initialized
+     `DXamlCore` (its constructor reads the thread's core), and it
+     fails fast unless the `EnableUWPWindow` feature is on or the core
+     was initialized for islands.
+   - *Next.*  The rest of `DXamlCore::InitializeInstance` (the static
+     store, the UI affinity release queue and the reference tracker
+     with the lifetime library, a `Window` on the initialized core), then the
+     value boxer `XamlReader.Load` returns objects through, until
+     `Application.Start` runs and `XamlReader.Load` parses a page, one
+     component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

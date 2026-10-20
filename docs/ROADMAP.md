@@ -1102,10 +1102,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   window render target with its hardware walk and compositor tree host)
   built from their sources, so `CJupiterControl::Create` succeeds in
   `xamlloadtest`, on NovaOS's software Direct3D 11 device without DXVK.
-  Next: the rest of
-  `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the static
-  store, the default styles, the reference tracker), then
-  `XamlReader.Load` and `Application.Start` end to end.
+  Phase 32 push: the XAML dispatcher
+  (`DispatcherImpl`), the default styles' cache (`DefaultStyles`), the
+  `Window` and the framework's peer base class (`DependencyObject`)
+  built from their sources, the dispatcher and styles run in
+  `xamlloadtest`.
+  Next: the static store, the UI affinity release queue and the
+  reference tracker, a `Window` made on an initialized `DXamlCore`,
+  then `XamlReader.Load` and `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

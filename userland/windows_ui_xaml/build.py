@@ -165,6 +165,23 @@ CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namesco
                 'control/common/shared/sl/controlBase.vcxproj': ('../ControlBase.cpp', '../FrameCounter.cpp'),
                 'win/shared/sl/shared.vcxproj': ('../xcpwindow.cpp', '../PendingMessages.cpp'),
                 'hostpalplatmisc.vcxproj': ('host/win/browserdesktop/WinBrowserHost.cpp',)}
+# (Xaml 32.3 push, DXamlCore start-up rest: the rest of what
+# DXamlCore::InitializeInstance makes after the control: the XAML
+# dispatcher, DispatcherImpl (dispatcher.cpp), the default control styles'
+# cache, DefaultStyles, and the Window, Window_Partial with its generated
+# class)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../dispatcher.cpp', '../DefaultStyles.cpp', '../Window_Partial.cpp', '../winrtgeneratedclasses/Window.g.cpp')
+# (and the framework's peer base class, DirectUI::DependencyObject, the
+# Window's)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../DependencyObject.cpp',)
+# (whose stubs, which the component tests keep, a program on the core links
+# renamed out)
+CORE_STUB_RENAMES = {'DependencyObject_Stub.cpp': ('GetHandle', 'GetModernDoubleValue')}
+# (and, of the framework's window, CJupiterWindow, the size the control
+# layer reads, src/jupiter_window.cpp)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'jupiter_window.cpp'))
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
@@ -514,7 +531,7 @@ def test_stubs(b, odir):
         f = flags(b) + ['-D__XAML_UNITTESTS__']
         headers = [os.path.join(r, h) for r, _, fs in os.walk(INC) for h in fs if h.endswith('.h')] + \
                   [os.path.abspath(__file__)]
-        objs = []
+        objs, core_variants = [], []
         for proj, skip, more in TEST_STUBS + [('Collection/Lib/Microsoft.UI.Xaml.Collection.vcxproj', None, [])]:
             p = vcxproj.read(os.path.join(XCP, 'components', proj), PROPS)
             extra = more + [x for i in p['includes'] for x in ('-I', i)] + ['-D' + d for d in p['defines']] + \
@@ -528,6 +545,10 @@ def test_stubs(b, odir):
             for x in renamed:
                 objs += b.compile_many([x], odir, 'xamlstub_', f + extra + [
                     f'-D{n}={n}_stub' for n in STUB_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
+            for x in [x for x in srcs if os.path.basename(x) in CORE_STUB_RENAMES]:
+                core_variants += b.compile_many([x], odir, 'xamlcorestub_', f + extra + [
+                    f'-D{n}={n}_stub' for n in STUB_RENAMES.get(os.path.basename(x), ()) +
+                    CORE_STUB_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
         # and those of what the resource dictionary calls in the core above
         # it (src/elements_stubs.cpp) and the properties' runtime data
         # (src/property_data.cpp), with the elements' flags (and, each alone,
@@ -541,6 +562,10 @@ def test_stubs(b, odir):
             'error_service.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
             headers, compiler='clang++')
         core_objs = [o for o in objs if not os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' in CORE_SERVICES_STUBS]
+        # (a stub the core builds part of for real is linked, by a program
+        # on the core, with that part renamed out: CORE_STUB_RENAMES)
+        core_objs = [o for o in core_objs if os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' not in CORE_STUB_RENAMES] + \
+            core_variants
         for out, members in ((lib, objs), (core_lib, core_objs)):
             if not os.path.exists(out) or any(os.path.getmtime(o) > os.path.getmtime(out) for o in members):
                 b.run(['lld-link', '/lib', f'/out:{out}'] + members)

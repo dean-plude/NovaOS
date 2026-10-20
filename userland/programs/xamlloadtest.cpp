@@ -25,11 +25,17 @@
  * made on the thread's DispatcherQueue (CoreMessaging.dll) and ticking from
  * its timer, and the Jupiter control, CJupiterControl, which makes the
  * dispatcher and the browser host (CXcpBrowserHost, with the thread's core
- * services); and (part 13) the browser host's render target
+ * services); (part 13) the browser host's render target
  * (CWindowRenderTarget: the hardware walk and compositor tree host on the
  * graphics device manager, whose Direct3D 11 device and Direct2D device are
  * made on a thread of their own, with the compositor and UI thread
- * schedulers), so CJupiterControl::Create succeeds.
+ * schedulers), so CJupiterControl::Create succeeds; and (the 32.3 push)
+ * what DXamlCore::InitializeInstance makes after the control: the XAML
+ * dispatcher (DispatcherImpl, which knows its thread and refuses work
+ * without a core) and the default control styles' cache (DefaultStyles);
+ * the Window and the framework's peer base class,
+ * DirectUI::DependencyObject, build and link here, but a Window is made
+ * only on a thread whose DXamlCore is initialized.
  *
  * Until the core's generated type table builds, the table here activates
  * the handful of types the cases use (below).
@@ -54,6 +60,9 @@
 #include <JupiterControl.h>
 #include <XcpWindow.h>
 #include <microsoft.ui.dispatching.h>
+#include <Dispatcher.h>
+#include <Callback.h>
+#include <DefaultStyles.h>
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
@@ -412,6 +421,38 @@ static void test_control()
     if (t) CloseHandle(t);
 }
 
+/* The pieces DXamlCore::InitializeInstance makes after the Jupiter
+ * control, each on its own (InitializeInstance itself waits on the
+ * rendering, above; the Window, on an initialized DXamlCore) */
+static DWORD WINAPI other_thread_check(void *p)
+{
+    return static_cast<DirectUI::DispatcherImpl *>(p)->OnDispatcherThread() ? 1 : 0;
+}
+
+static void test_startup()
+{
+    ctl::ComPtr<DirectUI::DispatcherImpl> disp;
+    CHECK_HR("the XAML dispatcher, DispatcherImpl", ctl::ComObject<DirectUI::DispatcherImpl>::CreateInstance(
+        disp.ReleaseAndGetAddressOf()));
+    if (disp) {
+        /* (DXamlCore connects it, on its own thread; unconnected it is no
+         * thread's and takes no work) */
+        CHECK("an unconnected dispatcher is not this thread's", !disp->OnDispatcherThread());
+        HANDLE t = CreateThread(nullptr, 0, other_thread_check, disp.Get(), 0, nullptr);
+        DWORD code = 2;
+        if (t) { WaitForSingleObject(t, 10000); GetExitCodeThread(t, &code); CloseHandle(t); }
+        CHECK("nor another thread's", code == 0);
+        HRESULT hr = disp->RunAsync(ctl::ComPtr<DirectUI::ICallback>());
+        CHECK("RunAsync without a core fails", FAILED(hr));
+    }
+
+    DirectUI::DefaultStyles *styles = new DirectUI::DefaultStyles();
+    CHECK("the default styles' cache, DefaultStyles", styles != nullptr);
+    CHECK("its style cache", styles->GetStyleCache() != nullptr);
+    styles->GetStyleCache()->Clear();
+    delete styles;
+}
+
 int main()
 {
     DirectUI::StaticLockGlobalInit();
@@ -419,6 +460,7 @@ int main()
     test_load();
     test_framework();
     test_control();
+    test_startup();
     printf("xamlloadtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     return fail != 0;

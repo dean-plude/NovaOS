@@ -856,8 +856,11 @@ static void switch_locked(RunQueue *rq)
      * holding a fast mutex): the next thread starts at PASSIVE_LEVEL or
      * goes on at its own */
     UINT8 irql = KeIrql();
-    if (irql >= DISPATCH_LEVEL)
+    if (irql >= DISPATCH_LEVEL) {
+        static bool traced;                 /* (where the first one switched: once, it may repeat) */
         kprintf("[SCHED] IRQL_NOT_LESS_OR_EQUAL: thread '%s' (TID %lu) waits at IRQL %u\n", prev->name, prev->tid, irql);
+        if (!__atomic_exchange_n(&traced, true, __ATOMIC_RELAXED)) KsymBacktraceHere();
+    }
     if (irql) KeIrqlSet(PASSIVE_LEVEL);
 
     /* Perform the actual register swap */

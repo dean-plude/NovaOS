@@ -129,7 +129,15 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   the APIC delivers once the IRQL drops, and switches then; a thread
   that blocks at `APC_LEVEL` (holding a fast mutex) keeps its IRQL across
   the switch.  A dispatch routine that returns above `PASSIVE_LEVEL` is
-  logged (`IRQL_GT_ZERO_AT_SYSTEM_SERVICE`) and its IRQL put back.  Device interrupts
+  logged (`IRQL_GT_ZERO_AT_SYSTEM_SERVICE`) and its IRQL put back.  An idle
+  thread found above `PASSIVE_LEVEL` when it is about to halt is logged
+  once per CPU and put back too: left at a device IRQL, its CPU would keep
+  out the clock tick and the interrupts routed to it while it idles, which
+  stalled the input poll and the desktop on CPU 0 after a restart with a
+  boot-start driver whose device had an interrupt waiting (the devices
+  self-tests' "after boot" checks under KVM).  The first thread switched
+  out at a raised IRQL also prints where it was, and an interrupt taken at
+  an IRQL that masks it is logged once.  Device interrupts
   for a Windows driver run at the vector's IRQL (`vector / 16`, as on
   Windows) with interrupts off; once the routines are done the interrupt
   is ended and the IRQL goes back down with interrupts on, so whatever

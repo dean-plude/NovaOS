@@ -109,7 +109,9 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   CoreWindow events and dispatcher, RunAsync, a swap chain for a
   CoreWindow; 64- and 32-bit), `d2dctxtest` (Direct2D device contexts:
   ID2D1Device on Direct3D 11, bitmaps on DXGI surfaces,
-  DirectComposition surfaces drawn with Direct2D; 64-bit), `wictest`,
+  DirectComposition surfaces drawn with Direct2D; 64-bit),
+  `dispatchqtest` (the DispatcherQueue: work by priority, timers, the
+  event loop, a dedicated thread, shutdown; 64- and 32-bit), `wictest`,
   `winrtabitest` (the generated Windows Runtime ABI headers: IIDs, and
   the Compositor driven through them; 64- and 32-bit), `xamlbasetest`
   (Microsoft's XAML core, lowest layer, built from its sources, and
@@ -118,12 +120,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   and `CResourceDictionary`, built from its sources: XAML text loaded
   into a live resource dictionary with merged and theme dictionaries,
   through the core's own `CCoreServices`, made by
-  `CCoreServices::Create` on the platform layer's services, and the
-  framework's `XamlReader` factory), `xamlparsetest` (Microsoft's XAML
-  parser, built from its sources: XAML text to XAML's node stream
-  through NovaOS's xmllite.dll, markup extensions, resource keys and
-  maps), `nlstest` (date, time, number and currency formats in German
-  and Japanese, 64- and 32-bit; `nlstest user`), `nlstest calendars`
+  `CCoreServices::Create` on the platform layer's services, the
+  framework's `XamlReader` factory, and the control layer:
+  `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create`
+  up to the rendering seam), `xamlparsetest` (Microsoft's XAML parser,
+  built from its sources: XAML text to XAML's node stream through
+  NovaOS's xmllite.dll, markup extensions, resource keys and maps),
+  `nlstest` (date, time, number and currency formats in German and
+  Japanese, 64- and 32-bit; `nlstest user`), `nlstest calendars`
   (Japanese eras, Buddhist, Taiwan, Tangun, Hebrew, Hijri, Um Al Qura
   and Persian dates; `GetDurationFormat`) and `nlstest override`
   (`SetLocaleInfo`), 64- and 32-bit, `tlbtest` (type libraries, 64- and
@@ -452,7 +456,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `wlantest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xamlbasetest`, `xamlloadtest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apitest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `wlantest`, `wndthreads`, `wvsetuptest`, `wvstarttest`, `xamlbasetest`, `xamlloadtest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

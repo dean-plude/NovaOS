@@ -19,7 +19,13 @@
  * built with the framework above the core (dxaml/lib, what becomes
  * Windows.UI.Xaml.dll): its per-thread core, DXamlCore, and the public
  * XamlReader's activation factory, which on a thread without XAML refuses
- * to load, as Windows' does.
+ * to load, as Windows' does; and (part 12) the framework's error helper
+ * (ErrorHelper: a null markup string is an invalid argument) and the
+ * control layer DXamlCore starts on: the XAML dispatcher, CXcpDispatcher,
+ * made on the thread's DispatcherQueue (CoreMessaging.dll) and ticking from
+ * its timer, and the Jupiter control, CJupiterControl, which makes the
+ * dispatcher and the browser host (CXcpBrowserHost, with the thread's core
+ * services) and stops where the rendering, not built yet, begins.
  *
  * Until the core's generated type table builds, the table here activates
  * the handful of types the cases use (below).
@@ -41,6 +47,9 @@
 #include <ParserAPI.h>
 #include <SystemThemingInterop.h>
 #include <XamlReader.g.h>
+#include <JupiterControl.h>
+#include <XcpWindow.h>
+#include <microsoft.ui.dispatching.h>
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
@@ -296,12 +305,115 @@ static void test_framework()
     CHECK("XamlReader.Load without XAML on the thread: RPC_E_WRONG_THREAD", hr == RPC_E_WRONG_THREAD && obj == nullptr);
 }
 
+/* A host site for a dispatcher of the test's own (CJupiterControl is the
+ * framework's): no window, no browser host, no automation */
+struct TestSite final : IXcpHostSite
+{
+    void IncrementReference() override {}
+    void ReleaseReference() override {}
+    void ReportError(IErrorService *) override {}
+    IPALUri *GetBaseUri() override { return nullptr; }
+    IPALUri *GetSecurityUri() override { return nullptr; }
+    HRESULT SetAppUri(IPALUri *) override { return S_OK; }
+    IXcpDispatcher *GetXcpDispatcher() override { return nullptr; }
+    IXcpBrowserHost *GetBrowserHost() const override { return nullptr; }
+    HRESULT CreateResourceManager(IPALResourceManager **) override { return E_NOTIMPL; }
+    XINT32 IsInitialized() override { return TRUE; }
+    HRESULT GetActualHeight(XUINT32 *h) override { *h = 0; return S_OK; }
+    HRESULT GetActualWidth(XUINT32 *w) override { *w = 0; return S_OK; }
+    XUINT32 GetIdentity() override { return 1; }
+    HRESULT IsDependencyObjectValid(CDependencyObject *) override { return S_OK; }
+    bool GetEnableFrameRateCounter() const override { return false; }
+    HRESULT SetEnableFrameRateCounter(bool) override { return S_OK; }
+    XHANDLE GetXcpControlWindow() override { return nullptr; }
+    HRESULT UIAClientsAreListening(UIAXcp::APAutomationEvents) override { return S_FALSE; }
+    HRESULT UIARaiseAutomationEvent(CAutomationPeer *, UIAXcp::APAutomationEvents) override { return S_OK; }
+    HRESULT UIARaiseAutomationPropertyChangedEvent(CAutomationPeer *, UIAXcp::APAutomationProperties, const CValue &,
+                                                   const CValue &) override { return S_OK; }
+    HRESULT UIARaiseFocusChangedEventOnUIAWindow() override { return S_OK; }
+    HRESULT UIARaiseTextEditTextChangedEvent(CAutomationPeer *, UIAXcp::AutomationTextEditChangeType, CValue *) override { return S_OK; }
+    HRESULT UIARaiseNotificationEvent(CAutomationPeer *, UIAXcp::AutomationNotificationKind, UIAXcp::AutomationNotificationProcessing,
+                                      xstring_ptr, xstring_ptr) override { return S_OK; }
+    HRESULT GetUIAWindow(CDependencyObject *, XHANDLE, bool, CUIAWindow **w) override { *w = nullptr; return S_OK; }
+    HRESULT GetAccessibleRootObjectReference(XHANDLE, XDWORD, XDWORD, XDWORD *, bool *handled) override { *handled = false; return S_OK; }
+    HRESULT OnFirstFrameDrawn() override { return S_OK; }
+    bool IsWindowDestroyed() override { return false; }
+    void OnReentrancyDetected() override {}
+    bool IsHdrOutput() const override { return false; }
+};
+
+static void pump(DWORD ms)
+{
+    DWORD start = GetTickCount();
+    MSG msg;
+    while (GetTickCount() - start < ms) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+    }
+}
+
+/* Part 12: the error helper and the control layer, on a thread of their own
+ * (a DispatcherQueue is the thread's for good once made) */
+static DWORD WINAPI control_thread(void *)
+{
+    ctl::ComPtr<msy::IDispatcherQueueControllerStatics> statics;
+    CHECK_HR("DispatcherQueueController's statics (CoreMessaging.dll)", wf::GetActivationFactory(
+        wrl_wrappers::HStringReference(RuntimeClass_Microsoft_UI_Dispatching_DispatcherQueueController).Get(), statics.ReleaseAndGetAddressOf()));
+    if (!statics) return 0;
+    ctl::ComPtr<msy::IDispatcherQueueController> controller;
+    CHECK_HR("a DispatcherQueue on the thread", statics->CreateOnCurrentThread(&controller));
+    if (!controller) return 0;
+    ctl::ComPtr<msy::IDispatcherQueue> queue;
+    controller->get_DispatcherQueue(&queue);
+
+    /* the XAML dispatcher, on the thread's queue; QueueTick starts its timer */
+    TestSite site;
+    IXcpDispatcher *disp = nullptr;
+    CHECK_HR("CXcpDispatcher::Create on the thread's DispatcherQueue", CXcpDispatcher::Create(&site, &disp));
+    if (disp) {
+        CHECK("the dispatcher's queue is the thread's", disp->GetDispatcherQueueNoRef() == queue.Get());
+        CHECK("the dispatcher's host site", disp->GetHostSite() == &site);
+        CHECK_HR("the dispatcher starts", disp->Start());
+        CHECK_HR("QueueTick", disp->QueueTick());
+        pump(100);                                      /* (the timer's tick runs the queued tick) */
+        disp->Deinit();
+        disp->Release();
+    }
+
+    /* the Jupiter control: its dispatcher and browser host, as far as the
+     * render target (the rendering does not build yet: E_NOTIMPL) */
+    CJupiterControl *control = nullptr;
+    HRESULT hr = CJupiterControl::Create(&control);
+    CHECK("CJupiterControl::Create reaches the render target (not built: E_NOTIMPL)", hr == E_NOTIMPL && control == nullptr);
+    if (control) control->Release();
+
+    ctl::ComPtr<msy::IDispatcherQueueController2> controller2;
+    if (SUCCEEDED(controller.As(&controller2))) controller2->ShutdownQueue();
+    return 0;
+}
+
+static void test_control()
+{
+    /* the error helper: XamlReader.Load(null) is an invalid argument */
+    ctl::ComPtr<DirectUI::XamlReaderFactory> reader;
+    ctl::ComObject<DirectUI::XamlReaderFactory>::CreateInstance(reader.ReleaseAndGetAddressOf());
+    ctl::ComPtr<xaml_markup::IXamlReaderStatics> statics;
+    if (reader) reader.As(&statics);
+    IInspectable *obj = reinterpret_cast<IInspectable *>(1);
+    HRESULT hr = statics ? statics->Load(nullptr, &obj) : E_FAIL;
+    CHECK("XamlReader.Load(null): E_INVALIDARG", hr == E_INVALIDARG);
+    HANDLE t = CreateThread(nullptr, 0, control_thread, nullptr, 0, nullptr);
+    CHECK("the control layer's thread", t && WaitForSingleObject(t, 60000) == WAIT_OBJECT_0);
+    if (t) CloseHandle(t);
+}
+
 int main()
 {
     DirectUI::StaticLockGlobalInit();
     test_dictionary();
     test_load();
     test_framework();
+    test_control();
     printf("xamlloadtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     return fail != 0;

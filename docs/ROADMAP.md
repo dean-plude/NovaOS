@@ -1083,11 +1083,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   framework's entry points from `dxaml/lib` (`DXamlCore`, `XamlReader`,
   `FrameworkApplication`, the instance storage and `DXamlServices`) built
   from their sources on that core, with `XamlReader`'s activation factory
-  made and called in `xamlloadtest`.  Next: what
-  `DXamlCore::InitializeInstance` needs to run (the control layer's
-  `CJupiterControl`, the dispatcher, `Window`, the error helper and the
-  framework's static store), then `XamlReader.Load` and
-  `Application.Start` end to end.
+  made and called in `xamlloadtest`.  Twelfth part done: the
+  `DispatcherQueue` every XAML thread runs on (`CoreMessaging.dll`, both
+  `Microsoft.UI.Dispatching` and `Windows.System`, test `dispatchqtest`),
+  the restricted error info in ole32, and the control layer
+  (`CJupiterControl`, `CControlBase`, `CXcpDispatcher`, the browser host)
+  and the error helper built from their sources, with
+  `CJupiterControl::Create` running up to the rendering seam in
+  `xamlloadtest`.  Next: the rendering seam (graphics device manager,
+  compositor scheduler, window render target), the rest of
+  `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the static
+  store, the default styles, the reference tracker), then
+  `XamlReader.Load` and `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

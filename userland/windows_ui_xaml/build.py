@@ -30,9 +30,13 @@
 # (xaml_core.lib, for programs that say "xaml": "core", with stand-ins
 # for the rest of the core: unbuilt()), with the framework's entry points
 # above it (dxaml/lib: DXamlCore, XamlReader, Application; programs that say
-# "xaml": "framework").  inc/ also stands in for the closed
-# Windows App SDK headers those include (FrameworkUdk's helpers, the lifted
-# IXP interop headers); the rest of the core links as it builds.
+# "xaml": "framework"), and the control layer under the framework's
+# start-up (CJupiterControl, CControlBase, CXcpDispatcher on the
+# DispatcherQueue, the browser host, the error helper).  inc/ and src/
+# also stand in for the closed
+# Windows App SDK headers and functions those include and call
+# (FrameworkUdk's helpers, the lifted IXP interop headers); the rest of the
+# core links as it builds.
 import os, re, subprocess, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,7 +117,12 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
                    'plat/win/browserdesktop/precomp.h', []),
                   ('dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj', 'dxaml/lib/sources.props', 'dxaml/lib/precomp.h',
                    [os.path.join(XCP, 'dxaml', 'lib', 'winrtgeneratedclasses', f)
-                    for f in ('XamlReader.g.cpp', 'FrameworkApplication.g.cpp')])]
+                    for f in ('XamlReader.g.cpp', 'FrameworkApplication.g.cpp')] +
+                   [os.path.join(HERE, 'src', 'framework_udk.cpp')]),
+                  ('control/common/shared/sl/controlBase.vcxproj', 'control/common/shared/sl/controlBase.vcxproj',
+                   'control/common/shared/precomp.h', []),
+                  ('win/shared/sl/shared.vcxproj', 'win/shared/sources.props', 'win/shared/precomp.h', []),
+                  ('hostpalplatmisc.vcxproj', 'hostpalplatmisc.vcxproj', 'precomp.h', [])]
 # the sources of a CORE_LIBRARIES project built so far, when not all of
 # them, which make xaml_core.lib: of the core's own library
 # (xcpcore.vcxproj), the core services, CCoreServices (dll/xcpcore.cpp,
@@ -133,8 +142,15 @@ CORE_LIBRARIES = [('core/Parser/core/Parser.Core.vcxproj', 'core/Parser/sources.
 # XamlReader.g.cpp and FrameworkApplication.g.cpp), its core per thread,
 # DXamlCore, with the thread's instance storage and DXamlServices, the
 # activation factories' checks (comTemplateLibrary.cpp), XamlReader and
-# Application (FrameworkApplication).  What they call in the rest of the
-# core and the framework stands in until it builds (unbuilt())
+# Application (FrameworkApplication), with the error helper
+# (ErrorHelper.cpp) and the control the framework's start-up makes
+# (JupiterControl.cpp); and of the control layer under it: CControlBase
+# with its frame counter (control/common/shared), the XAML window's
+# dispatcher CXcpDispatcher and its pending messages (win/shared, on the
+# thread's DispatcherQueue from CoreMessaging.dll) and the browser host
+# CXcpBrowserHost
+# (host/win/browserdesktop).  What they call in the rest of the core and
+# the framework stands in until it builds (unbuilt())
 CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namescope.cpp', 'dll/rendertargetbitmapmgr.cpp',
                                          'dethunk/elements/MediaQueue.cpp'),
                 'core/native/text/Common/Native.Text.Common.vcxproj': ('WinTextCore.cpp',),
@@ -144,7 +160,11 @@ CORE_SOURCES = {'core/xcpcore.vcxproj': ('dll/xcpcore.cpp', 'dll/xcpcore_namesco
                 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj': ('../DXamlCore.cpp', '../DXamlInstanceStorage.cpp',
                                                                          '../DXamlServices.cpp', '../comTemplateLibrary.cpp',
                                                                          '../XamlReader.cpp',
-                                                                         '../FrameworkApplication_Partial.cpp')}
+                                                                         '../FrameworkApplication_Partial.cpp',
+                                                                         '../ErrorHelper.cpp', '../JupiterControl.cpp'),
+                'control/common/shared/sl/controlBase.vcxproj': ('../ControlBase.cpp', '../FrameCounter.cpp'),
+                'win/shared/sl/shared.vcxproj': ('../xcpwindow.cpp', '../PendingMessages.cpp'),
+                'hostpalplatmisc.vcxproj': ('host/win/browserdesktop/WinBrowserHost.cpp',)}
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
@@ -166,6 +186,10 @@ CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] = \
 CORE_FIRST['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = \
     CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h', 'windows.applicationmodel.activation.h',
                                           'windows.applicationmodel.datatransfer.h']
+# (and the control layer's, its dispatcher's and its browser host's as the
+# platform layer's)
+for _p in ('control/common/shared/sl/controlBase.vcxproj', 'win/shared/sl/shared.vcxproj', 'hostpalplatmisc.vcxproj'):
+    CORE_FIRST[_p] = CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj']
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
 # ("framework": the framework's, dxaml/lib's, linked as "core" is)

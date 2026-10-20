@@ -54,3 +54,17 @@ namespace Windows.Foundation
         interface Windows.Foundation.IReferenceArray<Windows.Foundation.Rect>;
     };
 }
+
+// and the instances XAML's own declarations add
+// (dxaml/idl/winrt/main/windows.foundation.declarations.idl) or its value
+// boxer uses: read-only views of numbers, which the boxer hands out for
+// the core's arrays (ValueTypeView<T>)
+namespace Windows.Foundation.Collections
+{
+    declare
+    {
+        interface Windows.Foundation.Collections.IVectorView<Int32>;
+        interface Windows.Foundation.Collections.IVectorView<UInt32>;
+        interface Windows.Foundation.Collections.IVectorView<Double>;
+    };
+}

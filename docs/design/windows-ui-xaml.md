@@ -439,13 +439,44 @@ vendors.
      seam (`CommonBrowserHost::CreateRenderTarget`: the graphics device
      manager, the compositor and UI thread schedulers and the window
      render target), not yet built, with `E_NOTIMPL`.
+   - *The value boxer (Phase 32 push).*  What `XamlReader.Load` hands
+     its result back through.  NovaOS gains `wintypes.dll` with
+     `Windows.Foundation.PropertyValue`, the Windows Runtime's boxes
+     (every scalar and array type of `PropertyType`; `IPropertyValue`'s
+     numeric getters convert in range, as Windows' do; each box answers
+     its own `IReference<T>` or `IReferenceArray<T>`, whose IIDs are the
+     parameterized interfaces' worked out from their signatures; test
+     `propvaltest`).  Built from Microsoft's sources: the value boxer
+     (`components/valueboxer`: `CValueBoxer`, `PropertyValue`'s wrappers)
+     and the lifetime library (`components/lifetime`:
+     `ReferenceTrackerManager`, the weak reference sources, tracker
+     targets), each as its own core library with Microsoft's flags (they
+     call into the framework, so programs without it keep Microsoft's
+     stubs); the framework's `StaticStore` (the `PropertyValue` statics
+     and cached boxes) and `UIAffinityReleaseQueue`; and the core's
+     error service (`core/error`), deployment (`core/packaging`) and
+     entry points (`core/dll/CoreImports.cpp`).  The ABI headers gain
+     the `IVectorView` instances of numbers XAML's own declarations add.
+     `xamlloadtest` starts the framework on a thread as the XAML compiler
+     does (`DXamlCore::Initialize(InitializationType::Xbf)`, which needs
+     no window or rendering; the test makes the framework's per-thread
+     slot first, as its `DllMain` does), parses an `x:String` with that
+     thread's core and has `CValueBoxer` unbox it, and numbers and
+     booleans, into `PropertyValue` boxes, and box them back (given
+     the target's type, as a property's setter passes it: finding an
+     untyped box's type is the reflection API's, `core/metadata`, not
+     built yet).
+     `XamlReader.Load` itself parses through the browser host
+     (`Host_CreateFromXaml`), which the full start-up makes past the
+     rendering seam, so it runs end to end once that builds; an
+     element's framework peer also needs the peer base
+     (`DirectUI::DependencyObject`).
    - *Next.*  The rendering seam `CJupiterControl` stops at
      (`WindowsGraphicsDeviceManager`, `DCompTreeHost`,
      `CompositorScheduler`, `UIThreadScheduler`, `CWindowRenderTarget`),
      then the rest of `DXamlCore::InitializeInstance`
-     (`DispatcherImpl`, `Window`, the static store, the default styles,
-     the UI affinity release queue and the reference tracker), then the
-     value boxer `XamlReader.Load` returns objects through, until
+     (`DispatcherImpl`, `Window`, the default styles), then the element
+     classes and their framework peers, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:

@@ -52,7 +52,12 @@ then ErrorHelper.cpp and JupiterControl.cpp), the control layer
 sl/sources.g.props, sources.props and precomp.h; win/shared's xcpwindow.cpp
 and PendingMessages.cpp with sl/shared.vcxproj, sources.props and precomp.h;
 host/win/browserdesktop/WinBrowserHost.cpp with hostpalplatmisc.vcxproj and
-the top-level precomp.h) and the headers those include, external/inc's gsl
+the top-level precomp.h), the value boxer (components/valueboxer's lib,
+with its project) and the lifetime library (components/lifetime's lib,
+with its project), dxaml/lib's StaticStore.cpp and
+UIAffinityReleaseQueue.cpp, the core's error service (core/error),
+deployment (core/packaging/deployment.cpp) and entry points
+(core/dll/CoreImports.cpp) and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

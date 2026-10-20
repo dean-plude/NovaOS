@@ -858,7 +858,8 @@ static void defaults(void)
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication and CoreWindow (twinapi.appcore.dll; Windows
      * keeps CoreWindow in Windows.UI.dll), and the DispatcherQueue, Windows'
-     * and the Windows App SDK's (CoreMessaging.dll).  ActivationType 0 = in process,
+     * and the Windows App SDK's (CoreMessaging.dll), and the Windows Runtime's
+     * boxes for values, PropertyValue (wintypes.dll).  ActivationType 0 = in process,
      * Threading 0 = both apartments.  As on Windows, the 32-bit view
      * (WOW6432Node) has its own copy, naming the SysWOW64 DLL. */
     static const char *const wrt_classes[][2] = {
@@ -869,6 +870,7 @@ static void defaults(void)
         { "Windows.System.DispatcherQueueController", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueue", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueueController", "CoreMessaging.dll" },
+        { "Windows.Foundation.PropertyValue", "wintypes.dll" },
     };
     for (unsigned i = 0; i < 2 * (sizeof wrt_classes / sizeof wrt_classes[0]); i++) {
         char path[180];

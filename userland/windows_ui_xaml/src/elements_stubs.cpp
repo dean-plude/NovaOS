@@ -1,8 +1,7 @@
 // NovaOS: stand-ins, in the manner of Microsoft's isolated-test stubs
 // (components/unittests/stubs), for what the core's resource dictionary
 // (core/core/elements/Resources.cpp) calls in the parts of the core that do
-// not build yet: CApplication's base URIs, the
-// error service's invalid-operation errors, implicit-style invalidation and
+// not build yet: CApplication's base URIs, implicit-style invalidation and
 // eight of CDependencyObject's members from
 // core/core/elements/depends.cpp; and for the object writer runtime, the
 // framework's callbacks for app-defined (managed) types, the elements
@@ -19,7 +18,6 @@
 #include <Resources.h>
 #include <framework.h>
 #include <application.h>
-#include <ErrorService.h>
 #include <DXamlCore.h>
 #include <NullKeyedResource.g.h>
 #include <XamlTypeTokens.h>
@@ -49,12 +47,6 @@ _Check_return_ HRESULT CApplication::CreateBaseUri(_In_ XUINT32, _In_reads_(cUri
 {
     *ppUri = nullptr;
     return E_NOTIMPL;
-}
-
-_Check_return_ HRESULT CErrorService::OriginateInvalidOperationError(_In_ CCoreServices *, _In_ XUINT32, _In_ const xstring_ptr_view &,
-                                                                     _In_ const xstring_ptr_view &, _In_ const xstring_ptr_view &)
-{
-    return E_FAIL;
 }
 
 _Check_return_ HRESULT CDependencyObject::SetParticipatesInManagedTreeDefault()

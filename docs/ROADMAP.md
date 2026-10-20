@@ -1090,10 +1090,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`CJupiterControl`, `CControlBase`, `CXcpDispatcher`, the browser host)
   and the error helper built from their sources, with
   `CJupiterControl::Create` running up to the rendering seam in
-  `xamlloadtest`.  Next: the rendering seam (graphics device manager,
+  `xamlloadtest`.  Value boxer part (Phase 32 push) done: the
+  Windows Runtime's value boxes (`wintypes.dll`'s
+  `Windows.Foundation.PropertyValue`, test `propvaltest`), the value
+  boxer `CValueBoxer`, the lifetime library (`ReferenceTrackerManager`),
+  `StaticStore`, the release queue and the core's error service built,
+  with the framework started as the XAML compiler starts it and parsed
+  values unboxed in `xamlloadtest`.  Next: the rendering seam (graphics device manager,
   compositor scheduler, window render target), the rest of
-  `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the static
-  store, the default styles, the reference tracker), then
+  `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the
+  default styles), the element classes and their framework peers, then
   `XamlReader.Load` and `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.

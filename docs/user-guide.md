@@ -324,10 +324,33 @@ silently with the switches the manifest gives (or winget's usual ones for
 Inno Setup, NSIS, WiX Burn and Windows Installer); a portable program is
 copied to `C:\Programs\<command>\<command>.exe`, so typing its command
 runs it; `.zip` packages need **7-Zip** (`winget install 7zip.7zip`).
-MSIX and Microsoft Store packages cannot be installed: they need Windows'
-package deployment, which NovaOS does not have.  `winget list` shows what
+MSIX and Microsoft Store packages are not installed by winget (see
+[App packages](#app-packages)).  `winget list` shows what
 winget and the App Store installed and every program with an entry in
 Windows' installed programs list.
+
+### App packages
+
+Windows app packages (`.msix`, `.appx`) install with `appx`, or by
+opening the file.  Installing and removing need an administrator (UAC
+asks; Windows does this through a system service NovaOS does not have
+yet):
+
+    sudo appx install C:\Downloads\app.msix -AllowUnsigned
+    appx list
+    appx start NovaOS.PackageTest_rtg2wbn51qgvw!App
+    sudo appx remove NovaOS.PackageTest
+
+The package's files are checked against its block map, unpacked into
+`C:\Programs\WindowsApps`, and each application gets a Start menu
+entry; an application started from there belongs to its package as on
+Windows.  NovaOS does not verify package signatures yet, so signed
+packages (the Microsoft Store's, and most downloads) are refused rather
+than installed unchecked.  An unsigned package installs only with
+`-AllowUnsigned` and if its publisher carries Microsoft's "unsigned"
+marker (`OID.2.25.311729368913984317654407730594956997722=1`), as on
+Windows 11.  Bundles (`.msixbundle`) and packages that need framework
+packages are not installed yet.
 
 ### Drivers
 

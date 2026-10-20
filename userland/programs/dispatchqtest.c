@@ -67,10 +67,25 @@ static HRESULT STDMETHODCALLTYPE h_invoke(Handler *h, void *sender, void *args)
     h->fn(h, sender, args);
     return S_OK;
 }
+/* DispatcherQueueHandler's Invoke takes no arguments (on x86 the callee
+ * pops them, so it has its own slot) */
+static HRESULT STDMETHODCALLTYPE h_work(Handler *h)
+{
+    h->tid = GetCurrentThreadId();
+    h->fn(h, 0, 0);
+    return S_OK;
+}
 static const void *const handler_vt[] = { (void *)h_qi, (void *)h_addref, (void *)h_release, (void *)h_invoke };
+static const void *const work_vt[] = { (void *)h_qi, (void *)h_addref, (void *)h_release, (void *)h_work };
 static Handler handler(void (*fn)(Handler *, void *, void *), int tag)
 {
     Handler h = { handler_vt, 1, fn, tag, 0, 0, 0, 0 };
+    return h;
+}
+static Handler work_item(void (*fn)(Handler *, void *, void *), int tag)
+{
+    Handler h = handler(fn, tag);
+    h.vt = work_vt;
     return h;
 }
 
@@ -142,7 +157,7 @@ static void test_current(void *qstatics, void *cstatics)
 
     /* work runs from the thread's message loop, high priority first */
     int log[8], n = 0;
-    Handler low = handler(log_tag, 1), normal = handler(log_tag, 2), high = handler(log_tag, 3);
+    Handler low = work_item(log_tag, 1), normal = work_item(log_tag, 2), high = work_item(log_tag, 3);
     low.log = normal.log = high.log = log;
     low.n = normal.n = high.n = &n;
     BYTE ok1 = 0, ok2 = 0, ok3 = 0;
@@ -195,7 +210,7 @@ static void test_current(void *qstatics, void *cstatics)
     g_queue3 = qi(q, &IID_MUI_IDispatcherQueue3);
     CHECK("IDispatcherQueue3", g_queue3 != 0);
     if (g_queue3) {
-        Handler quit = handler(exit_loop, 0);
+        Handler quit = work_item(exit_loop, 0);
         BYTE ok = 0;
         VT(q, Q_TRY_ENQUEUE, Enq_t)(q, &quit, &ok);
         CHECK("RunEventLoop runs work and returns on EnqueueEventLoopExit",
@@ -204,7 +219,7 @@ static void test_current(void *qstatics, void *cstatics)
     }
 
     /* ShutdownQueue ends the queue: its events, no more work, the thread free */
-    Handler started = handler(count, 0), completed = handler(count, 0), late = handler(count, 0);
+    Handler started = handler(count, 0), completed = handler(count, 0), late = work_item(count, 0);
     INT64 tok1 = 0, tok2 = 0;
     VT(q, Q_ADD_STARTING, Add_t)(q, &started, &tok1);
     VT(q, Q_ADD_COMPLETED, Add_t)(q, &completed, &tok2);
@@ -236,7 +251,7 @@ static void test_dedicated(void *cstatics)
     BYTE access = 1;
     CHECK("HasThreadAccess from another thread: false", qa && SUCCEEDED(VT(qa, Q2_HAS_ACCESS, Get_t)(qa, &access)) && !access);
     RELEASE(qa);
-    Handler work = handler(on_dedicated, 0);
+    Handler work = work_item(on_dedicated, 0);
     work.done = CreateEventW(0, FALSE, FALSE, 0);
     BYTE ok = 0;
     VT(q, Q_TRY_ENQUEUE, Enq_t)(q, &work, &ok);
@@ -277,7 +292,7 @@ static void test_windows_system(void)
     void *sq = qi(q, &IID_SYS_IDispatcherQueue);
     CHECK("Windows.System.DispatcherQueue", sq && class_is(sq, L"Windows.System.DispatcherQueue"));
     int log[2], n = 0;
-    Handler h = handler(log_tag, 7);
+    Handler h = work_item(log_tag, 7);
     h.log = log;
     h.n = &n;
     BYTE ok = 0;

@@ -130,9 +130,12 @@ Hyper-V shows the video memory only where the guest says it changed, so
 the driver reports the whole screen 20 times a second while the host
 asks for it (from the "vmbus" thread), and, during boot, after every line
 the boot log prints: the driver takes the screen over in `VmbusInit`,
-long before the scheduler runs that thread.  (Before this, the first real
-host boot looked frozen right after `Hyper-V video: channel 5 open`: the
-screen stayed as it was at the takeover.)  NovaOS draws its own pointer
+long before the scheduler runs that thread.  On a real host the screen
+stops changing as soon as the version is agreed, so the boot log is
+reported from then on, and still when a later step (the mode list, the
+video memory's location) fails: the firmware's frame buffer is then shown
+at its own mode.  (The first real host boots looked frozen right after
+`Hyper-V video: channel 5 open`, then after `Version 3.5 accepted`.)  NovaOS draws its own pointer
 (the host's is hidden).
 
 ## Network
@@ -284,7 +287,7 @@ lines say what went wrong:
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
-| the screen stops changing after `[HVVIDEO] Video memory at ... taken` | the host gets no dirty rectangles: the boot log on COM1 says whether NovaOS still runs (Hyper-V Manager's Heartbeat column too) |
+| the screen stops changing after `[HVVIDEO] Version 3.5 accepted` or later | the host gets no dirty rectangles: the boot log on COM1 says whether NovaOS still runs (Hyper-V Manager's Heartbeat column too) |
 | `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |
 | `[NETVSC] Link down` | the VM's adapter is not connected to a switch (Settings, Network Adapter, Virtual switch) |
 | `[VMBUS] ...: removed by the host (channel N)` | the device was removed from the VM's settings (or its integration service unticked) while NovaOS ran |

@@ -362,9 +362,14 @@ void fb_putc(char c)
     }
 }
 
+static void (*g_fb_shown)(void);
+
+void fb_set_shown_hook(void (*shown)(void)) { g_fb_shown = shown; }
+
 void fb_puts(const char *s)
 {
     while (*s) fb_putc(*s++);
+    if (g_fb_shown && fb.ready) g_fb_shown();
 }
 
 void fb_set_colors(FbColor fg, FbColor bg)

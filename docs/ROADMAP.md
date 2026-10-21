@@ -687,7 +687,10 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   Generation 2 VM. Done when NovaOS reaches the desktop and accepts input.
   The synthetic mouse's attach fault and the VMBus handshake were fixed in
   #367 ([hyperv.md](hyperv.md)); the check on a real Hyper-V host is still
-  to do.
+  to do.  The first real boot (10-21) looked frozen after
+  `Hyper-V video: channel 5 open`: the synthetic video took the screen
+  over but reported no changes until the scheduler ran; the boot log's
+  lines are reported now too.
 - [ ] **23.5 Update signing key.** Ship the release public key in
   `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
   a signed 0.1.1 test update and rejects an unsigned one.

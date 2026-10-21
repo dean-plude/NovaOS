@@ -14,12 +14,14 @@ static bool   gop = true;
 static int    attached, attach_n;
 static bool (*attach_set)(int w, int h);
 static DisplayMode attach_modes[DISPLAY_MAX_MODES];
+static void (*shown_hook)(void);
 
 void kprintf(const char *f, ...) { va_list v; va_start(v, f); vprintf(f, v); va_end(v); }
 void *kzalloc(size_t n) { return calloc(1, n); }
 void udelay(UINT64 us) { (void)us; }
 void sched_yield(void) {}
 uint64_t sched_ticks(void) { return ticks; }
+void fb_set_shown_hook(void (*shown)(void)) { shown_hook = shown; }
 UINT32 VmbusChannelMmioMegabytes(const VmbusChannel *ch) { (void)ch; return mmio_mb; }
 bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h)
 {
@@ -119,7 +121,7 @@ static void fresh(UINT32 version)
 {
     memset(counts, 0, sizeof(counts));
     accepts = version; silent = bad_ack = false; gop = true;
-    attached = 0; nqueued = 0; g_video = NULL;
+    attached = 0; nqueued = 0; g_video = NULL; shown_hook = NULL;
     ctx = HvVideoDriver.opened(NULL);
 }
 
@@ -149,9 +151,19 @@ static void windows10_checks(void)
     assert(counts[SV_DIRT] == 1 && last[SV_DIRT].dirt.count == 1 && last[SV_DIRT].dirt.x2 == 1024 && last[SV_DIRT].dirt.y2 == 768);
     puts("Windows 10 host passed");
 
+    assert(shown_hook == console_shown);                    /* the boot log's lines are reported too ... */
+    int c = counts[SV_DIRT];
+    shown_hook();
+    assert(counts[SV_DIRT] == c + 1 && last[SV_DIRT].dirt.x2 == 1024 && last[SV_DIRT].dirt.y2 == 768);
+    v->sending = 1;                                         /* ... never waiting for another sender */
+    shown_hook();
+    assert(counts[SV_DIRT] == c + 1);
+    v->sending = 0;
+    puts("boot log passed");
+
     assert(attach_set(1920, 1080));
     o = &last[SV_SITUATION_UPDATE].situation.out;
-    assert(o->width == 1920 && o->height == 1080 && o->pitch == 7680 && counts[SV_DIRT] == 2);
+    assert(o->width == 1920 && o->height == 1080 && o->pitch == 7680 && counts[SV_DIRT] == c + 2);
     assert(last[SV_DIRT].dirt.x2 == 1920 && last[SV_DIRT].dirt.y2 == 1080);
     int n = counts[SV_SITUATION_UPDATE];
     assert(!attach_set(3840, 2160) && !attach_set(320, 200) && counts[SV_SITUATION_UPDATE] == n);
@@ -184,7 +196,7 @@ static void windows10_checks(void)
     d = counts[SV_DIRT];
     ticks += 100;
     HvVideoDriver.tick(ctx);
-    assert(!g_video && !attach_set(1024, 768) && counts[SV_DIRT] == d);
+    assert(!g_video && !attach_set(1024, 768) && counts[SV_DIRT] == d && !shown_hook);
     puts("removal passed");
 }
 
@@ -215,7 +227,7 @@ static void refusal_checks(void)
     fresh(SV_WIN10);                                        /* a host that never answers */
     silent = true;
     HvVideoDriver.started(ctx);
-    assert(counts[SV_VERSION_REQUEST] == 1 && !attached && !g_video);
+    assert(counts[SV_VERSION_REQUEST] == 1 && !attached && !g_video && !shown_hook);
 
     fresh(SV_WIN10);                                        /* the video memory refused */
     bad_ack = true;

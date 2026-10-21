@@ -1758,7 +1758,7 @@ static void desktop_press(int x, int y, bool dbl)
             case ACT_APP:    start_open(false); AppActivate((AppId)h->arg); break;
             case ACT_TASK:   start_open(false); dock_task_click(h->arg); break;
             case ACT_CLOCK:  start_open(false); AppActivate(APP_CALENDAR); break;
-            case ACT_NET:    start_open(false); SettingsOpenPage(SETTINGS_NETWORK); break;
+            case ACT_NET:    if (!NetworkPromptOpen()) { start_open(false); SettingsOpenPage(SETTINGS_NETWORK); } break;
             default: break;
             }
         }
@@ -2314,7 +2314,7 @@ void DesktopRun(void *arg)
 
         WmTick();                               /* (takes the file-system lock as needed) */
         UmPoll();                               /* reclaim exited programs */
-        NetworkPromptPoll();                    /* (the firewall: which network, and a new one's prompt) */
+        NetworkPromptPoll();                    /* (the firewall: which network it is on) */
         UmUpdateForeground();                   /* (the active window's process) */
         KbdCurrent();                           /* follow a program's change to the keyboard layout */
 

@@ -21,3 +21,10 @@ NovaOS filters its network traffic the Windows 11 way
   policy, reset) and a Settings > Firewall page.
 - **Test:** `firewalltest` (network suite, 64- and 32-bit), with
   connections from the host through QEMU's port forwarding.
+
+Later the same day: a new network no longer brings up the "discoverable?"
+window by itself.  It stays Public, as in Windows 11, and the question is
+asked when the network icon by the clock is opened.  The window took the
+keyboard focus when the window under it closed (a UAC prompt), so typed
+input went to it; windows that never take the focus are now passed over
+when the focus moves on.

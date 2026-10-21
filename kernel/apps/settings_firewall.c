@@ -8,12 +8,15 @@
  * each switched on or off where it is listed.  Changing them needs an
  * administrator, as on Windows.  The firewall is kernel/net/firewall.c.
  *
- * The prompt: the first time the PC joins a network, a small window at
- * the bottom right asks whether the PC may be discoverable there, as
- * Windows does.  Yes makes the network Private, No (or no answer within a
- * minute) leaves it Public.  It never takes the keyboard focus.  The
- * NewNetworkWindowOff key (HKLM\SYSTEM\CurrentControlSet\Control\Network)
- * turns it off.
+ * The prompt: a network the PC joins for the first time is Public, and,
+ * as in Windows 11, nothing pops up by itself: the question whether the
+ * PC may be discoverable there waits until the person opens the network
+ * icon in the tray, which then shows it in a small window at the bottom
+ * right (or they pick Public or Private on this page).  Yes makes the
+ * network Private, No (or no answer within a minute) leaves it Public.
+ * The window never takes the keyboard focus, not even when the window
+ * under it closes.  The NewNetworkWindowOff key
+ * (HKLM\SYSTEM\CurrentControlSet\Control\Network) turns the question off.
  */
 
 #include "apps.h"
@@ -292,12 +295,18 @@ static void prompt_close(WND *w)
 void NetworkPromptPoll(void)
 {
     FwPoll();
-    if (g_prompt || !FwPromptPending()) return;
+}
+
+bool NetworkPromptOpen(void)
+{
+    if (g_prompt) return true;
+    if (!FwPromptPending()) return false;
     GdiRect work = WmWorkArea();
     int fw_ = PROMPT_W + 2, fh = PROMPT_H + WM_TITLEBAR_H + 1;
     GdiRect frame = RECT(work.x + work.w - fw_ - 12, work.y + work.h - fh - 12, fw_, fh);
     g_prompt = WmCreateWindowEx("Networks", frame, WS_TOOLWINDOW, UI_BG, UI_ACCENT, prompt_paint, NULL, false);
-    if (!g_prompt) { FwPromptAnswered(); return; }
+    if (!g_prompt) return false;
+    g_prompt->no_activate = true;
     g_prompt->on_mouse = prompt_mouse;
     g_prompt->on_tick = prompt_tick;
     g_prompt->on_close = prompt_close;
@@ -305,4 +314,5 @@ void NetworkPromptPoll(void)
     NovaFwNetwork net;
     FwGetNetwork(&net);
     kprintf("[FIREWALL] asking whether this PC may be discoverable on \"%s\"\n", net.name);
+    return true;
 }

@@ -6,8 +6,9 @@
  * actions (inbound blocked, outbound allowed) and "block all incoming
  * connections".  The one in force is the category of the network the
  * adapter is on; a network seen for the first time is Public, and the
- * desktop asks once whether this PC should be discoverable on it (Yes
- * makes it Private).  Loopback traffic is never filtered by the firewall.
+ * desktop asks whether this PC should be discoverable on it (Yes makes
+ * it Private) when the person opens the tray's network icon, as Windows 11
+ * does, never by itself.  Loopback traffic is never filtered by the firewall.
  *
  * Rules: allow or block, inbound or outbound, for a program, protocol,
  * local and remote ports and addresses, on some profiles.  Inbound, a

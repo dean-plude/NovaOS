@@ -27,10 +27,14 @@
  * vmbus thread's tick), as Linux's hyperv_fb does.  That thread runs only
  * once the scheduler does, and the takeover happens in VmbusInit, long
  * before: so the boot log's lines are reported too, after each one the
- * framebuffer console prints (fb_set_shown_hook).  Without that the screen
- * stays as it was at the first DIRT ("Hyper-V video: channel 5 open") for
- * the rest of the boot, which looks just like a hang.  A mode change is
- * one SITUATION_UPDATE; the host does not answer it.
+ * framebuffer console prints (fb_set_shown_hook).  On a real host the
+ * screen stops changing as soon as the version is agreed (the firmware's
+ * own synthvid session ends there), so the boot log is reported from that
+ * moment, and still when a later step fails: the firmware's frame buffer
+ * is then shown through DIRT at its own mode.  Without that the screen
+ * stays as it was ("Hyper-V video: channel 5 open", then "Version 3.5
+ * accepted") for the rest of the boot, which looks just like a hang.  A
+ * mode change is one SITUATION_UPDATE; the host does not answer it.
  */
 
 #include "hv_video.h"
@@ -108,6 +112,7 @@ typedef struct {
     SvMsg         reply;
     volatile bool dirt;                  /* the host wants DIRT messages */
     bool          attached;
+    bool          console;               /* the boot log and the tick report the screen */
     UINT32        version;
     UINT64        vram_phys, vram_size;
     int           w, h;                  /* the mode the host shows */
@@ -117,6 +122,7 @@ typedef struct {
 } HvVideo;
 
 static HvVideo *g_video;                 /* (display.c's set_mode has no context) */
+static HvVideo *g_console;               /* (fb_set_shown_hook's has none either) */
 
 static void take(volatile int *f)
 {
@@ -221,7 +227,7 @@ static void dirt(HvVideo *v)
  * tick */
 static void console_shown(void)
 {
-    HvVideo *v = g_video;
+    HvVideo *v = g_console;
     if (!v || !__atomic_load_n(&v->dirt, __ATOMIC_ACQUIRE)) return;
     if (__atomic_exchange_n(&v->sending, 1, __ATOMIC_ACQUIRE)) return;
     SvMsg m;
@@ -255,7 +261,7 @@ static bool set_mode(int w, int h)
 static void video_tick(void *ctx)
 {
     HvVideo *v = ctx;
-    if (!v->attached || !__atomic_load_n(&v->dirt, __ATOMIC_ACQUIRE)) return;
+    if (!v->console || !__atomic_load_n(&v->dirt, __ATOMIC_ACQUIRE)) return;
     UINT64 now = sched_ticks();
     if (now - v->last_dirt < DIRT_TICKS) return;
     v->last_dirt = now;
@@ -303,6 +309,12 @@ static void video_started(void *ctx)
         kprintf("[HVVIDEO] The screen is not the firmware's frame buffer: left alone\n");
         return;
     }
+    v->w = bw;                                           /* the host shows only what DIRT reports from here */
+    v->h = bh;
+    v->console = true;
+    g_console = v;
+    fb_set_shown_hook(console_shown);
+    dirt(v);
     v->vram_phys = base;
     v->vram_size = (UINT64)VmbusChannelMmioMegabytes(v->ch) << 20;
     if (v->vram_size < size) v->vram_size = size;
@@ -328,6 +340,8 @@ static void video_started(void *ctx)
     if (!ask(v, &m, SV_VRAM_LOCATION, 17, SV_VRAM_LOCATION_ACK) || v->reply.vram_ack.user_ctx != base) {
         kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx: the firmware's frame buffer stays\n",
                 (unsigned long long)base);
+        situation(v, bw, bh);                            /* (best effort: the screen must not freeze) */
+        dirt(v);
         return;
     }
     kprintf("[HVVIDEO] Video memory at 0x%llx taken: the screen is NovaOS's from here\n", (unsigned long long)base);
@@ -347,7 +361,6 @@ static void video_started(void *ctx)
 
     g_video = v;
     dirt(v);
-    fb_set_shown_hook(console_shown);                    /* (the boot log, until the vmbus thread's tick) */
     kprintf("[HVVIDEO] Synthetic video %u.%u: %llu MiB of video memory at 0x%llx, %d mode(s)\n",
             v->version & 0xFFFF, v->version >> 16, (unsigned long long)(v->vram_size >> 20),
             (unsigned long long)base, v->nmodes);
@@ -359,8 +372,9 @@ static void video_started(void *ctx)
 static void video_removed(void *ctx)
 {
     HvVideo *v = ctx;
-    v->attached = false;
-    if (g_video == v) { fb_set_shown_hook(NULL); g_video = NULL; }
+    v->attached = v->console = false;
+    if (g_video == v) g_video = NULL;
+    if (g_console == v) { fb_set_shown_hook(NULL); g_console = NULL; }
 }
 
 const VmbusDriver HvVideoDriver = {

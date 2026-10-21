@@ -34,6 +34,7 @@ public:
     // the surface factory on @renderingDevice (XAML's D2D or D3D11 device)
     _Check_return_ HRESULT CreateSurfaceFactory(_In_ IUnknown *renderingDevice);
     _Check_return_ HRESULT FlushSurfaceFactory();
+    _Check_return_ HRESULT FlushSurfaceFactory(_In_ IDCompositionSurfaceFactory *factory);
     _Check_return_ HRESULT CreateSurface(UINT width, UINT height, DXGI_FORMAT format, DXGI_ALPHA_MODE alphaMode,
                                          bool isExclusive, _Outptr_ IDCompositionSurface **surface);
     _Check_return_ HRESULT CreateSurface(_In_ IDCompositionSurfaceFactory *factory, UINT width, UINT height,
@@ -44,7 +45,7 @@ public:
         _In_opt_ IDCompositionSurface *surface,
         _Outptr_ ABI::Microsoft::UI::Composition::ICompositionSurface **result);
     _Check_return_ HRESULT OfferSurfaceResources(_In_ IDCompositionSurfaceFactory *factory);
-    _Check_return_ HRESULT ReclaimSurfaceResources(_In_ IDCompositionSurfaceFactory *factory, _Out_ bool *discarded);
+    _Check_return_ HRESULT ReclaimSurfaceResources(_In_ IDCompositionSurfaceFactory *factory, _Out_ BOOL *discarded);
     _Check_return_ HRESULT HintSize(UINT width, UINT height);
     _Check_return_ HRESULT Flush();
     _Check_return_ HRESULT GetCurrentBatchID(_Out_ ULONG *batchId);

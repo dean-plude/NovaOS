@@ -15091,6 +15091,19 @@ framework starts up on now builds from Microsoft's sources.
   calls `CJupiterControl::Create`, which now stops only at the
   rendering seam (the window render target), not yet built.
 
+## XAML's dispatcher, default styles and Window
+
+Phase 32 push on step 32.3 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)): more of what
+`DXamlCore::InitializeInstance` makes now builds from Microsoft's
+sources.
+
+- **Built:** the XAML dispatcher `DispatcherImpl`, the default control
+  styles' cache `DefaultStyles`, the `Window` and the framework's peer
+  base class `DirectUI::DependencyObject`.
+- `xamlloadtest` makes a `DispatcherImpl` and a `DefaultStyles`; a
+  `Window` follows once the thread's `DXamlCore` initializes.
+
 ## XAML's framework entry points
 
 Eleventh part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
@@ -15109,6 +15122,27 @@ itself (`dxaml/lib`) now builds from Microsoft's sources on the core.
 - `xamlloadtest` makes `XamlReader`'s factory and calls
   `XamlReader.Load` on a thread without the framework, which fails with
   `RPC_E_WRONG_THREAD` as on Windows.
+
+## XAML's rendering seam
+
+Thirteenth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)): the render target the XAML
+control makes now builds from Microsoft's sources, and
+`CJupiterControl::Create` succeeds.
+
+- **Built:** the graphics device manager (`WindowsGraphicsDeviceManager`,
+  `DCompTreeHost`, the Direct3D 11 and Direct2D device wrappers), the
+  compositor and UI thread schedulers, and the window render target
+  (`CWindowRenderTarget`, `HWWalk`, `CompositorTreeHost`), with the error
+  service, the downloader, the value store and `WUCBrushManager`.
+- **Direct3D 11:** the software device answers `IDXGIDevice2`/`3`,
+  `ID3D10Multithread` and `ID3D11Device4`, which XAML's graphics device
+  asks for.
+- **ole32:** `RoFailFastWithErrorContextInternal2`, the fail fast XAML's
+  error paths call, which ends the process with the error on the
+  debugger's output.
+- `xamlloadtest` checks that `CJupiterControl::Create` makes the control
+  and its render target.
 
 ## XAML's value boxer and Windows.Foundation.PropertyValue
 

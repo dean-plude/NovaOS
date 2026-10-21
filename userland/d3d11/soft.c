@@ -11,9 +11,12 @@
  * chain's buffer and presents.  The device does not rasterize: shaders,
  * views and draws are not implemented, and only a request that accepts
  * feature level 9_1 gets it (ANGLE asks for 9_3 and up, so it never takes
- * this device for a renderer).
+ * this device for a renderer).  The XAML framework's graphics device
+ * (Windows.UI.Xaml's CD3D11DeviceInstance) takes it too, with Direct2D on its
+ * DXGI device: it asks for IDXGIDevice2, ID3D10Multithread and ID3D11Device4
+ * (for device-removed events) as well.
  *
- * 64-bit only: the device's and context's ~160 unimplemented methods share
+ * 64-bit only: the device's and context's ~180 unimplemented methods share
  * one stub, which only the x64 calling convention allows.
  */
 #include <windows.h>
@@ -52,10 +55,14 @@ struct Device {
     void *const *vtbl;                  /* ID3D11Device */
     void *const *dxgi;                  /* IDXGIDevice1 */
     void *const *ctx;                   /* its immediate ID3D11DeviceContext */
+    void *const *mt;                    /* ID3D10Multithread */
     LONG refs;
     UINT flags;
+    CRITICAL_SECTION lock;              /* ID3D10Multithread's Enter and Leave */
+    BOOL protect;
 };
 #define DEV_OF_DXGI(p) ((Device *)((BYTE *)(p) - offsetof(Device, dxgi)))
+#define DEV_OF_MT(p)   ((Device *)((BYTE *)(p) - offsetof(Device, mt)))
 #define DEV_OF_CTX(p)  ((Device *)((BYTE *)(p) - offsetof(Device, ctx)))
 
 /* ---- Textures ------------------------------------------------------------- */
@@ -199,14 +206,21 @@ static Texture *tex_of(void *r)
 static HRESULT STDMETHODCALLTYPE d_qi(Device *d, const GUID *iid, void **out)
 {
     if (!out) return E_POINTER;
-    if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_ID3D11Device) || novadx_same(iid, &NIID_INovaSoftDevice)) {
+    if (novadx_same(iid, &NIID_IUnknown) || novadx_same(iid, &NIID_ID3D11Device) || novadx_same(iid, &NIID_INovaSoftDevice) ||
+        novadx_same(iid, &NIID_ID3D11Device4)) {
         InterlockedIncrement(&d->refs);
         *out = d;
         return S_OK;
     }
-    if (novadx_same(iid, &NIID_IDXGIObject) || novadx_same(iid, &NIID_IDXGIDevice) || novadx_same(iid, &NIID_IDXGIDevice1)) {
+    if (novadx_same(iid, &NIID_IDXGIObject) || novadx_same(iid, &NIID_IDXGIDevice) || novadx_same(iid, &NIID_IDXGIDevice1) ||
+        novadx_same(iid, &NIID_IDXGIDevice2) || novadx_same(iid, &NIID_IDXGIDevice3)) {
         InterlockedIncrement(&d->refs);
         *out = &d->dxgi;
+        return S_OK;
+    }
+    if (novadx_same(iid, &NIID_ID3D10Multithread)) {
+        InterlockedIncrement(&d->refs);
+        *out = &d->mt;
         return S_OK;
     }
     *out = NULL;
@@ -216,7 +230,7 @@ static ULONG STDMETHODCALLTYPE d_addref(Device *d) { return (ULONG)InterlockedIn
 static ULONG STDMETHODCALLTYPE d_release(Device *d)
 {
     LONG r = InterlockedDecrement(&d->refs);
-    if (!r) HeapFree(GetProcessHeap(), 0, d);
+    if (!r) { DeleteCriticalSection(&d->lock); HeapFree(GetProcessHeap(), 0, d); }
     return (ULONG)r;
 }
 
@@ -277,8 +291,19 @@ static void STDMETHODCALLTYPE d_context(Device *d, void **out) { if (out) { d_ad
 static HRESULT STDMETHODCALLTYPE d_setexc(Device *d, UINT f) { (void)d; (void)f; return S_OK; }
 static UINT STDMETHODCALLTYPE d_getexc(Device *d) { (void)d; return 0; }
 
-static void *const g_dev_vtbl[43] = {
-    [0 ... 42] = (void *)notimpl,
+/* ID3D11Device1 to 4, for Windows.UI.Xaml, which registers for device-removed
+ * events: a device in memory is never removed, so the event never fires.  The
+ * immediate context is only an ID3D11DeviceContext, so the newer ones are none
+ * (the device answers ID3D11Device4 alone, which a program asks for by name) */
+static void STDMETHODCALLTYPE d_context_n(Device *d, void **out) { (void)d; if (out) *out = NULL; }
+static HRESULT STDMETHODCALLTYPE d_regremoved(Device *d, HANDLE e, DWORD *cookie)
+{ (void)d; if (!e || !cookie) return E_INVALIDARG; *cookie = 1; return S_OK; }
+static void STDMETHODCALLTYPE d_unregremoved(Device *d, DWORD cookie) { (void)d; (void)cookie; }
+
+static void *const g_dev_vtbl[67] = {
+    [0 ... 66] = (void *)notimpl,
+    [43] = (void *)d_context_n, [50] = (void *)d_context_n, [61] = (void *)d_context_n,
+    [65] = (void *)d_regremoved, [66] = (void *)d_unregremoved,
     [0] = (void *)d_qi, [1] = (void *)d_addref, [2] = (void *)d_release,
     [5] = (void *)d_tex2d,
     [29] = (void *)d_fmt, [30] = (void *)d_msaa, [33] = (void *)d_feature,
@@ -329,10 +354,45 @@ static HRESULT STDMETHODCALLTYPE x_getprio(void *p, INT *prio) { (void)p; if (!p
 static HRESULT STDMETHODCALLTYPE x_setlat(void *p, UINT n) { (void)p; (void)n; return S_OK; }
 static HRESULT STDMETHODCALLTYPE x_getlat(void *p, UINT *n) { (void)p; if (!n) return E_POINTER; *n = 3; return S_OK; }
 
-static void *const g_dxgi_vtbl[14] = {
+/* IDXGIDevice2 and 3: textures in memory have nothing to offer or trim
+ * (an offered resource is never discarded) and no GPU work to wait for (an
+ * event is set at once) */
+static HRESULT STDMETHODCALLTYPE x_offer(void *p, UINT n, IUnknown *const *res, UINT prio)
+{ (void)p; (void)n; (void)res; (void)prio; return S_OK; }
+static HRESULT STDMETHODCALLTYPE x_reclaim(void *p, UINT n, IUnknown *const *res, BOOL *discarded)
+{
+    (void)p; (void)res;
+    if (discarded) for (UINT i = 0; i < n; i++) discarded[i] = FALSE;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE x_setevent(void *p, HANDLE e) { (void)p; return e && SetEvent(e) ? S_OK : E_INVALIDARG; }
+static void STDMETHODCALLTYPE x_trim(void *p) { (void)p; }
+
+static void *const g_dxgi_vtbl[18] = {
     (void *)x_qi, (void *)x_addref, (void *)x_release, (void *)x_setpriv, (void *)x_setprivif, (void *)x_getpriv,
     (void *)x_getparent, (void *)x_getadapter, (void *)notimpl, (void *)x_residency, (void *)x_setprio, (void *)x_getprio,
-    (void *)x_setlat, (void *)x_getlat,
+    (void *)x_setlat, (void *)x_getlat, (void *)x_offer, (void *)x_reclaim, (void *)x_setevent, (void *)x_trim,
+};
+
+/* ---- ID3D10Multithread ---------------------------------------------------- */
+/* (the lock a program takes around the device, Direct2D and DirectComposition
+ * sharing it: the XAML framework's) */
+static HRESULT STDMETHODCALLTYPE m_qi(void *p, const GUID *iid, void **out) { return d_qi(DEV_OF_MT(p), iid, out); }
+static ULONG STDMETHODCALLTYPE m_addref(void *p) { return d_addref(DEV_OF_MT(p)); }
+static ULONG STDMETHODCALLTYPE m_release(void *p) { return d_release(DEV_OF_MT(p)); }
+static void STDMETHODCALLTYPE m_enter(void *p) { EnterCriticalSection(&DEV_OF_MT(p)->lock); }
+static void STDMETHODCALLTYPE m_leave(void *p) { LeaveCriticalSection(&DEV_OF_MT(p)->lock); }
+static BOOL STDMETHODCALLTYPE m_setprotected(void *p, BOOL on)
+{
+    Device *d = DEV_OF_MT(p);
+    BOOL was = d->protect;
+    d->protect = on;
+    return was;
+}
+static BOOL STDMETHODCALLTYPE m_getprotected(void *p) { return DEV_OF_MT(p)->protect; }
+static void *const g_mt_vtbl[7] = {
+    (void *)m_qi, (void *)m_addref, (void *)m_release, (void *)m_enter, (void *)m_leave, (void *)m_setprotected,
+    (void *)m_getprotected,
 };
 
 /* ---- ID3D11DeviceContext -------------------------------------------------- */
@@ -439,6 +499,8 @@ HRESULT soft_create_device(UINT flags, void **device, UINT *level, void **contex
     d->vtbl = g_dev_vtbl;
     d->dxgi = g_dxgi_vtbl;
     d->ctx = g_ctx_vtbl;
+    d->mt = g_mt_vtbl;
+    InitializeCriticalSection(&d->lock);
     d->refs = 1;
     d->flags = flags;
     if (context) d_context(d, context);

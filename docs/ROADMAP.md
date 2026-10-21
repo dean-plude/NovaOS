@@ -1096,16 +1096,26 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`CJupiterControl`, `CControlBase`, `CXcpDispatcher`, the browser host)
   and the error helper built from their sources, with
   `CJupiterControl::Create` running up to the rendering seam in
-  `xamlloadtest`.  Value boxer part (Phase 32 push) done: the
+  `xamlloadtest`.  Thirteenth part done: the rendering seam (the
+  graphics device manager with its Direct3D 11 and Direct2D devices made
+  on their own thread, the compositor and UI thread schedulers, the
+  window render target with its hardware walk and compositor tree host)
+  built from their sources, so `CJupiterControl::Create` succeeds in
+  `xamlloadtest`, on NovaOS's software Direct3D 11 device without DXVK.
+  Phase 32 push: the XAML dispatcher
+  (`DispatcherImpl`), the default styles' cache (`DefaultStyles`), the
+  `Window` and the framework's peer base class (`DependencyObject`)
+  built from their sources, the dispatcher and styles run in
+  `xamlloadtest`.
+  Value boxer part (Phase 32 push) done: the
   Windows Runtime's value boxes (`wintypes.dll`'s
   `Windows.Foundation.PropertyValue`, test `propvaltest`), the value
   boxer `CValueBoxer`, the lifetime library (`ReferenceTrackerManager`),
   `StaticStore`, the release queue and the core's error service built,
   with the framework started as the XAML compiler starts it and parsed
-  values unboxed in `xamlloadtest`.  Next: the rendering seam (graphics device manager,
-  compositor scheduler, window render target), the rest of
-  `DXamlCore::InitializeInstance` (`DispatcherImpl`, `Window`, the
-  default styles), the element classes and their framework peers, then
+  values unboxed in `xamlloadtest`.
+  Next: the reference tracker's use by a `Window` made on an initialized
+  `DXamlCore`, the element classes and their framework peers, then
   `XamlReader.Load` and `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.

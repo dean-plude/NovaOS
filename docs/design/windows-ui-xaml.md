@@ -468,6 +468,51 @@ vendors.
      seam (`CommonBrowserHost::CreateRenderTarget`: the graphics device
      manager, the compositor and UI thread schedulers and the window
      render target), not yet built, with `E_NOTIMPL`.
+   - *Part 13: the rendering seam.*  `CJupiterControl::Create` now
+     gets through `CommonBrowserHost::CreateRenderTarget`, built from
+     Microsoft's sources: the graphics device manager
+     (`WindowsGraphicsDeviceManager`, with `DCompTreeHost`,
+     `OfferTracker`, `ProjectedShadowManager` and the refresh rate
+     info), the compositor scheduler with its refresh-aligned clock, the
+     UI thread scheduler, and the window render target
+     (`CWindowRenderTarget`: the hardware walk `HWWalk` with its surface
+     cache and texture manager, and `CompositorTreeHost`), plus what it
+     calls on the way: the error service, the downloader and its async
+     request manager, the value store, `WUCBrushManager` and the
+     hardware render commands.  The device manager makes its Direct3D 11
+     device (`CD3D11Device`, `CD3D11DeviceInstance`) and Direct2D device
+     (`CD2DFactory`) on a thread of its own and draws a first line of
+     text there with DirectWrite.  Without DXVK that device is NovaOS's
+     software device (`userland/d3d11/soft.c`), which gains
+     `IDXGIDevice2`/`3` (offer, reclaim and trim, which have nothing to
+     do in memory), `ID3D10Multithread` (a critical section) and
+     `ID3D11Device4` (device-removed events that never fire); ole32
+     gains combase's `RoFailFastWithErrorContextInternal2`, which XAML's
+     fail-fast paths call.  `plat/win/desktop`'s precompiled header names
+     closed headers (MUI, print preview, the windowless RichEdit host),
+     so NovaOS's own `src/platdesktop/precomp.h` stands in for it.
+     The one stand-in this path left,
+     `CJupiterWindow::GetJupiterWindowPhysicalSize` (the window class
+     needs the closed `FrameworkUdk/CoreWindowIntegration.h`), is now
+     NovaOS's own (below).  `xamlloadtest` checks that
+     `CJupiterControl::Create` succeeds with its render target.
+   - *Phase 32 push, `DXamlCore`'s start-up.*  Built from Microsoft's
+     sources: the XAML dispatcher `DispatcherImpl` (`dispatcher.cpp`),
+     the default control styles' cache `DefaultStyles`, the `Window`
+     (`Window_Partial.cpp` and its generated class) and the framework's
+     peer base class `DirectUI::DependencyObject`.  The isolated tests'
+     `DependencyObject_Stub.cpp` defines two of the peer base's
+     members; programs on the core link it with those renamed out
+     (`CORE_STUB_RENAMES` in `build.py`).  Of the framework's window,
+     `CJupiterWindow`, whose source includes headers Microsoft does not
+     publish, NovaOS writes the one member the control layer calls on a
+     resize, its client size in physical pixels
+     (`src/jupiter_window.cpp`).  `xamlloadtest` makes a
+     `DispatcherImpl` (unconnected, it is no thread's and refuses work)
+     and a `DefaultStyles`.  A `Window` is made only on an initialized
+     `DXamlCore` (its constructor reads the thread's core), and it
+     fails fast unless the `EnableUWPWindow` feature is on or the core
+     was initialized for islands.
    - *The value boxer (Phase 32 push).*  What `XamlReader.Load` hands
      its result back through.  NovaOS gains `wintypes.dll` with
      `Windows.Foundation.PropertyValue`, the Windows Runtime's boxes
@@ -496,16 +541,11 @@ vendors.
      untyped box's type is the reflection API's, `core/metadata`, not
      built yet).
      `XamlReader.Load` itself parses through the browser host
-     (`Host_CreateFromXaml`), which the full start-up makes past the
-     rendering seam, so it runs end to end once that builds; an
-     element's framework peer also needs the peer base
-     (`DirectUI::DependencyObject`).
-   - *Next.*  The rendering seam `CJupiterControl` stops at
-     (`WindowsGraphicsDeviceManager`, `DCompTreeHost`,
-     `CompositorScheduler`, `UIThreadScheduler`, `CWindowRenderTarget`),
-     then the rest of `DXamlCore::InitializeInstance`
-     (`DispatcherImpl`, `Window`, the default styles), then the element
-     classes and their framework peers, until
+     (`Host_CreateFromXaml`), which the full start-up now makes past the
+     rendering seam, so it runs end to end once the element classes and
+     their framework peers build.
+   - *Next.*  A `Window` on the initialized core with the reference
+     tracker, then the element classes and their framework peers, until
      `Application.Start` runs and `XamlReader.Load` parses a page, one
      component seam per pull request.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:

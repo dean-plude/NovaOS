@@ -581,11 +581,44 @@ vendors.
      a live tree, as on Windows).  The test's core cases run on a
      framework thread too, since every element now gets its peer from
      the thread's `DXamlCore`.
-   - *Left for 32.3:* `Application.Start` itself
-     (`FrameworkApplicationFactory::StartImpl`, which on the desktop goes
-     through `WindowsXamlManager.InitializeForCurrentThread` and a
-     `DesktopWindowImpl` with its message loop) is not called yet; the
-     test does the same thread start-up by hand.
+   - *`Application.Start` (done, the end of 32.3).*
+     `FrameworkApplicationFactory::StartImpl` takes the desktop path,
+     `FrameworkApplication::StartDesktop`, as on Windows: a
+     `DispatcherQueue` on the calling thread, the framework's core for
+     islands, then the app's initialization callback, in which the app
+     makes its `Application` (its own class composed over the
+     framework's, as a C++/WinRT or C# app's `App` is).  The thread's
+     `WindowsXamlManager.InitializeForCurrentThread` then starts the
+     application on the thread (`StartOnCurrentThread`:
+     `EnsureCoreApplicationInitialized` enters the application into the
+     CoreWindow content root's visual tree; `ConfigureJupiterWindow`
+     gives the control its desktop window object, `CJupiterWindow`,
+     without a CoreWindow) and raises `OnLaunched`; the desktop message
+     loop (`RunDesktopWindowMessageLoop`) runs until `Application.Exit`,
+     and `Application.Start` returns.  Built from their sources for it:
+     `WindowsXamlManager`, the launch and initialization arguments, the
+     debug settings and error info, the core's application, visual tree,
+     focus manager, time manager, layout manager and input services, the
+     content root component, the focus, scaling and access key
+     components, popups, `CJupiterWindow` and the control layer's
+     resource manager.  NovaOS stand-ins: the lifted windowing calls the
+     message loop and input make (`src/windowing.cpp`: no content
+     island claims a message yet; a `WindowId` is the HWND's value), the
+     closed FrameworkUdk theming and CoreWindow headers, and XAML's
+     diagnostics interop, which has none to give
+     (`src/diagnostics.cpp`).  ole32 now serves classes a program
+     registers itself (`RoRegisterActivationFactories`, as a packaged
+     app's own classes are), which the test uses for the
+     `WindowsXamlManager` the framework activates, and
+     `RoOriginateLanguageException` originates its error.
+     `xamlapptest` starts the app, checks `Application.Current`, loads a
+     `Grid` with a `TextBlock` in `OnLaunched`, and exits from work
+     queued on the `DispatcherQueue`.
+   - *Left for 32.4:* a `Window`.  `DesktopWindowImpl` and the
+     `DesktopWindowXamlSource` under it compile, but run on the Windows
+     App SDK's lifted content, input and windowing classes
+     (`ContentIsland`, `DesktopChildSiteBridge`, `AppWindow`, the input
+     sources and focus controller), which NovaOS does not have yet.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

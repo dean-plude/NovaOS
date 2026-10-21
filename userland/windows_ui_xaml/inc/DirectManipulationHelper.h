@@ -14,6 +14,8 @@ class DirectManipulationHelper
 public:
     // the lifted DirectManipulation manager's class factory, from its DLL
     static HRESULT GetDirectManipulationManagerFactory(_In_ HMODULE dmanip, _Outptr_ IClassFactory **factory);
+    // and its composition-backed manipulation compositor's
+    static HRESULT GetDCompManipulationCompositorFactory(_In_ HMODULE dmanip, _Outptr_ IClassFactory **factory);
 };
 
 // the helper a DirectManipulation service owns, made once it has its

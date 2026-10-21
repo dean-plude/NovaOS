@@ -29,7 +29,8 @@
  * (CWindowRenderTarget: the hardware walk and compositor tree host on the
  * graphics device manager, whose Direct3D 11 device and Direct2D device are
  * made on a thread of their own, with the compositor and UI thread
- * schedulers), so CJupiterControl::Create succeeds; and (the 32.3 push)
+ * schedulers), so CJupiterControl::Create succeeds (as DXamlCore::Initialize
+ * makes it, below); and (the 32.3 push)
  * what DXamlCore::InitializeInstance makes after the control: the XAML
  * dispatcher (DispatcherImpl, which knows its thread and refuses work
  * without a core) and the default control styles' cache (DefaultStyles);
@@ -374,13 +375,10 @@ static DWORD WINAPI control_thread(void *)
         disp->Release();
     }
 
-    /* the Jupiter control: its dispatcher, browser host and render target
-     * (the graphics device, made on its own thread, Direct2D on it and the
-     * compositor and UI thread schedulers) */
-    CJupiterControl *control = nullptr;
-    HRESULT hr = CJupiterControl::Create(&control);
-    CHECK("CJupiterControl::Create makes the control and its render target", SUCCEEDED(hr) && control != nullptr);
-    if (control) control->Release();
+    /* (the Jupiter control itself, CJupiterControl::Create, is made by
+     * DXamlCore::Initialize below, as on Windows: once the core has its
+     * time manager its start-up builds the CoreWindow content root's
+     * visual tree, which calls back into the thread's DXamlCore) */
 
     ctl::ComPtr<msy::IDispatcherQueueController2> controller2;
     if (SUCCEEDED(controller.As(&controller2))) controller2->ShutdownQueue();

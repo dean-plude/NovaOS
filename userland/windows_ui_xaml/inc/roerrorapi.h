@@ -1,5 +1,5 @@
 /* NovaOS: the Windows SDK's roerrorapi.h (with restrictederrorinfo.h's
- * interface), which MinGW-w64 lacks: the Windows Runtime's error objects,
+ * interfaces), which MinGW-w64 lacks: the Windows Runtime's error objects,
  * IRestrictedErrorInfo, that XAML's error helpers (dxaml/lib ErrorInfo.h)
  * keep and hand on, the functions that set and take a thread's and that
  * report an unhandled one, and the C++ helpers in
@@ -19,7 +19,17 @@ struct __declspec(uuid("82BA7092-4C88-427D-A7BC-16DD93FEB67E")) __declspec(novta
 };
 #endif
 
+#ifndef __ILanguageExceptionStackBackTrace_INTERFACE_DEFINED__
+#define __ILanguageExceptionStackBackTrace_INTERFACE_DEFINED__
+struct __declspec(uuid("CBE53FB5-F967-4258-8D34-42F5E25833DE")) __declspec(novtable) ILanguageExceptionStackBackTrace : public IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE GetStackBackTrace(ULONG maxFramesToCapture, UINT_PTR stackBackTrace[],
+                                                        ULONG *framesCaptured) = 0;
+};
+#endif
+
 extern "C" {
+BOOL WINAPI RoOriginateLanguageException(HRESULT error, HSTRING message, IUnknown *languageException);
 BOOL WINAPI RoOriginateError(HRESULT error, HSTRING message);
 BOOL WINAPI RoOriginateErrorW(HRESULT error, UINT cchMax, PCWSTR message);
 BOOL WINAPI RoTransformError(HRESULT oldError, HRESULT newError, HSTRING message);

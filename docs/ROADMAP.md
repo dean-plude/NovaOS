@@ -1050,7 +1050,7 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   property sets, key frame animations, animation groups, scoped batches,
   easing functions and rectangle clips (expression animations are kept,
   not yet evaluated).
-- [ ] **32.3 The XAML core builds.** The `dxaml` core as
+- [x] **32.3 The XAML core builds.** The `dxaml` core as
   `Windows.UI.Xaml.dll`: `Application.Start` runs and `XamlReader.Load`
   parses a page.  First part done: Direct2D 1.1's devices and device
   contexts, and DirectComposition and Composition surfaces drawn with
@@ -1130,8 +1130,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `XamlReader.Load` of a `Grid` with a `TextBlock` and a `Button` hands
   back their framework objects on a thread started as
   `Application.Start` starts it, in `xamlloadtest`.
-  Next: `Application.Start` itself (the desktop path through
-  `WindowsXamlManager` and `DesktopWindowImpl`).
+  `Application.Start` part (Phase 32 push) done, completing 32.3:
+  `Application.Start` built from its sources takes the desktop path: a
+  `DispatcherQueue` on the thread, the app's initialization callback
+  (in which the app composes its `Application` over the framework's),
+  `WindowsXamlManager` starting the application on the thread (the core's
+  application, visual tree, content root, layout, focus, time manager and
+  input services), `OnLaunched` loading a page with `XamlReader.Load`,
+  queued work run from the desktop message loop and `Application.Exit`
+  returning from `Application.Start`, in `xamlapptest`; ole32 serves
+  classes a program registers with `RoRegisterActivationFactories`.  A
+  `Window` (`DesktopWindowImpl`, on the Windows App SDK's content
+  islands) comes with 32.4.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

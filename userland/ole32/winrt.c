@@ -202,6 +202,7 @@ static HRESULT registry_factory_in(HKEY hive, const WCHAR *root, HSTRING cls, co
     size = sizeof path;
     if (RegGetValueW(hive, key, L"DllPath", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, 0, path, &size))
         return REGDB_E_CLASSNOTREG;
+    if (!out) return S_OK;                            /* only asked whether it is there */
     HMODULE mod = LoadLibraryExW(path, 0, 0);
     if (!mod) return CO_E_DLLNOTFOUND;
     typedef HRESULT (WINAPI *GetFactory)(HSTRING, IUnknown **);
@@ -232,6 +233,13 @@ static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFI
     }
     return registry_factory_in(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\",
                                cls, name, len, iid, out);
+}
+
+/* Whether the registry names an in-process server for class @name, without
+ * loading it (ApiInformation.IsTypePresent, winrt_classes.c) */
+BOOL ole32_winrt_registered(const WCHAR *name, UINT32 len)
+{
+    return registry_factory(0, name, len, 0, 0) == S_OK;
 }
 
 WINOLEAPI_(HRESULT) RoGetActivationFactory(HSTRING cls, REFIID iid, void **f)

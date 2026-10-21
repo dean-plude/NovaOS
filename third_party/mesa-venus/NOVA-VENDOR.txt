@@ -34,7 +34,11 @@ novaos.patch changes:
 - src/virtio/vulkan/vn_renderer.h: vn_renderer_create() makes the NovaOS
   renderer on Windows (and declares vn_renderer_nova_show).
 - src/virtio/vulkan/vn_wsi.c: on Windows, the WSI's present_memory hook
-  is vn_renderer_nova_show.
+  is vn_renderer_nova_show, and the present thread keeps the queue locked
+  while it waits for its submissions (vn_wsi_fence_wait; vn_wsi_sync_wait
+  does nothing): unlocked, the program's vkQueueSubmit ran beside the
+  present's next one and both built their batches in queue->storage, which
+  lost the present fence's signal (a hang in DXVK).
 - src/virtio/vulkan/vn_instance.c: VK_KHR_win32_surface (Venus's
   Windows build left it out; DXVK needs it).
 - src/virtio/vulkan/vn_common.h: no sync files on Windows (sync_wait and

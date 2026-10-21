@@ -298,6 +298,39 @@ Binary files mesa-26.2.4/src/util/perf/__pycache__/u_trace.cpython-313.pyc and .
     physical_dev->wsi_device.supports_scanout = false;
     physical_dev->wsi_device.supports_modifiers =
        physical_dev->base.vk.supported_extensions.EXT_image_drm_format_modifier;
+@@ -426,8 +429,19 @@
+    /* Common wsi does queue submit for each chain, so here we can only safely
+     * unlock the queue mutex if presenting to a single chain.
+     */
++#ifdef _WIN32
++   /* NovaOS: never.  The present goes on submitting (the present fence's
++    * empty submit) once this wait is over, while the app, let in by the
++    * unlocked queue, may be inside vkQueueSubmit on the same queue: both
++    * build their batches in queue->storage, and the present fence's sync
++    * was overwritten by the app's, so it was never signaled and DXVK
++    * waited for it forever.  The wait is for work already submitted.
++    */
++   const bool can_unlock_queue = false;
++#else
+    const bool can_unlock_queue =
+       queue->async_present.info->swapchainCount == 1;
++#endif
+    if (can_unlock_queue)
+       simple_mtx_unlock(&queue->async_present.queue_mutex);
+    vn_wsi_chains_unlock(dev, queue->async_present.info, /*all=*/false);
+@@ -451,6 +465,12 @@
+    if (dev->renderer->info.has_implicit_fencing)
+       return;
+ 
++#ifdef _WIN32
++   /* NovaOS: no sync files (sync_wait returns at once), so the queue stays
++    * locked, as in vn_wsi_fence_wait */
++   return;
++#endif
++
+    const pid_t tid = vn_gettid();
+    struct vn_queue *queue = NULL;
+    for (uint32_t i = 0; i < dev->queue_count; i++) {
 --- a/src/vulkan/runtime/vk_instance.c
 +++ b/src/vulkan/runtime/vk_instance.c
 @@ -578,9 +578,18 @@

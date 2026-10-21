@@ -88,6 +88,7 @@
 #include "../hal/ioapic.h"
 #include "../hal/hpet.h"
 #include "../net/net.h"
+#include "../net/wfp.h"
 #include "../um/um.h"
 #include "version.h"
 #include "../ps/csrss.h"
@@ -430,6 +431,8 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
     /* Windows programs: SSE for user code, NT services, loader */
     UmInit();
     NetRestoreConfig();                   /* manual network settings (kept in the registry) */
+    FwRestore();                          /* the firewall's profiles and rules (registry) */
+    WfpRestore();                         /* ... and the filtering engine's persistent filters */
 
     /* The other CPUs (they copy this CPU's control registers, so after
      * UmInit's SSE setup); they start scheduling once this CPU first lets

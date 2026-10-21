@@ -175,7 +175,7 @@ Keyboard shortcuts:
 |---|---|
 | **File Explorer** | Shows This PC (every drive and its free space) and the folders Documents, Downloads, Pictures, Personal, Projects and Windows.  Double-click a program (`.exe`) to run it, a Windows Installer package (`.msi`) to install it, a picture (`.png`, `.ico`, `.cur`) to see it in Photos, a shortcut (`.lnk`) to open its target, and anything else to read it in Notepad.  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also to and from Windows programs; Delete deletes. |
 | **Terminal** | The command line (below). |
-| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Wi-Fi (the networks in range; joining one with its password), Accounts, Time & language, Printers, and About. |
+| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Wi-Fi (the networks in range; joining one with its password), Firewall (the network's Public or Private type, each profile on or off, the rules), Accounts, Time & language, Printers, and About. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
@@ -471,6 +471,30 @@ range, profiles, connecting and disconnecting, with their notifications.
 While connected, the Wi-Fi card carries NovaOS's network traffic
 (`ipconfig` shows "Wireless LAN adapter Wi-Fi"); when it disconnects, the
 Ethernet card takes over again.
+
+**The firewall** is on from the start, as on Windows.  The first time
+NovaOS joins a network it treats it as **Public** and asks, in a small
+window at the bottom right, whether the PC may be discoverable there:
+**Yes** makes it a **Private** network.  On a Public network nothing from
+outside can connect to the PC unless a rule allows it; replies to what the
+PC itself started always come back.  **Settings > Firewall** shows the
+network and switches it between Public and Private, turns the firewall on
+or off for each profile (Domain, Private, Public), and lists the rules,
+each with its own switch (changes need an administrator).  Programs and
+installers add their rules through the Windows Firewall API, and the
+Terminal does it the Windows way:
+
+```text
+netsh advfirewall show currentprofile
+netsh advfirewall firewall add rule name="Game server" dir=in action=allow protocol=TCP localport=27015
+netsh advfirewall firewall show rule name="Game server"
+netsh advfirewall firewall delete rule name="Game server"
+netsh advfirewall set publicprofile state on
+```
+
+Rules and profiles are kept where Windows keeps them, under
+`HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy`
+([design](design/network-security.md)).
 
 **Sound** plays through the newest output device.  Settings > Sound picks
 another device and sets each device's volume; the choices are kept across

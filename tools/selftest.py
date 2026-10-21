@@ -378,9 +378,10 @@ def venus_gpu():
 # HTTP/2: QEMU's user-mode network, where 10.0.2.2 is this machine and
 # tools/h2server.js serves HTTPS (HTTP/2 by ALPN, self-signed) on 18443 and
 # HTTP/1.1 on 18080, and tools/ippprinter.py is a network printer (IPP) on
-# 18631.  IPv6: an IPv6-only network that is tools/v6peer.py (a
-# router with SLAAC and RDNSS, a stateful DHCPv6 server, DNS for nova6.test,
-# HTTP on port 80), over a QEMU datagram netdev.
+# 18631; host ports 18191-18198 (TCP) and 18291-18298 (UDP) are forwarded
+# into NovaOS for the firewall's inbound tests.  IPv6: an IPv6-only network
+# that is tools/v6peer.py (a router with SLAAC and RDNSS, a stateful DHCPv6
+# server, DNS for nova6.test, HTTP on port 80), over a QEMU datagram netdev.
 NET4 = load_suite('network4')
 NET6 = load_suite('network6')
 
@@ -391,9 +392,10 @@ def renamed(t, suffix):
     return t
 
 
-# The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping)
+# The e1000e boot: its own tests, then the IPv4 ones (but ipconfig and ping, and the
+# firewall's, whose knocks need net4_boot's port forwarding)
 NET_E1000E = load_suite('network-e1000e') + [renamed(t, ' (e1000e)') for t in NET4
-                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store', 'spooltest'))]
+                                             if t.name not in ('virtio-net', 'ping') and not t.name.startswith(('winget', 'store', 'spooltest', 'firewall'))]
 # The devices suite: a boot for each device the core boot doesn't have
 # (one that takes QEMU's input, like a touch screen, would take it from the
 # core boot's mouse)
@@ -443,7 +445,10 @@ def net4_boot(work):
                            stdout=open(os.path.join(work, 'h2server.log'), 'w'), stderr=subprocess.STDOUT)
     ipp = subprocess.Popen([sys.executable, '-u', os.path.join(ROOT, 'tools', 'ippprinter.py'), '--port', '18631'],
                            stdout=open(os.path.join(work, 'ippprinter.log'), 'w'), stderr=subprocess.STDOUT)
-    return ['-nic', 'user,model=virtio-net-pci'], [srv, ipp]
+    # (firewalltest's inbound knocks: host 18190+N -> TCP 8190+N, 18290+N -> UDP 8290+N)
+    fwd = ''.join(f',hostfwd=tcp:127.0.0.1:{18190 + n}-:{8190 + n},hostfwd=udp:127.0.0.1:{18290 + n}-:{8290 + n}'
+                  for n in range(1, 9))
+    return ['-nic', 'user,model=virtio-net-pci' + fwd], [srv, ipp]
 
 
 def net6_boot(work):

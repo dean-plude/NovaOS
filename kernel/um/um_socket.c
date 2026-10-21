@@ -17,6 +17,7 @@
 #include "../net/sock.h"
 #include "../net/net.h"
 #include "../net/net_internal.h"
+#include "../net/wfp.h"
 
 #define BOUNCE  (16 * 1024)
 
@@ -82,7 +83,7 @@ static UINT64 sys_socket(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     int fam = a2 ? (int)a2 : NET_AF_INET;
     int s = a1 == 1 ? NetSockUdp(fam) : NetSockTcp(fam);
     if (s < 0) return (UINT64)(INT64)s;
-    NetSockSetOwner(s, p->pid);
+    NetSockSetOwner(s, p->pid, p->image_path);
     UmObject *o = kzalloc(sizeof(*o));
     if (!o) { NetSockClose(s); return (UINT64)(INT64)-SOCK_ENOBUFS; }
     o->type = UO_SOCKET;
@@ -173,7 +174,7 @@ static UINT64 sys_accept(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     NetSockAddr peer;
     int ns = NetSockAccept(s, &peer, sock_cancel, NULL);
     if (ns < 0) return 0;
-    NetSockSetOwner(ns, p->pid);
+    NetSockSetOwner(ns, p->pid, p->image_path);
     UmObject *o = kzalloc(sizeof(*o));
     if (!o) { NetSockClose(ns); return 0; }
     o->type = UO_SOCKET; o->refs = 1; o->sock = ns; o->destroy = sock_destroy;
@@ -212,7 +213,9 @@ static UINT64 tcp_table(UINT64 max, UINT64 out)
  *   17 the adapter's counters (no handle): octets in, octets out, frames
  *   in, frames out (4 UINT64s) into outptr (iphlpapi's GetIfEntry2);
  *   18-21 Wi-Fi (no handle): wlanapi.dll's adapters, scans and connections
- *   (um_wlan.c, userland/include/novawlan.h) */
+ *   (um_wlan.c, userland/include/novawlan.h);
+ *   22, 23 the filtering engine and the firewall (no handle): fwpuclnt.dll's
+ *   and hnetcfg.dll's calls (userland/include/novafw.h, net/wfp.c, net/firewall.c) */
 /* NtNovaSockCtl op 16 (userland/iphlpapi/iphlpapi.c reads the same layout) */
 typedef struct {
     UINT32 flags;                       /* bit 0 configured, 1 link, 2 present, 3 IPv4 by DHCP */
@@ -266,6 +269,53 @@ static UINT64 adapter_info(UINT64 out)
     return sizeof(a);
 }
 
+/* NtNovaSockCtl ops 22 and 23: the filtering engine and the firewall
+ * (userland/include/novafw.h).  The request is copied in, worked on and
+ * copied back; changes need an administrator, as on Windows. */
+static UINT32 wfp_size(UINT32 op)
+{
+    switch (op) {
+    case NOVAWFP_OPEN: return 4;
+    case NOVAWFP_FILTER_ADD: case NOVAWFP_FILTER_GET_ID: case NOVAWFP_FILTER_GET_KEY: case NOVAWFP_FILTER_AT:
+        return sizeof(NovaWfpFilter);
+    case NOVAWFP_FILTER_DELETE_ID: return 8;
+    case NOVAWFP_FILTER_DELETE_KEY: case NOVAWFP_SUBLAYER_DELETE: case NOVAWFP_PROVIDER_DELETE: return sizeof(NovaGuid);
+    case NOVAWFP_SUBLAYER_ADD: case NOVAWFP_SUBLAYER_GET: case NOVAWFP_SUBLAYER_AT: return sizeof(NovaWfpSublayer);
+    case NOVAWFP_PROVIDER_ADD: case NOVAWFP_PROVIDER_GET: case NOVAWFP_PROVIDER_AT: return sizeof(NovaWfpProvider);
+    default: return 0;
+    }
+}
+
+static UINT32 fw_size(UINT32 op)
+{
+    switch (op) {
+    case NOVAFWC_PROFILE_GET: case NOVAFWC_PROFILE_SET: return sizeof(NovaFwProfile);
+    case NOVAFWC_RULE_AT: case NOVAFWC_RULE_GET: case NOVAFWC_RULE_ADD: case NOVAFWC_RULE_SET: case NOVAFWC_RULE_DELETE:
+        return sizeof(NovaFwRule);
+    case NOVAFWC_NETWORK_GET: case NOVAFWC_NETWORK_SET: return sizeof(NovaFwNetwork);
+    default: return 0;
+    }
+}
+
+static UINT64 security_ctl(bool fw, UINT64 arg, UINT64 out)
+{
+    UINT32 op = (UINT32)(arg & 0xFFFF), extra = (UINT32)((arg >> 16) & 0x7FFF);
+    UINT32 size = fw ? fw_size(op) : wfp_size(op);
+    void *req = NULL;
+    if (size) {
+        req = kzalloc(size);
+        if (!req) return NOVAWFP_E_OUTOFMEMORY;
+        if (!out || !NT_SUCCESS(CopyFromUser(req, (const void *)(uintptr_t)out, size))) { kfree(req); return 0x80004003u; }   /* E_POINTER */
+    }
+    UmProcess *p = UmCurrent();
+    bool admin = um_caller_is_admin();
+    INT64 result = 0;
+    UINT32 hr = fw ? FwCtl(admin, op, extra, req, &result) : WfpCtl(p ? p->pid : 0, admin, op, extra, req);
+    if (size && !NT_SUCCESS(CopyToUser((void *)(uintptr_t)out, req, size))) hr = 0x80004003u;
+    kfree(req);
+    return hr ? hr : (UINT64)result;
+}
+
 static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     /* 6: the network generation (select reads it before looking);
@@ -274,6 +324,7 @@ static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     if (a2 == 12 || a2 == 13) return (UINT64)um_afd_ctl(a1, a2, a3, a4);   /* \Device\Afd helpers (um_afd.c) */
     if (a2 == 14) return tcp_table(a3, a4);
     if (a2 >= 18 && a2 <= 21) return (UINT64)um_wlan_ctl(a2, a3, a4);
+    if (a2 == NOVAFW_WFP || a2 == NOVAFW_FW) return security_ctl(a2 == NOVAFW_FW, a3, a4);
     if (a2 == 17) {
         NetStatus st;
         NetGetStatus(&st);
@@ -336,7 +387,7 @@ static UINT64 sys_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         if (ls < 0) return (UINT64)(INT64)-SOCK_ENOTSOCK;
         int ns = NetSockAccept(ls, &na, sock_cancel, NULL);
         if (ns < 0) return (UINT64)(INT64)ns;
-        NetSockSetOwner(ns, p->pid);
+        NetSockSetOwner(ns, p->pid, p->image_path);
         UmObject *o = um_handle_object(p, a1, UO_SOCKET);
         if (!o) { NetSockClose(ns); return (UINT64)(INT64)-SOCK_ENOTSOCK; }
         int old = o->sock;

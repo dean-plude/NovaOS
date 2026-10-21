@@ -1,6 +1,6 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, Wi-Fi, accounts, time & language, printers and about pages
+ *               storage, network, Wi-Fi, firewall (settings_firewall.c), accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  */
 
@@ -84,9 +84,9 @@ typedef struct {
 } Settings;
 
 static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Wi-Fi",
-                                 "Accounts", "Time & language", "Printers", "About" };
+                                 "Firewall", "Accounts", "Time & language", "Printers", "About" };
 static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_NETWORK,
-                                       GL_PERSON, GL_GEAR, GL_PRINTER, GL_NOVA };
+                                       GL_SHIELD, GL_PERSON, GL_GEAR, GL_PRINTER, GL_NOVA };
 #define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
 
 /* A labelled row inside a card: "Label ........ value" */
@@ -923,6 +923,7 @@ static bool set_tick(WND *w)
         st->thumbs_gen = g;
         return true;
     }
+    if (st && st->page == SETTINGS_FIREWALL) return FirewallPageTick();   /* a profile, rule or network changed */
     if (st && st->page == SETTINGS_PRINTERS)                  /* a printer added, named, removed... */
         return um_registry_generation() != st->prn_gen;
     if (st && st->page == SETTINGS_SOUND) {                   /* a device plugged in or out */
@@ -1828,6 +1829,7 @@ static void set_paint(WND *w)
     case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
     case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
     case SETTINGS_WIFI:        page_wifi(st, x, y, w2);    break;
+    case SETTINGS_FIREWALL:    FirewallPagePaint(x, y, w2); break;
     case SETTINGS_ACCOUNTS:    page_accounts(st, c, x, y, w2); break;
     case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
     case SETTINGS_PRINTERS:    page_printers(st, x, y, w2); break;
@@ -1880,6 +1882,10 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
     }
     if (x >= SIDE_W && st->page == SETTINGS_WIFI) {
         wifi_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+        return;
+    }
+    if (x >= SIDE_W && st->page == SETTINGS_FIREWALL) {
+        FirewallPageMouse(SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
         return;
     }
     if (x >= SIDE_W && st->page == SETTINGS_PRINTERS) {

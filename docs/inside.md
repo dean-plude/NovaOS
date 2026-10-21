@@ -173,6 +173,15 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows
     programs and NovaOS updates) and, on the live media, Install NovaOS.
+  - Settings (`kernel/apps/settings.c`): one table of pages (each with its
+    name, icon, Windows' `ms-settings:` names, search words and its
+    drawing, mouse, keyboard and refresh hooks) behind one frame: the
+    sidebar with **Find a setting** (only the pages' icons in a narrow
+    window), and a content area that scrolls whenever a page is taller
+    than the window.  Every page change goes one way, which closes the
+    page's forms and wipes what was typed.  Start's search lists the same
+    pages; `start ms-settings:NAME` opens one; `settings check` draws every
+    page at three window sizes and checks each (the core self-tests run it).
   - Task Manager (`taskmgr.exe`, a Windows program in System32;
     Ctrl+Shift+Esc, Start's right-click menu or search): Processes with
     End task, Performance (each logical processor, memory, disk and

@@ -100,6 +100,7 @@ inline E &operator^=(E &a, E b) throw() { return a = a ^ b; } \
 #ifndef NOVA_AGILEREFERENCE_DEFINED
 #define NOVA_AGILEREFERENCE_DEFINED
 enum AgileReferenceOptions { AGILEREFERENCE_DEFAULT = 0, AGILEREFERENCE_DELAYEDMARSHAL = 1 };
+struct IUnknown;    /* (declared here too: WIN32_LEAN_AND_MEAN leaves out the COM headers) */
 extern "C" HRESULT WINAPI RoGetAgileReference(AgileReferenceOptions options, REFIID riid, IUnknown *pUnk,
                                               struct IAgileReference **ppAgileReference);
 #endif

@@ -1114,9 +1114,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `StaticStore`, the release queue and the core's error service built,
   with the framework started as the XAML compiler starts it and parsed
   values unboxed in `xamlloadtest`.
-  Next: the reference tracker's use by a `Window` made on an initialized
-  `DXamlCore`, the element classes and their framework peers, then
-  `XamlReader.Load` and `Application.Start` end to end.
+  `XamlReader.Load` part (Phase 32 push) done: the element classes, the
+  `TextBlock` text core, the real type table, `CUIElement` and
+  `CFrameworkElement`, and the framework peers of `Grid`, `TextBlock`,
+  `Button` and the classes under them built from their sources, so
+  `XamlReader.Load` of a `Grid` with a `TextBlock` and a `Button` hands
+  back their framework objects on a thread started as
+  `Application.Start` starts it, in `xamlloadtest`.
+  Next: `Application.Start` itself (the desktop path through
+  `WindowsXamlManager` and `DesktopWindowImpl`).
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

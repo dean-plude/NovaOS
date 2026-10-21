@@ -51,10 +51,14 @@ inline Details::ModuleBase *GetModuleBase() throw() { return &Module<InProc>::Ge
 
 }} // namespace Microsoft::WRL
 
-/* a class's entry in the module's registry of activatable classes, which
- * NovaOS's module does not keep (above): nothing */
+/* a class's entry in the module's registry of activatable (and
+ * CoCreateInstance-able) classes, which NovaOS's module does not keep
+ * (above): nothing */
 #ifndef ActivatableClass
 #define ActivatableClass(className)
 #define ActivatableClassWithFactory(className, factory)
 #define ActivatableStaticOnlyFactory(factory)
+#endif
+#ifndef CoCreatableClass
+#define CoCreatableClass(className)
 #endif

@@ -24,12 +24,18 @@
  *
  * The host shows the video memory only where DIRT says it changed, so
  * while it wants them, the whole screen is reported every 50 ms (the
- * device poll thread's tick), as Linux's hyperv_fb does.  A mode change is
+ * vmbus thread's tick), as Linux's hyperv_fb does.  That thread runs only
+ * once the scheduler does, and the takeover happens in VmbusInit, long
+ * before: so the boot log's lines are reported too, after each one the
+ * framebuffer console prints (fb_set_shown_hook).  Without that the screen
+ * stays as it was at the first DIRT ("Hyper-V video: channel 5 open") for
+ * the rest of the boot, which looks just like a hang.  A mode change is
  * one SITUATION_UPDATE; the host does not answer it.
  */
 
 #include "hv_video.h"
 #include "../hal/display.h"
+#include "../hal/framebuffer.h"
 #include "../lib/string.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
@@ -121,12 +127,17 @@ static void take(volatile int *f)
 }
 static void drop(volatile int *f) { __atomic_store_n(f, 0, __ATOMIC_RELEASE); }
 
-static bool send(HvVideo *v, SvMsg *m, UINT32 type, UINT32 body)
+static void header(SvMsg *m, UINT32 type, UINT32 body)
 {
     m->h.pipe_type = PIPE_DATA;
     m->h.type = type;
     m->h.size = 8 + body;
     m->h.pipe_size = m->h.size;
+}
+
+static bool send(HvVideo *v, SvMsg *m, UINT32 type, UINT32 body)
+{
+    header(m, type, body);
     take(&v->sending);
     bool ok = VmbusSend(v->ch, m, sizeof(SvHeader) + body, 0, false);
     drop(&v->sending);
@@ -188,15 +199,36 @@ static bool situation(HvVideo *v, int w, int h)
     return true;
 }
 
+static void dirt_msg(const HvVideo *v, SvMsg *m)
+{
+    memset(m, 0, sizeof(*m));
+    m->dirt.output = 0;
+    m->dirt.count = 1;
+    m->dirt.x2 = v->w;
+    m->dirt.y2 = v->h;
+}
+
 static void dirt(HvVideo *v)
 {
     SvMsg m;
-    memset(&m, 0, sizeof(m));
-    m.dirt.output = 0;
-    m.dirt.count = 1;
-    m.dirt.x2 = v->w;
-    m.dirt.y2 = v->h;
+    dirt_msg(v, &m);
     send(v, &m, SV_DIRT, 2 + 16);
+}
+
+/* The framebuffer console printed (fb_set_shown_hook): the whole screen
+ * is reported.  Under kprintf's lock, so it never waits: when someone is
+ * sending (or the ring is full) the line shows with the next one, or the
+ * tick */
+static void console_shown(void)
+{
+    HvVideo *v = g_video;
+    if (!v || !__atomic_load_n(&v->dirt, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_exchange_n(&v->sending, 1, __ATOMIC_ACQUIRE)) return;
+    SvMsg m;
+    dirt_msg(v, &m);
+    header(&m, SV_DIRT, 2 + 16);
+    VmbusSend(v->ch, &m, sizeof(SvHeader) + 2 + 16, 0, false);
+    drop(&v->sending);
 }
 
 static bool fits(const HvVideo *v, int w, int h)
@@ -253,10 +285,12 @@ static void video_started(void *ctx)
         memset(&m, 0, sizeof(m));
         m.version.version = versions[i];
         if (!ask(v, &m, SV_VERSION_REQUEST, 4, SV_VERSION_RESPONSE)) {
-            kprintf("[HVVIDEO] No answer to the version request: the firmware's frame buffer stays\n");
+            kprintf("[HVVIDEO] No answer to the version request in %u ms: the firmware's frame buffer stays\n", REPLY_MS);
             return;
         }
         if (v->reply.version.accepted) v->version = versions[i];
+        kprintf("[HVVIDEO] Version %u.%u %s\n", versions[i] & 0xFFFF, versions[i] >> 16,
+                v->version ? "accepted" : "refused");
     }
     if (!v->version) {
         kprintf("[HVVIDEO] The host took no version NovaOS speaks (3.5, 3.2, 3.0)\n");
@@ -279,6 +313,8 @@ static void video_started(void *ctx)
         if (ask(v, &m, SV_RESOLUTION_REQUEST, 1, SV_RESOLUTION_RESPONSE)) {
             int n = v->reply.res.count < MAX_RES ? v->reply.res.count : MAX_RES;
             for (int i = 0; i < n; i++) add_mode(v, v->reply.res.res[i].w, v->reply.res.res[i].h);
+        } else {
+            kprintf("[HVVIDEO] No answer to the resolution request: the usual modes\n");
         }
     }
     if (!v->nmodes)
@@ -294,7 +330,11 @@ static void video_started(void *ctx)
                 (unsigned long long)base);
         return;
     }
-    if (!situation(v, bw, bh)) return;
+    kprintf("[HVVIDEO] Video memory at 0x%llx taken: the screen is NovaOS's from here\n", (unsigned long long)base);
+    if (!situation(v, bw, bh)) {
+        kprintf("[HVVIDEO] Cannot send the mode\n");
+        return;
+    }
 
     memset(&m, 0, sizeof(m));                            /* NovaOS draws the pointer itself */
     m.ptr_pos.visible = 1;
@@ -307,6 +347,7 @@ static void video_started(void *ctx)
 
     g_video = v;
     dirt(v);
+    fb_set_shown_hook(console_shown);                    /* (the boot log, until the vmbus thread's tick) */
     kprintf("[HVVIDEO] Synthetic video %u.%u: %llu MiB of video memory at 0x%llx, %d mode(s)\n",
             v->version & 0xFFFF, v->version >> 16, (unsigned long long)(v->vram_size >> 20),
             (unsigned long long)base, v->nmodes);
@@ -319,7 +360,7 @@ static void video_removed(void *ctx)
 {
     HvVideo *v = ctx;
     v->attached = false;
-    if (g_video == v) g_video = NULL;
+    if (g_video == v) { fb_set_shown_hook(NULL); g_video = NULL; }
 }
 
 const VmbusDriver HvVideoDriver = {

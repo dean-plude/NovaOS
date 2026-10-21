@@ -128,7 +128,12 @@ Set-VMVideo -VMName NovaOS -HorizontalResolution 2560 -VerticalResolution 1600 -
 
 Hyper-V shows the video memory only where the guest says it changed, so
 the driver reports the whole screen 20 times a second while the host
-asks for it.  NovaOS draws its own pointer (the host's is hidden).
+asks for it (from the "vmbus" thread), and, during boot, after every line
+the boot log prints: the driver takes the screen over in `VmbusInit`,
+long before the scheduler runs that thread.  (Before this, the first real
+host boot looked frozen right after `Hyper-V video: channel 5 open`: the
+screen stayed as it was at the takeover.)  NovaOS draws its own pointer
+(the host's is hidden).
 
 ## Network
 
@@ -241,6 +246,8 @@ version and the descriptor's size depend on the host):
 [VMBUS] Hyper-V video: channel 7 open
 [VMBUS] Hyper-V network: channel 8 open
 [NETVSC] NVSP 5, MAC 00:15:5d:01:02:03, link up
+[HVVIDEO] Version 3.5 accepted
+[HVVIDEO] Video memory at 0xf8000000 taken: the screen is NovaOS's from here
 [HVVIDEO] Synthetic video 3.5: 8 MiB of video memory at 0xf8000000, 9 mode(s)
 [DISPLAY] Hyper-V synthetic video: 1024x768, 9 mode(s)
 ```
@@ -277,6 +284,7 @@ lines say what went wrong:
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
+| the screen stops changing after `[HVVIDEO] Video memory at ... taken` | the host gets no dirty rectangles: the boot log on COM1 says whether NovaOS still runs (Hyper-V Manager's Heartbeat column too) |
 | `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |
 | `[NETVSC] Link down` | the VM's adapter is not connected to a switch (Settings, Network Adapter, Virtual switch) |
 | `[VMBUS] ...: removed by the host (channel N)` | the device was removed from the VM's settings (or its integration service unticked) while NovaOS ran |
@@ -318,7 +326,8 @@ answering.  `tests/host/hv_video.c` (`tests/tools/test_hv_video.py`) runs
 the video driver against a fake host: each message's size, the version
 fallback from 3.5 to 3.0, the host's mode list filtered to what fits,
 the video memory's location, mode changes, the dirty-rectangle timing and
-the host turning it off, and a host that refuses or never answers.
+the host turning it off, the boot log's lines reported without waiting,
+and a host that refuses or never answers.
 `tests/host/hv_netvsc.c` (`tests/tools/test_hv_netvsc.py`) runs the network
 driver against a fake host: the transfer-page packet layout, bring-up on
 NVSP 5, 4 and 1 (NDIS 6.30 or 6.1, no NDIS_CONF on 1), the RNDIS

@@ -60,6 +60,14 @@ void fb_putc(char c);
 void fb_puts(const char *s);
 
 /*
+ * Called after each fb_puts (kprintf's lines, under its lock, interrupts
+ * off): a display the host shows only where the guest says it changed
+ * (Hyper-V's synthetic video) reports the screen.  It must not print or
+ * wait.  NULL: none.
+ */
+void fb_set_shown_hook(void (*shown)(void));
+
+/*
  * Set text foreground and background colors.
  */
 void fb_set_colors(FbColor fg, FbColor bg);

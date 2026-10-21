@@ -5,7 +5,11 @@
  * StackTextAnalysisSource implements, core/text/RichTextServices/
  * TextFormatter/TextSegment.h), a text format's locale name list and a
  * text's reading direction detected from its content (core/text/TextBlock).
- * The two functions are FrameworkUdk's, which NovaOS does not have yet:
+ * The proxy over such a source that DirectWrite's private locale list
+ * support reads (TextAnalysis_CreateDWritePrivateTextAnalysisSourceProxy,
+ * pal/win's DWriteTextAnalyzer.cpp) is here the source itself: NovaOS's
+ * DirectWrite reads a source's one locale name.
+ * The other two functions are FrameworkUdk's, which NovaOS does not have yet:
  * they stand in as unbuilt (build.py unbuilt()), so a text block keeps its
  * language and a direction detected from content falls back as XAML's does
  * when detection fails. */
@@ -26,3 +30,12 @@ HRESULT TextAnalysis_SetLocaleNameList(IDWriteTextFormat *textFormat, wchar_t co
 HRESULT TextAnalysis_GetContentReadingDirection(IDWriteTextAnalyzer *analyzer, IDWriteTextAnalysisSource *source,
                                                 UINT32 textPosition, UINT32 textLength,
                                                 DWRITE_READING_DIRECTION *readingDirection, BOOL *isAmbiguous);
+
+inline HRESULT TextAnalysis_CreateDWritePrivateTextAnalysisSourceProxy(
+    ABI::Microsoft::Internal::FrameworkUdk::ITextFormatCallbacks *source, IDWriteTextAnalysisSource **proxy)
+{
+    if (!source || !proxy) return E_INVALIDARG;
+    source->AddRef();
+    *proxy = source;
+    return S_OK;
+}

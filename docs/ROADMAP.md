@@ -1144,6 +1144,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   islands) comes with 32.4.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
+  Content islands part (Phase 32 push) done: the Windows App SDK's
+  lifted content, input and windowing classes a `Window` sits on
+  (`Microsoft.UI.Input.dll`: `ContentIsland`, `DesktopChildSiteBridge`,
+  the island's input sources and focus controller, `AppWindow`), in
+  `contentislandtest`, and the framework's `DesktopWindowImpl`,
+  `DesktopWindowXamlSource`, island root and window chrome built.  Left:
+  the theme resources (`generic.xaml`, which a `Window` loads as it is
+  created, compiled to XBF as Windows ships it), DirectWrite's Windows 10
+  font model (`IDWriteFactory6`, which XAML's text formatting starts
+  from), then the page laid out, drawn, typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,

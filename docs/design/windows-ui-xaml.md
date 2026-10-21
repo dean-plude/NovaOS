@@ -622,6 +622,42 @@ vendors.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.
+   - *Content islands part (done):* the Windows App SDK's lifted
+     content, input and windowing classes, which the framework reaches
+     through `Microsoft.UI.Input.dll` (`MuxGetActivationFactory` in
+     `xcpcore.cpp`, the registry after it), as NovaOS's own DLL
+     (`userland/microsoft_ui_input`, C++ on the generated ABI headers;
+     its `build.py` writes a default for every interface method, so a
+     class overrides only what it does, and the rest report "not
+     implemented" on the debugger's output).  `ContentIsland` holds its
+     root visual, size and state; `DesktopChildSiteBridge` is a child
+     window of the app's window whose composition target is the
+     compositor's desktop target for it, sizes the island with itself
+     (`StateChanged`) and hands its messages to the island's input
+     sources (`InputPointerSource`, `InputKeyboardSource` with the
+     pre-translate source, `InputFocusController`,
+     `InputActivationListener`); `InputNonClientPointerSource` keeps a
+     window's caption regions; `AppWindow` is the top-level window
+     (subclassed for its `Changed` events) with an overlapped presenter
+     and title bar.  Built with it: `DesktopWindowImpl`,
+     `DesktopWindowXamlSource`, `XamlIslandRoot` (framework and core),
+     the window chrome (`components/WindowChrome`) and the window's event
+     arguments; the platform layer's DirectWrite font and script services
+     (`pal/win`) with the text core's font families (`core/text/Fonts`).
+     MinGW-w64's DirectWrite headers hide a base interface's overloads
+     behind a derived interface's (C++ name hiding) where the SDK's bring
+     them back with using-declarations; `build.py` generates copies that
+     add them (`dwrite_headers`).  `contentislandtest` checks the layer
+     on its own.
+   - *Left:* creating a `Window` applies its chrome's style, which loads
+     the framework's theme resources: `themeresources.xbf` and
+     `Styles.xbf` from `Microsoft.UI.Xaml.Resources.19H1.dll`, compiled
+     from `themes/generic.xaml` by Microsoft's XBF generator
+     (`tools/GenXbfDLL`, MIT).  Text formatting starts from DirectWrite's
+     Windows 10 font model (`IDWriteFactory6`, font collections and
+     families 2, font lists 2, font faces 4 and 5, text layouts up to 4),
+     which NovaOS's DirectWrite stops short of (`IDWriteFactory3`).  The
+     page test that waits on both is kept for those parts.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable

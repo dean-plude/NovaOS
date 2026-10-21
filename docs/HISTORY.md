@@ -15209,6 +15209,13 @@ NovaOS filters its network traffic the Windows 11 way
 - **Test:** `firewalltest` (network suite, 64- and 32-bit), with
   connections from the host through QEMU's port forwarding.
 
+Later the same day: a new network no longer brings up the "discoverable?"
+window by itself.  It stays Public, as in Windows 11, and the question is
+asked when the network icon by the clock is opened.  The window took the
+keyboard focus when the window under it closed (a UAC prompt), so typed
+input went to it; windows that never take the focus are now passed over
+when the focus moves on.
+
 ## Direct3D on Venus no longer hangs waiting for a present fence
 
 A CI flake in `d3dtest x64` (and before it `d3dtest present x86`): the
@@ -15264,6 +15271,36 @@ The last part of step 32.3 of `Windows.UI.Xaml` on NovaOS
   `DispatcherQueue` (64-bit).
 - **Next (32.4):** a `Window` on the Windows App SDK's content islands,
   and a page drawn.
+
+## XAML under its Windows.UI.Xaml names
+
+The first part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the XAML
+framework, Microsoft's WinUI 3 source with its lifted `Microsoft.UI.Xaml`
+interfaces, now also answers as `Windows.UI.Xaml`, the system XAML that
+WinUI 2 and UWP apps are compiled against.
+
+- **Faces:** `tools/winrt/winfaces.py` generates, from the Windows SDK's
+  and the framework's metadata, a face per `Windows.UI.Xaml` interface
+  over the framework's (2106 faces, 7550 methods matched by name), the
+  reverse faces the framework calls on an app's objects (overrides,
+  event handlers), boxes of Windows enums and structs, and the type-name
+  table. A framework object asked for a Windows interface hands out the
+  face; a method with no counterpart says so once and returns
+  `E_NOTIMPL`.
+- **Activation:** `Windows.UI.Xaml.*` class names activate the
+  framework's classes through its own module and activation table,
+  vendored from Microsoft's sources (`comModule.cpp`, `Factories.g.cpp`).
+- **Built from their sources:** the dependency properties' objects
+  (`DependencyProperty.Register`, `MetadataAPI`, `PropertyMetadata`) and
+  the enums' WinRT boxes.
+- **ole32:** `RoParseTypeName`, with which the framework reads a box's
+  element type.
+- **Test:** `wuxamltest` creates and uses `Windows.UI.Xaml` controls,
+  dependency properties, `XamlReader.Load`, events and a control composed
+  over `Control` with its own `MeasureOverride` (64-bit).
+- **Next:** WinUI 2's own controls built from Microsoft's sources on these
+  names, then Calculator.
 
 <!-- END generated:history -->
 

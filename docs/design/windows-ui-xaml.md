@@ -624,6 +624,65 @@ vendors.
    into and clicked in a self-test, with a reference screenshot.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
+   - *First part, the framework under its Windows names.*  WinUI 2 (the
+     `winui2/main` branch of microsoft-ui-xaml, C++/WinRT) is compiled
+     against `Windows.UI.Xaml`: Windows' interface IDs and Windows'
+     interface split (`IUIElement`, `IUIElement2` ... `IUIElement10`),
+     where the framework's source is WinUI 3's, with the lifted
+     `Microsoft.UI.Xaml` interfaces (one `IUIElement` holding them all,
+     some members moved: `Control.IsTabStop` is `UIElement`'s).  WinUI
+     2's own classes are named `Microsoft.UI.Xaml.Controls.*` too, so the
+     framework cannot answer under its lifted names alone.  The
+     namespace is therefore given as faces rather than by building the
+     framework twice: `tools/winrt/winfaces.py` reads Windows' metadata
+     with the framework's IDL (as `abigen.py` does) and writes
+     `windows_faces.g.cpp`, a table of faces, each a vtable of thunks:
+     *forward* faces implement a `Windows.UI.Xaml` interface by calling
+     the framework interface whose method has the same name (the class's
+     own, a base class's, or for statics a base class's factory), and
+     *reverse* faces implement a framework interface over a Windows one:
+     the overridable interfaces (what the framework calls on a class an
+     app composed over its own), delegates (event handlers), the
+     interfaces an app implements (`ICommand`, `IValueConverter`) and the
+     collections' generic instances (`IVector<UIElement>`).  A thunk
+     converts what it passes: an interface pointer is asked for the other
+     world's interface (or wrapped in the face that gives it), a Windows
+     box of a `Windows.UI.Xaml` enum or struct (`IReference<Visibility>`,
+     as C++/WinRT boxes it) is boxed again as the framework's, and a
+     `TypeName` naming a `Windows.UI.Xaml` type is renamed as the
+     framework's and back.  A method whose types have no counterpart (a
+     `Windows.UI.Composition` visual where the framework takes
+     `Microsoft.UI.Composition`'s, an array of objects) answers
+     `E_NOTIMPL` and names itself once on the debugger's output.
+     The framework objects' `QueryInterface` (NovaOS's
+     `src/ComObjectBase.cpp` in place of components/com's) hands out a
+     forward face's tear-off for a `Windows.UI.Xaml` interface ID the
+     object has none of its own for, and, asked by a composed object's
+     outer for a framework overridable interface the outer passed on,
+     the reverse face over the outer's Windows overrides (which call the
+     framework's own back when the app does not override them).  The
+     framework's own table of activation factories (`Factories.g.cpp`,
+     behind Microsoft's `DllGetActivationFactory`) gives its classes by
+     their Windows names (`src/windows_activation.cpp`).  A face handed
+     back as an object is the object it is a face of, so the framework
+     only ever holds its own objects.  ole32 gained `RoParseTypeName`
+     (wintypes' `api-ms-win-ro-typeresolution`), with which the
+     framework reads a box's element type from its class name.  Test:
+     `wuxamltest`, a `Windows.UI.Xaml` client: a `Button` activated by
+     its Windows name and driven through Windows' interfaces (one
+     identity, its Windows class name), a Windows-boxed `Visibility`,
+     `DependencyProperty.Register` with Windows type names,
+     `XamlReader.Load` and the page's children through Windows'
+     `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
+     Windows handler, and a control composed over
+     `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
+     framework's layout calls.  (A `Visibility` set on a `Button` goes to
+     its visual states, `VisualStateManager`, which 32.4 builds; the test
+     sets it on a `TextBlock`.)
+   - *Next:* WinUI 2's controls built from its `dev` tree on that (C++/
+     WinRT projections of `Windows.UI.Xaml`, its XAML resources), then
+     `Windows.UI.Xaml.Application` and `Window.Current` for UWP apps
+     (CoreApplication's activation in place of the desktop path).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

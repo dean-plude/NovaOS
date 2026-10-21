@@ -1148,6 +1148,20 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
+  First part done: the framework under its `Windows.UI.Xaml` names,
+  which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`
+  writes, from Windows' metadata and the framework's IDL, a face for each
+  `Windows.UI.Xaml` interface over the framework's lifted one (2,106
+  faces, 7,550 methods matched by name, the rest answering `E_NOTIMPL`
+  and naming themselves), and the framework's overridable interfaces,
+  delegates and collections over Windows' ones; the framework objects'
+  `QueryInterface` hands them out, its classes are activated by their
+  Windows names, a Windows-boxed enum or struct is boxed again as the
+  framework's, a `TypeName` is renamed both ways, and an app's control
+  composed over a `Windows.UI.Xaml` class has its Windows overrides
+  called by the framework's layout.  Test `wuxamltest`.  Next: WinUI 2's
+  controls themselves (its `dev` tree, C++/WinRT) built on that, then
+  `Windows.UI.Xaml.Application` for UWP apps.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

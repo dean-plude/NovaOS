@@ -514,6 +514,7 @@ def library(b, odir):
                 _core_objs.extend(built)
             else:
                 objs += built
+        _core_objs.extend(windows_faces(b, odir))
         for out, members in ((lib, objs), (core_lib, _core_objs)):
             if not os.path.exists(out) or any(os.path.getmtime(o) > os.path.getmtime(out) for o in members):
                 b.run(['lld-link', '/lib', f'/out:{out}'] + members)
@@ -784,6 +785,45 @@ PROJECT_INCLUDES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = (
 # (and Microsoft's clang build's EXP_CLANG, which the islands' sources'
 # runtime profiler markers are written for, as the type table's)
 PROJECT_DEFINES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = ['EXP_CLANG']
+
+# Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
+# its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled
+# against.  tools/winrt/winfaces.py writes, from Windows' metadata and the
+# framework's IDL, the faces (windows_faces.g.cpp: each Windows.UI.Xaml
+# interface as thunks over the framework's lifted one, and the framework's
+# overridable interfaces, delegates and collections over Windows' ones),
+# compiled with their runtime (src/windows_faces.cpp) into xaml_core.lib;
+# the framework objects' QueryInterface (components/com's ComObjectBase.cpp,
+# in place of Microsoft's: src/ComObjectBase.cpp) hands them out; and the
+# framework's table of activation factories (dxaml/lib's comModule.cpp and
+# Factories.g.cpp, Microsoft's DllGetActivationFactory's) gives its classes
+# by their Windows names (src/windows_activation.cpp)
+REPLACED['com/ComObjectBase.cpp'] = os.path.join(HERE, 'src', 'ComObjectBase.cpp')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../comModule.cpp', '../Factories.g.cpp', os.path.join(HERE, 'src', 'windows_activation.cpp'),
+    # (the dependency properties' objects and the classes' statics hand
+    # out: DependencyProperty and its handles, MetadataAPI, PropertyMetadata;
+    # the visual tree's ConnectedAnimationRoot a control's layout makes)
+    '../DependencyPropertyHandle.cpp', '../MetadataAPI.cpp', '../winrtgeneratedclasses/ConnectedAnimationRoot.g.cpp',
+    '../PropertyMetadata_Partial.cpp', '../winrtgeneratedclasses/PropertyMetadata.g.cpp',
+    # (and the enums' WinRT boxes, Boxes.g.cpp: an enum value set through
+    # its property boxed, or unboxed)
+    '../winrtgeneratedclasses/Boxes.g.cpp')
+WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
+
+
+def windows_faces(b, odir):
+    """windows_faces.g.cpp (written when its inputs change) and the faces'
+    runtime, as objects"""
+    out = os.path.join(odir, 'windows_faces.g.cpp')
+    inputs = [WINFACES, os.path.join(ROOT, 'tools', 'winrt', 'abigen.py'), os.path.join(ROOT, 'tools', 'winrt', 'idl.py'),
+              os.path.join(ROOT, 'third_party', 'winmd', 'Windows.winmd')]
+    if not os.path.exists(out) or any(os.path.getmtime(i) > os.path.getmtime(out) for i in inputs):
+        b.run(['python3', WINFACES, out])
+    src = os.path.join(HERE, 'src')
+    return b.compile_many([out, os.path.join(src, 'windows_faces.cpp')], odir, 'xamlfaces_',
+                          _msvcp(b).cxx_flags(b) + ['-I', src],
+                          [os.path.join(src, 'windows_faces.h')], compiler='clang++')
 
 
 def test_stubs(b, odir):

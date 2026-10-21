@@ -108,7 +108,14 @@ XamlIslandRootCollection, control/common/shared/ResourceManager.cpp, and
 components/ContentRoot, components/focus (FocusObserver, FocusProperties,
 FocusSelection, Movement, XYFocus), components/scaling and
 components/AccessKeys (Export, AccessKey, ModeContainer, Parser) with
-their projects,
+their projects, dxaml/lib's comModule.cpp and Factories.g.cpp (the
+framework's table of activation factories, which NovaOS's Windows.UI.Xaml
+faces activate its classes through, step 32.5) with the classes those
+faces reach first: DependencyPropertyHandle.cpp and MetadataAPI.cpp (the
+dependency properties' objects, DependencyProperty.Register),
+PropertyMetadata, ConnectedAnimationRoot's peer and the enums' WinRT
+boxes (winrtgeneratedclasses/Boxes.g.cpp), and
+components/ExtMetadataProvider/inc/XamlLibMetadataProvider.h,
 and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of

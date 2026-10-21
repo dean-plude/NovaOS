@@ -1711,6 +1711,7 @@ static void map_api_set(char *lname, int cap)
         { "api-ms-win-core-synch-",       "kernelbase.dll" },  /* WaitOnAddress: kernelbase's, as on Windows */
         { "api-ms-win-core-com-",         "ole32.dll" },
         { "api-ms-win-core-winrt-",       "ole32.dll" },      /* combase: HSTRINGs, activation */
+        { "api-ms-win-ro-typeresolution-", "ole32.dll" },     /* wintypes: RoParseTypeName */
         { "combase.dll",                  "ole32.dll" },
         { "api-ms-win-core-",             "kernel32.dll" },
         { "api-ms-win-security-",         "advapi32.dll" },

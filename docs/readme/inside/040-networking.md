@@ -1,1 +1,1 @@
-- **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC, stateful and stateless DHCPv6 and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2.
+- **Networking**: lwIP over IPv4 and IPv6 with DHCP, SLAAC, stateful and stateless DHCPv6 and DNS, TLS 1.3/1.2 on Mbed TLS, Winsock, and `winhttp` with HTTP/2; a Windows Filtering Platform engine with the Windows Firewall (Public, Private and Domain profiles, rules, `netsh advfirewall`).

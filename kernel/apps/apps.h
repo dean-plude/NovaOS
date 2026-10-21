@@ -106,7 +106,7 @@ void AppDrawFolderKindIcon(FolderKind k, int x, int y, int size);
 typedef enum {
     GL_PC, GL_DOCUMENTS, GL_DOWNLOADS, GL_PICTURES, GL_PERSON, GL_CODE, GL_WINDOWS,
     GL_FOLDER, GL_FILE, GL_PLUS, GL_SEARCH, GL_NETWORK, GL_NETWORK_OFF, GL_CHEVRON,
-    GL_BACK, GL_UP, GL_NOVA, GL_GEAR, GL_POWER, GL_SPEAKER, GL_PRINTER,
+    GL_BACK, GL_UP, GL_NOVA, GL_GEAR, GL_POWER, GL_SPEAKER, GL_PRINTER, GL_SHIELD,
 } Glyph;
 void AppDrawGlyph(Glyph g, int x, int y, int size, GdiColor c);
 
@@ -203,10 +203,19 @@ void NotepadOpen(RamNode *file);
 void SettingsOpen(void);
 /* Settings pages (for SettingsOpenPage) */
 enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_STORAGE,
-       SETTINGS_NETWORK, SETTINGS_WIFI, SETTINGS_ACCOUNTS, SETTINGS_TIME_LANGUAGE, SETTINGS_PRINTERS, SETTINGS_ABOUT,
+       SETTINGS_NETWORK, SETTINGS_WIFI, SETTINGS_FIREWALL, SETTINGS_ACCOUNTS, SETTINGS_TIME_LANGUAGE, SETTINGS_PRINTERS, SETTINGS_ABOUT,
        SETTINGS_ACCOUNTS_ADD = 100 /* Accounts, with "Add an account" open */ };
 /* Open Settings (or focus the open window) at page @page */
 void SettingsOpenPage(int page);
+/* Settings' Firewall page (settings_firewall.c): drawn at (x, y), w wide;
+ * a click at client (x, y) on the page drawn at (px, py), pw wide (true:
+ * draw it again); true when what it shows changed */
+void FirewallPagePaint(int x, int y, int w);
+bool FirewallPageMouse(int px, int py, int pw, int x, int y);
+bool FirewallPageTick(void);
+/* The firewall's once-a-second network check, and its "make this PC
+ * discoverable?" prompt for a new network (the desktop loop calls it) */
+void NetworkPromptPoll(void);
 void CalendarOpen(void);
 /* Photos: view a picture or icon (every image of an .ico); NULL shows the
  * pictures in C:\Pictures */
@@ -234,3 +243,8 @@ void WelcomeTimeZone(void);       /* the time zone page alone (Settings) */
 void WelcomeKeyboard(void);       /* the keyboard layout page alone (Settings) */
 /* The user's name given at first boot ("Dean Plude" until then) */
 void AppUserName(char *out, int cap);
+
+/* netsh advfirewall (netsh_fw.c): the firewall's rules and profiles from
+ * the Terminal; each line of the answer goes to @out (@err: an error) */
+typedef void (*NetshOut)(void *ctx, bool err, const char *line);
+void NetshAdvfirewall(int argc, char **argv, NetshOut out, void *ctx);

@@ -279,6 +279,7 @@ static void cmd_help(Term *t)
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
         "  netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect  join a Wi-Fi network (open, WPA2 or WPA3), or leave it\n"
+        "  netsh advfirewall firewall add|delete|show rule ... | set allprofiles state on|off  the firewall's rules and profiles\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
         "  wget <url> [url...] download web pages to C:\\Downloads\n"
@@ -1073,9 +1074,16 @@ static void cmd_netsh_wlan(Term *t, int argc, char **argv)
     j->cur = adapter;
 }
 
+static void netsh_out(void *t, bool err, const char *line)
+{
+    if (err) terr((Term *)t, line);
+    else tprint((Term *)t, line);
+}
+
 static void cmd_netsh(Term *t, int argc, char **argv)
 {
     if (argc > 1 && is(argv[1], "wlan")) { cmd_netsh_wlan(t, argc, argv); return; }
+    if (argc > 1 && is(argv[1], "advfirewall")) { NetshAdvfirewall(argc, argv, netsh_out, t); return; }
     static const char usage[] =
         "Usage: netsh interface ipv4 set address [name=]Ethernet [source=]dhcp\n"
         "       netsh interface ipv4 set address [name=]Ethernet [source=]static [address=]IP [mask=]MASK [[gateway=]IP]\n"
@@ -1083,7 +1091,8 @@ static void cmd_netsh(Term *t, int argc, char **argv)
         "       netsh interface ipv4 add dnsservers [name=]Ethernet [address=]IP [index=2]\n"
         "       netsh interface ipv4 show config\n"
         "       netsh wlan show interfaces | networks [mode=bssid]\n"
-        "       netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect";
+        "       netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect\n"
+        "       netsh advfirewall firewall add|delete|show|set rule ... | set|show ...profile ... | reset";
     if (argc < 4 || !(is(argv[1], "interface") || is(argv[1], "int")) ||
         !(is(argv[2], "ipv4") || is(argv[2], "ip"))) { terr(t, usage); return; }
     if (is(argv[3], "show")) { netsh_show(t); return; }

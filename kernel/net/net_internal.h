@@ -34,3 +34,8 @@ void   http_release(NetOp *op);         /* NetRelease() of an HTTP operation */
  * zone).  The lwIP type is ip_addr_t; void * keeps lwIP out of this header. */
 void   net_addr_to_lwip(const NetIp *a, void *ip_addr_out);
 void   net_addr_from_lwip(const void *ip_addr, NetIp *out);
+
+/* sock.c: the filtering engine's outbound transport layer for a packet
+ * (a struct pbuf, its IP header first) leaving by the adapter; false:
+ * drop it */
+bool   net_filter_outbound(void *pbuf, bool v6);

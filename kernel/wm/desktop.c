@@ -720,6 +720,7 @@ static const struct { const char *name; const char *keys; int page; } g_setting_
     { "Storage",         "storage disk drive space memory ram",               SETTINGS_STORAGE },
     { "Network",         "network ethernet internet ip dns certificates",     SETTINGS_NETWORK },
     { "Wi-Fi",           "wi-fi wifi wireless wlan networks ssid connect join", SETTINGS_WIFI },
+    { "Firewall",        "firewall network security protection public private profile allow app port rule", SETTINGS_FIREWALL },
     { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
     { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
     { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
@@ -2319,6 +2320,7 @@ void DesktopRun(void *arg)
 
         WmTick();                               /* (takes the file-system lock as needed) */
         UmPoll();                               /* reclaim exited programs */
+        NetworkPromptPoll();                    /* (the firewall: which network, and a new one's prompt) */
         UmUpdateForeground();                   /* (the active window's process) */
         KbdCurrent();                           /* follow a program's change to the keyboard layout */
 

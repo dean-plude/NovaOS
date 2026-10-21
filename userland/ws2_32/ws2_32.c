@@ -32,6 +32,7 @@ static int sock_err(long r)
         0, WSAEWOULDBLOCK, WSAECONNRESET, WSAECONNREFUSED, WSAENOTCONN, WSAETIMEDOUT,
         WSAEHOSTUNREACH, WSAEINVAL, WSAENOBUFS, WSAEADDRINUSE, WSAEISCONN, WSAEFAULT,
         WSAENETDOWN, WSAEMFILE, WSAENOTSOCK, WSAEAFNOSUPPORT,
+        WSAEACCES,                                   /* (a filter or the firewall blocked it) */
     };
     int e = (int)(-r);
     set_err(e >= 0 && e < (int)(sizeof(map) / sizeof(map[0])) ? map[e] : WSAEINVAL);

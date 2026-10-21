@@ -473,9 +473,10 @@ While connected, the Wi-Fi card carries NovaOS's network traffic
 Ethernet card takes over again.
 
 **The firewall** is on from the start, as on Windows.  The first time
-NovaOS joins a network it treats it as **Public** and asks, in a small
-window at the bottom right, whether the PC may be discoverable there:
-**Yes** makes it a **Private** network.  On a Public network nothing from
+NovaOS joins a network it treats it as **Public**, as Windows 11 does,
+without interrupting you.  Click the network icon next to the clock and
+a small window asks whether the PC may be discoverable there: **Yes**
+makes it a **Private** network.  On a Public network nothing from
 outside can connect to the PC unless a rule allows it; replies to what the
 PC itself started always come back.  **Settings > Firewall** shows the
 network and switches it between Public and Private, turns the firewall on

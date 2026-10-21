@@ -226,9 +226,11 @@ const char *SettingsPageKeys(int page);
 int FirewallPagePaint(int x, int y, int w);
 bool FirewallPageMouse(int px, int py, int pw, int x, int y);
 bool FirewallPageTick(void);
-/* The firewall's once-a-second network check, and its "make this PC
- * discoverable?" prompt for a new network (the desktop loop calls it) */
+/* The firewall's once-a-second network check (the desktop loop calls it) */
 void NetworkPromptPoll(void);
+/* A new network's "make this PC discoverable?" question, shown when the
+ * tray's network icon is opened; false: no question waits */
+bool NetworkPromptOpen(void);
 void CalendarOpen(void);
 /* Photos: view a picture or icon (every image of an .ico); NULL shows the
  * pictures in C:\Pictures */

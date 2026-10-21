@@ -87,8 +87,12 @@ On Windows the engine is split between the Base Filtering Engine service
 - **Networks:** the network list is Windows' `NetworkList` keys
   (`Profiles\{guid}` with `ProfileName` and `Category`, and
   `Signatures\Unmanaged\<gateway MAC>`).  A network is known by its
-  gateway's MAC address; a new one is Public, and the desktop asks once
-  whether the PC may be discoverable there (Yes: Private).
+  gateway's MAC address; a new one is Public.  As in Windows 11 nothing
+  pops up by itself: the question whether the PC may be discoverable
+  there (Yes: Private) waits until the person opens the network icon in
+  the tray, and the small window that asks never takes the keyboard
+  focus, not even when the window under it closes (so a program being
+  typed into, or a test driving the keyboard, is never interrupted).
   `NewNetworkWindowOff` under `...\Control\Network` turns the question
   off.  Changing `Category` in the registry (as `Set-NetConnectionProfile`
   does) takes effect within a second.

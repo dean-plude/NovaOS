@@ -200,6 +200,19 @@ static WND *topmost(const WND *except)
     return best;
 }
 
+/* The window the focus falls to when the active one goes: the topmost
+ * one that takes the focus (not a notice such as the network prompt) */
+static WND *next_focus(const WND *except)
+{
+    WND *best = NULL;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        WND *w = &g_windows[i];
+        if (w == except || !shown(w) || w->popup || w->no_activate) continue;
+        if (!best || w->z > best->z) best = w;
+    }
+    return best;
+}
+
 WND *WmCreateWindow(const char *title, GdiRect frame, UINT32 style,
                     GdiColor client_bg, GdiColor accent,
                     WndPaintFn on_paint, void *user)
@@ -259,7 +272,7 @@ static WND *by_id(int id);
 static void activate_next(const WND *gone, int owner)
 {
     WND *o = owner ? by_id(owner) : NULL;
-    WND *next = o && o != gone && shown(o) && !o->disabled ? o : topmost(gone);
+    WND *next = o && o != gone && shown(o) && !o->disabled ? o : next_focus(gone);
     if (next) WmSetActive(next);
 }
 
@@ -395,7 +408,7 @@ void WmMinimize(WND *w)
     if (!w) return;
     w->minimized = true;
     w->active    = false;
-    WND *next = topmost(w);
+    WND *next = next_focus(w);
     if (next) WmSetActive(next);
     mark_dirty();
 }
@@ -555,7 +568,7 @@ void WmSetSession(UINT32 rid)
     for (int i = 0; i < SESSION_SLOTS; i++)
         if (g_sess_focus[i].rid == rid) { focus = g_sess_focus[i].active; g_sess_focus[i].rid = 0; }
     WND *f = focus ? by_id(focus) : NULL;
-    if (!f || !shown(f)) f = topmost(NULL);
+    if (!f || !shown(f)) f = next_focus(NULL);
     if (f) WmSetActive(f);
     else for (int i = 0; i < WM_MAX_WINDOWS; i++) if (g_used[i]) g_windows[i].active = false;
     if (old) kprintf("[WM] Sign-in %u on the screen: %d windows back, %d put away\n", rid, shown_n, away_n);

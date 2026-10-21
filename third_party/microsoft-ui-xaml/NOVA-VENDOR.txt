@@ -77,7 +77,8 @@ args (core/error/ErrorEventArgs.cpp), deployment
 and, for XamlReader.Load end to end (32.3), the element classes
 (core/core/elements and elements2, less the ones that need closed headers:
 svgimagesource, glyphs, imagebrush, swapchainpanel, deferredkeys,
-softwarebitmapsource, xamlislandroot, popup), the text core's TextBlock
+softwarebitmapsource, xamlislandroot; popup joined with the
+Application.Start part), the text core's TextBlock
 subset (core/text: TextBlock, inlines, runs, inherited properties and
 common/text.cpp), the type table (core/metadata/dynamic), the core's event
 manager (core/dll/eventmgr.cpp), components/elements (CUIElement and
@@ -92,6 +93,22 @@ _Partial.cpp and winrtgeneratedclasses' .g.cpp), with UWPWindowImpl.cpp,
 ContentManager.cpp, DXamlCoreLightup.cpp, FxCallbacks.cpp,
 XamlParserCallbacks.cpp, UtilityFunctions.cpp, JoltClasses.cpp,
 ActivationAPI.cpp and DirectUIXamlQualifiedObject.cpp,
+and, for Application.Start's desktop path (32.3, the end of it),
+dxaml/lib's WindowsXamlManager_Partial.cpp, DebugSettings_Partial.cpp and
+ErrorInfo.cpp with the generated classes of WindowsXamlManager,
+DebugSettings, ApplicationInitializationCallbackParams,
+LaunchActivatedEventArgs and XamlShutdownCompletedOnThreadEventArgs, the
+core's application (core/packaging/application.cpp), visual tree
+(core/dll/VisualTree.cpp), focus manager (core/dll/focusmgr.cpp), time
+manager (core/animation/timemgr.cpp), layout manager (core/layout) and
+input services (core/input: InputServices.cpp,
+DirectManipulationServiceSharedState.cpp, RoutedEventArgs.cpp and the
+focus event args), dxaml/lib's JupiterWindow.cpp and the generated
+XamlIslandRootCollection, control/common/shared/ResourceManager.cpp, and
+components/ContentRoot, components/focus (FocusObserver, FocusProperties,
+FocusSelection, Movement, XYFocus), components/scaling and
+components/AccessKeys (Export, AccessKey, ModeContainer, Parser) with
+their projects,
 and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of

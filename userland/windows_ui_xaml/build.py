@@ -181,10 +181,6 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Dep
 # (whose stubs, which the component tests keep, a program on the core links
 # renamed out)
 CORE_STUB_RENAMES = {'DependencyObject_Stub.cpp': ('GetHandle', 'GetModernDoubleValue')}
-# (and, of the framework's window, CJupiterWindow, the size the control
-# layer reads, src/jupiter_window.cpp)
-next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
-    os.path.join(HERE, 'src', 'jupiter_window.cpp'))
 # The Windows SDK's namespace headers include the namespaces they import in
 # full; tools/winrt/abigen.py's declare them only (a fraction of the
 # compile time), so a library whose headers use an imported namespace's
@@ -584,9 +580,9 @@ _ELEMENTS2 = 'core/core/elements/lib2/elements2.vcxproj'
 CORE_LIBRARIES.append((_ELEMENTS2, 'core/core/elements/sources.props', 'core/core/elements/pch/precomp.h', []))
 CORE_FIRST[_ELEMENTS2] = CORE_FIRST['core/xcpcore.vcxproj']
 # (less the software bitmap image source, on Windows.Graphics.Imaging, and
-# the XAML island root and popups, on the lifted windowing (windowing.h),
-# which join when those do)
-_ELEMENTS2_LATER = ('softwarebitmapsource.cpp', 'xamlislandroot.cpp', 'popup.cpp')
+# the XAML island root, on the lifted content islands, which join when
+# those do)
+_ELEMENTS2_LATER = ('softwarebitmapsource.cpp', 'xamlislandroot.cpp')
 CORE_SOURCES[_ELEMENTS2] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
     for s in vcxproj.read(os.path.join(XCP, _ELEMENTS2), PROPS)['sources']
@@ -703,6 +699,91 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
                                                       'Border', 'ContentPresenter', 'Style', 'Setter', 'SetterBase',
                                                       'SetterBaseCollection', 'FrameworkTemplate', 'ControlTemplate',
                                                       'VectorChangedEventArgs', 'ExternalObjectReference'))
+
+# (32.3, Application.Start: the desktop start-up FrameworkApplicationFactory::
+# StartImpl takes, FrameworkApplication::StartDesktop: the thread's
+# WindowsXamlManager (InitializeForCurrentThread, which starts the
+# application on the thread and raises OnLaunched), with the arguments the
+# application's initialization callback and OnLaunched are given and the
+# event its shutdown raises, each its generated class and its partial one,
+# and the generated class of the island root collection the main visual
+# tree holds)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../WindowsXamlManager_Partial.cpp',) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('WindowsXamlManager', 'ApplicationInitializationCallbackParams',
+                                                      'LaunchActivatedEventArgs',
+                                                      'XamlShutdownCompletedOnThreadEventArgs',
+                                                      'XamlIslandRootCollection'))
+# (and NovaOS's stand-ins for the lifted windowing and content its message
+# loop and windows call, src/windowing.cpp, and for the diagnostics interop
+# the framework asks for as its tree changes, src/diagnostics.cpp)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].extend((
+    os.path.join(HERE, 'src', 'windowing.cpp'), os.path.join(HERE, 'src', 'diagnostics.cpp')))
+# (and the application's debug settings, which the application makes, and
+# its core half, CApplication (core/packaging/application.cpp), with the
+# core's visual tree (core/dll/VisualTree.cpp), which the application's
+# entering the tree asks for, and the framework's error info on the thread
+# (ErrorInfo.cpp), which its errors are reported through)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../DebugSettings_Partial.cpp', '../winrtgeneratedclasses/DebugSettings.g.cpp', '../ErrorInfo.cpp')
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('packaging/application.cpp', 'dll/VisualTree.cpp')
+# (and the content roots, components/ContentRoot whole: the coordinator and
+# the CoreWindow content root the application enters the tree under, each
+# root's input and focus managers; its stubs leave a program on the core)
+_CONTENTROOT = 'components/ContentRoot/lib/Microsoft.UI.Xaml.ContentRoot.vcxproj'
+CORE_LIBRARIES.append((_CONTENTROOT, _CONTENTROOT, 'components/pch/precomp.h', []))
+CORE_SOURCES[_CONTENTROOT] = tuple('../' + os.path.basename(x) for x in
+                                   vcxproj.read(os.path.join(XCP, _CONTENTROOT), PROPS)['sources'])
+CORE_SERVICES_STUBS += ('ContentRoot_Stub.cpp', 'ContentRootCoordinator_Stub.cpp')
+# (and what the core's start-up (CCoreServices::Initialize, then the
+# CoreWindow content root it makes, InitCoreWindowContentRoot) makes: the
+# time manager (core/animation/timemgr.cpp) and the input services, of the
+# core's input library, core/input/InputServices.cpp, with the shared state
+# of its manipulations and the routed and focus event args)
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('animation/timemgr.cpp',)
+_INPUT = 'core/input/Input.vcxproj'
+CORE_LIBRARIES.append((_INPUT, 'core/common.props', 'core/input/precomp.h', []))
+CORE_FIRST[_INPUT] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+CORE_SOURCES[_INPUT] = ('InputServices.cpp', 'DirectManipulationServiceSharedState.cpp', 'RoutedEventArgs.cpp',
+                         'FocusedElementRemovedEventArgs.cpp', 'GettingFocusEventArgs.cpp', 'LosingFocusEventArgs.cpp')
+# (and what each content root's visual tree makes: its layout manager
+# (core/layout), its focus manager (core/dll/focusmgr.cpp) with the focus
+# components (the focus observers, properties, selection, movement and XY
+# focus) and its root scale (components/scaling); and the core's access
+# keys (components/AccessKeys), which the core services make with them)
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('layout/LayoutManager.cpp', 'layout/LayoutStorage.cpp',
+                                         'layout/EffectiveViewportChangedEventArgs.cpp', 'dll/focusmgr.cpp')
+for _p in ('focus/FocusObserver/Microsoft.UI.Xaml.Focus.FocusObserver.vcxproj',
+           'focus/FocusProperties/lib/Microsoft.UI.Xaml.Focus.FocusProperties.vcxproj',
+           'focus/FocusSelection/lib/Microsoft.UI.Xaml.Focus.FocusSelection.vcxproj',
+           'focus/Movement/lib/Microsoft.UI.Xaml.Focus.FocusMovement.vcxproj',
+           'focus/XYFocus/lib/Microsoft.UI.Xaml.Focus.XYFocus.vcxproj',
+           'scaling/Microsoft.UI.Xaml.Scaling.vcxproj',
+           'AccessKeys/Export/lib/AccessKeys.AKExport.vcxproj',
+           'AccessKeys/AccessKey/lib/AccessKeys.AKAccessKey.vcxproj',
+           'AccessKeys/ModeContainer/lib/AccessKeys.AKModeContainer.vcxproj',
+           'AccessKeys/Parser/lib/AccessKeys.AKParser.vcxproj'):
+    _rel = '../' if '/lib/' in _p else ''
+    CORE_LIBRARIES.append(('components/' + _p, 'components/' + _p, 'components/pch/precomp.h', []))
+    CORE_SOURCES['components/' + _p] = tuple(_rel + os.path.basename(x) for x in
+                                              vcxproj.read(os.path.join(XCP, 'components', _p), PROPS)['sources'])
+# (and, once the application has entered its tree, the window the
+# framework's control takes on (dxaml/lib/JupiterWindow.cpp, a desktop
+# window without a CoreWindow on this path) and the control layer's
+# resource manager (control/common/shared/ResourceManager.cpp))
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../JupiterWindow.cpp',)
+CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../ResourceManager.cpp',)
+# (with the component tests' Uri factory stub renamed out, which the
+# window's callers pull in beside the static store's own)
+CORE_STUB_RENAMES['Utility_Stub.cpp'] = ('GetUriFactory',)
+# (Microsoft builds the islands' sources, WindowsXamlManager's among them,
+# in the third controls library, wrtdxamlcontrols3.vcxproj, and the debug
+# settings in the second foundation library: their include directories,
+# the focus bridge's among them, are the foundation library's too)
+PROJECT_INCLUDES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = (
+    'dxaml/lib/winrtcontrols3/wrtdxamlcontrols3.vcxproj', 'dxaml/lib/winrtfoundation2/wrtdxamlfoundation2.vcxproj')
+# (and Microsoft's clang build's EXP_CLANG, which the islands' sources'
+# runtime profiler markers are written for, as the type table's)
+PROJECT_DEFINES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = ['EXP_CLANG']
 
 
 def test_stubs(b, odir):

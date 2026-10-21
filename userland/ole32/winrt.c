@@ -242,13 +242,93 @@ BOOL ole32_winrt_registered(const WCHAR *name, UINT32 len)
     return registry_factory(0, name, len, 0, 0) == S_OK;
 }
 
+/* The factories a process registers for its own classes
+ * (RoRegisterActivationFactories, as an executable that serves Windows
+ * Runtime classes registers them): each registration is a set of class
+ * names, each with the function that makes its factory; RoGetActivationFactory
+ * looks among them first, newest registration first, until
+ * RoRevokeActivationFactories takes the set away. */
+typedef HRESULT (WINAPI *PFNGETACTIVATIONFACTORY)(HSTRING, IUnknown **);
+typedef void *RO_REGISTRATION_COOKIE;
+typedef struct Registration {
+    struct Registration *next;
+    UINT32 count;
+    HSTRING *names;
+    PFNGETACTIVATIONFACTORY *makers;
+} Registration;
+static Registration *g_registrations;
+static SRWLOCK g_registrations_lock = SRWLOCK_INIT;
+
+WINOLEAPI_(HRESULT) RoRegisterActivationFactories(HSTRING *classes, PFNGETACTIVATIONFACTORY *makers, UINT32 count,
+                                                  RO_REGISTRATION_COOKIE *cookie)
+{
+    if (!cookie) return E_POINTER;
+    *cookie = 0;
+    if (!classes || !makers || !count) return E_INVALIDARG;
+    Registration *r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                sizeof *r + count * (sizeof(HSTRING) + sizeof(PFNGETACTIVATIONFACTORY)));
+    if (!r) return E_OUTOFMEMORY;
+    r->count = count;
+    r->names = (HSTRING *)(r + 1);
+    r->makers = (PFNGETACTIVATIONFACTORY *)(r->names + count);
+    for (UINT32 i = 0; i < count; i++) {
+        if (!classes[i] || !makers[i] || FAILED(WindowsDuplicateString(classes[i], &r->names[i]))) {
+            for (UINT32 j = 0; j < i; j++) WindowsDeleteString(r->names[j]);
+            HeapFree(GetProcessHeap(), 0, r);
+            return E_INVALIDARG;
+        }
+        r->makers[i] = makers[i];
+    }
+    AcquireSRWLockExclusive(&g_registrations_lock);
+    r->next = g_registrations;
+    g_registrations = r;
+    ReleaseSRWLockExclusive(&g_registrations_lock);
+    *cookie = (RO_REGISTRATION_COOKIE)r;
+    return S_OK;
+}
+
+WINOLEAPI_(void) RoRevokeActivationFactories(RO_REGISTRATION_COOKIE cookie)
+{
+    Registration *found = 0;
+    AcquireSRWLockExclusive(&g_registrations_lock);
+    for (Registration **pp = &g_registrations; *pp; pp = &(*pp)->next)
+        if (*pp == (Registration *)cookie) { found = *pp; *pp = found->next; break; }
+    ReleaseSRWLockExclusive(&g_registrations_lock);
+    if (!found) return;
+    for (UINT32 i = 0; i < found->count; i++) WindowsDeleteString(found->names[i]);
+    HeapFree(GetProcessHeap(), 0, found);
+}
+
+static HRESULT registered_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFIID iid, void **out)
+{
+    PFNGETACTIVATIONFACTORY maker = 0;
+    AcquireSRWLockShared(&g_registrations_lock);
+    for (Registration *r = g_registrations; r && !maker; r = r->next)
+        for (UINT32 i = 0; i < r->count && !maker; i++) {
+            UINT32 n;
+            const WCHAR *s = WindowsGetStringRawBuffer(r->names[i], &n);
+            if (n == len && CompareStringOrdinal(s, (int)n, name, (int)len, FALSE) == CSTR_EQUAL) maker = r->makers[i];
+        }
+    ReleaseSRWLockShared(&g_registrations_lock);
+    if (!maker) return REGDB_E_CLASSNOTREG;
+    IUnknown *f = 0;
+    HRESULT hr = maker(cls, &f);
+    if (FAILED(hr)) return hr;
+    if (!f) return E_UNEXPECTED;
+    hr = f->lpVtbl->QueryInterface(f, iid, out);
+    f->lpVtbl->Release(f);
+    return hr;
+}
+
 WINOLEAPI_(HRESULT) RoGetActivationFactory(HSTRING cls, REFIID iid, void **f)
 {
     if (!f) return E_POINTER;
     *f = 0;
     UINT32 len;
     const WCHAR *name = WindowsGetStringRawBuffer(cls, &len);
-    HRESULT hr = ole32_winrt_factory(name, len, iid, f);
+    HRESULT hr = registered_factory(cls, name, len, iid, f);
+    if (hr != REGDB_E_CLASSNOTREG) return hr;
+    hr = ole32_winrt_factory(name, len, iid, f);
     if (hr != REGDB_E_CLASSNOTREG) return hr;
     hr = registry_factory(cls, name, len, iid, f);
     if (hr != REGDB_E_CLASSNOTREG) return hr;
@@ -418,9 +498,12 @@ WINOLEAPI_(void) RoFailFastWithErrorContextInternal2(HRESULT hr, ULONG count, vo
     OutputDebugStringA(msg);
     TerminateProcess(GetCurrentProcess(), (UINT)hr);
 }
-/* C++/WinRT's hresult_error reports through this before it throws; there is
- * no debugger to tell, so the error is only thrown (FALSE: not reported) */
-WINOLEAPI_(BOOL) RoOriginateLanguageException(HRESULT hr, HSTRING msg, IUnknown *e) { (void)hr; (void)msg; (void)e; return FALSE; }
+/* C++/WinRT's hresult_error and XAML's error info (dxaml/lib ErrorInfo.cpp)
+ * report through this before they throw or return: the error is originated
+ * as RoOriginateError originates it (the thread's IRestrictedErrorInfo, which
+ * they then take with GetRestrictedErrorInfo); the language exception, whose
+ * stack Windows would keep for a debugger, is not kept */
+WINOLEAPI_(BOOL) RoOriginateLanguageException(HRESULT hr, HSTRING msg, IUnknown *e) { (void)e; return RoOriginateError(hr, msg); }
 
 /* Agile references: every object here can be used from any thread, so
  * the reference holds the object and Resolve is a QueryInterface */

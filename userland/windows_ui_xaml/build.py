@@ -521,6 +521,34 @@ _STUBS = threading.Lock()
 CORE_SERVICES_STUBS = ('CoreServices_Stub.cpp', 'core_services_stubs.cpp', 'error_service.cpp',
                        'platform_services.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp')
 
+# (32.3, the value boxer and XamlReader.Load: what Load hands back its
+# objects through) the value boxer, CValueBoxer, which boxes the core's
+# values as the framework's (Windows.Foundation.PropertyValue, wintypes.dll)
+# and its objects as their framework peers, and the lifetime component the
+# peers' reference tracking runs on (ReferenceTrackerManager): component
+# libraries, built as Microsoft builds them but into xaml_core.lib (they
+# call into the framework, and programs without the framework take
+# Microsoft's stubs of them instead); and of the framework,
+# the process-wide store (StaticStore: the PropertyValue statics, the
+# cached boxes) and the queue of objects released off their thread
+# (UIAffinityReleaseQueue), which the framework's start-up makes, with
+# the core's error service (core/error: CErrorService, built with the
+# rendering seam above; its event args here) it gives the core,
+# the deployment that holds the current application (core/packaging) and
+# the core's entry points the framework calls (core/dll/CoreImports.cpp:
+# XamlReader.Load's Host_CreateFromXaml among them)
+# (src/invalid_operation.cpp stands in for its one function the
+# resource dictionary calls, for programs without it).  The
+# stubs of what now builds leave xaml_corestubs.lib.
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../StaticStore.cpp', '../UIAffinityReleaseQueue.cpp')
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('error/ErrorEventArgs.cpp', 'packaging/deployment.cpp',
+                                         'dll/CoreImports.cpp')
+for _p in ('valueboxer/lib/Microsoft.UI.Xaml.ValueBoxer.vcxproj', 'lifetime/lib/Microsoft.UI.Xaml.Lifetime.vcxproj'):
+    CORE_LIBRARIES.append(('components/' + _p, 'components/' + _p, 'components/pch/precomp.h', []))
+    CORE_SOURCES['components/' + _p] = tuple(os.path.basename(x) for x in
+                                              vcxproj.read(os.path.join(XCP, 'components', _p), PROPS)['sources'])
+CORE_SERVICES_STUBS += ('ValueBoxer_Stub.cpp', 'ReferenceTrackerManager_Stub.cpp')
+
 
 def test_stubs(b, odir):
     """xaml_teststubs.lib (TEST_STUBS) and xaml_corestubs.lib (the same

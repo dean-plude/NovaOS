@@ -68,7 +68,13 @@ DCompTreeHost.cpp and OfferTracker.cpp and components/brushes'
 WUCBrushManager.cpp, with their lib projects; control/download with its
 project and precomp.hpp; control/common/shared/AsyncDownloadRequestManager.cpp,
 win/shared/UIAHostEnvironmentInfo.cpp and
-host/win/browserdesktop/windwnreq.cpp) and the headers those include, external/inc's gsl
+host/win/browserdesktop/windwnreq.cpp),
+the value boxer (components/valueboxer's lib, with its project) and the
+lifetime library (components/lifetime's lib, with its project), dxaml/lib's
+StaticStore.cpp and UIAffinityReleaseQueue.cpp, the core's error event
+args (core/error/ErrorEventArgs.cpp), deployment
+(core/packaging/deployment.cpp) and entry points (core/dll/CoreImports.cpp)
+and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of
 dxaml (the rest of the core and the controls) joins as

@@ -1107,9 +1107,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `Window` and the framework's peer base class (`DependencyObject`)
   built from their sources, the dispatcher and styles run in
   `xamlloadtest`.
-  Next: the static store, the UI affinity release queue and the
-  reference tracker, a `Window` made on an initialized `DXamlCore`,
-  then `XamlReader.Load` and `Application.Start` end to end.
+  Value boxer part (Phase 32 push) done: the
+  Windows Runtime's value boxes (`wintypes.dll`'s
+  `Windows.Foundation.PropertyValue`, test `propvaltest`), the value
+  boxer `CValueBoxer`, the lifetime library (`ReferenceTrackerManager`),
+  `StaticStore`, the release queue and the core's error service built,
+  with the framework started as the XAML compiler starts it and parsed
+  values unboxed in `xamlloadtest`.
+  Next: the reference tracker's use by a `Window` made on an initialized
+  `DXamlCore`, the element classes and their framework peers, then
+  `XamlReader.Load` and `Application.Start` end to end.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.

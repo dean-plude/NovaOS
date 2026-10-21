@@ -18,7 +18,6 @@
 #include <Resources.h>
 #include <framework.h>
 #include <application.h>
-#include <ErrorService.h>
 #include <DXamlCore.h>
 #include <NullKeyedResource.g.h>
 #include <XamlTypeTokens.h>

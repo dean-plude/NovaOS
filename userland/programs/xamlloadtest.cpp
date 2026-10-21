@@ -60,6 +60,10 @@
 #include <JupiterControl.h>
 #include <XcpWindow.h>
 #include <microsoft.ui.dispatching.h>
+#include <DXamlInstanceStorage.h>
+#include <CValueBoxer.h>
+#include <Value.h>
+#include <MetadataAPI.h>
 #include <Dispatcher.h>
 #include <Callback.h>
 #include <DefaultStyles.h>
@@ -421,6 +425,96 @@ static void test_control()
     if (t) CloseHandle(t);
 }
 
+/* The value boxer (32.3, the push's value boxer part): the framework
+ * started on a thread of its own as Microsoft's XAML compiler starts it
+ * (DXamlCore::Initialize for XBF: the core services with the core's error
+ * service, the process's StaticStore with its PropertyValue statics, the
+ * release queue and the reference tracker; no window or rendering), then
+ * XamlReader.Load's second half: the core's objects and values unboxed by
+ * CValueBoxer into the framework's boxes (Windows.Foundation.PropertyValue,
+ * wintypes.dll), and boxes back into the core's values.  (Load's first
+ * half, Host_CreateFromXaml, parses through the browser host, which the
+ * framework's full start-up makes, CJupiterControl, past the rendering
+ * seam; here the thread's core parses as that host does.) */
+static ctl::ComPtr<IInspectable> unbox(const CValue &v)
+{
+    ctl::ComPtr<IInspectable> out;
+    CHECK_HR("DirectUI::CValueBoxer::UnboxObjectValue", DirectUI::CValueBoxer::UnboxObjectValue(&v, nullptr, out.ReleaseAndGetAddressOf()));
+    return out;
+}
+
+static DWORD WINAPI reader_thread(void *)
+{
+    CHECK_HR("DXamlCore::Initialize (as the XAML compiler's)", DirectUI::DXamlCore::Initialize(InitializationType::Xbf));
+    DirectUI::DXamlCore *dx = DirectUI::DXamlCore::GetCurrent();
+    CHECK("a framework core on this thread", dx != nullptr && dx->GetHandle() != nullptr);
+    if (!dx || !dx->GetHandle()) return 0;
+
+    /* an x:String parsed by the thread's core, as XamlReader.Load parses it,
+     * unboxed: an IReference<String> (an IPropertyValue of type String) */
+    static const wchar_t xaml[] = L"<x:String " XMLNS XMLNS_X L">Hello, Kepler</x:String>";
+    Parser::XamlBuffer buffer;
+    buffer.m_count = (uint32_t)(wcslen(xaml) * sizeof(wchar_t));
+    buffer.m_buffer = reinterpret_cast<const BYTE *>(xaml);
+    CDependencyObject *root = nullptr;
+    CHECK_HR("the thread's core parses an x:String", dx->GetHandle()->ParseXaml(buffer, true, true, true, &root));
+    CValue v;
+    v.WrapObjectNoRef(root);
+    ctl::ComPtr<IInspectable> obj = unbox(v);
+    ctl::ComPtr<wf::IPropertyValue> pv;
+    CHECK("the result is an IPropertyValue", obj && SUCCEEDED(obj.As(&pv)));
+    wf::PropertyType type = wf::PropertyType_Empty;
+    CHECK("of type String", pv && SUCCEEDED(pv->get_Type(&type)) && type == wf::PropertyType_String);
+    ctl::ComPtr<wf::IReference<HSTRING>> ref;
+    HSTRING text = nullptr;
+    CHECK("its IReference<String> is the text", obj && SUCCEEDED(obj.As(&ref)) && SUCCEEDED(ref->get_Value(&text)) &&
+          wcscmp(WindowsGetStringRawBuffer(text, nullptr), L"Hello, Kepler") == 0);
+    WindowsDeleteString(text);
+    ReleaseInterface(root);
+
+    /* the core's numbers and booleans unboxed */
+    CValue d;
+    d.SetDouble(14.5);
+    obj = unbox(d);
+    DOUBLE dv = 0;
+    CHECK("a double: an IPropertyValue of 14.5", obj && SUCCEEDED(obj.As(&pv)) && SUCCEEDED(pv->GetDouble(&dv)) && dv == 14.5);
+    CValue i;
+    i.SetSigned(42);
+    obj = unbox(i);
+    INT32 iv = 0;
+    CHECK("an integer: an IPropertyValue of 42", obj && SUCCEEDED(obj.As(&pv)) && SUCCEEDED(pv->GetInt32(&iv)) && iv == 42);
+    CValue t;
+    t.SetBool(true);
+    obj = unbox(t);
+    boolean bv = false;
+    CHECK("a boolean: an IPropertyValue of true", obj && SUCCEEDED(obj.As(&pv)) && SUCCEEDED(pv->GetBoolean(&bv)) && bv);
+
+    /* and the framework's boxes back into the core's values, with the
+       target's type as a property's setter passes it (finding the type of
+       an untyped box is the reflection API's, core/metadata, not built) */
+    ctl::ComPtr<IInspectable> boxed;
+    CHECK_HR("PropertyValue::CreateFromString", DirectUI::PropertyValue::CreateFromString(
+        wrl_wrappers::HStringReference(L"back").Get(), boxed.ReleaseAndGetAddressOf()));
+    CValue back;
+    DirectUI::BoxerBuffer bb;
+    DirectUI::DependencyObject *mor = nullptr;
+    CHECK_HR("DirectUI::CValueBoxer::BoxObjectValue of a string", DirectUI::CValueBoxer::BoxObjectValue(&back, DirectUI::MetadataAPI::GetClassInfoByIndex(KnownTypeIndex::String), boxed.Get(), &bb, &mor));
+    CHECK("the core's string value", back.GetType() == valueString && narrow(back.AsString()) == "back" && !mor);
+    CHECK_HR("PropertyValue::CreateFromDouble", DirectUI::PropertyValue::CreateFromDouble(2.25, boxed.ReleaseAndGetAddressOf()));
+    CValue back2;
+    CHECK_HR("DirectUI::CValueBoxer::BoxObjectValue of a double", DirectUI::CValueBoxer::BoxObjectValue(&back2, DirectUI::MetadataAPI::GetClassInfoByIndex(KnownTypeIndex::Double), boxed.Get(), &bb, &mor));
+    CHECK("the core's double value", (back2.GetType() == valueDouble && back2.AsDouble() == 2.25) ||
+          (back2.GetType() == valueFloat && back2.AsFloat() == 2.25f));
+    return 0;
+}
+
+static void test_reader()
+{
+    HANDLE t = CreateThread(nullptr, 0, reader_thread, nullptr, 0, nullptr);
+    CHECK("XamlReader.Load's thread", t && WaitForSingleObject(t, 60000) == WAIT_OBJECT_0);
+    if (t) CloseHandle(t);
+}
+
 /* The pieces DXamlCore::InitializeInstance makes after the Jupiter
  * control, each on its own (InitializeInstance itself waits on the
  * rendering, above; the Window, on an initialized DXamlCore) */
@@ -456,11 +550,13 @@ static void test_startup()
 int main()
 {
     DirectUI::StaticLockGlobalInit();
+    DXamlInstanceStorage::Initialize();     /* (as the framework's DllMain does: its per-thread core's slot) */
     test_dictionary();
     test_load();
     test_framework();
     test_control();
     test_startup();
+    test_reader();
     printf("xamlloadtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     return fail != 0;

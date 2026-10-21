@@ -640,7 +640,11 @@ static int start_menu_link(const WCHAR *exe, const WCHAR *dir, const WCHAR *name
     return SUCCEEDED(hr);
 }
 
-static void remove_package(const WCHAR *full)
+/* @full unregistered and its folder deleted: 0 if the folder is still
+ * there.  A program of the package that has just exited may still hold
+ * its files for a moment (its image is unmapped after the process is
+ * signalled), so the delete is tried again for a few seconds. */
+static int remove_package(const WCHAR *full)
 {
     WCHAR k[600], root[MAX_PATH] = L"", lnk[MAX_PATH], fam[300];
     HKEY h = repo_key(L"Packages\\%ls%ls", full, L"", 0);
@@ -677,7 +681,12 @@ static void remove_package(const WCHAR *full)
     swprintf(k, 600, L"%ls\\%ls", CLASSES_KEY, full);
     RegDeleteTreeW(HKEY_CURRENT_USER, k);
     RegDeleteKeyW(HKEY_CURRENT_USER, k);
-    if (root[0]) delete_tree(root);
+    for (int tries = 0; root[0] && tries < 100; tries++) {
+        delete_tree(root);
+        if (GetFileAttributesW(root) == INVALID_FILE_ATTRIBUTES) return 1;
+        Sleep(100);
+    }
+    return !root[0];
 }
 
 /* the installed packages of @family, by full name */
@@ -859,7 +868,8 @@ static int remove_cmd(const WCHAR *what)
     each_package(match_one, &m);
     if (!m.n) return !fail("%ls: no such package is installed", what);
     for (int i = 0; i < m.n; i++) {
-        remove_package(m.found[i]);
+        if (!remove_package(m.found[i]))
+            return !fail("%ls: unregistered, but its folder could not be deleted (are its files in use?)", m.found[i]);
         printf("Removed %ls\n", m.found[i]);
     }
     return 0;

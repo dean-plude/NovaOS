@@ -2,6 +2,16 @@
  * settings.c — Settings: live system, display, sound, personalization,
  *               storage, network, Wi-Fi, firewall (settings_firewall.c), accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
+ *
+ * Every page is an entry of g_pages (its name, glyph, ms-settings: names,
+ * search words and hooks); one frame draws them all: the sidebar (a search
+ * box, then the pages; glyphs only in a narrow window), the page's title,
+ * and its content, which scrolls (a scroll bar, the wheel, Page Up/Down)
+ * whenever it is taller than the window.  go() is the one way to another
+ * page: it closes the page's forms, wipes what was typed and logs
+ * "[SETTINGS] Page: NAME".  "settings check" in the Terminal draws every
+ * page at three window sizes and checks that each one draws something and
+ * scrolls within its range (SettingsCheck).
  */
 
 #include "apps.h"
@@ -22,10 +32,16 @@
 #include "../um/um.h"
 #include "../drivers/audio.h"
 #include "../wm/wallpaper.h"
+#include "../ke/scheduler.h"
 #include "iconset.h"
 
-#define SIDE_W 200
-#define ITEM_H 36
+#define SIDE_W     200
+#define SIDE_SLIM  56                /* the sidebar with glyphs only (a window narrower than SLIM_BELOW) */
+#define SLIM_BELOW 680
+#define ITEM_H     36
+#define HEAD_H     72                /* the page's title: its content starts this far down */
+#define FIND_Y     58                /* the search box, in the sidebar */
+#define FIND_H     32
 
 /* Personalization's clickable parts, recorded as they are drawn (client
  * coordinates) */
@@ -42,7 +58,7 @@ typedef struct {
 #define PHITS_MAX 48
 
 typedef struct {
-    int page; UINT32 net_sig;
+    int page; UINT32 sig;            /* the page; what it shows, as last drawn (Network, Wi-Fi, Display) */
     int mon;                         /* Display page: the monitor chosen */
     bool drag, moved;                /* a monitor being dragged in the arrangement */
     int drag_dx, drag_dy;            /* the press inside it (diagram px) */
@@ -56,7 +72,6 @@ typedef struct {
     char net_text[5][16];            /* ... address, mask, gateway, two DNS servers */
     char net_err[96];                /* ... why Save was refused */
     int ptab;                        /* Personalization: Background (0) or Icons (1) */
-    int pscroll, pheight;            /* ... scrolled by, and the height of what it shows */
     UINT32 thumbs_gen;               /* ... the wallpaper thumbnails shown (repainted when more are ready) */
     int nhits;                       /* ... what a click there does (set_paint records it) */
     PHit hits[PHITS_MAX];
@@ -81,13 +96,17 @@ typedef struct {
     char wifi_key[64];               /* ... its passphrase, as typed (wiped once used) */
     char wifi_note[160];             /* ... what the last connection did */
     WlanInfo wifi_info;              /* ... the adapter, as last seen (WlanPeekInfo: never waits) */
+    UiScroll sb;                     /* the page's content: pixels down */
+    UiScroll nb;                     /* the sidebar's pages: pixels down (in a short window) */
+    UINT32 live;                     /* System, Storage: the second shown (repainted each second) */
+    bool find;                       /* the search box has the keyboard */
+    char query[32];                  /* ... what is typed in it */
+    int check;                       /* SettingsCheck: the step drawn last (0: not checking) */
+    int check_drawn, check_bottom;   /* ... the step set_paint drew, and its content's height */
+    int check_pass, check_fail;
+    GdiRect check_frame;             /* ... the window as it was */
+    bool check_close;                /* ... the check opened the window (it closes it again) */
 } Settings;
-
-static const char *g_pages[] = { "System", "Display", "Sound", "Personalization", "Storage", "Network", "Wi-Fi",
-                                 "Firewall", "Accounts", "Time & language", "Printers", "About" };
-static const Glyph g_page_glyphs[] = { GL_PC, GL_WINDOWS, GL_SPEAKER, GL_PICTURES, GL_FOLDER, GL_NETWORK, GL_NETWORK,
-                                       GL_SHIELD, GL_PERSON, GL_GEAR, GL_PRINTER, GL_NOVA };
-#define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
 
 /* A labelled row inside a card: "Label ........ value" */
 static void row(int x, int y, int w, const char *label, const char *value)
@@ -112,7 +131,7 @@ static void ramdisk_usage(RamNode *d, UINT64 *bytes, int *files)
     }
 }
 
-static void page_system(int x, int y, int w)
+static int page_system(int x, int y, int w)
 {
     char cpu[64], up[32], mem[48];
     AppCpuName(cpu, sizeof(cpu));
@@ -133,6 +152,7 @@ static void page_system(int x, int y, int w)
     row(x, y, w, "Installed memory", mem);    y += 50;
     row(x, y, w, "System type", "64-bit operating system, x64 processor"); y += 50;
     row(x, y, w, "Uptime", up);
+    return y + 44;
 }
 
 /* System's Recovery, REC_DY below the page's top (set_mouse finds its
@@ -154,7 +174,7 @@ static void rec_row(int x, int y, int w, const char *label, const char *about, i
     if (ax + GdiTextW(about) < x + w - 16 - buttons * (REC_BTN_W + 8)) GdiTextT(ax, y + 14, about, UI_TEXT2);
 }
 
-static void page_recovery(Settings *st, int x, int y, int w)
+static int page_recovery(Settings *st, int x, int y, int w)
 {
     int ry = y + REC_DY;
     GdiTextT(x, ry, "Recovery", UI_TEXT);
@@ -170,7 +190,8 @@ static void page_recovery(Settings *st, int x, int y, int w)
     ry += 50;
     rec_row(x, ry, w, "Advanced startup", "Restart into safe mode, startup repair or the previous version", 1);
     UiButton(r_rec_restart(x, y, w), "Restart now", false);
-    if (st->rec_note[0]) GdiTextT(x, ry + 54, st->rec_note, UI_TEXT2);
+    if (st->rec_note[0]) { GdiTextT(x, ry + 54, st->rec_note, UI_TEXT2); return ry + 54 + GDI_FONT_H; }
+    return ry + 44;
 }
 
 static void recovery_click(Settings *st, int x, int y, int px, int py, int pw)
@@ -245,7 +266,7 @@ static GdiRect arr_rect(const Arr *a, GdiRect m)
                 m.w * a->num / a->den, m.h * a->num / a->den);
 }
 
-static void page_display(Settings *st, int x, int y, int w)
+static int page_display(Settings *st, int x, int y, int w)
 {
     char res[96], scale[48], s1[32];
     int mon = chosen(st);
@@ -257,7 +278,7 @@ static void page_display(Settings *st, int x, int y, int w)
         Arr a = arr_of(x, y + ARR_DY, w);
         for (int i = 0; i < GdiMonitorCount(); i++) {
             GdiRect r = arr_rect(&a, GdiMonitorRect(i));
-            if (st->drag && i == mon) { r.x = st->drag_x; r.y = st->drag_y; }
+            if (st->drag && i == mon) { r.x = st->drag_x; r.y = st->drag_y - st->sb.pos; }
             GdiRoundRect(RECT(r.x + 1, r.y + 1, r.w - 2, r.h - 2), 4, i == mon ? UI_ACCENT : UI_HOVER,
                          i == mon ? GDI_WHITE : UI_LINE);
             ksnprintf(s1, sizeof(s1), "%d", i + 1);
@@ -309,6 +330,7 @@ static void page_display(Settings *st, int x, int y, int w)
     row(x, y, w, "Driver", DisplayDriverName());     y += 50;
     if (DisplayAdapterName()) { row(x, y, w, "Adapter", DisplayAdapterName()); y += 50; }
     row(x, y, w, "Presentation", DisplayCanFlip() ? "Back buffer, page flipping" : "Back buffer, copied to the screen");
+    return y + 44;
 }
 
 /* Where a monitor dropped with its top left at (x, y) goes: touching
@@ -424,7 +446,7 @@ static void sound_row_click(bool capture, const AudioDevice *a, int dx, int w)
     AudioSetDefault(capture, a->id);
 }
 
-static void page_sound(Settings *st, int x, int y, int w)
+static int page_sound(Settings *st, int x, int y, int w)
 {
     SoundDevs d;
     sound_devs(&d);
@@ -436,6 +458,7 @@ static void page_sound(Settings *st, int x, int y, int w)
     GdiTextBold(x, iy, "Input: choose a device for speaking or recording", UI_TEXT);
     for (int i = 0; i < d.nin; i++) sound_row(x, iy + SOUND_HEAD + i * SOUND_ROW, w, &d.in[i]);
     if (!d.nin) row(x, iy + SOUND_HEAD, w, "No input devices found", "");
+    return iy + SOUND_HEAD + (d.nin ? d.nin : 1) * SOUND_ROW;
 }
 
 /* A click on the Sound page at page coordinates (@dx, @dy) below its top */
@@ -454,7 +477,7 @@ static void sound_click(int dx, int dy, int w)
     if (iy >= 0 && iy % SOUND_ROW < 44 && r < d.nin) sound_row_click(true, &d.in[r], dx, w);
 }
 
-static void page_storage(int x, int y, int w)
+static int page_storage(int x, int y, int w)
 {
     uint64_t total, free_p, used;
     pmm_stats(&total, &free_p, &used);
@@ -484,6 +507,7 @@ static void page_storage(int x, int y, int w)
     UINT64 dfree, dtotal;
     if (PersistSpace(&dfree, &dtotal)) bar(x + 16, y + 66, w - 32, dtotal - dfree, dtotal);   /* the disk's use */
     else bar(x + 16, y + 66, w - 32, bytes, bytes + 1024 * 1024);
+    return y + 92;
 }
 
 /* Network: the Edit button on the Ethernet card, and the IP settings form
@@ -512,7 +536,7 @@ static int net_end_y(const Settings *st, int y) { return net_row_y(st, y, NET_FI
 static GdiRect r_net_save(const Settings *st, int x, int y)   { return RECT(x, net_end_y(st, y) + 28, 100, 32); }
 static GdiRect r_net_cancel(const Settings *st, int x, int y) { return RECT(x + 112, net_end_y(st, y) + 28, 100, 32); }
 
-static void net_form(Settings *st, int x, int y, int w)
+static int net_form(Settings *st, int x, int y, int w)
 {
     GdiTextBold(x, y + 88, "IP assignment", UI_TEXT);
     for (int i = 0; i < 2; i++) {
@@ -539,6 +563,7 @@ static void net_form(Settings *st, int x, int y, int w)
     UiButton(r_net_save(st, x, y), "Save", true);
     UiButton(r_net_cancel(st, x, y), "Cancel", false);
     if (st->net_err[0]) GdiTextT(x + 228, ey + 36, st->net_err, GDI_C(0xE0, 0x60, 0x60));
+    return ey + 28 + 32;
 }
 
 static void net_begin_edit(Settings *st)
@@ -619,7 +644,7 @@ static void net_key(Settings *st, const KeyEvent *k)
     }
 }
 
-static void page_network(Settings *st, int x, int y, int w)
+static int page_network(Settings *st, int x, int y, int w)
 {
     NetStatus ns;
     NetGetStatus(&ns);
@@ -637,9 +662,13 @@ static void page_network(Settings *st, int x, int y, int w)
     GdiRoundRect(RECT(x + 16, y + 44, 10, 10), 5, dot, GDI_TRANSPARENT);
     GdiTextT(x + 34, y + 40, state, UI_TEXT2);
     if (ns.present && !st->net_edit) UiButton(r_net_edit(x, y, w), "Edit", false);
-    if (ns.present && st->net_edit) { net_form(st, x, top, w); return; }
+    if (ns.present && st->net_edit) return net_form(st, x, top, w);
     y += 88;
-    if (!ns.present) return;
+    if (!ns.present) {
+        GdiTextT(x, y, "Plug in a network cable, or add a network adapter (Device Manager lists the ones found).",
+                 UI_TEXT2);
+        return y + GDI_FONT_H;
+    }
 
     ksnprintf(mac, sizeof(mac), "%02X-%02X-%02X-%02X-%02X-%02X", ns.mac[0], ns.mac[1],
               ns.mac[2], ns.mac[3], ns.mac[4], ns.mac[5]);
@@ -663,7 +692,7 @@ static void page_network(Settings *st, int x, int y, int w)
         row(x, y, w, "DHCPv6 lease", lease); y += 50;
     }
     if (ns.dns_suffix[0]) { row(x, y, w, "DNS suffix search list", ns.dns_suffix); y += 50; }
-    if (!ns.configured) return;
+    if (!ns.configured) return y - 6;
     NetFormatIp(ns.ip, ip, sizeof(ip));
     NetFormatIp(ns.mask, mask, sizeof(mask));
     NetFormatIp(ns.gw, gw, sizeof(gw));
@@ -683,6 +712,7 @@ static void page_network(Settings *st, int x, int y, int w)
     if (imported) ksnprintf(roots, sizeof(roots), "%d (%d imported)", n, imported);
     else          ksnprintf(roots, sizeof(roots), "%d (Mozilla CA list)", n);
     row(x, y, w, "Trusted root certificates (HTTPS)", roots);
+    return y + 44;
 }
 
 /* Wi-Fi: the adapter's state, the networks its last scan heard (a scan
@@ -798,7 +828,7 @@ static void wifi_bars(int x, int y, UINT32 q)
     }
 }
 
-static void page_wifi(Settings *st, int x, int y, int w)
+static int page_wifi(Settings *st, int x, int y, int w)
 {
     bool have = WlanCount() > 0;
     if (have) WlanPeekInfo(0, &st->wifi_info);
@@ -815,11 +845,18 @@ static void page_wifi(Settings *st, int x, int y, int w)
     GdiColor dot = !have ? GDI_C(0xD0, 0x40, 0x40) : info.connected ? GDI_C(0x2E, 0xB8, 0x5C) : GDI_C(0xE8, 0xA8, 0x20);
     GdiRoundRect(RECT(x + 16, y + 44, 10, 10), 5, dot, GDI_TRANSPARENT);
     GdiTextT(x + 34, y + 40, state, UI_TEXT2);
-    if (!have) return;
+    if (!have) {
+        GdiTextT(x, y + 88, "Wi-Fi needs a wireless adapter with a Windows driver (Device Manager lists the "
+                            "devices found).", UI_TEXT2);
+        return y + 88 + GDI_FONT_H;
+    }
     UiButton(r_wifi_refresh(x, y, w), "Refresh", false);
     if (info.connected) UiButton(r_wifi_disconnect(x, y, w), "Disconnect", false);
     int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
-    if (!n) GdiTextT(x, y + 96, st->wifi_scanned ? "No networks in range." : "Looking for networks...", UI_TEXT2);
+    if (!n) {
+        GdiTextT(x, y + 96, st->wifi_scanned ? "No networks in range." : "Looking for networks...", UI_TEXT2);
+        if (!st->wifi_note[0]) return y + 96 + GDI_FONT_H;
+    }
     for (int i = 0; i < n; i++) {
         const WlanBss *b = &st->wifi_bss[i];
         int ry = wifi_row_y(st, y, i);
@@ -847,14 +884,15 @@ static void page_wifi(Settings *st, int x, int y, int w)
         }
         UiButton(r_wifi_connect(st, x, y, w), "Connect", true);
     }
-    int ny = wifi_row_y(st, y, n) + 4;
+    int ny = n ? wifi_row_y(st, y, n) + 4 : y + 96 + 24;
     if (st->wifi_n > WIFI_SHOWN) {
         char more[64];
         ksnprintf(more, sizeof(more), "and %d more", st->wifi_n - WIFI_SHOWN);
         GdiTextT(x + 16, ny, more, UI_TEXT2);
         ny += 24;
     }
-    if (st->wifi_note[0]) GdiTextT(x, ny, st->wifi_note, GDI_C(0xE0, 0x60, 0x60));
+    if (st->wifi_note[0]) { GdiTextT(x, ny, st->wifi_note, GDI_C(0xE0, 0x60, 0x60)); ny += 24; }
+    return ny;
 }
 
 static void wifi_choose(Settings *st, int i)
@@ -901,56 +939,81 @@ static bool wifi_key(Settings *st, const KeyEvent *k)
 
 static void current_locale(char *out, int cap);
 
-/* Repaint the Network page when the connection state changes (and Time &
- * language when the user locale does) */
-static bool set_tick(WND *w)
+/* Each page's on_tick part: true when what it shows changed (a repaint) */
+static bool tick_time_language(Settings *st)                  /* intl.exe has written the choice */
 {
-    Settings *st = w->user;
-    if (st && st->wifi_job && wifi_poll(st)) return true;    /* (a Wi-Fi scan or connection finished, on any page) */
-    if (st && st->page == SETTINGS_TIME_LANGUAGE) {           /* intl.exe has written the choice */
-        char cur[32];
-        current_locale(cur, sizeof(cur));
-        int tz = TzCurrent(), kbd = KbdCurrent();
-        if (!strcmp(cur, st->locale) && tz == st->tz && kbd == st->kbd) return false;
-        strcpy(st->locale, cur);
-        st->tz = tz;
-        st->kbd = kbd;
-        return true;
-    }
-    if (st && (st->page == SETTINGS_PERSONALIZE || st->page == SETTINGS_ACCOUNTS)) {   /* wallpaper thumbnails made */
-        UINT32 g = WallpaperThumbsGen();
-        if (g == st->thumbs_gen) return false;
-        st->thumbs_gen = g;
-        return true;
-    }
-    if (st && st->page == SETTINGS_FIREWALL) return FirewallPageTick();   /* a profile, rule or network changed */
-    if (st && st->page == SETTINGS_PRINTERS)                  /* a printer added, named, removed... */
-        return um_registry_generation() != st->prn_gen;
-    if (st && st->page == SETTINGS_SOUND) {                   /* a device plugged in or out */
-        SoundDevs d;
-        sound_devs(&d);
-        return sound_sig(&d) != st->sound_sig;
-    }
-    if (st && st->page == SETTINGS_WIFI) {                    /* the first scan; the adapter's state */
-        if (!st->wifi_scanned && !st->wifi_job) { wifi_scan(st); return st->wifi_job != 0; }
-        UINT32 sig = WlanCount() ? 1u : 0;
-        if (sig && WlanPeekInfo(0, &st->wifi_info)) {
-            const WlanInfo *info = &st->wifi_info;
-            sig |= (info->connected ? 2u : 0) ^ ((UINT32)info->bss.quality << 2) ^ ((UINT32)info->bss.ssid[0] << 9);
-        } else if (sig) sig = st->net_sig;                    /* (busy: nothing new to show) */
-        if (sig == st->net_sig) return false;
-        st->net_sig = sig;
-        return true;
-    }
-    if (!st || st->page != SETTINGS_NETWORK) return false;
+    char cur[32];
+    current_locale(cur, sizeof(cur));
+    int tz = TzCurrent(), kbd = KbdCurrent();
+    if (!strcmp(cur, st->locale) && tz == st->tz && kbd == st->kbd) return false;
+    strcpy(st->locale, cur);
+    st->tz = tz;
+    st->kbd = kbd;
+    return true;
+}
+
+static bool tick_thumbs(Settings *st)                         /* wallpaper thumbnails made */
+{
+    UINT32 g = WallpaperThumbsGen();
+    if (g == st->thumbs_gen) return false;
+    st->thumbs_gen = g;
+    return true;
+}
+
+static bool tick_printers(Settings *st) { return um_registry_generation() != st->prn_gen; }   /* added, named, removed... */
+
+static bool tick_sound(Settings *st)                          /* a device plugged in or out */
+{
+    SoundDevs d;
+    sound_devs(&d);
+    return sound_sig(&d) != st->sound_sig;
+}
+
+static bool tick_wifi(Settings *st)                           /* the first scan; the adapter's state */
+{
+    if (!st->wifi_scanned && !st->wifi_job) { wifi_scan(st); return st->wifi_job != 0; }
+    UINT32 sig = WlanCount() ? 1u : 0;
+    if (sig && WlanPeekInfo(0, &st->wifi_info)) {
+        const WlanInfo *info = &st->wifi_info;
+        sig |= (info->connected ? 2u : 0) ^ ((UINT32)info->bss.quality << 2) ^ ((UINT32)info->bss.ssid[0] << 9);
+    } else if (sig) sig = st->sig;                            /* (busy: nothing new to show) */
+    if (sig == st->sig) return false;
+    st->sig = sig;
+    return true;
+}
+
+static bool tick_network(Settings *st)                        /* the connection's state */
+{
     NetStatus ns;
     NetGetStatus(&ns);
     UINT32 sig = ns.ip ^ ns.gw ^ ns.dns[0] ^ (ns.link ? 1u : 0) ^ (ns.configured ? 2u : 0) ^ (ns.dhcp6 ? 4u : 0) ^
-                 ((UINT32)ns.ip6_count << 3) ^ (ns.dhcp6_valid - ns.dhcp6_age) / 60 << 6;
-    if (sig == st->net_sig) return false;
-    st->net_sig = sig;
+                 ((UINT32)ns.ip6_count << 3) ^ (ns.dhcp6_valid - ns.dhcp6_age) / 60 << 6 ^ (ns.present ? 1u << 30 : 0);
+    if (sig == st->sig) return false;
+    st->sig = sig;
     return true;
 }
+
+static bool tick_display(Settings *st)                        /* a monitor plugged in or out, a mode changed */
+{
+    int mon = chosen(st);
+    DisplayMode m = DisplayHeadMode(mon);
+    UINT32 sig = (UINT32)GdiMonitorCount() ^ (UINT32)m.w << 4 ^ (UINT32)m.h << 17 ^ (UINT32)GdiMonitorScale(mon) << 28 ^
+                 (UINT32)GdiMonitorDpi(mon) << 20;
+    if (sig == st->sig) return false;
+    st->sig = sig;
+    return true;
+}
+
+/* System (its uptime and memory) each second; Storage every five */
+static bool tick_live(Settings *st, UINT32 every)
+{
+    UINT32 now = (UINT32)(sched_ticks() / 100 / every);
+    if (now == st->live) return false;
+    st->live = now;
+    return true;
+}
+static bool tick_system(Settings *st)  { return tick_live(st, 1); }
+static bool tick_storage(Settings *st) { return tick_live(st, 5); }
 
 /* Personalization, in two tabs:
  *   Background: one card per wallpaper theme, the pictures in
@@ -967,7 +1030,7 @@ static const AppId g_preview_apps[] = { APP_EXPLORER, APP_TERMINAL, APP_SETTINGS
 
 static void hit(Settings *st, GdiRect r, GdiRect c, PHitKind kind, int i, RamNode *node)
 {
-    if (st->nhits >= PHITS_MAX) return;
+    if (st->nhits >= PHITS_MAX || !GdiInClip(r)) return;     /* (parts scrolled out of view are not clickable) */
     PHit *h = &st->hits[st->nhits++];
     h->r = RECT(r.x - c.x, r.y - c.y, r.w, r.h);
     h->kind = kind;
@@ -1097,7 +1160,7 @@ static int icons_tab(Settings *st, GdiRect c, int x, int y, int w)
     return y - top;
 }
 
-static void page_personalize(Settings *st, GdiRect c, int x, int y, int w)
+static int page_personalize(Settings *st, GdiRect c, int x, int y, int w)
 {
     st->nhits = 0;
     static const char *const tabs[] = { "Background", "Icons" };
@@ -1108,32 +1171,7 @@ static void page_personalize(Settings *st, GdiRect c, int x, int y, int w)
         hit(st, r, c, PH_TAB, i, NULL);
     }
     y += CHIP_H + 16;
-    /* the rest scrolls, clipped below the tabs */
-    int view = c.y + c.h - y;
-    GdiRect old = GdiClipRect();
-    int y0 = y > old.y ? y : old.y, y1 = c.y + c.h < old.y + old.h ? c.y + c.h : old.y + old.h;
-    if (y1 <= y0) return;
-    GdiSetClip(RECT(old.x, y0, old.w, y1 - y0));
-    int first = st->nhits;
-    st->pheight = st->ptab ? icons_tab(st, c, x, y - st->pscroll, w)
-                           : background_tab(st, c, x, y - st->pscroll, w);
-    GdiSetClip(old);
-    /* (parts scrolled out of view are not clickable) */
-    int n = first;
-    for (int i = first; i < st->nhits; i++) {
-        PHit *h = &st->hits[i];
-        if (h->r.y + c.y < y0 || h->r.y + h->r.h + c.y > y1) {
-            int vy = h->r.y + c.y, vb = vy + h->r.h;
-            if (vb <= y0 || vy >= y1) continue;
-            if (vy < y0) { h->r.h -= y0 - vy; h->r.y += y0 - vy; }
-            if (vb > y1) h->r.h -= vb - y1;
-        }
-        if (n != i) st->hits[n] = *h;
-        n++;
-    }
-    st->nhits = n;
-    int max = st->pheight - view + 16;
-    if (st->pscroll > (max > 0 ? max : 0)) st->pscroll = max > 0 ? max : 0;
+    return y + (st->ptab ? icons_tab(st, c, x, y, w) : background_tab(st, c, x, y, w));
 }
 
 static void personalize_click(Settings *st, int x, int y)
@@ -1143,7 +1181,7 @@ static void personalize_click(Settings *st, int x, int y)
         if (!UiHit(h->r, x, y)) continue;
         RamNode *n = h->path[0] ? RamfsResolve(NULL, h->path) : NULL;
         switch (h->kind) {
-        case PH_TAB:         if (st->ptab != h->i) { st->ptab = h->i; st->pscroll = 0; } break;
+        case PH_TAB:         if (st->ptab != h->i) { st->ptab = h->i; UiScrollTo(&st->sb, 0); } break;
         case PH_THEME:       DesktopSetTheme(h->i); break;
         case PH_PICTURE:     DesktopSetPicture(h->path); break;
         case PH_ADD_PICTURE: {
@@ -1197,7 +1235,7 @@ static int loc_cols(int w)
     return n < 1 ? 1 : n;
 }
 
-static void page_time_language(int x, int y, int w)
+static int page_time_language(int x, int y, int w)
 {
     char cur[32], value[64];
     current_locale(cur, sizeof(cur));
@@ -1233,6 +1271,7 @@ static void page_time_language(int x, int y, int w)
     }
     y += ((N_FORMATS + cols - 1) / cols) * (CHIP_H + CHIP_GAP) + 10;
     GdiTextT(x, y, "Other locales: intl NAME in the Terminal (intl /list shows them)", UI_TEXT2);
+    return y + GDI_FONT_H;
 }
 
 static void set_locale(const char *name)
@@ -1399,7 +1438,7 @@ static void acc_chips(Settings *st, GdiRect c, int x, int y)
     }
 }
 
-static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
+static int acc_form(Settings *st, GdiRect c, int x, int y, int w)
 {
     UmAccount a;
     bool known = um_account_get(st->acc_rid, &a);
@@ -1427,9 +1466,13 @@ static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
             GdiTextT(x, ey, "Leave the password blank to sign in without one.", UI_TEXT2);
         } else GdiTextT(x, ey, "Leave the new password blank to sign in without one.", UI_TEXT2);
         acc_buttons(st, c, x, ey + 30, st->acc_form == ACC_ADD ? "Create" : "Save");
-        return;
+        return ey + 30 + 32 + (st->acc_err[0] ? 12 + GDI_FONT_H : 0);
     }
-    if (!known) { st->acc_form = ACC_NONE; return; }
+    if (!known) {                                             /* (removed meanwhile) */
+        st->acc_form = ACC_NONE;
+        GdiTextT(x, y, "That account is no longer on this PC.", UI_TEXT2);
+        return y + GDI_FONT_H;
+    }
     if (st->acc_form == ACC_TYPE) {
         char t[64];
         ksnprintf(t, sizeof(t), "Change account type: %s", a.full[0] ? a.full : a.name);
@@ -1437,7 +1480,7 @@ static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
         acc_chips(st, c, x, y + 32);
         GdiTextT(x, y + 32 + CHIP_H + 16, "An administrator can change settings, install programs and manage other accounts.", UI_TEXT2);
         acc_buttons(st, c, x, y + 32 + CHIP_H + 48, "OK");
-        return;
+        return y + 32 + CHIP_H + 48 + 32 + (st->acc_err[0] ? 12 + GDI_FONT_H : 0);
     }
     if (st->acc_form == ACC_REMOVE) {
         char t[64], l[160];
@@ -1447,7 +1490,7 @@ static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
         GdiTextT(x, y + 32, l, UI_TEXT2);
         GdiTextT(x, y + 56, "Back up anything you want to keep before you delete it.", UI_TEXT2);
         acc_buttons(st, c, x, y + 92, "Delete account and data");
-        return;
+        return y + 92 + 32 + (st->acc_err[0] ? 12 + GDI_FONT_H : 0);
     }
     /* ACC_PICTURE: the pictures in C:\Windows\Web\Wallpaper, or none */
     GdiTextBold(x, y, "Choose your picture", UI_TEXT);
@@ -1481,14 +1524,18 @@ static void acc_form(Settings *st, GdiRect c, int x, int y, int w)
     GdiRect k = RECT(x, ey, 100, 32);
     UiButton(k, "Cancel", false);
     hit(st, k, c, AH_CANCEL, 0, NULL);
+    return ey + 32;
 }
 
-static void page_accounts(Settings *st, GdiRect c, int x, int y, int w)
+static int page_accounts(Settings *st, GdiRect c, int x, int y, int w)
 {
     st->nhits = 0;
-    if (st->acc_form) { acc_form(st, c, x, y, w); return; }
+    if (st->acc_form) return acc_form(st, c, x, y, w);
     UmAccount me;
-    if (!acc_me(&me)) return;
+    if (!acc_me(&me)) {
+        GdiTextT(x, y, "The account signed in could not be read; sign out and in again.", UI_TEXT2);
+        return y + GDI_FONT_H;
+    }
     bool admin = me.flags & UM_ACCT_ADMIN;
 
     /* Your info */
@@ -1538,7 +1585,8 @@ static void page_accounts(Settings *st, GdiRect c, int x, int y, int w)
         }
         y += ACC_ROW_H;
     }
-    if (!shown) GdiTextT(x, y + 4, "No other accounts on this PC yet.", UI_TEXT2);
+    if (!shown) { GdiTextT(x, y + 4, "No other accounts on this PC yet.", UI_TEXT2); y += 4 + GDI_FONT_H; }
+    return y;
 }
 
 static void accounts_click(Settings *st, int x, int y)
@@ -1648,7 +1696,7 @@ static int prn_add_y(int y, int n) { return y + (n < 1 ? 1 : n > PRN_SHOWN ? PRN
 static GdiRect r_prn_box(int x, int ay, int w) { return RECT(x, ay + 70, w - 112, 32); }
 static GdiRect r_prn_add(int x, int ay, int w) { return RECT(x + w - 100, ay + 70, 100, 32); }
 
-static void page_printers(Settings *st, int x, int y, int w)
+static int page_printers(Settings *st, int x, int y, int w)
 {
     Prn *p = g_prn;
     int n = prn_list(p, PRN_MAX);
@@ -1688,7 +1736,8 @@ static void page_printers(Settings *st, int x, int y, int w)
     else GdiTextT(b.x + 10, b.y + (b.h - GDI_FONT_H) / 2, "192.168.1.20", UI_TEXT2);
     if (st->prn_focus) GdiFillRect(RECT(b.x + 10 + GdiTextW(st->prn_text) + 1, b.y + 7, 2, b.h - 14), UI_ACCENT);
     UiButton(r_prn_add(x, ay, w), "Add", true);
-    if (st->prn_err[0]) GdiTextT(x, ay + 112, st->prn_err, GDI_C(0xE0, 0x60, 0x60));
+    if (st->prn_err[0]) { GdiTextT(x, ay + 112, st->prn_err, GDI_C(0xE0, 0x60, 0x60)); return ay + 112 + GDI_FONT_H; }
+    return ay + 102;
 }
 
 /* Add the printer whose address was typed */
@@ -1788,7 +1837,7 @@ static void prn_key(Settings *st, const KeyEvent *k)
     }
 }
 
-static void page_about(int x, int y, int w)
+static int page_about(int x, int y, int w)
 {
     GdiTextLarge(x, y, "NovaOS", UI_TEXT);             y += 40;
     char ver[96];
@@ -1798,52 +1847,56 @@ static void page_about(int x, int y, int w)
     row(x, y, w, "Desktop", "Kernel GDI + window manager");            y += 50;
     row(x, y, w, "UI font", "Inter 4.1 (SIL OFL 1.1)");                 y += 50;
     row(x, y, w, "Monospace font", "Cascadia Mono (SIL OFL 1.1)");
+    return y + 44;
 }
 
-static void set_paint(WND *w)
+/* -----------------------------------------------------------------------
+ * The pages, and the frame that shows them
+ * ----------------------------------------------------------------------- */
+
+/* Mouse hooks get client coordinates (x, y) and the page's origin (px, py:
+ * its content's top left, client-relative) and width; for a page with
+ * .hits, y is where the pointer is, for the others where it is in the
+ * unscrolled page, which the page's layout functions compute against */
+typedef struct {
+    const char *name;
+    Glyph glyph;
+    const char *uri;                 /* its ms-settings: names (space separated) */
+    const char *keys;                /* what the search box and Start's search find it by */
+    int  (*paint)(Settings *st, GdiRect c, int x, int y, int w);   /* the content's bottom */
+    void (*mouse)(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw);
+    bool (*key)(Settings *st, const KeyEvent *k);                  /* (pressed keys) true: taken */
+    bool (*tick)(Settings *st);
+    bool hits;                       /* the page's clicks go by st->hits (recorded as drawn) */
+} SetPage;
+
+static int paint_system(Settings *st, GdiRect c, int x, int y, int w)
 {
-    Settings *st = w->user;
-    GdiRect c = WmClientRect(w);
+    (void)c;
+    page_system(x, y, w);
+    return page_recovery(st, x, y, w);
+}
+static int paint_display(Settings *st, GdiRect c, int x, int y, int w)  { (void)c; return page_display(st, x, y, w); }
+static int paint_sound(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; return page_sound(st, x, y, w); }
+static int paint_storage(Settings *st, GdiRect c, int x, int y, int w)  { (void)c; (void)st; return page_storage(x, y, w); }
+static int paint_network(Settings *st, GdiRect c, int x, int y, int w)  { (void)c; return page_network(st, x, y, w); }
+static int paint_wifi(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; return page_wifi(st, x, y, w); }
+static int paint_time(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return page_time_language(x, y, w); }
+static int paint_firewall(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return FirewallPagePaint(x, y, w); }
+static int paint_printers(Settings *st, GdiRect c, int x, int y, int w) { (void)c; return page_printers(st, x, y, w); }
+static int paint_about(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; (void)st; return page_about(x, y, w); }
 
-    GdiFillRect(RECT(c.x, c.y, SIDE_W, c.h), UI_PANEL);
-    GdiFillRect(RECT(c.x + SIDE_W - 1, c.y, 1, c.h), UI_LINE);
-    GdiTextLarge(c.x + 20, c.y + 16, "Settings", UI_TEXT);
-    for (int i = 0; i < N_PAGES; i++) {
-        int y = c.y + 64 + i * ITEM_H;
-        if (i == st->page) {
-            GdiRoundRect(RECT(c.x + 8, y, SIDE_W - 16, ITEM_H - 4), 4, UI_HOVER, GDI_TRANSPARENT);
-            GdiRoundRect(RECT(c.x + 8, y + 9, 3, 14), 1, UI_ACCENT, GDI_TRANSPARENT);
-        }
-        AppDrawGlyph(g_page_glyphs[i], c.x + 22, y + 8, 16, i == st->page ? UI_TEXT : UI_TEXT2);
-        GdiTextT(c.x + 48, y + 8, g_pages[i], i == st->page ? UI_TEXT : UI_TEXT2);
-    }
-
-    int x = c.x + SIDE_W + 28, y = c.y + 20, w2 = c.w - SIDE_W - 56;
-    GdiTextLarge(x, y, g_pages[st->page], UI_TEXT);
-    y += 52;
-    switch (st->page) {
-    case SETTINGS_SYSTEM:      page_system(x, y, w2); page_recovery(st, x, y, w2); break;
-    case SETTINGS_DISPLAY:     page_display(st, x, y, w2); break;
-    case SETTINGS_SOUND:       page_sound(st, x, y, w2);   break;
-    case SETTINGS_PERSONALIZE: page_personalize(st, c, x, y, w2); break;
-    case SETTINGS_STORAGE:     page_storage(x, y, w2);    break;
-    case SETTINGS_NETWORK:     page_network(st, x, y, w2); break;
-    case SETTINGS_WIFI:        page_wifi(st, x, y, w2);    break;
-    case SETTINGS_FIREWALL:    FirewallPagePaint(x, y, w2); break;
-    case SETTINGS_ACCOUNTS:    page_accounts(st, c, x, y, w2); break;
-    case SETTINGS_TIME_LANGUAGE: page_time_language(x, y, w2); break;
-    case SETTINGS_PRINTERS:    page_printers(st, x, y, w2); break;
-    case SETTINGS_ABOUT:       page_about(x, y, w2);      break;
-    }
+static void mouse_system(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c;
+    if (msg == WM_MOUSE_DOWN) recovery_click(st, x, y, px, py, pw);
 }
 
-static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
+static void mouse_display(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
 {
-    Settings *st = w->user;
-    GdiRect c = WmClientRect(w);
-    if (st->page == SETTINGS_DISPLAY && multi()) {
-        /* the arrangement (layout matches set_paint + page_display) */
-        Arr a = arr_of(SIDE_W + 28, 20 + 52 + ARR_DY, c.w - SIDE_W - 56);
+    if (multi()) {
+        /* the arrangement (layout matches page_display) */
+        Arr a = arr_of(px, py + ARR_DY, pw);
         if (msg == WM_MOUSE_DOWN) {
             for (int i = GdiMonitorCount() - 1; i >= 0; i--) {
                 GdiRect r = arr_rect(&a, GdiMonitorRect(i));
@@ -1870,96 +1923,402 @@ static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
             return;
         }
     }
-    if (msg == WM_MOUSE_WHEEL && st->page == SETTINGS_PERSONALIZE) {
-        st->pscroll -= WmWheelDelta() * 48;                    /* (page_personalize keeps it in range) */
-        if (st->pscroll < 0) st->pscroll = 0;
+    if (msg != WM_MOUSE_DOWN) return;
+    /* resolution chips, then the DPI chips (layout matches page_display) */
+    int cols = chip_cols(pw);
+    int mon0 = chosen(st), dy = py + dpi_chips_dy(mon0, pw);
+    if (GdiMonitorScale(mon0) >= 2 && y >= dy && y < dy + CHIP_H && x >= px &&
+        (x - px) % (CHIP_W + CHIP_GAP) < CHIP_W && (x - px) / (CHIP_W + CHIP_GAP) < 2) {
+        DesktopSetMonitorDpi(mon0, (x - px) / (CHIP_W + CHIP_GAP) ? 192 : 96, true);
+        return;
+    }
+    int my = py + modes_dy();
+    if (x < px || y < my) return;
+    int col = (x - px) / (CHIP_W + CHIP_GAP), r = (y - my) / (CHIP_H + CHIP_GAP);
+    if (col >= cols || (x - px) % (CHIP_W + CHIP_GAP) >= CHIP_W || (y - my) % (CHIP_H + CHIP_GAP) >= CHIP_H) return;
+    DisplayMode m;
+    int mon = chosen(st);
+    if (!DisplayHeadModeAt(mon, r * cols + col, &m)) return;
+    if (DesktopSetHeadMode(mon, m.w, m.h)) DesktopSaveHeadMode(mon, m.w, m.h);
+}
+
+static void mouse_sound(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) sound_click(x - px, y - py, pw);   /* device rows (layout matches page_sound) */
+}
+
+static void mouse_personalize(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c; (void)px; (void)py; (void)pw;
+    if (msg == WM_MOUSE_DOWN) personalize_click(st, x, y);
+}
+
+static void mouse_network(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c;
+    if (msg == WM_MOUSE_DOWN) net_mouse(st, px, py, pw, x, y);
+}
+
+static void mouse_wifi(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c;
+    if (msg == WM_MOUSE_DOWN) wifi_mouse(st, px, py, pw, x, y);
+}
+
+static void mouse_accounts(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c; (void)px; (void)py; (void)pw;
+    if (msg == WM_MOUSE_DOWN) accounts_click(st, x, y);
+}
+
+static void mouse_time(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg != WM_MOUSE_DOWN) return;
+    /* the time zone's and keyboard's Change, format chips (layout matches page_time_language) */
+    if (UiHit(r_tz_change(px, py, pw), x, y)) { WelcomeTimeZone(); return; }
+    if (UiHit(r_kbd_change(px, py, pw), x, y)) { WelcomeKeyboard(); return; }
+    int cols = loc_cols(pw), ly = py + LOCALES_DY;
+    if (x < px || y < ly) return;
+    int col = (x - px) / (LOC_CHIP_W + CHIP_GAP), r = (y - ly) / (CHIP_H + CHIP_GAP), i = r * cols + col;
+    if (col >= cols || (x - px) % (LOC_CHIP_W + CHIP_GAP) >= LOC_CHIP_W ||
+        (y - ly) % (CHIP_H + CHIP_GAP) >= CHIP_H || i >= N_FORMATS) return;
+    set_locale(g_formats[i].name);
+}
+
+static void mouse_printers(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)c;
+    if (msg == WM_MOUSE_DOWN) prn_mouse(st, px, py, pw, x, y);
+}
+
+static void mouse_firewall(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) FirewallPageMouse(px, py, pw, x, y);
+}
+
+static bool tick_firewall(Settings *st) { (void)st; return FirewallPageTick(); }   /* a profile, rule or network changed */
+
+static bool key_network(Settings *st, const KeyEvent *k)  { if (!st->net_edit) return false; net_key(st, k); return true; }
+static bool key_accounts(Settings *st, const KeyEvent *k) { if (!st->acc_form) return false; accounts_key(st, k); return true; }
+static bool key_printers(Settings *st, const KeyEvent *k) { if (!st->prn_focus) return false; prn_key(st, k); return true; }
+
+/* (Start's search lists these too: desktop.c asks SettingsPageName/Keys) */
+static const SetPage g_pages[] = {
+    [SETTINGS_SYSTEM] = { "System", GL_PC, "system recovery",
+        "system about pc processor memory uptime recovery reset advanced startup safe mode",
+        paint_system, mouse_system, NULL, tick_system, false },
+    [SETTINGS_DISPLAY] = { "Display", GL_WINDOWS, "display screenrotation",
+        "display screen resolution scale monitor dpi arrange multiple displays adapter",
+        paint_display, mouse_display, NULL, tick_display, false },
+    [SETTINGS_SOUND] = { "Sound", GL_SPEAKER, "sound sound-devices apps-volume",
+        "sound audio speakers headphones headset microphone output input device usb volume",
+        paint_sound, mouse_sound, NULL, tick_sound, false },
+    [SETTINGS_PERSONALIZE] = { "Personalization", GL_PICTURES,
+        "personalization personalization-background personalization-colors themes",
+        "personalization wallpaper background theme colors icons icon set picture",
+        page_personalize, mouse_personalize, NULL, tick_thumbs, true },
+    [SETTINGS_STORAGE] = { "Storage", GL_FOLDER, "storagesense savelocations",
+        "storage disk drive space memory ram",
+        paint_storage, NULL, NULL, tick_storage, false },
+    [SETTINGS_NETWORK] = { "Network", GL_NETWORK, "network network-status network-ethernet network-advancedsettings",
+        "network ethernet internet ip dns certificates dhcp gateway adapter",
+        paint_network, mouse_network, key_network, tick_network, false },
+    [SETTINGS_WIFI] = { "Wi-Fi", GL_NETWORK, "network-wifi network-wifisettings availablenetworks",
+        "wi-fi wifi wireless wlan networks ssid connect join",
+        paint_wifi, mouse_wifi, wifi_key, tick_wifi, false },
+    [SETTINGS_FIREWALL] = { "Firewall", GL_SHIELD, "windowsdefender network-firewall",
+        "firewall network security protection public private profile allow app port rule",
+        paint_firewall, mouse_firewall, NULL, tick_firewall, false },
+    [SETTINGS_ACCOUNTS] = { "Accounts", GL_PERSON, "accounts yourinfo otherusers signinoptions",
+        "accounts users user add other family password sign in picture administrator switch",
+        page_accounts, mouse_accounts, key_accounts, tick_thumbs, true },
+    [SETTINGS_TIME_LANGUAGE] = { "Time & language", GL_GEAR, "dateandtime regionformatting regionlanguage keyboard",
+        "time language region regional format locale date number currency zone keyboard layout",
+        paint_time, mouse_time, NULL, tick_time_language, false },
+    [SETTINGS_PRINTERS] = { "Printers", GL_PRINTER, "printers",
+        "printers printing printer scanner ipp default add network",
+        paint_printers, mouse_printers, key_printers, tick_printers, false },
+    [SETTINGS_ABOUT] = { "About", GL_NOVA, "about",
+        "about version fonts licence",
+        paint_about, NULL, NULL, NULL, false },
+};
+#define N_PAGES ((int)(sizeof(g_pages) / sizeof(g_pages[0])))
+
+int SettingsPageCount(void) { return N_PAGES; }
+const char *SettingsPageName(int page) { return page >= 0 && page < N_PAGES ? g_pages[page].name : ""; }
+const char *SettingsPageKeys(int page) { return page >= 0 && page < N_PAGES ? g_pages[page].keys : ""; }
+
+/* Case-insensitive: @needle (its first @n characters) in @hay */
+static bool ci_has(const char *hay, const char *needle, size_t n)
+{
+    for (; *hay; hay++) {
+        size_t i = 0;
+        while (i < n && hay[i] && (hay[i] | 0x20) == (needle[i] | 0x20)) i++;
+        if (i == n) return true;
+    }
+    return !n;
+}
+
+/* Every word of @q is in the page's name or search words */
+static bool page_matches(int page, const char *q)
+{
+    while (*q) {
+        while (*q == ' ') q++;
+        size_t n = 0;
+        while (q[n] && q[n] != ' ') n++;
+        if (n && !ci_has(g_pages[page].name, q, n) && !ci_has(g_pages[page].keys, q, n)) return false;
+        q += n;
+    }
+    return true;
+}
+
+/* The pages the sidebar lists (those the search matches); how many */
+static int nav_list(const Settings *st, int *vis)
+{
+    int n = 0;
+    for (int i = 0; i < N_PAGES; i++) if (page_matches(i, st->query)) vis[n++] = i;
+    return n;
+}
+
+/* The page named by @uri ("ms-settings:display", "display", "Wi-Fi"), or -1 */
+static int page_by_uri(const char *uri)
+{
+    if (!strncmp(uri, "ms-settings:", 12) || !strncmp(uri, "MS-SETTINGS:", 12)) uri += 12;
+    size_t n = 0;
+    while (uri[n] && uri[n] != '?' && uri[n] != '#' && uri[n] != ' ') n++;
+    if (!n) return SETTINGS_SYSTEM;                           /* (ms-settings: alone: Windows' home page) */
+    for (int i = 0; i < N_PAGES; i++) {
+        const char *u = g_pages[i].uri;
+        while (*u) {                                          /* one of its ms-settings: names */
+            size_t k = 0;
+            while (u[k] && u[k] != ' ') k++;
+            bool same = k == n;
+            for (size_t j = 0; same && j < n; j++) same = (u[j] | 0x20) == (uri[j] | 0x20);
+            if (same) return i;
+            u += k;
+            while (*u == ' ') u++;
+        }
+        const char *nm = g_pages[i].name;                     /* its name */
+        bool same = strlen(nm) == n;
+        for (size_t j = 0; same && j < n; j++) same = (nm[j] | 0x20) == (uri[j] | 0x20);
+        if (same) return i;
+    }
+    return -1;
+}
+
+/* The frame's parts, client-relative: the sidebar's width, the page's
+ * origin and width, and the view its content scrolls in */
+typedef struct { int side, px, py, pw; GdiRect view; bool slim; } Frame;
+
+static Frame frame_of(GdiRect c)
+{
+    Frame f;
+    f.slim = c.w < SLIM_BELOW;
+    f.side = f.slim ? SIDE_SLIM : SIDE_W;
+    f.px = f.side + 28;
+    f.py = HEAD_H;
+    f.pw = c.w - f.side - 56;
+    if (f.pw < 160) f.pw = 160;                               /* (narrower: cut at the right, not squeezed) */
+    f.view = RECT(f.side, HEAD_H - 8, c.w - f.side, c.h > HEAD_H - 8 ? c.h - (HEAD_H - 8) : 0);
+    return f;
+}
+
+static int nav_top(const Frame *f) { return f->slim ? 12 : FIND_Y + FIND_H + 14; }
+
+/* Go to @page: what the page had open (forms, typed text, a pending
+ * Reset) is closed, the content scrolls to its top */
+static void go(Settings *st, int page, bool log)
+{
+    if (page < 0 || page >= N_PAGES) return;
+    if (page != st->page) {
+        st->net_edit = false; st->net_err[0] = '\0';
+        st->prn_focus = false; st->prn_err[0] = '\0';
+        st->rec_ask = false; st->rec_note[0] = '\0';
+        st->drag = false;
+        st->wifi_scanned = false;                             /* (Wi-Fi scans again when it opens) */
+        wifi_choose(st, -1);
+        if (st->acc_form) acc_close(st, NULL);
+        st->acc_note[0] = '\0';
+        st->page = page;
+        st->sig = 0;
+        UiScrollSet(&st->sb, 0, st->sb.page);
+        UiScrollTo(&st->sb, 0);
+    }
+    if (log) kprintf("[SETTINGS] Page: %s\n", g_pages[page].name);
+}
+
+static void sidebar(Settings *st, GdiRect c, const Frame *f)
+{
+    GdiFillRect(RECT(c.x, c.y, f->side, c.h), UI_PANEL);
+    GdiFillRect(RECT(c.x + f->side - 1, c.y, 1, c.h), UI_LINE);
+    if (!f->slim) {
+        GdiTextLarge(c.x + 20, c.y + 16, "Settings", UI_TEXT);
+        GdiRect b = RECT(c.x + 12, c.y + FIND_Y, f->side - 24, FIND_H);  /* the search box */
+        GdiRoundRect(b, 6, UI_BG, GDI_TRANSPARENT);
+        GdiRoundBorderAlpha(b, 6, st->find ? UI_ACCENT : GDI_WHITE, st->find ? 200 : 30);
+        AppDrawGlyph(GL_SEARCH, b.x + b.w - 26, b.y + 8, 16, UI_TEXT2);
+        int ty = b.y + (b.h - GDI_FONT_H) / 2;
+        if (st->query[0] || st->find) GdiTextT(b.x + 10, ty, st->query, UI_TEXT);
+        else GdiTextT(b.x + 10, ty, "Find a setting", UI_TEXT3);
+        if (st->find) GdiFillRect(RECT(b.x + 10 + GdiTextW(st->query) + 1, b.y + 7, 2, b.h - 14), UI_ACCENT);
+    }
+    int vis[N_PAGES], n = nav_list(st, vis), top = nav_top(f);
+    UiScrollSet(&st->nb, n * ITEM_H + 8, c.h - top);
+    GdiRect old = GdiClipRect(), list = RECT(c.x, c.y + top, f->side - 1, c.h - top);
+    if (GdiInClip(list)) {
+        GdiSetClip(list);
+        for (int i = 0; i < n; i++) {
+            int p = vis[i], y = c.y + top + i * ITEM_H - st->nb.pos;
+            bool on = p == st->page;
+            if (on) {
+                GdiRoundRect(RECT(c.x + 8, y, f->side - 16, ITEM_H - 4), 4, UI_HOVER, GDI_TRANSPARENT);
+                GdiRoundRect(RECT(c.x + 8, y + 9, 3, 14), 1, UI_ACCENT, GDI_TRANSPARENT);
+            }
+            AppDrawGlyph(g_pages[p].glyph, f->slim ? c.x + (f->side - 16) / 2 : c.x + 22, y + 8, 16, on ? UI_TEXT : UI_TEXT2);
+            if (!f->slim) GdiTextT(c.x + 48, y + 8, g_pages[p].name, on ? UI_TEXT : UI_TEXT2);
+        }
+        if (!n) GdiTextT(c.x + 20, c.y + top + 8, "No results", UI_TEXT3);
+        GdiSetClip(old);
+    }
+    UiScrollDraw(&st->nb, RECT(f->side - 1 - UI_SB_W, top, UI_SB_W, c.h - top), c);
+}
+
+static void set_paint(WND *w)
+{
+    Settings *st = w->user;
+    GdiRect c = WmClientRect(w);
+    Frame f = frame_of(c);
+    if (st->page < 0 || st->page >= N_PAGES) st->page = SETTINGS_SYSTEM;
+    const SetPage *pg = &g_pages[st->page];
+
+    sidebar(st, c, &f);
+    GdiTextLarge(c.x + f.px, c.y + 20, pg->name, UI_TEXT);
+
+    /* the content, clipped to its view and scrolled (the scroll range is
+     * the height it had when last drawn) */
+    GdiRect old = GdiClipRect(), view = RECT(c.x + f.view.x, c.y + f.view.y, f.view.w, f.view.h);
+    UiScrollSet(&st->sb, st->sb.max, f.view.h);
+    int pos = st->sb.pos, top = c.y + f.py - pos, bottom = top;
+    if (GdiInClip(view)) {
+        GdiSetClip(view);
+        bottom = pg->paint(st, c, c.x + f.px, top, f.pw);
+        GdiSetClip(old);
+    }
+    int height = (f.py - f.view.y) + bottom - top + 24;       /* (from the view's top; a margin below) */
+    UiScrollSet(&st->sb, height > 0 ? height : 0, f.view.h);
+    if (st->sb.pos != pos) WmInvalidate();                    /* (it got shorter: drawn again in range) */
+    UiScrollDraw(&st->sb, RECT(c.w - UI_SB_W, f.view.y, UI_SB_W, f.view.h), c);
+    if (st->check) { st->check_drawn = st->check; st->check_bottom = bottom - top; }
+}
+
+static void set_mouse(WND *w, WmMouseMsg msg, int x, int y)
+{
+    Settings *st = w->user;
+    if (st->check) return;
+    GdiRect c = WmClientRect(w);
+    Frame f = frame_of(c);
+    if (UiScrollMouse(&st->sb, msg, x, y) || UiScrollMouse(&st->nb, msg, x, y)) return;
+    const SetPage *pg = &g_pages[st->page];
+    if (msg == WM_MOUSE_WHEEL) {
+        UiScroll *s = x < f.side ? &st->nb : &st->sb;
+        UiScrollTo(s, s->pos - WmWheelDelta() * 48);
+        return;
+    }
+    if (x >= f.side || (msg != WM_MOUSE_DOWN && st->drag)) {
+        if (msg == WM_MOUSE_DOWN) {
+            st->find = false;
+            if (y < f.view.y) return;                         /* (the title, and parts scrolled under it) */
+        }
+        if (pg->mouse) pg->mouse(st, c, msg, x, pg->hits ? y : y + st->sb.pos, f.px, f.py, f.pw);
         return;
     }
     if (msg != WM_MOUSE_DOWN) return;
-    if (x >= SIDE_W && st->page == SETTINGS_NETWORK) {
-        net_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+    if (!f.slim && UiHit(RECT(12, FIND_Y, f.side - 24, FIND_H), x, y)) { st->find = true; return; }
+    st->find = false;
+    int vis[N_PAGES], n = nav_list(st, vis), top = nav_top(&f);
+    int i = (y - top + st->nb.pos) / ITEM_H;
+    if (y < top || i < 0 || i >= n) return;
+    st->query[0] = '\0';
+    go(st, vis[i], true);
+}
+
+/* The search box has the keyboard: typing filters the pages, Up and Down
+ * go through the ones found, Enter opens the first one (or the one shown),
+ * Esc clears it */
+static void find_key(Settings *st, const KeyEvent *k)
+{
+    int vis[N_PAGES], n = nav_list(st, vis), at = -1;
+    for (int i = 0; i < n; i++) if (vis[i] == st->page) at = i;
+    size_t len = strlen(st->query);
+    if (k->scancode == KEY_ESC || k->scancode == KEY_TAB) { st->query[0] = '\0'; st->find = false; return; }
+    if (k->scancode == KEY_ENTER && !k->extended) {
+        if (n) go(st, vis[at >= 0 ? at : 0], true);
+        st->query[0] = '\0';
+        st->find = false;
         return;
     }
-    if (x >= SIDE_W && st->page == SETTINGS_WIFI) {
-        wifi_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
+    if (k->extended && (k->scancode == KEY_UP || k->scancode == KEY_DOWN)) {
+        if (!n) return;
+        int to = k->scancode == KEY_UP ? (at > 0 ? at - 1 : 0) : (at + 1 < n ? at + 1 : n - 1);
+        go(st, vis[to], true);
         return;
     }
-    if (x >= SIDE_W && st->page == SETTINGS_FIREWALL) {
-        FirewallPageMouse(SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
-        return;
-    }
-    if (x >= SIDE_W && st->page == SETTINGS_PRINTERS) {
-        prn_mouse(st, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56, x, y);
-        return;
-    }
-    if (x >= SIDE_W) {
-        if (st->page == SETTINGS_DISPLAY) {
-            /* resolution chips (layout matches set_paint + page_display) */
-            int px = SIDE_W + 28, py = 20 + 52 + modes_dy(), pw = c.w - SIDE_W - 56;
-            int cols = chip_cols(pw);
-            int mon0 = chosen(st), dy = 20 + 52 + dpi_chips_dy(mon0, pw);
-            if (GdiMonitorScale(mon0) >= 2 && y >= dy && y < dy + CHIP_H && x >= px &&
-                (x - px) % (CHIP_W + CHIP_GAP) < CHIP_W && (x - px) / (CHIP_W + CHIP_GAP) < 2) {
-                DesktopSetMonitorDpi(mon0, (x - px) / (CHIP_W + CHIP_GAP) ? 192 : 96, true);
-                return;
-            }
-            if (x < px || y < py) return;
-            int col = (x - px) / (CHIP_W + CHIP_GAP), r = (y - py) / (CHIP_H + CHIP_GAP);
-            if (col >= cols || (x - px) % (CHIP_W + CHIP_GAP) >= CHIP_W ||
-                (y - py) % (CHIP_H + CHIP_GAP) >= CHIP_H) return;
-            DisplayMode m;
-            int mon = chosen(st);
-            if (!DisplayHeadModeAt(mon, r * cols + col, &m)) return;
-            if (DesktopSetHeadMode(mon, m.w, m.h)) DesktopSaveHeadMode(mon, m.w, m.h);
-            return;
-        }
-        if (st->page == SETTINGS_SOUND) {
-            /* device rows (layout matches set_paint + page_sound) */
-            sound_click(x - (SIDE_W + 28), y - (20 + 52), c.w - SIDE_W - 56);
-            return;
-        }
-        if (st->page == SETTINGS_TIME_LANGUAGE) {
-            /* the time zone's Change, format chips (layout matches set_paint + page_time_language) */
-            int px = SIDE_W + 28, py = 20 + 52 + LOCALES_DY, pw = c.w - SIDE_W - 56;
-            if (UiHit(r_tz_change(px, 20 + 52, pw), x, y)) { WelcomeTimeZone(); return; }
-            if (UiHit(r_kbd_change(px, 20 + 52, pw), x, y)) { WelcomeKeyboard(); return; }
-            int cols = loc_cols(pw);
-            if (x < px || y < py) return;
-            int col = (x - px) / (LOC_CHIP_W + CHIP_GAP), r = (y - py) / (CHIP_H + CHIP_GAP), i = r * cols + col;
-            if (col >= cols || (x - px) % (LOC_CHIP_W + CHIP_GAP) >= LOC_CHIP_W ||
-                (y - py) % (CHIP_H + CHIP_GAP) >= CHIP_H || i >= N_FORMATS) return;
-            set_locale(g_formats[i].name);
-            return;
-        }
-        if (st->page == SETTINGS_SYSTEM) recovery_click(st, x, y, SIDE_W + 28, 20 + 52, c.w - SIDE_W - 56);
-        if (st->page == SETTINGS_PERSONALIZE) personalize_click(st, x, y);
-        if (st->page == SETTINGS_ACCOUNTS) accounts_click(st, x, y);
-        return;
-    }
-    int i = (y - 64) / ITEM_H;
-    if (y >= 64 && i >= 0 && i < N_PAGES) {
-        if (i != st->page) st->wifi_scanned = false;          /* (Wi-Fi scans again when it opens) */
-        st->page = i; st->net_edit = false; st->prn_focus = false; st->rec_ask = false;
-        wifi_choose(st, -1);
-        if (st->acc_form) acc_close(st, NULL);
-    }
+    if (k->ch == '\b') { if (len) st->query[len - 1] = '\0'; }
+    else if (!k->ctrl && !k->alt && k->ch >= ' ' && k->ch < 0x7F && len < sizeof(st->query) - 1) {
+        st->query[len] = k->ch;
+        st->query[len + 1] = '\0';
+    } else return;
+    UiScrollTo(&st->nb, 0);
 }
 
 static void set_key(WND *w, const KeyEvent *k)
 {
     Settings *st = w->user;
-    if (st->page == SETTINGS_NETWORK && st->net_edit) { if (k->pressed) net_key(st, k); return; }
-    if (st->page == SETTINGS_ACCOUNTS && st->acc_form) { if (k->pressed) accounts_key(st, k); return; }
-    if (st->page == SETTINGS_PRINTERS && st->prn_focus) { if (k->pressed) prn_key(st, k); return; }
-    if (st->page == SETTINGS_WIFI && k->pressed && wifi_key(st, k)) return;
+    if (!k->pressed || st->check) return;
+    if (st->find) { find_key(st, k); return; }
+    Frame f = frame_of(WmClientRect(w));
+    if (k->ctrl && !k->alt && !k->extended && k->scancode == 0x21 && !f.slim) { st->find = true; return; }   /* Ctrl+F */
+    const SetPage *pg = &g_pages[st->page];
+    if (pg->key && pg->key(st, k)) return;
     if (!k->extended) return;
-    if (k->scancode == KEY_UP && st->page > 0) st->page--;
-    if (k->scancode == KEY_DOWN && st->page < N_PAGES - 1) st->page++;
+    switch (k->scancode) {
+    case KEY_UP:   go(st, st->page > 0 ? st->page - 1 : 0, true); break;
+    case KEY_DOWN: go(st, st->page < N_PAGES - 1 ? st->page + 1 : N_PAGES - 1, true); break;
+    case KEY_PGUP: UiScrollTo(&st->sb, st->sb.pos - st->sb.page + 48); break;
+    case KEY_PGDN: UiScrollTo(&st->sb, st->sb.pos + st->sb.page - 48); break;
+    case KEY_HOME: UiScrollTo(&st->sb, 0); break;
+    case KEY_END:  UiScrollTo(&st->sb, st->sb.max); break;
+    }
 }
+
+static bool check_step(WND *w, Settings *st);
+
+static bool set_tick(WND *w)
+{
+    Settings *st = w->user;
+    if (!st) return false;
+    bool moved = UiScrollTick(&st->sb);
+    moved |= UiScrollTick(&st->nb);
+    if (st->check) return check_step(w, st) || moved;
+    if (st->wifi_job && wifi_poll(st)) return true;           /* (a Wi-Fi scan or connection finished, on any page) */
+    const SetPage *pg = &g_pages[st->page];
+    return (pg->tick && pg->tick(st)) || moved;
+}
+
+static int g_check_state, g_check_pass, g_check_fail;     /* SettingsCheck: 0 none, 1 running, 2 done */
 
 static void set_close(WND *w)
 {
     Settings *st = w->user;
+    if (st && st->check) {                    /* (closed half-way through "settings check") */
+        kprintf("[SETTINGS] check: FAILED: the window was closed\n");
+        g_check_pass = st->check_pass;
+        g_check_fail = st->check_fail + 1;
+        g_check_state = 2;
+    }
     if (st) acc_wipe(st);                     /* (passwords typed) */
     if (st) memset(st->wifi_key, 0, sizeof(st->wifi_key));
     kfree(w->user);
@@ -1968,36 +2327,158 @@ static void set_close(WND *w)
 
 void SettingsOpen(void)
 {
+    if (WmFindApp(APP_SETTINGS)) { WmSetActive(WmFindApp(APP_SETTINGS)); return; }
     Settings *st = kzalloc(sizeof(Settings));
     if (!st) return;
     WND *w = AppCreateWindow(APP_SETTINGS, "Settings", 860, 580, UI_BG);
     if (!w) { kfree(st); return; }
     st->wifi_sel = -1;
+    st->sb.vert = st->nb.vert = true;
+    st->sb.line = st->nb.line = 48;
     w->user     = st;
     w->on_paint = set_paint;
     w->on_mouse = set_mouse;
     w->on_key   = set_key;
     w->on_close = set_close;
     w->on_tick  = set_tick;
-    w->rbutton  = true;                       /* (the wheel scrolls Personalization) */
+    w->rbutton  = true;                       /* (the wheel scrolls the page and the sidebar) */
 }
 
-void SettingsOpenPage(int page)
+static Settings *settings_window(WND **out)
 {
     WND *w = WmFindApp(APP_SETTINGS);
     if (!w) {
         SettingsOpen();
         w = WmFindApp(APP_SETTINGS);
-        if (!w) return;
+        if (!w) return NULL;
     }
-    Settings *st = w->user;
-    if (st && page == SETTINGS_ACCOUNTS_ADD) {                /* (Start's "Add an account") */
-        st->page = SETTINGS_ACCOUNTS;
+    if (out) *out = w;
+    return w->user;
+}
+
+void SettingsOpenPage(int page)
+{
+    WND *w;
+    Settings *st = settings_window(&w);
+    if (!st) return;
+    if (page == SETTINGS_ACCOUNTS_ADD) {                     /* (Start's "Add an account") */
+        go(st, SETTINGS_ACCOUNTS, true);
         if (acc_can_manage()) acc_open(st, ACC_ADD, 0);
-    } else if (st && page >= 0 && page < N_PAGES) {
-        if (page != st->page) st->wifi_scanned = false;
-        st->page = page;
+    } else if (page >= 0 && page < N_PAGES) {
+        go(st, page, true);
     }
     WmSetActive(w);
     WmInvalidate();
+}
+
+bool SettingsOpenUri(const char *uri)
+{
+    int page = page_by_uri(uri ? uri : "");
+    if (page < 0) kprintf("[SETTINGS] No page \"%s\": opened System\n", uri);
+    SettingsOpenPage(page < 0 ? SETTINGS_SYSTEM : page);
+    return page >= 0;
+}
+
+/* -----------------------------------------------------------------------
+ * SettingsCheck ("settings check" in the Terminal): every page drawn at
+ * three window sizes (the narrowest and shortest a window gets, with the
+ * slim sidebar; the default; a wide one), at its top and scrolled to its
+ * end, through the real on_paint.  Each must draw something, and its
+ * end must come into view; every page must be found by its ms-settings:
+ * name and by searching for its name.  One step per tick; the summary is
+ * "[SETTINGS] check: N passed, M failed".
+ * ----------------------------------------------------------------------- */
+static const struct { int w, h; } g_check_sizes[] = { { 400, 300 }, { 860, 580 }, { 1200, 720 } };
+#define CHECK_SIZES ((int)(sizeof(g_check_sizes) / sizeof(g_check_sizes[0])))
+#define CHECK_STEPS (CHECK_SIZES * N_PAGES * 2)
+
+static void check_result(Settings *st, bool ok, const char *what, int step)
+{
+    if (ok) { st->check_pass++; return; }
+    st->check_fail++;
+    int s = (step - 1) / (N_PAGES * 2), p = (step - 1) / 2 % N_PAGES;
+    kprintf("[SETTINGS] check: FAILED %s at %d x %d: %s\n", g_pages[p].name, g_check_sizes[s].w, g_check_sizes[s].h, what);
+}
+
+/* Set up step @k (1..CHECK_STEPS): its window size, page and scroll */
+static void check_setup(WND *w, Settings *st, int k)
+{
+    int s = (k - 1) / (N_PAGES * 2), p = (k - 1) / 2 % N_PAGES;
+    bool end = (k - 1) % 2;
+    if ((k - 1) % (N_PAGES * 2) == 0) {                       /* a new size */
+        GdiRect fr = w->frame, c = WmClientRect(w);
+        WmSetFrame(w, RECT(fr.x, fr.y, g_check_sizes[s].w + fr.w - c.w, g_check_sizes[s].h + fr.h - c.h));
+    }
+    if (end) UiScrollTo(&st->sb, st->sb.max);
+    else { go(st, p, false); st->sb.max = 0; UiScrollTo(&st->sb, 0); }
+    st->check = k;
+}
+
+static bool check_step(WND *w, Settings *st)
+{
+    int k = st->check;
+    if (st->check_drawn != k) return true;                    /* (not drawn yet) */
+    GdiRect c = WmClientRect(w);
+    Frame f = frame_of(c);
+    bool end = (k - 1) % 2;
+    if (!end) {
+        check_result(st, st->check_bottom > GDI_FONT_H, "nothing drawn", k);
+        check_result(st, f.slim == (c.w < SLIM_BELOW), "wrong sidebar", k);
+    } else {
+        /* scrolled to the end: the content's bottom is in view */
+        int seen = st->sb.pos + st->sb.page;
+        check_result(st, !UiScrollNeeded(&st->sb) || seen >= st->sb.max, "its end cannot be scrolled into view", k);
+    }
+    if (k == 1)                                               /* (once: names and searches) */
+        for (int i = 0; i < N_PAGES; i++) {
+            char uri[64];
+            const char *u = g_pages[i].uri;
+            size_t n = 0;
+            while (u[n] && u[n] != ' ' && n < 40) n++;
+            strcpy(uri, "ms-settings:");
+            memcpy(uri + 12, u, n);                           /* (its first name) */
+            uri[12 + n] = '\0';
+            check_result(st, page_by_uri(uri) == i, "not found by its ms-settings: name", 1 + i * 2);
+            check_result(st, page_matches(i, g_pages[i].name), "not found by searching for its name", 1 + i * 2);
+        }
+    if (k < CHECK_STEPS) { check_setup(w, st, k + 1); return true; }
+    WmSetFrame(w, st->check_frame);
+    kprintf("[SETTINGS] check: %d pages at %d window sizes\n", N_PAGES, CHECK_SIZES);
+    kprintf("[SETTINGS] check: %d passed, %d failed\n", st->check_pass, st->check_fail);
+    g_check_pass = st->check_pass;
+    g_check_fail = st->check_fail;
+    g_check_state = 2;
+    st->check = 0;
+    go(st, SETTINGS_SYSTEM, false);
+    if (st->check_close) WmRequestClose(w);
+    return true;
+}
+
+bool SettingsCheck(void)
+{
+    bool open = WmFindApp(APP_SETTINGS) != NULL;
+    WND *w;
+    Settings *st = settings_window(&w);
+    if (!st || st->check) return false;
+    st->check_close = !open;
+    WmSetActive(w);
+    if (w->maximized) WmSnap(w, WM_SNAP_RESTORE);
+    st->check_frame = w->frame;
+    st->check_pass = st->check_fail = 0;
+    st->check_drawn = 0;
+    st->query[0] = '\0';
+    st->find = false;
+    check_setup(w, st, 1);
+    g_check_state = 1;
+    WmInvalidate();
+    return true;
+}
+
+bool SettingsCheckDone(int *pass, int *fail)
+{
+    if (g_check_state != 2) return false;
+    *pass = g_check_pass;
+    *fail = g_check_fail;
+    g_check_state = 0;
+    return true;
 }

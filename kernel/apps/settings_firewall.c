@@ -95,7 +95,7 @@ static void rule_detail(const NovaFwRule *r, char *out, int cap)
     if (n < cap - 8) ksnprintf(out + n, (size_t)(cap - n), "  -  %s", profs);
 }
 
-void FirewallPagePaint(int x, int y, int w)
+int FirewallPagePaint(int x, int y, int w)
 {
     NovaFwNetwork net;
     bool connected = FwGetNetwork(&net);
@@ -172,7 +172,8 @@ void FirewallPagePaint(int x, int y, int w)
         GdiTextT(x + 16, ny, more, UI_TEXT2);
         ny += 22;
     }
-    if (g_note[0]) GdiTextT(x, ny, g_note, GDI_C(0xE0, 0x60, 0x60));
+    if (g_note[0]) { GdiTextT(x, ny, g_note, GDI_C(0xE0, 0x60, 0x60)); ny += 22; }
+    return ny;
 }
 
 bool FirewallPageMouse(int px, int py, int pw, int x, int y)

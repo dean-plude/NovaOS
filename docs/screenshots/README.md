@@ -61,7 +61,8 @@ desktop of early October.
 | `terminal.png` | 1280x800 | Fresh: the Terminal from the dock, running `sysinfo` and `devices`. |
 | `notepad.png` | 1280x800 | Fresh: Notepad from the dock, with two lines typed. |
 | `calendar.png` | 1280x800 | Fresh: Calendar from the dock, over Notepad. |
-| `settings-personalization.png`, `settings-display.png`, `settings-time-language.png`, `settings-network.png` | 1280x800 | Fresh: Settings from the dock, on Personalization (the four themes), Display (resolution and scale), Time & language and Network (the e1000e card's DHCP address). |
+| `settings-display.png` | 1280x800 | Settings from the dock, on Display (resolution and scale). |
+| `settings-system.png`, `settings-personalization.png`, `settings-personalization-scrolled.png`, `settings-time-language.png`, `settings-network.png`, `settings-search.png`, `settings-narrow.png` | 1280x800 | 2026-10-21, after the Settings page framework: System with Recovery; Personalization at its top and scrolled (the scroll bar, the content clipped under the title); Time & language; Network; **Find a setting** with "net" typed (Network, Wi-Fi and Printers found); and the window snapped to half the screen (Win+Left), where the sidebar shows only the pages' icons.  Taken under QEMU's software emulation from a local build. |
 | `settings-sound.png` | 1280x800 | Earlier (2026-10-03): Settings > Sound with an Intel HD Audio card, a QEMU USB audio device and a USB headset, the headset chosen. |
 | `first-start-setup.png` | 1280x800 | Earlier (2026-10-03): **Welcome to NovaOS** on its time zone page, with "Berlin" typed. |
 | `app-store-badges.png` | 1280x800 | Earlier (2026-10-14, roadmap step 27.5): the App Store's catalog with its Verified and Platinum badges, over the Aurora home panel. |

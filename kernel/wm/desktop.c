@@ -712,20 +712,9 @@ static struct {
 } g_res[MAX_RESULTS];
 static int g_nres;
 
+/* (besides each Settings page: SettingsPageName/Keys) */
 static const struct { const char *name; const char *keys; int page; } g_setting_items[] = {
-    { "System",          "system about pc processor memory uptime",           SETTINGS_SYSTEM },
-    { "Display",         "display screen resolution scale monitor",           SETTINGS_DISPLAY },
-    { "Sound",           "sound audio speakers headphones headset microphone output input device usb", SETTINGS_SOUND },
-    { "Personalization", "personalization wallpaper background theme colors", SETTINGS_PERSONALIZE },
-    { "Storage",         "storage disk drive space memory ram",               SETTINGS_STORAGE },
-    { "Network",         "network ethernet internet ip dns certificates",     SETTINGS_NETWORK },
-    { "Wi-Fi",           "wi-fi wifi wireless wlan networks ssid connect join", SETTINGS_WIFI },
-    { "Firewall",        "firewall network security protection public private profile allow app port rule", SETTINGS_FIREWALL },
-    { "Accounts",        "accounts users user add other family password sign in picture administrator switch", SETTINGS_ACCOUNTS },
     { "Add an account",  "add account user other new", SETTINGS_ACCOUNTS_ADD },
-    { "Time & language", "time language region regional format locale date number currency", SETTINGS_TIME_LANGUAGE },
-    { "Printers",        "printers printing printer scanner ipp default add network", SETTINGS_PRINTERS },
-    { "About",           "about version fonts licence",                       SETTINGS_ABOUT },
 };
 #define N_SETTING_ITEMS ((int)(sizeof(g_setting_items) / sizeof(g_setting_items[0])))
 
@@ -786,6 +775,11 @@ static void run_search(void)
     for (int i = 0; i < g_nprogs; i++) {
         int m = match(g_progs[i].name, g_query);
         if (m >= 0) add_result(R_PROG, i, g_progs[i].name, g_progs[i].path, 10 + m);
+    }
+    for (int i = 0; i < SettingsPageCount(); i++) {
+        int m = match(SettingsPageName(i), g_query);
+        if (m < 0 && ci_find(SettingsPageKeys(i), g_query) >= 0) m = 2;
+        if (m >= 0) add_result(R_SETTING, i, SettingsPageName(i), "Settings", 20 + m);
     }
     for (int i = 0; i < N_SETTING_ITEMS; i++) {
         int m = match(g_setting_items[i].name, g_query);

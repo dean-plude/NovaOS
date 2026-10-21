@@ -153,6 +153,17 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     Python's asyncio need.
   - `winhttp` is an HTTP client over Schannel TLS, with HTTP/2 through
     ALPN (nghttp2).
+  - The network's security, the Windows way
+    ([design](design/network-security.md)): a filtering engine shaped like
+    the Windows Filtering Platform beside the stack (ALE connect, accept
+    and listen layers and the transport layers, sublayers and weighted
+    block and permit filters, transactions, dynamic and persistent
+    objects; `fwpuclnt.dll`), and the Windows Firewall on it: Domain,
+    Private and Public profiles (a new network is Public, inbound blocked
+    unless a rule allows it), rules by program, protocol, port and
+    address, kept in the registry as Windows keeps them, through
+    `hnetcfg.dll`'s `INetFwPolicy2`, `netsh advfirewall` and Settings >
+    Firewall.
 - **Desktop** (`kernel/wm/`, `kernel/apps/`): a window manager and shell
   drawn by the kernel's software GDI ([design/native-desktop.md](design/native-desktop.md)).
   - Windows 11-style frames, a dock with pinned and running apps, a Start
@@ -173,6 +184,15 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     drive C:, which also runs Windows console programs), Settings,
     Calendar, Photos, the App Store (downloads open-source Windows
     programs and NovaOS updates) and, on the live media, Install NovaOS.
+  - Settings (`kernel/apps/settings.c`): one table of pages (each with its
+    name, icon, Windows' `ms-settings:` names, search words and its
+    drawing, mouse, keyboard and refresh hooks) behind one frame: the
+    sidebar with **Find a setting** (only the pages' icons in a narrow
+    window), and a content area that scrolls whenever a page is taller
+    than the window.  Every page change goes one way, which closes the
+    page's forms and wipes what was typed.  Start's search lists the same
+    pages; `start ms-settings:NAME` opens one; `settings check` draws every
+    page at three window sizes and checks each (the core self-tests run it).
   - Task Manager (`taskmgr.exe`, a Windows program in System32;
     Ctrl+Shift+Esc, Start's right-click menu or search): Processes with
     End task, Performance (each logical processor, memory, disk and

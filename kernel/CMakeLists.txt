@@ -194,6 +194,8 @@ set(KERNEL_C_SOURCES
     net/tls_platform.c
     net/http.c
     net/sock.c
+    net/wfp.c
+    net/firewall.c
     um/um.c
     um/um_console.c
     um/um_syscall.c
@@ -303,6 +305,8 @@ set(KERNEL_C_SOURCES
     apps/explorer.c
     apps/notepad.c
     apps/settings.c
+    apps/netsh_fw.c
+    apps/settings_firewall.c
     apps/iconset.c
     apps/calendar.c
     apps/photos.c

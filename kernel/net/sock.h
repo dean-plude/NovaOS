@@ -27,6 +27,7 @@
 #define SOCK_EMFILE        13
 #define SOCK_ENOTSOCK      14
 #define SOCK_EAFNOSUPPORT  15
+#define SOCK_EACCES        16     /* the filtering engine or the firewall said no (WSAEACCES) */
 
 /* A "kill" predicate: the blocking calls poll it and return -SOCK_ETIMEDOUT
  * (cancelled) when it returns true, so a killed program does not hang. */
@@ -70,7 +71,9 @@ typedef struct {
     UINT32 state;
     UINT32 owner;
 } NetTcpRow;
-void NetSockSetOwner(int s, UINT32 pid);
+/* The process that owns the socket, and its program (@image: its path,
+ * the application id the firewall's rules and the filters name) */
+void NetSockSetOwner(int s, UINT32 pid, const char *image);
 int  NetSockTcpTable(NetTcpRow *rows, int max);
 
 /* Socket options (Winsock's setsockopt/getsockopt; ws2_32 maps the levels

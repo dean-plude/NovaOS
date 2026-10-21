@@ -173,6 +173,20 @@ static err_t link_output(struct netif *n, struct pbuf *p)
     return ERR_IF;
 }
 
+/* The adapter's IP output, through the filtering engine's outbound
+ * transport layer first (wfp.h) */
+static err_t filtered_output(struct netif *n, struct pbuf *p, const ip4_addr_t *ip)
+{
+    if (!net_filter_outbound(p, false)) return ERR_OK;      /* (dropped, as a blocked packet is on Windows) */
+    return etharp_output(n, p, ip);
+}
+
+static err_t filtered_output_ip6(struct netif *n, struct pbuf *p, const ip6_addr_t *ip)
+{
+    if (!net_filter_outbound(p, true)) return ERR_OK;
+    return ethip6_output(n, p, ip);
+}
+
 static err_t netif_setup(struct netif *n)
 {
     n->name[0] = 'e'; n->name[1] = 'n';
@@ -180,8 +194,8 @@ static err_t netif_setup(struct netif *n)
     g_nic->mac(n->hwaddr);
     n->mtu = 1500;
     n->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_MLD6;
-    n->output = etharp_output;
-    n->output_ip6 = ethip6_output;
+    n->output = filtered_output;
+    n->output_ip6 = filtered_output_ip6;
     n->linkoutput = link_output;
     netif_set_hostname(n, "nova-pc");
     return ERR_OK;
@@ -530,6 +544,23 @@ bool NetParseIp(const char *s, UINT32 *ip_be)
 
 bool NetAvailable(void) { return g_up; }
 bool net_up(void)       { return g_up; }
+
+bool NetGatewayMac(UINT8 mac[6])
+{
+    bool ok = false;
+    net_lock();
+    const ip4_addr_t *gw = netif_ip4_gw(&g_netif);
+    struct eth_addr *eth = NULL;
+    const ip4_addr_t *ip = NULL;
+    if (gw && !ip4_addr_isany(gw) && etharp_find_addr(&g_netif, gw, &eth, &ip) >= 0 && eth) {
+        memcpy(mac, eth->addr, 6);
+        ok = true;
+    } else if (gw && !ip4_addr_isany(gw) && netif_is_link_up(&g_netif)) {
+        etharp_request(&g_netif, gw);           /* (not asked yet: the next call finds it) */
+    }
+    net_unlock();
+    return ok;
+}
 
 void NetGetStatus(NetStatus *st)
 {

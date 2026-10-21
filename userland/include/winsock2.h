@@ -82,6 +82,7 @@ typedef struct linger LINGER, *PLINGER, *LPLINGER;
 #define WSAEINVAL          10022
 #define WSAEMFILE          10024
 #define WSAEAFNOSUPPORT    10047
+#define WSAEACCES          10013
 #define WSAENOPROTOOPT     10042
 
 typedef struct in_addr { union { struct { UCHAR s_b1,s_b2,s_b3,s_b4; } S_un_b; ULONG S_addr; } S_un;

@@ -32,6 +32,7 @@
 #include "../fs/bootfiles.h"
 #include "../fs/reset.h"
 #include "../arch/x86_64/idt.h"
+#include "../net/wfp.h"
 #include "um_internal.h"
 #include "../ke/syscall.h"
 #include "../ke/scheduler.h"
@@ -3565,6 +3566,7 @@ void UmPoll(void)
             FsLock();                           /* (its images and files) */
             um_gui_process_gone(p);
             um_registry_process_gone(p);
+            WfpProcessGone(p->pid);           /* its filtering-engine sessions (dynamic filters) */
             release_images(p);
             imgc_release(p);
             um_pipe_process_gone(p);            /* before its memory goes */

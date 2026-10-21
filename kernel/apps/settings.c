@@ -1,6 +1,6 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, Wi-Fi, accounts, time & language, printers and about pages
+ *               storage, network, Wi-Fi, firewall (settings_firewall.c), accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  *
  * Every page is an entry of g_pages (its name, glyph, ms-settings: names,
@@ -1882,6 +1882,7 @@ static int paint_storage(Settings *st, GdiRect c, int x, int y, int w)  { (void)
 static int paint_network(Settings *st, GdiRect c, int x, int y, int w)  { (void)c; return page_network(st, x, y, w); }
 static int paint_wifi(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; return page_wifi(st, x, y, w); }
 static int paint_time(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return page_time_language(x, y, w); }
+static int paint_firewall(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return FirewallPagePaint(x, y, w); }
 static int paint_printers(Settings *st, GdiRect c, int x, int y, int w) { (void)c; return page_printers(st, x, y, w); }
 static int paint_about(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; (void)st; return page_about(x, y, w); }
 
@@ -1992,6 +1993,14 @@ static void mouse_printers(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y
     if (msg == WM_MOUSE_DOWN) prn_mouse(st, px, py, pw, x, y);
 }
 
+static void mouse_firewall(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) FirewallPageMouse(px, py, pw, x, y);
+}
+
+static bool tick_firewall(Settings *st) { (void)st; return FirewallPageTick(); }   /* a profile, rule or network changed */
+
 static bool key_network(Settings *st, const KeyEvent *k)  { if (!st->net_edit) return false; net_key(st, k); return true; }
 static bool key_accounts(Settings *st, const KeyEvent *k) { if (!st->acc_form) return false; accounts_key(st, k); return true; }
 static bool key_printers(Settings *st, const KeyEvent *k) { if (!st->prn_focus) return false; prn_key(st, k); return true; }
@@ -2020,6 +2029,9 @@ static const SetPage g_pages[] = {
     [SETTINGS_WIFI] = { "Wi-Fi", GL_NETWORK, "network-wifi network-wifisettings availablenetworks",
         "wi-fi wifi wireless wlan networks ssid connect join",
         paint_wifi, mouse_wifi, wifi_key, tick_wifi, false },
+    [SETTINGS_FIREWALL] = { "Firewall", GL_SHIELD, "windowsdefender network-firewall",
+        "firewall network security protection public private profile allow app port rule",
+        paint_firewall, mouse_firewall, NULL, tick_firewall, false },
     [SETTINGS_ACCOUNTS] = { "Accounts", GL_PERSON, "accounts yourinfo otherusers signinoptions",
         "accounts users user add other family password sign in picture administrator switch",
         page_accounts, mouse_accounts, key_accounts, tick_thumbs, true },

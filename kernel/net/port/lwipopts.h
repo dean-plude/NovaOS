@@ -98,3 +98,8 @@
 /* Diagnostics */
 #define LWIP_STATS                  0
 #define LWIP_DEBUG                  0
+
+/* The filtering engine's inbound layers (kernel/net/wfp.h, sock.c) */
+#define LWIP_HOOK_FILENAME          "nova_hooks.h"
+#define LWIP_HOOK_IP4_INPUT(p, inp) nova_ip4_input_hook((p), (inp))
+#define LWIP_HOOK_IP6_INPUT(p, inp) nova_ip6_input_hook((p), (inp))

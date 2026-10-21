@@ -849,6 +849,26 @@ static void defaults(void)
         RegKey *k = kpath(path, false);
         if (!has_value(k, "")) { kset_sz(k, "", "windowscodecs.dll", 1); kset_sz(k, "ThreadingModel", "Both", 1); }
     }
+    /* the Windows Firewall API (hnetcfg.dll's NetFwPolicy2 and NetFwRule) */
+    static const char *const fw_cls[][3] = {
+        { "{E2B3C97F-6AE1-41AC-817A-F6F92166D7DD}", "HNetCfg.FwPolicy2", "HNetCfg.FwPolicy2" },
+        { "{2C5BC43E-3369-4C33-AB0C-BE9469677AF4}", "HNetCfg.FWRule", "HNetCfg.FWRule" },
+    };
+    for (unsigned i = 0; i < sizeof fw_cls / sizeof fw_cls[0]; i++) {
+        char path[112];
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Classes\\CLSID\\%s", fw_cls[i][0]);
+        RegKey *c = kpath(path, false);
+        if (!has_value(c, "")) kset_sz(c, "", fw_cls[i][1], 1);
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", fw_cls[i][0]);
+        RegKey *ip = kpath(path, false);
+        if (!has_value(ip, "")) { kset_sz(ip, "", "hnetcfg.dll", 1); kset_sz(ip, "ThreadingModel", "Both", 1); }
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Classes\\CLSID\\%s\\ProgID", fw_cls[i][0]);
+        RegKey *pk = kpath(path, false);
+        if (!has_value(pk, "")) kset_sz(pk, "", fw_cls[i][2], 1);
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Classes\\%s\\CLSID", fw_cls[i][2]);
+        RegKey *pc = kpath(path, false);
+        if (!has_value(pc, "")) kset_sz(pc, "", fw_cls[i][0], 1);
+    }
     /* Task Scheduler 2.0 (taskschd.dll's TaskScheduler class) */
     RegKey *ts = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}\\InprocServer32", false);
     if (!has_value(ts, "")) { kset_sz(ts, "", "taskschd.dll", 1); kset_sz(ts, "ThreadingModel", "Both", 1); }

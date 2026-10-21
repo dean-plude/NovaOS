@@ -2314,6 +2314,7 @@ void DesktopRun(void *arg)
 
         WmTick();                               /* (takes the file-system lock as needed) */
         UmPoll();                               /* reclaim exited programs */
+        NetworkPromptPoll();                    /* (the firewall: which network, and a new one's prompt) */
         UmUpdateForeground();                   /* (the active window's process) */
         KbdCurrent();                           /* follow a program's change to the keyboard layout */
 

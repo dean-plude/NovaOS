@@ -14,6 +14,7 @@
 #include "../ke/printf.h"
 #include "../mm/vmm.h"
 #include "../lib/string.h"
+#include "wfp.h"
 
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"      /* tcp_process_refused_data */
@@ -21,12 +22,16 @@
 #include "lwip/ip_addr.h"
 #include "lwip/ip6_addr.h"
 #include "lwip/pbuf.h"
+#include "lwip/netif.h"
+#include "nova_hooks.h"
 
 #define NSOCK        1024           /* system-wide (each takes its ring only while open) */
 #define RXBUF        (32 * 1024)
 #define ACCEPT_MAX   8
 #define DGRAM_HDR    (2 + (int)sizeof(NetSockAddr))
 #define OVF_MAX      (4 * 1024 * 1024)   /* most a non-blocking send takes beyond lwIP's send buffer */
+#define FLOWS        4              /* the UDP peers a socket's filters have let through */
+#define MCAST_TICKS  300            /* unicast answers to a multicast or broadcast send: 3 s (Windows') */
 
 typedef struct {
     bool          used;
@@ -67,6 +72,14 @@ typedef struct {
     UINT8         ttl;
     bool          v6only;                 /* IPV6_V6ONLY: :: takes IPv6 alone (Windows' default) */
     UINT32        owner;                  /* the process id the connection tables name (0: the system) */
+    UINT16        app;                    /* its program, for the filters (wfp.h: WfpAppIntern; 0 the system) */
+
+    /* UDP flows the filtering layers let through (a peer sent to, or
+     * whose first datagram was accepted): its datagrams pass without
+     * another classification, as Windows' ALE flows do */
+    struct { UINT8 addr[16]; UINT16 port; bool v6; } flows[FLOWS];
+    UINT8         nflows, flow_next;
+    UINT64        mcast_until;            /* (ticks) a multicast or broadcast send's answers come from anyone */
 
     /* A non-blocking TCP send takes the whole buffer, as Windows' AFD
      * does: what lwIP's send buffer cannot hold waits here and goes out
@@ -183,6 +196,8 @@ static bool family_ok(const Sock *s, const NetSockAddr *a)
  * lwIP callbacks (net thread, lock held)
  * ----------------------------------------------------------------------- */
 static void free_slot(Sock *s);
+static void udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port);
+static err_t tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err);
 static bool ovf_drain(Sock *s);
 
 static void tcp_err_cb(void *arg, err_t err)
@@ -265,6 +280,7 @@ static err_t tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     ns->nodelay = s->nodelay; ns->linger_on = s->linger_on; ns->linger_s = s->linger_s;
     ns->so_options = s->so_options; ns->ttl = s->ttl;
     ns->owner = s->owner;                                   /* (until a process accepts it) */
+    ns->app = s->app;
     newpcb->so_options = s->so_options;
     newpcb->ttl = s->ttl;
     if (s->nodelay) tcp_nagle_disable(newpcb);
@@ -296,6 +312,227 @@ static void udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
     pbuf_free(p);
 }
+
+/* -----------------------------------------------------------------------
+ * The filtering engine's layers (wfp.h): what a socket does is classified
+ * at connect, listen, a UDP send to a new peer, and when a connection or a
+ * first datagram arrives for it; and every TCP/UDP packet at the
+ * transport layers when filters are there
+ * ----------------------------------------------------------------------- */
+static bool v6_of(const ip_addr_t *a) { return IP_IS_V6(a) && !ip6_addr_isipv4mappedipv6(ip_2_ip6(a)); }
+
+static void raw_of(const ip_addr_t *a, UINT8 out[16])
+{
+    memset(out, 0, 16);
+    if (!IP_IS_V6(a)) memcpy(out, &ip_2_ip4(a)->addr, 4);
+    else if (ip6_addr_isipv4mappedipv6(ip_2_ip6(a))) memcpy(out, &ip_2_ip6(a)->addr[3], 4);
+    else memcpy(out, ip_2_ip6(a)->addr, 16);
+}
+
+/* @a (raw, network order) is this computer: a loopback address or one of the adapter's */
+static bool own_raw(bool v6, const UINT8 *a)
+{
+    struct netif *n = netif_default;
+    if (!v6) {
+        if (a[0] == 127) return true;
+        return n && !memcmp(a, &netif_ip4_addr(n)->addr, 4) && netif_ip4_addr(n)->addr;
+    }
+    static const UINT8 lo6[16] = { [15] = 1 };
+    if (!memcmp(a, lo6, 16)) return true;
+    if (!n) return false;
+    ip6_addr_t x;
+    memcpy(x.addr, a, 16);
+    ip6_addr_clear_zone(&x);
+    for (int i = 0; i < LWIP_IPV6_NUM_ADDRESSES; i++)
+        if (ip6_addr_isvalid(netif_ip6_addr_state(n, i)) && !memcmp(netif_ip6_addr(n, i)->addr, x.addr, 16)) return true;
+    return false;
+}
+
+static void interface_of(WfpValues *v, bool loop)
+{
+    struct netif *n = loop ? netif_find("lo0") : netif_default;
+    v->if_index = n ? netif_get_index(n) : 0;
+    v->if_luid = ((UINT64)(loop ? 24 : 6) << 48) | ((UINT64)v->if_index << 24);   /* IfType, NetLuidIndex (iphlpapi's) */
+}
+
+/* The values of a socket's classification: @local and @remote as lwIP
+ * has them (local may be unbound: the adapter's address then) */
+static void values_of(WfpValues *v, int layer4, const Sock *s, UINT8 proto, const ip_addr_t *local, UINT16 lport,
+                      const ip_addr_t *remote, UINT16 rport)
+{
+    memset(v, 0, sizeof(*v));
+    v->v6 = remote ? v6_of(remote) : (local ? v6_of(local) : s->family == NET_AF_INET6);
+    v->layer = layer4 + (v->v6 ? 1 : 0);
+    v->protocol = proto;
+    if (local) raw_of(local, v->local);
+    static const UINT8 zero[16];
+    if (!memcmp(v->local, zero, 16) && netif_default) {
+        if (!v->v6) memcpy(v->local, &netif_ip4_addr(netif_default)->addr, 4);
+        else for (int i = 0; i < LWIP_IPV6_NUM_ADDRESSES; i++)
+            if (ip6_addr_ispreferred(netif_ip6_addr_state(netif_default, i))) { memcpy(v->local, netif_ip6_addr(netif_default, i)->addr, 16); }
+    }
+    if (remote) raw_of(remote, v->remote);
+    v->lport = lport;
+    v->rport = rport;
+    v->app = WfpAppName(s->app);
+    bool loop = remote ? own_raw(v->v6, v->remote) : (local && own_raw(v->v6, v->local) && v->local[0] == 127);
+    if (loop) v->flags |= NOVAWFP_FLAG_IS_LOOPBACK;
+    interface_of(v, loop);
+}
+
+static bool flow_known(const Sock *s, bool v6, const UINT8 *addr, UINT16 port)
+{
+    for (int i = 0; i < s->nflows; i++)
+        if (s->flows[i].port == port && s->flows[i].v6 == v6 && !memcmp(s->flows[i].addr, addr, 16)) return true;
+    return false;
+}
+
+static void flow_add(Sock *s, bool v6, const UINT8 *addr, UINT16 port)
+{
+    if (flow_known(s, v6, addr, port)) return;
+    int i = s->nflows < FLOWS ? s->nflows++ : (s->flow_next++ % FLOWS);
+    memcpy(s->flows[i].addr, addr, 16);
+    s->flows[i].port = port;
+    s->flows[i].v6 = v6;
+}
+
+/* A UDP send to @to: classified once per peer (ALE connect); 0 or -SOCK_EACCES */
+static int udp_authorize(Sock *s, const ip_addr_t *to, UINT16 port)
+{
+    UINT8 raw[16];
+    raw_of(to, raw);
+    bool v6 = v6_of(to);
+    if (flow_known(s, v6, raw, port)) return 0;
+    WfpValues v;
+    values_of(&v, NOVAWFP_L_CONNECT_V4, s, 17, &s->udp_pcb->local_ip, s->udp_pcb->local_port, to, port);
+    if (!WfpClassify(&v)) return -SOCK_EACCES;
+    bool group = v6 ? raw[0] == 0xFF : (raw[0] >= 224 || (raw[0] == 255 && raw[1] == 255 && raw[2] == 255 && raw[3] == 255));
+    if (!group && !v6 && netif_default && netif_ip4_netmask(netif_default)->addr) {
+        UINT32 a; memcpy(&a, raw, 4);
+        UINT32 m = netif_ip4_netmask(netif_default)->addr;
+        group = (a | m) == 0xFFFFFFFFu;                       /* the subnet's broadcast address */
+    }
+    if (group) s->mcast_until = sched_ticks() + MCAST_TICKS;
+    else flow_add(s, v6, raw, port);
+    return 0;
+}
+
+static Sock *listener_on(UINT16 port, bool v6, const UINT8 *dst)
+{
+    for (struct tcp_pcb_listen *l = tcp_listen_pcbs.listen_pcbs; l; l = l->next) {
+        if (l->local_port != port || l->accept != tcp_accept_cb || !l->callback_arg) continue;
+        if (!ip_addr_isany(&l->local_ip)) {
+            UINT8 raw[16];
+            raw_of(&l->local_ip, raw);
+            if (v6_of(&l->local_ip) != v6 || memcmp(raw, dst, v6 ? 16 : 4)) continue;
+        } else if (IP_IS_V4(&l->local_ip) && v6) continue;
+        return l->callback_arg;
+    }
+    return NULL;
+}
+
+static Sock *udp_socket_on(UINT16 port, bool v6, const UINT8 *dst)
+{
+    for (struct udp_pcb *u = udp_pcbs; u; u = u->next) {
+        if (u->local_port != port || u->recv != udp_recv_cb || !u->recv_arg) continue;
+        if (!ip_addr_isany(&u->local_ip)) {
+            UINT8 raw[16];
+            raw_of(&u->local_ip, raw);
+            if (v6_of(&u->local_ip) != v6 || memcmp(raw, dst, v6 ? 16 : 4)) continue;
+        }
+        return u->recv_arg;
+    }
+    return NULL;
+}
+
+/* A packet arriving (the net thread, the lock held): the inbound transport
+ * layer, then for a TCP SYN to a listener or a datagram from a new peer
+ * the ALE receive/accept layer.  Dropped packets are freed here (1). */
+static int input_hook(struct pbuf *p, struct netif *inp, bool v6)
+{
+    const UINT8 *b = p->payload;
+    int len = p->len, hl;
+    UINT8 proto;
+    const UINT8 *src, *dst;
+    if (v6) {
+        if (len < 40) return 0;
+        proto = b[6]; src = b + 8; dst = b + 24; hl = 40;
+    } else {
+        if (len < 20) return 0;
+        if (((b[6] & 0x1F) << 8 | b[7]) != 0) return 0;        /* (a later fragment: its first was classified) */
+        proto = b[9]; src = b + 12; dst = b + 16; hl = (b[0] & 0x0F) * 4;
+    }
+    if ((proto != 6 && proto != 17) || len < hl + (proto == 6 ? 20 : 8)) return 0;
+    const UINT8 *l4 = b + hl;
+    WfpValues v;
+    memset(&v, 0, sizeof(v));
+    v.v6 = v6;
+    v.protocol = proto;
+    memcpy(v.local, dst, v6 ? 16 : 4);
+    memcpy(v.remote, src, v6 ? 16 : 4);
+    v.rport = (UINT16)(l4[0] << 8 | l4[1]);
+    v.lport = (UINT16)(l4[2] << 8 | l4[3]);
+    v.app = "";
+    bool loop = (inp && inp->name[0] == 'l' && inp->name[1] == 'o') || own_raw(v6, v.remote);
+    if (loop) v.flags |= NOVAWFP_FLAG_IS_LOOPBACK;
+    interface_of(&v, loop);
+    v.layer = v6 ? NOVAWFP_L_IN_TRANSPORT_V6 : NOVAWFP_L_IN_TRANSPORT_V4;
+    if (WfpLayerUsed(v.layer) && !WfpClassify(&v)) goto drop;
+    v.layer = v6 ? NOVAWFP_L_RECV_ACCEPT_V6 : NOVAWFP_L_RECV_ACCEPT_V4;
+    if (proto == 6) {
+        if ((l4[13] & 0x12) != 0x02) return 0;               /* only a connection's first SYN */
+        Sock *ls = listener_on(v.lport, v6, dst);
+        if (!ls) return 0;
+        v.app = WfpAppName(ls->app);
+        if (!WfpClassify(&v)) goto drop;
+        return 0;
+    }
+    Sock *us = udp_socket_on(v.lport, v6, dst);
+    if (!us || flow_known(us, v6, v.remote, v.rport)) return 0;
+    if (us->mcast_until && sched_ticks() < us->mcast_until) { flow_add(us, v6, v.remote, v.rport); return 0; }
+    v.app = WfpAppName(us->app);
+    if (!WfpClassify(&v)) goto drop;
+    flow_add(us, v6, v.remote, v.rport);
+    return 0;
+drop:
+    pbuf_free(p);
+    return 1;
+}
+
+/* A packet leaving by the adapter (net.c's netif output, the lock held):
+ * the outbound transport layer; false: drop it */
+bool net_filter_outbound(void *pbuf, bool v6)
+{
+    int layer = v6 ? NOVAWFP_L_OUT_TRANSPORT_V6 : NOVAWFP_L_OUT_TRANSPORT_V4;
+    if (!WfpLayerUsed(layer)) return true;
+    struct pbuf *p = pbuf;
+    const UINT8 *b = p->payload;
+    int len = p->len, hl;
+    UINT8 proto;
+    WfpValues v;
+    memset(&v, 0, sizeof(v));
+    if (v6) {
+        if (len < 40) return true;
+        proto = b[6]; hl = 40;
+        memcpy(v.local, b + 8, 16); memcpy(v.remote, b + 24, 16);
+    } else {
+        if (len < 20 || ((b[6] & 0x1F) << 8 | b[7]) != 0) return true;
+        proto = b[9]; hl = (b[0] & 0x0F) * 4;
+        memcpy(v.local, b + 12, 4); memcpy(v.remote, b + 16, 4);
+    }
+    if ((proto != 6 && proto != 17) || len < hl + 4) return true;
+    v.layer = layer;
+    v.v6 = v6;
+    v.protocol = proto;
+    v.lport = (UINT16)(b[hl] << 8 | b[hl + 1]);
+    v.rport = (UINT16)(b[hl + 2] << 8 | b[hl + 3]);
+    v.app = "";
+    interface_of(&v, false);
+    return WfpClassify(&v);
+}
+
+int nova_ip4_input_hook(struct pbuf *p, struct netif *inp) { return input_hook(p, inp, false); }
+int nova_ip6_input_hook(struct pbuf *p, struct netif *inp) { return input_hook(p, inp, true); }
 
 /* -----------------------------------------------------------------------
  * Creation
@@ -378,6 +615,7 @@ int NetSockConnect(int sd, const NetSockAddr *to, SockCancelFn c, void *ca)
         if (!s->udp_pcb) { net_unlock(); return -SOCK_ENOTSOCK; }   /* only its datagrams arrive (Windows' too) */
         if (!family_ok(s, to)) { net_unlock(); return -SOCK_EAFNOSUPPORT; }
         ip_addr_t ip; to_lwip(to, &ip);
+        if (udp_authorize(s, &ip, lwip_htons(to->port_be)) < 0) { net_unlock(); return -SOCK_EACCES; }
         err_t e = udp_connect(s->udp_pcb, &ip, lwip_htons(to->port_be));
         if (e == ERR_OK) { s->connected = true; s->peer = *to; }
         net_unlock();
@@ -388,6 +626,9 @@ int NetSockConnect(int sd, const NetSockAddr *to, SockCancelFn c, void *ca)
     if (!s->tcp) { net_unlock(); return -SOCK_ENOTCONN; }
     if (!family_ok(s, to)) { net_unlock(); return -SOCK_EAFNOSUPPORT; }
     ip_addr_t ip; to_lwip(to, &ip);
+    WfpValues wv;                                            /* ALE connect: the filters, the firewall's outbound rules */
+    values_of(&wv, NOVAWFP_L_CONNECT_V4, s, 6, &s->tcp->local_ip, s->tcp->local_port, &ip, lwip_htons(to->port_be));
+    if (!WfpClassify(&wv)) { net_unlock(); return -SOCK_EACCES; }
     s->connecting = true;
     err_t e = tcp_connect(s->tcp, &ip, lwip_htons(to->port_be), tcp_connected_cb);
     net_unlock();
@@ -527,10 +768,11 @@ int NetSockSendTo(int sd, const void *buf, int len, const NetSockAddr *to)
     Sock *s = slot(sd);
     if (!s || !s->udp || !s->udp_pcb) { net_unlock(); return -SOCK_ENOTSOCK; }
     if (!family_ok(s, to)) { net_unlock(); return -SOCK_EAFNOSUPPORT; }
+    ip_addr_t ip; to_lwip(to, &ip);
+    if (udp_authorize(s, &ip, lwip_htons(to->port_be)) < 0) { net_unlock(); return -SOCK_EACCES; }
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (UINT16)len, PBUF_RAM);
     if (!p) { net_unlock(); return -SOCK_ENOBUFS; }
     pbuf_take(p, buf, (UINT16)len);
-    ip_addr_t ip; to_lwip(to, &ip);
     err_t e;
     /* Bound to 127.0.0.1 or ::1 (a program's wake-up socket, Poco's PollSet):
      * lwIP's udp_sendto drops a source that is not the interface's own
@@ -598,6 +840,9 @@ int NetSockListen(int sd, int backlog)
     net_lock();
     Sock *s = slot(sd);
     if (!s || s->udp || !s->tcp) { net_unlock(); return -SOCK_ENOTSOCK; }
+    WfpValues wv;                                            /* ALE listen */
+    values_of(&wv, NOVAWFP_L_LISTEN_V4, s, 6, &s->tcp->local_ip, s->tcp->local_port, NULL, 0);
+    if (!WfpClassify(&wv)) { net_unlock(); return -SOCK_EACCES; }
     struct tcp_pcb *lp = tcp_listen_with_backlog(s->tcp, backlog > 0 && backlog < 255 ? (UINT8)backlog : 8);
     if (!lp) { net_unlock(); return -SOCK_ENOBUFS; }
     s->tcp = lp;
@@ -763,10 +1008,15 @@ int NetSockLocalName(int sd, NetSockAddr *out)
     return 0;
 }
 
-void NetSockSetOwner(int sd, UINT32 pid)
+void NetSockSetOwner(int sd, UINT32 pid, const char *image)
 {
+    net_lock();
     Sock *s = slot(sd);
-    if (s) s->owner = pid;
+    if (s) {
+        s->owner = pid;
+        s->app = image && image[0] ? WfpAppIntern(image) : 0;
+    }
+    net_unlock();
 }
 
 /* The TCP connection table: a row per TCP socket with a local port (lwIP's

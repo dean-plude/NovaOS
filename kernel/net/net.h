@@ -70,6 +70,9 @@ typedef struct {
 } NetStatus;
 
 void NetGetStatus(NetStatus *st);
+/* The default gateway's MAC address once ARP has it (the firewall's
+ * network signature, firewall.c) */
+bool NetGatewayMac(UINT8 mac[6]);
 void NetFormatIp(UINT32 ip_be, char *buf, int cap);        /* "10.0.2.15" */
 bool NetParseIp(const char *s, UINT32 *ip_be);
 /* Either family: "10.0.2.15", "fd00::15" (cap 46 holds any) */

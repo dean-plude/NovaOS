@@ -62,7 +62,8 @@ static void mirror(const char *s, int n)
 }
 
 /* A network command in progress (advanced by term_tick) */
-typedef enum { JOB_NONE, JOB_PING, JOB_LOOKUP, JOB_FETCH, JOB_PROC, JOB_SETUP, JOB_UPDATE, JOB_WLAN, JOB_WLAN_CONNECT } JobKind;
+typedef enum { JOB_NONE, JOB_PING, JOB_LOOKUP, JOB_FETCH, JOB_PROC, JOB_SETUP, JOB_UPDATE, JOB_WLAN, JOB_WLAN_CONNECT,
+               JOB_SETTINGS_CHECK } JobKind;
 enum { PH_RESOLVE, PH_SEND, PH_WAIT, PH_SLEEP, PH_FETCH };
 
 typedef struct {
@@ -585,6 +586,10 @@ static void cmd_dmesg(Term *t)
 static void cmd_start(Term *t, int argc, char **argv)
 {
     AppId id;
+    if (argc >= 2 && (!strncmp(argv[1], "ms-settings:", 12) || !strncmp(argv[1], "MS-SETTINGS:", 12))) {
+        if (!SettingsOpenUri(argv[1])) terr(t, "Settings has no such page; it opened System.");
+        return;
+    }
     if (argc >= 2) {                             /* a .msi package: Windows Installer */
         size_t n = strlen(argv[1]);
         RamNode *msi = n > 4 && !strcmp(argv[1] + n - 4, ".msi") ? RamfsResolve(t->cwd, argv[1]) : NULL;
@@ -625,6 +630,15 @@ static void cmd_start(Term *t, int argc, char **argv)
     }
     if (argc < 2 || !AppByName(argv[1], &id)) {
         terr(t, "Usage: start notepad|explorer|settings|calendar|browser|terminal|PROGRAM [file|args]");
+        return;
+    }
+    if (argc >= 3 && id == APP_SETTINGS) {        /* "settings display", "settings check" */
+        if (!strcmp(argv[2], "check")) {         /* (in the background: JOB_SETTINGS_CHECK) */
+            if (!SettingsCheck()) { terr(t, "Settings is busy checking already."); return; }
+            Job *j = &t->job;
+            memset(j, 0, sizeof(*j));
+            j->kind = JOB_SETTINGS_CHECK;
+        } else if (!SettingsOpenUri(argv[2])) terr(t, "Settings has no such page; it opened System.");
         return;
     }
     if (argc >= 3 && (id == APP_NOTEPAD || id == APP_EXPLORER)) {
@@ -1627,6 +1641,13 @@ static bool term_tick_files(WND *w)
         UINT32 st;
         if (!WlanScanDone(g_wlan_bss, WLAN_MAX_BSS, &n, &st)) return false;
         wlan_networks(t, j->cur, j->count, n, st);
+        job_end(t);
+        return true;
+    }
+    if (j->kind == JOB_SETTINGS_CHECK) {
+        int pass, fail;
+        if (!SettingsCheckDone(&pass, &fail)) return false;
+        tprintf(t, "settings check: %d passed, %d failed", pass, fail);
         job_end(t);
         return true;
     }

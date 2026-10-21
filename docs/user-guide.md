@@ -175,7 +175,7 @@ Keyboard shortcuts:
 |---|---|
 | **File Explorer** | Shows This PC (every drive and its free space) and the folders Documents, Downloads, Pictures, Personal, Projects and Windows.  Double-click a program (`.exe`) to run it, a Windows Installer package (`.msi`) to install it, a picture (`.png`, `.ico`, `.cur`) to see it in Photos, a shortcut (`.lnk`) to open its target, and anything else to read it in Notepad.  Ctrl+C, Ctrl+X and Ctrl+V copy and move files, also to and from Windows programs; Delete deletes. |
 | **Terminal** | The command line (below). |
-| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Wi-Fi (the networks in range; joining one with its password), Firewall (the network's Public or Private type, each profile on or off, the rules), Accounts, Time & language, Printers, and About. |
+| **Settings** | System, Display (resolution, scale, several monitors), Sound (output and input devices and their volumes), Personalization (theme, wallpaper picture and icon set, and adding wallpapers and icon sets), Storage, Network, Wi-Fi (the networks in range; joining one with its password), Firewall (the network's Public or Private type, each profile on or off, the rules), Accounts, Time & language, Printers, and About.  **Find a setting** at the top of the sidebar (or Ctrl+F) narrows the pages to those that match; Up and Down go through them, Enter opens one.  A page taller than the window scrolls (wheel, scroll bar, Page Up and Page Down), and in a narrow window the sidebar shows only the pages' icons.  `start ms-settings:display` (any of Windows' `ms-settings:` names NovaOS has a page for) or `settings wifi` in the Terminal opens a page directly. |
 | **Firefox** | Mozilla's Firefox 157 for Windows, unmodified and built into NovaOS as its web browser. |
 | **App Store** | Downloads and installs open-source Windows programs (see [Installing programs](#installing-programs)), and updates NovaOS. |
 | **Task Manager** | Ctrl+Shift+Esc, or right-click Start.  **Processes** lists the open apps and the background processes with their CPU, memory and status; select one (click it, or type its name) and press **End task** or Delete to end it.  **Performance** graphs the last minute of each logical processor, memory, disk and Ethernet.  **Details** shows every process with its PID, user, CPU time, threads, handles and priority, and **Services** the Windows services and their state.  Ctrl+Tab moves between the views; click a column heading to sort by it. |
@@ -195,7 +195,7 @@ The Terminal has its own commands; `help` lists them.  The most useful:
 | Command | Does |
 |---|---|
 | `dir`, `cd`, `type`, `copy`, `del`, `mkdir` | Work with files |
-| `start <app> [file]` | Open a built-in app (`notepad`, `explorer`, `settings`, `calendar`, `browser`, `store`, `welcome`) |
+| `start <app> [file]` | Open a built-in app (`notepad`, `explorer`, `settings`, `calendar`, `browser`, `store`, `welcome`); `start ms-settings:<page>` or `settings <page>` opens a Settings page |
 | `store install <name>` | Install a program from the App Store |
 | `winget search`, `install`, `list`, `upgrade`, `uninstall` | The Windows Package Manager ([below](#winget)) |
 | `ipconfig`, `ping`, `nslookup`, `curl`, `wget` | Network |

@@ -207,10 +207,23 @@ enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, 
        SETTINGS_ACCOUNTS_ADD = 100 /* Accounts, with "Add an account" open */ };
 /* Open Settings (or focus the open window) at page @page */
 void SettingsOpenPage(int page);
-/* Settings' Firewall page (settings_firewall.c): drawn at (x, y), w wide;
+/* ... at the page an ms-settings: URI names ("ms-settings:display"; also
+ * "display", or a page's name); false (System opened) if none is named so */
+bool SettingsOpenUri(const char *uri);
+/* Draw every page at three window sizes and check each ("settings check"),
+ * a step per tick; false if it could not start.  SettingsCheckDone: true
+ * once it has finished, with how many checks passed and failed */
+bool SettingsCheck(void);
+bool SettingsCheckDone(int *pass, int *fail);
+/* The pages, for Start's search: their names and search words */
+int SettingsPageCount(void);
+const char *SettingsPageName(int page);
+const char *SettingsPageKeys(int page);
+/* Settings' Firewall page (settings_firewall.c): drawn at (x, y), w wide
+ * (returns its content's bottom);
  * a click at client (x, y) on the page drawn at (px, py), pw wide (true:
  * draw it again); true when what it shows changed */
-void FirewallPagePaint(int x, int y, int w);
+int FirewallPagePaint(int x, int y, int w);
 bool FirewallPageMouse(int px, int py, int pw, int x, int y);
 bool FirewallPageTick(void);
 /* The firewall's once-a-second network check, and its "make this PC

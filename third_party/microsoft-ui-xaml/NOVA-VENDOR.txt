@@ -74,6 +74,24 @@ lifetime library (components/lifetime's lib, with its project), dxaml/lib's
 StaticStore.cpp and UIAffinityReleaseQueue.cpp, the core's error event
 args (core/error/ErrorEventArgs.cpp), deployment
 (core/packaging/deployment.cpp) and entry points (core/dll/CoreImports.cpp)
+and, for XamlReader.Load end to end (32.3), the element classes
+(core/core/elements and elements2, less the ones that need closed headers:
+svgimagesource, glyphs, imagebrush, swapchainpanel, deferredkeys,
+softwarebitmapsource, xamlislandroot, popup), the text core's TextBlock
+subset (core/text: TextBlock, inlines, runs, inherited properties and
+common/text.cpp), the type table (core/metadata/dynamic), the core's event
+manager (core/dll/eventmgr.cpp), components/elements (CUIElement and
+CFrameworkElement) with its lib project, components/Telemetry's
+GCInstrumentationAggregator.cpp with its project, components/graphics'
+AlphaMask.cpp, ExpressionHelper.cpp, XamlLightTargetIdMap.cpp and
+XamlLightTargetMap.cpp, and dxaml/lib's framework peers for UIElement,
+FrameworkElement, Panel, Grid, TextBlock, Control, ContentControl,
+ButtonBase, Button, Border, ContentPresenter, ResourceDictionary, Style,
+Setter, the templates, the event args and ExternalObjectReference (their
+_Partial.cpp and winrtgeneratedclasses' .g.cpp), with UWPWindowImpl.cpp,
+ContentManager.cpp, DXamlCoreLightup.cpp, FxCallbacks.cpp,
+XamlParserCallbacks.cpp, UtilityFunctions.cpp, JoltClasses.cpp,
+ActivationAPI.cpp and DirectUIXamlQualifiedObject.cpp,
 and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of

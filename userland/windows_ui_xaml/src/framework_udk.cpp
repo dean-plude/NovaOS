@@ -6,6 +6,11 @@
 //     UnhandledErrorDetected yet (ole32's RoReportUnhandledError says so by
 //     failing, and the error helper then handles the error itself), so the
 //     handler is kept and not called.
+//   Mui_GetFontFallbackLanguageList: a language's font fallback list (the
+//     MUI fallback languages), which the text core asks for each language
+//     it resolves (core/text/common/TextFormatting.cpp).  NovaOS has no MUI
+//     fallback data, so there is none, and the text core uses the language
+//     itself, as it does on Windows when the lookup fails.
 //   VisualDiagnosticsPort: the message port diagnostics tools connect to a
 //     XAML thread through.  NovaOS has no such tools, so there is nothing to
 //     register with; the framework starts as it does on Windows when no
@@ -13,6 +18,7 @@
 #include <windows.h>
 #include <FrameworkUdk/FinalUnhandledErrorDetected.h>
 #include <FrameworkUdk/VisualDiagnosticsPort.h>
+#include <MuiUdk.h>
 
 namespace {
 SRWLOCK g_lock = SRWLOCK_INIT;
@@ -60,4 +66,10 @@ HRESULT VisualDiagnosticsPort_Register(PCWSTR endpointName, VisualDiagnosticsPor
 
 void VisualDiagnosticsPort_Unregister()
 {
+}
+
+HRESULT Mui_GetFontFallbackLanguageList(PCWSTR, size_t, PWSTR, size_t *cchWritten)
+{
+    if (cchWritten) *cchWritten = 0;
+    return E_NOTIMPL;
 }

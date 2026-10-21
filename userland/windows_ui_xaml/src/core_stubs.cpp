@@ -17,10 +17,15 @@
 #include <vsm/inc/CVisualStateManager2.h>
 #include <string.h>
 
+// (a program on the core links components/elements' own; the Windows
+// headers' GetClassName macro keeps a renaming -D from reaching this one,
+// so the core's variant of this file is built with NOVA_ON_THE_CORE)
+#ifndef NOVA_ON_THE_CORE
 xstring_ptr CFrameworkElement::GetClassName()
 {
     return xstring_ptr::NullString();
 }
+#endif
 
 CDependencyObject *CFrameworkElement::GetLogicalParentNoRef()
 {

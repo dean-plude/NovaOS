@@ -57,6 +57,9 @@ etwgen = _load('etwgen')
 
 # MSBuild's properties as the projects use them
 PROPS = {'XcpPath': XCP, 'XamlSourcePath': os.path.join(MUX, 'dxaml'), 'RepoRoot': MUX}
+# (and the ones the projects' props files set that their include paths
+# use: XAML diagnostics' sources, whose headers the framework includes)
+PROPS['XamlDiagPath'] = PROPS['XAML_DIAG_PATH'] = os.path.join(XCP, 'components', 'xamlDiagnostics')
 
 # The component libraries built so far (dxaml/xcp/components/...: the
 # lowest layer, the type metadata and CDependencyObject)
@@ -199,10 +202,12 @@ CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] = \
     CORE_FIRST['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj'] = \
     CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 # (and the framework's, dxaml/lib, as theirs, with the application's
-# activation arguments and drag and drop's data package, which it holds)
+# activation arguments and drag and drop's data package, which it holds,
+# and src/framework_first.h)
 CORE_FIRST['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = \
     CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h', 'windows.applicationmodel.activation.h',
-                                          'windows.applicationmodel.datatransfer.h']
+                                          'windows.applicationmodel.datatransfer.h',
+                                          os.path.join(HERE, 'src', 'framework_first.h')]
 # (and the control layer's, its dispatcher's and its browser host's as the
 # platform layer's)
 for _p in ('control/common/shared/sl/controlBase.vcxproj', 'win/shared/sl/shared.vcxproj', 'hostpalplatmisc.vcxproj'):
@@ -264,6 +269,8 @@ for _p in ('plat/win/desktop/platwindesktop.vcxproj', 'components/graphics/lib/M
 # (the platform layer's headers include each other's by <name>, as MSBuild's
 # project directory lets them: core_flags())
 PROJECT_DIR = ('plat/win/desktop/platwindesktop.vcxproj',)
+PROJECT_INCLUDES = {}
+PROJECT_DEFINES = {}
 
 # a program's "xaml" (in its NAME.json) naming a CORE_LIBRARIES entry whose
 # flags it is built with, as Microsoft builds that library's unit tests
@@ -336,8 +343,9 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # the DLLs XAML's sources call beyond a program's usual ones (the parser
 # reads XML with XmlLite, the URI library builds URIs with urlmon, the
 # framework turns the legacy IMEs off with imm32, the graphics device draws
-# its first text with DirectWrite)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite']
+# its first text with DirectWrite, an element takes focus with a correlation
+# GUID from rpcrt4)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -363,6 +371,7 @@ def generated(b):
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
             fold(os.path.join(d, 'fold'), component_includes() + project_includes() + core_includes() + source_dirs() +
+                 [i for c in CORE_LIBRARIES for i in vcxproj.read(os.path.join(XCP, c[0]), PROPS)['includes']] +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
@@ -404,6 +413,10 @@ def core_flags(proj, sources, pch, added=()):
     """what a CORE_LIBRARIES entry's sources add to flags()"""
     p = vcxproj.read(os.path.join(XCP, proj), PROPS)
     inc = core_includes(sources) + p['includes']
+    # (and the include path of the projects whose headers its NovaOS
+    # precompiled header takes, PROJECT_INCLUDES)
+    for other in PROJECT_INCLUDES.get(proj, ()):
+        inc += [d for d in vcxproj.read(os.path.join(XCP, other), PROPS)['includes'] if d not in inc]
     # (a precompiled header of NovaOS's own named precomp.h stands in for
     # the project's, which its sources include as "precomp.h": its directory
     # is searched first)
@@ -413,7 +426,7 @@ def core_flags(proj, sources, pch, added=()):
     # include each other's by <name>)
     if proj in PROJECT_DIR:
         inc = inc + [os.path.dirname(os.path.join(XCP, proj))]
-    return [x for d in inc for x in ('-I', d)] + ['-D' + d for d in p['defines']] + EXCEPTIONS + \
+    return [x for d in inc for x in ('-I', d)] + ['-D' + d for d in p['defines'] + PROJECT_DEFINES.get(proj, [])] + EXCEPTIONS + \
         [x for h in CORE_FIRST.get(proj, []) for x in ('-include', h)] + ['-include', os.path.join(XCP, pch)]
 
 
@@ -549,6 +562,148 @@ for _p in ('valueboxer/lib/Microsoft.UI.Xaml.ValueBoxer.vcxproj', 'lifetime/lib/
                                               vcxproj.read(os.path.join(XCP, 'components', _p), PROPS)['sources'])
 CORE_SERVICES_STUBS += ('ValueBoxer_Stub.cpp', 'ReferenceTrackerManager_Stub.cpp')
 
+# (32.3, Application.Start and XamlReader.Load end to end: the page's
+# objects) the element tree's library whole (core/core/elements'
+# elements.vcxproj: CDependencyObject's own half, depends.cpp, and the
+# elements, CUIElement, CFrameworkElement, CPanel, CGrid and the rest; its
+# DeferredKeys.cpp is the resource dictionary's, above), less the imaging
+# and media elements that call Direct2D 1.3 and 1.4 (colour glyphs, SVG
+# documents) and the lifted input's pointer sources, which join when those
+# build
+_ELEMENTS = 'core/core/elements/lib/elements.vcxproj'
+_ELEMENTS_LATER = ('deferredkeys.cpp', 'svgimagesource.cpp', 'glyphs.cpp', 'imagebrush.cpp', 'swapchainpanel.cpp')
+CORE_SOURCES[_ELEMENTS] = tuple(
+    os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS)))
+    for s in vcxproj.read(os.path.join(XCP, _ELEMENTS), PROPS)['sources']
+    if os.path.basename(s).lower() not in _ELEMENTS_LATER)
+# (and its second library, elements2.vcxproj: the content controls,
+# CContentControl and CButton, the content presenter, borders, styles and
+# setters, the visual state manager, the root visual and popups, the
+# automation peers' core halves)
+_ELEMENTS2 = 'core/core/elements/lib2/elements2.vcxproj'
+CORE_LIBRARIES.append((_ELEMENTS2, 'core/core/elements/sources.props', 'core/core/elements/pch/precomp.h', []))
+CORE_FIRST[_ELEMENTS2] = CORE_FIRST['core/xcpcore.vcxproj']
+# (less the software bitmap image source, on Windows.Graphics.Imaging, and
+# the XAML island root and popups, on the lifted windowing (windowing.h),
+# which join when those do)
+_ELEMENTS2_LATER = ('softwarebitmapsource.cpp', 'xamlislandroot.cpp', 'popup.cpp')
+CORE_SOURCES[_ELEMENTS2] = tuple(
+    os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
+    for s in vcxproj.read(os.path.join(XCP, _ELEMENTS2), PROPS)['sources']
+    if os.path.basename(s).lower() not in _ELEMENTS2_LATER)
+# (and, of the text core, core/text's coretext.vcxproj, the text block,
+# CTextBlock, with its inlines and runs, the inherited text properties and
+# the text helpers they share (common/text.cpp: inline whitespace), with NovaOS's precompiled header in place of the project's,
+# src/coretext: the text core's own includes the closed Page/Table Layout
+# Services' header)
+_CORETEXT = 'core/text/coretext.vcxproj'
+CORE_LIBRARIES.append((_CORETEXT, 'core/common.props', os.path.join(HERE, 'src', 'coretext', 'precomp.h'), []))
+CORE_FIRST[_CORETEXT] = CORE_FIRST['core/xcpcore.vcxproj']
+PROJECT_INCLUDES[_CORETEXT] = ('core/xcpcore.vcxproj',)
+CORE_SOURCES[_CORETEXT] = ('common/InheritedProperties.cpp', 'common/TextFormatting.cpp', 'common/text.cpp',
+                           'TextBlock/TextBlock.cpp', 'TextBlock/TextBlockView.cpp', 'TextBlock/Inline.cpp', 'TextBlock/InlineCollection.cpp',
+                           'TextBlock/CRun.cpp', 'TextBlock/LineBreak.cpp')
+# (and the type table, core/metadata's dynamicmetadata.vcxproj whole: the
+# core's generated metadata, every type's core and framework constructors
+# (Activators.g.cpp, c_aTypeActivations) and every property's runtime data
+# (DynamicMetadata.g.cpp: its field's offset, its property method, its
+# render-changed handler), the simple properties' and the reflection API's
+# getters, ReflectionAPI.cpp; with it, NovaOS's table of the few types and
+# properties that built before it, src/property_data.cpp and
+# src/type_activations.cpp, and the isolated tests' metadata mocks leave a
+# program on the core)
+_METADATA = 'core/metadata/dynamic/dynamicmetadata.vcxproj'
+CORE_LIBRARIES.append((_METADATA, 'core/common.props', 'core/metadata/dynamic/precomp.h', []))
+# (its project is lean, WIN32_LEAN_AND_MEAN: the ABI headers' COM base
+# first; and the namespaces of the background task and the software
+# bitmap source it holds, the bitmaps' pixel buffers' streams, and
+# src/metadata_first.h; and Microsoft's clang build's EXP_CLANG, which
+# its activators' runtime profiler markers are written for)
+CORE_FIRST[_METADATA] = ['objbase.h'] + CORE_FIRST['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] + \
+    ['windows.graphics.imaging.h', 'windows.applicationmodel.background.h', 'windows.storage.streams.h',
+     'robuffer.h', os.path.join(HERE, 'src', 'metadata_first.h')]
+PROJECT_DEFINES[_METADATA] = ['EXP_CLANG']
+CORE_SOURCES[_METADATA] = ('../Activators.g.cpp', '../DynamicMetadata.g.cpp', '../SimplePropertiesCommon.g.cpp',
+                           '../ReflectionAPI.cpp')
+# (and, of the framework, the page's peers: UIElement, FrameworkElement,
+# Panel, Grid, TextBlock, Control, ContentControl, ButtonBase and Button,
+# and a panel's children, UIElementCollection, and the resource
+# dictionaries every page and control style holds, ResourceDictionary and
+# ResourceDictionaryCollection, the styles and templates that dress a
+# control (Style, Setter, SetterBase, SetterBaseCollection,
+# FrameworkTemplate, ControlTemplate, and the Border and ContentPresenter
+# a button's template is made of), and the event arguments an element
+# raises entering the tree (RoutedEventArgs, DataContextChangedEventArgs,
+# SizeChangedEventArgs) and a collection raises changing
+# (VectorChangedEventArgs), and the hidden window every thread's
+# framework core holds (its implementation, UWPWindowImpl, and its
+# content's, ContentManager), and the framework core's handlers of the
+# system's animation and scroll bar settings (DXamlCoreLightup.cpp),
+# each its generated class and its partial one, and the core's callbacks
+# into the framework, FxCallbacks.cpp, which make and find them, and the
+# parser's, XamlParserCallbacks.cpp, through which it creates objects, and
+# the helpers the peers share, UtilityFunctions.cpp: the strict API check
+# every control's members make, and the peers' event sources' registration
+# with the core, JoltClasses.cpp, and the activation of a type by its
+# metadata, ActivationAPI.cpp, through which the parser makes a control,
+# handed back in the framework's qualified object,
+# DirectUIXamlQualifiedObject.cpp, which wraps what is not a dependency
+# object in an ExternalObjectReference)
+# (with the element tree, the type table and the peers built, their stubs
+# leave a program on the core: the core's DependencyObject_Stub.cpp (until
+# now linked with two members renamed out), MetadataAPI_Stub.cpp and
+# Storyboard_Stub.cpp, NovaOS's stand-ins for the elements' members and
+# the properties' runtime data and the empty type table
+# (src/elements_stubs.cpp, src/property_data.cpp, src/type_activations.cpp);
+# and src/core_stubs.cpp's members of the elements and the popup root,
+# renamed out)
+del CORE_STUB_RENAMES['DependencyObject_Stub.cpp']
+CORE_STUB_RENAMES['core_stubs.cpp'] = ('OnAssociationFailure', 'GetOpenPopupWithChild', 'GetResourcesNoCreateNoRef',
+                                      'GetLogicalParentNoRef', 'GetTemplatedParent', 'NOVA_ON_THE_CORE')
+CORE_SERVICES_STUBS += ('DependencyObject_Stub.cpp', 'MetadataAPI_Stub.cpp', 'Storyboard_Stub.cpp',
+                        'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp')
+# (and the element component, components/elements: the elements' core
+# classes themselves, CUIElement and CFrameworkElement, with their layout,
+# rendering walk and hit testing, and the layout transition elements and
+# popups that hang off them)
+_ELEMENTS_COMPONENT = 'components/elements/lib/Microsoft.UI.Xaml.Elements.vcxproj'
+CORE_LIBRARIES.append((_ELEMENTS_COMPONENT, _ELEMENTS_COMPONENT, 'components/pch/precomp.h', []))
+PROJECT_DEFINES[_ELEMENTS_COMPONENT] = ['EXP_CLANG']   # (its runtime profiler markers, as the type table's)
+CORE_SOURCES[_ELEMENTS_COMPONENT] = tuple('../' + os.path.basename(x) for x in
+                                          vcxproj.read(os.path.join(XCP, _ELEMENTS_COMPONENT), PROPS)['sources'])
+# (and, of the graphics component, what an element holds for its
+# composition: its alpha mask, its expression helpers and the light
+# targets it may be: AlphaMask.cpp, ExpressionHelper.cpp,
+# XamlLightTargetIdMap.cpp, XamlLightTargetMap.cpp)
+# (and the core's event manager, core/dll/eventmgr.cpp, with which a
+# control's peer registers its events' listeners)
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('dll/eventmgr.cpp',)
+CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += (
+    '../AlphaMask.cpp', '../ExpressionHelper.cpp', '../XamlLightTargetIdMap.cpp', '../XamlLightTargetMap.cpp')
+# (and, of the instrumentation component, the garbage collection
+# aggregator the release queue and the reference tracker report to,
+# GCInstrumentationAggregator.cpp)
+_TELEMETRY = 'components/Telemetry/Microsoft.UI.Xaml.Instrumentation.vcxproj'
+CORE_LIBRARIES.append((_TELEMETRY, _TELEMETRY, 'components/pch/precomp.h', []))
+CORE_SOURCES[_TELEMETRY] = ('GCInstrumentationAggregator.cpp',)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../' + x for x in ('UIElement_Partial.cpp', 'FrameworkElement_partial.cpp', 'Panel_Partial.cpp',
+                        'TextBlock_Partial.cpp', 'Control_Partial.cpp', 'ContentControl_Partial.cpp',
+                        'ButtonBase_Partial.cpp', 'Button_Partial.cpp', 'ResourceDictionary_partial.cpp',
+                        'RoutedEventArgs_Partial.cpp', 'ContentPresenter_Partial.cpp', 'Style_Partial.cpp',
+                        'Setter_Partial.cpp', 'UWPWindowImpl.cpp', 'ContentManager.cpp', 'DXamlCoreLightup.cpp',
+                        'FxCallbacks.cpp', 'XamlParserCallbacks.cpp', 'UtilityFunctions.cpp',
+                        'JoltClasses.cpp', 'ActivationAPI.cpp',
+                        'DirectUIXamlQualifiedObject.cpp', 'ExternalObjectReference_partial.cpp')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('UIElement', 'FrameworkElement', 'Panel', 'Grid', 'TextBlock',
+                                                      'Control', 'ContentControl', 'ButtonBase', 'Button',
+                                                      'UIElementCollection', 'ResourceDictionary',
+                                                      'ResourceDictionaryCollection', 'RoutedEventArgs',
+                                                      'DataContextChangedEventArgs', 'SizeChangedEventArgs',
+                                                      'Border', 'ContentPresenter', 'Style', 'Setter', 'SetterBase',
+                                                      'SetterBaseCollection', 'FrameworkTemplate', 'ControlTemplate',
+                                                      'VectorChangedEventArgs', 'ExternalObjectReference'))
+
 
 def test_stubs(b, odir):
     """xaml_teststubs.lib (TEST_STUBS) and xaml_corestubs.lib (the same
@@ -584,10 +739,11 @@ def test_stubs(b, odir):
         # core services' members, error service and its invalid-operation
         # errors for programs without the core, src/type_activations.cpp,
         # src/core_services_stubs.cpp, src/error_service.cpp and
-        # src/invalid_operation.cpp)
+        # src/invalid_operation.cpp; and the interface IDs as data,
+        # src/uuids.cpp)
         objs += b.compile_many([os.path.join(HERE, 'src', x) for x in (
             'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp', 'core_services_stubs.cpp',
-            'error_service.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
+            'error_service.cpp', 'framework_stubs.cpp', 'invalid_operation.cpp', 'uuids.cpp')], odir, 'xamlstub_', f + core_flags(*CORE_LIBRARIES[PROGRAM_CORE['elements']]),
             headers, compiler='clang++')
         core_objs = [o for o in objs if not os.path.basename(o)[len('xamlstub_'):-4] + '.cpp' in CORE_SERVICES_STUBS]
         # (a stub the core builds part of for real is linked, by a program
@@ -682,7 +838,9 @@ def unbuilt(b, odir, libs):
         # library's, is theirs: an alternate name stands only for one no
         # library defines; a C one is a Windows-style function returning an
         # HRESULT, the framework's DllGetActivationFactory)
-        names = sorted(n for n in undef - defined if not n.startswith(('__imp_', '.')))
+        # (and never for data: an interface or class ID, src/uuids.cpp's,
+        # which a thunk's code would stand in for unequal to any)
+        names = sorted(n for n in undef - defined if not n.startswith(('__imp_', '.', 'IID_', 'CLSID_', 'GUID_')))
         r = subprocess.run([b.llvm_tool('llvm-undname')], input='\n'.join(names) + '\n', capture_output=True, text=True)
         dem = [l for l in r.stdout.splitlines() if l.strip()]
         demangled = dict(zip(dem[0::2], dem[1::2]))

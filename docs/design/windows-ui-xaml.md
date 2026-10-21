@@ -544,10 +544,48 @@ vendors.
      (`Host_CreateFromXaml`), which the full start-up now makes past the
      rendering seam, so it runs end to end once the element classes and
      their framework peers build.
-   - *Next.*  A `Window` on the initialized core with the reference
-     tracker, then the element classes and their framework peers, until
-     `Application.Start` runs and `XamlReader.Load` parses a page, one
-     component seam per pull request.
+   - *`XamlReader.Load` end to end (Phase 32 push).*  Built from
+     Microsoft's sources: the element classes (`core/core/elements` and
+     `elements2`, less the few whose sources include closed headers), the
+     text core's `TextBlock` subset (`core/text`, with NovaOS's own
+     precompiled header in place of the project's, which pulls in the
+     closed line services), the real type table (`core/metadata/dynamic`,
+     replacing the isolated tests' mocks and NovaOS's empty
+     activation table), the core's event manager, `components/elements`
+     (`CUIElement`, `CFrameworkElement`), and the framework peers of
+     `UIElement`, `FrameworkElement`, `Panel`, `Grid`, `TextBlock`,
+     `Control`, `ContentControl`, `ButtonBase`, `Button`, `Border`,
+     `ContentPresenter`, `ResourceDictionary`, `Style`, `Setter`, the
+     templates and their event args, with the framework's callbacks the
+     core and the parser make (`FxCallbacks.cpp`,
+     `XamlParserCallbacks.cpp`), type activation (`ActivationAPI.cpp`)
+     and the framework's qualified objects. The stubs of what now builds
+     leave `xaml_corestubs.lib` (`CORE_SERVICES_STUBS`).  NovaOS adds
+     only what no published header or metadata gives: the Windows SDK's
+     name for `CoreWindow.Closed`'s handler and a stand-in for
+     `GamepadKeyRoutingConfiguration` (contract 19, never activated here)
+     in `src/framework_first.h`; the COM IIDs uuid.lib holds
+     (`src/uuids.cpp`, since an IID the link leaves undefined would
+     otherwise alias generated code); `ID2D1DeviceContext5`'s declaration;
+     and `abigen.py` now puts flag enums' operators in the enum's
+     namespace, emits the generic instances runtime classes implement and
+     defines the universal API contract's version per header, as MIDL
+     does.  `xamlloadtest` starts the framework as `Application.Start`
+     does on a thread with a `DispatcherQueue`
+     (`DXamlCore::Initialize(InitializationType::IslandsOnly)`), then
+     `XamlReader.Load` of a `Grid` holding a `TextBlock` with an
+     `x:Name` and a `Button` hands back the framework objects: the Grid's
+     two children through `IPanel`, the text and name, the Button's
+     content through `IContentControl`, and the TextBlock's core object
+     parented to the Grid's (`FrameworkElement.Parent` stays null outside
+     a live tree, as on Windows).  The test's core cases run on a
+     framework thread too, since every element now gets its peer from
+     the thread's `DXamlCore`.
+   - *Left for 32.3:* `Application.Start` itself
+     (`FrameworkApplicationFactory::StartImpl`, which on the desktop goes
+     through `WindowsXamlManager.InitializeForCurrentThread` and a
+     `DesktopWindowImpl` with its message loop) is not called yet; the
+     test does the same thread start-up by hand.
 4. **32.4 A XAML page draws.** Layout and rendering through composition:
    a `Grid` with a `TextBlock` and a `Button` from `generic.xaml`, typed
    into and clicked in a self-test, with a reference screenshot.

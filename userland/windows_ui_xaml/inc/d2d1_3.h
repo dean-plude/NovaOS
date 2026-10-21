@@ -15,6 +15,15 @@
 #ifdef __cplusplus
 interface ID2D1DeviceContext1;
 interface ID2D1DeviceContext2;
+interface ID2D1DeviceContext4;     /* (named by the text drawing context's colour glyphs) */
+/* (Direct2D 1.4's device context, which the platform layer's render
+ * target hands out: so far its Direct2D 1.1 part, ID2D1DeviceContext,
+ * the head of its vtable; the 1.2-1.4 methods that follow it join when a
+ * caller needs them) */
+struct __declspec(uuid("7836d248-68cc-4df6-b9e8-de991bf62eb7")) __declspec(novtable) ID2D1DeviceContext5
+    : public ID2D1DeviceContext
+{
+};
 typedef enum D2D1_RENDERING_PRIORITY { D2D1_RENDERING_PRIORITY_NORMAL = 0, D2D1_RENDERING_PRIORITY_LOW = 1,
                                        D2D1_RENDERING_PRIORITY_FORCE_DWORD = 0xffffffff } D2D1_RENDERING_PRIORITY;
 struct __declspec(uuid("d21768e1-23a4-4823-a14b-7c3eba85d658")) __declspec(novtable) ID2D1Device1 : public ID2D1Device

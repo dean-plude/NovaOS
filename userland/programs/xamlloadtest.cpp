@@ -34,11 +34,15 @@
  * dispatcher (DispatcherImpl, which knows its thread and refuses work
  * without a core) and the default control styles' cache (DefaultStyles);
  * the Window and the framework's peer base class,
- * DirectUI::DependencyObject, build and link here, but a Window is made
- * only on a thread whose DXamlCore is initialized.
+ * DirectUI::DependencyObject; and (32.3, end to end) the framework started
+ * as Application.Start starts it (DXamlCore::Initialize on a thread with a
+ * DispatcherQueue), so XamlReader.Load parses a page, a Grid holding a
+ * TextBlock and a Button, through the element classes' real type table
+ * and hands back their framework peers: the Grid's children, the
+ * TextBlock's text and x:Name and the Button's content, read through the
+ * public interfaces.  The core's cases run on such a thread too, since
+ * every element made now gets its peer from the thread's DXamlCore.
  *
- * Until the core's generated type table builds, the table here activates
- * the handful of types the cases use (below).
  *
  *   xamlloadtest       the self-test runs it with no arguments
  */
@@ -67,30 +71,15 @@
 #include <Dispatcher.h>
 #include <Callback.h>
 #include <DefaultStyles.h>
+#include <Grid.g.h>
+#include <TextBlock.g.h>
+#include <Button.g.h>
+#include <FrameworkApplication_Partial.h>
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
 #define CHECK_HR(what, expr) do { HRESULT h_ = (expr); if (SUCCEEDED(h_)) pass++; else { fail++; \
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
-
-/* the types the object writer may create here, by the core's own
- * constructors (the XAML core's generated table, core/metadata
- * DynamicMetadata.g.cpp, has every type's) */
-static HRESULT create_dictionary(CDependencyObject **out, CREATEPARAMETERS *create)
-{
-    return CResourceDictionary::Create(out, create);
-}
-
-#define ACT(type, fn) [static_cast<int>(KnownTypeIndex::type)] = { fn, nullptr }
-extern const MetaDataTypeActivation c_aTypeActivations[KnownTypeCount] = {
-    ACT(ResourceDictionary, &create_dictionary),
-    ACT(ResourceDictionaryCollection, &CResourceDictionaryCollection::Create),
-    ACT(String, &CString::Create),
-    ACT(Double, &CDouble::Create),
-    ACT(Int32, &CInt32::Create),
-    ACT(Boolean, &CBoolean::Create),
-    ACT(Color, &CColor::Create),
-};
 
 static std::string narrow(const xstring_ptr_view &s)
 {
@@ -100,28 +89,15 @@ static std::string narrow(const xstring_ptr_view &s)
 }
 
 /* the core: the XAML core's own core services (CCoreServices,
- * core/dll/xcpcore.cpp, built since part 9), made as the framework makes
- * them (DXamlCore::InitializeInstance): the platform layer's services
- * (CWindowsServices, plat/win/browserdesktop/xcpwin.cpp, built since
- * part 10: its queues, work items and security token), handed to
- * ObtainCoreServices, which has CCoreServices::Create set up the rest (the
- * theming over the system's, the theme cache, the media queue, the text
- * core and render target bitmaps); the system theme is fixed at Dark
- * through the theming's own test hook, so the cases do not depend on the
+ * core/dll/xcpcore.cpp, built since part 9) on the platform layer's
+ * services (CWindowsServices, plat/win/browserdesktop/xcpwin.cpp, part 10),
+ * as the framework makes them for its thread (DXamlCore::Initialize, below:
+ * with the element tree and the type table built, the core's objects make
+ * their framework peers, so the core runs only on a thread the framework
+ * has started on, as on Windows); the system theme is fixed at Dark through
+ * the theming's own test hook (main()), so the cases do not depend on the
  * machine's.  The objects the core makes name it, and the parser reads it
- * through its IParserCoreServices; XamlReader.Load loads XAML as load()
- * does, through CCoreServices::ParseXaml. */
-static CCoreServices *make_core()
-{
-    IPlatformServices *pal = nullptr;
-    CCoreServices *c = nullptr;
-    SystemThemingInterop::OverrideSystemTheme(Theming::Theme::Dark);
-    CHECK_HR("ObtainPlatformServices", ObtainPlatformServices(&pal));
-    CHECK_HR("ObtainCoreServices (CCoreServices::Create)", pal ? ObtainCoreServices(pal, &c) : E_POINTER);
-    CHECK("the core services", c != nullptr);
-    return c;
-}
-
+ * through its IParserCoreServices. */
 static CDependencyObject *load(const wchar_t *xaml, HRESULT *hr_out = nullptr);
 
 /* the core's own theme resources, which the framework loads on first
@@ -138,7 +114,8 @@ static CCoreServices *core()
 {
     static CCoreServices *c;
     if (!c) {
-        c = make_core();
+        DirectUI::DXamlCore *dx = DirectUI::DXamlCore::GetCurrent();
+        c = dx ? dx->GetHandle() : nullptr;
         if (!c) return nullptr;
         CDependencyObject *theme = load(c_themeResources);
         c->SetThemeResources(do_pointer_cast<CResourceDictionary>(theme));
@@ -450,6 +427,10 @@ static DWORD WINAPI reader_thread(void *)
     CHECK("a framework core on this thread", dx != nullptr && dx->GetHandle() != nullptr);
     if (!dx || !dx->GetHandle()) return 0;
 
+    /* the core's dictionaries and object writer, on the thread's core */
+    test_dictionary();
+    test_load();
+
     /* an x:String parsed by the thread's core, as XamlReader.Load parses it,
      * unboxed: an IReference<String> (an IPropertyValue of type String) */
     static const wchar_t xaml[] = L"<x:String " XMLNS XMLNS_X L">Hello, Kepler</x:String>";
@@ -547,16 +528,121 @@ static void test_startup()
     delete styles;
 }
 
+/* 32.3, end to end: the framework started on a thread of its own as
+ * Application.Start starts it on a desktop app's (a DispatcherQueue made on
+ * the thread, then DXamlCore::Initialize for islands: the control, its
+ * browser host and render target, the dispatcher, the default styles), then
+ * XamlReader.Load of a page: the browser host parses it into the core's
+ * elements (core/core/elements, core/text) through the type table
+ * (core/metadata), and the value boxer hands back their framework peers
+ * (dxaml/lib's Grid, TextBlock and Button), read through the public
+ * interfaces as an app reads them */
+static HSTRING text_of(IInspectable *o)
+{
+    HSTRING t = nullptr;
+    ctl::ComPtr<wf::IReference<HSTRING>> ref;
+    if (o && SUCCEEDED(o->QueryInterface(__uuidof(wf::IReference<HSTRING>), reinterpret_cast<void **>(ref.ReleaseAndGetAddressOf()))))
+        ref->get_Value(&t);
+    return t;
+}
+
+static bool is(HSTRING h, const wchar_t *s)
+{
+    return h && wcscmp(WindowsGetStringRawBuffer(h, nullptr), s) == 0;
+}
+
+static DWORD WINAPI page_thread(void *)
+{
+    ctl::ComPtr<msy::IDispatcherQueueControllerStatics> qstatics;
+    CHECK_HR("DispatcherQueueController's statics", wf::GetActivationFactory(
+        wrl_wrappers::HStringReference(RuntimeClass_Microsoft_UI_Dispatching_DispatcherQueueController).Get(), qstatics.ReleaseAndGetAddressOf()));
+    if (!qstatics) return 0;
+    ctl::ComPtr<msy::IDispatcherQueueController> controller;
+    CHECK_HR("a DispatcherQueue on the thread", qstatics->CreateOnCurrentThread(&controller));
+    if (!controller) return 0;
+
+    CHECK_HR("DXamlCore::Initialize (as Application.Start's)", DirectUI::DXamlCore::Initialize(InitializationType::IslandsOnly));
+    DirectUI::DXamlCore *dx = DirectUI::DXamlCore::GetCurrent();
+    CHECK("the framework's core on the thread, with its browser host", dx && dx->GetHandle() && dx->GetHandle()->GetBrowserHost());
+    if (!dx || !dx->GetHandle() || !dx->GetHandle()->GetBrowserHost()) return 0;
+
+    ctl::ComPtr<DirectUI::XamlReaderFactory> reader;
+    ctl::ComObject<DirectUI::XamlReaderFactory>::CreateInstance(reader.ReleaseAndGetAddressOf());
+    ctl::ComPtr<xaml_markup::IXamlReaderStatics> statics;
+    if (reader) reader.As(&statics);
+    ctl::ComPtr<IInspectable> page;
+    CHECK_HR("XamlReader.Load of a page", statics ? statics->Load(wrl_wrappers::HStringReference(
+        L"<Grid " XMLNS XMLNS_X L"><TextBlock x:Name='title' Text='Hello, Kepler'/><Button Content='Click me'/></Grid>").Get(),
+        page.ReleaseAndGetAddressOf()) : E_FAIL);
+
+    ctl::ComPtr<xaml_controls::IGrid> grid;
+    CHECK("the page is a Grid", page && SUCCEEDED(page.As(&grid)));
+    ctl::ComPtr<xaml_controls::IPanel> panel;
+    ctl::ComPtr<wfc::IVector<xaml::UIElement *>> children;
+    CHECK("its children, through IPanel", page && SUCCEEDED(page.As(&panel)) && SUCCEEDED(panel->get_Children(&children)));
+    UINT32 n = 0;
+    CHECK("two of them", children && SUCCEEDED(children->get_Size(&n)) && n == 2);
+    if (n != 2) return 0;
+
+    ctl::ComPtr<xaml::IUIElement> first, second;
+    children->GetAt(0, &first);
+    children->GetAt(1, &second);
+    ctl::ComPtr<xaml_controls::ITextBlock> tb;
+    HSTRING text = nullptr;
+    CHECK("the first a TextBlock", first && SUCCEEDED(first.As(&tb)));
+    CHECK("its Text", tb && SUCCEEDED(tb->get_Text(&text)) && is(text, L"Hello, Kepler"));
+    WindowsDeleteString(text);
+    ctl::ComPtr<xaml::IFrameworkElement> fe;
+    HSTRING name = nullptr;
+    CHECK("its x:Name, through IFrameworkElement", first && SUCCEEDED(first.As(&fe)) && SUCCEEDED(fe->get_Name(&name)) &&
+          is(name, L"title"));
+    WindowsDeleteString(name);
+
+    ctl::ComPtr<xaml_controls::IButton> button;
+    ctl::ComPtr<xaml_controls::IContentControl> cc;
+    ctl::ComPtr<IInspectable> content;
+    CHECK("the second a Button", second && SUCCEEDED(second.As(&button)));
+    CHECK("its Content, through IContentControl", second && SUCCEEDED(second.As(&cc)) && SUCCEEDED(cc->get_Content(&content)));
+    HSTRING label = text_of(content.Get());
+    CHECK("the string it was given", is(label, L"Click me"));
+    WindowsDeleteString(label);
+
+    /* and the tree is the core's: the TextBlock's core object hangs off the
+     * Grid's (FrameworkElement.Parent says null, as on Windows, until the
+     * page joins a live tree) */
+    ctl::ComPtr<xaml::IDependencyObject> parent;
+    CHECK("no public Parent outside a live tree", fe && SUCCEEDED(fe->get_Parent(&parent)) && !parent);
+    CHECK("the TextBlock's core parent is the Grid's", fe && grid &&
+          static_cast<DirectUI::FrameworkElement *>(fe.Get())->GetHandle()->GetParentInternal() ==
+          static_cast<DirectUI::Grid *>(grid.Get())->GetHandle());
+
+    page.Reset(); grid.Reset(); panel.Reset(); children.Reset(); first.Reset(); second.Reset();
+    tb.Reset(); fe.Reset(); button.Reset(); cc.Reset(); content.Reset(); parent.Reset();
+    ctl::ComPtr<msy::IDispatcherQueueController2> controller2;
+    if (SUCCEEDED(controller.As(&controller2))) controller2->ShutdownQueue();
+    return 0;
+}
+
+static void test_page()
+{
+    HANDLE t = CreateThread(nullptr, 0, page_thread, nullptr, 0, nullptr);
+    CHECK("the page's thread", t && WaitForSingleObject(t, 120000) == WAIT_OBJECT_0);
+    if (t) CloseHandle(t);
+}
+
 int main()
 {
     DirectUI::StaticLockGlobalInit();
-    DXamlInstanceStorage::Initialize();     /* (as the framework's DllMain does: its per-thread core's slot) */
-    test_dictionary();
-    test_load();
+    DXamlInstanceStorage::Initialize();     /* (as the framework's DllMain does: its per-thread core's slot, */
+    DirectUI::FrameworkApplication::GlobalInit();   /* the application's lock, */
+    IPlatformServices *pal = nullptr;                   /* and the platform layer's services) */
+    CHECK_HR("ObtainPlatformServices", ObtainPlatformServices(&pal));
+    SystemThemingInterop::OverrideSystemTheme(Theming::Theme::Dark);
     test_framework();
     test_control();
     test_startup();
     test_reader();
+    test_page();
     printf("xamlloadtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     return fail != 0;

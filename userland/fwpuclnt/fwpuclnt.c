@@ -45,6 +45,29 @@ typedef struct { DWORD magic; UINT32 next; int layer; BOOL any_layer; BOOL subl;
 static void *zalloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
 static void zfree(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 
+/* What these functions hand out, which FwpmFreeMemory0 frees: each block
+ * behind a header, and an Enum's array of entries freed with its entries */
+#define OUT_MAGIC  0x5450554Fu            /* "OUPT" */
+#define LIST_MAGIC 0x5453494Cu            /* "LIST" */
+typedef struct { DWORD magic, count; UINT64 align; } OutHeader;
+
+static void *out_alloc(SIZE_T n, DWORD magic)
+{
+    OutHeader *h = zalloc(sizeof(OutHeader) + n);
+    if (!h) return NULL;
+    h->magic = magic;
+    return h + 1;
+}
+static void out_free(void *p)
+{
+    if (!p) return;
+    OutHeader *h = (OutHeader *)p - 1;
+    if (h->magic == LIST_MAGIC) for (DWORD i = 0; i < h->count; i++) out_free(((void **)p)[i]);
+    h->magic = 0;
+    zfree(h);
+}
+static void list_done(void *list, UINT32 n) { ((OutHeader *)list - 1)->count = n; }
+
 static const GUID *const g_layers[NOVAWFP_LAYERS] = {
     &FWPM_LAYER_INBOUND_TRANSPORT_V4, &FWPM_LAYER_INBOUND_TRANSPORT_V6,
     &FWPM_LAYER_OUTBOUND_TRANSPORT_V4, &FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
@@ -161,7 +184,7 @@ FWPAPI DWORD WINAPI FwpmEngineGetOption0(HANDLE engineHandle, int option, FWP_VA
 {
     (void)option;
     if (!engine_of(engineHandle) || !value) return ERROR_INVALID_PARAMETER;
-    FWP_VALUE0 *v = zalloc(sizeof(*v));
+    FWP_VALUE0 *v = out_alloc(sizeof(*v), OUT_MAGIC);
     if (!v) return ERROR_NOT_ENOUGH_MEMORY;
     v->type = FWP_UINT32;                        /* (net events, packet queuing...: off) */
     *value = v;
@@ -348,7 +371,7 @@ static void put_wide(wchar_t *dst, int cap, const char *s)
 
 static FWPM_FILTER0 *filter_out(const NovaWfpFilter *in)
 {
-    FilterOut *o = zalloc(sizeof(*o));
+    FilterOut *o = out_alloc(sizeof(*o), OUT_MAGIC);
     if (!o) return NULL;
     FWPM_FILTER0 *f = &o->f;
     memcpy(&f->filterKey, &in->key, sizeof(GUID));
@@ -473,9 +496,9 @@ FWPAPI DWORD WINAPI FwpmFilterEnum0(HANDLE engineHandle, HANDLE enumHandle, UINT
     *numEntriesReturned = 0;
     if (!numEntriesRequested) return ERROR_SUCCESS;
     if (numEntriesRequested > 1024) numEntriesRequested = 1024;
-    FWPM_FILTER0 **list = zalloc(numEntriesRequested * sizeof(*list));
+    FWPM_FILTER0 **list = out_alloc(numEntriesRequested * sizeof(*list), LIST_MAGIC);
     NovaWfpFilter *f = zalloc(sizeof(*f));
-    if (!list || !f) { zfree(list); zfree(f); return ERROR_NOT_ENOUGH_MEMORY; }
+    if (!list || !f) { out_free(list); zfree(f); return ERROR_NOT_ENOUGH_MEMORY; }
     UINT32 n = 0;
     while (n < numEntriesRequested) {
         memset(f, 0, sizeof(*f));
@@ -486,9 +509,10 @@ FWPAPI DWORD WINAPI FwpmFilterEnum0(HANDLE engineHandle, HANDLE enumHandle, UINT
         if (h->by_provider && (!f->has_provider || memcmp(&f->provider, &h->provider, sizeof(GUID)))) continue;
         if (!(list[n] = filter_out(f))) break;
         n++;
+        list_done(list, n);
     }
     zfree(f);
-    if (!n) { zfree(list); return ERROR_SUCCESS; }
+    if (!n) { out_free(list); return ERROR_SUCCESS; }
     *entries = list;
     *numEntriesReturned = n;
     return ERROR_SUCCESS;
@@ -512,7 +536,7 @@ typedef struct { FWPM_PROVIDER0 p; wchar_t name[NOVAWFP_NAME_MAX]; } ProviderOut
 
 static FWPM_SUBLAYER0 *sublayer_out(const NovaWfpSublayer *in)
 {
-    SublayerOut *o = zalloc(sizeof(*o));
+    SublayerOut *o = out_alloc(sizeof(*o), OUT_MAGIC);
     if (!o) return NULL;
     memcpy(&o->s.subLayerKey, &in->key, sizeof(GUID));
     put_wide(o->name, NOVAWFP_NAME_MAX, in->name);
@@ -586,7 +610,7 @@ FWPAPI DWORD WINAPI FwpmSubLayerEnum0(HANDLE engineHandle, HANDLE enumHandle, UI
     *numEntriesReturned = 0;
     if (!numEntriesRequested) return ERROR_SUCCESS;
     if (numEntriesRequested > 256) numEntriesRequested = 256;
-    FWPM_SUBLAYER0 **list = zalloc(numEntriesRequested * sizeof(*list));
+    FWPM_SUBLAYER0 **list = out_alloc(numEntriesRequested * sizeof(*list), LIST_MAGIC);
     if (!list) return ERROR_NOT_ENOUGH_MEMORY;
     UINT32 n = 0;
     while (n < numEntriesRequested) {
@@ -598,8 +622,9 @@ FWPAPI DWORD WINAPI FwpmSubLayerEnum0(HANDLE engineHandle, HANDLE enumHandle, UI
         if (h->by_provider && (!s.has_provider || memcmp(&s.provider, &h->provider, sizeof(GUID)))) continue;
         if (!(list[n] = sublayer_out(&s))) break;
         n++;
+        list_done(list, n);
     }
-    if (!n) { zfree(list); return ERROR_SUCCESS; }
+    if (!n) { out_free(list); return ERROR_SUCCESS; }
     *entries = list;
     *numEntriesReturned = n;
     return ERROR_SUCCESS;
@@ -644,7 +669,7 @@ FWPAPI DWORD WINAPI FwpmProviderGetByKey0(HANDLE engineHandle, const GUID *key, 
     memcpy(&p.key, key, sizeof(GUID));
     DWORD r = ctl(e->session, NOVAWFP_PROVIDER_GET, &p);
     if (r) return r;
-    ProviderOut *o = zalloc(sizeof(*o));
+    ProviderOut *o = out_alloc(sizeof(*o), OUT_MAGIC);
     if (!o) return ERROR_NOT_ENOUGH_MEMORY;
     memcpy(&o->p.providerKey, &p.key, sizeof(GUID));
     put_wide(o->name, NOVAWFP_NAME_MAX, p.name);
@@ -673,7 +698,7 @@ FWPAPI DWORD WINAPI FwpmGetAppIdFromFileName0(const wchar_t *fileName, FWP_BYTE_
     const wchar_t *rest = full[1] == L':' ? full + 2 : full;
     int rn = 0;
     while (rest[rn]) rn++;
-    FWP_BYTE_BLOB *b = zalloc(sizeof(*b) + (SIZE_T)(dn + rn + 1) * sizeof(wchar_t));
+    FWP_BYTE_BLOB *b = out_alloc(sizeof(*b) + (SIZE_T)(dn + rn + 1) * sizeof(wchar_t), OUT_MAGIC);
     if (!b) return ERROR_NOT_ENOUGH_MEMORY;
     wchar_t *w = (wchar_t *)(b + 1);
     for (int i = 0; i < dn; i++) w[i] = dev[i];
@@ -685,11 +710,11 @@ FWPAPI DWORD WINAPI FwpmGetAppIdFromFileName0(const wchar_t *fileName, FWP_BYTE_
     return ERROR_SUCCESS;
 }
 
-/* Frees what the Get, Enum and AppId calls handed out (one allocation
- * each; an Enum's array of them goes with the array) and sets *p NULL */
+/* Frees what the Get, Enum and AppId calls handed out (an Enum's
+ * entries go with their array) and sets *p NULL */
 FWPAPI void WINAPI FwpmFreeMemory0(void **p)
 {
     if (!p || !*p) return;
-    zfree(*p);
+    out_free(*p);
     *p = NULL;
 }

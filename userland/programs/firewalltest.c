@@ -342,17 +342,19 @@ static void wfp_tests(void)
 }
 
 /* ---- the firewall ---- */
-static int category_set(DWORD cat)              /* every network's, as Set-NetConnectionProfile would */
+/* Every network's, as Set-NetConnectionProfile would (in the 64-bit view:
+ * NetworkList is not shared with WOW6432Node) */
+static int category_set(DWORD cat)
 {
     HKEY k;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, NETLIST_KEY, 0, KEY_ALL_ACCESS, &k)) return 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, NETLIST_KEY, 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY, &k)) return 0;
     int n = 0;
     WCHAR name[64];
     for (DWORD i = 0;; i++) {
         DWORD len = 64;
         if (RegEnumKeyExW(k, i, name, &len, NULL, NULL, NULL, NULL)) break;
         HKEY p;
-        if (RegOpenKeyExW(k, name, 0, KEY_ALL_ACCESS, &p)) continue;
+        if (RegOpenKeyExW(k, name, 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY, &p)) continue;
         if (!RegSetValueExW(p, L"Category", 0, REG_DWORD, (const BYTE *)&cat, sizeof(cat))) n++;
         RegCloseKey(p);
     }

@@ -38,14 +38,15 @@ static void zfree(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 /* ---------------------------------------------------------------------------
  * The kernel's firewall
  * ------------------------------------------------------------------------- */
-/* An HRESULT (the kernel's are 32-bit values, zero-extended) or a count */
+/* An HRESULT or a count (the kernel's answer is 32 bits wide: zero-extended
+ * for 64-bit programs, sign-extended in a 32-bit one's register) */
 static HRESULT fw(UINT32 op, UINT32 profile, void *req, LONG *result)
 {
-    UINT64 r = (UINT64)NtNovaSockCtl(0, NOVAFW_FW, (ULONG_PTR)(op | (profile << 16)), req);
-    if (r >= 0x80000000u && r <= 0xFFFFFFFFu) {
+    UINT32 r = (UINT32)(ULONG_PTR)NtNovaSockCtl(0, NOVAFW_FW, (ULONG_PTR)(op | (profile << 16)), req);
+    if (r >= 0x80000000u) {
         if (r == NOVAWFP_E_NOT_FOUND) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         if (r == NOVAWFP_E_INVALID_PARAMETER) return E_INVALIDARG;
-        return (HRESULT)(UINT32)r;
+        return (HRESULT)r;
     }
     if (result) *result = (LONG)r;
     return S_OK;
@@ -300,11 +301,12 @@ static HRESULT rule_named(BSTR name, NovaFwRule *r)
 {
     char want[NOVAFW_TEXT];
     to_utf8(name, want, sizeof(want));
-    for (LONG i = 0;; i++) {
+    for (LONG i = 0; i < 4096; i++) {                    /* (the firewall holds 512) */
         HRESULT hr = rule_at(i, r);
         if (hr != S_OK) return hr == S_FALSE ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : hr;
         if (eq_nocase(r->name, want)) return S_OK;
     }
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
 
 static HRESULT STDMETHODCALLTYPE rules_qi(INetFwRules *t, REFIID riid, void **ppv)
@@ -543,7 +545,7 @@ static HRESULT group_walk(LONG profiles, BSTR group, int enable, VARIANT_BOOL *a
     to_utf8(group, want, sizeof(want));
     if (!want[0]) return E_INVALIDARG;
     BOOL any = FALSE, on = TRUE;
-    for (LONG i = 0;; i++) {
+    for (LONG i = 0; i < 4096; i++) {
         NovaFwRule r;
         HRESULT hr = rule_at(i, &r);
         if (FAILED(hr)) return hr;

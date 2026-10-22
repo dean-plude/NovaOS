@@ -682,6 +682,13 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'appx', 'mktes
 for n in sorted(os.listdir(appxpkg)):
     if n.endswith('.msix'):
         built.append((f'\\Tests\\Appx\\{n}', os.path.join(appxpkg, n)))
+# (and the one winui2test installs, tools/appx/mkuwptest.py: a copy of
+# winui2test run as a UWP app)
+if os.path.exists(os.path.join(out, 'winui2test.exe')):
+    uwppkg = os.path.join(out, 'uwptest')
+    run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'appx', 'mkuwptest.py'), uwppkg,
+         os.path.join(out, 'winui2test.exe')])
+    built.append(('\\Tests\\Appx\\XamlUwpTest.msix', os.path.join(uwppkg, 'XamlUwpTest.msix')))
 # 3a2a. the driver package the drvtest self-test installs (tools/drivertest/mkdriver.py)
 drvdir = os.path.join(out, 'drivertest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'drivertest', 'mkdriver.py'), drvdir])

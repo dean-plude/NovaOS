@@ -1211,9 +1211,19 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `userland/microsoft_ui_xaml/mergexaml.py`, `CommonStyles` included) into
   the `19h1_themeresources.xaml` and `19h1_generic.xaml` files
   `XamlControlsResources` and the controls load (`C:\Programs\Microsoft.UI.Xaml\Themes`;
-  loading them waits on the framework's data binding and 32.4's fonts).  Next: data binding,
-  `Windows.UI.Xaml.Application.Start`'s UWP path (CoreApplication's
-  activation) with `Window.Current`, and the controls Calculator uses
+  loading them waited on the framework's data binding and 32.4's fonts).
+  Fourth part done: the framework's data binding (`{Binding}`, `Binding`,
+  `BindingExpression`, `RelativeSource`, property paths) and control
+  templates (`ApplyTemplate` with `{TemplateBinding}` and `Style`
+  templates, the default styles' theme transitions), the parser's error
+  texts, and the UWP start-up as far as the app's `Application`:
+  `winui2test` installs itself as a UWP app and starts by its AUMID,
+  `Application.Start` takes its UWP route (the framework's view source,
+  view and `CoreWindow` wrapper; `CoreApplication`'s `ICoreApplication2`
+  and `CoreCursor`).  Next: the animation component (the core's
+  `DispatcherTimer`, where the UWP route stops) on to `Window.Current`,
+  WinUI 2's theme resources (`AcrylicBrush`'s inherited `FallbackColor`)
+  and its controls' default styles, and the controls Calculator uses
   (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
   `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
   Native app, which needs that runtime's framework packages too.

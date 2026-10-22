@@ -44,6 +44,16 @@ UXAPI HTHEME WINAPI OpenThemeDataForDpi(HWND w, LPCWSTR classes, UINT dpi) { (vo
 UXAPI HTHEME WINAPI GetWindowTheme(HWND w) { (void)w; return 0; }
 UXAPI HRESULT WINAPI CloseThemeData(HTHEME t) { (void)t; return S_OK; }
 
+/* the theme's animation and timing function data (XAML's theme transitions
+ * read their storyboards' timings and stagger here): with no theme there is
+ * none, so the caller keeps its own defaults */
+UXAPI HRESULT WINAPI GetThemeAnimationProperty(HTHEME t, int board, int target, int prop, void *v, DWORD n, DWORD *out)
+{ (void)t; (void)board; (void)target; (void)prop; (void)v; (void)n; if (out) *out = 0; return E_HANDLE_; }
+UXAPI HRESULT WINAPI GetThemeAnimationTransform(HTHEME t, int board, int target, DWORD i, void *v, DWORD n, DWORD *out)
+{ (void)t; (void)board; (void)target; (void)i; (void)v; (void)n; if (out) *out = 0; return E_HANDLE_; }
+UXAPI HRESULT WINAPI GetThemeTimingFunction(HTHEME t, int id, void *v, DWORD n, DWORD *out)
+{ (void)t; (void)id; (void)v; (void)n; if (out) *out = 0; return E_HANDLE_; }
+
 UXAPI HRESULT WINAPI SetWindowTheme(HWND w, LPCWSTR app, LPCWSTR idlist) { (void)w; (void)app; (void)idlist; return S_OK; }
 UXAPI HRESULT WINAPI SetWindowThemeAttribute(HWND w, int type, PVOID attr, DWORD n)
 { (void)w; (void)type; (void)attr; (void)n; return S_OK; }

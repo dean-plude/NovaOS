@@ -256,6 +256,12 @@ CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../AsyncDownlo
 # host's environment, a download request)
 CORE_SOURCES['win/shared/sl/shared.vcxproj'] += ('../UIAHostEnvironmentInfo.cpp',)
 CORE_SOURCES['hostpalplatmisc.vcxproj'] += ('host/win/browserdesktop/windwnreq.cpp',)
+# (and the framework's error messages, which the browser host gives the
+# error service (a parser error's text): NovaOS's
+# CXcpBrowserHost::GetNonLocalizedErrorString over Microsoft's string table,
+# src/error_strings.cpp; Microsoft's reads it from its resource DLL)
+next(c for c in CORE_LIBRARIES if c[0] == 'hostpalplatmisc.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'error_strings.cpp'))
 CORE_SOURCES.update({
     'core/hw/hw.vcxproj': ('CompositorTreeHost.cpp', 'hwwalk.cpp', 'hwtexturemgr.cpp', 'hwsurfacecache.cpp'),
     'plat/win/desktop/platwindesktop.vcxproj': ('windowsgraphicsdevicemanager.cpp', 'd3d11device.cpp',
@@ -349,8 +355,9 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # reads XML with XmlLite, the URI library builds URIs with urlmon, the
 # framework turns the legacy IMEs off with imm32, the graphics device draws
 # its first text with DirectWrite, an element takes focus with a correlation
-# GUID from rpcrt4)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4']
+# GUID from rpcrt4, the theme transitions read the theme's animation timings
+# with uxtheme)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -377,12 +384,28 @@ def generated(b):
                 open(p, 'w').write(text)
             # (before the spellings, which then name them)
             dwrite_headers(_msvcp(b).mingw_include(), d)
+            error_strings(os.path.join(d, 'xaml_error_strings.g.inc'))
             fold(os.path.join(d, 'fold'), component_includes() + project_includes() + core_includes() + source_dirs() +
                  [i for c in CORE_LIBRARIES for i in vcxproj.read(os.path.join(XCP, c[0]), PROPS)['includes']] +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
         return d
+
+
+COMMON_ERRORS = os.path.join(XCP, 'win', 'agcore.debug', 'CommonErrors.rc')
+
+
+def error_strings(out):
+    """OUT: the framework's non-localized error messages (Microsoft's
+    win/agcore.debug/CommonErrors.rc, the string table its
+    MUX.resources.common.dll holds) as C++ table rows, { ID, L"text" },
+    each guarded by its ID's #define (src/error_strings.cpp)"""
+    text = open(COMMON_ERRORS, encoding='utf-8-sig').read()
+    rows = re.findall(r'^\s*([A-Z][A-Z0-9_]+)\s+"((?:[^"\\]|\\.)*)"', text, re.M)
+    body = ''.join('#ifdef %s\n{ %s, L"%s" },\n#endif\n' % (n, n, t) for n, t in rows)
+    if not os.path.exists(out) or open(out).read() != body:
+        open(out, 'w').write(body)
 
 
 _DWRITE = ('dwrite.h', 'dwrite_1.h', 'dwrite_2.h', 'dwrite_3.h')
@@ -963,6 +986,80 @@ if not any(c[0] == _EXTMETA for c in CORE_LIBRARIES):
 _VSM = 'components/vsm/lib/Microsoft.UI.Xaml.VisualStateMachine.vcxproj'
 CORE_LIBRARIES.append((_VSM, _VSM, 'components/pch/precomp.h', []))
 CORE_SOURCES[_VSM] = tuple('../' + os.path.basename(x) for x in vcxproj.read(os.path.join(XCP, _VSM), PROPS)['sources'])
+# (32.5 part 4, data binding: the framework's {Binding}, which the
+# controls' default styles and WinUI 2's use: the Binding a {Binding}
+# markup extension makes and its base, the BindingExpression it sets on its
+# target (BindingOperations) with its base, RelativeSource, the property
+# path (PropertyPath, its parser and its steps: a dependency property's, a
+# CLR-style property's through the type's IXamlMember or
+# ICustomPropertyProvider, a map's, an indexer's) and the value converters
+# between a source's value and the target's type, each its generated class
+# and its partial one)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'Binding_Partial', 'BindingExpression_Partial', 'DefaultValueConverter', 'DynamicValueConverter',
+    'DependencyObjectPropertyAccess', 'IndexerPropertyAccess', 'MapPropertyAccess', 'PropertyAccessPathStep',
+    'PropertyInfoPropertyAccess', 'PropertyProviderPropertyAccess', 'PropertyPath', 'PropertyPathCommonNames',
+    'PropertyPathParser', 'PropertyPathStep', 'PropertyPathStepDescriptor', 'PropertyPath_Partial',
+    'SourceAccessPathStep', 'IntIndexerPathStep', 'StringIndexerPathStep',
+    # (with what they stand on: the markup extensions' base, the property
+    # changed listeners, the bindable vectors' wrappers, the binding's
+    # debug output)
+    'INPCListenerBase', 'BindableObservableVectorWrapper', 'BindableVectorWrapper', 'DebugOutput',
+    # (and the markup extensions' service provider the parser hands a
+    # {Binding}, with its target property, and the app's MarkupExtension)
+    'ParserServiceProvider_Partial', 'ProvideValueTargetProperty_Partial', 'MarkupExtension_Partial',
+    # (and the effective value a dependency object keeps for a property set
+    # by an expression, and VisualTreeHelper, which a binding walks up to
+    # its templated parent and data context with)
+    'EffectiveValueEntry', 'VisualTreeHelper',
+    # (and the layout transitions' members, LayoutTransition_partial.cpp: a
+    # theme transition's state, which the default styles' transitions
+    # prepare as the parser makes them)
+    'LayoutTransition_partial', 'ThemeGenerator', 'StaggerFunctionBase_Partial',
+    # (and a {TemplateBinding} to a property the core does not template-bind
+    # itself, TemplateBindingExpression)
+    'TemplateBindingExpression',
+    # (and XamlCompositionBrushBase, the base of WinUI 2's AcrylicBrush and
+    # RevealBrush: FallbackColor, which the theme resources set)
+    'XamlCompositionBrushBase_Partial')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
+                                                      'BindingExpressionBase', 'BindingFailedEventArgs',
+                                                      'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
+                                                      'XamlResourceReferenceFailedEventArgs', 'ParserServiceProvider',
+                                                      'ProvideValueTargetProperty', 'MarkupExtension',
+                                                      'StaggerFunctionBase', 'PVLStaggerFunction',
+                                                      'XamlCompositionBrushBase'))
+# (with its core half, components/brushes' CXamlCompositionBrush)
+CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../XamlCompositionBrush.cpp',)
+# (and the style component, components/style: CStyle's own members and
+# the optimized style a style's setters are read from as it applies, which
+# hands a control its Template)
+_STYLE = 'components/style/lib/Microsoft.UI.Xaml.Style.vcxproj'
+CORE_LIBRARIES.append((_STYLE, _STYLE, 'components/pch/precomp.h', []))
+CORE_SOURCES[_STYLE] = tuple('../' + os.path.basename(x) for x in vcxproj.read(os.path.join(XCP, _STYLE), PROPS)['sources'])
+# (and the core's generated classes, core/controls/generated: the core
+# halves of the framework-only types (each a CDependencyObject subclass
+# its generated header defines) and their OnCoreCreate functions, through
+# which the parser makes, among others, the theme transitions the default
+# styles' ItemContainerTransitions hold)
+_GENERATED = 'core/controls/generated/CoreControlsGenerated.vcxproj'
+CORE_LIBRARIES.append((_GENERATED, 'core/core/elements/sources.props', 'core/core/elements/pch/precomp.h', []))
+CORE_SOURCES[_GENERATED] = ('GeneratedClasses.g.cpp',)
+CORE_FIRST[_GENERATED] = CORE_FIRST['core/core/elements/lib/elements.vcxproj']
+PROJECT_DEFINES[_GENERATED] = ['EXP_CLANG']   # (its runtime profiler markers, as the type table's)
+# (and the event arguments' base, DirectUI::EventArgs, with the failed
+# resource reference's arguments the debug output raises; built once,
+# whichever step adds it first (32.4's page too))
+if '../FrameworkEventArgs.cpp' not in CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj']:
+    CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../FrameworkEventArgs.cpp',)
+# (and the UWP start-up a packaged app's Application.Start takes
+# (FrameworkApplication::StartUWP, RunInActivationMode): the view source it
+# hands CoreApplication.Run (twinapi.appcore) and the view that makes, which
+# starts the framework on the view's thread, gives it the view's CoreWindow
+# (CoreWindowWrapper) and runs the window's message loop)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../FrameworkView_Partial.cpp', '../FrameworkViewSource_Partial.cpp', '../CoreWindowWrapper.cpp',
+    '../winrtgeneratedclasses/FrameworkView.g.cpp', '../winrtgeneratedclasses/FrameworkViewSource.g.cpp')
 WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

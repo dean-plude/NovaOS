@@ -74,6 +74,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install runtime dependencies
       run: tools/ci/install.sh runtime
+      timeout-minutes: 25
     - name: Select accelerator
       run: tools/ci/enable-kvm.sh optional
       env:
@@ -107,6 +108,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install runtime dependencies
       run: tools/ci/install.sh runtime
+      timeout-minutes: 25
     - name: Select accelerator
       run: tools/ci/enable-kvm.sh optional
       env:
@@ -159,6 +161,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install runtime dependencies
       run: tools/ci/install.sh runtime
+      timeout-minutes: 25
     - name: Select accelerator
       run: tools/ci/enable-kvm.sh optional
       env:

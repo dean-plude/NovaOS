@@ -17,8 +17,19 @@ case "$profile" in
     runtime) ;;
     *) echo "unknown dependency profile $profile" >&2; exit 2 ;;
 esac
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${base[@]}"
+# A runner's apt can stall for the whole job (devices: 60 minutes without output): bound each attempt and try twice.
+apt_install() {
+    sudo apt-get update -qq &&
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${base[@]}"
+}
+export -f apt_install
+export base_list="${base[*]}"
+for attempt in 1 2; do
+    if timeout 600 bash -c 'read -ra base <<< "$base_list"; '"$(declare -f apt_install)"'; apt_install'; then break; fi
+    [ "$attempt" = 2 ] && { echo "apt install failed twice" >&2; exit 1; }
+    echo "apt install stalled or failed: trying once more" >&2
+    sudo pkill -x apt-get || true
+done
 if [ "$profile" = graphics ] || [ "$profile" = vkd3d ]; then
     pip install --user --break-system-packages -q 'meson==1.9.0' pycotap
     echo "$HOME/.local/bin" >> "$GITHUB_PATH"

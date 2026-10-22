@@ -178,6 +178,15 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
 # (and the framework's peer base class, DirectUI::DependencyObject, the
 # Window's)
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../DependencyObject.cpp',)
+# (and, for an app's dependency property's changed callback, the old and
+# new values it is given and the event arguments it is called with: Xaml
+# 32.5, WinUI 2's InfoBadge, whose Value's callback)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../PropertyChangedParamsHelper.cpp', '../DependencyPropertyChangedEventArgs_Partial.cpp',
+    '../winrtgeneratedclasses/DependencyPropertyChangedEventArgs.g.cpp',
+    # (which moves the control to its visual state, VisualStateManager's
+    # statics)
+    '../VisualStateManager_Partial.cpp', '../winrtgeneratedclasses/VisualStateManager.g.cpp')
 # (whose stubs, which the component tests keep, a program on the core links
 # renamed out)
 CORE_STUB_RENAMES = {'DependencyObject_Stub.cpp': ('GetHandle', 'GetModernDoubleValue')}
@@ -699,7 +708,9 @@ CORE_SOURCES[_METADATA] = ('../Activators.g.cpp', '../DynamicMetadata.g.cpp', '.
 # renamed out)
 del CORE_STUB_RENAMES['DependencyObject_Stub.cpp']
 CORE_STUB_RENAMES['core_stubs.cpp'] = ('OnAssociationFailure', 'GetOpenPopupWithChild', 'GetResourcesNoCreateNoRef',
-                                      'GetLogicalParentNoRef', 'GetTemplatedParent', 'NOVA_ON_THE_CORE')
+                                      'GetLogicalParentNoRef', 'GetTemplatedParent', 'NOVA_ON_THE_CORE',
+                                      # (components/vsm's own, Xaml 32.5)
+                                      'GetGroupCollectionFromVisualState')
 CORE_SERVICES_STUBS += ('DependencyObject_Stub.cpp', 'MetadataAPI_Stub.cpp', 'Storyboard_Stub.cpp',
                         'elements_stubs.cpp', 'property_data.cpp', 'type_activations.cpp')
 # (and the element component, components/elements: the elements' core
@@ -883,6 +894,22 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
     # (and the enums' WinRT boxes, Boxes.g.cpp: an enum value set through
     # its property boxed, or unboxed)
     '../winrtgeneratedclasses/Boxes.g.cpp')
+# (32.5, WinUI 2 on the system XAML) the framework's metadata provider,
+# components/ExtMetadataProvider: what MetadataAPI asks a type name it does
+# not know, through the app's provider (its Application's
+# IXamlMetadataProvider, which a WinUI 2 app's forwards to WinUI 2's);
+# built once, whichever step adds it first (32.4's theme resources too)
+_EXTMETA = 'components/ExtMetadataProvider/lib/Microsoft.UI.Xaml.ExtMetadataProvider.vcxproj'
+if not any(c[0] == _EXTMETA for c in CORE_LIBRARIES):
+    CORE_LIBRARIES.append((_EXTMETA, _EXTMETA, 'components/pch/precomp.h', []))
+    CORE_SOURCES[_EXTMETA] = tuple('../' + os.path.basename(x) for x in
+                                   vcxproj.read(os.path.join(XCP, _EXTMETA), PROPS)['sources'])
+# (and the visual state machine under VisualStateManager's statics,
+# components/vsm: a WinUI 2 control's property callbacks move it to its
+# states)
+_VSM = 'components/vsm/lib/Microsoft.UI.Xaml.VisualStateMachine.vcxproj'
+CORE_LIBRARIES.append((_VSM, _VSM, 'components/pch/precomp.h', []))
+CORE_SOURCES[_VSM] = tuple('../' + os.path.basename(x) for x in vcxproj.read(os.path.join(XCP, _VSM), PROPS)['sources'])
 WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

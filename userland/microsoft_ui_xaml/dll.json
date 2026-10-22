@@ -1,0 +1,6 @@
+{
+  "deps": ["msvcp140", "d2d1", "ole32", "oleaut32", "user32", "advapi32", "kernel32", "ntdll", "msvcrt", "vcruntime140"],
+  "x64_only": true,
+  "tlssup": true,
+  "file": "Microsoft.UI.Xaml.dll"
+}

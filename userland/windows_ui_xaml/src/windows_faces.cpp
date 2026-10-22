@@ -80,8 +80,19 @@ extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void 
         *out = t;
         return S_OK;
     }
-    // (the object's identity, and every other interface, are the object's)
-    return qi(t->obj, &iid, out);
+    // (the object's identity, and every other interface, are the object's;
+    // one it has only in the other framework's form is a face of that, as
+    // the framework asking an app's IXamlType for another of its interfaces)
+    HRESULT hr = qi(t->obj, &iid, out);
+    const NovaFace *f;
+    void *w;
+    if (hr == E_NOINTERFACE && (f = find(iid)) && !(f->flags & (NOVA_FACE_DELEGATE | NOVA_FACE_OVERRIDE)) &&
+        !(f->flags & NOVA_FACE_REVERSE) == !(t->face->flags & NOVA_FACE_REVERSE) &&
+        SUCCEEDED(qi(t->obj, f->target, &w))) {
+        *out = tear(f, w, TRUE);
+        return *out ? S_OK : E_OUTOFMEMORY;
+    }
+    return hr;
 }
 
 extern "C" ULONG STDMETHODCALLTYPE nova_tear_addref(NovaTear *t)
@@ -478,6 +489,22 @@ extern "C" HRESULT nova_xaml_face_query(REFIID iid, void **out, HRESULT (*impl)(
     if (FAILED(impl(ctx, *f->target, &p)) || !p)
         return E_NOINTERFACE;
     *out = tear(f, p, TRUE);
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+// a framework interface @iid a composed object has no answer of its own
+// for, which its outer implements as Windows' (a WinUI 2 app's Application
+// is its IXamlMetadataProvider, which XAML's metadata asks the app's
+// Application for): the reverse face over the outer's Windows interface
+extern "C" HRESULT nova_xaml_outer_face(REFIID iid, IInspectable *outer, void **out)
+{
+    const NovaFace *f = find(iid);
+    if (!f || !(f->flags & NOVA_FACE_REVERSE) || (f->flags & (NOVA_FACE_OVERRIDE | NOVA_FACE_DELEGATE)) || !outer)
+        return E_NOINTERFACE;
+    void *w;
+    if (FAILED(qi(outer, f->target, &w)))
+        return E_NOINTERFACE;
+    *out = tear(f, w, TRUE);
     return *out ? S_OK : E_OUTOFMEMORY;
 }
 

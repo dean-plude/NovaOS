@@ -1,0 +1,21 @@
+C++/WinRT, vendored for NovaOS
+==============================
+
+Source: https://github.com/microsoft/cppwinrt (MIT, LICENSE), tag
+2.0.250303.1 (commit 69c78cfc7920367c4ce9cc024cf8c5b8d217fb1b): cppwinrt/
+(the cppwinrt.exe code generator's sources) and strings/ (the base headers
+it writes out, base_*.h).  Left out: the Visual Studio projects, the NuGet
+packaging, the tests, and prebuild/ (the tool that turns strings/ into
+strings.h and strings.cpp; userland/microsoft_ui_xaml/build.py does that
+in Python).
+
+winmd/: https://github.com/microsoft/winmd (MIT, winmd/LICENSE), commit
+0f1eae3bfa63fa2ba3c2912cbfe72a01db94cc5a: src/, the header-only metadata
+reader cppwinrt is built on.
+
+userland/microsoft_ui_xaml/build.py builds the tool for the build machine
+(clang++, C++17) and runs it on Windows.winmd and on WinUI 2's metadata
+(tools/winrt/winmdwrite.py) to write the C++/WinRT projection WinUI 2
+compiles against.  One change, applied at build time (CPPWINRT_PATCHES):
+a method whose result parameter row has an empty name (windows-rs's
+Windows.winmd has some) gets the default result name, not "void* {};".

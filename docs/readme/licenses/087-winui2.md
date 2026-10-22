@@ -1,0 +1,1 @@
+WinUI 2, Microsoft's controls library for UWP apps (`third_party/winui2`, its `winui2/main` sources built as `Microsoft.UI.Xaml.dll` 2.x: so far its shared code, collections, composition effects, materials, lights, icons, `AnimatedVisualPlayer`, `AnimatedIcon`, `SplitButton`, `DropDownButton` and `InfoBadge`): MIT

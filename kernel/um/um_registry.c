@@ -881,8 +881,9 @@ static void defaults(void)
      * functions, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
-     * PropertyValue (wintypes.dll), and the Windows App SDK's lifted content,
-     * input and windowing classes XAML's windows are made of (NovaOS's
+     * PropertyValue (wintypes.dll), its URI, Uri (urlmon.dll), and the
+     * Windows App SDK's lifted content, input and windowing classes
+     * XAML's windows are made of (NovaOS's
      * Microsoft.UI.Input.dll).  ActivationType 0 = in process,
      * Threading 0 = both apartments.  As on Windows, the 32-bit view
      * (WOW6432Node) has its own copy, naming the SysWOW64 DLL. */
@@ -898,6 +899,7 @@ static void defaults(void)
         { "Microsoft.UI.Dispatching.DispatcherQueue", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueueController", "CoreMessaging.dll" },
         { "Windows.Foundation.PropertyValue", "wintypes.dll" },
+        { "Windows.Foundation.Uri", "urlmon.dll" },
         { "Microsoft.UI.Content.ContentIsland", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Content.DesktopChildSiteBridge", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Content.ContentCoordinateConverter", "Microsoft.UI.Input.dll" },

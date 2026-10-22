@@ -715,10 +715,66 @@ vendors.
      framework's layout calls.  (A `Visibility` set on a `Button` goes to
      its visual states, `VisualStateManager`, which 32.4 builds; the test
      sets it on a `TextBlock`.)
-   - *Next:* WinUI 2's controls built from its `dev` tree on that (C++/
-     WinRT projections of `Windows.UI.Xaml`, its XAML resources), then
-     `Windows.UI.Xaml.Application` and `Window.Current` for UWP apps
-     (CoreApplication's activation in place of the desktop path).
+   - *Second part, WinUI 2's controls built.*  `userland/microsoft_ui_xaml`
+     builds `Microsoft.UI.Xaml.dll` 2.x from WinUI 2's own sources
+     (`third_party/winui2`, the `winui2/main` branch, MIT) the way its
+     Visual Studio project does, with no Windows SDK tool:
+     - *Metadata.*  The features' IDL (Microsoft.UI.Xaml.idl imports each
+       one's, MIDL 3 with some MIDL 2: the composition effects) is read by
+       `tools/winrt/idl.py` (taught `feature_name`, `midl_pragma`,
+       forward declarations, MIDL 2 typedefs and `[propget]` methods) into
+       the model abigen uses, and `tools/winrt/winmdwrite.py` writes it as
+       a `.winmd` (ECMA-335 tables in a PE file, the attributes C++/WinRT
+       reads: `Guid`, `Activatable`, `Composable`, `Static`, `ExclusiveTo`,
+       `Default`, `Overridable`, `Overload` ...), where MIDL would.
+     - *Projection.*  C++/WinRT's code generator (`third_party/cppwinrt`,
+       2.0.250303.1, MIT) is built for the build machine and writes the
+       projection of Windows' metadata (`third_party/winmd`) and WinUI 2's
+       component files (`module.g.cpp`, each class's `.g.h`), as the
+       NuGet package's MSBuild targets run it.
+     - *Type table.*  `xamlmeta.py` writes `XamlMetadataProviderGenerated.cpp`
+       as Microsoft's T4 template (`dll/XamlMetadataProviderGenerated.tt`)
+       does: every public type, its base type, activator and properties.
+     - *Compiling.*  clang (C++20, no RTTI) over the precompiled header the
+       project uses; MSVC-only spellings in three vendored files are
+       written for clang (listed in `third_party/winui2/NOVA-VENDOR.txt`);
+       the SDK headers WinUI 2 includes that MinGW-w64 lacks are in
+       `userland/microsoft_ui_xaml/inc`.
+     - *Features so far:* Microsoft's inner-loop set (the shared code,
+       collections, composition effects, materials, lights, icons,
+       `AnimatedVisualPlayer`, `AnimatedIcon`, `SplitButton`,
+       `DropDownButton`) and `InfoBadge`.  The rest are added by
+       copying their folders and listing them in `FEATURES`.
+     - *Running it.*  A WinUI 2 app's `Application` is its
+       `IXamlMetadataProvider`, forwarding to WinUI 2's
+       (`XamlControlsXamlMetaDataProvider`); the framework's metadata
+       (components/ExtMetadataProvider, now built) asks it for the types
+       it does not know, and the faces give the framework the app's
+       Windows interface as its own (`nova_xaml_outer_face`); a framework
+       method Windows moved to a later interface (`IXamlType`'s
+       `BoxedType` is `IXamlType2`'s) is asked of that one, and answers
+       nothing when the object lacks it, as WinUI 2's types do.  For a
+       control's property-changed callbacks the framework's
+       `DependencyPropertyChangedEventArgs` and the visual state machine
+       under `VisualStateManager` (components/vsm) are built.  WinUI 2's
+       controls compose over the framework's `Windows.UI.Xaml` classes,
+       make `Windows.Foundation.Uri`s (urlmon.dll serves the class, as on
+       Windows) and register their dependency properties on the
+       framework.  Test `winui2test`: an `InfoBadge` and a
+       `DropDownButton` made through WinUI 2's type table, the framework's
+       interfaces behind them, and `InfoBadge.Value` read, set and read
+       back.
+     - *Interface IDs.*  MIDL 3 derives the IDs of interfaces it
+       synthesizes (a class's default, factory and statics interfaces)
+       by an algorithm that is not published; the build gives them
+       name-based IDs (abigen's), which agree within NovaOS but not with
+       Microsoft's `Microsoft.UI.Xaml.winmd`.  An app compiled against
+       the NuGet package (Calculator) needs Microsoft's: the next part.
+   - *Next:* WinUI 2's XAML resources (its `generic.xaml` and theme
+     dictionaries, compiled to XBF, and its `.pri`), the interface IDs
+     apps were compiled with, then Calculator, and `Windows.UI.Xaml.
+     Application` and `Window.Current` for UWP apps (CoreApplication's
+     activation in place of the desktop path).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

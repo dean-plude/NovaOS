@@ -41,8 +41,9 @@ release in the sense of this page.
    `NOVA_VERSION` (`v0.1.1` for `0.1.1`), and `docs/releases/VERSION.md`
    must exist. Otherwise the run stops before building anything.
 2. **CI** (`ci.yml`, called with `release: true`): the same jobs as a pull
-   request: Checks, Build, Compatibility smoke, the core, network and
-   devices suites, the Performance budget and the graphics suite. The
+   request: Checks, Build, the core suite with the compatibility smoke,
+   the network suite with the performance budget, the devices suite and
+   the graphics suite. The
    devices suite also starts NovaOS from the ISO, as a USB stick and as a
    DVD. With `release: true` the Build job first runs
    `tools/fetch_firmware.py`, so the image carries the default firmware set

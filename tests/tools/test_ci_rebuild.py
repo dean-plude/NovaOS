@@ -43,11 +43,13 @@ class CIRebuildTests(unittest.TestCase):
                              {'code': False, 'corpus': False})
             for paths in ([], ['new-input.bin'], ['kernel/ke/sched.c']):
                 self.assertTrue(plan.scope(event, paths)['code'])
-            for path in ('tools/ci/plan.py', '.github/workflows/build.yml',
+            for path in ('.github/workflows/nightly.yml', 'userland/store/catalog.json',
                          'tests/reference/Firefox.png', 'tools/bundle_firefox.py',
-                         'kernel/apps/store.c', 'tests/tools/test_ci_rebuild.py'):
+                         'kernel/apps/store.c', 'tests/appcorpus/010-ripgrep.py'):
                 self.assertTrue(plan.scope(event, [path])['corpus'])
-            self.assertFalse(plan.scope(event, ['kernel/ke/sched.c'])['corpus'])
+            for path in ('kernel/ke/sched.c', 'tools/ci/plan.py', '.github/workflows/ci.yml',
+                         'tests/tools/test_ci_rebuild.py'):
+                self.assertFalse(plan.scope(event, [path])['corpus'])
         for event in ('push', 'workflow_dispatch', 'schedule'):
             self.assertEqual(plan.scope(event, ['README.md']), {'code': True, 'corpus': True})
 
@@ -117,7 +119,7 @@ class CIRebuildTests(unittest.TestCase):
             for value in (None, [], {'checks': []}):
                 self.assertFalse(results.evaluate(mode, value)[0])
         for raw in ('invalid json', '{}'):
-            r = subprocess.run([sys.executable, str(ROOT / 'tools/ci/results.py'), 'ci'],
+            r = subprocess.run([sys.executable, str(ROOT / 'tools/ci/results.py'), 'boot'],
                                env=dict(os.environ, NEEDS_JSON=raw), capture_output=True)
             self.assertEqual(r.returncode, 1)
 
@@ -177,13 +179,13 @@ class CIRebuildTests(unittest.TestCase):
     def test_graph_builds_once_shares_verified_image_and_never_masks_failures(self):
         workflows = {p.stem: yaml.safe_load(p.read_text()) for p in (ROOT / '.github/workflows').glob('*.yml')}
         ci, nightly, build = (workflows[n] for n in ('ci', 'nightly', 'build'))
-        for workflow, result, prerequisites in ((ci, 'ci-result', ['checks','build','compatibility','boot-test','perf','graphics-test','boot-result']),
+        for workflow, result, prerequisites in ((ci, 'boot-result', ['checks','build','boot-test']),
                                                (nightly, 'corpus-result', ['gate','build','app-corpus','smp'])):
             jobs = workflow['jobs']
             self.assertEqual(jobs[result]['needs'], prerequisites)
             self.assertEqual(jobs[result]['if'], 'always()')
             self.assertEqual(jobs['build']['uses'], './.github/workflows/build.yml')
-            for name in [n for n in prerequisites[2:] if n != 'boot-result']:
+            for name in prerequisites[2:] + (['graphics-test'] if workflow is ci else []):
                 steps = jobs[name]['steps']
                 self.assertTrue(any('image_manifest.py verify' in s.get('run', '') for s in steps))
                 self.assertFalse(any('make -C build' in s.get('run', '') for s in steps))
@@ -191,13 +193,18 @@ class CIRebuildTests(unittest.TestCase):
         self.assertFalse(ci['jobs']['boot-test']['strategy']['fail-fast'])
         self.assertFalse(nightly['jobs']['app-corpus']['strategy']['fail-fast'])
         self.assertEqual(nightly['jobs']['app-corpus']['strategy']['max-parallel'], 4)
-        self.assertEqual(ci['jobs']['publish-iso']['needs'], ['ci-result'])
+        self.assertEqual(ci['jobs']['publish-iso']['needs'], ['boot-result', 'graphics-test'])
         self.assertEqual(ci['jobs']['boot-result']['name'], 'Build and boot-test')
-        self.assertEqual(ci['jobs']['boot-result']['needs'], ['checks', 'build', 'boot-test', 'perf'])
+        self.assertEqual(ci['jobs']['graphics-test']['name'], 'Graphics tests (OpenGL, Direct3D)')
+        self.assertEqual(ci['jobs']['checks']['name'], 'Checks (conflict markers, manifests, generated docs)')
+        steps = [s.get('run', '') for s in ci['jobs']['boot-test']['steps']]
+        self.assertTrue(any('compat_smoke.py --img' in r for r in steps))
+        self.assertTrue(any('tools/ci/perf.py --img' in r for r in steps))
         artifacts = [s['with']['name'] for s in build['jobs']['image']['steps'] if s.get('uses') == 'actions/upload-artifact@v4']
         self.assertIn('nova-iso', artifacts); self.assertIn('nova-boot', artifacts)
         self.assertIn('merge_group', ci['on']); self.assertIn('workflow_call', ci['on'])
-        self.assertNotIn('paths', nightly['on']['pull_request'])
+        paths = nightly['on']['pull_request']['paths']
+        self.assertEqual(sorted(paths), sorted([d + '**' for d in plan.CORPUS_DIRS] + list(plan.CORPUS_FILES)))
         self.assertEqual(nightly['permissions'], {'contents':'read','actions':'read'})
 
     def test_netsurf_ignores_desktop_but_checks_every_page_pixel_and_geometry(self):

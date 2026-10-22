@@ -10,7 +10,21 @@ name: Nightly app corpus
         description: Allow software emulation for explicit manual runs
         type: boolean
         default: false
-  pull_request: {}
+  # Only pull requests that change the corpus or what it depends on; the same
+  # list as CORPUS_DIRS and CORPUS_FILES in tools/ci/plan.py.
+  pull_request:
+    paths:
+    - userland/store/**
+    - tests/appcorpus/**
+    - tests/reference/**
+    - tools/appcorpus.py
+    - tools/download_cache.py
+    - kernel/apps/store.c
+    - kernel/apps/store_catalog.h
+    - tools/bundle_firefox.py
+    - tools/bundle_mesa.py
+    - tools/build_vkd3d_proton.py
+    - .github/workflows/nightly.yml
 permissions:
   contents: read
   actions: read

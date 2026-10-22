@@ -1,11 +1,12 @@
 # CI
 
-NovaOS is tested by GitHub Actions. Four workflows matter:
+NovaOS is tested by GitHub Actions. Five workflows matter:
 
 | Workflow | File | Runs on | What it does |
 |---|---|---|---|
 | **CI** | `.github/workflows/ci.yml` | every pull request, merge-queue group, push to `main`, manual run; called by Release | builds one image, boots it in QEMU and runs every suite; on `main` republishes the rolling `latest` release |
-| **Nightly app corpus** | `.github/workflows/nightly.yml` | three daily schedules, manual run, pull requests that touch the corpus | runs real Windows programs (`tools/appcorpus.py`) and an SMP stress test |
+| **Nightly app corpus** | `.github/workflows/nightly.yml` | three daily schedules, manual run, pull requests that change the corpus or what it depends on (a paths filter) | runs real Windows programs (`tools/appcorpus.py`) and an SMP stress test |
+| **MS-DOS** | `.github/workflows/msdos.yml` | push to `main`, manual run, pull requests that change `tools/msdos/`, ntvdm or bootRogue (a paths filter) | builds MS-DOS 4.0 from source and boots it in QEMU and on ntvdm's CPU ([dos.md](dos.md)) |
 | **Release** | `.github/workflows/release.yml` | a pushed `v*` tag | runs CI on the tag and publishes a GitHub release ([releasing.md](releasing.md)) |
 | **Docs** | `.github/workflows/docs.yml` | push to `main`, manual run | read-only report of generated doc regions that are behind their fragments |
 
@@ -22,14 +23,26 @@ failure.
 |---|---|---|
 | **Checks (conflict markers, manifests, generated docs)** | | decides the run's scope (`tools/ci/plan.py`), runs actionlint, the host regressions in `tests/tools/`, `tools/ci/check-conflict-markers.py`, `tools/ci/check-driver-imports.py`, `tools/build_userland.py --check`, `tools/selftest.py --list` for every suite, `tools/compat_smoke.py --list`, and `tools/docgen.py --check-pr` against the pull request's base |
 | **Build** | Checks | `build.yml`: kernel, boot loader, userland, `build/nova.img` and `build/nova.iso`; stamps `build/ci-image.json` |
-| **Compatibility smoke** | Build | `tools/compat_smoke.py`: seven bounded core tests (`dlltest` x64 and x86, wait migration x64 and x86, Chromium start-up x64, `unwindtest`, `wvstarttest`) in their own boot |
-| **OS tests (core)**, **(network)**, **(devices)** | Build | `tools/selftest.py --suite SUITE`, one job per suite, `fail-fast: false`; the devices suite runs as three jobs, **OS tests (devices 1/3)** to **(devices 3/3)**, each a third of its boots (`--shard I/N`, balanced by test count) so no job nears the 60-minute limit; `tools/ci/install.sh` bounds each apt attempt at 10 minutes and tries twice, and the install step has a 25-minute limit, because a runner's apt can stall for a whole job |
-| **Performance budget** | Build | `tools/ci/perf.py` ([below](#the-performance-budget)) |
+| **OS tests (core)**, **(network)**, **(devices)** | Build | `tools/selftest.py --suite SUITE`, one job per suite, `fail-fast: false`; the devices suite runs as three jobs, **OS tests (devices 1/3)** to **(devices 3/3)**, each a third of its boots (`--shard I/N`, balanced by test count) so no job nears the 60-minute limit; `tools/ci/install.sh` bounds each apt attempt at 10 minutes and tries twice, and the install step has a 25-minute limit, because a runner's apt can stall for a whole job. Two short checks ride along as steps instead of jobs of their own: **OS tests (core)** then runs the compatibility smoke (`tools/compat_smoke.py`: seven bounded core tests, `dlltest` x64 and x86, wait migration x64 and x86, Chromium start-up x64, `unwindtest`, `wvstarttest`, in their own boot, about a minute), and **OS tests (network)** then runs the performance budget (`tools/ci/perf.py`, [below](#the-performance-budget), about a minute). Both run even when the suite before them failed |
 | **Graphics tests (OpenGL, Direct3D)** | Build | builds or restores Venus, VKD3D-Proton and a QEMU with Venus, then `tools/selftest.py --suite graphics` |
-| **MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)** | Checks | builds MS-DOS 4.0 from Microsoft's source with its own tools in DOSBox (`tools/msdos/build_msdos.py`), boots it from a floppy image in QEMU (`tools/msdos/boot_test.py`) and on `ntvdm.exe`'s real-mode CPU and BIOS built for Linux, typing `VER`, `DIR`, `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session, then running a `.COM` and an `.EXE` on a drive C: of the runner's files as `CreateProcess` starts them and `DIR`, `CD`, `COPY`, `REN`, `DEL` there, writing a file in `EDLIN` and playing the DOS game bootRogue with the arrow keys (`tools/msdos/vdm_test.py`); not part of the required checks ([dos.md](dos.md)) |
-| **Build and boot-test** | Build, the three OS test jobs, Performance budget | summary: passes only if all of those passed (`tools/ci/results.py boot`) |
-| **CI result** | every job above | summary: passes only if every selected job passed (`tools/ci/results.py ci`) |
-| **Publish nova.iso** | CI result | push to `main` only: republishes the `latest` release ([below](#the-rolling-latest-release)) |
+| *(MS-DOS workflow)* **MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)** | | builds MS-DOS 4.0 from Microsoft's source with its own tools in DOSBox (`tools/msdos/build_msdos.py`), boots it from a floppy image in QEMU (`tools/msdos/boot_test.py`) and on `ntvdm.exe`'s real-mode CPU and BIOS built for Linux, typing `VER`, `DIR`, `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session, then running a `.COM` and an `.EXE` on a drive C: of the runner's files as `CreateProcess` starts them and `DIR`, `CD`, `COPY`, `REN`, `DEL` there, writing a file in `EDLIN` and playing the DOS game bootRogue with the arrow keys (`tools/msdos/vdm_test.py`); its own workflow (`msdos.yml`), not part of the required checks ([dos.md](dos.md)) |
+| **Build and boot-test** | Checks, Build, the OS test jobs | summary: passes only if all of those passed, compatibility smoke and performance budget included (`tools/ci/results.py boot`) |
+| **Publish nova.iso** | Build and boot-test, Graphics tests | push to `main` only: republishes the `latest` release ([below](#the-rolling-latest-release)) |
+
+### How many checks a pull request runs
+
+A pull request that changes code runs eight jobs: Checks, Build, OS tests
+(core), (network), (devices 1/3), (devices 2/3), (devices 3/3) and Graphics
+tests, plus the **Build and boot-test** summary, and lists **Publish
+nova.iso** as skipped. Until October 2026 it ran about 68 check runs: CI
+had separate Compatibility smoke, Performance budget, MS-DOS and **CI
+result** jobs, and the nightly app corpus started on every pull request
+and fanned out to one **App corpus (NN)** job per program (53) whenever
+the pull request touched `tools/ci/`, `.github/` or `tests/tools/`. Now
+the corpus and MS-DOS workflows start on a pull request only when its
+paths filter matches, so most pull requests do not list them at all; the
+corpus still runs every day on `main` and can be started on any branch by
+hand (Actions, **Nightly app corpus**, **Run workflow**, pick the branch).
 
 ### The checks to require
 
@@ -40,13 +53,13 @@ Three check names are stable and are the ones meant for a branch rule on
 - **Build and boot-test**
 - **Graphics tests (OpenGL, Direct3D)**
 
-**CI result** (and **Corpus result** from the nightly workflow) also always
-report, and cover the compatibility smoke and the completeness of the
-whole run as well. Branch rules live in the repository settings, not in
+**Build and boot-test** covers the compatibility smoke and the performance
+budget too, since they are steps of the OS test jobs. **Corpus result**
+from the nightly workflow also always reports when that workflow runs. Branch rules live in the repository settings, not in
 this repository. Pull requests are required for `main`: nothing is pushed
 to it directly.
 
-The two summary jobs run with `if: always()`. They fail when a job they
+**Build and boot-test** (like **Corpus result**) runs with `if: always()`. They fail when a job they
 depend on failed, was cancelled, is missing, or was skipped when the scope
 said it should run. A skip counts as a pass only when the Checks job said
 the run had no code to test.
@@ -57,10 +70,12 @@ the run had no code to test.
 named in the event (the pull request's base SHA, or the merge group's
 `base_sha`). If every changed path is under `docs/`, ends in `.md`, or is
 `LICENSE`, the run has `code=false`: the Checks job still runs, the build
-and test jobs are skipped, and **Build and boot-test** and **CI result**
-pass. Pushes, manual runs, tag builds, an empty diff and any other path
-build and test everything. There are no workflow-level path filters, so a
-required check never sits waiting for a job that will not start.
+and test jobs are skipped, and **Build and boot-test** passes.
+Pushes, manual runs, tag builds, an empty diff and any other path
+build and test everything. CI has no workflow-level path filters, so a
+required check never sits waiting for a job that will not start; only the
+nightly corpus and MS-DOS workflows, which hold no required check, have
+them.
 
 ### One image per run
 
@@ -104,7 +119,7 @@ and SMP jobs) it fails the job unless the run was started by hand with
   (`tools/build_venus.py`), VKD3D-Proton (`tools/build_vkd3d_proton.py`)
   and QEMU 10.2 with virglrenderer and Venus
   (`tools/ci/build-qemu-venus.sh`), each keyed on the script that builds it.
-- **MS-DOS job** and **Build**: the MS-DOS source checkout and its build
+- **MS-DOS workflow** and **Build**: the MS-DOS source checkout and its build
   (`~/.cache/novaos/msdos`), keyed on `tools/msdos/build_msdos.py` (the
   image ships MS-DOS's boot disk, so the build makes it too).
 
@@ -112,7 +127,7 @@ and SMP jobs) it fails the job unless the run was started by hand with
 
 Each test job uploads its output even when it fails, kept for 14 days:
 `selftest-core`, `selftest-network`, `selftest-devices-1` to `selftest-devices-3`, `graphics-out`,
-`compat-smoke-out`, `perf-out` and `msdos` (the built MS-DOS files, NMAKE's
+`compat-smoke-out` (from the core job), `perf-out` (from the network job) and, from the MS-DOS workflow, `msdos` (the built MS-DOS files, NMAKE's
 `BUILD.LOG` and the boot test's serial log). They hold the serial logs, a screenshot
 after each test, sound recordings and a JUnit file where the suite writes
 one. Each job's summary page has a table of results. The graphics job also
@@ -122,14 +137,15 @@ and host CPU profiles (`tools/ci/host_profile.py`) into `graphics-out`.
 
 ### Cancellation
 
-Concurrency groups are per event and per pull request or ref. A new push to
-a pull request cancels that pull request's older run. Runs on `main`,
+Concurrency groups are per workflow, per event and per pull request or ref.
+A new push to a pull request cancels that pull request's older runs (CI,
+the corpus and MS-DOS). Runs on `main`,
 merge groups, schedules, manual runs and releases are never cancelled by a
 newer run, although GitHub may still drop a run that is only queued.
 
 ## The rolling `latest` release
 
-When a push to `main` passes **CI result**, the **Publish nova.iso** job
+When a push to `main` passes **Build and boot-test** and the graphics tests, the **Publish nova.iso** job
 republishes the GitHub release tagged `latest`:
 
 1. **Require current main before publication.** The job checks that
@@ -154,7 +170,8 @@ cancelled. Tag builds skip it: `release.yml` publishes instead.
 
 ## The performance budget
 
-Roadmap step 26.4. The **Performance budget** job (`tools/ci/perf.py`)
+Roadmap step 26.4. The performance budget (`tools/ci/perf.py`, a step of
+the **OS tests (network)** job)
 boots the tested image once, with four CPUs and 4 GB of memory, and
 measures:
 
@@ -175,7 +192,7 @@ measures:
 
 The budget is in `tools/ci/perf-budget.json`: 20 s to boot and 10 s for
 Firefox. The first KVM run took 9.8 s and 3.4 s, so only a large
-regression fails. The job fails, and with it **Build and boot-test**, when
+regression fails. The step fails **OS tests (network)**, and with it **Build and boot-test**, when
 a time is over budget, smpstress fails or scales too little, or Firefox
 never draws its page. Times are judged only under KVM; under TCG they are
 recorded but not judged.
@@ -201,14 +218,18 @@ purpose raises the budget in the same pull request and says why.
 **When it runs.** Three schedules a day (03:17, 06:47 and 10:23 UTC). A
 scheduled run goes ahead unless another scheduled or manual run is still
 active or one in the last 20 hours ran the whole corpus successfully, so
-the later schedules are retries. A manual run always goes ahead. On a pull
-request it runs only when the pull request touches the corpus or what it
-depends on: `tests/appcorpus/`, `tests/reference/`, `tests/tools/`,
-`tools/ci/`, `.github/`, `userland/store/`, the corpus and download
-harness (`tools/appcorpus.py`, `tools/download_cache.py`,
-`tools/novarun.py`), the App Store code and catalog, or the Firefox, Mesa
-and VKD3D-Proton bundling scripts. Otherwise its jobs are skipped and
-**Corpus result** passes.
+the later schedules are retries. A manual run always goes ahead, on any
+branch. On a pull request the workflow starts only when the pull request
+changes the corpus or what it depends on: `tests/appcorpus/`,
+`tests/reference/`, `userland/store/`, the corpus and download harness
+(`tools/appcorpus.py`, `tools/download_cache.py`), the App Store code
+(`kernel/apps/store.c`, `store_catalog.h`), the Firefox, Mesa and
+VKD3D-Proton bundling scripts, or `nightly.yml` itself. The paths filter in
+`nightly.yml` and `CORPUS_DIRS`/`CORPUS_FILES` in `tools/ci/plan.py` list
+the same entries (a host regression checks that). Changes to `tools/ci/`,
+`tests/tools/` or the other workflows no longer start it: the host
+regressions in the Checks job test those scripts, and the next scheduled
+run tests them against the programs.
 
 **KVM.** The app and SMP jobs require KVM. A manual run can set `allow_tcg`
 to accept software emulation.

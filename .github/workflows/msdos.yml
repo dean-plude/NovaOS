@@ -1,0 +1,56 @@
+# MS-DOS: builds MS-DOS 4.0 from Microsoft's source and boots it in QEMU and
+# on ntvdm's real-mode CPU and BIOS (docs/dos.md, docs/ci.md).  It needs no
+# NovaOS image, so it runs on its own: on every push to main, and on a pull
+# request only when the pull request changes MS-DOS's tools, ntvdm or this
+# file.  It is not one of the required checks.
+name: MS-DOS
+'on':
+  push:
+    branches:
+    - main
+  pull_request:
+    paths:
+    - tools/msdos/**
+    - userland/programs/ntvdm.c
+    - userland/programs/ntvdm.json
+    - userland/programs/ntvdm/**
+    - third_party/bootrogue/**
+    - .github/workflows/msdos.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: msdos-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  msdos:
+    name: MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install DOSBox, mtools, NASM and QEMU
+      run: |-
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dosbox mtools nasm qemu-system-x86
+    - name: Cache the MS-DOS build
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/novaos/msdos
+        key: msdos-v1-${{ hashFiles('tools/msdos/build_msdos.py') }}
+    - name: Build MS-DOS 4.0 with its own MASM, C compiler, LINK and NMAKE
+      run: python3 tools/msdos/build_msdos.py msdos-out
+    - name: Boot it from a floppy image and run COMMAND.COM and MEM.EXE
+      run: python3 tools/msdos/boot_test.py msdos-out --work msdos-boot
+    - name: Boot it on ntvdm's real-mode CPU and BIOS, type at COMMAND.COM and play bootRogue
+      run: python3 tools/msdos/vdm_test.py msdos-out --work msdos-vdm
+    - name: Keep the MS-DOS files and the boot log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: msdos
+        path: |-
+          msdos-out
+          msdos-boot/com1.log
+        if-no-files-found: ignore
+        retention-days: 14

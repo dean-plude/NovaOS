@@ -366,12 +366,55 @@ def generated(b):
             p = os.path.join(d, 'winrt_abi.h')
             if not os.path.exists(p) or open(p).read() != text:
                 open(p, 'w').write(text)
+            # (before the spellings, which then name them)
+            dwrite_headers(_msvcp(b).mingw_include(), d)
             fold(os.path.join(d, 'fold'), component_includes() + project_includes() + core_includes() + source_dirs() +
                  [i for c in CORE_LIBRARIES for i in vcxproj.read(os.path.join(XCP, c[0]), PROPS)['includes']] +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
                   os.path.join(ROOT, 'third_party', 'msstl', 'inc'), _msvcp(b).SHIM])
             _done['gen'] = d
         return d
+
+
+_DWRITE = ('dwrite.h', 'dwrite_1.h', 'dwrite_2.h', 'dwrite_3.h')
+
+
+def dwrite_headers(mingw, out):
+    """OUT/dwrite*.h: MinGW-w64's DirectWrite headers as the Windows SDK's
+    declare their interfaces.  widl's C++ interfaces hide a base interface's
+    overloads of a method behind their own, as C++ hides a base class's
+    (IDWriteFontList1's GetFont, the one giving an IDWriteFont3, hides
+    IDWriteFontList's, the one giving an IDWriteFont); the SDK's bring them
+    back into scope with using-declarations, and XAML's text block and its
+    DirectWrite font services call them so (core/text/TextBlock,
+    pal/win): here each such interface gets the using-declaration of the
+    nearest base interface that declares the name"""
+    head = re.compile(r'^MIDL_INTERFACE\("[^"]*"\)\n(\w+) : public (\w+)\n\{\n', re.M)
+    meth = re.compile(r'virtual [^;(]*?STDMETHODCALLTYPE\s+(\w+)\(')
+    texts = {h: open(os.path.join(mingw, h)).read() for h in _DWRITE}
+    base, names = {}, {}
+    for t in texts.values():
+        for m in head.finditer(t):
+            body = t[m.end():t.index('\n};', m.end())]
+            base[m.group(1)] = m.group(2)
+            names[m.group(1)] = set(meth.findall(body))
+
+    def owner(iface, name):
+        while iface in names:
+            if name in names[iface]:
+                return iface
+            iface = base.get(iface)
+        return None
+
+    for h, t in texts.items():
+        def using(m):
+            lines = ['    using %s::%s;\n' % (o, n) for n in sorted(names[m.group(1)])
+                     for o in [owner(base[m.group(1)], n)] if o]
+            return m.group(0) + ''.join(lines)
+        text = head.sub(using, t)
+        p = os.path.join(out, h)
+        if not os.path.exists(p) or open(p).read() != text:
+            open(p, 'w').write(text)
 
 
 def component_includes():
@@ -784,6 +827,37 @@ PROJECT_INCLUDES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = (
 # (and Microsoft's clang build's EXP_CLANG, which the islands' sources'
 # runtime profiler markers are written for, as the type table's)
 PROJECT_DEFINES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] = ['EXP_CLANG']
+# (and what OnLaunched's window is (roadmap 32.4): the desktop window,
+# DesktopWindowImpl, with its Win32 window, the window chrome its content
+# sits in (WindowChrome and the chrome component's CWindowChrome and window
+# helpers), the DesktopWindowXamlSource that hosts it and the XAML island
+# root under that (the framework's XamlIslandRoot and the elements'
+# CXamlIslandRoot), and the arguments of the window's events)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../' + x for x in (
+    'DesktopWindowImpl.cpp', 'WindowChrome_Partial.cpp',
+    'DesktopWindowXamlSource_Partial.cpp', 'XamlIslandRoot_Partial.cpp')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('WindowChrome', 'DesktopWindowXamlSource',
+                                                      'XamlIslandRoot', 'WindowActivatedEventArgs', 'WindowEventArgs',
+                                                      'WindowSizeChangedEventArgs',
+                                                      'WindowVisibilityChangedEventArgs'))
+_ELEMENTS2_LATER = tuple(x for x in _ELEMENTS2_LATER if x != 'xamlislandroot.cpp')
+CORE_SOURCES[_ELEMENTS2] = tuple(
+    os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
+    for s in vcxproj.read(os.path.join(XCP, _ELEMENTS2), PROPS)['sources']
+    if os.path.basename(s).lower() not in _ELEMENTS2_LATER)
+_WINDOWCHROME = 'components/WindowChrome/Microsoft.UI.Xaml.WindowChrome.vcxproj'
+CORE_LIBRARIES.append((_WINDOWCHROME, _WINDOWCHROME, 'components/pch/precomp.h', []))
+CORE_SOURCES[_WINDOWCHROME] = ('CWindowChrome.cpp', 'WindowHelpers.cpp')
+# (and a laid-out TextBlock's fonts: the platform layer's DirectWrite font
+# and script services (pal/win: the font collection, families, faces and
+# text analyzer DWriteFontAndScriptServices hands the text core) and the
+# text core's font families and typefaces over them, core/text/Fonts, with
+# RichTextServices' PALFontAndScriptServices.cpp)
+CORE_SOURCES['hostpalplatmisc.vcxproj'] += tuple('pal/win/%s.cpp' % x for x in (
+    'DWriteFontAndScriptServices', 'DWriteTextAnalyzer', 'DWriteFontCollection', 'DWriteFontFamily', 'DWriteFontFace'))
+CORE_SOURCES[_CORETEXT] += tuple('Fonts/%s.cpp' % x for x in (
+    'CompositeFontFamily', 'FontFamily', 'FontTypeface', 'SharedName', 'TypefaceCollection')) + (
+    'RichTextServices/xcp/PALFontAndScriptServices.cpp',)
 
 
 def test_stubs(b, odir):

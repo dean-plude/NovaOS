@@ -881,7 +881,9 @@ static void defaults(void)
      * functions, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
-     * PropertyValue (wintypes.dll).  ActivationType 0 = in process,
+     * PropertyValue (wintypes.dll), and the Windows App SDK's lifted content,
+     * input and windowing classes XAML's windows are made of (NovaOS's
+     * Microsoft.UI.Input.dll).  ActivationType 0 = in process,
      * Threading 0 = both apartments.  As on Windows, the 32-bit view
      * (WOW6432Node) has its own copy, naming the SysWOW64 DLL. */
     static const char *const wrt_classes[][2] = {
@@ -896,6 +898,18 @@ static void defaults(void)
         { "Microsoft.UI.Dispatching.DispatcherQueue", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueueController", "CoreMessaging.dll" },
         { "Windows.Foundation.PropertyValue", "wintypes.dll" },
+        { "Microsoft.UI.Content.ContentIsland", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Content.DesktopChildSiteBridge", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Content.ContentCoordinateConverter", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputPointerSource", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputKeyboardSource", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputPreTranslateKeyboardSource", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputFocusController", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputActivationListener", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputNonClientPointerSource", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.InputSystemCursor", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.FocusNavigationRequest", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Windowing.AppWindow", "Microsoft.UI.Input.dll" },
     };
     for (unsigned i = 0; i < 2 * (sizeof wrt_classes / sizeof wrt_classes[0]); i++) {
         char path[180];

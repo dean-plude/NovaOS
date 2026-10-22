@@ -38,6 +38,7 @@
  */
 
 #include "hv_video.h"
+#include "../hal/aml.h"
 #include "../hal/display.h"
 #include "../hal/framebuffer.h"
 #include "../lib/string.h"
@@ -84,25 +85,35 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     SvHeader h;
     union {
-        struct { UINT32 version; UINT8 accepted, max_outputs; } version;
-        struct { UINT8 max_count; } res_req;
-        struct {
+        struct __attribute__((packed)) { UINT32 version; UINT8 accepted, max_outputs; } version;
+        struct __attribute__((packed)) { UINT8 max_count; } res_req;
+        struct __attribute__((packed)) {
             UINT8 edid[128];
             UINT8 count, default_index, is_standard;
-            struct { UINT16 w, h; } res[MAX_RES];
+            struct __attribute__((packed)) { UINT16 w, h; } res[MAX_RES];
         } res;
-        struct { UINT64 user_ctx; UINT8 gpa_specified; UINT64 gpa; } vram;
-        struct { UINT64 user_ctx; } vram_ack;
-        struct { UINT64 user_ctx; UINT8 count; SvOutput out; } situation;
-        struct { UINT8 visible, output; INT32 x, y; } ptr_pos;
-        struct { UINT8 part, argb; UINT32 w, h, hot_x, hot_y; UINT8 data[4]; } ptr_shape;
-        struct { UINT8 dirt, ptr_pos, ptr_shape, situation; } feature;
-        struct { UINT8 output, count; INT32 x1, y1, x2, y2; } dirt;
+        struct __attribute__((packed)) { UINT64 user_ctx; UINT8 gpa_specified; UINT64 gpa; } vram;
+        struct __attribute__((packed)) { UINT64 user_ctx; } vram_ack;
+        struct __attribute__((packed)) { UINT64 user_ctx; UINT8 count; SvOutput out; } situation;
+        struct __attribute__((packed)) { UINT8 visible, output; INT32 x, y; } ptr_pos;
+        struct __attribute__((packed)) { UINT8 part, argb; UINT32 w, h, hot_x, hot_y; UINT8 data[4]; } ptr_shape;
+        struct __attribute__((packed)) { UINT8 dirt, ptr_pos, ptr_shape, situation; } feature;
+        struct __attribute__((packed)) { UINT8 output, count; INT32 x1, y1, x2, y2; } dirt;
         UINT8 raw[512];
     };
 } SvMsg;
 
+/* Every message is packed, as Linux's hyperv_drm declares them: a gap
+ * after a byte (the video memory's address, a rectangle) moves what the
+ * host reads */
 _Static_assert(sizeof(SvOutput) == 18, "video_output_situation");
+_Static_assert(__builtin_offsetof(SvMsg, vram.gpa) == sizeof(SvHeader) + 9, "synthvid_vram_location");
+_Static_assert(__builtin_offsetof(SvMsg, situation.out) == sizeof(SvHeader) + 9, "synthvid_situation_update");
+_Static_assert(__builtin_offsetof(SvMsg, ptr_pos.x) == sizeof(SvHeader) + 2, "synthvid_pointer_position");
+_Static_assert(__builtin_offsetof(SvMsg, ptr_shape.w) == sizeof(SvHeader) + 2, "synthvid_pointer_shape");
+_Static_assert(__builtin_offsetof(SvMsg, ptr_shape.data) == sizeof(SvHeader) + 18, "synthvid_pointer_shape");
+_Static_assert(__builtin_offsetof(SvMsg, dirt.x1) == sizeof(SvHeader) + 2, "synthvid_dirt");
+_Static_assert(__builtin_offsetof(SvMsg, res.res) == sizeof(SvHeader) + 131, "synthvid_supported_resolution_resp");
 
 typedef struct {
     VmbusChannel *ch;
@@ -113,6 +124,8 @@ typedef struct {
     volatile bool dirt;                  /* the host wants DIRT messages */
     bool          attached;
     bool          console;               /* the boot log and the tick report the screen */
+    bool          relocate;              /* the GOP framebuffer was refused: try elsewhere once ACPI is up */
+    int           bw, bh;                /* the boot mode */
     UINT32        version;
     UINT64        vram_phys, vram_size;
     int           w, h;                  /* the mode the host shows */
@@ -268,9 +281,15 @@ static bool set_mode(int w, int h)
     return true;
 }
 
+static void relocate(HvVideo *v);
+
 static void video_tick(void *ctx)
 {
     HvVideo *v = ctx;
+    if (v->relocate && AmlReady()) {
+        v->relocate = false;
+        relocate(v);
+    }
     if (!v->console || !__atomic_load_n(&v->dirt, __ATOMIC_ACQUIRE)) return;
     UINT64 now = sched_ticks();
     if (now - v->last_dirt < DIRT_TICKS) return;
@@ -285,6 +304,91 @@ static void *video_opened(VmbusChannel *ch)
     v->ch = ch;
     v->dirt = true;                      /* (until the host says it needs none) */
     return v;
+}
+
+/* The video memory is the host's: say how it is shown, hide the host's
+ * pointer and hand the display its modes */
+static void take_over(HvVideo *v)
+{
+    SvMsg m;
+    if (!situation(v, v->bw, v->bh)) {
+        kprintf("[HVVIDEO] Cannot send the mode\n");
+        return;
+    }
+
+    memset(&m, 0, sizeof(m));                            /* NovaOS draws the pointer itself */
+    m.ptr_pos.visible = 1;
+    send(v, &m, SV_POINTER_POSITION, 10);
+    memset(&m, 0, sizeof(m));
+    m.ptr_shape.part = 0xFF;                             /* (the whole shape in one part) */
+    m.ptr_shape.argb = 1;
+    m.ptr_shape.w = m.ptr_shape.h = 1;
+    send(v, &m, SV_POINTER_SHAPE, 22);
+
+    g_video = v;
+    dirt(v);
+    kprintf("[HVVIDEO] Synthetic video %u.%u: %llu MiB of video memory at 0x%llx, %d mode(s)\n",
+            v->version & 0xFFFF, v->version >> 16, (unsigned long long)(v->vram_size >> 20),
+            (unsigned long long)v->vram_phys, v->nmodes);
+    v->attached = DisplayHyperVAttach(set_mode, v->modes, v->nmodes);
+}
+
+static bool place(HvVideo *v, UINT64 at)
+{
+    SvMsg m;
+    memset(&m, 0, sizeof(m));
+    m.vram.user_ctx = at;
+    m.vram.gpa_specified = 1;
+    m.vram.gpa = at;
+    if (!ask(v, &m, SV_VRAM_LOCATION, 17, SV_VRAM_LOCATION_ACK)) return false;
+    return v->reply.vram_ack.user_ctx == at;
+}
+
+/* The host would not take the GOP framebuffer as video memory (Hyper-V on
+ * Windows 11 hosts: "could not allocate guest physical address space"):
+ * put it in the memory ranges ACPI gives the VMBus, away from the
+ * firmware's frame buffer, as Linux's hyperv_drm does (vmbus_allocate_mmio),
+ * the ranges above 4 GiB first.  Runs on the VMBus thread, once */
+static void relocate(HvVideo *v)
+{
+    AmlRange r[AML_MAX_VMBUS_MMIO];
+    int n = AmlVmbusMmio(r, AML_MAX_VMBUS_MMIO);
+    if (n <= 0) {
+        kprintf("[HVVIDEO] ACPI lists no VMBus memory ranges: the screen stays as the firmware left it\n");
+        return;
+    }
+    const UINT64 mib = 1ull << 20;
+    UINT64 shown = (UINT64)v->bw * v->bh * 4;
+    UINT64 need = (v->vram_size > shown ? v->vram_size : shown);
+    need = (need + mib - 1) & ~(mib - 1);
+    UINT64 fb = v->vram_phys, fb_end = fb + (v->vram_size > 8 * mib ? v->vram_size : 8 * mib);
+    int tries = 0;
+    for (int pass = 0; pass < 2 && tries < 3; pass++) {
+        for (int i = 0; i < n && tries < 3; i++) {
+            bool high = r[i].base >= (1ull << 32);
+            if (high != (pass == 0)) continue;
+            UINT64 at = (r[i].base + mib - 1) & ~(mib - 1), end = r[i].base + r[i].size;
+            if (at < fb_end && at + need > fb) at = (fb_end + mib - 1) & ~(mib - 1);
+            if (at + need > end || at + need > PHYSMAP_SIZE) continue;
+            tries++;
+            if (!place(v, at)) {
+                kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx either\n", (unsigned long long)at);
+                continue;
+            }
+            if (!DisplayHyperVMove(at, need)) {
+                kprintf("[HVVIDEO] The screen could not move to 0x%llx\n", (unsigned long long)at);
+                return;
+            }
+            v->vram_phys = at;
+            v->vram_size = need;
+            kprintf("[HVVIDEO] Video memory at 0x%llx taken (%llu MiB): the screen is NovaOS's from here\n",
+                    (unsigned long long)at, (unsigned long long)(need >> 20));
+            take_over(v);
+            return;
+        }
+    }
+    kprintf("[HVVIDEO] No VMBus memory range took %llu MiB of video memory (%d tried)\n",
+            (unsigned long long)(need >> 20), tries);
 }
 
 static void video_started(void *ctx)
@@ -343,6 +447,8 @@ static void video_started(void *ctx)
     if (!v->nmodes)
         for (UINT32 i = 0; i < sizeof(common) / sizeof(common[0]); i++) add_mode(v, common[i].w, common[i].h);
     add_mode(v, bw, bh);
+    v->bw = bw;
+    v->bh = bh;
 
     bool taken = false;
     for (int tries = 0; tries < 2 && !taken; tries++) {
@@ -357,33 +463,19 @@ static void video_started(void *ctx)
                     (unsigned long long)v->reply.vram_ack.user_ctx, (unsigned long long)base);
     }
     if (!taken) {
-        kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx (%llu MiB offered): the firmware's frame buffer stays\n",
+        kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx (%llu MiB offered): "
+                "trying the VMBus memory ranges once ACPI is up; the boot log goes on COM1 only\n",
                 (unsigned long long)base, (unsigned long long)(v->vram_size >> 20));
         situation(v, bw, bh);                            /* (best effort: the screen must not freeze) */
         dirt(v);
+        /* Drawing into memory the host does not back is very slow (a
+         * scrolling boot log took ten minutes on Hyper-V) */
+        kprintf_set_fb_enabled(false);
+        v->relocate = true;
         return;
     }
     kprintf("[HVVIDEO] Video memory at 0x%llx taken: the screen is NovaOS's from here\n", (unsigned long long)base);
-    if (!situation(v, bw, bh)) {
-        kprintf("[HVVIDEO] Cannot send the mode\n");
-        return;
-    }
-
-    memset(&m, 0, sizeof(m));                            /* NovaOS draws the pointer itself */
-    m.ptr_pos.visible = 1;
-    send(v, &m, SV_POINTER_POSITION, 10);
-    memset(&m, 0, sizeof(m));
-    m.ptr_shape.part = 0xFF;                             /* (the whole shape in one part) */
-    m.ptr_shape.argb = 1;
-    m.ptr_shape.w = m.ptr_shape.h = 1;
-    send(v, &m, SV_POINTER_SHAPE, 22);
-
-    g_video = v;
-    dirt(v);
-    kprintf("[HVVIDEO] Synthetic video %u.%u: %llu MiB of video memory at 0x%llx, %d mode(s)\n",
-            v->version & 0xFFFF, v->version >> 16, (unsigned long long)(v->vram_size >> 20),
-            (unsigned long long)base, v->nmodes);
-    v->attached = DisplayHyperVAttach(set_mode, v->modes, v->nmodes);
+    take_over(v);
 }
 
 /* {da0a7802-e377-4aac-8e77-0558eb1073f8} */

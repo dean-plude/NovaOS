@@ -138,6 +138,19 @@ at its own mode.  (The first real host boots looked frozen right after
 `Hyper-V video: channel 5 open`, then after `Version 3.5 accepted`.)  NovaOS draws its own pointer
 (the host's is hidden).
 
+The messages are packed exactly as Linux's `hyperv_drm` declares them
+(the build checks the offsets): before that, the video memory's address
+sat a few bytes late and the host read it as 0, so it refused the video
+memory (and Hyper-V could not restore a saved state: "Synthetic Display
+Controller could not allocate guest physical address space").  Should a
+host still refuse the frame buffer, the driver stops drawing the boot log
+on the screen (it goes on on COM1; drawing into memory the host does not
+back made a boot take ten minutes) and, once ACPI is up, puts the video
+memory in the memory ranges ACPI gives the VMBus device, away from the
+frame buffer, the range above 4 GiB first, as Linux's
+`vmbus_allocate_mmio` does; the desktop moves there.  `Get-VM <name> |
+Format-List *MemoryMappedIo*` shows those ranges' sizes on the host.
+
 ## Network
 
 `kernel/drivers/netvsc.c` drives Hyper-V's synthetic network adapter, the
@@ -289,6 +302,9 @@ lines say what went wrong:
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
 | `[RTC] The clock's update flag never cleared` | the CMOS clock never finished an update; the time read may be off (it no longer hangs the boot) |
+| `[ACPI] VMBus memory range 0x...-0x... (N MiB)` | a range the VMBus device may use for the video memory |
+| `[HVVIDEO] ... trying the VMBus memory ranges once ACPI is up`, then `Video memory at 0x... taken (N MiB)` and `[DISPLAY] The screen moved to 0x...` | the frame buffer was refused and the video memory moved; the screen works |
+| `[HVVIDEO] No VMBus memory range took N MiB`, `ACPI lists no VMBus memory ranges` | the video memory found no home: the screen stays at the boot log's last frame (COM1 has the rest) |
 | `[HVVIDEO] No answer N to message M in 10000 ms`, `... answer names 0x..., not 0x...`, `While waiting for message N: ...` | which synthvid step failed and what the host sent instead (the video memory's location is asked twice) |
 | the screen stops changing after `[HVVIDEO] Version 3.5 accepted` or later | the host gets no dirty rectangles: the boot log on COM1 says whether NovaOS still runs (Hyper-V Manager's Heartbeat column too) |
 | `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |

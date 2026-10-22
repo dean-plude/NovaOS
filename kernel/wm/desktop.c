@@ -2198,6 +2198,10 @@ void DesktopRun(void *arg)
         ps2_poll();
         VirtioInputPoll();
         monitors_poll();
+        if (DisplayTakeMoved()) {               /* (Hyper-V's video memory went elsewhere: hv_video.c) */
+            WmCursorHide();
+            relayout(GdiScreenW(), GdiScreenH(), GdiScale());
+        }
         power_poll();
         /* C:\\Desktop changed (an installer made a shortcut)? redraw the icons */
         if (g_desktop_beat - last_desk_check >= 50) {

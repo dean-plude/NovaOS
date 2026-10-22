@@ -17,19 +17,42 @@ case "$profile" in
     runtime) ;;
     *) echo "unknown dependency profile $profile" >&2; exit 2 ;;
 esac
-# A runner's apt can stall for the whole job (devices: 60 minutes without output): bound each attempt and try twice.
-apt_install() {
-    sudo apt-get update -qq &&
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${base[@]}"
+# A runner's apt can stall for a whole job (devices: 60 minutes without output, twice in a row
+# on 10-22). So: APT_DEB_CACHE (.github/actions/deps, an actions/cache keyed by runner image)
+# keeps the .debs a profile downloaded and later jobs install them with dpkg, no network;
+# apt itself gets connection timeouts and retries, each attempt is bounded and tried twice,
+# and a stalled attempt prints which apt/dpkg processes were stuck.
+cache=${APT_DEB_CACHE:-}
+apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+          -o DPkg::Lock::Timeout=120)
+if [ -n "$cache" ]; then
+    mkdir -p "$cache"
+    apt_opts+=(-o Dir::Cache::archives="$cache")
+fi
+from_cache() {
+    [ -n "$cache" ] && compgen -G "$cache/*.deb" >/dev/null || return 1
+    echo "installing $(ls "$cache"/*.deb | wc -l) cached packages"
+    timeout 600 sudo DEBIAN_FRONTEND=noninteractive dpkg -i "$cache"/*.deb >/dev/null
 }
-export -f apt_install
-export base_list="${base[*]}"
-for attempt in 1 2; do
-    if timeout 600 bash -c 'read -ra base <<< "$base_list"; '"$(declare -f apt_install)"'; apt_install'; then break; fi
-    [ "$attempt" = 2 ] && { echo "apt install failed twice" >&2; exit 1; }
-    echo "apt install stalled or failed: trying once more" >&2
-    sudo pkill -x apt-get || true
-done
+apt_install() {
+    timeout 300 sudo apt-get "${apt_opts[@]}" update &&
+        timeout 600 sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" install -y -f \
+            --no-install-recommends "${base[@]}"
+}
+if ! from_cache; then
+    for attempt in 1 2; do
+        if apt_install; then break; fi
+        echo "apt install stalled or failed (attempt $attempt); apt and dpkg processes:" >&2
+        ps -eo pid,etime,stat,args | grep -E '[a]pt|[d]pkg|[h]ttp' >&2 || true
+        [ "$attempt" = 2 ] && { echo "apt install failed twice" >&2; exit 1; }
+        sudo pkill -x apt-get || true
+        sudo dpkg --configure -a || true
+    done
+    if [ -n "$cache" ]; then
+        sudo rm -rf "$cache/partial" "$cache/lock"
+        sudo chown -R "$(id -u):$(id -g)" "$cache"
+    fi
+fi
 if [ "$profile" = graphics ] || [ "$profile" = vkd3d ]; then
     pip install --user --break-system-packages -q 'meson==1.9.0' pycotap
     echo "$HOME/.local/bin" >> "$GITHUB_PATH"

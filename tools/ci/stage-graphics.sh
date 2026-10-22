@@ -7,7 +7,7 @@
 #                  (tools/build_vkd3d_proton.py; VKD3D_7Z names one already
 #                  built) (C:\Downloads: the Store installs them without a
 #                  network)
-#   DIR/tests      tools/gltest, tools/d3dtest, tools/d3d12test, tools/hlsltest, tools/d2dtest, tools/dwtest and tools/dw3test,
+#   DIR/tests      tools/gltest, tools/d3dtest, tools/d3d12test, tools/hlsltest, tools/d2dtest, tools/dwtest, tools/dw3test and tools/dw6test,
 #                  64- and 32-bit,
 #                  and d2dtest's reference image (C:\Tests)
 # Needs curl, 7z (p7zip-full) and MinGW-w64 (x86-64 and i686), and what
@@ -67,6 +67,7 @@ for arch in x86_64 i686; do
   $arch-w64-mingw32-gcc -O2 -o "$OUT/tests/dwtest$sfx.exe" "$ROOT/tools/dwtest/dwtest.c" \
     -ldwrite -lgdi32 -luser32
   $arch-w64-mingw32-gcc -O2 -o "$OUT/tests/dw3test$sfx.exe" "$ROOT/tools/dw3test/dw3test.c" -ldwrite
+  $arch-w64-mingw32-gcc -O2 -o "$OUT/tests/dw6test$sfx.exe" "$ROOT/tools/dw6test/dw6test.c" -ldwrite
 done
 python3 "$ROOT/tools/d2dtest/png2bmp.py" "$ROOT/tools/d2dtest/d2dref.png" "$OUT/tests/d2dref.bmp"
 ls -l "$OUT/downloads" "$OUT/tests"

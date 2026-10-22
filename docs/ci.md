@@ -307,8 +307,8 @@ The core and devices suites are described in [testing.md](testing.md).
   (`virtio-vga-gl,venus=on`, whose Vulkan and OpenGL are the runner's
   lavapipe and llvmpipe), run under Xvfb. In order:
   - `d2dtest` (Direct2D, and a scene that must match the reference
-    `tools/d2dtest/reference.py` draws with Skia), `dwtest` and `dw3test`
-    (DirectWrite), `d3d9test none` (Direct3D 9 with no DXVK);
+    `tools/d2dtest/reference.py` draws with Skia), `dwtest`, `dw3test` and
+    `dw6test` (DirectWrite), `d3d9test none` (Direct3D 9 with no DXVK);
   - the App Store installs Mesa 3D, DXVK, VKD3D-Proton and Venus
     (`tools/ci/stage-graphics.sh` stages the downloads);
   - `montest` (the second monitor), `nstest` (NetSurf on a page with an SVG

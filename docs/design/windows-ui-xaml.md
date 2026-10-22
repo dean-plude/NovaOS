@@ -681,12 +681,21 @@ vendors.
      (`DataTemplate`, `ItemsPanelTemplate`, `TemplateContent`, the
      transitions).  `xamlapptest` finds both resources and makes the
      resource manager.
-   - *Left:* the theme resources' first `FontFamily` starts XAML's text
-     services, and text formatting starts from DirectWrite's
-     Windows 10 font model (`IDWriteFactory6`, font collections and
-     families 2, font lists 2, font faces 4 and 5, text layouts up to 4),
-     which NovaOS's DirectWrite stops short of (`IDWriteFactory3`).  The
-     page test that waits on it is kept for that part.
+   - *Third part, DirectWrite's Windows 10 font model.*  The theme
+     resources' first `FontFamily` starts XAML's text services, and text
+     formatting starts from `IDWriteFactory6`.  NovaOS's DirectWrite now
+     goes up to `IDWriteFactory7`: system collections in the typographic
+     or weight-stretch-style family model, font sets, resources and
+     references with axis values, families and lists 2, font faces 4 to
+     6, font fallback 1, text formats 1 to 3, text layouts 1 to 4 and
+     text analyzers 1 and 2 (`dw6test`).  NovaOS's fonts are static, so
+     axis values map to weight, stretch and style.  A `Window` now loads
+     the system collection and its theme resources.
+   - *Left:* the framework's `XamlIsland` peer, which a desktop `Window`
+     makes for its content and whose implementation is not in
+     Microsoft's open sources (only its header is), then the page laid
+     out, drawn, typed into and clicked.  The page test that waits on it
+     is kept for that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

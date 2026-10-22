@@ -11,6 +11,11 @@
 //     it resolves (core/text/common/TextFormatting.cpp).  NovaOS has no MUI
 //     fallback data, so there is none, and the text core uses the language
 //     itself, as it does on Windows when the lookup fails.
+//   Mui_PropagateApplicationLanguages: hands the app's preferred languages
+//     on as the process's MUI languages, which the resource provider asks
+//     for when the app's languages change (CommonResourceProvider.cpp).
+//     NovaOS loads no MUI resources by language, so there is nothing to
+//     hand on, and it succeeds.
 //   VisualDiagnosticsPort: the message port diagnostics tools connect to a
 //     XAML thread through.  NovaOS has no such tools, so there is nothing to
 //     register with; the framework starts as it does on Windows when no
@@ -72,4 +77,9 @@ HRESULT Mui_GetFontFallbackLanguageList(PCWSTR, size_t, PWSTR, size_t *cchWritte
 {
     if (cchWritten) *cchWritten = 0;
     return E_NOTIMPL;
+}
+
+HRESULT Mui_PropagateApplicationLanguages()
+{
+    return S_OK;
 }

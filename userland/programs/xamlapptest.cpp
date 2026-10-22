@@ -11,6 +11,10 @@
  * holding a TextBlock) on the app's thread and queues work on the thread's
  * DispatcherQueue; the work runs from the desktop message loop and calls
  * Application.Exit, which ends the loop and returns from Application.Start.
+ * There, too, the framework's theme resources and control styles
+ * (Microsoft.UI.Xaml.Resources.19H1.dll, from generic.xaml: step 32.4) are
+ * found as the framework finds them (DXamlCore::GetResourceBytes), and the
+ * core's resource manager, over the platform's resource provider, is made.
  * A Window (DesktopWindowImpl, on the Windows App SDK's content islands)
  * is step 32.4.
  *
@@ -27,6 +31,8 @@
 #include <WindowsXamlManager.g.h>
 #include <Grid.g.h>
 #include <TextBlock.g.h>
+#include <DXamlCore.h>
+#include <ParserAPI.h>
 #include <roapi.h>
 #include <FrameworkApplication_Partial.h>
 #include <microsoft.ui.dispatching.h>
@@ -129,6 +135,34 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *args)
     CHECK("a TextBlock with its text", children && SUCCEEDED(children->GetAt(0, &first)) && SUCCEEDED(first.As(&tb)) &&
           SUCCEEDED(tb->get_Text(&text)) && is(text, L"Hello, Starlight"));
     WindowsDeleteString(text);
+
+    /* the theme resources and the control styles, as the framework finds
+     * them: the resource DLL's XAML (text: NovaOS builds it without the
+     * XAML compiler's XBF) */
+    DirectUI::DXamlCore *core = DirectUI::DXamlCore::GetCurrent();
+    CHECK("the thread's framework core", core != nullptr);
+    Parser::XamlBuffer themes, styles;
+    if (core) {
+        CHECK_HR("the theme resources", core->GetResourceBytes(L"ThemeResources.xbf", &themes));
+        CHECK_HR("the control styles", core->GetResourceBytes(L"Styles.xbf", &styles));
+    }
+    auto has = [](const Parser::XamlBuffer &b, const char *what) {
+        size_t n = strlen(what);
+        for (size_t i = 0; b.m_buffer && i + n <= b.m_count; i++)
+            if (!memcmp(b.m_buffer + i, what, n)) return true;
+        return false;
+    };
+    CHECK("are a resource dictionary's XAML, as text", themes.m_bufferType == Parser::XamlBufferType::Text &&
+          themes.m_count > 100000 && !memcmp(themes.m_buffer, "<ResourceDictionary", 19));
+    CHECK("with the Light, Dark (Default) and HighContrast theme dictionaries", has(themes, "x:Key=\"Light\"") &&
+          has(themes, "x:Key=\"Default\"") && has(themes, "x:Key=\"HighContrast\""));
+    CHECK("the styles hold Button's", styles.m_bufferType == Parser::XamlBufferType::Text &&
+          has(styles, "<Style TargetType=\"Button\""));
+    CHECK("but none of the controls libraries' types (Pivot, TextCommandBarFlyout)", !has(styles, "\"Pivot\"") &&
+          !has(themes, "<TextCommandBarFlyout"));
+    xref_ptr<IPALResourceManager> resources;
+    CHECK_HR("the core's resource manager", core ? core->GetHandle()->GetResourceManager(resources.ReleaseAndGetAddressOf()) : E_FAIL);
+    CHECK("is made", resources != nullptr);
 
     /* then work the message loop runs, which ends the app */
     ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;

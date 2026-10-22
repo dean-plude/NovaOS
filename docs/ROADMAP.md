@@ -1154,11 +1154,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`Microsoft.UI.Input.dll`: `ContentIsland`, `DesktopChildSiteBridge`,
   the island's input sources and focus controller, `AppWindow`), in
   `contentislandtest`, and the framework's `DesktopWindowImpl`,
-  `DesktopWindowXamlSource`, island root and window chrome built.  Left:
-  the theme resources (`generic.xaml`, which a `Window` loads as it is
-  created, compiled to XBF as Windows ships it), DirectWrite's Windows 10
-  font model (`IDWriteFactory6`, which XAML's text formatting starts
-  from), then the page laid out, drawn, typed into and clicked.
+  `DesktopWindowXamlSource`, island root and window chrome built.  Theme
+  resources part done: the framework's control styles and theme
+  resources (`themes/generic.xaml`, split as Microsoft splits it) in
+  `Microsoft.UI.Xaml.Resources.19H1.dll`, as XAML text (the XBF compiler
+  is Windows-only), found and parsed when a `Window` is created, with the
+  core's resource provider and the framework's metadata provider; checked
+  in `xamlapptest`.  Left: DirectWrite's Windows 10 font model
+  (`IDWriteFactory6`, which the theme resources' first `FontFamily` and
+  XAML's text formatting start from), then the page laid out, drawn,
+  typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

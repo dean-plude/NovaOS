@@ -649,15 +649,44 @@ vendors.
      them back with using-declarations; `build.py` generates copies that
      add them (`dwrite_headers`).  `contentislandtest` checks the layer
      on its own.
-   - *Left:* creating a `Window` applies its chrome's style, which loads
-     the framework's theme resources: `themeresources.xbf` and
-     `Styles.xbf` from `Microsoft.UI.Xaml.Resources.19H1.dll`, compiled
-     from `themes/generic.xaml` by Microsoft's XBF generator
-     (`tools/GenXbfDLL`, MIT).  Text formatting starts from DirectWrite's
+   - *Theme resources part (done):* creating a `Window` applies its
+     chrome's style, which loads the framework's theme resources
+     (`StyleCache::LoadThemeResources`): `ThemeResources.xbf`, and for a
+     control's default style `Styles.xbf`, `TEXTFILE` resources of
+     `Microsoft.UI.Xaml.Resources.19H1.dll`.  Microsoft splits
+     `themes/generic.xaml` into the two (`SplitGenericXaml.cs`: the
+     implicit styles; the theme dictionaries, other resources and keyed
+     styles) and compiles them to XBF with the XAML compiler, which runs
+     on Windows only.  NovaOS's DLL (`userland/microsoft_ui_xaml_resources_19h1`,
+     its `build.py` the split in Python, compiled by `llvm-rc`) holds the
+     split XAML as text, and NovaOS's `DXamlCore::GetResourceBytes`
+     (`src/resource_bytes.cpp`, with the resource module handle
+     Microsoft's `dllentry.cpp` keeps; DXamlCore.cpp's own renamed out,
+     `FILE_RENAMES`) hands it to the parser as text, or a resource that is
+     XBF as XBF.  Text differs from XBF in two ways that matter: the parser
+     asks the core's resource manager about the resource's URI, so the
+     platform's resource provider is built (Microsoft's
+     `CommonResourceProvider`, the fallback its desktop platform takes
+     when MRT Core's `ResourceManager` cannot be used, made by
+     `src/resource_provider.cpp`; MRT joins with 32.6), and every type
+     resolves as the text is parsed, where XBF waits until a resource is
+     looked up.  The framework's metadata provider
+     (`components/ExtMetadataProvider`) is built for the types the type
+     table does not know, and the split leaves out the resources and
+     styles of types from libraries not built yet (the phone extension
+     library's `Pivot`, looping selector and picker presenters, WinUI's
+     `ProgressBar` and `TextCommandBarFlyout`, and the text boxes' styles
+     that name its flyouts: `OUTSIDE` in the DLL's `build.py`).  The
+     framework peers the resources make as they load are built
+     (`DataTemplate`, `ItemsPanelTemplate`, `TemplateContent`, the
+     transitions).  `xamlapptest` finds both resources and makes the
+     resource manager.
+   - *Left:* the theme resources' first `FontFamily` starts XAML's text
+     services, and text formatting starts from DirectWrite's
      Windows 10 font model (`IDWriteFactory6`, font collections and
      families 2, font lists 2, font faces 4 and 5, text layouts up to 4),
      which NovaOS's DirectWrite stops short of (`IDWriteFactory3`).  The
-     page test that waits on both is kept for those parts.
+     page test that waits on it is kept for that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

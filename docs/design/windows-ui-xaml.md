@@ -703,12 +703,29 @@ vendors.
      (`AddXamlIslandRoot`), forwards `Content` and `ContentIsland` to it,
      keeps the system backdrop and `ShouldConstrainPopupsToWorkArea`, and
      on `Close` takes the root out of the core and disposes of it.
-   - *Left:* setting the page as the island's content makes the root
-     `ScrollViewer` around it (`ContentManager::CreateRootScrollViewer`:
-     the framework's `ScrollViewer`, `ScrollContentPresenter` and
-     `RootScrollViewer`, not built yet), then the page laid out, drawn,
-     typed into and clicked.  The page test that waits on it is kept for
-     that part.
+   - *Fifth part, the root ScrollViewer.*  Setting a page as the
+     window's content puts it in a root `ScrollViewer`
+     (`ContentManager::CreateRootScrollViewer`: a `RootScrollViewer` with
+     scrolling and zoom off, its `ScrollContentPresenter` set by hand
+     rather than by a template, and a `Border` painted with a transparent
+     `SolidColorBrush` around the page).  These are Microsoft's
+     (`ScrollViewer_Partial.cpp`, `ScrollContentPresenter_Partial.cpp`,
+     `RootScrollViewer_Partial.cpp`, their base `ScrollContentControl`,
+     `Brush` and `SolidColorBrush`, each with its generated class), with
+     the core constructors of the classes the core's generator writes
+     whole in headers (`core/controls/generated/GeneratedClasses.g.cpp`:
+     `CRootScrollViewer`, `CScrollContentPresenter` and the rest; the
+     core's `CScrollViewer` was already built).  DirectManipulation and the
+     scroll bars stay unbuilt: the root's scrolling is off.
+   - *Left:* the first frame then asks the composition tree host for its
+     device (`DCompTreeHost::EnsureDCompDevice`), made by a
+     `CompositionHelper` the Windows App SDK ships closed
+     (`inc/CompHelper/CompositionHelper.h` declares it).  Its main device
+     is both a DirectComposition `IDCompositionDevice2` (`Commit`,
+     `WaitForCommitCompletion`) and the Microsoft.UI.Composition
+     `Compositor` XAML's visuals are made on, so NovaOS's has to join
+     `dcomp.dll`'s two halves.  Then the page drawn, typed into and
+     clicked.  The page test that waits on it is kept for that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

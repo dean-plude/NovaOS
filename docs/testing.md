@@ -18,7 +18,7 @@ with OVMF in separate jobs:
 | Checks (conflict markers, manifests, generated docs) | host-side checks and the unit tests in `tests/tools/`; no VM |
 | OS tests (core) | `tools/selftest.py --suite core`: one long boot ([below](#the-core-suite)) |
 | OS tests (network) | `--suite network`: virtio-net on IPv4 and on IPv6, then an Intel e1000e ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
-| OS tests (devices) | `--suite devices`: one boot per device or machine ([below](#the-devices-suite)) |
+| OS tests (devices 1/3, 2/3, 3/3) | `--suite devices --shard I/3`: one boot per device or machine, a third of the boots in each job so the whole suite stays well under the 60-minute limit ([below](#the-devices-suite)) |
 | Compatibility smoke | `tools/compat_smoke.py`: seven core tests (loader, wait migration, Chromium start-up, unwinding, WebView2 start-up) in a short boot of their own |
 | Performance budget | `tools/ci/perf.py`: boot time, Firefox start time and SMP scaling against `tools/ci/perf-budget.json` ([ci.md](ci.md#the-performance-budget)) |
 | Graphics tests (OpenGL, Direct3D) | `--suite graphics`: Direct2D, DirectWrite, OpenGL, Direct3D 9/11/12, DirectComposition on Mesa, DXVK, VKD3D-Proton and Venus ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
@@ -441,6 +441,7 @@ sudo apt install acpica-tools
 python3 tools/selftest.py
 python3 tools/selftest.py --suite network
 python3 tools/selftest.py --suite devices
+python3 tools/selftest.py --suite devices --shard 1/3   # one of CI's three jobs
 python3 tools/selftest.py --only apitest,guitest --out /tmp/st
 python3 tools/compat_smoke.py
 python3 tools/ci/perf.py

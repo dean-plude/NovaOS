@@ -1351,6 +1351,16 @@ PANIC = re.compile(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|Unhandled kerne
 BOOTS['network'].append(('e1000e', NET_E1000E, e1000e_boot))
 
 
+def shard_boots(boots, index, count):
+    """The boots of shard INDEX (1-based) of COUNT: boots with the most tests first, each to the lightest shard so far."""
+    load, groups = [0] * count, [[] for _ in range(count)]
+    for b in sorted(boots, key=lambda b: -len(b[1])):
+        i = load.index(min(load))
+        groups[i].append(b)
+        load[i] += len(b[1])
+    return [b for b in boots if b in groups[index - 1]]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--suite', choices=('core', 'graphics') + tuple(BOOTS), default='core')
@@ -1358,6 +1368,7 @@ def main():
     ap.add_argument('--img', default=os.path.join(ROOT, 'build', 'nova.img'))
     ap.add_argument('--out', default='selftest-out')
     ap.add_argument('--only')
+    ap.add_argument('--shard', metavar='I/N', help='run only the I-th of N balanced groups of a boot suite\'s boots (devices)')
     ap.add_argument('--junit')
     ap.add_argument('--summary')
     ap.add_argument('--list', action='store_true', help='print the suite\'s tests and exit')
@@ -1377,7 +1388,10 @@ def main():
     OUT = a.out
     if a.suite in BOOTS:
         results = []
-        for name, suite, setup in BOOTS[a.suite]:
+        boots = BOOTS[a.suite]
+        if a.shard:
+            boots = shard_boots(boots, *map(int, a.shard.split('/')))
+        for name, suite, setup in boots:
             tests = chosen(suite)
             if not tests:
                 continue

@@ -856,6 +856,11 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
                                                       'XamlIslandRoot', 'WindowActivatedEventArgs', 'WindowEventArgs',
                                                       'WindowSizeChangedEventArgs',
                                                       'WindowVisibilityChangedEventArgs'))
+# (and the XamlIsland the DesktopWindowXamlSource makes its island root
+# through, which Microsoft's sources ship only the declarations of: NovaOS's
+# own, src/xaml_island.cpp, roadmap 32.4)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'xaml_island.cpp'))
 _ELEMENTS2_LATER = tuple(x for x in _ELEMENTS2_LATER if x != 'xamlislandroot.cpp')
 CORE_SOURCES[_ELEMENTS2] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))

@@ -1177,6 +1177,8 @@ FatVol *FatFormat(BlockDev *dev, UINT64 lba, UINT64 sectors, const char *label)
         UINT32 n = data_start + spc - s < 64 ? data_start + spc - s : 64;
         ok = dev->write(dev, lba + s, n, buf);
     }
+    if (!ok) kprintf("[FAT] %s: writing the empty FATs failed\n", dev->name);
+    else kprintf("[FAT] %s: %u sectors of empty FATs written\n", dev->name, data_start + spc);
     UINT8 *bs = buf;
     RtcTime t;
     rtc_read(&t);

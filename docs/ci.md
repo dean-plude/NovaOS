@@ -23,7 +23,7 @@ failure.
 | **Checks (conflict markers, manifests, generated docs)** | | decides the run's scope (`tools/ci/plan.py`), runs actionlint, the host regressions in `tests/tools/`, `tools/ci/check-conflict-markers.py`, `tools/ci/check-driver-imports.py`, `tools/build_userland.py --check`, `tools/selftest.py --list` for every suite, `tools/compat_smoke.py --list`, and `tools/docgen.py --check-pr` against the pull request's base |
 | **Build** | Checks | `build.yml`: kernel, boot loader, userland, `build/nova.img` and `build/nova.iso`; stamps `build/ci-image.json` |
 | **Compatibility smoke** | Build | `tools/compat_smoke.py`: seven bounded core tests (`dlltest` x64 and x86, wait migration x64 and x86, Chromium start-up x64, `unwindtest`, `wvstarttest`) in their own boot |
-| **OS tests (core)**, **(network)**, **(devices)** | Build | `tools/selftest.py --suite SUITE`, one job per suite, `fail-fast: false` |
+| **OS tests (core)**, **(network)**, **(devices)** | Build | `tools/selftest.py --suite SUITE`, one job per suite, `fail-fast: false`; the devices suite runs as three jobs, **OS tests (devices 1/3)** to **(devices 3/3)**, each a third of its boots (`--shard I/N`, balanced by test count) so no job nears the 60-minute limit; `tools/ci/install.sh` bounds each apt attempt at 10 minutes and tries twice, and the install step has a 25-minute limit, because a runner's apt can stall for a whole job |
 | **Performance budget** | Build | `tools/ci/perf.py` ([below](#the-performance-budget)) |
 | **Graphics tests (OpenGL, Direct3D)** | Build | builds or restores Venus, VKD3D-Proton and a QEMU with Venus, then `tools/selftest.py --suite graphics` |
 | **MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)** | Checks | builds MS-DOS 4.0 from Microsoft's source with its own tools in DOSBox (`tools/msdos/build_msdos.py`), boots it from a floppy image in QEMU (`tools/msdos/boot_test.py`) and on `ntvdm.exe`'s real-mode CPU and BIOS built for Linux, typing `VER`, `DIR`, `MEM`, `CHKDSK`, `COPY` and a `DEBUG` session, then running a `.COM` and an `.EXE` on a drive C: of the runner's files as `CreateProcess` starts them and `DIR`, `CD`, `COPY`, `REN`, `DEL` there, writing a file in `EDLIN` and playing the DOS game bootRogue with the arrow keys (`tools/msdos/vdm_test.py`); not part of the required checks ([dos.md](dos.md)) |
@@ -111,7 +111,7 @@ and SMP jobs) it fails the job unless the run was started by hand with
 ### Artifacts
 
 Each test job uploads its output even when it fails, kept for 14 days:
-`selftest-core`, `selftest-network`, `selftest-devices`, `graphics-out`,
+`selftest-core`, `selftest-network`, `selftest-devices-1` to `selftest-devices-3`, `graphics-out`,
 `compat-smoke-out`, `perf-out` and `msdos` (the built MS-DOS files, NMAKE's
 `BUILD.LOG` and the boot test's serial log). They hold the serial logs, a screenshot
 after each test, sound recordings and a JUnit file where the suite writes

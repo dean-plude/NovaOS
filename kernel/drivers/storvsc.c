@@ -176,6 +176,9 @@ static bool request(Stor *s, VstorPacket *p, UINT32 buf_len)
     for (UINT32 t = 0; sent && !__atomic_load_n(&s->done, __ATOMIC_ACQUIRE); t++) {
         VmbusPollChannel(s->ch);
         if (__atomic_load_n(&s->done, __ATOMIC_ACQUIRE)) break;
+        if (t && !(t % (5000 * 100)))                    /* (every 5 s: which request the host sits on) */
+            kprintf("[STORVSC] controller %d: still waiting after %u s (operation %u, SCSI 0x%02x)\n", s->number,
+                    t / 100000, p->operation, p->operation == VSTOR_EXECUTE_SRB ? p->srb.cdb[0] : 0);
         if (t >= TIMEOUT_MS * 100) {
             kprintf("[STORVSC] controller %d: no answer in %u s: given up\n", s->number, TIMEOUT_MS / 1000);
             s->dead = true;

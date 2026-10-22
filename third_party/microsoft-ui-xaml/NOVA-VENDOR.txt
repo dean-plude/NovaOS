@@ -154,6 +154,10 @@ core/controls/generated's GeneratedClasses.g.cpp with its
 CoreControlsGenerated.vcxproj (the core constructors of the generated
 control classes).
 
+For the first frame (step 32.4): components/UIBridgeFocus whole (the
+island's FocusController and its navigation results and event args, with
+Microsoft.UI.Xaml.UIBridgeFocus.vcxproj).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

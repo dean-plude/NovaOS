@@ -266,6 +266,11 @@ CORE_SOURCES.update({
     'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj': ('../DCompTreeHost.cpp', '../OfferTracker.cpp'),
     'control/download/download.vcxproj': ('download.cpp',),
     'components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj': ('../WUCBrushManager.cpp',)})
+# (and the CompositionHelper the composition tree host keeps its device in,
+# which the Windows App SDK ships closed: NovaOS's own on dcomp.dll's
+# compositor, src/composition_helper.cpp, roadmap 32.4)
+next(c for c in CORE_LIBRARIES if c[0] == 'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'composition_helper.cpp'))
 CORE_FIRST['core/hw/hw.vcxproj'] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 for _p in ('plat/win/desktop/platwindesktop.vcxproj', 'components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj',
            'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj', 'control/download/download.vcxproj',
@@ -825,6 +830,11 @@ for _p in ('focus/FocusObserver/Microsoft.UI.Xaml.Focus.FocusObserver.vcxproj',
     CORE_LIBRARIES.append(('components/' + _p, 'components/' + _p, 'components/pch/precomp.h', []))
     CORE_SOURCES['components/' + _p] = tuple(_rel + os.path.basename(x) for x in
                                               vcxproj.read(os.path.join(XCP, 'components', _p), PROPS)['sources'])
+# (and the focus controller a XAML island root makes over its content
+# island's InputFocusController, components/UIBridgeFocus, roadmap 32.4)
+_UIBRIDGEFOCUS = 'components/UIBridgeFocus/Microsoft.UI.Xaml.UIBridgeFocus.vcxproj'
+CORE_LIBRARIES.append((_UIBRIDGEFOCUS, _UIBRIDGEFOCUS, 'components/pch/precomp.h', []))
+CORE_SOURCES[_UIBRIDGEFOCUS] = tuple(vcxproj.read(os.path.join(XCP, _UIBRIDGEFOCUS), PROPS)['sources'])
 # (and, once the application has entered its tree, the window the
 # framework's control takes on (dxaml/lib/JupiterWindow.cpp, a desktop
 # window without a CoreWindow on this path) and the control layer's
@@ -942,6 +952,31 @@ CORE_LIBRARIES.append((_CONTROLSGEN, 'core/common.props', 'core/controls/generat
 CORE_FIRST[_CONTROLSGEN] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 PROJECT_DEFINES[_CONTROLSGEN] = ['EXP_CLANG']
 CORE_SOURCES[_CONTROLSGEN] = ('GeneratedClasses.g.cpp',)
+# (and what the first frame makes (roadmap 32.4): the popup root's peer
+# (PopupRoot, its generated class and its partial one) and the core
+# transforms' base, CTransform (components/transforms' Transform.cpp; the
+# transforms themselves are core/core/elements')
+_FRAME_PEERS = ('PopupRoot', 'Canvas', 'TransitionRoot', 'GettingFocusEventArgs', 'LosingFocusEventArgs', 'XamlSourceFocusNavigationRequest', 'PrintRoot', 'FullWindowMediaRoot')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in _FRAME_PEERS if os.path.exists(os.path.join(XCP, 'dxaml', 'lib', x + '_Partial.cpp'))) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _FRAME_PEERS)
+# (and the event args' base, DirectUI::EventArgs, FrameworkEventArgs.cpp,
+# which the focus events' args derive from; 32.5's data binding builds it
+# too, so once only)
+if '../FrameworkEventArgs.cpp' not in CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj']:
+    CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../FrameworkEventArgs.cpp',)
+# (and the window's present target the browser host retargets the render
+# target to as the window sizes, plat/win/desktop's WindowsPresentTarget)
+CORE_SOURCES['plat/win/desktop/platwindesktop.vcxproj'] += ('windowspresenttarget.cpp',)
+# (and the helpers the core's components reach a framework peer through,
+# DependencyObjectAbstractionHelpers, whose stubs, which answer no peer,
+# leave xaml_corestubs.lib: the focus walk asks a peer for its own tab order)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../DependencyObjectAbstractionHelpers.cpp',)
+CORE_SERVICES_STUBS += ('DXaml_Stub.cpp',)
+_TRANSFORMS = 'components/transforms/lib/Microsoft.UI.Xaml.Transforms.vcxproj'
+CORE_LIBRARIES.append((_TRANSFORMS, _TRANSFORMS, 'components/pch/precomp.h', []))
+CORE_FIRST[_TRANSFORMS] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp',)
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

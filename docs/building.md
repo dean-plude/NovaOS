@@ -688,7 +688,7 @@ The graphics suite needs a QEMU with Venus, an OpenGL display and a
 directory of staged files: 7-Zip, the Mesa 3D and DXVK archives the App
 Store lists, `venus.7z` and `vkd3d-proton.7z`, and the test programs
 (`gltest`, `d3dtest`, `d3d12test`, `hlsltest`, `d2dtest`, `dwtest`,
-`dw3test`).  On a machine without a screen, run it under `xvfb-run`:
+`dw3test`, `dw6test`).  On a machine without a screen, run it under `xvfb-run`:
 
 ```bash
 sudo apt install p7zip-full gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \

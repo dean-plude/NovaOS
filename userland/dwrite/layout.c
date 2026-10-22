@@ -1,5 +1,5 @@
 /*
- * layout.c — IDWriteTextFormat and IDWriteTextLayout
+ * layout.c — IDWriteTextFormat3 and IDWriteTextLayout4
  *
  * A layout keeps its text and, per character, an index into a small table
  * of formatting attributes (family, collection, weight, style, stretch,
@@ -22,12 +22,29 @@
  *
  * Draw hands the IDWriteTextRenderer one glyph run per visual piece of a
  * run, with underlines and strikethroughs, as DirectWrite does.
+ *
+ * Windows 10's additions are kept and handed back: axis values (which pick
+ * weight, stretch and style: no font has variations), optical alignment,
+ * vertical glyph orientation, last-line wrapping, a font fallback, pair
+ * kerning, character spacing and the line spacing's leading and line gap
+ * use.  Laying out does not use these yet beyond the axis values.  A layout
+ * is an IDWriteTextLayout4 whose IDWriteTextFormat1 to IDWriteTextFormat3
+ * is a second interface in the same object (their methods take the slots
+ * IDWriteTextLayout's own have).
  */
 #include "dwrite_int.h"
+#include <stddef.h>
 
 /* ---- interface ids ---- */
 DEFINE_GUID(IID_IDWriteTextFormat, 0x9c906818, 0x31d7, 0x4fd3, 0xa1, 0x51, 0x7c, 0x5e, 0x22, 0x5d, 0xb5, 0x5a);
 DEFINE_GUID(IID_IDWriteTextLayout, 0x53737037, 0x6d14, 0x410b, 0x9b, 0xfe, 0x0b, 0x18, 0x2b, 0xb7, 0x09, 0x61);
+DEFINE_GUID(IID_IDWriteTextFormat1, 0x5f174b49, 0x0d8b, 0x4cfb, 0x8b, 0xca, 0xf1, 0xcc, 0xe9, 0xd0, 0x6c, 0x67);
+DEFINE_GUID(IID_IDWriteTextFormat2, 0xf67e0edd, 0x9e3d, 0x4ecc, 0x8c, 0x32, 0x41, 0x83, 0x25, 0x3d, 0xfe, 0x70);
+DEFINE_GUID(IID_IDWriteTextFormat3, 0x6d3b5641, 0xe550, 0x430d, 0xa8, 0x5b, 0xb7, 0xbf, 0x48, 0xa9, 0x34, 0x27);
+DEFINE_GUID(IID_IDWriteTextLayout1, 0x9064d822, 0x80a7, 0x465c, 0xa9, 0x86, 0xdf, 0x65, 0xf7, 0x8b, 0x8f, 0xeb);
+DEFINE_GUID(IID_IDWriteTextLayout2, 0x1093c18f, 0x8d5e, 0x43f0, 0xb0, 0x64, 0x09, 0x17, 0x31, 0x1b, 0x52, 0x5e);
+DEFINE_GUID(IID_IDWriteTextLayout3, 0x07ddcd52, 0x020e, 0x4de8, 0xac, 0x33, 0x6c, 0x95, 0x3d, 0x83, 0xf9, 0x2d);
+DEFINE_GUID(IID_IDWriteTextLayout4, 0x05a9bf42, 0x223f, 0x4441, 0xb5, 0xfb, 0x82, 0x63, 0x68, 0x5f, 0x55, 0xe9);
 
 DWAPI HRESULT WINAPI DWriteCreateFactory(UINT32 type, REFIID riid, void **out);
 
@@ -35,8 +52,11 @@ DWAPI HRESULT WINAPI DWriteCreateFactory(UINT32 type, REFIID riid, void **out);
 typedef struct { UINT32 startPosition, length; } DW_TEXT_RANGE;
 typedef struct { UINT32 granularity, delimiter, delimiterCount; } DW_TRIMMING;
 typedef struct { UINT32 length, trailingWhitespaceLength, newlineLength; float height, baseline; BOOL isTrimmed; } DW_LINE_METRICS;
+typedef struct { DW_LINE_METRICS m; float leadingBefore, leadingAfter; } DW_LINE_METRICS1;
+typedef struct { UINT32 method; float height, baseline, leadingBefore; UINT32 fontLineGapUsage; } DW_LINE_SPACING;
 typedef struct { float left, top, width, widthIncludingTrailingWhitespace, height, layoutWidth, layoutHeight;
                  UINT32 maxBidiReorderingDepth, lineCount; } DW_TEXT_METRICS;
+typedef struct { DW_TEXT_METRICS m; float heightIncludingTrailingWhitespace; } DW_TEXT_METRICS1;
 typedef struct { float left, top, right, bottom; } DW_OVERHANG_METRICS;
 typedef struct { float width; UINT16 length; UINT16 flags; } DW_CLUSTER_METRICS;
 enum { CM_WRAP_AFTER = 1, CM_WHITESPACE = 2, CM_NEWLINE = 4, CM_SOFT_HYPHEN = 8, CM_RTL = 16 };
@@ -230,6 +250,8 @@ typedef struct {
     void *inline_obj;
     void *typography;
     WCHAR *locale;
+    UINT32 naxes;               /* axis values set for it (IDWriteTextFormat3, IDWriteTextLayout4) */
+    DW_AXIS_VALUE axes[8];
 } Attr;
 
 static void attr_copy(Attr *d, const Attr *s)
@@ -256,7 +278,8 @@ static int attr_eq(const Attr *a, const Attr *b)
     return dw_wcsieq(a->family, b->family) && a->coll == b->coll && a->weight == b->weight && a->style == b->style &&
            a->stretch == b->stretch && a->size == b->size && a->underline == b->underline && a->strike == b->strike &&
            a->effect == b->effect && a->inline_obj == b->inline_obj && a->typography == b->typography &&
-           dw_wcsieq(a->locale, b->locale);
+           dw_wcsieq(a->locale, b->locale) && a->naxes == b->naxes &&
+           !memcmp(a->axes, b->axes, a->naxes * sizeof(DW_AXIS_VALUE));
 }
 
 /* ---- the format (shared by IDWriteTextFormat and IDWriteTextLayout) ---- */
@@ -268,6 +291,11 @@ typedef struct {
     void *trim_sign;
     UINT32 spacing_method;
     float spacing, baseline;
+    /* IDWriteTextFormat1 to IDWriteTextFormat3 */
+    UINT32 vertical, optical, gap_usage, auto_axes;
+    BOOL last_line_wrapping;
+    void *fallback;             /* IDWriteFontFallback */
+    float leading_before;
 } Format;
 
 static void format_copy(Format *d, const Format *s)
@@ -275,11 +303,13 @@ static void format_copy(Format *d, const Format *s)
     *d = *s;
     attr_copy(&d->a, &s->a);
     if (d->trim_sign) COM_ADDREF(d->trim_sign);
+    if (d->fallback) COM_ADDREF(d->fallback);
 }
 static void format_free(Format *f)
 {
     attr_free(&f->a);
     if (f->trim_sign) COM_RELEASE(f->trim_sign);
+    if (f->fallback) COM_RELEASE(f->fallback);
 }
 
 /* ---- layout results ---- */
@@ -314,8 +344,11 @@ typedef struct {
 
 typedef struct Layout {
     const void *const *vtbl;
+    const void *const *fmt_iface; /* a layout's IDWriteTextFormat1-3 */
     LONG ref;
     int is_layout;
+    BOOL pair_kerning;          /* IDWriteTextLayout1, for the whole text */
+    float leading, trailing, min_advance;
     Format f;
     float max_w, max_h;
     WCHAR *text;
@@ -1154,10 +1187,19 @@ static void set_typography(Attr *a, const void *v) { set_iface(&a->typography, *
 static HRESULT STDMETHODCALLTYPE l_qi(Layout *l, REFIID riid, void **out)
 {
     if (!out) return E_POINTER;
-    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteTextFormat) ||
-        (l->is_layout && IsEqualIID(riid, &IID_IDWriteTextLayout))) {
+    BOOL format123 = IsEqualIID(riid, &IID_IDWriteTextFormat1) || IsEqualIID(riid, &IID_IDWriteTextFormat2) ||
+                     IsEqualIID(riid, &IID_IDWriteTextFormat3);
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteTextFormat) || (!l->is_layout && format123) ||
+        (l->is_layout && (IsEqualIID(riid, &IID_IDWriteTextLayout) || IsEqualIID(riid, &IID_IDWriteTextLayout1) ||
+                          IsEqualIID(riid, &IID_IDWriteTextLayout2) || IsEqualIID(riid, &IID_IDWriteTextLayout3) ||
+                          IsEqualIID(riid, &IID_IDWriteTextLayout4)))) {
         InterlockedIncrement(&l->ref);
         *out = l;
+        return S_OK;
+    }
+    if (l->is_layout && format123) {
+        InterlockedIncrement(&l->ref);
+        *out = &l->fmt_iface;
         return S_OK;
     }
     *out = NULL;
@@ -1261,6 +1303,83 @@ static UINT32 STDMETHODCALLTYPE f_get_stretch(Layout *l) { return l->f.a.stretch
 static float STDMETHODCALLTYPE f_get_size(Layout *l) { return l->f.a.size; }
 static UINT32 STDMETHODCALLTYPE f_get_locale_len(Layout *l) { return wlen(l->f.a.locale); }
 static HRESULT STDMETHODCALLTYPE f_get_locale(Layout *l, WCHAR *buf, UINT32 size) { return copy_str(l->f.a.locale, buf, size); }
+
+/* ---- IDWriteTextFormat1 ---- */
+static HRESULT STDMETHODCALLTYPE f_set_vertical(Layout *l, UINT32 v)
+{
+    if (v > 1) return E_INVALIDARG;    /* DEFAULT, STACKED */
+    l->f.vertical = v; invalidate(l); return S_OK;
+}
+static UINT32 STDMETHODCALLTYPE f_get_vertical(Layout *l) { return l->f.vertical; }
+static HRESULT STDMETHODCALLTYPE f_set_last_line(Layout *l, BOOL v) { l->f.last_line_wrapping = !!v; invalidate(l); return S_OK; }
+static BOOL STDMETHODCALLTYPE f_get_last_line(Layout *l) { return l->f.last_line_wrapping; }
+static HRESULT STDMETHODCALLTYPE f_set_optical(Layout *l, UINT32 v)
+{
+    if (v > 1) return E_INVALIDARG;    /* NONE, NO_SIDE_BEARINGS */
+    l->f.optical = v; invalidate(l); return S_OK;
+}
+static UINT32 STDMETHODCALLTYPE f_get_optical(Layout *l) { return l->f.optical; }
+static HRESULT STDMETHODCALLTYPE f_set_fallback(Layout *l, void *fb) { set_iface(&l->f.fallback, fb); invalidate(l); return S_OK; }
+static HRESULT STDMETHODCALLTYPE f_get_fallback(Layout *l, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    *out = l->f.fallback;
+    if (*out) COM_ADDREF(*out);
+    return S_OK;
+}
+/* ---- IDWriteTextFormat2 ---- */
+static HRESULT STDMETHODCALLTYPE f_set_spacing2(Layout *l, const DW_LINE_SPACING *sp)
+{
+    if (!sp || sp->method > SPACING_PROPORTIONAL || sp->height < 0 || sp->leadingBefore < 0 || sp->leadingBefore > 1 ||
+        sp->fontLineGapUsage > 2) return E_INVALIDARG;
+    if (sp->method != SPACING_PROPORTIONAL && sp->baseline < 0) return E_INVALIDARG;
+    l->f.spacing_method = sp->method; l->f.spacing = sp->height; l->f.baseline = sp->baseline;
+    l->f.leading_before = sp->leadingBefore; l->f.gap_usage = sp->fontLineGapUsage;
+    invalidate(l);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE f_get_spacing2(Layout *l, DW_LINE_SPACING *sp)
+{
+    if (!sp) return E_INVALIDARG;
+    sp->method = l->f.spacing_method; sp->height = l->f.spacing; sp->baseline = l->f.baseline;
+    sp->leadingBefore = l->f.leading_before; sp->fontLineGapUsage = l->f.gap_usage;
+    return S_OK;
+}
+/* ---- IDWriteTextFormat3 ---- */
+typedef struct { const DW_AXIS_VALUE *v; UINT32 n; } AxisSet;
+static void set_axes(Attr *a, const void *v)
+{
+    const AxisSet *x = v;
+    a->naxes = x->n;
+    if (x->n) memcpy(a->axes, x->v, x->n * sizeof(DW_AXIS_VALUE));
+    dw_axes_to_wss(x->v, x->n, &a->weight, &a->stretch, &a->style);
+}
+static HRESULT STDMETHODCALLTYPE f_set_axes(Layout *l, const DW_AXIS_VALUE *v, UINT32 n)
+{
+    if ((n && !v) || n > 8) return E_INVALIDARG;
+    AxisSet x = { v, n };
+    set_axes(&l->f.a, &x);
+    if (l->is_layout) {                 /* on a layout: all of its text */
+        DW_TEXT_RANGE all = { 0, l->n };
+        return set_range(l, all, set_axes, &x);
+    }
+    return S_OK;
+}
+static UINT32 STDMETHODCALLTYPE f_axis_count(Layout *l) { return l->f.a.naxes; }
+static HRESULT STDMETHODCALLTYPE f_get_axes(Layout *l, DW_AXIS_VALUE *v, UINT32 n)
+{
+    if (n && !v) return E_INVALIDARG;
+    if (n) memset(v, 0, n * sizeof(*v));
+    if (n < l->f.a.naxes) return E_NOT_SUFFICIENT_BUFFER_;
+    memcpy(v, l->f.a.axes, l->f.a.naxes * sizeof(*v));
+    return S_OK;
+}
+static UINT32 STDMETHODCALLTYPE f_get_auto(Layout *l) { return l->f.auto_axes; }
+static HRESULT STDMETHODCALLTYPE f_set_auto(Layout *l, UINT32 v)
+{
+    if (v > 1) return E_INVALIDARG;    /* NONE, OPTICAL_SIZE */
+    l->f.auto_axes = v; invalidate(l); return S_OK;
+}
 
 /* ---- IDWriteTextLayout ---- */
 static HRESULT STDMETHODCALLTYPE t_set_max_w(Layout *l, float v)
@@ -1449,6 +1568,82 @@ static HRESULT STDMETHODCALLTYPE t_hit_range(Layout *l, UINT32 pos, UINT32 len, 
     return layout_hit_range(l, pos, len, ox, oy, out, max, actual);
 }
 
+/* ---- IDWriteTextLayout1: kept for the whole text ---- */
+static void whole(Layout *l, DW_TEXT_RANGE *r) { if (r) { r->startPosition = 0; r->length = l->n; } }
+static HRESULT STDMETHODCALLTYPE t_set_pair_kerning(Layout *l, BOOL v, DW_TEXT_RANGE r)
+{
+    (void)r;
+    l->pair_kerning = !!v; invalidate(l); return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE t_get_pair_kerning(Layout *l, UINT32 pos, BOOL *v, DW_TEXT_RANGE *r)
+{
+    (void)pos;
+    if (!v) return E_INVALIDARG;
+    *v = l->pair_kerning;
+    whole(l, r);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE t_set_char_spacing(Layout *l, float leading, float trailing, float min_adv, DW_TEXT_RANGE r)
+{
+    (void)r;
+    if (min_adv < 0) return E_INVALIDARG;
+    l->leading = leading; l->trailing = trailing; l->min_advance = min_adv;
+    invalidate(l);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE t_get_char_spacing(Layout *l, UINT32 pos, float *leading, float *trailing, float *min_adv,
+                                                    DW_TEXT_RANGE *r)
+{
+    (void)pos;
+    if (!leading || !trailing || !min_adv) return E_INVALIDARG;
+    *leading = l->leading; *trailing = l->trailing; *min_adv = l->min_advance;
+    whole(l, r);
+    return S_OK;
+}
+/* ---- IDWriteTextLayout2 (the rest are IDWriteTextFormat1's) ---- */
+static HRESULT STDMETHODCALLTYPE t_metrics1(Layout *l, DW_TEXT_METRICS1 *m)
+{
+    if (!m) return E_INVALIDARG;
+    compute(l);
+    m->m = l->m;
+    m->heightIncludingTrailingWhitespace = l->m.height;
+    return S_OK;
+}
+/* ---- IDWriteTextLayout3 ---- */
+static HRESULT STDMETHODCALLTYPE t_invalidate(Layout *l) { invalidate(l); return S_OK; }
+static HRESULT STDMETHODCALLTYPE t_line_metrics1(Layout *l, DW_LINE_METRICS1 *out, UINT32 max, UINT32 *actual)
+{
+    compute(l);
+    DW_LINE_METRICS *m = l->nlines ? dw_alloc(l->nlines * sizeof(*m)) : NULL;
+    if (l->nlines && !m) return E_OUTOFMEMORY;
+    HRESULT hr = t_line_metrics(l, m, l->nlines, actual);
+    for (UINT32 q = 0; out && SUCCEEDED(hr) && q < l->nlines && q < max; q++) {
+        out[q].m = m[q];
+        out[q].leadingBefore = 0;   /* the line's height is all text: no leading is added */
+        out[q].leadingAfter = 0;
+    }
+    dw_free(m);
+    if (FAILED(hr)) return hr;
+    return max < l->nlines ? E_NOT_SUFFICIENT_BUFFER_ : S_OK;
+}
+/* ---- IDWriteTextLayout4 ---- */
+static HRESULT STDMETHODCALLTYPE t_set_axes(Layout *l, const DW_AXIS_VALUE *v, UINT32 n, DW_TEXT_RANGE r)
+{
+    if ((n && !v) || n > 8) return E_INVALIDARG;
+    AxisSet x = { v, n };
+    return set_range(l, r, set_axes, &x);
+}
+static UINT32 STDMETHODCALLTYPE t_axis_count(Layout *l, UINT32 pos) { return get_range(l, pos, NULL)->naxes; }
+static HRESULT STDMETHODCALLTYPE t_get_axes(Layout *l, UINT32 pos, DW_AXIS_VALUE *v, UINT32 n, DW_TEXT_RANGE *r)
+{
+    const Attr *a = get_range(l, pos, r);
+    if (n && !v) return E_INVALIDARG;
+    if (n) memset(v, 0, n * sizeof(*v));
+    if (n < a->naxes) return E_NOT_SUFFICIENT_BUFFER_;
+    memcpy(v, a->axes, a->naxes * sizeof(*v));
+    return S_OK;
+}
+
 #define FORMAT_METHODS                                                                              \
     l_qi, l_addref, l_release, f_set_align, f_set_para, f_set_wrap, f_set_reading, f_set_flow,     \
     f_set_tab, f_set_trimming, f_set_spacing, f_get_align, f_get_para, f_get_wrap, f_get_reading,  \
@@ -1456,7 +1651,72 @@ static HRESULT STDMETHODCALLTYPE t_hit_range(Layout *l, UINT32 pos, UINT32 len, 
     f_get_family, f_get_weight, f_get_style, f_get_stretch, f_get_size, f_get_locale_len,          \
     f_get_locale
 
-const void *const fmt_vtbl[] = { FORMAT_METHODS };
+#define FORMAT123_METHODS                                                                           \
+    f_set_vertical, f_get_vertical, f_set_last_line, f_get_last_line, f_set_optical, f_get_optical, \
+    f_set_fallback, f_get_fallback,                                                                 \
+    f_set_spacing2, f_get_spacing2,                                                                 \
+    f_set_axes, f_axis_count, f_get_axes, f_get_auto, f_set_auto
+
+const void *const fmt_vtbl[] = { FORMAT_METHODS, FORMAT123_METHODS };
+
+/* a layout's IDWriteTextFormat1-3: the same methods, on the layout that holds the interface */
+#define LF(p) ((Layout *)((char *)(p) - offsetof(Layout, fmt_iface)))
+#define THUNK(ret, name, params, args) static ret STDMETHODCALLTYPE x_##name params { return name args; }
+THUNK(HRESULT, l_qi, (void *p, REFIID riid, void **out), (LF(p), riid, out))
+THUNK(ULONG, l_addref, (void *p), (LF(p)))
+THUNK(ULONG, l_release, (void *p), (LF(p)))
+THUNK(HRESULT, f_set_align, (void *p, UINT32 v), (LF(p), v))
+THUNK(HRESULT, f_set_para, (void *p, UINT32 v), (LF(p), v))
+THUNK(HRESULT, f_set_wrap, (void *p, UINT32 v), (LF(p), v))
+THUNK(HRESULT, f_set_reading, (void *p, UINT32 v), (LF(p), v))
+THUNK(HRESULT, f_set_flow, (void *p, UINT32 v), (LF(p), v))
+THUNK(HRESULT, f_set_tab, (void *p, float v), (LF(p), v))
+THUNK(HRESULT, f_set_trimming, (void *p, const DW_TRIMMING *t, void *sign), (LF(p), t, sign))
+THUNK(HRESULT, f_set_spacing, (void *p, UINT32 m, float s, float b), (LF(p), m, s, b))
+THUNK(UINT32, f_get_align, (void *p), (LF(p)))
+THUNK(UINT32, f_get_para, (void *p), (LF(p)))
+THUNK(UINT32, f_get_wrap, (void *p), (LF(p)))
+THUNK(UINT32, f_get_reading, (void *p), (LF(p)))
+THUNK(UINT32, f_get_flow, (void *p), (LF(p)))
+THUNK(float, f_get_tab, (void *p), (LF(p)))
+THUNK(HRESULT, f_get_trimming, (void *p, DW_TRIMMING *t, void **sign), (LF(p), t, sign))
+THUNK(HRESULT, f_get_spacing, (void *p, UINT32 *m, float *s, float *b), (LF(p), m, s, b))
+THUNK(HRESULT, f_get_coll, (void *p, void **out), (LF(p), out))
+THUNK(UINT32, f_get_family_len, (void *p), (LF(p)))
+THUNK(HRESULT, f_get_family, (void *p, WCHAR *buf, UINT32 n), (LF(p), buf, n))
+THUNK(UINT32, f_get_weight, (void *p), (LF(p)))
+THUNK(UINT32, f_get_style, (void *p), (LF(p)))
+THUNK(UINT32, f_get_stretch, (void *p), (LF(p)))
+THUNK(float, f_get_size, (void *p), (LF(p)))
+THUNK(UINT32, f_get_locale_len, (void *p), (LF(p)))
+THUNK(HRESULT, f_get_locale, (void *p, WCHAR *buf, UINT32 n), (LF(p), buf, n))
+THUNK(HRESULT, f_set_vertical, (void *p, UINT32 v), (LF(p), v))
+THUNK(UINT32, f_get_vertical, (void *p), (LF(p)))
+THUNK(HRESULT, f_set_last_line, (void *p, BOOL v), (LF(p), v))
+THUNK(BOOL, f_get_last_line, (void *p), (LF(p)))
+THUNK(HRESULT, f_set_optical, (void *p, UINT32 v), (LF(p), v))
+THUNK(UINT32, f_get_optical, (void *p), (LF(p)))
+THUNK(HRESULT, f_set_fallback, (void *p, void *fb), (LF(p), fb))
+THUNK(HRESULT, f_get_fallback, (void *p, void **out), (LF(p), out))
+THUNK(HRESULT, f_set_spacing2, (void *p, const DW_LINE_SPACING *sp), (LF(p), sp))
+THUNK(HRESULT, f_get_spacing2, (void *p, DW_LINE_SPACING *sp), (LF(p), sp))
+THUNK(HRESULT, f_set_axes, (void *p, const DW_AXIS_VALUE *v, UINT32 n), (LF(p), v, n))
+THUNK(UINT32, f_axis_count, (void *p), (LF(p)))
+THUNK(HRESULT, f_get_axes, (void *p, DW_AXIS_VALUE *v, UINT32 n), (LF(p), v, n))
+THUNK(UINT32, f_get_auto, (void *p), (LF(p)))
+THUNK(HRESULT, f_set_auto, (void *p, UINT32 v), (LF(p), v))
+static const void *const lfmt_vtbl[] = {
+    x_l_qi, x_l_addref, x_l_release, x_f_set_align, x_f_set_para, x_f_set_wrap, x_f_set_reading, x_f_set_flow,
+    x_f_set_tab, x_f_set_trimming, x_f_set_spacing, x_f_get_align, x_f_get_para, x_f_get_wrap, x_f_get_reading,
+    x_f_get_flow, x_f_get_tab, x_f_get_trimming, x_f_get_spacing, x_f_get_coll, x_f_get_family_len,
+    x_f_get_family, x_f_get_weight, x_f_get_style, x_f_get_stretch, x_f_get_size, x_f_get_locale_len,
+    x_f_get_locale,
+    x_f_set_vertical, x_f_get_vertical, x_f_set_last_line, x_f_get_last_line, x_f_set_optical, x_f_get_optical,
+    x_f_set_fallback, x_f_get_fallback,
+    x_f_set_spacing2, x_f_get_spacing2,
+    x_f_set_axes, x_f_axis_count, x_f_get_axes, x_f_get_auto, x_f_set_auto,
+};
+
 const void *const lay_vtbl[] = {
     FORMAT_METHODS,
     t_set_max_w, t_set_max_h, t_set_coll, t_set_family, t_set_weight, t_set_style, t_set_stretch, t_set_size,
@@ -1465,7 +1725,15 @@ const void *const lay_vtbl[] = {
     t_get_stretch, t_get_size, t_get_underline, t_get_strike, t_get_effect, t_get_inline, t_get_typography,
     t_get_locale_len, t_get_locale, t_draw, t_line_metrics, t_metrics, t_overhang, t_cluster_metrics,
     t_min_width, t_hit_point, t_hit_pos, t_hit_range,
+    t_set_pair_kerning, t_get_pair_kerning, t_set_char_spacing, t_get_char_spacing,
+    t_metrics1, f_set_vertical, f_get_vertical, f_set_last_line, f_get_last_line, f_set_optical, f_get_optical,
+    f_set_fallback, f_get_fallback,
+    t_invalidate, f_set_spacing2, f_get_spacing2, t_line_metrics1,
+    t_set_axes, t_axis_count, t_get_axes, f_get_auto, f_set_auto,
 };
+_Static_assert(sizeof(fmt_vtbl) == 43 * sizeof(void *), "IDWriteTextFormat3 has 43 methods");
+_Static_assert(sizeof(lfmt_vtbl) == 43 * sizeof(void *), "IDWriteTextFormat3 has 43 methods");
+_Static_assert(sizeof(lay_vtbl) == 89 * sizeof(void *), "IDWriteTextLayout4 has 89 methods");
 
 /* ---- creation ---- */
 HRESULT text_format_create(const WCHAR *family, void *coll, UINT32 weight, UINT32 style, UINT32 stretch, float size,
@@ -1479,23 +1747,42 @@ HRESULT text_format_create(const WCHAR *family, void *coll, UINT32 weight, UINT3
     if (!l) return E_OUTOFMEMORY;
     l->vtbl = fmt_vtbl;
     l->ref = 1;
-    Attr a = { (WCHAR *)family, coll, weight, style, stretch, size, FALSE, FALSE, NULL, NULL, NULL, (WCHAR *)locale };
+    Attr a = { (WCHAR *)family, coll, weight, style, stretch, size, FALSE, FALSE, NULL, NULL, NULL, (WCHAR *)locale, 0, { { 0 } } };
     attr_copy(&l->f.a, &a);
     l->f.wrap = WRAP_WRAP;
     l->f.tab = 4 * size;
+    l->f.last_line_wrapping = TRUE;
     *out = l;
     return S_OK;
+}
+
+HRESULT text_format_create_axes(const WCHAR *family, void *coll, const DW_AXIS_VALUE *v, UINT32 n, float size,
+                                const WCHAR *locale, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    *out = NULL;
+    if ((n && !v) || n > 8) return E_INVALIDARG;
+    UINT32 weight, stretch, style;
+    dw_axes_to_wss(v, n, &weight, &stretch, &style);
+    HRESULT hr = text_format_create(family, coll, weight, style, stretch, size, locale, out);
+    if (SUCCEEDED(hr)) {
+        Layout *l = *out;
+        l->f.a.naxes = n;
+        if (n) memcpy(l->f.a.axes, v, n * sizeof(*v));
+    }
+    return hr;
 }
 
 HRESULT text_layout_create(const WCHAR *s, UINT32 n, void *fmt, float w, float h, void **out)
 {
     if (!out) return E_INVALIDARG;
     *out = NULL;
-    Layout *src = fmt;
+    Layout *src = fmt && *(void **)fmt == (void *)lfmt_vtbl ? LF(fmt) : fmt;
     if (!fmt || (!s && n) || (src->vtbl != fmt_vtbl && src->vtbl != lay_vtbl)) return E_INVALIDARG;
     Layout *l = dw_zalloc(sizeof(Layout));
     if (!l) return E_OUTOFMEMORY;
     l->vtbl = lay_vtbl;
+    l->fmt_iface = lfmt_vtbl;
     l->ref = 1;
     l->is_layout = 1;
     format_copy(&l->f, &src->f);

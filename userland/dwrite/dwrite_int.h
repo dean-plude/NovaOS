@@ -60,6 +60,27 @@ DEFINE_GUID(IID_IDWriteFontFamily,        0xda20d8ef, 0x812a, 0x4c43, 0x98,0x02,
 DEFINE_GUID(IID_IDWriteFontCollection,    0xa84cee02, 0x3eea, 0x4eee, 0xa8,0x27, 0x87,0xc1,0xa0,0x2a,0x0f,0xcc);
 DEFINE_GUID(IID_IDWriteGdiInterop,        0x1edd9491, 0x9853, 0x4299, 0x89,0x8f, 0x64,0x32,0x98,0x3b,0x6f,0x3a);
 DEFINE_GUID(IID_IDWriteGlyphRunAnalysis,  0x7d97dbf7, 0xe085, 0x42d4, 0x81,0xe3, 0x6a,0x88,0x3b,0xde,0xd1,0x18);
+/* Windows 10's font model (IDWriteFactory4 to IDWriteFactory7) */
+DEFINE_GUID(IID_IDWriteFactory4,          0x4b0b5bd3, 0x0797, 0x4549, 0x8a,0xc5, 0xfe,0x91,0x5c,0xc5,0x38,0x56);
+DEFINE_GUID(IID_IDWriteFactory5,          0x958db99a, 0xbe2a, 0x4f09, 0xaf,0x7d, 0x65,0x18,0x98,0x03,0xd1,0xd3);
+DEFINE_GUID(IID_IDWriteFactory6,          0xf3744d80, 0x21f7, 0x42eb, 0xb3,0x5d, 0x99,0x5b,0xc7,0x2f,0xc2,0x23);
+DEFINE_GUID(IID_IDWriteFactory7,          0x35d0e0b3, 0x9076, 0x4d2e, 0xa0,0x16, 0xa9,0x1b,0x56,0x8a,0x06,0xb4);
+DEFINE_GUID(IID_IDWriteFontCollection2,   0x514039c6, 0x4617, 0x4064, 0xbf,0x8b, 0x92,0xea,0x83,0xe5,0x06,0xe0);
+DEFINE_GUID(IID_IDWriteFontCollection3,   0xa4d055a6, 0xf9e3, 0x4e25, 0x93,0xb7, 0x9e,0x30,0x9f,0x3a,0xf8,0xe9);
+DEFINE_GUID(IID_IDWriteFontFamily2,       0x3ed49e77, 0xa398, 0x4261, 0xb9,0xcf, 0xc1,0x26,0xc2,0x13,0x1e,0xf3);
+DEFINE_GUID(IID_IDWriteFontList2,         0xc0763a34, 0x77af, 0x445a, 0xb7,0x35, 0x08,0xc3,0x7b,0x0a,0x5b,0xf5);
+DEFINE_GUID(IID_IDWriteFontSet1,          0x7e9fda85, 0x6c92, 0x4053, 0xbc,0x47, 0x7a,0xe3,0x53,0x0d,0xb4,0xd3);
+DEFINE_GUID(IID_IDWriteFontSet2,          0xdc7ead19, 0xe54c, 0x43af, 0xb2,0xda, 0x4e,0x2b,0x79,0xba,0x3f,0x7f);
+DEFINE_GUID(IID_IDWriteFontSetBuilder1,   0x3ff7715f, 0x3cdc, 0x4dc6, 0x9b,0x72, 0xec,0x56,0x21,0xdc,0xca,0xfd);
+DEFINE_GUID(IID_IDWriteFontSetBuilder2,   0xee5ba612, 0xb131, 0x463c, 0x8f,0x4f, 0x31,0x89,0xb9,0x40,0x1e,0x45);
+DEFINE_GUID(IID_IDWriteFontFaceReference1, 0xc081fe77, 0x2fd1, 0x41ac, 0xa5,0xa3, 0x34,0x98,0x3c,0x4b,0xa6,0x1a);
+DEFINE_GUID(IID_IDWriteFontResource,      0x1f803a76, 0x6871, 0x48e8, 0x98,0x7f, 0xb9,0x75,0x55,0x1c,0x50,0xf2);
+DEFINE_GUID(IID_IDWriteFontFace4,         0x27f2a904, 0x4eb8, 0x441d, 0x96,0x78, 0x05,0x63,0xf5,0x3e,0x3e,0x2f);
+DEFINE_GUID(IID_IDWriteFontFace5,         0x98eff3a5, 0xb667, 0x479a, 0xb1,0x45, 0xe2,0xfa,0x5b,0x9f,0xdc,0x29);
+DEFINE_GUID(IID_IDWriteFontFace6,         0xc4b1fe1b, 0x6e84, 0x47d5, 0xb5,0x4c, 0xa5,0x97,0x98,0x1b,0x06,0xad);
+DEFINE_GUID(IID_IDWriteFontFallback1,     0x2397599d, 0xdd0d, 0x4681, 0xbd,0x6a, 0xf4,0xf3,0x1e,0xaa,0xde,0x77);
+DEFINE_GUID(IID_IDWriteColorGlyphRunEnumerator1, 0x7c5f86da, 0xc7a1, 0x4f05, 0xb8,0xe1, 0x55,0xa1,0x79,0xfe,0x5a,0x35);
+DEFINE_GUID(IID_IDWriteInMemoryFontFileLoader, 0xdc102f47, 0xa12d, 0x4b1c, 0x82,0x2d, 0x9e,0x11,0x7e,0x33,0x04,0x3f);
 
 /* ---- enumerations (all passed as 32-bit values) ---- */
 enum { FACE_CFF = 0, FACE_TRUETYPE = 1, FACE_COLLECTION = 2, FACE_UNKNOWN = 6 };
@@ -134,7 +155,22 @@ typedef struct {
     UINT16                    paletteIndex;
 } DW_COLOR_GLYPH_RUN;
 
+/* DWRITE_COLOR_GLYPH_RUN1 */
+typedef struct { DW_COLOR_GLYPH_RUN run; UINT32 glyphImageFormat, measuringMode; } DW_COLOR_GLYPH_RUN1;
+
 typedef struct { UINT32 propertyId; const WCHAR *propertyValue; const WCHAR *localeName; } DW_FONT_PROPERTY;
+
+/* DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_AXIS_RANGE; tags are OpenType tags read as little-endian UINT32s */
+typedef struct { UINT32 axisTag; float value; } DW_AXIS_VALUE;
+typedef struct { UINT32 axisTag; float minValue, maxValue; } DW_AXIS_RANGE;
+#define DW_TAG(a, b, c, d) ((UINT32)(a) | ((UINT32)(b) << 8) | ((UINT32)(c) << 16) | ((UINT32)(d) << 24))
+#define AXIS_WEIGHT DW_TAG('w', 'g', 'h', 't')
+#define AXIS_WIDTH  DW_TAG('w', 'd', 't', 'h')
+#define AXIS_SLANT  DW_TAG('s', 'l', 'n', 't')
+#define AXIS_OPSZ   DW_TAG('o', 'p', 's', 'z')
+#define AXIS_ITALIC DW_TAG('i', 't', 'a', 'l')
+enum { MODEL_TYPOGRAPHIC = 0, MODEL_WWS = 1 };   /* DWRITE_FONT_FAMILY_MODEL */
+enum { GLYPH_IMAGE_NONE = 0, GLYPH_IMAGE_TRUETYPE = 1, GLYPH_IMAGE_CFF = 2, GLYPH_IMAGE_COLR = 4 };
 
 typedef struct { float x, y; } D2_POINT;
 typedef struct { D2_POINT p1, p2, p3; } D2_BEZIER;
@@ -255,13 +291,28 @@ HRESULT font_fallback_system(void **out);
 HRESULT font_fallback_builder_create(void **out);
 HRESULT font_download_queue(void **out);
 HRESULT text_analyzer_create(void **out);
+/* Windows 10's font model: axis values to and from weight, stretch and style.  NovaOS's
+ * fonts have no variations, so axis values only pick among a family's faces. */
+void    dw_axes_to_wss(const DW_AXIS_VALUE *v, UINT32 n, UINT32 *weight, UINT32 *stretch, UINT32 *style);
+UINT32  dw_wss_to_axes(UINT32 weight, UINT32 stretch, UINT32 style, DW_AXIS_VALUE *v);   /* 4 values */
+HRESULT dw_system_collection2(UINT32 model, void **out);   /* IDWriteFontCollection3, referenced */
+HRESULT dw_collection_from_faces2(FontFile *const *files, const UINT32 *index, UINT32 n, UINT32 model, void **out);
+FontFile *dw_font_file_new(void *loader, const void *key, UINT32 key_size);   /* NULL when out of memory */
+HRESULT font_resource_create(FontFile *file, UINT32 index, void **out);
+HRESULT in_memory_loader_create(void **out);
+HANDLE  dw_expiration_event(void);   /* never set: fonts do not come or go while a program runs */
 /* face.c: color glyphs (COLR/CPAL) */
+/* formats: the DWRITE_GLYPH_IMAGE_FORMATS asked for (GLYPH_IMAGE_COLR or more) */
 HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, const DW_GLYPH_RUN_DESCRIPTION *desc,
+                                  UINT32 formats, UINT32 measuring,
                                   UINT32 palette, void **out);
 /* layout.c */
 HRESULT text_format_create(const WCHAR *family, void *coll, UINT32 weight, UINT32 style, UINT32 stretch, float size,
                            const WCHAR *locale, void **out);
 HRESULT text_layout_create(const WCHAR *s, UINT32 n, void *fmt, float w, float h, void **out);
+/* IDWriteFactory6::CreateTextFormat: an IDWriteTextFormat3 from axis values */
+HRESULT text_format_create_axes(const WCHAR *family, void *coll, const DW_AXIS_VALUE *v, UINT32 n, float size,
+                                const WCHAR *locale, void **out);
 HRESULT dw_shape_text(FaceData *face, const WCHAR *text, UINT32 text_length, UINT32 start, UINT32 length,
                       BOOL rtl, float em_size, DW_SHAPED_GLYPH **glyphs, UINT32 *count);
 /* bitmap.c: IDWriteBitmapRenderTarget1 on a memory DC compatible with dc */

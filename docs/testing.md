@@ -509,8 +509,8 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
   its own menus, dialog, message box and property sheet and reports),
   `droptest`, `cpus` (SMP speed-up).
 - **Graphics test programs** in `tools/`, built with MinGW and copied to
-  `C:\Tests` by the graphics suite: `d2dtest` (Direct2D), `dwtest` and
-  `dw3test` (DirectWrite), `gltest` (OpenGL), `d3dtest` (Direct3D 9/11),
+  `C:\Tests` by the graphics suite: `d2dtest` (Direct2D), `dwtest`, `dw3test` and
+  `dw6test` (DirectWrite), `gltest` (OpenGL), `d3dtest` (Direct3D 9/11),
   `d3d12test` (Direct3D 12) and `hlsltest` (the HLSL compiler).
   `gltest fps` and `d3dtest fps` compare direct presentation with the GDI
   way; under KVM they check bytes, not time. Frames the host did not show go

@@ -1,13 +1,18 @@
 /*
- * fontset.c — NovaOS DirectWrite: Windows 10's font model (IDWriteFactory3)
- * and font fallback (IDWriteFactory2)
+ * fontset.c — NovaOS DirectWrite: Windows 10's font model (IDWriteFactory3
+ * to IDWriteFactory7) and font fallback (IDWriteFactory2)
  *
- *  - IDWriteFontFaceReference: a face in a font file, with simulations,
- *    that makes font faces on demand.
- *  - IDWriteFontSet / IDWriteFontSetBuilder: lists of face references with
+ *  - IDWriteFontFaceReference1: a face in a font file, with simulations,
+ *    that makes font faces on demand.  IDWriteFontResource: a face in a
+ *    font file, before simulations.
+ *  - IDWriteFontSet2 / IDWriteFontSetBuilder2: lists of face references with
  *    their properties (family, face, full and PostScript names, weight,
  *    stretch, style) to filter and match on.  The system font set is the
- *    system font collection's faces.
+ *    system font collection's faces.  No font has variations (fvar), so a
+ *    face's axis values are the ones its weight, stretch and style imply
+ *    (wght, wdth, ital, slnt): they are what the typographic font model
+ *    filters and matches on.
+ *  - IDWriteInMemoryFontFileLoader: font files in memory.
  *  - IDWriteFontFallback / IDWriteFontFallbackBuilder: which font draws
  *    which characters.  The system fallback keeps the base font for what it
  *    has and picks a system font that has the rest; built fallbacks try
@@ -46,7 +51,7 @@ static FaceRef *face_ref_from(void *iface) { return iface && *(void **)iface == 
 
 static HRESULT STDMETHODCALLTYPE ref_qi(FaceRef *r, REFIID riid, void **out)
 {
-    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFaceReference)) {
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFaceReference) || IS(riid, IID_IDWriteFontFaceReference1)) {
         *out = r; InterlockedIncrement(&r->ref); return S_OK;
     }
     *out = NULL;
@@ -104,10 +109,15 @@ static HRESULT STDMETHODCALLTYPE ref_enqueue(FaceRef *r) { (void)r; return S_OK;
 static HRESULT STDMETHODCALLTYPE ref_enqueue_chars(FaceRef *r, const WCHAR *s, UINT32 n) { (void)r; (void)s; (void)n; return S_OK; }
 static HRESULT STDMETHODCALLTYPE ref_enqueue_glyphs(FaceRef *r, const UINT16 *g, UINT32 n) { (void)r; (void)g; (void)n; return S_OK; }
 static HRESULT STDMETHODCALLTYPE ref_enqueue_fragment(FaceRef *r, UINT64 off, UINT64 n) { (void)r; (void)off; (void)n; return S_OK; }
+/* IDWriteFontFaceReference1: no variations, so no axis values */
+static UINT32 STDMETHODCALLTYPE ref_axis_count(FaceRef *r) { (void)r; return 0; }
+static HRESULT STDMETHODCALLTYPE ref_axis_values(FaceRef *r, DW_AXIS_VALUE *v, UINT32 n) { (void)r; (void)v; return n ? E_INVALIDARG : S_OK; }
 const void *const ref_vtbl[] = {
     ref_qi, ref_addref, ref_release, ref_face, ref_face_sims, ref_equals, ref_index, ref_sims, ref_file,
     ref_size, ref_size, ref_time, ref_locality, ref_enqueue, ref_enqueue_chars, ref_enqueue_glyphs, ref_enqueue_fragment,
+    ref_face, ref_axis_count, ref_axis_values,
 };
+_Static_assert(sizeof(ref_vtbl) == 20 * sizeof(void *), "IDWriteFontFaceReference1 has 20 methods");
 
 HRESULT face_ref_create(FontFile *file, UINT32 index, UINT32 sims, void **out)
 {
@@ -119,6 +129,88 @@ HRESULT face_ref_create(FontFile *file, UINT32 index, UINT32 sims, void **out)
     COM_ADDREF(file);
     r->index = index;
     r->sims = sims & (SIM_BOLD | SIM_OBLIQUE);
+    *out = r;
+    return S_OK;
+}
+
+/* -----------------------------------------------------------------------
+ * IDWriteFontResource
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    const void *const *vtbl;
+    LONG      ref;
+    FontFile *file;
+    UINT32    index;
+} Resource;
+
+static HRESULT STDMETHODCALLTYPE res_qi(Resource *r, REFIID riid, void **out)
+{
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontResource)) {
+        *out = r; InterlockedIncrement(&r->ref); return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE res_addref(Resource *r) { return (ULONG)InterlockedIncrement(&r->ref); }
+static ULONG STDMETHODCALLTYPE res_release(Resource *r)
+{
+    LONG n = InterlockedDecrement(&r->ref);
+    if (!n) { COM_RELEASE(r->file); dw_free(r); }
+    return (ULONG)n;
+}
+static HRESULT STDMETHODCALLTYPE res_file(Resource *r, void **out) { COM_ADDREF(r->file); *out = r->file; return S_OK; }
+static UINT32 STDMETHODCALLTYPE res_index(Resource *r) { return r->index; }
+/* no variations: no axes, so every axis index is out of range */
+static UINT32 STDMETHODCALLTYPE res_axis_count(Resource *r) { (void)r; return 0; }
+static HRESULT STDMETHODCALLTYPE res_axis_defaults(Resource *r, DW_AXIS_VALUE *v, UINT32 n) { (void)r; (void)v; return n ? E_INVALIDARG : S_OK; }
+static HRESULT STDMETHODCALLTYPE res_axis_ranges(Resource *r, DW_AXIS_RANGE *v, UINT32 n) { (void)r; (void)v; return n ? E_INVALIDARG : S_OK; }
+static UINT32 STDMETHODCALLTYPE res_axis_attributes(Resource *r, UINT32 axis) { (void)r; (void)axis; return 0; }
+static HRESULT STDMETHODCALLTYPE res_axis_names(Resource *r, UINT32 axis, void **out) { (void)r; (void)axis; *out = NULL; return E_INVALIDARG; }
+static UINT32 STDMETHODCALLTYPE res_value_name_count(Resource *r, UINT32 axis) { (void)r; (void)axis; return 0; }
+static HRESULT STDMETHODCALLTYPE res_value_names(Resource *r, UINT32 axis, UINT32 value, DW_AXIS_RANGE *range, void **out)
+{
+    (void)r; (void)axis; (void)value;
+    if (range) memset(range, 0, sizeof(*range));
+    *out = NULL;
+    return E_INVALIDARG;
+}
+static BOOL STDMETHODCALLTYPE res_has_variations(Resource *r) { (void)r; return FALSE; }
+static HRESULT STDMETHODCALLTYPE res_face(Resource *r, UINT32 sims, const DW_AXIS_VALUE *v, UINT32 n, void **out)
+{
+    (void)v;
+    *out = NULL;
+    if ((sims & ~(SIM_BOLD | SIM_OBLIQUE)) || (n && !v)) return E_INVALIDARG;
+    return font_face_create(r->file, r->index, sims, (FontFace **)out);
+}
+static HRESULT STDMETHODCALLTYPE res_face_ref(Resource *r, UINT32 sims, const DW_AXIS_VALUE *v, UINT32 n, void **out)
+{
+    *out = NULL;
+    if ((sims & ~(SIM_BOLD | SIM_OBLIQUE)) || (n && !v)) return E_INVALIDARG;
+    return face_ref_create(r->file, r->index, sims, out);
+}
+static const void *const res_vtbl[] = {
+    res_qi, res_addref, res_release, res_file, res_index, res_axis_count, res_axis_defaults, res_axis_ranges,
+    res_axis_attributes, res_axis_names, res_value_name_count, res_value_names, res_has_variations, res_face,
+    res_face_ref,
+};
+_Static_assert(sizeof(res_vtbl) == 15 * sizeof(void *), "IDWriteFontResource has 15 methods");
+
+HRESULT font_resource_create(FontFile *file, UINT32 index, void **out)
+{
+    *out = NULL;
+    FontData *d = NULL;
+    HRESULT hr = font_file_data(file, &d);
+    if (FAILED(hr)) return hr;
+    BOOL ok = d && font_face_data(d, index);
+    font_data_release(d);
+    if (!ok) return E_INVALIDARG;
+    Resource *r = dw_zalloc(sizeof(*r));
+    if (!r) return E_OUTOFMEMORY;
+    r->vtbl = res_vtbl;
+    r->ref = 1;
+    r->file = file;
+    COM_ADDREF(file);
+    r->index = index;
     *out = r;
     return S_OK;
 }
@@ -295,7 +387,8 @@ static FontSet *set_new(UINT32 cap)
 
 static HRESULT STDMETHODCALLTYPE set_qi(FontSet *s, REFIID riid, void **out)
 {
-    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontSet)) {
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontSet) || IS(riid, IID_IDWriteFontSet1) ||
+        IS(riid, IID_IDWriteFontSet2)) {
         *out = s; InterlockedIncrement(&s->ref); return S_OK;
     }
     *out = NULL;
@@ -474,10 +567,177 @@ static HRESULT STDMETHODCALLTYPE set_matching(FontSet *s, const WCHAR *family, U
     dw_free(pick);
     return hr;
 }
+/* ---- IDWriteFontSet1 ---- */
+/* the axis values a face's weight, stretch and style imply (simulations included) */
+static UINT32 entry_axes(const SetEntry *e, DW_AXIS_VALUE *v)
+{
+    UINT32 w = e->face->weight, st = e->face->style;
+    if ((e->sims & SIM_BOLD) && w < 700) w = 700;
+    if ((e->sims & SIM_OBLIQUE) && st == STYLE_NORMAL) st = STYLE_OBLIQUE;
+    return dw_wss_to_axes(w, e->face->stretch, st, v);
+}
+static BOOL entry_in_ranges(const SetEntry *e, const DW_AXIS_RANGE *r, UINT32 nr, BOOL any)
+{
+    DW_AXIS_VALUE v[4];
+    if (!e->face) return FALSE;
+    UINT32 nv = entry_axes(e, v);
+    for (UINT32 i = 0; i < nr; i++) {
+        BOOL in = FALSE, known = FALSE;
+        for (UINT32 k = 0; k < nv; k++)
+            if (v[k].axisTag == r[i].axisTag) { known = TRUE; in = v[k].value >= r[i].minValue && v[k].value <= r[i].maxValue; }
+        if (!known) in = FALSE;
+        if (any && in) return TRUE;
+        if (!any && !in) return FALSE;
+    }
+    return !any || !nr;
+}
+static BOOL entry_has_props(const SetEntry *e, const DW_FONT_PROPERTY *p, UINT32 np, BOOL any)
+{
+    for (UINT32 i = 0; i < np; i++) {
+        BOOL in = entry_has(e, &p[i]);
+        if (any && in) return TRUE;
+        if (!any && !in) return FALSE;
+    }
+    return !any || !np;
+}
+typedef BOOL (*EntryTest)(const SetEntry *, const void *, UINT32, BOOL);
+static HRESULT filtered_indices(FontSet *s, EntryTest test, const void *what, UINT32 nwhat, BOOL any,
+                                UINT32 *idx, UINT32 cap, UINT32 *count)
+{
+    UINT32 n = 0;
+    if ((nwhat && !what) || !count || (cap && !idx)) return E_INVALIDARG;
+    for (UINT32 i = 0; i < s->n; i++)
+        if (test(&s->e[i], what, nwhat, any)) { if (n < cap) idx[n] = i; n++; }
+    *count = n;
+    return n > cap ? E_NOT_SUFFICIENT_BUFFER_ : S_OK;
+}
+static HRESULT filtered(FontSet *s, EntryTest test, const void *what, UINT32 nwhat, BOOL any, void **out)
+{
+    *out = NULL;
+    UINT32 *idx = dw_alloc((s->n + 1) * sizeof(UINT32)), n = 0;
+    if (!idx) return E_OUTOFMEMORY;
+    HRESULT hr = filtered_indices(s, test, what, nwhat, any, idx, s->n, &n);
+    if (SUCCEEDED(hr)) hr = subset(s, idx, n, out);
+    dw_free(idx);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE set_matching_axes(FontSet *s, const DW_FONT_PROPERTY *p, const DW_AXIS_VALUE *v, UINT32 nv,
+                                                   void **out)
+{
+    *out = NULL;
+    if (nv && !v) return E_INVALIDARG;
+    UINT32 weight, stretch, style;
+    dw_axes_to_wss(v, nv, &weight, &stretch, &style);
+    /* family names: matched as IDWriteFontSet::GetMatchingFonts does, default names included */
+    if (p && p->propertyValue && (p->propertyId == 1 || p->propertyId == 2 || p->propertyId == 5))
+        return set_matching(s, p->propertyValue, weight, stretch, style, out);
+    UINT32 *pick = dw_alloc((s->n + 1) * sizeof(UINT32)), n = 0;
+    if (!pick) return E_OUTOFMEMORY;
+    for (UINT32 i = 0; i < s->n; i++)
+        if (s->e[i].face && (!p || entry_has(&s->e[i], p))) pick[n++] = i;
+    for (UINT32 i = 1; i < n; i++)
+        for (UINT32 k = i; k > 0 && dw_match_score(s->e[pick[k]].face, weight, stretch, style) <
+                                   dw_match_score(s->e[pick[k - 1]].face, weight, stretch, style); k--) {
+            UINT32 t = pick[k]; pick[k] = pick[k - 1]; pick[k - 1] = t;
+        }
+    HRESULT hr = subset(s, pick, n, out);
+    dw_free(pick);
+    return hr;
+}
+/* each face in a file once, without simulations */
+static HRESULT STDMETHODCALLTYPE set_first_resources(FontSet *s, void **out)
+{
+    FontSet *r = set_new(s->n);
+    *out = NULL;
+    if (!r) return E_OUTOFMEMORY;
+    for (UINT32 i = 0; i < s->n; i++) {
+        UINT32 k = 0;
+        while (k < r->n && !(r->e[k].index == s->e[i].index && font_file_equal(r->e[k].file, s->e[i].file))) k++;
+        if (k == r->n) entry_init(&r->e[r->n++], s->e[i].file, s->e[i].index, 0, s->e[i].props, s->e[i].nprops);
+    }
+    r->system = s->system;
+    *out = r;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE set_filtered_indices_list(FontSet *s, const UINT32 *idx, UINT32 n, void **out)
+{
+    *out = NULL;
+    if (n && !idx) return E_INVALIDARG;
+    for (UINT32 i = 0; i < n; i++) if (idx[i] >= s->n) return E_INVALIDARG;
+    return subset(s, idx, n, out);
+}
+static HRESULT STDMETHODCALLTYPE set_filtered_ranges(FontSet *s, const DW_AXIS_RANGE *r, UINT32 nr, BOOL any, void **out)
+{
+    return filtered(s, (EntryTest)entry_in_ranges, r, nr, any, out);
+}
+static HRESULT STDMETHODCALLTYPE set_filtered_props(FontSet *s, const DW_FONT_PROPERTY *p, UINT32 np, BOOL any, void **out)
+{
+    return filtered(s, (EntryTest)entry_has_props, p, np, any, out);
+}
+static HRESULT STDMETHODCALLTYPE set_indices_ranges(FontSet *s, const DW_AXIS_RANGE *r, UINT32 nr, BOOL any, UINT32 *idx,
+                                                    UINT32 cap, UINT32 *count)
+{
+    return filtered_indices(s, (EntryTest)entry_in_ranges, r, nr, any, idx, cap, count);
+}
+static HRESULT STDMETHODCALLTYPE set_indices_props(FontSet *s, const DW_FONT_PROPERTY *p, UINT32 np, BOOL any, UINT32 *idx,
+                                                   UINT32 cap, UINT32 *count)
+{
+    return filtered_indices(s, (EntryTest)entry_has_props, p, np, any, idx, cap, count);
+}
+/* the ranges of the implied axes over some of the set's faces */
+static HRESULT axis_ranges(FontSet *s, UINT32 first, UINT32 last, DW_AXIS_RANGE *r, UINT32 cap, UINT32 *count)
+{
+    DW_AXIS_RANGE acc[4];
+    UINT32 n = 0;
+    if (!count || (cap && !r)) return E_INVALIDARG;
+    for (UINT32 i = first; i < last; i++) {
+        DW_AXIS_VALUE v[4];
+        if (!s->e[i].face) continue;
+        UINT32 nv = entry_axes(&s->e[i], v);
+        for (UINT32 k = 0; k < nv; k++) {
+            UINT32 j = 0;
+            while (j < n && acc[j].axisTag != v[k].axisTag) j++;
+            if (j == n) { acc[n].axisTag = v[k].axisTag; acc[n].minValue = acc[n].maxValue = v[k].value; n++; }
+            if (v[k].value < acc[j].minValue) acc[j].minValue = v[k].value;
+            if (v[k].value > acc[j].maxValue) acc[j].maxValue = v[k].value;
+        }
+    }
+    *count = n;
+    if (n > cap) return E_NOT_SUFFICIENT_BUFFER_;
+    if (n) memcpy(r, acc, n * sizeof(*r));
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE set_font_axis_ranges(FontSet *s, UINT32 i, DW_AXIS_RANGE *r, UINT32 cap, UINT32 *count)
+{
+    if (i >= s->n) { if (count) *count = 0; return E_INVALIDARG; }
+    return axis_ranges(s, i, i + 1, r, cap, count);
+}
+static HRESULT STDMETHODCALLTYPE set_axis_ranges(FontSet *s, DW_AXIS_RANGE *r, UINT32 cap, UINT32 *count)
+{
+    return axis_ranges(s, 0, s->n, r, cap, count);
+}
+static HRESULT STDMETHODCALLTYPE set_resource(FontSet *s, UINT32 i, void **out)
+{
+    if (i >= s->n) { *out = NULL; return E_INVALIDARG; }
+    return font_resource_create(s->e[i].file, s->e[i].index, out);
+}
+static HRESULT STDMETHODCALLTYPE set_create_face(FontSet *s, UINT32 i, void **out)
+{
+    if (i >= s->n) { *out = NULL; return E_INVALIDARG; }
+    return font_face_create(s->e[i].file, s->e[i].index, s->e[i].sims, (FontFace **)out);
+}
+static UINT32 STDMETHODCALLTYPE set_locality(FontSet *s, UINT32 i) { (void)s; (void)i; return LOCALITY_LOCAL; }
+/* ---- IDWriteFontSet2 ---- */
+static HANDLE STDMETHODCALLTYPE set_expiration(FontSet *s) { (void)s; return dw_expiration_event(); }
 const void *const set_vtbl[] = {
     set_qi, set_addref, set_release, set_count, set_face_ref, set_find_ref, set_find_face,
     set_values, set_values_locales, set_values_at, set_occurrences, set_matching, set_matching_props,
+    set_matching_axes, set_first_resources, set_filtered_indices_list, set_filtered_ranges, set_filtered_props,
+    set_indices_ranges, set_indices_props, set_font_axis_ranges, set_axis_ranges, set_face_ref, set_resource,
+    set_create_face, set_locality,
+    set_expiration,
 };
+_Static_assert(sizeof(set_vtbl) == 27 * sizeof(void *), "IDWriteFontSet2 has 27 methods");
 
 HRESULT font_set_create(FontFile *const *files, const UINT32 *index, UINT32 n, BOOL system, void **out)
 {
@@ -515,7 +775,8 @@ typedef struct {
 
 static HRESULT STDMETHODCALLTYPE sb_qi(SetBuilder *b, REFIID riid, void **out)
 {
-    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontSetBuilder)) {
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontSetBuilder) || IS(riid, IID_IDWriteFontSetBuilder1) ||
+        IS(riid, IID_IDWriteFontSetBuilder2)) {
         *out = b; InterlockedIncrement(&b->ref); return S_OK;
     }
     *out = NULL;
@@ -576,7 +837,56 @@ static HRESULT STDMETHODCALLTYPE sb_create(SetBuilder *b, void **out)
     *out = s;
     return S_OK;
 }
-static const void *const sb_vtbl[] = { sb_qi, sb_addref, sb_release, sb_add_props, sb_add, sb_add_set, sb_create };
+/* ---- IDWriteFontSetBuilder1, IDWriteFontSetBuilder2 ---- */
+/* every face in a font file of ours */
+static HRESULT sb_add_faces(SetBuilder *b, FontFile *file)
+{
+    FontData *d = NULL;
+    HRESULT hr = font_file_data(file, &d);
+    if (FAILED(hr)) return hr;
+    if (!d) return DWRITE_E_FILEFORMAT;
+    for (UINT32 i = 0; i < d->num_faces && SUCCEEDED(hr); i++) {
+        if (!font_face_data(d, i)) continue;
+        SetEntry *e = sb_slot(b);
+        if (!e) hr = E_OUTOFMEMORY;
+        else entry_init(e, file, i, 0, NULL, 0);
+    }
+    font_data_release(d);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE sb_add_file(SetBuilder *b, void *file)
+{
+    FontFile *f = font_file_from(file);
+    return f ? sb_add_faces(b, f) : E_INVALIDARG;
+}
+/* the axis values and ranges only matter for fonts with variations, which no font here has */
+static HRESULT STDMETHODCALLTYPE sb_add_font(SetBuilder *b, void *file, UINT32 index, UINT32 sims, const DW_AXIS_VALUE *v,
+                                             UINT32 nv, const DW_AXIS_RANGE *r, UINT32 nr, const DW_FONT_PROPERTY *p,
+                                             UINT32 np)
+{
+    FontFile *f = font_file_from(file);
+    if (!f || (sims & ~(SIM_BOLD | SIM_OBLIQUE)) || (nv && !v) || (nr && !r) || (np && !p)) return E_INVALIDARG;
+    SetEntry *e = sb_slot(b);
+    if (!e) return E_OUTOFMEMORY;
+    entry_init(e, f, index, sims, p, np);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sb_add_path(SetBuilder *b, const WCHAR *path)
+{
+    if (!path) return E_INVALIDARG;
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return DWRITE_E_FILENOTFOUND;
+    FontFile *f = font_file_local(path);
+    if (!f) return E_OUTOFMEMORY;
+    HRESULT hr = sb_add_faces(b, f);
+    COM_RELEASE(f);
+    return hr;
+}
+static const void *const sb_vtbl[] = {
+    sb_qi, sb_addref, sb_release, sb_add_props, sb_add, sb_add_set, sb_create,
+    sb_add_file,
+    sb_add_font, sb_add_path,
+};
+_Static_assert(sizeof(sb_vtbl) == 10 * sizeof(void *), "IDWriteFontSetBuilder2 has 10 methods");
 
 HRESULT font_set_builder_create(void **out)
 {
@@ -731,7 +1041,7 @@ static UINT32 next_char(const WCHAR *s, UINT32 n, UINT32 i, UINT32 *len)
 
 static HRESULT STDMETHODCALLTYPE fb_qi(Fallback *f, REFIID riid, void **out)
 {
-    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFallback)) {
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFallback) || IS(riid, IID_IDWriteFontFallback1)) {
         *out = f; InterlockedIncrement(&f->ref); return S_OK;
     }
     *out = NULL;
@@ -816,7 +1126,25 @@ static HRESULT STDMETHODCALLTYPE fb_map(Fallback *fb, void *source, UINT32 pos, 
     dw_free(text);
     return S_OK;
 }
-const void *const fb_vtbl[] = { fb_qi, fb_addref, fb_release, fb_map };
+/* IDWriteFontFallback1: the same, with axis values for weight, stretch and style, giving a font face */
+static HRESULT STDMETHODCALLTYPE fb_map_axes(Fallback *fb, void *source, UINT32 pos, UINT32 length, void *coll,
+                                             const WCHAR *family, const DW_AXIS_VALUE *v, UINT32 nv,
+                                             UINT32 *mapped_len, float *scale, void **mapped_face)
+{
+    typedef HRESULT (STDMETHODCALLTYPE *CreateFace)(void *, void **);
+    if (!mapped_face) return E_INVALIDARG;
+    *mapped_face = NULL;
+    if (nv && !v) return E_INVALIDARG;
+    UINT32 weight, stretch, style;
+    dw_axes_to_wss(v, nv, &weight, &stretch, &style);
+    void *font = NULL;
+    HRESULT hr = fb_map(fb, source, pos, length, coll, family, weight, style, stretch, mapped_len, &font, scale);
+    if (SUCCEEDED(hr) && font) hr = ((CreateFace)VT(font)[13])(font, mapped_face);
+    if (font) COM_RELEASE(font);
+    return hr;
+}
+const void *const fb_vtbl[] = { fb_qi, fb_addref, fb_release, fb_map, fb_map_axes };
+_Static_assert(sizeof(fb_vtbl) == 5 * sizeof(void *), "IDWriteFontFallback1 has 5 methods");
 
 static Fallback *fallback_new(void)
 {
@@ -976,5 +1304,153 @@ HRESULT font_download_queue(void **out)
 {
     if (!out) return E_INVALIDARG;
     *out = &g_queue;
+    return S_OK;
+}
+
+/* -----------------------------------------------------------------------
+ * IDWriteInMemoryFontFileLoader: font files in memory, keyed by number
+ * ----------------------------------------------------------------------- */
+typedef struct {
+    LONG        ref;
+    const BYTE *data;
+    UINT32      size;
+    void       *owner;            /* IUnknown keeping data alive, or NULL when data is our copy */
+} Blob;
+
+static void blob_release(Blob *b)
+{
+    if (InterlockedDecrement(&b->ref)) return;
+    if (b->owner) COM_RELEASE(b->owner);
+    else dw_free((void *)b->data);
+    dw_free(b);
+}
+
+typedef struct { const void *const *vtbl; LONG ref; Blob *b; } MemStream;
+
+static HRESULT STDMETHODCALLTYPE ms_qi(MemStream *m, REFIID riid, void **out)
+{
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFileStream)) {
+        *out = m; InterlockedIncrement(&m->ref); return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE ms_addref(MemStream *m) { return (ULONG)InterlockedIncrement(&m->ref); }
+static ULONG STDMETHODCALLTYPE ms_release(MemStream *m)
+{
+    LONG r = InterlockedDecrement(&m->ref);
+    if (!r) { blob_release(m->b); dw_free(m); }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE ms_read(MemStream *m, const void **start, UINT64 off, UINT64 size, void **ctx)
+{
+    *ctx = NULL;
+    if (off > m->b->size || size > m->b->size - off) { *start = NULL; return E_FAIL; }
+    *start = m->b->data + off;
+    return S_OK;
+}
+static void STDMETHODCALLTYPE ms_release_fragment(MemStream *m, void *ctx) { (void)m; (void)ctx; }
+static HRESULT STDMETHODCALLTYPE ms_size(MemStream *m, UINT64 *size) { *size = m->b->size; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ms_time(MemStream *m, UINT64 *t) { (void)m; *t = 0; return E_NOTIMPL; }
+static const void *const ms_vtbl[] = { ms_qi, ms_addref, ms_release, ms_read, ms_release_fragment, ms_size, ms_time };
+_Static_assert(sizeof(ms_vtbl) == 7 * sizeof(void *), "IDWriteFontFileStream has 7 methods");
+
+typedef struct {
+    const void *const *vtbl;
+    LONG    ref;
+    UINT32  n, cap;
+    Blob  **blobs;
+    SRWLOCK lock;
+} MemLoader;
+
+static HRESULT STDMETHODCALLTYPE ml_qi(MemLoader *l, REFIID riid, void **out)
+{
+    if (IS(riid, IID_IUnknown) || IS(riid, IID_IDWriteFontFileLoader) || IS(riid, IID_IDWriteInMemoryFontFileLoader)) {
+        *out = l; InterlockedIncrement(&l->ref); return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE ml_addref(MemLoader *l) { return (ULONG)InterlockedIncrement(&l->ref); }
+static ULONG STDMETHODCALLTYPE ml_release(MemLoader *l)
+{
+    LONG r = InterlockedDecrement(&l->ref);
+    if (!r) {
+        for (UINT32 i = 0; i < l->n; i++) blob_release(l->blobs[i]);
+        dw_free(l->blobs);
+        dw_free(l);
+    }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE ml_stream(MemLoader *l, const void *key, UINT32 key_size, void **out)
+{
+    *out = NULL;
+    if (!key || key_size != sizeof(UINT32)) return E_INVALIDARG;
+    UINT32 i;
+    memcpy(&i, key, sizeof(i));
+    AcquireSRWLockShared(&l->lock);
+    Blob *b = i < l->n ? l->blobs[i] : NULL;
+    if (b) InterlockedIncrement(&b->ref);
+    ReleaseSRWLockShared(&l->lock);
+    if (!b) return E_INVALIDARG;
+    MemStream *m = dw_zalloc(sizeof(*m));
+    if (!m) { blob_release(b); return E_OUTOFMEMORY; }
+    m->vtbl = ms_vtbl;
+    m->ref = 1;
+    m->b = b;
+    *out = m;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ml_reference(MemLoader *l, void *factory, const void *data, UINT32 size, void *owner,
+                                              void **out)
+{
+    (void)factory;
+    *out = NULL;
+    if (!data && size) return E_INVALIDARG;
+    Blob *b = dw_zalloc(sizeof(*b));
+    if (!b) return E_OUTOFMEMORY;
+    b->ref = 1;
+    b->size = size;
+    if (owner) { b->data = data; b->owner = owner; COM_ADDREF(owner); }
+    else {
+        BYTE *copy = dw_alloc(size ? size : 1);
+        if (!copy) { dw_free(b); return E_OUTOFMEMORY; }
+        if (size) memcpy(copy, data, size);
+        b->data = copy;
+    }
+    AcquireSRWLockExclusive(&l->lock);
+    UINT32 key = l->n;
+    if (l->n == l->cap) {
+        UINT32 cap = l->cap ? l->cap * 2 : 8;
+        Blob **nb = dw_zalloc(cap * sizeof(Blob *));
+        if (nb) {
+            if (l->blobs) memcpy(nb, l->blobs, l->n * sizeof(Blob *));
+            dw_free(l->blobs);
+            l->blobs = nb;
+            l->cap = cap;
+        }
+    }
+    BOOL ok = l->n < l->cap;
+    if (ok) l->blobs[l->n++] = b;
+    ReleaseSRWLockExclusive(&l->lock);
+    if (!ok) { blob_release(b); return E_OUTOFMEMORY; }
+    FontFile *f = dw_font_file_new(l, &key, sizeof(key));
+    if (!f) return E_OUTOFMEMORY;
+    *out = f;
+    return S_OK;
+}
+static UINT32 STDMETHODCALLTYPE ml_count(MemLoader *l) { return l->n; }
+static const void *const ml_vtbl[] = { ml_qi, ml_addref, ml_release, ml_stream, ml_reference, ml_count };
+_Static_assert(sizeof(ml_vtbl) == 6 * sizeof(void *), "IDWriteInMemoryFontFileLoader has 6 methods");
+
+HRESULT in_memory_loader_create(void **out)
+{
+    MemLoader *l = dw_zalloc(sizeof(*l));
+    *out = NULL;
+    if (!l) return E_OUTOFMEMORY;
+    l->vtbl = ml_vtbl;
+    l->ref = 1;
+    InitializeSRWLock(&l->lock);
+    *out = l;
     return S_OK;
 }

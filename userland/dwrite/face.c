@@ -1,5 +1,5 @@
 /*
- * face.c — NovaOS DirectWrite: font faces (IDWriteFontFace3), glyph run
+ * face.c — NovaOS DirectWrite: font faces (IDWriteFontFace6), glyph run
  * outlines, glyph run analysis (the anti-aliased coverage that renderers
  * such as Skia and Direct2D blend) and color glyph runs (COLR/CPAL layers)
  */
@@ -23,7 +23,8 @@ static HRESULT STDMETHODCALLTYPE fc_qi(FontFace *f, REFIID riid, void **out)
 {
     if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDWriteFontFace) ||
         IsEqualGUID(riid, &IID_IDWriteFontFace1) || IsEqualGUID(riid, &IID_IDWriteFontFace2) ||
-        IsEqualGUID(riid, &IID_IDWriteFontFace3)) {
+        IsEqualGUID(riid, &IID_IDWriteFontFace3) || IsEqualGUID(riid, &IID_IDWriteFontFace4) ||
+        IsEqualGUID(riid, &IID_IDWriteFontFace5) || IsEqualGUID(riid, &IID_IDWriteFontFace6)) {
         *out = f; InterlockedIncrement(&f->ref); return S_OK;
     }
     *out = NULL;
@@ -441,6 +442,69 @@ static HRESULT STDMETHODCALLTYPE fc_glyphs_local(FontFace *f, const UINT16 *g, U
     return S_OK;
 }
 
+/* ---- IDWriteFontFace4: the glyph image formats are the outlines' and COLR layers ---- */
+static UINT32 outline_format(FontFace *f) { return f->face->file->face_type == FACE_CFF ? GLYPH_IMAGE_CFF : GLYPH_IMAGE_TRUETYPE; }
+static UINT32 STDMETHODCALLTYPE fc_image_formats(FontFace *f)
+{
+    return outline_format(f) | (face_is_color(f->face) ? GLYPH_IMAGE_COLR : 0);
+}
+static HRESULT STDMETHODCALLTYPE fc_glyph_image_formats(FontFace *f, UINT16 glyph, UINT32 ppem_first, UINT32 ppem_last,
+                                                        UINT32 *formats)
+{
+    (void)ppem_first; (void)ppem_last;
+    if (!formats) return E_INVALIDARG;
+    *formats = GLYPH_IMAGE_NONE;
+    if (glyph >= f->face->num_glyphs) return E_INVALIDARG;
+    *formats = outline_format(f);
+    if (face_is_color(f->face)) {
+        DW_GLYPH_RUN run = { f, 16.0f, 1, &glyph, NULL, NULL, FALSE, 0 };
+        void *e = NULL;
+        if (SUCCEEDED(color_glyph_run_translate(0, 0, &run, NULL, GLYPH_IMAGE_COLR, 0, 0, &e)) && e) {
+            *formats |= GLYPH_IMAGE_COLR;
+            COM_RELEASE(e);
+        }
+    }
+    return S_OK;
+}
+/* only outlines and COLR layers: there are no bitmap (PNG, JPEG, TIFF, sbix) or SVG glyph images to hand out */
+static HRESULT STDMETHODCALLTYPE fc_glyph_image_data(FontFace *f, UINT16 glyph, UINT32 ppem, UINT32 format, void *data,
+                                                     void **ctx)
+{
+    (void)f; (void)glyph; (void)ppem; (void)format;
+    /* DWRITE_GLYPH_IMAGE_DATA: a pointer, three UINT32s, a D2D1_SIZE_U and four D2D1_POINT_2Ls */
+    if (data) memset(data, 0, (sizeof(void *) + 52 + sizeof(void *) - 1) & ~(sizeof(void *) - 1));
+    if (ctx) *ctx = NULL;
+    return DWRITE_E_NOCOLOR;
+}
+static void STDMETHODCALLTYPE fc_release_image_data(FontFace *f, void *ctx) { (void)f; (void)ctx; }
+/* ---- IDWriteFontFace5: no font has variations, so no axes ---- */
+static UINT32 STDMETHODCALLTYPE fc_axis_count(FontFace *f) { (void)f; return 0; }
+static HRESULT STDMETHODCALLTYPE fc_axis_values(FontFace *f, DW_AXIS_VALUE *v, UINT32 n)
+{
+    (void)f; (void)v;
+    return n ? E_INVALIDARG : S_OK;
+}
+static BOOL STDMETHODCALLTYPE fc_has_variations(FontFace *f) { (void)f; return FALSE; }
+static HRESULT STDMETHODCALLTYPE fc_resource(FontFace *f, void **out) { return font_resource_create(f->file, f->index, out); }
+static BOOL STDMETHODCALLTYPE fc_equals(FontFace *f, void *other)
+{
+    FontFace *o = font_face_from(other);
+    return o && o->index == f->index && o->sims == f->sims && font_file_equal(o->file, f->file);
+}
+/* ---- IDWriteFontFace6: the typographic names, or the weight/stretch/style ones ---- */
+static HRESULT STDMETHODCALLTYPE fc_family_names6(FontFace *f, UINT32 model, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    if (model > MODEL_WWS) { *out = NULL; return E_INVALIDARG; }
+    return model == MODEL_TYPOGRAPHIC ? names_of(f, 13, 11, out) : fc_family_names(f, out);
+}
+static HRESULT STDMETHODCALLTYPE fc_face_names6(FontFace *f, UINT32 model, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    if (model > MODEL_WWS) { *out = NULL; return E_INVALIDARG; }
+    return names_of(f, 14, 12, out);
+}
+
 const void *const face_vtbl[] = {
     fc_qi, fc_addref, fc_release, fc_type, fc_files, fc_index, fc_sims, fc_symbol, fc_metrics, fc_glyph_count,
     fc_design_glyph_metrics, fc_glyph_indices, fc_table, fc_release_table, fc_outline, fc_recommended,
@@ -450,7 +514,11 @@ const void *const face_vtbl[] = {
     fc_is_color, fc_palette_count, fc_palette_entry_count, fc_palette_entries, fc_recommended2,
     fc_face_ref, fc_panose, fc_weight, fc_stretch, fc_style, fc_family_names, fc_face_names, fc_info_strings,
     fc_has_char, fc_recommended3, fc_char_local, fc_glyph_local, fc_chars_local, fc_glyphs_local,
+    fc_glyph_image_formats, fc_image_formats, fc_glyph_image_data, fc_release_image_data,
+    fc_axis_count, fc_axis_values, fc_has_variations, fc_resource, fc_equals,
+    fc_family_names6, fc_face_names6,
 };
+_Static_assert(sizeof(face_vtbl) == 60 * sizeof(void *), "IDWriteFontFace6 has 60 methods");
 
 HRESULT font_face_create(FontFile *file, UINT32 index, UINT32 sims, FontFace **out)
 {
@@ -638,7 +706,7 @@ typedef struct {
     const void *const *vtbl;
     LONG    ref;
     UINT32  n, cur;                 /* runs, and 1 + the current one (0 before the first MoveNext) */
-    DW_COLOR_GLYPH_RUN *runs;
+    DW_COLOR_GLYPH_RUN1 *runs;
     UINT16 *glyphs;                 /* one per run */
     float  *advances;
     DW_GLYPH_OFFSET *offsets;
@@ -648,7 +716,8 @@ typedef struct {
 
 static HRESULT STDMETHODCALLTYPE cr_qi(ColorRuns *c, REFIID riid, void **out)
 {
-    if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDWriteColorGlyphRunEnumerator)) {
+    if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDWriteColorGlyphRunEnumerator) ||
+        IsEqualGUID(riid, &IID_IDWriteColorGlyphRunEnumerator1)) {
         *out = c; InterlockedIncrement(&c->ref); return S_OK;
     }
     *out = NULL;
@@ -675,15 +744,23 @@ static HRESULT STDMETHODCALLTYPE cr_next(ColorRuns *c, BOOL *has)
 static HRESULT STDMETHODCALLTYPE cr_current(ColorRuns *c, const DW_COLOR_GLYPH_RUN **run)
 {
     if (!c->cur || c->cur > c->n) { *run = NULL; return (HRESULT)0x8007139FL; }   /* E_NOT_VALID_STATE */
+    *run = &c->runs[c->cur - 1].run;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE cr_current1(ColorRuns *c, const DW_COLOR_GLYPH_RUN1 **run)
+{
+    if (!c->cur || c->cur > c->n) { *run = NULL; return (HRESULT)0x8007139FL; }
     *run = &c->runs[c->cur - 1];
     return S_OK;
 }
-static const void *const cr_vtbl[] = { cr_qi, cr_addref, cr_release, cr_next, cr_current };
+static const void *const cr_vtbl[] = { cr_qi, cr_addref, cr_release, cr_next, cr_current, cr_current1 };
+_Static_assert(sizeof(cr_vtbl) == 6 * sizeof(void *), "IDWriteColorGlyphRunEnumerator1 has 6 methods");
 
 HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, const DW_GLYPH_RUN_DESCRIPTION *desc,
-                                  UINT32 palette, void **out)
+                                  UINT32 formats, UINT32 measuring, UINT32 palette, void **out)
 {
     *out = NULL;
+    if (!(formats & GLYPH_IMAGE_COLR)) return DWRITE_E_NOCOLOR;
     FontFace *f = run ? font_face_from(run->fontFace) : NULL;
     if (!f || (run->glyphCount && !run->glyphIndices)) return E_INVALIDARG;
     ColorTables t;
@@ -702,7 +779,7 @@ HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, c
     if (!c) return E_OUTOFMEMORY;
     c->vtbl = cr_vtbl;
     c->ref = 1;
-    c->runs = dw_zalloc(total * sizeof(DW_COLOR_GLYPH_RUN));
+    c->runs = dw_zalloc(total * sizeof(DW_COLOR_GLYPH_RUN1));
     c->glyphs = dw_zalloc(total * sizeof(UINT16));
     c->advances = dw_zalloc(total * sizeof(float));
     c->offsets = dw_zalloc(total * sizeof(DW_GLYPH_OFFSET));
@@ -727,7 +804,10 @@ HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, c
         UINT32 first = 0, n = colr_layers(&t, run->glyphIndices[i], &first);
         for (UINT32 k = 0; k < (n ? n : 1); k++) {
             UINT32 r = c->n++;
-            DW_COLOR_GLYPH_RUN *cr = &c->runs[r];
+            DW_COLOR_GLYPH_RUN *cr = &c->runs[r].run;
+            /* a layer is a COLR layer; a glyph without layers is drawn from its outline */
+            c->runs[r].glyphImageFormat = n ? GLYPH_IMAGE_COLR : outline_format(f);
+            c->runs[r].measuringMode = measuring;
             const BYTE *rec = n ? t.colr + layers + (first + k) * 4 : NULL;
             c->glyphs[r] = rec ? be16(rec) : run->glyphIndices[i];
             c->advances[r] = k + 1 == (n ? n : 1) ? adv : 0;

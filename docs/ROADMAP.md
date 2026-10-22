@@ -1203,9 +1203,20 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   Microsoft's T4 template writes it; the inner-loop feature set and
   `InfoBadge` so far.  The framework's metadata provider asks the app's
   `Application` for WinUI 2's types, and `urlmon.dll` serves
-  `Windows.Foundation.Uri`.  Test `winui2test`.  Next: WinUI 2's XAML
-  resources, the interface IDs apps were compiled with, then
-  Calculator and `Windows.UI.Xaml.Application` for UWP apps.
+  `Windows.Foundation.Uri`.  Test `winui2test`.  Third part done: the
+  interface IDs apps were compiled with (Microsoft's, from the
+  `Microsoft.UI.Xaml` 2.8.7 package's metadata, for the interfaces MIDL 3
+  synthesizes) and WinUI 2's XAML resources: each feature's pages merged
+  as Microsoft's build merges them (its MSBuild tasks ported to
+  `userland/microsoft_ui_xaml/mergexaml.py`, `CommonStyles` included) into
+  the `19h1_themeresources.xaml` and `19h1_generic.xaml` files
+  `XamlControlsResources` and the controls load (`C:\Programs\Microsoft.UI.Xaml\Themes`;
+  loading them waits on the framework's data binding and 32.4's fonts).  Next: data binding,
+  `Windows.UI.Xaml.Application.Start`'s UWP path (CoreApplication's
+  activation) with `Window.Current`, and the controls Calculator uses
+  (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
+  `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
+  Native app, which needs that runtime's framework packages too.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

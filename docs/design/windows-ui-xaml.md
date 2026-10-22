@@ -815,17 +815,69 @@ vendors.
        `DropDownButton` made through WinUI 2's type table, the framework's
        interfaces behind them, and `InfoBadge.Value` read, set and read
        back.
-     - *Interface IDs.*  MIDL 3 derives the IDs of interfaces it
-       synthesizes (a class's default, factory and statics interfaces)
-       by an algorithm that is not published; the build gives them
-       name-based IDs (abigen's), which agree within NovaOS but not with
-       Microsoft's `Microsoft.UI.Xaml.winmd`.  An app compiled against
-       the NuGet package (Calculator) needs Microsoft's: the next part.
-   - *Next:* WinUI 2's XAML resources (its `generic.xaml` and theme
-     dictionaries, compiled to XBF, and its `.pri`), the interface IDs
-     apps were compiled with, then Calculator, and `Windows.UI.Xaml.
-     Application` and `Window.Current` for UWP apps (CoreApplication's
-     activation in place of the desktop path).
+   - *Third part, what an app compiled against the NuGet package needs.*
+     - *Interface IDs.*  MIDL 3 makes up the IDs of the interfaces it
+       synthesizes for a class (its default, factory, statics,
+       overridable and protected interfaces) by an algorithm Microsoft has
+       not published, and WinUI 2's IDL names none for them, so an app
+       compiled against the `Microsoft.UI.Xaml` package asks for IDs the
+       IDL cannot give.  `userland/microsoft_ui_xaml/iids.txt` lists the
+       package's own (2.8.7, Calculator's: 402 interfaces;
+       `muxiids.py` reads them from its `Microsoft.UI.Xaml.winmd` and
+       writes the list, which is kept as facts, as MinGW-w64's headers keep
+       Windows' IDs; the package itself is not part of the build), and the
+       build gives each interface its published ID, abigen's name-based one
+       only to an interface the package lacks (2.9's additions, the
+       private test hooks).  An ID the IDL does name must equal the
+       published one, or the build stops; the interfaces both have list
+       their methods in the same order.
+     - *XAML resources.*  Each feature's XAML pages (a control's default
+       style, its theme resources, in a Version2 and a Version1 look) are
+       merged as Microsoft's build merges them: its MSBuild tasks
+       (`BatchMergeXaml`, `MergedDictionary`, `StripNamespaces`, from
+       microsoft-ui-xaml's `tools/CustomTasks`) ported to
+       `mergexaml.py`, the pages ordered and sorted into releases as
+       `Microsoft.UI.Xaml.Common.targets` does (each release's merge over
+       the previous one's, one entry per key, the theme dictionaries
+       merged by theme, conditional XAML resolved for the release's
+       `UniversalApiContract`).  `CommonStyles` (WinUI 2's styles of the
+       framework's own controls) is merged with the features built.
+       `XamlControlsResources` and each control's
+       `DefaultStyleResourceUri` choose the release by the contracts
+       `ApiInformation` reports; NovaOS reports Windows 10 22H2
+       (contract 10), so the 19H1 files are installed,
+       `C:\Programs\Microsoft.UI.Xaml\Themes\19h1_themeresources.xaml`,
+       `19h1_compact_themeresources.xaml` and `19h1_generic.xaml` (each also
+       in its `_v1` look), where `ms-appx:///Microsoft.UI.Xaml/Themes/`
+       finds them for an unpackaged program in `C:\Programs` (as the NuGet
+       package copies them into an app's folder); WinUI 2 asks its framework
+       package, `ms-appx://Microsoft.UI.Xaml.2.x/`, only when it runs from
+       one (32.6).  Microsoft compiles them to
+       XBF; the XAML compiler is Windows-only, so they stay XAML text,
+       which the framework's parser reads.  XAML text resolves every type
+       as it parses, so the resources that name a WinUI 2 type not built
+       yet (`TextCommandBarFlyout`, `NavigationViewItemPresenter`), or
+       use markup the framework cannot make yet (data binding,
+       `{Binding}`: the `Binding` class and its expressions are not
+       built), or name such a resource, are left out; the build lists them
+       in `Themes/left-out.txt`.  Test: `winui2test` checks the files are
+       installed.  Loading them waits on the framework: the controls'
+       default styles (the framework's own, which a WinUI 2 style is based
+       on) use data binding, so `ApplyTemplate` stops at the unbuilt
+       `Binding`, and `XamlControlsResources` setting its `Source` fails
+       (`E_FAIL`) while parsing in that context also reaches DirectWrite's
+       Windows 10 font model (`IDWriteFactory3` and later, 32.4).
+   - *Next:* the framework's data binding (`Binding`,
+     `BindingExpression`, `RelativeSource`; then the merged resources
+     keep their `{Binding}` styles) and, with 32.4's fonts, the resources
+     loaded; `Windows.UI.Xaml.Application.Start`'s UWP path
+     (`FrameworkApplication::StartUWP`: CoreApplication's activation and
+     the framework view, in place of the desktop path) with
+     `Window.Current`, then the features Calculator uses
+     (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
+     `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator
+     itself is a .NET Native app: its package also needs the .NET Native
+     framework and runtime packages (32.6).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

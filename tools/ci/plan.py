@@ -15,14 +15,19 @@ def docs_only(paths):
                                p == 'LICENSE' for p in paths)
 
 
+# What the nightly app corpus depends on.  On a pull request nightly.yml
+# starts only when one of these changed (its paths filter lists the same
+# entries: tests/tools/test_ci_rebuild.py checks that they agree).
+CORPUS_DIRS = ('userland/store/', 'tests/appcorpus/', 'tests/reference/')
+CORPUS_FILES = {'tools/appcorpus.py', 'tools/download_cache.py', 'kernel/apps/store.c',
+                'kernel/apps/store_catalog.h', 'tools/bundle_firefox.py', 'tools/bundle_mesa.py',
+                'tools/build_vkd3d_proton.py', '.github/workflows/nightly.yml'}
+
+
 def scope(event, paths):
     code = event not in {'pull_request', 'merge_group'} or not docs_only(paths)
     corpus = code and (not paths or event not in {'pull_request', 'merge_group'} or any(
-        p.startswith(('userland/store/', 'tests/appcorpus/', 'tests/reference/', 'tests/tools/',
-                      'tools/ci/', '.github/')) or
-        p in {'tools/appcorpus.py', 'tools/download_cache.py', 'tools/novarun.py',
-              'kernel/apps/store.c', 'kernel/apps/store_catalog.h', 'tools/bundle_firefox.py',
-              'tools/bundle_mesa.py', 'tools/build_vkd3d_proton.py'} for p in paths))
+        p.startswith(CORPUS_DIRS) or p in CORPUS_FILES for p in paths))
     return {'code': code, 'corpus': corpus}
 
 

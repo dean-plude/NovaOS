@@ -16,17 +16,19 @@ with OVMF in separate jobs:
 | Job | What it runs |
 |---|---|
 | Checks (conflict markers, manifests, generated docs) | host-side checks and the unit tests in `tests/tools/`; no VM |
-| OS tests (core) | `tools/selftest.py --suite core`: one long boot ([below](#the-core-suite)) |
-| OS tests (network) | `--suite network`: virtio-net on IPv4 and on IPv6, then an Intel e1000e ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
+| OS tests (core) | `tools/selftest.py --suite core`: one long boot ([below](#the-core-suite)); then the compatibility smoke, `tools/compat_smoke.py`: seven core tests (loader, wait migration, Chromium start-up, unwinding, WebView2 start-up) in a short boot of their own |
+| OS tests (network) | `--suite network`: virtio-net on IPv4 and on IPv6, then an Intel e1000e ([ci.md](ci.md#what-the-network-and-graphics-suites-run)); then the performance budget, `tools/ci/perf.py`: boot time, Firefox start time and SMP scaling against `tools/ci/perf-budget.json` ([ci.md](ci.md#the-performance-budget)) |
 | OS tests (devices 1/3, 2/3, 3/3) | `--suite devices --shard I/3`: one boot per device or machine, a third of the boots in each job so the whole suite stays well under the 60-minute limit ([below](#the-devices-suite)) |
-| Compatibility smoke | `tools/compat_smoke.py`: seven core tests (loader, wait migration, Chromium start-up, unwinding, WebView2 start-up) in a short boot of their own |
-| Performance budget | `tools/ci/perf.py`: boot time, Firefox start time and SMP scaling against `tools/ci/perf-budget.json` ([ci.md](ci.md#the-performance-budget)) |
 | Graphics tests (OpenGL, Direct3D) | `--suite graphics`: Direct2D, DirectWrite, OpenGL, Direct3D 9/11/12, DirectComposition on Mesa, DXVK, VKD3D-Proton and Venus ([ci.md](ci.md#what-the-network-and-graphics-suites-run)) |
 
-**Build and boot-test** passes when the build, all three OS test jobs and
-the performance budget passed. **CI result** passes when every job passed.
+**Build and boot-test** passes when the build and every OS test job
+passed, the compatibility smoke and the performance budget included.
 A pull request that changes only Markdown, files under `docs/` or `LICENSE`
-runs the Checks job and skips the rest, and both summary checks still pass.
+runs the Checks job and skips the rest, and **Build and boot-test** still
+passes. That is eight jobs and one summary per pull request
+([ci.md](ci.md#how-many-checks-a-pull-request-runs)); the MS-DOS build and
+the app corpus start on a pull request only when it changes what they
+test.
 
 A failing test fails its job. Each job's summary page has a table of
 results, and the serial logs, screenshots and sound recordings are kept as
@@ -482,7 +484,7 @@ CPUs; each multi-thread figure is the best of three samples, since a
 shared runner sometimes takes the emulated CPUs away for a moment and only a
 real lock stays near 1x in every sample). A scheduled run posts each program's result to issue #210. The
 workflow also runs on pull requests that change the corpus or what it
-depends on. [ci.md](ci.md#the-nightly-app-corpus) has the schedule, the
+depends on (a paths filter in `nightly.yml`), and by hand on any branch. [ci.md](ci.md#the-nightly-app-corpus) has the schedule, the
 retry rules and the reports.
 
 To run part of the corpus locally after a build:

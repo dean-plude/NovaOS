@@ -62,40 +62,6 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       release: ${{ inputs.release || false }}
-  compatibility:
-    name: Compatibility smoke
-    needs:
-    - checks
-    - build
-    if: needs.checks.outputs.code == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install runtime dependencies
-      run: tools/ci/install.sh runtime
-      timeout-minutes: 25
-    - name: Select accelerator
-      run: tools/ci/enable-kvm.sh optional
-      env:
-        NOVARUN_ALLOW_TCG: ${{ inputs.allow_tcg || false }}
-    - uses: actions/download-artifact@v4
-      with:
-        name: nova-image
-        path: build
-    - name: Verify tested image
-      run: python3 tools/ci/image_manifest.py verify --sha "$GITHUB_SHA"
-    - name: Run regressions
-      run: python3 tools/compat_smoke.py --img build/nova.img --out compat-smoke-out --junit compat-smoke-out/junit.xml
-        --summary "$GITHUB_STEP_SUMMARY"
-    - name: Keep compat-smoke-out
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: compat-smoke-out
-        path: compat-smoke-out
-        if-no-files-found: ignore
-        retention-days: 14
   boot-test:
     name: OS tests (${{ matrix.suite }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     needs:
@@ -130,6 +96,32 @@ jobs:
         path: selftest-${{ matrix.suite }}
         if-no-files-found: ignore
         retention-days: 14
+    - name: Compatibility smoke
+      if: always() && matrix.suite == 'core'
+      run: python3 tools/compat_smoke.py --img build/nova.img --out compat-smoke-out --junit compat-smoke-out/junit.xml
+        --summary "$GITHUB_STEP_SUMMARY"
+    - name: Keep compat-smoke-out
+      uses: actions/upload-artifact@v4
+      if: always() && matrix.suite == 'core'
+      with:
+        name: compat-smoke-out
+        path: compat-smoke-out
+        if-no-files-found: ignore
+        retention-days: 14
+    - name: Performance budget (boot time, Firefox start and smpstress scaling)
+      if: always() && matrix.suite == 'network'
+      run: python3 tools/ci/perf.py --img build/nova.img --out perf-out --summary "$GITHUB_STEP_SUMMARY"
+    - name: Keep perf-out
+      uses: actions/upload-artifact@v4
+      if: always() && matrix.suite == 'network'
+      with:
+        name: perf-out
+        path: |-
+          perf-out/*.json
+          perf-out/*.log
+          perf-out/*.png
+        if-no-files-found: ignore
+        retention-days: 14
     strategy:
       fail-fast: false
       matrix:
@@ -149,42 +141,6 @@ jobs:
       SUITE: ${{ matrix.suite }}
       SHARD: ${{ matrix.shard }}
       SHARDS: ${{ matrix.shards }}
-  perf:
-    name: Performance budget
-    needs:
-    - checks
-    - build
-    if: needs.checks.outputs.code == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install runtime dependencies
-      run: tools/ci/install.sh runtime
-      timeout-minutes: 25
-    - name: Select accelerator
-      run: tools/ci/enable-kvm.sh optional
-      env:
-        NOVARUN_ALLOW_TCG: ${{ inputs.allow_tcg || false }}
-    - uses: actions/download-artifact@v4
-      with:
-        name: nova-image
-        path: build
-    - name: Verify tested image
-      run: python3 tools/ci/image_manifest.py verify --sha "$GITHUB_SHA"
-    - name: Measure boot time, Firefox start and smpstress scaling against the budget
-      run: python3 tools/ci/perf.py --img build/nova.img --out perf-out --summary "$GITHUB_STEP_SUMMARY"
-    - name: Keep perf-out
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: perf-out
-        path: |-
-          perf-out/*.json
-          perf-out/*.log
-          perf-out/*.png
-        if-no-files-found: ignore
-        retention-days: 14
   graphics-test:
     name: Graphics tests (OpenGL, Direct3D)
     needs:
@@ -275,63 +231,13 @@ jobs:
         name: graphics-out
         path: graphics-out
         if-no-files-found: ignore
-  msdos:
-    name: MS-DOS 4.0 (built from source, booted in QEMU and on ntvdm's CPU)
-    needs: checks
-    if: needs.checks.outputs.code == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install DOSBox, mtools, NASM and QEMU
-      run: |-
-        sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dosbox mtools nasm qemu-system-x86
-    - name: Cache the MS-DOS build
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/novaos/msdos
-        key: msdos-v1-${{ hashFiles('tools/msdos/build_msdos.py') }}
-    - name: Build MS-DOS 4.0 with its own MASM, C compiler, LINK and NMAKE
-      run: python3 tools/msdos/build_msdos.py msdos-out
-    - name: Boot it from a floppy image and run COMMAND.COM and MEM.EXE
-      run: python3 tools/msdos/boot_test.py msdos-out --work msdos-boot
-    - name: Boot it on ntvdm's real-mode CPU and BIOS, type at COMMAND.COM and play bootRogue
-      run: python3 tools/msdos/vdm_test.py msdos-out --work msdos-vdm
-    - name: Keep the MS-DOS files and the boot log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: msdos
-        path: |-
-          msdos-out
-          msdos-boot/com1.log
-        if-no-files-found: ignore
-        retention-days: 14
-  ci-result:
-    name: CI result
-    needs:
-    - checks
-    - build
-    - compatibility
-    - boot-test
-    - perf
-    - graphics-test
-    - boot-result
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-    - uses: actions/checkout@v4
-    - name: Require every selected job
-      run: python3 tools/ci/results.py ci
-      env:
-        NEEDS_JSON: ${{ toJSON(needs) }}
   publish-iso:
     name: Publish nova.iso
     needs:
-    - ci-result
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci-result.result == 'success'
+    - boot-result
+    - graphics-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.boot-result.result == 'success' &&
+      needs.graphics-test.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -405,13 +311,12 @@ jobs:
     - checks
     - build
     - boot-test
-    - perf
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
     - uses: actions/checkout@v4
-    - name: Require build, every OS suite and the performance budget
+    - name: Require the build and every OS test job (with the compatibility smoke and the performance budget)
       env:
         NEEDS_JSON: ${{ toJSON(needs) }}
       run: python3 tools/ci/results.py boot

@@ -52,8 +52,10 @@ the output of `VER`, `DIR` and `MEM` to the first serial port; the test
 passes when "MS-DOS Version 4.00", the listing and MEM's memory report
 arrive.
 
-CI runs both in the **MS-DOS 4.0** job (not a required check) and keeps the
-files as the `msdos` artifact ([ci.md](ci.md)).  Locally:
+CI runs both in the **MS-DOS 4.0** job of its own workflow,
+`.github/workflows/msdos.yml` (on every push to `main`, and on pull requests
+that change `tools/msdos/`, ntvdm or bootRogue; not a required check), and
+keeps the files as the `msdos` artifact ([ci.md](ci.md)).  Locally:
 
 ```sh
 sudo apt install dosbox mtools qemu-system-x86

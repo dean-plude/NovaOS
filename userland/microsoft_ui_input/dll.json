@@ -1,0 +1,5 @@
+{
+  "deps": ["ole32", "user32", "gdi32", "kernel32", "ntdll", "msvcrt"],
+  "entry": "DllMain",
+  "file": "Microsoft.UI.Input.dll"
+}

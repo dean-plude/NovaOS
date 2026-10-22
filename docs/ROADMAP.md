@@ -690,7 +690,9 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   to do.  The first real boot (10-21) looked frozen after
   `Hyper-V video: channel 5 open`: the synthetic video took the screen
   over but reported no changes until the scheduler ran; the boot log's
-  lines are reported now too.
+  lines are reported now too.  The second boot stopped at `Version 3.5
+  accepted`: the boot log is now reported from the moment the version is
+  agreed, and still when a later video step fails.
 - [ ] **23.5 Update signing key.** Ship the release public key in
   `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
   a signed 0.1.1 test update and rejects an unsigned one.
@@ -1147,6 +1149,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   islands) comes with 32.4.
 - [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
+  Content islands part (Phase 32 push) done: the Windows App SDK's
+  lifted content, input and windowing classes a `Window` sits on
+  (`Microsoft.UI.Input.dll`: `ContentIsland`, `DesktopChildSiteBridge`,
+  the island's input sources and focus controller, `AppWindow`), in
+  `contentislandtest`, and the framework's `DesktopWindowImpl`,
+  `DesktopWindowXamlSource`, island root and window chrome built.  Left:
+  the theme resources (`generic.xaml`, which a `Window` loads as it is
+  created, compiled to XBF as Windows ships it), DirectWrite's Windows 10
+  font model (`IDWriteFactory6`, which XAML's text formatting starts
+  from), then the page laid out, drawn, typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

@@ -40,6 +40,28 @@ namespace Microsoft.UI.Input
 
 namespace Microsoft.UI.Content
 {
+    // a content island's display orientations, with the values of
+    // Windows.Graphics.Display.DisplayOrientations: XAML's display
+    // orientation helper reads an island's (dxaml/lib/DisplayOrientationHelper.h)
+    [flags]
+    enum ContentDisplayOrientations
+    {
+        None = 0,
+        Landscape = 0x1,
+        Portrait = 0x2,
+        LandscapeFlipped = 0x4,
+        PortraitFlipped = 0x8,
+    };
+
+    // ContentIslandEnvironment's experimental half: the display's current
+    // orientation, and the system theme changing, which XAML's island root
+    // listens for (core XamlIslandRoot.cpp)
+    interface IContentIslandEnvironmentExperimental
+    {
+        Microsoft.UI.Content.ContentDisplayOrientations CurrentOrientation{ get; };
+        event Windows.Foundation.TypedEventHandler<Microsoft.UI.Content.ContentIslandEnvironment, Object> ThemeChanged;
+    };
+
     // the site bridge of a popup window an island opens (a windowed
     // popup); XAML shows and hides it through its IDesktopSiteBridge
     runtimeclass PopupWindowSiteBridge

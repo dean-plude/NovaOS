@@ -17,11 +17,26 @@ extern "C" BOOL WINAPI ContentPreTranslateMessage(const MSG *msg)
     return FALSE;
 }
 
+// Theming_TryEnableHostBackdropBrush (FrameworkUdk/Theming.h): marks a
+//   top-level window as where the host backdrop brush (a system backdrop's
+//   sample of what is behind the window) is taken.  NovaOS's compositor
+//   draws no host backdrop, so there is nothing to mark; the brush falls back
+//   to its solid colour, as on Windows when transparency effects are off.
+#include <FrameworkUdk/Theming.h>
+
+HRESULT Theming_TryEnableHostBackdropBrush(HWND hwnd)
+{
+    (void)hwnd;
+    return S_OK;
+}
 
 // Windowing_GetWindowIdFromWindow, Windowing_GetWindowFromWindowId
-//   (windowing.h): a window's WindowId is its handle's value, as on Windows;
-//   an id that names no window is refused.
+//   (windowing.h) and the SDK's public wrappers of them,
+//   ABI::Microsoft::UI::GetWindowIdFromWindow and GetWindowFromWindowId
+//   (Microsoft.UI.Interop.h): a window's WindowId is its handle's value, as
+//   on Windows; an id that names no window is refused.
 #include <windowing.h>
+#include <Microsoft.UI.Interop.h>
 
 HRESULT Windowing_GetWindowIdFromWindow(HWND hwnd, ABI::Microsoft::UI::WindowId *windowId)
 {
@@ -41,3 +56,8 @@ HRESULT Windowing_GetWindowFromWindowId(ABI::Microsoft::UI::WindowId windowId, H
     *hwnd = h;
     return S_OK;
 }
+
+namespace ABI { namespace Microsoft { namespace UI {
+HRESULT GetWindowIdFromWindow(HWND hwnd, WindowId *windowId) { return Windowing_GetWindowIdFromWindow(hwnd, windowId); }
+HRESULT GetWindowFromWindowId(WindowId windowId, HWND *hwnd) { return Windowing_GetWindowFromWindowId(windowId, hwnd); }
+}}}

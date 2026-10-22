@@ -121,7 +121,7 @@ static void fresh(UINT32 version)
 {
     memset(counts, 0, sizeof(counts));
     accepts = version; silent = bad_ack = false; gop = true;
-    attached = 0; nqueued = 0; g_video = NULL; shown_hook = NULL;
+    attached = 0; nqueued = 0; g_video = g_console = NULL; shown_hook = NULL;
     ctx = HvVideoDriver.opened(NULL);
 }
 
@@ -148,7 +148,7 @@ static void windows10_checks(void)
     assert(counts[SV_POINTER_POSITION] == 1 && last[SV_POINTER_POSITION].ptr_pos.visible == 1);
     assert(counts[SV_POINTER_SHAPE] == 1 && last[SV_POINTER_SHAPE].ptr_shape.part == 0xFF);
     assert(last[SV_POINTER_SHAPE].ptr_shape.w == 1 && last[SV_POINTER_SHAPE].ptr_shape.h == 1);
-    assert(counts[SV_DIRT] == 1 && last[SV_DIRT].dirt.count == 1 && last[SV_DIRT].dirt.x2 == 1024 && last[SV_DIRT].dirt.y2 == 768);
+    assert(counts[SV_DIRT] == 2 && last[SV_DIRT].dirt.count == 1 && last[SV_DIRT].dirt.x2 == 1024 && last[SV_DIRT].dirt.y2 == 768);
     puts("Windows 10 host passed");
 
     assert(shown_hook == console_shown);                    /* the boot log's lines are reported too ... */
@@ -232,12 +232,20 @@ static void refusal_checks(void)
     fresh(SV_WIN10);                                        /* the video memory refused */
     bad_ack = true;
     HvVideoDriver.started(ctx);
-    assert(counts[SV_VRAM_LOCATION] == 1 && !counts[SV_SITUATION_UPDATE] && !attached && !g_video);
+    assert(counts[SV_VRAM_LOCATION] == 1 && !attached && !g_video);
+    assert(counts[SV_SITUATION_UPDATE] == 1 && counts[SV_DIRT] == 2);   /* the boot mode still shown ... */
+    assert(shown_hook == console_shown);
+    shown_hook();
+    ticks += 100;
+    HvVideoDriver.tick(ctx);
+    assert(counts[SV_DIRT] == 4);                          /* ... with the boot log and the tick */
+    HvVideoDriver.removed(ctx);
+    assert(!shown_hook);
 
     fresh(SV_WIN10);                                        /* another display driver owns the screen */
     gop = false;
     HvVideoDriver.started(ctx);
-    assert(!counts[SV_VRAM_LOCATION] && !attached && !g_video);
+    assert(!counts[SV_VRAM_LOCATION] && !attached && !g_video && !shown_hook);
     HvVideoDriver.tick(ctx);
     assert(!counts[SV_DIRT]);
     puts("refusals passed");

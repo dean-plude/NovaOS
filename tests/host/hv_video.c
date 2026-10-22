@@ -15,6 +15,11 @@ static int    attached, attach_n;
 static bool (*attach_set)(int w, int h);
 static DisplayMode attach_modes[DISPLAY_MAX_MODES];
 static void (*shown_hook)(void);
+static bool   aml_ready, fb_enabled = true;
+static AmlRange ranges[AML_MAX_VMBUS_MMIO];
+static int    nranges;
+static UINT64 moved_to;
+#define HIGH_MMIO 0xFE0000000ull                      /* (a Windows 11 host's: 63.5 GiB, 512 MiB) */
 
 void kprintf(const char *f, ...) { va_list v; va_start(v, f); vprintf(f, v); va_end(v); }
 void *kzalloc(size_t n) { return calloc(1, n); }
@@ -29,6 +34,15 @@ bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h)
     *phys = FB_BASE; *size = 1024 * 768 * 4; *w = 1024; *h = 768;
     return true;
 }
+bool AmlReady(void) { return aml_ready; }
+int AmlVmbusMmio(AmlRange *out, int max)
+{
+    int n = nranges < max ? nranges : max;
+    memcpy(out, ranges, n * sizeof(*out));
+    return n;
+}
+void kprintf_set_fb_enabled(bool enabled) { fb_enabled = enabled; }
+bool DisplayHyperVMove(UINT64 phys, UINT64 size) { (void)size; moved_to = phys; return true; }
 bool DisplayHyperVAttach(bool (*set_mode)(int w, int h), const DisplayMode *modes, int n)
 {
     attached++;
@@ -101,9 +115,9 @@ bool VmbusSend(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_id, 
         break;
     }
     case SV_VRAM_LOCATION:
-        assert(m->vram.gpa_specified == 1 && m->vram.gpa == FB_BASE);
-        reply(SV_VRAM_LOCATION_ACK, 8);
-        queued[nqueued - 1].vram_ack.user_ctx = bad_ack ? 1 : m->vram.user_ctx;
+        assert(m->vram.gpa_specified == 1 && m->vram.gpa == m->vram.user_ctx);
+        reply(SV_VRAM_LOCATION_ACK, 8);                     /* (bad_ack: only the firmware's frame buffer refused) */
+        queued[nqueued - 1].vram_ack.user_ctx = bad_ack && m->vram.gpa == FB_BASE ? 1 : m->vram.user_ctx;
         break;
     }
     return true;
@@ -122,6 +136,7 @@ static void fresh(UINT32 version)
     memset(counts, 0, sizeof(counts));
     accepts = version; silent = bad_ack = false; gop = true;
     attached = 0; nqueued = 0; g_video = g_console = NULL; shown_hook = NULL;
+    aml_ready = false; fb_enabled = true; nranges = 0; moved_to = 0;
     ctx = HvVideoDriver.opened(NULL);
 }
 
@@ -239,8 +254,35 @@ static void refusal_checks(void)
     ticks += 100;
     HvVideoDriver.tick(ctx);
     assert(counts[SV_DIRT] == 4);                          /* ... with the boot log and the tick */
+    assert(!fb_enabled && counts[SV_VRAM_LOCATION] == 2);   /* the boot log off the screen; ACPI not up yet */
+    ranges[0] = (AmlRange){ FB_BASE, 128ull << 20 };        /* then the VMBus ranges: the high one first */
+    ranges[1] = (AmlRange){ HIGH_MMIO, 512ull << 20 };
+    nranges = 2;
+    aml_ready = true;
+    HvVideoDriver.tick(ctx);
+    assert(counts[SV_VRAM_LOCATION] == 3 && last[SV_VRAM_LOCATION].vram.gpa == HIGH_MMIO);
+    assert(moved_to == HIGH_MMIO && attached == 1 && g_video == ctx && counts[SV_SITUATION_UPDATE] == 2);
+    HvVideoDriver.tick(ctx);                                /* (once) */
+    assert(counts[SV_VRAM_LOCATION] == 3);
     HvVideoDriver.removed(ctx);
     assert(!shown_hook);
+
+    fresh(SV_WIN10);                                        /* only the low range, the frame buffer at its start */
+    bad_ack = true;
+    HvVideoDriver.started(ctx);
+    ranges[0] = (AmlRange){ FB_BASE, 128ull << 20 };
+    nranges = 1;
+    aml_ready = true;
+    HvVideoDriver.tick(ctx);
+    assert(counts[SV_VRAM_LOCATION] == 3 && last[SV_VRAM_LOCATION].vram.gpa == FB_BASE + (16ull << 20));
+    assert(moved_to == FB_BASE + (16ull << 20) && attached == 1);
+
+    fresh(SV_WIN10);                                        /* no ranges: the screen stays */
+    bad_ack = true;
+    HvVideoDriver.started(ctx);
+    aml_ready = true;
+    HvVideoDriver.tick(ctx);
+    assert(counts[SV_VRAM_LOCATION] == 2 && !moved_to && !attached);
 
     fresh(SV_WIN10);                                        /* another display driver owns the screen */
     gop = false;

@@ -110,5 +110,12 @@ typedef struct {
     bool   irq_level, irq_low;
 } AmlI2cHid;
 
+/* Hyper-V's VMBus: the memory ranges its _CRS (or the nearest ancestor's)
+ * gives the synthetic devices, where the synthetic video's memory may go
+ * (Linux's vmbus_acpi_add).  Filled before AmlReady(); 0 outside Hyper-V */
+typedef struct { UINT64 base, size; } AmlRange;
+#define AML_MAX_VMBUS_MMIO 4
+int AmlVmbusMmio(AmlRange *out, int max);
+
 #define AML_MAX_I2C_HID 4
 int AmlI2cHidDevices(AmlI2cHid *out, int max);

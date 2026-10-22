@@ -1026,6 +1026,54 @@ typedef struct {
     UINT32              irq;
 } BlockRes;
 
+/* -----------------------------------------------------------------------
+ * Hyper-V's VMBus device ("VMBUS"): its memory ranges, from its own _CRS or
+ * the nearest ancestor's (Generation 2 puts them on \_SB.VMOD)
+ * ----------------------------------------------------------------------- */
+static AmlRange g_vmbus_mmio[AML_MAX_VMBUS_MMIO];
+static int      g_nvmbus_mmio;
+
+static uacpi_iteration_decision vmbus_resource(void *user, uacpi_resource *r)
+{
+    (void)user;
+    UINT64 base = 0, size = 0;
+    if (r->type == UACPI_RESOURCE_TYPE_ADDRESS32 && r->address32.common.type == UACPI_RANGE_MEMORY) {
+        base = r->address32.minimum;
+        size = r->address32.address_length;
+    } else if (r->type == UACPI_RESOURCE_TYPE_ADDRESS64 && r->address64.common.type == UACPI_RANGE_MEMORY) {
+        base = r->address64.minimum;
+        size = r->address64.address_length;
+    } else if (r->type == UACPI_RESOURCE_TYPE_MEMORY32) {
+        base = r->memory32.minimum;
+        size = r->memory32.length;
+    } else if (r->type == UACPI_RESOURCE_TYPE_FIXED_MEMORY32) {
+        base = r->fixed_memory32.address;
+        size = r->fixed_memory32.length;
+    }
+    if (size && g_nvmbus_mmio < AML_MAX_VMBUS_MMIO) g_vmbus_mmio[g_nvmbus_mmio++] = (AmlRange){ base, size };
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+static uacpi_iteration_decision found_vmbus(void *user, uacpi_namespace_node *node, uacpi_u32 depth)
+{
+    (void)user; (void)depth;
+    for (uacpi_namespace_node *n = node; n && n != uacpi_namespace_root() && !g_nvmbus_mmio;
+         n = uacpi_namespace_node_parent(n))
+        uacpi_for_each_device_resource(n, "_CRS", vmbus_resource, NULL);
+    for (int i = 0; i < g_nvmbus_mmio; i++)
+        kprintf("[ACPI] VMBus memory range 0x%llx-0x%llx (%llu MiB)\n", (unsigned long long)g_vmbus_mmio[i].base,
+                (unsigned long long)(g_vmbus_mmio[i].base + g_vmbus_mmio[i].size - 1),
+                (unsigned long long)(g_vmbus_mmio[i].size >> 20));
+    return UACPI_ITERATION_DECISION_BREAK;
+}
+
+int AmlVmbusMmio(AmlRange *out, int max)
+{
+    int n = g_nvmbus_mmio < max ? g_nvmbus_mmio : max;
+    for (int i = 0; i < n; i++) out[i] = g_vmbus_mmio[i];
+    return n;
+}
+
 static uacpi_iteration_decision block_resource(void *user, uacpi_resource *r)
 {
     BlockRes *b = user;
@@ -1502,6 +1550,8 @@ static bool load(void)
     GpioProbe();                         /* (before the devices whose interrupts are its pins) */
     uacpi_find_devices("PNP0C50", found_i2c_hid, NULL);
     uacpi_find_devices("ACPI0C50", found_i2c_hid, NULL);
+    uacpi_find_devices("VMBUS", found_vmbus, NULL);
+    if (!g_nvmbus_mmio) uacpi_find_devices("VMBus", found_vmbus, NULL);
     CStateProbe();                       /* (the processors' _OSC/_PDC, then their _CST: ke/idle.c) */
     ThrottleProbe();                     /* (before the thermal zones that slow the processors) */
     uacpi_namespace_for_each_child(uacpi_namespace_root(), found_zone, NULL,

@@ -1116,6 +1116,24 @@ bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h)
     return true;
 }
 
+static volatile bool g_moved;
+
+bool DisplayHyperVMove(UINT64 phys, UINT64 size)
+{
+    if (d.kind != DRV_GOP || (UINT64)d.cur.w * d.cur.h * 4 > size || phys + size > PHYSMAP_SIZE) return false;
+    memset((void *)(uintptr_t)(PHYSMAP_BASE + phys), 0, (UINT64)d.cur.w * d.cur.h * 4);
+    d.vram_phys = phys;
+    d.vram_size = size;
+    d.stride = d.cur.w;
+    publish_surface();
+    __atomic_store_n(&g_moved, true, __ATOMIC_RELEASE);
+    kprintf("[DISPLAY] The screen moved to 0x%llx (%llu MiB)\n", (unsigned long long)phys,
+            (unsigned long long)(size >> 20));
+    return true;
+}
+
+bool DisplayTakeMoved(void) { return __atomic_exchange_n(&g_moved, false, __ATOMIC_ACQ_REL); }
+
 bool DisplayHyperVAttach(bool (*set_mode)(int w, int h), const DisplayMode *modes, int n)
 {
     if (d.kind != DRV_GOP || !set_mode || n <= 0) return false;

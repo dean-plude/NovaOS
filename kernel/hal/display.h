@@ -173,3 +173,9 @@ bool DisplayPostInfo(UINT64 *phys, int *w, int *h, int *pitch_bytes);
  * ----------------------------------------------------------------------- */
 bool DisplayHyperVAttach(bool (*set_mode)(int w, int h), const DisplayMode *modes, int n);
 bool DisplayBootFramebuffer(UINT64 *phys, UINT64 *size, int *w, int *h);
+/* The host would not put the video memory at the GOP framebuffer, so it
+ * went to @phys (@size bytes, in the physmap) instead: the screen is drawn
+ * there from now on, w * 4 bytes a row.  The desktop lays itself out again
+ * when DisplayTakeMoved() says so (it reads the surface in its own loop) */
+bool DisplayHyperVMove(UINT64 phys, UINT64 size);
+bool DisplayTakeMoved(void);

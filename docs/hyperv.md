@@ -287,6 +287,7 @@ lines say what went wrong:
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
+| `[HVVIDEO] No answer N to message M in 10000 ms`, `... answer names 0x..., not 0x...`, `While waiting for message N: ...` | which synthvid step failed and what the host sent instead (the video memory's location is asked twice) |
 | the screen stops changing after `[HVVIDEO] Version 3.5 accepted` or later | the host gets no dirty rectangles: the boot log on COM1 says whether NovaOS still runs (Hyper-V Manager's Heartbeat column too) |
 | `[NETVSC] No answer to INIT`, `The host took no NVSP version NovaOS speaks`, `The host did not take the receive buffer`, `RNDIS did not start` | the network adapter did not come up: no network |
 | `[NETVSC] Link down` | the VM's adapter is not connected to a switch (Settings, Network Adapter, Virtual switch) |

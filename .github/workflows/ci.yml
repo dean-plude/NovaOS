@@ -96,7 +96,7 @@ jobs:
         if-no-files-found: ignore
         retention-days: 14
   boot-test:
-    name: OS tests (${{ matrix.suite }})
+    name: OS tests (${{ matrix.suite }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     needs:
     - checks
     - build
@@ -119,24 +119,34 @@ jobs:
       run: python3 tools/ci/image_manifest.py verify --sha "$GITHUB_SHA"
     - name: Run regressions
       run: python3 tools/selftest.py --suite "$SUITE" --img build/nova.img --out "selftest-$SUITE" --junit "selftest-$SUITE/junit.xml"
-        --summary "$GITHUB_STEP_SUMMARY"
+        ${SHARD:+--shard "$SHARD/$SHARDS"} --summary "$GITHUB_STEP_SUMMARY"
     - name: Keep selftest-${{ matrix.suite }}
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: selftest-${{ matrix.suite }}
+        name: selftest-${{ matrix.suite }}${{ matrix.shard && format('-{0}', matrix.shard) || '' }}
         path: selftest-${{ matrix.suite }}
         if-no-files-found: ignore
         retention-days: 14
     strategy:
       fail-fast: false
       matrix:
-        suite:
-        - core
-        - network
-        - devices
+        include:
+        - suite: core
+        - suite: network
+        - suite: devices
+          shard: 1
+          shards: 3
+        - suite: devices
+          shard: 2
+          shards: 3
+        - suite: devices
+          shard: 3
+          shards: 3
     env:
       SUITE: ${{ matrix.suite }}
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ matrix.shards }}
   perf:
     name: Performance budget
     needs:

@@ -107,7 +107,9 @@ runner image version and `install.sh`. A job that finds them installs with
 stall for a whole job (OS tests (devices 2/3) on PR #522: two 10-minute
 attempts with no output). On a cache miss `install.sh` uses apt with
 30-second connection timeouts, three retries and a 2-minute dpkg lock wait,
-bounds each attempt at 10 minutes, tries twice, and prints the stuck apt and
+bounds each attempt at 10 minutes, tries twice (the second time from
+`archive.ubuntu.com`, because the runner's Azure mirror can crawl at about
+100 KB/s without ever failing, so apt's mirror list never moves on), and prints the stuck apt and
 dpkg processes when an attempt stalls. The nightly workflow calls
 `install.sh` directly, without the cache.
 

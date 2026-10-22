@@ -20,8 +20,8 @@ esac
 # A runner's apt can stall for a whole job (devices: 60 minutes without output, twice in a row
 # on 10-22). So: APT_DEB_CACHE (.github/actions/deps, an actions/cache keyed by runner image)
 # keeps the .debs a profile downloaded and later jobs install them with dpkg, no network;
-# apt itself gets connection timeouts and retries, each attempt is bounded and tried twice,
-# and a stalled attempt prints which apt/dpkg processes were stuck.
+# apt itself gets connection timeouts and retries, each attempt is bounded and tried twice
+# (the second from archive.ubuntu.com), and a stalled attempt prints which apt/dpkg processes were stuck.
 cache=${APT_DEB_CACHE:-}
 apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
           -o DPkg::Lock::Timeout=120)
@@ -47,6 +47,11 @@ if ! from_cache; then
         [ "$attempt" = 2 ] && { echo "apt install failed twice" >&2; exit 1; }
         sudo pkill -x apt-get || true
         sudo dpkg --configure -a || true
+        # A runner's Azure mirror can crawl (~100 KB/s on PR #525: libflite1 alone outlasted the
+        # attempt) without ever erroring, so the mirror list never fails over: use the main archive.
+        echo "switching apt from the runner's mirror to archive.ubuntu.com" >&2
+        sudo sed -i -E 's#mirror\+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#; s#https?://azure\.archive\.ubuntu\.com#http://archive.ubuntu.com#g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
     done
     if [ -n "$cache" ]; then
         sudo rm -rf "$cache/partial" "$cache/lock"

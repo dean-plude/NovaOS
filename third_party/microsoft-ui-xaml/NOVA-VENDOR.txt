@@ -156,7 +156,13 @@ control classes).
 
 For the first frame (step 32.4): components/UIBridgeFocus whole (the
 island's FocusController and its navigation results and event args, with
-Microsoft.UI.Xaml.UIBridgeFocus.vcxproj).
+Microsoft.UI.Xaml.UIBridgeFocus.vcxproj), plat/win/desktop's
+windowspresenttarget.cpp, components/transforms' Transform.cpp with its lib
+project, dxaml/lib's DependencyObjectAbstractionHelpers.cpp,
+FrameworkEventArgs.cpp and the PopupRoot, FullWindowMediaRoot,
+GettingFocusEventArgs, LosingFocusEventArgs and
+XamlSourceFocusNavigationRequest partial classes, with the generated
+classes of those and of Canvas, PrintRoot and TransitionRoot.
 
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are

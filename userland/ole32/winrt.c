@@ -354,6 +354,56 @@ WINOLEAPI_(HRESULT) RoActivateInstance(HSTRING cls, void **inst)
     f->lpVtbl->Release(f);
     return hr;
 }
+/* RoParseTypeName (wintypes.dll's, api-ms-win-ro-typeresolution): a type
+ * name split into its parts, a generic's name then its arguments' parts in
+ * order: "A`1<B, C`1<D>>" -> "A`1", "B", "C`1", "D".  XAML's reflection
+ * reads a box's element type this way (IReference`1<T>). */
+#ifndef RO_E_METADATA_INVALID_TYPE_FORMAT
+#define RO_E_METADATA_INVALID_TYPE_FORMAT ((HRESULT)0x80000011L)
+#endif
+WINOLEAPI_(HRESULT) RoParseTypeName(HSTRING name, DWORD *count, HSTRING **parts)
+{
+    if (!count || !parts) return E_INVALIDARG;
+    *count = 0;
+    *parts = 0;
+    UINT32 n;
+    const WCHAR *s = WindowsGetStringRawBuffer(name, &n);
+    if (!n) return E_INVALIDARG;
+    DWORD max = 1, got = 0;
+    for (UINT32 i = 0; i < n; i++)
+        if (s[i] == '<' || s[i] == ',') max++;
+    HSTRING *a = (HSTRING *)CoTaskMemAlloc(max * sizeof(HSTRING));
+    if (!a) return E_OUTOFMEMORY;
+    HRESULT hr = S_OK;
+    int depth = 0;
+    UINT32 start = 0;
+    for (UINT32 i = 0; i <= n && SUCCEEDED(hr); i++) {
+        WCHAR c = i < n ? s[i] : 0;
+        if (c != '<' && c != '>' && c != ',' && c) continue;
+        UINT32 b = start, e = i;
+        while (b < e && s[b] == ' ') b++;
+        while (e > b && s[e - 1] == ' ') e--;
+        if (e > b) {
+            if (got == max) { hr = RO_E_METADATA_INVALID_TYPE_FORMAT; break; }
+            hr = WindowsCreateString(s + b, e - b, &a[got]);
+            if (SUCCEEDED(hr)) got++;
+        } else if (c == '<' || c == ',' || (c == 0 && !got)) {
+            hr = RO_E_METADATA_INVALID_TYPE_FORMAT;   /* an empty part */
+        }
+        if (c == '<') depth++;
+        else if (c == '>' && --depth < 0) hr = RO_E_METADATA_INVALID_TYPE_FORMAT;
+        start = i + 1;
+    }
+    if (SUCCEEDED(hr) && depth) hr = RO_E_METADATA_INVALID_TYPE_FORMAT;
+    if (FAILED(hr)) {
+        while (got) WindowsDeleteString(a[--got]);
+        CoTaskMemFree(a);
+        return hr;
+    }
+    *count = got;
+    *parts = a;
+    return S_OK;
+}
 /* The Windows Runtime's error objects: RoOriginateError makes an
  * IRestrictedErrorInfo (the error and its message) the thread's, which
  * GetRestrictedErrorInfo takes (and clears) and SetRestrictedErrorInfo

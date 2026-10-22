@@ -142,6 +142,7 @@ static const char *api_set_host(const char *name)
         { "api-ms-win-core-synch-", "kernelbase.dll" },  /* WaitOnAddress lives there, not in kernel32 */
         { "api-ms-win-core-com-",   "ole32.dll" },
         { "api-ms-win-core-winrt-", "ole32.dll" },
+        { "api-ms-win-ro-typeresolution-", "ole32.dll" },
         { "combase",                "ole32.dll" },
         { "api-ms-win-core-",       "kernel32.dll" },
         { "api-ms-win-security-",   "advapi32.dll" },

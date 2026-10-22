@@ -133,6 +133,17 @@ and ankerl, and XAML's ETW manifest
 dxaml (the rest of the core and the controls) joins as
 the build takes it in (docs/design/windows-ui-xaml.md).
 
+For WinUI 2 on the system XAML (step 32.5): components/ExtMetadataProvider
+whole (the framework's metadata provider, XamlLibMetadataProvider, which
+asks the app's provider for the types it does not know: WinUI 2's) with
+components/SatelliteBase/inc/XamlTypeInfo.h (step 32.4 takes the same
+files), and dxaml/lib's PropertyChangedParamsHelper.cpp,
+DependencyPropertyChangedEventArgs_Partial.cpp and the generated
+DependencyPropertyChangedEventArgs class (an app's dependency property's
+changed callback), VisualStateManager_Partial.cpp with the generated
+VisualStateManager class with components/vsm whole (the visual states
+that callback moves to).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

@@ -1176,9 +1176,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   Windows names, a Windows-boxed enum or struct is boxed again as the
   framework's, a `TypeName` is renamed both ways, and an app's control
   composed over a `Windows.UI.Xaml` class has its Windows overrides
-  called by the framework's layout.  Test `wuxamltest`.  Next: WinUI 2's
-  controls themselves (its `dev` tree, C++/WinRT) built on that, then
-  `Windows.UI.Xaml.Application` for UWP apps.
+  called by the framework's layout.  Test `wuxamltest`.  Second part
+  done: WinUI 2's own controls built from its `winui2/main` sources as
+  `Microsoft.UI.Xaml.dll` 2.x (`userland/microsoft_ui_xaml`): its IDL
+  written to a `.winmd` (`tools/winrt/winmdwrite.py`), C++/WinRT's
+  generator (vendored, built for the build machine) writing the
+  projection and component files, its XAML type table written as
+  Microsoft's T4 template writes it; the inner-loop feature set and
+  `InfoBadge` so far.  The framework's metadata provider asks the app's
+  `Application` for WinUI 2's types, and `urlmon.dll` serves
+  `Windows.Foundation.Uri`.  Test `winui2test`.  Next: WinUI 2's XAML
+  resources, the interface IDs apps were compiled with, then
+  Calculator and `Windows.UI.Xaml.Application` for UWP apps.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

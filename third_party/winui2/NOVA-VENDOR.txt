@@ -1,0 +1,45 @@
+WinUI 2 (Microsoft.UI.Xaml 2.x), vendored for NovaOS
+====================================================
+
+Source: https://github.com/microsoft/microsoft-ui-xaml (MIT, LICENSE),
+branch winui2/main, commit ac1341314cc895c23cee47e941ca6ad387ef9907
+(2024-09-12).  WinUI 2 is the controls library UWP apps ship (the
+Microsoft.UI.Xaml NuGet package and framework package), written in
+C++/WinRT over the system's Windows.UI.Xaml.  userland/microsoft_ui_xaml
+builds it as Microsoft.UI.Xaml.dll (roadmap step 32.5;
+docs/design/windows-ui-xaml.md).
+
+Kept so far: idl/ (Microsoft.UI.Xaml.idl, which imports every feature's
+IDL, and DPCodeGenAttributes.idl), dev/dll (the DLL's own sources, its
+precompiled header, its .def and the T4 templates xamlmeta.py ports),
+dev/inc (the shared headers, with gsl), dev/Generated (the properties files
+Microsoft's code generator wrote, for the features kept), and, of each
+feature the DLL builds, its sources, headers, IDL and .vcxitems: TestHooks,
+Common, Telemetry, ResourceHelper, Collections, Effects,
+Materials/{Acrylic,Reveal,Backdrop}, Lights, ImageIcon, IconSource,
+AnimatedVisualPlayer, AnimatedIcon (with AnimatedVisuals), SplitButton,
+DropDownButton and InfoBadge; and TabView/TabViewTrace.h (TestHooks
+includes it).  Left out: the XAML resource files (.xaml), the tests, the
+samples, and the MSBuild projects other than the .vcxitems the build reads.
+Files keep their CRLF line ends and byte-order marks.
+
+Changed for clang (marked here, the files otherwise as upstream):
+  dev/Collections/Vector.h      ##Options## and Options##:: pasting (which
+                                only MSVC's preprocessor accepts) written
+                                Options and Options::; "typename" left off
+                                VectorInnerType and T, which are not
+                                qualified names
+  dev/Collections/Vector.h, VectorIterator.h, HashMap.h
+                                reference_tracker_implements_t<X>::type
+                                named as the member template it is
+                                (::template type)
+  dev/Materials/Acrylic/AcrylicBrush.cpp
+                                winrt::TimeSpan::duration(...) (MSVC
+                                takes the constructor name as the type)
+                                written winrt::TimeSpan(...)
+The build also copies dev/Generated with [[gsl::suppress(con)]] written
+with the string argument clang wants (userland/microsoft_ui_xaml/build.py).
+
+To add a feature: copy its folder's .cpp, .h, .idl and .vcxitems (and its
+dev/Generated files) from the same commit, add its .vcxitems to FEATURES
+in userland/microsoft_ui_xaml/build.py, and list it above.

@@ -209,12 +209,13 @@ class Faces:
         return True
 
     # -- thunks -------------------------------------------------------------------
-    def thunk(self, name, impl, target, slot, tgt_iid, to_framework_in, queue_side):
+    def thunk(self, name, impl, target, slot, tgt_iid, to_framework_in, queue_side, optional=False):
         """a thunk implementing @impl's parameters by calling @target's at
         vtable @slot of the interface @tgt_iid; @to_framework_in: whether
         what goes in flows from Windows' types to the framework's (a forward
-        face) and what comes out the other way"""
-        cp, args, pre, post, clean = ['NovaTear* t'], ['p'], [], [], []
+        face) and what comes out the other way; @optional: an interface the
+        object may lack, a method of a later version of it"""
+        cp, args, pre, post, clean, zero = ['NovaTear* t'], ['p'], [], [], [], []
         tcp = ['void*']
         for i, ((ti, d), (tt, _)) in enumerate(zip(impl, target)):
             ki, kt = self.kind(ti), self.kind(tt)
@@ -223,6 +224,8 @@ class Faces:
             a = 'a%d' % i
             ic = self.cparams(ki, d if d != 'in' else None) if d != 'fill' else self.cparams(ki, None)
             tc = self.cparams(kt, d if d != 'in' else None) if d != 'fill' else self.cparams(kt, None)
+            if d == 'out':
+                zero += [a + 'n', a] if len(ic) == 2 else [a]
             if len(ic) == 2:
                 cp += ['%s %sn' % (ic[0], a), '%s %s' % (ic[1], a)]
                 tcp += tc
@@ -280,8 +283,13 @@ class Faces:
         get = 'nova_target(t, &%s, &p)' % self.guid(iid) if cls is None else \
             'nova_target_static(t, L"%s", &%s, &p)' % (cls, self.guid(iid))
         body = ['static HRESULT STDMETHODCALLTYPE %s(%s)' % (name, ', '.join(cp)), '{',
-                '    void* p; HRESULT hr = %s;' % get,
-                '    if (FAILED(hr)) return hr;']
+                '    void* p; HRESULT hr = %s;' % get]
+        if optional:
+            # (an object without the later interface: what it would answer is
+            # nothing, zeroed outputs)
+            body.append('    if (hr == E_NOINTERFACE) { %s return S_OK; }'
+                        % ' '.join('if (%s) __builtin_memset(%s, 0, sizeof(*%s));' % (z, z, z) for z in zero))
+        body.append('    if (FAILED(hr)) return hr;')
         body += ['    ' + x for x in pre]
         body.append('    if (SUCCEEDED(hr)) hr = ((HRESULT (STDMETHODCALLTYPE*)(%s))(*(void***)p)[%d])(%s);'
                     % (', '.join(tcp), slot, ', '.join(args)))
@@ -297,7 +305,7 @@ class Faces:
 
     def face(self, impl_name, impl_iid, delegate, methods, flags, default_target):
         """a face: @methods are (impl method name, impl params, target or
-        None) with target (params, slot, interface iid)"""
+        None) with target (params, slot, interface iid[, 'optional'])"""
         n = len(self.faces)
         slots = ['nova_tear_qi', 'nova_tear_addref', 'nova_tear_release']
         if not delegate:
@@ -307,7 +315,7 @@ class Faces:
             fname = 'f%d_%d' % (n, j)
             r = None
             if tgt is not None:
-                r = self.thunk(fname, ip, tgt[0], tgt[1], tgt[2], to_fw, None)
+                r = self.thunk(fname, ip, tgt[0], tgt[1], tgt[2], to_fw, None, len(tgt) > 3)
             if r is None:
                 r = self.missing_thunk(fname, '%s.%s' % (impl_name, mname))
                 self.stats['missing'] += 1
@@ -331,8 +339,11 @@ class Faces:
         if iw == il or name in self.done:
             return
         self.done.add(name)
-        lm = {m.name: (k, m) for k, m in enumerate(lif.methods)}
-        wm = {m.name: (k, m) for k, m in enumerate(win.methods)}
+        # (by ABI name: an overload's, IXamlMetadataProvider's
+        # GetXamlTypeByFullName, is its Overload attribute's in Windows'
+        # metadata, its method_name in the framework's IDL)
+        lm = {m.overload(): (k, m) for k, m in enumerate(lif.methods)}
+        wm = {m.overload(): (k, m) for k, m in enumerate(win.methods)}
         delegate = isinstance(win, Delegate)
         for impl, other, ia, oa, ii, oi, flags, label in ((win, lm, args_w, args_l, iw, il, (), name),
                                                            (lif, wm, args_l, args_w, il, iw, ('reverse',),
@@ -341,14 +352,32 @@ class Faces:
             for m in impl.methods:
                 ip = self.params(m, ia)
                 tgt = None
-                if m.name in other:
-                    k, om = other[m.name]
+                if m.overload() in other:
+                    k, om = other[m.overload()]
                     tp = self.params(om, oa)
                     if self.compatible(ip, tp):
                         tgt = (tp, self.base_slots(lif if 'reverse' not in flags else win) + k, oi)
-                methods.append((m.name, ip, tgt))
+                if tgt is None and 'reverse' in flags and args_w is None:
+                    tgt = self.sibling_target(win, m, ip)
+                methods.append((m.overload(), ip, tgt))
             self.face(label, ii, delegate, methods,
                       flags + (('delegate',) if delegate else ()), oi)
+
+    def sibling_target(self, win, m, ip):
+        """a lifted method that Windows moved to a later version of the
+        interface (IXamlType's BoxedType is IXamlType2's): the target is
+        that version's method, the thunk asking the object for it and, if
+        the object has only the first version, answering nothing"""
+        for v in range(2, 10):
+            w = self.types.get('%s%d' % (win.name, v))
+            if not isinstance(w, Interface) or w.generics:
+                continue
+            for k, om in enumerate(w.methods):
+                if om.overload() == m.overload():
+                    tp = self.params(om, None)
+                    if self.compatible(ip, tp):
+                        return (tp, self.base_slots(w) + k, self.g.iid_for(w), 'optional')
+        return None
 
     def class_faces(self, wc):
         """the faces of a Windows class's exclusive interfaces over its

@@ -524,6 +524,21 @@ WINOLEAPI_(BOOL) RoOriginateError(HRESULT hr, HSTRING msg)
     const WCHAR *s = msg ? WindowsGetStringRawBuffer(msg, &n) : 0;
     return RoOriginateErrorW(hr, n, s);
 }
+/* An error a caller changed into another (C++/WinRT's
+ * hresult_error::to_abi when it maps one HRESULT to another): the new one
+ * is originated with the message, as an error of its own; nothing is
+ * reported when the new one is a success or the same error */
+WINOLEAPI_(BOOL) RoTransformErrorW(HRESULT old_hr, HRESULT new_hr, UINT32 len, const WCHAR *msg)
+{
+    if (SUCCEEDED(new_hr) || new_hr == old_hr) return FALSE;
+    return RoOriginateErrorW(new_hr, len, msg);
+}
+WINOLEAPI_(BOOL) RoTransformError(HRESULT old_hr, HRESULT new_hr, HSTRING msg)
+{
+    UINT32 n = 0;
+    const WCHAR *s = msg ? WindowsGetStringRawBuffer(msg, &n) : 0;
+    return RoTransformErrorW(old_hr, new_hr, n, s);
+}
 /* An error no handler took: Windows raises CoreApplication's
  * UnhandledErrorDetected and FinalUnhandledErrorDetected events, which
  * NovaOS's CoreApplication does not have yet; so this reports the error on

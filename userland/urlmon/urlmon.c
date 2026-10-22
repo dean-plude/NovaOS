@@ -4,11 +4,18 @@
  * is NovaOS's own: a URI is split once into scheme, user info, host, port,
  * path, query and fragment, and every property is read from those parts.
  * The download and moniker side of urlmon is not here yet.
+ *
+ * It also serves the Windows Runtime's URI, Windows.Foundation.Uri, as
+ * Windows' urlmon.dll does (DllGetActivationFactory; the registry names it,
+ * kernel/um/um_registry.c): the same parts, read through
+ * IUriRuntimeClass, with UriEscape's statics.  C++/WinRT programs make one
+ * for any URI they hand an API (WinUI 2 for its controls' style URIs).
  */
 #include <windows.h>
 #include <oleauto.h>
 #include <wchar.h>
 #include <string.h>
+#include <stddef.h>
 
 #define URLMONAPI __declspec(dllexport)
 #define URL_UNESCAPE_ 0x10000000
@@ -17,6 +24,7 @@
 HRESULT WINAPI UrlCreateFromPathW(LPCWSTR path, LPWSTR url, LPDWORD n, DWORD reserved);
 HRESULT WINAPI PathCreateFromUrlW(LPCWSTR url, LPWSTR path, LPDWORD n, DWORD flags);
 HRESULT WINAPI UrlCanonicalizeW(LPCWSTR in, LPWSTR out, LPDWORD n, DWORD flags);
+HRESULT WINAPI UrlCombineW(LPCWSTR base, LPCWSTR rel, LPWSTR out, LPDWORD n, DWORD flags);
 #define INET_E_DEFAULT_ACTION_ ((HRESULT)0x800C0011L)
 #define INET_E_INVALID_URL_ ((HRESULT)0x800C0002L)
 
@@ -596,4 +604,290 @@ URLMONAPI HRESULT WINAPI CoInternetParseUrl(LPCWSTR url, DWORD action, DWORD fla
     }
     HeapFree(GetProcessHeap(), 0, p.raw);
     return hr;
+}
+
+/* ---- Windows.Foundation.Uri: IUriRuntimeClass over the same parts ---- */
+typedef struct HSTRING__ *HSTRING;
+HRESULT WINAPI WindowsCreateString(const WCHAR *src, UINT32 len, HSTRING *out);
+const WCHAR *WINAPI WindowsGetStringRawBuffer(HSTRING h, UINT32 *len);
+HRESULT WINAPI WindowsDeleteString(HSTRING h);
+
+static const GUID IID_IInspectable_ = { 0xAF86E2E0, 0xB12D, 0x4C6A, { 0x9C, 0x5A, 0xD7, 0xAA, 0x65, 0x10, 0x1E, 0x90 } };
+static const GUID IID_IAgileObject_ = { 0x94EA2B94, 0xE9CC, 0x49E0, { 0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90 } };
+static const GUID IID_IActivationFactory_ = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID IID_IUriRuntimeClass_ = { 0x9e365e57, 0x48b2, 0x4160, { 0x95, 0x6f, 0xc7, 0x38, 0x51, 0x20, 0xbb, 0xfc } };
+static const GUID IID_IUriRuntimeClassFactory_ = { 0x44a9796f, 0x723e, 0x4fdf, { 0xa2, 0x18, 0x03, 0x3e, 0x75, 0xb0, 0xc0, 0x84 } };
+static const GUID IID_IUriRuntimeClassWithAbsoluteCanonicalUri_ = { 0x758d9661, 0x221c, 0x480f, { 0xa3, 0x39, 0x50, 0x65, 0x66, 0x73, 0xf4, 0x6f } };
+static const GUID IID_IUriEscapeStatics_ = { 0xc1d432ba, 0xc824, 0x4452, { 0xa7, 0xfd, 0x51, 0x2b, 0xc3, 0xbb, 0xe9, 0xa1 } };
+static const GUID IID_IStringable_ = { 0x96369f54, 0x8eb6, 0x48f0, { 0xab, 0xce, 0xc1, 0xb2, 0x11, 0xe6, 0x27, 0xc3 } };
+#define IS(a, b) (!memcmp((a), &(b), sizeof(GUID)))
+
+typedef struct WUri WUri;
+typedef HRESULT (WINAPI *WStr)(void *, HSTRING *);
+typedef struct {                     /* IUriRuntimeClass */
+    HRESULT (WINAPI *QueryInterface)(void *, const GUID *, void **);
+    ULONG   (WINAPI *AddRef)(void *);
+    ULONG   (WINAPI *Release)(void *);
+    HRESULT (WINAPI *GetIids)(void *, ULONG *, GUID **);
+    HRESULT (WINAPI *GetRuntimeClassName)(void *, HSTRING *);
+    HRESULT (WINAPI *GetTrustLevel)(void *, int *);
+    WStr AbsoluteUri, DisplayUri, Domain, Extension, Fragment, Host, Password, Path, Query;
+    HRESULT (WINAPI *QueryParsed)(void *, void **);
+    WStr RawUri, SchemeName, UserName;
+    HRESULT (WINAPI *Port)(void *, INT32 *);
+    HRESULT (WINAPI *Suspicious)(void *, unsigned char *);
+    HRESULT (WINAPI *Equals)(void *, void *, unsigned char *);
+    HRESULT (WINAPI *CombineUri)(void *, HSTRING, void **);
+} UriClassVtbl;
+typedef struct {                     /* IUriRuntimeClassWithAbsoluteCanonicalUri, IStringable */
+    HRESULT (WINAPI *QueryInterface)(void *, const GUID *, void **);
+    ULONG   (WINAPI *AddRef)(void *);
+    ULONG   (WINAPI *Release)(void *);
+    HRESULT (WINAPI *GetIids)(void *, ULONG *, GUID **);
+    HRESULT (WINAPI *GetRuntimeClassName)(void *, HSTRING *);
+    HRESULT (WINAPI *GetTrustLevel)(void *, int *);
+    WStr first, second;
+} UriMoreVtbl;
+struct WUri {
+    const UriClassVtbl *vtbl;
+    const UriMoreVtbl *canonical;
+    const UriMoreVtbl *stringable;
+    LONG refs;
+    Uri *uri;
+};
+#define WURI(o, field) ((WUri *)((char *)(o) - offsetof(WUri, field)))
+
+static HRESULT hstr_span(const Parts *p, DWORD prop, HSTRING *out)
+{
+    Span sp;
+    if (!out) return E_POINTER;
+    *out = NULL;
+    if (!prop_span(p, prop, &sp)) return E_INVALIDARG;
+    return sp.e > sp.s ? WindowsCreateString(p->raw + sp.s, (UINT32)(sp.e - sp.s), out) : S_OK;
+}
+/* the absolute URI as Windows gives it: a URI with an authority and no
+ * path gets "/" */
+static HRESULT wu_absolute_of(WUri *w, HSTRING *out)
+{
+    const Parts *p = &w->uri->p;
+    if (!out) return E_POINTER;
+    size_t n = wcslen(p->raw);
+    if (!(p->authority && p->path.e == p->path.s)) return WindowsCreateString(p->raw, (UINT32)n, out);
+    WCHAR *t = HeapAlloc(GetProcessHeap(), 0, (n + 2) * sizeof(WCHAR));
+    if (!t) return E_OUTOFMEMORY;
+    memcpy(t, p->raw, p->path.s * sizeof(WCHAR));
+    t[p->path.s] = L'/';
+    memcpy(t + p->path.s + 1, p->raw + p->path.s, (n - p->path.s) * sizeof(WCHAR));
+    HRESULT hr = WindowsCreateString(t, (UINT32)n + 1, out);
+    HeapFree(GetProcessHeap(), 0, t);
+    return hr;
+}
+
+static HRESULT WINAPI wu_qi(void *o, const GUID *iid, void **out)
+{
+    WUri *w = o;
+    if (!out) return E_POINTER;
+    if (IS(iid, IID_IUnknown_) || IS(iid, IID_IInspectable_) || IS(iid, IID_IUriRuntimeClass_) || IS(iid, IID_IAgileObject_))
+        *out = w;
+    else if (IS(iid, IID_IUriRuntimeClassWithAbsoluteCanonicalUri_))
+        *out = &w->canonical;
+    else if (IS(iid, IID_IStringable_))
+        *out = &w->stringable;
+    else { *out = NULL; return E_NOINTERFACE; }
+    InterlockedIncrement(&w->refs);
+    return S_OK;
+}
+static ULONG WINAPI wu_addref(void *o) { return InterlockedIncrement(&((WUri *)o)->refs); }
+static ULONG WINAPI wu_release(void *o)
+{
+    WUri *w = o;
+    LONG n = InterlockedDecrement(&w->refs);
+    if (!n) {
+        u_release(w->uri);
+        HeapFree(GetProcessHeap(), 0, w);
+    }
+    return n;
+}
+static HRESULT WINAPI insp_iids(void *o, ULONG *n, GUID **iids) { (void)o; *n = 0; *iids = NULL; return S_OK; }
+static HRESULT WINAPI insp_trust(void *o, int *t) { (void)o; *t = 0; return S_OK; }    /* BaseTrust */
+static HRESULT WINAPI wu_name(void *o, HSTRING *out)
+{
+    (void)o;
+    return WindowsCreateString(L"Windows.Foundation.Uri", 22, out);
+}
+#define WGETTER(fn, prop) static HRESULT WINAPI fn(void *o, HSTRING *out) { return hstr_span(&((WUri *)o)->uri->p, prop, out); }
+WGETTER(wu_display, P_DISPLAY_URI) WGETTER(wu_domain, P_DOMAIN) WGETTER(wu_extension, P_EXTENSION)
+WGETTER(wu_fragment, P_FRAGMENT) WGETTER(wu_host, P_HOST) WGETTER(wu_password, P_PASSWORD) WGETTER(wu_path, P_PATH)
+WGETTER(wu_query, P_QUERY) WGETTER(wu_raw, P_RAW_URI) WGETTER(wu_scheme, P_SCHEME_NAME) WGETTER(wu_user, P_USER_NAME)
+static HRESULT WINAPI wu_absolute(void *o, HSTRING *out) { return wu_absolute_of(o, out); }
+static HRESULT WINAPI wu_parsed(void *o, void **out) { (void)o; if (out) *out = NULL; return E_NOTIMPL; }
+static HRESULT WINAPI wu_port(void *o, INT32 *v)
+{
+    if (!v) return E_POINTER;
+    *v = (INT32)((WUri *)o)->uri->p.port_num;
+    return S_OK;
+}
+static HRESULT WINAPI wu_suspicious(void *o, unsigned char *v) { (void)o; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT WINAPI wu_equals(void *o, void *other, unsigned char *eq)
+{
+    if (!eq) return E_POINTER;
+    *eq = 0;
+    if (!other) return S_OK;
+    HSTRING a = NULL, b = NULL;
+    HRESULT hr = wu_absolute_of(o, &a);
+    if (SUCCEEDED(hr)) hr = (*(const UriClassVtbl **)other)->AbsoluteUri(other, &b);
+    if (SUCCEEDED(hr)) {
+        UINT32 na, nb;
+        const WCHAR *sa = WindowsGetStringRawBuffer(a, &na), *sb = WindowsGetStringRawBuffer(b, &nb);
+        *eq = na == nb && CompareStringOrdinal(sa, (int)na, sb, (int)nb, TRUE) == CSTR_EQUAL;
+    }
+    WindowsDeleteString(a);
+    WindowsDeleteString(b);
+    return hr;
+}
+static HRESULT make_wuri(const WCHAR *s, void **out);
+static HRESULT combine(const WCHAR *base, const WCHAR *rel, void **out)
+{
+    WCHAR buf[4096];
+    DWORD n = sizeof buf / sizeof buf[0];
+    if (FAILED(UrlCombineW(base, rel, buf, &n, 0))) return E_INVALIDARG;
+    return make_wuri(buf, out);
+}
+static HRESULT WINAPI wu_combine(void *o, HSTRING rel, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = NULL;
+    return combine(((WUri *)o)->uri->p.raw, WindowsGetStringRawBuffer(rel, NULL), out);
+}
+static const UriClassVtbl g_wuri = {
+    wu_qi, wu_addref, wu_release, insp_iids, wu_name, insp_trust,
+    wu_absolute, wu_display, wu_domain, wu_extension, wu_fragment, wu_host, wu_password, wu_path, wu_query,
+    wu_parsed, wu_raw, wu_scheme, wu_user, wu_port, wu_suspicious, wu_equals, wu_combine,
+};
+#define MORE(name, field) \
+    static HRESULT WINAPI name##_qi(void *o, const GUID *i, void **out) { return wu_qi(WURI(o, field), i, out); } \
+    static ULONG WINAPI name##_addref(void *o) { return wu_addref(WURI(o, field)); } \
+    static ULONG WINAPI name##_release(void *o) { return wu_release(WURI(o, field)); }
+MORE(wc, canonical)
+MORE(ws, stringable)
+static HRESULT WINAPI wc_canonical(void *o, HSTRING *out) { return wu_absolute_of(WURI(o, canonical), out); }
+static HRESULT WINAPI wc_iri(void *o, HSTRING *out) { return hstr_span(&WURI(o, canonical)->uri->p, P_DISPLAY_URI, out); }
+static HRESULT WINAPI ws_tostring(void *o, HSTRING *out) { return wu_absolute_of(WURI(o, stringable), out); }
+static const UriMoreVtbl g_wuri_canonical = { wc_qi, wc_addref, wc_release, insp_iids, wu_name, insp_trust, wc_canonical, wc_iri };
+static const UriMoreVtbl g_wuri_stringable = { ws_qi, ws_addref, ws_release, insp_iids, wu_name, insp_trust, ws_tostring, NULL };
+
+static HRESULT make_wuri(const WCHAR *s, void **out)
+{
+    *out = NULL;
+    Uri *u;
+    if (!s || FAILED(CreateUri(s, 0, 0, (void **)&u))) return E_INVALIDARG;   /* (Windows: a relative URI) */
+    WUri *w = HeapAlloc(GetProcessHeap(), 0, sizeof *w);
+    if (!w) { u_release(u); return E_OUTOFMEMORY; }
+    w->vtbl = &g_wuri;
+    w->canonical = &g_wuri_canonical;
+    w->stringable = &g_wuri_stringable;
+    w->refs = 1;
+    w->uri = u;
+    *out = w;
+    return S_OK;
+}
+
+/* the class's factory: IActivationFactory (no default constructor),
+ * IUriRuntimeClassFactory and IUriEscapeStatics; static, so agile */
+typedef struct {
+    HRESULT (WINAPI *QueryInterface)(void *, const GUID *, void **);
+    ULONG   (WINAPI *AddRef)(void *);
+    ULONG   (WINAPI *Release)(void *);
+    HRESULT (WINAPI *GetIids)(void *, ULONG *, GUID **);
+    HRESULT (WINAPI *GetRuntimeClassName)(void *, HSTRING *);
+    HRESULT (WINAPI *GetTrustLevel)(void *, int *);
+    void *a, *b;
+} FactoryVtbl;
+static struct { const FactoryVtbl *activation, *create, *escape; } g_uri_factory;
+static HRESULT WINAPI f_qi(void *o, const GUID *iid, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    if (IS(iid, IID_IUnknown_) || IS(iid, IID_IInspectable_) || IS(iid, IID_IActivationFactory_) || IS(iid, IID_IAgileObject_))
+        *out = &g_uri_factory.activation;
+    else if (IS(iid, IID_IUriRuntimeClassFactory_))
+        *out = &g_uri_factory.create;
+    else if (IS(iid, IID_IUriEscapeStatics_))
+        *out = &g_uri_factory.escape;
+    else { *out = NULL; return E_NOINTERFACE; }
+    return S_OK;
+}
+static ULONG WINAPI f_ref(void *o) { (void)o; return 2; }
+static HRESULT WINAPI f_activate(void *o, void **out) { (void)o; if (out) *out = NULL; return E_NOTIMPL; }
+static HRESULT WINAPI f_create(void *o, HSTRING s, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    return make_wuri(WindowsGetStringRawBuffer(s, NULL), out);
+}
+static HRESULT WINAPI f_relative(void *o, HSTRING base, HSTRING rel, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    *out = NULL;
+    return combine(WindowsGetStringRawBuffer(base, NULL), WindowsGetStringRawBuffer(rel, NULL), out);
+}
+/* UriEscape: %XX for every character outside RFC 3986's unreserved ones
+ * (UTF-8), and back */
+static HRESULT WINAPI f_unescape(void *o, HSTRING in, HSTRING *out)
+{
+    (void)o;
+    UINT32 n;
+    const WCHAR *s = WindowsGetStringRawBuffer(in, &n);
+    DWORD m = n + 1;
+    WCHAR *t = HeapAlloc(GetProcessHeap(), 0, (n + 1) * sizeof(WCHAR));
+    if (!t) return E_OUTOFMEMORY;
+    memcpy(t, s, n * sizeof(WCHAR));
+    t[n] = 0;
+    HRESULT hr = UrlCanonicalizeW(s, t, &m, URL_UNESCAPE_);
+    if (SUCCEEDED(hr)) hr = WindowsCreateString(t, m, out);
+    HeapFree(GetProcessHeap(), 0, t);
+    return hr;
+}
+static HRESULT WINAPI f_escape(void *o, HSTRING in, HSTRING *out)
+{
+    (void)o;
+    UINT32 n;
+    const WCHAR *s = WindowsGetStringRawBuffer(in, &n);
+    WCHAR *t = HeapAlloc(GetProcessHeap(), 0, (n * 9 + 1) * sizeof(WCHAR));
+    if (!t) return E_OUTOFMEMORY;
+    UINT32 o2 = 0;
+    for (UINT32 i = 0; i < n; i++) {
+        WCHAR c = s[i];
+        if (is_alpha(c) || is_digit(c) || c == L'-' || c == L'.' || c == L'_' || c == L'~') { t[o2++] = c; continue; }
+        char u8[4];
+        int k = WideCharToMultiByte(CP_UTF8, 0, s + i, (c >= 0xD800 && c < 0xDC00 && i + 1 < n) ? 2 : 1, u8, 4, NULL, NULL);
+        if (c >= 0xD800 && c < 0xDC00 && i + 1 < n) i++;
+        for (int j = 0; j < k; j++) {
+            t[o2++] = L'%';
+            t[o2++] = L"0123456789ABCDEF"[(unsigned char)u8[j] >> 4];
+            t[o2++] = L"0123456789ABCDEF"[(unsigned char)u8[j] & 15];
+        }
+    }
+    HRESULT hr = WindowsCreateString(t, o2, out);
+    HeapFree(GetProcessHeap(), 0, t);
+    return hr;
+}
+static HRESULT WINAPI f_name(void *o, HSTRING *out) { return wu_name(o, out); }
+static const FactoryVtbl g_f_activation = { f_qi, f_ref, f_ref, insp_iids, f_name, insp_trust, (void *)f_activate, NULL };
+static const FactoryVtbl g_f_create = { f_qi, f_ref, f_ref, insp_iids, f_name, insp_trust, (void *)f_create, (void *)f_relative };
+static const FactoryVtbl g_f_escape = { f_qi, f_ref, f_ref, insp_iids, f_name, insp_trust, (void *)f_unescape, (void *)f_escape };
+
+URLMONAPI HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = NULL;
+    UINT32 n;
+    const WCHAR *s = WindowsGetStringRawBuffer(cls, &n);
+    if (n != 22 || memcmp(s, L"Windows.Foundation.Uri", 22 * sizeof(WCHAR))) return CLASS_E_CLASSNOTAVAILABLE;
+    g_uri_factory.activation = &g_f_activation;
+    g_uri_factory.create = &g_f_create;
+    g_uri_factory.escape = &g_f_escape;
+    *out = &g_uri_factory.activation;
+    return S_OK;
 }

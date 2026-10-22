@@ -7,13 +7,16 @@
 // interface over the framework's, src/windows_faces.cpp), and a framework
 // overridable interface asked of a composed object itself, which its outer
 // passed on, to nova_xaml_override_face (the outer's Windows overrides: a
-// WinUI 2 control's MeasureOverride).  A program without the faces (the
+// WinUI 2 control's MeasureOverride); and one neither the object nor its
+// faces answer, to nova_xaml_outer_face (the outer's Windows interface: a
+// WinUI 2 app's IXamlMetadataProvider).  A program without the faces (the
 // component tests) links the answers below, "no interface".
 #include "precomp.h"
 #include "ComObjectBase.h"
 
 extern "C" HRESULT nova_xaml_face_query(REFIID iid, void **out, HRESULT (*impl)(void *, REFIID, void **), void *ctx);
 extern "C" HRESULT nova_xaml_override_face(REFIID iid, IInspectable *outer, void **out);
+extern "C" HRESULT nova_xaml_outer_face(REFIID iid, IInspectable *outer, void **out);
 extern "C" HRESULT nova_xaml_no_face(REFIID, void **, HRESULT (*)(void *, REFIID, void **), void *)
 {
     return E_NOINTERFACE;
@@ -24,6 +27,7 @@ extern "C" HRESULT nova_xaml_no_override_face(REFIID, IInspectable *, void **)
 }
 #pragma comment(linker, "/alternatename:nova_xaml_face_query=nova_xaml_no_face")
 #pragma comment(linker, "/alternatename:nova_xaml_override_face=nova_xaml_no_override_face")
+#pragma comment(linker, "/alternatename:nova_xaml_outer_face=nova_xaml_no_override_face")
 
 static HRESULT own_query(void *self, REFIID iid, void **out)
 {
@@ -52,6 +56,10 @@ IFACEMETHODIMP ctl::ComObjectBase::NonDelegatingQueryInterfaceBase(REFIID iid, v
         if (hr == E_NOINTERFACE)
         {
             hr = nova_xaml_face_query(iid, ppValue, own_query, this);
+        }
+        if (hr == E_NOINTERFACE && m_pControllingUnknown)
+        {
+            hr = nova_xaml_outer_face(iid, m_pControllingUnknown, ppValue);
         }
         return hr;
     }

@@ -24,6 +24,8 @@ PRIMS = {
     'UINT64': 'UInt64', 'Single': 'Single', 'FLOAT': 'Single', 'Double': 'Double',
     'DOUBLE': 'Double', 'String': 'String', 'HSTRING': 'String', 'Object': 'Object',
     'IInspectable': 'Object', 'Guid': 'Guid', 'GUID': 'Guid',
+    # (MIDL's C spellings, as some of WinUI 2's IDL writes them)
+    'double': 'Double', 'float': 'Single', 'int': 'Int32', 'short': 'Int16', 'char': 'Int8',
 }
 TYPEDEFS = {'HRESULT': 'Windows.Foundation.HResult'}
 
@@ -31,7 +33,7 @@ TOKEN = re.compile(r'''
     (?P<ws>\s+|//[^\n]*|/\*.*?\*/)
   | (?P<pp>^[ \t]*\#[^\n]*)
   | (?P<str>"(?:[^"\\]|\\.)*")
-  | (?P<num>0[xX][0-9a-fA-F]+|\d+)
+  | (?P<num>0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?)
   | (?P<id>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)
   | (?P<p>[{}()\[\]<>,;:=|*&~+-])
 ''', re.S | re.M | re.X)
@@ -197,6 +199,15 @@ class IdlReader:
         if t == 'cpp_quote':
             self.top()
             return
+        if t == 'typedef' and self.ns is not None and self.peek(1) in ('enum', 'struct'):
+            self.next()                            # MIDL 2: typedef enum N { ... } N;
+            ty = self.enum(attrs) if self.next() == 'enum' else self.struct()
+            while self.next() != ';':
+                pass
+            ty.attrs = attrs + ty.attrs
+            self.types[ty.name] = ty
+            self.file_ns.setdefault(self.file, set()).add(ty.namespace)
+            return
         if t == 'typedef':
             toks = []
             depth = 0
@@ -245,6 +256,18 @@ class IdlReader:
         elif kind == 'attribute':
             self.next()
             self.skip_block()
+            return
+        elif kind == 'midl_pragma':                # midl_pragma warning(...)
+            self.next()
+            self.expect('(')
+            depth = 1
+            while depth:
+                depth += {'(': 1, ')': -1}.get(self.next(), 0)
+            self.accept(';')
+            return
+        elif kind == 'feature_name':               # a feature's velocity (WinUI 2's features namespace)
+            while self.next() != ';':
+                pass
             return
         else:
             raise SyntaxError('%s: unknown declaration %r' % (self.file, kind))
@@ -300,8 +323,11 @@ class IdlReader:
             self.attributes()
             t = self.type()
             s.fields.append(Field(self.next(), t))
+            while self.accept(','):                # (MIDL 2: float M11, M12;)
+                s.fields.append(Field(self.next(), t))
             self.expect(';')
-        self.accept(';')
+        if self.peek() != s.short:
+            self.accept(';')
         return s
 
     def params(self):
@@ -325,6 +351,8 @@ class IdlReader:
                 t.byref = True
             elif ref:
                 out = True                         # fill array
+                t = t.copy()
+                t.fill = True
             if out and isinstance(t, Array):
                 t = t.copy()
                 t.byref = True
@@ -359,6 +387,8 @@ class IdlReader:
         uuid = next((a.args[0] for a in attrs if a.name == 'uuid'), None)
         if uuid:
             it.guid = uuid.replace(' ', '').lower()
+        if self.peek() == ':' and self.peek(1) == 'IInspectable':   # a Windows Runtime one, spelled out
+            self.i += 2
         if self.accept(':'):                       # classic COM interface
             it.base = self.next()
             it.classic = True
@@ -411,12 +441,41 @@ class IdlReader:
         synth = _Synth(self)
         while not self.accept('}'):
             mattrs = self.attributes()
+            if self.peek() == 'HRESULT':           # MIDL 2: [propget] HRESULT X([out, retval] T* value);
+                it.methods.append(self.midl2_method(mattrs))
+                continue
             synth.member(it, mattrs, 'instance')
         self.accept(';')
+        ex = next((a.args[0] for a in attrs if a.name == 'exclusiveto'), None)
+        if ex:
+            it.exclusive_to = self.qualify(ex)
         return it
+
+    def midl2_method(self, attrs):
+        self.expect('HRESULT')
+        name = self.next()
+        prefix = {'propget': 'get_', 'propput': 'put_', 'eventadd': 'add_', 'eventremove': 'remove_'}
+        for a in attrs:
+            if a.name in prefix:
+                name = prefix[a.name] + name
+        self.expect('(')
+        ps, ret, retname = [], None, 'result'
+        while not self.accept(')'):
+            pattrs = [a.name for a in self.attributes()]
+            t = self.type()
+            pname = self.next()
+            if 'retval' in pattrs:
+                ret, retname = t, pname
+            else:
+                ps.append(Param(pname, t, 'out' in pattrs))
+            self.accept(',')
+        self.expect(';')
+        return Method(name, ps, ret, retname)
 
     def runtimeclass(self, attrs, mods):
         name = self.qualify(self.next())
+        if self.accept(';'):                       # forward declaration
+            return None
         rc = RuntimeClass(name)
         rc.sealed = 'unsealed' not in mods
         rc.static = 'static' in mods
@@ -502,7 +561,7 @@ def _enum_value(toks, names):
     """An enum value: literals and earlier values, or-ed together."""
     val = 0
     for part in ' '.join(toks).split('|'):
-        part = part.replace(' ', '')
+        part = re.sub(r'^\(\s*\w+\s*\)', '', part.strip()).replace(' ', '')   # (int)0
         neg = part.startswith('-')
         part = part.lstrip('-')
         v = int(names[part]) if part in names else int(part, 0)

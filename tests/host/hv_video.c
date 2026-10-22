@@ -230,9 +230,9 @@ static void refusal_checks(void)
     assert(counts[SV_VERSION_REQUEST] == 1 && !attached && !g_video && !shown_hook);
 
     fresh(SV_WIN10);                                        /* the video memory refused */
-    bad_ack = true;
+    bad_ack = true;                                         /* (asked twice) */
     HvVideoDriver.started(ctx);
-    assert(counts[SV_VRAM_LOCATION] == 1 && !attached && !g_video);
+    assert(counts[SV_VRAM_LOCATION] == 2 && !attached && !g_video);
     assert(counts[SV_SITUATION_UPDATE] == 1 && counts[SV_DIRT] == 2);   /* the boot mode still shown ... */
     assert(shown_hook == console_shown);
     shown_hook();

@@ -9,6 +9,7 @@
 #include "../ke/spinlock.h"
 #include "rtc.h"
 #include "../arch/x86_64/cpu.h"
+#include "../ke/printf.h"
 
 #define CMOS_INDEX  0x70
 #define CMOS_DATA   0x71
@@ -48,8 +49,14 @@ void rtc_read(RtcTime *out)
     static KSpinLock lock = KSPINLOCK_INIT;
     IrqState irq = spin_lock_irqsave(&lock);
 
-    /* Wait for any in-progress update to finish, then take a coherent read. */
-    while (update_in_progress()) { }
+    /* Wait for any in-progress update to finish (it lasts under 2 ms),
+     * then take a coherent read.  Bounded: a clock whose update flag never
+     * clears (or no clock: the port reads 0xFF) must not hang the caller */
+    static bool warned;
+    UINT32 polls = 0;
+    while (update_in_progress() && ++polls < 200000) { }
+    bool stuck = polls >= 200000 && !warned;
+    if (stuck) warned = true;
 
     UINT8 sec   = cmos_read(RTC_SECONDS);
     UINT8 min   = cmos_read(RTC_MINUTES);
@@ -59,6 +66,8 @@ void rtc_read(RtcTime *out)
     UINT8 year  = cmos_read(RTC_YEAR);
     UINT8 regb  = cmos_read(RTC_STATUS_B);
     spin_unlock_irqrestore(&lock, irq);
+    if (stuck)
+        kprintf("[RTC] The clock's update flag never cleared (status B 0x%02x): read anyway\n", regb);
 
     bool bcd     = (regb & 0x04) == 0;   /* bit2 clear → BCD */
     bool hour12  = (regb & 0x02) == 0;   /* bit1 clear → 12-hour */

@@ -65,7 +65,7 @@
 #define SV_WIN8                    SV_VERSION(3, 2)
 #define SV_WIN10                   SV_VERSION(3, 5)
 
-#define REPLY_MS                   5000
+#define REPLY_MS                   10000 /* (Linux's hyperv_fb and hyperv_drm wait 10 s) */
 #define DIRT_TICKS                 5     /* 50 ms */
 #define MAX_RES                    64
 
@@ -150,17 +150,23 @@ static bool send(HvVideo *v, SvMsg *m, UINT32 type, UINT32 body)
     return ok;
 }
 
-/* Send @m and wait for a message of type @want (in v->reply) */
+/* Send @m and wait for a message of type @want (in v->reply); what went
+ * wrong is logged (message @type: the send, or no answer in REPLY_MS) */
 static bool ask(HvVideo *v, SvMsg *m, UINT32 type, UINT32 body, UINT32 want)
 {
     v->got = false;
     __atomic_store_n(&v->waiting, want, __ATOMIC_RELEASE);
     bool ok = send(v, m, type, body);
+    if (!ok) kprintf("[HVVIDEO] Message %u could not be sent (the ring is full, or the device gone)\n", type);
     for (UINT32 t = 0; ok && !__atomic_load_n(&v->got, __ATOMIC_ACQUIRE); t++) {
         VmbusPollChannel(v->ch);
         if (__atomic_load_n(&v->got, __ATOMIC_ACQUIRE)) break;
-        if (t >= REPLY_MS * 100) ok = false;
-        else udelay(10);
+        if (t >= REPLY_MS * 100) {
+            ok = false;
+            kprintf("[HVVIDEO] No answer %u to message %u in %u ms\n", want, type, REPLY_MS);
+        } else {
+            udelay(10);
+        }
     }
     __atomic_store_n(&v->waiting, 0, __ATOMIC_RELEASE);
     return ok && v->got;
@@ -172,6 +178,10 @@ static void video_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
     HvVideo *v = ctx;
     if (!v || len < sizeof(SvHeader)) return;
     const SvMsg *m = (const SvMsg *)d;
+    UINT32 waiting = __atomic_load_n(&v->waiting, __ATOMIC_ACQUIRE);
+    if (waiting && (m->h.pipe_type != PIPE_DATA || (m->h.type != waiting && m->h.type != SV_FEATURE_CHANGE)))
+        kprintf("[HVVIDEO] While waiting for message %u: pipe %u, message %u, %u bytes\n",
+                waiting, m->h.pipe_type, m->h.type, len);
     if (m->h.pipe_type != PIPE_DATA) return;
     if (m->h.type == SV_FEATURE_CHANGE && len >= sizeof(SvHeader) + 4) {
         bool want = m->feature.dirt;
@@ -180,7 +190,7 @@ static void video_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
         __atomic_store_n(&v->dirt, want, __ATOMIC_RELEASE);
         return;
     }
-    if (m->h.type == __atomic_load_n(&v->waiting, __ATOMIC_ACQUIRE) && !v->got) {
+    if (m->h.type == waiting && !v->got) {
         memset(&v->reply, 0, sizeof(v->reply));
         memcpy(&v->reply, d, len < sizeof(v->reply) ? len : sizeof(v->reply));
         __atomic_store_n(&v->got, true, __ATOMIC_RELEASE);
@@ -325,6 +335,7 @@ static void video_started(void *ctx)
         if (ask(v, &m, SV_RESOLUTION_REQUEST, 1, SV_RESOLUTION_RESPONSE)) {
             int n = v->reply.res.count < MAX_RES ? v->reply.res.count : MAX_RES;
             for (int i = 0; i < n; i++) add_mode(v, v->reply.res.res[i].w, v->reply.res.res[i].h);
+            kprintf("[HVVIDEO] The host lists %d mode(s), %d fit\n", n, v->nmodes);
         } else {
             kprintf("[HVVIDEO] No answer to the resolution request: the usual modes\n");
         }
@@ -333,13 +344,21 @@ static void video_started(void *ctx)
         for (UINT32 i = 0; i < sizeof(common) / sizeof(common[0]); i++) add_mode(v, common[i].w, common[i].h);
     add_mode(v, bw, bh);
 
-    memset(&m, 0, sizeof(m));
-    m.vram.user_ctx = base;
-    m.vram.gpa_specified = 1;
-    m.vram.gpa = base;
-    if (!ask(v, &m, SV_VRAM_LOCATION, 17, SV_VRAM_LOCATION_ACK) || v->reply.vram_ack.user_ctx != base) {
-        kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx: the firmware's frame buffer stays\n",
-                (unsigned long long)base);
+    bool taken = false;
+    for (int tries = 0; tries < 2 && !taken; tries++) {
+        memset(&m, 0, sizeof(m));
+        m.vram.user_ctx = base;
+        m.vram.gpa_specified = 1;
+        m.vram.gpa = base;
+        if (!ask(v, &m, SV_VRAM_LOCATION, 17, SV_VRAM_LOCATION_ACK)) continue;
+        taken = v->reply.vram_ack.user_ctx == base;
+        if (!taken)
+            kprintf("[HVVIDEO] The video memory's answer names 0x%llx, not 0x%llx\n",
+                    (unsigned long long)v->reply.vram_ack.user_ctx, (unsigned long long)base);
+    }
+    if (!taken) {
+        kprintf("[HVVIDEO] The host did not take the video memory at 0x%llx (%llu MiB offered): the firmware's frame buffer stays\n",
+                (unsigned long long)base, (unsigned long long)(v->vram_size >> 20));
         situation(v, bw, bh);                            /* (best effort: the screen must not freeze) */
         dirt(v);
         return;

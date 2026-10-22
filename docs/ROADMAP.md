@@ -692,7 +692,12 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   over but reported no changes until the scheduler ran; the boot log's
   lines are reported now too.  The second boot stopped at `Version 3.5
   accepted`: the boot log is now reported from the moment the version is
-  agreed, and still when a later video step fails.
+  agreed, and still when a later video step fails.  The third boot (10-22)
+  showed the host refusing the video memory at 0xf8000000; the driver now
+  waits 10 s as Linux does, asks twice, and logs which answer was missing
+  or wrong.  That boot then stopped while formatting the blank VHDX
+  (after `[PERSIST] hv0 is empty`): the format, a slow SCSI request and
+  the CMOS clock's update wait (now bounded) are logged.
 - [ ] **23.5 Update signing key.** Ship the release public key in
   `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
   a signed 0.1.1 test update and rejects an unsigned one.

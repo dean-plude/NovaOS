@@ -1178,10 +1178,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   resources' first `FontFamily` and XAML's text formatting start from;
   checked in `dw6test`.  Island part done: NovaOS's own `XamlIsland`
   (Microsoft's open sources ship only its header), which a `Window`'s
-  `DesktopWindowXamlSource` makes its island root through.  Left: the
-  root `ScrollViewer` the island puts around its content (the framework's
-  `ScrollViewer`, `ScrollContentPresenter` and `RootScrollViewer`), then
-  the page laid out, drawn, typed into and clicked.
+  `DesktopWindowXamlSource` makes its island root through.  Root
+  `ScrollViewer` part done: the framework's `ScrollViewer`,
+  `ScrollContentPresenter` and `RootScrollViewer` (with
+  `ScrollContentControl`, `SolidColorBrush` and the core's generated
+  control classes), which a page set as a `Window`'s content is put in.
+  Left: the composition device the first frame asks for (NovaOS's
+  `CompositionHelper`, whose Windows App SDK original is closed), then
+  the page drawn, typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

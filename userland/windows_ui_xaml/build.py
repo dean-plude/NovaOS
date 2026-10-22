@@ -923,6 +923,25 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
     '../%s_Partial.cpp' % x for x in _THEME_PEERS if os.path.exists(os.path.join(XCP, 'dxaml', 'lib', x + '_Partial.cpp'))) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in _THEME_PEERS if x != 'DataTemplate') + (
     os.path.join(HERE, 'src', 'data_template.cpp'),)
+# (and the root ScrollViewer a window's content sits in (ContentManager::
+# SetContent, CreateRootScrollViewer): the framework's ScrollViewer, its
+# ScrollContentPresenter and the RootScrollViewer, each its generated class
+# and its partial one, with the core constructors of the classes the
+# core's generator writes whole in headers, core/controls/generated's
+# GeneratedClasses.g.cpp (CRootScrollViewer, CScrollContentPresenter and
+# the rest; the core's CScrollViewer is elements2's), and the transparent
+# brush the root border is painted with (SolidColorBrush and its Brush))
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in ('ScrollViewer', 'ScrollContentPresenter', 'RootScrollViewer',
+                                      'Brush', 'SolidColorBrush')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Brush', 'SolidColorBrush')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('ScrollContentControl', 'ScrollViewer', 'ScrollContentPresenter',
+                                                      'RootScrollViewer'))
+_CONTROLSGEN = 'core/controls/generated/CoreControlsGenerated.vcxproj'
+CORE_LIBRARIES.append((_CONTROLSGEN, 'core/common.props', 'core/controls/generated/precomp.h', []))
+CORE_FIRST[_CONTROLSGEN] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+PROJECT_DEFINES[_CONTROLSGEN] = ['EXP_CLANG']
+CORE_SOURCES[_CONTROLSGEN] = ('GeneratedClasses.g.cpp',)
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

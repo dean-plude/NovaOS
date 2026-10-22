@@ -140,14 +140,16 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   app's initialization callback composing its `Application` over the
   framework's, `WindowsXamlManager` starting it on the thread and
   raising `OnLaunched`, `XamlReader.Load` of a `Grid` holding a
-  `TextBlock` there, queued work run from the desktop message loop, and
-  `Application.Exit` returning from `Application.Start`), `xamlbasetest`
-  (Microsoft's XAML core, lowest layer, built from its sources, and
-  NovaOS's WRL: ComPtr, RuntimeClass, weak references, Callback,
-  EventSource, HString), `xamlloadtest` (Microsoft's XAML object writer
-  and `CResourceDictionary`, built from its sources: XAML text loaded
-  into a live resource dictionary with merged and theme dictionaries,
-  through the core's own `CCoreServices`, made by
+  `TextBlock` there, the framework's theme resources and control styles
+  found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the core's
+  resource manager made, queued work run from the desktop message loop,
+  and `Application.Exit` returning from `Application.Start`),
+  `xamlbasetest` (Microsoft's XAML core, lowest layer, built from its
+  sources, and NovaOS's WRL: ComPtr, RuntimeClass, weak references,
+  Callback, EventSource, HString), `xamlloadtest` (Microsoft's XAML
+  object writer and `CResourceDictionary`, built from its sources: XAML
+  text loaded into a live resource dictionary with merged and theme
+  dictionaries, through the core's own `CCoreServices`, made by
   `CCoreServices::Create` on the platform layer's services, the
   framework's `XamlReader` factory, and the control layer:
   `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create`

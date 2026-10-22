@@ -116,6 +116,17 @@ dependency properties' objects, DependencyProperty.Register),
 PropertyMetadata, ConnectedAnimationRoot's peer and the enums' WinRT
 boxes (winrtgeneratedclasses/Boxes.g.cpp), and
 components/ExtMetadataProvider/inc/XamlLibMetadataProvider.h,
+the framework's control styles and theme resources,
+dxaml/xcp/dxaml/themes/generic.xaml (which
+userland/microsoft_ui_xaml_resources_19h1 splits as Microsoft's
+SplitGenericXaml.cs does, step 32.4), with what loading them builds:
+plat/win/desktop's CommonResourceProvider.cpp (pal/inc's header),
+components/mrt's FilePathResource and FileMappedMemory with their
+project, components/ExtMetadataProvider whole (the framework's metadata
+provider, with SatelliteBase's XamlTypeInfo.h) and dxaml/lib's
+DataTemplate_Partial.cpp and Transition_Partial.cpp with the generated
+DataTemplate, ItemsPanelTemplate, TemplateContent, TransitionCollection,
+Transition and four theme transitions' classes,
 and the headers those include, external/inc's gsl
 and ankerl, and XAML's ETW manifest
 (dxaml/xcp/plat/win/desktop/Microsoft-Windows-XAML-ETW.man).  The rest of

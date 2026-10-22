@@ -560,8 +560,12 @@ def library(b, odir):
             prefix = 'xaml_' + proj.replace('/', '_').rsplit('_', 1)[0] + '_'
             srcs = p['sources'] if proj not in CORE_SOURCES else \
                 [os.path.join(os.path.dirname(os.path.join(XCP, proj)), x) for x in CORE_SOURCES[proj]]
-            built = b.compile_many(srcs + added, odir, prefix, f + core_flags(proj, sources, pch), headers,
-                                   compiler='clang++')
+            renamed = [x for x in srcs + added if os.path.basename(x) in FILE_RENAMES]
+            built = b.compile_many([x for x in srcs + added if x not in renamed], odir, prefix,
+                                   f + core_flags(proj, sources, pch), headers, compiler='clang++')
+            for x in renamed:
+                built += b.compile_many([x], odir, prefix, f + core_flags(proj, sources, pch) + [
+                    f'-D{n}={n}_vendored' for n in FILE_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
             if proj in CORE_SOURCES:
                 _core_objs.extend(built)
             else:
@@ -870,6 +874,50 @@ CORE_SOURCES['hostpalplatmisc.vcxproj'] += tuple('pal/win/%s.cpp' % x for x in (
 CORE_SOURCES[_CORETEXT] += tuple('Fonts/%s.cpp' % x for x in (
     'CompositeFontFamily', 'FontFamily', 'FontTypeface', 'SharedName', 'TypefaceCollection')) + (
     'RichTextServices/xcp/PALFontAndScriptServices.cpp',)
+# (and the controls' default styles and the theme resources the window's
+# chrome looks up first (StyleCache, DefaultStyles.cpp): Microsoft's
+# resource DLL, Microsoft.UI.Xaml.Resources.19H1.dll, which
+# userland/microsoft_ui_xaml_resources_19h1 makes from themes/generic.xaml,
+# found through NovaOS's DXamlCore::GetResourceBytes (src/resource_bytes.cpp,
+# with the resource module's handle Microsoft's dllentry.cpp keeps): it
+# hands the parser the resources' XAML as text, or XBF as XBF;
+# DXamlCore.cpp's own is renamed out, FILE_RENAMES)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'resource_bytes.cpp'))
+FILE_RENAMES = {'DXamlCore.cpp': ('GetResourceBytes',)}
+# (the theme resources' URI, which the parser looks up in the core's
+# resource manager, made by the control layer's ResourceManager.cpp over
+# the platform's resource provider: Microsoft's desktop platform tries MRT
+# Core's ResourceManager first and falls back to the resource provider
+# over the app's directory, CommonResourceProvider (plat/win/desktop),
+# whose resources are files (components/mrt's FilePathResource and
+# FileMappedMemory); NovaOS's CWindowsServices::CreateResourceProvider,
+# src/resource_provider.cpp, makes the fallback until MRT Core's
+# Windows Runtime classes join, step 32.6)
+_MRT = 'components/mrt/lib/Microsoft.UI.Xaml.Mrt.vcxproj'
+CORE_LIBRARIES.append((_MRT, _MRT, 'components/pch/precomp.h', []))
+CORE_SOURCES[_MRT] = ('../FilePathResource.cpp', '../FileMappedMemory.cpp')
+next(c for c in CORE_LIBRARIES if c[0] == 'plat/win/browserdesktop/platwinbrowserdesktop.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'resource_provider.cpp'))
+PROJECT_INCLUDES['plat/win/browserdesktop/platwinbrowserdesktop.vcxproj'] = (_MRT,)
+# (and the framework's metadata provider, which the parser asks for a type
+# the type table does not know: Microsoft's XamlLibMetadataProvider
+# (components/ExtMetadataProvider), over the app's own provider and the
+# framework's extension libraries; the theme resources name one)
+_EXTMETADATA = 'components/ExtMetadataProvider/lib/Microsoft.UI.Xaml.ExtMetadataProvider.vcxproj'
+CORE_LIBRARIES.append((_EXTMETADATA, _EXTMETADATA, 'components/pch/precomp.h', []))
+CORE_SOURCES[_EXTMETADATA] = tuple('../' + os.path.basename(x) for x in
+                                   vcxproj.read(os.path.join(XCP, _EXTMETADATA), PROPS)['sources'])
+# (and the framework peers of what the theme resources and the styles make
+# as they load: the data and items panel templates, and the transitions a
+# style's setter sets, TransitionCollection and the theme transitions;
+# the generated DataTemplate through src/data_template.cpp)
+_THEME_PEERS = ('DataTemplate', 'ItemsPanelTemplate', 'TransitionCollection', 'Transition', 'AddDeleteThemeTransition',
+                'ContentThemeTransition', 'ReorderThemeTransition', 'EntranceThemeTransition', 'TemplateContent')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in _THEME_PEERS if os.path.exists(os.path.join(XCP, 'dxaml', 'lib', x + '_Partial.cpp'))) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _THEME_PEERS if x != 'DataTemplate') + (
+    os.path.join(HERE, 'src', 'data_template.cpp'),)
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

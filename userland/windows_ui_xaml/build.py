@@ -1042,11 +1042,14 @@ CORE_SOURCES[_STYLE] = tuple('../' + os.path.basename(x) for x in vcxproj.read(o
 # its generated header defines) and their OnCoreCreate functions, through
 # which the parser makes, among others, the theme transitions the default
 # styles' ItemContainerTransitions hold)
+# (step 32.4's root ScrollViewer registers the same library, with its own
+# precompiled header; it is built once)
 _GENERATED = 'core/controls/generated/CoreControlsGenerated.vcxproj'
-CORE_LIBRARIES.append((_GENERATED, 'core/core/elements/sources.props', 'core/core/elements/pch/precomp.h', []))
-CORE_SOURCES[_GENERATED] = ('GeneratedClasses.g.cpp',)
-CORE_FIRST[_GENERATED] = CORE_FIRST['core/core/elements/lib/elements.vcxproj']
-PROJECT_DEFINES[_GENERATED] = ['EXP_CLANG']   # (its runtime profiler markers, as the type table's)
+if not any(lib[0] == _GENERATED for lib in CORE_LIBRARIES):
+    CORE_LIBRARIES.append((_GENERATED, 'core/core/elements/sources.props', 'core/core/elements/pch/precomp.h', []))
+    CORE_SOURCES[_GENERATED] = ('GeneratedClasses.g.cpp',)
+    CORE_FIRST[_GENERATED] = CORE_FIRST['core/core/elements/lib/elements.vcxproj']
+    PROJECT_DEFINES[_GENERATED] = ['EXP_CLANG']   # (its runtime profiler markers, as the type table's)
 # (and the event arguments' base, DirectUI::EventArgs, with the failed
 # resource reference's arguments the debug output raises; built once,
 # whichever step adds it first (32.4's page too))

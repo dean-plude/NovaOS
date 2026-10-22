@@ -691,11 +691,24 @@ vendors.
      text analyzers 1 and 2 (`dw6test`).  NovaOS's fonts are static, so
      axis values map to weight, stretch and style.  A `Window` now loads
      the system collection and its theme resources.
-   - *Left:* the framework's `XamlIsland` peer, which a desktop `Window`
-     makes for its content and whose implementation is not in
-     Microsoft's open sources (only its header is), then the page laid
-     out, drawn, typed into and clicked.  The page test that waits on it
-     is kept for that part.
+   - *Fourth part, the island.*  A desktop `Window`'s
+     `DesktopWindowXamlSource` makes a `XamlIsland` for its content, and
+     Microsoft's open sources ship only its declarations
+     (`XamlIsland_Partial.h`, `XamlIsland.g.h`).  NovaOS writes its own,
+     `userland/windows_ui_xaml/src/xaml_island.cpp` (the generated class,
+     its factory and the partial class): it keeps the thread's
+     `WindowsXamlManager`, starts the islands on the dummy window, makes
+     a `XamlIslandRoot` of the desktop content bridge kind (it connects
+     when the site bridge takes its content island), hands it to the core
+     (`AddXamlIslandRoot`), forwards `Content` and `ContentIsland` to it,
+     keeps the system backdrop and `ShouldConstrainPopupsToWorkArea`, and
+     on `Close` takes the root out of the core and disposes of it.
+   - *Left:* setting the page as the island's content makes the root
+     `ScrollViewer` around it (`ContentManager::CreateRootScrollViewer`:
+     the framework's `ScrollViewer`, `ScrollContentPresenter` and
+     `RootScrollViewer`, not built yet), then the page laid out, drawn,
+     typed into and clicked.  The page test that waits on it is kept for
+     that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

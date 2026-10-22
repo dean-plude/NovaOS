@@ -1176,9 +1176,12 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   model (`IDWriteFactory4` to `7`, font sets, family models, font faces
   4 to 6, text layouts 1 to 4, text analyzers 1 and 2), which the theme
   resources' first `FontFamily` and XAML's text formatting start from;
-  checked in `dw6test`.  Left: the framework's `XamlIsland` peer (not in
-  Microsoft's open sources), then the page laid out, drawn, typed into
-  and clicked.
+  checked in `dw6test`.  Island part done: NovaOS's own `XamlIsland`
+  (Microsoft's open sources ship only its header), which a `Window`'s
+  `DesktopWindowXamlSource` makes its island root through.  Left: the
+  root `ScrollViewer` the island puts around its content (the framework's
+  `ScrollViewer`, `ScrollContentPresenter` and `RootScrollViewer`), then
+  the page laid out, drawn, typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

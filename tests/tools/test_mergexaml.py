@@ -1,0 +1,71 @@
+"""WinUI 2's XAML merge (userland/microsoft_ui_xaml/mergexaml.py), the port
+of Microsoft's BatchMergeXaml, MergedDictionary and StripNamespaces."""
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from xml.dom import minidom
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'userland' / 'microsoft_ui_xaml'))
+import mergexaml
+
+HEAD = ('<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" '
+        'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" ')
+C7 = 'http://schemas.microsoft.com/winfx/2006/xaml/presentation?IsApiContractPresent(Windows.Foundation.UniversalApiContract,7)'
+C14 = 'http://schemas.microsoft.com/winfx/2006/xaml/presentation?IsApiContractPresent(Windows.Foundation.UniversalApiContract,14)'
+
+
+def keys(el):
+    return [c.getAttribute('x:Key') or c.getAttribute('TargetType') for c in el.childNodes if c.nodeType == c.ELEMENT_NODE]
+
+
+class MergeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def page(self, name, text):
+        p = Path(self.tmp.name) / name
+        p.write_text(text, encoding='utf-8')
+        return str(p)
+
+    def test_later_page_wins_and_prefixes_are_standardized(self):
+        a = self.page('a.xaml', HEAD + 'xmlns:muxc="using:Microsoft.UI.Xaml.Controls"><x:Double x:Key="Size">1</x:Double>'
+                      '<Style TargetType="muxc:InfoBadge"/></ResourceDictionary>')
+        b = self.page('b.xaml', HEAD + '><x:Double x:Key="Size">2</x:Double></ResourceDictionary>')
+        text = mergexaml.merge({'RS2': [a, b]})['21H1'][1]
+        root = minidom.parseString(text).documentElement
+        self.assertEqual(keys(root), ['Size', 'controls:InfoBadge'])
+        self.assertEqual(root.getElementsByTagName('x:Double')[0].firstChild.data, '2')
+        self.assertEqual(root.getAttribute('xmlns:controls'), 'using:Microsoft.UI.Xaml.Controls')
+
+    def test_theme_dictionaries_merge_by_theme_with_dark_as_default(self):
+        a = self.page('a.xaml', HEAD + '><ResourceDictionary.ThemeDictionaries><ResourceDictionary x:Key="Dark">'
+                      '<Color x:Key="One">#000000</Color></ResourceDictionary></ResourceDictionary.ThemeDictionaries>'
+                      '<Color x:Key="Two">#111111</Color></ResourceDictionary>')
+        b = self.page('b.xaml', HEAD + '><ResourceDictionary.ThemeDictionaries><ResourceDictionary x:Key="Default">'
+                      '<Color x:Key="Two">#222222</Color></ResourceDictionary></ResourceDictionary.ThemeDictionaries>'
+                      '</ResourceDictionary>')
+        text = mergexaml.merge({'RS1': [a, b]})['RS1'][1]
+        root = minidom.parseString(text).documentElement
+        themes = root.getElementsByTagName('ResourceDictionary.ThemeDictionaries')[0]
+        default, = [d for d in themes.childNodes if d.nodeType == d.ELEMENT_NODE]
+        self.assertEqual(default.getAttribute('x:Key'), 'Default')
+        self.assertEqual(keys(default), ['One', 'Two'])
+        # a key a theme dictionary has is taken out of the dictionary above it
+        self.assertEqual(keys(root), [''])
+
+    def test_conditional_xaml_resolved_for_each_release(self):
+        a = self.page('a.xaml', HEAD + f'xmlns:contract7Present="{C7}" xmlns:contract14Present="{C14}">'
+                      '<Style x:Key="S"><Setter Property="A" Value="1"/>'
+                      '<contract7Present:Setter Property="B" Value="2"/>'
+                      '<contract14Present:Setter Property="C" Value="3"/></Style></ResourceDictionary>')
+        out = mergexaml.merge({'RS1': [a]})
+        for rel, want in (('RS1', ['A']), ('19H1', ['A', 'B']), ('21H1', ['A', 'B', 'C'])):
+            root = minidom.parseString(out[rel][1]).documentElement
+            self.assertEqual([s.getAttribute('Property') for s in root.getElementsByTagName('Setter')], want, rel)
+            self.assertNotIn('contract', out[rel][1])
+
+
+if __name__ == '__main__':
+    unittest.main()

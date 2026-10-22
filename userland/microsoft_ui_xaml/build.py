@@ -27,9 +27,14 @@
 #
 # WinUI 2's classes then call the system XAML through the projection of
 # Windows.UI.Xaml (RoGetActivationFactory), which NovaOS's framework answers
-# under its Windows names (32.5's first part).  The XAML resources (each
-# control's template and theme resources, compiled to XBF and kept in
-# Microsoft.UI.Xaml's resources.pri) come later.  docs/design/windows-ui-xaml.md.
+# under its Windows names (32.5's first part).  The interfaces MIDL 3
+# synthesizes get the IDs Microsoft's own metadata gives them (iids.txt,
+# muxiids.py), which apps were compiled with.  The XAML resources (each
+# control's default style and theme resources, which Microsoft compiles to
+# XBF in Microsoft.UI.Xaml's resources.pri) are merged as its build merges
+# them (mergexaml.py) and kept as XAML text in C:\Programs\Microsoft.UI.Xaml\
+# Themes, where an unpackaged program's ms-appx: finds them.
+# docs/design/windows-ui-xaml.md.
 import hashlib, os, re, shutil, subprocess, sys, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +45,8 @@ CPPWINRT = os.path.join(ROOT, 'third_party', 'cppwinrt')
 WINMD = os.path.join(ROOT, 'third_party', 'winmd', 'Windows.winmd')
 INC = os.path.join(HERE, 'inc')
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'winrt'))
+sys.path.insert(0, HERE)
+import mergexaml  # noqa: E402
 
 # The features built so far: what the project always imports (TestHooks,
 # Common, Telemetry) and Microsoft's smallest set the DLL builds with (the
@@ -109,6 +116,23 @@ def feature_items():
 
 
 # -- 1. the metadata ------------------------------------------------------------
+def published_iids(types, own):
+    """the interface IDs Microsoft's Microsoft.UI.Xaml.winmd gives (iids.txt,
+    see muxiids.py) for the interfaces the IDL names none for: those MIDL 3
+    synthesizes, whose IDs apps were compiled with.  An ID the IDL does name
+    must be the published one."""
+    iids = {}
+    for line in open(os.path.join(HERE, 'iids.txt')):
+        if line.strip() and not line.startswith('#'):
+            n, g = line.split()
+            iids[n] = g.strip('{}')
+    for n in own:
+        g = getattr(types[n], 'guid', None)
+        if g and n in iids and g.lower() != iids[n]:
+            raise SystemExit(f'WinUI 2 IDL: {n} is {{{g}}}, Microsoft.UI.Xaml.winmd has {{{iids[n]}}}')
+    return iids
+
+
 def write_winmd(gen, idls):
     """Microsoft.UI.Xaml.winmd from the features' IDL, as MIDL would write it
     (with the experimental members, as C++/WinRT's -ignore_velocity keeps
@@ -124,8 +148,114 @@ def write_winmd(gen, idls):
     types, *_ = abigen.load([WINMD], [pp], [], [])
     own = sorted(n for n, t in types.items() if n.startswith('Microsoft.') and not getattr(t, 'classic', False))
     out = os.path.join(gen, 'Microsoft.UI.Xaml.winmd')
-    winmdwrite.write(out, 'Microsoft.UI.Xaml', types, own, abigen.Generator(types, {}).iid_for)
+    winmdwrite.write(out, 'Microsoft.UI.Xaml', types, own, abigen.Generator(types, published_iids(types, own)).iid_for)
     return out, types, own
+
+
+# -- 1b. the XAML resources -------------------------------------------------------
+# the features whose XAML pages are merged besides FEATURES' (CommonStyles has
+# only pages: WinUI 2's styles of the framework's own controls)
+PAGE_FEATURES = ['CommonStyles/CommonStyles.vcxitems']
+XAML_TYPE_NS = ('using:Microsoft.UI.Xaml.Controls', 'using:Microsoft.UI.Xaml.Controls.Primitives',
+                'using:Microsoft.UI.Xaml.Media')
+
+
+def pages():
+    """each kind of merged file's pages by release, as the project's
+    CategorizeSharedPages lists them: the Page items of the features built,
+    in the order Microsoft.UI.Xaml.vcxproj imports their vcxitems, by
+    Priority (1-8, then none), each in its variant (ControlsResourcesVersion
+    Version2 -> '', Version1 -> '_v1', Any -> both)"""
+    proj = open(os.path.join(DEV, 'dll', 'Microsoft.UI.Xaml.vcxproj'), encoding='utf-8-sig').read()
+    order = [f.replace('\\', '/') for f in re.findall(r'<Import Project="\.\.\\([^"]+\.vcxitems)"', proj)]
+    feats = sorted(FEATURES + PAGE_FEATURES, key=lambda f: order.index(f) if f in order else len(order))
+    shared = []
+    for f in feats:
+        path = os.path.join(DEV, f)
+        text = open(path, encoding='utf-8-sig').read()
+        for inc, body in re.findall(r'<Page Include="\$\(MSBuildThisFileDirectory\)([^"]+)"\s*>(.*?)</Page>', text, re.S):
+            meta = dict(re.findall(r'<(\w+)>([^<]*)</\1>', body))
+            shared.append((ci_path(os.path.normpath(os.path.join(os.path.dirname(path), inc.replace('\\', '/')))), meta))
+    prio = [str(i) for i in range(1, 9)] + ['Undefined']
+    shared.sort(key=lambda p: prio.index(p[1].get('Priority', 'Undefined')))
+    out = {}
+    for v, skip in (('', 'Version1'), ('_v1', 'Version2')):
+        for kind, typ in (('generic', 'DefaultStyle'), ('themeresources', 'ThemeResources')):
+            out[kind + v] = {rel: [p for p, m in shared if m.get('Version') == rel and m.get('Type') == typ
+                                   and m.get('ControlsResourcesVersion', 'Any') != skip]
+                             for rel in mergexaml.RELEASES}
+        compact = os.path.join(DEV, 'dll', 'DensityStyles', 'Compact.xaml')
+        out['compact_themeresources' + v] = {rel: ps + [compact] for rel, ps in out['themeresources' + v].items()}
+    return out
+
+
+# the markup the framework cannot make yet: data binding ({Binding}, the
+# Binding class and its expressions are not built: dxaml/lib's Binding_Partial
+# and BindingExpression); its resources are left out as an unbuilt type's are
+FRAMEWORK_LACKS = ('{Binding',)
+
+
+def leave_out_unbuilt(text, types):
+    """@text (a merged dictionary) without the resources that name a WinUI 2
+    type this build does not have (a feature not built yet) or use markup in
+    FRAMEWORK_LACKS, or name such a resource: XAML text resolves each type as it is parsed, where XBF
+    resolves a resource's types when it is first looked up"""
+    from xml.dom import minidom
+    doc = minidom.parseString(text.encode('utf-8'))
+    root = doc.documentElement
+    prefixes = {a.name[6:]: a.value for a in root.attributes.values() if a.name.startswith('xmlns:')}
+    def known(prefix, name):
+        ns = prefixes.get(prefix, '')
+        return ns not in XAML_TYPE_NS or (ns[len('using:'):] + '.' + name.split('.')[0]) in types
+    gone, left = set(), []
+    def unbuilt(el):
+        for e in [el] + el.getElementsByTagName('*'):
+            if ':' in e.tagName and not known(*e.tagName.split(':', 1)):
+                return True
+            for a in e.attributes.values():
+                m = re.fullmatch(r'(\w+):(\w+)', a.value) if a.name in ('TargetType', 'x:DataType') else None
+                if m and not known(m.group(1), m.group(2)):
+                    return True
+                if any(k in gone for k in re.findall(r'{(?:StaticResource|ThemeResource)\s+([\w.]+)}', a.value)):
+                    return True
+                if any(m in a.value for m in FRAMEWORK_LACKS):
+                    return True
+        return False
+    dicts = [root] + [d for t in root.getElementsByTagName('ResourceDictionary.ThemeDictionaries')
+                      for d in t.childNodes if d.nodeType == d.ELEMENT_NODE]
+    while True:
+        out = [(d, el) for d in dicts for el in d.childNodes
+               if el.nodeType == el.ELEMENT_NODE and el.tagName != 'ResourceDictionary.ThemeDictionaries' and unbuilt(el)]
+        if not out:
+            return root.toxml(), sorted(left)
+        for d, el in out:
+            k = el.getAttribute('x:Key') or el.getAttribute('x:Name') or el.getAttribute('TargetType')
+            gone.add(k)
+            left.append(k)
+            d.removeChild(el)
+
+
+# the release whose merged files are installed: XamlControlsResources
+# and each control's DefaultStyleResourceUri pick them by the
+# UniversalApiContract ApiInformation reports, which on NovaOS (Windows 10
+# 22H2, contract 10: ole32's winrt_classes.c) is 19H1's (21H1's is 14)
+RELEASE = '19H1'
+
+
+def themes(gen, types):
+    """WinUI 2's merged XAML resources for RELEASE (19h1_themeresources.xaml,
+    19h1_generic.xaml ... in each variant), written under @gen/Themes"""
+    out = os.path.join(gen, 'Themes')
+    os.makedirs(out, exist_ok=True)
+    report = []
+    for kind, rels in pages().items():
+        name = RELEASE.lower() + '_' + kind + '.xaml'
+        text, left = leave_out_unbuilt(mergexaml.merge(rels)[RELEASE][1], types)
+        path = os.path.join(out, name)
+        if not os.path.exists(path) or open(path, encoding='utf-8').read() != text:
+            open(path, 'w', encoding='utf-8').write(text)
+        report.append('%s: left out (feature or framework part not built): %s\n' % (name, ', '.join(left) or 'nothing'))
+    open(os.path.join(out, 'left-out.txt'), 'w').write(''.join(report))
 
 
 # -- 2. C++/WinRT ---------------------------------------------------------------
@@ -272,6 +402,7 @@ def objs(b, odir):
         srcs, idls, defines = feature_items()
         winmd, types, own = write_winmd(gen, idls)
         projection(b, odir, gen, winmd)
+        themes(gen, types)
         xamlmeta = b.load_hook('microsoft_ui_xaml_meta', os.path.join(HERE, 'xamlmeta.py'))
         meta = os.path.join(gen, 'XamlMetadataProviderGenerated.cpp')
         text = xamlmeta.generate(types, own)
@@ -308,3 +439,12 @@ def link(b, odir, objs, deps, base):
     b.HOOKS['msvcp140'].link_dll(b, odir, 'Microsoft.UI.Xaml', objs + [os.path.join(odir, 'tlregdtr.lib')], base,
                                  [d for d in deps if d not in ('msvcrt', 'vcruntime140', 'kernel32', 'ntdll')],
                                  ['/def:' + os.path.join(DEV, 'dll', 'Microsoft.UI.Xaml.def')])
+    # the XAML resources where an unpackaged program's ms-appx:///
+    # Microsoft.UI.Xaml/Themes/... finds them: its own folder (C:\Programs,
+    # as the NuGet package copies them into an app's), since WinUI 2 asks
+    # its framework package (ms-appx://Microsoft.UI.Xaml.2.x/) only when it
+    # runs from one (step 32.6)
+    out = os.path.join(odir, 'winui2', 'Themes')
+    for name in sorted(os.listdir(out)):
+        if name.endswith('.xaml'):
+            b.built.append(('\\Programs\\Microsoft.UI.Xaml\\Themes\\' + name, os.path.join(out, name)))

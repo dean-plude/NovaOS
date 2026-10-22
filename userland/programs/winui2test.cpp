@@ -17,7 +17,10 @@
  *   - InfoBadge.Value (a dependency property WinUI 2 registered on the
  *     framework) read, set and read back through the type's member;
  *   - a DropDownButton (composed over Windows.UI.Xaml.Controls.Button): its
- *     Windows IButton and its content set and read back.
+ *     Windows IButton and its content set and read back;
+ *   - WinUI 2's XAML resources (step 32.5's third part): the merged
+ *     19h1 theme resources and default styles installed where ms-appx:///
+ *     Microsoft.UI.Xaml/Themes/ finds them.
  *
  *   winui2test        the self-test runs it with no arguments
  */
@@ -178,6 +181,25 @@ static void winui2_checks()
           SUCCEEDED(pv->CreateString(wrl_wrappers::HStringReference(L"More").Get(), label.GetAddressOf())) &&
           SUCCEEDED(content->put_Content(label.Get())) && SUCCEEDED(content->get_Content(got.GetAddressOf())) &&
           unboxed_is(got.Get(), L"More"));
+
+    /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
+     * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/
+     * finds them (the files XamlControlsResources and the controls'
+     * DefaultStyleResourceUri name on NovaOS's Windows 10 contracts).
+     * Loading them waits on the framework: their styles use data binding
+     * ({Binding}, not built yet) and XAML's text formatting starts from
+     * DirectWrite's Windows 10 font model (32.4). */
+    static const wchar_t *const themes[] = {L"19h1_themeresources.xaml", L"19h1_compact_themeresources.xaml",
+                                            L"19h1_generic.xaml", L"19h1_themeresources_v1.xaml",
+                                            L"19h1_compact_themeresources_v1.xaml", L"19h1_generic_v1.xaml"};
+    for (const wchar_t *t : themes) {
+        wchar_t path[MAX_PATH];
+        swprintf(path, MAX_PATH, L"C:\\Programs\\Microsoft.UI.Xaml\\Themes\\%ls", t);
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        char what[96];
+        snprintf(what, sizeof what, "Microsoft.UI.Xaml\\Themes\\%ls installed", t);
+        CHECK(what, GetFileAttributesExW(path, GetFileExInfoStandard, &fa) && fa.nFileSizeLow > 10000);
+    }
 }
 
 /* WinUI 2's XAML type table, made once (on the UI thread, when the

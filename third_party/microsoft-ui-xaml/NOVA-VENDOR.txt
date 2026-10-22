@@ -144,6 +144,16 @@ changed callback), VisualStateManager_Partial.cpp with the generated
 VisualStateManager class with components/vsm whole (the visual states
 that callback moves to).
 
+For the root ScrollViewer (step 32.4): dxaml/lib's ScrollViewer_Partial.cpp,
+ScrollContentPresenter_Partial.cpp, RootScrollViewer_Partial.cpp,
+Brush_Partial.cpp and SolidColorBrush_Partial.cpp with the generated
+ScrollContentControl, ScrollViewer, ScrollContentPresenter,
+RootScrollViewer, Brush and SolidColorBrush classes (and the
+ContentDialogMetadata.h and FocusManager.g.h they include), and
+core/controls/generated's GeneratedClasses.g.cpp with its
+CoreControlsGenerated.vcxproj (the core constructors of the generated
+control classes).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

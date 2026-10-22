@@ -84,6 +84,7 @@ jobs:
         name: nova-image
         path: build
     - name: Verify tested image
+      id: verify
       run: python3 tools/ci/image_manifest.py verify --sha "$GITHUB_SHA"
     - name: Run regressions
       run: python3 tools/selftest.py --suite "$SUITE" --img build/nova.img --out "selftest-$SUITE" --junit "selftest-$SUITE/junit.xml"
@@ -97,7 +98,7 @@ jobs:
         if-no-files-found: ignore
         retention-days: 14
     - name: Compatibility smoke
-      if: always() && matrix.suite == 'core'
+      if: always() && matrix.suite == 'core' && steps.verify.outcome == 'success'
       run: python3 tools/compat_smoke.py --img build/nova.img --out compat-smoke-out --junit compat-smoke-out/junit.xml
         --summary "$GITHUB_STEP_SUMMARY"
     - name: Keep compat-smoke-out
@@ -109,7 +110,7 @@ jobs:
         if-no-files-found: ignore
         retention-days: 14
     - name: Performance budget (boot time, Firefox start and smpstress scaling)
-      if: always() && matrix.suite == 'network'
+      if: always() && matrix.suite == 'network' && steps.verify.outcome == 'success'
       run: python3 tools/ci/perf.py --img build/nova.img --out perf-out --summary "$GITHUB_STEP_SUMMARY"
     - name: Keep perf-out
       uses: actions/upload-artifact@v4

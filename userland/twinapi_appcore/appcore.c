@@ -12,8 +12,9 @@
  * ActivatableClassId keys (kernel/um/um_registry.c) name this DLL, and
  * DllGetActivationFactory answers for
  *   Windows.ApplicationModel.Core.CoreApplication  (ICoreApplication,
- *       ICoreApplicationExit, ICoreImmersiveApplication)
+ *       ICoreApplication2, ICoreApplicationExit, ICoreImmersiveApplication)
  *   Windows.UI.Core.CoreWindow                     (ICoreWindowStatic)
+ *   Windows.UI.Core.CoreCursor                     (ICoreCursorFactory)
  *
  * A CoreWindow is a top-level user32 window of class
  * "Windows.UI.Core.CoreWindow"; ICoreWindowInterop gives its HWND, which is
@@ -57,6 +58,9 @@ static const GUID IID_IActivationFactory_    = { 0x00000035, 0, 0, { 0xC0, 0, 0,
 static const GUID IID_IAsyncInfo_            = { 0x00000036, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID IID_IAsyncAction_          = { 0x5A648006, 0x843A, 0x4DA9, { 0x86, 0x5B, 0x9D, 0x26, 0xE5, 0xDF, 0xAD, 0x7B } };
 static const GUID IID_ICoreApplication_      = { 0x0AACF7A4, 0x5E1D, 0x49DF, { 0x80, 0x34, 0xFB, 0x6A, 0x68, 0xBC, 0x5E, 0xD1 } };
+static const GUID IID_ICoreApplication2_     = { 0x998681FB, 0x1AB6, 0x4B7F, { 0xBE, 0x4A, 0x9A, 0x06, 0x45, 0x22, 0x4C, 0x04 } };
+static const GUID IID_ICoreCursor_           = { 0x96893ACF, 0x111D, 0x442C, { 0x8A, 0x77, 0xB8, 0x79, 0x92, 0xF8, 0xE2, 0xD6 } };
+static const GUID IID_ICoreCursorFactory_    = { 0xF6359621, 0xA79D, 0x4ED3, { 0x8C, 0x32, 0xA9, 0xEF, 0x9D, 0x6B, 0x76, 0xA4 } };
 static const GUID IID_ICoreApplicationExit_  = { 0xCF86461D, 0x261E, 0x4B72, { 0x9A, 0xCD, 0x44, 0xED, 0x2A, 0xCE, 0x6A, 0x29 } };
 static const GUID IID_ICoreImmersiveApplication_ = { 0x1ADA0E3E, 0xE4A2, 0x4123, { 0xB4, 0x51, 0xDC, 0x96, 0xBF, 0x80, 0x04, 0x19 } };
 static const GUID IID_ICoreApplicationView_  = { 0x638BB2DB, 0x451D, 0x4661, { 0xB0, 0x99, 0x41, 0x4F, 0x34, 0xFF, 0xB9, 0xF1 } };
@@ -1002,7 +1006,8 @@ typedef struct {
     const void *const *app;             /* ICoreApplication */
     const void *const *exit;            /* ICoreApplicationExit */
     const void *const *immersive;       /* ICoreImmersiveApplication */
-    Event suspending, resuming, exiting;
+    const void *const *app2;            /* ICoreApplication2 */
+    Event suspending, resuming, exiting, background, leaving, entered;
     LONG running;
 } App;
 static App g_app;
@@ -1014,6 +1019,7 @@ static HRESULT STDMETHODCALLTYPE app_qi(void *p, REFIID iid, void **out)
     else if (IsEqualGUID(iid, &IID_ICoreApplication_)) *out = &g_app.app;
     else if (IsEqualGUID(iid, &IID_ICoreApplicationExit_)) *out = &g_app.exit;
     else if (IsEqualGUID(iid, &IID_ICoreImmersiveApplication_)) *out = &g_app.immersive;
+    else if (IsEqualGUID(iid, &IID_ICoreApplication2_)) *out = &g_app.app2;
     else { *out = 0; return E_NOINTERFACE; }
     return S_OK;
 }
@@ -1084,14 +1090,77 @@ static HRESULT STDMETHODCALLTYPE imm_views(void *p, void **v) { (void)p; if (v) 
 static HRESULT STDMETHODCALLTYPE imm_new_view(void *p, HSTRING type, HSTRING entry, void **v) { (void)p; (void)type; (void)entry; if (v) *v = 0; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE imm_main_view(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = &g_view.vt; return S_OK; }
 
+/* ICoreApplication2: the background events (none is raised: no background
+ * tasks, and the app stays in the foreground) and prelaunch (ignored) */
+static HRESULT STDMETHODCALLTYPE app2_add_background(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.background, h, t); }
+static HRESULT STDMETHODCALLTYPE app2_remove_background(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.background, t); }
+static HRESULT STDMETHODCALLTYPE app2_add_leaving(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.leaving, h, t); }
+static HRESULT STDMETHODCALLTYPE app2_remove_leaving(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.leaving, t); }
+static HRESULT STDMETHODCALLTYPE app2_add_entered(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.entered, h, t); }
+static HRESULT STDMETHODCALLTYPE app2_remove_entered(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.entered, t); }
+static HRESULT STDMETHODCALLTYPE app2_prelaunch(void *p, boolean_t v) { (void)p; (void)v; return S_OK; }
+
 static const void *const app_factory_vt[] = { INSP_FNS(app_qi, app_name), (void *)app_activate };
 static const void *const app_vt[] = { INSP_FNS(app_qi, app_name), (void *)app_id, (void *)app_add_suspending, (void *)app_remove_suspending,
                                       (void *)app_add_resuming, (void *)app_remove_resuming, (void *)app_properties,
                                       (void *)app_current_view, (void *)app_run, (void *)app_run_factories };
 static const void *const app_exit_vt[] = { INSP_FNS(app_qi, app_name), (void *)exit_exit, (void *)exit_add, (void *)exit_remove };
 static const void *const app_immersive_vt[] = { INSP_FNS(app_qi, app_name), (void *)imm_views, (void *)imm_new_view, (void *)imm_main_view };
+static const void *const app2_vt[] = { INSP_FNS(app_qi, app_name), (void *)app2_add_background, (void *)app2_remove_background,
+                                       (void *)app2_add_leaving, (void *)app2_remove_leaving, (void *)app2_add_entered,
+                                       (void *)app2_remove_entered, (void *)app2_prelaunch };
 static App g_app = { (const void *const *)app_factory_vt, (const void *const *)app_vt,
-                     (const void *const *)app_exit_vt, (const void *const *)app_immersive_vt };
+                     (const void *const *)app_exit_vt, (const void *const *)app_immersive_vt, (const void *const *)app2_vt };
+
+/* ---- CoreCursor: a cursor type and id (a CoreWindow shows the arrow for any) */
+typedef struct { const void *const *vt; LONG refs; INT32 type; UINT32 id; } Cursor;
+static HRESULT STDMETHODCALLTYPE cur_qi(Cursor *c, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_ICoreCursor_)) { *out = 0; return E_NOINTERFACE; }
+    InterlockedIncrement(&c->refs);
+    *out = c;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE cur_ref(Cursor *c) { return InterlockedIncrement(&c->refs); }
+static ULONG STDMETHODCALLTYPE cur_release(Cursor *c)
+{
+    LONG n = InterlockedDecrement(&c->refs);
+    if (!n) HeapFree(GetProcessHeap(), 0, c);
+    return n;
+}
+static HRESULT STDMETHODCALLTYPE cur_name(Cursor *c, HSTRING *n) { (void)c; return make_hstring(L"Windows.UI.Core.CoreCursor", n); }
+static HRESULT STDMETHODCALLTYPE cur_id(Cursor *c, UINT32 *v) { if (!v) return E_POINTER; *v = c->id; return S_OK; }
+static HRESULT STDMETHODCALLTYPE cur_type(Cursor *c, INT32 *v) { if (!v) return E_POINTER; *v = c->type; return S_OK; }
+static const void *const cur_vt[] = { (void *)cur_qi, (void *)cur_ref, (void *)cur_release, (void *)no_iids, (void *)cur_name,
+                                      (void *)base_trust, (void *)cur_id, (void *)cur_type };
+
+typedef struct { const void *const *factory; const void *const *cursors; } CursorStatics;
+static CursorStatics g_cursor_statics;
+static HRESULT STDMETHODCALLTYPE cs_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_cursor_statics.factory;
+    else if (IsEqualGUID(iid, &IID_ICoreCursorFactory_)) *out = &g_cursor_statics.cursors;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE cs_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Core.CoreCursor", n); }
+static HRESULT STDMETHODCALLTYPE cs_activate(void *p, void **out) { (void)p; if (out) *out = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE cs_create(void *p, INT32 type, UINT32 id, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    Cursor *c = HeapAlloc(GetProcessHeap(), 0, sizeof *c);
+    if (!c) { *out = 0; return E_OUTOFMEMORY; }
+    c->vt = cur_vt; c->refs = 1; c->type = type; c->id = id;
+    *out = c;
+    return S_OK;
+}
+static const void *const cs_factory_vt[] = { INSP_FNS(cs_qi, cs_name), (void *)cs_activate };
+static const void *const cs_cursors_vt[] = { INSP_FNS(cs_qi, cs_name), (void *)cs_create };
+static CursorStatics g_cursor_statics = { (const void *const *)cs_factory_vt, (const void *const *)cs_cursors_vt };
 
 /* ---- CoreWindow's statics: GetForCurrentThread ------------------------ */
 typedef struct { const void *const *factory; const void *const *statics; } WinStatics;
@@ -1132,6 +1201,7 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (!factory) return E_POINTER;
     if (name_is(cls, L"Windows.ApplicationModel.Core.CoreApplication")) { *factory = &g_app.factory; return S_OK; }
     if (name_is(cls, L"Windows.UI.Core.CoreWindow")) { *factory = &g_win_statics.factory; return S_OK; }
+    if (name_is(cls, L"Windows.UI.Core.CoreCursor")) { *factory = &g_cursor_statics.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

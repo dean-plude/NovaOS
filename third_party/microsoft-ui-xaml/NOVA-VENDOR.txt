@@ -154,6 +154,30 @@ core/controls/generated's GeneratedClasses.g.cpp with its
 CoreControlsGenerated.vcxproj (the core constructors of the generated
 control classes).
 
+For data binding, control templates and UWP start-up (step 32.5 part 4):
+dxaml/lib's Binding_Partial.cpp, BindingExpression_Partial.cpp, the
+property path and property access sources (PropertyPath*.cpp,
+*PropertyAccess.cpp, *PathStep.cpp, SourceAccessPathStep.cpp),
+DefaultValueConverter.cpp, DynamicValueConverter.cpp, INPCListenerBase.cpp,
+Bindable*VectorWrapper.cpp, DebugOutput.cpp, FrameworkEventArgs.cpp,
+ParserServiceProvider_Partial.cpp, ProvideValueTargetProperty_Partial.cpp,
+MarkupExtension_Partial.cpp, EffectiveValueEntry.cpp, VisualTreeHelper.cpp,
+LayoutTransition_partial.cpp, ThemeGenerator.cpp,
+StaggerFunctionBase_Partial.cpp, TemplateBindingExpression.cpp,
+FrameworkView_Partial.cpp, FrameworkViewSource_Partial.cpp,
+XamlCompositionBrushBase_Partial.cpp and
+CoreWindowWrapper.cpp with their generated classes (Binding, BindingBase,
+BindingExpression, BindingExpressionBase, BindingFailedEventArgs,
+PropertyPath, RelativeSource, MarkupExtension, MarkupExtensionBase,
+XamlResourceReferenceFailedEventArgs, ParserServiceProvider,
+ProvideValueTargetProperty, StaggerFunctionBase, PVLStaggerFunction,
+FrameworkView, FrameworkViewSource, XamlCompositionBrushBase) and the
+headers they include; components/brushes/XamlCompositionBrush.cpp;
+components/style (CStyle, OptimizedStyle); core/controls/generated
+(GeneratedClasses.g.cpp: the core's create functions for framework-only
+types such as the theme transitions); and win/agcore.debug/CommonErrors.rc
+(the parser's error texts, turned into a table at build time).
+
 For the first frame (step 32.4): components/UIBridgeFocus whole (the
 island's FocusController and its navigation results and event args, with
 Microsoft.UI.Xaml.UIBridgeFocus.vcxproj), plat/win/desktop's

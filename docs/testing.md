@@ -127,14 +127,20 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   activated from the DLL and composed over the framework's
   `Windows.UI.Xaml.Controls.Control`, WinUI 2's XAML type table
   (`XamlControlsXamlMetaDataProvider`) reading, setting and reading back
-  `InfoBadge.Value`, and a `DropDownButton` composed over `Button`),
-  `wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as
-  WinUI 2 and UWP apps see it: `Windows.UI.Xaml.Controls.Button`
-  activated by its Windows name and driven through Windows' interfaces,
-  a Windows-boxed `Visibility`, `DependencyProperty.Register` with
-  Windows type names, `XamlReader.Load` and the page's children through
-  Windows' `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click`
-  with a Windows handler, and an app's control composed over
+  `InfoBadge.Value`, and a `DropDownButton` composed over `Button`; data
+  binding: `{Binding}` to the element, its `DataContext` and a control
+  template's templated parent, a `Binding` made in code following its
+  source, `{TemplateBinding}`, `Control.ApplyTemplate`; and the UWP
+  start-up: the program installed as a UWP app, started by its AUMID,
+  with its package identity, the Universal windowing model and the app's
+  `Application` made on `Application.Start`'s UWP route), `wuxamltest`
+  (the XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and
+  UWP apps see it: `Windows.UI.Xaml.Controls.Button` activated by its
+  Windows name and driven through Windows' interfaces, a Windows-boxed
+  `Visibility`, `DependencyProperty.Register` with Windows type names,
+  `XamlReader.Load` and the page's children through Windows'
+  `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
+  Windows handler, and an app's control composed over
   `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
   framework's layout calls), `xamlapptest` (Microsoft's XAML framework
   started as a desktop app starts it, built from its sources:

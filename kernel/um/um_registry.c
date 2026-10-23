@@ -796,6 +796,12 @@ static void defaults(void)
         if (!has_value(pol, "ConsentPromptBehaviorUser")) kset_dword(pol, "ConsentPromptBehaviorUser", 3);
         if (!has_value(pol, "PromptOnSecureDesktop")) kset_dword(pol, "PromptOnSecureDesktop", 1);
     }
+    /* NovaOS's Windows.UI.Xaml is the system XAML UWP apps start on: the
+     * framework (built from WinUI's sources, which turn the UWP window off)
+     * reads its runtime features here, and EnableUWPWindow lets a packaged
+     * app's Application.Start make its CoreWindow-backed Window */
+    RegKey *winui = kpath("Machine\\SOFTWARE\\Microsoft\\WinUI\\Xaml", false);
+    if (!has_value(winui, "EnableUWPWindow")) kset_dword(winui, "EnableUWPWindow", 1);
     kpath("Machine\\SOFTWARE\\Classes\\CLSID", false);
     kpath("Machine\\SOFTWARE\\Classes\\Interface", false);
     /* shortcuts: shell32's ShellLink class (a bare DLL name: the 32-bit
@@ -876,7 +882,7 @@ static void defaults(void)
     if (!has_value(tsc, "")) kset_sz(tsc, "", "TaskScheduler class", 1);
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
-     * model's CoreApplication and CoreWindow (twinapi.appcore.dll; Windows
+     * model's CoreApplication, CoreWindow and CoreCursor (twinapi.appcore.dll; Windows
      * keeps CoreWindow in Windows.UI.dll), the compositor and its easing
      * functions, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
@@ -890,6 +896,7 @@ static void defaults(void)
     static const char *const wrt_classes[][2] = {
         { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
+        { "Windows.UI.Core.CoreCursor", "twinapi.appcore.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },

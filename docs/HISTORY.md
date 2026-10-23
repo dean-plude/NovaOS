@@ -15358,6 +15358,26 @@ created.
 - **Next (32.4):** the framework's `XamlIsland` peer, which a desktop
   `Window` now reaches, then a page drawn, typed into and clicked.
 
+## Fewer CI checks per pull request
+
+A pull request used to start about 68 check runs; now one that changes
+code runs eight jobs and the **Build and boot-test** summary
+([ci.md](ci.md#how-many-checks-a-pull-request-runs)).
+
+- **The nightly app corpus** starts on a pull request only through a
+  paths filter: the corpus, the App Store, the download harness and the
+  bundling scripts (`CORPUS_DIRS`/`CORPUS_FILES` in `tools/ci/plan.py`).
+  Changes to `tools/ci/`, `tests/tools/` or other workflows no longer fan
+  out to its 53 program jobs. It still runs daily and by hand.
+- **Compatibility smoke** and **Performance budget** are steps of
+  **OS tests (core)** and **OS tests (network)**; each took about a
+  minute in a job of its own.
+- **MS-DOS 4.0** moved to `.github/workflows/msdos.yml`: every push to
+  `main`, and pull requests that change `tools/msdos/`, ntvdm or bootRogue.
+- **CI result** is gone; **Publish nova.iso** needs **Build and
+  boot-test** and the graphics tests. The three required check names are
+  unchanged.
+
 ## WinUI 2's controls built
 
 The second part of step 32.5 of `Windows.UI.Xaml` on NovaOS
@@ -15390,6 +15410,40 @@ system XAML under its `Windows.UI.Xaml` names.
   `InfoBadge.Value` (64-bit).
 - **Next:** WinUI 2's XAML resources, the interface IDs apps were
   compiled with, then Calculator.
+
+## XAML data binding, control templates and the UWP start-up
+
+The fourth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+framework's data binding and control templates, which WinUI 2's styles
+are written with, and the start of a UWP app.
+
+- **Data binding, built from Microsoft's sources:** `Binding`,
+  `BindingExpression`, `RelativeSource`, `PropertyPath` with its parser,
+  steps and property accessors, the value converters, the markup
+  extensions' service provider, `EffectiveValueEntry`,
+  `VisualTreeHelper`, and the framework's `EventArgs`.
+- **Control templates:** the style component (`CStyle` and the optimized
+  style), `{TemplateBinding}` to a property the core does not bind
+  itself, the core's create functions of the framework-only types (the
+  default styles' theme transitions, with their states and stagger
+  functions), and `XamlCompositionBrushBase` with its core half.
+  uxtheme answers the framework's animation queries with no theme open.
+- **Parser errors with their text:** `CommonErrors.rc`'s strings as a
+  table written at build time, so a failed load says what failed.
+- **UWP start-up:** the framework's view source, view and `CoreWindow`
+  wrapper; the core's `EnableUWPWindow` feature on; twinapi.appcore's
+  `CoreApplication` answers `ICoreApplication2` and serves `CoreCursor`.
+- **Test:** `winui2test` loads `{Binding}`s to the element, its
+  `DataContext` and a template's templated parent, makes a `Binding` in
+  code and sees it follow its source, applies four kinds of template;
+  then packs itself as a UWP app (`XamlUwpTest.msix`), installs it and
+  starts it by its AUMID, which reaches `Application.Start`'s UWP route
+  with the app's `Application` made (64-bit).
+- **Next (32.5):** the animation component (the core's `DispatcherTimer`
+  stops the UWP route), then `Window.Current`; WinUI 2's theme resources
+  (`AcrylicBrush`'s inherited `FallbackColor`) and its controls' default
+  styles.
 
 ## The XAML framework's theme resources
 

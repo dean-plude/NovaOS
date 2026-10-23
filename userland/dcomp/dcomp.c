@@ -880,6 +880,7 @@ struct Dc {
     int version;
     IUnknown *d3d, *ctx;                /* the rendering device (ID3D11Device) and its immediate context, for surfaces */
     IUnknown *d2d;                      /* the ID2D1Device it was given as the rendering device, or NULL */
+    IUnknown *outer;                    /* the compositor it is part of (composition.c), or NULL (not counted) */
 };
 static const void *const g_v1_vtbl[], *const g_desktop_vtbl[], *const g_dev3_vtbl[];
 
@@ -896,29 +897,45 @@ static HRESULT STDMETHODCALLTYPE d_qi(void *p, const GUID *iid, void **out)
     Dc *d = dc_of(p);
     if (!out) return E_POINTER;
     *out = NULL;
+    /* (part of a compositor: every version, and the compositor's identity) */
+    if (d->outer && novadx_same(iid, &NIID_IUnknown)) return d->outer->lpVtbl->QueryInterface(d->outer, iid, out);
     if (novadx_same(iid, &NIID_IUnknown)) *out = d->version == 1 ? (void *)&d->v1 : (void *)&d->desktop;
-    else if (d->version == 1 && novadx_same(iid, &NIID_IDCompositionDevice)) *out = &d->v1;
+    else if ((d->version == 1 || d->outer) && novadx_same(iid, &NIID_IDCompositionDevice)) *out = &d->v1;
     else if (d->version > 1 && (novadx_same(iid, &NIID_IDCompositionDevice2) || novadx_same(iid, &NIID_IDCompositionDesktopDevice)))
         *out = &d->desktop;
     else if (d->version > 1 && novadx_same(iid, &NIID_IDCompositionDevice3)) *out = &d->dev3;
-    if (!*out) return E_NOINTERFACE;
-    InterlockedIncrement(&d->refs);
+    if (!*out) return d->outer ? d->outer->lpVtbl->QueryInterface(d->outer, iid, out) : E_NOINTERFACE;
+    if (d->outer) d->outer->lpVtbl->AddRef(d->outer);
+    else InterlockedIncrement(&d->refs);
     return S_OK;
 }
-static ULONG STDMETHODCALLTYPE d_addref(void *p) { return (ULONG)InterlockedIncrement(&dc_of(p)->refs); }
+static void d_free(Dc *d)
+{
+    if (d->ctx) d->ctx->lpVtbl->Release(d->ctx);
+    if (d->d3d) d->d3d->lpVtbl->Release(d->d3d);
+    if (d->d2d) d->d2d->lpVtbl->Release(d->d2d);
+    HeapFree(GetProcessHeap(), 0, d);
+}
+static ULONG STDMETHODCALLTYPE d_addref(void *p)
+{
+    Dc *d = dc_of(p);
+    return d->outer ? d->outer->lpVtbl->AddRef(d->outer) : (ULONG)InterlockedIncrement(&d->refs);
+}
 static ULONG STDMETHODCALLTYPE d_release(void *p)
 {
     Dc *d = dc_of(p);
+    if (d->outer) return d->outer->lpVtbl->Release(d->outer);
     LONG r = InterlockedDecrement(&d->refs);
-    if (!r) {
-        if (d->ctx) d->ctx->lpVtbl->Release(d->ctx);
-        if (d->d3d) d->d3d->lpVtbl->Release(d->d3d);
-        if (d->d2d) d->d2d->lpVtbl->Release(d->d2d);
-        HeapFree(GetProcessHeap(), 0, d);
-    }
+    if (!r) d_free(d);
     return (ULONG)r;
 }
-static HRESULT STDMETHODCALLTYPE d_commit(void *p) { (void)p; commit(); return S_OK; }
+void composition_wake(void);           /* (composition.c: its thread draws its targets again) */
+static HRESULT STDMETHODCALLTYPE d_commit(void *p)
+{
+    commit();
+    if (dc_of(p)->outer) composition_wake();      /* (its surfaces, drawn since, show in the compositor's visuals) */
+    return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE d_wait(void *p) { (void)p; return S_OK; }
 static HRESULT STDMETHODCALLTYPE d_stats(void *p, void *out)
 {
@@ -1130,6 +1147,45 @@ static HRESULT create(int version, IUnknown *rendering, const GUID *iid, void **
 DCOMPAPI HRESULT WINAPI DCompositionCreateDevice(IUnknown *dxgi, const GUID *iid, void **out) { return create(1, dxgi, iid, out); }
 DCOMPAPI HRESULT WINAPI DCompositionCreateDevice2(IUnknown *rendering, const GUID *iid, void **out) { return create(2, rendering, iid, out); }
 DCOMPAPI HRESULT WINAPI DCompositionCreateDevice3(IUnknown *rendering, const GUID *iid, void **out) { return create(3, rendering, iid, out); }
+
+/* The DirectComposition device a Windows.UI.Composition (or
+ * Microsoft.UI.Composition) compositor is as well, which the XAML
+ * framework's composition tree host asks its compositor for (NovaOS's
+ * CompositionHelper, userland/windows_ui_xaml/src/composition_helper.cpp):
+ * IDCompositionDevice, and IDCompositionDevice2 as IDCompositionDesktopDevice
+ * and IDCompositionDevice3, with no rendering device (surfaces come from
+ * its surface factories).  It is part of @outer: its references are
+ * @outer's, it answers @outer's interfaces and @outer frees it
+ * (dcomp_part_free). */
+void *dcomp_part_new(IUnknown *outer)
+{
+    Dc *d = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*d));
+    if (!d) return NULL;
+    d->v1 = g_v1_vtbl; d->desktop = g_desktop_vtbl; d->dev3 = g_dev3_vtbl;
+    d->version = 3;
+    d->outer = outer;
+    return d;
+}
+void dcomp_part_free(void *part) { if (part) d_free(part); }
+/* whether @iid is a device's interface (a compositor's dcomp_part_new answers it) */
+BOOL dcomp_part_iid(const GUID *iid)
+{
+    return novadx_same(iid, &NIID_IDCompositionDevice) || novadx_same(iid, &NIID_IDCompositionDevice2) ||
+           novadx_same(iid, &NIID_IDCompositionDesktopDevice) || novadx_same(iid, &NIID_IDCompositionDevice3);
+}
+HRESULT dcomp_part_qi(void *part, const GUID *iid, void **out) { return d_qi(part, iid, out); }
+
+/* @unk's pixels (BGRA, *pitch bytes a row) as last read back, when it is a
+ * surface of this dll's, and whether its alpha means nothing; NULL when it
+ * is not one or has not been drawn */
+const BYTE *dcomp_surface_frame(IUnknown *unk, UINT *pitch, UINT *w, UINT *h, BOOL *opaque)
+{
+    Surface *s = surface_of(unk);
+    if (!s || !s->frame) return NULL;
+    *w = s->w; *h = s->h; *pitch = s->w * 4;
+    *opaque = s->format == NDXGI_FORMAT_B8G8R8X8_UNORM;
+    return s->frame;
+}
 
 void composition_init(void);            /* (composition.c: Windows.UI.Composition) */
 

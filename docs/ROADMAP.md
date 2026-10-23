@@ -1183,9 +1183,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `ScrollContentPresenter` and `RootScrollViewer` (with
   `ScrollContentControl`, `SolidColorBrush` and the core's generated
   control classes), which a page set as a `Window`'s content is put in.
-  Left: the composition device the first frame asks for (NovaOS's
-  `CompositionHelper`, whose Windows App SDK original is closed), then
-  the page drawn, typed into and clicked.
+  First-frame part done: NovaOS's own `CompositionHelper` (the Windows
+  App SDK's is closed) on `dcomp.dll`, whose `Compositor` is now also
+  its DirectComposition device, and what the first frame makes after it
+  (the island's `FocusController`, the window's present target, the
+  popup, print, full-window media and transition roots' peers, the focus
+  event args); a page test window now runs to its checks.  Left: the
+  framework's control styles stop at `EntranceThemeTransition` (the theme
+  transitions' code, which 32.5's data binding part builds), so nothing
+  is laid out yet; then the page drawn, typed into and clicked.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

@@ -111,6 +111,16 @@ too.
 
 ## Display
 
+A thread that asks the SCSI controller for a read or write sleeps until
+the host's answer arrives (the "vmbus" thread wakes it), a tick at a time
+at most.  It used to poll the ring with the kernel lock held: on a
+Windows 11 host that starved every other thread for the length of a disk
+copy (the desktop's watchdog found it asleep for 3 s, the installer looked
+stuck at "Copying NovaOS", a blank disk's format took minutes), and when
+the vmbus thread was switched out in the middle of reading that ring, the
+poller waited for it with the lock it needed: the whole VM froze.  Waiting
+for a channel's reader now gives the CPU away too.
+
 `kernel/drivers/hv_video.c` drives Hyper-V's synthetic video device, so
 the resolution can be changed in Settings > Display like on a PC.  NovaOS
 starts on the firmware's frame buffer, then the driver agrees on a

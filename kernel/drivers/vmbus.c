@@ -660,9 +660,22 @@ static void read_channel(VmbusChannel *ch)
     if (any) signal_host(ch);
 }
 
+/* Wait for the channel's reader to finish.  A thread gives its CPU away
+ * (sched_yield lets the other CPUs into the kernel: the reader may be a
+ * thread switched out in the middle of the ring, which needs the kernel
+ * lock back to finish); before the scheduler runs, or with interrupts
+ * off, it spins */
+static void wait_reader(VmbusChannel *ch)
+{
+    while (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) {
+        if (interrupts_enabled() && sched_current()) sched_yield();
+        else pause_cpu();
+    }
+}
+
 void VmbusPollChannel(VmbusChannel *ch)
 {
-    while (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) pause_cpu();
+    wait_reader(ch);
     if (!__atomic_load_n(&ch->gone, __ATOMIC_ACQUIRE)) read_channel(ch);
     __atomic_store_n(&ch->reading, 0, __ATOMIC_RELEASE);
 }
@@ -691,7 +704,7 @@ static void rescind(UINT32 relid)
     if (i == g_nch) return;
     VmbusChannel *ch = g_ch[i];
     kprintf("[VMBUS] %s: removed by the host (channel %u)\n", ch->drv->name, relid);
-    while (__atomic_exchange_n(&ch->reading, 1, __ATOMIC_ACQUIRE)) pause_cpu();
+    wait_reader(ch);
     __atomic_store_n(&ch->gone, true, __ATOMIC_RELEASE);
     __atomic_store_n(&ch->reading, 0, __ATOMIC_RELEASE);
     g_ch[i] = g_ch[--g_nch];

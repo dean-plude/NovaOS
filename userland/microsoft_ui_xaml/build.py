@@ -189,10 +189,10 @@ def pages():
     return out
 
 
-# the markup the framework cannot make yet: data binding ({Binding}, the
-# Binding class and its expressions are not built: dxaml/lib's Binding_Partial
-# and BindingExpression); its resources are left out as an unbuilt type's are
-FRAMEWORK_LACKS = ('{Binding',)
+# the markup the framework cannot make yet, whose resources are left out as
+# an unbuilt type's are (none since data binding, {Binding}, built: step
+# 32.5's fourth part)
+FRAMEWORK_LACKS = ()
 
 
 def leave_out_unbuilt(text, types):

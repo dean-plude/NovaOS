@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The XAML UWP self-test's package (tools/appx/mkuwptest.py): winui2test.exe
+     as a UWP app (its entry point a Windows Runtime class, not
+     Windows.FullTrustApplication), so Application.Start takes the UWP path -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         IgnorableNamespaces="uap">
+  <Identity Name="NovaOS.XamlUwpTest"
+            Publisher="CN=NovaOS Package Test, OID.2.25.311729368913984317654407730594956997722=1"
+            Version="1.0.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>NovaOS XAML UWP Test</DisplayName>
+    <PublisherDisplayName>NovaOS</PublisherDisplayName>
+    <Logo>winui2test.exe</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="App" Executable="winui2test.exe" EntryPoint="Winui2Test.App">
+      <uap:VisualElements DisplayName="NovaOS XAML UWP Test" Description="The XAML UWP self-test's package"
+                          BackgroundColor="transparent" Square150x150Logo="winui2test.exe" Square44x44Logo="winui2test.exe" />
+    </Application>
+  </Applications>
+</Package>

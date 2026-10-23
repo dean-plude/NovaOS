@@ -8,6 +8,12 @@
 #include <windows.ui.core.h>
 namespace ABI { namespace Windows { namespace UI { namespace Core {
 typedef ABI::Windows::Foundation::ITypedEventHandler<CoreWindow *, CoreWindowEventArgs *> IWindowClosedEventHandler;
+// (and the other handlers a UWP app's CoreWindow wrapper subscribes with,
+// CoreWindowWrapper.cpp, as the internal windows.ui.core.corewindow-defs.h
+// names them)
+typedef ABI::Windows::Foundation::ITypedEventHandler<CoreWindow *, WindowActivatedEventArgs *> IWindowActivatedEventHandler;
+typedef ABI::Windows::Foundation::ITypedEventHandler<CoreWindow *, WindowSizeChangedEventArgs *> IWindowSizeChangedEventHandler;
+typedef ABI::Windows::Foundation::ITypedEventHandler<CoreWindow *, VisibilityChangedEventArgs *> IVisibilityChangedEventHandler;
 }}}}
 
 // and the gamepad key routing the framework's light-up code turns on at

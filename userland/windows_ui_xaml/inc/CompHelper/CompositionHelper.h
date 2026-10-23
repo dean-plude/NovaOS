@@ -7,9 +7,10 @@
  * and reclaims their memory, and reports batch ids and the largest texture
  * size.  DCompTreeHost holds it in a CompositionHelperHolder made when the
  * host initializes, and the helper tells the host through
- * INotifyCompositionDirty when composition needs a commit.  Declared here as XAML calls it; NovaOS defines it on
- * its Windows.UI.Composition (userland/dcomp) when the composition tree
- * builds. */
+ * INotifyCompositionDirty when composition needs a commit.  Declared here
+ * as XAML calls it; NovaOS's own definition (src/composition_helper.cpp)
+ * is on its Windows.UI.Composition (userland/dcomp), whose compositor is
+ * the DirectComposition device as well. */
 #pragma once
 #include <windows.h>
 #include <dcomp.h>
@@ -56,6 +57,15 @@ public:
     void ReleaseGraphicsResources();
     void ReleaseObjectsForClosedDevice();
     void CloseAndReleaseInteropCompositor();
+
+private:
+    friend class CompositionHelperHolder;
+    _Check_return_ HRESULT Initialize();
+
+    IDCompositionDevice2 *m_device = nullptr;           // the compositor, as its DirectComposition device
+    IDCompositionSurfaceFactory *m_factory = nullptr;
+    IUnknown *m_renderingDevice = nullptr;              // what m_factory was made on
+    ULONG m_batch = 1;                                  // (one a Flush)
 };
 
 // DCompTreeHost's CompositionHelper, made by Initialize

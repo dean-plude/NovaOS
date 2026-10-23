@@ -717,15 +717,38 @@ vendors.
      `CRootScrollViewer`, `CScrollContentPresenter` and the rest; the
      core's `CScrollViewer` was already built).  DirectManipulation and the
      scroll bars stay unbuilt: the root's scrolling is off.
-   - *Left:* the first frame then asks the composition tree host for its
-     device (`DCompTreeHost::EnsureDCompDevice`), made by a
-     `CompositionHelper` the Windows App SDK ships closed
-     (`inc/CompHelper/CompositionHelper.h` declares it).  Its main device
-     is both a DirectComposition `IDCompositionDevice2` (`Commit`,
-     `WaitForCommitCompletion`) and the Microsoft.UI.Composition
-     `Compositor` XAML's visuals are made on, so NovaOS's has to join
-     `dcomp.dll`'s two halves.  Then the page drawn, typed into and
-     clicked.  The page test that waits on it is kept for that part.
+   - *Sixth part, the composition device and the first frame.*  The
+     first frame asks the composition tree host for its device
+     (`DCompTreeHost::EnsureDCompDevice`), made by a `CompositionHelper`
+     the Windows App SDK ships closed (`inc/CompHelper/CompositionHelper.h`
+     declares it).  Its main device is both a DirectComposition
+     `IDCompositionDevice2` (`Commit`, `GetFrameStatistics`, surface
+     factories) and the Microsoft.UI.Composition `Compositor` XAML's
+     visuals are made on, so `dcomp.dll` joins its two halves: a
+     `Compositor` answers `IDCompositionDevice`, `IDCompositionDevice2`
+     and `3` as well (a DirectComposition device that is part of it, with
+     its references and identity), and a `Commit` of that device has the
+     compositor draw again.  NovaOS's `CompositionHelper`
+     (`src/composition_helper.cpp`) makes a `Compositor` and keeps it as
+     that device; the surfaces XAML draws into come from the device's
+     surface factory on XAML's Direct3D 11 / Direct2D device and are shown
+     in visuals through `dcomp.dll`'s `NovaCompositionSurfaceForDComp`
+     (a DirectComposition surface as an `ICompositionSurface`).  After it
+     the first frame builds the island's `FocusController`
+     (`components/UIBridgeFocus`), the window's `WindowsPresentTarget`,
+     the peers of the popup, print, full-window media and transition roots
+     and of `Canvas`, the focus event args with their `EventArgs` base,
+     `XamlSourceFocusNavigationRequest`, the core transforms' base
+     `CTransform`, and Microsoft's `DependencyObjectAbstractionHelpers`
+     in place of the test stubs that answered "no peer".
+   - *Left:* the page test's window now runs to its checks, but the
+     framework's control styles fail to load at `EntranceThemeTransition`
+     (its `PrepareState` is in the theme transitions' code,
+     `LayoutTransition_partial.cpp` with `ThemeGenerator`, which 32.5's
+     data binding part builds), so nothing is laid out; and
+     `Window.Close` then crashes in `WindowChrome::OnContentChanged`.
+     Then the page drawn, typed into and clicked.  The page test is kept
+     for that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

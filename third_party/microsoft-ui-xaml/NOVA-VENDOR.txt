@@ -178,6 +178,16 @@ components/style (CStyle, OptimizedStyle); core/controls/generated
 types such as the theme transitions); and win/agcore.debug/CommonErrors.rc
 (the parser's error texts, turned into a table at build time).
 
+For the first frame (step 32.4): components/UIBridgeFocus whole (the
+island's FocusController and its navigation results and event args, with
+Microsoft.UI.Xaml.UIBridgeFocus.vcxproj), plat/win/desktop's
+windowspresenttarget.cpp, components/transforms' Transform.cpp with its lib
+project, dxaml/lib's DependencyObjectAbstractionHelpers.cpp,
+FrameworkEventArgs.cpp and the PopupRoot, FullWindowMediaRoot,
+GettingFocusEventArgs, LosingFocusEventArgs and
+XamlSourceFocusNavigationRequest partial classes, with the generated
+classes of those and of Canvas, PrintRoot and TransitionRoot.
+
 For the animation (step 32.5 part 5): core/animation whole (with the
 time manager vendored before), components/animation with its project
 (lib/Microsoft.UI.Xaml.Animation.vcxproj), and dxaml/lib's

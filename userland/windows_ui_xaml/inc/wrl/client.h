@@ -213,6 +213,17 @@ inline HRESULT AsWeak(IUnknown *unk, WeakRef *pWeakRef) throw()
     return hr;
 }
 
+// (an object of several interfaces, which this calls QueryInterface on
+// itself, as WRL's AsWeak does: FocusController's Init)
+template <class T> HRESULT AsWeak(T *p, WeakRef *pWeakRef) throw()
+{
+    ComPtr<IWeakReferenceSource> src;
+    *pWeakRef = nullptr;
+    HRESULT hr = p->QueryInterface(__uuidof(IWeakReferenceSource), reinterpret_cast<void **>(src.GetAddressOf()));
+    if (FAILED(hr)) return hr;
+    return AsWeak(static_cast<IUnknown *>(src.Get()), pWeakRef);
+}
+
 template <class T> HRESULT ComPtr<T>::AsWeak(WeakRef *pWeakRef) const throw()
 {
     return ::Microsoft::WRL::AsWeak(ptr_, pWeakRef);

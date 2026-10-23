@@ -194,3 +194,10 @@
 #include <XamlBehaviorMode.h>
 
 #include "MUX-ETWEvents.h"
+
+// (MSHTML's present notify site, which a windowed present target holds
+// when a hosting site gives one (windowspresenttarget.cpp counts it); the
+// desktop window gives none, so only IUnknown's members are used)
+struct IViewObjectPresentNotifySite : public IUnknown
+{
+};

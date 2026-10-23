@@ -38,7 +38,10 @@
  * as well); property sets (an object's Properties, CreatePropertySet); key
  * frame animations run by the compositor's thread, animation groups,
  * scoped and commit batches, easing functions (and their statics) and
- * rectangle clips.
+ * rectangle clips.  A compositor is a DirectComposition device as well
+ * (dcomp.c's dcomp_part_new), as the XAML framework's composition tree
+ * host has it, and DirectComposition surfaces can be shown in its surface
+ * brushes (NovaCompositionSurfaceForDComp).
  *
  * Not implemented: expression animations' expressions (they are accepted,
  * held on their property and stopped, not evaluated), implicit
@@ -174,6 +177,8 @@ struct Obj {
     BOOL drawing;
     RECT update;
     INovaSwapChain *chain;              /* (counted) */
+    IUnknown *dsurf;                    /* a surface's DirectComposition surface (counted) */
+    void *dcomp;                        /* the compositor's DirectComposition device (dcomp.c's dcomp_part_new), or NULL */
     /* property sets */
     Prop *propv;
     int nprops, capprops;
@@ -323,10 +328,24 @@ static int find_slot(const Iface *f, REFIID iid)
         if ((f->iid->Data1 | f->iid->Data2 | f->iid->Data3) && IsEqualGUID(iid, f->iid))   /* (none: GUID_NULL) */ return f->slot;
     return -1;
 }
+void *dcomp_part_new(IUnknown *outer);  /* (dcomp.c) */
+void dcomp_part_free(void *part);
+BOOL dcomp_part_iid(const GUID *iid);
+HRESULT dcomp_part_qi(void *part, const GUID *iid, void **out);
+const BYTE *dcomp_surface_frame(IUnknown *unk, UINT *pitch, UINT *w, UINT *h, BOOL *opaque);
 static HRESULT obj_qi(Obj *o, REFIID iid, void **out)
 {
     if (!out) return E_POINTER;
     *out = 0;
+    /* a compositor is a DirectComposition device too (made when first asked
+     * for), as the XAML framework's composition tree host has it */
+    if (o->kind == K_COMPOSITOR && dcomp_part_iid(iid)) {
+        lock();
+        if (!o->dcomp) o->dcomp = dcomp_part_new((IUnknown *)IF(o, 0));
+        void *part = o->dcomp;
+        unlock();
+        return part ? dcomp_part_qi(part, iid, out) : E_OUTOFMEMORY;
+    }
     if (IsEqualGUID(iid, &IID_INovaCompositionObject)) { *out = o; obj_addref(o); return S_OK; }
     int slot = -1;
     if (IsEqualGUID(iid, &IID_IUnknown_) || IsEqualGUID(iid, &IID_IInspectable_) || IsEqualGUID(iid, &IID_IAgileObject_))
@@ -552,6 +571,7 @@ static const BYTE *surface_pixels(Obj *s, UINT *pitch, UINT *w, UINT *h, BOOL *o
         *opaque = s->alpha == 3 || s->format == NDXGI_FORMAT_B8G8R8X8_UNORM;
         return s->frame;
     }
+    if (s->kind == K_CHAIN_SURFACE && s->dsurf) return dcomp_surface_frame(s->dsurf, pitch, w, h, opaque);
     if (s->kind == K_CHAIN_SURFACE && s->chain) {
         *opaque = TRUE;                 /* (a swap chain's frames are shown opaque) */
         return s->chain->lpVtbl->Frame(s->chain, pitch, w, h);
@@ -780,6 +800,8 @@ static void obj_free(Obj *o)
     HeapFree(GetProcessHeap(), 0, o->pic);
     HeapFree(GetProcessHeap(), 0, o->frame);
     if (o->chain) o->chain->lpVtbl->Release(o->chain);
+    if (o->dsurf) o->dsurf->lpVtbl->Release(o->dsurf);
+    dcomp_part_free(o->dcomp);
     if (o->tex) o->tex->lpVtbl->Release(o->tex);
     if (o->staging) o->staging->lpVtbl->Release(o->staging);
     if (o->dc) novadx_d2d_end(o->dc);
@@ -2704,6 +2726,34 @@ COMP_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     return CLASS_E_CLASSNOTAVAILABLE;
 }
 COMP_API HRESULT WINAPI DllCanUnloadNow(void) { return S_FALSE; }
+
+/* (dcomp.c: a commit of a compositor's DirectComposition device, after
+ * which its surfaces show what was drawn into them) */
+void composition_wake(void) { schedule(); }
+
+/* @surface (a DirectComposition surface of dcomp.c's) as an
+ * ICompositionSurface of the compositor @compositor (any of its
+ * interfaces) for surface brushes, in Windows.UI.Composition's namespace
+ * (@ms 0) or Microsoft.UI.Composition's (1): what the XAML framework's
+ * composition tree host draws its elements' content into
+ * (userland/windows_ui_xaml/src/composition_helper.cpp); NULL: an empty
+ * one */
+COMP_API HRESULT WINAPI NovaCompositionSurfaceForDComp(IUnknown *compositor, IUnknown *surface, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *c = 0;
+    if (!compositor || FAILED(compositor->lpVtbl->QueryInterface(compositor, &IID_INovaCompositionObject, (void **)&c)) || !c)
+        return E_INVALIDARG;
+    if (c->kind != K_COMPOSITOR) { obj_release(c); return E_INVALIDARG; }
+    Obj *s = obj_new(c, K_CHAIN_SURFACE);
+    obj_release(c);
+    if (!s) return E_OUTOFMEMORY;
+    s->vt[0] = co_vt; s->vt[1] = closable_vt; s->vt[2] = empty2_vt;
+    if (surface) { s->dsurf = surface; surface->lpVtbl->AddRef(surface); }
+    *out = IF(s, 2);
+    return S_OK;
+}
 
 void composition_init(void)
 {

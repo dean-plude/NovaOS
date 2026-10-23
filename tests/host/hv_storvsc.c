@@ -19,7 +19,26 @@ void kfree(void *p) { free(p); }
 void *kernel_alloc_pages(size_t n) { void *p = aligned_alloc(4096, n * 4096); memset(p, 0, n * 4096); return p; }
 void udelay(UINT64 us) { (void)us; }
 void sched_yield(void) {}
-Thread *sched_current(void) { return NULL; }
+static Thread  asker;                       /* the thread in request() once the scheduler runs */
+static Thread *current;
+static int     sleeps, wakes, late;         /* (late: the host answers only once the asker sleeps) */
+Thread *sched_current(void) { return current; }
+uint64_t sched_ticks(void) { return 0; }
+uint64_t g_tsc_per_tick;
+void sched_unblock(Thread *t) { assert(t == &asker); wakes++; }
+void sched_sleep_until(volatile uint32_t *flag, uint64_t deadline)
+{
+    (void)deadline;
+    sleeps++;
+    if (!late || *flag) return;
+    late = 0;                               /* the vmbus thread reads the answer meanwhile */
+    Thread *was = current;
+    current = NULL;
+    void VmbusPollChannel(VmbusChannel *ch);
+    VmbusPollChannel(NULL);
+    current = was;
+    assert(*flag && wakes == 1);
+}
 
 /* ---- the fake host ---- */
 #define DISK_SECTORS 2048
@@ -151,7 +170,7 @@ bool VmbusSendGpa(VmbusChannel *ch, const void *data, UINT32 len, UINT64 trans_i
 void VmbusPollChannel(VmbusChannel *ch)
 {
     (void)ch;
-    if (!have_pending || silent) return;
+    if (!have_pending || silent || late) return;   /* (late: not before the asker sleeps) */
     have_pending = false;
     HvStorageDriver.completion(ctx, (const UINT8 *)&pending, sizeof(pending), pending_id);
 }
@@ -209,6 +228,18 @@ int main(void)
     assert(d->read(d, 1000, 300, back) && !memcmp(back, data, sizeof(data)));
     assert(d->flush(d));
     puts("read, write and flush passed");
+
+    /* With the scheduler running, the asker sleeps until the answer
+     * comes (the vmbus thread wakes it) rather than spinning */
+    current = &asker;
+    sleeps = wakes = 0;
+    late = 1;
+    assert(d->read(d, 1000, 1, back) && !memcmp(back, data, 512));
+    assert(sleeps == 1 && wakes == 1 && !ctx->waiter);
+    sleeps = wakes = 0;
+    assert(d->read(d, 1000, 1, back) && !sleeps && !wakes);   /* (already answered when polled: no sleep) */
+    current = NULL;
+    puts("a sleeping asker passed");
 
     UINT8 bus[64] = { VSTOR_ENUMERATE_BUS };                /* the host's own packets: logged */
     HvStorageDriver.packet(ctx, bus, sizeof(bus), 0);

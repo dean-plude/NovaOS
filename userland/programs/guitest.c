@@ -248,6 +248,19 @@ static int run_auto(HWND h, HACCEL acc)
     SendMessageW(h, WM_COMMAND, IDC_PROPS, 0);
     CHECK("PropertySheet PSN_APPLY", g_applied >= 1);
 
+    /* CW_USEDEFAULT is for overlapped windows: a popup's position and size
+     * are 0 (WiX Burn's visible 0 x 0 engine window, which must not cover
+     * the installer's own window) */
+    HWND pop = CreateWindowExW(WS_EX_NOACTIVATE, L"Static", NULL, WS_POPUP | WS_VISIBLE, CW_USEDEFAULT, SW_SHOWNA, 0, 0, NULL, NULL, g_inst, NULL);
+    RECT pr = { 1, 1, 1, 1 };
+    CHECK("popup CW_USEDEFAULT", pop && GetWindowRect(pop, &pr) && pr.left == 0 && pr.top == 0 && pr.right == 0 && pr.bottom == 0);
+    if (pr.right || pr.bottom) printf("guitest: the popup is at %ld,%ld-%ld,%ld\n", pr.left, pr.top, pr.right, pr.bottom);
+    if (pop) DestroyWindow(pop);
+    pop = CreateWindowExW(0, L"Static", NULL, WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, g_inst, NULL);
+    SetRect(&pr, 1, 1, 1, 1);
+    CHECK("popup CW_USEDEFAULT size", pop && GetWindowRect(pop, &pr) && pr.right - pr.left == 0 && pr.bottom - pr.top == 0);
+    if (pop) DestroyWindow(pop);
+
     DestroyWindow(h);
     CHECK("DestroyWindow", !IsWindow(h));
     printf("guitest: %d passed, %d failed\n", g_pass, g_fail);

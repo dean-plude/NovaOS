@@ -748,6 +748,10 @@ void top_sync_from_kernel(Wnd *w, int sized)
     POINT nb;
     int nw, nh;
     dpi_from_kernel(w, r, dpi_k(w), &nr, &nb, &nw, &nh);
+    /* the desktop's windows are at least 1 x 1: an empty one stays empty
+     * here, as on Windows (WiX Burn's visible 0 x 0 engine window) */
+    if (old.right == old.left && nr.right - nr.left == 1) nr.right = nr.left;
+    if (old.bottom == old.top && nr.bottom - nr.top == 1) nr.bottom = nr.top;
     w->rect = nr;
     w->bmp = nb;
     int resized = nw != w->bw || nh != w->bh;
@@ -1016,6 +1020,11 @@ static HWND create_window(DWORD ex, WClass *cls, LPCWSTR title, DWORD style, int
         RECT wa;
         work_area(&wa);
         int ww = wa.right - wa.left, wh = wa.bottom - wa.top;
+        if (style & WS_POPUP) {                             /* CW_USEDEFAULT is for overlapped windows: a popup's is 0 */
+            if (x == CW_USEDEFAULT) x = y = 0;
+            if (cx == CW_USEDEFAULT) cx = cy = 0;
+            if (cy == CW_USEDEFAULT) cy = 0;                /* (WiX Burn's visible 0 x 0 engine window) */
+        }
         if (cx == CW_USEDEFAULT || (x == CW_USEDEFAULT && cx <= 0)) { cx = ww * 3 / 4; cy = wh * 3 / 4; }
         if (cy == CW_USEDEFAULT) cy = wh * 3 / 4;
         if (x == CW_USEDEFAULT) {

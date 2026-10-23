@@ -1,1 +1,1 @@
-| `guitest auto` | user32 and comctl32: menus, accelerators, edit and list boxes, a resource dialog, a message box, a property sheet |
+| `guitest auto` | user32 and comctl32: menus, accelerators, edit and list boxes, a resource dialog, a message box, a property sheet, and `CW_USEDEFAULT` on a popup (position and size 0, as WiX Burn's engine window needs) |

@@ -61,6 +61,8 @@ bool PersistPanicWrite(const char *text, UINT32 len);
 
 /* A FAT (DOS) date and time as a FILETIME (100 ns since 1601) */
 UINT64 PersistDosToFiletime(UINT32 dos);
+/* A FILETIME as a FAT date and time (0 for 0) */
+UINT32 PersistFiletimeToDos(UINT64 ft);
 
 /* For the installer (fs/setup.c) */
 #include "fat.h"

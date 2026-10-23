@@ -768,10 +768,17 @@ def ntfs_disk(path, label, mb=128, files=()):
 def ntfs_boot(work):
     """A second disk with a fresh, empty NTFS volume from 1 MiB, labelled
     NOVATEST (ntfs_disk): drive D:, read-write.  It stays in work/ntfs.img
-    for the tests' check once QEMU has quit (tests/selftest/devices/ntfs)"""
+    for the tests' check once QEMU has quit (tests/selftest/devices/ntfs).
+    A third disk is one FAT32 volume, NOVAFAT, with no partition table:
+    drive E:, read-write"""
     disk = os.path.join(work, 'ntfs.img')
     ntfs_disk(disk, 'NOVATEST')
-    return ['-drive', f'format=raw,file={disk}'], []
+    fat = os.path.join(work, 'fat.img')
+    if os.path.exists(fat):
+        os.unlink(fat)
+    mkfs = shutil.which('mkfs.fat') or '/usr/sbin/mkfs.fat'
+    subprocess.run([mkfs, '-F', '32', '-n', 'NOVAFAT', '-C', fat, str(128 << 10)], check=True, stdout=subprocess.DEVNULL)
+    return ['-drive', f'format=raw,file={disk}', '-drive', f'format=raw,file={fat}'], []
 
 
 def diskmgr_boot(work):

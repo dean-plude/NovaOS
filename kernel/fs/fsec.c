@@ -250,6 +250,7 @@ static bool inherit(const RamNode *n, const UINT8 *from_dacl, int depth, UINT8 *
  * goes in @buf).  False if out of room. */
 static bool view_of(RamNode *n, View *v, UINT8 *buf)
 {
+    RamfsLoadSecurity(n);                                       /* (on a mounted volume: what it keeps) */
     if (n->sd) { parse(n->sd, v); return true; }
     memset(v, 0, sizeof(*v));
     v->owner = g_user;
@@ -267,7 +268,7 @@ static bool view_of(RamNode *n, View *v, UINT8 *buf)
     int depth = 1;
     RamNode *a = n->parent;
     const UINT8 *from = NULL;
-    for (; a->parent && !a->sd && !(from = builtin_dacl(a)); a = a->parent) depth++;
+    for (; RamfsLoadSecurity(a), a->parent && !a->sd && !(from = builtin_dacl(a)); a = a->parent) depth++;
     if (from) {                                                 /* below a system folder: its owner too */
         v->owner = g_trusted_installer;
         return inherit(n, from, depth, buf, DACL_MAX, &v->dacl);
@@ -314,8 +315,7 @@ bool FsecShareFolder(RamNode *n)
     kfree(n->sd);
     n->sd = sd;
     n->sdlen = need;
-    RamfsMarkChanged(n);
-    return true;
+    return RamfsSecurityChanged(n);
 }
 
 bool FsecSet(RamNode *n, UINT32 info, const void *sd, UINT32 len)
@@ -339,6 +339,5 @@ bool FsecSet(RamNode *n, UINT32 info, const void *sd, UINT32 len)
     kfree(n->sd);
     n->sd = nsd;
     n->sdlen = need;
-    RamfsMarkChanged(n);
-    return true;
+    return RamfsSecurityChanged(n);
 }

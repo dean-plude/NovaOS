@@ -35,10 +35,33 @@ static bool ntfs_list(void *vol, UINT64 ref, bool (*add)(const RamfsExtEntry *e,
 static bool ntfs_size(void *vol, UINT64 ref, UINT64 *size) { return NtfsSize(vol, ref, size); }
 static bool ntfs_read(void *vol, UINT64 ref, UINT64 off, void *buf, UINT64 len) { return NtfsRead(vol, ref, off, buf, len); }
 
+/* A record whose descriptor is the root's inherits, as drive C: saves them
+ * (fs/persist.c): its own descriptor is any other one */
+static bool ntfs_security(void *vol, UINT64 ref, void *buf, UINT32 cap, UINT32 *len)
+{
+    UINT32 id = NtfsSecurityId(vol, ref);
+    if (!id || (ref != NTFS_ROOT && id == NtfsSecurityId(vol, NTFS_ROOT))) return false;
+    return NtfsSecurityById(vol, id, buf, cap, len);
+}
+static bool ntfs_set_security(void *vol, UINT64 ref, const void *sd, UINT32 len)
+{
+    UINT32 id = sd ? NtfsAddSecurity(vol, sd, len) : NtfsSecurityId(vol, NTFS_ROOT);   /* (the root's may be 0) */
+    return (id || !sd) && NtfsSetSecurityId(vol, ref, id) && NtfsSync(vol);
+}
+static bool ntfs_set_info(void *vol, UINT64 ref, UINT64 ctime, UINT64 mtime, UINT32 attrs)
+{
+    if (ref == NTFS_ROOT) return true;            /* (the root's are the volume's own) */
+    return NtfsSetInfo(vol, ref, ctime, mtime, attrs) && NtfsSync(vol);
+}
+
 static bool ntfs_create(void *vol, UINT64 dir, const char *name, bool is_dir, UINT64 *ref)
 {
     g_ops++;
-    return NtfsCreate(vol, dir, name, is_dir, ref) && NtfsSync(vol);
+    if (!NtfsCreate(vol, dir, name, is_dir, ref)) return false;
+    /* (NTFS gives it its folder's descriptor: a new node inherits instead) */
+    UINT32 root = NtfsSecurityId(vol, NTFS_ROOT);         /* (0 on a volume whose root keeps its own, as mkntfs makes) */
+    if (NtfsSecurityId(vol, *ref) != root) NtfsSetSecurityId(vol, *ref, root);
+    return NtfsSync(vol);
 }
 static bool ntfs_remove(void *vol, UINT64 dir, UINT64 ref, const char *name)
 {
@@ -70,10 +93,10 @@ static bool ntfs_fits(void *vol, UINT64 len) { return NtfsFits(vol, len); }
 static bool ntfs_can_write(void *vol, UINT64 ref) { return NtfsCanWrite(vol, ref); }
 
 static const RamfsSource g_ntfs_source = { ntfs_list, ntfs_size, ntfs_read, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL, ntfs_links, ntfs_names, NULL };
+                                           NULL, ntfs_links, ntfs_names, NULL, NULL, ntfs_security, NULL };
 static const RamfsSource g_ntfs_rw_source = { ntfs_list, ntfs_size, ntfs_read, ntfs_create, ntfs_remove,
                                               ntfs_rename, ntfs_write, ntfs_free, ntfs_can_write, ntfs_link, ntfs_links,
-                                              ntfs_names, ntfs_fits };
+                                              ntfs_names, ntfs_fits, ntfs_set_info, ntfs_security, ntfs_set_security };
 
 typedef struct { bool (*add)(const RamfsExtEntry *e, void *ctx); void *ctx; } ListCtx;
 
@@ -142,7 +165,8 @@ static bool fat_one(const FatEntry *e, void *ctx)
     x.dir = e->dir;
     x.ref = ref;
     x.size = e->size;
-    x.ctime = x.mtime = PersistDosToFiletime(e->wtime);
+    x.mtime = PersistDosToFiletime(e->wtime);
+    x.ctime = e->ctime ? PersistDosToFiletime(e->ctime) : x.mtime;
     x.attrs = e->attr & 0x27u;
     return c->l.add(&x, c->l.ctx);
 }
@@ -222,15 +246,28 @@ static bool fat_remove(void *vol, UINT64 dir, UINT64 ref, const char *name)
     return fat_dir(s, dir, &dc) && FatDelete(s->v, dc, name) && FatSync(s->v);
 }
 
-/* (in its directory only: FAT has no moving an entry elsewhere here) */
+/* (a directory keeps its cluster, so what it holds keeps its refs) */
 static bool fat_rename(void *vol, UINT64 dir, UINT64 ref, const char *old_name, UINT64 to, const char *name)
 {
     FatSrc *s = vol;
-    UINT32 dc;
+    UINT32 dc, tc;
     g_ops++;
-    if (dir != to || !ref || ref > s->n || !fat_dir(s, dir, &dc)) return false;
-    FatSetStamp(s->v, 0);
-    return FatRename(s->v, dc, old_name, name) && FatSync(s->v) && fat_refresh(s, ref, name);
+    if (!ref || ref > s->n || !fat_dir(s, dir, &dc) || !fat_dir(s, to, &tc)) return false;
+    if (!FatMove(s->v, dc, old_name, tc, name) || !FatSync(s->v)) return false;
+    s->parent[ref - 1] = tc;
+    return fat_refresh(s, ref, name);
+}
+
+static bool fat_set_info(void *vol, UINT64 ref, UINT64 ctime, UINT64 mtime, UINT32 attrs)
+{
+    FatSrc *s = vol;
+    if (!ref) return true;                        /* (the root directory has no entry) */
+    if (ref > s->n) return false;
+    char name[FAT_NAME_MAX];
+    strncpy(name, s->ents[ref - 1].name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = 0;
+    return FatSetInfo(s->v, s->parent[ref - 1], name, (UINT8)attrs, PersistFiletimeToDos(ctime),
+                      PersistFiletimeToDos(mtime)) && FatSync(s->v) && fat_refresh(s, ref, name);
 }
 
 static bool fat_write(void *vol, UINT64 ref, const void *data, UINT64 len)
@@ -248,9 +285,10 @@ static bool fat_write(void *vol, UINT64 ref, const void *data, UINT64 len)
 static UINT64 fat_free(void *vol) { return FatFreeBytes(((FatSrc *)vol)->v); }
 static bool fat_fits(void *vol, UINT64 len) { return len <= 0xFFFFFFFFull && len <= fat_free(vol); }
 
-static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+static const RamfsSource g_fat_source = { fat_list, fat_size, fat_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                          NULL, NULL, NULL };
 static const RamfsSource g_fat_rw_source = { fat_list, fat_size, fat_read, fat_create, fat_remove, fat_rename, fat_write,
-                                             fat_free, NULL, NULL, NULL, NULL, fat_fits };
+                                             fat_free, NULL, NULL, NULL, NULL, fat_fits, fat_set_info, NULL, NULL };
 
 static void fat_src_free(FatSrc *s)
 {

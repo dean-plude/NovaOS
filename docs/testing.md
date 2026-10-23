@@ -301,73 +301,74 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   EnableTrace, QueryAllTraces, OpenTrace, ProcessTrace, CloseTrace; 64-
   and 32-bit), `qtwebtest` (the calls Qt WebEngine imports: Bluetooth
   and SDP records, Direct3D 12, WinUSB, AppContainer profiles, proxy
-  resolver, security zones and more; 64- and 32-bit), `cachetest` (saved
-  files of drive C: let go of and read back from the data disk: memory,
-  ReadFile, a mapped view, renamed, hard-linked and emptied files,
-  `shutdown /r`, `cachetest after`), `qtthemetest`
-  (Windows.UI.ViewManagement UISettings and UIViewSettings as Qt reads
-  them, ColorValuesChanged, Schannel's cipher suites; 64- and 32-bit),
-  `samplertest` (a sampling profiler: GetThreadContext of a waiting
-  thread, unwound with RtlVirtualUnwind), `hwcheck` touchpad interrupt:
-  a modelled Intel GPIO controller from the ACPI tables, its interrupt
-  routed, the touchpad's GpioInt pin set up and its reports read on the
-  interrupt instead of polling, `proclisttest` (another program's image
-  name, user and command line, as Edge Update looks for its install
-  worker; 64- and 32-bit), `rawtest` (the mouse and the keyboard through
-  Raw Input: device list, names and info; WM_INPUT with relative motion,
-  button flags and the wheel; keys through GetRawInputBuffer with
-  RIDEV_NOLEGACY; 64- and 32-bit), `libmtest` (the 32-bit C runtime's
-  `_libm_sse2_*` and `_CI*` math, which MSVC-built SDL2 imports),
-  `warptest` (SetCursorPos and ClipCursor: the pointer moved and
-  confined by the window in front, WM_MOUSEMOVE but no WM_INPUT for a
-  warp, the mouse kept in the rectangle, a background process refused;
-  64- and 32-bit), `wvsetuptest` (a 300 MB file mapped whole, wer.dll's
-  report API and FlsGetValue2, as the WebView2 runtime's setup needs;
-  64- and 32-bit), `wvstarttest` (COM's apartment in the TEB,
-  TerminateProcess on itself, FLS slots and the functions the WebView2
-  runtime's browser process calls), `xpwin` (windows of different
-  processes: SetParent, SetWindowPos, ShowWindow and messages across
-  processes, GetDC on another process's window; 64- and 32-bit),
-  `dcomptest` (Direct3D without a GPU as Chromium's software compositor
-  uses it: the Basic Render Driver adapter, a WARP device,
-  DirectComposition showing a swap chain, dirty-rectangle presents, a
-  GPU process's window parented in another process's; 64- and 32-bit),
-  `schanneltest stores` (a certificate found through a collection of
-  collections, a root's extended key usages, and
-  `InternetGetConnectedState` offline without a network; 64- and
-  32-bit), driver packages staged in the driver store and published as
-  oemN.inf from a program (`DiInstallDriver`, `SetupCopyOEMInf`), with
-  `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`),
-  `imgsharetest` (a second process of a running program shares its image
-  pages from the image cache; 64- and 32-bit; a commit of 15/16 of the
-  RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on x64 and
-  `_chkstk` on x86, and its half-precision conversions, which LLVM's JIT
-  in Mesa looks up), `avxtest` (the AVX state: CPUID's OSXSAVE, AVX and
-  F16C and XCR0 as the kernel sets them, YMM0-15 kept across context
-  switches, in an exception's `CONTEXT_XSTATE` and through `NtContinue`,
-  and read from a suspended thread by `GetThreadContext`), `tpwaittest`
-  (thread-pool waits: a wait calls back once per signal or on its
-  timeout, a callback sets its own wait again, setting a wait never
-  waits for a running callback, cancelling and closing from a callback;
-  64- and 32-bit), Task Manager opened with Ctrl+Shift+Esc: `winhello`
-  listed, selected by typing its name and ended with Delete; the
-  Performance, Details and Services views, `evtlogtest` (ReportEvent,
-  ReadEventLog, EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot,
-  service, driver-failure and crash events) and Event Viewer from the
-  Start menu finding its event, Calculator (Windows Calculator's
-  CalcManager engine) from the Start menu: Standard, Scientific
-  (precedence, x^y, 25!) and Programmer (hexadecimal, AND) answers to
-  typed expressions, `dostest` (MS-DOS 4.00 boots in a console window on
-  ntvdm.exe's real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR,
-  F12 gives the screen back; a DOS .COM run from cmd by name and a DOS
-  .EXE from CreateProcess read and write files on drive C: and return
-  their exit code; the DOS game bootRogue draws its dungeon straight
-  into video memory, takes arrow keys and ends on Esc), `kmttest` (the
-  WDDM graphics kernel's D3DKMT* calls on NovaOS's Basic Render adapter,
-  step 3 of docs/design/intel-gpu.md: adapters by LUID, devices,
-  allocations counted as video memory and mapped by `D3DKMTLock2`,
-  monitored fences signalled and waited on from the CPU, with an event
-  or another thread), `accounttest` (local accounts:
+  resolver, security zones and more; 64- and 32-bit), `cachetest` (C:
+  reports the data disk's FAT32 and size; saved files of drive C: let go
+  of and read back from the data disk: memory, ReadFile, a mapped view,
+  renamed, hard-linked and emptied files, `shutdown /r`, `cachetest
+  after`), `qtthemetest` (Windows.UI.ViewManagement UISettings and
+  UIViewSettings as Qt reads them, ColorValuesChanged, Schannel's cipher
+  suites; 64- and 32-bit), `samplertest` (a sampling profiler:
+  GetThreadContext of a waiting thread, unwound with RtlVirtualUnwind),
+  `hwcheck` touchpad interrupt: a modelled Intel GPIO controller from
+  the ACPI tables, its interrupt routed, the touchpad's GpioInt pin set
+  up and its reports read on the interrupt instead of polling,
+  `proclisttest` (another program's image name, user and command line,
+  as Edge Update looks for its install worker; 64- and 32-bit),
+  `rawtest` (the mouse and the keyboard through Raw Input: device list,
+  names and info; WM_INPUT with relative motion, button flags and the
+  wheel; keys through GetRawInputBuffer with RIDEV_NOLEGACY; 64- and
+  32-bit), `libmtest` (the 32-bit C runtime's `_libm_sse2_*` and `_CI*`
+  math, which MSVC-built SDL2 imports), `warptest` (SetCursorPos and
+  ClipCursor: the pointer moved and confined by the window in front,
+  WM_MOUSEMOVE but no WM_INPUT for a warp, the mouse kept in the
+  rectangle, a background process refused; 64- and 32-bit),
+  `wvsetuptest` (a 300 MB file mapped whole, wer.dll's report API and
+  FlsGetValue2, as the WebView2 runtime's setup needs; 64- and 32-bit),
+  `wvstarttest` (COM's apartment in the TEB, TerminateProcess on itself,
+  FLS slots and the functions the WebView2 runtime's browser process
+  calls), `xpwin` (windows of different processes: SetParent,
+  SetWindowPos, ShowWindow and messages across processes, GetDC on
+  another process's window; 64- and 32-bit), `dcomptest` (Direct3D
+  without a GPU as Chromium's software compositor uses it: the Basic
+  Render Driver adapter, a WARP device, DirectComposition showing a swap
+  chain, dirty-rectangle presents, a GPU process's window parented in
+  another process's; 64- and 32-bit), `schanneltest stores` (a
+  certificate found through a collection of collections, a root's
+  extended key usages, and `InternetGetConnectedState` offline without a
+  network; 64- and 32-bit), driver packages staged in the driver store
+  and published as oemN.inf from a program (`DiInstallDriver`,
+  `SetupCopyOEMInf`), with `pnputil` and from an MSI (`drvtest exe`,
+  `zip`, `msi`), `imgsharetest` (a second process of a running program
+  shares its image pages from the image cache; 64- and 32-bit; a commit
+  of 15/16 of the RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on
+  x64 and `_chkstk` on x86, and its half-precision conversions, which
+  LLVM's JIT in Mesa looks up), `avxtest` (the AVX state: CPUID's
+  OSXSAVE, AVX and F16C and XCR0 as the kernel sets them, YMM0-15 kept
+  across context switches, in an exception's `CONTEXT_XSTATE` and
+  through `NtContinue`, and read from a suspended thread by
+  `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
+  back once per signal or on its timeout, a callback sets its own wait
+  again, setting a wait never waits for a running callback, cancelling
+  and closing from a callback; 64- and 32-bit), Task Manager opened with
+  Ctrl+Shift+Esc: `winhello` listed, selected by typing its name and
+  ended with Delete; the Performance, Details and Services views,
+  `evtlogtest` (ReportEvent, ReadEventLog,
+  EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot, service,
+  driver-failure and crash events) and Event Viewer from the Start menu
+  finding its event, Calculator (Windows Calculator's CalcManager
+  engine) from the Start menu: Standard, Scientific (precedence, x^y,
+  25!) and Programmer (hexadecimal, AND) answers to typed expressions,
+  `dostest` (MS-DOS 4.00 boots in a console window on ntvdm.exe's
+  real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR, F12 gives
+  the screen back; a DOS .COM run from cmd by name and a DOS .EXE from
+  CreateProcess read and write files on drive C: and return their exit
+  code; the DOS game bootRogue draws its dungeon straight into video
+  memory, takes arrow keys and ends on Esc), `kmttest` (the WDDM
+  graphics kernel's D3DKMT* calls on NovaOS's Basic Render adapter, step
+  3 of docs/design/intel-gpu.md: adapters by LUID, devices, allocations
+  counted as video memory and mapped by `D3DKMTLock2`, monitored fences
+  signalled and waited on from the CPU, with an event or another
+  thread), `accounttest` (local accounts:
   NetUserAdd/Enum/GetInfo/SetInfo/ChangePassword/Del, LogonUser refusing
   a wrong password and signing in with the right one, the account's own
   SID, token, profile in C:\Users, HKEY_CURRENT_USER and environment,

@@ -299,6 +299,8 @@ lines say what went wrong:
 | `[STORVSC] controller N: no disks` | the controller has no virtual hard disk attached |
 | `... its blocks are not 512 bytes` | a VHDX with 4 KiB logical sectors: make one with 512 |
 | `[STORVSC] controller N: still waiting after N s (operation N, SCSI 0xNN)` | the host sits on that request (every 5 s until the 30 s limit) |
+| `[STORVSC] controller N: N requests in N s, N KiB; the host took N.N ms each on average, N ms at most` | how fast the host answers disk requests (every 5 s while they run); a Windows 11 host answered a blank VHDX's format very slowly |
+| `[WATCHDOG]   asleep on CPU N (tick stopped/running) until tick N, now N; its timer is armed N ms from now` | the desktop's timed sleep did not end on time: whose timer should have ended it |
 | `[STORVSC] controller N: no answer in 30 s: given up` | a request got no answer; that controller's disks stop working |
 | `[HVVIDEO] No answer to the version request`, `The host took no version NovaOS speaks`, `The host did not take the video memory` | the video device did not come up: the screen stays at the firmware's resolution |
 | `[RTC] The clock's update flag never cleared` | the CMOS clock never finished an update; the time read may be off (it no longer hangs the boot) |

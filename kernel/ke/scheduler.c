@@ -1031,6 +1031,8 @@ void sched_timer_rearm(void)
 }
 
 uint64_t sched_timer_armed(uint32_t cpu) { return cpu < MAX_CPUS ? g_armed[cpu] : 0; }
+static volatile bool g_tick_stopped[MAX_CPUS];
+bool sched_tick_stopped(uint32_t cpu) { return cpu < MAX_CPUS && g_tick_stopped[cpu]; }
 
 /* Tickless idle: a CPU with nothing to run need not wake every 10 ms.  The
  * boot CPU keeps ticking (the global tick's work: Windows drivers' KTIMERs,
@@ -1039,7 +1041,6 @@ uint64_t sched_timer_armed(uint32_t cpu) { return cpu < MAX_CPUS ? g_armed[cpu] 
  * instead, at most a second ahead.  Work queued meanwhile reaches it as
  * an IPI (smp_kick; and sched_tick kicks an idle CPU when its own queue
  * has threads waiting, as the idle CPU's tick used to come stealing). */
-static volatile bool g_tick_stopped[MAX_CPUS];
 static volatile uint32_t g_ticks_stopped;      /* how many CPUs have it stopped */
 
 void sched_idle_stop_tick(void)

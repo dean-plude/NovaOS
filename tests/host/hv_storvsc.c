@@ -20,6 +20,8 @@ void *kernel_alloc_pages(size_t n) { void *p = aligned_alloc(4096, n * 4096); me
 void udelay(UINT64 us) { (void)us; }
 void sched_yield(void) {}
 Thread *sched_current(void) { return NULL; }
+uint64_t sched_ticks(void) { return 0; }
+uint64_t g_tsc_per_tick;
 
 /* ---- the fake host ---- */
 #define DISK_SECTORS 2048

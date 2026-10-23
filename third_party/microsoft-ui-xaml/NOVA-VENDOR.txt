@@ -178,6 +178,13 @@ components/style (CStyle, OptimizedStyle); core/controls/generated
 types such as the theme transitions); and win/agcore.debug/CommonErrors.rc
 (the parser's error texts, turned into a table at build time).
 
+For the animation (step 32.5 part 5): core/animation whole (with the
+time manager vendored before), components/animation with its project
+(lib/Microsoft.UI.Xaml.Animation.vcxproj), and dxaml/lib's
+DispatcherTimer_Partial.cpp, Storyboard_Partial.cpp, Timeline_Partial.cpp
+and TimelineTimer.cpp with the generated classes of the timelines,
+animations, key frames and eases they and the parser make.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

@@ -1227,7 +1227,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and `CoreCursor`).  Next: the animation component (the core's
   `DispatcherTimer`, where the UWP route stops) on to `Window.Current`,
   WinUI 2's theme resources (`AcrylicBrush`'s inherited `FallbackColor`)
-  and its controls' default styles, and the controls Calculator uses
+  and its controls' default styles.  Fifth part done: the animation
+  (the core's animation library, the animation component, the
+  framework's `DispatcherTimer`, `Storyboard` and animation classes) and
+  WinUI 2 types' properties inherited from the framework's types
+  (`AcrylicBrush.FallbackColor`); the UWP route now stops at the window's
+  present target (32.4's composition) and the theme resources at
+  `InkToolbarFlyoutItem`, a type the framework lacks.  Next: those two,
+  the controls' default styles, and the controls Calculator uses
   (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
   `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
   Native app, which needs that runtime's framework packages too.

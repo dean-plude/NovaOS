@@ -433,7 +433,13 @@ extern "C" void nova_typename(void *tn, void **made, int to_framework)
 {
     NovaTypeName *t = (NovaTypeName *)tn;
     *made = nullptr;
-    if (t->Kind != 1 || !t->Name)
+    // (a Metadata type's name; and a Primitive one's, as a WinUI 2 provider
+    // names the system types its types derive from, Windows.UI.Xaml.Media.
+    // XamlCompositionBrushBase under AcrylicBrush: the framework looks a
+    // primitive up by its full name when it is no primitive it knows.
+    // renamed() renames only the framework's own names, so Int32 and
+    // String stay as they are)
+    if ((t->Kind != 0 && t->Kind != 1) || !t->Name)
         return;
     HSTRING h = to_framework ? renamed(t->Name, L"Windows.UI.Xaml.", L"Microsoft.UI.Xaml.")
                              : renamed(t->Name, L"Microsoft.UI.Xaml.", L"Windows.UI.Xaml.");

@@ -6,9 +6,20 @@
 
 namespace Microsoft { namespace WRL {
 
-class FtmBase : public Implements<RuntimeClassFlags<ClassicCom>, CloakedIid<IMarshal>, CloakedIid<IAgileObject>>
+// (IAgileObject, method-less, is answered here with the IMarshal rather
+// than derived, so a class may name IAgileObject next to FtmBase, as
+// XAML's composition batch handlers do: Implements<..., IAgileObject, FtmBase>)
+class FtmBase : public Implements<RuntimeClassFlags<ClassicCom>, CloakedIid<IMarshal>>
 {
 public:
+    bool CanCastTo(REFIID riid, void **ppv) throw()
+    {
+        if (InlineIsEqualGUID(riid, __uuidof(IAgileObject))) {
+            *ppv = static_cast<IMarshal *>(this);
+            return true;
+        }
+        return Implements::CanCastTo(riid, ppv);
+    }
     FtmBase() throw()
     {
         ComPtr<IUnknown> unk;

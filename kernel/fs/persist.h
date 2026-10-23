@@ -53,6 +53,8 @@ bool PersistOwns(BlockDev *d, UINT64 lba);
 void PersistWhere(char *buf, int cap);
 /* The volume's size and free space in bytes; false without one. */
 bool PersistSpace(UINT64 *free, UINT64 *total);
+/* The volume's file system ("FAT32", "NTFS"); false without one. */
+bool PersistFileSystem(char *buf, int cap);
 
 /* The kernel crash slot (FAT volumes): whether there is one, and write a
  * report into it (a kernel fault, no locks or allocations; best effort) */

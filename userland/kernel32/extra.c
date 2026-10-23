@@ -2052,6 +2052,20 @@ WINBASEAPI BOOL WINAPI GetVolumeInformationW(LPCWSTR root, LPWSTR name, DWORD nn
     if (maxlen) *maxlen = 47;
     if (flags) *flags = 0x2 | 0x4 | 0x400000;   /* CASE_PRESERVED_NAMES | UNICODE_ON_DISK | SUPPORTS_HARD_LINKS */
     if (fs && nfs) put_utf8_as_w("RAMFS", fs, nfs);
+    /* C:'s file system: RAMFS in memory only, else the disk volume it is
+     * saved to (FAT32, NTFS: an installed system), as Disk Management shows it */
+    DWORD le = GetLastError();
+    HANDLE ch = k32_drive_open('C');
+    BYTE ci[12 + 2 * 16];
+    memset(ci, 0, sizeof(ci));
+    if (ch && handle_query(ch, 5, ci, sizeof(ci))) {
+        ULONG cl = *(ULONG *)(ci + 8) / 2;
+        if (cl > 16) cl = 16;
+        if (cl && fs && nfs && put_w((const WCHAR *)(ci + 12), (int)cl, fs, nfs) > cl) { NtClose(ch); return FALSE; }
+        if (flags && (*(DWORD *)ci & 0x8)) *flags |= 0x8;     /* PERSISTENT_ACLS (C: on NTFS) */
+    }
+    if (ch) NtClose(ch);
+    SetLastError(le);
     return TRUE;
 }
 

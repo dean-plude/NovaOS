@@ -32,6 +32,7 @@ void k32_io_done(HANDLE h, OVERLAPPED *o, NTSTATUS s, DWORD bytes);
 /* volume.c */
 BOOL   k32_volume_of(LPCWSTR path, WCHAR *letter, DWORD *flags);   /* a volume name's or drive's letter, NOVA_VOLUME_* flags */
 HANDLE k32_volume_open(LPCWSTR path);                               /* a volume name's volume, for queries */
+HANDLE k32_drive_open(WCHAR c);                                    /* drive @c's volume, for queries */
 
 /* compat.c */
 BOOL k32_close_snapshot(HANDLE h);

@@ -790,6 +790,11 @@ static void setup_thread(void *arg)
 
     /* C: may be saved on this very disk: stop that before erasing it */
     bool had_c = PersistActive(), c_here = PersistDevice() == d && !keep;
+    if (c_here && PersistDirect()) {                             /* (the running system's own C:, docs/design/disk-c.md) */
+        kfree(layout);
+        failed("NovaOS is running from this disk. Start from the installation media to install on it again.");
+        return;
+    }
     if (c_here) {
         step(6, "Saving this session's files for the move");
         PersistDetach();

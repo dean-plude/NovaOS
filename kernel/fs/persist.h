@@ -39,6 +39,13 @@ void PersistPoll(void);
  * on a disk error.  Holds the file-system lock only while it copies what
  * changed, not while the disk is written. */
 bool PersistSync(void);
+/* Drive C: is the installed system's NTFS volume itself, mounted in place
+ * (no RAM disk, nothing saved behind: docs/design/disk-c.md) */
+bool PersistDirect(void);
+/* (DrivesPoll, DrivesSync) C: on its disk was written to and is not
+ * marked clean yet; marking it clean (true when C: is not on its disk) */
+bool PersistMarked(void);
+bool PersistMarkClean(void);
 
 /* Reset this PC (fs/reset.c): forget the deleted starter files @keep
  * says no to, so they come back at the next start */

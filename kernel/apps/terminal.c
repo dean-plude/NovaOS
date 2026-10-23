@@ -508,7 +508,9 @@ static void cmd_mem(Term *t)
     tprintf(t, "Drive C: %u files, %u MB; in memory %u MB of them, taking %u MB",
             (unsigned)files, (unsigned)(bytes >> 20), (unsigned)(inmem >> 20), (unsigned)(held >> 20));
     PersistLetGoStats(&gone, &gone_bytes);
-    if (PersistActive())
+    if (PersistDirect())
+        tprintf(t, "Drive C: is its disk volume: files are in memory only while open");
+    else if (PersistActive())
         tprintf(t, "The rest is read from the data disk when wanted (let go of so far: %u files, %u MB)",
                 (unsigned)gone, (unsigned)(gone_bytes >> 20));
     UINT32 images;

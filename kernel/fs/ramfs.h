@@ -145,6 +145,14 @@ RamNode *RamfsRoot(void);
  * @letter (D-Z); its root directory is @root_ref.  NULL if the letter is taken or memory is out. */
 RamNode *RamfsMountDrive(char letter, const RamfsSource *src, void *vol, UINT64 root_ref, const char *label,
                          const char *fs, UINT64 total_bytes);
+/* Drive C: becomes volume @vol on its disk (an installed system: see
+ * docs/design/disk-c.md), mounted as D: is, its root @root_ref; what C:
+ * held in memory (the starter files) goes.  False if something holds a
+ * node of it. */
+bool     RamfsMountC(const RamfsSource *src, void *vol, UINT64 root_ref, const char *label, const char *fs,
+                     UINT64 total_bytes);
+/* Drive C: is a volume on its disk (RamfsMountC) */
+bool     RamfsCOnDisk(void);
 /* The volume behind drive @letter went away (a USB stick was pulled): the
  * letter is free again.  Nodes still held from it stay valid but empty and
  * read nothing more (RamfsDetached).  Returns its volume pointer. */

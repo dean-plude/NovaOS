@@ -3,11 +3,23 @@
  *   linktest [DIR]             the tests, in DIR (C:\LinkTest); leaves kept-a.txt,
  *                              kept-b.txt and kept-sub\kept-c.txt there, three
  *                              names of one file
- *   linktest restarted [DIR]   after a restart: they are still one file
+ *   linktest restarted [DIR]   after a restart: they are still one file, and
+ *                              kept-times.txt keeps the times and the hidden
+ *                              attribute it was given (on NTFS its creation
+ *                              time too; FAT keeps write times to 2 seconds),
+ *                              and on drive C: on NTFS (installed: C: is its
+ *                              disk volume) the DACL it was given
  */
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+
+#ifndef SECURITY_WORLD_RID
+#define SECURITY_WORLD_RID 0
+#endif
+#ifndef ACCESS_ALLOWED_ACE_TYPE
+#define ACCESS_ALLOWED_ACE_TYPE 0
+#endif
 
 #ifndef FILE_SUPPORTS_HARD_LINKS
 #define FILE_SUPPORTS_HARD_LINKS 0x00400000
@@ -15,6 +27,11 @@
 
 HANDLE WINAPI FindFirstFileNameW(LPCWSTR name, DWORD flags, LPDWORD len, PWSTR out);
 BOOL   WINAPI FindNextFileNameW(HANDLE h, LPDWORD len, PWSTR out);
+
+WINADVAPI BOOL WINAPI GetFileSecurityA(LPCSTR name, SECURITY_INFORMATION si, PSECURITY_DESCRIPTOR sd, DWORD n, LPDWORD need);
+WINADVAPI BOOL WINAPI SetFileSecurityA(LPCSTR name, SECURITY_INFORMATION si, PSECURITY_DESCRIPTOR sd);
+WINADVAPI BOOL WINAPI GetSecurityDescriptorDacl(PSECURITY_DESCRIPTOR sd, LPBOOL present, PACL *acl, LPBOOL def);
+WINADVAPI BOOL WINAPI GetAce(PACL acl, DWORD i, LPVOID *ace);
 
 static int pass, fail;
 #define CHECK(cond) do { if (cond) pass++; else { fail++; printf("FAIL line %d: %s (error %lu)\n", __LINE__, #cond, GetLastError()); } } while (0)
@@ -123,6 +140,58 @@ static void clean(void)
     RemoveDirectoryA("kept-sub");
 }
 
+/* kept-times.txt's times: 2001-02-03 04:05:06 written, 1999-12-31 23:59:58 created (UTC) */
+static FILETIME when(WORD y, WORD mo, WORD d, WORD h, WORD mi, WORD sec)
+{
+    SYSTEMTIME st = { y, mo, 0, d, h, mi, sec, 0 };
+    FILETIME ft = { 0, 0 };
+    SystemTimeToFileTime(&st, &ft);
+    return ft;
+}
+
+static BOOL same_time(FILETIME a, FILETIME b) { return a.dwLowDateTime == b.dwLowDateTime && a.dwHighDateTime == b.dwHighDateTime; }
+
+/* Is the volume @g_dir is on NTFS? */
+static BOOL on_ntfs(void)
+{
+    char root[4] = "C:\\", fs[16] = "";
+    if (g_dir[1] == ':') root[0] = g_dir[0];
+    return GetVolumeInformationA(root, 0, 0, 0, 0, 0, fs, sizeof(fs)) && !strcmp(fs, "NTFS");
+}
+
+/* kept-times.txt's DACL: everyone may do anything, then read (two ACEs of its own) */
+static BOOL set_kept_dacl(void)
+{
+    static SID_IDENTIFIER_AUTHORITY world = { SECURITY_WORLD_SID_AUTHORITY };
+    PSID everyone = NULL;
+    BYTE buf[256];
+    PACL acl = (PACL)buf;
+    SECURITY_DESCRIPTOR sd;
+    BOOL ok = AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &everyone) &&
+              InitializeAcl(acl, sizeof(buf), ACL_REVISION) &&
+              AddAccessAllowedAce(acl, ACL_REVISION, 0x1F01FF, everyone) &&
+              AddAccessAllowedAce(acl, ACL_REVISION, 0x120089, everyone) &&
+              InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+              SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE) &&
+              SetFileSecurityA("kept-times.txt", DACL_SECURITY_INFORMATION, &sd);
+    if (everyone) FreeSid(everyone);
+    return ok;
+}
+
+/* ... still there: two ACEs, not inherited, the first allowing everything */
+static BOOL kept_dacl(void)
+{
+    static BYTE sd[1024];
+    DWORD need;
+    BOOL present, def;
+    PACL acl;
+    ACE_HEADER *a;
+    return GetFileSecurityA("kept-times.txt", DACL_SECURITY_INFORMATION, sd, sizeof(sd), &need) &&
+           GetSecurityDescriptorDacl(sd, &present, &acl, &def) && present && acl && acl->AceCount == 2 &&
+           GetAce(acl, 0, (LPVOID *)&a) && a->AceType == ACCESS_ALLOWED_ACE_TYPE && !(a->AceFlags & 0x10) &&
+           ((ACCESS_ALLOWED_ACE *)a)->Mask == 0x1F01FF;
+}
+
 static int restarted(void)
 {
     CHECK(SetCurrentDirectoryA(g_dir));
@@ -136,6 +205,12 @@ static int restarted(void)
     CHECK(read_all("kept-b.txt", buf, sizeof(buf)) > 0 && !strcmp(buf, "Kept by linktest\r\n"));
     CHECK(write_all("kept-a.txt", "and again\r\n", OPEN_EXISTING));
     CHECK(read_all("kept-b.txt", buf, sizeof(buf)) > 0 && !strcmp(buf, "Kept by linktest\r\nand again\r\n"));
+    WIN32_FILE_ATTRIBUTE_DATA ad;
+    CHECK(GetFileAttributesExA("kept-times.txt", GetFileExInfoStandard, &ad));
+    CHECK(ad.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN);
+    CHECK(same_time(ad.ftLastWriteTime, when(2001, 2, 3, 4, 5, 6)));
+    CHECK(!on_ntfs() || same_time(ad.ftCreationTime, when(1999, 12, 31, 23, 59, 58)));
+    CHECK((g_dir[0] & ~0x20) != 'C' || !on_ntfs() || kept_dacl());
     printf("linktest restarted: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }
@@ -250,6 +325,19 @@ int main(int argc, char **argv)
     CHECK(CreateHardLinkA("kept-b.txt", "kept-a.txt", 0));
     CHECK(CreateDirectoryA("kept-sub", 0) && CreateHardLinkA("kept-sub\\kept-c.txt", "kept-a.txt", 0));
     CHECK(links("kept-b.txt") == 3);
+    /* given times while open after writing (the contents reach the disk
+     * later, and must not take the times back) and a hidden attribute */
+    HANDLE h = CreateFileA("kept-times.txt", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+    CHECK(h != INVALID_HANDLE_VALUE);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD w = 0;
+        FILETIME ct = when(1999, 12, 31, 23, 59, 58), wt = when(2001, 2, 3, 4, 5, 6);
+        CHECK(WriteFile(h, "Times kept\r\n", 12, &w, 0) && w == 12);
+        CHECK(SetFileTime(h, &ct, 0, &wt));
+        CloseHandle(h);
+    }
+    CHECK(SetFileAttributesA("kept-times.txt", FILE_ATTRIBUTE_HIDDEN));
+    CHECK(set_kept_dacl() && ((g_dir[0] & ~0x20) != 'C' || kept_dacl()));   /* (other drives keep no ACLs) */
 
     printf("linktest: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;

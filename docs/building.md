@@ -508,11 +508,23 @@ MinGW-w64.
 
 ### Where your files are kept
 
-Drive C: lives in memory.  NovaOS saves every change to an NTFS or FAT
-volume a second later (and before Restart and Shut down) and restores it
-at the next boot.  The files installed from the OS image
-(`C:\Windows\System32`, `C:\Windows\SysWOW64`, `C:\Programs`) are never
-saved, so a newer image always brings its own.  NovaOS uses the first of:
+**Installed on NTFS** (the default), drive C: is the NTFS volume
+`NOVADATA` itself, as on Windows ([design/disk-c.md](design/disk-c.md)).
+NovaOS mounts it in place, the way it mounts D:.  There is no RAM disk
+and nothing is restored at start: a folder is read when something looks
+in it, a file when it is opened, and changed files are written a second
+after the last change (and before Restart and Shut down).  The files from
+the OS image (`C:\Windows\System32`, `C:\Windows\SysWOW64`,
+`C:\Programs`, and the wallpapers and icons beside the kernel) are
+written to the volume at the first start and again whenever a new image
+brings other ones. `C:\Windows\NovaOS-system-files.txt` records which
+ones it has.
+
+**Live from the installation media**, or installed on FAT32, drive C:
+lives in memory.  NovaOS saves every change to an NTFS or FAT volume a
+second later (and before Restart and Shut down) and restores it at the
+next boot.  The files installed from the OS image are never saved, so a
+newer image always brings its own.  NovaOS uses the first of:
 
 1. an NTFS or FAT volume labelled `NOVADATA` on any SATA or NVMe disk
    (including the data partition Install NovaOS creates);

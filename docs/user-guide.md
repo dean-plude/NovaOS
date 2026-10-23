@@ -389,11 +389,12 @@ drivers load ([drivers.md](drivers.md)).
 
 ## Your files
 
-Drive C: holds your files and the programs you install.  While NovaOS
-runs, C: is held in memory.  On an installed NovaOS it is also kept on
-the disk: NovaOS saves changes once C: has been quiet for a second, and
-again before a restart or shutdown.  In the Terminal, `vol` shows where
-C: is saved and `sync` saves it at once.
+Drive C: holds your files and the programs you install.  On an
+installed NovaOS, C: is the NTFS partition NovaOS was installed to, as on
+Windows: changed files are written to it a second after the last change,
+and again before a restart or shutdown.  Running live from the
+installation media, C: is held in memory.  In the Terminal, `vol` shows
+where C: is and `sync` writes it at once.
 
 Running live from the ISO, NovaOS keeps nothing unless it finds somewhere
 to save C:: an empty disk (which it formats as FAT32 and labels

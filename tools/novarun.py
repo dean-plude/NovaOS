@@ -120,9 +120,16 @@ class Serial:
         return buf, False
 
 
-def make_data(path, puts, size_mb):
+def make_data(path, puts, size_mb, fs='fat'):
     with open(path, 'wb') as f:
         f.truncate(size_mb << 20)
+    if fs == 'ntfs':                # an installed system's C: (docs/design/disk-c.md): the volume is drive C: itself
+        mkntfs = shutil.which('mkntfs') or '/usr/sbin/mkntfs'
+        subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVADATA', '-p', '0', '-H', '255', '-S', '63', path],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if puts:
+            raise RuntimeError('files put on drive C: need the FAT data disk')
+        return
     subprocess.run(['mkfs.fat', '-F32', '-n', 'NOVADATA', path], check=True, stdout=subprocess.DEVNULL)
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
     subprocess.run(['mmd', '-i', path, '::/NOVA', '::/NOVA/C'], check=True, env=env)
@@ -170,7 +177,7 @@ class Nova:
 
     def __init__(self, img=None, work=None, puts=(), mem=2048, smp=2, data_mb=1024, wav=None,
                  extra_args=(), boot_timeout=300, net=False, keep_data=False, vga=('-vga', 'std'), rec=None, serial_path=None,
-                 cpu_flags=''):
+                 cpu_flags='', data_fs='fat'):
         # cpu_flags: more CPU features for this boot (",+monitor": tests/selftest/devices/laptop's C-states)
         self.work = work or tempfile.mkdtemp(prefix='novarun')
         # more monitors: QEMU display devices with an id (-device secondary-vga,id=head2), and
@@ -193,7 +200,7 @@ class Nova:
             if os.path.exists(p):
                 os.unlink(p)
         if not (keep_data and os.path.exists(data)):     # keep_data: the drive C: an earlier boot saved
-            make_data(data, puts, data_mb)
+            make_data(data, puts, data_mb, data_fs)
         self.wav = wav
         self.rec = rec
         self.extra = list(extra_args)

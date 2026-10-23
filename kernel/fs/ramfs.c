@@ -251,6 +251,54 @@ static void forget_dirty(RamNode *n)
     }
 }
 
+/* @n and what is below it, gone from memory (nothing holds them) */
+static void free_tree(RamNode *n)
+{
+    for (RamNode *c = n->child, *next; c; c = next) {
+        next = c->next;
+        free_tree(c);
+    }
+    if (n->link) leave_ring(n);
+    else { release_data(n, n->data); kfree(n->sd); }
+    kfree(n);
+}
+
+static bool held(const RamNode *n)
+{
+    if (n->refs > 0 || n->pins > 0) return true;
+    for (const RamNode *c = n->child; c; c = c->next) if (held(c)) return true;
+    return false;
+}
+
+bool RamfsMountC(const RamfsSource *src, void *vol, UINT64 root_ref, const char *label, const char *fs,
+                 UINT64 total_bytes)
+{
+    Drive *d = &g_drives['C' - 'A'];
+    if (d->root || held(&g_root)) return false;
+    for (RamNode *c = g_root.child, *next; c; c = next) {     /* (the starter files: on the disk already) */
+        next = c->next;
+        free_tree(c);
+    }
+    g_root.child = NULL;
+    kfree(g_root.sd);
+    g_root.sd = NULL;
+    g_root.sdlen = 0;
+    g_root.pflags = 0;
+    g_root.xflags = RAMFS_X_EXTERN;
+    g_root.xref = root_ref;
+    d->src = src;
+    d->vol = vol;
+    memset(d->label, 0, sizeof(d->label));
+    strncpy(d->label, label ? label : "", sizeof(d->label) - 1);
+    memset(d->fs, 0, sizeof(d->fs));
+    strncpy(d->fs, fs ? fs : "", sizeof(d->fs) - 1);
+    d->total = total_bytes;
+    d->root = &g_root;
+    return true;
+}
+
+bool RamfsCOnDisk(void) { return g_drives['C' - 'A'].root != NULL; }
+
 void *RamfsUnmountDrive(char letter)
 {
     letter = (char)(letter & ~0x20);

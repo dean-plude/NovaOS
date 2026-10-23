@@ -429,7 +429,8 @@ def objs(b, odir):
         allsrc = [os.path.join(gendir, os.path.basename(s)) if os.path.dirname(s) == os.path.join(DEV, 'Generated') else s
                   for s in srcs] + [os.path.join(gen, 'module.g.cpp'), meta, os.path.join(HERE, 'src', 'nova.cpp')]
         guids = b.compile_many([os.path.join(HERE, 'src', 'd2d1guids.cpp')], odir, 'muxc_',
-                               b.HOOKS['msvcp140'].program_flags(b) + ['-I', INC], [], compiler='clang++')
+                               b.HOOKS['msvcp140'].program_flags(b) + ['-I', INC, '-I', os.path.join(
+                                   ROOT, 'userland', 'windows_ui_xaml', 'inc')], [], compiler='clang++')
         return b.compile_many(allsrc, odir, 'muxc_', f, headers + [pch], compiler='clang++') + guids + \
             b.HOOKS['msvcp140'].start_obj(b, odir, 'muxc_')
 

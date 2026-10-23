@@ -1,9 +1,7 @@
 /* NovaOS: the Windows App SDK's FrameworkUdk/CoreWindowIntegration.h
  * (FrameworkUdk, shipped closed): a window hosting XAML on a CoreWindow
  * (dxaml/lib JupiterWindow.cpp) registers here to hear when the CoreWindow
- * moves.  NovaOS's desktop path has no CoreWindow, so the functions are
- * not built yet (a call stands in as an unbuilt function:
- * userland/windows_ui_xaml/build.py). */
+ * moves.  NovaOS's are in userland/windows_ui_xaml/src/framework_udk.cpp. */
 #pragma once
 #include <FrameworkUdk/CoreWindowIntegrationInterface.h>
 

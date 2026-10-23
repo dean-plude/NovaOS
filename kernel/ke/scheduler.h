@@ -286,6 +286,8 @@ uint64_t sched_tick_tsc(uint64_t tick);
 void sched_timer_rearm(void);
 /* The TSC this CPU's timer is armed for (idle.c: how long it may idle) */
 uint64_t sched_timer_armed(uint32_t cpu);
+/* Whether that CPU idles with its tick stopped (desktop.c's watchdog) */
+bool sched_tick_stopped(uint32_t cpu);
 /* cpu_idle_wait, interrupts off: a CPU other than the boot CPU stops its
  * 10 ms tick while idle, its timer armed for its next timed sleeper (at
  * most a second ahead); the boot CPU keeps the tick's work going.  Any

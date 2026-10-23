@@ -15475,6 +15475,61 @@ created.
   resources' first `FontFamily` now stops a `Window`'s creation; then a
   page drawn, typed into and clicked.
 
+## The Visual C++ Redistributable's window shows again
+
+Run by hand (from the App Store's download or `C:\Downloads`), the
+Visual C++ Redistributable's installer showed an empty black box where
+its licence page should be, and closing it ended the installer with
+exit code 1602 (`ERROR_INSTALL_USEREXIT`: the user cancelled).  The
+licence window was there all along, under the black box.
+
+The black box was WiX Burn's engine window.  Burn makes it to hear
+`WM_QUERYENDSESSION` and keeps it visible, but empty:
+`CreateWindowEx(WS_EX_NOACTIVATE, ..., WS_POPUP | WS_VISIBLE,
+CW_USEDEFAULT, SW_SHOWNA, 0, 0, ...)`.  `CW_USEDEFAULT` means a default
+position and size only for overlapped windows; for a popup Windows sets
+the position (and, for a `CW_USEDEFAULT` width, the size) to 0.  NovaOS
+gave every top-level window three quarters of the screen when its `x`
+was `CW_USEDEFAULT` and its width 0, so Burn's window became a 960 by
+544 popup that never paints, above the installer's own window.
+
+- **`CreateWindowEx`** (`user32/win.c`): a popup's `CW_USEDEFAULT`
+  position is 0, 0 and its `CW_USEDEFAULT` size 0 by 0, as on Windows;
+  overlapped windows keep their default placement.
+- An empty top-level window stays empty after it is shown (the desktop
+  makes its windows at least one pixel square; `GetWindowRect` still
+  answers 0 by 0).
+- **Self-test** `guitest auto` checks both popup cases.
+
+## XAML animation and WinUI 2's inherited properties
+
+The fifth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+framework's animation, which the core's start-up and every control's
+visual states run on, and WinUI 2 types that inherit framework
+properties.
+
+- **Animation, built from Microsoft's sources:** the core's animation
+  library (timelines, storyboards, animations, key frames, triggers and
+  the timer under `DispatcherTimer`), the animation component, and the
+  framework's `DispatcherTimer`, `Timeline`, `Storyboard` and animation,
+  key frame and easing classes.
+- **Composition animations:** NovaOS's `CompositionAnimationHelper` (the
+  Windows App SDK's is closed) starts and stops them on NovaOS's
+  `Windows.UI.Composition`.
+- **UWP start-up:** FrameworkUdk's `CoreWindow` position listener; the
+  UWP route now passes the core's `DispatcherTimer` and reaches the
+  view's window.
+- **WinUI 2's inherited properties:** WinUI 2 names its types' Windows
+  bases as primitive type names; the faces now map those to the
+  framework's types too, so `AcrylicBrush` finds `FallbackColor`.
+- **Test:** `winui2test` loads an `AcrylicBrush` with its `FallbackColor`
+  from markup (64-bit).
+- **Next (32.5):** the UWP window's present target (32.4's composition)
+  on to `Window.Current`; WinUI 2's theme resources past
+  `InkToolbarFlyoutItem`, a type the framework lacks; its controls'
+  default styles.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

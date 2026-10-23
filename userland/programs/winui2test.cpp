@@ -56,7 +56,9 @@ static int pass, fail;
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
 /* what waits on framework parts not built yet: reported, not counted, so
  * the line turns into a pass when the part lands (roadmap 32.5's next
- * parts: the animation component, WinUI 2's theme resources) */
+ * parts: the rest of WinUI 2's theme resources (types the Windows XAML
+ * has and the framework not, InkToolbarFlyoutItem), the UWP window's
+ * present target (32.4's composition)) */
 #define NOT_YET(what, cond) do { printf("%s: %s (line %d)\n", (cond) ? "now works (make it a CHECK)" : "not yet", \
     what, __LINE__); fflush(stdout); } while (0)
 #define NOT_YET_HR(what, expr) do { HRESULT h_ = (expr); printf("%s: %s: 0x%08lx (line %d)\n", SUCCEEDED(h_) ? \
@@ -293,7 +295,7 @@ static void winui2_checks()
             L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' xmlns:media='using:Microsoft.UI.Xaml.Media'>"
             L"<media:AcrylicBrush x:Key='Acrylic' TintColor='Gray' FallbackColor='Gray'/></ResourceDictionary>").Get(),
             acrylicLoaded.GetAddressOf()) : E_FAIL;
-    NOT_YET_HR("an AcrylicBrush with its FallbackColor loaded from markup", hr);
+    CHECK_HR("an AcrylicBrush with its FallbackColor (its framework base's) loaded from markup", hr);
     if (FAILED(hr))
         why();
 

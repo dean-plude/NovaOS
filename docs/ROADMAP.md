@@ -704,7 +704,15 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   are packed now, checked against Linux's layout; should the host still
   refuse, the video memory moves into the VMBus's ACPI memory ranges (the
   one above 4 GiB first) and the boot log stops drawing on a screen the
-  host does not show.
+  host does not show.  The fourth boot (10-23) reached the desktop with a working
+  screen; the installer sat at "Copying NovaOS" and the watchdog found the
+  desktop in a 10 ms sleep that had not ended after 3 s.  The disk driver
+  now logs how fast the host answers (every 5 s) and the watchdog says
+  whose timer a sleeping desktop waits for.  The cause: a disk request
+  polled for its answer with the kernel lock held, starving the other
+  threads, and froze the VM when the vmbus thread was switched out
+  mid-ring; the asker sleeps until the answer now.  An install with
+  drive C: on FAT32 completed in that boot.
 - [ ] **23.5 Update signing key.** Ship the release public key in
   `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
   a signed 0.1.1 test update and rejects an unsigned one.
@@ -1233,7 +1241,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and `CoreCursor`).  Next: the animation component (the core's
   `DispatcherTimer`, where the UWP route stops) on to `Window.Current`,
   WinUI 2's theme resources (`AcrylicBrush`'s inherited `FallbackColor`)
-  and its controls' default styles, and the controls Calculator uses
+  and its controls' default styles.  Fifth part done: the animation
+  (the core's animation library, the animation component, the
+  framework's `DispatcherTimer`, `Storyboard` and animation classes) and
+  WinUI 2 types' properties inherited from the framework's types
+  (`AcrylicBrush.FallbackColor`); the UWP route now stops at the window's
+  present target (32.4's composition) and the theme resources at
+  `InkToolbarFlyoutItem`, a type the framework lacks.  Next: those two,
+  the controls' default styles, and the controls Calculator uses
   (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
   `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
   Native app, which needs that runtime's framework packages too.

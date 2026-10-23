@@ -961,11 +961,51 @@ vendors.
        Windows base does not find the property yet;
        without those resources an `InfoBadge`'s `ApplyTemplate` finds no
        default style.  `winui2test` reports these as "not yet" lines.
-   - *Next:* the animation component (storyboards and the core's
-     `DispatcherTimer`), then `Application.Start`'s UWP route on to
-     `CoreApplication.Run` with `Window.Current`; WinUI 2's theme resources
-     loaded (`AcrylicBrush`'s inherited `FallbackColor`) and its controls'
-     default styles applied; then the features Calculator uses
+   - *Fifth part, the animation and WinUI 2's inherited properties.*
+     - *Animation.*  The core's animation library whole (core/animation:
+       timelines, storyboards, the animations and key frames, key times,
+       durations, repeat behaviours, triggers and the timer under
+       `DispatcherTimer`) and the animation component
+       (components/animation: the timelines' and animations' second
+       halves, the conversion of an animation to a composition one, the
+       easing functions, connected animations); of the framework,
+       `DispatcherTimer` with its timeline timer, `Timeline`, `Storyboard`
+       and the generated classes of the animations, key frames and
+       eases.  The composition animations start through
+       `CompositionAnimationHelper`, whose Windows App SDK header and code
+       are closed: NovaOS's (`inc/CompHelper/CompositionAnimationHelper.h`,
+       `src/composition_animation_helper.cpp`) starts and stops an
+       animation on the object's property through NovaOS's
+       `Windows.UI.Composition`, which keeps no animation controllers, so
+       its pause and seek leave the animation running.  Also: the time
+       manager's composition batch handler lists `FtmBase` without
+       `IAgileObject` (NovaOS's WRL `FtmBase` derives it), an SDK-style
+       `<minmax.h>`, and the
+       effects headers moved from WinUI 2's include directory to the
+       framework's, which both build with.
+     - *FrameworkUdk's `CoreWindow` position listener*
+       (`WindowPositionChanged_RegisterListener`, `src/framework_udk.cpp`):
+       a UWP app's window registers to hear its `CoreWindow` move; the
+       listeners are kept and not called yet.
+     - *Inherited properties of WinUI 2 types.*  WinUI 2's type table names
+       the Windows types its types derive from as primitive type names
+       (`Windows.UI.Xaml.Media.XamlCompositionBrushBase` under
+       `AcrylicBrush`); the faces now give the framework those names under
+       its own (`nova_typename`), so the framework's walk from a WinUI 2
+       type to its base finds the base's properties, `FallbackColor`
+       among them.  Test: `winui2test` loads an `AcrylicBrush` with its
+       `FallbackColor` from markup.
+     - *Where it stops.*  `Application.Start`'s UWP route now passes the
+       core's `DispatcherTimer` and reaches the view's `SetWindow`, which
+       sizes the window and stops at its windowed present target
+       (`WindowsPresentTarget::CreateWindowedPresentTarget`, step 32.4's
+       sixth part).  `XamlControlsResources` now loads past
+       `AcrylicBrush` and stops at `InkToolbarFlyoutItem`, a Windows
+       XAML type the framework does not have.
+   - *Next:* `Application.Start`'s UWP route on to `CoreApplication.Run`
+     with `Window.Current` once 32.4's present target is in; WinUI 2's
+     theme resources without the types the framework lacks, and its
+     controls' default styles applied; then the features Calculator uses
      (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
      `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator
      itself is a .NET Native app: its package also needs the .NET Native

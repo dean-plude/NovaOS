@@ -1157,6 +1157,43 @@ if '../FrameworkEventArgs.cpp' not in CORE_SOURCES['dxaml/lib/winrtfoundation/wr
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
     '../FrameworkView_Partial.cpp', '../FrameworkViewSource_Partial.cpp', '../CoreWindowWrapper.cpp',
     '../winrtgeneratedclasses/FrameworkView.g.cpp', '../winrtgeneratedclasses/FrameworkViewSource.g.cpp')
+# (32.5 part 5, the animation: what the core's start-up makes its
+# background timer of (CCoreServices::EnsureBackgroundTimer: a
+# CDispatcherTimer, a timeline) and what every control's visual states run:
+# the core's timelines, storyboards, animations, key frames and their
+# times, durations and repeat behaviours, triggers and timers,
+# core/animation whole (its time manager above), with the animation
+# component, components/animation (the timelines' and animations' second
+# halves, the time manager's composition animations, the easing functions,
+# connected animations), whose composition animations start through
+# NovaOS's CompositionAnimationHelper (src/composition_animation_helper.cpp,
+# the Windows App SDK's is closed); of the framework, the DispatcherTimer
+# and its timeline timer, the timelines, storyboards, animations and key
+# frames, each its generated class and its partial one; the stubs of what
+# now builds leave a program on the core)
+CORE_SOURCES['core/xcpcore.vcxproj'] += tuple(
+    'animation/' + os.path.basename(s)
+    for s in vcxproj.read(os.path.join(XCP, 'core/xcpcore.vcxproj'), PROPS)['sources']
+    if os.path.basename(os.path.dirname(s)) == 'animation' and os.path.basename(s) != 'timemgr.cpp')
+_ANIMATION = 'components/animation/lib/Microsoft.UI.Xaml.Animation.vcxproj'
+CORE_LIBRARIES.append((_ANIMATION, _ANIMATION, 'components/pch/precomp.h', [
+    os.path.join(HERE, 'src', 'composition_animation_helper.cpp')]))
+CORE_SOURCES[_ANIMATION] = tuple('../' + os.path.basename(x) for x in
+                                 vcxproj.read(os.path.join(XCP, _ANIMATION), PROPS)['sources'])
+_ANIMATION_PEERS = ('DispatcherTimer', 'Timeline', 'Storyboard')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in _ANIMATION_PEERS) + ('../TimelineTimer.cpp',) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _ANIMATION_PEERS + (
+        'TimelineCollection', 'DoubleAnimation', 'ColorAnimation', 'PointAnimation', 'ObjectAnimationUsingKeyFrames',
+        'DoubleAnimationUsingKeyFrames', 'ColorAnimationUsingKeyFrames', 'ObjectKeyFrame', 'DiscreteObjectKeyFrame',
+        'DoubleKeyFrame', 'DiscreteDoubleKeyFrame', 'LinearDoubleKeyFrame', 'EasingDoubleKeyFrame',
+        'SplineDoubleKeyFrame', 'ColorKeyFrame', 'DiscreteColorKeyFrame', 'LinearColorKeyFrame',
+        'EasingColorKeyFrame', 'SplineColorKeyFrame', 'KeySpline', 'EasingFunctionBase', 'CubicEase',
+        'QuadraticEase', 'ExponentialEase', 'SineEase', 'CircleEase', 'BackEase', 'PowerEase'))
+CORE_SERVICES_STUBS += tuple(x + '_Stub.cpp' for x in (
+    'Animation', 'ColorAnimation', 'ColorKeyFrame', 'DoubleAnimation', 'DoubleKeyFrame', 'Duration',
+    'EasingFunction', 'KeyFrameCollection', 'KeyFrame', 'KeySpline', 'KeyTime', 'ParallelTimeline',
+    'RepeatBehavior', 'TimeSpan', 'TimelineCollection', 'TimelineGroup', 'Timeline', 'TimingCollection'))
 WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

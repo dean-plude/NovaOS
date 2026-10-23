@@ -2,7 +2,7 @@
 
 A pull request used to start about 68 check runs; now one that changes
 code runs eight jobs and the **Build and boot-test** summary
-([ci.md](../ci.md#how-many-checks-a-pull-request-runs)).
+([ci.md](ci.md#how-many-checks-a-pull-request-runs)).
 
 - **The nightly app corpus** starts on a pull request only through a
   paths filter: the corpus, the App Store, the download harness and the

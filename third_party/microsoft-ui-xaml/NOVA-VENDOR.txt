@@ -144,6 +144,40 @@ changed callback), VisualStateManager_Partial.cpp with the generated
 VisualStateManager class with components/vsm whole (the visual states
 that callback moves to).
 
+For the root ScrollViewer (step 32.4): dxaml/lib's ScrollViewer_Partial.cpp,
+ScrollContentPresenter_Partial.cpp, RootScrollViewer_Partial.cpp,
+Brush_Partial.cpp and SolidColorBrush_Partial.cpp with the generated
+ScrollContentControl, ScrollViewer, ScrollContentPresenter,
+RootScrollViewer, Brush and SolidColorBrush classes (and the
+ContentDialogMetadata.h and FocusManager.g.h they include), and
+core/controls/generated's GeneratedClasses.g.cpp with its
+CoreControlsGenerated.vcxproj (the core constructors of the generated
+control classes).
+
+For data binding, control templates and UWP start-up (step 32.5 part 4):
+dxaml/lib's Binding_Partial.cpp, BindingExpression_Partial.cpp, the
+property path and property access sources (PropertyPath*.cpp,
+*PropertyAccess.cpp, *PathStep.cpp, SourceAccessPathStep.cpp),
+DefaultValueConverter.cpp, DynamicValueConverter.cpp, INPCListenerBase.cpp,
+Bindable*VectorWrapper.cpp, DebugOutput.cpp, FrameworkEventArgs.cpp,
+ParserServiceProvider_Partial.cpp, ProvideValueTargetProperty_Partial.cpp,
+MarkupExtension_Partial.cpp, EffectiveValueEntry.cpp, VisualTreeHelper.cpp,
+LayoutTransition_partial.cpp, ThemeGenerator.cpp,
+StaggerFunctionBase_Partial.cpp, TemplateBindingExpression.cpp,
+FrameworkView_Partial.cpp, FrameworkViewSource_Partial.cpp,
+XamlCompositionBrushBase_Partial.cpp and
+CoreWindowWrapper.cpp with their generated classes (Binding, BindingBase,
+BindingExpression, BindingExpressionBase, BindingFailedEventArgs,
+PropertyPath, RelativeSource, MarkupExtension, MarkupExtensionBase,
+XamlResourceReferenceFailedEventArgs, ParserServiceProvider,
+ProvideValueTargetProperty, StaggerFunctionBase, PVLStaggerFunction,
+FrameworkView, FrameworkViewSource, XamlCompositionBrushBase) and the
+headers they include; components/brushes/XamlCompositionBrush.cpp;
+components/style (CStyle, OptimizedStyle); core/controls/generated
+(GeneratedClasses.g.cpp: the core's create functions for framework-only
+types such as the theme transitions); and win/agcore.debug/CommonErrors.rc
+(the parser's error texts, turned into a table at build time).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

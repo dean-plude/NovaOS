@@ -23,7 +23,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install build dependencies
-      run: tools/ci/install.sh build
+      uses: ./.github/actions/deps
+      with:
+        profile: build
+      timeout-minutes: 25
     - name: Restore compiler cache
       id: cache
       uses: actions/cache/restore@v4

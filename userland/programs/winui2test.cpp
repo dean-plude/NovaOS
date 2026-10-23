@@ -33,11 +33,18 @@
 #include <DXamlInstanceStorage.h>
 #include <WindowsXamlManager.g.h>
 #include <roapi.h>
+#include <restrictederrorinfo.h>
+#include <roerrorapi.h>
 #include <FrameworkApplication_Partial.h>
+#include <DXamlCore.h>
 #include <microsoft.ui.dispatching.h>
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.markup.h>
+#include <windows.ui.xaml.data.h>
+#include <windows.ui.xaml.media.h>
+#include <windows.ui.core.h>
+#include <appmodel.h>
 
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
@@ -47,6 +54,13 @@ static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
 #define CHECK_HR(what, expr) do { HRESULT h_ = (expr); if (SUCCEEDED(h_)) pass++; else { fail++; \
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
+/* what waits on framework parts not built yet: reported, not counted, so
+ * the line turns into a pass when the part lands (roadmap 32.5's next
+ * parts: the animation component, WinUI 2's theme resources) */
+#define NOT_YET(what, cond) do { printf("%s: %s (line %d)\n", (cond) ? "now works (make it a CHECK)" : "not yet", \
+    what, __LINE__); fflush(stdout); } while (0)
+#define NOT_YET_HR(what, expr) do { HRESULT h_ = (expr); printf("%s: %s: 0x%08lx (line %d)\n", SUCCEEDED(h_) ? \
+    "now works (make it a CHECK)" : "not yet", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } while (0)
 
 extern "C" HRESULT nova_xaml_windows_factory(HSTRING cls, IActivationFactory **out);
 
@@ -106,6 +120,58 @@ static HRESULT activate(const wchar_t *cls, IInspectable **out)
 }
 
 static wuxm::IXamlMetadataProvider *winui2_provider();
+
+template <class T> static HRESULT statics(const wchar_t *cls, T **out)
+{
+    return RoGetActivationFactory(wrl_wrappers::HStringReference(cls).Get(), __uuidof(T), reinterpret_cast<void **>(out));
+}
+
+static bool text_is(IInspectable *o, const wchar_t *s)
+{
+    ctl::ComPtr<wuxc::ITextBlock> tb;
+    HSTRING h = nullptr;
+    bool r = o && SUCCEEDED(as(o, tb.GetAddressOf())) && SUCCEEDED(tb->get_Text(&h)) && is(h, s);
+    WindowsDeleteString(h);
+    return r;
+}
+
+static HRESULT box_string(const wchar_t *s, IInspectable **out)
+{
+    ctl::ComPtr<wf::IPropertyValueStatics> pv;
+    IFC_RETURN(wf::GetActivationFactory(wrl_wrappers::HStringReference(RuntimeClass_Windows_Foundation_PropertyValue).Get(), pv.ReleaseAndGetAddressOf()));
+    return pv->CreateString(wrl_wrappers::HStringReference(s).Get(), out);
+}
+
+/* the thread's error, as the framework originated it (a parse error's
+ * line and message) */
+static void why()
+{
+    IRestrictedErrorInfo *info = nullptr;
+    BSTR desc = nullptr, restricted = nullptr, sid = nullptr;
+    HRESULT code = S_OK;
+    if (SUCCEEDED(GetRestrictedErrorInfo(&info)) && info &&
+        SUCCEEDED(info->GetErrorDetails(&desc, &code, &restricted, &sid)))
+        printf("  error 0x%08lx: %ls %ls\n", static_cast<unsigned long>(code), desc ? desc : L"", restricted ? restricted : L"");
+    SysFreeString(desc);
+    SysFreeString(restricted);
+    SysFreeString(sid);
+    if (info)
+        info->Release();
+    /* and the core's first error (a parser error's code, line and position) */
+    IErrorService *errors = nullptr;
+    IError *first = nullptr;
+    DirectUI::DXamlCore *core = DirectUI::DXamlCore::GetCurrent();
+    if (core && core->GetHandle() && SUCCEEDED(core->GetHandle()->getErrorService(&errors)) && errors &&
+        SUCCEEDED(errors->GetLastReportedError(&first)) && first) {
+        xstring_ptr message;
+        first->GetErrorMessage(&message);
+        printf("  the core's last error: code %u, line %u, position %u: %ls\n", first->GetErrorCode(),
+               first->GetLineNumber(), first->GetCharPosition(), message.IsNull() ? L"" : message.GetBuffer());
+        errors->CleanupErrors();
+    }
+    fflush(stdout);
+}
+
 
 static void winui2_checks()
 {
@@ -182,13 +248,76 @@ static void winui2_checks()
           SUCCEEDED(content->put_Content(label.Get())) && SUCCEEDED(content->get_Content(got.GetAddressOf())) &&
           unboxed_is(got.Get(), L"More"));
 
+    /* an InfoBadge's default style (WinUI 2's generic.xaml, which its
+     * DefaultStyleResourceUri names) and its template applied */
+    ctl::ComPtr<wuxc::IControl> badgeControl;
+    boolean applied = false;
+    HRESULT hr = as(badge.Get(), badgeControl.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = badgeControl->ApplyTemplate(&applied);
+    CHECK_HR("InfoBadge.ApplyTemplate (WinUI 2's default style)", hr);
+    if (FAILED(hr))
+        why();
+    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
+    INT32 parts = 0;
+    NOT_YET("its template applied: the InfoBadge has its template's root", applied &&
+          SUCCEEDED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())) && dobj &&
+          SUCCEEDED(vth->GetChildrenCount(dobj.Get(), &parts)) && parts == 1);
+
+    /* an AcrylicBrush (WinUI 2's, over the framework's
+     * XamlCompositionBrushBase) with its base's FallbackColor, as the theme
+     * resources set it: the type, its base and the member, then markup */
+    ctl::ComPtr<wuxm::IXamlType> acrylic, acrylicBase;
+    ctl::ComPtr<wuxm::IXamlMember> fallback;
+    HSTRING acrylicBaseName = nullptr;
+    hr = provider->GetXamlTypeByFullName(wrl_wrappers::HStringReference(L"Microsoft.UI.Xaml.Media.AcrylicBrush").Get(),
+                                         acrylic.GetAddressOf());
+    CHECK_HR("the type Microsoft.UI.Xaml.Media.AcrylicBrush", acrylic ? hr : E_FAIL);
+    if (acrylic) {
+        CHECK("its base type, Windows.UI.Xaml.Media.XamlCompositionBrushBase",
+              SUCCEEDED(acrylic->get_BaseType(acrylicBase.GetAddressOf())) && acrylicBase &&
+              SUCCEEDED(acrylicBase->get_FullName(&acrylicBaseName)) &&
+              is(acrylicBaseName, L"Windows.UI.Xaml.Media.XamlCompositionBrushBase"));
+        printf("  acrylic: base %ls, RunInitializer %08lx, GetMember(FallbackColor) %08lx\n",
+               acrylicBaseName ? WindowsGetStringRawBuffer(acrylicBaseName, nullptr) : L"(none)",
+               (unsigned long)acrylic->RunInitializer(),
+               (unsigned long)acrylic->GetMember(wrl_wrappers::HStringReference(L"FallbackColor").Get(), fallback.GetAddressOf()));
+        printf("  acrylic: FallbackColor member %s\n", fallback ? "found" : "not found");
+        WindowsDeleteString(acrylicBaseName);
+    }
+    ctl::ComPtr<wuxm::IXamlReaderStatics> acrylicReader;
+    ctl::ComPtr<IInspectable> acrylicLoaded;
+    hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", acrylicReader.GetAddressOf())) ?
+        acrylicReader->Load(wrl_wrappers::HStringReference(
+            L"<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+            L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' xmlns:media='using:Microsoft.UI.Xaml.Media'>"
+            L"<media:AcrylicBrush x:Key='Acrylic' TintColor='Gray' FallbackColor='Gray'/></ResourceDictionary>").Get(),
+            acrylicLoaded.GetAddressOf()) : E_FAIL;
+    NOT_YET_HR("an AcrylicBrush with its FallbackColor loaded from markup", hr);
+    if (FAILED(hr))
+        why();
+
+    /* XamlControlsResources: WinUI 2's theme resources, the dictionary an
+     * app's App.xaml merges, loaded from its Source (ms-appx:///
+     * Microsoft.UI.Xaml/Themes/19h1_themeresources.xaml) */
+    ctl::ComPtr<IInspectable> resources, duration;
+    ctl::ComPtr<wux::IResourceDictionary> dictionary;
+    ctl::ComPtr<wf::Collections::IMap<IInspectable *, IInspectable *>> map;
+    ctl::ComPtr<IInspectable> key;
+    hr = activate(L"Microsoft.UI.Xaml.Controls.XamlControlsResources", resources.GetAddressOf());
+    NOT_YET_HR("XamlControlsResources made", hr);
+    if (FAILED(hr))
+        why();
+    NOT_YET("a Windows ResourceDictionary", resources && SUCCEEDED(as(resources.Get(), dictionary.GetAddressOf())) &&
+          SUCCEEDED(as(resources.Get(), map.GetAddressOf())));
+    NOT_YET("its theme resources looked up: ControlNormalAnimationDuration, 00:00:00.250", map &&
+          SUCCEEDED(box_string(L"ControlNormalAnimationDuration", key.GetAddressOf())) &&
+          SUCCEEDED(map->Lookup(key.Get(), duration.GetAddressOf())) && unboxed_is(duration.Get(), L"00:00:00.250"));
+
     /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
      * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/
      * finds them (the files XamlControlsResources and the controls'
-     * DefaultStyleResourceUri name on NovaOS's Windows 10 contracts).
-     * Loading them waits on the framework: their styles use data binding
-     * ({Binding}, not built yet) and XAML's text formatting starts from
-     * DirectWrite's Windows 10 font model (32.4). */
+     * DefaultStyleResourceUri name on NovaOS's Windows 10 contracts) */
     static const wchar_t *const themes[] = {L"19h1_themeresources.xaml", L"19h1_compact_themeresources.xaml",
                                             L"19h1_generic.xaml", L"19h1_themeresources_v1.xaml",
                                             L"19h1_compact_themeresources_v1.xaml", L"19h1_generic_v1.xaml"};
@@ -202,6 +331,130 @@ static void winui2_checks()
     }
 }
 
+/* the framework's data binding (step 32.5's fourth part): {Binding} in
+ * markup to the element itself, to its DataContext and, in a control
+ * template, to the templated parent; a Binding made in code and set with
+ * FrameworkElement.SetBinding, following its source's changes; and a
+ * control's template applied (ApplyTemplate), its parts in the visual tree */
+#define XMLNS L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+#define XMLNS_X L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' "
+static void binding_checks()
+{
+    printf("errors before the binding checks:\n");
+    why();
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> page;
+    /* each form on its own first */
+    static const wchar_t *const forms[] = {
+        L"<TextBlock " XMLNS L"Tag='bound' Text='{Binding Tag, RelativeSource={RelativeSource Self}}'/>",
+        L"<TextBlock " XMLNS L"DataContext='from the context' Text='{Binding}'/>",
+        L"<ControlTemplate " XMLNS L"TargetType='ContentControl'><Border><TextBlock "
+        L"Text='{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}'/></Border></ControlTemplate>"};
+    for (const wchar_t *form : forms) {
+        ctl::ComPtr<IInspectable> o;
+        HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.ReleaseAndGetAddressOf())) ?
+            reader->Load(wrl_wrappers::HStringReference(form).Get(), o.GetAddressOf()) : E_FAIL;
+        char what[300];
+        snprintf(what, sizeof what, "XamlReader.Load %ls", form);
+        CHECK_HR(what, hr);
+        if (FAILED(hr))
+            why();
+    }
+    CHECK_HR("XamlReader.Load of a page with {Binding}s and a control template", SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader",
+        reader.GetAddressOf())) ? reader->Load(wrl_wrappers::HStringReference(
+        L"<Grid " XMLNS XMLNS_X L"><Grid.Resources><Style x:Key='Templated' TargetType='ContentControl'>"
+        L"<Setter Property='Template'><Setter.Value><ControlTemplate TargetType='ContentControl'>"
+        L"<Border x:Name='Root'><TextBlock Text='{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}'/></Border>"
+        L"</ControlTemplate></Setter.Value></Setter></Style></Grid.Resources>"
+        L"<TextBlock x:Name='Self' Tag='bound' Text='{Binding Tag, RelativeSource={RelativeSource Self}}'/>"
+        L"<TextBlock x:Name='Context' DataContext='from the context' Text='{Binding}'/>"
+        L"<TextBlock x:Name='Code'/>"
+        L"<ContentControl x:Name='Templated' Style='{StaticResource Templated}' Tag='templated'/></Grid>").Get(),
+        page.GetAddressOf()) : E_FAIL);
+    if (!page)
+        why();
+    ctl::ComPtr<wux::IFrameworkElement> root;
+    if (!page || FAILED(as(page.Get(), root.GetAddressOf())))
+        return;
+    auto find = [&](const wchar_t *name) {
+        ctl::ComPtr<IInspectable> o;
+        root->FindName(wrl_wrappers::HStringReference(name).Get(), o.GetAddressOf());
+        return o;
+    };
+    ctl::ComPtr<IInspectable> self = find(L"Self"), context = find(L"Context"), code = find(L"Code"),
+                              templated = find(L"Templated");
+    CHECK("{Binding Tag, RelativeSource={RelativeSource Self}}: the element's own Tag", text_is(self.Get(), L"bound"));
+    CHECK("{Binding}: the element's DataContext", text_is(context.Get(), L"from the context"));
+
+    /* a Binding made in code, its source the first TextBlock's Tag */
+    ctl::ComPtr<wux::Data::IBindingFactory> bf;
+    ctl::ComPtr<IInspectable> inner;
+    ctl::ComPtr<wux::Data::IBinding> binding;
+    CHECK_HR("Windows.UI.Xaml.Data.Binding made", SUCCEEDED(statics(L"Windows.UI.Xaml.Data.Binding", bf.GetAddressOf())) ?
+             bf->CreateInstance(nullptr, inner.GetAddressOf(), binding.GetAddressOf()) : E_FAIL);
+    ctl::ComPtr<wux::IPropertyPathFactory> ppf;
+    ctl::ComPtr<wux::IPropertyPath> path;
+    ctl::ComPtr<wuxc::ITextBlockStatics> tbs;
+    ctl::ComPtr<wux::IDependencyProperty> textProperty;
+    ctl::ComPtr<wux::Data::IBindingBase> bindingBase;
+    ctl::ComPtr<wux::IFrameworkElement> codeElement;
+    CHECK_HR("its Path (PropertyPath 'Tag') and Source set, FrameworkElement.SetBinding(TextBlock.TextProperty)",
+             binding && self && code && SUCCEEDED(statics(L"Windows.UI.Xaml.PropertyPath", ppf.GetAddressOf())) &&
+             SUCCEEDED(ppf->CreateInstance(wrl_wrappers::HStringReference(L"Tag").Get(), path.GetAddressOf())) &&
+             SUCCEEDED(binding->put_Path(path.Get())) && SUCCEEDED(binding->put_Source(self.Get())) &&
+             SUCCEEDED(statics(L"Windows.UI.Xaml.Controls.TextBlock", tbs.GetAddressOf())) &&
+             SUCCEEDED(tbs->get_TextProperty(textProperty.GetAddressOf())) &&
+             SUCCEEDED(as(binding.Get(), bindingBase.GetAddressOf())) && SUCCEEDED(as(code.Get(), codeElement.GetAddressOf())) ?
+             codeElement->SetBinding(textProperty.Get(), bindingBase.Get()) : E_FAIL);
+    CHECK("the target reads its source", text_is(code.Get(), L"bound"));
+    ctl::ComPtr<wux::IFrameworkElement> selfElement;
+    ctl::ComPtr<IInspectable> changed;
+    CHECK_HR("the source's Tag changed", self && SUCCEEDED(as(self.Get(), selfElement.GetAddressOf())) &&
+             SUCCEEDED(box_string(L"changed", changed.GetAddressOf())) ? selfElement->put_Tag(changed.Get()) : E_FAIL);
+    CHECK("both bindings follow it", text_is(code.Get(), L"changed") && text_is(self.Get(), L"changed"));
+
+    /* templates set directly, plain, with a TemplateBinding and with a
+     * {Binding} to the templated parent */
+#define TEMPLATED(t) L"<ContentControl " XMLNS L"Tag='t'><ContentControl.Template><ControlTemplate " \
+    L"TargetType='ContentControl'>" t L"</ControlTemplate></ContentControl.Template></ContentControl>"
+    static const wchar_t *const templates[] = {
+        TEMPLATED(L"<Border/>"), TEMPLATED(L"<Border Tag='{TemplateBinding Tag}'/>"),
+        TEMPLATED(L"<Border Tag='{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}'/>")};
+    for (const wchar_t *markup : templates) {
+        ctl::ComPtr<IInspectable> o;
+        ctl::ComPtr<wuxc::IControl> c;
+        boolean ok = false;
+        HRESULT hr = SUCCEEDED(reader->Load(wrl_wrappers::HStringReference(markup).Get(), o.GetAddressOf())) &&
+            SUCCEEDED(as(o.Get(), c.GetAddressOf())) ? c->ApplyTemplate(&ok) : E_FAIL;
+        char what[300];
+        snprintf(what, sizeof what, "ApplyTemplate of %ls", markup);
+        CHECK_HR(what, hr);
+        if (FAILED(hr))
+            why();
+    }
+
+    /* the ContentControl's template applied: Border > TextBlock, bound to
+     * the templated parent's Tag */
+    ctl::ComPtr<wuxc::IControl> control;
+    boolean applied = false;
+    HRESULT hrApply = templated && SUCCEEDED(as(templated.Get(), control.GetAddressOf())) ? control->ApplyTemplate(&applied) : E_FAIL;
+    CHECK_HR("Control.ApplyTemplate", hrApply);
+    if (FAILED(hrApply))
+        why();
+    CHECK("the template applied", applied);
+    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
+    ctl::ComPtr<wux::IDependencyObject> templatedDO, border, label;
+    INT32 n = 0;
+    CHECK("its root, a Border, the control's one visual child", templated &&
+          SUCCEEDED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())) &&
+          SUCCEEDED(as(templated.Get(), templatedDO.GetAddressOf())) && SUCCEEDED(vth->GetChildrenCount(templatedDO.Get(), &n)) &&
+          n == 1 && SUCCEEDED(vth->GetChild(templatedDO.Get(), 0, border.GetAddressOf())) && border);
+    ctl::ComPtr<wuxc::IBorder> b;
+    CHECK("(Windows' IBorder)", border && SUCCEEDED(as(border.Get(), b.GetAddressOf())));
+    CHECK("its TextBlock bound to the templated parent's Tag", border && SUCCEEDED(vth->GetChildrenCount(border.Get(), &n)) &&
+          n == 1 && SUCCEEDED(vth->GetChild(border.Get(), 0, label.GetAddressOf())) && text_is(label.Get(), L"templated"));
+}
+
 /* WinUI 2's XAML type table, made once (on the UI thread, when the
  * framework or the test first asks) */
 static wuxm::IXamlMetadataProvider *winui2_provider()
@@ -211,6 +464,99 @@ static wuxm::IXamlMetadataProvider *winui2_provider()
     if (!provider && SUCCEEDED(activate(L"Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider", made.GetAddressOf())))
         as(made.Get(), &provider);
     return provider;
+}
+
+/* the UWP start-up (step 32.5's fourth part): this program installed as a
+ * UWP app (C:\Tests\Appx\XamlUwpTest.msix, tools/appx/mkuwptest.py) and
+ * started by its AUMID; inside the package Application.Start takes the UWP
+ * path, CoreApplication.Run with the framework's FrameworkViewSource
+ * (twinapi.appcore's CoreApplication gives its view a CoreWindow), and
+ * OnLaunched finds the CoreWindow's Window as Window.Current */
+#define UWP_FAMILY L"NovaOS.XamlUwpTest_rtg2wbn51qgvw"
+#define UWP_LOG L"C:\\Temp\\winui2test-uwp.log"
+static bool s_uwp;
+__declspec(dllimport) extern "C" LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name);
+
+static void uwp_checks()
+{
+    WCHAR full[256];
+    UINT32 n = ARRAYSIZE(full);
+    CHECK("packaged: its package full name", GetCurrentPackageFullName(&n, full) == ERROR_SUCCESS);
+    AppPolicyWindowingModel model = AppPolicyWindowingModel_None;
+    CHECK("its windowing model: Universal", AppPolicyGetWindowingModel(GetCurrentThreadEffectiveToken(), &model) ==
+          ERROR_SUCCESS && model == AppPolicyWindowingModel_Universal);
+    ctl::ComPtr<wux::IWindowStatics> ws;
+    ctl::ComPtr<wux::IWindow> window;
+    CHECK("Window.Current, the view's window", SUCCEEDED(statics(L"Windows.UI.Xaml.Window", ws.GetAddressOf())) &&
+          SUCCEEDED(ws->get_Current(window.GetAddressOf())) && window);
+    if (!window)
+        return;
+    ctl::ComPtr<ABI::Windows::UI::Core::ICoreWindow> core;
+    CHECK("its CoreWindow (twinapi.appcore's)", SUCCEEDED(window->get_CoreWindow(core.GetAddressOf())) && core);
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> page, got;
+    ctl::ComPtr<wux::IUIElement> element;
+    CHECK_HR("Window.Content set to a page", SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) &&
+             SUCCEEDED(reader->Load(wrl_wrappers::HStringReference(L"<TextBlock " XMLNS L"Text='Hello, UWP'/>").Get(),
+                                    page.GetAddressOf())) && SUCCEEDED(as(page.Get(), element.GetAddressOf())) ?
+             window->put_Content(element.Get()) : E_FAIL);
+    ctl::ComPtr<wux::IUIElement> content;
+    CHECK("and read back", SUCCEEDED(window->get_Content(content.GetAddressOf())) && content &&
+          identity(content.Get()) == identity(element.Get()));
+    CHECK_HR("Window.Activate", window->Activate());
+}
+
+/* the parent: the package installed, started by its AUMID ("uwp"), its log
+ * read, the package removed */
+static DWORD appx(const wchar_t *args)
+{
+    wchar_t cmd[600];
+    STARTUPINFOW si = {sizeof si};
+    PROCESS_INFORMATION pi;
+    DWORD code = 0xFFFF;
+    swprintf(cmd, 600, L"appx.exe %ls", args);
+    if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+        return code;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return code;
+}
+
+static void uwp_parent()
+{
+    static const GUID clsidAam = {0x45BA127D, 0x10A8, 0x46EA, {0x8A, 0xB7, 0x56, 0xEA, 0x90, 0x78, 0x94, 0x3C}};
+    static const GUID iidAam = {0x2E941141, 0x7F97, 0x4756, {0xBA, 0x1D, 0x9D, 0xEC, 0xDE, 0x89, 0x4A, 0x3D}};
+    CreateDirectoryW(L"C:\\Temp", nullptr);
+    appx(L"remove NovaOS.XamlUwpTest");                        /* (a run that stopped half way) */
+    DeleteFileW(UWP_LOG);
+    CHECK("the UWP package installed (appx install XamlUwpTest.msix)",
+          appx(L"install C:\\Tests\\Appx\\XamlUwpTest.msix -AllowUnsigned") == 0);
+    IUnknown *am = nullptr;
+    DWORD pid = 0, code = 0xFFFF;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    HRESULT hr = CoCreateInstance(clsidAam, nullptr, CLSCTX_INPROC_SERVER, iidAam, reinterpret_cast<void **>(&am));
+    if (SUCCEEDED(hr) && am) {
+        typedef HRESULT (STDMETHODCALLTYPE *Activate)(void *, LPCWSTR, LPCWSTR, int, DWORD *);
+        hr = reinterpret_cast<Activate>((*reinterpret_cast<void ***>(am))[3])(am, UWP_FAMILY L"!App", L"uwp", 0, &pid);
+        am->Release();
+    }
+    CHECK_HR("started by its AUMID (ApplicationActivationManager)", SUCCEEDED(hr) && pid ? S_OK : FAILED(hr) ? hr : E_FAIL);
+    HANDLE p = pid ? OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+    if (p) {
+        WaitForSingleObject(p, 120000);
+        GetExitCodeProcess(p, &code);
+        CloseHandle(p);
+    }
+    FILE *log = _wfopen(UWP_LOG, L"r");
+    char line[512];
+    while (log && fgets(line, sizeof line, log))
+        printf("  uwp: %s", line);
+    if (log)
+        fclose(log);
+    NOT_YET("the UWP app passed (Application.Start's UWP path)", code == 0);
+    CHECK("the UWP package removed", appx(L"remove NovaOS.XamlUwpTest") == 0);
 }
 
 /* the framework started as wuxamltest starts it; the app's Application is
@@ -277,6 +623,15 @@ public:
     HRESULT STDMETHODCALLTYPE OnLaunched(xaml::ILaunchActivatedEventArgs *) override
     {
         s_launched = true;
+        if (s_uwp) {
+            uwp_checks();
+            ctl::ComPtr<xaml::IApplication> app;
+            CHECK_HR("Application.Exit (CoreApplication.Exit)", SUCCEEDED(QueryInterface(__uuidof(xaml::IApplication),
+                     reinterpret_cast<void **>(app.GetAddressOf()))) ? app->Exit() : E_FAIL);
+            s_exit_called = true;
+            return S_OK;
+        }
+        binding_checks();
         winui2_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
@@ -313,7 +668,8 @@ static HRESULT on_start(xaml::IApplicationInitializationCallbackParams *)
 static DWORD WINAPI watchdog(void *)
 {
     Sleep(90000);
-    printf("FAIL: Application.Start did not return\nwinui2test: %d passed, %d failed (%s)\n", pass, fail + 1,
+    printf(s_uwp ? "FAIL: Application.Start did not return\nthe UWP app: %d checks passed, %d did not (%s)\n" :
+           "FAIL: Application.Start did not return\nwinui2test: %d passed, %d failed (%s)\n", pass, fail + 1,
            sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     ExitProcess(1);
@@ -336,10 +692,20 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Controls.Border", L"Windows.UI.Xaml.Controls.Image", L"Windows.UI.Xaml.Controls.ToolTipService",
     L"Windows.UI.Xaml.Media.VisualTreeHelper", L"Windows.UI.Xaml.Media.SolidColorBrush", L"Windows.UI.Xaml.Media.Brush",
     L"Windows.UI.Xaml.Media.XamlCompositionBrushBase", L"Windows.UI.Xaml.Media.XamlLight",
-    L"Windows.UI.Xaml.Media.CompositionTarget", L"Windows.UI.Xaml.Data.Binding",
+    L"Windows.UI.Xaml.Media.CompositionTarget", L"Windows.UI.Xaml.Data.Binding", L"Windows.UI.Xaml.Data.RelativeSource",
+    L"Windows.UI.Xaml.PropertyPath", L"Windows.UI.Xaml.Controls.ControlTemplate",
     L"Windows.UI.Xaml.Automation.AutomationProperties", L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer",
     L"Windows.UI.Xaml.Automation.Peers.ButtonAutomationPeer", L"Windows.UI.Xaml.Hosting.ElementCompositionPreview",
-    L"Windows.UI.Xaml.Markup.XamlReader"};
+    L"Windows.UI.Xaml.Markup.XamlReader",
+    /* (and, for the UWP start-up, the view source Application.Start hands
+     * CoreApplication.Run and the view it makes) */
+    L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView"};
+
+namespace DirectUI
+{
+    _Check_return_ IActivationFactory *CreateActivationFactory_FrameworkViewSource();
+    _Check_return_ IActivationFactory *CreateActivationFactory_FrameworkView();
+}
 
 static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
 {
@@ -349,11 +715,22 @@ static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
         IFC_RETURN(ctl::ComObject<DirectUI::WindowsXamlManagerFactory>::CreateInstance(f.ReleaseAndGetAddressOf()));
         return f.CopyTo(out);
     }
+    if (is(cls, RuntimeClass_Microsoft_UI_Xaml_FrameworkViewSource)) {
+        *out = DirectUI::CreateActivationFactory_FrameworkViewSource();
+        return *out ? S_OK : E_OUTOFMEMORY;
+    }
+    if (is(cls, RuntimeClass_Microsoft_UI_Xaml_FrameworkView)) {
+        *out = DirectUI::CreateActivationFactory_FrameworkView();
+        return *out ? S_OK : E_OUTOFMEMORY;
+    }
     return nova_xaml_windows_factory(cls, out);
 }
 
 int main()
 {
+    s_uwp = wcsstr(GetCommandLineW(), L" uwp") != nullptr;
+    if (s_uwp)
+        _wfreopen(UWP_LOG, L"w", stdout);
     DirectUI::StaticLockGlobalInit();
     DXamlInstanceStorage::Initialize();
     DirectUI::FrameworkApplication::GlobalInit();
@@ -372,10 +749,12 @@ int main()
     RO_REGISTRATION_COOKIE cookie = nullptr;
     CHECK_HR("RoRegisterActivationFactories (the framework's classes)", RoRegisterActivationFactories(classes, makers, nclasses, &cookie));
     CloseHandle(CreateThread(nullptr, 0, watchdog, nullptr, 0, nullptr));
-    HMODULE mux = LoadLibraryW(L"Microsoft.UI.Xaml.dll");
-    CHECK("Microsoft.UI.Xaml.dll (WinUI 2) loaded", mux != nullptr);
-    s_mux = mux ? reinterpret_cast<GetFactory>(GetProcAddress(mux, "DllGetActivationFactory")) : nullptr;
-    CHECK("its DllGetActivationFactory", s_mux != nullptr);
+    if (!s_uwp) {
+        HMODULE mux = LoadLibraryW(L"Microsoft.UI.Xaml.dll");
+        CHECK("Microsoft.UI.Xaml.dll (WinUI 2) loaded", mux != nullptr);
+        s_mux = mux ? reinterpret_cast<GetFactory>(GetProcAddress(mux, "DllGetActivationFactory")) : nullptr;
+        CHECK("its DllGetActivationFactory", s_mux != nullptr);
+    }
 
     ctl::ComPtr<DirectUI::FrameworkApplicationFactory> appFactory;
     ctl::ComObject<DirectUI::FrameworkApplicationFactory>::CreateInstance(appFactory.ReleaseAndGetAddressOf());
@@ -387,7 +766,12 @@ int main()
     CHECK("Application.Exit returned from Application.Start", s_exit_called);
 
     RoRevokeActivationFactories(cookie);
-    printf("winui2test: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
+    if (!s_uwp)
+        uwp_parent();
+    /* (the UWP app's own count says it differently: the self-test reads
+     * the first count in the output, and the parent prints the app's log) */
+    printf(s_uwp ? "the UWP app: %d checks passed, %d did not (%s)\n" : "winui2test: %d passed, %d failed (%s)\n",
+           pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     fflush(stdout);
     ExitProcess(fail != 0);
 }

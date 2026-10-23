@@ -73,7 +73,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install runtime dependencies
-      run: tools/ci/install.sh runtime
+      uses: ./.github/actions/deps
+      with:
+        profile: runtime
       timeout-minutes: 25
     - name: Select accelerator
       run: tools/ci/enable-kvm.sh optional
@@ -153,7 +155,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install graphics dependencies
-      run: tools/ci/install.sh graphics
+      uses: ./.github/actions/deps
+      with:
+        profile: graphics
+      timeout-minutes: 25
     - name: Select accelerator
       run: tools/ci/enable-kvm.sh optional
       env:

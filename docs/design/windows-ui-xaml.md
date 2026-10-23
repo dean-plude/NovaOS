@@ -703,12 +703,29 @@ vendors.
      (`AddXamlIslandRoot`), forwards `Content` and `ContentIsland` to it,
      keeps the system backdrop and `ShouldConstrainPopupsToWorkArea`, and
      on `Close` takes the root out of the core and disposes of it.
-   - *Left:* setting the page as the island's content makes the root
-     `ScrollViewer` around it (`ContentManager::CreateRootScrollViewer`:
-     the framework's `ScrollViewer`, `ScrollContentPresenter` and
-     `RootScrollViewer`, not built yet), then the page laid out, drawn,
-     typed into and clicked.  The page test that waits on it is kept for
-     that part.
+   - *Fifth part, the root ScrollViewer.*  Setting a page as the
+     window's content puts it in a root `ScrollViewer`
+     (`ContentManager::CreateRootScrollViewer`: a `RootScrollViewer` with
+     scrolling and zoom off, its `ScrollContentPresenter` set by hand
+     rather than by a template, and a `Border` painted with a transparent
+     `SolidColorBrush` around the page).  These are Microsoft's
+     (`ScrollViewer_Partial.cpp`, `ScrollContentPresenter_Partial.cpp`,
+     `RootScrollViewer_Partial.cpp`, their base `ScrollContentControl`,
+     `Brush` and `SolidColorBrush`, each with its generated class), with
+     the core constructors of the classes the core's generator writes
+     whole in headers (`core/controls/generated/GeneratedClasses.g.cpp`:
+     `CRootScrollViewer`, `CScrollContentPresenter` and the rest; the
+     core's `CScrollViewer` was already built).  DirectManipulation and the
+     scroll bars stay unbuilt: the root's scrolling is off.
+   - *Left:* the first frame then asks the composition tree host for its
+     device (`DCompTreeHost::EnsureDCompDevice`), made by a
+     `CompositionHelper` the Windows App SDK ships closed
+     (`inc/CompHelper/CompositionHelper.h` declares it).  Its main device
+     is both a DirectComposition `IDCompositionDevice2` (`Commit`,
+     `WaitForCommitCompletion`) and the Microsoft.UI.Composition
+     `Compositor` XAML's visuals are made on, so NovaOS's has to join
+     `dcomp.dll`'s two halves.  Then the page drawn, typed into and
+     clicked.  The page test that waits on it is kept for that part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the
@@ -858,22 +875,74 @@ vendors.
        as it parses, so the resources that name a WinUI 2 type not built
        yet (`TextCommandBarFlyout`, `NavigationViewItemPresenter`), or
        use markup the framework cannot make yet (data binding,
-       `{Binding}`: the `Binding` class and its expressions are not
-       built), or name such a resource, are left out; the build lists them
-       in `Themes/left-out.txt`.  Test: `winui2test` checks the files are
-       installed.  Loading them waits on the framework: the controls'
-       default styles (the framework's own, which a WinUI 2 style is based
-       on) use data binding, so `ApplyTemplate` stops at the unbuilt
-       `Binding`, and `XamlControlsResources` setting its `Source` fails
-       (`E_FAIL`) while parsing in that context also reaches DirectWrite's
-       Windows 10 font model (`IDWriteFactory3` and later, 32.4).
-   - *Next:* the framework's data binding (`Binding`,
-     `BindingExpression`, `RelativeSource`; then the merged resources
-     keep their `{Binding}` styles) and, with 32.4's fonts, the resources
-     loaded; `Windows.UI.Xaml.Application.Start`'s UWP path
-     (`FrameworkApplication::StartUWP`: CoreApplication's activation and
-     the framework view, in place of the desktop path) with
-     `Window.Current`, then the features Calculator uses
+       `{Binding}`, before the fourth part), or name such a resource, are
+       left out; the build lists them in `Themes/left-out.txt`
+       (`FRAMEWORK_LACKS` in `userland/microsoft_ui_xaml/build.py` is now
+       empty).  Test: `winui2test` checks the files are installed.
+   - *Fourth part, data binding, control templates and the UWP start-up.*
+     - *Data binding.*  The framework's own `Binding`, `BindingExpression`,
+       `RelativeSource` and `PropertyPath` (dxaml/lib's `Binding_Partial`,
+       `BindingExpression_Partial`, the property path parser and steps,
+       the property accessors for dependency properties, `ICustomPropertyProvider`,
+       indexers and maps, the value converters), the markup extensions'
+       service provider the parser hands a `{Binding}`
+       (`ParserServiceProvider`, `ProvideValueTargetProperty`,
+       `MarkupExtension`), the effective value a property set by an
+       expression keeps (`EffectiveValueEntry`), `VisualTreeHelper`, and
+       the framework's `EventArgs` (`FrameworkEventArgs.cpp`, which
+       `DirectUI::EventArgs` lived in, unbuilt until now).
+     - *Control templates.*  The style component (components/style:
+       `CStyle` and the optimized style its setters are read from, which
+       hands a control its `Template`), `{TemplateBinding}` to a property
+       the core does not bind itself (`TemplateBindingExpression`), and
+       the core's create functions of the framework-only types
+       (core/controls/generated: the theme transitions the default styles
+       make, with their states, `LayoutTransition_partial`,
+       `ThemeGenerator` and the stagger functions; uxtheme's animation
+       queries answer that no theme is open, as Windows' do without one,
+       and the framework uses its built-in timings).  The parser's errors
+       now carry their text (`src/error_strings.cpp`, from
+       win/agcore.debug/CommonErrors.rc, as a table written at build time).
+       Test: `winui2test` loads `{Binding}`s to the element itself, its
+       `DataContext` and a template's templated parent, makes a `Binding`
+       in code and sees it follow its source, and applies templates
+       (plain, `{TemplateBinding}`, `{Binding}` to the templated parent, a
+       `Style`'s template), with `VisualTreeHelper` finding the template's
+       root.
+     - *UWP start-up.*  `Application.Start` takes its UWP route when
+       `AppPolicyGetWindowingModel` says Universal, which kernel32 says
+       for a packaged app whose entry point is not
+       `Windows.FullTrustApplication`.  The framework's view source and
+       view (`FrameworkViewSource_Partial`, `FrameworkView_Partial`) and
+       its `CoreWindow` wrapper are built; the core's `EnableUWPWindow`
+       feature is on (`HKLM\SOFTWARE\Microsoft\WinUI\Xaml`);
+       twinapi.appcore's `CoreApplication` answers `ICoreApplication2`
+       (the background events and prelaunch) and serves `CoreCursor`.
+       `winui2test` packs itself as a UWP app (`tools/appx/mkuwptest.py`,
+       `C:\Tests\Appx\XamlUwpTest.msix`), installs it, starts it by its
+       AUMID through `ApplicationActivationManager` and reads its log:
+       the package identity, the Universal windowing model and the app's
+       `Application` made pass.
+     - *Where it stops.*  `Application.Start`'s UWP route stops at the
+       core's `DispatcherTimer` (the core services' background resource
+       timer, `CCoreServices::EnsureBackgroundTimer`): it is a `CTimeline`,
+       whose constructor and composition half are the animation component
+       (components/animation, with `Timeline.cpp`'s unpublished
+       `CompHelper/CompositionAnimationHelper.h`), not built yet.  WinUI
+       2's theme resources (`XamlControlsResources`) stop at
+       `AcrylicBrush`'s `FallbackColor` (`AG_E_PARSER2_UNKNOWN_PROP_ON_TYPE`):
+       the property is its base's, the framework's
+       `XamlCompositionBrushBase` (built now, with its core half); WinUI
+       2's type table names that base and answers no member of it, as on
+       Windows, and the framework's walk from the WinUI 2 type to its
+       Windows base does not find the property yet;
+       without those resources an `InfoBadge`'s `ApplyTemplate` finds no
+       default style.  `winui2test` reports these as "not yet" lines.
+   - *Next:* the animation component (storyboards and the core's
+     `DispatcherTimer`), then `Application.Start`'s UWP route on to
+     `CoreApplication.Run` with `Window.Current`; WinUI 2's theme resources
+     loaded (`AcrylicBrush`'s inherited `FallbackColor`) and its controls'
+     default styles applied; then the features Calculator uses
      (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
      `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator
      itself is a .NET Native app: its package also needs the .NET Native

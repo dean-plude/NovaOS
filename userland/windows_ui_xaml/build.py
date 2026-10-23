@@ -425,7 +425,7 @@ def dwrite_headers(mingw, out):
     back into scope with using-declarations, and XAML's text block and its
     DirectWrite font services call them so (core/text/TextBlock,
     pal/win): here each such interface gets the using-declaration of the
-    nearest base interface that declares the name"""
+    nearest base interface that declares the name, after its methods"""
     head = re.compile(r'^MIDL_INTERFACE\("[^"]*"\)\n(\w+) : public (\w+)\n\{\n', re.M)
     meth = re.compile(r'virtual [^;(]*?STDMETHODCALLTYPE\s+(\w+)\(')
     texts = {h: open(os.path.join(mingw, h)).read() for h in _DWRITE}
@@ -444,11 +444,19 @@ def dwrite_headers(mingw, out):
         return None
 
     for h, t in texts.items():
-        def using(m):
+        # (at the end of the interface, as the SDK's: a using-declaration
+        # ahead of the methods would make Microsoft's C++ ABI place the
+        # interface's overloads of those names first in its vtable, out of
+        # its IDL order: IDWriteFactory6's GetSystemFontCollection would
+        # call CreateFontCollectionFromFontSet)
+        out_text, at = [], 0
+        for m in head.finditer(t):
+            end = t.index('\n};', m.end())
             lines = ['    using %s::%s;\n' % (o, n) for n in sorted(names[m.group(1)])
                      for o in [owner(base[m.group(1)], n)] if o]
-            return m.group(0) + ''.join(lines)
-        text = head.sub(using, t)
+            out_text.append(t[at:end + 1] + ''.join(lines))
+            at = end + 1
+        text = ''.join(out_text) + t[at:]
         p = os.path.join(out, h)
         if not os.path.exists(p) or open(p).read() != text:
             open(p, 'w').write(text)
@@ -988,6 +996,38 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
 # too, so once only)
 if '../FrameworkEventArgs.cpp' not in CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj']:
     CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../FrameworkEventArgs.cpp',)
+# (and what a page's first frame needs (roadmap 32.4): the root
+# ScrollViewer's scrolling state, which its presenter makes when the
+# template hooks it to its owner (ScrollData.cpp; without it the root's
+# content never enters the tree, so nothing is laid out or drawn), and the
+# frame's time budget for deferred work (BudgetManager))
+_PAGE_PEERS = ('BudgetManager',)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../ScrollData.cpp',) + tuple(
+    '../%s_Partial.cpp' % x for x in _PAGE_PEERS) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _PAGE_PEERS)
+# (and the text block's typography, which its text is formatted with
+# (core/text's Typography.cpp))
+CORE_SOURCES[_CORETEXT] += ('common/Typography.cpp', 'common/TextOptions.cpp')
+# (and what draws the frame: the compositor tree's clips and transform
+# stacks (core/compositor's compositortree.cpp), the hardware walk's
+# content renderers, composition nodes and realizations (core/hw), and the
+# hit-test parameters the input walk takes (components/transforms))
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('compositor/compositortree.cpp',)
+CORE_SOURCES['core/hw/hw.vcxproj'] += ('BaseContentRenderer.cpp', 'ContentRenderer.cpp', 'VisualContentRenderer.cpp',
+                                       'hwcompnode.cpp', 'hwrealization.cpp')
+# (and NovaOS's DirectManipulationHelper (closed in the Windows App SDK):
+# the lifted DirectManipulation DLL's class factories, which the
+# framework's probe asks for on the first frame; NovaOS's
+# Microsoft.DirectManipulation.dll cannot make its manager yet, so the
+# framework scrolls without it)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    os.path.join(HERE, 'src', 'direct_manipulation_helper.cpp'), os.path.join(HERE, 'src', 'text_analysis.cpp'))
+# (NovaOS's TextAnalysis_GetContentReadingDirection, closed in the Windows
+# App SDK: a text block's reading direction from its first strong
+# character; and the trace session the frame's tracing asks for
+# (components/Telemetry's XamlTraceSession.cpp))
+CORE_SOURCES[_TELEMETRY] += ('XamlTraceSession.cpp',)
+PROJECT_DEFINES[_TELEMETRY] = PROJECT_DEFINES.get(_TELEMETRY, []) + ['RPC_USE_NATIVE_WCHAR']
 # (and the window's present target the browser host retargets the render
 # target to as the window sizes, plat/win/desktop's WindowsPresentTarget)
 CORE_SOURCES['plat/win/desktop/platwindesktop.vcxproj'] += ('windowspresenttarget.cpp',)
@@ -999,7 +1039,7 @@ CORE_SERVICES_STUBS += ('DXaml_Stub.cpp',)
 _TRANSFORMS = 'components/transforms/lib/Microsoft.UI.Xaml.Transforms.vcxproj'
 CORE_LIBRARIES.append((_TRANSFORMS, _TRANSFORMS, 'components/pch/precomp.h', []))
 CORE_FIRST[_TRANSFORMS] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
-CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp',)
+CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp', '../HitTestParams.cpp')
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

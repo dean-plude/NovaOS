@@ -1,8 +1,8 @@
 /* ramdisktest.exe — files on drive C: take the memory their contents need.
  *
- * Drive C: is kept in memory, so its free space is the machine's free
- * memory (GetDiskFreeSpaceEx), and a file's buffer is RAM for as long as the
- * file exists.  The checks:
+ * Drive C: is kept in memory (and saved to a disk when there is one,
+ * which GetDiskFreeSpaceEx then reports), and a file's buffer is RAM for
+ * as long as the file exists.  The checks:
  *   - a file written by appending (its buffer grows as it goes) takes about
  *     its size once it is closed, not the doubled buffer it grew into;
  *   - SetEndOfFile takes the size asked for, not the next power of two
@@ -14,8 +14,8 @@
  *   - deleting the files gives the memory back;
  *   - programs are told the machine's real memory: GlobalMemoryStatusEx's
  *     total is NtQuerySystemInformation's physical pages, its free memory
- *     is drive C:'s free space and falls when a file takes memory (it said
- *     512 MB total, 256 MB free whatever the machine had). */
+ *     falls when a file takes memory (it said 512 MB total, 256 MB free
+ *     whatever the machine had). */
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -29,12 +29,10 @@ static int pass, fail;
 
 static unsigned char buf[CHUNK];
 
-static unsigned long long free_bytes(void)
-{
-    ULARGE_INTEGER avail, total, free;
-    if (!GetDiskFreeSpaceExW(L"C:\\", &avail, &total, &free)) return 0;
-    return free.QuadPart;
-}
+static unsigned long long avail_phys(void);
+
+/* Free memory (drive C:'s free space is its disk's once C: is saved to one) */
+static unsigned long long free_bytes(void) { return avail_phys(); }
 
 static unsigned char pattern(int file, unsigned long long off) { return (unsigned char)(file * 37 + off / 4093 + off); }
 

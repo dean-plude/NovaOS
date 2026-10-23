@@ -483,7 +483,7 @@ bool PersistAdopt(BlockDev *d, UINT64 lba)
 
 /* What Settings and the Terminal show about the volume, as of the last
  * look that did not have to wait for a save (they never wait for one) */
-static struct { bool have; UINT64 free, total; char where[64], desc[96]; } g_shown;
+static struct { bool have; UINT64 free, total; char fs[8], where[64], desc[96]; } g_shown;
 
 static void refresh_shown(void)
 {
@@ -493,9 +493,9 @@ static void refresh_shown(void)
         if (g_vol) { g_shown.free = FatFreeBytes(g_vol); g_shown.total = FatTotalBytes(g_vol); }
         else { g_shown.free = NtfsFreeBytes(g_ntfs); g_shown.total = NtfsTotalBytes(g_ntfs); }
         const char *label = g_vol ? FatLabel(g_vol) : NtfsLabel(g_ntfs);
-        char fs[8];
-        if (g_vol) ksnprintf(fs, sizeof(fs), "FAT%d", FatType(g_vol));
-        else ksnprintf(fs, sizeof(fs), "NTFS");
+        char *fs = g_shown.fs;
+        if (g_vol) ksnprintf(fs, sizeof(g_shown.fs), "FAT%d", FatType(g_vol));
+        else ksnprintf(fs, sizeof(g_shown.fs), "NTFS");
         ksnprintf(g_shown.where, sizeof(g_shown.where), "%s (%s)", g_dev->name, label);
         ksnprintf(g_shown.desc, sizeof(g_shown.desc), "%s %s \"%s\", %u MiB free of %u MiB", g_dev->name, fs, label,
                   (unsigned)(g_shown.free >> 20), (unsigned)(g_shown.total >> 20));
@@ -509,6 +509,14 @@ bool PersistSpace(UINT64 *free, UINT64 *total)
     if (!g_shown.have) return false;
     *free = g_shown.free;
     *total = g_shown.total;
+    return true;
+}
+
+bool PersistFileSystem(char *buf, int cap)
+{
+    refresh_shown();
+    if (!g_shown.have) return false;
+    ksnprintf(buf, (size_t)cap, "%s", g_shown.fs);
     return true;
 }
 

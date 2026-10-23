@@ -7,7 +7,8 @@
  * NtSetSystemInformation(SystemMemoryListInformation) asks for both steps,
  * as RAMMap does: MemoryFlushModifiedList saves, MemoryPurgeStandbyList
  * lets go.  The checks:
- *   - letting go gives the memory back (C:'s free space) and the
+ *   - C: reports the data disk's file system and size;
+ *   - letting go gives the memory back and the
  *     files read back as they were, also through a mapped view;
  *   - opening a file for its details only reads nothing back;
  *   - a file renamed and one hard-linked while only on the disk, then
@@ -85,12 +86,13 @@ static BOOL verify_mapped(const WCHAR *name, int file, DWORD len)
 
 static LONG memory_list(ULONG cmd) { return set_sys_info(80, &cmd, sizeof(cmd)); }   /* SystemMemoryListInformation */
 
-/* Free memory: drive C:'s free space (GlobalMemoryStatusEx's figure is
- * updated every tick) */
+/* Free memory: GlobalMemoryStatusEx's, once the kernel's figure (updated
+ * every tick) has caught up (drive C:'s free space is the data disk's) */
 static unsigned long long avail(void)
 {
-    ULARGE_INTEGER a, total, free;
-    return GetDiskFreeSpaceExW(L"C:\\", &a, &total, &free) ? free.QuadPart : 0;
+    Sleep(50);
+    MEMORYSTATUSEX ms = { .dwLength = sizeof(ms) };
+    return GlobalMemoryStatusEx(&ms) ? ms.ullAvailPhys : 0;
 }
 
 static unsigned long long size_of(const WCHAR *name, DWORD access)
@@ -102,8 +104,25 @@ static unsigned long long size_of(const WCHAR *name, DWORD access)
     return (unsigned long long)s.QuadPart;
 }
 
+/* Drive C: is saved to the data disk (a 64 MiB FAT32 volume, under the
+ * machine's 2 GiB): it reports that volume's file system and size, not
+ * RAMFS and the machine's memory (Disk Management showed an installed C:
+ * as a RAM disk) */
+static void c_volume(void)
+{
+    char fs[32] = "";
+    ULARGE_INTEGER a, total, free;
+    CHECK("GetVolumeInformation(C:) names the data disk's FAT32",
+          GetVolumeInformationA("C:\\", NULL, 0, NULL, NULL, NULL, fs, sizeof(fs)) && !strcmp(fs, "FAT32"));
+    CHECK("GetDiskFreeSpaceEx(C:) is the data disk's size",
+          GetDiskFreeSpaceExW(L"C:\\", &a, &total, &free) && total.QuadPart > 16 * MiB && total.QuadPart <= 1024 * MiB &&
+          free.QuadPart < total.QuadPart);
+    printf("  C: is %s, %llu MiB, %llu MiB free\n", fs, total.QuadPart / MiB, free.QuadPart / MiB);
+}
+
 static void before_restart(void)
 {
+    c_volume();
     CreateDirectoryW(L"C:\\Temp", NULL);
     CreateDirectoryW(DIR_, NULL);
     CHECK("an unknown memory list command is refused", memory_list(9) == (LONG)0xC000000D);

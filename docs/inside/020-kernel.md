@@ -30,4 +30,6 @@
     `GetSystemTimes`, `GetProcessTimes` and `GetThreadTimes` report and
     Task Manager graphs.
   - Drive C: is a RAM disk, saved to an NTFS or FAT32 volume once it has
-    been quiet for a second and restored at boot.
+    been quiet for a second and restored at boot; once saved, it reports
+    that volume's file system, size and free space (Disk Management,
+    `GetVolumeInformation`, `GetDiskFreeSpaceEx`).

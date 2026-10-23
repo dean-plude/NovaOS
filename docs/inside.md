@@ -69,7 +69,9 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     `GetSystemTimes`, `GetProcessTimes` and `GetThreadTimes` report and
     Task Manager graphs.
   - Drive C: is a RAM disk, saved to an NTFS or FAT32 volume once it has
-    been quiet for a second and restored at boot.
+    been quiet for a second and restored at boot; once saved, it reports
+    that volume's file system, size and free space (Disk Management,
+    `GetVolumeInformation`, `GetDiskFreeSpaceEx`).
 - **Built-in drivers** (`kernel/drivers/`, `kernel/hal/`, `kernel/fs/`):
   NovaOS's own drivers, compiled into the kernel; they play the part of
   Windows' inbox drivers ([drivers.md](drivers.md), [hardware.md](hardware.md)).

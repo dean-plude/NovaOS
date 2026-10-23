@@ -164,6 +164,12 @@ HANDLE k32_volume_open(LPCWSTR path)
     return open_guid_path(name, 0);
 }
 
+/* For extra.c: drive @c's volume ("\\.\C:"), opened for queries */
+HANDLE k32_drive_open(WCHAR c)
+{
+    return open_letter(c, 0);
+}
+
 /* -----------------------------------------------------------------------
  * Listing the volumes
  * ----------------------------------------------------------------------- */

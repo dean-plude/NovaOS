@@ -977,10 +977,10 @@ vendors.
        `src/composition_animation_helper.cpp`) starts and stops an
        animation on the object's property through NovaOS's
        `Windows.UI.Composition`, which keeps no animation controllers, so
-       its pause and seek leave the animation running.  Also: NovaOS's
-       WRL `FtmBase` answers `IAgileObject` without deriving it (a class
-       may list `IAgileObject` beside `FtmBase`, as the time manager's
-       composition batch handler does), an SDK-style `<minmax.h>`, and the
+       its pause and seek leave the animation running.  Also: the time
+       manager's composition batch handler lists `FtmBase` without
+       `IAgileObject` (NovaOS's WRL `FtmBase` derives it), an SDK-style
+       `<minmax.h>`, and the
        effects headers moved from WinUI 2's include directory to the
        framework's, which both build with.
      - *FrameworkUdk's `CoreWindow` position listener*

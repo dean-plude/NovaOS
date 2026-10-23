@@ -258,7 +258,7 @@ bool CTimeManager::AddActiveWUCAnimation(
             wrl::Implements<
                 wrl::RuntimeClassFlags<wrl::ClassicCom>,
                 wf::ITypedEventHandler<IInspectable*, WUComp::CompositionBatchCompletedEventArgs*>,
-                IAgileObject, wrl::FtmBase>>
+                wrl::FtmBase>>   // NovaOS: IAgileObject left out (FtmBase answers it, as NovaOS's WRL derives it)
             (this, &CTimeManager::OnWUCAnimationCompleted);
 
         IFCFAILFAST(scopedBatch->add_Completed(

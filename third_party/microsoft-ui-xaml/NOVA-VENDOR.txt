@@ -193,7 +193,9 @@ time manager vendored before), components/animation with its project
 (lib/Microsoft.UI.Xaml.Animation.vcxproj), and dxaml/lib's
 DispatcherTimer_Partial.cpp, Storyboard_Partial.cpp, Timeline_Partial.cpp
 and TimelineTimer.cpp with the generated classes of the timelines,
-animations, key frames and eases they and the parser make.
+animations, key frames and eases they and the parser make.  Changed:
+components/animation/TimeManager.cpp's batch handler lists FtmBase without
+IAgileObject (NovaOS's WRL FtmBase already derives IAgileObject).
 
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are

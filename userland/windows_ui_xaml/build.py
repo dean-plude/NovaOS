@@ -1028,6 +1028,54 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
 # (components/Telemetry's XamlTraceSession.cpp))
 CORE_SOURCES[_TELEMETRY] += ('XamlTraceSession.cpp',)
 PROJECT_DEFINES[_TELEMETRY] = PROJECT_DEFINES.get(_TELEMETRY, []) + ['RPC_USE_NATIVE_WCHAR']
+# (and the theme animations a button's visual states run (PointerUp/
+# PointerDownThemeAnimation and the rest: their generated classes, their
+# base's and the framework's ThemeAnimations.cpp, which makes their
+# storyboards with the theme generator), with the helper component they
+# share (components/themeanimationshelper))
+_THEME_ANIMATIONS = ('ThemeAnimationBase', 'DragItemThemeAnimation', 'DragOverThemeAnimation', 'DrillInThemeAnimation',
+                     'DrillOutThemeAnimation', 'DropTargetItemThemeAnimation', 'FadeInThemeAnimation',
+                     'FadeOutThemeAnimation', 'PointerDownThemeAnimation', 'PointerUpThemeAnimation',
+                     'PopInThemeAnimation', 'PopOutThemeAnimation', 'RepositionThemeAnimation',
+                     'SplitCloseThemeAnimation', 'SplitOpenThemeAnimation', 'SwipeBackThemeAnimation',
+                     'SwipeHintThemeAnimation')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../ThemeAnimations.cpp',) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _THEME_ANIMATIONS)
+COMPONENT_INCLUDES.append('components/themeanimationshelper/inc')
+_THEMEANIMHELPER = 'components/themeanimationshelper/lib/Microsoft.UI.Xaml.ThemeAnimationsHelper.vcxproj'
+CORE_LIBRARIES.append((_THEMEANIMHELPER, _THEMEANIMHELPER, 'components/pch/precomp.h', []))
+CORE_FIRST[_THEMEANIMHELPER] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+CORE_SOURCES[_THEMEANIMHELPER] = ('ThemeAnimationsHelper.cpp',)
+# (and the framework's peers of what those storyboards animate and are
+# made of: the transforms and projections, the timelines, the key frame
+# collections, each its generated class (InternalTransform its partial too))
+_ANIMATED_PEERS = ('ColorKeyFrameCollection', 'CompositeTransform', 'DoubleKeyFrameCollection', 'DynamicTimeline',
+                   'GeneralTransform', 'InternalTransform', 'MatrixTransform', 'ObjectKeyFrameCollection',
+                   'ParallelTimeline', 'PlaneProjection', 'PointKeyFrameCollection', 'PointerAnimationUsingKeyFrames',
+                   'PointerKeyFrame', 'PointerKeyFrameCollection', 'Projection', 'RotateTransform', 'ScaleTransform',
+                   'SkewTransform', 'StoryboardCollection', 'TransformCollection', 'TransformGroup', 'TranslateTransform')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../InternalTransform_Partial.cpp',) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _ANIMATED_PEERS)
+# (and the transforms' base and the peers of a control template's visual
+# states and triggers, and of a grid's rows and columns)
+_STATE_PEERS = ('Transform', 'VisualState', 'VisualStateCollection', 'VisualStateGroup', 'VisualStateGroupCollection',
+                'VisualTransition', 'VisualTransitionCollection', 'StateTriggerCollection', 'TriggerCollection',
+                'TriggerActionCollection', 'KeyboardAcceleratorCollection', 'BeginStoryboard', 'EventTrigger',
+                'ColumnDefinition', 'ColumnDefinitionCollection', 'RowDefinition', 'RowDefinitionCollection',
+                'DoubleCollection')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in ('Transform', 'VisualStateGroup', 'VisualStateGroupCollection', 'EventTrigger')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _STATE_PEERS)
+# (and the automation peers' base, AutomationPeer: layout asks it whether a
+# UI Automation client listens (ListenerExistsHelper) before raising the
+# scroll viewer's property changes)
+_STATE_PEERS += ('AutomationPeer',)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../winrtgeneratedclasses/UnhandledExceptionEventArgs.g.cpp',)   # (the args an unhandled error is reported with)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../AutomationPeer_Partial.cpp', '../winrtgeneratedclasses/AutomationPeer.g.cpp')
+# (and the print root's layout, which the root visual measures with the
+# rest of its children (core/optional's printroot.cpp))
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('optional/elements/printing/printroot.cpp',)
 # (and the window's present target the browser host retargets the render
 # target to as the window sizes, plat/win/desktop's WindowsPresentTarget)
 CORE_SOURCES['plat/win/desktop/platwindesktop.vcxproj'] += ('windowspresenttarget.cpp',)

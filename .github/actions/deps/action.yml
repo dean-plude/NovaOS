@@ -1,0 +1,27 @@
+name: Install job dependencies
+description: tools/ci/install.sh PROFILE, with the downloaded .deb packages cached per runner image so later jobs install them without the network.
+inputs:
+  profile:
+    description: install.sh profile (build, runtime, graphics, corpus, vkd3d)
+    required: true
+runs:
+  using: composite
+  steps:
+  - id: key
+    shell: bash
+    run: echo "key=apt-debs-v1-${{ inputs.profile }}-$ImageOS-$ImageVersion-$(sha256sum tools/ci/install.sh | cut -c1-16)" >> "$GITHUB_OUTPUT"
+  - id: restore
+    uses: actions/cache/restore@v4
+    with:
+      path: ${{ runner.temp }}/apt-debs
+      key: ${{ steps.key.outputs.key }}
+  - shell: bash
+    run: tools/ci/install.sh "${{ inputs.profile }}"
+    env:
+      APT_DEB_CACHE: ${{ runner.temp }}/apt-debs
+  - if: steps.restore.outputs.cache-hit != 'true'
+    uses: actions/cache/save@v4
+    continue-on-error: true
+    with:
+      path: ${{ runner.temp }}/apt-debs
+      key: ${{ steps.key.outputs.key }}

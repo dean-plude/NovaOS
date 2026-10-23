@@ -46,6 +46,7 @@
 #include "../hal/aml.h"
 #include "../ke/sleep.h"
 #include "../arch/x86_64/cpu.h"
+#include "../arch/x86_64/apic.h"
 #include "../apps/apps.h"
 #include "../net/net.h"
 #include "../drivers/audio.h"
@@ -2137,6 +2138,15 @@ void DesktopWatchdog(UINT64 now)
         kprintf("[WATCHDOG] %s: '%s' (TID %llu, state %d); kernel return addresses:\n",
                 i ? "the desktop lock is held by" : "the desktop has not responded for 3 s", th->name,
                 (unsigned long long)th->tid, th->state);
+        if (th->state == THREAD_WAITING && th->in_sleepers) {
+            /* A timed sleep that did not end: whose timer, and when it was
+             * due (a Hyper-V host showed the desktop asleep for 3 s) */
+            UINT64 tsc = rdtsc(), armed = sched_timer_armed(th->sleep_cpu);
+            kprintf("[WATCHDOG]   asleep on CPU %u (tick %s) until tick %llu, now %llu; its timer is armed %lld ms from now\n",
+                    th->sleep_cpu, sched_tick_stopped(th->sleep_cpu) ? "stopped" : "running",
+                    (unsigned long long)th->wake_tick, (unsigned long long)now,
+                    g_tsc_per_tick ? (long long)(armed - tsc) / (long long)(g_tsc_per_tick / 10) : 0);
+        }
         UINT64 *sp = (UINT64 *)(uintptr_t)th->context.rsp;
         UINT64 *top = (UINT64 *)((uintptr_t)th->kernel_stack + th->stack_size);
         for (int n = 0; sp < top && n < 24; sp++)

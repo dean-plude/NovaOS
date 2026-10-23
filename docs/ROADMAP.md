@@ -704,7 +704,15 @@ ThinkPad T14 Gen 4 and the nightly corpus is green for a week.
   are packed now, checked against Linux's layout; should the host still
   refuse, the video memory moves into the VMBus's ACPI memory ranges (the
   one above 4 GiB first) and the boot log stops drawing on a screen the
-  host does not show.
+  host does not show.  The fourth boot (10-23) reached the desktop with a working
+  screen; the installer sat at "Copying NovaOS" and the watchdog found the
+  desktop in a 10 ms sleep that had not ended after 3 s.  The disk driver
+  now logs how fast the host answers (every 5 s) and the watchdog says
+  whose timer a sleeping desktop waits for.  The cause: a disk request
+  polled for its answer with the kernel lock held, starving the other
+  threads, and froze the VM when the vmbus thread was switched out
+  mid-ring; the asker sleeps until the answer now.  An install with
+  drive C: on FAT32 completed in that boot.
 - [ ] **23.5 Update signing key.** Ship the release public key in
   `kernel/fs/update_key.h` (still empty); verify that a 0.1 install accepts
   a signed 0.1.1 test update and rejects an unsigned one.

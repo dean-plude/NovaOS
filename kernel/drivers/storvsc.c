@@ -111,10 +111,14 @@ typedef struct {
     UINT32        max_transfer;
     UINT64        next_id;
     volatile UINT64 wait_id;             /* the request waiting for its answer */
-    volatile bool done;
+    volatile UINT32 done;
+    Thread       *waiter;                /* the thread asleep in request(), woken by the answer */
     bool          dead;                  /* a request got no answer: no more are sent */
     VstorPacket   reply;
     UINT8        *bounce;                /* XFER_PAGES pages */
+    /* How long the host takes (a Hyper-V host's disk writes looked very
+     * slow): summed up and logged every 5 s while requests run */
+    UINT64        stat_since, stat_n, stat_bytes, stat_tsc, stat_max_tsc;
 } Stor;
 
 typedef struct {
@@ -142,7 +146,9 @@ static bool take_reply(Stor *s, const UINT8 *d, UINT32 len, UINT64 trans_id)
     if (!trans_id || trans_id != s->wait_id || s->done) return false;
     memset(&s->reply, 0, sizeof(s->reply));
     memcpy(&s->reply, d, len < sizeof(s->reply) ? len : sizeof(s->reply));
-    __atomic_store_n(&s->done, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&s->done, 1, __ATOMIC_RELEASE);
+    Thread *w = s->waiter;               /* (the vmbus thread read the answer: wake the asker) */
+    if (w && w != sched_current()) sched_unblock(w);
     return true;
 }
 
@@ -161,34 +167,66 @@ static void stor_packet(void *ctx, const UINT8 *d, UINT32 len, UINT64 trans_id)
                 s->number, op == VSTOR_ENUMERATE_BUS ? "asks for a rescan" : "removed a device");
 }
 
+static void account(Stor *s, UINT64 took, UINT32 bytes)
+{
+    UINT64 now = sched_ticks();
+    if (!s->stat_since) s->stat_since = now;
+    s->stat_n++;
+    s->stat_bytes += bytes;
+    s->stat_tsc += took;
+    if (took > s->stat_max_tsc) s->stat_max_tsc = took;
+    if (now - s->stat_since < 500 || !g_tsc_per_tick) return;
+    UINT64 per_ms = g_tsc_per_tick / 10;
+    kprintf("[STORVSC] controller %d: %llu requests in %llu s, %llu KiB; the host took %llu.%llu ms each on average, %llu ms at most\n",
+            s->number, (unsigned long long)s->stat_n, (unsigned long long)((now - s->stat_since) / 100),
+            (unsigned long long)(s->stat_bytes >> 10),
+            (unsigned long long)(s->stat_tsc / s->stat_n / per_ms),
+            (unsigned long long)(s->stat_tsc / s->stat_n % per_ms * 10 / per_ms),
+            (unsigned long long)(s->stat_max_tsc / per_ms));
+    s->stat_since = now;
+    s->stat_n = s->stat_bytes = s->stat_tsc = s->stat_max_tsc = 0;
+}
+
 /* Send @p (@buf: the bounce buffer's first @buf_len bytes go with it, or
  * none) and wait for the answer in s->reply.  False when it could not be
- * sent or no answer came */
+ * sent or no answer came.  A thread waits asleep, a tick at a time, and
+ * the vmbus thread wakes it when the answer arrives (take_reply): spinning
+ * here held the kernel lock for a whole disk copy and starved the desktop
+ * on a Hyper-V host.  Before the scheduler runs (the boot disk's first
+ * reads), it polls. */
 static bool request(Stor *s, VstorPacket *p, UINT32 buf_len)
 {
     if (s->dead) return false;
-    UINT64 id = ++s->next_id;
-    s->done = false;
+    UINT64 id = ++s->next_id, t0 = rdtsc(), per_ms = g_tsc_per_tick / 10;
+    s->done = 0;
+    s->waiter = interrupts_enabled() ? sched_current() : NULL;
     __atomic_store_n(&s->wait_id, id, __ATOMIC_RELEASE);
     p->flags = VSTOR_FLAG_COMPLETION;
     bool sent = buf_len ? VmbusSendGpa(s->ch, p, s->pkt_len, id, s->bounce, buf_len)
                         : VmbusSend(s->ch, p, s->pkt_len, id, true);
+    UINT32 reported = 0;
     for (UINT32 t = 0; sent && !__atomic_load_n(&s->done, __ATOMIC_ACQUIRE); t++) {
         VmbusPollChannel(s->ch);
         if (__atomic_load_n(&s->done, __ATOMIC_ACQUIRE)) break;
-        if (t && !(t % (5000 * 100)))                    /* (every 5 s: which request the host sits on) */
+        /* (polling: 10 us a round; asleep: the TSC says) */
+        UINT32 ms = per_ms && s->waiter ? (UINT32)((rdtsc() - t0) / per_ms) : t / 100;
+        if (ms >= reported + 5000) {                     /* (every 5 s: which request the host sits on) */
+            reported = ms / 5000 * 5000;
             kprintf("[STORVSC] controller %d: still waiting after %u s (operation %u, SCSI 0x%02x)\n", s->number,
-                    t / 100000, p->operation, p->operation == VSTOR_EXECUTE_SRB ? p->srb.cdb[0] : 0);
-        if (t >= TIMEOUT_MS * 100) {
+                    ms / 1000, p->operation, p->operation == VSTOR_EXECUTE_SRB ? p->srb.cdb[0] : 0);
+        }
+        if (ms >= TIMEOUT_MS) {
             kprintf("[STORVSC] controller %d: no answer in %u s: given up\n", s->number, TIMEOUT_MS / 1000);
             s->dead = true;
             sent = false;
             break;
         }
-        udelay(10);
-        if (interrupts_enabled() && sched_current() && !(t & 127)) sched_yield();
+        if (s->waiter) sched_sleep_until(&s->done, sched_ticks() + 1);
+        else udelay(10);
     }
+    s->waiter = NULL;
     __atomic_store_n(&s->wait_id, 0, __ATOMIC_RELEASE);
+    if (sent && s->done) account(s, rdtsc() - t0, buf_len);
     return sent && s->done;
 }
 

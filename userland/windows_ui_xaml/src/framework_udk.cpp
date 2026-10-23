@@ -20,10 +20,17 @@
 //     XAML thread through.  NovaOS has no such tools, so there is nothing to
 //     register with; the framework starts as it does on Windows when no
 //     tool is listening.
+//   WindowPositionChanged_RegisterListener and _UnregisterListener: a
+//     window on a CoreWindow (dxaml/lib JupiterWindow.cpp, a UWP app's
+//     window) registers to hear when the CoreWindow moves, so its popups
+//     and text input follow.  The listeners are kept (each held until it
+//     unregisters) and not called yet: NovaOS's CoreWindow
+//     (twinapi.appcore) reports no moves to FrameworkUdk.
 #include <windows.h>
 #include <FrameworkUdk/FinalUnhandledErrorDetected.h>
 #include <FrameworkUdk/VisualDiagnosticsPort.h>
 #include <MuiUdk.h>
+#include <FrameworkUdk/CoreWindowIntegration.h>
 
 namespace {
 SRWLOCK g_lock = SRWLOCK_INIT;
@@ -81,5 +88,43 @@ HRESULT Mui_GetFontFallbackLanguageList(PCWSTR, size_t, PWSTR, size_t *cchWritte
 
 HRESULT Mui_PropagateApplicationLanguages()
 {
+    return S_OK;
+}
+
+namespace {
+using PositionListener = ABI::Microsoft::Internal::FrameworkUdk::ICoreWindowPositionChangedListener;
+PositionListener *g_position_listeners[16];
+}
+
+HRESULT WindowPositionChanged_RegisterListener(PositionListener *listener)
+{
+    if (!listener) return E_INVALIDARG;
+    HRESULT hr = E_OUTOFMEMORY;
+    AcquireSRWLockExclusive(&g_lock);
+    for (auto &l : g_position_listeners) {
+        if (!l) {
+            listener->AddRef();
+            l = listener;
+            hr = S_OK;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    return hr;
+}
+
+HRESULT WindowPositionChanged_UnregisterListener(PositionListener *listener)
+{
+    PositionListener *found = nullptr;
+    AcquireSRWLockExclusive(&g_lock);
+    for (auto &l : g_position_listeners) {
+        if (l && l == listener) {
+            found = l;
+            l = nullptr;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    if (found) found->Release();
     return S_OK;
 }

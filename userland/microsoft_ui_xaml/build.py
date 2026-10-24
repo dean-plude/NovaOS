@@ -258,6 +258,56 @@ def leave_out_unbuilt(text, types, framework=None):
             d.removeChild(el)
 
 
+def lookup_order(text):
+    """@text (a merged dictionary) with each dictionary's resources ordered
+    so that one comes after the resources of its dictionary it names
+    ({StaticResource}, {ThemeResource}), the merged order kept otherwise:
+    XBF defers each resource until it is first looked up, so a resource may
+    name one later in its dictionary (BasedOn="{StaticResource
+    DefaultMenuFlyoutItemStyle}" before that style), where XAML text lets
+    a resource see only the keys before it (the framework's CDeferredKeys
+    sets a lookup boundary at the resource being created)"""
+    from xml.dom import minidom
+    doc = minidom.parseString(text.encode('utf-8'))
+    root = doc.documentElement
+    for d in [root] + root.getElementsByTagName('ResourceDictionary'):
+        items = [e for e in d.childNodes if e.nodeType == e.ELEMENT_NODE and '.' not in e.tagName.split(':')[-1]]
+        by_key = {}
+        for e in items:
+            k = e.getAttribute('x:Key') or e.getAttribute('x:Name')
+            if k:
+                by_key[k] = e
+        def refs(e):
+            out = []
+            for n in [e] + e.getElementsByTagName('*'):
+                for at in n.attributes.values():
+                    out += re.findall(r'{(?:StaticResource|ThemeResource)\s+(?:ResourceKey=)?([\w.]+)\s*}', at.value)
+                if n.tagName in ('StaticResource', 'ThemeResource') and n.getAttribute('ResourceKey'):
+                    out.append(n.getAttribute('ResourceKey'))
+            return [by_key[k] for k in out if k in by_key and by_key[k] is not e]
+        order, done = [], set()
+        for e in items:
+            stack = [(e, iter(refs(e)))]
+            if id(e) in done:
+                continue
+            done.add(id(e))
+            while stack:
+                node, deps = stack[-1]
+                dep = next(deps, None)
+                if dep is None:
+                    order.append(node)
+                    stack.pop()
+                elif id(dep) not in done:
+                    done.add(id(dep))
+                    stack.append((dep, iter(refs(dep))))
+        if order != items:
+            for e in items:
+                d.removeChild(e)
+            for e in order:
+                d.appendChild(e)
+    return root.toxml()
+
+
 # the release whose merged files are installed: XamlControlsResources
 # and each control's DefaultStyleResourceUri pick them by the
 # UniversalApiContract ApiInformation reports, which on NovaOS (Windows 10
@@ -274,6 +324,7 @@ def themes(gen, types):
     for kind, rels in pages().items():
         name = RELEASE.lower() + '_' + kind + '.xaml'
         text, left = leave_out_unbuilt(mergexaml.merge(rels)[RELEASE][1], types)
+        text = lookup_order(text)
         path = os.path.join(out, name)
         if not os.path.exists(path) or open(path, encoding='utf-8').read() != text:
             open(path, 'w', encoding='utf-8').write(text)

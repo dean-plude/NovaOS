@@ -1270,10 +1270,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   faces pass `Windows.UI.Composition` objects as the framework's
   `Microsoft.UI.Composition` ones; the merged theme resources list each
   resource after those it names, as XBF's lookup-time creation allows;
-  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Next: the
-  controls' default styles applied (`InfoBadge`'s template), then
-  Calculator's controls; Calculator's start-up itself waits on the .NET
-  Native framework packages (32.6).
+  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Eighth
+  part done: the controls' default styles apply with
+  `XamlControlsResources` in the app's resources: `InfoBadge`,
+  `ProgressBar`, `ProgressRing`, `SwipeControl` and `BackdropMaterial`
+  (more of the framework vendored; `Windows.UI.Colors`,
+  `AccessibilitySettings`, dcomp's property-change listeners, and a
+  hidden `CoreWindow` on a desktop XAML thread as XAML islands make).
+  Next: `NavigationView` with `ItemsRepeater` and `RadioButtons`;
+  Calculator's start-up itself waits on the .NET Native framework
+  packages (32.6).
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

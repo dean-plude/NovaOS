@@ -224,7 +224,9 @@ for _p in ('control/common/shared/sl/controlBase.vcxproj', 'win/shared/sl/shared
 # NovaOS's precompiled header in place of the project's, src/platdesktop;
 # and its half in components/graphics, with the frame scheduler and the
 # projected shadow manager), the composition tree host it makes
-# (components/comptree: DCompTreeHost, OfferTracker, with its brush
+# (components/comptree: DCompTreeHost, OfferTracker, the property
+# listener of an element visual handed off (DCompPropertyChangedListener,
+# step 32.5 part 8: AnimatedVisualPlayer), with its brush
 # manager, components/brushes' WUCBrushManager), the core's compositor
 # scheduler and its render thread, the UI thread's frame scheduler, the
 # window render target with its refresh rate and clock
@@ -269,7 +271,8 @@ CORE_SOURCES.update({
     'components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj': ('../WindowsGraphicsDeviceManager.cpp',
                                                                           '../ProjectedShadowManager.cpp',
                                                                           '../Scheduler.cpp'),
-    'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj': ('../DCompTreeHost.cpp', '../OfferTracker.cpp'),
+    'components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj': ('../DCompTreeHost.cpp', '../OfferTracker.cpp',
+                                                                  '../DCompPropertyChangedListener.cpp'),
     'control/download/download.vcxproj': ('download.cpp',),
     'components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj': ('../WUCBrushManager.cpp',)})
 # (and the CompositionHelper the composition tree host keeps its device in,
@@ -1052,6 +1055,9 @@ CORE_SOURCES[_VSM] = tuple('../' + os.path.basename(x) for x in vcxproj.read(os.
 # ICustomPropertyProvider, a map's, an indexer's) and the value converters
 # between a source's value and the target's type, each its generated class
 # and its partial one)
+_THEME_ANIMATIONS = tuple(x + 'ThemeAnimation' for x in (
+    'DragItem', 'DragOver', 'DrillIn', 'DrillOut', 'DropTargetItem', 'FadeIn', 'FadeOut', 'PointerDown', 'PointerUp',
+    'PopIn', 'PopOut', 'Reposition', 'SplitClose', 'SplitOpen', 'SwipeBack', 'SwipeHint'))
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
     'Binding_Partial', 'BindingExpression_Partial', 'DefaultValueConverter', 'DynamicValueConverter',
     'DependencyObjectPropertyAccess', 'IndexerPropertyAccess', 'MapPropertyAccess', 'PropertyAccessPathStep',
@@ -1082,7 +1088,18 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     # (and CompositionTarget's statics: its Rendering event, which WinUI 2's
     # acrylic waits on for the dispatcher, and XamlLight, the base of its
     # reveal lights: step 32.5's sixth part)
-    'CompositionTarget', 'XamlLight_Partial')) + tuple(
+    'CompositionTarget', 'XamlLight_Partial',
+    # (and RangeBase, the base of WinUI 2's ProgressBar, UserControl, and
+    # the theme animations WinUI 2's templates run (RepositionThemeAnimation,
+    # FadeInThemeAnimation ...): step 32.5's eighth part)
+    'RangeBase_Partial', 'UserControl_Partial', 'ThemeAnimations',
+    # (and the elements those templates are made of and their code reaches:
+    # shapes, transforms, StackPanel, grid definitions, visual states)
+    'Shape_Partial', 'Transform_Partial', 'StackPanel_Partial', 'VisualStateGroup_Partial',
+    'BrushTransition_Partial',
+    # (and ElementCompositionPreview's statics, which WinUI 2's
+    # AnimatedVisualPlayer (ProgressRing's) hangs its visual on)
+    'ElementCompositionPreview')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
                                                       'BindingExpressionBase', 'BindingFailedEventArgs',
                                                       'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
@@ -1091,7 +1108,20 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
                                                       'StaggerFunctionBase', 'PVLStaggerFunction',
                                                       'XamlCompositionBrushBase',
                                                       # (the UWP start-up's Window.Created arguments)
-                                                      'WindowCreatedEventArgs', 'XamlLight'))
+                                                      'WindowCreatedEventArgs', 'XamlLight',
+                                                      'RangeBase', 'RangeBaseValueChangedEventArgs', 'UserControl', 'DynamicTimeline',
+                                                      'Shape', 'Rectangle', 'Ellipse', 'GeneralTransform', 'Transform',
+                                                      'CompositeTransform', 'ScaleTransform', 'TranslateTransform',
+                                                      'RotateTransform', 'StackPanel', 'ColumnDefinition',
+                                                      'RowDefinition', 'VisualState', 'VisualStateGroup',
+                                                      'VisualTransition', 'BrushTransition',
+                                                      'ElementCompositionPreview') +
+    _THEME_ANIMATIONS)
+# (with the helper component the pointer-down animation asks,
+# components/themeanimationshelper)
+_THEMEANIMATIONSHELPER = 'components/themeanimationshelper/lib/Microsoft.UI.Xaml.ThemeAnimationsHelper.vcxproj'
+CORE_LIBRARIES.append((_THEMEANIMATIONSHELPER, _THEMEANIMATIONSHELPER, 'components/pch/precomp.h', []))
+CORE_SOURCES[_THEMEANIMATIONSHELPER] = ('ThemeAnimationsHelper.cpp',)
 # (with its core half, components/brushes' CXamlCompositionBrush)
 CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../XamlCompositionBrush.cpp',)
 # (and the style component, components/style: CStyle's own members and

@@ -17,5 +17,15 @@ now an NTFS volume, as on an installed system (Setup installs on NTFS only).
   bar's loop until the next key. Another key's release now counts too
   (`userland/user32/msg.c`); `guitest auto` checks that Alt alone opens
   the menu bar and Alt with F4's release does not.
+- **An NTFS volume took no more files after about 7,000** (Steam's
+  test: its update stopped there, with "The cache_path directory ...
+  could not be created"). The MFT grew 64 records at a time, each time in
+  a new extent after the files written since, until its extents no
+  longer fitted in record 0. It now grows by half its size (64 records at
+  least, 65,536 at most), and its bitmap gets more clusters when its own
+  are full, which a volume Setup formatted needed past 32,768 records
+  (`kernel/fs/ntfs.c` `grow_mft`). `tests/tools/test_ntfs_many.py` puts
+  40,000 files on Setup's and mkntfs' volumes and checks them with
+  `scripts/ntfs-check.py`.
 - **Audacity's test** waits 60 s for its Save As dialog, which lists
   `C:\Documents\Audacity` from the disk now.

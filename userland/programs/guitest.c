@@ -9,7 +9,7 @@
 
 static HINSTANCE g_inst;
 static HWND g_log, g_edit;
-static int g_auto, g_pass, g_fail, g_applied;     /* "guitest auto": drives itself and checks */
+static int g_auto, g_pass, g_fail, g_applied, g_menuloops;     /* "guitest auto": drives itself and checks */
 static char g_ok_name[260];
 static int g_ok_fmt = -1, g_ok_enc = -1;
 #define CHECK(what, cond) do { if (cond) g_pass++; else { g_fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); } } while (0)
@@ -156,6 +156,10 @@ static LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (mb) { KillTimer(h, 1); PostMessageW(mb, WM_COMMAND, IDNO, 0); }
         return 0;
     }
+    case WM_ENTERMENULOOP:                           /* auto: counted, and left again */
+        g_menuloops++;
+        if (g_auto) { PostMessageW(h, WM_KEYDOWN, VK_ESCAPE, 1); PostMessageW(h, WM_KEYDOWN, VK_ESCAPE, 1); }
+        return 0;
     case WM_CLOSE: logf("main: WM_CLOSE"); DestroyWindow(h); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     }
@@ -213,6 +217,19 @@ static INT_PTR CALLBACK page_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return FALSE;
 }
 
+/* Alt down, @vk's release (0: none), Alt up, as the desktop delivers
+ * them: how often the menu bar's loop was entered */
+static int alt_keys(HWND h, UINT vk)
+{
+    g_menuloops = 0;
+    PostMessageW(h, WM_SYSKEYDOWN, VK_MENU, 0x20380001);
+    if (vk) PostMessageW(h, WM_SYSKEYUP, vk, 0xE03E0001);
+    PostMessageW(h, WM_SYSKEYUP, VK_MENU, 0xC0380001);
+    MSG m;
+    while (PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageW(&m); }
+    return g_menuloops;
+}
+
 /* "guitest auto": the menu, edit, list box, dialog, message box and
  * property sheet driven by the program itself; exits with the failure count */
 static int run_auto(HWND h, HACCEL acc)
@@ -260,6 +277,12 @@ static int run_auto(HWND h, HACCEL acc)
     SetRect(&pr, 1, 1, 1, 1);
     CHECK("popup CW_USEDEFAULT size", pop && GetWindowRect(pop, &pr) && pr.right - pr.left == 0 && pr.bottom - pr.top == 0);
     if (pop) DestroyWindow(pop);
+
+    /* Alt tapped alone opens the menu bar; Alt+F4 does not, although the
+     * desktop takes F4's press (it closes the window) and passes on only
+     * its release: a slow closing program was left in the menu bar */
+    CHECK("Alt opens the menu bar", alt_keys(h, 0) == 1);
+    CHECK("Alt+F4's F4 release leaves it", alt_keys(h, VK_F4) == 0);
 
     DestroyWindow(h);
     CHECK("DestroyWindow", !IsWindow(h));

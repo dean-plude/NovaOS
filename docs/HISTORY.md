@@ -15635,9 +15635,16 @@ now an NTFS volume, as on an installed system (Setup installs on NTFS only).
 - **`tools/novarun.py`**: `make_data(..., fs='ntfs')` copies files onto the
   volume (`put_ntfs`: an ntfs-3g mount, through `sudo -n` when not root).
 - **`tools/appcorpus.py`**: the corpus machine's data disk is NTFS.
-- **Still open:** with C: on its disk, Audacity sometimes waits after
-  Alt+F4 until a key or a mouse event arrives before it exits; under
-  investigation.
+- **Alt+F4 opened the menu bar** of a program that was slow to close.
+  The desktop takes F4's press itself (it closes the window) and passes
+  on only its release, and user32 counted only key presses as "another
+  key", so Alt's release looked like Alt tapped alone and opened the menu
+  bar; Audacity, closing its project on the disk, then sat in the menu
+  bar's loop until the next key. Another key's release now counts too
+  (`userland/user32/msg.c`); `guitest auto` checks that Alt alone opens
+  the menu bar and Alt with F4's release does not.
+- **Audacity's test** waits 60 s for its Save As dialog, which lists
+  `C:\Documents\Audacity` from the disk now.
 
 ## Setup installs drive C: on NTFS only
 

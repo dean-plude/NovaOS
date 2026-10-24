@@ -177,8 +177,7 @@ TESTS = [
           r'\[DbgPrint\] wditest: DHCP discover: offering 192\.168\.77\.100',
           r'\[DbgPrint\] wditest: DHCP request: acknowledging 192\.168\.77\.100'], builtin=True),
     Test('wifi ping', 'ping 192.168.77.1',
-         [r'\[DbgPrint\] wditest: ARP: 192\.168\.77\.1 is at the router',
-          r'\[DbgPrint\] wditest: ping from 192\.168\.77\.100 to the router: answering',
+         [r'\[DbgPrint\] wditest: ping from 192\.168\.77\.100 to the router: answering \([1-9]\d* ARP request\(s\) answered so far\)',
           r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_dhcp),
     Test('wifi connected', 'netsh wlan show interfaces',
          [r'State +: connected\n +SSID +: NovaGuest\n +AP BSSID +: 02:4e:6f:76:61:03\n +Band +: 2\.4 GHz\n'

@@ -133,13 +133,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   source, `{TemplateBinding}`, `Control.ApplyTemplate`; and the UWP
   start-up: the program installed as a UWP app, started by its AUMID,
   with its package identity, the Universal windowing model and the app's
-  `Application` made on `Application.Start`'s UWP route; and an
-  `AcrylicBrush` loaded from markup with `FallbackColor`, a property of
-  its framework base), `wuxamltest` (the XAML framework under its
-  `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
-  `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
-  driven through Windows' interfaces, a Windows-boxed `Visibility`,
-  `DependencyProperty.Register` with Windows type names,
+  `Application` made on `Application.Start`'s UWP route,
+  `Window.Current` with its `CoreWindow`, its content set, `Activate`
+  and `Application.Exit`; and an `AcrylicBrush` loaded from markup with
+  `FallbackColor`, a property of its framework base), `wuxamltest` (the
+  XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP
+  apps see it: `Windows.UI.Xaml.Controls.Button` activated by its
+  Windows name and driven through Windows' interfaces, a Windows-boxed
+  `Visibility`, `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
   Windows handler, and an app's control composed over

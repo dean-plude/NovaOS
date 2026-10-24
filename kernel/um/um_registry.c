@@ -882,8 +882,10 @@ static void defaults(void)
     if (!has_value(tsc, "")) kset_sz(tsc, "", "TaskScheduler class", 1);
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
-     * model's CoreApplication, CoreWindow and CoreCursor (twinapi.appcore.dll; Windows
-     * keeps CoreWindow in Windows.UI.dll), the compositor and its easing
+     * model's CoreApplication, CoreWindow, CoreCursor, DesignMode and
+     * PowerManager (twinapi.appcore.dll; Windows keeps CoreWindow in
+     * Windows.UI.dll, DesignMode in Windows.ApplicationModel.dll and
+     * PowerManager in Windows.System.Power), the compositor and its easing
      * functions, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
@@ -897,6 +899,8 @@ static void defaults(void)
         { "Windows.ApplicationModel.Core.CoreApplication", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreWindow", "twinapi.appcore.dll" },
         { "Windows.UI.Core.CoreCursor", "twinapi.appcore.dll" },
+        { "Windows.ApplicationModel.DesignMode", "twinapi.appcore.dll" },
+        { "Windows.System.Power.PowerManager", "twinapi.appcore.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },

@@ -67,5 +67,29 @@ class MergeTests(unittest.TestCase):
             self.assertNotIn('contract', out[rel][1])
 
 
+class LeaveOutTests(unittest.TestCase):
+    def test_types_neither_winui2_nor_the_framework_has_are_left_out(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('winui2_build', str(Path(mergexaml.__file__).with_name('build.py')))
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        text = (HEAD + 'xmlns:controls="using:Microsoft.UI.Xaml.Controls">'
+                '<Style x:Key="Ink" TargetType="InkToolbar"/>'
+                '<Style x:Key="Item"><Setter Property="Template"><Setter.Value><ControlTemplate>'
+                '<InkToolbarFlyoutItem/></ControlTemplate></Setter.Value></Setter></Style>'
+                '<Style x:Key="UsesItem" BasedOn="{StaticResource Item}"/>'
+                '<AcrylicBrush x:Key="Acrylic"/>'
+                '<Style x:Key="Badge" TargetType="controls:InfoBadge"/>'
+                '<Style x:Key="Grid" TargetType="Grid"><Setter Property="Grid.Row" Value="1"/></Style>'
+                '</ResourceDictionary>')
+        out, left = build.leave_out_unbuilt(text, {'Microsoft.UI.Xaml.Controls.InfoBadge',
+                                                   'Microsoft.UI.Xaml.Media.AcrylicBrush'}, {'Style', 'Setter', 'Grid'})
+        self.assertEqual(left, ['Ink', 'Item', 'UsesItem'])
+        self.assertEqual(keys(minidom.parseString(out).documentElement), ['Acrylic', 'Badge', 'Grid'])
+        # the framework's own type table, as its parser has it
+        self.assertIn('ItemsWrapGrid', build.framework_types())
+        self.assertNotIn('InkToolbarFlyoutItem', build.framework_types())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1421,6 +1421,12 @@ _Check_return_
 HRESULT
 DXamlCore::GetDebugInterop(_Outptr_result_maybenull_ DebugTool::IInternalDebugInterop** ppDebugInterop)
 {
+    // NovaOS: no debug tool attached is null and S_OK, as Windows' WeakRef gives it
+    if (!m_wpDebugInterop)
+    {
+        *ppDebugInterop = nullptr;
+        return S_OK;
+    }
     return m_wpDebugInterop.CopyTo(ppDebugInterop);
 }
 

@@ -1252,7 +1252,20 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   the controls' default styles, and the controls Calculator uses
   (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
   `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
-  Native app, which needs that runtime's framework packages too.
+  Native app, which needs that runtime's framework packages too.  Sixth
+  part done: the UWP start-up runs through: inside its package
+  `winui2test` gets `Window.Current` (the view's window), its
+  `CoreWindow`, sets its content, activates it and exits
+  (`CoreWindow`'s `ICoreWindow5`, `CompositionTarget`, `XamlLight`,
+  `WindowCreatedEventArgs`); WinUI 2's theme resources leave out what
+  neither WinUI 2 nor the framework has (`InkToolbar`, `Pivot`,
+  `LoopingSelector`, `MediaTransportControls`: Windows-only controls),
+  register attached properties and content properties as Microsoft's
+  XBF compiler resolves them, and find `DesignMode` and `PowerManager`
+  (twinapi.appcore); they now stop at `RevealBrush.TargetTheme`
+  (`E_NOINTERFACE` inside WinUI 2's reveal code).  Next: that, the
+  controls' default styles (`InfoBadge`'s is in the theme resources),
+  then Calculator's controls.
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

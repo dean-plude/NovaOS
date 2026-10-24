@@ -557,7 +557,7 @@ static void uwp_parent()
         printf("  uwp: %s", line);
     if (log)
         fclose(log);
-    NOT_YET("the UWP app passed (Application.Start's UWP path)", code == 0);
+    CHECK("the UWP app passed (Application.Start's UWP path: Window.Current, its CoreWindow, content, Activate)", code == 0);
     CHECK("the UWP package removed", appx(L"remove NovaOS.XamlUwpTest") == 0);
 }
 

@@ -15525,6 +15525,11 @@ installation media.
   an install or an update writes them, and later starts don't.
 - **Security descriptors, times and attributes** of C: are the volume's
   own, through the step 1 source functions every NTFS drive uses.
+- **FAT-saved C:** (a live stick's NOVADATA, and CI's data disk) now
+  keeps the read-only, hidden and system attributes it promised: saving a
+  file wrote its contents and write time but not its attribute bits, so a
+  hidden file came back visible after a restart (`linktest restarted`
+  checks it now).
 - **Reset this PC** removes the system files along with the rest. The
   restart that follows writes them again.
 - **Setup** refuses to install over the disk the running system's C: is

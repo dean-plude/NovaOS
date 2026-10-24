@@ -695,6 +695,8 @@ static bool vol_write(UINT64 dir, const SNode *n)
         FatSetStamp(g_vol, filetime_to_dos(n->mtime));
         bool ok = FatWriteFile(g_vol, (UINT32)dir, n->name, n->data, n->size);
         FatSetStamp(g_vol, 0);
+        if (ok && (n->attrs & 0x07))                                /* read-only, hidden, system (and archive) */
+            ok = FatSetInfo(g_vol, (UINT32)dir, n->name, (UINT8)((n->attrs & 0x07) | 0x20), 0, 0);
         return ok;
     }
     UINT64 ref;

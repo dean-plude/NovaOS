@@ -13,4 +13,6 @@
   would, leaving it clean (`ntfstest churn`, the machine reset, `ntfstest
   cut`; every cut point on the host, `tests/tools/test_ntfs_cut.py`); a write past the free space fails
   with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
-  disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  disposable disk.  ~~Many files~~ Done: the MFT grows by half its size
+  (and its bitmap with it), so a volume takes as many files as fit
+  (`tests/tools/test_ntfs_many.py`: 40,000).  ~~NVMe~~ Done: NVMe disks, installed to and booted from.

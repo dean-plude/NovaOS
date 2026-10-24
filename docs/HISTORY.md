@@ -15624,6 +15624,38 @@ properties.
   `InkToolbarFlyoutItem`, a type the framework lacks; its controls'
   default styles.
 
+## The app corpus runs with an NTFS drive C:
+
+Audacity's nightly test failed from #533 on: drive C: now reports the
+file system it is saved to, and the corpus machine's C: was a FAT32 data
+disk, so Audacity warned "The temporary files directory is on a FAT
+formatted drive" and the test's clicks missed. The corpus machine's C: is
+now an NTFS volume, as on an installed system (Setup installs on NTFS only).
+
+- **`tools/novarun.py`**: `make_data(..., fs='ntfs')` copies files onto the
+  volume (`put_ntfs`: an ntfs-3g mount, through `sudo -n` when not root).
+- **`tools/appcorpus.py`**: the corpus machine's data disk is NTFS.
+- **Alt+F4 opened the menu bar** of a program that was slow to close.
+  The desktop takes F4's press itself (it closes the window) and passes
+  on only its release, and user32 counted only key presses as "another
+  key", so Alt's release looked like Alt tapped alone and opened the menu
+  bar; Audacity, closing its project on the disk, then sat in the menu
+  bar's loop until the next key. Another key's release now counts too
+  (`userland/user32/msg.c`); `guitest auto` checks that Alt alone opens
+  the menu bar and Alt with F4's release does not.
+- **An NTFS volume took no more files after about 7,000** (Steam's
+  test: its update stopped there, with "The cache_path directory ...
+  could not be created"). The MFT grew 64 records at a time, each time in
+  a new extent after the files written since, until its extents no
+  longer fitted in record 0. It now grows by half its size (64 records at
+  least, 65,536 at most), and its bitmap gets more clusters when its own
+  are full, which a volume Setup formatted needed past 32,768 records
+  (`kernel/fs/ntfs.c` `grow_mft`). `tests/tools/test_ntfs_many.py` puts
+  40,000 files on Setup's and mkntfs' volumes and checks them with
+  `scripts/ntfs-check.py`.
+- **Audacity's test** waits 60 s for its Save As dialog, which lists
+  `C:\Documents\Audacity` from the disk now.
+
 ## Setup installs drive C: on NTFS only
 
 Since step 2 of the on-disk drive C: plan, an installed system's C: is

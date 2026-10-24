@@ -703,7 +703,8 @@ bool NtfsRead(NtfsVol *v, UINT64 mft, UINT64 off, void *buf, UINT64 len)
 #define REC_IN_USE           0x0001u
 #define REC_IS_DIR           0x0002u
 #define FIRST_FREE_REC       24            /* 16-23 are reserved for the system */
-#define MFT_GROW             64            /* records added when the MFT is full */
+#define MFT_GROW             64            /* records added when the MFT is full: at least */
+#define MFT_GROW_MAX         65536         /* and at most (it grows by half its size) */
 #define FN_DIR_FLAG          0x10000000u   /* $FILE_NAME flags: a directory */
 
 static UINT64 (*g_now)(void);
@@ -1608,71 +1609,118 @@ bool NtfsFits(NtfsVol *v, UINT64 len)
 
 /* ---- the MFT ---- */
 
+/* Give back the clusters of @s from VCN @vcn on (taken for a change that
+ * then failed) */
+static void free_past(NtfsVol *v, const Stream *s, UINT64 vcn)
+{
+    for (UINT32 i = 0; i < s->nruns; i++) {
+        const Run *r = &s->runs[i];
+        if (r->lcn == SPARSE || r->vcn + r->len <= vcn) continue;
+        UINT64 skip = vcn > r->vcn ? vcn - r->vcn : 0;
+        Run t = { r->vcn + skip, r->lcn + skip, r->len - skip };
+        free_runs(v, &t, 1);
+    }
+}
+
+/* Make room for more records.  The MFT grows by half its size (at least
+ * MFT_GROW records, at most MFT_GROW_MAX), as Windows reserves room for
+ * it, so it stays in few extents: its runs must fit in record 0, and
+ * growing a few records at a time between files' clusters took one run
+ * each, until they did not (about 7000 files).  Its bitmap grows with it. */
 static bool grow_mft(NtfsVol *v)
 {
     UINT8 *rec = kmalloc(v->rec_size), *buf = kmalloc(v->rec_size);
     bool ok = false;
+    Stream grown, gbm;
+    memset(&grown, 0, sizeof(grown));
+    memset(&gbm, 0, sizeof(gbm));
+    UINT64 alloc = 0, alloc0 = 0, bm_alloc = 0, bm_alloc0 = 0;
     if (!rec || !buf || !read_record(v, 0, rec) || next_attr(rec, v->rec_size, NULL, AT_ATTRIBUTE_LIST)) goto out;
     UINT8 *da = find_attr(rec, v->rec_size, AT_DATA, NULL, 0);
     UINT8 *bm = find_attr(rec, v->rec_size, AT_BITMAP, NULL, 0);
     if (!da || !da[8] || !bm || !bm[8]) goto out;
-    UINT64 nrec = v->mft.size / v->rec_size, want = nrec + MFT_GROW;
-    UINT64 alloc = rd64(da + 0x28), size = want * v->rec_size;
-    Stream s = v->mft;                                            /* (runs shared until replaced) */
-    Stream grown;
-    memset(&grown, 0, sizeof(grown));
-    for (UINT32 i = 0; i < s.nruns; i++) if (!add_run(&grown, s.runs[i].vcn, s.runs[i].lcn, s.runs[i].len)) goto out;
+    UINT64 nrec = v->mft.size / v->rec_size, add = nrec / 2;
+    if (add < MFT_GROW) add = MFT_GROW;
+    if (add > MFT_GROW_MAX) add = MFT_GROW_MAX;
+    UINT64 want = nrec + add, size = want * v->rec_size;
+    alloc = alloc0 = rd64(da + 0x28);
+    const Stream *s = &v->mft;
+    for (UINT32 i = 0; i < s->nruns; i++) if (!add_run(&grown, s->runs[i].vcn, s->runs[i].lcn, s->runs[i].len)) goto out;
     if (size > alloc) {
         UINT64 more = (size - alloc + v->cluster - 1) / v->cluster;
-        if (!alloc_clusters(v, &grown, alloc / v->cluster, more)) { stream_free(&grown); goto out; }
+        if (!alloc_clusters(v, &grown, alloc / v->cluster, more)) goto out;
         alloc += more * v->cluster;
     }
-    /* the MFT bitmap must cover the new records */
+    /* the MFT bitmap must cover the new records: more clusters for it
+     * when its own are full */
     UINT64 bm_need = (want + 63) / 64 * 8;
-    if (bm_need > rd64(bm + 0x28)) { stream_free(&grown); goto out; }   /* (its clusters would have to grow too) */
+    bm_alloc = bm_alloc0 = rd64(bm + 0x28);
+    for (UINT32 i = 0; i < v->mbm.nruns; i++)
+        if (!add_run(&gbm, v->mbm.runs[i].vcn, v->mbm.runs[i].lcn, v->mbm.runs[i].len)) goto out;
+    if (bm_need > bm_alloc) {
+        UINT64 more = (bm_need - bm_alloc + v->cluster - 1) / v->cluster;
+        if (!alloc_clusters(v, &gbm, bm_alloc / v->cluster, more)) goto out;
+        bm_alloc += more * v->cluster;
+    }
+    gbm.size = gbm.init_size = bm_need > v->mmap_bytes ? bm_need : v->mmap_bytes;
 
-    /* format the new records (not in use) */
+    /* format the new records (not in use), a block of them at a time */
     grown.size = grown.init_size = size;
-    grown.resident = false;
-    Stream old = v->mft;
-    v->mft = grown;
-    for (UINT64 r = nrec; r < want; r++) {
-        memset(buf, 0, v->rec_size);
-        memcpy(buf, "FILE", 4);
-        wr16(buf + 4, 0x30);
-        wr16(buf + 6, (UINT16)(v->rec_size / BLOCK_SECTOR + 1));
-        wr16(buf + 0x10, 1);
-        wr16(buf + 0x14, (UINT16)align8(0x30 + 2 * (v->rec_size / BLOCK_SECTOR + 1)));
-        wr32(buf + rd16(buf + 0x14), AT_END);
-        wr32(buf + 0x18, rd16(buf + 0x14) + 8);
-        wr32(buf + 0x1C, v->rec_size);
-        wr32(buf + 0x2C, (UINT32)r);
-        if (!write_record(v, r, buf)) { v->mft = old; stream_free(&grown); goto out; }
+    UINT32 per = BOUNCE / v->rec_size;
+    UINT8 *blk = kmalloc(BOUNCE);
+    if (!blk) goto out;
+    for (UINT64 r0 = nrec; r0 < want; r0 += per) {
+        UINT32 k = want - r0 < per ? (UINT32)(want - r0) : per;
+        for (UINT32 i = 0; i < k; i++) {
+            UINT8 *b = blk + (UINT64)i * v->rec_size;
+            memset(b, 0, v->rec_size);
+            memcpy(b, "FILE", 4);
+            wr16(b + 4, 0x30);
+            wr16(b + 6, (UINT16)(v->rec_size / BLOCK_SECTOR + 1));
+            wr16(b + 0x10, 1);
+            wr16(b + 0x14, (UINT16)align8(0x30 + 2 * (v->rec_size / BLOCK_SECTOR + 1)));
+            wr32(b + rd16(b + 0x14), AT_END);
+            wr32(b + 0x18, rd16(b + 0x14) + 8);
+            wr32(b + 0x1C, v->rec_size);
+            wr32(b + 0x2C, (UINT32)(r0 + i));
+            usa_apply(b, v->rec_size);
+        }
+        if (!write_raw(v, &grown, r0 * v->rec_size, blk, (UINT64)k * v->rec_size)) { kfree(blk); goto out; }
     }
-    /* record 0: the new $DATA, and the bitmap's size */
-    UINT32 len = make_nonresident(v, buf, v->rec_size / 2, AT_DATA, NULL, 0, &v->mft, alloc, size);
-    if (!len) { v->mft = old; stream_free(&grown); goto out; }
+    kfree(blk);
+    /* the bitmap, then record 0 with the new $DATA and $BITMAP: once
+     * record 0 is written, the records are there */
+    UINT8 *nm = kzalloc(gbm.size);
+    if (!nm) goto out;
+    memcpy(nm, v->mmap, v->mmap_bytes);
+    if (!write_raw(v, &gbm, 0, nm, gbm.size)) { kfree(nm); goto out; }
+    UINT32 len = make_nonresident(v, buf, v->rec_size / 2, AT_DATA, NULL, 0, &grown, alloc, size);
+    if (!len) { kfree(nm); goto out; }
     remove_attr(rec, da);
-    if (!insert_attr(v, rec, buf, len)) { v->mft = old; stream_free(&grown); goto out; }
+    if (!insert_attr(v, rec, buf, len)) { kfree(nm); goto out; }
+    len = make_nonresident(v, buf, v->rec_size / 4, AT_BITMAP, NULL, 0, &gbm, bm_alloc, gbm.size);
     bm = find_attr(rec, v->rec_size, AT_BITMAP, NULL, 0);
-    UINT64 bm_old = rd64(bm + 0x30);
-    if (bm_need > bm_old) {
-        wr64(bm + 0x30, bm_need);
-        wr64(bm + 0x38, bm_need);
-        UINT8 *nm = kzalloc(bm_need);
-        if (!nm) { v->mft = old; stream_free(&grown); goto out; }
-        memcpy(nm, v->mmap, v->mmap_bytes);
-        kfree(v->mmap);
-        v->mmap = nm;
-        v->mmap_bytes = bm_need;
-        v->mbm.size = v->mbm.init_size = bm_need;
-        if (!write_raw(v, &v->mbm, 0, v->mmap, bm_need)) { v->mft = old; stream_free(&grown); goto out; }
-    }
-    if (!write_record(v, 0, rec)) { v->mft = old; stream_free(&grown); goto out; }
-    stream_free(&old);
+    if (!len || !bm) { kfree(nm); goto out; }
+    remove_attr(rec, bm);
+    if (!insert_attr(v, rec, buf, len) || !write_record(v, 0, rec)) { kfree(nm); goto out; }
+    stream_free(&v->mft);
+    v->mft = grown;
+    stream_free(&v->mbm);
+    v->mbm = gbm;
+    kfree(v->mmap);
+    v->mmap = nm;
+    v->mmap_bytes = gbm.size;
+    memset(&grown, 0, sizeof(grown));
+    memset(&gbm, 0, sizeof(gbm));
     ok = true;
     kprintf("[NTFS] %s: the MFT grew to %llu records\n", v->dev->name, (unsigned long long)want);
 out:
+    if (!ok) {                                                    /* (the clusters taken for it go back) */
+        if (alloc > alloc0) free_past(v, &grown, alloc0 / v->cluster);
+        if (bm_alloc > bm_alloc0) free_past(v, &gbm, bm_alloc0 / v->cluster);
+    }
+    stream_free(&grown);
+    stream_free(&gbm);
     kfree(rec);
     kfree(buf);
     return ok;

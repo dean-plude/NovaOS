@@ -652,7 +652,9 @@ static int is_timer_proc(HWND h, UINT_PTR id, LPARAM fn)
  * (GetKeyState); g_async is what the keyboard is doing now */
 BYTE g_async[256];
 /* Alt (or F10) went down and no other key or button has since: only then
- * does its release open the menu bar, so Ctrl+Alt+S leaves the menu alone */
+ * does its release open the menu bar, so Ctrl+Alt+S leaves the menu alone.
+ * Another key's release counts too: the desktop takes Alt+F4's F4 press
+ * itself (it closes the window) and passes on only its release */
 int g_alt_tap;
 
 static void key_state(BYTE *keys, UINT msg, WPARAM wp)
@@ -662,6 +664,8 @@ static void key_state(BYTE *keys, UINT msg, WPARAM wp)
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
             if (vk == VK_MENU || vk == VK_F10) { if (!(keys[vk] & 0x80)) g_alt_tap = !(keys[VK_CONTROL] & 0x80) && !(keys[VK_SHIFT] & 0x80); }
             else g_alt_tap = 0;
+        } else if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+            if (vk != VK_MENU && vk != VK_F10) g_alt_tap = 0;
         } else if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN ||
                    msg == WM_NCLBUTTONDOWN || msg == WM_NCRBUTTONDOWN) g_alt_tap = 0;
     }

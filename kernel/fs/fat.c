@@ -444,6 +444,7 @@ static bool dir_walk(FatVol *v, UINT32 dir, bool (*fn)(FatVol *, const FatEntry 
         if (fe.dir && fe.cluster == 0) fe.cluster = FAT_ROOT;
         fe.size = *(UINT32 *)(e + 28);
         fe.wtime = (UINT32)*(UINT16 *)(e + 24) << 16 | *(UINT16 *)(e + 22);
+        fe.ctime = (UINT32)*(UINT16 *)(e + 16) << 16 | *(UINT16 *)(e + 14);
         fe.attr = e[11];
         fe.dir_cluster = dir;
         fe.index = idx;
@@ -897,11 +898,49 @@ bool FatDelete(FatVol *v, UINT32 dir, const char *name)
 
 bool FatRename(FatVol *v, UINT32 dir, const char *from, const char *to)
 {
-    FatEntry fe, other;
-    if (!FatLookup(v, dir, from, &fe) || fe.dir || FatLookup(v, dir, to, &other)) return false;
-    if (!create_entry(v, dir, to, fe.attr, fe.cluster, fe.size)) return false;
+    FatEntry fe;
+    if (!FatLookup(v, dir, from, &fe) || fe.dir) return false;
+    return FatMove(v, dir, from, dir, to);
+}
+
+bool FatMove(FatVol *v, UINT32 dir, const char *from, UINT32 to_dir, const char *to)
+{
+    FatEntry fe, other, ne;
+    CacheEnt *ce;
+    if (!FatLookup(v, dir, from, &fe)) return false;
+    if (FatLookup(v, to_dir, to, &other) && (other.dir_cluster != fe.dir_cluster || other.index != fe.index))
+        return false;                                     /* (another entry; itself is a change of case) */
+    UINT8 *e = dir_entry(v, fe.dir_cluster, fe.index, false, &ce);
+    if (!e) return false;
+    UINT8 times[13];                                      /* created (tenths, time, date), accessed, written */
+    memcpy(times, e + 13, 7);
+    memcpy(times + 7, e + 22, 4);
+    if (!create_entry(v, to_dir, to, fe.attr, fe.cluster, fe.size)) return false;
     /* (creating may have grown the directory, but not moved @from's entries) */
     erase_entry(v, &fe);
+    if (!FatLookup(v, to_dir, to, &ne) || !(e = dir_entry(v, ne.dir_cluster, ne.index, false, &ce))) return false;
+    memcpy(e + 13, times, 7);
+    memcpy(e + 22, times + 7, 4);
+    ce->dirty = true;
+    if (fe.dir && dir != to_dir) {                        /* its ".." names its new parent */
+        UINT8 *dd = dir_entry(v, fe.cluster, 1, false, &ce);
+        if (!dd || dd[0] != '.' || dd[1] != '.') return false;
+        set_cluster(v, dd, to_dir == FAT_ROOT ? 0 : to_dir);
+        ce->dirty = true;
+    }
+    return true;
+}
+
+bool FatSetInfo(FatVol *v, UINT32 dir, const char *name, UINT8 attr, UINT32 ctime, UINT32 wtime)
+{
+    FatEntry fe;
+    CacheEnt *ce;
+    UINT8 *e;
+    if (!FatLookup(v, dir, name, &fe) || !(e = dir_entry(v, fe.dir_cluster, fe.index, false, &ce))) return false;
+    e[11] = (UINT8)((e[11] & ~0x27u) | (attr & 0x27u));
+    if (ctime) { *(UINT16 *)(e + 14) = (UINT16)ctime; *(UINT16 *)(e + 16) = (UINT16)(ctime >> 16); e[13] = 0; }
+    if (wtime) { *(UINT16 *)(e + 22) = (UINT16)wtime; *(UINT16 *)(e + 24) = (UINT16)(wtime >> 16); }
+    ce->dirty = true;
     return true;
 }
 

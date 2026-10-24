@@ -39,6 +39,13 @@ void PersistPoll(void);
  * on a disk error.  Holds the file-system lock only while it copies what
  * changed, not while the disk is written. */
 bool PersistSync(void);
+/* Drive C: is the installed system's NTFS volume itself, mounted in place
+ * (no RAM disk, nothing saved behind: docs/design/disk-c.md) */
+bool PersistDirect(void);
+/* (DrivesPoll, DrivesSync) C: on its disk was written to and is not
+ * marked clean yet; marking it clean (true when C: is not on its disk) */
+bool PersistMarked(void);
+bool PersistMarkClean(void);
 
 /* Reset this PC (fs/reset.c): forget the deleted starter files @keep
  * says no to, so they come back at the next start */
@@ -53,6 +60,8 @@ bool PersistOwns(BlockDev *d, UINT64 lba);
 void PersistWhere(char *buf, int cap);
 /* The volume's size and free space in bytes; false without one. */
 bool PersistSpace(UINT64 *free, UINT64 *total);
+/* The volume's file system ("FAT32", "NTFS"); false without one. */
+bool PersistFileSystem(char *buf, int cap);
 
 /* The kernel crash slot (FAT volumes): whether there is one, and write a
  * report into it (a kernel fault, no locks or allocations; best effort) */
@@ -61,6 +70,8 @@ bool PersistPanicWrite(const char *text, UINT32 len);
 
 /* A FAT (DOS) date and time as a FILETIME (100 ns since 1601) */
 UINT64 PersistDosToFiletime(UINT32 dos);
+/* A FILETIME as a FAT date and time (0 for 0) */
+UINT32 PersistFiletimeToDos(UINT64 ft);
 
 /* For the installer (fs/setup.c) */
 #include "fat.h"

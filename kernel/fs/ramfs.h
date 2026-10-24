@@ -64,6 +64,8 @@ typedef struct RamNode {
 #define RAMFS_X_DIRTY    0x08     /* file: @data is newer than the disk */
 #define RAMFS_X_NOWRITE  0x10     /* file: its volume can't rewrite it (compressed, sparse, encrypted) */
 #define RAMFS_X_CHECKED  0x20     /* file: the volume was asked whether it can rewrite it */
+#define RAMFS_X_SDREAD   0x40     /* its own security descriptor was asked of the volume (RamfsLoadSecurity) */
+#define RAMFS_X_STAMPED  0x80     /* file: its times or attributes were set: given again after its contents are written */
 
 /* A mounted volume, as its file system reads it */
 typedef struct {
@@ -74,7 +76,7 @@ typedef struct {
     UINT32 attrs;
 } RamfsExtEntry;
 
-typedef struct {
+typedef struct RamfsSource {
     /* Calls @add for each entry of directory @ref; false on a read error */
     bool (*list)(void *vol, UINT64 ref, bool (*add)(const RamfsExtEntry *e, void *ctx), void *ctx);
     /* The real size of file @ref, and reading @len bytes of it from @off */
@@ -99,6 +101,16 @@ typedef struct {
     /* Whether a file of @len bytes can be written there (NULL: any): a
      * file may not grow past that (ERROR_DISK_FULL) */
     bool (*fits)(void *vol, UINT64 len);
+    /* Give @ref the times (0: unchanged) and FILE_ATTRIBUTE_READONLY/
+     * HIDDEN/SYSTEM/ARCHIVE @attrs (NULL on a read-only volume) */
+    bool (*set_info)(void *vol, UINT64 ref, UINT64 ctime, UINT64 mtime, UINT32 attrs);
+    /* @ref's own security descriptor (self-relative) into @buf, its length
+     * in *@len; false if it has none of its own (it inherits) or the file
+     * system keeps none (NULL then, as on FAT) */
+    bool (*security)(void *vol, UINT64 ref, void *buf, UINT32 cap, UINT32 *len);
+    /* Give @ref the descriptor @sd (@len bytes), or none of its own (it
+     * inherits) when @sd is NULL (NULL on FAT and read-only volumes) */
+    bool (*set_security)(void *vol, UINT64 ref, const void *sd, UINT32 len);
 } RamfsSource;
 
 /* Change tracking, for saving drive C: to disk (fs/persist.c).  Nodes
@@ -133,6 +145,14 @@ RamNode *RamfsRoot(void);
  * @letter (D-Z); its root directory is @root_ref.  NULL if the letter is taken or memory is out. */
 RamNode *RamfsMountDrive(char letter, const RamfsSource *src, void *vol, UINT64 root_ref, const char *label,
                          const char *fs, UINT64 total_bytes);
+/* Drive C: becomes volume @vol on its disk (an installed system: see
+ * docs/design/disk-c.md), mounted as D: is, its root @root_ref; what C:
+ * held in memory (the starter files) goes.  False if something holds a
+ * node of it. */
+bool     RamfsMountC(const RamfsSource *src, void *vol, UINT64 root_ref, const char *label, const char *fs,
+                     UINT64 total_bytes);
+/* Drive C: is a volume on its disk (RamfsMountC) */
+bool     RamfsCOnDisk(void);
 /* The volume behind drive @letter went away (a USB stick was pulled): the
  * letter is free again.  Nodes still held from it stay valid but empty and
  * read nothing more (RamfsDetached).  Returns its volume pointer. */
@@ -282,8 +302,22 @@ int      RamfsCount(const RamNode *dir);
  * until it is set, files get no times. */
 void RamfsSetClock(UINT64 (*now)(void));
 UINT64 RamfsNow(void);                          /* 0 until it is set */
-/* Record that @n's times, attributes or security descriptor changed (it is saved again) */
-void RamfsMarkChanged(RamNode *n);
+/* Record that @n's times or attributes changed: on drive C: it is saved
+ * again, on a mounted volume they are written to the disk at once.  False
+ * if that write failed. */
+bool RamfsMarkChanged(RamNode *n);
+/* The same for @n's security descriptor (RamNode.sd; NULL: it inherits).
+ * On a mounted volume whose file system keeps none (FAT) it stays in
+ * memory only, as long as the node does. */
+bool RamfsSecurityChanged(RamNode *n);
+/* On a mounted volume, read @n's own security descriptor into @n->sd the
+ * first time it is wanted (fs/fsec.c, before looking at @n->sd); nothing
+ * for nodes of drive C:.  Safe with the file-system lock shared: the
+ * descriptor is put in place atomically. */
+void RamfsLoadSecurity(RamNode *n);
+/* Whether descriptors set on @n are kept (drive C:, or a volume that
+ * keeps them: NTFS) */
+bool RamfsKeepsSecurity(const RamNode *n);
 /* Saving C: (fs/persist.c) writes files' contents to the disk after letting
  * go of the file-system lock, without copying them.  RamfsLend (with the
  * lock held exclusively) returns @f's contents and keeps those bytes where

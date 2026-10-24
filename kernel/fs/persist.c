@@ -1,6 +1,12 @@
 /*
  * persist.c — keeps drive C: on disk (see persist.h)
  *
+ * An installed system's C: is its NTFS volume, mounted in place (g_direct,
+ * docs/design/disk-c.md): none of the saving below runs for it.  The RAM
+ * disk, saved as below, is for the installation media, an install whose
+ * volume could not be mounted in place, and a FAT32 install from an older
+ * NovaOS (Setup formats drive C: as NTFS only).
+ *
  * Saving walks the RAM disk along the RAMFS_F_SUB marks to the nodes that
  * changed: a changed file is written whole, a directory whose entries
  * changed has the disk entries it no longer holds deleted, and a moved
@@ -41,6 +47,8 @@
 #include "../arch/x86_64/apic.h"
 #include "../um/um.h"
 #include "../mm/pmm.h"
+#include "setup.h"
+#include "drives.h"
 
 #define DATA_ROOT     "\\NOVA\\C"
 #define DELETED_FILE  "DELETED.TXT"          /* in \NOVA */
@@ -69,6 +77,7 @@ static UINT32  g_saved_changes, g_seen_changes;
 static UINT64  g_seen_tick, g_retry_tick;
 static bool    g_failed;
 
+static bool    g_direct;                      /* C: is the NTFS volume itself, mounted in place (no RAM disk) */
 static bool have_vol(void) { return g_vol || g_ntfs; }
 static void load_links(void);
 static char *g_links_text;
@@ -138,6 +147,7 @@ static void removed_hook(const char *path) { add_removed(path); }
 
 void PersistForgetDeleted(bool (*keep)(const char *path))
 {
+    if (g_direct) return;                                         /* (nothing comes back at the next start) */
     for (Removed **pp = &g_removed; *pp;) {
         if (!keep((*pp)->path)) {
             Removed *r = *pp;
@@ -322,7 +332,18 @@ void PersistInit(void)
         if (i != pick) cand_free(&c[i]);
     RamfsSetRemovedHook(removed_hook);
     if (g_vol) reclaim();
-    if (have_vol()) {
+    /* An installed system's C: on NTFS is the volume itself, mounted as
+     * D: is (docs/design/disk-c.md); the installation media keeps C: in
+     * memory, saved to a volume */
+    if (g_ntfs && !SetupIsLive())
+        g_direct = RamfsMountC(DrivesCSource(), g_ntfs, NTFS_ROOT, NtfsLabel(g_ntfs), "NTFS", NtfsTotalBytes(g_ntfs));
+    if (g_ntfs && !SetupIsLive() && !g_direct)
+        kprintf("[PERSIST] Drive C: could not be mounted in place: it stays in memory, saved to the volume\n");
+    if (g_direct) {
+        char d[96];
+        PersistDescribe(d, sizeof(d));
+        kprintf("[PERSIST] Drive C: is %s, in place (not a RAM disk)\n", d);
+    } else if (have_vol()) {
         char d[96];
         PersistDescribe(d, sizeof(d));
         kprintf("[PERSIST] Drive C: is saved to %s\n", d);
@@ -413,6 +434,7 @@ static UINT32 bring_back(RamNode *d, int depth);
 
 void PersistDetach(void)
 {
+    if (g_direct) return;                                         /* (the running system's C:: it stays) */
     FsLock();
     save_lock();                                                  /* (after a save in progress) */
     if (have_vol()) {
@@ -441,6 +463,7 @@ static bool save_locked(void);
 bool PersistAdopt(BlockDev *d, UINT64 lba)
 {
     Cand c;
+    if (g_direct) return false;                                   /* (C: is this system's own volume) */
     if (!mount_at(d, lba, &c)) return false;
     FsLock();
     save_lock();
@@ -483,7 +506,7 @@ bool PersistAdopt(BlockDev *d, UINT64 lba)
 
 /* What Settings and the Terminal show about the volume, as of the last
  * look that did not have to wait for a save (they never wait for one) */
-static struct { bool have; UINT64 free, total; char where[64], desc[96]; } g_shown;
+static struct { bool have; UINT64 free, total; char fs[8], where[64], desc[96]; } g_shown;
 
 static void refresh_shown(void)
 {
@@ -493,9 +516,9 @@ static void refresh_shown(void)
         if (g_vol) { g_shown.free = FatFreeBytes(g_vol); g_shown.total = FatTotalBytes(g_vol); }
         else { g_shown.free = NtfsFreeBytes(g_ntfs); g_shown.total = NtfsTotalBytes(g_ntfs); }
         const char *label = g_vol ? FatLabel(g_vol) : NtfsLabel(g_ntfs);
-        char fs[8];
-        if (g_vol) ksnprintf(fs, sizeof(fs), "FAT%d", FatType(g_vol));
-        else ksnprintf(fs, sizeof(fs), "NTFS");
+        char *fs = g_shown.fs;
+        if (g_vol) ksnprintf(fs, sizeof(g_shown.fs), "FAT%d", FatType(g_vol));
+        else ksnprintf(fs, sizeof(g_shown.fs), "NTFS");
         ksnprintf(g_shown.where, sizeof(g_shown.where), "%s (%s)", g_dev->name, label);
         ksnprintf(g_shown.desc, sizeof(g_shown.desc), "%s %s \"%s\", %u MiB free of %u MiB", g_dev->name, fs, label,
                   (unsigned)(g_shown.free >> 20), (unsigned)(g_shown.total >> 20));
@@ -509,6 +532,14 @@ bool PersistSpace(UINT64 *free, UINT64 *total)
     if (!g_shown.have) return false;
     *free = g_shown.free;
     *total = g_shown.total;
+    return true;
+}
+
+bool PersistFileSystem(char *buf, int cap)
+{
+    refresh_shown();
+    if (!g_shown.have) return false;
+    ksnprintf(buf, (size_t)cap, "%s", g_shown.fs);
     return true;
 }
 
@@ -670,6 +701,8 @@ static bool vol_write(UINT64 dir, const SNode *n)
         FatSetStamp(g_vol, filetime_to_dos(n->mtime));
         bool ok = FatWriteFile(g_vol, (UINT32)dir, n->name, n->data, n->size);
         FatSetStamp(g_vol, 0);
+        if (ok && (n->attrs & 0x07))                                /* read-only, hidden, system (and archive) */
+            ok = FatSetInfo(g_vol, (UINT32)dir, n->name, (UINT8)((n->attrs & 0x07) | 0x20), 0, 0);
         return ok;
     }
     UINT64 ref;
@@ -835,6 +868,7 @@ static UINT64 dos_to_filetime(UINT32 dos)
 }
 
 UINT64 PersistDosToFiletime(UINT32 dos) { return dos_to_filetime(dos); }
+UINT32 PersistFiletimeToDos(UINT64 ft) { return ft ? filetime_to_dos(ft) : 0; }
 
 static UINT32 filetime_to_dos(UINT64 ft)
 {
@@ -996,6 +1030,11 @@ static void load_removed(void)
 void PersistLoad(void)
 {
     RamfsSetBacking(backing_read);
+    if (g_direct) {                                               /* (nothing to restore: C: is the volume) */
+        g_loaded = true;
+        RamfsSetMode(RAMFS_TRACK);
+        return;
+    }
     if (g_vol) {
         RamfsSetMode(RAMFS_LOADING);
         FatEntry nova, root;
@@ -1657,7 +1696,11 @@ static bool save(void)
     return save_locked();
 }
 
-bool PersistSync(void) { return save(); }
+bool PersistSync(void) { return g_direct ? DrivesSync() : save(); }
+
+bool PersistDirect(void) { return g_direct; }
+bool PersistMarked(void) { return g_direct && NtfsMarked(g_ntfs); }
+bool PersistMarkClean(void) { return !g_direct || NtfsMarkClean(g_ntfs); }
 
 /* The "persist" thread: saves when PersistPoll asks */
 static Thread *g_saver;
@@ -1685,7 +1728,7 @@ static void wake_saver(void);
 
 void PersistPoll(void)
 {
-    if (!have_vol() || !g_loaded) return;
+    if (!have_vol() || !g_loaded || g_direct) return;         /* (C: on its disk: DrivesPoll writes it) */
     UINT32 now = RamfsChanges();
     UINT64 t = sched_ticks();
     if (t >= g_trim_tick && pmm_free_now() < lg_low()) {         /* memory is short: at most once a second */

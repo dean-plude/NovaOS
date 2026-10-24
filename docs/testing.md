@@ -301,73 +301,74 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   EnableTrace, QueryAllTraces, OpenTrace, ProcessTrace, CloseTrace; 64-
   and 32-bit), `qtwebtest` (the calls Qt WebEngine imports: Bluetooth
   and SDP records, Direct3D 12, WinUSB, AppContainer profiles, proxy
-  resolver, security zones and more; 64- and 32-bit), `cachetest` (saved
-  files of drive C: let go of and read back from the data disk: memory,
-  ReadFile, a mapped view, renamed, hard-linked and emptied files,
-  `shutdown /r`, `cachetest after`), `qtthemetest`
-  (Windows.UI.ViewManagement UISettings and UIViewSettings as Qt reads
-  them, ColorValuesChanged, Schannel's cipher suites; 64- and 32-bit),
-  `samplertest` (a sampling profiler: GetThreadContext of a waiting
-  thread, unwound with RtlVirtualUnwind), `hwcheck` touchpad interrupt:
-  a modelled Intel GPIO controller from the ACPI tables, its interrupt
-  routed, the touchpad's GpioInt pin set up and its reports read on the
-  interrupt instead of polling, `proclisttest` (another program's image
-  name, user and command line, as Edge Update looks for its install
-  worker; 64- and 32-bit), `rawtest` (the mouse and the keyboard through
-  Raw Input: device list, names and info; WM_INPUT with relative motion,
-  button flags and the wheel; keys through GetRawInputBuffer with
-  RIDEV_NOLEGACY; 64- and 32-bit), `libmtest` (the 32-bit C runtime's
-  `_libm_sse2_*` and `_CI*` math, which MSVC-built SDL2 imports),
-  `warptest` (SetCursorPos and ClipCursor: the pointer moved and
-  confined by the window in front, WM_MOUSEMOVE but no WM_INPUT for a
-  warp, the mouse kept in the rectangle, a background process refused;
-  64- and 32-bit), `wvsetuptest` (a 300 MB file mapped whole, wer.dll's
-  report API and FlsGetValue2, as the WebView2 runtime's setup needs;
-  64- and 32-bit), `wvstarttest` (COM's apartment in the TEB,
-  TerminateProcess on itself, FLS slots and the functions the WebView2
-  runtime's browser process calls), `xpwin` (windows of different
-  processes: SetParent, SetWindowPos, ShowWindow and messages across
-  processes, GetDC on another process's window; 64- and 32-bit),
-  `dcomptest` (Direct3D without a GPU as Chromium's software compositor
-  uses it: the Basic Render Driver adapter, a WARP device,
-  DirectComposition showing a swap chain, dirty-rectangle presents, a
-  GPU process's window parented in another process's; 64- and 32-bit),
-  `schanneltest stores` (a certificate found through a collection of
-  collections, a root's extended key usages, and
-  `InternetGetConnectedState` offline without a network; 64- and
-  32-bit), driver packages staged in the driver store and published as
-  oemN.inf from a program (`DiInstallDriver`, `SetupCopyOEMInf`), with
-  `pnputil` and from an MSI (`drvtest exe`, `zip`, `msi`),
-  `imgsharetest` (a second process of a running program shares its image
-  pages from the image cache; 64- and 32-bit; a commit of 15/16 of the
-  RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on x64 and
-  `_chkstk` on x86, and its half-precision conversions, which LLVM's JIT
-  in Mesa looks up), `avxtest` (the AVX state: CPUID's OSXSAVE, AVX and
-  F16C and XCR0 as the kernel sets them, YMM0-15 kept across context
-  switches, in an exception's `CONTEXT_XSTATE` and through `NtContinue`,
-  and read from a suspended thread by `GetThreadContext`), `tpwaittest`
-  (thread-pool waits: a wait calls back once per signal or on its
-  timeout, a callback sets its own wait again, setting a wait never
-  waits for a running callback, cancelling and closing from a callback;
-  64- and 32-bit), Task Manager opened with Ctrl+Shift+Esc: `winhello`
-  listed, selected by typing its name and ended with Delete; the
-  Performance, Details and Services views, `evtlogtest` (ReportEvent,
-  ReadEventLog, EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot,
-  service, driver-failure and crash events) and Event Viewer from the
-  Start menu finding its event, Calculator (Windows Calculator's
-  CalcManager engine) from the Start menu: Standard, Scientific
-  (precedence, x^y, 25!) and Programmer (hexadecimal, AND) answers to
-  typed expressions, `dostest` (MS-DOS 4.00 boots in a console window on
-  ntvdm.exe's real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR,
-  F12 gives the screen back; a DOS .COM run from cmd by name and a DOS
-  .EXE from CreateProcess read and write files on drive C: and return
-  their exit code; the DOS game bootRogue draws its dungeon straight
-  into video memory, takes arrow keys and ends on Esc), `kmttest` (the
-  WDDM graphics kernel's D3DKMT* calls on NovaOS's Basic Render adapter,
-  step 3 of docs/design/intel-gpu.md: adapters by LUID, devices,
-  allocations counted as video memory and mapped by `D3DKMTLock2`,
-  monitored fences signalled and waited on from the CPU, with an event
-  or another thread), `accounttest` (local accounts:
+  resolver, security zones and more; 64- and 32-bit), `cachetest` (C:
+  reports the data disk's FAT32 and size; saved files of drive C: let go
+  of and read back from the data disk: memory, ReadFile, a mapped view,
+  renamed, hard-linked and emptied files, `shutdown /r`, `cachetest
+  after`), `qtthemetest` (Windows.UI.ViewManagement UISettings and
+  UIViewSettings as Qt reads them, ColorValuesChanged, Schannel's cipher
+  suites; 64- and 32-bit), `samplertest` (a sampling profiler:
+  GetThreadContext of a waiting thread, unwound with RtlVirtualUnwind),
+  `hwcheck` touchpad interrupt: a modelled Intel GPIO controller from
+  the ACPI tables, its interrupt routed, the touchpad's GpioInt pin set
+  up and its reports read on the interrupt instead of polling,
+  `proclisttest` (another program's image name, user and command line,
+  as Edge Update looks for its install worker; 64- and 32-bit),
+  `rawtest` (the mouse and the keyboard through Raw Input: device list,
+  names and info; WM_INPUT with relative motion, button flags and the
+  wheel; keys through GetRawInputBuffer with RIDEV_NOLEGACY; 64- and
+  32-bit), `libmtest` (the 32-bit C runtime's `_libm_sse2_*` and `_CI*`
+  math, which MSVC-built SDL2 imports), `warptest` (SetCursorPos and
+  ClipCursor: the pointer moved and confined by the window in front,
+  WM_MOUSEMOVE but no WM_INPUT for a warp, the mouse kept in the
+  rectangle, a background process refused; 64- and 32-bit),
+  `wvsetuptest` (a 300 MB file mapped whole, wer.dll's report API and
+  FlsGetValue2, as the WebView2 runtime's setup needs; 64- and 32-bit),
+  `wvstarttest` (COM's apartment in the TEB, TerminateProcess on itself,
+  FLS slots and the functions the WebView2 runtime's browser process
+  calls), `xpwin` (windows of different processes: SetParent,
+  SetWindowPos, ShowWindow and messages across processes, GetDC on
+  another process's window; 64- and 32-bit), `dcomptest` (Direct3D
+  without a GPU as Chromium's software compositor uses it: the Basic
+  Render Driver adapter, a WARP device, DirectComposition showing a swap
+  chain, dirty-rectangle presents, a GPU process's window parented in
+  another process's; 64- and 32-bit), `schanneltest stores` (a
+  certificate found through a collection of collections, a root's
+  extended key usages, and `InternetGetConnectedState` offline without a
+  network; 64- and 32-bit), driver packages staged in the driver store
+  and published as oemN.inf from a program (`DiInstallDriver`,
+  `SetupCopyOEMInf`), with `pnputil` and from an MSI (`drvtest exe`,
+  `zip`, `msi`), `imgsharetest` (a second process of a running program
+  shares its image pages from the image cache; 64- and 32-bit; a commit
+  of 15/16 of the RAM), `chkstktest` (ntdll's stack probe, `__chkstk` on
+  x64 and `_chkstk` on x86, and its half-precision conversions, which
+  LLVM's JIT in Mesa looks up), `avxtest` (the AVX state: CPUID's
+  OSXSAVE, AVX and F16C and XCR0 as the kernel sets them, YMM0-15 kept
+  across context switches, in an exception's `CONTEXT_XSTATE` and
+  through `NtContinue`, and read from a suspended thread by
+  `GetThreadContext`), `tpwaittest` (thread-pool waits: a wait calls
+  back once per signal or on its timeout, a callback sets its own wait
+  again, setting a wait never waits for a running callback, cancelling
+  and closing from a callback; 64- and 32-bit), Task Manager opened with
+  Ctrl+Shift+Esc: `winhello` listed, selected by typing its name and
+  ended with Delete; the Performance, Details and Services views,
+  `evtlogtest` (ReportEvent, ReadEventLog,
+  EvtQuery/EvtRender/EvtSubscribe/EvtExportLog; the boot, service,
+  driver-failure and crash events) and Event Viewer from the Start menu
+  finding its event, Calculator (Windows Calculator's CalcManager
+  engine) from the Start menu: Standard, Scientific (precedence, x^y,
+  25!) and Programmer (hexadecimal, AND) answers to typed expressions,
+  `dostest` (MS-DOS 4.00 boots in a console window on ntvdm.exe's
+  real-mode CPU and BIOS: COMMAND.COM's prompt, VER and DIR, F12 gives
+  the screen back; a DOS .COM run from cmd by name and a DOS .EXE from
+  CreateProcess read and write files on drive C: and return their exit
+  code; the DOS game bootRogue draws its dungeon straight into video
+  memory, takes arrow keys and ends on Esc), `kmttest` (the WDDM
+  graphics kernel's D3DKMT* calls on NovaOS's Basic Render adapter, step
+  3 of docs/design/intel-gpu.md: adapters by LUID, devices, allocations
+  counted as video memory and mapped by `D3DKMTLock2`, monitored fences
+  signalled and waited on from the CPU, with an event or another
+  thread), `accounttest` (local accounts:
   NetUserAdd/Enum/GetInfo/SetInfo/ChangePassword/Del, LogonUser refusing
   a wrong password and signing in with the right one, the account's own
   SID, token, profile in C:\Users, HKEY_CURRENT_USER and environment,
@@ -424,7 +425,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `bluetooth` | a fake USB Bluetooth radio with a mouse and a headset in range (`tools/btpeer.py`): `bthusb` and the host stack bring it up; `bttest` through `bthprops.cpl` (radio, inquiry, pairing both, services by SDP, the mouse's HID service on and the cursor moving), the mouse reconnecting after a restart, `btfilter.sys` (a lower filter packaged as Intel's `ibtusb` is) installed with `pnputil` and passing the radio's HCI traffic, then `bttest remove`; then the headset's sound: `bttest audio` turns its hands-free and audio sink services on, `soundtest` plays a tone through its A2DP output (decoded by `btpeer` into `bt-a2dp.wav`) and its hands-free output (the eSCO voice link, into `bt-hfp.wav`) and records its microphone, and `bttest audio-remove` takes its devices away |
 | `isocam` | a fake UVC 1.1 camera streaming isochronously in MJPEG and YUY2 (`tools/campeer.py --iso`): the UVC driver on isochronous URBs; `camtest --iso` in each mode, the MJPEG frames decoded into RGB32, NV12 and YUY2, then the Camera app showing MJPEG 640x480 |
 | `pnp` | a keyboard, a hub and a USB stick plugged into xHCI and removed: `pnptest` follows the Plug and Play device tree |
-| `ntfs` | an NTFS volume as drive D:: hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
+| `ntfs` | an NTFS volume as drive D: and a FAT32 disk as E:: attributes, times, change notifications, moved folders and (NTFS) DACLs written to the volume and read back after a restart (`volfiletest`), hard links across a restart, a full volume, and a reset in the middle of writing, after which NovaOS repairs the volume; `scripts/ntfs-check.py` and ntfs-3g check it from the host |
 | `wdm` | a Windows kernel-mode test driver (`wdmtest.sys`) under the signing policy (loads only with test signing on; unsigned and tampered copies never), then a KMDF driver (`kmdftest.sys`) on `Wdf01000.sys` |
 | `edu` | QEMU's edu PCI device, behind a PCIe root port (its interrupt routed through the bridge swizzle): a Plug and Play driver (`edutest.sys`) installed with `pnputil`, with its memory, interrupt and DMA from the PnP manager; disabled and enabled again |
 | `vioser` | virtio-win's signed `vioser.sys` (KMDF) on virtio-serial: bytes to the host and back |
@@ -505,7 +506,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamlloadtest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `volfiletest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamlloadtest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

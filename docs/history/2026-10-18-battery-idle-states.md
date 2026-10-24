@@ -1,7 +1,7 @@
 ## Idle CPUs in C-states, a stopped tick, idle devices in D3
 
 First part of roadmap step 28.4, battery life
-([install-and-power.md](../install-and-power.md#processor-idle-states-and-device-power)).
+([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)).
 An idle CPU used to execute HLT and wake every 10 ms; a Windows driver
 that asked for its device to be powered down got `STATUS_NOT_IMPLEMENTED`.
 

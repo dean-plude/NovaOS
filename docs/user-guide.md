@@ -76,14 +76,14 @@ also on the desktop:
 
 1. Choose the disk to install on.  NovaOS installs on SATA (AHCI), NVMe
    and USB disks of at least 256 MB.  **The whole disk is erased.**
-2. Choose the file system for drive C:: **NTFS** (the default; keeps file
-   permissions) or **FAT32**.
+2. Confirm.  Drive C: is a new **NTFS** volume, which keeps file
+   permissions; the installed system uses it in place, as Windows does.
 3. When it has finished, remove the ISO (in QEMU, start again without
    `-cdrom nova.iso`) and restart from the disk.
 
 Anything you saved on C: during the live session is copied to the new
 installation.  In the Terminal, `install` lists the disks and
-`install <disk> [/fat]` installs without the window.
+`install <disk>` installs without the window.
 
 ## First start
 
@@ -389,11 +389,12 @@ drivers load ([drivers.md](drivers.md)).
 
 ## Your files
 
-Drive C: holds your files and the programs you install.  While NovaOS
-runs, C: is held in memory.  On an installed NovaOS it is also kept on
-the disk: NovaOS saves changes once C: has been quiet for a second, and
-again before a restart or shutdown.  In the Terminal, `vol` shows where
-C: is saved and `sync` saves it at once.
+Drive C: holds your files and the programs you install.  On an
+installed NovaOS, C: is the NTFS partition NovaOS was installed to, as on
+Windows: changed files are written to it a second after the last change,
+and again before a restart or shutdown.  Running live from the
+installation media, C: is held in memory.  In the Terminal, `vol` shows
+where C: is and `sync` writes it at once.
 
 Running live from the ISO, NovaOS keeps nothing unless it finds somewhere
 to save C:: an empty disk (which it formats as FAT32 and labels

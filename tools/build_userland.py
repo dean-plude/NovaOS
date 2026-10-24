@@ -880,5 +880,16 @@ with open(gen_c + '.tmp', 'w') as f:
         f.write(f'    {{ "{cpath}", nova_userland_{i}, {size}, {zsize} }},\n')
     f.write('};\n')
     f.write(f'const int g_userland_file_count = {len(built)};\n')
+    # what the files are, for an installed C: on its disk: written there
+    # again only when this changes (kernel/um/um.c, docs/design/disk-c.md)
+    import hashlib
+    h = hashlib.sha256()
+    for path, file in built:
+        h.update(path.encode() + b'\0')
+        with open(file, 'rb') as src:
+            for chunk in iter(lambda: src.read(1 << 20), b''):
+                h.update(chunk)
+        h.update(b'\0')
+    f.write(f'const char g_userland_digest[] = "{h.hexdigest()}";\n')
 os.replace(gen_c + '.tmp', gen_c)
 print(f'userland: {len(built)} files')

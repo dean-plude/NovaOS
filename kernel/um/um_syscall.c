@@ -34,6 +34,7 @@
 #include "../ke/kpcr.h"
 #include "../ke/idle.h"
 #include "../fs/recovery.h"
+#include "../fs/persist.h"
 
 #define ST_SUCCESS                 0x00000000u
 #define ST_PENDING                 0x00000103u
@@ -1634,7 +1635,8 @@ static UINT64 sys_set_info_file_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a
         if (ct > 0) h->node->ctime = (UINT64)ct;            /* 0: unchanged, -1: stop updating */
         if (wt > 0) h->node->mtime = (UINT64)wt;
         if (attr) h->node->attrs = attr & 0x07;
-        if (ct > 0 || wt > 0 || attr) RamfsMarkChanged(h->node);
+        if ((ct > 0 || wt > 0 || attr) && !RamfsMarkChanged(h->node))   /* (on another drive: written at once) */
+            return iosb(a2, 0xC0000185u, 0);                             /* STATUS_IO_DEVICE_ERROR */
         return iosb(a2, ST_SUCCESS, 0);
     }
     case 13:                                                    /* FileDispositionInformation */
@@ -1681,7 +1683,7 @@ UINT64 um_file_query_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 }
 
 /* NtSetSecurityObject(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR)
- * for a file or directory: kept for those on drive C: */
+ * for a file or directory: kept for those on drive C: and on NTFS volumes */
 UINT64 um_file_set_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
@@ -1695,7 +1697,7 @@ UINT64 um_file_set_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     RamNode *n = h && (h->kind == H_FILE || h->kind == H_DIR) ? h->node : NULL;
     um_unlock_excl(&p->lock);
     UINT32 st = ST_SUCCESS, info = (UINT32)a2 & 7;
-    if (n && !RamfsReadOnly(n) && RamfsDriveLetter(n) == 'C' && info) {
+    if (n && !RamfsReadOnly(n) && RamfsKeepsSecurity(n) && info) {
         UINT32 want = ((info & 4) ? 0x00040000u : 0) | ((info & 3) ? 0x00080000u : 0);   /* WRITE_DAC, WRITE_OWNER */
         if (!FsecAccess(n, want, NULL)) st = ST_ACCESS_DENIED;
         else if (!FsecSet(n, info, sd, len)) st = 0xC0000079u;
@@ -1922,7 +1924,7 @@ static UINT64 sys_query_volume_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
         return iosb(a2, n < need ? ST_BUFFER_OVERFLOW : ST_SUCCESS, n);
     }
     if (cls != 4) {
-        /* the volume of drive C: (reported as FAT32: no ACLs persist unless it is on NTFS; hard links yes) */
+        /* the volume of drive C: (in memory only: reported as FAT32, no ACLs persist; hard links yes) */
         if (h->kind != H_FILE && h->kind != H_DIR) return iosb(a2, 0xC0000010u /* INVALID_DEVICE_REQUEST */, 0);
         UINT8 b[64];
         UINT32 need;
@@ -1934,6 +1936,14 @@ static UINT64 sys_query_volume_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
         UINT64 bytes;
         bool ext = RamfsDriveInfo(h->node, &label, &fsname, &bytes);
         if (ext) { total = bytes >> 12; avail = RamfsDriveFree(h->node) >> 12; }
+        /* or drive C: saved to a disk (installed): that volume's file system, size and free space */
+        char cfs[8];
+        UINT64 cfree, ctotal;
+        if (!ext && PersistFileSystem(cfs, sizeof(cfs)) && PersistSpace(&cfree, &ctotal)) {
+            fsname = cfs;
+            total = ctotal >> 12;
+            avail = cfree >> 12;
+        }
         switch (cls) {
         case 1: {                                               /* FileFsVolumeInformation */
             memcpy(b, &g_boot_time, 8);
@@ -1950,6 +1960,7 @@ static UINT64 sys_query_volume_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4
             break;
         case 5: {                                               /* FileFsAttributeInformation */
             UINT32 attrs = 0x400006, maxc = 255, nl = 2 * (UINT32)strlen(fsname);  /* CASE_PRESERVED_NAMES | UNICODE_ON_DISK | SUPPORTS_HARD_LINKS */
+            if (!ext && !strcmp(fsname, "NTFS")) attrs |= 0x8u;                    /* PERSISTENT_ACLS (persist.c keeps them) */
             if (ext && RamfsReadOnly(RamfsDriveRoot(RamfsDriveLetter(h->node)))) attrs |= 0x80000u;   /* FILE_READ_ONLY_VOLUME */
             memcpy(b, &attrs, 4); memcpy(b + 4, &maxc, 4); memcpy(b + 8, &nl, 4);
             u2w(fsname, b + 12, 8);

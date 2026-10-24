@@ -44,7 +44,7 @@ Installing beside the other systems:
    its largest free space, in the first unused entries: an EFI System
    Partition (FAT32 `NOVA_EFI`, sized as for a whole disk: the system, a
    staged update and the boot files) and a basic data partition
-   (`NOVADATA`, NTFS or FAT32) for drive C: with the rest, at least
+   (`NOVADATA`, NTFS) for drive C: with the rest, at least
    512 MiB. Every partition already there keeps its entry number, place,
    type, GUIDs, attributes and name, so Windows' Boot Manager (which finds
    its partitions by GUID and offset) is not affected.

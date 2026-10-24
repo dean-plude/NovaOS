@@ -27,6 +27,7 @@ typedef struct {
     UINT32 index;                   /* entry index of its 8.3 entry */
     UINT32 first_index;             /* first entry (long-name entries included) */
     UINT32 wtime;                   /* last written: DOS date << 16 | DOS time */
+    UINT32 ctime;                   /* created, the same way (0 if not recorded) */
     UINT8  attr;                    /* FAT attribute byte */
 } FatEntry;
 
@@ -71,6 +72,14 @@ bool FatDelete(FatVol *v, UINT32 dir, const char *name);
  * contents where they are: the new entry is written before the old one is
  * erased, so a crash in between leaves both names, never neither. */
 bool FatRename(FatVol *v, UINT32 dir, const char *from, const char *to);
+/* The same for a file or a directory, from @dir to @to_dir as @to (which
+ * must not exist, unless it is @from itself in another case); its times
+ * and attributes stay, and a directory's ".." follows it */
+bool FatMove(FatVol *v, UINT32 dir, const char *from, UINT32 to_dir, const char *to);
+/* Set @name's (in @dir) FILE_ATTRIBUTE_READONLY/HIDDEN/SYSTEM/ARCHIVE to
+ * @attr, and its created and last-written times (DOS date << 16 | time;
+ * 0: unchanged) */
+bool FatSetInfo(FatVol *v, UINT32 dir, const char *name, UINT8 attr, UINT32 ctime, UINT32 wtime);
 
 /* What FatReclaim did */
 typedef struct {

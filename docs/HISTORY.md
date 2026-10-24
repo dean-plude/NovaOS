@@ -13402,7 +13402,7 @@ transfer is checked yet.
 ## ACPI: processor throttling, GPE blocks and interrupts behind bridges
 
 The three items left open under "ACPI beyond the MADT" since Phase 18.6
-are done ([install-and-power.md](../install-and-power.md) has the
+are done ([install-and-power.md](install-and-power.md) has the
 details):
 
 - **Passive cooling throttles the processors.** A thermal zone at or
@@ -14289,7 +14289,7 @@ and checks the menu comes up by itself after two failed starts.
 ## Idle CPUs in C-states, a stopped tick, idle devices in D3
 
 First part of roadmap step 28.4, battery life
-([install-and-power.md](../install-and-power.md#processor-idle-states-and-device-power)).
+([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)).
 An idle CPU used to execute HLT and wake every 10 ms; a Windows driver
 that asked for its device to be powered down got `STATUS_NOT_IMPLEMENTED`.
 
@@ -14521,7 +14521,7 @@ printing) closed the everyday-OS phase, and the version moves from 0.1.0 to
 is new since 0.1, how to start it and its known limits, which include the
 checks that still need a real PC (the T14 boot of the ISO, Hyper-V, the
 update signing key).  Tagging `v0.2.0` runs the release workflow as for
-0.1.0 ([releasing.md](../releasing.md)); the tag is the owner's to push.
+0.1.0 ([releasing.md](releasing.md)); the tag is the owner's to push.
 
 ## Reset this PC, the firmware's watchdog and Recovery in Settings
 
@@ -15501,6 +15501,100 @@ was `CW_USEDEFAULT` and its width 0, so Burn's window became a 960 by
   answers 0 by 0).
 - **Self-test** `guitest auto` checks both popup cases.
 
+## An installed drive C: is its disk, not a RAM disk
+
+Installed on NTFS, NovaOS used to keep all of drive C: in memory: it
+restored the tree from the disk at every start and saved changes behind
+the scenes. The system DLLs and programs were unpacked into memory on
+every start too. Now an installed system's C: is the NTFS volume itself,
+as on Windows (docs/design/disk-c.md). The RAM disk is only for the
+installation media.
+
+- **`PersistInit`** (`fs/persist.c`): when C:'s volume is NTFS and NovaOS
+  did not start from the installation media, `RamfsMountC` mounts it as
+  the root of drive C:, the way D: is mounted. A folder is read when
+  something looks in it, a file's contents when it is opened, and changed
+  files are written a second after the last change (`DrivesPoll`, which
+  also marks the volume clean). Nothing is restored, saved behind or let
+  go of.
+- **System files**: `UmInit` writes the files from the OS image to the
+  volume only when `C:\Windows\NovaOS-system-files.txt` names other ones.
+  That stamp holds a SHA-256 of the embedded files, computed by
+  `tools/build_userland.py` as `g_userland_digest`, and a digest of the
+  files beside the kernel (`BootFilesDigest`). So the first start after
+  an install or an update writes them, and later starts don't.
+- **Security descriptors, times and attributes** of C: are the volume's
+  own, through the step 1 source functions every NTFS drive uses.
+- **FAT-saved C:** (a live stick's NOVADATA, and CI's data disk) now
+  keeps the read-only, hidden and system attributes it promised: saving a
+  file wrote its contents and write time but not its attribute bits, so a
+  hidden file came back visible after a restart (`linktest restarted`
+  checks it now).
+- **Reset this PC** removes the system files along with the rest. The
+  restart that follows writes them again.
+- **Setup** refuses to install over the disk the running system's C: is
+  on: start from the installation media for that.
+- **Self-test**: devices boot `diskc` uses an NTFS NOVADATA data disk as
+  C:. It checks that the system files are written once and are current
+  after `shutdown /r`, and that `linktest` on C: keeps links, times, the
+  hidden attribute and a DACL across the restart. Offline,
+  `scripts/ntfs-check.py` checks the volume and ntfs-3g reads the stamp
+  and `kernel32.dll`.
+
+## Drives on disk keep attributes, times and permissions
+
+The first of three steps toward an installed drive C: that is the disk's
+own NTFS or FAT volume, with the RAM disk kept for live and setup boots
+only: drives mounted from disk (D:, E:, ...) now do what C: relies on.
+
+- **Attributes and times** set with `SetFileAttributes` and `SetFileTime`
+  are written to the volume at once (NTFS's standard information and
+  directory entries, FAT's directory entry), and times set on a file
+  before its new contents reach the disk are given again after them, as
+  an extractor sets an archive's times before closing.
+- **Permissions on NTFS:** a file's or folder's security descriptor is
+  read from `$Secure` when first wanted, and one a program sets is
+  written there; a file whose descriptor is the root's inherits from its
+  folder, as drive C: saves them, and new files get that one.
+- **FAT moves:** files move between folders, and folders are renamed
+  (also in case only) and moved, keeping their times; a moved folder's
+  `..` names its new parent.
+- **Change notifications** already reached these drives' folders; they
+  are now tested there.
+- **kernel32:** `FindFirstChangeNotificationA`, `GetCompressedFileSizeA`
+  and `SearchPathA` passed their path on unterminated (the conversion
+  writes no NUL), so a watch could fail with "path not found" on any
+  drive.
+- **Test:** the devices suite's "ntfs" boot gains a FAT32 disk as E:, and
+  `volfiletest` checks all of the above on D: and E:, then again after a
+  restart, read back from the volumes.
+- **Next:** step 2 mounts an installed C: straight from its volume (no
+  restore into memory at boot, no saving behind), with system files kept
+  in `C:\Windows` and refreshed when an update changes them.
+
+## An installed drive C: shows its disk, not a RAM disk
+
+After installing NovaOS to a disk, Disk Management still listed drive
+C: as a RAMFS volume whose capacity was the machine's memory (4.13 GB
+on a 4 GB Hyper-V machine, on a 9.44 GB NTFS partition).  C: was saved
+to that partition all along; only the answers about it were wrong:
+`GetVolumeInformation("C:\")` always named RAMFS, and
+`GetDiskFreeSpaceEx` and `NtQueryVolumeInformationFile` on C: gave the
+machine's memory.
+
+- **Kernel** (`um/um_syscall.c`, `fs/persist.c`): once C: is saved to a
+  volume, its `FileFsSizeInformation`, `FileFsFullSizeInformation` and
+  `FileFsAttributeInformation` are that volume's size, free space and
+  file system (`PersistFileSystem`: FAT32 or NTFS; NTFS adds
+  `FILE_PERSISTENT_ACLS`).  A C: kept in memory only answers as before.
+- **`GetVolumeInformation`** (`kernel32/extra.c`): C:'s file system is
+  the one its volume reports (`\\.\C:`): RAMFS in memory only, else FAT32
+  or NTFS, as Disk Management shows it.  Its label and serial number stay
+  NovaOS's, so files on C: still match their volume.
+- **Self-tests**: `cachetest` checks that C: reports the data disk's
+  FAT32 and size; it and `ramdisktest` measure free memory with
+  `GlobalMemoryStatusEx` now that C:'s free space is the disk's.
+
 ## XAML animation and WinUI 2's inherited properties
 
 The fifth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
@@ -15529,6 +15623,31 @@ properties.
   on to `Window.Current`; WinUI 2's theme resources past
   `InkToolbarFlyoutItem`, a type the framework lacks; its controls'
   default styles.
+
+## Setup installs drive C: on NTFS only
+
+Since step 2 of the on-disk drive C: plan, an installed system's C: is
+its NTFS volume, used in place. Setup could still format drive C: as
+FAT32, and such an install kept C: in a RAM disk saved to the volume. Now
+Setup formats drive C: as NTFS only, so after any install the RAM disk is
+used only by the installation media (docs/design/disk-c.md, step 3).
+
+- **Setup's window** (`kernel/apps/setup.c`): the confirm page has no
+  NTFS/FAT32 choice any more; it says drive C: is a new NTFS volume used
+  in place.
+- **The Terminal's `install`** (`kernel/apps/terminal.c`): `/fat` is
+  refused with a message, and the usage line no longer offers it.
+- **`SetupStart`** (`kernel/fs/setup.c`) lost its file-system argument
+  and the FAT32 drive C: format; the 1 TiB cap a FAT32 drive C: had's size
+  went with it (`tests/tools/test_installer_layout.py`).
+- **An older FAT32 drive C:** (`SetupDisk.fat_c`): reinstalling cannot
+  keep it, as drive C: is NTFS now. The disk list says "an older NovaOS
+  (drive C: on FAT32)", `install` explains it, `/reinstall` is refused,
+  and Setup itself fails the reinstall if it finds one. Such an install
+  still starts as before.
+- **Docs**: install-and-power.md, user-guide.md, building.md,
+  design/installer.md, design/disk-c.md (with what still uses the RAM
+  disk), the README and the NTFS roadmap item.
 
 <!-- END generated:history -->
 

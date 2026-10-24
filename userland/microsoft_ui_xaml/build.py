@@ -195,7 +195,23 @@ def pages():
 FRAMEWORK_LACKS = ()
 
 
-def leave_out_unbuilt(text, types):
+# the framework's type table (Windows.UI.Xaml's, vendored under
+# Microsoft.UI.Xaml names): a type the presentation namespace names that it
+# lacks is Windows-only (InkToolbar's, in Windows.UI.Xaml.InkControls.dll)
+STATIC_METADATA = os.path.join(ROOT, 'third_party', 'microsoft-ui-xaml', 'dxaml', 'xcp', 'components',
+                               'metadata', 'StaticMetadata.g.cpp')
+
+
+def framework_types():
+    """the names of the types the framework's parser knows, as the XAML
+    presentation namespace gives them (no prefix)"""
+    with open(STATIC_METADATA, encoding='utf-8-sig') as f:
+        text = f.read()
+    return set(re.findall(r'XSTRING_PTR_STORAGE\(L"(\w+)"\), // Name\s+XSTRING_PTR_STORAGE\(L"[\w.]+"\), // Full name',
+                          text))
+
+
+def leave_out_unbuilt(text, types, framework=None):
     """@text (a merged dictionary) without the resources that name a WinUI 2
     type this build does not have (a feature not built yet) or use markup in
     FRAMEWORK_LACKS, or name such a resource: XAML text resolves each type as it is parsed, where XBF
@@ -203,18 +219,25 @@ def leave_out_unbuilt(text, types):
     from xml.dom import minidom
     doc = minidom.parseString(text.encode('utf-8'))
     root = doc.documentElement
-    prefixes = {a.name[6:]: a.value for a in root.attributes.values() if a.name.startswith('xmlns:')}
+    prefixes = {a.name[6:]: a.value for a in root.attributes.values() if a.name.split(':')[0] == 'xmlns'}
+    # (a name the framework lacks is looked up in WinUI 2's metadata
+    # provider under each of its namespaces: AcrylicBrush is WinUI 2's)
+    framework = (framework_types() if framework is None else framework) | {t.rsplit('.', 1)[1] for t in types
+                                                                       if t.startswith('Microsoft.UI.Xaml.')}
     def known(prefix, name):
         ns = prefixes.get(prefix, '')
+        if ns == mergexaml.P:
+            return name.split('.')[0] in framework
         return ns not in XAML_TYPE_NS or (ns[len('using:'):] + '.' + name.split('.')[0]) in types
     gone, left = set(), []
     def unbuilt(el):
         for e in [el] + el.getElementsByTagName('*'):
-            if ':' in e.tagName and not known(*e.tagName.split(':', 1)):
+            prefix, _, name = e.tagName.rpartition(':')
+            if not known(prefix, name):
                 return True
             for a in e.attributes.values():
-                m = re.fullmatch(r'(\w+):(\w+)', a.value) if a.name in ('TargetType', 'x:DataType') else None
-                if m and not known(m.group(1), m.group(2)):
+                m = re.fullmatch(r'(?:(\w+):)?(\w+)', a.value) if a.name in ('TargetType', 'x:DataType') else None
+                if m and not known(m.group(1) or '', m.group(2)):
                     return True
                 if any(k in gone for k in re.findall(r'{(?:StaticResource|ThemeResource)\s+([\w.]+)}', a.value)):
                     return True

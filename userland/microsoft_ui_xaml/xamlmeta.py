@@ -177,7 +177,8 @@ class Gen:
         return False
 
     def content_property(self, t):
-        for a in t.attrs:
+        # (a runtime class's own attributes: idl.py keeps them as class_attrs)
+        for a in getattr(t, 'class_attrs', None) or t.attrs:
             if a.name == 'contentproperty' and a.args:
                 return a.args[0]
         return ''
@@ -328,11 +329,25 @@ class Gen:
                     is_content = ty is not None and name == content
                     if ty is None:
                         ty = self.find_getter(t, name)
+                        attached = ty is not None
+                    else:
+                        attached = False
                     tname = self.meta(ty) if ty is not None else 'Object'
                     if tname not in self.discovered:
                         self.discovered[tname] = ty
-                    self.w('xamlType.AddDPMember(L"%s", L"%s", statics%s.%s(), %s /* isContent */);'
-                           % (name, tname, suffix, pname, 'true' if is_content else 'false'))
+                    if attached:
+                        # (NovaOS: an attached property's member is
+                        # attachable, as the parser of XAML text asks;
+                        # Microsoft's XBF compiler resolves them itself)
+                        self.w('xamlType.AddMember(L"%s", L"%s",' % (name, tname))
+                        self.w('    [dp = statics%s.%s()](winrt::IInspectable instance) '
+                               '{ return instance.as<winrt::DependencyObject>().GetValue(dp); },' % (suffix, pname))
+                        self.w('    [dp = statics%s.%s()](winrt::IInspectable instance, winrt::IInspectable value) '
+                               '{ instance.as<winrt::DependencyObject>().SetValue(dp, value); },' % (suffix, pname))
+                        self.w('    false /* isContent */, true /* isDependencyProperty */, true /* isAttachable */);')
+                    else:
+                        self.w('xamlType.AddDPMember(L"%s", L"%s", statics%s.%s(), %s /* isContent */);'
+                               % (name, tname, suffix, pname, 'true' if is_content else 'false'))
                 else:
                     self.w('// Ignoring static non-dependency property %s()' % pname)
             self.indent -= 1

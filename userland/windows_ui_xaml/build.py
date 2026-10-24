@@ -1088,6 +1088,20 @@ _TRANSFORMS = 'components/transforms/lib/Microsoft.UI.Xaml.Transforms.vcxproj'
 CORE_LIBRARIES.append((_TRANSFORMS, _TRANSFORMS, 'components/pch/precomp.h', []))
 CORE_FIRST[_TRANSFORMS] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp', '../HitTestParams.cpp')
+# (and what the first frame's arrange and render walk make (roadmap
+# 32.4): a scrolling presenter's clip (components/graphics'
+# CRectangleGeometry), a transform group with its collection, and the
+# solid colour brush's core half (components/brushes' CSolidColorBrush))
+CORE_SOURCES[_TRANSFORMS] += ('../TransformGroup.cpp', '../TransformCollection.cpp')
+CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += ('../RectangleGeometry.cpp',)
+CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../SolidColorBrush.cpp',)
+# (with the clip's peer: Geometry, its partial one, and RectangleGeometry)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Geometry_Partial.cpp',) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Geometry', 'RectangleGeometry'))
+# (and what draws a text block's glyphs: the native text's Direct2D
+# drawing context, with its shared WIC bitmap and text helpers)
+CORE_SOURCES['core/native/text/Common/Native.Text.Common.vcxproj'] += (
+    'D2DTextDrawingContext.cpp', 'SharedWicBitmap.cpp', 'TextHelpers.cpp')
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

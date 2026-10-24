@@ -1,6 +1,12 @@
 /*
  * persist.c — keeps drive C: on disk (see persist.h)
  *
+ * An installed system's C: is its NTFS volume, mounted in place (g_direct,
+ * docs/design/disk-c.md): none of the saving below runs for it.  The RAM
+ * disk, saved as below, is for the installation media, an install whose
+ * volume could not be mounted in place, and a FAT32 install from an older
+ * NovaOS (Setup formats drive C: as NTFS only).
+ *
  * Saving walks the RAM disk along the RAMFS_F_SUB marks to the nodes that
  * changed: a changed file is written whole, a directory whose entries
  * changed has the disk entries it no longer holds deleted, and a moved

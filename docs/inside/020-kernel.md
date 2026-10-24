@@ -32,7 +32,8 @@
   - Drive C: on an installed system is its NTFS volume, mounted in place
     as D: is, with the system files written to it once per OS image
     ([design/disk-c.md](design/disk-c.md)).  Live from the installation
-    media (or installed on FAT32) it is a RAM disk, saved to a volume once
+    media (or installed on FAT32 by an older NovaOS: Setup formats NTFS
+    only) it is a RAM disk, saved to a volume once
     it has been quiet for a second and restored at boot.  Either way it
     reports the volume's file system, size and free space (Disk
     Management, `GetVolumeInformation`, `GetDiskFreeSpaceEx`).

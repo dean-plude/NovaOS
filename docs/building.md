@@ -520,7 +520,8 @@ written to the volume at the first start and again whenever a new image
 brings other ones. `C:\Windows\NovaOS-system-files.txt` records which
 ones it has.
 
-**Live from the installation media**, or installed on FAT32, drive C:
+**Live from the installation media**, or installed on FAT32 by an older
+NovaOS, drive C:
 lives in memory.  NovaOS saves every change to an NTFS or FAT volume a
 second later (and before Restart and Shut down) and restores it at the
 next boot.  The files installed from the OS image are never saved, so a
@@ -533,8 +534,10 @@ newer image always brings its own.  NovaOS uses the first of:
 3. the FAT volume it booted from (the one holding
    `\EFI\NOVA\kernel.elf`), under `\NOVA\C`.
 
-Install NovaOS asks which file system drive C: gets: NTFS (the default)
-or FAT32.
+Install NovaOS formats drive C: as NTFS, which an installed system mounts
+in place (above).  It no longer offers FAT32; a FAT32 drive C: from an
+older NovaOS still starts this way, and Setup cannot keep it when
+reinstalling.
 
 - **On NTFS**, C: is the whole volume.  It also keeps creation times and
   each file's security descriptor, so ACLs set with `SetFileSecurity` or

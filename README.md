@@ -104,8 +104,9 @@ qemu-system-x86_64 -machine q35 -m 2G -smp 4 \
 <img src="docs/screenshots/install.png" alt="Install NovaOS, opened by the live session" width="560" align="right">
 
 NovaOS starts live from the disc and offers **Install NovaOS**, which
-partitions `disk.img` (GPT, an EFI System Partition and a data partition
-for drive C:).  On a disk that already holds Windows, Setup can instead
+partitions `disk.img` (GPT, an EFI System Partition and an NTFS partition
+that the installed system uses as drive C: in place; the RAM disk is only
+for the live session).  On a disk that already holds Windows, Setup can instead
 install NovaOS beside it in the disk's free space and keep Windows'
 partitions as they are (shrinking Windows' volume to make room when the
 disk has no free space), or reinstall NovaOS keeping drive C:; NovaOS then

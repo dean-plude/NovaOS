@@ -72,7 +72,8 @@ typedef struct {
     bool      can_shrink;
     UINT64    shrink_lba, shrink_from, shrink_to, shrink_used;
     char      shrink_why[80];  /* why none can, when an NTFS volume is there */
-    bool      can_reinstall;   /* NovaOS is on it: reinstall, keeping drive C: (NOVADATA) */
+    bool      fat_c;           /* its NOVADATA (drive C:) is FAT32, from an older NovaOS: Setup cannot keep it */
+    bool      can_reinstall;   /* NovaOS is on it: reinstall, keeping drive C: (NOVADATA, NTFS) */
 } SetupDisk;
 
 /* The free space NovaOS needs beside other systems: its ESP (the system
@@ -91,8 +92,8 @@ typedef enum {
 } SetupHow;
 
 /* Start installing on @dev in the background, @how, with a new drive C:
- * on NTFS (or FAT32); false if one is running */
-bool SetupStart(BlockDev *dev, bool ntfs, SetupHow how);
+ * on NTFS (the installed system mounts it in place); false if one is running */
+bool SetupStart(BlockDev *dev, SetupHow how);
 
 typedef enum { SETUP_IDLE, SETUP_RUNNING, SETUP_DONE, SETUP_FAILED } SetupState;
 typedef struct {

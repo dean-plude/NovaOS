@@ -1241,18 +1241,20 @@ static void cmd_install(Term *t, int argc, char **argv)
             if (d[i].can_reinstall)
                 tprintf(t, "      NovaOS can be reinstalled there, keeping drive C: and your files (install %s /reinstall)",
                         d[i].dev->name);
+            else if (d[i].nova && d[i].fat_c)
+                tprint(t, "      Drive C: there is FAT32 (an older NovaOS): it cannot be kept, as drive C: is NTFS now");
         }
         if (!n) tprint(t, "There are no disks to install on.");
         if (NvmeBehindVmd())
             tprint(t, "Intel VMD (RST) hides the NVMe disks: turn it off in the firmware setup.");
-        tprint(t, "Usage: install <disk> [/beside | /shrink | /reinstall] [/fat]   (drive C: on NTFS, or FAT32 with /fat;");
+        tprint(t, "Usage: install <disk> [/beside | /shrink | /reinstall]   (drive C: is a new NTFS volume;");
         tprint(t, "       /beside keeps what is on the disk and uses its free space, /shrink first shrinks Windows'");
         tprint(t, "       volume to make that space, /reinstall replaces NovaOS keeping drive C:; else the disk is erased)");
         kfree(d);
         return;
     }
     SetupDisk *pick = NULL;
-    bool fat = false;
+    bool fat = false;                 /* (/fat: refused, drive C: is NTFS now) */
     SetupHow how = SETUP_ERASE;
     for (int i = 2; i < argc; i++) {
         if (is(argv[i], "/fat") || is(argv[i], "fat")) fat = true;
@@ -1270,11 +1272,14 @@ static void cmd_install(Term *t, int argc, char **argv)
                     : how == SETUP_BESIDE && !pick->can_beside ? "That disk has too little free space for NovaOS (see 'install')."
                     : how == SETUP_SHRINK && !pick->can_shrink ? (pick->shrink_why[0] ? pick->shrink_why
                                                                   : "No volume on that disk can be shrunk to make room (see 'install').")
+                    : fat ? "Drive C: is NTFS now: Setup no longer formats it FAT32 (leave out /fat)."
+                    : how == SETUP_REINSTALL && pick->nova && pick->fat_c
+                          ? "Drive C: on that disk is FAT32 (an older NovaOS) and cannot be kept: copy your files off, then erase it."
                     : how == SETUP_REINSTALL && !pick->can_reinstall ? "NovaOS is not installed on that disk."
                     : NULL;
     if (!pick) tprintf(t, "There is no disk named %s. Type 'install' to list them.", argv[1]);
     else if (why) terr(t, why);
-    else if (!SetupStart(pick->dev, !fat, how)) {
+    else if (!SetupStart(pick->dev, how)) {
         SetupStatus st;
         SetupGetStatus(&st);
         terr(t, st.error[0] ? st.error : "The installer is already running.");

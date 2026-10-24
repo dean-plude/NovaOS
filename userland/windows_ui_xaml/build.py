@@ -1092,7 +1092,11 @@ CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp', '../HitTestParams.cpp')
 # 32.4): a scrolling presenter's clip (components/graphics'
 # CRectangleGeometry), a transform group with its collection, and the
 # solid colour brush's core half (components/brushes' CSolidColorBrush))
-CORE_SOURCES[_TRANSFORMS] += ('../TransformGroup.cpp', '../TransformCollection.cpp')
+CORE_SOURCES[_TRANSFORMS] += ('../TransformGroup.cpp', '../TransformCollection.cpp',
+                              # (and what turns an element's transforms into its
+                              # composition visual's: expressions and local transforms)
+                              '../WinRTExpressionConversionContext.cpp', '../WinRTLocalExpressionBuilder.cpp',
+                              '../XamlLocalTransformBuilder.cpp')
 CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += ('../RectangleGeometry.cpp',)
 CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../SolidColorBrush.cpp',)
 # (with the clip's peer: Geometry, its partial one, and RectangleGeometry)
@@ -1102,6 +1106,13 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Geo
 # drawing context, with its shared WIC bitmap and text helpers)
 CORE_SOURCES['core/native/text/Common/Native.Text.Common.vcxproj'] += (
     'D2DTextDrawingContext.cpp', 'SharedWicBitmap.cpp', 'TextHelpers.cpp')
+CORE_SOURCES[_CORETEXT] += ('RichTextServices/shared/TextObject.cpp',)     # (the drawing context's base)
+# (and the text block's DirectWrite renderer, which hands its glyph runs to
+# the drawing context, and the service the first frame's deferred tree
+# building runs on (BuildTreeService, its generated class and its partial one))
+CORE_SOURCES[_CORETEXT] += ('TextBlock/DWriteTextRenderer.cpp',)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../BuildTreeService_Partial.cpp', '../winrtgeneratedclasses/BuildTreeService.g.cpp')
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled

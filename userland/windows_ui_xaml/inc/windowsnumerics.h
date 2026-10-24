@@ -1,7 +1,10 @@
 /* NovaOS: the Windows SDK's windowsnumerics.h, MinGW-w64's plus what its
  * declares and never defines that XAML calls: inverting a 3x2 and a 4x4
  * matrix (XAML's 2D and 3D transforms, components/math).  As the SDK's,
- * they return false, and a matrix of NaNs, for a matrix with no inverse. */
+ * they return false, and a matrix of NaNs, for a matrix with no inverse.
+ * And normalizing a Windows Runtime Vector3 (X, Y, Z) as a float3, which
+ * XAML's local transform builder does with a rotation axis
+ * (components/transforms' XamlLocalTransformBuilder.cpp). */
 #pragma once
 #include_next <windowsnumerics.h>
 #include <float.h>
@@ -51,6 +54,14 @@ inline bool invert(const float4x4 &m, float4x4 *out)
         (-m.m21 * c3 + m.m22 * c1 - m.m23 * c0) * i, ( m.m11 * c3 - m.m12 * c1 + m.m13 * c0) * i,
         (-m.m41 * s3 + m.m42 * s1 - m.m43 * s0) * i, ( m.m31 * s3 - m.m32 * s1 + m.m33 * s0) * i);
     return true;
+}
+
+/* (any struct with X, Y and Z members: the Windows Runtime's Vector3,
+ * whose header this one doesn't include) */
+template <typename V, typename = decltype(V::X), typename = decltype(V::Y), typename = decltype(V::Z)>
+inline float3 normalize(const V &v)
+{
+    return normalize(float3(v.X, v.Y, v.Z));
 }
 
 }}}

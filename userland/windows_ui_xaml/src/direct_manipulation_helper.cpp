@@ -32,3 +32,13 @@ HRESULT DirectManipulationHelper::GetDCompManipulationCompositorFactory(HMODULE 
 {
     return GetFactory(dmanip, CLSID_DCompCompositor, factory);
 }
+
+// NovaOS's DirectManipulation hands out no manager (Microsoft.DirectManipulation.dll:
+// the framework treats manipulations as unsupported), so no viewport has an
+// interaction to chain to another process: there is nothing to set on the visual
+HRESULT DirectManipulationHelper::SetInteraction(ABI::Microsoft::UI::Composition::IVisual *visual, IInspectable *interaction)
+{
+    (void)visual;
+    (void)interaction;
+    return S_OK;
+}

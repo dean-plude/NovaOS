@@ -1097,7 +1097,7 @@ CORE_SOURCES[_TRANSFORMS] += ('../TransformGroup.cpp', '../TransformCollection.c
                               # composition visual's: expressions and local transforms)
                               '../WinRTExpressionConversionContext.cpp', '../WinRTLocalExpressionBuilder.cpp',
                               '../XamlLocalTransformBuilder.cpp')
-CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += ('../RectangleGeometry.cpp',)
+CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += ('../RectangleGeometry.cpp', '../EffectPolicyHelper.cpp')
 CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../SolidColorBrush.cpp',)
 # (with the clip's peer: Geometry, its partial one, and RectangleGeometry)
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Geometry_Partial.cpp',) + tuple(
@@ -1111,6 +1111,24 @@ CORE_SOURCES[_CORETEXT] += ('RichTextServices/shared/TextObject.cpp',)     # (th
 # the drawing context, and the service the first frame's deferred tree
 # building runs on (BuildTreeService, its generated class and its partial one))
 CORE_SOURCES[_CORETEXT] += ('TextBlock/DWriteTextRenderer.cpp',)
+# (and the composition nodes the render walk hangs elements' visuals on:
+# components/comptree's HWCompTreeNode and its Windows.UI.Composition kind)
+CORE_SOURCES['components/comptree/lib/Microsoft.UI.Xaml.CompTree.vcxproj'] += ('../HWCompNode.cpp', '../HWCompNodeWinRT.cpp')
+CORE_SERVICES_STUBS += ('HWCompNode_Stub.cpp',)                    # (their stubs leave xaml_corestubs.lib)
+# (and what a text block's render walk draws its text highlights with:
+# components/text's highlight renderer and its region merge)
+_TEXT = 'components/text/lib/Microsoft.UI.Xaml.Text.vcxproj'
+CORE_LIBRARIES.append((_TEXT, _TEXT, 'components/pch/precomp.h', []))
+CORE_FIRST[_TEXT] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
+CORE_SOURCES[_TEXT] = ('../TextHighlightRenderer.cpp', '../TextHighlightMerge.cpp')
+# (and the DirectComposition surfaces a text block's glyphs are drawn into:
+# the platform layer's DCompSurface, its factories and their monitor)
+CORE_SOURCES['plat/win/desktop/platwindesktop.vcxproj'] += ('DCompSurface.cpp', 'DCompSurfaceFactoryManager.cpp',
+                                                            'DCompSurfaceMonitor.cpp')
+# (whose debug dump of a surface's pixels writes them through WIC, which the
+# Windows SDK's headers the platform layer's precompiled header pulls in declare)
+CORE_FIRST['plat/win/desktop/platwindesktop.vcxproj'] = \
+    CORE_FIRST['plat/win/desktop/platwindesktop.vcxproj'] + ['wincodec.h']
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
     '../BuildTreeService_Partial.cpp', '../winrtgeneratedclasses/BuildTreeService.g.cpp')
 

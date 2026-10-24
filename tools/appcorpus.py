@@ -672,11 +672,11 @@ def main():
     t_boot = time.time()
     try:
         # Drive C: gets about 2.3 GB of programs before the first one starts,
-        # and Roblox, Steam and WebView2 install about 2.7 GB more.  C: lives
-        # in memory, but the contents of its saved files are let go of when
-        # memory runs short and read back from the data disk when wanted, so
-        # 6 GB is room enough; the data disk needs room for all of C:
-        nova = Nova(a.img, os.path.join(work, 'boot'), puts, mem=6144, data_mb=12288,
+        # and Roblox, Steam and WebView2 install about 2.7 GB more.  C: is the
+        # data disk's NTFS volume, as on an installed system (a FAT one would
+        # be reported as FAT32, and Audacity refuses its temporary files
+        # there), so files are in memory only while open
+        nova = Nova(a.img, os.path.join(work, 'boot'), puts, mem=6144, data_mb=12288, data_fs='ntfs',
                     extra_args=extra, serial_path=os.path.join(a.out, 'serial-raw.log'),
                     net=network_required(staged), rec=rec, wav=wav)
     except RuntimeError as e:

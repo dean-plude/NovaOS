@@ -488,6 +488,11 @@ commands, clicks and keys. The windowed programs' screenshots must match
 `dir` on C: and on an NTFS drive D:, each with its own free space, and File
 Explorer's This PC listing both.
 
+The corpus machine's drive C: is an NTFS data disk, as on an installed
+system: the harness formats it with `mkntfs` and copies the programs in
+through an ntfs-3g mount (with `sudo` when it does not run as root), so
+programs see NTFS as they would on Windows.
+
 The same workflow runs an SMP stress test (`smpstress scaling 0` on four
 CPUs; each multi-thread figure is the best of three samples, since a
 shared runner sometimes takes the emulated CPUs away for a moment and only a

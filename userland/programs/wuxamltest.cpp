@@ -335,9 +335,10 @@ static void windows_checks()
     mine->Release();
 
     /* a Windows method the framework has no counterpart for says so */
-    ctl::ComPtr<wux::IUIElement9> ue9;
-    CHECK("UIElement.StopAnimation (Windows.UI.Composition): E_NOTIMPL",
-          SUCCEEDED(as(button.Get(), ue9.GetAddressOf())) && ue9->StopAnimation(nullptr) == E_NOTIMPL);
+    ctl::ComPtr<wux::IUIElement10> ue10;
+    ctl::ComPtr<ABI::Windows::UI::IUIContext> context;
+    CHECK("UIElement.UIContext (Windows.UI.UIContext): E_NOTIMPL",
+          SUCCEEDED(as(button.Get(), ue10.GetAddressOf())) && ue10->get_UIContext(context.GetAddressOf()) == E_NOTIMPL);
 }
 
 /* the framework started as xamlapptest starts it */

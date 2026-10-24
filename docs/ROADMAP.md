@@ -1265,9 +1265,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   register attached properties and content properties as Microsoft's
   XBF compiler resolves them, and find `DesignMode` and `PowerManager`
   (twinapi.appcore); they now stop at `RevealBrush.TargetTheme`
-  (`E_NOINTERFACE` inside WinUI 2's reveal code).  Next: that, the
-  controls' default styles (`InfoBadge`'s is in the theme resources),
-  then Calculator's controls.
+  (`E_NOINTERFACE` inside WinUI 2's reveal code).  Seventh part done:
+  `XamlControlsResources` loads whole and answers lookups (the Windows
+  faces pass `Windows.UI.Composition` objects as the framework's
+  `Microsoft.UI.Composition` ones; the merged theme resources list each
+  resource after those it names, as XBF's lookup-time creation allows;
+  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Next: the
+  controls' default styles applied (`InfoBadge`'s template), then
+  Calculator's controls; Calculator's start-up itself waits on the .NET
+  Native framework packages (32.6).
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

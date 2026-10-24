@@ -56,9 +56,8 @@ static int pass, fail;
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
 /* what waits on framework parts not built yet: reported, not counted, so
  * the line turns into a pass when the part lands (roadmap 32.5's next
- * parts: the rest of WinUI 2's theme resources (types the Windows XAML
- * has and the framework not, InkToolbarFlyoutItem), the UWP window's
- * present target (32.4's composition)) */
+ * parts: the controls' default styles applied, the UWP window's present
+ * target (32.4's composition)) */
 #define NOT_YET(what, cond) do { printf("%s: %s (line %d)\n", (cond) ? "now works (make it a CHECK)" : "not yet", \
     what, __LINE__); fflush(stdout); } while (0)
 #define NOT_YET_HR(what, expr) do { HRESULT h_ = (expr); printf("%s: %s: 0x%08lx (line %d)\n", SUCCEEDED(h_) ? \
@@ -307,14 +306,32 @@ static void winui2_checks()
     ctl::ComPtr<wf::Collections::IMap<IInspectable *, IInspectable *>> map;
     ctl::ComPtr<IInspectable> key;
     hr = activate(L"Microsoft.UI.Xaml.Controls.XamlControlsResources", resources.GetAddressOf());
-    NOT_YET_HR("XamlControlsResources made", hr);
+    CHECK_HR("XamlControlsResources made", hr);
     if (FAILED(hr))
         why();
-    NOT_YET("a Windows ResourceDictionary", resources && SUCCEEDED(as(resources.Get(), dictionary.GetAddressOf())) &&
+    CHECK("a Windows ResourceDictionary", resources && SUCCEEDED(as(resources.Get(), dictionary.GetAddressOf())) &&
           SUCCEEDED(as(resources.Get(), map.GetAddressOf())));
-    NOT_YET("its theme resources looked up: ControlNormalAnimationDuration, 00:00:00.250", map &&
+    CHECK("its theme resources looked up: ControlNormalAnimationDuration, 00:00:00.250", map &&
           SUCCEEDED(box_string(L"ControlNormalAnimationDuration", key.GetAddressOf())) &&
           SUCCEEDED(map->Lookup(key.Get(), duration.GetAddressOf())) && unboxed_is(duration.Get(), L"00:00:00.250"));
+    /* its dark theme's acrylic brushes tinted (XamlControlsResources sets
+     * their TintLuminosityOpacity through Windows' IAcrylicBrush2, which
+     * WinUI 2's AcrylicBrush answers on NovaOS) */
+    ctl::ComPtr<wf::Collections::IMap<IInspectable *, IInspectable *>> themeDictionaries, dark;
+    ctl::ComPtr<IInspectable> darkKey, darkDictionary, brushKey, brush;
+    ctl::ComPtr<wux::Media::IAcrylicBrush2> acrylic2;
+    ctl::ComPtr<wf::IReference<DOUBLE>> luminosity;
+    DOUBLE tint = 0;
+    CHECK("its Default theme's AcrylicBackgroundFillColorDefaultBrush, TintLuminosityOpacity 0.96",
+          dictionary && SUCCEEDED(dictionary->get_ThemeDictionaries(themeDictionaries.GetAddressOf())) &&
+          SUCCEEDED(box_string(L"Default", darkKey.GetAddressOf())) &&
+          SUCCEEDED(themeDictionaries->Lookup(darkKey.Get(), darkDictionary.GetAddressOf())) &&
+          SUCCEEDED(as(darkDictionary.Get(), dark.GetAddressOf())) &&
+          SUCCEEDED(box_string(L"AcrylicBackgroundFillColorDefaultBrush", brushKey.GetAddressOf())) &&
+          SUCCEEDED(dark->Lookup(brushKey.Get(), brush.GetAddressOf())) &&
+          SUCCEEDED(as(brush.Get(), acrylic2.GetAddressOf())) &&
+          SUCCEEDED(acrylic2->get_TintLuminosityOpacity(luminosity.GetAddressOf())) && luminosity &&
+          SUCCEEDED(luminosity->get_Value(&tint)) && tint > 0.95 && tint < 0.97);
 
     /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
      * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/

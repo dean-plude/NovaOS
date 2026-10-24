@@ -1036,9 +1036,38 @@ vendors.
      - *Where it stops.*  `XamlControlsResources` now loads past the
        acrylic brushes and stops at `RevealBrush.TargetTheme`: WinUI 2's
        reveal code fails `E_NOINTERFACE` when the property changes.
-   - *Next:* that `RevealBrush` stop, so the theme resources load whole,
-     and the controls' default styles applied (`InfoBadge`'s style is in
-     the theme resources, so `XamlControlsResources` has to load first);
+   - *Seventh part, the theme resources whole.*  `XamlControlsResources`
+     loads from its `Source` and answers lookups (`winui2test`: the
+     dictionary, `ControlNormalAnimationDuration`, the dark theme's
+     `AcrylicBackgroundFillColorDefaultBrush` tinted).
+     - *Composition types across the faces.*  The `RevealBrush` stop was
+       a missing face: `XamlCompositionBrushBase`'s protected
+       `CompositionBrush` takes a `Windows.UI.Composition.CompositionBrush`
+       in Windows' metadata and a `Microsoft.UI.Composition` one in the
+       framework's, which `tools/winrt/winfaces.py` never matched, so the
+       interface had no face and WinUI 2's `.as<>` threw.  The
+       compositor's objects (dcomp.dll) answer both namespaces' IDs, so
+       `same_composition()` now lets a face pass such an object across
+       (ten more faces, among them `UIElement.StartAnimation`).
+     - *Resources in lookup order.*  XBF creates a resource when it is
+       first looked up, so WinUI 2's dictionaries name resources defined
+       later (`BasedOn="{StaticResource DefaultMenuFlyoutItemStyle}"`
+       before that style).  XAML text does not: the framework's
+       `CDeferredKeys` lets a resource being created (and an implicit
+       style, created as the dictionary loads) see only the keys before
+       it.  `lookup_order()` (`userland/microsoft_ui_xaml/build.py`)
+       reorders each merged dictionary so a resource follows those it
+       names, the merged order kept otherwise.
+     - *Acrylic brushes.*  Windows has `Windows.UI.Xaml.Media.AcrylicBrush`
+       (built from the same source as WinUI 2's); WinUI 3's framework has
+       none, so the theme resources' presentation-namespace `AcrylicBrush`
+       is WinUI 2's.  `XamlControlsResources` then asks it for Windows'
+       `IAcrylicBrush`; the framework's query answers Windows'
+       `IAcrylicBrush` and `IAcrylicBrush2` with the outer's WinUI 2
+       interfaces, which have the same methods in the same order
+       (`windows_faces.cpp`, `s_winui2_aliases`).
+   - *Next:* the controls' default styles applied (`InfoBadge`'s template:
+     the style is in the theme resources, which now load);
      then the features Calculator uses
      (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
      `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator

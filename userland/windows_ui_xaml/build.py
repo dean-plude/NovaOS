@@ -770,7 +770,10 @@ CORE_SOURCES[_ELEMENTS_COMPONENT] = tuple('../' + os.path.basename(x) for x in
 # control's peer registers its events' listeners)
 CORE_SOURCES['core/xcpcore.vcxproj'] += ('dll/eventmgr.cpp',)
 CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += (
-    '../AlphaMask.cpp', '../ExpressionHelper.cpp', '../XamlLightTargetIdMap.cpp', '../XamlLightTargetMap.cpp')
+    '../AlphaMask.cpp', '../ExpressionHelper.cpp', '../XamlLightTargetIdMap.cpp', '../XamlLightTargetMap.cpp',
+    # (and the light itself, CXamlLight, whose statics WinUI 2's
+    # RevealBrush targets: step 32.5's sixth part)
+    '../XamlLight.cpp')
 # (and, of the instrumentation component, the garbage collection
 # aggregator the release queue and the reference tracker report to,
 # GCInstrumentationAggregator.cpp)
@@ -1206,14 +1209,20 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'TemplateBindingExpression',
     # (and XamlCompositionBrushBase, the base of WinUI 2's AcrylicBrush and
     # RevealBrush: FallbackColor, which the theme resources set)
-    'XamlCompositionBrushBase_Partial')) + tuple(
+    'XamlCompositionBrushBase_Partial',
+    # (and CompositionTarget's statics: its Rendering event, which WinUI 2's
+    # acrylic waits on for the dispatcher, and XamlLight, the base of its
+    # reveal lights: step 32.5's sixth part)
+    'CompositionTarget', 'XamlLight_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
                                                       'BindingExpressionBase', 'BindingFailedEventArgs',
                                                       'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
                                                       'XamlResourceReferenceFailedEventArgs', 'ParserServiceProvider',
                                                       'ProvideValueTargetProperty', 'MarkupExtension',
                                                       'StaggerFunctionBase', 'PVLStaggerFunction',
-                                                      'XamlCompositionBrushBase'))
+                                                      'XamlCompositionBrushBase',
+                                                      # (the UWP start-up's Window.Created arguments)
+                                                      'WindowCreatedEventArgs', 'XamlLight'))
 # (with its core half, components/brushes' CXamlCompositionBrush)
 CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../XamlCompositionBrush.cpp',)
 # (and the style component, components/style: CStyle's own members and

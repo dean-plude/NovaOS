@@ -133,9 +133,13 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   source, `{TemplateBinding}`, `Control.ApplyTemplate`; and the UWP
   start-up: the program installed as a UWP app, started by its AUMID,
   with its package identity, the Universal windowing model and the app's
-  `Application` made on `Application.Start`'s UWP route; and an
-  `AcrylicBrush` loaded from markup with `FallbackColor`, a property of
-  its framework base), `wuxamltest` (the XAML framework under its
+  `Application` made on `Application.Start`'s UWP route,
+  `Window.Current` with its `CoreWindow`, its content set, `Activate`
+  and `Application.Exit`; and an `AcrylicBrush` loaded from markup with
+  `FallbackColor`, a property of its framework base; and WinUI 2's theme
+  resources: `XamlControlsResources` loaded from its `Source`, a theme
+  resource looked up and its dark theme's acrylic brushes tinted through
+  Windows' `IAcrylicBrush2`), `wuxamltest` (the XAML framework under its
   `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
   `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
   driven through Windows' interfaces, a Windows-boxed `Visibility`,
@@ -495,6 +499,11 @@ commands, clicks and keys. The windowed programs' screenshots must match
 `tests/reference/NAME.png`. Before them, NovaOS's own screens are checked:
 `dir` on C: and on an NTFS drive D:, each with its own free space, and File
 Explorer's This PC listing both.
+
+The corpus machine's drive C: is an NTFS data disk, as on an installed
+system: the harness formats it with `mkntfs` and copies the programs in
+through an ntfs-3g mount (with `sudo` when it does not run as root), so
+programs see NTFS as they would on Windows.
 
 The same workflow runs an SMP stress test (`smpstress scaling 0` on four
 CPUs; each multi-thread figure is the best of three samples, since a

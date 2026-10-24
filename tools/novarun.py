@@ -120,6 +120,27 @@ class Serial:
         return buf, False
 
 
+def put_ntfs(path, puts):
+    """Copy @puts ((host path, "C:\\dir") pairs) onto the NTFS volume @path,
+    mounted with ntfs-3g (FUSE; through sudo when not root, as on CI runners).
+    umask 0: the descriptors ntfs-3g writes let everyone change them, as
+    files the user put there themselves"""
+    sudo = [] if os.geteuid() == 0 else ['sudo', '-n']
+    mnt = tempfile.mkdtemp(prefix='novadata')
+    subprocess.run(sudo + ['ntfs-3g', '-o', f'uid={os.getuid()},gid={os.getgid()},umask=000', path, mnt], check=True)
+    try:
+        for host, dest in puts:
+            target = os.path.join(mnt, *[p for p in dest.replace('C:', '', 1).split('\\') if p])
+            if os.path.isdir(host):
+                shutil.copytree(host, target, dirs_exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copyfile(host, target)
+    finally:
+        subprocess.run(sudo + ['umount', mnt], check=True)
+        os.rmdir(mnt)
+
+
 def make_data(path, puts, size_mb, fs='fat'):
     with open(path, 'wb') as f:
         f.truncate(size_mb << 20)
@@ -128,7 +149,7 @@ def make_data(path, puts, size_mb, fs='fat'):
         subprocess.run([mkntfs, '-F', '-Q', '-L', 'NOVADATA', '-p', '0', '-H', '255', '-S', '63', path],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if puts:
-            raise RuntimeError('files put on drive C: need the FAT data disk')
+            put_ntfs(path, puts)
         return
     subprocess.run(['mkfs.fat', '-F32', '-n', 'NOVADATA', path], check=True, stdout=subprocess.DEVNULL)
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1')

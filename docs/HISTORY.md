@@ -15624,6 +15624,38 @@ properties.
   `InkToolbarFlyoutItem`, a type the framework lacks; its controls'
   default styles.
 
+## The app corpus runs with an NTFS drive C:
+
+Audacity's nightly test failed from #533 on: drive C: now reports the
+file system it is saved to, and the corpus machine's C: was a FAT32 data
+disk, so Audacity warned "The temporary files directory is on a FAT
+formatted drive" and the test's clicks missed. The corpus machine's C: is
+now an NTFS volume, as on an installed system (Setup installs on NTFS only).
+
+- **`tools/novarun.py`**: `make_data(..., fs='ntfs')` copies files onto the
+  volume (`put_ntfs`: an ntfs-3g mount, through `sudo -n` when not root).
+- **`tools/appcorpus.py`**: the corpus machine's data disk is NTFS.
+- **Alt+F4 opened the menu bar** of a program that was slow to close.
+  The desktop takes F4's press itself (it closes the window) and passes
+  on only its release, and user32 counted only key presses as "another
+  key", so Alt's release looked like Alt tapped alone and opened the menu
+  bar; Audacity, closing its project on the disk, then sat in the menu
+  bar's loop until the next key. Another key's release now counts too
+  (`userland/user32/msg.c`); `guitest auto` checks that Alt alone opens
+  the menu bar and Alt with F4's release does not.
+- **An NTFS volume took no more files after about 7,000** (Steam's
+  test: its update stopped there, with "The cache_path directory ...
+  could not be created"). The MFT grew 64 records at a time, each time in
+  a new extent after the files written since, until its extents no
+  longer fitted in record 0. It now grows by half its size (64 records at
+  least, 65,536 at most), and its bitmap gets more clusters when its own
+  are full, which a volume Setup formatted needed past 32,768 records
+  (`kernel/fs/ntfs.c` `grow_mft`). `tests/tools/test_ntfs_many.py` puts
+  40,000 files on Setup's and mkntfs' volumes and checks them with
+  `scripts/ntfs-check.py`.
+- **Audacity's test** waits 60 s for its Save As dialog, which lists
+  `C:\Documents\Audacity` from the disk now.
+
 ## Setup installs drive C: on NTFS only
 
 Since step 2 of the on-disk drive C: plan, an installed system's C: is
@@ -15674,6 +15706,58 @@ page in a `Window` is laid out and drawn, built from Microsoft's sources.
 - **Test:** `xamlpagetest` draws a `Border`, a `TextBlock` and a
   `Button` and screenshots them (64-bit).
 - **Next (32.4):** typing into a `TextBox` and clicking the `Button`.
+
+## WinUI 2's theme resources load whole
+
+The seventh part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push:
+`XamlControlsResources`, the dictionary of WinUI 2's theme resources an
+app's `App.xaml` merges, now loads from its `Source` and answers lookups.
+
+- **Composition types across the faces:** the framework's interfaces take
+  `Microsoft.UI.Composition` objects where Windows' take
+  `Windows.UI.Composition` ones of the same name; the compositor's objects
+  answer both, so the Windows faces now pass them across (WinUI 2's
+  `RevealBrush` setting its `CompositionBrush`, `UIElement.StartAnimation`).
+- **Resources in lookup order:** Microsoft compiles WinUI 2's resources to
+  XBF, which creates each resource when it is first looked up, so one may
+  name a resource later in its dictionary; XAML text lets a resource see
+  only the ones before it.  The merged files now list each resource after
+  the ones it names.
+- **Acrylic brushes:** the theme resources' `AcrylicBrush` is WinUI 2's
+  on NovaOS (the framework has none), and it answers Windows'
+  `IAcrylicBrush` and `IAcrylicBrush2` (the same methods), which
+  `XamlControlsResources` uses to tint the dark theme's brushes.
+- **Test:** `winui2test` checks the dictionary, a theme resource and a
+  tinted brush (65 checks).
+- **Next (32.5):** the controls' default styles applied (`InfoBadge`'s
+  template), then the controls Calculator uses.  Calculator itself is a
+  .NET Native app: its start-up needs the .NET Native framework packages
+  (32.6) before NovaOS can run it.
+
+## XAML's UWP start-up runs through
+
+The sixth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a UWP
+app's `Application.Start` now runs to the end, and WinUI 2's theme
+resources load much further.
+
+- **UWP start-up:** inside its package, `winui2test` gets
+  `Window.Current` (the view's window) and its `CoreWindow`, sets the
+  window's content, activates it and exits (15 checks).  On the way:
+  the framework's debug tool lookup, `CoreWindow`'s `ICoreWindow5`, and
+  the `WindowCreatedEventArgs` class.
+- **Windows-only types:** WinUI 2's merged theme resources leave out the
+  controls neither WinUI 2 nor the framework has (`InkToolbar`, `Pivot`,
+  `LoopingSelector`, `MediaTransportControls`).
+- **Attached and content properties:** WinUI 2's type table marks them
+  as XAML text needs them (`AnimatedIcon.State`, an `AnimatedIcon`'s
+  source).
+- **What WinUI 2's brushes ask for:** `DesignMode` and `PowerManager`
+  (twinapi.appcore), `Window.Current` on a desktop thread, the
+  framework's `CompositionTarget` and `XamlLight`.
+- **Next (32.5):** the theme resources stop at `RevealBrush.TargetTheme`;
+  then the controls' default styles and Calculator's controls.
 
 <!-- END generated:history -->
 

@@ -1138,7 +1138,9 @@ https://10.0.2.2:8443/hello`) and `dltest` (`dltest -n 8 -w 10.0.2.2 8080
   `tests/tools/test_ntfs_cut.py`, runs the real `kernel/fs/ntfs.c` on a
   RAM disk (`tests/host/ntfs_cut.c`), cuts it off after each disk write
   in turn, and requires every cut disk to come back writable, with every
-  file whole, and to pass `scripts/ntfs-check.py`.
+  file whole, and to pass `scripts/ntfs-check.py`.  Another,
+  `tests/tools/test_ntfs_many.py` (`tests/host/ntfs_many.c`), puts 40,000
+  files on a volume formatted as Setup does and as mkntfs does.
 
 ---
 

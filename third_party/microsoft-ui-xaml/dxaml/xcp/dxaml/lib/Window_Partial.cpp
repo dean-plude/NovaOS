@@ -61,10 +61,11 @@ _Check_return_ HRESULT WindowFactory::get_CurrentImpl(_Outptr_result_maybenull_ 
         // on UWP mode results in catastrophic failures of the framework during init
         // this will likely need to be one of the last dummy window hooks that can be removed.
         // https://microsoft.visualstudio.com/OS/_workitems/edit/37016876
-        if (policy != AppPolicyWindowingModel_ClassicDesktop)
-        {
-            spRetVal = pCore->GetDummyWindowNoRef();
-        }
+        // NovaOS: as Windows.UI.Xaml (not WinUI 3), a desktop thread's
+        // Window.Current is the core's window too, the one XAML islands
+        // initialize (WinUI 2 asks it for the Dispatcher)
+        (void)policy;
+        spRetVal = pCore->GetDummyWindowNoRef();
     }
     else
     {

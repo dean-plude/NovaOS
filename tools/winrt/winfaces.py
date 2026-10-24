@@ -43,6 +43,9 @@ from model import (Enum, Struct, Interface, Delegate, RuntimeClass, TypeRef,
 
 WIN = 'Windows.UI.Xaml.'
 MUX = 'Microsoft.UI.Xaml.'
+# (the compositor's objects, dcomp.dll's, answer both namespaces' IIDs)
+COMP_WIN = 'Windows.UI.Composition.'
+COMP_MUX = 'Microsoft.UI.Composition.'
 PRIM_C = {'Boolean': 'BYTE', 'Char16': 'WCHAR', 'Int8': 'INT8', 'UInt8': 'BYTE', 'Int16': 'INT16',
           'UInt16': 'UINT16', 'Int32': 'INT32', 'UInt32': 'UINT32', 'Int64': 'INT64', 'UInt64': 'UINT64',
           'Single': 'FLOAT', 'Double': 'DOUBLE', 'Guid': 'GUID', 'IntPtr': 'INT_PTR', 'UIntPtr': 'UINT_PTR'}
@@ -202,11 +205,25 @@ class Faces:
                 return False
             if self.key(self.lift(ta)) == self.key(self.lift(tb)):
                 continue
+            if self.same_composition(ta, tb):
+                continue
             ka, kb = self.kind(ta), self.kind(tb)
             if ka and kb and {ka[0], kb[0]} == {'ref', 'object'} and da in ('in', 'out'):
                 continue
             return False
         return True
+
+    def same_composition(self, a, b):
+        """a Windows.UI.Composition class or interface where the framework
+        has Microsoft.UI.Composition's of the same name: one object answers
+        both (dcomp.dll), so the thunk asks it for the other's interface"""
+        if not (isinstance(a, TypeRef) and isinstance(b, TypeRef)):
+            return False
+        n = {a.name, b.name}
+        w = [x for x in n if x.startswith(COMP_WIN)]
+        m = [x for x in n if x.startswith(COMP_MUX)]
+        return (len(w) == 1 and len(m) == 1 and w[0][len(COMP_WIN):] == m[0][len(COMP_MUX):]
+                and all(self.kind(TypeRef(x)) and self.kind(TypeRef(x))[0] == 'ref' for x in n))
 
     # -- thunks -------------------------------------------------------------------
     def thunk(self, name, impl, target, slot, tgt_iid, to_framework_in, queue_side, optional=False):

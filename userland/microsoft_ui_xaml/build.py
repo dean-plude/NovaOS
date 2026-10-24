@@ -195,7 +195,23 @@ def pages():
 FRAMEWORK_LACKS = ()
 
 
-def leave_out_unbuilt(text, types):
+# the framework's type table (Windows.UI.Xaml's, vendored under
+# Microsoft.UI.Xaml names): a type the presentation namespace names that it
+# lacks is Windows-only (InkToolbar's, in Windows.UI.Xaml.InkControls.dll)
+STATIC_METADATA = os.path.join(ROOT, 'third_party', 'microsoft-ui-xaml', 'dxaml', 'xcp', 'components',
+                               'metadata', 'StaticMetadata.g.cpp')
+
+
+def framework_types():
+    """the names of the types the framework's parser knows, as the XAML
+    presentation namespace gives them (no prefix)"""
+    with open(STATIC_METADATA, encoding='utf-8-sig') as f:
+        text = f.read()
+    return set(re.findall(r'XSTRING_PTR_STORAGE\(L"(\w+)"\), // Name\s+XSTRING_PTR_STORAGE\(L"[\w.]+"\), // Full name',
+                          text))
+
+
+def leave_out_unbuilt(text, types, framework=None):
     """@text (a merged dictionary) without the resources that name a WinUI 2
     type this build does not have (a feature not built yet) or use markup in
     FRAMEWORK_LACKS, or name such a resource: XAML text resolves each type as it is parsed, where XBF
@@ -203,18 +219,25 @@ def leave_out_unbuilt(text, types):
     from xml.dom import minidom
     doc = minidom.parseString(text.encode('utf-8'))
     root = doc.documentElement
-    prefixes = {a.name[6:]: a.value for a in root.attributes.values() if a.name.startswith('xmlns:')}
+    prefixes = {a.name[6:]: a.value for a in root.attributes.values() if a.name.split(':')[0] == 'xmlns'}
+    # (a name the framework lacks is looked up in WinUI 2's metadata
+    # provider under each of its namespaces: AcrylicBrush is WinUI 2's)
+    framework = (framework_types() if framework is None else framework) | {t.rsplit('.', 1)[1] for t in types
+                                                                       if t.startswith('Microsoft.UI.Xaml.')}
     def known(prefix, name):
         ns = prefixes.get(prefix, '')
+        if ns == mergexaml.P:
+            return name.split('.')[0] in framework
         return ns not in XAML_TYPE_NS or (ns[len('using:'):] + '.' + name.split('.')[0]) in types
     gone, left = set(), []
     def unbuilt(el):
         for e in [el] + el.getElementsByTagName('*'):
-            if ':' in e.tagName and not known(*e.tagName.split(':', 1)):
+            prefix, _, name = e.tagName.rpartition(':')
+            if not known(prefix, name):
                 return True
             for a in e.attributes.values():
-                m = re.fullmatch(r'(\w+):(\w+)', a.value) if a.name in ('TargetType', 'x:DataType') else None
-                if m and not known(m.group(1), m.group(2)):
+                m = re.fullmatch(r'(?:(\w+):)?(\w+)', a.value) if a.name in ('TargetType', 'x:DataType') else None
+                if m and not known(m.group(1) or '', m.group(2)):
                     return True
                 if any(k in gone for k in re.findall(r'{(?:StaticResource|ThemeResource)\s+([\w.]+)}', a.value)):
                     return True
@@ -235,6 +258,56 @@ def leave_out_unbuilt(text, types):
             d.removeChild(el)
 
 
+def lookup_order(text):
+    """@text (a merged dictionary) with each dictionary's resources ordered
+    so that one comes after the resources of its dictionary it names
+    ({StaticResource}, {ThemeResource}), the merged order kept otherwise:
+    XBF defers each resource until it is first looked up, so a resource may
+    name one later in its dictionary (BasedOn="{StaticResource
+    DefaultMenuFlyoutItemStyle}" before that style), where XAML text lets
+    a resource see only the keys before it (the framework's CDeferredKeys
+    sets a lookup boundary at the resource being created)"""
+    from xml.dom import minidom
+    doc = minidom.parseString(text.encode('utf-8'))
+    root = doc.documentElement
+    for d in [root] + root.getElementsByTagName('ResourceDictionary'):
+        items = [e for e in d.childNodes if e.nodeType == e.ELEMENT_NODE and '.' not in e.tagName.split(':')[-1]]
+        by_key = {}
+        for e in items:
+            k = e.getAttribute('x:Key') or e.getAttribute('x:Name')
+            if k:
+                by_key[k] = e
+        def refs(e):
+            out = []
+            for n in [e] + e.getElementsByTagName('*'):
+                for at in n.attributes.values():
+                    out += re.findall(r'{(?:StaticResource|ThemeResource)\s+(?:ResourceKey=)?([\w.]+)\s*}', at.value)
+                if n.tagName in ('StaticResource', 'ThemeResource') and n.getAttribute('ResourceKey'):
+                    out.append(n.getAttribute('ResourceKey'))
+            return [by_key[k] for k in out if k in by_key and by_key[k] is not e]
+        order, done = [], set()
+        for e in items:
+            stack = [(e, iter(refs(e)))]
+            if id(e) in done:
+                continue
+            done.add(id(e))
+            while stack:
+                node, deps = stack[-1]
+                dep = next(deps, None)
+                if dep is None:
+                    order.append(node)
+                    stack.pop()
+                elif id(dep) not in done:
+                    done.add(id(dep))
+                    stack.append((dep, iter(refs(dep))))
+        if order != items:
+            for e in items:
+                d.removeChild(e)
+            for e in order:
+                d.appendChild(e)
+    return root.toxml()
+
+
 # the release whose merged files are installed: XamlControlsResources
 # and each control's DefaultStyleResourceUri pick them by the
 # UniversalApiContract ApiInformation reports, which on NovaOS (Windows 10
@@ -251,6 +324,7 @@ def themes(gen, types):
     for kind, rels in pages().items():
         name = RELEASE.lower() + '_' + kind + '.xaml'
         text, left = leave_out_unbuilt(mergexaml.merge(rels)[RELEASE][1], types)
+        text = lookup_order(text)
         path = os.path.join(out, name)
         if not os.path.exists(path) or open(path, encoding='utf-8').read() != text:
             open(path, 'w', encoding='utf-8').write(text)

@@ -223,6 +223,16 @@ ThemeAnimations.cpp, with the generated classes of those and of the theme
 animations, transforms, visual states, triggers, key frame collections,
 row and column definitions and timelines they make.
 
+For WinUI 2's theme resources and the UWP start-up (step 32.5 part 6):
+dxaml/lib's CompositionTarget.cpp and .h and XamlLight_Partial.cpp,
+components/graphics/XamlLight.cpp, and the generated XamlLight and
+WindowCreatedEventArgs classes.  Changed: dxaml/lib/DXamlCore.cpp's
+GetDebugInterop answers null and S_OK when no debug tool is attached
+(NovaOS's WRL WeakRef::CopyTo of an empty reference fails E_POINTER), and
+dxaml/lib/Window_Partial.cpp's Window.Current gives the core's window on a
+desktop thread too, as Windows.UI.Xaml does for XAML islands (WinUI 3 gives
+null there; WinUI 2 asks the window for its dispatcher).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

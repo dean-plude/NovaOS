@@ -458,7 +458,9 @@ item ends when a named program or test demonstrates it.
   would, leaving it clean (`ntfstest churn`, the machine reset, `ntfstest
   cut`; every cut point on the host, `tests/tools/test_ntfs_cut.py`); a write past the free space fails
   with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
-  disposable disk.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  disposable disk.  ~~Many files~~ Done: the MFT grows by half its size
+  (and its bitmap with it), so a volume takes as many files as fit
+  (`tests/tools/test_ntfs_many.py`: 40,000).  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).
@@ -1260,7 +1262,26 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   the controls' default styles, and the controls Calculator uses
   (`NavigationView`, `SwipeControl`, `RadioButtons`, `ProgressRing`,
   `BackdropMaterial`, with `ItemsRepeater`); Calculator itself is a .NET
-  Native app, which needs that runtime's framework packages too.
+  Native app, which needs that runtime's framework packages too.  Sixth
+  part done: the UWP start-up runs through: inside its package
+  `winui2test` gets `Window.Current` (the view's window), its
+  `CoreWindow`, sets its content, activates it and exits
+  (`CoreWindow`'s `ICoreWindow5`, `CompositionTarget`, `XamlLight`,
+  `WindowCreatedEventArgs`); WinUI 2's theme resources leave out what
+  neither WinUI 2 nor the framework has (`InkToolbar`, `Pivot`,
+  `LoopingSelector`, `MediaTransportControls`: Windows-only controls),
+  register attached properties and content properties as Microsoft's
+  XBF compiler resolves them, and find `DesignMode` and `PowerManager`
+  (twinapi.appcore); they now stop at `RevealBrush.TargetTheme`
+  (`E_NOINTERFACE` inside WinUI 2's reveal code).  Seventh part done:
+  `XamlControlsResources` loads whole and answers lookups (the Windows
+  faces pass `Windows.UI.Composition` objects as the framework's
+  `Microsoft.UI.Composition` ones; the merged theme resources list each
+  resource after those it names, as XBF's lookup-time creation allows;
+  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Next: the
+  controls' default styles applied (`InfoBadge`'s template), then
+  Calculator's controls; Calculator's start-up itself waits on the .NET
+  Native framework packages (32.6).
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

@@ -498,12 +498,36 @@ extern "C" HRESULT nova_xaml_face_query(REFIID iid, void **out, HRESULT (*impl)(
     return *out ? S_OK : E_OUTOFMEMORY;
 }
 
+// Windows.UI.Xaml classes the framework (WinUI 3's) does not have, whose
+// WinUI 2 class is the same code (Windows builds WinUI 2's Materials into
+// the system as Windows.UI.Xaml.Media's): WinUI 2's theme resources make
+// an AcrylicBrush in the presentation namespace, which on NovaOS is
+// WinUI 2's own, and XamlControlsResources then asks it for Windows'
+// IAcrylicBrush.  The interfaces are the same methods in the same order
+// (the enum AcrylicBackgroundSource has the same values), so the outer's
+// WinUI 2 interface answers for Windows'.
+static const struct { GUID windows, winui2; } s_winui2_aliases[] = {
+    // Windows.UI.Xaml.Media.IAcrylicBrush, Microsoft.UI.Xaml.Media.IAcrylicBrush
+    {{0x79bbcf4e, 0xcd66, 0x4f1b, {0xa8, 0xb6, 0xcd, 0x6d, 0x29, 0x77, 0xc1, 0x8d}},
+     {0x26861c81, 0x72f4, 0x5065, {0xb1, 0x44, 0xe9, 0xec, 0x7f, 0xce, 0x86, 0xa9}}},
+    // IAcrylicBrush2 (TintLuminosityOpacity)
+    {{0xc9645383, 0xb19e, 0x5ac0, {0x86, 0xff, 0x3d, 0x90, 0x50, 0x6d, 0xbc, 0xda}},
+     {0x23fad570, 0x43ed, 0x5a73, {0x9d, 0xe7, 0xa3, 0x03, 0x55, 0x3d, 0x54, 0x14}}},
+};
+
 // a framework interface @iid a composed object has no answer of its own
 // for, which its outer implements as Windows' (a WinUI 2 app's Application
 // is its IXamlMetadataProvider, which XAML's metadata asks the app's
 // Application for): the reverse face over the outer's Windows interface
+// (or, for an alias above, the outer's WinUI 2 interface)
 extern "C" HRESULT nova_xaml_outer_face(REFIID iid, IInspectable *outer, void **out)
 {
+    if (outer) {
+        for (const auto &a : s_winui2_aliases) {
+            if (IsEqualGUID(iid, a.windows))
+                return qi(outer, &a.winui2, out);
+        }
+    }
     const NovaFace *f = find(iid);
     if (!f || !(f->flags & NOVA_FACE_REVERSE) || (f->flags & (NOVA_FACE_OVERRIDE | NOVA_FACE_DELEGATE)) || !outer)
         return E_NOINTERFACE;

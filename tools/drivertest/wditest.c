@@ -522,7 +522,8 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
         r[hl + 2] = r[hl + 3] = 0;
         c = csum(r + hl, tot - hl);
         r[hl + 2] = (unsigned char)(c >> 8); r[hl + 3] = (unsigned char)c;
-        if (!a->pings++) DbgPrint("wditest: ping from %u.%u.%u.%u to the router: answering\n", p[12], p[13], p[14], p[15]);
+        if (!a->pings++) DbgPrint("wditest: ping from %u.%u.%u.%u to the router: answering (%u ARP request(s) answered so far)\n",
+                                      p[12], p[13], p[14], p[15], a->arps);
         receive(a, src, 0x0800, r, tot);
         if (a->wpa2 && a->hs == HS_DONE && !a->rekeyed) {       /* (the access point's rekeying interval, early) */
             a->rekeyed = 1;

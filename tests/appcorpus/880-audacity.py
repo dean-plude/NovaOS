@@ -64,7 +64,7 @@ def record(nova, echo):
     else:
         return 'the save dialog did not appear'
     nova.click(734, 584)                            # How would you like to save: Save to computer
-    time.sleep(20)                                  # the file dialog
+    time.sleep(60)                                  # the file dialog (it lists C:\Documents\Audacity from the disk)
     nova.qmp.type(rf'{A}\rec10')
     time.sleep(2)
     nova.keys('ret')

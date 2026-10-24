@@ -11,3 +11,4 @@ typedef struct {
 
 extern const UserlandFile g_userland_files[];
 extern const int          g_userland_file_count;
+extern const char         g_userland_digest[];   /* SHA-256 of the paths and contents, hex */

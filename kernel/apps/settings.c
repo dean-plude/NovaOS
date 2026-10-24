@@ -499,13 +499,19 @@ static int page_storage(int x, int y, int w)
     AppFormatSize(bytes, b, sizeof(b));
     char where[40];
     PersistWhere(where, sizeof(where));
-    if (PersistActive())
+    UINT64 dfree, dtotal;
+    bool space = PersistSpace(&dfree, &dtotal);
+    if (PersistDirect() && space) {                          /* (C: is the volume itself: docs/design/disk-c.md) */
+        char u[24], t[24];
+        AppFormatSize(dtotal - dfree, u, sizeof(u));
+        AppFormatSize(dtotal, t, sizeof(t));
+        ksnprintf(a, sizeof(a), "%s used of %s on %s", u, t, where);
+    } else if (PersistActive())
         ksnprintf(a, sizeof(a), "%s in %d file%s; saved to disk %s", b, files, files == 1 ? "" : "s", where);
     else
         ksnprintf(a, sizeof(a), "%s in %d file%s; no disk found, reset on reboot", b, files, files == 1 ? "" : "s");
     GdiTextT(x + 16, y + 38, a, UI_TEXT2);
-    UINT64 dfree, dtotal;
-    if (PersistSpace(&dfree, &dtotal)) bar(x + 16, y + 66, w - 32, dtotal - dfree, dtotal);   /* the disk's use */
+    if (space) bar(x + 16, y + 66, w - 32, dtotal - dfree, dtotal);   /* the disk's use */
     else bar(x + 16, y + 66, w - 32, bytes, bytes + 1024 * 1024);
     return y + 92;
 }

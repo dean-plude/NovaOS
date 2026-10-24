@@ -432,6 +432,7 @@ WDDM = load_suite('devices/wddm')
 DEVMGR = load_suite('devices/devmgr')
 NETKVM = load_suite('devices/netkvm')
 DISKMGR = load_suite('devices/diskmgr')
+DISKC = load_suite('devices/diskc')
 VHIDMINI = load_suite('devices/vhidmini')
 
 
@@ -779,6 +780,15 @@ def ntfs_boot(work):
     mkfs = shutil.which('mkfs.fat') or '/usr/sbin/mkfs.fat'
     subprocess.run([mkfs, '-F', '32', '-n', 'NOVAFAT', '-C', fat, str(128 << 10)], check=True, stdout=subprocess.DEVNULL)
     return ['-drive', f'format=raw,file={disk}', '-drive', f'format=raw,file={fat}'], []
+
+
+def diskc_boot(work):
+    """Drive C: is an NTFS volume labelled NOVADATA, as an installed
+    system's is: NovaOS uses it in place, as its C: (docs/design/disk-c.md),
+    and writes the system files to it at the first start.  It stays in
+    work/data.img for the tests' check once QEMU has quit
+    (tests/selftest/devices/diskc)"""
+    return [], [], dict(data_fs='ntfs', data_mb=2048)
 
 
 def diskmgr_boot(work):
@@ -1292,7 +1302,8 @@ BOOTS = {
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
                 ('wddm', WDDM, wddm_boot), ('devmgr', DEVMGR, devmgr_boot),
-                ('diskmgr', DISKMGR, diskmgr_boot), ('vhidmini', VHIDMINI, vhidmini_boot)],
+                ('diskmgr', DISKMGR, diskmgr_boot), ('vhidmini', VHIDMINI, vhidmini_boot),
+                ('diskc', DISKC, diskc_boot)],
 }
 
 
@@ -1406,7 +1417,9 @@ def main():
             procs = []
             try:
                 args, procs, *more = setup(work)
-                results += run_boot(a, tests, work, name, extra_args=args, data_mb=64, **(more[0] if more else {}))
+                nova_args = dict(data_mb=64)
+                nova_args.update(more[0] if more else {})
+                results += run_boot(a, tests, work, name, extra_args=args, **nova_args)
             finally:
                 for p in procs:
                     p.kill()

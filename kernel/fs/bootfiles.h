@@ -22,7 +22,9 @@
 void BootFilesInfo(const BootInfo *info);
 /* Install them on drive C: (UmInit, while it installs the system files)
  * and give their memory back; how many */
-int  BootFilesInstall(void);
+int  BootFilesInstall(bool write);
+/* A digest of the files' paths and contents (FNV-1a, before BootFilesInstall) */
+UINT64 BootFilesDigest(void);
 /* What was installed: how many files, their C: paths and their total size */
 int         BootFilesCount(void);
 const char *BootFilesPath(int i);

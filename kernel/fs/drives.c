@@ -98,6 +98,9 @@ static const RamfsSource g_ntfs_rw_source = { ntfs_list, ntfs_size, ntfs_read, n
                                               ntfs_rename, ntfs_write, ntfs_free, ntfs_can_write, ntfs_link, ntfs_links,
                                               ntfs_names, ntfs_fits, ntfs_set_info, ntfs_security, ntfs_set_security };
 
+/* Drive C: on its disk is mounted with the same source (fs/persist.c) */
+const RamfsSource *DrivesCSource(void) { return &g_ntfs_rw_source; }
+
 typedef struct { bool (*add)(const RamfsExtEntry *e, void *ctx); void *ctx; } ListCtx;
 
 static bool ntfs_one(const NtfsEntry *e, void *ctx)
@@ -664,7 +667,7 @@ void DrivesPoll(void)
     UINT64 t = sched_ticks();
     if (c != seen) { seen = c; since = t; }
     if (t - since < 100) return;                             /* wait for a quiet second */
-    bool marked = false;
+    bool marked = PersistMarked();                           /* (C: on its disk) */
     for (int i = 0; i < MAX_MOUNTS && !marked; i++)
         marked = g_mounts[i].dev && g_mounts[i].ntfs && NtfsMarked(g_mounts[i].vol);
     if (RamfsExtDirty() || marked) DrivesSync();
@@ -679,6 +682,7 @@ bool DrivesSync(void)
     for (int i = 0; i < MAX_MOUNTS; i++)
         if (g_mounts[i].dev && g_mounts[i].ntfs && !g_mounts[i].dev->gone && !RamfsExtDirty())
             ok &= NtfsMarkClean(g_mounts[i].vol);
+    if (!RamfsExtDirty()) ok &= PersistMarkClean();
     bkl_release();
     DesktopUnlock();
     return ok;

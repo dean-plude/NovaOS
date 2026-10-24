@@ -28,6 +28,10 @@ void DrivesDetach(BlockDev *d);
  * (DrivesPoll, called often), or now (DrivesSync, before shutting down) */
 void DrivesPoll(void);
 bool DrivesSync(void);
+/* The NTFS source drive C: is mounted with when it is its disk volume
+ * (persist.c, docs/design/disk-c.md): D:'s, with security descriptors */
+struct RamfsSource;
+const struct RamfsSource *DrivesCSource(void);
 
 #define DRIVE_VOL_SYSTEM   0x01         /* an EFI System Partition */
 #define DRIVE_VOL_BOOT     0x02         /* drive C: */

@@ -230,6 +230,10 @@ static void free_unpacked(void)
                        (unsigned long long)(freed >> 8));
 }
 
+/* Which system files drive C: on its disk has (UmInit) */
+#define SYSTEM_STAMP_NAME "NovaOS-system-files.txt"
+#define SYSTEM_STAMP      "\\Windows\\" SYSTEM_STAMP_NAME
+
 void UmInit(void)
 {
     /* SSE for user code: FPU present (EM=0, MP=1), FXSAVE/FXRSTOR and
@@ -241,8 +245,19 @@ void UmInit(void)
     um_syscall_init();
     kusd_init();
 
-    /* Install the system DLLs and programs on drive C: */
+    /* Install the system DLLs and programs on drive C:.  On an installed
+     * system C: is its disk volume (docs/design/disk-c.md): they are
+     * written there only when they changed (a new NovaOS), which a stamp
+     * file there tells */
     int installed = 0;
+    char stamp[160];
+    int slen = ksnprintf(stamp, sizeof(stamp), "NovaOS system files\r\nuserland %s\r\nboot files %016llx\r\n",
+                         g_userland_digest, (unsigned long long)BootFilesDigest());
+    bool on_disk = PersistDirect(), current = false;
+    if (on_disk) {
+        RamNode *sf = RamfsResolve(NULL, SYSTEM_STAMP);
+        current = sf && RamfsLoad(sf) && sf->size == (UINT32)slen && sf->data && !memcmp(sf->data, stamp, (size_t)slen);
+    }
     RamfsCreate(RamfsRoot(), "Temp", true);
     /* the profile folders every Windows program can assume exist (%APPDATA%, %LOCALAPPDATA%, ...) */
     RamfsCreate(RamfsRoot(), "ProgramData", true);
@@ -253,7 +268,8 @@ void UmInit(void)
         RamfsCreate(appdata, "LocalLow", true);
     }
     RamfsSetMode(RAMFS_INSTALLING);                 /* system files: never saved to disk */
-    for (int i = 0; i < g_userland_file_count; i++) {
+    UINT64 written = 0, unflushed = 0;
+    for (int i = 0; i < g_userland_file_count && !current; i++) {
         const UserlandFile *uf = &g_userland_files[i];
         char dir[RAMFS_PATH_MAX];
         strncpy(dir, uf->path, sizeof(dir) - 1);
@@ -278,11 +294,29 @@ void UmInit(void)
                 kprintf("[UM] %s: could not unpack\n", uf->path);
             }
         } else if (f && RamfsWrite(f, (const char *)uf->data, uf->size)) installed++;
+        else kprintf("[UM] %s: could not install\n", uf->path);
+        written += uf->size;
+        unflushed += uf->size;
+        if (on_disk && unflushed >= (64ull << 20)) {    /* (on the disk: memory holds them only until written) */
+            RamfsFlush();
+            unflushed = 0;
+        }
     }
-    kprintf("[UM] User-mode subsystem ready: %d system files installed (C:\\Windows\\System32, C:\\Programs)\n",
-            installed);
-    BootFilesInstall();                             /* wallpapers, icon sets, pictures: beside the kernel */
+    if (current)
+        kprintf("[UM] User-mode subsystem ready: the %d system files on drive C: are current\n", g_userland_file_count);
+    else
+        kprintf("[UM] User-mode subsystem ready: %d system files installed (C:\\Windows\\System32, C:\\Programs)%s\n",
+                installed, on_disk ? ", written to drive C:'s disk" : "");
+    BootFilesInstall(!current);                     /* wallpapers, icon sets, pictures: beside the kernel */
     free_unpacked();
+    if (on_disk && !current) {                      /* (all of them there: the stamp says so) */
+        bool ok = RamfsFlush() && installed == g_userland_file_count;
+        RamNode *wdir = RamfsResolve(NULL, "\\Windows");
+        RamNode *sf = ok && wdir ? RamfsCreate(wdir, SYSTEM_STAMP_NAME, false) : NULL;
+        ok = sf && RamfsWrite(sf, stamp, (UINT32)slen) && RamfsFlush();
+        kprintf("[UM] %s the system files to drive C: (%llu MB)\n", ok ? "Wrote" : "Could not write all of",
+                (unsigned long long)(written >> 20));
+    }
     PersistLoad();                                  /* the user's files (and the registry hive) from disk */
     /* The folders in C:\Windows every user may write (kernel/fs/fsec.c):
      * there before any program, which may not make them there itself */

@@ -40,7 +40,24 @@ static RamNode *parent_of(const char *path, const char **name)
     return d;
 }
 
-int BootFilesInstall(void)
+UINT64 BootFilesDigest(void)
+{
+    UINT64 h = 0xCBF29CE484222325ull;
+    if (!g_table || !g_count) return h;
+    const BootFile *t = (const BootFile *)(uintptr_t)(PHYSMAP_BASE + g_table);
+    for (UINT64 i = 0; i < g_count; i++) {
+        const UINT8 *p = (const UINT8 *)t[i].path;
+        for (int k = 0; k < BOOT_FILE_PATH_MAX && p[k]; k++) h = (h ^ p[k]) * 0x100000001B3ull;
+        const UINT8 *d = (const UINT8 *)(uintptr_t)(PHYSMAP_BASE + t[i].base);
+        for (UINT64 k = 0; k < t[i].size; k++) h = (h ^ d[k]) * 0x100000001B3ull;
+        h = (h ^ 0xFF) * 0x100000001B3ull;
+    }
+    return h;
+}
+
+/* (@write false: drive C: on its disk has them already, as they are;
+ * they are only listed) */
+int BootFilesInstall(bool write)
 {
     if (!g_table || !g_count) return 0;
     BootFile *t = (BootFile *)(uintptr_t)(PHYSMAP_BASE + g_table);
@@ -49,9 +66,9 @@ int BootFilesInstall(void)
         BootFile *b = &t[i];
         b->path[BOOT_FILE_PATH_MAX - 1] = '\0';
         const char *name = NULL;
-        RamNode *d = b->path[0] == '\\' && b->size <= 0xFFFFFFFFu ? parent_of(b->path, &name) : NULL;
+        RamNode *d = write && b->path[0] == '\\' && b->size <= 0xFFFFFFFFu ? parent_of(b->path, &name) : NULL;
         RamNode *f = d ? RamfsCreate(d, name, false) : NULL;
-        if (f && RamfsWrite(f, (const char *)(uintptr_t)(PHYSMAP_BASE + b->base), (UINT32)b->size)) {
+        if (!write || (f && RamfsWrite(f, (const char *)(uintptr_t)(PHYSMAP_BASE + b->base), (UINT32)b->size))) {
             size_t n = strlen(b->path) + 1;
             char *p = g_paths ? kmalloc(n) : NULL;
             if (p) { memcpy(p, b->path, n); g_paths[g_installed++] = p; }
@@ -63,8 +80,8 @@ int BootFilesInstall(void)
         pmm_free_pages((uintptr_t)b->base, pages ? pages : 1);
     }
     pmm_free_pages((uintptr_t)g_table, (BOOT_FILES_MAX * sizeof(BootFile) + 4095) / 4096);
-    kprintf("[FILES] Installed %d files from %s (%u KB): wallpapers, icon sets, pictures\n",
-            g_installed, BOOT_FILES_DIR, (unsigned)(g_bytes >> 10));
+    kprintf("[FILES] %s %d files from %s (%u KB): wallpapers, icon sets, pictures\n",
+            write ? "Installed" : "On drive C: already:", g_installed, BOOT_FILES_DIR, (unsigned)(g_bytes >> 10));
     g_table = g_count = 0;
     return g_installed;
 }

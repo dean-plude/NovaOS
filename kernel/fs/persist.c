@@ -843,6 +843,7 @@ static UINT64 dos_to_filetime(UINT32 dos)
 }
 
 UINT64 PersistDosToFiletime(UINT32 dos) { return dos_to_filetime(dos); }
+UINT32 PersistFiletimeToDos(UINT64 ft) { return ft ? filetime_to_dos(ft) : 0; }
 
 static UINT32 filetime_to_dos(UINT64 ft)
 {

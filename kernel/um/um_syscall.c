@@ -1635,7 +1635,8 @@ static UINT64 sys_set_info_file_locked(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a
         if (ct > 0) h->node->ctime = (UINT64)ct;            /* 0: unchanged, -1: stop updating */
         if (wt > 0) h->node->mtime = (UINT64)wt;
         if (attr) h->node->attrs = attr & 0x07;
-        if (ct > 0 || wt > 0 || attr) RamfsMarkChanged(h->node);
+        if ((ct > 0 || wt > 0 || attr) && !RamfsMarkChanged(h->node))   /* (on another drive: written at once) */
+            return iosb(a2, 0xC0000185u, 0);                             /* STATUS_IO_DEVICE_ERROR */
         return iosb(a2, ST_SUCCESS, 0);
     }
     case 13:                                                    /* FileDispositionInformation */
@@ -1682,7 +1683,7 @@ UINT64 um_file_query_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 }
 
 /* NtSetSecurityObject(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR)
- * for a file or directory: kept for those on drive C: */
+ * for a file or directory: kept for those on drive C: and on NTFS volumes */
 UINT64 um_file_set_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
 {
     (void)a4;
@@ -1696,7 +1697,7 @@ UINT64 um_file_set_security(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
     RamNode *n = h && (h->kind == H_FILE || h->kind == H_DIR) ? h->node : NULL;
     um_unlock_excl(&p->lock);
     UINT32 st = ST_SUCCESS, info = (UINT32)a2 & 7;
-    if (n && !RamfsReadOnly(n) && RamfsDriveLetter(n) == 'C' && info) {
+    if (n && !RamfsReadOnly(n) && RamfsKeepsSecurity(n) && info) {
         UINT32 want = ((info & 4) ? 0x00040000u : 0) | ((info & 3) ? 0x00080000u : 0);   /* WRITE_DAC, WRITE_OWNER */
         if (!FsecAccess(n, want, NULL)) st = ST_ACCESS_DENIED;
         else if (!FsecSet(n, info, sd, len)) st = 0xC0000079u;

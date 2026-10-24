@@ -146,7 +146,8 @@ K32 DWORD WINAPI GetCompressedFileSizeW(LPCWSTR name, LPDWORD high)
 K32 DWORD WINAPI GetCompressedFileSizeA(LPCSTR name, LPDWORD high)
 {
     WCHAR w[MAX_PATH];
-    u2w(name, -1, w, MAX_PATH);
+    int k = u2w(name, -1, w, MAX_PATH - 1);              /* (u2w writes no NUL) */
+    w[k < 0 ? 0 : k] = 0;
     return GetCompressedFileSizeW(w, high);
 }
 
@@ -381,7 +382,8 @@ K32 HANDLE WINAPI FindFirstChangeNotificationW(LPCWSTR path, BOOL sub, DWORD fil
 K32 HANDLE WINAPI FindFirstChangeNotificationA(LPCSTR path, BOOL sub, DWORD filter)
 {
     WCHAR w[MAX_PATH];
-    u2w(path, -1, w, MAX_PATH);
+    int k = u2w(path, -1, w, MAX_PATH - 1);              /* (u2w writes no NUL) */
+    w[k < 0 ? 0 : k] = 0;
     return FindFirstChangeNotificationW(w, sub, filter);
 }
 K32 BOOL WINAPI FindNextChangeNotification(HANDLE h) { return ResetEvent(h); }
@@ -467,13 +469,14 @@ K32 DWORD WINAPI SearchPathW(LPCWSTR path, LPCWSTR file, LPCWSTR ext, DWORD n, L
 K32 DWORD WINAPI SearchPathA(LPCSTR path, LPCSTR file, LPCSTR ext, DWORD n, LPSTR buf, LPSTR *part)
 {
     WCHAR wp[2048], wf[MAX_PATH], we[16], out[MAX_PATH * 2];
-    if (path) u2w(path, -1, wp, 2048);
-    u2w(file, -1, wf, MAX_PATH);
-    if (ext) u2w(ext, -1, we, 16);
+    int k;                                               /* (u2w writes no NUL) */
+    if (path) { k = u2w(path, -1, wp, 2047); wp[k < 0 ? 0 : k] = 0; }
+    k = u2w(file, -1, wf, MAX_PATH - 1); wf[k < 0 ? 0 : k] = 0;
+    if (ext) { k = u2w(ext, -1, we, 15); we[k < 0 ? 0 : k] = 0; }
     DWORD r = SearchPathW(path ? wp : 0, wf, ext ? we : 0, MAX_PATH * 2, out, 0);
     if (!r) return 0;
     char tmp[MAX_PATH * 3];
-    int k = w2u(out, -1, tmp, sizeof(tmp));
+    k = w2u(out, -1, tmp, sizeof(tmp));
     if (k > 0 && !tmp[k - 1]) k--;
     if ((DWORD)k + 1 > n) return (DWORD)k + 1;
     memcpy(buf, tmp, (size_t)k + 1);

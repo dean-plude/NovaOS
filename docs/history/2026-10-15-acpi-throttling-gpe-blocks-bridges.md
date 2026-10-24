@@ -1,7 +1,7 @@
 ## ACPI: processor throttling, GPE blocks and interrupts behind bridges
 
 The three items left open under "ACPI beyond the MADT" since Phase 18.6
-are done ([install-and-power.md](../install-and-power.md) has the
+are done ([install-and-power.md](install-and-power.md) has the
 details):
 
 - **Passive cooling throttles the processors.** A thermal zone at or

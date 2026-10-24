@@ -173,12 +173,13 @@ TESTS = [
           r'\[DbgPrint\] wditest: peer 1 on port 1 configured \(QoS 0\)',
           r'\[WDI\] WdiTest: connected to NovaGuest \(02:4e:6f:76:61:03\) on port 1, peer 1: open, no cipher, WMM off',
           r'Connection request was completed successfully\.',
-          r'\[NET\] Adapter: NovaOS WDI test Wi-Fi adapter, MAC 02:4e:6f:76:61:00',
-          r'\[DbgPrint\] wditest: DHCP discover: offering 192\.168\.77\.100',
-          r'\[DbgPrint\] wditest: DHCP request: acknowledging 192\.168\.77\.100'], builtin=True),
+          r'\[NET\] Adapter: NovaOS WDI test Wi-Fi adapter, MAC 02:4e:6f:76:61:00'], builtin=True),
     Test('wifi ping', 'ping 192.168.77.1',
          [r'\[DbgPrint\] wditest: ping from 192\.168\.77\.100 to the router: answering \([1-9]\d* ARP request\(s\) answered so far\)',
-          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_dhcp),
+          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_dhcp,
+         # (the driver's DHCP lines come after the connect command's output ends; the lease wait covers them)
+         boot_expect=[r'\[DbgPrint\] wditest: DHCP discover: offering 192\.168\.77\.100',
+                      r'\[DbgPrint\] wditest: DHCP request: acknowledging 192\.168\.77\.100']),
     Test('wifi connected', 'netsh wlan show interfaces',
          [r'State +: connected\n +SSID +: NovaGuest\n +AP BSSID +: 02:4e:6f:76:61:03\n +Band +: 2\.4 GHz\n'
           r' +Channel +: 11\n +Network type +: Infrastructure\n +Radio type +: 802\.11n\n +Authentication +: Open\n'
@@ -215,15 +216,15 @@ TESTS = [
           r'\[WPA\] WdiTest: pairwise key and group key 1 installed \(0x00000000\)',
           r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
           r'Connection request was completed successfully\.',
-          r'\[NET\] Adapter: NovaOS WDI test Wi-Fi adapter, MAC 02:4e:6f:76:61:00',
-          r'\[DbgPrint\] wditest: DHCP request: acknowledging 192\.168\.77\.100'], builtin=True),
+          r'\[NET\] Adapter: NovaOS WDI test Wi-Fi adapter, MAC 02:4e:6f:76:61:00'], builtin=True),
     Test('wifi wpa2 ping', 'ping 192.168.77.1',
          [r'\[DbgPrint\] wditest: group key handshake: sending group key 2',
           r'\[WPA\] WdiTest: group key handshake message 1 \(a new group key\): sending message 2',
           r'\[DbgPrint\] wditest: group key handshake message 2: MIC good',
           r'\[DbgPrint\] wditest: group key 2: the access point\'s',
           r'\[WPA\] WdiTest: group key 2 installed \(0x00000000\)',
-          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_dhcp_again),
+          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_dhcp_again,
+         boot_expect=[r'(?s)DHCP request: acknowledging 192\.168\.77\.100.*DHCP request: acknowledging 192\.168\.77\.100']),
     Test('wifi wpa2 connected', 'netsh wlan show interfaces',
          [r'State +: connected\n +SSID +: NovaNet\n +AP BSSID +: 02:4e:6f:76:61:01\n +Band +: 2\.4 GHz\n'
           r' +Channel +: 6\n +Network type +: Infrastructure\n +Radio type +: 802\.11n\n'

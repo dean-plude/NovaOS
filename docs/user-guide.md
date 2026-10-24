@@ -76,14 +76,14 @@ also on the desktop:
 
 1. Choose the disk to install on.  NovaOS installs on SATA (AHCI), NVMe
    and USB disks of at least 256 MB.  **The whole disk is erased.**
-2. Choose the file system for drive C:: **NTFS** (the default; keeps file
-   permissions) or **FAT32**.
+2. Confirm.  Drive C: is a new **NTFS** volume, which keeps file
+   permissions; the installed system uses it in place, as Windows does.
 3. When it has finished, remove the ISO (in QEMU, start again without
    `-cdrom nova.iso`) and restart from the disk.
 
 Anything you saved on C: during the live session is copied to the new
 installation.  In the Terminal, `install` lists the disks and
-`install <disk> [/fat]` installs without the window.
+`install <disk>` installs without the window.
 
 ## First start
 

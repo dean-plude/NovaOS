@@ -19,7 +19,6 @@ class InstallerLayoutTests(unittest.TestCase):
 typedef uint64_t UINT64;
 typedef uint32_t UINT32;
 #define GPT_TABLE_SEC 32
-static bool g_ntfs;
 '''+source[start:end]+r'''
 int main(void) {
     UINT64 esp, data, size;
@@ -38,8 +37,7 @@ int main(void) {
     assert(!setup_layout(256ull*2048, sectors, &esp, &data, &size));
     assert(!setup_layout(480ull*2048, sectors, &esp, &data, &size));
     assert(!setup_layout(UINT64_MAX, UINT64_MAX, &esp, &data, &size));
-    assert(setup_layout(4ull<<32, sectors, &esp, &data, &size) && size==(1ull<<31));
-    g_ntfs=true;
+    /* (drive C: is NTFS: no FAT32 size limit) */
     assert(setup_layout(4ull<<32, sectors, &esp, &data, &size) && size>(1ull<<31));
     assert(setup_esp_sectors(UINT32_MAX, UINT32_MAX, 0) > 2ull*UINT32_MAX/512);
 }

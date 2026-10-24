@@ -178,6 +178,7 @@ int SetupListDisks(SetupDisk *out, int max)
             /* (from the disc, a disk with NovaOS on it is not what booted) */
             if (!g_live && FatLookupPath(v[k], "\\EFI\\NOVA\\kernel.elf", &e) && !e.dir) s->boot = true;
             if (FatLookupPath(v[k], "\\EFI\\Microsoft\\Boot\\bootmgfw.efi", &e) && !e.dir) s->windows = true;
+            if (!strcmp(FatLabel(v[k]), "NOVADATA")) s->fat_c = true;
             FatUnmount(v[k]);
         }
         char labels[48];
@@ -195,7 +196,9 @@ int SetupListDisks(SetupDisk *out, int max)
             s->can_beside = !s->boot && !s->holds_c && !s->nova &&
                             s->free_sectors * BLOCK_SECTOR >= SetupBesideBytes();
             if (!s->boot && !s->holds_c && !s->nova && !s->can_beside) shrink_plan(s, l);
-            s->can_reinstall = s->nova && !s->boot;          /* (drive C: may be kept there: it stays) */
+            /* (drive C: may be kept there: it stays; a FAT32 one cannot be kept, as
+             * drive C: is NTFS now, docs/design/disk-c.md) */
+            s->can_reinstall = s->nova && !s->boot && !s->fat_c;
         }
     }
     kfree(vols);
@@ -208,7 +211,6 @@ int SetupListDisks(SetupDisk *out, int max)
  * ------------------------------------------------------------------------- */
 static volatile SetupStatus g_status;
 static BlockDev *g_target;
-static bool      g_ntfs;                  /* drive C: on NTFS */
 static SetupHow  g_how;
 static bool      g_beside;                /* in the free space, keeping the disk's partitions */
 
@@ -335,7 +337,6 @@ static bool setup_layout(UINT64 sectors, UINT64 esp_sectors,
     UINT64 end = (sectors - 1 - GPT_TABLE_SEC) & ~2047ull;
     if (end <= *data_lba || end - *data_lba <= 131072) return false;
     *data_sectors = end - *data_lba;
-    if (!g_ntfs && *data_sectors > (1ull << 31)) *data_sectors = 1ull << 31;
     return true;
 }
 
@@ -441,7 +442,6 @@ static bool beside_layout(BlockDev *d, DiskLayout *l, UINT64 esp_sectors,
     *esp_lba = s.free_lba;
     *data_lba = s.free_lba + esp_sectors;
     *data_sectors = s.free_lba + s.free_sectors - *data_lba;
-    if (!g_ntfs && *data_sectors > (1ull << 31)) *data_sectors = 1ull << 31;
     UINT32 nums[2] = { 0, 0 };
     for (UINT32 num = 1, k = 0; num <= l->max && k < 2; num++) {
         bool used = false;
@@ -767,6 +767,12 @@ static void setup_thread(void *arg)
             failed("NovaOS's EFI System Partition on the disk is too small for this version: erase the disk instead.");
             return;
         }
+        FatVol *fat_c = FatMount(d, data_lba);                   /* (an older NovaOS's FAT32 drive C: is not kept) */
+        if (fat_c) {
+            FatUnmount(fat_c);
+            failed("Drive C: on this disk is FAT32 (an older NovaOS); it is NTFS now. Copy your files off, then erase the disk.");
+            return;
+        }
         kprintf("[SETUP] Reinstalling NovaOS on %s: EFI System Partition at %u MiB (%u MiB) formatted again, "
                 "NOVADATA at %u MiB (%u MiB) kept\n", d->name, (unsigned)(esp_lba >> 11), (unsigned)(esp_sec >> 11),
                 (unsigned)(data_lba >> 11), (unsigned)(data_sec >> 11));
@@ -858,17 +864,9 @@ static void setup_thread(void *arg)
     if (keep) {
         step(80, "Keeping drive C: (NOVADATA) and your files as they are");
         g_status.kept_c = true;
-    } else if (g_ntfs) {
+    } else {                          /* (drive C: is NTFS: the installed system mounts it in place, docs/design/disk-c.md) */
         step(80, "Formatting the data partition for drive C: (NTFS)");
         if (!NtfsFormat(d, data_lba, data_sec, "NOVADATA", rnd())) { failed("Could not format the data partition."); return; }
-    } else {
-        step(80, "Formatting the data partition for drive C: (FAT32)");
-        FatVol *data = FatFormat(d, data_lba, data_sec, "NOVADATA");
-        if (!data) { failed("Could not format the data partition."); return; }
-        UINT32 nova_dir;
-        FatMkdirPath(data, "\\NOVA\\C", &nova_dir);
-        FatSync(data);
-        FatUnmount(data);
     }
 
     /* This session's files go to the new disk when C: has nowhere else to
@@ -887,7 +885,7 @@ static void setup_thread(void *arg)
     g_status.state = SETUP_DONE;
 }
 
-bool SetupStart(BlockDev *dev, bool ntfs, SetupHow how)
+bool SetupStart(BlockDev *dev, SetupHow how)
 {
     static const char *const what[] = { "on", "beside the other systems on", "beside the other systems, making room, on",
                                         "again, keeping drive C:, on" };
@@ -895,11 +893,10 @@ bool SetupStart(BlockDev *dev, bool ntfs, SetupHow how)
     memset((void *)&g_status, 0, sizeof(g_status));
     g_status.state = SETUP_RUNNING;
     g_target = dev;
-    g_ntfs = ntfs;
     g_how = how;
     g_beside = how == SETUP_BESIDE || how == SETUP_SHRINK;
     kprintf("[SETUP] Installing NovaOS %s %s (%s, %u MiB), drive C: on %s\n", what[how],
-            dev->name, dev->model, (unsigned)(dev->sectors >> 11), how == SETUP_REINSTALL ? "NOVADATA, kept" : ntfs ? "NTFS" : "FAT32");
+            dev->name, dev->model, (unsigned)(dev->sectors >> 11), how == SETUP_REINSTALL ? "NOVADATA, kept" : "NTFS");
     if (!sched_create_thread("setup", setup_thread, NULL, PRIO_SERVICE)) {
         g_status.state = SETUP_FAILED;
         strncpy((char *)g_status.error, "Could not start the installer.", sizeof(g_status.error) - 1);

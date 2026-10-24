@@ -446,7 +446,8 @@ item ends when a named program or test demonstrates it.
 - ~~NTFS read~~ ~~NTFS write~~ Done: NTFS volumes mount as drives D:, E:,
   ...; files on them are written, created, renamed and deleted (volumes
   Windows left hibernated or unclean stay read-only).  ~~NTFS as drive C:~~
-  Done: the installer formats C: as NTFS (or FAT32), and files there keep
+  Done: the installer formats C: as NTFS (only, since
+  2026-10-24), the installed system mounts it in place, and files there keep
   security descriptors that opening, deleting and renaming obey.  ~~Hard
   links and persistence~~ Done (Phase 17.5; `linktest` and `linktest
   restarted`; on a mounted NTFS volume across a restart, with

@@ -35,9 +35,11 @@ holds the file any more.
   how an update brings new ones.
 - **Security descriptors** of C: are the volume's own (`$Secure`), as
   on any NTFS drive since step 1.
-- **FAT32:** Setup installs on NTFS only. An existing FAT32 install
-  keeps the old way (RAM disk saved to `\NOVA\C`) until it is
-  reinstalled.
+- **FAT32:** Setup installs on NTFS only (the window has no file
+  system choice, and the Terminal's `install /fat` is refused). An
+  existing FAT32 install, from an older NovaOS, keeps the old way (RAM
+  disk saved to `\NOVA\C`); Setup cannot keep that drive C: when
+  reinstalling, so the disk is erased and installed again on NTFS.
 
 ## Steps (one pull request each)
 
@@ -51,4 +53,16 @@ holds the file any more.
    `diskc`.  `Reset this PC` removes the system files too,
    and the restart writes them again.  Setup refuses to install over the
    disk the running system's C: is on.
-3. Setup installs on NTFS only; Settings, Disk Management and the docs.
+3. Setup installs on NTFS only (`SetupStart` lost its file-system
+   argument; `SetupDisk.fat_c` marks an older FAT32 drive C:, which a
+   reinstall refuses to keep), and the docs.  Settings, Disk Management
+   and the Terminal's `mem` already describe the on-disk C: since step 2.
+
+## What still uses the RAM disk
+
+- The installation media (live), with or without a `NOVADATA` volume
+  to save to.
+- An installed system whose NTFS volume could not be mounted in place
+  (the boot log says so): C: falls back to the RAM disk, saved to the
+  volume, rather than not starting.
+- An install on FAT32 made by an older NovaOS.

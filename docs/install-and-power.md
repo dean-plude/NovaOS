@@ -26,15 +26,18 @@ The Setup app (Install NovaOS on the live desktop) and the Terminal's
 C:\Documents> install
   nvme0n1  488386 MiB  SAMSUNG MZVL2512HCJQ-00BL7  Volumes: SYSTEM, Windows
   usb0  14800 MiB  SanDisk Ultra  Volumes: NOVA_EFI  (NovaOS is running from it)
-Usage: install <disk> [/beside | /shrink | /reinstall] [/fat]   (drive C: on NTFS, or FAT32 with /fat;
+Usage: install <disk> [/beside | /shrink | /reinstall]   (drive C: is a new NTFS volume;
        /beside keeps what is on the disk and uses its free space, /shrink first shrinks Windows'
        volume to make that space, /reinstall replaces NovaOS keeping drive C:; else the disk is erased)
 ```
 
 `install nvme0n1` erases that disk, makes a GPT with an EFI System
-Partition and a partition for drive C: (NTFS, or FAT32 with `/fat`), and
-copies the boot loader and the kernel from the installation medium. It
-refuses the disk NovaOS is running from and a disk that is too small.
+Partition and an NTFS partition for drive C:, and copies the boot loader
+and the kernel from the installation medium. It refuses the disk NovaOS
+is running from and a disk that is too small. The installed system uses
+that NTFS volume as drive C: in place, as Windows does: the RAM disk is
+only for the installation media ([design/disk-c.md](design/disk-c.md)).
+Setup no longer formats drive C: as FAT32, and `/fat` is refused.
 
 **Beside Windows.** `install` also lists each GPT disk's partitions and
 its free space. `install nvme0n1 /beside` (or "Beside Windows" on Setup's
@@ -62,6 +65,8 @@ in Windows' Disk Management. Back up first; see
 NovaOS's EFI System Partition again with this system's files and keeps
 drive C:'s partition, `NOVADATA`, as it is: `C:\Users`, your files,
 settings and programs stay, and the firmware's "NovaOS" entry is reused.
+A drive C: on FAT32, made by an older NovaOS, cannot be kept (drive C: is
+NTFS now): `install` says so, and the disk can only be erased.
 
 **Intel VMD.** With VMD on (the RAID or "Intel RST" storage setting of
 many laptops' firmware), the NVMe disk sits behind the VMD controller and

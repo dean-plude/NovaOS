@@ -7,4 +7,4 @@ printing) closed the everyday-OS phase, and the version moves from 0.1.0 to
 is new since 0.1, how to start it and its known limits, which include the
 checks that still need a real PC (the T14 boot of the ISO, Hyper-V, the
 update signing key).  Tagging `v0.2.0` runs the release workflow as for
-0.1.0 ([releasing.md](../releasing.md)); the tag is the owner's to push.
+0.1.0 ([releasing.md](releasing.md)); the tag is the owner's to push.

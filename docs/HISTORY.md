@@ -13402,7 +13402,7 @@ transfer is checked yet.
 ## ACPI: processor throttling, GPE blocks and interrupts behind bridges
 
 The three items left open under "ACPI beyond the MADT" since Phase 18.6
-are done ([install-and-power.md](../install-and-power.md) has the
+are done ([install-and-power.md](install-and-power.md) has the
 details):
 
 - **Passive cooling throttles the processors.** A thermal zone at or
@@ -14289,7 +14289,7 @@ and checks the menu comes up by itself after two failed starts.
 ## Idle CPUs in C-states, a stopped tick, idle devices in D3
 
 First part of roadmap step 28.4, battery life
-([install-and-power.md](../install-and-power.md#processor-idle-states-and-device-power)).
+([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)).
 An idle CPU used to execute HLT and wake every 10 ms; a Windows driver
 that asked for its device to be powered down got `STATUS_NOT_IMPLEMENTED`.
 
@@ -14521,7 +14521,7 @@ printing) closed the everyday-OS phase, and the version moves from 0.1.0 to
 is new since 0.1, how to start it and its known limits, which include the
 checks that still need a real PC (the T14 boot of the ISO, Hyper-V, the
 update signing key).  Tagging `v0.2.0` runs the release workflow as for
-0.1.0 ([releasing.md](../releasing.md)); the tag is the owner's to push.
+0.1.0 ([releasing.md](releasing.md)); the tag is the owner's to push.
 
 ## Reset this PC, the firmware's watchdog and Recovery in Settings
 

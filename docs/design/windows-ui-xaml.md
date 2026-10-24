@@ -1002,10 +1002,44 @@ vendors.
        sixth part).  `XamlControlsResources` now loads past
        `AcrylicBrush` and stops at `InkToolbarFlyoutItem`, a Windows
        XAML type the framework does not have.
-   - *Next:* `Application.Start`'s UWP route on to `CoreApplication.Run`
-     with `Window.Current` once 32.4's present target is in; WinUI 2's
-     theme resources without the types the framework lacks, and its
-     controls' default styles applied; then the features Calculator uses
+   - *Sixth part, the UWP start-up through and the theme resources further.*
+     - *UWP start-up.*  Inside its package `winui2test` now runs
+       `Application.Start`'s UWP route to the end: `Window.Current` is the
+       view's window, with its `CoreWindow`; content set, `Activate` and
+       `Application.Exit` (15 checks).  On the way: `GetDebugInterop`
+       answers null when no debug tool is attached (NovaOS's WRL
+       `WeakRef::CopyTo` of an empty reference fails, a vendored edit
+       in `DXamlCore.cpp` rather than a change to the widely included
+       `wrl/client.h`), twinapi.appcore's `CoreWindow` has `ICoreWindow5`
+       (its `DispatcherQueue` and `ActivationMode`, which the focus
+       observer asks), and the generated `WindowCreatedEventArgs` class.
+     - *Windows-only types left out.*  `leave_out_unbuilt`
+       (`userland/microsoft_ui_xaml/build.py`) now also checks the names
+       the presentation namespace gives (no prefix) against the
+       framework's own type table (`StaticMetadata.g.cpp`) and WinUI 2's
+       types: resources naming a type neither has are Windows-only
+       controls the framework lacks (`InkToolbar*` from
+       Windows.UI.Xaml.InkControls.dll, `Pivot`, `LoopingSelector`,
+       `MediaTransportControls`) and are left out, with what names them.
+     - *Attached and content properties.*  WinUI 2's type table
+       (`xamlmeta.py`) registers an attached property (a static `Get`
+       method, no instance property) as attachable and a class's
+       `[contentproperty]` as its content: parsing XAML text needs both,
+       where Microsoft's XBF compiler resolves them from the metadata
+       (`local:AnimatedIcon.State`, an `AnimatedIcon`'s source as content).
+     - *What WinUI 2's brushes ask the system.*  `DesignMode` and
+       `PowerManager` (from `GetSystemPowerStatus`; its events are not
+       raised yet) in twinapi.appcore; `Window.Current` on a desktop thread
+       gives the core's window, as Windows.UI.Xaml does for XAML islands
+       (WinUI 3 gives null); the framework's `CompositionTarget` (its
+       `Rendering` event) and `XamlLight`.
+     - *Where it stops.*  `XamlControlsResources` now loads past the
+       acrylic brushes and stops at `RevealBrush.TargetTheme`: WinUI 2's
+       reveal code fails `E_NOINTERFACE` when the property changes.
+   - *Next:* that `RevealBrush` stop, so the theme resources load whole,
+     and the controls' default styles applied (`InfoBadge`'s style is in
+     the theme resources, so `XamlControlsResources` has to load first);
+     then the features Calculator uses
      (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
      `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator
      itself is a .NET Native app: its package also needs the .NET Native

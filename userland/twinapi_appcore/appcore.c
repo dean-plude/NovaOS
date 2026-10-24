@@ -66,6 +66,8 @@ static const GUID IID_ICoreImmersiveApplication_ = { 0x1ADA0E3E, 0xE4A2, 0x4123,
 static const GUID IID_ICoreApplicationView_  = { 0x638BB2DB, 0x451D, 0x4661, { 0xB0, 0x99, 0x41, 0x4F, 0x34, 0xFF, 0xB9, 0xF1 } };
 static const GUID IID_ICoreWindow_           = { 0x79B9D5F2, 0x879E, 0x4B89, { 0xB7, 0x98, 0x79, 0xE4, 0x75, 0x98, 0x03, 0x0C } };
 static const GUID IID_ICoreWindowStatic_     = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90, 0x22, 0x53, 0x6B, 0xB9, 0xCF, 0x93, 0xB1 } };
+static const GUID IID_ICoreWindow5_          = { 0x4B4AE1E1, 0x2E6D, 0x4EAA, { 0xBD, 0xA1, 0x1C, 0x5C, 0xC1, 0xBE, 0xE1, 0x41 } };
+static const GUID IID_IDispatcherQueueStatics_ = { 0xA96D83D7, 0x9371, 0x4517, { 0x92, 0x45, 0xD0, 0x82, 0x4A, 0xC1, 0x2C, 0x74 } };
 static const GUID IID_ICoreWindowInterop_    = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 static const GUID IID_ICoreDispatcher_       = { 0x60DB2FA8, 0xB705, 0x4FDE, { 0xA7, 0xD6, 0xEB, 0xBB, 0x18, 0x91, 0xD3, 0x9E } };
 static const GUID IID_ICoreAcceleratorKeys_  = { 0x9FFDF7F5, 0xB8C9, 0x4EF0, { 0xB7, 0xD2, 0x1D, 0xE6, 0x26, 0x56, 0x1F, 0xC8 } };
@@ -509,6 +511,7 @@ enum { EV_ACTIVATED, EV_AUTOMATION, EV_CHAR, EV_CLOSED, EV_INPUT_ENABLED, EV_KEY
 typedef struct Win {
     const void *const *vt;              /* ICoreWindow */
     const void *const *interop;         /* ICoreWindowInterop */
+    const void *const *win5;            /* ICoreWindow5 */
     HWND hwnd;
     DWORD tid;
     Event ev[EV_COUNT];
@@ -534,6 +537,7 @@ static HRESULT STDMETHODCALLTYPE win_qi(Win *w, REFIID iid, void **out)
     if (!out) return E_POINTER;
     if (is_base(iid) || IsEqualGUID(iid, &IID_ICoreWindow_)) *out = &w->vt;
     else if (IsEqualGUID(iid, &IID_ICoreWindowInterop_)) *out = &w->interop;
+    else if (IsEqualGUID(iid, &IID_ICoreWindow5_)) *out = &w->win5;
     else { *out = 0; return E_NOINTERFACE; }
     return S_OK;
 }
@@ -634,7 +638,41 @@ static HRESULT STDMETHODCALLTYPE wi_hwnd(void *p, HWND *h) { if (!h) return E_PO
 static HRESULT STDMETHODCALLTYPE wi_handled(void *p, boolean_t v) { WIN_OF_INTEROP(p)->message_handled = v ? 1 : 0; return S_OK; }
 static const void *const win_interop_vt[] = { (void *)wi_qi, (void *)static_ref, (void *)static_ref, (void *)wi_hwnd, (void *)wi_handled };
 
-static Win g_win = { (const void *const *)win_vt, (const void *const *)win_interop_vt };
+/* ICoreWindow5: the thread's DispatcherQueue (Windows.System's, from
+ * CoreMessaging) and how the window is activated (XAML's focus observer
+ * asks) */
+#define WIN_OF_WIN5(p) ((Win *)((char *)(p) - __builtin_offsetof(Win, win5)))
+static HRESULT STDMETHODCALLTYPE w5_qi(void *p, REFIID iid, void **out) { return win_qi(WIN_OF_WIN5(p), iid, out); }
+static HRESULT STDMETHODCALLTYPE w5_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Core.CoreWindow", n); }
+static HRESULT STDMETHODCALLTYPE w5_queue(void *p, void **v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    *v = 0;
+    HSTRING name = 0;
+    void *statics = 0;
+    HRESULT hr = make_hstring(L"Windows.System.DispatcherQueue", &name);
+    if (SUCCEEDED(hr))
+        hr = RoGetActivationFactory(name, &IID_IDispatcherQueueStatics_, &statics);
+    WindowsDeleteString(name);
+    if (FAILED(hr))
+        return hr;
+    hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))SLOT(statics, 6))(statics, v);   /* GetForCurrentThread */
+    obj_release(statics);
+    return hr;
+}
+/* CoreWindowActivationMode: None until the window exists, then
+ * ActivatedInForeground while it is the foreground window, else Deactivated */
+static HRESULT STDMETHODCALLTYPE w5_mode(void *p, int *v)
+{
+    Win *w = WIN_OF_WIN5(p);
+    if (!v) return E_POINTER;
+    *v = !w->hwnd ? 0 : GetForegroundWindow() == w->hwnd ? 3 : 1;
+    return S_OK;
+}
+static const void *const win5_vt[] = { INSP_FNS(w5_qi, w5_name), (void *)w5_queue, (void *)w5_mode };
+
+static Win g_win = { (const void *const *)win_vt, (const void *const *)win_interop_vt, (const void *const *)win5_vt };
 
 /* ICoreDispatcher */
 static HRESULT STDMETHODCALLTYPE disp_qi(Dispatcher *d, REFIID iid, void **out)
@@ -1188,6 +1226,114 @@ static const void *const ws_factory_vt[] = { INSP_FNS(ws_qi, ws_name), (void *)w
 static const void *const ws_statics_vt[] = { INSP_FNS(ws_qi, ws_name), (void *)ws_for_thread };
 static WinStatics g_win_statics = { (const void *const *)ws_factory_vt, (const void *const *)ws_statics_vt };
 
+/* ---- DesignMode: whether the code runs in a XAML designer (never here;
+ * Windows serves it from Windows.ApplicationModel.dll) ------------------ */
+static const GUID IID_IDesignModeStatics_  = { 0x2C3893CC, 0xF81A, 0x4E7A, { 0xB8, 0x57, 0x76, 0xA8, 0x08, 0x87, 0xE1, 0x85 } };
+static const GUID IID_IDesignModeStatics2_ = { 0x80CF8137, 0xB064, 0x4858, { 0xBE, 0xC8, 0x3E, 0xBA, 0x22, 0x35, 0x75, 0x35 } };
+typedef struct { const void *const *factory; const void *const *statics; const void *const *statics2; } DesignMode;
+static DesignMode g_design;
+static HRESULT STDMETHODCALLTYPE dm_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_design.factory;
+    else if (IsEqualGUID(iid, &IID_IDesignModeStatics_)) *out = &g_design.statics;
+    else if (IsEqualGUID(iid, &IID_IDesignModeStatics2_)) *out = &g_design.statics2;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE dm_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.ApplicationModel.DesignMode", n); }
+static HRESULT STDMETHODCALLTYPE dm_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE dm_enabled(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static const void *const dm_factory_vt[] = { INSP_FNS(dm_qi, dm_name), (void *)dm_activate };
+static const void *const dm_statics_vt[] = { INSP_FNS(dm_qi, dm_name), (void *)dm_enabled };
+static DesignMode g_design = { (const void *const *)dm_factory_vt, (const void *const *)dm_statics_vt,
+                               (const void *const *)dm_statics_vt };
+
+/* ---- PowerManager: the battery and power supply, from
+ * GetSystemPowerStatus (Windows serves it from Windows.System.Power; WinUI
+ * 2's acrylic asks EnergySaverStatus).  The Changed events take handlers
+ * and are not raised yet ------------------------------------------------ */
+static const GUID IID_IPowerManagerStatics_ = { 0x1394825D, 0x62CE, 0x4364, { 0x98, 0xD5, 0xAA, 0x28, 0xC7, 0xFB, 0xD1, 0x5B } };
+enum { PM_SAVER, PM_BATTERY, PM_SUPPLY, PM_PERCENT, PM_DISCHARGE, PM_COUNT };
+typedef struct { const void *const *factory; const void *const *statics; Event ev[PM_COUNT]; } PowerManager;
+static PowerManager g_power;
+static HRESULT STDMETHODCALLTYPE pm_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_power.factory;
+    else if (IsEqualGUID(iid, &IID_IPowerManagerStatics_)) *out = &g_power.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE pm_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.Power.PowerManager", n); }
+static HRESULT STDMETHODCALLTYPE pm_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static SYSTEM_POWER_STATUS pm_status(void)
+{
+    SYSTEM_POWER_STATUS s;
+    if (!GetSystemPowerStatus(&s)) { s.ACLineStatus = 1; s.BatteryFlag = 128; s.BatteryLifePercent = 255;
+                                     s.SystemStatusFlag = 0; s.BatteryLifeTime = (DWORD)-1; }
+    return s;
+}
+/* EnergySaverStatus: Disabled 0 (no battery), Off 1, On 2 */
+static HRESULT STDMETHODCALLTYPE pm_saver(void *p, int *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    SYSTEM_POWER_STATUS s = pm_status();
+    *v = (s.SystemStatusFlag & 1) ? 2 : (s.BatteryFlag & 128) ? 0 : 1;
+    return S_OK;
+}
+/* BatteryStatus: NotPresent 0, Discharging 1, Idle 2, Charging 3 */
+static HRESULT STDMETHODCALLTYPE pm_battery(void *p, int *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    SYSTEM_POWER_STATUS s = pm_status();
+    *v = (s.BatteryFlag & 128) ? 0 : (s.BatteryFlag & 8) ? 3 : s.ACLineStatus == 1 ? 2 : 1;
+    return S_OK;
+}
+/* PowerSupplyStatus: NotPresent 0, Inadequate 1, Adequate 2 */
+static HRESULT STDMETHODCALLTYPE pm_supply(void *p, int *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    *v = pm_status().ACLineStatus == 1 ? 2 : 0;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE pm_percent(void *p, INT32 *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    SYSTEM_POWER_STATUS s = pm_status();
+    *v = s.BatteryLifePercent > 100 ? 100 : s.BatteryLifePercent;
+    return S_OK;
+}
+/* RemainingDischargeTime: a TimeSpan (100 ns units); unknown is the largest */
+static HRESULT STDMETHODCALLTYPE pm_discharge(void *p, INT64 *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    SYSTEM_POWER_STATUS s = pm_status();
+    *v = s.BatteryLifeTime == (DWORD)-1 ? 0x7FFFFFFFFFFFFFFFLL : (INT64)s.BatteryLifeTime * 10000000;
+    return S_OK;
+}
+#define PM_EVENT_FNS(i) (void *)pm_add_##i, (void *)pm_remove_##i
+#define PM_EVENT(i) \
+    static HRESULT STDMETHODCALLTYPE pm_add_##i(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_power.ev[i], h, t); } \
+    static HRESULT STDMETHODCALLTYPE pm_remove_##i(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_power.ev[i], t); }
+PM_EVENT(PM_SAVER) PM_EVENT(PM_BATTERY) PM_EVENT(PM_SUPPLY) PM_EVENT(PM_PERCENT) PM_EVENT(PM_DISCHARGE)
+static const void *const pm_factory_vt[] = { INSP_FNS(pm_qi, pm_name), (void *)pm_activate };
+static const void *const pm_statics_vt[] = {
+    INSP_FNS(pm_qi, pm_name),
+    (void *)pm_saver, PM_EVENT_FNS(PM_SAVER), (void *)pm_battery, PM_EVENT_FNS(PM_BATTERY),
+    (void *)pm_supply, PM_EVENT_FNS(PM_SUPPLY), (void *)pm_percent, PM_EVENT_FNS(PM_PERCENT),
+    (void *)pm_discharge, PM_EVENT_FNS(PM_DISCHARGE),
+};
+_Static_assert(sizeof pm_statics_vt / sizeof pm_statics_vt[0] == 6 + 15, "IPowerManagerStatics has 21 slots");
+static PowerManager g_power = { (const void *const *)pm_factory_vt, (const void *const *)pm_statics_vt };
+
 /* ---- the in-process server's exports ---------------------------------- */
 static BOOL name_is(HSTRING s, const WCHAR *want)
 {
@@ -1202,6 +1348,8 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.ApplicationModel.Core.CoreApplication")) { *factory = &g_app.factory; return S_OK; }
     if (name_is(cls, L"Windows.UI.Core.CoreWindow")) { *factory = &g_win_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.UI.Core.CoreCursor")) { *factory = &g_cursor_statics.factory; return S_OK; }
+    if (name_is(cls, L"Windows.ApplicationModel.DesignMode")) { *factory = &g_design.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.Power.PowerManager")) { *factory = &g_power.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

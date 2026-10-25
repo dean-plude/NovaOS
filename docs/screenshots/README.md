@@ -11,11 +11,11 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 
 | File | Size | How it was taken |
 |---|---|---|
-| `desktop.png` | 1280x800 | The `latest` ISO of 2026-10-25 (`564e70d`) booted live in QEMU (q35, 4 CPUs, 4 GB, standard VGA at 2560x1600, e1000e network card, USB tablet), the installer closed: the default Aurora desktop with nothing open.  Taken with QMP `screendump`, reduced to 256 colours. |
-| `install.png` | 1280x800 | The same boot before the installer was closed: **Install NovaOS**, which a live start opens by itself. |
+| `desktop.png` | 1280x800 | The `latest` ISO of 2026-10-25 (main at `564e70d`) booted live in QEMU (q35, 4 CPUs, 4 GB, standard VGA with its default 16 MB, so the largest mode is 2560x1600), the installer closed with Esc: the default Aurora desktop with nothing open.  Taken with QMP `screendump`. |
+| `install.png` | 1280x800 | The same boot before Esc: **Install NovaOS**, which a live start opens by itself, on its Welcome page (it can install beside Windows). |
 | `install-confirm.png` | 1280x800 | The same boot: Setup's confirm page for a whole blank 16 GB disk, which says drive C: is a new NTFS volume used in place (no file system choice since Setup installs on NTFS only).  In [design/installer.md](../design/installer.md). |
 | `notepad++.png` | 1280x800 | Notepad++ 8.8.3 portable (the app corpus's download) staged with `--put DIR=C:\Apps\npp`, opened on `kernel/ke/scheduler.c` staged in `C:\Projects\src`. |
-| `app-store.png` | 1280x800 | The App Store opened from the dock, with the Terminal minimized. |
+| `app-store.png` | 1280x800 | The App Store opened from the dock on the same boot, on All apps (the offline catalog); reduced to 256 colours. |
 | `task-manager.png`, `task-manager-performance.png` | 1280x800 | Task Manager opened with Ctrl+Shift+Esc over `winhello`, on Processes with `winhello.exe` selected and then on Performance: the screenshots `tests/selftest/core/166-taskmgr.py` takes (`tools/selftest.py --suite core --only taskmgr`), QEMU with 2 CPUs. |
 | `calculator.png`, `calculator-scientific.png`, `calculator-programmer.png` | 1280x800 (taken at 2560x1600) | Calculator started from the Start menu: Standard after 1 ÷ 7, Scientific after 25!, Programmer with 255 in hexadecimal: the screenshots `tests/selftest/core/168-calc.py` takes (`tools/selftest.py --suite core --only calc`), scaled down. |
 | `firefox.png`, `vlc.png`, `keepassxc.png`, `inkscape.png` | 1280x800 | Copies of the `tests/reference/` screenshots that `tools/appcorpus.py` takes of those programs. |
@@ -45,7 +45,7 @@ not a screenshot of NovaOS running, and
 
 These are not in the README's table; the [user guide](../user-guide.md)
 shows some of them.  The **fresh** ones come from the `latest` ISO of
-2026-10-14 booted live in QEMU (q35, 4 CPUs, standard VGA at 2560x1600,
+2026-10-25 booted live in QEMU (q35, 4 CPUs, standard VGA at 2560x1600,
 e1000e network card, USB tablet) with the installer closed by Esc, driven
 over QMP (`send-key`, `input-send-event`, `screendump`).  Shots with the
 Aurora wallpaper are reduced to 256 colours to keep them small.  The

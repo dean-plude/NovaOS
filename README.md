@@ -120,9 +120,9 @@ name, time zone, keyboard layout and display resolution.
 - **A Mac:** [docs/macos.md](docs/macos.md) (Apple Silicon and Intel).
 - **Hyper-V** (Generation 2 VM): [docs/hyperv.md](docs/hyperv.md).
 - **A real PC from a USB stick** (UEFI, Secure Boot off): write the ISO with
-  `dd`, Rufus in DD mode or balenaEtcher.  NovaOS has not yet been checked on
-  real hardware; [docs/hardware.md](docs/hardware.md) lists what is expected
-  to work on the reference laptop, and [docs/install-and-power.md](docs/install-and-power.md)
+  `dd`, Rufus in DD mode or balenaEtcher.  The 0.2 ISO boots on the
+  reference laptop, a ThinkPad T14 Gen 4; [docs/hardware.md](docs/hardware.md)
+  lists what has been checked on it and what is expected to work, and [docs/install-and-power.md](docs/install-and-power.md)
   covers installing on one.
 
 The [user guide](docs/user-guide.md) covers the desktop, the built-in apps
@@ -225,9 +225,16 @@ updates that roll back, an installer that works beside Windows, printing,
 and the Windows driver model.  A performance budget guards boot time and
 Firefox start-up in CI.
 
-What 0.1 still owes is a boot on the reference PC, a ThinkPad T14 Gen 4: all
-testing so far has been in QEMU (and in CI), and nothing has yet run on a real
-PC or on Microsoft Hyper-V.  The next phases are:
+**NovaOS 0.2.1 "Starlight"** is being prepared
+([draft notes](docs/releases/0.2.1.md)): the Windows app platform (the
+XAML framework built from Microsoft's source, WinUI 2 and app packages,
+Phase 32), drive C: as the installed disk itself, a rebuilt Settings and
+the Windows Firewall.
+
+Kepler's ISO boots on the reference PC, a ThinkPad T14 Gen 4, and NovaOS
+installs on a real Hyper-V host; its laptop drivers (Wi-Fi, Bluetooth,
+camera, power, GPU) are still tested against modelled devices in QEMU.
+The next phases are:
 
 | Phase | Focus |
 |---|---|
@@ -238,6 +245,7 @@ PC or on Microsoft Hyper-V.  The next phases are:
 | 28 | Laptop hardware: Wi-Fi, Bluetooth, camera, battery life, a second reference PC |
 | 29 | NovaOS 0.2 on both reference PCs |
 | 31 | DOS programs: MS-DOS 4.0 built from Microsoft's source, on a real-mode CPU in a NovaOS console window, as NTVDM did |
+| 32 | UWP and WinUI apps: the XAML framework from Microsoft's source as `Windows.UI.Xaml`, WinUI 2, `.msix` packages, then Windows Calculator's own package |
 | 33 | Everyday OS: accounts and sign-in, standard users and UAC, update rollback and recovery, an installer beside Windows, printing |
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has every step, what has been done and

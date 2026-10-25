@@ -498,6 +498,10 @@ Rules and profiles are kept where Windows keeps them, under
 `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy`
 ([design](design/network-security.md)).
 
+![The network icon's question on a new network](screenshots/firewall-network-prompt.png)
+
+![Settings > Firewall](screenshots/settings-firewall.png)
+
 **Sound** plays through the newest output device.  Settings > Sound picks
 another device and sets each device's volume; the choices are kept across
 restarts.  On the reference laptop (ThinkPad T14 Gen 4), the built-in

@@ -1305,8 +1305,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   Runtime classes) and bundles (their application package for x64);
   Microsoft's signed VCLibs, `Microsoft.UI.Xaml.2.8` and .NET Native
   framework packages install unchanged.
-  Next: a download route for the Store's Calculator bundle and its
-  frameworks, then starting it once 32.5 gives it its controls.
+  Third part done: a download route, `tools/appx/storefetch.py` (the
+  Store's delivery service, as the Store app asks it); Calculator
+  11.2607's five Store frameworks install unchanged.
+  Next: Calculator's own bundle.  The Store's bundles leave their
+  application packages out of the bundle's block map (only the bundle
+  manifest is in it) and sign each package itself, so `appx` must take
+  a package the bundle manifest names that the block map leaves out,
+  and then verify that package's own signature, whose publisher must be
+  the bundle's, as Windows does; then starting it once 32.5 gives it
+  its controls.
 
 ---
 

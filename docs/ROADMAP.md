@@ -460,7 +460,8 @@ item ends when a named program or test demonstrates it.
   with `ERROR_DISK_FULL` (`ntfstest fill`), both on the "ntfs" boot's
   disposable disk.  ~~Many files~~ Done: the MFT grows by half its size
   (and its bitmap with it), so a volume takes as many files as fit
-  (`tests/tools/test_ntfs_many.py`: 40,000).  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
+  (`tests/tools/test_ntfs_many.py`: 40,000), and a rename or link that
+  needs room in a file's record moves its small contents to clusters.  ~~NVMe~~ Done: NVMe disks, installed to and booted from.
 - ~~IPv6, HTTP/2~~ Done (Phase 18.8): lwIP's IPv6 (SLAAC, RDNSS, MLD),
   dual-stack Winsock with `getaddrinfo`, `ping -6` and `curl -6`; a
   virtio-net driver; `winhttp` on Schannel with HTTP/2 by ALPN (nghttp2).
@@ -1278,10 +1279,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   faces pass `Windows.UI.Composition` objects as the framework's
   `Microsoft.UI.Composition` ones; the merged theme resources list each
   resource after those it names, as XBF's lookup-time creation allows;
-  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Next: the
-  controls' default styles applied (`InfoBadge`'s template), then
-  Calculator's controls; Calculator's start-up itself waits on the .NET
-  Native framework packages (32.6).
+  WinUI 2's `AcrylicBrush` answers Windows' `IAcrylicBrush`).  Eighth
+  part done: the controls' default styles apply with
+  `XamlControlsResources` in the app's resources: `InfoBadge`,
+  `ProgressBar`, `ProgressRing`, `SwipeControl` and `BackdropMaterial`
+  (more of the framework vendored; `Windows.UI.Colors`,
+  `AccessibilitySettings`, dcomp's property-change listeners, and a
+  hidden `CoreWindow` on a desktop XAML thread as XAML islands make).
+  Next: `NavigationView` with `ItemsRepeater` and `RadioButtons`;
+  Calculator's start-up itself waits on the .NET Native framework
+  packages (32.6).
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

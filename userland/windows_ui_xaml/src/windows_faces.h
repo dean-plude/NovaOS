@@ -94,4 +94,7 @@ void nova_addref(void *p);
 void nova_release(void *p);
 // a method with no counterpart: says so once, E_NOTIMPL
 HRESULT nova_face_missing(const char *name);
+// (an event NovaOS never raises: its handler kept until removed)
+HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token);
+HRESULT nova_face_event_removed(INT64 token);
 }

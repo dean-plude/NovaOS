@@ -53,6 +53,15 @@ TYPENAME = 'Windows.UI.Xaml.Interop.TypeName'
 SPECIAL_C = {'Windows.Foundation.HResult': 'INT32', 'Windows.Foundation.EventRegistrationToken': 'INT64'}
 
 
+# Windows.UI.Xaml events of a UWP app's lifetime, which the framework
+# builds without (its Feature_UwpSupportApi is off) and NovaOS never raises
+# (it suspends no process, and a desktop thread's Application is never
+# suspended on Windows either): WinUI 2's AnimatedVisualPlayer, for one,
+# pauses on Suspending
+NEVER_RAISED = {WIN + 'IApplication': ('Suspending', 'Resuming'),
+                WIN + 'IApplication2': ('LeavingBackground', 'EnteredBackground')}
+
+
 def attr_args(t, name):
     return [a.args for a in t.attrs if a.name.endswith(name)]
 
@@ -316,6 +325,15 @@ class Faces:
         return name
 
     def missing_thunk(self, name, what):
+        iface, _, method = what.rpartition('.')
+        if iface in NEVER_RAISED and method.startswith(('add_', 'remove_')) and method[method.index('_') + 1:] in NEVER_RAISED[iface]:
+            # (an event the framework has no counterpart of because NovaOS
+            # never raises it: the handler is kept until it is removed)
+            self.thunks.append('static HRESULT STDMETHODCALLTYPE %s(void*, IUnknown* h, INT64* token) '
+                               '{ return nova_face_event_kept(h, token); }' % name if method.startswith('add_') else
+                               'static HRESULT STDMETHODCALLTYPE %s(void*, INT64 token) '
+                               '{ return nova_face_event_removed(token); }' % name)
+            return name
         self.thunks.append('static HRESULT STDMETHODCALLTYPE %s() { return nova_face_missing("%s"); }' % (name, what))
         self.missing.append(what)
         return name

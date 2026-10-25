@@ -18,7 +18,8 @@ feature the DLL builds, its sources, headers, IDL and .vcxitems: TestHooks,
 Common, Telemetry, ResourceHelper, Collections, Effects,
 Materials/{Acrylic,Reveal,Backdrop}, Lights, ImageIcon, IconSource,
 AnimatedVisualPlayer, AnimatedIcon (with AnimatedVisuals), SplitButton,
-DropDownButton and InfoBadge; and TabView/TabViewTrace.h (TestHooks
+DropDownButton, InfoBadge, ProgressBar, ProgressRing (with
+AnimatedVisuals) and SwipeControl; and TabView/TabViewTrace.h (TestHooks
 includes it).  The XAML pages (.xaml) each of those .vcxitems lists, with
 CommonStyles (its .vcxitems and pages: WinUI 2's styles of the system
 controls), dev/dll/DensityStyles/Compact.xaml and dev/dll/Microsoft.UI.Xaml.vcxproj

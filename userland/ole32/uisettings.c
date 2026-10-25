@@ -1,5 +1,6 @@
 /*
- * Windows.UI.ViewManagement.UISettings and UIViewSettings, the Windows
+ * Windows.UI.ViewManagement.UISettings, UIViewSettings and
+ * AccessibilitySettings, the Windows
  * Runtime classes Win32 programs ask for the user's colours and interface
  * settings.  Qt's Windows platform plugin (qwindows.dll, Qt 6) builds its
  * palette from UISettings.GetColorValue (Background, Foreground and the
@@ -21,6 +22,10 @@
  * AutoHideScrollBarsChanged on every UISettings with a handler, from a
  * thread of the process as Windows does (a thread watches the keys once a
  * first handler is added).
+ *
+ * AccessibilitySettings answers whether high contrast is on, and its
+ * scheme, from SystemParametersInfo(SPI_GETHIGHCONTRAST) (WinUI 2's
+ * BackdropMaterial asks it).
  *
  * Interface IDs and method orders: Windows SDK windows.ui.viewmanagement.idl
  * (MinGW-w64 and Wine carry the same IIDs).
@@ -234,9 +239,73 @@ struct UISettings {
     const Ui3Vtbl *v3;
     const UiEventVtbl *v4, *v5;
     const Ui6Vtbl *v6;
+    const struct WrsVtbl *wrs;      /* IWeakReferenceSource */
+    struct UiWeak *weak;            /* its weak reference, once one is asked for */
     LONG refs;
 };
 #define UI_OF(p, f) ((UISettings *)((BYTE *)(p) - __builtin_offsetof(UISettings, f)))
+
+/* ---- Weak references: every Windows Runtime object gives one (C++/WinRT's
+ * event revokers hold their source by one) ----------------------------- */
+static const GUID IID_IWeakReferenceSource_u = { 0x00000038, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID IID_IWeakReference_u       = { 0x00000037, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+struct WrsVtbl {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(void *, REFIID, void **);
+    ULONG   (STDMETHODCALLTYPE *AddRef)(void *);
+    ULONG   (STDMETHODCALLTYPE *Release)(void *);
+    HRESULT (STDMETHODCALLTYPE *GetWeakReference)(void *, void **);
+};
+typedef struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(void *, REFIID, void **);
+    ULONG   (STDMETHODCALLTYPE *AddRef)(void *);
+    ULONG   (STDMETHODCALLTYPE *Release)(void *);
+    HRESULT (STDMETHODCALLTYPE *Resolve)(void *, REFIID, void **);
+} WeakVtbl;
+/* a UISettings' weak reference: its target is cleared (under the lock) as
+ * the object goes away */
+struct UiWeak { const WeakVtbl *v; LONG refs; UISettings *target; };
+static SRWLOCK g_weak_lock = SRWLOCK_INIT;
+
+static HRESULT STDMETHODCALLTYPE weak_qi(void *o, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown_u) || IsEqualGUID(iid, &IID_IAgileObject_u) ||
+        IsEqualGUID(iid, &IID_IWeakReference_u)) {
+        InterlockedIncrement(&((struct UiWeak *)o)->refs);
+        *out = o;
+        return S_OK;
+    }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE weak_addref(void *o) { return (ULONG)InterlockedIncrement(&((struct UiWeak *)o)->refs); }
+static ULONG STDMETHODCALLTYPE weak_release(void *o)
+{
+    struct UiWeak *w = o;
+    LONG r = InterlockedDecrement(&w->refs);
+    if (!r) HeapFree(GetProcessHeap(), 0, w);
+    return (ULONG)r;
+}
+static HRESULT ui_qi(UISettings *u, REFIID iid, void **out);
+static ULONG ui_release(UISettings *u);
+static HRESULT STDMETHODCALLTYPE weak_resolve(void *o, REFIID iid, void **out)
+{
+    struct UiWeak *w = o;
+    UISettings *t;
+    if (!out) return E_POINTER;
+    *out = 0;
+    AcquireSRWLockExclusive(&g_weak_lock);
+    t = w->target;
+    for (LONG r; t && (r = t->refs) > 0;)               /* (a strong reference while one is left) */
+        if (InterlockedCompareExchange(&t->refs, r + 1, r) == r) break;
+    if (t && t->refs <= 0) t = 0;
+    ReleaseSRWLockExclusive(&g_weak_lock);
+    if (!t) return S_OK;                                /* gone: Resolve gives null */
+    HRESULT hr = ui_qi(t, iid, out);
+    ui_release(t);
+    return hr;
+}
+static const WeakVtbl g_weak_vtbl = { weak_qi, weak_addref, weak_release, weak_resolve };
 
 static HRESULT ui_qi(UISettings *u, REFIID iid, void **out)
 {
@@ -248,6 +317,7 @@ static HRESULT ui_qi(UISettings *u, REFIID iid, void **out)
     else if (IsEqualGUID(iid, &IID_IUISettings4)) *out = &u->v4;
     else if (IsEqualGUID(iid, &IID_IUISettings5)) *out = &u->v5;
     else if (IsEqualGUID(iid, &IID_IUISettings6)) *out = &u->v6;
+    else if (IsEqualGUID(iid, &IID_IWeakReferenceSource_u)) *out = &u->wrs;
     else { *out = 0; return E_NOINTERFACE; }
     InterlockedIncrement(&u->refs);
     return S_OK;
@@ -256,6 +326,10 @@ static ULONG ui_release(UISettings *u)
 {
     LONG r = InterlockedDecrement(&u->refs);
     if (!r) {
+        AcquireSRWLockExclusive(&g_weak_lock);
+        if (u->weak) u->weak->target = 0;
+        ReleaseSRWLockExclusive(&g_weak_lock);
+        if (u->weak) weak_release(u->weak);
         remove_handlers(u, 0, 0);
         HeapFree(GetProcessHeap(), 0, u);
     }
@@ -287,7 +361,23 @@ static HRESULT STDMETHODCALLTYPE ui_trust(void *o, int *t) { (void)o; if (!t) re
     static HRESULT STDMETHODCALLTYPE f##_qi(void *o, REFIID iid, void **out) { return ui_qi(UI_OF(o, f), iid, out); } \
     static ULONG STDMETHODCALLTYPE f##_addref(void *o) { return (ULONG)InterlockedIncrement(&UI_OF(o, f)->refs); } \
     static ULONG STDMETHODCALLTYPE f##_release(void *o) { return ui_release(UI_OF(o, f)); }
-UI_UNKNOWN(v1) UI_UNKNOWN(v2) UI_UNKNOWN(v3) UI_UNKNOWN(v4) UI_UNKNOWN(v5) UI_UNKNOWN(v6)
+UI_UNKNOWN(v1) UI_UNKNOWN(v2) UI_UNKNOWN(v3) UI_UNKNOWN(v4) UI_UNKNOWN(v5) UI_UNKNOWN(v6) UI_UNKNOWN(wrs)
+static HRESULT STDMETHODCALLTYPE ui_weak(void *o, void **out)
+{
+    UISettings *u = UI_OF(o, wrs);
+    if (!out) return E_POINTER;
+    AcquireSRWLockExclusive(&g_weak_lock);
+    if (!u->weak && (u->weak = HeapAlloc(GetProcessHeap(), 0, sizeof(struct UiWeak)))) {
+        u->weak->v = &g_weak_vtbl;
+        u->weak->refs = 1;                                /* (the object's own) */
+        u->weak->target = u;
+    }
+    if (u->weak) InterlockedIncrement(&u->weak->refs);
+    *out = u->weak;
+    ReleaseSRWLockExclusive(&g_weak_lock);
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+static const struct WrsVtbl g_wrs = { wrs_qi, wrs_addref, wrs_release, ui_weak };
 #define UI_INSP(f) { f##_qi, f##_addref, f##_release, ui_iids, ui_name, ui_trust }
 
 static UINT spi_uint(UINT action, UINT dflt)
@@ -414,6 +504,8 @@ static HRESULT new_uisettings(void **out)
     u->v4 = &g_ui4;
     u->v5 = &g_ui5;
     u->v6 = &g_ui6;
+    u->wrs = &g_wrs;
+    u->weak = 0;
     u->refs = 1;
     *out = &u->v1;
     return S_OK;
@@ -577,6 +669,106 @@ static const ViewStaticsVtbl g_vs_vtbl = { { vf_qi, static_ref, static_ref, no_i
 static const ViewInteropVtbl g_vi_vtbl = { { vf_qi, static_ref, static_ref, no_iids, view_name, ui_trust }, vf_forwindow };
 static ViewFactory g_view_factory = { &g_vf_vtbl, &g_vs_vtbl, &g_vi_vtbl };
 
+/* ---- AccessibilitySettings: high contrast, as SystemParametersInfo says -- */
+static const GUID IID_IAccessibilitySettings = { 0xFE0E8147, 0xC4C0, 0x4562, { 0xB9, 0x62, 0x13, 0x27, 0xB5, 0x2A, 0xD5, 0xB9 } };
+typedef struct {
+    InspVtbl i;
+    HRESULT (STDMETHODCALLTYPE *get_HighContrast)(void *, BOOLEAN *);
+    HRESULT (STDMETHODCALLTYPE *get_HighContrastScheme)(void *, HSTRING *);
+    HRESULT (STDMETHODCALLTYPE *add_HighContrastChanged)(void *, IUnknown *, EventToken *);
+    HRESULT (STDMETHODCALLTYPE *remove_HighContrastChanged)(void *, EventToken);
+} AccessVtbl;
+typedef struct { const AccessVtbl *v; } Access;
+static Access g_access;
+static Factory g_access_factory;
+
+static HRESULT STDMETHODCALLTYPE access_name(void *o, HSTRING *n)
+{
+    (void)o;
+    if (!n) return E_POINTER;
+    *n = name_of(L"Windows.UI.ViewManagement.AccessibilitySettings");
+    return *n ? S_OK : E_OUTOFMEMORY;
+}
+/* (one object, never gone: its weak reference always resolves) */
+typedef struct { const struct WrsVtbl *v; } AccessWrs;
+typedef struct { const WeakVtbl *v; } AccessWeak;
+static AccessWrs g_access_wrs;
+static AccessWeak g_access_weak;
+static HRESULT STDMETHODCALLTYPE access_qi(void *o, REFIID iid, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown_u) || IsEqualGUID(iid, &IID_IInspectable_u) ||
+        IsEqualGUID(iid, &IID_IAgileObject_u) || IsEqualGUID(iid, &IID_IAccessibilitySettings)) { *out = &g_access; return S_OK; }
+    if (IsEqualGUID(iid, &IID_IWeakReferenceSource_u)) { *out = &g_access_wrs; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE access_weak(void *o, void **out) { (void)o; if (!out) return E_POINTER; *out = &g_access_weak; return S_OK; }
+static HRESULT STDMETHODCALLTYPE aweak_qi(void *o, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown_u) || IsEqualGUID(iid, &IID_IAgileObject_u) ||
+        IsEqualGUID(iid, &IID_IWeakReference_u)) { *out = o; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE aweak_resolve(void *o, REFIID iid, void **out) { (void)o; return access_qi(&g_access, iid, out); }
+static const struct WrsVtbl g_access_wrs_vtbl = { access_qi, static_ref, static_ref, access_weak };
+static const WeakVtbl g_access_weak_vtbl = { aweak_qi, static_ref, static_ref, aweak_resolve };
+static AccessWrs g_access_wrs = { &g_access_wrs_vtbl };
+static AccessWeak g_access_weak = { &g_access_weak_vtbl };
+typedef struct { UINT cbSize; DWORD dwFlags; WCHAR *lpszDefaultScheme; } HighContrast;   /* HIGHCONTRASTW */
+static BOOL high_contrast(HighContrast *hc)
+{
+    hc->cbSize = sizeof *hc;
+    return SystemParametersInfoW(0x0042 /* SPI_GETHIGHCONTRAST */, sizeof *hc, hc, 0) &&
+           (hc->dwFlags & 1 /* HCF_HIGHCONTRASTON */);
+}
+static HRESULT STDMETHODCALLTYPE access_on(void *o, BOOLEAN *r)
+{
+    HighContrast hc = {0};
+    (void)o;
+    if (!r) return E_POINTER;
+    *r = (BOOLEAN)high_contrast(&hc);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE access_scheme(void *o, HSTRING *r)
+{
+    HighContrast hc = {0};
+    (void)o;
+    if (!r) return E_POINTER;
+    *r = high_contrast(&hc) && hc.lpszDefaultScheme ? name_of(hc.lpszDefaultScheme) : 0;
+    return S_OK;
+}
+/* (the setting is not changed while a program runs on NovaOS: a handler is
+ * kept by no one and never called) */
+static HRESULT STDMETHODCALLTYPE access_add(void *o, IUnknown *h, EventToken *t)
+{
+    static LONG next;
+    (void)o;
+    if (!h || !t) return E_POINTER;
+    t->value = InterlockedIncrement(&next);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE access_remove(void *o, EventToken t) { (void)o; (void)t; return S_OK; }
+static const AccessVtbl g_access_vtbl = { { access_qi, static_ref, static_ref, no_iids, access_name, ui_trust },
+                                          access_on, access_scheme, access_add, access_remove };
+static Access g_access = { &g_access_vtbl };
+
+static HRESULT STDMETHODCALLTYPE af_qi(void *o, REFIID iid, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown_u) || IsEqualGUID(iid, &IID_IInspectable_u) ||
+        IsEqualGUID(iid, &IID_IAgileObject_u) || IsEqualGUID(iid, &IID_IActivationFactory_u)) { *out = &g_access_factory; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE af_activate(void *o, void **out) { (void)o; if (!out) return E_POINTER; *out = &g_access; return S_OK; }
+static const FactoryVtbl g_af_vtbl = { { af_qi, static_ref, static_ref, no_iids, access_name, ui_trust }, af_activate };
+static Factory g_access_factory = { &g_af_vtbl };
+
 static BOOL named(const WCHAR *name, UINT32 len, const WCHAR *want)
 {
     UINT32 i = 0;
@@ -584,11 +776,12 @@ static BOOL named(const WCHAR *name, UINT32 len, const WCHAR *want)
     return i == len && !want[i];
 }
 
-/* The factory for UISettings or UIViewSettings, or REGDB_E_CLASSNOTREG */
+/* The factory for UISettings, UIViewSettings or AccessibilitySettings, or REGDB_E_CLASSNOTREG */
 HRESULT ole32_uisettings_factory(const WCHAR *name, UINT32 len, REFIID iid, void **out)
 {
     if (named(name, len, L"Windows.UI.ViewManagement.UISettings")) return uisf_qi(&g_uis_factory, iid, out);
     if (named(name, len, L"Windows.UI.ViewManagement.UIViewSettings")) return vf_qi(&g_view_factory, iid, out);
+    if (named(name, len, L"Windows.UI.ViewManagement.AccessibilitySettings")) return af_qi(&g_access_factory, iid, out);
     *out = 0;
     return REGDB_E_CLASSNOTREG;
 }

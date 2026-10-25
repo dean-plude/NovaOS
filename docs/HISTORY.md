@@ -15656,6 +15656,24 @@ now an NTFS volume, as on an installed system (Setup installs on NTFS only).
 - **Audacity's test** waits 60 s for its Save As dialog, which lists
   `C:\Documents\Audacity` from the disk now.
 
+## NTFS: a rename to a longer name makes room in the file's record
+
+GIMP's and SuperTux's installs failed on the app corpus's NTFS drive C:
+(Inno Setup exit code 5). Inno Setup writes each file as `is-XXXXX.tmp`,
+then renames it to its real name. A small file's contents are kept in
+its MFT record, and when they left no room for the longer name the rename
+failed (`STATUS_OBJECT_NAME_INVALID`); this was in NovaOS's NTFS writer
+from the start, and the corpus's FAT32 C: had hidden it.
+
+- **`kernel/fs/ntfs.c`**: a rename or a new link (`NtfsRename`,
+  `NtfsLink`) whose name does not fit moves the file's resident contents
+  to clusters first, as Windows does (`make_room`); the clusters go back
+  if the change fails before the record is written.
+- **`tests/tools/test_ntfs_many.py`**: 600 files with 600-899 bytes are
+  made as `is-XXXXX.tmp`, renamed to long names, every tenth given a
+  second long name, then read back after a remount and checked with
+  `scripts/ntfs-check.py`. It fails at the first rename without the fix.
+
 ## Setup installs drive C: on NTFS only
 
 Since step 2 of the on-disk drive C: plan, an installed system's C: is
@@ -15680,6 +15698,38 @@ used only by the installation media (docs/design/disk-c.md, step 3).
 - **Docs**: install-and-power.md, user-guide.md, building.md,
   design/installer.md, design/disk-c.md (with what still uses the RAM
   disk), the README and the NTFS roadmap item.
+
+## WinUI 2's controls get their default styles
+
+The eighth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: with
+`XamlControlsResources` merged into the app's resources, as an app's
+`App.xaml` merges it, WinUI 2's controls take their default styles and
+apply their templates.
+
+- **Controls:** `InfoBadge`, and of the controls Calculator uses
+  `ProgressRing` (with its animated visual player), `ProgressBar`,
+  `SwipeControl` with its `SwipeItems`, and
+  `BackdropMaterial.ApplyToRootOrPageBackground` (WinUI 2 now builds
+  `ProgressBar`, `ProgressRing` and `SwipeControl`).
+- **Framework pieces they need:** `RangeBase`, `UserControl`, the theme
+  animations, `Shape` with `Rectangle` and `Ellipse`, the transforms,
+  `StackPanel`, row and column definitions, visual states and
+  transitions, `BrushTransition` and `ElementCompositionPreview`
+  (vendored from Microsoft's WinUI 3 source).
+- **What they ask the system:** `Windows.UI.Colors`, `AccessibilitySettings`
+  and weak references to `UISettings` (ole32); composition visuals that
+  report property changes (dcomp); and on a desktop thread a hidden
+  `CoreWindow`, as XAML islands make on Windows (twinapi.appcore's
+  `PrivateCreateCoreWindow`; `CoreWindow.GetForCurrentThread` answers and
+  the window can be held weakly).  `Application.Suspending` and
+  `Resuming` take handlers on a desktop app and are never raised, as on
+  Windows.
+- **Test:** `winui2test` makes each control from markup and checks its
+  template's root, then loads a page as Calculator's declares these
+  controls (82 checks).
+- **Next (32.5):** `NavigationView` with `ItemsRepeater`, and
+  `RadioButtons`, the rest of Calculator's controls.
 
 ## A XAML page draws
 

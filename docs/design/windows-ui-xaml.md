@@ -1099,13 +1099,43 @@ vendors.
        `IAcrylicBrush` and `IAcrylicBrush2` with the outer's WinUI 2
        interfaces, which have the same methods in the same order
        (`windows_faces.cpp`, `s_winui2_aliases`).
-   - *Next:* the controls' default styles applied (`InfoBadge`'s template:
-     the style is in the theme resources, which now load);
-     then the features Calculator uses
-     (`NavigationView` with `ItemsRepeater`, `SwipeControl`,
-     `RadioButtons`, `ProgressRing`, `BackdropMaterial`).  Calculator
-     itself is a .NET Native app: its package also needs the .NET Native
-     framework and runtime packages (32.6).
+   - *Eighth part, the controls' default styles.*  With
+     `XamlControlsResources` merged into `Application.Current.Resources`
+     (as an app's `App.xaml` merges it), a WinUI 2 control made from
+     markup takes its default style from the style's
+     `DefaultStyleResourceUri` (the merged `19h1_generic.xaml`) and
+     applies its template; one made in code gets it on entering the
+     tree, as on Windows.  `winui2test` checks `InfoBadge`, `ProgressBar`,
+     `ProgressRing` and `SwipeControl` that way, and a page with a
+     `ProgressRing`, a `SwipeControl` with `SwipeItems`, an `InfoBadge`
+     and `BackdropMaterial.ApplyToRootOrPageBackground`.
+     - *WinUI 2's features.*  `ProgressBar`, `ProgressRing` (with its
+       Lottie visuals) and `SwipeControl` join the build.
+     - *Framework pieces.*  Vendored from Microsoft's WinUI 3 source:
+       `RangeBase`, `UserControl`, the sixteen theme animations with
+       `ThemeAnimationsHelper`, `DynamicTimeline`, `Shape`, `Rectangle`,
+       `Ellipse`, the transforms (`CompositeTransform`, `ScaleTransform`,
+       `TranslateTransform`, `RotateTransform`), `StackPanel`,
+       `RowDefinition`/`ColumnDefinition`, `VisualState`,
+       `VisualStateGroup`, `VisualTransition`, `BrushTransition`,
+       `ElementCompositionPreview` and the composition tree's
+       `DCompPropertyChangedListener`.
+     - *What the controls ask the system.*  `Windows.UI.Colors` and
+       `AccessibilitySettings` (ole32), `UISettings` held weakly; dcomp's
+       visuals answer `IExpCompositionPropertyChanged`, telling a
+       listener when their offset, size, scale and the rest change.  On
+       a desktop thread `DXamlCore` makes a hidden `CoreWindow`
+       (twinapi.appcore's `PrivateCreateCoreWindow`, Windows.UI.dll's on
+       Windows), as XAML islands do, so `CoreWindow.GetForCurrentThread`
+       answers (`AnimatedVisualPlayer` and `SwipeControl` ask it); the
+       window answers `IWeakReferenceSource`.  `Application.Suspending`,
+       `Resuming`, `EnteredBackground` and `LeavingBackground` take
+       handlers and are never raised on a desktop app, as on Windows
+       (`winfaces.py`'s `NEVER_RAISED`).
+   - *Next:* the rest of Calculator's controls (`NavigationView` with
+     `ItemsRepeater`, `RadioButtons`).  Calculator itself is a .NET
+     Native app: its package also needs the .NET Native framework and
+     runtime packages (32.6).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

@@ -51,14 +51,17 @@ import mergexaml  # noqa: E402
 # The features built so far: what the project always imports (TestHooks,
 # Common, Telemetry) and Microsoft's smallest set the DLL builds with (the
 # MUXControlsInnerLoop solution's, FeatureAreas.props: the DLL's own sources
-# use Reveal and Acrylic), with InfoBadge (and ImageIcon, which IconSource needs).  Each is a vcxitems of
+# use Reveal and Acrylic), with InfoBadge (and ImageIcon, which IconSource
+# needs) and the controls Calculator uses so far: ProgressBar,
+# ProgressRing and SwipeControl.  Each is a vcxitems of
 # dev/dll/Microsoft.UI.Xaml.vcxproj's ImportGroup.
 FEATURES = '''TestHooks/TestHooks.vcxitems Common/Common.vcxitems Telemetry/Telemetry.vcxitems
 ResourceHelper/ResourceHelper.vcxitems Collections/Collections.vcxitems Effects/Microsoft.UI.Private.Composition.Effects.vcxitems
 Materials/Acrylic/AcrylicBrush.vcxitems Materials/Reveal/RevealBrush.vcxitems Materials/Backdrop/SystemBackdropComponent.vcxitems
 Lights/Lights.vcxitems ImageIcon/ImageIcon.vcxitems IconSource/IconSource.vcxitems AnimatedVisualPlayer/AnimatedVisualPlayer.vcxitems
 AnimatedIcon/AnimatedIcon.vcxitems SplitButton/SplitButton.vcxitems DropDownButton/DropDownButton.vcxitems
-InfoBadge/InfoBadge.vcxitems'''.split()
+InfoBadge/InfoBadge.vcxitems ProgressBar/ProgressBar.vcxitems ProgressRing/ProgressRing.vcxitems
+SwipeControl/SwipeControl.vcxitems'''.split()
 
 # dev/dll's own sources (Microsoft.UI.Xaml.Common.targets and the project);
 # module.g.cpp and XamlMetadataProviderGenerated.cpp are generated

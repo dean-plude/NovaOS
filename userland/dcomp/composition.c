@@ -39,8 +39,12 @@
  * frame animations run by the compositor's thread, animation groups,
  * scoped and commit batches, easing functions (and their statics),
  * rectangle clips, clip and surface brush transforms (ICompositionClip2,
- * ICompositionSurfaceBrush2 and 3) and mask brushes (the XAML framework
- * draws text as its glyphs' alpha mask over a colour brush).  A compositor is a DirectComposition device as well
+ * ICompositionSurfaceBrush2 and 3), mask brushes (the XAML framework
+ * draws text as its glyphs' alpha mask over a colour brush) and the
+ * experimental IExpCompositionPropertyChanged on visuals (a listener told
+ * of a transform property set through IVisual, which the XAML framework
+ * hit-tests an app's element visual with).  A compositor is a
+ * DirectComposition device as well
  * (dcomp.c's dcomp_part_new), as the XAML framework's composition tree
  * host has it, and DirectComposition surfaces can be shown in its surface
  * brushes (NovaCompositionSurfaceForDComp).
@@ -86,6 +90,12 @@ static const GUID IID_ICoreWindowStatic_ = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90,
 static const GUID IID_ICompositorSwapChainInterop_ = { 0xA0B03594, 0xC413, 0x5F5D, { 0xBC, 0x70, 0xCE, 0x93, 0x82, 0xEB, 0x5E, 0x83 } };
 static const GUID IID_ICoreWindowInterop_ = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 #include "composition_iids.h"
+/* the lifted composition's experimental IExpCompositionPropertyChanged
+ * (userland/windows_ui_xaml/inc/microsoft.ui.composition.experimental.h) */
+static const GUID IID_IExpCompositionPropertyChanged_ = { 0x12B579A9, 0x6A27, 0x5CDE, { 0xA2, 0xA1, 0xC5, 0x57, 0xBB, 0x7D, 0xFD, 0xB3 } };
+/* (its ExpExpressionNotificationProperty values a visual tells of) */
+enum { EXP_CLIP = 1, EXP_OFFSET = 2, EXP_SIZE = 4, EXP_ANCHOR = 7, EXP_CENTER = 8, EXP_ANGLE = 10, EXP_SCALE = 12,
+       EXP_MATRIX = 13, EXP_PROPS = 26 };
 /* (NovaOS's own: hands back the object behind any of its interfaces) */
 static const GUID IID_INovaCompositionObject = { 0x6e6f7661, 0x0010, 0x4358, { 0x91, 0x00, 0x63, 0x6f, 0x6d, 0x70, 0x6f, 0x73 } };
 
@@ -209,6 +219,8 @@ struct Obj {
     Obj *open_batch;                    /* (not counted) */
     Obj *next_due;                      /* (the list of batches due to complete) */
     float playback_rate;
+    IUnknown **listen;                  /* a visual's IExpCompositionPropertyChangedListener for each
+                                           ExpExpressionNotificationProperty (counted; made when first set) */
 };
 #define OBJ_AT(p, i) ((Obj *)((char *)(p) - (i) * sizeof(void *)))
 #define IF(o, i) ((void *)&(o)->vt[i])
@@ -241,7 +253,8 @@ static const Iface if_compositor[] = { { &IIDW_Compositor, 0 }, { &IIDM_Composit
                                        { &IID_ICompositorDesktopInterop_, 3 }, BOTH(Compositor2, S_C2), { &IIDW_Compositor3, S_C3 },
                                        BOTH(Compositor4, S_C4), BOTH(Compositor5, S_C5), BOTH(Compositor6, S_C6),
                                        { &IIDW_Compositor7, S_C7_W }, { &IIDM_Compositor7, S_C7_M }, BOTH(Compositor8, S_C8), { 0, 0 } };
-#define VISUAL_IFS BOTH(ContainerVisual, 3), BOTH(Visual, 2), BOTH(Visual2, 5), BOTH(Visual3, 6), BOTH(Visual4, 7)
+#define VISUAL_IFS BOTH(ContainerVisual, 3), BOTH(Visual, 2), BOTH(Visual2, 5), BOTH(Visual3, 6), BOTH(Visual4, 7), \
+                   { &IID_IExpCompositionPropertyChanged_, 8 }
 static const Iface if_container[] = { VISUAL_IFS, { 0, 0 } };
 static const Iface if_sprite[] = { BOTH(SpriteVisual, 4), VISUAL_IFS, { 0, 0 } };
 static const Iface if_collection[] = { BOTH(VisualCollection, 2), { 0, 0 } };
@@ -862,6 +875,10 @@ static void obj_free(Obj *o)
     HeapFree(GetProcessHeap(), 0, o->handlers);
     if (o->queue) o->queue->lpVtbl->Release(o->queue);
     if (o->comment) WindowsDeleteString(o->comment);
+    if (o->listen) {
+        for (int i = 0; i < EXP_PROPS; i++) if (o->listen[i]) o->listen[i]->lpVtbl->Release(o->listen[i]);
+        HeapFree(GetProcessHeap(), 0, o->listen);
+    }
     for (int i = 0; i < o->nkids; i++) obj_release(o->kids[i]);
     for (int i = 0; i < n; i++) if (drop[i]) obj_release(drop[i]);
     HeapFree(GetProcessHeap(), 0, o->kids);
@@ -987,15 +1004,79 @@ static HRESULT STDMETHODCALLTYPE v_put_clip(void *p, void *clip)
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE v_get_parent(void *p, void **out) { lock(); HRESULT hr = give(V(p)->parent, 3, out); unlock(); return hr; }
+
+/* IExpCompositionPropertyChanged (slot 8): the XAML framework listens to the
+ * transform properties of a visual it hands an app (ElementCompositionPreview.
+ * GetElementVisual) to hit-test the element where the app moved it; a
+ * property set through IVisual tells its listener the new value */
+typedef struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(void *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(void *);
+    ULONG (STDMETHODCALLTYPE *Release)(void *);
+    void *GetIids, *GetRuntimeClassName, *GetTrustLevel;
+    void *NotifyBoolean, *NotifyColor, *NotifyMatrix3x2;
+    HRESULT (STDMETHODCALLTYPE *NotifyMatrix4x4)(void *, void *, int, Mat4);
+    HRESULT (STDMETHODCALLTYPE *NotifyReference)(void *, void *, int);
+    HRESULT (STDMETHODCALLTYPE *NotifySingle)(void *, void *, int, float);
+    HRESULT (STDMETHODCALLTYPE *NotifyVector2)(void *, void *, int, Vec2);
+    HRESULT (STDMETHODCALLTYPE *NotifyVector3)(void *, void *, int, Vec3);
+} ListenerVtbl;
+typedef struct { const ListenerVtbl *lpVtbl; } Listener;
+static HRESULT STDMETHODCALLTYPE exp_set(void *p, int property, IUnknown *listener)
+{
+    Obj *v = OBJ_AT(p, 8);
+    if (property <= 0 || property >= EXP_PROPS) return E_INVALIDARG;
+    lock();
+    if (!v->listen && !(v->listen = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, EXP_PROPS * sizeof(IUnknown *)))) {
+        unlock();
+        return E_OUTOFMEMORY;
+    }
+    IUnknown *old = v->listen[property];
+    if (listener) listener->lpVtbl->AddRef(listener);
+    v->listen[property] = listener;
+    unlock();
+    if (old) old->lpVtbl->Release(old);
+    return S_OK;
+}
+static const void *const exp_vt[] = { BASE(8), (void *)exp_set };
+/* tells @v's listener of @property its value now */
+static void notify(Obj *v, int property)
+{
+    lock();
+    Listener *l = v->listen ? (Listener *)v->listen[property] : 0;
+    if (l) l->lpVtbl->AddRef(l);
+    Obj copy = *v;
+    unlock();
+    if (!l) return;
+    void *target = IF(v, S_CO_M);
+    switch (property) {
+    case EXP_OFFSET: l->lpVtbl->NotifyVector3(l, target, property, copy.offset); break;
+    case EXP_SCALE: l->lpVtbl->NotifyVector3(l, target, property, copy.scale); break;
+    case EXP_CENTER: l->lpVtbl->NotifyVector3(l, target, property, copy.center); break;
+    case EXP_SIZE: l->lpVtbl->NotifyVector2(l, target, property, copy.size); break;
+    case EXP_ANCHOR: l->lpVtbl->NotifyVector2(l, target, property, copy.anchor); break;
+    case EXP_ANGLE: l->lpVtbl->NotifySingle(l, target, property, copy.angle); break;
+    case EXP_MATRIX: l->lpVtbl->NotifyMatrix4x4(l, target, property, copy.tm); break;
+    case EXP_CLIP: l->lpVtbl->NotifyReference(l, target, property); break;
+    }
+    l->lpVtbl->Release(l);
+}
+#define NOTIFYING(name, T, property) \
+    static HRESULT STDMETHODCALLTYPE vn_put_##name(void *p, T in) \
+    { HRESULT hr = v_put_##name(p, in); if (SUCCEEDED(hr)) notify(V(p), property); return hr; }
+NOTIFYING(offset, Vec3, EXP_OFFSET) NOTIFYING(scale, Vec3, EXP_SCALE) NOTIFYING(center, Vec3, EXP_CENTER)
+NOTIFYING(size, Vec2, EXP_SIZE) NOTIFYING(anchor, Vec2, EXP_ANCHOR) NOTIFYING(angle, float, EXP_ANGLE)
+NOTIFYING(tm, Mat4, EXP_MATRIX) NOTIFYING(clip, void *, EXP_CLIP)
+static HRESULT STDMETHODCALLTYPE vn_put_degrees(void *p, float f) { return vn_put_angle(p, f * (3.14159265f / 180.0f)); }
 static const void *const visual_vt[] = {
     BASE(2),
-    (void *)v_get_anchor, (void *)v_put_anchor, (void *)v_get_backface, (void *)v_put_backface, (void *)v_get_border,
-    (void *)v_put_border, (void *)v_get_center, (void *)v_put_center, (void *)v_get_clip, (void *)v_put_clip,
+    (void *)v_get_anchor, (void *)vn_put_anchor, (void *)v_get_backface, (void *)v_put_backface, (void *)v_get_border,
+    (void *)v_put_border, (void *)v_get_center, (void *)vn_put_center, (void *)v_get_clip, (void *)vn_put_clip,
     (void *)v_get_composite, (void *)v_put_composite, (void *)v_get_visible, (void *)v_put_visible, (void *)v_get_offset,
-    (void *)v_put_offset, (void *)v_get_opacity, (void *)v_put_opacity, (void *)v_get_orient, (void *)v_put_orient,
-    (void *)v_get_parent, (void *)v_get_angle, (void *)v_put_angle, (void *)v_get_degrees, (void *)v_put_degrees,
-    (void *)v_get_axis, (void *)v_put_axis, (void *)v_get_scale, (void *)v_put_scale, (void *)v_get_size, (void *)v_put_size,
-    (void *)v_get_tm, (void *)v_put_tm,
+    (void *)vn_put_offset, (void *)v_get_opacity, (void *)v_put_opacity, (void *)v_get_orient, (void *)v_put_orient,
+    (void *)v_get_parent, (void *)v_get_angle, (void *)vn_put_angle, (void *)v_get_degrees, (void *)vn_put_degrees,
+    (void *)v_get_axis, (void *)v_put_axis, (void *)v_get_scale, (void *)vn_put_scale, (void *)v_get_size, (void *)vn_put_size,
+    (void *)v_get_tm, (void *)vn_put_tm,
 };
 _Static_assert(sizeof visual_vt / sizeof visual_vt[0] == 6 + 33, "IVisual has 33 methods");
 
@@ -2498,7 +2579,7 @@ static HRESULT new_visual(Obj *comp, int kind, void **out)
     if (!v) return E_OUTOFMEMORY;
     v->vt[0] = co_vt; v->vt[1] = closable_vt; v->vt[2] = visual_vt; v->vt[3] = container_vt;
     if (kind == K_SPRITE) v->vt[4] = sprite_vt;
-    v->vt[5] = visual2_vt; v->vt[6] = visual3_vt; v->vt[7] = visual4_vt;
+    v->vt[5] = visual2_vt; v->vt[6] = visual3_vt; v->vt[7] = visual4_vt; v->vt[8] = exp_vt;
     v->opacity = 1.0f;
     v->visible = 1;
     v->hit_test = 1;

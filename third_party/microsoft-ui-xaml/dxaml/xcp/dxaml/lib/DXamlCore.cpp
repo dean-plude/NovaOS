@@ -527,6 +527,21 @@ _Check_return_ HRESULT DXamlCore::InitializeInstance(_In_ InitializationType ini
         initDxamlCoreTest.set_flag(TIP_reason(DXamlInitializeCoreTest::reason::init_type_islands_only));
         m_hCore->ForceDisableTSF3();
         initDxamlCoreTest.set_flag(TIP_reason(DXamlInitializeCoreTest::reason::disabled_tsf3));
+
+        // NovaOS: as Windows.UI.Xaml's islands do, the thread gets a hidden
+        // CoreWindow (twinapi.appcore.dll's PrivateCreateCoreWindow, Windows.UI.dll's
+        // on Windows), so CoreWindow.GetForCurrentThread answers on a desktop thread
+        // (WinUI 2's AnimatedVisualPlayer and SwipeControl ask it)
+        if (HMODULE appcore = ::LoadLibraryW(L"twinapi.appcore.dll"))
+        {
+            typedef HRESULT (WINAPI *PrivateCreateCoreWindowFn)(int, LPCWSTR, int, int, UINT, UINT, DWORD, HWND, REFIID, void**);
+            if (auto create = reinterpret_cast<PrivateCreateCoreWindowFn>(::GetProcAddress(appcore, "PrivateCreateCoreWindow")))
+            {
+                wrl::ComPtr<wuc::ICoreWindow> coreWindow;
+                IGNOREHR(create(2 /* not immersive */, L"", 0, 0, 0, 0, 0, nullptr, __uuidof(wuc::ICoreWindow),
+                                reinterpret_cast<void**>(coreWindow.GetAddressOf())));
+            }
+        }
     }
 
     // initialize the XAML dispatcher

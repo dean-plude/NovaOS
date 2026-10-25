@@ -482,6 +482,44 @@ extern "C" HRESULT nova_face_missing(const char *name)
     return E_NOTIMPL;
 }
 
+// The handlers of the events NovaOS never raises (winfaces.py's
+// NEVER_RAISED: a UWP app's suspending and resuming), kept, as an event
+// source keeps them, until they are removed
+static struct { INT64 token; IUnknown *handler; } s_kept[64];
+static INT64 s_next_token;
+
+extern "C" HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token)
+{
+    if (!handler || !token)
+        return E_POINTER;
+    AcquireSRWLockExclusive(&s_lock);
+    unsigned i = 0;
+    while (i < ARRAYSIZE(s_kept) && s_kept[i].handler)
+        i++;
+    if (i < ARRAYSIZE(s_kept)) {
+        handler->AddRef();
+        s_kept[i].handler = handler;
+        s_kept[i].token = *token = ++s_next_token;
+    }
+    ReleaseSRWLockExclusive(&s_lock);
+    return i < ARRAYSIZE(s_kept) ? S_OK : E_OUTOFMEMORY;
+}
+
+extern "C" HRESULT nova_face_event_removed(INT64 token)
+{
+    IUnknown *handler = nullptr;
+    AcquireSRWLockExclusive(&s_lock);
+    for (auto &k : s_kept)
+        if (k.handler && k.token == token) {
+            handler = k.handler;
+            k.handler = nullptr;
+        }
+    ReleaseSRWLockExclusive(&s_lock);
+    if (handler)
+        handler->Release();
+    return S_OK;
+}
+
 // The hooks NovaOS's ComObjectBase.cpp calls
 // a Windows.UI.Xaml interface @iid of a framework object that has none of
 // its own: the forward face over the framework interface @impl (the

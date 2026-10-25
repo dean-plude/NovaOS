@@ -271,6 +271,11 @@ class Faces:
                                    % (i, a, self.guid(kt[1]), i))
                     elif to_framework_in:
                         pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = nova_object_in(%s, &c%d);' % (i, a, i))
+                    elif ki[0] == 'object':
+                        # (an object the framework hands the app's code: a
+                        # box of one of its Windows-named enums or structs
+                        # as Windows boxes it)
+                        pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = nova_object_to_app(%s, &c%d);' % (i, a, i))
                     else:
                         pre.append('void* c%d = %s; nova_addref(c%d);' % (i, a, i))
                     args.append('c%d' % i)

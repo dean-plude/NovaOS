@@ -19,7 +19,8 @@ Common, Telemetry, ResourceHelper, Collections, Effects,
 Materials/{Acrylic,Reveal,Backdrop}, Lights, ImageIcon, IconSource,
 AnimatedVisualPlayer, AnimatedIcon (with AnimatedVisuals), SplitButton,
 DropDownButton, InfoBadge, ProgressBar, ProgressRing (with
-AnimatedVisuals) and SwipeControl; and TabView/TabViewTrace.h (TestHooks
+AnimatedVisuals), SwipeControl, Repeater, NavigationView and
+RadioButtons; and TabView/TabViewTrace.h (TestHooks
 includes it).  The XAML pages (.xaml) each of those .vcxitems lists, with
 CommonStyles (its .vcxitems and pages: WinUI 2's styles of the system
 controls), dev/dll/DensityStyles/Compact.xaml and dev/dll/Microsoft.UI.Xaml.vcxproj
@@ -42,6 +43,16 @@ Changed for clang (marked here, the files otherwise as upstream):
                                 winrt::TimeSpan::duration(...) (MSVC
                                 takes the constructor name as the type)
                                 written winrt::TimeSpan(...)
+  dev/Repeater/SelectedItems.h, VirtualLayoutContextAdapter.h
+                                reference_tracker_implements_t<X>::type
+                                named as a member template (::template type)
+  dev/NavigationView/SplitDataSourceBase.h
+                                "typename" left off T, SplitVectorID and
+                                AttachedDataType, which are not qualified
+                                names
+  dev/NavigationView/NavigationView.cpp
+                                [[gsl::suppress(con.4)]] written with the
+                                string argument clang wants
 The build also copies dev/Generated with [[gsl::suppress(con)]] written
 with the string argument clang wants (userland/microsoft_ui_xaml/build.py).
 

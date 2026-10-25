@@ -75,13 +75,17 @@ void nova_untarget(NovaTear *t, void *p);
 // @a as interface @iid: asked for it, else wrapped in the face that
 // implements it over what @a has (null stays null)
 HRESULT nova_cross(void *a, const GUID *iid, void **out);
-// an out parameter the call @hr gave as @o, as @iid (or as it is, @iid
-// null) into @a; releases @o
+// an out parameter the call @hr gave as @o, as @iid (or, @iid null, as it
+// is, a framework box of a Windows.UI.Xaml enum or struct boxed again as
+// Windows boxes it) into @a; releases @o
 HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a);
 // an object going from Windows' types to the framework's: a Windows box
 // of a Windows.UI.Xaml enum or struct boxed again as the framework's
 HRESULT nova_object_in(void *a, void **out);
 HRESULT nova_object_out(HRESULT hr, void *o, void **a);
+// an object going from the framework to the app's code: a framework box of
+// a Windows.UI.Xaml enum or struct boxed again as Windows boxes it
+HRESULT nova_object_to_app(void *a, void **out);
 // a TypeName (Windows.UI.Xaml.Interop.TypeName) of a Windows.UI.Xaml type
 // renamed as the framework's (@to_framework) or back: in place, the new
 // name made into @made (for the caller to delete); nova_typename_out: an

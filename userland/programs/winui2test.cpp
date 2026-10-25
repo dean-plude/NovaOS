@@ -26,7 +26,11 @@
  *     ProgressRing and SwipeControl made from markup with their templates
  *     applied, and a page as Calculator's declares them (ProgressRing,
  *     SwipeControl with SwipeItems, InfoBadge,
- *     BackdropMaterial.ApplyToRootOrPageBackground).
+ *     BackdropMaterial.ApplyToRootOrPageBackground);
+ *   - NavigationView and RadioButtons (step 32.5's ninth part): each with
+ *     its template, and a page with a NavigationView (NavigationViewItems
+ *     in MenuItems) and RadioButtons, their items and SelectedIndex from
+ *     markup; the RadioButtons measured and arranged.
  *
  *   winui2test        the self-test runs it with no arguments
  */
@@ -34,6 +38,7 @@
 #include <string.h>
 #include <new>
 #include <string>
+#include <vector>
 #include <corep.h>
 #include <CStaticLock.h>
 #include <SystemThemingInterop.h>
@@ -47,6 +52,7 @@
 #include <microsoft.ui.dispatching.h>
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.controls.h>
+#include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.markup.h>
 #include <windows.ui.xaml.data.h>
 #include <windows.ui.xaml.media.h>
@@ -268,6 +274,123 @@ static void default_style_checks()
           SUCCEEDED(control->get_Background(background.GetAddressOf())) && background);
 }
 
+/* the first element under @o (depth first, @o included) whose runtime
+ * class is @cls, and how many there are */
+static int find_class(IInspectable *o, const wchar_t *cls, std::vector<ctl::ComPtr<IInspectable>> *found)
+{
+    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
+    ctl::ComPtr<wux::IDependencyObject> dobj;
+    HSTRING name = nullptr;
+    int n = 0;
+    if (o && SUCCEEDED(o->GetRuntimeClassName(&name)) && is(name, cls)) {
+        n++;
+        if (found)
+            found->push_back(o);
+    }
+    WindowsDeleteString(name);
+    INT32 count = 0;
+    if (FAILED(as(o, dobj.GetAddressOf())) || FAILED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())) ||
+        FAILED(vth->GetChildrenCount(dobj.Get(), &count)))
+        return n;
+    for (INT32 i = 0; i < count; i++) {
+        ctl::ComPtr<wux::IDependencyObject> child;
+        if (SUCCEEDED(vth->GetChild(dobj.Get(), i, child.GetAddressOf())) && child)
+            n += find_class(child.Get(), cls, found);
+    }
+    return n;
+}
+
+/* the rest of Calculator's WinUI 2 controls (step 32.5's ninth part):
+ * NavigationView and RadioButtons, each templated alone, and a page as
+ * Calculator's declares them (a NavigationView with NavigationViewItems in
+ * MenuItems, RadioButtons with RadioButton items); the RadioButtons
+ * measured and arranged, with the ItemsRepeater (WinUI 2's Repeater) in
+ * its template */
+static void navigation_checks()
+{
+    templated(L"NavigationView");
+    templated(L"RadioButtons");
+
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> page;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(
+            L"<UserControl " XMLNS XMLNS_X L"xmlns:muxc='using:Microsoft.UI.Xaml.Controls'><StackPanel>"
+            L"<muxc:NavigationView x:Name='Nav' PaneDisplayMode='LeftMinimal' IsBackButtonVisible='Collapsed' "
+            L"IsSettingsVisible='False' Height='300'><muxc:NavigationView.MenuItems>"
+            L"<muxc:NavigationViewItemHeader x:Name='Calc' Content='Calculator'/>"
+            L"<muxc:NavigationViewItem x:Name='Standard' Content='Standard'/>"
+            L"<muxc:NavigationViewItem x:Name='Scientific' Content='Scientific'/>"
+            L"<muxc:NavigationViewItemSeparator/>"
+            L"</muxc:NavigationView.MenuItems><TextBlock Text='0'/></muxc:NavigationView>"
+            L"<muxc:RadioButtons x:Name='Theme' Header='Theme' SelectedIndex='1'>"
+            L"<RadioButton Content='Light'/><RadioButton Content='Dark'/><RadioButton Content='Use system setting'/>"
+            L"</muxc:RadioButtons></StackPanel></UserControl>").Get(),
+            page.GetAddressOf()) : E_FAIL;
+    CHECK_HR("a page with a NavigationView (NavigationViewItems in MenuItems) and RadioButtons loaded from markup", hr);
+    if (FAILED(hr)) {
+        why();
+        return;
+    }
+    ctl::ComPtr<wux::IFrameworkElement> root;
+    ctl::ComPtr<IInspectable> navo, item, theme;
+    CHECK("its controls found by name", SUCCEEDED(as(page.Get(), root.GetAddressOf())) &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Nav").Get(), navo.GetAddressOf())) && navo &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Standard").Get(), item.GetAddressOf())) && item &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Theme").Get(), theme.GetAddressOf())) && theme);
+    HSTRING name = nullptr;
+    CHECK("the NavigationViewItem, Microsoft.UI.Xaml.Controls.NavigationViewItem", item &&
+          SUCCEEDED(item->GetRuntimeClassName(&name)) && is(name, L"Microsoft.UI.Xaml.Controls.NavigationViewItem"));
+    WindowsDeleteString(name);
+
+    /* MenuItems filled from the property element: the parser added the
+     * four items to NavigationView's IVector<Object> */
+    ctl::ComPtr<wuxm::IXamlType> navType;
+    ctl::ComPtr<wuxm::IXamlMember> menuItems;
+    ctl::ComPtr<IInspectable> itemsValue;
+    ctl::ComPtr<wf::Collections::IVector<IInspectable *>> items;
+    UINT32 count = 0;
+    CHECK("NavigationView.MenuItems: the four items added from markup",
+          SUCCEEDED(winui2_provider()->GetXamlTypeByFullName(
+              wrl_wrappers::HStringReference(L"Microsoft.UI.Xaml.Controls.NavigationView").Get(), navType.GetAddressOf())) &&
+          navType && SUCCEEDED(navType->GetMember(wrl_wrappers::HStringReference(L"MenuItems").Get(), menuItems.GetAddressOf())) &&
+          menuItems && SUCCEEDED(menuItems->GetValue(navo.Get(), itemsValue.GetAddressOf())) && itemsValue &&
+          SUCCEEDED(as(itemsValue.Get(), items.GetAddressOf())) && SUCCEEDED(items->get_Size(&count)) && count == 4);
+
+    /* layout: Measure and Arrange the RadioButtons (no window: the layout
+     * pass an element's parent runs), which applies its template and runs
+     * its ItemsRepeater's layout.  (NavigationView's layout waits on the
+     * composition shapes its pane button's AnimatedIcon draws with) */
+    ctl::ComPtr<wux::IUIElement> ui;
+    hr = as(theme.Get(), ui.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = ui->Measure(wf::Size{400, 600});
+    if (SUCCEEDED(hr))
+        hr = ui->Arrange(wf::Rect{0, 0, 400, 600});
+    CHECK_HR("the RadioButtons measured and arranged", hr);
+
+    /* its items and SelectedIndex, from markup.  (The ItemsRepeater makes
+     * the items' containers from OnApplyTemplate, an override the Windows
+     * projection does not produce yet: the next part) */
+    ctl::ComPtr<wuxm::IXamlType> rbType;
+    ctl::ComPtr<wuxm::IXamlMember> rbItems, rbIndex;
+    ctl::ComPtr<IInspectable> rbValue, indexValue;
+    ctl::ComPtr<wf::Collections::IVector<IInspectable *>> rbList;
+    ctl::ComPtr<wf::IReference<INT32>> index;
+    INT32 selected = -1;
+    count = 0;
+    CHECK("RadioButtons.Items: the three RadioButtons added from markup",
+          SUCCEEDED(winui2_provider()->GetXamlTypeByFullName(
+              wrl_wrappers::HStringReference(L"Microsoft.UI.Xaml.Controls.RadioButtons").Get(), rbType.GetAddressOf())) &&
+          rbType && SUCCEEDED(rbType->GetMember(wrl_wrappers::HStringReference(L"Items").Get(), rbItems.GetAddressOf())) &&
+          rbItems && SUCCEEDED(rbItems->GetValue(theme.Get(), rbValue.GetAddressOf())) && rbValue &&
+          SUCCEEDED(as(rbValue.Get(), rbList.GetAddressOf())) && SUCCEEDED(rbList->get_Size(&count)) && count == 3);
+    CHECK("RadioButtons.SelectedIndex: 1, as the markup sets it", rbType &&
+          SUCCEEDED(rbType->GetMember(wrl_wrappers::HStringReference(L"SelectedIndex").Get(), rbIndex.GetAddressOf())) &&
+          rbIndex && SUCCEEDED(rbIndex->GetValue(theme.Get(), indexValue.GetAddressOf())) && indexValue &&
+          SUCCEEDED(as(indexValue.Get(), index.GetAddressOf())) && SUCCEEDED(index->get_Value(&selected)) && selected == 1);
+}
+
 static void winui2_checks()
 {
     if (!s_mux)
@@ -436,6 +559,7 @@ static void winui2_checks()
              SUCCEEDED(appResources->get_MergedDictionaries(merged.GetAddressOf())) && merged ?
              merged->Append(dictionary.Get()) : E_FAIL);
     default_style_checks();
+    navigation_checks();
 
     /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
      * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/
@@ -680,6 +804,74 @@ static void uwp_parent()
     CHECK("the UWP package removed", appx(L"remove NovaOS.XamlUwpTest") == 0);
 }
 
+/* the type of WinUI 2's IVector<Object> properties (NavigationView's
+ * MenuItems, RadioButtons' Items), as the XAML compiler writes it into an
+ * app's XamlTypeInfo when the app's markup fills one as a property element:
+ * a collection whose items the parser adds to the property's vector
+ * (WinUI 2's own provider has no such type; on Windows, too, the app's
+ * generated provider is the one that answers for it) */
+static const wchar_t s_object_vector[] = L"Windows.Foundation.Collections.IVector`1<Object>";
+
+class ObjectVectorType : public wuxm::IXamlType
+{
+public:
+    LONG m_refs = 1;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (!out) return E_POINTER;
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IInspectable) || iid == __uuidof(wuxm::IXamlType)) {
+            *out = static_cast<wuxm::IXamlType *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&m_refs); }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        LONG r = InterlockedDecrement(&m_refs);
+        if (!r) delete this;
+        return (ULONG)r;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG *n, IID **iids) override { *n = 0; *iids = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING *name) override { *name = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel *t) override { *t = BaseTrust; return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE get_BaseType(wuxm::IXamlType **r) override { *r = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_ContentProperty(wuxm::IXamlMember **r) override { *r = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_FullName(HSTRING *r) override
+    {
+        return WindowsCreateString(s_object_vector, (UINT32)wcslen(s_object_vector), r);
+    }
+    HRESULT STDMETHODCALLTYPE get_IsArray(::boolean *r) override { *r = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_IsCollection(::boolean *r) override { *r = true; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_IsConstructible(::boolean *r) override { *r = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_IsDictionary(::boolean *r) override { *r = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_IsMarkupExtension(::boolean *r) override { *r = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_IsBindable(::boolean *r) override { *r = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_ItemType(wuxm::IXamlType **r) override { *r = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_KeyType(wuxm::IXamlType **r) override { *r = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_UnderlyingType(wux::Interop::TypeName *r) override
+    {
+        r->Kind = wux::Interop::TypeKind_Metadata;
+        return WindowsCreateString(s_object_vector, (UINT32)wcslen(s_object_vector), &r->Name);
+    }
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable **r) override { *r = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateFromString(HSTRING, IInspectable **r) override { *r = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetMember(HSTRING, wuxm::IXamlMember **r) override { *r = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE AddToVector(IInspectable *instance, IInspectable *value) override
+    {
+        ctl::ComPtr<wf::Collections::IVector<IInspectable *>> vector;
+        HRESULT hr = reinterpret_cast<IUnknown *>(instance)->QueryInterface(__uuidof(wf::Collections::IVector<IInspectable *>),
+                                                                             reinterpret_cast<void **>(vector.GetAddressOf()));
+        return SUCCEEDED(hr) ? vector->Append(value) : hr;
+    }
+    HRESULT STDMETHODCALLTYPE AddToMap(IInspectable *, IInspectable *, IInspectable *) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE RunInitializer() override { return S_OK; }
+};
+
 /* the framework started as wuxamltest starts it; the app's Application is
  * its IXamlMetadataProvider, as a WinUI 2 app's (its generated XamlTypeInfo
  * hands the framework WinUI 2's types) */
@@ -724,12 +916,20 @@ public:
     HRESULT STDMETHODCALLTYPE GetXamlType(wux::Interop::TypeName type, wuxm::IXamlType **result) override
     {
         *result = nullptr;
+        if (type.Name && !wcscmp(WindowsGetStringRawBuffer(type.Name, nullptr), s_object_vector)) {
+            *result = new ObjectVectorType;
+            return S_OK;
+        }
         wuxm::IXamlMetadataProvider *p = winui2_provider();
         return p ? p->GetXamlType(type, result) : S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetXamlTypeByFullName(HSTRING name, wuxm::IXamlType **result) override
     {
         *result = nullptr;
+        if (name && !wcscmp(WindowsGetStringRawBuffer(name, nullptr), s_object_vector)) {
+            *result = new ObjectVectorType;
+            return S_OK;
+        }
         wuxm::IXamlMetadataProvider *p = winui2_provider();
         return p ? p->GetXamlTypeByFullName(name, result) : S_OK;
     }
@@ -819,6 +1019,21 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Automation.Peers.ButtonAutomationPeer", L"Windows.UI.Xaml.Hosting.ElementCompositionPreview",
     L"Windows.UI.Xaml.Markup.XamlReader",
     L"Windows.UI.Xaml.Controls.Primitives.RangeBase", L"Windows.UI.Xaml.Controls.UserControl", L"Windows.UI.Xaml.Controls.Panel",
+    /* (NavigationView's SelectionModel raises PropertyChanged; WinUI 2's
+     * peers ask AutomationPeer's statics; ItemsRepeater's data source
+     * raises CollectionChanged when an items vector changes) */
+    L"Windows.UI.Xaml.Data.PropertyChangedEventArgs", L"Windows.UI.Xaml.Automation.Peers.AutomationPeer",
+    L"Windows.UI.Xaml.Interop.NotifyCollectionChangedEventArgs",
+    /* (and what NavigationView, RadioButtons and ItemsRepeater make in
+     * code: transforms for their animations, the pane's SplitView, tool
+     * tips, RadioButtons' items) */
+    L"Windows.UI.Xaml.Media.ScaleTransform", L"Windows.UI.Xaml.Media.TranslateTransform",
+    L"Windows.UI.Xaml.Media.CompositeTransform", L"Windows.UI.Xaml.Media.RotateTransform",
+    L"Windows.UI.Xaml.Media.TransformGroup", L"Windows.UI.Xaml.Media.Animation.Storyboard",
+    L"Windows.UI.Xaml.Controls.SplitView", L"Windows.UI.Xaml.Controls.ToolTip",
+    L"Windows.UI.Xaml.Controls.RadioButton", L"Windows.UI.Xaml.Controls.StackPanel",
+    L"Windows.UI.Xaml.Controls.Canvas", L"Windows.UI.Xaml.Controls.ContentPresenter",
+    L"Windows.UI.Xaml.Shapes.Rectangle",
     /* (and, for the UWP start-up, the view source Application.Start hands
      * CoreApplication.Run and the view it makes) */
     L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView"};

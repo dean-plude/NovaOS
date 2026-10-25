@@ -487,7 +487,10 @@ static NtDriver *new_driver(const char *service, const char *image, const char *
 
 static void free_driver(NtDriver *drv)
 {
-    if (drv->obj) kfree(drv->obj->DriverName.Buffer);
+    if (drv->obj) {
+        NtIoFreeDriverExtensions(drv->obj);
+        kfree(drv->obj->DriverName.Buffer);
+    }
     kfree(drv->obj);
     kfree(drv->reg_path.Buffer);
     kfree(drv->ext.ServiceKeyName.Buffer);

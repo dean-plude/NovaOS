@@ -118,6 +118,8 @@ void      NtIoInit(void);
 NtDriver *NtIoDriverOf(NT_DRIVER_OBJECT *obj);
 void      NtIoAddDriver(NtDriver *drv);
 void      NtIoRemoveDriver(NtDriver *drv);
+/* Free the extensions IoAllocateDriverObjectExtension gave @drv's object */
+void      NtIoFreeDriverExtensions(NT_DRIVER_OBJECT *drv);
 /* Whether @path (an NT path without its \??\ or \\.\ prefix) names a
  * Windows device: \Device\<name>[\...], or a link a driver made in
  * \DosDevices (<link>[\...]) */

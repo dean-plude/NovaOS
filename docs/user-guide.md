@@ -331,26 +331,37 @@ Windows' installed programs list.
 
 ### App packages
 
-Windows app packages (`.msix`, `.appx`) install with `appx`, or by
-opening the file.  Installing and removing need an administrator (UAC
-asks; Windows does this through a system service NovaOS does not have
-yet):
+Windows app packages (`.msix`, `.appx`) and bundles (`.msixbundle`,
+`.appxbundle`) install with `appx`, or by opening the file.  Installing
+and removing need an administrator (UAC asks; Windows does this through
+a system service NovaOS does not have yet):
 
-    sudo appx install C:\Downloads\app.msix -AllowUnsigned
+    sudo appx install C:\Downloads\Microsoft.VCLibs.x64.14.00.Desktop.appx
+    sudo appx install C:\Downloads\app.msixbundle
     appx list
     appx start NovaOS.PackageTest_rtg2wbn51qgvw!App
     sudo appx remove NovaOS.PackageTest
 
-The package's files are checked against its block map, unpacked into
-`C:\Programs\WindowsApps`, and each application gets a Start menu
-entry; an application started from there belongs to its package as on
-Windows.  NovaOS does not verify package signatures yet, so signed
-packages (the Microsoft Store's, and most downloads) are refused rather
-than installed unchecked.  An unsigned package installs only with
-`-AllowUnsigned` and if its publisher carries Microsoft's "unsigned"
-marker (`OID.2.25.311729368913984317654407730594956997722=1`), as on
-Windows 11.  Bundles (`.msixbundle`) and packages that need framework
-packages are not installed yet.
+The package's files are checked against its block map and its signature
+is verified as Windows verifies it: the signature must cover the
+package exactly as it is, chain to a trusted root (the Microsoft roots
+NovaOS ships, or one you add with `certutil -addstore Root`) and name
+the package's publisher; a package that fails any of that is not
+installed.  The files are unpacked into `C:\Programs\WindowsApps`, and
+each application gets a Start menu entry; an application started from
+there belongs to its package as on Windows.  An unsigned package
+installs only with `-AllowUnsigned` and if its publisher carries
+Microsoft's "unsigned" marker
+(`OID.2.25.311729368913984317654407730594956997722=1`), as on Windows 11.
+
+A package that needs framework packages (the Visual C++ runtime
+`Microsoft.VCLibs`, `Microsoft.UI.Xaml`, the .NET Native framework and
+runtime) installs once they are installed: install the frameworks first
+(`appx` names the missing one).  Its programs then find the frameworks'
+DLLs and Windows Runtime classes, and a framework is not removed while a
+package uses it.  From a bundle, `appx` installs the application package
+for this computer (x64); its language and scale resource packages are
+not installed yet.
 
 ### Drivers
 
@@ -497,6 +508,10 @@ netsh advfirewall set publicprofile state on
 Rules and profiles are kept where Windows keeps them, under
 `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy`
 ([design](design/network-security.md)).
+
+![The network icon's question on a new network](screenshots/firewall-network-prompt.png)
+
+![Settings > Firewall](screenshots/settings-firewall.png)
 
 **Sound** plays through the newest output device.  Settings > Sound picks
 another device and sets each device's volume; the choices are kept across

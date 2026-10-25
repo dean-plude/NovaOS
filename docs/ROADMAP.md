@@ -23,7 +23,9 @@ NovaOS 0.1.0, the first release, was published on 2026-10-04 from the
 from the `v0.2.0` tag, after Phase 33, the everyday-OS phase (step 29.1 stays
 open until its ISO boots on the T14). Since 0.1 every green
 CI run on a push to `main` republishes a rolling **latest** release with
-that commit's `nova.iso`. The release closed Phase 22 except its checks
+that commit's `nova.iso`. NovaOS 0.2.1 "Starlight" ([draft
+notes](releases/0.2.1.md)) follows once Phase 32 (`Windows.UI.Xaml`, WinUI 2
+and app packages) is complete. The 0.1 release closed Phase 22 except its checks
 on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
 are complete, and Phases 24 and 25 are partly done.
 
@@ -1200,10 +1202,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   its DirectComposition device, and what the first frame makes after it
   (the island's `FocusController`, the window's present target, the
   popup, print, full-window media and transition roots' peers, the focus
-  event args); a page test window now runs to its checks.  Left: the
-  framework's control styles stop at `EntranceThemeTransition` (the theme
-  transitions' code, which 32.5's data binding part builds), so nothing
-  is laid out yet; then the page drawn, typed into and clicked.
+  event args); a page test window now runs to its checks.  Page-drawn
+  part done: the page's first frame, a `Border`, a `TextBlock` and a
+  `Button`, laid out and drawn through the framework's composition tree
+  (its render walk, composition nodes, transforms, geometry clips and
+  DirectWrite text drawn into DirectComposition surfaces) on
+  `dcomp.dll`'s compositor, which gained mask brushes (XAML's text is
+  its glyphs' alpha over a colour brush), surface brush and clip
+  transforms; NovaOS's `XamlIsland` now asks for its content, the
+  island's `CompositionSurfaceHelper` is NovaOS's own, and the window
+  closes cleanly; checked in `xamlpagetest`, with
+  [a screenshot](screenshots/winui3-first-page.png).  Left: the page
+  typed into (a `TextBox`) and clicked (the `Button`).
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`
@@ -1302,9 +1312,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   packages refused until their signatures can be verified), package
   identity in kernel32, packaged Windows Runtime classes,
   `ApplicationActivationManager`, `resources.pri` through Microsoft's MRT
-  Core (`MRM.dll`), test `appxtest`.  Next, for Calculator: bundles,
-  framework packages (VCLibs, `Microsoft.UI.Xaml`) and package signature
-  verification, after 32.3 to 32.5.
+  Core (`MRM.dll`), test `appxtest`.  Second part done: package
+  signatures verified as Windows' APPX SIP verifies them (wintrust; the
+  publisher must be the signer), framework packages (a dependent finds
+  them at their minimum version; the loader searches a packaged
+  program's frameworks, `GetCurrentPackageInfo`, the frameworks' Windows
+  Runtime classes) and bundles (their application package for x64);
+  Microsoft's signed VCLibs, `Microsoft.UI.Xaml.2.8` and .NET Native
+  framework packages install unchanged.
+  Next: a download route for the Store's Calculator bundle and its
+  frameworks, then starting it once 32.5 gives it its controls.
 
 ---
 

@@ -15731,6 +15731,36 @@ apply their templates.
 - **Next (32.5):** `NavigationView` with `ItemsRepeater`, and
   `RadioButtons`, the rest of Calculator's controls.
 
+## A XAML page draws
+
+The seventh part of step 32.4 of `Windows.UI.Xaml` on NovaOS
+([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a WinUI 3
+page in a `Window` is laid out and drawn, built from Microsoft's sources.
+
+![A WinUI 3 page on NovaOS](../screenshots/winui3-first-page.png)
+
+- **Layout:** the control styles load now that the theme transitions are
+  built, and measure and arrange run over the page (scroll data, geometry
+  clips, transforms, the core `SolidColorBrush`, text options).
+- **Drawing:** the framework's render walk, hardware walk and composition
+  nodes, its DirectWrite text renderer and Direct2D text drawing context,
+  and its DirectComposition surfaces, all from Microsoft's sources.
+- **NovaOS's side:** its `XamlIsland` now asks for the island's content
+  (without it the island's root visual was never connected) and its own
+  `CompositionSurfaceHelper` (the Windows App SDK's is closed);
+  `d2d1.dll` answers `ID2D1DeviceContext1` to `7`; `dcomp.dll`'s
+  compositor gained mask brushes (XAML draws text as its glyphs' alpha
+  over a colour brush), surface brush transforms and clip transforms.
+- **Window.Close:** the page's window now closes and the app exits
+  cleanly.
+- **UWP teardown:** NovaOS's FrameworkUdk no longer keeps a counted
+  reference to a UWP window's position listener, so the window is freed
+  (and stops subclassing the `CoreWindow`) when the XAML core shuts down,
+  not left to take the `CoreWindow`'s last messages.
+- **Test:** `xamlpagetest` draws a `Border`, a `TextBlock` and a
+  `Button` and screenshots them (64-bit).
+- **Next (32.4):** typing into a `TextBox` and clicking the `Button`.
+
 ## WinUI 2's theme resources load whole
 
 The seventh part of step 32.5 of `Windows.UI.Xaml` on NovaOS
@@ -15783,6 +15813,49 @@ resources load much further.
 - **Next (32.5):** the theme resources stop at `RevealBrush.TargetTheme`;
   then the controls' default styles and Calculator's controls.
 
+## App packages: signatures, framework packages and bundles
+
+Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
+[design](../design/windows-ui-xaml.md)), second part: signed packages,
+the framework packages apps depend on, and bundles.
+
+- **Signatures:** wintrust's `WinVerifyTrust` verifies an app package
+  (`.msix`, `.appx` and their bundles) as Windows' APPX SIP does: the
+  hashes in `AppxSignature.p7x` of the package's zip records, central
+  directory, content types, block map and code integrity catalog, then
+  the signer's signature, timestamp and chain to a trusted root.  `appx`
+  installs a signed package only when it verifies and its publisher is
+  the signer; a package whose signature fails is never installed.
+  Microsoft's own signed `Microsoft.VCLibs.140.00.UWPDesktop`,
+  `Microsoft.UI.Xaml.2.8` and .NET Native framework packages install
+  unchanged in a local boot.
+- **Certificates:** crypt32 now reads certificates that mark Microsoft's
+  application policies extension, or certificate policies other than
+  anyPolicy, critical, as CryptoAPI does: the Store's signing
+  certificates and the older Microsoft Time-Stamp PCA 2010 do.  Before,
+  their signatures could not be checked at all.
+- **Framework packages:** a framework (`Microsoft.VCLibs`,
+  `Microsoft.UI.Xaml`, the .NET Native framework and runtime) installs
+  like any package.  A package that depends on one installs once the
+  framework is in, at its minimum version, and a framework is not
+  removed while a package uses it.  The kernel's loader searches a
+  packaged program's frameworks for its DLLs (its package graph, as
+  Windows' loader does), kernel32's `GetCurrentPackageInfo` lists the
+  graph, and ole32 finds the frameworks' Windows Runtime classes.
+- **Bundles:** a `.msixbundle` or `.appxbundle` is checked as a package
+  is, then its application package for this computer installs from
+  inside it.
+- `appxtest` now also trusts a test root and installs a signed framework
+  package and a signed bundle whose program finds the framework's DLL
+  and class; it refuses the framework before its root is trusted, with
+  its records changed after signing, or with another publisher, the
+  bundle before its framework, and removing the framework while the app
+  uses it.  `tools/appx/signappx.py` signs the test packages.
+
+Not yet: a bundle's language and scale resource packages, and a
+download route for the Microsoft Store's Calculator bundle, whose
+frameworks these packages are.
+
 ## A re-enabled KMDF driver starts every time
 
 A CI fix: `pnputil /enable-device` on the edu device sometimes failed
@@ -15798,6 +15871,26 @@ shards.
 - **Fix:** a driver object's extensions are freed with it
   (`kernel/nt/io.c`, `NtIoFreeDriverExtensions`), as Windows frees them
   when it deletes the object.
+
+## NovaOS 0.2.1 "Starlight": the notes and the screenshots
+
+Release prep for 0.2.1, code name "Starlight", the release that follows
+Phase 32. [docs/releases/0.2.1.md](../releases/0.2.1.md) is the release's
+text: the XAML framework under `Windows.UI.Xaml`, WinUI 2 and app
+packages, drive C: as the installed NTFS volume, the rebuilt Settings, the
+Windows Firewall, and the rest since 0.2, with how to start it and its
+known limits. The version stays 0.2.0 until Phase 32's last steps
+(32.4 to 32.6) have merged; the bump to 0.2.1 and the notes' final words
+come in a pull request of their own, then the owner pushes the `v0.2.1`
+tag ([releasing.md](releasing.md)).
+
+Screenshots retaken from the `latest` ISO of 2026-10-25: the desktop,
+**Install NovaOS** and Setup's confirm page (NTFS only now), Settings'
+Display and Printers pages, and two new ones for the firewall: the
+network icon's question on a new network and Settings > Firewall
+([screenshots/README.md](../screenshots/README.md)). The README's status
+says that Kepler's ISO boots on the T14 and that NovaOS installs on a real
+Hyper-V host, and lists Phase 32.
 
 ## WinUI 2's NavigationView and RadioButtons
 

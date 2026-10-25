@@ -23,9 +23,12 @@
 //   WindowPositionChanged_RegisterListener and _UnregisterListener: a
 //     window on a CoreWindow (dxaml/lib JupiterWindow.cpp, a UWP app's
 //     window) registers to hear when the CoreWindow moves, so its popups
-//     and text input follow.  The listeners are kept (each held until it
-//     unregisters) and not called yet: NovaOS's CoreWindow
-//     (twinapi.appcore) reports no moves to FrameworkUdk.
+//     and text input follow.  The listeners are kept, not counted: the
+//     window unregisters only in its destructor, so a counted reference
+//     would keep it (and its subclass of the CoreWindow's window) alive
+//     after the XAML core is gone, into the CoreWindow's WM_NCDESTROY.
+//     They are not called yet: NovaOS's CoreWindow (twinapi.appcore)
+//     reports no moves to FrameworkUdk.
 #include <windows.h>
 #include <FrameworkUdk/FinalUnhandledErrorDetected.h>
 #include <FrameworkUdk/VisualDiagnosticsPort.h>
@@ -103,7 +106,6 @@ HRESULT WindowPositionChanged_RegisterListener(PositionListener *listener)
     AcquireSRWLockExclusive(&g_lock);
     for (auto &l : g_position_listeners) {
         if (!l) {
-            listener->AddRef();
             l = listener;
             hr = S_OK;
             break;
@@ -115,16 +117,13 @@ HRESULT WindowPositionChanged_RegisterListener(PositionListener *listener)
 
 HRESULT WindowPositionChanged_UnregisterListener(PositionListener *listener)
 {
-    PositionListener *found = nullptr;
     AcquireSRWLockExclusive(&g_lock);
     for (auto &l : g_position_listeners) {
         if (l && l == listener) {
-            found = l;
             l = nullptr;
             break;
         }
     }
     ReleaseSRWLockExclusive(&g_lock);
-    if (found) found->Release();
     return S_OK;
 }

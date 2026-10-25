@@ -18,7 +18,7 @@ From the bottom up:
 | App model | `twinapi.appcore.dll` (`CoreApplication`, views), `Windows.UI.dll` (`CoreWindow`, `CoreDispatcher`) | `twinapi.appcore.dll` (`userland/twinapi_appcore`), step 32.1 |
 | Composition | `Windows.UI.Composition` (the system compositor's WinRT API, over DirectComposition and Direct3D 11) | `dcomp.dll` (`userland/dcomp/composition.c`), step 32.2 |
 | XAML | `Windows.UI.Xaml.dll` (system XAML) and WinUI 2 (`Microsoft.UI.Xaml.dll`, controls on top of it) | Microsoft's MIT XAML source, built for NovaOS, steps 32.3 on |
-| Packages | AppX/MSIX deployment, `resources.pri` (MRT), the app container | `appx.exe`, `MRM.dll` (MRT Core, MIT), package identity in kernel32; bundles, frameworks, signatures and the app container to write |
+| Packages | AppX/MSIX deployment, `resources.pri` (MRT), the app container | `appx.exe` (bundles, framework packages, signatures verified by wintrust's APPX SIP), `MRM.dll` (MRT Core, MIT), package identity and graph in kernel32 and the loader; resource packages and the app container to write |
 
 ## Where the XAML framework comes from
 
@@ -741,14 +741,47 @@ vendors.
      `XamlSourceFocusNavigationRequest`, the core transforms' base
      `CTransform`, and Microsoft's `DependencyObjectAbstractionHelpers`
      in place of the test stubs that answered "no peer".
-   - *Left:* the page test's window now runs to its checks, but the
-     framework's control styles fail to load at `EntranceThemeTransition`
-     (its `PrepareState` is in the theme transitions' code,
-     `LayoutTransition_partial.cpp` with `ThemeGenerator`, which 32.5's
-     data binding part builds), so nothing is laid out; and
-     `Window.Close` then crashes in `WindowChrome::OnContentChanged`.
-     Then the page drawn, typed into and clicked.  The page test is kept
-     for that part.
+   - *Seventh part, the page drawn.*  The control styles load now that
+     the theme transitions are built (`ThemeAnimations.cpp`, the theme
+     animations helper, the visual state classes and their generated
+     peers), and layout, measure and arrange run over the page
+     (`ScrollData`, `RectangleGeometry` for the scroll presenter's clip,
+     the transforms and `TransformGroup`, the core `SolidColorBrush`,
+     `TextOptions` and `Typography`).  Two duties of the closed Windows
+     App SDK code fall to NovaOS: its `XamlIsland` calls
+     `CXamlIslandRoot::SetContentRequested` once the island is made
+     (without it the composition tree host never connects the island's
+     root visual), and its `CompositionSurfaceHelper`
+     (`src/composition_helper.cpp`) begins a surface's drawing with no
+     gutters (NovaOS samples surfaces nearest, so none are needed).  The
+     frame is then the framework's own: the render walk and hardware walk
+     (`core/hw`: the content renderers, `hwcompnode.cpp`,
+     `hwrealization.cpp`), the composition nodes
+     (`components/comptree`: `HWCompNode.cpp`, `HWCompNodeWinRT.cpp`)
+     with their transform expressions
+     (`WinRTExpressionConversionContext`, `WinRTLocalExpressionBuilder`,
+     `XamlLocalTransformBuilder`), the text block's DirectWrite renderer
+     (`DWriteTextRenderer`, `TextObject`) and the native text's Direct2D
+     drawing context (`D2DTextDrawingContext`, `SharedWicBitmap`,
+     `TextHelpers`), the text highlight renderer
+     (`components/text`), the platform layer's DirectComposition
+     surfaces (`DCompSurface`, `DCompSurfaceFactoryManager`,
+     `DCompSurfaceMonitor`) and the shadow effect policy
+     (`EffectPolicyHelper`).  NovaOS's side: `d2d1.dll` answers
+     `ID2D1DeviceContext1` to `7` (XAML asks for `4` for every glyph
+     run); `windowsnumerics.h` converts its `float2` ... `quaternion` to
+     and from the ABI `Vector2` ... `Quaternion` as the Windows SDK's
+     does; and `dcomp.dll`'s compositor gained `CompositionMaskBrush`
+     (XAML draws text as its glyphs' alpha mask over a colour brush),
+     `ICompositionSurfaceBrush2`/`3` (a brush's own transform, which
+     places each glyph run's texture) and `ICompositionClip2` (a clip's
+     transform).  `xamlpagetest` now draws the page: a SteelBlue
+     `Border`, "Hello from NovaOS" in the theme's font and a "Click me"
+     `Button` ([screenshot](../screenshots/winui3-first-page.png)), then
+     closes the window and exits cleanly.
+   - *Left for 32.4:* typing into a `TextBox` and clicking the `Button`
+     in the test (the island's pointer and keyboard input into the
+     framework's input manager), and a pixel check of the drawn frame.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the
@@ -1186,10 +1219,40 @@ vendors.
    whose folder holds its program; ole32 looks up its classes there
    first; `ApplicationActivationManager` (twinapi.appcore) starts an
    application by AUMID.  `MRM.dll` is MRT Core built unchanged, and
-   `SHLoadIndirectString` reads `ms-resource:` strings with it.  A signed
-   package is refused until NovaOS verifies package signatures (PKCS#7
-   over the block map and the chain, as Windows does); bundles and
-   framework packages come with Calculator.
+   `SHLoadIndirectString` reads `ms-resource:` strings with it.  Second
+   part: package signatures, framework packages and bundles.
+   wintrust's `WinVerifyTrust` verifies an app package as Windows' APPX
+   SIP does (`verify_package`): `AppxSignature.p7x` is "PKCX" and a
+   PKCS#7 SignedData whose SpcIndirectDataContent digest is "APPX" and
+   the named hashes of the unsigned package, `AXPC` (every byte before
+   the signature's own zip record), `AXCD` (the central directory without
+   the signature's record, its zip64 and end records put back as they
+   were), `AXCT` (`[Content_Types].xml`), `AXBM` (`AppxBlockMap.xml`,
+   whose block hashes cover every file) and `AXCI` (the code integrity
+   catalog); then the signer, timestamp and chain as for a PE.  The
+   algorithm was checked against Microsoft's own packages: their signed
+   `Microsoft.VCLibs.140.00.UWPDesktop`, `Microsoft.UI.Xaml.2.8` and
+   `Microsoft.NET.Native.Framework.2.2` install unchanged in a local boot
+   (crypt32 reads the critical application policies and certificate
+   policies their certificates carry, as CryptoAPI does);
+   `tools/appx/signappx.py` signs the test packages with it.  `appx` also requires the manifest's publisher
+   to be the signer's subject.  A framework package (`Framework` true)
+   installs like any other; a dependent's `PackageDependency` must find
+   one of the framework's family at its minimum version, and is recorded
+   machine-wide (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
+   AppModel\PackageRepository`: `Packages\<full>\Dependencies` names the
+   frameworks' families, `Families\<family>` the installed one's `Path`).
+   The kernel's loader (`package_graph` in kernel/um/um.c) searches those
+   folders for a packaged program's DLLs after its own, kernel32's
+   `GetCurrentPackageInfo` lists the graph, and ole32 looks up the
+   frameworks' Windows Runtime classes after the package's own.  A bundle
+   is checked as a package (block map, signature, publisher), then its
+   application package for x64 (else neutral, else x86) installs from
+   inside it, covered by the bundle's signature.  Not yet: a bundle's
+   resource packages, and a Store download route for Calculator's own
+   bundle (its frameworks: `Microsoft.UI.Xaml.2.8`, `Microsoft.VCLibs.
+   140.00` and `.UWPDesktop`, `Microsoft.NET.Native.Framework.2.2` and
+   `.Runtime.2.2`).
 
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

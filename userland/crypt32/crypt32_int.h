@@ -45,5 +45,8 @@ __declspec(dllexport) BOOL WINAPI CertAddEncodedCertificateToStore(HANDLE h, DWO
 /* certs.c: a memory store, and adding DER certificates to it */
 HANDLE crypt32_memory_store(void);
 BOOL crypt32_store_add_der(HANDLE store, const BYTE *der, DWORD n, const void **out);
+/* a certificate's encoding parsed as CryptoAPI reads it (0, or Mbed TLS's error) */
+struct mbedtls_x509_crt;
+int crypt32_parse_crt(struct mbedtls_x509_crt *crt, const unsigned char *der, size_t n);
 
 #endif

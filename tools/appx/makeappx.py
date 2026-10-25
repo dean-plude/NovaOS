@@ -14,7 +14,9 @@ signed (no AppxSignature.p7x); NovaOS's appx.exe, as Windows, installs an
 unsigned package only when asked to (-AllowUnsigned) and only if its
 publisher carries Microsoft's "unsigned" OID.
 
-pack() is what tools/appx/mktest.py packs the appx self-test's packages with.
+pack() is what tools/appx/mktest.py packs the appx self-test's packages
+with, pack_bundle() its bundle (as MakeAppx.exe "bundle" makes one), and
+tools/appx/signappx.py signs them.
 """
 import base64
 import hashlib
@@ -27,6 +29,7 @@ import zlib
 BLOCK = 65536
 STAMP = (0, 0x21)                       # (DOS time, date: 1980-01-01, so packages are reproducible)
 TYPES = {'exe': 'application/x-msdownload', 'dll': 'application/x-msdownload', 'pri': 'application/octet-stream',
+         'msix': 'application/vnd.ms-appx', 'appx': 'application/vnd.ms-appx',
          'png': 'image/png', 'xml': 'text/xml', 'txt': 'text/plain', 'winmd': 'application/octet-stream'}
 
 
@@ -50,11 +53,12 @@ def zip_name(name):
     return urllib.parse.quote(name.replace('\\', '/'), safe="/!$&'()*+,;=-._~@[]")
 
 
-def pack(files, change=None, signature=None):
+def pack(files, change=None, signature=None, stored=()):
     """the package's bytes for @files [(name, bytes)]; @change, when given,
     maps a name to the bytes written for it in place of the bytes the
     block map hashes (a damaged package, for tests); @signature, the bytes
-    of an AppxSignature.p7x (outside the block map, as a signature is)"""
+    of an AppxSignature.p7x (outside the block map, as a signature is);
+    the files named in @stored are not deflated (a bundle's packages)"""
     zip_, central, entries = b'', b'', []
 
     def add(name, data, method, packed):
@@ -73,13 +77,15 @@ def pack(files, change=None, signature=None):
                 '<BlockMap xmlns="http://schemas.microsoft.com/appx/2010/blockmap" '
                 'HashMethod="http://www.w3.org/2001/04/xmlenc#sha256">']
     for name, data in files:
-        packed, sizes = deflate_blocks(data)
+        store = name in stored
+        packed, sizes = (data, None) if store else deflate_blocks(data)
         written = (change or {}).get(name)
         if written is not None:
-            packed = deflate_blocks(written)[0]
-        lfh = add(name, written if written is not None else data, 8, packed)
-        blocks = ''.join('<Block Hash="%s" Size="%d"/>' % (
-            base64.b64encode(hashlib.sha256(data[i:i + BLOCK]).digest()).decode(), sizes[k])
+            packed = written if store else deflate_blocks(written)[0]
+        lfh = add(name, written if written is not None else data, 0 if store else 8, packed)
+        blocks = ''.join('<Block Hash="%s"%s/>' % (
+            base64.b64encode(hashlib.sha256(data[i:i + BLOCK]).digest()).decode(),
+            '' if store else ' Size="%d"' % sizes[k])
             for k, i in enumerate(range(0, len(data), BLOCK)))
         blockmap.append('<File Name="%s" Size="%d" LfhSize="%d">%s</File>' % (
             name.replace('/', '\\').replace('&', '&amp;').replace('"', '&quot;'), len(data), lfh, blocks))
@@ -97,6 +103,28 @@ def pack(files, change=None, signature=None):
         add('AppxSignature.p7x', signature, 0, signature)
     end = struct.pack('<IHHHHIIH', 0x06054b50, 0, 0, len(entries), len(entries), len(central), len(zip_), 0)
     return zip_ + central + end
+
+
+def bundle_manifest(name, publisher, version, packages):
+    """AppxMetadata/AppxBundleManifest.xml for @packages [(type,
+    architecture, file name, bytes, resource id)], as MakeAppx bundle
+    writes it"""
+    rows = []
+    for kind, arch, fn, data, rid in packages:
+        rows.append('<Package Type="%s" Version="%s"%s%s FileName="%s" Size="%d"><Resources>%s</Resources></Package>' % (
+            kind, version, ' Architecture="%s"' % arch if arch else '', ' ResourceId="%s"' % rid if rid else '', fn,
+            len(data), '<Resource Scale="200"/>' if kind == 'resource' else '<Resource Language="en-us"/>'))
+    return ('<?xml version="1.0" encoding="UTF-8"?>\r\n<Bundle xmlns="http://schemas.microsoft.com/appx/2013/bundle" '
+            'SchemaVersion="5.0"><Identity Name="%s" Publisher="%s" Version="%s"/><Packages>%s</Packages></Bundle>' % (
+                name, publisher.replace('"', '&quot;'), version, ''.join(rows))).encode('utf-8')
+
+
+def pack_bundle(name, publisher, version, packages):
+    """a bundle (.msixbundle) of @packages (as bundle_manifest takes them):
+    each stored, the bundle's manifest, block map and content types"""
+    files = [(fn, data) for _, _, fn, data, _ in packages]
+    files.append(('AppxMetadata\\AppxBundleManifest.xml', bundle_manifest(name, publisher, version, packages)))
+    return pack(files, stored={fn for fn, _ in files[:-1]})
 
 
 def folder_files(folder):

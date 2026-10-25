@@ -675,12 +675,13 @@ run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'msitest', 'mk
 for n in sorted(os.listdir(msipkg)):
     built.append((f'\\Tests\\Msi\\{n}', os.path.join(msipkg, n)))
 # 3a2. and the app packages the appxtest self-test installs (tools/appx/mktest.py:
-# a copy of appxtest run packaged, its Windows Runtime class and resources.pri)
+# a copy of appxtest run packaged, its Windows Runtime class and resources.pri;
+# a signed framework package and a signed bundle that depends on it)
 appxpkg = os.path.join(out, 'appxtest')
 run([sys.executable, os.path.join(os.path.dirname(HERE), 'tools', 'appx', 'mktest.py'), appxpkg,
      os.path.join(out, 'appxtest.exe')])
 for n in sorted(os.listdir(appxpkg)):
-    if n.endswith('.msix'):
+    if n.endswith(('.msix', '.msixbundle', '.cer')):
         built.append((f'\\Tests\\Appx\\{n}', os.path.join(appxpkg, n)))
 # (and the one winui2test installs, tools/appx/mkuwptest.py: a copy of
 # winui2test run as a UWP app)

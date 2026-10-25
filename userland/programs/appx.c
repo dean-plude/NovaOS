@@ -14,12 +14,18 @@
  * - checks every file against the block map (the files are taken only if
  *   each block's hash matches, and a file the block map does not name is
  *   refused), as Windows' deployment does before it trusts a byte;
- * - takes a signed package (AppxSignature.p7x) only when its signature
- *   can be verified: NovaOS does not verify package signatures yet, so a
- *   signed package is refused, never installed unchecked; an unsigned one
- *   only as Windows 11 takes one: with -AllowUnsigned and a publisher
- *   carrying Microsoft's "unsigned" OID (OID.2.25.3117293689139843176545
- *   07730594956997722=1);
+ * - checks its signature (AppxSignature.p7x) as Windows' deployment does:
+ *   wintrust's WinVerifyTrust verifies it (the APPX SIP's digests of the
+ *   package's records, directory, content types, block map and code
+ *   integrity catalog, the signer's signature and timestamp, its chain to
+ *   a trusted root for code signing), and the manifest's publisher must
+ *   be the signer's subject; a package whose signature fails is never
+ *   installed.  An unsigned one only as Windows 11 takes one: with
+ *   -AllowUnsigned and a publisher carrying Microsoft's "unsigned" OID
+ *   (OID.2.25.311729368913984317654407730594956997722=1);
+ * - finds each framework package it depends on (PackageDependency: the
+ *   name, publisher and minimum version) among the installed ones, else
+ *   refuses with the framework's name: install the framework first;
  * - unpacks the files into C:\Programs\WindowsApps\<package full name>;
  * - records the package in the current user's package repository
  *   (HKCU\...\AppModel\Repository: Packages, their Applications and the
@@ -28,12 +34,29 @@
  *   ApplicationActivationManager read, and the package's in-process
  *   Windows Runtime classes (HKCU\Software\Classes\ActivatableClasses\
  *   Package\<full name>), which ole32's RoGetActivationFactory finds
- *   for the package's processes;
+ *   for the processes of the package and of those that depend on it;
+ * - records it machine-wide too, with its dependencies, in
+ *   HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModel\
+ *   PackageRepository (Packages\<full name>: Path, Framework, and
+ *   Dependencies, the frameworks' family names in the manifest's order;
+ *   Families\<family>: the installed member's FullName and Path): the
+ *   kernel's loader searches a packaged program's frameworks for its DLLs
+ *   from there (its package graph, as Windows' loader does), and kernel32's
+ *   GetCurrentPackageInfo lists the graph;
  * - names the package and its applications with the manifest's strings,
  *   an "ms-resource:" string looked up in the package's resources.pri
  *   (shlwapi's SHLoadIndirectString, through MRM.dll);
  * - adds each listed application to the Start menu.
- * Installing and removing write C:\Programs, so they need an
+ * A bundle (.msixbundle, .appxbundle: AppxMetadata\AppxBundleManifest.xml
+ * naming the packages inside it) is checked as a package is (its block
+ * map, its signature, its publisher), then the application package for
+ * this processor (x64, else neutral, else x86) is installed from inside
+ * it; a package inside a signed bundle is covered by the bundle's
+ * signature, and checked by its own when it has one.
+ * A framework package (<Framework>true</Framework>) is installed the same
+ * way; it has no applications, and it is not removed while a package that
+ * depends on it is installed.
+ * Installing and removing write C:\Programs and HKLM, so they need an
  * administrator (Windows' deployment service does that as the system for
  * any user; NovaOS has no such service yet).
  * A package's full name and family name are made as Windows makes them:
@@ -41,10 +64,10 @@
  * the first 64 bits of the SHA-256 of the publisher's name (UTF-16) in
  * Crockford's base 32.
  *
- * Not yet: bundles (.msixbundle), framework dependencies (a package that
- * names one is refused with the dependency's name), optional and resource
- * packages, and the manifest's other extensions (file types, protocols,
- * background tasks, out-of-process servers).
+ * Not yet: a bundle's resource packages (languages, scales: the
+ * application package's own resources are used), optional packages, and
+ * the manifest's other extensions (file types, protocols, background
+ * tasks, out-of-process servers).
  */
 #include <windows.h>
 #include <objbase.h>
@@ -352,14 +375,22 @@ typedef struct {
 } Server;
 
 typedef struct {
+    WCHAR *name, *publisher, *minver;
+    WCHAR family[300], full[300];          /* (the installed one it was found as) */
+} Dependency;
+
+typedef struct {
     Zip zip;
     Node *manifest;
     WCHAR *name, *publisher, *version, *arch, *resource, *display, *pubdisplay;
     WCHAR family[300], full[300], pubid[16];
+    int framework;
     App apps[16];
     int napps;
     Server servers[16];
     int nservers;
+    Dependency deps[16];
+    int ndeps;
 } Package;
 
 /* the publisher id: SHA-256 of the publisher (UTF-16LE), its first 8
@@ -434,9 +465,14 @@ static int check_blockmap(Package *pk)
         if (at < e->usize) return fail("%ls: fewer blocks than data", name);
         e->covered = 1;
     }
+    /* (the content types, the signature and, in a signed package, its code
+     * integrity catalog are outside the block map: the signature's own
+     * digests cover them) */
+    int sig = zip_find(&pk->zip, L"AppxSignature.p7x") != NULL;
     for (int i = 0; i < pk->zip.count; i++) {
         const WCHAR *n = pk->zip.e[i].name;
-        if (!pk->zip.e[i].covered && wcscmp(n, L"[Content_Types].xml") && wcscmp(n, L"AppxSignature.p7x"))
+        if (!pk->zip.e[i].covered && wcscmp(n, L"[Content_Types].xml") && wcscmp(n, L"AppxSignature.p7x") &&
+            !(sig && !wcscmp(n, L"AppxMetadata\\CodeIntegrity.cat")))
             return fail("%ls: in the package but not in its block map", n);
     }
     return 1;
@@ -466,10 +502,18 @@ static int read_manifest(Package *pk)
     Node *props = child(p, L"Properties");
     pk->display = wcopy(text(child(props, L"DisplayName")));
     pk->pubdisplay = wcopy(text(child(props, L"PublisherDisplayName")));
+    pk->framework = !_wcsicmp(text(child(props, L"Framework")), L"true");
     Node *deps = child(p, L"Dependencies");
-    for (Node *d = child(deps, L"PackageDependency"); d; d = sibling(d, L"PackageDependency"))
-        return fail("needs the framework package %ls, which is not installed (framework packages are not installed yet)",
-                    attr(d, L"Name") ? attr(d, L"Name") : L"(no name)");
+    for (Node *d = child(deps, L"PackageDependency"); d && pk->ndeps < 16; d = sibling(d, L"PackageDependency")) {
+        Dependency *dp = &pk->deps[pk->ndeps++];
+        dp->name = wcopy(attr(d, L"Name"));
+        dp->publisher = wcopy(attr(d, L"Publisher"));
+        dp->minver = wcopy(attr(d, L"MinVersion") ? attr(d, L"MinVersion") : L"0.0.0.0");
+        WCHAR id[16];
+        if (!dp->name || !dp->publisher) return fail("a package dependency needs Name and Publisher", L"");
+        if (!publisher_id(dp->publisher, id)) return fail("%ls: cannot hash the publisher", dp->publisher);
+        swprintf(dp->family, 300, L"%ls_%ls", dp->name, id);
+    }
     for (Node *a = child(child(p, L"Applications"), L"Application"); a && pk->napps < 16;
          a = sibling(a, L"Application")) {
         App *ap = &pk->apps[pk->napps++];
@@ -644,6 +688,7 @@ static int start_menu_link(const WCHAR *exe, const WCHAR *dir, const WCHAR *name
  * there.  A program of the package that has just exited may still hold
  * its files for a moment (its image is unmapped after the process is
  * signalled), so the delete is tried again for a few seconds. */
+static void machine_forget(const WCHAR *full);
 static int remove_package(const WCHAR *full)
 {
     WCHAR k[600], root[MAX_PATH] = L"", lnk[MAX_PATH], fam[300];
@@ -678,6 +723,7 @@ static int remove_package(const WCHAR *full)
         swprintf(k, 600, L"%ls\\Families\\%ls", REPO_KEY, fam);
         RegDeleteKeyW(HKEY_CURRENT_USER, k);                    /* (only once empty) */
     }
+    machine_forget(full);
     swprintf(k, 600, L"%ls\\%ls", CLASSES_KEY, full);
     RegDeleteTreeW(HKEY_CURRENT_USER, k);
     RegDeleteKeyW(HKEY_CURRENT_USER, k);
@@ -704,32 +750,271 @@ static int family_packages(const WCHAR *family, WCHAR out[][300], int cap)
     return n;
 }
 
-static int install(const WCHAR *file, int allow_unsigned)
+/* ---- signatures (wintrust's WinVerifyTrust, the APPX SIP) ---- */
+
+typedef struct { DWORD cbData; BYTE *pbData; } Blob_;
+typedef struct {
+    DWORD dwVersion;
+    Blob_ SerialNumber;
+    struct { LPSTR pszObjId; Blob_ Parameters; } SignatureAlgorithm;
+    Blob_ Issuer;
+    FILETIME NotBefore, NotAfter;
+    Blob_ Subject;
+} CertInfo_;
+typedef struct { DWORD dwCertEncodingType; BYTE *pbCertEncoded; DWORD cbCertEncoded; CertInfo_ *pCertInfo; HANDLE hCertStore; } CertContext_;
+typedef struct { DWORD cbStruct; const CertContext_ *pCert; } ProvCert_;
+typedef struct { DWORD cbStruct; GUID gSubject; LPCWSTR pcwszDisplayName; DWORD cbMemObject; BYTE *pbMemObject;
+                 DWORD cbMemSignedMsg; BYTE *pbMemSignedMsg; } BlobInfo_;
+typedef struct {
+    DWORD cbStruct;
+    LPVOID pPolicyCallbackData, pSIPClientData;
+    DWORD dwUIChoice, fdwRevocationChecks, dwUnionChoice;
+    void *pInfo;
+    DWORD dwStateAction;
+    HANDLE hWVTStateData;
+    WCHAR *pwszURLReference;
+    DWORD dwProvFlags, dwUIContext;
+    void *pSignatureSettings;
+} TrustData_;
+__declspec(dllimport) LONG WINAPI WinVerifyTrust(HWND w, GUID *action, LPVOID data);
+__declspec(dllimport) PVOID WINAPI WTHelperProvDataFromStateData(HANDLE h);
+__declspec(dllimport) PVOID WINAPI WTHelperGetProvSignerFromChain(PVOID prov, DWORD signer, BOOL counter, DWORD index);
+__declspec(dllimport) PVOID WINAPI WTHelperGetProvCertFromChain(PVOID signer, DWORD index);
+__declspec(dllimport) DWORD WINAPI CertNameToStrW(DWORD enc, Blob_ *name, DWORD type, LPWSTR s, DWORD n);
+static GUID GENERIC_VERIFY_V2_ = { 0x00AAC56B, 0xCD44, 0x11D0, { 0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE } };
+
+/* @s with the spaces around its separators taken out and its attribute
+ * names in capitals, for comparing names ("CN=A, O=B" is "CN=A,O=B") */
+static void name_key(const WCHAR *s, WCHAR *out, size_t cap)
+{
+    size_t o = 0;
+    int in_value = 0;
+    for (; *s && o + 1 < cap; s++) {
+        if (*s == ',' || *s == '+') {
+            while (o && out[o - 1] == ' ') o--;
+            out[o++] = *s;
+            while (s[1] == ' ') s++;
+            in_value = 0;
+        } else if (*s == '=' && !in_value) {
+            while (o && out[o - 1] == ' ') o--;
+            out[o++] = '=';
+            while (s[1] == ' ') s++;
+            in_value = 1;
+        } else out[o++] = in_value ? *s : (WCHAR)towupper(*s);
+    }
+    out[o] = 0;
+}
+
+/* @data's signature verified, its signer the publisher @publisher; 1 when
+ * it verifies, 0 (said why) when not */
+static int check_signature(const BYTE *data, size_t n, const WCHAR *publisher, const WCHAR *what)
+{
+    BlobInfo_ bi = { sizeof bi };
+    bi.cbMemObject = (DWORD)n;
+    bi.pbMemObject = (BYTE *)data;
+    bi.pcwszDisplayName = what;
+    TrustData_ td = { sizeof td };
+    td.dwUIChoice = 2;                                  /* WTD_UI_NONE */
+    td.dwUnionChoice = 3;                               /* WTD_CHOICE_BLOB */
+    td.pInfo = &bi;
+    td.dwStateAction = 1;                               /* WTD_STATEACTION_VERIFY */
+    LONG r = WinVerifyTrust(NULL, &GENERIC_VERIFY_V2_, &td);
+    WCHAR subject[600] = L"", a[600], b[600];
+    if (!r) {
+        void *sg = WTHelperGetProvSignerFromChain(WTHelperProvDataFromStateData(td.hWVTStateData), 0, FALSE, 0);
+        ProvCert_ *pc = sg ? WTHelperGetProvCertFromChain(sg, 0) : NULL;
+        if (pc && pc->pCert)                            /* CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG */
+            CertNameToStrW(1, &pc->pCert->pCertInfo->Subject, 3 | 0x02000000, subject, 600);
+    }
+    td.dwStateAction = 2;                               /* WTD_STATEACTION_CLOSE */
+    WinVerifyTrust(NULL, &GENERIC_VERIFY_V2_, &td);
+    if (r) {
+        const char *why = (unsigned long)r == 0x800B0109 ? "its signer's certificate does not chain to a trusted root "
+                                                           "(trust the signer's root certificate to install it)" :
+                          (unsigned long)r == 0x80096010 ? "its contents do not match its signature: it was changed "
+                                                           "after it was signed" :
+                          (unsigned long)r == 0x800B0101 ? "its signer's certificate has expired and the signature "
+                                                           "has no timestamp" :
+                          (unsigned long)r == 0x800B0100 ? "its signature cannot be read" :
+                          "its signature does not verify";
+        printf("appx: %ls: %s (0x%08lx), so it is not installed\n", what, why, (unsigned long)r);
+        return 0;
+    }
+    name_key(subject, a, 600);
+    name_key(publisher, b, 600);
+    if (wcscmp(a, b)) {
+        printf("appx: %ls: its publisher (%ls) is not its signer (%ls), so it is not installed\n", what, publisher, subject);
+        return 0;
+    }
+    return 1;
+}
+
+/* ---- the machine's package repository (the loader's package graphs) ---- */
+
+#define MACHINE_REPO L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository"
+
+static HKEY machine_key(const WCHAR *kind, const WCHAR *name, const WCHAR *sub, int create)
+{
+    WCHAR k[700];
+    HKEY h = NULL;
+    swprintf(k, 700, L"%ls\\%ls\\%ls%ls%ls", MACHINE_REPO, kind, name, sub ? L"\\" : L"", sub ? sub : L"");
+    if (create ? RegCreateKeyExW(HKEY_LOCAL_MACHINE, k, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &h, NULL)
+               : RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h))
+        return NULL;
+    return h;
+}
+
+static void machine_forget(const WCHAR *full)
+{
+    WCHAR k[700], fam[300], have[300];
+    const WCHAR *us = wcschr(full, '_'), *last = wcsrchr(full, '_');
+    swprintf(k, 700, L"%ls\\Packages\\%ls", MACHINE_REPO, full);
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, k);
+    RegDeleteKeyW(HKEY_LOCAL_MACHINE, k);
+    if (!us || !last) return;
+    swprintf(fam, 300, L"%.*ls%ls", (int)(us - full), full, last);
+    HKEY f = machine_key(L"Families", fam, NULL, 0);
+    int mine = f && get_str(f, L"FullName", have, 300) && !_wcsicmp(have, full);
+    if (f) RegCloseKey(f);
+    if (mine) {
+        swprintf(k, 700, L"%ls\\Families\\%ls", MACHINE_REPO, fam);
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, k);
+    }
+}
+
+/* the installed packages that depend on the family @family: their full
+ * names in @out, a count */
+static int dependents(const WCHAR *family, WCHAR out[][300], int cap)
+{
+    WCHAR k[400], full[300], v[300], name[16];
+    HKEY h;
+    int n = 0;
+    swprintf(k, 400, L"%ls\\Packages", MACHINE_REPO);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &h)) return 0;
+    for (DWORD i = 0; n < cap; i++) {
+        DWORD len = 300;
+        if (RegEnumKeyExW(h, i, full, &len, NULL, NULL, NULL, NULL)) break;
+        HKEY d = machine_key(L"Packages", full, L"Dependencies", 0);
+        for (DWORD j = 0; d; j++) {
+            swprintf(name, 16, L"%lu", (unsigned long)j);
+            if (!get_str(d, name, v, 300)) break;
+            if (!_wcsicmp(v, family)) { wcscpy(out[n++], full); break; }
+        }
+        if (d) RegCloseKey(d);
+    }
+    RegCloseKey(h);
+    return n;
+}
+
+/* the full name's parts: its architecture */
+static void full_arch(const WCHAR *full, WCHAR *out, size_t cap)
+{
+    const WCHAR *a = wcschr(full, '_');
+    a = a ? wcschr(a + 1, '_') : NULL;
+    const WCHAR *e = a ? wcschr(a + 1, '_') : NULL;
+    out[0] = 0;
+    if (a && e && (size_t)(e - a - 1) < cap) { memcpy(out, a + 1, (e - a - 1) * sizeof(WCHAR)); out[e - a - 1] = 0; }
+}
+
+/* each of @pk's dependencies found among the installed packages: one of
+ * its family, at least its minimum version, for this package's processor
+ * (or neutral) */
+static int find_dependencies(Package *pk)
+{
+    for (int i = 0; i < pk->ndeps; i++) {
+        Dependency *d = &pk->deps[i];
+        WCHAR members[16][300], arch[16];
+        int n = family_packages(d->family, members, 16);
+        d->full[0] = 0;
+        for (int m = 0; m < n && !d->full[0]; m++) {
+            const WCHAR *v = wcschr(members[m], '_');
+            full_arch(members[m], arch, 16);
+            if (v && version_number(v + 1) >= version_number(d->minver) &&
+                (!wcscmp(arch, L"neutral") || !wcscmp(arch, pk->arch) || !wcscmp(pk->arch, L"neutral")))
+                wcscpy(d->full, members[m]);
+        }
+        if (!d->full[0]) {
+            printf("appx: %ls: needs the framework package %ls %ls or newer (%ls, from %ls), which is not installed: "
+                   "install it first\n", pk->full, d->name, d->minver, pk->arch, d->publisher);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* ---- installing ---- */
+
+/* @data (@n bytes, read from @file): a package, or a bundle of packages;
+ * @signed_by: the verified bundle it came from (its publisher), if any */
+static int install_data(const BYTE *data, size_t n, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by);
+
+static int install_bundle(Package *b, const BYTE *data, size_t n, const WCHAR *file, int allow_unsigned)
+{
+    Entry *e = zip_find(&b->zip, L"AppxMetadata\\AppxBundleManifest.xml");
+    BYTE *m = zip_read(&b->zip, e);
+    Node *root = m ? xml_parse(m, (size_t)e->usize) : NULL;
+    Node *bundle = child(root, L"Bundle"), *id = child(bundle, L"Identity");
+    const WCHAR *publisher = attr(id, L"Publisher");
+    if (!id || !attr(id, L"Name") || !publisher) return !fail("%ls: the bundle's manifest has no identity", file);
+    if (!check_blockmap(b)) return 1;
+    int sig = zip_find(&b->zip, L"AppxSignature.p7x") != NULL;
+    if (sig && !check_signature(data, n, publisher, file)) return 1;
+    if (!sig && !allow_unsigned)
+        return !fail("%ls: the bundle is not signed (an unsigned bundle installs only with -AllowUnsigned)", file);
+    if (!sig && !wcsstr(publisher, UNSIGNED_OID))
+        return !fail("%ls: an unsigned bundle's publisher must carry " UNSIGNED_OID_A " (Windows' rule)", publisher);
+    /* the application package for this processor */
+    static const WCHAR *const order[] = { L"x64", L"neutral", L"x86" };
+    Node *pick = NULL;
+    for (int o = 0; o < 3 && !pick; o++)
+        for (Node *p = child(child(bundle, L"Packages"), L"Package"); p && !pick; p = sibling(p, L"Package")) {
+            const WCHAR *type = attr(p, L"Type"), *arch = attr(p, L"Architecture");
+            if ((!type || !_wcsicmp(type, L"application")) && arch && !_wcsicmp(arch, order[o])) pick = p;
+        }
+    if (!pick) return !fail("%ls: the bundle has no application package for this processor (x64, neutral, x86)", file);
+    for (Node *p = child(child(bundle, L"Packages"), L"Package"); p; p = sibling(p, L"Package"))
+        if (attr(p, L"Type") && !_wcsicmp(attr(p, L"Type"), L"resource"))
+            printf("appx: %ls: a resource package, not installed (resource packages are not installed yet)\n",
+                   attr(p, L"FileName") ? attr(p, L"FileName") : L"(no name)");
+    WCHAR name[MAX_PATH];
+    const WCHAR *fn = attr(pick, L"FileName");
+    if (!fn || wcslen(fn) >= MAX_PATH) return !fail("%ls: the bundle names a package without a file", file);
+    wcscpy(name, fn);
+    for (WCHAR *c = name; *c; c++) if (*c == '/') *c = '\\';
+    Entry *inner = zip_find(&b->zip, name);
+    BYTE *bytes = inner ? zip_read(&b->zip, inner) : NULL;
+    if (!bytes) return !fail("%ls: in the bundle's manifest but not in the bundle", name);
+    printf("appx: %ls: installing %ls from the bundle\n", file, name);
+    return install_data(bytes, (size_t)inner->usize, name, allow_unsigned, sig ? publisher : NULL);
+}
+
+static int install_data(const BYTE *data, size_t size, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by)
 {
     Package pk;
     memset(&pk, 0, sizeof pk);
-    HANDLE h = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    LARGE_INTEGER size;
-    if (h == INVALID_HANDLE_VALUE || !GetFileSizeEx(h, &size) || size.QuadPart > 0x7FFFFFFF) {
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-        return !fail("%ls: cannot be read", file);
+    if (!zip_open(&pk.zip, data, (unsigned long long)size)) return !fail("%ls: not a package (not a zip)", file);
+    if (!zip_find(&pk.zip, L"AppxManifest.xml") && zip_find(&pk.zip, L"AppxMetadata\\AppxBundleManifest.xml")) {
+        if (signed_by) return !fail("%ls: a bundle inside a bundle", file);
+        return install_bundle(&pk, data, size, file, allow_unsigned);
     }
-    BYTE *data = xmalloc((size_t)size.QuadPart);
-    DWORD got = 0;
-    BOOL ok = ReadFile(h, data, (DWORD)size.QuadPart, &got, NULL) && got == size.QuadPart;
-    CloseHandle(h);
-    if (!ok) return !fail("%ls: cannot be read", file);
-    if (!zip_open(&pk.zip, data, (unsigned long long)size.QuadPart)) return !fail("%ls: not a package (not a zip)", file);
     if (!read_manifest(&pk) || !check_blockmap(&pk)) return 1;
 
-    /* the signature: verified, or (unsigned) allowed as Windows allows it */
-    if (zip_find(&pk.zip, L"AppxSignature.p7x"))
-        return !fail("%ls: a signed package: NovaOS cannot verify package signatures yet, so it is not installed",
-                     pk.full);
-    if (!allow_unsigned)
-        return !fail("%ls: the package is not signed (an unsigned package installs only with -AllowUnsigned)", pk.full);
-    if (!wcsstr(pk.publisher, UNSIGNED_OID))
-        return !fail("%ls: an unsigned package's publisher must carry " UNSIGNED_OID_A " (Windows' rule)", pk.publisher);
+    /* the signature: verified, or (unsigned) allowed as Windows allows it;
+     * inside a signed bundle, the bundle's covers it */
+    if (zip_find(&pk.zip, L"AppxSignature.p7x")) {
+        if (!check_signature(data, size, pk.publisher, pk.full)) return 1;
+    } else if (signed_by) {
+        WCHAR a[600], b[600];
+        name_key(signed_by, a, 600);
+        name_key(pk.publisher, b, 600);
+        if (wcscmp(a, b)) return !fail("%ls: its publisher is not its bundle's", pk.full);
+    } else {
+        if (!allow_unsigned)
+            return !fail("%ls: the package is not signed (an unsigned package installs only with -AllowUnsigned)", pk.full);
+        if (!wcsstr(pk.publisher, UNSIGNED_OID))
+            return !fail("%ls: an unsigned package's publisher must carry " UNSIGNED_OID_A " (Windows' rule)", pk.publisher);
+    }
+    if (!find_dependencies(&pk)) return 1;
 
     /* the family's other versions: an older one is replaced, a newer one kept */
     WCHAR others[16][300];
@@ -777,7 +1062,30 @@ static int install(const WCHAR *file, int allow_unsigned)
     resolve(pk.full, pk.pubdisplay, pubdisplay, 512);
     set_str(pkey, L"DisplayName", display);
     set_str(pkey, L"PublisherDisplayName", pubdisplay);
+    set_dword(pkey, L"Framework", (DWORD)pk.framework);
     RegCloseKey(pkey);
+    /* machine-wide: the package, its dependencies' families, its family's member */
+    HKEY mk = machine_key(L"Packages", pk.full, NULL, 1), fk = machine_key(L"Families", pk.family, NULL, 1);
+    if (!mk || !fk) {
+        if (mk) RegCloseKey(mk);
+        if (fk) RegCloseKey(fk);
+        remove_package(pk.full);
+        return !fail("%ls: cannot be recorded in the machine's package repository (HKLM)", pk.full);
+    }
+    set_str(mk, L"Path", root);
+    set_dword(mk, L"Framework", (DWORD)pk.framework);
+    RegCloseKey(mk);
+    set_str(fk, L"FullName", pk.full);
+    set_str(fk, L"Path", root);
+    RegCloseKey(fk);
+    if (pk.ndeps && (mk = machine_key(L"Packages", pk.full, L"Dependencies", 1))) {
+        for (int i = 0; i < pk.ndeps; i++) {
+            WCHAR name[16];
+            swprintf(name, 16, L"%d", i);
+            set_str(mk, name, pk.deps[i].family);
+        }
+        RegCloseKey(mk);
+    }
     for (int i = 0; i < pk.napps; i++) {
         App *a = &pk.apps[i];
         WCHAR name[512], exe[MAX_PATH * 2], lnk[MAX_PATH] = L"";
@@ -808,9 +1116,26 @@ static int install(const WCHAR *file, int allow_unsigned)
             RegCloseKey(k);
         }
     }
-    printf("Installed %ls (%ls)\n", pk.full, display);
+    printf("Installed %ls (%ls)%ls\n", pk.full, display, pk.framework ? L", a framework package" : L"");
+    for (int i = 0; i < pk.ndeps; i++) printf("  using the framework %ls\n", pk.deps[i].full);
     for (int i = 0; i < pk.napps; i++) printf("  start it with: appx start %ls!%ls\n", pk.family, pk.apps[i].id);
     return 0;
+}
+
+static int install(const WCHAR *file, int allow_unsigned)
+{
+    HANDLE h = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    LARGE_INTEGER size;
+    if (h == INVALID_HANDLE_VALUE || !GetFileSizeEx(h, &size) || size.QuadPart > 0x7FFFFFFF) {
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        return !fail("%ls: cannot be read", file);
+    }
+    BYTE *data = xmalloc((size_t)size.QuadPart);
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, data, (DWORD)size.QuadPart, &got, NULL) && got == size.QuadPart;
+    CloseHandle(h);
+    if (!ok) return !fail("%ls: cannot be read", file);
+    return install_data(data, (size_t)size.QuadPart, file, allow_unsigned, NULL);
 }
 
 /* each installed package: the callback gets its full name and its key */
@@ -868,6 +1193,13 @@ static int remove_cmd(const WCHAR *what)
     each_package(match_one, &m);
     if (!m.n) return !fail("%ls: no such package is installed", what);
     for (int i = 0; i < m.n; i++) {
+        WCHAR fam[300], users[4][300];
+        const WCHAR *us = wcschr(m.found[i], '_'), *last = wcsrchr(m.found[i], '_');
+        swprintf(fam, 300, L"%.*ls%ls", (int)(us - m.found[i]), m.found[i], last);
+        if (dependents(fam, users, 4)) {
+            printf("appx: %ls: a framework that %ls uses: remove that first\n", m.found[i], users[0]);
+            return 1;
+        }
         if (!remove_package(m.found[i]))
             return !fail("%ls: unregistered, but its folder could not be deleted (are its files in use?)", m.found[i]);
         printf("Removed %ls\n", m.found[i]);

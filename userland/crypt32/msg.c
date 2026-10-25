@@ -530,7 +530,7 @@ CRYPT32API BOOL WINAPI CryptMsgGetParam(HANDLE h, DWORD type, DWORD index, void 
 static BOOL key_from_cert(const BYTE *der, size_t n, mbedtls_x509_crt *crt)
 {
     mbedtls_x509_crt_init(crt);
-    return mbedtls_x509_crt_parse_der(crt, der, n) == 0;
+    return crypt32_parse_crt(crt, der, n) == 0;
 }
 
 /* ... or from a CERT_PUBLIC_KEY_INFO, encoded back into SubjectPublicKeyInfo */

@@ -1,4 +1,4 @@
 {
   "system": true,
-  "libs": ["shlwapi", "bcrypt", "xmllite"]
+  "libs": ["shlwapi", "bcrypt", "xmllite", "wintrust", "crypt32"]
 }

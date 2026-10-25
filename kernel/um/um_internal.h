@@ -14,6 +14,7 @@
 #define UM_MAX_REGIONS   8192     /* (runtimes such as CoreCLR reserve thousands of ranges) */
 #define UM_MAX_MODULES   1024     /* (Audacity loads about 150, VLC every plugin: about 410) */
 #define UM_MAX_DLL_DIRS  16       /* AddDllDirectory's folders */
+#define UM_MAX_PKG_DIRS  8        /* a packaged program's frameworks (its package graph) */
 #define UM_MAX_THREADS   256      /* (a browser's main process runs well over 64) */
 #define UM_THREAD_MMCSS  0x4E4D   /* NtSetInformationThread class: avrt.dll's MMCSS (um_thread.c) */
 #define UM32_MAX_THREADS 96       /* WoW: the TEB area must stay below KUSER_SHARED_DATA */
@@ -283,6 +284,9 @@ struct UmProcess {
     RamNode    *exe_dir;        /* searched for DLLs before System32 */
     char        dll_dirs[UM_MAX_DLL_DIRS][RAMFS_PATH_MAX];  /* AddDllDirectory's ("": a free slot) */
     char        dll_dir[RAMFS_PATH_MAX];                    /* SetDllDirectory's ("": none) */
+    char        pkg_dirs[UM_MAX_PKG_DIRS][RAMFS_PATH_MAX];  /* its frameworks' folders (package_graph) */
+    int         npkg_dirs;
+    bool        pkg_known;                                  /* (pkg_dirs looked up) */
     UmConsole  *con;
     char        log_line[256];  /* a detached process's unfinished console line (um_console_write) */
     int         log_n;

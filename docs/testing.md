@@ -398,15 +398,16 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   writing, reading or ending a high-integrity one; programs that are not
   elevated refused changes to `C:\Windows`, `C:\Programs` and `HKLM`,
   which they read, and the elevated one making them), `appxtest` (app
-  packages: `appx` install, block map and signature checks, start by
-  AUMID, package identity, `resources.pri`, a packaged Windows Runtime
-  class, remove), Settings: `start ms-settings:display` opens Display,
-  its search box (Ctrl+F, "printer", Enter) goes to Printers; `settings
-  check` draws every page at three window sizes, at its top and scrolled
-  to its end, programs started from the Start menu (Win+S, the name,
-  Enter): `winhello`, a GUI program, with no Terminal window, and
-  `hello`, a console program, in a Terminal, `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
+  packages: `appx` install, block map and signature checks (APPX SIP,
+  publisher), start by AUMID, package identity, `resources.pri`, a
+  packaged Windows Runtime class, framework packages and the package
+  graph, a signed bundle, remove), Settings: `start ms-settings:display`
+  opens Display, its search box (Ctrl+F, "printer", Enter) goes to
+  Printers; `settings check` draws every page at three window sizes, at
+  its top and scrolled to its end, programs started from the Start menu
+  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
+  window, and `hello`, a console program, in a Terminal, `crash kernel`,
+  a deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 

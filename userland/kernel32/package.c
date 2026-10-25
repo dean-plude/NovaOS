@@ -361,6 +361,106 @@ K32 LONG WINAPI PackageIdFromFullName(PCWSTR full, UINT32 flags, UINT32 *len, BY
     return ERROR_SUCCESS;
 }
 
+/* The current package graph: this process's package, then the framework
+ * packages it depends on, in its manifest's order, as appx recorded them
+ * machine-wide (HKLM\...\AppModel\PackageRepository\Packages\<full
+ * name>\Dependencies: their families; Families\<family>\FullName, Path)
+ * and the kernel's loader searches them for its DLLs */
+#define MACHINE_REPO L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository"
+static int graph(WCHAR full[][128], WCHAR path[][MAX_PATH], int cap)
+{
+    if (!current() || cap < 1) return 0;
+    UINT32 n = MAX_PATH;
+    memcpy(full[0], g_me.full, sizeof g_me.full);
+    if (GetPackagePathByFullName(g_me.full, &n, path[0])) path[0][0] = 0;
+    int count = 1;
+    WCHAR key[400];
+    int k = 0;
+    for (const WCHAR *p = MACHINE_REPO L"\\Packages\\"; *p; p++) key[k++] = *p;
+    for (const WCHAR *p = g_me.full; *p && k < 380; p++) key[k++] = *p;
+    for (const WCHAR *p = L"\\Dependencies"; *p && k < 398; p++) key[k++] = *p;
+    key[k] = 0;
+    HKEY deps;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &deps)) return count;
+    for (DWORD i = 0; count < cap; i++) {
+        WCHAR name[12], fam[160], fkey[400];
+        int m = 0;
+        DWORD v = i;
+        do { name[m++] = (WCHAR)('0' + v % 10); v /= 10; } while (v);
+        for (int a = 0, b = m - 1; a < b; a++, b--) { WCHAR t = name[a]; name[a] = name[b]; name[b] = t; }
+        name[m] = 0;
+        if (!reg_str(deps, NULL, name, fam, 160)) break;
+        m = 0;
+        for (const WCHAR *p = MACHINE_REPO L"\\Families\\"; *p; p++) fkey[m++] = *p;
+        for (const WCHAR *p = fam; *p && m < 398; p++) fkey[m++] = *p;
+        fkey[m] = 0;
+        HKEY f;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, fkey, 0, KEY_READ, &f)) continue;
+        if (reg_str(f, NULL, L"FullName", full[count], 128) && reg_str(f, NULL, L"Path", path[count], MAX_PATH)) count++;
+        RegCloseKey(f);
+    }
+    RegCloseKey(deps);
+    return count;
+}
+
+/* GetCurrentPackageInfo: the graph as PACKAGE_INFO records, then their
+ * strings (PACKAGE_FILTER_HEAD: the process's own package only) */
+typedef struct { UINT32 reserved, flags; PWSTR path, packageFullName, packageFamilyName; PackageId packageId; } PackageInfo;
+
+K32 LONG WINAPI GetCurrentPackageInfo(UINT32 flags, UINT32 *len, BYTE *buf, UINT32 *count)
+{
+    WCHAR full[8][128], path[8][MAX_PATH];
+    if (!len) return ERROR_INVALID_PARAMETER;
+    if (!current()) { *len = 0; if (count) *count = 0; return APPMODEL_ERROR_NO_PACKAGE; }
+    int n = graph(full, path, 8);
+    if (flags & 0x10 /* PACKAGE_FILTER_HEAD */) n = 1;
+    UINT32 need = 0;
+    UINT32 idlen[8];
+    for (int i = 0; i < n; i++) {
+        WCHAR fam[160];
+        UINT32 f = 160;
+        idlen[i] = 0;
+        PackageIdFromFullName(full[i], 0, &idlen[i], 0);
+        PackageFamilyNameFromFullName(full[i], &f, fam);
+        need += sizeof(PackageInfo) + (idlen[i] - sizeof(PackageId) + 7) / 8 * 8 +
+                (UINT32)(wlen(path[i]) + 1 + wlen(full[i]) + 1 + f) * sizeof(WCHAR);
+    }
+    if (count) *count = (UINT32)n;
+    if (!buf || *len < need) { *len = need; return ERROR_INSUFFICIENT_BUFFER; }
+    PackageInfo *pi = (PackageInfo *)buf;
+    BYTE *strs = buf + n * sizeof(PackageInfo);
+    for (int i = 0; i < n; i++) {
+        BYTE tmp[sizeof(PackageId) + 512];
+        UINT32 l = sizeof tmp, f = 160;
+        memset(&pi[i], 0, sizeof pi[i]);
+        pi[i].flags = i ? 0x10 /* PACKAGE_PROPERTY_FRAMEWORK */ : 0;
+        if (PackageIdFromFullName(full[i], 0, &l, tmp)) continue;
+        PackageId *id = (PackageId *)tmp;
+        pi[i].packageId = *id;
+        /* its id's strings, moved after the records */
+        UINT32 sl = l - sizeof(PackageId);
+        memcpy(strs, tmp + sizeof(PackageId), sl);
+        PWSTR *fields[4] = { &pi[i].packageId.name, &pi[i].packageId.publisher, &pi[i].packageId.resourceId,
+                             &pi[i].packageId.publisherId };
+        for (int j = 0; j < 4; j++)
+            if (*fields[j]) *fields[j] = (PWSTR)(strs + ((BYTE *)*fields[j] - (tmp + sizeof(PackageId))));
+        strs += (sl + 7) / 8 * 8;
+        WCHAR *w = (WCHAR *)strs;
+        pi[i].path = w;
+        memcpy(w, path[i], (wlen(path[i]) + 1) * sizeof(WCHAR));
+        w += wlen(path[i]) + 1;
+        pi[i].packageFullName = w;
+        memcpy(w, full[i], (wlen(full[i]) + 1) * sizeof(WCHAR));
+        w += wlen(full[i]) + 1;
+        pi[i].packageFamilyName = w;
+        PackageFamilyNameFromFullName(full[i], &f, w);
+        w += f;
+        strs = (BYTE *)w;
+    }
+    *len = need;
+    return ERROR_SUCCESS;
+}
+
 /* A UWP app (an application whose RuntimeBehavior is "windowsApp") runs
  * under the Windows Runtime's policies: it ends with TerminateProcess, its
  * threads start in the Windows Runtime, its window is a CoreWindow.  A

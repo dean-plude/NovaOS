@@ -1309,6 +1309,24 @@ NT_API void *nt_IoGetDriverObjectExtension(NT_DRIVER_OBJECT *drv, void *client_i
     return data;
 }
 
+/* @drv's driver object is freed: its extensions go with it, as Windows
+ * frees them when it deletes the object.  (Left behind, they collided with
+ * the next load's: a new driver object at the same address got
+ * STATUS_OBJECT_NAME_COLLISION for Wdf01000.sys's FxDriver extension, and a
+ * re-enabled KMDF driver's DriverEntry failed.) */
+void NtIoFreeDriverExtensions(NT_DRIVER_OBJECT *drv)
+{
+    IrqState s = spin_lock_irqsave(&g_drvext_lock);
+    DrvExt *gone = NULL;
+    for (DrvExt **pp = &g_drvext; *pp;) {
+        DrvExt *e = *pp;
+        if (e->drv == drv) { *pp = e->next; e->next = gone; gone = e; }
+        else pp = &e->next;
+    }
+    spin_unlock_irqrestore(&g_drvext_lock, s);
+    while (gone) { DrvExt *e = gone; gone = e->next; kfree(e->data); kfree(e); }
+}
+
 /* -----------------------------------------------------------------------
  * Error log and WMI: a driver records events; NovaOS writes error-log
  * entries to the kernel log and has no WMI consumer yet

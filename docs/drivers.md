@@ -89,7 +89,9 @@ The kernel loads the `.sys` into kernel memory and calls its
 programs as `\\.\NAME`, and their `ReadFile`, `WriteFile` and
 `DeviceIoControl` calls reach the driver's dispatch routines as Windows
 IRPs. A driver with files still open unloads when the last one closes;
-one without a `DriverUnload` routine cannot be stopped.
+one without a `DriverUnload` routine cannot be stopped. What an unloaded
+driver allocated with `IoAllocateDriverObjectExtension` goes with its
+driver object, so the next load starts clean.
 
 ## What a Windows driver can use
 

@@ -61,7 +61,8 @@ Materials/Acrylic/AcrylicBrush.vcxitems Materials/Reveal/RevealBrush.vcxitems Ma
 Lights/Lights.vcxitems ImageIcon/ImageIcon.vcxitems IconSource/IconSource.vcxitems AnimatedVisualPlayer/AnimatedVisualPlayer.vcxitems
 AnimatedIcon/AnimatedIcon.vcxitems SplitButton/SplitButton.vcxitems DropDownButton/DropDownButton.vcxitems
 InfoBadge/InfoBadge.vcxitems ProgressBar/ProgressBar.vcxitems ProgressRing/ProgressRing.vcxitems
-SwipeControl/SwipeControl.vcxitems'''.split()
+SwipeControl/SwipeControl.vcxitems Repeater/Repeater.vcxitems
+NavigationView/NavigationView.vcxitems RadioButtons/RadioButtons.vcxitems'''.split()
 
 # dev/dll's own sources (Microsoft.UI.Xaml.Common.targets and the project);
 # module.g.cpp and XamlMetadataProviderGenerated.cpp are generated
@@ -79,6 +80,11 @@ CPPWINRT_PATCHES = [
     # has some) is named as one with no row is, not left as "void* {};"
     ('cppwinrt/helpers.h', '            if (m_return)\n            {\n                name = m_return.Name();',
      '            if (m_return && !m_return.Name().empty())\n            {\n                name = m_return.Name();'),
+    # a runtime class projects its overridable and protected interfaces too,
+    # as the C++/WinRT WinUI 2 pins (2.0.210309.3) does: WinUI 2 calls them
+    # on its own classes (VirtualizingLayoutContext.ItemCountCore())
+    ('cppwinrt/code_writers.h', '            if ((!info.defaulted || info.base) && (!info.is_protected && !info.overridable))',
+     '            if (!info.defaulted || info.base)'),
 ]
 
 
@@ -426,7 +432,11 @@ def fold(out, dirs, srcdirs):
     for s in want:
         target = lower.get(s.lower())
         if target:
-            texts[s] = '#include "%s"\n' % os.path.join(*target)
+            # (by its own name when it goes on with #include_next, which
+            # needs it found through the include path)
+            path = os.path.join(*target)
+            texts[s] = ('#include <%s>\n' % target[1]) if '#include_next' in open(path, errors='replace').read() \
+                else '#include "%s"\n' % path
     for s in has:
         if os.path.exists(os.path.join(dirs[-1], s.replace('\\', '/'))):
             texts[s] = '#include <%s>\n' % s.replace('\\', '/')

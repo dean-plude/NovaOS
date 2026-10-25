@@ -364,8 +364,9 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # framework turns the legacy IMEs off with imm32, the graphics device draws
 # its first text with DirectWrite, an element takes focus with a correlation
 # GUID from rpcrt4, the theme transitions read the theme's animation timings
-# with uxtheme)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme']
+# with uxtheme, ToolTipService follows the display's power state with
+# powrprof)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -908,6 +909,10 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
 # own, src/xaml_island.cpp, roadmap 32.4)
 next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'xaml_island.cpp'))
+# (and ElementSoundPlayerService's statics, which play no sound on a PC:
+# src/element_sound_player.cpp, roadmap 32.5)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'element_sound_player.cpp'))
 _ELEMENTS2_LATER = tuple(x for x in _ELEMENTS2_LATER if x != 'xamlislandroot.cpp')
 CORE_SOURCES[_ELEMENTS2] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
@@ -1230,7 +1235,28 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'BrushTransition_Partial',
     # (and ElementCompositionPreview's statics, which WinUI 2's
     # AnimatedVisualPlayer (ProgressRing's) hangs its visual on)
-    'ElementCompositionPreview')) + tuple(
+    'ElementCompositionPreview',
+    # (and AutomationProperties' statics, which WinUI 2's ItemsRepeater and
+    # NavigationView set names and views through: step 32.5's ninth part)
+    'AutomationProperties',
+    # (and PropertyChangedEventArgs, which WinUI 2's SelectionModel raises
+    # INotifyPropertyChanged with)
+    'PropertyChangedEventArgs',
+    # (and ToolTip with ToolTipService, which NavigationView's template and
+    # code give its buttons)
+    'ToolTip_Partial', 'ToolTipService_Partial',
+    # (and Flyout with FlyoutBase: NavigationView's top pane overflow menu)
+    'Flyout_partial', 'FlyoutBase_partial',
+    # (and SplitView, NavigationView's pane and content)
+    'SplitView_Partial',
+    # (and XamlRoot, which SplitView and the flyouts find an element's
+    # with)
+    'XamlRoot_Partial',
+    # (and NotifyCollectionChangedEventArgs, which WinUI 2's ItemsRepeater
+    # data source raises when an items vector changes)
+    'NotifyCollectionChangedEventArgs_partial',
+    # (and RadioButton with ToggleButton: RadioButtons' items)
+    'ToggleButton_Partial', 'RadioButton_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
                                                       'BindingExpressionBase', 'BindingFailedEventArgs',
                                                       'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
@@ -1246,7 +1272,18 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
                                                       'RotateTransform', 'StackPanel', 'ColumnDefinition',
                                                       'RowDefinition', 'VisualState', 'VisualStateGroup',
                                                       'VisualTransition', 'BrushTransition',
-                                                      'ElementCompositionPreview') +
+                                                      'ElementCompositionPreview', 'PropertyChangedEventArgs',
+                                                      'ToolTip', 'ToolTipTemplateSettings', 'ToolTipService',
+                                                      'Flyout', 'FlyoutBase', 'SplitView', 'SplitViewTemplateSettings',
+                                                      'SplitViewPaneClosingEventArgs', 'XamlRoot',
+                                                      'XamlRootChangedEventArgs',
+                                                      'NotifyCollectionChangedEventArgs', 'ToggleButton',
+                                                      'RadioButton',
+                                                      # (PathIcon, which WinUI 2's AnimatedIcon
+                                                      # composes over: NavigationView's pane button)
+                                                      # (TransformGroup and its collection are
+                                                      # built with the animated peers above)
+                                                      'IconElement', 'PathIcon') +
     _THEME_ANIMATIONS)
 # (with the helper component the pointer-down animation asks,
 # components/themeanimationshelper)

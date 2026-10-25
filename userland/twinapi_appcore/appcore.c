@@ -58,6 +58,7 @@ static const GUID IID_IInspectable_          = { 0xAF86E2E0, 0xB12D, 0x4C6A, { 0
 static const GUID IID_IAgileObject_          = { 0x94EA2B94, 0xE9CC, 0x49E0, { 0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90 } };
 static const GUID IID_IActivationFactory_    = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID IID_IAsyncInfo_            = { 0x00000036, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID IID_IIdleDispatchedHandlerArgs_ = { 0x98BB6A24, 0xDC1C, 0x43CB, { 0xB4, 0xED, 0xD1, 0xC0, 0xEB, 0x23, 0x91, 0xF3 } };
 static const GUID IID_IAsyncAction_          = { 0x5A648006, 0x843A, 0x4DA9, { 0x86, 0x5B, 0x9D, 0x26, 0xE5, 0xDF, 0xAD, 0x7B } };
 static const GUID IID_ICoreApplication_      = { 0x0AACF7A4, 0x5E1D, 0x49DF, { 0x80, 0x34, 0xFB, 0x6A, 0x68, 0xBC, 0x5E, 0xD1 } };
 static const GUID IID_ICoreApplication2_     = { 0x998681FB, 0x1AB6, 0x4B7F, { 0xBE, 0x4A, 0x9A, 0x06, 0x45, 0x22, 0x4C, 0x04 } };
@@ -430,6 +431,7 @@ struct Action {
     void *completed;                    /* AsyncActionCompletedHandler */
     void *work;                         /* DispatchedHandler, until it has run */
     UINT32 id;
+    int idle;                           /* RunIdleAsync's: work is an IdleDispatchedHandler */
 };
 #define ACTION_OF_INFO(p) ((Action *)((char *)(p) - __builtin_offsetof(Action, info)))
 static HRESULT STDMETHODCALLTYPE act_qi(Action *a, REFIID iid, void **out)
@@ -490,13 +492,30 @@ static const void *const action_vt[] = { (void *)act_qi, (void *)act_addref, (vo
 static const void *const action_info_vt[] = { (void *)ai_qi, (void *)ai_addref, (void *)ai_release, (void *)no_iids, (void *)ai_name,
                                               (void *)base_trust, (void *)ai_id, (void *)ai_status, (void *)ai_error, (void *)ai_cancel, (void *)ai_close };
 
+/* IdleDispatchedHandlerArgs: the work runs when the window's queue holds
+ * nothing else (posted behind what is queued), so the dispatcher is idle */
+static HRESULT STDMETHODCALLTYPE idle_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IIdleDispatchedHandlerArgs_)) { *out = p; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE idle_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Core.IdleDispatchedHandlerArgs", n); }
+static HRESULT STDMETHODCALLTYPE idle_is_idle(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = TRUE; return S_OK; }
+static const void *const idle_args_vt[] = { INSP_FNS(idle_qi, idle_name), (void *)idle_is_idle };
+static const void *const *g_idle_args = idle_args_vt;
+
 /* Runs the work on the window's thread, then completes the action */
 static void action_run(Action *a)
 {
     void *work = a->work;
     a->work = 0;
     if (work) {
-        ((Fn0)SLOT(work, 3))(work);                     /* DispatchedHandler::Invoke() */
+        if (a->idle)                                    /* IdleDispatchedHandler::Invoke(args) */
+            ((HRESULT (STDMETHODCALLTYPE *)(void *, void *))SLOT(work, 3))(work, &g_idle_args);
+        else
+            ((Fn0)SLOT(work, 3))(work);                 /* DispatchedHandler::Invoke() */
         obj_release(work);
     }
     AcquireSRWLockExclusive(&a->lock);
@@ -756,9 +775,10 @@ static HRESULT STDMETHODCALLTYPE disp_process(Dispatcher *d, int option)
     }
     return S_OK;
 }
-static HRESULT STDMETHODCALLTYPE disp_run_async(Dispatcher *d, int priority, void *work, void **out)
+/* Posts @work to the window as an IAsyncAction (@idle: an
+ * IdleDispatchedHandler's) */
+static HRESULT post_action(void *work, int idle, void **out)
 {
-    (void)d; (void)priority;
     if (!work || !out) return E_INVALIDARG;
     *out = 0;
     if (!g_win.hwnd) return E_ILLEGAL_METHOD_CALL_;
@@ -771,6 +791,7 @@ static HRESULT STDMETHODCALLTYPE disp_run_async(Dispatcher *d, int priority, voi
     a->id = (UINT32)InterlockedIncrement((LONG *)&g_win.next_action);
     obj_addref(work);
     a->work = work;
+    a->idle = idle;
     if (!PostMessageW(g_win.hwnd, WM_NOVA_DISPATCH, 0, (LPARAM)a)) {
         HeapFree(GetProcessHeap(), 0, a);
         obj_release(work);
@@ -779,13 +800,17 @@ static HRESULT STDMETHODCALLTYPE disp_run_async(Dispatcher *d, int priority, voi
     *out = &a->op;
     return S_OK;
 }
-/* RunIdleAsync's handler takes IdleDispatchedHandlerArgs, which are not
- * made yet */
+static HRESULT STDMETHODCALLTYPE disp_run_async(Dispatcher *d, int priority, void *work, void **out)
+{
+    (void)d; (void)priority;
+    return post_action(work, 0, out);
+}
+/* RunIdleAsync: the work posted as RunAsync's, its handler given
+ * IdleDispatchedHandlerArgs */
 static HRESULT STDMETHODCALLTYPE disp_run_idle(Dispatcher *d, void *work, void **out)
 {
-    (void)d; (void)work;
-    if (out) *out = 0;
-    return E_NOTIMPL;
+    (void)d;
+    return post_action(work, 1, out);
 }
 static const void *const disp_vt[] = { INSP_FNS(disp_qi, disp_name), (void *)disp_access, (void *)disp_process,
                                        (void *)disp_run_async, (void *)disp_run_idle };

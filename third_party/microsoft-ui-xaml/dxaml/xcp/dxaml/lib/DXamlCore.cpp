@@ -540,6 +540,12 @@ _Check_return_ HRESULT DXamlCore::InitializeInstance(_In_ InitializationType ini
                 wrl::ComPtr<wuc::ICoreWindow> coreWindow;
                 IGNOREHR(create(2 /* not immersive */, L"", 0, 0, 0, 0, 0, nullptr, __uuidof(wuc::ICoreWindow),
                                 reinterpret_cast<void**>(coreWindow.GetAddressOf())));
+                // (and its dispatcher is the elements' Dispatcher, as on Windows:
+                // WinUI 2's ItemsRepeater runs its cache work through RunIdleAsync)
+                if (coreWindow && !m_pDispatcher)
+                {
+                    IGNOREHR(coreWindow->get_Dispatcher(&m_pDispatcher));
+                }
             }
         }
     }

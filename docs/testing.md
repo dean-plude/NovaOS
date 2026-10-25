@@ -144,11 +144,17 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `ProgressBar`, `ProgressRing` and `SwipeControl` made from markup with
   their templates applied, and a page with a `ProgressRing`, a
   `SwipeControl` with `SwipeItems`, an `InfoBadge` and
-  `BackdropMaterial.ApplyToRootOrPageBackground`), `wuxamltest` (the
-  XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP
-  apps see it: `Windows.UI.Xaml.Controls.Button` activated by its
-  Windows name and driven through Windows' interfaces, a Windows-boxed
-  `Visibility`, `DependencyProperty.Register` with Windows type names,
+  `BackdropMaterial.ApplyToRootOrPageBackground`; and `NavigationView`
+  and `RadioButtons` with their templates, and a page with a
+  `NavigationView` holding `NavigationViewItem`s in `MenuItems` and
+  `RadioButtons` with three `RadioButton`s: the menu items and the
+  `RadioButtons`' items and `SelectedIndex` added from markup, and the
+  `RadioButtons` measured and arranged with the `ItemsRepeater` in its
+  template), `wuxamltest` (the XAML framework under its
+  `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
+  `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
+  driven through Windows' interfaces, a Windows-boxed `Visibility`,
+  `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
   Windows handler, and an app's control composed over

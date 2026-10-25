@@ -18,7 +18,7 @@ recovery boot belong to step 33.3 ([recovery.md](recovery.md)).
 ## Done (part 1): installing into the free space
 
 <img src="../screenshots/install-where.png" alt="Setup's Where page: Windows' partitions and NovaOS in the free space" width="640">
-<img src="../screenshots/install-confirm.png" alt="Setup's confirm page for installing beside Windows" width="640">
+<img src="../screenshots/install-confirm.png" alt="Setup's confirm page: drive C: is a new NTFS volume, used in place" width="640">
 
 `SetupListDisks` (`kernel/fs/setup.c`) reads each disk's partition table
 (`DiskReadLayout`, `kernel/fs/partition.c`), names each partition from its

@@ -13,6 +13,7 @@ All are of NovaOS running in QEMU, saved as optimized PNG files.
 |---|---|---|
 | `desktop.png` | 1280x800 | The `latest` ISO of 2026-10-25 (main at `564e70d`) booted live in QEMU (q35, 4 CPUs, 4 GB, standard VGA with its default 16 MB, so the largest mode is 2560x1600), the installer closed with Esc: the default Aurora desktop with nothing open.  Taken with QMP `screendump`. |
 | `install.png` | 1280x800 | The same boot before Esc: **Install NovaOS**, which a live start opens by itself, on its Welcome page (it can install beside Windows). |
+| `install-confirm.png` | 1280x800 | The same boot: Setup's confirm page for a whole blank 16 GB disk, which says drive C: is a new NTFS volume used in place (no file system choice since Setup installs on NTFS only).  In [design/installer.md](../design/installer.md). |
 | `notepad++.png` | 1280x800 | Notepad++ 8.8.3 portable (the app corpus's download) staged with `--put DIR=C:\Apps\npp`, opened on `kernel/ke/scheduler.c` staged in `C:\Projects\src`. |
 | `app-store.png` | 1280x800 | The App Store opened from the dock on the same boot, on All apps (the offline catalog); reduced to 256 colours. |
 | `task-manager.png`, `task-manager-performance.png` | 1280x800 | Task Manager opened with Ctrl+Shift+Esc over `winhello`, on Processes with `winhello.exe` selected and then on Performance: the screenshots `tests/selftest/core/166-taskmgr.py` takes (`tools/selftest.py --suite core --only taskmgr`), QEMU with 2 CPUs. |
@@ -61,7 +62,8 @@ desktop of early October.
 | `terminal.png` | 1280x800 | Fresh: the Terminal from the dock, running `sysinfo` and `devices`. |
 | `notepad.png` | 1280x800 | Fresh: Notepad from the dock, with two lines typed. |
 | `calendar.png` | 1280x800 | Fresh: Calendar from the dock, over Notepad. |
-| `settings-display.png` | 1280x800 | Settings from the dock, on Display (resolution and scale). |
+| `settings-display.png`, `settings-printers.png`, `settings-firewall.png` | 1280x800 | Fresh (2026-10-25, the same boot as `desktop.png`): Settings from the dock on Display (resolution, scale, DPI and the adapter), Printers (Microsoft Print to PDF and the network printer box) and Firewall (the network Public, the three profiles on, no rules yet). |
+| `firewall-network-prompt.png` | 1280x800 | Fresh (2026-10-25, the same boot): the network icon by the clock clicked on a new network, which asks whether the PC may be discoverable there (Yes makes the network Private).  In the user guide. |
 | `settings-system.png`, `settings-personalization.png`, `settings-personalization-scrolled.png`, `settings-time-language.png`, `settings-network.png`, `settings-search.png`, `settings-narrow.png` | 1280x800 | 2026-10-21, after the Settings page framework: System with Recovery; Personalization at its top and scrolled (the scroll bar, the content clipped under the title); Time & language; Network; **Find a setting** with "net" typed (Network, Wi-Fi and Printers found); and the window snapped to half the screen (Win+Left), where the sidebar shows only the pages' icons.  Taken under QEMU's software emulation from a local build. |
 | `settings-sound.png` | 1280x800 | Earlier (2026-10-03): Settings > Sound with an Intel HD Audio card, a QEMU USB audio device and a USB headset, the headset chosen. |
 | `first-start-setup.png` | 1280x800 | Earlier (2026-10-03): **Welcome to NovaOS** on its time zone page, with "Berlin" typed. |

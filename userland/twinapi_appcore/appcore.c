@@ -36,9 +36,11 @@
  * pixels (the window's DPI over 96).
  *
  * There is one view, the main one, as in an app that never calls
- * CreateNewView.  The application, view, window and dispatcher objects are
- * static and agile, so their reference counts are kept only for show;
- * event arguments and IAsyncActions are counted for real.
+ * CreateNewView.  A desktop thread that hosts XAML gets a hidden CoreWindow
+ * from PrivateCreateCoreWindow, as XAML islands make on Windows.  The
+ * application, view, window and dispatcher objects are static and agile,
+ * so their reference counts are kept only for show; event arguments and
+ * IAsyncActions are counted for real.
  */
 #include <windows.h>
 #include <roapi.h>
@@ -67,6 +69,8 @@ static const GUID IID_ICoreApplicationView_  = { 0x638BB2DB, 0x451D, 0x4661, { 0
 static const GUID IID_ICoreWindow_           = { 0x79B9D5F2, 0x879E, 0x4B89, { 0xB7, 0x98, 0x79, 0xE4, 0x75, 0x98, 0x03, 0x0C } };
 static const GUID IID_ICoreWindowStatic_     = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90, 0x22, 0x53, 0x6B, 0xB9, 0xCF, 0x93, 0xB1 } };
 static const GUID IID_ICoreWindow5_          = { 0x4B4AE1E1, 0x2E6D, 0x4EAA, { 0xBD, 0xA1, 0x1C, 0x5C, 0xC1, 0xBE, 0xE1, 0x41 } };
+static const GUID IID_IWeakReferenceSource_  = { 0x00000038, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID IID_IWeakReference_        = { 0x00000037, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 static const GUID IID_IDispatcherQueueStatics_ = { 0xA96D83D7, 0x9371, 0x4517, { 0x92, 0x45, 0xD0, 0x82, 0x4A, 0xC1, 0x2C, 0x74 } };
 static const GUID IID_ICoreWindowInterop_    = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 static const GUID IID_ICoreDispatcher_       = { 0x60DB2FA8, 0xB705, 0x4FDE, { 0xA7, 0xD6, 0xEB, 0xBB, 0x18, 0x91, 0xD3, 0x9E } };
@@ -512,6 +516,8 @@ typedef struct Win {
     const void *const *vt;              /* ICoreWindow */
     const void *const *interop;         /* ICoreWindowInterop */
     const void *const *win5;            /* ICoreWindow5 */
+    const void *const *wrs;             /* IWeakReferenceSource */
+    const void *const *weak;            /* IWeakReference */
     HWND hwnd;
     DWORD tid;
     Event ev[EV_COUNT];
@@ -538,6 +544,7 @@ static HRESULT STDMETHODCALLTYPE win_qi(Win *w, REFIID iid, void **out)
     if (is_base(iid) || IsEqualGUID(iid, &IID_ICoreWindow_)) *out = &w->vt;
     else if (IsEqualGUID(iid, &IID_ICoreWindowInterop_)) *out = &w->interop;
     else if (IsEqualGUID(iid, &IID_ICoreWindow5_)) *out = &w->win5;
+    else if (IsEqualGUID(iid, &IID_IWeakReferenceSource_)) *out = &w->wrs;
     else { *out = 0; return E_NOINTERFACE; }
     return S_OK;
 }
@@ -672,7 +679,31 @@ static HRESULT STDMETHODCALLTYPE w5_mode(void *p, int *v)
 }
 static const void *const win5_vt[] = { INSP_FNS(w5_qi, w5_name), (void *)w5_queue, (void *)w5_mode };
 
-static Win g_win = { (const void *const *)win_vt, (const void *const *)win_interop_vt, (const void *const *)win5_vt };
+/* IWeakReferenceSource and its IWeakReference (C++/WinRT's event revokers
+ * hold the window weakly): the window resolves while it exists */
+#define WIN_OF_WRS(p) ((Win *)((char *)(p) - __builtin_offsetof(Win, wrs)))
+#define WIN_OF_WEAK(p) ((Win *)((char *)(p) - __builtin_offsetof(Win, weak)))
+static HRESULT STDMETHODCALLTYPE wrs_qi(void *p, REFIID iid, void **out) { return win_qi(WIN_OF_WRS(p), iid, out); }
+static HRESULT STDMETHODCALLTYPE wrs_get(void *p, void **v) { if (!v) return E_POINTER; *v = &WIN_OF_WRS(p)->weak; return S_OK; }
+static HRESULT STDMETHODCALLTYPE weak_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown) || IsEqualGUID(iid, &IID_IWeakReference_)) { *out = p; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE weak_resolve(void *p, REFIID iid, void **v)
+{
+    Win *w = WIN_OF_WEAK(p);
+    if (!v) return E_POINTER;
+    *v = 0;
+    return w->hwnd ? win_qi(w, iid, v) : S_OK;
+}
+static const void *const win_wrs_vt[] = { (void *)wrs_qi, (void *)static_ref, (void *)static_ref, (void *)wrs_get };
+static const void *const win_weak_vt[] = { (void *)weak_qi, (void *)static_ref, (void *)static_ref, (void *)weak_resolve };
+
+static Win g_win = { (const void *const *)win_vt, (const void *const *)win_interop_vt, (const void *const *)win5_vt,
+                     (const void *const *)win_wrs_vt, (const void *const *)win_weak_vt };
 
 /* ICoreDispatcher */
 static HRESULT STDMETHODCALLTYPE disp_qi(Dispatcher *d, REFIID iid, void **out)
@@ -952,6 +983,22 @@ static HRESULT create_window(void)
     g_win.hwnd = CreateWindowExW(0, cls, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                                  0, 0, wc.hInstance, 0);
     return g_win.hwnd ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+}
+
+/* PrivateCreateCoreWindow (Windows: Windows.UI.dll's ordinal 1500): a
+ * hidden CoreWindow for the calling thread, the one XAML islands make on a
+ * desktop thread, so CoreWindow.GetForCurrentThread answers there too
+ * (WinUI 2's AnimatedVisualPlayer and SwipeControl ask it).  It is never
+ * shown; the thread's message loop pumps it.  One CoreWindow per process */
+APPCORE_API HRESULT WINAPI PrivateCreateCoreWindow(int type, LPCWSTR title, int x, int y, UINT w, UINT h,
+                                                   DWORD attrs, HWND owner, REFIID iid, void **out)
+{
+    (void)type; (void)title; (void)x; (void)y; (void)w; (void)h; (void)attrs; (void)owner;
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (g_win.hwnd) return GetCurrentThreadId() == g_win.tid ? win_qi(&g_win, iid, out) : E_ILLEGAL_METHOD_CALL_;
+    HRESULT hr = create_window();
+    return SUCCEEDED(hr) ? win_qi(&g_win, iid, out) : hr;
 }
 
 /* ---- the view (CoreApplicationView) and the launch's arguments -------- */

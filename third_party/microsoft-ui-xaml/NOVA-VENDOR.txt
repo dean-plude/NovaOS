@@ -207,6 +207,22 @@ dxaml/lib/Window_Partial.cpp's Window.Current gives the core's window on a
 desktop thread too, as Windows.UI.Xaml does for XAML islands (WinUI 3 gives
 null there; WinUI 2 asks the window for its dispatcher).
 
+For WinUI 2's controls' default styles (step 32.5 part 8): dxaml/lib's
+RangeBase_Partial.cpp, UserControl_Partial.cpp, ThemeAnimations.cpp,
+Shape_Partial.cpp, Transform_Partial.cpp, StackPanel_Partial.cpp,
+VisualStateGroup_Partial.cpp, BrushTransition_Partial.cpp,
+ElementCompositionPreview.cpp and PointerSourceWrapper.h; the generated
+classes of those, of the sixteen theme animations, DynamicTimeline,
+Rectangle, Ellipse, GeneralTransform, CompositeTransform, ScaleTransform,
+TranslateTransform, RotateTransform, ColumnDefinition, RowDefinition,
+VisualState, VisualTransition and RangeBaseValueChangedEventArgs;
+components/themeanimationshelper (inc, lib and its project); and
+components/comptree/DCompPropertyChangedListener.cpp.  Changed:
+dxaml/lib/DXamlCore.cpp gives a desktop (islands-only) thread a hidden
+CoreWindow through twinapi.appcore.dll's PrivateCreateCoreWindow, as
+Windows.UI.Xaml's islands do (WinUI 2's AnimatedVisualPlayer and
+SwipeControl ask CoreWindow.GetForCurrentThread).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

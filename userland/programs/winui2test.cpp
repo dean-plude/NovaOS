@@ -20,13 +20,20 @@
  *     Windows IButton and its content set and read back;
  *   - WinUI 2's XAML resources (step 32.5's third part): the merged
  *     19h1 theme resources and default styles installed where ms-appx:///
- *     Microsoft.UI.Xaml/Themes/ finds them.
+ *     Microsoft.UI.Xaml/Themes/ finds them;
+ *   - the default styles (step 32.5's eighth part): XamlControlsResources
+ *     merged into the app's resources, then InfoBadge, ProgressBar,
+ *     ProgressRing and SwipeControl made from markup with their templates
+ *     applied, and a page as Calculator's declares them (ProgressRing,
+ *     SwipeControl with SwipeItems, InfoBadge,
+ *     BackdropMaterial.ApplyToRootOrPageBackground).
  *
  *   winui2test        the self-test runs it with no arguments
  */
 #include <stdio.h>
 #include <string.h>
 #include <new>
+#include <string>
 #include <corep.h>
 #include <CStaticLock.h>
 #include <SystemThemingInterop.h>
@@ -56,8 +63,7 @@ static int pass, fail;
     printf("FAIL: %s: 0x%08lx (line %d)\n", what, static_cast<unsigned long>(h_), __LINE__); fflush(stdout); } } while (0)
 /* what waits on framework parts not built yet: reported, not counted, so
  * the line turns into a pass when the part lands (roadmap 32.5's next
- * parts: the controls' default styles applied, the UWP window's present
- * target (32.4's composition)) */
+ * parts: the UWP window's present target (32.4's composition)) */
 #define NOT_YET(what, cond) do { printf("%s: %s (line %d)\n", (cond) ? "now works (make it a CHECK)" : "not yet", \
     what, __LINE__); fflush(stdout); } while (0)
 #define NOT_YET_HR(what, expr) do { HRESULT h_ = (expr); printf("%s: %s: 0x%08lx (line %d)\n", SUCCEEDED(h_) ? \
@@ -174,6 +180,94 @@ static void why()
 }
 
 
+#define XMLNS L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
+#define XMLNS_X L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' "
+
+/* a WinUI 2 control @name (of Microsoft.UI.Xaml.Controls) made from markup,
+ * as an app's page makes it (the parser completes its creation, which
+ * applies its default style: the style DefaultStyleResourceUri's
+ * generic.xaml holds for it; a control made in code gets it entering the
+ * tree), and Control.ApplyTemplate: the template's root under it */
+static ctl::ComPtr<IInspectable> templated(const wchar_t *name)
+{
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> o;
+    ctl::ComPtr<wuxc::IControl> control;
+    ctl::ComPtr<wux::IDependencyObject> dobj;
+    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
+    boolean applied = false;
+    INT32 parts = 0;
+    std::wstring markup = std::wstring(L"<muxc:") + name + L" " XMLNS L"xmlns:muxc='using:Microsoft.UI.Xaml.Controls'/>";
+    char what[200];
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(markup.c_str()).Get(), o.GetAddressOf()) : E_FAIL;
+    snprintf(what, sizeof what, "a %ls loaded from markup", name);
+    CHECK_HR(what, hr);
+    if (FAILED(hr)) {
+        why();
+        return o;
+    }
+    hr = as(o.Get(), control.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = control->ApplyTemplate(&applied);
+    snprintf(what, sizeof what, "%ls: ApplyTemplate (WinUI 2's default style)", name);
+    CHECK_HR(what, hr);
+    if (FAILED(hr))
+        why();
+    if (SUCCEEDED(as(o.Get(), dobj.GetAddressOf())) &&
+        SUCCEEDED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())))
+        vth->GetChildrenCount(dobj.Get(), &parts);
+    snprintf(what, sizeof what, "%ls: its template applied, the template's root under it", name);
+    CHECK(what, applied && parts == 1);
+    return o;
+}
+
+/* WinUI 2's controls with their default styles (step 32.5's eighth part):
+ * InfoBadge, and the controls Calculator uses (ProgressRing and the
+ * ProgressBar under it, SwipeControl with its SwipeItems), each templated
+ * alone and loaded together from markup as Calculator's pages declare them,
+ * and BackdropMaterial.ApplyToRootOrPageBackground (Calculator's page
+ * background) on a control */
+static void default_style_checks()
+{
+    for (const wchar_t *name : {L"InfoBadge", L"ProgressBar", L"ProgressRing", L"SwipeControl"})
+        templated(name);
+
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> page;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(
+            L"<UserControl " XMLNS XMLNS_X L"xmlns:muxc='using:Microsoft.UI.Xaml.Controls' "
+            L"muxc:BackdropMaterial.ApplyToRootOrPageBackground='True'><StackPanel>"
+            L"<muxc:ProgressRing x:Name='Ring' IsActive='True' Width='20' Height='20'/>"
+            L"<muxc:SwipeControl x:Name='Swipe'><muxc:SwipeControl.RightItems><muxc:SwipeItems Mode='Execute'>"
+            L"<muxc:SwipeItem x:Name='Delete' Text='Delete'/></muxc:SwipeItems></muxc:SwipeControl.RightItems>"
+            L"<TextBlock Text='1 + 1 = 2'/></muxc:SwipeControl>"
+            L"<muxc:InfoBadge x:Name='Badge' Value='3'/></StackPanel></UserControl>").Get(),
+            page.GetAddressOf()) : E_FAIL;
+    CHECK_HR("a page with a ProgressRing, a SwipeControl with SwipeItems and an InfoBadge loaded from markup", hr);
+    if (FAILED(hr)) {
+        why();
+        return;
+    }
+    ctl::ComPtr<wux::IFrameworkElement> root;
+    ctl::ComPtr<IInspectable> swipe, item, badge;
+    CHECK("its controls found by name", SUCCEEDED(as(page.Get(), root.GetAddressOf())) &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Swipe").Get(), swipe.GetAddressOf())) && swipe &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Delete").Get(), item.GetAddressOf())) && item &&
+          SUCCEEDED(root->FindName(wrl_wrappers::HStringReference(L"Badge").Get(), badge.GetAddressOf())) && badge);
+    HSTRING name = nullptr;
+    CHECK("the SwipeItem, Microsoft.UI.Xaml.Controls.SwipeItem", item && SUCCEEDED(item->GetRuntimeClassName(&name)) &&
+          is(name, L"Microsoft.UI.Xaml.Controls.SwipeItem"));
+    WindowsDeleteString(name);
+    /* BackdropMaterial: the page's Background set to its fallback brush (no
+     * Mica on this window: the brush WinUI 2 gives when Mica is unavailable) */
+    ctl::ComPtr<wuxc::IControl> control;
+    ctl::ComPtr<wux::Media::IBrush> background;
+    CHECK("BackdropMaterial.ApplyToRootOrPageBackground: the page's Background set", SUCCEEDED(as(page.Get(), control.GetAddressOf())) &&
+          SUCCEEDED(control->get_Background(background.GetAddressOf())) && background);
+}
+
 static void winui2_checks()
 {
     if (!s_mux)
@@ -259,11 +353,6 @@ static void winui2_checks()
     CHECK_HR("InfoBadge.ApplyTemplate (WinUI 2's default style)", hr);
     if (FAILED(hr))
         why();
-    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
-    INT32 parts = 0;
-    NOT_YET("its template applied: the InfoBadge has its template's root", applied &&
-          SUCCEEDED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())) && dobj &&
-          SUCCEEDED(vth->GetChildrenCount(dobj.Get(), &parts)) && parts == 1);
 
     /* an AcrylicBrush (WinUI 2's, over the framework's
      * XamlCompositionBrushBase) with its base's FallbackColor, as the theme
@@ -333,6 +422,21 @@ static void winui2_checks()
           SUCCEEDED(acrylic2->get_TintLuminosityOpacity(luminosity.GetAddressOf())) && luminosity &&
           SUCCEEDED(luminosity->get_Value(&tint)) && tint > 0.95 && tint < 0.97);
 
+    /* merged into the app's resources, as an app's App.xaml merges it
+     * (<muxc:XamlControlsResources/> in Application.Resources), where the
+     * controls' default styles find their theme resources */
+    ctl::ComPtr<wux::IApplicationStatics> appStatics;
+    ctl::ComPtr<wux::IApplication> current;
+    ctl::ComPtr<wux::IResourceDictionary> appResources;
+    ctl::ComPtr<wf::Collections::IVector<wux::ResourceDictionary *>> merged;
+    CHECK_HR("XamlControlsResources merged into Application.Current.Resources", dictionary &&
+             SUCCEEDED(statics(L"Windows.UI.Xaml.Application", appStatics.GetAddressOf())) &&
+             SUCCEEDED(appStatics->get_Current(current.GetAddressOf())) && current &&
+             SUCCEEDED(current->get_Resources(appResources.GetAddressOf())) && appResources &&
+             SUCCEEDED(appResources->get_MergedDictionaries(merged.GetAddressOf())) && merged ?
+             merged->Append(dictionary.Get()) : E_FAIL);
+    default_style_checks();
+
     /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
      * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/
      * finds them (the files XamlControlsResources and the controls'
@@ -355,8 +459,6 @@ static void winui2_checks()
  * template, to the templated parent; a Binding made in code and set with
  * FrameworkElement.SetBinding, following its source's changes; and a
  * control's template applied (ApplyTemplate), its parts in the visual tree */
-#define XMLNS L"xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' "
-#define XMLNS_X L"xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' "
 static void binding_checks()
 {
     printf("errors before the binding checks:\n");
@@ -716,6 +818,7 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Automation.AutomationProperties", L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer",
     L"Windows.UI.Xaml.Automation.Peers.ButtonAutomationPeer", L"Windows.UI.Xaml.Hosting.ElementCompositionPreview",
     L"Windows.UI.Xaml.Markup.XamlReader",
+    L"Windows.UI.Xaml.Controls.Primitives.RangeBase", L"Windows.UI.Xaml.Controls.UserControl", L"Windows.UI.Xaml.Controls.Panel",
     /* (and, for the UWP start-up, the view source Application.Start hands
      * CoreApplication.Run and the view it makes) */
     L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView"};

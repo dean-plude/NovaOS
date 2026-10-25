@@ -15753,6 +15753,10 @@ page in a `Window` is laid out and drawn, built from Microsoft's sources.
   over a colour brush), surface brush transforms and clip transforms.
 - **Window.Close:** the page's window now closes and the app exits
   cleanly.
+- **UWP teardown:** NovaOS's FrameworkUdk no longer keeps a counted
+  reference to a UWP window's position listener, so the window is freed
+  (and stops subclassing the `CoreWindow`) when the XAML core shuts down,
+  not left to take the `CoreWindow`'s last messages.
 - **Test:** `xamlpagetest` draws a `Border`, a `TextBlock` and a
   `Button` and screenshots them (64-bit).
 - **Next (32.4):** typing into a `TextBox` and clicking the `Button`.

@@ -223,6 +223,21 @@ CoreWindow through twinapi.appcore.dll's PrivateCreateCoreWindow, as
 Windows.UI.Xaml's islands do (WinUI 2's AnimatedVisualPlayer and
 SwipeControl ask CoreWindow.GetForCurrentThread).
 
+For NavigationView and RadioButtons (step 32.5 part 9): dxaml/lib's
+AutomationProperties.cpp, PropertyChangedEventArgs.cpp, ToolTip_Partial.cpp,
+ToolTipService_Partial.cpp, Flyout_partial.cpp, FlyoutBase_partial.cpp,
+FlyoutShowOptions_partial.h, SplitView_Partial.cpp, XamlRoot_Partial.cpp and
+NotifyCollectionChangedEventArgs_partial.cpp, ToggleButton_Partial.cpp and
+RadioButton_Partial.cpp; the generated classes of
+NotifyCollectionChangedEventArgs, ToggleButton, RadioButton, IconElement,
+PathIcon, TransformGroup, TransformCollection, PropertyChangedEventArgs, ToolTip,
+ToolTipTemplateSettings, ToolTipService, Flyout, FlyoutBase,
+FlyoutShowOptions (header), SplitView, SplitViewTemplateSettings,
+SplitViewPaneClosingEventArgs, XamlRoot and XamlRootChangedEventArgs; components/transforms' TransformGroup.cpp and
+TransformCollection.cpp; core/text/common/Typography.cpp and TextOptions.cpp.  Changed: dxaml/lib/DXamlCore.cpp keeps that hidden CoreWindow's dispatcher
+as the elements' Dispatcher, as on Windows (WinUI 2's ItemsRepeater runs
+its cache work through Dispatcher.RunIdleAsync).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

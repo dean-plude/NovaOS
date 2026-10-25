@@ -633,7 +633,11 @@ class _Synth:
             ps = r.params()
             r.expect(';')
             ret = None if _void(t) else t
-            m = Method(mname or name, ps, ret, _attr(attrs, 'return_name') or 'result')
+            # (MIDL 3's method_name names the ABI method, the overload: the
+            # projection keeps the declared name, OverloadAttribute the other)
+            m = Method(name, ps, ret, _attr(attrs, 'return_name') or 'result')
+            if mname and mname != name:
+                m.attrs.append(Attribute('Windows.Foundation.Metadata.OverloadAttribute', [mname]))
             return kind, [m]
         # property
         get = put = True

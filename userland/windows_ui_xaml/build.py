@@ -364,8 +364,9 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # framework turns the legacy IMEs off with imm32, the graphics device draws
 # its first text with DirectWrite, an element takes focus with a correlation
 # GUID from rpcrt4, the theme transitions read the theme's animation timings
-# with uxtheme)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme']
+# with uxtheme, ToolTipService follows the display's power state with
+# powrprof)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -428,7 +429,12 @@ def dwrite_headers(mingw, out):
     back into scope with using-declarations, and XAML's text block and its
     DirectWrite font services call them so (core/text/TextBlock,
     pal/win): here each such interface gets the using-declaration of the
-    nearest base interface that declares the name"""
+    nearest base interface that declares the name, at the end of the class
+    as the SDK places them: in the MSVC ABI a class's new virtual methods
+    are grouped by the name's first declaration in the class, a using-
+    declaration included, so one at the top reorders the vtable
+    (IDWriteFactory6's GetSystemFontCollection landing in
+    CreateFontCollectionFromFontSet's slot)"""
     head = re.compile(r'^MIDL_INTERFACE\("[^"]*"\)\n(\w+) : public (\w+)\n\{\n', re.M)
     meth = re.compile(r'virtual [^;(]*?STDMETHODCALLTYPE\s+(\w+)\(')
     texts = {h: open(os.path.join(mingw, h)).read() for h in _DWRITE}
@@ -447,11 +453,14 @@ def dwrite_headers(mingw, out):
         return None
 
     for h, t in texts.items():
-        def using(m):
+        out_text, at = [], 0
+        for m in head.finditer(t):
+            end = t.index('\n};', m.end())
             lines = ['    using %s::%s;\n' % (o, n) for n in sorted(names[m.group(1)])
                      for o in [owner(base[m.group(1)], n)] if o]
-            return m.group(0) + ''.join(lines)
-        text = head.sub(using, t)
+            out_text += [t[at:end + 1], ''.join(lines)]
+            at = end + 1
+        text = ''.join(out_text) + t[at:]
         p = os.path.join(out, h)
         if not os.path.exists(p) or open(p).read() != text:
             open(p, 'w').write(text)
@@ -685,6 +694,10 @@ CORE_LIBRARIES.append((_CORETEXT, 'core/common.props', os.path.join(HERE, 'src',
 CORE_FIRST[_CORETEXT] = CORE_FIRST['core/xcpcore.vcxproj']
 PROJECT_INCLUDES[_CORETEXT] = ('core/xcpcore.vcxproj',)
 CORE_SOURCES[_CORETEXT] = ('common/InheritedProperties.cpp', 'common/TextFormatting.cpp', 'common/text.cpp',
+                           # (and the typography and text options an element
+                           # inheriting text formatting carries: RadioButtons'
+                           # header, step 32.5's ninth part)
+                           'common/Typography.cpp', 'common/TextOptions.cpp',
                            'TextBlock/TextBlock.cpp', 'TextBlock/TextBlockView.cpp', 'TextBlock/Inline.cpp', 'TextBlock/InlineCollection.cpp',
                            'TextBlock/CRun.cpp', 'TextBlock/LineBreak.cpp')
 # (and the type table, core/metadata's dynamicmetadata.vcxproj whole: the
@@ -900,6 +913,10 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
 # own, src/xaml_island.cpp, roadmap 32.4)
 next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'xaml_island.cpp'))
+# (and ElementSoundPlayerService's statics, which play no sound on a PC:
+# src/element_sound_player.cpp, roadmap 32.5)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'element_sound_player.cpp'))
 _ELEMENTS2_LATER = tuple(x for x in _ELEMENTS2_LATER if x != 'xamlislandroot.cpp')
 CORE_SOURCES[_ELEMENTS2] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
@@ -1005,7 +1022,10 @@ CORE_SERVICES_STUBS += ('DXaml_Stub.cpp',)
 _TRANSFORMS = 'components/transforms/lib/Microsoft.UI.Xaml.Transforms.vcxproj'
 CORE_LIBRARIES.append((_TRANSFORMS, _TRANSFORMS, 'components/pch/precomp.h', []))
 CORE_FIRST[_TRANSFORMS] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
-CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp',)
+CORE_SOURCES[_TRANSFORMS] = ('../Transform.cpp',
+                             # (and the transform group with its collection,
+                             # which NavigationView's template animates)
+                             '../TransformGroup.cpp', '../TransformCollection.cpp')
 
 # Xaml 32.5 (WinUI 2 on the system XAML), first part: the framework under
 # its Windows.UI.Xaml names, which WinUI 2 and UWP apps are compiled
@@ -1099,7 +1119,28 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'BrushTransition_Partial',
     # (and ElementCompositionPreview's statics, which WinUI 2's
     # AnimatedVisualPlayer (ProgressRing's) hangs its visual on)
-    'ElementCompositionPreview')) + tuple(
+    'ElementCompositionPreview',
+    # (and AutomationProperties' statics, which WinUI 2's ItemsRepeater and
+    # NavigationView set names and views through: step 32.5's ninth part)
+    'AutomationProperties',
+    # (and PropertyChangedEventArgs, which WinUI 2's SelectionModel raises
+    # INotifyPropertyChanged with)
+    'PropertyChangedEventArgs',
+    # (and ToolTip with ToolTipService, which NavigationView's template and
+    # code give its buttons)
+    'ToolTip_Partial', 'ToolTipService_Partial',
+    # (and Flyout with FlyoutBase: NavigationView's top pane overflow menu)
+    'Flyout_partial', 'FlyoutBase_partial',
+    # (and SplitView, NavigationView's pane and content)
+    'SplitView_Partial',
+    # (and XamlRoot, which SplitView and the flyouts find an element's
+    # with)
+    'XamlRoot_Partial',
+    # (and NotifyCollectionChangedEventArgs, which WinUI 2's ItemsRepeater
+    # data source raises when an items vector changes)
+    'NotifyCollectionChangedEventArgs_partial',
+    # (and RadioButton with ToggleButton: RadioButtons' items)
+    'ToggleButton_Partial', 'RadioButton_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
                                                       'BindingExpressionBase', 'BindingFailedEventArgs',
                                                       'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
@@ -1115,7 +1156,17 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
                                                       'RotateTransform', 'StackPanel', 'ColumnDefinition',
                                                       'RowDefinition', 'VisualState', 'VisualStateGroup',
                                                       'VisualTransition', 'BrushTransition',
-                                                      'ElementCompositionPreview') +
+                                                      'ElementCompositionPreview', 'PropertyChangedEventArgs',
+                                                      'ToolTip', 'ToolTipTemplateSettings', 'ToolTipService',
+                                                      'Flyout', 'FlyoutBase', 'SplitView', 'SplitViewTemplateSettings',
+                                                      'SplitViewPaneClosingEventArgs', 'XamlRoot',
+                                                      'XamlRootChangedEventArgs',
+                                                      'NotifyCollectionChangedEventArgs', 'ToggleButton',
+                                                      'RadioButton',
+                                                      # (PathIcon, which WinUI 2's AnimatedIcon
+                                                      # composes over: NavigationView's pane button)
+                                                      'IconElement', 'PathIcon', 'TransformGroup',
+                                                      'TransformCollection') +
     _THEME_ANIMATIONS)
 # (with the helper component the pointer-down animation asks,
 # components/themeanimationshelper)

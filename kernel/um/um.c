@@ -1606,6 +1606,43 @@ static bool known_dll(const char *name)
     return false;
 }
 
+/* A packaged program's frameworks: when its folder is an installed
+ * package's (C:\Programs\WindowsApps\<full name>\...), the folders of the
+ * framework packages it depends on, in its manifest's order, as appx
+ * recorded them (HKLM\...\AppModel\PackageRepository: Packages\<full
+ * name>\Dependencies names their families, Families\<family> each one's
+ * installed Path).  Windows' loader searches a packaged process's package
+ * graph the same way.  Looked up once, at its first DLL. */
+#define PKG_REPO "Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModel\\PackageRepository"
+static void package_graph(UmProcess *p)
+{
+    if (p->pkg_known) return;
+    p->pkg_known = true;
+    if (!p->exe_dir) return;
+    char path[RAMFS_PATH_MAX], full[128], key[256];
+    RamfsPath(p->exe_dir, path, sizeof(path));
+    static const char apps[] = "\\windowsapps\\";
+    const char *at = NULL;
+    for (const char *s = path; *s && !at; s++) {
+        int i = 0;
+        while (apps[i] && s[i] && (s[i] | (s[i] >= 'A' && s[i] <= 'Z' ? 32 : 0)) == apps[i]) i++;
+        if (!apps[i]) at = s + i;
+    }
+    if (!at) return;
+    int n = 0;
+    while (at[n] && at[n] != '\\' && n < (int)sizeof(full) - 1) { full[n] = at[n]; n++; }
+    full[n] = '\0';
+    if (!n) return;
+    ksnprintf(key, sizeof(key), PKG_REPO "\\Packages\\%s\\Dependencies", full);
+    for (UINT32 i = 0; p->npkg_dirs < UM_MAX_PKG_DIRS; i++) {
+        char name[12], fam[160], fkey[256];
+        ksnprintf(name, sizeof(name), "%u", i);
+        if (!um_registry_get_sz(key, name, fam, sizeof(fam))) break;
+        ksnprintf(fkey, sizeof(fkey), PKG_REPO "\\Families\\%s", fam);
+        if (um_registry_get_sz(fkey, "Path", p->pkg_dirs[p->npkg_dirs], RAMFS_PATH_MAX)) p->npkg_dirs++;
+    }
+}
+
 /* (@dep_dir: the folder of the DLL that imports @name, searched after the
  * program's, as LoadLibraryEx(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR) does; a
  * path without an extension gets ".dll", as LoadLibrary adds it) */
@@ -1640,6 +1677,13 @@ static RamNode *find_dll(UmProcess *p, const char *name, RamNode *dep_dir)
     if (n && !n->dir && known_dll(name)) return n;
     if (p->exe_dir) {
         RamNode *a = RamfsFind(p->exe_dir, name);
+        if (a && !a->dir && RamfsLoad(a) && um_pe_machine(a) == (p->wow ? 0x014C : 0x8664)) return a;
+    }
+    /* then its frameworks' (a packaged program's package graph) */
+    package_graph(p);
+    for (int i = 0; i < p->npkg_dirs; i++) {
+        RamNode *dir = RamfsResolve(NULL, p->pkg_dirs[i]);
+        RamNode *a = dir && dir->dir ? RamfsFind(dir, name) : NULL;
         if (a && !a->dir && RamfsLoad(a) && um_pe_machine(a) == (p->wow ? 0x014C : 0x8664)) return a;
     }
     if (dep_dir && dep_dir != p->exe_dir) {

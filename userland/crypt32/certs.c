@@ -138,8 +138,8 @@ static const mbedtls_x509_crt *trusted(void)
         mbedtls_x509_crt_init(&g_trust);
         g_trust_built = TRUE;
         for (const mbedtls_x509_crt *x = r; x && x->raw.p; x = x->next)
-            if (!is_removed(x->raw.p, x->raw.len)) mbedtls_x509_crt_parse_der(&g_trust, x->raw.p, x->raw.len);
-        for (DWORD i = 0; i < g_nadded; i++) mbedtls_x509_crt_parse_der(&g_trust, g_added[i].der, g_added[i].n);
+            if (!is_removed(x->raw.p, x->raw.len)) crypt32_parse_crt(&g_trust, x->raw.p, x->raw.len);
+        for (DWORD i = 0; i < g_nadded; i++) crypt32_parse_crt(&g_trust, g_added[i].der, g_added[i].n);
         g_built_gen = g_trust_gen;
     }
     return &g_trust;
@@ -228,13 +228,36 @@ static void oid_text(const mbedtls_x509_buf *oid, char *out, size_t cap)
     if (mbedtls_oid_get_numeric_string(out, cap, oid) < 0) out[0] = 0;
 }
 
+/* The extensions Windows' CryptoAPI knows that Mbed TLS does not, which
+ * a certificate may mark critical: Microsoft's application policies
+ * (1.3.6.1.4.1.311.21.10, the usages its issuer allows, alongside the
+ * extended key usage Microsoft's Store signing certificates also carry),
+ * and certificate policies (2.5.29.32) naming policies other than
+ * anyPolicy, which Microsoft's Time-Stamp PCA 2010 marks critical.  Any
+ * other unknown critical extension still fails the parse. */
+static int known_ext(void *ctx, mbedtls_x509_crt const *crt, mbedtls_x509_buf const *oid, int critical,
+                     const unsigned char *p, const unsigned char *end)
+{
+    (void)ctx; (void)crt; (void)critical; (void)p; (void)end;
+    static const unsigned char app_policies[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x15, 0x0A },
+                               cert_policies[] = { 0x55, 0x1D, 0x20 };
+    if (oid->len == sizeof(app_policies) && !memcmp(oid->p, app_policies, sizeof(app_policies))) return 0;
+    if (oid->len == sizeof(cert_policies) && !memcmp(oid->p, cert_policies, sizeof(cert_policies))) return 0;
+    return -1;
+}
+
+int crypt32_parse_crt(struct mbedtls_x509_crt *crt, const unsigned char *der, size_t n)
+{
+    return mbedtls_x509_crt_parse_der_with_ext_cb(crt, der, n, 1, known_ext, NULL);
+}
+
 static Cert *cert_new(const BYTE *der, DWORD n)
 {
     /* Mbed TLS keeps parsed keys in PSA, which must be up before any parse */
     roots();
     mbedtls_x509_crt x;
     mbedtls_x509_crt_init(&x);
-    if (!der || !n || mbedtls_x509_crt_parse_der(&x, der, n)) {
+    if (!der || !n || crypt32_parse_crt(&x, der, n)) {
         mbedtls_x509_crt_free(&x);
         SetLastError(CRYPT_E_ASN1_BADTAG_);
         return NULL;
@@ -351,7 +374,7 @@ CRYPT32API BOOL WINAPI CertGetEnhancedKeyUsage(const void *cv, DWORD flags, void
     char oids[16][64];
     DWORD count = 0, need = 2 * sizeof(DWORD_PTR);      /* the count (padded) and the array's pointer */
     if (!(flags & 0x4 /* CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG */) &&
-        !mbedtls_x509_crt_parse_der(&x, c->der, c->ctx.cbCertEncoded) &&
+        !crypt32_parse_crt(&x, c->der, c->ctx.cbCertEncoded) &&
         (x.MBEDTLS_PRIVATE(ext_types) & MBEDTLS_X509_EXT_EXTENDED_KEY_USAGE))
         for (const mbedtls_x509_sequence *q = &x.ext_key_usage; q && q->buf.p && count < 16; q = q->next) {
             oid_text(&q->buf, oids[count], sizeof(oids[count]));
@@ -786,7 +809,7 @@ CRYPT32API BOOL WINAPI CryptVerifyCertificateSignatureEx(ULONG_PTR prov, DWORD e
     mbedtls_md_type_t md;
     mbedtls_pk_type_t pkt;
     const void *opts;
-    if (!mbedtls_x509_crt_parse_der(&crt, der, n)) {
+    if (!crypt32_parse_crt(&crt, der, n)) {
         tbs = &crt.tbs; sig = &crt.sig; md = crt.MBEDTLS_PRIVATE(sig_md); pkt = crt.MBEDTLS_PRIVATE(sig_pk); opts = crt.MBEDTLS_PRIVATE(sig_opts);
     } else if (stype == SIGN_SUBJECT_BLOB_ && !mbedtls_x509_crl_parse_der(&crl, der, n)) {
         tbs = &crl.tbs; sig = &crl.sig; md = crl.MBEDTLS_PRIVATE(sig_md); pkt = crl.MBEDTLS_PRIVATE(sig_pk); opts = crl.MBEDTLS_PRIVATE(sig_opts);
@@ -807,7 +830,7 @@ CRYPT32API BOOL WINAPI CryptVerifyCertificateSignatureEx(ULONG_PTR prov, DWORD e
         const CHAIN_CONTEXT_ *ch = issuer;
         if (ch->cChain && ch->rgpChain[0]->cElement) ic = (const Cert *)ch->rgpChain[0]->rgpElement[0]->pCertContext;
     }
-    if (ic && !mbedtls_x509_crt_parse_der(&icrt, ic->der, ic->ctx.cbCertEncoded)) pk = &icrt.pk;
+    if (ic && !crypt32_parse_crt(&icrt, ic->der, ic->ctx.cbCertEncoded)) pk = &icrt.pk;
     else if (itype == SIGN_ISSUER_PUBKEY_ && !spki_key(issuer, &key)) pk = &key;
     DWORD err = 0;
     if (!pk) err = itype == SIGN_ISSUER_CERT_ || itype == SIGN_ISSUER_PUBKEY_ ? (DWORD)CRYPT_E_ASN1_BADTAG_ : (DWORD)E_INVALIDARG;
@@ -940,7 +963,7 @@ CRYPT32API BOOL WINAPI CertGetCertificateChain(HANDLE engine, const void *cv, LP
      * and the certificate's own store, each after the one it signed */
     mbedtls_x509_crt chain;
     mbedtls_x509_crt_init(&chain);
-    if (mbedtls_x509_crt_parse_der(&chain, c->der, c->ctx.cbCertEncoded)) {
+    if (crypt32_parse_crt(&chain, c->der, c->ctx.cbCertEncoded)) {
         mbedtls_x509_crt_free(&chain);
         SetLastError(CRYPT_E_ASN1_BADTAG_);
         return FALSE;
@@ -958,7 +981,7 @@ CRYPT32API BOOL WINAPI CertGetCertificateChain(HANDLE engine, const void *cv, LP
                     memcmp(x->info.Subject.pbData, last->issuer_raw.p, last->issuer_raw.len) ||
                     (x->ctx.cbCertEncoded == last->raw.len && !memcmp(x->der, last->raw.p, last->raw.len)))
                     continue;
-                if (mbedtls_x509_crt_parse_der(&chain, x->der, x->ctx.cbCertEncoded) == 0) {
+                if (crypt32_parse_crt(&chain, x->der, x->ctx.cbCertEncoded) == 0) {
                     for (found = &chain; found->next; found = found->next) ;
                 }
             }
@@ -1147,7 +1170,7 @@ CRYPT32API BOOL WINAPI CertVerifyCertificateChainPolicy(LPCSTR policy, const voi
         mbedtls_x509_crt_init(&x);
         uint32_t f = 0;
         lock();
-        if (leaf && !mbedtls_x509_crt_parse_der(&x, leaf->der, leaf->ctx.cbCertEncoded))
+        if (leaf && !crypt32_parse_crt(&x, leaf->der, leaf->ctx.cbCertEncoded))
             mbedtls_x509_crt_verify(&x, &x, NULL, host, &f, NULL, NULL);
         unlock();
         if (f & MBEDTLS_X509_BADCERT_CN_MISMATCH) { ps->dwError = 0x800B010F; ps->lChainIndex = ps->lElementIndex = 0; }  /* CERT_E_CN_NO_MATCH */

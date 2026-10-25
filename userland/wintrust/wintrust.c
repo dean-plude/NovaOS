@@ -20,6 +20,12 @@
  * Nested (secondary) signatures are read; WINTRUST_SIGNATURE_SETTINGS picks
  * one or counts them.
  *
+ * App packages (.msix, .appx, .msixbundle, .appxbundle; by file or in
+ * memory) are checked as Windows' APPX SIP checks them: the digests of the
+ * package's zip records, central directory, content types, block map and
+ * code integrity catalog in the signature, then its signer, timestamp and
+ * chain as above (verify_package).
+ *
  * Catalogs (WTD_CHOICE_CATALOG): a signed .cat lists files by hash; the
  * check is the catalog's signature and chain as above, then whether it
  * lists the member file's hash.  The driver action
@@ -823,6 +829,255 @@ static LONG verify_catalog(const CATALOG_INFO_ *ci, BOOL driver, DWORD chain_fla
 }
 
 /* -----------------------------------------------------------------------
+ * App packages (.msix, .appx and their bundles), as Windows' APPX SIP
+ * checks them: the package is a zip whose last file is AppxSignature.p7x,
+ * "PKCX" and a PKCS #7 SignedData over an SpcIndirectDataContent whose
+ * digest is "APPX" and four or five named hashes (the algorithm the
+ * DigestInfo names):
+ *   AXPC  the zip's local file records, the signature's left out: every
+ *         byte before the signature file's own record;
+ *   AXCD  the central directory as it was before the signature was added:
+ *         its records but the signature's, then the zip64 end record, its
+ *         locator and the end record with their counts, size and offset
+ *         put back to that directory's;
+ *   AXCT  [Content_Types].xml, AXBM  AppxBlockMap.xml (whose hashes cover
+ *         every other file), AXCI  AppxMetadata/CodeIntegrity.cat, each
+ *         inflated.
+ * Then the signer's signature, timestamp and chain as for a PE.
+ * ----------------------------------------------------------------------- */
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#define STBI_NO_THREAD_LOCALS             /* (a DLL without TLS) */
+#define STBI_ONLY_PNG                     /* (the zlib decoder is what this uses) */
+#include "../../third_party/stb/stb_image.h"
+
+typedef struct { ULONGLONG lho, csize, usize, rec; DWORD reclen; int method, found; } ZipEnt;
+
+static WORD le16(const BYTE *p) { return (WORD)(p[0] | p[1] << 8); }
+static DWORD le32(const BYTE *p) { return p[0] | p[1] << 8 | p[2] << 16 | (DWORD)p[3] << 24; }
+static ULONGLONG le64(const BYTE *p) { return le32(p) | (ULONGLONG)le32(p + 4) << 32; }
+static void put16(BYTE *p, ULONGLONG v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); }
+static void put32(BYTE *p, ULONGLONG v) { for (int i = 0; i < 4; i++) p[i] = (BYTE)(v >> 8 * i); }
+static void put64(BYTE *p, ULONGLONG v) { for (int i = 0; i < 8; i++) p[i] = (BYTE)(v >> 8 * i); }
+
+/* @s's bytes at @off, copied (@n of them) */
+static BYTE *subj_copy(Subject *s, ULONGLONG off, ULONGLONG n)
+{
+    if (n > 0x7FFFFFFF) return NULL;
+    BYTE *b = zalloc((SIZE_T)n + 1), *at = b;
+    for (ULONGLONG left = n; b && left;) {
+        DWORD k = left > (1u << 20) ? 1u << 20 : (DWORD)left;
+        const BYTE *p = subj_at(s, off, k);
+        if (!p) { zfree(b); return NULL; }
+        CopyMemory(at, p, k);
+        at += k; off += k; left -= k;
+    }
+    return b;
+}
+
+/* A file's contents, inflated (*@n bytes) */
+static BYTE *zip_file(Subject *s, const ZipEnt *e, DWORD *n)
+{
+    const BYTE *h = subj_at(s, e->lho, 30);
+    if (!h || le32(h) != 0x04034b50 || e->usize > 0x7FFFFFFF || e->csize > 0x7FFFFFFF) return NULL;
+    BYTE *raw = subj_copy(s, e->lho + 30 + le16(h + 26) + le16(h + 28), e->csize);
+    if (!raw || e->method == 0) {
+        if (raw && e->csize != e->usize) { zfree(raw); return NULL; }
+        *n = (DWORD)e->csize;
+        return raw;
+    }
+    BYTE *out = e->method == 8 ? zalloc((SIZE_T)e->usize + 1) : NULL;
+    if (out && e->usize && stbi_zlib_decode_noheader_buffer((char *)out, (int)e->usize, (const char *)raw, (int)e->csize) !=
+                           (int)e->usize) { zfree(out); out = NULL; }
+    zfree(raw);
+    *n = (DWORD)e->usize;
+    return out;
+}
+
+static BOOL is_zip(Subject *s)
+{
+    const BYTE *p = subj_at(s, 0, 4);
+    return p && le32(p) == 0x04034b50;
+}
+
+static BOOL hash_bytes(Span alg, const BYTE *p, SIZE_T n, BYTE *out, DWORD *len)
+{
+    Hash h;
+    if (!hash_start(alg, &h)) return FALSE;
+    hash_data(&h, p, n);
+    *len = h.len;
+    hash_end(&h, out);
+    return TRUE;
+}
+
+static LONG verify_package(Subject *s, DWORD chain_flags, Sig *g)
+{
+    ZeroMemory(g, sizeof(*g));
+    /* the end records */
+    ULONGLONG tail_at = s->size > 65557 ? s->size - 65557 : 0;
+    BYTE *tail = subj_copy(s, tail_at, s->size - tail_at), *cd = NULL, z64rec[56], z64loc[20];
+    if (!tail) return TRUST_E_SUBJECT_FORM_UNKNOWN_;
+    LONG err = TRUST_E_SUBJECT_FORM_UNKNOWN_;
+    long long eocd = -1;
+    for (long long i = (long long)(s->size - tail_at) - 22; i >= 0; i--)
+        if (le32(tail + i) == 0x06054b50) { eocd = i; break; }
+    BYTE eocdrec[22];
+    ULONGLONG count, cdsize, cdoff, z64at = 0;
+    BOOL zip64 = FALSE;
+    if (eocd < 0) goto out;
+    CopyMemory(eocdrec, tail + eocd, 22);
+    count = le16(eocdrec + 10); cdsize = le32(eocdrec + 12); cdoff = le32(eocdrec + 16);
+    if (eocd >= 20 && le32(tail + eocd - 20) == 0x07064b50) {
+        CopyMemory(z64loc, tail + eocd - 20, 20);
+        z64at = le64(z64loc + 8);
+        const BYTE *r = subj_at(s, z64at, 56);
+        if (!r || le32(r) != 0x06064b50) goto out;
+        CopyMemory(z64rec, r, 56);
+        count = le64(z64rec + 32); cdsize = le64(z64rec + 40); cdoff = le64(z64rec + 48);
+        zip64 = TRUE;
+    }
+    if (cdoff > s->size || cdsize > s->size - cdoff || cdsize > (64u << 20) || !(cd = subj_copy(s, cdoff, cdsize))) goto out;
+
+    /* the files the digests name */
+    static const char *const names[] = { "AppxSignature.p7x", "[Content_Types].xml", "AppxBlockMap.xml",
+                                         "AppxMetadata/CodeIntegrity.cat" };
+    ZipEnt ent[4];
+    ZeroMemory(ent, sizeof(ent));
+    ULONGLONG last_lho = 0;
+    const BYTE *c = cd, *cend = cd + cdsize;
+    for (ULONGLONG i = 0; i < count; i++) {
+        if (cend - c < 46 || le32(c) != 0x02014b50) goto out;
+        DWORD nl = le16(c + 28), xl = le16(c + 30), cl = le16(c + 32);
+        if ((ULONGLONG)(cend - c) < 46ull + nl + xl + cl) goto out;
+        ZipEnt e = { le32(c + 42), le32(c + 20), le32(c + 24), (ULONGLONG)(c - cd), 46 + nl + xl + cl, le16(c + 10), 1 };
+        for (const BYTE *x = c + 46 + nl; x + 4 <= c + 46 + nl + xl;) {            /* the zip64 sizes */
+            DWORD id = le16(x), xn = le16(x + 2);
+            const BYTE *v = x + 4, *ve = x + 4 + xn;
+            if (ve > c + 46 + nl + xl) goto out;
+            if (id == 1) {
+                if (e.usize == 0xFFFFFFFF && v + 8 <= ve) { e.usize = le64(v); v += 8; }
+                if (e.csize == 0xFFFFFFFF && v + 8 <= ve) { e.csize = le64(v); v += 8; }
+                if (e.lho == 0xFFFFFFFF && v + 8 <= ve) e.lho = le64(v);
+            }
+            x = ve;
+        }
+        if (e.lho >= cdoff) goto out;
+        for (int k = 0; k < 4; k++)
+            if (lstrlenA(names[k]) == (int)nl && !bytes_cmp(c + 46, names[k], nl)) ent[k] = e;
+        if (!(nl == 17 && !bytes_cmp(c + 46, names[0], nl)) && e.lho > last_lho) last_lho = e.lho;
+        c += e.reclen;
+    }
+    err = TRUST_E_NOSIGNATURE_;
+    if (!ent[0].found) goto out;
+    /* (the signature is the last file: added after the package was made) */
+    err = TRUST_E_SUBJECT_FORM_UNKNOWN_;
+    if (count < 2 || ent[0].lho < last_lho || !ent[1].found || !ent[2].found) goto out;
+
+    DWORD plen = 0;
+    BYTE *p7x = zip_file(s, &ent[0], &plen);
+    err = TRUST_E_NOSIGNATURE_;
+    if (!p7x || plen < 8 || bytes_cmp(p7x, "PKCX", 4)) { zfree(p7x); goto out; }
+    g->msg = open_msg(p7x + 4, plen - 4);
+    zfree(p7x);
+    if (!g->msg) goto out;
+    char *inner = msg_param(g->msg, 4 /* CMSG_INNER_CONTENT_TYPE_PARAM */, 0, NULL);
+    BOOL spc = inner && str_eq(inner, "1.3.6.1.4.1.311.2.1.4");
+    zfree(inner);
+    DWORD clen = 0;
+    BYTE *content = spc ? msg_param(g->msg, 2, 0, &clen) : NULL;
+    if (!content) goto out;
+    /* SpcIndirectDataContent { SpcAttributeTypeAndOptionalValue { SIP info }, DigestInfo { alg, "APPX"... } } */
+    Span seq, di, alg, oid = { 0 }, dig = { 0 };
+    const BYTE *p = content, *end = content + clen;
+    BOOL parsed = FALSE;
+    if (der_expect(&p, end, 0x30, &seq, NULL)) {
+        p = seq.p;
+        end = seq.p + seq.n;
+        if (der_expect(&p, end, 0x30, NULL, NULL) && der_expect(&p, end, 0x30, &di, NULL)) {
+            const BYTE *q = di.p;
+            if (der_expect(&q, di.p + di.n, 0x30, &alg, NULL) && der_expect(&q, di.p + di.n, 0x04, &dig, NULL)) {
+                const BYTE *a = alg.p;
+                parsed = der_expect(&a, alg.p + alg.n, 0x06, &oid, NULL);
+            }
+        }
+    }
+    BYTE want[5][64], got[64];
+    BOOL have[5] = { 0 };
+    DWORD hl = 0;
+    err = TRUST_E_BAD_DIGEST_;
+    if (!parsed || !hash_bytes(oid, (const BYTE *)"", 0, got, &hl)) { err = parsed ? NTE_BAD_ALGID_ : TRUST_E_NOSIGNATURE_; zfree(content); goto out; }
+    if (dig.n < 4 || bytes_cmp(dig.p, "APPX", 4) || (dig.n - 4) % (4 + hl)) { zfree(content); goto out; }
+    static const char tags[5][5] = { "AXPC", "AXCD", "AXCT", "AXBM", "AXCI" };
+    for (SIZE_T at = 4; at < dig.n; at += 4 + hl) {
+        int k = 0;
+        while (k < 5 && bytes_cmp(dig.p + at, tags[k], 4)) k++;
+        if (k == 5 || have[k]) { zfree(content); goto out; }
+        CopyMemory(want[k], dig.p + at + 4, hl);
+        have[k] = TRUE;
+    }
+    /* (the hash's OID outlives the content it points into) */
+    BYTE oidb[32];
+    if (oid.n > sizeof(oidb)) { zfree(content); goto out; }
+    CopyMemory(oidb, oid.p, oid.n);
+    oid.p = oidb;
+    zfree(content);
+    if (!have[0] || !have[1] || !have[2] || !have[3] || have[4] != ent[3].found) goto out;
+
+    /* AXPC: the bytes before the signature's record */
+    Hash h;
+    if (!hash_start(oid, &h)) goto out;
+    subj_hash(s, &h, 0, ent[0].lho);
+    hash_end(&h, got);
+    if (bytes_cmp(got, want[0], hl)) goto out;
+    /* AXCD: the directory without the signature, its end records as they were */
+    ULONGLONG ncd = cdsize - ent[0].reclen;
+    BYTE *was = zalloc((SIZE_T)ncd + 56 + 20 + 22);
+    SIZE_T wn = 0;
+    if (!was) goto out;
+    CopyMemory(was, cd, (SIZE_T)ent[0].rec);
+    CopyMemory(was + ent[0].rec, cd + ent[0].rec + ent[0].reclen, (SIZE_T)(cdsize - ent[0].rec - ent[0].reclen));
+    wn = (SIZE_T)ncd;
+    if (zip64) {
+        put64(z64rec + 24, count - 1); put64(z64rec + 32, count - 1);
+        put64(z64rec + 40, ncd); put64(z64rec + 48, ent[0].lho);
+        put64(z64loc + 8, ent[0].lho + ncd);
+        CopyMemory(was + wn, z64rec, 56); wn += 56;
+        CopyMemory(was + wn, z64loc, 20); wn += 20;
+    } else {
+        put16(eocdrec + 8, count - 1); put16(eocdrec + 10, count - 1);
+        put32(eocdrec + 12, ncd); put32(eocdrec + 16, ent[0].lho);
+    }
+    CopyMemory(was + wn, eocdrec, 22); wn += 22;
+    hash_bytes(oid, was, wn, got, &hl);
+    zfree(was);
+    if (bytes_cmp(got, want[1], hl)) goto out;
+    /* AXCT, AXBM, AXCI: the files */
+    for (int k = 1; k < 4; k++) {
+        if (!ent[k].found) continue;
+        DWORD n = 0;
+        BYTE *f = zip_file(s, &ent[k], &n);
+        BOOL same = f && hash_bytes(oid, f, n, got, &hl) && !bytes_cmp(got, want[k + 1], hl);
+        zfree(f);
+        if (!same) goto out;
+    }
+
+    /* the signer, its timestamp and its chain */
+    err = TRUST_E_NOSIGNATURE_;
+    if (!(g->store = CertOpenStore((LPCSTR)1 /* CERT_STORE_PROV_MSG */, ENC_, 0, 0, g->msg))) goto out;
+    if (!(g->signer = msg_signer(g->msg, g->store, &err))) goto out;
+    LONG ts = check_timestamp(g, chain_flags);
+    if (ts < 0) { err = ts; goto out; }
+    g->timestamped = ts == 0;
+    err = check_chain(g->signer, g->timestamped ? &g->when : NULL, g->store, "1.3.6.1.5.5.7.3.3", (LPCSTR)2 /* AUTHENTICODE */,
+                      chain_flags, &g->chain);
+out:
+    zfree(tail);
+    zfree(cd);
+    return err;
+}
+
+/* -----------------------------------------------------------------------
  * The provider's state (WTD_STATEACTION_VERIFY) and its helpers
  * ----------------------------------------------------------------------- */
 typedef struct {
@@ -980,10 +1235,12 @@ static LONG verify(GUID *action, WINTRUST_DATA_ *wd)
     PeLayout pl;
     Sig g;
     ZeroMemory(&g, sizeof(g));
-    if (!err) err = pe_layout(&s, &pl);
     DWORD chain_flags = wd->fdwRevocationChecks == WTD_REVOKE_WHOLECHAIN_ && !(wd->dwProvFlags & WTD_REVOCATION_CHECK_NONE_) ?
                         0x40000000 /* CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT */ : 0;
-    if (!err) {
+    BOOL package = !err && is_zip(&s);
+    if (package) err = verify_package(&s, chain_flags, &g);
+    else if (!err) err = pe_layout(&s, &pl);
+    if (!err && !package) {
         DWORD len = 0;
         BYTE *blob = pe_signature(&s, &pl, &len);
         if (!blob) err = TRUST_E_NOSIGNATURE_;

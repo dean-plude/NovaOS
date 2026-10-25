@@ -179,10 +179,11 @@ static const GUID IID_IActivationFactory__ = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0
  * names the DLL; its DllGetActivationFactory(class, IActivationFactory **)
  * makes the factory, which is then asked for the interface wanted.  The
  * DLL stays loaded, as combase keeps it while the process runs.  A
- * packaged process looks first among its package's classes (the
+ * packaged process looks first among its package graph's classes (each
  * manifest's windows.activatableClass.inProcessServer extensions, which
  * the package's installation registered under
- * HKCU\Software\Classes\ActivatableClasses\Package\<full name>), then
+ * HKCU\Software\Classes\ActivatableClasses\Package\<full name>: its own
+ * package's, then the framework packages' it depends on), then
  * the system's (HKLM\SOFTWARE\Microsoft\WindowsRuntime). */
 static HRESULT registry_factory_in(HKEY hive, const WCHAR *root, HSTRING cls, const WCHAR *name, UINT32 len,
                                    REFIID iid, void **out)
@@ -217,19 +218,30 @@ static HRESULT registry_factory_in(HKEY hive, const WCHAR *root, HSTRING cls, co
     return hr;
 }
 
-LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name);
+LONG WINAPI GetCurrentPackageInfo(UINT32 flags, UINT32 *len, BYTE *buf, UINT32 *count);
+typedef struct { UINT32 reserved, flags; PWSTR path, full, family; BYTE id[48]; } PackageInfo_;
 static HRESULT registry_factory(HSTRING cls, const WCHAR *name, UINT32 len, REFIID iid, void **out)
 {
     static const WCHAR pkg[] = L"Software\\Classes\\ActivatableClasses\\Package\\";
-    WCHAR root[300], full[128];
-    UINT32 n = 128, at = 0;
-    if (!GetCurrentPackageFullName(&n, full)) {
-        for (const WCHAR *r = pkg; *r; r++) root[at++] = *r;
-        for (const WCHAR *r = full; *r; r++) root[at++] = *r;
-        for (const WCHAR *r = L"\\ActivatableClassId\\"; *r; r++) root[at++] = *r;
-        root[at] = 0;
-        HRESULT hr = registry_factory_in(HKEY_CURRENT_USER, root, cls, name, len, iid, out);
-        if (hr != REGDB_E_CLASSNOTREG) return hr;
+    WCHAR root[300];
+    UINT32 n = 0, count = 0;
+    /* the package graph's classes: the package's own, then its frameworks'
+     * (kernel32's GetCurrentPackageInfo, in the order the loader searches) */
+    if (GetCurrentPackageInfo(0, &n, NULL, &count) == ERROR_INSUFFICIENT_BUFFER && n) {
+        BYTE *buf = HeapAlloc(GetProcessHeap(), 0, n);
+        if (buf && !GetCurrentPackageInfo(0, &n, buf, &count)) {
+            for (UINT32 i = 0; i < count; i++) {
+                const WCHAR *full = ((PackageInfo_ *)buf)[i].full;
+                UINT32 at = 0;
+                for (const WCHAR *r = pkg; *r; r++) root[at++] = *r;
+                for (const WCHAR *r = full; r && *r && at < 250; r++) root[at++] = *r;
+                for (const WCHAR *r = L"\\ActivatableClassId\\"; *r; r++) root[at++] = *r;
+                root[at] = 0;
+                HRESULT hr = registry_factory_in(HKEY_CURRENT_USER, root, cls, name, len, iid, out);
+                if (hr != REGDB_E_CLASSNOTREG) { HeapFree(GetProcessHeap(), 0, buf); return hr; }
+            }
+        }
+        if (buf) HeapFree(GetProcessHeap(), 0, buf);
     }
     return registry_factory_in(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\",
                                cls, name, len, iid, out);

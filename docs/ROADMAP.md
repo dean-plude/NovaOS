@@ -1297,9 +1297,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   packages refused until their signatures can be verified), package
   identity in kernel32, packaged Windows Runtime classes,
   `ApplicationActivationManager`, `resources.pri` through Microsoft's MRT
-  Core (`MRM.dll`), test `appxtest`.  Next, for Calculator: bundles,
-  framework packages (VCLibs, `Microsoft.UI.Xaml`) and package signature
-  verification, after 32.3 to 32.5.
+  Core (`MRM.dll`), test `appxtest`.  Second part done: package
+  signatures verified as Windows' APPX SIP verifies them (wintrust; the
+  publisher must be the signer), framework packages (a dependent finds
+  them at their minimum version; the loader searches a packaged
+  program's frameworks, `GetCurrentPackageInfo`, the frameworks' Windows
+  Runtime classes) and bundles (their application package for x64);
+  Microsoft's signed VCLibs, `Microsoft.UI.Xaml.2.8` and .NET Native
+  framework packages install unchanged.
+  Next: a download route for the Store's Calculator bundle and its
+  frameworks, then starting it once 32.5 gives it its controls.
 
 ---
 

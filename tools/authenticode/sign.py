@@ -80,6 +80,13 @@ def make_signature(pe, signer, chain, hash_name, timestamp=None, nested=()):
     are further SignedData encodings to nest"""
     spc = seq(seq(oid(SPC_PE_IMAGE_DATA), seq(bits(b''), explicit(0, explicit(2, tlv(0x80, b''))))),
               seq(alg(hash_name), octets(pe_digest(pe, hash_name))))
+    return sign_content(spc, signer, chain, hash_name, timestamp, nested)
+
+
+def sign_content(spc, signer, chain, hash_name, timestamp=None, nested=()):
+    """the SignedData over @spc (an SpcIndirectDataContent's encoding: a PE's
+    digest, or an app package's, tools/appx/signappx.py), as
+    make_signature() makes it"""
     body = split(spc)[2]                                    # PKCS #7: only the contents octets are hashed
     auth = [attr('1.2.840.113549.1.9.3', oid(SPC_INDIRECT_DATA)),
             attr('1.3.6.1.4.1.311.2.1.12', seq()),

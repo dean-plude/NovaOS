@@ -1,1 +1,1 @@
-{ "selftest": true, "libs": ["shlwapi"] }
+{ "selftest": true, "libs": ["shlwapi", "crypt32"] }

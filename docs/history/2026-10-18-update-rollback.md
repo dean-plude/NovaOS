@@ -1,6 +1,6 @@
 ## A failed update comes back on its own
 
-First part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+First part of roadmap step 33.3 ([design](design/recovery.md)).  An
 update whose kernel stopped during its first start (a panic, a failed
 assertion, a fatal CPU exception) used to print its report and halt, and
 the PC stayed there until someone pressed reset; only then did the boot

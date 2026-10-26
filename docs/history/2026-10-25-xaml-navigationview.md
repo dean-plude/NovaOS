@@ -1,7 +1,7 @@
 ## WinUI 2's NavigationView and RadioButtons
 
 The ninth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the rest
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the rest
 of Calculator's WinUI 2 controls, `NavigationView` and `RadioButtons`,
 apply their templates and lay out.
 

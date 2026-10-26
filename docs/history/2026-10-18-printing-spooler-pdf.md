@@ -1,6 +1,6 @@
 ## Printing: the print spooler, Microsoft Print to PDF and the print dialogs
 
-First part of roadmap step 33.5 ([design](../design/printing.md)).
+First part of roadmap step 33.5 ([design](design/printing.md)).
 NovaOS had no printers: `winspool.drv` was 113 lines of stubs and every
 print menu said no printer was installed. Now programs print the Windows
 way:

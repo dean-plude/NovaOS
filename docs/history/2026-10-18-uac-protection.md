@@ -1,7 +1,7 @@
 ## Unelevated programs cannot change Windows or HKLM
 
 Second part of roadmap step 33.2, which it finishes
-([design](../design/uac.md)).  A program that is not elevated used to
+([design](design/uac.md)).  A program that is not elevated used to
 write anywhere in `C:\Windows`, `C:\Programs` and `HKEY_LOCAL_MACHINE`,
 since the root's permissions reached everything and registry keys had
 none.  Now those folders carry Windows' own DACL (owned by

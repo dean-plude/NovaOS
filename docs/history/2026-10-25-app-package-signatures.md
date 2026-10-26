@@ -1,7 +1,7 @@
 ## App packages: signatures, framework packages and bundles
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), second part: signed packages,
+[design](design/windows-ui-xaml.md)), second part: signed packages,
 the framework packages apps depend on, and bundles.
 
 - **Signatures:** wintrust's `WinVerifyTrust` verifies an app package

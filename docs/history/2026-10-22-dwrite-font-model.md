@@ -1,7 +1,7 @@
 ## DirectWrite's Windows 10 font model
 
 The third part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 DirectWrite interfaces XAML's text services start from as a `Window` is
 created.
 

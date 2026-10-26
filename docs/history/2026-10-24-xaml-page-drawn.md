@@ -1,10 +1,10 @@
 ## A XAML page draws
 
 The seventh part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a WinUI 3
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: a WinUI 3
 page in a `Window` is laid out and drawn, built from Microsoft's sources.
 
-![A WinUI 3 page on NovaOS](../screenshots/winui3-first-page.png)
+![A WinUI 3 page on NovaOS](screenshots/winui3-first-page.png)
 
 - **Layout:** the control styles load now that the theme transitions are
   built, and measure and arrange run over the page (scroll data, geometry

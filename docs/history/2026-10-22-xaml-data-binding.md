@@ -1,7 +1,7 @@
 ## XAML data binding, control templates and the UWP start-up
 
 The fourth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 framework's data binding and control templates, which WinUI 2's styles
 are written with, and the start of a UWP app.
 

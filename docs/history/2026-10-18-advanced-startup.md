@@ -1,6 +1,6 @@
 ## Advanced startup: safe mode, startup repair and the previous version
 
-Third part of roadmap step 33.3 ([design](../design/recovery.md)), which
+Third part of roadmap step 33.3 ([design](design/recovery.md)), which
 it finishes. The boot loader has an Advanced startup menu
 (`bootloader/src/recovery.c`), the counterpart of Windows' Advanced Boot
 Options and recovery environment: F8 as it starts, `shutdown /r /o` (a

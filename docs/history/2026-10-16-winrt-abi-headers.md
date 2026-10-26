@@ -1,7 +1,7 @@
 ## Windows Runtime headers without MIDL
 
 Second part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), and the first question the
+[design](design/windows-ui-xaml.md)), and the first question the
 `dxaml` build has to answer: Microsoft's XAML sources are written against
 the C++ "ABI" headers MIDL makes from their IDL, and against the Windows
 SDK's, and MIDL is a closed tool.

@@ -1,7 +1,7 @@
 ## Windows.UI.Composition, and CoreWindow's pointer events
 
 Second step of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the compositor XAML draws with.
+[design](design/windows-ui-xaml.md)): the compositor XAML draws with.
 
 - **`Windows.UI.Composition`** in `dcomp.dll`, as on Windows (the
   registry's `ActivatableClassId` key for

@@ -12446,7 +12446,7 @@ the T14 (see [drivers.md](drivers.md)).
 
 ## A brand for NovaOS: the Beam logo, an icon set and eight wallpapers
 
-NovaOS has a brand guide, [docs/design/brand](../design/brand/README.md),
+NovaOS has a brand guide, [docs/design/brand](design/brand/README.md),
 built from the Aurora desktop's own colours in `kernel/wm/desktop.c` and
 `kernel/apps/apps.h`.  It brings in:
 
@@ -13779,7 +13779,7 @@ next step for HandBrake (roadmap 27.1); it stays Borked.
 ## Windows.UI.Composition, and CoreWindow's pointer events
 
 Second step of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the compositor XAML draws with.
+[design](design/windows-ui-xaml.md)): the compositor XAML draws with.
 
 - **`Windows.UI.Composition`** in `dcomp.dll`, as on Windows (the
   registry's `ActivatableClassId` key for
@@ -13816,7 +13816,7 @@ pointers.
 ## The UWP app model's core: CoreApplication and CoreWindow
 
 First step of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)).  XAML's `Application.Start` and
+[design](design/windows-ui-xaml.md)).  XAML's `Application.Start` and
 every DirectX UWP app stand on the Windows Runtime's app model, so that
 comes first:
 
@@ -13871,7 +13871,7 @@ next step; it stays Borked.
 ## Direct2D device contexts
 
 First part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML framework draws its
+[design](design/windows-ui-xaml.md)): the XAML framework draws its
 text and shapes with Direct2D 1.1's device contexts, into
 DirectComposition surfaces, so those come before its build.
 
@@ -13985,7 +13985,7 @@ past the fingers' ten notches, and stops a coast with a touch.
 ## Windows Runtime headers without MIDL
 
 Second part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), and the first question the
+[design](design/windows-ui-xaml.md)), and the first question the
 `dxaml` build has to answer: Microsoft's XAML sources are written against
 the C++ "ABI" headers MIDL makes from their IDL, and against the Windows
 SDK's, and MIDL is a closed tool.
@@ -14149,7 +14149,7 @@ T14's check.
 ## The closed Windows App SDK headers, and XAML's type metadata
 
 Fourth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the headers the XAML core's lower
+[design](design/windows-ui-xaml.md)): the headers the XAML core's lower
 layers include from closed Windows App SDK pieces now have NovaOS
 stand-ins, and the next layers of Microsoft's sources build.
 
@@ -14179,7 +14179,7 @@ properties by index and by name.
 ## XAML's collections
 
 Fifth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML core's collections now
+[design](design/windows-ui-xaml.md)): the XAML core's collections now
 build from Microsoft's sources and link, with the layers under them.
 
 - **Built and linked** in `xaml_components.lib`: the collections
@@ -14201,7 +14201,7 @@ build from Microsoft's sources and link, with the layers under them.
 ## The XAML core's toolchain, and its lowest layer built
 
 Third part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): Microsoft's XAML sources
+[design](design/windows-ui-xaml.md)): Microsoft's XAML sources
 (`dxaml`, microsoft-ui-xaml, MIT) now compile for NovaOS as Microsoft
 compiles them, and the first of them are built and tested.
 
@@ -14236,7 +14236,7 @@ weak references, delegates, events, strings) and the built components.
 
 ## Accounts in Settings, and fast user switching
 
-Second part of roadmap step 33.1 ([design](../design/accounts.md)).
+Second part of roadmap step 33.1 ([design](design/accounts.md)).
 Accounts could be made only by programs (`NetUserAdd`), and the lock
 screen offered only the account that locked it.  Now Settings has
 Windows 11's Accounts page: your info with your picture, type and
@@ -14263,7 +14263,7 @@ second account out.
 
 ## Advanced startup: safe mode, startup repair and the previous version
 
-Third part of roadmap step 33.3 ([design](../design/recovery.md)), which
+Third part of roadmap step 33.3 ([design](design/recovery.md)), which
 it finishes. The boot loader has an Advanced startup menu
 (`bootloader/src/recovery.c`), the counterpart of Windows' Advanced Boot
 Options and recovery environment: F8 as it starts, `shutdown /r /o` (a
@@ -14369,7 +14369,7 @@ driver on the T14's real radio.
 
 ## NovaOS starts first beside Windows, and offers Windows
 
-Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
+Second part of roadmap step 33.4 ([design](design/installer.md)).  A
 PC with Windows already has "Windows Boot Manager" first in the
 firmware's `BootOrder`, so NovaOS installed beside it was only reachable
 through the firmware's boot menu.  Setup now finishes by adding a
@@ -14418,7 +14418,7 @@ paging buffers hold GPU commands waits for submission, the next part.
 
 ## Setup makes room by shrinking Windows, and reinstalls keeping drive C:
 
-Third and last part of roadmap step 33.4 ([design](../design/installer.md)),
+Third and last part of roadmap step 33.4 ([design](design/installer.md)),
 which completes it.  Most PCs sold with Windows have no free space: Windows'
 volume runs up to its recovery partition.  Setup now offers "Beside Windows,
 shrinking it from X to Y": NovaOS's NTFS driver checks Windows left the
@@ -14438,7 +14438,7 @@ mkntfs, reinstalls, and checks every Windows file byte for byte from the host.
 
 ## Printing: Notepad++ and SumatraPDF print in the app corpus
 
-Third and last part of roadmap step 33.5 ([design](../design/printing.md)),
+Third and last part of roadmap step 33.5 ([design](design/printing.md)),
 which is now done. Two real Windows programs print on NovaOS the way
 people print, from their own Print dialog:
 
@@ -14459,7 +14459,7 @@ WS-Discovery) and a print queue in Settings.
 
 ## Printing: network printers (IPP) and Settings > Printers
 
-Second part of roadmap step 33.5 ([design](../design/printing.md)).
+Second part of roadmap step 33.5 ([design](design/printing.md)).
 NovaOS printed only to PDF files; now it prints to the printers people
 have at home and at work, without a driver, the way Windows 11 does with
 its "Microsoft IPP Class Driver":
@@ -14488,7 +14488,7 @@ printer and to the IPP printer in the app corpus.
 
 ## Printing: the print spooler, Microsoft Print to PDF and the print dialogs
 
-First part of roadmap step 33.5 ([design](../design/printing.md)).
+First part of roadmap step 33.5 ([design](design/printing.md)).
 NovaOS had no printers: `winspool.drv` was 113 lines of stubs and every
 print menu said no printer was installed. Now programs print the Windows
 way:
@@ -14517,7 +14517,7 @@ Next: IPP Everywhere network printing, then Settings' Printers page.
 Phase 33 (accounts, UAC, rollback and recovery, install beside Windows,
 printing) closed the everyday-OS phase, and the version moves from 0.1.0 to
 0.2.0 (`kernel/ke/version.h`, `CMakeLists.txt`), code name "Kepler".
-[docs/releases/0.2.0.md](../releases/0.2.0.md) is the release's text: what
+[docs/releases/0.2.0.md](releases/0.2.0.md) is the release's text: what
 is new since 0.1, how to start it and its known limits, which include the
 checks that still need a real PC (the T14 boot of the ISO, Hyper-V, the
 update signing key).  Tagging `v0.2.0` runs the release workflow as for
@@ -14525,7 +14525,7 @@ update signing key).  Tagging `v0.2.0` runs the release workflow as for
 
 ## Reset this PC, the firmware's watchdog and Recovery in Settings
 
-The last pieces of roadmap step 33.3 ([design](../design/recovery.md)).
+The last pieces of roadmap step 33.3 ([design](design/recovery.md)).
 Reset this PC works as Windows' "Keep my files": `systemreset /keep` in
 the Terminal, or Reset PC in Settings > System > Recovery, restarts, and
 the next start removes the apps, drivers and settings, keeps the accounts
@@ -14541,7 +14541,7 @@ resets the PC with a file, a folder and a setting to check.
 
 ## Programs ask before they run as administrator
 
-First part of roadmap step 33.2 ([design](../design/uac.md)).  A program
+First part of roadmap step 33.2 ([design](design/uac.md)).  A program
 whose manifest asks for administrator, and ShellExecute's `runas`, used to
 get the elevated half of the administrator's token at once, as if UAC
 were set to "never notify".  Now the screen dims and User Account
@@ -14565,7 +14565,7 @@ itself.
 ## Unelevated programs cannot change Windows or HKLM
 
 Second part of roadmap step 33.2, which it finishes
-([design](../design/uac.md)).  A program that is not elevated used to
+([design](design/uac.md)).  A program that is not elevated used to
 write anywhere in `C:\Windows`, `C:\Programs` and `HKEY_LOCAL_MACHINE`,
 since the root's permissions reached everything and registry keys had
 none.  Now those folders carry Windows' own DACL (owned by
@@ -14588,7 +14588,7 @@ writes for an elevated program.
 
 ## A failed update comes back on its own
 
-First part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+First part of roadmap step 33.3 ([design](design/recovery.md)).  An
 update whose kernel stopped during its first start (a panic, a failed
 assertion, a fatal CPU exception) used to print its report and halt, and
 the PC stayed there until someone pressed reset; only then did the boot
@@ -14607,7 +14607,7 @@ v3 and checks that the machine comes back as v1 with no reset from outside.
 
 ## An update that hangs or stalls comes back too
 
-Second part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+Second part of roadmap step 33.3 ([design](design/recovery.md)).  An
 update's first start used to count as good as soon as the kernel enabled
 interrupts, and a kernel that hung during that start waited for someone
 to press reset.  Now the start counts as good only once the desktop has
@@ -14832,7 +14832,7 @@ up to 10 s, as an app would on Windows. Test-only change.
 
 ## The 0.2 "Kepler" notes cover the last push
 
-Before the tag, [docs/releases/0.2.0.md](../releases/0.2.0.md) gained what
+Before the tag, [docs/releases/0.2.0.md](releases/0.2.0.md) gained what
 landed after Phase 33: Wi-Fi WPA2, the Bluetooth host stack and a mouse,
 processor idle states and idle devices in D3 (the first parts of steps
 28.2 and 28.4), GPU virtual addresses for the Intel GPU design, the XAML
@@ -14918,7 +14918,7 @@ between them.  Not yet: SAE's hash-to-element and its other groups,
 ## XAML's core services, made for real
 
 Tenth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML core is now made the
+[design](design/windows-ui-xaml.md)): the XAML core is now made the
 way the framework makes it, `CCoreServices::Create`, on Microsoft's own
 platform layer.
 
@@ -14941,7 +14941,7 @@ platform layer.
 ## XAML's core services
 
 Ninth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML core's own core
+[design](design/windows-ui-xaml.md)): the XAML core's own core
 services, `CCoreServices` (`core/dll/xcpcore.cpp`), now build from
 Microsoft's sources, and XAML text loads through them as
 `XamlReader.Load` loads it (`CCoreServices::ParseXaml`).
@@ -14962,7 +14962,7 @@ Microsoft's sources, and XAML text loads through them as
 ## XAML's merged and theme dictionaries
 
 Eighth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): a `ResourceDictionary` loaded
+[design](design/windows-ui-xaml.md)): a `ResourceDictionary` loaded
 from XAML now keeps its `MergedDictionaries` and `ThemeDictionaries`,
 and looking a key up searches them as Windows does.
 
@@ -14979,7 +14979,7 @@ and looking a key up searches them as Windows does.
 ## App packages: .msix and .appx
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), first part: Windows app packages
+[design](design/windows-ui-xaml.md)), first part: Windows app packages
 install, start and read their `resources.pri`.
 
 - **`appx`** (`C:\Windows\System32\appx.exe`) installs a package
@@ -15020,7 +15020,7 @@ steps 32.3 to 32.5.
 ## The composition interfaces XAML's render tree asks for
 
 Part of the Phase 32 push for `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): `dcomp.dll`'s
+([design](design/windows-ui-xaml.md)): `dcomp.dll`'s
 Windows.UI.Composition grows the later interface versions, animations
 and property sets the XAML framework's compositor tree host uses.
 
@@ -15074,7 +15074,7 @@ starting at boot.
 ## XAML's control layer and the DispatcherQueue
 
 Twelfth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the control layer the
+[design](design/windows-ui-xaml.md)): the control layer the
 framework starts up on now builds from Microsoft's sources.
 
 - **New DLL:** `CoreMessaging.dll`, the `DispatcherQueue` every XAML
@@ -15094,7 +15094,7 @@ framework starts up on now builds from Microsoft's sources.
 ## XAML's dispatcher, default styles and Window
 
 Phase 32 push on step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): more of what
+([design](design/windows-ui-xaml.md)): more of what
 `DXamlCore::InitializeInstance` makes now builds from Microsoft's
 sources.
 
@@ -15107,7 +15107,7 @@ sources.
 ## XAML's framework entry points
 
 Eleventh part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the first of the framework
+[design](design/windows-ui-xaml.md)): the first of the framework
 itself (`dxaml/lib`) now builds from Microsoft's sources on the core.
 
 - **Built:** `DXamlCore`, the per-thread framework core, with its
@@ -15126,7 +15126,7 @@ itself (`dxaml/lib`) now builds from Microsoft's sources on the core.
 ## XAML's rendering seam
 
 Thirteenth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the render target the XAML
+[design](design/windows-ui-xaml.md)): the render target the XAML
 control makes now builds from Microsoft's sources, and
 `CJupiterControl::Create` succeeds.
 
@@ -15147,7 +15147,7 @@ control makes now builds from Microsoft's sources, and
 ## XAML's value boxer and Windows.Foundation.PropertyValue
 
 Part of the Phase 32 push on step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): what `XamlReader.Load` hands
+([design](design/windows-ui-xaml.md)): what `XamlReader.Load` hands
 its results back through now builds from Microsoft's sources.
 
 - **New DLL:** `wintypes.dll`, `Windows.Foundation.PropertyValue`: the
@@ -15246,7 +15246,7 @@ the fence.
 ## XAML's Application.Start on the desktop
 
 The last part of step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push:
+([design](design/windows-ui-xaml.md)), in the Phase 32 push:
 `Application.Start` runs, built from Microsoft's sources, which with
 `XamlReader.Load` (the part before) completes the step.
 
@@ -15275,7 +15275,7 @@ The last part of step 32.3 of `Windows.UI.Xaml` on NovaOS
 ## The content islands under a XAML Window
 
 The first part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 Windows App SDK's lifted content, input and windowing classes, which a
 XAML `Window` sits on, and the framework's window classes built.
 
@@ -15308,7 +15308,7 @@ XAML `Window` sits on, and the framework's window classes built.
 ## XAML under its Windows.UI.Xaml names
 
 The first part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the XAML
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the XAML
 framework, Microsoft's WinUI 3 source with its lifted `Microsoft.UI.Xaml`
 interfaces, now also answers as `Windows.UI.Xaml`, the system XAML that
 WinUI 2 and UWP apps are compiled against.
@@ -15338,7 +15338,7 @@ WinUI 2 and UWP apps are compiled against.
 ## DirectWrite's Windows 10 font model
 
 The third part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 DirectWrite interfaces XAML's text services start from as a `Window` is
 created.
 
@@ -15381,7 +15381,7 @@ code runs eight jobs and the **Build and boot-test** summary
 ## WinUI 2's controls built
 
 The second part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: WinUI 2,
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: WinUI 2,
 the controls library UWP apps ship, is built from Microsoft's MIT
 `winui2/main` sources as `Microsoft.UI.Xaml.dll` 2.x and runs on the
 system XAML under its `Windows.UI.Xaml` names.
@@ -15414,7 +15414,7 @@ system XAML under its `Windows.UI.Xaml` names.
 ## XAML data binding, control templates and the UWP start-up
 
 The fourth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 framework's data binding and control templates, which WinUI 2's styles
 are written with, and the start of a UWP app.
 
@@ -15448,7 +15448,7 @@ are written with, and the start of a UWP app.
 ## The XAML framework's theme resources
 
 The second part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 control styles and theme resources a XAML `Window` loads as it is
 created.
 
@@ -15598,7 +15598,7 @@ machine's memory.
 ## XAML animation and WinUI 2's inherited properties
 
 The fifth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 framework's animation, which the core's start-up and every control's
 visual states run on, and WinUI 2 types that inherit framework
 properties.
@@ -15702,7 +15702,7 @@ used only by the installation media (docs/design/disk-c.md, step 3).
 ## WinUI 2's controls get their default styles
 
 The eighth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: with
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: with
 `XamlControlsResources` merged into the app's resources, as an app's
 `App.xaml` merges it, WinUI 2's controls take their default styles and
 apply their templates.
@@ -15734,10 +15734,10 @@ apply their templates.
 ## A XAML page draws
 
 The seventh part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a WinUI 3
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: a WinUI 3
 page in a `Window` is laid out and drawn, built from Microsoft's sources.
 
-![A WinUI 3 page on NovaOS](../screenshots/winui3-first-page.png)
+![A WinUI 3 page on NovaOS](screenshots/winui3-first-page.png)
 
 - **Layout:** the control styles load now that the theme transitions are
   built, and measure and arrange run over the page (scroll data, geometry
@@ -15764,7 +15764,7 @@ page in a `Window` is laid out and drawn, built from Microsoft's sources.
 ## WinUI 2's theme resources load whole
 
 The seventh part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push:
+([design](design/windows-ui-xaml.md)), in the Phase 32 push:
 `XamlControlsResources`, the dictionary of WinUI 2's theme resources an
 app's `App.xaml` merges, now loads from its `Source` and answers lookups.
 
@@ -15792,7 +15792,7 @@ app's `App.xaml` merges, now loads from its `Source` and answers lookups.
 ## XAML's UWP start-up runs through
 
 The sixth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a UWP
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: a UWP
 app's `Application.Start` now runs to the end, and WinUI 2's theme
 resources load much further.
 
@@ -15816,7 +15816,7 @@ resources load much further.
 ## App packages: signatures, framework packages and bundles
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), second part: signed packages,
+[design](design/windows-ui-xaml.md)), second part: signed packages,
 the framework packages apps depend on, and bundles.
 
 - **Signatures:** wintrust's `WinVerifyTrust` verifies an app package
@@ -15875,7 +15875,7 @@ shards.
 ## NovaOS 0.2.1 "Starlight": the notes and the screenshots
 
 Release prep for 0.2.1, code name "Starlight", the release that follows
-Phase 32. [docs/releases/0.2.1.md](../releases/0.2.1.md) is the release's
+Phase 32. [docs/releases/0.2.1.md](releases/0.2.1.md) is the release's
 text: the XAML framework under `Windows.UI.Xaml`, WinUI 2 and app
 packages, drive C: as the installed NTFS volume, the rebuilt Settings, the
 Windows Firewall, and the rest since 0.2, with how to start it and its
@@ -15888,14 +15888,14 @@ Screenshots retaken from the `latest` ISO of 2026-10-25: the desktop,
 **Install NovaOS** and Setup's confirm page (NTFS only now), Settings'
 Display and Printers pages, and two new ones for the firewall: the
 network icon's question on a new network and Settings > Firewall
-([screenshots/README.md](../screenshots/README.md)). The README's status
+([screenshots/README.md](screenshots/README.md)). The README's status
 says that Kepler's ISO boots on the T14 and that NovaOS installs on a real
 Hyper-V host, and lists Phase 32.
 
 ## App packages: a download route for Microsoft Store apps
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), third part: getting a Store
+[design](design/windows-ui-xaml.md)), third part: getting a Store
 app's packages the way the Store app gets them.
 
 - **`tools/appx/storefetch.py`** downloads a free Store product's bundle
@@ -15923,7 +15923,7 @@ the bundle's publisher, as Windows does.
 ## WinUI 2's NavigationView and RadioButtons
 
 The ninth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the rest
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the rest
 of Calculator's WinUI 2 controls, `NavigationView` and `RadioButtons`,
 apply their templates and lay out.
 
@@ -15965,10 +15965,10 @@ apply their templates and lay out.
 ## A XAML page takes input
 
 The eighth and last part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Starlight 0.2.1 push: a
+([design](design/windows-ui-xaml.md)), in the Starlight 0.2.1 push: a
 WinUI 3 page is clicked and typed into, built from Microsoft's sources.
 
-![A WinUI 3 page clicked and typed into on NovaOS](../screenshots/winui3-input.png)
+![A WinUI 3 page clicked and typed into on NovaOS](screenshots/winui3-input.png)
 
 - **Input:** the island's pointer and keyboard messages reach the
   framework's input manager through its browser host's input entry

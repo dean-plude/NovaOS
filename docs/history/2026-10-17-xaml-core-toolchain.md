@@ -1,7 +1,7 @@
 ## The XAML core's toolchain, and its lowest layer built
 
 Third part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): Microsoft's XAML sources
+[design](design/windows-ui-xaml.md)): Microsoft's XAML sources
 (`dxaml`, microsoft-ui-xaml, MIT) now compile for NovaOS as Microsoft
 compiles them, and the first of them are built and tested.
 

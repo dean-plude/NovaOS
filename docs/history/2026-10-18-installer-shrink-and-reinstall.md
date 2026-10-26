@@ -1,6 +1,6 @@
 ## Setup makes room by shrinking Windows, and reinstalls keeping drive C:
 
-Third and last part of roadmap step 33.4 ([design](../design/installer.md)),
+Third and last part of roadmap step 33.4 ([design](design/installer.md)),
 which completes it.  Most PCs sold with Windows have no free space: Windows'
 volume runs up to its recovery partition.  Setup now offers "Beside Windows,
 shrinking it from X to Y": NovaOS's NTFS driver checks Windows left the

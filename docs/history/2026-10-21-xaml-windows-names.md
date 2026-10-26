@@ -1,7 +1,7 @@
 ## XAML under its Windows.UI.Xaml names
 
 The first part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the XAML
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the XAML
 framework, Microsoft's WinUI 3 source with its lifted `Microsoft.UI.Xaml`
 interfaces, now also answers as `Windows.UI.Xaml`, the system XAML that
 WinUI 2 and UWP apps are compiled against.

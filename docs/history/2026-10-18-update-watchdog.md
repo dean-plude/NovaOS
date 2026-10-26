@@ -1,6 +1,6 @@
 ## An update that hangs or stalls comes back too
 
-Second part of roadmap step 33.3 ([design](../design/recovery.md)).  An
+Second part of roadmap step 33.3 ([design](design/recovery.md)).  An
 update's first start used to count as good as soon as the kernel enabled
 interrupts, and a kernel that hung during that start waited for someone
 to press reset.  Now the start counts as good only once the desktop has

@@ -1,6 +1,6 @@
 ## Printing: Notepad++ and SumatraPDF print in the app corpus
 
-Third and last part of roadmap step 33.5 ([design](../design/printing.md)),
+Third and last part of roadmap step 33.5 ([design](design/printing.md)),
 which is now done. Two real Windows programs print on NovaOS the way
 people print, from their own Print dialog:
 

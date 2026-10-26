@@ -1,7 +1,7 @@
 ## XAML's framework entry points
 
 Eleventh part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the first of the framework
+[design](design/windows-ui-xaml.md)): the first of the framework
 itself (`dxaml/lib`) now builds from Microsoft's sources on the core.
 
 - **Built:** `DXamlCore`, the per-thread framework core, with its

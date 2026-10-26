@@ -1,7 +1,7 @@
 ## XAML's Application.Start on the desktop
 
 The last part of step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push:
+([design](design/windows-ui-xaml.md)), in the Phase 32 push:
 `Application.Start` runs, built from Microsoft's sources, which with
 `XamlReader.Load` (the part before) completes the step.
 

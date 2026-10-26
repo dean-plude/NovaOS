@@ -1,7 +1,7 @@
 ## WinUI 2's controls built
 
 The second part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: WinUI 2,
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: WinUI 2,
 the controls library UWP apps ship, is built from Microsoft's MIT
 `winui2/main` sources as `Microsoft.UI.Xaml.dll` 2.x and runs on the
 system XAML under its `Windows.UI.Xaml` names.

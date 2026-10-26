@@ -1,7 +1,7 @@
 ## XAML's UWP start-up runs through
 
 The sixth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: a UWP
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: a UWP
 app's `Application.Start` now runs to the end, and WinUI 2's theme
 resources load much further.
 

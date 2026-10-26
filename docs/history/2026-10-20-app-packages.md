@@ -1,7 +1,7 @@
 ## App packages: .msix and .appx
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), first part: Windows app packages
+[design](design/windows-ui-xaml.md)), first part: Windows app packages
 install, start and read their `resources.pri`.
 
 - **`appx`** (`C:\Windows\System32\appx.exe`) installs a package

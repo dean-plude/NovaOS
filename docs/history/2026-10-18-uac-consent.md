@@ -1,6 +1,6 @@
 ## Programs ask before they run as administrator
 
-First part of roadmap step 33.2 ([design](../design/uac.md)).  A program
+First part of roadmap step 33.2 ([design](design/uac.md)).  A program
 whose manifest asks for administrator, and ShellExecute's `runas`, used to
 get the elevated half of the administrator's token at once, as if UAC
 were set to "never notify".  Now the screen dims and User Account

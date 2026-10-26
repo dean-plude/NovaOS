@@ -36,14 +36,22 @@
  * pixels (the window's DPI over 96).
  *
  * There is one view, the main one, as in an app that never calls
- * CreateNewView.  A desktop thread that hosts XAML gets a hidden CoreWindow
+ * CreateNewView, with its Dispatcher and title bar (ICoreApplicationView2
+ * and 3; WinUI 2's NavigationView follows the title bar).  A desktop thread that hosts XAML gets a hidden CoreWindow
  * from PrivateCreateCoreWindow, as XAML islands make on Windows.  The
  * application, view, window and dispatcher objects are static and agile,
  * so their reference counts are kept only for show; event arguments and
  * IAsyncActions are counted for real.
+ *
+ * Its other statics: DesignMode (never in a designer), PowerManager and
+ * AnalyticsInfo (a desktop, Windows.Desktop, at the system's version).
  */
 #include <windows.h>
 #include <roapi.h>
+
+/* ntdll's RtlGetVersion, with its RTL_OSVERSIONINFOW */
+typedef struct { ULONG size, major, minor, build, platform; WCHAR csd[128]; } VersionInfo;
+__declspec(dllimport) LONG WINAPI RtlGetVersion(VersionInfo *info);
 
 #define APPCORE_API __declspec(dllexport)
 typedef BYTE boolean_t;
@@ -67,6 +75,9 @@ static const GUID IID_ICoreCursorFactory_    = { 0xF6359621, 0xA79D, 0x4ED3, { 0
 static const GUID IID_ICoreApplicationExit_  = { 0xCF86461D, 0x261E, 0x4B72, { 0x9A, 0xCD, 0x44, 0xED, 0x2A, 0xCE, 0x6A, 0x29 } };
 static const GUID IID_ICoreImmersiveApplication_ = { 0x1ADA0E3E, 0xE4A2, 0x4123, { 0xB4, 0x51, 0xDC, 0x96, 0xBF, 0x80, 0x04, 0x19 } };
 static const GUID IID_ICoreApplicationView_  = { 0x638BB2DB, 0x451D, 0x4661, { 0xB0, 0x99, 0x41, 0x4F, 0x34, 0xFF, 0xB9, 0xF1 } };
+static const GUID IID_ICoreApplicationView2_ = { 0x68EB7ADF, 0x917F, 0x48EB, { 0x9A, 0xEB, 0x7D, 0xE5, 0x3E, 0x08, 0x6A, 0xB1 } };
+static const GUID IID_ICoreApplicationView3_ = { 0x07EBE1B3, 0xA4CF, 0x4550, { 0xAB, 0x70, 0xB0, 0x7E, 0x85, 0x33, 0x0B, 0xC8 } };
+static const GUID IID_ICoreApplicationViewTitleBar_ = { 0x006D35E3, 0xE1F1, 0x431B, { 0x95, 0x08, 0x29, 0xB9, 0x69, 0x26, 0xAC, 0x53 } };
 static const GUID IID_ICoreWindow_           = { 0x79B9D5F2, 0x879E, 0x4B89, { 0xB7, 0x98, 0x79, 0xE4, 0x75, 0x98, 0x03, 0x0C } };
 static const GUID IID_ICoreWindowStatic_     = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90, 0x22, 0x53, 0x6B, 0xB9, 0xCF, 0x93, 0xB1 } };
 static const GUID IID_ICoreWindow5_          = { 0x4B4AE1E1, 0x2E6D, 0x4EAA, { 0xBD, 0xA1, 0x1C, 0x5C, 0xC1, 0xBE, 0xE1, 0x41 } };
@@ -1026,13 +1037,20 @@ APPCORE_API HRESULT WINAPI PrivateCreateCoreWindow(int type, LPCWSTR title, int 
     return SUCCEEDED(hr) ? win_qi(&g_win, iid, out) : hr;
 }
 
-/* ---- the view (CoreApplicationView) and the launch's arguments -------- */
-typedef struct { const void *const *vt; Event activated; } View;
+/* ---- the view (CoreApplicationView) and the launch's arguments --------
+ * The one view: ICoreApplicationView, 2 (its Dispatcher, the CoreWindow's)
+ * and 3 (not a component; its title bar: the system's, visible, the view
+ * not extended into it) */
+typedef struct { const void *const *vt, *const *vt2, *const *vt3; Event activated, hosted_closing; } View;
 static View g_view;
+typedef struct { const void *const *vt, *const *wrs, *const *weak; boolean_t extend; Event metrics, visible; } TitleBar;
+static TitleBar g_title;
 static HRESULT STDMETHODCALLTYPE view_qi(View *v, REFIID iid, void **out)
 {
     if (!out) return E_POINTER;
     if (is_base(iid) || IsEqualGUID(iid, &IID_ICoreApplicationView_)) { *out = &v->vt; return S_OK; }
+    if (IsEqualGUID(iid, &IID_ICoreApplicationView2_)) { *out = &v->vt2; return S_OK; }
+    if (IsEqualGUID(iid, &IID_ICoreApplicationView3_)) { *out = &v->vt3; return S_OK; }
     *out = 0;
     return E_NOINTERFACE;
 }
@@ -1044,7 +1062,58 @@ static HRESULT STDMETHODCALLTYPE view_is_main(View *v, boolean_t *b) { (void)v; 
 static HRESULT STDMETHODCALLTYPE view_is_hosted(View *v, boolean_t *b) { (void)v; if (!b) return E_POINTER; *b = 0; return S_OK; }
 static const void *const view_vt[] = { INSP_FNS(view_qi, view_name), (void *)view_window, (void *)view_add_activated,
                                        (void *)view_remove_activated, (void *)view_is_main, (void *)view_is_hosted };
-static View g_view = { (const void *const *)view_vt };
+static HRESULT STDMETHODCALLTYPE view2_qi(void *p, REFIID iid, void **out) { (void)p; return view_qi(&g_view, iid, out); }
+static HRESULT STDMETHODCALLTYPE view2_name(void *p, HSTRING *n) { (void)p; return view_name(&g_view, n); }
+static HRESULT STDMETHODCALLTYPE view2_dispatcher(void *p, void **d) { (void)p; if (!d) return E_POINTER; *d = &g_disp.vt; return S_OK; }
+static const void *const view2_vt[] = { INSP_FNS(view2_qi, view2_name), (void *)view2_dispatcher };
+static HRESULT STDMETHODCALLTYPE view3_component(void *p, boolean_t *b) { (void)p; if (!b) return E_POINTER; *b = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE view3_title(void *p, void **t) { (void)p; if (!t) return E_POINTER; *t = &g_title.vt; return S_OK; }
+static HRESULT STDMETHODCALLTYPE view3_add_closing(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_view.hosted_closing, h, t); }
+static HRESULT STDMETHODCALLTYPE view3_remove_closing(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_view.hosted_closing, t); }
+static const void *const view3_vt[] = { INSP_FNS(view2_qi, view2_name), (void *)view3_component, (void *)view3_title,
+                                        (void *)view3_add_closing, (void *)view3_remove_closing };
+static View g_view = { (const void *const *)view_vt, (const void *const *)view2_vt, (const void *const *)view3_vt };
+
+/* CoreApplicationViewTitleBar: the system's title bar over the view (its
+ * window's caption, 32 pixels, no system overlay insets); extending the
+ * view into it is remembered, nothing else changes, so neither of its
+ * events is raised */
+static HRESULT STDMETHODCALLTYPE title_qi(TitleBar *t, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_ICoreApplicationViewTitleBar_)) { *out = &t->vt; return S_OK; }
+    if (IsEqualGUID(iid, &IID_IWeakReferenceSource_)) { *out = &t->wrs; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE title_name(TitleBar *t, HSTRING *n) { (void)t; return make_hstring(L"Windows.ApplicationModel.Core.CoreApplicationViewTitleBar", n); }
+static HRESULT STDMETHODCALLTYPE title_put_extend(TitleBar *t, boolean_t b) { t->extend = b != 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_get_extend(TitleBar *t, boolean_t *b) { if (!b) return E_POINTER; *b = t->extend; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_inset(TitleBar *t, double *v) { (void)t; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_height(TitleBar *t, double *v) { (void)t; if (!v) return E_POINTER; *v = 32; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_add_metrics(TitleBar *t, void *h, EventRegistrationToken *k) { return ev_add(&t->metrics, h, k); }
+static HRESULT STDMETHODCALLTYPE title_remove_metrics(TitleBar *t, EventRegistrationToken k) { return ev_remove(&t->metrics, k); }
+static HRESULT STDMETHODCALLTYPE title_visible(TitleBar *t, boolean_t *b) { (void)t; if (!b) return E_POINTER; *b = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_add_visible(TitleBar *t, void *h, EventRegistrationToken *k) { return ev_add(&t->visible, h, k); }
+static HRESULT STDMETHODCALLTYPE title_remove_visible(TitleBar *t, EventRegistrationToken k) { return ev_remove(&t->visible, k); }
+static const void *const title_vt[] = { INSP_FNS(title_qi, title_name), (void *)title_put_extend, (void *)title_get_extend,
+                                        (void *)title_inset, (void *)title_inset, (void *)title_height,
+                                        (void *)title_add_metrics, (void *)title_remove_metrics, (void *)title_visible,
+                                        (void *)title_add_visible, (void *)title_remove_visible };
+/* (and weakly held, as C++/WinRT's event revokers hold it: it always resolves) */
+static HRESULT STDMETHODCALLTYPE title_wrs_qi(void *p, REFIID iid, void **out) { (void)p; return title_qi(&g_title, iid, out); }
+static HRESULT STDMETHODCALLTYPE title_wrs_get(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = &g_title.weak; return S_OK; }
+static HRESULT STDMETHODCALLTYPE title_weak_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID(iid, &IID_IUnknown) || IsEqualGUID(iid, &IID_IWeakReference_)) { *out = p; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE title_resolve(void *p, REFIID iid, void **v) { (void)p; return title_qi(&g_title, iid, v); }
+static const void *const title_wrs_vt[] = { (void *)title_wrs_qi, (void *)static_ref, (void *)static_ref, (void *)title_wrs_get };
+static const void *const title_weak_vt[] = { (void *)title_weak_qi, (void *)static_ref, (void *)static_ref, (void *)title_resolve };
+static TitleBar g_title = { (const void *const *)title_vt, (const void *const *)title_wrs_vt, (const void *const *)title_weak_vt };
 
 /* LaunchActivatedEventArgs: Kind Launch (0), PreviousExecutionState
  * NotRunning (0), no splash screen; Arguments are the command line after
@@ -1406,6 +1475,57 @@ static const void *const pm_statics_vt[] = {
 _Static_assert(sizeof pm_statics_vt / sizeof pm_statics_vt[0] == 6 + 15, "IPowerManagerStatics has 21 slots");
 static PowerManager g_power = { (const void *const *)pm_factory_vt, (const void *const *)pm_statics_vt };
 
+/* ---- AnalyticsInfo: the device family a program runs on, Windows.Desktop
+ * with the system's version (Windows serves it from Windows.System.Profile;
+ * WinUI 2 asks whether it is on an Xbox).  DeviceForm is Unknown, as on a
+ * desktop PC that reports none ---------------------------------------- */
+static const GUID IID_IAnalyticsInfoStatics_ = { 0x1D5EE066, 0x188D, 0x5BA9, { 0x43, 0x87, 0xAC, 0xAE, 0xB0, 0xE7, 0xE3, 0x05 } };
+static const GUID IID_IAnalyticsVersionInfo_ = { 0x926130B8, 0x9955, 0x4C74, { 0xBD, 0xC1, 0x7C, 0xD0, 0xDE, 0xCF, 0x9B, 0x03 } };
+typedef struct { const void *const *factory; const void *const *statics; const void *const *version; } AnalyticsInfo;
+static AnalyticsInfo g_analytics;
+static HRESULT STDMETHODCALLTYPE pi_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_analytics.factory;
+    else if (IsEqualGUID(iid, &IID_IAnalyticsInfoStatics_)) *out = &g_analytics.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE pi_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.Profile.AnalyticsInfo", n); }
+static HRESULT STDMETHODCALLTYPE pi_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE pi_version_info(void *p, void **o) { (void)p; if (!o) return E_POINTER; *o = &g_analytics.version; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pi_form(void *p, HSTRING *n) { (void)p; return make_hstring(L"Unknown", n); }
+static HRESULT STDMETHODCALLTYPE avi_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IAnalyticsVersionInfo_)) { *out = &g_analytics.version; return S_OK; }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE avi_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.Profile.AnalyticsVersionInfo", n); }
+static HRESULT STDMETHODCALLTYPE avi_family(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.Desktop", n); }
+/* DeviceFamilyVersion: the version as one decimal number, major, minor,
+ * build and revision in 16 bits each */
+static HRESULT STDMETHODCALLTYPE avi_family_version(void *p, HSTRING *n)
+{
+    (void)p;
+    VersionInfo v = { sizeof v };
+    if (RtlGetVersion(&v) != 0) { v.major = 10; v.minor = 0; v.build = 0; }
+    unsigned long long x = ((unsigned long long)v.major << 48) | ((unsigned long long)v.minor << 32)
+                         | ((unsigned long long)(v.build & 0xFFFF) << 16);
+    WCHAR buf[24], *e = buf + 23;
+    *e = 0;
+    do { *--e = (WCHAR)(L'0' + x % 10); x /= 10; } while (x);
+    return make_hstring(e, n);
+}
+static const void *const pi_factory_vt[] = { INSP_FNS(pi_qi, pi_name), (void *)pi_activate };
+static const void *const pi_statics_vt[] = { INSP_FNS(pi_qi, pi_name), (void *)pi_version_info, (void *)pi_form };
+static const void *const avi_vt[] = { INSP_FNS(avi_qi, avi_name), (void *)avi_family, (void *)avi_family_version };
+static AnalyticsInfo g_analytics = { (const void *const *)pi_factory_vt, (const void *const *)pi_statics_vt,
+                                     (const void *const *)avi_vt };
+
 /* ---- the in-process server's exports ---------------------------------- */
 static BOOL name_is(HSTRING s, const WCHAR *want)
 {
@@ -1422,6 +1542,7 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.UI.Core.CoreCursor")) { *factory = &g_cursor_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.ApplicationModel.DesignMode")) { *factory = &g_design.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Power.PowerManager")) { *factory = &g_power.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.Profile.AnalyticsInfo")) { *factory = &g_analytics.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

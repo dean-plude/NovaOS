@@ -847,6 +847,23 @@ CORE_LIBRARIES.append((_INPUT, 'core/common.props', 'core/input/precomp.h', []))
 CORE_FIRST[_INPUT] = CORE_FIRST['core/xcpcore.vcxproj'] + ['microsoft.ui.composition.h']
 CORE_SOURCES[_INPUT] = ('InputServices.cpp', 'DirectManipulationServiceSharedState.cpp', 'RoutedEventArgs.cpp',
                          'FocusedElementRemovedEventArgs.cpp', 'GettingFocusEventArgs.cpp', 'LosingFocusEventArgs.cpp')
+# (and what WinUI 2's controls make once their OnApplyTemplate overrides
+# run: the keyboard accelerator NavigationView gives its pane button,
+# Windows+Back (the core's CKeyboardAccelerator and its invoked args, the
+# framework's peer of each and KeyboardAccelerator's partial), and the
+# routed events SwipeControl adds its pointer handlers for
+# (UIElement.PointerPressedEvent's RoutedEvent, with its partial), and
+# LayoutInformation, which ItemsRepeater's layouts ask for an element's
+# available size, and the ThemeShadow NavigationView casts from its pane
+# (Shadow, ThemeShadow and its receivers' UIElementWeakCollection; the
+# core's ThemeShadow, whose projected shadows are not drawn yet))
+CORE_SOURCES[_INPUT] += ('CKeyboardAccelerator.cpp', 'CKeyboardAcceleratorInvokedEventArgs.cpp')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../KeyboardAccelerator_Partial.cpp', '../RoutedEvent_Partial.cpp', '../LayoutInformation.cpp',
+    '../ThemeShadow_Partial.cpp', '../ThemeShadowFactory_Partial.cpp', '../UIElementWeakCollection_Partial.cpp') + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('KeyboardAccelerator', 'KeyboardAcceleratorInvokedEventArgs',
+                                                     'RoutedEvent', 'Shadow', 'ThemeShadow', 'UIElementWeakCollection'))
+CORE_SOURCES['components/graphics/lib/Microsoft.UI.Xaml.GraphicsUtility.vcxproj'] += ('../ThemeShadow.cpp',)
 # (and what each content root's visual tree makes: its layout manager
 # (core/layout), its focus manager (core/dll/focusmgr.cpp) with the focus
 # components (the focus observers, properties, selection, movement and XY
@@ -913,6 +930,10 @@ next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfou
 # src/element_sound_player.cpp, roadmap 32.5)
 next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'element_sound_player.cpp'))
+# (and VisualState.Name, which Microsoft's sources declare and do not
+# define: src/visual_state.cpp, roadmap 32.5)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'visual_state.cpp'))
 _ELEMENTS2_LATER = tuple(x for x in _ELEMENTS2_LATER if x != 'xamlislandroot.cpp')
 CORE_SOURCES[_ELEMENTS2] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS2)))
@@ -1256,7 +1277,18 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     # data source raises when an items vector changes)
     'NotifyCollectionChangedEventArgs_partial',
     # (and RadioButton with ToggleButton: RadioButtons' items)
-    'ToggleButton_Partial', 'RadioButton_Partial')) + tuple(
+    'ToggleButton_Partial', 'RadioButton_Partial',
+    # (and SymbolIcon and FontIcon with their icon sources, NavigationView's
+    # template's icons and its settings item's fallback icon, and the Thickness,
+    # GridLength and CornerRadius helpers' statics its code asks: step
+    # 32.5's tenth part)
+    'SymbolIcon_Partial', 'IconSource_Partial', 'SymbolIconSource_Partial',
+    'FontIconSource_Partial',
+    'Thickness_Partial', 'GridLength_Partial', 'CornerRadius_Partial',
+    # (and ScrollBar with its Thumb and RepeatButtons, the scroll bars of
+    # the ScrollViewer NavigationView's menu items sit in)
+    'ScrollBar_Partial', 'Thumb_Partial', 'RepeatButton_Partial', 'DragStartedEventArgs_Partial',
+    'DragDeltaEventArgs_Partial', 'DragCompletedEventArgs_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('Binding', 'BindingBase', 'BindingExpression',
                                                       'BindingExpressionBase', 'BindingFailedEventArgs',
                                                       'PropertyPath', 'RelativeSource', 'MarkupExtensionBase',
@@ -1283,7 +1315,27 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
                                                       # composes over: NavigationView's pane button)
                                                       # (TransformGroup and its collection are
                                                       # built with the animated peers above)
-                                                      'IconElement', 'PathIcon') +
+                                                      'IconElement', 'PathIcon',
+                                                      # (SymbolIcon, NavigationView's
+                                                      # template's search and settings icons,
+                                                      # and the icon source its settings item
+                                                      # falls back to)
+                                                      'SymbolIcon', 'IconSource', 'SymbolIconSource',
+                                                      'FontIcon', 'FontIconSource',
+                                                      # (Viewbox, which NavigationView's
+                                                      # template holds its items' icons in,
+                                                      # and Path, the icons' shape)
+                                                      'Viewbox', 'Path',
+                                                      'ScrollBar', 'Thumb', 'RepeatButton',
+                                                      'DragStartedEventArgs', 'DragDeltaEventArgs',
+                                                      'DragCompletedEventArgs', 'ScrollEventArgs',
+                                                      # (and a control's IsEnabledChanged
+                                                      # arguments: NavigationViewItem's)
+                                                      'IsEnabledChangedEventArgs',
+                                                      # (and the Thickness, GridLength and
+                                                      # CornerRadius helpers' statics,
+                                                      # which NavigationView's code asks)
+                                                      'Thickness', 'GridLength', 'CornerRadius') +
     _THEME_ANIMATIONS)
 # (with the helper component the pointer-down animation asks,
 # components/themeanimationshelper)

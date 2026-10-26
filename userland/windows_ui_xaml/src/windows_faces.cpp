@@ -343,6 +343,109 @@ static void *const s_pv_vtbl[6 + 40] = {
 static void *const s_box_vtbl[7] = {(void *)&box_qi, (void *)&box_addref, (void *)&box_release, (void *)&box_iids,
                                     (void *)&box_name, (void *)&box_trust, (void *)&box_value};
 
+// the framework's box of a delegate (the framework's face of the Windows
+// delegate an app's code boxed): IReference<D>, its Value the delegate
+struct NovaDelegateRef
+{
+    void *const *vtbl;
+    LONG ref;
+    const NovaDelegateBox *box;
+    void *value;
+};
+
+static HRESULT STDMETHODCALLTYPE dref_qi(NovaDelegateRef *b, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, IID_IInspectable_) || IsEqualGUID(iid, *b->box->framework) ||
+        IsEqualGUID(iid, IID_IAgileObject_)) {
+        *out = b;
+        InterlockedIncrement(&b->ref);
+        return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE dref_addref(NovaDelegateRef *b) { return InterlockedIncrement(&b->ref); }
+
+static ULONG STDMETHODCALLTYPE dref_release(NovaDelegateRef *b)
+{
+    ULONG r = InterlockedDecrement(&b->ref);
+    if (!r) {
+        nova_release(b->value);
+        CoTaskMemFree(b);
+    }
+    return r;
+}
+
+static HRESULT STDMETHODCALLTYPE dref_iids(NovaDelegateRef *b, ULONG *count, IID **iids)
+{
+    IID *a = (IID *)CoTaskMemAlloc(sizeof(IID));
+    if (!a)
+        return E_OUTOFMEMORY;
+    *a = *b->box->framework;
+    *count = 1;
+    *iids = a;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE dref_name(NovaDelegateRef *b, HSTRING *name)
+{
+    return WindowsCreateString(b->box->framework_name, (UINT32)wcslen(b->box->framework_name), name);
+}
+
+static HRESULT STDMETHODCALLTYPE dref_trust(NovaDelegateRef *, INT32 *level)
+{
+    *level = 0;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE dref_value(NovaDelegateRef *b, void **out)
+{
+    nova_addref(b->value);
+    *out = b->value;
+    return S_OK;
+}
+
+static void *const s_dref_vtbl[7] = {(void *)&dref_qi, (void *)&dref_addref, (void *)&dref_release, (void *)&dref_iids,
+                                     (void *)&dref_name, (void *)&dref_trust, (void *)&dref_value};
+
+// @a, if it is Windows' box of a Windows.UI.Xaml delegate (UIElement.
+// AddHandler's handler, as C++/WinRT's box_value boxes it), boxed again as
+// the framework's, its delegate the framework's face of the Windows one,
+// into @out: S_OK; S_FALSE when it is no such box
+static HRESULT rebox_delegate(void *a, void **out)
+{
+    for (unsigned i = 0; i < nova_delegate_box_count; i++) {
+        const NovaDelegateBox *bx = &nova_delegate_boxes[i];
+        const NovaFace *f;
+        void *r, *d = nullptr;
+        if (FAILED(qi(a, bx->windows, &r)))
+            continue;
+        HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))VT(r)[6])(r, &d);
+        nova_release(r);
+        if (FAILED(hr))
+            return hr;
+        if (!d || !(f = find(*bx->delegate))) {
+            nova_release(d);
+            return E_NOINTERFACE;
+        }
+        NovaDelegateRef *b = (NovaDelegateRef *)CoTaskMemAlloc(sizeof(NovaDelegateRef));
+        void *face = tear(f, d, TRUE);
+        if (!b || !face) {
+            CoTaskMemFree(b);
+            nova_release(face);
+            return E_OUTOFMEMORY;
+        }
+        b->vtbl = s_dref_vtbl;
+        b->ref = 1;
+        b->box = bx;
+        b->value = face;
+        *out = b;
+        return S_OK;
+    }
+    return S_FALSE;
+}
+
 // @a, if it is a tear-off of a forward face (@reverse: a reverse one), as
 // the IInspectable of the object it calls, into @out
 static bool untear(void *a, BOOL reverse, void **out)
@@ -356,8 +459,8 @@ static bool untear(void *a, BOOL reverse, void **out)
 }
 
 // @a, if it is a box of a Windows.UI.Xaml enum or struct on one side
-// (@to_windows: the framework's), boxed again as the other side's, into
-// @out: S_OK; S_FALSE when it is no such box
+// (@to_windows: the framework's), or Windows' box of a delegate, boxed
+// again as the other side's, into @out: S_OK; S_FALSE when it is no such box
 static HRESULT rebox(void *a, bool to_windows, void **out)
 {
     void *pv;
@@ -366,7 +469,7 @@ static HRESULT rebox(void *a, bool to_windows, void **out)
     INT32 type = 0;
     ((HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))VT(pv)[6])(pv, &type);
     nova_release(pv);
-    if (type != 20)                 // PropertyType_OtherType: perhaps a Windows.UI.Xaml enum or struct
+    if (type != 20)                 // PropertyType_OtherType: perhaps a Windows.UI.Xaml enum, struct or delegate
         return S_FALSE;
     for (unsigned i = 0; i < nova_box_count; i++) {
         const NovaBox *bx = &nova_boxes[i];
@@ -388,7 +491,7 @@ static HRESULT rebox(void *a, bool to_windows, void **out)
         *out = b;
         return S_OK;
     }
-    return S_FALSE;
+    return to_windows ? S_FALSE : rebox_delegate(a, out);
 }
 
 extern "C" HRESULT nova_object_in(void *a, void **out)

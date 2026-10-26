@@ -364,7 +364,8 @@ winrt::UIElement ItemsRepeater::GetOrCreateElementImpl(int index)
 winrt::com_ptr<VirtualizationInfo> ItemsRepeater::TryGetVirtualizationInfo(const winrt::UIElement& element)
 {
     auto value = element.GetValue(GetVirtualizationInfoProperty());
-    return winrt::get_self<VirtualizationInfo>(value)->get_strong();
+    auto self = winrt::get_self<VirtualizationInfo>(value);
+    return self ? self->get_strong() : nullptr;
 }
 
 /*static*/

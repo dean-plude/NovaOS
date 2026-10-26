@@ -1225,7 +1225,7 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `TextBox` is its own later step: its sources are open, but it loads
   `WinUIEdit.dll`, a closed windowless RichEdit (`ITextServices2`) NovaOS
   will provide.
-- [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
+- [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`
   writes, from Windows' metadata and the framework's IDL, a face for each
@@ -1308,15 +1308,22 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `PathIcon` and `TransformGroup` vendored into the framework; `CoreDispatcher.RunIdleAsync` and the elements' `Dispatcher`
   on a desktop XAML thread; enum and struct boxes crossing to WinUI 2 as
   Windows' boxes; the framework's DirectWrite headers' `IDWriteFactory6`
-  in the MSVC ABI's vtable order).  Next: WinUI 2's overrides
-  (`OnApplyTemplate` and the rest, which C++/WinRT does not produce from
-  windows-rs's `Windows.winmd`: no `OverridableAttribute`), so
-  `RadioButtons`' `ItemsRepeater` makes its items; then
-  `NavigationView`'s layout, which waits on the
-  composition shapes its pane button's `AnimatedIcon` draws with
-  (`Compositor.CreateShapeVisual` and the shape, geometry and path
-  objects); Calculator's start-up itself waits on the .NET Native
-  framework packages (32.6).
+  in the MSVC ABI's vtable order).  Tenth part done: WinUI 2's
+  overrides (`OnApplyTemplate`, `MeasureOverride` and the rest) are
+  called, so `RadioButtons`' `ItemsRepeater` makes its `RadioButton`s
+  and `NavigationView` applies its template, lays out and makes its
+  `NavigationViewItem`s (the build takes Windows'
+  `I...Overrides[N]` interfaces as overridable, which windows-rs's
+  `Windows.winmd` does not mark; C++/WinRT's `get_self` and `try_as` of
+  a null object stay null under clang; dcomp's composition shapes,
+  geometries, view boxes, animation controllers and implicit animation
+  collections; `MrmCoreR.dll`'s `ResourceManager` with WinUI 2's
+  strings in `resources.pri`; the main view's title bar,
+  `AnalyticsInfo` and the back button's listeners; keyboard
+  accelerators, `ThemeShadow`, `SymbolIcon`, `FontIcon`, `Viewbox`,
+  `Path` and `ScrollBar` vendored into the framework).  Calculator's
+  WinUI 2 controls all apply their templates; Calculator's start-up
+  itself waits on the .NET Native framework packages (32.6).
 - [x] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

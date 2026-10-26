@@ -882,14 +882,17 @@ static void defaults(void)
     if (!has_value(tsc, "")) kset_sz(tsc, "", "TaskScheduler class", 1);
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
-     * model's CoreApplication, CoreWindow, CoreCursor, DesignMode and
-     * PowerManager (twinapi.appcore.dll; Windows keeps CoreWindow in
-     * Windows.UI.dll, DesignMode in Windows.ApplicationModel.dll and
-     * PowerManager in Windows.System.Power), the compositor and its easing
-     * functions, Windows' and the Windows App SDK's (dcomp.dll), the
+     * model's CoreApplication, CoreWindow, CoreCursor, DesignMode,
+     * PowerManager and AnalyticsInfo (twinapi.appcore.dll; Windows keeps
+     * CoreWindow in Windows.UI.dll, DesignMode in
+     * Windows.ApplicationModel.dll, PowerManager in Windows.System.Power
+     * and AnalyticsInfo in Windows.System.Profile), the compositor and its easing
+     * functions and paths, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
-     * PropertyValue (wintypes.dll), its URI, Uri (urlmon.dll), and the
+     * PropertyValue (wintypes.dll), its URI, Uri (urlmon.dll), the
+     * package resource system, ResourceManager, ResourceContext and
+     * ResourceLoader (MrmCoreR.dll, over MRM.dll), and the
      * Windows App SDK's lifted content, input and windowing classes
      * XAML's windows are made of (NovaOS's
      * Microsoft.UI.Input.dll).  ActivationType 0 = in process,
@@ -901,10 +904,16 @@ static void defaults(void)
         { "Windows.UI.Core.CoreCursor", "twinapi.appcore.dll" },
         { "Windows.ApplicationModel.DesignMode", "twinapi.appcore.dll" },
         { "Windows.System.Power.PowerManager", "twinapi.appcore.dll" },
+        { "Windows.System.Profile.AnalyticsInfo", "twinapi.appcore.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },
         { "Microsoft.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
+        { "Windows.UI.Composition.CompositionPath", "dcomp.dll" },
+        { "Microsoft.UI.Composition.CompositionPath", "dcomp.dll" },
+        { "Windows.ApplicationModel.Resources.Core.ResourceManager", "MrmCoreR.dll" },
+        { "Windows.ApplicationModel.Resources.Core.ResourceContext", "MrmCoreR.dll" },
+        { "Windows.ApplicationModel.Resources.ResourceLoader", "MrmCoreR.dll" },
         { "Windows.System.DispatcherQueue", "CoreMessaging.dll" },
         { "Windows.System.DispatcherQueueController", "CoreMessaging.dll" },
         { "Microsoft.UI.Dispatching.DispatcherQueue", "CoreMessaging.dll" },

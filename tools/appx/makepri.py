@@ -131,11 +131,17 @@ def hnames(root):
 
 
 def build(name, tables):
-    """the .pri bytes: @tables is [(scope name, {key: string})]"""
+    """the .pri bytes: @tables is [(scope name, {key: string})], a scope
+    name a path of them ("Microsoft.UI.Xaml/Resources") where it is nested"""
     root = Node('', None, True)
     for scope, strings in tables:
-        s = Node(scope, root, True)
-        root.children.append(s)
+        s = root
+        for part in scope.split('/'):           # (a path: scopes in scopes)
+            found = [c for c in s.children if c.scope and c.name == part]
+            if not found:
+                found = [Node(part, s, True)]
+                s.children.append(found[0])
+            s = found[0]
         for key in strings:
             s.children.append(Node(key, s, False))
     names, scopes, items = hnames(root)
@@ -165,7 +171,7 @@ def build(name, tables):
     # the strings, one data item each
     data, offsets = b'', []
     for it in items:
-        s = (dict(tables)[it.parent.name][it.name] + '\0').encode('utf-16le')
+        s = (dict(tables)[it.parent.path()][it.name] + '\0').encode('utf-16le')
         if len(s) > 0x7FFF:
             raise SystemExit(f'makepri: {it.path()}: string too long')
         offsets.append((len(data), len(s)))

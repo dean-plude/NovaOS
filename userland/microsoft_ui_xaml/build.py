@@ -46,7 +46,9 @@ WINMD = os.path.join(ROOT, 'third_party', 'winmd', 'Windows.winmd')
 INC = os.path.join(HERE, 'inc')
 sys.path.insert(0, os.path.join(ROOT, 'tools', 'winrt'))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, 'tools', 'appx'))
 import mergexaml  # noqa: E402
+import makepri    # noqa: E402
 
 # The features built so far: what the project always imports (TestHooks,
 # Common, Telemetry) and Microsoft's smallest set the DLL builds with (the
@@ -85,6 +87,43 @@ CPPWINRT_PATCHES = [
     # on its own classes (VirtualizingLayoutContext.ItemCountCore())
     ('cppwinrt/code_writers.h', '            if ((!info.defaulted || info.base) && (!info.is_protected && !info.overridable))',
      '            if (!info.defaulted || info.base)'),
+    # windows-rs's Windows.winmd leaves OverridableAttribute off the classes'
+    # interface rows, so the Windows.UI.Xaml classes WinUI 2 derives from had
+    # no overridable interfaces and its overrides (OnApplyTemplate,
+    # MeasureOverride, ...) were never produced: one of those classes'
+    # I...Overrides[N] interfaces, the SDK's every overridable interface, is
+    # taken as overridable
+    ('cppwinrt/helpers.h',
+     '            info.overridable = overridable || has_attribute(impl, "Windows.Foundation.Metadata", "OverridableAttribute");',
+     '            info.overridable = overridable || has_attribute(impl, "Windows.Foundation.Metadata", "OverridableAttribute") ||\n'
+     '                (name.find("Windows::UI::Xaml::") != std::string::npos &&\n'
+     '                 name.find("Overrides", name.rfind("::")) != std::string::npos &&\n'
+     '                 name.find_first_not_of("0123456789", name.find("Overrides", name.rfind("::")) + 9) == std::string::npos);'),
+    # ... and produced: the Windows projection writes the produce<> those
+    # overrides need only for an exclusive interface it takes as overridable
+    ('cppwinrt/helpers.h',
+     '        auto interface_name = type_name(type);\n',
+     '        auto interface_name = type_name(type);\n'
+     '        if (interface_name.name_space.substr(0, 15) == "Windows.UI.Xaml" &&\n'
+     '            interface_name.name.find("Overrides") != std::string_view::npos &&\n'
+     '            interface_name.name.find_first_not_of("0123456789", interface_name.name.find("Overrides") + 9) == std::string_view::npos)\n'
+     '        {\n'
+     '            return true;\n'
+     '        }\n'),
+    # get_self of a null object is null (MSVC keeps it null; clang's
+    # static_cast to the implementation's base gives null minus an offset):
+    # ItemsRepeater asks it of an element with no VirtualizationInfo
+    ('strings/base_implements.h',
+     '        return &static_cast<impl::produce<D, default_interface<I>>*>(get_abi(from))->shim();',
+     '        auto abi = get_abi(from);\n'
+     '        return abi ? &static_cast<impl::produce<D, default_interface<I>>*>(abi)->shim() : nullptr;'),
+    # and so is try_as of an implementation type that the object is not
+    # (the same offset null, through wrap_as_result): AnimatedIcon asks it
+    # of each element whose AnimatedIcon.State changes
+    ('strings/base_windows.h',
+     '        return { &static_cast<produce<T, typename default_interface<T>::type>*>(result)->shim(), take_ownership_from_abi };',
+     '        return { result ? &static_cast<produce<T, typename default_interface<T>::type>*>(result)->shim() : nullptr,\n'
+     '                 take_ownership_from_abi };'),
 ]
 
 
@@ -536,3 +575,17 @@ def link(b, odir, objs, deps, base):
     for name in sorted(os.listdir(out)):
         if name.endswith('.xaml'):
             b.built.append(('\\Programs\\Microsoft.UI.Xaml\\Themes\\' + name, os.path.join(out, name)))
+    # and WinUI 2's strings (its controls' names, tooltips and narrator
+    # text), every feature's Strings/en-us/Resources.resw in the one scope
+    # ResourceAccessor asks for, Microsoft.UI.Xaml/Resources, of the
+    # resources.pri the NuGet package merges them into: the program's own,
+    # beside it (MrmCoreR.dll's ResourceManager.Current reads it)
+    strings = {}
+    for feature in sorted(os.listdir(DEV)):
+        resw = os.path.join(DEV, feature, 'Strings', 'en-us', 'Resources.resw')
+        if os.path.exists(resw):
+            strings.update(makepri.read_resw(resw))
+    pri = os.path.join(odir, 'winui2', 'resources.pri')
+    with open(pri, 'wb') as f:
+        f.write(makepri.build('Microsoft.UI.Xaml', [('Microsoft.UI.Xaml/Resources', strings)]))
+    b.built.append(('\\Programs\\resources.pri', pri))

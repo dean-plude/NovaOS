@@ -29,11 +29,20 @@
 //     after the XAML core is gone, into the CoreWindow's WM_NCDESTROY.
 //     They are not called yet: NovaOS's CoreWindow (twinapi.appcore)
 //     reports no moves to FrameworkUdk.
+//   BackButtonIntegration_RegisterListener, _UnregisterListener and
+//     _InjectBackButtonPress: a control that takes the system's back button
+//     while it is open (SplitView's pane: NavigationView's, an app bar, a
+//     popup) registers while it is open and unregisters on closing and in
+//     its destructor.  The listeners are kept, not counted, as the window
+//     position ones are; a press goes to the newest first, until one
+//     handles it.  NovaOS has no system back button yet, so nothing
+//     injects a press but an app that calls it.
 #include <windows.h>
 #include <FrameworkUdk/FinalUnhandledErrorDetected.h>
 #include <FrameworkUdk/VisualDiagnosticsPort.h>
 #include <MuiUdk.h>
 #include <FrameworkUdk/CoreWindowIntegration.h>
+#include <FrameworkUdk/BackButtonIntegration.h>
 
 namespace {
 SRWLOCK g_lock = SRWLOCK_INIT;
@@ -125,5 +134,61 @@ HRESULT WindowPositionChanged_UnregisterListener(PositionListener *listener)
         }
     }
     ReleaseSRWLockExclusive(&g_lock);
+    return S_OK;
+}
+
+namespace {
+using BackListener = ABI::Microsoft::Internal::FrameworkUdk::IBackButtonPressedListener;
+BackListener *g_back_listeners[16];                     // (in registration order)
+}
+
+HRESULT BackButtonIntegration_RegisterListener(BackListener *listener)
+{
+    if (!listener) return E_INVALIDARG;
+    HRESULT hr = E_OUTOFMEMORY;
+    AcquireSRWLockExclusive(&g_lock);
+    for (auto &l : g_back_listeners) {
+        if (l == listener) {                            // (open again: already registered)
+            hr = S_OK;
+            break;
+        }
+    }
+    if (hr != S_OK) {
+        for (auto &l : g_back_listeners) {
+            if (!l) {
+                l = listener;
+                hr = S_OK;
+                break;
+            }
+        }
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    return hr;
+}
+
+HRESULT BackButtonIntegration_UnregisterListener(BackListener *listener)
+{
+    AcquireSRWLockExclusive(&g_lock);
+    for (auto &l : g_back_listeners) {
+        if (l && l == listener) l = nullptr;
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    return S_OK;
+}
+
+HRESULT BackButtonIntegration_InjectBackButtonPress(BOOLEAN *handled)
+{
+    if (!handled) return E_INVALIDARG;
+    *handled = FALSE;
+    for (int i = 15; i >= 0 && !*handled; i--) {
+        AcquireSRWLockShared(&g_lock);
+        BackListener *l = g_back_listeners[i];
+        if (l) l->AddRef();
+        ReleaseSRWLockShared(&g_lock);
+        if (!l) continue;
+        HRESULT hr = l->OnBackButtonPressed(handled);
+        l->Release();
+        if (FAILED(hr)) return hr;
+    }
     return S_OK;
 }

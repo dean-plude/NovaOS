@@ -150,7 +150,10 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `RadioButtons` with three `RadioButton`s: the menu items and the
   `RadioButtons`' items and `SelectedIndex` added from markup, and the
   `RadioButtons` measured and arranged with the `ItemsRepeater` in its
-  template), `wuxamltest` (the XAML framework under its
+  template; and WinUI 2's overrides called: the `RadioButtons`'
+  `ItemsRepeater` making its three `RadioButton`s, the `NavigationView`
+  applying its template, laid out, and with its pane opened making its
+  two `NavigationViewItem`s), `wuxamltest` (the XAML framework under its
   `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
   `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
   driven through Windows' interfaces, a Windows-boxed `Visibility`,

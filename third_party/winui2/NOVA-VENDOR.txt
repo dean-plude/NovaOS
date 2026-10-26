@@ -25,7 +25,10 @@ includes it).  The XAML pages (.xaml) each of those .vcxitems lists, with
 CommonStyles (its .vcxitems and pages: WinUI 2's styles of the system
 controls), dev/dll/DensityStyles/Compact.xaml and dev/dll/Microsoft.UI.Xaml.vcxproj
 (whose import order orders the pages when they are merged:
-userland/microsoft_ui_xaml/mergexaml.py).  Left out: the tests, the
+userland/microsoft_ui_xaml/mergexaml.py), and the features' string tables,
+dev/{NavigationView,ProgressBar,ProgressRing,SplitButton,TabView}/Strings/
+en-us/Resources.resw (the build makes them C:\Programs\resources.pri;
+the other features kept have none).  Left out: the tests, the
 samples, and the other MSBuild projects.
 Files keep their CRLF line ends and byte-order marks.
 
@@ -50,6 +53,11 @@ Changed for clang (marked here, the files otherwise as upstream):
                                 "typename" left off T, SplitVectorID and
                                 AttachedDataType, which are not qualified
                                 names
+  dev/Repeater/ItemsRepeater.cpp
+                                TryGetVirtualizationInfo checks get_self's
+                                null before get_strong (MSVC's member call
+                                on a null pointer happens to give null;
+                                clang's moves the pointer to the base)
   dev/NavigationView/NavigationView.cpp
                                 [[gsl::suppress(con.4)]] written with the
                                 string argument clang wants

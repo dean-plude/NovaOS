@@ -42,6 +42,16 @@ struct NovaBox
     const wchar_t *framework_name;  // the framework's box's runtime class name
 };
 
+// a Windows.UI.Xaml delegate boxed: Windows' IReference<D> and the
+// framework's, with the framework's delegate (its face over Windows' one)
+struct NovaDelegateBox
+{
+    const GUID *windows;
+    const GUID *framework;
+    const GUID *delegate;
+    const wchar_t *framework_name;  // the framework's box's runtime class name
+};
+
 struct NovaTear
 {
     void *const *vtbl;
@@ -57,6 +67,8 @@ extern const NovaFace nova_faces[];
 extern const unsigned nova_face_count;
 extern const NovaBox nova_boxes[];
 extern const unsigned nova_box_count;
+extern const NovaDelegateBox nova_delegate_boxes[];
+extern const unsigned nova_delegate_box_count;
 
 HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void **out);
 ULONG STDMETHODCALLTYPE nova_tear_addref(NovaTear *t);

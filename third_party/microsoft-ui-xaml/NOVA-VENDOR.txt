@@ -279,6 +279,23 @@ components/transforms' CompositeTransform.cpp, Projection.cpp,
 PlaneProjection.cpp and Matrix3DProjection.cpp; and components/text's
 FocusableHelper.cpp.
 
+For WinUI 2's overrides (step 32.5 part 10): core/input's
+CKeyboardAccelerator.cpp and CKeyboardAcceleratorInvokedEventArgs.cpp,
+components/graphics/ThemeShadow.cpp, dxaml/lib's KeyboardAccelerator_Partial.cpp,
+RoutedEvent_Partial.cpp, LayoutInformation.cpp, ThemeShadow_Partial.cpp,
+ThemeShadowFactory_Partial.cpp and UIElementWeakCollection_Partial.cpp, and the
+generated classes of KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs,
+RoutedEvent, Shadow, ThemeShadow and UIElementWeakCollection; for NavigationView's
+template and code, dxaml/lib's SymbolIcon_Partial.cpp, IconSource_Partial.cpp,
+SymbolIconSource_Partial.cpp, FontIconSource_Partial.cpp, Thickness_Partial.cpp,
+GridLength_Partial.cpp, CornerRadius_Partial.cpp, ScrollBar_Partial.cpp,
+Thumb_Partial.cpp, RepeatButton_Partial.cpp, DragStartedEventArgs_Partial.cpp,
+DragDeltaEventArgs_Partial.cpp and DragCompletedEventArgs_Partial.cpp, and the
+generated classes of SymbolIcon, IconSource, SymbolIconSource, FontIcon,
+FontIconSource, Thickness, GridLength, CornerRadius, Viewbox, Path, ScrollBar,
+Thumb, RepeatButton, DragStartedEventArgs, DragDeltaEventArgs,
+DragCompletedEventArgs, ScrollEventArgs and IsEnabledChangedEventArgs.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

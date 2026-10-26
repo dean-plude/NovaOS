@@ -264,6 +264,21 @@ TransformCollection.cpp; core/text/common/Typography.cpp and TextOptions.cpp.  C
 as the elements' Dispatcher, as on Windows (WinUI 2's ItemsRepeater runs
 its cache work through Dispatcher.RunIdleAsync).
 
+For input (step 32.4 part 8): host/win/browserdesktop/PlatWinBrowserHost.cpp
+(the browser host's input entry points); components/input/lib
+(KeyboardUtility.cpp, RemapVirtualKey.cpp and its project),
+components/XboxUtility (XboxUtility.cpp and its project) and
+components/gestures (lib and export, with their projects); core/input's
+KeyboardEventArgs.cpp, CharacterReceivedEventArgs.cpp, PointerEventArgs.cpp,
+InputPointEventArgs.cpp and InteractionManager.cpp; dxaml/lib's
+KeyRoutedEventArgs_Partial.cpp, CharacterReceivedEventArgs_Partial.cpp,
+PointerRoutedEventArgs_Partial.cpp and PointerPointTransform.cpp, with the
+generated classes of those and of Pointer, PointerCollection and the
+Tapped, DoubleTapped, RightTapped and Holding routed event args;
+components/transforms' CompositeTransform.cpp, Projection.cpp,
+PlaneProjection.cpp and Matrix3DProjection.cpp; and components/text's
+FocusableHelper.cpp.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

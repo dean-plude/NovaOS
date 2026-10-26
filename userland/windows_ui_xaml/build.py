@@ -1361,6 +1361,50 @@ CORE_SERVICES_STUBS += tuple(x + '_Stub.cpp' for x in (
     'Animation', 'ColorAnimation', 'ColorKeyFrame', 'DoubleAnimation', 'DoubleKeyFrame', 'Duration',
     'EasingFunction', 'KeyFrameCollection', 'KeyFrame', 'KeySpline', 'KeyTime', 'ParallelTimeline',
     'RepeatBehavior', 'TimeSpan', 'TimelineCollection', 'TimelineGroup', 'Timeline', 'TimingCollection'))
+# Xaml 32.4 part 8 (input: a click and typing reach the page): what the
+# island's pointer and keyboard events go through on their way to the
+# page's elements: the browser host's pointer messages
+# (host/win/browserdesktop/PlatWinBrowserHost.cpp), the input component's
+# keyboard helpers and key remapping (components/input), the gamepad key
+# checks (components/XboxUtility), the core's key, character and pointer
+# event args (core/input) and the framework's peers for them
+# (KeyRoutedEventArgs, CharacterReceivedRoutedEventArgs,
+# PointerRoutedEventArgs, Pointer, the element's PointerCaptures and the
+# transform a pointer point is given relative to an element)
+CORE_SOURCES['hostpalplatmisc.vcxproj'] += ('host/win/browserdesktop/PlatWinBrowserHost.cpp',)
+for _p in ('XboxUtility/lib/Microsoft.UI.Xaml.XboxUtility.vcxproj', 'input/lib/Microsoft.UI.Xaml.Input.vcxproj',
+           'gestures/lib/Microsoft.UI.Xaml.Gestures.vcxproj', 'gestures/export/Microsoft.UI.Xaml.Gestures.Export.vcxproj'):
+    _proj = os.path.join(XCP, 'components', _p)
+    CORE_LIBRARIES.append(('components/' + _p, 'components/' + _p, 'components/pch/precomp.h', []))
+    CORE_SOURCES['components/' + _p] = tuple(os.path.relpath(x, os.path.dirname(_proj))
+                                              for x in vcxproj.read(_proj, PROPS)['sources'])
+# (the gesture configuration is built as Windows.UI.Input's GestureSettings,
+# which the gesture recognizer is then given as Microsoft.UI.Input's)
+for _p in ('gestures/lib/Microsoft.UI.Xaml.Gestures.vcxproj', 'gestures/export/Microsoft.UI.Xaml.Gestures.Export.vcxproj'):
+    CORE_FIRST['components/' + _p] = CORE_FIRST['core/xcpcore.vcxproj'] + ['windows.ui.input.h', 'microsoft.ui.input.h']
+CORE_SOURCES[_INPUT] += ('KeyboardEventArgs.cpp', 'CharacterReceivedEventArgs.cpp', 'PointerEventArgs.cpp',
+                         'InputPointEventArgs.cpp', 'InteractionManager.cpp')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../KeyRoutedEventArgs_Partial.cpp', '../CharacterReceivedEventArgs_Partial.cpp',
+    '../PointerRoutedEventArgs_Partial.cpp', '../PointerPointTransform.cpp') + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in ('KeyRoutedEventArgs', 'CharacterReceivedRoutedEventArgs',
+                                                      'PointerRoutedEventArgs', 'Pointer', 'PointerCollection',
+                                                      # (the gestures' routed event args)
+                                                      'TappedRoutedEventArgs', 'DoubleTappedRoutedEventArgs',
+                                                      'RightTappedRoutedEventArgs', 'HoldingRoutedEventArgs'))
+# (and, as the click and the focus move: the composite transform's matrix
+# (components/transforms), which the button's pressed animation sets and
+# hit testing reads, and the projections (an element's projection, whose
+# destructor must run for its weak references to let go: a pressed button's
+# theme animation gives it a plane projection); the focusable helper (components/text's
+# FocusableHelper.cpp), which focus asks of an element; and, for the sound
+# a click asks for, NovaOS's ElementSoundPlayerService entry points,
+# src/element_sound.cpp: the service's AudioGraph sits on a closed Windows
+# App SDK header, and a desktop PC plays no element sounds by default)
+CORE_SOURCES[_TRANSFORMS] += ('../CompositeTransform.cpp', '../Projection.cpp', '../PlaneProjection.cpp', '../Matrix3DProjection.cpp')
+CORE_SOURCES[_TEXT] += ('../FocusableHelper.cpp',)
+next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'element_sound.cpp'))
 WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

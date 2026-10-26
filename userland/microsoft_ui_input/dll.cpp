@@ -16,6 +16,9 @@
  *                   InputActivationListener (an island's), and
  *                   InputNonClientPointerSource, InputSystemCursor,
  *                   FocusNavigationRequest
+ *   gesture.cpp     GestureRecognizer (taps, right taps, translation
+ *                   manipulations), which XAML's input manager asks of
+ *                   each element it tracks
  *   windowing.cpp   AppWindow (GetFromWindowId), OverlappedPresenter,
  *                   AppWindowTitleBar
  *
@@ -51,6 +54,7 @@ static const struct { const wchar_t *name; IActivationFactory *(*make)(); } CLAS
     { L"Microsoft.UI.Input.InputNonClientPointerSource", input_nonclient_factory },
     { L"Microsoft.UI.Input.InputSystemCursor", input_system_cursor_factory },
     { L"Microsoft.UI.Input.FocusNavigationRequest", focus_navigation_request_factory },
+    { L"Microsoft.UI.Input.GestureRecognizer", gesture_recognizer_factory },
     { L"Microsoft.UI.Windowing.AppWindow", app_window_factory },
 };
 

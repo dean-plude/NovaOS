@@ -211,6 +211,7 @@ IActivationFactory *input_activation_listener_factory();
 IActivationFactory *input_nonclient_factory();
 IActivationFactory *input_system_cursor_factory();
 IActivationFactory *focus_navigation_request_factory();
+IActivationFactory *gesture_recognizer_factory();
 IActivationFactory *app_window_factory();
 
 HRESULT make_hstring(const wchar_t *s, HSTRING *out);

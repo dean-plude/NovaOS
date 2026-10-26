@@ -779,9 +779,35 @@ vendors.
      `Border`, "Hello from NovaOS" in the theme's font and a "Click me"
      `Button` ([screenshot](../screenshots/winui3-first-page.png)), then
      closes the window and exits cleanly.
-   - *Left for 32.4:* typing into a `TextBox` and clicking the `Button`
-     in the test (the island's pointer and keyboard input into the
-     framework's input manager), and a pixel check of the drawn frame.
+   - *Eighth part, input (32.4 done).*  The island's pointer and
+     keyboard messages (`Microsoft.UI.Input.dll`'s input sources) reach
+     the framework's input manager through its browser host's input
+     entry points (`PlatWinBrowserHost.cpp`), with the core's pointer,
+     key and character event args and their framework peers, the
+     keyboard utilities, the interaction manager and Microsoft's gesture
+     component (tap, double tap, right tap, hold) over NovaOS's own
+     `Microsoft.UI.Input.GestureRecognizer` (`microsoft_ui_input/gesture.cpp`:
+     taps by the system's double-click size and time, right taps,
+     translation manipulations past the drag size), the composite
+     transform and projections a pressed `Button`'s theme animation sets
+     (a projection's destructor has to run for its weak references to
+     let go), and the focusable helper.  The click's sound request goes
+     to NovaOS's `ElementSoundPlayerService` entry points
+     (`src/element_sound.cpp`): Microsoft's service plays through an
+     AudioGraph behind a closed Windows App SDK header, and a desktop
+     plays no element sounds by default.  `dcomp.dll`'s compositor gained
+     `CompositionNineGridBrush` (a pressed or hovered `Button`'s border
+     is a hollow nine-grid over a colour brush; surface sources keep
+     their insets' size times their scales at the edges).
+     `xamlpagetest` reads the `Border`'s colour back from the window
+     (`NOVA_PRESENT=gdi`), posts a mouse move and click to the island
+     (the `Button`'s `Click` fires, the island has the focus), the
+     characters "Nova" (the page's `CharacterReceived` writes them into
+     a `TextBlock`) and Space (the focused `Button` clicks again), then
+     screenshots the page ([screenshot](../screenshots/winui3-input.png)).
+     A `TextBox` is a step of its own: `TextBox_Partial.cpp` and
+     `TextBoxBase.cpp` are open, but they load `WinUIEdit.dll`, a closed
+     windowless RichEdit (`ITextServices2`), which NovaOS will provide.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

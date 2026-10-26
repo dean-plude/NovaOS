@@ -21,7 +21,7 @@
 #   See docs/building.md for crosstool-ng instructions.
 
 cmake_minimum_required(VERSION 3.18)
-project(NovaOS VERSION 0.2.0 LANGUAGES NONE)
+project(NovaOS VERSION 0.2.1 LANGUAGES NONE)
 
 # -------------------------------------------------------------------------
 # Build configuration

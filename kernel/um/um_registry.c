@@ -922,6 +922,7 @@ static void defaults(void)
         { "Microsoft.UI.Input.InputNonClientPointerSource", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Input.InputSystemCursor", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Input.FocusNavigationRequest", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Input.GestureRecognizer", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Windowing.AppWindow", "Microsoft.UI.Input.dll" },
     };
     for (unsigned i = 0; i < 2 * (sizeof wrt_classes / sizeof wrt_classes[0]); i++) {

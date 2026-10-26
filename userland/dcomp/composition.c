@@ -40,7 +40,8 @@
  * scoped and commit batches, easing functions (and their statics),
  * rectangle clips, clip and surface brush transforms (ICompositionClip2,
  * ICompositionSurfaceBrush2 and 3), mask brushes (the XAML framework
- * draws text as its glyphs' alpha mask over a colour brush) and the
+ * draws text as its glyphs' alpha mask over a colour brush), nine-grid
+ * brushes over a colour or surface brush (its borders) and the
  * experimental IExpCompositionPropertyChanged on visuals (a listener told
  * of a transform property set through IVisual, which the XAML framework
  * hit-tests an app's element visual with).  A compositor is a
@@ -52,7 +53,7 @@
  * Not implemented: expression animations' expressions (they are accepted,
  * held on their property and stopped, not evaluated), implicit
  * animations, animation controllers, effects, lights, shadows, shapes,
- * gradient, nine-grid and other brushes, brushes' and clips' AnchorPoint, perspective and 3-D rotation (only the
+ * gradient and other brushes, brushes' and clips' AnchorPoint, perspective and 3-D rotation (only the
  * matrix's 2-D part and the Z rotation are used), clips other than inset
  * and square-cornered rectangle clips (and a clip under a rotation is its
  * bounding box), bilinear sampling and surfaces from handles.
@@ -123,7 +124,7 @@ typedef struct { float a, b, c, d, tx, ty; } Aff;   /* [x y 1] * [a b; c d; tx t
  * 2-11 depend on the kind.  The compositor's slots are its own (S_C_*). */
 enum { K_COMPOSITOR, K_CONTAINER, K_SPRITE, K_COLLECTION, K_COLOR_BRUSH, K_SURFACE_BRUSH, K_INSET_CLIP,
        K_TARGET, K_GRAPHICS, K_DRAWING_SURFACE, K_CHAIN_SURFACE, K_RECT_CLIP, K_PROPSET, K_EXPRESSION, K_KEYFRAME,
-       K_GROUP, K_EASING, K_BATCH, K_BATCH_ARGS, K_MASK_BRUSH, K_COUNT };
+       K_GROUP, K_EASING, K_BATCH, K_BATCH_ARGS, K_MASK_BRUSH, K_NINEGRID_BRUSH, K_COUNT };
 #define NIF 18
 enum { S_CO_M = 12, S_CO2, S_CO3_W, S_CO3_M, S_CO4, S_CO5 };
 enum { S_C_M = 4, S_C2, S_C3, S_C4, S_C5, S_C6, S_C7_W, S_C7_M, S_C8 };
@@ -175,7 +176,9 @@ struct Obj {
     boolean_t b_snap;
     int stretch, interp;
     float hratio, vratio;
-    float inset[4];                     /* left, top, right, bottom (a rectangle clip's sides too) */
+    float inset[4];                     /* left, top, right, bottom (a rectangle clip's sides, a nine-grid brush's insets too) */
+    float iscale[4];                    /* a nine-grid brush's inset scales (left, top, right, bottom) */
+    boolean_t hollow;                   /* a nine-grid brush's IsCenterHollow */
     Vec2 radius[4];                     /* a rectangle clip's corners (kept, not drawn) */
     /* targets */
     HWND hwnd;
@@ -262,6 +265,7 @@ static const Iface if_color[] = { BOTH(CompositionColorBrush, 3), BOTH(Compositi
 static const Iface if_surface_brush[] = { BOTH(CompositionSurfaceBrush, 3), BOTH(CompositionBrush, 2), BOTH(CompositionSurfaceBrush2, 4),
                                           BOTH(CompositionSurfaceBrush3, 5), { 0, 0 } };
 static const Iface if_mask_brush[] = { BOTH(CompositionMaskBrush, 3), BOTH(CompositionBrush, 2), { 0, 0 } };
+static const Iface if_ninegrid[] = { BOTH(CompositionNineGridBrush, 3), BOTH(CompositionBrush, 2), { 0, 0 } };
 static const Iface if_inset[] = { BOTH(InsetClip, 3), BOTH(CompositionClip, 2), BOTH(CompositionClip2, 4), { 0, 0 } };
 static const Iface if_rect_clip[] = { BOTH(RectangleClip, 3), BOTH(CompositionClip, 2), BOTH(CompositionClip2, 4), { 0, 0 } };
 static const Iface if_target[] = { { &IIDW_CompositionTarget, 2 }, { 0, 0 } };
@@ -295,7 +299,7 @@ static int default_slot(Obj *o)
 {
     switch (o->kind) {
     case K_SPRITE: return 4;
-    case K_CONTAINER: case K_COLOR_BRUSH: case K_SURFACE_BRUSH: case K_MASK_BRUSH: case K_INSET_CLIP: case K_RECT_CLIP: return 3;
+    case K_CONTAINER: case K_COLOR_BRUSH: case K_SURFACE_BRUSH: case K_MASK_BRUSH: case K_NINEGRID_BRUSH: case K_INSET_CLIP: case K_RECT_CLIP: return 3;
     case K_TARGET: return o->vt[3] ? 3 : 2;
     case K_COMPOSITOR: return 0;
     case K_EXPRESSION: return 7;
@@ -314,6 +318,7 @@ static const Iface *ifaces(Obj *o)
     case K_COLOR_BRUSH: return if_color;
     case K_SURFACE_BRUSH: return if_surface_brush;
     case K_MASK_BRUSH: return if_mask_brush;
+    case K_NINEGRID_BRUSH: return if_ninegrid;
     case K_INSET_CLIP: return if_inset;
     case K_RECT_CLIP: return if_rect_clip;
     case K_TARGET: return o->vt[3] ? if_desktop_target : if_target;
@@ -394,7 +399,7 @@ static HRESULT obj_name(Obj *o, HSTRING *n)
         L"Windows.UI.Composition.ExpressionAnimation", L"Windows.UI.Composition.KeyFrameAnimation",
         L"Windows.UI.Composition.CompositionAnimationGroup", L"Windows.UI.Composition.CompositionEasingFunction",
         L"Windows.UI.Composition.CompositionScopedBatch", L"Windows.UI.Composition.CompositionBatchCompletedEventArgs",
-        L"Windows.UI.Composition.CompositionMaskBrush",
+        L"Windows.UI.Composition.CompositionMaskBrush", L"Windows.UI.Composition.CompositionNineGridBrush",
     };
     static const WCHAR *const keyframes[] = {
         [P_SCALAR] = L"Windows.UI.Composition.ScalarKeyFrameAnimation", [P_VEC2] = L"Windows.UI.Composition.Vector2KeyFrameAnimation",
@@ -441,7 +446,8 @@ static BOOL is_visual(Obj *o) { return o && (o->kind == K_CONTAINER || o->kind =
 static Obj *brush_of(void *p)
 {
     Obj *b = obj_of(p, -1, -1);
-    if (b && b->kind != K_COLOR_BRUSH && b->kind != K_SURFACE_BRUSH && b->kind != K_MASK_BRUSH) { obj_release(b); b = 0; }
+    if (b && b->kind != K_COLOR_BRUSH && b->kind != K_SURFACE_BRUSH && b->kind != K_MASK_BRUSH &&
+             b->kind != K_NINEGRID_BRUSH) { obj_release(b); b = 0; }
     return b;
 }
 
@@ -677,6 +683,28 @@ static DWORD samp_at(const Samp *s, float u, float w)
     return s->opaque ? px | 0xFF000000u : px;
 }
 
+/* a nine-grid brush's point (@u, @w) in a visual @vs in size, moved to
+ * its Source's place (@ss in size): the insets keep their size times
+ * their scales at the edges and corners, the centre stretches (FALSE: the
+ * point is in a hollow centre) */
+static float nine_axis(float x, float len, float slen, float a, float sa, float b, float sb, BOOL *centre)
+{
+    float A = a * sa, B = b * sb;
+    *centre = FALSE;
+    if (x < A) return sa > 0 ? x / sa : 0;
+    if (x >= len - B) return sb > 0 ? slen - (len - x) / sb : slen;
+    *centre = TRUE;
+    float mid = len - A - B, smid = slen - a - b;
+    return a + (mid > 0 ? (x - A) * smid / mid : 0);
+}
+static BOOL nine_at(const Obj *b, Vec2 vs, Vec2 ss, float *u, float *w)
+{
+    BOOL cx, cy;
+    *u = nine_axis(*u, vs.X, ss.X, b->inset[0], b->iscale[0], b->inset[2], b->iscale[2], &cx);
+    *w = nine_axis(*w, vs.Y, ss.Y, b->inset[1], b->iscale[1], b->inset[3], b->iscale[3], &cy);
+    return !(b->hollow && cx && cy);
+}
+
 /* @v (a sprite, @vs in size) filled with its brush in @pic (@pw x @ph),
  * through @m, inside @clip, at opacity @op */
 static void fill(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic, int pw, int ph)
@@ -688,8 +716,15 @@ static void fill(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic,
     RECT box = aff_box(m, 0, 0, vs.X, vs.Y), all = { 0, 0, pw, ph };
     if (!IntersectRect(&box, &box, &clip) || !IntersectRect(&box, &box, &all)) return;
     Samp src, mask;
-    BOOL masked = b->kind == K_MASK_BRUSH;
-    if (!samp_init(masked ? b->brush : b, vs, &src)) return;
+    BOOL masked = b->kind == K_MASK_BRUSH, nine = b->kind == K_NINEGRID_BRUSH;
+    Vec2 ss = vs;                       /* (a nine-grid brush's Source is sampled at its surface's own size) */
+    if (nine && b->brush && b->brush->kind == K_SURFACE_BRUSH) {
+        UINT pitch, sw = 0, sh = 0;
+        BOOL opaque;
+        if (!surface_pixels(b->brush->surface, &pitch, &sw, &sh, &opaque) || !sw || !sh) return;
+        ss.X = (float)sw; ss.Y = (float)sh;
+    }
+    if (!samp_init(masked || nine ? b->brush : b, ss, &src)) return;
     if (masked && !samp_init(b->mask, vs, &mask)) return;
     UINT opi = (UINT)(int)(op * 256.0f + 0.5f);
     /* each pixel's centre, back in the visual's space */
@@ -700,7 +735,9 @@ static void fill(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic,
         DWORD *row = pic + (size_t)y * pw;
         for (LONG x = box.left; x < box.right; x++, u += ia, w += ib) {
             if (u < 0 || w < 0 || u >= vs.X || w >= vs.Y) continue;
-            DWORD s = samp_at(&src, u, w);
+            float su = u, sw = w;
+            if (nine && !nine_at(b, vs, ss, &su, &sw)) continue;
+            DWORD s = samp_at(&src, su, sw);
             if (masked && s) {
                 UINT a = samp_at(&mask, u, w) >> 24;
                 s = a ? scale_px(s, a + (a >> 7)) : 0;
@@ -1289,6 +1326,45 @@ static HRESULT STDMETHODCALLTYPE mb_put_source(void *p, void *brush)
     return S_OK;
 }
 static const void *const mask_brush_vt[] = { BASE(3), (void *)mb_get_mask, (void *)mb_put_mask, (void *)mb_get_source, (void *)mb_put_source };
+
+/* ICompositionNineGridBrush (slot 3): the insets and their scales,
+ * IsCenterHollow and Source (a colour or surface brush) */
+#define NINE(name, i) \
+    static HRESULT STDMETHODCALLTYPE ng_get_##name(void *p, float *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 3)->inset[i]; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE ng_put_##name(void *p, float v) { lock(); OBJ_AT(p, 3)->inset[i] = v; unlock(); schedule(); return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE ng_get_##name##_scale(void *p, float *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 3)->iscale[i]; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE ng_put_##name##_scale(void *p, float v) { lock(); OBJ_AT(p, 3)->iscale[i] = v; unlock(); schedule(); return S_OK; }
+NINE(left, 0) NINE(top, 1) NINE(right, 2) NINE(bottom, 3)
+static HRESULT STDMETHODCALLTYPE ng_get_hollow(void *p, boolean_t *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 3)->hollow; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ng_put_hollow(void *p, boolean_t v) { lock(); OBJ_AT(p, 3)->hollow = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE ng_put_source(void *p, void *brush)
+{
+    Obj *b = 0;
+    if (brush && !(b = brush_of(brush))) return E_INVALIDARG;
+    swap_ref(&OBJ_AT(p, 3)->brush, b);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ng_set(void *p, float l, float t, float r, float b)
+{
+    Obj *o = OBJ_AT(p, 3);
+    lock(); o->inset[0] = l; o->inset[1] = t; o->inset[2] = r; o->inset[3] = b; unlock();
+    schedule();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ng_set_scales(void *p, float l, float t, float r, float b)
+{
+    Obj *o = OBJ_AT(p, 3);
+    lock(); o->iscale[0] = l; o->iscale[1] = t; o->iscale[2] = r; o->iscale[3] = b; unlock();
+    schedule();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ng_set1(void *p, float v) { return ng_set(p, v, v, v, v); }
+static HRESULT STDMETHODCALLTYPE ng_set_scales1(void *p, float v) { return ng_set_scales(p, v, v, v, v); }
+static const void *const ninegrid_vt[] = { BASE(3), (void *)ng_get_bottom, (void *)ng_put_bottom, (void *)ng_get_bottom_scale,
+    (void *)ng_put_bottom_scale, (void *)ng_get_hollow, (void *)ng_put_hollow, (void *)ng_get_left, (void *)ng_put_left,
+    (void *)ng_get_left_scale, (void *)ng_put_left_scale, (void *)ng_get_right, (void *)ng_put_right, (void *)ng_get_right_scale,
+    (void *)ng_put_right_scale, (void *)mb_get_source, (void *)ng_put_source, (void *)ng_get_top, (void *)ng_put_top,
+    (void *)ng_get_top_scale, (void *)ng_put_top_scale, (void *)ng_set1, (void *)ng_set, (void *)ng_set_scales1, (void *)ng_set_scales };
 
 /* IInsetClip: Bottom, Left, Right, Top */
 #define INSET(name, i) \
@@ -2746,8 +2822,19 @@ static HRESULT STDMETHODCALLTYPE c2_mask_brush(void *p, void **out)
     *out = IF(b, 3);
     return S_OK;
 }
+static HRESULT STDMETHODCALLTYPE c2_ninegrid_brush(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *b = obj_new(COMP(p, S_C2), K_NINEGRID_BRUSH);
+    if (!b) return E_OUTOFMEMORY;
+    b->vt[0] = co_vt; b->vt[1] = closable_vt; b->vt[2] = empty2_vt; b->vt[3] = ninegrid_vt;
+    b->iscale[0] = b->iscale[1] = b->iscale[2] = b->iscale[3] = 1.0f;
+    *out = IF(b, 3);
+    return S_OK;
+}
 static const void *const compositor2_vt[] = { BASE(5), (void *)c_none, (void *)c2_group, (void *)c_none, (void *)c_none, (void *)c_none,
-                                              (void *)c_none, (void *)c_none, (void *)c2_mask_brush, (void *)c_none, (void *)c_none, (void *)c_none,
+                                              (void *)c_none, (void *)c_none, (void *)c2_mask_brush, (void *)c2_ninegrid_brush, (void *)c_none, (void *)c_none,
                                               (void *)c2_step, (void *)c2_step_n };
 /* ICompositor3 (slot S_C3): CreateHostBackdropBrush (not here) */
 static const void *const compositor3_vt[] = { BASE(6), (void *)c_none };

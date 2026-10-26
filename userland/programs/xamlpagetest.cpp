@@ -1,5 +1,5 @@
-/* xamlpagetest.exe — a XAML page in a Window (roadmap step 32.4, its first
- * part; docs/design/windows-ui-xaml.md): an app started as xamlapptest
+/* xamlpagetest.exe — a XAML page in a Window (roadmap step 32.4;
+ * docs/design/windows-ui-xaml.md): an app started as xamlapptest
  * starts it (Application.Start on the desktop path) makes a Window in
  * OnLaunched, as a desktop app does: the framework's DesktopWindowImpl with
  * its Win32 window, the window chrome, the DesktopWindowXamlSource and the
@@ -9,8 +9,15 @@
  * loaded with XamlReader.Load (a Grid holding a Border and a Button: text,
  * which needs DirectWrite's Windows 10 font model, comes in the next part);
  * Activate shows the window, and once the framework has laid the page out
- * the test checks the window's bounds and the elements' laid-out sizes,
- * then closes the window and exits.
+ * the test checks the window's bounds and the elements' laid-out sizes and
+ * a pixel of the drawn Border, then uses the page as a user would: the
+ * mouse clicks the Button (its Click handler counts the click and says so
+ * in a TextBlock), keys typed reach the page (its CharacterReceived handler
+ * adds them to a TextBlock) and Space on the focused Button clicks it
+ * again.  The input is the window messages a user's mouse and keyboard
+ * make, posted to the island's window (the content islands' input sources
+ * hand them to the framework's input manager); then the window closes and
+ * the app exits.
  *
  *   xamlpagetest       the self-test runs it with no arguments
  */
@@ -26,6 +33,8 @@
 #include <XamlSourceFocusNavigationRequest.g.h>
 #include <Grid.g.h>
 #include <Button.g.h>
+#include <TextBlock.g.h>
+#include <CharacterReceivedRoutedEventArgs.g.h>
 #include <Window.g.h>
 #include <roapi.h>
 #include <FrameworkApplication_Partial.h>
@@ -91,7 +100,12 @@ static App *s_app;
 /* the page's elements, kept for the checks the timer makes */
 static ctl::ComPtr<xaml::IWindow> s_window;
 static ctl::ComPtr<xaml::IFrameworkElement> s_panel, s_button, s_grid, s_label;
+static ctl::ComPtr<xaml_controls::ITextBlock> s_status, s_typed;
 static int s_shown;     /* ticks since the checks, while the page stays on screen */
+static int s_step;      /* the input steps, one per tick */
+static int s_pixel_ticks;       /* ticks waited for the first frame's pixels */
+static int s_clicks;    /* the Button's Click handler's count */
+static wchar_t s_text[64];      /* what the page's CharacterReceived handler was given */
 static ctl::ComPtr<msy::IDispatcherQueueTimer> s_timer;
 
 static HWND find_window()
@@ -108,12 +122,131 @@ static HWND find_window()
     return found;
 }
 
-/* once the page is laid out (or after ten seconds): the checks, then the
- * window closes and the app exits */
+/* the content island's window (the bridge, a child of the window's), and a
+ * point of the window's client area in it */
+static HWND find_island(HWND top)
+{
+    return top ? FindWindowExW(top, nullptr, L"Microsoft.UI.Content.DesktopChildSiteBridge", nullptr) : nullptr;
+}
+
+static LPARAM island_point(HWND top, HWND island, int x, int y)
+{
+    POINT p = { x, y };
+    MapWindowPoints(top, island, &p, 1);
+    return MAKELPARAM(p.x, p.y);
+}
+
+static void set_text(xaml_controls::ITextBlock *block, const wchar_t *text)
+{
+    if (block) block->put_Text(wrl_wrappers::HStringReference(text).Get());
+}
+
+static bool text_is(xaml_controls::ITextBlock *block, const wchar_t *text)
+{
+    wrl_wrappers::HString h;
+    return block && SUCCEEDED(block->get_Text(h.GetAddressOf())) && is(h.Get(), text);
+}
+
+/* the pixel at the window's client point 100,100 (inside the Border) */
+static COLORREF border_pixel(HWND top, HWND island)
+{
+    POINT at = { 100, 100 };
+    if (!island) return CLR_INVALID;
+    MapWindowPoints(top, island, &at, 1);
+    HDC dc = GetDC(island);
+    COLORREF c = dc ? GetPixel(dc, at.x, at.y) : CLR_INVALID;
+    if (dc) ReleaseDC(island, dc);
+    return c;
+}
+
+/* the page's handlers, as an app's code-behind */
+static HRESULT on_click(IInspectable *, xaml::IRoutedEventArgs *)
+{
+    wchar_t line[32];
+    swprintf(line, 32, L"Clicked %d", ++s_clicks);
+    set_text(s_status.Get(), line);
+    printf("xamlpagetest: Click (%d)\n", s_clicks);
+    fflush(stdout);
+    return S_OK;
+}
+
+static HRESULT on_character(xaml::IUIElement *, xaml_input::ICharacterReceivedRoutedEventArgs *args)
+{
+    WCHAR c = 0;
+    if (FAILED(args->get_Character(&c)) || c < L' ') return S_OK;
+    size_t n = wcslen(s_text);
+    if (n + 1 < sizeof(s_text) / sizeof(s_text[0])) {
+        s_text[n] = c;
+        s_text[n + 1] = 0;
+    }
+    wchar_t line[80];
+    swprintf(line, 80, L"Typed: %ls", s_text);
+    set_text(s_typed.Get(), line);
+    args->put_Handled(TRUE);
+    return S_OK;
+}
+
+/* the input, one step per tick (the framework handles each step's messages
+ * before the next): the mouse clicks the Button, "Nova" is typed, Space
+ * clicks the focused Button */
+static void input_step(HWND top, HWND island)
+{
+    LPARAM button = island_point(top, island, 24 + 60, 148 + 20);  /* (the Button's middle) */
+    switch (s_step) {
+    case 1:
+        PostMessageW(island, WM_MOUSEMOVE, 0, island_point(top, island, 10, 10));
+        PostMessageW(island, WM_MOUSEMOVE, 0, button);
+        break;
+    case 2:
+        PostMessageW(island, WM_LBUTTONDOWN, MK_LBUTTON, button);
+        PostMessageW(island, WM_LBUTTONUP, 0, button);
+        break;
+    case 3:
+        CHECK("the mouse clicks the Button (its Click handler runs once)", s_clicks == 1);
+        CHECK("which the page shows", text_is(s_status.Get(), L"Clicked 1"));
+        CHECK("the click focuses the window", GetFocus() == island);
+        for (const wchar_t *c = L"Nova"; *c; c++)
+            PostMessageW(island, WM_CHAR, *c, 1);
+        break;
+    case 4:
+        CHECK("typed keys reach the page (CharacterReceived)", !wcscmp(s_text, L"Nova"));
+        CHECK("which shows them", text_is(s_typed.Get(), L"Typed: Nova"));
+        PostMessageW(island, WM_KEYDOWN, VK_SPACE, MAKELPARAM(1, MapVirtualKeyW(VK_SPACE, MAPVK_VK_TO_VSC)));
+        PostMessageW(island, WM_KEYUP, VK_SPACE, MAKELPARAM(1, MapVirtualKeyW(VK_SPACE, MAPVK_VK_TO_VSC)) | 0xC0000000);
+        break;
+    case 5:
+        CHECK("Space clicks the focused Button", s_clicks == 2);
+        CHECK("which the page shows", text_is(s_status.Get(), L"Clicked 2"));
+        break;
+    }
+}
+
+/* once the page is laid out (or after ten seconds): the checks, the input,
+ * then the window closes and the app exits */
 static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
 {
     double w = 0, h = 0;
     bool laid_out = s_panel && SUCCEEDED(s_panel->get_ActualWidth(&w)) && w > 0;
+    if (s_checked && s_step < 6) {
+        HWND top = find_window();
+        HWND island = find_island(top);
+        if (!s_step) {
+            /* the Border's pixels are its colour, SteelBlue, once the first
+             * frame is drawn (the window's pixels: NOVA_PRESENT=gdi, see
+             * main) */
+            COLORREF c = border_pixel(top, island);
+            if (c != RGB(70, 130, 180) && ++s_pixel_ticks < 20) return S_OK;
+            printf("xamlpagetest: pixel at 100,100 is %d,%d,%d\n", GetRValue(c), GetGValue(c), GetBValue(c));
+            CHECK("the Border is drawn in its colour", c == RGB(70, 130, 180));
+        }
+        if (++s_step == 1) CHECK("the content island's window", island != nullptr);
+        if (island) input_step(top, island);
+        if (s_step == 6) {
+            printf("xamlpagetest: page on screen\n");
+            fflush(stdout);
+        }
+        return S_OK;
+    }
     if (s_checked) {
         /* the page stays on screen for three seconds (the self-test's
          * screenshot), then the window closes and the app exits */
@@ -154,7 +287,6 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
     CHECK("the TextBlock is laid out to its text", s_label && SUCCEEDED(s_label->get_ActualWidth(&tw)) &&
           SUCCEEDED(s_label->get_ActualHeight(&th)) && tw > 0 && th > 0);
     printf("xamlpagetest: text %gx%g\n", tw, th);
-    printf("xamlpagetest: page on screen\n");
     fflush(stdout);
     return S_OK;
 }
@@ -184,6 +316,8 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
         L"<Border x:Name='panel' Width='200' Height='100' Margin='24,24,0,0' HorizontalAlignment='Left' VerticalAlignment='Top' Background='SteelBlue'/>"
         L"<TextBlock x:Name='label' Text='Hello from NovaOS' FontSize='20' Margin='240,24,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"<Button x:Name='go' Content='Click me' Width='120' Height='40' Margin='24,148,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<TextBlock x:Name='status' Text='Not clicked' FontSize='16' Margin='168,156,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<TextBlock x:Name='typed' Text='Typed: ' FontSize='16' Margin='24,212,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"</Grid>").Get(), page.ReleaseAndGetAddressOf()) : E_FAIL);
     if (page) page.As(&s_grid);
     ctl::ComPtr<IInspectable> found;
@@ -191,7 +325,20 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
     if (s_grid && SUCCEEDED(s_grid->FindName(panel.Get(), &found)) && found) found.As(&s_panel);
     if (s_grid && SUCCEEDED(s_grid->FindName(go.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_button);
     if (s_grid && SUCCEEDED(s_grid->FindName(label.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_label);
-    CHECK("the page's Border, TextBlock and Button", s_panel && s_button && s_label);
+    wrl_wrappers::HStringReference status(L"status"), typed(L"typed");
+    if (s_grid && SUCCEEDED(s_grid->FindName(status.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_status);
+    if (s_grid && SUCCEEDED(s_grid->FindName(typed.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_typed);
+    CHECK("the page's Border, TextBlocks and Button", s_panel && s_button && s_label && s_status && s_typed);
+
+    /* its handlers: the Button's Click, the page's CharacterReceived */
+    ctl::ComPtr<xaml_primitives::IButtonBase> buttonBase;
+    EventRegistrationToken token;
+    CHECK_HR("Click handler", s_button && SUCCEEDED(s_button.As(&buttonBase)) ?
+             buttonBase->add_Click(wrl::Callback<xaml::IRoutedEventHandler>(on_click).Get(), &token) : E_FAIL);
+    ctl::ComPtr<xaml::IUIElement> gridElement;
+    CHECK_HR("CharacterReceived handler", s_grid && SUCCEEDED(s_grid.As(&gridElement)) ?
+             gridElement->add_CharacterReceived(wrl::Callback<wf::ITypedEventHandler<xaml::UIElement *,
+                 xaml_input::CharacterReceivedRoutedEventArgs *>>(on_character).Get(), &token) : E_FAIL);
 
     /* a Window (made as a projection makes one: the factory, no outer object) */
     ctl::ComPtr<DirectUI::WindowFactory> windowFactory;
@@ -217,7 +364,6 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
     CHECK_HR("a timer on it", queue->CreateTimer(&s_timer));
     if (!s_timer) return S_OK;
     s_timer->put_Interval(wf::TimeSpan{ 2500000 });     /* (250 ms) */
-    EventRegistrationToken token;
     s_timer->add_Tick(wrl::Callback<wf::ITypedEventHandler<msy::DispatcherQueueTimer *, IInspectable *>>(on_tick).Get(), &token);
     CHECK_HR("started", s_timer->Start());
     return S_OK;
@@ -271,6 +417,7 @@ static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
 
 int main()
 {
+    SetEnvironmentVariableA("NOVA_PRESENT", "gdi");     /* (the frames in the window's pixels: the pixel check) */
     DirectUI::StaticLockGlobalInit();
     DXamlInstanceStorage::Initialize();     /* (as the framework's DllMain does: its per-thread core's slot, */
     DirectUI::FrameworkApplication::GlobalInit();   /* the application's lock, */

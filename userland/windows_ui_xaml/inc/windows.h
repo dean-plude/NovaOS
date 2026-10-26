@@ -119,10 +119,12 @@ extern "C" __declspec(selectany) const GUID GUID_NULL = {};
 
 /* the device family (the Windows SDK's winnt.h; ntdll exports it): XAML's
  * system theming reads the system's light or dark theme from UISettings on
- * Windows Core devices and from the registry elsewhere */
+ * Windows Core devices and from the registry elsewhere, and its gamepad
+ * input checks whether it runs on an Xbox */
 #ifndef DEVICEFAMILYINFOENUM_WINDOWS_CORE
 #define DEVICEFAMILYINFOENUM_DESKTOP 0x00000003
 #define DEVICEFAMILYINFOENUM_WINDOWS_CORE 0x00000010
+#define DEVICEFAMILYINFOENUM_XBOX 0x00000005       /* (XAML's gamepad focus checks ask) */
 #ifdef __cplusplus
 extern "C"
 #endif

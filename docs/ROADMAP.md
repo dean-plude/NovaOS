@@ -1173,7 +1173,7 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   classes a program registers with `RoRegisterActivationFactories`.  A
   `Window` (`DesktopWindowImpl`, on the Windows App SDK's content
   islands) comes with 32.4.
-- [ ] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
+- [x] **32.4 A XAML page draws.** A `TextBlock` and a `Button` laid out,
   drawn, typed into and clicked in a self-test, with a screenshot.
   Content islands part (Phase 32 push) done: the Windows App SDK's
   lifted content, input and windowing classes a `Window` sits on
@@ -1212,8 +1212,19 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   transforms; NovaOS's `XamlIsland` now asks for its content, the
   island's `CompositionSurfaceHelper` is NovaOS's own, and the window
   closes cleanly; checked in `xamlpagetest`, with
-  [a screenshot](screenshots/winui3-first-page.png).  Left: the page
-  typed into (a `TextBox`) and clicked (the `Button`).
+  [a screenshot](screenshots/winui3-first-page.png).  Input part done:
+  the island's pointer and keyboard input reach the framework (its
+  browser host's input entry points, the core's pointer, key and
+  character event args, the interaction manager and gesture component,
+  over NovaOS's own `Microsoft.UI.Input` `GestureRecognizer`), a mouse
+  click and Space on the focused `Button` fire its `Click`, typed
+  characters reach the page's `CharacterReceived`, the pressed `Button`'s
+  border draws through `dcomp.dll`'s new nine-grid brushes, and the
+  `Border`'s colour is read back from the window's pixels; checked in
+  `xamlpagetest` ([screenshot](screenshots/winui3-input.png)).  A
+  `TextBox` is its own later step: its sources are open, but it loads
+  `WinUIEdit.dll`, a closed windowless RichEdit (`ITextServices2`) NovaOS
+  will provide.
 - [ ] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

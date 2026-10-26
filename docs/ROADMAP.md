@@ -28,7 +28,10 @@ notes](releases/0.2.1.md)), the Phase 32 release (`Windows.UI.Xaml`, WinUI 2
 and app packages), is released from the `v0.2.1` tag. The next release, 0.2.2 "Pulsar", is
 planned in [releases/0.2.2.md](releases/0.2.2.md): Windows Calculator
 starting on a system `Windows.UI.Xaml.dll` (finishing Phase 32) and GPU
-sharing by NT handle. The 0.1 release closed Phase 22 except its checks
+sharing by NT handle. The one after it, 0.2.3 "Nebula", is planned in
+[releases/0.2.3.md](releases/0.2.3.md): XAML text input, packaged apps in
+the Start menu and Settings, a vendor WDDM display driver run unchanged,
+and signed updates. The 0.1 release closed Phase 22 except its checks
 on a real PC, which moved to Phase 23. Since then Phase 26 and Phase 30
 are complete, and Phases 24 and 25 are partly done.
 

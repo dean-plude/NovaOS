@@ -4,7 +4,7 @@
 #ifndef KE_VERSION_H
 #define KE_VERSION_H
 
-#define NOVA_VERSION "0.2.0"
+#define NOVA_VERSION "0.2.1"
 
 /* The version this kernel image carries.  It is NOVA_VERSION in a field of
  * the image (version.c) that tools/mkupdate.py can stamp with another

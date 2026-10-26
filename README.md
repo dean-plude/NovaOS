@@ -217,19 +217,15 @@ these decisions and why it was made.
 
 ## Status and roadmap
 
-**NovaOS 0.2 "Kepler"** (version 0.2.0) is the current release
-([release notes](docs/releases/0.2.0.md)); 0.1.0 was released on 4 October
-2026 ([notes](docs/releases/0.1.0.md)).  The rolling `latest` build follows
-`main`.  Kepler is the everyday-OS release: accounts and sign-in, UAC,
-updates that roll back, an installer that works beside Windows, printing,
-and the Windows driver model.  A performance budget guards boot time and
-Firefox start-up in CI.
-
-**NovaOS 0.2.1 "Starlight"** is being prepared
-([draft notes](docs/releases/0.2.1.md)): the Windows app platform (the
+**NovaOS 0.2.1 "Starlight"** (version 0.2.1) is the current release
+([release notes](docs/releases/0.2.1.md)): the Windows app platform (the
 XAML framework built from Microsoft's source, WinUI 2 and app packages,
 Phase 32), drive C: as the installed disk itself, a rebuilt Settings and
-the Windows Firewall.
+the Windows Firewall.  Before it came 0.2 "Kepler", the everyday-OS
+release ([notes](docs/releases/0.2.0.md)), and 0.1.0 on 4 October 2026
+([notes](docs/releases/0.1.0.md)).  The rolling `latest` build follows
+`main`, and a performance budget guards boot time and Firefox start-up
+in CI.
 
 Kepler's ISO boots on the reference PC, a ThinkPad T14 Gen 4, and NovaOS
 installs on a real Hyper-V host; its laptop drivers (Wi-Fi, Bluetooth,

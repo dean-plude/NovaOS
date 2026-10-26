@@ -8,8 +8,7 @@ Nothing is uploaded by hand.
 NovaOS 0.1.0 (`v0.1.0`) was released this way on 2026-10-04, 0.2.0,
 code name "Kepler" (`v0.2.0`, [notes](releases/0.2.0.md)), on 2026-10-19,
 and 0.2.1, code name "Starlight" (`v0.2.1`, [notes](releases/0.2.1.md)),
-is prepared the same way: its notes go in first, and the version bump
-follows once Phase 32 is complete. Separately,
+is released the same way. Separately,
 every green push to `main` republishes a rolling pre-release tagged
 `latest` ([ci.md](ci.md#the-rolling-latest-release)); that is not a
 release in the sense of this page.

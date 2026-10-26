@@ -363,6 +363,17 @@ package uses it.  From a bundle, `appx` installs the application package
 for this computer (x64); its language and scale resource packages are
 not installed yet.
 
+A free Microsoft Store app and the frameworks it needs can be downloaded
+on another computer with `tools/appx/storefetch.py` (in the NovaOS
+source), which asks the Store's own delivery service as the Store app
+does, then copied over and installed, frameworks first:
+
+    python3 tools/appx/storefetch.py 9WZDNCRFHVN5 calculator
+
+The packages stay exactly as Microsoft signed them.  Calculator's five
+frameworks install today; Calculator's own bundle does not yet (see
+[ROADMAP.md](ROADMAP.md), step 32.6).
+
 ### Drivers
 
 A Windows driver package (an `.inf` file with its `.sys` and `.cat`

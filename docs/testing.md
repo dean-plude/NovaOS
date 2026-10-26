@@ -416,7 +416,8 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   packages: `appx` install, block map and signature checks (APPX SIP,
   publisher), start by AUMID, package identity, `resources.pri`, a
   packaged Windows Runtime class, framework packages and the package
-  graph, a signed bundle, remove), Settings: `start ms-settings:display`
+  graph, a signed bundle, a Store-layout bundle whose packages are
+  signed by themselves, remove), Settings: `start ms-settings:display`
   opens Display, its search box (Ctrl+F, "printer", Enter) goes to
   Printers; `settings check` draws every page at three window sizes, at
   its top and scrolled to its end, programs started from the Start menu

@@ -23,7 +23,9 @@
  * graph (GetCurrentPackageInfo), loads the framework's novafw.dll by name
  * (the loader searches the graph) and activates the framework's Windows
  * Runtime class; the framework cannot be removed while the app is
- * installed.
+ * installed.  A bundle laid out as the Store's are (its block map naming
+ * only its manifest) installs by its package's own signature, and is
+ * refused when that package is unsigned or another publisher's.
  */
 #include <windows.h>
 #include <objbase.h>
@@ -284,6 +286,16 @@ static void signed_packages(void)
     CHECK("the packaged program found its framework", run_packaged(FT_FAMILY L"!App", L"fwchild") == 0);
     CHECK("refused: removing a framework in use", appx(L"remove NovaOS.TestFramework") == 1 && exists(FW_ROOT));
     CHECK("appx remove (the app)", appx(L"remove NovaOS.FrameworkTest") == 0 && !exists(FT_ROOT));
+    /* the Store's layout: the bundle's block map names only its manifest,
+     * each package is signed by itself */
+    CHECK("refused: a Store-layout bundle's package not signed",
+          appx(L"install C:\\Tests\\Appx\\StoreBundleUnsigned.msixbundle") == 1 && !exists(FT_ROOT));
+    CHECK("refused: a Store-layout bundle's package not the bundle's publisher",
+          appx(L"install C:\\Tests\\Appx\\StoreBundleOtherPublisher.msixbundle") == 1 &&
+          !exists(L"C:\\Programs\\WindowsApps\\NovaOS.FrameworkTest_1.0.0.0_x64__vbgq7nvafm2e2"));
+    CHECK("appx install (Store-layout bundle)", appx(L"install C:\\Tests\\Appx\\StoreBundle.msixbundle") == 0 &&
+                                                exists(FT_ROOT L"\\appxtest.exe"));
+    CHECK("appx remove (the Store-layout app)", appx(L"remove NovaOS.FrameworkTest") == 0 && !exists(FT_ROOT));
     CHECK("appx remove (the framework)", appx(L"remove NovaOS.TestFramework") == 0 && !exists(FW_ROOT));
     set_test_root(FALSE);
 }

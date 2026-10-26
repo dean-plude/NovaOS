@@ -8,7 +8,7 @@
 # Windows Runtime class through its package graph
 DOC = ('`appxtest` (app packages: `appx` install, block map and signature checks (APPX SIP, publisher), '
        'start by AUMID, package identity, `resources.pri`, a packaged Windows Runtime class, framework packages '
-       'and the package graph, a signed bundle, remove)')
+       'and the package graph, a signed bundle, a Store-layout bundle whose packages are signed by themselves, remove)')
 TESTS = [
     Test('appxtest', 'appxtest', [r'appxtest: \d+ passed, 0 failed'], timeout=300, elevated=True),
 ]

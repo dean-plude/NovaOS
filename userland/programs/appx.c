@@ -52,7 +52,12 @@
  * map, its signature, its publisher), then the application package for
  * this processor (x64, else neutral, else x86) is installed from inside
  * it; a package inside a signed bundle is covered by the bundle's
- * signature, and checked by its own when it has one.
+ * signature when the bundle's block map names it, and checked by its own
+ * when it has one.  The Store's bundles name only their manifest in their
+ * block map: a package the bundle's manifest names may be outside it, and
+ * then installs only by its own signature, verified as any package's
+ * (unsigned, or signed by another, it is refused).  Either way a bundle's
+ * package must have the bundle's publisher, as Windows requires.
  * A framework package (<Framework>true</Framework>) is installed the same
  * way; it has no applications, and it is not removed while a package that
  * depends on it is installed.
@@ -428,8 +433,26 @@ static int fail(const char *fmt, const WCHAR *what)
     return 0;
 }
 
-/* every file against the block map */
-static int check_blockmap(Package *pk)
+/* @fn (a bundle manifest's FileName): one of @bundle's packages */
+static int bundle_names(Node *bundle, const WCHAR *fn)
+{
+    for (Node *p = child(child(bundle, L"Packages"), L"Package"); p; p = sibling(p, L"Package")) {
+        const WCHAR *f = attr(p, L"FileName");
+        WCHAR name[MAX_PATH];
+        if (!f || wcslen(f) >= MAX_PATH) continue;
+        wcscpy(name, f);
+        for (WCHAR *c = name; *c; c++) if (*c == '/') *c = '\\';
+        if (!wcscmp(name, fn)) return 1;
+    }
+    return 0;
+}
+
+/* every file against the block map; in a bundle (@bundle, its manifest's
+ * Bundle element) a package its manifest names may be outside the block
+ * map, as the Store's bundles are (their block map covers only the bundle
+ * manifest): such a package is left uncovered, and installs only by its
+ * own signature (install_bundle) */
+static int check_blockmap(Package *pk, Node *bundle)
 {
     Entry *bme = zip_find(&pk->zip, L"AppxBlockMap.xml");
     BYTE *bm = bme ? zip_read(&pk->zip, bme) : NULL;
@@ -472,7 +495,7 @@ static int check_blockmap(Package *pk)
     for (int i = 0; i < pk->zip.count; i++) {
         const WCHAR *n = pk->zip.e[i].name;
         if (!pk->zip.e[i].covered && wcscmp(n, L"[Content_Types].xml") && wcscmp(n, L"AppxSignature.p7x") &&
-            !(sig && !wcscmp(n, L"AppxMetadata\\CodeIntegrity.cat")))
+            !(sig && !wcscmp(n, L"AppxMetadata\\CodeIntegrity.cat")) && !(bundle && bundle_names(bundle, n)))
             return fail("%ls: in the package but not in its block map", n);
     }
     return 1;
@@ -945,8 +968,11 @@ static int find_dependencies(Package *pk)
 /* ---- installing ---- */
 
 /* @data (@n bytes, read from @file): a package, or a bundle of packages;
- * @signed_by: the verified bundle it came from (its publisher), if any */
-static int install_data(const BYTE *data, size_t n, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by);
+ * @signed_by: the verified bundle it came from (its publisher), if any,
+ * when the bundle's block map covers it; @outside: the bundle's publisher
+ * when its block map does not (then only its own signature counts) */
+static int install_data(const BYTE *data, size_t n, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by,
+                        const WCHAR *outside);
 
 static int install_bundle(Package *b, const BYTE *data, size_t n, const WCHAR *file, int allow_unsigned)
 {
@@ -956,7 +982,7 @@ static int install_bundle(Package *b, const BYTE *data, size_t n, const WCHAR *f
     Node *bundle = child(root, L"Bundle"), *id = child(bundle, L"Identity");
     const WCHAR *publisher = attr(id, L"Publisher");
     if (!id || !attr(id, L"Name") || !publisher) return !fail("%ls: the bundle's manifest has no identity", file);
-    if (!check_blockmap(b)) return 1;
+    if (!check_blockmap(b, bundle)) return 1;
     int sig = zip_find(&b->zip, L"AppxSignature.p7x") != NULL;
     if (sig && !check_signature(data, n, publisher, file)) return 1;
     if (!sig && !allow_unsigned)
@@ -985,30 +1011,40 @@ static int install_bundle(Package *b, const BYTE *data, size_t n, const WCHAR *f
     BYTE *bytes = inner ? zip_read(&b->zip, inner) : NULL;
     if (!bytes) return !fail("%ls: in the bundle's manifest but not in the bundle", name);
     printf("appx: %ls: installing %ls from the bundle\n", file, name);
-    return install_data(bytes, (size_t)inner->usize, name, allow_unsigned, sig ? publisher : NULL);
+    if (!inner->covered)
+        return install_data(bytes, (size_t)inner->usize, name, allow_unsigned, NULL, publisher);
+    return install_data(bytes, (size_t)inner->usize, name, allow_unsigned, sig ? publisher : NULL, NULL);
 }
 
-static int install_data(const BYTE *data, size_t size, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by)
+static int install_data(const BYTE *data, size_t size, const WCHAR *file, int allow_unsigned, const WCHAR *signed_by,
+                        const WCHAR *outside)
 {
     Package pk;
     memset(&pk, 0, sizeof pk);
     if (!zip_open(&pk.zip, data, (unsigned long long)size)) return !fail("%ls: not a package (not a zip)", file);
     if (!zip_find(&pk.zip, L"AppxManifest.xml") && zip_find(&pk.zip, L"AppxMetadata\\AppxBundleManifest.xml")) {
-        if (signed_by) return !fail("%ls: a bundle inside a bundle", file);
+        if (signed_by || outside) return !fail("%ls: a bundle inside a bundle", file);
         return install_bundle(&pk, data, size, file, allow_unsigned);
     }
-    if (!read_manifest(&pk) || !check_blockmap(&pk)) return 1;
+    if (!read_manifest(&pk) || !check_blockmap(&pk, NULL)) return 1;
 
     /* the signature: verified, or (unsigned) allowed as Windows allows it;
-     * inside a signed bundle, the bundle's covers it */
-    if (zip_find(&pk.zip, L"AppxSignature.p7x")) {
-        if (!check_signature(data, size, pk.publisher, pk.full)) return 1;
-    } else if (signed_by) {
+     * inside a signed bundle whose block map covers it, the bundle's covers
+     * it; outside the bundle's block map (the Store's bundles), only its
+     * own; a bundle's package is its bundle's publisher's, as Windows
+     * requires */
+    const WCHAR *bundle_pub = signed_by ? signed_by : outside;
+    if (bundle_pub) {
         WCHAR a[600], b[600];
-        name_key(signed_by, a, 600);
+        name_key(bundle_pub, a, 600);
         name_key(pk.publisher, b, 600);
         if (wcscmp(a, b)) return !fail("%ls: its publisher is not its bundle's", pk.full);
-    } else {
+    }
+    if (zip_find(&pk.zip, L"AppxSignature.p7x")) {
+        if (!check_signature(data, size, pk.publisher, pk.full)) return 1;
+    } else if (outside) {
+        return !fail("%ls: outside its bundle's block map and not signed itself, so it is not installed", pk.full);
+    } else if (!signed_by) {
         if (!allow_unsigned)
             return !fail("%ls: the package is not signed (an unsigned package installs only with -AllowUnsigned)", pk.full);
         if (!wcsstr(pk.publisher, UNSIGNED_OID))
@@ -1135,7 +1171,7 @@ static int install(const WCHAR *file, int allow_unsigned)
     BOOL ok = ReadFile(h, data, (DWORD)size.QuadPart, &got, NULL) && got == size.QuadPart;
     CloseHandle(h);
     if (!ok) return !fail("%ls: cannot be read", file);
-    return install_data(data, (size_t)size.QuadPart, file, allow_unsigned, NULL);
+    return install_data(data, (size_t)size.QuadPart, file, allow_unsigned, NULL, NULL);
 }
 
 /* each installed package: the callback gets its full name and its key */

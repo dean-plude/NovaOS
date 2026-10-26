@@ -538,6 +538,110 @@ WINBASEAPI FARPROC WINAPI GetProcAddress(HMODULE m, LPCSTR name)
 
 WINBASEAPI BOOL WINAPI FreeLibrary(HMODULE m) { (void)m; return TRUE; }   /* modules stay mapped */
 
+/* The operating system's delay-load helper (api-ms-win-core-delayload):
+ * a program linked against dloadhelper.lib, as Windows' own apps are,
+ * calls it the first time it uses a delay-loaded function.  It loads the
+ * DLL once (the descriptor's module handle), finds the function by the
+ * import name table's entry for @thunk's slot and writes it there.  On a
+ * failure the program's hook, then the system hook, may give a stand-in;
+ * without one it raises ERROR_DELAY_LOAD_FAILED, as Windows does.
+ * (Thunks are pointer-sized; an ordinal import has the top bit set.) */
+typedef struct {
+    DWORD Attributes, DllNameRVA, ModuleHandleRVA, ImportAddressTableRVA, ImportNameTableRVA,
+          BoundImportAddressTableRVA, UnloadInformationTableRVA, TimeDateStamp;
+} IMAGE_DELAYLOAD_DESCRIPTOR_;
+typedef struct {
+    ULONG Size;
+    const IMAGE_DELAYLOAD_DESCRIPTOR_ *DelayloadDescriptor;
+    ULONG_PTR *ThunkAddress;
+    LPCSTR TargetDllName;
+    struct { ULONG ImportDescribedByName; union { LPCSTR Name; ULONG Ordinal; } Description; } TargetApiDescriptor;
+    PVOID TargetModuleBase, Unused;
+    ULONG LastError;
+} DELAYLOAD_INFO_;
+typedef PVOID (WINAPI *DELAYLOAD_DLL_HOOK)(ULONG reason, DELAYLOAD_INFO_ *info);
+typedef PVOID (WINAPI *DELAYLOAD_SYSTEM_HOOK)(LPCSTR dll, LPCSTR proc);
+#ifndef ERROR_DELAY_LOAD_FAILED
+#define ERROR_DELAY_LOAD_FAILED 1285
+#endif
+
+WINBASEAPI PVOID WINAPI ResolveDelayLoadedAPI(PVOID base, const IMAGE_DELAYLOAD_DESCRIPTOR_ *d,
+                                              PVOID dll_hook, PVOID system_hook,
+                                              ULONG_PTR *thunk, ULONG flags)
+{
+    (void)flags;
+    BYTE *b = (BYTE *)base;
+    LPCSTR dll = (LPCSTR)(b + d->DllNameRVA);
+    HMODULE *slot = (HMODULE *)(b + d->ModuleHandleRVA), m = *slot;
+    ULONG_PTR *iat = (ULONG_PTR *)(b + d->ImportAddressTableRVA);
+    ULONG_PTR name = ((ULONG_PTR *)(b + d->ImportNameTableRVA))[thunk - iat];
+    ULONG_PTR by_ordinal = (ULONG_PTR)1 << (sizeof(ULONG_PTR) * 8 - 1);
+    LPCSTR proc = name & by_ordinal ? (LPCSTR)(name & 0xFFFF)
+                                    : (LPCSTR)(b + (DWORD)name + 2);      /* IMAGE_IMPORT_BY_NAME: Hint, Name */
+    if (!m) {
+        m = LoadLibraryA(dll);
+        if (m) {
+            HMODULE old = InterlockedCompareExchangePointer((PVOID *)slot, m, NULL);
+            if (old) m = old;
+        }
+    }
+    FARPROC f = m ? GetProcAddress(m, proc) : NULL;
+    if (!f) {
+        DELAYLOAD_INFO_ info = { sizeof(info), d, thunk, dll };
+        info.TargetApiDescriptor.ImportDescribedByName = (ULONG_PTR)proc >= 0x10000;
+        info.TargetApiDescriptor.Description.Name = proc;
+        info.TargetModuleBase = m;
+        info.LastError = GetLastError();
+        if (dll_hook) f = (FARPROC)((DELAYLOAD_DLL_HOOK)dll_hook)(m ? 4 : 3, &info);  /* dliFailGetProc / dliFailLoadLib */
+        if (!f && system_hook) f = (FARPROC)((DELAYLOAD_SYSTEM_HOOK)system_hook)(dll, proc);
+        if (!f) {
+            /* Windows raises ERROR_DELAY_LOAD_FAILED (not delayimp's
+             * 0xC06D007E), which is what programs' handlers test for */
+            char msg[160];
+            int k = 0;
+            const char *parts[4] = { "delay load failed: ", dll, "!",
+                                     (ULONG_PTR)proc < 0x10000 ? "(an ordinal)" : proc };
+            for (int i = 0; i < 4; i++) for (const char *c = parts[i]; *c && k < 150; c++) msg[k++] = *c;
+            msg[k++] = '\n';
+            NtNovaDebugPrint(msg, (ULONG)k);
+            ULONG_PTR arg = (ULONG_PTR)&info;
+            RaiseException(ERROR_DELAY_LOAD_FAILED, 0, 1, &arg);
+            return NULL;
+        }
+    }
+    *thunk = (ULONG_PTR)f;
+    return (PVOID)f;
+}
+
+/* The system's hook for a delay-loaded DLL or function that is missing.
+ * Windows' kernelbase has stand-ins only for some of its own DLLs' APIs;
+ * for anything else it gives none, so ResolveDelayLoadedAPI raises
+ * ERROR_DELAY_LOAD_FAILED, which the program may catch (.NET Native's
+ * mrt100_app.dll probes mrt100.dll, which only a debugging machine has,
+ * that way). */
+WINBASEAPI PVOID WINAPI DelayLoadFailureHook(LPCSTR dll, LPCSTR proc)
+{
+    (void)dll; (void)proc;
+    return NULL;
+}
+
+/* Bind every delay-loaded import of @base from @dll at once */
+WINBASEAPI NTSTATUS WINAPI ResolveDelayLoadsFromDll(PVOID base, LPCSTR dll, ULONG flags)
+{
+    BYTE *b = (BYTE *)base, *nt = b + *(DWORD *)(b + 0x3C);
+    DWORD dd = *(WORD *)(nt + 24) == 0x10B ? 96 : 112;
+    DWORD rva = *(DWORD *)(nt + 24 + dd + 8 * 13);           /* the delay-load import directory */
+    if (!rva) return STATUS_DLL_NOT_FOUND;
+    for (const IMAGE_DELAYLOAD_DESCRIPTOR_ *d = (void *)(b + rva); d->DllNameRVA; d++) {
+        if (!ieq((const char *)b + d->DllNameRVA, dll)) continue;
+        for (ULONG_PTR *t = (ULONG_PTR *)(b + d->ImportAddressTableRVA),
+             *n = (ULONG_PTR *)(b + d->ImportNameTableRVA); *n; t++, n++)
+            if (!ResolveDelayLoadedAPI(base, d, NULL, NULL, t, flags)) return STATUS_PROCEDURE_NOT_FOUND;
+        return STATUS_SUCCESS;
+    }
+    return STATUS_DLL_NOT_FOUND;
+}
+
 /* Environment: "NAME=value" strings (UTF-8), sorted by name without
  * regard to case as Windows keeps them; filled from the process block on
  * first use.  GetEnvironmentStrings and CreateProcess see every change. */

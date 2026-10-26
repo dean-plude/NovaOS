@@ -1,7 +1,7 @@
 ## The closed Windows App SDK headers, and XAML's type metadata
 
 Fourth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the headers the XAML core's lower
+[design](design/windows-ui-xaml.md)): the headers the XAML core's lower
 layers include from closed Windows App SDK pieces now have NovaOS
 stand-ins, and the next layers of Microsoft's sources build.
 

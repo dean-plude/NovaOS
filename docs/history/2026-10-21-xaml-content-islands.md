@@ -1,7 +1,7 @@
 ## The content islands under a XAML Window
 
 The first part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 Windows App SDK's lifted content, input and windowing classes, which a
 XAML `Window` sits on, and the framework's window classes built.
 

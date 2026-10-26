@@ -1,6 +1,6 @@
 ## NovaOS starts first beside Windows, and offers Windows
 
-Second part of roadmap step 33.4 ([design](../design/installer.md)).  A
+Second part of roadmap step 33.4 ([design](design/installer.md)).  A
 PC with Windows already has "Windows Boot Manager" first in the
 firmware's `BootOrder`, so NovaOS installed beside it was only reachable
 through the firmware's boot menu.  Setup now finishes by adding a

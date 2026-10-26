@@ -1,7 +1,7 @@
 ## WinUI 2's controls get their default styles
 
 The eighth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: with
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: with
 `XamlControlsResources` merged into the app's resources, as an app's
 `App.xaml` merges it, WinUI 2's controls take their default styles and
 apply their templates.

@@ -1,7 +1,7 @@
 ## App packages: a download route for Microsoft Store apps
 
 Step 32.6 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)), third part: getting a Store
+[design](design/windows-ui-xaml.md)), third part: getting a Store
 app's packages the way the Store app gets them.
 
 - **`tools/appx/storefetch.py`** downloads a free Store product's bundle

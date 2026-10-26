@@ -1,7 +1,7 @@
 ## XAML's value boxer and Windows.Foundation.PropertyValue
 
 Part of the Phase 32 push on step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): what `XamlReader.Load` hands
+([design](design/windows-ui-xaml.md)): what `XamlReader.Load` hands
 its results back through now builds from Microsoft's sources.
 
 - **New DLL:** `wintypes.dll`, `Windows.Foundation.PropertyValue`: the

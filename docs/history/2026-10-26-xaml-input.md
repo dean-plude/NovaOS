@@ -1,10 +1,10 @@
 ## A XAML page takes input
 
 The eighth and last part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Starlight 0.2.1 push: a
+([design](design/windows-ui-xaml.md)), in the Starlight 0.2.1 push: a
 WinUI 3 page is clicked and typed into, built from Microsoft's sources.
 
-![A WinUI 3 page clicked and typed into on NovaOS](../screenshots/winui3-input.png)
+![A WinUI 3 page clicked and typed into on NovaOS](screenshots/winui3-input.png)
 
 - **Input:** the island's pointer and keyboard messages reach the
   framework's input manager through its browser host's input entry

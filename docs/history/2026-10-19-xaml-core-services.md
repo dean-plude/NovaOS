@@ -1,7 +1,7 @@
 ## XAML's core services
 
 Ninth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML core's own core
+[design](design/windows-ui-xaml.md)): the XAML core's own core
 services, `CCoreServices` (`core/dll/xcpcore.cpp`), now build from
 Microsoft's sources, and XAML text loads through them as
 `XamlReader.Load` loads it (`CCoreServices::ParseXaml`).

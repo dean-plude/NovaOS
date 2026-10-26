@@ -1,6 +1,6 @@
 ## Reset this PC, the firmware's watchdog and Recovery in Settings
 
-The last pieces of roadmap step 33.3 ([design](../design/recovery.md)).
+The last pieces of roadmap step 33.3 ([design](design/recovery.md)).
 Reset this PC works as Windows' "Keep my files": `systemreset /keep` in
 the Terminal, or Reset PC in Settings > System > Recovery, restarts, and
 the next start removes the apps, drivers and settings, keeps the accounts

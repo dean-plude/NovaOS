@@ -1,7 +1,7 @@
 ## WinUI 2's theme resources load whole
 
 The seventh part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push:
+([design](design/windows-ui-xaml.md)), in the Phase 32 push:
 `XamlControlsResources`, the dictionary of WinUI 2's theme resources an
 app's `App.xaml` merges, now loads from its `Source` and answers lookups.
 

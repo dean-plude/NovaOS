@@ -1,7 +1,7 @@
 ## The UWP app model's core: CoreApplication and CoreWindow
 
 First step of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)).  XAML's `Application.Start` and
+[design](design/windows-ui-xaml.md)).  XAML's `Application.Start` and
 every DirectX UWP app stand on the Windows Runtime's app model, so that
 comes first:
 

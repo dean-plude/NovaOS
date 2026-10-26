@@ -1,7 +1,7 @@
 ## XAML's core services, made for real
 
 Tenth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML core is now made the
+[design](design/windows-ui-xaml.md)): the XAML core is now made the
 way the framework makes it, `CCoreServices::Create`, on Microsoft's own
 platform layer.
 

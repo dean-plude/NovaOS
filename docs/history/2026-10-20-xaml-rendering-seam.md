@@ -1,7 +1,7 @@
 ## XAML's rendering seam
 
 Thirteenth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the render target the XAML
+[design](design/windows-ui-xaml.md)): the render target the XAML
 control makes now builds from Microsoft's sources, and
 `CJupiterControl::Create` succeeds.
 

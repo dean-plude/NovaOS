@@ -1,7 +1,7 @@
 ## XAML animation and WinUI 2's inherited properties
 
 The fifth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 framework's animation, which the core's start-up and every control's
 visual states run on, and WinUI 2 types that inherit framework
 properties.

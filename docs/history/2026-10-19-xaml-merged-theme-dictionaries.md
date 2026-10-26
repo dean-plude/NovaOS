@@ -1,7 +1,7 @@
 ## XAML's merged and theme dictionaries
 
 Eighth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): a `ResourceDictionary` loaded
+[design](design/windows-ui-xaml.md)): a `ResourceDictionary` loaded
 from XAML now keeps its `MergedDictionaries` and `ThemeDictionaries`,
 and looking a key up searches them as Windows does.
 

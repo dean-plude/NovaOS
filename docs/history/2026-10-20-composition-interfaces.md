@@ -1,7 +1,7 @@
 ## The composition interfaces XAML's render tree asks for
 
 Part of the Phase 32 push for `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): `dcomp.dll`'s
+([design](design/windows-ui-xaml.md)): `dcomp.dll`'s
 Windows.UI.Composition grows the later interface versions, animations
 and property sets the XAML framework's compositor tree host uses.
 

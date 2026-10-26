@@ -1,7 +1,7 @@
 ## XAML's dispatcher, default styles and Window
 
 Phase 32 push on step 32.3 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)): more of what
+([design](design/windows-ui-xaml.md)): more of what
 `DXamlCore::InitializeInstance` makes now builds from Microsoft's
 sources.
 

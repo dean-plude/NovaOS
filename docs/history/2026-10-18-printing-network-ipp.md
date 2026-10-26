@@ -1,6 +1,6 @@
 ## Printing: network printers (IPP) and Settings > Printers
 
-Second part of roadmap step 33.5 ([design](../design/printing.md)).
+Second part of roadmap step 33.5 ([design](design/printing.md)).
 NovaOS printed only to PDF files; now it prints to the printers people
 have at home and at work, without a driver, the way Windows 11 does with
 its "Microsoft IPP Class Driver":

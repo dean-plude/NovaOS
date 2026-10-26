@@ -1,7 +1,7 @@
 ## Direct2D device contexts
 
 First part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the XAML framework draws its
+[design](design/windows-ui-xaml.md)): the XAML framework draws its
 text and shapes with Direct2D 1.1's device contexts, into
 DirectComposition surfaces, so those come before its build.
 

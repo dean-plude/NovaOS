@@ -1,6 +1,6 @@
 ## Accounts in Settings, and fast user switching
 
-Second part of roadmap step 33.1 ([design](../design/accounts.md)).
+Second part of roadmap step 33.1 ([design](design/accounts.md)).
 Accounts could be made only by programs (`NetUserAdd`), and the lock
 screen offered only the account that locked it.  Now Settings has
 Windows 11's Accounts page: your info with your picture, type and

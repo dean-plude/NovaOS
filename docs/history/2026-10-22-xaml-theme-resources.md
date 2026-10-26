@@ -1,7 +1,7 @@
 ## The XAML framework's theme resources
 
 The second part of step 32.4 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Phase 32 push: the
+([design](design/windows-ui-xaml.md)), in the Phase 32 push: the
 control styles and theme resources a XAML `Window` loads as it is
 created.
 

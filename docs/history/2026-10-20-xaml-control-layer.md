@@ -1,7 +1,7 @@
 ## XAML's control layer and the DispatcherQueue
 
 Twelfth part of step 32.3 of `Windows.UI.Xaml` on NovaOS (Phase 32,
-[design](../design/windows-ui-xaml.md)): the control layer the
+[design](design/windows-ui-xaml.md)): the control layer the
 framework starts up on now builds from Microsoft's sources.
 
 - **New DLL:** `CoreMessaging.dll`, the `DispatcherQueue` every XAML

@@ -15962,6 +15962,15 @@ apply their templates and lay out.
   itself is a .NET Native app: its start-up needs the .NET Native
   framework packages (32.6).
 
+## The 0.2.1 "Starlight" notes cover the end of 32.5
+
+Before the `v0.2.1` tag, [docs/releases/0.2.1.md](../releases/0.2.1.md)
+gained the tenth and last part of step 32.5, which completes it: WinUI 2's
+controls get their overrides called, so `NavigationView` and
+`RadioButtons` make their items and every WinUI 2 control Calculator
+uses applies its template, on composition shape visuals and
+`MrmCoreR.dll`'s resource strings.
+
 ## NovaOS 0.2.1 "Starlight" is prepared
 
 The version moves from 0.2.0 to 0.2.1 (`kernel/ke/version.h`,

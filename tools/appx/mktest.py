@@ -35,6 +35,15 @@ tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Appx:
                     on NovaOS.TestFramework), the same for x86 (which must
                     not be picked) and a scale-200 resource package (not
                     installed yet)
+  StoreBundle.msixbundle  the same app laid out as the Store's bundles are:
+                    the block map names only the bundle's manifest, the
+                    x64 package signed by itself (same signer): installs
+  StoreBundleUnsigned.msixbundle  the same, its x64 package not signed:
+                    must be refused (nothing else covers it)
+  StoreBundleOtherPublisher.msixbundle  the same, its x64 package signed
+                    by another signer under the test root, its publisher
+                    that signer's: must be refused (not the bundle's
+                    publisher)
   testroot.cer      the test root
 """
 import os
@@ -59,6 +68,7 @@ def run(cmd):
 
 
 SIGNER = 'CN=NovaOS Package Signer, O=NovaOS, C=US'
+OTHER = 'CN=Someone Else, O=NovaOS, C=US'
 LONG = ((2000, 1, 1, 0, 0, 0), (2049, 12, 31, 23, 59, 59))
 
 FRAMEWORK = '''<?xml version="1.0" encoding="utf-8"?>
@@ -174,6 +184,17 @@ def main(argv):
         ('application', 'x64', 'FrameworkTest_x64.msix', app[0], None),
         ('resource', None, 'FrameworkTest_scale-200.msix', res, 'split.scale-200')])
     makeappx.write(os.path.join(out, 'FrameworkTest.msixbundle'), signappx.sign(bundle, signer, [root], bundle=True))
+    # the Store's layout: each package outside the block map, signed by itself
+    stranger = Cert('Someone Else', Key('novaos-test-other'), 6, ((2020, 1, 1, 0, 0, 0), LONG[1]), root, root.key,
+                 usage='codesign')
+    other_app = makeappx.pack([('appxtest.exe', exe_), ('AppxManifest.xml', (APP % (
+        OTHER, 'x64', '', SIGNER)).encode())])
+    for fn, x64 in (('StoreBundle', signappx.sign(app[0], signer, [root])), ('StoreBundleUnsigned', app[0]),
+                    ('StoreBundleOtherPublisher', signappx.sign(other_app, stranger, [root]))):
+        b = makeappx.pack_bundle('NovaOS.FrameworkTest', SIGNER, '1.0.0.0', [
+            ('application', 'x86', 'FrameworkTest_x86.msix', signappx.sign(app[1], signer, [root]), None),
+            ('application', 'x64', 'FrameworkTest_x64.msix', x64, None)], store_layout=True)
+        makeappx.write(os.path.join(out, fn + '.msixbundle'), signappx.sign(b, signer, [root], bundle=True))
     makeappx.write(os.path.join(out, 'testroot.cer'), root.der)
 
 

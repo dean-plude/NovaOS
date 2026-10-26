@@ -371,8 +371,10 @@ does, then copied over and installed, frameworks first:
     python3 tools/appx/storefetch.py 9WZDNCRFHVN5 calculator
 
 The packages stay exactly as Microsoft signed them.  Calculator's five
-frameworks install today; Calculator's own bundle does not yet (see
-[ROADMAP.md](ROADMAP.md), step 32.6).
+frameworks and its own bundle install; starting Calculator waits on the
+rest of its controls (see [ROADMAP.md](ROADMAP.md), step 32.5).  In a
+Store bundle each package carries its own signature, which `appx`
+verifies, and it must have the bundle's publisher.
 
 ### Drivers
 

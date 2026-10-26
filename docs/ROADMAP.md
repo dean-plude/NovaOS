@@ -1317,7 +1317,7 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`Compositor.CreateShapeVisual` and the shape, geometry and path
   objects); Calculator's start-up itself waits on the .NET Native
   framework packages (32.6).
-- [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
+- [x] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed
   packages refused until their signatures can be verified), package
@@ -1334,13 +1334,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   Third part done: a download route, `tools/appx/storefetch.py` (the
   Store's delivery service, as the Store app asks it); Calculator
   11.2607's five Store frameworks install unchanged.
-  Next: Calculator's own bundle.  The Store's bundles leave their
-  application packages out of the bundle's block map (only the bundle
-  manifest is in it) and sign each package itself, so `appx` must take
-  a package the bundle manifest names that the block map leaves out,
-  and then verify that package's own signature, whose publisher must be
-  the bundle's, as Windows does; then starting it once 32.5 gives it
-  its controls.
+  Fourth part done: Calculator's own bundle from the Store installs
+  unchanged.  The Store's bundles leave their packages out of the
+  bundle's block map (only the bundle manifest is in it) and sign each
+  package itself, so `appx` takes a package the bundle manifest names
+  outside the block map only by that package's own signature, and a
+  bundle's package must have the bundle's publisher, as Windows
+  requires; test `appxtest` (a Store-layout bundle installs, its package
+  unsigned or another publisher's is refused).  Starting Calculator
+  waits on its controls (32.5).
 
 ---
 

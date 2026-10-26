@@ -1274,11 +1274,17 @@ vendors.
    frameworks' Windows Runtime classes after the package's own.  A bundle
    is checked as a package (block map, signature, publisher), then its
    application package for x64 (else neutral, else x86) installs from
-   inside it, covered by the bundle's signature.  Not yet: a bundle's
-   resource packages, and a Store download route for Calculator's own
-   bundle (its frameworks: `Microsoft.UI.Xaml.2.8`, `Microsoft.VCLibs.
-   140.00` and `.UWPDesktop`, `Microsoft.NET.Native.Framework.2.2` and
-   `.Runtime.2.2`).
+   inside it, covered by the bundle's signature when the bundle's block
+   map names it.  The Store's bundles (Calculator's) name only their
+   manifest in the block map and sign each package itself: a package the
+   bundle manifest names may be outside the block map, and then installs
+   only by its own signature (`check_blockmap` with the bundle,
+   `install_data`'s `outside`); either way its publisher must be the
+   bundle's.  Calculator 11.2607's bundle and its five frameworks
+   (`Microsoft.UI.Xaml.2.8`, `Microsoft.VCLibs.140.00` and
+   `.UWPDesktop`, `Microsoft.NET.Native.Framework.2.2` and
+   `.Runtime.2.2`), downloaded with `tools/appx/storefetch.py`, install
+   unchanged.  Not yet: a bundle's resource packages.
 
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

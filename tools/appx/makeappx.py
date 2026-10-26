@@ -53,12 +53,14 @@ def zip_name(name):
     return urllib.parse.quote(name.replace('\\', '/'), safe="/!$&'()*+,;=-._~@[]")
 
 
-def pack(files, change=None, signature=None, stored=()):
+def pack(files, change=None, signature=None, stored=(), unmapped=()):
     """the package's bytes for @files [(name, bytes)]; @change, when given,
     maps a name to the bytes written for it in place of the bytes the
     block map hashes (a damaged package, for tests); @signature, the bytes
     of an AppxSignature.p7x (outside the block map, as a signature is);
-    the files named in @stored are not deflated (a bundle's packages)"""
+    the files named in @stored are not deflated (a bundle's packages), and
+    those named in @unmapped are left out of the block map (as the Store's
+    bundles leave out their packages)"""
     zip_, central, entries = b'', b'', []
 
     def add(name, data, method, packed):
@@ -83,6 +85,8 @@ def pack(files, change=None, signature=None, stored=()):
         if written is not None:
             packed = written if store else deflate_blocks(written)[0]
         lfh = add(name, written if written is not None else data, 0 if store else 8, packed)
+        if name in unmapped:
+            continue
         blocks = ''.join('<Block Hash="%s"%s/>' % (
             base64.b64encode(hashlib.sha256(data[i:i + BLOCK]).digest()).decode(),
             '' if store else ' Size="%d"' % sizes[k])
@@ -119,12 +123,15 @@ def bundle_manifest(name, publisher, version, packages):
                 name, publisher.replace('"', '&quot;'), version, ''.join(rows))).encode('utf-8')
 
 
-def pack_bundle(name, publisher, version, packages):
+def pack_bundle(name, publisher, version, packages, store_layout=False):
     """a bundle (.msixbundle) of @packages (as bundle_manifest takes them):
-    each stored, the bundle's manifest, block map and content types"""
+    each stored, the bundle's manifest, block map and content types; with
+    @store_layout the block map names only the bundle's manifest, as the
+    Store's bundles do (each package then signed by itself)"""
     files = [(fn, data) for _, _, fn, data, _ in packages]
     files.append(('AppxMetadata\\AppxBundleManifest.xml', bundle_manifest(name, publisher, version, packages)))
-    return pack(files, stored={fn for fn, _ in files[:-1]})
+    payloads = {fn for fn, _ in files[:-1]}
+    return pack(files, stored=payloads, unmapped=payloads if store_layout else ())
 
 
 def folder_files(folder):

@@ -16111,3 +16111,31 @@ controllers.
   FF00:1 and gets the device's echo of an output report as `WM_INPUT`;
   the 64-bit run sees `GIDC_REMOVAL` and the device leave the list when
   the test unplugs it.
+
+## Windows Calculator from the Store gets further
+
+Step 32.6's check: with everything for 32.5 and 32.6 merged, the Store's
+Calculator (11.2607, a .NET Native app on WinUI 2.8) and its five
+framework packages install with `sudo appx install`, and `appx start
+Microsoft.WindowsCalculator_8wekyb3d8bbwe!App` starts `CalculatorApp.exe`.
+Two things stopped it before its own code ran:
+
+- **The system's delay-load helper** (`userland/kernel32/kernel32.c`,
+  `api-ms-win-core-delayload`): `ResolveDelayLoadedAPI` loads a
+  delay-loaded DLL once (the descriptor's module handle), finds the
+  function by the import name table's entry for the slot and writes it
+  there, as programs linked against `dloadhelper.lib` (Windows' own
+  apps, .NET Native's runtime) expect; `ResolveDelayLoadsFromDll` binds
+  every import from one DLL; `DelayLoadFailureHook` is the system hook.
+  When neither the program's hook nor the system's gives a stand-in it
+  raises `ERROR_DELAY_LOAD_FAILED` (1285), as Windows does:
+  `mrt100_app.dll` probes `mrt100.dll`, which only a debugging machine
+  has, and catches exactly that code.
+- **Test**: `dlltest` (64- and 32-bit) binds a descriptor of its own
+  through `ResolveDelayLoadedAPI` and catches 1285 for a missing DLL.
+
+Not yet: Calculator then asks for `Windows.UI.Xaml.Application`,
+`Windows.System.MemoryManager` and `Windows.System.Threading.ThreadPool`.
+NovaOS's Windows.UI.Xaml is linked into its test programs, which
+register its classes themselves; there is no system `Windows.UI.Xaml.dll`
+serving them to an app yet, so 32.6 stays open.

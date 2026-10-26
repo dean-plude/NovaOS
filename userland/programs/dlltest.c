@@ -1,7 +1,7 @@
 /* dlltest.exe — DllMain, exported calls, static TLS, LoadLibrary,
  * GetModuleFileName with more than 64 modules loaded, exports found by
- * ordinal alone, and system DLL calls Delphi programs and LibreOffice
- * make at start */
+ * ordinal alone, system DLL calls Delphi programs and LibreOffice
+ * make at start, and the system's delay-load helper */
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -243,6 +243,45 @@ static void libreoffice(void)
     CHECK(make && make(tiny, 4, L"C:", L"\\Apps", L"sums", L"xlsx") == 34);
 }
 
+/* The system's delay-load helper (api-ms-win-core-delayload's
+ * ResolveDelayLoadedAPI, which Windows' own apps link against through
+ * dloadhelper.lib): a descriptor of this image's (its RVAs from this
+ * image's base) binds a slot on first use; a DLL that is missing raises
+ * ERROR_DELAY_LOAD_FAILED (1285) for the program's handler, as .NET
+ * Native's runtime expects when it probes mrt100.dll */
+static struct { DWORD attrs, dll, handle, iat, names, bound, unload, stamp; } dl_desc[2];
+static HMODULE dl_handle[2];
+static ULONG_PTR dl_iat[2][2], dl_names[2][2];
+static char dl_dll[] = "kernel32.dll", dl_missing[] = "nosuchdll.dll";
+static struct { WORD hint; char name[16]; } dl_proc = { 0, "GetTickCount" };
+
+static void delay_loads(void)
+{
+    typedef PVOID (WINAPI *ResolveFn)(PVOID, const void *, PVOID, PVOID, ULONG_PTR *, ULONG);
+    ResolveFn resolve = (ResolveFn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ResolveDelayLoadedAPI");
+    CHECK(resolve != NULL);
+    if (!resolve) return;
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    const char *names[2] = { dl_dll, dl_missing };
+    for (int i = 0; i < 2; i++) {
+        dl_desc[i].attrs = 1;                                   /* RVA-based */
+        dl_desc[i].dll = (DWORD)((BYTE *)names[i] - base);
+        dl_desc[i].handle = (DWORD)((BYTE *)&dl_handle[i] - base);
+        dl_desc[i].iat = (DWORD)((BYTE *)dl_iat[i] - base);
+        dl_desc[i].names = (DWORD)((BYTE *)dl_names[i] - base);
+        dl_names[i][0] = (ULONG_PTR)((BYTE *)&dl_proc - base);
+    }
+    PVOID f = resolve(base, &dl_desc[0], NULL, NULL, &dl_iat[0][0], 0);
+    CHECK(f != NULL && f == (PVOID)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetTickCount"));
+    CHECK(dl_iat[0][0] == (ULONG_PTR)f && dl_handle[0] == GetModuleHandleA("kernel32.dll"));
+    DWORD code = 0;
+    __try {
+        resolve(base, &dl_desc[1], NULL, NULL, &dl_iat[1][0], 0);
+    } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+    }
+    CHECK(code == 1285 && dl_iat[1][0] == 0);                  /* ERROR_DELAY_LOAD_FAILED */
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "child")) {
@@ -288,6 +327,7 @@ int main(int argc, char **argv)
     shell_folders();
     refused_start();
     libreoffice();
+    delay_loads();
 
     printf("DLL/TLS self-test: %d passed, %d failed\n", pass, fail);
     return fail;

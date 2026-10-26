@@ -75,21 +75,21 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   code expects), `filetest`, `linktest`, `pipetest`, `proctest`,
   `dlltest` (DllMain, static TLS, and a DllMain returning FALSE stopping
   the program with 0xC0000142, module file names past the 64th module,
-  exports by ordinal alone, image lists in streams and the shell's
-  desktop folder, 64- and 32-bit), `sectest`, `acltest` (64- and
-  32-bit), `consolecursortest` (classic console screen buffers: cursor,
-  cell I/O, fills, scrolling, attributes and independent buffers; 64-
-  and 32-bit), `ptyscreentest` (a full-screen program drawn in a console
-  window and through a pseudo console gives the same cells),
-  `conptytest` (a terminal host types into, resizes and exits an
-  interactive `cmd.exe` through `CreatePseudoConsole`), `guitest auto`,
-  `inputtest` (side buttons, horizontal wheel, volume keys), `usbcheck`
-  (media keys, AC Pan, pen pressure, tilt and twist, virtio pens and
-  tablets), `anitest` (animated cursors and program pointers),
-  `cursortest` (system pointers, SetSystemCursor, cursors at the display
-  scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections, cursors from
-  bitmaps with alpha or monochrome masks), `pentest` (a pen as
-  WM_POINTER* messages: enter, down, update, up, leave;
+  exports by ordinal alone, image lists in streams, the shell's desktop
+  folder and the system's delay-load helper, 64- and 32-bit), `sectest`,
+  `acltest` (64- and 32-bit), `consolecursortest` (classic console
+  screen buffers: cursor, cell I/O, fills, scrolling, attributes and
+  independent buffers; 64- and 32-bit), `ptyscreentest` (a full-screen
+  program drawn in a console window and through a pseudo console gives
+  the same cells), `conptytest` (a terminal host types into, resizes and
+  exits an interactive `cmd.exe` through `CreatePseudoConsole`),
+  `guitest auto`, `inputtest` (side buttons, horizontal wheel, volume
+  keys), `usbcheck` (media keys, AC Pan, pen pressure, tilt and twist,
+  virtio pens and tablets), `anitest` (animated cursors and program
+  pointers), `cursortest` (system pointers, SetSystemCursor, cursors at
+  the display scale), `bmpcurtest` (1-, 4-, 8- and 16-bit DIB sections,
+  cursors from bitmaps with alpha or monochrome masks), `pentest` (a pen
+  as WM_POINTER* messages: enter, down, update, up, leave;
   GetPointerPenInfo pressure, tilt, rotation, barrel and eraser;
   DefWindowProc promotion to mouse with the pen signature in
   GetMessageExtraInfo; WM_NCPOINTER* over a title bar and

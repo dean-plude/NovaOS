@@ -1356,6 +1356,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   requires; test `appxtest` (a Store-layout bundle installs, its package
   unsigned or another publisher's is refused).  Starting Calculator
   waits on its controls (32.5).
+  Fifth part done (0.2.2 "Pulsar" item 1): the system
+  `Windows.UI.Xaml.dll`.  The XAML framework is built as a DLL as well
+  as into the XAML self-tests; its `DllGetActivationFactory` serves the
+  framework's classes by their `Windows.UI.Xaml` names, and the registry
+  lists every one of them (501, `tools/winrt/wuxclasses.py`) under
+  `ActivatableClassId`, so `RoGetActivationFactory` finds
+  `Windows.UI.Xaml.Application` as on Windows; test `xamldlltest` (a
+  page in a window, the program registering nothing).  Next: the
+  Windows Runtime classes Calculator asks for after it (Pulsar item 2).
 
 ---
 

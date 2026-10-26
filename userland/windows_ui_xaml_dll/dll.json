@@ -1,0 +1,9 @@
+{
+  "deps": ["msvcp140", "msvcp140_1", "msvcp140_2", "msvcp140_atomic_wait", "msvcrt", "vcruntime140", "kernel32", "ntdll",
+           "ws2_32", "user32", "gdi32", "advapi32", "ole32", "oleaut32", "comctl32", "shell32", "msi", "winmm",
+           "dbghelp", "shlwapi", "xmllite", "urlmon", "imm32", "dwrite", "rpcrt4", "uxtheme", "powrprof"],
+  "base": "0x7FFE60000000",
+  "x64_only": true,
+  "tlssup": true,
+  "file": "Windows.UI.Xaml.dll"
+}

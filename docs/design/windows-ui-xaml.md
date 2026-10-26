@@ -1330,5 +1330,40 @@ vendors.
    `.Runtime.2.2`), downloaded with `tools/appx/storefetch.py`, install
    unchanged.  Not yet: a bundle's resource packages.
 
+   **The system `Windows.UI.Xaml.dll`** (0.2.2 "Pulsar", item 1).  Until
+   now the framework was linked into each XAML self-test, which served
+   its classes with `RoRegisterActivationFactories`.  It is now also
+   built as `C:\Windows\System32\Windows.UI.Xaml.dll`
+   (`userland/windows_ui_xaml_dll`: what a `"framework"` program links of
+   it, `build.py`'s `dll_objs()`, and `dll.cpp`).  Its
+   `DllGetActivationFactory` answers a `Windows.UI.Xaml` name with the
+   framework's factory under its Windows faces (as
+   `nova_xaml_windows_factory` does for the tests) and a
+   `Microsoft.UI.Xaml` name with the lifted one.  The first call starts
+   the framework as Windows' DLL does when it loads (its static locks,
+   per-thread core slot, application lock and platform layer) and
+   registers for the process the framework's own classes it activates by
+   their lifted names (`WindowsXamlManager`,
+   `XamlSourceFocusNavigationRequest`, `FrameworkViewSource`,
+   `FrameworkView`, `NavigationThemeTransition`).  The registry lists
+   every `Windows.UI.Xaml` class the framework serves under
+   `HKLM\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId`
+   (`kernel/um/um_registry.c`; the 501 names are
+   `tools/winrt/wuxclasses.py`'s: each class `Windows.winmd` gives an
+   activation factory whose lifted class is in the framework's
+   `Factories.g.cpp`; the host test `tests/tools/test_wuxaml_classes.py`
+   checks the list is current), 64-bit only for now.  A self-test with
+   the framework linked into it exports `nova_xaml_in_program`
+   (`src/in_program.cpp`), and there the DLL answers no class, so a
+   process never runs two frameworks.  `xamldlltest` links nothing of
+   the framework: `Windows.UI.Xaml.Application` from
+   `RoGetActivationFactory`, `Application.Start`, the app's
+   `Application` made in the callback, a page from
+   `Windows.UI.Xaml.Markup.XamlReader` in a `Windows.UI.Xaml.Window`,
+   laid out, then closed.  Not yet: Windows' `IApplicationOverrides`
+   (a UWP app's `OnLaunched` takes
+   `Windows.ApplicationModel.Activation` arguments, the framework's its
+   own), which Calculator needs (item 3).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

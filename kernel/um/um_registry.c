@@ -945,6 +945,23 @@ static void defaults(void)
             kset_dword(k, "Threading", 0);
         }
     }
+    /* and the system XAML's classes, Windows.UI.Xaml.Application,
+     * Windows.UI.Xaml.Controls.Button ... (Windows.UI.Xaml.dll, NovaOS's
+     * XAML framework; the list is tools/winrt/wuxclasses.py's).  64-bit
+     * only: the DLL is not built for SysWOW64 yet */
+    static const char *const wux_classes[] = {
+#include "um_wuxaml_classes.h"
+    };
+    for (unsigned i = 0; i < sizeof wux_classes / sizeof wux_classes[0]; i++) {
+        char path[180];
+        ksnprintf(path, sizeof path, "Machine\\SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\%s", wux_classes[i]);
+        RegKey *k = kpath(path, false);
+        if (!has_value(k, "DllPath")) {
+            kset_sz(k, "DllPath", "Windows.UI.Xaml.dll", 1);
+            kset_dword(k, "ActivationType", 0);
+            kset_dword(k, "Threading", 0);
+        }
+    }
     /* ApplicationActivationManager (twinapi.appcore.dll): starts packaged apps */
     RegKey *aam = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{45BA127D-10A8-46EA-8AB7-56EA9078943C}\\InprocServer32", false);
     if (!has_value(aam, "")) { kset_sz(aam, "", "twinapi.appcore.dll", 1); kset_sz(aam, "ThreadingModel", "Both", 1); }

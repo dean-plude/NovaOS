@@ -1158,10 +1158,79 @@ vendors.
        `Resuming`, `EnteredBackground` and `LeavingBackground` take
        handlers and are never raised on a desktop app, as on Windows
        (`winfaces.py`'s `NEVER_RAISED`).
-   - *Next:* the rest of Calculator's controls (`NavigationView` with
-     `ItemsRepeater`, `RadioButtons`).  Calculator itself is a .NET
-     Native app: its package also needs the .NET Native framework and
-     runtime packages (32.6).
+   - *Ninth part, `NavigationView` and `RadioButtons`.*  The rest of
+     Calculator's WinUI 2 controls: `winui2test` makes each from markup
+     and checks its template, then loads a page with a `NavigationView`
+     (`NavigationViewItemHeader`, `NavigationViewItem`s and a separator
+     in `MenuItems`) and `RadioButtons` with three `RadioButton`s, checks
+     the four menu items in `MenuItems`, the three items and
+     `SelectedIndex` in `RadioButtons`, and measures and arranges the
+     `RadioButtons` with the `ItemsRepeater` in its template.
+     - *WinUI 2's features.*  `Repeater` (`ItemsRepeater` and its
+       layouts), `NavigationView` and `RadioButtons` join the build.
+       WinUI 2 pins C++/WinRT 2.0.210309.3, which projects a class's
+       overridable and protected interfaces on the class (the vendored
+       generator does not; a `CPPWINRT_PATCHES` entry restores that), and
+       MIDL 3's `method_name` names the ABI method of an overload
+       (`tools/winrt/idl.py` writes it as `OverloadAttribute`, keeping
+       the projected name; about 25 more Windows faces connect with it,
+       `LoadComponent`, `Frame.Navigate`, `ScrollIntoView` and
+       `ChangeView` among them).
+     - *Framework pieces.*  Vendored from Microsoft's WinUI 3 source:
+       `AutomationProperties`, `PropertyChangedEventArgs`,
+       `NotifyCollectionChangedEventArgs`, `ToggleButton`, `RadioButton`,
+       `IconElement` and `PathIcon` (WinUI 2's `AnimatedIcon` composes
+       over `PathIcon`), `TransformGroup`, `ToolTip` and
+       `ToolTipService`, `Flyout` and `FlyoutBase`, `SplitView` and
+       `XamlRoot`.  `ElementSoundPlayer` plays nothing (a PC's `Auto`
+       state), so its requests succeed (`src/element_sound_player.cpp`).
+     - *DirectWrite's interfaces in the MSVC ABI.*  `RadioButtons`'
+       header asks the system font collection through `IDWriteFactory6`.
+       The build gives MinGW's `dwrite*.h` the using-declarations the
+       SDK's have (a base interface's overloads back in scope); it put
+       them at the top of each interface, and in the MSVC ABI a class's
+       new virtual methods are grouped by the first declaration of their
+       name in the class, a using-declaration included, so the vtable
+       came out reordered (`GetSystemFontCollection` called
+       `CreateFontCollectionFromFontSet`).  They now go at the end of
+       the interface, as the SDK places them.
+     - *Dispatcher.*  `ItemsRepeater` runs its cache work through the
+       element's `Dispatcher.RunIdleAsync`: on a desktop thread the
+       elements' `Dispatcher` is the hidden `CoreWindow`'s, as on
+       Windows, and twinapi.appcore's `CoreDispatcher.RunIdleAsync` posts
+       the work with an idle `IdleDispatchedHandlerArgs`.
+     - *Boxes both ways.*  An enum or struct value the framework boxes
+       (`StackLayout.Orientation`'s default, a property changed event's
+       old and new values) reaches WinUI 2 boxed again under Windows'
+       `IReference` ID, through a forward face's object out and a
+       reverse face's object in-parameter.
+     - *Collections in markup.*  A `MenuItems` property element adds its
+       items to the property's `IVector<Object>`: the XAML compiler
+       writes that type into the app's `XamlTypeInfo` as a collection,
+       and `winui2test`'s `Application` answers for it as such a
+       generated provider does.
+   - *Next:* WinUI 2's overrides, then `NavigationView`'s layout.  The
+     framework calls a composed class's `OnApplyTemplate`,
+     `MeasureOverride` and the rest through its overridable interfaces,
+     and C++/WinRT produces those only for an interface row carrying
+     `OverridableAttribute`, which windows-rs's `Windows.winmd` leaves
+     off.  So WinUI 2's controls never see `OnApplyTemplate` yet:
+     `RadioButtons` does not hand its `ItemsRepeater` its items, so no
+     `RadioButton`s are made.  Taking the `Windows.UI.Xaml`
+     `I...Overrides[N]` interfaces as overridable makes them run, and
+     then `ProgressRing` (`RectangleGeometry`, an `AnimatedVisualPlayer`
+     source drawn with composition shapes), `SwipeControl`
+     (`AutomationPeer`'s statics), `NavigationView` (MRT's
+     `ResourceManager` for its strings) and `ItemsRepeater` (C++/WinRT's
+     `get_self` of a null object, which clang turns into a pointer just
+     below null where MSVC keeps null) need more of the system.  Its pane
+     button's
+     `AnimatedIcon` draws its glyph with composition shapes
+     (`Compositor.CreateShapeVisual`, container and sprite shapes, path
+     geometries from a `CompositionPath`), which dcomp's compositor does
+     not make yet, so setting its `Source` fails and the template's
+     layout with it.  Calculator itself is a .NET Native app: its package
+     also needs the .NET Native framework and runtime packages (32.6).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

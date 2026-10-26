@@ -9,7 +9,8 @@
 # program installed as a UWP app and started by its AUMID (elevated: appx
 # install); WinUI 2's theme resources, XamlControlsResources, loaded
 # whole (seventh part); and the controls' default styles with their
-# templates applied: InfoBadge and the controls Calculator uses (eighth part)
+# templates applied: InfoBadge and the controls Calculator uses (eighth part);
+# NavigationView and RadioButtons with their items from markup (ninth part)
 DOC = ('`winui2test` (WinUI 2\'s own controls, `Microsoft.UI.Xaml.dll` 2.x built from Microsoft\'s `winui2/main` '
        'sources, on the system XAML: an `InfoBadge` activated from the DLL and composed over the framework\'s '
        '`Windows.UI.Xaml.Controls.Control`, WinUI 2\'s XAML type table (`XamlControlsXamlMetaDataProvider`) reading, '
@@ -24,7 +25,11 @@ DOC = ('`winui2test` (WinUI 2\'s own controls, `Microsoft.UI.Xaml.dll` 2.x built
        'acrylic brushes tinted through Windows\' `IAcrylicBrush2`; and the controls\' default styles: '
        '`XamlControlsResources` merged into the app\'s resources, `InfoBadge`, `ProgressBar`, `ProgressRing` and '
        '`SwipeControl` made from markup with their templates applied, and a page with a `ProgressRing`, a '
-       '`SwipeControl` with `SwipeItems`, an `InfoBadge` and `BackdropMaterial.ApplyToRootOrPageBackground`)')
+       '`SwipeControl` with `SwipeItems`, an `InfoBadge` and `BackdropMaterial.ApplyToRootOrPageBackground`; and '
+       '`NavigationView` and `RadioButtons` with their templates, and a page with a `NavigationView` holding '
+       '`NavigationViewItem`s in `MenuItems` and `RadioButtons` with three `RadioButton`s: the menu items and the '
+       '`RadioButtons`\' items and `SelectedIndex` added from markup, and the `RadioButtons` measured and arranged '
+       'with the `ItemsRepeater` in its template)')
 TESTS = [
     Test('winui2test', 'winui2test', [r'winui2test: \d+ passed, 0 failed \(64-bit\)'], timeout=300, elevated=True),
 ]

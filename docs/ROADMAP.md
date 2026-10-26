@@ -1299,9 +1299,24 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (more of the framework vendored; `Windows.UI.Colors`,
   `AccessibilitySettings`, dcomp's property-change listeners, and a
   hidden `CoreWindow` on a desktop XAML thread as XAML islands make).
-  Next: `NavigationView` with `ItemsRepeater` and `RadioButtons`;
-  Calculator's start-up itself waits on the .NET Native framework
-  packages (32.6).
+  Ninth part done: the rest of Calculator's WinUI 2 controls,
+  `NavigationView` (with its `NavigationViewItem`s in `MenuItems`) and
+  `RadioButtons`, apply their templates and lay out (WinUI 2's `Repeater`, `NavigationView` and
+  `RadioButtons` built; `ToolTip`, `Flyout`, `SplitView`, `XamlRoot`,
+  `AutomationProperties`, `PropertyChangedEventArgs`,
+  `NotifyCollectionChangedEventArgs`, `ToggleButton`, `RadioButton`,
+  `PathIcon` and `TransformGroup` vendored into the framework; `CoreDispatcher.RunIdleAsync` and the elements' `Dispatcher`
+  on a desktop XAML thread; enum and struct boxes crossing to WinUI 2 as
+  Windows' boxes; the framework's DirectWrite headers' `IDWriteFactory6`
+  in the MSVC ABI's vtable order).  Next: WinUI 2's overrides
+  (`OnApplyTemplate` and the rest, which C++/WinRT does not produce from
+  windows-rs's `Windows.winmd`: no `OverridableAttribute`), so
+  `RadioButtons`' `ItemsRepeater` makes its items; then
+  `NavigationView`'s layout, which waits on the
+  composition shapes its pane button's `AnimatedIcon` draws with
+  (`Compositor.CreateShapeVisual` and the shape, geometry and path
+  objects); Calculator's start-up itself waits on the .NET Native
+  framework packages (32.6).
 - [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed

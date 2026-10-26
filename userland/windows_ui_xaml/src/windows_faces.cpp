@@ -8,6 +8,7 @@
 // their Windows names through nova_xaml_windows_factory
 // (windows_activation.cpp).
 #include "windows_faces.h"
+#include <stdio.h>
 #include <string.h>
 #include <winstring.h>
 
@@ -205,6 +206,8 @@ extern "C" HRESULT nova_cross(void *a, const GUID *iid, void **out)
     return hr;
 }
 
+static HRESULT rebox(void *a, bool to_windows, void **out);
+
 extern "C" HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a)
 {
     if (FAILED(hr) || !a) {
@@ -212,8 +215,15 @@ extern "C" HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a)
         return hr;
     }
     if (!iid) {
-        *a = o;
-        return hr;
+        // (an object the framework gives the app's code: a box of a
+        // Windows-named enum or struct as Windows boxes it)
+        HRESULT h = o ? rebox(o, true, a) : S_FALSE;
+        if (h == S_FALSE) {
+            *a = o;
+            return hr;
+        }
+        nova_release(o);
+        return FAILED(h) ? h : hr;
     }
     HRESULT h = nova_cross(o, iid, a);
     nova_release(o);
@@ -222,19 +232,26 @@ extern "C" HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a)
 
 // a framework box of a Windows.UI.Xaml enum's or struct's value: the
 // framework's IReference<T> and, as Windows' boxes have, IPropertyValue
-// (OtherType; an enum's value as Int32 and UInt32 too)
+// (OtherType; an enum's value as Int32 and UInt32 too); or (@windows) the
+// Windows box of it the app's code is handed, Windows' IReference<T>
 struct NovaValueBox
 {
     void *const *vtbl;
     void *const *pv_vtbl;
     LONG ref;
     const NovaBox *box;
+    bool windows;
     unsigned char value[64];
 };
 
+static const GUID &box_iid(NovaValueBox *b)
+{
+    return b->windows ? *b->box->windows : *b->box->framework;
+}
+
 static HRESULT STDMETHODCALLTYPE box_qi(NovaValueBox *b, REFIID iid, void **out)
 {
-    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, IID_IInspectable_) || IsEqualGUID(iid, *b->box->framework) ||
+    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, IID_IInspectable_) || IsEqualGUID(iid, box_iid(b)) ||
         IsEqualGUID(iid, IID_IAgileObject_))
         *out = b;
     else if (IsEqualGUID(iid, IID_IPropertyValue_))
@@ -262,7 +279,7 @@ static HRESULT STDMETHODCALLTYPE box_iids(NovaValueBox *b, ULONG *count, IID **i
     IID *a = (IID *)CoTaskMemAlloc(2 * sizeof(IID));
     if (!a)
         return E_OUTOFMEMORY;
-    a[0] = *b->box->framework;
+    a[0] = box_iid(b);
     a[1] = IID_IPropertyValue_;
     *count = 2;
     *iids = a;
@@ -272,6 +289,11 @@ static HRESULT STDMETHODCALLTYPE box_iids(NovaValueBox *b, ULONG *count, IID **i
 // (the framework reads the type boxed from the name: RoParseTypeName)
 static HRESULT STDMETHODCALLTYPE box_name(NovaValueBox *b, HSTRING *name)
 {
+    if (b->windows) {
+        wchar_t s[256];
+        int n = swprintf(s, ARRAYSIZE(s), L"Windows.Foundation.IReference`1<%hs>", b->box->name);
+        return n > 0 ? WindowsCreateString(s, (UINT32)n, name) : E_FAIL;
+    }
     return WindowsCreateString(b->box->framework_name, (UINT32)wcslen(b->box->framework_name), name);
 }
 
@@ -333,38 +355,50 @@ static bool untear(void *a, BOOL reverse, void **out)
     return SUCCEEDED(qi(t->obj, &IID_IInspectable_, out));
 }
 
+// @a, if it is a box of a Windows.UI.Xaml enum or struct on one side
+// (@to_windows: the framework's), boxed again as the other side's, into
+// @out: S_OK; S_FALSE when it is no such box
+static HRESULT rebox(void *a, bool to_windows, void **out)
+{
+    void *pv;
+    if (FAILED(qi(a, &IID_IPropertyValue_, &pv)))
+        return S_FALSE;
+    INT32 type = 0;
+    ((HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))VT(pv)[6])(pv, &type);
+    nova_release(pv);
+    if (type != 20)                 // PropertyType_OtherType: perhaps a Windows.UI.Xaml enum or struct
+        return S_FALSE;
+    for (unsigned i = 0; i < nova_box_count; i++) {
+        const NovaBox *bx = &nova_boxes[i];
+        void *r;
+        if (bx->size > sizeof(((NovaValueBox *)0)->value) || FAILED(qi(a, to_windows ? bx->framework : bx->windows, &r)))
+            continue;
+        NovaValueBox *b = (NovaValueBox *)CoTaskMemAlloc(sizeof(NovaValueBox));
+        HRESULT hr = b ? ((HRESULT (STDMETHODCALLTYPE *)(void *, void *))VT(r)[6])(r, b->value) : E_OUTOFMEMORY;
+        nova_release(r);
+        if (FAILED(hr)) {
+            CoTaskMemFree(b);
+            return hr;
+        }
+        b->vtbl = s_box_vtbl;
+        b->pv_vtbl = s_pv_vtbl;
+        b->ref = 1;
+        b->box = bx;
+        b->windows = to_windows;
+        *out = b;
+        return S_OK;
+    }
+    return S_FALSE;
+}
+
 extern "C" HRESULT nova_object_in(void *a, void **out)
 {
     *out = nullptr;
     if (!a)
         return S_OK;
-    void *pv;
-    if (SUCCEEDED(qi(a, &IID_IPropertyValue_, &pv))) {
-        INT32 type = 0;
-        ((HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))VT(pv)[6])(pv, &type);
-        nova_release(pv);
-        if (type == 20) {           // PropertyType_OtherType: perhaps a Windows.UI.Xaml enum or struct
-            for (unsigned i = 0; i < nova_box_count; i++) {
-                const NovaBox *bx = &nova_boxes[i];
-                void *r;
-                if (bx->size > sizeof(((NovaValueBox *)0)->value) || FAILED(qi(a, bx->windows, &r)))
-                    continue;
-                NovaValueBox *b = (NovaValueBox *)CoTaskMemAlloc(sizeof(NovaValueBox));
-                HRESULT hr = b ? ((HRESULT (STDMETHODCALLTYPE *)(void *, void *))VT(r)[6])(r, b->value) : E_OUTOFMEMORY;
-                nova_release(r);
-                if (FAILED(hr)) {
-                    CoTaskMemFree(b);
-                    return hr;
-                }
-                b->vtbl = s_box_vtbl;
-                b->pv_vtbl = s_pv_vtbl;
-                b->ref = 1;
-                b->box = bx;
-                *out = b;
-                return S_OK;
-            }
-        }
-    }
+    HRESULT hr = rebox(a, false, out);
+    if (hr != S_FALSE)
+        return hr;
     // (a face handed back as an object is the object it is a face of: a
     // framework object the framework knows by its own type)
     if (untear(a, FALSE, out))
@@ -390,6 +424,19 @@ extern "C" HRESULT nova_object_out(HRESULT hr, void *o, void **a)
     }
     nova_release(o);
     return FAILED(h) ? h : hr;
+}
+
+extern "C" HRESULT nova_object_to_app(void *a, void **out)
+{
+    *out = nullptr;
+    if (!a)
+        return S_OK;
+    HRESULT hr = rebox(a, true, out);
+    if (hr != S_FALSE)
+        return hr;
+    nova_addref(a);
+    *out = a;
+    return S_OK;
 }
 
 struct NovaTypeName

@@ -1209,28 +1209,72 @@ vendors.
        writes that type into the app's `XamlTypeInfo` as a collection,
        and `winui2test`'s `Application` answers for it as such a
        generated provider does.
-   - *Next:* WinUI 2's overrides, then `NavigationView`'s layout.  The
-     framework calls a composed class's `OnApplyTemplate`,
-     `MeasureOverride` and the rest through its overridable interfaces,
-     and C++/WinRT produces those only for an interface row carrying
-     `OverridableAttribute`, which windows-rs's `Windows.winmd` leaves
-     off.  So WinUI 2's controls never see `OnApplyTemplate` yet:
-     `RadioButtons` does not hand its `ItemsRepeater` its items, so no
-     `RadioButton`s are made.  Taking the `Windows.UI.Xaml`
-     `I...Overrides[N]` interfaces as overridable makes them run, and
-     then `ProgressRing` (`RectangleGeometry`, an `AnimatedVisualPlayer`
-     source drawn with composition shapes), `SwipeControl`
-     (`AutomationPeer`'s statics), `NavigationView` (MRT's
-     `ResourceManager` for its strings) and `ItemsRepeater` (C++/WinRT's
-     `get_self` of a null object, which clang turns into a pointer just
-     below null where MSVC keeps null) need more of the system.  Its pane
-     button's
-     `AnimatedIcon` draws its glyph with composition shapes
-     (`Compositor.CreateShapeVisual`, container and sprite shapes, path
-     geometries from a `CompositionPath`), which dcomp's compositor does
-     not make yet, so setting its `Source` fails and the template's
-     layout with it.  Calculator itself is a .NET Native app: its package
-     also needs the .NET Native framework and runtime packages (32.6).
+   - *Tenth part, WinUI 2's overrides.*  The framework calls a composed
+     class's `OnApplyTemplate`, `MeasureOverride` and the rest through
+     its overridable interfaces, and C++/WinRT produces those only for
+     an interface row carrying `OverridableAttribute`, which windows-rs's
+     `Windows.winmd` leaves off.  Two patches to C++/WinRT's writers
+     (`userland/microsoft_ui_xaml/build.py` `CPPWINRT_PATCHES`) take the
+     `Windows.UI.Xaml` `I...Overrides[N]` interfaces as overridable, as
+     Windows' own metadata marks them, so WinUI 2's controls now get
+     their overrides called.  What that exposed:
+     - *C++/WinRT under clang.*  `get_self` of a null object and
+       `try_as` of an implementation type the object is not take the
+       address of a member of a null pointer; MSVC keeps null, clang
+       gives a pointer just below it.  Both now check for null
+       (`ItemsRepeater`'s virtualization info, `AnimatedIcon`'s state).
+     - *Composition shapes.*  dcomp's compositor makes `ShapeVisual`,
+       container and sprite shapes, ellipse, rectangle, rounded
+       rectangle, line and path geometries (a `CompositionPath` from
+       Direct2D's geometry through `IGeometrySource2DInterop`), view
+       boxes and `AnimationController`s, drawn by a software rasteriser
+       with anti-aliased fills and strokes; `ProgressRing`'s and
+       `AnimatedIcon`'s Lottie visuals set their progress through
+       expressions naming `"controller.Progress"`.  Implicit animation
+       collections are kept and not started.  A method dcomp does not
+       make yet logs its caller once
+       (`dcomp: a composition method not made yet, called from ...`).
+     - *Resources.*  `NavigationView` reads its strings through MRT's
+       `ResourceManager`: `MrmCoreR.dll` serves `ResourceManager`,
+       `ResourceContext` and `ResourceLoader` over MRT Core
+       (`MRM.dll`), and the build packs WinUI 2's English strings
+       (`Strings/en-us/Resources.resw` of each built feature) into
+       `\Programs\resources.pri` under `Microsoft.UI.Xaml/Resources`.
+     - *Delegates across the faces.*  `SwipeControl` adds handlers with
+       `AddHandler`, its delegate boxed as an `IReference` of the
+       framework's delegate type; a forward face reboxes it under
+       WinUI 2's (Windows') delegate box, as it reboxes enums and
+       structs (`nova_delegate_boxes`, written by `winfaces.py`).  A
+       class's default interface that is a generic instance
+       (`Grid.RowDefinitions`, an `IVector<RowDefinition>`) gets its
+       face, and an empty Windows interface (`IUIElementWeakCollection`)
+       one over its class.
+     - *What the controls ask the system.*  `CoreApplicationView`'s
+       `Dispatcher`, `IsComponent` and `TitleBar` (twinapi.appcore: a
+       title bar of 32 pixels with no insets that remembers
+       `ExtendViewIntoTitleBar`, and answers for weak references, as
+       NavigationView's revokers hold it); `AnalyticsInfo`
+       (`Windows.Desktop` at the system's version: WinUI 2 asks whether
+       it runs on an Xbox); the system back button's listeners
+       (FrameworkUdk, which `SplitView`'s pane registers while open).
+     - *Framework pieces.*  Vendored from Microsoft's WinUI 3 source:
+       keyboard accelerators (the pane button's), `RoutedEvent`,
+       `LayoutInformation`, `ThemeShadow` with `UIElementWeakCollection`
+       (the pane's shadow), `SymbolIcon`, `FontIcon` and their icon
+       sources, `Viewbox`, `Path`, `ScrollBar` with `Thumb` and
+       `RepeatButton` (the menu's `ScrollViewer`), the `Thickness`,
+       `GridLength` and `CornerRadius` helpers and
+       `IsEnabledChangedEventArgs`.  `VisualState.Name`, which the
+       sources declare and do not define, is NovaOS's
+       (`src/visual_state.cpp`).
+     - *Checked.*  `winui2test`: the `RadioButtons`' `ItemsRepeater`
+       makes its three `RadioButton`s; `NavigationView` applies its
+       template, lays out and, its pane opened (Calculator's
+       `LeftMinimal` keeps it closed), makes its two
+       `NavigationViewItem`s.  Calculator's WinUI 2 controls all apply
+       their templates, which completes step 32.5.  Calculator itself is
+       a .NET Native app: its package also needs the .NET Native
+       framework and runtime packages (32.6).
 6. **32.6 Packages.** Install an `.msix`/`.appx` (manifest, activatable
    classes from `InProcessServer` extensions, `resources.pri` read by
    MRT), start it from the Start menu; then the Calculator package

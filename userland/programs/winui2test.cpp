@@ -30,7 +30,12 @@
  *   - NavigationView and RadioButtons (step 32.5's ninth part): each with
  *     its template, and a page with a NavigationView (NavigationViewItems
  *     in MenuItems) and RadioButtons, their items and SelectedIndex from
- *     markup; the RadioButtons measured and arranged.
+ *     markup; the RadioButtons measured and arranged;
+ *   - WinUI 2's overrides (step 32.5's tenth part): OnApplyTemplate and
+ *     the layout overrides called through Windows' overridable interfaces,
+ *     so the RadioButtons' ItemsRepeater makes its three RadioButtons, the
+ *     NavigationView applies its template, lays out and, its pane open,
+ *     makes its two NavigationViewItems.
  *
  *   winui2test        the self-test runs it with no arguments
  */
@@ -300,6 +305,37 @@ static int find_class(IInspectable *o, const wchar_t *cls, std::vector<ctl::ComP
     return n;
 }
 
+/* the visual tree under o, a class per line with its visibility and
+ * desired size, for a failed check's log */
+static void dump_tree(IInspectable *o, int depth, int *lines)
+{
+    ctl::ComPtr<wux::Media::IVisualTreeHelperStatics> vth;
+    ctl::ComPtr<wux::IDependencyObject> dobj;
+    ctl::ComPtr<wux::IUIElement> ui;
+    HSTRING name = nullptr;
+    if (!o || ++*lines > 300)
+        return;
+    wux::Visibility vis = wux::Visibility_Visible;
+    wf::Size desired{};
+    if (SUCCEEDED(as(o, ui.GetAddressOf()))) {
+        ui->get_Visibility(&vis);
+        ui->get_DesiredSize(&desired);
+    }
+    o->GetRuntimeClassName(&name);
+    printf("  tree %*s%ls%s %gx%g\n", depth * 2, "", WindowsGetStringRawBuffer(name, nullptr),
+           vis == wux::Visibility_Collapsed ? " (collapsed)" : "", desired.Width, desired.Height);
+    WindowsDeleteString(name);
+    INT32 count = 0;
+    if (FAILED(as(o, dobj.GetAddressOf())) || FAILED(statics(L"Windows.UI.Xaml.Media.VisualTreeHelper", vth.GetAddressOf())) ||
+        FAILED(vth->GetChildrenCount(dobj.Get(), &count)))
+        return;
+    for (INT32 i = 0; i < count; i++) {
+        ctl::ComPtr<wux::IDependencyObject> child;
+        if (SUCCEEDED(vth->GetChild(dobj.Get(), i, child.GetAddressOf())) && child)
+            dump_tree(child.Get(), depth + 1, lines);
+    }
+}
+
 /* the rest of Calculator's WinUI 2 controls (step 32.5's ninth part):
  * NavigationView and RadioButtons, each templated alone, and a page as
  * Calculator's declares them (a NavigationView with NavigationViewItems in
@@ -359,8 +395,7 @@ static void navigation_checks()
 
     /* layout: Measure and Arrange the RadioButtons (no window: the layout
      * pass an element's parent runs), which applies its template and runs
-     * its ItemsRepeater's layout.  (NavigationView's layout waits on the
-     * composition shapes its pane button's AnimatedIcon draws with) */
+     * its ItemsRepeater's layout */
     ctl::ComPtr<wux::IUIElement> ui;
     hr = as(theme.Get(), ui.GetAddressOf());
     if (SUCCEEDED(hr))
@@ -368,10 +403,58 @@ static void navigation_checks()
     if (SUCCEEDED(hr))
         hr = ui->Arrange(wf::Rect{0, 0, 400, 600});
     CHECK_HR("the RadioButtons measured and arranged", hr);
+    if (FAILED(hr))
+        why();
+    /* its ItemsRepeater (given its ItemsSource in OnApplyTemplate, WinUI 2's
+     * override of Windows' IFrameworkElementOverrides) laid the three
+     * RadioButtons out under it.  (RadioButtons checks the selected one
+     * when the repeater is Loaded, in a window's tree: not this page's) */
+    CHECK("the RadioButtons' ItemsRepeater made its three RadioButtons",
+          find_class(theme.Get(), L"Windows.UI.Xaml.Controls.RadioButton", nullptr) == 3);
+    /* and the NavigationView: its layout (its pane toggle button's
+     * AnimatedIcon draws with composition shapes) */
+    ctl::ComPtr<wux::IUIElement> navUi;
+    hr = as(navo.Get(), navUi.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = navUi->Measure(wf::Size{400, 300});
+    if (SUCCEEDED(hr))
+        hr = navUi->Arrange(wf::Rect{0, 0, 400, 300});
+    CHECK_HR("the NavigationView measured and arranged", hr);
+    if (FAILED(hr))
+        why();
+    /* then its pane opened (LeftMinimal, Calculator's mode, keeps it closed
+     * until the pane button opens it; a closed pane is not laid out): its
+     * menu items' containers, the two NavigationViewItems, under its
+     * ItemsRepeater (the header and separator are other classes) */
+    ctl::ComPtr<wuxm::IXamlMember> paneOpen;
+    ctl::ComPtr<IInspectable> yes;
+    ctl::ComPtr<wf::IPropertyValueStatics> pvs;
+    hr = wf::GetActivationFactory(wrl_wrappers::HStringReference(RuntimeClass_Windows_Foundation_PropertyValue).Get(), pvs.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = pvs->CreateBoolean(TRUE, yes.GetAddressOf());
+    if (SUCCEEDED(hr))
+        hr = navType ? navType->GetMember(wrl_wrappers::HStringReference(L"IsPaneOpen").Get(), paneOpen.GetAddressOf()) : E_POINTER;
+    if (SUCCEEDED(hr))
+        hr = paneOpen ? paneOpen->SetValue(navo.Get(), yes.Get()) : E_POINTER;
+    if (SUCCEEDED(hr))
+        hr = navUi->Measure(wf::Size{400, 300});
+    if (SUCCEEDED(hr))
+        hr = navUi->Arrange(wf::Rect{0, 0, 400, 300});
+    CHECK_HR("its pane opened (IsPaneOpen) and laid out again", hr);
+    if (FAILED(hr))
+        why();
+    /* (the visual tree hands WinUI 2's elements out through the framework's
+     * tear, which names them by their Windows.UI.Xaml names, as it does
+     * the RadioButtons) */
+    int navItems = find_class(navo.Get(), L"Windows.UI.Xaml.Controls.NavigationViewItem", nullptr) +
+                   find_class(navo.Get(), L"Microsoft.UI.Xaml.Controls.NavigationViewItem", nullptr);
+    CHECK("its pane's ItemsRepeater made the two NavigationViewItems", navItems == 2);
+    if (navItems != 2) {
+        int lines = 0;
+        dump_tree(navo.Get(), 0, &lines);
+    }
 
-    /* its items and SelectedIndex, from markup.  (The ItemsRepeater makes
-     * the items' containers from OnApplyTemplate, an override the Windows
-     * projection does not produce yet: the next part) */
+    /* its items and SelectedIndex, from markup */
     ctl::ComPtr<wuxm::IXamlType> rbType;
     ctl::ComPtr<wuxm::IXamlMember> rbItems, rbIndex;
     ctl::ComPtr<IInspectable> rbValue, indexValue;
@@ -1034,6 +1117,18 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Controls.RadioButton", L"Windows.UI.Xaml.Controls.StackPanel",
     L"Windows.UI.Xaml.Controls.Canvas", L"Windows.UI.Xaml.Controls.ContentPresenter",
     L"Windows.UI.Xaml.Shapes.Rectangle",
+    /* (and what the overrides WinUI 2's controls now get make: SwipeControl's
+     * clip, a RectangleGeometry, NavigationView's pane button's keyboard
+     * accelerator and pane's ThemeShadow, the LayoutInformation
+     * ItemsRepeater's layouts ask, and the binding, thickness and grid
+     * length helpers and settings item's fallback icon NavigationView's
+     * template asks) */
+    L"Windows.UI.Xaml.Media.RectangleGeometry", L"Windows.UI.Xaml.Input.KeyboardAccelerator",
+    L"Windows.UI.Xaml.Controls.Primitives.LayoutInformation", L"Windows.UI.Xaml.Media.ThemeShadow",
+    L"Windows.UI.Xaml.Data.BindingOperations", L"Windows.UI.Xaml.ThicknessHelper",
+    L"Windows.UI.Xaml.GridLengthHelper", L"Windows.UI.Xaml.CornerRadiusHelper",
+    L"Windows.UI.Xaml.Controls.SymbolIconSource", L"Windows.UI.Xaml.Controls.FontIconSource",
+    L"Windows.UI.Xaml.Controls.Viewbox", L"Windows.UI.Xaml.Shapes.Path", L"Windows.UI.Xaml.VisualStateGroup",
     /* (and, for the UWP start-up, the view source Application.Start hands
      * CoreApplication.Run and the view it makes) */
     L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView"};

@@ -50,9 +50,16 @@
  * host has it, and DirectComposition surfaces can be shown in its surface
  * brushes (NovaCompositionSurfaceForDComp).
  *
- * Not implemented: expression animations' expressions (they are accepted,
- * held on their property and stopped, not evaluated), implicit
- * animations, animation controllers, effects, lights, shadows, shapes,
+ * Shapes (ShapeVisual, sprite and container shapes, ellipse, rectangle,
+ * rounded rectangle, line and path geometries with their trims, view boxes:
+ * the shapes section below) and animation controllers (a paused animation
+ * stands at its controller's Progress); implicit animation collections
+ * are kept on the objects they are set on.  A method not made yet answers
+ * E_NOTIMPL and says so on the debugger's output, once per caller.
+ *
+ * Not implemented: expression animations' expressions other than
+ * "name.Property" (they are accepted, held on their property and stopped,
+ * not evaluated), starting implicit animations, effects, lights, shadows, dashed strokes,
  * gradient and other brushes, brushes' and clips' AnchorPoint, perspective and 3-D rotation (only the
  * matrix's 2-D part and the Z rotation are used), clips other than inset
  * and square-cornered rectangle clips (and a clip under a rotation is its
@@ -67,6 +74,7 @@ typedef BYTE boolean_t;
 
 #define E_ILLEGAL_METHOD_CALL_ ((HRESULT)0x8000000EL)
 #define RO_E_CLOSED_           ((HRESULT)0x80000013L)
+#define E_BOUNDS_              ((HRESULT)0x8000000BL)
 #define DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED_     ((HRESULT)0x88980801L)
 #define DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED_ ((HRESULT)0x88980802L)
 #define D3D11_BIND_SHADER_RESOURCE_  0x8
@@ -91,6 +99,33 @@ static const GUID IID_ICoreWindowStatic_ = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90,
 static const GUID IID_ICompositorSwapChainInterop_ = { 0xA0B03594, 0xC413, 0x5F5D, { 0xBC, 0x70, 0xCE, 0x93, 0x82, 0xEB, 0x5E, 0x83 } };
 static const GUID IID_ICoreWindowInterop_ = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 #include "composition_iids.h"
+
+/* a method not made yet: E_NOTIMPL (and a null result), saying so once per
+ * caller (its module and offset, which the module's .map names), as the
+ * XAML faces say which of theirs have no counterpart */
+static HRESULT not_made_at(void **out, void *caller)
+{
+    static void *seen[64];
+    static LONG nseen;
+    if (out) *out = 0;
+    for (LONG i = 0; i < nseen && i < 64; i++)
+        if (seen[i] == caller) return E_NOTIMPL;
+    LONG n = InterlockedIncrement(&nseen) - 1;
+    if (n < 64) seen[n] = caller;
+    HMODULE m = 0;
+    char path[MAX_PATH] = "?", line[MAX_PATH + 96];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)caller, &m) && m)
+        GetModuleFileNameA(m, path, sizeof path);
+    const char *name = path;
+    for (const char *c = path; *c; c++)
+        if (*c == '\\') name = c + 1;
+    wsprintfA(line, "dcomp: a composition method not made yet, called from %s+0x%lx\n", name,
+              (unsigned long)((char *)caller - (char *)m));
+    OutputDebugStringA(line);
+    return E_NOTIMPL;
+}
+#define not_made(out) not_made_at((void **)(out), __builtin_return_address(0))
 /* the lifted composition's experimental IExpCompositionPropertyChanged
  * (userland/windows_ui_xaml/inc/microsoft.ui.composition.experimental.h) */
 static const GUID IID_IExpCompositionPropertyChanged_ = { 0x12B579A9, 0x6A27, 0x5CDE, { 0xA2, 0xA1, 0xC5, 0x57, 0xBB, 0x7D, 0xFD, 0xB3 } };
@@ -124,7 +159,10 @@ typedef struct { float a, b, c, d, tx, ty; } Aff;   /* [x y 1] * [a b; c d; tx t
  * 2-11 depend on the kind.  The compositor's slots are its own (S_C_*). */
 enum { K_COMPOSITOR, K_CONTAINER, K_SPRITE, K_COLLECTION, K_COLOR_BRUSH, K_SURFACE_BRUSH, K_INSET_CLIP,
        K_TARGET, K_GRAPHICS, K_DRAWING_SURFACE, K_CHAIN_SURFACE, K_RECT_CLIP, K_PROPSET, K_EXPRESSION, K_KEYFRAME,
-       K_GROUP, K_EASING, K_BATCH, K_BATCH_ARGS, K_MASK_BRUSH, K_NINEGRID_BRUSH, K_COUNT };
+       K_GROUP, K_EASING, K_BATCH, K_BATCH_ARGS, K_MASK_BRUSH, K_NINEGRID_BRUSH, K_SPRITE_SHAPE, K_CONTAINER_SHAPE, K_GEOMETRY, K_PATH,
+       K_VIEWBOX, K_SHAPES, K_SHAPE_ITER, K_CONTROLLER, K_IMPLICIT, K_COUNT };
+/* a geometry's kind (G_*) */
+enum { G_ELLIPSE, G_RECT, G_RRECT, G_LINE, G_PATH };
 #define NIF 18
 enum { S_CO_M = 12, S_CO2, S_CO3_W, S_CO3_M, S_CO4, S_CO5 };
 enum { S_C_M = 4, S_C2, S_C3, S_C4, S_C5, S_C6, S_C7_W, S_C7_M, S_C8 };
@@ -224,6 +262,35 @@ struct Obj {
     float playback_rate;
     IUnknown **listen;                  /* a visual's IExpCompositionPropertyChangedListener for each
                                            ExpExpressionNotificationProperty (counted; made when first set) */
+    /* shapes: a shape visual's (a container visual with shape_visual set) or a
+     * container shape's shapes (counted); a shape's transform is the b_*
+     * fields' (CenterPoint, Offset, RotationAngle, Scale, TransformMatrix) */
+    boolean_t shape_visual;
+    Obj **shapes;
+    int nshapes;
+    Obj *geom, *stroke, *viewbox;       /* a sprite shape's Geometry and StrokeBrush, a shape visual's ViewBox (counted) */
+    Obj *implicit;                      /* its ImplicitAnimations (counted) */
+    float stroke_w, miter, dash_offset;
+    int cap_start, cap_end, cap_dash, join;
+    boolean_t non_scaling;
+    /* geometries: G_*; g[]: an ellipse's Center and Radius, a rectangle's
+     * Offset, Size (and a rounded one's CornerRadius), a line's Start and End;
+     * trim: TrimStart, TrimEnd, TrimOffset; a path geometry's Path (counted) */
+    int gkind;
+    Vec2 g[3];
+    float trim[3];
+    Obj *path;
+    /* paths: their figures flattened to lines */
+    float *xy;                          /* the points, x and y */
+    int *fig_end;                       /* each figure's end in xy (points) */
+    BYTE *fig_closed;
+    int npts, nfigs;
+    int fill_mode;                      /* D2D1_FILL_MODE: alternate 0, winding 1 */
+    /* an iterator's place; an animation controller's */
+    int at;
+    float progress, rate;
+    int progress_behavior;
+    boolean_t paused;
 };
 #define OBJ_AT(p, i) ((Obj *)((char *)(p) - (i) * sizeof(void *)))
 #define IF(o, i) ((void *)&(o)->vt[i])
@@ -294,12 +361,31 @@ static const Iface if_step[] = { BOTH(StepEasingFunction, 3), BOTH(CompositionEa
 static const Iface if_scoped[] = { BOTH(CompositionScopedBatch, 2), { 0, 0 } };
 static const Iface if_commit[] = { BOTH(CompositionCommitBatch, 2), { 0, 0 } };
 static const Iface if_batch_args[] = { BOTH(CompositionBatchCompletedEventArgs, 2), { 0, 0 } };
+static const Iface if_shape_visual[] = { BOTH(ShapeVisual, 4), VISUAL_IFS, { 0, 0 } };
+static const Iface if_sprite_shape[] = { BOTH(CompositionSpriteShape, 3), BOTH(CompositionShape, 2), { 0, 0 } };
+static const Iface if_container_shape[] = { BOTH(CompositionContainerShape, 3), BOTH(CompositionShape, 2), { 0, 0 } };
+static const Iface if_geometries[][4] = {
+    [G_ELLIPSE] = { BOTH(CompositionEllipseGeometry, 3), BOTH(CompositionGeometry, 2) },
+    [G_RECT] = { BOTH(CompositionRectangleGeometry, 3), BOTH(CompositionGeometry, 2) },
+    [G_RRECT] = { BOTH(CompositionRoundedRectangleGeometry, 3), BOTH(CompositionGeometry, 2) },
+    [G_LINE] = { BOTH(CompositionLineGeometry, 3), BOTH(CompositionGeometry, 2) },
+    [G_PATH] = { BOTH(CompositionPathGeometry, 3), BOTH(CompositionGeometry, 2) },
+};
+static const Iface if_path[] = { BOTH(CompositionPath, 2), { &IID_IGeometrySource2D_, 3 }, { 0, 0 } };
+static const Iface if_viewbox[] = { BOTH(CompositionViewBox, 2), { 0, 0 } };
+static const Iface if_shapes[] = { BOTH(VectorShape, 2), BOTH(IterableShape, 3), BOTH(VectorViewShape, 4), { 0, 0 } };
+static const Iface if_shape_iter[] = { BOTH(IteratorShape, 2), { 0, 0 } };
+static const Iface if_controller[] = { BOTH(AnimationController, 2), { 0, 0 } };
+static const Iface if_implicit[] = { BOTH(ImplicitAnimationCollection, 2), BOTH(MapAnimation, 3), BOTH(IterableAnimation, 4),
+                                     { 0, 0 } };
 /* the slot of the runtime class's default interface */
 static int default_slot(Obj *o)
 {
     switch (o->kind) {
     case K_SPRITE: return 4;
-    case K_CONTAINER: case K_COLOR_BRUSH: case K_SURFACE_BRUSH: case K_MASK_BRUSH: case K_NINEGRID_BRUSH: case K_INSET_CLIP: case K_RECT_CLIP: return 3;
+    case K_CONTAINER: return o->shape_visual ? 4 : 3;
+    case K_SPRITE_SHAPE: case K_CONTAINER_SHAPE: case K_GEOMETRY: return 3;
+    case K_COLOR_BRUSH: case K_SURFACE_BRUSH: case K_MASK_BRUSH: case K_NINEGRID_BRUSH: case K_INSET_CLIP: case K_RECT_CLIP: return 3;
     case K_TARGET: return o->vt[3] ? 3 : 2;
     case K_COMPOSITOR: return 0;
     case K_EXPRESSION: return 7;
@@ -312,7 +398,7 @@ static const Iface *ifaces(Obj *o)
 {
     switch (o->kind) {
     case K_COMPOSITOR: return if_compositor;
-    case K_CONTAINER: return if_container;
+    case K_CONTAINER: return o->shape_visual ? if_shape_visual : if_container;
     case K_SPRITE: return if_sprite;
     case K_COLLECTION: return if_collection;
     case K_COLOR_BRUSH: return if_color;
@@ -333,6 +419,15 @@ static const Iface *ifaces(Obj *o)
                           o->ease.type == E_STEP ? if_step : if_easing;
     case K_BATCH: return o->b_commit ? if_commit : if_scoped;
     case K_BATCH_ARGS: return if_batch_args;
+    case K_SPRITE_SHAPE: return if_sprite_shape;
+    case K_CONTAINER_SHAPE: return if_container_shape;
+    case K_GEOMETRY: return if_geometries[o->gkind];
+    case K_PATH: return if_path;
+    case K_VIEWBOX: return if_viewbox;
+    case K_SHAPES: return if_shapes;
+    case K_SHAPE_ITER: return if_shape_iter;
+    case K_CONTROLLER: return if_controller;
+    case K_IMPLICIT: return if_implicit;
     }
     return if_target;
 }
@@ -400,7 +495,20 @@ static HRESULT obj_name(Obj *o, HSTRING *n)
         L"Windows.UI.Composition.CompositionAnimationGroup", L"Windows.UI.Composition.CompositionEasingFunction",
         L"Windows.UI.Composition.CompositionScopedBatch", L"Windows.UI.Composition.CompositionBatchCompletedEventArgs",
         L"Windows.UI.Composition.CompositionMaskBrush", L"Windows.UI.Composition.CompositionNineGridBrush",
+        L"Windows.UI.Composition.CompositionSpriteShape",
+        L"Windows.UI.Composition.CompositionContainerShape", L"Windows.UI.Composition.CompositionGeometry",
+        L"Windows.UI.Composition.CompositionPath", L"Windows.UI.Composition.CompositionViewBox",
+        L"Windows.UI.Composition.CompositionShapeCollection",
+        L"Windows.Foundation.Collections.IIterator`1<Windows.UI.Composition.CompositionShape>",
+        L"Windows.UI.Composition.AnimationController", L"Windows.UI.Composition.ImplicitAnimationCollection",
     };
+    static const WCHAR *const geometries[] = {
+        L"Windows.UI.Composition.CompositionEllipseGeometry", L"Windows.UI.Composition.CompositionRectangleGeometry",
+        L"Windows.UI.Composition.CompositionRoundedRectangleGeometry", L"Windows.UI.Composition.CompositionLineGeometry",
+        L"Windows.UI.Composition.CompositionPathGeometry",
+    };
+    if (o->kind == K_CONTAINER && o->shape_visual) return make_hstring(L"Windows.UI.Composition.ShapeVisual", n);
+    if (o->kind == K_GEOMETRY) return make_hstring(geometries[o->gkind], n);
     static const WCHAR *const keyframes[] = {
         [P_SCALAR] = L"Windows.UI.Composition.ScalarKeyFrameAnimation", [P_VEC2] = L"Windows.UI.Composition.Vector2KeyFrameAnimation",
         [P_VEC3] = L"Windows.UI.Composition.Vector3KeyFrameAnimation", [P_VEC4] = L"Windows.UI.Composition.Vector4KeyFrameAnimation",
@@ -748,6 +856,7 @@ static void fill(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic,
     }
 }
 
+static void draw_shapes(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic, int pw, int ph);
 /* (@psize: the parent's size, or the window's for a target's root) */
 static void draw_visual(Obj *v, Aff parent, Vec2 psize, RECT clip, float op, DWORD *pic, int pw, int ph, int depth)
 {
@@ -763,6 +872,7 @@ static void draw_visual(Obj *v, Aff parent, Vec2 psize, RECT clip, float op, DWO
         if (!IntersectRect(&clip, &clip, &c)) return;
     }
     if (v->kind == K_SPRITE) fill(v, vs, &m, clip, op, pic, pw, ph);
+    if (v->shape_visual) draw_shapes(v, vs, &m, clip, op, pic, pw, ph);
     for (int i = 0; i < v->nkids; i++) draw_visual(v->kids[i], m, vs, clip, op, pic, pw, ph, depth + 1);
 }
 
@@ -884,7 +994,7 @@ static void unsubclass(HWND h)
 static void visual_unhook(Obj *kid) { kid->parent = 0; }
 static void obj_free(Obj *o)
 {
-    Obj *drop[8];
+    Obj *drop[16];
     int n = 0;
     lock();
     if (o->kind == K_BATCH && o->comp && o->comp->open_batch == o) o->comp->open_batch = 0;
@@ -897,7 +1007,14 @@ static void obj_free(Obj *o)
     if (o->chain) o->chain->lpVtbl->SetSink(o->chain, 0, 0);
     drop[n++] = o->clip; drop[n++] = o->brush; drop[n++] = o->of; drop[n++] = o->surface; drop[n++] = o->root;
     drop[n++] = o->props; drop[n++] = o->for_transform; drop[n++] = o->mask;
+    drop[n++] = o->geom; drop[n++] = o->stroke; drop[n++] = o->viewbox; drop[n++] = o->path;
+    drop[n++] = o->implicit;
     unlock();
+    for (int i = 0; i < o->nshapes; i++) obj_release(o->shapes[i]);
+    HeapFree(GetProcessHeap(), 0, o->shapes);
+    HeapFree(GetProcessHeap(), 0, o->xy);
+    HeapFree(GetProcessHeap(), 0, o->fig_end);
+    HeapFree(GetProcessHeap(), 0, o->fig_closed);
     for (int i = 0; i < o->nprops; i++) HeapFree(GetProcessHeap(), 0, o->propv[i].name);
     HeapFree(GetProcessHeap(), 0, o->propv);
     for (int i = 0; i < o->nparams; i++) {
@@ -968,11 +1085,25 @@ static HRESULT STDMETHODCALLTYPE com_start(void *p, HSTRING name, void *anim) { 
 static HRESULT STDMETHODCALLTYPE com_stop(void *p, HSTRING name) { return anim_stop(OBJ_AT(p, S_CO_M), name); }
 static const void *const co_m_vt[] = { BASE(12), (void *)com_compositor, (void *)com_properties, (void *)com_start, (void *)com_stop };
 _Static_assert(S_CO_M == 12, "BASE(12) is S_CO_M's");
-/* ICompositionObject2: Comment, ImplicitAnimations (none here), StartAnimationGroup, StopAnimationGroup */
+/* ICompositionObject2: Comment, ImplicitAnimations (kept, not started: see
+ * the collection), StartAnimationGroup, StopAnimationGroup */
 static HRESULT STDMETHODCALLTYPE co2_get_comment(void *p, HSTRING *out) { return comment_get(OBJ_AT(p, S_CO2), out); }
 static HRESULT STDMETHODCALLTYPE co2_put_comment(void *p, HSTRING s) { return comment_put(OBJ_AT(p, S_CO2), s); }
-static HRESULT STDMETHODCALLTYPE co2_get_implicit(void *p, void **out) { (void)p; if (!out) return E_POINTER; *out = 0; return S_OK; }
-static HRESULT STDMETHODCALLTYPE co2_put_implicit(void *p, void *c) { (void)p; return c ? E_NOTIMPL : S_OK; }
+static HRESULT STDMETHODCALLTYPE co2_get_implicit(void *p, void **out)
+{
+    Obj *o = OBJ_AT(p, S_CO2);
+    lock();
+    HRESULT hr = give(o->implicit, 2, out);
+    unlock();
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE co2_put_implicit(void *p, void *c)
+{
+    Obj *v = c ? obj_of(c, K_IMPLICIT, K_IMPLICIT) : 0;
+    if (c && !v) return E_INVALIDARG;
+    swap_ref(&OBJ_AT(p, S_CO2)->implicit, v);
+    return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE co2_start_group(void *p, void *g) { return group_run(OBJ_AT(p, S_CO2), g, TRUE); }
 static HRESULT STDMETHODCALLTYPE co2_stop_group(void *p, void *g) { return group_run(OBJ_AT(p, S_CO2), g, FALSE); }
 static const void *const co2_vt[] = { BASE(13), (void *)co2_get_comment, (void *)co2_put_comment, (void *)co2_get_implicit,
@@ -982,14 +1113,18 @@ static HRESULT STDMETHODCALLTYPE co3_w_queue(void *p, void **out) { (void)p; ret
 static HRESULT STDMETHODCALLTYPE co3_m_queue(void *p, void **out) { (void)p; return thread_queue(TRUE, out); }
 static const void *const co3_w_vt[] = { BASE(14), (void *)co3_w_queue };
 static const void *const co3_m_vt[] = { BASE(15), (void *)co3_m_queue };
-/* ICompositionObject4: TryGetAnimationController (no controllers here);
- * ICompositionObject5: StartAnimation with a controller (not used) */
-static HRESULT STDMETHODCALLTYPE co4_controller(void *p, HSTRING name, void **out) { (void)p; (void)name; if (!out) return E_POINTER; *out = 0; return S_OK; }
+/* ICompositionObject4: TryGetAnimationController (the key frame animation's
+ * on the property, made when first asked for);
+ * ICompositionObject5: StartAnimation with a controller */
+static HRESULT anim_controller(Obj *o, HSTRING name, void **out);
+static Obj *controller_new(Obj *comp);
+static HRESULT anim_attach(Obj *o, HSTRING name, void *controller);
+static HRESULT STDMETHODCALLTYPE co4_controller(void *p, HSTRING name, void **out) { return anim_controller(OBJ_AT(p, S_CO4), name, out); }
 static const void *const co4_vt[] = { BASE(16), (void *)co4_controller };
 static HRESULT STDMETHODCALLTYPE co5_start(void *p, HSTRING name, void *anim, void *controller)
 {
-    (void)controller;
-    return anim_start(OBJ_AT(p, S_CO5), name, anim);
+    HRESULT hr = anim_start(OBJ_AT(p, S_CO5), name, anim);
+    return SUCCEEDED(hr) && controller ? anim_attach(OBJ_AT(p, S_CO5), name, controller) : hr;
 }
 static const void *const co5_vt[] = { BASE(17), (void *)co5_start };
 _Static_assert(S_CO2 == 13 && S_CO3_W == 14 && S_CO3_M == 15 && S_CO4 == 16 && S_CO5 == 17, "the BASE(n) above");
@@ -1932,7 +2067,7 @@ static HRESULT STDMETHODCALLTYPE an_put_target(void *p, HSTRING s)
 static const void *const anim2_vt[] = { BASE(3), (void *)an_bool, (void *)an_get_target, (void *)an_put_target };
 /* ICompositionAnimation3 (slot 5): InitialValueExpressions (not here);
  * ICompositionAnimation4 (slot 6): SetExpressionReferenceParameter (ours kept) */
-static HRESULT STDMETHODCALLTYPE an_initial(void *p, void **out) { (void)p; if (out) *out = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE an_initial(void *p, void **out) { (void)p; return not_made(out); }
 static const void *const anim3_vt[] = { BASE(5), (void *)an_initial };
 static HRESULT STDMETHODCALLTYPE an_expr_ref(void *p, HSTRING n, void *obj)
 {
@@ -2154,6 +2289,21 @@ static const struct { const WCHAR *name; size_t at; int type; float k; } visual_
     { L"RelativeOffsetAdjustment", __builtin_offsetof(Obj, rel_offset), P_VEC3, 1 },
     { L"RelativeSizeAdjustment", __builtin_offsetof(Obj, rel_size), P_VEC2, 1 },
 };
+/* (a shape's, a sprite shape's strokes', a geometry's trims, and each kind of geometry's g[]) */
+static const struct { const WCHAR *name; size_t at; int type; float k; } shape_props[] = {
+    { L"CenterPoint", __builtin_offsetof(Obj, b_center), P_VEC2, 1 }, { L"Offset", __builtin_offsetof(Obj, b_offset), P_VEC2, 1 },
+    { L"RotationAngle", __builtin_offsetof(Obj, b_angle), P_SCALAR, 1 },
+    { L"RotationAngleInDegrees", __builtin_offsetof(Obj, b_angle), P_SCALAR, 3.14159265358979f / 180 },
+    { L"Scale", __builtin_offsetof(Obj, b_scale), P_VEC2, 1 }, { L"TransformMatrix", __builtin_offsetof(Obj, b_tm), P_M3X2, 1 },
+    { L"StrokeThickness", __builtin_offsetof(Obj, stroke_w), P_SCALAR, 1 },
+    { L"StrokeDashOffset", __builtin_offsetof(Obj, dash_offset), P_SCALAR, 1 },
+    { L"StrokeMiterLimit", __builtin_offsetof(Obj, miter), P_SCALAR, 1 },
+};
+static const WCHAR *const trim_props[] = { L"TrimStart", L"TrimEnd", L"TrimOffset" };
+static const WCHAR *const geometry_props[][3] = {
+    [G_ELLIPSE] = { L"Center", L"Radius", 0 }, [G_RECT] = { L"Offset", L"Size", 0 },
+    [G_RRECT] = { L"Offset", L"Size", L"CornerRadius" }, [G_LINE] = { L"Start", L"End", 0 }, [G_PATH] = { 0, 0, 0 },
+};
 static const WCHAR *const inset_props[] = { L"LeftInset", L"TopInset", L"RightInset", L"BottomInset" };
 static const WCHAR *const rect_props[] = { L"Left", L"Top", L"Right", L"Bottom" };
 /* @o's property @name (@n characters) (under the lock) */
@@ -2186,6 +2336,23 @@ static BOOL bind(Obj *o, const WCHAR *name, UINT32 n, Bind *b)
             if (wsame(o->kind == K_INSET_CLIP ? inset_props[i] : rect_props[i], name, base)) {
                 b->f = &o->inset[i]; b->type = P_SCALAR; b->n = 1;
             }
+    } else if (o->kind == K_SPRITE_SHAPE || o->kind == K_CONTAINER_SHAPE) {
+        for (size_t i = 0; i < sizeof shape_props / sizeof shape_props[0]; i++)
+            if (wsame(shape_props[i].name, name, base)) {
+                b->f = (float *)((char *)o + shape_props[i].at);
+                b->type = shape_props[i].type;
+                b->n = p_count[b->type];
+                b->k = shape_props[i].k;
+            }
+    } else if (o->kind == K_GEOMETRY) {
+        for (int i = 0; i < 3; i++) {
+            if (wsame(trim_props[i], name, base)) { b->f = &o->trim[i]; b->type = P_SCALAR; b->n = 1; }
+            if (geometry_props[o->gkind][i] && wsame(geometry_props[o->gkind][i], name, base)) {
+                b->f = &o->g[i].X; b->type = P_VEC2; b->n = 2;
+            }
+        }
+    } else if (o->kind == K_CONTROLLER && wsame(L"Progress", name, base)) {
+        b->f = &o->progress; b->type = P_SCALAR; b->n = 1;
     }
     if (!b->f && !b->b && !b->color) {
         Obj *ps = o->kind == K_PROPSET ? o : o->props;
@@ -2226,6 +2393,9 @@ struct Active {
     float start[16];                    /* the property's value when it started */
     INT64 begin, delay, duration;
     int iters, forever, direction, stop_behavior, delay_behavior;
+    Obj *ctl;                           /* its AnimationController (counted), or NULL */
+    Obj *src;                           /* an expression "name.Property": the object name refers to (counted), */
+    WCHAR *src_prop;                    /* and the property */
 };
 static Active *g_active;
 static Obj *g_due;                      /* batches whose Completed is to be raised (counted, through due_next) */
@@ -2280,6 +2450,9 @@ static void active_free(Active *a)      /* (under the lock: the releases may fre
 {
     if (a->batch) { batch_done_one(a->batch); obj_release(a->batch); }
     if (a->anim) obj_release(a->anim);
+    if (a->ctl) obj_release(a->ctl);
+    if (a->src) obj_release(a->src);
+    HeapFree(GetProcessHeap(), 0, a->src_prop);
     obj_release(a->obj);
     HeapFree(GetProcessHeap(), 0, a->prop);
     HeapFree(GetProcessHeap(), 0, a->kfs);
@@ -2311,12 +2484,30 @@ static BOOL stop_named(Obj *o, const WCHAR *name, UINT32 n, BOOL behave)
     }
     return FALSE;
 }
+/* (under the lock) the expression animations of the form "name.Property"
+ * (name a reference parameter): the property's value copied to theirs */
+static void expressions_eval(void)
+{
+    for (Active *a = g_active; a; a = a->next) {
+        if (a->type || !a->src) continue;
+        Bind from, to;
+        UINT32 n = 0, m = 0;
+        while (a->prop[n]) n++;
+        while (a->src_prop[m]) m++;
+        if (!bind(a->src, a->src_prop, m, &from) || !bind(a->obj, a->prop, n, &to) || !compatible(from.type, to.type)) continue;
+        float v[16] = { 0 };
+        bind_read(&from, v);
+        bind_write(&to, v);
+    }
+}
 /* (the compositor's thread, under the lock) moves the key frame animations
- * on; TRUE while any runs */
+ * on; TRUE while any runs.  One whose controller is paused stands at the
+ * controller's Progress. */
 static BOOL anim_tick(void)
 {
     INT64 now = now_100ns();
     BOOL more = FALSE;
+    expressions_eval();
     for (Active **pp = &g_active; *pp;) {
         Active *a = *pp;
         if (!a->type) { pp = &a->next; continue; }
@@ -2325,6 +2516,12 @@ static BOOL anim_tick(void)
         while (a->prop[n]) n++;
         if (!bind(a->obj, a->prop, n, &b)) { *pp = a->next; active_free(a); continue; }     /* (the property went) */
         float t, v[16];
+        if (a->ctl && a->ctl->paused) {
+            anim_value(a, a->ctl->progress, v);
+            bind_write(&b, v);
+            pp = &a->next;
+            continue;
+        }
         int st = anim_progress(a, now, &t);
         if (st >= 0 || a->delay_behavior == 1) {      /* (SetInitialValueBeforeDelay 1) */
             anim_value(a, t, v);
@@ -2334,7 +2531,32 @@ static BOOL anim_tick(void)
         more = TRUE;
         pp = &a->next;
     }
+    expressions_eval();
     return more;
+}
+/* (under the lock) an expression of the form "name.Property", name one of
+ * its reference parameters: what @x copies from */
+static void expression_source(Obj *a, Active *x)
+{
+    const WCHAR *e = a->expr;
+    if (!e) return;
+    while (*e == ' ') e++;
+    UINT32 n = 0;
+    while ((e[n] >= 'a' && e[n] <= 'z') || (e[n] >= 'A' && e[n] <= 'Z') || (e[n] >= '0' && e[n] <= '9') || e[n] == '_') n++;
+    if (!n || e[n] != '.') return;
+    const WCHAR *prop = e + n + 1;
+    UINT32 m = 0;
+    while ((prop[m] >= 'a' && prop[m] <= 'z') || (prop[m] >= 'A' && prop[m] <= 'Z') || (prop[m] >= '0' && prop[m] <= '9') ||
+           prop[m] == '_' || prop[m] == '.') m++;
+    for (UINT32 k = m; prop[k]; k++) if (prop[k] != ' ') return;
+    if (!m) return;
+    for (int i = 0; i < a->nparams; i++)
+        if (a->params[i].ref && wsame(a->params[i].name, e, n)) {
+            if (!(x->src_prop = wdup(prop, m))) return;
+            x->src = a->params[i].ref;
+            obj_addref(x->src);
+            return;
+        }
 }
 static HRESULT anim_start(Obj *o, HSTRING name, void *anim)
 {
@@ -2369,6 +2591,7 @@ static HRESULT anim_start(Obj *o, HSTRING name, void *anim)
             if (bt && bt->b_active) { x->batch = bt; obj_addref(bt); bt->pending++; }
         } else {
             x->anim = a; obj_addref(a);
+            expression_source(a, x);
         }
         x->next = g_active;
         g_active = x;
@@ -2380,6 +2603,37 @@ static HRESULT anim_start(Obj *o, HSTRING name, void *anim)
     if (x) { HeapFree(GetProcessHeap(), 0, x->kfs); HeapFree(GetProcessHeap(), 0, x); }
     if (SUCCEEDED(hr)) { ensure_thread(); schedule(); }
     return hr;
+}
+/* the key frame animation on @o's property @name, if any (under the lock) */
+static Active *active_on(Obj *o, HSTRING name)
+{
+    UINT32 n;
+    const WCHAR *c = hbuf(name, &n);
+    for (Active *a = g_active; a; a = a->next) if (a->obj == o && a->type && wsame(a->prop, c, n)) return a;
+    return 0;
+}
+static HRESULT anim_controller(Obj *o, HSTRING name, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    lock();
+    Active *a = active_on(o, name);
+    if (a && !a->ctl) a->ctl = controller_new(o->kind == K_COMPOSITOR ? o : o->comp);
+    HRESULT hr = give(a ? a->ctl : 0, 2, out);
+    unlock();
+    return hr;
+}
+static HRESULT anim_attach(Obj *o, HSTRING name, void *controller)
+{
+    Obj *c = obj_of(controller, K_CONTROLLER, -1), *old = 0;
+    if (!c) return E_INVALIDARG;
+    lock();
+    Active *a = active_on(o, name);
+    if (a) { old = a->ctl; a->ctl = c; c = 0; }
+    unlock();
+    if (old) obj_release(old);
+    if (c) obj_release(c);
+    return S_OK;
 }
 static HRESULT anim_stop(Obj *o, HSTRING name)
 {
@@ -2637,9 +2891,773 @@ static HRESULT rect_clip_new(Obj *comp, float l, float t, float r, float b, cons
     return S_OK;
 }
 
+/* ---- shapes ----------------------------------------------------------------------
+ * ShapeVisual (a container visual whose Shapes are drawn under its children,
+ * clipped to its size, through its ViewBox when it has one), sprite and
+ * container shapes (each scaled and rotated about CenterPoint, then
+ * TransformMatrix, then moved to Offset), and their geometries: ellipses,
+ * rectangles, rounded rectangles, lines and paths (CompositionPath, made from
+ * an IGeometrySource2D: its Direct2D geometry flattened to lines), with
+ * TrimStart, TrimEnd and TrimOffset.  A sprite shape is filled with its
+ * FillBrush and stroked with its StrokeBrush, StrokeThickness wide (round
+ * joins; flat, square or round caps); a colour brush's colour only (other
+ * brushes are kept, not drawn), anti-aliased.  Dashes (StrokeDashArray) are
+ * not drawn.  What WinUI 2's AnimatedVisualPlayer, AnimatedIcon and
+ * ProgressRing draw with. */
+static const void *const shapes_vt[], *const shapes_iterable_vt[], *const shapes_view_vt[], *const shape_iter_vt[];
+static BOOL is_shape(Obj *o) { return o && (o->kind == K_SPRITE_SHAPE || o->kind == K_CONTAINER_SHAPE); }
+
+/* a shape visual's or a container shape's Shapes: a collection on it */
+static HRESULT shapes_of(Obj *owner, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *c = obj_new(owner->comp, K_SHAPES);
+    if (!c) return E_OUTOFMEMORY;
+    c->vt[2] = shapes_vt; c->vt[3] = shapes_iterable_vt; c->vt[4] = shapes_view_vt;
+    c->of = owner;
+    obj_addref(owner);
+    *out = IF(c, 2);
+    return S_OK;
+}
+/* IVector<CompositionShape> (slot 2), IIterable (slot 3), IVectorView (slot 4) */
+#define SHP(p, i) (OBJ_AT(p, i)->of)
+static HRESULT shapes_at(Obj *o, UINT32 i, void **out)
+{
+    if (!out) return E_POINTER;
+    lock();
+    HRESULT hr = i < (UINT32)o->nshapes ? give(o->shapes[i], 2, out) : (*out = 0, E_BOUNDS_);
+    unlock();
+    return hr;
+}
+static HRESULT shapes_size(Obj *o, UINT32 *n) { if (!n) return E_POINTER; *n = (UINT32)o->nshapes; return S_OK; }
+static HRESULT shapes_index(Obj *o, void *shape, UINT32 *at, boolean_t *found)
+{
+    if (!at || !found) return E_POINTER;
+    *at = 0; *found = 0;
+    Obj *s = obj_of(shape, K_SPRITE_SHAPE, K_CONTAINER_SHAPE);
+    if (!s) return S_OK;
+    lock();
+    for (int i = 0; i < o->nshapes; i++) if (o->shapes[i] == s) { *at = (UINT32)i; *found = 1; break; }
+    unlock();
+    obj_release(s);
+    return S_OK;
+}
+static HRESULT shapes_many(Obj *o, UINT32 start, UINT32 cap, void **items, UINT32 *got)
+{
+    if (!got || (cap && !items)) return E_POINTER;
+    *got = 0;
+    lock();
+    for (UINT32 i = start; i < (UINT32)o->nshapes && *got < cap; i++) {
+        items[(*got)++] = IF(o->shapes[i], 2);
+        obj_addref(o->shapes[i]);
+    }
+    unlock();
+    return S_OK;
+}
+/* @shape in at @i (@replace: in place of the one there) */
+static HRESULT shapes_put(Obj *o, UINT32 i, void *shape, BOOL replace)
+{
+    Obj *s = obj_of(shape, K_SPRITE_SHAPE, K_CONTAINER_SHAPE), *old = 0;
+    if (!s) return E_INVALIDARG;
+    HRESULT hr = S_OK;
+    lock();
+    if (replace ? i >= (UINT32)o->nshapes : i > (UINT32)o->nshapes) hr = E_BOUNDS_;
+    else if (replace) { old = o->shapes[i]; o->shapes[i] = s; s = 0; }
+    else if (!grow((void **)&o->shapes, o->nshapes, sizeof *o->shapes)) hr = E_OUTOFMEMORY;
+    else {
+        for (int k = o->nshapes; k > (int)i; k--) o->shapes[k] = o->shapes[k - 1];
+        o->shapes[i] = s; s = 0;
+        o->nshapes++;
+    }
+    unlock();
+    if (s) obj_release(s);
+    if (old) obj_release(old);
+    schedule();
+    return hr;
+}
+static HRESULT shapes_remove(Obj *o, UINT32 i)
+{
+    Obj *old = 0;
+    lock();
+    if (i < (UINT32)o->nshapes) {
+        old = o->shapes[i];
+        for (int k = (int)i; k + 1 < o->nshapes; k++) o->shapes[k] = o->shapes[k + 1];
+        o->nshapes--;
+    }
+    unlock();
+    if (!old) return E_BOUNDS_;
+    obj_release(old);
+    schedule();
+    return S_OK;
+}
+static HRESULT shapes_clear(Obj *o)
+{
+    lock();
+    Obj **v = o->shapes;
+    int n = o->nshapes;
+    o->shapes = 0; o->nshapes = 0;
+    unlock();
+    for (int i = 0; i < n; i++) obj_release(v[i]);
+    HeapFree(GetProcessHeap(), 0, v);
+    schedule();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE sv_at(void *p, UINT32 i, void **out) { return shapes_at(SHP(p, 2), i, out); }
+static HRESULT STDMETHODCALLTYPE sv_size(void *p, UINT32 *n) { return shapes_size(SHP(p, 2), n); }
+static HRESULT STDMETHODCALLTYPE sv_view(void *p, void **out) { return give(OBJ_AT(p, 2), 4, out); }
+static HRESULT STDMETHODCALLTYPE sv_index(void *p, void *s, UINT32 *at, boolean_t *f) { return shapes_index(SHP(p, 2), s, at, f); }
+static HRESULT STDMETHODCALLTYPE sv_set(void *p, UINT32 i, void *s) { return shapes_put(SHP(p, 2), i, s, TRUE); }
+static HRESULT STDMETHODCALLTYPE sv_insert(void *p, UINT32 i, void *s) { return shapes_put(SHP(p, 2), i, s, FALSE); }
+static HRESULT STDMETHODCALLTYPE sv_remove(void *p, UINT32 i) { return shapes_remove(SHP(p, 2), i); }
+static HRESULT STDMETHODCALLTYPE sv_append(void *p, void *s) { Obj *o = SHP(p, 2); return shapes_put(o, (UINT32)o->nshapes, s, FALSE); }
+static HRESULT STDMETHODCALLTYPE sv_remove_end(void *p) { Obj *o = SHP(p, 2); return o->nshapes ? shapes_remove(o, (UINT32)o->nshapes - 1) : E_BOUNDS_; }
+static HRESULT STDMETHODCALLTYPE sv_clear(void *p) { return shapes_clear(SHP(p, 2)); }
+static HRESULT STDMETHODCALLTYPE sv_many(void *p, UINT32 start, UINT32 cap, void **items, UINT32 *got) { return shapes_many(SHP(p, 2), start, cap, items, got); }
+static HRESULT STDMETHODCALLTYPE sv_replace_all(void *p, UINT32 n, void **items)
+{
+    Obj *o = SHP(p, 2);
+    shapes_clear(o);
+    for (UINT32 i = 0; i < n; i++) {
+        HRESULT hr = shapes_put(o, i, items[i], FALSE);
+        if (FAILED(hr)) return hr;
+    }
+    return S_OK;
+}
+static const void *const shapes_vt[] = { BASE(2), (void *)sv_at, (void *)sv_size, (void *)sv_view, (void *)sv_index, (void *)sv_set,
+                                         (void *)sv_insert, (void *)sv_remove, (void *)sv_append, (void *)sv_remove_end, (void *)sv_clear,
+                                         (void *)sv_many, (void *)sv_replace_all };
+static HRESULT STDMETHODCALLTYPE svv_at(void *p, UINT32 i, void **out) { return shapes_at(SHP(p, 4), i, out); }
+static HRESULT STDMETHODCALLTYPE svv_size(void *p, UINT32 *n) { return shapes_size(SHP(p, 4), n); }
+static HRESULT STDMETHODCALLTYPE svv_index(void *p, void *s, UINT32 *at, boolean_t *f) { return shapes_index(SHP(p, 4), s, at, f); }
+static HRESULT STDMETHODCALLTYPE svv_many(void *p, UINT32 start, UINT32 cap, void **items, UINT32 *got) { return shapes_many(SHP(p, 4), start, cap, items, got); }
+static const void *const shapes_view_vt[] = { BASE(4), (void *)svv_at, (void *)svv_size, (void *)svv_index, (void *)svv_many };
+/* IIterable.First: an iterator over the owner's shapes */
+static HRESULT STDMETHODCALLTYPE svi_first(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *owner = SHP(p, 3), *it = obj_new(owner->comp, K_SHAPE_ITER);
+    if (!it) return E_OUTOFMEMORY;
+    it->vt[0] = 0; it->vt[1] = 0;
+    for (int i = S_CO_M; i <= S_CO5; i++) it->vt[i] = 0;
+    it->vt[2] = shape_iter_vt;
+    it->of = owner;
+    obj_addref(owner);
+    *out = IF(it, 2);
+    return S_OK;
+}
+static const void *const shapes_iterable_vt[] = { BASE(3), (void *)svi_first };
+/* IIterator<CompositionShape> (slot 2) */
+#define ITR(p) OBJ_AT(p, 2)
+static HRESULT STDMETHODCALLTYPE it_current(void *p, void **out) { return shapes_at(ITR(p)->of, (UINT32)ITR(p)->at, out); }
+static HRESULT STDMETHODCALLTYPE it_has(void *p, boolean_t *v) { if (!v) return E_POINTER; *v = ITR(p)->at < ITR(p)->of->nshapes; return S_OK; }
+static HRESULT STDMETHODCALLTYPE it_next(void *p, boolean_t *v)
+{
+    Obj *it = ITR(p);
+    if (!v) return E_POINTER;
+    if (it->at < it->of->nshapes) it->at++;
+    *v = it->at < it->of->nshapes;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE it_many(void *p, UINT32 cap, void **items, UINT32 *got)
+{
+    Obj *it = ITR(p);
+    HRESULT hr = shapes_many(it->of, (UINT32)it->at, cap, items, got);
+    if (SUCCEEDED(hr)) it->at += (int)*got;
+    return hr;
+}
+static const void *const shape_iter_vt[] = { BASE(2), (void *)it_current, (void *)it_has, (void *)it_next, (void *)it_many };
+
+/* IShapeVisual (slot 4 of a shape visual): Shapes, ViewBox */
+static HRESULT STDMETHODCALLTYPE shv_shapes(void *p, void **out) { return shapes_of(OBJ_AT(p, 4), out); }
+static HRESULT STDMETHODCALLTYPE shv_get_viewbox(void *p, void **out) { lock(); HRESULT hr = give(OBJ_AT(p, 4)->viewbox, 2, out); unlock(); return hr; }
+static HRESULT STDMETHODCALLTYPE shv_put_viewbox(void *p, void *box)
+{
+    Obj *b = 0;
+    if (box && !(b = obj_of(box, K_VIEWBOX, -1))) return E_INVALIDARG;
+    swap_ref(&OBJ_AT(p, 4)->viewbox, b);
+    return S_OK;
+}
+static const void *const shape_visual_vt[] = { BASE(4), (void *)shv_shapes, (void *)shv_get_viewbox, (void *)shv_put_viewbox };
+
+/* ICompositionShape (slot 2): CenterPoint, Offset, RotationAngle(InDegrees), Scale, TransformMatrix */
+#define SH(p) OBJ_AT(p, 2)
+#define SH_VEC(name, field) \
+    static HRESULT STDMETHODCALLTYPE sh_get_##name(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = SH(p)->field; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE sh_put_##name(void *p, Vec2 v) { lock(); SH(p)->field = v; unlock(); schedule(); return S_OK; }
+SH_VEC(center, b_center) SH_VEC(offset, b_offset) SH_VEC(scale, b_scale)
+static HRESULT STDMETHODCALLTYPE sh_get_angle(void *p, float *v) { if (!v) return E_POINTER; *v = SH(p)->b_angle; return S_OK; }
+static HRESULT STDMETHODCALLTYPE sh_put_angle(void *p, float v) { lock(); SH(p)->b_angle = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE sh_get_deg(void *p, float *v) { if (!v) return E_POINTER; *v = SH(p)->b_angle * 57.2957795f; return S_OK; }
+static HRESULT STDMETHODCALLTYPE sh_put_deg(void *p, float v) { return sh_put_angle(p, v / 57.2957795f); }
+static HRESULT STDMETHODCALLTYPE sh_get_tm(void *p, Aff *v) { if (!v) return E_POINTER; *v = SH(p)->b_tm; return S_OK; }
+static HRESULT STDMETHODCALLTYPE sh_put_tm(void *p, Aff v) { lock(); SH(p)->b_tm = v; unlock(); schedule(); return S_OK; }
+static const void *const shape_vt[] = { BASE(2), (void *)sh_get_center, (void *)sh_put_center, (void *)sh_get_offset, (void *)sh_put_offset,
+                                        (void *)sh_get_angle, (void *)sh_put_angle, (void *)sh_get_deg, (void *)sh_put_deg,
+                                        (void *)sh_get_scale, (void *)sh_put_scale, (void *)sh_get_tm, (void *)sh_put_tm };
+/* ICompositionContainerShape (slot 3): Shapes */
+static HRESULT STDMETHODCALLTYPE csh_shapes(void *p, void **out) { return shapes_of(OBJ_AT(p, 3), out); }
+static const void *const container_shape_vt[] = { BASE(3), (void *)csh_shapes };
+/* ICompositionSpriteShape (slot 3) */
+#define SS(p) OBJ_AT(p, 3)
+static HRESULT ss_brush(Obj **field, void *brush)
+{
+    Obj *b = 0;
+    if (brush && !(b = brush_of(brush))) return E_INVALIDARG;
+    swap_ref(field, b);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ss_get_fill(void *p, void **out) { lock(); HRESULT hr = give(SS(p)->brush, 2, out); unlock(); return hr; }
+static HRESULT STDMETHODCALLTYPE ss_put_fill(void *p, void *b) { return ss_brush(&SS(p)->brush, b); }
+static HRESULT STDMETHODCALLTYPE ss_get_geom(void *p, void **out) { lock(); HRESULT hr = give(SS(p)->geom, 2, out); unlock(); return hr; }
+static HRESULT STDMETHODCALLTYPE ss_put_geom(void *p, void *g)
+{
+    Obj *o = 0;
+    if (g && !(o = obj_of(g, K_GEOMETRY, -1))) return E_INVALIDARG;
+    swap_ref(&SS(p)->geom, o);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ss_get_stroke(void *p, void **out) { lock(); HRESULT hr = give(SS(p)->stroke, 2, out); unlock(); return hr; }
+static HRESULT STDMETHODCALLTYPE ss_put_stroke(void *p, void *b) { return ss_brush(&SS(p)->stroke, b); }
+static HRESULT STDMETHODCALLTYPE ss_dashes(void *p, void **out) { (void)p; return not_made(out); }
+#define SS_VAL(name, field, T) \
+    static HRESULT STDMETHODCALLTYPE ss_get_##name(void *p, T *v) { if (!v) return E_POINTER; *v = SS(p)->field; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE ss_put_##name(void *p, T v) { lock(); SS(p)->field = v; unlock(); schedule(); return S_OK; }
+SS_VAL(non_scaling, non_scaling, boolean_t) SS_VAL(dash_cap, cap_dash, int) SS_VAL(dash_offset, dash_offset, float)
+SS_VAL(end_cap, cap_end, int) SS_VAL(join, join, int) SS_VAL(miter, miter, float) SS_VAL(start_cap, cap_start, int)
+SS_VAL(width, stroke_w, float)
+static const void *const sprite_shape_vt[] = {
+    BASE(3), (void *)ss_get_fill, (void *)ss_put_fill, (void *)ss_get_geom, (void *)ss_put_geom, (void *)ss_get_non_scaling,
+    (void *)ss_put_non_scaling, (void *)ss_get_stroke, (void *)ss_put_stroke, (void *)ss_dashes, (void *)ss_get_dash_cap,
+    (void *)ss_put_dash_cap, (void *)ss_get_dash_offset, (void *)ss_put_dash_offset, (void *)ss_get_end_cap, (void *)ss_put_end_cap,
+    (void *)ss_get_join, (void *)ss_put_join, (void *)ss_get_miter, (void *)ss_put_miter, (void *)ss_get_start_cap,
+    (void *)ss_put_start_cap, (void *)ss_get_width, (void *)ss_put_width,
+};
+_Static_assert(sizeof sprite_shape_vt / sizeof sprite_shape_vt[0] == 6 + 23, "ICompositionSpriteShape has 23 methods");
+static HRESULT shape_new(Obj *comp, int kind, void *geometry, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *g = 0;
+    if (geometry && !(g = obj_of(geometry, K_GEOMETRY, -1))) return E_INVALIDARG;
+    Obj *s = obj_new(comp, kind);
+    if (!s) { if (g) obj_release(g); return E_OUTOFMEMORY; }
+    s->vt[2] = shape_vt;
+    s->vt[3] = kind == K_SPRITE_SHAPE ? sprite_shape_vt : container_shape_vt;
+    s->geom = g;
+    s->stroke_w = 1.0f;
+    s->miter = 2.0f;
+    *out = IF(s, 3);
+    return S_OK;
+}
+
+/* ICompositionGeometry (slot 2): TrimEnd, TrimOffset, TrimStart */
+#define GM(p, i) OBJ_AT(p, i)
+#define TRIM(name, i) \
+    static HRESULT STDMETHODCALLTYPE gm_get_##name(void *p, float *v) { if (!v) return E_POINTER; *v = GM(p, 2)->trim[i]; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE gm_put_##name(void *p, float v) { lock(); GM(p, 2)->trim[i] = v; unlock(); schedule(); return S_OK; }
+TRIM(start, 0) TRIM(end, 1) TRIM(offset, 2)
+static const void *const geometry_vt[] = { BASE(2), (void *)gm_get_end, (void *)gm_put_end, (void *)gm_get_offset, (void *)gm_put_offset,
+                                           (void *)gm_get_start, (void *)gm_put_start };
+/* the kinds' own interfaces (slot 3), on g[] */
+#define GV(name, i) \
+    static HRESULT STDMETHODCALLTYPE gv_get_##name(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = GM(p, 3)->g[i]; return S_OK; } \
+    static HRESULT STDMETHODCALLTYPE gv_put_##name(void *p, Vec2 v) { lock(); GM(p, 3)->g[i] = v; unlock(); schedule(); return S_OK; }
+GV(0, 0) GV(1, 1) GV(2, 2)
+static const void *const ellipse_vt[] = { BASE(3), (void *)gv_get_0, (void *)gv_put_0, (void *)gv_get_1, (void *)gv_put_1 };   /* Center, Radius */
+static const void *const rect_vt[] = { BASE(3), (void *)gv_get_0, (void *)gv_put_0, (void *)gv_get_1, (void *)gv_put_1 };      /* Offset, Size */
+static const void *const rrect_vt[] = { BASE(3), (void *)gv_get_2, (void *)gv_put_2, (void *)gv_get_0, (void *)gv_put_0,       /* CornerRadius, */
+                                        (void *)gv_get_1, (void *)gv_put_1 };                                                     /* Offset, Size */
+static const void *const line_vt[] = { BASE(3), (void *)gv_get_0, (void *)gv_put_0, (void *)gv_get_1, (void *)gv_put_1 };      /* Start, End */
+static HRESULT STDMETHODCALLTYPE pg_get(void *p, void **out) { lock(); HRESULT hr = give(GM(p, 3)->path, 2, out); unlock(); return hr; }
+static HRESULT STDMETHODCALLTYPE pg_put(void *p, void *path)
+{
+    Obj *o = 0;
+    if (path && !(o = obj_of(path, K_PATH, -1))) return E_INVALIDARG;
+    swap_ref(&GM(p, 3)->path, o);
+    return S_OK;
+}
+static const void *const path_geometry_vt[] = { BASE(3), (void *)pg_get, (void *)pg_put };
+static HRESULT geometry_new(Obj *comp, int kind, void *path, void **out)
+{
+    static const void *const *const vts[] = { [G_ELLIPSE] = ellipse_vt, [G_RECT] = rect_vt, [G_RRECT] = rrect_vt,
+                                              [G_LINE] = line_vt, [G_PATH] = path_geometry_vt };
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *pa = 0;
+    if (path && !(pa = obj_of(path, K_PATH, -1))) return E_INVALIDARG;
+    Obj *g = obj_new(comp, K_GEOMETRY);
+    if (!g) { if (pa) obj_release(pa); return E_OUTOFMEMORY; }
+    g->gkind = kind;
+    g->vt[2] = geometry_vt; g->vt[3] = vts[kind];
+    g->trim[1] = 1.0f;
+    g->path = pa;
+    *out = IF(g, 3);
+    return S_OK;
+}
+
+/* ICompositionViewBox (slot 2): HorizontalAlignmentRatio, Offset, Size, Stretch, VerticalAlignmentRatio */
+#define VB(p) OBJ_AT(p, 2)
+static HRESULT STDMETHODCALLTYPE vb_get_h(void *p, float *v) { if (!v) return E_POINTER; *v = VB(p)->hratio; return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_put_h(void *p, float v) { lock(); VB(p)->hratio = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_get_offset(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = VB(p)->b_offset; return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_put_offset(void *p, Vec2 v) { lock(); VB(p)->b_offset = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_get_size(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = VB(p)->size; return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_put_size(void *p, Vec2 v) { lock(); VB(p)->size = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_get_stretch(void *p, int *v) { if (!v) return E_POINTER; *v = VB(p)->stretch; return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_put_stretch(void *p, int v) { if (v < 0 || v > 3) return E_INVALIDARG; lock(); VB(p)->stretch = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_get_v(void *p, float *v) { if (!v) return E_POINTER; *v = VB(p)->vratio; return S_OK; }
+static HRESULT STDMETHODCALLTYPE vb_put_v(void *p, float v) { lock(); VB(p)->vratio = v; unlock(); schedule(); return S_OK; }
+static const void *const viewbox_vt[] = { BASE(2), (void *)vb_get_h, (void *)vb_put_h, (void *)vb_get_offset, (void *)vb_put_offset,
+                                          (void *)vb_get_size, (void *)vb_put_size, (void *)vb_get_stretch, (void *)vb_put_stretch,
+                                          (void *)vb_get_v, (void *)vb_put_v };
+
+/* ---- paths: CompositionPath, from an IGeometrySource2D ------------------------------
+ * The source's Direct2D geometry (IGeometrySource2DInterop) simplified to
+ * lines into a sink of ours: its figures, closed or not, and its fill mode */
+static const GUID IID_IGeometrySource2DInterop_ = { 0x0657AF73, 0x53FD, 0x47CF, { 0x84, 0xFF, 0xC8, 0x49, 0x2D, 0x2A, 0x80, 0xA3 } };
+typedef struct { float x, y; } PtF;
+typedef struct { const void *const *vt; Obj *path; } Sink;
+static BOOL path_point(Obj *o, float x, float y)
+{
+    if (!grow((void **)&o->xy, o->npts, 2 * sizeof(float))) return FALSE;
+    o->xy[o->npts * 2] = x;
+    o->xy[o->npts * 2 + 1] = y;
+    o->npts++;
+    if (o->nfigs) o->fig_end[o->nfigs - 1] = o->npts;
+    return TRUE;
+}
+static HRESULT STDMETHODCALLTYPE sk_qi(void *p, REFIID iid, void **out) { (void)iid; *out = p; return S_OK; }
+static ULONG STDMETHODCALLTYPE sk_ref(void *p) { (void)p; return 1; }
+static void STDMETHODCALLTYPE sk_fill_mode(void *p, int mode) { ((Sink *)p)->path->fill_mode = mode; }
+static void STDMETHODCALLTYPE sk_flags(void *p, int flags) { (void)p; (void)flags; }
+static void STDMETHODCALLTYPE sk_begin(void *p, PtF start, int how)
+{
+    Obj *o = ((Sink *)p)->path;
+    (void)how;
+    if (!grow((void **)&o->fig_end, o->nfigs, sizeof *o->fig_end) || !grow((void **)&o->fig_closed, o->nfigs, 1)) return;
+    o->fig_end[o->nfigs] = o->npts;
+    o->fig_closed[o->nfigs] = 0;
+    o->nfigs++;
+    path_point(o, start.x, start.y);
+}
+static void STDMETHODCALLTYPE sk_lines(void *p, const PtF *pts, UINT32 n)
+{
+    Obj *o = ((Sink *)p)->path;
+    if (o->nfigs) for (UINT32 i = 0; i < n; i++) path_point(o, pts[i].x, pts[i].y);
+}
+static void STDMETHODCALLTYPE sk_beziers(void *p, const PtF *b, UINT32 n)       /* (D2D1_BEZIER_SEGMENTs; not asked for) */
+{
+    Obj *o = ((Sink *)p)->path;
+    if (!o->nfigs || o->npts < 1) return;
+    for (UINT32 i = 0; i < n; i++) {
+        float x0 = o->xy[o->npts * 2 - 2], y0 = o->xy[o->npts * 2 - 1];
+        const PtF *c = &b[i * 3];
+        for (int k = 1; k <= 16; k++) {
+            float t = k / 16.0f, u = 1 - t;
+            path_point(o, u * u * u * x0 + 3 * u * u * t * c[0].x + 3 * u * t * t * c[1].x + t * t * t * c[2].x,
+                       u * u * u * y0 + 3 * u * u * t * c[0].y + 3 * u * t * t * c[1].y + t * t * t * c[2].y);
+        }
+    }
+}
+static void STDMETHODCALLTYPE sk_end(void *p, int how) { Obj *o = ((Sink *)p)->path; if (o->nfigs) o->fig_closed[o->nfigs - 1] = how == 1; }
+static HRESULT STDMETHODCALLTYPE sk_close(void *p) { (void)p; return S_OK; }
+static const void *const sink_vt[] = { (void *)sk_qi, (void *)sk_ref, (void *)sk_ref, (void *)sk_fill_mode, (void *)sk_flags, (void *)sk_begin,
+                                       (void *)sk_lines, (void *)sk_beziers, (void *)sk_end, (void *)sk_close };
+static HRESULT path_new(IUnknown *source, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!source) return E_INVALIDARG;
+    IUnknown *interop = 0, *geometry = 0;
+    HRESULT hr = source->lpVtbl->QueryInterface(source, &IID_IGeometrySource2DInterop_, (void **)&interop);
+    if (FAILED(hr)) return E_INVALIDARG;
+    hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, IUnknown **))((void **)*(void **)interop)[3])(interop, &geometry);   /* GetGeometry */
+    interop->lpVtbl->Release(interop);
+    if (FAILED(hr)) return hr;
+    if (!geometry) return E_INVALIDARG;
+    Obj *o = obj_new(0, K_PATH);
+    if (!o) { geometry->lpVtbl->Release(geometry); return E_OUTOFMEMORY; }
+    o->vt[0] = 0; o->vt[1] = 0;                 /* (not a composition object) */
+    for (int i = S_CO_M; i <= S_CO5; i++) o->vt[i] = 0;
+    o->vt[2] = empty2_vt; o->vt[3] = empty3_vt;
+    Sink sink = { sink_vt, o };
+    /* ID2D1Geometry::Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, no transform, tolerance) */
+    hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, int, const void *, float, void *))((void **)*(void **)geometry)[9])(geometry, 1, 0, 0.02f, &sink);
+    geometry->lpVtbl->Release(geometry);
+    if (FAILED(hr)) { obj_release(o); return hr; }
+    *out = IF(o, 2);
+    return S_OK;
+}
+
+/* ---- drawing shapes ---------------------------------------------------------------- */
+typedef struct { float *xy; int n, cap; int *end; BYTE *closed; int nf, capf; } Figs;
+static void figs_free(Figs *f) { HeapFree(GetProcessHeap(), 0, f->xy); HeapFree(GetProcessHeap(), 0, f->end); HeapFree(GetProcessHeap(), 0, f->closed); }
+static BOOL figs_begin(Figs *f, BOOL closed)
+{
+    if (f->nf == f->capf) {
+        int cap = f->capf ? f->capf * 2 : 16;
+        int *e = f->end ? HeapReAlloc(GetProcessHeap(), 0, f->end, cap * sizeof *e) : HeapAlloc(GetProcessHeap(), 0, cap * sizeof *e);
+        if (!e) return FALSE;
+        f->end = e;
+        BYTE *c = f->closed ? HeapReAlloc(GetProcessHeap(), 0, f->closed, cap) : HeapAlloc(GetProcessHeap(), 0, cap);
+        if (!c) return FALSE;
+        f->closed = c;
+        f->capf = cap;
+    }
+    f->end[f->nf] = f->n;
+    f->closed[f->nf] = closed != 0;
+    f->nf++;
+    return TRUE;
+}
+static void figs_point(Figs *f, float x, float y)
+{
+    if (!f->nf) return;
+    if (f->n == f->cap) {
+        int cap = f->cap ? f->cap * 2 : 64;
+        float *v = f->xy ? HeapReAlloc(GetProcessHeap(), 0, f->xy, cap * 2 * sizeof *v) : HeapAlloc(GetProcessHeap(), 0, cap * 2 * sizeof *v);
+        if (!v) return;
+        f->xy = v;
+        f->cap = cap;
+    }
+    f->xy[f->n * 2] = x;
+    f->xy[f->n * 2 + 1] = y;
+    f->n++;
+    f->end[f->nf - 1] = f->n;
+}
+static int fig_start(const Figs *f, int i) { return i ? f->end[i - 1] : 0; }
+/* an arc of the ellipse about (@cx, @cy), radii @rx, @ry, from angle @a0 to @a1 (clockwise on the screen) */
+static void figs_arc(Figs *f, float cx, float cy, float rx, float ry, float a0, float a1, int steps)
+{
+    for (int k = 0; k <= steps; k++) {
+        double a = a0 + (a1 - a0) * k / steps;
+        figs_point(f, cx + rx * (float)c_cos(a), cy + ry * (float)c_sin(a));
+    }
+}
+/* @g's figures, in its own space */
+static void geometry_figs(Obj *g, Figs *f)
+{
+    const float pi = 3.14159265f;
+    Vec2 a = g->g[0], b = g->g[1], r = g->g[2];
+    switch (g->gkind) {
+    case G_ELLIPSE:                     /* (from the rightmost point, clockwise) */
+        if (figs_begin(f, TRUE)) figs_arc(f, a.X, a.Y, b.X, b.Y, 0, 2 * pi * 63 / 64, 63);
+        break;
+    case G_RECT:
+        if (figs_begin(f, TRUE)) {
+            figs_point(f, a.X, a.Y); figs_point(f, a.X + b.X, a.Y);
+            figs_point(f, a.X + b.X, a.Y + b.Y); figs_point(f, a.X, a.Y + b.Y);
+        }
+        break;
+    case G_RRECT: {
+        float rx = r.X < b.X / 2 ? r.X : b.X / 2, ry = r.Y < b.Y / 2 ? r.Y : b.Y / 2;
+        if (rx < 0) rx = 0;
+        if (ry < 0) ry = 0;
+        if (!figs_begin(f, TRUE)) break;
+        float l = a.X, t = a.Y, rt = a.X + b.X, bt = a.Y + b.Y;
+        figs_arc(f, rt - rx, t + ry, rx, ry, -pi / 2, 0, 8);
+        figs_arc(f, rt - rx, bt - ry, rx, ry, 0, pi / 2, 8);
+        figs_arc(f, l + rx, bt - ry, rx, ry, pi / 2, pi, 8);
+        figs_arc(f, l + rx, t + ry, rx, ry, pi, 3 * pi / 2, 8);
+        break;
+    }
+    case G_LINE:
+        if (figs_begin(f, FALSE)) { figs_point(f, a.X, a.Y); figs_point(f, b.X, b.Y); }
+        break;
+    case G_PATH:
+        if (g->path)
+            for (int i = 0; i < g->path->nfigs; i++) {
+                int s = i ? g->path->fig_end[i - 1] : 0;
+                if (!figs_begin(f, g->path->fig_closed[i])) break;
+                for (int k = s; k < g->path->fig_end[i]; k++) figs_point(f, g->path->xy[k * 2], g->path->xy[k * 2 + 1]);
+            }
+        break;
+    }
+}
+static float seg_len(float x0, float y0, float x1, float y1) { return c_sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)); }
+/* the stretch of @in from length @from to @to (along all its figures, a
+ * closed one's closing line too) into @out, as open figures */
+static void figs_part(const Figs *in, float from, float to, Figs *out)
+{
+    float at = 0;
+    for (int i = 0; i < in->nf; i++) {
+        int s = fig_start(in, i), e = in->end[i], n = e - s;
+        BOOL open = FALSE;
+        for (int k = 0; k + 1 < n + (in->closed[i] ? 1 : 0); k++) {
+            const float *p = &in->xy[(s + k) * 2], *q = &in->xy[(s + (k + 1) % n) * 2];
+            float len = seg_len(p[0], p[1], q[0], q[1]), a = at, b = at + len;
+            at = b;
+            if (b < from || a > to || len <= 0) { if (a > to) open = FALSE; continue; }
+            float t0 = from > a ? (from - a) / len : 0, t1 = to < b ? (to - a) / len : 1;
+            if (!open) {
+                if (!figs_begin(out, FALSE)) return;
+                figs_point(out, p[0] + (q[0] - p[0]) * t0, p[1] + (q[1] - p[1]) * t0);
+                open = TRUE;
+            }
+            figs_point(out, p[0] + (q[0] - p[0]) * t1, p[1] + (q[1] - p[1]) * t1);
+            if (t1 < 1) open = FALSE;
+        }
+    }
+}
+static float figs_length(const Figs *f)
+{
+    float l = 0;
+    for (int i = 0; i < f->nf; i++) {
+        int s = fig_start(f, i), n = f->end[i] - s;
+        for (int k = 0; k + 1 < n + (f->closed[i] ? 1 : 0); k++) {
+            const float *p = &f->xy[(s + k) * 2], *q = &f->xy[(s + (k + 1) % n) * 2];
+            l += seg_len(p[0], p[1], q[0], q[1]);
+        }
+    }
+    return l;
+}
+static float c_floor(float f) { int i = (int)f; return (float)(f < i ? i - 1 : i); }
+/* @in trimmed as @g's TrimStart, TrimEnd and TrimOffset say: FALSE when it
+ * is whole (@out then unused) */
+static BOOL figs_trim(Obj *g, const Figs *in, Figs *out)
+{
+    float s = g->trim[0], e = g->trim[1], off = g->trim[2];
+    if (s == 0 && e == 1 && off == 0) return FALSE;
+    float a = s < e ? s : e, b = s < e ? e : s;
+    a += off; b += off;
+    float k = c_floor(a);
+    a -= k; b -= k;
+    if (b - a >= 1) return FALSE;
+    float len = figs_length(in);
+    if (b > a) {
+        figs_part(in, a * len, (b < 1 ? b : 1) * len, out);
+        if (b > 1) figs_part(in, 0, (b - 1) * len, out);
+    }
+    return TRUE;
+}
+
+/* Anti-aliased polygon filling: every figure closed, the non-zero winding
+ * rule or the even-odd one, four rows of samples a pixel, each covering
+ * exactly as much of a row as it spans */
+typedef struct { float x0, y0, x1, y1; int dir; } Edge;
+typedef struct { float x; int dir; } Cross;
+static void cover_span(float *cov, int w, float a, float b, float k)
+{
+    if (a < 0) a = 0;
+    if (b > w) b = (float)w;
+    if (b <= a) return;
+    int ia = (int)a, ib = (int)b;
+    if (ia == ib) { cov[ia] += (b - a) * k; return; }
+    cov[ia] += (ia + 1 - a) * k;
+    for (int i = ia + 1; i < ib; i++) cov[i] += k;
+    if (ib < w) cov[ib] += (b - ib) * k;
+}
+static void fill_figs(const Figs *f, BOOL nonzero, DWORD color, float op, RECT clip, DWORD *pic, int pw, int ph)
+{
+    if (!f->n || !(color >> 24) || op <= 0) return;
+    Edge *edges = HeapAlloc(GetProcessHeap(), 0, (size_t)f->n * sizeof *edges);
+    Cross *cross = HeapAlloc(GetProcessHeap(), 0, (size_t)f->n * sizeof *cross);
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    int ne = 0;
+    for (int i = 0; edges && cross && i < f->nf; i++) {
+        int s = fig_start(f, i), n = f->end[i] - s;
+        for (int k = 0; k < n; k++) {
+            const float *p = &f->xy[(s + k) * 2], *q = &f->xy[(s + (k + 1) % n) * 2];
+            if (p[0] < x0) x0 = p[0];
+            if (p[0] > x1) x1 = p[0];
+            if (p[1] < y0) y0 = p[1];
+            if (p[1] > y1) y1 = p[1];
+            if (p[1] == q[1]) continue;
+            Edge e = p[1] < q[1] ? (Edge){ p[0], p[1], q[0], q[1], 1 } : (Edge){ q[0], q[1], p[0], p[1], -1 };
+            edges[ne++] = e;
+        }
+    }
+    RECT box = { (LONG)c_floor(x0), (LONG)c_floor(y0), (LONG)c_floor(x1) + 1, (LONG)c_floor(y1) + 1 }, all = { 0, 0, pw, ph };
+    float *cov = 0;
+    if (ne && IntersectRect(&box, &box, &clip) && IntersectRect(&box, &box, &all))
+        cov = HeapAlloc(GetProcessHeap(), 0, (size_t)(box.right - box.left + 1) * sizeof *cov);
+    int w = box.right - box.left;
+    UINT opi = (UINT)(int)(op * 256.0f + 0.5f);
+    for (LONG y = box.top; cov && y < box.bottom; y++) {
+        __builtin_memset(cov, 0, (size_t)(w + 1) * sizeof *cov);
+        BOOL any = FALSE;
+        for (int sub = 0; sub < 4; sub++) {
+            float sy = y + (sub + 0.5f) / 4;
+            int nc = 0;
+            for (int i = 0; i < ne; i++) {
+                const Edge *e = &edges[i];
+                if (sy < e->y0 || sy >= e->y1) continue;
+                Cross c = { e->x0 + (e->x1 - e->x0) * (sy - e->y0) / (e->y1 - e->y0) - box.left, e->dir };
+                int j = nc++;
+                while (j > 0 && cross[j - 1].x > c.x) { cross[j] = cross[j - 1]; j--; }
+                cross[j] = c;
+            }
+            int wind = 0;
+            for (int i = 0; i + 1 < nc; i++) {
+                wind += cross[i].dir;
+                if (nonzero ? wind != 0 : (wind & 1)) { cover_span(cov, w, cross[i].x, cross[i + 1].x, 0.25f); any = TRUE; }
+            }
+        }
+        if (!any) continue;
+        DWORD *row = pic + (size_t)y * pw + box.left;
+        for (int x = 0; x < w; x++) {
+            float a = cov[x];
+            if (a <= 0.002f) continue;
+            if (a > 1) a = 1;
+            row[x] = over(scale_px(color, (UINT)(int)(a * opi + 0.5f)), row[x]);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, cov);
+    HeapFree(GetProcessHeap(), 0, edges);
+    HeapFree(GetProcessHeap(), 0, cross);
+}
+/* a disc about (@x, @y), radius @r, and a quadrilateral, counter-clockwise
+ * on the screen (so that their union fills by the non-zero rule) */
+static void figs_disc(Figs *f, float x, float y, float r)
+{
+    int n = r < 2 ? 8 : r < 8 ? 16 : 32;
+    if (!figs_begin(f, TRUE)) return;
+    for (int k = 0; k < n; k++) {
+        double a = -2 * 3.14159265358979 * k / n;
+        figs_point(f, x + r * (float)c_cos(a), y + r * (float)c_sin(a));
+    }
+}
+static void figs_quad(Figs *f, const float *q)
+{
+    float area = 0;
+    for (int k = 0; k < 4; k++) area += q[k * 2] * q[(k + 1) % 4 * 2 + 1] - q[(k + 1) % 4 * 2] * q[k * 2 + 1];
+    if (!figs_begin(f, TRUE)) return;
+    for (int k = 0; k < 4; k++) { int j = area > 0 ? 3 - k : k; figs_point(f, q[j * 2], q[j * 2 + 1]); }
+}
+/* @in's outline, @r either side of its lines: each line a quadrilateral, a
+ * disc at each join (round joins), and the caps (CompositionStrokeCap:
+ * Flat 0, Square 1, Round 2, Triangle 3, drawn round) */
+static void stroke_figs(const Figs *in, float r, int start_cap, int end_cap, Figs *out)
+{
+    for (int i = 0; i < in->nf; i++) {
+        int s = fig_start(in, i), n = in->end[i] - s;
+        BOOL closed = in->closed[i] && n > 2;
+        if (n < 1) continue;
+        int segs = closed ? n : n - 1, drawn = 0;
+        for (int k = 0; k < segs; k++) {
+            const float *p = &in->xy[(s + k) * 2], *q = &in->xy[(s + (k + 1) % n) * 2];
+            float dx = q[0] - p[0], dy = q[1] - p[1], len = c_sqrt(dx * dx + dy * dy);
+            if (len <= 0) continue;
+            float nx = -dy / len * r, ny = dx / len * r, ex0 = 0, ey0 = 0, ex1 = 0, ey1 = 0;
+            if (!closed && k == 0 && start_cap == 1) { ex0 = dx / len * r; ey0 = dy / len * r; }
+            if (!closed && k == segs - 1 && end_cap == 1) { ex1 = dx / len * r; ey1 = dy / len * r; }
+            float quad[8] = { p[0] - ex0 + nx, p[1] - ey0 + ny, q[0] + ex1 + nx, q[1] + ey1 + ny,
+                              q[0] + ex1 - nx, q[1] + ey1 - ny, p[0] - ex0 - nx, p[1] - ey0 - ny };
+            figs_quad(out, quad);
+            if (closed || k + 1 < segs) figs_disc(out, q[0], q[1], r);
+            drawn++;
+        }
+        if (closed) continue;
+        const float *a = &in->xy[s * 2], *b = &in->xy[(s + n - 1) * 2];
+        if (start_cap >= 2 || (!drawn && start_cap)) figs_disc(out, a[0], a[1], r);
+        if (drawn && end_cap >= 2) figs_disc(out, b[0], b[1], r);
+    }
+}
+static DWORD shape_color(Obj *b) { return b && b->kind == K_COLOR_BRUSH ? premul(b->color, 1.0f) : 0; }
+/* a shape's transform: scaled and rotated about CenterPoint, TransformMatrix, then moved to Offset */
+static Aff shape_matrix(const Obj *s)
+{
+    float k = (float)c_cos(s->b_angle), n = (float)c_sin(s->b_angle);
+    Aff rs = { s->b_scale.X * k, s->b_scale.X * n, -s->b_scale.Y * n, s->b_scale.Y * k, 0, 0 };
+    Aff m = aff_mul(aff_mul(aff_move(-s->b_center.X, -s->b_center.Y), rs), aff_move(s->b_center.X, s->b_center.Y));
+    return aff_mul(aff_mul(m, s->b_tm), aff_move(s->b_offset.X, s->b_offset.Y));
+}
+static void draw_shape(Obj *s, Aff parent, RECT clip, float op, DWORD *pic, int pw, int ph, int depth)
+{
+    if (!s || depth > MAX_DEPTH) return;
+    Aff m = aff_mul(shape_matrix(s), parent);
+    if (s->kind == K_CONTAINER_SHAPE) {
+        for (int i = 0; i < s->nshapes; i++) draw_shape(s->shapes[i], m, clip, op, pic, pw, ph, depth + 1);
+        return;
+    }
+    DWORD fill = shape_color(s->brush), line = shape_color(s->stroke);
+    if (!s->geom || (!fill && !(line && s->stroke_w > 0))) return;
+    Figs f = { 0 }, t = { 0 }, o = { 0 };
+    geometry_figs(s->geom, &f);
+    Figs *g = figs_trim(s->geom, &f, &t) ? &t : &f;
+    for (int i = 0; i < g->n; i++) {
+        float x = g->xy[i * 2], y = g->xy[i * 2 + 1];
+        aff_apply(&m, x, y, &g->xy[i * 2], &g->xy[i * 2 + 1]);
+    }
+    BOOL nonzero = s->geom->gkind != G_PATH || !s->geom->path || s->geom->path->fill_mode == 1;
+    if (fill) fill_figs(g, nonzero, fill, op, clip, pic, pw, ph);
+    if (line && s->stroke_w > 0) {
+        float k = c_sqrt(c_abs(m.a * m.d - m.b * m.c)), w = s->non_scaling ? s->stroke_w : s->stroke_w * k;
+        stroke_figs(g, w / 2, s->cap_start, s->cap_end, &o);
+        fill_figs(&o, TRUE, line, op, clip, pic, pw, ph);
+    }
+    figs_free(&f); figs_free(&t); figs_free(&o);
+}
+/* a shape visual's shapes (@vs its size, @m its transform), clipped to it,
+ * through its ViewBox (stretched, None 0, Fill 1, Uniform 2, UniformToFill
+ * 3, and placed by its alignment ratios) */
+static void draw_shapes(Obj *v, Vec2 vs, const Aff *m, RECT clip, float op, DWORD *pic, int pw, int ph)
+{
+    if (!v->nshapes) return;
+    RECT b = aff_box(m, 0, 0, vs.X, vs.Y);
+    if (!IntersectRect(&clip, &clip, &b)) return;
+    Aff base = *m;
+    Obj *box = v->viewbox;
+    if (box && box->size.X > 0 && box->size.Y > 0) {
+        float kx = vs.X / box->size.X, ky = vs.Y / box->size.Y;
+        if (box->stretch == 0) kx = ky = 1;
+        else if (box->stretch == 2) kx = ky = kx < ky ? kx : ky;
+        else if (box->stretch == 3) kx = ky = kx > ky ? kx : ky;
+        Aff vb = { kx, 0, 0, ky, (vs.X - box->size.X * kx) * box->hratio - box->b_offset.X * kx,
+                   (vs.Y - box->size.Y * ky) * box->vratio - box->b_offset.Y * ky };
+        base = aff_mul(vb, *m);
+    }
+    for (int i = 0; i < v->nshapes; i++) draw_shape(v->shapes[i], base, clip, op, pic, pw, ph, 0);
+}
+
+/* ---- animation controllers: IAnimationController (slot 2) ---------------------------
+ * PlaybackRate (kept), Progress, ProgressBehavior (kept), Pause and Resume: a
+ * paused animation stands at its controller's Progress (0-1 of its
+ * duration); resumed, it goes on from there */
+static void controller_resume(Obj *c);
+#define CT(p) OBJ_AT(p, 2)
+static HRESULT STDMETHODCALLTYPE ct_get_rate(void *p, float *v) { if (!v) return E_POINTER; *v = CT(p)->rate; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_put_rate(void *p, float v) { CT(p)->rate = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_get_progress(void *p, float *v) { if (!v) return E_POINTER; *v = CT(p)->progress; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_put_progress(void *p, float v)
+{
+    lock(); CT(p)->progress = v < 0 ? 0 : v > 1 ? 1 : v; unlock();
+    if (!CT(p)->paused) controller_resume(CT(p));
+    schedule();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ct_get_behavior(void *p, int *v) { if (!v) return E_POINTER; *v = CT(p)->progress_behavior; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_put_behavior(void *p, int v) { CT(p)->progress_behavior = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_pause(void *p) { lock(); CT(p)->paused = TRUE; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE ct_resume(void *p)
+{
+    lock(); CT(p)->paused = FALSE; unlock();
+    controller_resume(CT(p));
+    ensure_thread();
+    schedule();
+    return S_OK;
+}
+static const void *const controller_vt[] = { BASE(2), (void *)ct_get_rate, (void *)ct_put_rate, (void *)ct_get_progress,
+                                             (void *)ct_put_progress, (void *)ct_get_behavior, (void *)ct_put_behavior,
+                                             (void *)ct_pause, (void *)ct_resume };
+static Obj *controller_new(Obj *comp)
+{
+    Obj *c = obj_new(comp, K_CONTROLLER);
+    if (c) { c->vt[2] = controller_vt; c->rate = 1.0f; }
+    return c;
+}
+static void controller_resume(Obj *c)
+{
+    lock();
+    INT64 now = now_100ns();
+    for (Active *a = g_active; a; a = a->next)
+        if (a->ctl == c) a->begin = now - a->delay - (INT64)(c->progress * (float)a->duration);
+    unlock();
+}
+
 /* ---- the Compositor ------------------------------------------------------------------ */
 #define COMP(p, i) OBJ_AT(p, i)
-static HRESULT not_made(void **out) { if (out) *out = 0; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE c_none(void *p, void **out) { (void)p; return not_made(out); }
 static HRESULT STDMETHODCALLTYPE c_none_easing(void *p, Vec2 a, Vec2 b, void **out) { (void)p; (void)a; (void)b; return not_made(out); }
 static HRESULT STDMETHODCALLTYPE c_none_effect(void *p, void *e, void **out) { (void)p; (void)e; return not_made(out); }
@@ -2800,6 +3818,108 @@ static const void *const compositor_closable_vt[] = { BASE(1), (void *)c_close }
 /* ICompositor2 (slot S_C2): CreateAnimationGroup, CreateStepEasingFunction; lights, shadows,
  * mask brushes; lights, shadows, layer visuals, nine-grid and backdrop brushes and implicit
  * animations are not here */
+/* ---- implicit animations: an ImplicitAnimationCollection, the animations
+ * an object starts when a property of its changes, by the property's name
+ * (its params: name and animation).  They are kept, not started: the
+ * property takes its new value at once (this.FinalValue expressions are
+ * not evaluated yet) */
+#define IMPL(p, i) OBJ_AT(p, i)
+static int impl_find(Obj *o, HSTRING key)
+{
+    UINT32 n;
+    const WCHAR *k = hbuf(key, &n);
+    for (int i = 0; i < o->nparams; i++) if (wsame(o->params[i].name, k, n)) return i;
+    return -1;
+}
+static HRESULT STDMETHODCALLTYPE im_lookup(void *p, HSTRING key, void **out)
+{
+    Obj *o = IMPL(p, 3);
+    if (!out) return E_POINTER;
+    lock();
+    int i = impl_find(o, key);
+    Obj *a = i >= 0 ? o->params[i].ref : 0;
+    HRESULT hr = a ? give(a, find_slot(ifaces(a), &IIDW_CompositionAnimationBase), out) : (*out = 0, E_BOUNDS_);
+    unlock();
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE im_size(void *p, UINT32 *out) { if (!out) return E_POINTER; *out = (UINT32)IMPL(p, 3)->nparams; return S_OK; }
+static HRESULT STDMETHODCALLTYPE im_has(void *p, HSTRING key, boolean_t *out)
+{
+    if (!out) return E_POINTER;
+    lock();
+    *out = impl_find(IMPL(p, 3), key) >= 0;
+    unlock();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE im_view(void *p, void **out) { (void)p; return not_made(out); }
+static HRESULT STDMETHODCALLTYPE im_insert(void *p, HSTRING key, void *anim, boolean_t *replaced)
+{
+    Obj *o = IMPL(p, 3), *a = obj_of(anim, -1, -1);
+    if (!a || (a->kind != K_EXPRESSION && a->kind != K_KEYFRAME && a->kind != K_GROUP)) {
+        if (a) obj_release(a);
+        return E_INVALIDARG;
+    }
+    UINT32 n;
+    const WCHAR *k = hbuf(key, &n);
+    Obj *old = 0;
+    HRESULT hr = S_OK;
+    lock();
+    int i = impl_find(o, key);
+    if (replaced) *replaced = i >= 0;
+    if (i >= 0) { old = o->params[i].ref; o->params[i].ref = a; }
+    else if (grow((void **)&o->params, o->nparams, sizeof(Param))) {
+        Param *pr = &o->params[o->nparams];
+        __builtin_memset(pr, 0, sizeof *pr);
+        if ((pr->name = wdup(k, n))) { pr->ref = a; o->nparams++; }
+        else { old = a; hr = E_OUTOFMEMORY; }
+    } else { old = a; hr = E_OUTOFMEMORY; }
+    unlock();
+    if (old) obj_release(old);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE im_remove(void *p, HSTRING key)
+{
+    Obj *o = IMPL(p, 3), *old = 0;
+    WCHAR *name = 0;
+    lock();
+    int i = impl_find(o, key);
+    if (i >= 0) {
+        old = o->params[i].ref; name = o->params[i].name;
+        for (int j = i + 1; j < o->nparams; j++) o->params[j - 1] = o->params[j];
+        o->nparams--;
+    }
+    unlock();
+    if (old) obj_release(old);
+    HeapFree(GetProcessHeap(), 0, name);
+    return i >= 0 ? S_OK : E_BOUNDS_;
+}
+static HRESULT STDMETHODCALLTYPE im_clear(void *p)
+{
+    Obj *o = IMPL(p, 3);
+    lock();
+    Param *items = o->params;
+    int n = o->nparams;
+    o->params = 0; o->nparams = 0;
+    unlock();
+    for (int i = 0; i < n; i++) { HeapFree(GetProcessHeap(), 0, items[i].name); if (items[i].ref) obj_release(items[i].ref); }
+    HeapFree(GetProcessHeap(), 0, items);
+    return S_OK;
+}
+/* IMap<String, ICompositionAnimationBase> (slot 3), IIterable of its pairs (slot 4: First is not here) */
+static const void *const implicit_map_vt[] = { BASE(3), (void *)im_lookup, (void *)im_size, (void *)im_has, (void *)im_view,
+                                               (void *)im_insert, (void *)im_remove, (void *)im_clear };
+static HRESULT STDMETHODCALLTYPE im_first(void *p, void **out) { (void)p; return not_made(out); }
+static const void *const implicit_iterable_vt[] = { BASE(4), (void *)im_first };
+static HRESULT STDMETHODCALLTYPE c2_implicit(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *c = obj_new(COMP(p, S_C2), K_IMPLICIT);
+    if (!c) return E_OUTOFMEMORY;
+    c->vt[2] = empty2_vt; c->vt[3] = implicit_map_vt; c->vt[4] = implicit_iterable_vt;
+    *out = IF(c, 2);
+    return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE c2_group(void *p, void **out)
 {
     if (!out) return E_POINTER;
@@ -2834,7 +3954,7 @@ static HRESULT STDMETHODCALLTYPE c2_ninegrid_brush(void *p, void **out)
     return S_OK;
 }
 static const void *const compositor2_vt[] = { BASE(5), (void *)c_none, (void *)c2_group, (void *)c_none, (void *)c_none, (void *)c_none,
-                                              (void *)c_none, (void *)c_none, (void *)c2_mask_brush, (void *)c2_ninegrid_brush, (void *)c_none, (void *)c_none,
+                                              (void *)c2_implicit, (void *)c_none, (void *)c2_mask_brush, (void *)c2_ninegrid_brush, (void *)c_none, (void *)c_none,
                                               (void *)c2_step, (void *)c2_step_n };
 /* ICompositor3 (slot S_C3): CreateHostBackdropBrush (not here) */
 static const void *const compositor3_vt[] = { BASE(6), (void *)c_none };
@@ -2842,17 +3962,51 @@ static const void *const compositor3_vt[] = { BASE(6), (void *)c_none };
 static HRESULT STDMETHODCALLTYPE c_none_stop(void *p, float at, Color c, void **out) { (void)p; (void)at; (void)c; return not_made(out); }
 static const void *const compositor4_vt[] = { BASE(7), (void *)c_none, (void *)c_none_stop, (void *)c_none, (void *)c_none, (void *)c_none,
                                               (void *)c_none };
-/* ICompositor5 (slot S_C5): Comment, GlobalPlaybackRate (kept); shapes, bounce and
- * path animations and RequestCommitAsync are not here */
+/* ICompositor5 (slot S_C5): Comment, GlobalPlaybackRate (kept), shapes, their
+ * geometries and view boxes; bounce and path animations and RequestCommitAsync
+ * are not here */
 static HRESULT STDMETHODCALLTYPE c5_get_comment(void *p, HSTRING *out) { return comment_get(COMP(p, S_C5), out); }
 static HRESULT STDMETHODCALLTYPE c5_put_comment(void *p, HSTRING s) { return comment_put(COMP(p, S_C5), s); }
 static HRESULT STDMETHODCALLTYPE c5_get_rate(void *p, float *v) { if (!v) return E_POINTER; *v = COMP(p, S_C5)->playback_rate; return S_OK; }
 static HRESULT STDMETHODCALLTYPE c5_put_rate(void *p, float v) { COMP(p, S_C5)->playback_rate = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE c5_container_shape(void *p, void **out) { return shape_new(COMP(p, S_C5), K_CONTAINER_SHAPE, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_ellipse(void *p, void **out) { return geometry_new(COMP(p, S_C5), G_ELLIPSE, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_line(void *p, void **out) { return geometry_new(COMP(p, S_C5), G_LINE, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_path_geometry(void *p, void **out) { return geometry_new(COMP(p, S_C5), G_PATH, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_path_geometry_with(void *p, void *path, void **out) { return geometry_new(COMP(p, S_C5), G_PATH, path, out); }
+static HRESULT STDMETHODCALLTYPE c5_rect(void *p, void **out) { return geometry_new(COMP(p, S_C5), G_RECT, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_rrect(void *p, void **out) { return geometry_new(COMP(p, S_C5), G_RRECT, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_shape_visual(void *p, void **out)
+{
+    HRESULT hr = new_visual(COMP(p, S_C5), K_CONTAINER, out);
+    if (FAILED(hr)) return hr;
+    Obj *v = OBJ_AT(*out, 3);
+    v->shape_visual = 1;
+    v->vt[4] = shape_visual_vt;
+    *out = IF(v, 4);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE c5_sprite_shape(void *p, void **out) { return shape_new(COMP(p, S_C5), K_SPRITE_SHAPE, 0, out); }
+static HRESULT STDMETHODCALLTYPE c5_sprite_shape_with(void *p, void *g, void **out) { return shape_new(COMP(p, S_C5), K_SPRITE_SHAPE, g, out); }
+static HRESULT STDMETHODCALLTYPE c5_viewbox(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *b = obj_new(COMP(p, S_C5), K_VIEWBOX);
+    if (!b) return E_OUTOFMEMORY;
+    b->vt[2] = viewbox_vt;
+    b->stretch = 2;                     /* (Uniform, centred) */
+    b->hratio = b->vratio = 0.5f;
+    *out = IF(b, 2);
+    return S_OK;
+}
 static const void *const compositor5_vt[] = {
     BASE(8), (void *)c5_get_comment, (void *)c5_put_comment, (void *)c5_get_rate, (void *)c5_put_rate,
-    (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none_effect,
-    (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none, (void *)c_none_effect, (void *)c_none, (void *)c_none,
+    (void *)c_none, (void *)c_none, (void *)c_none, (void *)c5_container_shape, (void *)c5_ellipse, (void *)c5_line,
+    (void *)c5_path_geometry, (void *)c5_path_geometry_with, (void *)c_none, (void *)c5_rect, (void *)c5_rrect, (void *)c5_shape_visual,
+    (void *)c5_sprite_shape, (void *)c5_sprite_shape_with, (void *)c5_viewbox, (void *)c_none,
 };
+_Static_assert(sizeof compositor5_vt / sizeof compositor5_vt[0] == 6 + 20, "ICompositor5 has 20 methods");
 /* ICompositor6 (slot S_C6): CreateBooleanKeyFrameAnimation; geometric clips and redirect visuals are not here */
 static HRESULT STDMETHODCALLTYPE c6_kf_bool(void *p, void **out) { return anim_new(COMP(p, S_C6), K_KEYFRAME, P_BOOL, 0, out); }
 static const void *const compositor6_vt[] = { BASE(9), (void *)c_none, (void *)c_none_effect, (void *)c_none, (void *)c_none_effect,
@@ -2872,8 +4026,15 @@ static const void *const compositor7_w_vt[] = { BASE(10), (void *)c7_w_queue, (v
                                                 (void *)c7_rect8_w };
 static const void *const compositor7_m_vt[] = { BASE(11), (void *)c7_m_queue, (void *)c_none, (void *)c7_rect_m, (void *)c7_rect4_m,
                                                 (void *)c7_rect8_m };
-/* ICompositor8 (slot S_C8): CreateAnimationController (not here) */
-static const void *const compositor8_vt[] = { BASE(12), (void *)c_none };
+/* ICompositor8 (slot S_C8): CreateAnimationController */
+static HRESULT STDMETHODCALLTYPE c8_controller(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    Obj *c = controller_new(COMP(p, S_C8));
+    *out = c ? IF(c, 2) : 0;
+    return c ? S_OK : E_OUTOFMEMORY;
+}
+static const void *const compositor8_vt[] = { BASE(12), (void *)c8_controller };
 _Static_assert(S_C2 == 5 && S_C3 == 6 && S_C4 == 7 && S_C5 == 8 && S_C6 == 9 && S_C7_W == 10 && S_C7_M == 11 && S_C8 == 12,
                "the BASE(n) above");
 
@@ -2994,6 +4155,28 @@ static HRESULT STDMETHODCALLTYPE es_qi(void *p, REFIID iid, void **out)
     return *out ? S_OK : E_NOINTERFACE;
 }
 
+/* CompositionPath's factory (ICompositionPathFactory, in either namespace):
+ * Create(IGeometrySource2D) */
+static HRESULT STDMETHODCALLTYPE pf_qi(void *p, REFIID iid, void **out);
+static HRESULT STDMETHODCALLTYPE pf_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.Composition.CompositionPath", n); }
+static HRESULT STDMETHODCALLTYPE pf_create(void *p, IUnknown *source, void **out) { (void)p; return path_new(source, out); }
+static const void *const path_factory_vt[] = { (void *)pf_qi, (void *)es_ref, (void *)es_ref, (void *)no_iids, (void *)pf_name,
+                                               (void *)base_trust, (void *)es_activate };
+static const void *const path_create_vt[] = { (void *)pf_qi, (void *)es_ref, (void *)es_ref, (void *)no_iids, (void *)pf_name,
+                                              (void *)base_trust, (void *)pf_create };
+static const void *const *const g_path_factory[2] = { path_factory_vt, path_create_vt };
+static HRESULT STDMETHODCALLTYPE pf_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (IsEqualGUID(iid, &IID_IUnknown_) || IsEqualGUID(iid, &IID_IInspectable_) || IsEqualGUID(iid, &IID_IAgileObject_) ||
+        IsEqualGUID(iid, &IID_IActivationFactory_)) *out = (void *)&g_path_factory[0];
+    else if (IsEqualGUID(iid, &IIDW_CompositionPathFactory) || IsEqualGUID(iid, &IIDM_CompositionPathFactory))
+        *out = (void *)&g_path_factory[1];
+    return *out ? S_OK : E_NOINTERFACE;
+}
+
 static BOOL name_is(HSTRING s, const WCHAR *want)
 {
     UINT32 n, i = 0;
@@ -3012,6 +4195,10 @@ COMP_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.UI.Composition.CompositionEasingFunction") ||
         name_is(cls, L"Microsoft.UI.Composition.CompositionEasingFunction")) {
         *factory = (void *)&g_easing_factory[0];
+        return S_OK;
+    }
+    if (name_is(cls, L"Windows.UI.Composition.CompositionPath") || name_is(cls, L"Microsoft.UI.Composition.CompositionPath")) {
+        *factory = (void *)&g_path_factory[0];
         return S_OK;
     }
     *factory = 0;

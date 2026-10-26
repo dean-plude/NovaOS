@@ -80,6 +80,7 @@ class Faces:
         self.stats = {'matched': 0, 'missing': 0}
         self.missing = []
         self.boxes = []                 # (windows IReference iid, lifted IReference iid, C type)
+        self.delegate_boxes = []        # (windows IReference iid, lifted IReference iid, lifted delegate iid)
         self.exclusive = {}
         for t in types.values():
             if isinstance(t, Interface):
@@ -263,6 +264,12 @@ class Faces:
                 args.append(a)
             elif ki[0] in ('ref', 'object') and kt[0] in ('ref', 'object'):
                 for x in (ti, tt):
+                    # (a class whose default interface is a generic one, as
+                    # Grid.RowDefinitions' RowDefinitionCollection is an
+                    # IVector<RowDefinition>: that interface's face)
+                    c = self.types.get(x.name) if isinstance(x, TypeRef) else None
+                    if isinstance(c, RuntimeClass) and isinstance(c.default_interface(), GenericInst):
+                        x = c.default_interface()
                     if isinstance(x, GenericInst) and self.is_windows(x):
                         self.queue.append(x)
                 if d == 'in':
@@ -465,6 +472,16 @@ class Faces:
                             if static:
                                 owner[t.name] = bc.name
             prim = self.primary(w, cands)
+            if prim is None and not w.methods and not static and not over:
+                # (an interface with no methods whose framework class has
+                # no counterpart of it, IUIElementWeakCollection, where
+                # the framework's class is only its collection: a face of
+                # nothing over the class's default interface, so the
+                # object can be handed out as the Windows class)
+                k = self.kind(TypeRef(lc.name))
+                if k and k[0] == 'ref':
+                    self.face(w.name, self.g.iid_for(w), False, [], (), k[1])
+                continue
             if prim is None:
                 continue
             if over:
@@ -547,6 +564,16 @@ class Faces:
                     continue
                 self.queue.append(gw)
                 self.boxes.append((self.g.generic_iid(gw), self.g.generic_iid(gl), k[1], n))
+        # (and of each Windows.UI.Xaml delegate the framework has: a handler an
+        # app's code boxes, UIElement.AddHandler's, boxed again as the
+        # framework's, over the framework's face of the delegate)
+        for n, t in sorted(self.types.items()):
+            lt = self.types.get(self.lifted_name(n))
+            if n.startswith(WIN) and isinstance(t, Delegate) and not t.generics and isinstance(lt, Delegate) \
+                    and lt is not t:
+                gw = GenericInst('Windows.Foundation.IReference`1', [TypeRef(n)])
+                self.delegate_boxes.append((self.g.generic_iid(gw), self.g.generic_iid(self.lift(gw)),
+                                            self.g.iid_for(lt), n))
 
     def run(self):
         for n, t in sorted(self.types.items()):
@@ -578,6 +605,12 @@ class Faces:
                         % (self.guid(w), self.guid(l), c, n, self.lifted_name(n)))
         body.append('};')
         body.append('extern "C" const unsigned nova_box_count = %d;' % len(self.boxes))
+        body.append('extern "C" const NovaDelegateBox nova_delegate_boxes[] = {')
+        for w, l, d, n in self.delegate_boxes:
+            body.append('    {&%s, &%s, &%s, L"Windows.Foundation.IReference`1<%s>"},'
+                        % (self.guid(w), self.guid(l), self.guid(d), self.lifted_name(n)))
+        body.append('};')
+        body.append('extern "C" const unsigned nova_delegate_box_count = %d;' % len(self.delegate_boxes))
         # (the framework's type names that are Windows.UI.Xaml ones, sorted:
         # the type names nova_typename() renames)
         names = sorted(n[len(MUX):] for n, t in self.types.items()
@@ -612,8 +645,8 @@ def main(argv):
     f = Faces(types, iidmap)
     f.run()
     f.write(argv[0])
-    print('winfaces: %d faces, %d methods matched, %d not (E_NOTIMPL), %d boxes -> %s'
-          % (len(f.faces), f.stats['matched'], f.stats['missing'], len(f.boxes), argv[0]))
+    print('winfaces: %d faces, %d methods matched, %d not (E_NOTIMPL), %d boxes, %d delegate boxes -> %s'
+          % (len(f.faces), f.stats['matched'], f.stats['missing'], len(f.boxes), len(f.delegate_boxes), argv[0]))
     if '--report' in argv:
         for m in f.missing:
             print('  not matched: ' + m)

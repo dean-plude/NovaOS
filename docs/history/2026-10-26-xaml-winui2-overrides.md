@@ -1,7 +1,7 @@
 ## WinUI 2's overrides
 
 The tenth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Starlight 0.2.1 push:
+([design](design/windows-ui-xaml.md)), in the Starlight 0.2.1 push:
 WinUI 2's controls get their `OnApplyTemplate`, `MeasureOverride` and
 the rest of their overrides called, so `RadioButtons` makes its
 `RadioButton`s and `NavigationView` applies its template and lays out.

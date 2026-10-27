@@ -15964,7 +15964,7 @@ apply their templates and lay out.
 
 ## The 0.2.1 "Starlight" notes cover the end of 32.5
 
-Before the `v0.2.1` tag, [docs/releases/0.2.1.md](../releases/0.2.1.md)
+Before the `v0.2.1` tag, [docs/releases/0.2.1.md](releases/0.2.1.md)
 gained the tenth and last part of step 32.5, which completes it: WinUI 2's
 controls get their overrides called, so `NavigationView` and
 `RadioButtons` make their items and every WinUI 2 control Calculator
@@ -15975,7 +15975,7 @@ uses applies its template, on composition shape visuals and
 
 The version moves from 0.2.0 to 0.2.1 (`kernel/ke/version.h`,
 `CMakeLists.txt`), code name "Starlight", the Phase 32 release.
-[docs/releases/0.2.1.md](../releases/0.2.1.md) now covers what landed
+[docs/releases/0.2.1.md](releases/0.2.1.md) now covers what landed
 since its first draft: a WinUI 3 page drawn, clicked and typed into
 (32.4), `ItemsRepeater`, `NavigationView` and `RadioButtons` (32.5), and
 signed packages, framework packages and the Store's bundles, with
@@ -16038,7 +16038,7 @@ WinUI 3 page is clicked and typed into, built from Microsoft's sources.
 ## WinUI 2's overrides
 
 The tenth part of step 32.5 of `Windows.UI.Xaml` on NovaOS
-([design](../design/windows-ui-xaml.md)), in the Starlight 0.2.1 push:
+([design](design/windows-ui-xaml.md)), in the Starlight 0.2.1 push:
 WinUI 2's controls get their `OnApplyTemplate`, `MeasureOverride` and
 the rest of their overrides called, so `RadioButtons` makes its
 `RadioButton`s and `NavigationView` applies its template and lays out.

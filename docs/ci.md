@@ -122,8 +122,13 @@ and SMP jobs) it fails the job unless the run was started by hand with
 
 ### Caches
 
-- **Compiler cache** (`build.yml`): ccache (capped at 1 GB so one entry
-  fits), restored by prefix. Only runs on `main` save it, and at most once
+- **Compiler cache** (`build.yml`): ccache, capped at 2 GB, restored by
+  prefix. A full build makes about 21,500 cacheable compiles; under the old
+  1 GB cap the cache filled (0.8 of 1.0 GB) and only 65% of them hit (PR
+  #563's run: 7,526 misses), so the whole build no longer fit. At about
+  70 KB a compile a full build needs roughly 1.5 GB, and 2 GB leaves
+  headroom while a few daily entries still fit the 10 GB budget (GitHub
+  drops the least recently used entry first, which is an old ccache day). Only runs on `main` save it, and at most once
   a day (key `ccache-v4-OS-ARCH-HASH-YYYY-MM-DD`, skipped on an exact hit),
   so the repository's 10 GB cache is not churned out by per-run entries.
   Pull request runs only restore, falling back to main's newest entry, which

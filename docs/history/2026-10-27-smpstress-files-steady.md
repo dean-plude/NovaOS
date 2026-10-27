@@ -14,3 +14,12 @@ lock that serialises the work stays near 1x in every sample, before and
 after the pause, and still fails; the logged samples show the next time
 whether the stall is a few seconds of something else running or a state
 that lasts.
+
+The same day the file figure stayed at 0.99x on the re-run of one commit, so
+it was not only a passing stall.  A file's contents are read and written
+under one of 64 locks chosen by the file's address; but a file's node is a
+512-byte slab object, so the address divided by 64 takes only 8 values
+within a page, and two files shared a lock about one time in two.  The
+node lock is now one of 256, picked by a hash of the address, so two files
+share one about once in 256 and `smpstress`'s four, each on a file of its
+own, do not queue behind each other.

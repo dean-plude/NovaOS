@@ -14,7 +14,7 @@ env:
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_NOHASHDIR: 'true'
   CCACHE_COMPILERCHECK: content
-  CCACHE_MAXSIZE: 1000M
+  CCACHE_MAXSIZE: 2G
 jobs:
   image:
     name: Kernel, userland and image

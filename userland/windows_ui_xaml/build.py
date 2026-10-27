@@ -1539,18 +1539,28 @@ def program_objs(b, odir):
     picks a program's)"""
     components, core = library(b, odir)
     stubs, core_stubs = test_stubs(b, odir)
-    return [components, stubs, core, core_stubs] + unbuilt(b, odir, [components, core, core_stubs])
+    marker = b.compile_many([IN_PROGRAM], odir, 'xamlprog_', _msvcp(b).cxx_flags(b), [], compiler='clang++')
+    return [components, stubs, core, core_stubs] + marker + unbuilt(b, odir, [components, core, core_stubs])
 
 
 def program_link(prog, objs):
     """of program_objs() @objs, what program @prog links: xaml_components.lib
     and, after it, xaml_teststubs.lib; or, for a program on the core itself
-    ("xaml": "core", or "framework"), xaml_core.lib, xaml_corestubs.lib
+    ("xaml": "core", or "framework"), xaml_core.lib, xaml_corestubs.lib,
+    the marker that says the program has the framework in it (src/in_program.cpp)
     and the stand-ins for the core not yet built (unbuilt())"""
     components, stubs, core, core_stubs = objs[:4]
     if prog.get('xaml') in ('core', 'framework'):
         return [components, core, core_stubs] + objs[4:]
     return [components, stubs]
+
+
+def dll_objs(b, odir):
+    """what Windows.UI.Xaml.dll (userland/windows_ui_xaml_dll) links of the
+    framework: what a "framework" program links, less the marker"""
+    components, core = library(b, odir)
+    _, core_stubs = test_stubs(b, odir)
+    return [components, core, core_stubs] + unbuilt(b, odir, [components, core, core_stubs])
 
 
 # A function the built core calls in the parts of the core that do not
@@ -1568,6 +1578,9 @@ def program_link(prog, objs):
 # define, worked out at each build (llvm-nm, llvm-undname), so it shrinks
 # as the core builds.
 UNBUILT_REPORT = os.path.join(HERE, 'src', 'unbuilt.cpp')
+# (a program with the framework linked in exports this marker, so the system
+# Windows.UI.Xaml.dll leaves its classes to it: src/in_program.cpp)
+IN_PROGRAM = os.path.join(HERE, 'src', 'in_program.cpp')
 _UNBUILT = threading.Lock()
 
 

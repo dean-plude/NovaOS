@@ -245,6 +245,7 @@ static DWORD WINAPI call_worker(LPVOID arg)
     return 0;
 }
 
+static double g_yard;                               /* the system calls' scaling of this run (0: not measured) */
 static int g_only_many;                             /* "smpstress throughput X NAME many|N": that many threads only */
 static int cpus_of(const SYSTEM_INFO *si) { return si->dwNumberOfProcessors > 16 ? 16 : (int)si->dwNumberOfProcessors; }
 
@@ -256,13 +257,32 @@ static int scaling(const char *name, LPTHREAD_START_ROUTINE fn, int cpus, double
      * and registry figures of the same run were fine while the files' fell to 1.05x): the throughput a
      * machine can reach is the best of a few samples, which only a real lock holds near 1x in every one.
      * (The nightly and the performance budget each failed once on a single low sample.) */
-    double one = throughput(fn, 1), all = 0;
-    for (int i = 0; i < 3; i++) {
-        double t = throughput(fn, cpus);
-        if (t > all) all = t;
+    /* What the figure should reach: the target, else half the bare system calls' (check-smpstress.py's rule) */
+    double goal = want > 0 ? want : (g_yard >= 2 ? 0.5 * g_yard : 0);
+    double one = 0, all = 0;
+    printf("    samples (%s), operations a second:", name);
+    for (int round = 0; round < 2; round++) {
+        if (round) {                                /* still below the target: the stall was longer than the samples */
+            if (!(goal > 0 && all < goal * one)) break;
+            printf("\n    (below %.2fx: once more after a pause)", goal);
+            Sleep(3000);
+        }
+        /* Both figures are the best of a few samples (a sample is one thread's, or all CPUs' for 2 s) */
+        for (int i = 0; i < 3; i++) {
+            double t = throughput(fn, 1);
+            printf(" 1:%.0f", t);
+            if (t > one) one = t;
+        }
+        for (int i = 0; i < 3; i++) {
+            double t = throughput(fn, cpus);
+            printf(" %d:%.0f", cpus, t);
+            if (t > all) all = t;
+        }
     }
+    printf("\n");
     double x = one > 0 ? all / one : 0;
     printf("  %-16s 1 thread %8.0f/s, %2d threads %8.0f/s: %.2fx\n", name, one, cpus, all, x);
+    if (fn == call_worker) g_yard = x;
     if (g_bad != bad0) { printf("  %s: %ld failed\n", name, g_bad - bad0); return 0; }
     return !(want > 0 && x < want);
 }

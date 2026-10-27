@@ -529,7 +529,9 @@ programs see NTFS as they would on Windows.
 The same workflow runs an SMP stress test (`smpstress scaling 0` on four
 CPUs; each multi-thread figure is the best of three samples, since a
 shared runner sometimes takes the emulated CPUs away for a moment and only a
-real lock stays near 1x in every sample). A scheduled run posts each program's result to issue #210. The
+real lock stays near 1x in every sample; a figure still below half the bare
+system calls' is sampled once more after a three-second pause, and the log
+lists every sample) A scheduled run posts each program's result to issue #210. The
 workflow also runs on pull requests that change the corpus or what it
 depends on (a paths filter in `nightly.yml`), and by hand on any branch. [ci.md](ci.md#the-nightly-app-corpus) has the schedule, the
 retry rules and the reports.

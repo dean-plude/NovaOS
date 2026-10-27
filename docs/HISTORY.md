@@ -16097,6 +16097,23 @@ the rest of their overrides called, so `RadioButtons` makes its
   `RadioButton`s, `NavigationView`'s template, its layout, and, its pane
   opened, its two `NavigationViewItem`s.
 
+## SMP stress: a low file sample gets a second look, and every sample is logged
+
+Three main runs on 2026-10-27 (99a22d7, 1762f6f, 6f5403d) failed the
+performance budget on one figure: `smpstress` file access scaled 1.07x,
+1.23x and 1.07x against 2.6x for bare system calls, with the registry
+(2.4x) in the same run fine; each passed on a re-run.  The best of three
+four-thread samples was already used, so a stall that long outlasted all
+three, and the log kept only the best figure, which cannot say what the
+other samples did.  `smpstress` now prints every sample's operations a
+second, takes the best of three for the one-thread figure as well as the
+all-CPU one, and when the result is below half the bare system calls' (or
+the target) it pauses three seconds and samples again before judging.  A
+lock that serialises the work stays near 1x in every sample, before and
+after the pause, and still fails; the logged samples show the next time
+whether the stall is a few seconds of something else running or a state
+that lasts.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

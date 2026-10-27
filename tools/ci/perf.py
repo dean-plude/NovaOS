@@ -139,6 +139,8 @@ def main():
         res['smpstress'] = scaling
         notes += why
         print('smpstress: ' + '; '.join(why), flush=True)
+        if not smp_ok:                  # (the artifact is not always at hand: the samples go in the job log too)
+            print(log[-3000:], flush=True)
         if not smp_ok:
             bad.append('smpstress')
 

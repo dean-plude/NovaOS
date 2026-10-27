@@ -16123,6 +16123,13 @@ node lock is now one of 256, picked by a hash of the address, so two files
 share one about once in 256 and `smpstress`'s four, each on a file of its
 own, do not queue behind each other.
 
+The hashed node lock did not move the figure (0.93x on its own run), so the
+cause is elsewhere.  When the files scale too little, `smpstress` now also
+measures the parts of one file operation alone, opening and closing a file,
+and reading and writing an open one, each on one thread and on all CPUs,
+and the performance budget prints the log's tail in the job output when
+smpstress fails.  Whichever part stays near 1x is the one to fix.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

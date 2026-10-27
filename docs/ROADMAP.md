@@ -1330,7 +1330,7 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `Path` and `ScrollBar` vendored into the framework).  Calculator's
   WinUI 2 controls all apply their templates; Calculator's start-up
   itself waits on the .NET Native framework packages (32.6).
-- [x] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
+- [ ] **32.6 Packages.** `.msix`/`.appx` install and start, `resources.pri`;
   then the Calculator package.  First part done: `appx` installs,
   lists, removes and starts unsigned packages (block map checked, signed
   packages refused until their signatures can be verified), package

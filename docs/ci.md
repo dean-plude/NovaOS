@@ -129,7 +129,11 @@ and SMP jobs) it fails the job unless the run was started by hand with
   Pull request runs only restore, falling back to main's newest entry, which
   they can read. The hash covers `tools/build_userland.py` and
   `kernel/CMakeLists.txt`. A cold build (no entry) is slower than the old
-  45-minute job limit, so the image job allows 90 minutes.
+  45-minute job limit, and a warm one now takes about 68 minutes (PR run
+  1403 on 10-26; main runs 1404 and 1408 of the same tree passed 90), so
+  the image job allows 150 minutes. Every 10 minutes the build step prints
+  the compiles that have run longest, since `kernel_build`'s own output
+  goes to its log files: a compile that hangs is named in the job log.
 - **Firefox installer and Mesa archive** downloads, keyed on
   `tools/bundle_firefox.py` and `tools/bundle_mesa.py`.
 - **Graphics job**: the Mesa, DXVK and 7-Zip downloads, Venus

@@ -65,6 +65,7 @@ jobs:
         # name the compiles that have run longest (a stuck one shows here)
         ( while sleep 600; do
             echo "--- $(date -u +%H:%M) still building; longest-running compiles:"
+            # shellcheck disable=SC2009  # (pgrep cannot sort by run time)
             ps -eo etimes=,args= --sort=-etimes | grep -E '[c]lang|[l]ld-link' | head -5 | cut -c1-400 || true
           done ) &
         watch=$!

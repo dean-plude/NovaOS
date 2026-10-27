@@ -1363,8 +1363,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   lists every one of them (501, `tools/winrt/wuxclasses.py`) under
   `ActivatableClassId`, so `RoGetActivationFactory` finds
   `Windows.UI.Xaml.Application` as on Windows; test `xamldlltest` (a
-  page in a window, the program registering nothing).  Next: the
-  Windows Runtime classes Calculator asks for after it (Pulsar item 2).
+  page in a window, the program registering nothing).
+  Sixth part done (0.2.2 "Pulsar" item 2): the `Windows.System`
+  classes Calculator asks for after it, `MemoryManager` and
+  `Windows.System.Threading`'s `ThreadPool` and `ThreadPoolTimer`, in
+  `twinapi.appcore.dll` with their `ActivatableClassId` keys; test
+  `wrtpooltest`.  Calculator now gets past `RoGetActivationFactory`
+  to `CoreApplication.Run`, then stops on XAML core functions not
+  built yet.  Next: Calculator itself (Pulsar item 3).
 
 ---
 

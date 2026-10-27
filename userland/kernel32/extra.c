@@ -3732,7 +3732,8 @@ WINBASEAPI BOOL WINAPI K32GetModuleInformation(HANDLE p, HMODULE m, MODULEINFO *
 
 WINBASEAPI BOOL WINAPI K32GetProcessMemoryInfo(HANDLE p, PROCESS_MEMORY_COUNTERS_EX *pmc, DWORD cb)
 {
-    if (cb < 72) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+    /* PROCESS_MEMORY_COUNTERS, without PrivateUsage: 72 bytes in 64 bits, 40 in 32 */
+    if (cb < __builtin_offsetof(PROCESS_MEMORY_COUNTERS_EX, PrivateUsage)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
     ULONG64 info[3];
     DWORD pid = p == GetCurrentProcess() ? GetCurrentProcessId() : (NT_SUCCESS(NtNovaProcessInfo(p, info)) ? (DWORD)info[0] : 0);
     NOVA_PROCESS_ENTRY list[64];

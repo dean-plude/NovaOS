@@ -467,9 +467,16 @@ static UINT64 *hpos(UmHandle *h)
 
 /* An open file's contents and position, read and written under the
  * file-system lock shared (FsLockShared): one of these locks, by file */
-#define NODE_LOCKS 64
+#define NODE_LOCKS 256
 static UmLock g_node_lock[NODE_LOCKS];
-static UmLock *node_lock(const RamNode *n) { return &g_node_lock[((uintptr_t)RamfsFileId(n) / 64) % NODE_LOCKS]; }   /* (one per file, whatever its name) */
+/* (One per file, whatever its name.  A node is a 512-byte slab object, so its address / 64 only takes 8 values
+ * a page: files shared a lock about one time in two, so smpstress's four files, one each,
+ * often queued behind each other.  The address is mixed first.) */
+static UmLock *node_lock(const RamNode *n)
+{
+    UINT64 h = (UINT64)(uintptr_t)RamfsFileId(n) * 0x9E3779B97F4A7C15ull;
+    return &g_node_lock[h >> 56];
+}
 
 static void handle_close(UmHandle *h)
 {

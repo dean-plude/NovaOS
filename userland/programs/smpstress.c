@@ -216,6 +216,39 @@ static double throughput(LPTHREAD_START_ROUTINE fn, int n)
     return ms ? ops * 1000.0 / ms : 0;
 }
 
+/* Parts of file_worker alone, to tell which one holds the files back when they scale badly (diagnosis only) */
+static DWORD WINAPI open_close_worker(LPVOID arg)
+{
+    char path[MAX_PATH];
+    wsprintfA(path, "C:\\Temp\\smpstress\\f%d.dat", (int)(ULONG_PTR)arg);
+    while (!g_tp_stop) {
+        HANDLE f = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, 0, NULL);
+        if (f == INVALID_HANDLE_VALUE) { InterlockedIncrement(&g_bad); return 1; }
+        CloseHandle(f);
+        InterlockedIncrement(&g_tp_ops);
+    }
+    return 0;
+}
+
+static DWORD WINAPI read_write_worker(LPVOID arg)
+{
+    char path[MAX_PATH], buf[TP_CHUNK];
+    DWORD n;
+    wsprintfA(path, "C:\\Temp\\smpstress\\f%d.dat", (int)(ULONG_PTR)arg);
+    memset(buf, 7, sizeof(buf));
+    HANDLE f = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) { InterlockedIncrement(&g_bad); return 1; }
+    while (!g_tp_stop) {
+        SetFilePointer(f, 0, NULL, FILE_BEGIN);
+        for (int k = 0; k < TP_CHUNKS; k++) WriteFile(f, buf, TP_CHUNK, &n, NULL);
+        SetFilePointer(f, 0, NULL, FILE_BEGIN);
+        for (int k = 0; k < TP_CHUNKS; k++) ReadFile(f, buf, TP_CHUNK, &n, NULL);
+        InterlockedIncrement(&g_tp_ops);
+    }
+    CloseHandle(f);
+    return 0;
+}
+
 /* @fn's throughput by one thread and by one per CPU; false if it failed
  * or scaled by less than @want (0: no target) */
 /* Yardsticks for the two above: plain computation, and a system call that
@@ -245,6 +278,9 @@ static DWORD WINAPI call_worker(LPVOID arg)
     return 0;
 }
 
+static double g_files_x;                            /* the files' scaling, when measured */
+static int g_diag;                                  /* measuring parts of an operation: logged, not retried */
+static double g_yard;                               /* the system calls' scaling of this run (0: not measured) */
 static int g_only_many;                             /* "smpstress throughput X NAME many|N": that many threads only */
 static int cpus_of(const SYSTEM_INFO *si) { return si->dwNumberOfProcessors > 16 ? 16 : (int)si->dwNumberOfProcessors; }
 
@@ -256,13 +292,33 @@ static int scaling(const char *name, LPTHREAD_START_ROUTINE fn, int cpus, double
      * and registry figures of the same run were fine while the files' fell to 1.05x): the throughput a
      * machine can reach is the best of a few samples, which only a real lock holds near 1x in every one.
      * (The nightly and the performance budget each failed once on a single low sample.) */
-    double one = throughput(fn, 1), all = 0;
-    for (int i = 0; i < 3; i++) {
-        double t = throughput(fn, cpus);
-        if (t > all) all = t;
+    /* What the figure should reach: the target, else half the bare system calls' (check-smpstress.py's rule) */
+    double goal = g_diag ? 0 : want > 0 ? want : (g_yard >= 2 ? 0.5 * g_yard : 0);
+    double one = 0, all = 0;
+    printf("    samples (%s), operations a second:", name);
+    for (int round = 0; round < 2; round++) {
+        if (round) {                                /* still below the target: the stall was longer than the samples */
+            if (!(goal > 0 && all < goal * one)) break;
+            printf("\n    (below %.2fx: once more after a pause)", goal);
+            Sleep(3000);
+        }
+        /* Both figures are the best of a few samples (a sample is one thread's, or all CPUs' for 2 s) */
+        for (int i = 0; i < 3; i++) {
+            double t = throughput(fn, 1);
+            printf(" 1:%.0f", t);
+            if (t > one) one = t;
+        }
+        for (int i = 0; i < 3; i++) {
+            double t = throughput(fn, cpus);
+            printf(" %d:%.0f", cpus, t);
+            if (t > all) all = t;
+        }
     }
+    printf("\n");
     double x = one > 0 ? all / one : 0;
     printf("  %-16s 1 thread %8.0f/s, %2d threads %8.0f/s: %.2fx\n", name, one, cpus, all, x);
+    if (fn == call_worker) g_yard = x;
+    if (fn == file_worker) g_files_x = x;
     if (g_bad != bad0) { printf("  %s: %ld failed\n", name, g_bad - bad0); return 0; }
     return !(want > 0 && x < want);
 }
@@ -426,7 +482,16 @@ throughput:
         scaling("(computing)", cpu_worker, cpus, 0);
         if (g_qst) scaling("(system calls)", call_worker, cpus, 0);
     }
-    if (!only || !strcmp(only, "files")) { if (scaling("files", file_worker, cpus, want)) pass++; else fail++; }
+    if (!only || !strcmp(only, "files")) {
+        if (scaling("files", file_worker, cpus, want)) pass++; else fail++;
+        if (g_files_x < (want > 0 ? want : g_yard >= 2 ? 0.5 * g_yard : 0)) {      /* too low: which part of it? */
+            g_diag = 1;
+            printf("  (files scaled too little: its parts alone)\n");
+            scaling("(open, close)", open_close_worker, cpus, 0);
+            scaling("(read, write)", read_write_worker, cpus, 0);
+            g_diag = 0;
+        }
+    }
     if (!only || !strcmp(only, "registry")) { if (scaling("registry", reg_worker, cpus, want)) pass++; else fail++; }
     if (want > 0) printf("  (target: %.1fx on %d CPUs)\n", want, cpus);
 

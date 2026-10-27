@@ -214,7 +214,9 @@ measures:
   CPUs really ran side by side), files and the registry must scale at least
   half as well as system calls did in the same run; otherwise the figures
   are only recorded (`tools/ci/check-smpstress.py`, the same rule as the
-  nightly SMP job).
+  nightly SMP job). A figure that falls short is sampled once more
+  after a three-second pause, and `smpstress.log` in `perf-out` lists every
+  sample, so a stall can be told from a lock.
 
 The budget is in `tools/ci/perf-budget.json`: 20 s to boot and 10 s for
 Firefox. The first KVM run took 9.8 s and 3.4 s, so only a large

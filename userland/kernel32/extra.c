@@ -816,6 +816,9 @@ void k32_forget_handle(HANDLE h)
     if (!h || h == INVALID_HANDLE_VALUE) return;
     Port *port = 0;
     Timer *timer = 0;
+    /* (Nothing emulated is open, the usual case: closing files side by side does not queue for the lock.) */
+    if (!__atomic_load_n(&g_files, __ATOMIC_ACQUIRE) && !__atomic_load_n(&g_ports, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&g_timers, __ATOMIC_ACQUIRE)) return;
     lock();
     for (FileInfo **pp = &g_files; *pp; pp = &(*pp)->next)
         if ((*pp)->h == h) { FileInfo *f = *pp; *pp = f->next; zfree(f); break; }

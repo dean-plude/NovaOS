@@ -1,0 +1,5 @@
+{
+  "deps": ["ole32", "msvcrt", "kernel32", "ntdll"],
+  "file": "Windows.Globalization.dll",
+  "sources": ["windows_globalization", "winrtmap"]
+}

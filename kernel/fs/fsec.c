@@ -4,6 +4,7 @@
 
 #include "fsec.h"
 #include "../mm/vmm.h"
+#include "../ke/kpcr.h"
 #include "../lib/string.h"
 
 /* (kernel/um/um_security.c: the check against the effective token) */
@@ -246,6 +247,25 @@ static bool inherit(const RamNode *n, const UINT8 *from_dacl, int depth, UINT8 *
 
 #define DACL_MAX 4096
 
+/* The room for an inherited DACL.  4096 bytes is a page allocation (two pages with the header, from the physical
+ * memory manager's one lock), and every open of a file asks twice: threads opening files side by side queued
+ * for that lock (smpstress's open and close scaled 0.25x on four CPUs).  Each CPU keeps one buffer to reuse. */
+static UINT8 *volatile g_dacl_spare[MAX_CPUS];
+
+static UINT8 *dacl_buf_get(void)
+{
+    UINT8 *b = __atomic_exchange_n(&g_dacl_spare[KiGetCurrentKpcr()->CpuNumber % MAX_CPUS], NULL, __ATOMIC_ACQUIRE);
+    return b ? b : kmalloc(DACL_MAX);
+}
+
+static void dacl_buf_put(UINT8 *b)
+{
+    UINT8 *none = NULL;
+    if (b && !__atomic_compare_exchange_n(&g_dacl_spare[KiGetCurrentKpcr()->CpuNumber % MAX_CPUS], &none, b, false,
+                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+        kfree(b);
+}
+
 /* @n's descriptor as it applies: its own, or the inherited one (whose DACL
  * goes in @buf).  False if out of room. */
 static bool view_of(RamNode *n, View *v, UINT8 *buf)
@@ -296,13 +316,13 @@ bool FsecAccess(RamNode *n, UINT32 want, UINT32 *granted)
 
 UINT32 FsecQuery(RamNode *n, UINT32 info, void *out, UINT32 cap)
 {
-    UINT8 *buf = kmalloc(DACL_MAX);
+    UINT8 *buf = dacl_buf_get();
     View v;
-    if (!buf || !view_of(n, &v, buf)) { kfree(buf); return 0; }
+    if (!buf || !view_of(n, &v, buf)) { dacl_buf_put(buf); return 0; }
     UINT32 len = build(out, cap, (info & 1) ? v.owner : NULL, (info & 2) ? v.group : NULL,
                        (info & 4) && v.dacl_present, (info & 4) ? v.dacl : NULL,
                        (UINT16)((info & 4) ? v.control & DACL_CONTROL : 0));
-    kfree(buf);
+    dacl_buf_put(buf);
     return len;
 }
 

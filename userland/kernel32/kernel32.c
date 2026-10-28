@@ -135,12 +135,14 @@ int full_path(const char *name, char *out, int cap)
     char tmp[MAX_PATH * 2];
     int n = 0;
     name = skip_prefix(name);
-    const char *c = cwd();
+    /* (The current directory is only asked for when the name needs it: that takes the process's one
+     * current-directory lock, which threads opening files side by side queued for.) */
+    const char *c = NULL;
     if (((name[0] | 0x20) >= 'a' && (name[0] | 0x20) <= 'z') && name[1] == ':') {
         /* "C:" and "C:x" (no separator) are relative to the current directory
          * when that is on drive C: (the CRT's getcwd asks for "C:."); else to
          * the root */
-        if (name[2] != '\\' && name[2] != '/' && ((name[0] ^ c[0]) & ~0x20) == 0) {
+        if (name[2] != '\\' && name[2] != '/' && ((name[0] ^ (c = cwd())[0]) & ~0x20) == 0) {
             while (*c && n < (int)sizeof(tmp) - 2) tmp[n++] = *c++;
             if (tmp[n - 1] != '\\') tmp[n++] = '\\';
         } else {
@@ -148,8 +150,10 @@ int full_path(const char *name, char *out, int cap)
         }
         name += 2;
     } else if (name[0] == '\\' || name[0] == '/') {         /* rooted: on the current directory's drive */
+        c = cwd();
         tmp[n++] = c[0]; tmp[n++] = ':'; tmp[n++] = '\\';
     } else {
+        c = cwd();
         while (*c && n < (int)sizeof(tmp) - 2) tmp[n++] = *c++;
         if (tmp[n - 1] != '\\') tmp[n++] = '\\';
     }

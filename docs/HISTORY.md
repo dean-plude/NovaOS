@@ -16130,19 +16130,6 @@ and reading and writing an open one, each on one thread and on all CPUs,
 and the performance budget prints the log's tail in the job output when
 smpstress fails.  Whichever part stays near 1x is the one to fix.
 
-## Opening a file no longer queues for the page allocator
-
-`smpstress`'s file figure kept failing the performance budget on main, and
-the parts the test had been taught to log said where: reading and writing
-open files scaled 2.6x on four CPUs, registry keys 2.3x, but opening and
-closing a file scaled 0.25x (824,000 a second on one thread, 206,000 on
-four).  Every open checks the file's security descriptor
-(`FsecAccess`), which asked twice for a 4096-byte buffer for the inherited
-DACL.  That is not a slab size, so each was a page allocation (two pages
-with the header) from the physical memory manager's one lock, and threads
-opening files side by side queued for it.  Each CPU now keeps one such
-buffer to reuse.
-
 ## Windows.System's MemoryManager and thread pool classes
 
 The second item of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)), part of
@@ -16171,6 +16158,37 @@ Windows Calculator asks `RoGetActivationFactory` for after
 - **Not yet:** the memory events are never raised (NovaOS sets apps no
   memory limit); `WorkItemOptions.TimeSliced` is the default's
   behaviour.
+
+## Opening a file no longer queues for the page allocator
+
+`smpstress`'s file figure kept failing the performance budget on main, and
+the parts the test had been taught to log said where: reading and writing
+open files scaled 2.6x on four CPUs, registry keys 2.3x, but opening and
+closing a file scaled 0.25x (824,000 a second on one thread, 206,000 on
+four).  Every open checks the file's security descriptor
+(`FsecAccess`), which asked twice for a 4096-byte buffer for the inherited
+DACL.  That is not a slab size, so each was a page allocation (two pages
+with the header) from the physical memory manager's one lock, and threads
+opening files side by side queued for it.  Each CPU now keeps one such
+buffer to reuse.
+
+## Opening and closing files stop queuing for two process-wide locks
+
+The per-CPU DACL buffer (#568) did not move `smpstress`'s file figure: on
+main it still failed with opening and closing a file alone at 0.25x on four
+CPUs (884,000 a second on one thread, 224,000 on four), while reading and
+writing open files scaled 2.6x and the registry 2.3x.  Two process-wide
+locks sat on that path in kernel32 and the registry's path did not touch
+them:
+
+- `CreateFileA` built the NT path with `full_path`, which asked for the
+  current directory first, whether or not the name needed it.  That takes
+  ntdll's `FastPebLock` critical section and a counted reference on the
+  shared current-directory record.  An absolute name (`C:\dir\file`) now
+  never asks.
+- `CloseHandle` called `k32_forget_handle`, which took an SRW lock around
+  three lists (emulated file information, completion ports and timers) to
+  find nothing.  It now returns at once while the three lists are empty.
 
 <!-- END generated:history -->
 

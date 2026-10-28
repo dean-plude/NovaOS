@@ -375,8 +375,8 @@ typedef struct {
 } App;
 
 typedef struct {
-    WCHAR *dll, *cls[64], *threading[64];
-    int ncls;
+    WCHAR *dll, **cls, **threading;     /* (as many as the manifest names: WinUI 2's has 136) */
+    int ncls, cap;
 } Server;
 
 typedef struct {
@@ -569,7 +569,17 @@ static int read_manifest(Package *pk)
                 continue;
             Server *s = &pk->servers[pk->nservers++];
             s->dll = wcopy(text(child(srv, L"Path")));
-            for (Node *c = child(srv, L"ActivatableClass"); c && s->ncls < 64; c = sibling(c, L"ActivatableClass")) {
+            for (Node *c = child(srv, L"ActivatableClass"); c; c = sibling(c, L"ActivatableClass")) {
+                if (s->ncls == s->cap) {
+                    int cap = s->cap ? 2 * s->cap : 32;
+                    WCHAR **cls = xmalloc(cap * sizeof *cls), **th = xmalloc(cap * sizeof *th);
+                    if (s->ncls) { memcpy(cls, s->cls, s->ncls * sizeof *cls); memcpy(th, s->threading, s->ncls * sizeof *th); }
+                    free(s->cls);
+                    free(s->threading);
+                    s->cls = cls;
+                    s->threading = th;
+                    s->cap = cap;
+                }
                 s->cls[s->ncls] = wcopy(attr(c, L"ActivatableClassId"));
                 s->threading[s->ncls] = wcopy(attr(c, L"ThreadingModel") ? attr(c, L"ThreadingModel") : L"both");
                 if (s->cls[s->ncls]) s->ncls++;

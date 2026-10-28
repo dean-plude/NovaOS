@@ -1,0 +1,5 @@
+{
+  "deps": ["ole32", "kernel32", "ntdll"],
+  "file": "Windows.Storage.ApplicationData.dll",
+  "sources": ["windows_storage_appdata", "winrtmap"]
+}

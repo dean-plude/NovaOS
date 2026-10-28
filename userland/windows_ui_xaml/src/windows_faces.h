@@ -60,6 +60,8 @@ struct NovaTear
                                 // override face, the app's controlling IInspectable
     LONG ref;
     BOOL direct;                // obj is face->target's interface
+    BOOL part;                  // part of its object (nova_xaml_face_query): counts the object's
+                                // references, holds none, lives as long as the object
 };
 
 extern "C" {
@@ -110,6 +112,8 @@ void nova_addref(void *p);
 void nova_release(void *p);
 // a method with no counterpart: says so once, E_NOTIMPL
 HRESULT nova_face_missing(const char *name);
+// a composable class's instance out: crossed through @inner (winfaces.py)
+HRESULT nova_out_inner(HRESULT hr, void *o, const GUID *iid, void **a, void *inner);
 // (an event NovaOS never raises: its handler kept until removed)
 HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token);
 HRESULT nova_face_event_removed(INT64 token);

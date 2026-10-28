@@ -189,6 +189,32 @@ static void test_fls_exit(const char *self, const char *how)
     CHECK(what, !strcmp(buf, "main\nmain2\ndetach\nother\nend\n") || !strcmp(buf, "main2\nmain\ndetach\nother\nend\n"));
 }
 
+/* ------------------------------------- FLS callbacks at a thread's exit */
+static DWORD g_seen_slot;
+static void *g_seen_value;
+static int g_seen_still;
+static void WINAPI seen_cb(void *v)
+{
+    g_seen_value = v;
+    g_seen_still = FlsGetValue(g_seen_slot) == v;   /* (.NET Native's thread detach checks this) */
+}
+static DWORD WINAPI sets_and_ends(void *arg)
+{
+    FlsSetValue(g_seen_slot, arg);
+    return 0;
+}
+static void test_fls_thread_exit(void)
+{
+    static char mark[] = "mark";
+    g_seen_slot = FlsAlloc(seen_cb);
+    HANDLE t = CreateThread(NULL, 0, sets_and_ends, mark, 0, NULL);
+    WaitForSingleObject(t, 20000);
+    CloseHandle(t);
+    CHECK("a thread's exit hands its FLS value to the callback", g_seen_value == mark);
+    CHECK("and the callback still reads it with FlsGetValue", g_seen_still);
+    FlsFree(g_seen_slot);
+}
+
 int main(int argc, char **argv)
 {
     (void)*(PIMAGE_TLS_CALLBACK volatile *)&tlsslots_tls_cb;   /* keep the callback linked in */
@@ -196,6 +222,7 @@ int main(int argc, char **argv)
     char self[MAX_PATH];
     GetModuleFileNameA(NULL, self, sizeof(self));
     test_tls();
+    test_fls_thread_exit();
     for (int i = 0; i < 3; i++) {       /* the next child re-creates the file this one's parent just deleted */
         test_fls_exit(self, "ret");
         test_fls_exit(self, "exit");

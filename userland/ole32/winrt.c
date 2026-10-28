@@ -508,6 +508,28 @@ WINOLEAPI RoGetErrorReportingFlags(UINT32 *flags)
 }
 /* A message of len characters (0: up to its NUL), as Windows keeps them:
  * at most 512 characters */
+/* The caller's stack on the debugger's output, each frame as
+ * module+offset (a fail fast's, so the failing call can be found) */
+__declspec(dllimport) USHORT __stdcall RtlCaptureStackBackTrace(ULONG skip, ULONG count, PVOID *frames, PULONG hash);
+static void trace_stack(const char *what)
+{
+    void *frames[24];
+    USHORT n = RtlCaptureStackBackTrace(1, 24, frames, 0);
+    for (USHORT i = 0; i < n; i++) {
+        HMODULE m = 0;
+        char name[MAX_PATH] = "?", line[MAX_PATH + 64];
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (const char *)frames[i], &m) && m) {
+            GetModuleFileNameA(m, name, sizeof name);
+        }
+        const char *base = name;
+        for (const char *c = name; *c; c++)
+            if (*c == '\\') base = c + 1;
+        wsprintfA(line, "%s: #%u %s+0x%lx\n", what, (unsigned)i, base,
+                  (unsigned long)((char *)frames[i] - (char *)m));
+        OutputDebugStringA(line);
+    }
+}
 WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg)
 {
     if (SUCCEEDED(hr)) return FALSE;
@@ -573,6 +595,7 @@ WINOLEAPI_(void) RoFailFastWithErrorContextInternal2(HRESULT hr, ULONG count, vo
     wsprintfA(msg, "RoFailFastWithErrorContextInternal2: fail fast 0x%08lx (%lu stowed)\n", (unsigned long)hr,
               (unsigned long)count);
     OutputDebugStringA(msg);
+    trace_stack("fail fast");
     TerminateProcess(GetCurrentProcess(), (UINT)hr);
 }
 /* C++/WinRT's hresult_error and XAML's error info (dxaml/lib ErrorInfo.cpp)

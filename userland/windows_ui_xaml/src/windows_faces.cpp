@@ -39,8 +39,14 @@ static HRESULT qi(void *p, const GUID *iid, void **out)
     return ((QI_FN)VT(p)[0])(p, *iid, out);
 }
 
+static void *tear(const NovaFace *f, void *obj, BOOL direct);
+#include "application_overrides.inc"
+
 static const NovaFace *find(REFIID iid)
 {
+    for (const NovaFace &h : s_hand_faces)
+        if (IsEqualGUID(iid, *h.impl))
+            return &h;
     unsigned lo = 0, hi = nova_face_count;
     while (lo < hi) {
         unsigned mid = (lo + hi) / 2;
@@ -68,6 +74,7 @@ static void *tear(const NovaFace *f, void *obj, BOOL direct)
     t->obj = obj;
     t->ref = 1;
     t->direct = direct;
+    t->part = FALSE;
     return t;
 }
 
@@ -98,11 +105,15 @@ extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void 
 
 extern "C" ULONG STDMETHODCALLTYPE nova_tear_addref(NovaTear *t)
 {
+    if (t->part)
+        return ((ULONG (STDMETHODCALLTYPE *)(void *))VT(t->obj)[1])(t->obj);
     return InterlockedIncrement(&t->ref);
 }
 
 extern "C" ULONG STDMETHODCALLTYPE nova_tear_release(NovaTear *t)
 {
+    if (t->part)
+        return ((ULONG (STDMETHODCALLTYPE *)(void *))VT(t->obj)[2])(t->obj);
     ULONG r = InterlockedDecrement(&t->ref);
     if (r == 0) {
         nova_release(t->obj);
@@ -228,6 +239,20 @@ extern "C" HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a)
     HRESULT h = nova_cross(o, iid, a);
     nova_release(o);
     return FAILED(h) ? h : hr;
+}
+
+// a composable class's instance made over an app's outer object: the inner
+// object (the non-delegating one, which answers for the class's own
+// interfaces without asking the outer) gives the face, as the outer cannot
+// answer until it holds the inner (.NET Native's keeps it only once
+// CreateInstance returns); the instance itself when the inner gives none
+extern "C" HRESULT nova_out_inner(HRESULT hr, void *o, const GUID *iid, void **a, void *inner)
+{
+    if (SUCCEEDED(hr) && a && inner && SUCCEEDED(nova_cross(inner, iid, a))) {
+        nova_release(o);
+        return hr;
+    }
+    return nova_out(hr, o, iid, a);
 }
 
 // a framework box of a Windows.UI.Xaml enum's or struct's value: the
@@ -671,6 +696,12 @@ extern "C" HRESULT nova_face_event_removed(INT64 token)
 }
 
 // The hooks NovaOS's ComObjectBase.cpp calls
+// the faces that are part of their objects (nova_xaml_face_query), by
+// object and face
+struct PartFace { void *ctx; NovaTear *t; PartFace *next; };
+static PartFace *s_parts[4096];
+static SRWLOCK s_part_lock = SRWLOCK_INIT;
+
 // a Windows.UI.Xaml interface @iid of a framework object that has none of
 // its own: the forward face over the framework interface @impl (the
 // object's own query, which the face's target goes through) gives
@@ -682,8 +713,38 @@ extern "C" HRESULT nova_xaml_face_query(REFIID iid, void **out, HRESULT (*impl)(
     void *p = nullptr;
     if (FAILED(impl(ctx, *f->target, &p)) || !p)
         return E_NOINTERFACE;
-    *out = tear(f, p, TRUE);
-    return *out ? S_OK : E_OUTOFMEMORY;
+    // (a Windows interface of a framework object is part of the object, as
+    // its own interfaces are: callers keep one after releasing it while they
+    // hold the object, as C++/CX keeps a factory's statics and .NET Native
+    // the interfaces of the framework object its class is composed over,
+    // whose references are the outer's; so the face counts the object's
+    // references and lives as long as it, one per object and interface, and
+    // the object's address coming back with another object re-aims it)
+    AcquireSRWLockExclusive(&s_part_lock);
+    NovaTear *t = nullptr;
+    unsigned h = (unsigned)(((ULONG_PTR)ctx >> 4) * 31 + (ULONG_PTR)f / sizeof(NovaFace)) % ARRAYSIZE(s_parts);
+    for (PartFace *e = s_parts[h]; e && !t; e = e->next)
+        if (e->ctx == ctx && e->t->face == f)
+            t = e->t;
+    if (t)
+        t->obj = p;
+    else if ((t = (NovaTear *)tear(f, p, TRUE)) != nullptr) {
+        PartFace *e = (PartFace *)HeapAlloc(GetProcessHeap(), 0, sizeof(PartFace));
+        if (e) {
+            t->part = TRUE;
+            *e = {ctx, t, s_parts[h]};
+            s_parts[h] = e;
+        } else {
+            nova_release(p);
+            CoTaskMemFree(t);
+            t = nullptr;
+        }
+    }
+    ReleaseSRWLockExclusive(&s_part_lock);
+    if (!t)
+        return E_OUTOFMEMORY;   // (tear() released @p; the object's own reference)
+    *out = t;   // (with the reference the object's own query gave)
+    return S_OK;
 }
 
 // Windows.UI.Xaml classes the framework (WinUI 3's) does not have, whose

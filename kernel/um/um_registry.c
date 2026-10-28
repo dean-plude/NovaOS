@@ -883,12 +883,16 @@ static void defaults(void)
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication, CoreWindow, CoreCursor, DesignMode,
-     * PowerManager, AnalyticsInfo, MemoryManager, ThreadPool and
-     * ThreadPoolTimer (twinapi.appcore.dll; Windows keeps
+     * PowerManager, AnalyticsInfo, MemoryManager, ThreadPool,
+     * ThreadPoolTimer, User, NamedPolicy and ApplicationView
+     * (twinapi.appcore.dll; Windows keeps
      * CoreWindow in Windows.UI.dll, DesignMode in
      * Windows.ApplicationModel.dll, PowerManager in Windows.System.Power,
      * AnalyticsInfo in Windows.System.Profile and the thread pool's in
-     * threadpoolwinrt.dll), the compositor and its easing
+     * threadpoolwinrt.dll, User in Windows.System.UserManagement,
+     * NamedPolicy in Windows.Management.Policies and ApplicationView in
+     * Windows.UI.dll), the app's data store, ApplicationData
+     * (Windows.Storage.ApplicationData.dll), the compositor and its easing
      * functions and paths, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
@@ -910,6 +914,10 @@ static void defaults(void)
         { "Windows.System.MemoryManager", "twinapi.appcore.dll" },
         { "Windows.System.Threading.ThreadPool", "twinapi.appcore.dll" },
         { "Windows.System.Threading.ThreadPoolTimer", "twinapi.appcore.dll" },
+        { "Windows.System.User", "twinapi.appcore.dll" },
+        { "Windows.Management.Policies.NamedPolicy", "twinapi.appcore.dll" },
+        { "Windows.UI.ViewManagement.ApplicationView", "twinapi.appcore.dll" },
+        { "Windows.Storage.ApplicationData", "Windows.Storage.ApplicationData.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },

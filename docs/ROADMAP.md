@@ -1383,6 +1383,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `Windows.Globalization` classes Calculator asks for
   (`ApplicationLanguages` first), its page's remaining gaps, then the
   CI check that it computes `2 + 2`, which ticks this step.
+  Eighth part done (Pulsar item 3, second slice): a new
+  `Windows.Globalization.dll` with the eleven globalization classes
+  Calculator names (`ApplicationLanguages`, `Language`,
+  `GeographicRegion`, `GlobalizationPreferences`, `Calendar`, the
+  calendar and clock identifiers, `DateTimeFormatter`,
+  `DecimalFormatter`, `CurrencyFormatter`, `LanguageFontGroup`), over
+  kernel32's locale data; test `wrtglobtest`.  Calculator now gets past
+  them and stops on `CoreDragDropManager`, `AsyncCausalityTracer` and an
+  unhandled `E_FAIL` in `Windows.UI.Xaml.dll`.  Next: those, then the
+  CI check that it computes `2 + 2`, which ticks this step.
 
 ---
 

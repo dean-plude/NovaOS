@@ -892,7 +892,11 @@ static void defaults(void)
      * threadpoolwinrt.dll, User in Windows.System.UserManagement,
      * NamedPolicy in Windows.Management.Policies and ApplicationView in
      * Windows.UI.dll), the app's data store, ApplicationData
-     * (Windows.Storage.ApplicationData.dll), the compositor and its easing
+     * (Windows.Storage.ApplicationData.dll), the globalization classes:
+     * languages, regions, calendars and number and date formatters, with
+     * the user's GlobalizationPreferences (Windows.Globalization.dll;
+     * Windows keeps LanguageFontGroup in Windows.Globalization.Fonts.dll),
+     * the compositor and its easing
      * functions and paths, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
@@ -918,6 +922,17 @@ static void defaults(void)
         { "Windows.Management.Policies.NamedPolicy", "twinapi.appcore.dll" },
         { "Windows.UI.ViewManagement.ApplicationView", "twinapi.appcore.dll" },
         { "Windows.Storage.ApplicationData", "Windows.Storage.ApplicationData.dll" },
+        { "Windows.Globalization.ApplicationLanguages", "Windows.Globalization.dll" },
+        { "Windows.Globalization.Language", "Windows.Globalization.dll" },
+        { "Windows.Globalization.GeographicRegion", "Windows.Globalization.dll" },
+        { "Windows.Globalization.Calendar", "Windows.Globalization.dll" },
+        { "Windows.Globalization.CalendarIdentifiers", "Windows.Globalization.dll" },
+        { "Windows.Globalization.ClockIdentifiers", "Windows.Globalization.dll" },
+        { "Windows.Globalization.DateTimeFormatting.DateTimeFormatter", "Windows.Globalization.dll" },
+        { "Windows.Globalization.NumberFormatting.DecimalFormatter", "Windows.Globalization.dll" },
+        { "Windows.Globalization.NumberFormatting.CurrencyFormatter", "Windows.Globalization.dll" },
+        { "Windows.Globalization.Fonts.LanguageFontGroup", "Windows.Globalization.dll" },
+        { "Windows.System.UserProfile.GlobalizationPreferences", "Windows.Globalization.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },

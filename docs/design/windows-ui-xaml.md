@@ -1410,5 +1410,30 @@ vendors.
    the `Windows.Globalization` classes are the next slice.  Tests:
    `wrtapptest`, `coreapptest`.
 
+   Pulsar item 3, second slice: the `Windows.Globalization` classes
+   Calculator's view models name (`CalcViewModel.dll`,
+   `CalculatorApp.dll`), in a new `Windows.Globalization.dll`
+   (`userland/windows_globalization`), all worked out from kernel32's
+   locale data: `ApplicationLanguages` (the user's language, a
+   `PrimaryLanguageOverride` first), `Language`, `GeographicRegion`,
+   `Windows.System.UserProfile.GlobalizationPreferences`,
+   `CalendarIdentifiers`, `ClockIdentifiers`,
+   `Fonts.LanguageFontGroup`, `NumberFormatting.DecimalFormatter` and
+   `CurrencyFormatter` (exact decimal digit strings, a double by its
+   shortest round-tripping text, Windows' rounding algorithms and
+   `INumberRounder`, parsing back), `Calendar` (Gregorian, years 1 to
+   9999, the machine's time zone or UTC) and
+   `DateTimeFormatting.DateTimeFormatter` (templates pick the language's
+   own Win32 picture and keep the parts asked for; `{...}` patterns;
+   `Patterns` given back in that syntax).  One object answers for all of
+   a class's interfaces through faces that point back at it (`glob.h`).
+   Calculator no longer asks for a class NovaOS lacks there; it now
+   stops further on: `CoreDragDropManager` and `AsyncCausalityTracer`
+   are not there, then an unhandled `E_FAIL` fails it fast inside
+   `Windows.UI.Xaml.dll` (after looking for `Microsoft.UI.Xaml.Phone.dll`),
+   the next slice.  Not yet: other calendars and time zones,
+   `PercentFormatter`, the rounder classes, `ManifestLanguages` from the
+   manifest.  Test: `wrtglobtest`.
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

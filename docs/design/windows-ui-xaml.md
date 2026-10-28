@@ -1365,5 +1365,24 @@ vendors.
    `Windows.ApplicationModel.Activation` arguments, the framework's its
    own), which Calculator needs (item 3).
 
+   Pulsar item 2: the `Windows.System` classes Calculator's start-up
+   asks for after `Windows.UI.Xaml.Application`, in
+   `twinapi.appcore.dll` with its other statics (Windows serves the
+   thread pool's from `threadpoolwinrt.dll`), each with its
+   `ActivatableClassId` key, 64- and 32-bit.  `MemoryManager`: the
+   app's usage is the process's private commit, its limit the system's
+   commit limit (memory and page file), its level Low under half of it,
+   Medium under 80%, High to it and OverLimit past it; the app and
+   process memory reports; the three events take handlers and are not
+   raised; `TrySetAppMemoryUsageLimit` refuses, as for a desktop app.
+   `ThreadPool.RunAsync` submits the `WorkItemHandler` to the process's
+   thread pool (`TrySubmitThreadpoolCallback`) behind an `IAsyncAction`
+   it is given; `Cancel` before it starts skips it and while it runs
+   shows as `Status` Canceled, a failed `HRESULT` ends it Error, Low and
+   High priority set the thread's for the item.  A `ThreadPoolTimer` is
+   a thread pool timer (`CreateThreadpoolTimer`) that lives until it has
+   fired once (a one-shot) or is cancelled, whatever its caller holds,
+   then calls its `TimerDestroyedHandler`.  Test: `wrtpooltest`.
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

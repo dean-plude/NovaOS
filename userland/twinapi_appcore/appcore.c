@@ -946,6 +946,7 @@ static BOOL raise_pointer(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return raise_one_pointer(ev, update, at, held, 0, FALSE);
 }
 
+static void av_min_track(MINMAXINFO *m);
 static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     Args *a;
@@ -960,6 +961,9 @@ static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_SHOWWINDOW:
         raise_visible(wp != 0);
+        break;
+    case WM_GETMINMAXINFO:              /* ApplicationView.SetPreferredMinSize's */
+        av_min_track((MINMAXINFO *)lp);
         break;
     case WM_SIZE:
         if (wp == SIZE_MINIMIZED) { raise_visible(FALSE); return 0; }
@@ -1131,18 +1135,72 @@ static const void *const title_wrs_vt[] = { (void *)title_wrs_qi, (void *)static
 static const void *const title_weak_vt[] = { (void *)title_weak_qi, (void *)static_ref, (void *)static_ref, (void *)title_resolve };
 static TitleBar g_title = { (const void *const *)title_vt, (const void *const *)title_wrs_vt, (const void *const *)title_weak_vt };
 
+/* SplashScreen: there is none on NovaOS (the window shows the app's first
+ * frame), so its image is at no place and Dismissed, which Windows raises
+ * as the splash screen goes, is accepted and not raised */
+static const GUID IID_ISplashScreen_ = { 0xCA4D975C, 0xD4D6, 0x43F0, { 0x97, 0xC0, 0x08, 0x33, 0xC6, 0x39, 0x1C, 0x24 } };
+typedef struct { const void *const *vt; Event dismissed; } Splash;
+static HRESULT STDMETHODCALLTYPE splash_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = is_base(iid) || IsEqualGUID(iid, &IID_ISplashScreen_) ? p : 0;
+    return *out ? S_OK : E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE splash_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.ApplicationModel.Activation.SplashScreen", n); }
+static HRESULT STDMETHODCALLTYPE splash_where(void *p, RectF *v) { (void)p; if (!v) return E_POINTER; *v = (RectF){ 0, 0, 0, 0 }; return S_OK; }
+static HRESULT STDMETHODCALLTYPE splash_add(Splash *p, void *h, EventRegistrationToken *t) { return ev_add(&p->dismissed, h, t); }
+static HRESULT STDMETHODCALLTYPE splash_remove(Splash *p, EventRegistrationToken t) { return ev_remove(&p->dismissed, t); }
+static const void *const splash_vt[] = { INSP_FNS(splash_qi, splash_name), (void *)splash_where, (void *)splash_add, (void *)splash_remove };
+static Splash g_splash = { (const void *const *)splash_vt };
+
+/* Windows.System.User: the one user, signed in on the machine (a local
+ * user, LocallyAuthenticated); its properties and picture are not here */
+static const GUID IID_IUser_ = { 0xDF9A26C6, 0xE746, 0x4BCD, { 0xB5, 0xD4, 0x12, 0x01, 0x03, 0xC4, 0x20, 0x9B } };
+static HRESULT STDMETHODCALLTYPE user_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = is_base(iid) || IsEqualGUID(iid, &IID_IUser_) ? p : 0;
+    return *out ? S_OK : E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE user_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.User", n); }
+static HRESULT STDMETHODCALLTYPE user_id(void *p, HSTRING *v) { (void)p; return make_hstring(L"NovaOS.User", v); }
+static HRESULT STDMETHODCALLTYPE user_auth(void *p, int *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE user_type(void *p, int *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE user_async1(void *p, void *a, void **v) { (void)p; (void)a; if (v) *v = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE user_picture(void *p, int a, void **v) { (void)p; (void)a; if (v) *v = 0; return E_NOTIMPL; }
+static const void *const user_vt[] = { INSP_FNS(user_qi, user_name), (void *)user_id, (void *)user_auth, (void *)user_type,
+                                       (void *)user_async1, (void *)user_async1, (void *)user_picture };
+static const void *const *const g_user = user_vt;
+
 /* LaunchActivatedEventArgs: Kind Launch (0), PreviousExecutionState
- * NotRunning (0), no splash screen; Arguments are the command line after
- * the program's name (ApplicationActivationManager, activation.c, puts the
- * activation's arguments there), TileId the packaged application's id
- * ("App" for a program outside a package) */
-typedef struct { const void *const *act; const void *const *launch; LONG refs; HSTRING args; } Launch;
-#define LAUNCH_OF_L(p) ((Launch *)((char *)(p) - __builtin_offsetof(Launch, launch)))
+ * NotRunning (0), the splash screen above; Arguments are the command line
+ * after the program's name (ApplicationActivationManager, activation.c,
+ * puts the activation's arguments there), TileId the packaged
+ * application's id ("App" for a program outside a package); User the one
+ * user, not a prelaunch, no tile information or view switcher, the main
+ * view (CurrentlyShownApplicationViewId, ApplicationView.Id: 1) */
+static const GUID IID_IActivatedEventArgsWithUser_ = { 0x1CF09B9E, 0x9962, 0x4936, { 0x80, 0xFF, 0xAF, 0xC8, 0xE8, 0xAE, 0x5C, 0x8C } };
+static const GUID IID_IPrelaunchActivatedEventArgs_ = { 0x0C44717B, 0x19F7, 0x48D6, { 0xB0, 0x46, 0xCF, 0x22, 0x82, 0x6E, 0xAA, 0x74 } };
+static const GUID IID_ILaunchActivatedEventArgs2_ = { 0x0FD37EBC, 0x9DC9, 0x46B5, { 0x9A, 0xCE, 0xBD, 0x95, 0xD4, 0x56, 0x53, 0x45 } };
+static const GUID IID_IApplicationViewActivatedEventArgs_ = { 0x930CEF4B, 0xB829, 0x40FC, { 0x88, 0xF4, 0x85, 0x13, 0xE8, 0xA6, 0x47, 0x38 } };
+static const GUID IID_IViewSwitcherProvider_ = { 0x33F288A6, 0x5C2C, 0x4D27, { 0xBA, 0xC7, 0x75, 0x36, 0x08, 0x8F, 0x12, 0x19 } };
+typedef struct {
+    const void *const *act, *const *launch, *const *user, *const *pre, *const *launch2, *const *view, *const *vsw;
+    LONG refs;
+    HSTRING args;
+} Launch;
+#define LAUNCH_OF(p, f) ((Launch *)((char *)(p) - __builtin_offsetof(Launch, f)))
+#define LAUNCH_OF_L(p) LAUNCH_OF(p, launch)
 static HRESULT STDMETHODCALLTYPE la_qi(Launch *l, REFIID iid, void **out)
 {
     if (!out) return E_POINTER;
     if (is_base(iid) || IsEqualGUID(iid, &IID_IActivatedEventArgs_)) *out = &l->act;
     else if (IsEqualGUID(iid, &IID_ILaunchActivatedEventArgs_)) *out = &l->launch;
+    else if (IsEqualGUID(iid, &IID_IActivatedEventArgsWithUser_)) *out = &l->user;
+    else if (IsEqualGUID(iid, &IID_IPrelaunchActivatedEventArgs_)) *out = &l->pre;
+    else if (IsEqualGUID(iid, &IID_ILaunchActivatedEventArgs2_)) *out = &l->launch2;
+    else if (IsEqualGUID(iid, &IID_IApplicationViewActivatedEventArgs_)) *out = &l->view;
+    else if (IsEqualGUID(iid, &IID_IViewSwitcherProvider_)) *out = &l->vsw;
     else { *out = 0; return E_NOINTERFACE; }
     InterlockedIncrement(&l->refs);
     return S_OK;
@@ -1157,11 +1215,20 @@ static ULONG STDMETHODCALLTYPE la_release(Launch *l)
 static HRESULT STDMETHODCALLTYPE la_name(Launch *l, HSTRING *n) { (void)l; return make_hstring(L"Windows.ApplicationModel.Activation.LaunchActivatedEventArgs", n); }
 static HRESULT STDMETHODCALLTYPE la_kind(Launch *l, int *v) { (void)l; if (!v) return E_POINTER; *v = 0; return S_OK; }
 static HRESULT STDMETHODCALLTYPE la_prev(Launch *l, int *v) { (void)l; if (!v) return E_POINTER; *v = 0; return S_OK; }
-static HRESULT STDMETHODCALLTYPE la_splash(Launch *l, void **v) { (void)l; if (!v) return E_POINTER; *v = 0; return S_OK; }
-static HRESULT STDMETHODCALLTYPE ll_qi(void *p, REFIID iid, void **out) { return la_qi(LAUNCH_OF_L(p), iid, out); }
-static ULONG STDMETHODCALLTYPE ll_addref(void *p) { return la_addref(LAUNCH_OF_L(p)); }
-static ULONG STDMETHODCALLTYPE ll_release(void *p) { return la_release(LAUNCH_OF_L(p)); }
-static HRESULT STDMETHODCALLTYPE ll_name(void *p, HSTRING *n) { return la_name(LAUNCH_OF_L(p), n); }
+static HRESULT STDMETHODCALLTYPE la_splash(Launch *l, void **v) { (void)l; if (!v) return E_POINTER; *v = &g_splash; return S_OK; }
+/* each other face's IInspectable, by its field */
+#define LAUNCH_FACE(f) \
+    static HRESULT STDMETHODCALLTYPE f##_fqi(void *p, REFIID iid, void **out) { return la_qi(LAUNCH_OF(p, f), iid, out); } \
+    static ULONG STDMETHODCALLTYPE f##_faddref(void *p) { return la_addref(LAUNCH_OF(p, f)); } \
+    static ULONG STDMETHODCALLTYPE f##_frelease(void *p) { return la_release(LAUNCH_OF(p, f)); } \
+    static HRESULT STDMETHODCALLTYPE f##_fname(void *p, HSTRING *n) { return la_name(LAUNCH_OF(p, f), n); }
+#define LAUNCH_BASE(f) (void *)f##_fqi, (void *)f##_faddref, (void *)f##_frelease, (void *)no_iids, (void *)f##_fname, (void *)base_trust
+LAUNCH_FACE(launch)
+LAUNCH_FACE(user)
+LAUNCH_FACE(pre)
+LAUNCH_FACE(launch2)
+LAUNCH_FACE(view)
+LAUNCH_FACE(vsw)
 static HRESULT STDMETHODCALLTYPE ll_arguments(void *p, HSTRING *v) { if (!v) return E_POINTER; return WindowsDuplicateString(LAUNCH_OF_L(p)->args, v); }
 LONG WINAPI GetCurrentApplicationUserModelId(UINT32 *len, PWSTR id);
 static HRESULT STDMETHODCALLTYPE ll_tile(void *p, HSTRING *v)
@@ -1174,10 +1241,18 @@ static HRESULT STDMETHODCALLTYPE ll_tile(void *p, HSTRING *v)
         for (const WCHAR *s = id; *s; s++) if (*s == '!') app = s + 1;
     return make_hstring(app, v);
 }
+static HRESULT STDMETHODCALLTYPE lu_user(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = (void *)&g_user; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lp_prelaunch(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lx_null(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lv_view_id(void *p, INT32 *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
 static const void *const launch_act_vt[] = { (void *)la_qi, (void *)la_addref, (void *)la_release, (void *)no_iids, (void *)la_name,
                                              (void *)base_trust, (void *)la_kind, (void *)la_prev, (void *)la_splash };
-static const void *const launch_vt[] = { (void *)ll_qi, (void *)ll_addref, (void *)ll_release, (void *)no_iids, (void *)ll_name,
-                                         (void *)base_trust, (void *)ll_arguments, (void *)ll_tile };
+static const void *const launch_vt[] = { LAUNCH_BASE(launch), (void *)ll_arguments, (void *)ll_tile };
+static const void *const launch_user_vt[] = { LAUNCH_BASE(user), (void *)lu_user };
+static const void *const launch_pre_vt[] = { LAUNCH_BASE(pre), (void *)lp_prelaunch };
+static const void *const launch2_vt[] = { LAUNCH_BASE(launch2), (void *)lx_null };
+static const void *const launch_view_vt[] = { LAUNCH_BASE(view), (void *)lv_view_id };
+static const void *const launch_vsw_vt[] = { LAUNCH_BASE(vsw), (void *)lx_null };
 
 static Launch *launch_new(void)
 {
@@ -1185,6 +1260,11 @@ static Launch *launch_new(void)
     if (!l) return 0;
     l->act = launch_act_vt;
     l->launch = launch_vt;
+    l->user = launch_user_vt;
+    l->pre = launch_pre_vt;
+    l->launch2 = launch2_vt;
+    l->view = launch_view_vt;
+    l->vsw = launch_vsw_vt;
     l->refs = 1;
     /* the command line after the program's (possibly quoted) name */
     const WCHAR *c = GetCommandLineW();
@@ -1920,6 +2000,314 @@ static BOOL name_is(HSTRING s, const WCHAR *want)
     for (; i < n && want[i]; i++) if (c[i] != want[i]) return FALSE;
     return i == n && !want[i];
 }
+/* ---- User's statics: GetFromId finds the one user (the launch's User);
+ * finding all users and watching them are not here ---------------------- */
+static const GUID IID_IUserStatics_ = { 0x155EB23B, 0x242A, 0x45E0, { 0xA2, 0xE9, 0x31, 0x71, 0xFC, 0x6A, 0x7F, 0xDD } };
+typedef struct { const void *const *factory; const void *const *statics; } UserStatics;
+static UserStatics g_users;
+static HRESULT STDMETHODCALLTYPE us_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_users.factory;
+    else if (IsEqualGUID(iid, &IID_IUserStatics_)) *out = &g_users.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE us_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE us_none(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE us_none1(void *p, int a, void **o) { (void)p; (void)a; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE us_none2(void *p, int a, int b, void **o) { (void)p; (void)a; (void)b; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE us_from_id(void *p, HSTRING id, void **o)
+{
+    (void)p;
+    if (!o) return E_POINTER;
+    HSTRING mine = 0;
+    INT32 c = 1;
+    user_id(0, &mine);
+    WindowsCompareStringOrdinal(mine, id, &c);
+    WindowsDeleteString(mine);
+    *o = c ? 0 : (void *)&g_user;
+    return S_OK;
+}
+static const void *const us_factory_vt[] = { INSP_FNS(us_qi, user_name), (void *)us_activate };
+static const void *const us_statics_vt[] = { INSP_FNS(us_qi, user_name), (void *)us_none, (void *)us_none, (void *)us_none1,
+                                             (void *)us_none2, (void *)us_from_id };
+static UserStatics g_users = { (const void *const *)us_factory_vt, (const void *const *)us_statics_vt };
+
+/* ---- NamedPolicy (Windows.Management.Policies): no policy is managed on
+ * NovaOS, so a policy's data is unmanaged and its value the policy's
+ * default, which for the policies here is "allowed": a Boolean true, an
+ * Int32/Int64 1, an empty string (Windows reads the MDM policy store) ---- */
+static const GUID IID_INamedPolicyStatics_ = { 0x7F793BE7, 0x76C4, 0x4058, { 0x8C, 0xAD, 0x67, 0x66, 0x2C, 0xD0, 0x5F, 0x0D } };
+static const GUID IID_INamedPolicyData_ = { 0x38DCB198, 0x95AC, 0x4077, { 0xA6, 0x43, 0x80, 0x78, 0xCA, 0xE2, 0x64, 0x00 } };
+typedef struct { const void *const *vt; LONG refs; HSTRING area, name; void *user; Event changed; } Policy;
+static HRESULT STDMETHODCALLTYPE pol_qi(Policy *d, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_INamedPolicyData_)) { *out = 0; return E_NOINTERFACE; }
+    InterlockedIncrement(&d->refs);
+    *out = d;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE pol_addref(Policy *d) { return (ULONG)InterlockedIncrement(&d->refs); }
+static ULONG STDMETHODCALLTYPE pol_release(Policy *d)
+{
+    LONG r = InterlockedDecrement(&d->refs);
+    if (!r) {
+        WindowsDeleteString(d->area);
+        WindowsDeleteString(d->name);
+        for (UINT32 i = 0; i < d->changed.n; i++) obj_release(d->changed.subs[i].handler);
+        HeapFree(GetProcessHeap(), 0, d->changed.subs);
+        HeapFree(GetProcessHeap(), 0, d);
+    }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE pol_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.Management.Policies.NamedPolicyData", n); }
+static HRESULT STDMETHODCALLTYPE pol_area(Policy *d, HSTRING *v) { if (!v) return E_POINTER; return WindowsDuplicateString(d->area, v); }
+static HRESULT STDMETHODCALLTYPE pol_pname(Policy *d, HSTRING *v) { if (!v) return E_POINTER; return WindowsDuplicateString(d->name, v); }
+/* NamedPolicyKind: Invalid 0, Binary 1, Boolean 2, Int32 3, Int64 4, String 5 */
+static HRESULT STDMETHODCALLTYPE pol_kind(Policy *d, int *v) { (void)d; if (!v) return E_POINTER; *v = 2; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_false(Policy *d, boolean_t *v) { (void)d; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_is_user(Policy *d, boolean_t *v) { if (!v) return E_POINTER; *v = d->user != 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_user(Policy *d, void **v) { if (!v) return E_POINTER; *v = d->user; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_true(Policy *d, boolean_t *v) { (void)d; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_binary(Policy *d, void **v) { (void)d; if (v) *v = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE pol_int32(Policy *d, INT32 *v) { (void)d; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_int64(Policy *d, INT64 *v) { (void)d; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_string(Policy *d, HSTRING *v) { (void)d; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pol_add(Policy *d, void *h, EventRegistrationToken *t) { return ev_add(&d->changed, h, t); }
+static HRESULT STDMETHODCALLTYPE pol_remove(Policy *d, EventRegistrationToken t) { return ev_remove(&d->changed, t); }
+static const void *const policy_vt[] = { (void *)pol_qi, (void *)pol_addref, (void *)pol_release, (void *)no_iids, (void *)pol_name,
+                                         (void *)base_trust, (void *)pol_area, (void *)pol_pname, (void *)pol_kind, (void *)pol_false,
+                                         (void *)pol_is_user, (void *)pol_user, (void *)pol_true, (void *)pol_binary, (void *)pol_int32,
+                                         (void *)pol_int64, (void *)pol_string, (void *)pol_add, (void *)pol_remove };
+typedef struct { const void *const *factory; const void *const *statics; } PolicyStatics;
+static PolicyStatics g_policies;
+static HRESULT STDMETHODCALLTYPE nps_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_policies.factory;
+    else if (IsEqualGUID(iid, &IID_INamedPolicyStatics_)) *out = &g_policies.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nps_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.Management.Policies.NamedPolicy", n); }
+static HRESULT STDMETHODCALLTYPE nps_for_user(void *p, void *user, HSTRING area, HSTRING name, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    Policy *d = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *d);
+    *out = d;
+    if (!d) return E_OUTOFMEMORY;
+    d->vt = policy_vt;
+    d->refs = 1;
+    d->user = user ? (void *)&g_user : 0;          /* (the one user) */
+    WindowsDuplicateString(area, &d->area);
+    WindowsDuplicateString(name, &d->name);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE nps_path(void *p, HSTRING area, HSTRING name, void **out) { return nps_for_user(p, 0, area, name, out); }
+static const void *const nps_factory_vt[] = { INSP_FNS(nps_qi, nps_name), (void *)us_activate };
+static const void *const nps_statics_vt[] = { INSP_FNS(nps_qi, nps_name), (void *)nps_path, (void *)nps_for_user };
+static PolicyStatics g_policies = { (const void *const *)nps_factory_vt, (const void *const *)nps_statics_vt };
+
+/* ---- ApplicationView (Windows.UI.ViewManagement; Windows serves it from
+ * Windows.UI.dll): the main view's, over its CoreWindow.  Its Id is 1;
+ * Title is the window's; TryResizeView sizes the window's client area (in
+ * DIPs) and SetPreferredMinSize keeps the window from being sized smaller;
+ * the view is never full screen, on the lock screen or in another view
+ * mode (compact overlay is not supported); its title bar's colours are
+ * accepted and not drawn (the window has user32's frame).  Its events
+ * accept handlers and are not raised ------------------------------------ */
+static const GUID IID_IApplicationView_ = { 0xD222D519, 0x4361, 0x451E, { 0x96, 0xC4, 0x60, 0xF4, 0xF9, 0x74, 0x2D, 0xB0 } };
+static const GUID IID_IApplicationView2_ = { 0xE876B196, 0xA545, 0x40DC, { 0xB5, 0x94, 0x45, 0x0C, 0xBA, 0x68, 0xCC, 0x00 } };
+static const GUID IID_IApplicationView3_ = { 0x903C9CE5, 0x793A, 0x4FDF, { 0xA2, 0xB2, 0xAF, 0x1A, 0xC2, 0x1E, 0x31, 0x08 } };
+static const GUID IID_IApplicationView4_ = { 0x15E5CBEC, 0x9E0F, 0x46B5, { 0xBC, 0x3F, 0x9B, 0xF6, 0x53, 0xE7, 0x4B, 0x5E } };
+static const GUID IID_IApplicationViewTitleBar_ = { 0x00924AC0, 0x932B, 0x4A6B, { 0x9C, 0x4B, 0xDC, 0x38, 0xC8, 0x24, 0x78, 0xCE } };
+static const GUID IID_IApplicationViewStatics2_ = { 0xAF338AE5, 0xCF64, 0x423C, { 0x85, 0xE5, 0xF3, 0xE7, 0x24, 0x48, 0xFB, 0x23 } };
+static const GUID IID_IApplicationViewStatics3_ = { 0xA28D7594, 0x8C41, 0x4E13, { 0x97, 0x19, 0x51, 0x64, 0x79, 0x6F, 0xE4, 0xC7 } };
+static const GUID IID_IApplicationViewStatics4_ = { 0x08FD8D33, 0x2611, 0x5336, { 0xA3, 0x15, 0xD9, 0x8E, 0x63, 0x66, 0xC9, 0xDB } };
+static const GUID IID_IApplicationViewInteropStatics_ = { 0xC446FB5D, 0x4793, 0x4896, { 0xA8, 0xE2, 0xBE, 0x57, 0xA8, 0xBB, 0x0F, 0x50 } };
+typedef struct {
+    const void *const *v1, *const *v2, *const *v3, *const *v4, *const *title;
+    Event consolidated, bounds;
+    SizeF min;
+} AppView;
+static AppView g_appview;
+static HRESULT STDMETHODCALLTYPE av_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IApplicationView_)) *out = &g_appview.v1;
+    else if (IsEqualGUID(iid, &IID_IApplicationView2_)) *out = &g_appview.v2;
+    else if (IsEqualGUID(iid, &IID_IApplicationView3_)) *out = &g_appview.v3;
+    else if (IsEqualGUID(iid, &IID_IApplicationView4_)) *out = &g_appview.v4;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE av_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.ViewManagement.ApplicationView", n); }
+static HRESULT STDMETHODCALLTYPE av_int0(void *p, int *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_false(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_true(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_set_bool(void *p, boolean_t v) { (void)p; (void)v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_set_int(void *p, int v) { (void)p; (void)v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_none(void *p) { (void)p; return S_OK; }
+/* ApplicationViewOrientation: Landscape 0, Portrait 1 */
+static HRESULT STDMETHODCALLTYPE av_orientation(void *p, int *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    RECT r = { 0, 0, 1, 0 };
+    if (g_win.hwnd) GetClientRect(g_win.hwnd, &r);
+    *v = r.bottom > r.right;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE av_set_title(void *p, HSTRING t)
+{
+    (void)p;
+    if (g_win.hwnd) SetWindowTextW(g_win.hwnd, t ? WindowsGetStringRawBuffer(t, 0) : L"");
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE av_title(void *p, HSTRING *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    WCHAR t[256] = L"";
+    if (g_win.hwnd) GetWindowTextW(g_win.hwnd, t, 256);
+    return make_hstring(t, v);
+}
+static HRESULT STDMETHODCALLTYPE av_id(void *p, INT32 *v) { (void)p; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_add_consolidated(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_appview.consolidated, h, t); }
+static HRESULT STDMETHODCALLTYPE av_remove_consolidated(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_appview.consolidated, t); }
+static HRESULT STDMETHODCALLTYPE av_visible_bounds(void *p, RectF *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    RECT r = { 0 };
+    if (g_win.hwnd) GetClientRect(g_win.hwnd, &r);
+    float s = win_scale();
+    *v = (RectF){ 0, 0, r.right / s, r.bottom / s };
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE av_add_bounds(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_appview.bounds, h, t); }
+static HRESULT STDMETHODCALLTYPE av_remove_bounds(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_appview.bounds, t); }
+/* ApplicationViewBoundsMode: UseVisible 0, UseCoreWindow 1 (the same here) */
+static HRESULT STDMETHODCALLTYPE av_set_bounds_mode(void *p, int m, boolean_t *v) { (void)p; (void)m; if (!v) return E_POINTER; *v = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE av_title_bar(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = &g_appview.title; return S_OK; }
+/* the window's outer size for a client area of @w x @h DIPs */
+static void av_outer(float w, float h, int *ow, int *oh)
+{
+    float s = win_scale();
+    RECT r = { 0, 0, (LONG)(w * s + 0.5f), (LONG)(h * s + 0.5f) };
+    AdjustWindowRectEx(&r, (DWORD)GetWindowLongPtrW(g_win.hwnd, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtrW(g_win.hwnd, GWL_EXSTYLE));
+    *ow = r.right - r.left;
+    *oh = r.bottom - r.top;
+}
+static HRESULT STDMETHODCALLTYPE av_try_resize(void *p, SizeF size, boolean_t *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    *v = 0;
+    if (!g_win.hwnd || size.Width < g_appview.min.Width || size.Height < g_appview.min.Height) return S_OK;
+    int w, h;
+    av_outer(size.Width, size.Height, &w, &h);
+    *v = SetWindowPos(g_win.hwnd, 0, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != 0;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE av_set_min(void *p, SizeF size)
+{
+    (void)p;
+    g_appview.min = size;           /* (the window procedure's WM_GETMINMAXINFO reads it) */
+    return S_OK;
+}
+static void av_min_track(MINMAXINFO *m)
+{
+    if (g_appview.min.Width <= 0 && g_appview.min.Height <= 0) return;
+    int w, h;
+    av_outer(g_appview.min.Width, g_appview.min.Height, &w, &h);
+    if (m->ptMinTrackSize.x < w) m->ptMinTrackSize.x = w;
+    if (m->ptMinTrackSize.y < h) m->ptMinTrackSize.y = h;
+}
+static HRESULT STDMETHODCALLTYPE av_async_none(void *p, void **v) { (void)p; if (v) *v = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE av_async_mode(void *p, int m, void **v) { (void)p; (void)m; if (v) *v = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE av_async_mode2(void *p, int m, void *x, void **v) { (void)p; (void)m; (void)x; if (v) *v = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE av_mode_supported(void *p, int m, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = m == 0; return S_OK; }
+static const void *const av1_vt[] = { INSP_FNS(av_qi, av_name), (void *)av_orientation, (void *)av_false, (void *)av_false, (void *)av_false,
+                                      (void *)av_false, (void *)av_true, (void *)av_set_bool, (void *)av_set_title, (void *)av_title,
+                                      (void *)av_id, (void *)av_add_consolidated, (void *)av_remove_consolidated };
+static const void *const av2_vt[] = { INSP_FNS(av_qi, av_name), (void *)av_false, (void *)av_set_bool, (void *)av_visible_bounds,
+                                      (void *)av_add_bounds, (void *)av_remove_bounds, (void *)av_set_bounds_mode, (void *)av_int0 };
+static const void *const av3_vt[] = { INSP_FNS(av_qi, av_name), (void *)av_title_bar, (void *)av_int0, (void *)av_set_int, (void *)av_false,
+                                      (void *)av_false, (void *)av_none, (void *)av_none, (void *)av_try_resize, (void *)av_set_min };
+static const void *const av4_vt[] = { INSP_FNS(av_qi, av_name), (void *)av_int0, (void *)av_mode_supported, (void *)av_async_mode,
+                                      (void *)av_async_mode2, (void *)av_async_none };
+/* ApplicationViewTitleBar: twelve colours (IReference<Color>), each a put
+ * then a get */
+static HRESULT STDMETHODCALLTYPE tb_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = is_base(iid) || IsEqualGUID(iid, &IID_IApplicationViewTitleBar_) ? p : 0;
+    return *out ? S_OK : E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE tb_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.UI.ViewManagement.ApplicationViewTitleBar", n); }
+static HRESULT STDMETHODCALLTYPE tb_put(void *p, void *c) { (void)p; (void)c; return S_OK; }
+static HRESULT STDMETHODCALLTYPE tb_get(void *p, void **c) { (void)p; if (!c) return E_POINTER; *c = 0; return S_OK; }
+#define TB2 (void *)tb_put, (void *)tb_get
+static const void *const title_bar_vt[] = { INSP_FNS(tb_qi, tb_name), TB2, TB2, TB2, TB2, TB2, TB2, TB2, TB2, TB2, TB2, TB2, TB2 };
+static AppView g_appview = { (const void *const *)av1_vt, (const void *const *)av2_vt, (const void *const *)av3_vt,
+                             (const void *const *)av4_vt, (const void *const *)title_bar_vt };
+
+/* its statics: GetForCurrentView (the main view, on the window's thread),
+ * TerminateAppOnFinalViewClose, PreferredLaunchWindowingMode and
+ * PreferredLaunchViewSize (kept, not used: the window is made before the
+ * app runs), ClearPersistedState, GetApplicationViewIdForWindow */
+typedef struct {
+    const void *const *factory, *const *statics2, *const *statics3, *const *statics4, *const *interop;
+    boolean_t terminate;
+    int launch_mode;
+    SizeF launch_size;
+} AppViewStatics;
+static AppViewStatics g_appview_statics;
+static HRESULT STDMETHODCALLTYPE avs_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_appview_statics.factory;
+    else if (IsEqualGUID(iid, &IID_IApplicationViewStatics2_)) *out = &g_appview_statics.statics2;
+    else if (IsEqualGUID(iid, &IID_IApplicationViewStatics3_)) *out = &g_appview_statics.statics3;
+    else if (IsEqualGUID(iid, &IID_IApplicationViewStatics4_)) *out = &g_appview_statics.statics4;
+    else if (IsEqualGUID(iid, &IID_IApplicationViewInteropStatics_)) *out = &g_appview_statics.interop;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE avs_current(void *p, void **v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    *v = 0;
+    if (!g_win.hwnd || GetCurrentThreadId() != g_win.tid) return RPC_E_WRONG_THREAD_;
+    *v = &g_appview.v1;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE avs_terminate(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = g_appview_statics.terminate; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_set_terminate(void *p, boolean_t v) { (void)p; g_appview_statics.terminate = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_mode(void *p, int *v) { (void)p; if (!v) return E_POINTER; *v = g_appview_statics.launch_mode; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_set_mode(void *p, int v) { (void)p; g_appview_statics.launch_mode = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_size(void *p, SizeF *v) { (void)p; if (!v) return E_POINTER; *v = g_appview_statics.launch_size; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_set_size(void *p, SizeF v) { (void)p; g_appview_statics.launch_size = v; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_clear_key(void *p, HSTRING k) { (void)p; (void)k; return S_OK; }
+static HRESULT STDMETHODCALLTYPE avs_view_id(void *p, void *window, INT32 *v) { (void)p; if (!v) return E_POINTER; *v = window ? 1 : 0; return S_OK; }
+static const void *const avs_factory_vt[] = { INSP_FNS(avs_qi, av_name), (void *)us_activate };
+static const void *const avs_statics2_vt[] = { INSP_FNS(avs_qi, av_name), (void *)avs_current, (void *)avs_terminate, (void *)avs_set_terminate };
+static const void *const avs_statics3_vt[] = { INSP_FNS(avs_qi, av_name), (void *)avs_mode, (void *)avs_set_mode, (void *)avs_size, (void *)avs_set_size };
+static const void *const avs_statics4_vt[] = { INSP_FNS(avs_qi, av_name), (void *)av_none, (void *)avs_clear_key };
+static const void *const avs_interop_vt[] = { INSP_FNS(avs_qi, av_name), (void *)avs_view_id };
+static AppViewStatics g_appview_statics = { (const void *const *)avs_factory_vt, (const void *const *)avs_statics2_vt,
+                                            (const void *const *)avs_statics3_vt, (const void *const *)avs_statics4_vt,
+                                            (const void *const *)avs_interop_vt };
+
 APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
 {
     if (!factory) return E_POINTER;
@@ -1932,6 +2320,9 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.System.MemoryManager")) { *factory = &g_memory.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Threading.ThreadPool")) { *factory = &g_pool.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Threading.ThreadPoolTimer")) { *factory = &g_timers.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.User")) { *factory = &g_users.factory; return S_OK; }
+    if (name_is(cls, L"Windows.Management.Policies.NamedPolicy")) { *factory = &g_policies.factory; return S_OK; }
+    if (name_is(cls, L"Windows.UI.ViewManagement.ApplicationView")) { *factory = &g_appview_statics.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

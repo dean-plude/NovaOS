@@ -19,11 +19,12 @@
  * reads its map's strings ("Resources" unless it was made for another).
  *
  * Not here: the maps' NamedResource collections (IMapView, IIterable),
- * LoadPriFiles, qualifiers and their contexts' values (a ResourceContext
- * is accepted and the neutral candidate used), file candidates.
+ * LoadPriFiles, choosing by qualifiers (a ResourceContext has its values,
+ * but the neutral candidate is used), file candidates.
  */
 #include <windows.h>
 #include <roapi.h>
+#include "../winrtmap/strmap.h"
 
 #define MRMCORER_API __declspec(dllexport)
 #define ERROR_MRM_NAMED_RESOURCE_NOT_FOUND_ ((HRESULT)0x80073B17L)
@@ -250,9 +251,42 @@ static HRESULT root_map(void **out)
     return m ? S_OK : E_OUTOFMEMORY;
 }
 
-/* IResourceContext: its qualifier values and languages are not here */
-static const void *const context_vt[] = { BASE, (void *)out_null, (void *)not_here, (void *)not_here1, (void *)not_here1, (void *)out_null,
-                                          (void *)out_null, (void *)not_here1 };
+/* IResourceContext.QualifierValues: an observable string map of the
+ * qualifiers Windows fills a context with, at their NovaOS values (the
+ * candidates are not chosen between by them: see the top) */
+static HRESULT STDMETHODCALLTYPE context_qualifiers(void *p, void **out)
+{
+    static const WCHAR *const q[][2] = {
+        { L"Language", L"en-US" }, { L"Contrast", L"standard" }, { L"Scale", L"100" }, { L"HomeRegion", L"US" },
+        { L"TargetSize", L"0" }, { L"LayoutDirection", L"LTR" }, { L"Theme", L"dark" }, { L"AlternateForm", L"" },
+        { L"DXFeatureLevel", L"DX11" }, { L"Configuration", L"" }, { L"DeviceFamily", L"Desktop" }, { L"Custom", L"" },
+    };
+    static const GUID iid = { 0x1E036276, 0x2F60, 0x55F6, { 0xB7, 0xF3, 0xF8, 0x60, 0x79, 0xE6, 0x90, 0x0B } };
+    (void)p;
+    if (!out) return E_POINTER;
+    *out = 0;
+    IUnknown *m;
+    HRESULT hr = nova_strmap_new(FALSE, (void **)&m);
+    for (unsigned i = 0; SUCCEEDED(hr) && i < sizeof q / sizeof *q; i++) hr = nova_strmap_put(m, q[i][0], q[i][1]);
+    if (SUCCEEDED(hr)) hr = m->lpVtbl->QueryInterface(m, &iid, out);
+    if (m) m->lpVtbl->Release(m);
+    return hr;
+}
+
+/* IResourceContext.Languages: the user's language (NovaOS's one, en-US) */
+static HRESULT STDMETHODCALLTYPE context_languages(void *p, void **out)
+{
+    static const WCHAR *const langs[] = { L"en-US" };
+    (void)p;
+    return nova_strvec_new(langs, 1, out);
+}
+static HRESULT context_new(void **out);
+static HRESULT STDMETHODCALLTYPE context_clone(void *p, void **out) { (void)p; return context_new(out); }
+
+/* IResourceContext: Reset, OverrideToMatch and setting its languages are not
+ * here */
+static const void *const context_vt[] = { BASE, (void *)context_qualifiers, (void *)not_here, (void *)not_here1, (void *)not_here1,
+                                          (void *)context_clone, (void *)context_languages, (void *)not_here1 };
 static HRESULT context_new(void **out)
 {
     if (!out) return E_POINTER;

@@ -14,6 +14,11 @@
  * PointerPressed, a second button as PointerMoved, PointerReleased,
  * PointerWheelChanged) with their PointerPoints; and a Windows.UI.Composition
  * target on the CoreWindow (CreateTargetForCurrentView) showing a sprite.
+ * The launch's arguments carry what Windows Calculator's OnLaunched reads
+ * (the User, PrelaunchActivated, a SplashScreen taking a Dismissed
+ * handler), and ApplicationView.GetForCurrentView on the window's thread
+ * is the main view (Id 1), resizing the window (TryResizeView) and refusing
+ * a size under SetPreferredMinSize's.
  *
  *   coreapptest ARGS...   the self-test runs it as "coreapptest hello world"
  */
@@ -45,6 +50,10 @@ static const GUID IID_ICoreWindowStatic_T = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90
 static const GUID IID_ICoreWindowInterop_T = { 0x45D64A29, 0xA63E, 0x4CB6, { 0xB4, 0x98, 0x57, 0x81, 0xD2, 0x98, 0xCB, 0x4F } };
 static const GUID IID_ICoreWindowEventArgs_T = { 0x272B1EF3, 0xC633, 0x4DA5, { 0xA2, 0x6C, 0xC6, 0xD0, 0xF5, 0x6B, 0x29, 0xDA } };
 static const GUID IID_ILaunchActivatedEventArgs_T = { 0xFBC93E26, 0xA14A, 0x4B4F, { 0x82, 0xB0, 0x33, 0xBE, 0xD9, 0x20, 0xAF, 0x52 } };
+static const GUID IID_IActivatedEventArgsWithUser_T = { 0x1CF09B9E, 0x9962, 0x4936, { 0x80, 0xFF, 0xAF, 0xC8, 0xE8, 0xAE, 0x5C, 0x8C } };
+static const GUID IID_IPrelaunchActivatedEventArgs_T = { 0x0C44717B, 0x19F7, 0x48D6, { 0xB0, 0x46, 0xCF, 0x22, 0x82, 0x6E, 0xAA, 0x74 } };
+static const GUID IID_IApplicationViewStatics2_T = { 0xAF338AE5, 0xCF64, 0x423C, { 0x85, 0xE5, 0xF3, 0xE7, 0x24, 0x48, 0xFB, 0x23 } };
+static const GUID IID_IApplicationView3_T = { 0x903C9CE5, 0x793A, 0x4FDF, { 0xA2, 0xB2, 0xAF, 0x1A, 0xC2, 0x1E, 0x31, 0x08 } };
 static const GUID IID_IAsyncInfo_T = { 0x00000036, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 
 /* ICoreWindow's slots (IInspectable's six first) */
@@ -80,6 +89,69 @@ static const void *const handler2_vt[] = { (void *)h_qi, (void *)h_ref, (void *)
 static const void *const handler0_vt[] = { (void *)h_qi, (void *)h_ref, (void *)h_ref, (void *)h_invoke0 };
 static const void *const handler_status_vt[] = { (void *)h_qi, (void *)h_ref, (void *)h_ref, (void *)h_invoke_status };
 
+static HRESULT factory(const WCHAR *cls, const GUID *iid, void **out);
+/* what Windows Calculator's OnLaunched reads of its launch */
+static void launch_extras(void *args)
+{
+    void *wu = 0, *user = 0, *pre = 0, *splash = 0;
+    CHECK("the launch: IActivatedEventArgsWithUser", SUCCEEDED(VT(args, 0, QI_t)(args, &IID_IActivatedEventArgsWithUser_T, &wu)) && wu);
+    if (wu) VT(wu, 6, Get_t)(wu, &user);
+    CHECK("its User", user != 0);
+    if (user) {
+        HSTRING id = 0;
+        VT(user, 6, Get_t)(user, &id);                              /* NonRoamableId */
+        CHECK("the User's NonRoamableId", WindowsGetStringLen(id) > 0);
+        WindowsDeleteString(id);
+    }
+    RELEASE(user);
+    RELEASE(wu);
+    BYTE p = 1;
+    CHECK("IPrelaunchActivatedEventArgs", SUCCEEDED(VT(args, 0, QI_t)(args, &IID_IPrelaunchActivatedEventArgs_T, &pre)) && pre);
+    if (pre) VT(pre, 6, Get_t)(pre, &p);
+    CHECK("not a prelaunch", p == 0);
+    RELEASE(pre);
+    VT(args, 8, Get_t)(args, &splash);                              /* IActivatedEventArgs::SplashScreen */
+    CHECK("its SplashScreen", splash != 0);
+    if (splash) {
+        static Handler none = { handler2_vt, 0 };
+        EventRegistrationToken tok = { 0 };
+        CHECK("SplashScreen.Dismissed takes a handler",
+              VT(splash, 7, HRESULT (STDMETHODCALLTYPE *)(void *, void *, EventRegistrationToken *))(splash, &none, &tok) == S_OK &&
+              VT(splash, 8, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(splash, tok) == S_OK);
+    }
+    RELEASE(splash);
+}
+/* ApplicationView on the window's thread */
+static void app_view(void)
+{
+    void *statics = 0, *view = 0, *view3 = 0;
+    CHECK("ApplicationView's statics", factory(L"Windows.UI.ViewManagement.ApplicationView", &IID_IApplicationViewStatics2_T, &statics) == S_OK);
+    if (statics) VT(statics, 6, Get_t)(statics, &view);           /* GetForCurrentView */
+    CHECK("GetForCurrentView", view != 0);
+    INT32 id = 0;
+    if (view) VT(view, 15, Get_t)(view, &id);                       /* IApplicationView::Id */
+    CHECK("the main view: Id 1", id == 1);
+    if (view) VT(view, 0, QI_t)(view, &IID_IApplicationView3_T, &view3);
+    CHECK("IApplicationView3", view3 != 0);
+    if (view3) {
+        typedef HRESULT (STDMETHODCALLTYPE *Resize_t)(void *, SizeF, BYTE *);
+        BYTE ok = 0;
+        CHECK("SetPreferredMinSize",
+              VT(view3, 14, HRESULT (STDMETHODCALLTYPE *)(void *, SizeF))(view3, (SizeF){ 200, 150 }) == S_OK);
+        VT(view3, 13, Resize_t)(view3, (SizeF){ 100, 100 }, &ok);
+        CHECK("TryResizeView under the minimum: refused", !ok);
+        VT(view3, 13, Resize_t)(view3, (SizeF){ 420, 310 }, &ok);
+        RECT r = { 0 };
+        GetClientRect(g_hwnd, &r);
+        UINT dpi = GetDpiForWindow(g_hwnd);
+        int w = MulDiv(420, dpi ? dpi : 96, 96), h = MulDiv(310, dpi ? dpi : 96, 96);
+        CHECK("TryResizeView: the window's client area", ok && r.right == w && r.bottom == h);
+        VT(view3, 14, HRESULT (STDMETHODCALLTYPE *)(void *, SizeF))(view3, (SizeF){ 0, 0 });
+    }
+    RELEASE(view3);
+    RELEASE(view);
+    RELEASE(statics);
+}
 static void on_activated(void *view, void *args)
 {
     (void)view;
@@ -94,8 +166,10 @@ static void on_activated(void *view, void *args)
         WindowsDeleteString(s);
         RELEASE(launch);
     }
+    launch_extras(args);
     order('A');
     CHECK("CoreWindow::Activate", VT(g_win, W_ACTIVATE, Call_t)(g_win) == S_OK);
+    app_view();
 }
 static void key_args(void *args, KeyStatus *st, int *vk)
 {

@@ -1371,6 +1371,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `wrtpooltest`.  Calculator now gets past `RoGetActivationFactory`
   to `CoreApplication.Run`, then stops on XAML core functions not
   built yet.  Next: Calculator itself (Pulsar item 3).
+  Seventh part done (Pulsar item 3, first slice): Calculator's `App` is
+  made, its window opens and its `OnLaunched` runs (a composable
+  instance crossed through its inner object, `Windows.UI.Xaml` faces
+  that are part of their objects, `IApplicationOverrides`, the launch's
+  User and splash screen, `ResourceContext` qualifiers and languages,
+  `User`, `NamedPolicy`, `ApplicationView`,
+  `ApplicationData.LocalSettings`, ntdll's FLS callbacks fixed for
+  .NET Native's thread exit, all of a package's classes registered);
+  tests `wrtapptest`, `coreapptest`, `tlsslots`.  Next: the
+  `Windows.Globalization` classes Calculator asks for
+  (`ApplicationLanguages` first), its page's remaining gaps, then the
+  CI check that it computes `2 + 2`, which ticks this step.
 
 ---
 

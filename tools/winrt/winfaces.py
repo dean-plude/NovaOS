@@ -243,6 +243,7 @@ class Faces:
         face) and what comes out the other way; @optional: an interface the
         object may lack, a method of a later version of it"""
         cp, args, pre, post, clean, zero = ['NovaTear* t'], ['p'], [], [], [], []
+        outer, inner = False, None  # (a composable factory's outer object and inner out)
         tcp = ['void*']
         for i, ((ti, d), (tt, _)) in enumerate(zip(impl, target)):
             ki, kt = self.kind(ti), self.kind(tt)
@@ -278,6 +279,7 @@ class Faces:
                                    % (i, a, self.guid(kt[1]), i))
                     elif to_framework_in:
                         pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = nova_object_in(%s, &c%d);' % (i, a, i))
+                        outer = outer or ki[0] == 'object'
                     elif ki[0] == 'object':
                         # (an object the framework hands the app's code: a
                         # box of one of its Windows-named enums or structs
@@ -290,12 +292,23 @@ class Faces:
                 else:
                     pre.append('if (%s) *%s = 0; void* o%d = 0;' % (a, a, i))
                     args.append('&o%d' % i)
-                    if ki[0] == 'ref':
+                    if ki[0] == 'ref' and inner is not None:
+                        # (a composable class's instance, made over an app's
+                        # outer object: crossed through the inner object it
+                        # was handed with, as the outer cannot answer for
+                        # the class's interfaces until it holds the inner;
+                        # .NET Native's outer does not yet while
+                        # CreateInstance runs)
+                        post.append('hr = nova_out_inner(hr, o%d, &%s, %s, %s ? *%s : 0);'
+                                    % (i, self.guid(ki[1]), a, inner, inner))
+                    elif ki[0] == 'ref':
                         post.append('hr = nova_out(hr, o%d, &%s, %s);' % (i, self.guid(ki[1]), a))
                     elif not to_framework_in:
                         post.append('hr = nova_object_out(hr, o%d, %s);' % (i, a))
                     else:
                         post.append('hr = nova_out(hr, o%d, 0, %s);' % (i, a))
+                        if outer and to_framework_in and ki[0] == 'object':
+                            inner = '((void**)%s)' % a
             elif self.key(ti) == TYPENAME and d in ('in', 'out'):
                 # (a type's name: Windows.UI.Xaml.Controls.Control as the
                 # framework's Microsoft.UI.Xaml.Controls.Control, and back)

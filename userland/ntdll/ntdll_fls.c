@@ -138,8 +138,9 @@ NTSYSAPI VOID NTAPI RtlProcessFlsData(PVOID data, ULONG flags)
         for (ULONG i = 0; i < FLS_SLOTS; i++) {
             PVOID *p = slot_of(d, i), v = p ? *p : 0;
             if (!v || !g_used[i]) continue;
+            if (g_cb[i]) g_cb[i](v);    /* (the slot still holds it, as on Windows: .NET Native's
+                                         * thread detach checks FlsGetValue is its thread) */
             *p = 0;
-            if (g_cb[i]) g_cb[i](v);
         }
     if (flags & 2) {
         d->prev->next = d->next;

@@ -1360,10 +1360,8 @@ vendors.
    `RoGetActivationFactory`, `Application.Start`, the app's
    `Application` made in the callback, a page from
    `Windows.UI.Xaml.Markup.XamlReader` in a `Windows.UI.Xaml.Window`,
-   laid out, then closed.  Not yet: Windows' `IApplicationOverrides`
-   (a UWP app's `OnLaunched` takes
-   `Windows.ApplicationModel.Activation` arguments, the framework's its
-   own), which Calculator needs (item 3).
+   laid out, then closed.  (Windows' `IApplicationOverrides`, which a
+   UWP app's `OnLaunched` needs, came with item 3, below.)
 
    Pulsar item 2: the `Windows.System` classes Calculator's start-up
    asks for after `Windows.UI.Xaml.Application`, in
@@ -1383,6 +1381,34 @@ vendors.
    a thread pool timer (`CreateThreadpoolTimer`) that lives until it has
    fired once (a one-shot) or is cancelled, whatever its caller holds,
    then calls its `TimerDestroyedHandler`.  Test: `wrtpooltest`.
+
+   Pulsar item 3, first slice: Calculator's own launch.  A composable
+   class's `CreateInstance` face (`tools/winrt/winfaces.py`) crosses the
+   new instance through the inner object it hands back
+   (`nova_out_inner`): .NET Native's outer object holds the inner only
+   once `CreateInstance` returns, so asking it for the class's
+   interfaces meanwhile fails.  The faces `nova_xaml_face_query` gives
+   for a framework object are part of it: one per object and interface,
+   counting the object's references (`NovaTear.part`) and living as long
+   as it, as an object's own interfaces do; C++/CX keeps a factory's
+   statics, and .NET Native the interfaces of the object its class is
+   composed over, after releasing them, which a counted face did not
+   survive.  A part face is never freed; an object address that comes
+   back with another object re-aims it.  Windows' `IApplicationOverrides`
+   and `IApplicationOverrides2` are written by hand
+   (`src/application_overrides.inc`), the framework's launch reaching
+   the app's `OnLaunched` with the Windows `LaunchActivatedEventArgs`
+   (`IApplicationOverridesFeature_UwpSupportApi`'s), and the other
+   activations its other overrides.  The Windows Runtime classes
+   `OnLaunched` asks for next: `ResourceContext`'s `QualifierValues` and
+   `Languages` (`MrmCoreR.dll`, with a shared `StringMap`/`PropertySet`
+   and string list in `userland/winrtmap`), `User.GetFromId`,
+   `NamedPolicy` and `ApplicationView` (`twinapi.appcore.dll`), and
+   `ApplicationData.Current.LocalSettings`
+   (`Windows.Storage.ApplicationData.dll`, held for the process's life).
+   Calculator then asks for `Windows.Globalization.ApplicationLanguages`:
+   the `Windows.Globalization` classes are the next slice.  Tests:
+   `wrtapptest`, `coreapptest`.
 
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

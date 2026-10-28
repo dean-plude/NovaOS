@@ -2319,10 +2319,49 @@ K32 BOOL WINAPI FreeUserPhysicalPages(HANDLE p, PULONG_PTR n, PULONG_PTR pfns)
 K32 BOOL WINAPI MapUserPhysicalPages(PVOID va, ULONG_PTR n, PULONG_PTR pfns)
 { (void)va; (void)n; (void)pfns; SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
 
-/* RaiseFailFastException: the process ends at once with the code */
+/* (a line for RaiseFailFastException's report: @text, then @hex in hex) */
+static char *ff_put(char *o, const char *text, ULONG_PTR hex)
+{
+    int d = 0;
+    while (*text) *o++ = *text++;
+    *o++ = '0'; *o++ = 'x';
+    for (int sh = 60; sh >= 0; sh -= 4) {
+        int v = (int)((hex >> sh) & 15);
+        if (v || d || !sh) { *o++ = (char)(v < 10 ? '0' + v : 'a' + v - 10); d = 1; }
+    }
+    return o;
+}
+
+/* RaiseFailFastException: the process ends at once with the code, which
+ * goes on the debugger's output with the caller's stack (module+offset), so
+ * the failing code can be found */
 K32 VOID WINAPI RaiseFailFastException(PEXCEPTION_RECORD rec, PCONTEXT ctx, DWORD flags)
 {
+    char line[MAX_PATH + 64], *o;
+    void *frames[16];
+    USHORT n;
     (void)ctx; (void)flags;
+    o = ff_put(line, "RaiseFailFastException: code ", rec ? rec->ExceptionCode : 0);
+    o = ff_put(o, " at ", rec ? (ULONG_PTR)rec->ExceptionAddress : 0);
+    *o++ = '\n'; *o = 0;
+    OutputDebugStringA(line);
+    n = RtlCaptureStackBackTrace(1, 16, frames, 0);
+    for (USHORT i = 0; i < n; i++) {
+        HMODULE m = 0;
+        char name[MAX_PATH] = "?";
+        const char *base = name;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (const char *)frames[i], &m) && m)
+            GetModuleFileNameA(m, name, sizeof name);
+        for (const char *c = name; *c; c++)
+            if (*c == '\\') base = c + 1;
+        o = line;
+        for (const char *c = "RaiseFailFastException: "; *c; c++) *o++ = *c;
+        while (*base) *o++ = *base++;
+        o = ff_put(o, "+", (ULONG_PTR)((char *)frames[i] - (char *)m));
+        *o++ = '\n'; *o = 0;
+        OutputDebugStringA(line);
+    }
     TerminateProcess(GetCurrentProcess(), rec ? rec->ExceptionCode : 0xC0000602 /* STATUS_FAIL_FAST_EXCEPTION */);
 }
 

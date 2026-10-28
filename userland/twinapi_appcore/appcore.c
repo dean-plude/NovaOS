@@ -43,8 +43,11 @@
  * so their reference counts are kept only for show; event arguments and
  * IAsyncActions are counted for real.
  *
- * Its other statics: DesignMode (never in a designer), PowerManager and
- * AnalyticsInfo (a desktop, Windows.Desktop, at the system's version).
+ * Its other statics: DesignMode (never in a designer), PowerManager,
+ * AnalyticsInfo (a desktop, Windows.Desktop, at the system's version),
+ * MemoryManager (the process's commit against the system's), and
+ * Windows.System.Threading's ThreadPool and ThreadPoolTimer (the process's
+ * thread pool, its work items as IAsyncActions).
  */
 #include <windows.h>
 #include <roapi.h>
@@ -443,6 +446,10 @@ struct Action {
     void *work;                         /* DispatchedHandler, until it has run */
     UINT32 id;
     int idle;                           /* RunIdleAsync's: work is an IdleDispatchedHandler */
+    int pool;                           /* ThreadPool.RunAsync's: work is a WorkItemHandler */
+    int priority;                       /* (its thread's priority meanwhile) */
+    volatile LONG cancel;               /* Cancel called (a pool item not yet started is skipped) */
+    HRESULT error;                      /* the work's failure, with status Error 3 */
 };
 #define ACTION_OF_INFO(p) ((Action *)((char *)(p) - __builtin_offsetof(Action, info)))
 static HRESULT STDMETHODCALLTYPE act_qi(Action *a, REFIID iid, void **out)
@@ -488,15 +495,24 @@ static HRESULT STDMETHODCALLTYPE act_get_completed(Action *a, void **h)
     ReleaseSRWLockShared(&a->lock);
     return S_OK;
 }
-static HRESULT STDMETHODCALLTYPE act_results(Action *a) { return a->status == 1 ? S_OK : E_ILLEGAL_METHOD_CALL_; }
+static HRESULT STDMETHODCALLTYPE act_results(Action *a) { return a->status == 1 ? S_OK : a->status == 3 ? a->error : E_ILLEGAL_METHOD_CALL_; }
 static HRESULT STDMETHODCALLTYPE ai_qi(void *p, REFIID iid, void **out) { return act_qi(ACTION_OF_INFO(p), iid, out); }
 static ULONG STDMETHODCALLTYPE ai_addref(void *p) { return act_addref(ACTION_OF_INFO(p)); }
 static ULONG STDMETHODCALLTYPE ai_release(void *p) { return act_release(ACTION_OF_INFO(p)); }
 static HRESULT STDMETHODCALLTYPE ai_name(void *p, HSTRING *n) { return act_name(ACTION_OF_INFO(p), n); }
 static HRESULT STDMETHODCALLTYPE ai_id(void *p, UINT32 *v) { if (!v) return E_POINTER; *v = ACTION_OF_INFO(p)->id; return S_OK; }
-static HRESULT STDMETHODCALLTYPE ai_status(void *p, int *v) { if (!v) return E_POINTER; *v = ACTION_OF_INFO(p)->status; return S_OK; }
-static HRESULT STDMETHODCALLTYPE ai_error(void *p, HRESULT *v) { (void)p; if (!v) return E_POINTER; *v = S_OK; return S_OK; }
-static HRESULT STDMETHODCALLTYPE ai_cancel(void *p) { (void)p; return S_OK; }      /* (the work runs anyway once posted) */
+/* (a pool item's work polls it: Canceled 2 once Cancel was called) */
+static HRESULT STDMETHODCALLTYPE ai_status(void *p, int *v)
+{
+    if (!v) return E_POINTER;
+    Action *a = ACTION_OF_INFO(p);
+    *v = a->pool && a->cancel && a->status == 0 ? 2 : a->status;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ai_error(void *p, HRESULT *v) { if (!v) return E_POINTER; *v = ACTION_OF_INFO(p)->error; return S_OK; }
+/* (a dispatcher's work runs anyway once posted; a pool item's is skipped
+ * if it has not started, and a running one can watch Status) */
+static HRESULT STDMETHODCALLTYPE ai_cancel(void *p) { InterlockedExchange(&ACTION_OF_INFO(p)->cancel, 1); return S_OK; }
 static HRESULT STDMETHODCALLTYPE ai_close(void *p) { (void)p; return S_OK; }
 static const void *const action_vt[] = { (void *)act_qi, (void *)act_addref, (void *)act_release, (void *)no_iids, (void *)act_name,
                                          (void *)base_trust, (void *)act_put_completed, (void *)act_get_completed, (void *)act_results };
@@ -1526,6 +1542,376 @@ static const void *const avi_vt[] = { INSP_FNS(avi_qi, avi_name), (void *)avi_fa
 static AnalyticsInfo g_analytics = { (const void *const *)pi_factory_vt, (const void *const *)pi_statics_vt,
                                      (const void *const *)avi_vt };
 
+/* ---- MemoryManager: the app's memory use against its limit (Windows
+ * serves it from Windows.System; XAML's core listens to its events to trim
+ * its caches).  A desktop app's limit is the system's commit limit
+ * (memory and page file), its usage the process's private commit, its
+ * level Low under half the limit, Medium under 80%, High to the limit and
+ * OverLimit past it.  The events take handlers and are not raised yet, and
+ * TrySetAppMemoryUsageLimit refuses, as it does for a desktop app -------- */
+static const GUID IID_IMemoryManagerStatics_  = { 0x5C6C279C, 0xD7CA, 0x4779, { 0x91, 0x88, 0x40, 0x57, 0x21, 0x9C, 0xE6, 0x4C } };
+static const GUID IID_IMemoryManagerStatics2_ = { 0x6EEE351F, 0x6D62, 0x423F, { 0x94, 0x79, 0xB0, 0x1F, 0x9C, 0x9F, 0x76, 0x69 } };
+static const GUID IID_IMemoryManagerStatics3_ = { 0x149B59CE, 0x92AD, 0x4E35, { 0x89, 0xEB, 0x50, 0xDF, 0xB4, 0xC0, 0xD9, 0x1C } };
+static const GUID IID_IMemoryManagerStatics4_ = { 0xC5A94828, 0xE84E, 0x4886, { 0x8A, 0x0D, 0x44, 0xB3, 0x19, 0x0E, 0x3B, 0x72 } };
+static const GUID IID_IAppMemoryReport_       = { 0x6D65339B, 0x4D6F, 0x45BC, { 0x9C, 0x5E, 0xE4, 0x9B, 0x3F, 0xF2, 0x75, 0x8D } };
+static const GUID IID_IAppMemoryReport2_      = { 0x5F7F3738, 0x51B7, 0x42DC, { 0xB7, 0xED, 0x79, 0xBA, 0x46, 0xD2, 0x88, 0x57 } };
+static const GUID IID_IProcessMemoryReport_   = { 0x087305A8, 0x9B70, 0x4782, { 0x87, 0x41, 0x3A, 0x98, 0x2B, 0x6C, 0xE5, 0xE4 } };
+
+/* kernel32's K32GetProcessMemoryInfo, with PROCESS_MEMORY_COUNTERS_EX */
+typedef struct { DWORD cb, faults; SIZE_T peak_ws, ws, peak_paged, paged, peak_nonpaged, nonpaged, pagefile, peak_pagefile, priv; } MemCounters;
+__declspec(dllimport) BOOL WINAPI K32GetProcessMemoryInfo(HANDLE process, MemCounters *c, DWORD cb);
+static MemCounters mm_counters(void)
+{
+    MemCounters c = { sizeof c };
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &c, sizeof c)) { MemCounters none = { sizeof c }; c = none; }
+    return c;
+}
+static UINT64 mm_limit(void)
+{
+    MEMORYSTATUSEX m = { sizeof m };
+    return GlobalMemoryStatusEx(&m) ? m.ullTotalPageFile : 0;
+}
+
+enum { MM_INCREASED, MM_DECREASED, MM_LIMIT_CHANGING, MM_COUNT };
+typedef struct { const void *const *factory, *const *statics, *const *statics2, *const *statics3, *const *statics4; Event ev[MM_COUNT]; } MemoryManager;
+static MemoryManager g_memory;
+static HRESULT STDMETHODCALLTYPE mm_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_memory.factory;
+    else if (IsEqualGUID(iid, &IID_IMemoryManagerStatics_)) *out = &g_memory.statics;
+    else if (IsEqualGUID(iid, &IID_IMemoryManagerStatics2_)) *out = &g_memory.statics2;
+    else if (IsEqualGUID(iid, &IID_IMemoryManagerStatics3_)) *out = &g_memory.statics3;
+    else if (IsEqualGUID(iid, &IID_IMemoryManagerStatics4_)) *out = &g_memory.statics4;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE mm_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.MemoryManager", n); }
+static HRESULT STDMETHODCALLTYPE mm_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE mm_usage(void *p, UINT64 *v) { (void)p; if (!v) return E_POINTER; *v = mm_counters().priv; return S_OK; }
+static HRESULT STDMETHODCALLTYPE mm_usage_limit(void *p, UINT64 *v) { (void)p; if (!v) return E_POINTER; *v = mm_limit(); return S_OK; }
+/* AppMemoryUsageLevel: Low 0, Medium 1, High 2, OverLimit 3 */
+static HRESULT STDMETHODCALLTYPE mm_level(void *p, int *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    UINT64 used = mm_counters().priv, limit = mm_limit();
+    *v = !limit || used < limit / 2 ? 0 : used < limit / 10 * 8 ? 1 : used <= limit ? 2 : 3;
+    return S_OK;
+}
+#define MM_EVENT_FNS(i) (void *)mm_add_##i, (void *)mm_remove_##i
+#define MM_EVENT(i) \
+    static HRESULT STDMETHODCALLTYPE mm_add_##i(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_memory.ev[i], h, t); } \
+    static HRESULT STDMETHODCALLTYPE mm_remove_##i(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_memory.ev[i], t); }
+MM_EVENT(MM_INCREASED) MM_EVENT(MM_DECREASED) MM_EVENT(MM_LIMIT_CHANGING)
+
+/* AppMemoryReport and ProcessMemoryReport: the figures when asked */
+typedef struct { const void *const *vt, *const *vt2; LONG refs; UINT64 priv, peak, total, limit; } AppReport;
+#define APP_REPORT_OF2(p) ((AppReport *)((char *)(p) - __builtin_offsetof(AppReport, vt2)))
+static HRESULT STDMETHODCALLTYPE ar_qi(AppReport *r, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IAppMemoryReport_)) *out = &r->vt;
+    else if (IsEqualGUID(iid, &IID_IAppMemoryReport2_)) *out = &r->vt2;
+    else { *out = 0; return E_NOINTERFACE; }
+    InterlockedIncrement(&r->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE ar_addref(AppReport *r) { return (ULONG)InterlockedIncrement(&r->refs); }
+static ULONG STDMETHODCALLTYPE ar_release(AppReport *r)
+{
+    LONG n = InterlockedDecrement(&r->refs);
+    if (!n) HeapFree(GetProcessHeap(), 0, r);
+    return (ULONG)n;
+}
+static HRESULT STDMETHODCALLTYPE ar_name(AppReport *r, HSTRING *n) { (void)r; return make_hstring(L"Windows.System.AppMemoryReport", n); }
+static HRESULT STDMETHODCALLTYPE ar_priv(AppReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->priv; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ar_peak(AppReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->peak; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ar_total(AppReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->total; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ar_limit(AppReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->limit; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ar2_qi(void *p, REFIID iid, void **out) { return ar_qi(APP_REPORT_OF2(p), iid, out); }
+static ULONG STDMETHODCALLTYPE ar2_addref(void *p) { return ar_addref(APP_REPORT_OF2(p)); }
+static ULONG STDMETHODCALLTYPE ar2_release(void *p) { return ar_release(APP_REPORT_OF2(p)); }
+static HRESULT STDMETHODCALLTYPE ar2_name(void *p, HSTRING *n) { return ar_name(APP_REPORT_OF2(p), n); }
+static HRESULT STDMETHODCALLTYPE ar2_expected(void *p, UINT64 *v) { return ar_limit(APP_REPORT_OF2(p), v); }
+static const void *const app_report_vt[] = { (void *)ar_qi, (void *)ar_addref, (void *)ar_release, (void *)no_iids, (void *)ar_name,
+                                             (void *)base_trust, (void *)ar_priv, (void *)ar_peak, (void *)ar_total, (void *)ar_limit };
+static const void *const app_report2_vt[] = { (void *)ar2_qi, (void *)ar2_addref, (void *)ar2_release, (void *)no_iids, (void *)ar2_name,
+                                              (void *)base_trust, (void *)ar2_expected };
+
+typedef struct { const void *const *vt; LONG refs; UINT64 priv_ws, total_ws; } ProcReport;
+static HRESULT STDMETHODCALLTYPE pr_qi(ProcReport *r, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_IProcessMemoryReport_)) { *out = 0; return E_NOINTERFACE; }
+    *out = r;
+    InterlockedIncrement(&r->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE pr_addref(ProcReport *r) { return (ULONG)InterlockedIncrement(&r->refs); }
+static ULONG STDMETHODCALLTYPE pr_release(ProcReport *r)
+{
+    LONG n = InterlockedDecrement(&r->refs);
+    if (!n) HeapFree(GetProcessHeap(), 0, r);
+    return (ULONG)n;
+}
+static HRESULT STDMETHODCALLTYPE pr_name(ProcReport *r, HSTRING *n) { (void)r; return make_hstring(L"Windows.System.ProcessMemoryReport", n); }
+static HRESULT STDMETHODCALLTYPE pr_priv(ProcReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->priv_ws; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pr_total(ProcReport *r, UINT64 *v) { if (!v) return E_POINTER; *v = r->total_ws; return S_OK; }
+static const void *const proc_report_vt[] = { (void *)pr_qi, (void *)pr_addref, (void *)pr_release, (void *)no_iids, (void *)pr_name,
+                                              (void *)base_trust, (void *)pr_priv, (void *)pr_total };
+
+static HRESULT STDMETHODCALLTYPE mm_app_report(void *p, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    AppReport *r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *r);
+    if (!(*out = r)) return E_OUTOFMEMORY;
+    MemCounters c = mm_counters();
+    r->vt = app_report_vt;
+    r->vt2 = app_report2_vt;
+    r->refs = 1;
+    r->priv = r->total = c.priv;
+    r->peak = c.peak_pagefile > c.priv ? c.peak_pagefile : c.priv;
+    r->limit = mm_limit();
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE mm_process_report(void *p, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    ProcReport *r = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *r);
+    if (!(*out = r)) return E_OUTOFMEMORY;
+    MemCounters c = mm_counters();
+    r->vt = proc_report_vt;
+    r->refs = 1;
+    r->priv_ws = r->total_ws = c.ws;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE mm_try_set_limit(void *p, UINT64 v, boolean_t *ok) { (void)p; (void)v; if (!ok) return E_POINTER; *ok = 0; return S_OK; }
+static const void *const mm_factory_vt[] = { INSP_FNS(mm_qi, mm_name), (void *)mm_activate };
+static const void *const mm_statics_vt[] = {
+    INSP_FNS(mm_qi, mm_name), (void *)mm_usage, (void *)mm_usage_limit, (void *)mm_level,
+    MM_EVENT_FNS(MM_INCREASED), MM_EVENT_FNS(MM_DECREASED), MM_EVENT_FNS(MM_LIMIT_CHANGING),
+};
+_Static_assert(sizeof mm_statics_vt / sizeof mm_statics_vt[0] == 6 + 9, "IMemoryManagerStatics has 15 slots");
+static const void *const mm_statics2_vt[] = { INSP_FNS(mm_qi, mm_name), (void *)mm_app_report, (void *)mm_process_report };
+static const void *const mm_statics3_vt[] = { INSP_FNS(mm_qi, mm_name), (void *)mm_try_set_limit };
+static const void *const mm_statics4_vt[] = { INSP_FNS(mm_qi, mm_name), (void *)mm_usage_limit };   /* ExpectedAppMemoryUsageLimit */
+static MemoryManager g_memory = { (const void *const *)mm_factory_vt, (const void *const *)mm_statics_vt,
+                                  (const void *const *)mm_statics2_vt, (const void *const *)mm_statics3_vt,
+                                  (const void *const *)mm_statics4_vt };
+
+/* ---- Windows.System.Threading: ThreadPool and ThreadPoolTimer, the
+ * Windows Runtime's face of the process's thread pool (Windows serves them
+ * from threadpoolwinrt.dll; XAML's core and .NET Native's Task scheduler
+ * reach their work through them).  RunAsync submits a WorkItemHandler as
+ * a thread pool callback (TrySubmitThreadpoolCallback) behind an
+ * IAsyncAction, which its handler is given: Cancel before it starts skips
+ * it, after shows as Status Canceled; Low and High priority set the
+ * thread's for the item; TimeSliced is the default's behaviour here.  A
+ * ThreadPoolTimer is a thread pool timer (CreateThreadpoolTimer) calling
+ * its TimerElapsedHandler after Delay, or every Period; it lives until it
+ * has fired once (a one-shot) or Cancel, whatever the caller holds, and
+ * then calls its TimerDestroyedHandler ---------------------------------- */
+static const GUID IID_IThreadPoolStatics_      = { 0xB6BF67DD, 0x84BD, 0x44F8, { 0xAC, 0x1C, 0x93, 0xEB, 0xCB, 0x9D, 0xBA, 0x91 } };
+static const GUID IID_IThreadPoolTimerStatics_ = { 0x1A8A9D02, 0xE482, 0x461B, { 0xB8, 0xC7, 0x8E, 0xFA, 0xD1, 0xCC, 0xE5, 0x90 } };
+static const GUID IID_IThreadPoolTimer_        = { 0x594EBE78, 0x55EA, 0x4A88, { 0xA5, 0x0D, 0x34, 0x02, 0xAE, 0x1F, 0x9C, 0xF2 } };
+
+/* kernel32's thread pool (as threadpoolapiset.h has it) */
+typedef VOID (CALLBACK *TpSimpleFn)(PVOID instance, PVOID ctx);
+typedef VOID (CALLBACK *TpTimerFn)(PVOID instance, PVOID ctx, PVOID timer);
+__declspec(dllimport) BOOL WINAPI TrySubmitThreadpoolCallback(TpSimpleFn fn, PVOID ctx, PVOID env);
+__declspec(dllimport) PVOID WINAPI CreateThreadpoolTimer(TpTimerFn fn, PVOID ctx, PVOID env);
+__declspec(dllimport) VOID WINAPI SetThreadpoolTimer(PVOID timer, FILETIME *due, DWORD period, DWORD window);
+__declspec(dllimport) VOID WINAPI WaitForThreadpoolTimerCallbacks(PVOID timer, BOOL cancel);
+__declspec(dllimport) VOID WINAPI CloseThreadpoolTimer(PVOID timer);
+
+typedef struct { const void *const *factory; const void *const *statics; } PoolStatics;
+static PoolStatics g_pool;
+static volatile LONG g_pool_ids;
+static HRESULT STDMETHODCALLTYPE tp_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_pool.factory;
+    else if (IsEqualGUID(iid, &IID_IThreadPoolStatics_)) *out = &g_pool.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tp_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.Threading.ThreadPool", n); }
+static HRESULT STDMETHODCALLTYPE tp_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+
+/* Runs the work item on a pool thread, then completes its action:
+ * Completed 1, Canceled 2 or Error 3 */
+static VOID CALLBACK tp_work(PVOID instance, PVOID ctx)
+{
+    (void)instance;
+    Action *a = ctx;
+    void *work = a->work;
+    a->work = 0;
+    int status = 2;
+    if (!a->cancel) {
+        HANDLE t = GetCurrentThread();
+        int prio = GetThreadPriority(t);
+        if (a->priority) SetThreadPriority(t, a->priority > 0 ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
+        HRESULT hr = ((FnP)SLOT(work, 3))(work, &a->op);     /* WorkItemHandler::Invoke(operation) */
+        if (a->priority) SetThreadPriority(t, prio);
+        status = FAILED(hr) ? 3 : a->cancel ? 2 : 1;
+        a->error = FAILED(hr) ? hr : status == 2 ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : S_OK;
+    } else
+        a->error = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    obj_release(work);
+    AcquireSRWLockExclusive(&a->lock);
+    a->status = status;
+    void *h = a->completed;
+    if (h) obj_addref(h);
+    ReleaseSRWLockExclusive(&a->lock);
+    if (h) { ((FnPI)SLOT(h, 3))(h, &a->op, status); obj_release(h); }
+    act_release(a);                                     /* (the pool's reference) */
+}
+static HRESULT STDMETHODCALLTYPE tp_run_options(void *p, void *work, int priority, int options, void **out)
+{
+    (void)p; (void)options;
+    if (!work) return E_INVALIDARG;
+    if (!out) return E_POINTER;
+    *out = 0;
+    Action *a = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *a);
+    if (!a) return E_OUTOFMEMORY;
+    a->op = action_vt;
+    a->info = action_info_vt;
+    a->refs = 2;                                        /* the caller's and the pool's */
+    a->lock = (SRWLOCK)SRWLOCK_INIT;
+    a->pool = 1;
+    a->priority = priority;
+    a->id = (UINT32)InterlockedIncrement(&g_pool_ids);
+    a->work = work;
+    obj_addref(work);
+    if (!TrySubmitThreadpoolCallback(tp_work, a, 0)) {
+        obj_release(work);
+        HeapFree(GetProcessHeap(), 0, a);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    *out = &a->op;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tp_run_priority(void *p, void *work, int priority, void **out) { return tp_run_options(p, work, priority, 0, out); }
+static HRESULT STDMETHODCALLTYPE tp_run(void *p, void *work, void **out) { return tp_run_options(p, work, 0, 0, out); }
+static const void *const tp_factory_vt[] = { INSP_FNS(tp_qi, tp_name), (void *)tp_activate };
+static const void *const tp_statics_vt[] = { INSP_FNS(tp_qi, tp_name), (void *)tp_run, (void *)tp_run_priority, (void *)tp_run_options };
+static PoolStatics g_pool = { (const void *const *)tp_factory_vt, (const void *const *)tp_statics_vt };
+
+/* ThreadPoolTimer: Delay and Period are TimeSpans (100 ns units) */
+typedef struct {
+    const void *const *vt;              /* IThreadPoolTimer */
+    LONG refs;
+    PVOID tp;                           /* the thread pool timer */
+    void *elapsed, *destroyed;          /* TimerElapsedHandler, TimerDestroyedHandler (or 0) */
+    INT64 delay, period;
+    volatile LONG done;                 /* fired (a one-shot) or cancelled */
+} PoolTimer;
+static HRESULT STDMETHODCALLTYPE tmr_qi(PoolTimer *t, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_IThreadPoolTimer_)) { *out = 0; return E_NOINTERFACE; }
+    *out = t;
+    InterlockedIncrement(&t->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE tmr_addref(PoolTimer *t) { return (ULONG)InterlockedIncrement(&t->refs); }
+static ULONG STDMETHODCALLTYPE tmr_release(PoolTimer *t)
+{
+    LONG n = InterlockedDecrement(&t->refs);
+    if (!n) {
+        if (t->tp) CloseThreadpoolTimer(t->tp);
+        obj_release(t->elapsed);
+        if (t->destroyed) obj_release(t->destroyed);
+        HeapFree(GetProcessHeap(), 0, t);
+    }
+    return (ULONG)n;
+}
+static HRESULT STDMETHODCALLTYPE tmr_name(PoolTimer *t, HSTRING *n) { (void)t; return make_hstring(L"Windows.System.Threading.ThreadPoolTimer", n); }
+static HRESULT STDMETHODCALLTYPE tmr_period(PoolTimer *t, INT64 *v) { if (!v) return E_POINTER; *v = t->period; return S_OK; }
+static HRESULT STDMETHODCALLTYPE tmr_delay(PoolTimer *t, INT64 *v) { if (!v) return E_POINTER; *v = t->delay; return S_OK; }
+/* The timer's end, once: its destroyed handler, then the timer's own
+ * reference goes */
+static void tmr_finish(PoolTimer *t)
+{
+    if (InterlockedExchange(&t->done, 1)) return;
+    if (t->destroyed) ((FnP)SLOT(t->destroyed, 3))(t->destroyed, t);   /* TimerDestroyedHandler::Invoke(timer) */
+    tmr_release(t);
+}
+static HRESULT STDMETHODCALLTYPE tmr_cancel(PoolTimer *t)
+{
+    if (t->done) return S_OK;
+    WaitForThreadpoolTimerCallbacks(t->tp, TRUE);        /* (not waiting for itself, from its own handler) */
+    tmr_finish(t);
+    return S_OK;
+}
+static const void *const timer_vt[] = { (void *)tmr_qi, (void *)tmr_addref, (void *)tmr_release, (void *)no_iids, (void *)tmr_name,
+                                        (void *)base_trust, (void *)tmr_period, (void *)tmr_delay, (void *)tmr_cancel };
+static VOID CALLBACK tmr_fire(PVOID instance, PVOID ctx, PVOID tp)
+{
+    (void)instance; (void)tp;
+    PoolTimer *t = ctx;
+    if (t->done) return;
+    tmr_addref(t);
+    ((FnP)SLOT(t->elapsed, 3))(t->elapsed, t);              /* TimerElapsedHandler::Invoke(timer) */
+    if (!t->period) tmr_finish(t);
+    tmr_release(t);
+}
+
+typedef struct { const void *const *factory; const void *const *statics; } TimerStatics;
+static TimerStatics g_timers;
+static HRESULT STDMETHODCALLTYPE tps_qi(void *p, REFIID iid, void **out)
+{
+    (void)p;
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_timers.factory;
+    else if (IsEqualGUID(iid, &IID_IThreadPoolTimerStatics_)) *out = &g_timers.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tps_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.System.Threading.ThreadPoolTimer", n); }
+static HRESULT STDMETHODCALLTYPE tps_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT timer_make(void *elapsed, INT64 delay, INT64 period, void *destroyed, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!elapsed || delay < 0 || period < 0) return E_INVALIDARG;
+    PoolTimer *t = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *t);
+    if (!t) return E_OUTOFMEMORY;
+    t->vt = timer_vt;
+    t->refs = 2;                                        /* the caller's and its own, until it ends */
+    t->elapsed = elapsed;
+    obj_addref(elapsed);
+    if ((t->destroyed = destroyed)) obj_addref(destroyed);
+    t->delay = delay;
+    t->period = period;
+    if (!(t->tp = CreateThreadpoolTimer(tmr_fire, t, 0))) {
+        t->refs = 1;
+        tmr_release(t);
+        return E_OUTOFMEMORY;
+    }
+    /* a relative due time (negative 100 ns units); periods in whole
+     * milliseconds, at least one */
+    INT64 due = -(period ? period : delay);
+    FILETIME ft = { (DWORD)due, (DWORD)((UINT64)due >> 32) };
+    DWORD ms = period ? (DWORD)((period + 9999) / 10000) : 0;
+    SetThreadpoolTimer(t->tp, &ft, ms, 0);
+    *out = t;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tps_periodic(void *p, void *h, INT64 period, void **out) { (void)p; return period ? timer_make(h, 0, period, 0, out) : E_INVALIDARG; }
+static HRESULT STDMETHODCALLTYPE tps_timer(void *p, void *h, INT64 delay, void **out) { (void)p; return timer_make(h, delay, 0, 0, out); }
+static HRESULT STDMETHODCALLTYPE tps_periodic_destroyed(void *p, void *h, INT64 period, void *d, void **out) { (void)p; return period ? timer_make(h, 0, period, d, out) : E_INVALIDARG; }
+static HRESULT STDMETHODCALLTYPE tps_timer_destroyed(void *p, void *h, INT64 delay, void *d, void **out) { (void)p; return timer_make(h, delay, 0, d, out); }
+static const void *const tps_factory_vt[] = { INSP_FNS(tps_qi, tps_name), (void *)tps_activate };
+static const void *const tps_statics_vt[] = { INSP_FNS(tps_qi, tps_name), (void *)tps_periodic, (void *)tps_timer,
+                                              (void *)tps_periodic_destroyed, (void *)tps_timer_destroyed };
+static TimerStatics g_timers = { (const void *const *)tps_factory_vt, (const void *const *)tps_statics_vt };
+
 /* ---- the in-process server's exports ---------------------------------- */
 static BOOL name_is(HSTRING s, const WCHAR *want)
 {
@@ -1543,6 +1929,9 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.ApplicationModel.DesignMode")) { *factory = &g_design.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Power.PowerManager")) { *factory = &g_power.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Profile.AnalyticsInfo")) { *factory = &g_analytics.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.MemoryManager")) { *factory = &g_memory.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.Threading.ThreadPool")) { *factory = &g_pool.factory; return S_OK; }
+    if (name_is(cls, L"Windows.System.Threading.ThreadPoolTimer")) { *factory = &g_timers.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

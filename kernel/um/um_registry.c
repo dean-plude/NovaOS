@@ -883,10 +883,12 @@ static void defaults(void)
     /* Windows Runtime classes served in process (RoGetActivationFactory
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication, CoreWindow, CoreCursor, DesignMode,
-     * PowerManager and AnalyticsInfo (twinapi.appcore.dll; Windows keeps
+     * PowerManager, AnalyticsInfo, MemoryManager, ThreadPool and
+     * ThreadPoolTimer (twinapi.appcore.dll; Windows keeps
      * CoreWindow in Windows.UI.dll, DesignMode in
-     * Windows.ApplicationModel.dll, PowerManager in Windows.System.Power
-     * and AnalyticsInfo in Windows.System.Profile), the compositor and its easing
+     * Windows.ApplicationModel.dll, PowerManager in Windows.System.Power,
+     * AnalyticsInfo in Windows.System.Profile and the thread pool's in
+     * threadpoolwinrt.dll), the compositor and its easing
      * functions and paths, Windows' and the Windows App SDK's (dcomp.dll), the
      * DispatcherQueue, Windows' and the Windows App SDK's
      * (CoreMessaging.dll), and the Windows Runtime's boxes for values,
@@ -905,6 +907,9 @@ static void defaults(void)
         { "Windows.ApplicationModel.DesignMode", "twinapi.appcore.dll" },
         { "Windows.System.Power.PowerManager", "twinapi.appcore.dll" },
         { "Windows.System.Profile.AnalyticsInfo", "twinapi.appcore.dll" },
+        { "Windows.System.MemoryManager", "twinapi.appcore.dll" },
+        { "Windows.System.Threading.ThreadPool", "twinapi.appcore.dll" },
+        { "Windows.System.Threading.ThreadPoolTimer", "twinapi.appcore.dll" },
         { "Windows.UI.Composition.Compositor", "dcomp.dll" },
         { "Windows.UI.Composition.CompositionEasingFunction", "dcomp.dll" },
         { "Microsoft.UI.Composition.Compositor", "dcomp.dll" },

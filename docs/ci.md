@@ -139,6 +139,9 @@ and SMP jobs) it fails the job unless the run was started by hand with
   the image job allows 150 minutes. Every 10 minutes the build step prints
   the compiles that have run longest, since `kernel_build`'s own output
   goes to its log files: a compile that hangs is named in the job log.
+  The 90-minute runs of 10-26 were a clang 18 hang (about one compile in
+  five, hidden when ccache hit) on a `__except` filter that assigns in
+  `userland/programs/dlltest.c`; the code is now read in the handler body.
 - **Firefox installer and Mesa archive** downloads, keyed on
   `tools/bundle_firefox.py` and `tools/bundle_mesa.py`.
 - **Graphics job**: the Mesa, DXVK and 7-Zip downloads, Venus

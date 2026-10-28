@@ -275,9 +275,13 @@ static void delay_loads(void)
     CHECK(f != NULL && f == (PVOID)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetTickCount"));
     CHECK(dl_iat[0][0] == (ULONG_PTR)f && dl_handle[0] == GetModuleHandleA("kernel32.dll"));
     DWORD code = 0;
+    /* (the code is read in the handler, not the filter: clang 18 with
+     * -fasync-exceptions now and then loops forever building the SEH state
+     * table of a filter that assigns, which hung builds for hours) */
     __try {
         resolve(base, &dl_desc[1], NULL, NULL, &dl_iat[1][0], 0);
-    } __except (code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        code = GetExceptionCode();
     }
     CHECK(code == 1285 && dl_iat[1][0] == 0);                  /* ERROR_DELAY_LOAD_FAILED */
 }

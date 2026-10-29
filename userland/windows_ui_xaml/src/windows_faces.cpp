@@ -536,6 +536,22 @@ extern "C" HRESULT nova_object_in(void *a, void **out)
     return S_OK;
 }
 
+// a composable factory's outer object, which is no box: as nova_object_in,
+// asking it nothing (a C++/CX outer, such as Calculator's NarratorNotifier,
+// forwards an interface it does not know to its inner, which it holds only
+// once CreateInstance returns)
+extern "C" HRESULT nova_outer_in(void *a, void **out)
+{
+    *out = nullptr;
+    if (!a)
+        return S_OK;
+    if (untear(a, FALSE, out))
+        return S_OK;
+    nova_addref(a);
+    *out = a;
+    return S_OK;
+}
+
 extern "C" HRESULT nova_object_out(HRESULT hr, void *o, void **a)
 {
     if (FAILED(hr) || !a) {
@@ -554,6 +570,42 @@ extern "C" HRESULT nova_object_out(HRESULT hr, void *o, void **a)
     return FAILED(h) ? h : hr;
 }
 
+// the Windows default interface of @a's class, when it is a framework class
+// with a Windows one (nova_xaml_classes)
+static const GUID *windows_default(void *a)
+{
+    if (VT(a)[0] == (void *)&nova_tear_qi)
+        return nullptr;
+    void *insp;
+    if (FAILED(qi(a, &IID_IInspectable_, &insp)))
+        return nullptr;
+    HSTRING h = nullptr;
+    HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING *))VT(insp)[4])(insp, &h);
+    nova_release(insp);
+    if (FAILED(hr) || !h)
+        return nullptr;
+    UINT32 n;
+    const wchar_t *s = WindowsGetStringRawBuffer(h, &n);
+    static const wchar_t lifted[] = L"Microsoft.UI.Xaml.";
+    const UINT32 ln = ARRAYSIZE(lifted) - 1;
+    const GUID *found = nullptr;
+    if (n > ln && !wcsncmp(s, lifted, ln)) {
+        unsigned lo = 0, hi = nova_xaml_class_count;
+        while (lo < hi && !found) {
+            unsigned mid = (lo + hi) / 2;
+            int c = wcscmp(s + ln, nova_xaml_classes[mid].name);
+            if (!c)
+                found = nova_xaml_classes[mid].windows_default;
+            else if (c < 0)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+    }
+    WindowsDeleteString(h);
+    return found;
+}
+
 extern "C" HRESULT nova_object_to_app(void *a, void **out)
 {
     *out = nullptr;
@@ -562,6 +614,12 @@ extern "C" HRESULT nova_object_to_app(void *a, void **out)
     HRESULT hr = rebox(a, true, out);
     if (hr != S_FALSE)
         return hr;
+    // (a framework object as its Windows class's default interface's face,
+    // which names the Windows class: .NET Native casts an object to a
+    // sealed class, as Calculator's markup connects its Style, by the name)
+    const GUID *iid = windows_default(a);
+    if (iid && SUCCEEDED(nova_cross(a, iid, out)) && *out)
+        return S_OK;
     nova_addref(a);
     *out = a;
     return S_OK;

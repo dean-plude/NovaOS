@@ -244,6 +244,10 @@ class Faces:
         object may lack, a method of a later version of it"""
         cp, args, pre, post, clean, zero = ['NovaTear* t'], ['p'], [], [], [], []
         outer, inner = False, None  # (a composable factory's outer object and inner out)
+        # (which in object is that outer: one an out object, the inner, follows)
+        kinds = [(self.kind(ti), d) for (ti, d), _ in zip(impl, target)]
+        outer_at = next((i for i, (k, d) in enumerate(kinds) if k and k[0] == 'object' and d == 'in' and
+                         any(k2 and k2[0] == 'object' and d2 == 'out' for k2, d2 in kinds[i + 1:])), None)
         tcp = ['void*']
         for i, ((ti, d), (tt, _)) in enumerate(zip(impl, target)):
             ki, kt = self.kind(ti), self.kind(tt)
@@ -278,7 +282,11 @@ class Faces:
                         pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = nova_cross(%s, &%s, &c%d);'
                                    % (i, a, self.guid(kt[1]), i))
                     elif to_framework_in:
-                        pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = nova_object_in(%s, &c%d);' % (i, a, i))
+                        # (the outer is asked nothing: a C++/CX outer
+                        # forwards what it does not know to the inner it
+                        # holds only once CreateInstance returns)
+                        pre.append('void* c%d = 0; if (SUCCEEDED(hr)) hr = %s(%s, &c%d);'
+                                   % (i, 'nova_outer_in' if i == outer_at else 'nova_object_in', a, i))
                         outer = outer or ki[0] == 'object'
                     elif ki[0] == 'object':
                         # (an object the framework hands the app's code: a
@@ -349,6 +357,32 @@ class Faces:
         self.thunks.append('\n'.join(body))
         return name
 
+    def overload_thunk(self, name, ip, siblings):
+        """an overridable overload Windows' interface lacks, one taking more
+        leading in parameters than one it has (the framework's
+        MarkupExtension.ProvideValue(IXamlServiceProvider) over Windows'
+        ProvideValue()): that one, without them, as the framework's own
+        default implementation calls it"""
+        for sib, sp in siblings:
+            extra = len(ip) - len(sp)
+            if extra <= 0 or [(self.key(t), d) for t, d in ip[extra:]] != [(self.key(t), d) for t, d in sp] or \
+                    any(d != 'in' for _, d in ip[:extra]):
+                continue
+            cp, args = ['NovaTear* t'], ['t']
+            for i, (ti, d) in enumerate(ip):
+                k = self.kind(ti)
+                if k is None:
+                    return None
+                cs = self.cparams(k, d if d != 'in' else None)
+                names = ['a%dn' % i, 'a%d' % i] if len(cs) == 2 else ['a%d' % i]
+                cp += ['%s %s' % (c, a) for c, a in zip(cs, names)]
+                if i >= extra:
+                    args += names
+            self.thunks.append('static HRESULT STDMETHODCALLTYPE %s(%s) { return %s(%s); }'
+                               % (name, ', '.join(cp), sib, ', '.join(args)))
+            return name
+        return None
+
     def missing_thunk(self, name, what):
         iface, _, method = what.rpartition('.')
         if iface in NEVER_RAISED and method.startswith(('add_', 'remove_')) and method[method.index('_') + 1:] in NEVER_RAISED[iface]:
@@ -371,11 +405,16 @@ class Faces:
         if not delegate:
             slots += ['nova_tear_iids', 'nova_tear_name', 'nova_tear_trust']
         to_fw = 'reverse' not in flags
+        made = {}
         for j, (mname, ip, tgt) in enumerate(methods):
             fname = 'f%d_%d' % (n, j)
             r = None
             if tgt is not None:
                 r = self.thunk(fname, ip, tgt[0], tgt[1], tgt[2], to_fw, None, len(tgt) > 3)
+            if r is None and 'override' in flags:
+                r = self.overload_thunk(fname, ip, [(made[k], methods[k][1]) for k in made if methods[k][0] == mname])
+            if r is not None:
+                made[j] = r
             if r is None:
                 r = self.missing_thunk(fname, '%s.%s' % (impl_name, mname))
                 self.stats['missing'] += 1
@@ -633,6 +672,20 @@ class Faces:
         body += ['    L"%s",' % n for n in names]
         body.append('};')
         body.append('extern "C" const unsigned nova_xaml_name_count = %d;' % len(names))
+        # (and of those the classes, sorted, with their Windows default
+        # interfaces: a framework object handed to an app's code as an
+        # object is handed out as that interface's face, so it names its
+        # Windows class, as .NET's casts to a sealed class ask)
+        classes = []
+        for n in names:
+            t = self.types.get(WIN + n)
+            k = self.kind(TypeRef(WIN + n)) if isinstance(t, RuntimeClass) else None
+            if k and k[0] == 'ref':
+                classes.append((n, k[1]))
+        body.append('extern "C" const NovaXamlClass nova_xaml_classes[] = {')
+        body += ['    {L"%s", &%s},' % (n, self.guid(i)) for n, i in classes]
+        body.append('};')
+        body.append('extern "C" const unsigned nova_xaml_class_count = %d;' % len(classes))
         lines = ['// Generated by tools/winrt/winfaces.py: the Windows.UI.Xaml faces of the',
                  "// XAML framework (Windows' metadata over the framework's IDL).  Do not edit.",
                  '#include "windows_faces.h"', '']

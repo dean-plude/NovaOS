@@ -96,6 +96,7 @@ HRESULT nova_out(HRESULT hr, void *o, const GUID *iid, void **a);
 // an object going from Windows' types to the framework's: a Windows box
 // of a Windows.UI.Xaml enum or struct boxed again as the framework's
 HRESULT nova_object_in(void *a, void **out);
+HRESULT nova_outer_in(void *a, void **out);
 HRESULT nova_object_out(HRESULT hr, void *o, void **a);
 // an object going from the framework to the app's code: a framework box of
 // a Windows.UI.Xaml enum or struct boxed again as Windows boxes it
@@ -106,6 +107,15 @@ HRESULT nova_object_to_app(void *a, void **out);
 // out parameter's, whose old name it deletes
 extern const wchar_t *const nova_xaml_names[];
 extern const unsigned nova_xaml_name_count;
+// a framework class with a Windows one: its name less Microsoft.UI.Xaml.,
+// and the Windows class's default interface
+struct NovaXamlClass
+{
+    const wchar_t *name;
+    const GUID *windows_default;
+};
+extern const NovaXamlClass nova_xaml_classes[];
+extern const unsigned nova_xaml_class_count;
 void nova_typename(void *typename_, void **made, int to_framework);
 void nova_typename_out(void *typename_, int to_framework);
 void nova_addref(void *p);

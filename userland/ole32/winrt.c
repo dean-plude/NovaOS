@@ -339,18 +339,37 @@ WINOLEAPI_(HRESULT) RoGetActivationFactory(HSTRING cls, REFIID iid, void **f)
     UINT32 len;
     const WCHAR *name = WindowsGetStringRawBuffer(cls, &len);
     HRESULT hr = registered_factory(cls, name, len, iid, f);
-    if (hr != REGDB_E_CLASSNOTREG) return hr;
-    hr = ole32_winrt_factory(name, len, iid, f);
-    if (hr != REGDB_E_CLASSNOTREG) return hr;
-    hr = registry_factory(cls, name, len, iid, f);
-    if (hr != REGDB_E_CLASSNOTREG) return hr;
-    char msg[160] = "ole32: no Windows Runtime class ";
+    if (hr == REGDB_E_CLASSNOTREG) hr = ole32_winrt_factory(name, len, iid, f);
+    if (hr == REGDB_E_CLASSNOTREG) hr = registry_factory(cls, name, len, iid, f);
+    if (SUCCEEDED(hr)) return hr;
+    /* (on the debugger's output: the class, and why when it has a factory
+     * that failed, such as a factory interface it does not have) */
+    char msg[200] = "ole32: no Windows Runtime class ";
     UINT32 at = 32;
+    if (hr != REGDB_E_CLASSNOTREG) {
+        static const char hex[] = "0123456789abcdef";
+        const char *t = "ole32: factory failed 0x";
+        for (at = 0; t[at]; at++) msg[at] = t[at];
+        for (int sh = 28; sh >= 0; sh -= 4) msg[at++] = hex[((ULONG)hr >> sh) & 15];
+        msg[at++] = ':'; msg[at++] = ' ';
+    }
     for (UINT32 i = 0; i < len && at < sizeof msg - 2; i++) msg[at++] = name[i] < 0x80 ? (char)name[i] : '?';
+    if (hr != REGDB_E_CLASSNOTREG && iid && at < sizeof msg - 48) {
+        /* (with the interface asked for: {Data1-...}) */
+        static const char hex[] = "0123456789abcdef";
+        const BYTE *g = (const BYTE *)iid;
+        static const signed char order[] = {3, 2, 1, 0, -1, 5, 4, -1, 7, 6, -1, 8, 9, -1, 10, 11, 12, 13, 14, 15};
+        msg[at++] = ' '; msg[at++] = '{';
+        for (int i = 0; i < 20; i++) {
+            if (order[i] < 0) { msg[at++] = '-'; continue; }
+            msg[at++] = hex[g[order[i]] >> 4]; msg[at++] = hex[g[order[i]] & 15];
+        }
+        msg[at++] = '}';
+    }
     msg[at++] = '\n';
     msg[at] = 0;
     OutputDebugStringA(msg);
-    return REGDB_E_CLASSNOTREG;
+    return hr;
 }
 /* The class's factory's IActivationFactory::ActivateInstance, the slot
  * after IInspectable's six */

@@ -2345,6 +2345,24 @@ K32 VOID WINAPI RaiseFailFastException(PEXCEPTION_RECORD rec, PCONTEXT ctx, DWOR
     o = ff_put(o, " at ", rec ? (ULONG_PTR)rec->ExceptionAddress : 0);
     *o++ = '\n'; *o = 0;
     OutputDebugStringA(line);
+    /* (and the record's parameters, each also as the text it points at when
+     * it points at readable UTF-16: .NET Native passes its message so) */
+    for (DWORD p = 0; rec && p < rec->NumberParameters && p < 4; p++) {
+        ULONG_PTR v = rec->ExceptionInformation[p];
+        MEMORY_BASIC_INFORMATION mbi;
+        o = ff_put(line, "RaiseFailFastException: parameter ", v);
+        if (v > 0x10000 && !(v & 1) && VirtualQuery((LPCVOID)v, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & (PAGE_NOACCESS | 0x100 /* PAGE_GUARD */))) {
+            const WCHAR *w = (const WCHAR *)v;
+            const char *end = (const char *)mbi.BaseAddress + mbi.RegionSize;
+            *o++ = ' '; *o++ = '"';
+            for (int i = 0; i < 200 && (const char *)(w + i + 1) <= end && w[i]; i++)
+                *o++ = w[i] >= 32 && w[i] < 127 ? (char)w[i] : '?';
+            *o++ = '"';
+        }
+        *o++ = '\n'; *o = 0;
+        OutputDebugStringA(line);
+    }
     n = RtlCaptureStackBackTrace(1, 16, frames, 0);
     for (USHORT i = 0; i < n; i++) {
         HMODULE m = 0;

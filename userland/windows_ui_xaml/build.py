@@ -1457,7 +1457,33 @@ CORE_SOURCES[_TRANSFORMS] += ('../CompositeTransform.cpp', '../Projection.cpp', 
 CORE_SOURCES[_TEXT] += ('../FocusableHelper.cpp',)
 next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'element_sound.cpp'))
-WINFACES = os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
+# (step 32.6, a UWP app's first page: SizeHelper's statics, which
+# Calculator asks first, and the navigation an app's OnLaunched starts
+# with Frame.Navigate: Frame and Page, the frame's history, page stack and
+# page cache, and the navigation's event args, each its generated class
+# and its partial one)
+_NAVIGATION_PEERS = ('SizeHelper', 'Frame', 'Page', 'PageStackEntry', 'NavigationEventArgs',
+                     'NavigatingCancelEventArgs', 'NavigationFailedEventArgs', 'FrameNavigationOptions')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'Size_Partial', 'Frame_Partial', 'Page_Partial', 'PageStackEntry_Partial', 'NavigationCache',
+    'NavigationHelpers', 'NavigationHistory', 'PageStackEntryTrackerCollection')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _NAVIGATION_PEERS)
+# (and the classes a page's compiled markup and code ask next: the {x:Bind}
+# helpers' statics (XamlBindingHelper, XamlMarkupHelper), the Duration,
+# KeyTime and RepeatBehavior helpers, FontFamily, the state triggers and
+# their base, the template and style selectors and the flyouts' show options)
+_PAGE_HELPERS = ('XamlBindingHelper', 'XamlMarkupHelper', 'Duration', 'KeyTime', 'RepeatBehavior', 'FontFamily',
+                 'StateTriggerBase', 'AdaptiveTrigger', 'StateTrigger', 'DataTemplateSelector', 'StyleSelector',
+                 'FlyoutShowOptions',
+                 # (and the theme transitions the page's panels and popups set, and the
+                 # navigation transitions' base)
+                 'RepositionThemeTransition', 'EdgeUIThemeTransition', 'PaneThemeTransition',
+                 'PopupThemeTransition', 'NavigationTransitionInfo')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'XamlBindingHelperFactory_Partial', 'XamlMarkupHelper_Partial', 'Duration_Partial', 'KeyTime_Partial',
+    'RepeatBehavior_Partial', 'FontFamily_Partial', 'StateTriggerBase_Partial', 'DataTemplateSelector_Partial',
+    'FlyoutShowOptions_partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _PAGE_HELPERS)
+WINFACES =os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 
 def windows_faces(b, odir):

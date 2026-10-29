@@ -884,9 +884,9 @@ static void defaults(void)
      * loads DllPath and calls its DllGetActivationFactory): the UWP app
      * model's CoreApplication, CoreWindow, CoreCursor, DesignMode,
      * PowerManager, AnalyticsInfo, MemoryManager, ThreadPool,
-     * ThreadPoolTimer, User, NamedPolicy and ApplicationView
+     * ThreadPoolTimer, User, NamedPolicy, ApplicationView and Package
      * (twinapi.appcore.dll; Windows keeps
-     * CoreWindow in Windows.UI.dll, DesignMode in
+     * CoreWindow in Windows.UI.dll, DesignMode and Package in
      * Windows.ApplicationModel.dll, PowerManager in Windows.System.Power,
      * AnalyticsInfo in Windows.System.Profile and the thread pool's in
      * threadpoolwinrt.dll, User in Windows.System.UserManagement,
@@ -921,6 +921,7 @@ static void defaults(void)
         { "Windows.System.User", "twinapi.appcore.dll" },
         { "Windows.Management.Policies.NamedPolicy", "twinapi.appcore.dll" },
         { "Windows.UI.ViewManagement.ApplicationView", "twinapi.appcore.dll" },
+        { "Windows.ApplicationModel.Package", "twinapi.appcore.dll" },
         { "Windows.Storage.ApplicationData", "Windows.Storage.ApplicationData.dll" },
         { "Windows.Globalization.ApplicationLanguages", "Windows.Globalization.dll" },
         { "Windows.Globalization.Language", "Windows.Globalization.dll" },

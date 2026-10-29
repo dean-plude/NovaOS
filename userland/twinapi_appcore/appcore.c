@@ -45,9 +45,10 @@
  *
  * Its other statics: DesignMode (never in a designer), PowerManager,
  * AnalyticsInfo (a desktop, Windows.Desktop, at the system's version),
- * MemoryManager (the process's commit against the system's), and
+ * MemoryManager (the process's commit against the system's),
  * Windows.System.Threading's ThreadPool and ThreadPoolTimer (the process's
- * thread pool, its work items as IAsyncActions).
+ * thread pool, its work items as IAsyncActions), and Package.Current (the
+ * process's package and its Id).
  */
 #include <windows.h>
 #include <roapi.h>
@@ -2338,6 +2339,125 @@ static AppViewStatics g_appview_statics = { (const void *const *)avs_factory_vt,
                                             (const void *const *)avs_statics3_vt, (const void *const *)avs_statics4_vt,
                                             (const void *const *)avs_interop_vt };
 
+/* ---- Package: the package the process belongs to, Package.Current
+ * (Windows serves it from Windows.ApplicationModel.dll; Calculator reads
+ * its Id's name, version and full and family names).  Its Id is kernel32's
+ * GetCurrentPackageId and full and family names; a process of no package
+ * gets none (APPMODEL_ERROR_NO_PACKAGE as its HRESULT, as on Windows).  The
+ * installed location and dependencies are not served yet ------------------- */
+static const GUID IID_IPackageStatics_ = { 0x4E534BDF, 0x2960, 0x4878, { 0x97, 0xA4, 0x96, 0x24, 0xDE, 0xB7, 0x2F, 0x2D } };
+static const GUID IID_IPackage_        = { 0x163C792F, 0xBD75, 0x413C, { 0xBF, 0x23, 0xB1, 0xFE, 0x7B, 0x95, 0xD8, 0x25 } };
+static const GUID IID_IPackageId_      = { 0x1ADB665E, 0x37C7, 0x4790, { 0x99, 0x80, 0xDD, 0x7A, 0xE7, 0x4E, 0x8B, 0xB2 } };
+/* kernel32's, with its PACKAGE_ID */
+typedef struct { UINT32 reserved, arch; UINT64 version; PWSTR name, publisher, resource, publisher_id; } PackageId_;
+__declspec(dllimport) LONG WINAPI GetCurrentPackageId(UINT32 *len, BYTE *buf);
+__declspec(dllimport) LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name);
+__declspec(dllimport) LONG WINAPI GetCurrentPackageFamilyName(UINT32 *len, PWSTR name);
+typedef struct { const void *const *factory, *const *statics, *const *package, *const *id; } PackageStatics;
+static PackageStatics g_package;
+static HRESULT STDMETHODCALLTYPE pk_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (p == &g_package.package && (is_base(iid) || IsEqualGUID(iid, &IID_IPackage_))) *out = &g_package.package;
+    else if (p == &g_package.id && (is_base(iid) || IsEqualGUID(iid, &IID_IPackageId_))) *out = &g_package.id;
+    else if ((p == &g_package.factory || p == &g_package.statics) && (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)))
+        *out = &g_package.factory;
+    else if ((p == &g_package.factory || p == &g_package.statics) && IsEqualGUID(iid, &IID_IPackageStatics_))
+        *out = &g_package.statics;
+    else { *out = 0; return E_NOINTERFACE; }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE pk_name(void *p, HSTRING *n)
+{
+    return make_hstring(p == &g_package.id ? L"Windows.ApplicationModel.PackageId" : L"Windows.ApplicationModel.Package", n);
+}
+static HRESULT STDMETHODCALLTYPE pk_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT pk_error(LONG e) { return HRESULT_FROM_WIN32(e); }
+static HRESULT STDMETHODCALLTYPE pk_current(void *p, void **o)
+{
+    (void)p;
+    if (!o) return E_POINTER;
+    UINT32 n = 0;
+    LONG e = GetCurrentPackageFullName(&n, 0);
+    if (e != ERROR_INSUFFICIENT_BUFFER) { *o = 0; return pk_error(e ? e : ERROR_NOT_FOUND); }
+    *o = &g_package.package;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE pk_id(void *p, void **o) { (void)p; if (!o) return E_POINTER; *o = &g_package.id; return S_OK; }
+static HRESULT STDMETHODCALLTYPE pk_not_yet(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE pk_is_framework(void *p, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = 0; return S_OK; }
+/* the process's PACKAGE_ID, in a buffer the caller frees */
+static PackageId_ *pk_get_id(HRESULT *hr)
+{
+    UINT32 n = 0;
+    LONG e = GetCurrentPackageId(&n, 0);
+    PackageId_ *id = e == ERROR_INSUFFICIENT_BUFFER ? HeapAlloc(GetProcessHeap(), 0, n) : 0;
+    if (id && (e = GetCurrentPackageId(&n, (BYTE *)id)) != 0) { HeapFree(GetProcessHeap(), 0, id); id = 0; }
+    *hr = id ? S_OK : e == ERROR_INSUFFICIENT_BUFFER ? E_OUTOFMEMORY : pk_error(e ? e : ERROR_NOT_FOUND);
+    return id;
+}
+static HRESULT pk_id_string(int which, HSTRING *s)
+{
+    if (!s) return E_POINTER;
+    *s = 0;
+    HRESULT hr;
+    PackageId_ *id = pk_get_id(&hr);
+    if (!id) return hr;
+    const WCHAR *v = which == 0 ? id->name : which == 1 ? id->resource : which == 2 ? id->publisher : id->publisher_id;
+    hr = make_hstring(v ? v : L"", s);
+    HeapFree(GetProcessHeap(), 0, id);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE pki_name(void *p, HSTRING *s) { (void)p; return pk_id_string(0, s); }
+static HRESULT STDMETHODCALLTYPE pki_resource(void *p, HSTRING *s) { (void)p; return pk_id_string(1, s); }
+static HRESULT STDMETHODCALLTYPE pki_publisher(void *p, HSTRING *s) { (void)p; return pk_id_string(2, s); }
+static HRESULT STDMETHODCALLTYPE pki_publisher_id(void *p, HSTRING *s) { (void)p; return pk_id_string(3, s); }
+/* PackageVersion: Major, Minor, Build, Revision; PACKAGE_VERSION keeps
+ * Revision in the low 16 bits */
+static HRESULT STDMETHODCALLTYPE pki_version(void *p, UINT16 *v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    HRESULT hr;
+    PackageId_ *id = pk_get_id(&hr);
+    if (!id) return hr;
+    for (int i = 0; i < 4; i++) v[i] = (UINT16)(id->version >> (48 - 16 * i));
+    HeapFree(GetProcessHeap(), 0, id);
+    return S_OK;
+}
+/* ProcessorArchitecture: the PROCESSOR_ARCHITECTURE_ values (X64 9, Neutral 11) */
+static HRESULT STDMETHODCALLTYPE pki_arch(void *p, INT32 *a)
+{
+    (void)p;
+    if (!a) return E_POINTER;
+    HRESULT hr;
+    PackageId_ *id = pk_get_id(&hr);
+    if (!id) return hr;
+    *a = (INT32)id->arch;
+    HeapFree(GetProcessHeap(), 0, id);
+    return S_OK;
+}
+static HRESULT pk_full_or_family(int family, HSTRING *s)
+{
+    if (!s) return E_POINTER;
+    *s = 0;
+    WCHAR buf[200];
+    UINT32 n = 200;
+    LONG e = family ? GetCurrentPackageFamilyName(&n, buf) : GetCurrentPackageFullName(&n, buf);
+    return e ? pk_error(e) : make_hstring(buf, s);
+}
+static HRESULT STDMETHODCALLTYPE pki_full(void *p, HSTRING *s) { (void)p; return pk_full_or_family(0, s); }
+static HRESULT STDMETHODCALLTYPE pki_family(void *p, HSTRING *s) { (void)p; return pk_full_or_family(1, s); }
+static const void *const pk_factory_vt[] = { INSP_FNS(pk_qi, pk_name), (void *)pk_activate };
+static const void *const pk_statics_vt[] = { INSP_FNS(pk_qi, pk_name), (void *)pk_current };
+static const void *const pk_package_vt[] = { INSP_FNS(pk_qi, pk_name), (void *)pk_id, (void *)pk_not_yet,
+                                             (void *)pk_is_framework, (void *)pk_not_yet };
+static const void *const pk_id_vt[] = { INSP_FNS(pk_qi, pk_name), (void *)pki_name, (void *)pki_version, (void *)pki_arch,
+                                        (void *)pki_resource, (void *)pki_publisher, (void *)pki_publisher_id,
+                                        (void *)pki_full, (void *)pki_family };
+static PackageStatics g_package = { (const void *const *)pk_factory_vt, (const void *const *)pk_statics_vt,
+                                    (const void *const *)pk_package_vt, (const void *const *)pk_id_vt };
+
 APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
 {
     if (!factory) return E_POINTER;
@@ -2353,6 +2473,7 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.System.User")) { *factory = &g_users.factory; return S_OK; }
     if (name_is(cls, L"Windows.Management.Policies.NamedPolicy")) { *factory = &g_policies.factory; return S_OK; }
     if (name_is(cls, L"Windows.UI.ViewManagement.ApplicationView")) { *factory = &g_appview_statics.factory; return S_OK; }
+    if (name_is(cls, L"Windows.ApplicationModel.Package")) { *factory = &g_package.factory; return S_OK; }
     *factory = 0;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

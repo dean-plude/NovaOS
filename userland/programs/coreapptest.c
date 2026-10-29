@@ -16,7 +16,8 @@
  * target on the CoreWindow (CreateTargetForCurrentView) showing a sprite.
  * The launch's arguments carry what Windows Calculator's OnLaunched reads
  * (the User, PrelaunchActivated, a SplashScreen taking a Dismissed
- * handler), and ApplicationView.GetForCurrentView on the window's thread
+ * handler), Package.Current (none, outside a package), and
+ * ApplicationView.GetForCurrentView on the window's thread
  * is the main view (Id 1), resizing the window (TryResizeView) and refusing
  * a size under SetPreferredMinSize's. The view and CoreApplication each
  * keep one Properties set (WinUI 2 stores its per-view objects there).
@@ -542,6 +543,16 @@ int main(void)
     CHECK("CoreApplication (ICoreApplication)", factory(L"Windows.ApplicationModel.Core.CoreApplication", &IID_ICoreApplication_T, &g_app) == S_OK && g_app);
     void *junk = 0;
     CHECK("an unknown class: REGDB_E_CLASSNOTREG", factory(L"Windows.NovaOS.NoSuchClass", &IID_IInspectable_T, &junk) == REGDB_E_CLASSNOTREG);
+    /* Package.Current (Calculator reads its Id): a process of no package
+     * has none, APPMODEL_ERROR_NO_PACKAGE as its HRESULT, as on Windows */
+    static const GUID IID_IPackageStatics_T = { 0x4E534BDF, 0x2960, 0x4878, { 0x97, 0xA4, 0x96, 0x24, 0xDE, 0xB7, 0x2F, 0x2D } };
+    void *pkgs = 0, *current = (void *)1;
+    CHECK("Package's statics", factory(L"Windows.ApplicationModel.Package", &IID_IPackageStatics_T, &pkgs) == S_OK && pkgs);
+    if (pkgs) {
+        CHECK("Package.Current of no package: APPMODEL_ERROR_NO_PACKAGE",
+              VT(pkgs, 6, Get_t)(pkgs, &current) == HRESULT_FROM_WIN32(15700) && current == 0);
+        RELEASE(pkgs);
+    }
     if (!g_app || !g_win_statics) { printf("coreapptest: %d passed, %d failed\n", pass, fail + 1); return 1; }
     CHECK("ICoreApplicationExit", SUCCEEDED(VT(g_app, 0, QI_t)(g_app, &IID_ICoreApplicationExit_T, &g_exit)) && g_exit);
     void *imm = 0, *main_view = 0;

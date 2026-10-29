@@ -1447,5 +1447,30 @@ vendors.
    `PercentFormatter`, the rounder classes, `ManifestLanguages` from the
    manifest.  Test: `wrtglobtest`.
 
+   Pulsar item 3, fourth slice: Calculator's navigation to `MainPage`.
+   The framework's `Frame`, `Page`, `PageStackEntry`, the navigation
+   event args and history, `SizeHelper` and the helpers its page's
+   markup makes (`XamlBindingHelper`, `XamlMarkupHelper`, `Duration`,
+   `KeyTime`, `RepeatBehavior`, `FontFamily`, the state triggers, the
+   template and style selectors, `FlyoutShowOptions`, four theme
+   transitions and `NavigationTransitionInfo`) are vendored and built.
+   Three face fixes came out of it.  A composable `CreateInstance`
+   takes its outer object untouched (`nova_outer_in`): asking a C++/CX
+   outer for an interface before it holds its inner follows a null
+   pointer (`CalcViewModel.dll`'s `NarratorNotifier`).  A framework
+   object handed to the app is crossed to its class's Windows default
+   interface (`nova_xaml_classes`, written by `winfaces.py`), so it
+   names its `Windows.UI.Xaml` class: .NET Native casts to a sealed
+   class by that name (the `Style` that `IComponentConnector.Connect`
+   gets).  An overridable method the framework has with more leading
+   parameters than Windows' (`ProvideValueWithIXamlServiceProvider`
+   against `ProvideValue`) calls the Windows overload without them.
+   `Windows.ApplicationModel.Package.Current` and its `Id` are given by
+   `twinapi.appcore.dll` over kernel32's package identity.  Calculator
+   now gets through its `MainPage` markup to its first `Image`, whose
+   core element (`CImage`) and imaging (`BitmapImage`,
+   `BitmapSource`) are the next slice.  Test: `coreapptest`
+   (`Package.Current` with no package).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -156,15 +156,17 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   two `NavigationViewItem`s), `wrtapptest`
   (`ApplicationData.LocalSettings`, `ResourceContext.QualifierValues`
   and `Languages`, `User.GetFromId`, `NamedPolicy`; 64- and 32-bit),
-  `wrtpooltest` (`Windows.System.MemoryManager` and
-  `Windows.System.Threading`'s `ThreadPool` and `ThreadPoolTimer` from
-  `RoGetActivationFactory`: memory use and reports, work items as
-  `IAsyncAction`s, one-shot, periodic and cancelled timers; 64- and
-  32-bit), `wuxamltest` (the XAML framework under its `Windows.UI.Xaml`
-  names, as WinUI 2 and UWP apps see it:
-  `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
-  driven through Windows' interfaces, a Windows-boxed `Visibility`,
-  `DependencyProperty.Register` with Windows type names,
+  `wrtglobtest` (`ApplicationLanguages`, `Language`, `GeographicRegion`,
+  `GlobalizationPreferences`, `DecimalFormatter`, `CurrencyFormatter`,
+  `Calendar`, `DateTimeFormatter`; 64- and 32-bit), `wrtpooltest`
+  (`Windows.System.MemoryManager` and `Windows.System.Threading`'s
+  `ThreadPool` and `ThreadPoolTimer` from `RoGetActivationFactory`:
+  memory use and reports, work items as `IAsyncAction`s, one-shot,
+  periodic and cancelled timers; 64- and 32-bit), `wuxamltest` (the XAML
+  framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps
+  see it: `Windows.UI.Xaml.Controls.Button` activated by its Windows
+  name and driven through Windows' interfaces, a Windows-boxed
+  `Visibility`, `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
   Windows handler, and an app's control composed over
@@ -553,7 +555,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `volfiletest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wrtapptest`, `wrtpooltest`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamldlltest`, `xamlloadtest`, `xamlpagetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `volfiletest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wrtapptest`, `wrtglobtest`, `wrtpooltest`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamldlltest`, `xamlloadtest`, `xamlpagetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

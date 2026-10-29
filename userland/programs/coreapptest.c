@@ -18,7 +18,8 @@
  * (the User, PrelaunchActivated, a SplashScreen taking a Dismissed
  * handler), and ApplicationView.GetForCurrentView on the window's thread
  * is the main view (Id 1), resizing the window (TryResizeView) and refusing
- * a size under SetPreferredMinSize's.
+ * a size under SetPreferredMinSize's. The view and CoreApplication each
+ * keep one Properties set (WinUI 2 stores its per-view objects there).
  *
  *   coreapptest ARGS...   the self-test runs it as "coreapptest hello world"
  */
@@ -54,6 +55,7 @@ static const GUID IID_IActivatedEventArgsWithUser_T = { 0x1CF09B9E, 0x9962, 0x49
 static const GUID IID_IPrelaunchActivatedEventArgs_T = { 0x0C44717B, 0x19F7, 0x48D6, { 0xB0, 0x46, 0xCF, 0x22, 0x82, 0x6E, 0xAA, 0x74 } };
 static const GUID IID_IApplicationViewStatics2_T = { 0xAF338AE5, 0xCF64, 0x423C, { 0x85, 0xE5, 0xF3, 0xE7, 0x24, 0x48, 0xFB, 0x23 } };
 static const GUID IID_IApplicationView3_T = { 0x903C9CE5, 0x793A, 0x4FDF, { 0xA2, 0xB2, 0xAF, 0x1A, 0xC2, 0x1E, 0x31, 0x08 } };
+static const GUID IID_ICoreApplicationView5_T = { 0x2BC095A8, 0x8EF0, 0x446D, { 0x9E, 0x60, 0x3A, 0x3E, 0x04, 0x28, 0xC6, 0x71 } };
 static const GUID IID_IAsyncInfo_T = { 0x00000036, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 
 /* ICoreWindow's slots (IInspectable's six first) */
@@ -405,6 +407,18 @@ static HRESULT STDMETHODCALLTYPE v_initialize(Obj *o, void *app_view)
                                                 (app_view, &h_activated, &t) == S_OK);
     void *cur = 0;
     CHECK("GetCurrentView: this view", VT(g_app, 12, Get_t)(g_app, &cur) == S_OK && cur == app_view);
+    /* WinUI 2 keeps its per-view objects in the view's Properties */
+    void *v5 = 0, *p1 = 0, *p2 = 0;
+    CHECK("ICoreApplicationView5", SUCCEEDED(VT(app_view, 0, QI_t)(app_view, &IID_ICoreApplicationView5_T, &v5)) && v5);
+    if (v5) {
+        CHECK("the view's Properties: one set", VT(v5, 6, Get_t)(v5, &p1) == S_OK && p1
+              && VT(v5, 6, Get_t)(v5, &p2) == S_OK && p2 == p1);
+        RELEASE(p1);
+        RELEASE(p2);
+        RELEASE(v5);
+    }
+    CHECK("CoreApplication.Properties", VT(g_app, 11, Get_t)(g_app, &p1) == S_OK && p1);
+    RELEASE(p1);
     return S_OK;
 }
 typedef HRESULT (STDMETHODCALLTYPE *Add_t)(void *, void *, EventRegistrationToken *);

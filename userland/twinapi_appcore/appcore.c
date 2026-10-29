@@ -51,6 +51,7 @@
  */
 #include <windows.h>
 #include <roapi.h>
+#include "../winrtmap/strmap.h"
 
 /* ntdll's RtlGetVersion, with its RTL_OSVERSIONINFOW */
 typedef struct { ULONG size, major, minor, build, platform; WCHAR csd[128]; } VersionInfo;
@@ -80,6 +81,8 @@ static const GUID IID_ICoreImmersiveApplication_ = { 0x1ADA0E3E, 0xE4A2, 0x4123,
 static const GUID IID_ICoreApplicationView_  = { 0x638BB2DB, 0x451D, 0x4661, { 0xB0, 0x99, 0x41, 0x4F, 0x34, 0xFF, 0xB9, 0xF1 } };
 static const GUID IID_ICoreApplicationView2_ = { 0x68EB7ADF, 0x917F, 0x48EB, { 0x9A, 0xEB, 0x7D, 0xE5, 0x3E, 0x08, 0x6A, 0xB1 } };
 static const GUID IID_ICoreApplicationView3_ = { 0x07EBE1B3, 0xA4CF, 0x4550, { 0xAB, 0x70, 0xB0, 0x7E, 0x85, 0x33, 0x0B, 0xC8 } };
+static const GUID IID_ICoreApplicationView5_ = { 0x2BC095A8, 0x8EF0, 0x446D, { 0x9E, 0x60, 0x3A, 0x3E, 0x04, 0x28, 0xC6, 0x71 } };
+static const GUID IID_IPropertySet_appcore = { 0x8A43ED9F, 0xF4E6, 0x4421, { 0xAC, 0xF9, 0x1D, 0xAB, 0x29, 0x86, 0x82, 0x0C } };
 static const GUID IID_ICoreApplicationViewTitleBar_ = { 0x006D35E3, 0xE1F1, 0x431B, { 0x95, 0x08, 0x29, 0xB9, 0x69, 0x26, 0xAC, 0x53 } };
 static const GUID IID_ICoreWindow_           = { 0x79B9D5F2, 0x879E, 0x4B89, { 0xB7, 0x98, 0x79, 0xE4, 0x75, 0x98, 0x03, 0x0C } };
 static const GUID IID_ICoreWindowStatic_     = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90, 0x22, 0x53, 0x6B, 0xB9, 0xCF, 0x93, 0xB1 } };
@@ -1058,10 +1061,32 @@ APPCORE_API HRESULT WINAPI PrivateCreateCoreWindow(int type, LPCWSTR title, int 
 }
 
 /* ---- the view (CoreApplicationView) and the launch's arguments --------
- * The one view: ICoreApplicationView, 2 (its Dispatcher, the CoreWindow's)
- * and 3 (not a component; its title bar: the system's, visible, the view
- * not extended into it) */
-typedef struct { const void *const *vt, *const *vt2, *const *vt3; Event activated, hosted_closing; } View;
+ * The one view: ICoreApplicationView, 2 (its Dispatcher, the CoreWindow's),
+ * 3 (not a component; its title bar: the system's, visible, the view not
+ * extended into it) and 5 (its Properties, a PropertySet for the app's
+ * own per-view state: WinUI 2 keeps its per-view objects there) */
+/* a PropertySet made the first time it is asked for, kept for the
+ * process (CoreApplication's and the view's Properties) */
+static HRESULT lazy_property_set(void *volatile *slot, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!*slot) {
+        void *map = 0, *set = 0;
+        HRESULT hr = nova_strmap_new(TRUE, &map);
+        if (FAILED(hr)) return hr;
+        hr = (*(HRESULT (STDMETHODCALLTYPE **)(void *, REFIID, void **))*(void **)map)(map, &IID_IPropertySet_appcore, &set);
+        (*(ULONG (STDMETHODCALLTYPE **)(void *))((*(void ***)map) + 2))(map);
+        if (FAILED(hr)) return hr;
+        if (InterlockedCompareExchangePointer(slot, set, 0))
+            (*(ULONG (STDMETHODCALLTYPE **)(void *))((*(void ***)set) + 2))(set);
+    }
+    void *set = *slot;
+    (*(ULONG (STDMETHODCALLTYPE **)(void *))((*(void ***)set) + 1))(set);
+    *out = set;
+    return S_OK;
+}
+typedef struct { const void *const *vt, *const *vt2, *const *vt3, *const *vt5; Event activated, hosted_closing; void *volatile props; } View;
 static View g_view;
 typedef struct { const void *const *vt, *const *wrs, *const *weak; boolean_t extend; Event metrics, visible; } TitleBar;
 static TitleBar g_title;
@@ -1071,6 +1096,7 @@ static HRESULT STDMETHODCALLTYPE view_qi(View *v, REFIID iid, void **out)
     if (is_base(iid) || IsEqualGUID(iid, &IID_ICoreApplicationView_)) { *out = &v->vt; return S_OK; }
     if (IsEqualGUID(iid, &IID_ICoreApplicationView2_)) { *out = &v->vt2; return S_OK; }
     if (IsEqualGUID(iid, &IID_ICoreApplicationView3_)) { *out = &v->vt3; return S_OK; }
+    if (IsEqualGUID(iid, &IID_ICoreApplicationView5_)) { *out = &v->vt5; return S_OK; }
     *out = 0;
     return E_NOINTERFACE;
 }
@@ -1092,7 +1118,10 @@ static HRESULT STDMETHODCALLTYPE view3_add_closing(void *p, void *h, EventRegist
 static HRESULT STDMETHODCALLTYPE view3_remove_closing(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_view.hosted_closing, t); }
 static const void *const view3_vt[] = { INSP_FNS(view2_qi, view2_name), (void *)view3_component, (void *)view3_title,
                                         (void *)view3_add_closing, (void *)view3_remove_closing };
-static View g_view = { (const void *const *)view_vt, (const void *const *)view2_vt, (const void *const *)view3_vt };
+static HRESULT STDMETHODCALLTYPE view5_properties(void *p, void **ps) { (void)p; return lazy_property_set(&g_view.props, ps); }
+static const void *const view5_vt[] = { INSP_FNS(view2_qi, view2_name), (void *)view5_properties };
+static View g_view = { (const void *const *)view_vt, (const void *const *)view2_vt, (const void *const *)view3_vt,
+                       (const void *const *)view5_vt };
 
 /* CoreApplicationViewTitleBar: the system's title bar over the view (its
  * window's caption, 32 pixels, no system overlay insets); extending the
@@ -1305,7 +1334,8 @@ static HRESULT STDMETHODCALLTYPE app_add_suspending(void *p, void *h, EventRegis
 static HRESULT STDMETHODCALLTYPE app_remove_suspending(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.suspending, t); }
 static HRESULT STDMETHODCALLTYPE app_add_resuming(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.resuming, h, t); }
 static HRESULT STDMETHODCALLTYPE app_remove_resuming(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.resuming, t); }
-static HRESULT STDMETHODCALLTYPE app_properties(void *p, void **v) { (void)p; if (v) *v = 0; return E_NOTIMPL; }
+static void *volatile g_app_props;
+static HRESULT STDMETHODCALLTYPE app_properties(void *p, void **v) { (void)p; return lazy_property_set(&g_app_props, v); }
 static HRESULT STDMETHODCALLTYPE app_current_view(void *p, void **v)
 {
     (void)p;

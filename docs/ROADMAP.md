@@ -1393,6 +1393,19 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   them and stops on `CoreDragDropManager`, `AsyncCausalityTracer` and an
   unhandled `E_FAIL` in `Windows.UI.Xaml.dll`.  Next: those, then the
   CI check that it computes `2 + 2`, which ticks this step.
+  Ninth part done (Pulsar item 3, third slice): the drag-and-drop and
+  causality-tracer misses turn out harmless; the `E_FAIL` was
+  `App.xaml` never loading, because a package keeps its compiled XAML
+  inside `resources.pri`.  The system XAML now reads it (and WinUI 2's
+  theme resources from its framework package) through `MRM.dll`;
+  `CoreApplicationView.Properties` and `CoreApplication.Properties` are
+  there for WinUI 2, and boxed values name their
+  ``IReference`1<T>`` class so .NET Native can unbox them (tests
+  `propvaltest`, `coreapptest`).  Calculator now gets through
+  `OnLaunched` and stops on XAML classes the system DLL does not build
+  yet (`SizeHelper` first, then `Frame` and `Page` for its navigation to
+  `MainPage`).  Next: those, then the CI check that it computes `2 + 2`,
+  which ticks this step.
 
 ---
 

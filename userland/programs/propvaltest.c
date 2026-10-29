@@ -4,7 +4,8 @@
  * through RoGetActivationFactory (the registry's ActivatableClassId key),
  * boxes of numbers, booleans, strings, GUIDs, points and rectangles read
  * back through IPropertyValue (type, numeric conversions in range,
- * overflow and type mismatches refused) and their IReference<T>, arrays
+ * overflow and type mismatches refused) and their IReference<T> (whose
+ * class name .NET Native unboxes by), arrays
  * through IReferenceArray<T>, CreateEmpty's null and CreateInspectable's
  * object itself.
  */
@@ -127,6 +128,11 @@ int main(void)
         CHECK("GetInt32 of 2.0", SUCCEEDED(VT(o, P_INT32, Get_t)(o, &i32)) && i32 == 2);
         CHECK("IReference<Double>", SUCCEEDED(QI(o, &IID_IReference_Double, &ref)) && ref);
         RELEASE(ref);
+        /* .NET Native unboxes by the class name, so it names the reference */
+        HSTRING cn = NULL;
+        CHECK("class name is IReference`1<Double>", SUCCEEDED(VT(o, 4, Get_t)(o, &cn))
+              && hs_is(cn, L"Windows.Foundation.IReference`1<Double>"));
+        WindowsDeleteString(cn);
         RELEASE(o);
     }
     VT(st, S_DOUBLE, HRESULT (STDMETHODCALLTYPE *)(void *, double, void **))(st, 2.5, &o);

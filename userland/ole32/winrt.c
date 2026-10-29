@@ -575,13 +575,27 @@ WINOLEAPI_(BOOL) RoTransformError(HRESULT old_hr, HRESULT new_hr, HSTRING msg)
 }
 /* An error no handler took: Windows raises CoreApplication's
  * UnhandledErrorDetected and FinalUnhandledErrorDetected events, which
- * NovaOS's CoreApplication does not have yet; so this reports the error on
- * the debugger's output and fails, which tells the caller the events were
- * not raised (XAML's error helper then handles the error itself) */
+ * NovaOS's CoreApplication does not have yet; so this reports the error
+ * (its HRESULT and message) on the debugger's output and fails, which
+ * tells the caller the events were not raised (XAML's error helper then
+ * handles the error itself) */
 WINOLEAPI RoReportUnhandledError(IUnknown *info)
 {
     if (!info) return E_INVALIDARG;
-    OutputDebugStringA("RoReportUnhandledError: an unhandled Windows Runtime error\n");
+    char line[1024];
+    HRESULT hr = 0;
+    WCHAR *desc = 0, *rdesc = 0, *sid = 0;
+    RErr *e = 0;
+    if (SUCCEEDED(info->lpVtbl->QueryInterface(info, &IID_IRestrictedErrorInfo_, (void **)&e)) && e) {
+        e->lpVtbl->GetErrorDetails(e, &desc, &hr, &rdesc, &sid);
+        e->lpVtbl->Release(e);
+    }
+    wsprintfA(line, "RoReportUnhandledError: an unhandled Windows Runtime error 0x%08lx: %.500ls\n", (unsigned long)hr,
+              rdesc && *rdesc ? rdesc : desc ? desc : L"");
+    OutputDebugStringA(line);
+    if (desc) CoTaskMemFree((BYTE *)desc - sizeof(DWORD));
+    if (rdesc) CoTaskMemFree((BYTE *)rdesc - sizeof(DWORD));
+    if (sid) CoTaskMemFree((BYTE *)sid - sizeof(DWORD));
     return E_NOTIMPL;
 }
 /* A fail fast with the Windows Runtime errors stowed for it (combase's;

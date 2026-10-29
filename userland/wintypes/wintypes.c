@@ -149,15 +149,35 @@ static ULONG box_release(Box *b)
     mem_free(b);
     return 0;
 }
-static const WCHAR c_class_name[] = L"Windows.Foundation.IPropertyValue";
 static HRESULT STDMETHODCALLTYPE no_iids(void *o, ULONG *n, GUID **iids) { (void)o; if (!n || !iids) return E_POINTER; *n = 0; *iids = 0; return S_OK; }
 static HRESULT STDMETHODCALLTYPE base_trust(void *o, int *t) { (void)o; if (!t) return E_POINTER; *t = BaseTrust; return S_OK; }
-static HRESULT STDMETHODCALLTYPE pv_class(void *o, HSTRING *s)
+/* A box's class name is Windows': its IReference<T> or IReferenceArray<T>
+ * by T's name ("Windows.Foundation.IReference`1<Double>"), which .NET
+ * Native's runtime reads to unbox it as T (an empty box: IPropertyValue) */
+static const WCHAR *const c_type_names[PT_COUNT] = {
+    [PT_UINT8] = L"UInt8", [PT_INT16] = L"Int16", [PT_UINT16] = L"UInt16", [PT_INT32] = L"Int32",
+    [PT_UINT32] = L"UInt32", [PT_INT64] = L"Int64", [PT_UINT64] = L"UInt64", [PT_SINGLE] = L"Single",
+    [PT_DOUBLE] = L"Double", [PT_CHAR16] = L"Char16", [PT_BOOLEAN] = L"Boolean", [PT_STRING] = L"String",
+    [PT_INSPECTABLE] = L"Object", [PT_DATETIME] = L"Windows.Foundation.DateTime",
+    [PT_TIMESPAN] = L"Windows.Foundation.TimeSpan", [PT_GUID] = L"Guid", [PT_POINT] = L"Windows.Foundation.Point",
+    [PT_SIZE] = L"Windows.Foundation.Size", [PT_RECT] = L"Windows.Foundation.Rect",
+};
+static HRESULT box_class(const Box *b, HSTRING *s)
 {
-    (void)o;
     if (!s) return E_POINTER;
-    return WindowsCreateString(c_class_name, (UINT32)(sizeof c_class_name / sizeof(WCHAR) - 1), s);
+    int t = elem_type(b);
+    const WCHAR *tn = t > PT_EMPTY && t < PT_COUNT ? c_type_names[t] : 0;
+    WCHAR name[96];
+    UINT32 n = 0;
+    const WCHAR *parts[3] = { tn ? (is_array(b) ? L"Windows.Foundation.IReferenceArray`1<" : L"Windows.Foundation.IReference`1<")
+                                 : L"Windows.Foundation.IPropertyValue",
+                              tn ? tn : L"", tn ? L">" : L"" };
+    for (int i = 0; i < 3; i++)
+        for (const WCHAR *c = parts[i]; *c && n < 95; c++) name[n++] = *c;
+    return WindowsCreateString(name, n, s);
 }
+static HRESULT STDMETHODCALLTYPE pv_class(void *o, HSTRING *s) { return box_class(BOX_OF_PV(o), s); }
+static HRESULT STDMETHODCALLTYPE ref_class(void *o, HSTRING *s) { return box_class(BOX_OF_REF(o), s); }
 
 static HRESULT STDMETHODCALLTYPE pv_qi(void *o, REFIID iid, void **out) { return box_qi(BOX_OF_PV(o), iid, out); }
 static ULONG STDMETHODCALLTYPE pv_addref(void *o) { return (ULONG)InterlockedIncrement(&BOX_OF_PV(o)->refs); }
@@ -356,8 +376,8 @@ static HRESULT STDMETHODCALLTYPE refarray_value(void *o, UINT32 *n, void **out)
     Box *b = BOX_OF_REF(o);
     return get_array(b, elem_type(b), n, out);
 }
-static const void *const g_ref_vtbl[] = { ref_qi, ref_addref, ref_release, no_iids, pv_class, base_trust, ref_value };
-static const void *const g_refarray_vtbl[] = { ref_qi, ref_addref, ref_release, no_iids, pv_class, base_trust, refarray_value };
+static const void *const g_ref_vtbl[] = { ref_qi, ref_addref, ref_release, no_iids, ref_class, base_trust, ref_value };
+static const void *const g_refarray_vtbl[] = { ref_qi, ref_addref, ref_release, no_iids, ref_class, base_trust, refarray_value };
 
 /* ---- making boxes ---- */
 static Box *box_new(int type)

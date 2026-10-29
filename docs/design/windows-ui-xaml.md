@@ -668,7 +668,7 @@ vendors.
      platform's resource provider is built (Microsoft's
      `CommonResourceProvider`, the fallback its desktop platform takes
      when MRT Core's `ResourceManager` cannot be used, made by
-     `src/resource_provider.cpp`; MRT joins with 32.6), and every type
+     `src/resource_provider.cpp`), and every type
      resolves as the text is parsed, where XBF waits until a resource is
      looked up.  The framework's metadata provider
      (`components/ExtMetadataProvider`) is built for the types the type
@@ -680,7 +680,19 @@ vendors.
      framework peers the resources make as they load are built
      (`DataTemplate`, `ItemsPanelTemplate`, `TemplateContent`, the
      transitions).  `xamlapptest` finds both resources and makes the
-     resource manager.
+     resource manager.  For a packaged app (32.6) NovaOS's provider wraps
+     that one: a URI no file answers (`ms-resource:///Files/app.xaml`,
+     whose compiled `app.xbf` the framework loads before `OnLaunched`,
+     and WinUI 2's `ms-appx://Microsoft.UI.Xaml.2.8/...` theme
+     resources) is read from the package's `resources.pri` through
+     `MRM.dll`'s `MrmLoadEmbeddedResourceFromResourceUri`, as Microsoft's
+     `ModernResourceProvider` reads it through MRT; the resource map
+     picks the package (empty for the app's own, else a framework
+     package's name).  Microsoft never published the PAL classes this
+     path needs (`BasePALResource.cpp`, `winstream.cpp`), so NovaOS
+     writes `CBasePALResource`, `CBufferMemory`,
+     `CWinDataStreamBuffer::CreateFromIPalMemory` and `CWinDataStream`
+     there too.
    - *Third part, DirectWrite's Windows 10 font model.*  The theme
      resources' first `FontFamily` starts XAML's text services, and text
      formatting starts from `IDWriteFactory6`.  NovaOS's DirectWrite now

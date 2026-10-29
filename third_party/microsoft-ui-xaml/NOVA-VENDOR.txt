@@ -296,6 +296,23 @@ FontIconSource, Thickness, GridLength, CornerRadius, Viewbox, Path, ScrollBar,
 Thumb, RepeatButton, DragStartedEventArgs, DragDeltaEventArgs,
 DragCompletedEventArgs, ScrollEventArgs and IsEnabledChangedEventArgs.
 
+For Calculator's navigation to its main page (Pulsar item 3, fourth
+slice): dxaml/lib's Frame_Partial.cpp, Page_Partial.cpp, Size_Partial.cpp,
+SizeHelper_Partial.h, PageStackEntry_Partial.cpp, NavigationCache,
+NavigationHelpers, NavigationHistory and PageStackEntryTrackerCollection
+(.cpp and .h), XamlBindingHelperFactory_Partial.cpp,
+XamlMarkupHelper_Partial.cpp, Duration_Partial.cpp, KeyTime_Partial.cpp,
+RepeatBehavior_Partial.cpp, FontFamily_Partial.cpp,
+StateTriggerBase_Partial.cpp, DataTemplateSelector_Partial.cpp and
+FlyoutShowOptions_partial.cpp, and the generated classes of SizeHelper,
+Frame, Page, PageStackEntry, NavigationEventArgs, NavigatingCancelEventArgs,
+NavigationFailedEventArgs, FrameNavigationOptions, XamlBindingHelper,
+XamlMarkupHelper, Duration, KeyTime, RepeatBehavior, FontFamily,
+StateTriggerBase, AdaptiveTrigger, StateTrigger, DataTemplateSelector,
+StyleSelector, FlyoutShowOptions, RepositionThemeTransition,
+EdgeUIThemeTransition, PaneThemeTransition, PopupThemeTransition and
+NavigationTransitionInfo.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

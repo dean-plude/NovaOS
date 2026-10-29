@@ -1406,6 +1406,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   yet (`SizeHelper` first, then `Frame` and `Page` for its navigation to
   `MainPage`).  Next: those, then the CI check that it computes `2 + 2`,
   which ticks this step.
+  Tenth part done (Pulsar item 3, fourth slice): `Frame`, `Page`,
+  `SizeHelper`, navigation and the helpers `MainPage`'s markup makes
+  are built; composable outers are taken untouched, framework objects
+  name their `Windows.UI.Xaml` class for .NET Native's casts,
+  overridable overloads with extra leading parameters reach Windows'
+  overload, and `Package.Current` is there (test `coreapptest`).
+  Calculator gets through `MainPage`'s markup to its first `Image`.
+  Next: `Image` and its imaging (`CImage`, `BitmapImage`), then the
+  CI check that it computes `2 + 2`, which ticks this step.
 
 ---
 

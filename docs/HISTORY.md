@@ -16274,6 +16274,51 @@ them:
   three lists (emulated file information, completion ports and timers) to
   find nothing.  It now returns at once while the three lists are empty.
 
+## Windows Calculator's launch, third slice: compiled XAML from resources.pri
+
+The third part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  The `E_FAIL` that stopped
+Calculator's `OnLaunched` came from `App.xaml` never loading.  A package
+keeps its compiled XAML (`app.xbf` and WinUI 2's theme resources) inside
+`resources.pri`, but the system XAML's resource provider read only
+files.  NovaOS's provider now also reads embedded candidates through
+`MRM.dll`, choosing the package by its resource map, as Microsoft's
+`ModernResourceProvider` does through MRT.
+
+- **App model:** `CoreApplication.Properties` and the view's
+  `Properties` (where WinUI 2 keeps its per-view objects).
+- **Boxes:** each box names its ``Windows.Foundation.IReference`1<T>``
+  class, which .NET Native unboxes by.
+- **Tests:** `propvaltest` checks a box's class name, and `coreapptest`
+  checks both `Properties`.
+- **Not yet:** Calculator now stops on XAML classes the system DLL does
+  not build yet (`SizeHelper`, then `Frame` and `Page`).
+
+## Windows Calculator's launch, fourth slice: Frame, Page and MainPage's markup
+
+The fourth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's `OnLaunched`
+navigates its `Frame` to `MainPage`.  The system XAML now builds the
+framework's `Frame`, `Page`, the navigation stack, cache and event
+arguments, `SizeHelper`, and the helpers `MainPage`'s markup makes
+(`XamlBindingHelper`, `XamlMarkupHelper`, `Duration`, `KeyTime`,
+`RepeatBehavior`, `FontFamily`, the state triggers, the data and style
+selectors, `FlyoutShowOptions`, four theme transitions and
+`NavigationTransitionInfo`), vendored from microsoft-ui-xaml.
+
+- **Windows faces:** a composable `CreateInstance` passes its outer
+  object through untouched, which fixes the crash in Calculator's
+  `NarratorNotifier`.  A framework object handed to the app is crossed
+  to its class's Windows default interface, because .NET Native casts
+  to a sealed class by name.
+- **App model:** `Windows.ApplicationModel.Package.Current` and its `Id`.
+- **Tests:** `coreapptest` checks `Package.Current` with no package.
+- **Not yet:** Calculator now stops on its first `Image`.  The core
+  image element and imaging (`BitmapImage`, `BitmapSource`) are the
+  next slice.
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

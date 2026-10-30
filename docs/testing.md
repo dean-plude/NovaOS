@@ -168,8 +168,9 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   name and driven through Windows' interfaces, a Windows-boxed
   `Visibility`, `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
-  `IVector<UIElement>`, `Control.IsTabStopProperty`, `Click` with a
-  Windows handler, and an app's control composed over
+  `IVector<UIElement>`, an `Image` whose markup URI source becomes a
+  `BitmapImage`, `Control.IsTabStopProperty`, `Click` with a Windows
+  handler, and an app's control composed over
   `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
   framework's layout calls), `xamlapptest` (Microsoft's XAML framework
   started as a desktop app starts it, built from its sources:

@@ -1415,6 +1415,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   Calculator gets through `MainPage`'s markup to its first `Image`.
   Next: `Image` and its imaging (`CImage`, `BitmapImage`), then the
   CI check that it computes `2 + 2`, which ticks this step.
+  Eleventh part done (Pulsar item 3, fifth slice): images: the core's
+  `CImage`, its image provider and the imaging component (image cache,
+  WIC decoding, software bitmaps) with the framework's `Image`,
+  `ImageSource`, `BitmapSource` and `BitmapImage` are built (test
+  `wuxamltest`); a UWP window's `Window.SetTitleBar`, which WinUI 3
+  refuses for UWP, is answered; and markup that names `TabIndex`,
+  `IsTabStop`, `UseSystemFocusVisuals`, `AccessKey` or `XYFocus*` by
+  their pre-1709 `Control`/`FrameworkElement` indexes reaches the moved
+  `UIElement` properties.  Calculator gets through its title bar and
+  `MainPage`'s `NavigationView` to its first `Popup`.  Next: `Popup`
+  (the framework's peer), then the CI check that it computes `2 + 2`,
+  which ticks this step.
 
 ---
 

@@ -127,4 +127,6 @@ HRESULT nova_out_inner(HRESULT hr, void *o, const GUID *iid, void **a, void *inn
 // (an event NovaOS never raises: its handler kept until removed)
 HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token);
 HRESULT nova_face_event_removed(INT64 token);
+// (a UWP window's methods NovaOS answers itself: winfaces.py's ANSWERED_HERE)
+HRESULT nova_face_window_set_title_bar(void *element);
 }

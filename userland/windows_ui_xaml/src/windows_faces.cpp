@@ -715,6 +715,16 @@ extern "C" HRESULT nova_face_missing(const char *name)
     return E_NOTIMPL;
 }
 
+// Window.SetTitleBar of a UWP app (winfaces.py's ANSWERED_HERE), which
+// WinUI 3's UWP window refuses: on Windows the element becomes the drag
+// region of a view extended into its title bar.  A NovaOS app window keeps
+// the caption its frame draws, so the element stays ordinary content
+extern "C" HRESULT nova_face_window_set_title_bar(void *element)
+{
+    (void)element;
+    return S_OK;
+}
+
 // The handlers of the events NovaOS never raises (winfaces.py's
 // NEVER_RAISED: a UWP app's suspending and resuming), kept, as an event
 // source keeps them, until they are removed

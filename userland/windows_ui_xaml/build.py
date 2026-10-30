@@ -365,8 +365,8 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # its first text with DirectWrite, an element takes focus with a correlation
 # GUID from rpcrt4, the theme transitions read the theme's animation timings
 # with uxtheme, ToolTipService follows the display's power state with
-# powrprof)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof']
+# powrprof, an image's casting source makes its property store with propsys)
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof', 'propsys']
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -600,12 +600,13 @@ def library(b, odir):
             prefix = 'xaml_' + proj.replace('/', '_').rsplit('_', 1)[0] + '_'
             srcs = p['sources'] if proj not in CORE_SOURCES else \
                 [os.path.join(os.path.dirname(os.path.join(XCP, proj)), x) for x in CORE_SOURCES[proj]]
-            renamed = [x for x in srcs + added if os.path.basename(x) in FILE_RENAMES]
+            renamed = [x for x in srcs + added if os.path.basename(x) in FILE_RENAMES or os.path.basename(x) in FILE_FIRST]
             built = b.compile_many([x for x in srcs + added if x not in renamed], odir, prefix,
                                    f + core_flags(proj, sources, pch), headers, compiler='clang++')
             for x in renamed:
                 built += b.compile_many([x], odir, prefix, f + core_flags(proj, sources, pch) + [
-                    f'-D{n}={n}_vendored' for n in FILE_RENAMES[os.path.basename(x)]], headers, compiler='clang++')
+                    f'-D{n}={n}_vendored' for n in FILE_RENAMES.get(os.path.basename(x), ())] + [
+                    y for h in FILE_FIRST.get(os.path.basename(x), ()) for y in ('-include', h)], headers, compiler='clang++')
             if proj in CORE_SOURCES:
                 _core_objs.extend(built)
             else:
@@ -963,6 +964,16 @@ CORE_SOURCES[_CORETEXT] += tuple('Fonts/%s.cpp' % x for x in (
 next(c for c in CORE_LIBRARIES if c[0] == 'dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'resource_bytes.cpp'))
 FILE_RENAMES = {'DXamlCore.cpp': ('GetResourceBytes',)}
+# (and the parser's stable XBF property indexes: src/xbf_moved_properties.cpp
+# answers the properties Windows moved to UIElement, which a UWP app's
+# compiled markup names by their old indexes, and Microsoft's
+# GetKnownPropertyIndex, renamed out, the rest)
+FILE_RENAMES['XbfMetadataApi.cpp'] = ('GetKnownPropertyIndex',)
+next(c for c in CORE_LIBRARIES if c[0] == 'core/Parser/core/Parser.Core.vcxproj')[3].append(
+    os.path.join(HERE, 'src', 'xbf_moved_properties.cpp'))
+# (and the headers a source alone takes first, after its project's: the
+# Windows namespaces only it uses)
+FILE_FIRST = {}
 # (the theme resources' URI, which the parser looks up in the core's
 # resource manager, made by the control layer's ResourceManager.cpp over
 # the platform's resource provider: Microsoft's desktop platform tries MRT
@@ -1483,6 +1494,35 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'XamlBindingHelperFactory_Partial', 'XamlMarkupHelper_Partial', 'Duration_Partial', 'KeyTime_Partial',
     'RepeatBehavior_Partial', 'FontFamily_Partial', 'StateTriggerBase_Partial', 'DataTemplateSelector_Partial',
     'FlyoutShowOptions_partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _PAGE_HELPERS)
+# (step 32.6, a page's images: the core's image element, CImage
+# (native/elements/image.cpp), the core's image provider, which hands an
+# image source its decoded surface (core/imaging/ImagingProvider, less the
+# loaded image surface, on composition surfaces that do not build yet), and
+# the imaging component, components/imaging: the image cache, its downloads
+# and decodes through WIC (windowscodecs.dll), the decoded image cache and
+# the software bitmaps, less the SVG image source and its decoder, on
+# Direct2D's SVG documents, and the render target bitmap's sprite visual
+# renderer, on a closed Windows App SDK helper, which join when those do; of the framework, the
+# Image element and its sources, ImageSource, BitmapSource and BitmapImage,
+# each its generated class and its partial one)
+CORE_SOURCES['core/xcpcore.vcxproj'] += ('native/elements/image.cpp', 'imaging/ImagingProvider/AsyncImageFactory.cpp',
+                                         'imaging/ImagingProvider/ImageProvider.cpp',
+                                         'imaging/ImagingProvider/ImageProviderDecodeHandlerTask.cpp')
+_IMAGING = 'components/imaging/lib/Microsoft.UI.Xaml.Media.Imaging.vcxproj'
+CORE_LIBRARIES.append((_IMAGING, _IMAGING, 'components/pch/precomp.h', []))
+# (its software bitmaps, Windows.Graphics.Imaging's, and their buffers)
+CORE_FIRST[_IMAGING] = ['windows.graphics.imaging.h', 'windows.storage.streams.h', 'robuffer.h']
+CORE_SOURCES[_IMAGING] = tuple('../' + os.path.basename(x) for x in
+                               vcxproj.read(os.path.join(XCP, _IMAGING), PROPS)['sources']
+                               if not os.path.basename(x).lower().startswith('svg') and
+                               os.path.basename(x) != 'RenderTargetBitmapImplUsingSpriteVisuals.cpp')
+# (the bitmap source reads a stream given to SetSource into a buffer:
+# Windows.Storage.Streams' types)
+FILE_FIRST['BitmapSource_Partial.cpp'] = ('windows.storage.streams.h', 'robuffer.h')
+_IMAGE_PEERS = ('Image', 'ImageSource', 'BitmapSource', 'BitmapImage')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
+    '../%s_Partial.cpp' % x for x in ('Image', 'BitmapSource', 'BitmapImage')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _IMAGE_PEERS)
 WINFACES =os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

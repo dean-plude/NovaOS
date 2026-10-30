@@ -313,6 +313,17 @@ StyleSelector, FlyoutShowOptions, RepositionThemeTransition,
 EdgeUIThemeTransition, PaneThemeTransition, PopupThemeTransition and
 NavigationTransitionInfo.
 
+For a page's images (Pulsar item 3, fifth slice): core/native/elements'
+image.cpp (the core's CImage), core/imaging/ImagingProvider's
+AsyncImageFactory, ImageProvider and ImageProviderDecodeHandlerTask (.cpp
+and the two headers it lacked), the imaging component, components/imaging
+(its project, sources and inc/ headers, less SvgImageSource.cpp,
+SvgImageDecoder.cpp and RenderTargetBitmapImplUsingSpriteVisuals.cpp,
+which need Direct2D's SVG documents and a closed Windows App SDK helper),
+and dxaml/lib's Image_Partial.cpp, BitmapSource_Partial.cpp and
+BitmapImage_Partial.cpp with the generated classes of Image, ImageSource,
+BitmapSource and BitmapImage.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

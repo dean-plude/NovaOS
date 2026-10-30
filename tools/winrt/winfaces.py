@@ -61,6 +61,12 @@ SPECIAL_C = {'Windows.Foundation.HResult': 'INT32', 'Windows.Foundation.EventReg
 NEVER_RAISED = {WIN + 'IApplication': ('Suspending', 'Resuming'),
                 WIN + 'IApplication2': ('LeavingBackground', 'EnteredBackground')}
 
+# Windows.UI.Xaml methods of a UWP app's window that the framework answers
+# "not implemented for UWP" (WinUI 3's UWPWindowImpl) and NovaOS answers
+# itself (userland/windows_ui_xaml/src/windows_faces.cpp): the method's
+# parameters after the face and the function it calls with them
+ANSWERED_HERE = {WIN + 'IWindow2.SetTitleBar': ('void* a0', 'a0', 'nova_face_window_set_title_bar')}
+
 
 def attr_args(t, name):
     return [a.args for a in t.attrs if a.name.endswith(name)]
@@ -409,7 +415,12 @@ class Faces:
         for j, (mname, ip, tgt) in enumerate(methods):
             fname = 'f%d_%d' % (n, j)
             r = None
-            if tgt is not None:
+            here = ANSWERED_HERE.get('%s.%s' % (impl_name, mname)) if to_fw else None
+            if here:
+                self.thunks.append('static HRESULT STDMETHODCALLTYPE %s(NovaTear*, %s) { return %s(%s); }'
+                                   % (fname, here[0], here[2], here[1]))
+                r = fname
+            elif tgt is not None:
                 r = self.thunk(fname, ip, tgt[0], tgt[1], tgt[2], to_fw, None, len(tgt) > 3)
             if r is None and 'override' in flags:
                 r = self.overload_thunk(fname, ip, [(made[k], methods[k][1]) for k in made if methods[k][0] == mname])

@@ -17,6 +17,7 @@
  *   - DependencyProperty.Register with Windows type names, and its value;
  *   - XamlReader.Load through Windows' statics, the page's children through
  *     Windows' IVector<UIElement>;
+ *   - an Image loaded from markup, its Source URI made a BitmapImage;
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
@@ -41,6 +42,8 @@
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.markup.h>
+#include <windows.ui.xaml.media.h>
+#include <windows.ui.xaml.media.imaging.h>
 
 namespace wux = ABI::Windows::UI::Xaml;
 namespace wuxc = ABI::Windows::UI::Xaml::Controls;
@@ -301,6 +304,24 @@ static void windows_checks()
     UINT32 at = 9;
     boolean found = false;
     CHECK("IndexOf finds it", children && second && SUCCEEDED(children->IndexOf(second.Get(), &at, &found)) && found && at == 1);
+
+    /* an Image whose Source is given as a URI in markup: a BitmapImage */
+    ctl::ComPtr<IInspectable> imageObject;
+    ctl::ComPtr<wuxc::IImage> image;
+    ctl::ComPtr<wux::Media::IImageSource> source;
+    ctl::ComPtr<wux::Media::Imaging::IBitmapImage> bitmap;
+    ctl::ComPtr<ABI::Windows::Foundation::IUriRuntimeClass> uri;
+    HSTRING uriText = nullptr;
+    CHECK_HR("XamlReader.Load of an Image", reader ?
+             reader->Load(wrl_wrappers::HStringReference(L"<Image " XMLNS L"Width='20' Height='20' "
+                                                         L"Source='ms-appx:///Assets/Logo.png'/>").Get(),
+                          imageObject.GetAddressOf()) : E_FAIL);
+    CHECK("an Image (Windows' IImage) whose Source is a BitmapImage with the URI",
+          imageObject && SUCCEEDED(as(imageObject.Get(), image.GetAddressOf())) &&
+          SUCCEEDED(image->get_Source(source.GetAddressOf())) && source &&
+          SUCCEEDED(as(source.Get(), bitmap.GetAddressOf())) && SUCCEEDED(bitmap->get_UriSource(uri.GetAddressOf())) && uri &&
+          SUCCEEDED(uri->get_AbsoluteUri(&uriText)) && is(uriText, L"ms-appx:///Assets/Logo.png"));
+    WindowsDeleteString(uriText);
 
     /* a base class's statics: Control.IsTabStopProperty (UIElement's in WinUI 3) */
     ctl::ComPtr<wuxc::IControlStatics> cs;

@@ -1472,5 +1472,37 @@ vendors.
    `BitmapSource`) are the next slice.  Test: `coreapptest`
    (`Package.Current` with no package).
 
+   Pulsar item 3, fifth slice: images.  The core's image element
+   (`CImage`), its image provider (`core/imaging/ImagingProvider`) and
+   the imaging component (`components/imaging`: the image cache, its
+   downloads, WIC decoding through `windowscodecs.dll`, the decoded
+   image cache and software bitmaps) are vendored and built, with the
+   framework's `Image`, `ImageSource`, `BitmapSource` and `BitmapImage`.
+   Left out until what they stand on builds: the SVG image source and
+   decoder (Direct2D's SVG documents) and the render target bitmap's
+   sprite-visual renderer (a closed Windows App SDK helper).  The SDK
+   parts MinGW-w64 lacks are NovaOS headers in `windows_ui_xaml/inc`:
+   `IWICBitmapSourceTransform` and the high-quality cubic mode
+   (`wincodec.h`), the EXIF orientations (`propkey.h`),
+   `IMemoryBufferByteAccess` (`MemoryBuffer.h`), the software bitmap's
+   native factory (`Windows.Graphics.Imaging.Interop.h`), the SVG
+   document and element vtables (`d2d1svg.h`), and the closed
+   `OrientationSupportedLegacy.h`.  Two more fixes came out of
+   Calculator's title bar and `NavigationView`.  WinUI 3's UWP window
+   answers `Window.SetTitleBar` "not implemented for UWP"; the face
+   answers it itself (`winfaces.py`'s `ANSWERED_HERE`,
+   `nova_face_window_set_title_bar`): the app's window keeps the
+   caption its frame draws and the element stays content.  And a UWP
+   app's XBF names properties Windows moved from `Control` and
+   `FrameworkElement` to `UIElement` in 1709 (`TabIndex`, `IsTabStop`,
+   `FocusState`, `UseSystemFocusVisuals`, `XYFocus*`, `AccessKey`) by
+   their old stable indexes, which WinUI 3's table maps to the unknown
+   property; `src/xbf_moved_properties.cpp` maps them to the moved
+   properties (the parser's `GetKnownPropertyIndex`, Microsoft's
+   renamed out).  Calculator now gets through its title bar and
+   `MainPage`'s `NavigationView` to its first `Popup`, whose framework
+   peer is the next slice.  Test: `wuxamltest` (an `Image` loaded from
+   markup, its URI source a `BitmapImage`).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

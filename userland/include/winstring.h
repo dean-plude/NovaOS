@@ -19,5 +19,7 @@ WINOLEAPI_(UINT32) WindowsGetStringLen(HSTRING s);
 WINOLEAPI_(BOOL) WindowsIsStringEmpty(HSTRING s);
 WINOLEAPI_(HRESULT) WindowsCompareStringOrdinal(HSTRING a, HSTRING b, INT32 *result);
 WINOLEAPI_(HRESULT) WindowsConcatString(HSTRING a, HSTRING b, HSTRING *out);
+WINOLEAPI_(HRESULT) WindowsSubstring(HSTRING h, UINT32 start, HSTRING *out);
+WINOLEAPI_(HRESULT) WindowsSubstringWithSpecifiedLength(HSTRING h, UINT32 start, UINT32 len, HSTRING *out);
 
 _NOVA_END

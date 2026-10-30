@@ -76,17 +76,42 @@ public:
     const wchar_t *GetRawBuffer(unsigned int *length) const throw() { return ::WindowsGetStringRawBuffer(hstr_, length); }
     HRESULT CopyTo(HSTRING *str) const throw() { return ::WindowsDuplicateString(hstr_, str); }
     HRESULT Duplicate(const HString &other) throw() { return Set(other.hstr_); }
+    /* (each result is made before newString lets go of its own, so newString
+     * may be this string: Popup_Partial.cpp's truncation does so) */
     HRESULT Concat(const HString &str, HString &newString) const throw()
     {
-        return ::WindowsConcatString(hstr_, str.hstr_, newString.GetAddressOf());
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsConcatString(hstr_, str.hstr_, &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
     }
     HRESULT TrimStart(const HString &trim, HString &newString) const throw()
     {
-        return ::WindowsTrimStringStart(hstr_, trim.hstr_, newString.GetAddressOf());
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsTrimStringStart(hstr_, trim.hstr_, &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
     }
     HRESULT TrimEnd(const HString &trim, HString &newString) const throw()
     {
-        return ::WindowsTrimStringEnd(hstr_, trim.hstr_, newString.GetAddressOf());
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsTrimStringEnd(hstr_, trim.hstr_, &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
+    }
+    HRESULT Substring(UINT32 startIndex, HString &newString) const throw()
+    {
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsSubstring(hstr_, startIndex, &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
+    }
+    HRESULT Substring(UINT32 startIndex, UINT32 length, HString &newString) const throw()
+    {
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsSubstringWithSpecifiedLength(hstr_, startIndex, length, &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
     }
     void Swap(HString &other) throw()
     {
@@ -100,6 +125,17 @@ public:
     template <unsigned int s> static HStringReference MakeReference(const wchar_t (&str)[s]) throw();
 
 protected:
+    /* owns h, a new reference (a duplicate of hstr_ itself drops its extra one) */
+    void Take(HSTRING h) throw()
+    {
+        if (h == hstr_) {
+            if (h) ::WindowsDeleteString(h);
+            return;
+        }
+        Release();
+        hstr_ = h;
+    }
+
     HSTRING hstr_;
 };
 

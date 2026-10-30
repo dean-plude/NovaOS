@@ -18,6 +18,7 @@
  *   - XamlReader.Load through Windows' statics, the page's children through
  *     Windows' IVector<UIElement>;
  *   - an Image loaded from markup, its Source URI made a BitmapImage;
+ *   - a Popup loaded from markup, holding its child, closed;
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
@@ -322,6 +323,19 @@ static void windows_checks()
           SUCCEEDED(as(source.Get(), bitmap.GetAddressOf())) && SUCCEEDED(bitmap->get_UriSource(uri.GetAddressOf())) && uri &&
           SUCCEEDED(uri->get_AbsoluteUri(&uriText)) && is(uriText, L"ms-appx:///Assets/Logo.png"));
     WindowsDeleteString(uriText);
+
+    /* a Popup from markup (NavigationView's pane makes them): its child, and closed */
+    ctl::ComPtr<IInspectable> popupObject;
+    ctl::ComPtr<wuxc::Primitives::IPopup> popup;
+    ctl::ComPtr<wux::IUIElement> popupChild;
+    boolean popupOpen = true;
+    CHECK_HR("XamlReader.Load of a Popup", reader ?
+             reader->Load(wrl_wrappers::HStringReference(L"<Popup " XMLNS L"><Border Width='20' Height='20'/></Popup>").Get(),
+                          popupObject.GetAddressOf()) : E_FAIL);
+    CHECK("a Popup (Windows' IPopup) holding its child, closed",
+          popupObject && SUCCEEDED(as(popupObject.Get(), popup.GetAddressOf())) &&
+          SUCCEEDED(popup->get_Child(popupChild.GetAddressOf())) && popupChild &&
+          SUCCEEDED(popup->get_IsOpen(&popupOpen)) && !popupOpen);
 
     /* a base class's statics: Control.IsTabStopProperty (UIElement's in WinUI 3) */
     ctl::ComPtr<wuxc::IControlStatics> cs;

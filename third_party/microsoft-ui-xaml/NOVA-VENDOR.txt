@@ -324,6 +324,9 @@ and dxaml/lib's Image_Partial.cpp, BitmapSource_Partial.cpp and
 BitmapImage_Partial.cpp with the generated classes of Image, ImageSource,
 BitmapSource and BitmapImage.
 
+For a page's popups (Pulsar item 3, sixth slice): dxaml/lib's
+Popup_Partial.cpp with the generated class of Popup.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

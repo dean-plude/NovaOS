@@ -2264,6 +2264,16 @@ WINBASEAPI BOOL WINAPI GetPhysicallyInstalledSystemMemory(PULONGLONG kb)
     return TRUE;
 }
 
+/* The built-in screen's diagonal, in inches (api-ms-win-core-sysinfo-l1-2-3;
+ * WinUI 2 asks while Calculator's page loads): NovaOS knows of no built-in
+ * panel, so it answers as Windows does on a desktop PC, not found */
+WINBASEAPI HRESULT WINAPI GetIntegratedDisplaySize(double *inches)
+{
+    if (!inches) return E_INVALIDARG;
+    *inches = 0;
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+
 WINBASEAPI BOOL WINAPI FlushInstructionCache(HANDLE p, LPCVOID a, SIZE_T n) { (void)p; (void)a; (void)n; return TRUE; }
 WINBASEAPI VOID WINAPI FlushProcessWriteBuffers(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
 

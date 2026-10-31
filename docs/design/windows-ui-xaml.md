@@ -1504,5 +1504,22 @@ vendors.
    peer is the next slice.  Test: `wuxamltest` (an `Image` loaded from
    markup, its URI source a `BitmapImage`).
 
+   Pulsar item 3, sixth slice: the framework's `Popup` (its generated
+   class and `Popup_Partial.cpp`; the core's `CPopup` was already
+   built).  It truncates a long automation name with
+   `HString::Substring`, so NovaOS's WRL wrappers gain `Substring`, and
+   their `Concat`, `TrimStart`, `TrimEnd` and `Substring` now make the
+   result before the output lets go of its own string, so the output
+   may be the string itself, as the popup's truncation passes it;
+   `combase`'s `WindowsSubstring` and
+   `WindowsSubstringWithSpecifiedLength` are added in `ole32`.
+   `kernel32` answers `GetIntegratedDisplaySize` (WinUI 2 asks during
+   the page's load) as a desktop PC does: no built-in panel.
+   Calculator now gets past `MainPage`'s `NavigationView` and its
+   popups and stops on `UserActivityRequestManager`
+   (`Windows.ApplicationModel.UserActivities`, not in NovaOS: class not
+   registered, fail fast 0x80040154), the next slice.  Test: `wuxamltest` (a
+   `Popup` loaded from markup, holding its child, closed).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

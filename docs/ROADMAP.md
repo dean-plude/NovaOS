@@ -1427,6 +1427,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `MainPage`'s `NavigationView` to its first `Popup`.  Next: `Popup`
   (the framework's peer), then the CI check that it computes `2 + 2`,
   which ticks this step.
+  Twelfth part done (Pulsar item 3, sixth slice): the framework's
+  `Popup` is built (test `wuxamltest`), with `HString::Substring` and
+  `WindowsSubstring` it uses and `GetIntegratedDisplaySize`, which
+  WinUI 2 asks next.  Calculator gets past `MainPage`'s
+  `NavigationView` and its popups and stops on
+  `UserActivityRequestManager` (`Windows.ApplicationModel.UserActivities`).
+  Next: that class, then the CI check that it computes `2 + 2`, which
+  ticks this step.
 
 ---
 

@@ -31,6 +31,9 @@ _Static_assert(__builtin_offsetof(HStr, refs) == sizeof(HSTRING_HEADER), "HSTRIN
 
 #define HSTR_REF 1
 #define E_STRING_NOT_NULL_TERMINATED ((HRESULT)0x80000017L)
+#ifndef E_BOUNDS
+#define E_BOUNDS ((HRESULT)0x8000000BL)
+#endif
 
 WINOLEAPI_(HRESULT) WindowsCreateString(const WCHAR *src, UINT32 len, HSTRING *out)
 {
@@ -127,6 +130,20 @@ WINOLEAPI_(HRESULT) WindowsConcatString(HSTRING a, HSTRING b, HSTRING *out)
     HRESULT hr = WindowsCreateString(t, la + lb, out);
     HeapFree(GetProcessHeap(), 0, t);
     return hr;
+}
+WINOLEAPI_(HRESULT) WindowsSubstringWithSpecifiedLength(HSTRING h, UINT32 start, UINT32 len, HSTRING *out)
+{
+    if (!out) return E_INVALIDARG;
+    UINT32 l;
+    const WCHAR *c = WindowsGetStringRawBuffer(h, &l);
+    *out = 0;
+    if (start > l || len > l - start) return E_BOUNDS;
+    return WindowsCreateString(c + start, len, out);
+}
+WINOLEAPI_(HRESULT) WindowsSubstring(HSTRING h, UINT32 start, HSTRING *out)
+{
+    UINT32 l = WindowsGetStringLen(h);
+    return WindowsSubstringWithSpecifiedLength(h, start, start > l ? 0 : l - start, out);
 }
 
 /* A string built in place: the caller fills the characters

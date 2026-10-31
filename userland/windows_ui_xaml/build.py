@@ -1523,6 +1523,11 @@ _IMAGE_PEERS = ('Image', 'ImageSource', 'BitmapSource', 'BitmapImage')
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
     '../%s_Partial.cpp' % x for x in ('Image', 'BitmapSource', 'BitmapImage')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in _IMAGE_PEERS)
+# (step 32.6, the framework's Popup, which a page's NavigationView makes
+# for its pane's flyouts and tool tips: its generated class and its
+# partial one; the core's CPopup is core/core/elements')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../Popup_Partial.cpp', '../winrtgeneratedclasses/Popup.g.cpp')
 WINFACES =os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

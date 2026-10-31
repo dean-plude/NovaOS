@@ -1521,5 +1521,18 @@ vendors.
    registered, fail fast 0x80040154), the next slice.  Test: `wuxamltest` (a
    `Popup` loaded from markup, holding its child, closed).
 
+   Pulsar item 3, seventh slice: `UserActivityRequestManager`
+   (`Windows.ApplicationModel.UserActivities`; Windows serves it from
+   `Windows.ApplicationModel.dll`), which Calculator's `MainPage` asks
+   for the view's manager, is in `twinapi.appcore.dll` and the
+   registry's `ActivatableClassId` keys: `GetForCurrentView` gives the
+   one view's manager, whose `UserActivityRequested` event takes and
+   removes handlers and is never raised (NovaOS has no Timeline or
+   cross-device resume to ask).  Calculator now stops on
+   `Windows.Foundation.Diagnostics.LoggingFields` (not in NovaOS: class
+   not registered, fail fast 0x80040154), the next slice.  Test:
+   `wrtpooltest` (the manager from its statics, the same one twice, a
+   handler taken and removed).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

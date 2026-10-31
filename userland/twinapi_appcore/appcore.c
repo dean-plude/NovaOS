@@ -48,7 +48,8 @@
  * MemoryManager (the process's commit against the system's),
  * Windows.System.Threading's ThreadPool and ThreadPoolTimer (the process's
  * thread pool, its work items as IAsyncActions), and Package.Current (the
- * process's package and its Id).
+ * process's package and its Id), and UserActivityRequestManager (the
+ * view's; its UserActivityRequested event is never raised: no Timeline).
  */
 #include <windows.h>
 #include <roapi.h>
@@ -1518,6 +1519,36 @@ static const void *const dm_statics_vt[] = { INSP_FNS(dm_qi, dm_name), (void *)d
 static DesignMode g_design = { (const void *const *)dm_factory_vt, (const void *const *)dm_statics_vt,
                                (const void *const *)dm_statics_vt };
 
+/* ---- UserActivityRequestManager (Windows.ApplicationModel.UserActivities;
+ * Windows serves it from Windows.ApplicationModel.dll): the view's, asked
+ * for the app's current UserActivity when Timeline or a cross-device resume
+ * wants one.  NovaOS has neither, so UserActivityRequested accepts handlers
+ * and is never raised ---------------------------------------------------- */
+static const GUID IID_IUserActivityRequestManagerStatics_ = { 0xC0392DF1, 0x224A, 0x432C, { 0x81, 0xE5, 0x0C, 0x76, 0xB4, 0xC4, 0xCE, 0xFA } };
+static const GUID IID_IUserActivityRequestManager_ = { 0x0C30BE4E, 0x903D, 0x48D6, { 0x82, 0xD4, 0x40, 0x43, 0xED, 0x57, 0x79, 0x1B } };
+typedef struct { const void *const *factory, *const *statics, *const *manager; Event requested; } ActivityRequests;
+static ActivityRequests g_activity;
+static HRESULT STDMETHODCALLTYPE uar_qi(void *p, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (p == &g_activity.manager) {                 /* the view's manager, an object of its own */
+        if (is_base(iid) || IsEqualGUID(iid, &IID_IUserActivityRequestManager_)) *out = p;
+    } else if (is_base(iid) || IsEqualGUID(iid, &IID_IActivationFactory_)) *out = &g_activity.factory;
+    else if (IsEqualGUID(iid, &IID_IUserActivityRequestManagerStatics_)) *out = &g_activity.statics;
+    return *out ? S_OK : E_NOINTERFACE;
+}
+static HRESULT STDMETHODCALLTYPE uar_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.ApplicationModel.UserActivities.UserActivityRequestManager", n); }
+static HRESULT STDMETHODCALLTYPE uar_activate(void *p, void **o) { (void)p; if (o) *o = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE uar_for_view(void *p, void **out) { (void)p; if (!out) return E_POINTER; *out = &g_activity.manager; return S_OK; }
+static HRESULT STDMETHODCALLTYPE uar_add(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_activity.requested, h, t); }
+static HRESULT STDMETHODCALLTYPE uar_remove(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_activity.requested, t); }
+static const void *const uar_factory_vt[] = { INSP_FNS(uar_qi, uar_name), (void *)uar_activate };
+static const void *const uar_statics_vt[] = { INSP_FNS(uar_qi, uar_name), (void *)uar_for_view };
+static const void *const uar_manager_vt[] = { INSP_FNS(uar_qi, uar_name), (void *)uar_add, (void *)uar_remove };
+static ActivityRequests g_activity = { (const void *const *)uar_factory_vt, (const void *const *)uar_statics_vt,
+                                       (const void *const *)uar_manager_vt, { 0 } };
+
 /* ---- PowerManager: the battery and power supply, from
  * GetSystemPowerStatus (Windows serves it from Windows.System.Power; WinUI
  * 2's acrylic asks EnergySaverStatus).  The Changed events take handlers
@@ -2465,6 +2496,7 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.UI.Core.CoreWindow")) { *factory = &g_win_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.UI.Core.CoreCursor")) { *factory = &g_cursor_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.ApplicationModel.DesignMode")) { *factory = &g_design.factory; return S_OK; }
+    if (name_is(cls, L"Windows.ApplicationModel.UserActivities.UserActivityRequestManager")) { *factory = &g_activity.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Power.PowerManager")) { *factory = &g_power.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.Profile.AnalyticsInfo")) { *factory = &g_analytics.factory; return S_OK; }
     if (name_is(cls, L"Windows.System.MemoryManager")) { *factory = &g_memory.factory; return S_OK; }

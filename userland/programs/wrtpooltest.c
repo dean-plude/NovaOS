@@ -10,7 +10,10 @@
  * cancelled while it runs (its Status shows it); and ThreadPoolTimer: a
  * one-shot timer firing after its Delay though the caller let it go, then
  * destroyed; a periodic one ticking until cancelled and no more after; and
- * a one-shot cancelled before it fires */
+ * a one-shot cancelled before it fires; and
+ * Windows.ApplicationModel.UserActivities' UserActivityRequestManager
+ * (Calculator's MainPage asks it): the view's manager, the same each time,
+ * taking and removing a UserActivityRequested handler */
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -34,6 +37,8 @@ static const GUID IID_IMemoryManagerStatics3_T = { 0x149B59CE, 0x92AD, 0x4E35, {
 static const GUID IID_IMemoryManagerStatics4_T = { 0xC5A94828, 0xE84E, 0x4886, { 0x8A, 0x0D, 0x44, 0xB3, 0x19, 0x0E, 0x3B, 0x72 } };
 static const GUID IID_IAppMemoryReport2_T      = { 0x5F7F3738, 0x51B7, 0x42DC, { 0xB7, 0xED, 0x79, 0xBA, 0x46, 0xD2, 0x88, 0x57 } };
 static const GUID IID_IThreadPoolStatics_T      = { 0xB6BF67DD, 0x84BD, 0x44F8, { 0xAC, 0x1C, 0x93, 0xEB, 0xCB, 0x9D, 0xBA, 0x91 } };
+static const GUID IID_IUserActivityRequestManagerStatics_T = { 0xC0392DF1, 0x224A, 0x432C, { 0x81, 0xE5, 0x0C, 0x76, 0xB4, 0xC4, 0xCE, 0xFA } };
+static const GUID IID_IUserActivityRequestManager_T = { 0x0C30BE4E, 0x903D, 0x48D6, { 0x82, 0xD4, 0x40, 0x43, 0xED, 0x57, 0x79, 0x1B } };
 static const GUID IID_IThreadPoolTimerStatics_T = { 0x1A8A9D02, 0xE482, 0x461B, { 0xB8, 0xC7, 0x8E, 0xFA, 0xD1, 0xCC, 0xE5, 0x90 } };
 
 /* ---- delegates: Invoke is the slot after IUnknown's three ----------- */
@@ -306,6 +311,31 @@ static void timers(void)
     RELEASE(statics);
 }
 
+/* ---- UserActivityRequestManager -------------------------------------- */
+static void activity_requests(void)
+{
+    void *statics = 0, *mgr = 0, *again = 0, *as_mgr = 0;
+    CHECK("UserActivityRequestManager's statics", factory(L"Windows.ApplicationModel.UserActivities.UserActivityRequestManager",
+                                                          &IID_IUserActivityRequestManagerStatics_T, &statics) == S_OK && statics);
+    if (!statics) return;
+    CHECK("GetForCurrentView", VT(statics, 6, Get_t)(statics, &mgr) == S_OK && mgr);
+    CHECK("GetForCurrentView: the same manager again", VT(statics, 6, Get_t)(statics, &again) == S_OK && again == mgr);
+    if (mgr) {
+        CHECK("IUserActivityRequestManager", SUCCEEDED(VT(mgr, 0, QI_t)(mgr, &IID_IUserActivityRequestManager_T, &as_mgr)) && as_mgr == mgr);
+        HSTRING n = 0;
+        VT(mgr, 4, Get_t)(mgr, &n);
+        CHECK("its class", !wcscmp(WindowsGetStringRawBuffer(n, 0), L"Windows.ApplicationModel.UserActivities.UserActivityRequestManager"));
+        WindowsDeleteString(n);
+        Handler h = handler(handler2_vt, 0);
+        EventRegistrationToken tok = { 0 };
+        CHECK("add_UserActivityRequested", VT(mgr, 6, HRESULT (STDMETHODCALLTYPE *)(void *, void *, EventRegistrationToken *))(mgr, &h, &tok) == S_OK
+                                           && tok.value);
+        CHECK("remove_UserActivityRequested", VT(mgr, 7, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(mgr, tok) == S_OK);
+        CHECK("its handler never called (no Timeline)", h.calls == 0);
+    }
+    RELEASE(as_mgr); RELEASE(again); RELEASE(mgr); RELEASE(statics);
+}
+
 int main(void)
 {
     g_main_tid = GetCurrentThreadId();
@@ -315,6 +345,7 @@ int main(void)
     memory_manager();
     thread_pool();
     timers();
+    activity_requests();
     printf("wrtpooltest: %d passed, %d failed (%d-bit)\n", pass, fail, (int)sizeof(void *) * 8);
     fflush(stdout);
     return fail != 0;

@@ -1435,6 +1435,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `UserActivityRequestManager` (`Windows.ApplicationModel.UserActivities`).
   Next: that class, then the CI check that it computes `2 + 2`, which
   ticks this step.
+  Thirteenth part done (Pulsar item 3, seventh slice):
+  `UserActivityRequestManager` (`GetForCurrentView`, its
+  `UserActivityRequested` event taking handlers and never raised, as
+  NovaOS has no Timeline) in `twinapi.appcore` (test `wrtpooltest`).
+  Calculator gets past it and stops on
+  `Windows.Foundation.Diagnostics.LoggingFields`.  Next: that class (and
+  the logging channel its trace logger writes to), then the CI check
+  that it computes `2 + 2`, which ticks this step.
 
 ---
 

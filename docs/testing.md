@@ -162,11 +162,13 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   (`Windows.System.MemoryManager` and `Windows.System.Threading`'s
   `ThreadPool` and `ThreadPoolTimer` from `RoGetActivationFactory`:
   memory use and reports, work items as `IAsyncAction`s, one-shot,
-  periodic and cancelled timers; 64- and 32-bit), `wuxamltest` (the XAML
-  framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps
-  see it: `Windows.UI.Xaml.Controls.Button` activated by its Windows
-  name and driven through Windows' interfaces, a Windows-boxed
-  `Visibility`, `DependencyProperty.Register` with Windows type names,
+  periodic and cancelled timers, and the view's
+  `UserActivityRequestManager` taking a `UserActivityRequested` handler;
+  64- and 32-bit), `wuxamltest` (the XAML framework under its
+  `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
+  `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
+  driven through Windows' interfaces, a Windows-boxed `Visibility`,
+  `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, an `Image` whose markup URI source becomes a
   `BitmapImage`, a `Popup` from markup holding its child,

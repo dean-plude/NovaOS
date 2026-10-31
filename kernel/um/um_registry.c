@@ -922,6 +922,7 @@ static void defaults(void)
         { "Windows.Management.Policies.NamedPolicy", "twinapi.appcore.dll" },
         { "Windows.UI.ViewManagement.ApplicationView", "twinapi.appcore.dll" },
         { "Windows.ApplicationModel.Package", "twinapi.appcore.dll" },
+        { "Windows.ApplicationModel.UserActivities.UserActivityRequestManager", "twinapi.appcore.dll" },
         { "Windows.Storage.ApplicationData", "Windows.Storage.ApplicationData.dll" },
         { "Windows.Globalization.ApplicationLanguages", "Windows.Globalization.dll" },
         { "Windows.Globalization.Language", "Windows.Globalization.dll" },

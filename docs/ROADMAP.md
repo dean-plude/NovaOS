@@ -1443,6 +1443,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `Windows.Foundation.Diagnostics.LoggingFields`.  Next: that class (and
   the logging channel its trace logger writes to), then the CI check
   that it computes `2 + 2`, which ticks this step.
+  Fourteenth part done (Pulsar item 3, eighth slice):
+  `Windows.Foundation.Diagnostics`' `LoggingChannel`,
+  `LoggingChannelOptions`, `LoggingOptions`, `LoggingFields` and
+  `LoggingActivity` in `twinapi.appcore` (no ETW session ever enables a
+  channel, so events go nowhere, as on Windows when nobody listens; test
+  `wrtpooltest`).  Calculator gets past its trace logger and stops on
+  `Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer`,
+  whose factory the XAML core does not build yet (then fail fast
+  0x80131577).  Next: the automation peers, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

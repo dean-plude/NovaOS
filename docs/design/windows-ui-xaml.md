@@ -1534,5 +1534,23 @@ vendors.
    `wrtpooltest` (the manager from its statics, the same one twice, a
    handler taken and removed).
 
+   Pulsar item 3, eighth slice: `Windows.Foundation.Diagnostics`'
+   logging classes, which Calculator's trace logger
+   (`TraceLoggingCommon`) uses, are in `twinapi.appcore.dll`
+   (`logging.c`) and the registry's `ActivatableClassId` keys:
+   `LoggingChannel` (made with options and a provider id), its
+   `LoggingChannelOptions`, `LoggingOptions` (keywords, tags, task,
+   opcode, activity ids), `LoggingFields` and `LoggingActivity`, with
+   `ILoggingTarget` and `IClosable`.  NovaOS has no ETW sessions, so no
+   channel is ever enabled: `Enabled` and `IsEnabled*` answer false,
+   `LogEvent`, `LogMessage` and `LogValuePair` succeed and go nowhere, and
+   a `LoggingFields` drops what each of its 115 `Add*` methods is given
+   (each stub pops its own argument words for 32-bit callers).  Calculator
+   now stops on `Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer`
+   (`CreateActivationFactory_FrameworkElementAutomationPeer` not built in
+   the XAML core yet), then fails fast 0x80131577, the next slice.  Test:
+   `wrtpooltest` (a channel with options and an id, disabled, events with
+   fields and options, `Add*` of every argument size, an activity on it).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

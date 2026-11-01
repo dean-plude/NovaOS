@@ -1552,5 +1552,30 @@ vendors.
    `wrtpooltest` (a channel with options and an id, disabled, events with
    fields and options, `Add*` of every argument size, an activity on it).
 
+   Pulsar item 3, ninth slice: the automation peers.  The framework's
+   `FrameworkElementAutomationPeer` (its generated class and partial one,
+   with `AccessKeyStringBuilder.h`), and the peers Calculator names,
+   `TextBlockAutomationPeer` (its date page calls `FromElement` on it) and
+   `ButtonAutomationPeer` with its base `ButtonBaseAutomationPeer` (its
+   settings page makes one), are vendored from upstream and built
+   (`build.py`'s `_AUTOMATION_PEERS`); their UI Automation providers stay
+   unbuilt, as no UI Automation client runs.  Calculator's own peers
+   (`CalculationResultAutomationPeer`, `OverflowTextBlockAutomationPeer`)
+   compose over `FrameworkElementAutomationPeer`.  Past them, its theme
+   helper reads `ApplicationData.Current.LocalSettings.Values[key]` and
+   expects null for a setting never written, as Windows'
+   `ApplicationDataContainerSettings` answers; NovaOS's property set
+   answered `E_BOUNDS`, which .NET Native turns into `KeyNotFoundException`
+   (0x80131577).  A container's values are now a settings map
+   (`userland/winrtmap`'s `nova_strmap_new_settings`, class name
+   `Windows.Storage.ApplicationDataContainerSettings`) that answers null.
+   `RoOriginateError` also writes each originated error and its message to
+   the debugger's output.  Calculator now stops as the framework connects
+   the CoreWindow's content (`DCompTreeHost::SetTargetWindowUWP`):
+   `Microsoft.UI.Content.CoreWindowSiteBridge` is not registered (fail fast
+   0x80040154), the next slice.  Tests: `wuxamltest` (the text block's and
+   button's peers from `CreatePeerForElement`, the same one from
+   `FromElement`), `wrtapptest` (a key not set looks up as null).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

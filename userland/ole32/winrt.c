@@ -584,6 +584,15 @@ WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg)
             e->len = n;
         }
     }
+    /* (and says so on the debugger's output, with its message: an app that
+     * dies of an error the framework reports names what failed) */
+    char line[600];
+    int k = wsprintfA(line, "ole32: error 0x%08lx originated: ", (unsigned long)hr);
+    for (UINT32 i = 0; e->msg && i < e->len && k < (int)sizeof line - 2; i++)
+        line[k++] = e->msg[i] < 0x80 ? (char)e->msg[i] : '?';
+    line[k++] = '\n';
+    line[k] = 0;
+    OutputDebugStringA(line);
     SetRestrictedErrorInfo((IUnknown *)e);
     rerr_release(e);
     return TRUE;

@@ -154,9 +154,10 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `ItemsRepeater` making its three `RadioButton`s, the `NavigationView`
   applying its template, laid out, and with its pane opened making its
   two `NavigationViewItem`s), `wrtapptest`
-  (`ApplicationData.LocalSettings`, `ResourceContext.QualifierValues`
-  and `Languages`, `User.GetFromId`, `NamedPolicy`; 64- and 32-bit),
-  `wrtglobtest` (`ApplicationLanguages`, `Language`, `GeographicRegion`,
+  (`ApplicationData.LocalSettings`, a setting not set looking up as
+  null, `ResourceContext.QualifierValues` and `Languages`,
+  `User.GetFromId`, `NamedPolicy`; 64- and 32-bit), `wrtglobtest`
+  (`ApplicationLanguages`, `Language`, `GeographicRegion`,
   `GlobalizationPreferences`, `DecimalFormatter`, `CurrencyFormatter`,
   `Calendar`, `DateTimeFormatter`; 64- and 32-bit), `wrtpooltest`
   (`Windows.System.MemoryManager` and `Windows.System.Threading`'s
@@ -172,19 +173,20 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, an `Image` whose markup URI source becomes a
-  `BitmapImage`, a `Popup` from markup holding its child,
-  `Control.IsTabStopProperty`, `Click` with a Windows handler, and an
-  app's control composed over `Windows.UI.Xaml.Controls.Control` whose
-  `MeasureOverride` the framework's layout calls), `xamlapptest`
-  (Microsoft's XAML framework started as a desktop app starts it, built
-  from its sources: `Application.Start` on the desktop path with a
-  `DispatcherQueue`, the app's initialization callback composing its
-  `Application` over the framework's, `WindowsXamlManager` starting it
-  on the thread and raising `OnLaunched`, `XamlReader.Load` of a `Grid`
-  holding a `TextBlock` there, the framework's theme resources and
-  control styles found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the
-  core's resource manager made, queued work run from the desktop message
-  loop, and `Application.Exit` returning from `Application.Start`),
+  `BitmapImage`, a `Popup` from markup holding its child, the text
+  block's and button's automation peers, `Control.IsTabStopProperty`,
+  `Click` with a Windows handler, and an app's control composed over
+  `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
+  framework's layout calls), `xamlapptest` (Microsoft's XAML framework
+  started as a desktop app starts it, built from its sources:
+  `Application.Start` on the desktop path with a `DispatcherQueue`, the
+  app's initialization callback composing its `Application` over the
+  framework's, `WindowsXamlManager` starting it on the thread and
+  raising `OnLaunched`, `XamlReader.Load` of a `Grid` holding a
+  `TextBlock` there, the framework's theme resources and control styles
+  found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the core's
+  resource manager made, queued work run from the desktop message loop,
+  and `Application.Exit` returning from `Application.Start`),
   `xamlbasetest` (Microsoft's XAML core, lowest layer, built from its
   sources, and NovaOS's WRL: ComPtr, RuntimeClass, weak references,
   Callback, EventSource, HString), `xamldlltest` (the system

@@ -4,8 +4,9 @@
  *
  * LocalSettings (and RoamingSettings, which stays on the machine as it does
  * on a PC not signed in to a Microsoft account) is an
- * ApplicationDataContainer whose Values are a PropertySet
- * (userland/winrtmap); CreateContainer makes or opens a named container
+ * ApplicationDataContainer whose Values are a property set
+ * (userland/winrtmap's ApplicationDataContainerSettings, which answers a
+ * key not set with null); CreateContainer makes or opens a named container
  * below it.
  *
  * Not here yet: the settings are kept for the process's life only (Windows
@@ -107,7 +108,7 @@ static Container *container_new(const WCHAR *name, int locality)
     if (!c) return 0;
     void *map = 0;
     c->name = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(name) + 1) * sizeof(WCHAR));
-    if (!c->name || FAILED(nova_strmap_new(TRUE, &map)) ||
+    if (!c->name || FAILED(nova_strmap_new_settings(&map)) ||
         FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, REFIID, void **))VT(map)[0])(map, &IID_IPropertySet_, &c->values))) {
         if (map) ((ULONG (STDMETHODCALLTYPE *)(void *))VT(map)[2])(map);
         HeapFree(GetProcessHeap(), 0, c->name);

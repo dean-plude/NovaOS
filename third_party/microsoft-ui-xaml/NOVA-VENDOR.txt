@@ -327,6 +327,11 @@ BitmapSource and BitmapImage.
 For a page's popups (Pulsar item 3, sixth slice): dxaml/lib's
 Popup_Partial.cpp with the generated class of Popup.
 
+For a page's automation peers (Pulsar item 3, ninth slice): dxaml/lib's
+FrameworkElementAutomationPeer_partial.cpp, TextBlockAutomationPeer_Partial.cpp,
+ButtonBaseAutomationPeer_Partial.cpp, ButtonAutomationPeer_Partial.cpp and
+AccessKeyStringBuilder.h with the generated classes of those four peers.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

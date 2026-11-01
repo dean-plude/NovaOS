@@ -13,7 +13,12 @@
  * a one-shot cancelled before it fires; and
  * Windows.ApplicationModel.UserActivities' UserActivityRequestManager
  * (Calculator's MainPage asks it): the view's manager, the same each time,
- * taking and removing a UserActivityRequested handler */
+ * taking and removing a UserActivityRequested handler; and
+ * Windows.Foundation.Diagnostics' logging classes (Calculator's trace
+ * logger): a LoggingChannel made with options and an id, disabled (no ETW
+ * session), events logged to it with LoggingFields and LoggingOptions, the
+ * fields' Add* methods taking every argument size (32-bit: each pops its
+ * own), and an activity started on it */
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -39,6 +44,13 @@ static const GUID IID_IAppMemoryReport2_T      = { 0x5F7F3738, 0x51B7, 0x42DC, {
 static const GUID IID_IThreadPoolStatics_T      = { 0xB6BF67DD, 0x84BD, 0x44F8, { 0xAC, 0x1C, 0x93, 0xEB, 0xCB, 0x9D, 0xBA, 0x91 } };
 static const GUID IID_IUserActivityRequestManagerStatics_T = { 0xC0392DF1, 0x224A, 0x432C, { 0x81, 0xE5, 0x0C, 0x76, 0xB4, 0xC4, 0xCE, 0xFA } };
 static const GUID IID_IUserActivityRequestManager_T = { 0x0C30BE4E, 0x903D, 0x48D6, { 0x82, 0xD4, 0x40, 0x43, 0xED, 0x57, 0x79, 0x1B } };
+static const GUID IID_ILoggingChannelFactory2_T = { 0x4C6EF5DD, 0x3B27, 0x4DC9, { 0x99, 0xF0, 0x29, 0x9C, 0x6E, 0x46, 0x03, 0xA1 } };
+static const GUID IID_ILoggingChannelOptionsFactory_T = { 0xA93151DA, 0x7FAF, 0x4191, { 0x87, 0x55, 0x5E, 0x86, 0xDC, 0x65, 0xD8, 0x96 } };
+static const GUID IID_ILoggingOptionsFactory_T = { 0xD713C6CB, 0x98AB, 0x464B, { 0x9F, 0x22, 0xA3, 0x26, 0x84, 0x78, 0x36, 0x8A } };
+static const GUID IID_ILoggingChannel2_T = { 0x9F4C3CF3, 0x0BAC, 0x45A5, { 0x9E, 0x33, 0xBA, 0xF3, 0xF3, 0xA2, 0x46, 0xA5 } };
+static const GUID IID_ILoggingTarget_T = { 0x65F16C35, 0xE388, 0x4E26, { 0xB1, 0x7A, 0xF5, 0x1C, 0xD3, 0xA8, 0x39, 0x16 } };
+static const GUID IID_ILoggingActivity2_T = { 0x26C29808, 0x6322, 0x456A, { 0xAF, 0x82, 0x80, 0xC8, 0x64, 0x2F, 0x17, 0x8B } };
+static const GUID IID_IActivationFactory_T = { 0x00000035, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID IID_IThreadPoolTimerStatics_T = { 0x1A8A9D02, 0xE482, 0x461B, { 0xB8, 0xC7, 0x8E, 0xFA, 0xD1, 0xCC, 0xE5, 0x90 } };
 
 /* ---- delegates: Invoke is the slot after IUnknown's three ----------- */
@@ -336,6 +348,70 @@ static void activity_requests(void)
     RELEASE(as_mgr); RELEASE(again); RELEASE(mgr); RELEASE(statics);
 }
 
+/* ---- Windows.Foundation.Diagnostics' logging ------------------------- */
+typedef struct { float X, Y, Width, Height; } RectT;
+static HSTRING hs(const WCHAR *s) { HSTRING h = 0; WindowsCreateString(s, (UINT32)wcslen(s), &h); return h; }
+static void logging(void)
+{
+    static const GUID group = { 0x4F50731A, 0x89CF, 0x4782, { 0xB3, 0xE0, 0xDC, 0xE8, 0xC9, 0x04, 0x76, 0xBA } };
+    static const GUID provider = { 0x0905CA09, 0x610E, 0x401E, { 0xB6, 0x50, 0x2F, 0x21, 0x29, 0x80, 0xB9, 0xE0 } };
+    void *chf = 0, *cof = 0, *opf = 0, *ff = 0, *copts = 0, *ch = 0, *ch2 = 0, *target = 0, *fields = 0, *opts = 0, *act = 0, *act2 = 0, *back = 0;
+    HSTRING name = hs(L"MicrosoftCalculator"), ev = hs(L"AppLaunch"), got = 0;
+    CHECK("LoggingChannel's factory", factory(L"Windows.Foundation.Diagnostics.LoggingChannel", &IID_ILoggingChannelFactory2_T, &chf) == S_OK);
+    CHECK("LoggingChannelOptions' factory", factory(L"Windows.Foundation.Diagnostics.LoggingChannelOptions", &IID_ILoggingChannelOptionsFactory_T, &cof) == S_OK);
+    CHECK("LoggingOptions' factory", factory(L"Windows.Foundation.Diagnostics.LoggingOptions", &IID_ILoggingOptionsFactory_T, &opf) == S_OK);
+    CHECK("LoggingFields' factory", factory(L"Windows.Foundation.Diagnostics.LoggingFields", &IID_IActivationFactory_T, &ff) == S_OK);
+    if (!chf || !cof || !opf || !ff) goto out;
+    CHECK("LoggingChannelOptions(group)", VT(cof, 6, HRESULT (STDMETHODCALLTYPE *)(void *, GUID, void **))(cof, group, &copts) == S_OK && copts);
+    GUID g = { 0 };
+    CHECK("its Group", copts && VT(copts, 6, Get_t)(copts, &g) == S_OK && IsEqualGUID(&g, &group));
+    CHECK("LoggingChannel(name, options, id)", VT(chf, 7, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *, GUID, void **))(chf, name, copts, provider, &ch) == S_OK && ch);
+    if (!ch) goto out;
+    VT(ch, 6, Get_t)(ch, &got);
+    CHECK("its Name", got && !wcscmp(WindowsGetStringRawBuffer(got, 0), L"MicrosoftCalculator"));
+    WindowsDeleteString(got); got = 0;
+    BYTE on = 1;
+    CHECK("its Enabled: false (no ETW session)", VT(ch, 7, Get_t)(ch, &on) == S_OK && on == 0);
+    g = (GUID){ 0 };
+    CHECK("ILoggingChannel2.Id: the provider id", SUCCEEDED(VT(ch, 0, QI_t)(ch, &IID_ILoggingChannel2_T, &ch2)) && VT(ch2, 6, Get_t)(ch2, &g) == S_OK
+                                                   && IsEqualGUID(&g, &provider));
+    CHECK("ILoggingTarget", SUCCEEDED(VT(ch, 0, QI_t)(ch, &IID_ILoggingTarget_T, &target)) && target);
+    on = 1;
+    CHECK("IsEnabledWithLevelAndKeywords: false", VT(target, 8, HRESULT (STDMETHODCALLTYPE *)(void *, int, INT64, BYTE *))(target, 0, (INT64)0x0000800000000000LL, &on) == S_OK && on == 0);
+    CHECK("new LoggingFields", VT(ff, 6, Get_t)(ff, &fields) == S_OK && fields);
+    CHECK("LoggingOptions(keywords)", VT(opf, 6, HRESULT (STDMETHODCALLTYPE *)(void *, INT64, void **))(opf, (INT64)0x0000400000000000LL, &opts) == S_OK && opts);
+    INT64 kw = 0;
+    CHECK("its Keywords", opts && VT(opts, 6, Get_t)(opts, &kw) == S_OK && kw == (INT64)0x0000400000000000LL);
+    if (fields) {
+        RectT r = { 1, 2, 3, 4 };
+        HRESULT hr = VT(fields, 79, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, HSTRING))(fields, ev, name);                     /* AddString */
+        hr |= VT(fields, 31, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, INT32))(fields, ev, 7);                                   /* AddInt32 */
+        hr |= VT(fields, 49, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, UINT64))(fields, ev, 0x2000000ULL);                     /* AddUInt64 */
+        hr |= VT(fields, 85, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, GUID))(fields, ev, provider);                           /* AddGuid */
+        hr |= VT(fields, 87, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, GUID, int, int))(fields, ev, provider, 0, 0);         /* AddGuidWithFormatAndTags */
+        hr |= VT(fields, 115, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, RectT))(fields, ev, r);                                /* AddRect */
+        hr |= VT(fields, 8, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, int))(fields, ev, 0);                                    /* BeginStructWithTags */
+        hr |= VT(fields, 9, Call_t)(fields);                                                                                         /* EndStruct */
+        hr |= VT(fields, 6, Call_t)(fields);                                                                                         /* Clear */
+        CHECK("LoggingFields' Add*: taken", hr == S_OK);
+    }
+    CHECK("LogEvent(name, fields, Verbose, options)", VT(target, 12, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *, int, void *))(target, ev, fields, 0, opts) == S_OK);
+    CHECK("LogMessage", VT(ch, 9, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(ch, ev) == S_OK);
+    CHECK("StartActivity", VT(target, 13, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void **))(target, ev, &act) == S_OK && act);
+    if (act) {
+        VT(act, 6, Get_t)(act, &got);
+        CHECK("the activity's Name", got && !wcscmp(WindowsGetStringRawBuffer(got, 0), L"AppLaunch"));
+        WindowsDeleteString(got); got = 0;
+        CHECK("its Channel: the channel", SUCCEEDED(VT(act, 0, QI_t)(act, &IID_ILoggingActivity2_T, &act2))
+                                          && VT(act2, 6, Get_t)(act2, &back) == S_OK && back == ch);
+        CHECK("StopActivity", act2 && VT(act2, 7, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(act2, ev) == S_OK);
+    }
+out:
+    RELEASE(back); RELEASE(act2); RELEASE(act); RELEASE(opts); RELEASE(fields); RELEASE(target); RELEASE(ch2); RELEASE(ch);
+    RELEASE(copts); RELEASE(ff); RELEASE(opf); RELEASE(cof); RELEASE(chf);
+    WindowsDeleteString(name); WindowsDeleteString(ev);
+}
+
 int main(void)
 {
     g_main_tid = GetCurrentThreadId();
@@ -346,6 +422,7 @@ int main(void)
     thread_pool();
     timers();
     activity_requests();
+    logging();
     printf("wrtpooltest: %d passed, %d failed (%d-bit)\n", pass, fail, (int)sizeof(void *) * 8);
     fflush(stdout);
     return fail != 0;

@@ -50,6 +50,8 @@
  * thread pool, its work items as IAsyncActions), and Package.Current (the
  * process's package and its Id), and UserActivityRequestManager (the
  * view's; its UserActivityRequested event is never raised: no Timeline).
+ * Windows.Foundation.Diagnostics' LoggingChannel, LoggingChannelOptions,
+ * LoggingOptions, LoggingFields and LoggingActivity are in logging.c.
  */
 #include <windows.h>
 #include <roapi.h>
@@ -2489,6 +2491,7 @@ static const void *const pk_id_vt[] = { INSP_FNS(pk_qi, pk_name), (void *)pki_na
 static PackageStatics g_package = { (const void *const *)pk_factory_vt, (const void *const *)pk_statics_vt,
                                     (const void *const *)pk_package_vt, (const void *const *)pk_id_vt };
 
+HRESULT logging_factory(HSTRING cls, void **factory);
 APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
 {
     if (!factory) return E_POINTER;
@@ -2507,6 +2510,6 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.UI.ViewManagement.ApplicationView")) { *factory = &g_appview_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.ApplicationModel.Package")) { *factory = &g_package.factory; return S_OK; }
     *factory = 0;
-    return CLASS_E_CLASSNOTAVAILABLE;
+    return logging_factory(cls, factory);           /* Windows.Foundation.Diagnostics' Logging* (logging.c) */
 }
 APPCORE_API HRESULT WINAPI DllCanUnloadNow(void) { return S_FALSE; }

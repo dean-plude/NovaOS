@@ -19,6 +19,9 @@
  *     Windows' IVector<UIElement>;
  *   - an Image loaded from markup, its Source URI made a BitmapImage;
  *   - a Popup loaded from markup, holding its child, closed;
+ *   - the automation peers FrameworkElementAutomationPeer's statics make
+ *     for the page's text block and button (TextBlockAutomationPeer,
+ *     ButtonAutomationPeer), the same one from FromElement after;
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
@@ -40,6 +43,7 @@
 #include <FrameworkApplication_Partial.h>
 #include <microsoft.ui.dispatching.h>
 #include <windows.ui.xaml.h>
+#include <windows.ui.xaml.automation.peers.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.markup.h>
@@ -337,6 +341,25 @@ static void windows_checks()
           SUCCEEDED(popup->get_Child(popupChild.GetAddressOf())) && popupChild &&
           SUCCEEDED(popup->get_IsOpen(&popupOpen)) && !popupOpen);
 
+    /* the automation peers a page's elements make (Calculator asks for them):
+     * the text block's and the button's, kept by the element */
+    namespace wuxap = ABI::Windows::UI::Xaml::Automation::Peers;
+    ctl::ComPtr<wuxap::IFrameworkElementAutomationPeerStatics> peers;
+    ctl::ComPtr<wuxap::IAutomationPeer> textPeer, buttonPeer, again;
+    ctl::ComPtr<wuxap::ITextBlockAutomationPeer> textBlockPeer;
+    ctl::ComPtr<wuxap::IButtonAutomationPeer> buttonButtonPeer;
+    CHECK_HR("FrameworkElementAutomationPeer's statics",
+             statics(L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer", peers.GetAddressOf()));
+    CHECK("CreatePeerForElement of the text block: a TextBlockAutomationPeer", peers && first &&
+          SUCCEEDED(peers->CreatePeerForElement(first.Get(), textPeer.GetAddressOf())) && textPeer &&
+          SUCCEEDED(as(textPeer.Get(), textBlockPeer.GetAddressOf())));
+    CHECK("CreatePeerForElement of the button: a ButtonAutomationPeer", peers && second &&
+          SUCCEEDED(peers->CreatePeerForElement(second.Get(), buttonPeer.GetAddressOf())) && buttonPeer &&
+          SUCCEEDED(as(buttonPeer.Get(), buttonButtonPeer.GetAddressOf())));
+    CHECK("FromElement then gives the same peer", peers && second &&
+          SUCCEEDED(peers->FromElement(second.Get(), again.GetAddressOf())) && again &&
+          identity(again.Get()) == identity(buttonPeer.Get()));
+
     /* a base class's statics: Control.IsTabStopProperty (UIElement's in WinUI 3) */
     ctl::ComPtr<wuxc::IControlStatics> cs;
     ctl::ComPtr<wux::IDependencyProperty> tabStop;
@@ -463,7 +486,8 @@ static DWORD WINAPI watchdog(void *)
 static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Controls.Button", L"Windows.UI.Xaml.Controls.TextBlock", L"Windows.UI.Xaml.UIElement",
     L"Windows.UI.Xaml.DependencyProperty",
-    L"Windows.UI.Xaml.Markup.XamlReader", L"Windows.UI.Xaml.Controls.Control"};
+    L"Windows.UI.Xaml.Markup.XamlReader", L"Windows.UI.Xaml.Controls.Control",
+    L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer"};
 
 static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
 {

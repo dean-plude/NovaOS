@@ -16,6 +16,10 @@
  * of it gives the rest): @objects, values are objects (IInspectable*) and
  * the map is a PropertySet (IPropertySet); else strings (a StringMap) */
 HRESULT nova_strmap_new(BOOL objects, void **out);
+/* a new empty property set that is an ApplicationDataContainer's Values
+ * (ApplicationDataContainerSettings): as nova_strmap_new(TRUE), but a key
+ * not in it looks up as null (S_OK), as on Windows, not E_BOUNDS */
+HRESULT nova_strmap_new_settings(void **out);
 /* (a string map's) @key set to @value, without raising MapChanged */
 HRESULT nova_strmap_put(void *map, const WCHAR *key, const WCHAR *value);
 /* a read-only list of copies of @items (strvec.c): its IVectorView<String>

@@ -1528,6 +1528,19 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple(
 # partial one; the core's CPopup is core/core/elements')
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
     '../Popup_Partial.cpp', '../winrtgeneratedclasses/Popup.g.cpp')
+# (step 32.6, the framework's FrameworkElementAutomationPeer, the peer UI
+# Automation asks an element for and the base of the controls' peers, which
+# a page's controls make as they load: its generated class and its partial
+# one; AutomationPeer, its base, is above), and the peers Calculator asks
+# for by name: a text block's (TextBlockAutomationPeer, whose FromElement
+# its date page calls) and a button's (ButtonAutomationPeer and its base,
+# ButtonBaseAutomationPeer, which its settings page makes)
+_AUTOMATION_PEERS = ('FrameworkElementAutomationPeer', 'TextBlockAutomationPeer', 'ButtonBaseAutomationPeer',
+                     'ButtonAutomationPeer')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../FrameworkElementAutomationPeer_partial.cpp', '../TextBlockAutomationPeer_Partial.cpp',
+    '../ButtonBaseAutomationPeer_Partial.cpp', '../ButtonAutomationPeer_Partial.cpp') + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _AUTOMATION_PEERS)
 WINFACES =os.path.join(ROOT, 'tools', 'winrt', 'winfaces.py')
 
 

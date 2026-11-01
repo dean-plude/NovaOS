@@ -1453,6 +1453,20 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   whose factory the XAML core does not build yet (then fail fast
   0x80131577).  Next: the automation peers, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Fifteenth part done (Pulsar item 3, ninth slice): the XAML core's
+  automation peers Calculator asks for, `FrameworkElementAutomationPeer`
+  (with `FromElement` and `CreatePeerForElement`), `TextBlockAutomationPeer`,
+  `ButtonBaseAutomationPeer` and `ButtonAutomationPeer`, built from
+  Microsoft's sources (test `wuxamltest`); and `LocalSettings.Values`
+  answering a setting not set with null, as on Windows (Calculator's theme
+  helper read one and died of a .NET `KeyNotFoundException`, 0x80131577;
+  test `wrtapptest`).  `RoOriginateError` now names each originated error
+  on the debugger's output.  Calculator gets through `MainPage`'s start and
+  stops as the framework connects the CoreWindow's content:
+  `Microsoft.UI.Content.CoreWindowSiteBridge` is not registered (fail fast
+  0x80040154, `DCompTreeHost::SetTargetWindowUWP`).  Next: that bridge
+  (and the `ContentIsland` it connects), then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

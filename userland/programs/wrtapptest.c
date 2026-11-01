@@ -86,6 +86,9 @@ static void app_data(void)
         CHECK("Remove", VT(map, 11, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(map, k) == S_OK);
         VT(map, 8, GetS_t)(map, k, &had);
         CHECK("then gone", had == 0);
+        void *none = (void *)1;                                     /* (a setting not set looks up as null, */
+        CHECK("Lookup of a key not set: null, not an error",       /*  as Calculator's theme helper expects) */
+              VT(map, 6, GetS_t)(map, k, &none) == S_OK && none == 0);
         WindowsDeleteString(k);
     }
     void *c1 = 0, *c2 = 0, *c3 = 0;

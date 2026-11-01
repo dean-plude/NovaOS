@@ -3,7 +3,7 @@
 # (Windows.Storage.ApplicationData.dll), ResourceContext's qualifier values
 # and languages (MrmCoreR.dll), User.GetFromId and NamedPolicy
 # (twinapi.appcore.dll), all through the registry's ActivatableClassId keys
-DOC = ('`wrtapptest` (`ApplicationData.LocalSettings`, `ResourceContext.QualifierValues` and `Languages`, '
+DOC = ('`wrtapptest` (`ApplicationData.LocalSettings`, a setting not set looking up as null, `ResourceContext.QualifierValues` and `Languages`, '
        '`User.GetFromId`, `NamedPolicy`; 64- and 32-bit)')
 TESTS = [
     Test('wrtapptest', 'wrtapptest', [r'wrtapptest: \d+ passed, 0 failed \(64-bit\)'], timeout=120),

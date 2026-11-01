@@ -57,6 +57,7 @@ typedef struct Map {
     const void *const *pset;        /* IPropertySet (objects only) */
     LONG refs;
     int objects;
+    int settings;                   /* an ApplicationDataContainerSettings: a missing key looks up as null */
     SRWLOCK lock;
     Pair *pairs;
     UINT32 count, cap;
@@ -172,7 +173,8 @@ static ULONG sm_release(Map *m)
 }
 static HRESULT sm_name(Map *m, HSTRING *n)
 {
-    const WCHAR *s = m->objects ? L"Windows.Foundation.Collections.PropertySet" : L"Windows.Foundation.Collections.StringMap";
+    const WCHAR *s = m->settings ? L"Windows.Storage.ApplicationDataContainerSettings" :
+                     m->objects ? L"Windows.Foundation.Collections.PropertySet" : L"Windows.Foundation.Collections.StringMap";
     return WindowsCreateString(s, (UINT32)lstrlenW(s), n);
 }
 /* each face's IInspectable, by its field */
@@ -196,7 +198,9 @@ static HRESULT lookup(Map *m, HSTRING key, void **v)
     int i = find(m, key);
     *v = i < 0 ? 0 : val_copy(m, m->pairs[i].value);
     ReleaseSRWLockShared(&m->lock);
-    return i < 0 ? E_BOUNDS_ : S_OK;
+    /* (a settings container's Values answer a key not set with null, as
+     * Windows' do: apps read a setting and test it for null) */
+    return i < 0 && !m->settings ? E_BOUNDS_ : S_OK;
 }
 static HRESULT size(Map *m, UINT32 *v)
 {
@@ -456,6 +460,13 @@ HRESULT nova_strmap_new(BOOL objects, void **out)
     m->objects = objects ? 1 : 0;
     InitializeSRWLock(&m->lock);
     return S_OK;
+}
+
+HRESULT nova_strmap_new_settings(void **out)
+{
+    HRESULT hr = nova_strmap_new(TRUE, out);
+    if (SUCCEEDED(hr)) OF(*out, map)->settings = 1;
+    return hr;
 }
 
 HRESULT nova_strmap_put(void *map, const WCHAR *key, const WCHAR *value)

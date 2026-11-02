@@ -957,6 +957,7 @@ static void defaults(void)
         { "Windows.Foundation.Uri", "urlmon.dll" },
         { "Microsoft.UI.Content.ContentIsland", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Content.DesktopChildSiteBridge", "Microsoft.UI.Input.dll" },
+        { "Microsoft.UI.Content.CoreWindowSiteBridge", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Content.ContentCoordinateConverter", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Input.InputPointerSource", "Microsoft.UI.Input.dll" },
         { "Microsoft.UI.Input.InputKeyboardSource", "Microsoft.UI.Input.dll" },

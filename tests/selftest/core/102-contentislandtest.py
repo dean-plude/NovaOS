@@ -2,9 +2,10 @@
 # windowing classes (Microsoft.UI.Input.dll, roadmap 32.4): a
 # DesktopChildSiteBridge and a ContentIsland sized together, the island's
 # pointer, key and focus sources raising events from the bridge window's
-# messages, and AppWindow's Changed for a move
+# messages, AppWindow's Changed for a move, and a CoreWindowSiteBridge
+# filling a (stand-in) CoreWindow and following its size
 DOC = ('`contentislandtest` (the lifted content islands a XAML Window sits on: a site bridge and an '
-       'island sized together, the island\'s input events, AppWindow)')
+       'island sized together, the island\'s input events, AppWindow, the bridge a UWP app\'s CoreWindow shows its island through)')
 TESTS = [
     Test('contentislandtest', 'contentislandtest', [r'contentislandtest: \d+ passed, 0 failed \(64-bit\)'], timeout=120),
 ]

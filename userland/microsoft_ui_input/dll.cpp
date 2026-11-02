@@ -10,7 +10,8 @@
  * (kernel/um/um_registry.c).
  *
  *   content.cpp     ContentIsland (and its environment, state changes and
- *                   coordinate converter), DesktopChildSiteBridge
+ *                   coordinate converter), DesktopChildSiteBridge,
+ *                   CoreWindowSiteBridge (a UWP app's CoreWindow)
  *   input.cpp       InputPointerSource, InputKeyboardSource,
  *                   InputPreTranslateKeyboardSource, InputFocusController,
  *                   InputActivationListener (an island's), and
@@ -45,6 +46,7 @@ HRESULT make_hstring(const wchar_t *s, HSTRING *out)
 static const struct { const wchar_t *name; IActivationFactory *(*make)(); } CLASSES[] = {
     { L"Microsoft.UI.Content.ContentIsland", content_island_factory },
     { L"Microsoft.UI.Content.DesktopChildSiteBridge", desktop_child_site_bridge_factory },
+    { L"Microsoft.UI.Content.CoreWindowSiteBridge", core_window_site_bridge_factory },
     { L"Microsoft.UI.Content.ContentCoordinateConverter", content_coordinate_converter_factory },
     { L"Microsoft.UI.Input.InputPointerSource", input_pointer_source_factory },
     { L"Microsoft.UI.Input.InputKeyboardSource", input_keyboard_source_factory },

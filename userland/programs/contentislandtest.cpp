@@ -8,7 +8,9 @@
  * becomes the island's (StateChanged); the island's input sources raise
  * pointer, key and focus events from the bridge window's messages; AppWindow
  * reports the top-level window's moves; closing the bridge destroys its
- * window.
+ * window.  A CoreWindowSiteBridge (what a UWP app's XAML shows its root
+ * island through) on a stand-in CoreWindow's window fills that window and
+ * follows its size, and connects an island the same way.
  *
  *   contentislandtest       the self-test runs it with no arguments
  */
@@ -253,10 +255,103 @@ static void run(void)
     DestroyWindow(top);
 }
 
+/* a stand-in for a UWP app's CoreWindow: the bridge asks it only for its
+ * window (ICoreWindowInterop) */
+struct __declspec(uuid("45D64A29-A63E-4CB6-B498-5781D298CB4F")) ICoreWindowInterop : IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE get_WindowHandle(HWND *hwnd) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MessageHandled(unsigned char value) = 0;
+};
+struct FakeCoreWindow : IInspectable, ICoreWindowInterop
+{
+    LONG refs = 1;
+    HWND hwnd = nullptr;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IInspectable)) *out = static_cast<IInspectable *>(this);
+        else if (iid == __uuidof(ICoreWindowInterop)) *out = static_cast<ICoreWindowInterop *>(this);
+        else { *out = nullptr; return E_NOINTERFACE; }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    ULONG STDMETHODCALLTYPE Release() override { return (ULONG)InterlockedDecrement(&refs); }  /* (on the stack) */
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG *n, IID **iids) override { *n = 0; *iids = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING *name) override { *name = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel *t) override { *t = BaseTrust; return S_OK; }
+    HRESULT STDMETHODCALLTYPE get_WindowHandle(HWND *h) override { *h = hwnd; return S_OK; }
+    HRESULT STDMETHODCALLTYPE put_MessageHandled(unsigned char) override { return S_OK; }
+};
+
+/* a CoreWindowSiteBridge on the stand-in's window: its bridge window fills
+ * the CoreWindow's client area and keeps its size, and an island connected
+ * to it takes that size */
+static void core_window(void)
+{
+    HWND top = CreateWindowExW(0, (const WCHAR *)L"ContentIslandTestWindow", (const WCHAR *)L"Core window", WS_OVERLAPPEDWINDOW,
+                               60, 60, 400, 300, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    CHECK("a CoreWindow's window", top != nullptr);
+    if (!top) return;
+    ShowWindow(top, SW_SHOW);
+    pump();
+    HSTRING cls = nullptr;
+    WindowsCreateString((const WCHAR *)L"Microsoft.UI.Composition.Compositor", 35, &cls);
+    IInspectable *insp = nullptr;
+    RoActivateInstance(cls, (void **)&insp);
+    WindowsDeleteString(cls);
+    mcomp::ICompositor *comp = qi<mcomp::ICompositor>(insp);
+    release(insp);
+    mcomp::IContainerVisual *container = nullptr;
+    if (comp) comp->CreateContainerVisual(&container);
+    mcomp::IVisual *root = qi<mcomp::IVisual>(container);
+
+    FakeCoreWindow cw;
+    cw.hwnd = top;
+    auto *statics = factory<ixp::ICoreWindowSiteBridgeStatics>(L"Microsoft.UI.Content.CoreWindowSiteBridge");
+    CHECK("CoreWindowSiteBridge's statics", statics != nullptr);
+    ixp::ICoreWindowSiteBridge *bridge = nullptr;
+    CHECK("CoreWindowSiteBridge.Create", statics && comp &&
+          SUCCEEDED(statics->Create(comp, reinterpret_cast<ABI::Windows::UI::Core::ICoreWindow *>(static_cast<IInspectable *>(&cw)),
+                                    &bridge)) && bridge);
+    if (!bridge) { release(statics); release(root); release(container); release(comp); DestroyWindow(top); return; }
+    ixp::IContentSiteBridge *site = qi<ixp::IContentSiteBridge>(bridge);
+    CHECK("is also an IContentSiteBridge", site != nullptr);
+    HWND child = GetWindow(top, GW_CHILD);
+    RECT pc = {}, cc = {};
+    GetClientRect(top, &pc);
+    if (child) GetClientRect(child, &cc);
+    CHECK("its window fills the CoreWindow", child && IsWindowVisible(child) && cc.right == pc.right && cc.bottom == pc.bottom);
+
+    auto *islandStatics = factory<ixp::IContentIslandStatics>(L"Microsoft.UI.Content.ContentIsland");
+    ixp::IContentIsland *island = nullptr;
+    if (islandStatics && root) islandStatics->Create(root, &island);
+    CHECK("Connect", island && SUCCEEDED(bridge->Connect(island)));
+    ::boolean connected = false;
+    wfn::Vector2 size = {};
+    CHECK("the island is connected, at the CoreWindow's size", island && SUCCEEDED(island->get_IsConnected(&connected)) &&
+          connected && SUCCEEDED(island->get_ActualSize(&size)) && size.X == (float)pc.right && size.Y == (float)pc.bottom);
+    SetWindowPos(top, nullptr, 0, 0, 520, 420, SWP_NOMOVE | SWP_NOZORDER);
+    pump();
+    GetClientRect(top, &pc);
+    if (island) island->get_ActualSize(&size);
+    CHECK("follows the CoreWindow's size", size.X == (float)pc.right && size.Y == (float)pc.bottom);
+
+    wf::IClosable *closeBridge = qi<wf::IClosable>(bridge);
+    CHECK("CoreWindowSiteBridge.Close", closeBridge && SUCCEEDED(closeBridge->Close()));
+    CHECK("destroys its window, not the CoreWindow's", !IsWindow(child) && IsWindow(top));
+    release(closeBridge);
+    wf::IClosable *closeIsland = qi<wf::IClosable>(island);
+    if (closeIsland) closeIsland->Close();
+    release(closeIsland); release(island); release(islandStatics); release(site); release(bridge); release(statics);
+    release(root); release(container); release(comp);
+    DestroyWindow(top);
+}
+
 int main(void)
 {
     RoInitialize(RO_INIT_SINGLETHREADED);
     run();
+    core_window();
     printf("contentislandtest: %d passed, %d failed (%s)\n", pass, fail, sizeof(void *) == 8 ? "64-bit" : "32-bit");
     return fail ? 1 : 0;
 }

@@ -1577,5 +1577,27 @@ vendors.
    button's peers from `CreatePeerForElement`, the same one from
    `FromElement`), `wrtapptest` (a key not set looks up as null).
 
+   Pulsar item 3, tenth slice: the CoreWindow's site bridge.
+   `DCompTreeHost::SetTargetWindowUWP` makes a
+   `Microsoft.UI.Content.CoreWindowSiteBridge` on its compositor for the
+   thread's CoreWindow, a `ContentIsland` on a container visual, and
+   connects the two.  NovaOS's `Microsoft.UI.Input.dll`
+   (`userland/microsoft_ui_input/content.cpp`) now serves the class: the
+   bridge asks the CoreWindow for its window (`ICoreWindowInterop`), makes
+   its bridge window (the `DesktopChildSiteBridge`'s class) as a visible
+   child filling the CoreWindow's client area, and subclasses the
+   CoreWindow's window so that its `WM_SIZE` resizes the bridge window and
+   its `WM_SETFOCUS` passes focus on to it.  `Connect` is the desktop
+   bridge's: a composition target on the bridge window shows the island's
+   root, the window's size is the island's, and its pointer and key
+   messages are the island's input sources' events.  The bridge answers
+   `IContentSiteBridge` and `IClosable` too; closing it restores the
+   CoreWindow's window procedure.  Calculator gets past it and stops on
+   `InputSiteAdapter` (`JupiterWindow::EnsureInputSiteAdapterForCoreWindow`),
+   whose `.cpp` is not vendored yet, the next slice.  Test:
+   `contentislandtest` (a bridge on a stand-in CoreWindow fills it,
+   connects an island at its size and follows a resize; closing destroys
+   only the bridge window).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

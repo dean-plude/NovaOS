@@ -111,11 +111,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   on Direct3D 11 and Direct2D, later interface versions, property sets,
   animations; 64- and 32-bit), `comtest`, `contentislandtest` (the
   lifted content islands a XAML Window sits on: a site bridge and an
-  island sized together, the island's input events, AppWindow),
-  `coreapptest` (CoreApplication.Run, CoreWindow events and dispatcher,
-  RunAsync, a swap chain for a CoreWindow; 64- and 32-bit), `d2dctxtest`
-  (Direct2D device contexts: ID2D1Device on Direct3D 11, bitmaps on DXGI
-  surfaces, DirectComposition surfaces drawn with Direct2D; 64-bit),
+  island sized together, the island's input events, AppWindow, the
+  bridge a UWP app's CoreWindow shows its island through), `coreapptest`
+  (CoreApplication.Run, CoreWindow events and dispatcher, RunAsync, a
+  swap chain for a CoreWindow; 64- and 32-bit), `d2dctxtest` (Direct2D
+  device contexts: ID2D1Device on Direct3D 11, bitmaps on DXGI surfaces,
+  DirectComposition surfaces drawn with Direct2D; 64-bit),
   `dispatchqtest` (the DispatcherQueue: work by priority, timers, the
   event loop, a dedicated thread, shutdown; 64- and 32-bit),
   `propvaltest` (Windows.Foundation.PropertyValue: boxed values, numeric

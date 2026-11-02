@@ -202,6 +202,7 @@ float island_scale(ixp::IContentIsland *island);
 /* the factories dll.cpp serves */
 IActivationFactory *content_island_factory();
 IActivationFactory *desktop_child_site_bridge_factory();
+IActivationFactory *core_window_site_bridge_factory();
 IActivationFactory *content_coordinate_converter_factory();
 IActivationFactory *input_pointer_source_factory();
 IActivationFactory *input_keyboard_source_factory();

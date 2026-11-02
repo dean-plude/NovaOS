@@ -17,6 +17,10 @@
  * the island's input sources' events.  An island's root can be replaced
  * (IContentIslandExperimental::put_Root, which XAML's composition tree
  * host calls); the target shows the new root.
+ *
+ * CoreWindowSiteBridge.Create(compositor, coreWindow) does the same for a
+ * UWP app's CoreWindow: its bridge window fills the CoreWindow and follows
+ * its size and focus (see the class below).
  */
 #include "lifted.h"
 
@@ -356,6 +360,31 @@ struct SiteBridge : Object, Stub<IDesktopChildSiteBridge>, Stub<IDesktopSiteBrid
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
 
+    /* the bridge window: a child of @parent with @style added */
+    HRESULT create_window(mcomp::ICompositor *compositor, HWND parent, DWORD style, int x, int y, int w, int h)
+    {
+        static LONG registered;
+        if (!InterlockedExchange(&registered, 1)) {
+            WNDCLASSEXW wc = {};
+            wc.cbSize = sizeof wc;
+            wc.lpfnWndProc = SiteBridge::wndproc;
+            wc.hInstance = GetModuleHandleW(W(L"Microsoft.UI.Input.dll"));
+            wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
+            wc.lpszClassName = BRIDGE_CLASS;
+            wc.style = CS_DBLCLKS;
+            RegisterClassExW(&wc);
+        }
+        set_ref(m_compositor, compositor);
+        m_hwnd = CreateWindowExW(0, BRIDGE_CLASS, W(L""), WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | style, x, y, w, h,
+                                 parent, nullptr, GetModuleHandleW(W(L"Microsoft.UI.Input.dll")), nullptr);
+        if (!m_hwnd) {
+            DWORD e = GetLastError();
+            return HRESULT_FROM_WIN32(e ? e : ERROR_INVALID_WINDOW_HANDLE);
+        }
+        SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
+        return S_OK;
+    }
+
     /* IDesktopChildSiteBridge */
     HRESULT STDMETHODCALLTYPE get_ResizePolicy(ContentSizePolicy *v) override { *v = m_policy; return S_OK; }
     HRESULT STDMETHODCALLTYPE put_ResizePolicy(ContentSizePolicy v) override { m_policy = v; return S_OK; }
@@ -626,28 +655,109 @@ struct DesktopChildSiteBridgeStatics : Object, Stub<IDesktopChildSiteBridgeStati
         *result = nullptr;
         HWND parent = (HWND)(ULONG_PTR)parentWindowId.Value;
         if (!compositor || !IsWindow(parent)) return E_INVALIDARG;
-        static LONG registered;
-        if (!InterlockedExchange(&registered, 1)) {
-            WNDCLASSEXW wc = {};
-            wc.cbSize = sizeof wc;
-            wc.lpfnWndProc = SiteBridge::wndproc;
-            wc.hInstance = GetModuleHandleW(W(L"Microsoft.UI.Input.dll"));
-            wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
-            wc.lpszClassName = BRIDGE_CLASS;
-            wc.style = CS_DBLCLKS;
-            RegisterClassExW(&wc);
-        }
         SiteBridge *b = new SiteBridge();
         if (!b) return E_OUTOFMEMORY;
-        set_ref(b->m_compositor, compositor);
-        b->m_hwnd = CreateWindowExW(0, BRIDGE_CLASS, W(L""), WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 0, 0, parent,
-                                    nullptr, GetModuleHandleW(W(L"Microsoft.UI.Input.dll")), nullptr);
-        if (!b->m_hwnd) {
-            DWORD e = GetLastError();
+        HRESULT hr = b->create_window(compositor, parent, 0, 0, 0, 0, 0);
+        if (FAILED(hr)) {
             b->Release();
-            return HRESULT_FROM_WIN32(e ? e : ERROR_INVALID_WINDOW_HANDLE);
+            return hr;
         }
-        SetWindowLongPtrW(b->m_hwnd, GWLP_USERDATA, (LONG_PTR)b);
+        *result = b;
+        return S_OK;
+    }
+};
+
+/* ---- CoreWindowSiteBridge ------------------------------------------------
+ * A UWP app's window (a CoreWindow, twinapi.appcore.dll's) shows XAML's root
+ * island through this bridge (DCompTreeHost::SetTargetWindowUWP): a bridge
+ * window that fills the CoreWindow's client area, made visible at once and
+ * kept at the CoreWindow's size (its window procedure is subclassed for
+ * WM_SIZE), which passes keyboard focus on to it (WM_SETFOCUS), so the
+ * island's input sources see the app's pointer and key messages as a
+ * DesktopChildSiteBridge's do. */
+#define CORE_PARENT_PROC W(L"NovaOS.CoreWindowSiteBridge.Proc")
+#define CORE_PARENT_CHILD W(L"NovaOS.CoreWindowSiteBridge.Child")
+
+/* (corewindow.h) */
+struct __declspec(uuid("45D64A29-A63E-4CB6-B498-5781D298CB4F")) ICoreWindowInterop : IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE get_WindowHandle(HWND *hwnd) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MessageHandled(::boolean value) = 0;
+};
+
+static LRESULT CALLBACK core_parent_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    WNDPROC old = (WNDPROC)GetPropW(hwnd, CORE_PARENT_PROC);
+    HWND child = (HWND)GetPropW(hwnd, CORE_PARENT_CHILD);
+    LRESULT r = old ? CallWindowProcW(old, hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
+    if (child && IsWindow(child))
+        switch (msg) {
+        case WM_SIZE:
+            SetWindowPos(child, nullptr, 0, 0, LOWORD(lp), HIWORD(lp), SWP_NOZORDER | SWP_NOACTIVATE);
+            break;
+        case WM_SETFOCUS:
+            SetFocus(child);
+            break;
+        }
+    return r;
+}
+
+struct CoreWindowBridge : SiteBridge, Stub<ICoreWindowSiteBridge>
+{
+    HWND m_parent = nullptr;
+
+    LIFTED_OBJECT(L"Microsoft.UI.Content.CoreWindowSiteBridge")
+    LIFTED_QI(CoreWindowBridge, ICoreWindowSiteBridge, IContentSiteBridge, wf::IClosable, mui::IClosableNotifier)
+    ~CoreWindowBridge() { Close(); }
+
+    HRESULT STDMETHODCALLTYPE Connect(IContentIsland *content) override { return SiteBridge::Connect(content); }
+    HRESULT STDMETHODCALLTYPE Close() override
+    {
+        if (m_parent && IsWindow(m_parent) && GetPropW(m_parent, CORE_PARENT_CHILD) == m_hwnd) {
+            SetWindowLongPtrW(m_parent, GWLP_WNDPROC, (LONG_PTR)GetPropW(m_parent, CORE_PARENT_PROC));
+            RemovePropW(m_parent, CORE_PARENT_PROC);
+            RemovePropW(m_parent, CORE_PARENT_CHILD);
+        }
+        m_parent = nullptr;
+        return SiteBridge::Close();
+    }
+};
+
+struct CoreWindowSiteBridgeStatics : Object, Stub<ICoreWindowSiteBridgeStatics>, IActivationFactory
+{
+    LIFTED_OBJECT(L"Microsoft.UI.Content.CoreWindowSiteBridge")
+    LIFTED_QI(CoreWindowSiteBridgeStatics, ICoreWindowSiteBridgeStatics, IActivationFactory)
+    HRESULT STDMETHODCALLTYPE ActivateInstance(IInspectable **out) override { *out = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Create(mcomp::ICompositor *compositor, ABI::Windows::UI::Core::ICoreWindow *coreWindow,
+                                     ICoreWindowSiteBridge **result) override
+    {
+        if (!result) return E_POINTER;
+        *result = nullptr;
+        if (!compositor || !coreWindow) return E_INVALIDARG;
+        HWND parent = nullptr;
+        ICoreWindowInterop *interop = nullptr;
+        HRESULT hr = reinterpret_cast<IUnknown *>(coreWindow)->QueryInterface(__uuidof(ICoreWindowInterop), (void **)&interop);
+        if (SUCCEEDED(hr)) {
+            hr = interop->get_WindowHandle(&parent);
+            interop->Release();
+        }
+        if (FAILED(hr)) return hr;
+        if (!IsWindow(parent)) return E_INVALIDARG;
+        RECT rc = {};
+        GetClientRect(parent, &rc);
+        CoreWindowBridge *b = new CoreWindowBridge();
+        if (!b) return E_OUTOFMEMORY;
+        hr = b->create_window(compositor, parent, WS_VISIBLE, 0, 0, rc.right - rc.left, rc.bottom - rc.top);
+        if (FAILED(hr)) {
+            b->Release();
+            return hr;
+        }
+        b->m_parent = parent;
+        if (!GetPropW(parent, CORE_PARENT_PROC)) {
+            SetPropW(parent, CORE_PARENT_CHILD, b->m_hwnd);
+            SetPropW(parent, CORE_PARENT_PROC, (HANDLE)SetWindowLongPtrW(parent, GWLP_WNDPROC, (LONG_PTR)core_parent_proc));
+        }
+        if (GetFocus() == parent) SetFocus(b->m_hwnd);
         *result = b;
         return S_OK;
     }
@@ -663,3 +773,4 @@ struct CoordinateConverterStatics : Object, Stub<IContentCoordinateConverterStat
 IActivationFactory *content_island_factory() { return new ContentIslandStatics(); }
 IActivationFactory *desktop_child_site_bridge_factory() { return new DesktopChildSiteBridgeStatics(); }
 IActivationFactory *content_coordinate_converter_factory() { return new CoordinateConverterStatics(); }
+IActivationFactory *core_window_site_bridge_factory() { return new CoreWindowSiteBridgeStatics(); }

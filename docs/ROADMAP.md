@@ -1467,6 +1467,17 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   0x80040154, `DCompTreeHost::SetTargetWindowUWP`).  Next: that bridge
   (and the `ContentIsland` it connects), then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Sixteenth part done (Pulsar item 3, tenth slice):
+  `Microsoft.UI.Content.CoreWindowSiteBridge` in NovaOS's
+  `Microsoft.UI.Input.dll`, the bridge a UWP app's XAML shows its root
+  island through: a bridge window that fills the app's CoreWindow, follows
+  its size and takes its keyboard focus, so the island draws there and
+  its input sources see the window's messages (test `contentislandtest`,
+  on a stand-in CoreWindow).  Calculator gets past it and stops on the
+  framework's `InputSiteAdapter`, whose source is not vendored yet
+  (`JupiterWindow::EnsureInputSiteAdapterForCoreWindow`).  Next: that
+  adapter, then the CI check that it computes `2 + 2`, which ticks this
+  step.
 
 ---
 

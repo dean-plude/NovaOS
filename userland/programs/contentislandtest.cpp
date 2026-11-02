@@ -10,7 +10,9 @@
  * reports the top-level window's moves; closing the bridge destroys its
  * window.  A CoreWindowSiteBridge (what a UWP app's XAML shows its root
  * island through) on a stand-in CoreWindow's window fills that window and
- * follows its size, and connects an island the same way.
+ * follows its size, and connects an island the same way; that island
+ * answers the input site XAML's InputSiteAdapter asks for (its window is the
+ * bridge's) and has each input source the adapter gets for it.
  *
  *   contentislandtest       the self-test runs it with no arguments
  */
@@ -35,6 +37,12 @@ namespace ixi = ABI::Microsoft::UI::Input;
 namespace ixw = ABI::Microsoft::UI::Windowing;
 namespace wf = ABI::Windows::Foundation;
 namespace wfn = ABI::Windows::Foundation::Numerics;
+
+/* the island's input site (InputSiteHelpers.h, userland/windows_ui_xaml/inc) */
+struct __declspec(uuid("5bad72c0-f7b0-5c64-9aea-80a5250b121b")) IIslandInputSite : IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE GetInputWindowId(mui::WindowId *windowId) = 0;
+};
 
 static int pass, fail;
 #define CHECK(what, cond) do { if (cond) pass++; else { fail++; printf("FAIL: %s (line %d)\n", what, __LINE__); fflush(stdout); } } while (0)
@@ -330,6 +338,33 @@ static void core_window(void)
     wfn::Vector2 size = {};
     CHECK("the island is connected, at the CoreWindow's size", island && SUCCEEDED(island->get_IsConnected(&connected)) &&
           connected && SUCCEEDED(island->get_ActualSize(&size)) && size.X == (float)pc.right && size.Y == (float)pc.bottom);
+    /* what XAML's InputSiteAdapter asks of the CoreWindow's island */
+    IIslandInputSite *inputSite = qi<IIslandInputSite>(island);
+    mui::WindowId inputWindow = {};
+    CHECK("the island's input site is the bridge's window", inputSite && SUCCEEDED(inputSite->GetInputWindowId(&inputWindow)) &&
+          (HWND)(ULONG_PTR)inputWindow.Value == child);
+    auto *focusStatics = factory<ixi::IInputFocusControllerStatics>(L"Microsoft.UI.Input.InputFocusController");
+    ixi::IInputFocusController *focus = nullptr;
+    CHECK("its InputFocusController", focusStatics && SUCCEEDED(focusStatics->GetForIsland(island, &focus)) && focus);
+    auto *keyStatics = factory<ixi::IInputKeyboardSourceStatics2>(L"Microsoft.UI.Input.InputKeyboardSource");
+    ixi::IInputKeyboardSource *keys = nullptr;
+    ixi::IInputKeyboardSource2 *keys2 = nullptr;
+    CHECK("its InputKeyboardSource (2)", keyStatics && SUCCEEDED(keyStatics->GetForIsland(island, &keys)) &&
+          (keys2 = qi<ixi::IInputKeyboardSource2>(keys)) != nullptr);
+    auto *ptStatics = factory<ixi::IInputPreTranslateKeyboardSourceStatics>(L"Microsoft.UI.Input.InputPreTranslateKeyboardSource");
+    ixi::IInputPreTranslateKeyboardSource *pretranslate = nullptr;
+    CHECK("its InputPreTranslateKeyboardSource", ptStatics && SUCCEEDED(ptStatics->GetForIsland(island, &pretranslate)) && pretranslate);
+    auto *pointerStatics = factory<ixi::IInputPointerSourceStatics>(L"Microsoft.UI.Input.InputPointerSource");
+    ixi::IInputPointerSource *pointer = nullptr;
+    ixi::IInputPointerSource2 *pointer2 = nullptr;
+    CHECK("its InputPointerSource (2)", pointerStatics && SUCCEEDED(pointerStatics->GetForIsland(island, &pointer)) &&
+          (pointer2 = qi<ixi::IInputPointerSource2>(pointer)) != nullptr);
+    auto *activationStatics = factory<ixi::IInputActivationListenerStatics2>(L"Microsoft.UI.Input.InputActivationListener");
+    ixi::IInputActivationListener *activation = nullptr;
+    CHECK("its InputActivationListener", activationStatics && SUCCEEDED(activationStatics->GetForIsland(island, &activation)) && activation);
+    release(activation); release(activationStatics); release(pointer2); release(pointer); release(pointerStatics);
+    release(pretranslate); release(ptStatics); release(keys2); release(keys); release(keyStatics); release(focus); release(focusStatics);
+
     SetWindowPos(top, nullptr, 0, 0, 520, 420, SWP_NOMOVE | SWP_NOZORDER);
     pump();
     GetClientRect(top, &pc);
@@ -339,6 +374,8 @@ static void core_window(void)
     wf::IClosable *closeBridge = qi<wf::IClosable>(bridge);
     CHECK("CoreWindowSiteBridge.Close", closeBridge && SUCCEEDED(closeBridge->Close()));
     CHECK("destroys its window, not the CoreWindow's", !IsWindow(child) && IsWindow(top));
+    CHECK("the input site fails once the bridge is closed", inputSite && FAILED(inputSite->GetInputWindowId(&inputWindow)));
+    release(inputSite);
     release(closeBridge);
     wf::IClosable *closeIsland = qi<wf::IClosable>(island);
     if (closeIsland) closeIsland->Close();

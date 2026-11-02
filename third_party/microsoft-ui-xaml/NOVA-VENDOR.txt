@@ -332,6 +332,11 @@ FrameworkElementAutomationPeer_partial.cpp, TextBlockAutomationPeer_Partial.cpp,
 ButtonBaseAutomationPeer_Partial.cpp, ButtonAutomationPeer_Partial.cpp and
 AccessKeyStringBuilder.h with the generated classes of those four peers.
 
+For a UWP app's CoreWindow input (Pulsar item 3, eleventh slice):
+dxaml/lib's InputSiteAdapter.cpp, which hands the CoreWindow content
+island's input sources (keyboard, pointer, focus, activation and
+pre-translate) to the window's content root.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

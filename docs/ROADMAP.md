@@ -1478,6 +1478,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`JupiterWindow::EnsureInputSiteAdapterForCoreWindow`).  Next: that
   adapter, then the CI check that it computes `2 + 2`, which ticks this
   step.
+  Seventeenth part done (Pulsar item 3, eleventh slice): the framework's
+  `InputSiteAdapter` (vendored), which hands the CoreWindow island's
+  keyboard, pointer, focus, activation and pre-translate sources to the
+  window's content root, and the input site NovaOS's `ContentIsland` now
+  answers for it (`InputSiteHelper::IIslandInputSite`, the bridge's
+  window; test `contentislandtest`).  Calculator gets past it and stops
+  on `Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition`, which
+  has no factory yet.  Next: that transition, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

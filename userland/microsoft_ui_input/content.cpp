@@ -33,6 +33,15 @@ struct __declspec(uuid("29E691FA-4567-4DCA-B319-D0F207EB6807")) ICompositorDeskt
     virtual HRESULT STDMETHODCALLTYPE EnsureOnThread(DWORD threadId) = 0;
 };
 
+/* the island's input site (the Windows App SDK's InputSiteHelpers.h ships
+ * closed; userland/windows_ui_xaml/inc/InputSiteHelpers.h declares the same
+ * interface): what XAML's input services and its InputSiteAdapter hold for
+ * an island, and the window that island's input arrives at */
+struct __declspec(uuid("5bad72c0-f7b0-5c64-9aea-80a5250b121b")) IIslandInputSite : IUnknown
+{
+    virtual HRESULT STDMETHODCALLTYPE GetInputWindowId(mui::WindowId *windowId) = 0;
+};
+
 static SRWLOCK g_islands_lock = SRWLOCK_INIT;
 static Island *g_islands;        /* every island, newest first */
 static UINT64 g_next_id = 1;
@@ -152,7 +161,7 @@ struct CoordinateConverter : Object, Stub<IContentCoordinateConverter>
 
 /* ---- Island ---------------------------------------------------------- */
 struct Island : Object, Stub<IContentIsland>, Stub<IContentIsland2>, IContentIslandExperimental,
-                       Stub<IContentIslandAutomation>, wf::IClosable, Stub<mui::IClosableNotifier>
+                       Stub<IContentIslandAutomation>, wf::IClosable, Stub<mui::IClosableNotifier>, IIslandInputSite
 {
     Island *m_next;
     UINT64 m_id;
@@ -171,7 +180,7 @@ struct Island : Object, Stub<IContentIsland>, Stub<IContentIsland2>, IContentIsl
 
     LIFTED_OBJECT(L"Microsoft.UI.Content.ContentIsland")
     LIFTED_QI(Island, IContentIsland, IContentIsland2, IContentIslandExperimental, IContentIslandAutomation,
-              wf::IClosable, mui::IClosableNotifier)
+              wf::IClosable, mui::IClosableNotifier, IIslandInputSite)
 
     ~Island()
     {
@@ -250,6 +259,10 @@ struct Island : Object, Stub<IContentIsland>, Stub<IContentIsland2>, IContentIsl
 
     /* IContentIslandExperimental: a new root, shown by the bridge's target */
     HRESULT STDMETHODCALLTYPE put_Root(mcomp::IVisual *value) override;
+
+    /* IIslandInputSite: the bridge's window; fails until a bridge connects
+       the island and once it is closed */
+    HRESULT STDMETHODCALLTYPE GetInputWindowId(mui::WindowId *id) override;
 
     /* IContentIslandAutomation */
     HRESULT STDMETHODCALLTYPE get_AutomationOption(ContentAutomationOptions *v) override
@@ -485,6 +498,14 @@ HWND island_window(IContentIsland *island)
 {
     Island *i = static_cast<Island *>(island);
     return i && i->m_bridge ? i->m_bridge->m_hwnd : nullptr;
+}
+
+HRESULT Island::GetInputWindowId(mui::WindowId *id)
+{
+    if (!id) return E_POINTER;
+    HWND w = m_closed ? nullptr : island_window(this);
+    id->Value = (UINT64)(ULONG_PTR)w;
+    return w ? S_OK : RO_E_CLOSED;
 }
 
 InputSources *island_inputs(IContentIsland *island)

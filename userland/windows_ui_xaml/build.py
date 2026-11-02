@@ -896,6 +896,10 @@ CORE_SOURCES[_UIBRIDGEFOCUS] = tuple(vcxproj.read(os.path.join(XCP, _UIBRIDGEFOC
 # window without a CoreWindow on this path) and the control layer's
 # resource manager (control/common/shared/ResourceManager.cpp))
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../JupiterWindow.cpp',)
+# (and the input site adapter the window makes over its CoreWindow content
+# island once the composition tree host connects it, dxaml/lib/
+# InputSiteAdapter.cpp: the island's input sources to the content root)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../InputSiteAdapter.cpp',)
 CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../ResourceManager.cpp',)
 # (with the component tests' Uri factory stub renamed out, which the
 # window's callers pull in beside the static store's own)

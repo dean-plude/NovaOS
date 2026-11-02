@@ -1599,5 +1599,24 @@ vendors.
    connects an island at its size and follows a resize; closing destroys
    only the bridge window).
 
+   Pulsar item 3, eleventh slice: the input site adapter.  Once the
+   CoreWindow's island is connected, `CCoreServices` calls
+   `JupiterWindow::EnsureInputSiteAdapterForCoreWindow`, which makes an
+   `InputSiteAdapter` (`dxaml/lib/InputSiteAdapter.cpp`, vendored at the
+   same commit).  The adapter asks the island for its input site
+   (`InputSiteHelper::GetIslandInputSite`, the closed header NovaOS writes
+   as `userland/windows_ui_xaml/inc/InputSiteHelpers.h`), registers it
+   with the input services, and subscribes to the island's
+   `InputKeyboardSource`, `InputPointerSource`, `InputFocusController`,
+   `InputActivationListener` and `InputPreTranslateKeyboardSource`.
+   NovaOS's `ContentIsland` (`userland/microsoft_ui_input/content.cpp`)
+   now answers `IIslandInputSite`: its input window is the bridge's
+   window, and asking fails before a bridge connects the island or once
+   it is closed.  Calculator gets past it and stops on
+   `NavigationThemeTransition`, which has no factory yet, the next slice.
+   Test: `contentislandtest` (the CoreWindow island's input site is the
+   bridge window, each input source the adapter asks for is there, and
+   the site fails once the bridge closes).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

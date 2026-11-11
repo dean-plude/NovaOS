@@ -47,6 +47,22 @@ public:
     }
 };
 
+/* an activation factory: IActivationFactory and the class's statics and
+ * factory interfaces @Is; ActivateInstance fails unless the class's
+ * factory answers it.  Factories are agile (IAgileObject) as every WinRt
+ * RuntimeClass here is, so AgileActivationFactory is the same */
+template <class... Is>
+class ActivationFactory : public RuntimeClass<RuntimeClassFlags<WinRt | InhibitWeakReference>, IActivationFactory, Is...>
+{
+public:
+    STDMETHOD(ActivateInstance)(IInspectable **ppvObject) override
+    {
+        *ppvObject = nullptr;
+        return E_NOTIMPL;
+    }
+};
+template <class... Is> class AgileActivationFactory : public ActivationFactory<Is...> {};
+
 inline Details::ModuleBase *GetModuleBase() throw() { return &Module<InProc>::GetModule(); }
 
 }} // namespace Microsoft::WRL

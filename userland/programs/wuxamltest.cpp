@@ -27,7 +27,13 @@
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
  *   - a control of the app's own composed over Windows.UI.Xaml.Controls.
  *     Control (as WinUI 2 derives its controls), whose Windows
- *     MeasureOverride the framework's layout calls.
+ *     MeasureOverride the framework's layout calls;
+ *   - the navigation transitions of the framework's phone library (a
+ *     Frame's NavigationThemeTransition, which the framework activates by
+ *     name for a page, and the transition infos): each activated by its
+ *     name, composed over the framework's Transition and
+ *     NavigationTransitionInfo, their dependency properties (the default
+ *     transition info, a slide's effect, staggering) set and read back.
  *
  *   wuxamltest        the self-test runs it with no arguments
  */
@@ -42,6 +48,7 @@
 #include <roapi.h>
 #include <FrameworkApplication_Partial.h>
 #include <microsoft.ui.dispatching.h>
+#include <microsoft.ui.xaml.phone.h>
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.automation.peers.h>
 #include <windows.ui.xaml.controls.h>
@@ -399,6 +406,98 @@ static void windows_checks()
           SUCCEEDED(as(button.Get(), ue10.GetAddressOf())) && ue10->get_UIContext(context.GetAddressOf()) == E_NOTIMPL);
 }
 
+/* the phone library's navigation transitions (src/phone in the framework's
+ * build): activated by their lifted names, as the framework's core
+ * activates a Frame's NavigationThemeTransition, once the framework's
+ * lifted classes are registered as the system Windows.UI.Xaml.dll
+ * registers them */
+extern "C" HRESULT nova_register_lifted_classes(PFNGETACTIVATIONFACTORY maker);
+extern "C" IActivationFactory *nova_lifted_factory(const wchar_t *cls);
+
+static HRESULT WINAPI lifted_maker(HSTRING cls, IActivationFactory **out)
+{
+    *out = nova_lifted_factory(WindowsGetStringRawBuffer(cls, nullptr));
+    return *out ? S_OK : CLASS_E_CLASSNOTAVAILABLE;
+}
+
+static HRESULT activate(const wchar_t *cls, IInspectable **out)
+{
+    return RoActivateInstance(wrl_wrappers::HStringReference(cls).Get(), out);
+}
+
+static void navigation_transition_checks()
+{
+    namespace mxa = xaml_animation;
+    CHECK_HR("the framework's lifted classes registered (as Windows.UI.Xaml.dll registers them)",
+             nova_register_lifted_classes(lifted_maker));
+    ctl::ComPtr<IInspectable> ntt;
+    CHECK_HR("NavigationThemeTransition activated by its name (as the framework's core does for a Frame's page)",
+             activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_NavigationThemeTransition, ntt.ReleaseAndGetAddressOf()));
+    ctl::ComPtr<mxa::INavigationThemeTransition> theme;
+    ctl::ComPtr<mxa::ITransition> transition;
+    ctl::ComPtr<mxa::ITransitionPrivate> transitionPrivate;
+    ctl::ComPtr<xaml::IDependencyObject> transitionObject;
+    CHECK("a Transition (composed over the framework's) and a dependency object, one object behind them",
+          ntt && SUCCEEDED(as(ntt.Get(), theme.GetAddressOf())) && SUCCEEDED(as(ntt.Get(), transition.GetAddressOf())) &&
+          SUCCEEDED(as(ntt.Get(), transitionPrivate.GetAddressOf())) &&
+          SUCCEEDED(as(ntt.Get(), transitionObject.GetAddressOf())) &&
+          identity(transitionObject.Get()) == identity(ntt.Get()));
+    BOOLEAN load = FALSE, layout = TRUE;
+    CHECK("which takes part in a page's load and not its layout",
+          transitionPrivate && SUCCEEDED(transitionPrivate->ParticipatesInTransition(nullptr, xaml::TransitionTrigger_Load, &load)) &&
+          SUCCEEDED(transitionPrivate->ParticipatesInTransition(nullptr, xaml::TransitionTrigger_Layout, &layout)) &&
+          load && !layout);
+
+    /* the transition infos: each composed over NavigationTransitionInfo */
+    static const wchar_t *const infos[] = {
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_DrillInNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SuppressNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_EntranceNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_CommonNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SlideNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_ContinuumNavigationTransitionInfo};
+    int made = 0;
+    for (const wchar_t *cls : infos) {
+        ctl::ComPtr<IInspectable> info;
+        ctl::ComPtr<mxa::INavigationTransitionInfo> base;
+        ctl::ComPtr<mxa::INavigationTransitionInfoPrivate> storyboards;
+        HSTRING name = nullptr;
+        if (SUCCEEDED(activate(cls, info.GetAddressOf())) && SUCCEEDED(as(info.Get(), base.GetAddressOf())) &&
+            SUCCEEDED(as(info.Get(), storyboards.GetAddressOf())) && SUCCEEDED(info->GetRuntimeClassName(&name)) && is(name, cls))
+            made++;
+        else
+            printf("  (not made: %ls)\n", cls);
+        WindowsDeleteString(name);
+    }
+    CHECK("the six navigation transition infos, each a NavigationTransitionInfo by its own class name", made == 6);
+
+    /* the transition's default info, a dependency property */
+    ctl::ComPtr<IInspectable> drill;
+    ctl::ComPtr<mxa::INavigationTransitionInfo> drillInfo, got;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_DrillInNavigationTransitionInfo, drill.GetAddressOf());
+    CHECK("DefaultNavigationTransitionInfo set to a DrillInNavigationTransitionInfo and read back",
+          theme && drill && SUCCEEDED(as(drill.Get(), drillInfo.GetAddressOf())) &&
+          SUCCEEDED(theme->put_DefaultNavigationTransitionInfo(drillInfo.Get())) &&
+          SUCCEEDED(theme->get_DefaultNavigationTransitionInfo(got.GetAddressOf())) && identity(got.Get()) == identity(drill.Get()));
+
+    /* a slide's effect and the common transition's staggering */
+    ctl::ComPtr<IInspectable> slide, common;
+    ctl::ComPtr<mxa::ISlideNavigationTransitionInfo> slideInfo;
+    ctl::ComPtr<mxa::ICommonNavigationTransitionInfo> commonInfo;
+    mxa::SlideNavigationTransitionEffect effect = mxa::SlideNavigationTransitionEffect_FromBottom;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SlideNavigationTransitionInfo, slide.GetAddressOf());
+    CHECK("SlideNavigationTransitionInfo.Effect set FromRight and read back",
+          slide && SUCCEEDED(as(slide.Get(), slideInfo.GetAddressOf())) &&
+          SUCCEEDED(slideInfo->put_Effect(mxa::SlideNavigationTransitionEffect_FromRight)) &&
+          SUCCEEDED(slideInfo->get_Effect(&effect)) && effect == mxa::SlideNavigationTransitionEffect_FromRight);
+    boolean staggering = false;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_CommonNavigationTransitionInfo, common.GetAddressOf());
+    CHECK("CommonNavigationTransitionInfo.IsStaggeringEnabled set and read back",
+          common && SUCCEEDED(as(common.Get(), commonInfo.GetAddressOf())) &&
+          SUCCEEDED(commonInfo->put_IsStaggeringEnabled(true)) &&
+          SUCCEEDED(commonInfo->get_IsStaggeringEnabled(&staggering)) && staggering);
+}
+
 /* the framework started as xamlapptest starts it */
 static bool s_launched, s_exit_called;
 static DWORD s_main_thread;
@@ -438,6 +537,7 @@ public:
     {
         s_launched = true;
         windows_checks();
+        navigation_transition_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
         CHECK("the thread's DispatcherQueue", SUCCEEDED(wf::GetActivationFactory(

@@ -803,7 +803,8 @@ NOVA_IDL = ['winrt/core/microsoft.ui.xaml.coretypes.idl', 'winrt/core/microsoft.
             'com/microsoft.ui.xaml.media.dxinterop.idl', 'com/microsoft.ui.xaml.window.idl',
             'com/microsoft.ui.xaml.xamlroot.idl',
             '../../components/xamlDiagnostics/idl/XamlOM.WinUI.idl',
-            '../../components/xamlDiagnostics/idl/XamlOM.WinUI.Private.idl']
+            '../../components/xamlDiagnostics/idl/XamlOM.WinUI.Private.idl',
+            '../../../phone/idl/Microsoft.UI.Xaml.Phone.idl']
 
 
 def nova_disabled():

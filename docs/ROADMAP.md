@@ -1487,6 +1487,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   on `Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition`, which
   has no factory yet.  Next: that transition, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Eighteenth part done (Pulsar item 3, twelfth slice): the navigation
+  transitions, `NavigationThemeTransition` and the six navigation
+  transition infos, from WinUI's phone library (vendored and built into
+  the framework, activated by name; test `wuxamltest`).  Calculator gets
+  past them and stops later in the dispatcher's tick on `E_NOTIMPL`
+  (0x80004001), most likely a core function not built yet
+  (`CImageBrush::ReloadImage` is the last one logged).  Next: that, then
+  the CI check that it computes `2 + 2`, which ticks this step.
 
 ---
 

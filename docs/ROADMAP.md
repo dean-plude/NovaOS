@@ -1495,6 +1495,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (0x80004001), most likely a core function not built yet
   (`CImageBrush::ReloadImage` is the last one logged).  Next: that, then
   the CI check that it computes `2 + 2`, which ticks this step.
+  Nineteenth part done (Pulsar item 3, thirteenth slice): the image
+  brush an `Image` paints with (`CImageBrush`, `imagebrush.cpp`
+  vendored), whose `ReloadImage` was the `E_NOTIMPL`; and a Windows event
+  handler that is a reference tracker target (a .NET Native delegate) now
+  stays alive while subscribed (NovaOS's wrapper of it no longer passes
+  on `IReferenceTrackerTarget`, so the framework holds the wrapper by a
+  COM reference; it was freed and its memory reused).  Test
+  `wuxamltest`.  Calculator gets past both and stops in its page's
+  `Loading` handler on a .NET `NullReferenceException`.  Next: that, then
+  the CI check that it computes `2 + 2`, which ticks this step.
 
 ---
 

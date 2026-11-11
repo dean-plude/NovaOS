@@ -17,7 +17,8 @@
  *   - DependencyProperty.Register with Windows type names, and its value;
  *   - XamlReader.Load through Windows' statics, the page's children through
  *     Windows' IVector<UIElement>;
- *   - an Image loaded from markup, its Source URI made a BitmapImage;
+ *   - an Image loaded from markup, its Source URI made a BitmapImage,
+ *     measured (its image brush loads the source);
  *   - a Popup loaded from markup, holding its child, closed;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
@@ -25,6 +26,8 @@
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
+ *   - FrameworkElement.Loading added and removed with a Windows handler
+ *     that is a reference tracker target, kept while subscribed;
  *   - a control of the app's own composed over Windows.UI.Xaml.Controls.
  *     Control (as WinUI 2 derives its controls), whose Windows
  *     MeasureOverride the framework's layout calls;
@@ -167,6 +170,35 @@ struct ClickHandler : wux::IRoutedEventHandler
     ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
     ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
     HRESULT STDMETHODCALLTYPE Invoke(IInspectable *, wux::IRoutedEventArgs *) override { return S_OK; }
+};
+
+/* a Windows TypedEventHandler<FrameworkElement, Object>, as a .NET Native
+ * app's delegate: one the framework could hold by tracker references
+ * (IReferenceTrackerTarget), not COM ones */
+struct LoadingHandler : wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *>, IReferenceTrackerTarget
+{
+    LONG refs = 1, tracker = 0;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *>) ||
+            iid == __uuidof(IAgileObject))
+            *out = static_cast<wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *> *>(this);
+        else if (iid == __uuidof(IReferenceTrackerTarget))
+            *out = static_cast<IReferenceTrackerTarget *>(this);
+        else {
+            *out = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
+    HRESULT STDMETHODCALLTYPE Invoke(wux::IFrameworkElement *, IInspectable *) override { return S_OK; }
+    ULONG STDMETHODCALLTYPE AddRefFromReferenceTracker() override { return (ULONG)InterlockedIncrement(&tracker); }
+    ULONG STDMETHODCALLTYPE ReleaseFromReferenceTracker() override { return (ULONG)InterlockedDecrement(&tracker); }
+    HRESULT STDMETHODCALLTYPE Peg() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Unpeg() override { return S_OK; }
 };
 
 /* the app's own control composed over Windows.UI.Xaml.Controls.Control, as
@@ -334,6 +366,12 @@ static void windows_checks()
           SUCCEEDED(as(source.Get(), bitmap.GetAddressOf())) && SUCCEEDED(bitmap->get_UriSource(uri.GetAddressOf())) && uri &&
           SUCCEEDED(uri->get_AbsoluteUri(&uriText)) && is(uriText, L"ms-appx:///Assets/Logo.png"));
     WindowsDeleteString(uriText);
+    /* measured, the Image hands its source to its image brush (CImageBrush::
+     * ReloadImage), as Calculator's page's images are on its first layout */
+    ctl::ComPtr<wux::IUIElement> imageElement;
+    CHECK_HR("UIElement.Measure of the Image (its image brush loads the source)",
+             imageObject && SUCCEEDED(as(imageObject.Get(), imageElement.GetAddressOf())) ?
+             imageElement->Measure(wf::Size{40, 40}) : E_FAIL);
 
     /* a Popup from markup (NavigationView's pane makes them): its child, and closed */
     ctl::ComPtr<IInspectable> popupObject;
@@ -380,6 +418,21 @@ static void windows_checks()
     CHECK_HR("ButtonBase.Click added", SUCCEEDED(as(button.Get(), bb.GetAddressOf())) ? bb->add_Click(handler, &token) : E_FAIL);
     CHECK_HR("and removed", bb ? bb->remove_Click(token) : E_FAIL);
     handler->Release();
+
+    /* FrameworkElement.Loading with a Windows handler that is a reference
+     * tracker target (.NET Native's delegates are): the framework's handler
+     * is NovaOS's wrapper of it, which the framework keeps by a COM
+     * reference, so the wrapper and the app's handler stay while it is
+     * subscribed (Calculator: the wrapper was freed and its memory reused) */
+    ctl::ComPtr<wux::IFrameworkElement3> fe3;
+    LoadingHandler *loading = new LoadingHandler();
+    EventRegistrationToken loadingToken = {};
+    CHECK_HR("FrameworkElement.Loading added with a reference tracker target handler",
+             SUCCEEDED(as(button.Get(), fe3.GetAddressOf())) ? fe3->add_Loading(loading, &loadingToken) : E_FAIL);
+    CHECK("the handler kept by its wrapper while subscribed", loading->refs == 2 && loading->tracker == 0);
+    CHECK_HR("and removed", fe3 ? fe3->remove_Loading(loadingToken) : E_FAIL);
+    CHECK("the handler let go", loading->refs == 1);
+    loading->Release();
 
     /* an app's control composed over Windows.UI.Xaml.Controls.Control */
     ctl::ComPtr<wuxc::IControlFactory> cf;

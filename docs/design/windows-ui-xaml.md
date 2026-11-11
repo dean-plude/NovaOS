@@ -1652,5 +1652,28 @@ vendors.
    by name, composed over the framework's bases; the default transition
    info, a slide's effect and staggering set and read back).
 
+   Pulsar item 3, thirteenth slice: an `Image`'s brush and an app's
+   event handlers.  An `Image` paints its source with an internal
+   `CImageBrush`; when it is measured (`CImageBase::EnsureBrush`) it hands
+   the source to the brush's `ReloadImage`.  `imagebrush.cpp` had been
+   left out of the element library with the Direct2D 1.3/1.4 elements, so
+   that call was a "not built yet" stand-in answering `E_NOTIMPL`, which
+   failed Calculator's first layout.  It is vendored and built now.  The
+   next failure was a use after free: the framework keeps an event
+   handler that is an `IReferenceTrackerTarget` (as .NET Native's
+   delegates are) by tracker references, not COM ones
+   (`TrackerTargetReference`).  A Windows handler reaches the framework
+   as NovaOS's wrapper (a face of the framework's delegate type), which
+   passed every interface but its own to the app's object, that one too.
+   So the framework took a tracker reference on the app's delegate and
+   none on the wrapper, which was freed when the face's `add_` returned,
+   and its memory was later reused by another face.  A wrapper of its own
+   (not part of a framework object) now answers no
+   `IReferenceTrackerTarget`, so the framework holds it by a COM
+   reference, and it holds the app's delegate.  Test: `wuxamltest` (the
+   `Image` measured; `FrameworkElement.Loading` added with a handler that
+   is a reference tracker target, kept while subscribed and let go when
+   removed).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

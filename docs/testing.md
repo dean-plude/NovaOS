@@ -175,9 +175,11 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `DependencyProperty.Register` with Windows type names,
   `XamlReader.Load` and the page's children through Windows'
   `IVector<UIElement>`, an `Image` whose markup URI source becomes a
-  `BitmapImage`, a `Popup` from markup holding its child, the text
-  block's and button's automation peers, `Control.IsTabStopProperty`,
-  `Click` with a Windows handler, and an app's control composed over
+  `BitmapImage`, measured (its image brush loads the source), a `Popup`
+  from markup holding its child, the text block's and button's
+  automation peers, `Control.IsTabStopProperty`, `Click` with a Windows
+  handler, `Loading` with a Windows handler that is a reference tracker
+  target (kept while subscribed), and an app's control composed over
   `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
   framework's layout calls; and the phone library's navigation
   transitions, a Frame's `NavigationThemeTransition` and the six

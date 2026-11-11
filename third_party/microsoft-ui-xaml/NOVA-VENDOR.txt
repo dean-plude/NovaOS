@@ -337,6 +337,18 @@ dxaml/lib's InputSiteAdapter.cpp, which hands the CoreWindow content
 island's input sources (keyboard, pointer, focus, activation and
 pre-translate) to the window's content root.
 
+For a frame's navigation transition (Pulsar item 3, twelfth slice): of
+the phone library, dxaml/phone: its IDL (idl/Microsoft.UI.Xaml.Phone.idl,
+the phone controls' and navigation transitions' API, which abigen reads
+with the framework's), its project (lib/PhoneSignatureControls.vcxproj,
+read for its include path, and common.props), inc/RuntimeErrorCodes.h,
+and lib's ThemeTransitions.cpp/.h (NavigationThemeTransition and the
+Common, Slide, Continuum, DrillIn, Suppress and Entrance navigation
+transition infos), NavigateTransitionHelper.cpp/.h (their storyboards) and
+RoVariant.h; and of components/SatelliteBase, the extension libraries'
+helpers: inc/SatMacros.h, ValueBoxer.h and XamlWrlHelpers.h with
+lib/XamlWrlHelpers.cpp (their dependency properties).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

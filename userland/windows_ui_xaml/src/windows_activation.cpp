@@ -5,6 +5,11 @@
 // Windows.UI.Xaml faces (src/windows_faces.cpp): the factory a Windows
 // name gives answers Windows' statics and factory interfaces through them.
 #include "comModule.h"
+#include <roapi.h>
+
+// (and the phone library's classes the framework builds, the navigation
+// transitions, from their table: src/phone/phone_factories.cpp)
+extern "C" IActivationFactory *nova_phone_factory(const wchar_t *cls);
 
 extern "C" IActivationFactory *nova_lifted_factory(const wchar_t *cls)
 {
@@ -13,7 +18,7 @@ extern "C" IActivationFactory *nova_lifted_factory(const wchar_t *cls)
         return nullptr;
     IActivationFactory *f = ctl::__module.GetActivationFactory(h);
     WindowsDeleteString(h);
-    return f;
+    return f ? f : nova_phone_factory(cls);
 }
 
 // the framework's factory of the Windows.UI.Xaml class @cls
@@ -32,4 +37,55 @@ extern "C" HRESULT nova_xaml_windows_factory(HSTRING cls, IActivationFactory **o
     buf[n - wn + ln] = 0;
     *out = nova_lifted_factory(buf);
     return *out ? S_OK : CLASS_E_CLASSNOTAVAILABLE;
+}
+
+// the classes the framework itself activates by their lifted names, which
+// the system Windows.UI.Xaml.dll (userland/windows_ui_xaml_dll) and a
+// self-test serving the framework registers for the process: Application.
+// Start's WindowsXamlManager, a window's XamlSourceFocusNavigationRequest,
+// the UWP start-up's FrameworkViewSource and FrameworkView (Windows App
+// SDK's Microsoft.UI.Xaml.dll would serve them), and the phone library's
+// navigation transitions, a Frame's NavigationThemeTransition and the
+// transition infos
+// (src/phone/phone_factories.cpp, Microsoft.UI.Xaml.Phone.dll's in the
+// Windows App SDK) with the framework classes they make by name: their
+// base classes, storyboards, key frames, easing functions, projections
+// and dependency properties.  Only these names: WinUI 2's
+// Microsoft.UI.Xaml.dll, which a UWP app may carry, serves classes under
+// Microsoft.UI.Xaml names of its own.
+extern "C" const wchar_t *nova_phone_class(unsigned int i);
+
+static const wchar_t *const s_lifted[] = {
+    L"Microsoft.UI.Xaml.Hosting.WindowsXamlManager", L"Microsoft.UI.Xaml.Hosting.XamlSourceFocusNavigationRequest",
+    L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView",
+    L"Microsoft.UI.Xaml.DependencyProperty", L"Microsoft.UI.Xaml.PropertyMetadata",
+    L"Microsoft.UI.Xaml.Media.VisualTreeHelper", L"Microsoft.UI.Xaml.Media.PlaneProjection",
+    L"Microsoft.UI.Xaml.Media.Animation.Transition", L"Microsoft.UI.Xaml.Media.Animation.NavigationTransitionInfo",
+    L"Microsoft.UI.Xaml.Media.Animation.Storyboard", L"Microsoft.UI.Xaml.Media.Animation.DoubleAnimationUsingKeyFrames",
+    L"Microsoft.UI.Xaml.Media.Animation.ObjectAnimationUsingKeyFrames",
+    L"Microsoft.UI.Xaml.Media.Animation.DiscreteDoubleKeyFrame", L"Microsoft.UI.Xaml.Media.Animation.DiscreteObjectKeyFrame",
+    L"Microsoft.UI.Xaml.Media.Animation.EasingDoubleKeyFrame", L"Microsoft.UI.Xaml.Media.Animation.LinearDoubleKeyFrame",
+    L"Microsoft.UI.Xaml.Media.Animation.SplineDoubleKeyFrame", L"Microsoft.UI.Xaml.Media.Animation.KeySpline",
+    L"Microsoft.UI.Xaml.Media.Animation.PointAnimation", L"Microsoft.UI.Xaml.Media.Animation.CircleEase",
+    L"Microsoft.UI.Xaml.Media.Animation.ExponentialEase", L"Microsoft.UI.Xaml.Media.Animation.PowerEase"};
+
+// registers them all with @maker (which answers with nova_lifted_factory),
+// for the rest of the process
+extern "C" HRESULT nova_register_lifted_classes(PFNGETACTIVATIONFACTORY maker)
+{
+    const UINT32 most = ARRAYSIZE(s_lifted) + 16;
+    HSTRING names[most];
+    PFNGETACTIVATIONFACTORY makers[most];
+    UINT32 n = 0;
+    for (; n < ARRAYSIZE(s_lifted); n++)
+        WindowsCreateString(s_lifted[n], (UINT32)wcslen(s_lifted[n]), &names[n]);
+    for (unsigned int i = 0; n < most && nova_phone_class(i); i++, n++)
+        WindowsCreateString(nova_phone_class(i), (UINT32)wcslen(nova_phone_class(i)), &names[n]);
+    for (UINT32 i = 0; i < n; i++)
+        makers[i] = maker;
+    RO_REGISTRATION_COOKIE cookie = nullptr;
+    HRESULT hr = RoRegisterActivationFactories(names, makers, n, &cookie);
+    for (UINT32 i = 0; i < n; i++)
+        WindowsDeleteString(names[i]);
+    return hr;
 }

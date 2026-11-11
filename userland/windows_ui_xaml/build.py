@@ -1498,6 +1498,30 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'XamlBindingHelperFactory_Partial', 'XamlMarkupHelper_Partial', 'Duration_Partial', 'KeyTime_Partial',
     'RepeatBehavior_Partial', 'FontFamily_Partial', 'StateTriggerBase_Partial', 'DataTemplateSelector_Partial',
     'FlyoutShowOptions_partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _PAGE_HELPERS)
+# (step 32.6, a frame's navigation transition: the framework makes a
+# NavigationThemeTransition by name for a Frame's page (core/core/elements'
+# LayoutTransition.cpp), a class of its phone library (dxaml/phone/lib,
+# Microsoft.UI.Xaml.Phone.dll in the Windows App SDK), with the navigation
+# transition infos it plays (Common, Slide, Continuum, DrillIn, Suppress,
+# Entrance): the phone library's ThemeTransitions.cpp and its storyboard
+# helper NavigateTransitionHelper.cpp, compiled with the phone library's
+# include path over a NovaOS precompiled header of the headers they need
+# (src/phone/precomp.h), with SatelliteBase's dependency-property helper
+# (components/SatelliteBase, XamlWrlHelpers.cpp) and NovaOS's table of
+# their activation factories (src/phone/phone_factories.cpp), which
+# NovaOS's WRL module does not keep; the phone IDL's ABI headers are
+# tools/winrt/abigen.py's)
+_PHONE = '../phone/lib/PhoneSignatureControls.vcxproj'
+# (the properties its project sets for its include path)
+PROPS['XcpPhonePath'] = os.path.join(MUX, 'dxaml', 'phone')
+PROPS['XcpPalInc'] = os.path.join(XCP, 'pal', 'inc')
+PROPS['XcpSatbaseInc'] = os.path.join(XCP, 'components', 'SatelliteBase', 'inc')
+PROPS['XcpBaseInc'] = os.path.join(XCP, 'components', 'base', 'inc')
+CORE_LIBRARIES.append((_PHONE, _PHONE, os.path.join(HERE, 'src', 'phone', 'precomp.h'),
+                       [os.path.join(HERE, 'src', 'phone', 'phone_factories.cpp'),
+                        os.path.join(XCP, 'components', 'SatelliteBase', 'lib', 'XamlWrlHelpers.cpp')]))
+CORE_SOURCES[_PHONE] = ('ThemeTransitions.cpp', 'NavigateTransitionHelper.cpp')
+PROJECT_DIR += (_PHONE,)
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

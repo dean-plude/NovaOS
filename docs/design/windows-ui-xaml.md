@@ -1618,5 +1618,39 @@ vendors.
    bridge window, each input source the adapter asks for is there, and
    the site fails once the bridge closes).
 
+   Pulsar item 3, twelfth slice: the navigation transitions.  When a
+   Frame's page loads or unloads, the core's `LayoutTransition.cpp`
+   activates `Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition`
+   by name.  That class and the six navigation transition infos (Common,
+   Slide, Continuum, DrillIn, Suppress, Entrance) are not in the
+   framework's own tree: they live in WinUI's phone library
+   (`dxaml/phone/lib/ThemeTransitions.cpp`,
+   `Microsoft.UI.Xaml.Phone.dll` in the Windows App SDK).  They are WRL
+   classes composed over the framework's `Transition` and
+   `NavigationTransitionInfo`, and they reach the framework only by
+   class name.  NovaOS vendors the phone library's IDL (abigen now writes
+   `microsoft.ui.xaml.phone.h` and the phone types' interfaces) together
+   with `ThemeTransitions.cpp`, its storyboard helper
+   `NavigateTransitionHelper.cpp`, and SatelliteBase's
+   dependency-property helper.  `build.py` compiles them into the
+   framework as one more core library, over a NovaOS precompiled header
+   (`userland/windows_ui_xaml/src/phone/precomp.h`).  NovaOS's WRL gained
+   what they use: `ActivationFactory`/`AgileActivationFactory`, and a
+   `RuntimeClass` that answers what its own interfaces lack from its
+   `ComposableBase`.  WRL's module registry (`ActivatableClass`) is not
+   kept, so `src/phone/phone_factories.cpp` lists the seven factories by
+   name, and the framework's lookup by name (`nova_lifted_factory`) asks
+   that table after its own.  The lifted class names the framework
+   activates (the phone classes and the storyboards, key frames, easing
+   functions, projections and dependency properties they make) are listed
+   in one place, `nova_register_lifted_classes`
+   (`src/windows_activation.cpp`).  `Windows.UI.Xaml.dll` registers them
+   for the process at start-up.  The list is deliberately not every
+   lifted name, because WinUI 2's `Microsoft.UI.Xaml.dll`, which a UWP
+   app may carry, serves classes under `Microsoft.UI.Xaml` names of its
+   own.  Test: `wuxamltest` (the transition and the six infos activated
+   by name, composed over the framework's bases; the default transition
+   info, a slide's effect and staggering set and read back).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

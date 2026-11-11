@@ -140,6 +140,24 @@ template <class Derived, class MixInType, bool h> struct Entry<MixIn<Derived, Mi
     template <class C> static IUnknown *Identity(C *) { return nullptr; }
 };
 template <class T> struct Entry<T, typename EnableIf<__is_base_of(ComposableBaseMarker, T)>::type> : Entry<Nil, void> {};
+/* the list's ComposableBase entry (Nil when it has none): what the
+ * object's QueryInterface asks for an interface its own entries lack */
+template <class... Ts> struct FindComposable { typedef Nil type; };
+template <class T, class... Ts> struct FindComposable<T, Ts...>
+{
+    typedef typename Conditional<__is_base_of(ComposableBaseMarker, T), T, typename FindComposable<Ts...>::type>::type type;
+};
+
+/* whether T is again among Ts: an interface a list names twice (as the
+ * phone library's SlideNavigationTransitionInfo names
+ * ISlideNavigationTransitionInfo) is derived from and answered once, by
+ * its last entry */
+template <class T, class... Ts> struct Contains { static const bool value = false; };
+template <class T, class U, class... Ts> struct Contains<T, U, Ts...>
+{
+    static const bool value = IsSame<T, U>::value || Contains<T, Ts...>::value;
+};
+template <class T, class... Ts> struct Once { typedef typename Conditional<Contains<T, Ts...>::value, Nil, T>::type type; };
 
 /* the entries of a list, in order */
 template <class... Ts> struct EntryList;
@@ -152,19 +170,20 @@ template <> struct EntryList<>
 };
 template <class T, class... Ts> struct EntryList<T, Ts...>
 {
+    typedef Entry<typename Once<T, Ts...>::type> First;
     template <class C> static bool Query(C *c, REFIID riid, void **ppv)
     {
-        return Entry<T>::Query(c, riid, ppv) || EntryList<Ts...>::Query(c, riid, ppv);
+        return First::Query(c, riid, ppv) || EntryList<Ts...>::Query(c, riid, ppv);
     }
-    static const unsigned int IidCount = Entry<T>::IidCount + EntryList<Ts...>::IidCount;
+    static const unsigned int IidCount = First::IidCount + EntryList<Ts...>::IidCount;
     static void FillIids(IID *&p)
     {
-        Entry<T>::FillIids(p);
+        First::FillIids(p);
         EntryList<Ts...>::FillIids(p);
     }
     template <class C> static IUnknown *Identity(C *c)
     {
-        IUnknown *u = Entry<T>::Identity(c);
+        IUnknown *u = First::Identity(c);
         return u ? u : EntryList<Ts...>::Identity(c);
     }
 };
@@ -177,7 +196,7 @@ template <class D, class M, bool h, unsigned int N> struct BaseOf<MixIn<D, M, h>
 
 template <unsigned int N, class... Ts> struct DeriveAll {};
 template <unsigned int N, class T, class... Ts>
-struct DeriveAll<N, T, Ts...> : public BaseOf<T, N>::type, public DeriveAll<N + 1, Ts...> {};
+struct DeriveAll<N, T, Ts...> : public BaseOf<typename Once<T, Ts...>::type, N>::type, public DeriveAll<N + 1, Ts...> {};
 
 template <class... Ts> struct FirstFlags { typedef RuntimeClassFlags<WinRt> type; };
 template <unsigned int f, class... Ts> struct FirstFlags<RuntimeClassFlags<f>, Ts...> { typedef RuntimeClassFlags<f> type; };
@@ -343,6 +362,14 @@ protected:
         } else if (HasWeakSource && InlineIsEqualGUID(riid, __uuidof(IWeakReferenceSource))) {
             *ppv = WeakSource();
         } else if (!Entries::Query(this, riid, ppv)) {
+            // (a composable class answers the rest from its base, the
+            // instance its base class's factory made for it: WRL's
+            // ComposableBase)
+            typedef typename Details::FindComposable<Ts...>::type Composable;
+            if constexpr (!Details::IsSame<Composable, Details::Nil>::value) {
+                ComPtr<IInspectable> &base = static_cast<Composable *>(this)->GetComposableBase();
+                if (base) return base->QueryInterface(riid, ppv);
+            }
             return FallbackQuery(riid, ppv);
         }
         static_cast<IUnknown *>(*ppv)->AddRef();

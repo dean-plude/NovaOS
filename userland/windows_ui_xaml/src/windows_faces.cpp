@@ -16,6 +16,7 @@ static const GUID IID_IUnknown_ = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00
 static const GUID IID_IInspectable_ = {0xaf86e2e0, 0xb12d, 0x4c6a, {0x9c, 0x5a, 0xd7, 0xaa, 0x65, 0x10, 0x1e, 0x90}};
 static const GUID IID_IPropertyValue_ = {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
 static const GUID IID_IAgileObject_ = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
+static const GUID IID_IReferenceTrackerTarget_ = {0x64bd43f8, 0xbfee, 0x4ec4, {0xb7, 0xeb, 0x29, 0x35, 0x15, 0x8d, 0xae, 0x21}};
 
 #define VT(p) (*(void ***)(p))
 typedef HRESULT (STDMETHODCALLTYPE *QI_FN)(void *, REFIID, void **);
@@ -87,6 +88,17 @@ extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void 
         nova_tear_addref(t);
         *out = t;
         return S_OK;
+    }
+    // (a tear-off of its own, not part of its object, is kept alive by its
+    // COM references only: it does not pass on the object's
+    // IReferenceTrackerTarget, or the framework, which holds a tracker
+    // target by tracker references instead of COM ones (an event source's
+    // handler list, TrackerTargetReference), would keep the object and let
+    // the tear-off go: a .NET Native app's Windows event handler, the
+    // tear-off freed while subscribed and its memory reused)
+    if (!t->part && IsEqualGUID(iid, IID_IReferenceTrackerTarget_)) {
+        *out = nullptr;
+        return E_NOINTERFACE;
     }
     // (the object's identity, and every other interface, are the object's;
     // one it has only in the other framework's form is a face of that, as

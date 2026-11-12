@@ -663,9 +663,10 @@ CORE_SERVICES_STUBS += ('ValueBoxer_Stub.cpp', 'ReferenceTrackerManager_Stub.cpp
 # DeferredKeys.cpp is the resource dictionary's, above), less the imaging
 # and media elements that call Direct2D 1.3 and 1.4 (colour glyphs, SVG
 # documents) and the lifted input's pointer sources, which join when those
-# build
+# build (the image brush, imagebrush.cpp, joined with an Image's picture,
+# Pulsar 3 part 13)
 _ELEMENTS = 'core/core/elements/lib/elements.vcxproj'
-_ELEMENTS_LATER = ('deferredkeys.cpp', 'svgimagesource.cpp', 'glyphs.cpp', 'imagebrush.cpp', 'swapchainpanel.cpp')
+_ELEMENTS_LATER = ('deferredkeys.cpp', 'svgimagesource.cpp', 'glyphs.cpp', 'swapchainpanel.cpp')
 CORE_SOURCES[_ELEMENTS] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS)))
     for s in vcxproj.read(os.path.join(XCP, _ELEMENTS), PROPS)['sources']

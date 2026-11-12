@@ -349,6 +349,10 @@ RoVariant.h; and of components/SatelliteBase, the extension libraries'
 helpers: inc/SatMacros.h, ValueBoxer.h and XamlWrlHelpers.h with
 lib/XamlWrlHelpers.cpp (their dependency properties).
 
+For an Image's picture (Pulsar item 3, thirteenth slice): core/core/
+elements' imagebrush.cpp, CImageBrush, the brush an Image element paints
+its source with (ReloadImage, which hands the source's decode to it).
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

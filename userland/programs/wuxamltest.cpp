@@ -36,7 +36,11 @@
  *     name for a page, and the transition infos): each activated by its
  *     name, composed over the framework's Transition and
  *     NavigationTransitionInfo, their dependency properties (the default
- *     transition info, a slide's effect, staggering) set and read back.
+ *     transition info, a slide's effect, staggering) set and read back;
+ *   - an app's x:Bind connector (Windows' IComponentConnector2's
+ *     GetBindingConnector) under the framework's IComponentConnector, kept
+ *     weakly as the parser keeps it: the weak reference resolves to the
+ *     framework's IComponentConnector again, which Connect goes through.
  *
  *   wuxamltest        the self-test runs it with no arguments
  */
@@ -478,6 +482,88 @@ static HRESULT activate(const wchar_t *cls, IInspectable **out)
     return RoActivateInstance(wrl_wrappers::HStringReference(cls).Get(), out);
 }
 
+/* an app's x:Bind connector, as a .NET Native page's generated bindings
+ * object is: Windows' IComponentConnector (Connect) and
+ * IComponentConnector2, weakly referenced (IWeakReferenceSource; this one's
+ * weak reference holds it strongly, enough for the test) */
+struct AppConnector : wux::Markup::IComponentConnector, wux::Markup::IComponentConnector2, IWeakReferenceSource, IWeakReference
+{
+    LONG refs = 1;
+    int connected = -1;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IInspectable) || iid == __uuidof(wux::Markup::IComponentConnector))
+            *out = static_cast<wux::Markup::IComponentConnector *>(this);
+        else if (iid == __uuidof(wux::Markup::IComponentConnector2))
+            *out = static_cast<wux::Markup::IComponentConnector2 *>(this);
+        else if (iid == __uuidof(IWeakReferenceSource))
+            *out = static_cast<IWeakReferenceSource *>(this);
+        else if (iid == __uuidof(IWeakReference))
+            *out = static_cast<IWeakReference *>(this);
+        else {
+            *out = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG *n, IID **iids) override { *n = 0; *iids = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING *name) override
+    {
+        return WindowsCreateString(L"WuxamlTest.Bindings", 19, name);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel *t) override { *t = BaseTrust; return S_OK; }
+    HRESULT STDMETHODCALLTYPE Connect(INT32 id, IInspectable *) override { connected = id; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetBindingConnector(INT32, IInspectable *, wux::Markup::IComponentConnector **out) override
+    {
+        *out = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetWeakReference(IWeakReference **out) override
+    {
+        *out = static_cast<IWeakReference *>(this);
+        AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Resolve(REFIID iid, IInspectable **out) override
+    {
+        return QueryInterface(iid, reinterpret_cast<void **>(out));
+    }
+};
+
+extern "C" HRESULT nova_cross(void *a, const GUID *iid, void **out);
+
+/* the framework's IComponentConnector over the app's connector, kept weakly
+ * as the parser keeps the x:Bind connector GetBindingConnector returns
+ * (ValueWeakReference), resolves to an object that answers the framework's
+ * IComponentConnector again: the parser calls Connect for each x:Bind
+ * target through it */
+static void binding_connector_checks()
+{
+    AppConnector *app = new AppConnector();
+    ctl::ComPtr<xaml_markup::IComponentConnector> face;
+    CHECK_HR("the framework's IComponentConnector over the app's connector",
+             nova_cross(static_cast<wux::Markup::IComponentConnector *>(app), &__uuidof(xaml_markup::IComponentConnector),
+                        reinterpret_cast<void **>(face.ReleaseAndGetAddressOf())));
+    ctl::ComPtr<IWeakReferenceSource> source;
+    ctl::ComPtr<IWeakReference> weak;
+    ctl::ComPtr<IInspectable> resolved;
+    ctl::ComPtr<xaml_markup::IComponentConnector> again;
+    CHECK("its weak reference resolves to the framework's IComponentConnector",
+          face && SUCCEEDED(face.As(&source)) && SUCCEEDED(source->GetWeakReference(&weak)) &&
+          SUCCEEDED(weak->Resolve(__uuidof(IInspectable), resolved.ReleaseAndGetAddressOf())) && resolved &&
+          SUCCEEDED(resolved.As(&again)));
+    CHECK("Connect through it reaches the app's connector", again && SUCCEEDED(again->Connect(7, nullptr)) && app->connected == 7);
+    ctl::ComPtr<IUnknown> id1, id2;
+    CHECK("the resolved object keeps the app object's identity",
+          resolved && SUCCEEDED(resolved.As(&id1)) &&
+          SUCCEEDED(app->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(id2.GetAddressOf()))) && id1 == id2);
+    face.Reset(); source.Reset(); weak.Reset(); resolved.Reset(); again.Reset(); id1.Reset(); id2.Reset();
+    app->Release();
+}
+
 static void navigation_transition_checks()
 {
     namespace mxa = xaml_animation;
@@ -591,6 +677,7 @@ public:
         s_launched = true;
         windows_checks();
         navigation_transition_checks();
+        binding_connector_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
         CHECK("the thread's DispatcherQueue", SUCCEEDED(wf::GetActivationFactory(

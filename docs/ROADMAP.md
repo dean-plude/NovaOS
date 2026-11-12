@@ -1505,6 +1505,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `wuxamltest`.  Calculator gets past both and stops in its page's
   `Loading` handler on a .NET `NullReferenceException`.  Next: that, then
   the CI check that it computes `2 + 2`, which ticks this step.
+  Twentieth part done (Pulsar item 3, fourteenth slice): an app's x:Bind
+  connector, which the XAML parser keeps by a weak reference, resolves to
+  the framework's `IComponentConnector` again (NovaOS's wrapper of it
+  answers its own `IWeakReferenceSource`), so the parser connects every
+  x:Bind target; the generated bindings had found theirs unset and threw
+  the `NullReferenceException`.  Test `wuxamltest`.  Calculator gets past
+  it and stops on `E_NOTIMPL` in its page's layout
+  (`LayoutBoundsChangedHelper::InitializeSizeChangedHandlers`, not built
+  yet).  Next: that, then the CI check that it computes `2 + 2`, which
+  ticks this step.
 
 ---
 

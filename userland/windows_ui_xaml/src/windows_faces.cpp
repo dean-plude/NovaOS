@@ -79,6 +79,119 @@ static void *tear(const NovaFace *f, void *obj, BOOL direct)
     return t;
 }
 
+// A weak reference to a reverse face's tear-off (a framework interface over
+// an app's object) resolves to a tear-off again, not to the app's object:
+// the framework keeps what it was handed weakly (ValueWeakReference, as the
+// x:Bind connector IComponentConnector2::GetBindingConnector returns, which
+// the parser then asks for its own IComponentConnector to call Connect on
+// each x:Bind target) and asks the resolved object for the framework's
+// interface, which the app's object (a .NET Native one) does not know: the
+// parser skipped every Connect, and the app's generated bindings, their
+// targets never set, failed with a NullReferenceException in their first
+// Update (Calculator's MainPage)
+static const GUID IID_IWeakReferenceSource_ = {0x00000038, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const GUID IID_IWeakReference_ = {0x00000037, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+struct NovaTearWeak
+{
+    void *const *vtbl;
+    LONG ref;
+    const NovaFace *face;
+    void *inner;                // the app object's IWeakReferenceSource or IWeakReference
+};
+
+static HRESULT STDMETHODCALLTYPE weak_qi(NovaTearWeak *w, REFIID iid, void **out, const GUID *own)
+{
+    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, *own)) {
+        InterlockedIncrement(&w->ref);
+        *out = w;
+        return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE weak_addref(NovaTearWeak *w)
+{
+    return InterlockedIncrement(&w->ref);
+}
+
+static ULONG STDMETHODCALLTYPE weak_release(NovaTearWeak *w)
+{
+    ULONG r = InterlockedDecrement(&w->ref);
+    if (!r) {
+        nova_release(w->inner);
+        CoTaskMemFree(w);
+    }
+    return r;
+}
+
+static HRESULT STDMETHODCALLTYPE weakref_qi(NovaTearWeak *w, REFIID iid, void **out)
+{
+    return weak_qi(w, iid, out, &IID_IWeakReference_);
+}
+
+static HRESULT STDMETHODCALLTYPE weakref_resolve(NovaTearWeak *w, REFIID iid, void **out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = nullptr;
+    void *obj = nullptr;
+    HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, REFIID, void **))VT(w->inner)[3])(w->inner, IID_IInspectable_, &obj);
+    if (FAILED(hr) || !obj)
+        return hr;
+    // (the framework's own interface, and the object as IInspectable, are
+    // the face's tear-off; whatever else it is asked the object answers)
+    const GUID *want = IsEqualGUID(iid, IID_IInspectable_) ? w->face->impl : &iid;
+    if (FAILED(nova_cross(obj, want, out)) || !*out) {
+        *out = nullptr;
+        if (want != &iid) {
+            *out = obj;
+            return S_OK;
+        }
+    }
+    nova_release(obj);
+    return S_OK;
+}
+
+static void *const s_weakref_vtbl[] = {(void *)&weakref_qi, (void *)&weak_addref, (void *)&weak_release,
+                                       (void *)&weakref_resolve};
+
+static HRESULT STDMETHODCALLTYPE weaksrc_qi(NovaTearWeak *w, REFIID iid, void **out)
+{
+    return weak_qi(w, iid, out, &IID_IWeakReferenceSource_);
+}
+
+static NovaTearWeak *weak_make(void *const *vtbl, const NovaFace *f, void *inner)
+{
+    NovaTearWeak *w = (NovaTearWeak *)CoTaskMemAlloc(sizeof(NovaTearWeak));
+    if (!w) {
+        nova_release(inner);
+        return nullptr;
+    }
+    w->vtbl = vtbl;
+    w->ref = 1;
+    w->face = f;
+    w->inner = inner;
+    return w;
+}
+
+static HRESULT STDMETHODCALLTYPE weaksrc_get(NovaTearWeak *w, void **out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = nullptr;
+    void *ref = nullptr;
+    HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))VT(w->inner)[3])(w->inner, &ref);
+    if (FAILED(hr) || !ref)
+        return FAILED(hr) ? hr : E_FAIL;
+    *out = weak_make(s_weakref_vtbl, w->face, ref);
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+static void *const s_weaksrc_vtbl[] = {(void *)&weaksrc_qi, (void *)&weak_addref, (void *)&weak_release,
+                                       (void *)&weaksrc_get};
+
 extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void **out)
 {
     if (!out)
@@ -103,6 +216,15 @@ extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void 
     // (the object's identity, and every other interface, are the object's;
     // one it has only in the other framework's form is a face of that, as
     // the framework asking an app's IXamlType for another of its interfaces)
+    if (!t->part && IsEqualGUID(iid, IID_IWeakReferenceSource_) &&
+        (t->face->flags & (NOVA_FACE_REVERSE | NOVA_FACE_DELEGATE | NOVA_FACE_OVERRIDE)) == NOVA_FACE_REVERSE) {
+        void *src;
+        HRESULT hr = qi(t->obj, &iid, &src);
+        if (FAILED(hr))
+            return hr;
+        *out = weak_make(s_weaksrc_vtbl, t->face, src);
+        return *out ? S_OK : E_OUTOFMEMORY;
+    }
     HRESULT hr = qi(t->obj, &iid, out);
     const NovaFace *f;
     void *w;

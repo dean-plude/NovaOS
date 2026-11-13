@@ -185,7 +185,8 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `ApplicationView` on the desktop path, callbacks added and removed), a
   UWP window's `Activated` handler on the thread's `CoreWindow` (called
   with the window as sender and `Windows.UI.Core`'s arguments, not after
-  it is removed), and an app's control composed over
+  it is removed), `UIViewSettings.GetForCurrentView` on that thread
+  (`Mouse`), and an app's control composed over
   `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
   framework's layout calls; and the phone library's navigation
   transitions, a Frame's `NavigationThemeTransition` and the six

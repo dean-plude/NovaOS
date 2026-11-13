@@ -547,10 +547,10 @@ WINOLEAPI RoGetErrorReportingFlags(UINT32 *flags)
 /* The caller's stack on the debugger's output, each frame as
  * module+offset (a fail fast's, so the failing call can be found) */
 __declspec(dllimport) USHORT __stdcall RtlCaptureStackBackTrace(ULONG skip, ULONG count, PVOID *frames, PULONG hash);
-static void trace_stack(const char *what)
+static void trace_stack(const char *what, ULONG count)
 {
     void *frames[24];
-    USHORT n = RtlCaptureStackBackTrace(1, 24, frames, 0);
+    USHORT n = RtlCaptureStackBackTrace(1, count < 24 ? count : 24, frames, 0);
     for (USHORT i = 0; i < n; i++) {
         HMODULE m = 0;
         char name[MAX_PATH] = "?", line[MAX_PATH + 64];
@@ -593,6 +593,9 @@ WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg)
     line[k++] = '\n';
     line[k] = 0;
     OutputDebugStringA(line);
+    /* (with where it was raised: a later fail fast's stack no longer has
+     * the call that failed) */
+    trace_stack("originated at", 10);
     SetRestrictedErrorInfo((IUnknown *)e);
     rerr_release(e);
     return TRUE;
@@ -654,7 +657,7 @@ WINOLEAPI_(void) RoFailFastWithErrorContextInternal2(HRESULT hr, ULONG count, vo
     wsprintfA(msg, "RoFailFastWithErrorContextInternal2: fail fast 0x%08lx (%lu stowed)\n", (unsigned long)hr,
               (unsigned long)count);
     OutputDebugStringA(msg);
-    trace_stack("fail fast");
+    trace_stack("fail fast", 24);
     TerminateProcess(GetCurrentProcess(), (UINT)hr);
 }
 /* C++/WinRT's hresult_error and XAML's error info (dxaml/lib ErrorInfo.cpp)

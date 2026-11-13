@@ -1536,6 +1536,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   stops on an unhandled `E_BOUNDS` (after an `ERROR_NOT_FOUND`) reported
   from the dispatcher's tick.  Next: that, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Twenty-third part done (Pulsar item 3, seventeenth slice): the
+  `ERROR_NOT_FOUND` was `UIViewSettings.GetForCurrentView`, which now
+  answers on a thread with a `CoreWindow`; the `E_BOUNDS` was WinUI 2
+  looking up its framework package's strings in
+  `ResourceManager.AllResourceMaps`, which now holds each framework
+  package's `resources.pri` by its package's name.  Every originated
+  Windows Runtime error now logs the stack it was raised from.  Tests
+  `wuxamltest`, `qtthemetest`.  Calculator gets further and stops when
+  `NavigationView`'s template sets `AnimatedIcon.FallbackIconSource`
+  ("Specified cast is not valid", `AnimatedIcon`'s factory 0x80004002).
+  Next: that, then the CI check that it computes `2 + 2`, which ticks
+  this step.
 
 ---
 

@@ -654,8 +654,34 @@ static HRESULT STDMETHODCALLTYPE vf_qi(void *o, REFIID iid, void **out)
 }
 /* A static class: no instances of its own */
 static HRESULT STDMETHODCALLTYPE vf_activate(void *o, void **out) { (void)o; if (out) *out = 0; return E_NOTIMPL_; }
-/* GetForCurrentView needs a CoreWindow, which a Win32 thread has not */
-static HRESULT STDMETHODCALLTYPE vf_current(void *o, void **out) { (void)o; if (out) *out = 0; return E_NOTFOUND_; }
+/* GetForCurrentView answers on a thread with a CoreWindow (a UWP app's
+ * view thread: CoreWindow.GetForCurrentThread, twinapi.appcore's); a Win32
+ * thread has none and gets ERROR_NOT_FOUND, as on Windows */
+HRESULT WINAPI WindowsDeleteString(HSTRING s);                                     /* winrt.c */
+HRESULT WINAPI RoGetActivationFactory(HSTRING cls, REFIID iid, void **f);         /* winrt.c */
+static const GUID IID_ICoreWindowStatic_u = { 0x4D239005, 0x3C2A, 0x41B1, { 0x90, 0x22, 0x53, 0x6B, 0xB9, 0xCF, 0x93, 0xB1 } };
+static BOOL thread_has_core_window(void)
+{
+    HSTRING s = name_of(L"Windows.UI.Core.CoreWindow");
+    void *statics = 0, *win = 0;
+    HRESULT hr = s ? RoGetActivationFactory(s, &IID_ICoreWindowStatic_u, &statics) : E_OUTOFMEMORY;
+    WindowsDeleteString(s);
+    if (FAILED(hr) || !statics) return FALSE;
+    hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))(*(void ***)statics)[6])(statics, &win);  /* GetForCurrentThread */
+    ((IUnknown *)statics)->lpVtbl->Release((IUnknown *)statics);
+    if (FAILED(hr) || !win) return FALSE;
+    ((IUnknown *)win)->lpVtbl->Release((IUnknown *)win);
+    return TRUE;
+}
+static HRESULT STDMETHODCALLTYPE vf_current(void *o, void **out)
+{
+    (void)o;
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!thread_has_core_window()) return E_NOTFOUND_;
+    *out = &g_view;
+    return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE vf_forwindow(void *o, HWND w, REFIID iid, void **out)
 {
     (void)o;

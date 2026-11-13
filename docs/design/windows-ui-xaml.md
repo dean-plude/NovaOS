@@ -1727,5 +1727,20 @@ vendors.
    `wuxamltest` (`Activated` added, the `CoreWindow` activated, the call,
    its sender and its state, removed).
 
+   Pulsar item 3, seventeenth slice: views and framework strings.
+   `UIViewSettings.GetForCurrentView` (`ole32`'s `uisettings.c`) answers
+   on a thread that has a `CoreWindow` (Calculator's title bar asks it
+   when loaded) and is still `ERROR_NOT_FOUND` on a Win32 thread.
+   WinUI 2 in its framework package reads its strings from
+   `ResourceManager.Current.AllResourceMaps()["Microsoft.UI.Xaml.2.8"]`
+   (`ResourceAccessor.cpp`); `MrmCoreR`'s `AllResourceMaps` now holds the
+   map of each framework package in the app's package graph that has a
+   `resources.pri`, by its package's name, beside the app's own.  To find
+   such origins, `RoOriginateError` logs the ten frames it was called from
+   ("originated at: #n module+offset"); WinUI 2's public symbols
+   (msdl.microsoft.com) name them.  Tests: `wuxamltest`
+   (`GetForCurrentView` on the `CoreWindow`'s thread), `qtthemetest` (on
+   a Win32 thread).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

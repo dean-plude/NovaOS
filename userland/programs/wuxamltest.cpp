@@ -659,6 +659,17 @@ static void window_activated_checks()
     SendMessageW(hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
     CHECK("and not called again", h.calls == 1);
     CHECK("the handler released", h.ref == 1);
+    /* UIViewSettings.GetForCurrentView answers on the CoreWindow's thread
+     * (Calculator's title bar asks it when loaded) and says Mouse */
+    static const GUID iidViewStatics = {0x595c97a5, 0xf8f6, 0x41cf, {0xb0, 0xfb, 0xaa, 0xcd, 0xb8, 0x1f, 0xd5, 0xf6}};
+    ctl::ComPtr<IInspectable> viewStatics, view;
+    int mode = -1;
+    CHECK("UIViewSettings.GetForCurrentView on the CoreWindow's thread, Mouse",
+          SUCCEEDED(RoGetActivationFactory(wrl_wrappers::HStringReference(L"Windows.UI.ViewManagement.UIViewSettings").Get(),
+                                           iidViewStatics, reinterpret_cast<void **>(viewStatics.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, void **))(*(void ***)viewStatics.Get())[6])(
+              viewStatics.Get(), reinterpret_cast<void **>(view.GetAddressOf()))) && view &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, int *))(*(void ***)view.Get())[6])(view.Get(), &mode)) && mode == 0);
 }
 
 static void navigation_transition_checks()

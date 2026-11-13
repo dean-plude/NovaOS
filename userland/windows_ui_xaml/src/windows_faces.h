@@ -129,4 +129,8 @@ HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token);
 HRESULT nova_face_event_removed(INT64 token);
 // (a UWP window's methods NovaOS answers itself: winfaces.py's ANSWERED_HERE)
 HRESULT nova_face_window_set_title_bar(void *element);
+// (a UWP app's window's events: Activated, Closed, SizeChanged and
+// VisibilityChanged, in that order, their handlers on the thread's CoreWindow)
+HRESULT nova_face_window_event_add(NovaTear *t, int event, void *handler, INT64 *token);
+HRESULT nova_face_window_event_remove(int event, INT64 token);
 }

@@ -62,10 +62,17 @@ NEVER_RAISED = {WIN + 'IApplication': ('Suspending', 'Resuming'),
                 WIN + 'IApplication2': ('LeavingBackground', 'EnteredBackground')}
 
 # Windows.UI.Xaml methods of a UWP app's window that the framework answers
-# "not implemented for UWP" (WinUI 3's UWPWindowImpl) and NovaOS answers
-# itself (userland/windows_ui_xaml/src/windows_faces.cpp): the method's
-# parameters after the face and the function it calls with them
+# "not implemented for UWP" (WinUI 3's UWPWindowImpl), or has no counterpart
+# of (the window's events: Windows' handlers take Windows.UI.Core's
+# arguments, the framework's its own), and NovaOS answers itself
+# (userland/windows_ui_xaml/src/windows_faces.cpp): the method's parameters
+# after the face (t, the tear-off) and the function it calls with them
 ANSWERED_HERE = {WIN + 'IWindow2.SetTitleBar': ('void* a0', 'a0', 'nova_face_window_set_title_bar')}
+# (the window's events, on the thread's CoreWindow: windows_faces.cpp's
+# NOVA_WINDOW_EVENT_* order)
+for _i, _ev in enumerate(('Activated', 'Closed', 'SizeChanged', 'VisibilityChanged')):
+    ANSWERED_HERE[WIN + 'IWindow.add_' + _ev] = ('void* a0, INT64* a1', 't, %d, a0, a1' % _i, 'nova_face_window_event_add')
+    ANSWERED_HERE[WIN + 'IWindow.remove_' + _ev] = ('INT64 a0', '%d, a0' % _i, 'nova_face_window_event_remove')
 
 
 def attr_args(t, name):
@@ -417,7 +424,7 @@ class Faces:
             r = None
             here = ANSWERED_HERE.get('%s.%s' % (impl_name, mname)) if to_fw else None
             if here:
-                self.thunks.append('static HRESULT STDMETHODCALLTYPE %s(NovaTear*, %s) { return %s(%s); }'
+                self.thunks.append('static HRESULT STDMETHODCALLTYPE %s(NovaTear* t, %s) { (void)t; return %s(%s); }'
                                    % (fname, here[0], here[2], here[1]))
                 r = fname
             elif tgt is not None:

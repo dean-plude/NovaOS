@@ -1527,6 +1527,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `E_NOTIMPL` from `Windows.UI.Xaml.Window.Activated` (no counterpart in
   the framework's `Window` yet).  Next: that, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Twenty-second part done (Pulsar item 3, sixteenth slice): a UWP window's
+  events (`Window.Activated`, `Closed`, `SizeChanged`, `VisibilityChanged`),
+  whose Windows handlers take `Windows.UI.Core`'s arguments and have no
+  counterpart in the framework's `Window`: the `Windows.UI.Xaml` face
+  subscribes them on the thread's `CoreWindow`, with the window as sender,
+  as Windows does.  Test `wuxamltest`.  Calculator gets past them and
+  stops on an unhandled `E_BOUNDS` (after an `ERROR_NOT_FOUND`) reported
+  from the dispatcher's tick.  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

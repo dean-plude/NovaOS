@@ -1515,6 +1515,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (`LayoutBoundsChangedHelper::InitializeSizeChangedHandlers`, not built
   yet).  Next: that, then the CI check that it computes `2 + 2`, which
   ticks this step.
+  Twenty-first part done (Pulsar item 3, fifteenth slice): the framework's
+  `LayoutBoundsChangedHelper` (vendored `dxaml/lib/LayoutBoundsChangedHelper.cpp`),
+  which a page measuring itself asks its XAML root for (the root's changes
+  and, for a UWP app's main view, its `ApplicationView`'s visible bounds),
+  and DirectWrite's ellipsis trimming sign
+  (`IDWriteFactory::CreateEllipsisTrimmingSign`, an inline object that
+  measures and draws U+2026 in the format's font), which a `TextBlock`
+  asks for when it trims.  Tests `wuxamltest`, `dwtest`.  Calculator gets
+  past both, builds its navigation view's template, and stops on
+  `E_NOTIMPL` from `Windows.UI.Xaml.Window.Activated` (no counterpart in
+  the framework's `Window` yet).  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

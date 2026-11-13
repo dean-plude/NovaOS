@@ -40,7 +40,10 @@
  *   - an app's x:Bind connector (Windows' IComponentConnector2's
  *     GetBindingConnector) under the framework's IComponentConnector, kept
  *     weakly as the parser keeps it: the weak reference resolves to the
- *     framework's IComponentConnector again, which Connect goes through.
+ *     framework's IComponentConnector again, which Connect goes through;
+ *   - the helper a XAML root's layout bounds come through (a page asks it
+ *     when it measures itself): on the desktop path no ApplicationView,
+ *     its root's own bounds (UseCoreWindow), callbacks added and removed.
  *
  *   wuxamltest        the self-test runs it with no arguments
  */
@@ -54,6 +57,7 @@
 #include <WindowsXamlManager.g.h>
 #include <roapi.h>
 #include <FrameworkApplication_Partial.h>
+#include <LayoutBoundsChangedHelper.h>
 #include <microsoft.ui.dispatching.h>
 #include <microsoft.ui.xaml.phone.h>
 #include <windows.ui.xaml.h>
@@ -564,6 +568,31 @@ static void binding_connector_checks()
     app->Release();
 }
 
+/* the helper a XAML root's layout bounds come through (dxaml/lib/
+ * LayoutBoundsChangedHelper.cpp; a Page's MeasureOverride asks its root
+ * for it): a desktop program has no ApplicationView, so the root's own
+ * bounds are used; a UWP app's main view has one */
+static void layout_bounds_checks()
+{
+    ctl::ComPtr<wuv::IApplicationView2> view;
+    CHECK("no ApplicationView on the desktop path",
+          SUCCEEDED(DirectUI::LayoutBoundsChangedHelper::GetApplicationView2(view.GetAddressOf())) && !view);
+    wuv::ApplicationViewBoundsMode mode = wuv::ApplicationViewBoundsMode_UseVisible;
+    CHECK("so the desired bounds are the root's own (UseCoreWindow)",
+          SUCCEEDED(DirectUI::LayoutBoundsChangedHelper::GetDesiredBoundsMode(&mode)) &&
+          mode == wuv::ApplicationViewBoundsMode_UseCoreWindow);
+    ctl::ComPtr<DirectUI::LayoutBoundsChangedHelper> helper;
+    CHECK_HR("a helper made", ctl::make(&helper));
+    if (!helper) return;
+    EventRegistrationToken a{}, b{};
+    helper->AddLayoutBoundsChangedCallback([]() { return S_OK; }, &a);
+    helper->AddLayoutBoundsChangedCallback([]() { return S_OK; }, &b);
+    CHECK("two bounds callbacks added, each its own token", a.value && b.value && a.value != b.value);
+    helper->RemoveLayoutBoundsChangedCallback(&a);
+    helper->RemoveLayoutBoundsChangedCallback(&b);
+    CHECK("and removed (their tokens cleared)", !a.value && !b.value);
+}
+
 static void navigation_transition_checks()
 {
     namespace mxa = xaml_animation;
@@ -678,6 +707,7 @@ public:
         windows_checks();
         navigation_transition_checks();
         binding_connector_checks();
+        layout_bounds_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
         CHECK("the thread's DispatcherQueue", SUCCEEDED(wf::GetActivationFactory(

@@ -1694,5 +1694,22 @@ vendors.
    still the app object's.  Test: `wuxamltest` (an app's connector
    wrapped, weakly referenced and resolved, `Connect` reaching it).
 
+   Pulsar item 3, fifteenth slice: a page's layout bounds and text
+   trimming.  A `Page` measuring itself asks its XAML root for the
+   root's `LayoutBoundsChangedHelper` and has it watch for the bounds
+   changing; the helper (Microsoft's `dxaml/lib/LayoutBoundsChangedHelper.cpp`,
+   now built) follows the root's `Changed` event and, when the app's
+   windowing model is the universal one (a UWP app), the main view's
+   `ApplicationView.VisibleBoundsChanged` (NovaOS's `twinapi.appcore`
+   serves `ApplicationView`); a desktop program has no `ApplicationView`
+   and uses its root's own bounds.  Then a `TextBlock` with
+   `TextTrimming` asks DirectWrite for an ellipsis trimming sign, which
+   NovaOS's `dwrite.dll` now makes: an `IDWriteInlineObject` that lays out
+   U+2026 in the text format's font with a one-character layout of its
+   own, reports that layout's width, height and baseline, breaks like the
+   text around it and draws through the caller's renderer.  Tests:
+   `wuxamltest` (the helper on the desktop path, its callbacks), `dwtest`
+   (the sign's metrics, break conditions and glyph run).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

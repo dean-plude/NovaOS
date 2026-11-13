@@ -181,6 +181,8 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   handler, `Loading` with a Windows handler that is a reference tracker
   target (kept while subscribed), an app's x:Bind connector kept by a
   weak reference that resolves to the framework's `IComponentConnector`,
+  the helper a XAML root's layout bounds come through (no
+  `ApplicationView` on the desktop path, callbacks added and removed),
   and an app's control composed over `Windows.UI.Xaml.Controls.Control`
   whose `MeasureOverride` the framework's layout calls; and the phone
   library's navigation transitions, a Frame's

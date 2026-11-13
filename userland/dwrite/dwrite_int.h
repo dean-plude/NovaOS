@@ -310,6 +310,7 @@ HRESULT color_glyph_run_translate(float ox, float oy, const DW_GLYPH_RUN *run, c
 HRESULT text_format_create(const WCHAR *family, void *coll, UINT32 weight, UINT32 style, UINT32 stretch, float size,
                            const WCHAR *locale, void **out);
 HRESULT text_layout_create(const WCHAR *s, UINT32 n, void *fmt, float w, float h, void **out);
+HRESULT ellipsis_sign_create(void *fmt, void **out);
 /* IDWriteFactory6::CreateTextFormat: an IDWriteTextFormat3 from axis values */
 HRESULT text_format_create_axes(const WCHAR *family, void *coll, const DW_AXIS_VALUE *v, UINT32 n, float size,
                                 const WCHAR *locale, void **out);

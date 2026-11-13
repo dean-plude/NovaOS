@@ -1675,5 +1675,24 @@ vendors.
    is a reference tracker target, kept while subscribed and let go when
    removed).
 
+   Pulsar item 3, fourteenth slice: x:Bind's connector.  A page's
+   compiled bindings (x:Bind) are an object of the app's that the parser
+   gets from the page's `IComponentConnector2::GetBindingConnector` and
+   then calls `Connect` on for each element that has an x:Bind, which
+   sets the bindings' reference to it.  The parser keeps that connector
+   by a weak reference (`ValueWeakReference`) and asks the object it
+   resolves to for the framework's `IComponentConnector`.  NovaOS's
+   wrapper (the framework's interface over the app's Windows one) passed
+   `IWeakReferenceSource` on to the app's object, so the weak reference
+   resolved to the app's object itself, which knows only the Windows
+   interface: the parser skipped every `Connect`, and the bindings' first
+   `Update` (from the page's `Loading`) used a target that was never set,
+   a .NET `NullReferenceException`.  A wrapper of its own over an app's
+   object now answers `IWeakReferenceSource` itself: its weak reference
+   resolves the app's object and wraps it again, so the resolved object
+   answers the framework's interface, and its identity (`IUnknown`) is
+   still the app object's.  Test: `wuxamltest` (an app's connector
+   wrapped, weakly referenced and resolved, `Connect` reaching it).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -1405,10 +1405,8 @@ static HRESULT STDMETHODCALLTYPE fa_gdi_text_layout(Factory *f, const WCHAR *s, 
 }
 static HRESULT STDMETHODCALLTYPE fa_ellipsis(Factory *f, void *fmt, void **out)
 {
-    (void)f; (void)fmt;
-    dw_log("unimplemented IDWriteFactory::CreateEllipsisTrimmingSign");
-    *out = NULL;
-    return E_NOTIMPL;
+    (void)f;
+    return ellipsis_sign_create(fmt, out);
 }
 static HRESULT STDMETHODCALLTYPE fa_text_analyzer(Factory *f, void **out)
 {

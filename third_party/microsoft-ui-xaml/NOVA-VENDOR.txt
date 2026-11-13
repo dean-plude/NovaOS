@@ -353,6 +353,11 @@ For an Image's picture (Pulsar item 3, thirteenth slice): core/core/
 elements' imagebrush.cpp, CImageBrush, the brush an Image element paints
 its source with (ReloadImage, which hands the source's decode to it).
 
+For a page's layout bounds (Pulsar item 3, fifteenth slice): dxaml/lib's
+LayoutBoundsChangedHelper.cpp, which a XAML root hands a page measuring
+itself: the root's changes and, for a UWP app's main view, its
+ApplicationView's visible bounds changing.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

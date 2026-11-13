@@ -901,6 +901,11 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Jup
 # island once the composition tree host connects it, dxaml/lib/
 # InputSiteAdapter.cpp: the island's input sources to the content root)
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../InputSiteAdapter.cpp',)
+# (and the helper a XAML root's layout bounds come through, which a page
+# measuring itself asks for its root's visible bounds changing: dxaml/lib/
+# LayoutBoundsChangedHelper.cpp, over the main view's ApplicationView for
+# a UWP app's CoreWindow, none on a desktop island)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../LayoutBoundsChangedHelper.cpp',)
 CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../ResourceManager.cpp',)
 # (with the component tests' Uri factory stub renamed out, which the
 # window's callers pull in beside the static store's own)

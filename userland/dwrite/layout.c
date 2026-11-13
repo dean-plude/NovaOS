@@ -1804,3 +1804,94 @@ HRESULT text_layout_create(const WCHAR *s, UINT32 n, void *fmt, float w, float h
     *out = l;
     return S_OK;
 }
+
+/* ---- the ellipsis trimming sign (IDWriteFactory::CreateEllipsisTrimmingSign):
+ * an inline object that draws U+2026 HORIZONTAL ELLIPSIS in the text
+ * format's font, laid out by a one-character layout of its own; its
+ * metrics are that layout's, it breaks like the text around it ---------- */
+DEFINE_GUID(IID_IDWriteInlineObject_, 0x8339fde3, 0x106f, 0x47ab, 0x83,0x73, 0x1c,0x62,0x95,0xeb,0x10,0xb3);
+typedef struct { float width, height, baseline; BOOL supportsSideways; } DW_INLINE_OBJECT_METRICS;
+typedef struct {
+    const void *const *vtbl;
+    LONG ref;
+    Layout *layout;
+} Ellipsis;
+static HRESULT STDMETHODCALLTYPE el_qi(Ellipsis *e, REFIID riid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDWriteInlineObject_)) {
+        *out = e;
+        InterlockedIncrement(&e->ref);
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE el_addref(Ellipsis *e) { return (ULONG)InterlockedIncrement(&e->ref); }
+static ULONG STDMETHODCALLTYPE el_release(Ellipsis *e)
+{
+    LONG r = InterlockedDecrement(&e->ref);
+    if (!r) {
+        COM_RELEASE(e->layout);
+        dw_free(e);
+    }
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE el_draw(Ellipsis *e, void *ctx, void *rend, float x, float y, BOOL sideways, BOOL rtl,
+                                         void *effect)
+{
+    (void)sideways; (void)rtl; (void)effect;
+    if (!rend) return E_INVALIDARG;
+    return layout_draw(e->layout, ctx, rend, x, y);
+}
+static HRESULT STDMETHODCALLTYPE el_metrics(Ellipsis *e, DW_INLINE_OBJECT_METRICS *m)
+{
+    if (!m) return E_INVALIDARG;
+    compute(e->layout);
+    m->width = e->layout->m.widthIncludingTrailingWhitespace;
+    m->height = e->layout->m.height;
+    m->baseline = e->layout->nlines ? e->layout->lines[0].baseline : 0;
+    m->supportsSideways = FALSE;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE el_overhang(Ellipsis *e, DW_OVERHANG_METRICS *o)
+{
+    (void)e;
+    if (!o) return E_INVALIDARG;
+    o->left = o->top = o->right = o->bottom = 0;
+    return S_OK;
+}
+/* DWRITE_BREAK_CONDITION_NEUTRAL */
+static HRESULT STDMETHODCALLTYPE el_breaks(Ellipsis *e, UINT32 *before, UINT32 *after)
+{
+    (void)e;
+    if (!before || !after) return E_INVALIDARG;
+    *before = *after = 0;
+    return S_OK;
+}
+static const void *const ellipsis_vtbl[] = { (void *)el_qi, (void *)el_addref, (void *)el_release, (void *)el_draw,
+                                             (void *)el_metrics, (void *)el_overhang, (void *)el_breaks };
+
+HRESULT ellipsis_sign_create(void *fmt, void **out)
+{
+    if (!out) return E_INVALIDARG;
+    *out = NULL;
+    static const WCHAR ellipsis[] = { 0x2026 };
+    void *layout;
+    HRESULT hr = text_layout_create(ellipsis, 1, fmt, 0, 0, &layout);
+    if (FAILED(hr)) return hr;
+    Layout *l = layout;
+    l->f.wrap = WRAP_NONE;                      /* (one line, untrimmed) */
+    memset(&l->f.trimming, 0, sizeof l->f.trimming);
+    set_iface(&l->f.trim_sign, NULL);
+    Ellipsis *e = dw_zalloc(sizeof(Ellipsis));
+    if (!e) {
+        COM_RELEASE(layout);
+        return E_OUTOFMEMORY;
+    }
+    e->vtbl = ellipsis_vtbl;
+    e->ref = 1;
+    e->layout = l;
+    *out = e;
+    return S_OK;
+}

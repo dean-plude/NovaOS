@@ -43,7 +43,10 @@
  *     framework's IComponentConnector again, which Connect goes through;
  *   - the helper a XAML root's layout bounds come through (a page asks it
  *     when it measures itself): on the desktop path no ApplicationView,
- *     its root's own bounds (UseCoreWindow), callbacks added and removed.
+ *     its root's own bounds (UseCoreWindow), callbacks added and removed;
+ *   - a UWP app's Window.Activated: its Windows handler on the thread's
+ *     CoreWindow, called with the window as sender and Windows.UI.Core's
+ *     arguments when the CoreWindow is activated, not after it is removed.
  *
  *   wuxamltest        the self-test runs it with no arguments
  */
@@ -593,6 +596,71 @@ static void layout_bounds_checks()
     CHECK("and removed (their tokens cleared)", !a.value && !b.value);
 }
 
+/* a UWP app's Window.Activated (the face answers it itself,
+ * windows_faces.cpp: Windows' handler takes Windows.UI.Core's arguments):
+ * the handler goes on the thread's CoreWindow (the desktop path has its
+ * hidden one) and is called, with the window as sender, when the CoreWindow
+ * is activated; removed, it is not called again */
+extern "C" HRESULT nova_face_window_event_add(void *t, int event, void *handler, INT64 *token);
+extern "C" HRESULT nova_face_window_event_remove(int event, INT64 token);
+struct ActivatedHandler
+{
+    void *const *vtbl;
+    LONG ref = 1;
+    int calls = 0, state = -1;
+    void *sender = nullptr;
+    static HRESULT STDMETHODCALLTYPE qi(ActivatedHandler *h, REFIID iid, void **out)
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IAgileObject)) { h->ref++; *out = h; return S_OK; }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    static ULONG STDMETHODCALLTYPE addref(ActivatedHandler *h) { return (ULONG)++h->ref; }
+    static ULONG STDMETHODCALLTYPE release(ActivatedHandler *h) { return (ULONG)--h->ref; }
+    static HRESULT STDMETHODCALLTYPE invoke(ActivatedHandler *h, void *sender, void *args)
+    {
+        h->calls++;
+        h->sender = sender;
+        int st = -1;    /* IWindowActivatedEventArgs.WindowActivationState */
+        if (args && SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, int *))(*(void ***)args)[6])(args, &st)))
+            h->state = st;
+        return S_OK;
+    }
+};
+static void *const s_activated_handler_vtbl[] = {(void *)&ActivatedHandler::qi, (void *)&ActivatedHandler::addref,
+                                                 (void *)&ActivatedHandler::release, (void *)&ActivatedHandler::invoke};
+
+static void window_activated_checks()
+{
+    static const GUID iidStatic = {0x4d239005, 0x3c2a, 0x41b1, {0x90, 0x22, 0x53, 0x6b, 0xb9, 0xcf, 0x93, 0xb1}};
+    static const GUID iidInterop = {0x45d64a29, 0xa63e, 0x4cb6, {0xb4, 0x98, 0x57, 0x81, 0xd2, 0x98, 0xcb, 0x4f}};
+    ctl::ComPtr<IInspectable> statics, coreWindow;
+    ctl::ComPtr<IUnknown> interop;
+    HWND hwnd = nullptr;
+    CHECK("the thread's CoreWindow and its HWND",
+          SUCCEEDED(RoGetActivationFactory(wrl_wrappers::HStringReference(L"Windows.UI.Core.CoreWindow").Get(), iidStatic,
+                                           reinterpret_cast<void **>(statics.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, void **))(*(void ***)statics.Get())[6])(
+              statics.Get(), reinterpret_cast<void **>(coreWindow.GetAddressOf()))) && coreWindow &&
+          SUCCEEDED(coreWindow.Get()->QueryInterface(iidInterop, reinterpret_cast<void **>(interop.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, HWND *))(*(void ***)interop.Get())[3])(interop.Get(), &hwnd)) && hwnd);
+    if (!hwnd) return;
+    ctl::ComPtr<IInspectable> window;   /* (the sender: any object stands in for the window's face) */
+    RoActivateInstance(wrl_wrappers::HStringReference(L"Windows.UI.Xaml.Controls.Button").Get(), window.GetAddressOf());
+    ActivatedHandler h;
+    h.vtbl = s_activated_handler_vtbl;
+    INT64 token = 0;
+    CHECK("Window.Activated added (on the CoreWindow), a token",
+          window && SUCCEEDED(nova_face_window_event_add(window.Get(), 0, &h, &token)) && token);
+    SendMessageW(hwnd, WM_ACTIVATE, WA_CLICKACTIVE, 0);
+    CHECK("the handler called when the CoreWindow is activated, the window as sender, PointerActivated",
+          h.calls == 1 && h.sender == window.Get() && h.state == 2);
+    CHECK_HR("Window.Activated removed", nova_face_window_event_remove(0, token));
+    SendMessageW(hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
+    CHECK("and not called again", h.calls == 1);
+    CHECK("the handler released", h.ref == 1);
+}
+
 static void navigation_transition_checks()
 {
     namespace mxa = xaml_animation;
@@ -708,6 +776,7 @@ public:
         navigation_transition_checks();
         binding_connector_checks();
         layout_bounds_checks();
+        window_activated_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
         CHECK("the thread's DispatcherQueue", SUCCEEDED(wf::GetActivationFactory(

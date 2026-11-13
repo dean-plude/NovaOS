@@ -1711,5 +1711,21 @@ vendors.
    `wuxamltest` (the helper on the desktop path, its callbacks), `dwtest`
    (the sign's metrics, break conditions and glyph run).
 
+   Pulsar item 3, sixteenth slice: the window's events.  A UWP app's
+   `Window.Activated`, `Closed`, `SizeChanged` and `VisibilityChanged`
+   handlers (Windows.UI.Xaml's `WindowActivatedEventHandler` and the
+   others) take `Windows.UI.Core`'s arguments, while the framework's
+   `Window` raises its own `Microsoft.UI.Xaml` ones, so the face has no
+   method to call.  On Windows these events are the `CoreWindow`'s; the
+   face now answers them itself (`winfaces.py`'s `ANSWERED_HERE`,
+   `nova_face_window_event_add`/`_remove`): an adapter, the `CoreWindow`
+   event's `TypedEventHandler<CoreWindow, ...>`, goes on the thread's
+   `CoreWindow` (`twinapi.appcore`'s) and calls the app's handler with
+   the window as sender and the `CoreWindow`'s arguments as they are; the
+   token is the `CoreWindow`'s.  A thread without a `CoreWindow` gets
+   token 0 and no events, as WinUI 3's `UWPWindowImpl` answers.  Test:
+   `wuxamltest` (`Activated` added, the `CoreWindow` activated, the call,
+   its sender and its state, removed).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

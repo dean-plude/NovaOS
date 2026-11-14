@@ -261,7 +261,9 @@ CORE_SOURCES['hostpalplatmisc.vcxproj'] += ('host/win/browserdesktop/windwnreq.c
 # (and the framework's error messages, which the browser host gives the
 # error service (a parser error's text): NovaOS's
 # CXcpBrowserHost::GetNonLocalizedErrorString over Microsoft's string table,
-# src/error_strings.cpp; Microsoft's reads it from its resource DLL)
+# src/error_strings.cpp; Microsoft's reads it from its resource DLL; the
+# same file answers the localized strings, GetLocalizedResourceString:
+# UI Automation names and a windowed popup's host window title)
 next(c for c in CORE_LIBRARIES if c[0] == 'hostpalplatmisc.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'error_strings.cpp'))
 CORE_SOURCES.update({

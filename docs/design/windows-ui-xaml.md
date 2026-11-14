@@ -1762,5 +1762,18 @@ vendors.
    `winui2test` (an `AnimatedIcon` from markup, its `FallbackIconSource`
    read through WinUI 2's `FontIconSource.Glyph` member).
 
+   Pulsar item 3, nineteenth slice: the framework's localized strings.
+   The core asks its browser host for them by id (`localizedResource.h`:
+   automation peers' localized control types, scroll bar parts' names,
+   the title a windowed `Popup` gives its host window, which WinUI 2's
+   `NavigationView` opens while it lays out).  Microsoft's host loads them
+   from a localized satellite DLL whose string table is not in the public
+   repository; NovaOS's `CXcpBrowserHost::GetLocalizedResourceString`
+   (`userland/windows_ui_xaml/src/error_strings.cpp`, beside the
+   non-localized error messages) keeps the English text of the ids its
+   built parts ask for, and an id without text reads as the empty string,
+   as Microsoft's answers when its table has no row.  Test: `wuxamltest`
+   (the button peer's localized control type).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

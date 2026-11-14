@@ -22,7 +22,9 @@
  *   - a Popup loaded from markup, holding its child, closed;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
- *     ButtonAutomationPeer), the same one from FromElement after;
+ *     ButtonAutomationPeer), the same one from FromElement after, and the
+ *     button peer's localized control type (the browser host's localized
+ *     strings);
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
@@ -415,6 +417,13 @@ static void windows_checks()
     CHECK("FromElement then gives the same peer", peers && second &&
           SUCCEEDED(peers->FromElement(second.Get(), again.GetAddressOf())) && again &&
           identity(again.Get()) == identity(buttonPeer.Get()));
+    /* its localized control type: the browser host's localized strings
+     * (GetLocalizedResourceString, which a windowed Popup also asks) */
+    HSTRING controlType = nullptr;
+    CHECK("the button peer's localized control type is \"button\"", buttonPeer &&
+          SUCCEEDED(buttonPeer->GetLocalizedControlType(&controlType)) &&
+          wcscmp(WindowsGetStringRawBuffer(controlType, nullptr), L"button") == 0);
+    WindowsDeleteString(controlType);
 
     /* a base class's statics: Control.IsTabStopProperty (UIElement's in WinUI 3) */
     ctl::ComPtr<wuxc::IControlStatics> cs;

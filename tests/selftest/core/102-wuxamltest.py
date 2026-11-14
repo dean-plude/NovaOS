@@ -1,7 +1,8 @@
 # wuxamltest: the XAML framework under its Windows.UI.Xaml names (roadmap
 # step 32.5, WinUI 2 on the system XAML, first part): a Button activated by
 # its Windows name and driven through Windows' interfaces, a Windows-boxed
-# enum, DependencyProperty.Register with Windows type names, XamlReader.Load
+# enum, DependencyProperty.Register with Windows type names (a brush property's
+# value read back under its Windows class), XamlReader.Load
 # and the page's children through Windows' interfaces, an Image whose
 # markup URI source becomes a BitmapImage, measured (its image brush loads
 # the source), and a Popup holding its child
@@ -17,7 +18,7 @@
 # UIViewSettings.GetForCurrentView on that thread
 DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it: '
        '`Windows.UI.Xaml.Controls.Button` activated by its Windows name and driven through Windows\' interfaces, a '
-       'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names, `XamlReader.Load` and the page\'s '
+       'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names (a `SolidColorBrush` property\'s value read back as `Windows.UI.Xaml.Media.SolidColorBrush`), `XamlReader.Load` and the page\'s '
        'children through Windows\' `IVector<UIElement>`, an `Image` whose markup URI source becomes a `BitmapImage`, measured (its image brush loads the source), a `Popup` from markup holding its child, the text block\'s and button\'s automation peers (the button\'s localized control type `button`), `Control.IsTabStopProperty`, `Click` with a Windows handler, `Loading` with a Windows handler that is a reference tracker target (kept while subscribed), an app\'s x:Bind connector kept by a weak reference that resolves to the framework\'s `IComponentConnector`, the helper a XAML root\'s layout bounds come through (no `ApplicationView` on the desktop path, callbacks added and removed), a UWP window\'s `Activated` handler on the thread\'s `CoreWindow` (called with the window as sender and `Windows.UI.Core`\'s arguments, not after it is removed), `UIViewSettings.GetForCurrentView` on that thread (`Mouse`), and an '
        'app\'s control composed over `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the framework\'s layout calls; '
        'and the phone library\'s navigation transitions, a Frame\'s `NavigationThemeTransition` and the six transition infos, '

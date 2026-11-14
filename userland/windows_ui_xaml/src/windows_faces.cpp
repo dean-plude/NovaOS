@@ -711,6 +711,16 @@ static const GUID *windows_default(void *a)
 {
     if (VT(a)[0] == (void *)&nova_tear_qi)
         return nullptr;
+    // (the framework's own objects only: WinUI 2's, which an app carries,
+    // have names the framework's classes have too, and an app's object
+    // composed over a framework one is the app's)
+    HMODULE self = nullptr, owner = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)&windows_default, &self) ||
+        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)VT(a)[0], &owner) ||
+        owner != self)
+        return nullptr;
     void *insp;
     if (FAILED(qi(a, &IID_IInspectable_, &insp)))
         return nullptr;
@@ -758,6 +768,21 @@ extern "C" HRESULT nova_object_to_app(void *a, void **out)
     nova_addref(a);
     *out = a;
     return S_OK;
+}
+
+// an object the framework gives the app's code as a call's result
+// (DependencyObject.GetValue's): as nova_object_to_app, so that a brush a
+// custom property holds comes back as Windows' SolidColorBrush, which
+// Calculator's TitleBar casts it to
+extern "C" HRESULT nova_object_app_out(HRESULT hr, void *o, void **a)
+{
+    if (FAILED(hr) || !a) {
+        nova_release(o);
+        return hr;
+    }
+    HRESULT h = nova_object_to_app(o, a);
+    nova_release(o);
+    return FAILED(h) ? h : hr;
 }
 
 struct NovaTypeName

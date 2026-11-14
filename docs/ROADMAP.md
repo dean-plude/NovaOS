@@ -1560,6 +1560,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `GetLocalizedResourceString`, which a windowed `Popup` asks for its
   host's name, is not built).  Next: that, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Twenty-fifth part done (Pulsar item 3, nineteenth slice): the browser
+  host's localized strings (`CXcpBrowserHost::GetLocalizedResourceString`:
+  a windowed `Popup`'s host window title, automation peers' control type
+  names), English text NovaOS keeps itself.  Test `wuxamltest`.
+  Calculator gets through layout to its first frame's `Loaded` events
+  and stops on "Specified cast is not valid" (0x80004002) thrown from one
+  of its `Loaded` handlers.  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

@@ -20,6 +20,18 @@ XAML_ABI_NAMESPACE_BEGIN namespace Microsoft { namespace UI { namespace Xaml { n
     {
     }
 
+    // NovaOS: set by an exit handler registered when the providers are
+    // first loaded (so after the dependency locator's storage exists, and
+    // the handler runs before that storage is destroyed): a program that
+    // links the framework statically destroys its static objects before
+    // ntdll says the process is shutting down.
+    static volatile bool s_processExiting = false;
+
+    static void __cdecl NovaMarkProcessExiting()
+    {
+        s_processExiting = true;
+    }
+
     XamlLibMetadataProvider::~XamlLibMetadataProvider()
     {
         // NovaOS: not when the process exits (its DLLs' static objects
@@ -31,7 +43,7 @@ XAML_ABI_NAMESPACE_BEGIN namespace Microsoft { namespace UI { namespace Xaml { n
         typedef BOOLEAN (NTAPI *ShutdownInProgressFn)();
         static const auto shutdownInProgress = reinterpret_cast<ShutdownInProgressFn>(
             ::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress"));
-        if (shutdownInProgress && shutdownInProgress())
+        if (s_processExiting || (shutdownInProgress && shutdownInProgress()))
         {
             return;
         }
@@ -185,6 +197,9 @@ XAML_ABI_NAMESPACE_BEGIN namespace Microsoft { namespace UI { namespace Xaml { n
             }
 
             m_providersInitialized = true;
+
+            static const bool s_exitHandlerRegistered = (atexit(NovaMarkProcessExiting) == 0);
+            (void)s_exitHandlerRegistered;
         }
     }
 

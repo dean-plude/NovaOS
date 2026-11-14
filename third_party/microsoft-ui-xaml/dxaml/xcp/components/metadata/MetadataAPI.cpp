@@ -1297,8 +1297,13 @@ _Check_return_ HRESULT MetadataAPI::TryGetCustomClassInfoByName(_In_ KnownNamesp
     IFC_RETURN(strFullNameBuilder.Append(strTypeName));
     IFC_RETURN(strFullNameBuilder.DetachString(&strFullName));
 
+    // A provider that can't answer (none registered, as in the test
+    // programs' metadata stub) means no custom type: the built-in one wins.
     const CClassInfo* pType = nullptr;
-    IFC_RETURN(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType));
+    if (FAILED(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType)))
+    {
+        pType = nullptr;
+    }
     if (pType && !pType->IsUnknown() && !IsKnownIndex(pType->GetIndex()))
     {
         *ppType = pType;
@@ -1325,7 +1330,10 @@ _Check_return_ HRESULT MetadataAPI::TryGetRegisteredClassInfo(_In_ wxaml_interop
             xstring_ptr strFullName;
             const CClassInfo* pType = nullptr;
             IFC_RETURN(xstring_ptr::CloneRuntimeStringHandle(typeName.Name, &strFullName));
-            IFC_RETURN(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType));
+            if (FAILED(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType)))
+            {
+                pType = nullptr;
+            }
             if (pType && !pType->IsUnknown() && !IsKnownIndex(pType->GetIndex()))
             {
                 *ppType = pType;

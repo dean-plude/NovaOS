@@ -12,7 +12,10 @@
 # templates applied: InfoBadge and the controls Calculator uses (eighth part);
 # NavigationView and RadioButtons with their items from markup (ninth part);
 # WinUI 2's overrides called: the RadioButtons' and NavigationView's
-# ItemsRepeaters make their items, NavigationView lays out (tenth part)
+# ItemsRepeaters make their items, NavigationView lays out (tenth part);
+# WinUI 2's classes under the framework's own names: an AnimatedIcon's
+# FallbackIconSource is WinUI 2's FontIconSource, a binding on its FontSize
+# finds WinUI 2's dependency property (Pulsar item 3, eighteenth slice)
 DOC = ('`winui2test` (WinUI 2\'s own controls, `Microsoft.UI.Xaml.dll` 2.x built from Microsoft\'s `winui2/main` '
        'sources, on the system XAML: an `InfoBadge` activated from the DLL and composed over the framework\'s '
        '`Windows.UI.Xaml.Controls.Control`, WinUI 2\'s XAML type table (`XamlControlsXamlMetaDataProvider`) reading, '
@@ -33,7 +36,9 @@ DOC = ('`winui2test` (WinUI 2\'s own controls, `Microsoft.UI.Xaml.dll` 2.x built
        '`RadioButtons`\' items and `SelectedIndex` added from markup, and the `RadioButtons` measured and arranged '
        'with the `ItemsRepeater` in its template; and WinUI 2\'s overrides called: the `RadioButtons`\' '
        '`ItemsRepeater` making its three `RadioButton`s, the `NavigationView` applying its template, laid out, and '
-       'with its pane opened making its two `NavigationViewItem`s)')
+       'with its pane opened making its two `NavigationViewItem`s; and WinUI 2\'s classes named as the framework\'s own: '
+       'an `AnimatedIcon` whose `FallbackIconSource` is a `FontIconSource` from a `using:Microsoft.UI.Xaml.Controls` '
+       'xmlns, with a binding on its `FontSize`, gets WinUI 2\'s `FontIconSource`)')
 TESTS = [
     Test('winui2test', 'winui2test', [r'winui2test: \d+ passed, 0 failed \(64-bit\)'], timeout=300, elevated=True),
 ]

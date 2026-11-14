@@ -22,6 +22,19 @@ XAML_ABI_NAMESPACE_BEGIN namespace Microsoft { namespace UI { namespace Xaml { n
 
     XamlLibMetadataProvider::~XamlLibMetadataProvider()
     {
+        // NovaOS: not when the process exits (its DLLs' static objects
+        // destroyed, the dependency locator's storage among them, which the
+        // reset reads; NovaOS's metadata asks this provider for WinUI 2's
+        // classes under the framework's names, so a process that registers
+        // dependency properties holds it until then): ntdll's
+        // RtlDllShutdownInProgress, as WIL's ProcessShutdownInProgress
+        typedef BOOLEAN (NTAPI *ShutdownInProgressFn)();
+        static const auto shutdownInProgress = reinterpret_cast<ShutdownInProgressFn>(
+            ::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress"));
+        if (shutdownInProgress && shutdownInProgress())
+        {
+            return;
+        }
         ResetDependencyProperties();
     }
 

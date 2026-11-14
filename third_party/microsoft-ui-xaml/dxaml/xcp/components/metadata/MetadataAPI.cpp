@@ -1039,8 +1039,11 @@ _Check_return_ HRESULT MetadataAPI::ProcessRegistrations()
             wxaml_interop::TypeName declaringType = { ownerTypeNamePromoted.GetHSTRING(), registration.m_declaringTypeKind };
 
             // Resolve the type references.
-            IFC_RETURN(GetClassInfoByTypeName(propertyType, &pPropertyType));
-            IFC_RETURN(GetClassInfoByTypeName(declaringType, &pDeclaringType));
+            // NovaOS: a provider's type first, as WinUI 2 registers its
+            // classes' properties under Microsoft.UI.Xaml names the
+            // framework has types of its own by (TryGetRegisteredClassInfo)
+            IFC_RETURN(TryGetRegisteredClassInfo(propertyType, &pPropertyType));
+            IFC_RETURN(TryGetRegisteredClassInfo(declaringType, &pDeclaringType));
 
             // Update the property info.
             pDP->UpdateTypeInfo(
@@ -1270,6 +1273,67 @@ _Check_return_ HRESULT MetadataAPI::TryGetClassInfoByName(_In_ KnownNamespaceInd
     IFC_RETURN(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, ppType));
 
     return S_OK;
+}
+
+// NovaOS: the framework (WinUI 3's source) is the system Windows.UI.Xaml
+// here, its own types named Microsoft.UI.Xaml.* inside it, and WinUI 2,
+// which a UWP app carries, has types under the same names
+// (Microsoft.UI.Xaml.Controls.FontIconSource, IconSource, ...).  Markup
+// names WinUI 2's through a "using:Microsoft.UI.Xaml.Controls" xmlns (the
+// framework's are in the presentation xmlns), so for such a name the
+// metadata providers' type comes first: WinUI 2's control templates set
+// AnimatedIcon.FallbackIconSource to a WinUI 2 FontIconSource, which an
+// app's provider casts to WinUI 2's IconSource.  A name no provider has
+// is cached as unknown (ImportUnknownClassInfo), so it is asked once.
+_Check_return_ HRESULT MetadataAPI::TryGetCustomClassInfoByName(_In_ KnownNamespaceIndex eNamespaceIndex, _In_ const xstring_ptr_view& strTypeName, _Outptr_result_maybenull_ const CClassInfo** ppType)
+{
+    *ppType = nullptr;
+    XStringBuilder strFullNameBuilder;
+    xstring_ptr strNamespaceName = GetNamespaceByIndex(eNamespaceIndex)->GetName();
+    xstring_ptr strFullName;
+    IFC_RETURN(strFullNameBuilder.Initialize(strNamespaceName.GetCount() + /* "." */ 1 + strTypeName.GetCount()));
+    IFC_RETURN(strFullNameBuilder.Append(strNamespaceName));
+    IFC_RETURN(strFullNameBuilder.AppendChar(L'.'));
+    IFC_RETURN(strFullNameBuilder.Append(strTypeName));
+    IFC_RETURN(strFullNameBuilder.DetachString(&strFullName));
+
+    const CClassInfo* pType = nullptr;
+    IFC_RETURN(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType));
+    if (pType && !pType->IsUnknown() && !IsKnownIndex(pType->GetIndex()))
+    {
+        *ppType = pType;
+    }
+    return S_OK;
+}
+
+// NovaOS: a dependency property's owner or property type as it is
+// registered (DependencyProperty.Register, through the Windows.UI.Xaml
+// faces, which hand the framework's own types over by their lifted names):
+// a Microsoft.UI.Xaml name a metadata provider has a type by is the
+// provider's, WinUI 2's FontIconSource registering FontSize, so a binding
+// set on the property in markup finds it; otherwise the framework's.
+_Check_return_ HRESULT MetadataAPI::TryGetRegisteredClassInfo(_In_ wxaml_interop::TypeName typeName, _Outptr_ const CClassInfo** ppType)
+{
+    *ppType = nullptr;
+    if (typeName.Kind == wxaml_interop::TypeKind::TypeKind_Metadata && typeName.Name != nullptr)
+    {
+        UINT32 length = 0;
+        const wchar_t* name = WindowsGetStringRawBuffer(typeName.Name, &length);
+        static const wchar_t lifted[] = L"Microsoft.UI.Xaml.";
+        if (length > ARRAY_SIZE(lifted) - 1 && wcsncmp(name, lifted, ARRAY_SIZE(lifted) - 1) == 0)
+        {
+            xstring_ptr strFullName;
+            const CClassInfo* pType = nullptr;
+            IFC_RETURN(xstring_ptr::CloneRuntimeStringHandle(typeName.Name, &strFullName));
+            IFC_RETURN(TryGetClassInfoByFullName(strFullName, /* bSearchCustomTypesOnly */ TRUE, &pType));
+            if (pType && !pType->IsUnknown() && !IsKnownIndex(pType->GetIndex()))
+            {
+                *ppType = pType;
+                return S_OK;
+            }
+        }
+    }
+    return GetClassInfoByTypeName(typeName, ppType);
 }
 
 const CPropertyBase* MetadataAPI::TryGetBuiltInPropertyBaseByName(

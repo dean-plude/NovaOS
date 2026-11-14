@@ -358,6 +358,17 @@ LayoutBoundsChangedHelper.cpp, which a XAML root hands a page measuring
 itself: the root's changes and, for a UWP app's main view, its
 ApplicationView's visible bounds changing.
 
+For WinUI 2's classes named as the framework's own (Pulsar item 3,
+eighteenth slice), NovaOS changes three of the files kept, each change
+marked "NovaOS:": core/Parser/XamlXmlNamespace.cpp (with
+core/inc/xamlxmlnamespace.h) asks the metadata providers first for a type
+of a "using:" xmlns that maps to a built-in namespace, and
+components/metadata/MetadataAPI.cpp (with core/inc/MetadataAPI.h) adds
+TryGetCustomClassInfoByName and TryGetRegisteredClassInfo, which a
+dependency property registration's owner and property types resolve
+through; components/ExtMetadataProvider/XamlLibMetadataProvider.cpp
+leaves its dependency properties alone when the process exits.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

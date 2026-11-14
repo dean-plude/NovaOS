@@ -1742,5 +1742,25 @@ vendors.
    (`GetForCurrentView` on the `CoreWindow`'s thread), `qtthemetest` (on
    a Win32 thread).
 
+   Pulsar item 3, eighteenth slice: WinUI 2's classes named as the
+   framework's own.  The framework's classes are `Microsoft.UI.Xaml.*`
+   inside it, and WinUI 2 has classes of its own under some of the same
+   names (`Microsoft.UI.Xaml.Controls.IconSource`, `FontIconSource`,
+   `SymbolIconSource`).  Markup names WinUI 2's through a
+   `using:Microsoft.UI.Xaml.Controls` xmlns, which the parser maps to the
+   framework's built-in namespace; `XamlXmlNamespace::GetCustomXamlType`
+   now asks the metadata providers (the app's, which hands on to WinUI
+   2's) for a `using:` xmlns's name first, so WinUI 2's `NavigationView`
+   template gives its pane button's `AnimatedIcon` WinUI 2's
+   `FontIconSource` (Calculator's .NET members cast it to WinUI 2's
+   `IconSource`).  `DependencyProperty.Register`'s owner and property type
+   names (`MetadataAPI::TryGetRegisteredClassInfo`, which the queued
+   registrations resolve through) do the same for `Microsoft.UI.Xaml`
+   names, so WinUI 2's `FontIconSource.FontSize` is registered on WinUI 2's
+   class and a `{Binding}` on it in markup finds it.  A name no provider
+   has is cached as unknown and resolves to the framework's class.  Test:
+   `winui2test` (an `AnimatedIcon` from markup, its `FallbackIconSource`
+   read through WinUI 2's `FontIconSource.Glyph` member).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

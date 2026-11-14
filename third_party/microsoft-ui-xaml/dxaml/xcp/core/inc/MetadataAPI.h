@@ -86,6 +86,14 @@ namespace DirectUI
             _In_ const xstring_ptr_view& strTypeName,
             _Outptr_ const CClassInfo** ppType);
 
+        // NovaOS: the type a metadata provider (an app's, WinUI 2's) has by
+        // the name in a built-in namespace, or null: what a "using:" xmlns
+        // of a Microsoft.UI.Xaml namespace names (see the .cpp)
+        static _Check_return_ HRESULT TryGetCustomClassInfoByName(
+            _In_ KnownNamespaceIndex eNamespaceIndex,
+            _In_ const xstring_ptr_view& strTypeName,
+            _Outptr_result_maybenull_ const CClassInfo** ppType);
+
         // Resolves a type by its type name. This function may call out to user code (IXamlMetadataProvider) to resolve custom types.
         static _Check_return_ HRESULT GetClassInfoByTypeName(
             _In_ wxaml_interop::TypeName typeName,
@@ -443,6 +451,8 @@ namespace DirectUI
 
         // Try to find a type by the specified full name.
         static _Check_return_ HRESULT TryGetClassInfoByFullName(_In_ const xstring_ptr_view& strTypeFullName, _In_ bool bSearchCustomTypesOnly, _Outptr_ const CClassInfo** ppType);
+        // NovaOS: a registered dependency property's type (see the .cpp)
+        static _Check_return_ HRESULT TryGetRegisteredClassInfo(_In_ wxaml_interop::TypeName typeName, _Outptr_ const CClassInfo** ppType);
 
         // Tries to resolve a DP given its full name using the current parser context.
         // NOTE: This method does not need to use the lock because it is not actually looking for the property on the tables directly,

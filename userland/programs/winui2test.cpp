@@ -35,7 +35,11 @@
  *     the layout overrides called through Windows' overridable interfaces,
  *     so the RadioButtons' ItemsRepeater makes its three RadioButtons, the
  *     NavigationView applies its template, lays out and, its pane open,
- *     makes its two NavigationViewItems.
+ *     makes its two NavigationViewItems;
+ *   - WinUI 2's classes under the framework's own names (Pulsar item 3,
+ *     eighteenth slice): an AnimatedIcon's FallbackIconSource from a
+ *     "using:Microsoft.UI.Xaml.Controls" FontIconSource is WinUI 2's, and a
+ *     binding on its FontSize finds WinUI 2's dependency property.
  *
  *   winui2test        the self-test runs it with no arguments
  */
@@ -474,6 +478,42 @@ static void navigation_checks()
           SUCCEEDED(as(indexValue.Get(), index.GetAddressOf())) && SUCCEEDED(index->get_Value(&selected)) && selected == 1);
 }
 
+/* WinUI 2's own classes named as the framework's are (the framework is
+ * the system Windows.UI.Xaml here, its classes Microsoft.UI.Xaml.* inside
+ * it): an AnimatedIcon's FallbackIconSource set to a FontIconSource from
+ * a "using:Microsoft.UI.Xaml.Controls" xmlns, as WinUI 2's NavigationView
+ * template sets its pane button's, is WinUI 2's FontIconSource (which
+ * WinUI 2's members cast it to, as Calculator's .NET members do), and a
+ * binding on its FontSize finds the dependency property WinUI 2
+ * registered on it */
+static void icon_source_checks()
+{
+    ctl::ComPtr<wuxm::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> icon;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(
+            L"<muxc:AnimatedIcon " XMLNS L"xmlns:muxc='using:Microsoft.UI.Xaml.Controls'>"
+            L"<muxc:AnimatedIcon.FallbackIconSource><muxc:FontIconSource Glyph='&#xE700;' FontSize='{Binding}'/>"
+            L"</muxc:AnimatedIcon.FallbackIconSource></muxc:AnimatedIcon>").Get(), icon.GetAddressOf()) : E_FAIL;
+    CHECK_HR("an AnimatedIcon with a FontIconSource (a binding on its FontSize) as FallbackIconSource loaded from markup", hr);
+    if (FAILED(hr)) {
+        why();
+        return;
+    }
+    ctl::ComPtr<wuxm::IXamlType> iconType, sourceType;
+    ctl::ComPtr<wuxm::IXamlMember> fallback, glyph;
+    ctl::ComPtr<IInspectable> source, g;
+    CHECK("its FallbackIconSource, WinUI 2's FontIconSource (WinUI 2's Glyph member reads it)",
+          SUCCEEDED(winui2_provider()->GetXamlTypeByFullName(
+              wrl_wrappers::HStringReference(L"Microsoft.UI.Xaml.Controls.AnimatedIcon").Get(), iconType.GetAddressOf())) && iconType &&
+          SUCCEEDED(iconType->GetMember(wrl_wrappers::HStringReference(L"FallbackIconSource").Get(), fallback.GetAddressOf())) &&
+          fallback && SUCCEEDED(fallback->GetValue(icon.Get(), source.GetAddressOf())) && source &&
+          SUCCEEDED(winui2_provider()->GetXamlTypeByFullName(
+              wrl_wrappers::HStringReference(L"Microsoft.UI.Xaml.Controls.FontIconSource").Get(), sourceType.GetAddressOf())) &&
+          sourceType && SUCCEEDED(sourceType->GetMember(wrl_wrappers::HStringReference(L"Glyph").Get(), glyph.GetAddressOf())) &&
+          glyph && SUCCEEDED(glyph->GetValue(source.Get(), g.GetAddressOf())) && unboxed_is(g.Get(), L"\xE700"));
+}
+
 static void winui2_checks()
 {
     if (!s_mux)
@@ -643,6 +683,7 @@ static void winui2_checks()
              merged->Append(dictionary.Get()) : E_FAIL);
     default_style_checks();
     navigation_checks();
+    icon_source_checks();
 
     /* WinUI 2's XAML resources, merged as Microsoft's build merges them,
      * where an unpackaged program's ms-appx:///Microsoft.UI.Xaml/Themes/

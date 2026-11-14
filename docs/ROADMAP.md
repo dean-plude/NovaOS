@@ -1548,6 +1548,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   ("Specified cast is not valid", `AnimatedIcon`'s factory 0x80004002).
   Next: that, then the CI check that it computes `2 + 2`, which ticks
   this step.
+  Twenty-fourth part done (Pulsar item 3, eighteenth slice): WinUI 2's
+  classes named as the framework's own (`Microsoft.UI.Xaml.Controls.
+  FontIconSource`, `IconSource`): markup's `using:Microsoft.UI.Xaml...`
+  namespaces and `DependencyProperty.Register`'s owner and property
+  types now take the metadata providers' class of the name before the
+  framework's, so the pane button's fallback icon is WinUI 2's
+  `FontIconSource` and a binding on its `FontSize` finds WinUI 2's
+  property.  Test `winui2test`.  Calculator gets further and stops on an
+  unhandled `E_NOTIMPL` from `NavigationView`'s layout (the core's
+  `GetLocalizedResourceString`, which a windowed `Popup` asks for its
+  host's name, is not built).  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
 
 ---
 

@@ -155,9 +155,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   template; and WinUI 2's overrides called: the `RadioButtons`'
   `ItemsRepeater` making its three `RadioButton`s, the `NavigationView`
   applying its template, laid out, and with its pane opened making its
-  two `NavigationViewItem`s), `wrtapptest`
-  (`ApplicationData.LocalSettings`, a setting not set looking up as
-  null, `ResourceContext.QualifierValues` and `Languages`,
+  two `NavigationViewItem`s; and WinUI 2's classes named as the
+  framework's own: an `AnimatedIcon` whose `FallbackIconSource` is a
+  `FontIconSource` from a `using:Microsoft.UI.Xaml.Controls` xmlns, with
+  a binding on its `FontSize`, gets WinUI 2's `FontIconSource`),
+  `wrtapptest` (`ApplicationData.LocalSettings`, a setting not set
+  looking up as null, `ResourceContext.QualifierValues` and `Languages`,
   `User.GetFromId`, `NamedPolicy`; 64- and 32-bit), `wrtglobtest`
   (`ApplicationLanguages`, `Language`, `GeographicRegion`,
   `GlobalizationPreferences`, `DecimalFormatter`, `CurrencyFormatter`,

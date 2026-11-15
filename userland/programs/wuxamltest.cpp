@@ -71,6 +71,7 @@
 #include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.markup.h>
 #include <windows.ui.xaml.media.h>
+#include <windows.ui.xaml.media.animation.h>
 #include <windows.ui.xaml.media.imaging.h>
 
 namespace wux = ABI::Windows::UI::Xaml;
@@ -772,6 +773,20 @@ static void navigation_transition_checks()
           common && SUCCEEDED(as(common.Get(), commonInfo.GetAddressOf())) &&
           SUCCEEDED(commonInfo->put_IsStaggeringEnabled(true)) &&
           SUCCEEDED(commonInfo->get_IsStaggeringEnabled(&staggering)) && staggering);
+
+    /* and by its Windows name, as a UWP app makes one (Calculator's main
+     * page navigates with a new EntranceNavigationTransitionInfo): the
+     * Windows interfaces answered, the one object behind them */
+    namespace wuxma = ABI::Windows::UI::Xaml::Media::Animation;
+    ctl::ComPtr<IInspectable> entrance;
+    ctl::ComPtr<wuxma::IEntranceNavigationTransitionInfo> entranceInfo;
+    ctl::ComPtr<wuxma::INavigationTransitionInfo> entranceBase;
+    CHECK_HR("Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo activated by its Windows name",
+             RoActivateInstance(wrl_wrappers::HStringReference(L"Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo").Get(),
+                                entrance.GetAddressOf()));
+    CHECK("which answers Windows' IEntranceNavigationTransitionInfo and INavigationTransitionInfo",
+          entrance && SUCCEEDED(entrance.As(&entranceInfo)) && SUCCEEDED(entrance.As(&entranceBase)) &&
+          identity(entranceBase.Get()) == identity(entrance.Get()));
 }
 
 /* the framework started as xamlapptest starts it */
@@ -866,7 +881,8 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Controls.Button", L"Windows.UI.Xaml.Controls.TextBlock", L"Windows.UI.Xaml.UIElement",
     L"Windows.UI.Xaml.DependencyProperty",
     L"Windows.UI.Xaml.Markup.XamlReader", L"Windows.UI.Xaml.Controls.Control",
-    L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer"};
+    L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer",
+    L"Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo"};
 
 static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
 {

@@ -14,6 +14,10 @@
 #include <wrl/client.h>
 #include <roerrorapi.h>
 
+#ifdef NOVA_WRL_XAML_FACES
+extern "C" HRESULT nova_xaml_face_query(REFIID iid, void **out, HRESULT (*impl)(void *, REFIID, void **), void *ctx);
+#endif
+
 namespace Microsoft { namespace WRL {
 
 template <unsigned int flags> struct RuntimeClassFlags { static const unsigned int value = flags; };
@@ -368,7 +372,19 @@ protected:
             typedef typename Details::FindComposable<Ts...>::type Composable;
             if constexpr (!Details::IsSame<Composable, Details::Nil>::value) {
                 ComPtr<IInspectable> &base = static_cast<Composable *>(this)->GetComposableBase();
-                if (base) return base->QueryInterface(riid, ppv);
+                if (base) {
+                    HRESULT hr = base->QueryInterface(riid, ppv);
+#ifdef NOVA_WRL_XAML_FACES
+                    // (NovaOS: and, for a class composed over the XAML
+                    // framework's, a Windows.UI.Xaml interface of its own
+                    // lifted ones through the framework's faces: a UWP
+                    // app's EntranceNavigationTransitionInfo asked for
+                    // Windows' IEntranceNavigationTransitionInfo;
+                    // src/windows_faces.cpp)
+                    if (hr == E_NOINTERFACE) hr = nova_xaml_face_query(riid, ppv, &OwnQuery, this);
+#endif
+                    return hr;
+                }
             }
             return FallbackQuery(riid, ppv);
         }
@@ -376,6 +392,16 @@ protected:
         return S_OK;
     }
     virtual HRESULT FallbackQuery(REFIID, void **ppv) { *ppv = nullptr; return E_NOINTERFACE; }
+#ifdef NOVA_WRL_XAML_FACES
+    // (the class's own interfaces, for a face's target)
+    static HRESULT OwnQuery(void *self, REFIID riid, void **ppv)
+    {
+        *ppv = nullptr;
+        if (!Entries::Query(static_cast<RuntimeClass *>(self), riid, ppv)) return E_NOINTERFACE;
+        static_cast<IUnknown *>(*ppv)->AddRef();
+        return S_OK;
+    }
+#endif
     unsigned long InternalAddRef() throw() { return static_cast<unsigned long>(::InterlockedIncrement(&refcount_)); }
     unsigned long InternalRelease() throw()
     {

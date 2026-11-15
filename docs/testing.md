@@ -198,13 +198,17 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `NavigationThemeTransition` and the six transition infos, activated by
   name, composed over the framework's `Transition` and
   `NavigationTransitionInfo`, their dependency properties set and read
-  back), `xamlapptest` (Microsoft's XAML framework started as a desktop
-  app starts it, built from its sources: `Application.Start` on the
-  desktop path with a `DispatcherQueue`, the app's initialization
-  callback composing its `Application` over the framework's,
-  `WindowsXamlManager` starting it on the thread and raising
-  `OnLaunched`, `XamlReader.Load` of a `Grid` holding a `TextBlock`
-  there, the framework's theme resources and control styles found in
+  back, and
+  `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo`
+  activated by its Windows name, answering Windows'
+  `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`),
+  `xamlapptest` (Microsoft's XAML framework started as a desktop app
+  starts it, built from its sources: `Application.Start` on the desktop
+  path with a `DispatcherQueue`, the app's initialization callback
+  composing its `Application` over the framework's, `WindowsXamlManager`
+  starting it on the thread and raising `OnLaunched`, `XamlReader.Load`
+  of a `Grid` holding a `TextBlock` there, the framework's theme
+  resources and control styles found in
   `Microsoft.UI.Xaml.Resources.19H1.dll` and the core's resource manager
   made, queued work run from the desktop message loop, and
   `Application.Exit` returning from `Application.Start`), `xamlbasetest`

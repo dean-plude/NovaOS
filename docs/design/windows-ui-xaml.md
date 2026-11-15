@@ -1775,5 +1775,22 @@ vendors.
    as Microsoft's answers when its table has no row.  Test: `wuxamltest`
    (the button peer's localized control type).
 
+   Pulsar item 3, twentieth slice: objects handed back to the app.  A
+   face's `Object` result on a call from the app into the framework
+   (`DependencyObject.GetValue`, `ContentControl.Content`, ...) goes
+   through `nova_object_app_out` (`windows_faces.cpp`; `winfaces.py`
+   emits it, except for a composable class's inner object): a framework
+   box of a Windows-named enum or struct is boxed again as Windows boxes
+   it, and a framework object whose class has a Windows name is handed
+   over as the face of that class's default interface, which names the
+   Windows class, as `nova_object_to_app` already did for the arguments
+   of the app's handlers.  .NET Native makes a runtime callable wrapper
+   by that name, so Calculator's `(SolidColorBrush)GetValue(...)` (its
+   title bar's button brushes, set by a style) no longer fails.  Only
+   objects whose vtable lies in `Windows.UI.Xaml.dll` are crossed:
+   WinUI 2's classes share the framework's `Microsoft.UI.Xaml` names, and
+   an app's object composed over a framework class is the app's.  Test:
+   `wuxamltest` (a `SolidColorBrush` property's value read back).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

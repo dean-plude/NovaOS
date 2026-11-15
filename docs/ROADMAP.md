@@ -1568,6 +1568,15 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and stops on "Specified cast is not valid" (0x80004002) thrown from one
   of its `Loaded` handlers.  Next: that, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Twenty-sixth part done (Pulsar item 3, twentieth slice): an object a
+  framework call returns as `Object` (`GetValue`, `Content`) reaches the
+  app as its Windows class (`Windows.UI.Xaml.Media.SolidColorBrush`, not
+  the framework's `Microsoft.UI.Xaml` name), so Calculator's title bar
+  casts its button brushes.  Test `wuxamltest`.  Calculator stops next as
+  its main page navigates: `EntranceNavigationTransitionInfo` is not
+  activated by its `Windows.UI.Xaml.Media.Animation` name (0x802B000A).
+  Next: that, then the CI check that it computes `2 + 2`, which ticks
+  this step.
 
 ---
 

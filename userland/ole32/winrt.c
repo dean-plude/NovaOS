@@ -594,8 +594,10 @@ WINOLEAPI_(BOOL) RoOriginateErrorW(HRESULT hr, UINT32 len, const WCHAR *msg)
     line[k] = 0;
     OutputDebugStringA(line);
     /* (with where it was raised: a later fail fast's stack no longer has
-     * the call that failed) */
-    trace_stack("originated at", 10);
+     * the call that failed; 24 frames, as a .NET Native exception is
+     * originated from its catch handler, which runs above the runtime's
+     * dispatch frames and the throw site) */
+    trace_stack("originated at", 24);
     SetRestrictedErrorInfo((IUnknown *)e);
     rerr_release(e);
     return TRUE;

@@ -335,6 +335,26 @@ static void windows_checks()
           SUCCEEDED(dobj->GetValue(answer.Get(), read.GetAddressOf())) && read && SUCCEEDED(read.As(&readValue)) &&
           SUCCEEDED(readValue->GetInt32(&v)) && v == 42);
 
+    /* a framework object read back through GetValue comes under its Windows
+     * class (Calculator's TitleBar casts its brush property's value to
+     * Windows.UI.Xaml.Media.SolidColorBrush) */
+    wrl_wrappers::HStringReference brushName(L"Windows.UI.Xaml.Media.SolidColorBrush");
+    wux::Interop::TypeName brushType = {brushName.Get(), wux::Interop::TypeKind_Metadata};
+    ctl::ComPtr<wux::IDependencyProperty> brushProperty;
+    ctl::ComPtr<IInspectable> brush, readBrush;
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> brushReader;
+    HSTRING brushClass = nullptr;
+    CHECK("a SolidColorBrush property's value read back as Windows.UI.Xaml.Media.SolidColorBrush", dps && dobj &&
+          SUCCEEDED(dps->Register(wrl_wrappers::HStringReference(L"ButtonBackground").Get(), brushType, ownerType, nullptr,
+                                  brushProperty.GetAddressOf())) &&
+          SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", brushReader.GetAddressOf())) &&
+          SUCCEEDED(brushReader->Load(wrl_wrappers::HStringReference(L"<SolidColorBrush " XMLNS L" Color='Transparent'/>").Get(),
+                                      brush.GetAddressOf())) &&
+          SUCCEEDED(dobj->SetValue(brushProperty.Get(), brush.Get())) &&
+          SUCCEEDED(dobj->GetValue(brushProperty.Get(), readBrush.GetAddressOf())) && readBrush &&
+          SUCCEEDED(readBrush->GetRuntimeClassName(&brushClass)) && is(brushClass, L"Windows.UI.Xaml.Media.SolidColorBrush"));
+    WindowsDeleteString(brushClass);
+
     /* XamlReader.Load through Windows' statics */
     ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
     ctl::ComPtr<IInspectable> page;

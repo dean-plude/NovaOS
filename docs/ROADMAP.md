@@ -1577,6 +1577,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   activated by its `Windows.UI.Xaml.Media.Animation` name (0x802B000A).
   Next: that, then the CI check that it computes `2 + 2`, which ticks
   this step.
+  Twenty-seventh part done (Pulsar item 3, twenty-first slice): the
+  phone library's navigation transitions (`NavigationThemeTransition`,
+  `EntranceNavigationTransitionInfo` and the other five transition infos)
+  are registered under their `Windows.UI.Xaml.Media.Animation` names, so
+  a UWP app activates them, and they answer Windows' interfaces through
+  the framework's faces.  Test `wuxamltest`.  Calculator activates its
+  `EntranceNavigationTransitionInfo` and still stops in the same main
+  page `Loaded` handler: a framework call returns XAML parse error
+  0x802B000A (`Application.LoadComponent` or `Control.ApplyTemplate`
+  turn any failure into it) with no error logged beneath.  Next: find
+  that failure, then the CI check that it computes `2 + 2`, which ticks
+  this step.
 
 ---
 

@@ -1792,5 +1792,22 @@ vendors.
    an app's object composed over a framework class is the app's.  Test:
    `wuxamltest` (a `SolidColorBrush` property's value read back).
 
+   Pulsar item 3, twenty-first slice: the phone library's classes by
+   their Windows names.  The registry's `ActivatableClassId` keys for
+   `Windows.UI.Xaml.dll` (`kernel/um/um_wuxaml_classes.h`, written by
+   `tools/winrt/wuxclasses.py`) listed only classes in the framework's
+   own table (`Factories.g.cpp`), so `RoGetActivationFactory` of
+   `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo`
+   never reached the DLL, which already served it
+   (`nova_xaml_windows_factory` falls back to `nova_phone_factory`).
+   `wuxclasses.py` now also reads `src/phone/phone_factories.cpp`'s table
+   (508 classes).  The phone classes are WRL classes composed over the
+   framework's `Transition` and `NavigationTransitionInfo`; NovaOS's WRL
+   (`inc/wrl/implements.h`), built with `NOVA_WRL_XAML_FACES` (the phone
+   sources' `precomp.h`), answers a Windows interface their base does not
+   through `nova_xaml_face_query` over the class's own lifted interfaces,
+   so the object answers Windows' `IEntranceNavigationTransitionInfo`.
+   Test: `wuxamltest` (the transition info activated by its Windows name).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

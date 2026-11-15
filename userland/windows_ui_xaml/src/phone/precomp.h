@@ -10,6 +10,10 @@
 
 #include <new>
 
+// (NovaOS: the classes, composed over the framework's, answer Windows'
+// interfaces through the framework's faces: inc/wrl/implements.h)
+#define NOVA_WRL_XAML_FACES 1
+
 #include <windows.h>
 #include <strsafe.h>
 

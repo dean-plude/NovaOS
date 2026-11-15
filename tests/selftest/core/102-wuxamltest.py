@@ -12,7 +12,9 @@
 # framework's IComponentConnector), and an app's control composed over
 # Windows.UI.Xaml.Controls.Control whose Windows MeasureOverride the layout calls,
 # and the phone library's navigation transitions (a Frame's
-# NavigationThemeTransition and the transition infos) activated by name,
+# NavigationThemeTransition and the transition infos) activated by name
+# (EntranceNavigationTransitionInfo also by its Windows name, answering Windows'
+# interfaces),
 # the helper a XAML root's layout bounds come through (a page's measure), and
 # a UWP window's Activated handler on the thread's CoreWindow, and
 # UIViewSettings.GetForCurrentView on that thread
@@ -23,7 +25,8 @@ DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as W
        'app\'s control composed over `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the framework\'s layout calls; '
        'and the phone library\'s navigation transitions, a Frame\'s `NavigationThemeTransition` and the six transition infos, '
        'activated by name, composed over the framework\'s `Transition` and `NavigationTransitionInfo`, their dependency '
-       'properties set and read back)')
+       'properties set and read back, and `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo` activated by its '
+       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`)')
 TESTS = [
     Test('wuxamltest', 'wuxamltest', [r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
 ]

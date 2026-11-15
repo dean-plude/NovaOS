@@ -369,6 +369,14 @@ dependency property registration's owner and property types resolve
 through; components/ExtMetadataProvider/XamlLibMetadataProvider.cpp
 leaves its dependency properties alone when the process exits.
 
+For the error behind a parse failure (Pulsar item 3, twenty-second
+slice), each change marked "NovaOS:": core/error/ErrorService.cpp's
+AddError writes each reported error to the debug log; core/Parser/
+XamlType.cpp's CreateInstance names a type that was not resolved; and
+dxaml/lib's FrameworkApplication_Partial.cpp (LoadComponent),
+Control_Partial.cpp (ApplyTemplate) and DataTemplate_Partial.cpp
+(LoadContent) log the failure they turn into E_XAMLPARSEFAILED.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

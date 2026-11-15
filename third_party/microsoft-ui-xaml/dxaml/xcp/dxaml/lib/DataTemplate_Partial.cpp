@@ -22,6 +22,10 @@ _Check_return_ HRESULT DirectUI::DataTemplate::LoadContentImpl(_Outptr_ xaml::ID
     HRESULT hr = CoreImports::CDataTemplate_LoadContent(static_cast<CDataTemplate*>(GetHandle()), returnValueNative.ReleaseAndGetAddressOf());
     if (FAILED(hr) && !m_elementFactory)
     {
+        // NovaOS: keep the real failure in the debug log before it becomes E_XAMLPARSEFAILED.
+        WCHAR line[96];
+        swprintf_s(line, L"xaml: DataTemplate.LoadContent failed hr=0x%08x\n", static_cast<unsigned>(hr));
+        ::OutputDebugStringW(line);
         // Markup case only: translate a parse failure to XamlParseFailed. The CLR knows how to
         // translate this to a XamlParseException. For a code-authored template there is no parse,
         // so the callback's original failure HRESULT is propagated unchanged.

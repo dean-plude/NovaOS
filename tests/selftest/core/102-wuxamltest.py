@@ -17,7 +17,8 @@
 # interfaces),
 # the helper a XAML root's layout bounds come through (a page's measure), and
 # a UWP window's Activated handler on the thread's CoreWindow, and
-# UIViewSettings.GetForCurrentView on that thread
+# UIViewSettings.GetForCurrentView on that thread, and markup naming an
+# unknown element failing with the parser's error in the debug log
 DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it: '
        '`Windows.UI.Xaml.Controls.Button` activated by its Windows name and driven through Windows\' interfaces, a '
        'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names (a `SolidColorBrush` property\'s value read back as `Windows.UI.Xaml.Media.SolidColorBrush`), `XamlReader.Load` and the page\'s '
@@ -26,7 +27,7 @@ DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as W
        'and the phone library\'s navigation transitions, a Frame\'s `NavigationThemeTransition` and the six transition infos, '
        'activated by name, composed over the framework\'s `Transition` and `NavigationTransitionInfo`, their dependency '
        'properties set and read back, and `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo` activated by its '
-       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`)')
+       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`; and markup naming an unknown element failing, with the parser\'s error, its line and column, in the debug log)')
 TESTS = [
-    Test('wuxamltest', 'wuxamltest', [r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
+    Test('wuxamltest', 'wuxamltest', [r'xaml: error \d+ hr=0x802b000a line 1 col \d+', r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
 ]

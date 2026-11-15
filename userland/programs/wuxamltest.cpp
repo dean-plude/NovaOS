@@ -420,6 +420,15 @@ static void windows_checks()
           SUCCEEDED(popup->get_Child(popupChild.GetAddressOf())) && popupChild &&
           SUCCEEDED(popup->get_IsOpen(&popupOpen)) && !popupOpen);
 
+    /* markup naming an element no type stands for fails, and the parser's error
+     * (its code, line and column) reaches the debug log ("xaml: error"), not
+     * only the bare XAML parse failure Load returns (102-wuxamltest.py checks the
+     * line) */
+    ctl::ComPtr<IInspectable> unknownObject;
+    CHECK("XamlReader.Load of an unknown element fails", reader &&
+          FAILED(reader->Load(wrl_wrappers::HStringReference(L"<Grid " XMLNS L"><NoSuchElement/></Grid>").Get(),
+                              unknownObject.GetAddressOf())) && !unknownObject);
+
     /* the automation peers a page's elements make (Calculator asks for them):
      * the text block's and the button's, kept by the element */
     namespace wuxap = ABI::Windows::UI::Xaml::Automation::Peers;

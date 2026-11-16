@@ -468,10 +468,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   signed by themselves, remove), Settings: `start ms-settings:display`
   opens Display, its search box (Ctrl+F, "printer", Enter) goes to
   Printers; `settings check` draws every page at three window sizes, at
-  its top and scrolled to its end, programs started from the Start menu
-  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
-  window, and `hello`, a console program, in a Terminal, `crash kernel`,
-  a deliberate kernel fault whose serial log must show a backtrace with
+  its top and scrolled to its end, packaged apps in the shell: `appx`
+  installs the test package, the Start menu lists its application by the
+  manifest's name and tile logo and starts it packaged (Win+S, the name,
+  Enter), and Settings > Apps lists the package and uninstalls it (Down,
+  Delete, Enter), programs started from the Start menu (Win+S, the name,
+  Enter): `winhello`, a GUI program, with no Terminal window, and
+  `hello`, a console program, in a Terminal, `crash kernel`, a
+  deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 

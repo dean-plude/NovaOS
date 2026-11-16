@@ -13,10 +13,8 @@
  *   Io          activity IDs on IRPs (none kept), device properties (the
  *               unified property store arrives with PnP: none found), the
  *               initiator and requestor processes, a driver's full path
- *   Po          the power framework (PoFx): components are kept active, so
- *               an activation reports the active condition at once and an
- *               idle request the idle condition; the device is never powered
- *               down by it (no runtime power management yet)
+ *   Po          the system wake source (NovaOS's sleep has none to report);
+ *               the power framework (PoFx: runtime idle) is po.c's
  *   Ps          a process's ID
  */
 #include "nt.h"
@@ -210,9 +208,7 @@ NT_API NTSTATUS nt_IoUnregisterPlugPlayNotificationEx(void *handle) { return nt_
 /* -----------------------------------------------------------------------
  * Po: the power framework
  * ----------------------------------------------------------------------- */
-/* (PoFxRegisterDevice, the activation calls and the completions are po.c's) */
-NT_API void nt_PoFxCompleteDevicePowerNotRequired(void *h) { (void)h; }
-NT_API void nt_PoFxSetDeviceIdleTimeout(void *h, UINT64 timeout) { (void)h; (void)timeout; }
+/* (the power framework, PoFx, is po.c's) */
 
 /* Whether the IRP's system wake (a wait/wake IRP's) was the system's wake
  * source: NovaOS does not sleep */

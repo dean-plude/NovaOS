@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The appx self-test's package (tools/appx/mktest.py): a full trust
      program (appxtest.exe) and an in-process Windows Runtime class
-     (greeter.dll), its names in resources.pri -->
+     (greeter.dll), its names in resources.pri, its tile logo in two
+     scales (Assets\Square44x44Logo.scale-100.png and .scale-200.png) -->
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
@@ -23,7 +24,8 @@
   <Applications>
     <Application Id="App" Executable="appxtest.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="ms-resource:AppDisplayName" Description="The appx self-test's package"
-                          BackgroundColor="transparent" Square150x150Logo="appxtest.exe" Square44x44Logo="appxtest.exe" />
+                          BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png" />
     </Application>
   </Applications>
   <Capabilities>

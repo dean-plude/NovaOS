@@ -46,7 +46,13 @@
  * - names the package and its applications with the manifest's strings,
  *   an "ms-resource:" string looked up in the package's resources.pri
  *   (shlwapi's SHLoadIndirectString, through MRM.dll);
- * - adds each listed application to the Start menu.
+ * - records each application's tile logo (its VisualElements'
+ *   Square44x44Logo, else Square150x150Logo: the file on disk, a scale or
+ *   target-size variant of it as Windows' resource lookup picks one) and
+ *   whether it is listed (AppListEntry); the shell (kernel/wm/desktop.c)
+ *   lists the package's applications in the Start menu from the package
+ *   repository, as Windows' Start lists packaged apps, and Settings > Apps
+ *   lists the packages and removes them (kernel/apps/settings_apps.c).
  * A bundle (.msixbundle, .appxbundle: AppxMetadata\AppxBundleManifest.xml
  * naming the packages inside it) is checked as a package is (its block
  * map, its signature, its publisher), then the application package for
@@ -100,14 +106,10 @@ __declspec(dllimport) LONG WINAPI BCryptHash(void *alg, PUCHAR secret, ULONG sle
 #define CLASSES_KEY L"Software\\Classes\\ActivatableClasses\\Package"
 #define UNSIGNED_OID_A "OID.2.25.311729368913984317654407730594956997722=1"
 #define UNSIGNED_OID L"" UNSIGNED_OID_A
-#define CSIDL_PROGRAMS_ 0x02
 #define CSIDL_PROGRAM_FILES_ 0x26
 #define BLOCK 65536
 
 static const GUID IID_IXmlReader_ = { 0x7279fc81, 0x709d, 0x4095, { 0xb6, 0x3d, 0x69, 0xfe, 0x4b, 0x0d, 0x90, 0x30 } };
-static const GUID CLSID_ShellLink_ = { 0x00021401, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
-static const GUID IID_IShellLinkW_ = { 0x000214F9, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
-static const GUID IID_IPersistFile_ = { 0x0000010B, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID CLSID_ApplicationActivationManager_ = { 0x45BA127D, 0x10A8, 0x46EA, { 0x8A, 0xB7, 0x56, 0xEA, 0x90, 0x78, 0x94, 0x3C } };
 static const GUID IID_IApplicationActivationManager_ = { 0x2E941141, 0x7F97, 0x4756, { 0xBA, 0x1D, 0x9D, 0xEC, 0xDE, 0x89, 0x4A, 0x3D } };
 
@@ -371,7 +373,7 @@ static void base64(const BYTE *p, int n, WCHAR *out)
 /* ---- the package ---- */
 
 typedef struct {
-    WCHAR *id, *exe, *entry, *behavior, *display, *show;
+    WCHAR *id, *exe, *entry, *behavior, *display, *show, *logo;
 } App;
 
 typedef struct {
@@ -387,7 +389,7 @@ typedef struct {
 typedef struct {
     Zip zip;
     Node *manifest;
-    WCHAR *name, *publisher, *version, *arch, *resource, *display, *pubdisplay;
+    WCHAR *name, *publisher, *version, *arch, *resource, *display, *pubdisplay, *logo;
     WCHAR family[300], full[300], pubid[16];
     int framework;
     App apps[16];
@@ -526,6 +528,7 @@ static int read_manifest(Package *pk)
     pk->display = wcopy(text(child(props, L"DisplayName")));
     pk->pubdisplay = wcopy(text(child(props, L"PublisherDisplayName")));
     pk->framework = !_wcsicmp(text(child(props, L"Framework")), L"true");
+    pk->logo = wcopy(text(child(props, L"Logo")));
     Node *deps = child(p, L"Dependencies");
     for (Node *d = child(deps, L"PackageDependency"); d && pk->ndeps < 16; d = sibling(d, L"PackageDependency")) {
         Dependency *dp = &pk->deps[pk->ndeps++];
@@ -546,6 +549,8 @@ static int read_manifest(Package *pk)
         ap->entry = wcopy(attr(a, L"EntryPoint") ? attr(a, L"EntryPoint") : L"");
         ap->display = wcopy(attr(ve, L"DisplayName") ? attr(ve, L"DisplayName") : pk->display);
         ap->show = wcopy(attr(ve, L"AppListEntry") ? attr(ve, L"AppListEntry") : L"default");
+        ap->logo = wcopy(attr(ve, L"Square44x44Logo") ? attr(ve, L"Square44x44Logo") :
+                         attr(ve, L"Square150x150Logo") ? attr(ve, L"Square150x150Logo") : pk->logo);
         /* uap10:RuntimeBehavior, or what the entry point implies (a full
          * trust program, or a UWP app's CoreApplication) */
         const WCHAR *rb = attr(a, L"RuntimeBehavior");
@@ -689,32 +694,45 @@ static void resolve(const WCHAR *full, const WCHAR *s, WCHAR *out, UINT cap)
     }
 }
 
-static int start_menu_link(const WCHAR *exe, const WCHAR *dir, const WCHAR *name, const WCHAR *desc, WCHAR *lnk)
+/* The file the manifest's logo @rel names, in the package's folder @root:
+ * the file itself, else one of its qualified variants beside it
+ * (Assets\Logo.png as Assets\Logo.targetsize-48.png, Logo.scale-200.png,
+ * ...: a target size of 48 first, then the scales from 200 down, as
+ * Windows' resource lookup picks one for a list's icon; high-contrast
+ * variants are skipped); "" when there is none */
+static void logo_file(const WCHAR *root, const WCHAR *rel, WCHAR *out, size_t cap)
 {
-    typedef HRESULT (STDMETHODCALLTYPE *SetStr)(void *, LPCWSTR);
-    typedef HRESULT (STDMETHODCALLTYPE *SetIcon)(void *, LPCWSTR, int);
-    typedef HRESULT (STDMETHODCALLTYPE *Qi)(void *, REFIID, void **);
-    typedef HRESULT (STDMETHODCALLTYPE *Save)(void *, LPCOLESTR, BOOL);
-    WCHAR folder[MAX_PATH], clean[MAX_PATH];
-    void *sl = NULL, *pf = NULL;
-    int at = 0;
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_PROGRAMS_, NULL, 0, folder))) return 0;
-    for (const WCHAR *p = name; *p && at < 100; p++)            /* (a file name) */
-        clean[at++] = wcschr(L"\\/:*?\"<>|", *p) ? '_' : *p;
-    clean[at] = 0;
-    swprintf(lnk, MAX_PATH, L"%ls\\%ls.lnk", folder, clean);
-    if (FAILED(CoCreateInstance(&CLSID_ShellLink_, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW_, &sl)) || !sl) return 0;
-    ((SetStr)VT(sl)[20])(sl, exe);                             /* SetPath */
-    ((SetStr)VT(sl)[9])(sl, dir);                              /* SetWorkingDirectory */
-    ((SetStr)VT(sl)[7])(sl, desc);                             /* SetDescription */
-    ((SetIcon)VT(sl)[17])(sl, exe, 0);                         /* SetIconLocation */
-    HRESULT hr = ((Qi)VT(sl)[0])(sl, &IID_IPersistFile_, &pf);
-    if (SUCCEEDED(hr)) {
-        hr = ((Save)VT(pf)[6])(pf, lnk, TRUE);
-        ((IUnknown *)pf)->lpVtbl->Release(pf);
-    }
-    ((IUnknown *)sl)->lpVtbl->Release(sl);
-    return SUCCEEDED(hr);
+    static const WCHAR *const pref[] = { L".targetsize-48", L".scale-200", L".scale-150", L".scale-125",
+                                         L".scale-100", L".targetsize-", L".scale-" };
+    WCHAR path[MAX_PATH * 2], pat[MAX_PATH * 2], stem[MAX_PATH], name[MAX_PATH];
+    out[0] = 0;
+    if (!rel || !rel[0] || wcslen(rel) >= MAX_PATH) return;
+    wcscpy(name, rel);
+    for (WCHAR *c = name; *c; c++) if (*c == '/') *c = '\\';
+    if (!safe_name(name)) return;                        /* (inside the package's folder) */
+    swprintf(path, MAX_PATH * 2, L"%ls\\%ls", root, name);
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) { wcsncpy(out, path, cap - 1); out[cap - 1] = 0; return; }
+    WCHAR *slash = wcsrchr(path, '\\'), *dot = wcsrchr(path, '.');
+    if (!slash || !dot || dot < slash || dot - slash - 1 >= MAX_PATH) return;
+    wcsncpy(stem, slash + 1, (size_t)(dot - slash - 1));
+    stem[dot - slash - 1] = 0;
+    size_t dirn = (size_t)(slash - path) + 1;
+    swprintf(pat, MAX_PATH * 2, L"%.*ls%ls.*%ls", (int)dirn, path, stem, dot);
+    int best = (int)(sizeof pref / sizeof pref[0]);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const WCHAR *q = fd.cFileName + wcslen(stem);       /* ".scale-200.png" */
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || wcsstr(q, L"contrast-")) continue;
+        for (int i = 0; i < best; i++)
+            if (!_wcsnicmp(q, pref[i], wcslen(pref[i]))) {
+                best = i;
+                swprintf(out, cap, L"%.*ls%ls", (int)dirn, path, fd.cFileName);
+                break;
+            }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
 }
 
 /* @full unregistered and its folder deleted: 0 if the folder is still
@@ -1109,6 +1127,9 @@ static int install_data(const BYTE *data, size_t size, const WCHAR *file, int al
     set_str(pkey, L"DisplayName", display);
     set_str(pkey, L"PublisherDisplayName", pubdisplay);
     set_dword(pkey, L"Framework", (DWORD)pk.framework);
+    WCHAR logo[MAX_PATH * 2];
+    logo_file(root, pk.logo, logo, MAX_PATH * 2);
+    set_str(pkey, L"Logo", logo);
     RegCloseKey(pkey);
     /* machine-wide: the package, its dependencies' families, its family's member */
     HKEY mk = machine_key(L"Packages", pk.full, NULL, 1), fk = machine_key(L"Families", pk.family, NULL, 1);
@@ -1134,18 +1155,17 @@ static int install_data(const BYTE *data, size_t size, const WCHAR *file, int al
     }
     for (int i = 0; i < pk.napps; i++) {
         App *a = &pk.apps[i];
-        WCHAR name[512], exe[MAX_PATH * 2], lnk[MAX_PATH] = L"";
+        WCHAR name[512];
         if (!safe_name(a->exe)) { remove_package(pk.full); return !fail("%ls: a program outside the package", a->exe); }
         resolve(pk.full, a->display, name, 512);
-        swprintf(exe, MAX_PATH * 2, L"%ls\\%ls", root, a->exe);
-        if (_wcsicmp(a->show, L"none") && !start_menu_link(exe, root, name, display, lnk))
-            printf("appx: %ls: no Start menu entry\n", name);
+        logo_file(root, a->logo, logo, MAX_PATH * 2);
         if (!(k = repo_key(L"Packages\\%ls\\Applications\\%ls", pk.full, a->id, 1))) continue;
         set_str(k, L"Executable", a->exe);
         set_str(k, L"EntryPoint", a->entry);
         set_str(k, L"RuntimeBehavior", a->behavior);
         set_str(k, L"DisplayName", name);
-        set_str(k, L"StartMenuLink", lnk);
+        set_str(k, L"AppListEntry", a->show);               /* ("none": not in Start) */
+        set_str(k, L"Logo", logo);
         RegCloseKey(k);
     }
     for (int i = 0; i < pk.nservers; i++) {

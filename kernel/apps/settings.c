@@ -1,6 +1,7 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               storage, network, Wi-Fi, firewall (settings_firewall.c), accounts, time & language, printers and about pages
+ *               apps (settings_apps.c), storage, network, Wi-Fi, firewall (settings_firewall.c), accounts,
+ *               time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  *
  * Every page is an entry of g_pages (its name, glyph, ms-settings: names,
@@ -1891,6 +1892,7 @@ static int paint_time(Settings *st, GdiRect c, int x, int y, int w)     { (void)
 static int paint_firewall(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return FirewallPagePaint(x, y, w); }
 static int paint_printers(Settings *st, GdiRect c, int x, int y, int w) { (void)c; return page_printers(st, x, y, w); }
 static int paint_about(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; (void)st; return page_about(x, y, w); }
+static int paint_apps(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return AppsPagePaint(x, y, w); }
 
 static void mouse_system(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
 {
@@ -2006,6 +2008,13 @@ static void mouse_firewall(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y
 }
 
 static bool tick_firewall(Settings *st) { (void)st; return FirewallPageTick(); }   /* a profile, rule or network changed */
+static void mouse_apps(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) AppsPageMouse(px, py, pw, x, y);
+}
+static bool key_apps(Settings *st, const KeyEvent *k) { (void)st; return AppsPageKey(k); }
+static bool tick_apps(Settings *st) { (void)st; return AppsPageTick(); }   /* an uninstall finished, packages changed */
 
 static bool key_network(Settings *st, const KeyEvent *k)  { if (!st->net_edit) return false; net_key(st, k); return true; }
 static bool key_accounts(Settings *st, const KeyEvent *k) { if (!st->acc_form) return false; accounts_key(st, k); return true; }
@@ -2026,6 +2035,9 @@ static const SetPage g_pages[] = {
         "personalization personalization-background personalization-colors themes",
         "personalization wallpaper background theme colors icons icon set picture",
         page_personalize, mouse_personalize, NULL, tick_thumbs, true },
+    [SETTINGS_APPS] = { "Apps", GL_CODE, "appsfeatures installed-apps appsforwebsites",
+        "apps installed uninstall remove programs packages msix appx store features",
+        paint_apps, mouse_apps, key_apps, tick_apps, false },
     [SETTINGS_STORAGE] = { "Storage", GL_FOLDER, "storagesense savelocations",
         "storage disk drive space memory ram",
         paint_storage, NULL, NULL, tick_storage, false },

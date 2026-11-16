@@ -66,6 +66,9 @@ NT_STATUS BthHidConnect(NT_DEVICE_OBJECT *pdo, BthHidInput input, void *ctx);
 NT_STATUS BthHidSend(NT_DEVICE_OBJECT *pdo, bool intr, const UINT8 *data, UINT32 len);
 void      BthHidDisconnect(NT_DEVICE_OBJECT *pdo);
 bool      BthHidConnected(NT_DEVICE_OBJECT *pdo);
+/* Once after the device connected to us by itself: true (it should open
+ * its channels within a few seconds; if not, the driver opens them) */
+bool      BthHidReconnectSoon(NT_DEVICE_OBJECT *pdo);
 
 /* ---- for the audio profiles (bthaudio.c): a paired device's links ---- */
 
@@ -97,6 +100,35 @@ void      BthScoClose(BthRadio *r, BthDev *d);
  * connected.  Stop waits until it has let go of the device. */
 BthAudio *BthAudioStart(BthRadio *r, BthDev *d, const char *name, bool hfp, UINT8 channel, bool a2dp);
 void      BthAudioStop(BthAudio *a);
+/* The headset connected to us by itself: its profiles now, not at the next retry */
+void      BthAudioKick(BthAudio *a);
+
+/* ---- for Settings' Bluetooth page (kernel/apps/settings_bluetooth.c) ---- */
+
+typedef struct {
+    char name[64];
+    char addr[18];                     /* (XX:XX:XX:XX:XX:XX) */
+    bool discoverable;
+} BthRadioView;
+
+typedef struct {
+    UINT64 addr;
+    char   name[64];                   /* ("" until its name is known) */
+    UINT32 cod;                        /* its class of device */
+    bool   paired, connected;
+    bool   hid, audio;                 /* its HID service on; its headset profiles running */
+} BthDevView;
+
+/* The first radio that is up (false: none) */
+bool BthViewRadio(BthRadioView *out);
+/* Its devices: the paired ones, then those the last inquiry found */
+int  BthViewDevices(BthDevView *out, int cap);
+/* One job at a time in the background: an inquiry (BTH_JOB_SCAN), pairing
+ * a device and switching its services on (BTH_JOB_PAIR), or forgetting it
+ * (BTH_JOB_REMOVE).  Done: its status, and an inquiry's count */
+enum { BTH_JOB_SCAN = 1, BTH_JOB_PAIR, BTH_JOB_REMOVE };
+bool BthJobStart(int job, UINT64 addr);
+bool BthJobDone(NT_STATUS *status, UINT32 *count);
 
 NTSTATUS NT_API BthUsbDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);
 NTSTATUS NT_API HidBthDriverEntry(NT_DRIVER_OBJECT *drv, NT_UNICODE_STRING *reg);

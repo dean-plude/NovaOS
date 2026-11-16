@@ -53,9 +53,16 @@
  *     host (Write Voice Setting 0x0060), whose SCO data packets the
  *     transport carries (a USB radio's isochronous interface 1).
  *
- * Not done yet: devices that connect to us (a mouse reconnecting after
- * sleep: Connection Request is refused), LE, wideband speech (mSBC), BRBs
- * for third-party profile drivers (IOCTL_INTERNAL_BTH_SUBMIT_BRB).
+ *   - devices that connect to us: a paired device with a service on
+ *     (a mouse moved after sleep, a headset switched on) has its
+ *     Connection Request accepted; it authenticates and encrypts the
+ *     link, and the HID channels a mouse or keyboard opens go to its
+ *     node (incoming); a headset's profiles are opened at once;
+ *   - Settings' Bluetooth page (BthViewRadio, BthViewDevices, BthJobStart).
+ *
+ * Not done yet: LE, wideband speech (mSBC), profile channels a headset
+ * opens itself, BRBs for third-party profile drivers
+ * (IOCTL_INTERNAL_BTH_SUBMIT_BRB).
  */
 #include "ntapi.h"
 #include "bthport.h"
@@ -110,6 +117,8 @@ struct BthDev {
     UINT16   handle;
     volatile int auth, enc, name_req;  /* 0 not asked, 1 asked, 2 answered */
     volatile UINT8 auth_status, enc_status;
+    volatile bool conn_in;             /* the device connected to us (Connection Request accepted) */
+    volatile bool hid_kick;            /* ... and HID's driver has not been told yet */
     UINT8    rx[ACL_BUF];              /* an L2CAP frame being put together */
     UINT32   rx_len;
     UINT8    ident;
@@ -189,6 +198,10 @@ typedef struct {                       /* a service PDO's extension */
 } SvcPdo;
 
 static const NT_GUID g_radio_iface = NOVABTH_RADIO_GUID_INIT;
+static SvcPdo *svc(NT_DEVICE_OBJECT *pdo);
+
+#define MAX_RADIOS 4
+static BthRadio *volatile g_radios[MAX_RADIOS];   /* (for Settings: BthViewRadio...) */
 
 static void lock(BthRadio *r)   { nt_KeWaitForSingleObject(&r->lock, 0, 0, 0, NULL); }
 static void unlock(BthRadio *r) { nt_KeSetEvent(&r->lock, 0, 0); }
@@ -451,25 +464,74 @@ static void chan_free(BthRadio *r, BthChan *c)
     unlock(r);
 }
 
+/* The device asks for a channel to @psm (its CID @scid): HID's control
+ * (0x11) then interrupt (0x13) channel are taken from a paired device whose
+ * HID service is on and whose link is encrypted, as a mouse or keyboard
+ * reconnecting by itself opens them (the HID Profile's virtual cable
+ * reconnection); the rest are refused.  The answer is sent; the channel
+ * (configuring) if it was taken. */
+static BthChan *incoming(BthRadio *r, BthDev *d, UINT16 psm, UINT16 scid, UINT8 ident)
+{
+    UINT8 b[8];
+    char t[18];
+    UINT16 res = 0x0002;                                        /* (PSM not supported) */
+    SvcPdo *s = d->hid_pdo ? svc(d->hid_pdo) : NULL;
+    BthChan *c = NULL;
+    if ((psm == 0x0011 || psm == 0x0013) && s && d->paired && d->hid_on && s->input) {
+        if (d->enc != 2 || d->enc_status) res = 0x0003;         /* (security block: not encrypted) */
+        else if (psm == 0x0011 ? s->ctrl != NULL : (!s->ctrl || s->ctrl->state != 3 || s->intr)) res = 0x0004;
+        else {                                                  /* (no resources: the host is opening its own) */
+            lock(r);
+            for (int i = 0; i < MAX_CHANS && !c; i++)
+                if (!r->chan[i].used) {
+                    c = &r->chan[i];
+                    memset(c, 0, sizeof(*c));
+                    c->used = true;
+                    c->dev = d;
+                    c->psm = psm;
+                    c->lcid = r->next_cid++;
+                    if (r->next_cid < 0x40) r->next_cid = 0x40;
+                    c->rcid = scid;
+                    c->rmtu = 672;
+                    c->state = 2;
+                    if (psm == 0x0013) { c->rx = s->input; c->ctx = s->ctx; }
+                }
+            unlock(r);
+            if (!c) res = 0x0004;
+        }
+    }
+    put16(b, c ? c->lcid : 0);
+    put16(b + 2, scid);
+    put16(b + 4, c ? 0 : res);
+    put16(b + 6, 0);
+    sig_send(r, d, 0x03, ident, b, 8);
+    if (!c) { kprintf("[BTH] %s asked for PSM %04x: refused (%04x)\n", addr_text(d->addr, t), psm, res); return NULL; }
+    if (psm == 0x0011) s->ctrl = c;
+    else s->intr = c;
+    kprintf("[BTH] %s opened the HID %s channel\n", addr_text(d->addr, t), psm == 0x0011 ? "control" : "interrupt");
+    return c;
+}
+
 /* A request from the device on the signalling channel, or its answer
  * to ours */
 static void l2_signal(BthRadio *r, BthDev *d, UINT8 code, UINT8 ident, const UINT8 *p, UINT16 len)
 {
     UINT8 b[16];
-    char t[18];
     BthChan *c;
     switch (code) {
     case 0x01:                                                  /* Command Reject */
         if ((c = chan_by_ident(r, d, ident))) { c->result = 0xFFFF; c->state = 0; }
         break;
-    case 0x02:                                                  /* Connection Request: none taken yet */
+    case 0x02:                                                  /* Connection Request: HID's, from a paired device */
         if (len < 4) break;
-        put16(b, 0);
-        put16(b + 2, le16(p + 2));
-        put16(b + 4, 0x0002);                                   /* (PSM not supported) */
-        put16(b + 6, 0);
-        sig_send(r, d, 0x03, ident, b, 8);
-        kprintf("[BTH] %s asked for PSM %04x: refused\n", addr_text(d->addr, t), le16(p));
+        c = incoming(r, d, le16(p), le16(p + 2), ident);
+        if (!c) break;
+        c->ident = (UINT8)(++d->ident ? d->ident : ++d->ident);
+        put16(b, c->rcid);                                      /* (then our configuration, as for ours) */
+        put16(b + 2, 0);
+        b[4] = 0x01; b[5] = 2;
+        put16(b + 6, OUR_MTU);
+        sig_send(r, d, 0x04, c->ident, b, 8);
         break;
     case 0x03:                                                  /* Connection Response */
         if (len < 8 || !(c = chan_by_lcid(r, d, le16(p + 2)))) break;
@@ -700,6 +762,11 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
         d->handle = le16(p + 1) & 0x0FFF;
         d->rx_len = 0;
         d->conn = p[0] ? 0 : 2;
+        if (!d->conn_in) break;
+        if (p[0]) { d->conn_in = false; kprintf("[BTH] %s: its connection failed (%02x)\n", addr_text(d->addr, t), p[0]); break; }
+        kprintf("[BTH] %s reconnected by itself, handle %03x\n", addr_text(d->addr, t), d->handle);
+        d->hid_kick = d->hid_pdo != NULL;                       /* (hidbth: its channels soon, or it opens them) */
+        if (d->audio) BthAudioKick(d->audio);                   /* (the headset's profiles: now, not at the next retry) */
         break;
     case 0x2C:                                                  /* Synchronous Connection Complete */
         if (n < 17 || !(d = dev_find(r, p + 3)) || d->sco != 1) break;
@@ -718,6 +785,7 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
             }
             if (!d->used || d->conn != 2 || d->handle != (le16(p + 1) & 0x0FFF)) continue;
             d->conn = 0;
+            d->conn_in = d->hid_kick = false;
             d->auth = d->enc = 0;
             d->sco = 0;
             for (int c = 0; c < MAX_CHANS; c++) if (r->chan[c].used && r->chan[c].dev == d) r->chan[c].state = 0;
@@ -735,13 +803,25 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
         for (UINT32 i = 0; i < k && 1 + 4 * i + 4 <= n; i++) __atomic_fetch_add(&r->acl_free, le16(p + 1 + 4 * i + 2), __ATOMIC_ACQ_REL);
         break;
     }
-    case 0x04:                                                  /* Connection Request: one of ours may reconnect later */
+    case 0x04: {                                                /* Connection Request: a paired device coming back */
         if (n < 10) break;
         memcpy(b, p, 6);
+        d = dev_find(r, p);
+        const char *why = p[9] != 0x01 ? "not an ACL link" : !d || !d->paired ? "not paired" :
+                          d->conn ? "already connecting" : !d->hid_on && !d->audio ? "no service on" : NULL;
+        if (!why) {                                             /* (a mouse after sleep, a headset switched on) */
+            d->conn_in = true;
+            d->conn = 1;
+            b[6] = 0x01;                                        /* (role: it stays central, no role switch) */
+            send_cmd(r, 0x0409, b, 7);
+            kprintf("[BTH] %s wants to connect: accepted\n", addr_text(p, t));
+            break;
+        }
         b[6] = 0x0F;                                            /* (rejected: unacceptable address) */
         send_cmd(r, 0x040A, b, 7);
-        kprintf("[BTH] %s wants to connect: refused (not done yet)\n", addr_text(p, t));
+        kprintf("[BTH] %s wants to connect: refused (%s)\n", addr_text(p, t), why);
         break;
+    }
     case 0x17:                                                  /* Link Key Request */
         if (n < 6) break;
         d = dev_find(r, p);
@@ -1286,6 +1366,12 @@ bool BthHidConnected(NT_DEVICE_OBJECT *pdo)
     return s && s->intr && s->intr->state == 3 && s->ctrl && s->ctrl->state == 3 && !s->r->gone;
 }
 
+bool BthHidReconnectSoon(NT_DEVICE_OBJECT *pdo)
+{
+    SvcPdo *s = hid_svc(pdo);
+    return s && __atomic_exchange_n(&s->dev->hid_kick, false, __ATOMIC_ACQ_REL);
+}
+
 /* ---- for the audio profiles ---- */
 
 NT_STATUS BthDevLink(BthRadio *r, BthDev *d)
@@ -1456,6 +1542,8 @@ BthRadio *BthRadioCreate(NT_DEVICE_OBJECT *fdo, NT_DEVICE_OBJECT *pdo, const Bth
     nt_KeInitializeEvent(&r->cmd_lock, NT_SynchronizationEvent, 1);
     nt_KeInitializeEvent(&r->lock, NT_SynchronizationEvent, 1);
     if (!NT_SUCCESS(nt_IoRegisterDeviceInterface(pdo, &g_radio_iface, NULL, &r->iface))) r->iface.Buffer = NULL;
+    for (int i = 0; i < MAX_RADIOS; i++)
+        if (__atomic_compare_exchange_n(&g_radios[i], &(BthRadio *){ NULL }, r, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
     return r;
 }
 
@@ -1480,6 +1568,7 @@ void BthRadioStop(BthRadio *r)
 void BthRadioFree(BthRadio *r)
 {
     if (!r) return;
+    for (int i = 0; i < MAX_RADIOS; i++) if (g_radios[i] == r) g_radios[i] = NULL;
     for (int i = 0; i < MAX_DEVS; i++) kfree(r->dev[i].rdesc);   /* (the services' PDOs went first, as children do) */
     if (r->iface.Buffer) nt_ExFreePool(r->iface.Buffer);
     kfree(r);
@@ -1571,6 +1660,35 @@ static NT_STATUS forget(BthRadio *r, BthDev *d)
     return NT_STATUS_SUCCESS;
 }
 
+/* A service of the device's switched on or off (BluetoothSetServiceState) */
+static NT_STATUS set_service(BthRadio *r, BthDev *d, UINT16 uuid, bool enable)
+{
+    bool has = false;
+    for (int i = 0; i < d->nsvc; i++) has |= d->svc[i] == uuid;
+    if (!has || !d->paired) return ST_NOT_FOUND;
+    if (uuid == UUID_HFP || uuid == UUID_SINK) {                /* (a headset's: bthaudio.c) */
+        if (uuid == UUID_HFP && !d->hf_chan) return NT_STATUS_UNSUCCESSFUL;
+        if (uuid == UUID_HFP) d->hfp_on = enable;
+        else d->a2dp_on = enable;
+        lock(r);
+        dev_save(r, d);
+        unlock(r);
+        audio_update(r, d);
+        if (!d->audio && !d->hid_pdo) disconnect(r, d);
+        return NT_STATUS_SUCCESS;
+    }
+    if (uuid != UUID_HID) return NT_STATUS_NOT_SUPPORTED;      /* (no driver for the others yet) */
+    if (!d->rdesc_len) return NT_STATUS_UNSUCCESSFUL;
+    if (!enable && d->hid_pdo) BthHidDisconnect(d->hid_pdo);
+    d->hid_on = enable;
+    lock(r);
+    dev_save(r, d);
+    unlock(r);
+    hid_node(r, d);
+    if (!d->hid_on) disconnect(r, d);
+    return NT_STATUS_SUCCESS;
+}
+
 NT_STATUS BthRadioIoctl(BthRadio *r, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_ULONG_PTR *info)
 {
     UINT32 code = sl->Parameters.DeviceIoControl.IoControlCode;
@@ -1655,30 +1773,7 @@ NT_STATUS BthRadioIoctl(BthRadio *r, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
     case IOCTL_NOVABTH_SET_SERVICE: {
         if (in_len < sizeof(NovaBthSetService)) return NT_STATUS_INVALID_PARAMETER;
         NovaBthSetService *q = (NovaBthSetService *)sys;
-        bool has = false;
-        for (int i = 0; i < d->nsvc; i++) has |= d->svc[i] == q->uuid;
-        if (!has || !d->paired) return ST_NOT_FOUND;
-        if (q->uuid == UUID_HFP || q->uuid == UUID_SINK) {     /* (a headset's: bthaudio.c) */
-            if (q->uuid == UUID_HFP && !d->hf_chan) return NT_STATUS_UNSUCCESSFUL;
-            if (q->uuid == UUID_HFP) d->hfp_on = q->enable != 0;
-            else d->a2dp_on = q->enable != 0;
-            lock(r);
-            dev_save(r, d);
-            unlock(r);
-            audio_update(r, d);
-            if (!d->audio && !d->hid_pdo) disconnect(r, d);
-            return NT_STATUS_SUCCESS;
-        }
-        if (q->uuid != UUID_HID) return NT_STATUS_NOT_SUPPORTED;   /* (no driver for the others yet) */
-        if (!d->rdesc_len) return NT_STATUS_UNSUCCESSFUL;
-        if (!q->enable && d->hid_pdo) BthHidDisconnect(d->hid_pdo);
-        d->hid_on = q->enable != 0;
-        lock(r);
-        dev_save(r, d);
-        unlock(r);
-        hid_node(r, d);
-        if (!d->hid_on) disconnect(r, d);
-        return NT_STATUS_SUCCESS;
+        return set_service(r, d, q->uuid, q->enable != 0);
     }
     case IOCTL_NOVABTH_REMOVE:
         return forget(r, d);
@@ -1691,4 +1786,109 @@ NT_STATUS BthRadioIoctl(BthRadio *r, NT_IRP *irp, NT_IO_STACK_LOCATION *sl, NT_U
     }
     }
     return NT_STATUS_INVALID_DEVICE_REQUEST;
+}
+
+/* ---- for Settings' Bluetooth page (kernel/apps/settings_bluetooth.c) ---- */
+
+static BthRadio *first_radio(void)
+{
+    for (int i = 0; i < MAX_RADIOS; i++) {
+        BthRadio *r = g_radios[i];
+        if (r && r->up && !r->gone) return r;
+    }
+    return NULL;
+}
+
+bool BthViewRadio(BthRadioView *out)
+{
+    BthRadio *r = first_radio();
+    memset(out, 0, sizeof(*out));
+    if (!r) return false;
+    strncpy(out->name, r->name, sizeof(out->name) - 1);
+    addr_text(r->addr, out->addr);
+    out->discoverable = (r->scan & 1) != 0;
+    return true;
+}
+
+static bool has_svc(const BthDev *d, UINT16 uuid)
+{
+    for (int i = 0; i < d->nsvc; i++) if (d->svc[i] == uuid) return true;
+    return false;
+}
+
+int BthViewDevices(BthDevView *out, int cap)
+{
+    BthRadio *r = first_radio();
+    int n = 0;
+    if (!r) return 0;
+    lock(r);
+    for (int pass = 0; pass < 2; pass++)                        /* (paired ones first, then the ones in range) */
+        for (int i = 0; i < MAX_DEVS && n < cap; i++) {
+            const BthDev *d = &r->dev[i];
+            if (!d->used || (pass ? d->paired || !d->found : !d->paired)) continue;
+            BthDevView *v = &out[n++];
+            memset(v, 0, sizeof(*v));
+            v->addr = addr_u64(d->addr);
+            strncpy(v->name, d->named ? d->name : "", sizeof(v->name) - 1);
+            v->cod = d->cod;
+            v->paired = d->paired;
+            v->connected = d->conn == 2;
+            v->hid = d->hid_on;
+            v->audio = d->audio != NULL;
+        }
+    unlock(r);
+    return n;
+}
+
+static volatile int g_job, g_job_state;                         /* (the job; 1 running, 2 done) */
+static UINT64 g_job_addr;
+static volatile NT_STATUS g_job_status;
+static volatile UINT32 g_job_count;
+
+static void job_run(void *arg)
+{
+    (void)arg;
+    BthRadio *r = first_radio();
+    NT_STATUS st = ST_DEVICE_NOT_CONNECTED;
+    UINT32 n = 0;
+    UINT8 a[6];
+    addr_from(g_job_addr, a);
+    BthDev *d = r && g_job != BTH_JOB_SCAN ? dev_find(r, a) : NULL;
+    if (r && g_job == BTH_JOB_SCAN) {
+        st = inquiry(r, 8, &n);
+    } else if (r && !d) {
+        st = ST_NOT_FOUND;
+    } else if (r && g_job == BTH_JOB_PAIR) {
+        st = d->paired ? NT_STATUS_SUCCESS : pair(r, d);
+        /* (as Windows does once a device pairs: its services on, so a
+         * mouse moves and a headset plays without another step) */
+        if (NT_SUCCESS(st) && has_svc(d, UUID_HID) && d->rdesc_len && !d->hid_on) set_service(r, d, UUID_HID, true);
+        if (NT_SUCCESS(st) && has_svc(d, UUID_HFP) && d->hf_chan && !d->hfp_on) set_service(r, d, UUID_HFP, true);
+        if (NT_SUCCESS(st) && has_svc(d, UUID_SINK) && !d->a2dp_on) set_service(r, d, UUID_SINK, true);
+    } else if (r && g_job == BTH_JOB_REMOVE) {
+        st = forget(r, d);
+    }
+    g_job_status = st;
+    g_job_count = n;
+    __atomic_store_n(&g_job_state, 2, __ATOMIC_RELEASE);
+}
+
+bool BthJobStart(int job, UINT64 addr)
+{
+    if (!first_radio() || g_job_state == 1) return false;
+    g_job = job;
+    g_job_addr = addr;
+    g_job_state = 1;
+    if (sched_create_thread_ex("bth-settings", job_run, NULL, PRIO_DEVICE_IO, 16 * 1024)) return true;
+    g_job_state = 0;
+    return false;
+}
+
+bool BthJobDone(NT_STATUS *status, UINT32 *count)
+{
+    if (__atomic_load_n(&g_job_state, __ATOMIC_ACQUIRE) != 2) return false;
+    *status = g_job_status;
+    *count = g_job_count;
+    g_job_state = 0;
+    return true;
 }

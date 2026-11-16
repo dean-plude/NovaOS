@@ -25,8 +25,12 @@
  *     control channel (0x53);
  *   - attributes and the product string from what SDP gave.
  *
- * Not done yet: GET_REPORT (the control channel's DATA answer), the
- * device connecting to us (virtual cable reconnection), suspend.
+ * A paired device that connects to us by itself (a mouse moved after
+ * sleep: the HID Profile's virtual cable reconnection) opens the control
+ * and interrupt channels itself, which bthport takes for this node; if it
+ * opens none within three seconds of its link, the thread opens them.
+ *
+ * Not done yet: GET_REPORT (the control channel's DATA answer), suspend.
  */
 #include "ntapi.h"
 #include "hidclass.h"
@@ -115,6 +119,7 @@ static void link_thread(void *arg)
             h->linked = up;
             kprintf("[HIDBTH] %s: %s\n", h->info.name, up ? "connected" : "disconnected");
         }
+        if (!up && BthHidReconnectSoon(h->pdo)) wait = 30;        /* (it connected to us: its channels, or ours in 3 s) */
         if (!up && wait <= 0) {
             if (NT_SUCCESS(BthHidConnect(h->pdo, input, h))) continue;
             wait = 100;                                         /* (ten seconds, then again) */

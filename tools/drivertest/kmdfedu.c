@@ -20,10 +20,17 @@
  *                            28-bit DMA: scatter/gather and packet
  *   EvtDeviceQueryRemove     refused while a handle is open
  *   EvtDeviceReleaseHardware unmaps the BAR
- *   S0 idle                  WdfDeviceAssignS0IdleSettings, 2 s: the
- *                            framework powers the device down to D3 when
- *                            no request came for that long (EvtDeviceD0Exit),
- *                            and back up for the next one (step 28.4)
+ *   S0 idle                  WdfDeviceAssignS0IdleSettings, 2 s, with the
+ *                            idle timeout system-managed: the framework
+ *                            registers the device with the power framework
+ *                            (PoFx) as one component with two F-states
+ *                            (WdfDeviceWdmAssignPowerFrameworkSettings);
+ *                            when no request came for 2 s the component
+ *                            goes idle and to F1 (EvtPoFxIdleState), PoFx
+ *                            says device power is not required and the
+ *                            framework powers it down to D3
+ *                            (EvtDeviceD0Exit); the next request has power
+ *                            required again: D0, then F0 (step 28.4)
  *
  * The ISR (EvtInterruptIsr) acknowledges the device and queues the
  * interrupt's DPC (WdfInterruptQueueDpcForIsr), which wakes the waiting
@@ -68,6 +75,7 @@ typedef struct {
     PSCATTER_GATHER_LIST list;
     volatile ULONG    isr_status, isr_irql, dpc_irql, interrupts, dma_interrupts, message_interrupts;
     volatile LONG     opens;
+    POHANDLE          pox;                       /* the power framework's handle (S0 idle below) */
     EDUTEST_INFO      info;
 } EDU_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(EDU_CONTEXT, EduContext)
@@ -225,6 +233,29 @@ static NTSTATUS EvtDeviceD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
     UNREFERENCED_PARAMETER(device);
     DbgPrint("kmdfedu: D0Exit to D%d\n", (int)target - 1);
     return STATUS_SUCCESS;
+}
+
+/* The power framework: its handle, and moves of the idle component
+ * between F0 and F1 (nothing to do in the hardware: edu has no power
+ * states of its own) */
+static NTSTATUS EvtPostPoFxRegisterDevice(WDFDEVICE device, POHANDLE pox)
+{
+    EduContext(device)->pox = pox;
+    DbgPrint("kmdfedu: registered with the power framework\n");
+    return STATUS_SUCCESS;
+}
+
+static VOID EvtPrePoFxUnregisterDevice(WDFDEVICE device, POHANDLE pox)
+{
+    UNREFERENCED_PARAMETER(pox);
+    EduContext(device)->pox = NULL;
+}
+
+static VOID NTAPI EvtPoFxIdleState(PVOID ctx, ULONG component, ULONG state)
+{
+    EDU_CONTEXT *x = ctx;
+    DbgPrint("kmdfedu: component %lu to F%lu\n", component, state);
+    PoFxCompleteIdleState(x->pox, component);
 }
 
 static NTSTATUS EvtDeviceQueryRemove(WDFDEVICE device)
@@ -495,11 +526,33 @@ static NTSTATUS EvtDriverDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     if (!NT_SUCCESS(st)) return st;
 
     /* Power the device down when idle (no request for 2 s), as laptop
-     * drivers do: the framework asks for D3 (PoRequestPowerIrp), and a
-     * request on the (power-managed) queue brings it back to D0 */
+     * drivers do, through the power framework: one component, F0 and F1;
+     * the framework asks for D3 (PoRequestPowerIrp) once PoFx says device
+     * power is not required, and a request on the (power-managed) queue
+     * brings it back to D0 */
+    static PO_FX_COMPONENT_IDLE_STATE fstates[2] = {
+        { 0, 0, PO_FX_UNKNOWN_POWER },                              /* F0 */
+        { 1000 * 10, 100000 * 10, 0 },                              /* F1: 1 ms out, worth 100 ms (100 ns units) */
+    };
+    static PO_FX_COMPONENT component;
+    component.IdleStateCount = 2;
+    component.IdleStates = fstates;
+    WDF_POWER_FRAMEWORK_SETTINGS pfx;
+    WDF_POWER_FRAMEWORK_SETTINGS_INIT(&pfx);
+    pfx.EvtDeviceWdmPostPoFxRegisterDevice = EvtPostPoFxRegisterDevice;
+    pfx.EvtDeviceWdmPrePoFxUnregisterDevice = EvtPrePoFxUnregisterDevice;
+    pfx.Component = &component;
+    pfx.ComponentIdleStateCallback = EvtPoFxIdleState;
+    pfx.PoFxDeviceContext = x;
+    st = WdfDeviceWdmAssignPowerFrameworkSettings(device, &pfx);
+    if (!NT_SUCCESS(st)) {
+        DbgPrint("kmdfedu: WdfDeviceWdmAssignPowerFrameworkSettings failed (%08x)\n", st);
+        return st;
+    }
     WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS idle;
     WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS_INIT(&idle, IdleCannotWakeFromS0);
     idle.IdleTimeout = 2000;
+    idle.IdleTimeoutType = SystemManagedIdleTimeout;
     st = WdfDeviceAssignS0IdleSettings(device, &idle);
     if (!NT_SUCCESS(st)) {
         DbgPrint("kmdfedu: WdfDeviceAssignS0IdleSettings failed (%08x)\n", st);

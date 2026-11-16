@@ -279,7 +279,7 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
-        "  netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect  join a Wi-Fi network (open, WPA2 or WPA3), or leave it\n"
+        "  netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect  join a Wi-Fi network (user=: WPA2-Enterprise), or leave it\n"
         "  netsh advfirewall firewall add|delete|show rule ... | set allprofiles state on|off  the firewall's rules and profiles\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
@@ -1000,17 +1000,19 @@ static int wlan_adapter(const char *v)
     return -1;
 }
 
-/* netsh wlan connect name=SSID [key=PASSPHRASE] [interface=Wi-Fi] |
+/* netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] [interface=Wi-Fi] |
  * disconnect [interface=Wi-Fi]: in the background (JOB_WLAN_CONNECT).
  * There are no profiles yet (Windows' netsh connects to a saved profile):
  * name is the network's SSID, and a WPA2-Personal network's passphrase
  * or a WPA3-Personal network's password comes with key=, NovaOS's own
- * addition, used for that connection only */
+ * addition, used for that connection only; a WPA2-Enterprise network's
+ * user name comes with user= and its password with key= (PEAP,
+ * MS-CHAPv2: the server's certificate must be from a trusted root) */
 static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
 {
-    static const char usage[] = "Usage: netsh wlan connect [name=]SSID [key=PASSPHRASE] [interface=Wi-Fi]\n"
+    static const char usage[] = "Usage: netsh wlan connect [name=]SSID [key=PASSPHRASE] [user=NAME] [interface=Wi-Fi]\n"
                                 "       netsh wlan disconnect [interface=Wi-Fi]";
-    const char *ssid = NULL, *key = NULL;
+    const char *ssid = NULL, *key = NULL, *user = NULL;
     int adapter = 0;
     for (int i = 3; i < argc; i++) {
         const char *v;
@@ -1018,16 +1020,17 @@ static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
             if ((adapter = wlan_adapter(v)) < 0) { tprint(t, "There is no such wireless interface on the system."); return; }
         } else if (connect && ((v = netsh_value(argv[i], "name")) || (v = netsh_value(argv[i], "ssid")))) ssid = v;
         else if (connect && (v = netsh_value(argv[i], "key"))) key = v;
+        else if (connect && ((v = netsh_value(argv[i], "user")) || (v = netsh_value(argv[i], "username")))) user = v;
         else if (connect && !strchr(argv[i], '=') && !ssid) ssid = argv[i];
         else { terr(t, usage); return; }
     }
     if (connect && !ssid) { terr(t, usage); return; }
     if (!WlanCount()) { tprint(t, "\nThere is no wireless interface on the system."); return; }
-    if (key && strlen(key) > 64) {
+    if (key && strlen(key) > (user ? 127u : 64u)) {
         terr(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 password 8 to 63 characters.");
         return;
     }
-    if (!WlanConnectStart(adapter, connect ? ssid : NULL, key)) { terr(t, "The wireless adapter is busy; try again."); return; }
+    if (!WlanConnectStartAs(adapter, connect ? ssid : NULL, key, user)) { terr(t, "The wireless adapter is busy; try again."); return; }
     Job *j = &t->job;
     memset(j, 0, sizeof(*j));
     j->kind = JOB_WLAN_CONNECT;
@@ -1049,10 +1052,15 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
     case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured: give its passphrase with key=PASSPHRASE.", ssid);
                             break;
     case WLAN_BAD_KEY:      tprintf(t, "The network security key isn't correct: \"%s\" did not accept it.", ssid); break;
+    case WLAN_NEEDS_USER:   tprintf(t, "The network \"%s\" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD.", ssid);
+                            break;
+    case WLAN_UNTRUSTED:    tprintf(t, "The sign-in server of \"%s\" has a certificate from a root that is not trusted; "
+                                    "trust its CA with certutil -addstore root FILE.", ssid); break;
     case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 "
                                    "password 8 to 63 characters."); break;
     case WLAN_UNSUPPORTED:  tprintf(t, "The network \"%s\" uses security NovaOS does not support yet (WPA2- and "
-                                    "WPA3-Personal with CCMP connect; WPA, WEP and Enterprise do not).", ssid); break;
+                                    "WPA3-Personal and WPA2-Enterprise with CCMP connect; WPA, WEP and "
+                                    "WPA3-Enterprise do not).", ssid); break;
     case WLAN_NOT_CONNECTED: tprintf(t, "The interface \"%s\" is not connected.", name); break;
     case WLAN_NO_ADAPTER:   tprint(t, "The wireless interface is not ready."); break;
     default:                tprintf(t, "The %s request failed (0x%08x).", connect ? "connection" : "disconnection", st);
@@ -1063,7 +1071,7 @@ static void cmd_netsh_wlan(Term *t, int argc, char **argv)
 {
     static const char usage[] = "Usage: netsh wlan show interfaces\n"
                                 "       netsh wlan show networks [interface=]Wi-Fi [mode=bssid]\n"
-                                "       netsh wlan connect [name=]SSID [key=PASSPHRASE] [interface=Wi-Fi]\n"
+                                "       netsh wlan connect [name=]SSID [key=PASSPHRASE] [user=NAME] [interface=Wi-Fi]\n"
                                 "       netsh wlan disconnect [interface=Wi-Fi]";
     if (argc >= 3 && (is(argv[2], "connect") || is(argv[2], "disconnect"))) {
         cmd_netsh_wlan_connect(t, argc, argv, is(argv[2], "connect"));
@@ -1107,7 +1115,7 @@ static void cmd_netsh(Term *t, int argc, char **argv)
         "       netsh interface ipv4 add dnsservers [name=]Ethernet [address=]IP [index=2]\n"
         "       netsh interface ipv4 show config\n"
         "       netsh wlan show interfaces | networks [mode=bssid]\n"
-        "       netsh wlan connect name=SSID [key=PASSPHRASE] | disconnect\n"
+        "       netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect\n"
         "       netsh advfirewall firewall add|delete|show|set rule ... | set|show ...profile ... | reset";
     if (argc < 4 || !(is(argv[1], "interface") || is(argv[1], "int")) ||
         !(is(argv[2], "ipv4") || is(argv[2], "ip"))) { terr(t, usage); return; }

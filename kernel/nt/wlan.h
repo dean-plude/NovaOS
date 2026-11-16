@@ -73,13 +73,21 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status);
 #define WLAN_NO_ADAPTER  (-4)
 #define WLAN_NOT_CONNECTED (-5)
 #define WLAN_BAD_KEY     (-6)  /* the 4-way handshake failed: the access point did not take the key */
-#define WLAN_UNSUPPORTED (-7)  /* security NovaOS does not have yet (WPA3's SAE, WPA, WEP, TKIP, Enterprise) */
-#define WLAN_KEY_FORMAT  (-8)  /* @key is not 8 to 63 characters or 64 hex digits */
+#define WLAN_UNSUPPORTED (-7)  /* security NovaOS does not have yet (WPA, WEP, TKIP, WPA3-Enterprise, EAP-TLS) */
+#define WLAN_KEY_FORMAT  (-8)  /* @key is not 8 to 63 characters or 64 hex digits (or an Enterprise password too long) */
+#define WLAN_NEEDS_USER  (-9)  /* a WPA2-Enterprise network, and no @user or no password */
+#define WLAN_UNTRUSTED   (-10) /* WPA2-Enterprise: the server's certificate is not from a trusted root */
 int  WlanConnect(int i, const char *ssid, const char *key, UINT32 *status);
+/* The same with a user name: a WPA2-Enterprise network (802.1X, AKM
+ * 00-0f-ac:1) signs in as @user with password @key by PEAP and MS-CHAPv2
+ * (nt/eap.h; WLAN_BAD_KEY if the server refuses them), and the 4-way
+ * handshake starts from the PMK the sign-in gives */
+int  WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UINT32 *status);
 int  WlanDisconnect(int i, UINT32 *status);
 /* The same in the background (netsh's and Settings'), sharing the scan's: @ssid NULL
  * disconnects; then poll for the answer */
 bool WlanConnectStart(int i, const char *ssid, const char *key);
+bool WlanConnectStartAs(int i, const char *ssid, const char *key, const char *user);
 bool WlanConnectDone(int *result, UINT32 *status);
 /* Whether a Wi-Fi adapter is the stack's adapter now (ipconfig's "Wireless LAN adapter") */
 bool WlanCarriesNet(void);

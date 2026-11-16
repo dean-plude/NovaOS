@@ -13,6 +13,9 @@
  *   through the package's ActivatableClasses registration),
  * writes what it found to C:\Temp\appxtest-child.log and exits with its
  * failure count; then "appx remove" takes the package away again.
+ * Started packaged with no arguments (from the Start menu: the core
+ * suite's tests/selftest/core/179-appxshell.py) it only writes the
+ * application user model id it runs as to C:\Temp\appxtest-start.log.
  * Then signed packages: with the test root not trusted, the signed
  * framework package (NovaOS.TestFramework) is refused; trusted (the ROOT
  * store), it installs, and the copies whose records or publisher were
@@ -55,7 +58,7 @@ __declspec(dllimport) BOOL WINAPI CertCloseStore(HANDLE, DWORD);
 #define FAMILY L"NovaOS.PackageTest_rtg2wbn51qgvw"
 #define FULL L"NovaOS.PackageTest_1.0.0.0_x64__rtg2wbn51qgvw"
 #define ROOT L"C:\\Programs\\WindowsApps\\" FULL
-#define LINK L"C:\\AppData\\Roaming\\Start Menu\\Programs\\NovaOS Package Test.lnk"
+#define LOGO ROOT L"\\Assets\\Square44x44Logo.scale-200.png"
 #define LOG L"C:\\Temp\\appxtest-child.log"
 /* the signed ones (tools/appx/mktest.py's SIGNER, hashed) */
 #define FW_FULL L"NovaOS.TestFramework_1.0.0.0_x64__h384ge6vq8144"
@@ -308,6 +311,16 @@ int main(void)
     WCHAR **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argc >= 2 && !wcscmp(argv[1], L"child")) return child(argc, argv);
     if (argc >= 2 && !wcscmp(argv[1], L"fwchild")) return fwchild();
+    {   /* packaged with no arguments: started from the Start menu (tests/selftest/core/179-appxshell.py) */
+        WCHAR id[400];
+        UINT32 len = 400;
+        if (argc < 2 && !GetCurrentApplicationUserModelId(&len, id)) {
+            FILE *f = _wfopen(L"C:\\Temp\\appxtest-start.log", L"w");
+            printf("appxtest: started as %ls\n", id);
+            if (f) { fprintf(f, "appxtest: started as %ls\n", id); fclose(f); }
+            return 0;
+        }
+    }
     out = stdout;
     CreateDirectoryW(L"C:\\Temp", NULL);
     appx(L"remove NovaOS.PackageTest");                       /* (a run that stopped half way) */
@@ -331,7 +344,12 @@ int main(void)
     RegGetValueW(HKEY_CURRENT_USER, REPO L"\\Packages\\" FULL, L"DisplayName", RRF_RT_REG_SZ, NULL, s, &size);
     CHECK("its name, from resources.pri", !wcscmp(s, L"NovaOS Package Test"));
     printf("DisplayName: %ls\n", s);
-    CHECK("its Start menu entry", exists(LINK));
+    size = sizeof s;
+    s[0] = 0;
+    RegGetValueW(HKEY_CURRENT_USER, REPO L"\\Packages\\" FULL L"\\Applications\\App", L"Logo", RRF_RT_REG_SZ, NULL,
+                 s, &size);
+    CHECK("its tile logo for the Start menu (the scale-200 one)", !_wcsicmp(s, LOGO) && exists(LOGO));
+    printf("Logo: %ls\n", s);
     CHECK("appx list", appx(L"list") == 0);
 
     /* started by its application user model id */
@@ -367,7 +385,9 @@ int main(void)
     CHECK("appx remove", appx(L"remove NovaOS.PackageTest") == 0);
     n = MAX_PATH;
     CHECK("removed: its folder", !exists(ROOT));
-    CHECK("removed: its Start menu entry", !exists(LINK));
+    CHECK("removed: out of the Start menu's list",
+          RegGetValueW(HKEY_CURRENT_USER, REPO L"\\Packages\\" FULL L"\\Applications\\App", L"Logo", RRF_RT_REG_SZ,
+                       NULL, NULL, NULL) != ERROR_SUCCESS);
     CHECK("removed: unknown to kernel32", GetPackagePathByFullName(FULL, &n, s) != 0);
     CHECK("removing it again fails", appx(L"remove NovaOS.PackageTest") == 1);
 

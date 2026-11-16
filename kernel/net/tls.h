@@ -64,3 +64,25 @@ const char *TlsDescribe(TlsConn *c, char *buf, int cap);
 bool        TlsResumed(TlsConn *c);
 /* Human-readable text for an error from TlsHandshake/TlsRead/TlsWrite. */
 const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap);
+
+/* EAP sessions: a TLS 1.2 client over memory rather than TCP, for PEAP's
+ * tunnel (nt/eap.c).  The server's certificate must chain to a trusted
+ * root; its name is not checked (it is no web address).  Ciphertext from
+ * the server goes in with TlsEapInput, TlsEapHandshake/Read/Write run the
+ * protocol, and what it has to send waits until TlsEapOutput takes it.
+ * Unlike the functions above, these take the network lock themselves. */
+typedef struct TlsEap TlsEap;
+TlsEap     *TlsEapNew(void);                 /* NULL without TLS or memory */
+void        TlsEapInput(TlsEap *e, const void *data, UINT32 len);
+int         TlsEapHandshake(TlsEap *e);      /* 1 = complete, TLS_AGAIN, or a negative error */
+UINT32      TlsEapPending(TlsEap *e);        /* bytes waiting to go to the server */
+UINT32      TlsEapOutput(TlsEap *e, UINT8 *out, UINT32 cap);
+int         TlsEapWrite(TlsEap *e, const void *data, UINT32 len);
+int         TlsEapRead(TlsEap *e, void *buf, UINT32 cap);
+bool        TlsEapUntrusted(TlsEap *e);      /* the handshake failed on the server's certificate */
+const char *TlsEapErrorText(TlsEap *e, int err, char *buf, int cap);
+/* RFC 5705 keying material with @label and no context (PEAP's MSK: "client EAP encryption") */
+bool        TlsEapExportKey(TlsEap *e, const char *label, UINT8 *out, UINT32 len);
+void        TlsEapPeerName(TlsEap *e, char *buf, int cap);  /* the server certificate's CN */
+void        TlsEapRandom(UINT8 *out, UINT32 len);
+void        TlsEapFree(TlsEap *e);

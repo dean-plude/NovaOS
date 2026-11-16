@@ -72,6 +72,7 @@
 #include "wlan.h"
 #include "wpa.h"
 #include "sae.h"
+#include "eap.h"
 #include "../ke/irql.h"
 #include "../ke/printf.h"
 #include "../ke/scheduler.h"
@@ -91,8 +92,10 @@
 #define RX_FRAME          1536
 #define POOL_TAG          0x49445749u   /* 'IWDI' */
 #define EAPOL_SLOTS       4         /* EAPOL frames waiting for the supplicant */
-#define EAPOL_MAX         512
+#define EAPOL_MAX         EAP_FRAME_MAX   /* (WPA2-Enterprise: EAP fragments of up to ~1 KB) */
 #define HANDSHAKE_MS      8000      /* (an access point resends message 1 a few times, a second apart) */
+#define EAP_MS            30000     /* (WPA2-Enterprise: the whole EAP sign-in, a TLS handshake included) */
+#define EAP_START_MS      2000      /* (no EAP request yet: EAPOL-Start asks for one) */
 #define SAE_SLOTS         4         /* the driver's SAE requests waiting for the connecting thread */
 #define SAE_REQ_MAX       512
 #define SAE_SLICE_MS      20        /* (how often a connect waiting for its task looks at them) */
@@ -179,6 +182,8 @@ struct WdiHost {
     UINT8          sae_req[SAE_SLOTS][SAE_REQ_MAX];
     UINT16         sae_req_len[SAE_SLOTS];
     UINT32         sae_head, sae_tail;
+    /* WPA2-Enterprise: the EAP sign-in (eap.c) before the 4-way handshake */
+    EapPeer        eap;
 };
 enum { SAE_IDLE, SAE_COMMITTED, SAE_CONFIRMED, SAE_DONE, SAE_FAILED };
 
@@ -1050,12 +1055,46 @@ static bool install_keys(WdiHost *w, UINT8 *buf, bool pairwise)
  * message 3 or a group message the keys installed (once the reply has
  * gone, so it goes out under the old keys).  The caller holds the command
  * lock.  Returns the last frame's WPA_* outcome that was not a drop. */
+/* WPA2-Enterprise: an EAP packet for the sign-in (eap.c), its reply sent
+ * (unencrypted, under the exemption); its success gives the PMK */
+static void eap_frame(WdiHost *w, const UINT8 *frame, UINT32 n)
+{
+    static UINT8 reply[EAP_FRAME_MAX];                  /* (under the command lock) */
+    UINT32 rl = 0;
+    int r = EapReceive(&w->eap, frame, n, reply, &rl);
+    if (r == EAP_DROP) {
+        kprintf("[EAP] %s: EAP packet dropped: %s\n", w->info.service, w->eap.why ? w->eap.why : "?");
+        return;
+    }
+    if (rl && !tx_send(w, w->peer_mac, w->port_attr.MacAddress, ETHERTYPE_EAPOL, reply, rl,
+                       WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE))
+        kprintf("[EAP] %s: no room to send the reply\n", w->info.service);
+    memset(reply, 0, rl);
+    if (r == EAP_SUCCESS) {
+        memcpy(w->wpa.pmk, w->eap.msk, WPA_PMK_LEN);    /* (the PMK: the MSK's first half) */
+        kprintf("[EAP] %s: signed in as %s with PEAP (MS-CHAPv2) to server %s: EAP-Success, PMK from the tunnel\n",
+                w->info.service, w->eap.identity, w->eap.server[0] ? w->eap.server : "?");
+    } else if (r == EAP_FAILURE) {
+        kprintf("[EAP] %s: the sign-in failed: %s\n", w->info.service, w->eap.why ? w->eap.why : "EAP-Failure");
+    }
+}
+
 static int eapol_step(WdiHost *w, UINT8 *buf)
 {
     static UINT8 frame[EAPOL_MAX], reply[WPA_FRAME_MAX];     /* (under the command lock) */
     UINT32 n, rl;
     int last = WPA_DROP;
     while (eapol_pop(w, frame, &n)) {
+        bool enterprise = w->wpa.akm == WPA_AKM_8021X;
+        if (n >= 2 && frame[1] != 3) {                  /* (not EAPOL-Key: EAP, for the sign-in) */
+            if (enterprise && w->handshaking && w->eap.result == EAP_RESULT_NONE) eap_frame(w, frame, n);
+            else kprintf("[EAP] %s: EAPOL frame type %u outside a sign-in: dropped\n", w->info.service, frame[1]);
+            continue;
+        }
+        if (enterprise && w->eap.result != EAP_RESULT_OK) {
+            kprintf("[WPA] %s: EAPOL-Key frame before the EAP sign-in finished: dropped\n", w->info.service);
+            continue;
+        }
         int r = WpaReceive(&w->wpa, frame, n, reply, &rl);
         if (r == WPA_DROP) {
             kprintf("[WPA] %s: EAPOL frame dropped: %s\n", w->info.service, w->wpa.why ? w->wpa.why : "?");
@@ -1402,8 +1441,9 @@ static UINT32 connect_entry(UINT8 *out, UINT32 off, const UINT8 *raw, UINT32 n)
 /* What @b's security asks of a connection: WLAN_OK and *@akm 0 for an
  * open network, WPA_AKM_PSK for WPA2-Personal with CCMP, WPA_AKM_SAE for
  * WPA3-Personal (SAE, CCMP, management frame protection: taken over PSK
- * when a transition-mode network offers both), else why not */
-static int security_of(const WlanBss *b, const char *key, UINT8 *akm)
+ * when a transition-mode network offers both), WPA_AKM_8021X for
+ * WPA2-Enterprise (802.1X: a @user and a password, @key), else why not */
+static int security_of(const WlanBss *b, const char *key, const char *user, UINT8 *akm)
 {
     *akm = 0;
     if (!b->rsn_len) return b->privacy ? WLAN_UNSUPPORTED : WLAN_OK;    /* (WEP or WPA without RSN) */
@@ -1411,6 +1451,10 @@ static int security_of(const WlanBss *b, const char *key, UINT8 *akm)
         return WLAN_UNSUPPORTED;                        /* (CCMP both ways) */
     if ((b->akms & (1u << WPA_AKM_SAE)) && (b->rsn_caps & 0x80)) *akm = WPA_AKM_SAE;    /* (SAE, MFP capable) */
     else if ((b->akms & (1u << WPA_AKM_PSK)) && !(b->rsn_caps & 0x40)) *akm = WPA_AKM_PSK;  /* (no required MFP) */
+    else if ((b->akms & (1u << WPA_AKM_8021X)) && !(b->rsn_caps & 0x40)) {
+        *akm = WPA_AKM_8021X;                           /* (WPA2-Enterprise: EAP signs in) */
+        return user && user[0] && key && key[0] ? WLAN_OK : WLAN_NEEDS_USER;
+    }
     else return WLAN_UNSUPPORTED;
     return key && key[0] ? WLAN_OK : WLAN_NEEDS_KEY;
 }
@@ -1570,8 +1614,37 @@ static int handshake_locked(WdiHost *w, UINT8 *buf)
             w->wpa.own_ie[19] = WPA_AKM_SAE;
             w->wpa.own_ie[20] = (UINT8)(0x80 | (w->wpa.ap_ie_len >= 22 ? w->wpa.ap_ie[20] & 0x40 : 0));
         }
+        if (w->wpa.akm == WPA_AKM_8021X) w->wpa.own_ie[19] = WPA_AKM_8021X;
     }
     bool m1 = false;
+    if (w->wpa.akm == WPA_AKM_8021X) {                  /* WPA2-Enterprise: the EAP sign-in gives the PMK first */
+        bool asked = false;
+        for (int waited = 0; w->eap.result == EAP_RESULT_NONE && waited < EAP_MS; waited += 100) {
+            if (eapol_step(w, buf) == WPA_REPLY) m1 = true;
+            if (w->eap.result != EAP_RESULT_NONE) break;
+            if (!w->eap.started && !asked && waited >= EAP_START_MS) {
+                UINT8 start[8];
+                UINT32 k = EapStartFrame(start);
+                kprintf("[EAP] %s: no EAP request from the access point: sending EAPOL-Start\n", w->info.service);
+                tx_send(w, w->peer_mac, w->port_attr.MacAddress, ETHERTYPE_EAPOL, start, k,
+                        WDI_EXEMPT_ON_KEY_MAPPING_KEY_UNAVAILABLE);
+                asked = true;
+            }
+            INT64 t = -1000000;                         /* (100 ms) */
+            nt_KeWaitForSingleObject(&w->eapol_event, 0, 0, 0, &t);
+        }
+        int res = w->eap.result;
+        if (res != EAP_RESULT_OK) {
+            if (res == EAP_RESULT_NONE)
+                kprintf("[EAP] %s: the sign-in did not finish: %s\n", w->info.service,
+                        w->eap.started ? "the server stopped answering" : "no EAP request came");
+            EapClear(&w->eap);
+            return res == EAP_RESULT_BAD_PASSWORD ? WLAN_BAD_KEY : res == EAP_RESULT_UNTRUSTED ? WLAN_UNTRUSTED :
+                   WLAN_FAILED;
+        }
+        EapClear(&w->eap);                              /* (the password and the tunnel: not kept) */
+        w->eap.result = EAP_RESULT_OK;                  /* (still: EAPOL-Key frames are for the supplicant now) */
+    }
     for (int waited = 0; waited < HANDSHAKE_MS; waited += 100) {
         int r = eapol_step(w, buf);
         if (r == WPA_REPLY) m1 = true;
@@ -1586,6 +1659,11 @@ static int handshake_locked(WdiHost *w, UINT8 *buf)
 
 int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
 {
+    return WlanConnectAs(i, ssid, key, NULL, status);
+}
+
+int WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UINT32 *status)
+{
     if (status) *status = (UINT32)NDIS_STATUS_FAILURE;
     UINT8 *buf = kmalloc(CMD_BUF);
     if (!buf) return WLAN_FAILED;
@@ -1598,12 +1676,13 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     int b = find_bss(w, ssid);
     if (b < 0 && scan_locked(w, buf) == NDIS_STATUS_SUCCESS) b = find_bss(w, ssid);
     UINT8 akm = 0;
-    int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, &akm);
-    bool rsna = akm != 0, sae = akm == WPA_AKM_SAE;
+    int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, user, &akm);
+    bool rsna = akm != 0, sae = akm == WPA_AKM_SAE, enterprise = akm == WPA_AKM_8021X;
     UINT8 pmk[WPA_PMK_LEN];
     if (r == WLAN_OK && akm == WPA_AKM_PSK && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
     if (r == WLAN_OK && sae && (strlen(key) < 8 || strlen(key) >= sizeof(w->sae_password))) r = WLAN_KEY_FORMAT;
     if (r == WLAN_OK && sae && !w->sae_buf && !(w->sae_buf = kmalloc(CMD_BUF))) r = WLAN_FAILED;
+    if (r == WLAN_OK && enterprise && !EapStart(&w->eap, user, key)) r = WLAN_KEY_FORMAT;
     if (r != WLAN_OK) {
         unlock(w);
         kfree(buf);
@@ -1617,12 +1696,13 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     memset(&cs, 0, sizeof(cs));
     cs.ExcludeUnencrypted = rsna;
     cs.MFPEnabled = sae;
-    UINT32 auth = sae ? WDI_AUTH_ALGO_WPA3_SAE : rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+    UINT32 auth = sae ? WDI_AUTH_ALGO_WPA3_SAE : enterprise ? WDI_AUTH_ALGO_RSNA :
+                  rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
     UINT32 cipher = rsna ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
     if (rsna) {
         w->wpa.akm = akm;
         w->wpa.mfp = sae;
-        if (sae) memset(w->wpa.pmk, 0, sizeof(w->wpa.pmk));     /* (SAE gives it) */
+        if (sae || enterprise) memset(w->wpa.pmk, 0, sizeof(w->wpa.pmk));     /* (SAE or EAP gives it) */
         else memcpy(w->wpa.pmk, pmk, sizeof(pmk));
         memset(pmk, 0, sizeof(pmk));
         memcpy(w->wpa.aa, bss.bssid, 6);
@@ -1688,6 +1768,7 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
         if (w->peer_up || w->peer_deleted) disconnect_locked(w, buf, true);
         w->rsna = w->handshaking = false;
         WpaClear(&w->wpa);
+        EapClear(&w->eap);
         if (status) *status = (UINT32)st;
         unlock(w);
         kfree(buf);
@@ -1708,7 +1789,8 @@ int WlanConnect(int i, const char *ssid, const char *key, UINT32 *status)
     kprintf("[WDI] %s: connected to %s (%s) on port %u, peer %u: %s, %s, WMM %s\n", w->info.service, bss.ssid, mac,
             w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" :
             w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA_PSK ? "WPA2-Personal" :
-            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_WPA3_SAE ? "WPA3-Personal" : "secured",
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_WPA3_SAE ? "WPA3-Personal" :
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA ? "WPA2-Enterprise" : "secured",
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" :
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_CCMP ? "CCMP" : "ciphered",
             w->assoc.WMMQoSEnabled ? "on" : "off");
@@ -1757,7 +1839,7 @@ enum { BG_SCAN, BG_CONNECT, BG_DISCONNECT };
 static volatile bool g_bg_busy, g_bg_done;
 static int           g_bg_kind, g_bg_adapter, g_bg_n;
 static UINT32        g_bg_status;
-static char          g_bg_ssid[33], g_bg_key[65];
+static char          g_bg_ssid[33], g_bg_key[EAP_NAME_MAX], g_bg_user[EAP_NAME_MAX];
 static WlanBss       g_scan_bss[WLAN_MAX_BSS];
 
 static void bg_thread(void *arg)
@@ -1765,9 +1847,11 @@ static void bg_thread(void *arg)
     (void)arg;
     UINT32 st = 0;
     if (g_bg_kind == BG_SCAN) g_bg_n = WlanScan(g_bg_adapter, g_scan_bss, WLAN_MAX_BSS, &st);
-    else if (g_bg_kind == BG_CONNECT) g_bg_n = WlanConnect(g_bg_adapter, g_bg_ssid, g_bg_key, &st);
+    else if (g_bg_kind == BG_CONNECT)
+        g_bg_n = WlanConnectAs(g_bg_adapter, g_bg_ssid, g_bg_key, g_bg_user[0] ? g_bg_user : NULL, &st);
     else g_bg_n = WlanDisconnect(g_bg_adapter, &st);
     memset(g_bg_key, 0, sizeof(g_bg_key));             /* (the passphrase is not kept) */
+    memset(g_bg_user, 0, sizeof(g_bg_user));
     g_bg_status = st;
     __atomic_store_n(&g_bg_done, true, __ATOMIC_RELEASE);
 }
@@ -1811,12 +1895,19 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status)
 
 bool WlanConnectStart(int i, const char *ssid, const char *key)
 {
+    return WlanConnectStartAs(i, ssid, key, NULL);
+}
+
+bool WlanConnectStartAs(int i, const char *ssid, const char *key, const char *user)
+{
     if (__atomic_load_n(&g_bg_busy, __ATOMIC_ACQUIRE) && !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE)) return false;
     if (ssid) {
         strncpy(g_bg_ssid, ssid, sizeof(g_bg_ssid) - 1);
         g_bg_ssid[sizeof(g_bg_ssid) - 1] = 0;
         memset(g_bg_key, 0, sizeof(g_bg_key));
         if (key) strncpy(g_bg_key, key, sizeof(g_bg_key) - 1);
+        memset(g_bg_user, 0, sizeof(g_bg_user));
+        if (user) strncpy(g_bg_user, user, sizeof(g_bg_user) - 1);
     }
     return bg_start(ssid ? BG_CONNECT : BG_DISCONNECT, i);
 }

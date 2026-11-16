@@ -669,16 +669,26 @@ waits for (scan complete, connection start, complete and failed,
 disconnected). As on Windows, `WlanScan` and `WlanConnect` return at once
 and notify when they finish.
 
+WPA2-Enterprise networks sign in with PEAP and MS-CHAPv2
+(`kernel/nt/eap.c`, `netsh wlan connect name=SSID user=NAME
+key=PASSWORD`): the EAP packets go over EAPOL under the same exemption as
+the 4-way handshake's frames, the TLS tunnel is an EAP session of
+`net/tls.c` that checks the server's certificate against the trusted
+roots, and the MSK it gives is the 4-way handshake's PMK.
+
 What is missing: SAE's hash-to-element and groups other than P-256,
-WPA2- and WPA3-Enterprise, frames the driver injects itself, and the
+EAP-TLS and WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
+the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
 joining on the real card, the rest of roadmap step 28.1, needs the T14.
 
 QEMU has no Wi-Fi card of any kind, so the `wifi` self-test brings its
 own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
-QEMU's `edu` card whose radio hears three access points (WPA2-Personal on
-2.4 GHz, WPA3-Personal on 5 GHz, an open network, each one an access point
-it plays), and whose TAL plays a
+QEMU's `edu` card whose radio hears four access points (WPA2-Personal on
+2.4 GHz, WPA3-Personal on 5 GHz, an open network and WPA2-Enterprise, each
+one an access point it plays, the last with its authentication server:
+`tools/drivertest/eapap.h`, PEAP on Mbed TLS built into the driver), and
+whose TAL plays a
 small router at 192.168.77.1 behind the open network (ARP, DHCP, ping).
 The test installs it with `pnputil` and checks the messages and data
 path calls from both sides (the driver reports what it was sent): the
@@ -693,7 +703,10 @@ NovaOS pings. Then it joins the WPA3 network: the driver's access point
 does its own SAE (`tools/drivertest/saeap.h`: its own P-256), so a wrong
 password fails at the confirm, and with the right one it checks the
 pairwise, group and management group keys and rekeys both group keys.
-Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
+Then it signs in to the Enterprise network: refused while the server's
+root is not trusted, refused with a wrong password once `certutil` trusts
+it, and with the right one the 4-way handshake runs from the sign-in's
+PMK. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
 notification, the network and BSS lists, a profile, a wrong passphrase
 refused with the key-mismatch reason, joining by profile and by SSID),
 and the test joins the WPA2 network in Settings' Wi-Fi page by typing,

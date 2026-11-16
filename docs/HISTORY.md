@@ -16703,6 +16703,72 @@ programs built with its headers (`PartitionId` is x64 only), now fixed.  Not yet
 named shares (`D3DKMTOpenSyncObjectNtHandleFromName`), keyed mutexes and
 the older global share handles.
 
+## Packaged apps in the shell, first part: the Start menu and Settings > Apps
+
+The first part of item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
+An installed app package's applications now appear in the Start menu as
+Windows lists packaged apps: from the package repository, not from
+shortcuts.  `appx` records each application's tile logo (the manifest's
+`Square44x44Logo`, else `Square150x150Logo`, found on disk as a scale or
+target-size variant the way Windows' resource lookup picks one, a target
+size of 48 first, then the scales from 200 down) and its `AppListEntry`;
+the Start menu reads the current account's packages, leaves out
+frameworks and `AppListEntry="none"` applications, shows each one by its
+display name with its logo, and starts it in its package's folder, so it
+runs with its package identity.  `appx` no longer writes `.lnk` files
+(removing a package installed before still deletes its old shortcut).
+
+Settings has a new **Apps** page (`ms-settings:appsfeatures`,
+`kernel/apps/settings_apps.c`): the installed packages with their logo,
+publisher and version and an **Uninstall** button that asks first, then
+runs `appx remove` as the system, without a UAC prompt, as Windows'
+deployment service removes a Store app.  Up and Down pick an app, Delete
+asks, Enter confirms.
+
+- **Tests:** the core suite's `889-appxshell.py` installs the test
+  package, starts it from the Start menu by its manifest name (its
+  program writes the application user model id it runs as) and
+  uninstalls it from Settings > Apps; `appxtest` checks the recorded logo
+  (the scale-200 variant of the test package's new logo) and that it goes
+  with the package.
+- **Left:** suspend and resume (`CoreApplication.Suspending` and
+  `Resuming` when a package's window is minimised and restored), the
+  item's second part.
+
+## Battery life, second part: runtime idle and low-power idle states
+
+The second part of step 28.4 ([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)),
+the "deeper idle" item of 0.2.3 ([plan](releases/0.2.3.md)).
+
+- **Runtime idle (PoFx):** the power framework (`kernel/nt/po.c`) now
+  runs as Windows runs it instead of keeping every component active: a
+  component whose last activation reference goes gets the idle condition,
+  then moves to its deepest F-state; with every component idle for the
+  device's idle timeout the driver hears that device power is not
+  required, and may send its device to D3.  The next activation has device
+  power required again (`PoFxReportDevicePoweredOn`), the component back in
+  F0, then the active condition.  Device and F-state callbacks come from
+  the power manager's thread; `PO_FX_FLAG_BLOCKING` waits for the active
+  condition.
+- **Fixed:** `PoFxRegisterDevice` read version 2 and 3 `PO_FX_DEVICE`s'
+  `ComponentCount` from the wrong place (it follows `DeviceContext`
+  there), so such a registration failed.
+- **`_LPI`:** where the platform-wide `_OSC` agrees to
+  platform-coordinated low-power idle, a processor's `_LPI` is used
+  instead of `_CST` (`kernel/hal/cstate.c`), with its processor
+  container's states flattened in as Linux does; a state's minimum
+  residency decides when it is worth entering (`kernel/ke/idle.c`).
+- **Tests:** `kmdfedu.sys` now asks KMDF for a system-managed idle timeout
+  with a component of two F-states, so the devices suite's `kmdfedu` boot
+  shows F1, device power not required, D3, then device power required, D0
+  and F0; the `laptop` boot's second processor and its container describe
+  their states in `_LPI` (`tests/acpi/laptop.asl`), which CPU 1 takes,
+  while CPU 0 keeps its `_CST`.
+
+Not yet: OS-coordinated container states, PoFx directed power-down and
+latency tolerances, NovaOS's own drivers powering their devices down, and
+the idle-drain measurement on the T14.
+
 ## The Venus present hang is retired: one cause, fixed on 2026-10-21
 
 Item 6 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)) asked for the root
@@ -16742,6 +16808,58 @@ which merged that day, ended both.
   in 0.2.3's plan is gone.  If a Venus hang ever comes back, the
   2026-10-21 entry says how to read the hang dump, starting with the
   virtio GPU's "requests out".
+
+## Wi-Fi: WPA2-Enterprise networks sign in with PEAP
+
+Sixth part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)).  NovaOS joined open, WPA2-Personal and
+WPA3-Personal networks.  Now it signs in to WPA2-Enterprise networks, the
+kind offices and universities run, with a user name and password, the way
+Windows does by default: PEAP with MS-CHAPv2 inside it.
+
+- **`netsh wlan connect name=SSID user=NAME key=PASSWORD`** on a network
+  whose RSN element offers 802.1X (AKM 00-0f-ac:1) with CCMP signs in,
+  then runs the 4-way handshake.  Without `user=` netsh says the network
+  is WPA2-Enterprise; Settings' Wi-Fi page says to sign in from the
+  Terminal.
+- **The EAP peer** (`kernel/nt/eap.c`): EAP over EAPOL (802.1X), the
+  identity, then PEAP version 0 ([MS-PEAP]): a TLS 1.2 tunnel to the
+  authentication server, its fragments acknowledged and reassembled; inside,
+  the inner identity, EAP-MSCHAPv2 (RFC 2759: the NT-Response from the
+  password, and the server's own response checked, so a server that does
+  not know the password is refused too) and the Result TLV.  On
+  EAP-Success the tunnel's keying material ("client EAP encryption") gives
+  the MSK, and its first half is the PMK the 4-way handshake starts from.
+  MD4, which Mbed TLS 3 dropped, is RFC 1320's; SHA-1 and DES (now on in
+  the kernel's Mbed TLS) are Mbed TLS's.
+- **The server's certificate must be trusted** before any password goes
+  out: the tunnel is an EAP session of `net/tls.c` (TLS 1.2 over memory,
+  Mbed TLS) that checks the chain against the trusted roots, as Windows
+  wants by default.  An untrusted one stops the sign-in with "has a
+  certificate from a root that is not trusted"; `certutil -addstore root`
+  trusts a company's CA.
+- **Clear errors**: a wrong password or unknown user (MS-CHAPv2's E=691)
+  is "The network security key isn't correct".
+- **`wlanapi.dll`** reports such a network with its RSNA authentication
+  (6), not connectable through the API yet.
+
+The `wifi` boot's radio hears a fourth access point, `NovaCorp`, and
+`wditest.sys` plays its authentication server too
+(`tools/drivertest/eapap.h`, written from the same documents apart from
+NovaOS's peer): Mbed TLS's TLS server compiled into the driver
+(`tools/drivertest/mbedtls/`: its configuration and the few C library
+headers a driver lacks), a test certificate from fixed seeds
+("radius.novacorp.test" under "NovaCorp Test Root",
+`tools/drivertest/mksys.py`), one user and its MS-CHAPv2 check.  The test
+signs in before the root is trusted (refused), trusts it, signs in with a
+wrong password (refused), then the right one, and gets DHCP, pings and a
+group rekey over the connection.  A host test
+(`tests/tools/test_eap_peap.py`) checks both sides' MD4 and MS-CHAPv2
+against RFC 1320's and RFC 2759's vectors and runs whole sign-ins
+between them: the same MSK at both ends, a wrong password, an unknown user,
+a `DOMAIN\user` name and an untrusted server.  Not yet: EAP-TLS (a client
+certificate), WPA3-Enterprise, Enterprise profiles in `wlanapi.dll` and
+Settings, and PEAP's cryptobinding; the real card needs the T14.
 
 <!-- END generated:history -->
 

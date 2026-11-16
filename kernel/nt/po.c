@@ -1,81 +1,295 @@
 /*
- * po.c — the power framework (PoFx) a driver registers its device with
+ * po.c — the power framework (PoFx) a driver registers its device with,
+ * and device power IRPs
  *
  * A driver that manages its device's power by components registers it
  * (PoFxRegisterDevice) with callbacks the framework calls when a
- * component must be active (ComponentActiveConditionCallback) and when it
- * may go idle (ComponentIdleConditionCallback).  The driver takes an
- * activation reference before it touches the hardware (PoFxActivateComponent)
- * and drops it after (PoFxIdleComponent).
+ * component must be active (ComponentActiveConditionCallback), when it
+ * may go idle (ComponentIdleConditionCallback), to move an idle component
+ * between its F-states (ComponentIdleStateCallback: F0 is on, F1 and
+ * deeper save more power) and when the whole device is or is not needed
+ * in D0 (DevicePowerRequiredCallback, DevicePowerNotRequiredCallback).
+ * The driver takes an activation reference before it touches the hardware
+ * (PoFxActivateComponent) and drops it after (PoFxIdleComponent).
+ * KMDF does all of this for a driver whose S0 idle settings say
+ * SystemManagedIdleTimeout.
  *
- * NovaOS does not power devices down: every component stays in F0 and the
- * device in D0.  The conditions are still kept the way Windows keeps them,
- * because drivers wait on them: a component starts active; when its last
- * activation reference goes it gets the idle-condition callback (the
- * driver answers with PoFxCompleteIdleCondition), and the next activation
- * gets the active-condition callback again before the call returns.  No
- * idle-state change is ever asked for, so PoFxCompleteIdleState and the
- * directed power-down calls have nothing to complete.
+ * Runtime idle, as Windows runs it:
+ *   - a component starts active, in F0, and the device's power is
+ *     required; nothing moves before PoFxStartDevicePowerManagement;
+ *   - when a component's last activation reference goes it gets the idle
+ *     condition callback, and once the driver completes that
+ *     (PoFxCompleteIdleCondition) it is moved to its deepest F-state
+ *     (PoFxCompleteIdleState ends each move);
+ *   - when every component is idle for the device's idle timeout
+ *     (PoFxSetDeviceIdleTimeout; none by default), device power is not
+ *     required: the driver may ask for a D-IRP to Dx, and completes the
+ *     callback with PoFxCompleteDevicePowerNotRequired;
+ *   - an activation of an idle component first has device power required
+ *     again (the driver brings the device to D0 and calls
+ *     PoFxReportDevicePoweredOn), then the component moved to F0, then the
+ *     active condition callback.  A driver asking with PO_FX_FLAG_BLOCKING
+ *     at PASSIVE_LEVEL waits for that; else the call returns and the
+ *     callback comes later (at once, from the caller, when the component
+ *     only has to be told).
+ * The device and F-state callbacks are made from the "nt-power" thread at
+ * PASSIVE_LEVEL, one at a time per device; condition callbacks from the
+ * caller where they need nothing else.  The F-state taken is the deepest
+ * the component describes (NovaOS has no latency tolerances to weigh);
+ * directed power-down (Modern Standby's DFx) is never asked for.
  */
 #include "nt.h"
+#include "ntapi.h"
+#include "../hal/aml.h"
+#include "../ke/irql.h"
 #include "../ke/printf.h"
+#include "../ke/scheduler.h"
 #include "../ke/spinlock.h"
 #include "../lib/string.h"
 #include "../mm/vmm.h"
 
 typedef void (NT_API *PoFxCondition)(void *ctx, UINT32 component);
-
-typedef struct {
-    PoFxCondition active, idle;                 /* ComponentActive/IdleConditionCallback */
-    void         *ctx;                          /* DeviceContext */
-} NtPoFxCallbacks;
+typedef void (NT_API *PoFxIdleState)(void *ctx, UINT32 component, UINT32 state);
+typedef void (NT_API *PoFxDevicePower)(void *ctx);
 
 #define MAX_COMPONENTS 32
+#define PO_FX_FLAG_BLOCKING 0x1
 
 typedef struct {
+    int    refs;                                /* activation references */
+    bool   active;                              /* in the active condition (as the driver was told) */
+    bool   idling;                              /* told it is idle; PoFxCompleteIdleCondition not yet */
+    UINT32 fstate, deepest;                     /* its F-state now, and the deepest it has */
+} FxComponent;
+
+enum { FX_NONE, FX_REQUIRED, FX_NOT_REQUIRED, FX_STATE };      /* the callback whose completion is awaited */
+enum { DO_NOTHING, DO_ACTIVE, DO_IDLE, DO_STATE, DO_REQUIRED, DO_NOT_REQUIRED };
+
+typedef struct NtPoFx {
+    struct NtPoFx    *next;
     NT_DEVICE_OBJECT *pdo;
-    NtPoFxCallbacks   cb;
+    PoFxCondition     active, idle;
+    PoFxIdleState     state;
+    PoFxDevicePower   required, not_required;
+    void             *ctx;                      /* DeviceContext */
     UINT32            count;
-    int               refs[MAX_COMPONENTS];     /* activation references */
-    bool              idle[MAX_COMPONENTS];     /* in the idle condition */
+    FxComponent       c[MAX_COMPONENTS];
+    bool              started;                  /* PoFxStartDevicePowerManagement */
+    bool              powered;                  /* device power required */
+    bool              gone;                     /* unregistered: the power thread frees it */
+    int               pending;                  /* FX_* */
+    UINT32            pending_component, pending_state;
+    UINT64            idle_since;               /* sched_ticks() + 1 when every component was idle (0: not) */
+    UINT64            timeout;                  /* idle ticks before device power is not required */
+    NT_KEVENT         changed;                  /* a component went active (PO_FX_FLAG_BLOCKING waits) */
     KSpinLock         lock;
 } NtPoFx;
 
-/* PO_FX_DEVICE: V1 has Version, ComponentCount, then the callbacks at 8
- * and DeviceContext at 56; V2 and V3 put a ULONGLONG Flags after
- * ComponentCount (callbacks at 16, DeviceContext at 64 and, after V3's
- * directed power callbacks, 88) */
+static NtPoFx   *g_fx;                          /* registered devices */
+static KSpinLock g_fx_lock;                     /* (zeroed: KSPINLOCK_INIT) */
+
+static void po_start(void);
+static void po_kick(void);
+NT_API void nt_PoFxCompleteIdleCondition(NtPoFx *h, UINT32 c);
+NT_API void nt_PoFxCompleteIdleState(NtPoFx *h, UINT32 c);
+NT_API void nt_PoFxReportDevicePoweredOn(NtPoFx *h);
+NT_API void nt_PoFxCompleteDevicePowerNotRequired(NtPoFx *h);
+
+/* PO_FX_DEVICE (x64): V1 is Version, ComponentCount, the six callbacks at
+ * 8, DeviceContext at 56 and its PO_FX_COMPONENT_V1s (32 bytes: Id,
+ * IdleStateCount at 16) at 64.  V2 puts a ULONGLONG Flags at 8 (callbacks
+ * at 16, DeviceContext at 64) and ComponentCount after DeviceContext (72,
+ * components at 80); V3 adds the directed power callbacks and their
+ * timeout before DeviceContext (88; ComponentCount 96, components 104).
+ * PO_FX_COMPONENT_V2 is 56 bytes: Id, Flags, DeepestWakeableIdleState,
+ * IdleStateCount at 28. */
 NT_API NTSTATUS nt_PoFxRegisterDevice(NT_DEVICE_OBJECT *pdo, const UINT8 *dev, NtPoFx **handle)
 {
     if (!pdo || !dev || !handle) return NT_STATUS_INVALID_PARAMETER;
-    UINT32 version = *(const UINT32 *)dev, components = *(const UINT32 *)(dev + 4);
-    if (version < 1 || version > 3 || !components) return NT_STATUS_INVALID_PARAMETER;
+    UINT32 version = *(const UINT32 *)dev;
+    if (version < 1 || version > 3) return NT_STATUS_INVALID_PARAMETER;
     UINT32 cb = version == 1 ? 8 : 16, ctx = version == 1 ? 56 : version == 2 ? 64 : 88;
+    UINT32 count_at = version == 1 ? 4 : ctx + 8, comp = version == 1 ? 64 : ctx + 16;
+    UINT32 stride = version == 1 ? 32 : 56, states_at = version == 1 ? 16 : 28;
+    UINT32 components = *(const UINT32 *)(dev + count_at);
+    if (!components) return NT_STATUS_INVALID_PARAMETER;
     NtPoFx *h = kzalloc(sizeof(*h));
     if (!h) return NT_STATUS_INSUFFICIENT_RESOURCES;
     h->pdo = pdo;
-    h->cb.active = *(PoFxCondition const *)(dev + cb);
-    h->cb.idle = *(PoFxCondition const *)(dev + cb + 8);
-    h->cb.ctx = *(void *const *)(dev + ctx);
+    h->active = *(PoFxCondition const *)(dev + cb);
+    h->idle = *(PoFxCondition const *)(dev + cb + 8);
+    h->state = *(PoFxIdleState const *)(dev + cb + 16);
+    h->required = *(PoFxDevicePower const *)(dev + cb + 24);
+    h->not_required = *(PoFxDevicePower const *)(dev + cb + 32);
+    h->ctx = *(void *const *)(dev + ctx);
     h->count = components < MAX_COMPONENTS ? components : MAX_COMPONENTS;
+    for (UINT32 i = 0; i < h->count; i++) {
+        UINT32 n = *(const UINT32 *)(dev + comp + i * stride + states_at);
+        h->c[i] = (FxComponent){ 0, true, false, 0, n > 1 ? n - 1 : 0 };
+    }
+    h->powered = true;
+    nt_KeInitializeEvent(&h->changed, NT_SynchronizationEvent, 0);
     /* (a zeroed KSpinLock is KSPINLOCK_INIT) */
+    po_start();
+    IrqState s = spin_lock_irqsave(&g_fx_lock);
+    h->next = g_fx;
+    g_fx = h;
+    spin_unlock_irqrestore(&g_fx_lock, s);
     *handle = h;
     return NT_STATUS_SUCCESS;
 }
 
-NT_API void nt_PoFxUnregisterDevice(NtPoFx *h) { kfree(h); }
+/* (the power thread frees it, after any callback it is making) */
+NT_API void nt_PoFxUnregisterDevice(NtPoFx *h)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    h->gone = true;
+    spin_unlock_irqrestore(&h->lock, s);
+    po_kick();
+}
 
-NT_API void nt_PoFxStartDevicePowerManagement(NtPoFx *h) { (void)h; }   /* (components start active, in F0) */
+/* The next thing @h needs (its lock held).  Off the power thread only the
+ * condition callbacks are made: the rest waits for the thread. */
+static int fx_next(NtPoFx *h, bool thread, UINT32 *comp, UINT32 *state)
+{
+    if (!h->started || h->gone) return DO_NOTHING;
+    for (UINT32 i = 0; i < h->count; i++) {
+        FxComponent *x = &h->c[i];
+        if (x->refs <= 0 || x->active || x->idling) continue;
+        if (h->powered && !x->fstate) {
+            x->active = true;
+            *comp = i;
+            return DO_ACTIVE;
+        }
+        if (!thread || h->pending) continue;
+        if (!h->powered) {
+            h->pending = FX_REQUIRED;
+            return DO_REQUIRED;
+        }
+        h->pending = FX_STATE;
+        *comp = h->pending_component = i;
+        *state = h->pending_state = 0;
+        return DO_STATE;
+    }
+    bool all_idle = true;
+    for (UINT32 i = 0; i < h->count; i++) {
+        FxComponent *x = &h->c[i];
+        if (x->refs <= 0 && x->active) {
+            x->active = false;
+            x->idling = true;
+            *comp = i;
+            return DO_IDLE;
+        }
+        if (x->refs > 0 || x->active || x->idling) all_idle = false;
+    }
+    if (!all_idle) h->idle_since = 0;
+    if (!thread || h->pending || !h->powered || !all_idle) return DO_NOTHING;
+    for (UINT32 i = 0; i < h->count; i++)
+        if (h->c[i].fstate != h->c[i].deepest) {
+            h->pending = FX_STATE;
+            *comp = h->pending_component = i;
+            *state = h->pending_state = h->c[i].deepest;
+            return DO_STATE;
+        }
+    UINT64 now = sched_ticks() + 1;
+    if (!h->idle_since) h->idle_since = now;
+    if (now - h->idle_since < h->timeout) return DO_NOTHING;
+    h->pending = FX_NOT_REQUIRED;
+    return DO_NOT_REQUIRED;
+}
+
+/* Make @h's callbacks until it needs nothing more (or waits on the driver) */
+static void fx_run(NtPoFx *h, bool thread)
+{
+    for (;;) {
+        UINT32 c = 0, st = 0;
+        IrqState s = spin_lock_irqsave(&h->lock);
+        int what = fx_next(h, thread, &c, &st);
+        spin_unlock_irqrestore(&h->lock, s);
+        const char *who = NtPnpInstanceOf(h->pdo);
+        switch (what) {
+        case DO_NOTHING:
+            return;
+        case DO_ACTIVE:
+            if (h->active) h->active(h->ctx, c);
+            nt_KeSetEvent(&h->changed, 0, 0);
+            break;
+        case DO_IDLE:
+            if (h->idle) h->idle(h->ctx, c);
+            else nt_PoFxCompleteIdleCondition(h, c);
+            break;
+        case DO_STATE:
+            kprintf("[PO] %s: component %u to F%u\n", who ? who : "?", c, st);
+            if (h->state) h->state(h->ctx, c, st);
+            else nt_PoFxCompleteIdleState(h, c);
+            break;
+        case DO_REQUIRED:
+            kprintf("[PO] %s: device power required (a component is active)\n", who ? who : "?");
+            if (h->required) h->required(h->ctx);
+            else nt_PoFxReportDevicePoweredOn(h);
+            break;
+        case DO_NOT_REQUIRED:
+            kprintf("[PO] %s: device power not required (every component idle)\n", who ? who : "?");
+            if (h->not_required) h->not_required(h->ctx);
+            else nt_PoFxCompleteDevicePowerNotRequired(h);
+            break;
+        }
+    }
+}
+
+/* The power thread's round: every registered device (and the unregistered
+ * ones freed) */
+static void fx_round(void)
+{
+    for (;;) {
+        IrqState s = spin_lock_irqsave(&g_fx_lock);
+        NtPoFx **pp = &g_fx;
+        while (*pp && !(*pp)->gone) pp = &(*pp)->next;
+        NtPoFx *dead = *pp;
+        if (dead) *pp = dead->next;
+        spin_unlock_irqrestore(&g_fx_lock, s);
+        if (!dead) break;
+        kfree(dead);
+    }
+    /* (only this thread unlinks: the list stays valid while it walks) */
+    for (NtPoFx *h = __atomic_load_n(&g_fx, __ATOMIC_ACQUIRE); h; h = h->next) fx_run(h, true);
+}
+
+NT_API void nt_PoFxStartDevicePowerManagement(NtPoFx *h)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    h->started = true;
+    spin_unlock_irqrestore(&h->lock, s);
+    fx_run(h, false);
+    po_kick();
+}
 
 NT_API void nt_PoFxActivateComponent(NtPoFx *h, UINT32 c, UINT32 flags)
 {
-    (void)flags;
     if (!h || c >= h->count) return;
     IrqState s = spin_lock_irqsave(&h->lock);
-    bool wake = h->refs[c]++ == 0 && h->idle[c];
-    if (wake) h->idle[c] = false;
+    h->c[c].refs++;
+    h->idle_since = 0;
+    bool ready = h->c[c].active;
     spin_unlock_irqrestore(&h->lock, s);
-    if (wake && h->cb.active) h->cb.active(h->cb.ctx, c);
+    if (ready) return;
+    fx_run(h, false);
+    s = spin_lock_irqsave(&h->lock);
+    ready = h->c[c].active || !h->started;
+    spin_unlock_irqrestore(&h->lock, s);
+    if (ready) return;
+    po_kick();
+    if (!(flags & PO_FX_FLAG_BLOCKING) || KeIrql() != PASSIVE_LEVEL) return;
+    for (;;) {                                  /* (PO_FX_FLAG_BLOCKING: until it is active) */
+        INT64 tick = -100000;                   /* (10 ms, relative) */
+        nt_KeWaitForSingleObject(&h->changed, 0, 0, 0, &tick);
+        s = spin_lock_irqsave(&h->lock);
+        ready = h->c[c].active || h->c[c].refs <= 0 || h->gone;
+        spin_unlock_irqrestore(&h->lock, s);
+        if (ready) return;
+    }
 }
 
 NT_API void nt_PoFxIdleComponent(NtPoFx *h, UINT32 c, UINT32 flags)
@@ -83,23 +297,72 @@ NT_API void nt_PoFxIdleComponent(NtPoFx *h, UINT32 c, UINT32 flags)
     (void)flags;
     if (!h || c >= h->count) return;
     IrqState s = spin_lock_irqsave(&h->lock);
-    if (h->refs[c] <= 0) {
+    if (h->c[c].refs <= 0) {
         spin_unlock_irqrestore(&h->lock, s);
         kprintf("[NT] PoFxIdleComponent: component %u has no activation reference\n", c);
         return;
     }
-    bool idle = --h->refs[c] == 0;
-    if (idle) h->idle[c] = true;
+    bool idle = --h->c[c].refs == 0;
     spin_unlock_irqrestore(&h->lock, s);
-    if (idle && h->cb.idle) h->cb.idle(h->cb.ctx, c);
+    if (!idle) return;
+    fx_run(h, false);
+    po_kick();
 }
 
-/* The driver's answers to callbacks NovaOS makes (idle condition) or never
- * makes (idle state, directed power-down): nothing waits on them */
-NT_API void nt_PoFxCompleteIdleCondition(NtPoFx *h, UINT32 c) { (void)h; (void)c; }
-NT_API void nt_PoFxCompleteIdleState(NtPoFx *h, UINT32 c) { (void)h; (void)c; }
-NT_API void nt_PoFxCompleteDirectedPowerDown(NtPoFx *h) { (void)h; }
-NT_API void nt_PoFxReportDevicePoweredOn(NtPoFx *h) { (void)h; }
+/* The driver's answers to the callbacks */
+NT_API void nt_PoFxCompleteIdleCondition(NtPoFx *h, UINT32 c)
+{
+    if (!h || c >= h->count) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    h->c[c].idling = false;
+    spin_unlock_irqrestore(&h->lock, s);
+    po_kick();
+}
+
+NT_API void nt_PoFxCompleteIdleState(NtPoFx *h, UINT32 c)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    if (h->pending == FX_STATE && h->pending_component == c) {
+        h->c[c].fstate = h->pending_state;
+        h->pending = FX_NONE;
+    }
+    spin_unlock_irqrestore(&h->lock, s);
+    po_kick();
+}
+
+NT_API void nt_PoFxReportDevicePoweredOn(NtPoFx *h)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    h->powered = true;
+    if (h->pending == FX_REQUIRED) h->pending = FX_NONE;
+    spin_unlock_irqrestore(&h->lock, s);
+    po_kick();
+}
+
+NT_API void nt_PoFxCompleteDevicePowerNotRequired(NtPoFx *h)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    if (h->pending == FX_NOT_REQUIRED) {
+        h->powered = false;
+        h->pending = FX_NONE;
+    }
+    spin_unlock_irqrestore(&h->lock, s);
+    po_kick();
+}
+
+/* PoFxSetDeviceIdleTimeout(Handle, IdleTimeout in 100 ns units) */
+NT_API void nt_PoFxSetDeviceIdleTimeout(NtPoFx *h, UINT64 timeout)
+{
+    if (!h) return;
+    IrqState s = spin_lock_irqsave(&h->lock);
+    h->timeout = timeout / 100000;              /* (10 ms ticks) */
+    spin_unlock_irqrestore(&h->lock, s);
+}
+
+NT_API void nt_PoFxCompleteDirectedPowerDown(NtPoFx *h) { (void)h; }    /* (never asked for) */
 
 /* -----------------------------------------------------------------------
  * Device power IRPs
@@ -122,10 +385,6 @@ NT_API void nt_PoFxReportDevicePoweredOn(NtPoFx *h) { (void)h; }
  * mains), asks for the state the driver gave.  Powering the device back
  * up is the driver's own business, as on Windows.
  * ----------------------------------------------------------------------- */
-#include "ntapi.h"
-#include "../hal/aml.h"
-#include "../ke/scheduler.h"
-
 typedef void (NT_API *PoRequestComplete)(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 state, void *ctx,
                                          NT_IO_STATUS_BLOCK *iosb);
 
@@ -233,6 +492,7 @@ static void po_thread(void *arg)
             if (!r) break;
             po_send(r);
         }
+        fx_round();
         static UINT64 last;
         UINT64 now = sched_ticks();
         if (now - last >= 100) {
@@ -249,6 +509,11 @@ static void po_start(void)
     nt_KeInitializeEvent(&g_po_event, NT_SynchronizationEvent, 0);
     if (sched_create_thread("nt-power", po_thread, NULL, 9)) __atomic_store_n(&g_po_thread, 2, __ATOMIC_RELEASE);
     else kprintf("[PO] no power thread: device power requests fail\n");
+}
+
+static void po_kick(void)
+{
+    if (__atomic_load_n(&g_po_thread, __ATOMIC_ACQUIRE) == 2) nt_KeSetEvent(&g_po_event, 0, 0);
 }
 
 static NTSTATUS po_request(NT_DEVICE_OBJECT *dev, UINT8 minor, UINT32 state, PoRequestComplete done, void *ctx,

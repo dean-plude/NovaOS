@@ -943,9 +943,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   Windows drivers sent to D3 through `PoRequestPowerIrp` (KMDF's S0 idle,
   WDM idle detection, PCI PMCSR in the bus driver); tested in the devices
   suite's `laptop` boot (`idletest`) and `kmdfedu` boot (D3 and back).
-  Still needed: the idle-drain measurement on the T14
-  ([install-and-power.md](install-and-power.md#checks-on-the-t14), check 7),
-  then PoFx runtime idle and `_LPI` if the drain is too high.
+  Runtime idle done in QEMU too: the power framework (PoFx,
+  `kernel/nt/po.c`) moves an idle driver's components to their deepest
+  F-state and tells the driver when device power is not required, and
+  back, shown with KMDF's system-managed idle in the `kmdfedu` boot; and
+  `_LPI` low-power idle states, with the processor container's states
+  flattened in, once the platform-wide `_OSC` agrees, shown in the
+  `laptop` boot. Still needed: the idle-drain measurement on the T14
+  ([install-and-power.md](install-and-power.md#checks-on-the-t14), check 7).
 - [ ] **28.5 A second reference PC.** Pick an AMD machine and list its
   devices in [hardware.md](hardware.md), each marked supported or missing.
 

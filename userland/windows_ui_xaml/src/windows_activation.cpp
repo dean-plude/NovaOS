@@ -46,7 +46,7 @@ extern "C" HRESULT nova_xaml_windows_factory(HSTRING cls, IActivationFactory **o
 // the UWP start-up's FrameworkViewSource and FrameworkView (Windows App
 // SDK's Microsoft.UI.Xaml.dll would serve them), and the phone library's
 // navigation transitions, a Frame's NavigationThemeTransition and the
-// transition infos
+// transition infos, and its Pivot and the Pivot's parts
 // (src/phone/phone_factories.cpp, Microsoft.UI.Xaml.Phone.dll's in the
 // Windows App SDK) with the framework classes they make by name: their
 // base classes, storyboards, key frames, easing functions, projections
@@ -67,13 +67,32 @@ static const wchar_t *const s_lifted[] = {
     L"Microsoft.UI.Xaml.Media.Animation.EasingDoubleKeyFrame", L"Microsoft.UI.Xaml.Media.Animation.LinearDoubleKeyFrame",
     L"Microsoft.UI.Xaml.Media.Animation.SplineDoubleKeyFrame", L"Microsoft.UI.Xaml.Media.Animation.KeySpline",
     L"Microsoft.UI.Xaml.Media.Animation.PointAnimation", L"Microsoft.UI.Xaml.Media.Animation.CircleEase",
-    L"Microsoft.UI.Xaml.Media.Animation.ExponentialEase", L"Microsoft.UI.Xaml.Media.Animation.PowerEase"};
+    L"Microsoft.UI.Xaml.Media.Animation.ExponentialEase", L"Microsoft.UI.Xaml.Media.Animation.PowerEase",
+    // (and the Pivot's: the classes it is composed over, the transforms,
+    // animations, helpers and automation identifiers it makes and asks)
+    L"Microsoft.UI.Xaml.Controls.Control", L"Microsoft.UI.Xaml.Controls.ContentControl",
+    L"Microsoft.UI.Xaml.Controls.ItemsControl", L"Microsoft.UI.Xaml.Controls.Panel", L"Microsoft.UI.Xaml.Controls.Canvas",
+    L"Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs", L"Microsoft.UI.Xaml.DependencyObject",
+    L"Microsoft.UI.Xaml.UIElement", L"Microsoft.UI.Xaml.Application", L"Microsoft.UI.Xaml.PropertyPath",
+    L"Microsoft.UI.Xaml.RectHelper", L"Microsoft.UI.Xaml.VisualStateManager", L"Microsoft.UI.Xaml.ElementSoundPlayer",
+    L"Microsoft.UI.Xaml.Data.Binding", L"Microsoft.UI.Xaml.Input.FocusManager",
+    L"Microsoft.UI.Xaml.Input.FindNextElementOptions", L"Microsoft.UI.Xaml.Hosting.ElementCompositionPreview",
+    L"Microsoft.UI.Xaml.Internal.LayoutTransitionElementUtilities",
+    L"Microsoft.UI.Xaml.Internal.SecondaryContentRelationship", L"Microsoft.UI.Xaml.Media.TranslateTransform",
+    L"Microsoft.UI.Xaml.Media.CompositionTarget", L"Microsoft.UI.Xaml.Media.ThemeShadow",
+    L"Microsoft.UI.Xaml.Media.Animation.ThemeAnimationBase",
+    L"Microsoft.UI.Xaml.Automation.AutomationProperties", L"Microsoft.UI.Xaml.Automation.AutomationElementIdentifiers",
+    L"Microsoft.UI.Xaml.Automation.ScrollPatternIdentifiers",
+    L"Microsoft.UI.Xaml.Automation.SelectionItemPatternIdentifiers",
+    L"Microsoft.UI.Xaml.Automation.Peers.AutomationPeer", L"Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer",
+    L"Microsoft.UI.Xaml.Automation.Peers.ItemAutomationPeer",
+    L"Microsoft.UI.Xaml.Automation.Peers.ItemsControlAutomationPeer"};
 
 // registers them all with @maker (which answers with nova_lifted_factory),
 // for the rest of the process
 extern "C" HRESULT nova_register_lifted_classes(PFNGETACTIVATIONFACTORY maker)
 {
-    const UINT32 most = ARRAYSIZE(s_lifted) + 16;
+    const UINT32 most = ARRAYSIZE(s_lifted) + 32;
     HSTRING names[most];
     PFNGETACTIVATIONFACTORY makers[most];
     UINT32 n = 0;

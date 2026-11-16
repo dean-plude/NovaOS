@@ -202,20 +202,24 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo`
   activated by its Windows name, answering Windows'
   `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`;
-  and markup naming an unknown element failing, with the parser's error,
-  its line and column, in the debug log), `xamlapptest` (Microsoft's
-  XAML framework started as a desktop app starts it, built from its
-  sources: `Application.Start` on the desktop path with a
-  `DispatcherQueue`, the app's initialization callback composing its
-  `Application` over the framework's, `WindowsXamlManager` starting it
-  on the thread and raising `OnLaunched`, `XamlReader.Load` of a `Grid`
-  holding a `TextBlock` there, the framework's theme resources and
-  control styles found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the
-  core's resource manager made, queued work run from the desktop message
-  loop, and `Application.Exit` returning from `Application.Start`),
-  `xamlbasetest` (Microsoft's XAML core, lowest layer, built from its
-  sources, and NovaOS's WRL: ComPtr, RuntimeClass, weak references,
-  Callback, EventSource, HString), `xamldlltest` (the system
+  markup naming an unknown element failing, with the parser's error, its
+  line and column, in the debug log; and the phone library's `Pivot` and
+  `PivotItem`, their statics and dependency properties (`SelectedIndex`,
+  `Header`), and markup naming a `Pivot` resolved through the
+  framework's `XamlLibMetadataProvider` and the library's type tables),
+  `xamlapptest` (Microsoft's XAML framework started as a desktop app
+  starts it, built from its sources: `Application.Start` on the desktop
+  path with a `DispatcherQueue`, the app's initialization callback
+  composing its `Application` over the framework's, `WindowsXamlManager`
+  starting it on the thread and raising `OnLaunched`, `XamlReader.Load`
+  of a `Grid` holding a `TextBlock` there, the framework's theme
+  resources and control styles found in
+  `Microsoft.UI.Xaml.Resources.19H1.dll` and the core's resource manager
+  made, queued work run from the desktop message loop, and
+  `Application.Exit` returning from `Application.Start`), `xamlbasetest`
+  (Microsoft's XAML core, lowest layer, built from its sources, and
+  NovaOS's WRL: ComPtr, RuntimeClass, weak references, Callback,
+  EventSource, HString), `xamldlltest` (the system
   `Windows.UI.Xaml.dll`: `Windows.UI.Xaml.Application`, `XamlReader` and
   `Window` from `RoGetActivationFactory` alone, through the registry's
   `ActivatableClassId` keys, `Application.Start`, a page laid out in a

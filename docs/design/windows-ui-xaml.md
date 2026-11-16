@@ -1820,10 +1820,47 @@ vendors.
    `UnknownType`, whose runtime kind is neither native nor managed) before
    `XamlSchemaContext::GetRuntime` fails it with a bare E_FAIL.  That
    showed Calculator's stop: its `Pivot`, which the framework looks for
-   through `XamlLibMetadataProvider` in `Microsoft.UI.Xaml.Phone.dll`, a
-   closed Windows App SDK library (the open-source tree has only its
-   `generic.xaml` style).  Test: `wuxamltest` (markup with an unknown
-   element fails, with the parser's error logged).
+   through `XamlLibMetadataProvider` in `Microsoft.UI.Xaml.Phone.dll`,
+   which NovaOS did not build yet.  Test: `wuxamltest` (markup with an
+   unknown element fails, with the parser's error logged).
+
+   Pulsar item 3, twenty-third slice: Calculator's `Pivot`.
+   `Microsoft.UI.Xaml.Phone.dll` is not closed after all: its source is
+   WinUI's phone library (`dxaml/phone/lib`), and the DLL's project and
+   generated type metadata are `dxaml/xcp/dxaml/dllsrv/exts/phone`.
+   NovaOS now builds the library's `Pivot` into the framework with the
+   navigation transitions it already had: `Pivot`, `PivotItem`,
+   `PivotPanel`, `PivotHeaderPanel`, `PivotHeaderItem` and the header
+   manager, the slide-in effect, `PivotItemEventArgs` and the three
+   automation peers, over the library's generated classes
+   (`PhoneTypes.g.cpp`) and the Pivot's state machine and curves
+   (`components/pivot`).  `src/phone/precomp.h` now takes the headers the
+   library's own precompiled header does, less the pickers',
+   `LoopingSelector`'s and the jump list's: they need WRL's async
+   operations, which NovaOS's WRL does not have yet, so `build.py`'s
+   `phone_built()` leaves their generated classes out of
+   `PhoneTypes.g.cpp` and their activation out of the type metadata.  The
+   parser finds a `Pivot` named in markup as on Windows:
+   `XamlLibMetadataProvider` reads the library's type tables and asks its
+   `XamlRuntimeType` (`XamlTypeInfo.g.cpp`) to make one and set its
+   members.  On Windows the tables are `XamlTypeInfo.g.rc`'s resources in
+   the DLL and the runtime type comes from the DLL's dependency locator;
+   NovaOS has no such DLL, so `build.py`'s `phone_type_info()` lays the
+   `.g.rc` out as `rc` would, as data in `src/phone/phone_metadata.cpp`
+   (`nova_phone_resource`), which also provides the runtime type to the
+   framework's own dependency locator, and `XamlTypeInfoProvider.cpp`
+   reads them there for that module name.  `src/phone/phone_factories.cpp`
+   lists the Pivot's classes (517 classes in the registry).  NovaOS's WRL
+   gained `Details::RuntimeClassBase` and now deletes an object only in
+   `Release`, so SatelliteBase's `ReferenceTrackerRuntimeClass`, which
+   resurrects an object through `InternalRelease`, works; ole32 gained
+   `RoClearError`.  Making a `Pivot` stops at its base class, the
+   framework's `ItemsControl`, whose sources (`ItemsControl_Partial.cpp`,
+   `ItemCollection`, `ItemContainerGenerator`, `ItemsPresenter`,
+   `Selector`) NovaOS does not build yet: that is the next slice.  Test:
+   `wuxamltest` (the `Pivot`'s and `PivotItem`'s statics and their
+   dependency properties; markup naming a `Pivot` resolved through the
+   phone library's type tables).
 
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

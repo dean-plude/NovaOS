@@ -1595,10 +1595,21 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   error service is given, and the name of a type the parser could not
   resolve.  Test `wuxamltest`.  The failure is Calculator's `Pivot`
   (the history and memory panel), a class of `Microsoft.UI.Xaml.Phone.dll`,
-  which is closed source and not in NovaOS's framework.  Next: a NovaOS
+  which NovaOS's framework did not build.  Next: a NovaOS
   `Pivot` (with `PivotItem` and the header parts its `generic.xaml`
   template names), then the CI check that it computes `2 + 2`, which
   ticks this step.
+  Twenty-ninth part done (Pulsar item 3, twenty-third slice): the
+  `Pivot`.  `Microsoft.UI.Xaml.Phone.dll` is open source after all
+  (WinUI's phone library, MIT), so NovaOS builds its `Pivot`,
+  `PivotItem`, header and panel parts and automation peers into the
+  framework, with the library's type tables, which the parser now reads
+  to find a `Pivot` named in markup.  Test `wuxamltest`.  Making the
+  `Pivot` stops at its base class, the framework's `ItemsControl`, which
+  NovaOS does not build yet.  Next: the framework's `ItemsControl` (its
+  item collection, container generator, items presenter and `Selector`),
+  then the CI check that Calculator computes `2 + 2`, which ticks this
+  step.
 
 ---
 

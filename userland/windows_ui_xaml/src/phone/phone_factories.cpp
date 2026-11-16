@@ -10,6 +10,9 @@
 #include "precomp.h"
 
 using namespace ABI::Microsoft::UI::Xaml::Media::Animation;
+using namespace ABI::Microsoft::UI::Xaml::Controls;
+namespace primitives = ABI::Microsoft::UI::Xaml::Controls::Primitives;
+namespace peers = ABI::Microsoft::UI::Xaml::Automation::Peers;
 
 namespace {
 
@@ -60,6 +63,18 @@ const Entry s_classes[] = {
      make_simple<SuppressNavigationTransitionInfo>},
     {RuntimeClass_Microsoft_UI_Xaml_Media_Animation_EntranceNavigationTransitionInfo,
      make<EntranceNavigationTransitionInfoFactory>},
+    // (the Pivot and its parts: PhoneTypes.g.h's factories)
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_Pivot, make<PivotFactory>},
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_PivotItem, make<PivotItemFactory>},
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_PivotItemEventArgs, make_simple<PivotItemEventArgs>},
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_Primitives_PivotHeaderItem, make<primitives::PivotHeaderItemFactory>},
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_Primitives_PivotHeaderPanel, make_simple<primitives::PivotHeaderPanel>},
+    {RuntimeClass_Microsoft_UI_Xaml_Controls_Primitives_PivotPanel, make_simple<primitives::PivotPanel>},
+    {RuntimeClass_Microsoft_UI_Xaml_Automation_Peers_PivotAutomationPeer, make<peers::PivotAutomationPeerFactory>},
+    {RuntimeClass_Microsoft_UI_Xaml_Automation_Peers_PivotItemAutomationPeer,
+     make<peers::PivotItemAutomationPeerFactory>},
+    {RuntimeClass_Microsoft_UI_Xaml_Automation_Peers_PivotItemDataAutomationPeer,
+     make<peers::PivotItemDataAutomationPeerFactory>},
 };
 
 IActivationFactory *s_made[ARRAYSIZE(s_classes)];

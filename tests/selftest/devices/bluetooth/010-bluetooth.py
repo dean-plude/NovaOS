@@ -108,6 +108,7 @@ TESTS = [
                       r'\[HIDBTH\] NovaOS Test Mouse: connected']),
     Test('bluetooth device reconnect', 'bttest reconnect', [r'bttest reconnect: \d+ passed, 0 failed'],
          boot_expect=[r'\[BTH\] 4E:4F:56:41:00:01 wants to connect: accepted', r'\[BTH\] 4E:4F:56:41:00:01 reconnected by itself',
+         r'\[BTH\] 4E:4F:56:41:00:01 asked for PSM 0011 before encryption: pending',
          r'\[BTH\] 4E:4F:56:41:00:01 opened the HID interrupt channel'], timeout=180,
          acts=[(r'\[BT\] step: away', lambda nova: _ctl('away mouse')),
                (r'\[BT\] step: back', lambda nova: _ctl('back mouse')),

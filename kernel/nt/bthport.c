@@ -119,6 +119,8 @@ struct BthDev {
     volatile UINT8 auth_status, enc_status;
     volatile bool conn_in;             /* the device connected to us (Connection Request accepted) */
     volatile bool hid_kick;            /* ... and HID's driver has not been told yet */
+    UINT16   pend_psm, pend_scid;      /* a channel it asked for before the link was encrypted (answered "pending") */
+    UINT8    pend_ident;
     UINT8    rx[ACL_BUF];              /* an L2CAP frame being put together */
     UINT32   rx_len;
     UINT8    ident;
@@ -478,8 +480,21 @@ static BthChan *incoming(BthRadio *r, BthDev *d, UINT16 psm, UINT16 scid, UINT8 
     SvcPdo *s = d->hid_pdo ? svc(d->hid_pdo) : NULL;
     BthChan *c = NULL;
     if ((psm == 0x0011 || psm == 0x0013) && s && d->paired && d->hid_on && s->input) {
-        if (d->enc != 2 || d->enc_status) res = 0x0003;         /* (security block: not encrypted) */
-        else if (psm == 0x0011 ? s->ctrl != NULL : (!s->ctrl || s->ctrl->state != 3 || s->intr)) res = 0x0004;
+        if (d->enc != 2 || d->enc_status) {                     /* (not encrypted yet: its events can trail its data) */
+            if (!d->pend_psm) {                                 /* ("pending, authentication pending": answered once it is) */
+                d->pend_psm = psm;
+                d->pend_scid = scid;
+                d->pend_ident = ident;
+                put16(b, 0);
+                put16(b + 2, scid);
+                put16(b + 4, 0x0001);
+                put16(b + 6, 0x0001);
+                sig_send(r, d, 0x03, ident, b, 8);
+                kprintf("[BTH] %s asked for PSM %04x before encryption: pending\n", addr_text(d->addr, t), psm);
+                return NULL;
+            }
+            res = 0x0003;                                       /* (security block: one waits already) */
+        } else if (psm == 0x0011 ? s->ctrl != NULL : (!s->ctrl || s->ctrl->state != 3 || s->intr)) res = 0x0004;
         else {                                                  /* (no resources: the host is opening its own) */
             lock(r);
             for (int i = 0; i < MAX_CHANS && !c; i++)
@@ -512,6 +527,20 @@ static BthChan *incoming(BthRadio *r, BthDev *d, UINT16 psm, UINT16 scid, UINT8 
     return c;
 }
 
+/* incoming(), then our configuration request, as for channels we open */
+static void incoming_open(BthRadio *r, BthDev *d, UINT16 psm, UINT16 scid, UINT8 ident)
+{
+    UINT8 b[8];
+    BthChan *c = incoming(r, d, psm, scid, ident);
+    if (!c) return;
+    c->ident = (UINT8)(++d->ident ? d->ident : ++d->ident);
+    put16(b, c->rcid);
+    put16(b + 2, 0);
+    b[4] = 0x01; b[5] = 2;
+    put16(b + 6, OUR_MTU);
+    sig_send(r, d, 0x04, c->ident, b, 8);
+}
+
 /* A request from the device on the signalling channel, or its answer
  * to ours */
 static void l2_signal(BthRadio *r, BthDev *d, UINT8 code, UINT8 ident, const UINT8 *p, UINT16 len)
@@ -524,14 +553,7 @@ static void l2_signal(BthRadio *r, BthDev *d, UINT8 code, UINT8 ident, const UIN
         break;
     case 0x02:                                                  /* Connection Request: HID's, from a paired device */
         if (len < 4) break;
-        c = incoming(r, d, le16(p), le16(p + 2), ident);
-        if (!c) break;
-        c->ident = (UINT8)(++d->ident ? d->ident : ++d->ident);
-        put16(b, c->rcid);                                      /* (then our configuration, as for ours) */
-        put16(b + 2, 0);
-        b[4] = 0x01; b[5] = 2;
-        put16(b + 6, OUR_MTU);
-        sig_send(r, d, 0x04, c->ident, b, 8);
+        incoming_open(r, d, le16(p), le16(p + 2), ident);
         break;
     case 0x03:                                                  /* Connection Response */
         if (len < 8 || !(c = chan_by_lcid(r, d, le16(p + 2)))) break;
@@ -786,6 +808,7 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
             if (!d->used || d->conn != 2 || d->handle != (le16(p + 1) & 0x0FFF)) continue;
             d->conn = 0;
             d->conn_in = d->hid_kick = false;
+            d->pend_psm = 0;
             d->auth = d->enc = 0;
             d->sco = 0;
             for (int c = 0; c < MAX_CHANS; c++) if (r->chan[c].used && r->chan[c].dev == d) r->chan[c].state = 0;
@@ -796,7 +819,19 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
         if (n >= 3 && (d = dev_by_handle(r, le16(p + 1) & 0x0FFF))) { d->auth_status = p[0]; d->auth = 2; }
         break;
     case 0x08:                                                  /* Encryption Change */
-        if (n >= 4 && (d = dev_by_handle(r, le16(p + 1) & 0x0FFF))) { d->enc_status = p[0] ? p[0] : p[3] ? 0 : 0xFF; d->enc = 2; }
+        if (n < 4 || !(d = dev_by_handle(r, le16(p + 1) & 0x0FFF))) break;
+        d->enc_status = p[0] ? p[0] : p[3] ? 0 : 0xFF;
+        d->enc = 2;
+        if (d->pend_psm) {                                      /* (the channel it asked for early: answered now) */
+            UINT16 psm = d->pend_psm, scid = d->pend_scid;
+            d->pend_psm = 0;
+            if (!d->enc_status) { incoming_open(r, d, psm, scid, d->pend_ident); break; }
+            put16(b, 0);
+            put16(b + 2, scid);
+            put16(b + 4, 0x0003);                               /* (security block) */
+            put16(b + 6, 0);
+            sig_send(r, d, 0x03, d->pend_ident, b, 8);
+        }
         break;
     case 0x13: {                                                /* Number Of Completed Packets */
         UINT32 k = n ? p[0] : 0;
@@ -1296,9 +1331,13 @@ NT_STATUS BthServiceDispatch(NT_DEVICE_OBJECT *pdo, NT_IRP *irp)
 
 /* ---- HID's driver ---- */
 
+/* @pdo's HID service, while it is still the device's: a node whose
+ * service went off (or whose device was forgotten, its slot perhaps reused
+ * by a new pairing) waits for its removal and must not touch the link */
 static SvcPdo *hid_svc(NT_DEVICE_OBJECT *pdo)
 {
-    return BthIsServicePdo(pdo) && svc(pdo)->uuid == UUID_HID ? svc(pdo) : NULL;
+    SvcPdo *s = BthIsServicePdo(pdo) && svc(pdo)->uuid == UUID_HID ? svc(pdo) : NULL;
+    return s && s->listed && !s->gone && s->dev->hid_pdo == pdo ? s : NULL;
 }
 
 bool BthHidGetInfo(NT_DEVICE_OBJECT *pdo, BthHidInfo *out)

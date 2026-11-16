@@ -787,9 +787,10 @@ class Radio:
                     return
                 link.auth = True
                 log('authenticated by the device ' + addr_text(addr))
-                self.event(0x08, b'\x00' + struct.pack('<HB', link.handle, 1))
-                if 0x13 in link.remote.psms:
+                if 0x13 in link.remote.psms:                       # (its Encryption Change trails its first request)
                     threading.Thread(target=self.open_hid, args=(link,), daemon=True).start()
+                else:
+                    self.event(0x08, b'\x00' + struct.pack('<HB', link.handle, 1))
             elif link and link.pending_auth == 'key':
                 good = link.remote.key == key
                 link.auth = good
@@ -1061,6 +1062,13 @@ class Radio:
                 link.out[cid] = [False, False]
                 link.ident = (link.ident + 1) & 0xFF or 1
                 self.sig(link, 0x02, link.ident, struct.pack('<HH', psm, cid))
+            if psm == 0x11:
+                # The request reaches the host before the Encryption Change
+                # event, as on a USB radio, where ACL data (bulk) and events
+                # (interrupt) race: the host must hold it, not refuse it
+                time.sleep(0.2)
+                with self.lock:
+                    self.event(0x08, b'\x00' + struct.pack('<HB', link.handle, 1))
             end = time.monotonic() + 5
             while time.monotonic() < end and link.out[cid] != [True, True] and link.out[cid][0] != 'refused':
                 time.sleep(0.05)

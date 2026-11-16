@@ -548,7 +548,7 @@ every 10 seconds while it is out of reach.
 A paired device can also connect by itself, as a mouse moved after sleep
 or a headset switched on does: the host accepts the Connection Request
 of a paired device that has a service on (others are refused), the device
-authenticates the link with its stored key and encrypts it, and a mouse
+authenticates the link with its stored key and encrypts it (a channel it asks for before the host has seen the link encrypted, as a USB radio's events can trail its data, is answered "pending" and opened once it is), and a mouse
 or keyboard then opens HID's control and interrupt channels itself (the
 HID Profile's virtual cable reconnection), which the host gives to its
 `hidbth` node; if it opens none within three seconds, `hidbth` opens them

@@ -33,10 +33,10 @@ static void to_user_bss(const WlanBss *b, NovaWlanBss *o)
     memcpy(o->bssid, b->bssid, 6);
     strncpy(o->ssid, b->ssid, sizeof(o->ssid) - 1);
     o->ssid_len = (unsigned char)strlen(o->ssid);
-    bool psk = b->akms & (1u << 2), sae = b->akms & (1u << 8);
+    bool psk = b->akms & (1u << 2), sae = b->akms & (1u << 8), dot1x = b->akms & (1u << 1);
     o->security = !b->privacy && !b->rsn_len ? NOVAWLAN_OPEN :
                   !b->rsn_len || !(b->pairwise & (1u << 4)) ? NOVAWLAN_OTHER :
-                  sae ? NOVAWLAN_WPA3 : psk ? NOVAWLAN_WPA2 : NOVAWLAN_OTHER;
+                  sae ? NOVAWLAN_WPA3 : psk ? NOVAWLAN_WPA2 : dot1x ? NOVAWLAN_ENTERPRISE : NOVAWLAN_OTHER;
     o->mixed = psk && sae;
     o->privacy = b->privacy;
     o->phy = !b->radio ? 0 : !strcmp(b->radio, "802.11ax") ? 3 : !strcmp(b->radio, "802.11ac") ? 2 :

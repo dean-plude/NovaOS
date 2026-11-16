@@ -186,7 +186,9 @@ interrupt and PnP code.  NovaOS's built-in drivers do not change.
   (D-IRPs from `PoRequestPowerIrp`, sent down the whole stack from the
   power manager's thread; the PCI bus driver moves the function through
   its PMCSR; KMDF's S0 idle and `PoRegisterDeviceForIdleDetection` power
-  idle devices down: step 28.4, `kernel/nt/po.c`),
+  idle devices down, and the power framework's runtime idle (PoFx
+  components, F-states, device power not required): step 28.4,
+  `kernel/nt/po.c`),
   device interfaces (`IoRegisterDeviceInterface`, so `SetupDi*` and
   `CM_Register_Notification` find them through the existing PnP code).
 - **Hardware access**: `IoConnectInterruptEx` (line-based and MSI/MSI-X

@@ -472,10 +472,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   signed by themselves, remove), Settings: `start ms-settings:display`
   opens Display, its search box (Ctrl+F, "printer", Enter) goes to
   Printers; `settings check` draws every page at three window sizes, at
-  its top and scrolled to its end, programs started from the Start menu
-  (Win+S, the name, Enter): `winhello`, a GUI program, with no Terminal
-  window, and `hello`, a console program, in a Terminal, `crash kernel`,
-  a deliberate kernel fault whose serial log must show a backtrace with
+  its top and scrolled to its end, packaged apps in the shell: `appx`
+  installs the test package, the Start menu lists its application by the
+  manifest's name and tile logo and starts it packaged (Win+S, the name,
+  Enter), and Settings > Apps lists the package and uninstalls it (Down,
+  Delete, Enter), programs started from the Start menu (Win+S, the name,
+  Enter): `winhello`, a GUI program, with no Terminal window, and
+  `hello`, a console program, in a Terminal, `crash kernel`, a
+  deliberate kernel fault whose serial log must show a backtrace with
   function names, and last the kernel crash report: after `crash kernel`
   and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
 
@@ -494,7 +498,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `usbboot` | `nova.iso` written to a USB stick, with only the firmware's GOP display: starts live and writes its boot log (and a kernel fault) to the stick |
 | `cdboot` | `nova.iso` as a disc in a SATA DVD drive: starts live |
 | `beside` | a PC with Windows on its NVMe disk (ESP, Microsoft reserved, NTFS volume, free space) and nova.iso on a USB stick: Setup's window installs NovaOS beside Windows in the free space and adds its firmware boot entry, NovaOS starts from the disk through it, its boot menu offers Windows Boot Manager and starts it (a stand-in UEFI application) and NovaOS after it, and the host checks that Windows' partitions are where they were, its reserved partition unchanged byte for byte, its ESP's files unchanged and its NTFS volume and file intact ([design/installer.md](design/installer.md)) |
-| `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there, through the firmware boot entry Setup added |
+| `laptop` | a laptop without S3 whose lid, battery and AC adapter are behind an embedded controller (`tests/acpi/laptop.asl`): battery, processor idle states from `_CST` and `_LPI`, lid sleep in S0 idle and wake, then NovaOS installed from a USB stick onto an NVMe disk and started from there, through the firmware boot entry Setup added |
 | `update` | an installed NovaOS updating itself from signed test channels, refusing bad ones, and going back after a reset ([updates.md](updates.md#the-self-test)) |
 | `rollbacktest` | an installed NovaOS with a previous version beside it (`kernel.old`, `bootx64.old`) and an unfinished update's files: `shutdown /r /o` brings up the boot loader's Advanced startup menu, which starts safe mode, startup repair (it removes the unfinished update and writes `SrtTrail.txt`) and the previous version; after two starts reset before the desktop the menu comes up by itself and runs startup repair ([design/recovery.md](design/recovery.md)) |
 | `gamepad` | a wired Xbox 360, an Xbox One and a HID game pad (`tools/padpeer.py`): `padtest` through XInput and DirectInput 8, motors, unplugging |
@@ -509,10 +513,10 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `vioser` | virtio-win's signed `vioser.sys` (KMDF) on virtio-serial: bytes to the host and back |
 | `usbserial` | QEMU's FTDI FT232 USB serial adapter: FTDI's own driver found by hardware ID, the port becomes COM3 and `serialtest` loops data through it |
 | `ax211` | Intel's AX211 Wi-Fi driver (`Netwtw14.sys`) downloaded by hardware ID and loaded on a stand-in PCI device; it loads its firmware and registers with NDIS, and its hardware probe fails as expected, since the device is not a real AX211 |
-| `wifi` | a WDI Wi-Fi miniport (`wditest.sys`) on the edu device, hearing three access points: NovaOS's WDI command layer reads its capabilities, creates its station port and scans; `netsh wlan show interfaces` and `netsh wlan show networks mode=bssid` list the adapter and the networks; `netsh wlan connect name=NovaGuest` joins the open one, and DHCP and ping run over the WDI data path (802.11 frames through the driver's TAL); disconnecting gives the Ethernet card back; disabling it deletes the port and stops the data path |
+| `wifi` | a WDI Wi-Fi miniport (`wditest.sys`) on the edu device, hearing four access points: NovaOS's WDI command layer reads its capabilities, creates its station port and scans; `netsh wlan show interfaces` and `netsh wlan show networks mode=bssid` list the adapter and the networks; `netsh wlan connect name=NovaGuest` joins the open one, and DHCP and ping run over the WDI data path (802.11 frames through the driver's TAL); disconnecting gives the Ethernet card back; disabling it deletes the port and stops the data path |
 | `viostor` | virtio-win's signed `viostor.sys` on virtio-blk, on NovaOS's Storport host: its NTFS volume mounts as D: |
 | `umdf` | a UMDF 2 driver (`umdftest.dll`) on the edu device, running in `WUDFHost.exe` |
-| `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA |
+| `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA, and runtime idle through the power framework (F1 and D3, then back) |
 | `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
 | `devmgr` | Device Manager (`devmgmt.exe`) opened from the Start menu, then `devmgmt --check` on an e1000e card, a USB keyboard and tablet and the driverless edu device: setupapi's list against cfgmgr32's tree, classes, status and problem codes, resources (`CM_Get_First_Log_Conf`); its screenshot is `docs/screenshots/device-manager.png` |
 | `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled; then a WDDM render miniport (`wddmtest.sys`) on a root-enumerated device, whose adapter, devices, allocations, GPU virtual addresses, command submission (contexts, DMA buffers its software GPU runs, fences it signals and waits on), preemption and TDR (a spinning buffer preempted, a hung one reset and its context lost) `kmttest wddm` drives through `D3DKMT*` |

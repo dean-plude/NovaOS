@@ -2,7 +2,8 @@
  * (tools/selftest.py starts QEMU without \_S3, as the ThinkPad T14 Gen 4's
  * firmware has none): an embedded controller holding the lid switch, a
  * battery and the AC adapter, which their methods read as a real laptop's
- * do; an LPS0 device; a thermal zone; and the processors' C-states.
+ * do; an LPS0 device; a thermal zone; and the processors' C-states (_CST,
+ * and for the second processor and its container also _LPI).
  *
  * QEMU emulates no embedded controller: _HID NOVA0EC1 makes NovaOS serve
  * this one with the model of a controller in kernel/hal/ec.c (its ports
@@ -156,11 +157,65 @@ DefinitionBlock ("", "SSDT", 2, "NOVA", "LAPTOP", 1)
         Method (_PDC, 1) { PDCS (Arg0) }
         Method (_CST) { Return (CSTS ()) }
     }
+    /* The second processor describes the same states as low-power idle
+     * states (_LPI, ACPI 6.5 section 8.4.4, step 28.4's second part),
+     * which an OS uses once the platform-wide _OSC agreed to
+     * platform-coordinated LPI (bit 7): C1 and C2 of its own, and the
+     * container's (\_SB.CPUS, QEMU's ACPI0010) package state PC6, which
+     * C2 allows and which is entered with MWAIT hint 0x20 (C2 with PC6 is
+     * the C3 of _CST: 200 us).  With no MWAIT, C1 is HLT and PC6 cannot be
+     * entered.  _CST stays for an OS that did not ask. */
+    Scope (\_SB)
+    {
+        Method (_OSC, 4)
+        {
+            CreateDWordField (Arg3, 0, STS0)
+            If (Arg0 == ToUUID ("0811b06e-4a27-44f9-8d60-3cbbc22e7b48"))
+            {
+                CreateDWordField (Arg3, 4, CAP0)
+                CAP0 &= 0x80                        /* (platform-coordinated LPI only) */
+            }
+            Else
+            {
+                STS0 |= 0x04                        /* unrecognised UUID */
+            }
+            Return (Arg3)
+        }
+    }
+    External (\_SB.CPUS, DeviceObj)
+    Scope (\_SB.CPUS)
+    {
+        Name (_LPI, Package () { 0, 0, 1,
+            Package () { 300, 150, 1, 0, 0, 0, ResourceTemplate () { Register (FFixedHW, 1, 2, 0x20, 3) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) }, "PC6" } })
+    }
+    Method (LPIS, 0)
+    {
+        If ((PDCV & 0x0300) != 0x0300)
+        {
+            Return (Package () { 0, 0, 2,
+                Package () { 2, 1, 1, 0, 0, 0, ResourceTemplate () { Register (FFixedHW, 0, 0, 0) },
+                             ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                             ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) }, "C1" },
+                Package () { 100, 50, 1, 0, 0, 1, ResourceTemplate () { Register (SystemIO, 8, 0, 0xE9) },
+                             ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                             ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) }, "C2" } })
+        }
+        Return (Package () { 0, 0, 2,
+            Package () { 2, 1, 1, 0, 0, 0, ResourceTemplate () { Register (FFixedHW, 1, 2, 0x00, 1) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) }, "C1" },
+            Package () { 100, 50, 1, 0, 0, 1, ResourceTemplate () { Register (SystemIO, 8, 0, 0xE9) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                         ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) }, "C2" } })
+    }
     External (\_SB.CPUS.C001, DeviceObj)
     Scope (\_SB.CPUS.C001)
     {
         Method (_PDC, 1) { PDCS (Arg0) }
         Method (_CST) { Return (CSTS ()) }
+        Method (_LPI) { Return (LPIS ()) }
     }
 
     Scope (\_TZ)

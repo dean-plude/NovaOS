@@ -27,6 +27,7 @@
 #define WPA_IE_MAX    64
 #define WPA_FRAME_MAX 256           /* (an EAPOL-Key frame the station sends) */
 #define WPA_IGTK_LEN  16            /* (BIP-CMAC-128) */
+#define WPA_AKM_8021X 1             /* (WPA2-Enterprise: the PMK from EAP, eap.h) */
 #define WPA_AKM_PSK   2
 #define WPA_AKM_SAE   8
 

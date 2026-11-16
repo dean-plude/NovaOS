@@ -202,7 +202,7 @@ void ExplorerOpen(RamNode *dir);
 void NotepadOpen(RamNode *file);
 void SettingsOpen(void);
 /* Settings pages (for SettingsOpenPage) */
-enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_STORAGE,
+enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_APPS, SETTINGS_STORAGE,
        SETTINGS_NETWORK, SETTINGS_WIFI, SETTINGS_FIREWALL, SETTINGS_ACCOUNTS, SETTINGS_TIME_LANGUAGE, SETTINGS_PRINTERS, SETTINGS_ABOUT,
        SETTINGS_ACCOUNTS_ADD = 100 /* Accounts, with "Add an account" open */ };
 /* Open Settings (or focus the open window) at page @page */
@@ -223,6 +223,11 @@ const char *SettingsPageKeys(int page);
  * (returns its content's bottom);
  * a click at client (x, y) on the page drawn at (px, py), pw wide (true:
  * draw it again); true when what it shows changed */
+/* Settings' Apps page (settings_apps.c): the installed app packages, Uninstall */
+int  AppsPagePaint(int x, int y, int w);
+bool AppsPageMouse(int px, int py, int pw, int x, int y);
+bool AppsPageKey(const KeyEvent *k);
+bool AppsPageTick(void);
 int FirewallPagePaint(int x, int y, int w);
 bool FirewallPageMouse(int px, int py, int pw, int x, int y);
 bool FirewallPageTick(void);

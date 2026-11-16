@@ -1,7 +1,9 @@
 # A laptop like the ThinkPad T14 Gen 4 (docs/hardware.md): no \_S3 (Modern
 # Standby firmware), no HPET, an embedded controller behind the lid,
 # battery and AC adapter, an LPS0 device, processor C-states in _CST
-# (tests/acpi/laptop.asl; MWAIT ones when the CPU has MWAIT), no
+# (tests/acpi/laptop.asl; MWAIT ones when the CPU has MWAIT) and, for the
+# second processor and its container, as low-power idle states in _LPI
+# (taken once the platform-wide _OSC agreed to them), no
 # display adapter NovaOS drives (the firmware's GOP only), nova.iso on a
 # USB stick and an empty NVMe disk.  The idle CPUs wait in their deepest
 # C-state, and CPU 1 stops its tick while idle (idletest).  The lid sleeps it in low-power S0
@@ -10,7 +12,8 @@
 import time
 
 DOC = ('a laptop without S3 whose lid and battery sit behind an embedded controller (`tests/acpi/laptop.asl`): '
-       'the battery read through it, idle CPUs in the C-states its `_CST` describes (MWAIT and a port, or HLT and the port without MWAIT) with CPU 1\'s '
+       'the battery read through it, idle CPUs in the C-states its `_CST` describes (MWAIT and a port, or HLT and the port without MWAIT), and CPU 1 in the same '
+       'states from its `_LPI` with its container\'s package state flattened in, with CPU 1\'s '
        'tick stopped while idle (`idletest`), the lid sleeping it in low-power S0 idle and waking it, then `install` '
        'onto an NVMe disk from the USB stick and the first start from that disk')
 
@@ -46,8 +49,9 @@ TESTS = [
          boot_expect=[r'\[IDLE\] MWAIT (yes|no)[^\n]*, in a virtual machine',
                       r'\[IDLE\] CPU 0: (C1 \(MWAIT 0x00, 1 us\), C2 \(I/O 0xe9, 50 us\), C3 \(MWAIT 0x20, 200 us\)|'
                       r'C1 \(HLT, 1 us\), C2 \(I/O 0xe9, 50 us\)), from \\_SB_\.CPUS\.C000\._CST',
+                      r'\[ACPI\] \\_SB\._OSC: platform-coordinated low-power idle states \(_LPI\) supported',
                       r'\[IDLE\] CPU 1: (C1 \(MWAIT 0x00, 1 us\), C2 \(I/O 0xe9, 50 us\), C3 \(MWAIT 0x20, 200 us\)|'
-                      r'C1 \(HLT, 1 us\), C2 \(I/O 0xe9, 50 us\)), from \\_SB_\.CPUS\.C001\._CST']),
+                      r'C1 \(HLT, 1 us\), C2 \(I/O 0xe9, 50 us\)), from \\_SB_\.CPUS\.C001\._LPI and \\_SB_\.CPUS\._LPI']),
     Test('lid sleep (S0 idle)', 'cmd /c echo awake', [r'awake'], before=lid_sleep,
          boot_expect=[r'\[EC\] Event 0x2a: _Q2A', r'\[ACPI\] Lid closed', r'\[SHELL\] Lid closed: sleeping',
                       r'\[SLEEP\] No S3 on this machine: sleeping in low-power S0 idle',

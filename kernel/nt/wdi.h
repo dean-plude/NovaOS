@@ -227,6 +227,7 @@ typedef struct __attribute__((packed)) {
  * WDI_TLV_ASSOCIATION_RESULT per access point tried), then
  * WDI_INDICATION_CONNECT_COMPLETE. */
 #define WDI_AUTH_ALGO_80211_OPEN  1
+#define WDI_AUTH_ALGO_RSNA        6         /* (802.1X: WPA2-Enterprise) */
 #define WDI_AUTH_ALGO_RSNA_PSK    7
 #define WDI_AUTH_ALGO_WPA3_SAE    9
 #define WDI_CIPHER_ALGO_NONE      0x00

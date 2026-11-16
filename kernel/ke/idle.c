@@ -6,8 +6,9 @@
  * leave.  Each CPU has a table of the states it may enter, shallowest
  * first:
  *
- *   - its processor object's _CST (hal/cstate.c), the way Windows and
- *     Linux read it: a state entered with MWAIT and a hint (FFixedHW,
+ *   - its processor object's _LPI, with its processor container's states
+ *     flattened in, or else its _CST (hal/cstate.c), the way Windows and
+ *     Linux read them: a state entered with MWAIT and a hint (FFixedHW,
  *     Intel's "native C-state instruction"), by reading a port (System
  *     I/O: the chipset's P_LVLx registers) or with HLT (C1);
  *   - else the C-states CPUID leaf 5 enumerates MWAIT sub-states for
@@ -144,7 +145,7 @@ void IdleInit(void)
     int n = 0;
     for (UINT32 c = 1; c < 8 && n < IDLE_MAX_STATES; c++)
         if ((g_mwait_edx >> (c * 4)) & 0xF)
-            s[n++] = (IdleState){ IDLE_MWAIT, (UINT8)(c < 3 ? c : 3), (c - 1) << 4, latency[c], 0 };
+            s[n++] = (IdleState){ IDLE_MWAIT, (UINT8)(c < 3 ? c : 3), (c - 1) << 4, latency[c], 0, 0 };
     for (UINT32 i = 0; i < MAX_CPUS; i++) IdleSetStates(i, s, n, i ? NULL : "CPUID leaf 5");
 }
 
@@ -164,12 +165,15 @@ void IdleSetStates(UINT32 cpu, const IdleState *s, int n, const char *source)
     if (source) log_states(cpu, source);
 }
 
-/* The deepest state worth entering for @us microseconds of idle time */
+/* The deepest state worth entering for @us microseconds of idle time: its
+ * minimum residency (_LPI's), else twice its exit latency */
 static int pick(const CpuIdle *c, int n, UINT64 us)
 {
     int best = 0;
-    for (int i = 1; i < n; i++)
-        if ((UINT64)c->s[i].latency_us * 2 <= us) best = i;
+    for (int i = 1; i < n; i++) {
+        UINT64 need = c->s[i].residency_us ? c->s[i].residency_us : (UINT64)c->s[i].latency_us * 2;
+        if (need <= us) best = i;
+    }
     return best;
 }
 

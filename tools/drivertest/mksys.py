@@ -32,7 +32,7 @@ edutest.sys's, wddmdod.sys's, wddmtest.sys's, wditest.sys's and btfilter.sys's p
 are signed as wdmcat's is: a test-signed catalog, NAME.cat, lists the INF
 and the .sys.
 """
-import os, re, struct, subprocess, sys
+import concurrent.futures, glob, os, re, struct, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
 from pki import Cert, Key                                       # noqa: E402
 from sign import sign                                           # noqa: E402
 from catalog import catalog                                     # noqa: E402
+from pki import integer, seq                                    # noqa: E402
 
 LONG = ((2020, 1, 1, 0, 0, 0), (2049, 12, 31, 23, 59, 59))
 
@@ -171,6 +172,47 @@ def import_libs(work):
     return libs
 
 
+def radius_certs(work, out):
+    """wditest.sys's WPA2-Enterprise authentication server's certificate
+    (tools/drivertest/eapap.h): "radius.novacorp.test" (a TLS server
+    certificate) under "NovaCorp Test Root", both from fixed seeds and
+    trusted by nobody until the wifi self-test imports the root
+    (novacorp-ca.cer beside the driver: certutil -addstore root).  The
+    server's certificate and its RSA key (PKCS #1 DER) go into the driver as
+    wditest_certs.h"""
+    root_key, server_key = Key('novacorp-test-root'), Key('novacorp-radius-server')
+    root = Cert('NovaCorp Test Root', root_key, 1, LONG, ca=True)
+    server = Cert('radius.novacorp.test', server_key, 2, LONG, root, root_key, usage='server')
+    k = server_key
+    der = seq(*[integer(v) for v in (0, k.n, k.e, k.d, k.p, k.q, k.dp, k.dq, k.qi)])
+
+    def arr(name, b):
+        rows = ',\n'.join('    ' + ', '.join(f'0x{x:02x}' for x in b[i:i + 16]) for i in range(0, len(b), 16))
+        return f'static const unsigned char {name}[{len(b)}] = {{\n{rows}\n}};\n'
+    write(os.path.join(work, 'wditest_certs.h'),
+          ('/* made by tools/drivertest/mksys.py: NovaCorp\'s RADIUS server certificate and key */\n#pragma once\n' +
+           arr('CERT_SERVER', server.der) + arr('KEY_SERVER', der)).encode())
+    write(os.path.join(out, 'novacorp-ca.cer'), root.der)
+
+
+def mbedtls_objects(work):
+    """Mbed TLS (third_party/mbedtls) compiled for wditest.sys: its own
+    configuration and C library headers (tools/drivertest/mbedtls)"""
+    lib = os.path.join(ROOT, 'third_party', 'mbedtls')
+    srcs = sorted(glob.glob(os.path.join(lib, 'library', '*.c')))
+
+    def cc(src):
+        obj = os.path.join(work, 'mbedtls_' + os.path.basename(src)[:-2] + '.obj')
+        run(['clang', '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-stack-protector',
+             '-mno-stack-arg-probe', '-w', '-nostdlibinc', '-U_WIN32', '-U_WIN64',     # (no Win32 in a driver)
+             '-I', os.path.join(HERE, 'mbedtls'),
+             '-I', os.path.join(lib, 'include'), '-I', os.path.join(lib, 'library'),
+             '-DMBEDTLS_CONFIG_FILE="mbedtls_wditest_config.h"', '-c', src, '-o', obj])
+        return obj
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 2) as ex:
+        return list(ex.map(cc, srcs))
+
+
 def main():
     out = sys.argv[1]
     name = sys.argv[2] if len(sys.argv) > 2 else 'wdmtest'
@@ -179,15 +221,22 @@ def main():
     os.makedirs(work, exist_ok=True)
     libs = import_libs(work)
     obj = os.path.join(work, name + '.obj')
+    extra, flags = [], []
+    if name == 'wditest':           # (its RADIUS server: TLS by Mbed TLS, with a test certificate)
+        radius_certs(work, out)
+        extra = mbedtls_objects(work)
+        lib = os.path.join(ROOT, 'third_party', 'mbedtls')
+        flags = ['-I', work, '-I', os.path.join(HERE, 'mbedtls'), '-I', os.path.join(lib, 'include'),
+                 '-DMBEDTLS_CONFIG_FILE="mbedtls_wditest_config.h"']
     # -fasync-exceptions (MSVC's /EHa for the kernel): without it the
     # optimizer assumes a memory access never faults and deletes a
     # __try/__except around one, dropping the .pdata/.xdata and the
     # __C_specific_handler import the kernel's SEH (kernel/nt/seh.c) walks.
     run(['clang', '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-stack-protector',
-         '-mno-stack-arg-probe', '-fno-builtin', '-fasync-exceptions', '-Wall', '-c',
+         '-mno-stack-arg-probe', '-fno-builtin', '-fasync-exceptions', '-Wall'] + flags + ['-c',
          os.path.join(HERE, name + '.c'), '-o', obj])
     run(['lld-link', '/driver', '/subsystem:native', '/entry:DriverEntry', '/nodefaultlib', '/machine:x64',
-         '/base:0x140000000', obj] + libs + [f'/out:{os.path.join(out, name + ".sys")}'])
+         '/base:0x140000000', obj] + extra + libs + [f'/out:{os.path.join(out, name + ".sys")}'])
     for n in os.listdir(work):
         os.remove(os.path.join(work, n))
     os.rmdir(work)

@@ -439,8 +439,9 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   graphics kernel's D3DKMT* calls on NovaOS's Basic Render adapter, step
   3 of docs/design/intel-gpu.md: adapters by LUID, devices, allocations
   counted as video memory and mapped by `D3DKMTLock2`, monitored fences
-  signalled and waited on from the CPU, with an event or another
-  thread), `accounttest` (local accounts:
+  signalled and waited on from the CPU, with an event or another thread;
+  again as a 32-bit program, its structures rebuilt in their x64 layouts
+  by gdi32), `accounttest` (local accounts:
   NetUserAdd/Enum/GetInfo/SetInfo/ChangePassword/Del, LogonUser refusing
   a wrong password and signing in with the right one, the account's own
   SID, token, profile in C:\Users, HKEY_CURRENT_USER and environment,
@@ -511,7 +512,7 @@ boot does not have (`tests/selftest/devices/NAME/`):
 | `kmdfedu` | a KMDF driver (`kmdfedu.sys`) on the edu device, with its memory, interrupt (line, then MSI) and DMA |
 | `netkvm` | virtio-win's signed `netkvm.sys` in place of the built-in virtio-net driver, on NovaOS's NDIS host: DHCP, ping and a download |
 | `devmgr` | Device Manager (`devmgmt.exe`) opened from the Start menu, then `devmgmt --check` on an e1000e card, a USB keyboard and tablet and the driverless edu device: setupapi's list against cfgmgr32's tree, classes, status and problem codes, resources (`CM_Get_First_Log_Conf`); its screenshot is `docs/screenshots/device-manager.png` |
-| `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled; then a WDDM render miniport (`wddmtest.sys`) on a root-enumerated device, whose adapter, devices, allocations, GPU virtual addresses, command submission (contexts, DMA buffers its software GPU runs, fences it signals and waits on), preemption and TDR (a spinning buffer preempted, a hung one reset and its context lost) `kmttest wddm` drives through `D3DKMT*` |
+| `wddm` | a WDDM display-only driver (`wddmdod.sys`) on the standard VGA: takes over the desktop through NovaOS's dxgkrnl host, changes mode, gives the screen back when disabled; then a WDDM render miniport (`wddmtest.sys`) on a root-enumerated device, whose adapter, devices, allocations, GPU virtual addresses, command submission (contexts, DMA buffers its software GPU runs, fences it signals and waits on), preemption and TDR (a spinning buffer preempted, a hung one reset and its context lost) and sharing by NT handle with a second process (its GPU writing the shared allocation and fence) `kmttest wddm` drives through `D3DKMT*`, 64-bit and 32-bit |
 | `diskmgr` | a blank second disk: Disk Management (`diskmgmt.exe`), opened from the Start menu, initializes it as GPT, makes an NTFS and a FAT32 volume and moves one to T: (still T: after a restart); `scripts/ntfs-check.py`, `fsck.fat` and the files are checked from the host |
 
 [drivers.md](drivers.md) has more on the Windows driver model these boots

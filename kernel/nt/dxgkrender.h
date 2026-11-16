@@ -34,6 +34,15 @@ void   DxgkRenderDestroyDevice(UINT64 luid, UINT32 dev);
 UINT32 DxgkRenderCreateAllocation(UINT64 luid, UINT32 dev, const void *priv, UINT32 priv_size, UINT64 *size,
                                   UINT32 *alloc);
 void   DxgkRenderDestroyAllocation(UINT64 luid, UINT32 alloc);
+/* Sharing (an NT handle to a resource, D3DKMTShareObjects): the driver's
+ * allocation behind @alloc, kept for the share until it is released (its
+ * opens and its share each keep it); dxgkrnl's handle for it, 0 if none.
+ * Open: that allocation on device @dev, another process's
+ * (DxgkDdiOpenAllocation with the private data it was made with):
+ * NTSTATUS, and *size and *alloc, a handle as CreateAllocation's */
+UINT32 DxgkRenderShareAllocation(UINT64 luid, UINT32 alloc);
+UINT32 DxgkRenderOpenAllocation(UINT64 luid, UINT32 dev, UINT32 shared, UINT64 *size, UINT32 *alloc);
+void   DxgkRenderReleaseShared(UINT64 luid, UINT32 shared);
 
 /* @owner's GPU virtual addresses on the adapter (the address space its
  * devices share), each NTSTATUS.  Reserve: @size bytes at @base, or where

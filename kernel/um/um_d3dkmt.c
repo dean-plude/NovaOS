@@ -48,10 +48,20 @@
  * writes).  The scheduler's thread wakes the waits without g_lock, so the
  * waiters have their own lock.
  *
- * Not yet (the next parts of step 3, with wddmtest.sys, a render miniport
- * whose "GPU" runs in software): GPU virtual addresses on Basic Render,
- * eviction, preemption and TDR, contexts broadcast to several engines,
- * shared resources and 32-bit programs' structures.
+ * Step 3's sixth part: resources (D3DKMTCreateAllocation2's CreateResource:
+ * allocations together, with the runtime's and the driver's private data)
+ * and fences made shareable (NtSecuritySharing) are shared by NT handle
+ * (D3DKMTShareObjects): a UO_DXGK_SHARE object holds their pages (and a
+ * miniport's driver allocation), and another process that has the handle
+ * (duplicated or inherited) opens them on its own device:
+ * D3DKMTQueryResourceInfoFromNtHandle, D3DKMTOpenResourceFromNtHandle
+ * (DxgkDdiOpenAllocation there), D3DKMTOpenSyncObjectFromNtHandle2 (the
+ * fence's value page mapped into it, for its CPU and its GPU).  32-bit
+ * programs' structures are rebuilt in these x64 layouts by their gdi32.
+ *
+ * Not yet: GPU virtual addresses on Basic Render, eviction, contexts
+ * broadcast to several engines, named shares, keyed mutexes and the older
+ * global (D3DKMT_HANDLE) share handles.
  *
  * Handles (D3DKMT_HANDLE) are the process's own, as Windows' are; a
  * process's objects go with it (um_d3dkmt_process_gone).  A view the
@@ -131,6 +141,16 @@ typedef struct { UINT64 commands; UINT32 length, flags; UINT64 history; UINT32 n
 typedef struct { UINT32 count, pad; UINT64 handles; UINT32 flags, ncontexts; UINT64 contexts;
                  union { UINT64 value; UINT64 values; UINT64 reserved[8]; }; } SignalFromGpu2;
 typedef struct { UINT32 context, count; UINT64 handles; union { UINT64 values; UINT64 value; UINT64 reserved[8]; }; } WaitFromGpu;
+/* Sharing by NT handle.  D3DKMTShareObjects takes its arguments one by one
+ * (gdi32 packs them: NOVA's own); the rest are Windows' structures */
+typedef struct { UINT32 count, access; UINT64 handles, oa, out; } ShareObjects;
+typedef struct { UINT32 alloc, pad; UINT64 priv; UINT32 priv_size, pad2; UINT64 gpu_va, reserved[6]; } OpenAllocInfo2;
+typedef struct { UINT32 device, pad; UINT64 nt; UINT32 num, pad2; UINT64 info; UINT32 rt_size, pad3; UINT64 rt;
+                 UINT32 rpriv_size, pad4; UINT64 rpriv; UINT32 total_size, pad5; UINT64 total; UINT32 resource, keyed_mutex;
+                 UINT64 km_rt; UINT32 km_rt_size, sync; } OpenResourceFromNt;
+typedef struct { UINT32 device, pad; UINT64 nt, rt; UINT32 rt_size, total_size, rpriv_size, num; } QueryResourceInfoFromNt;
+typedef struct { UINT64 nt; UINT32 device, flags, sync, pad;
+                 union { struct { UINT64 cpu_va, gpu_va; UINT32 affinity, pad; } mf; UINT64 reserved[8]; }; } OpenSyncFromNt2;
 
 #define OFF(t, m) __builtin_offsetof(t, m)
 _Static_assert(sizeof(AdapterInfo) == 20 && sizeof(EnumAdapters2) == 16 && sizeof(OpenFromLuid) == 12 &&
@@ -159,6 +179,14 @@ _Static_assert(sizeof(SubmitCommand) == 384 && OFF(SubmitCommand, broadcast) == 
 _Static_assert(sizeof(SignalFromGpu2) == 96 && OFF(SignalFromGpu2, contexts) == 24 && OFF(SignalFromGpu2, values) == 32 &&
                sizeof(WaitFromGpu) == 80 && OFF(WaitFromGpu, values) == 16,
                "D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2, D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU");
+_Static_assert(sizeof(OpenAllocInfo2) == 80 && OFF(OpenAllocInfo2, gpu_va) == 24, "D3DDDI_OPENALLOCATIONINFO2");
+_Static_assert(sizeof(OpenResourceFromNt) == 104 && OFF(OpenResourceFromNt, info) == 24 &&
+               OFF(OpenResourceFromNt, total) == 72 && OFF(OpenResourceFromNt, resource) == 80 &&
+               OFF(OpenResourceFromNt, sync) == 100, "D3DKMT_OPENRESOURCEFROMNTHANDLE");
+_Static_assert(sizeof(QueryResourceInfoFromNt) == 40 && OFF(QueryResourceInfoFromNt, num) == 36,
+               "D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE");
+_Static_assert(sizeof(OpenSyncFromNt2) == 88 && OFF(OpenSyncFromNt2, sync) == 16 && OFF(OpenSyncFromNt2, mf.gpu_va) == 32,
+               "D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2");
 
 enum {
     OP_ENUM_ADAPTERS2, OP_OPEN_ADAPTER_FROM_LUID, OP_CLOSE_ADAPTER, OP_QUERY_ADAPTER_INFO,
@@ -166,7 +194,8 @@ enum {
     OP_LOCK2, OP_UNLOCK2, OP_CREATE_SYNC2, OP_DESTROY_SYNC, OP_SIGNAL_FROM_CPU, OP_WAIT_FROM_CPU,
     OP_QUERY_VIDEO_MEMORY_INFO, OP_CREATE_PAGING_QUEUE, OP_DESTROY_PAGING_QUEUE, OP_RESERVE_GPU_VA,
     OP_MAP_GPU_VA, OP_FREE_GPU_VA, OP_MAKE_RESIDENT, OP_EVICT, OP_CREATE_CONTEXT_VIRTUAL, OP_DESTROY_CONTEXT,
-    OP_SUBMIT_COMMAND, OP_SIGNAL_FROM_GPU2, OP_WAIT_FROM_GPU,
+    OP_SUBMIT_COMMAND, OP_SIGNAL_FROM_GPU2, OP_WAIT_FROM_GPU, OP_SHARE_OBJECTS, OP_QUERY_RESOURCE_INFO_FROM_NT,
+    OP_OPEN_RESOURCE_FROM_NT, OP_OPEN_SYNC_FROM_NT2,
 };
 
 #define QAI_GETSEGMENTSIZE 3
@@ -179,9 +208,19 @@ enum {
 #define SYNC_FENCE           3
 #define SYNC_MONITORED_FENCE 5
 
-/* D3DKMT_CREATEALLOCATIONFLAGS this adapter cannot do yet: CreateResource,
- * CreateShared, ExistingSysMem, StandardAllocation, ExistingSection */
-#define ALLOC_FLAGS_UNSUPPORTED (0x1u | 0x2u | 0x20u | 0x10000u | 0x20000u)
+/* D3DKMT_CREATEALLOCATIONFLAGS: a resource (its allocations together),
+ * shared by an NT handle; not yet: ExistingSysMem, StandardAllocation,
+ * ExistingSection */
+#define ALLOC_CREATE_RESOURCE 0x1u
+#define ALLOC_CREATE_SHARED   0x2u
+#define ALLOC_NT_SHARING      0x40u
+#define ALLOC_FLAGS_UNSUPPORTED (0x20u | 0x10000u | 0x20000u)
+/* D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS */
+#define SYNC_SHARED           0x1u
+#define SYNC_NT_SHARING       0x2u
+
+#define MAX_SHARE  16                 /* allocations one shared resource may have */
+#define MAX_RT     4096               /* a resource's private runtime data */
 
 /* -----------------------------------------------------------------------
  * Objects
@@ -202,7 +241,7 @@ typedef struct {
     PADDR    page;                    /* (monitored: 0 otherwise) */
 } Fence;
 
-typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC, K_PQUEUE, K_CONTEXT } Kind;
+typedef enum { K_FREE, K_ADAPTER, K_DEVICE, K_ALLOC, K_SYNC, K_PQUEUE, K_CONTEXT, K_RESOURCE } Kind;
 
 typedef struct {
     Kind     kind;
@@ -216,7 +255,28 @@ typedef struct {
     UINT64   va;                      /* an allocation's view while locked; a monitored fence's value page */
     UINT64   gpu_va;                  /* a monitored fence's value page, in the GPU's view (a miniport's) */
     int      locks;
+    UINT32   resource;                /* an allocation's resource (its handle), or 0 */
+    bool     shareable;               /* a resource or fence made to be shared by an NT handle */
+    void    *priv;                    /* a shareable resource's allocation: its private driver data;
+                                         a resource: its private runtime data */
+    UINT32   priv_size;
+    void    *rpriv;                   /* a resource's private driver data */
+    UINT32   rpriv_size;
 } Object;
+
+/* What an NT handle from D3DKMTShareObjects holds (a UO_DXGK_SHARE
+ * object's): a resource's allocations (their pages, the driver's
+ * allocation behind each, the private data to open them with) or a fence,
+ * kept while any handle to it is open, in any process */
+typedef struct {
+    Kind     kind;                    /* K_RESOURCE or K_SYNC */
+    UINT64   luid;
+    Fence   *fence;
+    int      n;
+    struct { Memory *mem; UINT32 global; void *priv; UINT32 priv_size; } a[MAX_SHARE];
+    void    *rt, *rpriv;
+    UINT32   rt_size, rpriv_size;
+} Share;
 
 typedef struct Proc {
     struct Proc *next;
@@ -356,6 +416,8 @@ static void waiters_check(void)
 /* Drop object @o; @p: its process, still mapped (NULL when the process is going) */
 static void object_free(Proc *q, Object *o, UmProcess *p)
 {
+    kfree(o->priv);
+    kfree(o->rpriv);
     if (o->kind == K_ALLOC) {
         if (o->va && p) um_unmap_view_at(p, o->va, o->mem);
         if (o->luid == BASIC_LUID_LO) q->usage -= o->mem->size;
@@ -465,20 +527,53 @@ static UINT32 destroy_device(Proc *q, UINT32 dev, UmProcess *p)
     for (int i = 0; i < q->nobj; i++)                   /* (its contexts' work first: it uses the rest) */
         if (q->obj[i].kind == K_CONTEXT && q->obj[i].device == dev) object_free(q, &q->obj[i], p);
     for (int i = 0; i < q->nobj; i++)
-        if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC || q->obj[i].kind == K_PQUEUE) &&
-            q->obj[i].device == dev)
+        if ((q->obj[i].kind == K_ALLOC || q->obj[i].kind == K_SYNC || q->obj[i].kind == K_PQUEUE ||
+             q->obj[i].kind == K_RESOURCE) && q->obj[i].device == dev)
             object_free(q, &q->obj[i], p);
     object_free(q, d, p);
     return ST_OK;
 }
 
+/* A copy of @n bytes at @src (NULL for none); false if out of memory */
+static bool dup(void **dst, UINT32 *size, const void *src, UINT32 n)
+{
+    *dst = NULL;
+    *size = 0;
+    if (!n) return true;
+    if (!(*dst = kmalloc(n))) return false;
+    memcpy(*dst, src, n);
+    *size = n;
+    return true;
+}
+
 /* Each allocation of @a (@info: its D3DDDI_ALLOCATIONINFO2s, filled in;
- * @priv: their private driver data, MAX_PRIV bytes apart) */
-static UINT32 create_allocation2(Proc *q, const CreateAllocation *a, AllocInfo2 *info, const UINT8 *priv)
+ * @priv: their private driver data, MAX_PRIV bytes apart); with
+ * CreateResource, a resource holding them (@rt: its private runtime data,
+ * @rpriv: its private driver data), shareable by an NT handle with
+ * CreateShared and NtSecuritySharing (the older global share handles: not
+ * done) */
+static UINT32 create_allocation2(Proc *q, CreateAllocation *a, AllocInfo2 *info, const UINT8 *priv, const void *rt,
+                                 const void *rpriv)
 {
     Object *d = object(q, a->device, K_DEVICE);
     if (!d) return ST_INVALID_PARAM;
     if (a->flags & ALLOC_FLAGS_UNSUPPORTED) return ST_NOT_SUPPORTED;
+    bool res = a->flags & ALLOC_CREATE_RESOURCE, shared = a->flags & ALLOC_CREATE_SHARED;
+    if (a->resource && !res) return ST_NOT_SUPPORTED;                  /* (adding to a resource: not yet) */
+    if (shared && (!res || !(a->flags & ALLOC_NT_SHARING) || a->num > MAX_SHARE)) return ST_NOT_SUPPORTED;
+    UINT32 rh = 0;
+    if (res) {
+        if (!(rh = handle_new(q, K_RESOURCE))) return ST_NO_MEMORY;
+        d = object(q, a->device, K_DEVICE);
+        Object *r = object(q, rh, K_RESOURCE);
+        r->device = a->device;
+        r->luid = d->luid;
+        r->shareable = shared;
+        if (!dup(&r->priv, &r->priv_size, rt, a->rt_size) || !dup(&r->rpriv, &r->rpriv_size, rpriv, a->priv_size)) {
+            object_free(q, r, q->p);
+            return ST_NO_MEMORY;
+        }
+    }
     const UINT64 luid = d->luid;                /* (handle_new may move the table) */
     const UINT32 kdev = d->kmd;
     bool basic = luid == BASIC_LUID_LO;
@@ -518,23 +613,37 @@ static UINT32 create_allocation2(Proc *q, const CreateAllocation *a, AllocInfo2 
         o->kmd = kmd;
         o->mem = m;
         o->resident = 1;                        /* (created resident, as WDDM 2 allocations are) */
+        o->resource = rh;
         if (basic) q->usage += m->size;
         info[i].alloc = made[i] = h;
         info[i].gpu_va = 0;                     /* (no GPU virtual addresses yet) */
+        if (shared && !dup(&o->priv, &o->priv_size, pd, info[i].priv_size)) { st = ST_NO_MEMORY; i++; break; }
     }
-    if (st != ST_OK)                            /* all or nothing */
+    if (st != ST_OK) {                          /* all or nothing */
         while (i--) object_free(q, object(q, made[i], K_ALLOC), q->p);
+        if (rh) object_free(q, object(q, rh, K_RESOURCE), q->p);
+        return st;
+    }
+    if (res) a->resource = rh;
+    a->global_share = 0;
     return st;
 }
 
+/* (a resource goes with all its allocations) */
 static UINT32 destroy_allocation2(Proc *q, const DestroyAllocation2 *a, const UINT32 *list, UmProcess *p)
 {
-    if (!object(q, a->device, K_DEVICE) || a->resource) return ST_INVALID_PARAM;
+    Object *r = a->resource ? object(q, a->resource, K_RESOURCE) : NULL;
+    if (!object(q, a->device, K_DEVICE) || (a->resource && (!r || r->device != a->device))) return ST_INVALID_PARAM;
     for (UINT32 i = 0; i < a->count; i++) {
         Object *o = object(q, list[i], K_ALLOC);
         if (!o || o->device != a->device) return ST_INVALID_PARAM;
     }
     for (UINT32 i = 0; i < a->count; i++) object_free(q, object(q, list[i], K_ALLOC), p);
+    if (r) {
+        for (int i = 0; i < q->nobj; i++)
+            if (q->obj[i].kind == K_ALLOC && q->obj[i].resource == a->resource) object_free(q, &q->obj[i], p);
+        object_free(q, r, p);
+    }
     return ST_OK;
 }
 
@@ -571,7 +680,8 @@ static UINT32 create_sync2(Proc *q, CreateSync2 *a, UmProcess *p)
     if (!d) return ST_INVALID_PARAM;
     const UINT64 luid = d->luid;                /* (handle_new may move the table) */
     if (a->type != SYNC_FENCE && a->type != SYNC_MONITORED_FENCE) return ST_NOT_SUPPORTED;
-    if (a->flags & 1) return ST_NOT_SUPPORTED;                     /* Shared: not yet */
+    bool shareable = (a->flags & (SYNC_SHARED | SYNC_NT_SHARING)) == (SYNC_SHARED | SYNC_NT_SHARING);
+    if ((a->flags & (SYNC_SHARED | SYNC_NT_SHARING)) && !shareable) return ST_NOT_SUPPORTED;   /* (global share handles) */
     Fence *f = kzalloc(sizeof(*f));
     if (!f) return ST_NO_MEMORY;
     f->refs = 1;
@@ -603,9 +713,44 @@ static UINT32 create_sync2(Proc *q, CreateSync2 *a, UmProcess *p)
     o->fence = f;
     o->va = va;
     o->gpu_va = gpu_va;
+    o->shareable = shareable;
     if (va) { a->mf.cpu_va = va; a->mf.gpu_va = gpu_va; }
+    a->shared = 0;
     a->sync = h;
     return ST_OK;
+}
+
+/* Fence @f (referenced: the new object takes it) on device @dev, mapped
+ * for the CPU (read-only) and the GPU as create_sync2 maps a new one: its
+ * handle, 0 if it failed (the reference dropped) */
+static UINT32 sync_object(Proc *q, UINT32 dev, Fence *f, UmProcess *p, UINT64 *cpu, UINT64 *gpu)
+{
+    Object *d = object(q, dev, K_DEVICE);
+    const UINT64 luid = d->luid;
+    UINT64 va = 0, gpu_va = 0;
+    if (f->page) {
+        f->refs++;                                                  /* (the view's) */
+        va = um_map_frames_view(p, &f->page, 1, 0x02 /* PAGE_READONLY */, fence_unref, f);
+        if (!va) { fence_unref(f); return 0; }
+        if (has_gpu_va(luid) && DxgkRenderMapPages(luid, q->p, &f->page, 1, 1, &gpu_va) != ST_OK) gpu_va = 0;
+    }
+    UINT32 h = handle_new(q, K_SYNC);
+    if (!h) {
+        if (gpu_va) DxgkRenderFreeVa(luid, q->p, gpu_va, PAGE_SIZE);
+        if (va) um_unmap_view_at(p, va, f);
+        fence_unref(f);
+        return 0;
+    }
+    Object *o = object(q, h, K_SYNC);
+    o->device = dev;
+    o->luid = luid;
+    o->fence = f;
+    o->va = va;
+    o->gpu_va = gpu_va;
+    o->shareable = true;
+    *cpu = va;
+    *gpu = gpu_va;
+    return h;
 }
 
 /* The fences of @list on device @dev, referenced into @f; false if one is not */
@@ -796,6 +941,199 @@ static bool gpu_reached(void *f, UINT64 v) { return fence_value(f) >= v; }
 static const DxgkFenceOps g_fence_ops = { gpu_signal, gpu_reached, fence_unref, waiters_check };
 
 /* -----------------------------------------------------------------------
+ * Sharing by NT handle (D3DKMTShareObjects; VKD3D-Proton's and D3D12's
+ * shared heaps and fences): a resource's allocations or a fence, held by an
+ * object other processes reach through a handle duplicated or inherited
+ * into them, then opened on one of their own devices.  The pages are the
+ * same ones; a miniport's allocation is the driver's same allocation,
+ * opened on the new device (DxgkDdiOpenAllocation), and a monitored fence's
+ * value page is mapped into the opener for its CPU (read-only) and its GPU.
+ * ----------------------------------------------------------------------- */
+static bool in(void *k, UINT64 u, UINT64 n);
+static bool out(UINT64 u, const void *k, UINT64 n);
+
+static void share_free(Share *sh)
+{
+    if (sh->fence) fence_unref(sh->fence);
+    for (int i = 0; i < sh->n; i++) {
+        mem_unref(sh->a[i].mem);
+        if (sh->a[i].global) DxgkRenderReleaseShared(sh->luid, sh->a[i].global);
+        kfree(sh->a[i].priv);
+    }
+    kfree(sh->rt);
+    kfree(sh->rpriv);
+    kfree(sh);
+}
+
+static void share_destroy(UmObject *o) { share_free(o->ptr); }
+
+/* What object @h of @q holds, into @sh */
+static UINT32 share_take(Proc *q, UINT32 h, Share *sh)
+{
+    Object *o = object(q, h, K_SYNC);
+    if (o) {
+        if (!o->shareable) return ST_INVALID_PARAM;
+        sh->kind = K_SYNC;
+        sh->luid = o->luid;
+        sh->fence = o->fence;
+        __atomic_add_fetch(&sh->fence->refs, 1, __ATOMIC_ACQ_REL);
+        return ST_OK;
+    }
+    Object *r = object(q, h, K_RESOURCE);
+    if (!r || !r->shareable) return ST_INVALID_PARAM;
+    sh->kind = K_RESOURCE;
+    sh->luid = r->luid;
+    if (!dup(&sh->rt, &sh->rt_size, r->priv, r->priv_size) || !dup(&sh->rpriv, &sh->rpriv_size, r->rpriv, r->rpriv_size))
+        return ST_NO_MEMORY;
+    for (int i = 0; i < q->nobj; i++) {
+        Object *a = &q->obj[i];
+        if (a->kind != K_ALLOC || a->resource != h) continue;
+        if (sh->n == MAX_SHARE) return ST_NOT_SUPPORTED;
+        int k = sh->n;
+        UINT32 g = a->luid == BASIC_LUID_LO ? 0 : DxgkRenderShareAllocation(a->luid, a->kmd);
+        if (a->luid != BASIC_LUID_LO && !g) return ST_INVALID_PARAM;   /* (its adapter has gone) */
+        sh->a[k].global = g;
+        sh->a[k].mem = a->mem;
+        __atomic_add_fetch(&a->mem->refs, 1, __ATOMIC_ACQ_REL);
+        sh->n++;
+        if (!dup(&sh->a[k].priv, &sh->a[k].priv_size, a->priv, a->priv_size)) return ST_NO_MEMORY;
+    }
+    return sh->n ? ST_OK : ST_INVALID_PARAM;
+}
+
+static UINT64 share_objects(UmProcess *p, UINT64 args)
+{
+    ShareObjects a;
+    UINT32 h;
+    if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+    if (a.count != 1) return a.count ? ST_NOT_SUPPORTED : ST_INVALID_PARAM;   /* (a resource with its keyed mutex: not yet) */
+    if (!in(&h, a.handles, 4) || !a.out) return ST_INVALID_PARAM;
+    UINT32 attrs = 0;
+    UINT64 name = 0;
+    if (a.oa && (!in(&attrs, a.oa + 24, 4) || !in(&name, a.oa + 16, 8))) return ST_ACCESS_VIOLATION;
+    if (name) return ST_NOT_SUPPORTED;                  /* (named shares: not yet) */
+    Share *sh = kzalloc(sizeof(*sh));
+    UmObject *o = sh ? kzalloc(sizeof(*o)) : NULL;
+    if (!o) { kfree(sh); return ST_NO_MEMORY; }
+    um_lock(&g_lock);
+    Proc *q = proc_of(p, false);
+    UINT32 st = q ? share_take(q, h, sh) : ST_INVALID_PARAM;
+    um_unlock(&g_lock);
+    if (st != ST_OK) { share_free(sh); kfree(o); return st; }
+    o->type = UO_DXGK_SHARE;
+    o->refs = 1;
+    o->ptr = sh;
+    o->destroy = share_destroy;
+    o->free_unlocked = true;
+    UINT64 nt = um_handle_new_object(p, o);
+    um_ob_unref(o);
+    if (!nt) return ST_NO_MEMORY;
+    if (attrs & 0x2) um_handle_set_inherit(p, nt, true);    /* OBJ_INHERIT */
+    if (!out(a.out, &nt, 8)) { um_close_handle(nt); return ST_ACCESS_VIOLATION; }
+    return ST_OK;
+}
+
+/* The share an NT handle names, referenced (*ob), and its device's adapter
+ * matching: NULL if not */
+static Share *share_of(UmProcess *p, UINT64 nt, UmObject **ob)
+{
+    *ob = um_handle_object(p, nt, UO_DXGK_SHARE);
+    return *ob ? (*ob)->ptr : NULL;
+}
+
+static UINT32 query_resource_info(Proc *q, QueryResourceInfoFromNt *a, const Share *sh)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d || sh->kind != K_RESOURCE || d->luid != sh->luid) return ST_INVALID_PARAM;
+    UINT32 total = 0;
+    for (int i = 0; i < sh->n; i++) total += sh->a[i].priv_size;
+    a->rt_size = sh->rt_size;
+    a->total_size = total;
+    a->rpriv_size = sh->rpriv_size;
+    a->num = (UINT32)sh->n;
+    return ST_OK;
+}
+
+/* @sh's resource opened on @a's device: the new handles in @info and the
+ * allocations' private data into @total (at @a->total in the process) */
+static UINT32 open_resource(Proc *q, OpenResourceFromNt *a, const Share *sh, OpenAllocInfo2 *info, UINT8 *total)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d || sh->kind != K_RESOURCE || d->luid != sh->luid || a->num != (UINT32)sh->n) return ST_INVALID_PARAM;
+    UINT32 need = 0;
+    for (int i = 0; i < sh->n; i++) need += sh->a[i].priv_size;
+    if (a->total_size < need || a->rt_size < sh->rt_size || a->rpriv_size < sh->rpriv_size ||
+        (need && !a->total) || (sh->rt_size && !a->rt) || (sh->rpriv_size && !a->rpriv))
+        return ST_INVALID_PARAM;
+    const UINT64 luid = d->luid;
+    const UINT32 kdev = d->kmd;
+    UINT32 rh = handle_new(q, K_RESOURCE), made[MAX_SHARE];
+    if (!rh) return ST_NO_MEMORY;
+    Object *r = object(q, rh, K_RESOURCE);
+    r->device = a->device;
+    r->luid = luid;
+    r->shareable = true;
+    UINT32 st = dup(&r->priv, &r->priv_size, sh->rt, sh->rt_size) && dup(&r->rpriv, &r->rpriv_size, sh->rpriv, sh->rpriv_size)
+                    ? ST_OK : ST_NO_MEMORY;
+    int i;
+    UINT32 off = 0;
+    for (i = 0; i < sh->n && st == ST_OK; i++) {
+        Memory *m = sh->a[i].mem;
+        UINT64 bytes = m->size;
+        UINT32 kmd = 0;
+        if (luid == BASIC_LUID_LO) {
+            if (q->usage + bytes > g_budget) { st = ST_NO_MEMORY; break; }
+        } else if ((st = DxgkRenderOpenAllocation(luid, kdev, sh->a[i].global, &bytes, &kmd)) != ST_OK)
+            break;
+        UINT32 h = handle_new(q, K_ALLOC);
+        if (!h) {
+            if (kmd) DxgkRenderDestroyAllocation(luid, kmd);
+            st = ST_NO_MEMORY;
+            break;
+        }
+        Object *o = object(q, h, K_ALLOC);
+        o->device = a->device;
+        o->luid = luid;
+        o->kmd = kmd;
+        o->mem = m;
+        __atomic_add_fetch(&m->refs, 1, __ATOMIC_ACQ_REL);
+        o->resident = 1;
+        o->resource = rh;
+        if (luid == BASIC_LUID_LO) q->usage += m->size;
+        made[i] = h;
+        if (!dup(&o->priv, &o->priv_size, sh->a[i].priv, sh->a[i].priv_size)) { st = ST_NO_MEMORY; i++; break; }
+        memset(&info[i], 0, sizeof(info[i]));
+        info[i].alloc = h;
+        info[i].priv = sh->a[i].priv_size ? a->total + off : 0;
+        info[i].priv_size = sh->a[i].priv_size;
+        if (sh->a[i].priv_size) memcpy(total + off, sh->a[i].priv, sh->a[i].priv_size);
+        off += sh->a[i].priv_size;
+    }
+    if (st != ST_OK) {
+        while (i--) object_free(q, object(q, made[i], K_ALLOC), q->p);
+        object_free(q, object(q, rh, K_RESOURCE), q->p);
+        return st;
+    }
+    a->resource = rh;
+    a->keyed_mutex = 0;
+    a->sync = 0;
+    return ST_OK;
+}
+
+static UINT32 open_sync(Proc *q, OpenSyncFromNt2 *a, const Share *sh, UmProcess *p)
+{
+    Object *d = object(q, a->device, K_DEVICE);
+    if (!d || sh->kind != K_SYNC || d->luid != sh->luid) return ST_INVALID_PARAM;
+    __atomic_add_fetch(&sh->fence->refs, 1, __ATOMIC_ACQ_REL);
+    UINT64 cpu = 0, gpu = 0;
+    if (!(a->sync = sync_object(q, a->device, sh->fence, p, &cpu, &gpu))) return ST_NO_MEMORY;
+    memset(a->reserved, 0, sizeof(a->reserved));
+    a->mf.cpu_va = cpu;
+    a->mf.gpu_va = gpu;
+    return ST_OK;
+}
+
+/* -----------------------------------------------------------------------
  * NtNovaDxgkCtl(op, args): NTSTATUS
  * ----------------------------------------------------------------------- */
 static bool in(void *k, UINT64 u, UINT64 n) { return u && NT_SUCCESS(CopyFromUser(k, (const void *)(uintptr_t)u, n)); }
@@ -912,20 +1250,25 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         AllocInfo2 info[MAX_LIST];
         if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
         if (!a.num || a.num > MAX_LIST || !in(info, a.info, sizeof(info[0]) * a.num)) return ST_INVALID_PARAM;
-        UINT8 *priv = kzalloc((size_t)a.num * MAX_PRIV);
+        bool res = a.flags & ALLOC_CREATE_RESOURCE;     /* (a resource's own data) */
+        if (res && (a.rt_size > MAX_RT || a.priv_size > MAX_RT)) return ST_INVALID_PARAM;
+        UINT8 *priv = kzalloc((size_t)a.num * MAX_PRIV + (res ? 2 * MAX_RT : 0));
         if (!priv) return ST_NO_MEMORY;
-        for (UINT32 i = 0; i < a.num; i++)
+        UINT8 *rt = priv + (size_t)a.num * MAX_PRIV, *rpriv = rt + MAX_RT;
+        bool ok = !res || ((!a.rt_size || in(rt, a.rt_data, a.rt_size)) && (!a.priv_size || in(rpriv, a.priv, a.priv_size)));
+        for (UINT32 i = 0; ok && i < a.num; i++)
             if (info[i].priv_size > MAX_PRIV || (info[i].priv_size && !in(priv + (size_t)i * MAX_PRIV, info[i].priv,
-                                                                          info[i].priv_size))) {
-                kfree(priv);
-                return ST_INVALID_PARAM;
-            }
+                                                                          info[i].priv_size)))
+                ok = false;
+        if (!ok) { kfree(priv); return ST_INVALID_PARAM; }
+        if (!res) a.rt_size = a.priv_size = 0;
         um_lock(&g_lock);
         Proc *q = proc_of(p, true);
-        UINT32 st = q ? create_allocation2(q, &a, info, priv) : ST_NO_MEMORY;
+        UINT32 st = q ? create_allocation2(q, &a, info, priv, rt, rpriv) : ST_NO_MEMORY;
         um_unlock(&g_lock);
         kfree(priv);
-        if (st == ST_OK && !out(a.info, info, sizeof(info[0]) * a.num)) return ST_ACCESS_VIOLATION;
+        if (st == ST_OK && (!out(a.info, info, sizeof(info[0]) * a.num) || (res && !out(args, &a, sizeof(a)))))
+            return ST_ACCESS_VIOLATION;
         return st;
     }
     case OP_DESTROY_ALLOCATION2: {
@@ -1072,6 +1415,60 @@ static UINT64 sys_dxgk(UINT64 op, UINT64 args, UINT64 a3, UINT64 a4)
         }
         if (ok) st = fences_on_gpu(q, c, signal, list, n, vals, values);
         um_unlock(&g_lock);
+        return st;
+    }
+    case OP_SHARE_OBJECTS: return share_objects(p, args);
+    case OP_QUERY_RESOURCE_INFO_FROM_NT: {
+        QueryResourceInfoFromNt a;
+        UmObject *ob;
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        Share *sh = share_of(p, a.nt, &ob);
+        if (!sh) return ST_INVALID_PARAM;
+        UINT32 want = a.rt_size;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        UINT32 st = q ? query_resource_info(q, &a, sh) : ST_INVALID_PARAM;
+        um_unlock(&g_lock);
+        /* (the runtime data too, given room for it) */
+        bool ok = st != ST_OK || ((!a.rt || !sh->rt_size || want < sh->rt_size || out(a.rt, sh->rt, sh->rt_size)) &&
+                                  out(args, &a, sizeof(a)));
+        um_ob_unref(ob);
+        return ok ? st : ST_ACCESS_VIOLATION;
+    }
+    case OP_OPEN_RESOURCE_FROM_NT: {
+        OpenResourceFromNt a;
+        UmObject *ob;
+        OpenAllocInfo2 info[MAX_SHARE];
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        Share *sh = share_of(p, a.nt, &ob);
+        if (!sh) return ST_INVALID_PARAM;
+        UINT32 need = 0;
+        for (int i = 0; i < sh->n; i++) need += sh->a[i].priv_size;
+        UINT8 *total = kzalloc(need + 1);
+        if (!total) { um_ob_unref(ob); return ST_NO_MEMORY; }
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        UINT32 st = q ? open_resource(q, &a, sh, info, total) : ST_INVALID_PARAM;
+        um_unlock(&g_lock);
+        bool ok = st != ST_OK || (out(a.info, info, sizeof(info[0]) * (UINT64)sh->n) && (!need || out(a.total, total, need)) &&
+                                  (!sh->rt_size || out(a.rt, sh->rt, sh->rt_size)) &&
+                                  (!sh->rpriv_size || out(a.rpriv, sh->rpriv, sh->rpriv_size)) && out(args, &a, sizeof(a)));
+        kfree(total);
+        um_ob_unref(ob);
+        return ok ? st : ST_ACCESS_VIOLATION;
+    }
+    case OP_OPEN_SYNC_FROM_NT2: {
+        OpenSyncFromNt2 a;
+        UmObject *ob;
+        if (!in(&a, args, sizeof(a))) return ST_ACCESS_VIOLATION;
+        Share *sh = share_of(p, a.nt, &ob);
+        if (!sh) return ST_INVALID_PARAM;
+        um_lock(&g_lock);
+        Proc *q = proc_of(p, false);
+        UINT32 st = q ? open_sync(q, &a, sh, p) : ST_INVALID_PARAM;
+        um_unlock(&g_lock);
+        um_ob_unref(ob);
+        if (st == ST_OK && !out(args, &a, sizeof(a))) return ST_ACCESS_VIOLATION;
         return st;
     }
     case OP_QUERY_VIDEO_MEMORY_INFO: {

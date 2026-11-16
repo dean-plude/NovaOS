@@ -58,11 +58,29 @@
  *                 reset after the timeout: that context is lost (its fence
  *                 raised to the maximum, STATUS_DEVICE_REMOVED after) and the
  *                 other context goes on
+ *   sharing       (step 3's sixth part) a resource (CreateResource,
+ *                 CreateShared, NtSecuritySharing) and a monitored fence
+ *                 shared by NT handle (D3DKMTShareObjects; objects made
+ *                 without sharing refused), inherited by a second process,
+ *                 "kmttest share", which opens both on its own device
+ *                 (QueryResourceInfoFromNtHandle, OpenResourceFromNtHandle:
+ *                 DxgkDdiOpenAllocation; OpenSyncObjectFromNtHandle2), sees
+ *                 what the first wrote, maps the allocation and the fence
+ *                 into its own GPU address space and has the GPU write the
+ *                 one and signal the other, then signals from its CPU: the
+ *                 first process sees all of it; the share outlives the
+ *                 resource it was made from
+ *
+ * The same checks run as a 32-bit program (C:\Programs\x86\kmttest.exe,
+ * whose gdi32 rebuilds each structure in its x64 layout), its second
+ * process 32-bit too.
  */
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <winternl.h>
 #include <d3dkmthk.h>
 
 #define ST_INVALID_PARAMETER ((LONG)0xC000000D)
@@ -512,6 +530,227 @@ static void tdr(D3DKMT_HANDLE dev)
     D3DKMTDestroyPagingQueue(&dq);
 }
 
+/* ---- "kmttest wddm": sharing by NT handle, with a second process ---- */
+#define WORD_CHILD 0x5A4ED001u
+static const char RT_DATA[16] = "kmttest runtime";
+static const UINT64 RES_PRIV = 0x7E50C0DE7E50C0DEull;
+
+static D3DKMT_HANDLE device_on(LUID luid, D3DKMT_HANDLE *adapter)
+{
+    D3DKMT_OPENADAPTERFROMLUID ol = { luid, 0 };
+    if (D3DKMTOpenAdapterFromLuid(&ol)) return 0;
+    D3DKMT_CREATEDEVICE cd;
+    memset(&cd, 0, sizeof(cd));
+    cd.hAdapter = *adapter = ol.hAdapter;
+    return D3DKMTCreateDevice(&cd) ? 0 : cd.hDevice;
+}
+
+/* "kmttest share RES FENCE LUID": the second process, given the handles by inheritance */
+static int share_child(HANDLE hres, HANDLE hfence, LUID luid)
+{
+    D3DKMT_HANDLE adapter = 0, dev = device_on(luid, &adapter);
+    check(dev != 0, "a device of its own on the driver's adapter");
+    if (!dev) goto done;
+    D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE qr;
+    memset(&qr, 0, sizeof(qr));
+    qr.hDevice = dev;
+    qr.hNtHandle = hres;
+    check(D3DKMTQueryResourceInfoFromNtHandle(&qr) == 0 && qr.NumAllocations == 1 &&
+          qr.PrivateRuntimeDataSize == sizeof(RT_DATA) && qr.ResourcePrivateDriverDataSize == sizeof(RES_PRIV) &&
+          qr.TotalPrivateDriverDataSize == sizeof(NOVA_KMT_ALLOCATION),
+          "QueryResourceInfoFromNtHandle: one allocation, the runtime's and the driver's data");
+    char rt[16];
+    UINT64 rpriv = 0;
+    NOVA_KMT_ALLOCATION total;
+    D3DDDI_OPENALLOCATIONINFO2 oi;
+    memset(rt, 0, sizeof(rt));
+    memset(&total, 0, sizeof(total));
+    memset(&oi, 0, sizeof(oi));
+    D3DKMT_OPENRESOURCEFROMNTHANDLE orr;
+    memset(&orr, 0, sizeof(orr));
+    orr.hDevice = dev;
+    orr.hNtHandle = hres;
+    orr.NumAllocations = 1;
+    orr.pOpenAllocationInfo2 = &oi;
+    orr.PrivateRuntimeDataSize = sizeof(rt);
+    orr.pPrivateRuntimeData = rt;
+    orr.ResourcePrivateDriverDataSize = sizeof(rpriv);
+    orr.pResourcePrivateDriverData = &rpriv;
+    orr.TotalPrivateDriverDataBufferSize = sizeof(total);
+    orr.pTotalPrivateDriverDataBuffer = &total;
+    check(D3DKMTOpenResourceFromNtHandle(&orr) == 0 && orr.hResource && oi.hAllocation,
+          "OpenResourceFromNtHandle (DxgkDdiOpenAllocation on this device)");
+    check(!memcmp(rt, RT_DATA, sizeof(rt)) && rpriv == RES_PRIV && oi.pPrivateDriverData == (void *)&total &&
+          oi.PrivateDriverDataSize == sizeof(total) && total.Size == 65536,
+          "with the data the resource was made with");
+    D3DKMT_LOCK2 lk = { dev, oi.hAllocation, 0, NULL };
+    volatile UINT *sw = NULL;
+    if (D3DKMTLock2(&lk) == 0) sw = lk.pData;
+    check(sw && sw[0] == WORD_A, "Lock2 here sees what the first process wrote");
+
+    D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2 os;
+    memset(&os, 0, sizeof(os));
+    os.hNtHandle = hfence;
+    os.hDevice = dev;
+    check(D3DKMTOpenSyncObjectFromNtHandle2(&os) == 0 && os.hSyncObject && os.MonitoredFence.FenceValueCPUVirtualAddress &&
+          os.MonitoredFence.FenceValueGPUVirtualAddress, "OpenSyncObjectFromNtHandle2: the fence, for this CPU and GPU");
+    volatile UINT64 *fcpu = os.MonitoredFence.FenceValueCPUVirtualAddress;
+    D3DKMT_HANDLE fence = os.hSyncObject;
+    check(fcpu && *fcpu == 1, "its value is the one the first process signalled");
+    if (!sw || !fcpu) goto done;
+
+    /* this process's GPU writes the shared allocation and signals the shared fence */
+    LONG st;
+    D3DKMT_CREATEPAGINGQUEUE pq;
+    memset(&pq, 0, sizeof(pq));
+    pq.hDevice = dev;
+    D3DKMTCreatePagingQueue(&pq);
+    D3DKMT_HANDLE cmd = allocate(dev, 65536, &st);
+    UINT64 cva = map(pq.hPagingQueue, cmd, 16, 1), sva = map(pq.hPagingQueue, oi.hAllocation, 16, 1);
+    D3DKMT_HANDLE ctx = context(dev);
+    D3DKMT_LOCK2 lc = { dev, cmd, 0, NULL };
+    UINT *cw = NULL;
+    if (D3DKMTLock2(&lc) == 0) cw = lc.pData;
+    check(cmd && cva && sva && ctx && cw, "the shared allocation mapped in this process's GPU address space");
+    if (cw && ctx) {
+        UINT *w = put_write(cw, sva + 4, WORD_CHILD);
+        w = put_fence(w, os.MonitoredFence.FenceValueGPUVirtualAddress, 2);
+        check(submit(ctx, cva, (UINT)((char *)w - (char *)cw)) == 0 && reaches(dev, fence, 2, 5000) && *fcpu == 2 &&
+              sw[1] == WORD_CHILD, "its GPU writes the shared allocation and the shared fence");
+        UINT64 three = 3;
+        D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU sg = { dev, 1, &fence, &three, 0 };
+        check(D3DKMTSignalSynchronizationObjectFromCpu(&sg) == 0 && *fcpu == 3, "and its CPU signals it");
+        D3DKMT_DESTROYCONTEXT dc = { ctx };
+        D3DKMTDestroyContext(&dc);
+    }
+    D3DKMT_DESTROYALLOCATION2 dr = { dev, orr.hResource, NULL, 0, 0 };
+    check(D3DKMTDestroyAllocation2(&dr) == 0 && D3DKMTLock2(&lk) != 0,
+          "DestroyAllocation2 of the opened resource takes its allocation with it");
+done:
+    if (dev) {
+        D3DKMT_DESTROYDEVICE dd = { dev };
+        check(D3DKMTDestroyDevice(&dd) == 0, "DestroyDevice (this process's)");
+    }
+    printf("kmttest share: %d passed, %d failed\n", g_pass, g_fail);
+    return g_fail != 0;
+}
+
+static void share(D3DKMT_HANDLE adapter, D3DKMT_HANDLE dev, LUID luid)
+{
+    UINT64 before = usage(adapter);
+    NOVA_KMT_ALLOCATION spec = { 65536, 0, 0 };
+    D3DDDI_ALLOCATIONINFO2 info;
+    memset(&info, 0, sizeof(info));
+    info.pPrivateDriverData = &spec;
+    info.PrivateDriverDataSize = sizeof(spec);
+    D3DKMT_CREATEALLOCATION ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.hDevice = dev;
+    ca.pPrivateRuntimeData = RT_DATA;
+    ca.PrivateRuntimeDataSize = sizeof(RT_DATA);
+    ca.pPrivateDriverData = &RES_PRIV;
+    ca.PrivateDriverDataSize = sizeof(RES_PRIV);
+    ca.NumAllocations = 1;
+    ca.pAllocationInfo2 = &info;
+    ca.Flags = D3DKMT_CREATEALLOCATION_CREATERESOURCE | D3DKMT_CREATEALLOCATION_CREATESHARED;
+    check(D3DKMTCreateAllocation2(&ca) != 0, "a shared resource without NtSecuritySharing (a global share) is refused");
+    ca.Flags |= D3DKMT_CREATEALLOCATION_NTSECURITYSHARING;
+    check(D3DKMTCreateAllocation2(&ca) == 0 && ca.hResource && info.hAllocation && usage(adapter) == before + 65536,
+          "CreateAllocation2 with CreateResource, CreateShared and NtSecuritySharing");
+    D3DKMT_HANDLE res = ca.hResource, alloc = info.hAllocation;
+    D3DKMT_LOCK2 lk = { dev, alloc, 0, NULL };
+    volatile UINT *pw = NULL;
+    if (D3DKMTLock2(&lk) == 0) pw = lk.pData;
+    if (pw) { pw[0] = WORD_A; pw[1] = 0; }
+
+    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 cs;
+    memset(&cs, 0, sizeof(cs));
+    cs.hDevice = dev;
+    cs.Info.Type = D3DDDI_MONITORED_FENCE;
+    cs.Info.Flags = D3DDDI_SYNCHRONIZATIONOBJECT_SHARED | D3DDDI_SYNCHRONIZATIONOBJECT_NTSECURITYSHARING;
+    check(D3DKMTCreateSynchronizationObject2(&cs) == 0, "a monitored fence made to share");
+    D3DKMT_HANDLE fence = cs.hSyncObject;
+    volatile UINT64 *fcpu = cs.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+
+    LONG st;
+    HANDLE h = NULL;
+    D3DKMT_HANDLE plain = allocate(dev, 65536, &st);
+    volatile UINT64 *pc;
+    UINT64 pg;
+    D3DKMT_HANDLE pf = monitored(dev, &pc, &pg);
+    check(D3DKMTShareObjects(1, &plain, NULL, GENERIC_ALL, &h) != 0 && D3DKMTShareObjects(1, &pf, NULL, GENERIC_ALL, &h) != 0 &&
+          D3DKMTShareObjects(1, &alloc, NULL, GENERIC_ALL, &h) != 0, "objects not made to share (and lone allocations) are refused");
+    D3DKMT_DESTROYALLOCATION2 dp = { dev, 0, &plain, 1, 0 };
+    D3DKMTDestroyAllocation2(&dp);
+    D3DKMT_DESTROYSYNCHRONIZATIONOBJECT dsp = { pf };
+    D3DKMTDestroySynchronizationObject(&dsp);
+
+    OBJECT_ATTRIBUTES oa;
+    memset(&oa, 0, sizeof(oa));
+    oa.Length = sizeof(oa);
+    oa.Attributes = 0x2;                                  /* OBJ_INHERIT */
+    HANDLE hres = NULL, hfence = NULL;
+    check(D3DKMTShareObjects(1, &res, &oa, GENERIC_ALL, &hres) == 0 && hres &&
+          D3DKMTShareObjects(1, &fence, &oa, GENERIC_ALL, &hfence) == 0 && hfence,
+          "ShareObjects: NT handles to the resource and the fence (inheritable)");
+    UINT64 one = 1;
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU sg = { dev, 1, &fence, &one, 0 };
+    D3DKMTSignalSynchronizationObjectFromCpu(&sg);
+
+    /* the second process: this program again, with the handles inherited */
+    char exe[MAX_PATH], cmdline[MAX_PATH + 80];
+    GetModuleFileNameA(NULL, exe, sizeof(exe));
+    sprintf(cmdline, "\"%s\" share %lx %lx %lx", exe, (unsigned long)(ULONG_PTR)hres, (unsigned long)(ULONG_PTR)hfence,
+            (unsigned long)luid.LowPart);
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    DWORD code = 99;
+    BOOL ran = CreateProcessA(exe, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+    if (ran) {
+        ran = WaitForSingleObject(pi.hProcess, 60000) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    check(ran && code == 0, "a second process opens both and uses them (kmttest share)");
+    check(pw && pw[1] == WORD_CHILD, "its GPU's write is in this process's view of the allocation");
+    check(fcpu && *fcpu == 3 && reaches(dev, fence, 3, 1000), "and the fence it signalled has risen here");
+
+    /* the share keeps the allocation after the resource it was made from has gone */
+    D3DKMT_DESTROYALLOCATION2 dr = { dev, res, NULL, 0, 0 };
+    check(D3DKMTDestroyAllocation2(&dr) == 0 && usage(adapter) == before, "DestroyAllocation2 of the resource");
+    D3DDDI_OPENALLOCATIONINFO2 oi;
+    NOVA_KMT_ALLOCATION total;
+    memset(&oi, 0, sizeof(oi));
+    D3DKMT_OPENRESOURCEFROMNTHANDLE orr;
+    memset(&orr, 0, sizeof(orr));
+    char rt[16];
+    UINT64 rpriv;
+    orr.hDevice = dev;
+    orr.hNtHandle = hres;
+    orr.NumAllocations = 1;
+    orr.pOpenAllocationInfo2 = &oi;
+    orr.PrivateRuntimeDataSize = sizeof(rt);
+    orr.pPrivateRuntimeData = rt;
+    orr.ResourcePrivateDriverDataSize = sizeof(rpriv);
+    orr.pResourcePrivateDriverData = &rpriv;
+    orr.TotalPrivateDriverDataBufferSize = sizeof(total);
+    orr.pTotalPrivateDriverDataBuffer = &total;
+    orr.NumAllocations = 2;
+    check(D3DKMTOpenResourceFromNtHandle(&orr) != 0, "opening it with the wrong allocation count is refused");
+    orr.NumAllocations = 1;
+    lk.hAllocation = 0;
+    check(D3DKMTOpenResourceFromNtHandle(&orr) == 0 && (lk.hAllocation = oi.hAllocation) && D3DKMTLock2(&lk) == 0 &&
+          ((volatile UINT *)lk.pData)[1] == WORD_CHILD, "the NT handle still opens it, with what was written");
+    dr.hResource = orr.hResource;
+    check(D3DKMTDestroyAllocation2(&dr) == 0 && CloseHandle(hres) && usage(adapter) == before,
+          "destroyed and its handle closed: the memory is back");
+    check(CloseHandle(hfence), "the fence's NT handle closed");
+    D3DKMT_DESTROYSYNCHRONIZATIONOBJECT ds = { fence };
+    check(D3DKMTDestroySynchronizationObject(&ds) == 0, "and the fence destroyed");
+}
+
 /* ---- "kmttest wddm": the adapter of wddmtest.sys ---- */
 static int wddm(void)
 {
@@ -521,6 +760,7 @@ static int wddm(void)
     st = D3DKMTEnumAdapters2(&en);
     check(st == 0 && en.NumAdapters >= 2, "EnumAdapters2 lists the driver's adapter beside Basic Render");
     D3DKMT_HANDLE adapter = 0, basic = 0;
+    LUID aluid = { 0, 0 };
     for (UINT i = 0; st == 0 && i < en.NumAdapters; i++) {
         D3DKMT_ADAPTERTYPE type = { 0 };
         D3DKMT_QUERYADAPTERINFO qa = { info[i].hAdapter, KMTQAITYPE_ADAPTERTYPE, &type, sizeof(type) };
@@ -529,6 +769,7 @@ static int wddm(void)
         else if (!adapter && (type.Value & D3DKMT_ADAPTERTYPE_RENDER_SUPPORTED) &&
                  !(type.Value & D3DKMT_ADAPTERTYPE_DISPLAY_SUPPORTED)) {
             adapter = info[i].hAdapter;
+            aluid = info[i].AdapterLuid;
             printf("kmttest: render adapter LUID %08lx:%08lx\n", (unsigned long)info[i].AdapterLuid.HighPart,
                    (unsigned long)info[i].AdapterLuid.LowPart);
         }
@@ -585,6 +826,8 @@ static int wddm(void)
     check(usage(adapter) == 65536, "the buffers' memory is back");
     tdr(dev);
     check(usage(adapter) == 65536, "and after the preemption and TDR checks");
+    share(adapter, dev, aluid);
+    check(usage(adapter) == 65536, "and after the sharing checks");
     D3DKMT_DESTROYDEVICE dd = { dev };
     check(D3DKMTDestroyDevice(&dd) == 0 && usage(adapter) == 0, "DestroyDevice takes the other with it");
     D3DKMT_CLOSEADAPTER close = { adapter };
@@ -598,6 +841,10 @@ int main(int argc, char **argv)
     LONG st;
     if (argc > 1 && !strcmp(argv[1], "create")) return create();
     if (argc > 1 && !strcmp(argv[1], "wddm")) return wddm();
+    if (argc > 4 && !strcmp(argv[1], "share")) {
+        LUID luid = { strtoul(argv[4], NULL, 16), 0 };
+        return share_child((HANDLE)(ULONG_PTR)strtoul(argv[2], NULL, 16), (HANDLE)(ULONG_PTR)strtoul(argv[3], NULL, 16), luid);
+    }
 
     /* ---- adapters ---- */
     D3DKMT_ENUMADAPTERS2 en = { 0, NULL };

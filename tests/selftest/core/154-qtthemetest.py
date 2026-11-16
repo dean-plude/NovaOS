@@ -1,7 +1,8 @@
 # qtthemetest: what Qt's Windows platform plugin (qwindows.dll, in GOG
 # GALAXY's client) asks of the Windows Runtime: UISettings (the light and
 # dark app modes, the accent palette, ColorValuesChanged when the theme's
-# keys change, AdvancedEffectsEnabled) and UIViewSettings (no tablet mode);
+# keys change, AdvancedEffectsEnabled) and UIViewSettings (no tablet mode;
+# GetForCurrentView is ERROR_NOT_FOUND on a thread with no CoreWindow);
 # and CNG's BCryptEnumContextFunctions (Schannel's cipher suites, which
 # Galaxy's CrashReporter.exe lists); 64- and 32-bit.
 DOC = ('`qtthemetest` (Windows.UI.ViewManagement UISettings and UIViewSettings as Qt reads them, '

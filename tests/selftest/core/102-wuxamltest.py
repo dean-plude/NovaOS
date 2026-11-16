@@ -1,17 +1,33 @@
 # wuxamltest: the XAML framework under its Windows.UI.Xaml names (roadmap
 # step 32.5, WinUI 2 on the system XAML, first part): a Button activated by
 # its Windows name and driven through Windows' interfaces, a Windows-boxed
-# enum, DependencyProperty.Register with Windows type names, XamlReader.Load
+# enum, DependencyProperty.Register with Windows type names (a brush property's
+# value read back under its Windows class), XamlReader.Load
 # and the page's children through Windows' interfaces, an Image whose
-# markup URI source becomes a BitmapImage and a Popup holding its child
+# markup URI source becomes a BitmapImage, measured (its image brush loads
+# the source), and a Popup holding its child
 # (step 32.6), a base class's
-# statics, a Windows event handler, and an app's control composed over
-# Windows.UI.Xaml.Controls.Control whose Windows MeasureOverride the layout calls
+# statics, Windows event handlers (one a reference tracker target, kept while
+# subscribed), an app's x:Bind connector kept weakly (resolving to the
+# framework's IComponentConnector), and an app's control composed over
+# Windows.UI.Xaml.Controls.Control whose Windows MeasureOverride the layout calls,
+# and the phone library's navigation transitions (a Frame's
+# NavigationThemeTransition and the transition infos) activated by name
+# (EntranceNavigationTransitionInfo also by its Windows name, answering Windows'
+# interfaces),
+# the helper a XAML root's layout bounds come through (a page's measure), and
+# a UWP window's Activated handler on the thread's CoreWindow, and
+# UIViewSettings.GetForCurrentView on that thread, and markup naming an
+# unknown element failing with the parser's error in the debug log
 DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it: '
        '`Windows.UI.Xaml.Controls.Button` activated by its Windows name and driven through Windows\' interfaces, a '
-       'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names, `XamlReader.Load` and the page\'s '
-       'children through Windows\' `IVector<UIElement>`, an `Image` whose markup URI source becomes a `BitmapImage`, a `Popup` from markup holding its child, the text block\'s and button\'s automation peers, `Control.IsTabStopProperty`, `Click` with a Windows handler, and an '
-       'app\'s control composed over `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the framework\'s layout calls)')
+       'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names (a `SolidColorBrush` property\'s value read back as `Windows.UI.Xaml.Media.SolidColorBrush`), `XamlReader.Load` and the page\'s '
+       'children through Windows\' `IVector<UIElement>`, an `Image` whose markup URI source becomes a `BitmapImage`, measured (its image brush loads the source), a `Popup` from markup holding its child, the text block\'s and button\'s automation peers (the button\'s localized control type `button`), `Control.IsTabStopProperty`, `Click` with a Windows handler, `Loading` with a Windows handler that is a reference tracker target (kept while subscribed), an app\'s x:Bind connector kept by a weak reference that resolves to the framework\'s `IComponentConnector`, the helper a XAML root\'s layout bounds come through (no `ApplicationView` on the desktop path, callbacks added and removed), a UWP window\'s `Activated` handler on the thread\'s `CoreWindow` (called with the window as sender and `Windows.UI.Core`\'s arguments, not after it is removed), `UIViewSettings.GetForCurrentView` on that thread (`Mouse`), and an '
+       'app\'s control composed over `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the framework\'s layout calls; '
+       'and the phone library\'s navigation transitions, a Frame\'s `NavigationThemeTransition` and the six transition infos, '
+       'activated by name, composed over the framework\'s `Transition` and `NavigationTransitionInfo`, their dependency '
+       'properties set and read back, and `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo` activated by its '
+       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`; and markup naming an unknown element failing, with the parser\'s error, its line and column, in the debug log)')
 TESTS = [
-    Test('wuxamltest', 'wuxamltest', [r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
+    Test('wuxamltest', 'wuxamltest', [r'xaml: error \d+ hr=0x802b000a line 1 col \d+', r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
 ]

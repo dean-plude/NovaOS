@@ -16447,6 +16447,220 @@ input arrives at.
 - **Not yet:** Calculator now stops on `NavigationThemeTransition`, the
   page transition its frame plays.
 
+## Windows Calculator's launch, twelfth slice: the navigation transitions
+
+The twelfth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  A frame's page transition,
+`NavigationThemeTransition`, and the six navigation transition infos
+(Common, Slide, Continuum, DrillIn, Suppress, Entrance) now activate.
+They come from WinUI's phone library, which NovaOS now vendors and builds
+into the XAML framework, with the pieces of WRL it needs.
+
+- **Tests:** `wuxamltest` activates the transition and the six infos by
+  name and checks they compose over the framework's bases.
+- **Not yet:** Calculator now gets past the transition and stops later
+  in the dispatcher's tick with `E_NOTIMPL` (0x80004001), most likely a
+  core function not built yet such as `CImageBrush::ReloadImage`.
+  The page does not draw yet.
+
+## Windows Calculator's launch, thirteenth slice: an Image's brush and kept event handlers
+
+The thirteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  An `Image` now paints through the
+framework's image brush (`CImageBrush`, vendored), whose missing
+`ReloadImage` stopped Calculator with `E_NOTIMPL`.  And an app's event
+handler that the framework would hold by reference tracking, as .NET
+Native's delegates are, now stays alive while it is subscribed: NovaOS's
+wrapper of it had been freed and its memory reused.
+
+- **Tests:** `wuxamltest` measures an `Image` with a source, and adds and
+  removes a `Loading` handler that is a reference tracker target.
+- **Not yet:** Calculator now gets past both and stops in its page's
+  `Loading` handler on a .NET `NullReferenceException`.  The page does
+  not draw yet.
+
+## Windows Calculator's launch, fourteenth slice: x:Bind's connector
+
+The fourteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  A page's compiled bindings
+(x:Bind) now get their targets: the XAML parser keeps the app's binding
+connector by a weak reference, which had resolved to an object that did
+not answer the framework's `IComponentConnector`, so the parser never
+connected the targets and Calculator's bindings threw a .NET
+`NullReferenceException` on their first update.
+
+- **Tests:** `wuxamltest` wraps an app's connector, keeps it weakly,
+  resolves it and connects through it.
+- **Not yet:** Calculator gets past it and stops on `E_NOTIMPL` in its
+  page's layout (`LayoutBoundsChangedHelper`, not built yet).  The page
+  does not draw yet.
+
+## Windows Calculator's launch, fifteenth slice: layout bounds and text trimming
+
+The fifteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's page now measures
+itself: the framework's `LayoutBoundsChangedHelper` (Microsoft's source,
+vendored), which a page asks its XAML root for, is built, and NovaOS's
+DirectWrite makes the ellipsis trimming sign a trimmed `TextBlock` asks
+for (`CreateEllipsisTrimmingSign`, which had answered "not implemented").
+
+- **Tests:** `wuxamltest` checks the helper on the desktop path; `dwtest`
+  measures and draws the ellipsis sign.
+- **Not yet:** Calculator gets past both, builds its navigation view's
+  template and stops on `E_NOTIMPL` from `Window.Activated`, which has no
+  counterpart in the framework's `Window` yet.  The page does not draw
+  yet.
+
+## Windows Calculator's launch, sixteenth slice: the window's events
+
+The sixteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  A UWP app's `Window.Activated`,
+`Closed`, `SizeChanged` and `VisibilityChanged` now work: their Windows
+handlers take `Windows.UI.Core`'s event arguments, which the framework's
+`Window` (WinUI 3, with its own argument types) has no counterpart of, so
+NovaOS's `Windows.UI.Xaml` face subscribes them on the thread's
+`CoreWindow` itself, as Windows does, with the window as sender.
+
+- **Tests:** `wuxamltest` adds `Window.Activated`'s handler, activates the
+  thread's `CoreWindow` and checks the call, its sender and its arguments,
+  then removes it.
+- **Not yet:** Calculator gets past its window's events and stops on an
+  unhandled `E_BOUNDS` (after an `ERROR_NOT_FOUND`) reported from the
+  framework's dispatcher tick.  The page does not draw yet.
+
+## Windows Calculator's launch, seventeenth slice: views and framework strings
+
+The seventeenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's unhandled `E_BOUNDS`
+had two causes: `UIViewSettings.GetForCurrentView` refused the app's view
+thread (`ERROR_NOT_FOUND`), and WinUI 2 could not find its framework
+package's strings in `ResourceManager.AllResourceMaps`.  The first now
+answers on a thread with a `CoreWindow`; the second map now holds each
+framework package's `resources.pri` by its package's name.  Every
+originated Windows Runtime error also logs the stack it was raised from.
+
+- **Tests:** `wuxamltest` calls `GetForCurrentView` on the `CoreWindow`'s
+  thread (`Mouse`); `qtthemetest` checks it is `ERROR_NOT_FOUND` on a
+  Win32 thread.
+- **Not yet:** Calculator gets further and stops when `NavigationView`'s
+  template sets `AnimatedIcon.FallbackIconSource` ("Specified cast is not
+  valid").  The page does not draw yet.
+
+## Windows Calculator's launch, eighteenth slice: WinUI 2's classes under the framework's names
+
+The eighteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's "Specified cast is
+not valid" came from a name both XAML layers use: the system XAML's own
+classes are `Microsoft.UI.Xaml.*` inside it, and WinUI 2 has its own
+`Microsoft.UI.Xaml.Controls.FontIconSource`.  `NavigationView`'s template
+made the system's `FontIconSource` for the pane button's fallback icon,
+which Calculator's code could not cast to WinUI 2's `IconSource`.  Markup's
+`using:Microsoft.UI.Xaml...` namespaces and dependency property
+registrations now take the app's and WinUI 2's class of such a name first.
+
+- **Tests:** `winui2test` loads an `AnimatedIcon` whose fallback icon is a
+  `FontIconSource` with a binding on its `FontSize`, and reads it back
+  through WinUI 2's `FontIconSource.Glyph`.
+- **Not yet:** Calculator gets further and stops on an unhandled
+  `E_NOTIMPL` from `NavigationView`'s layout (a windowed `Popup` asks the
+  core for a localized string, which is not built).  The page does not
+  draw yet.
+
+## Windows Calculator's launch, nineteenth slice: the framework's localized strings
+
+The nineteenth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's "not implemented"
+during `NavigationView`'s layout came from the browser host's
+`GetLocalizedResourceString`, which was never built: a windowed `Popup`
+asks it for the title of its host window, and automation peers for their
+control type names.  Microsoft's reads these strings from a localized
+resource DLL whose table is not in the public repository, so NovaOS now
+keeps their English text itself; an id without text reads as the empty
+string, as Microsoft's does when its table has no row.
+
+- **Tests:** `wuxamltest` reads the button's automation peer's localized
+  control type (`button`).
+- **Not yet:** Calculator gets through layout to its first frame's
+  `Loaded` events and stops there: one of its `Loaded` handlers throws
+  "Specified cast is not valid" (E_NOINTERFACE), which the framework
+  reports as unhandled.  The page does not draw yet.
+
+## Windows Calculator's launch, twentieth slice: framework objects handed back under their Windows class
+
+The twentieth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's "Specified cast is
+not valid" came from its title bar's `Loaded` handler, which reads the
+`ButtonBackground` brush its style sets and casts it to
+`Windows.UI.Xaml.Media.SolidColorBrush`.  `GetValue` handed the app the
+framework's own brush, whose class is named
+`Microsoft.UI.Xaml.Media.SolidColorBrush`, and .NET Native could not cast
+an object of an unknown class to the Windows one.  An object a framework
+call returns as `Object` (`GetValue`, `Content`, ...) now reaches the app
+as its Windows class's face, as objects handed to the app's handlers
+already did; WinUI 2's objects, which carry the same names, and an app's
+own objects stay as they are.  Errors originated with
+`RoOriginateError` now log 24 stack frames, enough to reach a .NET Native
+exception's throw site.
+
+- **Tests:** `wuxamltest` reads a `SolidColorBrush` property's value
+  back as `Windows.UI.Xaml.Media.SolidColorBrush`.
+- **Not yet:** Calculator gets past its title bar and stops while its
+  main page navigates: `Windows.UI.Xaml.Media.Animation.
+  EntranceNavigationTransitionInfo` cannot be activated by that name
+  (XAML error 0x802B000A).  The page does not draw yet.
+
+## Windows Calculator's launch, twenty-first slice: navigation transitions by their Windows names
+
+The twenty-first part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's main page navigates
+with a new `EntranceNavigationTransitionInfo`, which it could not create:
+the registry named `Windows.UI.Xaml.dll` only for the framework's own
+classes, not for the phone library's navigation transitions NovaOS
+builds into it.  The seven of them (`NavigationThemeTransition` and the
+six transition infos) are now registered under their
+`Windows.UI.Xaml.Media.Animation` names, and their objects answer
+Windows' interfaces through the framework's faces.
+
+- **Tests:** `wuxamltest` activates
+  `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo` by
+  its Windows name and asks it for Windows' interfaces.
+- **Not yet:** Calculator creates the transition info and still stops in
+  the same main page `Loaded` handler: a framework call returns XAML parse
+  error 0x802B000A with no error logged beneath it.  The page does not
+  draw yet.
+
+## Windows Calculator's launch, twenty-second slice: the error behind XAML's parse failure
+
+The twenty-second part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's main page stopped
+with XAML parse error 0x802B000A and nothing beneath it: page loading,
+template application and a data template's content turn any failure into
+that one code.  The framework now writes the real failure to the debug log
+first (`xaml: LoadComponent failed hr=...`, and the same for
+`ApplyTemplate` and `DataTemplate.LoadContent`), every error the XAML
+error service is given (`xaml: error N hr=... line L col C: message`),
+and the name of a type the parser could not resolve when it is asked to
+create one (`xaml: cannot create NAME: type not resolved`).
+
+- **Tests:** `wuxamltest` loads markup naming an unknown element, which
+  fails, with the parser's error and its line in the debug log.
+- **Found:** the failure is Calculator's `Pivot` (`DockPivot`, the
+  history and memory panel): the type comes from `Microsoft.UI.Xaml.Phone.dll`
+  in the Windows App SDK, which is not open source and is not part of
+  NovaOS's framework, so the parser cannot resolve it and loading the page
+  fails with E_FAIL.  The page does not draw yet.
+
 ## The Venus present hang is retired: one cause, fixed on 2026-10-21
 
 Item 6 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)) asked for the root

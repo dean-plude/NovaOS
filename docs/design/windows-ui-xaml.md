@@ -1618,5 +1618,212 @@ vendors.
    bridge window, each input source the adapter asks for is there, and
    the site fails once the bridge closes).
 
+   Pulsar item 3, twelfth slice: the navigation transitions.  When a
+   Frame's page loads or unloads, the core's `LayoutTransition.cpp`
+   activates `Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition`
+   by name.  That class and the six navigation transition infos (Common,
+   Slide, Continuum, DrillIn, Suppress, Entrance) are not in the
+   framework's own tree: they live in WinUI's phone library
+   (`dxaml/phone/lib/ThemeTransitions.cpp`,
+   `Microsoft.UI.Xaml.Phone.dll` in the Windows App SDK).  They are WRL
+   classes composed over the framework's `Transition` and
+   `NavigationTransitionInfo`, and they reach the framework only by
+   class name.  NovaOS vendors the phone library's IDL (abigen now writes
+   `microsoft.ui.xaml.phone.h` and the phone types' interfaces) together
+   with `ThemeTransitions.cpp`, its storyboard helper
+   `NavigateTransitionHelper.cpp`, and SatelliteBase's
+   dependency-property helper.  `build.py` compiles them into the
+   framework as one more core library, over a NovaOS precompiled header
+   (`userland/windows_ui_xaml/src/phone/precomp.h`).  NovaOS's WRL gained
+   what they use: `ActivationFactory`/`AgileActivationFactory`, and a
+   `RuntimeClass` that answers what its own interfaces lack from its
+   `ComposableBase`.  WRL's module registry (`ActivatableClass`) is not
+   kept, so `src/phone/phone_factories.cpp` lists the seven factories by
+   name, and the framework's lookup by name (`nova_lifted_factory`) asks
+   that table after its own.  The lifted class names the framework
+   activates (the phone classes and the storyboards, key frames, easing
+   functions, projections and dependency properties they make) are listed
+   in one place, `nova_register_lifted_classes`
+   (`src/windows_activation.cpp`).  `Windows.UI.Xaml.dll` registers them
+   for the process at start-up.  The list is deliberately not every
+   lifted name, because WinUI 2's `Microsoft.UI.Xaml.dll`, which a UWP
+   app may carry, serves classes under `Microsoft.UI.Xaml` names of its
+   own.  Test: `wuxamltest` (the transition and the six infos activated
+   by name, composed over the framework's bases; the default transition
+   info, a slide's effect and staggering set and read back).
+
+   Pulsar item 3, thirteenth slice: an `Image`'s brush and an app's
+   event handlers.  An `Image` paints its source with an internal
+   `CImageBrush`; when it is measured (`CImageBase::EnsureBrush`) it hands
+   the source to the brush's `ReloadImage`.  `imagebrush.cpp` had been
+   left out of the element library with the Direct2D 1.3/1.4 elements, so
+   that call was a "not built yet" stand-in answering `E_NOTIMPL`, which
+   failed Calculator's first layout.  It is vendored and built now.  The
+   next failure was a use after free: the framework keeps an event
+   handler that is an `IReferenceTrackerTarget` (as .NET Native's
+   delegates are) by tracker references, not COM ones
+   (`TrackerTargetReference`).  A Windows handler reaches the framework
+   as NovaOS's wrapper (a face of the framework's delegate type), which
+   passed every interface but its own to the app's object, that one too.
+   So the framework took a tracker reference on the app's delegate and
+   none on the wrapper, which was freed when the face's `add_` returned,
+   and its memory was later reused by another face.  A wrapper of its own
+   (not part of a framework object) now answers no
+   `IReferenceTrackerTarget`, so the framework holds it by a COM
+   reference, and it holds the app's delegate.  Test: `wuxamltest` (the
+   `Image` measured; `FrameworkElement.Loading` added with a handler that
+   is a reference tracker target, kept while subscribed and let go when
+   removed).
+
+   Pulsar item 3, fourteenth slice: x:Bind's connector.  A page's
+   compiled bindings (x:Bind) are an object of the app's that the parser
+   gets from the page's `IComponentConnector2::GetBindingConnector` and
+   then calls `Connect` on for each element that has an x:Bind, which
+   sets the bindings' reference to it.  The parser keeps that connector
+   by a weak reference (`ValueWeakReference`) and asks the object it
+   resolves to for the framework's `IComponentConnector`.  NovaOS's
+   wrapper (the framework's interface over the app's Windows one) passed
+   `IWeakReferenceSource` on to the app's object, so the weak reference
+   resolved to the app's object itself, which knows only the Windows
+   interface: the parser skipped every `Connect`, and the bindings' first
+   `Update` (from the page's `Loading`) used a target that was never set,
+   a .NET `NullReferenceException`.  A wrapper of its own over an app's
+   object now answers `IWeakReferenceSource` itself: its weak reference
+   resolves the app's object and wraps it again, so the resolved object
+   answers the framework's interface, and its identity (`IUnknown`) is
+   still the app object's.  Test: `wuxamltest` (an app's connector
+   wrapped, weakly referenced and resolved, `Connect` reaching it).
+
+   Pulsar item 3, fifteenth slice: a page's layout bounds and text
+   trimming.  A `Page` measuring itself asks its XAML root for the
+   root's `LayoutBoundsChangedHelper` and has it watch for the bounds
+   changing; the helper (Microsoft's `dxaml/lib/LayoutBoundsChangedHelper.cpp`,
+   now built) follows the root's `Changed` event and, when the app's
+   windowing model is the universal one (a UWP app), the main view's
+   `ApplicationView.VisibleBoundsChanged` (NovaOS's `twinapi.appcore`
+   serves `ApplicationView`); a desktop program has no `ApplicationView`
+   and uses its root's own bounds.  Then a `TextBlock` with
+   `TextTrimming` asks DirectWrite for an ellipsis trimming sign, which
+   NovaOS's `dwrite.dll` now makes: an `IDWriteInlineObject` that lays out
+   U+2026 in the text format's font with a one-character layout of its
+   own, reports that layout's width, height and baseline, breaks like the
+   text around it and draws through the caller's renderer.  Tests:
+   `wuxamltest` (the helper on the desktop path, its callbacks), `dwtest`
+   (the sign's metrics, break conditions and glyph run).
+
+   Pulsar item 3, sixteenth slice: the window's events.  A UWP app's
+   `Window.Activated`, `Closed`, `SizeChanged` and `VisibilityChanged`
+   handlers (Windows.UI.Xaml's `WindowActivatedEventHandler` and the
+   others) take `Windows.UI.Core`'s arguments, while the framework's
+   `Window` raises its own `Microsoft.UI.Xaml` ones, so the face has no
+   method to call.  On Windows these events are the `CoreWindow`'s; the
+   face now answers them itself (`winfaces.py`'s `ANSWERED_HERE`,
+   `nova_face_window_event_add`/`_remove`): an adapter, the `CoreWindow`
+   event's `TypedEventHandler<CoreWindow, ...>`, goes on the thread's
+   `CoreWindow` (`twinapi.appcore`'s) and calls the app's handler with
+   the window as sender and the `CoreWindow`'s arguments as they are; the
+   token is the `CoreWindow`'s.  A thread without a `CoreWindow` gets
+   token 0 and no events, as WinUI 3's `UWPWindowImpl` answers.  Test:
+   `wuxamltest` (`Activated` added, the `CoreWindow` activated, the call,
+   its sender and its state, removed).
+
+   Pulsar item 3, seventeenth slice: views and framework strings.
+   `UIViewSettings.GetForCurrentView` (`ole32`'s `uisettings.c`) answers
+   on a thread that has a `CoreWindow` (Calculator's title bar asks it
+   when loaded) and is still `ERROR_NOT_FOUND` on a Win32 thread.
+   WinUI 2 in its framework package reads its strings from
+   `ResourceManager.Current.AllResourceMaps()["Microsoft.UI.Xaml.2.8"]`
+   (`ResourceAccessor.cpp`); `MrmCoreR`'s `AllResourceMaps` now holds the
+   map of each framework package in the app's package graph that has a
+   `resources.pri`, by its package's name, beside the app's own.  To find
+   such origins, `RoOriginateError` logs the ten frames it was called from
+   ("originated at: #n module+offset"); WinUI 2's public symbols
+   (msdl.microsoft.com) name them.  Tests: `wuxamltest`
+   (`GetForCurrentView` on the `CoreWindow`'s thread), `qtthemetest` (on
+   a Win32 thread).
+
+   Pulsar item 3, eighteenth slice: WinUI 2's classes named as the
+   framework's own.  The framework's classes are `Microsoft.UI.Xaml.*`
+   inside it, and WinUI 2 has classes of its own under some of the same
+   names (`Microsoft.UI.Xaml.Controls.IconSource`, `FontIconSource`,
+   `SymbolIconSource`).  Markup names WinUI 2's through a
+   `using:Microsoft.UI.Xaml.Controls` xmlns, which the parser maps to the
+   framework's built-in namespace; `XamlXmlNamespace::GetCustomXamlType`
+   now asks the metadata providers (the app's, which hands on to WinUI
+   2's) for a `using:` xmlns's name first, so WinUI 2's `NavigationView`
+   template gives its pane button's `AnimatedIcon` WinUI 2's
+   `FontIconSource` (Calculator's .NET members cast it to WinUI 2's
+   `IconSource`).  `DependencyProperty.Register`'s owner and property type
+   names (`MetadataAPI::TryGetRegisteredClassInfo`, which the queued
+   registrations resolve through) do the same for `Microsoft.UI.Xaml`
+   names, so WinUI 2's `FontIconSource.FontSize` is registered on WinUI 2's
+   class and a `{Binding}` on it in markup finds it.  A name no provider
+   has is cached as unknown and resolves to the framework's class.  Test:
+   `winui2test` (an `AnimatedIcon` from markup, its `FallbackIconSource`
+   read through WinUI 2's `FontIconSource.Glyph` member).
+
+   Pulsar item 3, nineteenth slice: the framework's localized strings.
+   The core asks its browser host for them by id (`localizedResource.h`:
+   automation peers' localized control types, scroll bar parts' names,
+   the title a windowed `Popup` gives its host window, which WinUI 2's
+   `NavigationView` opens while it lays out).  Microsoft's host loads them
+   from a localized satellite DLL whose string table is not in the public
+   repository; NovaOS's `CXcpBrowserHost::GetLocalizedResourceString`
+   (`userland/windows_ui_xaml/src/error_strings.cpp`, beside the
+   non-localized error messages) keeps the English text of the ids its
+   built parts ask for, and an id without text reads as the empty string,
+   as Microsoft's answers when its table has no row.  Test: `wuxamltest`
+   (the button peer's localized control type).
+
+   Pulsar item 3, twentieth slice: objects handed back to the app.  A
+   face's `Object` result on a call from the app into the framework
+   (`DependencyObject.GetValue`, `ContentControl.Content`, ...) goes
+   through `nova_object_app_out` (`windows_faces.cpp`; `winfaces.py`
+   emits it, except for a composable class's inner object): a framework
+   box of a Windows-named enum or struct is boxed again as Windows boxes
+   it, and a framework object whose class has a Windows name is handed
+   over as the face of that class's default interface, which names the
+   Windows class, as `nova_object_to_app` already did for the arguments
+   of the app's handlers.  .NET Native makes a runtime callable wrapper
+   by that name, so Calculator's `(SolidColorBrush)GetValue(...)` (its
+   title bar's button brushes, set by a style) no longer fails.  Only
+   objects whose vtable lies in `Windows.UI.Xaml.dll` are crossed:
+   WinUI 2's classes share the framework's `Microsoft.UI.Xaml` names, and
+   an app's object composed over a framework class is the app's.  Test:
+   `wuxamltest` (a `SolidColorBrush` property's value read back).
+
+   Pulsar item 3, twenty-first slice: the phone library's classes by
+   their Windows names.  The registry's `ActivatableClassId` keys for
+   `Windows.UI.Xaml.dll` (`kernel/um/um_wuxaml_classes.h`, written by
+   `tools/winrt/wuxclasses.py`) listed only classes in the framework's
+   own table (`Factories.g.cpp`), so `RoGetActivationFactory` of
+   `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo`
+   never reached the DLL, which already served it
+   (`nova_xaml_windows_factory` falls back to `nova_phone_factory`).
+   `wuxclasses.py` now also reads `src/phone/phone_factories.cpp`'s table
+   (508 classes).  The phone classes are WRL classes composed over the
+   framework's `Transition` and `NavigationTransitionInfo`; NovaOS's WRL
+   (`inc/wrl/implements.h`), built with `NOVA_WRL_XAML_FACES` (the phone
+   sources' `precomp.h`), answers a Windows interface their base does not
+   through `nova_xaml_face_query` over the class's own lifted interfaces,
+   so the object answers Windows' `IEntranceNavigationTransitionInfo`.
+   Test: `wuxamltest` (the transition info activated by its Windows name).
+
+   Pulsar item 3, twenty-second slice: the error behind a parse failure.
+   `FrameworkApplication::LoadComponent`, `Control::ApplyTemplate` and
+   `DataTemplate::LoadContent` translate any failure into
+   E_XAMLPARSEFAILED (0x802B000A) for the CLR; NovaOS writes the original
+   HRESULT to the debug log first.  `CErrorService::AddError`
+   (`core/error/ErrorService.cpp`) logs each parser and runtime error
+   (code, HRESULT, line, column, message), and `XamlType::CreateInstance`
+   (`core/Parser/XamlType.cpp`) names an unresolved type (an
+   `UnknownType`, whose runtime kind is neither native nor managed) before
+   `XamlSchemaContext::GetRuntime` fails it with a bare E_FAIL.  That
+   showed Calculator's stop: its `Pivot`, which the framework looks for
+   through `XamlLibMetadataProvider` in `Microsoft.UI.Xaml.Phone.dll`, a
+   closed Windows App SDK library (the open-source tree has only its
+   `generic.xaml` style).  Test: `wuxamltest` (markup with an unknown
+   element fails, with the parser's error logged).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -101,6 +101,7 @@ HRESULT nova_object_out(HRESULT hr, void *o, void **a);
 // an object going from the framework to the app's code: a framework box of
 // a Windows.UI.Xaml enum or struct boxed again as Windows boxes it
 HRESULT nova_object_to_app(void *a, void **out);
+HRESULT nova_object_app_out(HRESULT hr, void *o, void **a);
 // a TypeName (Windows.UI.Xaml.Interop.TypeName) of a Windows.UI.Xaml type
 // renamed as the framework's (@to_framework) or back: in place, the new
 // name made into @made (for the caller to delete); nova_typename_out: an
@@ -129,4 +130,8 @@ HRESULT nova_face_event_kept(IUnknown *handler, INT64 *token);
 HRESULT nova_face_event_removed(INT64 token);
 // (a UWP window's methods NovaOS answers itself: winfaces.py's ANSWERED_HERE)
 HRESULT nova_face_window_set_title_bar(void *element);
+// (a UWP app's window's events: Activated, Closed, SizeChanged and
+// VisibilityChanged, in that order, their handlers on the thread's CoreWindow)
+HRESULT nova_face_window_event_add(NovaTear *t, int event, void *handler, INT64 *token);
+HRESULT nova_face_window_event_remove(int event, INT64 token);
 }

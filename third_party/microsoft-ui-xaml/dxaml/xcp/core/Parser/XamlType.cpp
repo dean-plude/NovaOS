@@ -26,6 +26,15 @@ HRESULT XamlType::CreateInstance(
     std::shared_ptr<XamlRuntime> spXamlRuntime;
     
     IFC(GetSchemaContext(spXamlSchemaContext));
+    if (m_sTypeToken.GetRuntimeKind() != tfkNative && m_sTypeToken.GetRuntimeKind() != tfkManaged)
+    {
+        // NovaOS: a type the parser could not resolve (an UnknownType) reaches here and fails
+        // with a bare E_FAIL in GetRuntime below; name it in the debug log.
+        WCHAR line[400];
+        swprintf_s(line, L"xaml: cannot create %.300s: type not resolved\n",
+            m_spName.IsNullOrEmpty() ? L"(unnamed type)" : m_spName.GetBuffer());
+        ::OutputDebugStringW(line);
+    }
     IFC(spXamlSchemaContext->GetRuntime(m_sTypeToken.GetRuntimeKind(), spXamlRuntime));
     IFC(spXamlRuntime->CreateInstance(m_sTypeToken, rqoOut));
     

@@ -80,6 +80,11 @@ private:
     _Check_return_ HRESULT GetXamlTypeImpl(
         _In_ const xstring_ptr& inTypeName, 
         _Out_ std::shared_ptr<XamlType>& outType);
+    // NovaOS: a "using:" xmlns's type a metadata provider has (the .cpp)
+    _Check_return_ HRESULT GetCustomXamlType(
+        _In_ const std::shared_ptr<XamlTypeNamespace>& typeNamespace,
+        _In_ const xstring_ptr& inTypeName,
+        _Out_ std::shared_ptr<XamlType>& outType);
     
     bool m_bIsImplicitlyResolved : 1;
     bool m_bIsImplicitlyResolvedComputed : 1;

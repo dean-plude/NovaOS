@@ -3,7 +3,8 @@
  * font has only Latin.  The layout must pick fallback fonts for the other
  * scripts, shape them (Arabic joining, Devanagari conjuncts), order the
  * Arabic right to left, and the glyph runs must draw.  The drawing is shown
- * in a window for the screenshot.
+ * in a window for the screenshot.  The ellipsis trimming sign is an inline
+ * object that measures and draws U+2026 in the format's font.
  * Build: x86_64-w64-mingw32-gcc -O2 -o dwtest.exe dwtest.c -ldwrite -lgdi32 -luser32
  * Run:   dwtest [seconds to keep the window up]
  */
@@ -181,6 +182,26 @@ int main(int argc, char **argv)
     }
     CHECK("Arabic is drawn to the right of the Latin", ar->x0 >= lat->x1 - 1);
     CHECK("Devanagari is drawn to the right of the Arabic", dv->x0 >= ar->x1 - 1);
+
+    /* the ellipsis trimming sign (XAML's TextBlock asks for one for
+     * TextTrimming): an inline object with the format's font's U+2026 */
+    IDWriteInlineObject *sign = NULL;
+    hr = IDWriteFactory_CreateEllipsisTrimmingSign(g_f, fmt, &sign);
+    CHECK("CreateEllipsisTrimmingSign", SUCCEEDED(hr) && sign);
+    if (sign) {
+        DWRITE_INLINE_OBJECT_METRICS im = { 0 };
+        DWRITE_BREAK_CONDITION before = DWRITE_BREAK_CONDITION_CAN_BREAK, after = DWRITE_BREAK_CONDITION_CAN_BREAK;
+        CHECK("its metrics: a width under the font size, a line's height, a baseline in it",
+              SUCCEEDED(IDWriteInlineObject_GetMetrics(sign, &im)) && im.width > 0 && im.width < 40 &&
+              im.height >= 40 && im.baseline > 0 && im.baseline < im.height);
+        CHECK("it breaks like the text around it",
+              SUCCEEDED(IDWriteInlineObject_GetBreakConditions(sign, &before, &after)) &&
+              before == DWRITE_BREAK_CONDITION_NEUTRAL && after == DWRITE_BREAK_CONDITION_NEUTRAL);
+        int had = nruns;
+        hr = IDWriteInlineObject_Draw(sign, NULL, &g_renderer, 0, 0, FALSE, FALSE, NULL);
+        CHECK("it draws one glyph run", SUCCEEDED(hr) && nruns == had + 1 && runs[had].glyphs == 1);
+        IDWriteInlineObject_Release(sign);
+    }
 
     /* GDI interop: a bitmap render target is a memory DC on a 32-bit DIB
      * section; DrawGlyphRun blends the text colour into its pixels (Steam's

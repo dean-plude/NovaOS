@@ -3,6 +3,9 @@
 
 #include "precomp.h"
 #include "xamlxmlnamespace.h"
+#include "TypeTableStructs.h"
+#include "MetadataAPI.h"
+#include "XamlTypeNamespace.h"
 
 _Check_return_ HRESULT 
 XamlXmlNamespace::AddTypeNamespace(const std::shared_ptr<XamlTypeNamespace> inTypeNamespace)
@@ -57,6 +60,42 @@ XamlXmlNamespace::GetXamlType(
 //      Xxx
 //
 //------------------------------------------------------------------------
+// NovaOS: the framework (WinUI 3's source) is the system Windows.UI.Xaml
+// here, its own types named Microsoft.UI.Xaml.* inside it, and WinUI 2,
+// which a UWP app carries, has types of its own under the same names
+// (Microsoft.UI.Xaml.Controls.FontIconSource, IconSource, ...).  Markup
+// names WinUI 2's through a "using:Microsoft.UI.Xaml..." xmlns (the
+// framework's own are in the presentation xmlns, which maps to the same
+// built-in namespaces), so in a "using:" xmlns the metadata providers'
+// type of the name comes first: WinUI 2's NavigationView template sets
+// AnimatedIcon.FallbackIconSource to a WinUI 2 FontIconSource, which an
+// app's provider casts to WinUI 2's IconSource.  Null when no provider
+// has the name (MetadataAPI::TryGetCustomClassInfoByName).
+_Check_return_ HRESULT
+XamlXmlNamespace::GetCustomXamlType(
+    _In_ const std::shared_ptr<XamlTypeNamespace>& typeNamespace,
+    _In_ const xstring_ptr& inTypeName,
+    _Out_ std::shared_ptr<XamlType>& outType)
+{
+    outType.reset();
+    DECLARE_CONST_STRING_IN_FUNCTION_SCOPE(c_strUsing, L"using:");
+    const auto& token = typeNamespace->get_TypeNamespaceToken();
+    if (!m_spXmlNamespaceUri.StartsWith(c_strUsing, xstrCompareCaseSensitive) ||
+        token.GetProviderKind() != tpkNative || !DirectUI::MetadataAPI::IsKnownIndex(token.GetHandle()))
+    {
+        return S_OK;
+    }
+    const CClassInfo* pType = nullptr;
+    IFC_RETURN(DirectUI::MetadataAPI::TryGetCustomClassInfoByName(token.GetHandle(), inTypeName, &pType));
+    if (pType)
+    {
+        auto schemaContext = m_spXamlSchemaContext.lock();
+        IFCEXPECT_RETURN(schemaContext);
+        IFC_RETURN(schemaContext->GetXamlType(XamlTypeToken::FromType(pType), typeNamespace, inTypeName, outType));
+    }
+    return S_OK;
+}
+
 _Check_return_ HRESULT 
 XamlXmlNamespace::GetXamlTypeImpl(
     _In_ const xstring_ptr& inTypeName, 
@@ -83,6 +122,11 @@ XamlXmlNamespace::GetXamlTypeImpl(
         {
             for (auto typeNamespace : m_typeNamespaceList)
             {
+                IFC_RETURN(GetCustomXamlType(typeNamespace, inTypeName, spXamlType));
+                if (spXamlType)
+                {
+                    break;
+                }
                 IFC_RETURN(typeNamespace->GetXamlType(inTypeName, spXamlType));
 
                 if (spXamlType)

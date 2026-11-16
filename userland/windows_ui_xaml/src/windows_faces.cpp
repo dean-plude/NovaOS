@@ -11,11 +11,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <winstring.h>
+#include <roapi.h>
 
 static const GUID IID_IUnknown_ = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const GUID IID_IInspectable_ = {0xaf86e2e0, 0xb12d, 0x4c6a, {0x9c, 0x5a, 0xd7, 0xaa, 0x65, 0x10, 0x1e, 0x90}};
 static const GUID IID_IPropertyValue_ = {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
 static const GUID IID_IAgileObject_ = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
+static const GUID IID_IReferenceTrackerTarget_ = {0x64bd43f8, 0xbfee, 0x4ec4, {0xb7, 0xeb, 0x29, 0x35, 0x15, 0x8d, 0xae, 0x21}};
 
 #define VT(p) (*(void ***)(p))
 typedef HRESULT (STDMETHODCALLTYPE *QI_FN)(void *, REFIID, void **);
@@ -78,6 +80,119 @@ static void *tear(const NovaFace *f, void *obj, BOOL direct)
     return t;
 }
 
+// A weak reference to a reverse face's tear-off (a framework interface over
+// an app's object) resolves to a tear-off again, not to the app's object:
+// the framework keeps what it was handed weakly (ValueWeakReference, as the
+// x:Bind connector IComponentConnector2::GetBindingConnector returns, which
+// the parser then asks for its own IComponentConnector to call Connect on
+// each x:Bind target) and asks the resolved object for the framework's
+// interface, which the app's object (a .NET Native one) does not know: the
+// parser skipped every Connect, and the app's generated bindings, their
+// targets never set, failed with a NullReferenceException in their first
+// Update (Calculator's MainPage)
+static const GUID IID_IWeakReferenceSource_ = {0x00000038, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const GUID IID_IWeakReference_ = {0x00000037, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+struct NovaTearWeak
+{
+    void *const *vtbl;
+    LONG ref;
+    const NovaFace *face;
+    void *inner;                // the app object's IWeakReferenceSource or IWeakReference
+};
+
+static HRESULT STDMETHODCALLTYPE weak_qi(NovaTearWeak *w, REFIID iid, void **out, const GUID *own)
+{
+    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, *own)) {
+        InterlockedIncrement(&w->ref);
+        *out = w;
+        return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE weak_addref(NovaTearWeak *w)
+{
+    return InterlockedIncrement(&w->ref);
+}
+
+static ULONG STDMETHODCALLTYPE weak_release(NovaTearWeak *w)
+{
+    ULONG r = InterlockedDecrement(&w->ref);
+    if (!r) {
+        nova_release(w->inner);
+        CoTaskMemFree(w);
+    }
+    return r;
+}
+
+static HRESULT STDMETHODCALLTYPE weakref_qi(NovaTearWeak *w, REFIID iid, void **out)
+{
+    return weak_qi(w, iid, out, &IID_IWeakReference_);
+}
+
+static HRESULT STDMETHODCALLTYPE weakref_resolve(NovaTearWeak *w, REFIID iid, void **out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = nullptr;
+    void *obj = nullptr;
+    HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, REFIID, void **))VT(w->inner)[3])(w->inner, IID_IInspectable_, &obj);
+    if (FAILED(hr) || !obj)
+        return hr;
+    // (the framework's own interface, and the object as IInspectable, are
+    // the face's tear-off; whatever else it is asked the object answers)
+    const GUID *want = IsEqualGUID(iid, IID_IInspectable_) ? w->face->impl : &iid;
+    if (FAILED(nova_cross(obj, want, out)) || !*out) {
+        *out = nullptr;
+        if (want != &iid) {
+            *out = obj;
+            return S_OK;
+        }
+    }
+    nova_release(obj);
+    return S_OK;
+}
+
+static void *const s_weakref_vtbl[] = {(void *)&weakref_qi, (void *)&weak_addref, (void *)&weak_release,
+                                       (void *)&weakref_resolve};
+
+static HRESULT STDMETHODCALLTYPE weaksrc_qi(NovaTearWeak *w, REFIID iid, void **out)
+{
+    return weak_qi(w, iid, out, &IID_IWeakReferenceSource_);
+}
+
+static NovaTearWeak *weak_make(void *const *vtbl, const NovaFace *f, void *inner)
+{
+    NovaTearWeak *w = (NovaTearWeak *)CoTaskMemAlloc(sizeof(NovaTearWeak));
+    if (!w) {
+        nova_release(inner);
+        return nullptr;
+    }
+    w->vtbl = vtbl;
+    w->ref = 1;
+    w->face = f;
+    w->inner = inner;
+    return w;
+}
+
+static HRESULT STDMETHODCALLTYPE weaksrc_get(NovaTearWeak *w, void **out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = nullptr;
+    void *ref = nullptr;
+    HRESULT hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))VT(w->inner)[3])(w->inner, &ref);
+    if (FAILED(hr) || !ref)
+        return FAILED(hr) ? hr : E_FAIL;
+    *out = weak_make(s_weakref_vtbl, w->face, ref);
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+static void *const s_weaksrc_vtbl[] = {(void *)&weaksrc_qi, (void *)&weak_addref, (void *)&weak_release,
+                                       (void *)&weaksrc_get};
+
 extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void **out)
 {
     if (!out)
@@ -88,9 +203,29 @@ extern "C" HRESULT STDMETHODCALLTYPE nova_tear_qi(NovaTear *t, REFIID iid, void 
         *out = t;
         return S_OK;
     }
+    // (a tear-off of its own, not part of its object, is kept alive by its
+    // COM references only: it does not pass on the object's
+    // IReferenceTrackerTarget, or the framework, which holds a tracker
+    // target by tracker references instead of COM ones (an event source's
+    // handler list, TrackerTargetReference), would keep the object and let
+    // the tear-off go: a .NET Native app's Windows event handler, the
+    // tear-off freed while subscribed and its memory reused)
+    if (!t->part && IsEqualGUID(iid, IID_IReferenceTrackerTarget_)) {
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
     // (the object's identity, and every other interface, are the object's;
     // one it has only in the other framework's form is a face of that, as
     // the framework asking an app's IXamlType for another of its interfaces)
+    if (!t->part && IsEqualGUID(iid, IID_IWeakReferenceSource_) &&
+        (t->face->flags & (NOVA_FACE_REVERSE | NOVA_FACE_DELEGATE | NOVA_FACE_OVERRIDE)) == NOVA_FACE_REVERSE) {
+        void *src;
+        HRESULT hr = qi(t->obj, &iid, &src);
+        if (FAILED(hr))
+            return hr;
+        *out = weak_make(s_weaksrc_vtbl, t->face, src);
+        return *out ? S_OK : E_OUTOFMEMORY;
+    }
     HRESULT hr = qi(t->obj, &iid, out);
     const NovaFace *f;
     void *w;
@@ -576,6 +711,16 @@ static const GUID *windows_default(void *a)
 {
     if (VT(a)[0] == (void *)&nova_tear_qi)
         return nullptr;
+    // (the framework's own objects only: WinUI 2's, which an app carries,
+    // have names the framework's classes have too, and an app's object
+    // composed over a framework one is the app's)
+    HMODULE self = nullptr, owner = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)&windows_default, &self) ||
+        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)VT(a)[0], &owner) ||
+        owner != self)
+        return nullptr;
     void *insp;
     if (FAILED(qi(a, &IID_IInspectable_, &insp)))
         return nullptr;
@@ -623,6 +768,21 @@ extern "C" HRESULT nova_object_to_app(void *a, void **out)
     nova_addref(a);
     *out = a;
     return S_OK;
+}
+
+// an object the framework gives the app's code as a call's result
+// (DependencyObject.GetValue's): as nova_object_to_app, so that a brush a
+// custom property holds comes back as Windows' SolidColorBrush, which
+// Calculator's TitleBar casts it to
+extern "C" HRESULT nova_object_app_out(HRESULT hr, void *o, void **a)
+{
+    if (FAILED(hr) || !a) {
+        nova_release(o);
+        return hr;
+    }
+    HRESULT h = nova_object_to_app(o, a);
+    nova_release(o);
+    return FAILED(h) ? h : hr;
 }
 
 struct NovaTypeName
@@ -723,6 +883,143 @@ extern "C" HRESULT nova_face_window_set_title_bar(void *element)
 {
     (void)element;
     return S_OK;
+}
+
+// A UWP app's window's events (winfaces.py's ANSWERED_HERE): Activated,
+// Closed, SizeChanged and VisibilityChanged.  On Windows a UWP Window's
+// events are its CoreWindow's: each handler (Windows.UI.Xaml's
+// WindowActivatedEventHandler, WindowClosedEventHandler,
+// WindowSizeChangedEventHandler, WindowVisibilityChangedEventHandler) gets
+// the CoreWindow's Windows.UI.Core arguments with the Window as sender.  The
+// framework's Window hands its own (Microsoft.UI.Xaml) arguments, so the face
+// subscribes on the thread's CoreWindow itself: an adapter, the CoreWindow
+// event's TypedEventHandler<CoreWindow, ...>, calls the app's handler with
+// the window (the face) as sender and the arguments as they are.  A thread
+// without a CoreWindow (a XAML island) gets no events and token 0, as WinUI
+// 3's UWPWindowImpl answers there.
+static const GUID IID_ICoreWindowStatic_ = {0x4d239005, 0x3c2a, 0x41b1, {0x90, 0x22, 0x53, 0x6b, 0xb9, 0xcf, 0x93, 0xb1}};
+enum { CORE_WINDOW_STATIC_FOR_THREAD = 6 };
+static const struct
+{
+    GUID handler;               // TypedEventHandler<CoreWindow, the event's arguments>
+    unsigned add;               // ICoreWindow's add_ slot (remove_ the next)
+} s_window_events[] = {
+    // Activated (WindowActivatedEventArgs)
+    {{0x26a73b35, 0xa7f9, 0x52db, {0x88, 0xd6, 0x15, 0x72, 0x6d, 0xeb, 0x25, 0x23}}, 24},
+    // Closed (CoreWindowEventArgs)
+    {{0xd08e4f66, 0x3457, 0x57f2, {0xba, 0x0c, 0xcb, 0x34, 0x71, 0x33, 0xbd, 0x15}}, 30},
+    // SizeChanged (WindowSizeChangedEventArgs)
+    {{0x318dbb67, 0x4089, 0x5690, {0x90, 0x40, 0x1d, 0x45, 0x4f, 0xb2, 0xf6, 0x86}}, 54},
+    // VisibilityChanged (VisibilityChangedEventArgs)
+    {{0x14b7f692, 0x5583, 0x52a1, {0xaa, 0x42, 0xfc, 0x18, 0x43, 0xc0, 0xf7, 0x48}}, 56},
+};
+
+struct NovaWindowEventAdapter
+{
+    void *const *vtbl;
+    LONG ref;
+    int event;
+    void *handler;              // the app's handler
+    void *window;               // the sender: the app's Window (its face)
+};
+
+static HRESULT STDMETHODCALLTYPE window_event_qi(NovaWindowEventAdapter *a, REFIID iid, void **out)
+{
+    if (!out)
+        return E_POINTER;
+    if (IsEqualGUID(iid, IID_IUnknown_) || IsEqualGUID(iid, IID_IAgileObject_) ||
+        IsEqualGUID(iid, s_window_events[a->event].handler)) {
+        InterlockedIncrement(&a->ref);
+        *out = a;
+        return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE window_event_addref(NovaWindowEventAdapter *a)
+{
+    return (ULONG)InterlockedIncrement(&a->ref);
+}
+
+static ULONG STDMETHODCALLTYPE window_event_release(NovaWindowEventAdapter *a)
+{
+    LONG r = InterlockedDecrement(&a->ref);
+    if (!r) {
+        nova_release(a->handler);
+        nova_release(a->window);
+        HeapFree(GetProcessHeap(), 0, a);
+    }
+    return (ULONG)r;
+}
+
+static HRESULT STDMETHODCALLTYPE window_event_invoke(NovaWindowEventAdapter *a, void *core_window, void *args)
+{
+    (void)core_window;
+    typedef HRESULT (STDMETHODCALLTYPE *INVOKE_FN)(void *, void *, void *);
+    return ((INVOKE_FN)VT(a->handler)[3])(a->handler, a->window, args);
+}
+
+static void *const s_window_event_vtbl[] = {(void *)&window_event_qi, (void *)&window_event_addref,
+                                            (void *)&window_event_release, (void *)&window_event_invoke};
+
+// the thread's CoreWindow (AddRef'd), or null
+static void *core_window_for_thread()
+{
+    HSTRING_HEADER h;
+    HSTRING name;
+    static const wchar_t cls[] = L"Windows.UI.Core.CoreWindow";
+    void *statics = nullptr, *w = nullptr;
+    if (FAILED(WindowsCreateStringReference(cls, ARRAYSIZE(cls) - 1, &h, &name)) ||
+        FAILED(RoGetActivationFactory(name, IID_ICoreWindowStatic_, &statics)) || !statics)
+        return nullptr;
+    typedef HRESULT (STDMETHODCALLTYPE *GET_FN)(void *, void **);
+    if (FAILED(((GET_FN)VT(statics)[CORE_WINDOW_STATIC_FOR_THREAD])(statics, &w)))
+        w = nullptr;
+    nova_release(statics);
+    return w;
+}
+
+extern "C" HRESULT nova_face_window_event_add(NovaTear *t, int event, void *handler, INT64 *token)
+{
+    if (!handler || !token)
+        return E_INVALIDARG;
+    if (event < 0 || event >= (int)ARRAYSIZE(s_window_events))
+        return E_INVALIDARG;
+    *token = 0;
+    void *w = core_window_for_thread();
+    if (!w)
+        return S_OK;
+    NovaWindowEventAdapter *a = (NovaWindowEventAdapter *)HeapAlloc(GetProcessHeap(), 0, sizeof *a);
+    if (!a) {
+        nova_release(w);
+        return E_OUTOFMEMORY;
+    }
+    a->vtbl = s_window_event_vtbl;
+    a->ref = 1;
+    a->event = event;
+    a->handler = handler;
+    nova_addref(handler);
+    a->window = t;
+    nova_addref(t);
+    typedef HRESULT (STDMETHODCALLTYPE *ADD_FN)(void *, void *, INT64 *);
+    HRESULT hr = ((ADD_FN)VT(w)[s_window_events[event].add])(w, a, token);
+    window_event_release(a);
+    nova_release(w);
+    return hr;
+}
+
+extern "C" HRESULT nova_face_window_event_remove(int event, INT64 token)
+{
+    if (event < 0 || event >= (int)ARRAYSIZE(s_window_events))
+        return E_INVALIDARG;
+    void *w = core_window_for_thread();
+    if (!w)
+        return S_OK;
+    typedef HRESULT (STDMETHODCALLTYPE *REMOVE_FN)(void *, INT64);
+    HRESULT hr = ((REMOVE_FN)VT(w)[s_window_events[event].add + 1])(w, token);
+    nova_release(w);
+    return hr;
 }
 
 // The handlers of the events NovaOS never raises (winfaces.py's

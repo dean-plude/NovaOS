@@ -720,6 +720,10 @@ _Check_return_ HRESULT Control::ApplyTemplateImpl(_Out_ BOOLEAN* pReturnValue)
     hr = InvokeApplyTemplate(pReturnValue);
     if (FAILED(hr))
     {
+        // NovaOS: keep the real failure in the debug log before it becomes E_XAMLPARSEFAILED.
+        WCHAR line[96];
+        swprintf_s(line, L"xaml: ApplyTemplate failed hr=0x%08x\n", static_cast<unsigned>(hr));
+        ::OutputDebugStringW(line);
         // Translate to XamlParseFailed error. The CLR knows how to translate this to
         // a XamlParseException.
         hr = MAKE_HRESULT(SEVERITY_ERROR, FACILITY_XAML, E_XAMLPARSEFAILED);

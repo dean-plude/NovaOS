@@ -29,6 +29,10 @@ TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 WIN = 'Windows.UI.Xaml.'
 MUX = 'Microsoft.UI.Xaml.'
 FACTORIES = os.path.join(TOP, 'third_party', 'microsoft-ui-xaml', 'dxaml', 'xcp', 'dxaml', 'lib', 'Factories.g.cpp')
+# (and the phone library's classes NovaOS builds into the framework, the
+# navigation transitions, from their own table: Microsoft.UI.Xaml.Phone.dll
+# serves them in the Windows App SDK, Windows.UI.Xaml.dll on Windows)
+PHONE = os.path.join(TOP, 'userland', 'windows_ui_xaml', 'src', 'phone', 'phone_factories.cpp')
 OUT = os.path.join(TOP, 'kernel', 'um', 'um_wuxaml_classes.h')
 
 
@@ -36,9 +40,12 @@ def classes():
     r = winmd.Reader()
     r.load(os.path.join(TOP, 'third_party', 'winmd', 'Windows.winmd'))
     lifted = set(re.findall(r'XSTRING_PTR_STORAGE\(L"Microsoft\.UI\.Xaml\.([\w.]+)"\)', open(FACTORIES).read()))
+    phone = set(re.findall(r'\{RuntimeClass_Microsoft_UI_Xaml_(\w+),', open(PHONE).read()))
     out = []
     for n, t in sorted(r.types.items()):
-        if not n.startswith(WIN) or not isinstance(t, RuntimeClass) or n[len(WIN):] not in lifted:
+        if not n.startswith(WIN) or not isinstance(t, RuntimeClass):
+            continue
+        if n[len(WIN):] not in lifted and n[len(WIN):].replace('.', '_') not in phone:
             continue
         if any(a.name.endswith(k) for a in t.attrs for k in ('ActivatableAttribute', 'StaticAttribute',
                                                               'ComposableAttribute')):

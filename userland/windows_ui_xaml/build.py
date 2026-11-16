@@ -261,7 +261,9 @@ CORE_SOURCES['hostpalplatmisc.vcxproj'] += ('host/win/browserdesktop/windwnreq.c
 # (and the framework's error messages, which the browser host gives the
 # error service (a parser error's text): NovaOS's
 # CXcpBrowserHost::GetNonLocalizedErrorString over Microsoft's string table,
-# src/error_strings.cpp; Microsoft's reads it from its resource DLL)
+# src/error_strings.cpp; Microsoft's reads it from its resource DLL; the
+# same file answers the localized strings, GetLocalizedResourceString:
+# UI Automation names and a windowed popup's host window title)
 next(c for c in CORE_LIBRARIES if c[0] == 'hostpalplatmisc.vcxproj')[3].append(
     os.path.join(HERE, 'src', 'error_strings.cpp'))
 CORE_SOURCES.update({
@@ -663,9 +665,10 @@ CORE_SERVICES_STUBS += ('ValueBoxer_Stub.cpp', 'ReferenceTrackerManager_Stub.cpp
 # DeferredKeys.cpp is the resource dictionary's, above), less the imaging
 # and media elements that call Direct2D 1.3 and 1.4 (colour glyphs, SVG
 # documents) and the lifted input's pointer sources, which join when those
-# build
+# build (the image brush, imagebrush.cpp, joined with an Image's picture,
+# Pulsar 3 part 13)
 _ELEMENTS = 'core/core/elements/lib/elements.vcxproj'
-_ELEMENTS_LATER = ('deferredkeys.cpp', 'svgimagesource.cpp', 'glyphs.cpp', 'imagebrush.cpp', 'swapchainpanel.cpp')
+_ELEMENTS_LATER = ('deferredkeys.cpp', 'svgimagesource.cpp', 'glyphs.cpp', 'swapchainpanel.cpp')
 CORE_SOURCES[_ELEMENTS] = tuple(
     os.path.relpath(s, os.path.dirname(os.path.join(XCP, _ELEMENTS)))
     for s in vcxproj.read(os.path.join(XCP, _ELEMENTS), PROPS)['sources']
@@ -900,6 +903,11 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Jup
 # island once the composition tree host connects it, dxaml/lib/
 # InputSiteAdapter.cpp: the island's input sources to the content root)
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../InputSiteAdapter.cpp',)
+# (and the helper a XAML root's layout bounds come through, which a page
+# measuring itself asks for its root's visible bounds changing: dxaml/lib/
+# LayoutBoundsChangedHelper.cpp, over the main view's ApplicationView for
+# a UWP app's CoreWindow, none on a desktop island)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../LayoutBoundsChangedHelper.cpp',)
 CORE_SOURCES['control/common/shared/sl/controlBase.vcxproj'] += ('../ResourceManager.cpp',)
 # (with the component tests' Uri factory stub renamed out, which the
 # window's callers pull in beside the static store's own)
@@ -1498,6 +1506,30 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'XamlBindingHelperFactory_Partial', 'XamlMarkupHelper_Partial', 'Duration_Partial', 'KeyTime_Partial',
     'RepeatBehavior_Partial', 'FontFamily_Partial', 'StateTriggerBase_Partial', 'DataTemplateSelector_Partial',
     'FlyoutShowOptions_partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _PAGE_HELPERS)
+# (step 32.6, a frame's navigation transition: the framework makes a
+# NavigationThemeTransition by name for a Frame's page (core/core/elements'
+# LayoutTransition.cpp), a class of its phone library (dxaml/phone/lib,
+# Microsoft.UI.Xaml.Phone.dll in the Windows App SDK), with the navigation
+# transition infos it plays (Common, Slide, Continuum, DrillIn, Suppress,
+# Entrance): the phone library's ThemeTransitions.cpp and its storyboard
+# helper NavigateTransitionHelper.cpp, compiled with the phone library's
+# include path over a NovaOS precompiled header of the headers they need
+# (src/phone/precomp.h), with SatelliteBase's dependency-property helper
+# (components/SatelliteBase, XamlWrlHelpers.cpp) and NovaOS's table of
+# their activation factories (src/phone/phone_factories.cpp), which
+# NovaOS's WRL module does not keep; the phone IDL's ABI headers are
+# tools/winrt/abigen.py's)
+_PHONE = '../phone/lib/PhoneSignatureControls.vcxproj'
+# (the properties its project sets for its include path)
+PROPS['XcpPhonePath'] = os.path.join(MUX, 'dxaml', 'phone')
+PROPS['XcpPalInc'] = os.path.join(XCP, 'pal', 'inc')
+PROPS['XcpSatbaseInc'] = os.path.join(XCP, 'components', 'SatelliteBase', 'inc')
+PROPS['XcpBaseInc'] = os.path.join(XCP, 'components', 'base', 'inc')
+CORE_LIBRARIES.append((_PHONE, _PHONE, os.path.join(HERE, 'src', 'phone', 'precomp.h'),
+                       [os.path.join(HERE, 'src', 'phone', 'phone_factories.cpp'),
+                        os.path.join(XCP, 'components', 'SatelliteBase', 'lib', 'XamlWrlHelpers.cpp')]))
+CORE_SOURCES[_PHONE] = ('ThemeTransitions.cpp', 'NavigateTransitionHelper.cpp')
+PROJECT_DIR += (_PHONE,)
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

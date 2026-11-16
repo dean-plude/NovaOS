@@ -17,17 +17,38 @@
  *   - DependencyProperty.Register with Windows type names, and its value;
  *   - XamlReader.Load through Windows' statics, the page's children through
  *     Windows' IVector<UIElement>;
- *   - an Image loaded from markup, its Source URI made a BitmapImage;
+ *   - an Image loaded from markup, its Source URI made a BitmapImage,
+ *     measured (its image brush loads the source);
  *   - a Popup loaded from markup, holding its child, closed;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
- *     ButtonAutomationPeer), the same one from FromElement after;
+ *     ButtonAutomationPeer), the same one from FromElement after, and the
+ *     button peer's localized control type (the browser host's localized
+ *     strings);
  *   - Control.IsTabStopProperty (a base class's statics: WinUI 3 moved it
  *     to UIElement);
  *   - Button.Click added and removed with a Windows RoutedEventHandler;
+ *   - FrameworkElement.Loading added and removed with a Windows handler
+ *     that is a reference tracker target, kept while subscribed;
  *   - a control of the app's own composed over Windows.UI.Xaml.Controls.
  *     Control (as WinUI 2 derives its controls), whose Windows
- *     MeasureOverride the framework's layout calls.
+ *     MeasureOverride the framework's layout calls;
+ *   - the navigation transitions of the framework's phone library (a
+ *     Frame's NavigationThemeTransition, which the framework activates by
+ *     name for a page, and the transition infos): each activated by its
+ *     name, composed over the framework's Transition and
+ *     NavigationTransitionInfo, their dependency properties (the default
+ *     transition info, a slide's effect, staggering) set and read back;
+ *   - an app's x:Bind connector (Windows' IComponentConnector2's
+ *     GetBindingConnector) under the framework's IComponentConnector, kept
+ *     weakly as the parser keeps it: the weak reference resolves to the
+ *     framework's IComponentConnector again, which Connect goes through;
+ *   - the helper a XAML root's layout bounds come through (a page asks it
+ *     when it measures itself): on the desktop path no ApplicationView,
+ *     its root's own bounds (UseCoreWindow), callbacks added and removed;
+ *   - a UWP app's Window.Activated: its Windows handler on the thread's
+ *     CoreWindow, called with the window as sender and Windows.UI.Core's
+ *     arguments when the CoreWindow is activated, not after it is removed.
  *
  *   wuxamltest        the self-test runs it with no arguments
  */
@@ -41,13 +62,16 @@
 #include <WindowsXamlManager.g.h>
 #include <roapi.h>
 #include <FrameworkApplication_Partial.h>
+#include <LayoutBoundsChangedHelper.h>
 #include <microsoft.ui.dispatching.h>
+#include <microsoft.ui.xaml.phone.h>
 #include <windows.ui.xaml.h>
 #include <windows.ui.xaml.automation.peers.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.markup.h>
 #include <windows.ui.xaml.media.h>
+#include <windows.ui.xaml.media.animation.h>
 #include <windows.ui.xaml.media.imaging.h>
 
 namespace wux = ABI::Windows::UI::Xaml;
@@ -160,6 +184,35 @@ struct ClickHandler : wux::IRoutedEventHandler
     ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
     ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
     HRESULT STDMETHODCALLTYPE Invoke(IInspectable *, wux::IRoutedEventArgs *) override { return S_OK; }
+};
+
+/* a Windows TypedEventHandler<FrameworkElement, Object>, as a .NET Native
+ * app's delegate: one the framework could hold by tracker references
+ * (IReferenceTrackerTarget), not COM ones */
+struct LoadingHandler : wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *>, IReferenceTrackerTarget
+{
+    LONG refs = 1, tracker = 0;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *>) ||
+            iid == __uuidof(IAgileObject))
+            *out = static_cast<wf::ITypedEventHandler<wux::FrameworkElement *, IInspectable *> *>(this);
+        else if (iid == __uuidof(IReferenceTrackerTarget))
+            *out = static_cast<IReferenceTrackerTarget *>(this);
+        else {
+            *out = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
+    HRESULT STDMETHODCALLTYPE Invoke(wux::IFrameworkElement *, IInspectable *) override { return S_OK; }
+    ULONG STDMETHODCALLTYPE AddRefFromReferenceTracker() override { return (ULONG)InterlockedIncrement(&tracker); }
+    ULONG STDMETHODCALLTYPE ReleaseFromReferenceTracker() override { return (ULONG)InterlockedDecrement(&tracker); }
+    HRESULT STDMETHODCALLTYPE Peg() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Unpeg() override { return S_OK; }
 };
 
 /* the app's own control composed over Windows.UI.Xaml.Controls.Control, as
@@ -283,6 +336,26 @@ static void windows_checks()
           SUCCEEDED(dobj->GetValue(answer.Get(), read.GetAddressOf())) && read && SUCCEEDED(read.As(&readValue)) &&
           SUCCEEDED(readValue->GetInt32(&v)) && v == 42);
 
+    /* a framework object read back through GetValue comes under its Windows
+     * class (Calculator's TitleBar casts its brush property's value to
+     * Windows.UI.Xaml.Media.SolidColorBrush) */
+    wrl_wrappers::HStringReference brushName(L"Windows.UI.Xaml.Media.SolidColorBrush");
+    wux::Interop::TypeName brushType = {brushName.Get(), wux::Interop::TypeKind_Metadata};
+    ctl::ComPtr<wux::IDependencyProperty> brushProperty;
+    ctl::ComPtr<IInspectable> brush, readBrush;
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> brushReader;
+    HSTRING brushClass = nullptr;
+    CHECK("a SolidColorBrush property's value read back as Windows.UI.Xaml.Media.SolidColorBrush", dps && dobj &&
+          SUCCEEDED(dps->Register(wrl_wrappers::HStringReference(L"ButtonBackground").Get(), brushType, ownerType, nullptr,
+                                  brushProperty.GetAddressOf())) &&
+          SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", brushReader.GetAddressOf())) &&
+          SUCCEEDED(brushReader->Load(wrl_wrappers::HStringReference(L"<SolidColorBrush " XMLNS L" Color='Transparent'/>").Get(),
+                                      brush.GetAddressOf())) &&
+          SUCCEEDED(dobj->SetValue(brushProperty.Get(), brush.Get())) &&
+          SUCCEEDED(dobj->GetValue(brushProperty.Get(), readBrush.GetAddressOf())) && readBrush &&
+          SUCCEEDED(readBrush->GetRuntimeClassName(&brushClass)) && is(brushClass, L"Windows.UI.Xaml.Media.SolidColorBrush"));
+    WindowsDeleteString(brushClass);
+
     /* XamlReader.Load through Windows' statics */
     ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
     ctl::ComPtr<IInspectable> page;
@@ -327,6 +400,12 @@ static void windows_checks()
           SUCCEEDED(as(source.Get(), bitmap.GetAddressOf())) && SUCCEEDED(bitmap->get_UriSource(uri.GetAddressOf())) && uri &&
           SUCCEEDED(uri->get_AbsoluteUri(&uriText)) && is(uriText, L"ms-appx:///Assets/Logo.png"));
     WindowsDeleteString(uriText);
+    /* measured, the Image hands its source to its image brush (CImageBrush::
+     * ReloadImage), as Calculator's page's images are on its first layout */
+    ctl::ComPtr<wux::IUIElement> imageElement;
+    CHECK_HR("UIElement.Measure of the Image (its image brush loads the source)",
+             imageObject && SUCCEEDED(as(imageObject.Get(), imageElement.GetAddressOf())) ?
+             imageElement->Measure(wf::Size{40, 40}) : E_FAIL);
 
     /* a Popup from markup (NavigationView's pane makes them): its child, and closed */
     ctl::ComPtr<IInspectable> popupObject;
@@ -340,6 +419,15 @@ static void windows_checks()
           popupObject && SUCCEEDED(as(popupObject.Get(), popup.GetAddressOf())) &&
           SUCCEEDED(popup->get_Child(popupChild.GetAddressOf())) && popupChild &&
           SUCCEEDED(popup->get_IsOpen(&popupOpen)) && !popupOpen);
+
+    /* markup naming an element no type stands for fails, and the parser's error
+     * (its code, line and column) reaches the debug log ("xaml: error"), not
+     * only the bare XAML parse failure Load returns (102-wuxamltest.py checks the
+     * line) */
+    ctl::ComPtr<IInspectable> unknownObject;
+    CHECK("XamlReader.Load of an unknown element fails", reader &&
+          FAILED(reader->Load(wrl_wrappers::HStringReference(L"<Grid " XMLNS L"><NoSuchElement/></Grid>").Get(),
+                              unknownObject.GetAddressOf())) && !unknownObject);
 
     /* the automation peers a page's elements make (Calculator asks for them):
      * the text block's and the button's, kept by the element */
@@ -359,6 +447,13 @@ static void windows_checks()
     CHECK("FromElement then gives the same peer", peers && second &&
           SUCCEEDED(peers->FromElement(second.Get(), again.GetAddressOf())) && again &&
           identity(again.Get()) == identity(buttonPeer.Get()));
+    /* its localized control type: the browser host's localized strings
+     * (GetLocalizedResourceString, which a windowed Popup also asks) */
+    HSTRING controlType = nullptr;
+    CHECK("the button peer's localized control type is \"button\"", buttonPeer &&
+          SUCCEEDED(buttonPeer->GetLocalizedControlType(&controlType)) &&
+          wcscmp(WindowsGetStringRawBuffer(controlType, nullptr), L"button") == 0);
+    WindowsDeleteString(controlType);
 
     /* a base class's statics: Control.IsTabStopProperty (UIElement's in WinUI 3) */
     ctl::ComPtr<wuxc::IControlStatics> cs;
@@ -373,6 +468,21 @@ static void windows_checks()
     CHECK_HR("ButtonBase.Click added", SUCCEEDED(as(button.Get(), bb.GetAddressOf())) ? bb->add_Click(handler, &token) : E_FAIL);
     CHECK_HR("and removed", bb ? bb->remove_Click(token) : E_FAIL);
     handler->Release();
+
+    /* FrameworkElement.Loading with a Windows handler that is a reference
+     * tracker target (.NET Native's delegates are): the framework's handler
+     * is NovaOS's wrapper of it, which the framework keeps by a COM
+     * reference, so the wrapper and the app's handler stay while it is
+     * subscribed (Calculator: the wrapper was freed and its memory reused) */
+    ctl::ComPtr<wux::IFrameworkElement3> fe3;
+    LoadingHandler *loading = new LoadingHandler();
+    EventRegistrationToken loadingToken = {};
+    CHECK_HR("FrameworkElement.Loading added with a reference tracker target handler",
+             SUCCEEDED(as(button.Get(), fe3.GetAddressOf())) ? fe3->add_Loading(loading, &loadingToken) : E_FAIL);
+    CHECK("the handler kept by its wrapper while subscribed", loading->refs == 2 && loading->tracker == 0);
+    CHECK_HR("and removed", fe3 ? fe3->remove_Loading(loadingToken) : E_FAIL);
+    CHECK("the handler let go", loading->refs == 1);
+    loading->Release();
 
     /* an app's control composed over Windows.UI.Xaml.Controls.Control */
     ctl::ComPtr<wuxc::IControlFactory> cf;
@@ -397,6 +507,295 @@ static void windows_checks()
     ctl::ComPtr<ABI::Windows::UI::IUIContext> context;
     CHECK("UIElement.UIContext (Windows.UI.UIContext): E_NOTIMPL",
           SUCCEEDED(as(button.Get(), ue10.GetAddressOf())) && ue10->get_UIContext(context.GetAddressOf()) == E_NOTIMPL);
+}
+
+/* the phone library's navigation transitions (src/phone in the framework's
+ * build): activated by their lifted names, as the framework's core
+ * activates a Frame's NavigationThemeTransition, once the framework's
+ * lifted classes are registered as the system Windows.UI.Xaml.dll
+ * registers them */
+extern "C" HRESULT nova_register_lifted_classes(PFNGETACTIVATIONFACTORY maker);
+extern "C" IActivationFactory *nova_lifted_factory(const wchar_t *cls);
+
+static HRESULT WINAPI lifted_maker(HSTRING cls, IActivationFactory **out)
+{
+    *out = nova_lifted_factory(WindowsGetStringRawBuffer(cls, nullptr));
+    return *out ? S_OK : CLASS_E_CLASSNOTAVAILABLE;
+}
+
+static HRESULT activate(const wchar_t *cls, IInspectable **out)
+{
+    return RoActivateInstance(wrl_wrappers::HStringReference(cls).Get(), out);
+}
+
+/* an app's x:Bind connector, as a .NET Native page's generated bindings
+ * object is: Windows' IComponentConnector (Connect) and
+ * IComponentConnector2, weakly referenced (IWeakReferenceSource; this one's
+ * weak reference holds it strongly, enough for the test) */
+struct AppConnector : wux::Markup::IComponentConnector, wux::Markup::IComponentConnector2, IWeakReferenceSource, IWeakReference
+{
+    LONG refs = 1;
+    int connected = -1;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IInspectable) || iid == __uuidof(wux::Markup::IComponentConnector))
+            *out = static_cast<wux::Markup::IComponentConnector *>(this);
+        else if (iid == __uuidof(wux::Markup::IComponentConnector2))
+            *out = static_cast<wux::Markup::IComponentConnector2 *>(this);
+        else if (iid == __uuidof(IWeakReferenceSource))
+            *out = static_cast<IWeakReferenceSource *>(this);
+        else if (iid == __uuidof(IWeakReference))
+            *out = static_cast<IWeakReference *>(this);
+        else {
+            *out = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs); }
+    ULONG STDMETHODCALLTYPE Release() override { LONG r = InterlockedDecrement(&refs); if (!r) delete this; return (ULONG)r; }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG *n, IID **iids) override { *n = 0; *iids = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING *name) override
+    {
+        return WindowsCreateString(L"WuxamlTest.Bindings", 19, name);
+    }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel *t) override { *t = BaseTrust; return S_OK; }
+    HRESULT STDMETHODCALLTYPE Connect(INT32 id, IInspectable *) override { connected = id; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetBindingConnector(INT32, IInspectable *, wux::Markup::IComponentConnector **out) override
+    {
+        *out = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetWeakReference(IWeakReference **out) override
+    {
+        *out = static_cast<IWeakReference *>(this);
+        AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Resolve(REFIID iid, IInspectable **out) override
+    {
+        return QueryInterface(iid, reinterpret_cast<void **>(out));
+    }
+};
+
+extern "C" HRESULT nova_cross(void *a, const GUID *iid, void **out);
+
+/* the framework's IComponentConnector over the app's connector, kept weakly
+ * as the parser keeps the x:Bind connector GetBindingConnector returns
+ * (ValueWeakReference), resolves to an object that answers the framework's
+ * IComponentConnector again: the parser calls Connect for each x:Bind
+ * target through it */
+static void binding_connector_checks()
+{
+    AppConnector *app = new AppConnector();
+    ctl::ComPtr<xaml_markup::IComponentConnector> face;
+    CHECK_HR("the framework's IComponentConnector over the app's connector",
+             nova_cross(static_cast<wux::Markup::IComponentConnector *>(app), &__uuidof(xaml_markup::IComponentConnector),
+                        reinterpret_cast<void **>(face.ReleaseAndGetAddressOf())));
+    ctl::ComPtr<IWeakReferenceSource> source;
+    ctl::ComPtr<IWeakReference> weak;
+    ctl::ComPtr<IInspectable> resolved;
+    ctl::ComPtr<xaml_markup::IComponentConnector> again;
+    CHECK("its weak reference resolves to the framework's IComponentConnector",
+          face && SUCCEEDED(face.As(&source)) && SUCCEEDED(source->GetWeakReference(&weak)) &&
+          SUCCEEDED(weak->Resolve(__uuidof(IInspectable), resolved.ReleaseAndGetAddressOf())) && resolved &&
+          SUCCEEDED(resolved.As(&again)));
+    CHECK("Connect through it reaches the app's connector", again && SUCCEEDED(again->Connect(7, nullptr)) && app->connected == 7);
+    ctl::ComPtr<IUnknown> id1, id2;
+    CHECK("the resolved object keeps the app object's identity",
+          resolved && SUCCEEDED(resolved.As(&id1)) &&
+          SUCCEEDED(app->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(id2.GetAddressOf()))) && id1 == id2);
+    face.Reset(); source.Reset(); weak.Reset(); resolved.Reset(); again.Reset(); id1.Reset(); id2.Reset();
+    app->Release();
+}
+
+/* the helper a XAML root's layout bounds come through (dxaml/lib/
+ * LayoutBoundsChangedHelper.cpp; a Page's MeasureOverride asks its root
+ * for it): a desktop program has no ApplicationView, so the root's own
+ * bounds are used; a UWP app's main view has one */
+static void layout_bounds_checks()
+{
+    ctl::ComPtr<wuv::IApplicationView2> view;
+    CHECK("no ApplicationView on the desktop path",
+          SUCCEEDED(DirectUI::LayoutBoundsChangedHelper::GetApplicationView2(view.GetAddressOf())) && !view);
+    wuv::ApplicationViewBoundsMode mode = wuv::ApplicationViewBoundsMode_UseVisible;
+    CHECK("so the desired bounds are the root's own (UseCoreWindow)",
+          SUCCEEDED(DirectUI::LayoutBoundsChangedHelper::GetDesiredBoundsMode(&mode)) &&
+          mode == wuv::ApplicationViewBoundsMode_UseCoreWindow);
+    ctl::ComPtr<DirectUI::LayoutBoundsChangedHelper> helper;
+    CHECK_HR("a helper made", ctl::make(&helper));
+    if (!helper) return;
+    EventRegistrationToken a{}, b{};
+    helper->AddLayoutBoundsChangedCallback([]() { return S_OK; }, &a);
+    helper->AddLayoutBoundsChangedCallback([]() { return S_OK; }, &b);
+    CHECK("two bounds callbacks added, each its own token", a.value && b.value && a.value != b.value);
+    helper->RemoveLayoutBoundsChangedCallback(&a);
+    helper->RemoveLayoutBoundsChangedCallback(&b);
+    CHECK("and removed (their tokens cleared)", !a.value && !b.value);
+}
+
+/* a UWP app's Window.Activated (the face answers it itself,
+ * windows_faces.cpp: Windows' handler takes Windows.UI.Core's arguments):
+ * the handler goes on the thread's CoreWindow (the desktop path has its
+ * hidden one) and is called, with the window as sender, when the CoreWindow
+ * is activated; removed, it is not called again */
+extern "C" HRESULT nova_face_window_event_add(void *t, int event, void *handler, INT64 *token);
+extern "C" HRESULT nova_face_window_event_remove(int event, INT64 token);
+struct ActivatedHandler
+{
+    void *const *vtbl;
+    LONG ref = 1;
+    int calls = 0, state = -1;
+    void *sender = nullptr;
+    static HRESULT STDMETHODCALLTYPE qi(ActivatedHandler *h, REFIID iid, void **out)
+    {
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IAgileObject)) { h->ref++; *out = h; return S_OK; }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    static ULONG STDMETHODCALLTYPE addref(ActivatedHandler *h) { return (ULONG)++h->ref; }
+    static ULONG STDMETHODCALLTYPE release(ActivatedHandler *h) { return (ULONG)--h->ref; }
+    static HRESULT STDMETHODCALLTYPE invoke(ActivatedHandler *h, void *sender, void *args)
+    {
+        h->calls++;
+        h->sender = sender;
+        int st = -1;    /* IWindowActivatedEventArgs.WindowActivationState */
+        if (args && SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, int *))(*(void ***)args)[6])(args, &st)))
+            h->state = st;
+        return S_OK;
+    }
+};
+static void *const s_activated_handler_vtbl[] = {(void *)&ActivatedHandler::qi, (void *)&ActivatedHandler::addref,
+                                                 (void *)&ActivatedHandler::release, (void *)&ActivatedHandler::invoke};
+
+static void window_activated_checks()
+{
+    static const GUID iidStatic = {0x4d239005, 0x3c2a, 0x41b1, {0x90, 0x22, 0x53, 0x6b, 0xb9, 0xcf, 0x93, 0xb1}};
+    static const GUID iidInterop = {0x45d64a29, 0xa63e, 0x4cb6, {0xb4, 0x98, 0x57, 0x81, 0xd2, 0x98, 0xcb, 0x4f}};
+    ctl::ComPtr<IInspectable> statics, coreWindow;
+    ctl::ComPtr<IUnknown> interop;
+    HWND hwnd = nullptr;
+    CHECK("the thread's CoreWindow and its HWND",
+          SUCCEEDED(RoGetActivationFactory(wrl_wrappers::HStringReference(L"Windows.UI.Core.CoreWindow").Get(), iidStatic,
+                                           reinterpret_cast<void **>(statics.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, void **))(*(void ***)statics.Get())[6])(
+              statics.Get(), reinterpret_cast<void **>(coreWindow.GetAddressOf()))) && coreWindow &&
+          SUCCEEDED(coreWindow.Get()->QueryInterface(iidInterop, reinterpret_cast<void **>(interop.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, HWND *))(*(void ***)interop.Get())[3])(interop.Get(), &hwnd)) && hwnd);
+    if (!hwnd) return;
+    ctl::ComPtr<IInspectable> window;   /* (the sender: any object stands in for the window's face) */
+    RoActivateInstance(wrl_wrappers::HStringReference(L"Windows.UI.Xaml.Controls.Button").Get(), window.GetAddressOf());
+    ActivatedHandler h;
+    h.vtbl = s_activated_handler_vtbl;
+    INT64 token = 0;
+    CHECK("Window.Activated added (on the CoreWindow), a token",
+          window && SUCCEEDED(nova_face_window_event_add(window.Get(), 0, &h, &token)) && token);
+    SendMessageW(hwnd, WM_ACTIVATE, WA_CLICKACTIVE, 0);
+    CHECK("the handler called when the CoreWindow is activated, the window as sender, PointerActivated",
+          h.calls == 1 && h.sender == window.Get() && h.state == 2);
+    CHECK_HR("Window.Activated removed", nova_face_window_event_remove(0, token));
+    SendMessageW(hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
+    CHECK("and not called again", h.calls == 1);
+    CHECK("the handler released", h.ref == 1);
+    /* UIViewSettings.GetForCurrentView answers on the CoreWindow's thread
+     * (Calculator's title bar asks it when loaded) and says Mouse */
+    static const GUID iidViewStatics = {0x595c97a5, 0xf8f6, 0x41cf, {0xb0, 0xfb, 0xaa, 0xcd, 0xb8, 0x1f, 0xd5, 0xf6}};
+    ctl::ComPtr<IInspectable> viewStatics, view;
+    int mode = -1;
+    CHECK("UIViewSettings.GetForCurrentView on the CoreWindow's thread, Mouse",
+          SUCCEEDED(RoGetActivationFactory(wrl_wrappers::HStringReference(L"Windows.UI.ViewManagement.UIViewSettings").Get(),
+                                           iidViewStatics, reinterpret_cast<void **>(viewStatics.GetAddressOf()))) &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, void **))(*(void ***)viewStatics.Get())[6])(
+              viewStatics.Get(), reinterpret_cast<void **>(view.GetAddressOf()))) && view &&
+          SUCCEEDED(((HRESULT (STDMETHODCALLTYPE *)(void *, int *))(*(void ***)view.Get())[6])(view.Get(), &mode)) && mode == 0);
+}
+
+static void navigation_transition_checks()
+{
+    namespace mxa = xaml_animation;
+    CHECK_HR("the framework's lifted classes registered (as Windows.UI.Xaml.dll registers them)",
+             nova_register_lifted_classes(lifted_maker));
+    ctl::ComPtr<IInspectable> ntt;
+    CHECK_HR("NavigationThemeTransition activated by its name (as the framework's core does for a Frame's page)",
+             activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_NavigationThemeTransition, ntt.ReleaseAndGetAddressOf()));
+    ctl::ComPtr<mxa::INavigationThemeTransition> theme;
+    ctl::ComPtr<mxa::ITransition> transition;
+    ctl::ComPtr<mxa::ITransitionPrivate> transitionPrivate;
+    ctl::ComPtr<xaml::IDependencyObject> transitionObject;
+    CHECK("a Transition (composed over the framework's) and a dependency object, one object behind them",
+          ntt && SUCCEEDED(as(ntt.Get(), theme.GetAddressOf())) && SUCCEEDED(as(ntt.Get(), transition.GetAddressOf())) &&
+          SUCCEEDED(as(ntt.Get(), transitionPrivate.GetAddressOf())) &&
+          SUCCEEDED(as(ntt.Get(), transitionObject.GetAddressOf())) &&
+          identity(transitionObject.Get()) == identity(ntt.Get()));
+    BOOLEAN load = FALSE, layout = TRUE;
+    CHECK("which takes part in a page's load and not its layout",
+          transitionPrivate && SUCCEEDED(transitionPrivate->ParticipatesInTransition(nullptr, xaml::TransitionTrigger_Load, &load)) &&
+          SUCCEEDED(transitionPrivate->ParticipatesInTransition(nullptr, xaml::TransitionTrigger_Layout, &layout)) &&
+          load && !layout);
+
+    /* the transition infos: each composed over NavigationTransitionInfo */
+    static const wchar_t *const infos[] = {
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_DrillInNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SuppressNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_EntranceNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_CommonNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SlideNavigationTransitionInfo,
+        RuntimeClass_Microsoft_UI_Xaml_Media_Animation_ContinuumNavigationTransitionInfo};
+    int made = 0;
+    for (const wchar_t *cls : infos) {
+        ctl::ComPtr<IInspectable> info;
+        ctl::ComPtr<mxa::INavigationTransitionInfo> base;
+        ctl::ComPtr<mxa::INavigationTransitionInfoPrivate> storyboards;
+        HSTRING name = nullptr;
+        if (SUCCEEDED(activate(cls, info.GetAddressOf())) && SUCCEEDED(as(info.Get(), base.GetAddressOf())) &&
+            SUCCEEDED(as(info.Get(), storyboards.GetAddressOf())) && SUCCEEDED(info->GetRuntimeClassName(&name)) && is(name, cls))
+            made++;
+        else
+            printf("  (not made: %ls)\n", cls);
+        WindowsDeleteString(name);
+    }
+    CHECK("the six navigation transition infos, each a NavigationTransitionInfo by its own class name", made == 6);
+
+    /* the transition's default info, a dependency property */
+    ctl::ComPtr<IInspectable> drill;
+    ctl::ComPtr<mxa::INavigationTransitionInfo> drillInfo, got;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_DrillInNavigationTransitionInfo, drill.GetAddressOf());
+    CHECK("DefaultNavigationTransitionInfo set to a DrillInNavigationTransitionInfo and read back",
+          theme && drill && SUCCEEDED(as(drill.Get(), drillInfo.GetAddressOf())) &&
+          SUCCEEDED(theme->put_DefaultNavigationTransitionInfo(drillInfo.Get())) &&
+          SUCCEEDED(theme->get_DefaultNavigationTransitionInfo(got.GetAddressOf())) && identity(got.Get()) == identity(drill.Get()));
+
+    /* a slide's effect and the common transition's staggering */
+    ctl::ComPtr<IInspectable> slide, common;
+    ctl::ComPtr<mxa::ISlideNavigationTransitionInfo> slideInfo;
+    ctl::ComPtr<mxa::ICommonNavigationTransitionInfo> commonInfo;
+    mxa::SlideNavigationTransitionEffect effect = mxa::SlideNavigationTransitionEffect_FromBottom;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_SlideNavigationTransitionInfo, slide.GetAddressOf());
+    CHECK("SlideNavigationTransitionInfo.Effect set FromRight and read back",
+          slide && SUCCEEDED(as(slide.Get(), slideInfo.GetAddressOf())) &&
+          SUCCEEDED(slideInfo->put_Effect(mxa::SlideNavigationTransitionEffect_FromRight)) &&
+          SUCCEEDED(slideInfo->get_Effect(&effect)) && effect == mxa::SlideNavigationTransitionEffect_FromRight);
+    boolean staggering = false;
+    activate(RuntimeClass_Microsoft_UI_Xaml_Media_Animation_CommonNavigationTransitionInfo, common.GetAddressOf());
+    CHECK("CommonNavigationTransitionInfo.IsStaggeringEnabled set and read back",
+          common && SUCCEEDED(as(common.Get(), commonInfo.GetAddressOf())) &&
+          SUCCEEDED(commonInfo->put_IsStaggeringEnabled(true)) &&
+          SUCCEEDED(commonInfo->get_IsStaggeringEnabled(&staggering)) && staggering);
+
+    /* and by its Windows name, as a UWP app makes one (Calculator's main
+     * page navigates with a new EntranceNavigationTransitionInfo): the
+     * Windows interfaces answered, the one object behind them */
+    namespace wuxma = ABI::Windows::UI::Xaml::Media::Animation;
+    ctl::ComPtr<IInspectable> entrance;
+    ctl::ComPtr<wuxma::IEntranceNavigationTransitionInfo> entranceInfo;
+    ctl::ComPtr<wuxma::INavigationTransitionInfo> entranceBase;
+    CHECK_HR("Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo activated by its Windows name",
+             RoActivateInstance(wrl_wrappers::HStringReference(L"Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo").Get(),
+                                entrance.GetAddressOf()));
+    CHECK("which answers Windows' IEntranceNavigationTransitionInfo and INavigationTransitionInfo",
+          entrance && SUCCEEDED(entrance.As(&entranceInfo)) && SUCCEEDED(entrance.As(&entranceBase)) &&
+          identity(entranceBase.Get()) == identity(entrance.Get()));
 }
 
 /* the framework started as xamlapptest starts it */
@@ -438,6 +837,10 @@ public:
     {
         s_launched = true;
         windows_checks();
+        navigation_transition_checks();
+        binding_connector_checks();
+        layout_bounds_checks();
+        window_activated_checks();
         ctl::ComPtr<msy::IDispatcherQueueStatics> queueStatics;
         ctl::ComPtr<msy::IDispatcherQueue> queue;
         CHECK("the thread's DispatcherQueue", SUCCEEDED(wf::GetActivationFactory(
@@ -487,7 +890,8 @@ static const wchar_t *const s_windows_classes[] = {
     L"Windows.UI.Xaml.Controls.Button", L"Windows.UI.Xaml.Controls.TextBlock", L"Windows.UI.Xaml.UIElement",
     L"Windows.UI.Xaml.DependencyProperty",
     L"Windows.UI.Xaml.Markup.XamlReader", L"Windows.UI.Xaml.Controls.Control",
-    L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer"};
+    L"Windows.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer",
+    L"Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo"};
 
 static HRESULT WINAPI make_factory(HSTRING cls, IActivationFactory **out)
 {

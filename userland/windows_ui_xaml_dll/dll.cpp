@@ -16,7 +16,9 @@
 // WindowsXamlManager, a window's XamlSourceFocusNavigationRequest, the UWP
 // start-up's FrameworkViewSource and FrameworkView, a Frame's
 // NavigationThemeTransition), which Windows App SDK's Microsoft.UI.Xaml.dll
-// would serve.
+// would serve, and the phone library's navigation transitions with the
+// framework classes they make by name (the list is
+// userland/windows_ui_xaml/src/windows_activation.cpp's).
 //
 // A program with the framework linked into it (the XAML self-tests) serves
 // the classes itself: there, every class is left to it
@@ -30,10 +32,7 @@
 extern "C" HRESULT nova_xaml_windows_factory(HSTRING cls, IActivationFactory **out);
 extern "C" IActivationFactory *nova_lifted_factory(const wchar_t *cls);
 
-static const wchar_t *const s_lifted[] = {
-    L"Microsoft.UI.Xaml.Hosting.WindowsXamlManager", L"Microsoft.UI.Xaml.Hosting.XamlSourceFocusNavigationRequest",
-    L"Microsoft.UI.Xaml.FrameworkViewSource", L"Microsoft.UI.Xaml.FrameworkView",
-    L"Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition"};
+extern "C" HRESULT nova_register_lifted_classes(PFNGETACTIVATIONFACTORY maker);
 
 static HRESULT WINAPI lifted_factory(HSTRING cls, IActivationFactory **out)
 {
@@ -53,16 +52,7 @@ static BOOL CALLBACK start(INIT_ONCE *, void *, void **)
     s_start_hr = ObtainPlatformServices(&pal);
     if (FAILED(s_start_hr))
         return TRUE;
-    HSTRING names[ARRAYSIZE(s_lifted)];
-    PFNGETACTIVATIONFACTORY makers[ARRAYSIZE(s_lifted)];
-    for (UINT32 i = 0; i < ARRAYSIZE(s_lifted); i++) {
-        WindowsCreateString(s_lifted[i], (UINT32)wcslen(s_lifted[i]), &names[i]);
-        makers[i] = lifted_factory;
-    }
-    RO_REGISTRATION_COOKIE cookie = nullptr;       // (kept while the process runs, as the DLL is)
-    s_start_hr = RoRegisterActivationFactories(names, makers, ARRAYSIZE(s_lifted), &cookie);
-    for (HSTRING h : names)
-        WindowsDeleteString(h);
+    s_start_hr = nova_register_lifted_classes(lifted_factory);      // (kept while the process runs, as the DLL is)
     return TRUE;
 }
 

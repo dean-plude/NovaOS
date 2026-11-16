@@ -11,7 +11,10 @@
  * program's (XAML islands' WinUI 2 strings: NovaOS installs WinUI 2's
  * beside the programs in C:\Programs, as its NuGet package merges them into
  * an app's, userland/microsoft_ui_xaml/build.py).  AllResourceMaps has that
- * map, by its package's name.  ResourceMap.GetValue finds a string by its
+ * map, by its package's name, and the map of each framework package the
+ * app depends on that has a resources.pri, by that package's name (WinUI 2
+ * in its framework package reads its strings from "Microsoft.UI.Xaml.2.8"'s
+ * map, ResourceAccessor.cpp).  ResourceMap.GetValue finds a string by its
  * name in the map (a path below it: "Resources/AppName") and GetSubtree
  * goes below it; a candidate's ValueAsString is the string (every
  * candidate is the neutral one: resources.pri qualifiers, languages,
@@ -92,45 +95,96 @@ static HRESULT STDMETHODCALLTYPE out_null(void *p, void **out) { (void)p; if (!o
 typedef HRESULT (WINAPI *MrmCreate_t)(PCWSTR pri, void **mgr);
 typedef HRESULT (WINAPI *MrmLoad_t)(void *mgr, void *context, void *map, PCWSTR id, PWSTR *out);
 typedef void (WINAPI *MrmFree_t)(void *p);
+LONG WINAPI GetCurrentPackageInfo(UINT32 flags, UINT32 *len, BYTE *buf, UINT32 *count);
+typedef struct { UINT32 reserved, arch; UINT64 version; PWSTR name, publisher, resourceId, publisherId; } PkgId;
+typedef struct { UINT32 reserved, flags; PWSTR path, fullName, familyName; PkgId id; } PkgInfo;
+#define MAX_PRI 8
+typedef struct {
+    void *mgr;                          /* the resources.pri's MRT manager, or NULL */
+    WCHAR name[128];                    /* its package's name (AllResourceMaps' key) */
+} Pri;
 static SRWLOCK g_lock = SRWLOCK_INIT;
 static BOOL g_tried;
-static void *g_mgr;                     /* the main resources.pri's MRT manager, or NULL */
-static WCHAR g_name[128];               /* its package's name (AllResourceMaps' key) */
+static Pri g_pri[MAX_PRI];              /* [0] the main resources.pri; then the framework packages' */
+static int g_npri;
+static MrmCreate_t g_create;
 static MrmLoad_t g_load;
 static MrmFree_t g_free;
+/* MRM.dll's functions (once a resources.pri is there to read) */
+static BOOL mrm_ready(void)
+{
+    if (g_create) return TRUE;
+    HMODULE mrm = LoadLibraryW(L"MRM.dll");
+    MrmCreate_t create = mrm ? (MrmCreate_t)GetProcAddress(mrm, "MrmCreateResourceManager") : 0;
+    g_load = mrm ? (MrmLoad_t)GetProcAddress(mrm, "MrmLoadStringResource") : 0;
+    g_free = mrm ? (MrmFree_t)GetProcAddress(mrm, "MrmFreeResource") : 0;
+    if (create && g_load && g_free) g_create = create;
+    return g_create != 0;
+}
+/* the MRT manager of the resources.pri in folder @dir (NULL: none there) */
+static void *open_pri(const WCHAR *dir)
+{
+    WCHAR path[MAX_PATH + 16];
+    int at = 0;
+    for (; dir[at] && at < MAX_PATH; at++) path[at] = dir[at];
+    for (const WCHAR *f = L"\\resources.pri"; *f; f++) path[at++] = *f;
+    path[at] = 0;
+    void *mgr = 0;
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES && mrm_ready() && FAILED(g_create(path, &mgr))) mgr = 0;
+    return mgr;
+}
+/* the framework packages' resources.pri files, by their packages' names */
+static void framework_pris(void)
+{
+    UINT32 len = 0, n = 0;
+    if (GetCurrentPackageInfo(0, &len, 0, &n) != ERROR_INSUFFICIENT_BUFFER || !len) return;
+    BYTE *buf = alloc(len);
+    if (!buf) return;
+    if (!GetCurrentPackageInfo(0, &len, buf, &n)) {
+        PkgInfo *pi = (PkgInfo *)buf;
+        for (UINT32 i = 1; i < n && g_npri < MAX_PRI; i++) {
+            if (!pi[i].path || !pi[i].id.name) continue;
+            void *mgr = open_pri(pi[i].path);
+            if (!mgr) continue;
+            Pri *p = &g_pri[g_npri++];
+            p->mgr = mgr;
+            int k = 0;
+            for (; pi[i].id.name[k] && k < 127; k++) p->name[k] = pi[i].id.name[k];
+            p->name[k] = 0;
+        }
+    }
+    release_mem(buf);
+}
 static void *main_pri(void)
 {
     AcquireSRWLockExclusive(&g_lock);
     if (!g_tried) {
         g_tried = TRUE;
+        g_npri = 1;
+        WCHAR *name = g_pri[0].name;
         WCHAR path[MAX_PATH + 16];
         UINT32 n = MAX_PATH, fn = 128;
         if (!GetCurrentPackagePath(&n, path)) {
-            if (GetCurrentPackageFamilyName(&fn, g_name)) g_name[0] = 0;
-            for (int i = 0; g_name[i]; i++) if (g_name[i] == '_') { g_name[i] = 0; break; }   /* (the name, before the publisher's id) */
+            if (GetCurrentPackageFamilyName(&fn, name)) name[0] = 0;
+            for (int i = 0; name[i]; i++) if (name[i] == '_') { name[i] = 0; break; }   /* (the name, before the publisher's id) */
         } else {
             DWORD l = GetModuleFileNameW(0, path, MAX_PATH);
             while (l && path[l - 1] != '\\') l--;
             path[l ? l - 1 : 0] = 0;
         }
-        int at = wlen(path);
-        for (const WCHAR *f = L"\\resources.pri"; *f; f++) path[at++] = *f;
-        path[at] = 0;
-        HMODULE mrm = GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES ? LoadLibraryW(L"MRM.dll") : 0;
-        MrmCreate_t create = mrm ? (MrmCreate_t)GetProcAddress(mrm, "MrmCreateResourceManager") : 0;
-        g_load = mrm ? (MrmLoad_t)GetProcAddress(mrm, "MrmLoadStringResource") : 0;
-        g_free = mrm ? (MrmFree_t)GetProcAddress(mrm, "MrmFreeResource") : 0;
-        if (create && g_load && g_free && FAILED(create(path, &g_mgr))) g_mgr = 0;
+        g_pri[0].mgr = open_pri(path);
+        if (name[0]) framework_pris();
     }
-    void *m = g_mgr;
+    void *m = g_pri[0].mgr;
     ReleaseSRWLockExclusive(&g_lock);
     return m;
 }
-/* the string @id (a path from the map's root) in the main resources.pri */
-static HRESULT load_string(const WCHAR *id, HSTRING *out)
+/* the string @id (a path from the map's root) in resources.pri @pri */
+static HRESULT load_string(int pri, const WCHAR *id, HSTRING *out)
 {
     *out = 0;
-    void *mgr = main_pri();
+    main_pri();
+    void *mgr = pri >= 0 && pri < g_npri ? g_pri[pri].mgr : 0;
     if (!mgr) return ERROR_MRM_NAMED_RESOURCE_NOT_FOUND_;
     PWSTR s = 0;
     HRESULT hr = g_load(mgr, 0, 0, id, &s);
@@ -145,6 +199,7 @@ typedef struct Obj {
     const void *const *vt;
     LONG refs;
     int kind;                           /* K_* */
+    int pri;                            /* a map's resources.pri (g_pri) */
     WCHAR *path;                        /* a map's place below the root ("" the root); a loader's map */
     HSTRING value;                      /* a candidate's string */
 } Obj;
@@ -214,7 +269,7 @@ static HRESULT map_value(Obj *m, HSTRING name, void **out)
     WCHAR *id = wjoin(m->path, wlen(m->path), L"/", c, (int)n);
     if (!id) return E_OUTOFMEMORY;
     HSTRING s;
-    HRESULT hr = load_string(id, &s);
+    HRESULT hr = load_string(m->pri, id, &s);
     release_mem(id);
     if (FAILED(hr)) return hr;
     Obj *cand = obj_new(K_CANDIDATE, candidate_vt, 0, 0);
@@ -239,14 +294,16 @@ static HRESULT STDMETHODCALLTYPE map_subtree(void *p, HSTRING name, void **out)
     Obj *sub = obj_new(K_MAP, map_vt, path, wlen(path));
     release_mem(path);
     if (!sub) return E_OUTOFMEMORY;
+    sub->pri = m->pri;
     *out = sub;
     return S_OK;
 }
 static const void *const map_vt[] = { BASE, (void *)out_null, (void *)map_get, (void *)map_get_in, (void *)map_subtree };
-static HRESULT root_map(void **out)
+static HRESULT root_map(int pri, void **out)
 {
     if (!out) return E_POINTER;
     Obj *m = obj_new(K_MAP, map_vt, L"", 0);
+    if (m) m->pri = pri;
     *out = m;
     return m ? S_OK : E_OUTOFMEMORY;
 }
@@ -305,7 +362,7 @@ static HRESULT STDMETHODCALLTYPE ld_string(void *p, HSTRING name, HSTRING *out)
     const WCHAR *c = hbuf(name, &n);
     WCHAR *id = wjoin(l->path, wlen(l->path), L"/", c, (int)n);
     if (!id) return E_OUTOFMEMORY;
-    HRESULT hr = load_string(id, out);
+    HRESULT hr = load_string(0, id, out);
     release_mem(id);
     if (hr == ERROR_MRM_NAMED_RESOURCE_NOT_FOUND_) { *out = 0; hr = S_OK; }
     return hr;
@@ -326,7 +383,8 @@ static HRESULT loader_new(HSTRING name, void **out)
 typedef struct { const void *const *vt; } Static;
 static ULONG STDMETHODCALLTYPE s_ref(void *p) { (void)p; return 2; }
 
-/* AllResourceMaps: IMapView<String, ResourceMap> holding the main map, by its package's name */
+/* AllResourceMaps: IMapView<String, ResourceMap> holding the main map and
+ * the framework packages' maps, by their packages' names */
 static HRESULT STDMETHODCALLTYPE mv_qi(void *p, REFIID iid, void **out)
 {
     if (!out) return E_POINTER;
@@ -341,16 +399,32 @@ static HRESULT STDMETHODCALLTYPE mv_name(void *p, HSTRING *n)
     static const WCHAR s[] = L"Windows.Foundation.Collections.IMapView`2<String, Windows.ApplicationModel.Resources.Core.ResourceMap>";
     return WindowsCreateString(s, sizeof s / sizeof s[0] - 1, n);
 }
-static BOOL mv_has_key(HSTRING key) { main_pri(); return g_mgr && g_name[0] && name_is(key, g_name); }
+/* the map named @key (its index in g_pri), or -1 */
+static int mv_find(HSTRING key)
+{
+    main_pri();
+    for (int i = 0; i < g_npri; i++)
+        if (g_pri[i].mgr && g_pri[i].name[0] && name_is(key, g_pri[i].name)) return i;
+    return -1;
+}
 static HRESULT STDMETHODCALLTYPE mv_lookup(void *p, HSTRING key, void **out)
 {
     (void)p;
     if (!out) return E_POINTER;
     *out = 0;
-    return mv_has_key(key) ? root_map(out) : E_BOUNDS_;
+    int i = mv_find(key);
+    return i >= 0 ? root_map(i, out) : E_BOUNDS_;
 }
-static HRESULT STDMETHODCALLTYPE mv_size(void *p, UINT32 *n) { (void)p; if (!n) return E_POINTER; main_pri(); *n = g_mgr && g_name[0] ? 1 : 0; return S_OK; }
-static HRESULT STDMETHODCALLTYPE mv_has(void *p, HSTRING key, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = mv_has_key(key); return S_OK; }
+static HRESULT STDMETHODCALLTYPE mv_size(void *p, UINT32 *n)
+{
+    (void)p;
+    if (!n) return E_POINTER;
+    main_pri();
+    *n = 0;
+    for (int i = 0; i < g_npri; i++) *n += g_pri[i].mgr && g_pri[i].name[0];
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE mv_has(void *p, HSTRING key, boolean_t *v) { (void)p; if (!v) return E_POINTER; *v = mv_find(key) >= 0; return S_OK; }
 static HRESULT STDMETHODCALLTYPE mv_split(void *p, void **a, void **b) { (void)p; if (!a || !b) return E_POINTER; *a = *b = 0; return S_OK; }
 static const void *const mapview_vt[] = { (void *)mv_qi, (void *)s_ref, (void *)s_ref, (void *)no_iids, (void *)mv_name, (void *)base_trust,
                                           (void *)mv_lookup, (void *)mv_size, (void *)mv_has, (void *)mv_split };
@@ -376,7 +450,7 @@ static HRESULT STDMETHODCALLTYPE rm_name(void *p, HSTRING *n)
     static const WCHAR s[] = L"Windows.ApplicationModel.Resources.Core.ResourceManager";
     return WindowsCreateString(s, sizeof s / sizeof s[0] - 1, n);
 }
-static HRESULT STDMETHODCALLTYPE rm_main(void *p, void **out) { (void)p; return root_map(out); }
+static HRESULT STDMETHODCALLTYPE rm_main(void *p, void **out) { (void)p; return root_map(0, out); }
 static HRESULT STDMETHODCALLTYPE rm_all(void *p, void **out) { (void)p; if (!out) return E_POINTER; *out = (void *)&g_maps; return S_OK; }
 static HRESULT STDMETHODCALLTYPE rm_context(void *p, void **out) { (void)p; return context_new(out); }
 static const void *const manager_vt[] = { (void *)rm_qi, (void *)s_ref, (void *)s_ref, (void *)no_iids, (void *)rm_name, (void *)base_trust,

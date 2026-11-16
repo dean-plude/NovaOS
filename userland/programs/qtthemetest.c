@@ -40,6 +40,7 @@ static const GUID IID_IUISettings4 = { 0x52BB3002, 0x919B, 0x4D6B, { 0x9B, 0x78,
 static const GUID IID_IUISettings5 = { 0x5349D588, 0x0CB5, 0x5F05, { 0xBD, 0x34, 0x70, 0x6B, 0x32, 0x31, 0xF0, 0xBD } };
 static const GUID IID_IUISettings6 = { 0xAEF19BD7, 0xFE31, 0x5A04, { 0xAD, 0xA4, 0x46, 0x9A, 0xAE, 0xC6, 0xDF, 0xA9 } };
 static const GUID IID_IUIViewSettings = { 0xC63657F6, 0x8850, 0x470D, { 0x88, 0xF8, 0x45, 0x5E, 0x16, 0xEA, 0x2C, 0x26 } };
+static const GUID IID_IUIViewSettingsStatics_t = { 0x595C97A5, 0xF8F6, 0x41CF, { 0xB0, 0xFB, 0xAA, 0xCD, 0xB8, 0x1F, 0xD5, 0xF6 } };
 static const GUID IID_IUIViewSettingsInterop = { 0x3694DBF9, 0x8F68, 0x44BE, { 0x8F, 0xF5, 0x19, 0x5C, 0x98, 0xED, 0xE8, 0xA6 } };
 
 typedef struct { BYTE A, R, G, B; } WColor;
@@ -266,6 +267,17 @@ static void uiviewsettings(void)
     CHECK("GetForWindow refuses a window that is not there", FAILED(hr) && !view);
     DestroyWindow(w);
     RELEASE(interop);
+
+    /* GetForCurrentView: a Win32 thread has no CoreWindow, so no view */
+    void *statics = 0;
+    name = hs(L"Windows.UI.ViewManagement.UIViewSettings");
+    hr = pGetFactory(name, &IID_IUIViewSettingsStatics_t, &statics);
+    pDeleteString(name);
+    view = (void *)1;
+    if (statics) hr = ((HRESULT (STDMETHODCALLTYPE *)(void *, void **))SLOT(statics, 6))(statics, &view);
+    CHECK("GetForCurrentView on a thread with no CoreWindow is ERROR_NOT_FOUND",
+          statics && hr == (HRESULT)0x80070490L && !view);
+    if (statics) RELEASE(statics);
 
     void *none = (void *)1;
     name = hs(L"Windows.UI.ViewManagement.NoSuchClass");

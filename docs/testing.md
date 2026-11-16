@@ -155,9 +155,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   template; and WinUI 2's overrides called: the `RadioButtons`'
   `ItemsRepeater` making its three `RadioButton`s, the `NavigationView`
   applying its template, laid out, and with its pane opened making its
-  two `NavigationViewItem`s), `wrtapptest`
-  (`ApplicationData.LocalSettings`, a setting not set looking up as
-  null, `ResourceContext.QualifierValues` and `Languages`,
+  two `NavigationViewItem`s; and WinUI 2's classes named as the
+  framework's own: an `AnimatedIcon` whose `FallbackIconSource` is a
+  `FontIconSource` from a `using:Microsoft.UI.Xaml.Controls` xmlns, with
+  a binding on its `FontSize`, gets WinUI 2's `FontIconSource`),
+  `wrtapptest` (`ApplicationData.LocalSettings`, a setting not set
+  looking up as null, `ResourceContext.QualifierValues` and `Languages`,
   `User.GetFromId`, `NamedPolicy`; 64- and 32-bit), `wrtglobtest`
   (`ApplicationLanguages`, `Language`, `GeographicRegion`,
   `GlobalizationPreferences`, `DecimalFormatter`, `CurrencyFormatter`,
@@ -172,23 +175,44 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it:
   `Windows.UI.Xaml.Controls.Button` activated by its Windows name and
   driven through Windows' interfaces, a Windows-boxed `Visibility`,
-  `DependencyProperty.Register` with Windows type names,
-  `XamlReader.Load` and the page's children through Windows'
-  `IVector<UIElement>`, an `Image` whose markup URI source becomes a
-  `BitmapImage`, a `Popup` from markup holding its child, the text
-  block's and button's automation peers, `Control.IsTabStopProperty`,
-  `Click` with a Windows handler, and an app's control composed over
-  `Windows.UI.Xaml.Controls.Control` whose `MeasureOverride` the
-  framework's layout calls), `xamlapptest` (Microsoft's XAML framework
-  started as a desktop app starts it, built from its sources:
-  `Application.Start` on the desktop path with a `DispatcherQueue`, the
-  app's initialization callback composing its `Application` over the
-  framework's, `WindowsXamlManager` starting it on the thread and
-  raising `OnLaunched`, `XamlReader.Load` of a `Grid` holding a
-  `TextBlock` there, the framework's theme resources and control styles
-  found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the core's
-  resource manager made, queued work run from the desktop message loop,
-  and `Application.Exit` returning from `Application.Start`),
+  `DependencyProperty.Register` with Windows type names (a
+  `SolidColorBrush` property's value read back as
+  `Windows.UI.Xaml.Media.SolidColorBrush`), `XamlReader.Load` and the
+  page's children through Windows' `IVector<UIElement>`, an `Image`
+  whose markup URI source becomes a `BitmapImage`, measured (its image
+  brush loads the source), a `Popup` from markup holding its child, the
+  text block's and button's automation peers (the button's localized
+  control type `button`), `Control.IsTabStopProperty`, `Click` with a
+  Windows handler, `Loading` with a Windows handler that is a reference
+  tracker target (kept while subscribed), an app's x:Bind connector kept
+  by a weak reference that resolves to the framework's
+  `IComponentConnector`, the helper a XAML root's layout bounds come
+  through (no `ApplicationView` on the desktop path, callbacks added and
+  removed), a UWP window's `Activated` handler on the thread's
+  `CoreWindow` (called with the window as sender and `Windows.UI.Core`'s
+  arguments, not after it is removed),
+  `UIViewSettings.GetForCurrentView` on that thread (`Mouse`), and an
+  app's control composed over `Windows.UI.Xaml.Controls.Control` whose
+  `MeasureOverride` the framework's layout calls; and the phone
+  library's navigation transitions, a Frame's
+  `NavigationThemeTransition` and the six transition infos, activated by
+  name, composed over the framework's `Transition` and
+  `NavigationTransitionInfo`, their dependency properties set and read
+  back, and
+  `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo`
+  activated by its Windows name, answering Windows'
+  `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`;
+  and markup naming an unknown element failing, with the parser's error,
+  its line and column, in the debug log), `xamlapptest` (Microsoft's
+  XAML framework started as a desktop app starts it, built from its
+  sources: `Application.Start` on the desktop path with a
+  `DispatcherQueue`, the app's initialization callback composing its
+  `Application` over the framework's, `WindowsXamlManager` starting it
+  on the thread and raising `OnLaunched`, `XamlReader.Load` of a `Grid`
+  holding a `TextBlock` there, the framework's theme resources and
+  control styles found in `Microsoft.UI.Xaml.Resources.19H1.dll` and the
+  core's resource manager made, queued work run from the desktop message
+  loop, and `Application.Exit` returning from `Application.Start`),
   `xamlbasetest` (Microsoft's XAML core, lowest layer, built from its
   sources, and NovaOS's WRL: ComPtr, RuntimeClass, weak references,
   Callback, EventSource, HString), `xamldlltest` (the system

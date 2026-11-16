@@ -1487,6 +1487,118 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   on `Microsoft.UI.Xaml.Media.Animation.NavigationThemeTransition`, which
   has no factory yet.  Next: that transition, then the CI check that it
   computes `2 + 2`, which ticks this step.
+  Eighteenth part done (Pulsar item 3, twelfth slice): the navigation
+  transitions, `NavigationThemeTransition` and the six navigation
+  transition infos, from WinUI's phone library (vendored and built into
+  the framework, activated by name; test `wuxamltest`).  Calculator gets
+  past them and stops later in the dispatcher's tick on `E_NOTIMPL`
+  (0x80004001), most likely a core function not built yet
+  (`CImageBrush::ReloadImage` is the last one logged).  Next: that, then
+  the CI check that it computes `2 + 2`, which ticks this step.
+  Nineteenth part done (Pulsar item 3, thirteenth slice): the image
+  brush an `Image` paints with (`CImageBrush`, `imagebrush.cpp`
+  vendored), whose `ReloadImage` was the `E_NOTIMPL`; and a Windows event
+  handler that is a reference tracker target (a .NET Native delegate) now
+  stays alive while subscribed (NovaOS's wrapper of it no longer passes
+  on `IReferenceTrackerTarget`, so the framework holds the wrapper by a
+  COM reference; it was freed and its memory reused).  Test
+  `wuxamltest`.  Calculator gets past both and stops in its page's
+  `Loading` handler on a .NET `NullReferenceException`.  Next: that, then
+  the CI check that it computes `2 + 2`, which ticks this step.
+  Twentieth part done (Pulsar item 3, fourteenth slice): an app's x:Bind
+  connector, which the XAML parser keeps by a weak reference, resolves to
+  the framework's `IComponentConnector` again (NovaOS's wrapper of it
+  answers its own `IWeakReferenceSource`), so the parser connects every
+  x:Bind target; the generated bindings had found theirs unset and threw
+  the `NullReferenceException`.  Test `wuxamltest`.  Calculator gets past
+  it and stops on `E_NOTIMPL` in its page's layout
+  (`LayoutBoundsChangedHelper::InitializeSizeChangedHandlers`, not built
+  yet).  Next: that, then the CI check that it computes `2 + 2`, which
+  ticks this step.
+  Twenty-first part done (Pulsar item 3, fifteenth slice): the framework's
+  `LayoutBoundsChangedHelper` (vendored `dxaml/lib/LayoutBoundsChangedHelper.cpp`),
+  which a page measuring itself asks its XAML root for (the root's changes
+  and, for a UWP app's main view, its `ApplicationView`'s visible bounds),
+  and DirectWrite's ellipsis trimming sign
+  (`IDWriteFactory::CreateEllipsisTrimmingSign`, an inline object that
+  measures and draws U+2026 in the format's font), which a `TextBlock`
+  asks for when it trims.  Tests `wuxamltest`, `dwtest`.  Calculator gets
+  past both, builds its navigation view's template, and stops on
+  `E_NOTIMPL` from `Windows.UI.Xaml.Window.Activated` (no counterpart in
+  the framework's `Window` yet).  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
+  Twenty-second part done (Pulsar item 3, sixteenth slice): a UWP window's
+  events (`Window.Activated`, `Closed`, `SizeChanged`, `VisibilityChanged`),
+  whose Windows handlers take `Windows.UI.Core`'s arguments and have no
+  counterpart in the framework's `Window`: the `Windows.UI.Xaml` face
+  subscribes them on the thread's `CoreWindow`, with the window as sender,
+  as Windows does.  Test `wuxamltest`.  Calculator gets past them and
+  stops on an unhandled `E_BOUNDS` (after an `ERROR_NOT_FOUND`) reported
+  from the dispatcher's tick.  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
+  Twenty-third part done (Pulsar item 3, seventeenth slice): the
+  `ERROR_NOT_FOUND` was `UIViewSettings.GetForCurrentView`, which now
+  answers on a thread with a `CoreWindow`; the `E_BOUNDS` was WinUI 2
+  looking up its framework package's strings in
+  `ResourceManager.AllResourceMaps`, which now holds each framework
+  package's `resources.pri` by its package's name.  Every originated
+  Windows Runtime error now logs the stack it was raised from.  Tests
+  `wuxamltest`, `qtthemetest`.  Calculator gets further and stops when
+  `NavigationView`'s template sets `AnimatedIcon.FallbackIconSource`
+  ("Specified cast is not valid", `AnimatedIcon`'s factory 0x80004002).
+  Next: that, then the CI check that it computes `2 + 2`, which ticks
+  this step.
+  Twenty-fourth part done (Pulsar item 3, eighteenth slice): WinUI 2's
+  classes named as the framework's own (`Microsoft.UI.Xaml.Controls.
+  FontIconSource`, `IconSource`): markup's `using:Microsoft.UI.Xaml...`
+  namespaces and `DependencyProperty.Register`'s owner and property
+  types now take the metadata providers' class of the name before the
+  framework's, so the pane button's fallback icon is WinUI 2's
+  `FontIconSource` and a binding on its `FontSize` finds WinUI 2's
+  property.  Test `winui2test`.  Calculator gets further and stops on an
+  unhandled `E_NOTIMPL` from `NavigationView`'s layout (the core's
+  `GetLocalizedResourceString`, which a windowed `Popup` asks for its
+  host's name, is not built).  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
+  Twenty-fifth part done (Pulsar item 3, nineteenth slice): the browser
+  host's localized strings (`CXcpBrowserHost::GetLocalizedResourceString`:
+  a windowed `Popup`'s host window title, automation peers' control type
+  names), English text NovaOS keeps itself.  Test `wuxamltest`.
+  Calculator gets through layout to its first frame's `Loaded` events
+  and stops on "Specified cast is not valid" (0x80004002) thrown from one
+  of its `Loaded` handlers.  Next: that, then the CI check that it
+  computes `2 + 2`, which ticks this step.
+  Twenty-sixth part done (Pulsar item 3, twentieth slice): an object a
+  framework call returns as `Object` (`GetValue`, `Content`) reaches the
+  app as its Windows class (`Windows.UI.Xaml.Media.SolidColorBrush`, not
+  the framework's `Microsoft.UI.Xaml` name), so Calculator's title bar
+  casts its button brushes.  Test `wuxamltest`.  Calculator stops next as
+  its main page navigates: `EntranceNavigationTransitionInfo` is not
+  activated by its `Windows.UI.Xaml.Media.Animation` name (0x802B000A).
+  Next: that, then the CI check that it computes `2 + 2`, which ticks
+  this step.
+  Twenty-seventh part done (Pulsar item 3, twenty-first slice): the
+  phone library's navigation transitions (`NavigationThemeTransition`,
+  `EntranceNavigationTransitionInfo` and the other five transition infos)
+  are registered under their `Windows.UI.Xaml.Media.Animation` names, so
+  a UWP app activates them, and they answer Windows' interfaces through
+  the framework's faces.  Test `wuxamltest`.  Calculator activates its
+  `EntranceNavigationTransitionInfo` and still stops in the same main
+  page `Loaded` handler: a framework call returns XAML parse error
+  0x802B000A (`Application.LoadComponent` or `Control.ApplyTemplate`
+  turn any failure into it) with no error logged beneath.  Next: find
+  that failure, then the CI check that it computes `2 + 2`, which ticks
+  this step.
+  Twenty-eighth part done (Pulsar item 3, twenty-second slice): the
+  framework logs the real failure behind 0x802B000A (page loading,
+  template application, a data template's content), every error its
+  error service is given, and the name of a type the parser could not
+  resolve.  Test `wuxamltest`.  The failure is Calculator's `Pivot`
+  (the history and memory panel), a class of `Microsoft.UI.Xaml.Phone.dll`,
+  which is closed source and not in NovaOS's framework.  Next: a NovaOS
+  `Pivot` (with `PivotItem` and the header parts its `generic.xaml`
+  template names), then the CI check that it computes `2 + 2`, which
+  ticks this step.
 
 ---
 

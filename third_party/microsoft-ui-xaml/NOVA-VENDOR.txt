@@ -337,6 +337,46 @@ dxaml/lib's InputSiteAdapter.cpp, which hands the CoreWindow content
 island's input sources (keyboard, pointer, focus, activation and
 pre-translate) to the window's content root.
 
+For a frame's navigation transition (Pulsar item 3, twelfth slice): of
+the phone library, dxaml/phone: its IDL (idl/Microsoft.UI.Xaml.Phone.idl,
+the phone controls' and navigation transitions' API, which abigen reads
+with the framework's), its project (lib/PhoneSignatureControls.vcxproj,
+read for its include path, and common.props), inc/RuntimeErrorCodes.h,
+and lib's ThemeTransitions.cpp/.h (NavigationThemeTransition and the
+Common, Slide, Continuum, DrillIn, Suppress and Entrance navigation
+transition infos), NavigateTransitionHelper.cpp/.h (their storyboards) and
+RoVariant.h; and of components/SatelliteBase, the extension libraries'
+helpers: inc/SatMacros.h, ValueBoxer.h and XamlWrlHelpers.h with
+lib/XamlWrlHelpers.cpp (their dependency properties).
+
+For an Image's picture (Pulsar item 3, thirteenth slice): core/core/
+elements' imagebrush.cpp, CImageBrush, the brush an Image element paints
+its source with (ReloadImage, which hands the source's decode to it).
+
+For a page's layout bounds (Pulsar item 3, fifteenth slice): dxaml/lib's
+LayoutBoundsChangedHelper.cpp, which a XAML root hands a page measuring
+itself: the root's changes and, for a UWP app's main view, its
+ApplicationView's visible bounds changing.
+
+For WinUI 2's classes named as the framework's own (Pulsar item 3,
+eighteenth slice), NovaOS changes three of the files kept, each change
+marked "NovaOS:": core/Parser/XamlXmlNamespace.cpp (with
+core/inc/xamlxmlnamespace.h) asks the metadata providers first for a type
+of a "using:" xmlns that maps to a built-in namespace, and
+components/metadata/MetadataAPI.cpp (with core/inc/MetadataAPI.h) adds
+TryGetCustomClassInfoByName and TryGetRegisteredClassInfo, which a
+dependency property registration's owner and property types resolve
+through; components/ExtMetadataProvider/XamlLibMetadataProvider.cpp
+leaves its dependency properties alone when the process exits.
+
+For the error behind a parse failure (Pulsar item 3, twenty-second
+slice), each change marked "NovaOS:": core/error/ErrorService.cpp's
+AddError writes each reported error to the debug log; core/Parser/
+XamlType.cpp's CreateInstance names a type that was not resolved; and
+dxaml/lib's FrameworkApplication_Partial.cpp (LoadComponent),
+Control_Partial.cpp (ApplyTemplate) and DataTemplate_Partial.cpp
+(LoadContent) log the failure they turn into E_XAMLPARSEFAILED.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

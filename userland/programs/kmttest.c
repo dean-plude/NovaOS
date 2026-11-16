@@ -420,10 +420,18 @@ static void submission(D3DKMT_HANDLE dev)
     check(D3DKMTSignalSynchronizationObjectFromCpu(&sg) == 0 && reaches(dev, fence, 7, 5000) && dw[2] == 0x3A17EDu,
           "signalled from the CPU, the context goes on");
 
-    /* a write to the read-only mapping: a page fault, which loses the context */
+    /* a write to the read-only mapping: a page fault, which loses the context. A wait on
+       fence2 holds the context while the fault and the signal behind it are queued, so the
+       fault cannot land first and fail the signal (which a fast KVM GPU thread could do). */
+    UINT64 two = 2;
+    wg.MonitoredFenceValueArray = &two;
     w = put_write(cw + 0x2800 / 4, rova + 12, 0xBADu);
-    check(submit(ctx, cva + 0x2800, (UINT)((char *)w - (char *)(cw + 0x2800 / 4))) == 0 && signal_gpu(ctx, fence, 8) == 0 &&
-          reaches(dev, fence, 8, 5000) && dw[3] == 0, "a write to a read-only page faults and writes nothing");
+    check(D3DKMTWaitForSynchronizationObjectFromGpu(&wg) == 0 &&
+          submit(ctx, cva + 0x2800, (UINT)((char *)w - (char *)(cw + 0x2800 / 4))) == 0 && signal_gpu(ctx, fence, 8) == 0,
+          "a faulting buffer and a signal queued behind a wait");
+    sg.FenceValueArray = &two;
+    check(D3DKMTSignalSynchronizationObjectFromCpu(&sg) == 0 && reaches(dev, fence, 8, 5000) && dw[3] == 0,
+          "a write to a read-only page faults and writes nothing");
     check(*fcpu == ~0ull, "the faulting context is lost: the fence it would signal is raised to the maximum");
     check(submit(ctx, cva, 16) == ST_DEVICE_REMOVED, "its next submission fails (STATUS_DEVICE_REMOVED)");
 

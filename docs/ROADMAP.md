@@ -888,7 +888,7 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   own Windows driver (`Netwtw14.sys`) already downloads by hardware ID,
   installs and registers with NovaOS's NDIS host on a stand-in device in
   QEMU (step 30.9). NovaOS's WDI upper edge (`kernel/nt/wdi.c`) has
-  five parts done. The first is the command layer: adapter capabilities,
+  six parts done. The first is the command layer: adapter capabilities,
   the station port and scans, with `netsh wlan show interfaces` and
   `netsh wlan show networks`. The second is the data path: the TAL TX/RX
   interface, so 802.11 frames go both ways, plus joining open networks
@@ -902,10 +902,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   fifth is for people and programs: Settings' Wi-Fi page lists the
   networks and joins one with its password, and `wlanapi.dll` (the Native
   Wifi API) gives programs the adapters, scans, network lists, profiles
-  and connections with their notifications. All five are tested with
-  NovaOS's own WDI miniport on QEMU's `edu` device (the devices suite's
-  `wifi` boot). Still needed: scanning and joining a network on the T14's
-  card.
+  and connections with their notifications. The sixth is WPA2-Enterprise
+  (`netsh wlan connect name=SSID user=NAME key=PASSWORD`): PEAP with
+  MS-CHAPv2 in `kernel/nt/eap.c`, its TLS tunnel checked against the
+  trusted roots, the 4-way handshake from the PMK the sign-in gives. All
+  six are tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
+  devices suite's `wifi` boot; its `NovaCorp` network's authentication
+  server is the driver too). Still needed: EAP-TLS and WPA3-Enterprise,
+  and scanning and joining a network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep. Done in QEMU: NovaOS's Bluetooth host stack
   (`kernel/nt/bthport.c`, the role of Windows' `bthport.sys`: HCI, inquiry,
@@ -947,9 +951,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   Windows drivers sent to D3 through `PoRequestPowerIrp` (KMDF's S0 idle,
   WDM idle detection, PCI PMCSR in the bus driver); tested in the devices
   suite's `laptop` boot (`idletest`) and `kmdfedu` boot (D3 and back).
-  Still needed: the idle-drain measurement on the T14
-  ([install-and-power.md](install-and-power.md#checks-on-the-t14), check 7),
-  then PoFx runtime idle and `_LPI` if the drain is too high.
+  Runtime idle done in QEMU too: the power framework (PoFx,
+  `kernel/nt/po.c`) moves an idle driver's components to their deepest
+  F-state and tells the driver when device power is not required, and
+  back, shown with KMDF's system-managed idle in the `kmdfedu` boot; and
+  `_LPI` low-power idle states, with the processor container's states
+  flattened in, once the platform-wide `_OSC` agrees, shown in the
+  `laptop` boot. Still needed: the idle-drain measurement on the T14
+  ([install-and-power.md](install-and-power.md#checks-on-the-t14), check 7).
 - [ ] **28.5 A second reference PC.** Pick an AMD machine and list its
   devices in [hardware.md](hardware.md), each marked supported or missing.
 

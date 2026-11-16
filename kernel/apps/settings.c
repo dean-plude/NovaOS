@@ -1,6 +1,7 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               Bluetooth (settings_bluetooth.c), storage, network, Wi-Fi, firewall (settings_firewall.c), accounts, time & language, printers and about pages
+ *               Bluetooth (settings_bluetooth.c), apps (settings_apps.c), storage, network, Wi-Fi, firewall (settings_firewall.c),
+ *               accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  *
  * Every page is an entry of g_pages (its name, glyph, ms-settings: names,
@@ -814,7 +815,9 @@ static bool wifi_poll(Settings *st)
         case WLAN_NEEDS_KEY:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", s);
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
-                                         "support yet (WEP, WPA or Enterprise).", s); break;
+                                         "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: sign in from "
+                                         "the Terminal with netsh wlan connect user= key=.", s); break;
         default:               ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Can't connect to \"%s\" (0x%08x).", s, status);
         }
         if (r != WLAN_OK) kprintf("[SETTINGS] Wi-Fi: %s\n", st->wifi_note);
@@ -1892,6 +1895,7 @@ static int paint_firewall(Settings *st, GdiRect c, int x, int y, int w) { (void)
 static int paint_bluetooth(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return BluetoothPagePaint(x, y, w); }
 static int paint_printers(Settings *st, GdiRect c, int x, int y, int w) { (void)c; return page_printers(st, x, y, w); }
 static int paint_about(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; (void)st; return page_about(x, y, w); }
+static int paint_apps(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return AppsPagePaint(x, y, w); }
 
 static void mouse_system(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
 {
@@ -2007,6 +2011,13 @@ static void mouse_firewall(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y
 }
 
 static bool tick_firewall(Settings *st) { (void)st; return FirewallPageTick(); }   /* a profile, rule or network changed */
+static void mouse_apps(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) AppsPageMouse(px, py, pw, x, y);
+}
+static bool key_apps(Settings *st, const KeyEvent *k) { (void)st; return AppsPageKey(k); }
+static bool tick_apps(Settings *st) { (void)st; return AppsPageTick(); }   /* an uninstall finished, packages changed */
 
 static void mouse_bluetooth(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
 {
@@ -2038,6 +2049,9 @@ static const SetPage g_pages[] = {
         "personalization personalization-background personalization-colors themes",
         "personalization wallpaper background theme colors icons icon set picture",
         page_personalize, mouse_personalize, NULL, tick_thumbs, true },
+    [SETTINGS_APPS] = { "Apps", GL_CODE, "appsfeatures installed-apps appsforwebsites",
+        "apps installed uninstall remove programs packages msix appx store features",
+        paint_apps, mouse_apps, key_apps, tick_apps, false },
     [SETTINGS_STORAGE] = { "Storage", GL_FOLDER, "storagesense savelocations",
         "storage disk drive space memory ram",
         paint_storage, NULL, NULL, tick_storage, false },

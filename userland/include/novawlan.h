@@ -44,7 +44,8 @@
 #define NOVAWLAN_OPEN   0
 #define NOVAWLAN_WPA2   1      /* WPA2-Personal (AKM 2, CCMP) */
 #define NOVAWLAN_WPA3   2      /* WPA3-Personal (AKM 8, SAE) */
-#define NOVAWLAN_OTHER  3      /* something NovaOS cannot join yet (WEP, WPA, Enterprise) */
+#define NOVAWLAN_OTHER  3      /* something NovaOS cannot join yet (WEP, WPA, WPA3-Enterprise) */
+#define NOVAWLAN_ENTERPRISE 4  /* WPA2-Enterprise (AKM 1, CCMP): netsh signs in to it; wlanapi cannot yet */
 
 typedef struct {               /* an access point a scan heard */
     unsigned char  bssid[6];

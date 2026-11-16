@@ -2,7 +2,7 @@
 # Wi-Fi card and Intel's own driver stops at its hardware probe on a
 # stand-in (the ax211 boot), so QEMU's edu device (-device edu, PCI
 # 1234:11e8) gets wditest.sys (tools/drivertest/wditest.c, in C:\Tests\Wifi),
-# a WDI miniport as Intel's Netwtw14.sys is one, whose radio hears three
+# a WDI miniport as Intel's Netwtw14.sys is one, whose radio hears four
 # access points.  With test signing on, "pnputil /add-driver wditest.inf
 # /install" installs it: it registers with ndis.sys as a WDI miniport, the
 # upper edge allocates and opens its adapter, asks its capabilities
@@ -44,6 +44,16 @@
 # way from SAE's PMK and brings the management frame protection key
 # (IGTK) with the group key, both checked by the driver, and DHCP, ping
 # and a rekey of both group keys run over it.
+# NovaCorp is WPA2-Enterprise: without a user name netsh says so; with
+# "user=alice key=..." NovaOS signs in with PEAP and MS-CHAPv2
+# (kernel/nt/eap.c) to the authentication server the driver plays
+# (tools/drivertest/eapap.h, Mbed TLS's TLS server in the driver), the
+# EAP packets going over EAPOL as the 4-way handshake's frames do.  Its
+# certificate is from "NovaCorp Test Root", which nobody trusts at first:
+# the sign-in stops before any password is sent.  Once "certutil -addstore
+# root" trusts it, a wrong password fails at MS-CHAPv2 (E=691); the right
+# one gets EAP-Success, the 4-way handshake runs from the PMK the tunnel's
+# keys give, and DHCP, ping and a group rekey run over the connection.
 # wlanapi.dll (wlantest.exe) does the same as a Windows program does: the
 # adapter and its GUID, a scan and its notification, the networks and
 # access points, a profile saved in the registry, a wrong passphrase
@@ -56,7 +66,7 @@
 DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with `pnputil /add-driver /install`: '
        'NovaOS\'s WDI command layer reads its capabilities and creates its station port, `netsh wlan show interfaces` '
        'lists it and `netsh wlan show networks mode=bssid` scans (OID_WDI_TASK_SCAN and its BSS entry indications) '
-       'and lists three networks (WPA2-Personal, WPA3-Personal, open) with signal, band and channel; '
+       'and lists four networks (WPA2-Personal, WPA3-Personal, open, WPA2-Enterprise) with signal, band and channel; '
        '`netsh wlan connect name=NovaGuest` joins the open one, and DHCP and ping run over the WDI data path (802.11 '
        'frames through the driver\'s TAL TX/RX handlers); disconnecting gives the Ethernet card back; '
        '`netsh wlan connect name=NovaNet key=...` joins the WPA2-Personal one (EAPOL exempted, the 4-way handshake '
@@ -65,7 +75,10 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        'the secured connection; `netsh wlan connect name=NovaNet-5G key=...` joins the WPA3-Personal one (SAE through '
        'the driver: its SAE_AUTH_PARAMS_NEEDED indications answered with OID_WDI_SET_SAE_AUTH_PARAMS, then the WPA3 '
        '4-way handshake with management frame protection\'s IGTK), a wrong password is refused at SAE\'s confirm, and '
-       'DHCP, ping and a rekey run over it; `wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
+       'DHCP, ping and a rekey run over it; `netsh wlan connect name=NovaCorp user=alice key=...` signs in to the '
+       'WPA2-Enterprise one with PEAP and MS-CHAPv2 (refused while its server\'s root is not trusted, then, after '
+       '`certutil -addstore root`, refused with a wrong password), the 4-way handshake runs from the sign-in\'s PMK, '
+       'and DHCP and ping run over it; `wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
        'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
        'reason, joining by profile and by SSID, the current connection); Settings\' Wi-Fi page lists the networks and '
        'joins NovaNet with its passphrase typed as a person would; disabling the device deletes the port, stops the data path and closes the '
@@ -100,7 +113,7 @@ def _join_in_settings(nova):
     nova.qmp.type('wi-fi')
     time.sleep(2)
     nova.qmp.key('ret')
-    nova.sr.wait('[SETTINGS] Wi-Fi: 3 network(s) found', 60)
+    nova.sr.wait('[SETTINGS] Wi-Fi: 4 network(s) found', 60)
     time.sleep(1)
     nova.qmp.key('down')
     time.sleep(1)
@@ -125,7 +138,7 @@ TESTS = [
          [r'Driver package installed on device: PCI\\VEN_1234&DEV_11E8',
           r'\[NDIS\] WdiTest: WDI miniport registered \(NDIS 6\.50, WDI version 0x10108\)',
           r'\[DbgPrint\] wditest: adapter allocated',
-          r'\[DbgPrint\] wditest: adapter open: radio on, 3 access points in range',
+          r'\[DbgPrint\] wditest: adapter open: radio on, 4 access points in range',
           r'\[NDIS\] WdiTest: WDI: open adapter completed \(0x00000000\)',
           r'\[DbgPrint\] wditest: data path initialized \(API revision 2\)',
           r'\[WDI\] WdiTest: data path initialized \(0x00000000\), TX, RX',
@@ -146,9 +159,9 @@ TESTS = [
           r'State +: disconnected', r'Radio status +: Hardware On\n +Software On'], builtin=True),
     Test('wifi scan', 'netsh wlan show networks mode=bssid',
          [r'\[DbgPrint\] wditest: scan task \d+ on port 1: wildcard BSSID, any SSID, type 3, dwell 20/110 ms, at most 4000 ms',
-          r'\[DbgPrint\] wditest: scan complete: 3 BSS entries indicated',
-          r'\[WDI\] WdiTest: scan on port 1: 0x00000000, 3 access point\(s\)',
-          r'Interface name : Wi-Fi', r'There are 3 networks currently visible\.',
+          r'\[DbgPrint\] wditest: scan complete: 4 BSS entries indicated',
+          r'\[WDI\] WdiTest: scan on port 1: 0x00000000, 4 access point\(s\)',
+          r'Interface name : Wi-Fi', r'There are 4 networks currently visible\.',
           r'SSID 1 : NovaNet\n +Network type +: Infrastructure\n +Authentication +: WPA2-Personal\n +Encryption +: CCMP\n'
           r' +BSSID 1 +: 02:4e:6f:76:61:01\n +Signal +: 90% *\n +Radio type +: 802\.11n\n +Band +: 2\.4 GHz\n'
           r' +Channel +: 6\n',
@@ -157,9 +170,12 @@ TESTS = [
           r' +Band +: 5 GHz\n +Channel +: 36\n',
           r'SSID 3 : NovaGuest\n +Network type +: Infrastructure\n +Authentication +: Open\n +Encryption +: None\n'
           r' +BSSID 1 +: 02:4e:6f:76:61:03\n +Signal +: 35% *\n +Radio type +: 802\.11n\n +Band +: 2\.4 GHz\n'
-          r' +Channel +: 11\b'], builtin=True),
+          r' +Channel +: 11\b',
+          r'SSID 4 : NovaCorp\n +Network type +: Infrastructure\n +Authentication +: WPA2-Enterprise\n'
+          r' +Encryption +: CCMP\n +BSSID 1 +: 02:4e:6f:76:61:04\n +Signal +: 25% *\n +Radio type +: 802\.11n\n'
+          r' +Band +: 2\.4 GHz\n +Channel +: 1\b'], builtin=True),
     Test('wifi networks', 'netsh wlan show networks',
-         [r'There are 3 networks currently visible\.', r'SSID 2 : NovaNet-5G\n +Network type +: Infrastructure\n'
+         [r'There are 4 networks currently visible\.', r'SSID 2 : NovaNet-5G\n +Network type +: Infrastructure\n'
           r' +Authentication +: WPA3-Personal\n +Encryption +: CCMP\n'], builtin=True),
     Test('wifi secured', 'netsh wlan connect name=NovaNet',
          [r'The network "NovaNet" is secured: give its passphrase with key=PASSPHRASE\.'], builtin=True),
@@ -273,11 +289,58 @@ TESTS = [
     Test('wifi wpa3 disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaNet-5G \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    Test('wifi enterprise needs user', 'netsh wlan connect name=NovaCorp',
+         [r'The network "NovaCorp" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD\.'], builtin=True),
+    Test('wifi enterprise untrusted', 'netsh wlan connect name=NovaCorp user=alice key=nova-peap-password',
+         [r'\[DbgPrint\] wditest: connect to NovaCorp: auth 6, ciphers 4/4, exclude unencrypted 1, EAPOL exempted yes',
+          r'\[DbgPrint\] wditest: RADIUS: Request/Identity to the station',
+          r'\[DbgPrint\] wditest: RADIUS: identity alice; PEAP start',
+          r'\[TLS\] EAP tunnel: handshake failed: Certificate is not trusted \(unknown certificate authority\)',
+          r'\[EAP\] WdiTest: the sign-in failed: the server\'s certificate is not from a trusted root',
+          r'\[WDI\] WdiTest: disconnected from NovaCorp',
+          r'The sign-in server of "NovaCorp" has a certificate from a root that is not trusted'], builtin=True),
+    Test('wifi enterprise trust', r'certutil -addstore root C:\Tests\Wifi\novacorp-ca.cer',
+         [r'Added 1 certificate to the Trusted Root Certification Authorities store\.'], builtin=True),
+    Test('wifi enterprise wrong password', 'netsh wlan connect name=NovaCorp user=alice key=not-the-password',
+         [r'\[DbgPrint\] wditest: RADIUS: TLS handshake done \(TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256\); tunnel up',
+          r'\[DbgPrint\] wditest: RADIUS: inner identity alice; MS-CHAPv2 challenge',
+          r'\[DbgPrint\] wditest: RADIUS: MS-CHAPv2 response from alice: NT-Response wrong \(not the password\); '
+          r'failure E=691',
+          r'\[EAP\] the server refused the user name or password \(MS-CHAPv2 failure\)',
+          r'\[EAP\] WdiTest: the sign-in failed',
+          r'The network security key isn\'t correct: "NovaCorp" did not accept it\.'], builtin=True),
+    Test('wifi enterprise connect', 'netsh wlan connect name=NovaCorp user=alice key=nova-peap-password',
+         [r'\[DbgPrint\] wditest: connect task \d+ on port 1: SSID NovaCorp, auth 6, 1 BSS entry, first 02:4e:6f:76:61:04',
+          r'\[WDI\] WdiTest: connected to NovaCorp \(02:4e:6f:76:61:04\) on port 1, peer 1: WPA2-Enterprise, CCMP, '
+          r'WMM off',
+          r'\[DbgPrint\] wditest: RADIUS: TLS handshake done',
+          r'\[DbgPrint\] wditest: RADIUS: MS-CHAPv2 response from alice: NT-Response good; success with the '
+          r'authenticator response',
+          r'\[DbgPrint\] wditest: RADIUS: Result TLV success from the station; EAP-Success, the PMK from the tunnel',
+          r'\[EAP\] WdiTest: signed in as alice with PEAP \(MS-CHAPv2\) to server radius\.novacorp\.test: '
+          r'EAP-Success, PMK from the tunnel',
+          r'\[DbgPrint\] wditest: 4-way handshake message 1 \(ANonce\) to the station \(WPA2-Enterprise: from the '
+          r'EAP sign-in\'s PMK\)',
+          r'\[DbgPrint\] wditest: 4-way handshake message 2: MIC good, RSN element its association\'s; sending message 3',
+          r'\[DbgPrint\] wditest: 4-way handshake message 4: MIC good; the handshake is done',
+          r'\[WPA\] WdiTest: pairwise key and group key 1 installed \(0x00000000\)',
+          r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
+          r'Connection request was completed successfully\.'], builtin=True),
+    Test('wifi enterprise ping', 'ping 192.168.77.1',
+         [r'\[WPA\] WdiTest: group key 2 installed \(0x00000000\)',
+          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_leases(4)),
+    Test('wifi enterprise connected', 'netsh wlan show interfaces',
+         [r'State +: connected\n +SSID +: NovaCorp\n +AP BSSID +: 02:4e:6f:76:61:04\n +Band +: 2\.4 GHz\n'
+          r' +Channel +: 1\n +Network type +: Infrastructure\n +Radio type +: 802\.11n\n'
+          r' +Authentication +: WPA2-Enterprise\n +Cipher +: CCMP\n'], builtin=True),
+    Test('wifi enterprise disconnect', 'netsh wlan disconnect',
+         [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
+          r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi wlanapi', 'wlantest', [r'wlantest: \d+ passed, 0 failed'], timeout=300, elevated=True),
     Test('wifi settings', 'wlantest settings', [r'wlantest settings: \d+ passed, 0 failed'], timeout=300,
          acts=[(r'wlantest: join NovaNet in Settings', _join_in_settings),
                (r'wlantest: connected through Settings', _close_settings)],
-         boot_expect=[r'\[SETTINGS\] Wi-Fi: 3 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
+         boot_expect=[r'\[SETTINGS\] Wi-Fi: 4 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
     Test('wifi disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] wditest: station port 1 deleted',
           r'\[DbgPrint\] wditest: data path port 1 deleted',

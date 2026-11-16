@@ -23,6 +23,7 @@ typedef struct {
     UINT32    arg;              /* IDLE_MWAIT: the hint (EAX); IDLE_IO: the port to read */
     UINT32    latency_us;       /* worst-case exit latency */
     UINT32    power_mw;         /* average power, as _CST gives it (0: unknown) */
+    UINT32    residency_us;     /* the shortest stay worth entering it for (_LPI's; 0: twice the latency) */
 } IdleState;
 
 /* The boot CPU, once: what the CPU itself offers (MWAIT, its sub-states,

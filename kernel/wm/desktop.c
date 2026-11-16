@@ -614,7 +614,10 @@ static const char *g_pinned_cap[N_PINNED] = {
 /* Programs installed in C:\Programs (rescanned when the menu opens); room
  * for every one a full C:\Programs holds, so search finds the last ones too */
 #define MAX_PROGS 256
-static struct { char name[32]; char path[RAMFS_PATH_MAX]; bool hidden, link; } g_progs[MAX_PROGS];
+static struct {
+    char name[32]; char path[RAMFS_PATH_MAX]; bool hidden, link, pkg;
+    char logo[RAMFS_PATH_MAX];         /* a packaged app's tile logo (the manifest's), or "" */
+} g_progs[MAX_PROGS];
 static int g_nprogs;
 
 /* Shortcuts installers put in the Start menu's Programs folder (and one
@@ -637,8 +640,68 @@ static void scan_links(RamNode *dir, int depth)
     }
 }
 
+/* A path the package repository holds ("C:\Programs\..."), as the C:
+ * drive's ("\Programs\...") */
+static const char *drive_c_path(const char *p)
+{
+    return (p[0] == 'C' || p[0] == 'c') && p[1] == ':' ? p + 2 : p;
+}
+
+/* The applications of the packages installed for the account on the
+ * screen (Windows' Start lists packaged apps from the package repository,
+ * not from shortcuts): userland/programs/appx.c records each one's
+ * display name, program and tile logo (HKCU\Software\Classes\Local
+ * Settings\...\AppModel\Repository\Packages\<full name>\Applications\<id>);
+ * framework packages and AppListEntry="none" applications are left out */
+#define PKG_REPO_USER "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages"
+static void scan_packages(void)
+{
+    char sid[64], repo[256];
+    um_account_sid_string(um_session_rid(), sid, sizeof(sid));
+    ksnprintf(repo, sizeof(repo), "User\\%s\\" PKG_REPO_USER, sid);
+    for (UINT32 i = 0; g_nprogs < MAX_PROGS; i++) {
+        UINT16 w[128];
+        char full[128], key[256], root[RAMFS_PATH_MAX];
+        int n = um_registry_enum_key(repo, i, w, 127, NULL);
+        if (n < 0) break;
+        for (int k = 0; k < n && k < 127; k++) full[k] = w[k] < 0x80 ? (char)w[k] : '?';
+        full[n < 127 ? n : 127] = '\0';
+        UINT32 fw = 0;
+        ksnprintf(key, sizeof(key), "%s\\%s", repo, full);
+        if ((um_registry_get_dword(key, "Framework", &fw) && fw) ||
+            !um_registry_get_sz(key, "PackageRootFolder", root, sizeof(root)))
+            continue;
+        ksnprintf(key, sizeof(key), "%s\\%s\\Applications", repo, full);
+        for (UINT32 j = 0; g_nprogs < MAX_PROGS; j++) {
+            char id[64], akey[256], exe[RAMFS_PATH_MAX], show[16] = "";
+            int m = um_registry_enum_key(key, j, w, 63, NULL);
+            if (m < 0) break;
+            for (int k = 0; k < m && k < 63; k++) id[k] = w[k] < 0x80 ? (char)w[k] : '?';
+            id[m < 63 ? m : 63] = '\0';
+            ksnprintf(akey, sizeof(akey), "%s\\%s", key, id);
+            um_registry_get_sz(akey, "AppListEntry", show, sizeof(show));
+            if (!strcmp(show, "none") || !um_registry_get_sz(akey, "Executable", exe, sizeof(exe))) continue;
+            char *e = g_progs[g_nprogs].path;
+            ksnprintf(e, sizeof(g_progs[0].path), "%s\\%s", drive_c_path(root), exe);
+            if (!RamfsResolve(NULL, e)) continue;
+            if (!um_registry_get_sz(akey, "DisplayName", g_progs[g_nprogs].name, sizeof(g_progs[0].name)))
+                strncpy(g_progs[g_nprogs].name, id, sizeof(g_progs[0].name) - 1);
+            g_progs[g_nprogs].name[sizeof(g_progs[0].name) - 1] = '\0';
+            char logo[RAMFS_PATH_MAX] = "";
+            um_registry_get_sz(akey, "Logo", logo, sizeof(logo));
+            strncpy(g_progs[g_nprogs].logo, drive_c_path(logo), sizeof(g_progs[0].logo) - 1);
+            g_progs[g_nprogs].logo[sizeof(g_progs[0].logo) - 1] = '\0';
+            g_progs[g_nprogs].link = g_progs[g_nprogs].hidden = false;
+            g_progs[g_nprogs].pkg = true;
+            g_nprogs++;
+        }
+    }
+}
+
 static void draw_prog_icon(int i, int x, int y, int s)
 {
+    RamNode *logo = g_progs[i].logo[0] ? RamfsResolve(NULL, g_progs[i].logo) : NULL;
+    if (logo && !logo->dir) { AppDrawNodeIcon(logo, x, y, s); return; }   /* a packaged app's tile logo */
     RamNode *n = g_progs[i].link ? RamfsResolve(NULL, g_progs[i].path) : NULL;
     if (n) AppDrawNodeIcon(n, x, y, s);
     else AppDrawProgramIcon(g_progs[i].path[0] ? g_progs[i].path : g_progs[i].name, x, y, s);
@@ -656,7 +719,9 @@ static const struct { const char *name, *path; } g_tools[] = {
 static void scan_programs(void)
 {
     g_nprogs = 0;
+    memset(g_progs, 0, sizeof(g_progs));
     scan_links(RamfsResolve(NULL, START_MENU_PROGRAMS), 0);  /* installed apps first */
+    scan_packages();                                         /* ... and packaged apps */
     for (unsigned i = 0; i < sizeof(g_tools) / sizeof(g_tools[0]) && g_nprogs < MAX_PROGS; i++) {
         if (!RamfsResolve(NULL, g_tools[i].path)) continue;
         strncpy(g_progs[g_nprogs].name, g_tools[i].name, sizeof(g_progs[0].name) - 1);
@@ -698,6 +763,12 @@ static void launch_program(int i)
     if (i < 0 || i >= g_nprogs) return;
     RamNode *exe = RamfsResolve(NULL, g_progs[i].path);
     if (exe && g_progs[i].link) AppOpenFile(exe);        /* a shortcut */
+    else if (exe && g_progs[i].pkg) {                /* a packaged app: by its program's path, in its folder */
+        char cmd[RAMFS_PATH_MAX + 6];
+        ksnprintf(cmd, sizeof(cmd), "\"C:%s\"", g_progs[i].path);
+        kprintf("[START] %s: a packaged app\n", g_progs[i].name);
+        AppRunProgram(exe, cmd);
+    }
     else if (exe) AppRunProgram(exe, g_progs[i].name);
 }
 

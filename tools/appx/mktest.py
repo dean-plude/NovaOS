@@ -10,7 +10,10 @@ tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Appx:
                     self-test, run packaged), greeter.dll (its Windows
                     Runtime class, tools/appx/test/greeter.c) and
                     resources.pri (tools/appx/test/Resources.resw, through
-                    makepri.py), the manifest tools/appx/test/AppxManifest.xml
+                    makepri.py), its tile logo at two scales (Assets\\
+                    Square44x44Logo.scale-100.png and .scale-200.png, which
+                    the Start menu shows), the manifest
+                    tools/appx/test/AppxManifest.xml
   Tampered.msix     the same, greeter.dll changed after its block map was
                     made: must be refused
   Signed.msix       the same with an AppxSignature.p7x: a signature NovaOS
@@ -47,8 +50,10 @@ tools/build_userland.py runs it and puts what it writes in C:\\Tests\\Appx:
   testroot.cer      the test root
 """
 import os
+import struct
 import subprocess
 import sys
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -129,6 +134,27 @@ APP = '''<?xml version="1.0" encoding="utf-8"?>
 '''
 
 
+def logo_png(size):
+    """A @size x @size tile logo (RGBA PNG): a blue rounded square with a
+    white bar, enough for the Start menu and Settings to show"""
+    rows = []
+    r = size // 5
+    for y in range(size):
+        row = bytearray([0])
+        for x in range(size):
+            cx = min(x, size - 1 - x)
+            cy = min(y, size - 1 - y)
+            inside = cx >= r or cy >= r or (r - cx) ** 2 + (r - cy) ** 2 <= r * r
+            bar = size // 4 <= x < size - size // 4 and size * 2 // 5 <= y < size * 3 // 5
+            row += bytes((255, 255, 255, 255) if inside and bar else (0x30, 0x78, 0xD8, 255) if inside else (0, 0, 0, 0))
+        rows.append(bytes(row))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(b''.join(rows), 9)) + chunk(b'IEND', b''))
+
+
 def freestanding(out, name):
     """tools/appx/test/@name.c as @name.dll: clang and lld-link, freestanding"""
     obj, dll = os.path.join(out, name + '.obj'), os.path.join(out, name + '.dll')
@@ -151,6 +177,8 @@ def main(argv):
     pri = makepri.build('NovaOS.PackageTest', [('Resources', makepri.read_resw(os.path.join(TEST, 'Resources.resw')))])
     dll = freestanding(work, 'greeter')
     files = [('appxtest.exe', open(exe, 'rb').read()), ('greeter.dll', dll), ('resources.pri', pri),
+             ('Assets\\Square44x44Logo.scale-100.png', logo_png(44)),
+             ('Assets\\Square44x44Logo.scale-200.png', logo_png(88)),
              ('AppxManifest.xml', manifest)]
     makeappx.write(os.path.join(out, 'PackageTest.msix'), makeappx.pack(files))
     makeappx.write(os.path.join(out, 'Tampered.msix'),

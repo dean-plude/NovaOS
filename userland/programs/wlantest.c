@@ -4,16 +4,18 @@
  *
  * Runs in the devices self-test boot "wifi": NovaOS's WDI test miniport
  * (tools/drivertest/wditest.c) on QEMU's edu device, whose radio hears
- * three access points: NovaNet (WPA2-Personal, 2.4 GHz channel 6, signal
- * 90%), NovaNet-5G (WPA3-Personal, 5 GHz channel 36, 72%) and NovaGuest
- * (open, 2.4 GHz channel 11, 35%).  "wlantest" checks:
+ * four access points: NovaNet (WPA2-Personal, 2.4 GHz channel 6, signal
+ * 90%), NovaNet-5G (WPA3-Personal, 5 GHz channel 36, 72%), NovaGuest
+ * (open, 2.4 GHz channel 11, 35%) and NovaCorp (WPA2-Enterprise, 2.4 GHz
+ * channel 1, 25%).  "wlantest" checks:
  *  - WlanOpenHandle (a wrong client version refused), WlanEnumInterfaces
  *    (the adapter, its description, disconnected, its GUID from its MAC);
  *  - WlanRegisterNotification, then WlanScan finishing with
  *    wlan_notification_acm_scan_complete;
- *  - WlanGetAvailableNetworkList: the three networks with their
- *    authentication and cipher, signal and PHY types;
- *    WlanGetNetworkBssList: the three access points (BSSID, RSSI, channel
+ *  - WlanGetAvailableNetworkList: the four networks with their
+ *    authentication and cipher, signal and PHY types (NovaCorp's RSNA,
+ *    not connectable through wlanapi yet);
+ *    WlanGetNetworkBssList: the four access points (BSSID, RSSI, channel
  *    centre frequency) and one filtered by SSID;
  *  - WlanSetProfile with NovaNet's profile XML, WlanGetProfileList,
  *    WlanGetProfile, and the network list naming the profile;
@@ -313,7 +315,7 @@ int main(int argc, char **argv)
 
     NETWORK_LIST_ *nl = NULL;
     e = WlanGetAvailableNetworkList(h, &g, 0, NULL, &nl);
-    check(!e && nl && nl->dwNumberOfItems == 3, "WlanGetAvailableNetworkList: %lu networks (error %lu)",
+    check(!e && nl && nl->dwNumberOfItems == 4, "WlanGetAvailableNetworkList: %lu networks (error %lu)",
           nl ? nl->dwNumberOfItems : 0, e);
     const NETWORK_ *n1 = network(nl, "NovaNet"), *n2 = network(nl, "NovaNet-5G"), *n3 = network(nl, "NovaGuest");
     check(n1 && n1->bSecurityEnabled && n1->dot11DefaultAuthAlgorithm == 7 && n1->dot11DefaultCipherAlgorithm == 4 &&
@@ -324,11 +326,15 @@ int main(int argc, char **argv)
           n2->dot11PhyTypes[0] == 10, "NovaNet-5G: WPA3-Personal (SAE, 9), signal 72, 802.11ax");
     check(n3 && !n3->bSecurityEnabled && n3->dot11DefaultAuthAlgorithm == 1 && n3->dot11DefaultCipherAlgorithm == 0 &&
           n3->wlanSignalQuality == 35, "NovaGuest: open (1), no cipher, signal 35");
+    const NETWORK_ *n4 = network(nl, "NovaCorp");
+    check(n4 && n4->bSecurityEnabled && n4->dot11DefaultAuthAlgorithm == 6 && n4->dot11DefaultCipherAlgorithm == 4 &&
+          n4->wlanSignalQuality == 25 && !n4->bNetworkConnectable,
+          "NovaCorp: WPA2-Enterprise (RSNA, 6) with CCMP, signal 25, not connectable through wlanapi yet");
     if (nl) WlanFreeMemory(nl);
 
     BSS_LIST_ *bl = NULL;
     e = WlanGetNetworkBssList(h, &g, NULL, 3, FALSE, NULL, &bl);
-    check(!e && bl && bl->dwNumberOfItems == 3, "WlanGetNetworkBssList: %lu access points (error %lu)",
+    check(!e && bl && bl->dwNumberOfItems == 4, "WlanGetNetworkBssList: %lu access points (error %lu)",
           bl ? bl->dwNumberOfItems : 0, e);
     int found = 0;
     for (DWORD i = 0; bl && i < bl->dwNumberOfItems; i++) {

@@ -1,0 +1,10 @@
+/* inttypes.h for Mbed TLS in wditest.sys: the format macros it uses */
+#pragma once
+#include <stdint.h>
+#define PRId32 "d"
+#define PRIu32 "u"
+#define PRIx32 "x"
+#define PRId64 "lld"
+#define PRIi64 "lli"
+#define PRIu64 "llu"
+#define PRIx64 "llx"

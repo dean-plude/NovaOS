@@ -84,6 +84,10 @@ IMPORT void        NdisFreeNetBufferListPool(void *pool);
 IMPORT NET_BUFFER_LIST *NdisAllocateNetBufferAndNetBufferList(void *pool, unsigned short ctx, unsigned short backfill,
                                                               NT_MDL *mdl, unsigned int off, unsigned long long len);
 IMPORT void        NdisFreeNetBufferList(NET_BUFFER_LIST *nbl);
+typedef void (NT_API *WORK_FN)(void *ctx, void *item);
+IMPORT void       *NdisAllocateIoWorkItem(void *h);
+IMPORT void        NdisQueueIoWorkItem(void *item, WORK_FN fn, void *ctx);
+IMPORT void        NdisFreeIoWorkItem(void *item);
 
 typedef void (NT_API *TIMER_FN)(void *ss1, void *ctx, void *ss2, void *ss3);
 typedef struct {
@@ -98,6 +102,46 @@ IMPORT unsigned char NdisCancelTimerObject(void *t);
 IMPORT void        NdisFreeTimerObject(void *t);
 
 typedef void (NT_API *COMPLETE_FN)(void *adapter_handle, NDIS_STATUS st);
+
+/* ---- what Mbed TLS calls (tools/drivertest/mbedtls/mbedtls_wditest_config.h names them: a driver has no C library) ---- */
+#include <stdarg.h>
+IMPORT void *ExAllocatePoolWithTag(int type, unsigned long long n, unsigned int tag);
+IMPORT void  ExFreePoolWithTag(void *p, unsigned int tag);
+int _vsnprintf(char *s, unsigned long long n, const char *fmt, va_list ap);
+
+void *wditest_calloc(size_t n, size_t size)
+{
+    if (size && n > (size_t)-1 / size) return 0;
+    unsigned long long k = (unsigned long long)n * size;
+    unsigned char *p = ExAllocatePoolWithTag(0 /* NonPagedPool */, k ? k : 1, 0x50414557u /* 'WEAP' */);
+    if (p) for (unsigned long long i = 0; i < k; i++) p[i] = 0;
+    return p;
+}
+
+void wditest_free(void *p)
+{
+    if (p) ExFreePoolWithTag(p, 0x50414557u);
+}
+
+char *strchr(const char *s, int c)
+{
+    for (;; s++) {
+        if (*s == (char)c) return (char *)s;
+        if (!*s) return 0;
+    }
+}
+
+int wditest_snprintf(char *s, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = n ? _vsnprintf(s, n, fmt, ap) : 0;
+    va_end(ap);
+    if (n && (r < 0 || (size_t)r >= n)) { s[n - 1] = 0; r = (int)n; }     /* (C99's: truncated) */
+    return r;
+}
+
+#include "eapap.h"                  /* (after the imports: it uses DbgPrint) */
 
 #define TAG       0x54494457u       /* 'WDIT' */
 #define WDI_VER   ((1 << 16) | (1 << 8) | 8)
@@ -134,6 +178,13 @@ static const unsigned char IES_WPA3[] = {
     191, 12, 0x91, 0x59, 0x82, 0x0f, 0xea, 0xff, 0, 0, 0xea, 0xff, 0, 0,
     255, 7, 35, 0x05, 0x00, 0x08, 0x12, 0x00, 0x10,
 };
+/* Rates, DS parameter set (channel 1), RSN (CCMP, 802.1X), HT: WPA2-Enterprise */
+static const unsigned char IES_ENT[] = {
+    1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24,
+    3, 1, 1,
+    48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 1, 0x00, 0x00,
+    45, 26, 0x6f, 0x01, 0x17, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
 /* Rates, DS parameter set (channel 11), HT: an open network */
 static const unsigned char IES_OPEN[] = {
     1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24,
@@ -148,12 +199,15 @@ static const Ap APS[] = {
       IES_WPA3, sizeof(IES_WPA3) },
     { { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x03 }, "NovaGuest",  -78, 35, 11, WDI_BAND_ID_2400, 0x0401,
       IES_OPEN, sizeof(IES_OPEN) },
+    { { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x04 }, "NovaCorp",   -84, 25,  1, WDI_BAND_ID_2400, 0x0411,
+      IES_ENT, sizeof(IES_ENT) },
 };
 #define NAPS (int)(sizeof(APS) / sizeof(APS[0]))
 
 #define NNET      0                 /* APS[NNET]: the WPA2-Personal network, which connects with its passphrase */
 #define NNET5     1                 /* APS[NNET5]: the WPA3-Personal network, which connects with SAE */
 #define NGUEST    2                 /* APS[NGUEST]: the open network, which connects */
+#define NCORP     3                 /* APS[NCORP]: the WPA2-Enterprise network, which signs in with EAP (eapap.h) */
 #define PEER      1                 /* its peer ID */
 #define RXQ       16
 
@@ -177,6 +231,10 @@ static const char SAE_PASSWORD[] = "nova-wpa3-password";
 static const unsigned char STA_RSN3[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
                                             0x00, 0x0f, 0xac, 8, 0xc0, 0 };
 #define AP_RSN3 (IES_WPA3 + 10)
+/* NovaCorp's: the RSN element the driver associates with (802.1X, CCMP), its beacon's */
+static const unsigned char STA_RSN_ENT[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
+                                               0x00, 0x0f, 0xac, 1, 0, 0 };
+#define AP_RSN_ENT (IES_ENT + 13)
 
 /* ---- the adapter ---- */
 typedef struct {
@@ -206,7 +264,14 @@ typedef struct {
     int               wpa3, sae, igtk_ok;
     unsigned int      sae_tid;
     SaeAp             sap;
-    unsigned char     eapol[512];
+    unsigned char     eapol[1600];
+    /* WPA2-Enterprise: the EAP sign-in with the authentication server before the 4-way handshake */
+    int               ent;
+    EapAp             eap;
+    void             *eap_work;     /* (the server answers on a worker thread: TLS wants more stack than a send has) */
+    volatile int      eap_busy;
+    unsigned char     eap_in[1600];
+    unsigned int      eap_in_len;
 } Adapter;
 enum { HS_NONE, HS_MSG1, HS_MSG3, HS_DONE, HS_GROUP1 };
 /* (SAE: what the timer indicates next, or what the station's next answer should be) */
@@ -419,10 +484,43 @@ static void dhcp_reply(Adapter *a, const unsigned char *req, unsigned int n, uns
 
 /* An EAPOL-Key frame from the station: the authenticator's half of the
  * 4-way handshake (messages 2 and 4) and of the group key handshake */
+static void start_4way(Adapter *a);
+
+/* The authentication server's answer to the station's last EAP frame (on a worker thread) */
+static NT_API void eap_work(void *ctx, void *item)
+{
+    (void)item;
+    Adapter *a = ctx;
+    unsigned int k = eap_ap_receive(&a->eap, a->eap_in, a->eap_in_len, a->eapol);
+    if (k) receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
+    if (a->eap.state == EAPS_FAILED)
+        DbgPrint("wditest: RADIUS: sign-in refused (%s): EAP-Failure\n", a->eap.why ? a->eap.why : "?");
+    if (a->eap.state == EAPS_DONE) start_4way(a);
+    __atomic_store_n(&a->eap_busy, 0, __ATOMIC_RELEASE);
+}
+
 static void eapol(Adapter *a, const unsigned char *f, unsigned int n)
 {
     const unsigned char *sta = MAC;
     if (!a->wpa2) { DbgPrint("wditest: an EAPOL frame on an open network\n"); return; }
+    if (n >= 2 && f[1] != 3) {                          /* (EAP or EAPOL-Start: the authentication server's) */
+        if (!a->ent || a->eap.state == EAPS_DONE || a->eap.state == EAPS_FAILED) {
+            DbgPrint("wditest: an EAP frame outside a sign-in\n");
+            return;
+        }
+        if (n > sizeof(a->eap_in) || __atomic_exchange_n(&a->eap_busy, 1, __ATOMIC_ACQUIRE)) {
+            DbgPrint("wditest: RADIUS: busy with the last response: an EAP frame dropped\n");
+            return;
+        }
+        copy(a->eap_in, f, n);
+        a->eap_in_len = n;
+        NdisQueueIoWorkItem(a->eap_work, eap_work, a);
+        return;
+    }
+    if (a->ent && a->eap.state != EAPS_DONE) {
+        DbgPrint("wditest: an EAPOL-Key frame before the sign-in: dropped\n");
+        return;
+    }
     if (a->hs == HS_MSG1) {
         if (!ap_msg2(&a->wpa, f, n)) {
             DbgPrint("wditest: 4-way handshake message 2 refused: %s; no message 3\n", a->wpa.why);
@@ -443,6 +541,36 @@ static void eapol(Adapter *a, const unsigned char *f, unsigned int n)
     } else {
         DbgPrint("wditest: an EAPOL frame the access point did not expect\n");
     }
+}
+
+/* Once associated (WPA2/WPA3-Personal) or signed in (WPA2-Enterprise): the 4-way handshake's message 1 */
+static void start_4way(Adapter *a)
+{
+    const Ap *ap = &APS[a->ap];
+    WpaAp *w = &a->wpa;
+    zero(w, sizeof(*w));
+    copy(w->pmk, a->wpa3 ? a->sap.pmk : a->ent ? a->eap.msk : PMK, 32);   /* (Enterprise: the MSK's first half) */
+    copy(w->aa, ap->bssid, 6);
+    copy(w->spa, MAC, 6);
+    w->ap_ie = a->wpa3 ? AP_RSN3 : a->ent ? AP_RSN_ENT : AP_RSN;
+    w->ap_ie_len = AP_RSN_LEN;
+    w->sta_ie = a->wpa3 ? STA_RSN3 : a->ent ? STA_RSN_ENT : STA_RSN;
+    w->sta_ie_len = sizeof(STA_RSN);
+    if (a->wpa3) {                                  /* (WPA3: version 0, and the IGTK) */
+        w->sae = 1;
+        for (int i = 0; i < 16; i++) w->igtk[i] = (unsigned char)(0xC0 + i);
+        w->igtk_id = 4;
+        w->ipn[0] = 1;
+    }
+    for (int i = 0; i < 32; i++) w->anonce[i] = (unsigned char)(a->tid * 31 + i * 7);
+    for (int i = 0; i < 16; i++) w->gtk[i] = (unsigned char)(0xA0 + i);
+    w->gtk_id = 1;
+    w->rsc[0] = 5;
+    unsigned int k = ap_msg1(w, a->eapol);
+    a->hs = HS_MSG1;
+    DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station%s\n",
+             a->wpa3 ? " (WPA3: from SAE's PMK)" : a->ent ? " (WPA2-Enterprise: from the EAP sign-in's PMK)" : "");
+    receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
 }
 
 /* One frame NovaOS sent: an 802.11 MSDU to the access point.  What the
@@ -727,9 +855,9 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         /* what the radio heard: two entries unsolicited as they come in, the
          * last with the task's id; then the request completes and the scan ends */
         a->port = PORT;
-        for (int i = 0; i < 2; i++) n = bss_entry(t, n, &APS[i]);
+        for (int i = 0; i < NAPS - 1; i++) n = bss_entry(t, n, &APS[i]);
         indicate(a, WDI_INDICATION_BSS_ENTRY_LIST, WDI_TRANSACTION_ID_UNSOLICIT, n);
-        n = bss_entry(t, 0, &APS[2]);
+        n = bss_entry(t, 0, &APS[NAPS - 1]);
         indicate(a, WDI_INDICATION_BSS_ENTRY_LIST, a->tid, n);
         NDIS_OID_REQUEST *r = a->pending;
         a->pending = 0;
@@ -804,7 +932,8 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         WDI_ASSOCIATION_RESULT_PARAMETERS ar;
         zero(&ar, sizeof(ar));
         ar.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
-        ar.AuthAlgorithm = a->wpa3 ? WDI_AUTH_ALGO_WPA3_SAE : a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
+        ar.AuthAlgorithm = a->wpa3 ? WDI_AUTH_ALGO_WPA3_SAE : a->ent ? WDI_AUTH_ALGO_RSNA :
+                           a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
         ar.UnicastCipherAlgorithm = ar.MulticastDataCipherAlgorithm = a->wpa2 ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
         ar.PortAuthorized = !a->wpa2;
         unsigned int m = put(r, 0, WDI_TLV_BSSID, ap->bssid, 6);
@@ -817,7 +946,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
             q[k++] = 0; q[k++] = (unsigned char)sl;
             copy(q + k, ap->ssid, sl);
             k += sl;
-            copy(q + k, a->wpa3 ? STA_RSN3 : STA_RSN, sizeof(STA_RSN));
+            copy(q + k, a->wpa3 ? STA_RSN3 : a->ent ? STA_RSN_ENT : STA_RSN, sizeof(STA_RSN));
             k += sizeof(STA_RSN);
             m = put(r, m, WDI_TLV_ASSOCIATION_REQUEST_FRAME, q, k);
         }
@@ -825,30 +954,12 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         indicate(a, WDI_INDICATION_ASSOCIATION_RESULT, a->tid, n);
         indicate(a, WDI_INDICATION_CONNECT_COMPLETE, a->tid, 0);
         DbgPrint("wditest: associated with %s, peer %u\n", ap->ssid, PEER);
-        if (a->wpa2) {                                      /* the 4-way handshake: message 1 */
-            WpaAp *w = &a->wpa;
-            zero(w, sizeof(*w));
-            copy(w->pmk, a->wpa3 ? a->sap.pmk : PMK, 32);
-            copy(w->aa, ap->bssid, 6);
-            copy(w->spa, MAC, 6);
-            w->ap_ie = a->wpa3 ? AP_RSN3 : AP_RSN;
-            w->ap_ie_len = AP_RSN_LEN;
-            w->sta_ie = a->wpa3 ? STA_RSN3 : STA_RSN;
-            w->sta_ie_len = sizeof(STA_RSN);
-            if (a->wpa3) {                                  /* (WPA3: version 0, and the IGTK) */
-                w->sae = 1;
-                for (int i = 0; i < 16; i++) w->igtk[i] = (unsigned char)(0xC0 + i);
-                w->igtk_id = 4;
-                w->ipn[0] = 1;
-            }
-            for (int i = 0; i < 32; i++) w->anonce[i] = (unsigned char)(a->tid * 31 + i * 7);
-            for (int i = 0; i < 16; i++) w->gtk[i] = (unsigned char)(0xA0 + i);
-            w->gtk_id = 1;
-            w->rsc[0] = 5;
-            unsigned int k = ap_msg1(w, a->eapol);
-            a->hs = HS_MSG1;
-            DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station%s\n", a->wpa3 ? " (WPA3: from SAE's PMK)" : "");
+        if (a->ent) {                                       /* WPA2-Enterprise: the sign-in first */
+            unsigned int k = eap_ap_start(&a->eap, a->eapol);
+            DbgPrint("wditest: RADIUS: Request/Identity to the station\n");
             receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
+        } else if (a->wpa2) {
+            start_4way(a);
         }
         break;
     }
@@ -856,8 +967,9 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         a->port = PORT;
         a->connected = 0;
         a->port_open = a->hs = a->rekeyed = a->dropped = 0;    /* (and the connection's keys are gone) */
-        a->wpa3 = a->igtk_ok = 0;
+        a->wpa3 = a->igtk_ok = a->ent = 0;
         a->sae = SAE_NONE;
+        eap_ap_clear(&a->eap);
         zero(&a->wpa, sizeof(a->wpa));
         zero(&a->sap, sizeof(a->sap));
         NDIS_STATUS st = NDIS_STATUS_SUCCESS;
@@ -1109,6 +1221,7 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = 1;
+            a->ent = 0;
             a->wpa3 = 0;
         } else if (target == NNET5) {
             /* NovaNet-5G: WPA3-Personal, SAE, CCMP, management frame protection; EAPOL exempted first */
@@ -1129,10 +1242,31 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = a->wpa3 = 1;
+            a->ent = 0;
             a->sae = SAE_ASK;
             a->sae_tid = h->TransactionId;
+        } else if (target == NCORP) {
+            /* NovaCorp: WPA2-Enterprise, 802.1X, CCMP; EAPOL exempted first (EAP goes unencrypted too) */
+            WDI_CONNECTION_SETTINGS cs;
+            unsigned int ul, ml, csl, uc = 0, mc = 0;
+            const unsigned char *u = find(cp, cl, WDI_TLV_UNICAST_CIPHER_ALGO_LIST, &ul);
+            const unsigned char *mu = find(cp, cl, WDI_TLV_MULTICAST_CIPHER_ALGO_LIST, &ml);
+            const unsigned char *c = find(cp, cl, WDI_TLV_CONNECTION_SETTINGS, &csl);
+            if (u && ul >= 4) copy(&uc, u, 4);
+            if (mu && ml >= 4) copy(&mc, mu, 4);
+            zero(&cs, sizeof(cs));
+            if (c && csl >= sizeof(cs)) copy(&cs, c, sizeof(cs));
+            DbgPrint("wditest: connect to NovaCorp: auth %u, ciphers %u/%u, exclude unencrypted %u, EAPOL exempted %s\n",
+                     algo, uc, mc, cs.ExcludeUnencrypted, a->exempt ? "yes" : "no");
+            if (algo != WDI_AUTH_ALGO_RSNA || uc != WDI_CIPHER_ALGO_CCMP || mc != WDI_CIPHER_ALGO_CCMP ||
+                !cs.ExcludeUnencrypted || !a->exempt) {
+                st = NDIS_STATUS_NOT_SUPPORTED;
+                break;
+            }
+            a->wpa2 = a->ent = 1;
+            a->wpa3 = 0;
         } else if (target == NGUEST && algo == WDI_AUTH_ALGO_80211_OPEN) {
-            a->wpa2 = a->wpa3 = 0;
+            a->wpa2 = a->wpa3 = a->ent = 0;
         } else {
             st = NDIS_STATUS_NOT_SUPPORTED;
             break;
@@ -1256,6 +1390,7 @@ static NT_API NDIS_STATUS allocate_adapter(void *handle, void *driver_ctx, NDIS_
         NdisFreeMemoryWithTagPriority(handle, a, TAG);
         return NDIS_STATUS_RESOURCES;
     }
+    a->eap_work = NdisAllocateIoWorkItem(handle);
     ra->MiniportAdapterContext = a;
     DbgPrint("wditest: adapter allocated (WDI version 0x%x)\n", wdi->WdiVersion);
     return NDIS_STATUS_SUCCESS;
@@ -1266,6 +1401,8 @@ static NT_API void free_adapter(void *ctx)
     Adapter *a = ctx;
     NdisFreeTimerObject(a->timer);
     NdisFreeTimerObject(a->rx_timer);
+    if (a->eap_work) NdisFreeIoWorkItem(a->eap_work);
+    eap_ap_clear(&a->eap);
     NdisFreeMemoryWithTagPriority(a->handle, a, TAG);
     DbgPrint("wditest: adapter freed\n");
 }

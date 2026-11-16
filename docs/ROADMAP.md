@@ -1589,6 +1589,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   turn any failure into it) with no error logged beneath.  Next: find
   that failure, then the CI check that it computes `2 + 2`, which ticks
   this step.
+  Twenty-eighth part done (Pulsar item 3, twenty-second slice): the
+  framework logs the real failure behind 0x802B000A (page loading,
+  template application, a data template's content), every error its
+  error service is given, and the name of a type the parser could not
+  resolve.  Test `wuxamltest`.  The failure is Calculator's `Pivot`
+  (the history and memory panel), a class of `Microsoft.UI.Xaml.Phone.dll`,
+  which is closed source and not in NovaOS's framework.  Next: a NovaOS
+  `Pivot` (with `PivotItem` and the header parts its `generic.xaml`
+  template names), then the CI check that it computes `2 + 2`, which
+  ticks this step.
 
 ---
 

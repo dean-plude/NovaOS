@@ -697,6 +697,19 @@ _Check_return_ HRESULT CErrorService::AddError(HRESULT hrToOriginate, _In_ IErro
     }
 
     {
+        // NovaOS: XAML reports parse and runtime errors here, then callers turn the failure
+        // into one code (E_XAMLPARSEFAILED); write each to the debug log so it is not lost.
+        WCHAR line[640];
+        xstring_ptr msg;
+        IGNOREHR(pErrorObject->GetErrorMessage(&msg));
+        swprintf_s(line, L"xaml: error %u hr=0x%08x line %u col %u: %.500s\n",
+            pErrorObject->GetErrorCode(), static_cast<unsigned>(hrToOriginate),
+            pErrorObject->GetLineNumber(), pErrorObject->GetCharPosition(),
+            msg.IsNullOrEmpty() ? L"(no message)" : msg.GetBuffer());
+        ::OutputDebugStringW(line);
+    }
+
+    {
         auto lock = m_CSError.lock();
 
         if(!m_pErrorList)

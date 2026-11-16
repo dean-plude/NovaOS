@@ -1809,5 +1809,21 @@ vendors.
    so the object answers Windows' `IEntranceNavigationTransitionInfo`.
    Test: `wuxamltest` (the transition info activated by its Windows name).
 
+   Pulsar item 3, twenty-second slice: the error behind a parse failure.
+   `FrameworkApplication::LoadComponent`, `Control::ApplyTemplate` and
+   `DataTemplate::LoadContent` translate any failure into
+   E_XAMLPARSEFAILED (0x802B000A) for the CLR; NovaOS writes the original
+   HRESULT to the debug log first.  `CErrorService::AddError`
+   (`core/error/ErrorService.cpp`) logs each parser and runtime error
+   (code, HRESULT, line, column, message), and `XamlType::CreateInstance`
+   (`core/Parser/XamlType.cpp`) names an unresolved type (an
+   `UnknownType`, whose runtime kind is neither native nor managed) before
+   `XamlSchemaContext::GetRuntime` fails it with a bare E_FAIL.  That
+   showed Calculator's stop: its `Pivot`, which the framework looks for
+   through `XamlLibMetadataProvider` in `Microsoft.UI.Xaml.Phone.dll`, a
+   closed Windows App SDK library (the open-source tree has only its
+   `generic.xaml` style).  Test: `wuxamltest` (markup with an unknown
+   element fails, with the parser's error logged).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

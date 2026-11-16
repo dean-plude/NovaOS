@@ -738,6 +738,12 @@ static int wifi_row_y(const Settings *st, int y, int i)
     return y + 88 + i * WIFI_ROW_H + (st->wifi_sel >= 0 && i > st->wifi_sel ? WIFI_FORM_H : 0);
 }
 static bool wifi_secured(const WlanBss *b) { return b->privacy || b->rsn_len; }
+/* WPA2-Enterprise only (802.1X, AKM 1, without PSK or SAE): no key needed
+ * when a certificate is in the personal store (EAP-TLS) */
+static bool wifi_enterprise(const WlanBss *b)
+{
+    return (b->akms & (1u << 1)) && !(b->akms & ((1u << 2) | (1u << 8)));
+}
 static GdiRect r_wifi_key(const Settings *st, int x, int y, int w)
 {
     return RECT(x + 16, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, w - 32 - 112, 32);
@@ -757,7 +763,7 @@ static void wifi_connect(Settings *st)
 {
     if (st->wifi_job || st->wifi_sel < 0 || st->wifi_sel >= st->wifi_n) return;
     const WlanBss *b = &st->wifi_bss[st->wifi_sel];
-    if (wifi_secured(b) && !st->wifi_key[0]) {
+    if (wifi_secured(b) && !st->wifi_key[0] && !(wifi_enterprise(b) && NetPersonalCount())) {
         ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", b->ssid);
         return;
     }
@@ -816,8 +822,13 @@ static bool wifi_poll(Settings *st)
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
                                          "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
-        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: sign in from "
-                                         "the Terminal with netsh wlan connect user= key=.", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: import your "
+                                         "certificate (certutil -importpfx), or sign in from the Terminal with netsh "
+                                         "wlan connect user= key=.", s); break;
+        case WLAN_UNTRUSTED:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" has a "
+                                         "certificate from a root that is not trusted.", s); break;
+        case WLAN_CERT_REFUSED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" did not "
+                                          "accept your certificate.", s); break;
         default:               ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Can't connect to \"%s\" (0x%08x).", s, status);
         }
         if (r != WLAN_OK) kprintf("[SETTINGS] Wi-Fi: %s\n", st->wifi_note);

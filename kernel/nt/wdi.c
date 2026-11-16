@@ -1072,8 +1072,15 @@ static void eap_frame(WdiHost *w, const UINT8 *frame, UINT32 n)
     memset(reply, 0, rl);
     if (r == EAP_SUCCESS) {
         memcpy(w->wpa.pmk, w->eap.msk, WPA_PMK_LEN);    /* (the PMK: the MSK's first half) */
-        kprintf("[EAP] %s: signed in as %s with PEAP (MS-CHAPv2) to server %s: EAP-Success, PMK from the tunnel\n",
-                w->info.service, w->eap.identity, w->eap.server[0] ? w->eap.server : "?");
+        if (w->eap.method == EAP_METHOD_TLS) {
+            char cert[64];
+            if (!NetPersonalName(w->eap.cert, cert, sizeof(cert), NULL, 0)) strcpy(cert, "?");
+            kprintf("[EAP] %s: signed in as %s with EAP-TLS (certificate %s) to server %s: EAP-Success, PMK from "
+                    "the TLS keys\n", w->info.service, w->eap.identity, cert, w->eap.server[0] ? w->eap.server : "?");
+        } else {
+            kprintf("[EAP] %s: signed in as %s with PEAP (MS-CHAPv2) to server %s: EAP-Success, PMK from the tunnel\n",
+                    w->info.service, w->eap.identity, w->eap.server[0] ? w->eap.server : "?");
+        }
     } else if (r == EAP_FAILURE) {
         kprintf("[EAP] %s: the sign-in failed: %s\n", w->info.service, w->eap.why ? w->eap.why : "EAP-Failure");
     }
@@ -1453,7 +1460,9 @@ static int security_of(const WlanBss *b, const char *key, const char *user, UINT
     else if ((b->akms & (1u << WPA_AKM_PSK)) && !(b->rsn_caps & 0x40)) *akm = WPA_AKM_PSK;  /* (no required MFP) */
     else if ((b->akms & (1u << WPA_AKM_8021X)) && !(b->rsn_caps & 0x40)) {
         *akm = WPA_AKM_8021X;                           /* (WPA2-Enterprise: EAP signs in) */
-        return user && user[0] && key && key[0] ? WLAN_OK : WLAN_NEEDS_USER;
+        if (key && key[0]) return user && user[0] ? WLAN_OK : WLAN_NEEDS_USER;     /* (PEAP: a user and password) */
+        if (NetPersonalFind(user) >= 0) return WLAN_OK; /* (EAP-TLS: the user's certificate) */
+        return user && user[0] ? WLAN_NO_CERT : WLAN_NEEDS_USER;
     }
     else return WLAN_UNSUPPORTED;
     return key && key[0] ? WLAN_OK : WLAN_NEEDS_KEY;
@@ -1640,6 +1649,7 @@ static int handshake_locked(WdiHost *w, UINT8 *buf)
                         w->eap.started ? "the server stopped answering" : "no EAP request came");
             EapClear(&w->eap);
             return res == EAP_RESULT_BAD_PASSWORD ? WLAN_BAD_KEY : res == EAP_RESULT_UNTRUSTED ? WLAN_UNTRUSTED :
+                   res == EAP_RESULT_CERT_REFUSED ? WLAN_CERT_REFUSED :
                    WLAN_FAILED;
         }
         EapClear(&w->eap);                              /* (the password and the tunnel: not kept) */
@@ -1682,7 +1692,13 @@ int WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UI
     if (r == WLAN_OK && akm == WPA_AKM_PSK && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
     if (r == WLAN_OK && sae && (strlen(key) < 8 || strlen(key) >= sizeof(w->sae_password))) r = WLAN_KEY_FORMAT;
     if (r == WLAN_OK && sae && !w->sae_buf && !(w->sae_buf = kmalloc(CMD_BUF))) r = WLAN_FAILED;
-    if (r == WLAN_OK && enterprise && !EapStart(&w->eap, user, key)) r = WLAN_KEY_FORMAT;
+    if (r == WLAN_OK && enterprise && key && key[0] && !EapStart(&w->eap, user, key)) r = WLAN_KEY_FORMAT;
+    if (r == WLAN_OK && enterprise && !(key && key[0])) {   /* (EAP-TLS: as the user, else as the certificate) */
+        int cert = NetPersonalFind(user);
+        char name[EAP_NAME_MAX];
+        if (cert < 0 || !NetPersonalName(cert, name, sizeof(name), NULL, 0)) r = WLAN_NO_CERT;
+        else if (!EapStartCert(&w->eap, user && user[0] ? user : name, cert)) r = WLAN_KEY_FORMAT;
+    }
     if (r != WLAN_OK) {
         unlock(w);
         kfree(buf);

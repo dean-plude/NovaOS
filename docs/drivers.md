@@ -674,10 +674,16 @@ WPA2-Enterprise networks sign in with PEAP and MS-CHAPv2
 key=PASSWORD`): the EAP packets go over EAPOL under the same exemption as
 the 4-way handshake's frames, the TLS tunnel is an EAP session of
 `net/tls.c` that checks the server's certificate against the trusted
-roots, and the MSK it gives is the 4-way handshake's PMK.
+roots, and the MSK it gives is the 4-way handshake's PMK.  Without a
+password (`user=NAME` alone) they sign in with EAP-TLS instead: the
+station's Nak asks for it when the server offers PEAP, and the same TLS
+session sends the user's certificate and signs with its key when the
+server asks.  The certificate comes from the personal store, which
+`certutil -importpfx` fills from a PKCS #12 file (`kernel/net/pfx.c`:
+PBES2 with AES or TripleDES-SHA1 bags, the HMAC integrity check).
 
 What is missing: SAE's hash-to-element and groups other than P-256,
-EAP-TLS and WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
+WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
 the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
 joining on the real card, the rest of roadmap step 28.1, needs the T14.
@@ -687,7 +693,8 @@ own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
 QEMU's `edu` card whose radio hears four access points (WPA2-Personal on
 2.4 GHz, WPA3-Personal on 5 GHz, an open network and WPA2-Enterprise, each
 one an access point it plays, the last with its authentication server:
-`tools/drivertest/eapap.h`, PEAP on Mbed TLS built into the driver), and
+`tools/drivertest/eapap.h`, PEAP and EAP-TLS on Mbed TLS built into the
+driver), and
 whose TAL plays a
 small router at 192.168.77.1 behind the open network (ARP, DHCP, ping).
 The test installs it with `pnputil` and checks the messages and data
@@ -706,7 +713,10 @@ pairwise, group and management group keys and rekeys both group keys.
 Then it signs in to the Enterprise network: refused while the server's
 root is not trusted, refused with a wrong password once `certutil` trusts
 it, and with the right one the 4-way handshake runs from the sign-in's
-PMK. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
+PMK.  Then EAP-TLS: `certutil -importpfx` refuses `alice.pfx` with a wrong
+password and imports it and `mallory.pfx`; mallory's self-signed
+certificate is refused by the server with a TLS alert, and alice's (from
+NovaCorp Test Root) signs in. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
 notification, the network and BSS lists, a profile, a wrong passphrase
 refused with the key-mismatch reason, joining by profile and by SSID),
 and the test joins the WPA2 network in Settings' Wi-Fi page by typing,

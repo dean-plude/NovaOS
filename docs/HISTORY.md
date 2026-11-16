@@ -16661,6 +16661,38 @@ create one (`xaml: cannot create NAME: type not resolved`).
   NovaOS's framework, so the parser cannot resolve it and loading the page
   fails with E_FAIL.  The page does not draw yet.
 
+## Packaged apps in the shell, first part: the Start menu and Settings > Apps
+
+The first part of item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
+An installed app package's applications now appear in the Start menu as
+Windows lists packaged apps: from the package repository, not from
+shortcuts.  `appx` records each application's tile logo (the manifest's
+`Square44x44Logo`, else `Square150x150Logo`, found on disk as a scale or
+target-size variant the way Windows' resource lookup picks one, a target
+size of 48 first, then the scales from 200 down) and its `AppListEntry`;
+the Start menu reads the current account's packages, leaves out
+frameworks and `AppListEntry="none"` applications, shows each one by its
+display name with its logo, and starts it in its package's folder, so it
+runs with its package identity.  `appx` no longer writes `.lnk` files
+(removing a package installed before still deletes its old shortcut).
+
+Settings has a new **Apps** page (`ms-settings:appsfeatures`,
+`kernel/apps/settings_apps.c`): the installed packages with their logo,
+publisher and version and an **Uninstall** button that asks first, then
+runs `appx remove` as the system, without a UAC prompt, as Windows'
+deployment service removes a Store app.  Up and Down pick an app, Delete
+asks, Enter confirms.
+
+- **Tests:** the core suite's `889-appxshell.py` installs the test
+  package, starts it from the Start menu by its manifest name (its
+  program writes the application user model id it runs as) and
+  uninstalls it from Settings > Apps; `appxtest` checks the recorded logo
+  (the scale-200 variant of the test package's new logo) and that it goes
+  with the package.
+- **Left:** suspend and resume (`CoreApplication.Suspending` and
+  `Resuming` when a package's window is minimised and restored), the
+  item's second part.
+
 ## Battery life, second part: runtime idle and low-power idle states
 
 The second part of step 28.4 ([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)),
@@ -16734,6 +16766,61 @@ which merged that day, ended both.
   in 0.2.3's plan is gone.  If a Venus hang ever comes back, the
   2026-10-21 entry says how to read the hang dump, starting with the
   virtio GPU's "requests out".
+
+## Wi-Fi: WPA2-Enterprise networks sign in with a certificate (EAP-TLS)
+
+Seventh part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)).  NovaOS signed in to WPA2-Enterprise
+networks with a user name and password (PEAP).  Now it also signs in with
+a certificate, Windows' "smart card or other certificate" (EAP-TLS,
+RFC 5216), which many companies use instead of passwords.
+
+- **`certutil -p PASSWORD -importpfx FILE`** reads a PKCS #12 file
+  (`.pfx`/`.p12`, RFC 7292; `kernel/net/pfx.c`) into a new personal store
+  ("My"): the certificate that goes with the private key, the rest of its
+  chain, and the key.  It reads what Windows and OpenSSL write: bags in
+  the clear or encrypted with PBES2 (PBKDF2 with AES, Windows' default
+  since 2017 and OpenSSL 3's) or PKCS #12's TripleDES-SHA1 (Mbed TLS's
+  `MBEDTLS_PKCS12_C`, now on in the kernel), keys in keyBags or shrouded
+  ones, and the HMAC-SHA-1/SHA-256 integrity MAC, so a wrong password is
+  refused ("The specified network password is not correct").  RC2, which
+  OpenSSL 1.x used for certificates, is not there: Mbed TLS has none.
+  `certutil -store my` lists the store.  It lasts until NovaOS restarts,
+  as `certutil -addstore root` does.
+- **`netsh wlan connect name=SSID user=NAME`** with no `key=` signs in with
+  NAME's certificate (its common name, or the name without a `DOMAIN\` or
+  `@realm`); with neither, the newest certificate.  Settings' Wi-Fi page,
+  which has no user name box yet, joins such a network the same way once
+  a certificate is in the store.
+- **The EAP peer** (`kernel/nt/eap.c`) asks for the method it can do: a
+  Nak naming EAP-TLS when the server offers PEAP and the user has a
+  certificate (and PEAP when the server offers EAP-TLS and the user has a
+  password).  EAP-TLS runs the same TLS 1.2 handshake in the same
+  fragments as PEAP's tunnel, now with the certificate and its key
+  (`net/tls.c`'s EAP sessions take one from the personal store), the
+  server's certificate still checked against the trusted roots; nothing
+  runs inside, and the MSK comes from the same "client EAP encryption"
+  keying material.
+- **Clear errors**: a user with no certificate ("There is no certificate
+  for that user in the personal store"), and a server that refuses the
+  certificate with its TLS alert ("did not accept the certificate").
+
+`wditest.sys`'s authentication server (`tools/drivertest/eapap.h`) does
+EAP-TLS too, as FreeRADIUS does with its CA file: on the station's Nak it
+starts EAP-TLS, asks for the certificate, checks it chains to "NovaCorp
+Test Root", and sends its alert in a request before EAP-Failure when it
+does not.  `tools/drivertest/mksys.py` makes two client certificates from
+fixed seeds in PKCS #12 files beside the driver: `alice.pfx` (under the
+test root, with the root as an exported chain has it) and `mallory.pfx`
+(self-signed).  The `wifi` boot imports both (a wrong password refused
+first), lists the store, is told a user without a certificate has none,
+is refused with mallory's, signs in with alice's and pings over the
+connection.  The host test (`tests/tools/test_eap_peap.py`) runs both
+EAP-TLS sign-ins between the kernel's peer and the server, and reads
+PKCS #12 files OpenSSL encrypts with AES-256 and with TripleDES, with the
+right and a wrong password.  Not yet: WPA3-Enterprise, Enterprise
+profiles in `wlanapi.dll` and Settings, PEAP's cryptobinding, and keeping
+imported certificates across restarts; the real card needs the T14.
 
 ## Wi-Fi: WPA2-Enterprise networks sign in with PEAP
 

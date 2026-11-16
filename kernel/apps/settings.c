@@ -814,7 +814,9 @@ static bool wifi_poll(Settings *st)
         case WLAN_NEEDS_KEY:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", s);
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
-                                         "support yet (WEP, WPA or Enterprise).", s); break;
+                                         "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: sign in from "
+                                         "the Terminal with netsh wlan connect user= key=.", s); break;
         default:               ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Can't connect to \"%s\" (0x%08x).", s, status);
         }
         if (r != WLAN_OK) kprintf("[SETTINGS] Wi-Fi: %s\n", st->wifi_note);

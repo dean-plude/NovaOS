@@ -470,7 +470,8 @@ netsh interface ipv4 show config
 Changes take effect at once and are kept across restarts, in the registry
 under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`.
 
-**Wi-Fi** connects to open, WPA2-Personal and WPA3-Personal networks.
+**Wi-Fi** connects to open, WPA2-Personal, WPA3-Personal and
+WPA2-Enterprise networks.
 With a Wi-Fi card whose Windows driver NovaOS can open, **Settings >
 Wi-Fi** shows the card and whether it is connected, and lists the
 networks in range with their security and signal (Refresh, or F5, looks
@@ -483,11 +484,19 @@ netsh wlan show interfaces
 netsh wlan show networks mode=bssid
 netsh wlan connect name=CoffeeShop
 netsh wlan connect name=HomeNetwork key=MyPassphrase
+netsh wlan connect name=OfficeWiFi user=CORP\jsmith key=MyPassword
 netsh wlan disconnect
 ```
 
 `key=` is the network's passphrase (WPA2) or password (WPA3, which
-NovaOS uses whenever the network offers it).
+NovaOS uses whenever the network offers it).  A WPA2-Enterprise network
+(an office's or a university's) takes your user name with `user=` and
+your password with `key=`; NovaOS signs in with PEAP (MS-CHAPv2), as
+Windows does by default.  Before it sends the password it checks the
+network's sign-in server has a certificate from a trusted root; if your
+organisation uses its own certificate authority, trust it first with
+`certutil -addstore root company-ca.cer`.  Settings cannot sign in to
+these networks yet.
 
 Windows programs that manage Wi-Fi use the Native Wifi API
 (`wlanapi.dll`): the adapters, scans, the networks and access points in

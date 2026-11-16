@@ -2794,7 +2794,7 @@
  * \warning   DES/3DES are considered weak ciphers and their use constitutes a
  *            security risk. We recommend considering stronger ciphers instead.
  */
-//#define MBEDTLS_DES_C
+#define MBEDTLS_DES_C   /* NovaOS: MS-CHAPv2 (WPA2-Enterprise's PEAP, nt/eap.c) */
 
 /**
  * \def MBEDTLS_DHM_C

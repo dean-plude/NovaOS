@@ -175,6 +175,7 @@ _Static_assert(sizeof(CONNECTION_ATTRIBUTES_) == 604, "WLAN_CONNECTION_ATTRIBUTE
 #define IF_ASSOCIATING   5
 /* DOT11_AUTH_ALGORITHM, DOT11_CIPHER_ALGORITHM, DOT11_PHY_TYPE */
 #define AUTH_OPEN      1
+#define AUTH_RSNA      6           /* (802.1X: WPA2-Enterprise) */
 #define AUTH_RSNA_PSK  7
 #define AUTH_WPA3_SAE  9
 #define CIPHER_NONE    0
@@ -366,7 +367,7 @@ static void ssid_of(const NovaWlanBss *b, DOT11_SSID_ *s)
 static DWORD auth_of(const NovaWlanBss *b)
 {
     return b->security == NOVAWLAN_WPA3 ? AUTH_WPA3_SAE : b->security == NOVAWLAN_WPA2 ? AUTH_RSNA_PSK :
-           b->security == NOVAWLAN_OPEN ? AUTH_OPEN : AUTH_RSNA_PSK;
+           b->security == NOVAWLAN_ENTERPRISE ? AUTH_RSNA : b->security == NOVAWLAN_OPEN ? AUTH_OPEN : AUTH_RSNA_PSK;
 }
 
 WLAPI DWORD WINAPI WlanEnumInterfaces(HANDLE h, PVOID reserved, IF_LIST_ **out)
@@ -678,7 +679,8 @@ WLAPI DWORD WINAPI WlanGetAvailableNetworkList(HANDLE h, const GUID *g, DWORD fl
         ssid_of(&b[k], &e->dot11Ssid);
         e->dot11BssType = 1;                                       /* (dot11_BSS_type_infrastructure) */
         e->uNumberOfBssids = 1;
-        e->bNetworkConnectable = b[k].security != NOVAWLAN_OTHER;
+        /* (WPA2-Enterprise: netsh signs in with user=; profiles with EAP settings are not read yet) */
+        e->bNetworkConnectable = b[k].security != NOVAWLAN_OTHER && b[k].security != NOVAWLAN_ENTERPRISE;
         e->wlanNotConnectableReason = e->bNetworkConnectable ? REASON_SUCCESS : REASON_NETWORK_NOT_COMPATIBLE;
         e->uNumberOfPhyTypes = 1;
         e->dot11PhyTypes[0] = g_phy[b[k].phy & 3];

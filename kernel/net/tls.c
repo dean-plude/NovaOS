@@ -494,3 +494,179 @@ const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap)
     ksnprintf(buf, cap, "TLS error: %s", e);
     return buf;
 }
+
+/* -----------------------------------------------------------------------
+ * EAP sessions (tls.h): TLS 1.2 over memory, for PEAP's tunnel
+ * ----------------------------------------------------------------------- */
+#include "net_internal.h"
+
+#define EAP_TLS_BUF 32768
+
+struct TlsEap {
+    mbedtls_ssl_context ssl;
+    UINT8  *in, *out;           /* ciphertext from the server not yet read; to it not yet taken */
+    UINT32  in_len, in_off, out_len;
+    UINT32  verify;             /* mbedtls_ssl_get_verify_result after a failed handshake */
+};
+
+static mbedtls_ssl_config g_eap_conf;
+static bool               g_eap_ready;
+
+static int eap_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    TlsEap *e = ctx;
+    if (len > EAP_TLS_BUF - e->out_len) len = EAP_TLS_BUF - e->out_len;
+    if (!len) return MBEDTLS_ERR_SSL_WANT_WRITE;
+    memcpy(e->out + e->out_len, buf, len);
+    e->out_len += (UINT32)len;
+    return (int)len;
+}
+
+static int eap_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    TlsEap *e = ctx;
+    UINT32 left = e->in_len - e->in_off;
+    if (!left) return MBEDTLS_ERR_SSL_WANT_READ;
+    if (len > left) len = left;
+    memcpy(buf, e->in + e->in_off, len);
+    e->in_off += (UINT32)len;
+    if (e->in_off == e->in_len) e->in_off = e->in_len = 0;
+    return (int)len;
+}
+
+TlsEap *TlsEapNew(void)
+{
+    net_lock();
+    TlsEap *e = NULL;
+    if (!g_ready) goto out;
+    if (!g_eap_ready) {
+        /* PEAP's TLS: 1.2 (RFC 9427's TLS 1.3 for EAP is not what Windows' PEAP sends), the
+         * server's certificate checked against the trusted roots; no session tickets */
+        mbedtls_ssl_config_init(&g_eap_conf);
+        if (mbedtls_ssl_config_defaults(&g_eap_conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                        MBEDTLS_SSL_PRESET_DEFAULT))
+            goto out;
+        mbedtls_ssl_conf_authmode(&g_eap_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+        mbedtls_ssl_conf_ca_chain(&g_eap_conf, &g_roots, NULL);
+        mbedtls_ssl_conf_rng(&g_eap_conf, mbedtls_ctr_drbg_random, &g_drbg);
+        mbedtls_ssl_conf_min_tls_version(&g_eap_conf, MBEDTLS_SSL_VERSION_TLS1_2);
+        mbedtls_ssl_conf_max_tls_version(&g_eap_conf, MBEDTLS_SSL_VERSION_TLS1_2);
+        mbedtls_ssl_conf_session_tickets(&g_eap_conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+        g_eap_ready = true;
+    }
+    e = kmalloc(sizeof(*e));
+    if (!e) goto out;
+    memset(e, 0, sizeof(*e));
+    e->in = kmalloc(EAP_TLS_BUF);
+    e->out = kmalloc(EAP_TLS_BUF);
+    mbedtls_ssl_init(&e->ssl);
+    if (!e->in || !e->out || mbedtls_ssl_setup(&e->ssl, &g_eap_conf) ||
+        mbedtls_ssl_set_hostname(&e->ssl, NULL)) {      /* (no host name: the server's is not a web address) */
+        mbedtls_ssl_free(&e->ssl);
+        if (e->in) kfree(e->in);
+        if (e->out) kfree(e->out);
+        kfree(e);
+        e = NULL;
+        goto out;
+    }
+    mbedtls_ssl_set_bio(&e->ssl, e, eap_send, eap_recv, NULL);
+out:
+    net_unlock();
+    return e;
+}
+
+void TlsEapInput(TlsEap *e, const void *data, UINT32 len)
+{
+    if (e->in_off) {
+        memmove(e->in, e->in + e->in_off, e->in_len - e->in_off);
+        e->in_len -= e->in_off;
+        e->in_off = 0;
+    }
+    if (len > EAP_TLS_BUF - e->in_len) len = EAP_TLS_BUF - e->in_len;
+    memcpy(e->in + e->in_len, data, len);
+    e->in_len += len;
+}
+
+int TlsEapHandshake(TlsEap *e)
+{
+    net_lock();
+    int r = mbedtls_ssl_handshake(&e->ssl);
+    if (r == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) e->verify = mbedtls_ssl_get_verify_result(&e->ssl);
+    net_unlock();
+    if (!r) return 1;
+    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) return TLS_AGAIN;
+    char why[96];
+    kprintf("[TLS] EAP tunnel: handshake failed: %s\n", TlsEapErrorText(e, r, why, sizeof(why)));
+    return r;
+}
+
+UINT32 TlsEapPending(TlsEap *e) { return e->out_len; }
+
+UINT32 TlsEapOutput(TlsEap *e, UINT8 *out, UINT32 cap)
+{
+    UINT32 n = e->out_len < cap ? e->out_len : cap;
+    memcpy(out, e->out, n);
+    memmove(e->out, e->out + n, e->out_len - n);
+    e->out_len -= n;
+    return n;
+}
+
+int TlsEapWrite(TlsEap *e, const void *data, UINT32 len)
+{
+    net_lock();
+    int r = mbedtls_ssl_write(&e->ssl, data, len);
+    net_unlock();
+    return r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE ? TLS_AGAIN : r;
+}
+
+int TlsEapRead(TlsEap *e, void *buf, UINT32 cap)
+{
+    net_lock();
+    int r = mbedtls_ssl_read(&e->ssl, buf, cap);
+    net_unlock();
+    return r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE ? TLS_AGAIN : r;
+}
+
+bool TlsEapUntrusted(TlsEap *e) { return e->verify != 0; }
+
+const char *TlsEapErrorText(TlsEap *e, int err, char *buf, int cap)
+{
+    if (err == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED && (e->verify & MBEDTLS_X509_BADCERT_NOT_TRUSTED))
+        return "Certificate is not trusted (unknown certificate authority)";
+    if (err == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+        ksnprintf(buf, cap, "Certificate verification failed (flags 0x%x)", e->verify);
+        return buf;
+    }
+    return TlsErrorText(NULL, err, buf, cap);
+}
+
+bool TlsEapExportKey(TlsEap *e, const char *label, UINT8 *out, UINT32 len)
+{
+    net_lock();
+    int r = mbedtls_ssl_export_keying_material(&e->ssl, out, len, label, strlen(label), NULL, 0, 0);
+    net_unlock();
+    return r == 0;
+}
+
+void TlsEapPeerName(TlsEap *e, char *buf, int cap)
+{
+    buf[0] = '\0';
+    const mbedtls_x509_crt *c = mbedtls_ssl_get_peer_cert(&e->ssl);
+    if (!c) return;
+    for (const mbedtls_x509_name *n = &c->subject; n; n = n->next)
+        if (!MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid)) copy_str(&n->val, buf, cap);
+}
+
+void TlsEapRandom(UINT8 *out, UINT32 len) { TlsEntropyOutput(out, len); }
+
+void TlsEapFree(TlsEap *e)
+{
+    net_lock();
+    mbedtls_ssl_free(&e->ssl);
+    net_unlock();
+    memset(e->in, 0, EAP_TLS_BUF);
+    memset(e->out, 0, EAP_TLS_BUF);
+    kfree(e->in);
+    kfree(e->out);
+    kfree(e);
+}

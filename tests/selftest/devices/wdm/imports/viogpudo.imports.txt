@@ -1,0 +1,62 @@
+# Import list of viogpudo.sys, extracted from the real signed driver with
+# tools/ci/check-driver-imports.py --dump (do not edit by hand).  The
+# import-coverage check (the same tool) verifies every ntoskrnl.exe and
+# hal.dll import below is provided by kernel/nt/exports.h, and every
+# wdfldr.sys import by NovaOS's WdfLdr.sys (tools/kmdf/wdfldr.c).
+hal.dll	KeStallExecutionProcessor
+ntoskrnl.exe	ExAllocatePoolWithTag
+ntoskrnl.exe	ExFreePoolWithTag
+ntoskrnl.exe	ExInterlockedInsertTailList
+ntoskrnl.exe	ExInterlockedRemoveHeadList
+ntoskrnl.exe	IoAllocateMdl
+ntoskrnl.exe	IoBuildDeviceIoControlRequest
+ntoskrnl.exe	IoCreateNotificationEvent
+ntoskrnl.exe	IoFreeMdl
+ntoskrnl.exe	IoGetDeviceObjectPointer
+ntoskrnl.exe	IoOpenDeviceRegistryKey
+ntoskrnl.exe	IofCallDriver
+ntoskrnl.exe	KdDebuggerEnabled
+ntoskrnl.exe	KdDebuggerNotPresent
+ntoskrnl.exe	KeAcquireSpinLockAtDpcLevel
+ntoskrnl.exe	KeAcquireSpinLockRaiseToDpc
+ntoskrnl.exe	KeBugCheck
+ntoskrnl.exe	KeClearEvent
+ntoskrnl.exe	KeDelayExecutionThread
+ntoskrnl.exe	KeFlushQueuedDpcs
+ntoskrnl.exe	KeGetCurrentIrql
+ntoskrnl.exe	KeInitializeEvent
+ntoskrnl.exe	KeInitializeSpinLock
+ntoskrnl.exe	KeReleaseSpinLock
+ntoskrnl.exe	KeReleaseSpinLockFromDpcLevel
+ntoskrnl.exe	KeSetEvent
+ntoskrnl.exe	KeSetPriorityThread
+ntoskrnl.exe	KeWaitForSingleObject
+ntoskrnl.exe	MmAllocateContiguousMemory
+ntoskrnl.exe	MmFreeContiguousMemory
+ntoskrnl.exe	MmGetPhysicalAddress
+ntoskrnl.exe	MmIsAddressValid
+ntoskrnl.exe	MmMapIoSpace
+ntoskrnl.exe	MmProbeAndLockPages
+ntoskrnl.exe	MmUnlockPages
+ntoskrnl.exe	MmUnmapIoSpace
+ntoskrnl.exe	ObReferenceObjectByHandle
+ntoskrnl.exe	ObfDereferenceObject
+ntoskrnl.exe	ObfReferenceObject
+ntoskrnl.exe	PsCreateSystemThread
+ntoskrnl.exe	PsTerminateSystemThread
+ntoskrnl.exe	RtlAnsiStringToUnicodeString
+ntoskrnl.exe	RtlAssert
+ntoskrnl.exe	RtlFreeUnicodeString
+ntoskrnl.exe	RtlInitAnsiString
+ntoskrnl.exe	RtlInitUnicodeString
+ntoskrnl.exe	RtlIntegerToUnicodeString
+ntoskrnl.exe	ZwClose
+ntoskrnl.exe	ZwLoadDriver
+ntoskrnl.exe	ZwQueryValueKey
+ntoskrnl.exe	ZwSetValueKey
+ntoskrnl.exe	ZwUnloadDriver
+ntoskrnl.exe	__C_specific_handler
+ntoskrnl.exe	__chkstk
+ntoskrnl.exe	_purecall
+ntoskrnl.exe	_vsnwprintf
+ntoskrnl.exe	vDbgPrintEx

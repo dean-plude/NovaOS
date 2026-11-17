@@ -16661,6 +16661,35 @@ create one (`xaml: cannot create NAME: type not resolved`).
   NovaOS's framework, so the parser cannot resolve it and loading the page
   fails with E_FAIL.  The page does not draw yet.
 
+## Bluetooth: Settings' Bluetooth & devices page and reconnects the device starts
+
+The rest of roadmap step 28.2 that QEMU can show
+([drivers.md](../drivers.md#bluetooth-bthusb-and-the-host-stack)).
+
+- **Device-started reconnects** (`kernel/nt/bthport.c`, `hidbth.c`,
+  `bthaudio.c`): the host used to refuse every Connection Request, so a
+  mouse moved after sleep waited up to 10 seconds for NovaOS to page it.
+  Now a paired device with a service on is accepted; it authenticates
+  with its stored key and encrypts the link, and a mouse or keyboard
+  opens HID's control and interrupt channels itself, which the host gives
+  to the device's `hidbth` node (others are refused). If it opens none
+  within three seconds, `hidbth` opens them; a headset that connects gets
+  its profiles opened at once.
+- **Settings > Bluetooth & devices** (`kernel/apps/settings_bluetooth.c`,
+  a new page after System, found by "bluetooth" and
+  `ms-settings:bluetooth`): the radio, paired devices with their state,
+  and the devices a search found; **Add device** searches, **Pair** pairs
+  and switches the device's services on as Windows does, **Remove
+  device** forgets it, all in the background through the host code
+  `bthprops.cpl` uses.
+- **Tests:** the devices suite's `bluetooth` boot: `bttest reconnect`
+  (tools/btpeer.py's new `away mouse` and `back mouse`: the mouse's link
+  drops, then it pages the PC, authenticates, encrypts and opens its HID
+  channels) and `bttest settings` (the mouse paired in Settings with
+  Start, "bluetooth", Down, Enter, then moving the cursor).
+- **Not yet:** pairing a real mouse and headset on the T14 with Intel's
+  driver, including after sleep (Dean's check that ticks 28.2).
+
 ## GPU objects shared by NT handle, and 32-bit programs' D3DKMT calls
 
 Direct3D 12 and Vulkan share GPU memory and fences between processes and
@@ -16836,6 +16865,61 @@ which merged that day, ended both.
   2026-10-21 entry says how to read the hang dump, starting with the
   virtio GPU's "requests out".
 
+## Wi-Fi: WPA2-Enterprise networks sign in with a certificate (EAP-TLS)
+
+Seventh part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)).  NovaOS signed in to WPA2-Enterprise
+networks with a user name and password (PEAP).  Now it also signs in with
+a certificate, Windows' "smart card or other certificate" (EAP-TLS,
+RFC 5216), which many companies use instead of passwords.
+
+- **`certutil -p PASSWORD -importpfx FILE`** reads a PKCS #12 file
+  (`.pfx`/`.p12`, RFC 7292; `kernel/net/pfx.c`) into a new personal store
+  ("My"): the certificate that goes with the private key, the rest of its
+  chain, and the key.  It reads what Windows and OpenSSL write: bags in
+  the clear or encrypted with PBES2 (PBKDF2 with AES, Windows' default
+  since 2017 and OpenSSL 3's) or PKCS #12's TripleDES-SHA1 (Mbed TLS's
+  `MBEDTLS_PKCS12_C`, now on in the kernel), keys in keyBags or shrouded
+  ones, and the HMAC-SHA-1/SHA-256 integrity MAC, so a wrong password is
+  refused ("The specified network password is not correct").  RC2, which
+  OpenSSL 1.x used for certificates, is not there: Mbed TLS has none.
+  `certutil -store my` lists the store.  It lasts until NovaOS restarts,
+  as `certutil -addstore root` does.
+- **`netsh wlan connect name=SSID user=NAME`** with no `key=` signs in with
+  NAME's certificate (its common name, or the name without a `DOMAIN\` or
+  `@realm`); with neither, the newest certificate.  Settings' Wi-Fi page,
+  which has no user name box yet, joins such a network the same way once
+  a certificate is in the store.
+- **The EAP peer** (`kernel/nt/eap.c`) asks for the method it can do: a
+  Nak naming EAP-TLS when the server offers PEAP and the user has a
+  certificate (and PEAP when the server offers EAP-TLS and the user has a
+  password).  EAP-TLS runs the same TLS 1.2 handshake in the same
+  fragments as PEAP's tunnel, now with the certificate and its key
+  (`net/tls.c`'s EAP sessions take one from the personal store), the
+  server's certificate still checked against the trusted roots; nothing
+  runs inside, and the MSK comes from the same "client EAP encryption"
+  keying material.
+- **Clear errors**: a user with no certificate ("There is no certificate
+  for that user in the personal store"), and a server that refuses the
+  certificate with its TLS alert ("did not accept the certificate").
+
+`wditest.sys`'s authentication server (`tools/drivertest/eapap.h`) does
+EAP-TLS too, as FreeRADIUS does with its CA file: on the station's Nak it
+starts EAP-TLS, asks for the certificate, checks it chains to "NovaCorp
+Test Root", and sends its alert in a request before EAP-Failure when it
+does not.  `tools/drivertest/mksys.py` makes two client certificates from
+fixed seeds in PKCS #12 files beside the driver: `alice.pfx` (under the
+test root, with the root as an exported chain has it) and `mallory.pfx`
+(self-signed).  The `wifi` boot imports both (a wrong password refused
+first), lists the store, is told a user without a certificate has none,
+is refused with mallory's, signs in with alice's and pings over the
+connection.  The host test (`tests/tools/test_eap_peap.py`) runs both
+EAP-TLS sign-ins between the kernel's peer and the server, and reads
+PKCS #12 files OpenSSL encrypts with AES-256 and with TripleDES, with the
+right and a wrong password.  Not yet: WPA3-Enterprise, Enterprise
+profiles in `wlanapi.dll` and Settings, PEAP's cryptobinding, and keeping
+imported certificates across restarts; the real card needs the T14.
+
 ## Wi-Fi: WPA2-Enterprise networks sign in with PEAP
 
 Sixth part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
@@ -16887,6 +16971,37 @@ between them: the same MSK at both ends, a wrong password, an unknown user,
 a `DOMAIN\user` name and an untrusted server.  Not yet: EAP-TLS (a client
 certificate), WPA3-Enterprise, Enterprise profiles in `wlanapi.dll` and
 Settings, and PEAP's cryptobinding; the real card needs the T14.
+
+## A vendor's display driver, unchanged: Red Hat's viogpudo.sys on QEMU
+
+Item 3 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)): Red Hat's WDDM
+display-only driver for QEMU's virtio GPU, `viogpudo.sys`, as virtio-win
+0.1.302 publishes it (signed by Microsoft), runs unchanged on NovaOS's
+`dxgkrnl` host, the rehearsal on hardware CI has of the Intel design's
+step 2 ([design](design/intel-gpu.md)).
+
+- **What runs**: `pnputil /add-driver viogpudo.inf /install` on a machine
+  whose display is a virtio-vga: NovaOS's built-in driver steps aside (its
+  virtio side, `virtio_gpu.c`, lets go of the card), the driver registers
+  through displib, starts with the card's BARs and line interrupt, offers
+  23 modes, and the desktop moves to it.  Mode changes from Settings or
+  `ChangeDisplaySettings` are VidPNs it commits; disabling it gives the
+  screen back to the built-in driver; it starts at boot.
+- **What NovaOS needed**: `IoCreateNotificationEvent`, `RtlAssert` and
+  `vDbgPrintEx`; `ZwLoadDriver` of `DXGKrnl` answering "already loaded"
+  (displib loads it first); mode Ids numbered by dxgkrnl; committing the
+  driver's own source and target modes, on a path with the default gamma
+  ramp and scRGB colour basis (it checks both); stopping and removing the
+  driver before the bus turns its decoding off, its mappings kept until
+  then (it resets its virtio device in `DxgkDdiRemoveDevice`).
+- **What it found**: two structure layouts NovaOS's own test driver could
+  not catch, being built with the same header: a source mode's `Stride`
+  is a DWORD (40-byte mode), and a target mode is 96 bytes (colour basis,
+  per-channel ranges, wire format, then preference).  It also confirmed
+  the display-only registration IOCTL, `0x230043`, which had been a guess.
+- **Tested by** the devices suite's `viogpudo` boot
+  (`tests/selftest/devices/viogpudo`; the package is fetched by
+  `tools/drivertest/viogpudo.py`).
 
 <!-- END generated:history -->
 

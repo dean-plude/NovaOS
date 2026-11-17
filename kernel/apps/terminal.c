@@ -279,7 +279,8 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
-        "  netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect  join a Wi-Fi network (user=: WPA2-Enterprise), or leave it\n"
+        "  netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect  join a Wi-Fi network (user=: WPA2-Enterprise,\n"
+        "                      user= without key=: with that user's certificate, EAP-TLS), or leave it\n"
         "  netsh advfirewall firewall add|delete|show rule ... | set allprofiles state on|off  the firewall's rules and profiles\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
         "  nslookup <host>     look up a host name (DNS)\n"
@@ -293,6 +294,8 @@ static void cmd_help(Term *t)
         "                      primes, guess, wc, crttest, filetest, crash, spin)\n"
         "  netsurf [url]       the NetSurf web browser (http, https)\n"
         "  certutil -addstore root <file>   trust a CA certificate (PEM/DER)\n"
+        "  certutil [-p PASSWORD] -importpfx <file.pfx>  add a certificate and its key to the personal store\n"
+        "  certutil -store my  list the personal certificates (Wi-Fi Enterprise's EAP-TLS signs in with them)\n"
         "  cls                 clear the screen (also: clear, Ctrl+L)\n"
         "  exit                close this window\n"
         "Keys: Up/Down history, PgUp/PgDn scroll, Ctrl+C cancel.");
@@ -1007,7 +1010,9 @@ static int wlan_adapter(const char *v)
  * or a WPA3-Personal network's password comes with key=, NovaOS's own
  * addition, used for that connection only; a WPA2-Enterprise network's
  * user name comes with user= and its password with key= (PEAP,
- * MS-CHAPv2: the server's certificate must be from a trusted root) */
+ * MS-CHAPv2: the server's certificate must be from a trusted root), or
+ * without key= it signs in with that user's certificate from the personal
+ * store (EAP-TLS; certutil -importpfx), the newest one without user= */
 static void cmd_netsh_wlan_connect(Term *t, int argc, char **argv, bool connect)
 {
     static const char usage[] = "Usage: netsh wlan connect [name=]SSID [key=PASSPHRASE] [user=NAME] [interface=Wi-Fi]\n"
@@ -1052,8 +1057,11 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
     case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured: give its passphrase with key=PASSPHRASE.", ssid);
                             break;
     case WLAN_BAD_KEY:      tprintf(t, "The network security key isn't correct: \"%s\" did not accept it.", ssid); break;
-    case WLAN_NEEDS_USER:   tprintf(t, "The network \"%s\" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD.", ssid);
-                            break;
+    case WLAN_NEEDS_USER:   tprintf(t, "The network \"%s\" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD, or "
+                                    "import a certificate with certutil -importpfx.", ssid); break;
+    case WLAN_NO_CERT:      tprintf(t, "There is no certificate for that user in the personal store: import one with "
+                                    "certutil -importpfx FILE, or sign in to \"%s\" with key=PASSWORD.", ssid); break;
+    case WLAN_CERT_REFUSED: tprintf(t, "The sign-in server of \"%s\" did not accept the certificate.", ssid); break;
     case WLAN_UNTRUSTED:    tprintf(t, "The sign-in server of \"%s\" has a certificate from a root that is not trusted; "
                                     "trust its CA with certutil -addstore root FILE.", ssid); break;
     case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 "
@@ -1418,10 +1426,56 @@ static bool set_target(Term *t, const char *url)
     return true;
 }
 
+/* certutil -store my: the personal certificates */
+static void certutil_my(Term *t)
+{
+    int n = NetPersonalCount();
+    tprint(t, "Personal (My):");
+    for (int i = 0; i < n; i++) {
+        char name[64], issuer[64];
+        if (!NetPersonalName(i, name, sizeof(name), issuer, sizeof(issuer))) break;
+        tprintf(t, "  %3d  %s  (issued by %s; private key present)", i + 1, name[0] ? name : "(unnamed)",
+                issuer[0] ? issuer : "?");
+    }
+    tprintf(t, "%d certificate%s. CertUtil: -store command completed successfully.", n, n == 1 ? "" : "s");
+}
+
+/* certutil [-p PASSWORD] -importpfx [my] FILE [PASSWORD]: a PKCS #12
+ * file's certificate and key into the personal store (Windows asks for the
+ * password when -p is not given; NovaOS's Terminal takes it after the file) */
+static void certutil_importpfx(Term *t, int argc, char **argv)
+{
+    const char *password = NULL, *file = NULL;
+    bool cmd = false;
+    for (int i = 1; i < argc; i++) {
+        if (is(argv[i], "-p") && i + 1 < argc) password = argv[++i];
+        else if (is(argv[i], "-importpfx")) cmd = true;
+        else if (cmd && !file && (is(argv[i], "my") || is(argv[i], "-user") || is(argv[i], "-f"))) continue;
+        else if (cmd && !file) file = argv[i];
+        else if (cmd && !password) password = argv[i];
+        else { file = NULL; break; }
+    }
+    if (!file) { terr(t, "Usage: certutil [-p PASSWORD] -importpfx <file.pfx>"); return; }
+    RamNode *f = RamfsResolve(t->cwd, file);
+    if (!f || f->dir) { terr(t, "The system cannot find the file specified."); return; }
+    if (!RamfsLoad(f)) { terr(t, "The file could not be read."); return; }
+    char name[64], err[96];
+    if (!NetImportPfx(f->data, f->size, password ? password : "", name, sizeof(name), err, sizeof(err))) {
+        tprintf(t, "CertUtil: -importPFX command FAILED: %s", err);
+        return;
+    }
+    tprintf(t, "Certificate \"%s\" added to the personal store (My) with its private key.", name[0] ? name : "?");
+    tprint(t, "CertUtil: -importPFX command completed successfully. (Lasts until reboot.)");
+}
+
 /* certutil [-store]            list trusted roots
- * certutil -addstore root FILE  trust the CA certificate(s) in FILE */
+ * certutil -addstore root FILE  trust the CA certificate(s) in FILE
+ * certutil -importpfx FILE, certutil -store my: the personal store */
 static void cmd_certutil(Term *t, int argc, char **argv)
 {
+    for (int i = 1; i < argc; i++)
+        if (is(argv[i], "-importpfx")) { certutil_importpfx(t, argc, argv); return; }
+    if (argc >= 3 && is(argv[1], "-store") && is(argv[2], "my")) { certutil_my(t); return; }
     if (argc >= 2 && is(argv[1], "-addstore")) {
         if (argc < 4 || !is(argv[2], "root")) {
             terr(t, "Usage: certutil -addstore root <file.crt>");
@@ -1448,7 +1502,7 @@ static void cmd_certutil(Term *t, int argc, char **argv)
         return;
     }
     if (argc >= 2 && !is(argv[1], "-store")) {
-        terr(t, "Usage: certutil [-store] | certutil -addstore root <file>");
+        terr(t, "Usage: certutil [-store [my]] | certutil -addstore root <file> | certutil [-p PASSWORD] -importpfx <file.pfx>");
         return;
     }
     int imported, n = NetRootCount(&imported);

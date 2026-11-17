@@ -190,6 +190,7 @@ set(KERNEL_C_SOURCES
     fs/bootlog.c
     net/net.c
     net/tls.c
+    net/pfx.c
     net/tls_roots.c
     net/tls_platform.c
     net/http.c
@@ -308,6 +309,7 @@ set(KERNEL_C_SOURCES
     apps/settings.c
     apps/netsh_fw.c
     apps/settings_firewall.c
+    apps/settings_bluetooth.c
     apps/settings_apps.c
     apps/iconset.c
     apps/calendar.c

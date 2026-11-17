@@ -140,6 +140,23 @@ NT_API UINT32 nt_DbgPrintEx(UINT32 component, UINT32 level, const char *fmt, ...
     return 0;
 }
 
+/* vDbgPrintEx: DbgPrintEx with the arguments as a va_list */
+NT_API UINT32 nt_vDbgPrintEx(UINT32 component, UINT32 level, const char *fmt, __builtin_ms_va_list ap)
+{
+    (void)component;
+    UINT32 mask = level <= 31 ? 1u << level : level;
+    if (mask & 1) print(fmt, ap);
+    return 0;
+}
+
+/* RtlAssert: a driver's ASSERT failed (a checked build's): logged, and the
+ * driver carries on, as with no kernel debugger attached to break into */
+NT_API void nt_RtlAssert(const char *what, const char *file, UINT32 line, const char *msg)
+{
+    kprintf("[DbgPrint] Assertion failed: %s%s%s (%s, line %u)\n", msg ? msg : "", msg ? ": " : "",
+            what ? what : "?", file ? file : "?", line);
+}
+
 /* -----------------------------------------------------------------------
  * Run-time library
  * ----------------------------------------------------------------------- */

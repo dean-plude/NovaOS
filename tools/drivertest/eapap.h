@@ -15,6 +15,15 @@
  * EAP-Success.  The MSK comes from the TLS master secret through the TLS
  * PRF with "client EAP encryption" (RFC 5216 2.3); its first 32 bytes are
  * the PMK of the 4-way handshake after (wpaap.h, AKM 1).
+ *
+ * A station with a certificate answers PEAP's start with a Nak naming
+ * EAP-TLS (RFC 5216), and the server starts that instead: the same TLS
+ * server, now asking for the station's certificate (CertificateRequest)
+ * and checking it chains to NovaCorp Test Root (CERT_ROOT), as
+ * FreeRADIUS's eap tls does with its ca_file; nothing inside the tunnel,
+ * EAP-Success after the station acknowledges the server's Finished, the
+ * MSK the same way.  A certificate from anywhere else gets the TLS alert
+ * in a request, then EAP-Failure.
  */
 #pragma once
 
@@ -24,7 +33,7 @@
 #include "mbedtls/pk.h"
 #include "mbedtls/sha1.h"
 #include "mbedtls/des.h"
-#include "wditest_certs.h"          /* (made by mksys.py: CERT_SERVER, KEY_SERVER) */
+#include "wditest_certs.h"          /* (made by mksys.py: CERT_SERVER, KEY_SERVER, CERT_ROOT) */
 
 #define EAP_USER      "alice"
 #define EAP_PASSWORD  "nova-peap-password"
@@ -34,6 +43,7 @@
 
 typedef struct {
     int   state;                    /* EAPS_* */
+    u8    method;                   /* 25 (PEAP) or 13 (EAP-TLS: the station asked for it with a Nak) */
     u8    id;                       /* the identifier of the request outstanding */
     char  identity[64];
     mbedtls_ssl_context ssl;
@@ -49,12 +59,13 @@ typedef struct {
     const char *why;
 } EapAp;
 enum { EAPS_IDLE, EAPS_IDENTITY, EAPS_TLS, EAPS_INNER_IDENTITY, EAPS_CHAP, EAPS_CHAP_RESULT, EAPS_TLV, EAPS_DONE,
-       EAPS_FAILED };
+       EAPS_FAILED, EAPS_TLS_DONE, EAPS_ALERT };
 
 /* ---- the server's TLS ---- */
 static mbedtls_ssl_config       g_eap_conf;
 static mbedtls_ctr_drbg_context g_eap_drbg;
-static mbedtls_x509_crt         g_eap_crt;
+static mbedtls_ssl_config       g_eaptls_conf;    /* (EAP-TLS: the same, asking for the station's certificate) */
+static mbedtls_x509_crt         g_eap_crt, g_eap_root;
 static mbedtls_pk_context       g_eap_key;
 static int                      g_eap_conf_ready;
 
@@ -79,13 +90,18 @@ static int eap_tls_init(void)
     static const char pers[] = "wditest RADIUS";
     mbedtls_ctr_drbg_init(&g_eap_drbg);
     mbedtls_x509_crt_init(&g_eap_crt);
+    mbedtls_x509_crt_init(&g_eap_root);
     mbedtls_pk_init(&g_eap_key);
     mbedtls_ssl_config_init(&g_eap_conf);
+    mbedtls_ssl_config_init(&g_eaptls_conf);
     int r = mbedtls_ctr_drbg_seed(&g_eap_drbg, eap_entropy, 0, (const unsigned char *)pers, sizeof(pers) - 1);
     if (!r) r = mbedtls_x509_crt_parse_der(&g_eap_crt, CERT_SERVER, sizeof(CERT_SERVER));
     if (!r) r = mbedtls_pk_parse_key(&g_eap_key, KEY_SERVER, sizeof(KEY_SERVER), 0, 0, mbedtls_ctr_drbg_random,
                                      &g_eap_drbg);
+    if (!r) r = mbedtls_x509_crt_parse_der(&g_eap_root, CERT_ROOT, sizeof(CERT_ROOT));
     if (!r) r = mbedtls_ssl_config_defaults(&g_eap_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                            MBEDTLS_SSL_PRESET_DEFAULT);
+    if (!r) r = mbedtls_ssl_config_defaults(&g_eaptls_conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM,
                                             MBEDTLS_SSL_PRESET_DEFAULT);
     if (r) {
         DbgPrint("wditest: the RADIUS server's TLS did not start (-0x%x)\n", (unsigned int)-r);
@@ -97,6 +113,13 @@ static int eap_tls_init(void)
     mbedtls_ssl_conf_ciphersuites(&g_eap_conf, suites);
     mbedtls_ssl_conf_authmode(&g_eap_conf, MBEDTLS_SSL_VERIFY_NONE);
     mbedtls_ssl_conf_own_cert(&g_eap_conf, &g_eap_crt, &g_eap_key);
+    mbedtls_ssl_conf_rng(&g_eaptls_conf, mbedtls_ctr_drbg_random, &g_eap_drbg);
+    mbedtls_ssl_conf_min_tls_version(&g_eaptls_conf, MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_max_tls_version(&g_eaptls_conf, MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_ciphersuites(&g_eaptls_conf, suites);
+    mbedtls_ssl_conf_authmode(&g_eaptls_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(&g_eaptls_conf, &g_eap_root, 0);
+    mbedtls_ssl_conf_own_cert(&g_eaptls_conf, &g_eap_crt, &g_eap_key);
     g_eap_conf_ready = 1;
     return 1;
 }
@@ -291,7 +314,7 @@ static unsigned int peap_request(EapAp *e, u8 *f)
     wpa_copy(b + o, e->out + e->out_off, k);
     e->out_off += k;
     if (e->out_off == e->out_len) e->out_off = e->out_len = 0;
-    return eap_request(e, f, 25, b, o + k);
+    return eap_request(e, f, e->method, b, o + k);
 }
 
 /* An inner request through the tunnel (PEAPv0: @m without its EAP header, unless it is an EAP-TLV) */
@@ -307,6 +330,33 @@ static unsigned int eap_ap_fail(EapAp *e, u8 *f, const char *why)
     e->state = EAPS_FAILED;
     e->id++;
     return eap_frame(e, f, 4, 0, 0, 0);
+}
+
+/* A new TLS session for e->method: PEAP's, or EAP-TLS's asking for the station's certificate */
+static int eap_ap_session(EapAp *e)
+{
+    if (e->ssl_ready) mbedtls_ssl_free(&e->ssl);
+    mbedtls_ssl_init(&e->ssl);
+    e->ssl_ready = 1;
+    e->in_len = e->in_off = e->out_len = e->out_off = 0;
+    e->have_master = 0;
+    if (mbedtls_ssl_setup(&e->ssl, e->method == 13 ? &g_eaptls_conf : &g_eap_conf)) return 0;
+    mbedtls_ssl_set_bio(&e->ssl, e, eap_bio_send, eap_bio_recv, 0);
+    mbedtls_ssl_set_export_keys_cb(&e->ssl, eap_export, e);
+    return 1;
+}
+
+/* The station's certificate's common name */
+static void eap_ap_peer_cn(EapAp *e, char *out, unsigned int cap)
+{
+    const mbedtls_x509_crt *c = mbedtls_ssl_get_peer_cert(&e->ssl);
+    out[0] = 0;
+    for (const mbedtls_x509_name *n = c ? &c->subject : 0; n; n = n->next)
+        if (n->oid.len == 3 && n->oid.p[0] == 0x55 && n->oid.p[1] == 0x04 && n->oid.p[2] == 0x03) {
+            unsigned int k = n->val.len < cap - 1 ? (unsigned int)n->val.len : cap - 1;
+            wpa_copy(out, n->val.p, k);
+            out[k] = 0;
+        }
 }
 
 /* Start a sign-in (once associated): Request/Identity */
@@ -436,22 +486,28 @@ static unsigned int eap_ap_receive(EapAp *e, const u8 *p, unsigned int n, u8 *f)
         wpa_copy(e->identity, d, k);
         e->identity[k] = 0;
         if (!eap_tls_init()) return eap_ap_fail(e, f, "the server's TLS did not start");
-        mbedtls_ssl_init(&e->ssl);
-        e->ssl_ready = 1;
-        if (mbedtls_ssl_setup(&e->ssl, &g_eap_conf)) return eap_ap_fail(e, f, "no TLS session");
-        mbedtls_ssl_set_bio(&e->ssl, e, eap_bio_send, eap_bio_recv, 0);
-        mbedtls_ssl_set_export_keys_cb(&e->ssl, eap_export, e);
+        e->method = 25;
+        if (!eap_ap_session(e)) return eap_ap_fail(e, f, "no TLS session");
         e->state = EAPS_TLS;
         DbgPrint("wditest: RADIUS: identity %s; PEAP start\n", e->identity);
         u8 start = 0x20;                                /* (S, version 0) */
         return eap_request(e, f, 25, &start, 1);
     }
-    if (type == 3) return eap_ap_fail(e, f, "the station refused PEAP (a Nak)");
-    if (type != 25 || !dn) return eap_ap_fail(e, f, "not a PEAP response");
+    if (type == 3 && e->state == EAPS_TLS && e->method == 25 && dn >= 1 && d[0] == 13) {
+        /* a Nak asking for EAP-TLS: the station has a certificate */
+        e->method = 13;
+        if (!eap_ap_session(e)) return eap_ap_fail(e, f, "no TLS session");
+        DbgPrint("wditest: RADIUS: the station asked for EAP-TLS (a Nak): EAP-TLS start\n");
+        u8 start = 0x20;                                /* (S) */
+        return eap_request(e, f, 13, &start, 1);
+    }
+    if (type == 3) return eap_ap_fail(e, f, "the station refused PEAP and EAP-TLS (a Nak)");
+    if (type != e->method || !dn) return eap_ap_fail(e, f, e->method == 13 ? "not an EAP-TLS response" :
+                                                                             "not a PEAP response");
     u8 flags = d[0];
     d++;
     dn--;
-    if (flags & 0x07) return eap_ap_fail(e, f, "not PEAP version 0");
+    if (e->method == 25 && (flags & 0x07)) return eap_ap_fail(e, f, "not PEAP version 0");
     if (flags & 0x80) { if (dn < 4) return eap_ap_fail(e, f, "a PEAP length cut short"); d += 4; dn -= 4; }
     if (!dn && e->out_len) return peap_request(e, f);   /* (an acknowledgment: the next fragment) */
     if (dn) {
@@ -465,8 +521,22 @@ static unsigned int eap_ap_receive(EapAp *e, const u8 *p, unsigned int n, u8 *f)
         if (r && r != MBEDTLS_ERR_SSL_WANT_READ && r != MBEDTLS_ERR_SSL_WANT_WRITE) {
             DbgPrint("wditest: RADIUS: TLS handshake failed (-0x%x)%s\n", (unsigned int)-r,
                      r == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE ? ": the station sent an alert (it did not trust the "
-                                                                "certificate?)" : "");
+                                                                "certificate?)" :
+                     r == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED ? ": the station's certificate is not from NovaCorp "
+                                                                "Test Root" : "");
+            if (e->method == 13 && e->out_len) {        /* (EAP-TLS: the alert to the station first, then Failure) */
+                e->state = EAPS_ALERT;
+                return peap_request(e, f);
+            }
             return eap_ap_fail(e, f, "the TLS handshake failed");
+        }
+        if (!r && e->method == 13) {
+            char cn[64];
+            eap_ap_peer_cn(e, cn, sizeof(cn));
+            DbgPrint("wditest: RADIUS: EAP-TLS handshake done (%s): the station's certificate %s is from NovaCorp "
+                     "Test Root\n", mbedtls_ssl_get_ciphersuite(&e->ssl), cn);
+            e->state = EAPS_TLS_DONE;
+            return peap_request(e, f);                  /* (its ChangeCipherSpec and Finished) */
         }
         if (!r) {
             DbgPrint("wditest: RADIUS: TLS handshake done (%s); tunnel up\n", mbedtls_ssl_get_ciphersuite(&e->ssl));
@@ -475,6 +545,16 @@ static unsigned int eap_ap_receive(EapAp *e, const u8 *p, unsigned int n, u8 *f)
         } else {
             return peap_request(e, f);                  /* (its next flight, or an acknowledgment) */
         }
+    }
+    if (e->state == EAPS_ALERT) return eap_ap_fail(e, f, "the station's certificate was refused");
+    if (e->state == EAPS_TLS_DONE) {                    /* (EAP-TLS: the station acknowledged the Finished) */
+        if (!e->have_master || mbedtls_ssl_tls_prf(e->prf, e->master, 48, "client EAP encryption", e->randoms, 64,
+                                                   e->msk, 64))
+            return eap_ap_fail(e, f, "no master secret for the MSK");
+        e->state = EAPS_DONE;
+        DbgPrint("wditest: RADIUS: EAP-TLS done; EAP-Success, the PMK from the TLS keys\n");
+        e->id++;
+        return eap_frame(e, f, 3, 0, 0, 0);
     }
     if (e->state == EAPS_INNER_IDENTITY && !e->in_len && !dn) {
         u8 ident = 1;                                   /* (an inner Request/Identity: just its type) */

@@ -32,7 +32,7 @@ edutest.sys's, wddmdod.sys's, wddmtest.sys's, wditest.sys's and btfilter.sys's p
 are signed as wdmcat's is: a test-signed catalog, NAME.cat, lists the INF
 and the .sys.
 """
-import concurrent.futures, glob, os, re, struct, subprocess, sys
+import concurrent.futures, glob, hmac, os, re, struct, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -40,7 +40,8 @@ sys.path.insert(0, os.path.join(ROOT, 'tools', 'authenticode'))
 from pki import Cert, Key                                       # noqa: E402
 from sign import sign                                           # noqa: E402
 from catalog import catalog                                     # noqa: E402
-from pki import integer, seq                                    # noqa: E402
+from pki import integer, seq, oid, null, octets, explicit       # noqa: E402
+import hashlib                                                  # noqa: E402
 
 LONG = ((2020, 1, 1, 0, 0, 0), (2049, 12, 31, 23, 59, 59))
 
@@ -172,17 +173,69 @@ def import_libs(work):
     return libs
 
 
+def p12_kdf(password, salt, purpose, iterations, n, hash_name='sha256'):
+    """PKCS #12's key derivation (RFC 7292 B.2) from @password (a str, as a
+    BMPString with its terminator): @n bytes for @purpose (3: the MAC key)"""
+    u, v = hashlib.new(hash_name).digest_size, hashlib.new(hash_name).block_size
+
+    def fill(b):
+        return (b * (v // len(b) + 2))[:v * ((len(b) + v - 1) // v)] if b else b''
+    pw = password.encode('utf-16-be') + b'\0\0'
+    i = fill(salt) + fill(pw)
+    out = b''
+    while True:
+        a = hashlib.new(hash_name, bytes([purpose]) * v + i).digest()
+        for _ in range(iterations - 1):
+            a = hashlib.new(hash_name, a).digest()
+        out += a
+        if len(out) >= n:
+            return out[:n]
+        b = int.from_bytes((a * (v // u + 1))[:v], 'big')
+        i = b''.join(((int.from_bytes(i[j:j + v], 'big') + b + 1) % (1 << (8 * v))).to_bytes(v, 'big')
+                     for j in range(0, len(i), v))
+
+
+def pfx(cert, key, chain, password):
+    """A PKCS #12 file (RFC 7292) as Windows' certutil -exportpfx and
+    OpenSSL write one, but with its bags in the clear (OpenSSL's -keypbe
+    NONE -certpbe NONE: Python has no AES to encrypt them with): @cert and
+    @chain in certBags, @key in a keyBag (PKCS #8), and the HMAC-SHA-256
+    integrity MAC from @password"""
+    data = '1.2.840.113549.1.7.1'
+    pkcs1 = seq(*[integer(v) for v in (0, key.n, key.e, key.d, key.p, key.q, key.dp, key.dq, key.qi)])
+    pkcs8 = seq(integer(0), seq(oid('1.2.840.113549.1.1.1'), null()), octets(pkcs1))
+    certs = seq(*[seq(oid('1.2.840.113549.1.12.10.1.3'),
+                      explicit(0, seq(oid('1.2.840.113549.1.9.22.1'), explicit(0, octets(c.der)))))
+                  for c in [cert] + chain])
+    keys = seq(seq(oid('1.2.840.113549.1.12.10.1.1'), explicit(0, pkcs8)))
+    auth = seq(*[seq(oid(data), explicit(0, octets(b))) for b in (certs, keys)])
+    salt = hashlib.sha256(cert.der).digest()[:8]                 # (fixed: the same file every build)
+    mac = hmac.new(p12_kdf(password, salt, 3, 2048, 32), auth, 'sha256').digest()
+    return seq(integer(3), seq(oid(data), explicit(0, octets(auth))),
+               seq(seq(seq(oid('2.16.840.1.101.3.4.2.1'), null()), octets(mac)), octets(salt), integer(2048)))
+
+
+PFX_PASSWORD = 'nova-tls-password'
+
+
 def radius_certs(work, out):
     """wditest.sys's WPA2-Enterprise authentication server's certificate
     (tools/drivertest/eapap.h): "radius.novacorp.test" (a TLS server
     certificate) under "NovaCorp Test Root", both from fixed seeds and
     trusted by nobody until the wifi self-test imports the root
     (novacorp-ca.cer beside the driver: certutil -addstore root).  The
-    server's certificate and its RSA key (PKCS #1 DER) go into the driver as
-    wditest_certs.h"""
+    server's certificate and its RSA key (PKCS #1 DER) and the root (which
+    EAP-TLS's client certificates must chain to) go into the driver as
+    wditest_certs.h.  For EAP-TLS, two client certificates in PKCS #12
+    files (password PFX_PASSWORD) for certutil -importpfx: alice.pfx,
+    "alice" under NovaCorp Test Root (with the root, as an exported chain
+    has it), and mallory.pfx, a self-signed "mallory" the server refuses"""
     root_key, server_key = Key('novacorp-test-root'), Key('novacorp-radius-server')
     root = Cert('NovaCorp Test Root', root_key, 1, LONG, ca=True)
     server = Cert('radius.novacorp.test', server_key, 2, LONG, root, root_key, usage='server')
+    alice_key, mallory_key = Key('novacorp-eap-tls-alice'), Key('novacorp-eap-tls-mallory')
+    alice = Cert('alice', alice_key, 3, LONG, root, root_key, usage='client')
+    mallory = Cert('mallory', mallory_key, 1, LONG, usage='client')
     k = server_key
     der = seq(*[integer(v) for v in (0, k.n, k.e, k.d, k.p, k.q, k.dp, k.dq, k.qi)])
 
@@ -190,9 +243,12 @@ def radius_certs(work, out):
         rows = ',\n'.join('    ' + ', '.join(f'0x{x:02x}' for x in b[i:i + 16]) for i in range(0, len(b), 16))
         return f'static const unsigned char {name}[{len(b)}] = {{\n{rows}\n}};\n'
     write(os.path.join(work, 'wditest_certs.h'),
-          ('/* made by tools/drivertest/mksys.py: NovaCorp\'s RADIUS server certificate and key */\n#pragma once\n' +
-           arr('CERT_SERVER', server.der) + arr('KEY_SERVER', der)).encode())
+          ('/* made by tools/drivertest/mksys.py: NovaCorp\'s RADIUS server certificate and key, and its root */\n'
+           '#pragma once\n' + arr('CERT_SERVER', server.der) + arr('KEY_SERVER', der) +
+           arr('CERT_ROOT', root.der)).encode())
     write(os.path.join(out, 'novacorp-ca.cer'), root.der)
+    write(os.path.join(out, 'alice.pfx'), pfx(alice, alice_key, [root], PFX_PASSWORD))
+    write(os.path.join(out, 'mallory.pfx'), pfx(mallory, mallory_key, [], PFX_PASSWORD))
 
 
 def mbedtls_objects(work):

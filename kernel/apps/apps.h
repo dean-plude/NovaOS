@@ -106,7 +106,7 @@ void AppDrawFolderKindIcon(FolderKind k, int x, int y, int size);
 typedef enum {
     GL_PC, GL_DOCUMENTS, GL_DOWNLOADS, GL_PICTURES, GL_PERSON, GL_CODE, GL_WINDOWS,
     GL_FOLDER, GL_FILE, GL_PLUS, GL_SEARCH, GL_NETWORK, GL_NETWORK_OFF, GL_CHEVRON,
-    GL_BACK, GL_UP, GL_NOVA, GL_GEAR, GL_POWER, GL_SPEAKER, GL_PRINTER, GL_SHIELD,
+    GL_BACK, GL_UP, GL_NOVA, GL_GEAR, GL_POWER, GL_SPEAKER, GL_PRINTER, GL_SHIELD, GL_BLUETOOTH,
 } Glyph;
 void AppDrawGlyph(Glyph g, int x, int y, int size, GdiColor c);
 
@@ -202,7 +202,7 @@ void ExplorerOpen(RamNode *dir);
 void NotepadOpen(RamNode *file);
 void SettingsOpen(void);
 /* Settings pages (for SettingsOpenPage) */
-enum { SETTINGS_SYSTEM, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_APPS, SETTINGS_STORAGE,
+enum { SETTINGS_SYSTEM, SETTINGS_BLUETOOTH, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_PERSONALIZE, SETTINGS_APPS, SETTINGS_STORAGE,
        SETTINGS_NETWORK, SETTINGS_WIFI, SETTINGS_FIREWALL, SETTINGS_ACCOUNTS, SETTINGS_TIME_LANGUAGE, SETTINGS_PRINTERS, SETTINGS_ABOUT,
        SETTINGS_ACCOUNTS_ADD = 100 /* Accounts, with "Add an account" open */ };
 /* Open Settings (or focus the open window) at page @page */
@@ -231,6 +231,13 @@ bool AppsPageTick(void);
 int FirewallPagePaint(int x, int y, int w);
 bool FirewallPageMouse(int px, int py, int pw, int x, int y);
 bool FirewallPageTick(void);
+/* Settings' Bluetooth page (settings_bluetooth.c): as the Firewall page's,
+ * and keys (true: taken); Reset as the page opens (it searches again) */
+int  BluetoothPagePaint(int x, int y, int w);
+bool BluetoothPageMouse(int px, int py, int pw, int x, int y);
+bool BluetoothPageKey(const KeyEvent *k);
+bool BluetoothPageTick(void);
+void BluetoothPageReset(void);
 /* The firewall's once-a-second network check (the desktop loop calls it) */
 void NetworkPromptPoll(void);
 /* A new network's "make this PC discoverable?" question, shown when the

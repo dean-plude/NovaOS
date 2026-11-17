@@ -234,6 +234,39 @@ NT_API NTSTATUS nt_ObOpenObjectByPointer(void *object, UINT32 attributes, void *
     return STATUS_SUCCESS;
 }
 
+/* IoCreateNotificationEvent: the notification event named @name (made
+ * signalled the first time, as Windows makes it), and a kernel handle to it
+ * that ZwClose closes.  NovaOS's kernel-mode named events are the drivers'
+ * own: a program does not open them (viogpudo.sys names one,
+ * \BaseNamedObjects\VioGpuResolutionEvent, for its resolution helper) */
+#define NAMED_EVENTS 16
+static struct { NT_WCHAR name[64]; UINT16 len; NT_KEVENT *ev; } g_named[NAMED_EVENTS];
+
+NT_API NT_KEVENT *nt_IoCreateNotificationEvent(NT_UNICODE_STRING *name, void **handle)
+{
+    if (!name || !name->Buffer || !handle || name->Length / 2 > 64) return NULL;
+    UINT16 n = name->Length / 2;
+    NT_KEVENT *ev = NULL;
+    IrqState s = spin_lock_irqsave(&g_sys_lock);
+    int free_ = -1;
+    for (int i = 0; i < NAMED_EVENTS && !ev; i++) {
+        if (!g_named[i].ev) { if (free_ < 0) free_ = i; continue; }
+        if (g_named[i].len == n && !memcmp(g_named[i].name, name->Buffer, n * 2u)) ev = g_named[i].ev;
+    }
+    spin_unlock_irqrestore(&g_sys_lock, s);
+    if (!ev) {
+        if (free_ < 0 || !(ev = kzalloc(sizeof(*ev)))) return NULL;
+        nt_KeInitializeEvent(ev, NT_NotificationEvent, 1);
+        s = spin_lock_irqsave(&g_sys_lock);
+        if (g_named[free_].ev) { spin_unlock_irqrestore(&g_sys_lock, s); kfree(ev); return NULL; }
+        memcpy(g_named[free_].name, name->Buffer, n * 2u);
+        g_named[free_].len = n;
+        g_named[free_].ev = ev;
+        spin_unlock_irqrestore(&g_sys_lock, s);
+    }
+    return NT_SUCCESS(nt_ObOpenObjectByPointer(ev, 0, NULL, 0, NULL, 0, handle)) ? ev : NULL;
+}
+
 NT_API NTSTATUS nt_ObReferenceObjectByPointer(void *object, UINT32 access, void *type, char mode)
 {
     (void)access; (void)type; (void)mode;

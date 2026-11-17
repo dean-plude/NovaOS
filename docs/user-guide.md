@@ -509,10 +509,11 @@ a certificate instead (a `.pfx` or `.p12` file), add it to your personal
 store with `certutil -p PASSWORD -importpfx FILE` (`certutil -store my`
 lists what is there) and connect with `user=` and no `key=`: NovaOS signs
 in with EAP-TLS, Windows' "smart card or other certificate", using that
-certificate.  Without `user=` it uses the newest one; with a
-certificate in the store, Settings joins such a network the same way.
-Imported certificates last until NovaOS restarts.  Settings cannot sign
-in with a user name and password yet.
+certificate.  Without `user=` it uses the newest one.  In Settings'
+Wi-Fi page such a network has two boxes: type your user name and
+password (Tab moves between them), or leave both empty to sign in with
+your certificate.  Imported roots and certificates are kept when NovaOS
+restarts.
 
 Windows programs that manage Wi-Fi use the Native Wifi API
 (`wlanapi.dll`): the adapters, scans, the networks and access points in

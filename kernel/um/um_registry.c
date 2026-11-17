@@ -1517,11 +1517,15 @@ static bool is_named(const RegKey *k, const char *s)
     for (; s[n]; n++) if (n >= k->nlen || fold(k->name[n]) != fold((UINT8)s[n])) return false;
     return n == k->nlen;
 }
+/* HKLM\SECURITY likewise (on Windows the LSA's; here also the personal
+ * certificate store's private keys: net/net.c) */
 static bool in_sam(const RegKey *k)
 {
-    for (; k && k->parent && k->parent->parent; k = k->parent)
+    for (; k && k->parent && k->parent->parent; k = k->parent) {
         if (k->parent->parent->parent == g_root && is_named(k, "SAM") && is_named(k->parent, "SAM") &&
             is_named(k->parent->parent, "Machine")) return true;
+        if (k->parent->parent == g_root && is_named(k, "SECURITY") && is_named(k->parent, "Machine")) return true;
+    }
     return false;
 }
 

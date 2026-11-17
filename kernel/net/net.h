@@ -182,13 +182,18 @@ int    NetRootCount(int *imported);
 /* Name of root i (its common name); *imported set for user-added roots. */
 bool   NetRootName(int i, char *buf, int cap, bool *imported);
 /* Trust the CA certificate(s) in a PEM or DER file.  Returns the number
- * added; 0 with *err set on failure.  Lasts until reboot. */
+ * added; 0 with *err set on failure.  Kept in the registry, so they are
+ * trusted again after a restart (NetRestoreCertificates). */
 int    NetImportRoots(const void *data, UINT32 len, char *err, int err_cap);
 /* The personal store (certutil -importpfx): a PKCS #12 file's certificate
  * and private key, for Wi-Fi Enterprise's EAP-TLS.  1 with the
- * certificate's name, or 0 with *err set.  Lasts until reboot. */
+ * certificate's name, or 0 with *err set.  Kept in the registry (the key
+ * where no program may look), as the roots are. */
 int    NetImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
                     int err_cap);
 int    NetPersonalCount(void);
 bool   NetPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap);
 int    NetPersonalFind(const char *user);
+/* The imported roots and personal certificates kept in the registry, back
+ * in the stores (at boot, once the registry is loaded: ke/main.c) */
+void   NetRestoreCertificates(void);

@@ -29,7 +29,9 @@
  * "wlantest settings": the test joins NovaNet in Settings' Wi-Fi page as a
  * person would (the selftest types it); wlantest waits for the adapter to
  * be connected, checks the connection through WlanQueryInterface, then
- * disconnects it.
+ * disconnects it.  "wlantest settings enterprise" does the same for
+ * NovaCorp (WPA2-Enterprise), whose user name and password the selftest
+ * types in the page's two boxes.
  */
 #include <windows.h>
 #include <stdio.h>
@@ -208,7 +210,9 @@ static DOT11_SSID_ ssid_of(const char *s)
     return d;
 }
 
-static void connected_to(HANDLE h, const GUID *g, const char *ssid, const UCHAR *bssid, const wchar_t *profile)
+/* NovaNet (WPA2-Personal, 7; signal 90, channel 6) or NovaCorp (WPA2-Enterprise, 6; signal 25, channel 1) */
+static void connected_as(HANDLE h, const GUID *g, const char *ssid, const UCHAR *bssid, const wchar_t *profile,
+                         DWORD auth, DWORD signal, DWORD channel)
 {
     DWORD size = 0, type = 0;
     DWORD *state = NULL;
@@ -224,18 +228,23 @@ static void connected_to(HANDLE h, const GUID *g, const char *ssid, const UCHAR 
           a ? a->assoc.dot11Bssid[0] : 0, a ? a->assoc.dot11Bssid[1] : 0, a ? a->assoc.dot11Bssid[2] : 0,
           a ? a->assoc.dot11Bssid[3] : 0, a ? a->assoc.dot11Bssid[4] : 0, a ? a->assoc.dot11Bssid[5] : 0, e);
     if (a) {
-        check(a->sec.bSecurityEnabled && a->sec.dot11AuthAlgorithm == 7 && a->sec.dot11CipherAlgorithm == 4 &&
-              a->assoc.dot11PhyType == 7 && a->assoc.wlanSignalQuality == 90,
-              "... WPA2-Personal (auth %lu) with CCMP (%lu), 802.11n, signal %lu", a->sec.dot11AuthAlgorithm,
-              a->sec.dot11CipherAlgorithm, a->assoc.wlanSignalQuality);
+        check(a->sec.bSecurityEnabled && a->sec.dot11AuthAlgorithm == auth && a->sec.dot11CipherAlgorithm == 4 &&
+              a->assoc.dot11PhyType == 7 && a->assoc.wlanSignalQuality == signal,
+              "... %s (auth %lu) with CCMP (%lu), 802.11n, signal %lu", auth == 6 ? "WPA2-Enterprise" : "WPA2-Personal",
+              a->sec.dot11AuthAlgorithm, a->sec.dot11CipherAlgorithm, a->assoc.wlanSignalQuality);
         if (profile) check(!wcscmp(a->strProfileName, profile) && a->wlanConnectionMode == 0, "... profile \"%ls\"",
                            a->strProfileName);
         WlanFreeMemory(a);
     }
     DWORD *ch = NULL;
     e = WlanQueryInterface(h, g, 8, NULL, &size, (PVOID *)&ch, &type);
-    check(!e && ch && *ch == 6, "WlanQueryInterface(channel_number): %lu", ch ? *ch : 0);
+    check(!e && ch && *ch == channel, "WlanQueryInterface(channel_number): %lu", ch ? *ch : 0);
     if (ch) WlanFreeMemory(ch);
+}
+
+static void connected_to(HANDLE h, const GUID *g, const char *ssid, const UCHAR *bssid, const wchar_t *profile)
+{
+    connected_as(h, g, ssid, bssid, profile, 7, 90, 6);
 }
 
 static const UCHAR NOVANET[6] = { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x01 };
@@ -257,9 +266,13 @@ static const wchar_t WRONG[] =
     L"<MSM><security><sharedKey><keyType>passPhrase</keyType><protected>false</protected>"
     L"<keyMaterial>not-the-passphrase</keyMaterial></sharedKey></security></MSM></WLANProfile>";
 
-static int settings_test(HANDLE h, const GUID *g)
+static const UCHAR NOVACORP[6] = { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x04 };
+
+/* @corp: NovaCorp (WPA2-Enterprise, signed in with a user name and
+ * password typed in Settings) rather than NovaNet */
+static int settings_test(HANDLE h, const GUID *g, int corp)
 {
-    printf("wlantest: join NovaNet in Settings\n");
+    printf("wlantest: join %s in Settings\n", corp ? "NovaCorp" : "NovaNet");
     fflush(stdout);
     int up = 0;
     for (int i = 0; i < 240 && !up; i++) {
@@ -271,7 +284,8 @@ static int settings_test(HANDLE h, const GUID *g)
     check(up, "Settings connected the adapter");
     printf("wlantest: connected through Settings\n");
     fflush(stdout);
-    if (up) connected_to(h, g, "NovaNet", NOVANET, NULL);
+    if (up && corp) connected_as(h, g, "NovaCorp", NOVACORP, NULL, 6, 25, 1);
+    else if (up) connected_to(h, g, "NovaNet", NOVANET, NULL);
     int from = now();
     DWORD e = WlanDisconnect(h, g, NULL);
     check(!e && wait_for(from, DISCONNECTED, 2000) >= 0, "WlanDisconnect (error %lu)", e);
@@ -307,7 +321,7 @@ int main(int argc, char **argv)
     DWORD prev = 0;
     e = WlanRegisterNotification(h, ACM, FALSE, on_notify, (PVOID)0x1234, NULL, &prev);
     check(!e && prev == 0, "WlanRegisterNotification(ACM) (error %lu)", e);
-    if (argc > 1 && !strcmp(argv[1], "settings")) return settings_test(h, &g);
+    if (argc > 1 && !strcmp(argv[1], "settings")) return settings_test(h, &g, argc > 2 && !strcmp(argv[2], "enterprise"));
 
     int from = now();
     e = WlanScan(h, &g, NULL, NULL, NULL);

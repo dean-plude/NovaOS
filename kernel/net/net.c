@@ -22,6 +22,7 @@
 #include "../lib/string.h"
 #include "../arch/x86_64/cpu.h"
 #include "../um/um.h"
+#include "mbedtls/sha1.h"
 
 #include "lwip/init.h"
 #include "lwip/netif.h"
@@ -516,21 +517,126 @@ bool NetRootName(int i, char *buf, int cap, bool *imported)
     return ok;
 }
 
+/* -----------------------------------------------------------------------
+ * Certificates kept across restarts, in the registry
+ *
+ * Imported roots are where Windows keeps the machine's: HKLM\SOFTWARE\
+ * Microsoft\SystemCertificates\ROOT\Certificates\<SHA-1 thumbprint>,
+ * value Blob in Windows' serialized form (one CERT_CERT_PROP_ID property:
+ * the certificate's DER).  The personal store's certificates and private
+ * keys are under HKLM\SECURITY\NovaOS\Personal\<00..07, in import
+ * order>, values Certificates (the chain's DER, the certificate first) and
+ * Key (the private key's DER): HKLM\SECURITY is a key no program may open
+ * (um_registry.c), as on Windows, where only SYSTEM may.  Nothing is
+ * removed, as the stores keep everything while NovaOS runs.
+ * ----------------------------------------------------------------------- */
+#define ROOTS_KEY      "Machine\\SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates"
+#define PERSONAL_KEY   "Machine\\SECURITY\\NovaOS\\Personal"
+#define CERT_PROP_DER  0x20u                /* CERT_CERT_PROP_ID */
+#define CERT_ROOM      16384u               /* (a chain and its key, or one root's blob) */
+
+static void put32(UINT8 *p, UINT32 v) { p[0] = (UINT8)v; p[1] = (UINT8)(v >> 8); p[2] = (UINT8)(v >> 16); p[3] = (UINT8)(v >> 24); }
+static UINT32 get32(const UINT8 *p) { return p[0] | p[1] << 8 | p[2] << 16 | (UINT32)p[3] << 24; }
+
+static void save_root(const UINT8 *der, UINT32 len)
+{
+    UINT8 h[20];
+    mbedtls_sha1(der, len, h);
+    char path[sizeof(ROOTS_KEY) + 48];
+    int o = ksnprintf(path, sizeof(path), "%s\\", ROOTS_KEY);
+    for (int i = 0; i < 20; i++) o += ksnprintf(path + o, sizeof(path) - o, "%02X", h[i]);
+    UINT8 *blob = kmalloc(len + 12);
+    if (!blob) return;
+    put32(blob, CERT_PROP_DER);
+    put32(blob + 4, 1);
+    put32(blob + 8, len);
+    memcpy(blob + 12, der, len);
+    um_registry_set_bin(path, "Blob", blob, len + 12);
+    kfree(blob);
+}
+
 int NetImportRoots(const void *data, UINT32 len, char *err, int err_cap)
 {
     net_lock();
-    int n = TlsImportRoots(data, len, err, err_cap);
+    int first = TlsRootCount(), n = TlsImportRoots(data, len, err, err_cap);
     net_unlock();
+    /* (the new ones are at the end; roots are never removed, so their DER stays put) */
+    for (int i = first; i < first + n; i++) {
+        const UINT8 *der;
+        UINT32 dl;
+        net_lock();
+        bool ok = TlsRootCert(i, &der, &dl);
+        net_unlock();
+        if (ok) save_root(der, dl);
+    }
     return n;
 }
 
 int NetImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
                  int err_cap)
 {
+    UINT8 *buf = kmalloc(CERT_ROOM);
+    UINT32 cl = 0, kl = 0;
     net_lock();
     int n = TlsImportPfx(data, len, password, name, name_cap, err, err_cap);
+    int i = TlsPersonalCount() - 1;
+    bool keep = n && buf && TlsPersonalExport(i, buf, CERT_ROOM, &cl, &kl);
     net_unlock();
+    if (keep) {
+        char path[sizeof(PERSONAL_KEY) + 8];
+        ksnprintf(path, sizeof(path), "%s\\%02d", PERSONAL_KEY, i);
+        um_registry_set_bin(path, "Certificates", buf, cl);
+        um_registry_set_bin(path, "Key", buf + cl, kl);
+    } else if (n)
+        kprintf("[TLS] The certificate \"%s\" could not be saved: it lasts until NovaOS restarts\n", name_cap ? name : "?");
+    if (buf) { memset(buf, 0, CERT_ROOM); kfree(buf); }
     return n;
+}
+
+void NetRestoreCertificates(void)
+{
+    UINT8 *buf = kmalloc(CERT_ROOM);
+    if (!buf) return;
+    int roots = 0, mine = 0;
+    UINT16 w[64];
+    for (UINT32 k = 0; ; k++) {                              /* the roots */
+        int wl = um_registry_enum_key(ROOTS_KEY, k, w, 63, NULL);
+        if (wl <= 0) break;
+        char path[sizeof(ROOTS_KEY) + 72];
+        int o = ksnprintf(path, sizeof(path), "%s\\", ROOTS_KEY);
+        for (int c = 0; c < wl && o < (int)sizeof(path) - 1; c++) path[o++] = w[c] < 0x80 ? (char)w[c] : '?';
+        path[o] = '\0';
+        int bl = um_registry_get_bin(path, "Blob", buf, CERT_ROOM);
+        for (int p = 0; bl > 0 && p + 12 <= bl; ) {        /* (its properties: id, 1, length, data) */
+            UINT32 id = get32(buf + p), pl = get32(buf + p + 8);
+            if (pl > (UINT32)bl - p - 12) break;
+            char err[80];
+            if (id == CERT_PROP_DER) {
+                net_lock();
+                roots += TlsImportRoots(buf + p + 12, pl, err, sizeof(err));
+                net_unlock();
+                break;
+            }
+            p += 12 + (int)pl;
+        }
+    }
+    for (int i = 0; i < 8; i++) {                            /* the personal store, in import order */
+        char path[sizeof(PERSONAL_KEY) + 8], name[64], err[80];
+        ksnprintf(path, sizeof(path), "%s\\%02d", PERSONAL_KEY, i);
+        int cl = um_registry_get_bin(path, "Certificates", buf, CERT_ROOM / 2);
+        int kl = cl > 0 ? um_registry_get_bin(path, "Key", buf + cl, CERT_ROOM - cl) : -1;
+        if (cl <= 0) break;
+        net_lock();
+        int ok = kl > 0 && TlsPersonalAdd(buf, (UINT32)cl, buf + cl, (UINT32)kl, name, sizeof(name), err, sizeof(err));
+        net_unlock();
+        if (ok) mine++;
+        else kprintf("[TLS] Personal certificate %d not restored: %s\n", i, kl > 0 ? err : "its key is missing");
+    }
+    memset(buf, 0, CERT_ROOM);
+    kfree(buf);
+    if (roots || mine)
+        kprintf("[TLS] Restored %d imported root%s and %d personal certificate%s from the registry\n",
+                roots, roots == 1 ? "" : "s", mine, mine == 1 ? "" : "s");
 }
 
 int NetPersonalCount(void)

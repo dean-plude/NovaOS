@@ -19,6 +19,7 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
+#include "mbedtls/pk.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/oid.h"
 #include "mbedtls/error.h"
@@ -208,6 +209,17 @@ static void copy_str(const mbedtls_x509_buf *v, char *buf, int cap)
     buf[o] = '\0';
 }
 
+bool TlsRootCert(int i, const UINT8 **der, UINT32 *len)
+{
+    if (i < 0 || i >= g_nroots) return false;
+    const mbedtls_x509_crt *c = &g_roots;
+    for (int k = 0; k < i && c; k++) c = c->next;
+    if (!c || !c->raw.len) return false;
+    *der = c->raw.p;
+    *len = (UINT32)c->raw.len;
+    return true;
+}
+
 bool TlsRootName(int i, char *buf, int cap, bool *user)
 {
     if (i < 0 || i >= g_nroots || cap < 2) return false;
@@ -296,6 +308,8 @@ static void cn_of(const mbedtls_x509_name *n, char *buf, int cap)
         if (!MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid)) copy_str(&n->val, buf, cap);
 }
 
+static int add_personal(char *name, int name_cap, char *err, int err_cap);
+
 int TlsImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
                  int err_cap)
 {
@@ -309,6 +323,15 @@ int TlsImportPfx(const void *data, UINT32 len, const char *password, char *name,
     mbedtls_pk_init(key);
     int r = PfxParse(data, len, password, chain, key, mbedtls_ctr_drbg_random, &g_drbg);
     if (r != PFX_OK) { ksnprintf(err, err_cap, "%s", PfxErrorText(r)); return 0; }
+    return add_personal(name, name_cap, err, err_cap);
+}
+
+/* The new entry g_personal[g_npersonal] (its chain and key parsed): kept,
+ * unless the store has that certificate already */
+static int add_personal(char *name, int name_cap, char *err, int err_cap)
+{
+    mbedtls_x509_crt *chain = &g_personal[g_npersonal].chain;
+    mbedtls_pk_context *key = &g_personal[g_npersonal].key;
     for (int i = 0; i < g_npersonal; i++)                   /* (the same certificate again: kept once) */
         if (g_personal[i].chain.raw.len == chain->raw.len &&
             !memcmp(g_personal[i].chain.raw.p, chain->raw.p, chain->raw.len)) {
@@ -321,6 +344,67 @@ int TlsImportPfx(const void *data, UINT32 len, const char *password, char *name,
     cn_of(&chain->issuer, g_personal[g_npersonal].issuer, sizeof(g_personal[0].issuer));
     if (name_cap) ksnprintf(name, name_cap, "%s", g_personal[g_npersonal].name);
     g_npersonal++;
+    return 1;
+}
+
+/* One DER element's length (tag, length, contents) at @p, 0 if it does not fit in @room */
+static UINT32 der_len(const UINT8 *p, UINT32 room)
+{
+    if (room < 2) return 0;
+    UINT32 n = p[1], h = 2;
+    if (n & 0x80) {
+        UINT32 k = n & 0x7F;
+        if (!k || k > 3 || room < 2 + k) return 0;
+        n = 0;
+        for (UINT32 i = 0; i < k; i++) n = n << 8 | p[2 + i];
+        h += k;
+    }
+    return n <= room - h ? h + n : 0;
+}
+
+int TlsPersonalAdd(const void *chain_der, UINT32 chain_len, const void *key_der, UINT32 key_len, char *name,
+                   int name_cap, char *err, int err_cap)
+{
+    err[0] = '\0';
+    if (name_cap) name[0] = '\0';
+    if (!g_ready) { ksnprintf(err, err_cap, "TLS is not available"); return 0; }
+    if (g_npersonal >= PERSONAL_MAX) { ksnprintf(err, err_cap, "The personal store is full"); return 0; }
+    mbedtls_x509_crt *chain = &g_personal[g_npersonal].chain;
+    mbedtls_pk_context *key = &g_personal[g_npersonal].key;
+    mbedtls_x509_crt_init(chain);
+    mbedtls_pk_init(key);
+    const UINT8 *p = chain_der;
+    bool ok = chain_len > 0;
+    for (UINT32 o = 0, n; ok && o < chain_len; o += n) {
+        n = der_len(p + o, chain_len - o);
+        ok = n && !mbedtls_x509_crt_parse_der(chain, p + o, n);
+    }
+    ok = ok && !mbedtls_pk_parse_key(key, key_der, key_len, NULL, 0, mbedtls_ctr_drbg_random, &g_drbg) &&
+         !mbedtls_pk_check_pair(&chain->pk, key, mbedtls_ctr_drbg_random, &g_drbg);
+    if (!ok) {
+        mbedtls_x509_crt_free(chain);
+        mbedtls_pk_free(key);
+        ksnprintf(err, err_cap, "The saved certificate or its key could not be read");
+        return 0;
+    }
+    return add_personal(name, name_cap, err, err_cap);
+}
+
+int TlsPersonalExport(int i, UINT8 *out, UINT32 cap, UINT32 *chain_len, UINT32 *key_len)
+{
+    if (i < 0 || i >= g_npersonal) return 0;
+    UINT32 o = 0;
+    for (const mbedtls_x509_crt *c = &g_personal[i].chain; c && c->raw.len; c = c->next) {
+        if (c->raw.len > cap - o) return 0;
+        memcpy(out + o, c->raw.p, c->raw.len);
+        o += (UINT32)c->raw.len;
+    }
+    /* (mbedtls_pk_write_key_der writes at the end of the room it is given) */
+    int k = mbedtls_pk_write_key_der(&g_personal[i].key, out + o, cap - o);
+    if (k <= 0) return 0;
+    memmove(out + o, out + cap - k, (UINT32)k);
+    *chain_len = o;
+    *key_len = (UINT32)k;
     return 1;
 }
 

@@ -703,9 +703,18 @@ session sends the user's certificate and signs with its key when the
 server asks.  The certificate comes from the personal store, which
 `certutil -importpfx` fills from a PKCS #12 file (`kernel/net/pfx.c`:
 PBES2 with AES or TripleDES-SHA1 bags, the HMAC integrity check).
+Settings' Wi-Fi page signs in to such a network too: a user name and
+password box (PEAP), or both left empty to use the newest certificate.
+Imported roots and the personal store are kept in the registry and put
+back at boot (`NetRestoreCertificates`, `kernel/net/net.c`): roots where
+Windows keeps the machine's (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT\Certificates`,
+a `Blob` per thumbprint), certificates and private keys under
+`HKLM\SECURITY`, which no program may open, in a hive only SYSTEM and
+Administrators may read (`System32\config`, as on Windows).
 
 What is missing: SAE's hash-to-element and groups other than P-256,
-WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
+WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, removing a
+certificate (`certutil -delstore`), frames
 the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
 joining on the real card, the rest of roadmap step 28.1, needs the T14.
@@ -742,7 +751,10 @@ NovaCorp Test Root) signs in. Then `wlantest` does it all again through `wlanapi
 notification, the network and BSS lists, a profile, a wrong passphrase
 refused with the key-mismatch reason, joining by profile and by SSID),
 and the test joins the WPA2 network in Settings' Wi-Fi page by typing,
-as a person would. Then it disconnects, and on
+as a person would, then the Enterprise one with alice's user name and
+password in the page's two boxes. A restart then finds the NovaCorp root
+and both certificates back from the registry, and alice signs in with
+EAP-TLS again. Then it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 

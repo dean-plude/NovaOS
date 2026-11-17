@@ -71,7 +71,11 @@ The test drives the mouse through --ctl (default --port + 100), a TCP port
 that takes lines of name=value pairs and answers "ok" once the report is
 sent on the HID interrupt channel ("error not connected" when it is not
 open): buttons (bit 0 left, 1 right, 2 middle), dx, dy (-127..127),
-wheel.  What happens is printed: commands by name, "inquiry", "paired
+wheel.  "away mouse" (or headset) takes the device out of range: its link
+drops and pages to it time out; "back mouse" brings it back connecting
+to the host by itself, as a mouse moved after sleep does (Connection
+Request; the device authenticates and encrypts the link, and the mouse
+opens HID's channels itself), once the host's next page has timed out.  What happens is printed: commands by name, "inquiry", "paired
 ADDR (ssp|pin)", "connected ADDR", "l2cap PSM open", "sdp ADDR",
 "hid open", "disconnected ADDR", "rfcomm DLCI open", "hfp slc",
 "voice link HANDLE open", "a2dp configured ...", "a2dp start".
@@ -379,6 +383,9 @@ class Remote:
         self.addr, self.name, self.cod, self.ssp = bytes(reversed(bytes.fromhex(addr.replace(':', '')))), name, cod, ssp
         self.records, self.psms = records, psms
         self.key = None                                   # (the link key of its pairing with the radio)
+        self.away = False                                 # out of range ("away"): pages to it time out
+        self.paging = False                               # paging the host ("back"): its Connection Request sent
+        self.paged = 0.0                                  # when the host last paged it while it was away
 
 
 REMOTES = [
@@ -582,6 +589,7 @@ class Link:
         self.pending_auth = None                          # ('ssp'|'pin') while pairing
         self.hf = self.sink = None
         self.sco = None                                   # its voice link's handle
+        self.out = {}                                     # our CID -> [answered, configured] for channels the device opens
 
 
 class Radio:
@@ -686,7 +694,7 @@ class Radio:
             addr = p[:6]
             self.status(opcode)
             r = self.remote(addr)
-            if r:
+            if r and not r.away:
                 self.event(0x07, b'\x00' + addr + r.name.encode().ljust(248, b'\0'))
             else:
                 self.event(0x07, b'\x04' + addr + bytes(248))      # (page timeout)
@@ -694,6 +702,11 @@ class Radio:
             addr = p[:6]
             r = self.remote(addr)
             self.status(opcode)
+            if r and r.away:
+                r.paged = time.monotonic()
+                log('page timeout ' + addr_text(addr) + ' (away)')
+                self.event(0x03, b'\x04' + struct.pack('<H', 0) + addr + b'\x01\x00')
+                return
             if not r or self.link_by_addr(addr):
                 self.event(0x03, bytes([0x04 if not r else 0x0B]) + struct.pack('<H', 0) + addr + b'\x01\x00')
                 return
@@ -703,6 +716,25 @@ class Radio:
             self.links[h] = link
             log('connected ' + addr_text(addr))
             self.event(0x03, b'\x00' + struct.pack('<H', h) + addr + b'\x01\x00')
+        elif opcode in (0x0409, 0x040A):                           # Accept / Reject Connection Request: our page
+            addr = p[:6]
+            r = self.remote(addr)
+            self.status(opcode, 0 if r and r.paging else 0x02)
+            if not r or not r.paging:
+                return
+            r.paging = False
+            if opcode == 0x040A:
+                log(f'refused by the host {addr_text(addr)} (reason {p[6]:02x})')
+                self.event(0x03, bytes([p[6]]) + struct.pack('<H', 0) + addr + b'\x01\x00')
+                return
+            h = self.next_handle
+            self.next_handle += 1
+            link = Link(r, h)
+            self.links[h] = link
+            log('accepted by the host ' + addr_text(addr))
+            self.event(0x03, b'\x00' + struct.pack('<H', h) + addr + b'\x01\x00')
+            link.pending_auth = 'key_in'                           # (then the device authenticates the link itself)
+            self.event(0x17, addr)
         elif opcode == 0x0428:                                     # Setup Synchronous Connection: eSCO, CVSD
             link = self.links.get(struct.unpack('<H', p[:2])[0] & 0x0FFF)
             self.status(opcode, 0 if link else 0x02)
@@ -746,7 +778,20 @@ class Radio:
             addr, key = p[:6], p[6:22]
             self.complete(opcode, b'\x00' + addr)
             link = self.link_by_addr(addr)
-            if link and link.pending_auth == 'key':
+            if link and link.pending_auth == 'key_in':             # (the device's own authentication, then encryption)
+                link.pending_auth = None
+                if link.remote.key != key:
+                    log('wrong link key from ' + addr_text(addr))
+                    self.links.pop(link.handle, None)
+                    self.event(0x05, b'\x00' + struct.pack('<HB', link.handle, 0x05))
+                    return
+                link.auth = True
+                log('authenticated by the device ' + addr_text(addr))
+                if 0x13 in link.remote.psms:                       # (its Encryption Change trails its first request)
+                    threading.Thread(target=self.open_hid, args=(link,), daemon=True).start()
+                else:
+                    self.event(0x08, b'\x00' + struct.pack('<HB', link.handle, 1))
+            elif link and link.pending_auth == 'key':
                 good = link.remote.key == key
                 link.auth = good
                 link.pending_auth = None
@@ -756,7 +801,11 @@ class Radio:
             addr = p[:6]
             self.complete(opcode, b'\x00' + addr)
             link = self.link_by_addr(addr)
-            if link and link.pending_auth == 'key':
+            if link and link.pending_auth == 'key_in':             # (the host lost the pairing: the device gives up)
+                self.links.pop(link.handle, None)
+                log('no link key from the host for ' + addr_text(addr))
+                self.event(0x05, b'\x00' + struct.pack('<HB', link.handle, 0x05))
+            elif link and link.pending_auth == 'key':
                 if link.remote.ssp:
                     link.pending_auth = 'ssp'
                     self.event(0x31, addr)                         # (IO Capability Request)
@@ -875,6 +924,28 @@ class Radio:
             log(f'l2cap {psm:#04x} open')
             if psm == 0x13:
                 log('hid open')
+        elif code == 0x03:                                          # Connection Response: to a channel the device opens
+            dcid, scid, result = struct.unpack('<HHH', body[:6])
+            ch = link.chans.get(scid)
+            if not ch or scid not in link.out or result == 0x0001:
+                return
+            if result:
+                log(f'l2cap {ch[0]:#04x} refused by the host ({result:04x})')
+                link.chans.pop(scid)
+                link.out[scid][0] = 'refused'
+                return
+            ch[1] = dcid
+            link.out[scid][0] = True
+            link.ident = (link.ident + 1) & 0xFF or 1
+            self.sig(link, 0x04, link.ident, struct.pack('<HH', dcid, 0) + bytes([0x01, 2]) + struct.pack('<H', 672))
+        elif code == 0x05:                                          # Configuration Response: to ours
+            scid = struct.unpack('<H', body[:2])[0]
+            if scid in link.out and link.chans.get(scid):
+                link.out[scid][1] = True
+                ch = link.chans[scid]
+                log(f'l2cap {ch[0]:#04x} open (by the device)')
+                if ch[0] == 0x13:
+                    log('hid open')
         elif code == 0x04:                                          # Configuration Request: accepted as asked
             dcid, flags = struct.unpack('<HH', body[:4])
             ch = link.chans.get(dcid)
@@ -947,10 +1018,69 @@ class Radio:
         out, self.mic_buf = self.mic_buf[:n], self.mic_buf[n:]
         return out
 
+    # -- a device leaving and coming back by itself --
+    def away(self, r):
+        """@r goes out of range: its link drops (supervision timeout) and
+        pages to it time out until it is back"""
+        with self.lock:
+            r.away = True
+            link = self.link_by_addr(r.addr)
+            if link:
+                self.links.pop(link.handle)
+                if link.sco is not None:
+                    self.sco.pop(link.sco, None)
+                    self.event(0x05, b'\x00' + struct.pack('<HB', link.sco, 0x08))
+                self.event(0x05, b'\x00' + struct.pack('<HB', link.handle, 0x08))
+            log('away ' + addr_text(r.addr))
+        return True
+
+    def back(self, r):
+        """@r comes back and connects to the host itself (Connection
+        Request), as a mouse moved after sleep does.  It waits for the
+        host's next page of it to time out first, so the host's own retry
+        is seconds away and the connection is the device's"""
+        t0 = time.monotonic()
+        while r.paged < t0 and time.monotonic() < t0 + 15:
+            time.sleep(0.1)
+        time.sleep(1)
+        with self.lock:
+            r.away = False
+            if self.link_by_addr(r.addr):
+                return False
+            r.paging = True
+            log('paging the host from ' + addr_text(r.addr))
+            self.event(0x04, r.addr + r.cod.to_bytes(3, 'little') + b'\x01')
+        return True
+
+    def open_hid(self, link):
+        """The mouse opens HID's control then interrupt channel to the host"""
+        for psm in (0x11, 0x13):
+            with self.lock:
+                cid = link.next_cid
+                link.next_cid += 1
+                link.chans[cid] = [psm, None, False, 'out']
+                link.out[cid] = [False, False]
+                link.ident = (link.ident + 1) & 0xFF or 1
+                self.sig(link, 0x02, link.ident, struct.pack('<HH', psm, cid))
+            if psm == 0x11:
+                # The request reaches the host before the Encryption Change
+                # event, as on a USB radio, where ACL data (bulk) and events
+                # (interrupt) race: the host must hold it, not refuse it
+                time.sleep(0.2)
+                with self.lock:
+                    self.event(0x08, b'\x00' + struct.pack('<HB', link.handle, 1))
+            end = time.monotonic() + 5
+            while time.monotonic() < end and link.out[cid] != [True, True] and link.out[cid][0] != 'refused':
+                time.sleep(0.05)
+            if link.out[cid] != [True, True]:
+                log(f'l2cap {psm:#04x}: the host did not open it')
+                return
+            time.sleep(0.1)                                     # (the host's configuration of its side, answered)
+
     def mouse_report(self, buttons, dx, dy, wheel):
         with self.lock:
             link = self.link_by_addr(REMOTES[0].addr)
-            ch = next((c for c in (link.chans.values() if link else ()) if c[0] == 0x13), None)
+            ch = next((c for c in (link.chans.values() if link else ()) if c[0] == 0x13 and c[1] is not None), None)
             if not ch:
                 return False
             self.acl(link, ch[1], bytes([0xA1, buttons & 7, dx & 0xFF, dy & 0xFF, wheel & 0xFF]))
@@ -1200,6 +1330,13 @@ def ctl_loop(port, conns):
         f = c.makefile('rw')
         for line in f:
             try:
+                w = line.split()
+                if w and w[0] in ('away', 'back'):               # away|back mouse|headset
+                    r = REMOTES[0 if w[1:] == ['mouse'] else 1]
+                    ok = any((conn.radio.away if w[0] == 'away' else conn.radio.back)(r) for conn in list(conns))
+                    f.write('ok\n' if ok else 'error\n')
+                    f.flush()
+                    continue
                 v = {'buttons': 0, 'dx': 0, 'dy': 0, 'wheel': 0}
                 for kv in line.split():
                     k, x = kv.split('=')

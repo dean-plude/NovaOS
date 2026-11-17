@@ -429,6 +429,7 @@ VIOSTOR = load_suite('devices/viostor')
 UMDF = load_suite('devices/umdf')
 KMDFEDU = load_suite('devices/kmdfedu')
 WDDM = load_suite('devices/wddm')
+VIOGPUDO = load_suite('devices/viogpudo')
 DEVMGR = load_suite('devices/devmgr')
 NETKVM = load_suite('devices/netkvm')
 DISKMGR = load_suite('devices/diskmgr')
@@ -688,6 +689,17 @@ def wddm_boot(work):
     device it installs the render miniport wddmtest.sys on
     (tests/selftest/devices/wddm)"""
     return [], []
+
+
+def viogpudo_boot(work):
+    """A virtio-vga as the machine's display (PCI 1AF4:1050) and virtio-win's
+    signed viogpudo package (tools/drivertest/viogpudo.py) in
+    C:\\Tests\\VioGpu: pnputil installs it (tests/selftest/devices/viogpudo)"""
+    sys.path.insert(0, os.path.join(ROOT, 'tools', 'drivertest'))
+    import viogpudo
+    pkg = os.path.join(work, 'viogpudo')
+    viogpudo.fetch(pkg)
+    return [], [], dict(puts=[(pkg, r'C:\Tests\VioGpu')], vga=('-vga', 'virtio'))
 
 
 def devmgr_boot(work):
@@ -1301,7 +1313,7 @@ BOOTS = {
                 ('wifi', WIFI, wifi_boot),
                 ('viostor', VIOSTOR, viostor_boot), ('umdf', UMDF, umdf_boot),
                 ('kmdfedu', KMDFEDU, kmdfedu_boot), ('netkvm', NETKVM, netkvm_boot),
-                ('wddm', WDDM, wddm_boot), ('devmgr', DEVMGR, devmgr_boot),
+                ('wddm', WDDM, wddm_boot), ('viogpudo', VIOGPUDO, viogpudo_boot), ('devmgr', DEVMGR, devmgr_boot),
                 ('diskmgr', DISKMGR, diskmgr_boot), ('vhidmini', VHIDMINI, vhidmini_boot),
                 ('diskc', DISKC, diskc_boot)],
 }

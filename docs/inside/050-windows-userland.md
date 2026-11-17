@@ -23,7 +23,9 @@
   - **UWP app model**: `twinapi.appcore` (`CoreApplication.Run` driving an
     app's `IFrameworkView`, its `CoreWindow` with keyboard, pointer
     (`PointerPoint`), size, visibility and close events, and the
-    `CoreDispatcher`; DXGI swap chains present into a CoreWindow) and
+    `CoreDispatcher`; the app suspended when its window is minimised and
+    resumed when restored (`Suspending` with deferrals, `Resuming`,
+    `EnteredBackground`, `LeavingBackground`); DXGI swap chains present into a CoreWindow) and
     `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
     sprite visuals, colour and surface brushes, drawing surfaces on
     Direct3D 11, targets on a window or a CoreWindow, property sets, key

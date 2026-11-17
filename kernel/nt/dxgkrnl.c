@@ -163,6 +163,11 @@ typedef struct DxgkAdapter {
     DisplayWddm        disp;
     DisplayMode        modes[MAX_MODES];
     int                nmodes;
+    /* the driver's own mode infos for them, and its target modes: what a
+     * VidPN to commit pins (a driver checks every field of its own) */
+    D3DKMDT_VIDPN_SOURCE_MODE smode[MAX_MODES];
+    D3DKMDT_VIDPN_TARGET_MODE tmode[MAX_MODES];
+    int                ntmodes;
     DisplayMode        cur;
     struct { void *va; UINT64 len; } map[MAX_MAPS];
     /* a render adapter's */
@@ -323,6 +328,7 @@ typedef struct {
     bool  assigned;                        /* belongs to a VidPN (else freed when released) */
     bool  retired;                         /* replaced by an assigned one: freed with the VidPN */
     int   n, pinned;                       /* pinned: an index, or -1 */
+    UINT32 next_id;                        /* what CreateNewModeInfo numbers the next one */
     union {
         D3DKMDT_VIDPN_SOURCE_MODE s[MAX_MODES];
         D3DKMDT_VIDPN_TARGET_MODE t[MAX_MODES];
@@ -522,7 +528,12 @@ static NT_API NT_STATUS ms_new(void *h, void **out)
 {
     ModeSet *m = h;
     *out = kzalloc(m->target ? sizeof(m->t[0]) : sizeof(m->s[0]));
-    return *out ? NT_STATUS_SUCCESS : NT_STATUS_NO_MEMORY;
+    if (!*out) return NT_STATUS_NO_MEMORY;
+    /* (numbered by dxgkrnl, as Windows' is: a driver does not set Id) */
+    UINT32 id = 0x100 + m->next_id++;
+    if (m->target) ((D3DKMDT_VIDPN_TARGET_MODE *)*out)->Id = id;
+    else ((D3DKMDT_VIDPN_SOURCE_MODE *)*out)->Id = id;
+    return NT_STATUS_SUCCESS;
 }
 
 static NT_API NT_STATUS ms_add(void *h, const void *p)
@@ -643,7 +654,8 @@ static const DXGK_VIDPN_INTERFACE g_vidpn_if = {
 /* A VidPN with one path, source 0 to @target; with @w x @h, that mode
  * pinned on both ends (a VidPN to commit), else no modes (one for the
  * driver to fill with what it can do) */
-static VidPn *vidpn_one(D3DDDI_VIDEO_PRESENT_TARGET_ID target, int w, int h)
+static VidPn *vidpn_one(D3DDDI_VIDEO_PRESENT_TARGET_ID target, int w, int h, const D3DKMDT_VIDPN_SOURCE_MODE *src,
+                        const D3DKMDT_VIDPN_TARGET_MODE *tgt)
 {
     VidPn *v = vidpn_new();
     if (!v || target >= MAX_IDS) { kfree(v); return NULL; }
@@ -655,7 +667,8 @@ static VidPn *vidpn_one(D3DDDI_VIDEO_PRESENT_TARGET_ID target, int w, int h)
     p->ContentTransformation.ScalingSupport = 1;     /* identity */
     p->ContentTransformation.Rotation = D3DKMDT_VPPR_IDENTITY;
     p->ContentTransformation.RotationSupport = 1;
-    p->VidPnTargetColorBasis = D3DKMDT_CB_SRGB;
+    p->VidPnTargetColorBasis = D3DKMDT_CB_SCRGB;   /* (what Windows' dxgkrnl gives a display-only driver: */
+    p->GammaRamp.Type = 1;                          /* KMDOD-derived ones such as viogpudo check both) D3DDDI_GAMMARAMP_DEFAULT */
     p->Content = D3DKMDT_VPPC_GRAPHICS;
     if (w <= 0) return v;
     ModeSet *s = modeset_new(false), *t = modeset_new(true);
@@ -665,9 +678,9 @@ static VidPn *vidpn_one(D3DDDI_VIDEO_PRESENT_TARGET_ID target, int w, int h)
     sm->Type = D3DKMDT_RMT_GRAPHICS;
     sm->Format.Graphics.PrimSurfSize = (D3DKMDT_2DREGION){ (UINT32)w, (UINT32)h };
     sm->Format.Graphics.VisibleRegionSize = sm->Format.Graphics.PrimSurfSize;
-    sm->Format.Graphics.Stride = (UINT64)w * 4;
+    sm->Format.Graphics.Stride = (UINT32)w * 4;
     sm->Format.Graphics.PixelFormat = D3DDDIFMT_A8R8G8B8;
-    sm->Format.Graphics.ColorBasis = D3DKMDT_CB_SRGB;
+    sm->Format.Graphics.ColorBasis = D3DKMDT_CB_SCRGB;
     sm->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
     s->pinned = 0;
     D3DKMDT_VIDPN_TARGET_MODE *tm = &t->t[t->n++];
@@ -679,6 +692,9 @@ static VidPn *vidpn_one(D3DDDI_VIDEO_PRESENT_TARGET_ID target, int w, int h)
     tm->VideoSignalInfo.PixelRate = (UINT64)w * h * 60;
     tm->VideoSignalInfo.ScanLineOrdering = 1;       /* progressive */
     tm->Preference = D3DKMDT_MP_PREFERRED;
+    if (src) { *sm = *src; sm->Id = 0; }             /* (the driver's own, as it offered them) */
+    if (tgt) { *tm = *tgt; tm->Id = 0; }
+    s->next_id = t->next_id = 1;
     t->pinned = 0;
     s->assigned = t->assigned = true;
     v->src[0] = s;
@@ -891,7 +907,17 @@ static NT_API NT_STATUS cb_post_display(void *h, DXGK_DISPLAY_INFORMATION *info)
 static bool commit(DxgkAdapter *a, int w, int h)
 {
     const KMDDOD_INITIALIZATION_DATA *ddi = &a->drv->ddi;
-    VidPn *v = vidpn_one(a->target, w, h);
+    const D3DKMDT_VIDPN_SOURCE_MODE *src = NULL;
+    const D3DKMDT_VIDPN_TARGET_MODE *tgt = NULL;
+    for (int i = 0; i < a->nmodes && !src; i++)
+        if (a->modes[i].w == w && a->modes[i].h == h) src = &a->smode[i];
+    for (int i = 0; i < a->ntmodes; i++) {            /* (the one of that size; else the one it prefers) */
+        const D3DKMDT_2DREGION *r = &a->tmode[i].VideoSignalInfo.ActiveSize;
+        if (r->cx == (UINT32)w && r->cy == (UINT32)h) { tgt = &a->tmode[i]; break; }
+        if (!tgt && a->tmode[i].Preference == D3DKMDT_MP_PREFERRED) tgt = &a->tmode[i];
+    }
+    if (!tgt && a->ntmodes) tgt = &a->tmode[0];
+    VidPn *v = vidpn_one(a->target, w, h, src, tgt);
     if (!v) return false;
     DXGKARG_ISSUPPORTEDVIDPN is = { v, 0 };
     NT_STATUS st = ddi->DxgkDdiIsSupportedVidPn(a->ctx, &is);
@@ -954,7 +980,8 @@ static void disp_present(void *ctx, const UINT32 *px, int stride, int x, int y, 
 static void read_modes(DxgkAdapter *a)
 {
     a->nmodes = 0;
-    VidPn *v = vidpn_one(a->target, 0, 0);
+    a->ntmodes = 0;
+    VidPn *v = vidpn_one(a->target, 0, 0, NULL, NULL);
     if (!v) return;
     DXGKARG_ENUMVIDPNCOFUNCMODALITY e;
     memset(&e, 0, sizeof(e));
@@ -966,9 +993,15 @@ static void read_modes(DxgkAdapter *a)
         const D3DKMDT_VIDPN_SOURCE_MODE *m = &v->src[0]->s[i];
         int f = m->Format.Graphics.PixelFormat;
         if (m->Type != D3DKMDT_RMT_GRAPHICS || (f != D3DDDIFMT_A8R8G8B8 && f != D3DDDIFMT_X8R8G8B8)) continue;
+        a->smode[a->nmodes] = *m;
         a->modes[a->nmodes++] = (DisplayMode){ (int)m->Format.Graphics.PrimSurfSize.cx, (int)m->Format.Graphics.PrimSurfSize.cy };
     }
+    for (int i = 0; v->tgt[a->target] && i < v->tgt[a->target]->n && a->ntmodes < MAX_MODES; i++)
+        a->tmode[a->ntmodes++] = v->tgt[a->target]->t[i];
     int targets = v->tgt[a->target] ? v->tgt[a->target]->n : 0;
+    if (!a->nmodes && v->src[0] && v->src[0]->n)            /* (what it offered instead) */
+        kprintf("[DXGK] %s: source 0's first mode is type %d, format %d\n", a->drv->service, v->src[0]->s[0].Type,
+                v->src[0]->s[0].Format.Graphics.PixelFormat);
     vidpn_free(v);
     kprintf("[DXGK] %s: %d source mode(s), %d target mode(s) on output %u\n", a->drv->service, a->nmodes, targets, a->target);
 }
@@ -1925,13 +1958,26 @@ static NT_STATUS adapter_start(DxgkAdapter *a, NT_CM_RESOURCE_LIST *xlat)
     return NT_STATUS_SUCCESS;
 }
 
-/* SURPRISE_REMOVAL or REMOVE_DEVICE: the driver stops, @irp goes down
- * (the PCI bus turns the function's decoding off), and the display
+/* What the driver left mapped (DxgkCbMapMemory), once it is removed: a
+ * driver may keep its registers mapped from StopDevice to RemoveDevice
+ * (viogpudo.sys resets its virtio device there) */
+static void unmap_leftovers(DxgkAdapter *a)
+{
+    for (int i = 0; i < MAX_MAPS; i++)
+        if (a->map[i].va) { nt_MmUnmapIoSpace(a->map[i].va, a->map[i].len); a->map[i].va = NULL; }
+}
+
+/* SURPRISE_REMOVAL or REMOVE_DEVICE: the driver stops (on REMOVE_DEVICE,
+ * @remove, it is removed too, while its device still decodes), @irp goes
+ * down (the PCI bus turns the function's decoding off), and the display
  * layer's built-in driver gets the screen back as the driver left it */
-static NT_STATUS adapter_stop(DxgkAdapter *a, NT_IRP *irp)
+static NT_STATUS adapter_stop(DxgkAdapter *a, NT_IRP *irp, bool remove)
 {
     const KMDDOD_INITIALIZATION_DATA *ddi = &a->drv->ddi;
-    if (!a->started) return forward(a, irp);
+    if (!a->started) {
+        if (remove) { ddi->DxgkDdiRemoveDevice(a->ctx); unmap_leftovers(a); }
+        return forward(a, irp);
+    }
     if (a->drv->render) render_teardown(a);
     DesktopLockAlone();                               /* (no frame half presented; the desktop's order: it, then us) */
     lock(a);
@@ -1951,13 +1997,12 @@ static NT_STATUS adapter_stop(DxgkAdapter *a, NT_IRP *irp)
     }
     a->started = false;
     intr_disconnect(a);
+    if (remove) { ddi->DxgkDdiRemoveDevice(a->ctx); unmap_leftovers(a); }
     st = forward(a, irp);
     if (a->shown) DisplayWddmWithdraw(&a->disp, (DisplayMode){ (int)info.Width, (int)info.Height });
     a->shown = false;
     unlock(a);
     DesktopUnlockAlone();
-    for (int i = 0; i < MAX_MAPS; i++)                /* (anything the driver left mapped) */
-        if (a->map[i].va) { nt_MmUnmapIoSpace(a->map[i].va, a->map[i].len); a->map[i].va = NULL; }
     return st;
 }
 
@@ -1989,15 +2034,14 @@ static NT_STATUS adapter_pnp(DxgkAdapter *a, NT_IRP *irp, NT_IO_STACK_LOCATION *
     case NT_IRP_MN_SURPRISE_REMOVAL: {
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
         render_lock();
-        NT_STATUS st = adapter_stop(a, irp);
+        NT_STATUS st = adapter_stop(a, irp, false);
         render_unlock();
         return st;
     }
     case NT_IRP_MN_REMOVE_DEVICE: {
         irp->IoStatus.Status = NT_STATUS_SUCCESS;
         render_lock();
-        NT_STATUS st = adapter_stop(a, irp);
-        a->drv->ddi.DxgkDdiRemoveDevice(a->ctx);
+        NT_STATUS st = adapter_stop(a, irp, true);
         nt_IoDetachDevice(a->lower);
         nt_IoDeleteDevice(a->fdo);
         kprintf("[DXGK] %s: adapter removed\n", a->drv->service);

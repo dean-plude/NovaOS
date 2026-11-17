@@ -16661,6 +16661,35 @@ create one (`xaml: cannot create NAME: type not resolved`).
   NovaOS's framework, so the parser cannot resolve it and loading the page
   fails with E_FAIL.  The page does not draw yet.
 
+## Bluetooth: Settings' Bluetooth & devices page and reconnects the device starts
+
+The rest of roadmap step 28.2 that QEMU can show
+([drivers.md](../drivers.md#bluetooth-bthusb-and-the-host-stack)).
+
+- **Device-started reconnects** (`kernel/nt/bthport.c`, `hidbth.c`,
+  `bthaudio.c`): the host used to refuse every Connection Request, so a
+  mouse moved after sleep waited up to 10 seconds for NovaOS to page it.
+  Now a paired device with a service on is accepted; it authenticates
+  with its stored key and encrypts the link, and a mouse or keyboard
+  opens HID's control and interrupt channels itself, which the host gives
+  to the device's `hidbth` node (others are refused). If it opens none
+  within three seconds, `hidbth` opens them; a headset that connects gets
+  its profiles opened at once.
+- **Settings > Bluetooth & devices** (`kernel/apps/settings_bluetooth.c`,
+  a new page after System, found by "bluetooth" and
+  `ms-settings:bluetooth`): the radio, paired devices with their state,
+  and the devices a search found; **Add device** searches, **Pair** pairs
+  and switches the device's services on as Windows does, **Remove
+  device** forgets it, all in the background through the host code
+  `bthprops.cpl` uses.
+- **Tests:** the devices suite's `bluetooth` boot: `bttest reconnect`
+  (tools/btpeer.py's new `away mouse` and `back mouse`: the mouse's link
+  drops, then it pages the PC, authenticates, encrypts and opens its HID
+  channels) and `bttest settings` (the mouse paired in Settings with
+  Start, "bluetooth", Down, Enter, then moving the cursor).
+- **Not yet:** pairing a real mouse and headset on the T14 with Intel's
+  driver, including after sleep (Dean's check that ticks 28.2).
+
 ## GPU objects shared by NT handle, and 32-bit programs' D3DKMT calls
 
 Direct3D 12 and Vulkan share GPU memory and fences between processes and
@@ -16768,6 +16797,33 @@ the "deeper idle" item of 0.2.3 ([plan](releases/0.2.3.md)).
 Not yet: OS-coordinated container states, PoFx directed power-down and
 latency tolerances, NovaOS's own drivers powering their devices down, and
 the idle-drain measurement on the T14.
+
+## Packaged apps in the shell, second part: suspend and resume
+
+The second part of item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
+A UWP app (one that runs its view through `CoreApplication.Run`, which on
+Windows only a packaged app does) now goes through the lifetime Windows'
+process lifetime manager gives it.  When its window is minimised,
+`twinapi.appcore` raises `CoreApplication.EnteredBackground`, and a
+second later, if the window is still minimised, `Suspending`: its
+`SuspendingOperation` gives deferrals and a deadline five seconds on, and
+the suspension waits, pumping the window's messages so work the app posts
+to its dispatcher still runs, until every deferral is completed or the
+deadline passes.  Restored, the app gets `Resuming` and then
+`LeavingBackground` (with a deferral too), before `VisibilityChanged`, as
+on Windows.  A window minimised and restored within the second is never
+suspended, and one restored while its app is still saving resumes as
+soon as the saving ends.
+
+- **Tests:** `coreapptest` (core suite, 64- and 32-bit) minimises its
+  CoreWindow, completes the `Suspending` deferral from another thread
+  300 ms later, restores the window and checks the events' order
+  (EnteredBackground, Suspending, the deferral, Resuming,
+  LeavingBackground) and the deadline.
+- **Left:** NovaOS does not freeze a suspended app's threads (the app has
+  saved its state, which is what `Suspending` asks of it); XAML's own
+  `Application.Suspending` and `Resuming` (its process lifetime handler,
+  `PLMIntegration.cpp`, is not built yet) are still never raised.
 
 ## The Venus present hang is retired: one cause, fixed on 2026-10-21
 
@@ -16915,6 +16971,37 @@ between them: the same MSK at both ends, a wrong password, an unknown user,
 a `DOMAIN\user` name and an untrusted server.  Not yet: EAP-TLS (a client
 certificate), WPA3-Enterprise, Enterprise profiles in `wlanapi.dll` and
 Settings, and PEAP's cryptobinding; the real card needs the T14.
+
+## A vendor's display driver, unchanged: Red Hat's viogpudo.sys on QEMU
+
+Item 3 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)): Red Hat's WDDM
+display-only driver for QEMU's virtio GPU, `viogpudo.sys`, as virtio-win
+0.1.302 publishes it (signed by Microsoft), runs unchanged on NovaOS's
+`dxgkrnl` host, the rehearsal on hardware CI has of the Intel design's
+step 2 ([design](design/intel-gpu.md)).
+
+- **What runs**: `pnputil /add-driver viogpudo.inf /install` on a machine
+  whose display is a virtio-vga: NovaOS's built-in driver steps aside (its
+  virtio side, `virtio_gpu.c`, lets go of the card), the driver registers
+  through displib, starts with the card's BARs and line interrupt, offers
+  23 modes, and the desktop moves to it.  Mode changes from Settings or
+  `ChangeDisplaySettings` are VidPNs it commits; disabling it gives the
+  screen back to the built-in driver; it starts at boot.
+- **What NovaOS needed**: `IoCreateNotificationEvent`, `RtlAssert` and
+  `vDbgPrintEx`; `ZwLoadDriver` of `DXGKrnl` answering "already loaded"
+  (displib loads it first); mode Ids numbered by dxgkrnl; committing the
+  driver's own source and target modes, on a path with the default gamma
+  ramp and scRGB colour basis (it checks both); stopping and removing the
+  driver before the bus turns its decoding off, its mappings kept until
+  then (it resets its virtio device in `DxgkDdiRemoveDevice`).
+- **What it found**: two structure layouts NovaOS's own test driver could
+  not catch, being built with the same header: a source mode's `Stride`
+  is a DWORD (40-byte mode), and a target mode is 96 bytes (colour basis,
+  per-channel ranges, wire format, then preference).  It also confirmed
+  the display-only registration IOCTL, `0x230043`, which had been a guess.
+- **Tested by** the devices suite's `viogpudo` boot
+  (`tests/selftest/devices/viogpudo`; the package is fetched by
+  `tools/drivertest/viogpudo.py`).
 
 <!-- END generated:history -->
 

@@ -552,6 +552,10 @@ static NTSTATUS drv_load(const char *service)
 {
     if (!g_ready) return STATUS_INSUFFICIENT_RESOURCES;
     if (find(service)) return ST_IMAGE_ALREADY_LOADED;
+    /* (dxgkrnl.sys is the kernel's own, kernel/nt/dxgkrnl.c, running from
+     * boot as Windows starts it: displib.lib's DxgkInitialize loads it
+     * first and takes "already loaded" as yes) */
+    if (same_ci(service, "DXGKrnl")) return ST_IMAGE_ALREADY_LOADED;
     if (g_nloading == LOAD_DEPTH) return STATUS_INSUFFICIENT_RESOURCES;
 
     char path[260];

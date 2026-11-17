@@ -1,4 +1,5 @@
 {
+  "x86": true,
   "selftest": true,
   "libs": ["setupapi", "cfgmgr32"]
 }

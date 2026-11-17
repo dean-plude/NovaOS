@@ -16661,6 +16661,80 @@ create one (`xaml: cannot create NAME: type not resolved`).
   NovaOS's framework, so the parser cannot resolve it and loading the page
   fails with E_FAIL.  The page does not draw yet.
 
+## GPU objects shared by NT handle, and 32-bit programs' D3DKMT calls
+
+Direct3D 12 and Vulkan share GPU memory and fences between processes and
+APIs by NT handle: VKD3D-Proton's shared heaps and fences, a browser's GPU
+process handing frames to its window's process.  NovaOS's graphics kernel
+had no way to do it, and a 32-bit program's `D3DKMT*` calls all failed
+with `STATUS_NOT_SUPPORTED`.
+
+As the sixth part of step 3 of the Intel GPU design
+([design/intel-gpu.md](design/intel-gpu.md)), `D3DKMTCreateAllocation2`
+makes resources (`CreateResource`: allocations together, with the
+runtime's and the driver's private data), shareable with `CreateShared`
+and `NtSecuritySharing`, and fences take the same sharing flags.
+`D3DKMTShareObjects` turns one into an NT handle: a kernel object holding
+its pages, and on a driver's adapter the driver's allocation, which stays
+alive while any handle to it is open, even after the resource it was made
+from is gone.  Another process that has the handle, inherited or
+duplicated, opens it on its own device: `D3DKMTQueryResourceInfoFromNtHandle`
+says how much data comes with it, `D3DKMTOpenResourceFromNtHandle` opens
+the driver's same allocation there (`DxgkDdiOpenAllocation` with the data
+it was made with) and gives the data back, and
+`D3DKMTOpenSyncObjectFromNtHandle2` maps the fence's value page into the
+process for its CPU (read-only) and its GPU.  The second process maps the
+allocation into its own GPU address space like one of its own.
+
+For 32-bit programs, gdi32 now rebuilds each `D3DKMT*` structure in its
+x64 layout (pointers zero-extended, handles sign-extended, arrays of
+allocation descriptions rebuilt) and copies the kernel's answers back, as
+WoW64 does on Windows; the few structures laid out alike on both go as
+they are.
+
+`kmttest wddm` shares a resource and a monitored fence with a second
+process it starts with the handles inherited: that process sees what the
+first wrote, has its own GPU write the allocation and signal the fence,
+signals it again from its CPU, and the first process sees all of it.  The
+same checks pass as a 32-bit program (`C:\Programs\x86\kmttest.exe wddm`),
+and the core suite runs `kmttest` as a 32-bit program too, which found
+NovaOS's own `MEMORY_BASIC_INFORMATION` 4 bytes too long for 32-bit
+programs built with its headers (`PartitionId` is x64 only), now fixed.  Not yet:
+named shares (`D3DKMTOpenSyncObjectNtHandleFromName`), keyed mutexes and
+the older global share handles.
+
+## Packaged apps in the shell, first part: the Start menu and Settings > Apps
+
+The first part of item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
+An installed app package's applications now appear in the Start menu as
+Windows lists packaged apps: from the package repository, not from
+shortcuts.  `appx` records each application's tile logo (the manifest's
+`Square44x44Logo`, else `Square150x150Logo`, found on disk as a scale or
+target-size variant the way Windows' resource lookup picks one, a target
+size of 48 first, then the scales from 200 down) and its `AppListEntry`;
+the Start menu reads the current account's packages, leaves out
+frameworks and `AppListEntry="none"` applications, shows each one by its
+display name with its logo, and starts it in its package's folder, so it
+runs with its package identity.  `appx` no longer writes `.lnk` files
+(removing a package installed before still deletes its old shortcut).
+
+Settings has a new **Apps** page (`ms-settings:appsfeatures`,
+`kernel/apps/settings_apps.c`): the installed packages with their logo,
+publisher and version and an **Uninstall** button that asks first, then
+runs `appx remove` as the system, without a UAC prompt, as Windows'
+deployment service removes a Store app.  Up and Down pick an app, Delete
+asks, Enter confirms.
+
+- **Tests:** the core suite's `889-appxshell.py` installs the test
+  package, starts it from the Start menu by its manifest name (its
+  program writes the application user model id it runs as) and
+  uninstalls it from Settings > Apps; `appxtest` checks the recorded logo
+  (the scale-200 variant of the test package's new logo) and that it goes
+  with the package.
+- **Left:** suspend and resume (`CoreApplication.Suspending` and
+  `Resuming` when a package's window is minimised and restored), the
+  item's second part.
+
 ## Battery life, second part: runtime idle and low-power idle states
 
 The second part of step 28.4 ([install-and-power.md](install-and-power.md#processor-idle-states-and-device-power)),

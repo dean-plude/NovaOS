@@ -1,1 +1,1 @@
-{"deps": ["user32", "kernel32", "ntdll"], "entry": "DllMain"}
+{"deps": ["user32", "gdi32", "oleaut32", "kernel32", "ntdll"], "entry": "DllMain", "sources": ["riched20", "textserv"]}

@@ -1862,5 +1862,29 @@ vendors.
    dependency properties; markup naming a `Pivot` resolved through the
    phone library's type tables).
 
+   Pulsar item 3, twenty-fourth slice: the `Pivot`'s base class.  NovaOS
+   now builds the framework's `ItemsControl` (`ItemsControl_Partial.cpp`),
+   its `ItemCollection` with the `CollectionViewManager` that wraps an
+   `ItemsSource`, its `ItemContainerGenerator` and `ItemsChangedEventArgs`,
+   and the `ItemsPresenter` its template holds the items panel in, each
+   its generated class and its partial one.  Before that, the class's
+   activation factory was an unbuilt stand-in answering null, so
+   composing a `Pivot` over it failed with `CLASS_E_CLASSNOTAVAILABLE`.
+   The `Pivot` then asks, by name, for more framework classes as it is
+   made: the `Rect` and `Point` helpers' statics, the layout transition
+   and secondary content helpers its header animations use,
+   `SelectionChangedEventArgs`, `FocusManager` with
+   `FindNextElementOptions`, `ElementSoundPlayer`'s statics, the
+   automation identifiers (`AutomationElementIdentifiers`,
+   `PatternIdentifiers.cpp`, `AutomationProperty`) and the item and items
+   control automation peers; those build too (`build.py`'s
+   `_ITEMS_PEERS` and `_PIVOT_ASKS`).  `Selector` is not needed for the
+   `Pivot` and does not build yet.  A `Pivot` with two `PivotItem`s now
+   loads from markup, its items in its `Items`.  Calculator's main page
+   makes its `Pivot` and stops next at its `MenuFlyout` (the history and
+   memory context menu), whose constructor is an unbuilt stand-in.  Test:
+   `wuxamltest` (a `Pivot` from markup, its two items through Windows'
+   `IItemsControl`).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

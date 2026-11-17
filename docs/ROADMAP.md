@@ -1634,6 +1634,18 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   item collection, container generator, items presenter and `Selector`),
   then the CI check that Calculator computes `2 + 2`, which ticks this
   step.
+  Thirtieth part done (Pulsar item 3, twenty-fourth slice): the
+  framework's `ItemsControl`, with its item collection, container
+  generator and items presenter, and the other framework classes the
+  `Pivot` asks for as it is made (the `Rect` and `Point` helpers, the
+  layout transition and secondary content helpers, `FocusManager`, the
+  element sound player, the automation identifiers and the item and
+  items control automation peers).  A `Pivot` now loads from markup with
+  its items, and Calculator's main page makes its `Pivot`.  Test
+  `wuxamltest`.  The page now stops at its context menu, a `MenuFlyout`,
+  which NovaOS does not build yet.  Next: `MenuFlyout` (with its items),
+  then the CI check that Calculator computes `2 + 2`, which ticks this
+  step.
 
 ---
 

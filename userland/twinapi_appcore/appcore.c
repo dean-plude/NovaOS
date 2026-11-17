@@ -68,6 +68,7 @@ int _fltused = 0x9875;          /* sizes in DIPs are floats (the compiler refere
 #define E_ILLEGAL_METHOD_CALL_ ((HRESULT)0x8000000EL)
 #define RPC_E_WRONG_THREAD_    ((HRESULT)0x8001010EL)
 #define WM_NOVA_DISPATCH       (WM_APP + 0x3A1)       /* RunAsync's work, posted to the window */
+#define PLM_TIMER              0x4E50                 /* the window's timer: suspend (plm_timer) */
 
 static const GUID IID_IUnknown_              = { 0x00000000, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
 static const GUID IID_IInspectable_          = { 0xAF86E2E0, 0xB12D, 0x4C6A, { 0x9C, 0x5A, 0xD7, 0xAA, 0x65, 0x10, 0x1E, 0x90 } };
@@ -954,6 +955,7 @@ static BOOL raise_pointer(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 }
 
 static void av_min_track(MINMAXINFO *m);
+static void plm_minimized(HWND h), plm_restored(HWND h), plm_timer(HWND h);
 static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     Args *a;
@@ -973,7 +975,8 @@ static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         av_min_track((MINMAXINFO *)lp);
         break;
     case WM_SIZE:
-        if (wp == SIZE_MINIMIZED) { raise_visible(FALSE); return 0; }
+        if (wp == SIZE_MINIMIZED) { raise_visible(FALSE); plm_minimized(h); return 0; }
+        plm_restored(h);                /* (resumed first, as on Windows) */
         raise_visible(IsWindowVisible(h));
         if ((a = args_new(ARGS_SIZE))) {
             float s = win_scale();
@@ -998,6 +1001,9 @@ static LRESULT CALLBACK win_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_SETCURSOR:
         if (g_win.cursor_hidden && LOWORD(lp) == HTCLIENT) { SetCursor(0); return TRUE; }
+        break;
+    case WM_TIMER:
+        if (wp == PLM_TIMER) { plm_timer(h); return 0; }
         break;
     case WM_ERASEBKGND:
         return 1;                       /* (the app draws the whole window) */
@@ -1399,8 +1405,9 @@ static HRESULT STDMETHODCALLTYPE imm_views(void *p, void **v) { (void)p; if (v) 
 static HRESULT STDMETHODCALLTYPE imm_new_view(void *p, HSTRING type, HSTRING entry, void **v) { (void)p; (void)type; (void)entry; if (v) *v = 0; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE imm_main_view(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = &g_view.vt; return S_OK; }
 
-/* ICoreApplication2: the background events (none is raised: no background
- * tasks, and the app stays in the foreground) and prelaunch (ignored) */
+/* ICoreApplication2: the background events (EnteredBackground and
+ * LeavingBackground with the window minimised and restored, below;
+ * BackgroundActivated never: no background tasks) and prelaunch (ignored) */
 static HRESULT STDMETHODCALLTYPE app2_add_background(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.background, h, t); }
 static HRESULT STDMETHODCALLTYPE app2_remove_background(void *p, EventRegistrationToken t) { (void)p; return ev_remove(&g_app.background, t); }
 static HRESULT STDMETHODCALLTYPE app2_add_leaving(void *p, void *h, EventRegistrationToken *t) { (void)p; return ev_add(&g_app.leaving, h, t); }
@@ -1420,6 +1427,191 @@ static const void *const app2_vt[] = { INSP_FNS(app_qi, app_name), (void *)app2_
                                        (void *)app2_remove_entered, (void *)app2_prelaunch };
 static App g_app = { (const void *const *)app_factory_vt, (const void *const *)app_vt,
                      (const void *const *)app_exit_vt, (const void *const *)app_immersive_vt, (const void *const *)app2_vt };
+
+/* ---- the app's lifetime: suspend and resume ----------------------------
+ * As Windows' process lifetime manager does for a packaged app's window:
+ * minimised, the app enters the background (EnteredBackground) and, a
+ * moment later (PLM_DELAY_MS, so that a quick minimise and restore costs
+ * nothing), is suspended: Suspending, whose handlers may take a deferral
+ * (ISuspendingOperation.GetDeferral) and complete it before the deadline,
+ * five seconds on (the window's messages are pumped meanwhile, so work the
+ * app posts to its dispatcher still runs).  Restored, it resumes
+ * (Resuming, then LeavingBackground).  NovaOS does not freeze the
+ * suspended app's threads: the app saved its state, which is what it is
+ * asked to do; the shell (Start, Settings > Apps) may end it from there. */
+#define PLM_DELAY_MS  1000
+#define PLM_DEADLINE_MS 5000
+static const GUID IID_ISuspendingEventArgs_       = { 0x96061C05, 0x2DBA, 0x4D08, { 0xB0, 0xBD, 0x2B, 0x30, 0xA1, 0x31, 0xC6, 0xAA } };
+static const GUID IID_ISuspendingOperation_       = { 0x9DA4CA41, 0x20E1, 0x4E9B, { 0x9F, 0x65, 0xA9, 0xF4, 0x35, 0x34, 0x0C, 0x3A } };
+static const GUID IID_ISuspendingDeferral_        = { 0x59140509, 0x8BC9, 0x4EB4, { 0xB6, 0x36, 0xDA, 0xBD, 0xC4, 0xF4, 0x6F, 0x66 } };
+static const GUID IID_IEnteredBackgroundEventArgs_ = { 0xF722DCC2, 0x9827, 0x403D, { 0xAA, 0xED, 0xEC, 0xCA, 0x9A, 0xC1, 0x73, 0x98 } };
+static const GUID IID_ILeavingBackgroundEventArgs_ = { 0x39C6EC9A, 0xAE6E, 0x46F9, { 0xA0, 0x7A, 0xCF, 0xC2, 0x3F, 0x88, 0x73, 0x3E } };
+static const GUID IID_IDeferral_                  = { 0xD6269732, 0x3B7F, 0x46A7, { 0xB4, 0x0B, 0x4F, 0xDC, 0xA2, 0xA2, 0xC6, 0x93 } };
+static const GUID IID_IClosable_                  = { 0x30D5A829, 0x7FA4, 0x4026, { 0x83, 0xBB, 0xD7, 0x5B, 0xAE, 0x4E, 0xA9, 0x9E } };
+enum { PLM_RUNNING, PLM_PENDING, PLM_SUSPENDING, PLM_SUSPENDED };
+static struct { int state, restore_pending; volatile LONG deferrals, gen; } g_plm;
+
+/* A deferral (ISuspendingDeferral, or Windows.Foundation.Deferral's
+ * IDeferral and IClosable): Complete (or Close) once lets the step go on */
+typedef struct { const void *const *vt; LONG refs, done, gen; } Deferral;
+static HRESULT STDMETHODCALLTYPE def_qi(Deferral *d, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (!is_base(iid) && !IsEqualGUID(iid, &IID_ISuspendingDeferral_) && !IsEqualGUID(iid, &IID_IDeferral_) &&
+        !IsEqualGUID(iid, &IID_IClosable_)) { *out = 0; return E_NOINTERFACE; }
+    InterlockedIncrement(&d->refs);
+    *out = d;
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE def_addref(Deferral *d) { return (ULONG)InterlockedIncrement(&d->refs); }
+static HRESULT STDMETHODCALLTYPE def_complete(Deferral *d)
+{
+    if (!InterlockedExchange(&d->done, 1) && d->gen == g_plm.gen) InterlockedDecrement(&g_plm.deferrals);   /* (one of an earlier event's: nothing waits) */
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE def_release(Deferral *d)
+{
+    LONG r = InterlockedDecrement(&d->refs);
+    if (!r) { def_complete(d); HeapFree(GetProcessHeap(), 0, d); }   /* (released uncompleted: done) */
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE def_name(Deferral *d, HSTRING *n) { (void)d; return make_hstring(L"Windows.ApplicationModel.SuspendingDeferral", n); }
+static const void *const deferral_vt[] = { (void *)def_qi, (void *)def_addref, (void *)def_release, (void *)no_iids,
+                                           (void *)def_name, (void *)base_trust, (void *)def_complete };
+static HRESULT deferral_new(void **out)
+{
+    if (!out) return E_POINTER;
+    Deferral *d = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *d);
+    if (!d) { *out = 0; return E_OUTOFMEMORY; }
+    d->vt = deferral_vt;
+    d->refs = 1;
+    d->gen = g_plm.gen;
+    InterlockedIncrement(&g_plm.deferrals);
+    *out = d;
+    return S_OK;
+}
+
+/* The events' arguments: ISuspendingEventArgs with its ISuspendingOperation
+ * (GetDeferral, Deadline), or Entered/LeavingBackgroundEventArgs
+ * (GetDeferral); one object, its faces by field */
+typedef struct { const void *const *vt, *const *op; LONG refs; const GUID *iid; INT64 deadline; } Plm;
+#define PLM_OF_OP(p) ((Plm *)((char *)(p) - __builtin_offsetof(Plm, op)))
+static HRESULT STDMETHODCALLTYPE plm_qi(Plm *a, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    if (is_base(iid) || IsEqualGUID(iid, a->iid)) *out = &a->vt;
+    else if (a->iid == &IID_ISuspendingEventArgs_ && IsEqualGUID(iid, &IID_ISuspendingOperation_)) *out = &a->op;
+    else { *out = 0; return E_NOINTERFACE; }
+    InterlockedIncrement(&a->refs);
+    return S_OK;
+}
+static ULONG STDMETHODCALLTYPE plm_addref(Plm *a) { return (ULONG)InterlockedIncrement(&a->refs); }
+static ULONG STDMETHODCALLTYPE plm_release(Plm *a)
+{
+    LONG r = InterlockedDecrement(&a->refs);
+    if (!r) HeapFree(GetProcessHeap(), 0, a);
+    return (ULONG)r;
+}
+static HRESULT STDMETHODCALLTYPE plm_name(Plm *a, HSTRING *n)
+{
+    return make_hstring(a->iid == &IID_ISuspendingEventArgs_ ? L"Windows.ApplicationModel.SuspendingEventArgs" :
+                        a->iid == &IID_IEnteredBackgroundEventArgs_ ? L"Windows.ApplicationModel.EnteredBackgroundEventArgs" :
+                        L"Windows.ApplicationModel.LeavingBackgroundEventArgs", n);
+}
+/* slot 6: SuspendingOperation, or (the background events') GetDeferral */
+static HRESULT STDMETHODCALLTYPE plm_slot6(Plm *a, void **v)
+{
+    if (!v) return E_POINTER;
+    if (a->iid != &IID_ISuspendingEventArgs_) return deferral_new(v);
+    InterlockedIncrement(&a->refs);
+    *v = &a->op;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE op_qi(void *p, REFIID iid, void **out) { return plm_qi(PLM_OF_OP(p), iid, out); }
+static ULONG STDMETHODCALLTYPE op_addref(void *p) { return plm_addref(PLM_OF_OP(p)); }
+static ULONG STDMETHODCALLTYPE op_release(void *p) { return plm_release(PLM_OF_OP(p)); }
+static HRESULT STDMETHODCALLTYPE op_name(void *p, HSTRING *n) { (void)p; return make_hstring(L"Windows.ApplicationModel.SuspendingOperation", n); }
+static HRESULT STDMETHODCALLTYPE op_deferral(void *p, void **v) { (void)p; return deferral_new(v); }
+static HRESULT STDMETHODCALLTYPE op_deadline(void *p, INT64 *v) { if (!v) return E_POINTER; *v = PLM_OF_OP(p)->deadline; return S_OK; }
+static const void *const plm_vt[] = { (void *)plm_qi, (void *)plm_addref, (void *)plm_release, (void *)no_iids,
+                                      (void *)plm_name, (void *)base_trust, (void *)plm_slot6 };
+static const void *const plm_op_vt[] = { (void *)op_qi, (void *)op_addref, (void *)op_release, (void *)no_iids,
+                                         (void *)op_name, (void *)base_trust, (void *)op_deferral, (void *)op_deadline };
+
+/* Raises one lifetime event and waits, pumping the window's messages, for
+ * the deferrals its handlers took (until the deadline) */
+static void plm_raise(Event *e, const GUID *iid)
+{
+    Plm *a = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *a);
+    if (!a) return;
+    a->vt = plm_vt;
+    a->op = plm_op_vt;
+    a->refs = 1;
+    a->iid = iid;
+    ULONGLONG end = GetTickCount64() + PLM_DEADLINE_MS;
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);       /* (a DateTime: FILETIME's 100 ns units) */
+    a->deadline = (INT64)(((UINT64)ft.dwHighDateTime << 32 | ft.dwLowDateTime) + (UINT64)PLM_DEADLINE_MS * 10000);
+    InterlockedIncrement(&g_plm.gen);
+    InterlockedExchange(&g_plm.deferrals, 0);
+    ev_fire(e, &g_app.app, &a->vt);
+    plm_release(a);
+    while (g_plm.deferrals > 0) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= end) { OutputDebugStringA("twinapi.appcore: a deferral not completed by its deadline\n"); break; }
+        MsgWaitForMultipleObjects(0, 0, FALSE, (DWORD)(end - now), QS_ALLINPUT);
+        MSG m;
+        while (g_plm.deferrals > 0 && PeekMessageW(&m, 0, 0, 0, PM_REMOVE)) {
+            if (m.message == WM_QUIT) { PostQuitMessage((int)m.wParam); return; }
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+    }
+}
+static void plm_resume(void)
+{
+    g_plm.state = PLM_RUNNING;
+    ev_fire(&g_app.resuming, &g_app.app, 0);
+    OutputDebugStringA("twinapi.appcore: resumed\n");
+    plm_raise(&g_app.leaving, &IID_ILeavingBackgroundEventArgs_);
+}
+/* the window minimised (WM_SIZE's SIZE_MINIMIZED) */
+static void plm_minimized(HWND h)
+{
+    if (g_plm.state != PLM_RUNNING) { g_plm.restore_pending = 0; return; }
+    g_plm.state = PLM_PENDING;
+    plm_raise(&g_app.entered, &IID_IEnteredBackgroundEventArgs_);
+    if (g_plm.state == PLM_PENDING) SetTimer(h, PLM_TIMER, PLM_DELAY_MS, 0);
+}
+/* the minimised window shown again */
+static void plm_restored(HWND h)
+{
+    switch (g_plm.state) {
+    case PLM_PENDING:                   /* (not suspended yet) */
+        KillTimer(h, PLM_TIMER);
+        g_plm.state = PLM_RUNNING;
+        plm_raise(&g_app.leaving, &IID_ILeavingBackgroundEventArgs_);
+        break;
+    case PLM_SUSPENDING:                /* (resumes once suspended) */
+        g_plm.restore_pending = 1;
+        break;
+    case PLM_SUSPENDED:
+        plm_resume();
+        break;
+    }
+}
+/* PLM_TIMER: still minimised, so suspended */
+static void plm_timer(HWND h)
+{
+    KillTimer(h, PLM_TIMER);
+    if (g_plm.state != PLM_PENDING) return;
+    g_plm.state = PLM_SUSPENDING;
+    g_plm.restore_pending = 0;
+    plm_raise(&g_app.suspending, &IID_ISuspendingEventArgs_);
+    g_plm.state = PLM_SUSPENDED;
+    OutputDebugStringA("twinapi.appcore: suspended\n");
+    if (g_plm.restore_pending || !IsIconic(h)) { g_plm.restore_pending = 0; plm_resume(); }
+}
 
 /* ---- CoreCursor: a cursor type and id (a CoreWindow shows the arrow for any) */
 typedef struct { const void *const *vt; LONG refs; INT32 type; UINT32 id; } Cursor;

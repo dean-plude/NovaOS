@@ -190,6 +190,7 @@ set(KERNEL_C_SOURCES
     fs/bootlog.c
     net/net.c
     net/tls.c
+    net/pfx.c
     net/tls_roots.c
     net/tls_platform.c
     net/http.c

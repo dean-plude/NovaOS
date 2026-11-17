@@ -1,10 +1,13 @@
 /* The kernel's WPA2-Enterprise EAP peer (kernel/nt/eap.c: PEAPv0 with
- * EAP-MSCHAPv2) against wditest.sys's authentication server
+ * EAP-MSCHAPv2, and EAP-TLS) against wditest.sys's authentication server
  * (tools/drivertest/eapap.h) on the host, without a VM: MD4 (RFC 1320) and
  * MS-CHAPv2 (RFC 2759 9.2) known answers on both sides, then whole sign-ins
  * frame by frame: the right password (both ends must derive the same
  * MSK), a wrong one, an unknown user and a server certificate from an
- * untrusted root.  The station's TLS is Mbed TLS, as net/tls.c's EAP
+ * untrusted root; EAP-TLS with alice's certificate from her PKCS #12 file
+ * (kernel/net/pfx.c reads it, as certutil -importpfx does) and mallory's
+ * refused.  "eap_peap pfx FILE PASSWORD" reads one PKCS #12 file (the
+ * test makes encrypted ones with OpenSSL).  The station's TLS is Mbed TLS, as net/tls.c's EAP
  * sessions set it up (below: the same calls over memory, trusting the root
  * named on the command line).  It prints values for
  * tests/tools/test_eap_peap.py to check. */
@@ -25,11 +28,16 @@ void kprintf(const char *fmt, ...) { va_list ap; va_start(ap, fmt); vprintf(fmt,
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/oid.h"
+#include "../../kernel/net/pfx.c"
 
 /* ---- net/tls.c's EAP sessions, on the host ---- */
 static mbedtls_x509_crt         g_roots;
 static mbedtls_ctr_drbg_context g_cli_drbg;
 static mbedtls_ssl_config       g_cli;
+/* the personal store: alice's and mallory's certificates, each with its own configuration */
+static mbedtls_x509_crt         g_my_chain[2];
+static mbedtls_pk_context       g_my_key[2];
+static mbedtls_ssl_config       g_cli_cert[2];
 
 struct TlsEap {
     mbedtls_ssl_context ssl;
@@ -59,11 +67,11 @@ static int cli_recv(void *ctx, unsigned char *b, size_t n)
     return (int)n;
 }
 
-TlsEap *TlsEapNew(void)
+TlsEap *TlsEapNew(int cert)
 {
     TlsEap *e = calloc(1, sizeof(*e));
     mbedtls_ssl_init(&e->ssl);
-    if (mbedtls_ssl_setup(&e->ssl, &g_cli) || mbedtls_ssl_set_hostname(&e->ssl, NULL)) return NULL;
+    if (mbedtls_ssl_setup(&e->ssl, cert >= 0 ? &g_cli_cert[cert] : &g_cli) || mbedtls_ssl_set_hostname(&e->ssl, NULL)) return NULL;
     mbedtls_ssl_set_bio(&e->ssl, e, cli_send, cli_recv, NULL);
     return e;
 }
@@ -119,13 +127,13 @@ static void unhex(const char *s, UINT8 *out)
     for (int i = 0; s[2 * i]; i++) sscanf(s + 2 * i, "%2hhx", &out[i]);
 }
 
-/* One sign-in, frame by frame: what the peer ended with */
-static int sign_in(const char *user, const char *password, UINT8 *msk_ap, UINT8 *msk_sta, int *frames)
+/* One sign-in, frame by frame: what the peer ended with (@cert >= 0: EAP-TLS with that certificate) */
+static int sign_in_as(const char *user, const char *password, int cert, UINT8 *msk_ap, UINT8 *msk_sta, int *frames)
 {
     static EapAp ap;
     static EapPeer sta;
     static UINT8 f[2048], r[2048];
-    assert(EapStart(&sta, user, password));
+    assert(cert >= 0 ? EapStartCert(&sta, user, cert) : EapStart(&sta, user, password));
     unsigned int n = eap_ap_start(&ap, f);
     int out = EAP_DROP;
     *frames = 0;
@@ -150,6 +158,48 @@ static int sign_in(const char *user, const char *password, UINT8 *msk_ap, UINT8 
     EapClear(&sta);
     eap_ap_clear(&ap);
     return res;
+}
+
+static int sign_in(const char *user, const char *password, UINT8 *msk_ap, UINT8 *msk_sta, int *frames)
+{
+    return sign_in_as(user, password, -1, msk_ap, msk_sta, frames);
+}
+
+static size_t read_file(const char *path, UINT8 *buf, size_t cap)
+{
+    FILE *fp = fopen(path, "rb");
+    size_t n = fp ? fread(buf, 1, cap, fp) : 0;
+    if (fp) fclose(fp);
+    return n;
+}
+
+/* certutil -importpfx's half: @path with @password into personal certificate @i (and its configuration) */
+static int import_pfx(const char *path, const char *password, int i)
+{
+    static UINT8 der[16384];
+    size_t n = read_file(path, der, sizeof(der));
+    assert(n);
+    mbedtls_x509_crt_init(&g_my_chain[i]);
+    mbedtls_pk_init(&g_my_key[i]);
+    int r = PfxParse(der, n, password, &g_my_chain[i], &g_my_key[i], mbedtls_ctr_drbg_random, &g_cli_drbg);
+    if (r != PFX_OK) return r;
+    mbedtls_ssl_config_init(&g_cli_cert[i]);
+    assert(!mbedtls_ssl_config_defaults(&g_cli_cert[i], MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                        MBEDTLS_SSL_PRESET_DEFAULT));
+    mbedtls_ssl_conf_authmode(&g_cli_cert[i], MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(&g_cli_cert[i], &g_roots, NULL);
+    mbedtls_ssl_conf_rng(&g_cli_cert[i], mbedtls_ctr_drbg_random, &g_cli_drbg);
+    mbedtls_ssl_conf_min_tls_version(&g_cli_cert[i], MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_max_tls_version(&g_cli_cert[i], MBEDTLS_SSL_VERSION_TLS1_2);
+    assert(!mbedtls_ssl_conf_own_cert(&g_cli_cert[i], &g_my_chain[i], &g_my_key[i]));
+    return PFX_OK;
+}
+
+static int chain_len(const mbedtls_x509_crt *c)
+{
+    int n = 0;
+    for (; c && c->raw.len; c = c->next) n++;
+    return n;
 }
 
 int main(int argc, char **argv)
@@ -186,8 +236,21 @@ int main(int argc, char **argv)
     assert(!strcmp(s1, s2));
     printf("authenticator_response %s\n", s1);
 
-    /* the station's TLS: trusting the root in argv[1] (none: nothing trusted) */
+    mbedtls_ctr_drbg_init(&g_cli_drbg);
+    assert(!mbedtls_ctr_drbg_seed(&g_cli_drbg, fixed_entropy, NULL, NULL, 0));
     mbedtls_x509_crt_init(&g_roots);
+    if (argc == 4 && !strcmp(argv[1], "pfx")) {         /* one PKCS #12 file */
+        int r = import_pfx(argv[2], argv[3], 0);
+        if (r != PFX_OK) { printf("pfx error %d: %s\n", r, PfxErrorText(r)); return 0; }
+        char cn[64];
+        const mbedtls_x509_name *n = &g_my_chain[0].subject;
+        for (cn[0] = 0; n; n = n->next)
+            if (!MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid)) snprintf(cn, sizeof(cn), "%.*s", (int)n->val.len, n->val.p);
+        printf("pfx ok %s chain %d key %s\n", cn, chain_len(&g_my_chain[0]), mbedtls_pk_get_name(&g_my_key[0]));
+        return 0;
+    }
+
+    /* the station's TLS: trusting the root in argv[1] (none: nothing trusted) */
     if (argc > 1) {
         FILE *fp = fopen(argv[1], "rb");
         static UINT8 der[4096];
@@ -195,8 +258,6 @@ int main(int argc, char **argv)
         if (fp) fclose(fp);
         assert(n && !mbedtls_x509_crt_parse_der(&g_roots, der, n));
     }
-    mbedtls_ctr_drbg_init(&g_cli_drbg);
-    assert(!mbedtls_ctr_drbg_seed(&g_cli_drbg, fixed_entropy, NULL, NULL, 0));
     mbedtls_ssl_config_init(&g_cli);
     assert(!mbedtls_ssl_config_defaults(&g_cli, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                         MBEDTLS_SSL_PRESET_DEFAULT));
@@ -223,6 +284,19 @@ int main(int argc, char **argv)
         r = sign_in("mallory", "nova-peap-password", ma, ms, &frames);
         assert(r == EAP_RESULT_BAD_PASSWORD);
         printf("unknown user refused\n");
+        if (argc > 3) {                                 /* EAP-TLS: alice.pfx and mallory.pfx */
+            assert(import_pfx(argv[2], "not-the-password", 0) == PFX_BAD_PASSWORD);
+            printf("pfx wrong password refused\n");
+            assert(import_pfx(argv[2], "nova-tls-password", 0) == PFX_OK && chain_len(&g_my_chain[0]) == 2);
+            assert(import_pfx(argv[3], "nova-tls-password", 1) == PFX_OK && chain_len(&g_my_chain[1]) == 1);
+            r = sign_in_as("alice", NULL, 0, ma, ms, &frames);
+            assert(r == EAP_RESULT_OK && !memcmp(ma, ms, 64));
+            hex("tls_msk", ms, 64);
+            printf("eap-tls ok\n");
+            r = sign_in_as("mallory", NULL, 1, ma, ms, &frames);
+            assert(r == EAP_RESULT_CERT_REFUSED);
+            printf("eap-tls untrusted certificate refused\n");
+        }
     } else {
         int r = sign_in("alice", "nova-peap-password", ma, ms, &frames);
         assert(r == EAP_RESULT_UNTRUSTED);

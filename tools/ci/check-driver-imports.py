@@ -12,7 +12,8 @@ wmilib.sys, which NovaOS's kernel also provides (step 30.8).  This compares
 the import lists of the drivers we target first — the VirtIO serial driver
 (vioser.sys), the KMDF runtime and loader (Wdf01000.sys, wdfldr.sys),
 FTDI's USB serial drivers (ftdibus.sys, ftser2k.sys) and the UMDF reflector
-(WUDFRd.sys, step 30.10) — against exports.h and
+(WUDFRd.sys, step 30.10), the virtio-win storage, network and display
+drivers (viostor.sys, netkvm.sys, viogpudo.sys) — against exports.h and
 fails naming any import that is neither provided nor allow-listed.
 
 The import lists live beside the wdm self-test

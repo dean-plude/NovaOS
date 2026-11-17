@@ -696,10 +696,16 @@ WPA2-Enterprise networks sign in with PEAP and MS-CHAPv2
 key=PASSWORD`): the EAP packets go over EAPOL under the same exemption as
 the 4-way handshake's frames, the TLS tunnel is an EAP session of
 `net/tls.c` that checks the server's certificate against the trusted
-roots, and the MSK it gives is the 4-way handshake's PMK.
+roots, and the MSK it gives is the 4-way handshake's PMK.  Without a
+password (`user=NAME` alone) they sign in with EAP-TLS instead: the
+station's Nak asks for it when the server offers PEAP, and the same TLS
+session sends the user's certificate and signs with its key when the
+server asks.  The certificate comes from the personal store, which
+`certutil -importpfx` fills from a PKCS #12 file (`kernel/net/pfx.c`:
+PBES2 with AES or TripleDES-SHA1 bags, the HMAC integrity check).
 
 What is missing: SAE's hash-to-element and groups other than P-256,
-EAP-TLS and WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
+WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, frames
 the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
 joining on the real card, the rest of roadmap step 28.1, needs the T14.
@@ -709,7 +715,8 @@ own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
 QEMU's `edu` card whose radio hears four access points (WPA2-Personal on
 2.4 GHz, WPA3-Personal on 5 GHz, an open network and WPA2-Enterprise, each
 one an access point it plays, the last with its authentication server:
-`tools/drivertest/eapap.h`, PEAP on Mbed TLS built into the driver), and
+`tools/drivertest/eapap.h`, PEAP and EAP-TLS on Mbed TLS built into the
+driver), and
 whose TAL plays a
 small router at 192.168.77.1 behind the open network (ARP, DHCP, ping).
 The test installs it with `pnputil` and checks the messages and data
@@ -728,7 +735,10 @@ pairwise, group and management group keys and rekeys both group keys.
 Then it signs in to the Enterprise network: refused while the server's
 root is not trusted, refused with a wrong password once `certutil` trusts
 it, and with the right one the 4-way handshake runs from the sign-in's
-PMK. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
+PMK.  Then EAP-TLS: `certutil -importpfx` refuses `alice.pfx` with a wrong
+password and imports it and `mallory.pfx`; mallory's self-signed
+certificate is refused by the server with a TLS alert, and alice's (from
+NovaCorp Test Root) signs in. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
 notification, the network and BSS lists, a profile, a wrong passphrase
 refused with the key-mismatch reason, joining by profile and by SSID),
 and the test joins the WPA2 network in Settings' Wi-Fi page by typing,
@@ -765,7 +775,15 @@ in the mode the driver left, when the driver is disabled or removed.
 
 The test driver is `wddmdod.sys` (`tools/drivertest/wddmdod.c`), a
 display-only driver for QEMU's standard VGA modelled on Microsoft's KMDOD
-sample.
+sample. A vendor's driver runs the same way, unchanged: Red Hat's
+`viogpudo.sys` from virtio-win (Microsoft-signed, installed by hardware ID
+`PCI\VEN_1AF4&DEV_1050`) drives QEMU's virtio-vga, with NovaOS's own
+virtio-gpu driver letting go of the card first. It registers through
+displib's `DxgkInitializeDisplayOnlyDriver` (which loads `DXGKrnl` first:
+the kernel's own, so "already loaded"), sets its framebuffer up as a 2D
+resource on the virtio control queue, offers 23 modes, and keeps its
+registers mapped until `DxgkDdiRemoveDevice`, which the host calls before
+the bus turns the device's decoding off.
 
 Render drivers hand `DxgkInitialize` the full `DRIVER_INITIALIZATION_DATA`
 (step 3 of the design, begun): the host reads their memory segments at
@@ -939,6 +957,7 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer and data path: capabilities, the station port, a scan and its BSS entries, connecting to an open network, DHCP and ping over the TAL TX/RX path, `netsh wlan` |
+| `viogpudo` | Red Hat's `viogpudo.sys` (WDDM display-only, from virtio-win) | QEMU's virtio-vga | a vendor's display driver unchanged: the built-in driver stepping aside, the desktop on the driver, mode changes as Settings makes them, the screen handed back on disable, started at boot |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver), then `wddmtest.sys` (its render miniport) | QEMU's standard VGA; a root-enumerated device | the dxgkrnl host, mode changes, the screen handed back on disable; a render adapter's devices and allocations |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |

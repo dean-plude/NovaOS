@@ -54,6 +54,15 @@
 # root" trusts it, a wrong password fails at MS-CHAPv2 (E=691); the right
 # one gets EAP-Success, the 4-way handshake runs from the PMK the tunnel's
 # keys give, and DHCP, ping and a group rekey run over the connection.
+# Then EAP-TLS: "certutil -importpfx" refuses alice.pfx with a wrong
+# password and puts it (and mallory.pfx) in the personal store with the
+# right one (kernel/net/pfx.c); "netsh wlan connect name=NovaCorp
+# user=mallory" without key= signs in with mallory's certificate (the
+# station's Nak asks for EAP-TLS, the server asks for the certificate)
+# and the server refuses it with a TLS alert (self-signed, not from
+# NovaCorp Test Root); a user without a certificate is told so; alice's
+# certificate signs in, the 4-way handshake runs from the TLS keys' PMK,
+# and DHCP and ping run over it.
 # wlanapi.dll (wlantest.exe) does the same as a Windows program does: the
 # adapter and its GUID, a scan and its notification, the networks and
 # access points, a profile saved in the registry, a wrong passphrase
@@ -78,7 +87,10 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        'DHCP, ping and a rekey run over it; `netsh wlan connect name=NovaCorp user=alice key=...` signs in to the '
        'WPA2-Enterprise one with PEAP and MS-CHAPv2 (refused while its server\'s root is not trusted, then, after '
        '`certutil -addstore root`, refused with a wrong password), the 4-way handshake runs from the sign-in\'s PMK, '
-       'and DHCP and ping run over it; `wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
+       'and DHCP and ping run over it; `certutil -importpfx` puts a certificate with its key in the personal store '
+       '(a wrong PFX password refused) and `netsh wlan connect name=NovaCorp user=alice` without a password signs in '
+       'with it by EAP-TLS (a certificate the server does not trust refused with its TLS alert), DHCP and ping over it; '
+       '`wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
        'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
        'reason, joining by profile and by SSID, the current connection); Settings\' Wi-Fi page lists the networks and '
        'joins NovaNet with its passphrase typed as a person would; disabling the device deletes the port, stops the data path and closes the '
@@ -290,7 +302,8 @@ TESTS = [
          [r'\[WDI\] WdiTest: disconnected from NovaNet-5G \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi enterprise needs user', 'netsh wlan connect name=NovaCorp',
-         [r'The network "NovaCorp" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD\.'], builtin=True),
+         [r'The network "NovaCorp" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD, or import a certificate '
+          r'with certutil -importpfx\.'], builtin=True),
     Test('wifi enterprise untrusted', 'netsh wlan connect name=NovaCorp user=alice key=nova-peap-password',
          [r'\[DbgPrint\] wditest: connect to NovaCorp: auth 6, ciphers 4/4, exclude unencrypted 1, EAPOL exempted yes',
           r'\[DbgPrint\] wditest: RADIUS: Request/Identity to the station',
@@ -334,6 +347,42 @@ TESTS = [
           r' +Channel +: 1\n +Network type +: Infrastructure\n +Radio type +: 802\.11n\n'
           r' +Authentication +: WPA2-Enterprise\n +Cipher +: CCMP\n'], builtin=True),
     Test('wifi enterprise disconnect', 'netsh wlan disconnect',
+         [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
+          r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    Test('wifi eap-tls wrong pfx password', r'certutil -p not-the-password -importpfx C:\Tests\Wifi\alice.pfx',
+         [r'CertUtil: -importPFX command FAILED: The specified network password is not correct'], builtin=True),
+    Test('wifi eap-tls import', r'certutil -p nova-tls-password -importpfx C:\Tests\Wifi\alice.pfx',
+         [r'Certificate "alice" added to the personal store \(My\) with its private key\.',
+          r'CertUtil: -importPFX command completed successfully\.'], builtin=True),
+    Test('wifi eap-tls import mallory', r'certutil -p nova-tls-password -importpfx C:\Tests\Wifi\mallory.pfx',
+         [r'Certificate "mallory" added to the personal store \(My\) with its private key\.'], builtin=True),
+    Test('wifi eap-tls store', 'certutil -store my',
+         [r'Personal \(My\):\n +1  alice  \(issued by NovaCorp Test Root; private key present\)\n'
+          r' +2  mallory  \(issued by mallory; private key present\)\n2 certificates\.'], builtin=True),
+    Test('wifi eap-tls no certificate', 'netsh wlan connect name=NovaCorp user=bob',
+         [r'There is no certificate for that user in the personal store'], builtin=True),
+    Test('wifi eap-tls refused', 'netsh wlan connect name=NovaCorp user=mallory',
+         [r'\[DbgPrint\] wditest: RADIUS: identity mallory; PEAP start',
+          r'\[DbgPrint\] wditest: RADIUS: the station asked for EAP-TLS \(a Nak\): EAP-TLS start',
+          r'\[DbgPrint\] wditest: RADIUS: TLS handshake failed \(-0x2700\): the station\'s certificate is not from '
+          r'NovaCorp Test Root',
+          r'\[EAP\] WdiTest: the sign-in failed: the server refused the certificate \(a TLS alert\)',
+          r'\[WDI\] WdiTest: disconnected from NovaCorp',
+          r'The sign-in server of "NovaCorp" did not accept the certificate\.'], builtin=True),
+    Test('wifi eap-tls connect', 'netsh wlan connect name=NovaCorp user=alice',
+         [r'\[DbgPrint\] wditest: RADIUS: identity alice; PEAP start',
+          r'\[DbgPrint\] wditest: RADIUS: the station asked for EAP-TLS \(a Nak\): EAP-TLS start',
+          r'\[DbgPrint\] wditest: RADIUS: EAP-TLS handshake done \(TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256\): the '
+          r'station\'s certificate alice is from NovaCorp Test Root',
+          r'\[DbgPrint\] wditest: RADIUS: EAP-TLS done; EAP-Success, the PMK from the TLS keys',
+          r'\[EAP\] WdiTest: signed in as alice with EAP-TLS \(certificate alice\) to server radius\.novacorp\.test: '
+          r'EAP-Success, PMK from the TLS keys',
+          r'\[DbgPrint\] wditest: 4-way handshake message 4: MIC good; the handshake is done',
+          r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
+          r'Connection request was completed successfully\.'], builtin=True),
+    Test('wifi eap-tls ping', 'ping 192.168.77.1',
+         [r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_leases(5)),
+    Test('wifi eap-tls disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi wlanapi', 'wlantest', [r'wlantest: \d+ passed, 0 failed'], timeout=300, elevated=True),

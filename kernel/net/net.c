@@ -524,6 +524,39 @@ int NetImportRoots(const void *data, UINT32 len, char *err, int err_cap)
     return n;
 }
 
+int NetImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
+                 int err_cap)
+{
+    net_lock();
+    int n = TlsImportPfx(data, len, password, name, name_cap, err, err_cap);
+    net_unlock();
+    return n;
+}
+
+int NetPersonalCount(void)
+{
+    net_lock();
+    int n = TlsPersonalCount();
+    net_unlock();
+    return n;
+}
+
+bool NetPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap)
+{
+    net_lock();
+    bool ok = TlsPersonalName(i, name, name_cap, issuer, issuer_cap);
+    net_unlock();
+    return ok;
+}
+
+int NetPersonalFind(const char *user)
+{
+    net_lock();
+    int i = TlsPersonalFind(user);
+    net_unlock();
+    return i;
+}
+
 /* -----------------------------------------------------------------------
  * Status helpers
  * ----------------------------------------------------------------------- */

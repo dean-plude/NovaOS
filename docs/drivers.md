@@ -543,12 +543,34 @@ Sound page see them:
   input.
 
 A headset whose services are on is connected again after a restart, and
-every 10 seconds while it is out of reach. Not done yet: connections a
-device starts (a mouse or headset that wakes up is reconnected from
-NovaOS's side within 10 seconds), wide-band speech (mSBC), AAC and other
-A2DP codecs, the headset's volume and call buttons, Bluetooth Low Energy,
-the BRB interface (`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party
-profile driver uses, and Settings' Bluetooth page.
+every 10 seconds while it is out of reach.
+
+A paired device can also connect by itself, as a mouse moved after sleep
+or a headset switched on does: the host accepts the Connection Request
+of a paired device that has a service on (others are refused), the device
+authenticates the link with its stored key and encrypts it (a channel it asks for before the host has seen the link encrypted, as a USB radio's events can trail its data, is answered "pending" and opened once it is), and a mouse
+or keyboard then opens HID's control and interrupt channels itself (the
+HID Profile's virtual cable reconnection), which the host gives to its
+`hidbth` node; if it opens none within three seconds, `hidbth` opens them
+on the device's link. A headset that connects gets its hands-free and
+A2DP channels opened at once instead of at the next 10-second retry.
+
+**Settings > Bluetooth & devices** (`kernel/apps/settings_bluetooth.c`)
+shows the radio (its name, address, and whether it is discoverable), the
+paired devices with their state, and the devices a search found. A search
+runs when the page opens and on **Add device** (F5); choosing a device in
+range and **Pair** (Enter) pairs it and switches its services on, as
+Windows does, so a mouse moves and a headset plays at once; **Remove
+device** (Delete) forgets a paired one. It runs the same host code as
+`bthprops.cpl` (`BthJobStart` in `bthport.c`), in the background.
+
+![Settings > Bluetooth & devices](screenshots/settings-bluetooth.png)
+
+Not done yet: wide-band speech (mSBC), AAC and other A2DP codecs, the
+headset's volume and call buttons, Bluetooth Low Energy, the BRB interface
+(`IOCTL_INTERNAL_BTH_SUBMIT_BRB`) a third-party profile driver uses,
+profile channels a headset opens itself (NovaOS opens them), and a PIN or
+passkey typed in Settings for devices that need one.
 
 ### Network drivers (NDIS)
 

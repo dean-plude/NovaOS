@@ -94,6 +94,7 @@ struct BthAudio {
     bool      hfp, a2dp;
     UINT8     chan;
     volatile bool stop;
+    volatile bool kick;                /* (the headset connected to us: try now) */
     NT_KEVENT done;
     /* RFCOMM and the hands-free service level connection */
     BthChan  *rfc;
@@ -755,7 +756,9 @@ static void run(void *arg)
     while (!a->stop) {
         UINT64 now = now_ms();
         if (!up) {
-            if (now < retry) { sleep_ms(100); continue; }
+            if (now < retry && !a->kick) { sleep_ms(100); continue; }
+            if (a->kick) kprintf("[BTHAUD] %s: it connected to us; its profiles now\n", a->name);
+            a->kick = false;
             if (!links_open(a)) {
                 links_close(a);
                 retry = now_ms() + RETRY_MS;
@@ -817,6 +820,11 @@ BthAudio *BthAudioStart(BthRadio *r, BthDev *d, const char *name, bool hfp, UINT
     }
     kprintf("[BTHAUD] %s:%s%s\n", name, hfp ? " Hands-Free" : "", a2dp ? " Audio Sink" : "");
     return a;
+}
+
+void BthAudioKick(BthAudio *a)
+{
+    if (a) a->kick = true;
 }
 
 void BthAudioStop(BthAudio *a)

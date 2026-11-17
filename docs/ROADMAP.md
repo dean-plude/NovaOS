@@ -929,8 +929,12 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   with NovaOS's own SBC encoder and the hands-free profile's voice link
   (eSCO on the radio's isochronous endpoints) give a paired headset two
   outputs and a microphone, as a USB headset has; the `bluetooth` boot
-  plays a tone through each and records from the headset. Still needed:
-  reconnects the device starts, Settings' Bluetooth page, and pairing a
+  plays a tone through each and records from the headset. A paired device
+  can connect by itself (a mouse moved after sleep: the host accepts its
+  Connection Request and the HID channels it opens), and Settings'
+  Bluetooth & devices page searches, pairs (switching the device's
+  services on) and removes devices; the `bluetooth` boot takes the mouse
+  out of range and back and pairs it in Settings. Still needed: pairing a
   real mouse and headset on the T14 with Intel's driver, including after
   sleep.
 - [ ] **28.3 Camera.** Add USB Video Class capture through Media Foundation;

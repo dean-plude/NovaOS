@@ -1005,6 +1005,10 @@ void AppDrawGlyph(Glyph g, int x, int y, int s, GdiColor c)
         static const P out[] = { {28,62}, {72,62}, {72,90}, {28,90} };
         poly(in, 4, false, x, y, s, c); poly(body, 4, true, x, y, s, c); poly(out, 4, true, x, y, s, c);
         break; }
+    case GL_BLUETOOTH: {                        /* Bluetooth's rune */
+        static const P rune[] = { {28,30}, {72,70}, {50,90}, {50,10}, {72,30}, {28,70} };
+        poly(rune, 6, false, x, y, s, c);
+        break; }
     case GL_SHIELD: {                           /* the firewall: a shield */
         static const P sh[] = { {50,6}, {88,20}, {84,58}, {50,94}, {16,58}, {12,20} };
         poly(sh, 6, true, x, y, s, c);

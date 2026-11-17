@@ -308,6 +308,7 @@ set(KERNEL_C_SOURCES
     apps/settings.c
     apps/netsh_fw.c
     apps/settings_firewall.c
+    apps/settings_bluetooth.c
     apps/settings_apps.c
     apps/iconset.c
     apps/calendar.c

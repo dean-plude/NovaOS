@@ -689,7 +689,17 @@ the registry under `Software\NovaOS\Wlan\Profiles`, HKLM or, for
 `WLAN_PROFILE_USER`, HKCU) and the AutoConfig notifications a program
 waits for (scan complete, connection start, complete and failed,
 disconnected). As on Windows, `WlanScan` and `WlanConnect` return at once
-and notify when they finish.
+and notify when they finish. A WPA2-Enterprise profile (`useOneX` true)
+is read for its `OneX` `EapHostConfig`'s method, PEAP (25) or EAP-TLS
+(13), as `netsh wlan export profile` writes it; its sign-in comes from
+`WlanSetProfileEapXmlUserData` (the `EapHostUserCredentials` XML's
+`Username`, `Password` and `LogonDomain`), kept sealed with
+`CryptProtectData` under the user's
+`HKCU\Software\NovaOS\Wlan\EapUserData\NAME` (with
+`WLAN_SET_EAPHOST_DATA_ALL_USERS`, HKLM and the machine's key).  Without
+one, EAP-TLS uses the newest certificate in the personal store and PEAP
+fails with `ONEX_UNABLE_TO_IDENTIFY_USER`; the kernel takes the method,
+user name and password in op 20's request.
 
 WPA2-Enterprise networks sign in with PEAP and MS-CHAPv2
 (`kernel/nt/eap.c`, `netsh wlan connect name=SSID user=NAME
@@ -711,10 +721,15 @@ Windows keeps the machine's (`HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT\Ce
 a `Blob` per thumbprint), certificates and private keys under
 `HKLM\SECURITY`, which no program may open, in a hive only SYSTEM and
 Administrators may read (`System32\config`, as on Windows).
+`certutil -delstore root NAME` stops trusting an imported root (the
+root list is built again without it; built-in roots stay) and `certutil
+-delstore my NAME` takes a certificate and its key out of the personal
+store, each named by its common name or SHA-1 thumbprint, and out of the
+registry too.
 
 What is missing: SAE's hash-to-element and groups other than P-256,
-WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, removing a
-certificate (`certutil -delstore`), frames
+WPA3-Enterprise, PEAP's cryptobinding, the copy of a removed root
+under `System32\CertStore` that NetSurf reads, frames
 the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
 joining on the real card, the rest of roadmap step 28.1, needs the T14.
@@ -749,12 +764,17 @@ password and imports it and `mallory.pfx`; mallory's self-signed
 certificate is refused by the server with a TLS alert, and alice's (from
 NovaCorp Test Root) signs in. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
 notification, the network and BSS lists, a profile, a wrong passphrase
-refused with the key-mismatch reason, joining by profile and by SSID),
+refused with the key-mismatch reason, joining by profile and by SSID,
+and the Enterprise network by a PEAP profile with alice's sign-in from
+`WlanSetProfileEapXmlUserData` and by an EAP-TLS profile),
 and the test joins the WPA2 network in Settings' Wi-Fi page by typing,
 as a person would, then the Enterprise one with alice's user name and
 password in the page's two boxes. A restart then finds the NovaCorp root
 and both certificates back from the registry, and alice signs in with
-EAP-TLS again. Then it disconnects, and on
+EAP-TLS again. `certutil -delstore` then removes mallory's certificate
+and the NovaCorp root (alice's sign-in is refused, the server no longer
+trusted), and the next restart restores only alice's certificate. Then
+it disconnects, and on
 disable checks that the port is deleted, the data path stopped and the
 adapter closed.
 

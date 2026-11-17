@@ -42,7 +42,8 @@ struct TlsConn {
 static mbedtls_entropy_context  g_entropy;
 static mbedtls_ctr_drbg_context g_drbg;
 static mbedtls_ssl_config       g_conf;
-static mbedtls_x509_crt         g_roots;
+static mbedtls_x509_crt         g_roots_boot;
+static mbedtls_x509_crt        *g_roots = &g_roots_boot;    /* (a new list after TlsRemoveRoot) */
 static int                      g_nroots, g_nbuiltin;
 static bool                     g_ready;
 
@@ -162,9 +163,9 @@ void TlsInit(void)
         return;
     }
 
-    mbedtls_x509_crt_init(&g_roots);
+    mbedtls_x509_crt_init(g_roots);
     for (int i = 0; i < g_tls_builtin_root_count; i++)
-        if (!mbedtls_x509_crt_parse_der_nocopy(&g_roots, g_tls_builtin_roots[i].der,
+        if (!mbedtls_x509_crt_parse_der_nocopy(g_roots, g_tls_builtin_roots[i].der,
                                                g_tls_builtin_roots[i].len))
             g_nroots++;
     g_nbuiltin = g_nroots;
@@ -174,7 +175,7 @@ void TlsInit(void)
                                     MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
     if (r) { kprintf("[TLS] Configuration failed (-0x%x)\n", -r); return; }
     mbedtls_ssl_conf_authmode(&g_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-    mbedtls_ssl_conf_ca_chain(&g_conf, &g_roots, NULL);
+    mbedtls_ssl_conf_ca_chain(&g_conf, g_roots, NULL);
     mbedtls_ssl_conf_rng(&g_conf, mbedtls_ctr_drbg_random, &g_drbg);
     mbedtls_ssl_conf_min_tls_version(&g_conf, MBEDTLS_SSL_VERSION_TLS1_2);
     mbedtls_ssl_conf_max_tls_version(&g_conf, MBEDTLS_SSL_VERSION_TLS1_3);
@@ -212,7 +213,7 @@ static void copy_str(const mbedtls_x509_buf *v, char *buf, int cap)
 bool TlsRootCert(int i, const UINT8 **der, UINT32 *len)
 {
     if (i < 0 || i >= g_nroots) return false;
-    const mbedtls_x509_crt *c = &g_roots;
+    const mbedtls_x509_crt *c = g_roots;
     for (int k = 0; k < i && c; k++) c = c->next;
     if (!c || !c->raw.len) return false;
     *der = c->raw.p;
@@ -223,7 +224,7 @@ bool TlsRootCert(int i, const UINT8 **der, UINT32 *len)
 bool TlsRootName(int i, char *buf, int cap, bool *user)
 {
     if (i < 0 || i >= g_nroots || cap < 2) return false;
-    const mbedtls_x509_crt *c = &g_roots;
+    const mbedtls_x509_crt *c = g_roots;
     for (int k = 0; k < i && c; k++) c = c->next;
     if (!c) return false;
     if (user) *user = i >= g_nbuiltin;
@@ -270,11 +271,11 @@ int TlsImportRoots(const void *data, UINT32 len, char *err, int err_cap)
     for (mbedtls_x509_crt *c = &tmp; c && c->raw.len; c = c->next) {
         if (!mbedtls_x509_crt_get_ca_istrue(c)) { not_ca++; continue; }
         bool dup = false;
-        for (const mbedtls_x509_crt *t = &g_roots; t && t->raw.len; t = t->next)
+        for (const mbedtls_x509_crt *t = g_roots; t && t->raw.len; t = t->next)
             if (t->raw.len == c->raw.len && !memcmp(t->raw.p, c->raw.p, c->raw.len)) { dup = true; break; }
         if (dup) { dups++; continue; }
         /* appended at the end: connections holding the chain are unaffected */
-        if (!mbedtls_x509_crt_parse_der(&g_roots, c->raw.p, c->raw.len)) { added++; g_nroots++; }
+        if (!mbedtls_x509_crt_parse_der(g_roots, c->raw.p, c->raw.len)) { added++; g_nroots++; }
     }
     mbedtls_x509_crt_free(&tmp);
 
@@ -288,8 +289,10 @@ int TlsImportRoots(const void *data, UINT32 len, char *err, int err_cap)
 /* -----------------------------------------------------------------------
  * Personal store ("My"): certificates with their private keys, from
  * PKCS #12 files (certutil -importpfx), for TLS client authentication
- * (EAP-TLS: nt/eap.c).  Never removed while NovaOS runs, so a session
- * may keep pointing at one.
+ * (EAP-TLS: nt/eap.c).  A removed one (certutil -delstore my) is only
+ * marked so while NovaOS runs, as a session may still point at it: it is
+ * no longer listed, found or saved, and its slot stays taken until the
+ * next start.
  * ----------------------------------------------------------------------- */
 #define PERSONAL_MAX 8
 
@@ -298,6 +301,7 @@ static struct {
     mbedtls_pk_context key;
     char               name[64];       /* its subject's common name */
     char               issuer[64];
+    bool               removed;
 } g_personal[PERSONAL_MAX];
 static int g_npersonal;
 
@@ -333,7 +337,7 @@ static int add_personal(char *name, int name_cap, char *err, int err_cap)
     mbedtls_x509_crt *chain = &g_personal[g_npersonal].chain;
     mbedtls_pk_context *key = &g_personal[g_npersonal].key;
     for (int i = 0; i < g_npersonal; i++)                   /* (the same certificate again: kept once) */
-        if (g_personal[i].chain.raw.len == chain->raw.len &&
+        if (!g_personal[i].removed && g_personal[i].chain.raw.len == chain->raw.len &&
             !memcmp(g_personal[i].chain.raw.p, chain->raw.p, chain->raw.len)) {
             mbedtls_x509_crt_free(chain);
             mbedtls_pk_free(key);
@@ -343,6 +347,7 @@ static int add_personal(char *name, int name_cap, char *err, int err_cap)
     cn_of(&chain->subject, g_personal[g_npersonal].name, sizeof(g_personal[0].name));
     cn_of(&chain->issuer, g_personal[g_npersonal].issuer, sizeof(g_personal[0].issuer));
     if (name_cap) ksnprintf(name, name_cap, "%s", g_personal[g_npersonal].name);
+    g_personal[g_npersonal].removed = false;
     g_npersonal++;
     return 1;
 }
@@ -392,7 +397,7 @@ int TlsPersonalAdd(const void *chain_der, UINT32 chain_len, const void *key_der,
 
 int TlsPersonalExport(int i, UINT8 *out, UINT32 cap, UINT32 *chain_len, UINT32 *key_len)
 {
-    if (i < 0 || i >= g_npersonal) return 0;
+    if (i < 0 || i >= g_npersonal || g_personal[i].removed) return 0;
     UINT32 o = 0;
     for (const mbedtls_x509_crt *c = &g_personal[i].chain; c && c->raw.len; c = c->next) {
         if (c->raw.len > cap - o) return 0;
@@ -408,11 +413,33 @@ int TlsPersonalExport(int i, UINT8 *out, UINT32 cap, UINT32 *chain_len, UINT32 *
     return 1;
 }
 
-int TlsPersonalCount(void) { return g_npersonal; }
+int TlsPersonalCount(void)
+{
+    int n = 0;
+    for (int i = 0; i < g_npersonal; i++) n += !g_personal[i].removed;
+    return n;
+}
+
+int TlsPersonalSlots(void) { return g_npersonal; }
+
+bool TlsPersonalCert(int i, const UINT8 **der, UINT32 *len)
+{
+    if (i < 0 || i >= g_npersonal || g_personal[i].removed) return false;
+    *der = g_personal[i].chain.raw.p;
+    *len = (UINT32)g_personal[i].chain.raw.len;
+    return true;
+}
+
+int TlsPersonalRemove(int i)
+{
+    if (i < 0 || i >= g_npersonal || g_personal[i].removed) return 0;
+    g_personal[i].removed = true;               /* (its chain and key stay: a session may hold them) */
+    return 1;
+}
 
 bool TlsPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap)
 {
-    if (i < 0 || i >= g_npersonal) return false;
+    if (i < 0 || i >= g_npersonal || g_personal[i].removed) return false;
     if (name_cap) ksnprintf(name, name_cap, "%s", g_personal[i].name);
     if (issuer_cap) ksnprintf(issuer, issuer_cap, "%s", g_personal[i].issuer);
     return true;
@@ -432,7 +459,11 @@ static bool same_ci(const char *a, const char *b, UINT32 n)
 
 int TlsPersonalFind(const char *user)
 {
-    if (!user || !user[0]) return g_npersonal ? g_npersonal - 1 : -1;   /* (the newest) */
+    if (!user || !user[0]) {                                /* (the newest) */
+        for (int i = g_npersonal - 1; i >= 0; i--)
+            if (!g_personal[i].removed) return i;
+        return -1;
+    }
     /* the certificate named @user, or its bare name: "CORP\\alice", "alice@corp" */
     const char *bare = user;
     for (const char *s = user; *s; s++)
@@ -440,7 +471,8 @@ int TlsPersonalFind(const char *user)
     UINT32 bl = 0;
     while (bare[bl] && bare[bl] != '@') bl++;
     for (int i = g_npersonal - 1; i >= 0; i--)
-        if (same_ci(g_personal[i].name, user, sizeof(g_personal[i].name)) ||
+        if (g_personal[i].removed) continue;
+        else if (same_ci(g_personal[i].name, user, sizeof(g_personal[i].name)) ||
             (strlen(g_personal[i].name) == bl && same_ci(g_personal[i].name, bare, bl)))
             return i;
     return -1;
@@ -693,12 +725,43 @@ static bool eap_conf(mbedtls_ssl_config *c)
     if (mbedtls_ssl_config_defaults(c, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT))
         return false;
     mbedtls_ssl_conf_authmode(c, MBEDTLS_SSL_VERIFY_REQUIRED);
-    mbedtls_ssl_conf_ca_chain(c, &g_roots, NULL);
+    mbedtls_ssl_conf_ca_chain(c, g_roots, NULL);
     mbedtls_ssl_conf_rng(c, mbedtls_ctr_drbg_random, &g_drbg);
     mbedtls_ssl_conf_min_tls_version(c, MBEDTLS_SSL_VERSION_TLS1_2);
     mbedtls_ssl_conf_max_tls_version(c, MBEDTLS_SSL_VERSION_TLS1_2);
     mbedtls_ssl_conf_session_tickets(c, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
     return true;
+}
+
+/* Root store, removing an imported root (certutil -delstore root): a new
+ * list without it for the configurations to use from now on.  The old
+ * list stays allocated, as a handshake under way (or an EAP-TLS session's
+ * own configuration) may still be checking against it. */
+int TlsRemoveRoot(int i)
+{
+    if (!g_ready || i < g_nbuiltin || i >= g_nroots) return 0;
+    mbedtls_x509_crt *n = kmalloc(sizeof(*n));
+    if (!n) return 0;
+    mbedtls_x509_crt_init(n);
+    int k = 0, kept = 0;
+    bool ok = true;
+    for (const mbedtls_x509_crt *c = g_roots; ok && c && c->raw.len; c = c->next, k++) {
+        if (k == i) continue;
+        /* (the built-in ones point at tls_roots.c's DER, as at TlsInit) */
+        ok = !(k < g_nbuiltin ? mbedtls_x509_crt_parse_der_nocopy(n, c->raw.p, c->raw.len)
+                              : mbedtls_x509_crt_parse_der(n, c->raw.p, c->raw.len));
+        kept += ok;
+    }
+    if (!ok) {
+        mbedtls_x509_crt_free(n);
+        kfree(n);
+        return 0;
+    }
+    g_roots = n;
+    g_nroots = kept;
+    mbedtls_ssl_conf_ca_chain(&g_conf, g_roots, NULL);
+    if (g_eap_ready) mbedtls_ssl_conf_ca_chain(&g_eap_conf, g_roots, NULL);
+    return 1;
 }
 
 static int eap_send(void *ctx, const unsigned char *buf, size_t len)

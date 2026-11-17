@@ -14,7 +14,7 @@
  *    wlan_notification_acm_scan_complete;
  *  - WlanGetAvailableNetworkList: the four networks with their
  *    authentication and cipher, signal and PHY types (NovaCorp's RSNA,
- *    not connectable through wlanapi yet);
+ *    connectable with a profile's EAP settings);
  *    WlanGetNetworkBssList: the four access points (BSSID, RSSI, channel
  *    centre frequency) and one filtered by SSID;
  *  - WlanSetProfile with NovaNet's profile XML, WlanGetProfileList,
@@ -25,7 +25,18 @@
  *    WlanQueryInterface's state, current connection (SSID, BSSID,
  *    WPA2-Personal with CCMP, the profile) and channel; WlanDisconnect;
  *  - WlanConnect to the open network by SSID alone (discovery), then
- *    WlanDisconnect; WlanDeleteProfile; WlanCloseHandle.
+ *    WlanDisconnect; WlanDeleteProfile;
+ *  - WPA2-Enterprise profiles (the selftest has trusted NovaCorp's root
+ *    and imported alice's and mallory's certificates by then): NovaCorp's
+ *    PEAP profile (EapHostConfig, method 25) saved; WlanConnect without a
+ *    sign-in fails with ONEX_UNABLE_TO_IDENTIFY_USER;
+ *    WlanSetProfileEapXmlUserData refuses a profile that does not exist
+ *    or is not 802.1X, then takes alice's EapHostUserCredentials (user
+ *    name and password, written with namespace prefixes as Windows does)
+ *    and WlanConnect signs in: connected, WPA2-Enterprise, 802.1X on, the
+ *    profile named; WlanDisconnect; then an EAP-TLS profile (method 13)
+ *    whose user data names alice signs in with her certificate;
+ *    WlanDeleteProfile for both; WlanCloseHandle.
  * "wlantest settings": the test joins NovaNet in Settings' Wi-Fi page as a
  * person would (the selftest types it); wlantest waits for the adapter to
  * be connected, checks the connection through WlanQueryInterface, then
@@ -119,6 +130,7 @@ __declspec(dllimport) DWORD WINAPI WlanSetProfile(HANDLE, const GUID *, DWORD, L
 __declspec(dllimport) DWORD WINAPI WlanGetProfile(HANDLE, const GUID *, LPCWSTR, PVOID, LPWSTR *, DWORD *, DWORD *);
 __declspec(dllimport) DWORD WINAPI WlanDeleteProfile(HANDLE, const GUID *, LPCWSTR, PVOID);
 __declspec(dllimport) DWORD WINAPI WlanGetProfileList(HANDLE, const GUID *, PVOID, PROFILE_LIST_ **);
+__declspec(dllimport) DWORD WINAPI WlanSetProfileEapXmlUserData(HANDLE, const GUID *, LPCWSTR, DWORD, LPCWSTR, PVOID);
 __declspec(dllimport) DWORD WINAPI WlanConnect(HANDLE, const GUID *, const CONNECT_PARAMS_ *, PVOID);
 __declspec(dllimport) DWORD WINAPI WlanDisconnect(HANDLE, const GUID *, PVOID);
 __declspec(dllimport) DWORD WINAPI WlanQueryInterface(HANDLE, const GUID *, DWORD, PVOID, PDWORD, PVOID *, PDWORD);
@@ -134,6 +146,10 @@ __declspec(dllimport) VOID  WINAPI WlanFreeMemory(PVOID);
 #define ATTEMPT_FAIL 11
 #define DISCONNECTED 21
 #define KEY_MISMATCH 0x2800D
+#define ONEX_NO_USER 0x50001
+#ifndef ERROR_BAD_PROFILE
+#define ERROR_BAD_PROFILE 1206
+#endif
 
 static int g_pass, g_fail;
 
@@ -268,6 +284,136 @@ static const wchar_t WRONG[] =
 
 static const UCHAR NOVACORP[6] = { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x04 };
 
+/* NovaCorp's profiles as Windows exports them (netsh wlan export profile):
+ * 802.1X with PEAP and MS-CHAPv2 inside, or with EAP-TLS */
+#define CORP_HEAD(NAME)                                                                                           \
+    L"<?xml version=\"1.0\"?>\r\n"                                                                              \
+    L"<WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">\r\n"                           \
+    L"  <name>" NAME L"</name>\r\n"                                                                              \
+    L"  <SSIDConfig><SSID><name>NovaCorp</name></SSID></SSIDConfig>\r\n"                                         \
+    L"  <connectionType>ESS</connectionType><connectionMode>auto</connectionMode>\r\n"                           \
+    L"  <MSM><security>\r\n"                                                                                     \
+    L"    <authEncryption><authentication>WPA2</authentication><encryption>AES</encryption>"                     \
+    L"<useOneX>true</useOneX></authEncryption>\r\n"                                                              \
+    L"    <OneX xmlns=\"http://www.microsoft.com/networking/OneX/v1\"><EAPConfig>"                                \
+    L"<EapHostConfig xmlns=\"http://www.microsoft.com/provisioning/EapHostConfig\"><EapMethod>"
+#define CORP_TAIL L"</EapHostConfig></EAPConfig></OneX>\r\n  </security></MSM>\r\n</WLANProfile>\r\n"
+static const wchar_t CORP_PEAP[] = CORP_HEAD(L"NovaCorp")
+    L"<Type xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">25</Type>"
+    L"<VendorId xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</VendorId>"
+    L"<VendorType xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</VendorType>"
+    L"<AuthorId xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</AuthorId></EapMethod>"
+    L"<Config xmlns=\"http://www.microsoft.com/provisioning/EapHostConfig\">"
+    L"<Eap xmlns=\"http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1\"><Type>25</Type>"
+    L"<EapType xmlns=\"http://www.microsoft.com/provisioning/MsPeapConnectionPropertiesV1\"><ServerValidation>"
+    L"<DisableUserPromptForServerValidation>false</DisableUserPromptForServerValidation><TrustedRootCA />"
+    L"</ServerValidation><FastReconnect>true</FastReconnect><InnerEapOptional>false</InnerEapOptional>"
+    L"<Eap xmlns=\"http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1\"><Type>26</Type>"
+    L"<EapType xmlns=\"http://www.microsoft.com/provisioning/MsChapV2ConnectionPropertiesV1\">"
+    L"<UseWinLogonCredentials>false</UseWinLogonCredentials></EapType></Eap>"
+    L"<EnableQuarantineChecks>false</EnableQuarantineChecks><RequireCryptoBinding>false</RequireCryptoBinding>"
+    L"</EapType></Eap></Config>" CORP_TAIL;
+static const wchar_t CORP_TLS[] = CORP_HEAD(L"NovaCorp TLS")
+    L"<Type xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">13</Type>"
+    L"<VendorId xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</VendorId>"
+    L"<VendorType xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</VendorType>"
+    L"<AuthorId xmlns=\"http://www.microsoft.com/provisioning/EapCommon\">0</AuthorId></EapMethod>"
+    L"<Config xmlns=\"http://www.microsoft.com/provisioning/EapHostConfig\">"
+    L"<Eap xmlns=\"http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1\"><Type>13</Type>"
+    L"<EapType xmlns=\"http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV1\"><CredentialsSource>"
+    L"<CertificateStore><SimpleCertSelection>true</SimpleCertSelection></CertificateStore></CredentialsSource>"
+    L"<ServerValidation><DisableUserPromptForServerValidation>false</DisableUserPromptForServerValidation>"
+    L"<ServerNames></ServerNames></ServerValidation><DifferentUsername>false</DifferentUsername></EapType></Eap>"
+    L"</Config>" CORP_TAIL;
+/* the sign-ins (EapHostUserCredentials), as Microsoft's samples write them */
+static const wchar_t ALICE_PEAP[] =
+    L"<EapHostUserCredentials xmlns=\"http://www.microsoft.com/provisioning/EapHostUserCredentials\" "
+    L"xmlns:eapCommon=\"http://www.microsoft.com/provisioning/EapCommon\" "
+    L"xmlns:baseEap=\"http://www.microsoft.com/provisioning/BaseEapMethodUserCredentials\">"
+    L"<EapMethod><eapCommon:Type>25</eapCommon:Type><eapCommon:AuthorId>0</eapCommon:AuthorId></EapMethod>"
+    L"<Credentials xmlns:eapUser=\"http://www.microsoft.com/provisioning/EapUserPropertiesV1\" "
+    L"xmlns:baseEap=\"http://www.microsoft.com/provisioning/BaseEapUserPropertiesV1\" "
+    L"xmlns:MsPeap=\"http://www.microsoft.com/provisioning/MsPeapUserPropertiesV1\" "
+    L"xmlns:MsChapV2=\"http://www.microsoft.com/provisioning/MsChapV2UserPropertiesV1\">"
+    L"<baseEap:Eap><baseEap:Type>25</baseEap:Type><MsPeap:EapType><MsPeap:RoutingIdentity>alice</MsPeap:RoutingIdentity>"
+    L"<baseEap:Eap><baseEap:Type>26</baseEap:Type><MsChapV2:EapType><MsChapV2:Username>alice</MsChapV2:Username>"
+    L"<MsChapV2:Password>nova-peap-password</MsChapV2:Password><MsChapV2:LogonDomain></MsChapV2:LogonDomain>"
+    L"</MsChapV2:EapType></baseEap:Eap></MsPeap:EapType></baseEap:Eap></Credentials></EapHostUserCredentials>";
+static const wchar_t ALICE_TLS[] =
+    L"<EapHostUserCredentials xmlns=\"http://www.microsoft.com/provisioning/EapHostUserCredentials\" "
+    L"xmlns:eapCommon=\"http://www.microsoft.com/provisioning/EapCommon\" "
+    L"xmlns:baseEap=\"http://www.microsoft.com/provisioning/BaseEapMethodUserCredentials\">"
+    L"<EapMethod><eapCommon:Type>13</eapCommon:Type><eapCommon:AuthorId>0</eapCommon:AuthorId></EapMethod>"
+    L"<Credentials xmlns:eapUser=\"http://www.microsoft.com/provisioning/EapUserPropertiesV1\" "
+    L"xmlns:baseEap=\"http://www.microsoft.com/provisioning/BaseEapUserPropertiesV1\" "
+    L"xmlns:eapTls=\"http://www.microsoft.com/provisioning/EapTlsUserPropertiesV1\">"
+    L"<baseEap:Eap><baseEap:Type>13</baseEap:Type><eapTls:EapType><eapTls:Username>alice</eapTls:Username>"
+    L"</eapTls:EapType></baseEap:Eap></Credentials></EapHostUserCredentials>";
+
+/* Connect with saved profile @name: the connection_complete reason, or -1 */
+static long connect_profile(HANDLE h, const GUID *g, const wchar_t *name, DWORD *err)
+{
+    CONNECT_PARAMS_ p;
+    memset(&p, 0, sizeof(p));
+    p.wlanConnectionMode = 0;
+    p.strProfile = name;
+    p.dot11BssType = 1;
+    int from = now();
+    *err = WlanConnect(h, g, &p, NULL);
+    return *err ? -1 : wait_for(from, CONNECTION_COMPLETE, 120000);
+}
+
+static void enterprise_profiles(HANDLE h, const GUID *g)
+{
+    DWORD reason = 1, e;
+    e = WlanSetProfile(h, g, 0, CORP_PEAP, NULL, TRUE, NULL, &reason);
+    check(!e && !reason, "WlanSetProfile(NovaCorp, PEAP) (error %lu, reason %lx)", e, reason);
+    int from = now();
+    long r = connect_profile(h, g, L"NovaCorp", &e);
+    check(!e && r == ONEX_NO_USER && seen(from, ATTEMPT_FAIL),
+          "WlanConnect(NovaCorp) without a sign-in: complete with reason %lx (ONEX_UNABLE_TO_IDENTIFY_USER) (error %lu)",
+          r, e);
+    check(WlanSetProfileEapXmlUserData(h, g, L"NoSuchProfile", 0, ALICE_PEAP, NULL) == ERROR_NOT_FOUND,
+          "WlanSetProfileEapXmlUserData: a profile that does not exist, ERROR_NOT_FOUND");
+    e = WlanSetProfile(h, g, 0, PROFILE, NULL, TRUE, NULL, &reason);
+    check(!e && WlanSetProfileEapXmlUserData(h, g, L"NovaNet", 0, ALICE_PEAP, NULL) == ERROR_BAD_PROFILE,
+          "... a WPA2-Personal profile, ERROR_BAD_PROFILE");
+    WlanDeleteProfile(h, g, L"NovaNet", NULL);
+    e = WlanSetProfileEapXmlUserData(h, g, L"NovaCorp", 0, ALICE_PEAP, NULL);
+    check(!e, "WlanSetProfileEapXmlUserData(NovaCorp): alice's user name and password (error %lu)", e);
+    from = now();
+    r = connect_profile(h, g, L"NovaCorp", &e);
+    check(!e && r == 0 && !seen(from, ATTEMPT_FAIL), "WlanConnect(profile NovaCorp): signed in with PEAP, success "
+          "(reason %lx, error %lu)", r, e);
+    if (!r) {
+        connected_as(h, g, "NovaCorp", NOVACORP, L"NovaCorp", 6, 25, 1);
+        DWORD size;
+        CONNECTION_ATTRIBUTES_ *a = NULL;
+        if (!WlanQueryInterface(h, g, 7, NULL, &size, (PVOID *)&a, NULL) && a) {
+            check(a->sec.bOneXEnabled, "... 802.1X enabled");
+            WlanFreeMemory(a);
+        }
+    }
+    from = now();
+    e = WlanDisconnect(h, g, NULL);
+    check(!e && wait_for(from, DISCONNECTED, 2000) >= 0, "WlanDisconnect (error %lu)", e);
+
+    e = WlanSetProfile(h, g, 0, CORP_TLS, NULL, TRUE, NULL, &reason);
+    check(!e && !reason, "WlanSetProfile(NovaCorp TLS, EAP-TLS) (error %lu, reason %lx)", e, reason);
+    e = WlanSetProfileEapXmlUserData(h, g, L"NovaCorp TLS", 0, ALICE_TLS, NULL);
+    check(!e, "WlanSetProfileEapXmlUserData(NovaCorp TLS): alice (error %lu)", e);
+    from = now();
+    r = connect_profile(h, g, L"NovaCorp TLS", &e);
+    check(!e && r == 0, "WlanConnect(profile NovaCorp TLS): signed in with alice's certificate (reason %lx, error %lu)",
+          r, e);
+    if (!r) connected_as(h, g, "NovaCorp", NOVACORP, NULL, 6, 25, 1);
+    from = now();
+    e = WlanDisconnect(h, g, NULL);
+    check(!e && wait_for(from, DISCONNECTED, 2000) >= 0, "WlanDisconnect (error %lu)", e);
+    check(!WlanDeleteProfile(h, g, L"NovaCorp", NULL) && !WlanDeleteProfile(h, g, L"NovaCorp TLS", NULL),
+          "WlanDeleteProfile(NovaCorp, NovaCorp TLS)");
+}
+
 /* @corp: NovaCorp (WPA2-Enterprise, signed in with a user name and
  * password typed in Settings) rather than NovaNet */
 static int settings_test(HANDLE h, const GUID *g, int corp)
@@ -342,8 +488,8 @@ int main(int argc, char **argv)
           n3->wlanSignalQuality == 35, "NovaGuest: open (1), no cipher, signal 35");
     const NETWORK_ *n4 = network(nl, "NovaCorp");
     check(n4 && n4->bSecurityEnabled && n4->dot11DefaultAuthAlgorithm == 6 && n4->dot11DefaultCipherAlgorithm == 4 &&
-          n4->wlanSignalQuality == 25 && !n4->bNetworkConnectable,
-          "NovaCorp: WPA2-Enterprise (RSNA, 6) with CCMP, signal 25, not connectable through wlanapi yet");
+          n4->wlanSignalQuality == 25 && n4->bNetworkConnectable,
+          "NovaCorp: WPA2-Enterprise (RSNA, 6) with CCMP, signal 25, connectable");
     if (nl) WlanFreeMemory(nl);
 
     BSS_LIST_ *bl = NULL;
@@ -431,6 +577,7 @@ int main(int argc, char **argv)
     check(!WlanDeleteProfile(h, &g, L"NovaNet", NULL), "WlanDeleteProfile(NovaNet)");
     xml = NULL;
     check(WlanGetProfile(h, &g, L"NovaNet", NULL, &xml, NULL, NULL) == ERROR_NOT_FOUND, "... gone");
+    enterprise_profiles(h, &g);
     check(!WlanCloseHandle(h, NULL), "WlanCloseHandle");
     check(WlanCloseHandle(h, NULL) == ERROR_INVALID_HANDLE, "... a second time: ERROR_INVALID_HANDLE");
     printf("wlantest: %d passed, %d failed\n", g_pass, g_fail);

@@ -16972,6 +16972,37 @@ a `DOMAIN\user` name and an untrusted server.  Not yet: EAP-TLS (a client
 certificate), WPA3-Enterprise, Enterprise profiles in `wlanapi.dll` and
 Settings, and PEAP's cryptobinding; the real card needs the T14.
 
+## A vendor's display driver, unchanged: Red Hat's viogpudo.sys on QEMU
+
+Item 3 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)): Red Hat's WDDM
+display-only driver for QEMU's virtio GPU, `viogpudo.sys`, as virtio-win
+0.1.302 publishes it (signed by Microsoft), runs unchanged on NovaOS's
+`dxgkrnl` host, the rehearsal on hardware CI has of the Intel design's
+step 2 ([design](design/intel-gpu.md)).
+
+- **What runs**: `pnputil /add-driver viogpudo.inf /install` on a machine
+  whose display is a virtio-vga: NovaOS's built-in driver steps aside (its
+  virtio side, `virtio_gpu.c`, lets go of the card), the driver registers
+  through displib, starts with the card's BARs and line interrupt, offers
+  23 modes, and the desktop moves to it.  Mode changes from Settings or
+  `ChangeDisplaySettings` are VidPNs it commits; disabling it gives the
+  screen back to the built-in driver; it starts at boot.
+- **What NovaOS needed**: `IoCreateNotificationEvent`, `RtlAssert` and
+  `vDbgPrintEx`; `ZwLoadDriver` of `DXGKrnl` answering "already loaded"
+  (displib loads it first); mode Ids numbered by dxgkrnl; committing the
+  driver's own source and target modes, on a path with the default gamma
+  ramp and scRGB colour basis (it checks both); stopping and removing the
+  driver before the bus turns its decoding off, its mappings kept until
+  then (it resets its virtio device in `DxgkDdiRemoveDevice`).
+- **What it found**: two structure layouts NovaOS's own test driver could
+  not catch, being built with the same header: a source mode's `Stride`
+  is a DWORD (40-byte mode), and a target mode is 96 bytes (colour basis,
+  per-channel ranges, wire format, then preference).  It also confirmed
+  the display-only registration IOCTL, `0x230043`, which had been a guess.
+- **Tested by** the devices suite's `viogpudo` boot
+  (`tests/selftest/devices/viogpudo`; the package is fetched by
+  `tools/drivertest/viogpudo.py`).
+
 <!-- END generated:history -->
 
 ## Raw Input for the HID class driver's devices

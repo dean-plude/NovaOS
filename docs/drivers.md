@@ -775,7 +775,15 @@ in the mode the driver left, when the driver is disabled or removed.
 
 The test driver is `wddmdod.sys` (`tools/drivertest/wddmdod.c`), a
 display-only driver for QEMU's standard VGA modelled on Microsoft's KMDOD
-sample.
+sample. A vendor's driver runs the same way, unchanged: Red Hat's
+`viogpudo.sys` from virtio-win (Microsoft-signed, installed by hardware ID
+`PCI\VEN_1AF4&DEV_1050`) drives QEMU's virtio-vga, with NovaOS's own
+virtio-gpu driver letting go of the card first. It registers through
+displib's `DxgkInitializeDisplayOnlyDriver` (which loads `DXGKrnl` first:
+the kernel's own, so "already loaded"), sets its framebuffer up as a 2D
+resource on the virtio control queue, offers 23 modes, and keeps its
+registers mapped until `DxgkDdiRemoveDevice`, which the host calls before
+the bus turns the device's decoding off.
 
 Render drivers hand `DxgkInitialize` the full `DRIVER_INITIALIZATION_DATA`
 (step 3 of the design, begun): the host reads their memory segments at
@@ -949,6 +957,7 @@ kept in the repository or the image.
 | `usbserial` | FTDI's `ftdibus.sys` and `ftser2k.sys` | QEMU's `usb-serial` (FTDI FT232) | download by hardware ID, the USB bus interface, COM3 |
 | `ax211` | Intel's `Netwtw14.sys` (WDI) | `edu` standing in for the AX211 | download, signing, registration, firmware read, adapter open |
 | `wifi` | `wditest.sys` (NovaOS's WDI miniport) | `edu` | the WDI command layer and data path: capabilities, the station port, a scan and its BSS entries, connecting to an open network, DHCP and ping over the TAL TX/RX path, `netsh wlan` |
+| `viogpudo` | Red Hat's `viogpudo.sys` (WDDM display-only, from virtio-win) | QEMU's virtio-vga | a vendor's display driver unchanged: the built-in driver stepping aside, the desktop on the driver, mode changes as Settings makes them, the screen handed back on disable, started at boot |
 | `wddm` | `wddmdod.sys` (NovaOS's WDDM display-only driver), then `wddmtest.sys` (its render miniport) | QEMU's standard VGA; a root-enumerated device | the dxgkrnl host, mode changes, the screen handed back on disable; a render adapter's devices and allocations |
 | `hid` | NovaOS's HID class driver and `HidUsb` minidriver | a vendor-defined USB HID device (`tools/padpeer.py --kind vendor`) | `hid.dll` and setupapi on a class-driver collection: strings, preparsed data, feature, input and output reports, two handles, Raw Input, unplugging |
 | `composite` | the HID class driver with `HidUsb` on each function, `kbdhid` on the keyboard's collection | a composite USB device: a keyboard and two vendor-defined HID functions (`tools/compositepeer.py`) | a node and a PDO per interface (`MI_nn` IDs), each function's own reports and feature report, Device Manager, unplugging |

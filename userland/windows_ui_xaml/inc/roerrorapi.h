@@ -37,6 +37,7 @@ HRESULT WINAPI GetRestrictedErrorInfo(IRestrictedErrorInfo **ppRestrictedErrorIn
 HRESULT WINAPI SetRestrictedErrorInfo(IRestrictedErrorInfo *pRestrictedErrorInfo);
 HRESULT WINAPI RoReportUnhandledError(IRestrictedErrorInfo *pRestrictedErrorInfo);
 HRESULT WINAPI RoGetErrorReportingFlags(UINT32 *pflags);
+void WINAPI RoClearError(void);
 }
 
 typedef enum RO_ERROR_REPORTING_FLAGS {

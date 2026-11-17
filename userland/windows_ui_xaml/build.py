@@ -396,6 +396,8 @@ def generated(b):
             # (before the spellings, which then name them)
             dwrite_headers(_msvcp(b).mingw_include(), d)
             error_strings(os.path.join(d, 'xaml_error_strings.g.inc'))
+            phone_type_info(os.path.join(d, 'xaml_phone_type_info.g.inc'))
+            phone_built(d)
             fold(os.path.join(d, 'fold'), component_includes() + project_includes() + core_includes() + source_dirs() +
                  [i for c in CORE_LIBRARIES for i in vcxproj.read(os.path.join(XCP, c[0]), PROPS)['includes']] +
                  [INC, WIL] + abi + [d, _msvcp(b).mingw_include(),
@@ -417,6 +419,142 @@ def error_strings(out):
     body = ''.join('#ifdef %s\n{ %s, L"%s" },\n#endif\n' % (n, n, t) for n, t in rows)
     if not os.path.exists(out) or open(out).read() != body:
         open(out, 'w').write(body)
+
+
+PHONE_TYPE_INFO = os.path.join(XCP, 'dxaml', 'dllsrv', 'exts', 'phone')
+
+
+def phone_type_info(out):
+    """OUT: the phone library's type tables (Microsoft's generated
+    dllsrv/exts/phone/XamlTypeInfo.g.rc, the user-defined resources
+    Microsoft.UI.Xaml.Phone.dll holds and the framework's
+    components/ExtMetadataProvider reads) as C++ data, { name, type, size,
+    bytes } rows (src/phone/phone_metadata.cpp), laid out as rc lays out a raw
+    data block: each number a WORD, or a DWORD with an L suffix, each string
+    its characters, unterminated (L"..." UTF-16): an aligned array per
+    table and NOVA_PHONE_TABLES, their rows.  Its names are the
+    #defines of the .g.rc, XamlTypeInfo.g.h and SatelliteBase's
+    XamlTypeInfo.h"""
+    defs = {}
+    texts = [open(os.path.join(XCP, 'components', 'SatelliteBase', 'inc', 'XamlTypeInfo.h')).read(),
+             open(os.path.join(PHONE_TYPE_INFO, 'XamlTypeInfo.g.h')).read()]
+    rc = open(os.path.join(PHONE_TYPE_INFO, 'XamlTypeInfo.g.rc'), encoding='utf-8-sig').read()
+    for t in texts + [rc]:
+        for m in re.finditer(r'^\s*#define\s+(\w+)[ \t]+([^\n]*?)\s*$', t, re.M):
+            defs[m.group(1)] = m.group(2)
+    rc = re.sub(r'//[^\n]*', '', re.sub(r'^\s*#[^\n]*', '', rc, flags=re.M))
+    tok = re.compile(r'\s*(L?"(?:[^"\\]|\\.)*"|[A-Za-z_]\w*|\d+L?|[-+,{}])')
+
+    def tokens(text):
+        pos, out = 0, []
+        while pos < len(text):
+            m = tok.match(text, pos)
+            if not m:
+                if text[pos:].strip():
+                    raise ValueError('XamlTypeInfo.g.rc: cannot read %r' % text[pos:pos + 40])
+                break
+            t, pos = m.group(1), m.end()
+            depth = 0
+            while re.fullmatch(r'[A-Za-z_]\w*', t) and t in defs and depth < 8:
+                t, depth = defs[t], depth + 1
+            out += [x for x in tok.findall(t)] if t != m.group(1) else [t]
+        return out
+
+    def value(t):
+        return (int(t[:-1]), 4) if t.endswith('L') else (int(t), 2)
+
+    toks = tokens(rc)
+    rows, i = [], 0
+    while i < len(toks):
+        name, kind = value(toks[i])[0], value(toks[i + 1])[0]
+        assert toks[i + 2] == '{', toks[i:i + 3]
+        i += 3
+        data = bytearray()
+        while toks[i] != '}':
+            if toks[i] == ',':
+                i += 1
+                continue
+            if toks[i].startswith(('"', 'L"')):
+                body = bytes(toks[i].split('"', 1)[1][:-1], 'utf-8').decode('unicode_escape')
+                data += body.encode('utf-16-le' if toks[i][0] == 'L' else 'latin-1')
+                i += 1
+                continue
+            # an expression: [-]n (+|- [-]n)*
+            total, size, sign = 0, 2, 1
+            while True:
+                while toks[i] in '+-':
+                    sign, i = (-sign if toks[i] == '-' else sign), i + 1
+                n, w = value(toks[i])
+                total, size, sign, i = total + sign * n, max(size, w), 1, i + 1
+                if toks[i] not in ('+', '-'):
+                    break
+                sign, i = (-1 if toks[i] == '-' else 1), i + 1
+            data += (total & (0xffffffff if size == 4 else 0xffff)).to_bytes(size, 'little')
+        i += 1
+        rows.append((name, kind, len(data), ''.join('\\x%02x' % c for c in data)))
+    # (each table 4-byte aligned, as a resource is: their rows hold DWORDs)
+    body = ''.join('alignas(4) static const char nova_phone_table_%d[] = "%s";\n' % (n, r[3]) for n, r in enumerate(rows))
+    body += '#define NOVA_PHONE_TABLES \\\n' + ''.join(
+        '    { %d, %d, %d, nova_phone_table_%d }, \\\n' % (r[0], r[1], r[2], n) for n, r in enumerate(rows)) + '\n'
+    if not os.path.exists(out) or open(out).read() != body:
+        open(out, 'w').write(body)
+
+
+# the phone library's classes NovaOS builds (the Pivot's; and the navigation
+# transitions, ThemeTransitions.cpp's, which PhoneTypes.g.cpp does not hold)
+PHONE_BUILT = ('Pivot', 'PivotItem', 'PivotItemEventArgs', 'PivotHeaderItem', 'PivotHeaderPanel', 'PivotPanel',
+               'PivotAutomationPeer', 'PivotItemAutomationPeer', 'PivotItemDataAutomationPeer',
+               'NavigationThemeTransition', 'CommonNavigationTransitionInfo', 'SlideNavigationTransitionInfo',
+               'ContinuumNavigationTransitionInfo', 'DrillInNavigationTransitionInfo',
+               'SuppressNavigationTransitionInfo', 'EntranceNavigationTransitionInfo')
+
+
+def phone_built(d):
+    """D/xaml_phone_types.g.inc and D/xaml_phone_runtime_type.g.inc: the
+    phone library's generated classes (dxaml/phone/lib/PhoneTypes.g.cpp)
+    and its XamlRuntimeType (dllsrv/exts/phone/XamlTypeInfo.g.cpp) less
+    what names the classes NovaOS does not build yet (PHONE_BUILT; the
+    pickers, LoopingSelector, the jump list converters), whose headers do
+    not compile on NovaOS's WRL yet: PhoneTypes.g.cpp's definitions of
+    their generated classes and factories, and the runtime type's
+    activation of them (which then answers E_NOT_FOUND, as for a type it
+    does not know).  src/phone/phone_types.cpp and phone_runtime_type.cpp
+    compile them"""
+    src = open(os.path.join(MUX, 'dxaml', 'phone', 'lib', 'PhoneTypes.g.cpp'), encoding='utf-8-sig').read()
+    owner = re.compile(r'\b(\w+?)(?:Generated|Factory|RuntimeClass)::')
+    out, item, depth, base = [], [], 0, 0
+
+    def flush():
+        m = next((owner.search(l) for l in item if owner.search(l)), None)
+        if not m or m.group(1) in PHONE_BUILT:
+            out.extend(item)
+        item.clear()
+    for line in src.split('\n'):
+        code = re.sub(r'//.*', '', line)
+        if depth == base and (code.lstrip().startswith(('namespace', '#')) or
+                              (code.strip() and set(code.strip()) <= set('{} ') and not item)):
+            out.append(line)
+            depth += code.count('{') - code.count('}')
+            base = depth
+            continue
+        if depth == base and not code.strip() and not item:
+            out.append(line)
+            continue
+        item.append(line)
+        depth += code.count('{') - code.count('}')
+        if depth == base and (code.rstrip().endswith((';', '}'))):
+            flush()
+    flush()
+    types = '\n'.join(out)
+    rt = open(os.path.join(PHONE_TYPE_INFO, 'XamlTypeInfo.g.cpp'), encoding='utf-8-sig').read()
+    rt = re.sub(r'^        case activate_(\w+):\n            return wrl::MakeAndInitialize<\n[^\n]*\n',
+                lambda m: m.group(0) if m.group(1) in PHONE_BUILT else '', rt, flags=re.M)
+    # (its own header, by its path: the generated source is compiled from D)
+    rt = rt.replace('#include "XamlTypeInfo.g.h"', '#include "%s"' % os.path.join(PHONE_TYPE_INFO, 'XamlTypeInfo.g.h'))
+    for name, text in (('xaml_phone_types.g.inc', types), ('xaml_phone_runtime_type.g.inc', rt)):
+        p = os.path.join(d, name)
+        if not os.path.exists(p) or open(p).read() != text:
+            open(p, 'w').write(text)
 
 
 _DWRITE = ('dwrite.h', 'dwrite_1.h', 'dwrite_2.h', 'dwrite_3.h')
@@ -520,6 +658,14 @@ def core_flags(proj, sources, pch, added=()):
         [x for h in CORE_FIRST.get(proj, []) for x in ('-include', h)] + ['-include', os.path.join(XCP, pch)]
 
 
+# (a spelling both a header and another of the same name in other case
+# answer: the framework's sources mean dxaml/lib's comTemplateLibrary.h, as
+# their include path finds it on Windows; the phone library's sources mean
+# SatelliteBase's ComTemplateLibrary.h, which src/phone/precomp.h names by
+# its path)
+FOLD_OTHER_CASE = ('ComTemplateLibrary.h',)
+
+
 def fold(out, dirs):
     """write OUT/<spelling> for every include spelling in the XAML and WIL
     sources that names a file in @dirs only when case is ignored: a header
@@ -531,7 +677,10 @@ def fold(out, dirs):
             for f in files:
                 rel = os.path.relpath(os.path.join(root, f), d).replace(os.sep, '/')
                 real.add(rel)
+                if rel in FOLD_OTHER_CASE:
+                    continue
                 lower.setdefault(rel.lower(), (d, rel))
+    real -= set(FOLD_OTHER_CASE)
     pat = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.M)
     want = set()
     for top in (XCP, WIL):
@@ -1530,6 +1679,34 @@ CORE_LIBRARIES.append((_PHONE, _PHONE, os.path.join(HERE, 'src', 'phone', 'preco
                         os.path.join(XCP, 'components', 'SatelliteBase', 'lib', 'XamlWrlHelpers.cpp')]))
 CORE_SOURCES[_PHONE] = ('ThemeTransitions.cpp', 'NavigateTransitionHelper.cpp')
 PROJECT_DIR += (_PHONE,)
+# (step 32.6, Calculator's history and memory panel: the phone library's
+# Pivot, with its items, its panels, its header (PivotHeaderPanel,
+# PivotHeaderItem and the header manager), the slide-in effect, its event
+# args and automation peers, over the library's generated classes,
+# PhoneTypes.g.cpp (src/phone/phone_types.cpp), and its helpers; the
+# Pivot's state machine and curves, components/pivot; and the library's
+# type metadata, which the framework's XamlLibMetadataProvider reads to make
+# a Pivot named in markup: the generated XamlRuntimeType
+# (dllsrv/exts/phone/XamlTypeInfo.g.cpp, src/phone/phone_runtime_type.cpp)
+# and the type tables, data in src/phone/phone_metadata.cpp in place of
+# Microsoft.UI.Xaml.Phone.dll's resources.  The pickers, LoopingSelector
+# and the jump list converters do not build yet: phone_built() leaves them
+# out of the generated sources)
+CORE_SOURCES[_PHONE] += ('Pivot_Partial.cpp', 'Pivot_Automation_Partial.cpp',
+                         'Pivot_SlideInEffect_Partial.cpp', 'PivotItem_Partial.cpp', 'PivotPanel_Partial.cpp',
+                         'PivotHeaderPanel_Partial.cpp', 'PivotHeaderItem.cpp', 'PivotHeaderManager.cpp',
+                         'PivotItemEventArgs.cpp', 'PivotAutomationPeer_Partial.cpp',
+                         'PivotItemAutomationPeer_Partial.cpp', 'PivotItemDataAutomationPeer_Partial.cpp',
+                         'AutomationHelper.cpp', 'ValueHelpers.cpp', 'PlatformHelpers.cpp', 'ElevationHelper.cpp')
+CORE_LIBRARIES[-1][3].extend([os.path.join(HERE, 'src', 'phone', x) for x in
+                              ('phone_types.cpp', 'phone_runtime_type.cpp', 'phone_metadata.cpp')] +
+                             [os.path.join(XCP, 'components', 'SatelliteBase', 'lib', x)
+                              for x in ('DllInitializedHelpers.cpp', 'BindableToObservableVectorWrapper.cpp')])
+# (its runtime profiler markers, as the framework's)
+PROJECT_DEFINES[_PHONE] = ['EXP_CLANG']
+_PIVOT = 'components/pivot/lib/Microsoft.UI.Xaml.Pivot.vcxproj'
+CORE_LIBRARIES.append((_PIVOT, _PIVOT, 'components/pch/precomp.h', []))
+CORE_SOURCES[_PIVOT] = ('../PivotCurveGenerator.cpp', '../PivotStateMachine.cpp', '../PivotStaticContentCurve.cpp')
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

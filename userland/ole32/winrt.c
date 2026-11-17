@@ -536,6 +536,12 @@ WINOLEAPI GetRestrictedErrorInfo(IUnknown **info)
     TlsSetValue(tls, 0);                                /* (the caller now holds the thread's reference) */
     return S_OK;
 }
+/* RoClearError: the thread's error object dropped (a caller that has
+ * handled a failure, as the XAML phone library's tracker pointers do) */
+WINOLEAPI_(void) RoClearError(void)
+{
+    SetRestrictedErrorInfo(0);
+}
 WINOLEAPI RoGetErrorReportingFlags(UINT32 *flags)
 {
     if (!flags) return E_POINTER;

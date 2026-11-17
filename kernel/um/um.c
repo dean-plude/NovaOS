@@ -3228,7 +3228,7 @@ void UmReturnToUser(void)
      * off never answers another CPU's TLB shootdown for this process, and
      * that CPU waits forever holding the process lock (seen with Chromium's
      * stack sampler, which suspends threads while others free memory) */
-    if (t->suspend > 0 && sched_current()->fpu) {
+    if ((t->suspend > 0 || p->frozen) && sched_current()->fpu) {
         /* its user x87, SSE and AVX registers are still live in this CPU
          * (kernel code leaves them alone), and kt->fpu holds what the last
          * switch away saved, maybe long ago: save them for
@@ -3237,7 +3237,15 @@ void UmReturnToUser(void)
         xstate_save(sched_current()->fpu);
         __atomic_store_n(&t->fpu_parked, 1, __ATOMIC_RELEASE);
     }
-    while (t->suspend > 0 && !um_stopping()) { sti(); sched_yield(); cli(); }
+    /* A suspended app, frozen (CTL_FREEZE, um_gui.c), sleeps rather than
+     * yields, since it may stay so for hours: its window restored thaws it
+     * (a few ticks later), and ending the process still ends it */
+    while ((t->suspend > 0 || p->frozen) && !um_stopping()) {
+        sti();
+        if (t->suspend > 0) sched_yield();
+        else sched_sleep_until(NULL, sched_ticks() + 5);
+        cli();
+    }
     t->fpu_parked = 0;
     if (p->kill_pending) um_exit_thread(p->kill_status);
     if (t->terminate) um_exit_thread(t->term_status);

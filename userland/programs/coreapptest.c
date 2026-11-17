@@ -21,6 +21,8 @@
  * is the main view (Id 1), resizing the window (TryResizeView) and refusing
  * a size under SetPreferredMinSize's. The view and CoreApplication each
  * keep one Properties set (WinUI 2 stores its per-view objects there).
+ * Minimised, the app enters the background and is suspended (Suspending
+ * waits for its deferral); restored, it resumes and leaves the background.
  *
  *   coreapptest ARGS...   the self-test runs it as "coreapptest hello world"
  */
@@ -383,6 +385,93 @@ static void composition(void)
     RELEASE(v); RELEASE(brush); RELEASE(sprite); RELEASE(target); RELEASE(comp);
 }
 
+/* the app's lifetime: minimised, EnteredBackground and (a moment later)
+ * Suspending, whose deferral, completed from another thread, holds the
+ * suspension until then; restored, Resuming and LeavingBackground */
+static const GUID IID_ICoreApplication2_T = { 0x998681FB, 0x1AB6, 0x4B7F, { 0xBE, 0x4A, 0x9A, 0x06, 0x45, 0x22, 0x4C, 0x04 } };
+static const GUID IID_ISuspendingDeferral_T = { 0x59140509, 0x8BC9, 0x4EB4, { 0xB6, 0x36, 0xDA, 0xBD, 0xC4, 0xF4, 0x6F, 0x66 } };
+static char g_life[16];
+static volatile LONG g_deferral_done;
+static INT64 g_deadline;
+static int g_deferral_ok = -1, g_bg_deferral_ok = -1;
+static void life(char c) { size_t n = strlen(g_life); if (n + 1 < sizeof g_life) { g_life[n] = c; g_life[n + 1] = 0; } }
+static DWORD WINAPI complete_later(void *d)
+{
+    Sleep(300);
+    life('d');
+    VT(d, 6, Call_t)(d);                                            /* ISuspendingDeferral.Complete */
+    RELEASE(d);
+    InterlockedExchange(&g_deferral_done, 1);
+    return 0;
+}
+static void on_suspending(void *s, void *args)
+{
+    (void)s;
+    life('s');
+    void *op = 0, *d = 0, *dq = 0;
+    VT(args, 6, Get_t)(args, &op);                                  /* SuspendingOperation */
+    if (!op) return;
+    VT(op, 7, Get_t)(op, &g_deadline);                              /* Deadline */
+    VT(op, 6, Get_t)(op, &d);                                       /* GetDeferral */
+    RELEASE(op);
+    g_deferral_ok = d && SUCCEEDED(VT(d, 0, QI_t)(d, &IID_ISuspendingDeferral_T, &dq)) && dq == d;
+    RELEASE(dq);
+    if (d) CloseHandle(CreateThread(0, 0, complete_later, d, 0, 0));
+}
+static void on_resuming(void *s, void *args) { (void)s; (void)args; life('r'); }
+static void on_background(void *s, void *args, char c)
+{
+    (void)s;
+    life(c);
+    void *d = 0;
+    VT(args, 6, Get_t)(args, &d);                                   /* GetDeferral: a Deferral */
+    g_bg_deferral_ok = d != 0 && g_bg_deferral_ok != 0;
+    if (d) VT(d, 6, Call_t)(d);                                     /* Complete */
+    RELEASE(d);
+}
+static void on_bg_entered(void *s, void *args) { on_background(s, args, 'e'); }
+static void on_bg_leaving(void *s, void *args) { on_background(s, args, 'l'); }
+static Handler h_suspending = { handler2_vt, on_suspending }, h_resuming = { handler2_vt, on_resuming },
+               h_entered_bg = { handler2_vt, on_bg_entered }, h_leaving_bg = { handler2_vt, on_bg_leaving };
+static void pump(int ms)
+{
+    for (int i = 0; i < ms / 20; i++) {
+        VT(g_disp, 7, HRESULT (STDMETHODCALLTYPE *)(void *, int))(g_disp, 3);
+        Sleep(20);
+    }
+}
+static void lifetime(void)
+{
+    EventRegistrationToken ts, tr, te, tl;
+    void *app2 = 0;
+    CHECK("ICoreApplication2", SUCCEEDED(VT(g_app, 0, QI_t)(g_app, &IID_ICoreApplication2_T, &app2)) && app2);
+    if (!app2) return;
+    int ok = 1;
+    ok &= VT(g_app, 7, AddH_t)(g_app, &h_suspending, &ts) == S_OK;
+    ok &= VT(g_app, 9, AddH_t)(g_app, &h_resuming, &tr) == S_OK;
+    ok &= VT(app2, 10, AddH_t)(app2, &h_entered_bg, &te) == S_OK;
+    ok &= VT(app2, 8, AddH_t)(app2, &h_leaving_bg, &tl) == S_OK;
+    CHECK("Suspending, Resuming, EnteredBackground, LeavingBackground +=", ok);
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    INT64 now = (INT64)((UINT64)ft.dwHighDateTime << 32 | ft.dwLowDateTime);
+    ShowWindow(g_hwnd, SW_MINIMIZE);
+    for (int i = 0; i < 250 && !g_deferral_done; i++) pump(20);
+    pump(200);
+    CHECK("minimised: EnteredBackground, then Suspending, held by its deferral", !strcmp(g_life, "esd"));
+    CHECK("its deferral (ISuspendingDeferral) and the background event's", g_deferral_ok == 1 && g_bg_deferral_ok == 1);
+    CHECK("the deadline: some seconds on", g_deadline > now && g_deadline < now + 600000000LL);
+    ShowWindow(g_hwnd, SW_RESTORE);
+    pump(400);
+    CHECK("restored: Resuming, then LeavingBackground", !strcmp(g_life, "esdrl"));
+    CHECK("restored: visible again", IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd));
+    VT(g_app, 8, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(g_app, ts);
+    VT(g_app, 10, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(g_app, tr);
+    VT(app2, 11, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(app2, te);
+    VT(app2, 9, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(app2, tl);
+    RELEASE(app2);
+}
+
 /* ---- the app's view and its source (IInspectable objects) ------------ */
 typedef struct { const void *const *vt; } Obj;
 static HRESULT STDMETHODCALLTYPE o_iids(Obj *o, ULONG *n, GUID **g) { (void)o; *n = 0; *g = 0; return S_OK; }
@@ -486,6 +575,7 @@ static HRESULT STDMETHODCALLTYPE v_run(Obj *o)
     swap_chain();
     pointer_events();
     composition();
+    lifetime();
 
     HANDLE t = CreateThread(0, 0, post_work, 0, 0, 0);
     WaitForSingleObject(t, 10000);

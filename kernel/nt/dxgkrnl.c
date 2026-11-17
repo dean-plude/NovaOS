@@ -172,6 +172,7 @@ typedef struct DxgkAdapter {
     struct { UINT64 size, used; UINT32 flags; } seg[MAX_SEGS];   /* (segment n + 1) */
     struct DxgkDev    *devs;
     struct DxgkAlloc  *allocs;
+    struct DxgkGlobal *globals;            /* its allocations (each open on one device or more, or shared) */
     /* its GPU virtual addresses (gpummu: the driver said GpuMmuSupported and
      * its page tables are ones VidMm can make) */
     bool               gpummu;
@@ -270,13 +271,27 @@ typedef struct DxgkCtx {
     bool            lost;                  /* its buffer hung or faulted: reset, nothing more runs */
 } DxgkCtx;
 
+/* An allocation the driver made (DxgkDdiCreateAllocation), with its place
+ * in a segment: one per allocation however many devices have it open
+ * (its creator's, and those of the processes it was shared with) */
+typedef struct DxgkGlobal {
+    struct DxgkGlobal *next;
+    UINT32          handle;                /* (for a share: um_d3dkmt.c's NT handle object holds it) */
+    int             refs;                  /* the opens, and each share's */
+    void           *kmd;                   /* the driver's hAllocation */
+    UINT64          size;
+    int             seg;                   /* (an index into seg[]) */
+    void           *priv;                  /* the private driver data it was made with (DxgkDdiOpenAllocation's) */
+    UINT32          priv_size;
+} DxgkGlobal;
+
+/* An allocation open on a device: dxgkrnl's handle and the driver's */
 typedef struct DxgkAlloc {
     struct DxgkAlloc *next;
     UINT32          handle;
     DxgkDev        *dev;
-    void           *kmd, *devspec;         /* the driver's hAllocation, hDeviceSpecificAllocation */
-    UINT64          size;
-    int             seg;                   /* (an index into seg[]) */
+    DxgkGlobal     *g;
+    void           *devspec;               /* the driver's hDeviceSpecificAllocation */
 } DxgkAlloc;
 
 static DxgkDriver  *g_drivers;
@@ -839,7 +854,7 @@ static NT_API void *cb_get_handle_data(const DXGKARGCB_GETHANDLEDATA *q)
     if (!q || q->Type != DXGK_HANDLE_ALLOCATION) return NULL;
     for (DxgkAdapter *a = g_adapters; a; a = a->next)
         for (DxgkAlloc *al = a->allocs; al; al = al->next)
-            if (al->handle == q->hObject) return q->Flags & 1 ? al->devspec : al->kmd;
+            if (al->handle == q->hObject) return q->Flags & 1 ? al->devspec : al->g->kmd;
     return NULL;
 }
 
@@ -1258,7 +1273,7 @@ static NT_STATUS va_write(DxgkAdapter *a, DxgkProc *p, UINT64 va, UINT64 pages, 
         }
         for (UINT32 i = 0; i < n; i++)
             e[i] = frames ? (DXGK_PTE){ flags, frames[first + done + i] >> 12 } : (DXGK_PTE){ 0, 0 };
-        st = pt_write(a, p, a->levels - 1, t, start, n, e, 0, frames && al ? al->kmd : NULL,
+        st = pt_write(a, p, a->levels - 1, t, start, n, e, 0, frames && al ? al->g->kmd : NULL,
                       (first + done) * PAGE_SIZE, at);
         done += n;
     }
@@ -1753,6 +1768,19 @@ static void ctx_destroy(DxgkAdapter *a, DxgkCtx *c)
     kfree(c);
 }
 
+/* (the last open or share gone: the driver destroys it) */
+static void global_unref(DxgkAdapter *a, DxgkGlobal *g)
+{
+    if (--g->refs) return;
+    DXGKARG_DESTROYALLOCATION d = { 1, &g->kmd, NULL, 0 };
+    a->drv->full.DxgkDdiDestroyAllocation(a->ctx, &d);
+    a->seg[g->seg].used -= g->size;
+    for (DxgkGlobal **pp = &a->globals; *pp; pp = &(*pp)->next)
+        if (*pp == g) { *pp = g->next; break; }
+    kfree(g->priv);
+    kfree(g);
+}
+
 static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
 {
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
@@ -1760,9 +1788,7 @@ static void alloc_free(DxgkAdapter *a, DxgkAlloc *al)
     for (DxgkRange *r = al->dev->proc ? al->dev->proc->ranges : NULL; r; r = r->next)
         if (r->alloc == al->handle) range_unmap(a, al->dev->proc, r);   /* (its ranges stay reserved) */
     if (al->devspec) ddi->DxgkDdiCloseAllocation(al->dev->kmd, &c);
-    DXGKARG_DESTROYALLOCATION d = { 1, &al->kmd, NULL, 0 };
-    ddi->DxgkDdiDestroyAllocation(a->ctx, &d);
-    a->seg[al->seg].used -= al->size;
+    global_unref(a, al->g);
     for (DxgkAlloc **pp = &a->allocs; *pp; pp = &(*pp)->next)
         if (*pp == al) { *pp = al->next; break; }
     kfree(al);
@@ -1791,6 +1817,7 @@ static void render_teardown(DxgkAdapter *a)
     lock(a);
     int n = 0;
     while (a->devs) { dev_free(a, a->devs); n++; }
+    while (a->globals) { a->globals->refs = 1; global_unref(a, a->globals); }   /* (shares still held: they find nothing) */
     a->nseg = 0;
     unlock(a);
     sch_stop(a);
@@ -2290,6 +2317,31 @@ static int place(DxgkAdapter *a, UINT32 set, UINT32 pref, UINT64 size)
     return -1;
 }
 
+/* @g opened on device @d (DxgkDdiOpenAllocation with the private driver
+ * data it was made with; @create: by its creator); adapter locked */
+static NT_STATUS alloc_open(DxgkAdapter *a, DxgkDev *d, DxgkGlobal *g, bool create, DxgkAlloc **out)
+{
+    DxgkAlloc *al = kzalloc(sizeof(*al));
+    if (!al) return NT_STATUS_NO_MEMORY;
+    al->handle = handle_new();
+    al->dev = d;
+    al->g = g;
+    g->refs++;
+    al->next = a->allocs;
+    a->allocs = al;
+    DXGK_OPENALLOCATIONINFO oi = { al->handle, g->priv, g->priv_size, NULL };
+    DXGKARG_OPENALLOCATION oa;
+    memset(&oa, 0, sizeof(oa));
+    oa.NumAllocations = 1;
+    oa.pOpenAllocation = &oi;
+    oa.Flags = create ? 1 : 0;                            /* Create: opened by its creator */
+    NT_STATUS st = a->drv->full.DxgkDdiOpenAllocation(d->kmd, &oa);
+    if (!NT_SUCCESS_(st)) { alloc_free(a, al); return st; }
+    al->devspec = oi.hDeviceSpecificAllocation;
+    *out = al;
+    return NT_STATUS_SUCCESS;
+}
+
 UINT32 DxgkRenderCreateAllocation(UINT64 luid, UINT32 dev, const void *priv, UINT32 priv_size, UINT64 *size,
                                   UINT32 *alloc)
 {
@@ -2298,12 +2350,14 @@ UINT32 DxgkRenderCreateAllocation(UINT64 luid, UINT32 dev, const void *priv, UIN
     DxgkDev *d = dev_of(a, dev);
     if (!d) { render_unlock(); return (UINT32)NT_STATUS_INVALID_PARAMETER; }
     const DRIVER_INITIALIZATION_DATA *ddi = &a->drv->full;
-    DxgkAlloc *al = kzalloc(sizeof(*al));
-    if (!al) { render_unlock(); return (UINT32)NT_STATUS_NO_MEMORY; }
+    DxgkGlobal *g = kzalloc(sizeof(*g));
+    void *copy = g && priv_size ? kmalloc(priv_size) : NULL;
+    if (!g || (priv_size && !copy)) { kfree(g); render_unlock(); return (UINT32)NT_STATUS_NO_MEMORY; }
+    if (priv_size) memcpy(copy, priv, priv_size);
     lock(a);
     DXGK_ALLOCATIONINFO ai;
     memset(&ai, 0, sizeof(ai));
-    ai.pPrivateDriverData = (void *)priv;
+    ai.pPrivateDriverData = copy;
     ai.PrivateDriverDataSize = priv_size;
     DXGKARG_CREATEALLOCATION ca = { NULL, 0, 1, &ai, NULL, 0 };
     NT_STATUS st = ddi->DxgkDdiCreateAllocation(a->ctx, &ca);
@@ -2318,32 +2372,26 @@ UINT32 DxgkRenderCreateAllocation(UINT64 luid, UINT32 dev, const void *priv, UIN
             st = bytes ? ST_NO_VIDEO_MEMORY : NT_STATUS_INVALID_PARAMETER;
         }
     }
+    DxgkAlloc *al = NULL;
     if (NT_SUCCESS_(st)) {
-        al->handle = handle_new();
-        al->dev = d;
-        al->kmd = ai.hAllocation;
-        al->size = bytes;
-        al->seg = seg;
+        g->handle = handle_new();
+        g->kmd = ai.hAllocation;
+        g->size = bytes;
+        g->seg = seg;
+        g->priv = copy;
+        g->priv_size = priv_size;
+        g->refs = 1;                                      /* (until it is open: alloc_open takes its own) */
         a->seg[seg].used += bytes;
-        al->next = a->allocs;
-        a->allocs = al;
-        DXGK_OPENALLOCATIONINFO oi = { al->handle, (void *)priv, priv_size, NULL };
-        DXGKARG_OPENALLOCATION oa;
-        memset(&oa, 0, sizeof(oa));
-        oa.NumAllocations = 1;
-        oa.pOpenAllocation = &oi;
-        oa.Flags = 1;                                     /* Create: opened by its creator */
-        st = ddi->DxgkDdiOpenAllocation(d->kmd, &oa);
-        al->devspec = oi.hDeviceSpecificAllocation;
-        if (!NT_SUCCESS_(st)) {
-            al->devspec = NULL;
-            alloc_free(a, al);
-            al = NULL;
-        }
+        g->next = a->globals;
+        a->globals = g;
+        st = alloc_open(a, d, g, true, &al);
+        global_unref(a, g);                               /* (failed: that destroys it) */
+    } else {
+        kfree(copy);
+        kfree(g);
     }
     unlock(a);
     if (NT_SUCCESS_(st)) { *size = bytes; *alloc = al->handle; }
-    else if (al && !al->handle) kfree(al);
     render_unlock();
     return (UINT32)st;
 }
@@ -2354,6 +2402,50 @@ void DxgkRenderDestroyAllocation(UINT64 luid, UINT32 alloc)
     DxgkAdapter *a = render_adapter(luid);
     for (DxgkAlloc *al = a ? a->allocs : NULL; al; al = al->next)
         if (al->handle == alloc) { lock(a); alloc_free(a, al); unlock(a); break; }
+    render_unlock();
+}
+
+UINT32 DxgkRenderShareAllocation(UINT64 luid, UINT32 alloc)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    UINT32 h = 0;
+    for (DxgkAlloc *al = a ? a->allocs : NULL; al; al = al->next)
+        if (al->handle == alloc) { lock(a); al->g->refs++; h = al->g->handle; unlock(a); break; }
+    render_unlock();
+    return h;
+}
+
+static DxgkGlobal *global_of(DxgkAdapter *a, UINT32 h)
+{
+    for (DxgkGlobal *g = a ? a->globals : NULL; g; g = g->next) if (g->handle == h) return g;
+    return NULL;
+}
+
+UINT32 DxgkRenderOpenAllocation(UINT64 luid, UINT32 dev, UINT32 shared, UINT64 *size, UINT32 *alloc)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkDev *d = dev_of(a, dev);
+    DxgkGlobal *g = d ? global_of(a, shared) : NULL;
+    NT_STATUS st = NT_STATUS_INVALID_PARAMETER;
+    if (g) {
+        DxgkAlloc *al = NULL;
+        lock(a);
+        st = alloc_open(a, d, g, false, &al);
+        unlock(a);
+        if (NT_SUCCESS_(st)) { *size = g->size; *alloc = al->handle; }
+    }
+    render_unlock();
+    return (UINT32)st;
+}
+
+void DxgkRenderReleaseShared(UINT64 luid, UINT32 shared)
+{
+    render_lock();
+    DxgkAdapter *a = render_adapter(luid);
+    DxgkGlobal *g = global_of(a, shared);
+    if (g) { lock(a); global_unref(a, g); unlock(a); }
     render_unlock();
 }
 

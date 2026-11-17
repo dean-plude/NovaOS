@@ -793,7 +793,11 @@ measured frame-time gain over the CPU path.
   preemption and timeout recovery: a buffer that runs too long is
   preempted, one that will not stop (or faults) has its engine reset and
   its context lost while the others go on
-  ([history](HISTORY.md#gpu-preemption-and-timeout-recovery)).
+  ([history](HISTORY.md#gpu-preemption-and-timeout-recovery)), and
+  sharing: resources and fences shared with another process by NT handle,
+  which opens them on its own device and uses them from its GPU, and the
+  same calls from 32-bit programs
+  ([history](HISTORY.md#gpu-objects-shared-by-nt-handle-and-32-bit-programs-d3dkmt-calls)).
 - [ ] **25.4 Intel GPU 3D.** Pass `gltest` and `d3dtest` on the T14 GPU and
   outperform llvmpipe and lavapipe.
 - [ ] **25.5 Second monitor.** Drive an external display through HDMI or

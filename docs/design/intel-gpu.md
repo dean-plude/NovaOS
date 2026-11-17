@@ -184,8 +184,8 @@ confirm from the driver's caps):
 - `gdi32`'s `D3DKMT*` functions (`userland/gdi32/d3dkmt.c`) are thunks to
   one NovaOS system call, `NtNovaDxgkCtl`, that takes each call's
   `D3DKMT_*` structure as Windows lays it out on x64
-  (`kernel/um/um_d3dkmt.c`; 32-bit programs still get
-  `STATUS_NOT_SUPPORTED`).  The kernel always lists a **Basic Render
+  (`kernel/um/um_d3dkmt.c`; a 32-bit program's gdi32 rebuilds each in its
+  x64 layout, as WoW64 does).  The kernel always lists a **Basic Render
   adapter**, the software render-only adapter Windows has on every machine
   (Microsoft Basic Render Driver): one shared system-memory segment with a
   budget of half the RAM, its allocations' size in its own private driver
@@ -374,10 +374,24 @@ Each is one pull request off main.
       (engines reset together), device-wide removal
       (`D3DKMTGetDeviceState`), and the adapter-wide path, which no test
       driver takes yet.
-   6. **Sharing and 32-bit programs**: shared allocations and fences by NT
-      handle (`D3DKMTShareObjects`, `OpenResourceFromNtHandle`,
-      `OpenSyncObjectFromNtHandle`, which VKD3D-Proton uses), and the x86
-      structures translated for 32-bit programs.
+   6. **Sharing and 32-bit programs** (done): resources
+      (`CreateAllocation2` with `CreateResource`) and fences made with
+      `CreateShared`/`Shared` and `NtSecuritySharing` are shared by NT
+      handle (`D3DKMTShareObjects`): a `UO_DXGK_SHARE` object holds their
+      pages and, on a miniport, a reference to the driver's allocation
+      (dxgkrnl keeps one driver allocation per allocation, opened on each
+      device that has it).  Another process opens them on its own device
+      (`QueryResourceInfoFromNtHandle`, `OpenResourceFromNtHandle`:
+      `DxgkDdiOpenAllocation` with the creation's private data;
+      `OpenSyncObjectFromNtHandle2`: the monitored fence's page mapped
+      read-only for its CPU and into its GPU address space), then maps and
+      uses them as its own.  gdi32 rebuilds every `D3DKMT_*` structure in
+      its x64 layout for 32-bit programs.  Checked by `kmttest wddm`, x64
+      and x86, with a second process whose GPU writes the shared
+      allocation and signals the shared fence.  Not in it: named shares
+      (`OpenSyncObjectNtHandleFromName`, `OpenNtHandleFromName`), keyed
+      mutexes, the older global `D3DKMT_HANDLE` shares, and sharing across
+      adapters.
 4. **Intel's Vulkan and OpenGL drivers** (roadmap step 25.4).  The ICDs
    load through NovaOS's loaders from the adapter's registry key;
    `vulkaninfo`, then `gltest` and `d3dtest` (DXVK, VKD3D-Proton) pass on

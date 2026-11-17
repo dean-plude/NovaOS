@@ -65,6 +65,19 @@ bool        TlsResumed(TlsConn *c);
 /* Human-readable text for an error from TlsHandshake/TlsRead/TlsWrite. */
 const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap);
 
+/* The personal store ("My"): certificates with private keys from PKCS #12
+ * files (certutil -importpfx; net/pfx.h), for client authentication.
+ * Called with the network lock held (net.c's NetImportPfx and friends).
+ * TlsImportPfx returns 1 (the certificate's common name in @name), or 0
+ * with @err set.  Lasts until reboot. */
+int         TlsImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
+                         int err_cap);
+int         TlsPersonalCount(void);
+bool        TlsPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap);
+/* The certificate for @user (its common name, or the name without a
+ * "DOMAIN\" or "@realm"), the newest one for NULL; -1 if none */
+int         TlsPersonalFind(const char *user);
+
 /* EAP sessions: a TLS 1.2 client over memory rather than TCP, for PEAP's
  * tunnel (nt/eap.c).  The server's certificate must chain to a trusted
  * root; its name is not checked (it is no web address).  Ciphertext from
@@ -72,7 +85,9 @@ const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap);
  * protocol, and what it has to send waits until TlsEapOutput takes it.
  * Unlike the functions above, these take the network lock themselves. */
 typedef struct TlsEap TlsEap;
-TlsEap     *TlsEapNew(void);                 /* NULL without TLS or memory */
+/* @cert: a personal certificate (TlsPersonalFind) to sign in with when
+ * the server asks for one (EAP-TLS), or -1 (PEAP) */
+TlsEap     *TlsEapNew(int cert);             /* NULL without TLS or memory */
 void        TlsEapInput(TlsEap *e, const void *data, UINT32 len);
 int         TlsEapHandshake(TlsEap *e);      /* 1 = complete, TLS_AGAIN, or a negative error */
 UINT32      TlsEapPending(TlsEap *e);        /* bytes waiting to go to the server */

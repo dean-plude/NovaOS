@@ -492,6 +492,8 @@ netsh wlan show networks mode=bssid
 netsh wlan connect name=CoffeeShop
 netsh wlan connect name=HomeNetwork key=MyPassphrase
 netsh wlan connect name=OfficeWiFi user=CORP\jsmith key=MyPassword
+certutil -p PfxPassword -importpfx jsmith.pfx
+netsh wlan connect name=OfficeWiFi user=jsmith
 netsh wlan disconnect
 ```
 
@@ -502,8 +504,15 @@ your password with `key=`; NovaOS signs in with PEAP (MS-CHAPv2), as
 Windows does by default.  Before it sends the password it checks the
 network's sign-in server has a certificate from a trusted root; if your
 organisation uses its own certificate authority, trust it first with
-`certutil -addstore root company-ca.cer`.  Settings cannot sign in to
-these networks yet.
+`certutil -addstore root company-ca.cer`.  If your organisation gave you
+a certificate instead (a `.pfx` or `.p12` file), add it to your personal
+store with `certutil -p PASSWORD -importpfx FILE` (`certutil -store my`
+lists what is there) and connect with `user=` and no `key=`: NovaOS signs
+in with EAP-TLS, Windows' "smart card or other certificate", using that
+certificate.  Without `user=` it uses the newest one; with a
+certificate in the store, Settings joins such a network the same way.
+Imported certificates last until NovaOS restarts.  Settings cannot sign
+in with a user name and password yet.
 
 Windows programs that manage Wi-Fi use the Native Wifi API
 (`wlanapi.dll`): the adapters, scans, the networks and access points in

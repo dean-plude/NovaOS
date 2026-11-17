@@ -73,14 +73,18 @@ bool WlanScanDone(WlanBss *out, int max, int *n, UINT32 *status);
 #define WLAN_NO_ADAPTER  (-4)
 #define WLAN_NOT_CONNECTED (-5)
 #define WLAN_BAD_KEY     (-6)  /* the 4-way handshake failed: the access point did not take the key */
-#define WLAN_UNSUPPORTED (-7)  /* security NovaOS does not have yet (WPA, WEP, TKIP, WPA3-Enterprise, EAP-TLS) */
+#define WLAN_UNSUPPORTED (-7)  /* security NovaOS does not have yet (WPA, WEP, TKIP, WPA3-Enterprise) */
 #define WLAN_KEY_FORMAT  (-8)  /* @key is not 8 to 63 characters or 64 hex digits (or an Enterprise password too long) */
-#define WLAN_NEEDS_USER  (-9)  /* a WPA2-Enterprise network, and no @user or no password */
+#define WLAN_NEEDS_USER  (-9)  /* a WPA2-Enterprise network, and no @user and password, and no certificate */
 #define WLAN_UNTRUSTED   (-10) /* WPA2-Enterprise: the server's certificate is not from a trusted root */
+#define WLAN_NO_CERT     (-11) /* WPA2-Enterprise, @user without a password: no personal certificate for @user */
+#define WLAN_CERT_REFUSED (-12) /* EAP-TLS: the server did not accept the certificate */
 int  WlanConnect(int i, const char *ssid, const char *key, UINT32 *status);
 /* The same with a user name: a WPA2-Enterprise network (802.1X, AKM
  * 00-0f-ac:1) signs in as @user with password @key by PEAP and MS-CHAPv2
- * (nt/eap.h; WLAN_BAD_KEY if the server refuses them), and the 4-way
+ * (nt/eap.h; WLAN_BAD_KEY if the server refuses them), or without @key by
+ * EAP-TLS with @user's certificate from the personal store (certutil
+ * -importpfx; the newest one when @user is NULL too), and the 4-way
  * handshake starts from the PMK the sign-in gives */
 int  WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UINT32 *status);
 int  WlanDisconnect(int i, UINT32 *status);

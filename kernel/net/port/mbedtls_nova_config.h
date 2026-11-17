@@ -3283,7 +3283,7 @@
  *
  * This module enables PKCS#12 functions.
  */
-//#define MBEDTLS_PKCS12_C
+#define MBEDTLS_PKCS12_C  /* NovaOS: certutil -importpfx's TripleDES-SHA1 PFX files (net/pfx.c) */
 
 /**
  * \def MBEDTLS_PLATFORM_C

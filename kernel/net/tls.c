@@ -24,6 +24,7 @@
 #include "mbedtls/error.h"
 #include "mbedtls/version.h"
 #include "psa/crypto.h"
+#include "pfx.h"
 
 #define SESSION_CACHE  8
 
@@ -273,6 +274,95 @@ int TlsImportRoots(const void *data, UINT32 len, char *err, int err_cap)
 }
 
 /* -----------------------------------------------------------------------
+ * Personal store ("My"): certificates with their private keys, from
+ * PKCS #12 files (certutil -importpfx), for TLS client authentication
+ * (EAP-TLS: nt/eap.c).  Never removed while NovaOS runs, so a session
+ * may keep pointing at one.
+ * ----------------------------------------------------------------------- */
+#define PERSONAL_MAX 8
+
+static struct {
+    mbedtls_x509_crt   chain;          /* the certificate, then the rest of the file's chain */
+    mbedtls_pk_context key;
+    char               name[64];       /* its subject's common name */
+    char               issuer[64];
+} g_personal[PERSONAL_MAX];
+static int g_npersonal;
+
+static void cn_of(const mbedtls_x509_name *n, char *buf, int cap)
+{
+    buf[0] = '\0';
+    for (; n; n = n->next)
+        if (!MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid)) copy_str(&n->val, buf, cap);
+}
+
+int TlsImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
+                 int err_cap)
+{
+    err[0] = '\0';
+    if (name_cap) name[0] = '\0';
+    if (!g_ready) { ksnprintf(err, err_cap, "TLS is not available"); return 0; }
+    if (g_npersonal >= PERSONAL_MAX) { ksnprintf(err, err_cap, "The personal store is full"); return 0; }
+    mbedtls_x509_crt *chain = &g_personal[g_npersonal].chain;
+    mbedtls_pk_context *key = &g_personal[g_npersonal].key;
+    mbedtls_x509_crt_init(chain);
+    mbedtls_pk_init(key);
+    int r = PfxParse(data, len, password, chain, key, mbedtls_ctr_drbg_random, &g_drbg);
+    if (r != PFX_OK) { ksnprintf(err, err_cap, "%s", PfxErrorText(r)); return 0; }
+    for (int i = 0; i < g_npersonal; i++)                   /* (the same certificate again: kept once) */
+        if (g_personal[i].chain.raw.len == chain->raw.len &&
+            !memcmp(g_personal[i].chain.raw.p, chain->raw.p, chain->raw.len)) {
+            mbedtls_x509_crt_free(chain);
+            mbedtls_pk_free(key);
+            ksnprintf(err, err_cap, "The certificate is already in the personal store");
+            return 0;
+        }
+    cn_of(&chain->subject, g_personal[g_npersonal].name, sizeof(g_personal[0].name));
+    cn_of(&chain->issuer, g_personal[g_npersonal].issuer, sizeof(g_personal[0].issuer));
+    if (name_cap) ksnprintf(name, name_cap, "%s", g_personal[g_npersonal].name);
+    g_npersonal++;
+    return 1;
+}
+
+int TlsPersonalCount(void) { return g_npersonal; }
+
+bool TlsPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap)
+{
+    if (i < 0 || i >= g_npersonal) return false;
+    if (name_cap) ksnprintf(name, name_cap, "%s", g_personal[i].name);
+    if (issuer_cap) ksnprintf(issuer, issuer_cap, "%s", g_personal[i].issuer);
+    return true;
+}
+
+static bool same_ci(const char *a, const char *b, UINT32 n)
+{
+    for (UINT32 i = 0; i < n; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        if (x != y) return false;
+        if (!x) return true;
+    }
+    return true;
+}
+
+int TlsPersonalFind(const char *user)
+{
+    if (!user || !user[0]) return g_npersonal ? g_npersonal - 1 : -1;   /* (the newest) */
+    /* the certificate named @user, or its bare name: "CORP\\alice", "alice@corp" */
+    const char *bare = user;
+    for (const char *s = user; *s; s++)
+        if (*s == '\\') bare = s + 1;
+    UINT32 bl = 0;
+    while (bare[bl] && bare[bl] != '@') bl++;
+    for (int i = g_npersonal - 1; i >= 0; i--)
+        if (same_ci(g_personal[i].name, user, sizeof(g_personal[i].name)) ||
+            (strlen(g_personal[i].name) == bl && same_ci(g_personal[i].name, bare, bl)))
+            return i;
+    return -1;
+}
+
+/* -----------------------------------------------------------------------
  * Session cache
  * ----------------------------------------------------------------------- */
 static int cache_find(const char *host, UINT16 port)
@@ -504,6 +594,7 @@ const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap)
 
 struct TlsEap {
     mbedtls_ssl_context ssl;
+    mbedtls_ssl_config *conf;  /* EAP-TLS: its own, with the client certificate (else g_eap_conf) */
     UINT8  *in, *out;           /* ciphertext from the server not yet read; to it not yet taken */
     UINT32  in_len, in_off, out_len;
     UINT32  verify;             /* mbedtls_ssl_get_verify_result after a failed handshake */
@@ -511,6 +602,20 @@ struct TlsEap {
 
 static mbedtls_ssl_config g_eap_conf;
 static bool               g_eap_ready;
+
+static bool eap_conf(mbedtls_ssl_config *c)
+{
+    mbedtls_ssl_config_init(c);
+    if (mbedtls_ssl_config_defaults(c, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT))
+        return false;
+    mbedtls_ssl_conf_authmode(c, MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(c, &g_roots, NULL);
+    mbedtls_ssl_conf_rng(c, mbedtls_ctr_drbg_random, &g_drbg);
+    mbedtls_ssl_conf_min_tls_version(c, MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_max_tls_version(c, MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_session_tickets(c, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+    return true;
+}
 
 static int eap_send(void *ctx, const unsigned char *buf, size_t len)
 {
@@ -534,24 +639,15 @@ static int eap_recv(void *ctx, unsigned char *buf, size_t len)
     return (int)len;
 }
 
-TlsEap *TlsEapNew(void)
+TlsEap *TlsEapNew(int cert)
 {
     net_lock();
     TlsEap *e = NULL;
-    if (!g_ready) goto out;
+    if (!g_ready || cert >= g_npersonal) goto out;
     if (!g_eap_ready) {
-        /* PEAP's TLS: 1.2 (RFC 9427's TLS 1.3 for EAP is not what Windows' PEAP sends), the
-         * server's certificate checked against the trusted roots; no session tickets */
-        mbedtls_ssl_config_init(&g_eap_conf);
-        if (mbedtls_ssl_config_defaults(&g_eap_conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
-                                        MBEDTLS_SSL_PRESET_DEFAULT))
-            goto out;
-        mbedtls_ssl_conf_authmode(&g_eap_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-        mbedtls_ssl_conf_ca_chain(&g_eap_conf, &g_roots, NULL);
-        mbedtls_ssl_conf_rng(&g_eap_conf, mbedtls_ctr_drbg_random, &g_drbg);
-        mbedtls_ssl_conf_min_tls_version(&g_eap_conf, MBEDTLS_SSL_VERSION_TLS1_2);
-        mbedtls_ssl_conf_max_tls_version(&g_eap_conf, MBEDTLS_SSL_VERSION_TLS1_2);
-        mbedtls_ssl_conf_session_tickets(&g_eap_conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+        /* PEAP's and EAP-TLS's TLS: 1.2 (RFC 9427's TLS 1.3 for EAP is not what Windows sends by default),
+         * the server's certificate checked against the trusted roots; no session tickets */
+        if (!eap_conf(&g_eap_conf)) goto out;
         g_eap_ready = true;
     }
     e = kmalloc(sizeof(*e));
@@ -559,10 +655,20 @@ TlsEap *TlsEapNew(void)
     memset(e, 0, sizeof(*e));
     e->in = kmalloc(EAP_TLS_BUF);
     e->out = kmalloc(EAP_TLS_BUF);
+    if (cert >= 0 && (e->conf = kmalloc(sizeof(*e->conf))) != NULL) {
+        /* EAP-TLS: the client certificate (and the rest of its chain) with its key, when the server asks */
+        if (!eap_conf(e->conf) ||
+            mbedtls_ssl_conf_own_cert(e->conf, &g_personal[cert].chain, &g_personal[cert].key)) {
+            mbedtls_ssl_config_free(e->conf);
+            kfree(e->conf);
+            e->conf = NULL;
+        }
+    }
     mbedtls_ssl_init(&e->ssl);
-    if (!e->in || !e->out || mbedtls_ssl_setup(&e->ssl, &g_eap_conf) ||
+    if (!e->in || !e->out || (cert >= 0 && !e->conf) || mbedtls_ssl_setup(&e->ssl, e->conf ? e->conf : &g_eap_conf) ||
         mbedtls_ssl_set_hostname(&e->ssl, NULL)) {      /* (no host name: the server's is not a web address) */
         mbedtls_ssl_free(&e->ssl);
+        if (e->conf) { mbedtls_ssl_config_free(e->conf); kfree(e->conf); }
         if (e->in) kfree(e->in);
         if (e->out) kfree(e->out);
         kfree(e);
@@ -663,6 +769,7 @@ void TlsEapFree(TlsEap *e)
 {
     net_lock();
     mbedtls_ssl_free(&e->ssl);
+    if (e->conf) { mbedtls_ssl_config_free(e->conf); kfree(e->conf); }
     net_unlock();
     memset(e->in, 0, EAP_TLS_BUF);
     memset(e->out, 0, EAP_TLS_BUF);

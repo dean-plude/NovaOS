@@ -1465,7 +1465,7 @@ static void certutil_importpfx(Term *t, int argc, char **argv)
         return;
     }
     tprintf(t, "Certificate \"%s\" added to the personal store (My) with its private key.", name[0] ? name : "?");
-    tprint(t, "CertUtil: -importPFX command completed successfully. (Lasts until reboot.)");
+    tprint(t, "CertUtil: -importPFX command completed successfully.");
 }
 
 /* certutil [-store]            list trusted roots
@@ -1498,7 +1498,7 @@ static void cmd_certutil(Term *t, int argc, char **argv)
             RamNode *copy = RamfsCreate(store, name, false);
             if (copy) RamfsWrite(copy, f->data, f->size);
         }
-        tprint(t, "CertUtil: -addstore command completed successfully. (Lasts until reboot.)");
+        tprint(t, "CertUtil: -addstore command completed successfully.");
         return;
     }
     if (argc >= 2 && !is(argv[1], "-store")) {

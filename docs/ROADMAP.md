@@ -912,7 +912,10 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   trusted roots, the 4-way handshake from the PMK the sign-in gives. The
   seventh is EAP-TLS: a certificate and its key from a PKCS #12 file
   (`certutil -importpfx`, `kernel/net/pfx.c`) sign in with
-  `netsh wlan connect name=SSID user=NAME` and no password. All seven are
+  `netsh wlan connect name=SSID user=NAME` and no password. The eighth
+  keeps imported roots and certificates across restarts (in the
+  registry, the private keys where no program may read them) and gives
+  Settings' Wi-Fi page a user name and password box. All eight are
   tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
   devices suite's `wifi` boot; its `NovaCorp` network's authentication
   server is the driver too). Still needed: WPA3-Enterprise, Enterprise

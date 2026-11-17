@@ -202,6 +202,52 @@ static int chain_len(const mbedtls_x509_crt *c)
     return n;
 }
 
+/* What net/tls.c's TlsPersonalExport writes to the registry (the chain's
+ * DER one after another, then the key's DER) and TlsPersonalAdd reads back
+ * at the next start: the same certificates and a key matching the first */
+static UINT32 der_len(const UINT8 *p, UINT32 room)
+{
+    if (room < 2) return 0;
+    UINT32 n = p[1], h = 2;
+    if (n & 0x80) {
+        UINT32 k = n & 0x7F;
+        if (!k || k > 3 || room < 2 + k) return 0;
+        n = 0;
+        for (UINT32 i = 0; i < k; i++) n = n << 8 | p[2 + i];
+        h += k;
+    }
+    return n <= room - h ? h + n : 0;
+}
+
+static int keep_and_restore(const mbedtls_x509_crt *chain, mbedtls_pk_context *key)
+{
+    static UINT8 buf[16384];
+    UINT32 o = 0;
+    for (const mbedtls_x509_crt *c = chain; c && c->raw.len; c = c->next) {
+        memcpy(buf + o, c->raw.p, c->raw.len);
+        o += (UINT32)c->raw.len;
+    }
+    int k = mbedtls_pk_write_key_der(key, buf + o, sizeof(buf) - o);
+    if (k <= 0) return 0;
+    memmove(buf + o, buf + sizeof(buf) - k, (size_t)k);
+    mbedtls_x509_crt back;
+    mbedtls_pk_context bkey;
+    mbedtls_x509_crt_init(&back);
+    mbedtls_pk_init(&bkey);
+    int ok = o > 0;
+    for (UINT32 p = 0, n; ok && p < o; p += n) {
+        n = der_len(buf + p, o - p);
+        ok = n && !mbedtls_x509_crt_parse_der(&back, buf + p, n);
+    }
+    ok = ok && !mbedtls_pk_parse_key(&bkey, buf + o, (size_t)k, NULL, 0, mbedtls_ctr_drbg_random, &g_cli_drbg) &&
+         !mbedtls_pk_check_pair(&back.pk, &bkey, mbedtls_ctr_drbg_random, &g_cli_drbg) &&
+         chain_len(&back) == chain_len(chain) && back.raw.len == chain->raw.len &&
+         !memcmp(back.raw.p, chain->raw.p, chain->raw.len);
+    mbedtls_x509_crt_free(&back);
+    mbedtls_pk_free(&bkey);
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
     /* MD4 (RFC 1320 A.5), the kernel's and the server's */
@@ -246,6 +292,7 @@ int main(int argc, char **argv)
         const mbedtls_x509_name *n = &g_my_chain[0].subject;
         for (cn[0] = 0; n; n = n->next)
             if (!MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &n->oid)) snprintf(cn, sizeof(cn), "%.*s", (int)n->val.len, n->val.p);
+        printf("pfx kept %s\n", keep_and_restore(&g_my_chain[0], &g_my_key[0]) ? "ok" : "FAILED");
         printf("pfx ok %s chain %d key %s\n", cn, chain_len(&g_my_chain[0]), mbedtls_pk_get_name(&g_my_key[0]));
         return 0;
     }

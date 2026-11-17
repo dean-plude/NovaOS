@@ -22,8 +22,8 @@
  *   - a Popup loaded from markup, holding its child, closed;
  *   - the phone library's Pivot and PivotItem (Calculator's main page has
  *     one) by their Windows names, their statics' dependency properties,
- *     and a Pivot from markup found by the parser (its making does not
- *     finish yet: its base, ItemsControl, does not build);
+ *     and a Pivot from markup found by the parser and made over the
+ *     framework's ItemsControl, its two PivotItems in its Items;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
  *     ButtonAutomationPeer), the same one from FromElement after, and the
@@ -809,9 +809,8 @@ static void navigation_transition_checks()
  * factories); and a Pivot from markup, which the parser now finds through
  * the framework's XamlLibMetadataProvider (on Windows
  * Microsoft.UI.Xaml.Phone.dll's type tables) and asks the library to make.
- * A Pivot is composed over the framework's ItemsControl, which does not
- * build yet, so making one fails for now (cleanly: the half-made Pivot is
- * released); the result is printed, not checked */
+ * A Pivot is composed over the framework's ItemsControl, whose Items
+ * collection holds the markup's PivotItems */
 static void pivot_checks()
 {
     /* the phone library's factories answer its own (Microsoft) interfaces;
@@ -835,8 +834,17 @@ static void pivot_checks()
         reader->Load(wrl_wrappers::HStringReference(L"<Pivot " XMLNS L"><PivotItem Header='History'/>"
                                                     L"<PivotItem Header='Memory'/></Pivot>").Get(),
                      pivotObject.GetAddressOf()) : E_FAIL;
-    printf("  (a Pivot from markup: hr=0x%08lx; its base, the framework's ItemsControl, does not build yet)\n",
-           (unsigned long)hr);
+    CHECK("a Pivot with two PivotItems from markup (composed over the framework's ItemsControl)",
+          SUCCEEDED(hr) && pivotObject);
+    /* its items, through the ItemsControl it is composed over */
+    ctl::ComPtr<wux::Controls::IItemsControl> items;
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IObservableVector<IInspectable *>> observable;
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IVector<IInspectable *>> itemCollection;
+    unsigned int itemCount = 0;
+    CHECK("the Pivot's ItemsControl (Windows' IItemsControl) holds its two PivotItems", pivotObject &&
+          SUCCEEDED(pivotObject.As(&items)) && SUCCEEDED(items->get_Items(observable.GetAddressOf())) &&
+          observable && SUCCEEDED(observable.As(&itemCollection)) &&
+          SUCCEEDED(itemCollection->get_Size(&itemCount)) && itemCount == 2);
 }
 
 /* the framework started as xamlapptest starts it */

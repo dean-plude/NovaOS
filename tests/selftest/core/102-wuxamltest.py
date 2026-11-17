@@ -21,7 +21,7 @@
 # unknown element failing with the parser's error in the debug log, and a
 # the phone library's Pivot and PivotItem: their statics and dependency
 # properties, and markup naming a Pivot resolved through the library's
-# type tables
+# type tables, made over the framework's ItemsControl with its two items
 DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as WinUI 2 and UWP apps see it: '
        '`Windows.UI.Xaml.Controls.Button` activated by its Windows name and driven through Windows\' interfaces, a '
        'Windows-boxed `Visibility`, `DependencyProperty.Register` with Windows type names (a `SolidColorBrush` property\'s value read back as `Windows.UI.Xaml.Media.SolidColorBrush`), `XamlReader.Load` and the page\'s '
@@ -30,7 +30,7 @@ DOC = ('`wuxamltest` (the XAML framework under its `Windows.UI.Xaml` names, as W
        'and the phone library\'s navigation transitions, a Frame\'s `NavigationThemeTransition` and the six transition infos, '
        'activated by name, composed over the framework\'s `Transition` and `NavigationTransitionInfo`, their dependency '
        'properties set and read back, and `Windows.UI.Xaml.Media.Animation.EntranceNavigationTransitionInfo` activated by its '
-       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`; markup naming an unknown element failing, with the parser\'s error, its line and column, in the debug log; and the phone library\'s `Pivot` and `PivotItem`, their statics and dependency properties (`SelectedIndex`, `Header`), and markup naming a `Pivot` resolved through the framework\'s `XamlLibMetadataProvider` and the library\'s type tables)')
+       'Windows name, answering Windows\' `IEntranceNavigationTransitionInfo` and `INavigationTransitionInfo`; markup naming an unknown element failing, with the parser\'s error, its line and column, in the debug log; and the phone library\'s `Pivot` and `PivotItem`, their statics and dependency properties (`SelectedIndex`, `Header`), and markup naming a `Pivot` resolved through the framework\'s `XamlLibMetadataProvider` and the library\'s type tables and made over the framework\'s `ItemsControl`, its two `PivotItem`s in its `Items`)')
 TESTS = [
     Test('wuxamltest', 'wuxamltest', [r'xaml: error \d+ hr=0x802b000a line 1 col \d+', r'wuxamltest: \d+ passed, 0 failed \(64-bit\)'], timeout=150),
 ]

@@ -1707,6 +1707,36 @@ PROJECT_DEFINES[_PHONE] = ['EXP_CLANG']
 _PIVOT = 'components/pivot/lib/Microsoft.UI.Xaml.Pivot.vcxproj'
 CORE_LIBRARIES.append((_PIVOT, _PIVOT, 'components/pch/precomp.h', []))
 CORE_SOURCES[_PIVOT] = ('../PivotCurveGenerator.cpp', '../PivotStateMachine.cpp', '../PivotStaticContentCurve.cpp')
+# (step 32.6, the class the Pivot is composed over: the framework's
+# ItemsControl, with its items (ItemCollection and the collection view
+# manager that wraps an ItemsSource), its container generator and its items
+# changed arguments, and the ItemsPresenter its template holds the items
+# panel in, each its generated class and its partial one)
+_ITEMS_PEERS = ('ItemsControl', 'ItemCollection', 'ItemContainerGenerator', 'ItemsPresenter', 'ItemsChangedEventArgs')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'ItemsControl_Partial', 'ItemCollection_Partial', 'ItemContainerGenerator_Partial', 'CollectionViewManager',
+    'ItemsPresenter_Partial', 'ItemsPresenter_IManipulationDataProvider', 'ItemsPresenter_IScrollInfo',
+    'ItemsPresenter_IScrollOwner', 'ItemsPresenter_ISnapPointsInfo')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _ITEMS_PEERS)
+# (and the Rect and Point helpers' statics, which the Pivot's header and
+# panel ask as it is made)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../Rect_Partial.cpp', '../Point_Partial.cpp', '../winrtgeneratedclasses/RectHelper.g.cpp',
+    '../winrtgeneratedclasses/PointHelper.g.cpp')
+# (and the other framework classes the Pivot activates by name as it is
+# made and laid out (src/windows_activation.cpp's list): the layout
+# transition and secondary content helpers its header animations use, its
+# selection's changed arguments, the focus manager and its options, the
+# element sound player's statics, the automation identifiers and the item
+# and items control automation peers)
+_PIVOT_ASKS = ('LayoutTransitionElementUtilities', 'SecondaryContentRelationship', 'SelectionChangedEventArgs',
+               'ItemAutomationPeer', 'ItemsControlAutomationPeer', 'ElementSoundPlayer', 'FocusManager',
+               'FindNextElementOptions', 'AutomationProperty')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'LayoutTransitionElementUtilities', 'SecondaryContentRelationship_Partial', 'SelectionChangedEventArgs_Partial',
+    'ItemAutomationPeer_Partial', 'ItemsControlAutomationPeer_Partial', 'ElementSoundPlayer', 'FocusManager',
+    'PatternIdentifiers', 'AutomationElementIdentifiers')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _PIVOT_ASKS)
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

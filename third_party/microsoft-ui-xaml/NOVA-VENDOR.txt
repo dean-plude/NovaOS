@@ -399,6 +399,26 @@ IsHeaderItemsCarouselEnabled and GetPivotPanelMultiplier unqualified
 callback interfaces; SatelliteBase/inc/ValueBoxer.h makes
 CreatePropertyValue public, as MSVC's lookup lets callers reach it.
 
+Pulsar item 3, twenty-fourth slice (the class Calculator's Pivot is
+composed over), the same commit, unchanged but for line endings (LF):
+dxaml/lib's ItemsControl_Partial.cpp, ItemCollection_Partial.cpp,
+ItemContainerGenerator_Partial.cpp, CollectionViewManager.cpp and .h,
+ItemsPresenter_Partial.cpp with its four interface files
+(ItemsPresenter_IManipulationDataProvider, _IScrollInfo, _IScrollOwner,
+_ISnapPointsInfo), Rect_Partial.cpp and Point_Partial.cpp with
+RectHelper_Partial.h and PointHelper_Partial.h,
+LayoutTransitionElementUtilities.cpp, SecondaryContentRelationship_Partial
+.cpp and .h, SelectionChangedEventArgs_Partial.cpp, PatternIdentifiers.cpp
+and .h, AutomationElementIdentifiers.cpp and .h, ItemAutomationPeer_Partial
+.cpp, ItemsControlAutomationPeer_Partial.cpp, ElementSoundPlayer.cpp,
+FocusManager.cpp and FocusAsyncOperation.h; and winrtgeneratedclasses'
+.g.cpp (and the .g.h that were missing) of ItemsControl, ItemCollection,
+ItemContainerGenerator, ItemsPresenter, ItemsChangedEventArgs, RectHelper,
+PointHelper, LayoutTransitionElementUtilities, SecondaryContentRelationship,
+SelectionChangedEventArgs, ItemAutomationPeer, ItemsControlAutomationPeer,
+ElementSoundPlayer, FocusManager, FindNextElementOptions and
+AutomationProperty, with FocusMovementResult.g.h.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

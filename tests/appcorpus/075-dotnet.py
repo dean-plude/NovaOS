@@ -1,9 +1,10 @@
 # .NET from its NuGet packages (tools/appcorpus.py): the muxer and hostfxr
 # of 8.0 run any later runtime; tests/dotnet/culturetest.dll formats German
-# and Japanese through ICU
+# and Japanese through ICU; tests/dotnet/exceptiontest.dll reports an
+# unhandled exception with its type, message and stack trace
 import os, re, shutil, zipfile
 
-DOC = '.NET (German and Japanese formatting through ICU)'
+DOC = '.NET (German and Japanese formatting through ICU; an unhandled exception reported with its stack trace)'
 NUGET = 'https://api.nuget.org/v3-flatcontainer'
 
 
@@ -27,7 +28,8 @@ def stage_dotnet(app, archives, dest):
                 elif name.startswith('Microsoft.NETCore.App.') and name.endswith('.json'):
                     with z.open(m) as src, open(os.path.join(shared, name), 'wb') as out:
                         shutil.copyfileobj(src, out)
-    for n in ('culturetest.dll', 'culturetest.runtimeconfig.json'):
+    for n in ('culturetest.dll', 'culturetest.runtimeconfig.json',
+              'exceptiontest.dll', 'exceptiontest.runtimeconfig.json'):
         shutil.copy(os.path.join(ROOT, 'tests', 'dotnet', n), dest)
 
 
@@ -36,7 +38,11 @@ APP = App('.NET', '10.0.12', f'{NUGET}/microsoft.netcore.app.runtime.win-x64/10.
           'dotnet', [Test('dotnet runtimes', rf'{A}\dotnet\dotnet.exe --list-runtimes',
                           [r'Microsoft\.NETCore\.App 10\.0\.12'], timeout=300),
                      Test('culture formats', rf'{A}\dotnet\dotnet.exe {A}\dotnet\culturetest.dll',
-                          [r'globalization: ICU', r'culturetest: ok'], timeout=300)],
+                          [r'globalization: ICU', r'culturetest: ok'], timeout=300),
+                     Test('unhandled exception', rf'{A}\dotnet\dotnet.exe {A}\dotnet\exceptiontest.dll unhandled',
+                          [r'caught: caught one', r'trace has Thrower: True',
+                           r'Unhandled exception\. System\.InvalidOperationException: exceptiontest unhandled',
+                           r'at Program\.Thrower'], timeout=300)],
           unpack=stage_dotnet,
           extra=[f'{NUGET}/runtime.win-x64.microsoft.netcore.dotnethost/8.0.31/'
                  'runtime.win-x64.microsoft.netcore.dotnethost.8.0.31.nupkg',

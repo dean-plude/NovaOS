@@ -5,7 +5,9 @@
     and files on drive C: are opened.
   - Virtual memory with sections and guard pages. The read-only pages of a
     loaded DLL are shared by every process that loads the same bytes, as
-    Windows shares image sections.
+    Windows shares image sections.  A thread's stack has a guard page
+    below its used part, which moves down as the stack grows, with the
+    TEB's StackLimit on top of it, as on Windows.
   - The NT system-call table at Windows 10 1903 x64 numbers; NovaOS's own
     services are numbered from 0x200 up.
   - SMP: a run queue per CPU, fine-grained locks for the busy paths and a

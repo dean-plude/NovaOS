@@ -460,35 +460,39 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `WinUIEdit.dll`'s `CreateTextServices` and IIDs, typing, editing keys,
   selection, clipboard, undo and redo, limits, read-only, lines and word
   wrap, the mouse, `EN_CHANGE`/`EN_SELCHANGE`/`EN_MAXTEXT`, `TxDraw`
-  checked by pixels, a password box; `msftedit.dll` and `riched20.dll`
-  too), `spooltest` (the print spooler and `winspool.drv`: printers, raw
-  jobs, the queue, AddPrinter; a GDI page printed to Microsoft Print to
-  PDF matching what GDI draws; PrintDlg and PageSetupDlg; 64- and
-  32-bit), `uactest` (standard users and UAC: the consent prompt on the
-  secure desktop for runas and for an installer's manifest, No refused,
-  Yes elevating to high integrity; a standard user's credential prompt
-  refusing a wrong administrator password and running the installer and
-  runas as the administrator; a medium-integrity process kept from
-  writing, reading or ending a high-integrity one; programs that are not
-  elevated refused changes to `C:\Windows`, `C:\Programs` and `HKLM`,
-  which they read, and the elevated one making them), `appxtest` (app
-  packages: `appx` install, block map and signature checks (APPX SIP,
-  publisher), start by AUMID, package identity, `resources.pri`, a
-  packaged Windows Runtime class, framework packages and the package
-  graph, a signed bundle, a Store-layout bundle whose packages are
-  signed by themselves, remove), Settings: `start ms-settings:display`
-  opens Display, its search box (Ctrl+F, "printer", Enter) goes to
-  Printers; `settings check` draws every page at three window sizes, at
-  its top and scrolled to its end, packaged apps in the shell: `appx`
-  installs the test package, the Start menu lists its application by the
-  manifest's name and tile logo and starts it packaged (Win+S, the name,
-  Enter), and Settings > Apps lists the package and uninstalls it (Down,
-  Delete, Enter), programs started from the Start menu (Win+S, the name,
-  Enter): `winhello`, a GUI program, with no Terminal window, and
-  `hello`, a console program, in a Terminal, `crash kernel`, a
-  deliberate kernel fault whose serial log must show a backtrace with
-  function names, and last the kernel crash report: after `crash kernel`
-  and a reset, `crashes last` shows the fault's backtrace.<!-- END generated:core-tests -->
+  checked by pixels, a password box; the Text Object Model as XAML's
+  `TextBoxBase` uses it: `ITextDocument2`, ranges that follow edits, the
+  selection, units, points, find, clipboard, undo with `tomSuspend`;
+  `TxDrawD2D` on a Direct2D render target, opaque and transparent;
+  `msftedit.dll` and `riched20.dll` too), `spooltest` (the print spooler
+  and `winspool.drv`: printers, raw jobs, the queue, AddPrinter; a GDI
+  page printed to Microsoft Print to PDF matching what GDI draws;
+  PrintDlg and PageSetupDlg; 64- and 32-bit), `uactest` (standard users
+  and UAC: the consent prompt on the secure desktop for runas and for an
+  installer's manifest, No refused, Yes elevating to high integrity; a
+  standard user's credential prompt refusing a wrong administrator
+  password and running the installer and runas as the administrator; a
+  medium-integrity process kept from writing, reading or ending a
+  high-integrity one; programs that are not elevated refused changes to
+  `C:\Windows`, `C:\Programs` and `HKLM`, which they read, and the
+  elevated one making them), `appxtest` (app packages: `appx` install,
+  block map and signature checks (APPX SIP, publisher), start by AUMID,
+  package identity, `resources.pri`, a packaged Windows Runtime class,
+  framework packages and the package graph, a signed bundle, a
+  Store-layout bundle whose packages are signed by themselves, remove),
+  Settings: `start ms-settings:display` opens Display, its search box
+  (Ctrl+F, "printer", Enter) goes to Printers; `settings check` draws
+  every page at three window sizes, at its top and scrolled to its end,
+  packaged apps in the shell: `appx` installs the test package, the
+  Start menu lists its application by the manifest's name and tile logo
+  and starts it packaged (Win+S, the name, Enter), and Settings > Apps
+  lists the package and uninstalls it (Down, Delete, Enter), programs
+  started from the Start menu (Win+S, the name, Enter): `winhello`, a
+  GUI program, with no Terminal window, and `hello`, a console program,
+  in a Terminal, `crash kernel`, a deliberate kernel fault whose serial
+  log must show a backtrace with function names, and last the kernel
+  crash report: after `crash kernel` and a reset, `crashes last` shows
+  the fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 

@@ -328,7 +328,7 @@ static NT_STATUS add_source_modes(Dod *d, const DXGK_VIDPN_INTERFACE *vi, D3DKMD
         m->Type = D3DKMDT_RMT_GRAPHICS;
         m->Format.Graphics.PrimSurfSize.cx = m->Format.Graphics.VisibleRegionSize.cx = d->modes[i].w;
         m->Format.Graphics.PrimSurfSize.cy = m->Format.Graphics.VisibleRegionSize.cy = d->modes[i].h;
-        m->Format.Graphics.Stride = (unsigned long long)d->modes[i].w * 4;
+        m->Format.Graphics.Stride = (unsigned int)d->modes[i].w * 4;
         m->Format.Graphics.PixelFormat = D3DDDIFMT_A8R8G8B8;
         m->Format.Graphics.ColorBasis = D3DKMDT_CB_SRGB;
         m->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;

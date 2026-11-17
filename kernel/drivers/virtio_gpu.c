@@ -207,6 +207,7 @@ typedef struct {
     UINT8           *shm_used;            /* one byte per SHM_CHUNK of it */
     UINT64           fence_seq;
     UINT32           next_ctx;
+    bool             gone;                /* a Windows driver has it (VgpuRelease) */
 } Vgpu;
 
 #define SHM_CHUNK  (64u * 1024)
@@ -557,7 +558,7 @@ int VgpuInit(void)
 
 int VgpuCount(void) { return g_ndev; }
 
-static Vgpu *dev_of(int dev) { return dev >= 0 && dev < g_ndev ? g_dev[dev] : NULL; }
+static Vgpu *dev_of(int dev) { return dev >= 0 && dev < g_ndev && !g_dev[dev]->gone ? g_dev[dev] : NULL; }
 
 const char *VgpuName(int dev) { Vgpu *v = dev_of(dev); return v ? v->name : NULL; }
 int  VgpuScanouts(int dev)    { Vgpu *v = dev_of(dev); return v ? v->nscan : 0; }
@@ -638,10 +639,33 @@ void VgpuFlush(int dev, int scanout, int x, int y, int w, int h)
     spin_unlock_irqrestore(&g_lock, s);
 }
 
+/* A Windows display driver is being installed on the virtio-vga whose
+ * framebuffer is @fb (Red Hat's viogpudo.sys): this driver lets go of the
+ * card, which the Windows driver resets and sets up its own way.  A card
+ * running 3D (Venus) is kept.  True if it is no longer this driver's */
+bool VgpuRelease(UINT64 fb)
+{
+    for (int d = 0; d < g_ndev; d++) {
+        Vgpu *v = g_dev[d];
+        if (v->fb != fb) continue;
+        if (v->gone) return true;
+        if (v->has3d) return false;
+        for (int i = 0; i < v->nscan; i++)
+            if (v->out[i].px) return false;               /* (showing a picture on one of its outputs) */
+        IrqState s = spin_lock_irqsave(&g_lock);
+        v->gone = true;
+        spin_unlock_irqrestore(&g_lock, s);
+        kprintf("[VGPU] %s: left to a Windows display driver\n", v->name);
+        return true;
+    }
+    return true;                                          /* (not one of ours) */
+}
+
 void VgpuResume(void)
 {
     for (int d = 0; d < g_ndev; d++) {
         Vgpu *v = g_dev[d];
+        if (v->gone) continue;
         IrqState s = spin_lock_irqsave(&g_lock);
         bool ok = hw_setup(v);
         for (int i = 0; ok && i < v->nscan; i++) {
@@ -694,7 +718,7 @@ static bool VgpuTransfer3dEx(VgpuCtx *c, VgpuBlob *b, bool to_host, const UINT32
 static Vgpu *dev3d(void)
 {
     for (int i = 0; i < g_ndev; i++)
-        if (g_dev[i]->has3d) return g_dev[i];
+        if (g_dev[i]->has3d && !g_dev[i]->gone) return g_dev[i];
     return NULL;
 }
 
@@ -1254,7 +1278,7 @@ void VgpuDump(void)
 {
     for (int d = 0; d < g_ndev; d++) {
         Vgpu *v = g_dev[d];
-        if (!v || !v->has3d) continue;
+        if (!v || v->gone || !v->has3d) continue;
         int busy = 0;
         for (int i = 0; i < v->nslot; i++) busy += v->slot[i].state == SLOT_BUSY;
         kprintf("[VGPU] %s: avail %u, used %u, reaped %u, %d of %d requests out, fence seq %llu\n", v->name,

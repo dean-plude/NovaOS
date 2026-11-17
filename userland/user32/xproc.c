@@ -485,7 +485,15 @@ void embed_notified(Wnd *top, HWND parent)
 int embed_origin(Wnd *top, POINT *p, HWND *root)
 {
     INT32 out[3];
-    if (!top->foreign_parent || !top->kid || !NtNovaGuiCtl(top->kid, CTL_EMBED_INFO, 0, out)) return 0;
+    if (!top->kid || top->parent || !NtNovaGuiCtl(top->kid, CTL_EMBED_INFO, 0, out)) return 0;
+    if (!top->foreign_parent) {
+        /* The desktop embedded the window but WM_NOVA_EMBED has not been taken off
+         * the kernel queue yet (a call another process made, SetWindowPos, runs from
+         * the sent-message path and can come first): take the news from the kernel,
+         * or the place would be read as a screen position and be off by the parent's origin */
+        if (!out[0]) return 0;
+        embed_notified(top, (HWND)(ULONG_PTR)(UINT32)out[0]);
+    }
     p->x = out[1]; p->y = out[2];
     dpi_to_proc(p);
     if (root) *root = 0;

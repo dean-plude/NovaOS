@@ -1,7 +1,7 @@
 ## Bluetooth: Settings' Bluetooth & devices page and reconnects the device starts
 
 The rest of roadmap step 28.2 that QEMU can show
-([drivers.md](../drivers.md#bluetooth-bthusb-and-the-host-stack)).
+([drivers.md](drivers.md#bluetooth-bthusb-and-the-host-stack)).
 
 - **Device-started reconnects** (`kernel/nt/bthport.c`, `hidbth.c`,
   `bthaudio.c`): the host used to refuse every Connection Request, so a

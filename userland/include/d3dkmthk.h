@@ -6,8 +6,8 @@
  * of d3dkmthk.h and d3dukmdt.h (learn.microsoft.com; the GPU virtual
  * address ones checked against Microsoft's MIT-licensed libdxg headers),
  * only the ones NovaOS implements.  On x64 the kernel reads them as they are (abitest-style
- * offsets are checked in the kernel's copy); 32-bit programs get
- * STATUS_NOT_SUPPORTED for now.
+ * offsets are checked in the kernel's copy); a 32-bit program's gdi32
+ * rebuilds them in their x64 layouts.
  */
 #pragma once
 #include <windows.h>
@@ -385,6 +385,66 @@ typedef struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU {
     };
 } D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU;
 
+/* Sharing by NT handle (D3DKMTShareObjects): a resource (CreateAllocation2
+ * with CreateResource, CreateShared and NtSecuritySharing) or a fence
+ * (D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Shared and NtSecuritySharing) */
+#define D3DKMT_CREATEALLOCATION_CREATERESOURCE     0x1
+#define D3DKMT_CREATEALLOCATION_CREATESHARED       0x2
+#define D3DKMT_CREATEALLOCATION_NTSECURITYSHARING  0x40
+#define D3DDDI_SYNCHRONIZATIONOBJECT_SHARED        0x1
+#define D3DDDI_SYNCHRONIZATIONOBJECT_NTSECURITYSHARING 0x2
+
+typedef struct _D3DDDI_OPENALLOCATIONINFO2 {
+    D3DKMT_HANDLE          hAllocation;           /* out */
+    const VOID            *pPrivateDriverData;    /* out: in pTotalPrivateDriverDataBuffer */
+    UINT                   PrivateDriverDataSize; /* out */
+    D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;     /* out */
+    ULONG_PTR              Reserved[6];
+} D3DDDI_OPENALLOCATIONINFO2;
+
+typedef struct _D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE {
+    D3DKMT_HANDLE hDevice;
+    HANDLE        hNtHandle;
+    VOID         *pPrivateRuntimeData;            /* (filled when PrivateRuntimeDataSize is enough) */
+    UINT          PrivateRuntimeDataSize;         /* in/out */
+    UINT          TotalPrivateDriverDataSize;     /* out */
+    UINT          ResourcePrivateDriverDataSize;  /* out */
+    UINT          NumAllocations;                 /* out */
+} D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE;
+
+typedef struct _D3DKMT_OPENRESOURCEFROMNTHANDLE {
+    D3DKMT_HANDLE               hDevice;
+    HANDLE                      hNtHandle;
+    UINT                        NumAllocations;
+    D3DDDI_OPENALLOCATIONINFO2 *pOpenAllocationInfo2;
+    UINT                        PrivateRuntimeDataSize;
+    VOID                       *pPrivateRuntimeData;
+    UINT                        ResourcePrivateDriverDataSize;
+    VOID                       *pResourcePrivateDriverData;
+    UINT                        TotalPrivateDriverDataBufferSize;
+    VOID                       *pTotalPrivateDriverDataBuffer;
+    D3DKMT_HANDLE               hResource;        /* out */
+    D3DKMT_HANDLE               hKeyedMutex;      /* out (none yet) */
+    VOID                       *pKeyedMutexPrivateRuntimeData;
+    UINT                        KeyedMutexPrivateRuntimeDataSize;
+    D3DKMT_HANDLE               hSyncObject;      /* out (none yet) */
+} D3DKMT_OPENRESOURCEFROMNTHANDLE;
+
+typedef struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2 {
+    HANDLE        hNtHandle;
+    D3DKMT_HANDLE hDevice;
+    UINT          Flags;                          /* D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS */
+    D3DKMT_HANDLE hSyncObject;                    /* out */
+    union {
+        struct {
+            VOID                  *FenceValueCPUVirtualAddress;   /* out: read-only */
+            D3DGPU_VIRTUAL_ADDRESS FenceValueGPUVirtualAddress;   /* out */
+            UINT                   EngineAffinity;
+        } MonitoredFence;
+        UINT64 Reserved[8];
+    };
+} D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2;
+
 #ifndef NOVA_BUILD_GDI32
 #define KMTAPI __declspec(dllimport) LONG __stdcall
 KMTAPI D3DKMTEnumAdapters2(D3DKMT_ENUMADAPTERS2 *);
@@ -414,5 +474,9 @@ KMTAPI D3DKMTDestroyContext(const D3DKMT_DESTROYCONTEXT *);
 KMTAPI D3DKMTSubmitCommand(const D3DKMT_SUBMITCOMMAND *);
 KMTAPI D3DKMTSignalSynchronizationObjectFromGpu2(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *);
 KMTAPI D3DKMTWaitForSynchronizationObjectFromGpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *);
+KMTAPI D3DKMTShareObjects(UINT, const D3DKMT_HANDLE *, struct _OBJECT_ATTRIBUTES *, DWORD, HANDLE *);
+KMTAPI D3DKMTQueryResourceInfoFromNtHandle(D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE *);
+KMTAPI D3DKMTOpenResourceFromNtHandle(D3DKMT_OPENRESOURCEFROMNTHANDLE *);
+KMTAPI D3DKMTOpenSyncObjectFromNtHandle2(D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2 *);
 #undef KMTAPI
 #endif

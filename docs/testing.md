@@ -455,12 +455,17 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   would; fast user switching from the lock screen to it, a wrong
   password refused, while the first account's program keeps running; its
   profile and hive; back to the first account; signing the second out),
-  `spooltest` (the print spooler and `winspool.drv`: printers, raw jobs,
-  the queue, AddPrinter; a GDI page printed to Microsoft Print to PDF
-  matching what GDI draws; PrintDlg and PageSetupDlg; 64- and 32-bit),
-  `uactest` (standard users and UAC: the consent prompt on the secure
-  desktop for runas and for an installer's manifest, No refused, Yes
-  elevating to high integrity; a standard user's credential prompt
+  `textservtest` (the windowless Rich Edit XAML's text boxes host:
+  `WinUIEdit.dll`'s `CreateTextServices` and IIDs, typing, editing keys,
+  selection, clipboard, undo and redo, limits, read-only, lines and word
+  wrap, the mouse, `EN_CHANGE`/`EN_SELCHANGE`/`EN_MAXTEXT`, `TxDraw`
+  checked by pixels, a password box; `msftedit.dll` and `riched20.dll`
+  too), `spooltest` (the print spooler and `winspool.drv`: printers, raw
+  jobs, the queue, AddPrinter; a GDI page printed to Microsoft Print to
+  PDF matching what GDI draws; PrintDlg and PageSetupDlg; 64- and
+  32-bit), `uactest` (standard users and UAC: the consent prompt on the
+  secure desktop for runas and for an installer's manifest, No refused,
+  Yes elevating to high integrity; a standard user's credential prompt
   refusing a wrong administrator password and running the installer and
   runas as the administrator; a medium-integrity process kept from
   writing, reading or ending a high-integrity one; programs that are not
@@ -597,7 +602,7 @@ python3 tools/appcorpus.py --only ripgrep,jq --cache ~/.cache/novaos/appcorpus -
 
 - **Self-test programs** in `userland/programs/`, installed in
   `C:\Programs` (and 32-bit builds in `C:\Programs\x86`). Run them from the
-  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `volfiletest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wrtapptest`, `wrtglobtest`, `wrtpooltest`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamldlltest`, `xamlloadtest`, `xamlpagetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
+  Terminal; each prints "N passed, 0 failed": <!-- BEGIN generated:selftest-programs -->`abitest`, `accounttest`, `acltest`, `adaptertest`, `afdtest`, `aligntest`, `anitest`, `apiinfotest`, `apitest`, `appxtest`, `authtest`, `avxtest`, `bmpcurtest`, `boosttest`, `bttest`, `cabtest`, `cachetest`, `camtest`, `chkstktest`, `chrometest`, `cliptest`, `cmdlinetest`, `comoop`, `comptest`, `comtest`, `conptytest`, `consolecursortest`, `contentislandtest`, `coreapptest`, `cppeh`, `crashtest`, `crttest`, `crtthreads`, `cursortest`, `d2dctxtest`, `d3d9test`, `dcomptest`, `delaytest`, `devenumtest`, `devnotifytest`, `dhcp6test`, `digitest`, `dispatchqtest`, `disptest`, `dlgtest`, `dlltest`, `dltest`, `dostest`, `dpitest`, `drvtest`, `edgeupdtest`, `edutest`, `errnotest`, `etwtest`, `evtlogtest`, `filetest`, `firewalltest`, `fpstate`, `gatetest`, `gl2test`, `glgeneric`, `hidapitest`, `hidclasstest`, `httptest`, `icutest`, `idletest`, `imgsharetest`, `inputtest`, `kbdmoutest`, `kbdtest`, `kmdftest`, `kmttest`, `libmtest`, `linktest`, `loadtest`, `looptest`, `mmcsstest`, `montest`, `msiqtest`, `msitest`, `msxmltest`, `ndrtest`, `nlstest`, `nstest`, `ntfstest`, `overlaptest`, `padtest`, `pentest`, `pipetest`, `pnptest`, `posixtest`, `powertest`, `prioritytest`, `proclisttest`, `proctest`, `propvaltest`, `ptyscreentest`, `qttest`, `qtthemetest`, `qtwebtest`, `ramdisktest`, `rawpadtest`, `rawtest`, `regtest`, `rttest`, `samplertest`, `savetest`, `schanneltest`, `sectest`, `serialtest`, `setuptest`, `shmtest`, `smftest`, `smpstress`, `spooltest`, `stltest`, `svctest`, `switchtest`, `syscalltest`, `tcptabletest`, `textservtest`, `threads`, `tlsslots`, `touchtest`, `tpsimpletest`, `tpwaittest`, `tztest`, `uactest`, `umdftest`, `unwindtest`, `usbcompositetest`, `usptest`, `vhidtest`, `viosertest`, `volfiletest`, `waitmigrationtest`, `warptest`, `wdmtest`, `wictest`, `winrtabitest`, `wintabtest`, `winui2test`, `wlantest`, `wndthreads`, `wrtapptest`, `wrtglobtest`, `wrtpooltest`, `wuxamltest`, `wvsetuptest`, `wvstarttest`, `xamlapptest`, `xamlbasetest`, `xamldlltest`, `xamlloadtest`, `xamlpagetest`, `xamlparsetest`, `xpwin`<!-- END generated:selftest-programs -->.
   [building.md](building.md#self-test-programs) has a table of what each
   covers.
 - **Sound**: `soundtest` plays tones through `waveOut`, WASAPI,

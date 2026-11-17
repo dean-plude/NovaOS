@@ -1253,8 +1253,8 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `Border`'s colour is read back from the window's pixels; checked in
   `xamlpagetest` ([screenshot](screenshots/winui3-input.png)).  A
   `TextBox` is its own later step: its sources are open, but it loads
-  `WinUIEdit.dll`, a closed windowless RichEdit (`ITextServices2`) NovaOS
-  will provide.
+  `WinUIEdit.dll`, a closed windowless RichEdit (`ITextServices2`), which
+  NovaOS now provides (0.2.3 "Nebula" item 1, [progress](releases/0.2.3.md)).
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

@@ -723,14 +723,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD why, LPVOID reserved)
     return TRUE;
 }
 
-/* What riched20.dll exports besides its classes */
-__declspec(dllexport) HRESULT WINAPI CreateTextServices(void *outer, void *host, void **out)
-{
-    (void)outer; (void)host;
-    if (out) *out = 0;
-    return E_NOTIMPL;                             /* windowless text services: not provided */
-}
-
+/* What riched20.dll exports besides its classes (CreateTextServices, the
+ * windowless Rich Edit, is userland/textserv/textserv.c) */
 __declspec(dllexport) HRESULT WINAPI DllGetVersion(DWORD *info)
 {
     if (!info || info[0] < 20) return E_INVALIDARG;   /* DLLVERSIONINFO: cbSize, major, minor, build, platform */

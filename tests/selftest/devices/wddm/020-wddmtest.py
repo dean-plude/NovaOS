@@ -31,7 +31,14 @@
 # other's, resuming where it stopped; a spin the GPU cannot stop gets no
 # preemption in 2 s, so the engine is reset (DxgkDdiResetEngine): that
 # context is lost, its fence raised to the maximum, and the other
-# context's buffer is submitted again and runs.
+# context's buffer is submitted again and runs.  Step 3's sixth part,
+# sharing by NT handle: a resource and a monitored fence made to share go to
+# a second process ("kmttest share", started by kmttest with the handles
+# inherited), which opens both on its own device (DxgkDdiOpenAllocation
+# there), maps them into its own GPU address space and has its GPU write
+# the allocation and signal the fence, which the first process sees.  The
+# same checks again as a 32-bit program, whose gdi32 rebuilds each D3DKMT
+# structure in its x64 layout.
 VGA_ID = '"PCI\\VEN_1234&DEV_1111"'
 ROOT_ID = r'ROOT\\DISPLAY\\0000'
 TESTS = [
@@ -82,6 +89,15 @@ TESTS = [
           r'\[DbgPrint\] wddmtest: context destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: device destroyed \(0 left\)',
           r'\[DbgPrint\] wddmtest: process destroyed \(0 left\)',
+          r'\[DbgPrint\] wddmtest: process created \(2\)',
+          r'\[DbgPrint\] wddmtest: GPU wrote fence value 2',
+          r'kmttest share: \d+ passed, 0 failed',
+          r'kmttest wddm: \d+ passed, 0 failed']),
+    Test('wddmtest d3dkmt x86', r'C:\Programs\x86\kmttest.exe wddm',
+         [r'kmttest: render adapter LUID 00000000:0000[0-9a-f]+',
+          r'\[DbgPrint\] wddmtest: GPU wrote fence value 5',
+          r'\[DXGK\] WddmTest: a context on node 0 is lost \(a timeout\)',
+          r'kmttest share: \d+ passed, 0 failed',
           r'kmttest wddm: \d+ passed, 0 failed']),
     Test('wddmtest basic render still', 'kmttest', [r'kmttest: \d+ passed, 0 failed']),
 ]

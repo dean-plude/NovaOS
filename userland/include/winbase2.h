@@ -53,7 +53,9 @@ typedef enum { FindExSearchNameMatch, FindExSearchLimitToDirectories } FINDEX_SE
 typedef struct _MEMORY_BASIC_INFORMATION {
     PVOID BaseAddress, AllocationBase;
     DWORD AllocationProtect;
-    WORD PartitionId;
+#ifdef _WIN64
+    WORD PartitionId;                   /* (x64 only: the x86 structure is 28 bytes) */
+#endif
     SIZE_T RegionSize;
     DWORD State, Protect, Type;
 } MEMORY_BASIC_INFORMATION, *PMEMORY_BASIC_INFORMATION;

@@ -96,7 +96,7 @@ void um_unlock_excl(UmRwLock *l);
  * ----------------------------------------------------------------------- */
 typedef enum { UO_EVENT = 1, UO_MUTANT, UO_SEMAPHORE, UO_THREAD, UO_SOCKET, UO_WINDOW, UO_PROCESS, UO_KEY, UO_SECTION, UO_PIPE,
                UO_DIRECTORY, UO_SYMLINK, UO_TIMER, UO_AUDIO, UO_CONSOLE, UO_TOKEN, UO_GPU, UO_AFD, UO_KEYED_EVENT,
-               UO_PSEUDO_CONSOLE, UO_DEVICE, UO_DISK } UmObType;
+               UO_PSEUDO_CONSOLE, UO_DEVICE, UO_DISK, UO_DXGK_SHARE } UmObType;
 
 typedef struct UmThread UmThread;
 

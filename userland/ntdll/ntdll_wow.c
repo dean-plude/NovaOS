@@ -975,6 +975,8 @@ LONG_PTR NTAPI NtNovaGpuCtl(INT_PTR h, ULONG op, ULONG_PTR arg, void *ptr)
 {
     return SCP(NtNovaGpuCtl, S(h), U(op), U(arg), P(ptr));
 }
+/* (the D3DKMT structures: gdi32's d3dkmt.c rebuilds them in their x64 layouts) */
+LONG NTAPI NtNovaDxgkCtl(ULONG op, void *args) { return SC(NtNovaDxgkCtl, U(op), P(args)); }
 
 /* windows: the creation block is laid out with 64-bit fields already */
 LONG_PTR NTAPI NtNovaGuiCreate(void *info)                       { return SCP(NtNovaGuiCreate, P(info)); }

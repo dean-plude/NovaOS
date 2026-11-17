@@ -194,6 +194,10 @@ BOOL x_set_pos(HWND h, HWND after, int x, int y, int cx, int cy, UINT flags)
 BOOL x_show(HWND h, int cmd)
 {
     INT32 a[1] = { cmd };
+    /* shown again: a suspended app, frozen while minimised (twinapi.appcore),
+     * runs first, or nothing would take the message */
+    if (cmd != SW_HIDE && cmd != SW_MINIMIZE && cmd != SW_SHOWMINIMIZED && cmd != SW_SHOWMINNOACTIVE && cmd != SW_FORCEMINIMIZE)
+        NtNovaGuiCtl(0, CTL_FREEZE, 1, (void *)h);
     return (BOOL)x_op(h, XOP_SHOW, a, 1, 0, NULL);
 }
 

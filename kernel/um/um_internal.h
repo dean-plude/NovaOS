@@ -324,6 +324,8 @@ struct UmProcess {
 
     volatile bool   exited;     /* every thread has stopped for good */
     volatile bool   kill_pending;
+    volatile UINT8  frozen;     /* a suspended app (its window minimised): every thread parks at its next
+                                 * return to user mode until the window is restored (um_gui.c, CTL_FREEZE) */
     UINT32          kill_status;
     UINT32          exit_status;
     char            why[96];    /* crash/kill description */

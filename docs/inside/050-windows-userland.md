@@ -13,7 +13,8 @@
     dialogs, MDI, hooks, per-monitor and per-thread DPI awareness, touch,
     pens and the mouse as `WM_POINTER` messages), `gdi32`, `gdiplus` (on the
     plutovg rasteriser), `comctl32`, `comdlg32` (classic and `IFileDialog`
-    Open and Save As dialogs), `riched20`/`msftedit` (Rich Edit with RTF),
+    Open and Save As dialogs), `riched20`/`msftedit` (Rich Edit with RTF, and the windowless Rich Edit's
+    `CreateTextServices`, also as `WinUIEdit.dll` for XAML's text boxes),
     `shell32`, `oleacc`, `uxtheme`, `dwmapi`.
   - **COM**: `ole32`/`oleaut32` (in-process and local servers, type
     libraries, calls between processes with the standard marshaler, the
@@ -25,7 +26,8 @@
     (`PointerPoint`), size, visibility and close events, and the
     `CoreDispatcher`; the app suspended when its window is minimised and
     resumed when restored (`Suspending` with deferrals, `Resuming`,
-    `EnteredBackground`, `LeavingBackground`); DXGI swap chains present into a CoreWindow) and
+    `EnteredBackground`, `LeavingBackground`), frozen while suspended (its
+    threads stopped in the kernel until the window is restored); DXGI swap chains present into a CoreWindow) and
     `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
     sprite visuals, colour and surface brushes, drawing surfaces on
     Direct3D 11, targets on a window or a CoreWindow, property sets, key

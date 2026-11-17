@@ -22,9 +22,12 @@
  * a size under SetPreferredMinSize's. The view and CoreApplication each
  * keep one Properties set (WinUI 2 stores its per-view objects there).
  * Minimised, the app enters the background and is suspended (Suspending
- * waits for its deferral); restored, it resumes and leaves the background.
+ * waits for its deferral), then frozen: a second process sees a thread of
+ * ours stand still and restores the window, which thaws it; it resumes and
+ * leaves the background.
  *
  *   coreapptest ARGS...   the self-test runs it as "coreapptest hello world"
+ *   coreapptest --plm-thaw HWND PID   (the second process)
  */
 #include <stdio.h>
 #include <string.h>
@@ -440,6 +443,63 @@ static void pump(int ms)
         Sleep(20);
     }
 }
+/* Suspended, the app is frozen (all its threads, as on Windows) until its
+ * window is restored.  Another process, this program run as "--plm-thaw
+ * HWND PID", watches a counter one of our threads moves every 10 ms stand
+ * still, then restores the window as the taskbar would; the counter moves
+ * again.  They share it through a named section */
+typedef struct { volatile LONG ticks, stop, minimised, frozen, thawed; } PlmShare;
+static PlmShare *g_share;
+static DWORD WINAPI ticker(void *a)
+{
+    (void)a;
+    while (!g_share->stop) { InterlockedIncrement(&g_share->ticks); Sleep(10); }
+    return 0;
+}
+static int plm_thaw_helper(const WCHAR *args)
+{
+    WCHAR *e;
+    HWND h = (HWND)(ULONG_PTR)wcstoull(args, &e, 16);
+    unsigned pid = (unsigned)wcstoul(e, 0, 10);
+    if (!h || !pid) return 2;
+    WCHAR name[64];
+    swprintf(name, 64, L"Local\\coreapptest-plm-%u", pid);
+    HANDLE m = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
+    PlmShare *s = m ? MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof *s) : 0;
+    if (!s) return 2;
+    DWORD end = GetTickCount() + 30000;
+    while (!s->minimised && GetTickCount() < end) Sleep(20);
+    LONG last = s->ticks;
+    DWORD since = GetTickCount();
+    while (GetTickCount() < end) {                  /* standing still for 2 s: frozen */
+        Sleep(50);
+        LONG now = s->ticks;
+        if (now != last) { last = now; since = GetTickCount(); }
+        else if (GetTickCount() - since >= 2000) { s->frozen = 1; break; }
+    }
+    ShowWindow(h, SW_RESTORE);                      /* (thaws it first, then it restores itself) */
+    DWORD t0 = GetTickCount();
+    while (s->ticks == last && GetTickCount() - t0 < 10000) Sleep(20);
+    s->thawed = s->ticks != last;
+    return 0;
+}
+static HANDLE plm_helper_start(void)
+{
+    WCHAR name[64], exe[MAX_PATH], cmd[MAX_PATH + 64];
+    swprintf(name, 64, L"Local\\coreapptest-plm-%lu", (unsigned long)GetCurrentProcessId());
+    HANDLE m = CreateFileMappingW(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, 4096, name);
+    g_share = m ? MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof *g_share) : 0;
+    if (!g_share) return 0;
+    CloseHandle(CreateThread(0, 0, ticker, 0, 0, 0));
+    GetModuleFileNameW(0, exe, MAX_PATH);
+    swprintf(cmd, MAX_PATH + 64, L"\"%ls\" --plm-thaw %llx %lu", exe, (unsigned long long)(ULONG_PTR)g_hwnd,
+             (unsigned long)GetCurrentProcessId());
+    STARTUPINFOW si = { sizeof si };
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessW(0, cmd, 0, 0, FALSE, 0, 0, 0, &si, &pi)) return 0;
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
 static void lifetime(void)
 {
     EventRegistrationToken ts, tr, te, tl;
@@ -455,15 +515,26 @@ static void lifetime(void)
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     INT64 now = (INT64)((UINT64)ft.dwHighDateTime << 32 | ft.dwLowDateTime);
+    HANDLE helper = plm_helper_start();
+    CHECK("a second process to restore the window", helper != 0);
+    if (!helper) return;
     ShowWindow(g_hwnd, SW_MINIMIZE);
-    for (int i = 0; i < 250 && !g_deferral_done; i++) pump(20);
+    g_share->minimised = 1;
+    /* minimised: EnteredBackground; suspended: Suspending, its deferral,
+     * then frozen (this thread too, in the pump) until the helper restores
+     * the window; Resuming and LeavingBackground */
+    DWORD end = GetTickCount() + 40000;
+    while (strlen(g_life) < 5 && GetTickCount() < end) pump(20);
     pump(200);
-    CHECK("minimised: EnteredBackground, then Suspending, held by its deferral", !strcmp(g_life, "esd"));
+    CHECK("minimised: EnteredBackground, Suspending held by its deferral; restored: Resuming, LeavingBackground",
+          !strcmp(g_life, "esdrl"));
     CHECK("its deferral (ISuspendingDeferral) and the background event's", g_deferral_ok == 1 && g_bg_deferral_ok == 1);
     CHECK("the deadline: some seconds on", g_deadline > now && g_deadline < now + 600000000LL);
-    ShowWindow(g_hwnd, SW_RESTORE);
-    pump(400);
-    CHECK("restored: Resuming, then LeavingBackground", !strcmp(g_life, "esdrl"));
+    WaitForSingleObject(helper, 15000);
+    CloseHandle(helper);
+    CHECK("suspended: frozen (a thread of ours stood still until the window was restored)", g_share->frozen == 1);
+    CHECK("restored by another program: running again", g_share->thawed == 1);
+    g_share->stop = 1;
     CHECK("restored: visible again", IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd));
     VT(g_app, 8, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(g_app, ts);
     VT(g_app, 10, HRESULT (STDMETHODCALLTYPE *)(void *, EventRegistrationToken))(g_app, tr);
@@ -624,6 +695,8 @@ static HRESULT factory(const WCHAR *cls, const GUID *iid, void **out)
 
 int main(void)
 {
+    const WCHAR *thaw = wcsstr(GetCommandLineW(), L"--plm-thaw ");
+    if (thaw) return plm_thaw_helper(thaw + 11);
     CloseHandle(CreateThread(0, 0, watchdog, 0, 0, 0));
     CHECK("RoInitialize", SUCCEEDED(RoInitialize(RO_INIT_MULTITHREADED)));
     CHECK("CoreWindow's statics", factory(L"Windows.UI.Core.CoreWindow", &IID_ICoreWindowStatic_T, &g_win_statics) == S_OK && g_win_statics);

@@ -46,7 +46,8 @@ enum { CTL_GET_RECT = 1, CTL_SET_RECT, CTL_CAPTURE, CTL_CURSOR, CTL_ACTIVATE, CT
        CTL_SET_SYSCURSOR, CTL_SYSCURSOR_IMAGE, CTL_TOUCH, CTL_TABLET, CTL_SET_DPI, CTL_SET_SCALE, CTL_GAMEPAD,
        CTL_SET_CURSOR_POS, CTL_CLIP_CURSOR, CTL_SET_FRAME,
        /* windows of different processes (xproc.c; um_gui.c says what each does) */
-       CTL_XSEND = 48, CTL_XFETCH, CTL_XREPLY, CTL_XRESULT, CTL_EMBED, CTL_EMBED_INFO, CTL_XBLIT, CTL_SET_BACK, CTL_HOTKEY = 61 };
+       CTL_XSEND = 48, CTL_XFETCH, CTL_XREPLY, CTL_XRESULT, CTL_EMBED, CTL_EMBED_INFO, CTL_XBLIT, CTL_SET_BACK, CTL_HOTKEY = 61,
+       CTL_FREEZE = 63 /* a suspended app's threads (twinapi.appcore) */ };
 /* display.c: the monitors (GetSystemMetrics' virtual screen) */
 int  u32_monitor_count(void);
 void u32_virtual_screen(RECT *r);

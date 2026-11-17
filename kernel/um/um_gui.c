@@ -594,6 +594,13 @@ static void gui_touch(WND *w, const WmTouch *t, int n)
                 packxy(t[i].x, t[i].y), t[i].x - c.x, t[i].y - c.y);
 }
 
+/* A frozen app (CTL_FREEZE) runs again; under the desktop lock */
+static void plm_thaw(UmProcess *p, const char *why)
+{
+    if (!__atomic_exchange_n(&p->frozen, 0, __ATOMIC_ACQ_REL)) return;
+    kprintf("[UM] %s (PID %u) thawed (%s)\n", p->name, p->pid, why);
+}
+
 /* Every pass of the desktop loop: timers, and what the user did to the
  * window (resized, moved, focused, minimized) */
 static bool gui_tick(WND *w)
@@ -618,6 +625,7 @@ static bool gui_tick(WND *w)
             any = true;
         }
     }
+    if (!w->minimized && g->proc && g->proc->frozen) plm_thaw(g->proc, "restored");
     if (w->minimized != g->was_min) {
         g->was_min = w->minimized;
         enqueue(g, WM_SIZE, w->minimized ? 1 : w->maximized ? 2 : 0, packxy(g->cw, g->ch), 0, 0);
@@ -1342,6 +1350,19 @@ static UINT64 sys_gui_killtimer(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
  * screen shows there (logical pixels, 0x00RRGGBB, w per row); gdi32's
  * BitBlt from the screen's DC (ShareX's captures) */
 #define CTL_SCREEN_READ    62
+/* A suspended app's threads frozen, as Windows' process lifetime manager
+ * freezes a packaged app once its Suspending handlers are done
+ * (twinapi.appcore's PLM; hwnd is 0), by arg:
+ *  63 FREEZE  0 ptr = the caller's user32 handle of its minimised window:
+ *               every thread of the caller parks at its next return to user
+ *               mode (UmReturnToUser), this one on the way out of this call,
+ *               until the window is restored, from the taskbar or Alt+Tab
+ *               (gui_tick) or by another program (1).  Returns 1 once
+ *               thawed, 0 at once if the window is not minimised;
+ *             1 ptr = another process's user32 window handle: that process,
+ *               if frozen, runs again (user32's ShowWindow of a foreign
+ *               window, before its message goes); returns 1 if it was */
+#define CTL_FREEZE         63
 #define GUI_TAGS         2048
 #define GUI_TAG_MIN      4               /* keeps every handle above 0xFFFF */
 #define GUI_TAG_SHIFT    14
@@ -2336,6 +2357,23 @@ static UINT64 sys_gui_ctl(UINT64 a1, UINT64 a2, UINT64 a3, UINT64 a4)
         return NT_SUCCESS(CopyToUser((void *)(uintptr_t)a4, out, sizeof(out))) ? 1 : 0;
     }
     if (a2 == CTL_HOTKEY) return hotkey_ctl(p, a1, a3, a4);
+    if (a2 == CTL_FREEZE) {
+        UINT64 r = 0;
+        DesktopLock();
+        if (a3 == 0) {
+            GuiWin *g = win_by_hwnd((UINT32)a4);
+            if (g && g->proc == p && !g->host && g->wnd->minimized && !p->kill_pending) {
+                __atomic_store_n(&p->frozen, 1, __ATOMIC_RELEASE);   /* (UmReturnToUser parks us) */
+                kprintf("[UM] %s (PID %u) frozen: suspended\n", p->name, p->pid);
+                r = 1;
+            }
+        } else if (a3 == 1) {
+            UmProcess *tp = tag_process((UINT32)a4);
+            if (tp && tp != p && !tp->exited && tp->frozen) { plm_thaw(tp, "shown by another program"); r = 1; }
+        }
+        DesktopUnlock();
+        return r;
+    }
     if (a2 == CTL_SCREEN_READ) {
         struct { INT32 x, y, w, h; UINT64 out; } q;
         if (!NT_SUCCESS(CopyFromUser(&q, (const void *)(uintptr_t)a4, sizeof(q))) || q.w <= 0 || q.h <= 0 || q.w > 16384 || q.h > 16384)

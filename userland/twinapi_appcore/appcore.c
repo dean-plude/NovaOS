@@ -55,6 +55,7 @@
  */
 #include <windows.h>
 #include <roapi.h>
+#include <winternl.h>
 #include "../winrtmap/strmap.h"
 
 /* ntdll's RtlGetVersion, with its RTL_OSVERSIONINFOW */
@@ -1436,9 +1437,13 @@ static App g_app = { (const void *const *)app_factory_vt, (const void *const *)a
  * (ISuspendingOperation.GetDeferral) and complete it before the deadline,
  * five seconds on (the window's messages are pumped meanwhile, so work the
  * app posts to its dispatcher still runs).  Restored, it resumes
- * (Resuming, then LeavingBackground).  NovaOS does not freeze the
- * suspended app's threads: the app saved its state, which is what it is
- * asked to do; the shell (Start, Settings > Apps) may end it from there. */
+ * (Resuming, then LeavingBackground).  Suspended, the app's threads are
+ * frozen, as Windows freezes a suspended app: none of them runs (or uses
+ * the processor) until the window is restored, from the taskbar, Alt+Tab
+ * or another program's ShowWindow, which thaw it in the kernel
+ * (NtNovaGuiCtl's CTL_FREEZE, um_gui.c); the shell (Settings > Apps) may
+ * still end it meanwhile. */
+#define NOVA_CTL_FREEZE 63
 #define PLM_DELAY_MS  1000
 #define PLM_DEADLINE_MS 5000
 static const GUID IID_ISuspendingEventArgs_       = { 0x96061C05, 0x2DBA, 0x4D08, { 0xB0, 0xBD, 0x2B, 0x30, 0xA1, 0x31, 0xC6, 0xAA } };
@@ -1610,6 +1615,9 @@ static void plm_timer(HWND h)
     plm_raise(&g_app.suspending, &IID_ISuspendingEventArgs_);
     g_plm.state = PLM_SUSPENDED;
     OutputDebugStringA("twinapi.appcore: suspended\n");
+    /* frozen, this thread too, until the window is restored */
+    if (!g_plm.restore_pending && IsIconic(h) && NtNovaGuiCtl(0, NOVA_CTL_FREEZE, 0, h))
+        OutputDebugStringA("twinapi.appcore: thawed\n");
     if (g_plm.restore_pending || !IsIconic(h)) { g_plm.restore_pending = 0; plm_resume(); }
 }
 

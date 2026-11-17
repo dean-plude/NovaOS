@@ -1646,6 +1646,17 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   which NovaOS does not build yet.  Next: `MenuFlyout` (with its items),
   then the CI check that Calculator computes `2 + 2`, which ticks this
   step.
+  Thirty-first part done (Pulsar item 3, twenty-fifth slice): the
+  framework's `MenuFlyout`, with its items (`MenuFlyoutItem`,
+  `ToggleMenuFlyoutItem`, `MenuFlyoutSeparator`, `MenuFlyoutSubItem`),
+  the `MenuFlyoutPresenter` that shows them and their automation peers.
+  A `MenuFlyout` now loads from markup with its items, and Calculator's
+  main page gets past its history and memory context menus.  Test
+  `wuxamltest`.  The page now stops when one of Calculator's own event
+  handlers, called by the framework as the page loads, throws a
+  `NullReferenceException` (`E_POINTER`).  Next: find what that handler
+  reads that NovaOS leaves empty, then the CI check that Calculator
+  computes `2 + 2`, which ticks this step.
 
 ---
 

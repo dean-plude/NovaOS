@@ -208,7 +208,10 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `Header`), and markup naming a `Pivot` resolved through the
   framework's `XamlLibMetadataProvider` and the library's type tables
   and made over the framework's `ItemsControl`, its two `PivotItem`s in
-  its `Items`), `xamlapptest` (Microsoft's XAML framework started as a
+  its `Items`; and a `MenuFlyout` from markup, as Calculator's history
+  and memory context menus, holding a `MenuFlyoutItem`, a
+  `MenuFlyoutSeparator` and a `ToggleMenuFlyoutItem`, the item's `Text`
+  read back), `xamlapptest` (Microsoft's XAML framework started as a
   desktop app starts it, built from its sources: `Application.Start` on
   the desktop path with a `DispatcherQueue`, the app's initialization
   callback composing its `Application` over the framework's,

@@ -1886,5 +1886,24 @@ vendors.
    `wuxamltest` (a `Pivot` from markup, its two items through Windows'
    `IItemsControl`).
 
+   Pulsar item 3, twenty-fifth slice: the context menus.  Calculator's
+   history and memory lists hold a `MenuFlyout` in their resources, whose
+   constructor was an unbuilt stand-in.  NovaOS now builds the framework's
+   `MenuFlyout` with its item base and item collection, `MenuFlyoutItem`,
+   `ToggleMenuFlyoutItem`, `MenuFlyoutSeparator`, `MenuFlyoutSubItem` and
+   the template settings, the `MenuFlyoutPresenter` (an `ItemsControl`)
+   that shows them, their automation peers and `ContextMenuEventArgs`,
+   each its generated class and its partial one (`build.py`'s
+   `_MENU_FLYOUT`).  `MenuFlyout_Partial.cpp` includes the render target
+   bitmap's header, whose pixel buffer is a `Windows.Storage.Streams`
+   buffer with byte access, so that file takes those headers first
+   (`FILE_FIRST`).  A `MenuFlyout` with an item, a separator and a toggle
+   item now loads from markup.  Calculator's main page gets past its
+   context menus and stops next when one of the app's own event handlers,
+   which the framework calls as the page loads, throws a
+   `NullReferenceException` (`E_POINTER`, reported unhandled and failing
+   fast).  Test: `wuxamltest` (a `MenuFlyout` from markup, its three items
+   through Windows' `IMenuFlyout`, the first item's `Text`).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -24,6 +24,9 @@ int  VgpuCount(void);
 const char *VgpuName(int dev);
 int  VgpuScanouts(int dev);
 bool VgpuIsAt(int dev, UINT64 fb);
+/* Let a Windows display driver have the virtio-vga at @fb (PciSetAside):
+ * false if it is in use for 3D or for one of its outputs */
+bool VgpuRelease(UINT64 fb);
 
 /* The outputs with a monitor (bit N: output N), and each one's preferred
  * size (w[N] x h[N], what the monitor asks for) */

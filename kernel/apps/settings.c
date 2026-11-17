@@ -1,7 +1,7 @@
 /*
  * settings.c — Settings: live system, display, sound, personalization,
- *               apps (settings_apps.c), storage, network, Wi-Fi, firewall (settings_firewall.c), accounts,
- *               time & language, printers and about pages
+ *               Bluetooth (settings_bluetooth.c), apps (settings_apps.c), storage, network, Wi-Fi, firewall (settings_firewall.c),
+ *               accounts, time & language, printers and about pages
  *               (System has Recovery: Reset this PC and Advanced startup)
  *
  * Every page is an entry of g_pages (its name, glyph, ms-settings: names,
@@ -738,6 +738,12 @@ static int wifi_row_y(const Settings *st, int y, int i)
     return y + 88 + i * WIFI_ROW_H + (st->wifi_sel >= 0 && i > st->wifi_sel ? WIFI_FORM_H : 0);
 }
 static bool wifi_secured(const WlanBss *b) { return b->privacy || b->rsn_len; }
+/* WPA2-Enterprise only (802.1X, AKM 1, without PSK or SAE): no key needed
+ * when a certificate is in the personal store (EAP-TLS) */
+static bool wifi_enterprise(const WlanBss *b)
+{
+    return (b->akms & (1u << 1)) && !(b->akms & ((1u << 2) | (1u << 8)));
+}
 static GdiRect r_wifi_key(const Settings *st, int x, int y, int w)
 {
     return RECT(x + 16, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, w - 32 - 112, 32);
@@ -757,7 +763,7 @@ static void wifi_connect(Settings *st)
 {
     if (st->wifi_job || st->wifi_sel < 0 || st->wifi_sel >= st->wifi_n) return;
     const WlanBss *b = &st->wifi_bss[st->wifi_sel];
-    if (wifi_secured(b) && !st->wifi_key[0]) {
+    if (wifi_secured(b) && !st->wifi_key[0] && !(wifi_enterprise(b) && NetPersonalCount())) {
         ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", b->ssid);
         return;
     }
@@ -816,8 +822,13 @@ static bool wifi_poll(Settings *st)
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
                                          "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
-        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: sign in from "
-                                         "the Terminal with netsh wlan connect user= key=.", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: import your "
+                                         "certificate (certutil -importpfx), or sign in from the Terminal with netsh "
+                                         "wlan connect user= key=.", s); break;
+        case WLAN_UNTRUSTED:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" has a "
+                                         "certificate from a root that is not trusted.", s); break;
+        case WLAN_CERT_REFUSED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" did not "
+                                          "accept your certificate.", s); break;
         default:               ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Can't connect to \"%s\" (0x%08x).", s, status);
         }
         if (r != WLAN_OK) kprintf("[SETTINGS] Wi-Fi: %s\n", st->wifi_note);
@@ -1892,6 +1903,7 @@ static int paint_network(Settings *st, GdiRect c, int x, int y, int w)  { (void)
 static int paint_wifi(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; return page_wifi(st, x, y, w); }
 static int paint_time(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return page_time_language(x, y, w); }
 static int paint_firewall(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return FirewallPagePaint(x, y, w); }
+static int paint_bluetooth(Settings *st, GdiRect c, int x, int y, int w) { (void)c; (void)st; return BluetoothPagePaint(x, y, w); }
 static int paint_printers(Settings *st, GdiRect c, int x, int y, int w) { (void)c; return page_printers(st, x, y, w); }
 static int paint_about(Settings *st, GdiRect c, int x, int y, int w)    { (void)c; (void)st; return page_about(x, y, w); }
 static int paint_apps(Settings *st, GdiRect c, int x, int y, int w)     { (void)c; (void)st; return AppsPagePaint(x, y, w); }
@@ -2018,6 +2030,14 @@ static void mouse_apps(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, in
 static bool key_apps(Settings *st, const KeyEvent *k) { (void)st; return AppsPageKey(k); }
 static bool tick_apps(Settings *st) { (void)st; return AppsPageTick(); }   /* an uninstall finished, packages changed */
 
+static void mouse_bluetooth(Settings *st, GdiRect c, WmMouseMsg msg, int x, int y, int px, int py, int pw)
+{
+    (void)st; (void)c;
+    if (msg == WM_MOUSE_DOWN) BluetoothPageMouse(px, py, pw, x, y);
+}
+static bool key_bluetooth(Settings *st, const KeyEvent *k) { (void)st; return BluetoothPageKey(k); }
+static bool tick_bluetooth(Settings *st) { (void)st; return BluetoothPageTick(); }   /* a search, pairing or connection */
+
 static bool key_network(Settings *st, const KeyEvent *k)  { if (!st->net_edit) return false; net_key(st, k); return true; }
 static bool key_accounts(Settings *st, const KeyEvent *k) { if (!st->acc_form) return false; accounts_key(st, k); return true; }
 static bool key_printers(Settings *st, const KeyEvent *k) { if (!st->prn_focus) return false; prn_key(st, k); return true; }
@@ -2027,6 +2047,9 @@ static const SetPage g_pages[] = {
     [SETTINGS_SYSTEM] = { "System", GL_PC, "system recovery",
         "system about pc processor memory uptime recovery reset advanced startup safe mode",
         paint_system, mouse_system, NULL, tick_system, false },
+    [SETTINGS_BLUETOOTH] = { "Bluetooth & devices", GL_BLUETOOTH, "bluetooth connecteddevices devices",
+        "bluetooth devices device pair pairing mouse keyboard headset headphones wireless add remove",
+        paint_bluetooth, mouse_bluetooth, key_bluetooth, tick_bluetooth, false },
     [SETTINGS_DISPLAY] = { "Display", GL_WINDOWS, "display screenrotation",
         "display screen resolution scale monitor dpi arrange multiple displays adapter",
         paint_display, mouse_display, NULL, tick_display, false },
@@ -2159,6 +2182,7 @@ static void go(Settings *st, int page, bool log)
         st->rec_ask = false; st->rec_note[0] = '\0';
         st->drag = false;
         st->wifi_scanned = false;                             /* (Wi-Fi scans again when it opens) */
+        BluetoothPageReset();                                 /* (... and Bluetooth searches) */
         wifi_choose(st, -1);
         if (st->acc_form) acc_close(st, NULL);
         st->acc_note[0] = '\0';

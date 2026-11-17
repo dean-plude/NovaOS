@@ -9,7 +9,11 @@ and the test driver `wddmtest.sys`'s adapter, devices and allocations),
 and its third (GPU virtual addresses: per-process page tables the driver
 writes through paging buffers, residency counted);
 the rest of step 3, and steps 2, 4 and 5, are not built.  Intel's driver has not been tried: it needs step 2
-and the T14, and nothing has run on the T14 yet.
+and the T14, and nothing has run on the T14 yet.  A vendor's display-only
+driver has: Red Hat's `viogpudo.sys`, unchanged, drives QEMU's virtio-vga
+in the devices suite's `viogpudo` boot (step 2's display half rehearsed
+on QEMU), which fixed two VidPN structure layouts and confirmed the
+display-only registration IOCTL (`0x230043`).
 
 **The decision.**  NovaOS drives the ThinkPad T14 Gen 4's Intel Iris Xe
 with **Intel's own Windows display driver**, unchanged, through a WDDM

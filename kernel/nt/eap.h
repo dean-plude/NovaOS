@@ -10,6 +10,15 @@
  * server's certificate must chain to a trusted root (certutil -addstore
  * root), as Windows wants by default before it sends a password.
  *
+ * EAP-TLS (RFC 5216, Windows' "smart card or other certificate") signs in
+ * with a certificate instead: the same TLS 1.2 handshake in the same
+ * fragments, the server asking for the station's certificate, which comes
+ * from the personal store with its private key (certutil -importpfx;
+ * net/tls.h's TlsPersonalFind) and is checked by the server; no password
+ * and nothing inside the tunnel.  The peer asks for the method it has: a
+ * Nak names EAP-TLS when the server offers PEAP and the user has a
+ * certificate, PEAP when the server offers EAP-TLS and the user a password.
+ *
  * Once the server says EAP-Success, the tunnel's keying material gives
  * the MSK ("client EAP encryption", RFC 5216 2.3's PRF over the TLS
  * master secret and both randoms) and its first 32 bytes are the PMK the
@@ -26,6 +35,8 @@
 #define EAP_FRAME_MAX   1600        /* (an EAPOL frame either way: EAP fragments are at most EAP_FRAGMENT) */
 #define EAP_FRAGMENT    1024        /* (the TLS bytes in one PEAP fragment the station sends) */
 #define EAP_NAME_MAX    128
+#define EAP_METHOD_TLS  13          /* (EAP-TLS, RFC 5216) */
+#define EAP_METHOD_PEAP 25          /* (PEAP, [MS-PEAP]) */
 
 typedef struct TlsEap TlsEap;
 
@@ -33,8 +44,10 @@ typedef struct {
     /* set before the sign-in (EapStart) */
     char   identity[EAP_NAME_MAX];  /* the user name ("DOMAIN\user" or "user@realm"), also the outer identity */
     char   password[EAP_NAME_MAX];
+    UINT8  method;                  /* EAP_METHOD_PEAP (a password) or EAP_METHOD_TLS (a certificate) */
+    int    cert;                    /* EAP-TLS: the personal certificate (net/tls.h), else -1 */
     /* the sign-in's */
-    TlsEap *tls;                    /* the PEAP tunnel */
+    TlsEap *tls;                    /* the TLS session: PEAP's tunnel, or EAP-TLS's handshake */
     UINT8  id;                      /* the last request's identifier */
     bool   started;                 /* a request came (no need for EAPOL-Start) */
     bool   tunnel;                  /* the TLS handshake finished */
@@ -66,10 +79,13 @@ enum {
 #define EAP_RESULT_BAD_PASSWORD 2   /* MS-CHAPv2 failure: the user name or password is wrong */
 #define EAP_RESULT_UNTRUSTED   3    /* the server's certificate does not chain to a trusted root */
 #define EAP_RESULT_FAILED      4    /* anything else (no common method, TLS failed, the server's proof wrong) */
+#define EAP_RESULT_CERT_REFUSED 5   /* EAP-TLS: the server did not accept the station's certificate */
 
 /* Start a sign-in as @identity with @password (false if either is empty
  * or too long) */
 bool EapStart(EapPeer *p, const char *identity, const char *password);
+/* Start an EAP-TLS sign-in as @identity with personal certificate @cert */
+bool EapStartCert(EapPeer *p, const char *identity, int cert);
 /* EAPOL-Start (an EAPOL frame in @out, its length), for when the access
  * point does not ask first */
 UINT32 EapStartFrame(UINT8 *out);

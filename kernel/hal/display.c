@@ -602,8 +602,9 @@ static struct {
 } g_wddm;
 
 /* The built-in driver of a DISPI adapter lets a Windows driver have it
- * (PciSetAside): it keeps drawing until the driver starts and offers itself */
-static bool bochs_set_aside(void) { return true; }
+ * (PciSetAside): it keeps drawing until the driver starts and offers itself.
+ * A virtio-vga's virtio side (virtio_gpu.c) lets go of it first */
+static bool bochs_set_aside(void) { return d.pci.vendor != 0x1AF4 || VgpuRelease(d.vram_phys); }
 
 void DisplayWddmOffer(const DisplayWddm *drv, const DisplayMode *modes, int n, DisplayMode cur)
 {

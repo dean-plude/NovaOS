@@ -39,10 +39,9 @@ struct DXGKARGCB_GETHANDLEDATA;
  * initialisation function, which displib.lib's DxgkInitialize sends and
  * calls with a DRIVER_INITIALIZATION_DATA:
  * CTL_CODE(FILE_DEVICE_VIDEO, 0xF, METHOD_NEITHER, FILE_ANY_ACCESS).
- * What DxgkInitializeDisplayOnlyDriver (Windows 8's, for a
- * KMDDOD_INITIALIZATION_DATA) sends instead is not documented; NovaOS's
- * displib stand-in asks for the display-only function with the next
- * function code (an assumption step 2 checks against a real KMDOD driver) */
+ * DxgkInitializeDisplayOnlyDriver (Windows 8's, for a
+ * KMDDOD_INITIALIZATION_DATA) sends the next function code, 0x10: Red
+ * Hat's viogpudo.sys, built with Microsoft's displib.lib, does */
 #define IOCTL_VIDEO_DDI_FUNC_REGISTER     0x0023003Fu
 #define IOCTL_VIDEO_DDI_FUNC_REGISTER_DOD 0x00230043u   /* (NovaOS's: function 0x10) */
 
@@ -84,7 +83,7 @@ enum { D3DKMDT_MP_UNINITIALIZED, D3DKMDT_MP_PREFERRED, D3DKMDT_MP_NOTPREFERRED }
 typedef struct {
     D3DKMDT_2DREGION PrimSurfSize;
     D3DKMDT_2DREGION VisibleRegionSize;
-    unsigned long long Stride;                    /* SIZE_T */
+    unsigned int     Stride;                      /* DWORD (viogpudo.sys writes PixelFormat at +0x1C) */
     int              PixelFormat;                 /* D3DDDIFORMAT */
     int              ColorBasis;                  /* D3DKMDT_COLOR_BASIS */
     int              PixelValueAccessMode;
@@ -112,6 +111,11 @@ typedef struct {
 typedef struct {
     D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID Id;
     D3DKMDT_VIDEO_SIGNAL_INFO VideoSignalInfo;
+    /* (the WDDM 1.3 layout, the one every current WDK compiles: viogpudo.sys
+     * writes ColorBasis 2 at +0x40, 8 bits per channel at +0x44..+0x50, its
+     * wire formats at +0x54 and Preference at +0x58) */
+    int              ColorBasis;                  /* D3DKMDT_COLOR_BASIS */
+    unsigned int     ColorCoeffDynamicRanges[4];  /* bits of each channel */
     unsigned int     WireFormatAndPreference;     /* D3DKMDT_WIRE_FORMAT_AND_PREFERENCE bit fields */
     int              Preference;                  /* D3DKMDT_MODE_PREFERENCE */
 } D3DKMDT_VIDPN_TARGET_MODE;
@@ -872,9 +876,10 @@ static inline unsigned int DxgkInitEntries(unsigned int v)
 typedef NT_STATUS (NT_API *DXGKRNL_DPIINITIALIZE)(NT_DRIVER_OBJECT *, NT_UNICODE_STRING *registry, void *init_data);
 
 #define DXGK_OFFSET(t, m) __builtin_offsetof(t, m)
-_Static_assert(sizeof(D3DKMDT_VIDPN_SOURCE_MODE) == 48 && DXGK_OFFSET(D3DKMDT_VIDPN_SOURCE_MODE, Format.Graphics.Stride) == 24,
+_Static_assert(sizeof(D3DKMDT_VIDPN_SOURCE_MODE) == 40 && DXGK_OFFSET(D3DKMDT_VIDPN_SOURCE_MODE, Format.Graphics.PixelFormat) == 28,
                "D3DKMDT_VIDPN_SOURCE_MODE layout");
-_Static_assert(sizeof(D3DKMDT_VIDEO_SIGNAL_INFO) == 56 && sizeof(D3DKMDT_VIDPN_TARGET_MODE) == 72,
+_Static_assert(sizeof(D3DKMDT_VIDEO_SIGNAL_INFO) == 56 && sizeof(D3DKMDT_VIDPN_TARGET_MODE) == 96 &&
+               DXGK_OFFSET(D3DKMDT_VIDPN_TARGET_MODE, Preference) == 0x58,
                "D3DKMDT_VIDPN_TARGET_MODE layout");
 _Static_assert(DXGK_OFFSET(D3DKMDT_VIDPN_PRESENT_PATH, ContentTransformation) == 12 &&
                DXGK_OFFSET(D3DKMDT_VIDPN_PRESENT_PATH, VidPnTargetColorBasis) == 44 &&

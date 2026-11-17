@@ -27,6 +27,16 @@
  * "bttest after" (after a restart): the radio again, both devices
  * remembered as paired without an inquiry, the HID service still on, the
  * mouse back (reconnected with its stored link key) and moving.
+ * "bttest reconnect" (the mouse connected): at "[BT] step: away" the test
+ *    takes the mouse out of range (tools/btpeer.py: its link drops), and
+ *    BluetoothGetDeviceInfo must say it is disconnected; at "[BT] step:
+ *    back" it comes back and connects to the PC by itself, as a mouse moved
+ *    after sleep does: it must be connected again (bthport accepting its
+ *    Connection Request and the HID channels it opens) and moving.
+ * "bttest settings" (after "bttest remove"): at "[BT] step: settings"
+ *    the test pairs the mouse in Settings' Bluetooth page (a search, Down,
+ *    Enter); it must be paired with its HID service on, and move; then it
+ *    is removed again.
  * "bttest remove": BluetoothRemoveDevice forgets both; the device list
  * no longer has them paired and the mouse's HID collection is gone.
  * "bttest audio": the headset again (an inquiry, pairing by PIN), its
@@ -294,6 +304,55 @@ static int audio(HANDLE r, int remove)
     return g_fail != 0;
 }
 
+/* Whether the mouse's connection is @up within @ms */
+static BOOL mouse_connected(HANDLE r, BOOL up, int ms)
+{
+    for (int t = 0; t <= ms; t += 200) {
+        BLUETOOTH_DEVICE_INFO_ d;
+        memset(&d, 0, sizeof(d));
+        d.dwSize = sizeof(d);
+        d.Address = MOUSE;
+        if (!BluetoothGetDeviceInfo(r, &d) && !d.fConnected == !up) return TRUE;
+        Sleep(200);
+    }
+    return FALSE;
+}
+
+static int reconnect(HANDLE r)
+{
+    check(mouse_connected(r, TRUE, 30000), "the mouse is connected");
+    printf("[BT] step: away\n");
+    fflush(stdout);
+    check(mouse_connected(r, FALSE, 15000), "out of range: BluetoothGetDeviceInfo says it is disconnected");
+    printf("[BT] step: back\n");
+    fflush(stdout);
+    check(mouse_connected(r, TRUE, 30000), "back in range, it connected to the PC by itself");
+    mouse_checks();
+    printf("bttest reconnect: %d passed, %d failed\n", g_pass, g_fail);
+    return g_fail != 0;
+}
+
+static int settings(HANDLE r)
+{
+    BLUETOOTH_DEVICE_INFO_ mouse, headset;
+    printf("[BT] step: settings\n");
+    fflush(stdout);
+    BOOL paired = FALSE;
+    for (int i = 0; i < 600 && !paired; i++) {                  /* (Settings searches, then pairs it: up to 2 minutes) */
+        Sleep(200);
+        search(r, FALSE, FALSE, &mouse, &headset);
+        paired = mouse.dwSize && mouse.fAuthenticated && hid_installed(r, &mouse);
+    }
+    check(paired, "Settings' Bluetooth page paired the mouse and switched its HID service on");
+    if (paired) mouse_checks();
+    printf("[BT] step: close settings\n");
+    fflush(stdout);
+    ULONGLONG a = MOUSE;
+    check(!BluetoothRemoveDevice(&a), "BluetoothRemoveDevice: the mouse forgotten again");
+    printf("bttest settings: %d passed, %d failed\n", g_pass, g_fail);
+    return g_fail != 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "";
@@ -301,6 +360,8 @@ int main(int argc, char **argv)
     HANDLE r = radio();
     if (!r) { printf("bttest: %d passed, %d failed\n", g_pass, g_fail); return 1; }
     if (!strcmp(mode, "audio") || !strcmp(mode, "audio-remove")) return audio(r, mode[5] != 0);
+    if (!strcmp(mode, "reconnect")) return reconnect(r);
+    if (!strcmp(mode, "settings")) return settings(r);
     if (!strcmp(mode, "remove")) {
         ULONGLONG a = MOUSE, b = HEADSET;
         check(!BluetoothRemoveDevice(&a) && !BluetoothRemoveDevice(&b), "BluetoothRemoveDevice: both forgotten");

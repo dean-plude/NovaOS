@@ -25,6 +25,14 @@
  *   EAP-TLV Result (success)       -> Result (success)
  *   Success (outside the tunnel)   -> the MSK from the tunnel's keys
  *
+ * EAP-TLS (RFC 5216) is the same handshake without the inside: Request/
+ * EAP-TLS Start, the ClientHello, the server's flight with its
+ * CertificateRequest, the station's Certificate (from the personal store),
+ * ClientKeyExchange, CertificateVerify (signed with the certificate's
+ * key), ChangeCipherSpec and Finished, the server's ChangeCipherSpec and
+ * Finished (acknowledged), then Success: the MSK from the same label.
+ * A server that refuses the certificate sends a TLS alert, then Failure.
+ *
  * Written here rather than vendored: hostapd's wpa_supplicant (BSD) has
  * these, but as a user-mode program with its own event loop, TLS layer and
  * configuration, far more than this one method needs.  The cryptography
@@ -38,6 +46,7 @@
 #include "../ke/printf.h"
 #include "mbedtls/sha1.h"
 #include "mbedtls/des.h"
+#include "mbedtls/ssl.h"
 
 #define EAPOL_VERSION   2
 #define EAPOL_EAP       0
@@ -51,6 +60,7 @@
 #define TYPE_IDENTITY   1
 #define TYPE_NOTIFICATION 2
 #define TYPE_NAK        3
+#define TYPE_TLS        EAP_METHOD_TLS
 #define TYPE_PEAP       25
 #define TYPE_MSCHAPV2   26
 #define TYPE_TLV        33
@@ -237,6 +247,18 @@ bool EapStart(EapPeer *p, const char *identity, const char *password)
         return false;
     strcpy(p->identity, identity);
     strcpy(p->password, password);
+    p->method = TYPE_PEAP;
+    p->cert = -1;
+    return true;
+}
+
+bool EapStartCert(EapPeer *p, const char *identity, int cert)
+{
+    EapClear(p);
+    if (!identity || !identity[0] || strlen(identity) >= EAP_NAME_MAX || cert < 0) return false;
+    strcpy(p->identity, identity);
+    p->method = TYPE_TLS;
+    p->cert = cert;
     return true;
 }
 
@@ -278,7 +300,9 @@ static int eap_fail(EapPeer *p, int result, const char *why)
     return EAP_FAILURE;
 }
 
-/* The next PEAP fragment of what TLS has to send (or an acknowledgment, if nothing) */
+/* The next PEAP or EAP-TLS fragment of what TLS has to send (or an
+ * acknowledgment, if nothing): the flags byte is the same for both (PEAP
+ * puts its version in the low bits, 0 here) */
 static int peap_send(EapPeer *p, UINT8 *reply, UINT32 *reply_len)
 {
     UINT8 frag[6 + EAP_FRAGMENT];
@@ -293,7 +317,7 @@ static int peap_send(EapPeer *p, UINT8 *reply, UINT32 *reply_len)
     if (k) memcpy(frag + o, p->out + p->out_off, k);
     p->out_off += k;
     if (p->out_off == p->out_len) p->out_len = p->out_off = 0;
-    *reply_len = response(p, TYPE_PEAP, frag, o + k, reply);
+    *reply_len = response(p, p->method, frag, o + k, reply);
     return EAP_REPLY;
 }
 
@@ -421,7 +445,7 @@ static int inner(EapPeer *p, const UINT8 *m, UINT32 n, UINT8 *reply, UINT32 *rep
     return EAP_DROP;
 }
 
-/* A PEAP request: a fragment of TLS, or the start */
+/* A PEAP or EAP-TLS request: a fragment of TLS, or the start */
 static int peap(EapPeer *p, const UINT8 *d, UINT32 n, UINT8 *reply, UINT32 *reply_len)
 {
     if (!n) { p->why = "a PEAP request without flags"; return EAP_DROP; }
@@ -430,8 +454,8 @@ static int peap(EapPeer *p, const UINT8 *d, UINT32 n, UINT8 *reply, UINT32 *repl
     n--;
     if (flags & PEAP_S) {                           /* (a new tunnel) */
         if (p->tls) TlsEapFree(p->tls);
-        p->tls = TlsEapNew();
-        if (!p->tls) return eap_fail(p, EAP_RESULT_FAILED, "no TLS session for PEAP (TLS is not available)");
+        p->tls = TlsEapNew(p->method == TYPE_TLS ? p->cert : -1);
+        if (!p->tls) return eap_fail(p, EAP_RESULT_FAILED, "no TLS session (TLS is not available)");
         p->tunnel = p->chap_sent = p->chap_ok = p->result_ok = false;
         p->in_len = p->out_len = p->out_off = 0;
         int h = TlsEapHandshake(p->tls);            /* (the ClientHello) */
@@ -464,6 +488,8 @@ static int peap(EapPeer *p, const UINT8 *d, UINT32 n, UINT8 *reply, UINT32 *repl
         if (h < 0) {
             if (TlsEapUntrusted(p->tls))
                 return eap_fail(p, EAP_RESULT_UNTRUSTED, "the server's certificate is not from a trusted root");
+            if (p->method == TYPE_TLS && h == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE)
+                return eap_fail(p, EAP_RESULT_CERT_REFUSED, "the server refused the certificate (a TLS alert)");
             return eap_fail(p, EAP_RESULT_FAILED, "the TLS handshake failed");
         }
         if (h == 1) {
@@ -473,6 +499,7 @@ static int peap(EapPeer *p, const UINT8 *d, UINT32 n, UINT8 *reply, UINT32 *repl
         tls_collect(p);
         if (!p->tunnel || p->out_len) return peap_send(p, reply, reply_len);
     }
+    if (p->method == TYPE_TLS) return peap_send(p, reply, reply_len);  /* (EAP-TLS: nothing inside; acknowledged) */
     /* inside the tunnel: the inner request (one per PEAP message) */
     UINT8 m[512];
     int k = TlsEapRead(p->tls, m, sizeof(m));
@@ -497,7 +524,7 @@ int EapReceive(EapPeer *p, const UINT8 *frame, UINT32 len, UINT8 *reply, UINT32 
         return EAP_DROP;
     }
     if (e[0] == EAP_SUCCESS_CODE) {
-        if (!p->tunnel || !p->chap_ok || !p->result_ok) {
+        if (!p->tunnel || (p->method == TYPE_PEAP && (!p->chap_ok || !p->result_ok))) {
             /* (a Success the method never earned: no keys, so nothing to trust) */
             return eap_fail(p, EAP_RESULT_FAILED, "an EAP-Success before the inner method succeeded");
         }
@@ -508,7 +535,10 @@ int EapReceive(EapPeer *p, const UINT8 *frame, UINT32 len, UINT8 *reply, UINT32 
         return EAP_SUCCESS;
     }
     if (e[0] == EAP_FAILURE_CODE) {
-        if (p->result == EAP_RESULT_NONE)
+        if (p->result == EAP_RESULT_NONE && p->method == TYPE_TLS)
+            eap_fail(p, p->tls && !p->tunnel ? EAP_RESULT_CERT_REFUSED : EAP_RESULT_FAILED,
+                     "the server sent EAP-Failure");
+        else if (p->result == EAP_RESULT_NONE)
             eap_fail(p, p->chap_sent && !p->chap_ok ? EAP_RESULT_BAD_PASSWORD : EAP_RESULT_FAILED,
                  "the server sent EAP-Failure");
         return EAP_FAILURE;
@@ -527,9 +557,11 @@ int EapReceive(EapPeer *p, const UINT8 *frame, UINT32 len, UINT8 *reply, UINT32 
         *reply_len = response(p, TYPE_NOTIFICATION, NULL, 0, reply);
         return EAP_REPLY;
     case TYPE_PEAP:
-        return peap(p, d, n, reply, reply_len);
-    default: {                                      /* (EAP-TLS, TTLS, ...: not yet; PEAP instead) */
-        UINT8 want = TYPE_PEAP;
+    case TYPE_TLS:
+        if (type == p->method) return peap(p, d, n, reply, reply_len);
+        __attribute__((fallthrough));               /* (the other one: a Nak naming this sign-in's) */
+    default: {                                      /* (TTLS, EAP-FAST, ...: not NovaOS's; its own method instead) */
+        UINT8 want = p->method;
         *reply_len = response(p, TYPE_NAK, &want, 1, reply);
         return EAP_REPLY;
     }

@@ -919,12 +919,15 @@ static DWORD WINAPI connect_thread(void *p)
     d.bSecurityEnabled = j->c.key[0] != 0 || j->c.eap != NOVAWLAN_EAP_NONE;
     notify(&j->g, ACM_CONNECTION_START, &d, sizeof(d));
     LONG_PTR r = NtNovaSockCtl(0, NOVAWLAN_CONNECT, (ULONG_PTR)j->i, &j->c);
-    d.wlanReasonCode = reason_of(r);
-    if (r != NOVAWLAN_OK) notify(&j->g, ACM_CONNECTION_ATTEMPT_FAIL, &d, sizeof(d));
-    notify(&j->g, ACM_CONNECTION_COMPLETE, &d, sizeof(d));
+    GUID g = j->g;
     memset(j, 0, sizeof(*j));                                   /* (the passphrase) */
     HeapFree(GetProcessHeap(), 0, j);
+    /* (finished before anyone hears so: a program may connect again as
+     * soon as connection_complete arrives, as on Windows) */
     InterlockedExchange(&g_connecting, 0);
+    d.wlanReasonCode = reason_of(r);
+    if (r != NOVAWLAN_OK) notify(&g, ACM_CONNECTION_ATTEMPT_FAIL, &d, sizeof(d));
+    notify(&g, ACM_CONNECTION_COMPLETE, &d, sizeof(d));
     return 0;
 }
 

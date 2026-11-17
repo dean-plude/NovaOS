@@ -1937,7 +1937,7 @@ USERAPI BOOL SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy, UINT
     if (!W_quiet(h) && hwnd_foreign(h)) return x_set_pos(h, after, x, y, cx, cy, flags);   /* another process's window */
     Wnd *w = W(h);
     if (!w) return FALSE;
-    if (!w->parent && w->foreign_parent && !(flags & SWP_NOMOVE)) {
+    if (!w->parent && (w->foreign_parent || w->kid) && !(flags & SWP_NOMOVE)) {
         /* embedded in another process's window: a place in its parent's client area */
         POINT o;
         if (embed_origin(w, &o, NULL)) { x += o.x; y += o.y; }

@@ -32,6 +32,8 @@ int  TlsRootCount(void);
 int  TlsUserRootCount(void);
 /* Display name of root i (its CN, else O/OU); *user set for imported roots. */
 bool TlsRootName(int i, char *buf, int cap, bool *user);
+/* Root i's certificate as DER (for keeping the imported ones: net.c) */
+bool TlsRootCert(int i, const UINT8 **der, UINT32 *len);
 /* Import CA certificates (PEM, one or more; or a single DER certificate)
  * as trusted roots.  Returns the number added (0 with *err set if none). */
 int  TlsImportRoots(const void *data, UINT32 len, char *err, int err_cap);
@@ -69,9 +71,16 @@ const char *TlsErrorText(TlsConn *c, int err, char *buf, int cap);
  * files (certutil -importpfx; net/pfx.h), for client authentication.
  * Called with the network lock held (net.c's NetImportPfx and friends).
  * TlsImportPfx returns 1 (the certificate's common name in @name), or 0
- * with @err set.  Lasts until reboot. */
+ * with @err set.  net.c keeps the store in the registry: TlsPersonalExport
+ * gives entry i's chain (its certificates' DER one after another, the
+ * certificate first) and then its private key's DER in @out (lengths in
+ * *chain_len, *key_len; 0 if they do not fit), and TlsPersonalAdd takes
+ * them back at the next start (1, or 0 with @err set). */
 int         TlsImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
                          int err_cap);
+int         TlsPersonalExport(int i, UINT8 *out, UINT32 cap, UINT32 *chain_len, UINT32 *key_len);
+int         TlsPersonalAdd(const void *chain_der, UINT32 chain_len, const void *key_der, UINT32 key_len, char *name,
+                           int name_cap, char *err, int err_cap);
 int         TlsPersonalCount(void);
 bool        TlsPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap);
 /* The certificate for @user (its common name, or the name without a

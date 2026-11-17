@@ -77,6 +77,16 @@ static const UINT8 g_shared_dacl[] = {
 };
 _Static_assert(sizeof(g_shared_dacl) == 96, "the shared folders' DACL size");
 
+/* System32\config (the registry's hive, with the SAM's password hashes
+ * and HKLM\SECURITY's private keys): SYSTEM and Administrators only, as
+ * Windows has it */
+static const UINT8 g_admin_dacl[] = {
+    2, 0, 52, 0, 2, 0, 0, 0,
+    ROOT_ACE(0x03, 20, 0x001F01FFu), 1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0,                   /* SYSTEM */
+    ROOT_ACE(0x03, 24, 0x001F01FFu), 1, 2, 0, 0, 0, 0, 0, 5, 0x20, 0, 0, 0, 0x20, 2, 0, 0,  /* Administrators */
+};
+_Static_assert(sizeof(g_admin_dacl) == 52, "the config folder's DACL size");
+
 static bool named(const RamNode *n, const char *s)
 {
     const char *a = n->name;
@@ -95,7 +105,7 @@ static const UINT8 *builtin_dacl(const RamNode *n)
     if (p == RamfsRoot()) return named(n, "Windows") || named(n, "Programs") ? g_system_dacl : NULL;
     if (g == RamfsRoot() && named(p, "Windows")) return named(n, "Temp") ? g_shared_dacl : NULL;
     if (gg == RamfsRoot() && named(g, "Windows") && named(p, "System32"))
-        return named(n, "Tasks") || named(n, "CertStore") ? g_shared_dacl : NULL;
+        return named(n, "Tasks") || named(n, "CertStore") ? g_shared_dacl : named(n, "config") ? g_admin_dacl : NULL;
     if (gg && gg->parent == RamfsRoot() && named(gg, "Windows") && named(g, "System32") && named(p, "spool"))
         return named(n, "PRINTERS") ? g_shared_dacl : NULL;
     return NULL;

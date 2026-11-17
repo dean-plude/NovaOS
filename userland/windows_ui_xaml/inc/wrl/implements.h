@@ -28,6 +28,9 @@ struct ImplementsMarker {};
 struct ChainInterfacesMarker {};
 struct MixInMarker {};
 struct ComposableBaseMarker {};
+/* what every RuntimeClass derives from (the phone library's InspectableClass
+ * macros check for it, SatMacros.h) */
+struct RuntimeClassBase {};
 template <class T> struct IsFlags { static const bool value = false; };
 template <unsigned int f> struct IsFlags<RuntimeClassFlags<f>> { static const bool value = true; };
 template <unsigned int N> struct NilAt {};
@@ -279,7 +282,8 @@ class __declspec(novtable) RuntimeClass
     : public Details::DeriveAll<0, Ts...>,
       public Details::Conditional<
           (Details::FirstFlags<Ts...>::type::value & WinRt) && !(Details::FirstFlags<Ts...>::type::value & InhibitWeakReference),
-          IWeakReferenceSource, Details::NilAt<1000>>::type
+          IWeakReferenceSource, Details::NilAt<1000>>::type,
+      public Details::RuntimeClassBase
 {
 public:
     typedef RuntimeClass RuntimeClassT;
@@ -298,7 +302,12 @@ public:
 
     STDMETHOD(QueryInterface)(REFIID riid, void **ppv) override { return InternalQueryInterface(riid, ppv); }
     STDMETHOD_(ULONG, AddRef)() override { return InternalAddRef(); }
-    STDMETHOD_(ULONG, Release)() override { return InternalRelease(); }
+    STDMETHOD_(ULONG, Release)() override
+    {
+        unsigned long r = InternalRelease();
+        if (r == 0) delete this;
+        return r;
+    }
 
     STDMETHOD(GetIids)(ULONG *count, IID **iids)
     {
@@ -403,13 +412,13 @@ protected:
     }
 #endif
     unsigned long InternalAddRef() throw() { return static_cast<unsigned long>(::InterlockedIncrement(&refcount_)); }
+    /* the count less one (its weak references cleared at none); Release
+     * deletes the object then, as WRL's does: a class's own Release (the
+     * phone library's ReferenceTrackerRuntimeClass) may take it back first */
     unsigned long InternalRelease() throw()
     {
         long r = ::InterlockedDecrement(&refcount_);
-        if (r == 0) {
-            if (weak_) weak_->Clear();
-            delete this;
-        }
+        if (r == 0 && weak_) weak_->Clear();
         return static_cast<unsigned long>(r);
     }
     unsigned long DecrementReference() throw() { return static_cast<unsigned long>(::InterlockedDecrement(&refcount_)); }

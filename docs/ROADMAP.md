@@ -912,7 +912,10 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   trusted roots, the 4-way handshake from the PMK the sign-in gives. The
   seventh is EAP-TLS: a certificate and its key from a PKCS #12 file
   (`certutil -importpfx`, `kernel/net/pfx.c`) sign in with
-  `netsh wlan connect name=SSID user=NAME` and no password. All seven are
+  `netsh wlan connect name=SSID user=NAME` and no password. The eighth
+  keeps imported roots and certificates across restarts (in the
+  registry, the private keys where no program may read them) and gives
+  Settings' Wi-Fi page a user name and password box. All eight are
   tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
   devices suite's `wifi` boot; its `NovaCorp` network's authentication
   server is the driver too). Still needed: WPA3-Enterprise, Enterprise
@@ -1616,10 +1619,21 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   error service is given, and the name of a type the parser could not
   resolve.  Test `wuxamltest`.  The failure is Calculator's `Pivot`
   (the history and memory panel), a class of `Microsoft.UI.Xaml.Phone.dll`,
-  which is closed source and not in NovaOS's framework.  Next: a NovaOS
+  which NovaOS's framework did not build.  Next: a NovaOS
   `Pivot` (with `PivotItem` and the header parts its `generic.xaml`
   template names), then the CI check that it computes `2 + 2`, which
   ticks this step.
+  Twenty-ninth part done (Pulsar item 3, twenty-third slice): the
+  `Pivot`.  `Microsoft.UI.Xaml.Phone.dll` is open source after all
+  (WinUI's phone library, MIT), so NovaOS builds its `Pivot`,
+  `PivotItem`, header and panel parts and automation peers into the
+  framework, with the library's type tables, which the parser now reads
+  to find a `Pivot` named in markup.  Test `wuxamltest`.  Making the
+  `Pivot` stops at its base class, the framework's `ItemsControl`, which
+  NovaOS does not build yet.  Next: the framework's `ItemsControl` (its
+  item collection, container generator, items presenter and `Selector`),
+  then the CI check that Calculator computes `2 + 2`, which ticks this
+  step.
 
 ---
 

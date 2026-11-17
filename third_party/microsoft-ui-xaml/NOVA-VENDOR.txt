@@ -377,6 +377,28 @@ dxaml/lib's FrameworkApplication_Partial.cpp (LoadComponent),
 Control_Partial.cpp (ApplyTemplate) and DataTemplate_Partial.cpp
 (LoadContent) log the failure they turn into E_XAMLPARSEFAILED.
 
+For Calculator's Pivot (Pulsar item 3, twenty-third slice), added from
+the same commit, unchanged but for line endings (LF): the phone library,
+dxaml/phone (lib: every source and header but precomp.h and precomp.cpp,
+whose quoted include would shadow NovaOS's own, userland/windows_ui_xaml/
+src/phone/precomp.h; inc; idl's other files), which is Microsoft.UI.Xaml.Phone.dll's source in the
+Windows App SDK (earlier notes called it closed; it is in this tree); the
+Pivot's state machine and curves, xcp/components/pivot (less its unit
+tests); SatelliteBase's other sources and headers; and the DLL's
+project, entry and generated type metadata, xcp/dxaml/dllsrv/exts (phone/
+XamlTypeInfo.cpp, XamlTypeInfo.g.cpp, XamlTypeInfo.g.h, XamlTypeInfo.g.rc,
+the .rc, .def and CreatorMap.inl, and module.cpp).  Changed, marked
+"NovaOS:": components/ExtMetadataProvider/XamlTypeInfoProvider.cpp reads
+Microsoft.UI.Xaml.Phone.dll's type tables from data NovaOS builds into
+the framework (userland/windows_ui_xaml/src/phone/phone_metadata.cpp,
+from XamlTypeInfo.g.rc) and asks the framework's own dependency locator
+for its XamlRuntimeType, since the library is part of the framework's
+module, not a DLL of its own.  phone/lib/Pivot_Partial.h overrides
+IsHeaderItemsCarouselEnabled and GetPivotPanelMultiplier unqualified
+(clang refuses MSVC's qualified override names) and once for both
+callback interfaces; SatelliteBase/inc/ValueBoxer.h makes
+CreatePropertyValue public, as MSVC's lookup lets callers reach it.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

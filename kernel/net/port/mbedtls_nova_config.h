@@ -3223,7 +3223,7 @@
  *
  * Uncomment to enable generic public key write functions.
  */
-//#define MBEDTLS_PK_WRITE_C
+#define MBEDTLS_PK_WRITE_C  /* NovaOS: the personal store's keys, kept in the registry across restarts (net/net.c) */
 
 /**
  * \def MBEDTLS_PKCS5_C

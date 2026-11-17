@@ -20,6 +20,10 @@
  *   - an Image loaded from markup, its Source URI made a BitmapImage,
  *     measured (its image brush loads the source);
  *   - a Popup loaded from markup, holding its child, closed;
+ *   - the phone library's Pivot and PivotItem (Calculator's main page has
+ *     one) by their Windows names, their statics' dependency properties,
+ *     and a Pivot from markup found by the parser (its making does not
+ *     finish yet: its base, ItemsControl, does not build);
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
  *     ButtonAutomationPeer), the same one from FromElement after, and the
@@ -429,6 +433,7 @@ static void windows_checks()
           FAILED(reader->Load(wrl_wrappers::HStringReference(L"<Grid " XMLNS L"><NoSuchElement/></Grid>").Get(),
                               unknownObject.GetAddressOf())) && !unknownObject);
 
+
     /* the automation peers a page's elements make (Calculator asks for them):
      * the text block's and the button's, kept by the element */
     namespace wuxap = ABI::Windows::UI::Xaml::Automation::Peers;
@@ -798,6 +803,42 @@ static void navigation_transition_checks()
           identity(entranceBase.Get()) == identity(entrance.Get()));
 }
 
+/* the phone library's Pivot, as Calculator's main page has one (its history
+ * and memory panel): Pivot and PivotItem by their Windows names, their
+ * statics and dependency properties (registered by the library's generated
+ * factories); and a Pivot from markup, which the parser now finds through
+ * the framework's XamlLibMetadataProvider (on Windows
+ * Microsoft.UI.Xaml.Phone.dll's type tables) and asks the library to make.
+ * A Pivot is composed over the framework's ItemsControl, which does not
+ * build yet, so making one fails for now (cleanly: the half-made Pivot is
+ * released); the result is printed, not checked */
+static void pivot_checks()
+{
+    /* the phone library's factories answer its own (Microsoft) interfaces;
+       markup reaches them through the library's type tables */
+    namespace muxc = ABI::Microsoft::UI::Xaml::Controls;
+    ctl::ComPtr<muxc::IPivotStatics> pivotStatics;
+    ctl::ComPtr<muxc::IPivotItemStatics> itemStatics;
+    ctl::ComPtr<ABI::Microsoft::UI::Xaml::IDependencyProperty> selectedIndex, header;
+    CHECK_HR("the phone library's Pivot statics",
+             statics(L"Microsoft.UI.Xaml.Controls.Pivot", pivotStatics.GetAddressOf()));
+    CHECK("Pivot.SelectedIndexProperty registered", pivotStatics &&
+          SUCCEEDED(pivotStatics->get_SelectedIndexProperty(selectedIndex.GetAddressOf())) && selectedIndex);
+    CHECK_HR("the phone library's PivotItem statics",
+             statics(L"Microsoft.UI.Xaml.Controls.PivotItem", itemStatics.GetAddressOf()));
+    CHECK("PivotItem.HeaderProperty registered", itemStatics &&
+          SUCCEEDED(itemStatics->get_HeaderProperty(header.GetAddressOf())) && header);
+
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> pivotObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<Pivot " XMLNS L"><PivotItem Header='History'/>"
+                                                    L"<PivotItem Header='Memory'/></Pivot>").Get(),
+                     pivotObject.GetAddressOf()) : E_FAIL;
+    printf("  (a Pivot from markup: hr=0x%08lx; its base, the framework's ItemsControl, does not build yet)\n",
+           (unsigned long)hr);
+}
+
 /* the framework started as xamlapptest starts it */
 static bool s_launched, s_exit_called;
 static DWORD s_main_thread;
@@ -838,6 +879,7 @@ public:
         s_launched = true;
         windows_checks();
         navigation_transition_checks();
+        pivot_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

@@ -130,6 +130,9 @@ private:
 
 class ValueBoxer
 {
+    // NovaOS: public, as MSVC lets the phone library's AutomationHelper call
+    // it (clang checks the access of the specializations below)
+public:
     template<class T>
         static _Check_return_ HRESULT CreatePropertyValue(_In_ T value, _Outptr_ IInspectable** ppPropertyValue)
         {

@@ -431,6 +431,7 @@ void __attribute__((noreturn)) KiSystemStartup(const BootInfo *info_phys)
     /* Windows programs: SSE for user code, NT services, loader */
     UmInit();
     NetRestoreConfig();                   /* manual network settings (kept in the registry) */
+    NetRestoreCertificates();             /* imported roots and personal certificates (registry) */
     FwRestore();                          /* the firewall's profiles and rules (registry) */
     WfpRestore();                         /* ... and the filtering engine's persistent filters */
 

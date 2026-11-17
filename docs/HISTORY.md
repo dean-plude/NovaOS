@@ -16664,7 +16664,7 @@ create one (`xaml: cannot create NAME: type not resolved`).
 ## Bluetooth: Settings' Bluetooth & devices page and reconnects the device starts
 
 The rest of roadmap step 28.2 that QEMU can show
-([drivers.md](../drivers.md#bluetooth-bthusb-and-the-host-stack)).
+([drivers.md](drivers.md#bluetooth-bthusb-and-the-host-stack)).
 
 - **Device-started reconnects** (`kernel/nt/bthport.c`, `hidbth.c`,
   `bthaudio.c`): the host used to refuse every Connection Request, so a
@@ -16689,6 +16689,32 @@ The rest of roadmap step 28.2 that QEMU can show
   Start, "bluetooth", Down, Enter, then moving the cursor).
 - **Not yet:** pairing a real mouse and headset on the T14 with Intel's
   driver, including after sleep (Dean's check that ticks 28.2).
+
+## Windows Calculator's launch, twenty-third slice: the Pivot
+
+The twenty-third part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's main page stopped on
+its `Pivot`, a class of `Microsoft.UI.Xaml.Phone.dll`.  That library is
+open source after all: it is WinUI's phone library (MIT), with its
+generated type metadata in the same tree.  NovaOS now vendors it and
+builds the `Pivot`, `PivotItem`, their header and panel parts, the
+slide-in effect, the Pivot's state machine and its automation peers into
+the framework, beside the navigation transitions it already had.  The
+library's type tables (on Windows, resources in the DLL) are built in as
+data, so the framework's `XamlLibMetadataProvider` reads them and the
+parser finds a `Pivot` named in markup as it does on Windows.  NovaOS's
+WRL now deletes an object only in `Release`, as WRL does, and ole32 gained
+`RoClearError`.
+
+- **Tests:** `wuxamltest` gets the `Pivot`'s and `PivotItem`'s statics and
+  their `SelectedIndex` and `Header` dependency properties, and loads
+  markup naming a `Pivot`, which the parser resolves through the phone
+  library's type tables.
+- **Found:** making the `Pivot` stops at its base class, the framework's
+  `ItemsControl` (with its item collection, container generator, items
+  presenter and `Selector`), which NovaOS does not build yet.  That is the
+  next part.  The page does not draw yet.
 
 ## GPU objects shared by NT handle, and 32-bit programs' D3DKMT calls
 
@@ -16972,6 +16998,21 @@ a `DOMAIN\user` name and an untrusted server.  Not yet: EAP-TLS (a client
 certificate), WPA3-Enterprise, Enterprise profiles in `wlanapi.dll` and
 Settings, and PEAP's cryptobinding; the real card needs the T14.
 
+## A window parented across processes no longer lands at the wrong place
+
+The `xpwin` selftest failed now and then on 64-bit (never 32-bit) with
+every child window off by the same amount: "child at 30,40 200x150,
+wanted 151,202", the numbers of its place in the parent but no parent
+origin added.  The host's `MoveWindow` on a window another process made
+and parented (`SetParent`) is answered by that process from its
+sent-message path, while the desktop's news that the window is now
+embedded (`WM_NOVA_EMBED`) comes through the kernel message queue.  When
+the process took the sent call first it did not yet know the window was
+embedded, read the place as a screen position and kept it, and nothing
+corrected it afterwards.  `SetWindowPos` now asks the kernel whether the
+window is embedded when it has not heard yet, so a place given to an
+embedded window is always read in its parent's client area.
+
 ## Packaged apps in the shell, third part: suspended apps frozen
 
 A follow-up to item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
@@ -17030,6 +17071,47 @@ step 2 ([design](design/intel-gpu.md)).
 - **Tested by** the devices suite's `viogpudo` boot
   (`tests/selftest/devices/viogpudo`; the package is fetched by
   `tools/drivertest/viogpudo.py`).
+
+## Wi-Fi: imported certificates survive a restart, and Settings signs in to Enterprise networks
+
+Eighth part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)).  A trusted root added with `certutil
+-addstore root` and a certificate imported with `certutil -importpfx`
+lasted until NovaOS restarted, so a WPA2-Enterprise network had to be set
+up again after every restart, and Settings could join one only with a
+certificate.
+
+- **Kept in the registry.**  Imported roots go where Windows keeps the
+  machine's, `HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT\Certificates\<SHA-1
+  thumbprint>`, value `Blob` in Windows' serialized form (one
+  `CERT_CERT_PROP_ID` property with the DER).  The personal store's
+  certificates and private keys go under `HKLM\SECURITY\NovaOS\Personal`
+  (the chain's DER and the key's, written with Mbed TLS's
+  `MBEDTLS_PK_WRITE_C`, now on in the kernel), in import order, so
+  "the newest certificate" stays the same one.  At boot
+  `NetRestoreCertificates` (`kernel/net/net.c`) puts them back once the
+  registry is loaded and logs how many.  `certutil` no longer says
+  "Lasts until reboot".
+- **Private keys stay private.**  No program may open `HKLM\SECURITY`
+  (`um_registry.c` refuses it as it refuses the SAM; on Windows only
+  SYSTEM may), and `C:\Windows\System32\config`, which holds the hive
+  file, now has Windows' DACL: SYSTEM and Administrators only, where
+  before every user could read it (and the SAM's password hashes in it).
+- **Settings' Wi-Fi page** shows two boxes for a WPA2-Enterprise network,
+  User name and Password: both filled sign in with PEAP, a user name alone
+  with that user's certificate, both empty with the newest one (EAP-TLS).
+  Tab or a click moves between them; the notes say what is missing.
+
+The `wifi` boot gains two tests: `wlantest settings enterprise`, which
+waits while the test chooses NovaCorp in Settings and types alice's user
+name and password, then checks the WPA2-Enterprise connection through
+`wlanapi.dll`; and a restart after which the boot log says the root and
+both certificates were restored, `certutil -store my` lists them and
+alice signs in with EAP-TLS again.  The host test
+(`tests/tools/test_eap_peap.py`) writes each PKCS #12 file's chain and
+key as the registry keeps them and reads them back.  Not yet:
+WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, `certutil
+-delstore`, and PEAP's cryptobinding; the real card needs the T14.
 
 <!-- END generated:history -->
 

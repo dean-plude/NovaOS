@@ -93,7 +93,9 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        '`wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
        'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
        'reason, joining by profile and by SSID, the current connection); Settings\' Wi-Fi page lists the networks and '
-       'joins NovaNet with its passphrase typed as a person would; disabling the device deletes the port, stops the data path and closes the '
+       'joins NovaNet with its passphrase typed as a person would, then NovaCorp with alice\'s user name and '
+       'password in its two boxes; after a restart the NovaCorp root and both certificates are back from the registry '
+       'and alice signs in with EAP-TLS again; disabling the device deletes the port, stops the data path and closes the '
        'adapter')
 import time
 
@@ -130,6 +132,26 @@ def _join_in_settings(nova):
     nova.qmp.key('down')
     time.sleep(1)
     nova.qmp.type('nova-wpa2-passphrase\n')
+
+
+def _sign_in_in_settings(nova):
+    """Settings' Wi-Fi page again: Down four times chooses NovaCorp (the
+    weakest), alice in the user name box, Tab, her PEAP password, Enter"""
+    nova.qmp.key('meta_l', 's')
+    time.sleep(2)
+    nova.qmp.type('wi-fi')
+    time.sleep(2)
+    nova.qmp.key('ret')
+    nova.sr.wait('[SETTINGS] Wi-Fi: 4 network(s) found', 60)
+    time.sleep(1)
+    for _ in range(4):
+        nova.qmp.key('down')
+        time.sleep(0.5)
+    nova.qmp.type('alice')
+    time.sleep(0.5)
+    nova.qmp.key('tab')
+    time.sleep(0.5)
+    nova.qmp.type('nova-peap-password\n')
 
 
 def _close_settings(nova):
@@ -390,6 +412,24 @@ TESTS = [
          acts=[(r'wlantest: join NovaNet in Settings', _join_in_settings),
                (r'wlantest: connected through Settings', _close_settings)],
          boot_expect=[r'\[SETTINGS\] Wi-Fi: 4 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
+    Test('wifi settings enterprise', 'wlantest settings enterprise', [r'wlantest settings: \d+ passed, 0 failed'],
+         timeout=300,
+         acts=[(r'wlantest: join NovaCorp in Settings', _sign_in_in_settings),
+               (r'wlantest: connected through Settings', _close_settings)],
+         boot_expect=[r'\[EAP\] WdiTest: signed in as alice with PEAP \(MS-CHAPv2\)(?:.|\n)*'
+                      r'\[SETTINGS\] Wi-Fi: connected to NovaCorp']),
+    # (the trusted NovaCorp root and both personal certificates are kept in the registry)
+    Test('wifi certificates restart', 'shutdown /r /t 0',
+         [r'\[TLS\] Restored 1 imported root and 2 personal certificates from the registry'], reboot=True),
+    Test('wifi certificates kept', 'certutil -store my',
+         [r'Personal \(My\):\n +1  alice  \(issued by NovaCorp Test Root; private key present\)\n'
+          r' +2  mallory  \(issued by mallory; private key present\)\n2 certificates\.'], builtin=True),
+    Test('wifi eap-tls after restart', 'netsh wlan connect name=NovaCorp user=alice',
+         [r'\[EAP\] WdiTest: signed in as alice with EAP-TLS \(certificate alice\) to server radius\.novacorp\.test',
+          r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
+          r'Connection request was completed successfully\.'], builtin=True),
+    Test('wifi eap-tls after restart disconnect', 'netsh wlan disconnect',
+         [r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] wditest: station port 1 deleted',
           r'\[DbgPrint\] wditest: data path port 1 deleted',

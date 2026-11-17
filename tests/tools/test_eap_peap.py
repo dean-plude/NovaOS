@@ -85,6 +85,7 @@ class EapPeapTests(unittest.TestCase):
         for name in ('aes', '3des'):
             if name in pfx:
                 self.assertEqual(pfx[name].splitlines()[-1], 'pfx ok alice chain 2 key RSA', name)
+                self.assertIn('pfx kept ok', pfx[name], name)   # (the registry's copy reads back: net/tls.c)
                 self.assertTrue(pfx[name + ' wrong'].splitlines()[-1].startswith('pfx error -2'), pfx[name + ' wrong'])
 
 

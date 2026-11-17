@@ -95,6 +95,8 @@ typedef struct {
     WlanBss wifi_bss[WLAN_MAX_BSS];
     char wifi_ssid[33];              /* ... the network being joined */
     char wifi_key[64];               /* ... its passphrase, as typed (wiped once used) */
+    char wifi_user[64];              /* ... an Enterprise network's user name, as typed */
+    int wifi_field;                  /* ... which box typing goes to on an Enterprise network: 0 user, 1 password */
     char wifi_note[160];             /* ... what the last connection did */
     WlanInfo wifi_info;              /* ... the adapter, as last seen (WlanPeekInfo: never waits) */
     UiScroll sb;                     /* the page's content: pixels down */
@@ -724,33 +726,47 @@ static int page_network(Settings *st, int x, int y, int w)
 
 /* Wi-Fi: the adapter's state, the networks its last scan heard (a scan
  * runs when the page opens and on Refresh), and joining one: choose it
- * (a click, or Up and Down), type its passphrase if it is secured, then
- * Connect (or Enter).  Scans and connections run in the background
+ * (a click, or Up and Down), type its passphrase if it is secured (on a
+ * WPA2-Enterprise network a user name and password, or nothing to sign in
+ * with the certificate in the personal store), then Connect (or Enter).  Scans and connections run in the background
  * through NovaOS's WDI upper edge (kernel/nt/wdi.c), as netsh wlan's do.
  * Layout shared by set_paint + set_mouse. */
 #define WIFI_ROW_H   56
 #define WIFI_SHOWN   6
 #define WIFI_FORM_H  52              /* (below the chosen row: the passphrase and Connect) */
+#define WIFI_FIELD_H 40              /* (an Enterprise network's user name box, above its password) */
 static GdiRect r_wifi_refresh(int x, int y, int w)    { return RECT(x + w - 16 - 96, y + 20, 96, 32); }
 static GdiRect r_wifi_disconnect(int x, int y, int w) { return RECT(x + w - 16 - 96 - 12 - 120, y + 20, 120, 32); }
-static int wifi_row_y(const Settings *st, int y, int i)
-{
-    return y + 88 + i * WIFI_ROW_H + (st->wifi_sel >= 0 && i > st->wifi_sel ? WIFI_FORM_H : 0);
-}
 static bool wifi_secured(const WlanBss *b) { return b->privacy || b->rsn_len; }
-/* WPA2-Enterprise only (802.1X, AKM 1, without PSK or SAE): no key needed
- * when a certificate is in the personal store (EAP-TLS) */
+/* WPA2-Enterprise only (802.1X, AKM 1, without PSK or SAE): a user name
+ * and password (PEAP), or neither when a certificate is in the personal
+ * store (EAP-TLS) */
 static bool wifi_enterprise(const WlanBss *b)
 {
     return (b->akms & (1u << 1)) && !(b->akms & ((1u << 2) | (1u << 8)));
 }
-static GdiRect r_wifi_key(const Settings *st, int x, int y, int w)
+static bool wifi_sel_enterprise(const Settings *st)
+{
+    return st->wifi_sel >= 0 && st->wifi_sel < st->wifi_n && wifi_enterprise(&st->wifi_bss[st->wifi_sel]);
+}
+static int wifi_form_h(const Settings *st) { return WIFI_FORM_H + (wifi_sel_enterprise(st) ? WIFI_FIELD_H : 0); }
+static int wifi_row_y(const Settings *st, int y, int i)
+{
+    return y + 88 + i * WIFI_ROW_H + (st->wifi_sel >= 0 && i > st->wifi_sel ? wifi_form_h(st) : 0);
+}
+static GdiRect r_wifi_user(const Settings *st, int x, int y, int w)
 {
     return RECT(x + 16, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, w - 32 - 112, 32);
 }
+static GdiRect r_wifi_key(const Settings *st, int x, int y, int w)
+{
+    return RECT(x + 16, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4 + (wifi_sel_enterprise(st) ? WIFI_FIELD_H : 0),
+                w - 32 - 112, 32);
+}
 static GdiRect r_wifi_connect(const Settings *st, int x, int y, int w)
 {
-    return RECT(x + w - 16 - 100, wifi_row_y(st, y, st->wifi_sel) + WIFI_ROW_H - 4, 100, 32);
+    GdiRect k = r_wifi_key(st, x, y, w);
+    return RECT(x + w - 16 - 100, k.y, 100, 32);
 }
 
 static void wifi_scan(Settings *st)
@@ -763,12 +779,26 @@ static void wifi_connect(Settings *st)
 {
     if (st->wifi_job || st->wifi_sel < 0 || st->wifi_sel >= st->wifi_n) return;
     const WlanBss *b = &st->wifi_bss[st->wifi_sel];
-    if (wifi_secured(b) && !st->wifi_key[0] && !(wifi_enterprise(b) && NetPersonalCount())) {
+    bool ent = wifi_enterprise(b);
+    if (ent && st->wifi_key[0] && !st->wifi_user[0]) {          /* (PEAP: both) */
+        ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type your user name for \"%s\".", b->ssid);
+        st->wifi_field = 0;
+        return;
+    }
+    if (ent && !st->wifi_key[0] && !NetPersonalCount()) {       /* (EAP-TLS needs a certificate) */
+        ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type your user name and password for \"%s\", or import "
+                  "your certificate (certutil -importpfx).", b->ssid);
+        return;
+    }
+    if (wifi_secured(b) && !ent && !st->wifi_key[0]) {
         ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", b->ssid);
         return;
     }
     strcpy(st->wifi_ssid, b->ssid);
-    if (!WlanConnectStart(0, st->wifi_ssid, wifi_secured(b) ? st->wifi_key : NULL)) {
+    /* (Enterprise: a user name with a password signs in with PEAP; a user
+     * name alone, or nothing, with that user's or the newest certificate) */
+    if (!WlanConnectStartAs(0, st->wifi_ssid, wifi_secured(b) ? st->wifi_key : NULL,
+                            ent && st->wifi_user[0] ? st->wifi_user : NULL)) {
         strcpy(st->wifi_note, "The wireless adapter is busy; try again.");
         return;
     }
@@ -822,9 +852,11 @@ static bool wifi_poll(Settings *st)
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
                                          "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
-        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: import your "
-                                         "certificate (certutil -importpfx), or sign in from the Terminal with netsh "
-                                         "wlan connect user= key=.", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: type your "
+                                         "user name and password, or import your certificate (certutil -importpfx).", s);
+                               break;
+        case WLAN_NO_CERT:     ksnprintf(st->wifi_note, sizeof(st->wifi_note), "There is no certificate for that user "
+                                         "in the personal store: type the password too, or import the certificate."); break;
         case WLAN_UNTRUSTED:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" has a "
                                          "certificate from a root that is not trusted.", s); break;
         case WLAN_CERT_REFUSED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "The sign-in server of \"%s\" did not "
@@ -881,7 +913,7 @@ static int page_wifi(Settings *st, int x, int y, int w)
         const WlanBss *b = &st->wifi_bss[i];
         int ry = wifi_row_y(st, y, i);
         bool sel = i == st->wifi_sel, here = info.connected && !strcmp(info.bss.ssid, b->ssid);
-        GdiRoundRect(RECT(x, ry, w, WIFI_ROW_H - 8 + (sel ? WIFI_FORM_H : 0)), 8, sel ? UI_HOVER : UI_CARD, GDI_TRANSPARENT);
+        GdiRoundRect(RECT(x, ry, w, WIFI_ROW_H - 8 + (sel ? wifi_form_h(st) : 0)), 8, sel ? UI_HOVER : UI_CARD, GDI_TRANSPARENT);
         wifi_bars(x + 16, ry + 12, b->quality);
         GdiTextBold(x + 52, ry + 6, b->ssid[0] ? b->ssid : "(hidden network)", UI_TEXT);
         char line[128];
@@ -890,17 +922,30 @@ static int page_wifi(Settings *st, int x, int y, int w)
                   b->band == 1 ? "2.4" : b->band == 2 ? "5" : "6", b->channel);
         GdiTextT(x + 52, ry + 26, line, UI_TEXT2);
         if (!sel || here) continue;
+        bool ent = wifi_enterprise(b);
+        if (ent) {                                  /* (the user name box, above the password) */
+            GdiRect u = r_wifi_user(st, x, y, w);
+            GdiRoundRect(u, 6, UI_BG, GDI_TRANSPARENT);
+            GdiRoundBorderAlpha(u, 6, UI_ACCENT, st->wifi_field == 0 ? 200 : 80);
+            if (st->wifi_user[0]) GdiTextT(u.x + 10, u.y + (u.h - GDI_FONT_H) / 2, st->wifi_user, UI_TEXT);
+            else GdiTextT(u.x + 10, u.y + (u.h - GDI_FONT_H) / 2, "User name", UI_TEXT2);
+            if (st->wifi_field == 0)
+                GdiFillRect(RECT(u.x + 10 + GdiTextW(st->wifi_user) + 1, u.y + 7, 2, u.h - 14), UI_ACCENT);
+        }
         if (wifi_secured(b)) {
             GdiRect k = r_wifi_key(st, x, y, w);
+            bool focus = !ent || st->wifi_field == 1;
             GdiRoundRect(k, 6, UI_BG, GDI_TRANSPARENT);
-            GdiRoundBorderAlpha(k, 6, UI_ACCENT, 200);
+            GdiRoundBorderAlpha(k, 6, UI_ACCENT, focus ? 200 : 80);
             char dots[64];
             size_t kl = strlen(st->wifi_key);
             for (size_t c = 0; c < kl; c++) dots[c] = '*';
             dots[kl] = '\0';
             if (kl) GdiTextT(k.x + 10, k.y + (k.h - GDI_FONT_H) / 2, dots, UI_TEXT);
-            else GdiTextT(k.x + 10, k.y + (k.h - GDI_FONT_H) / 2, "Network security key", UI_TEXT2);
-            GdiFillRect(RECT(k.x + 10 + GdiTextW(dots) + 1, k.y + 7, 2, k.h - 14), UI_ACCENT);
+            else GdiTextT(k.x + 10, k.y + (k.h - GDI_FONT_H) / 2,
+                          !ent ? "Network security key" : NetPersonalCount() ? "Password (none: sign in with your certificate)"
+                                                                         : "Password", UI_TEXT2);
+            if (focus) GdiFillRect(RECT(k.x + 10 + GdiTextW(dots) + 1, k.y + 7, 2, k.h - 14), UI_ACCENT);
         }
         UiButton(r_wifi_connect(st, x, y, w), "Connect", true);
     }
@@ -917,7 +962,11 @@ static int page_wifi(Settings *st, int x, int y, int w)
 
 static void wifi_choose(Settings *st, int i)
 {
-    if (i != st->wifi_sel) memset(st->wifi_key, 0, sizeof(st->wifi_key));
+    if (i != st->wifi_sel) {
+        memset(st->wifi_key, 0, sizeof(st->wifi_key));
+        memset(st->wifi_user, 0, sizeof(st->wifi_user));
+        st->wifi_field = 0;
+    }
     st->wifi_sel = i;
     st->wifi_note[0] = '\0';
 }
@@ -929,15 +978,17 @@ static void wifi_mouse(Settings *st, int x, int y, int w, int mx, int my)
     bool connected = st->wifi_info.connected;
     if (connected && UiHit(r_wifi_disconnect(x, y, w), mx, my)) { wifi_disconnect(st); return; }
     if (st->wifi_sel >= 0 && UiHit(r_wifi_connect(st, x, y, w), mx, my)) { wifi_connect(st); return; }
-    if (st->wifi_sel >= 0 && UiHit(r_wifi_key(st, x, y, w), mx, my)) return;
+    if (st->wifi_sel >= 0 && UiHit(r_wifi_key(st, x, y, w), mx, my)) { st->wifi_field = 1; return; }
+    if (wifi_sel_enterprise(st) && UiHit(r_wifi_user(st, x, y, w), mx, my)) { st->wifi_field = 0; return; }
     int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
     for (int i = 0; i < n; i++)
         if (UiHit(RECT(x, wifi_row_y(st, y, i), w, WIFI_ROW_H - 8), mx, my)) { wifi_choose(st, i == st->wifi_sel ? -1 : i); return; }
 }
 
-/* Up and Down choose a network, typing goes to its passphrase, Enter
- * connects, F5 scans again, Esc lets go (then Up and Down move between pages
- * again); false: not the page's key */
+/* Up and Down choose a network, typing goes to its passphrase (on an
+ * Enterprise network to the user name, then after Tab to the password),
+ * Enter connects, F5 scans again, Esc lets go (then Up and Down move between
+ * pages again); false: not the page's key */
 static bool wifi_key(Settings *st, const KeyEvent *k)
 {
     int n = st->wifi_n < WIFI_SHOWN ? st->wifi_n : WIFI_SHOWN;
@@ -947,11 +998,15 @@ static bool wifi_key(Settings *st, const KeyEvent *k)
     if (st->wifi_sel < 0) return false;
     if (k->scancode == KEY_ESC) { wifi_choose(st, -1); return true; }
     if (k->scancode == KEY_ENTER && !k->extended) { wifi_connect(st); return true; }
-    size_t kl = strlen(st->wifi_key);
-    if (k->ch == '\b') { if (kl) st->wifi_key[kl - 1] = '\0'; return true; }
-    if (!k->ctrl && !k->alt && k->ch >= ' ' && k->ch < 0x7F && kl < sizeof(st->wifi_key) - 1) {
-        st->wifi_key[kl] = k->ch;
-        st->wifi_key[kl + 1] = '\0';
+    bool ent = wifi_sel_enterprise(st);
+    if (ent && k->scancode == KEY_TAB) { st->wifi_field = !st->wifi_field; return true; }
+    char *f = ent && st->wifi_field == 0 ? st->wifi_user : st->wifi_key;
+    size_t cap = ent && st->wifi_field == 0 ? sizeof(st->wifi_user) : sizeof(st->wifi_key);
+    size_t kl = strlen(f);
+    if (k->ch == '\b') { if (kl) f[kl - 1] = '\0'; return true; }
+    if (!k->ctrl && !k->alt && k->ch >= ' ' && k->ch < 0x7F && kl < cap - 1) {
+        f[kl] = k->ch;
+        f[kl + 1] = '\0';
         return true;
     }
     return false;
@@ -2365,6 +2420,7 @@ static void set_close(WND *w)
     }
     if (st) acc_wipe(st);                     /* (passwords typed) */
     if (st) memset(st->wifi_key, 0, sizeof(st->wifi_key));
+    if (st) memset(st->wifi_user, 0, sizeof(st->wifi_user));
     kfree(w->user);
     w->user = NULL;
 }

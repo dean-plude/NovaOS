@@ -31,4 +31,5 @@
     unless a rule allows it), rules by program, protocol, port and
     address, kept in the registry as Windows keeps them, through
     `hnetcfg.dll`'s `INetFwPolicy2`, `netsh advfirewall` and Settings >
-    Firewall.
+    Firewall; `netprofm.dll`'s Network List Manager tells programs whether
+    they are online, on which network and of what category.

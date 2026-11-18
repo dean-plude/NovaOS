@@ -119,6 +119,8 @@ struct BthDev {
     volatile UINT8 auth_status, enc_status;
     volatile bool conn_in;             /* the device connected to us (Connection Request accepted) */
     volatile bool hid_kick;            /* ... and HID's driver has not been told yet */
+    volatile UINT32 drops;             /* links to it that came down (kept when it is forgotten): a
+                                        * thread waiting on the old link gives up, never takes the next one's */
     UINT16   pend_psm, pend_scid;      /* a channel it asked for before the link was encrypted (answered "pending") */
     UINT8    pend_ident;
     UINT8    rx[ACL_BUF];              /* an L2CAP frame being put together */
@@ -807,6 +809,7 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
             }
             if (!d->used || d->conn != 2 || d->handle != (le16(p + 1) & 0x0FFF)) continue;
             d->conn = 0;
+            __atomic_add_fetch(&d->drops, 1, __ATOMIC_RELEASE);
             d->conn_in = d->hid_kick = false;
             d->pend_psm = 0;
             d->auth = d->enc = 0;
@@ -968,22 +971,30 @@ static void disconnect(BthRadio *r, BthDev *d)
     if (!cmd(r, 0x0406, p, 3, NULL, 0)) WAIT_FOR(r, d->conn != 2, 3000);
 }
 
-/* Authentication (pairing, when there is no key yet), then encryption */
+/* Authentication (pairing, when there is no key yet), then encryption.
+ * If the link drops meanwhile it fails at once: waiting on would take the
+ * answers of the next link (another thread's pairing) as its own */
 static NT_STATUS secure(BthRadio *r, BthDev *d)
 {
     char t[18];
     UINT8 p[3];
+    UINT32 drops = __atomic_load_n(&d->drops, __ATOMIC_ACQUIRE);
+    if (d->conn != 2) return ST_DEVICE_NOT_CONNECTED;
     put16(p, d->handle);
     d->auth = 1;
     int st = cmd(r, 0x0411, p, 2, NULL, 0);
-    if (st || !WAIT_FOR(r, d->auth == 2, 30000) || d->auth_status) {
+    if (!st) WAIT_FOR(r, d->auth == 2 || d->drops != drops, 30000);
+    if (d->drops != drops) { kprintf("[BTH] %s: link dropped while authenticating\n", addr_text(d->addr, t)); return ST_DEVICE_NOT_CONNECTED; }
+    if (st || d->auth != 2 || d->auth_status) {
         kprintf("[BTH] %s: authentication failed (%02x)\n", addr_text(d->addr, t), st ? st & 0xFF : d->auth_status);
         return ST_ACCESS_DENIED;
     }
     p[2] = 1;
     d->enc = 1;
     st = cmd(r, 0x0413, p, 3, NULL, 0);
-    if (st || !WAIT_FOR(r, d->enc == 2, 10000) || d->enc_status) {
+    if (!st) WAIT_FOR(r, d->enc == 2 || d->drops != drops, 10000);
+    if (d->drops != drops) { kprintf("[BTH] %s: link dropped while encrypting\n", addr_text(d->addr, t)); return ST_DEVICE_NOT_CONNECTED; }
+    if (st || d->enc != 2 || d->enc_status) {
         kprintf("[BTH] %s: encryption failed (%02x)\n", addr_text(d->addr, t), st ? st & 0xFF : d->enc_status);
         return ST_ACCESS_DENIED;
     }
@@ -1367,8 +1378,13 @@ NT_STATUS BthHidConnect(NT_DEVICE_OBJECT *pdo, BthHidInput input, void *ctx)
     BthHidDisconnect(pdo);
     s->input = input;
     s->ctx = ctx;
+    UINT32 drops = __atomic_load_n(&d->drops, __ATOMIC_ACQUIRE);
     NT_STATUS st = connect(r, d);
+    if (NT_SUCCESS(st)) drops = __atomic_load_n(&d->drops, __ATOMIC_ACQUIRE);
     if (NT_SUCCESS(st)) st = secure(r, d);
+    /* (its service switched off or the device forgotten meanwhile: the
+     * link, if any, is someone else's now, a new pairing's perhaps) */
+    if (hid_svc(pdo) != s || d->drops != drops) return ST_DEVICE_NOT_CONNECTED;
     if (NT_SUCCESS(st) && !(s->ctrl = l2_open(r, d, 0x0011))) st = ST_DEVICE_NOT_CONNECTED;
     if (NT_SUCCESS(st)) {
         s->intr = l2_open(r, d, 0x0013);
@@ -1377,7 +1393,7 @@ NT_STATUS BthHidConnect(NT_DEVICE_OBJECT *pdo, BthHidInput input, void *ctx)
     }
     if (!NT_SUCCESS(st)) {
         BthHidDisconnect(pdo);
-        disconnect(r, d);
+        if (hid_svc(pdo) == s && d->drops == drops) disconnect(r, d);
         return st;
     }
     kprintf("[BTH] %s: HID control and interrupt channels open\n", addr_text(d->addr, t));
@@ -1694,7 +1710,9 @@ static NT_STATUS forget(BthRadio *r, BthDev *d)
     kprintf("[BTH] %s forgotten\n", addr_text(d->addr, path));
     lock(r);
     kfree(d->rdesc);
+    UINT32 drops = d->drops;
     memset(d, 0, sizeof(*d));
+    d->drops = drops + 1;                                       /* (a thread still on its old link gives up) */
     unlock(r);
     return NT_STATUS_SUCCESS;
 }

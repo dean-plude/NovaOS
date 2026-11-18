@@ -677,9 +677,17 @@ int UmGuardFault(UINT64 va)
     if (dealloc && va >= dealloc && va < base) {
         UINT64 below = page - PAGE_SIZE;
         if (below >= dealloc + PAGE_SIZE) {               /* the lowest page stays reserved */
-            pte_t *b = walk(p->pml4, below, true);
-            /* read/write, as Windows grows stacks (the reservation may say PAGE_NOACCESS) */
-            if (b && !(*b & (PTE_PRESENT | PTE_LAZY))) um_commit(p, below, PAGE_SIZE, 0x04 | 0x100);
+            /* the next page down not used yet becomes the guard (read/write,
+             * as Windows grows stacks; the reservation may say PAGE_NOACCESS).
+             * Pages a frame that skipped the guard already used are passed. */
+            for (UINT64 g = below; g >= dealloc + PAGE_SIZE; g -= PAGE_SIZE) {
+                pte_t *b = walk(p->pml4, g, true);
+                if (!b) break;
+                if (*b & PTE_PRESENT) continue;
+                if (*b & PTE_LAZY) *b |= PTE_GUARD;        /* committed, never touched */
+                else um_commit(p, g, PAGE_SIZE, 0x04 | 0x100);
+                break;
+            }
             res = 1;
         } else res = -2;
         um_write(p, t->teb + o_limit, &page, w);
@@ -2779,6 +2787,14 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
         um_region_remove(p, um_region_find(p, lo));
         ok = false;
     }
+    /* As on Windows, the stack's committed part has a guard page below it
+     * (PAGE_GUARD), which moves down as the stack grows (UmGuardFault) and
+     * which StackLimit sits on top of.  The rest stays committed (lazily, so
+     * free until touched), so a frame that skips the guard still has its
+     * pages.  Programs look for the guard: the .NET runtime reports every
+     * unhandled exception as "Stack overflow." when it finds none. */
+    UINT64 guard = lo + stack_size - UM_STACK_COMMIT - PAGE_SIZE;
+    if (ok && !um_commit(p, guard, PAGE_SIZE, 0x04 | 0x100)) ok = false;
     if (ok) {
         t->stack_lo = lo;
         /* TEB */
@@ -2787,7 +2803,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
         if (ok && p->wow) {                                        /* the x86 TEB (fs:0) */
             put_u32(teb + 0x00, 0xFFFFFFFFu);                      /* ExceptionList: end of chain */
             put_u32(teb + 0x04, (UINT32)(lo + stack_size));        /* StackBase */
-            put_u32(teb + 0x08, (UINT32)lo);                       /* StackLimit */
+            put_u32(teb + 0x08, (UINT32)(guard + PAGE_SIZE));      /* StackLimit: above the guard page */
             put_u32(teb + 0x18, (UINT32)t->teb);                   /* Self */
             put_u32(teb + 0x20, p->pid);                           /* ClientId.UniqueProcess */
             put_u32(teb + 0x24, t->tid);                           /* ClientId.UniqueThread */
@@ -2797,7 +2813,7 @@ UmThread *um_create_thread(UmProcess *p, UINT64 start, UINT64 arg, UINT64 stack_
         } else if (ok) {
             wr64(teb + 0x00, UINT64_C(0xFFFFFFFFFFFFFFFF));        /* ExceptionList: none */
             wr64(teb + 0x08, lo + stack_size);                     /* StackBase */
-            wr64(teb + 0x10, lo);                                  /* StackLimit */
+            wr64(teb + 0x10, guard + PAGE_SIZE);                   /* StackLimit: above the guard page */
             wr64(teb + 0x30, t->teb);                              /* Self */
             wr64(teb + 0x40, p->pid);                              /* ClientId.UniqueProcess */
             wr64(teb + 0x48, t->tid);                              /* ClientId.UniqueThread */

@@ -42,6 +42,7 @@
 #define UM_STACK_TOP     UINT64_C(0x00007FFDE0000000)        /* first thread */
 #define UM_STACK_SIZE    (1024 * 1024)
 #define UM_THREAD_STACK  (256 * 1024)                         /* default for new threads */
+#define UM_STACK_COMMIT  (32 * 1024)                          /* above a new stack's first guard page */
 #define UM_ALLOC_MIN     UINT64_C(0x0000000010000000)   /* NtAllocateVirtualMemory */
 #define UM_ALLOC_MAX     UINT64_C(0x00007FFD00000000)
 #define UM_DLL_MIN       UINT64_C(0x0000000180000000)   /* relocated DLLs */

@@ -432,6 +432,11 @@ ToggleMenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem,
 MenuFlyoutPresenter, MenuFlyoutPresenterTemplateSettings, the four
 automation peers and ContextMenuEventArgs.
 
+Pulsar item 3, twenty-sixth slice: dxaml/lib/ResourceDictionary_partial.cpp's
+ResourceDictionary::Lookup (marked "NovaOS") hands a value looked up by code
+outside Windows.UI.Xaml.dll to nova_value_for_caller, which returns it as the
+app's Windows object.
+
 XAML text input, third part (a typable TextBox on a page), the same
 commit, unchanged (upstream line endings): core/native/text/Controls'
 TextBoxBase, TextBox, TextBoxView, TextServicesHost, HWRenderTarget,

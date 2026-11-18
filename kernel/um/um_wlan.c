@@ -90,10 +90,19 @@ INT64 um_wlan_ctl(UINT64 op, UINT64 arg, UINT64 out)
     case NOVAWLAN_CONNECT: {
         NovaWlanConnect c;
         if (!out || !NT_SUCCESS(CopyFromUser(&c, (const void *)(uintptr_t)out, sizeof(c)))) return NOVAWLAN_FAILED;
-        c.ssid[sizeof(c.ssid) - 1] = c.key[sizeof(c.key) - 1] = '\0';
+        c.ssid[sizeof(c.ssid) - 1] = c.key[sizeof(c.key) - 1] = c.user[sizeof(c.user) - 1] = '\0';
         UINT32 st;
-        int r = WlanConnect((int)arg, c.ssid, c.key[0] ? c.key : NULL, &st);
-        memset(&c, 0, sizeof(c));                                   /* (the passphrase) */
+        int r;
+        /* a profile's EAP method (WPA2-Enterprise): PEAP signs in with the
+         * user name and password, EAP-TLS with the user's certificate (the
+         * newest one without a user name) and never sends a password */
+        if (c.eap == NOVAWLAN_EAP_PEAP && (!c.user[0] || !c.key[0])) r = NOVAWLAN_NEEDS_USER;
+        else if (c.eap == NOVAWLAN_EAP_TLS)
+            r = WlanConnectAs((int)arg, c.ssid, NULL, c.user[0] ? c.user : NULL, &st);
+        else if (c.eap == NOVAWLAN_EAP_PEAP) r = WlanConnectAs((int)arg, c.ssid, c.key, c.user, &st);
+        else if (c.eap == NOVAWLAN_EAP_NONE) r = WlanConnect((int)arg, c.ssid, c.key[0] ? c.key : NULL, &st);
+        else r = NOVAWLAN_UNSUPPORTED;
+        memset(&c, 0, sizeof(c));                                   /* (the passphrase or password) */
         return r;
     }
     case NOVAWLAN_DISCONNECT: {

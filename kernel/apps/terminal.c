@@ -296,6 +296,7 @@ static void cmd_help(Term *t)
         "  certutil -addstore root <file>   trust a CA certificate (PEM/DER)\n"
         "  certutil [-p PASSWORD] -importpfx <file.pfx>  add a certificate and its key to the personal store\n"
         "  certutil -store my  list the personal certificates (Wi-Fi Enterprise's EAP-TLS signs in with them)\n"
+        "  certutil -delstore root|my <name>  remove an imported root, or a personal certificate and its key\n"
         "  cls                 clear the screen (also: clear, Ctrl+L)\n"
         "  exit                close this window\n"
         "Keys: Up/Down history, PgUp/PgDn scroll, Ctrl+C cancel.");
@@ -1429,12 +1430,12 @@ static bool set_target(Term *t, const char *url)
 /* certutil -store my: the personal certificates */
 static void certutil_my(Term *t)
 {
-    int n = NetPersonalCount();
+    int n = 0, slots = NetPersonalSlots();
     tprint(t, "Personal (My):");
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < slots; i++) {
         char name[64], issuer[64];
-        if (!NetPersonalName(i, name, sizeof(name), issuer, sizeof(issuer))) break;
-        tprintf(t, "  %3d  %s  (issued by %s; private key present)", i + 1, name[0] ? name : "(unnamed)",
+        if (!NetPersonalName(i, name, sizeof(name), issuer, sizeof(issuer))) continue;   /* (removed) */
+        tprintf(t, "  %3d  %s  (issued by %s; private key present)", ++n, name[0] ? name : "(unnamed)",
                 issuer[0] ? issuer : "?");
     }
     tprintf(t, "%d certificate%s. CertUtil: -store command completed successfully.", n, n == 1 ? "" : "s");
@@ -1468,13 +1469,35 @@ static void certutil_importpfx(Term *t, int argc, char **argv)
     tprint(t, "CertUtil: -importPFX command completed successfully.");
 }
 
+/* certutil -delstore [-user] root|my ID: stop trusting an imported root, or
+ * take a certificate and its key out of the personal store (ID: its name,
+ * or its SHA-1 thumbprint), here and in the registry */
+static void certutil_delstore(Term *t, int argc, char **argv)
+{
+    int a = 2;
+    if (a < argc && is(argv[a], "-user")) a++;
+    bool root = a < argc && is(argv[a], "root"), my = a < argc && is(argv[a], "my");
+    if ((!root && !my) || a + 2 != argc) { terr(t, "Usage: certutil -delstore root|my <name or SHA-1 thumbprint>"); return; }
+    char name[72], err[96];
+    int n = root ? NetDeleteRoots(argv[a + 1], name, sizeof(name), err, sizeof(err))
+                 : NetDeletePersonal(argv[a + 1], name, sizeof(name), err, sizeof(err));
+    if (!n) { tprintf(t, "CertUtil: -delstore command FAILED: %s", err); return; }
+    if (n == 1) tprintf(t, "Deleted certificate \"%s\" from the %s store.", name[0] ? name : "?",
+                        root ? "Trusted Root Certification Authorities" : "personal (My)");
+    else tprintf(t, "Deleted %d certificates from the %s store.", n,
+                 root ? "Trusted Root Certification Authorities" : "personal (My)");
+    tprint(t, "CertUtil: -delstore command completed successfully.");
+}
+
 /* certutil [-store]            list trusted roots
  * certutil -addstore root FILE  trust the CA certificate(s) in FILE
+ * certutil -delstore root|my ID take one away
  * certutil -importpfx FILE, certutil -store my: the personal store */
 static void cmd_certutil(Term *t, int argc, char **argv)
 {
     for (int i = 1; i < argc; i++)
         if (is(argv[i], "-importpfx")) { certutil_importpfx(t, argc, argv); return; }
+    if (argc >= 2 && is(argv[1], "-delstore")) { certutil_delstore(t, argc, argv); return; }
     if (argc >= 3 && is(argv[1], "-store") && is(argv[2], "my")) { certutil_my(t); return; }
     if (argc >= 2 && is(argv[1], "-addstore")) {
         if (argc < 4 || !is(argv[2], "root")) {
@@ -1502,7 +1525,8 @@ static void cmd_certutil(Term *t, int argc, char **argv)
         return;
     }
     if (argc >= 2 && !is(argv[1], "-store")) {
-        terr(t, "Usage: certutil [-store [my]] | certutil -addstore root <file> | certutil [-p PASSWORD] -importpfx <file.pfx>");
+        terr(t, "Usage: certutil [-store [my]] | certutil -addstore root <file> | certutil -delstore root|my <name> | "
+                "certutil [-p PASSWORD] -importpfx <file.pfx>");
         return;
     }
     int imported, n = NetRootCount(&imported);

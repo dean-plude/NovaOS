@@ -67,9 +67,16 @@
 # adapter and its GUID, a scan and its notification, the networks and
 # access points, a profile saved in the registry, a wrong passphrase
 # refused with the key-mismatch reason, joining NovaNet by its profile and
-# NovaGuest by its SSID, the connection's details.  Then the test joins
+# NovaGuest by its SSID, the connection's details, and NovaCorp's
+# Enterprise profiles: PEAP refused without a sign-in, then signing in with
+# the user data WlanSetProfileEapXmlUserData kept, and EAP-TLS with alice's
+# certificate.  Then the test joins
 # NovaNet in Settings' Wi-Fi page as a person would (Start, "wi-fi", Down,
 # its passphrase, Enter) and wlantest sees the connection.
+# After a restart, "certutil -delstore my mallory" and "certutil
+# -delstore root" take a certificate and the NovaCorp root away (alice's
+# sign-in is then refused, the server untrusted), and the next restart
+# brings back only alice's certificate from the registry.
 # Disabling the device deletes the port, stops the data path and closes the
 # adapter, and the interface is gone.
 DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with `pnputil /add-driver /install`: '
@@ -92,10 +99,13 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        'with it by EAP-TLS (a certificate the server does not trust refused with its TLS alert), DHCP and ping over it; '
        '`wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
        'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
-       'reason, joining by profile and by SSID, the current connection); Settings\' Wi-Fi page lists the networks and '
+       'reason, joining by profile and by SSID, the current connection, and WPA2-Enterprise profiles with their '
+       'EapHostConfig: PEAP with the sign-in WlanSetProfileEapXmlUserData keeps, EAP-TLS with alice\'s certificate); '
+       'Settings\' Wi-Fi page lists the networks and '
        'joins NovaNet with its passphrase typed as a person would, then NovaCorp with alice\'s user name and '
        'password in its two boxes; after a restart the NovaCorp root and both certificates are back from the registry '
-       'and alice signs in with EAP-TLS again; disabling the device deletes the port, stops the data path and closes the '
+       'and alice signs in with EAP-TLS again; `certutil -delstore` removes mallory\'s certificate and the NovaCorp root '
+       '(the sign-in then refused) and the next restart restores only alice\'s; disabling the device deletes the port, stops the data path and closes the '
        'adapter')
 import time
 
@@ -407,7 +417,10 @@ TESTS = [
     Test('wifi eap-tls disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
-    Test('wifi wlanapi', 'wlantest', [r'wlantest: \d+ passed, 0 failed'], timeout=300, elevated=True),
+    Test('wifi wlanapi', 'wlantest',
+         [r'\[EAP\] WdiTest: signed in as alice with PEAP \(MS-CHAPv2\)',
+          r'\[EAP\] WdiTest: signed in as alice with EAP-TLS \(certificate alice\)', r'wlantest: \d+ passed, 0 failed'],
+         timeout=600, elevated=True),
     Test('wifi settings', 'wlantest settings', [r'wlantest settings: \d+ passed, 0 failed'], timeout=300,
          acts=[(r'wlantest: join NovaNet in Settings', _join_in_settings),
                (r'wlantest: connected through Settings', _close_settings)],
@@ -430,6 +443,22 @@ TESTS = [
           r'Connection request was completed successfully\.'], builtin=True),
     Test('wifi eap-tls after restart disconnect', 'netsh wlan disconnect',
          [r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    Test('wifi certificate delete', 'certutil -delstore my mallory',
+         [r'Deleted certificate "mallory" from the personal \(My\) store\.',
+          r'CertUtil: -delstore command completed successfully\.'], builtin=True),
+    Test('wifi certificate deleted', 'certutil -store my',
+         [r'Personal \(My\):\n +1  alice  \(issued by NovaCorp Test Root; private key present\)\n1 certificate\.'],
+         builtin=True),
+    Test('wifi certificate delete missing', 'certutil -delstore my mallory',
+         [r'CertUtil: -delstore command FAILED: Cannot find object or property\.'], builtin=True),
+    Test('wifi root delete', 'certutil -delstore root "NovaCorp Test Root"',
+         [r'Deleted certificate "NovaCorp Test Root" from the Trusted Root Certification Authorities store\.',
+          r'CertUtil: -delstore command completed successfully\.'], builtin=True),
+    Test('wifi root deleted', 'netsh wlan connect name=NovaCorp user=alice',
+         [r'\[EAP\] WdiTest: the sign-in failed: the server\'s certificate is not from a trusted root',
+          r'The sign-in server of "NovaCorp" has a certificate from a root that is not trusted'], builtin=True),
+    Test('wifi certificates removed restart', 'shutdown /r /t 0',
+         [r'\[TLS\] Restored 0 imported roots and 1 personal certificate from the registry'], reboot=True),
     Test('wifi disable', 'pnputil /disable-device /deviceid ' + EDU_ID,
          [r'Device disabled successfully', r'\[DbgPrint\] wditest: station port 1 deleted',
           r'\[DbgPrint\] wditest: data path port 1 deleted',

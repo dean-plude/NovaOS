@@ -20,7 +20,16 @@
  *     WlanGetProfileList, kept in the registry (all users' under HKLM,
  *     WLAN_PROFILE_USER ones under HKCU: Software\NovaOS\Wlan\Profiles);
  *     a profile's SSID and its sharedKey's keyMaterial (the passphrase,
- *     protected false) are what NovaOS reads from it;
+ *     protected false) are what NovaOS reads from it, or, for
+ *     WPA2-Enterprise (useOneX true), its OneX EAPConfig's EAP method:
+ *     PEAP (25, with MS-CHAPv2 inside) or EAP-TLS (13);
+ *   - WlanSetProfileEapXmlUserData: an Enterprise profile's sign-in (the
+ *     EapHostUserCredentials XML's Username, Password and LogonDomain),
+ *     sealed with CryptProtectData as Windows keeps it, under the user's
+ *     HKCU\Software\NovaOS\Wlan\EapUserData\NAME (all users': HKLM, with
+ *     the machine's key); without it, EAP-TLS signs in with the newest
+ *     certificate in the personal store (certutil -importpfx) and PEAP
+ *     cannot sign in (the ONEX "unable to identify the user" reason);
  *   - notifications: WlanRegisterNotification, with the AutoConfig ones
  *     (WLAN_NOTIFICATION_SOURCE_ACM) a program waits for: scan_complete
  *     or scan_fail, connection_start, connection_complete (its reason
@@ -37,6 +46,14 @@
 #include <winternl.h>
 #include <winreg.h>
 #include "../include/novawlan.h"
+
+typedef struct { DWORD cbData; BYTE *pbData; } DATA_BLOB_;
+__declspec(dllimport) BOOL WINAPI CryptProtectData(DATA_BLOB_ *in, LPCWSTR desc, DATA_BLOB_ *entropy, PVOID reserved,
+                                                   PVOID prompt, DWORD flags, DATA_BLOB_ *out);
+__declspec(dllimport) BOOL WINAPI CryptUnprotectData(DATA_BLOB_ *in, LPWSTR *desc, DATA_BLOB_ *entropy, PVOID reserved,
+                                                     PVOID prompt, DWORD flags, DATA_BLOB_ *out);
+#define CRYPTPROTECT_UI_FORBIDDEN_  0x1
+#define CRYPTPROTECT_LOCAL_MACHINE_ 0x4
 
 void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
@@ -212,6 +229,10 @@ static const DWORD g_phy[] = { 6 /* erp: 802.11g */, 7 /* ht: n */, 8 /* vht: ac
 #define REASON_NETWORK_NOT_AVAILABLE 0x0002800B
 #define REASON_KEY_MISMATCH          0x0002800D
 #define REASON_PROFILE_MISSING       0x00080001   /* (WLAN_REASON_CODE_PROFILE_BASE + 1) */
+#define REASON_ONEX_NO_USER          0x00050001   /* (ONEX_UNABLE_TO_IDENTIFY_USER: no sign-in for PEAP) */
+#define REASON_ONEX_NO_IDENTITY      0x00050002   /* (ONEX_IDENTITY_NOT_FOUND: no certificate for the user) */
+#define REASON_ONEX_EAP_FAILURE      0x00050005   /* (ONEX_EAP_FAILURE_RECEIVED: the server, or its certificate) */
+#define WLAN_SET_EAPHOST_DATA_ALL_USERS 0x00000001
 #define WLAN_PROFILE_USER            0x00000002
 #define AVAILABLE_CONNECTED          0x00000001
 #define AVAILABLE_HAS_PROFILE        0x00000002
@@ -468,6 +489,7 @@ WLAPI DWORD WINAPI WlanScan(HANDLE h, const GUID *g, const DOT11_SSID_ *ssid, co
 /* ---- profiles (the registry: Software\NovaOS\Wlan\Profiles\NAME, value "Xml") ---- */
 
 #define PROFILES L"Software\\NovaOS\\Wlan\\Profiles"
+#define EAP_USER_DATA L"Software\\NovaOS\\Wlan\\EapUserData"
 
 static BOOL starts(const char *s, const char *with)
 {
@@ -475,24 +497,32 @@ static BOOL starts(const char *s, const char *with)
     return TRUE;
 }
 
-/* The text of the first <@tag> after @from in @xml (UTF-8), or FALSE */
+/* Just past the first start tag <@tag ...> at or after @p (with or without
+ * a namespace prefix and attributes, as Windows' EAP XML writes them:
+ * <Type xmlns="...">, <baseEap:Type>), or NULL */
+static const char *find_tag(const char *p, const char *tag)
+{
+    int tl = lstrlenA(tag);
+    for (; *p; p++) {
+        if (*p != '<' || p[1] == '/' || p[1] == '?' || p[1] == '!') continue;
+        const char *n = p + 1, *e = n;
+        while (*e && *e != '>' && *e != '/' && *e != ' ' && *e != '\t' && *e != '\r' && *e != '\n') e++;
+        const char *local = n;
+        for (const char *c = n; c < e; c++) if (*c == ':') local = c + 1;
+        if (e - local != tl || memcmp(local, tag, tl)) continue;
+        while (*e && *e != '>') e++;
+        if (!*e || e[-1] == '/') continue;                     /* (<tag/>: nothing in it) */
+        return e + 1;
+    }
+    return NULL;
+}
+
+/* The text of the first <@tag> after the first <@from> in @xml (UTF-8), or FALSE */
 static BOOL xml_tag(const char *xml, const char *from, const char *tag, char *out, int cap)
 {
     const char *p = xml;
-    if (from) {
-        for (; *p; p++) if (starts(p, from)) break;
-        if (!*p) return FALSE;
-    }
-    char open[40];
-    int tl = lstrlenA(tag);
-    if (tl > 36) return FALSE;
-    open[0] = '<';
-    memcpy(open + 1, tag, tl);
-    open[tl + 1] = '>';
-    open[tl + 2] = 0;
-    for (; *p; p++) if (starts(p, open)) break;
-    if (!*p) return FALSE;
-    p += tl + 2;
+    if (from && !(p = find_tag(p, from))) return FALSE;
+    if (!(p = find_tag(p, tag))) return FALSE;
     int n = 0;
     while (*p && *p != '<' && n < cap - 1) out[n++] = *p++;
     out[n] = 0;
@@ -510,19 +540,36 @@ static BOOL xml_tag(const char *xml, const char *from, const char *tag, char *ou
     return *p == '<';
 }
 
-/* A profile's name, SSID and passphrase (@key "" for an open network); FALSE if it is not one NovaOS reads */
-static BOOL parse_profile(LPCWSTR xml, char *name, char *ssid, char *key)
+/* @xml (UTF-16) as UTF-8, HeapAlloc'd, or NULL */
+static char *utf8_of(LPCWSTR xml)
 {
     int n = WideCharToMultiByte(CP_UTF8, 0, xml, -1, NULL, 0, NULL, NULL);
-    if (n <= 0) return FALSE;
-    char *x = HeapAlloc(GetProcessHeap(), 0, n);
+    char *x = n > 0 ? HeapAlloc(GetProcessHeap(), 0, n) : NULL;
+    if (x) WideCharToMultiByte(CP_UTF8, 0, xml, -1, x, n, NULL, NULL);
+    return x;
+}
+
+/* A profile's name, SSID and passphrase (@key "" for an open network, at
+ * most 64 characters) and, for WPA2-Enterprise, its EAP method
+ * (NOVAWLAN_EAP_*); FALSE if it is not one NovaOS reads */
+static BOOL parse_profile(LPCWSTR xml, char *name, char *ssid, char *key, unsigned char *eap)
+{
+    char *x = utf8_of(xml);
     if (!x) return FALSE;
-    WideCharToMultiByte(CP_UTF8, 0, xml, -1, x, n, NULL, NULL);
-    BOOL ok = xml_tag(x, NULL, "name", name, 257) && xml_tag(x, "<SSIDConfig>", "name", ssid, 33);
-    char prot[8];
+    BOOL ok = xml_tag(x, NULL, "name", name, 257) && xml_tag(x, "SSIDConfig", "name", ssid, 33);
+    char prot[8], onex[8], type[8];
     key[0] = 0;
-    if (ok && xml_tag(x, "<sharedKey>", "protected", prot, sizeof(prot)) && lstrcmpiA(prot, "false")) ok = FALSE;
-    if (ok) xml_tag(x, "<sharedKey>", "keyMaterial", key, 65);
+    *eap = NOVAWLAN_EAP_NONE;
+    if (ok && xml_tag(x, "sharedKey", "protected", prot, sizeof(prot)) && lstrcmpiA(prot, "false")) ok = FALSE;
+    if (ok) xml_tag(x, "sharedKey", "keyMaterial", key, 65);
+    if (ok && xml_tag(x, "authEncryption", "useOneX", onex, sizeof(onex)) && !lstrcmpiA(onex, "true")) {
+        /* (802.1X: the outer EAP method of EapHostConfig, under OneX's EAPConfig) */
+        if (!xml_tag(x, "EapMethod", "Type", type, sizeof(type))) ok = FALSE;
+        else if (!lstrcmpA(type, "25")) *eap = NOVAWLAN_EAP_PEAP;
+        else if (!lstrcmpA(type, "13")) *eap = NOVAWLAN_EAP_TLS;
+        else ok = FALSE;                                       /* (EAP-TTLS, EAP-SIM, ...: not yet) */
+        memset(key, 0, 65);
+    }
     HeapFree(GetProcessHeap(), 0, x);
     return ok && ssid[0];
 }
@@ -560,7 +607,8 @@ static BOOL profile_for(const char *ssid, WCHAR *out)
             if (RegEnumKeyExW(k, i, name, &len, NULL, NULL, NULL, NULL)) break;
             WCHAR *x = load_profile(name, NULL);
             char pn[257], ps[33], pk[65];
-            BOOL hit = x && parse_profile(x, pn, ps, pk) && !lstrcmpA(ps, ssid);
+            unsigned char eap;
+            BOOL hit = x && parse_profile(x, pn, ps, pk, &eap) && !lstrcmpA(ps, ssid);
             if (x) WlanFreeMemory(x);
             memset(pk, 0, sizeof(pk));
             if (hit) { lstrcpyW(out, name); RegCloseKey(k); return TRUE; }
@@ -579,8 +627,9 @@ WLAPI DWORD WINAPI WlanSetProfile(HANDLE h, const GUID *g, DWORD flags, LPCWSTR 
     NovaWlanIf o;
     if (find_adapter(g, &o) < 0) return ERROR_NOT_FOUND;
     char name[257], ssid[33], key[65];
+    unsigned char eap;
     *reason = REASON_SUCCESS;
-    if (!parse_profile(xml, name, ssid, key)) { *reason = REASON_NETWORK_NOT_COMPATIBLE; return ERROR_BAD_PROFILE; }
+    if (!parse_profile(xml, name, ssid, key, &eap)) { *reason = REASON_NETWORK_NOT_COMPATIBLE; return ERROR_BAD_PROFILE; }
     memset(key, 0, sizeof(key));
     WCHAR wname[257], path[300];
     wide(wname, 257, name);
@@ -618,7 +667,103 @@ WLAPI DWORD WINAPI WlanDeleteProfile(HANDLE h, const GUID *g, LPCWSTR name, PVOI
     lstrcatW(path, name);
     BOOL gone = !RegDeleteTreeW(HKEY_CURRENT_USER, path);
     gone |= !RegDeleteTreeW(HKEY_LOCAL_MACHINE, path);
+    if (gone) {                                                 /* (and its EAP sign-in) */
+        lstrcpyW(path, EAP_USER_DATA L"\\");
+        lstrcatW(path, name);
+        RegDeleteTreeW(HKEY_CURRENT_USER, path);
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, path);
+    }
     return gone ? ERROR_SUCCESS : ERROR_NOT_FOUND;
+}
+
+/* ---- an Enterprise profile's sign-in (WlanSetProfileEapXmlUserData) ---- */
+
+/* WlanSetProfileEapXmlUserData: @xml (EapHostUserCredentials) for profile
+ * @name, sealed with CryptProtectData: the user's, or with
+ * WLAN_SET_EAPHOST_DATA_ALL_USERS every user's (the machine's key, HKLM) */
+WLAPI DWORD WINAPI WlanSetProfileEapXmlUserData(HANDLE h, const GUID *g, LPCWSTR name, DWORD flags, LPCWSTR xml,
+                                                PVOID reserved)
+{
+    if (reserved || !g || !name || !xml || lstrlenW(name) > 255) return ERROR_INVALID_PARAMETER;
+    if (!client(h)) return ERROR_INVALID_HANDLE;
+    NovaWlanIf o;
+    if (find_adapter(g, &o) < 0) return ERROR_NOT_FOUND;
+    WCHAR *px = load_profile(name, NULL);
+    if (!px) return ERROR_NOT_FOUND;
+    char pn[257], ps[33], pk[65];
+    unsigned char eap;
+    BOOL ok = parse_profile(px, pn, ps, pk, &eap);
+    WlanFreeMemory(px);
+    if (!ok || eap == NOVAWLAN_EAP_NONE) return ERROR_BAD_PROFILE;  /* (not an 802.1X profile) */
+    char *x = utf8_of(xml);
+    ok = x && find_tag(x, "EapHostUserCredentials");
+    if (x) HeapFree(GetProcessHeap(), 0, x);
+    if (!ok) return ERROR_BAD_PROFILE;
+    BOOL all = (flags & WLAN_SET_EAPHOST_DATA_ALL_USERS) != 0;
+    DATA_BLOB_ in = { (DWORD)(lstrlenW(xml) + 1) * sizeof(WCHAR), (BYTE *)xml }, out = { 0, NULL };
+    if (!CryptProtectData(&in, L"Wi-Fi EAP user data", NULL, NULL, NULL,
+                          CRYPTPROTECT_UI_FORBIDDEN_ | (all ? CRYPTPROTECT_LOCAL_MACHINE_ : 0), &out))
+        return GetLastError() ? GetLastError() : ERROR_ACCESS_DENIED;
+    WCHAR path[300];
+    lstrcpyW(path, EAP_USER_DATA L"\\");
+    lstrcatW(path, name);
+    HKEY k;
+    DWORD err = ERROR_ACCESS_DENIED;
+    if (!RegCreateKeyExW(all ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, path, 0, NULL, 0, KEY_WRITE, NULL, &k, NULL)) {
+        err = RegSetValueExW(k, L"Data", 0, REG_BINARY, out.pbData, out.cbData) ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+        RegCloseKey(k);
+    }
+    memset(out.pbData, 0, out.cbData);
+    LocalFree(out.pbData);
+    return err;
+}
+
+/* Profile @name's sign-in (the user's, else all users'): its user name
+ * ("DOMAIN\user" with a LogonDomain) and password into @c; FALSE if it has none */
+static BOOL eap_user_data(LPCWSTR name, NovaWlanConnect *c)
+{
+    WCHAR path[300];
+    if (lstrlenW(name) > 255) return FALSE;
+    lstrcpyW(path, EAP_USER_DATA L"\\");
+    lstrcatW(path, name);
+    for (int pass = 0; pass < 2; pass++) {
+        HKEY k;
+        if (RegOpenKeyExW(pass ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, path, 0, KEY_READ, &k)) continue;
+        DWORD type, size = 0;
+        BYTE *blob = NULL;
+        if (!RegQueryValueExW(k, L"Data", NULL, &type, NULL, &size) && type == REG_BINARY && size &&
+            (blob = HeapAlloc(GetProcessHeap(), 0, size)) && RegQueryValueExW(k, L"Data", NULL, &type, blob, &size)) {
+            HeapFree(GetProcessHeap(), 0, blob);
+            blob = NULL;
+        }
+        RegCloseKey(k);
+        if (!blob) continue;
+        DATA_BLOB_ in = { size, blob }, out = { 0, NULL };
+        BOOL ok = CryptUnprotectData(&in, NULL, NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN_, &out) &&
+                  out.cbData >= sizeof(WCHAR);
+        HeapFree(GetProcessHeap(), 0, blob);
+        if (!ok) continue;
+        ((WCHAR *)out.pbData)[out.cbData / sizeof(WCHAR) - 1] = 0;
+        char *x = utf8_of((LPCWSTR)out.pbData);
+        memset(out.pbData, 0, out.cbData);
+        LocalFree(out.pbData);
+        if (!x) continue;
+        char user[128], domain[128];
+        c->user[0] = c->key[0] = 0;
+        if (xml_tag(x, NULL, "Username", user, sizeof(user)) && user[0]) {
+            if (xml_tag(x, NULL, "LogonDomain", domain, sizeof(domain)) && domain[0] &&
+                lstrlenA(domain) + 1 + lstrlenA(user) < (int)sizeof(c->user)) {
+                lstrcpyA(c->user, domain);
+                lstrcatA(c->user, "\\");
+                lstrcatA(c->user, user);
+            } else lstrcpynA(c->user, user, sizeof(c->user));
+        }
+        xml_tag(x, NULL, "Password", c->key, sizeof(c->key));
+        memset(x, 0, lstrlenA(x));
+        HeapFree(GetProcessHeap(), 0, x);
+        return TRUE;
+    }
+    return FALSE;
 }
 
 WLAPI DWORD WINAPI WlanGetProfileList(HANDLE h, const GUID *g, PVOID reserved, PROFILE_LIST_ **out)
@@ -679,8 +824,8 @@ WLAPI DWORD WINAPI WlanGetAvailableNetworkList(HANDLE h, const GUID *g, DWORD fl
         ssid_of(&b[k], &e->dot11Ssid);
         e->dot11BssType = 1;                                       /* (dot11_BSS_type_infrastructure) */
         e->uNumberOfBssids = 1;
-        /* (WPA2-Enterprise: netsh signs in with user=; profiles with EAP settings are not read yet) */
-        e->bNetworkConnectable = b[k].security != NOVAWLAN_OTHER && b[k].security != NOVAWLAN_ENTERPRISE;
+        /* (WPA2-Enterprise: with a profile whose EAP settings are PEAP or EAP-TLS) */
+        e->bNetworkConnectable = b[k].security != NOVAWLAN_OTHER;
         e->wlanNotConnectableReason = e->bNetworkConnectable ? REASON_SUCCESS : REASON_NETWORK_NOT_COMPATIBLE;
         e->uNumberOfPhyTypes = 1;
         e->dot11PhyTypes[0] = g_phy[b[k].phy & 3];
@@ -753,6 +898,10 @@ static DWORD reason_of(LONG_PTR r)
     case NOVAWLAN_KEY_FORMAT:  return REASON_KEY_MISMATCH;
     case NOVAWLAN_UNSUPPORTED: return REASON_NETWORK_NOT_COMPATIBLE;
     case NOVAWLAN_FAILED:      return REASON_CONNECT_CALL_FAIL;
+    case NOVAWLAN_NEEDS_USER:  return REASON_ONEX_NO_USER;
+    case NOVAWLAN_NO_CERT:     return REASON_ONEX_NO_IDENTITY;
+    case NOVAWLAN_UNTRUSTED:
+    case NOVAWLAN_CERT_REFUSED: return REASON_ONEX_EAP_FAILURE;
     }
     return REASON_UNKNOWN;
 }
@@ -767,15 +916,18 @@ static DWORD WINAPI connect_thread(void *p)
     d.dot11Ssid.uSSIDLength = lstrlenA(j->c.ssid);
     memcpy(d.dot11Ssid.ucSSID, j->c.ssid, d.dot11Ssid.uSSIDLength);
     d.dot11BssType = 1;
-    d.bSecurityEnabled = j->c.key[0] != 0;
+    d.bSecurityEnabled = j->c.key[0] != 0 || j->c.eap != NOVAWLAN_EAP_NONE;
     notify(&j->g, ACM_CONNECTION_START, &d, sizeof(d));
     LONG_PTR r = NtNovaSockCtl(0, NOVAWLAN_CONNECT, (ULONG_PTR)j->i, &j->c);
-    d.wlanReasonCode = reason_of(r);
-    if (r != NOVAWLAN_OK) notify(&j->g, ACM_CONNECTION_ATTEMPT_FAIL, &d, sizeof(d));
-    notify(&j->g, ACM_CONNECTION_COMPLETE, &d, sizeof(d));
+    GUID g = j->g;
     memset(j, 0, sizeof(*j));                                   /* (the passphrase) */
     HeapFree(GetProcessHeap(), 0, j);
+    /* (finished before anyone hears so: a program may connect again as
+     * soon as connection_complete arrives, as on Windows) */
     InterlockedExchange(&g_connecting, 0);
+    d.wlanReasonCode = reason_of(r);
+    if (r != NOVAWLAN_OK) notify(&g, ACM_CONNECTION_ATTEMPT_FAIL, &d, sizeof(d));
+    notify(&g, ACM_CONNECTION_COMPLETE, &d, sizeof(d));
     return 0;
 }
 
@@ -796,15 +948,17 @@ WLAPI DWORD WINAPI WlanConnect(HANDLE h, const GUID *g, const CONNECT_PARAMS_ *p
     case MODE_PROFILE: {
         WCHAR *x = p->strProfile ? load_profile(p->strProfile, NULL) : NULL;
         if (!x) { err = p->strProfile ? ERROR_NOT_FOUND : ERROR_INVALID_PARAMETER; break; }
-        if (!parse_profile(x, name, j->c.ssid, j->c.key)) err = ERROR_BAD_PROFILE;
+        if (!parse_profile(x, name, j->c.ssid, j->c.key, &j->c.eap)) err = ERROR_BAD_PROFILE;
         WlanFreeMemory(x);
         lstrcpynW(j->profile, p->strProfile, 256);
+        if (!err && j->c.eap != NOVAWLAN_EAP_NONE) eap_user_data(p->strProfile, &j->c);   /* (its sign-in) */
         break;
     }
     case MODE_TEMPORARY:
         if (!p->strProfile) { err = ERROR_INVALID_PARAMETER; break; }
-        if (!parse_profile(p->strProfile, name, j->c.ssid, j->c.key)) { err = ERROR_BAD_PROFILE; break; }
+        if (!parse_profile(p->strProfile, name, j->c.ssid, j->c.key, &j->c.eap)) { err = ERROR_BAD_PROFILE; break; }
         wide(j->profile, 256, name);
+        if (j->c.eap != NOVAWLAN_EAP_NONE) eap_user_data(j->profile, &j->c);  /* (a saved one of that name's) */
         break;
     case MODE_SECURE:
     case MODE_UNSECURE:                                         /* (an open network, by its SSID alone) */
@@ -884,6 +1038,7 @@ WLAPI DWORD WINAPI WlanQueryInterface(HANDLE h, const GUID *g, DWORD op, PVOID r
         a->wlanAssociationAttributes.wlanSignalQuality = o.bss.quality;
         a->wlanAssociationAttributes.ulRxRate = a->wlanAssociationAttributes.ulTxRate = 144400;   /* (kbps: MCS 15, 20 MHz) */
         a->wlanSecurityAttributes.bSecurityEnabled = o.bss.security != NOVAWLAN_OPEN;
+        a->wlanSecurityAttributes.bOneXEnabled = o.bss.security == NOVAWLAN_ENTERPRISE;
         a->wlanSecurityAttributes.dot11AuthAlgorithm = auth_of(&o.bss);
         a->wlanSecurityAttributes.dot11CipherAlgorithm = o.bss.security == NOVAWLAN_OPEN ? CIPHER_NONE : CIPHER_CCMP;
         *size = sizeof(*a);
@@ -914,6 +1069,9 @@ WLAPI DWORD WINAPI WlanReasonCodeToString(DWORD code, DWORD cap, PWCHAR buf, PVO
         { REASON_NETWORK_NOT_AVAILABLE, L"The network is not available." },
         { REASON_KEY_MISMATCH,          L"The network security key is not correct." },
         { REASON_PROFILE_MISSING,       L"The profile was not found." },
+        { REASON_ONEX_NO_USER,          L"No user credentials were found to sign in to the network." },
+        { REASON_ONEX_NO_IDENTITY,      L"No certificate was found for the user." },
+        { REASON_ONEX_EAP_FAILURE,      L"The authentication server refused the sign-in." },
     };
     const WCHAR *s = L"An unknown reason.";
     for (unsigned i = 0; i < sizeof(t) / sizeof(t[0]); i++) if (t[i].code == code) s = t[i].text;

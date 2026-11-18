@@ -875,6 +875,11 @@ static void defaults(void)
         RegKey *pc = kpath(path, false);
         if (!has_value(pc, "")) kset_sz(pc, "", fw_cls[i][0], 1);
     }
+    /* the Network List Manager (netprofm.dll's NetworkListManager) */
+    RegKey *nlm = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{DCB00C01-570F-4A9B-8D69-199FDBA5723B}\\InprocServer32", false);
+    if (!has_value(nlm, "")) { kset_sz(nlm, "", "netprofm.dll", 1); kset_sz(nlm, "ThreadingModel", "Both", 1); }
+    RegKey *nlmc = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{DCB00C01-570F-4A9B-8D69-199FDBA5723B}", false);
+    if (!has_value(nlmc, "")) kset_sz(nlmc, "", "Network List Manager", 1);
     /* Task Scheduler 2.0 (taskschd.dll's TaskScheduler class) */
     RegKey *ts = kpath("Machine\\SOFTWARE\\Classes\\CLSID\\{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}\\InprocServer32", false);
     if (!has_value(ts, "")) { kset_sz(ts, "", "taskschd.dll", 1); kset_sz(ts, "ThreadingModel", "Both", 1); }

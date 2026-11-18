@@ -7,13 +7,16 @@
 # pixels, the island is sent a mouse click, the characters "Nova" and Space
 # (the Button's Click fires twice, the page's CharacterReceived writes the
 # characters into a TextBlock: the step's input part), the page is
-# screenshotted, then the window closes and the app exits
+# screenshotted, then the window closes and the app exits; and a TextBox
+# (XAML text input part 3, on NovaOS's WinUIEdit.dll): clicked, typed into,
+# Backspace, TextChanged and its text's pixels
 DOC = ('`xamlpagetest` (a XAML page in a `Window`: the framework\'s desktop window, built from its sources, on the '
        'Windows App SDK\'s content islands as NovaOS\'s `Microsoft.UI.Input.dll` serves them (`ContentIsland`, '
        '`DesktopChildSiteBridge`, the island\'s input sources, `AppWindow`), showing a `Grid` with a `TextBlock` and a '
        '`Button` loaded by `XamlReader.Load`, laid out to the window\'s size and drawn through the framework\'s composition '
        'tree on `dcomp.dll`\'s compositor, its `Border`\'s colour read back from the window, clicked with the mouse '
-       'and with Space and typed into, then closed)')
+       'and with Space and typed into, with a `TextBox` clicked, typed into ("Hi!", then Backspace), its `TextChanged` '
+       'counted and its text found in its pixels, then closed)')
 TESTS = [
     Test('xamlpagetest', 'xamlpagetest', [r'xamlpagetest: \d+ passed, 0 failed \(64-bit\)'], timeout=200,
          shot=r'xamlpagetest: page on screen'),

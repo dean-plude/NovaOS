@@ -24,11 +24,14 @@
  * scrolled to keep the caret in view and multi-line text word-wrapped.
  *
  * TxDrawD2D draws the same onto a Direct2D render target (XAML's text
- * boxes draw that way).  The Text Object Model over the same text
+ * boxes draw that way): with DirectWrite glyph runs in the face the host's
+ * IProvideFontInfo names, when it has one (XAML's TextServicesHost:
+ * dwtext.c), else through a bitmap.  XAML's pointer input arrives as
+ * EM_MOUSEINPUT.  The Text Object Model over the same text
  * (ITextDocument2 by QueryInterface, IRichEditOle by EM_GETOLEINTERFACE,
- * its ranges and selection) is tom.c.  Plain text in one character format
- * (ITextFont2 and ITextPara2 come with XAML's TextBox).  Written from the
- * Rich Edit and text services documentation.
+ * its ranges and selection) is tom.c, its format objects tomfmt.c.  Plain
+ * text in one character format.  Written from the Rich Edit and text
+ * services documentation.
  */
 #include "tsint.h"
 
@@ -114,6 +117,7 @@ static void refresh_format(TS *t)
     t->font = CreateFontIndirectW(&lf);
     t->lineh = 0;
     t->dirty = TRUE;
+    dw_refresh(t);                                /* (the host's DirectWrite face, when it gives one) */
 }
 
 /* A device context to measure with: TxDraw's, the host's, or our own */
@@ -152,6 +156,10 @@ static void measure(TS *t, HDC dc, LONG start, LONG n, int *dx, SIZE *sz)
     if (n <= 0) return;
     if (n > 256) s = alloc(n * sizeof(WCHAR));
     for (i = 0; i < n; i++) s[i] = shown(t, start + i) == L'\t' ? L' ' : shown(t, start + i);
+    if (dw_measure(t, s, n, dx, sz)) {            /* (the host's DirectWrite face: dwtext.c) */
+        if (s != stackbuf) release(s);
+        return;
+    }
     if (!GetTextExtentExPointW(dc, s, (int)n, 0, 0, dx, sz) && dx) {
         int x = 0;                                /* (fallback: one at a time) */
         for (i = 0; i < n; i++) { SIZE c; GetTextExtentPoint32W(dc, s + i, 1, &c); x += c.cx; dx[i] = x; }
@@ -462,7 +470,12 @@ void changed(TS *t)
     t->dirty = TRUE;
     t->modified = TRUE;
     selection_changed(t);
-    if (t->mask & ENM_CHANGE) notify(t, EN_CHANGE, 0);
+    if (t->mask & ENM_CHANGE) {
+        /* (a windowless host's EN_CHANGE carries what changed: XAML's text
+         * boxes read it) */
+        CHANGENOTIFY cn = { CN_TEXTCHANGED, 0 };
+        notify(t, EN_CHANGE, &cn);
+    }
 }
 
 BOOL undo_redo(TS *t, BOOL redo)
@@ -507,7 +520,9 @@ LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL t
     if (n < 0) { n = 0; while (s && s[n]) n++; }
     if (!(norm = alloc((n + 1) * sizeof(WCHAR)))) return -1;
     k = normalise(t, s, n, norm);
-    room = (LONG)t->maxlen - (t->len - (b - a));
+    /* (the limit is a DWORD: a host with no limit, XAML's text boxes,
+     * answers TxGetMaxLength INFINITE) */
+    room = t->maxlen > 0x7fffffff ? 0x7fffffff - (t->len - (b - a)) : (LONG)t->maxlen - (t->len - (b - a));
     if (room < 0) room = 0;
     if (k > room) { k = room; notify(t, EN_MAXTEXT, 0); }
     if (k == 0 && a == b) { release(norm); return -1; }
@@ -793,6 +808,14 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
     case WM_MOUSEMOVE:
         if (t->dragging && (wp & MK_LBUTTON)) set_sel(t, t->anchor, hit(t, (short)LOWORD(lp), (short)HIWORD(lp)));
         break;
+    case NOVA_EM_SETDPI:
+        r = TRUE;
+        break;
+    case NOVA_EM_MOUSEINPUT: {                    /* XAML's text boxes: lp = NOVA_RE_MOUSEINPUT * */
+        const NOVA_RE_MOUSEINPUT *in = (const NOVA_RE_MOUSEINPUT *)lp;
+        if (!in) return E_INVALIDARG;
+        return send(t, in->msg, in->wparam, MAKELPARAM((WORD)in->pt.x, (WORD)in->pt.y), res);
+    }
     case WM_LBUTTONUP:
         if (t->dragging && t->host) HOST(t)->TxSetCapture(t->host, FALSE);
         t->dragging = FALSE;
@@ -1399,6 +1422,14 @@ static HRESULT TXAPI ts_drawd2d(ITextServices2 *me, ID2D1RenderTarget_ *rt, LPCR
     if (!t->memdc) t->memdc = CreateCompatibleDC(0);
     dc = t->memdc;
     if (t->host) HOST(t)->TxGetBackStyle(t->host, &back);
+    if (t->face) {
+        /* the host's DirectWrite face: glyph runs (dwtext.c), laid out for
+         * the drawn width first, as draw() does */
+        if (t->dirty || !t->nlines
+            || ((t->bits & TXTBIT_MULTILINE) && (t->bits & TXTBIT_WORDWRAP) && t->layoutw != w))
+            layout(t, dc, w);
+        return dw_draw(t, rt, &rc, back == TXTBACK_OPAQUE);
+    }
     if (!(colour = dib(dc, w, h, &cbits))) return E_OUTOFMEMORY;
     if (back == TXTBACK_OPAQUE) {
         draw_pass(t, dc, colour, cbits, w, h, 0);
@@ -1465,6 +1496,7 @@ static ULONG STDMETHODCALLTYPE in_release(IUnknown *me)
     LONG r = InterlockedDecrement(&t->ref);
     if (!r) {
         tom_free(t);
+        dw_free(t);
         clear_stack(t->undo, &t->nundo);
         clear_stack(t->redo, &t->nredo);
         if (t->font) DeleteObject(t->font);
@@ -1515,6 +1547,7 @@ __declspec(dllexport) HRESULT WINAPI ShutdownTextServices(IUnknown *services)
     if (services->lpVtbl->QueryInterface(services, &iid_ts, (void **)&ts) != S_OK || !ts) return E_INVALIDARG;
     if (ts->lpVtbl != &ts_vtbl) { ts->lpVtbl->Release(ts); return E_INVALIDARG; }
     FROM_IFACE(ts)->host = 0;
+    FROM_IFACE(ts)->fontinfo = 0;                 /* (the host's) */
     ts->lpVtbl->Release(ts);
     (void)in;
     return S_OK;

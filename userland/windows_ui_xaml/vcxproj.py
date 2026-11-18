@@ -37,6 +37,15 @@ def expand(value, props):
     return out
 
 
+def own(text, name):
+    """the value the project file itself gives property @name (or None;
+    never the ones MSBuild's props give, which expand() looks up)"""
+    if name == 'ProjectIncludeDirectories':
+        return None
+    m = re.search(r'<%s>([^<]*)</%s>' % (name, name), text)
+    return m.group(1) if m else None
+
+
 def read(path, props):
     """{'sources': [...], 'includes': [...], 'defines': [...]} of @path"""
     text = open(path, encoding='utf-8-sig').read()
@@ -56,6 +65,9 @@ def read(path, props):
             if src and src.endswith(('.cpp', '.c')):
                 res['sources'].append(src)
     for block in re.findall(r'<ProjectIncludeDirectories>(.*?)</ProjectIncludeDirectories>', text, re.S):
+        # (a list of the project's own it names, "$(OwnIncludes)", the text
+        # box controls' project: defined in the same file)
+        block = re.sub(r'\$\((\w+)\)', lambda m: own(text, m.group(1)) or m.group(0), block)
         for d in block.split(';'):
             d = d.strip()
             if not d or d.startswith('$(ProjectIncludeDirectories)'):

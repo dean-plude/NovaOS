@@ -23,9 +23,11 @@
  * SetPoint, GetRect, RangeFromPoint), FindText, ChangeCase, the clipboard
  * (Cut, Copy, Paste, CanPaste), undo and redo (with tomSuspend/tomResume
  * and tomFalse/tomTrue), Freeze/Unfreeze, the text limit, the client rect
- * and the input context.  Character and paragraph formatting objects
- * (ITextFont2, ITextPara2), tables, math, embedded objects and IDispatch's
- * late binding answer E_NOTIMPL.  Written from the Text Object Model
+ * and the input context.  The character and paragraph format objects
+ * (ITextFont2, ITextPara2) are tomfmt.c's, with what XAML's TextBoxBase
+ * asks of them; tables, math, embedded objects and IDispatch's late
+ * binding answer E_NOTIMPL.  In a plain-text control the final paragraph
+ * mark is never text (GetText2 with tomAllowFinalEOP leaves it out).  Written from the Text Object Model
  * documentation.
  */
 #include "tsint.h"
@@ -208,7 +210,10 @@ static HRESULT edit(RANGE *r, LONG a, LONG b, const WCHAR *s, LONG n)
 static BSTR text_of(TS *t, LONG a, LONG b, LONG flags)
 {
     LONG i, n = 0, k = 0;
-    BOOL final = b > t->len && (flags & tomAllowFinalEOP);
+    /* (a plain-text control's final paragraph mark is never text: XAML's
+     * TextBox reads its Text with tomAllowFinalEOP, a RichEditBox's text
+     * ends in it) */
+    BOOL final = b > t->len && (flags & tomAllowFinalEOP) && (t->bits & TXTBIT_RICHTEXT);
     BSTR out;
     if (b > t->len) b = t->len;
     if (a > b) a = b;
@@ -490,8 +495,10 @@ static HRESULT STDMETHODCALLTYPE r_setend(ITextRange2 *me, LONG cp)
     return S_OK;
 }
 
-/* character and paragraph formatting objects: with XAML's TextBox */
+/* character and paragraph formatting objects (tomfmt.c), and the rows of tables */
 static HRESULT STDMETHODCALLTYPE r_getobj(ITextRange2 *me, void **out) { (void)me; if (out) *out = 0; return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE r_getfont(ITextRange2 *me, void **out) { (void)me; return tom_format(TRUE, out); }
+static HRESULT STDMETHODCALLTYPE r_getpara(ITextRange2 *me, void **out) { (void)me; return tom_format(FALSE, out); }
 static HRESULT STDMETHODCALLTYPE r_setobj(ITextRange2 *me, void *p) { (void)me; (void)p; return E_NOTIMPL; }
 
 static HRESULT STDMETHODCALLTYPE r_storylen(ITextRange2 *me, LONG *n)
@@ -1156,7 +1163,7 @@ static const ITextRange2Vtbl range_vtbl = {
     r_tcount, r_tinfo, r_ids, r_invoke,
     /* ITextRange */
     r_gettext, r_settext, r_getchar, r_setchar, r_dup, r_getformatted, r_setformatted,
-    r_getstart, r_setstart, r_getend, r_setend, r_getobj, r_setobj, r_getobj, r_setobj,
+    r_getstart, r_setstart, r_getend, r_setend, r_getfont, r_setobj, r_getpara, r_setobj,
     r_storylen, r_storytype, r_collapse, r_expand, r_getindex, r_setindex, r_setrange,
     r_inrange, r_instory, r_isequal, r_select, r_startof, r_endof, r_move, r_movestart, r_moveend,
     r_movecset, r_movecset, r_movecset, r_movecset, r_movecset, r_movecset,
@@ -1165,8 +1172,8 @@ static const ITextRange2Vtbl range_vtbl = {
     /* ITextSelection */
     r_getflags, r_setflags, r_gettype, r_left, r_right, r_up, r_down, r_home, r_end, r_typetext,
     /* ITextRange2 */
-    r_getcch, r_getunk, r_getunk, r_getcount, r_dup2, r_getobj, r_setobj, r_getformatted2, r_setformatted2,
-    r_getgravity, r_setgravity, r_getobj, r_setobj, r_getobj, r_startpara, r_getunk, r_geturl, r_setbstr,
+    r_getcch, r_getunk, r_getunk, r_getcount, r_dup2, r_getfont, r_setobj, r_getformatted2, r_setformatted2,
+    r_getgravity, r_setgravity, r_getpara, r_setobj, r_getobj, r_startpara, r_getunk, r_geturl, r_setbstr,
     r_addsub, r_long1, r_long2, r_find2, r_getchar2, r_dropcap, r_getinline, r_getprop, r_getrect,
     r_getsub, r_gettext2, r_void, r_long3, r_long1, r_setsub, r_long2, r_setprop, r_settext2, r_void,
     r_setinline, r_mathtype, r_image,

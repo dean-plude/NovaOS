@@ -34,6 +34,8 @@
 #include <Grid.g.h>
 #include <Button.g.h>
 #include <TextBlock.g.h>
+#include <TextBox.g.h>
+#include <TextChangedEventArgs.g.h>
 #include <CharacterReceivedRoutedEventArgs.g.h>
 #include <Window.g.h>
 #include <roapi.h>
@@ -101,6 +103,10 @@ static App *s_app;
 static ctl::ComPtr<xaml::IWindow> s_window;
 static ctl::ComPtr<xaml::IFrameworkElement> s_panel, s_button, s_grid, s_label;
 static ctl::ComPtr<xaml_controls::ITextBlock> s_status, s_typed;
+static ctl::ComPtr<xaml_controls::ITextBox> s_box;     /* (the page's TextBox: XAML text input, part 3) */
+static ctl::ComPtr<xaml::IFrameworkElement> s_boxElement;
+static int s_text_changed;      /* the TextBox's TextChanged handler's count */
+static COLORREF s_box_before[200 * 32];         /* the TextBox's pixels before typing */
 static int s_shown;     /* ticks since the checks, while the page stays on screen */
 static int s_step;      /* the input steps, one per tick */
 static int s_pixel_ticks;       /* ticks waited for the first frame's pixels */
@@ -134,6 +140,30 @@ static LPARAM island_point(HWND top, HWND island, int x, int y)
     POINT p = { x, y };
     MapWindowPoints(top, island, &p, 1);
     return MAKELPARAM(p.x, p.y);
+}
+
+/* the TextBox's pixels (its 200x32 at the window's client point 24,260) */
+static void box_pixels(HWND top, HWND island, COLORREF *out)
+{
+    POINT at = { 24, 260 };
+    MapWindowPoints(top, island, &at, 1);
+    HDC dc = GetDC(island);
+    for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 200; x++)
+            out[y * 200 + x] = dc ? GetPixel(dc, at.x + x, at.y + y) : CLR_INVALID;
+    if (dc) ReleaseDC(island, dc);
+}
+
+static HRESULT on_text_changed(IInspectable *, xaml_controls::ITextChangedEventArgs *)
+{
+    s_text_changed++;
+    return S_OK;
+}
+
+static bool box_text_is(const wchar_t *text)
+{
+    wrl_wrappers::HString h;
+    return s_box && SUCCEEDED(s_box->get_Text(h.GetAddressOf())) && is(h.Get(), text);
 }
 
 static void set_text(xaml_controls::ITextBlock *block, const wchar_t *text)
@@ -188,7 +218,9 @@ static HRESULT on_character(xaml::IUIElement *, xaml_input::ICharacterReceivedRo
 
 /* the input, one step per tick (the framework handles each step's messages
  * before the next): the mouse clicks the Button, "Nova" is typed, Space
- * clicks the focused Button */
+ * clicks the focused Button; then the mouse clicks the TextBox, which takes
+ * the focus, "Hi!" is typed into it, Backspace takes the "!" off, and its
+ * text is drawn */
 static void input_step(HWND top, HWND island)
 {
     LPARAM button = island_point(top, island, 24 + 60, 148 + 20);  /* (the Button's middle) */
@@ -214,10 +246,60 @@ static void input_step(HWND top, HWND island)
         PostMessageW(island, WM_KEYDOWN, VK_SPACE, MAKELPARAM(1, MapVirtualKeyW(VK_SPACE, MAPVK_VK_TO_VSC)));
         PostMessageW(island, WM_KEYUP, VK_SPACE, MAKELPARAM(1, MapVirtualKeyW(VK_SPACE, MAPVK_VK_TO_VSC)) | 0xC0000000);
         break;
-    case 5:
+    case 5: {
         CHECK("Space clicks the focused Button", s_clicks == 2);
         CHECK("which the page shows", text_is(s_status.Get(), L"Clicked 2"));
+        box_pixels(top, island, s_box_before);
+        LPARAM box = island_point(top, island, 24 + 100, 260 + 16);    /* (the TextBox's middle) */
+        PostMessageW(island, WM_MOUSEMOVE, 0, box);
+        PostMessageW(island, WM_LBUTTONDOWN, MK_LBUTTON, box);
+        PostMessageW(island, WM_LBUTTONUP, 0, box);
         break;
+    }
+    case 6: {
+        ctl::ComPtr<xaml::IUIElement> control;
+        xaml::FocusState focus = xaml::FocusState_Unfocused;
+        CHECK("the click focuses the TextBox", s_box && SUCCEEDED(s_box.As(&control)) &&
+              SUCCEEDED(control->get_FocusState(&focus)) && focus != xaml::FocusState_Unfocused);
+        printf("xamlpagetest: TextBox focus state %d\n", static_cast<int>(focus));
+        for (const wchar_t *c = L"Hi!"; *c; c++)
+            PostMessageW(island, WM_CHAR, *c, 1);
+        break;
+    }
+    case 7: {
+        wrl_wrappers::HString h;
+        if (s_box) s_box->get_Text(h.GetAddressOf());
+        printf("xamlpagetest: TextBox text \"%ls\"\n", h.Get() ? WindowsGetStringRawBuffer(h.Get(), nullptr) : L"");
+        CHECK("typed keys reach the TextBox (its Text)", box_text_is(L"Hi!"));
+        /* (and the page sees them too: XAML's text boxes leave CharacterReceived
+         * unhandled, so an app's handlers get it, CTextBoxBase::OnCharacterReceived) */
+        CHECK("the page's CharacterReceived handler sees them too", !wcscmp(s_text, L"NovaHi!"));
+        /* (Backspace's WM_CHAR is the island's TranslateMessage's, as a key's) */
+        PostMessageW(island, WM_KEYDOWN, VK_BACK, MAKELPARAM(1, MapVirtualKeyW(VK_BACK, MAPVK_VK_TO_VSC)));
+        PostMessageW(island, WM_KEYUP, VK_BACK, MAKELPARAM(1, MapVirtualKeyW(VK_BACK, MAPVK_VK_TO_VSC)) | 0xC0000000);
+        break;
+    }
+    case 8:
+        CHECK("Backspace deletes the last character", box_text_is(L"Hi"));
+        break;
+    case 9: {
+        /* the text drawn: the TextBox's pixels changed where it is */
+        static COLORREF after[200 * 32];
+        box_pixels(top, island, after);
+        int changed = 0, inner = 0;
+        for (int y = 6; y < 26; y++)
+            for (int x = 8; x < 60; x++)
+                if (after[y * 200 + x] != after[y * 200 + 120]) inner++;   /* (text against the box's own background) */
+        for (int i = 0; i < 200 * 32; i++)
+            if (after[i] != s_box_before[i]) changed++;
+        printf("xamlpagetest: TextBox pixels changed %d, text pixels %d\n", changed, inner);
+        /* (TextChanged is raised asynchronously, as on Windows: by now, once
+         * for each character typed and for the Backspace) */
+        CHECK("the TextBox's TextChanged fires for each change", s_text_changed == 4);
+        printf("xamlpagetest: TextChanged %d times\n", s_text_changed);
+        CHECK("the TextBox draws its text", inner >= 20);
+        break;
+    }
     }
 }
 
@@ -227,7 +309,7 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
 {
     double w = 0, h = 0;
     bool laid_out = s_panel && SUCCEEDED(s_panel->get_ActualWidth(&w)) && w > 0;
-    if (s_checked && s_step < 6) {
+    if (s_checked && s_step < 10) {
         HWND top = find_window();
         HWND island = find_island(top);
         if (!s_step) {
@@ -241,7 +323,7 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
         }
         if (++s_step == 1) CHECK("the content island's window", island != nullptr);
         if (island) input_step(top, island);
-        if (s_step == 6) {
+        if (s_step == 10) {
             printf("xamlpagetest: page on screen\n");
             fflush(stdout);
         }
@@ -287,6 +369,10 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
     CHECK("the TextBlock is laid out to its text", s_label && SUCCEEDED(s_label->get_ActualWidth(&tw)) &&
           SUCCEEDED(s_label->get_ActualHeight(&th)) && tw > 0 && th > 0);
     printf("xamlpagetest: text %gx%g\n", tw, th);
+    double xw = 0, xh = 0;
+    CHECK("the TextBox is laid out at its size", s_boxElement && SUCCEEDED(s_boxElement->get_ActualWidth(&xw)) &&
+          SUCCEEDED(s_boxElement->get_ActualHeight(&xh)) && xw == 200 && xh == 32);
+    printf("xamlpagetest: textbox %gx%g\n", xw, xh);
     fflush(stdout);
     return S_OK;
 }
@@ -318,6 +404,7 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
         L"<Button x:Name='go' Content='Click me' Width='120' Height='40' Margin='24,148,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"<TextBlock x:Name='status' Text='Not clicked' FontSize='16' Margin='168,156,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"<TextBlock x:Name='typed' Text='Typed: ' FontSize='16' Margin='24,212,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<TextBox x:Name='box' Width='200' Height='32' Margin='24,260,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"</Grid>").Get(), page.ReleaseAndGetAddressOf()) : E_FAIL);
     if (page) page.As(&s_grid);
     ctl::ComPtr<IInspectable> found;
@@ -329,12 +416,20 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
     if (s_grid && SUCCEEDED(s_grid->FindName(status.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_status);
     if (s_grid && SUCCEEDED(s_grid->FindName(typed.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_typed);
     CHECK("the page's Border, TextBlocks and Button", s_panel && s_button && s_label && s_status && s_typed);
+    wrl_wrappers::HStringReference boxName(L"box");
+    if (s_grid && SUCCEEDED(s_grid->FindName(boxName.Get(), found.ReleaseAndGetAddressOf())) && found) {
+        found.As(&s_box);
+        found.As(&s_boxElement);
+    }
+    CHECK("the page's TextBox", s_box != nullptr);
 
     /* its handlers: the Button's Click, the page's CharacterReceived */
     ctl::ComPtr<xaml_primitives::IButtonBase> buttonBase;
     EventRegistrationToken token;
     CHECK_HR("Click handler", s_button && SUCCEEDED(s_button.As(&buttonBase)) ?
              buttonBase->add_Click(wrl::Callback<xaml::IRoutedEventHandler>(on_click).Get(), &token) : E_FAIL);
+    CHECK_HR("TextChanged handler", s_box ? s_box->add_TextChanged(wrl::Callback<xaml_controls::ITextChangedEventHandler>(
+                 on_text_changed).Get(), &token) : E_FAIL);
     ctl::ComPtr<xaml::IUIElement> gridElement;
     CHECK_HR("CharacterReceived handler", s_grid && SUCCEEDED(s_grid.As(&gridElement)) ?
              gridElement->add_CharacterReceived(wrl::Callback<wf::ITypedEventHandler<xaml::UIElement *,

@@ -432,6 +432,26 @@ ToggleMenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem,
 MenuFlyoutPresenter, MenuFlyoutPresenterTemplateSettings, the four
 automation peers and ContextMenuEventArgs.
 
+XAML text input, third part (a typable TextBox on a page), the same
+commit, unchanged (upstream line endings): core/native/text/Controls'
+TextBoxBase, TextBox, TextBoxView, TextServicesHost, HWRenderTarget,
+HWSolidColorBrush, HWStrokeStyle, HwTextBitmap, Util,
+TextBoxUIManagerEventSink, PrivateTextInputSettings,
+TextBoxCommandHandler, TextControlsPinvokes and RichEditOleCallback .cpp
+with every header of that directory, its precomp.h and
+Native.Text.Controls.vcxproj; core/text/TextBox/TextBoxHelpers.cpp and
+core/text/common/TextSelectionSettings.cpp; core/inc/GripperPopup.h;
+dxaml/lib's
+TextBox_Partial.cpp, TextBoxView_Partial.cpp,
+TextBoxPlaceholderTextHelper.cpp and .h, TextControlFlyoutHelper.cpp and
+TextAlternativesAsyncOperation.h; and winrtgeneratedclasses' .g.cpp of
+TextBox, TextBoxBase, TextBoxView, TextChangedEventArgs,
+TextBoxTextChangingEventArgs, TextBoxBeforeTextChangingEventArgs,
+TextBoxSelectionChangingEventArgs, CandidateWindowBoundsChangedEventArgs,
+TextControlPasteEventArgs, TextControlCopyingToClipboardEventArgs,
+TextControlCuttingToClipboardEventArgs, TextCompositionChangedEventArgs,
+TextCompositionEndedEventArgs and TextCompositionStartedEventArgs.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

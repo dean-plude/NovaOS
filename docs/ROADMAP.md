@@ -403,8 +403,10 @@ item ends when a named program or test demonstrates it.
   (`SetLocaleInfo`), `GetDurationFormat`/`Ex`, and twelve calendars with
   `GetCalendarInfo`, `EnumCalendarInfo`, `EnumDateFormats` and
   `DATE_USE_ALT_CALENDAR` (`nlstest calendars`, `nlstest override`).
-- .NET: an unhandled managed exception prints "Stack overflow." instead of
-  the exception and its stack trace (with NLS as well as ICU).
+- ~~.NET: an unhandled managed exception prints "Stack overflow." instead of
+  the exception and its stack trace (with NLS as well as ICU).~~ Done
+  (`stacktest`; the app corpus's .NET entry): thread stacks had no guard
+  page, which the .NET runtime looks for before it prints the exception.
 - ~~Scheduler: a thread woken by a timer preempts the running thread
   instead of waiting up to a 20 ms time slice~~ Done (`sleeptest timer`
   holds the timer queue case to 1 ms under load).

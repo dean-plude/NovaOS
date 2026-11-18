@@ -1943,5 +1943,29 @@ vendors.
    framework in are one module with it, so the app's side is tested where
    the framework is the system DLL).
 
+   Pulsar item 3, twenty-seventh slice: lists.  Calculator's history and
+   memory lists are `ListView`s, whose constructor was an unbuilt stand-in.
+   Vendored and built from microsoft-ui-xaml 866ba81: `Selector` with its
+   selected items (`Selection`), `ListViewBase` (all nine of its partial
+   files: selection, interaction, reorder, container phases, data
+   virtualization, semantic zoom, serialization, UI Automation
+   properties), `ListView`, the containers (`SelectorItem`,
+   `ListViewBaseItem`, `ListViewItem`, the header items) with their
+   template settings, `ListViewItemPresenter`, `ItemIndexRange`,
+   incremental loading and the connected animation operation, the event
+   arguments, and two small components, `visualstateshelper` and
+   `ItemIndexRangeHelper`.  Two NovaOS changes made them compile: NovaOS's
+   WRL `AsyncBase::FireCompletion` returns `HRESULT` as the Windows SDK's
+   does (the sources wrap it in `IFC`), and `nova_async_info.h`, forced
+   into the two incremental loading sources, names `IAsyncInfo` bare as the
+   SDK lets them.  Not built yet: the automation peers and dragging items
+   out (`StartDragAsyncOperation.cpp` needs the closed
+   `FrameworkUdk/CoreDragOperationFunctions.h`), and the panels a list's
+   template lays its items out in (`ItemsStackPanel`,
+   `ModernCollectionBasePanel`).  Calculator's page gets past its lists
+   and stops next at `LinearGradientBrush`.  Test: `wuxamltest` (a
+   `ListView` from markup over `ListViewBase` and `Selector`, its two
+   items, `SelectionMode` `Single`, `SelectedIndex` -1).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -27,6 +27,9 @@
  *   - a MenuFlyout from markup (Calculator's history and memory context
  *     menus), its item, separator and toggle item in its Items, the
  *     item's Text read back;
+ *   - a ListView from markup (Calculator's history and memory lists),
+ *     made over ListViewBase, Selector and the ItemsControl, its two
+ *     string items in its Items, nothing selected (SelectedIndex -1);
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
  *     ButtonAutomationPeer), the same one from FromElement after, and the
@@ -850,6 +853,38 @@ static void pivot_checks()
           SUCCEEDED(itemCollection->get_Size(&itemCount)) && itemCount == 2);
 }
 
+/* a ListView from markup, as Calculator's history and memory lists: made
+ * over ListViewBase and Selector, its two items in its Items, nothing
+ * selected yet */
+static void list_view_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> listObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<ListView " XMLNS L"SelectionMode='Single'>"
+                                                    L"<ListViewItem Content='1 + 1'/><ListViewItem Content='2'/>"
+                                                    L"</ListView>").Get(),
+                     listObject.GetAddressOf()) : E_FAIL;
+    CHECK("a ListView with two items from markup", SUCCEEDED(hr) && listObject);
+    ctl::ComPtr<wuxc::IListView> list;
+    ctl::ComPtr<wuxc::IListViewBase> listBase;
+    ctl::ComPtr<wuxc::Primitives::ISelector> selector;
+    CHECK("it is Windows' ListView over ListViewBase and Selector", listObject &&
+          SUCCEEDED(listObject.As(&list)) && SUCCEEDED(listObject.As(&listBase)) && SUCCEEDED(listObject.As(&selector)));
+    ctl::ComPtr<wuxc::IItemsControl> itemsControl;
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IObservableVector<IInspectable *>> observable;
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IVector<IInspectable *>> items;
+    unsigned int itemCount = 0;
+    CHECK("the ListView (an ItemsControl) holds its two items", listObject &&
+          SUCCEEDED(listObject.As(&itemsControl)) && SUCCEEDED(itemsControl->get_Items(observable.GetAddressOf())) &&
+          observable && SUCCEEDED(observable.As(&items)) && SUCCEEDED(items->get_Size(&itemCount)) && itemCount == 2);
+    INT32 selected = 0;
+    wuxc::ListViewSelectionMode mode = wuxc::ListViewSelectionMode_None;
+    CHECK("its SelectionMode is Single and nothing is selected (SelectedIndex -1)", listBase && selector &&
+          SUCCEEDED(listBase->get_SelectionMode(&mode)) && mode == wuxc::ListViewSelectionMode_Single &&
+          SUCCEEDED(selector->get_SelectedIndex(&selected)) && selected == -1);
+}
+
 /* a MenuFlyout from markup, as Calculator's history and memory lists hold
  * their context menus in their resources: the flyout, its items (an item, a
  * separator and a toggle item) in its Items, the first item's Text */
@@ -921,6 +956,7 @@ public:
         navigation_transition_checks();
         pivot_checks();
         menu_flyout_checks();
+        list_view_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

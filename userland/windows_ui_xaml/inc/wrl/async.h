@@ -200,13 +200,14 @@ protected:
         return S_OK;
     }
     /* completes the operation if it is still running, then calls the
-       Completed handler (once) with the state it ended in */
-    void FireCompletion()
+       Completed handler (once) with the state it ended in; S_OK, as the
+       Windows SDK's (callers wrap it in IFC) */
+    HRESULT FireCompletion()
     {
         TryTransitionToCompleted();
         TComplete *handler = complete_;
         if (!handler || ::InterlockedCompareExchange(&fired_, 1, 0) != 0)
-            return;
+            return S_OK;
         ComPtr<typename Details::DelegateTraits<TComplete>::Interface> self;
         if (SUCCEEDED(static_cast<ABI::Windows::Foundation::IAsyncInfo *>(this)->QueryInterface(
                 __uuidof(typename Details::DelegateTraits<TComplete>::Interface),
@@ -218,6 +219,7 @@ protected:
                                            : static_cast<ABI::Windows::Foundation::AsyncStatus>(s);
             handler->Invoke(self.Get(), status);
         }
+        return S_OK;
     }
 
     ~AsyncBase()

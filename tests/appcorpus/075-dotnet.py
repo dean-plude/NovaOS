@@ -39,10 +39,13 @@ APP = App('.NET', '10.0.12', f'{NUGET}/microsoft.netcore.app.runtime.win-x64/10.
                           [r'Microsoft\.NETCore\.App 10\.0\.12'], timeout=300),
                      Test('culture formats', rf'{A}\dotnet\dotnet.exe {A}\dotnet\culturetest.dll',
                           [r'globalization: ICU', r'culturetest: ok'], timeout=300),
-                     Test('unhandled exception', rf'{A}\dotnet\dotnet.exe {A}\dotnet\exceptiontest.dll unhandled',
+                     # (through cmd.exe, which ends with exit 0: the program itself ends with the
+                     # unhandled exception's crash, as on Windows, and the check is what it printed)
+                     Test('unhandled exception', rf'cmd.exe /c "{A}\dotnet\dotnet.exe {A}\dotnet\exceptiontest.dll '
+                          r'unhandled & echo exceptiontest ended & exit 0"',
                           [r'caught: caught one', r'trace has Thrower: True',
                            r'Unhandled exception\. System\.InvalidOperationException: exceptiontest unhandled',
-                           r'at Program\.Thrower'], timeout=300)],
+                           r'at Program\.Thrower', r'(?m)^exceptiontest ended'], timeout=300)],
           unpack=stage_dotnet,
           extra=[f'{NUGET}/runtime.win-x64.microsoft.netcore.dotnethost/8.0.31/'
                  'runtime.win-x64.microsoft.netcore.dotnethost.8.0.31.nupkg',

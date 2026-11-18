@@ -9,6 +9,14 @@
  * key not set with null); CreateContainer makes or opens a named container
  * below it.
  *
+ * As on Windows, ApplicationData.Current is a packaged app's: a process
+ * with no package identity (kernel32's GetCurrentPackageFullName answers
+ * APPMODEL_ERROR_NO_PACKAGE) is refused with that error as its HRESULT
+ * (0x80073D54, "The process has no package identity").  Libraries that
+ * look for an app data folder (Microsoft.Data.Sqlite's SqliteConnection,
+ * which ShareX opens its history with) take the refusal to mean "not a
+ * UWP app" and go on; handed Current, they asked for LocalFolder next.
+ *
  * Not here yet: the settings are kept for the process's life only (Windows
  * keeps them in the package's Settings\settings.dat); the data folders
  * (LocalFolder, LocalCacheFolder, RoamingFolder, TemporaryFolder), which
@@ -185,7 +193,19 @@ static HRESULT STDMETHODCALLTYPE s_qi(void *p, REFIID iid, void **out)
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE s_activate(void *p, void **v) { (void)p; if (v) *v = 0; return E_NOTIMPL; }
-static HRESULT STDMETHODCALLTYPE s_current(void *p, void **v) { (void)p; if (!v) return E_POINTER; *v = &g_data.v1; return S_OK; }
+__declspec(dllimport) LONG WINAPI GetCurrentPackageFullName(UINT32 *len, PWSTR name);
+#define APPMODEL_ERROR_NO_PACKAGE_ 15700L
+static HRESULT STDMETHODCALLTYPE s_current(void *p, void **v)
+{
+    (void)p;
+    if (!v) return E_POINTER;
+    *v = 0;
+    UINT32 n = 0;
+    if (GetCurrentPackageFullName(&n, 0) == APPMODEL_ERROR_NO_PACKAGE_)   /* (a packaged one: ERROR_INSUFFICIENT_BUFFER) */
+        return HRESULT_FROM_WIN32(APPMODEL_ERROR_NO_PACKAGE_);
+    *v = &g_data.v1;
+    return S_OK;
+}
 static const void *const factory_vt[] = { INSP_FNS(s_qi, d_class), (void *)s_activate };
 static const void *const statics_vt[] = { INSP_FNS(s_qi, d_class), (void *)s_current };
 static Statics g_statics = { (const void *const *)factory_vt, (const void *const *)statics_vt };

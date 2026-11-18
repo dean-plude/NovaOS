@@ -1757,6 +1757,41 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
 # (MenuFlyout_Partial.cpp includes the render target bitmap's header, whose
 # pixel buffer is a Windows.Storage.Streams IBuffer with byte access)
 FILE_FIRST['MenuFlyout_Partial.cpp'] = ('windows.storage.streams.h', 'robuffer.h')
+# (step 32.6, a page's text boxes (XAML text input, part 3): the core's
+# text controls library, core/native/text/Controls: the text box base,
+# CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's
+# WinUIEdit.dll, userland/textserv) through its text services host, the
+# TextBox and the view that draws it, CTextBoxView, through the render
+# target it hands the text services (HWRenderTarget, its brushes, stroke
+# styles and bitmaps), the text box's key commands, its input pane sink and
+# its private settings and helpers, with the Rich Edit OLE callback and the
+# text controls' entry points the framework calls (TextControlsPinvokes);
+# less the PasswordBox and the RichEditBox, their automation peers, the
+# context menu and the linguistics (spelling) helper, which join later.  Of
+# the framework, the TextBox, its base and its view, with the placeholder
+# text helper and the arguments of the text box's events, each its
+# generated class and its partial one)
+_TEXT_CONTROLS = 'core/native/text/Controls/Native.Text.Controls.vcxproj'
+CORE_LIBRARIES.append((_TEXT_CONTROLS, 'core/common.props', 'core/native/text/Controls/precomp.h',
+                       [os.path.join(HERE, 'src', 'text_controls.cpp')]))  # (uuid.lib's IID_IRichEditOleCallback, ...)
+CORE_SOURCES[_TEXT_CONTROLS] = tuple('%s.cpp' % x for x in (
+    'TextBoxBase', 'TextBox', 'TextBoxView', 'TextServicesHost', 'HWRenderTarget', 'HWSolidColorBrush', 'HWStrokeStyle',
+    'HwTextBitmap', 'Util', 'TextBoxUIManagerEventSink', 'PrivateTextInputSettings', 'TextBoxCommandHandler',
+    'TextControlsPinvokes', 'RichEditOleCallback'))
+# (and the text core's helpers for them: the caret's blink and its storyboard)
+CORE_SOURCES[_CORETEXT] += ('TextBox/TextBoxHelpers.cpp', 'common/TextSelectionSettings.cpp')
+CORE_FIRST[_TEXT_CONTROLS] = CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] + [
+    'windows.applicationmodel.datatransfer.h']  # (the clipboard its paste and undo menu reads)
+# (its precompiled header takes the core's headers, the control layer's host.h among them)
+PROJECT_INCLUDES[_TEXT_CONTROLS] = ('core/xcpcore.vcxproj', _CORETEXT)
+_TEXT_BOX = ('TextBox', 'TextBoxBase', 'TextBoxView', 'TextChangedEventArgs', 'TextBoxTextChangingEventArgs',
+             'TextBoxBeforeTextChangingEventArgs', 'TextBoxSelectionChangingEventArgs',
+             'CandidateWindowBoundsChangedEventArgs', 'TextControlPasteEventArgs',
+             'TextControlCopyingToClipboardEventArgs', 'TextControlCuttingToClipboardEventArgs',
+             'TextCompositionChangedEventArgs', 'TextCompositionEndedEventArgs', 'TextCompositionStartedEventArgs')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'TextBox_Partial', 'TextBoxView_Partial', 'TextBoxPlaceholderTextHelper', 'TextControlFlyoutHelper')) + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _TEXT_BOX)
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

@@ -1264,6 +1264,8 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `TextBox` is its own later step: its sources are open, but it loads
   `WinUIEdit.dll`, a closed windowless RichEdit (`ITextServices2`), which
   NovaOS now provides (0.2.3 "Nebula" item 1, [progress](releases/0.2.3.md)).
+  Since 11-18 a `TextBox` on the page takes a click, typing and Backspace,
+  raises `TextChanged` and draws its text, also in `xamlpagetest`.
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

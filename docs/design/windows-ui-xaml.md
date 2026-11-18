@@ -822,7 +822,20 @@ vendors.
      windowless RichEdit (`ITextServices2`).  NovaOS provides it
      (`userland/textserv/`): the text services, the Text Object Model
      `TextBoxBase` drives (`ITextDocument2`, ranges and the selection)
-     and `TxDrawD2D`; the `TextBox` on a page comes next.
+     and `TxDrawD2D`.  The `TextBox` is built (XAML text input part 3):
+     the core's `core/native/text/Controls` as a library of its own
+     (`Native.Text.Controls.vcxproj`, its include list read through the
+     project's own `$(OwnIncludes)`), the framework's `TextBox_Partial`,
+     `TextBoxView_Partial` and `TextControlFlyoutHelper`, and the text
+     core's `TextBoxHelpers` and `TextSelectionSettings`; the closed
+     headers they take are NovaOS's in `inc/` (`WinUIEdit.h`,
+     `textserv.h`, `tom.h`, `fontinfo.h`, `xamltexthost.h`, `TextInput.h`,
+     `ctffunc.h`, `richedit.h`) and `src/text_controls.cpp` gives
+     `IID_IRichEditOleCallback` and the selection's default colour.
+     `WinUIEdit.dll` draws the text as DirectWrite glyph runs on the
+     view's render target in the face the host's `IProvideFontInfo`
+     names.  `xamlpagetest` clicks the `TextBox`, types into it, presses
+     Backspace, counts `TextChanged` and finds the text's pixels.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

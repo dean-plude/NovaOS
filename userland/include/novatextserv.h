@@ -63,6 +63,11 @@ typedef struct _paraformat {
     LONG rgxTabs[32];
 } PARAFORMAT;
 typedef struct _selchange { NMHDR nmhdr; CHARRANGE chrg; WORD seltyp; } SELCHANGE;
+typedef struct _changenotify { DWORD dwChangeType; void *pvCookieData; } CHANGENOTIFY;   /* EN_CHANGE's, windowless */
+#define CN_GENERIC          0
+#define CN_TEXTCHANGED      1
+#define CN_NEWUNDO          2
+#define CN_NEWREDO          4
 typedef struct _gettextex { DWORD cb, flags; UINT codepage; LPCSTR lpDefaultChar; LPBOOL lpUsedDefChar; } GETTEXTEX;
 typedef struct _gettextlengthex { DWORD flags; UINT codepage; } GETTEXTLENGTHEX;
 typedef struct _settextex { DWORD flags; UINT codepage; } SETTEXTEX;
@@ -153,6 +158,14 @@ typedef enum { TXTBACK_TRANSPARENT = 0, TXTBACK_OPAQUE = 1 } TXTBACKSTYLE;
 #define EM_GETLANGOPTIONS   (WM_USER + 121)
 #define EM_SETEDITSTYLE     (WM_USER + 204)
 #define EM_GETEDITSTYLE     (WM_USER + 205)
+/* WinUIEdit's pointer input message (NovaOS's value, as XAML's text boxes
+ * are built with: userland/windows_ui_xaml/inc/WinUIEdit.h): the mouse
+ * message @msg at @pt, the view's coordinates */
+#define NOVA_EM_MOUSEINPUT  (WM_USER + 0x175)
+typedef struct { UINT msg; WPARAM wparam; POINT pt, screenPtInRawPixels; BOOL isPenInput; } NOVA_RE_MOUSEINPUT;
+/* (and its DPI, which XAML sets to 96 and checks the answer of: NovaOS's
+ * text services draw at the host's pixels and answer TRUE) */
+#define NOVA_EM_SETDPI      (WM_USER + 0x17d)
 
 #define ENM_CHANGE          0x00000001
 #define ENM_UPDATE          0x00000002
@@ -564,11 +577,15 @@ struct IRichEditOle_ { const IRichEditOle_Vtbl *lpVtbl; };
 /* the IIDs (riched20.dll, msftedit.dll and WinUIEdit.dll export them as data) */
 #define NOVA_IID_ITextServices   {0x8d33f740, 0xcf58, 0x11ce, {0xa8, 0x9d, 0x00, 0xaa, 0x00, 0x6c, 0xad, 0xc5}}
 #define NOVA_IID_ITextServices2  {0x8d33f741, 0xcf58, 0x11ce, {0xa8, 0x9d, 0x00, 0xaa, 0x00, 0x6c, 0xad, 0xc5}}
-#define NOVA_IID_ITextHost       {0xc5bdd8d0, 0xd26e, 0x11ce, {0xa8, 0x9e, 0x00, 0xaa, 0x00, 0x6c, 0xad, 0xc5}}
+#define NOVA_IID_ITextHost       {0x13e670f4, 0x1a5a, 0x11cf, {0xab, 0xeb, 0x00, 0xaa, 0x00, 0xb6, 0x5e, 0xa1}}
 #define NOVA_IID_ITextHost2      {0x13e670f5, 0x1a5a, 0x11cf, {0xab, 0xeb, 0x00, 0xaa, 0x00, 0xb6, 0x5e, 0xa1}}
 #define NOVA_IID_ITextDocument2  {0xc241f5e0, 0x7206, 0x11d8, {0xa2, 0xc7, 0x00, 0xa0, 0xd1, 0xd6, 0xc6, 0xb3}}
 #define NOVA_IID_IRicheditWindowlessAccessibility {0x983e572d, 0x20cd, 0x460b, {0x91, 0x04, 0x83, 0x11, 0x15, 0x92, 0xdd, 0x10}}
 #define NOVA_IID_IRichEditOle    {0x00020d00, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+/* IProvideFontInfo: a host's DirectWrite font faces (XAML's text boxes'
+ * host answers it; the IID is NovaOS's, as the interface's header is closed:
+ * userland/windows_ui_xaml/inc/fontinfo.h) */
+#define NOVA_IID_IProvideFontInfo {0xd81d4036, 0xc20c, 0x4297, {0x8c, 0xf1, 0x58, 0x35, 0xa6, 0x76, 0x61, 0x89}}
 #define NOVA_IID_IRichEditOleCallback {0x00020d03, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
 
 typedef HRESULT (WINAPI *PCREATETEXTSERVICES)(IUnknown *outer, ITextHost *host, IUnknown **out);

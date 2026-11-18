@@ -50,6 +50,11 @@ typedef struct TS {
     BOOL undooff, undosuspend;                    /* Undo(tomFalse), Undo(tomSuspend) */
     float tabstop;
     LONG carettype, notifymode, typography;
+    /* DirectWrite's fonts (dwtext.c), when the host gives them (IProvideFontInfo) */
+    void *fontinfo;                               /* (the host's, held without a reference, as the host) */
+    BOOL fontinfo_asked;
+    IUnknown *face;                               /* the default format's IDWriteFontFace, or none: GDI */
+    float emsize;                                 /* its size in pixels */
 } TS;
 
 #define FROM_IFACE(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, iface)))
@@ -86,9 +91,18 @@ BOOL can_paste(TS *t);
 WCHAR *clipboard_text(TS *t);
 HWND host_window(TS *t);
 
+/* dwtext.c */
+void dw_refresh(TS *t);
+void dw_free(TS *t);
+BOOL dw_measure(TS *t, const WCHAR *s, LONG n, int *dx, SIZE *sz);
+HRESULT dw_draw(TS *t, void *rt, const RECT *rc, BOOL opaque);
+
 /* tom.c */
 void tom_init(TS *t);
 void tom_free(TS *t);
 HRESULT tom_qi(TS *t, REFIID iid, void **out);
 void tom_edited(TS *t, LONG a, LONG b, LONG k);   /* [a, b) became k characters */
 void tom_clamp(TS *t);                            /* the text was replaced */
+
+/* tomfmt.c */
+HRESULT tom_format(BOOL font, void **out);       /* a range's ITextFont2 (or ITextPara2) */

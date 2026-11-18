@@ -38,7 +38,7 @@ typedef struct {
     RECT client;
     CHARFORMATW cf;
     PARAFORMAT pf;
-    int changes, selchanges, maxtext, carets, caretshown, focusreq, capture;
+    int changes, textchanges, selchanges, maxtext, carets, caretshown, focusreq, capture;
     CHARRANGE lastsel;
     POINT caret;
     HDC dc;                                     /* TxGetDC's */
@@ -100,7 +100,7 @@ static COLORREF TXAPI h_syscolor(ITextHost2 *me, int i)
     return GetSysColor(i);
 }
 static HRESULT TXAPI h_backstyle(ITextHost2 *me, TXTBACKSTYLE *s) { *s = H(me)->back; return S_OK; }
-static HRESULT TXAPI h_maxlen(ITextHost2 *me, DWORD *n) { (void)me; *n = 0x7fffffff; return S_OK; }
+static HRESULT TXAPI h_maxlen(ITextHost2 *me, DWORD *n) { (void)me; *n = INFINITE;   /* (as XAML's text boxes: no limit) */ return S_OK; }
 static HRESULT TXAPI h_scrollbars(ITextHost2 *me, DWORD *b) { (void)me; *b = 0; return S_OK; }
 static HRESULT TXAPI h_pwchar(ITextHost2 *me, WCHAR *c) { (void)me; *c = 0x25cf; return S_OK; }   /* ● */
 static HRESULT TXAPI h_accel(ITextHost2 *me, LONG *cp) { (void)me; *cp = -1; return S_OK; }
@@ -110,7 +110,7 @@ static HRESULT TXAPI h_pfchange(ITextHost2 *me, const PARAFORMAT *pf) { (void)me
 static HRESULT TXAPI h_bits(ITextHost2 *me, DWORD mask, DWORD *bits) { *bits = H(me)->bits & mask; return S_OK; }
 static HRESULT TXAPI h_notify(ITextHost2 *me, DWORD code, void *data)
 {
-    if (code == EN_CHANGE) H(me)->changes++;
+    if (code == EN_CHANGE) { H(me)->changes++; if (data && (((CHANGENOTIFY *)data)->dwChangeType & CN_TEXTCHANGED)) H(me)->textchanges++; }
     else if (code == EN_SELCHANGE) { H(me)->selchanges++; H(me)->lastsel = ((SELCHANGE *)data)->chrg; }
     else if (code == EN_MAXTEXT) H(me)->maxtext++;
     return S_OK;
@@ -286,6 +286,7 @@ static void typing(void)
     type(L"Hello");
     check("typing: the text", text_is(L"Hello"));
     check("typing: EN_CHANGE for each character", host.changes == 5);
+    check("EN_CHANGE says the text changed (CHANGENOTIFY, CN_TEXTCHANGED)", host.textchanges == 5);
     check("typing: the caret moved right", host.caret.x > x0);
     check("typing: the selection is the caret, after the text", get_sel().cpMin == 5 && get_sel().cpMax == 5);
     msg(WM_CHAR, 8, 1);
@@ -574,9 +575,17 @@ static void tom(HMODULE m)
     check("GetStoryLength", n == 12);
     check("GetText leaves out the final paragraph mark", range_text_is(r, L"Hello world"));
     r->lpVtbl->GetText2(r, tomAllowFinalEOP, &b);
-    check("GetText2(tomAllowFinalEOP)", bstr_is(b, L"Hello world\r"));
+    check("GetText2(tomAllowFinalEOP): plain text has no final mark (XAML's TextBox.Text)", bstr_is(b, L"Hello world"));
     SysFreeString(b);
     b = 0;
+    host.bits |= TXTBIT_RICHTEXT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT, host.bits);
+    r->lpVtbl->GetText2(r, tomAllowFinalEOP, &b);
+    check("GetText2(tomAllowFinalEOP): rich text ends in its final mark", bstr_is(b, L"Hello world\r"));
+    SysFreeString(b);
+    b = 0;
+    host.bits &= ~TXTBIT_RICHTEXT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT, host.bits);
     r->lpVtbl->Release(r);
 
     w = range(d, 7, 7);

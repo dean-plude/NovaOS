@@ -24,8 +24,9 @@
 # of WinUI's controls library (controls/dev: ProgressBar,
 # TextCommandBarFlyout).  Until those libraries are built (OUTSIDE), the
 # split leaves out the resources and styles that use them, and those that
-# name such a resource ({StaticResource KEY}: the text boxes' styles name
-# the text command bar flyouts).
+# name such a resource ({StaticResource KEY}); a style whose setter names
+# one keeps the rest of its setters (the text boxes' styles, whose
+# ContextFlyout and SelectionFlyout are the text command bar flyouts).
 import os, re, xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,7 +65,19 @@ def _leave_out_outside(root):
                    for k in re.findall(r'{(?:StaticResource|ThemeResource)\s+(\w+)}', v)):
                 return True
         return False
+    setter = '{%s}Setter' % P
+
+    def refs_gone(e):
+        return any(k in gone for v in e.attrib.values()
+                   for k in re.findall(r'{(?:StaticResource|ThemeResource)\s+(\w+)}', v))
     while True:
+        # (a style keeps itself and loses only its setters that name a
+        # resource taken out: the text boxes' context and selection flyouts,
+        # which a text box then goes without)
+        for el in root:
+            if el.tag == STYLE:
+                for e in [e for e in el if e.tag == setter and refs_gone(e)]:
+                    el.remove(e)
         out = [el for el in root if el.tag != THEMES and outside(el)]
         if not out:
             return

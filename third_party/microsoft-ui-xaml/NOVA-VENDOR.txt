@@ -432,6 +432,11 @@ ToggleMenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem,
 MenuFlyoutPresenter, MenuFlyoutPresenterTemplateSettings, the four
 automation peers and ContextMenuEventArgs.
 
+Pulsar item 3, twenty-sixth slice: dxaml/lib/ResourceDictionary_partial.cpp's
+ResourceDictionary::Lookup (marked "NovaOS") hands a value looked up by code
+outside Windows.UI.Xaml.dll to nova_value_for_caller, which returns it as the
+app's Windows object.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

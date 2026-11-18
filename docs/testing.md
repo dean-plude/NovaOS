@@ -227,11 +227,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `Windows.UI.Xaml.dll`: `Windows.UI.Xaml.Application`, `XamlReader` and
   `Window` from `RoGetActivationFactory` alone, through the registry's
   `ActivatableClassId` keys, `Application.Start`, a page laid out in a
-  window, then closed), `xamlloadtest` (Microsoft's XAML object writer
-  and `CResourceDictionary`, built from its sources: XAML text loaded
-  into a live resource dictionary with merged and theme dictionaries,
-  through the core's own `CCoreServices`, made by
-  `CCoreServices::Create` on the platform layer's services, the
+  window, a `MenuFlyout` in its resources looked up through their `IMap`
+  as `Windows.UI.Xaml.Controls.MenuFlyout`, then closed), `xamlloadtest`
+  (Microsoft's XAML object writer and `CResourceDictionary`, built from
+  its sources: XAML text loaded into a live resource dictionary with
+  merged and theme dictionaries, through the core's own `CCoreServices`,
+  made by `CCoreServices::Create` on the platform layer's services, the
   framework's `XamlReader` factory, and the control layer:
   `CXcpDispatcher` on a `DispatcherQueue` and `CJupiterControl::Create`
   with its render target, graphics device and schedulers; the

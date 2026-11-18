@@ -1737,6 +1737,26 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'ItemAutomationPeer_Partial', 'ItemsControlAutomationPeer_Partial', 'ElementSoundPlayer', 'FocusManager',
     'PatternIdentifiers', 'AutomationElementIdentifiers')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in _PIVOT_ASKS)
+# (step 32.6, the context menus a page's markup holds, Calculator's history
+# and memory lists' (Pulsar item 3, slice 25): MenuFlyout, its items (the
+# item base and its collection, the item, the toggle item, the separator
+# and the sub item, with their template settings), the presenter that shows
+# them, an ItemsControl, and their automation peers, with the arguments of
+# a ContextRequested event, each its generated class and its partial one)
+_MENU_FLYOUT = ('MenuFlyout', 'MenuFlyoutItemBase', 'MenuFlyoutItemBaseCollection', 'MenuFlyoutItem',
+                'MenuFlyoutItemTemplateSettings', 'ToggleMenuFlyoutItem', 'MenuFlyoutSeparator', 'MenuFlyoutSubItem',
+                'MenuFlyoutPresenter', 'MenuFlyoutPresenterTemplateSettings', 'MenuFlyoutItemAutomationPeer',
+                'ToggleMenuFlyoutItemAutomationPeer', 'MenuFlyoutSubItemAutomationPeer',
+                'MenuFlyoutPresenterAutomationPeer', 'ContextMenuEventArgs')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'MenuFlyout_Partial', 'MenuFlyoutItemBase_Partial', 'MenuFlyoutItemBaseCollection_Partial', 'MenuFlyoutItem_Partial',
+    'ToggleMenuFlyoutItem_Partial', 'MenuFlyoutSubItem_Partial', 'MenuFlyoutPresenter_Partial',
+    'MenuFlyoutItemAutomationPeer_Partial', 'ToggleMenuFlyoutItemAutomationPeer_Partial',
+    'MenuFlyoutSubItemAutomationPeer_Partial', 'MenuFlyoutPresenterAutomationPeer_Partial',
+    'ContextMenuEventArgs_Partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _MENU_FLYOUT)
+# (MenuFlyout_Partial.cpp includes the render target bitmap's header, whose
+# pixel buffer is a Windows.Storage.Streams IBuffer with byte access)
+FILE_FIRST['MenuFlyout_Partial.cpp'] = ('windows.storage.streams.h', 'robuffer.h')
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

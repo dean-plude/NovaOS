@@ -527,8 +527,10 @@ bool NetRootName(int i, char *buf, int cap, bool *imported)
  * keys are under HKLM\SECURITY\NovaOS\Personal\<00..07, in import
  * order>, values Certificates (the chain's DER, the certificate first) and
  * Key (the private key's DER): HKLM\SECURITY is a key no program may open
- * (um_registry.c), as on Windows, where only SYSTEM may.  Nothing is
- * removed, as the stores keep everything while NovaOS runs.
+ * (um_registry.c), as on Windows, where only SYSTEM may.  certutil
+ * -delstore takes a root's key away, and writes the personal store's keys
+ * again without the certificate removed (00 onwards, as the restore reads
+ * them).
  * ----------------------------------------------------------------------- */
 #define ROOTS_KEY      "Machine\\SOFTWARE\\Microsoft\\SystemCertificates\\ROOT\\Certificates"
 #define PERSONAL_KEY   "Machine\\SECURITY\\NovaOS\\Personal"
@@ -572,24 +574,135 @@ int NetImportRoots(const void *data, UINT32 len, char *err, int err_cap)
     return n;
 }
 
+/* The personal store's certificates and keys into the registry again, in
+ * order (00 onwards): false if one could not be written */
+static bool save_personal(void)
+{
+    UINT8 *buf = kmalloc(CERT_ROOM);
+    if (!buf) return false;
+    um_registry_delete_tree(PERSONAL_KEY);
+    bool all = true;
+    net_lock();
+    int slots = TlsPersonalSlots();
+    net_unlock();
+    for (int i = 0, k = 0; i < slots; i++) {
+        UINT32 cl = 0, kl = 0;
+        net_lock();
+        bool live = TlsPersonalName(i, NULL, 0, NULL, 0), ok = live && TlsPersonalExport(i, buf, CERT_ROOM, &cl, &kl);
+        net_unlock();
+        if (!live) continue;
+        if (!ok) { all = false; continue; }
+        char path[sizeof(PERSONAL_KEY) + 8];
+        ksnprintf(path, sizeof(path), "%s\\%02d", PERSONAL_KEY, k++);
+        um_registry_set_bin(path, "Certificates", buf, cl);
+        um_registry_set_bin(path, "Key", buf + cl, kl);
+    }
+    memset(buf, 0, CERT_ROOM);
+    kfree(buf);
+    return all;
+}
+
 int NetImportPfx(const void *data, UINT32 len, const char *password, char *name, int name_cap, char *err,
                  int err_cap)
 {
-    UINT8 *buf = kmalloc(CERT_ROOM);
-    UINT32 cl = 0, kl = 0;
     net_lock();
     int n = TlsImportPfx(data, len, password, name, name_cap, err, err_cap);
-    int i = TlsPersonalCount() - 1;
-    bool keep = n && buf && TlsPersonalExport(i, buf, CERT_ROOM, &cl, &kl);
     net_unlock();
-    if (keep) {
-        char path[sizeof(PERSONAL_KEY) + 8];
-        ksnprintf(path, sizeof(path), "%s\\%02d", PERSONAL_KEY, i);
-        um_registry_set_bin(path, "Certificates", buf, cl);
-        um_registry_set_bin(path, "Key", buf + cl, kl);
-    } else if (n)
+    if (n && !save_personal())
         kprintf("[TLS] The certificate \"%s\" could not be saved: it lasts until NovaOS restarts\n", name_cap ? name : "?");
-    if (buf) { memset(buf, 0, CERT_ROOM); kfree(buf); }
+    return n;
+}
+
+/* Does certutil's @id (a certificate's name, or its SHA-1 thumbprint in
+ * hex, spaces and colons allowed) name the certificate @der, called @cn? */
+static bool cert_is(const char *id, const char *cn, const UINT8 *der, UINT32 len)
+{
+    bool same = true;
+    for (UINT32 i = 0; same; i++) {
+        char x = id[i], y = cn[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        same = x == y;
+        if (!x) break;
+    }
+    if (same && cn[0]) return true;
+    UINT8 h[20];
+    mbedtls_sha1(der, len, h);
+    int n = 0;
+    for (const char *s = id; *s; s++) {
+        if (*s == ' ' || *s == ':') continue;
+        int v = *s >= '0' && *s <= '9' ? *s - '0' : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 :
+                *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
+        if (v < 0 || n >= 40 || v != ((h[n / 2] >> (n & 1 ? 0 : 4)) & 15)) return false;
+        n++;
+    }
+    return n == 40;
+}
+
+int NetDeleteRoots(const char *id, char *name, int name_cap, char *err, int err_cap)
+{
+    int removed = 0, builtin = 0;
+    if (name_cap) name[0] = '\0';
+    err[0] = '\0';
+    net_lock();
+    int n = TlsRootCount(), first = n - TlsUserRootCount();
+    net_unlock();
+    for (int i = n - 1; i >= 0; i--) {                       /* (from the end: removing renumbers the rest) */
+        char cn[72];
+        const UINT8 *der;
+        UINT32 dl;
+        bool imported = false;
+        net_lock();
+        bool hit = TlsRootName(i, cn, sizeof(cn), &imported) && TlsRootCert(i, &der, &dl) && cert_is(id, cn, der, dl);
+        UINT8 h[20];
+        if (hit) mbedtls_sha1(der, dl, h);
+        bool gone = hit && i >= first && TlsRemoveRoot(i);
+        net_unlock();
+        if (hit && i < first) builtin++;
+        if (!gone) continue;
+        removed++;
+        if (name_cap) ksnprintf(name, name_cap, "%s", cn);
+        char path[sizeof(ROOTS_KEY) + 48];
+        int o = ksnprintf(path, sizeof(path), "%s\\", ROOTS_KEY);
+        for (int k = 0; k < 20; k++) o += ksnprintf(path + o, sizeof(path) - o, "%02X", h[k]);
+        um_registry_delete_tree(path);
+    }
+    if (!removed)
+        ksnprintf(err, err_cap, "%s", builtin ? "A built-in root (from the Mozilla CA list) cannot be removed"
+                                              : "Cannot find object or property.");
+    return removed;
+}
+
+int NetDeletePersonal(const char *id, char *name, int name_cap, char *err, int err_cap)
+{
+    int removed = 0;
+    if (name_cap) name[0] = '\0';
+    err[0] = '\0';
+    net_lock();
+    int slots = TlsPersonalSlots();
+    net_unlock();
+    for (int i = 0; i < slots; i++) {
+        char cn[64];
+        const UINT8 *der;
+        UINT32 dl;
+        net_lock();
+        bool gone = TlsPersonalName(i, cn, sizeof(cn), NULL, 0) && TlsPersonalCert(i, &der, &dl) &&
+                    cert_is(id, cn, der, dl) && TlsPersonalRemove(i);
+        net_unlock();
+        if (!gone) continue;
+        removed++;
+        if (name_cap) ksnprintf(name, name_cap, "%s", cn);
+    }
+    if (!removed) ksnprintf(err, err_cap, "Cannot find object or property.");
+    else if (!save_personal()) kprintf("[TLS] The personal store could not be saved again\n");
+    return removed;
+}
+
+int NetPersonalSlots(void)
+{
+    net_lock();
+    int n = TlsPersonalSlots();
+    net_unlock();
     return n;
 }
 

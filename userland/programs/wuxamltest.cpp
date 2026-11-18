@@ -24,6 +24,9 @@
  *     one) by their Windows names, their statics' dependency properties,
  *     and a Pivot from markup found by the parser and made over the
  *     framework's ItemsControl, its two PivotItems in its Items;
+ *   - a MenuFlyout from markup (Calculator's history and memory context
+ *     menus), its item, separator and toggle item in its Items, the
+ *     item's Text read back;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
  *     ButtonAutomationPeer), the same one from FromElement after, and the
@@ -847,6 +850,35 @@ static void pivot_checks()
           SUCCEEDED(itemCollection->get_Size(&itemCount)) && itemCount == 2);
 }
 
+/* a MenuFlyout from markup, as Calculator's history and memory lists hold
+ * their context menus in their resources: the flyout, its items (an item, a
+ * separator and a toggle item) in its Items, the first item's Text */
+static void menu_flyout_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> flyoutObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<MenuFlyout " XMLNS L"><MenuFlyoutItem Text='Delete'/>"
+                                                    L"<MenuFlyoutSeparator/><ToggleMenuFlyoutItem Text='Keep'/>"
+                                                    L"</MenuFlyout>").Get(),
+                     flyoutObject.GetAddressOf()) : E_FAIL;
+    CHECK("a MenuFlyout with an item, a separator and a toggle item from markup", SUCCEEDED(hr) && flyoutObject);
+    ctl::ComPtr<wuxc::IMenuFlyout> flyout;
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IVector<wuxc::MenuFlyoutItemBase *>> items;
+    unsigned int itemCount = 0;
+    CHECK("the MenuFlyout (Windows' IMenuFlyout) holds its three items", flyoutObject &&
+          SUCCEEDED(flyoutObject.As(&flyout)) && SUCCEEDED(flyout->get_Items(items.GetAddressOf())) && items &&
+          SUCCEEDED(items->get_Size(&itemCount)) && itemCount == 3);
+    ctl::ComPtr<wuxc::IMenuFlyoutItemBase> first;
+    ctl::ComPtr<wuxc::IMenuFlyoutItem> item;
+    HSTRING text = nullptr;
+    CHECK("its first item is a MenuFlyoutItem whose Text is Delete", itemCount == 3 &&
+          SUCCEEDED(items->GetAt(0, first.GetAddressOf())) && first && SUCCEEDED(first.As(&item)) &&
+          SUCCEEDED(item->get_Text(&text)) &&
+          wcscmp(WindowsGetStringRawBuffer(text, nullptr), L"Delete") == 0);
+    WindowsDeleteString(text);
+}
+
 /* the framework started as xamlapptest starts it */
 static bool s_launched, s_exit_called;
 static DWORD s_main_thread;
@@ -888,6 +920,7 @@ public:
         windows_checks();
         navigation_transition_checks();
         pivot_checks();
+        menu_flyout_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

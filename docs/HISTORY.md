@@ -17019,6 +17019,26 @@ the item and items control automation peers).
   at its context menu, a `MenuFlyout`, which NovaOS does not build yet.
   That is the next part.  The page does not draw yet.
 
+## Windows Calculator's launch, twenty-fifth slice: the context menus
+
+The twenty-fifth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's history and memory
+lists hold a context menu, a `MenuFlyout`, which NovaOS did not build, so
+the main page stopped there.  NovaOS now vendors and builds it from
+Microsoft's XAML sources (MIT): `MenuFlyout`, its items (`MenuFlyoutItem`,
+`ToggleMenuFlyoutItem`, `MenuFlyoutSeparator`, `MenuFlyoutSubItem`), the
+`MenuFlyoutPresenter` that shows them, their automation peers and the
+arguments of a context menu request.
+
+- **Tests:** `wuxamltest` loads a `MenuFlyout` with an item, a separator
+  and a toggle item from markup, reads its three items through Windows'
+  `IMenuFlyout` and the first item's `Text`.
+- **Found:** Calculator's main page now gets past its context menus and
+  stops next when one of the app's own event handlers, called by the
+  framework as the page loads, throws a `NullReferenceException`.  That is
+  the next part.  The page does not draw yet.
+
 ## A window parented across processes no longer lands at the wrong place
 
 The `xpwin` selftest failed now and then on 64-bit (never 32-bit) with
@@ -17091,6 +17111,54 @@ serial log says `frozen: suspended` and `thawed (...)` for each.
 - **Left:** XAML's own `Application.Suspending` and `Resuming` (its
   process lifetime handler, `PLMIntegration.cpp`, is not built yet).
 
+## The Text Object Model and Direct2D drawing for XAML's text boxes
+
+Second part of XAML text input, item 1 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)), after the windowless Rich Edit
+([first part](2026-11-17-windowless-rich-edit.md)).  XAML's
+`TextBoxBase` asks the text services it hosts for `ITextDocument2`
+(`QueryInterface` with the IID it reads from `WinUIEdit.dll`) and works
+through it: the selection (`GetSelection2`) for select all, cut, copy,
+paste and the caret's rectangle, ranges (`Range2`, `RangeFromPoint2`)
+for the text, the paragraph under the caret and the lines in view,
+`Undo` and `Redo`, and `Undo(tomSuspend)`/`Undo(tomResume)` around its
+own changes.  It draws the text with `TxDrawD2D` on its Direct2D render
+target.  Both answered `E_NOTIMPL`.
+
+- **The Text Object Model** (`userland/textserv/tom.c`; the interfaces in
+  C in `userland/include/novatextserv.h`): `ITextDocument2` (also as
+  `ITextDocument` and `IDispatch`) on the text services, and
+  `IRichEditOle` from `EM_GETOLEINTERFACE`, whose `QueryInterface` gives
+  the same document.  Ranges (`ITextRange2`) and the selection
+  (`ITextSelection2`, which moves the text services' own selection, so
+  the host gets `EN_SELCHANGE` and the caret moves) take text in and out
+  (`GetText`, `GetText2` with `tomAllowFinalEOP` and `tomUseCRLF`,
+  `SetText`, `SetChar`, `TypeText`), move by characters, words, lines,
+  paragraphs and the story (`Move`, `MoveStart`, `MoveEnd`, `Expand`,
+  `StartOf`, `EndOf`, `GetIndex`, `SetIndex`, `Delete`, the selection's
+  `MoveLeft`/`Right`/`Up`/`Down`, `HomeKey` and `EndKey`), find text,
+  change case, cut, copy and paste, and give and take points
+  (`GetPoint` with the `TA_*` alignments, `SetPoint`, `GetRect`,
+  `RangeFromPoint`).  As in Rich Edit the story ends in a paragraph mark
+  ranges may take in but no edit removes.  Ranges follow every edit,
+  however it is made, and a range kept after the text services are gone
+  answers `CO_E_RELEASED`.  The document also has `Freeze`/`Unfreeze`,
+  the saved flag, the text limit check, the client rectangle and the
+  input context.  Character and paragraph format objects (`ITextFont2`,
+  `ITextPara2`), tables, math and embedded objects answer `E_NOTIMPL`.
+- **`TxDrawD2D`** draws what `TxDraw` draws into a 32-bit bitmap and puts
+  it on the render target with `DrawBitmap`.  A host that leaves the
+  background alone (`TXTBACK_TRANSPARENT`, as XAML's text boxes) gets a
+  premultiplied bitmap: the text is drawn on black in its colours and
+  again all in white, whose brightness is each pixel's coverage.
+
+The core suite's `textservtest` (64- and 32-bit) now also drives the
+Text Object Model the way `TextBoxBase` and `TextBoxView` do and draws
+with `TxDrawD2D` on a Direct2D DC render target, opaque and transparent,
+checking the pixels.  Next: XAML's `TextBox` on a page (its
+`TextBoxBase`, `TextBoxView` and `TextServicesHost` sources), with the
+format objects it needs.
+
 ## A vendor's display driver, unchanged: Red Hat's viogpudo.sys on QEMU
 
 Item 3 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)): Red Hat's WDDM
@@ -17162,6 +17230,51 @@ alice signs in with EAP-TLS again.  The host test
 key as the registry keeps them and reads them back.  Not yet:
 WPA3-Enterprise, Enterprise profiles in `wlanapi.dll`, `certutil
 -delstore`, and PEAP's cryptobinding; the real card needs the T14.
+
+## Wi-Fi: Enterprise profiles in wlanapi.dll, and certutil -delstore
+
+Ninth part of roadmap step 28.1, item 5 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)).  `netsh wlan` and Settings could sign in to
+a WPA2-Enterprise network, but a Windows program could not:
+`wlanapi.dll` read only a profile's passphrase and called such networks
+not connectable.  And nothing removed a certificate once imported.
+
+- **Enterprise profiles.**  A profile with `useOneX` true is read for its
+  `OneX` `EapHostConfig`'s outer method, PEAP (25, MS-CHAPv2 inside) or
+  EAP-TLS (13), as `netsh wlan export profile` writes it (the XML reader
+  now takes namespace prefixes and attributes).  Other methods are
+  refused as `ERROR_BAD_PROFILE`.  `WlanGetAvailableNetworkList` lists
+  WPA2-Enterprise networks as connectable, and the current connection
+  says 802.1X is on.
+- **The sign-in.**  `WlanSetProfileEapXmlUserData` takes the
+  `EapHostUserCredentials` XML (its `Username`, `Password` and
+  `LogonDomain`) for a saved 802.1X profile and keeps it sealed with
+  `CryptProtectData` under the user's
+  `HKCU\Software\NovaOS\Wlan\EapUserData\NAME` (with
+  `WLAN_SET_EAPHOST_DATA_ALL_USERS`, under HKLM with the machine's key);
+  `WlanDeleteProfile` removes it with the profile.  `WlanConnect` hands
+  the method, user name and password to the kernel (op 20's request
+  grew `user` and `eap` fields); without a sign-in EAP-TLS uses the
+  newest certificate and PEAP fails with
+  `ONEX_UNABLE_TO_IDENTIFY_USER`.  Failures map to the ONEX reasons
+  (no identity, EAP failure), with texts in `WlanReasonCodeToString`.
+- **`certutil -delstore root|my NAME`** (NAME: the common name or the
+  SHA-1 thumbprint) stops trusting an imported root, building the root
+  list again without it (the old list stays for handshakes under way;
+  built-in roots cannot be removed), or takes a personal certificate and
+  its key away (marked removed while NovaOS runs, as an EAP session may
+  still hold it), and removes them from the registry: the root's
+  thumbprint key, and the personal store's keys written again in order.
+
+The `wifi` boot's `wlantest` gains the Enterprise part: NovaCorp's PEAP
+profile refused without a sign-in, `WlanSetProfileEapXmlUserData`
+refusing a missing or WPA2-Personal profile and then signing alice in,
+and an EAP-TLS profile signing in with her certificate.  After the
+restart, `certutil -delstore` removes mallory's certificate and the
+NovaCorp root, alice's sign-in is refused as untrusted, and another
+restart restores only alice's certificate.  Not yet: WPA3-Enterprise,
+PEAP's cryptobinding, and removing a root's copy under
+`System32\CertStore` that NetSurf reads; the real card needs the T14.
 
 ## The windowless Rich Edit: WinUIEdit.dll's text services
 

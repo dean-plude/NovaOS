@@ -37,6 +37,8 @@ bool TlsRootCert(int i, const UINT8 **der, UINT32 *len);
 /* Import CA certificates (PEM, one or more; or a single DER certificate)
  * as trusted roots.  Returns the number added (0 with *err set if none). */
 int  TlsImportRoots(const void *data, UINT32 len, char *err, int err_cap);
+/* Stop trusting imported root i (not a built-in one): 1, or 0 */
+int  TlsRemoveRoot(int i);
 
 typedef struct TlsConn TlsConn;
 
@@ -81,7 +83,14 @@ int         TlsImportPfx(const void *data, UINT32 len, const char *password, cha
 int         TlsPersonalExport(int i, UINT8 *out, UINT32 cap, UINT32 *chain_len, UINT32 *key_len);
 int         TlsPersonalAdd(const void *chain_der, UINT32 chain_len, const void *key_der, UINT32 key_len, char *name,
                            int name_cap, char *err, int err_cap);
-int         TlsPersonalCount(void);
+int         TlsPersonalCount(void);         /* (the certificates in it) */
+/* Entries are numbered 0 to TlsPersonalSlots() - 1; a removed one's
+ * number is not reused until the next start (TlsPersonalName and
+ * TlsPersonalCert are false for it).  TlsPersonalRemove: certutil
+ * -delstore my (1, or 0). */
+int         TlsPersonalSlots(void);
+bool        TlsPersonalCert(int i, const UINT8 **der, UINT32 *len);
+int         TlsPersonalRemove(int i);
 bool        TlsPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap);
 /* The certificate for @user (its common name, or the name without a
  * "DOMAIN\" or "@realm"), the newest one for NULL; -1 if none */

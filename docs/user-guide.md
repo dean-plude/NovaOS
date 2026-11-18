@@ -513,11 +513,17 @@ certificate.  Without `user=` it uses the newest one.  In Settings'
 Wi-Fi page such a network has two boxes: type your user name and
 password (Tab moves between them), or leave both empty to sign in with
 your certificate.  Imported roots and certificates are kept when NovaOS
-restarts.
+restarts; `certutil -delstore my NAME` removes a certificate (and its
+key) and `certutil -delstore root NAME` stops trusting a root you added,
+NAME being the certificate's name or its SHA-1 thumbprint.
 
 Windows programs that manage Wi-Fi use the Native Wifi API
 (`wlanapi.dll`): the adapters, scans, the networks and access points in
 range, profiles, connecting and disconnecting, with their notifications.
+A program (or an administrator's script) can save an office network's
+profile as Windows exports it, with its PEAP or EAP-TLS settings, and
+the user's sign-in with `WlanSetProfileEapXmlUserData`, which NovaOS
+keeps encrypted for that user.
 
 While connected, the Wi-Fi card carries NovaOS's network traffic
 (`ipconfig` shows "Wireless LAN adapter Wi-Fi"); when it disconnects, the

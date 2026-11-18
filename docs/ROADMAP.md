@@ -917,12 +917,16 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   `netsh wlan connect name=SSID user=NAME` and no password. The eighth
   keeps imported roots and certificates across restarts (in the
   registry, the private keys where no program may read them) and gives
-  Settings' Wi-Fi page a user name and password box. All eight are
+  Settings' Wi-Fi page a user name and password box. The ninth gives
+  programs Enterprise profiles: `wlanapi.dll` reads a profile's 802.1X
+  EAP settings (PEAP or EAP-TLS) and keeps its sign-in from
+  `WlanSetProfileEapXmlUserData` sealed with the Data Protection API, and
+  `certutil -delstore root|my` removes an imported root or a personal
+  certificate. All nine are
   tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
   devices suite's `wifi` boot; its `NovaCorp` network's authentication
-  server is the driver too). Still needed: WPA3-Enterprise, Enterprise
-  profiles in `wlanapi.dll`, and scanning and joining a network on the
-  T14's card.
+  server is the driver too). Still needed: WPA3-Enterprise, and scanning
+  and joining a network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep. Done in QEMU: NovaOS's Bluetooth host stack
   (`kernel/nt/bthport.c`, the role of Windows' `bthport.sys`: HCI, inquiry,
@@ -1648,6 +1652,17 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   which NovaOS does not build yet.  Next: `MenuFlyout` (with its items),
   then the CI check that Calculator computes `2 + 2`, which ticks this
   step.
+  Thirty-first part done (Pulsar item 3, twenty-fifth slice): the
+  framework's `MenuFlyout`, with its items (`MenuFlyoutItem`,
+  `ToggleMenuFlyoutItem`, `MenuFlyoutSeparator`, `MenuFlyoutSubItem`),
+  the `MenuFlyoutPresenter` that shows them and their automation peers.
+  A `MenuFlyout` now loads from markup with its items, and Calculator's
+  main page gets past its history and memory context menus.  Test
+  `wuxamltest`.  The page now stops when one of Calculator's own event
+  handlers, called by the framework as the page loads, throws a
+  `NullReferenceException` (`E_POINTER`).  Next: find what that handler
+  reads that NovaOS leaves empty, then the CI check that Calculator
+  computes `2 + 2`, which ticks this step.
 
 ---
 

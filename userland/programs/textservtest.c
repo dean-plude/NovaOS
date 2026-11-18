@@ -8,8 +8,13 @@
  * the mouse, and the notifications the host gets (EN_CHANGE,
  * EN_SELCHANGE, EN_MAXTEXT, the caret).  TxDraw draws into a bitmap whose
  * pixels are checked: text, the selection's highlight, and a password
- * box's text drawn as the password characters.  Built for 32 bits too,
- * where the interfaces' methods are thiscall, as on Windows.
+ * box's text drawn as the password characters.  The Text Object Model as
+ * XAML's TextBoxBase uses it (ITextDocument2 by QueryInterface, ranges,
+ * the selection, units, points, undo with tomSuspend, Freeze, the
+ * clipboard; IRichEditOle by EM_GETOLEINTERFACE), ranges following edits
+ * and outliving the text services, and TxDrawD2D onto a Direct2D render
+ * target (opaque, and transparent over what is there).  Built for 32 bits
+ * too, where ITextServices' methods are thiscall, as on Windows.
  *
  *   textservtest    the test */
 #include <stdio.h>
@@ -37,6 +42,7 @@ typedef struct {
     CHARRANGE lastsel;
     POINT caret;
     HDC dc;                                     /* TxGetDC's */
+    TXTBACKSTYLE back;
 } HOSTOBJ;
 
 #define H(p) ((HOSTOBJ *)(p))
@@ -93,7 +99,7 @@ static COLORREF TXAPI h_syscolor(ITextHost2 *me, int i)
     }
     return GetSysColor(i);
 }
-static HRESULT TXAPI h_backstyle(ITextHost2 *me, TXTBACKSTYLE *s) { (void)me; *s = TXTBACK_OPAQUE; return S_OK; }
+static HRESULT TXAPI h_backstyle(ITextHost2 *me, TXTBACKSTYLE *s) { *s = H(me)->back; return S_OK; }
 static HRESULT TXAPI h_maxlen(ITextHost2 *me, DWORD *n) { (void)me; *n = 0x7fffffff; return S_OK; }
 static HRESULT TXAPI h_scrollbars(ITextHost2 *me, DWORD *b) { (void)me; *b = 0; return S_OK; }
 static HRESULT TXAPI h_pwchar(ITextHost2 *me, WCHAR *c) { (void)me; *c = 0x25cf; return S_OK; }   /* ● */
@@ -149,6 +155,7 @@ static void host_init(HOSTOBJ *h, DWORD bits, int width, HDC dc)
     wcscpy(h->cf.szFaceName, L"Segoe UI");
     h->pf.cbSize = sizeof(h->pf);
     h->dc = dc;
+    h->back = TXTBACK_OPAQUE;
 }
 
 /* ---- helpers ------------------------------------------------------------ */
@@ -504,6 +511,276 @@ static void others(void)
     }
 }
 
+/* ---- the Text Object Model ---------------------------------------------- */
+static const IID iid_doc2 = NOVA_IID_ITextDocument2, iid_doc = NOVA_IID_ITextDocument;
+static const IID iid_range2 = NOVA_IID_ITextRange2, iid_sel2 = NOVA_IID_ITextSelection2;
+
+static int bstr_is(BSTR b, const WCHAR *want) { return b && wcscmp(b, want) == 0; }
+
+static int range_text_is(ITextRange2 *r, const WCHAR *want)
+{
+    BSTR b = 0;
+    int ok = r->lpVtbl->GetText(r, &b) == S_OK && bstr_is(b, want);
+    if (!ok) printf("  (range text: \"%ls\", want \"%ls\")\n", b ? b : L"(null)", want);
+    SysFreeString(b);
+    return ok;
+}
+
+static int ends_are(ITextRange2 *r, LONG s, LONG e)
+{
+    LONG a = -1, b = -1;
+    r->lpVtbl->GetStart(r, &a);
+    r->lpVtbl->GetEnd(r, &b);
+    if (a != s || b != e) printf("  (range %ld..%ld, want %ld..%ld)\n", (long)a, (long)b, (long)s, (long)e);
+    return a == s && b == e;
+}
+
+static ITextRange2 *range(ITextDocument2 *d, LONG s, LONG e)
+{
+    ITextRange2 *r = 0;
+    d->lpVtbl->Range2(d, s, e, &r);              /* (active, anchor) */
+    return r;
+}
+
+static ITextRange2 *kept;                       /* (a range that outlives the text services) */
+
+static void tom(HMODULE m)
+{
+    const IID *exported = (const IID *)GetProcAddress(m, "IID_ITextDocument2");
+    ITextDocument2 *d = 0, *d1 = 0, *d2 = 0;
+    IRichEditOle_ *ole = 0;
+    ITextSelection2 *sel = 0, *sel2 = 0;
+    ITextRange2 *r, *w;
+    LONG n = 0, x = 0, y = 0, x2 = 0, y2 = 0, delta = 0;
+    BSTR b = 0;
+    LRESULT lr = 0;
+
+    check("TOM: QueryInterface(IID_ITextDocument2) as XAML does",
+          exported && ts->lpVtbl->QueryInterface(ts, exported, (void **)&d) == S_OK && d);
+    if (!d) return;
+    ts->lpVtbl->QueryInterface(ts, &iid_doc, (void **)&d1);
+    ts->lpVtbl->TxSendMessage(ts, EM_GETOLEINTERFACE, 0, (LPARAM)&ole, &lr);
+    if (ole) ole->lpVtbl->QueryInterface(ole, &iid_doc2, (void **)&d2);
+    check("TOM: ITextDocument and EM_GETOLEINTERFACE's IRichEditOle give the same document",
+          d1 == d && lr && ole && d2 == d && ole->lpVtbl->GetObjectCount(ole) == 0);
+    if (d1) d1->lpVtbl->Release(d1);
+    if (d2) d2->lpVtbl->Release(d2);
+    if (ole) ole->lpVtbl->Release(ole);
+
+    msg(WM_SETTEXT, 0, (LPARAM)L"Hello world");
+    r = range(d, 0, tomForward);
+    check("Range2(0, tomForward): the story and its final paragraph mark", r && ends_are(r, 0, 12));
+    r->lpVtbl->GetStoryLength(r, &n);
+    check("GetStoryLength", n == 12);
+    check("GetText leaves out the final paragraph mark", range_text_is(r, L"Hello world"));
+    r->lpVtbl->GetText2(r, tomAllowFinalEOP, &b);
+    check("GetText2(tomAllowFinalEOP)", bstr_is(b, L"Hello world\r"));
+    SysFreeString(b);
+    b = 0;
+    r->lpVtbl->Release(r);
+
+    w = range(d, 7, 7);
+    check("Expand(tomWord)", w->lpVtbl->Expand(w, tomWord, &delta) == S_OK && ends_are(w, 6, 11) && delta == 5);
+    w->lpVtbl->GetChar(w, &n);
+    check("GetChar", n == L'w');
+    r = range(d, 0, 5);
+    b = SysAllocString(L"Howdy");
+    host.changes = 0;
+    check("SetText replaces the range's text", r->lpVtbl->SetText(r, b) == S_OK && text_is(L"Howdy world")
+          && ends_are(r, 0, 5) && host.changes == 1);
+    SysFreeString(b);
+    set_sel(0, 0);
+    type(L"Oh ");
+    check("ranges follow edits made elsewhere", range_text_is(w, L"world") && ends_are(w, 9, 14) && ends_are(r, 3, 8));
+    r->lpVtbl->Release(r);
+
+    /* the selection, as XAML's TextBoxBase drives it */
+    d->lpVtbl->GetSelection2(d, &sel);
+    d->lpVtbl->GetSelection(d, &sel2);
+    check("GetSelection2: one selection object", sel && sel == sel2);
+    if (sel2) sel2->lpVtbl->Release(sel2);
+    if (!sel) { w->lpVtbl->Release(w); d->lpVtbl->Release(d); return; }
+    {
+        void *p1 = 0, *p2 = 0, *p3 = 0;
+        check("QueryInterface: ITextRange2 on both, ITextSelection2 on the selection only",
+              w->lpVtbl->QueryInterface(w, &iid_range2, &p1) == S_OK && p1 == w
+              && w->lpVtbl->QueryInterface(w, &iid_sel2, &p2) == E_NOINTERFACE
+              && sel->lpVtbl->QueryInterface(sel, &iid_sel2, &p3) == S_OK && p3 == sel);
+        if (p1) w->lpVtbl->Release(w);
+        if (p3) sel->lpVtbl->Release(sel);
+    }
+    host.selchanges = 0;
+    sel->lpVtbl->SetRange(sel, 3, 8);
+    check("selection SetRange moves the text services' selection", get_sel().cpMin == 3 && get_sel().cpMax == 8
+          && host.selchanges > 0);
+    sel->lpVtbl->GetFlags(sel, &n);
+    check("GetFlags: the active end is the end", !(n & tomSelStartActive));
+    sel->lpVtbl->SetFlags(sel, n | tomSelStartActive);
+    sel->lpVtbl->GetFlags(sel, &n);
+    check("SetFlags(tomSelStartActive)", (n & tomSelStartActive) && ends_are(sel, 3, 8));
+    sel->lpVtbl->Expand(sel, tomStory, 0);
+    check("select all (Expand(tomStory)): not the final paragraph mark", ends_are(sel, 0, 14) && get_sel().cpMax == 14);
+    sel->lpVtbl->GetCch(sel, &n);
+    check("GetCch", n == 14);
+    sel->lpVtbl->Collapse(sel, tomFalse);
+    sel->lpVtbl->GetType(sel, &n);
+    check("Collapse(false): the caret at the end", ends_are(sel, 14, 14) && n == tomSelectionIP);
+    sel->lpVtbl->MoveLeft(sel, tomWord, 1, tomMove, 0);
+    check("MoveLeft(tomWord)", ends_are(sel, 9, 9));
+    sel->lpVtbl->MoveRight(sel, tomCharacter, 2, tomExtend, &delta);
+    check("MoveRight(tomCharacter, 2, tomExtend)", ends_are(sel, 9, 11) && delta == 2);
+    sel->lpVtbl->HomeKey(sel, tomLine, tomMove, 0);
+    check("HomeKey", ends_are(sel, 0, 0));
+    sel->lpVtbl->EndKey(sel, tomLine, tomMove, 0);
+    check("EndKey", ends_are(sel, 14, 14));
+    b = SysAllocString(L"!");
+    sel->lpVtbl->TypeText(sel, b);
+    SysFreeString(b);
+    check("TypeText", text_is(L"Oh Howdy world!") && ends_are(sel, 15, 15));
+
+    /* units, finding, case, deleting */
+    r = range(d, 0, 0);
+    check("Move(tomWord, 2)", r->lpVtbl->Move(r, tomWord, 2, &delta) == S_OK && delta == 2 && ends_are(r, 9, 9));
+    r->lpVtbl->MoveEnd(r, tomCharacter, 5, 0);
+    check("MoveEnd", range_text_is(r, L"world"));
+    r->lpVtbl->ChangeCase(r, tomUpperCase);
+    check("ChangeCase(tomUpperCase)", text_is(L"Oh Howdy WORLD!"));
+    r->lpVtbl->SetRange(r, 0, 0);
+    b = SysAllocString(L"howdy");
+    check("FindText ignores case unless asked", r->lpVtbl->FindText(r, b, tomForward, 0, &n) == S_OK && n == 5
+          && ends_are(r, 3, 8) && r->lpVtbl->FindText(r, b, tomForward, tomMatchCase, &n) == S_FALSE);
+    SysFreeString(b);
+    r->lpVtbl->Delete(r, tomCharacter, 0, 0);
+    check("Delete", text_is(L"Oh  WORLD!"));
+    r->lpVtbl->Release(r);
+
+    /* undo and redo, and suspending them as XAML does around its own changes */
+    check("Undo(1)", d->lpVtbl->Undo(d, 1, &n) == S_OK && n == 1 && text_is(L"Oh Howdy WORLD!"));
+    check("Redo(1)", d->lpVtbl->Redo(d, 1, &n) == S_OK && text_is(L"Oh  WORLD!"));
+    msg(EM_EMPTYUNDOBUFFER, 0, 0);
+    d->lpVtbl->Undo(d, tomSuspend, 0);
+    r = range(d, 0, 2);
+    b = SysAllocString(L"Ah");
+    r->lpVtbl->SetText(r, b);
+    SysFreeString(b);
+    d->lpVtbl->Undo(d, tomResume, 0);
+    check("Undo(tomSuspend): changes are not recorded", text_is(L"Ah  WORLD!") && msg(EM_CANUNDO, 0, 0) == 0);
+    r->lpVtbl->Release(r);
+    d->lpVtbl->Freeze(d, &n);
+    check("Freeze and Unfreeze count", n == 1 && d->lpVtbl->Unfreeze(d, &n) == S_OK && n == 0);
+
+    /* points: GetPoint as TextBoxView finds the caret, RangeFromPoint2 back */
+    r = range(d, 4, 4);
+    r->lpVtbl->GetPoint(r, tomStart | tomClientCoord | tomAllowOffClient, &x, &y);
+    r->lpVtbl->GetPoint(r, tomStart | tomClientCoord | tomAllowOffClient | 8 /* TA_BOTTOM */, &x2, &y2);
+    check("GetPoint: top and bottom of the line", x > 5 && y == 0 && y2 > 10 && x2 == x);
+    r->lpVtbl->Release(r);
+    r = 0;
+    d->lpVtbl->RangeFromPoint2(d, x + 1, y + 2, tomClientCoord, &r);
+    check("RangeFromPoint2 finds the same place", r && ends_are(r, 4, 4));
+    if (r) r->lpVtbl->Release(r);
+
+    /* the clipboard */
+    r = range(d, 4, 9);
+    r->lpVtbl->Copy(r, 0);
+    check("Copy", clipboard_is(L"WORLD"));
+    r->lpVtbl->Collapse(r, tomStart);
+    r->lpVtbl->Paste(r, 0, 0);
+    check("Paste", text_is(L"Ah  WORLDWORLD!"));
+    msg(EM_SETREADONLY, TRUE, 0);
+    b = SysAllocString(L"x");
+    r->lpVtbl->CanEdit(r, &n);
+    check("read-only: SetText refused, CanEdit false", r->lpVtbl->SetText(r, b) == E_ACCESSDENIED && n == tomFalse);
+    SysFreeString(b);
+    msg(EM_SETREADONLY, FALSE, 0);
+    r->lpVtbl->Release(r);
+
+    /* paragraphs and lines */
+    host.bits |= TXTBIT_MULTILINE;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"one\r\ntwo");
+    r = range(d, 5, 5);
+    r->lpVtbl->GetIndex(r, tomParagraph, &n);
+    check("GetIndex(tomParagraph)", n == 2);
+    r->lpVtbl->Expand(r, tomParagraph, 0);
+    check("Expand(tomParagraph): the last takes in the final mark", ends_are(r, 4, 8));
+    r->lpVtbl->SetRange(r, 0, 0);
+    r->lpVtbl->Move(r, tomLine, 1, 0);
+    check("Move(tomLine)", ends_are(r, 4, 4));
+    r->lpVtbl->Release(r);
+    host.bits &= ~TXTBIT_MULTILINE;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_MULTILINE, host.bits);
+
+    kept = range(d, 0, 1);
+    sel->lpVtbl->Release(sel);
+    w->lpVtbl->Release(w);
+    d->lpVtbl->Release(d);
+}
+
+/* ---- TxDrawD2D ------------------------------------------------------------ */
+typedef struct { float r, g, b, a; } COLORF_;
+typedef struct { UINT32 type, format, alpha; float dpix, dpiy; UINT32 usage, level; } RTPROPS_;
+typedef HRESULT (WINAPI *PD2D1CREATEFACTORY)(UINT32, REFIID, const void *, void **);
+#define SLOT(p, i, type) ((type)((*(void ***)(p))[i]))
+
+static int count_near(DWORD rgb, int tol)
+{
+    int i, n = 0;
+    for (i = 0; i < BW * BH; i++) {
+        DWORD p = bits_of[i];
+        int dr = (int)((p >> 16) & 0xff) - (int)((rgb >> 16) & 0xff);
+        int dg = (int)((p >> 8) & 0xff) - (int)((rgb >> 8) & 0xff);
+        int db = (int)(p & 0xff) - (int)(rgb & 0xff);
+        n += dr * dr <= tol * tol && dg * dg <= tol * tol && db * db <= tol * tol;
+    }
+    return n;
+}
+
+static HRESULT d2d_draw(void *rt, const COLORF_ *bg)
+{
+    RECTL rc = {0, 0, BW, BH};
+    HRESULT hr;
+    UINT64 t1, t2;
+    SLOT(rt, 48, void (STDMETHODCALLTYPE *)(void *))(rt);                         /* BeginDraw */
+    SLOT(rt, 47, void (STDMETHODCALLTYPE *)(void *, const COLORF_ *))(rt, bg);     /* Clear */
+    hr = ts->lpVtbl->TxDrawD2D(ts, rt, &rc, 0, TXTVIEW_ACTIVE);
+    SLOT(rt, 49, HRESULT (STDMETHODCALLTYPE *)(void *, UINT64 *, UINT64 *))(rt, &t1, &t2);   /* EndDraw */
+    return hr;
+}
+
+static void drawd2d(HDC dc)
+{
+    static const IID iid_factory = {0x06152247, 0x6f50, 0x465a, {0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07}};
+    HMODULE m = LoadLibraryA("d2d1.dll");
+    PD2D1CREATEFACTORY fn = m ? (PD2D1CREATEFACTORY)GetProcAddress(m, "D2D1CreateFactory") : 0;
+    void *f = 0, *rt = 0;
+    RTPROPS_ props = {0, 87, 1, 0, 0, 0, 0};     /* B8G8R8A8, premultiplied */
+    RECT rc = {0, 0, BW, BH};
+    COLORF_ green = {0, 1, 0, 1};
+    HRESULT hr;
+    int dark, hl;
+    if (fn) fn(0, &iid_factory, 0, &f);
+    if (f) SLOT(f, 16, HRESULT (STDMETHODCALLTYPE *)(void *, const RTPROPS_ *, void **))(f, &props, &rt);   /* CreateDCRenderTarget */
+    check("Direct2D: a DC render target", rt != 0);
+    if (!rt) { if (f) ((IUnknown *)f)->lpVtbl->Release((IUnknown *)f); return; }
+    SLOT(rt, 57, HRESULT (STDMETHODCALLTYPE *)(void *, HDC, const RECT *))(rt, dc, &rc);   /* BindDC */
+    msg(WM_SETTEXT, 0, (LPARAM)L"Drawn text");
+    set_sel(0, 5);
+    hr = d2d_draw(rt, &green);
+    dark = count_dark();
+    hl = count_near(0x0078d7, 6);
+    check("TxDrawD2D: the text and the selection's highlight", hr == S_OK && dark > 10 && hl > 50);
+    check("TxDrawD2D opaque: the window colour over the background", count_near(0x00ff00, 8) == 0);
+    host.back = TXTBACK_TRANSPARENT;
+    hr = d2d_draw(rt, &green);
+    check("TxDrawD2D transparent: the background stays", hr == S_OK && count_near(0x00ff00, 8) > BW * BH / 2);
+    check("TxDrawD2D transparent: the text and highlight on it", count_dark() > 10 && count_near(0x0078d7, 6) > 50);
+    host.back = TXTBACK_OPAQUE;
+    set_sel(0, 0);
+    ((IUnknown *)rt)->lpVtbl->Release((IUnknown *)rt);
+    ((IUnknown *)f)->lpVtbl->Release((IUnknown *)f);
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -542,11 +819,18 @@ int main(void)
     multiline();
     drawing(dc);
     password(dc);
+    tom(m);
+    drawd2d(dc);
     others();
 
     check("ShutdownTextServices", shutdown_fn(unk) == S_OK);
     ts->lpVtbl->Release(ts);
     check("the last Release", unk->lpVtbl->Release(unk) == 0);
+    if (kept) {
+        LONG cp = 0;
+        check("a range kept after the text services: CO_E_RELEASED", kept->lpVtbl->GetStart(kept, &cp) == (HRESULT)0x800401ff);
+        kept->lpVtbl->Release(kept);
+    }
     check("the host was never AddRef'd for good", host.ref == 1);
     SelectObject(dc, oldbmp);
 done:

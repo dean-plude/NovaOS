@@ -194,6 +194,16 @@ int    NetImportPfx(const void *data, UINT32 len, const char *password, char *na
 int    NetPersonalCount(void);
 bool   NetPersonalName(int i, char *name, int name_cap, char *issuer, int issuer_cap);
 int    NetPersonalFind(const char *user);
+/* Entries are numbered 0 to NetPersonalSlots() - 1; NetPersonalName is
+ * false for one removed (certutil -delstore my) until the next start */
+int    NetPersonalSlots(void);
+/* certutil -delstore root|my ID: the imported roots, or the personal
+ * certificates, @id names (the certificate's name, or its SHA-1
+ * thumbprint in hex) taken out of the store and the registry; how many
+ * (the last one's name in @name), or 0 with *err set.  Built-in roots
+ * stay. */
+int    NetDeleteRoots(const char *id, char *name, int name_cap, char *err, int err_cap);
+int    NetDeletePersonal(const char *id, char *name, int name_cap, char *err, int err_cap);
 /* The imported roots and personal certificates kept in the registry, back
  * in the stores (at boot, once the registry is loaded: ke/main.c) */
 void   NetRestoreCertificates(void);

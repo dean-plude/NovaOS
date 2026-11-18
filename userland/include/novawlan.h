@@ -15,9 +15,11 @@
  *          points (NovaWlanBss rows into out), strongest first; returns
  *          how many, or -1 if the scan failed;
  *   op 20  connect adapter arg to the network NovaWlanConnect (out)
- *          names, with its passphrase; returns 0 or a NOVAWLAN_* error
- *          (kernel/nt/wlan.h's WLAN_*), after the association and its
- *          handshakes (DHCP follows on its own);
+ *          names, with its passphrase (or, on a WPA2-Enterprise network,
+ *          the EAP method, user name and password a profile's EAP
+ *          settings and its user data give); returns 0 or a NOVAWLAN_*
+ *          error (kernel/nt/wlan.h's WLAN_*), after the association and
+ *          its handshakes (DHCP follows on its own);
  *   op 21  disconnect adapter arg; returns 0 or a NOVAWLAN_* error.
  */
 #pragma once
@@ -39,13 +41,17 @@
 #define NOVAWLAN_BAD_KEY       (-6)
 #define NOVAWLAN_UNSUPPORTED   (-7)
 #define NOVAWLAN_KEY_FORMAT    (-8)
+#define NOVAWLAN_NEEDS_USER    (-9)   /* WPA2-Enterprise: no user name and password (PEAP) or no certificate */
+#define NOVAWLAN_UNTRUSTED     (-10)  /* WPA2-Enterprise: the server's certificate is not from a trusted root */
+#define NOVAWLAN_NO_CERT       (-11)  /* EAP-TLS: no personal certificate for the user */
+#define NOVAWLAN_CERT_REFUSED  (-12)  /* EAP-TLS: the server did not accept the certificate */
 
 /* NovaWlanBss.security */
 #define NOVAWLAN_OPEN   0
 #define NOVAWLAN_WPA2   1      /* WPA2-Personal (AKM 2, CCMP) */
 #define NOVAWLAN_WPA3   2      /* WPA3-Personal (AKM 8, SAE) */
 #define NOVAWLAN_OTHER  3      /* something NovaOS cannot join yet (WEP, WPA, WPA3-Enterprise) */
-#define NOVAWLAN_ENTERPRISE 4  /* WPA2-Enterprise (AKM 1, CCMP): netsh signs in to it; wlanapi cannot yet */
+#define NOVAWLAN_ENTERPRISE 4  /* WPA2-Enterprise (AKM 1, CCMP): PEAP (MS-CHAPv2) or EAP-TLS signs in */
 
 typedef struct {               /* an access point a scan heard */
     unsigned char  bssid[6];
@@ -71,7 +77,14 @@ typedef struct {               /* a Wi-Fi adapter */
     unsigned long long rx_frames, tx_frames;
 } NovaWlanIf;
 
+/* NovaWlanConnect.eap */
+#define NOVAWLAN_EAP_NONE 0    /* a Personal or open network's profile */
+#define NOVAWLAN_EAP_TLS  13   /* EAP-TLS: a certificate from the personal store (user's, else the newest) */
+#define NOVAWLAN_EAP_PEAP 25   /* PEAP with MS-CHAPv2: user and key (the password) */
+
 typedef struct {               /* op 20's request */
     char ssid[33];
-    char key[65];              /* "": none (an open network) */
+    char key[128];             /* the passphrase, or PEAP's password; "": none (an open network) */
+    char user[128];            /* WPA2-Enterprise: the user name ("DOMAIN\user" or "user@realm"), or "" */
+    unsigned char eap;         /* NOVAWLAN_EAP_* */
 } NovaWlanConnect;

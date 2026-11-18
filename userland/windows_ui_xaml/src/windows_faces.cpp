@@ -770,6 +770,30 @@ extern "C" HRESULT nova_object_to_app(void *a, void **out)
     return S_OK;
 }
 
+// A ResourceDictionary's IMap<Object, Object>.Lookup (the same interface ID
+// on both sides, so no face stands in front of it) answers the app's code
+// with the framework's own objects, which .NET Native does not know by
+// their lifted class names: Calculator's
+// (MenuFlyout)Resources["DisplayContextMenu"] failed with
+// InvalidCastException, the Calculator control was never given its
+// DataContext, and a storyboard's Completed handler then read it as null.
+// So the value goes to a caller outside this DLL as nova_object_to_app
+// hands any object to the app; the framework's own callers keep it as is.
+extern "C" PVOID NTAPI RtlPcToFileHeader(PVOID pc, PVOID *base);
+extern "C" void nova_value_for_caller(void *ret, void **value)
+{
+    PVOID mine = nullptr, theirs = nullptr;
+    if (!value || !*value || !ret)
+        return;
+    RtlPcToFileHeader((PVOID)&nova_value_for_caller, &mine);
+    RtlPcToFileHeader(ret, &theirs);
+    if (!mine || theirs == mine)
+        return;
+    void *o = *value;
+    *value = nullptr;
+    nova_object_app_out(S_OK, o, value);
+}
+
 // an object the framework gives the app's code as a call's result
 // (DependencyObject.GetValue's): as nova_object_to_app, so that a brush a
 // custom property holds comes back as Windows' SolidColorBrush, which

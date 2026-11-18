@@ -1910,5 +1910,25 @@ vendors.
    fast).  Test: `wuxamltest` (a `MenuFlyout` from markup, its three items
    through Windows' `IMenuFlyout`, the first item's `Text`).
 
+   Pulsar item 3, twenty-sixth slice: resources the app looks up.  The
+   collection interfaces over objects (`IMap<Object, Object>`,
+   `IVector<Object>`) have the same interface IDs on both sides, so no face
+   stands in front of a `ResourceDictionary`'s map, and its `Lookup` handed
+   Calculator the framework's `MenuFlyout`; .NET Native's cast to Windows'
+   sealed `MenuFlyout` then threw `InvalidCastException` in the Calculator
+   control's constructor, which never got its `DataContext`, and a
+   storyboard's `Completed` handler read that as null.
+   `ResourceDictionary::Lookup` (a NovaOS change in the vendored
+   `ResourceDictionary_partial.cpp`) now passes its result to
+   `nova_value_for_caller` (`windows_faces.cpp`), which, when the return
+   address is outside `Windows.UI.Xaml.dll` (`RtlPcToFileHeader`), hands
+   the value out as `nova_object_app_out` does for `GetValue`.  The
+   framework's own lookups keep the framework's objects.  Calculator's page
+   stops next at `ListView`, not built yet.  Test: `xamldlltest` (a
+   `MenuFlyout` in its page's resources, looked up through their `IMap`, is
+   `Windows.UI.Xaml.Controls.MenuFlyout`; the XAML self-tests that link the
+   framework in are one module with it, so the app's side is tested where
+   the framework is the system DLL).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

@@ -17054,6 +17054,35 @@ corrected it afterwards.  `SetWindowPos` now asks the kernel whether the
 window is embedded when it has not heard yet, so a place given to an
 embedded window is always read in its parent's client area.
 
+## .NET's unhandled exceptions: a guard page on every thread's stack
+
+An unhandled .NET exception printed only "Stack overflow." on NovaOS,
+whatever the exception was, and the process ended.  Before it prints an
+unhandled exception the .NET runtime checks that its thread still has a
+stack guard page (`Thread::DetermineIfGuardPagePresent`: `VirtualQuery`
+over the stack looking for a `PAGE_GUARD` page); if there is none, it
+takes the exception to be a stack overflow and says so.  NovaOS committed
+a thread's whole stack (lazily, so the pages cost nothing until touched)
+and never put a guard page on it, so the check always failed.
+
+- **A guard page on every stack** (`kernel/um/um.c`): a new thread's stack
+  has a committed read/write `PAGE_GUARD` page 32 KB below its base
+  (`UM_STACK_COMMIT`), and the TEB's `StackLimit` sits on top of it, as
+  on Windows.  The pages below stay committed lazily, so a frame that
+  skips the guard still has its memory.
+- **The guard moves down as the stack grows**: touching it lifts the
+  guard, and the next page down that has not been used yet becomes the
+  guard (it was already committed, which used to stop the guard from
+  being renewed), with `StackLimit` following.  Reaching the lowest page
+  is `STATUS_STACK_OVERFLOW`, as before.
+- **Checked by** the core suite's `stacktest` (64- and 32-bit: one guard
+  page on the first thread's and a new thread's stack, below the running
+  frame, with `StackLimit` on top; still one after the stack grew 128 KB,
+  lower down) and the app corpus's .NET entry, whose new
+  `exceptiontest.dll` prints "Unhandled exception.
+  System.InvalidOperationException: exceptiontest unhandled" and its stack
+  trace, as on Windows.
+
 ## Packaged apps in the shell, third part: suspended apps frozen
 
 A follow-up to item 2 of 0.2.3 "Nebula" ([plan](releases/0.2.3.md)).
@@ -17294,6 +17323,31 @@ pixels.  Not yet: the Text Object Model (`ITextDocument2`,
 `EM_GETOLEINTERFACE`) and `TxDrawD2D`, which XAML's `TextBox` uses, rich
 text formatting, IME composition and the touch keyboard; then the
 `TextBox` itself on a XAML page.
+
+## Windows Calculator's launch, twenty-sixth slice: resources the app looks up
+
+The twenty-sixth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's page load stopped on a
+`NullReferenceException` in one of its storyboard's `Completed` handlers,
+which read the Calculator control's `DataContext` and found it empty.  The
+control never got it because its constructor threw first: it casts
+`Resources["DisplayContextMenu"]` to `MenuFlyout`, and the resources' map
+(`IMap<Object, Object>`, whose interface ID is the same in the framework and
+in Windows) answered with the framework's own `MenuFlyout`, which .NET
+Native does not know by its lifted class name, so the cast threw
+`InvalidCastException`.  A `ResourceDictionary` lookup from the app's code
+now returns the value as the app's Windows object, as `GetValue` already
+did; the framework's own lookups are unchanged.
+
+- **Tests:** `xamldlltest` (a program on the system `Windows.UI.Xaml.dll`,
+  as an app is) looks up a `MenuFlyout` in its page's resources through
+  their `IMap` and reads its class name,
+  `Windows.UI.Xaml.Controls.MenuFlyout`.
+- **Found:** Calculator's control now gets its `DataContext` and the null
+  reference is gone.  The page stops next at a `ListView` (its history
+  list), which NovaOS does not build yet.  That is the next part.  The page
+  does not draw yet.
 
 ## ShareX starts again: app data only for packaged apps
 

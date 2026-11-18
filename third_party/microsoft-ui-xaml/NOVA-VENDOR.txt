@@ -419,6 +419,19 @@ SelectionChangedEventArgs, ItemAutomationPeer, ItemsControlAutomationPeer,
 ElementSoundPlayer, FocusManager, FindNextElementOptions and
 AutomationProperty, with FocusMovementResult.g.h.
 
+Pulsar item 3, twenty-fifth slice (Calculator's history and memory
+context menus), the same commit, unchanged but for line endings (LF):
+dxaml/lib's MenuFlyout_Partial.cpp, MenuFlyoutItemBase_Partial.cpp,
+MenuFlyoutItemBaseCollection_Partial.cpp, MenuFlyoutItem_Partial.cpp,
+ToggleMenuFlyoutItem_Partial.cpp, MenuFlyoutSubItem_Partial.cpp,
+MenuFlyoutPresenter_Partial.cpp, the item, toggle item, sub item and
+presenter automation peers' _Partial.cpp, and ContextMenuEventArgs_Partial
+.cpp; and winrtgeneratedclasses' .g.cpp of MenuFlyout, MenuFlyoutItemBase,
+MenuFlyoutItemBaseCollection, MenuFlyoutItem, MenuFlyoutItemTemplateSettings,
+ToggleMenuFlyoutItem, MenuFlyoutSeparator, MenuFlyoutSubItem,
+MenuFlyoutPresenter, MenuFlyoutPresenterTemplateSettings, the four
+automation peers and ContextMenuEventArgs.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

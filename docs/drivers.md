@@ -727,8 +727,21 @@ root list is built again without it; built-in roots stay) and `certutil
 store, each named by its common name or SHA-1 thumbprint, and out of the
 registry too.
 
+WPA3-Enterprise networks sign in the same way.  NovaOS takes
+802.1X-SHA256 (AKM 00-0f-ac:5) over plain 802.1X when the access point
+offers it and can protect management frames, as it takes SAE over PSK,
+and treats 802.1X with management frame protection required as
+WPA3-Enterprise too: the connect asks the driver for
+`WDI_AUTH_ALGO_WPA3_ENT` (11) with MFP on, the station's RSN element says
+MFP capable (and required if the access point requires it), and after
+the sign-in the 4-way handshake uses key descriptor version 3 (the PTK
+from KDF-SHA256, AES-128-CMAC MICs; `kernel/nt/wpa.c`) and must bring an
+IGTK, which goes to the driver with the other keys.  `netsh wlan show
+networks` and `wlanapi.dll` call such a network WPA3-Enterprise
+(`DOT11_AUTH_ALGO_WPA3_ENT`, 11).
+
 What is missing: SAE's hash-to-element and groups other than P-256,
-WPA3-Enterprise, PEAP's cryptobinding, the copy of a removed root
+WPA3-Enterprise's 192-bit mode (AKM 12, GCMP-256, SHA-384), PEAP's cryptobinding, the copy of a removed root
 under `System32\CertStore` that NetSurf reads, frames
 the driver injects itself, and the
 information elements in `WlanGetNetworkBssList`'s entries. Scanning and
@@ -736,9 +749,10 @@ joining on the real card, the rest of roadmap step 28.1, needs the T14.
 
 QEMU has no Wi-Fi card of any kind, so the `wifi` self-test brings its
 own: `wditest.sys` (`tools/drivertest/wditest.c`) is a WDI miniport on
-QEMU's `edu` card whose radio hears four access points (WPA2-Personal on
-2.4 GHz, WPA3-Personal on 5 GHz, an open network and WPA2-Enterprise, each
-one an access point it plays, the last with its authentication server:
+QEMU's `edu` card whose radio hears five access points (WPA2-Personal on
+2.4 GHz, WPA3-Personal on 5 GHz, an open network, WPA2-Enterprise and
+WPA3-Enterprise, each one an access point it plays, the last two with
+their authentication server:
 `tools/drivertest/eapap.h`, PEAP and EAP-TLS on Mbed TLS built into the
 driver), and
 whose TAL plays a
@@ -762,7 +776,9 @@ it, and with the right one the 4-way handshake runs from the sign-in's
 PMK.  Then EAP-TLS: `certutil -importpfx` refuses `alice.pfx` with a wrong
 password and imports it and `mallory.pfx`; mallory's self-signed
 certificate is refused by the server with a TLS alert, and alice's (from
-NovaCorp Test Root) signs in. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
+NovaCorp Test Root) signs in. Then alice signs in to the WPA3-Enterprise
+network with PEAP: the driver checks the version 3 handshake and the
+management group key and rekeys both group keys. Then `wlantest` does it all again through `wlanapi.dll` (a scan and its
 notification, the network and BSS lists, a profile, a wrong passphrase
 refused with the key-mismatch reason, joining by profile and by SSID,
 and the Enterprise network by a PEAP profile with alice's sign-in from

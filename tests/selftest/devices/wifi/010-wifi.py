@@ -430,8 +430,15 @@ TESTS = [
          [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     # (NovaLab: WPA3-Enterprise, 802.1X-SHA256 with management frame protection; the same PEAP sign-in)
-    Test('wifi wpa3-enterprise needs user', 'netsh wlan connect name=NovaLab',
-         [r'The network "NovaLab" is an Enterprise network: sign in with user=NAME key=PASSWORD'], builtin=True),
+    # (without user= or key=, the newest personal certificate signs in: mallory's, imported last, which the
+    # server refuses, so EAP-TLS runs over WPA3-Enterprise too)
+    Test('wifi wpa3-enterprise newest certificate', 'netsh wlan connect name=NovaLab',
+         [r'\[DbgPrint\] wditest: connect to NovaLab: auth 11, ciphers 4/4, exclude unencrypted 1, MFP 1, '
+          r'EAPOL exempted yes',
+          r'\[DbgPrint\] wditest: RADIUS: identity mallory; PEAP start',
+          r'\[DbgPrint\] wditest: RADIUS: the station asked for EAP-TLS \(a Nak\): EAP-TLS start',
+          r'\[EAP\] WdiTest: the sign-in failed: the server refused the certificate \(a TLS alert\)',
+          r'The sign-in server of "NovaLab" did not accept the certificate\.'], builtin=True),
     Test('wifi wpa3-enterprise connect', 'netsh wlan connect name=NovaLab user=alice key=nova-peap-password',
          [r'\[DbgPrint\] wditest: connect task \d+ on port 1: SSID NovaLab, auth 11, 1 BSS entry, first 02:4e:6f:76:61:05',
           r'\[DbgPrint\] wditest: connect to NovaLab: auth 11, ciphers 4/4, exclude unencrypted 1, MFP 1, '

@@ -11,6 +11,7 @@
  * - the package's resources.pri strings (SHLoadIndirectString, MRM.dll),
  * - the package's Windows Runtime class (greeter.dll, RoActivateInstance
  *   through the package's ActivatableClasses registration),
+ * - ApplicationData.Current, given to a packaged app: its LocalSettings,
  * writes what it found to C:\Temp\appxtest-child.log and exits with its
  * failure count; then "appx remove" takes the package away again.
  * Started packaged with no arguments (from the Start menu: the core
@@ -103,6 +104,101 @@ static DWORD appx(const WCHAR *args)
 
 /* ---- inside the package ---- */
 
+/* ApplicationData.Current, a packaged app's (Calculator's start-up): its
+ * LocalSettings, whose Values are a PropertySet taking, finding and
+ * removing a boxed value (a setting not set looks up as null);
+ * CreateContainer making then opening a named container, Existing
+ * refusing a missing one.  (Unpackaged, Current is refused: wrtapptest.) */
+static const GUID IID_IApplicationDataStatics_T = { 0x5612147B, 0xE843, 0x45E3, { 0x94, 0xD8, 0x06, 0x16, 0x9E, 0x3C, 0x8E, 0x17 } };
+static const GUID IID_IMapStringObject_T = { 0x1B0D3570, 0x0877, 0x5EC2, { 0x8A, 0x2C, 0x3B, 0x95, 0x39, 0x50, 0x6A, 0xCA } };
+static const GUID IID_IPropertyValueStatics_T = { 0x629BDBC8, 0xD932, 0x4FF4, { 0x96, 0xB9, 0x8D, 0x96, 0xC5, 0xC1, 0xE8, 0x58 } };
+static const GUID IID_IPropertyValue_T = { 0x4BD682DD, 0x7554, 0x40E9, { 0x9A, 0x9B, 0x82, 0x65, 0x4E, 0xDE, 0x7E, 0x62 } };
+#define VTF(o, i, T) ((T)((void **)*(void **)(o))[i])
+typedef ULONG (STDMETHODCALLTYPE *Rel_t)(void *);
+typedef HRESULT (STDMETHODCALLTYPE *QI_t)(void *, const GUID *, void **);
+typedef HRESULT (STDMETHODCALLTYPE *Get_t)(void *, void *);
+typedef HRESULT (STDMETHODCALLTYPE *GetS_t)(void *, HSTRING, void *);
+#define RELEASE_(o) do { if (o) VTF(o, 2, Rel_t)(o); (o) = NULL; } while (0)
+static HSTRING hs(const WCHAR *s) { HSTRING h = 0; WindowsCreateString(s, (UINT32)wcslen(s), &h); return h; }
+static HRESULT factory(const WCHAR *cls, const GUID *iid, void **o)
+{
+    HSTRING s = hs(cls);
+    HRESULT hr = RoGetActivationFactory(s, iid, o);
+    WindowsDeleteString(s);
+    if (hr != S_OK) fprintf(out, "RoGetActivationFactory(%ls): 0x%08lX\n", cls, (unsigned long)hr);
+    return hr;
+}
+
+static void app_data(void)
+{
+    void *statics = 0, *data = 0, *local = 0, *values = 0, *map = 0, *pv = 0, *box = 0, *found = 0;
+    CHECK("ApplicationData's statics", factory(L"Windows.Storage.ApplicationData", &IID_IApplicationDataStatics_T, &statics) == S_OK);
+    if (!statics) return;
+    VTF(statics, 6, Get_t)(statics, &data);                          /* Current */
+    CHECK("ApplicationData.Current", data != 0);
+    if (data) VTF(data, 10, Get_t)(data, &local);                    /* LocalSettings */
+    CHECK("LocalSettings", local != 0);
+    if (!local) goto out;
+    HSTRING name = 0;
+    int locality = -1;
+    VTF(local, 6, Get_t)(local, &name);
+    VTF(local, 7, Get_t)(local, &locality);
+    CHECK("its Name (empty) and Locality (Local)", WindowsGetStringLen(name) == 0 && locality == 0);
+    WindowsDeleteString(name);
+    VTF(local, 8, Get_t)(local, &values);                            /* Values: IPropertySet */
+    CHECK("its Values", values != 0);
+    if (values) VTF(values, 0, QI_t)(values, &IID_IMapStringObject_T, &map);
+    CHECK("Values: an IMap<String, Object>", map != 0);
+    factory(L"Windows.Foundation.PropertyValue", &IID_IPropertyValueStatics_T, &pv);
+    if (map && pv) {
+        VTF(pv, 10, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, void **))(pv, 42, &box);   /* CreateInt32 */
+        HSTRING k = hs(L"VeryFirstLaunch");
+        BYTE had = 1, replaced = 1;
+        VTF(map, 8, GetS_t)(map, k, &had);                           /* HasKey */
+        CHECK("a new key: not there", had == 0);
+        CHECK("Insert", VTF(map, 10, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING, void *, BYTE *))(map, k, box, &replaced) == S_OK && !replaced);
+        VTF(map, 8, GetS_t)(map, k, &had);
+        CHECK("then there", had == 1);
+        VTF(map, 6, GetS_t)(map, k, &found);                         /* Lookup */
+        INT32 v = 0;
+        void *fv = 0;
+        if (found) VTF(found, 0, QI_t)(found, &IID_IPropertyValue_T, &fv);
+        if (fv) VTF(fv, 11, Get_t)(fv, &v);                          /* GetInt32 */
+        CHECK("Lookup: the value put", v == 42);
+        RELEASE_(fv);
+        UINT32 n = 0;
+        VTF(map, 7, Get_t)(map, &n);
+        CHECK("Size 1", n == 1);
+        CHECK("Remove", VTF(map, 11, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(map, k) == S_OK);
+        VTF(map, 8, GetS_t)(map, k, &had);
+        CHECK("then gone", had == 0);
+        void *none = (void *)1;                                     /* (a setting not set looks up as null, */
+        CHECK("Lookup of a key not set: null, not an error",       /*  as Calculator's theme helper expects) */
+              VTF(map, 6, GetS_t)(map, k, &none) == S_OK && none == 0);
+        WindowsDeleteString(k);
+    }
+    void *c1 = 0, *c2 = 0, *c3 = 0;
+    HSTRING cn = hs(L"Sub"), missing = hs(L"Missing");
+    typedef HRESULT (STDMETHODCALLTYPE *Create_t)(void *, HSTRING, int, void **);
+    CHECK("CreateContainer(Always)", VTF(local, 10, Create_t)(local, cn, 0, &c1) == S_OK && c1);
+    CHECK("CreateContainer(Existing) opens it", VTF(local, 10, Create_t)(local, cn, 1, &c2) == S_OK && c2 == c1);
+    CHECK("CreateContainer(Existing) of a missing one: refused", FAILED(VTF(local, 10, Create_t)(local, missing, 1, &c3)) && !c3);
+    WindowsDeleteString(cn);
+    WindowsDeleteString(missing);
+    RELEASE_(c1);
+    RELEASE_(c2);
+out:
+    RELEASE_(found);
+    RELEASE_(box);
+    RELEASE_(pv);
+    RELEASE_(map);
+    RELEASE_(values);
+    RELEASE_(local);
+    RELEASE_(data);
+    RELEASE_(statics);
+}
+
+
 static int child(int argc, WCHAR **argv)
 {
     WCHAR s[MAX_PATH], exe[MAX_PATH], cwd[MAX_PATH], want[MAX_PATH];
@@ -168,6 +264,8 @@ static int child(int argc, WCHAR **argv)
     CHECK("greeter.dll: the package's", !_wcsicmp(s, ROOT L"\\greeter.dll"));
     if (insp) ((IUnknown *)insp)->lpVtbl->Release(insp);
     WindowsDeleteString(cls);
+
+    app_data();
 
     fprintf(out, "child: %d passed, %d failed\n", pass, fail);
     fclose(out);

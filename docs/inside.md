@@ -171,7 +171,8 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     unless a rule allows it), rules by program, protocol, port and
     address, kept in the registry as Windows keeps them, through
     `hnetcfg.dll`'s `INetFwPolicy2`, `netsh advfirewall` and Settings >
-    Firewall.
+    Firewall; `netprofm.dll`'s Network List Manager tells programs whether
+    they are online, on which network and of what category.
 - **Desktop** (`kernel/wm/`, `kernel/apps/`): a window manager and shell
   drawn by the kernel's software GDI ([design/native-desktop.md](design/native-desktop.md)).
   - Windows 11-style frames, a dock with pinned and running apps, a Start

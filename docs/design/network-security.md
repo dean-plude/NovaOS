@@ -107,6 +107,20 @@ On Windows the engine is split between the Base Filtering Engine service
   actions and block-all, the current profile, rules (add, remove, item,
   enumerate, rule groups), restoring the defaults.  A rule taken from the
   collection is live: setting a property changes the rule in force.
+- `netprofm.dll`: the Network List Manager (`NetworkListManager`:
+  `INetworkListManager`, `INetwork`, `INetworkConnection`, their
+  enumerators, `INetworkCostManager`, `INetworkConnectionCost` and
+  connection points for `INetworkListManagerEvents`, `INetworkEvents`,
+  `INetworkConnectionEvents` and `INetworkCostManagerEvents`).
+  Connectivity is the adapter's (IPv4 with a gateway, or an IPv6 address
+  that is not link-local, counts as the Internet; Windows' web probe is
+  not made), the networks are the list above, the network the PC is on
+  is the firewall's, and the connection is the adapter by `iphlpapi`'s
+  GUID for it.  `SetCategory` on that network goes through the firewall
+  (the profile changes at once); names, descriptions and other networks'
+  categories are written to the registry.  A sink advised on a manager is
+  called from a thread that looks once a second; cost events never come
+  (a wired network is always unrestricted).
 - `netsh advfirewall`: `firewall add|delete|show|set rule`, `show
   allprofiles|currentprofile|...`, `set ... state on|off`, `set ...
   firewallpolicy`, `reset`, answering in Windows' words.
@@ -119,9 +133,11 @@ Callouts (a kernel-mode callout driver's `FwpsCalloutRegister`, and
 `FwpmCalloutAdd0`), IPsec and connection security rules, SmartScreen-style
 reputation checks, the "allow this app?" notification when a program
 first listens, ICMP rules (types and codes), the legacy `INetFwMgr` API,
-IDispatch for `hnetcfg`'s objects (so scripts that bind late, such as
-PowerShell's `New-Object -ComObject`, cannot use them yet),
-`INetworkListManager` (`netprofm.dll`), service-restricted rules and the
+IDispatch for `hnetcfg`'s and `netprofm`'s objects (so scripts that bind
+late, such as PowerShell's `New-Object -ComObject`, cannot use them yet),
+the Network List Manager's "Unidentified network" (an adapter with an
+address but no gateway), its networks' creation and connection times and
+a second adapter, service-restricted rules and the
 `NetSecurity` PowerShell module.  Checks on real hardware (the reference
 laptop's Wi-Fi network as Public, then Private) wait on the ThinkPad.
 
@@ -130,4 +146,6 @@ laptop's Wi-Fi network as Public, then Private) wait on the ThinkPad.
 `firewalltest` (network suite, `tests/selftest/network4/075-firewalltest.py`)
 exercises the engine over loopback and the firewall on QEMU's network,
 with inbound connections made from the host through port forwarding;
-the same file checks `netsh advfirewall`.
+the same file checks `netsh advfirewall`.  `nlmtest`
+(`tests/selftest/network4/076-nlmtest.py`) checks the Network List
+Manager on the same network, after it.

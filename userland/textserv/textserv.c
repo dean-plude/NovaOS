@@ -23,17 +23,17 @@
  * each character, with the selection highlighted, single-line text
  * scrolled to keep the caret in view and multi-line text word-wrapped.
  *
- * Plain text in one character format: the Text Object Model
- * (ITextDocument2, EM_GETOLEINTERFACE) and drawing to Direct2D
- * (TxDrawD2D) are the next parts of the XAML text input step.  Written
- * from the Rich Edit and text services documentation.
+ * TxDrawD2D draws the same onto a Direct2D render target (XAML's text
+ * boxes draw that way).  The Text Object Model over the same text
+ * (ITextDocument2 by QueryInterface, IRichEditOle by EM_GETOLEINTERFACE,
+ * its ranges and selection) is tom.c.  Plain text in one character format
+ * (ITextFont2 and ITextPara2 come with XAML's TextBox).  Written from the
+ * Rich Edit and text services documentation.
  */
-#include <novatextserv.h>
+#include "tsint.h"
 
-void *memset(void *d, int c, size_t n);
-void *memcpy(void *d, const void *s, size_t n);
-void *memmove(void *d, const void *s, size_t n);
-int memcmp(const void *a, const void *b, size_t n);
+int _fltused = 0x9875;                            /* floating point in use (Direct2D's rectangles, the tab stop) */
+
 GDIAPI BOOL GetTextExtentExPointW(HDC dc, LPCWSTR s, int n, int max, LPINT fit, LPINT dx, LPSIZE size);
 
 /* the IIDs the three DLLs export as data (XAML checks them by GetProcAddress) */
@@ -47,49 +47,9 @@ __declspec(dllexport) const IID IID_IRichEditOle   = NOVA_IID_IRichEditOle;
 __declspec(dllexport) const IID IID_IRichEditOleCallback = NOVA_IID_IRichEditOleCallback;
 static const IID iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
-#define UNDO_MAX    100
-#define DEFAULT_MAX 32767                         /* Rich Edit's text limit until EM_EXLIMITTEXT */
-
-typedef struct { WCHAR *text; LONG len, anchor, active; } SNAP;
-typedef struct { LONG start, len, width; } LINE;  /* a laid-out line: [start, start+len) */
-
-typedef struct TS {
-    IUnknown inner;                               /* the object's own IUnknown (aggregation) */
-    ITextServices2 iface;
-    LONG ref;
-    IUnknown *outer;
-    ITextHost *host;                              /* not AddRef'd, as Windows' isn't */
-    WCHAR *text;
-    LONG len, cap;
-    LONG anchor, active;                          /* the selection: active end has the caret */
-    DWORD bits;                                   /* TXTBIT_* from the host */
-    DWORD maxlen, mask, options, editstyle, langopts, textmode;
-    WCHAR pwch;                                   /* the password character */
-    BOOL modified, focus, inplace, dragging, typing, caret;
-    SNAP undo[UNDO_MAX], redo[UNDO_MAX];
-    int nundo, nredo, undolimit;
-    CHARFORMAT2W cf;                              /* the default character format */
-    HFONT font;
-    LONG lineh, ascent;
-    LINE *lines;
-    int nlines, linecap;
-    LONG layoutw;                                 /* the width laid out for (0: no wrap) */
-    BOOL dirty;
-    LONG scrollx, scrolly;
-    LONG targetx;                                 /* Up and Down keep to this x */
-    RECT client;
-    HDC drawdc, memdc;
-} TS;
-
-#define FROM_IFACE(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, iface)))
-#define FROM_INNER(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, inner)))
-
-static LONG selmin(TS *t) { return t->anchor < t->active ? t->anchor : t->active; }
-static LONG selmax(TS *t) { return t->anchor < t->active ? t->active : t->anchor; }
-
 /* ---- memory ------------------------------------------------------------- */
-static void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n ? n : 1); }
-static void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
+void *alloc(SIZE_T n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n ? n : 1); }
+void release(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
 
 static BOOL reserve(TS *t, LONG n)
 {
@@ -106,7 +66,6 @@ static BOOL reserve(TS *t, LONG n)
 }
 
 /* ---- the host ----------------------------------------------------------- */
-#define HOST(t) ((t)->host->lpVtbl)
 
 static void notify(TS *t, DWORD code, void *data)
 {
@@ -264,7 +223,7 @@ static void layout(TS *t, HDC dc, LONG width)
     t->dirty = FALSE;
 }
 
-static void client_rect(TS *t, RECT *rc)
+void client_rect(TS *t, RECT *rc)
 {
     RECT inset;
     if (t->host && HOST(t)->TxGetClientRect(t->host, rc) == S_OK) t->client = *rc;
@@ -277,7 +236,7 @@ static void client_rect(TS *t, RECT *rc)
     }
 }
 
-static void ensure_layout(TS *t)
+void ensure_layout(TS *t)
 {
     RECT rc;
     LONG w;
@@ -291,7 +250,7 @@ static void ensure_layout(TS *t)
     }
 }
 
-static int line_of(TS *t, LONG cp)
+int line_of(TS *t, LONG cp)
 {
     int i;
     for (i = 0; i + 1 < t->nlines; i++)
@@ -300,7 +259,7 @@ static int line_of(TS *t, LONG cp)
 }
 
 /* x of character position @cp within its line (from the line's start) */
-static LONG x_of(TS *t, LONG cp)
+LONG x_of(TS *t, LONG cp)
 {
     int l = line_of(t, cp);
     LONG n = cp - t->lines[l].start, x = 0;
@@ -318,7 +277,7 @@ static LONG x_of(TS *t, LONG cp)
 }
 
 /* the character position on line @l nearest x (from the line's start) */
-static LONG cp_at_x(TS *t, int l, LONG x)
+LONG cp_at_x(TS *t, int l, LONG x)
 {
     LINE *ln = &t->lines[l];
     LONG i, cp = ln->start + ln->len;
@@ -346,7 +305,7 @@ static LONG cp_at_x(TS *t, int l, LONG x)
 }
 
 /* the character position at client point (x, y) */
-static LONG hit(TS *t, LONG x, LONG y)
+LONG hit(TS *t, LONG x, LONG y)
 {
     RECT rc;
     int l;
@@ -368,8 +327,8 @@ static void caret_point(TS *t, POINT *pt)
     pt->y = rc.top + line_of(t, t->active) * t->lineh - t->scrolly;
 }
 
-/* scrolls so the caret is inside the client area */
-static void scroll_to_caret(TS *t)
+/* scrolls so character position @cp is inside the client area */
+void scroll_to(TS *t, LONG cp)
 {
     RECT rc;
     LONG x, y, w, h;
@@ -377,8 +336,8 @@ static void scroll_to_caret(TS *t)
     client_rect(t, &rc);
     w = rc.right - rc.left;
     h = rc.bottom - rc.top;
-    x = x_of(t, t->active);
-    y = line_of(t, t->active) * t->lineh;
+    x = x_of(t, cp);
+    y = line_of(t, cp) * t->lineh;
     if (!(t->bits & TXTBIT_MULTILINE) || !(t->bits & TXTBIT_WORDWRAP)) {
         if (x - t->scrollx > w - 1) t->scrollx = x - w + 1;
         if (x < t->scrollx) t->scrollx = x;
@@ -388,6 +347,8 @@ static void scroll_to_caret(TS *t)
     if (t->scrollx < 0) t->scrollx = 0;
     if (t->scrolly < 0) t->scrolly = 0;
 }
+
+static void scroll_to_caret(TS *t) { scroll_to(t, t->active); }
 
 static void update_caret(TS *t)
 {
@@ -402,14 +363,14 @@ static void update_caret(TS *t)
     HOST(t)->TxShowCaret(t->host, TRUE);
 }
 
-static void redraw(TS *t)
+void redraw(TS *t)
 {
-    if (!t->host) return;
+    if (!t->host || t->frozen) return;            /* (ITextDocument::Freeze) */
     HOST(t)->TxInvalidateRect(t->host, 0, FALSE);
     HOST(t)->TxViewChange(t->host, TRUE);
 }
 
-static void selection_changed(TS *t)
+void selection_changed(TS *t)
 {
     scroll_to_caret(t);
     update_caret(t);
@@ -425,7 +386,7 @@ static void selection_changed(TS *t)
     }
 }
 
-static void set_sel(TS *t, LONG anchor, LONG active)
+void set_sel(TS *t, LONG anchor, LONG active)
 {
     if (anchor < 0) anchor = 0;
     if (active < 0) active = 0;
@@ -472,8 +433,15 @@ static void save_undo(TS *t)
 {
     SNAP s;
     if (t->typing) return;                        /* (typing groups into one step) */
+    if (t->undooff || t->undosuspend) return;     /* (ITextDocument::Undo(tomFalse or tomSuspend)) */
     if (!snap_take(t, &s)) return;
     push(t->undo, &t->nundo, t->undolimit, &s);
+    clear_stack(t->redo, &t->nredo);
+}
+
+void clear_undo(TS *t)
+{
+    clear_stack(t->undo, &t->nundo);
     clear_stack(t->redo, &t->nredo);
 }
 
@@ -486,9 +454,10 @@ static void restore(TS *t, SNAP *s)
     t->anchor = s->anchor;
     t->active = s->active;
     snap_free(s);
+    tom_clamp(t);
 }
 
-static void changed(TS *t)
+void changed(TS *t)
 {
     t->dirty = TRUE;
     t->modified = TRUE;
@@ -496,7 +465,7 @@ static void changed(TS *t)
     if (t->mask & ENM_CHANGE) notify(t, EN_CHANGE, 0);
 }
 
-static BOOL undo_redo(TS *t, BOOL redo)
+BOOL undo_redo(TS *t, BOOL redo)
 {
     SNAP cur, *from = redo ? t->redo : t->undo, *to = redo ? t->undo : t->redo;
     int *nfrom = redo ? &t->nredo : &t->nundo, *nto = redo ? &t->nundo : &t->nredo;
@@ -524,35 +493,52 @@ static LONG normalise(TS *t, const WCHAR *s, LONG n, WCHAR *out)
     return k;
 }
 
-/* Replaces the selection with @s (n characters), as far as the limit lets it.
- * Returns the number inserted */
-static LONG replace_sel(TS *t, const WCHAR *s, LONG n, BOOL undoable, BOOL typed)
+/* Replaces [a, b) with @s (n characters, or to its end when n < 0), as far
+ * as the limit lets it: the one place the text changes, so the Text Object
+ * Model's ranges and the selection follow it.  Returns the number inserted,
+ * or -1 when nothing changed */
+LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL typed)
 {
-    LONG a = selmin(t), b = selmax(t), k, room;
+    LONG k, room;
     WCHAR *norm;
+    if (a < 0) a = 0;
+    if (b > t->len) b = t->len;
+    if (a > b) a = b;
     if (n < 0) { n = 0; while (s && s[n]) n++; }
-    if (!(norm = alloc((n + 1) * sizeof(WCHAR)))) return 0;
+    if (!(norm = alloc((n + 1) * sizeof(WCHAR)))) return -1;
     k = normalise(t, s, n, norm);
     room = (LONG)t->maxlen - (t->len - (b - a));
     if (room < 0) room = 0;
     if (k > room) { k = room; notify(t, EN_MAXTEXT, 0); }
-    if (k == 0 && a == b) { release(norm); return 0; }
+    if (k == 0 && a == b) { release(norm); return -1; }
     if (!typed) t->typing = FALSE;
     if (undoable) save_undo(t);
     else if (!typed) { clear_stack(t->undo, &t->nundo); clear_stack(t->redo, &t->nredo); }
-    if (!reserve(t, t->len - (b - a) + k)) { release(norm); return 0; }
+    if (!reserve(t, t->len - (b - a) + k)) { release(norm); return -1; }
     memmove(t->text + a + k, t->text + b, (t->len - b) * sizeof(WCHAR));
     memcpy(t->text + a, norm, k * sizeof(WCHAR));
     t->len += k - (b - a);
-    t->anchor = t->active = a + k;
     t->typing = typed;
     release(norm);
+    tom_edited(t, a, b, k);
+    t->dirty = TRUE;
+    t->targetx = -1;
+    return k;
+}
+
+/* Replaces the selection with @s; the caret goes after it.  Returns the
+ * number inserted */
+LONG replace_sel(TS *t, const WCHAR *s, LONG n, BOOL undoable, BOOL typed)
+{
+    LONG a = selmin(t), k = splice(t, a, selmax(t), s, n, undoable, typed);
+    if (k < 0) return 0;
+    t->anchor = t->active = a + k;
     changed(t);
     t->targetx = -1;
     return k;
 }
 
-static void set_text(TS *t, const WCHAR *s, LONG n)
+void set_text(TS *t, const WCHAR *s, LONG n)
 {
     t->anchor = 0;
     t->active = t->len;
@@ -561,12 +547,13 @@ static void set_text(TS *t, const WCHAR *s, LONG n)
     clear_stack(t->redo, &t->nredo);
     replace_sel(t, s ? s : L"", s ? n : 0, FALSE, FALSE);
     t->anchor = t->active = 0;                     /* (the caret goes to the start, as Rich Edit's) */
+    tom_clamp(t);
     t->scrollx = t->scrolly = 0;
     t->modified = FALSE;
     selection_changed(t);
 }
 
-static BOOL is_word(WCHAR c) { return c != L' ' && c != L'\t' && c != L'\r'; }
+BOOL is_word(WCHAR c) { return c != L' ' && c != L'\t' && c != L'\r'; }
 
 static LONG word_left(TS *t, LONG cp)
 {
@@ -583,7 +570,7 @@ static LONG word_right(TS *t, LONG cp)
 }
 
 /* ---- the clipboard ------------------------------------------------------ */
-static HWND host_window(TS *t)
+HWND host_window(TS *t)
 {
     ITextHost2 *h2 = 0;
     HWND w = 0;
@@ -595,9 +582,9 @@ static HWND host_window(TS *t)
     return w;
 }
 
-static BOOL copy_sel(TS *t)
+BOOL copy_range(TS *t, LONG a, LONG b)
 {
-    LONG a = selmin(t), b = selmax(t), i, k = 0;
+    LONG i, k = 0;
     HGLOBAL mem;
     WCHAR *p;
     if (a == b || (t->bits & TXTBIT_USEPASSWORD)) return FALSE;   /* (a password is never copied) */
@@ -617,22 +604,38 @@ static BOOL copy_sel(TS *t)
     return TRUE;
 }
 
-static BOOL can_paste(TS *t)
+static BOOL copy_sel(TS *t) { return copy_range(t, selmin(t), selmax(t)); }
+
+BOOL can_paste(TS *t)
 {
     (void)t;
     return IsClipboardFormatAvailable(CF_UNICODETEXT);
 }
 
-static void paste(TS *t)
+/* the clipboard's text (to release), or NULL */
+WCHAR *clipboard_text(TS *t)
 {
     HGLOBAL mem;
-    if (t->bits & TXTBIT_READONLY) return;
-    if (!OpenClipboard(host_window(t))) return;
+    WCHAR *out = 0;
+    if (!OpenClipboard(host_window(t))) return 0;
     if ((mem = GetClipboardData(CF_UNICODETEXT))) {
         const WCHAR *p = GlobalLock(mem);
-        if (p) { replace_sel(t, p, -1, TRUE, FALSE); GlobalUnlock(mem); }
+        if (p) {
+            SIZE_T n = 0;
+            while (p[n]) n++;
+            if ((out = alloc((n + 1) * sizeof(WCHAR)))) memcpy(out, p, (n + 1) * sizeof(WCHAR));
+            GlobalUnlock(mem);
+        }
     }
     CloseClipboard();
+    return out;
+}
+
+static void paste(TS *t)
+{
+    WCHAR *p;
+    if (t->bits & TXTBIT_READONLY) return;
+    if ((p = clipboard_text(t))) { replace_sel(t, p, -1, TRUE, FALSE); release(p); }
 }
 
 /* ---- keys --------------------------------------------------------------- */
@@ -1060,8 +1063,11 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
     case EM_AUTOURLDETECT: case EM_SETOLECALLBACK: case EM_HIDESELECTION:
         r = msg == EM_SETOLECALLBACK;
         break;
-    case EM_GETOLEINTERFACE:                      /* the Text Object Model: a later part */
-        if (lp) *(void **)lp = 0;
+    case EM_GETOLEINTERFACE:                      /* IRichEditOle, whose QueryInterface gives the TOM */
+        if (!lp) break;
+        *(void **)lp = &t->reole;
+        t->outer->lpVtbl->AddRef(t->outer);
+        r = TRUE;
         break;
     default:
         hr = S_FALSE;
@@ -1085,6 +1091,8 @@ static void draw(TS *t, HDC dc, const RECT *bounds)
     HRGN clip;
     int i, savedc;
     if (t->host) HOST(t)->TxGetBackStyle(t->host, &back);
+    if (t->mono) back = TXTBACK_TRANSPARENT;      /* (TxDrawD2D's passes: on black) */
+    if (t->mono == 2) fg = selbg = selfg = RGB(255, 255, 255);
     savedc = SaveDC(dc);
     clip = CreateRectRgn(rc.left, rc.top, rc.right, rc.bottom);
     SelectClipRgn(dc, clip);
@@ -1307,6 +1315,7 @@ static HRESULT TXAPI ts_bits(ITextServices2 *me, DWORD mask, DWORD bits)
         t->len = i;
         if (t->anchor > i) t->anchor = i;
         if (t->active > i) t->active = i;
+        tom_clamp(t);
     }
     t->dirty = TRUE;
     redraw(t);
@@ -1325,10 +1334,105 @@ static HRESULT TXAPI ts_cached(ITextServices2 *me, DWORD *width, DWORD *height)
     return S_OK;
 }
 
+/* Direct2D drawing: the text is drawn as TxDraw draws it, into a 32-bit
+ * bitmap, which goes onto the render target with DrawBitmap.  When the host
+ * wants the background left alone (TXTBACK_TRANSPARENT, as XAML's text
+ * boxes do), the text is drawn twice on black: in its colours, which is
+ * the colour already multiplied by the coverage, and all in white, whose
+ * brightness is the coverage, so the bitmap is premultiplied BGRA */
+typedef struct { UINT32 width, height; } D2DSIZEU_;
+typedef struct { float left, top, right, bottom; } D2DRECTF_;
+typedef struct { UINT32 format, alpha; float dpix, dpiy; } D2DBMPPROPS_;
+typedef HRESULT (STDMETHODCALLTYPE *D2DCREATEBITMAP_)(void *, D2DSIZEU_, const void *, UINT32, const D2DBMPPROPS_ *, IUnknown **);
+typedef void (STDMETHODCALLTYPE *D2DDRAWBITMAP_)(void *, IUnknown *, const D2DRECTF_ *, float, UINT32, const D2DRECTF_ *);
+
+static HBITMAP dib(HDC dc, LONG w, LONG h, DWORD **bits)
+{
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;                   /* (top-down) */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    return CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void **)bits, 0, 0);
+}
+
+static void draw_pass(TS *t, HDC dc, HBITMAP bmp, DWORD *bits, LONG w, LONG h, int pass)
+{
+    HGDIOBJ old = SelectObject(dc, bmp);
+    RECT rc;
+    SetRect(&rc, 0, 0, w, h);
+    memset(bits, 0, (SIZE_T)w * h * 4);
+    t->mono = pass;
+    t->drawdc = dc;
+    draw(t, dc, &rc);
+    t->drawdc = 0;
+    t->mono = 0;
+    GdiFlush();
+    SelectObject(dc, old);
+}
+
 static HRESULT TXAPI ts_drawd2d(ITextServices2 *me, ID2D1RenderTarget_ *rt, LPCRECTL bounds, LPRECT update, LONG view)
 {
-    (void)me; (void)rt; (void)bounds; (void)update; (void)view;
-    return E_NOTIMPL;                             /* Direct2D drawing: the next part */
+    TS *t = FROM_IFACE(me);
+    void **vt;
+    RECT rc;
+    LONG w, h, i;
+    HDC dc;
+    HBITMAP colour = 0, cover = 0;
+    DWORD *cbits = 0, *abits = 0;
+    TXTBACKSTYLE back = TXTBACK_OPAQUE;
+    IUnknown *bitmap = 0;
+    D2DSIZEU_ size;
+    D2DBMPPROPS_ props = {87, 1, 96.0f, 96.0f};   /* DXGI_FORMAT_B8G8R8A8_UNORM, premultiplied */
+    D2DRECTF_ dst;
+    HRESULT hr;
+    (void)update; (void)view;
+    if (!rt) return E_INVALIDARG;
+    if (bounds) SetRect(&rc, bounds->left, bounds->top, bounds->right, bounds->bottom);
+    else client_rect(t, &rc);
+    w = rc.right - rc.left;
+    h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return S_OK;
+    if (!t->memdc) t->memdc = CreateCompatibleDC(0);
+    dc = t->memdc;
+    if (t->host) HOST(t)->TxGetBackStyle(t->host, &back);
+    if (!(colour = dib(dc, w, h, &cbits))) return E_OUTOFMEMORY;
+    if (back == TXTBACK_OPAQUE) {
+        draw_pass(t, dc, colour, cbits, w, h, 0);
+        for (i = 0; i < w * h; i++) cbits[i] |= 0xff000000;
+    } else {
+        if (!(cover = dib(dc, w, h, &abits))) { DeleteObject(colour); return E_OUTOFMEMORY; }
+        draw_pass(t, dc, colour, cbits, w, h, 1);
+        draw_pass(t, dc, cover, abits, w, h, 2);
+        for (i = 0; i < w * h; i++) {
+            DWORD a = abits[i], c = cbits[i], r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+            DWORD k = (a >> 16) & 0xff;
+            if (((a >> 8) & 0xff) > k) k = (a >> 8) & 0xff;
+            if ((a & 0xff) > k) k = a & 0xff;
+            if (r > k) r = k;
+            if (g > k) g = k;
+            if (b > k) b = k;
+            cbits[i] = (k << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+    vt = *(void ***)rt;
+    size.width = (UINT32)w;
+    size.height = (UINT32)h;
+    hr = ((D2DCREATEBITMAP_)vt[NOVA_D2D_CREATEBITMAP])(rt, size, cbits, (UINT32)w * 4, &props, &bitmap);
+    if (SUCCEEDED(hr) && bitmap) {
+        dst.left = (float)rc.left;
+        dst.top = (float)rc.top;
+        dst.right = (float)rc.right;
+        dst.bottom = (float)rc.bottom;
+        ((D2DDRAWBITMAP_)vt[NOVA_D2D_DRAWBITMAP])(rt, bitmap, &dst, 1.0f, 0, 0);   /* (nearest neighbour) */
+        bitmap->lpVtbl->Release(bitmap);
+    }
+    DeleteObject(colour);
+    if (cover) DeleteObject(cover);
+    return hr;
 }
 
 static const ITextServices2Vtbl ts_vtbl = {
@@ -1348,7 +1452,7 @@ static HRESULT STDMETHODCALLTYPE in_qi(IUnknown *me, REFIID iid, void **out)
     *out = 0;
     if (IsEqualGUID(iid, &iid_unknown)) *out = &t->inner;
     else if (IsEqualGUID(iid, &iid_ts) || IsEqualGUID(iid, &iid_ts2)) *out = &t->iface;
-    else return E_NOINTERFACE;
+    else return tom_qi(t, iid, out);              /* (ITextDocument2 and the rest of the TOM) */
     ((IUnknown *)*out)->lpVtbl->AddRef((IUnknown *)*out);
     return S_OK;
 }
@@ -1360,6 +1464,7 @@ static ULONG STDMETHODCALLTYPE in_release(IUnknown *me)
     TS *t = FROM_INNER(me);
     LONG r = InterlockedDecrement(&t->ref);
     if (!r) {
+        tom_free(t);
         clear_stack(t->undo, &t->nundo);
         clear_stack(t->redo, &t->nredo);
         if (t->font) DeleteObject(t->font);
@@ -1393,6 +1498,7 @@ __declspec(dllexport) HRESULT WINAPI CreateTextServices(IUnknown *outer, ITextHo
     t->targetx = -1;
     t->textmode = TM_RICHTEXT;
     reserve(t, 0);
+    tom_init(t);
     refresh_bits(t);
     refresh_format(t);
     *out = &t->inner;

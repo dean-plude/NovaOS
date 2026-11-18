@@ -819,7 +819,10 @@ vendors.
      screenshots the page ([screenshot](../screenshots/winui3-input.png)).
      A `TextBox` is a step of its own: `TextBox_Partial.cpp` and
      `TextBoxBase.cpp` are open, but they load `WinUIEdit.dll`, a closed
-     windowless RichEdit (`ITextServices2`), which NovaOS will provide.
+     windowless RichEdit (`ITextServices2`).  NovaOS provides it
+     (`userland/textserv/`): the text services, the Text Object Model
+     `TextBoxBase` drives (`ITextDocument2`, ranges and the selection)
+     and `TxDrawD2D`; the `TextBox` on a page comes next.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

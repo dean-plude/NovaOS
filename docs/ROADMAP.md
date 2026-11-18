@@ -920,11 +920,14 @@ online over Wi-Fi, takes a video call and runs a day on battery with sleep.
   EAP settings (PEAP or EAP-TLS) and keeps its sign-in from
   `WlanSetProfileEapXmlUserData` sealed with the Data Protection API, and
   `certutil -delstore root|my` removes an imported root or a personal
-  certificate. All nine are
+  certificate. The tenth is WPA3-Enterprise: 802.1X-SHA256 (AKM 5, or
+  802.1X with management frame protection required) signs in the same
+  way, then the 4-way handshake runs with key descriptor version 3
+  (KDF-SHA256, AES-CMAC) and brings the IGTK. All ten are
   tested with NovaOS's own WDI miniport on QEMU's `edu` device (the
-  devices suite's `wifi` boot; its `NovaCorp` network's authentication
-  server is the driver too). Still needed: WPA3-Enterprise, and scanning
-  and joining a network on the T14's card.
+  devices suite's `wifi` boot; its `NovaCorp` and `NovaLab` networks'
+  authentication server is the driver too). Still needed: scanning and
+  joining a network on the T14's card.
 - [ ] **28.2 Bluetooth.** Pair and use a Bluetooth mouse and headset, including
   after sleep. Done in QEMU: NovaOS's Bluetooth host stack
   (`kernel/nt/bthport.c`, the role of Windows' `bthport.sys`: HCI, inquiry,

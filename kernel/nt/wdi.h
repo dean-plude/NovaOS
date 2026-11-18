@@ -230,6 +230,7 @@ typedef struct __attribute__((packed)) {
 #define WDI_AUTH_ALGO_RSNA        6         /* (802.1X: WPA2-Enterprise) */
 #define WDI_AUTH_ALGO_RSNA_PSK    7
 #define WDI_AUTH_ALGO_WPA3_SAE    9
+#define WDI_AUTH_ALGO_WPA3_ENT    11        /* (802.1X with management frame protection: WPA3-Enterprise) */
 #define WDI_CIPHER_ALGO_NONE      0x00
 #define WDI_CIPHER_ALGO_CCMP      0x04
 #define WDI_CIPHER_ALGO_BIP       0x06      /* (BIP-CMAC-128: management frame protection's group key) */

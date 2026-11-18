@@ -23,7 +23,9 @@
  * access point's rekeying interval.  WPA3-Personal (AKM 8, after SAE gave
  * the PMK: sae.c) is the same exchange with key descriptor version 0: the
  * PTK from KDF-SHA256 rather than the SHA-1 PRF, AES-128-CMAC MICs, and an
- * IGTK KDE beside the GTK (management frame protection is required).  Written here rather than vendored:
+ * IGTK KDE beside the GTK (management frame protection is required).
+ * WPA3-Enterprise (AKM 5, 802.1X-SHA256, after EAP gave the PMK: eap.c)
+ * is the same with key descriptor version 3.  Written here rather than vendored:
  * hostapd's wpa_supplicant (BSD) is a user-mode program built around its
  * own event loop and driver layer, far more than these two exchanges; the
  * cryptography is Mbed TLS's.
@@ -39,7 +41,8 @@
 #define EAPOL_KEY       3
 #define DESC_RSN        2
 #define KI_VERSION      0x0007      /* Key Information: descriptor version (2: HMAC-SHA1-128, AES key wrap;
-                                       0: the AKM's, SAE's AES-128-CMAC) */
+                                       3: AES-128-CMAC, AES key wrap (802.1X-SHA256); 0: the AKM's, SAE's
+                                       AES-128-CMAC) */
 #define KI_PAIRWISE     0x0008
 #define KI_INSTALL      0x0040
 #define KI_ACK          0x0080
@@ -105,7 +108,7 @@ void WpaDerivePtk(UINT8 akm, const UINT8 *pmk, const UINT8 aa[6], const UINT8 sp
     memcpy(data + 12, an_first ? anonce : snonce, WPA_NONCE_LEN);
     memcpy(data + 44, an_first ? snonce : anonce, WPA_NONCE_LEN);
     const UINT32 ll = sizeof(label) - 1, bits = 8 * (WPA_KCK_LEN + WPA_KEK_LEN + WPA_TK_LEN);
-    if (akm == WPA_AKM_SAE) {
+    if (WpaAkmSha256(akm)) {
         memcpy(in + 2, label, ll);
         memcpy(in + 2 + ll, data, sizeof(data));
         in[2 + ll + 76] = (UINT8)bits;
@@ -133,11 +136,11 @@ static void derive_ptk(WpaSupplicant *s, UINT8 *ptk)
     WpaDerivePtk(s->akm, s->pmk, s->aa, s->spa, s->anonce, s->snonce, ptk);
 }
 
-/* The MIC of @len bytes of @f with @kck: HMAC-SHA1-128 (PSK) or AES-128-CMAC (SAE) */
+/* The MIC of @len bytes of @f with @kck: HMAC-SHA1-128 (PSK, 802.1X) or AES-128-CMAC (SAE, 802.1X-SHA256) */
 static void mic_of(const WpaSupplicant *s, const UINT8 *kck, const UINT8 *f, UINT32 len, UINT8 mic[16])
 {
     UINT8 mac[20];
-    if (s->akm == WPA_AKM_SAE)
+    if (WpaAkmSha256(s->akm))
         mbedtls_cipher_cmac(mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_128_ECB), kck, 128, f, len, mac);
     else
         hmac_sha1(kck, WPA_KCK_LEN, f, len, mac);
@@ -258,10 +261,11 @@ int WpaReceive(WpaSupplicant *s, const UINT8 *f, UINT32 len, UINT8 *reply, UINT3
     const UINT8 *b = f + 4;
     if (b[0] != DESC_RSN) { s->why = "not an RSN key descriptor (WPA's?)"; return WPA_DROP; }
     UINT16 info = be16(b + OFF_INFO);
-    UINT16 ver = s->akm == WPA_AKM_SAE ? 0 : 2;
+    UINT16 ver = s->akm == WPA_AKM_SAE ? 0 : s->akm == WPA_AKM_8021X_SHA256 ? 3 : 2;
     if ((info & KI_VERSION) != ver) {
-        s->why = ver ? "a key descriptor version other than 2 (HMAC-SHA1, AES key wrap)" :
-                       "a key descriptor version other than 0 (SAE's: AES-CMAC, AES key wrap)";
+        s->why = ver == 2 ? "a key descriptor version other than 2 (HMAC-SHA1, AES key wrap)" :
+                 ver == 3 ? "a key descriptor version other than 3 (802.1X-SHA256's: AES-CMAC, AES key wrap)" :
+                            "a key descriptor version other than 0 (SAE's: AES-CMAC, AES key wrap)";
         return WPA_DROP;
     }
     UINT32 dlen = be16(b + OFF_DATA_LEN);

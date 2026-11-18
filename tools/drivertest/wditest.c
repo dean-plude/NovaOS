@@ -57,6 +57,13 @@
  * and brings the IGTK, which must come back in OID_WDI_SET_ADD_CIPHER_KEYS
  * with the other keys.
  *
+ * NovaCorp is WPA2-Enterprise (802.1X, AKM 1): the driver plays its
+ * authentication server too (tools/drivertest/eapap.h), and the 4-way
+ * handshake starts from the EAP sign-in's PMK.  NovaLab is WPA3-Enterprise
+ * (802.1X-SHA256, AKM 5, management frame protection required): the same
+ * sign-in, then the handshake with key descriptor version 3 (KDF-SHA256,
+ * AES-CMAC) and the IGTK, as NovaNet-5G's.
+ *
  * Each check it makes of what it is sent goes to the debugger (DbgPrint),
  * where the wifi self-test reads it.
  *
@@ -185,6 +192,13 @@ static const unsigned char IES_ENT[] = {
     48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 1, 0x00, 0x00,
     45, 26, 0x6f, 0x01, 0x17, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
+/* Rates, DS parameter set (channel 1), RSN (CCMP, 802.1X-SHA256, MFP capable and required), HT: WPA3-Enterprise */
+static const unsigned char IES_ENT3[] = {
+    1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24,
+    3, 1, 1,
+    48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 5, 0xc0, 0x00,
+    45, 26, 0x6f, 0x01, 0x17, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+};
 /* Rates, DS parameter set (channel 11), HT: an open network */
 static const unsigned char IES_OPEN[] = {
     1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24,
@@ -201,6 +215,8 @@ static const Ap APS[] = {
       IES_OPEN, sizeof(IES_OPEN) },
     { { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x04 }, "NovaCorp",   -84, 25,  1, WDI_BAND_ID_2400, 0x0411,
       IES_ENT, sizeof(IES_ENT) },
+    { { 0x02, 0x4e, 0x6f, 0x76, 0x61, 0x05 }, "NovaLab",    -88, 20,  1, WDI_BAND_ID_2400, 0x0411,
+      IES_ENT3, sizeof(IES_ENT3) },
 };
 #define NAPS (int)(sizeof(APS) / sizeof(APS[0]))
 
@@ -208,6 +224,7 @@ static const Ap APS[] = {
 #define NNET5     1                 /* APS[NNET5]: the WPA3-Personal network, which connects with SAE */
 #define NGUEST    2                 /* APS[NGUEST]: the open network, which connects */
 #define NCORP     3                 /* APS[NCORP]: the WPA2-Enterprise network, which signs in with EAP (eapap.h) */
+#define NLAB      4                 /* APS[NLAB]: the WPA3-Enterprise network: the same sign-in, 802.1X-SHA256, MFP */
 #define PEER      1                 /* its peer ID */
 #define RXQ       16
 
@@ -235,6 +252,10 @@ static const unsigned char STA_RSN3[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1
 static const unsigned char STA_RSN_ENT[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
                                                0x00, 0x0f, 0xac, 1, 0, 0 };
 #define AP_RSN_ENT (IES_ENT + 13)
+/* NovaLab's: the RSN element the driver associates with (802.1X-SHA256, CCMP, MFP capable and required), its beacon's */
+static const unsigned char STA_RSN_ENT3[22] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0,
+                                                0x00, 0x0f, 0xac, 5, 0xc0, 0 };
+#define AP_RSN_ENT3 (IES_ENT3 + 13)
 
 /* ---- the adapter ---- */
 typedef struct {
@@ -266,7 +287,7 @@ typedef struct {
     SaeAp             sap;
     unsigned char     eapol[1600];
     /* WPA2-Enterprise: the EAP sign-in with the authentication server before the 4-way handshake */
-    int               ent;
+    int               ent, ent3;    /* (ent3: WPA3-Enterprise, NovaLab: 802.1X-SHA256 and the IGTK) */
     EapAp             eap;
     void             *eap_work;     /* (the server answers on a worker thread: TLS wants more stack than a send has) */
     volatile int      eap_busy;
@@ -552,12 +573,13 @@ static void start_4way(Adapter *a)
     copy(w->pmk, a->wpa3 ? a->sap.pmk : a->ent ? a->eap.msk : PMK, 32);   /* (Enterprise: the MSK's first half) */
     copy(w->aa, ap->bssid, 6);
     copy(w->spa, MAC, 6);
-    w->ap_ie = a->wpa3 ? AP_RSN3 : a->ent ? AP_RSN_ENT : AP_RSN;
+    w->ap_ie = a->wpa3 ? AP_RSN3 : a->ent3 ? AP_RSN_ENT3 : a->ent ? AP_RSN_ENT : AP_RSN;
     w->ap_ie_len = AP_RSN_LEN;
-    w->sta_ie = a->wpa3 ? STA_RSN3 : a->ent ? STA_RSN_ENT : STA_RSN;
+    w->sta_ie = a->wpa3 ? STA_RSN3 : a->ent3 ? STA_RSN_ENT3 : a->ent ? STA_RSN_ENT : STA_RSN;
     w->sta_ie_len = sizeof(STA_RSN);
-    if (a->wpa3) {                                  /* (WPA3: version 0, and the IGTK) */
+    if (a->wpa3 || a->ent3) {                       /* (WPA3: version 0, or 3 for 802.1X-SHA256, and the IGTK) */
         w->sae = 1;
+        w->ver3 = a->ent3;
         for (int i = 0; i < 16; i++) w->igtk[i] = (unsigned char)(0xC0 + i);
         w->igtk_id = 4;
         w->ipn[0] = 1;
@@ -569,7 +591,8 @@ static void start_4way(Adapter *a)
     unsigned int k = ap_msg1(w, a->eapol);
     a->hs = HS_MSG1;
     DbgPrint("wditest: 4-way handshake message 1 (ANonce) to the station%s\n",
-             a->wpa3 ? " (WPA3: from SAE's PMK)" : a->ent ? " (WPA2-Enterprise: from the EAP sign-in's PMK)" : "");
+             a->wpa3 ? " (WPA3: from SAE's PMK)" : a->ent3 ? " (WPA3-Enterprise: from the EAP sign-in's PMK)" :
+             a->ent ? " (WPA2-Enterprise: from the EAP sign-in's PMK)" : "");
     receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
 }
 
@@ -658,7 +681,7 @@ static void transmit(Adapter *a, NET_BUFFER_LIST *nbl)
             for (int i = 0; i < 16; i++) a->wpa.gtk[i] = (unsigned char)(0xB0 + i);
             a->wpa.gtk_id = 2;
             a->wpa.rsc[0] = 0;
-            if (a->wpa3) {
+            if (a->wpa3 || a->ent3) {
                 for (int i = 0; i < 16; i++) a->wpa.igtk[i] = (unsigned char)(0xD0 + i);
                 a->wpa.igtk_id = 5;
                 a->igtk_ok = 0;
@@ -932,7 +955,8 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         WDI_ASSOCIATION_RESULT_PARAMETERS ar;
         zero(&ar, sizeof(ar));
         ar.AssociationStatus = WDI_ASSOC_STATUS_SUCCESS;
-        ar.AuthAlgorithm = a->wpa3 ? WDI_AUTH_ALGO_WPA3_SAE : a->ent ? WDI_AUTH_ALGO_RSNA :
+        ar.AuthAlgorithm = a->wpa3 ? WDI_AUTH_ALGO_WPA3_SAE : a->ent3 ? WDI_AUTH_ALGO_WPA3_ENT :
+                           a->ent ? WDI_AUTH_ALGO_RSNA :
                            a->wpa2 ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
         ar.UnicastCipherAlgorithm = ar.MulticastDataCipherAlgorithm = a->wpa2 ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
         ar.PortAuthorized = !a->wpa2;
@@ -946,7 +970,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
             q[k++] = 0; q[k++] = (unsigned char)sl;
             copy(q + k, ap->ssid, sl);
             k += sl;
-            copy(q + k, a->wpa3 ? STA_RSN3 : a->ent ? STA_RSN_ENT : STA_RSN, sizeof(STA_RSN));
+            copy(q + k, a->wpa3 ? STA_RSN3 : a->ent3 ? STA_RSN_ENT3 : a->ent ? STA_RSN_ENT : STA_RSN, sizeof(STA_RSN));
             k += sizeof(STA_RSN);
             m = put(r, m, WDI_TLV_ASSOCIATION_REQUEST_FRAME, q, k);
         }
@@ -954,7 +978,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         indicate(a, WDI_INDICATION_ASSOCIATION_RESULT, a->tid, n);
         indicate(a, WDI_INDICATION_CONNECT_COMPLETE, a->tid, 0);
         DbgPrint("wditest: associated with %s, peer %u\n", ap->ssid, PEER);
-        if (a->ent) {                                       /* WPA2-Enterprise: the sign-in first */
+        if (a->ent) {                                       /* WPA2/WPA3-Enterprise: the sign-in first */
             unsigned int k = eap_ap_start(&a->eap, a->eapol);
             DbgPrint("wditest: RADIUS: Request/Identity to the station\n");
             receive(a, MAC, ETHERTYPE_EAPOL, a->eapol, k);
@@ -967,7 +991,7 @@ static NT_API void task_timer(void *ss1, void *ctx, void *ss2, void *ss3)
         a->port = PORT;
         a->connected = 0;
         a->port_open = a->hs = a->rekeyed = a->dropped = 0;    /* (and the connection's keys are gone) */
-        a->wpa3 = a->igtk_ok = a->ent = 0;
+        a->wpa3 = a->igtk_ok = a->ent = a->ent3 = 0;
         a->sae = SAE_NONE;
         eap_ap_clear(&a->eap);
         zero(&a->wpa, sizeof(a->wpa));
@@ -1050,7 +1074,7 @@ static NDIS_STATUS add_keys(Adapter *a, WDI_MESSAGE_HEADER *h, const unsigned ch
             unsigned int kid = 99, bl = 0;
             const unsigned char *bip = find(k, kl, WDI_TLV_CIPHER_KEY_BIP_KEY, &bl);
             if (id && il >= 4) copy(&kid, id, 4);
-            int ok = a->wpa3 && ti.CipherAlgorithm == WDI_CIPHER_ALGO_BIP &&
+            int ok = (a->wpa3 || a->ent3) && ti.CipherAlgorithm == WDI_CIPHER_ALGO_BIP &&
                      ti.Direction == WDI_CIPHER_KEY_DIRECTION_INBOUND && kid == a->wpa.igtk_id && bip && bl == 16 &&
                      same(bip, a->wpa.igtk, 16) && rsc && rl == 6 && same(rsc, a->wpa.ipn, 6);
             DbgPrint("wditest: management group key (IGTK) %u: %s\n", kid, ok ? "the access point's" :
@@ -1085,7 +1109,7 @@ static NDIS_STATUS add_keys(Adapter *a, WDI_MESSAGE_HEADER *h, const unsigned ch
             return NDIS_STATUS_NOT_SUPPORTED;
         }
     }
-    if (a->wpa3 && !a->igtk_ok) {                       /* (WPA3: the IGTK comes with the group key) */
+    if ((a->wpa3 || a->ent3) && !a->igtk_ok) {         /* (WPA3: the IGTK comes with the group key) */
         DbgPrint("wditest: WPA3 keys without the management group key (IGTK)\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
@@ -1221,7 +1245,7 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = 1;
-            a->ent = 0;
+            a->ent = a->ent3 = 0;
             a->wpa3 = 0;
         } else if (target == NNET5) {
             /* NovaNet-5G: WPA3-Personal, SAE, CCMP, management frame protection; EAPOL exempted first */
@@ -1242,7 +1266,7 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = a->wpa3 = 1;
-            a->ent = 0;
+            a->ent = a->ent3 = 0;
             a->sae = SAE_ASK;
             a->sae_tid = h->TransactionId;
         } else if (target == NCORP) {
@@ -1264,9 +1288,29 @@ static NT_API NDIS_STATUS oid_request(void *ctx, NDIS_OID_REQUEST *r)
                 break;
             }
             a->wpa2 = a->ent = 1;
+            a->wpa3 = a->ent3 = 0;
+        } else if (target == NLAB) {
+            /* NovaLab: WPA3-Enterprise, 802.1X-SHA256, CCMP, management frame protection; EAPOL exempted first */
+            WDI_CONNECTION_SETTINGS cs;
+            unsigned int ul, ml, csl, uc = 0, mc = 0;
+            const unsigned char *u = find(cp, cl, WDI_TLV_UNICAST_CIPHER_ALGO_LIST, &ul);
+            const unsigned char *mu = find(cp, cl, WDI_TLV_MULTICAST_CIPHER_ALGO_LIST, &ml);
+            const unsigned char *c = find(cp, cl, WDI_TLV_CONNECTION_SETTINGS, &csl);
+            if (u && ul >= 4) copy(&uc, u, 4);
+            if (mu && ml >= 4) copy(&mc, mu, 4);
+            zero(&cs, sizeof(cs));
+            if (c && csl >= sizeof(cs)) copy(&cs, c, sizeof(cs));
+            DbgPrint("wditest: connect to NovaLab: auth %u, ciphers %u/%u, exclude unencrypted %u, MFP %u, "
+                     "EAPOL exempted %s\n", algo, uc, mc, cs.ExcludeUnencrypted, cs.MFPEnabled, a->exempt ? "yes" : "no");
+            if (algo != WDI_AUTH_ALGO_WPA3_ENT || uc != WDI_CIPHER_ALGO_CCMP || mc != WDI_CIPHER_ALGO_CCMP ||
+                !cs.ExcludeUnencrypted || !cs.MFPEnabled || !a->exempt) {
+                st = NDIS_STATUS_NOT_SUPPORTED;
+                break;
+            }
+            a->wpa2 = a->ent = a->ent3 = 1;
             a->wpa3 = 0;
         } else if (target == NGUEST && algo == WDI_AUTH_ALGO_80211_OPEN) {
-            a->wpa2 = a->wpa3 = a->ent = 0;
+            a->wpa2 = a->wpa3 = a->ent = a->ent3 = 0;
         } else {
             st = NDIS_STATUS_NOT_SUPPORTED;
             break;

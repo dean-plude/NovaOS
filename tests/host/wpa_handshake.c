@@ -125,5 +125,36 @@ int main(void)
     f[n - 1] ^= 1;
     assert(WpaReceive(&s, f, n, rep, &rl) == WPA_DROP);
     printf("tampered refused: %s\n", s.why);
+
+    /* WPA3-Enterprise: 802.1X-SHA256 (AKM 5) from an EAP sign-in's PMK, key descriptor version 3 (KDF-SHA256,
+     * AES-CMAC), management frame protection: message 3 brings the IGTK; a version 0 frame (SAE's) is refused */
+    static const UINT8 AP_IE5[] = { 48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f,
+                                    0xac, 5, 0xc0, 0x00 };
+    setup(&s, &a, "nova-wpa2-passphrase", "nova-wpa2-passphrase");
+    for (int i = 0; i < 32; i++) s.pmk[i] = a.pmk[i] = (UINT8)(0x40 + i);     /* (the MSK's first half) */
+    s.akm = WPA_AKM_8021X_SHA256;
+    s.mfp = true;
+    memcpy(s.own_ie, AP_IE5, s.own_ie_len = sizeof(AP_IE5));
+    memcpy(s.ap_ie, AP_IE5, s.ap_ie_len = sizeof(AP_IE5));
+    a.ap_ie = a.sta_ie = AP_IE5;
+    a.sae = a.ver3 = 1;
+    for (int i = 0; i < 16; i++) a.igtk[i] = (UINT8)(0xC0 + i);
+    a.igtk_id = 4;
+    a.ipn[0] = 1;
+    n = ap_msg1(&a, f);
+    assert(WpaReceive(&s, f, n, rep, &rl) == WPA_REPLY);
+    assert(ap_msg2(&a, rep, rl));
+    hex("ptk5", a.ptk, 48);
+    n = ap_msg3(&a, f);
+    assert(WpaReceive(&s, f, n, rep, &rl) == WPA_PAIRWISE);
+    assert(ap_msg4(&a, rep, rl));
+    assert(!memcmp(WpaTk(&s), AP_TK(&a), 16) && !memcmp(s.gtk, a.gtk, 16) && s.have_igtk && s.igtk_id == 4 &&
+           !memcmp(s.igtk, a.igtk, 16));
+    printf("802.1X-SHA256 handshake ok\n");
+    WpaStart(&s);
+    a.ver3 = 0;                                         /* (SAE's version 0 from the access point) */
+    n = ap_msg1(&a, f);
+    assert(WpaReceive(&s, f, n, rep, &rl) == WPA_DROP);
+    printf("version 0 refused: %s\n", s.why);
     return 0;
 }

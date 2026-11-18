@@ -6,6 +6,8 @@
  * and the EAPOL-Key frames it sends (802.11-2020 12.7.6, 12.7.7).  WPA3's
  * (WpaAp.sae: after SAE, saeap.h) are key descriptor version 0: the PTK
  * from KDF-SHA256, AES-128-CMAC MICs, and an IGTK KDE beside the GTK.
+ * WPA3-Enterprise's (WpaAp.sae and WpaAp.ver3: 802.1X-SHA256, after EAP)
+ * are the same with key descriptor version 3.
  *
  * Written apart from the kernel's supplicant (kernel/nt/wpa.c, over Mbed
  * TLS) on purpose: the handshake only completes when two independent
@@ -425,6 +427,7 @@ typedef struct {
     u8  anonce[32], snonce[32], ptk[48];
     u8  gtk[16], gtk_id, rsc[8];
     int sae;                        /* WPA3: key descriptor version 0 (SAE's AKM), the IGTK too */
+    int ver3;                       /* (with sae: version 3 instead, WPA3-Enterprise's 802.1X-SHA256) */
     u8  igtk[16], igtk_id, ipn[6];
     u64 replay;
     const char *why;                /* (why the last frame was refused) */
@@ -436,8 +439,8 @@ typedef struct {
 
 static unsigned int be16_at(const u8 *p) { return (unsigned int)(p[0] << 8 | p[1]); }
 
-/* (the Key Information's descriptor version: 2, or 0 for SAE) */
-static unsigned int ap_ver(const WpaAp *a) { return a->sae ? 0 : KI_VER2; }
+/* (the Key Information's descriptor version: 2, 0 for SAE, 3 for 802.1X-SHA256) */
+static unsigned int ap_ver(const WpaAp *a) { return a->sae ? (a->ver3 ? 3 : 0) : KI_VER2; }
 
 /* Message 1: the ANonce */
 static unsigned int ap_msg1(WpaAp *a, u8 *f)

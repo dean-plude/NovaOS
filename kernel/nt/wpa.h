@@ -12,7 +12,10 @@
  * HMAC-SHA1).  WPA3-Personal: AKM 00-0f-ac:8 (SAE, sae.h, gives the PMK),
  * key descriptor version 0 (AES-128-CMAC MICs, the KDF over HMAC-SHA256),
  * and management frame protection, so message 3 and the group key
- * handshake also bring the IGTK (BIP-CMAC-128).
+ * handshake also bring the IGTK (BIP-CMAC-128).  WPA3-Enterprise: AKM
+ * 00-0f-ac:5 (802.1X-SHA256, the PMK from EAP), key descriptor version 3
+ * (the same AES-128-CMAC MICs and KDF-SHA256) and management frame
+ * protection required.
  */
 #pragma once
 
@@ -29,7 +32,14 @@
 #define WPA_IGTK_LEN  16            /* (BIP-CMAC-128) */
 #define WPA_AKM_8021X 1             /* (WPA2-Enterprise: the PMK from EAP, eap.h) */
 #define WPA_AKM_PSK   2
+#define WPA_AKM_8021X_SHA256 5     /* (WPA3-Enterprise: 802.1X with SHA-256, management frame protection) */
 #define WPA_AKM_SAE   8
+
+/* AKMs whose handshake is SHA-256's: the KDF over HMAC-SHA256 and
+ * AES-128-CMAC MICs (SAE's key descriptor version 0, 802.1X-SHA256's 3) */
+static inline bool WpaAkmSha256(UINT8 akm) { return akm == WPA_AKM_SAE || akm == WPA_AKM_8021X_SHA256; }
+/* Either 802.1X AKM: the PMK from an EAP sign-in */
+static inline bool WpaAkm8021X(UINT8 akm) { return akm == WPA_AKM_8021X || akm == WPA_AKM_8021X_SHA256; }
 
 /* The PMK for @passphrase on network @ssid: PBKDF2-HMAC-SHA1, 4096
  * rounds, 32 bytes (802.11-2020 J.4.1); a 64-digit hex string is the PMK
@@ -39,7 +49,7 @@ bool WpaPassphraseKey(const char *passphrase, const char *ssid, UINT8 pmk[WPA_PM
 
 typedef struct {
     /* set before the handshake */
-    UINT8  akm;                     /* WPA_AKM_PSK or WPA_AKM_SAE (0: PSK) */
+    UINT8  akm;                     /* WPA_AKM_* (0: PSK) */
     bool   mfp;                     /* management frame protection: message 3 must bring an IGTK */
     UINT8  pmk[WPA_PMK_LEN];
     UINT8  aa[6], spa[6];           /* the authenticator's (the access point's) address, the station's */
@@ -81,7 +91,8 @@ int  WpaReceive(WpaSupplicant *s, const UINT8 *frame, UINT32 len, UINT8 *reply, 
 /* The pairwise key (the TK) the handshake derived */
 static inline const UINT8 *WpaTk(const WpaSupplicant *s) { return s->ptk + WPA_KCK_LEN + WPA_KEK_LEN; }
 /* The PTK for @akm (WPA_AKM_*) from @pmk, both addresses and both nonces:
- * the 802.11 PRF-384 (HMAC-SHA1) for PSK, KDF-SHA256-384 for SAE */
+ * the 802.11 PRF-384 (HMAC-SHA1) for PSK and 802.1X, KDF-SHA256-384 for
+ * SAE and 802.1X-SHA256 */
 void WpaDerivePtk(UINT8 akm, const UINT8 *pmk, const UINT8 aa[6], const UINT8 spa[6], const UINT8 *anonce,
                   const UINT8 *snonce, UINT8 *ptk);
 /* Forget every key */

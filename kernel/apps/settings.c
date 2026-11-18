@@ -738,12 +738,12 @@ static int page_network(Settings *st, int x, int y, int w)
 static GdiRect r_wifi_refresh(int x, int y, int w)    { return RECT(x + w - 16 - 96, y + 20, 96, 32); }
 static GdiRect r_wifi_disconnect(int x, int y, int w) { return RECT(x + w - 16 - 96 - 12 - 120, y + 20, 120, 32); }
 static bool wifi_secured(const WlanBss *b) { return b->privacy || b->rsn_len; }
-/* WPA2-Enterprise only (802.1X, AKM 1, without PSK or SAE): a user name
+/* WPA2- or WPA3-Enterprise only (802.1X, AKM 1 or 5, without PSK or SAE): a user name
  * and password (PEAP), or neither when a certificate is in the personal
  * store (EAP-TLS) */
 static bool wifi_enterprise(const WlanBss *b)
 {
-    return (b->akms & (1u << 1)) && !(b->akms & ((1u << 2) | (1u << 8)));
+    return (b->akms & ((1u << 1) | (1u << 5))) && !(b->akms & ((1u << 2) | (1u << 8)));
 }
 static bool wifi_sel_enterprise(const Settings *st)
 {
@@ -851,8 +851,8 @@ static bool wifi_poll(Settings *st)
         case WLAN_NEEDS_KEY:   ksnprintf(st->wifi_note, sizeof(st->wifi_note), "Type the network security key for \"%s\".", s);
                                break;
         case WLAN_UNSUPPORTED: ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" uses security NovaOS does not "
-                                         "support yet (WEP, WPA or WPA3-Enterprise).", s); break;
-        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is WPA2-Enterprise: type your "
+                                         "support yet (WEP, WPA or WPA3-Enterprise 192-bit).", s); break;
+        case WLAN_NEEDS_USER:  ksnprintf(st->wifi_note, sizeof(st->wifi_note), "\"%s\" is an Enterprise network: type your "
                                          "user name and password, or import your certificate (certutil -importpfx).", s);
                                break;
         case WLAN_NO_CERT:     ksnprintf(st->wifi_note, sizeof(st->wifi_note), "There is no certificate for that user "

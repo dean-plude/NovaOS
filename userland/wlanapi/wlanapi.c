@@ -195,6 +195,7 @@ _Static_assert(sizeof(CONNECTION_ATTRIBUTES_) == 604, "WLAN_CONNECTION_ATTRIBUTE
 #define AUTH_RSNA      6           /* (802.1X: WPA2-Enterprise) */
 #define AUTH_RSNA_PSK  7
 #define AUTH_WPA3_SAE  9
+#define AUTH_WPA3_ENT  11          /* (802.1X with management frame protection: WPA3-Enterprise) */
 #define CIPHER_NONE    0
 #define CIPHER_CCMP    4
 static const DWORD g_phy[] = { 6 /* erp: 802.11g */, 7 /* ht: n */, 8 /* vht: ac */, 10 /* he: ax */ };
@@ -388,7 +389,8 @@ static void ssid_of(const NovaWlanBss *b, DOT11_SSID_ *s)
 static DWORD auth_of(const NovaWlanBss *b)
 {
     return b->security == NOVAWLAN_WPA3 ? AUTH_WPA3_SAE : b->security == NOVAWLAN_WPA2 ? AUTH_RSNA_PSK :
-           b->security == NOVAWLAN_ENTERPRISE ? AUTH_RSNA : b->security == NOVAWLAN_OPEN ? AUTH_OPEN : AUTH_RSNA_PSK;
+           b->security == NOVAWLAN_ENTERPRISE ? AUTH_RSNA : b->security == NOVAWLAN_WPA3_ENTERPRISE ? AUTH_WPA3_ENT :
+           b->security == NOVAWLAN_OPEN ? AUTH_OPEN : AUTH_RSNA_PSK;
 }
 
 WLAPI DWORD WINAPI WlanEnumInterfaces(HANDLE h, PVOID reserved, IF_LIST_ **out)
@@ -824,7 +826,7 @@ WLAPI DWORD WINAPI WlanGetAvailableNetworkList(HANDLE h, const GUID *g, DWORD fl
         ssid_of(&b[k], &e->dot11Ssid);
         e->dot11BssType = 1;                                       /* (dot11_BSS_type_infrastructure) */
         e->uNumberOfBssids = 1;
-        /* (WPA2-Enterprise: with a profile whose EAP settings are PEAP or EAP-TLS) */
+        /* (WPA2- and WPA3-Enterprise: with a profile whose EAP settings are PEAP or EAP-TLS) */
         e->bNetworkConnectable = b[k].security != NOVAWLAN_OTHER;
         e->wlanNotConnectableReason = e->bNetworkConnectable ? REASON_SUCCESS : REASON_NETWORK_NOT_COMPATIBLE;
         e->uNumberOfPhyTypes = 1;
@@ -1038,7 +1040,8 @@ WLAPI DWORD WINAPI WlanQueryInterface(HANDLE h, const GUID *g, DWORD op, PVOID r
         a->wlanAssociationAttributes.wlanSignalQuality = o.bss.quality;
         a->wlanAssociationAttributes.ulRxRate = a->wlanAssociationAttributes.ulTxRate = 144400;   /* (kbps: MCS 15, 20 MHz) */
         a->wlanSecurityAttributes.bSecurityEnabled = o.bss.security != NOVAWLAN_OPEN;
-        a->wlanSecurityAttributes.bOneXEnabled = o.bss.security == NOVAWLAN_ENTERPRISE;
+        a->wlanSecurityAttributes.bOneXEnabled = o.bss.security == NOVAWLAN_ENTERPRISE ||
+                                                 o.bss.security == NOVAWLAN_WPA3_ENTERPRISE;
         a->wlanSecurityAttributes.dot11AuthAlgorithm = auth_of(&o.bss);
         a->wlanSecurityAttributes.dot11CipherAlgorithm = o.bss.security == NOVAWLAN_OPEN ? CIPHER_NONE : CIPHER_CCMP;
         *size = sizeof(*a);

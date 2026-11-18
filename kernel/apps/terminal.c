@@ -279,7 +279,7 @@ static void cmd_help(Term *t)
         "  ipconfig [/all]     show the network configuration (/release6, /renew6: the DHCPv6 lease)\n"
         "  netsh interface ipv4 set address|dnsservers ...  set the address or DNS by hand (or dhcp)\n"
         "  netsh wlan show interfaces | networks [mode=bssid]  the Wi-Fi adapters, the networks in range\n"
-        "  netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect  join a Wi-Fi network (user=: WPA2-Enterprise,\n"
+        "  netsh wlan connect name=SSID [key=PASSPHRASE] [user=NAME] | disconnect  join a Wi-Fi network (user=: WPA2/WPA3-Enterprise,\n"
         "                      user= without key=: with that user's certificate, EAP-TLS), or leave it\n"
         "  netsh advfirewall firewall add|delete|show rule ... | set allprofiles state on|off  the firewall's rules and profiles\n"
         "  ping [-4|-6] <host> [-n N]  test a connection (ICMP echo)\n"
@@ -1009,7 +1009,7 @@ static int wlan_adapter(const char *v)
  * There are no profiles yet (Windows' netsh connects to a saved profile):
  * name is the network's SSID, and a WPA2-Personal network's passphrase
  * or a WPA3-Personal network's password comes with key=, NovaOS's own
- * addition, used for that connection only; a WPA2-Enterprise network's
+ * addition, used for that connection only; a WPA2- or WPA3-Enterprise network's
  * user name comes with user= and its password with key= (PEAP,
  * MS-CHAPv2: the server's certificate must be from a trusted root), or
  * without key= it signs in with that user's certificate from the personal
@@ -1058,7 +1058,7 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
     case WLAN_NEEDS_KEY:    tprintf(t, "The network \"%s\" is secured: give its passphrase with key=PASSPHRASE.", ssid);
                             break;
     case WLAN_BAD_KEY:      tprintf(t, "The network security key isn't correct: \"%s\" did not accept it.", ssid); break;
-    case WLAN_NEEDS_USER:   tprintf(t, "The network \"%s\" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD, or "
+    case WLAN_NEEDS_USER:   tprintf(t, "The network \"%s\" is an Enterprise network: sign in with user=NAME key=PASSWORD, or "
                                     "import a certificate with certutil -importpfx.", ssid); break;
     case WLAN_NO_CERT:      tprintf(t, "There is no certificate for that user in the personal store: import one with "
                                     "certutil -importpfx FILE, or sign in to \"%s\" with key=PASSWORD.", ssid); break;
@@ -1068,8 +1068,8 @@ static void wlan_connect_done(Term *t, int adapter, bool connect, const char *ss
     case WLAN_KEY_FORMAT:   tprint(t, "A WPA2 passphrase is 8 to 63 characters, or 64 hexadecimal digits; a WPA3 "
                                    "password 8 to 63 characters."); break;
     case WLAN_UNSUPPORTED:  tprintf(t, "The network \"%s\" uses security NovaOS does not support yet (WPA2- and "
-                                    "WPA3-Personal and WPA2-Enterprise with CCMP connect; WPA, WEP and "
-                                    "WPA3-Enterprise do not).", ssid); break;
+                                    "WPA3-Personal and WPA2- and WPA3-Enterprise with CCMP connect; WPA, WEP and "
+                                    "WPA3-Enterprise 192-bit do not).", ssid); break;
     case WLAN_NOT_CONNECTED: tprintf(t, "The interface \"%s\" is not connected.", name); break;
     case WLAN_NO_ADAPTER:   tprint(t, "The wireless interface is not ready."); break;
     default:                tprintf(t, "The %s request failed (0x%08x).", connect ? "connection" : "disconnection", st);

@@ -50,8 +50,9 @@
 #define NOVAWLAN_OPEN   0
 #define NOVAWLAN_WPA2   1      /* WPA2-Personal (AKM 2, CCMP) */
 #define NOVAWLAN_WPA3   2      /* WPA3-Personal (AKM 8, SAE) */
-#define NOVAWLAN_OTHER  3      /* something NovaOS cannot join yet (WEP, WPA, WPA3-Enterprise) */
+#define NOVAWLAN_OTHER  3      /* something NovaOS cannot join yet (WEP, WPA, WPA3-Enterprise 192-bit) */
 #define NOVAWLAN_ENTERPRISE 4  /* WPA2-Enterprise (AKM 1, CCMP): PEAP (MS-CHAPv2) or EAP-TLS signs in */
+#define NOVAWLAN_WPA3_ENTERPRISE 5  /* WPA3-Enterprise (AKM 5 with MFP, or AKM 1 with MFP required; CCMP): the same sign-in */
 
 typedef struct {               /* an access point a scan heard */
     unsigned char  bssid[6];

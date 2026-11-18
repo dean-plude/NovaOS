@@ -498,8 +498,8 @@ netsh wlan disconnect
 ```
 
 `key=` is the network's passphrase (WPA2) or password (WPA3, which
-NovaOS uses whenever the network offers it).  A WPA2-Enterprise network
-(an office's or a university's) takes your user name with `user=` and
+NovaOS uses whenever the network offers it).  A WPA2- or WPA3-Enterprise
+network (an office's or a university's) takes your user name with `user=` and
 your password with `key=`; NovaOS signs in with PEAP (MS-CHAPv2), as
 Windows does by default.  Before it sends the password it checks the
 network's sign-in server has a certificate from a trusted root; if your

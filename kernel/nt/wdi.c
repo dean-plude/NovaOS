@@ -458,6 +458,10 @@ static void parse_frame(WlanBss *b, const UINT8 *f, UINT32 n)
                     if (!b->auth || !strcmp(a, "WPA3-Personal")) b->auth = a;
                 }
                 if (p + 2 <= len) b->rsn_caps = (UINT16)(e[p] | e[p + 1] << 8);
+                /* (802.1X-SHA256 with management frame protection, or 802.1X with it required: WPA3-Enterprise) */
+                if (b->auth && !strcmp(b->auth, "WPA2-Enterprise") &&
+                    (((b->akms & (1u << 5)) && (b->rsn_caps & 0x80)) || (b->rsn_caps & 0xC0) == 0xC0))
+                    b->auth = "WPA3-Enterprise";
             }
         } else if (id == 221 && len >= 4 && e[0] == 0x00 && e[1] == 0x50 && e[2] == 0xF2 && e[3] == 1) {
             wpa = true;                                              /* (WPA, before RSN) */
@@ -1092,7 +1096,7 @@ static int eapol_step(WdiHost *w, UINT8 *buf)
     UINT32 n, rl;
     int last = WPA_DROP;
     while (eapol_pop(w, frame, &n)) {
-        bool enterprise = w->wpa.akm == WPA_AKM_8021X;
+        bool enterprise = WpaAkm8021X(w->wpa.akm);
         if (n >= 2 && frame[1] != 3) {                  /* (not EAPOL-Key: EAP, for the sign-in) */
             if (enterprise && w->handshaking && w->eap.result == EAP_RESULT_NONE) eap_frame(w, frame, n);
             else kprintf("[EAP] %s: EAPOL frame type %u outside a sign-in: dropped\n", w->info.service, frame[1]);
@@ -1449,7 +1453,12 @@ static UINT32 connect_entry(UINT8 *out, UINT32 off, const UINT8 *raw, UINT32 n)
  * open network, WPA_AKM_PSK for WPA2-Personal with CCMP, WPA_AKM_SAE for
  * WPA3-Personal (SAE, CCMP, management frame protection: taken over PSK
  * when a transition-mode network offers both), WPA_AKM_8021X for
- * WPA2-Enterprise (802.1X: a @user and a password, @key), else why not */
+ * WPA2-Enterprise (802.1X: a @user and a password, @key, or the user's
+ * certificate), WPA_AKM_8021X_SHA256 for WPA3-Enterprise (the same sign-in,
+ * 802.1X-SHA256 and management frame protection: taken over 802.1X when
+ * the access point offers both and can protect management frames; plain
+ * 802.1X with management frame protection required is WPA3-Enterprise
+ * too), else why not */
 static int security_of(const WlanBss *b, const char *key, const char *user, UINT8 *akm)
 {
     *akm = 0;
@@ -1458,8 +1467,10 @@ static int security_of(const WlanBss *b, const char *key, const char *user, UINT
         return WLAN_UNSUPPORTED;                        /* (CCMP both ways) */
     if ((b->akms & (1u << WPA_AKM_SAE)) && (b->rsn_caps & 0x80)) *akm = WPA_AKM_SAE;    /* (SAE, MFP capable) */
     else if ((b->akms & (1u << WPA_AKM_PSK)) && !(b->rsn_caps & 0x40)) *akm = WPA_AKM_PSK;  /* (no required MFP) */
-    else if ((b->akms & (1u << WPA_AKM_8021X)) && !(b->rsn_caps & 0x40)) {
-        *akm = WPA_AKM_8021X;                           /* (WPA2-Enterprise: EAP signs in) */
+    else if (((b->akms & (1u << WPA_AKM_8021X_SHA256)) && (b->rsn_caps & 0x80)) ||
+             ((b->akms & (1u << WPA_AKM_8021X)) && (!(b->rsn_caps & 0x40) || (b->rsn_caps & 0x80)))) {
+        /* (WPA3-Enterprise: SHA-256, MFP capable; else WPA2-Enterprise, MFP if the access point requires it) */
+        *akm = (b->akms & (1u << WPA_AKM_8021X_SHA256)) && (b->rsn_caps & 0x80) ? WPA_AKM_8021X_SHA256 : WPA_AKM_8021X;
         if (key && key[0]) return user && user[0] ? WLAN_OK : WLAN_NEEDS_USER;     /* (PEAP: a user and password) */
         if (NetPersonalFind(user) >= 0) return WLAN_OK; /* (EAP-TLS: the user's certificate) */
         return user && user[0] ? WLAN_NO_CERT : WLAN_NEEDS_USER;
@@ -1623,10 +1634,13 @@ static int handshake_locked(WdiHost *w, UINT8 *buf)
             w->wpa.own_ie[19] = WPA_AKM_SAE;
             w->wpa.own_ie[20] = (UINT8)(0x80 | (w->wpa.ap_ie_len >= 22 ? w->wpa.ap_ie[20] & 0x40 : 0));
         }
-        if (w->wpa.akm == WPA_AKM_8021X) w->wpa.own_ie[19] = WPA_AKM_8021X;
+        if (WpaAkm8021X(w->wpa.akm)) {                  /* (802.1X; with MFP: capable, and required if the AP is) */
+            w->wpa.own_ie[19] = w->wpa.akm;
+            if (w->wpa.mfp) w->wpa.own_ie[20] = (UINT8)(0x80 | (w->wpa.ap_ie_len >= 22 ? w->wpa.ap_ie[20] & 0x40 : 0));
+        }
     }
     bool m1 = false;
-    if (w->wpa.akm == WPA_AKM_8021X) {                  /* WPA2-Enterprise: the EAP sign-in gives the PMK first */
+    if (WpaAkm8021X(w->wpa.akm)) {                      /* WPA2/WPA3-Enterprise: the EAP sign-in gives the PMK first */
         bool asked = false;
         for (int waited = 0; w->eap.result == EAP_RESULT_NONE && waited < EAP_MS; waited += 100) {
             if (eapol_step(w, buf) == WPA_REPLY) m1 = true;
@@ -1687,7 +1701,9 @@ int WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UI
     if (b < 0 && scan_locked(w, buf) == NDIS_STATUS_SUCCESS) b = find_bss(w, ssid);
     UINT8 akm = 0;
     int r = b < 0 ? WLAN_NO_NETWORK : security_of(&w->bss[b], key, user, &akm);
-    bool rsna = akm != 0, sae = akm == WPA_AKM_SAE, enterprise = akm == WPA_AKM_8021X;
+    bool rsna = akm != 0, sae = akm == WPA_AKM_SAE, enterprise = WpaAkm8021X(akm);
+    /* (WPA3-Enterprise: 802.1X-SHA256, or 802.1X where the access point requires management frame protection) */
+    bool wpa3ent = enterprise && (akm == WPA_AKM_8021X_SHA256 || (w->bss[b].rsn_caps & 0x40)), mfp = sae || wpa3ent;
     UINT8 pmk[WPA_PMK_LEN];
     if (r == WLAN_OK && akm == WPA_AKM_PSK && !WpaPassphraseKey(key, w->bss[b].ssid, pmk)) r = WLAN_KEY_FORMAT;
     if (r == WLAN_OK && sae && (strlen(key) < 8 || strlen(key) >= sizeof(w->sae_password))) r = WLAN_KEY_FORMAT;
@@ -1711,13 +1727,13 @@ int WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UI
     WDI_CONNECTION_SETTINGS cs;
     memset(&cs, 0, sizeof(cs));
     cs.ExcludeUnencrypted = rsna;
-    cs.MFPEnabled = sae;
-    UINT32 auth = sae ? WDI_AUTH_ALGO_WPA3_SAE : enterprise ? WDI_AUTH_ALGO_RSNA :
+    cs.MFPEnabled = mfp;
+    UINT32 auth = sae ? WDI_AUTH_ALGO_WPA3_SAE : wpa3ent ? WDI_AUTH_ALGO_WPA3_ENT : enterprise ? WDI_AUTH_ALGO_RSNA :
                   rsna ? WDI_AUTH_ALGO_RSNA_PSK : WDI_AUTH_ALGO_80211_OPEN;
     UINT32 cipher = rsna ? WDI_CIPHER_ALGO_CCMP : WDI_CIPHER_ALGO_NONE;
     if (rsna) {
         w->wpa.akm = akm;
-        w->wpa.mfp = sae;
+        w->wpa.mfp = mfp;
         if (sae || enterprise) memset(w->wpa.pmk, 0, sizeof(w->wpa.pmk));     /* (SAE or EAP gives it) */
         else memcpy(w->wpa.pmk, pmk, sizeof(pmk));
         memset(pmk, 0, sizeof(pmk));
@@ -1806,7 +1822,8 @@ int WlanConnectAs(int i, const char *ssid, const char *key, const char *user, UI
             w->port_id, w->peer, w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_80211_OPEN ? "open" :
             w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA_PSK ? "WPA2-Personal" :
             w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_WPA3_SAE ? "WPA3-Personal" :
-            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA ? "WPA2-Enterprise" : "secured",
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_RSNA ? "WPA2-Enterprise" :
+            w->assoc.AuthAlgorithm == WDI_AUTH_ALGO_WPA3_ENT ? "WPA3-Enterprise" : "secured",
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_NONE ? "no cipher" :
             w->assoc.UnicastCipherAlgorithm == WDI_CIPHER_ALGO_CCMP ? "CCMP" : "ciphered",
             w->assoc.WMMQoSEnabled ? "on" : "off");

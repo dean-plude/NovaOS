@@ -63,6 +63,11 @@
 # NovaCorp Test Root); a user without a certificate is told so; alice's
 # certificate signs in, the 4-way handshake runs from the TLS keys' PMK,
 # and DHCP and ping run over it.
+# NovaLab is WPA3-Enterprise (802.1X-SHA256, AKM 5, management frame
+# protection required): alice's PEAP sign-in again, then the 4-way
+# handshake with key descriptor version 3 (KDF-SHA256, AES-CMAC MICs) and
+# the IGTK, both checked by the driver, and DHCP, ping and a rekey of both
+# group keys over it.
 # wlanapi.dll (wlantest.exe) does the same as a Windows program does: the
 # adapter and its GUID, a scan and its notification, the networks and
 # access points, a profile saved in the registry, a wrong passphrase
@@ -82,7 +87,8 @@
 DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with `pnputil /add-driver /install`: '
        'NovaOS\'s WDI command layer reads its capabilities and creates its station port, `netsh wlan show interfaces` '
        'lists it and `netsh wlan show networks mode=bssid` scans (OID_WDI_TASK_SCAN and its BSS entry indications) '
-       'and lists four networks (WPA2-Personal, WPA3-Personal, open, WPA2-Enterprise) with signal, band and channel; '
+       'and lists five networks (WPA2-Personal, WPA3-Personal, open, WPA2-Enterprise, WPA3-Enterprise) with signal, band '
+       'and channel; '
        '`netsh wlan connect name=NovaGuest` joins the open one, and DHCP and ping run over the WDI data path (802.11 '
        'frames through the driver\'s TAL TX/RX handlers); disconnecting gives the Ethernet card back; '
        '`netsh wlan connect name=NovaNet key=...` joins the WPA2-Personal one (EAPOL exempted, the 4-way handshake '
@@ -97,6 +103,9 @@ DOC = ('a WDI Wi-Fi miniport (wditest.sys) on QEMU\'s edu device, installed with
        'and DHCP and ping run over it; `certutil -importpfx` puts a certificate with its key in the personal store '
        '(a wrong PFX password refused) and `netsh wlan connect name=NovaCorp user=alice` without a password signs in '
        'with it by EAP-TLS (a certificate the server does not trust refused with its TLS alert), DHCP and ping over it; '
+       '`netsh wlan connect name=NovaLab user=alice key=...` signs in to the WPA3-Enterprise one the same way, then the '
+       '802.1X-SHA256 4-way handshake (key descriptor version 3) with management frame protection\'s IGTK, and DHCP, '
+       'ping and a rekey of both group keys run over it; '
        '`wlantest` does the same through wlanapi.dll (interfaces, a scan and its '
        'notification, the network and BSS lists, a profile saved, a wrong passphrase refused with the key-mismatch '
        'reason, joining by profile and by SSID, the current connection, and WPA2-Enterprise profiles with their '
@@ -137,7 +146,7 @@ def _join_in_settings(nova):
     nova.qmp.type('wi-fi')
     time.sleep(2)
     nova.qmp.key('ret')
-    nova.sr.wait('[SETTINGS] Wi-Fi: 4 network(s) found', 60)
+    nova.sr.wait('[SETTINGS] Wi-Fi: 5 network(s) found', 60)
     time.sleep(1)
     nova.qmp.key('down')
     time.sleep(1)
@@ -145,14 +154,14 @@ def _join_in_settings(nova):
 
 
 def _sign_in_in_settings(nova):
-    """Settings' Wi-Fi page again: Down four times chooses NovaCorp (the
-    weakest), alice in the user name box, Tab, her PEAP password, Enter"""
+    """Settings' Wi-Fi page again: Down four times chooses NovaCorp (fourth
+    strongest; NovaLab is weaker), alice in the user name box, Tab, her PEAP password, Enter"""
     nova.qmp.key('meta_l', 's')
     time.sleep(2)
     nova.qmp.type('wi-fi')
     time.sleep(2)
     nova.qmp.key('ret')
-    nova.sr.wait('[SETTINGS] Wi-Fi: 4 network(s) found', 60)
+    nova.sr.wait('[SETTINGS] Wi-Fi: 5 network(s) found', 60)
     time.sleep(1)
     for _ in range(4):
         nova.qmp.key('down')
@@ -182,7 +191,7 @@ TESTS = [
          [r'Driver package installed on device: PCI\\VEN_1234&DEV_11E8',
           r'\[NDIS\] WdiTest: WDI miniport registered \(NDIS 6\.50, WDI version 0x10108\)',
           r'\[DbgPrint\] wditest: adapter allocated',
-          r'\[DbgPrint\] wditest: adapter open: radio on, 4 access points in range',
+          r'\[DbgPrint\] wditest: adapter open: radio on, 5 access points in range',
           r'\[NDIS\] WdiTest: WDI: open adapter completed \(0x00000000\)',
           r'\[DbgPrint\] wditest: data path initialized \(API revision 2\)',
           r'\[WDI\] WdiTest: data path initialized \(0x00000000\), TX, RX',
@@ -203,9 +212,9 @@ TESTS = [
           r'State +: disconnected', r'Radio status +: Hardware On\n +Software On'], builtin=True),
     Test('wifi scan', 'netsh wlan show networks mode=bssid',
          [r'\[DbgPrint\] wditest: scan task \d+ on port 1: wildcard BSSID, any SSID, type 3, dwell 20/110 ms, at most 4000 ms',
-          r'\[DbgPrint\] wditest: scan complete: 4 BSS entries indicated',
-          r'\[WDI\] WdiTest: scan on port 1: 0x00000000, 4 access point\(s\)',
-          r'Interface name : Wi-Fi', r'There are 4 networks currently visible\.',
+          r'\[DbgPrint\] wditest: scan complete: 5 BSS entries indicated',
+          r'\[WDI\] WdiTest: scan on port 1: 0x00000000, 5 access point\(s\)',
+          r'Interface name : Wi-Fi', r'There are 5 networks currently visible\.',
           r'SSID 1 : NovaNet\n +Network type +: Infrastructure\n +Authentication +: WPA2-Personal\n +Encryption +: CCMP\n'
           r' +BSSID 1 +: 02:4e:6f:76:61:01\n +Signal +: 90% *\n +Radio type +: 802\.11n\n +Band +: 2\.4 GHz\n'
           r' +Channel +: 6\n',
@@ -217,9 +226,12 @@ TESTS = [
           r' +Channel +: 11\b',
           r'SSID 4 : NovaCorp\n +Network type +: Infrastructure\n +Authentication +: WPA2-Enterprise\n'
           r' +Encryption +: CCMP\n +BSSID 1 +: 02:4e:6f:76:61:04\n +Signal +: 25% *\n +Radio type +: 802\.11n\n'
+          r' +Band +: 2\.4 GHz\n +Channel +: 1\b',
+          r'SSID 5 : NovaLab\n +Network type +: Infrastructure\n +Authentication +: WPA3-Enterprise\n'
+          r' +Encryption +: CCMP\n +BSSID 1 +: 02:4e:6f:76:61:05\n +Signal +: 20% *\n +Radio type +: 802\.11n\n'
           r' +Band +: 2\.4 GHz\n +Channel +: 1\b'], builtin=True),
     Test('wifi networks', 'netsh wlan show networks',
-         [r'There are 4 networks currently visible\.', r'SSID 2 : NovaNet-5G\n +Network type +: Infrastructure\n'
+         [r'There are 5 networks currently visible\.', r'SSID 2 : NovaNet-5G\n +Network type +: Infrastructure\n'
           r' +Authentication +: WPA3-Personal\n +Encryption +: CCMP\n'], builtin=True),
     Test('wifi secured', 'netsh wlan connect name=NovaNet',
          [r'The network "NovaNet" is secured: give its passphrase with key=PASSPHRASE\.'], builtin=True),
@@ -334,7 +346,7 @@ TESTS = [
          [r'\[WDI\] WdiTest: disconnected from NovaNet-5G \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi enterprise needs user', 'netsh wlan connect name=NovaCorp',
-         [r'The network "NovaCorp" is WPA2-Enterprise: sign in with user=NAME key=PASSWORD, or import a certificate '
+         [r'The network "NovaCorp" is an Enterprise network: sign in with user=NAME key=PASSWORD, or import a certificate '
           r'with certutil -importpfx\.'], builtin=True),
     Test('wifi enterprise untrusted', 'netsh wlan connect name=NovaCorp user=alice key=nova-peap-password',
          [r'\[DbgPrint\] wditest: connect to NovaCorp: auth 6, ciphers 4/4, exclude unencrypted 1, EAPOL exempted yes',
@@ -417,6 +429,43 @@ TESTS = [
     Test('wifi eap-tls disconnect', 'netsh wlan disconnect',
          [r'\[WDI\] WdiTest: disconnected from NovaCorp \(0x00000000\)',
           r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
+    # (NovaLab: WPA3-Enterprise, 802.1X-SHA256 with management frame protection; the same PEAP sign-in)
+    # (without user= or key=, the newest personal certificate signs in: mallory's, imported last, which the
+    # server refuses, so EAP-TLS runs over WPA3-Enterprise too)
+    Test('wifi wpa3-enterprise newest certificate', 'netsh wlan connect name=NovaLab',
+         [r'\[DbgPrint\] wditest: connect to NovaLab: auth 11, ciphers 4/4, exclude unencrypted 1, MFP 1, '
+          r'EAPOL exempted yes',
+          r'\[DbgPrint\] wditest: RADIUS: identity mallory; PEAP start',
+          r'\[DbgPrint\] wditest: RADIUS: the station asked for EAP-TLS \(a Nak\): EAP-TLS start',
+          r'\[EAP\] WdiTest: the sign-in failed: the server refused the certificate \(a TLS alert\)',
+          r'The sign-in server of "NovaLab" did not accept the certificate\.'], builtin=True),
+    Test('wifi wpa3-enterprise connect', 'netsh wlan connect name=NovaLab user=alice key=nova-peap-password',
+         [r'\[DbgPrint\] wditest: connect task \d+ on port 1: SSID NovaLab, auth 11, 1 BSS entry, first 02:4e:6f:76:61:05',
+          r'\[DbgPrint\] wditest: connect to NovaLab: auth 11, ciphers 4/4, exclude unencrypted 1, MFP 1, '
+          r'EAPOL exempted yes',
+          r'\[WDI\] WdiTest: connected to NovaLab \(02:4e:6f:76:61:05\) on port 1, peer 1: WPA3-Enterprise, CCMP, '
+          r'WMM off',
+          r'\[EAP\] WdiTest: signed in as alice with PEAP \(MS-CHAPv2\) to server radius\.novacorp\.test: '
+          r'EAP-Success, PMK from the tunnel',
+          r'\[DbgPrint\] wditest: 4-way handshake message 1 \(ANonce\) to the station \(WPA3-Enterprise: from the '
+          r'EAP sign-in\'s PMK\)',
+          r'\[DbgPrint\] wditest: 4-way handshake message 2: MIC good, RSN element its association\'s; sending message 3',
+          r'\[DbgPrint\] wditest: 4-way handshake message 4: MIC good; the handshake is done',
+          r'\[DbgPrint\] wditest: management group key \(IGTK\) 4: the access point\'s',
+          r'\[WPA\] WdiTest: pairwise key and group key 1 and management group key 4 installed \(0x00000000\)',
+          r'\[WPA\] WdiTest: 4-way handshake done: the port is authorized',
+          r'Connection request was completed successfully\.'], builtin=True),
+    Test('wifi wpa3-enterprise ping', 'ping 192.168.77.1',
+         [r'\[DbgPrint\] wditest: management group key \(IGTK\) 5: the access point\'s',
+          r'\[WPA\] WdiTest: group key 2 and management group key 5 installed \(0x00000000\)',
+          r'Reply from 192\.168\.77\.1', r'Received = 4, Lost = 0'], builtin=True, before=_leases(6)),
+    Test('wifi wpa3-enterprise connected', 'netsh wlan show interfaces',
+         [r'State +: connected\n +SSID +: NovaLab\n +AP BSSID +: 02:4e:6f:76:61:05\n +Band +: 2\.4 GHz\n'
+          r' +Channel +: 1\n +Network type +: Infrastructure\n +Radio type +: 802\.11n\n'
+          r' +Authentication +: WPA3-Enterprise\n +Cipher +: CCMP\n'], builtin=True),
+    Test('wifi wpa3-enterprise disconnect', 'netsh wlan disconnect',
+         [r'\[WDI\] WdiTest: disconnected from NovaLab \(0x00000000\)',
+          r'Disconnection request was completed successfully for interface "Wi-Fi"\.'], builtin=True),
     Test('wifi wlanapi', 'wlantest',
          [r'\[EAP\] WdiTest: signed in as alice with PEAP \(MS-CHAPv2\)',
           r'\[EAP\] WdiTest: signed in as alice with EAP-TLS \(certificate alice\)', r'wlantest: \d+ passed, 0 failed'],
@@ -424,7 +473,7 @@ TESTS = [
     Test('wifi settings', 'wlantest settings', [r'wlantest settings: \d+ passed, 0 failed'], timeout=300,
          acts=[(r'wlantest: join NovaNet in Settings', _join_in_settings),
                (r'wlantest: connected through Settings', _close_settings)],
-         boot_expect=[r'\[SETTINGS\] Wi-Fi: 4 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
+         boot_expect=[r'\[SETTINGS\] Wi-Fi: 5 network\(s\) found', r'\[SETTINGS\] Wi-Fi: connected to NovaNet']),
     Test('wifi settings enterprise', 'wlantest settings enterprise', [r'wlantest settings: \d+ passed, 0 failed'],
          timeout=300,
          acts=[(r'wlantest: join NovaCorp in Settings', _sign_in_in_settings),

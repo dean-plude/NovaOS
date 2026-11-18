@@ -1,7 +1,9 @@
 """The kernel's WPA2 supplicant (kernel/nt/wpa.c) against wditest.sys's
 authenticator (tools/drivertest/wpaap.h) on the host, without a VM: the
 4-way and group key handshakes, a wrong passphrase, a downgrade and a
-tampered frame refused, and the keys checked against Python's hashlib."""
+tampered frame refused, WPA3-Enterprise's 802.1X-SHA256 handshake (key
+descriptor version 3, the IGTK), and the keys checked against Python's
+hashlib."""
 from pathlib import Path
 import hashlib
 import hmac
@@ -53,6 +55,14 @@ class WpaHandshakeTests(unittest.TestCase):
         self.assertIn('wrong key refused: a wrong MIC', out)
         self.assertIn('downgrade refused', out)
         self.assertIn("tampered refused: message 3's MIC is wrong", out)
+        # WPA3-Enterprise (AKM 5): the PTK from KDF-SHA256-384 (802.11-2020 12.7.1.7.2)
+        pmk5 = bytes(0x40 + i for i in range(32))
+        data = min(aa, spa) + max(aa, spa) + min(anonce, snonce) + max(anonce, snonce)
+        ptk5 = b''.join(hmac.new(pmk5, i.to_bytes(2, 'little') + b'Pairwise key expansion' + data +
+                                 (384).to_bytes(2, 'little'), hashlib.sha256).digest() for i in (1, 2))[:48]
+        self.assertEqual(got['ptk5'], ptk5.hex())
+        self.assertIn('802.1X-SHA256 handshake ok', out)
+        self.assertIn('version 0 refused: a key descriptor version other than 3', out)
 
 
 if __name__ == '__main__':

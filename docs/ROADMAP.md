@@ -1676,6 +1676,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   gone.  Test `xamldlltest`.  The page now stops at a `ListView`, which
   NovaOS does not build yet.  Next: `ListView`, then the CI check that
   Calculator computes `2 + 2`, which ticks this step.
+  Thirty-third part done (Pulsar item 3, twenty-seventh slice): the
+  framework's `ListView`, over `ListViewBase`, `Selector` and its
+  `Selection`, with its items, built for Calculator's history and memory
+  lists.  Test `wuxamltest`.  Calculator's page gets past its lists and
+  stops next at a `LinearGradientBrush`, which NovaOS does not build yet.
+  Next: `LinearGradientBrush`, then the CI check that Calculator computes
+  `2 + 2`, which ticks this step.
 
 ---
 

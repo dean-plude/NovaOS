@@ -159,8 +159,8 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   framework's own: an `AnimatedIcon` whose `FallbackIconSource` is a
   `FontIconSource` from a `using:Microsoft.UI.Xaml.Controls` xmlns, with
   a binding on its `FontSize`, gets WinUI 2's `FontIconSource`),
-  `wrtapptest` (`ApplicationData.LocalSettings`, a setting not set
-  looking up as null, `ResourceContext.QualifierValues` and `Languages`,
+  `wrtapptest` (`ApplicationData.Current` refused with no package
+  identity, `ResourceContext.QualifierValues` and `Languages`,
   `User.GetFromId`, `NamedPolicy`; 64- and 32-bit), `wrtglobtest`
   (`ApplicationLanguages`, `Language`, `GeographicRegion`,
   `GlobalizationPreferences`, `DecimalFormatter`, `CurrencyFormatter`,
@@ -480,22 +480,24 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `C:\Windows`, `C:\Programs` and `HKLM`, which they read, and the
   elevated one making them), `appxtest` (app packages: `appx` install,
   block map and signature checks (APPX SIP, publisher), start by AUMID,
-  package identity, `resources.pri`, a packaged Windows Runtime class,
-  framework packages and the package graph, a signed bundle, a
-  Store-layout bundle whose packages are signed by themselves, remove),
-  Settings: `start ms-settings:display` opens Display, its search box
-  (Ctrl+F, "printer", Enter) goes to Printers; `settings check` draws
-  every page at three window sizes, at its top and scrolled to its end,
-  packaged apps in the shell: `appx` installs the test package, the
-  Start menu lists its application by the manifest's name and tile logo
-  and starts it packaged (Win+S, the name, Enter), and Settings > Apps
-  lists the package and uninstalls it (Down, Delete, Enter), programs
-  started from the Start menu (Win+S, the name, Enter): `winhello`, a
-  GUI program, with no Terminal window, and `hello`, a console program,
-  in a Terminal, `crash kernel`, a deliberate kernel fault whose serial
-  log must show a backtrace with function names, and last the kernel
-  crash report: after `crash kernel` and a reset, `crashes last` shows
-  the fault's backtrace.<!-- END generated:core-tests -->
+  package identity, `resources.pri`, a packaged Windows Runtime class, a
+  packaged app's `ApplicationData.LocalSettings` (a setting not set
+  looking up as null, `CreateContainer`), framework packages and the
+  package graph, a signed bundle, a Store-layout bundle whose packages
+  are signed by themselves, remove), Settings: `start
+  ms-settings:display` opens Display, its search box (Ctrl+F, "printer",
+  Enter) goes to Printers; `settings check` draws every page at three
+  window sizes, at its top and scrolled to its end, packaged apps in the
+  shell: `appx` installs the test package, the Start menu lists its
+  application by the manifest's name and tile logo and starts it
+  packaged (Win+S, the name, Enter), and Settings > Apps lists the
+  package and uninstalls it (Down, Delete, Enter), programs started from
+  the Start menu (Win+S, the name, Enter): `winhello`, a GUI program,
+  with no Terminal window, and `hello`, a console program, in a
+  Terminal, `crash kernel`, a deliberate kernel fault whose serial log
+  must show a backtrace with function names, and last the kernel crash
+  report: after `crash kernel` and a reset, `crashes last` shows the
+  fault's backtrace.<!-- END generated:core-tests -->
 
 ### The devices suite
 

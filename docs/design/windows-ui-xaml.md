@@ -1420,10 +1420,12 @@ vendors.
    and string list in `userland/winrtmap`), `User.GetFromId`,
    `NamedPolicy` and `ApplicationView` (`twinapi.appcore.dll`), and
    `ApplicationData.Current.LocalSettings`
-   (`Windows.Storage.ApplicationData.dll`, held for the process's life).
+   (`Windows.Storage.ApplicationData.dll`, held for the process's life;
+   `Current` is a packaged app's, refused with `APPMODEL_ERROR_NO_PACKAGE`
+   to a program with no package identity, as on Windows).
    Calculator then asks for `Windows.Globalization.ApplicationLanguages`:
    the `Windows.Globalization` classes are the next slice.  Tests:
-   `wrtapptest`, `coreapptest`.
+   `wrtapptest`, `coreapptest`, `appxtest`.
 
    Pulsar item 3, second slice: the `Windows.Globalization` classes
    Calculator's view models name (`CalcViewModel.dll`,

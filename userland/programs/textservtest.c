@@ -13,7 +13,10 @@
  * the selection, units, points, undo with tomSuspend, Freeze, the
  * clipboard; IRichEditOle by EM_GETOLEINTERFACE), ranges following edits
  * and outliving the text services, and TxDrawD2D onto a Direct2D render
- * target (opaque, and transparent over what is there).  Built for 32 bits
+ * target (opaque, and transparent over what is there).  The cut, copy and
+ * paste keys offered to the host first (EN_*REQUESTED), and the Windows
+ * Runtime document a XAML RichEditBox hands out (Microsoft.UI.Text's
+ * ITextDocument, ranges and selection).  Built for 32 bits
  * too, where ITextServices' methods are thiscall, as on Windows.
  *
  *   textservtest    the test */
@@ -22,6 +25,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include <novatextserv.h>
+#include <winstring.h>
 
 static int pass, fail;
 static void check(const char *what, int ok)
@@ -43,6 +47,8 @@ typedef struct {
     POINT caret;
     HDC dc;                                     /* TxGetDC's */
     TXTBACKSTYLE back;
+    int requests[3];                            /* EN_PASTEREQUESTED, EN_COPYREQUESTED, EN_CUTREQUESTED */
+    int handle_requests;                        /* (answer them handled: the host does it its own way) */
 } HOSTOBJ;
 
 #define H(p) ((HOSTOBJ *)(p))
@@ -113,6 +119,10 @@ static HRESULT TXAPI h_notify(ITextHost2 *me, DWORD code, void *data)
     if (code == EN_CHANGE) { H(me)->changes++; if (data && (((CHANGENOTIFY *)data)->dwChangeType & CN_TEXTCHANGED)) H(me)->textchanges++; }
     else if (code == EN_SELCHANGE) { H(me)->selchanges++; H(me)->lastsel = ((SELCHANGE *)data)->chrg; }
     else if (code == EN_MAXTEXT) H(me)->maxtext++;
+    else if (code >= 0x0730 && code <= 0x0732) {  /* (WinUIEdit's cut/copy/paste requests: data is a bool) */
+        H(me)->requests[code - 0x0730]++;
+        if (H(me)->handle_requests) *(unsigned char *)data = 1;
+    }
     return S_OK;
 }
 static HIMC_ TXAPI h_imm(ITextHost2 *me) { (void)me; return 0; }
@@ -790,6 +800,146 @@ static void drawd2d(HDC dc)
     ((IUnknown *)f)->lpVtbl->Release((IUnknown *)f);
 }
 
+/* ---- the cut, copy and paste keys, offered to the host first ----------- */
+static void ctrl_key(UINT vk)
+{
+    BYTE keys[256];
+    GetKeyboardState(keys);
+    keys[VK_CONTROL] = 0x80;
+    SetKeyboardState(keys);
+    key(vk);
+    keys[VK_CONTROL] = 0;
+    SetKeyboardState(keys);
+}
+
+static void requests(void)
+{
+    static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+    ITextDocument2 *d = 0;
+    ITextSelection2 *sel = 0;
+    int p0 = host.requests[0], c0 = host.requests[1], x0 = host.requests[2];
+    msg(WM_SETTEXT, 0, (LPARAM)L"one two");
+    ctrl_key('A');
+    check("Ctrl+A selects all", get_sel().cpMin == 0 && get_sel().cpMax == 7);
+    set_sel(4, 7);
+    ctrl_key('C');
+    check("Ctrl+C: EN_COPYREQUESTED to the host, then the copy", host.requests[1] == c0 + 1 && clipboard_is(L"two"));
+    set_sel(0, 4);
+    ctrl_key('X');
+    check("Ctrl+X: EN_CUTREQUESTED, then the cut", host.requests[2] == x0 + 1 && text_is(L"two") && clipboard_is(L"one "));
+    set_sel(3, 3);
+    ctrl_key('V');
+    check("Ctrl+V: EN_PASTEREQUESTED, then the paste", host.requests[0] == p0 + 1 && text_is(L"twoone "));
+    host.handle_requests = 1;
+    ctrl_key('V');
+    set_sel(0, 3);
+    ctrl_key('X');
+    check("a request the host handles is left to it", host.requests[0] == p0 + 2 && host.requests[2] == x0 + 2 && text_is(L"twoone "));
+    /* (XAML's text boxes take the keys themselves and paste through the
+     * TOM selection: the same requests) */
+    ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+    if (d) d->lpVtbl->GetSelection2(d, &sel);
+    if (sel) {
+        sel->lpVtbl->Paste(sel, 0, 0);
+        check("the selection's Paste: EN_PASTEREQUESTED, handled by the host", host.requests[0] == p0 + 3 && text_is(L"twoone "));
+        host.handle_requests = 0;
+        sel->lpVtbl->Copy(sel, 0);
+        check("the selection's Copy: EN_COPYREQUESTED, then the copy", host.requests[1] == c0 + 2 && clipboard_is(L"two"));
+        set_sel(0, 0);
+        sel->lpVtbl->Paste(sel, 0, 0);
+        check("the selection's Paste", host.requests[0] == p0 + 4 && text_is(L"twotwoone "));
+        sel->lpVtbl->Release(sel);
+    } else check("the TOM selection", 0);
+    if (d) d->lpVtbl->Release(d);
+    host.handle_requests = 0;
+    msg(WM_PASTE, 0, 0);
+    check("WM_PASTE is not a request", host.requests[0] == p0 + 4);
+}
+
+/* ---- the Windows Runtime document (a XAML RichEditBox's Document) -------- */
+static HRESULT (WINAPI *p_hcreate)(const WCHAR *, UINT32, HSTRING *);
+static const WCHAR *(WINAPI *p_hbuffer)(HSTRING, UINT32 *);
+static HRESULT (WINAPI *p_hdelete)(HSTRING);
+
+static int hstring_is(HSTRING h, const WCHAR *want)
+{
+    UINT32 n = 0;
+    const WCHAR *p = h ? p_hbuffer(h, &n) : L"";
+    int ok = n == wcslen(want) && !memcmp(p, want, n * sizeof(WCHAR));
+    if (!ok) printf("  string is \"%.*ls\", want \"%ls\"\n", (int)n, p, want);
+    if (h) p_hdelete(h);
+    return ok;
+}
+
+/* (Microsoft.UI.Text's interfaces, by vtable slot: IInspectable's six, then theirs) */
+#define WSLOT(p, i, type) SLOT(p, 6 + (i), type)
+static void winrt(void)
+{
+    static const IID iid_wdoc = {0x1149d57d, 0x86a6, 0x59dd, {0x88, 0xd9, 0x19, 0x6f, 0x27, 0xbc, 0x5c, 0x85}};
+    static const IID iid_wsel = {0x8f5e6cb1, 0x2b04, 0x589f, {0xbd, 0x24, 0x54, 0xe5, 0xcd, 0x8d, 0xd3, 0x99}};
+    static const IID iid_wrange = {0x06d4abcf, 0x0c06, 0x5d12, {0xa7, 0x43, 0x85, 0x53, 0x7e, 0xfd, 0x09, 0xea}};
+    HMODULE ole = LoadLibraryW(L"ole32.dll");
+    IUnknown *doc = 0, *r = 0, *sel = 0, *sel2 = 0, *selr = 0;
+    HSTRING h = 0;
+    INT32 n = 0, d = 0;
+    BYTE b = 0;
+    p_hcreate = (void *)GetProcAddress(ole, "WindowsCreateString");
+    p_hbuffer = (void *)GetProcAddress(ole, "WindowsGetStringRawBuffer");
+    p_hdelete = (void *)GetProcAddress(ole, "WindowsDeleteString");
+    if (!p_hcreate || !p_hbuffer || !p_hdelete) { check("WinRT: ole32's strings", 0); return; }
+    check("WinRT: QueryInterface(Microsoft.UI.Text.ITextDocument), as XAML's RichEditBox does",
+          ts->lpVtbl->QueryInterface(ts, &iid_wdoc, (void **)&doc) == S_OK && doc);
+    if (!doc) return;
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+    p_hcreate(L"Rich text", 9, &h);
+    check("ITextDocument.SetText", WSLOT(doc, 25, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, HSTRING))(doc, 0, h) == S_OK &&
+          text_is(L"Rich text"));
+    p_hdelete(h);
+    h = 0;
+    check("ITextDocument.GetText", WSLOT(doc, 19, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, HSTRING *))(doc, 0, &h) == S_OK &&
+          hstring_is(h, L"Rich text"));
+    check("ITextDocument.GetRange(0, 2)", WSLOT(doc, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, void **))(doc, 0, 2, (void **)&r) == S_OK && r);
+    if (r) {
+        WSLOT(r, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))(r, &n);                   /* get_StoryLength */
+        check("ITextRange.StoryLength: the text and the final paragraph mark", n == 10);
+        h = 0;
+        WSLOT(r, 18, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING *))(r, &h);                 /* get_Text */
+        check("ITextRange.Text", hstring_is(h, L"Ri"));
+        WSLOT(r, 41, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, INT32 *))(r, 1, 1, &d);   /* MoveEnd(Word, 1) */
+        WSLOT(r, 10, HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))(r, &n);                   /* get_Length */
+        check("ITextRange.MoveEnd(Word): TextRangeUnit is TOM's unit", d == 1 && n == 5);
+        r->lpVtbl->Release(r);
+    }
+    check("ITextDocument.Selection", WSLOT(doc, 4, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(doc, (void **)&sel) == S_OK && sel);
+    if (sel) {
+        /* (Selection is an ITextSelection, whose range is its ITextRange) */
+        sel->lpVtbl->QueryInterface(sel, &iid_wsel, (void **)&sel2);
+        sel->lpVtbl->QueryInterface(sel, &iid_wrange, (void **)&selr);
+        check("the selection: ITextSelection and ITextRange", sel2 == sel && selr != 0);
+        if (selr) {
+            WSLOT(selr, 48, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32))(selr, 0, 4);  /* SetRange */
+            selr->lpVtbl->Release(selr);
+        }
+        check("ITextRange.SetRange on the selection selects", get_sel().cpMin == 0 && get_sel().cpMax == 4);
+        WSLOT(doc, 7, HRESULT (STDMETHODCALLTYPE *)(void *, BYTE *))(doc, &b);
+        check("ITextDocument.CanCopy with a selection", b == 1);
+        if (sel2) {
+            p_hcreate(L"Poor", 4, &h);
+            WSLOT(sel2, 9, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(sel2, h);          /* TypeText */
+            p_hdelete(h);
+            check("ITextSelection.TypeText", text_is(L"Poor text"));
+            sel2->lpVtbl->Release(sel2);
+        }
+        sel->lpVtbl->Release(sel);
+    }
+    WSLOT(doc, 10, HRESULT (STDMETHODCALLTYPE *)(void *, BYTE *))(doc, &b);
+    check("ITextDocument.CanUndo", b == 1);
+    WSLOT(doc, 26, HRESULT (STDMETHODCALLTYPE *)(void *))(doc);                               /* Undo */
+    check("ITextDocument.Undo", text_is(L"Rich text"));
+    doc->lpVtbl->Release(doc);
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -829,6 +979,8 @@ int main(void)
     drawing(dc);
     password(dc);
     tom(m);
+    requests();
+    winrt();
     drawd2d(dc);
     others();
 

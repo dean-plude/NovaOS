@@ -252,7 +252,12 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   compositor, its `Border`'s colour read back from the window, clicked
   with the mouse and with Space and typed into, with a `TextBox`
   clicked, typed into ("Hi!", then Backspace), its `TextChanged` counted
-  and its text found in its pixels, then closed), `xamlparsetest`
+  and its text found in its pixels, selected with Ctrl+A, copied, pasted
+  and cut through the clipboard (its `CopyingToClipboard`, `Paste` and
+  `CuttingToClipboard` events), a `PasswordBox` typed into (its
+  `Password`, `PasswordChanged`, its password characters drawn, Ctrl+C
+  copying nothing) and a `RichEditBox` typed into (its `Document` text,
+  `TextChanged`, Ctrl+A and Ctrl+C), then closed), `xamlparsetest`
   (Microsoft's XAML parser, built from its sources: XAML text to XAML's
   node stream through NovaOS's xmllite.dll, markup extensions, resource
   keys and maps), `nlstest` (date, time, number and currency formats in
@@ -472,10 +477,14 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   checked by pixels, a password box; the Text Object Model as XAML's
   `TextBoxBase` uses it: `ITextDocument2`, ranges that follow edits, the
   selection, units, points, find, clipboard, undo with `tomSuspend`;
-  `TxDrawD2D` on a Direct2D render target, opaque and transparent;
-  `msftedit.dll` and `riched20.dll` too), `spooltest` (the print spooler
-  and `winspool.drv`: printers, raw jobs, the queue, AddPrinter; a GDI
-  page printed to Microsoft Print to PDF matching what GDI draws;
+  `TxDrawD2D` on a Direct2D render target, opaque and transparent; the
+  cut, copy and paste keys and the TOM selection's offered to the host
+  first (`EN_CUTREQUESTED`, `EN_COPYREQUESTED`, `EN_PASTEREQUESTED`);
+  the Windows Runtime document a XAML `RichEditBox` hands out
+  (`Microsoft.UI.Text`'s `ITextDocument`: text, ranges, the selection,
+  undo); `msftedit.dll` and `riched20.dll` too), `spooltest` (the print
+  spooler and `winspool.drv`: printers, raw jobs, the queue, AddPrinter;
+  a GDI page printed to Microsoft Print to PDF matching what GDI draws;
   PrintDlg and PageSetupDlg; 64- and 32-bit), `uactest` (standard users
   and UAC: the consent prompt on the secure desktop for runas and for an
   installer's manifest, No refused, Yes elevating to high integrity; a

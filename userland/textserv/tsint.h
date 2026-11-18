@@ -50,6 +50,7 @@ typedef struct TS {
     BOOL undooff, undosuspend;                    /* Undo(tomFalse), Undo(tomSuspend) */
     float tabstop;
     LONG carettype, notifymode, typography;
+    const void *wdoc;                             /* Microsoft.UI.Text's ITextDocument (winrtdoc.c) */
     /* DirectWrite's fonts (dwtext.c), when the host gives them (IProvideFontInfo) */
     void *fontinfo;                               /* (the host's, held without a reference, as the host) */
     BOOL fontinfo_asked;
@@ -90,6 +91,12 @@ BOOL copy_range(TS *t, LONG a, LONG b);
 BOOL can_paste(TS *t);
 WCHAR *clipboard_text(TS *t);
 HWND host_window(TS *t);
+/* WinUIEdit's requests to the host: a cut, copy or paste the user asked for
+ * (data: a bool the host sets when it handled it) */
+#define EN_PASTEREQUESTED_  0x0730
+#define EN_COPYREQUESTED_   0x0731
+#define EN_CUTREQUESTED_    0x0732
+BOOL host_handles(TS *t, DWORD code);
 
 /* dwtext.c */
 void dw_refresh(TS *t);
@@ -103,6 +110,9 @@ void tom_free(TS *t);
 HRESULT tom_qi(TS *t, REFIID iid, void **out);
 void tom_edited(TS *t, LONG a, LONG b, LONG k);   /* [a, b) became k characters */
 void tom_clamp(TS *t);                            /* the text was replaced */
+
+/* winrtdoc.c */
+void *wdoc_qi(TS *t, REFIID iid);                 /* the Windows Runtime document, or null */
 
 /* tomfmt.c */
 HRESULT tom_format(BOOL font, void **out);       /* a range's ITextFont2 (or ITextPara2) */

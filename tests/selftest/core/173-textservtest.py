@@ -10,7 +10,10 @@ DOC = ('`textservtest` (the windowless Rich Edit XAML\'s text boxes host: `WinUI
        '`TxDraw` checked by pixels, a password box; the Text Object Model as XAML\'s `TextBoxBase` '
        'uses it: `ITextDocument2`, ranges that follow edits, the selection, units, points, find, '
        'clipboard, undo with `tomSuspend`; `TxDrawD2D` on a Direct2D render target, opaque and '
-       'transparent; `msftedit.dll` and `riched20.dll` too)')
+       'transparent; the cut, copy and paste keys and the TOM selection\'s offered to the host first '
+       '(`EN_CUTREQUESTED`, `EN_COPYREQUESTED`, `EN_PASTEREQUESTED`); the Windows Runtime document a XAML '
+       '`RichEditBox` hands out (`Microsoft.UI.Text`\'s `ITextDocument`: text, ranges, the selection, undo); '
+       '`msftedit.dll` and `riched20.dll` too)')
 TESTS = [
     Test('textservtest', 'textservtest', [r'textservtest: \d+ passed, 0 failed'], timeout=120),
     Test('textservtest x86', r'C:\Programs\x86\textservtest.exe', [r'textservtest: \d+ passed, 0 failed'], timeout=120),

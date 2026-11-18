@@ -13,7 +13,9 @@
  *     loaded by Windows.UI.Xaml.Markup.XamlReader (a Grid holding a Border
  *     and a TextBlock), a Windows.UI.Xaml.Window showing it (Activate);
  *   - once the page is laid out: the window's bounds, the Border's and the
- *     TextBlock's laid-out sizes, through Windows' IFrameworkElement; then
+ *     TextBlock's laid-out sizes, through Windows' IFrameworkElement, and
+ *     a MenuFlyout in the page's resources looked up through their IMap
+ *     as Windows' MenuFlyout (Calculator casts its context menu so); then
  *     the window closes and Application.Exit returns from Application.Start.
  *
  *   xamldlltest        the self-test runs it with no arguments
@@ -148,6 +150,34 @@ static HRESULT on_tick(msd::IDispatcherQueueTimer *, IInspectable *)
     return S_OK;
 }
 
+/* Calculator's control casts (MenuFlyout)Resources["DisplayContextMenu"]:
+ * what the page's resources' IMap<Object, Object>.Lookup hands the app is
+ * Windows' MenuFlyout by its class name, not the framework's lifted one */
+static void resource_checks()
+{
+    wux::IResourceDictionary *resources = nullptr;
+    wf::Collections::IMap<IInspectable *, IInspectable *> *map = nullptr;
+    wf::IPropertyValueStatics *pv = nullptr;
+    IInspectable *key = nullptr, *found = nullptr;
+    HSTRING name = nullptr, cls = nullptr;
+    if (s_grid) s_grid->get_Resources(&resources);
+    map = qi<wf::Collections::IMap<IInspectable *, IInspectable *>>(resources);
+    WindowsCreateString((const WCHAR *)L"DisplayContextMenu", 18, &name);
+    if (SUCCEEDED(factory(L"Windows.Foundation.PropertyValue", &pv)))
+        pv->CreateString(name, &key);
+    HRESULT hr = map && key ? map->Lookup(key, &found) : E_FAIL;
+    CHECK_HR("Resources[\"DisplayContextMenu\"] through the resources' IMap", hr);
+    CHECK("is Windows.UI.Xaml.Controls.MenuFlyout", found && SUCCEEDED(found->GetRuntimeClassName(&cls)) &&
+          wcscmp((const wchar_t *)WindowsGetStringRawBuffer(cls, nullptr), L"Windows.UI.Xaml.Controls.MenuFlyout") == 0);
+    WindowsDeleteString(cls);
+    WindowsDeleteString(name);
+    release(found);
+    release(key);
+    release(pv);
+    release(map);
+    release(resources);
+}
+
 /* on the DispatcherQueue, once the framework runs: the page in a window */
 static HRESULT show_page()
 {
@@ -158,6 +188,7 @@ static HRESULT show_page()
     const wchar_t *xaml = L"<Grid " XMLNS XMLNS_X L">"
         L"<Border x:Name='panel' Width='200' Height='100' Margin='24,24,0,0' HorizontalAlignment='Left' VerticalAlignment='Top' Background='SteelBlue'/>"
         L"<TextBlock x:Name='label' Text='Windows.UI.Xaml.dll' FontSize='20' Margin='240,24,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<Grid.Resources><MenuFlyout x:Key='DisplayContextMenu'><MenuFlyoutItem Text='Copy'/></MenuFlyout></Grid.Resources>"
         L"</Grid>";
     WindowsCreateString((const WCHAR *)xaml, (UINT32)wcslen(xaml), &text);
     CHECK_HR("Windows.UI.Xaml.Markup.XamlReader.Load of a page",
@@ -168,6 +199,7 @@ static HRESULT show_page()
     s_border = find(L"panel");
     s_text = find(L"label");
     CHECK("its Grid (Windows' IFrameworkElement), Border and TextBlock", s_grid && s_border && s_text);
+    resource_checks();
 
     /* a Windows.UI.Xaml.Window (activated by its name; else the
      * framework's factory, as a desktop app makes one) */

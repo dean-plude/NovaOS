@@ -14,9 +14,17 @@ ResourceDictionary::ResourceDictionary()
 {
 }
 
+// NovaOS: values looked up by the app's code (Windows.UI.Xaml callers
+// outside this DLL) come out as the app's Windows objects, not the lifted
+// framework ones (userland/windows_ui_xaml/src/windows_faces.cpp).
+extern "C" void nova_value_for_caller(void *ret, void **value);
+
 IFACEMETHODIMP ResourceDictionary::Lookup(_In_opt_ IInspectable* key, _Outptr_ IInspectable **ppValue)
 {
-    RRETURN(LookupCore(key, true /*originateErrorOnLookupFailure */, ppValue));
+    HRESULT hr = LookupCore(key, true /*originateErrorOnLookupFailure */, ppValue);
+    if (SUCCEEDED(hr))
+        nova_value_for_caller(_ReturnAddress(), reinterpret_cast<void **>(ppValue)); // NovaOS
+    return hr;
 }
 
 _Check_return_  HRESULT

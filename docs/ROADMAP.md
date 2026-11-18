@@ -1661,6 +1661,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `NullReferenceException` (`E_POINTER`).  Next: find what that handler
   reads that NovaOS leaves empty, then the CI check that Calculator
   computes `2 + 2`, which ticks this step.
+  Thirty-second part done (Pulsar item 3, twenty-sixth slice): a
+  `ResourceDictionary` lookup from the app's code returns the app's
+  Windows object, so Calculator's `(MenuFlyout)Resources[...]` cast no
+  longer throws `InvalidCastException`, its Calculator control gets its
+  `DataContext`, and the storyboard handler's `NullReferenceException` is
+  gone.  Test `xamldlltest`.  The page now stops at a `ListView`, which
+  NovaOS does not build yet.  Next: `ListView`, then the CI check that
+  Calculator computes `2 + 2`, which ticks this step.
 
 ---
 

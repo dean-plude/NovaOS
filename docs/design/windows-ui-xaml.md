@@ -835,7 +835,22 @@ vendors.
      `WinUIEdit.dll` draws the text as DirectWrite glyph runs on the
      view's render target in the face the host's `IProvideFontInfo`
      names.  `xamlpagetest` clicks the `TextBox`, types into it, presses
-     Backspace, counts `TextChanged` and finds the text's pixels.
+     Backspace, counts `TextChanged` and finds the text's pixels.  The
+     `PasswordBox` and the `RichEditBox` join it (part 4): the core's
+     `PasswordBox.cpp` and `RichEditBox.cpp` in the same library, and the
+     framework's `PasswordBox_Partial`, `RichEditBox_Partial` and their
+     generated classes.  A `RichEditBox` hands out its text services as
+     its `Document`, a Windows Runtime `Microsoft.UI.Text.ITextDocument`
+     (the `RichEditTextDocument`); `WinUIEdit.dll` answers that
+     `QueryInterface` with `userland/textserv/winrtdoc.c`, the document,
+     its ranges and selection as thin wrappers over its Text Object
+     Model.  The edit keys (Ctrl+C, X, V) never reach the text services:
+     XAML takes them and cuts, copies or pastes through the TOM
+     selection, which first asks the host with WinUIEdit's
+     `EN_CUTREQUESTED`, `EN_COPYREQUESTED` and `EN_PASTEREQUESTED`; that
+     is where a text box raises its `CuttingToClipboard`,
+     `CopyingToClipboard` and `Paste` events (an app that handles one
+     stops the Rich Edit's own).
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

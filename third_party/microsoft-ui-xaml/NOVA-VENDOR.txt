@@ -476,6 +476,13 @@ TextControlPasteEventArgs, TextControlCopyingToClipboardEventArgs,
 TextControlCuttingToClipboardEventArgs, TextCompositionChangedEventArgs,
 TextCompositionEndedEventArgs and TextCompositionStartedEventArgs.
 
+XAML text input, fourth part (the PasswordBox and the RichEditBox), the
+same commit, unchanged (upstream line endings): core/native/text/Controls'
+PasswordBox.cpp and RichEditBox.cpp; dxaml/lib's PasswordBox_Partial.cpp,
+RichEditBox_Partial.cpp and Launcher.h; and winrtgeneratedclasses' .g.cpp
+of PasswordBox, PasswordBoxPasswordChangingEventArgs, RichEditBox,
+RichEditBoxSelectionChangingEventArgs and RichEditBoxTextChangingEventArgs.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

@@ -34,3 +34,13 @@ inline HRESULT TextInput_SetTextPrediction(HWND inputWindow)
     (void)inputWindow;
     return S_OK;
 }
+
+/* (the touch keyboard's skin a PasswordBox asks for: BitLocker's for a
+ * PIN; NovaOS has no touch keyboard, so there is nothing to set) */
+enum class TextInput_KeyboardSkins : unsigned int { Default = 0, Bitlocker = 1 };
+
+inline HRESULT TextInput_SetKeyboardSkin(TextInput_KeyboardSkins skin, HWND inputWindow)
+{
+    (void)skin; (void)inputWindow;
+    return S_OK;
+}

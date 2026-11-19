@@ -18,7 +18,9 @@
  * EM_GETTEXTRANGE, EM_POSFROMCHAR, EM_CHARFROMPOS, line messages, limits,
  * read-only, the event mask, modify flag and undo).  Changes are reported
  * to the host by TxNotify (EN_CHANGE, EN_SELCHANGE, EN_MAXTEXT) as its
- * event mask asks, and drawn by TxDraw on the host's device context in
+ * event mask asks, and a cut, copy or paste key is offered to the host
+ * first (WinUIEdit's EN_CUTREQUESTED, EN_COPYREQUESTED, EN_PASTEREQUESTED,
+ * which XAML's text boxes answer with their clipboard events), and drawn by TxDraw on the host's device context in
  * the host's character format: the text, or the password character for
  * each character, with the selection highlighted, single-line text
  * scrolled to keep the caret in view and multi-line text word-wrapped.
@@ -29,7 +31,9 @@
  * dwtext.c), else through a bitmap.  XAML's pointer input arrives as
  * EM_MOUSEINPUT.  The Text Object Model over the same text
  * (ITextDocument2 by QueryInterface, IRichEditOle by EM_GETOLEINTERFACE,
- * its ranges and selection) is tom.c, its format objects tomfmt.c.  Plain
+ * its ranges and selection) is tom.c, its format objects tomfmt.c, and
+ * its Windows Runtime face (Microsoft.UI.Text's ITextDocument, a XAML
+ * RichEditBox's Document) winrtdoc.c.  Plain
  * text in one character format.  Written from the Rich Edit and text
  * services documentation.
  */
@@ -621,6 +625,27 @@ BOOL copy_range(TS *t, LONG a, LONG b)
 
 static BOOL copy_sel(TS *t) { return copy_range(t, selmin(t), selmax(t)); }
 
+/* a cut, copy or paste the user asked for (keys), offered to the host
+ * first: WinUIEdit's EN_CUTREQUESTED, EN_COPYREQUESTED, EN_PASTEREQUESTED,
+ * whose data is a bool the host sets when it handled it (XAML's text
+ * boxes raise their Cutting/CopyingToClipboard and Paste events, and an app
+ * that handles one does it its own way); FALSE: go ahead */
+BOOL host_handles(TS *t, DWORD code)
+{
+    unsigned char handled = 0;                    /* (C++'s bool) */
+    notify(t, code, &handled);
+    return handled != 0;
+}
+
+static void key_copy(TS *t) { if (!host_handles(t, EN_COPYREQUESTED_)) copy_sel(t); }
+static void key_cut(TS *t)
+{
+    if ((t->bits & TXTBIT_READONLY) || host_handles(t, EN_CUTREQUESTED_)) return;
+    if (copy_sel(t)) replace_sel(t, L"", 0, TRUE, FALSE);
+}
+static void paste(TS *t);
+static void key_paste(TS *t) { if (!(t->bits & TXTBIT_READONLY) && !host_handles(t, EN_PASTEREQUESTED_)) paste(t); }
+
 BOOL can_paste(TS *t)
 {
     (void)t;
@@ -712,7 +737,7 @@ static HRESULT on_key(TS *t, UINT vk)
         return S_OK;
     case VK_DELETE:
         if (t->bits & TXTBIT_READONLY) return S_OK;
-        if (shift) { if (copy_sel(t)) replace_sel(t, L"", 0, TRUE, FALSE); return S_OK; }
+        if (shift) { key_cut(t); return S_OK; }
         if (selmin(t) == selmax(t)) {
             if (t->active >= t->len) return S_OK;
             t->anchor = ctrl ? word_right(t, t->active) : t->active + 1;
@@ -720,16 +745,16 @@ static HRESULT on_key(TS *t, UINT vk)
         replace_sel(t, L"", 0, TRUE, FALSE);
         return S_OK;
     case VK_INSERT:
-        if (ctrl) copy_sel(t);
-        else if (shift) paste(t);
+        if (ctrl) key_copy(t);
+        else if (shift) key_paste(t);
         return S_OK;
     default:
         if (!ctrl || down(VK_MENU)) return S_FALSE;
         switch (vk) {
         case 'A': set_sel(t, 0, t->len); return S_OK;
-        case 'C': copy_sel(t); return S_OK;
-        case 'X': if (!(t->bits & TXTBIT_READONLY) && copy_sel(t)) replace_sel(t, L"", 0, TRUE, FALSE); return S_OK;
-        case 'V': paste(t); return S_OK;
+        case 'C': key_copy(t); return S_OK;
+        case 'X': key_cut(t); return S_OK;
+        case 'V': key_paste(t); return S_OK;
         case 'Z': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, FALSE); return S_OK;
         case 'Y': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, TRUE); return S_OK;
         }

@@ -36,6 +36,16 @@
 #define EM_SETSIPDISPLAYPOLICY      (WM_USER + 0x17e)
 #define EM_SETTOUCHSCALE            (WM_USER + 0x17f)
 #define EM_TERMINATECOMPOSITION     (WM_USER + 0x180)
+/* (a RichEditBox's: the formatting keys it allows, lp: CFE_BOLD,
+ * CFE_ITALIC, CFE_UNDERLINE; and a link's navigation asked for by UI
+ * Automation, which XAML handles as a click on it) */
+#define EM_SETFORMATACCELERATORS    (WM_USER + 0x181)
+#define EM_HANDLELINKNOTIFICATION   (WM_USER + 0x182)
+/* (the host's answer to EN_LINK: let the Rich Edit do what it does) */
+#define EN_LINK_DO_DEFAULT          S_FALSE
+#ifndef IMF_COPYPLAINTEXTONLY
+#define IMF_COPYPLAINTEXTONLY       0x00008000            /* (a RichEditBox's ClipboardCopyFormat PlainText) */
+#endif
 /* (notifications to the host: a paste, copy or cut the user asked for,
  * and UI Automation's select) */
 #define EN_PASTEREQUESTED           0x0730

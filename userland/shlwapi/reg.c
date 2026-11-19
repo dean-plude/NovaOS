@@ -17,6 +17,26 @@ LWSTDAPI_(LSTATUS) SHRegGetValueA(HKEY key, LPCSTR sub, LPCSTR name, DWORD flags
     return RegGetValueA(key, sub, name, flags, type, data, n);
 }
 
+/* a value as a number: a REG_DWORD, or a REG_SZ of digits (StrToInt's);
+ * @def when it is neither or missing (a PasswordBox's DisablePasswordReveal
+ * policy) */
+LWSTDAPI_(int) SHRegGetIntW(HKEY key, LPCWSTR name, int def)
+{
+    union { DWORD d; WCHAR s[32]; } v;
+    DWORD type = 0, n = sizeof(v);
+    int r = 0, neg = 0;
+    const WCHAR *p;
+    if (RegQueryValueExW(key, name, NULL, &type, (BYTE *)&v, &n) != ERROR_SUCCESS) return def;
+    if (type == REG_DWORD && n >= sizeof(DWORD)) return (int)v.d;
+    if (type != REG_SZ && type != REG_EXPAND_SZ) return def;
+    v.s[31] = 0;
+    p = v.s;
+    if (*p == L'-') { neg = 1; p++; }
+    if (*p < L'0' || *p > L'9') return def;
+    while (*p >= L'0' && *p <= L'9') r = r * 10 + (*p++ - L'0');
+    return neg ? -r : r;
+}
+
 LWSTDAPI_(DWORD) SHGetValueW(HKEY key, LPCWSTR sub, LPCWSTR name, LPDWORD type, LPVOID data, LPDWORD n)
 {
     return RegGetValueW(key, sub, name, RRF_RT_ANY | RRF_NOEXPAND, type, data, n);

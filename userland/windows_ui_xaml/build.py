@@ -368,7 +368,8 @@ PCH = os.path.join(XCP, 'components', 'pch', 'precomp.h')
 # GUID from rpcrt4, the theme transitions read the theme's animation timings
 # with uxtheme, ToolTipService follows the display's power state with
 # powrprof, an image's casting source makes its property store with propsys)
-LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof', 'propsys']
+LIBS = ['dbghelp', 'shlwapi', 'xmllite', 'urlmon', 'imm32', 'dwrite', 'rpcrt4', 'uxtheme', 'powrprof', 'propsys',
+        'crypt32']  # (a PasswordBox keeps its password with CryptProtectMemory)
 ETW_MANIFEST = os.path.join(XCP, 'plat', 'win', 'desktop', 'Microsoft-Windows-XAML-ETW.man')
 
 _SETUP = threading.Lock()
@@ -1807,9 +1808,10 @@ for _f in ('incrementalloading.cpp', 'ListViewBase_Partial_DataVirtualization.cp
 # styles and bitmaps), the text box's key commands, its input pane sink and
 # its private settings and helpers, with the Rich Edit OLE callback and the
 # text controls' entry points the framework calls (TextControlsPinvokes);
-# less the PasswordBox and the RichEditBox, their automation peers, the
-# context menu and the linguistics (spelling) helper, which join later.  Of
-# the framework, the TextBox, its base and its view, with the placeholder
+# with the PasswordBox and the RichEditBox (part 4); less their automation
+# peers, the context menu and the linguistics (spelling) helper, which join
+# later.  Of the framework, the TextBox, the PasswordBox and the
+# RichEditBox, the text box base and its view, with the placeholder
 # text helper and the arguments of the text box's events, each its
 # generated class and its partial one)
 _TEXT_CONTROLS = 'core/native/text/Controls/Native.Text.Controls.vcxproj'
@@ -1818,7 +1820,7 @@ CORE_LIBRARIES.append((_TEXT_CONTROLS, 'core/common.props', 'core/native/text/Co
 CORE_SOURCES[_TEXT_CONTROLS] = tuple('%s.cpp' % x for x in (
     'TextBoxBase', 'TextBox', 'TextBoxView', 'TextServicesHost', 'HWRenderTarget', 'HWSolidColorBrush', 'HWStrokeStyle',
     'HwTextBitmap', 'Util', 'TextBoxUIManagerEventSink', 'PrivateTextInputSettings', 'TextBoxCommandHandler',
-    'TextControlsPinvokes', 'RichEditOleCallback'))
+    'TextControlsPinvokes', 'RichEditOleCallback', 'PasswordBox', 'RichEditBox'))
 # (and the text core's helpers for them: the caret's blink and its storyboard)
 CORE_SOURCES[_CORETEXT] += ('TextBox/TextBoxHelpers.cpp', 'common/TextSelectionSettings.cpp')
 CORE_FIRST[_TEXT_CONTROLS] = CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] + [
@@ -1829,9 +1831,13 @@ _TEXT_BOX = ('TextBox', 'TextBoxBase', 'TextBoxView', 'TextChangedEventArgs', 'T
              'TextBoxBeforeTextChangingEventArgs', 'TextBoxSelectionChangingEventArgs',
              'CandidateWindowBoundsChangedEventArgs', 'TextControlPasteEventArgs',
              'TextControlCopyingToClipboardEventArgs', 'TextControlCuttingToClipboardEventArgs',
-             'TextCompositionChangedEventArgs', 'TextCompositionEndedEventArgs', 'TextCompositionStartedEventArgs')
+             'TextCompositionChangedEventArgs', 'TextCompositionEndedEventArgs', 'TextCompositionStartedEventArgs',
+             # (XAML text input, part 4: the PasswordBox and the RichEditBox)
+             'PasswordBox', 'PasswordBoxPasswordChangingEventArgs', 'RichEditBox',
+             'RichEditBoxSelectionChangingEventArgs', 'RichEditBoxTextChangingEventArgs')
 CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
-    'TextBox_Partial', 'TextBoxView_Partial', 'TextBoxPlaceholderTextHelper', 'TextControlFlyoutHelper')) + tuple(
+    'TextBox_Partial', 'TextBoxView_Partial', 'TextBoxPlaceholderTextHelper', 'TextControlFlyoutHelper',
+    'PasswordBox_Partial', 'RichEditBox_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in _TEXT_BOX)
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an

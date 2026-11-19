@@ -770,15 +770,23 @@ static HRESULT STDMETHODCALLTYPE r_delete(ITextRange2 *me, LONG unit, LONG count
     return hr;
 }
 
-static HRESULT STDMETHODCALLTYPE r_copy(ITextRange2 *me, VARIANT *v)
+static HRESULT copy_of(RANGE *r, VARIANT *v)
 {
-    RANGE *r = R(me);
     LONG s, e;
-    LIVE(r);
     if (v) VariantInit(v);
     get(r, &s, &e);
     if (r->t->bits & TXTBIT_USEPASSWORD) return E_ACCESSDENIED;
     return copy_range(r->t, s, e > r->t->len ? r->t->len : e) ? S_OK : S_FALSE;
+}
+
+/* (the selection's cut, copy and paste are the user's, XAML's text boxes'
+ * keys and menu: offered to the host first, as the keys are, textserv.c) */
+static HRESULT STDMETHODCALLTYPE r_copy(ITextRange2 *me, VARIANT *v)
+{
+    RANGE *r = R(me);
+    LIVE(r);
+    if (r->sel && host_handles(r->t, EN_COPYREQUESTED_)) return S_OK;
+    return copy_of(r, v);
 }
 
 static HRESULT STDMETHODCALLTYPE r_cut(ITextRange2 *me, VARIANT *v)
@@ -788,7 +796,8 @@ static HRESULT STDMETHODCALLTYPE r_cut(ITextRange2 *me, VARIANT *v)
     HRESULT hr;
     LIVE(r);
     if (READONLY(r->t)) return E_ACCESSDENIED;
-    if ((hr = r_copy(me, v)) != S_OK) return hr;
+    if (r->sel && host_handles(r->t, EN_CUTREQUESTED_)) return S_OK;
+    if ((hr = copy_of(r, v)) != S_OK) return hr;
     get(r, &s, &e);
     return edit(r, s, e, L"", 0);
 }
@@ -802,6 +811,7 @@ static HRESULT STDMETHODCALLTYPE r_paste(ITextRange2 *me, VARIANT *v, LONG forma
     (void)v; (void)format;
     LIVE(r);
     if (READONLY(r->t)) return E_ACCESSDENIED;
+    if (r->sel && host_handles(r->t, EN_PASTEREQUESTED_)) return S_OK;
     if (!(p = clipboard_text(r->t))) return S_FALSE;
     get(r, &s, &e);
     hr = edit(r, s, e, p, -1);
@@ -1484,7 +1494,7 @@ HRESULT tom_qi(TS *t, REFIID iid, void **out)
 {
     if (IsEqualGUID(iid, &iid_dispatch) || IsEqualGUID(iid, &iid_doc) || IsEqualGUID(iid, &iid_doc2)) *out = &t->doc;
     else if (IsEqualGUID(iid, &iid_reole)) *out = &t->reole;
-    else return E_NOINTERFACE;
+    else if (!(*out = wdoc_qi(t, iid))) return E_NOINTERFACE;    /* (a RichEditBox's Document) */
     t->outer->lpVtbl->AddRef(t->outer);
     return S_OK;
 }

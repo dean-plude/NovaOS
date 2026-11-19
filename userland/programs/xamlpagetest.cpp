@@ -36,6 +36,11 @@
 #include <TextBlock.g.h>
 #include <TextBox.g.h>
 #include <TextChangedEventArgs.g.h>
+#include <PasswordBox.g.h>
+#include <RichEditBox.g.h>
+#include <TextControlPasteEventArgs.g.h>
+#include <TextControlCopyingToClipboardEventArgs.g.h>
+#include <TextControlCuttingToClipboardEventArgs.g.h>
 #include <CharacterReceivedRoutedEventArgs.g.h>
 #include <Window.g.h>
 #include <roapi.h>
@@ -107,6 +112,13 @@ static ctl::ComPtr<xaml_controls::ITextBox> s_box;     /* (the page's TextBox: X
 static ctl::ComPtr<xaml::IFrameworkElement> s_boxElement;
 static int s_text_changed;      /* the TextBox's TextChanged handler's count */
 static COLORREF s_box_before[200 * 32];         /* the TextBox's pixels before typing */
+/* (XAML text input, part 4: a PasswordBox and a RichEditBox, and the text
+ * boxes' clipboard) */
+static ctl::ComPtr<xaml_controls::IPasswordBox> s_password;
+static ctl::ComPtr<xaml_controls::IRichEditBox> s_rich;
+static int s_password_changed, s_rich_changed;  /* their PasswordChanged and TextChanged counts */
+static int s_pasted, s_copied, s_cut;           /* the TextBox's Paste, CopyingToClipboard, CuttingToClipboard */
+#define LAST_STEP 20
 static int s_shown;     /* ticks since the checks, while the page stays on screen */
 static int s_step;      /* the input steps, one per tick */
 static int s_pixel_ticks;       /* ticks waited for the first frame's pixels */
@@ -164,6 +176,72 @@ static bool box_text_is(const wchar_t *text)
 {
     wrl_wrappers::HString h;
     return s_box && SUCCEEDED(s_box->get_Text(h.GetAddressOf())) && is(h.Get(), text);
+}
+
+/* the clipboard's text is @want */
+static bool clipboard_is(const wchar_t *want)
+{
+    bool ok = false;
+    if (!OpenClipboard(nullptr)) return false;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        const wchar_t *p = static_cast<const wchar_t *>(GlobalLock(h));
+        ok = p && !wcscmp(p, want);
+        printf("xamlpagetest: clipboard \"%ls\"\n", p ? p : L"(none)");
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return ok;
+}
+
+/* a key pressed and let go, with Ctrl held when @ctrl (the island's thread
+ * keeps the key state as its messages are taken) */
+static void post_key(HWND island, UINT vk, bool ctrl = false)
+{
+    UINT ctl = MapVirtualKeyW(VK_CONTROL, MAPVK_VK_TO_VSC), sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    if (ctrl) PostMessageW(island, WM_KEYDOWN, VK_CONTROL, MAKELPARAM(1, ctl));
+    PostMessageW(island, WM_KEYDOWN, vk, MAKELPARAM(1, sc));
+    PostMessageW(island, WM_KEYUP, vk, MAKELPARAM(1, sc) | 0xC0000000);
+    if (ctrl) PostMessageW(island, WM_KEYUP, VK_CONTROL, MAKELPARAM(1, ctl) | 0xC0000000);
+}
+
+static void click(HWND top, HWND island, int x, int y)
+{
+    LPARAM at = island_point(top, island, x, y);
+    PostMessageW(island, WM_MOUSEMOVE, 0, at);
+    PostMessageW(island, WM_LBUTTONDOWN, MK_LBUTTON, at);
+    PostMessageW(island, WM_LBUTTONUP, 0, at);
+}
+
+static bool focused(IUnknown *control)
+{
+    ctl::ComPtr<xaml::IUIElement> e;
+    xaml::FocusState focus = xaml::FocusState_Unfocused;
+    return control && SUCCEEDED(control->QueryInterface(__uuidof(xaml::IUIElement), reinterpret_cast<void **>(e.GetAddressOf()))) &&
+           SUCCEEDED(e->get_FocusState(&focus)) && focus != xaml::FocusState_Unfocused;
+}
+
+static bool selected_is(const wchar_t *text)
+{
+    wrl_wrappers::HString h;
+    return s_box && SUCCEEDED(s_box->get_SelectedText(h.GetAddressOf())) && is(h.Get(), text);
+}
+
+/* pixels of the 200x32 at the window's client point @x,@y that differ from
+ * the one at @bx (the control's own background), in its left part */
+static int text_pixels(HWND top, HWND island, int x0, int y0, int bx)
+{
+    POINT at = { x0, y0 };
+    MapWindowPoints(top, island, &at, 1);
+    HDC dc = GetDC(island);
+    int n = 0;
+    if (!dc) return 0;
+    for (int y = 6; y < 26; y++) {
+        COLORREF bg = GetPixel(dc, at.x + bx, at.y + y);
+        for (int x = 8; x < 60; x++)
+            if (GetPixel(dc, at.x + x, at.y + y) != bg) n++;
+    }
+    ReleaseDC(island, dc);
+    return n;
 }
 
 static void set_text(xaml_controls::ITextBlock *block, const wchar_t *text)
@@ -298,8 +376,87 @@ static void input_step(HWND top, HWND island)
         CHECK("the TextBox's TextChanged fires for each change", s_text_changed == 4);
         printf("xamlpagetest: TextChanged %d times\n", s_text_changed);
         CHECK("the TextBox draws its text", inner >= 20);
+        /* (XAML text input, part 4) the selection and the clipboard: Ctrl+A
+         * selects all of it, Ctrl+C copies it (XAML takes the edit keys and
+         * copies through the Rich Edit's selection, which asks the TextBox
+         * first: its CopyingToClipboard event) */
+        post_key(island, 'A', true);
+        post_key(island, 'C', true);
         break;
     }
+    case 10:
+        CHECK("Ctrl+A selects the TextBox's text", selected_is(L"Hi"));
+        CHECK("Ctrl+C copies it to the clipboard", clipboard_is(L"Hi"));
+        CHECK("its CopyingToClipboard event", s_copied == 1);
+        post_key(island, VK_END);
+        post_key(island, 'V', true);
+        break;
+    case 11:
+        CHECK("End, Ctrl+V pastes it after", box_text_is(L"HiHi"));
+        CHECK("its Paste event", s_pasted == 1);
+        post_key(island, 'A', true);
+        post_key(island, 'X', true);
+        break;
+    case 12:
+        CHECK("Ctrl+A, Ctrl+X cuts all of it", box_text_is(L""));
+        CHECK("to the clipboard", clipboard_is(L"HiHi"));
+        CHECK("its CuttingToClipboard event", s_cut == 1);
+        post_key(island, 'V', true);
+        break;
+    case 13:
+        CHECK("Ctrl+V pastes it back", box_text_is(L"HiHi"));
+        click(top, island, 240 + 60, 260 + 16);         /* (the PasswordBox) */
+        break;
+    case 14:
+        CHECK("the click focuses the PasswordBox", focused(s_password.Get()));
+        for (const wchar_t *c = L"pw1"; *c; c++)
+            PostMessageW(island, WM_CHAR, *c, 1);
+        break;
+    case 15: {
+        wrl_wrappers::HString h;
+        if (s_password) s_password->get_Password(h.GetAddressOf());
+        printf("xamlpagetest: Password \"%ls\"\n", h.Get() ? WindowsGetStringRawBuffer(h.Get(), nullptr) : L"");
+        CHECK("typed keys reach the PasswordBox (its Password)", is(h.Get(), L"pw1"));
+        /* (a password is never copied: the clipboard keeps what it had) */
+        post_key(island, 'A', true);
+        post_key(island, 'C', true);
+        break;
+    }
+    case 16: {
+        CHECK("Ctrl+C in a PasswordBox copies nothing", clipboard_is(L"HiHi"));
+        printf("xamlpagetest: PasswordChanged %d times\n", s_password_changed);
+        CHECK("its PasswordChanged fires", s_password_changed >= 1);
+        int n = text_pixels(top, island, 240, 260, 120);
+        printf("xamlpagetest: PasswordBox text pixels %d\n", n);
+        CHECK("the PasswordBox draws its password characters", n >= 10);
+        click(top, island, 24 + 100, 308 + 32);         /* (the RichEditBox) */
+        break;
+    }
+    case 17:
+        CHECK("the click focuses the RichEditBox", focused(s_rich.Get()));
+        for (const wchar_t *c = L"Rich"; *c; c++)
+            PostMessageW(island, WM_CHAR, *c, 1);
+        break;
+    case 18: {
+        /* its text, through its Document (Microsoft.UI.Text's ITextDocument:
+         * WinUIEdit's Windows Runtime document) */
+        ctl::ComPtr<mut::ITextDocument> doc;
+        wrl_wrappers::HString h;
+        CHECK_HR("RichEditBox.Document", s_rich ? s_rich->get_Document(&doc) : E_FAIL);
+        if (doc) doc->GetText(mut::TextGetOptions_None, h.GetAddressOf());
+        const wchar_t *t = h.Get() ? WindowsGetStringRawBuffer(h.Get(), nullptr) : L"";
+        printf("xamlpagetest: RichEditBox text \"%ls\"\n", t);
+        CHECK("typed keys reach the RichEditBox (Document.GetText)", !wcsncmp(t, L"Rich", 4) && wcslen(t) <= 5);
+        post_key(island, 'A', true);
+        post_key(island, 'C', true);
+        break;
+    }
+    case 19:
+        CHECK("Ctrl+A, Ctrl+C in the RichEditBox copies its text", clipboard_is(L"Rich"));
+        printf("xamlpagetest: RichEditBox TextChanged %d times\n", s_rich_changed);
+        CHECK("its TextChanged fires", s_rich_changed >= 1);
+        CHECK("the RichEditBox draws its text", text_pixels(top, island, 24, 308, 120) >= 20);
+        break;
     }
 }
 
@@ -309,7 +466,7 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
 {
     double w = 0, h = 0;
     bool laid_out = s_panel && SUCCEEDED(s_panel->get_ActualWidth(&w)) && w > 0;
-    if (s_checked && s_step < 10) {
+    if (s_checked && s_step < LAST_STEP) {
         HWND top = find_window();
         HWND island = find_island(top);
         if (!s_step) {
@@ -323,7 +480,7 @@ static HRESULT on_tick(msy::IDispatcherQueueTimer *, IInspectable *)
         }
         if (++s_step == 1) CHECK("the content island's window", island != nullptr);
         if (island) input_step(top, island);
-        if (s_step == 10) {
+        if (s_step == LAST_STEP) {
             printf("xamlpagetest: page on screen\n");
             fflush(stdout);
         }
@@ -405,6 +562,8 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
         L"<TextBlock x:Name='status' Text='Not clicked' FontSize='16' Margin='168,156,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"<TextBlock x:Name='typed' Text='Typed: ' FontSize='16' Margin='24,212,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"<TextBox x:Name='box' Width='200' Height='32' Margin='24,260,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<PasswordBox x:Name='password' Width='200' Height='32' Margin='240,260,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
+        L"<RichEditBox x:Name='rich' Width='200' Height='64' Margin='24,308,0,0' HorizontalAlignment='Left' VerticalAlignment='Top'/>"
         L"</Grid>").Get(), page.ReleaseAndGetAddressOf()) : E_FAIL);
     if (page) page.As(&s_grid);
     ctl::ComPtr<IInspectable> found;
@@ -422,6 +581,10 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
         found.As(&s_boxElement);
     }
     CHECK("the page's TextBox", s_box != nullptr);
+    wrl_wrappers::HStringReference passwordName(L"password"), richName(L"rich");
+    if (s_grid && SUCCEEDED(s_grid->FindName(passwordName.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_password);
+    if (s_grid && SUCCEEDED(s_grid->FindName(richName.Get(), found.ReleaseAndGetAddressOf())) && found) found.As(&s_rich);
+    CHECK("the page's PasswordBox and RichEditBox", s_password && s_rich);
 
     /* its handlers: the Button's Click, the page's CharacterReceived */
     ctl::ComPtr<xaml_primitives::IButtonBase> buttonBase;
@@ -430,6 +593,20 @@ HRESULT App::OnLaunched(xaml::ILaunchActivatedEventArgs *)
              buttonBase->add_Click(wrl::Callback<xaml::IRoutedEventHandler>(on_click).Get(), &token) : E_FAIL);
     CHECK_HR("TextChanged handler", s_box ? s_box->add_TextChanged(wrl::Callback<xaml_controls::ITextChangedEventHandler>(
                  on_text_changed).Get(), &token) : E_FAIL);
+    CHECK_HR("Paste handler", s_box ? s_box->add_Paste(wrl::Callback<xaml_controls::ITextControlPasteEventHandler>(
+                 [](IInspectable *, xaml_controls::ITextControlPasteEventArgs *) { s_pasted++; return S_OK; }).Get(), &token) : E_FAIL);
+    CHECK_HR("CopyingToClipboard handler", s_box ? s_box->add_CopyingToClipboard(wrl::Callback<wf::ITypedEventHandler<
+                 xaml_controls::TextBox *, xaml_controls::TextControlCopyingToClipboardEventArgs *>>(
+                 [](xaml_controls::ITextBox *, xaml_controls::ITextControlCopyingToClipboardEventArgs *) { s_copied++; return S_OK; }).Get(),
+                 &token) : E_FAIL);
+    CHECK_HR("CuttingToClipboard handler", s_box ? s_box->add_CuttingToClipboard(wrl::Callback<wf::ITypedEventHandler<
+                 xaml_controls::TextBox *, xaml_controls::TextControlCuttingToClipboardEventArgs *>>(
+                 [](xaml_controls::ITextBox *, xaml_controls::ITextControlCuttingToClipboardEventArgs *) { s_cut++; return S_OK; }).Get(),
+                 &token) : E_FAIL);
+    CHECK_HR("PasswordChanged handler", s_password ? s_password->add_PasswordChanged(wrl::Callback<xaml::IRoutedEventHandler>(
+                 [](IInspectable *, xaml::IRoutedEventArgs *) { s_password_changed++; return S_OK; }).Get(), &token) : E_FAIL);
+    CHECK_HR("RichEditBox TextChanged handler", s_rich ? s_rich->add_TextChanged(wrl::Callback<xaml::IRoutedEventHandler>(
+                 [](IInspectable *, xaml::IRoutedEventArgs *) { s_rich_changed++; return S_OK; }).Get(), &token) : E_FAIL);
     ctl::ComPtr<xaml::IUIElement> gridElement;
     CHECK_HR("CharacterReceived handler", s_grid && SUCCEEDED(s_grid.As(&gridElement)) ?
              gridElement->add_CharacterReceived(wrl::Callback<wf::ITypedEventHandler<xaml::UIElement *,

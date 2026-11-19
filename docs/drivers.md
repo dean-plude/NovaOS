@@ -503,7 +503,10 @@ minidriver under the HID class driver: it opens the HID control and
 interrupt channels with the report descriptor the SDP record carries, so
 a Bluetooth mouse or keyboard works as a USB one does. After a restart
 the paired devices come back from the registry and `hidbth` reconnects
-by the stored link key.
+by the stored link key. A connect that is still waiting for the link to
+authenticate or encrypt gives up as soon as that link drops, or the service
+goes off, or the device is forgotten: it never takes the next link's
+answers (a new pairing's, from Settings) as its own, nor closes that link.
 
 A vendor's radio package is installed as on Windows: the inbox
 `bth.inf` has the `BthUsb.NT`, `.HW` and `.Services` sections that

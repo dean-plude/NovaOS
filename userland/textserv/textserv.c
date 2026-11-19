@@ -66,6 +66,7 @@ static BOOL reserve(TS *t, LONG n)
     cap = t->cap ? t->cap : 64;
     while (cap < n + 1) cap *= 2;
     if (!(b = alloc(cap * sizeof(WCHAR)))) return FALSE;
+    if (!fmt_reserve(t, cap)) { release(b); return FALSE; }
     if (t->text) { memcpy(b, t->text, t->len * sizeof(WCHAR)); release(t->text); }
     t->text = b;
     t->cap = cap;
@@ -113,15 +114,39 @@ static void refresh_format(TS *t)
     lf.lfWeight = (t->cf.cf.dwEffects & CFE_BOLD) ? FW_BOLD : FW_NORMAL;
     if (t->cf.wWeight && t->cf.cf.cbSize >= sizeof(CHARFORMAT2W)) lf.lfWeight = t->cf.wWeight;
     lf.lfItalic = (t->cf.cf.dwEffects & CFE_ITALIC) != 0;
-    lf.lfUnderline = (t->cf.cf.dwEffects & CFE_UNDERLINE) != 0;
     lf.lfCharSet = DEFAULT_CHARSET;
     memcpy(lf.lfFaceName, t->cf.cf.szFaceName, sizeof(lf.lfFaceName));
     lf.lfFaceName[31] = 0;
     if (t->font) DeleteObject(t->font);
     t->font = CreateFontIndirectW(&lf);
+    fmt_free_fonts(t);                            /* (the formats' fonts are the default's face and size) */
     t->lineh = 0;
     t->dirty = TRUE;
     dw_refresh(t);                                /* (the host's DirectWrite face, when it gives one) */
+}
+
+/* EM_SETCHARFORMAT's change of the default format (and plain text's) */
+void set_default_format(TS *t, const CHARFORMATW *cf)
+{
+    static const DWORD effects[] = { CFM_BOLD, CFM_ITALIC, CFM_UNDERLINE, CFM_STRIKEOUT };
+    int i;
+    if (cf->dwMask & CFM_FACE) memcpy(t->cf.cf.szFaceName, cf->szFaceName, sizeof(cf->szFaceName));
+    if (cf->dwMask & CFM_SIZE) t->cf.cf.yHeight = cf->yHeight;
+    if (cf->dwMask & CFM_COLOR) {
+        t->cf.cf.crTextColor = cf->crTextColor;
+        t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~CFE_AUTOCOLOR) | (cf->dwEffects & CFE_AUTOCOLOR);
+    }
+    for (i = 0; i < 4; i++)                       /* (the CFE_ bit is the CFM_ one) */
+        if (cf->dwMask & effects[i]) t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~effects[i]) | (cf->dwEffects & effects[i]);
+    if (cf->dwMask & CFM_BOLD) t->cf.wWeight = 0;
+    t->cf.cf.dwMask |= cf->dwMask;
+    {   /* (the font, without reading the host's format again) */
+        ITextHost *h = t->host;
+        t->host = 0;
+        refresh_format(t);
+        t->host = h;
+    }
+    redraw(t);
 }
 
 /* A device context to measure with: TxDraw's, the host's, or our own */
@@ -149,26 +174,45 @@ static WCHAR shown(TS *t, LONG i)
     return (t->bits & TXTBIT_USEPASSWORD) ? t->pwch : t->text[i];
 }
 
-/* the widths of [start, start+n) as shown, cumulative, into dx */
-static void measure(TS *t, HDC dc, LONG start, LONG n, int *dx, SIZE *sz)
+/* the widths of @n characters @s in font @key, cumulative, into dx */
+static void measure_part(TS *t, HDC dc, int key, const WCHAR *s, LONG n, int *dx, SIZE *sz)
+{
+    HGDIOBJ old;
+    LONG i;
+    if (dw_measure(t, key, s, n, dx, sz)) return; /* (the host's DirectWrite faces: dwtext.c) */
+    if (!dc) return;
+    old = SelectObject(dc, fmt_font(t, key));
+    if (!GetTextExtentExPointW(dc, s, (int)n, 0, 0, dx, sz)) {
+        int x = 0;                                /* (fallback: one at a time) */
+        for (i = 0; i < n; i++) { SIZE c; GetTextExtentPoint32W(dc, s + i, 1, &c); x += c.cx; if (dx) dx[i] = x; }
+        sz->cx = x;
+    }
+    SelectObject(dc, old);
+}
+
+/* the widths of [start, start+n) as shown, cumulative, into dx: each run
+ * of characters in one font (rich text's bold and italic) measured in it */
+void measure(TS *t, HDC dc, LONG start, LONG n, int *dx, SIZE *sz)
 {
     WCHAR stackbuf[256], *s = stackbuf;
-    LONG i;
+    LONG i, j, k;
     SIZE dummy;
+    int base = 0;
     if (!sz) sz = &dummy;
     sz->cx = sz->cy = 0;
     if (n <= 0) return;
     if (n > 256) s = alloc(n * sizeof(WCHAR));
     for (i = 0; i < n; i++) s[i] = shown(t, start + i) == L'\t' ? L' ' : shown(t, start + i);
-    if (dw_measure(t, s, n, dx, sz)) {            /* (the host's DirectWrite face: dwtext.c) */
-        if (s != stackbuf) release(s);
-        return;
+    for (i = 0; i < n; i = j) {
+        int key = fmt_key(t, fmt_at(t, start + i));
+        SIZE part = {0, 0};
+        for (j = i + 1; j < n && fmt_key(t, fmt_at(t, start + j)) == key; j++) ;
+        measure_part(t, dc, key, s + i, j - i, dx ? dx + i : 0, &part);
+        if (dx && base) for (k = i; k < j; k++) dx[k] += base;
+        base += part.cx;
+        if (part.cy > sz->cy) sz->cy = part.cy;
     }
-    if (!GetTextExtentExPointW(dc, s, (int)n, 0, 0, dx, sz) && dx) {
-        int x = 0;                                /* (fallback: one at a time) */
-        for (i = 0; i < n; i++) { SIZE c; GetTextExtentPoint32W(dc, s + i, 1, &c); x += c.cx; dx[i] = x; }
-        sz->cx = x;
-    }
+    sz->cx = base;
     if (s != stackbuf) release(s);
 }
 
@@ -408,17 +452,20 @@ void set_sel(TS *t, LONG anchor, LONG active)
     t->anchor = anchor;
     t->active = active;
     t->typing = FALSE;
+    t->insfmt = -1;                               /* (the caret moved: the caret's format goes) */
     selection_changed(t);
 }
 
 /* ---- undo --------------------------------------------------------------- */
-static void snap_free(SNAP *s) { release(s->text); s->text = 0; }
+static void snap_free(SNAP *s) { release(s->text); release(s->fmt); s->text = 0; s->fmt = 0; }
 
 static BOOL snap_take(TS *t, SNAP *s)
 {
     s->text = alloc((t->len + 1) * sizeof(WCHAR));
-    if (!s->text) return FALSE;
+    s->fmt = alloc(t->len + 1);
+    if (!s->text || !s->fmt) { snap_free(s); return FALSE; }
     memcpy(s->text, t->text, t->len * sizeof(WCHAR));
+    if (t->fmt) memcpy(s->fmt, t->fmt, t->len);
     s->len = t->len;
     s->anchor = t->anchor;
     s->active = t->active;
@@ -441,7 +488,7 @@ static void clear_stack(SNAP *stack, int *n)
     while (*n) snap_free(&stack[--(*n)]);
 }
 
-static void save_undo(TS *t)
+void save_undo(TS *t)
 {
     SNAP s;
     if (t->typing) return;                        /* (typing groups into one step) */
@@ -461,6 +508,7 @@ static void restore(TS *t, SNAP *s)
 {
     if (reserve(t, s->len)) {
         memcpy(t->text, s->text, s->len * sizeof(WCHAR));
+        memcpy(t->fmt, s->fmt, s->len);
         t->len = s->len;
     }
     t->anchor = s->anchor;
@@ -518,6 +566,7 @@ LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL t
 {
     LONG k, room;
     WCHAR *norm;
+    int f;
     if (a < 0) a = 0;
     if (b > t->len) b = t->len;
     if (a > b) a = b;
@@ -534,8 +583,12 @@ LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL t
     if (undoable) save_undo(t);
     else if (!typed) { clear_stack(t->undo, &t->nundo); clear_stack(t->redo, &t->nredo); }
     if (!reserve(t, t->len - (b - a) + k)) { release(norm); return -1; }
+    f = fmt_insertion(t, a, b);                   /* (rich text's: runs.c) */
     memmove(t->text + a + k, t->text + b, (t->len - b) * sizeof(WCHAR));
     memcpy(t->text + a, norm, k * sizeof(WCHAR));
+    memmove(t->fmt + a + k, t->fmt + b, t->len - b);
+    memset(t->fmt + a, f, k);
+    if (k) t->insfmt = -1;
     t->len += k - (b - a);
     t->typing = typed;
     release(norm);
@@ -564,6 +617,7 @@ void set_text(TS *t, const WCHAR *s, LONG n)
     t->typing = FALSE;
     clear_stack(t->undo, &t->nundo);
     clear_stack(t->redo, &t->nredo);
+    t->insfmt = 0;                                /* (new text: the default format) */
     replace_sel(t, s ? s : L"", s ? n : 0, FALSE, FALSE);
     t->anchor = t->active = 0;                     /* (the caret goes to the start, as Rich Edit's) */
     tom_clamp(t);
@@ -757,6 +811,12 @@ static HRESULT on_key(TS *t, UINT vk)
         case 'V': key_paste(t); return S_OK;
         case 'Z': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, FALSE); return S_OK;
         case 'Y': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, TRUE); return S_OK;
+        case 'B': case 'I': case 'U': {           /* (rich text's formatting keys) */
+            DWORD e = vk == 'B' ? CFE_BOLD : vk == 'I' ? CFE_ITALIC : CFE_UNDERLINE;
+            if (!RICH(t) || !(t->accels & e) || shift) return S_FALSE;
+            if (!(t->bits & TXTBIT_READONLY)) fmt_toggle(t, e);
+            return S_OK;
+        }
         }
         return S_FALSE;
     }
@@ -1037,38 +1097,39 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         if (lp) r = hit(t, ((POINTL *)lp)->x, ((POINTL *)lp)->y);
         break;
     case EM_SETCHARFORMAT: {
+        /* (rich text: the selection's, or all the text's, characters;
+         * otherwise, and SCF_DEFAULT, the default format) */
         const CHARFORMATW *cf = (const CHARFORMATW *)lp;
         if (!cf) { r = 0; break; }
-        if (cf->dwMask & CFM_FACE) memcpy(t->cf.cf.szFaceName, cf->szFaceName, sizeof(cf->szFaceName));
-        if (cf->dwMask & CFM_SIZE) t->cf.cf.yHeight = cf->yHeight;
-        if (cf->dwMask & CFM_COLOR) {
-            t->cf.cf.crTextColor = cf->crTextColor;
-            t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~CFE_AUTOCOLOR) | (cf->dwEffects & CFE_AUTOCOLOR);
+        if (RICH(t) && (wp & (SCF_SELECTION | SCF_WORD | SCF_ALL))) {
+            if (wp & SCF_ALL) set_default_format(t, cf);
+            r = fmt_apply(t, (wp & SCF_ALL) ? 0 : selmin(t), (wp & SCF_ALL) ? t->len : selmax(t),
+                          cf->dwMask, cf->dwEffects, cf->crTextColor);
+            break;
         }
-        if (cf->dwMask & CFM_BOLD) t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~CFE_BOLD) | (cf->dwEffects & CFE_BOLD);
-        if (cf->dwMask & CFM_ITALIC) t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~CFE_ITALIC) | (cf->dwEffects & CFE_ITALIC);
-        if (cf->dwMask & CFM_UNDERLINE) t->cf.cf.dwEffects = (t->cf.cf.dwEffects & ~CFE_UNDERLINE) | (cf->dwEffects & CFE_UNDERLINE);
-        t->cf.cf.dwMask |= cf->dwMask;
-        {   /* (the font, without reading the host's format again) */
-            ITextHost *h = t->host;
-            t->host = 0;
-            refresh_format(t);
-            t->host = h;
-        }
-        redraw(t);
+        set_default_format(t, cf);
         r = 1;
         break;
     }
     case EM_GETCHARFORMAT: {
         CHARFORMATW *cf = (CHARFORMATW *)lp;
+        CHARFORMAT2W q;
         UINT n;
-        if (!cf) break;
-        n = cf->cbSize < sizeof(t->cf) ? cf->cbSize : sizeof(t->cf);
-        memcpy((char *)cf + sizeof(UINT), (char *)&t->cf + sizeof(UINT), n - sizeof(UINT));
-        cf->dwMask = CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_SIZE | CFM_COLOR | CFM_FACE;
+        if (!cf || cf->cbSize <= sizeof(UINT)) break;
+        if (RICH(t) && wp == SCF_SELECTION) fmt_query(t, selmin(t), selmax(t), &q);
+        else {
+            memcpy(&q, &t->cf, sizeof(q));
+            q.cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_SIZE | CFM_COLOR | CFM_FACE;
+        }
+        n = cf->cbSize < sizeof(q) ? cf->cbSize : sizeof(q);
+        memcpy((char *)cf + sizeof(UINT), (char *)&q + sizeof(UINT), n - sizeof(UINT));
         r = cf->dwMask;
         break;
     }
+    case NOVA_EM_SETFORMATACCELERATORS:
+        t->accels = (DWORD)lp & (CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE);
+        r = 1;
+        break;
     case EM_GETPARAFORMAT: {
         PARAFORMAT *pf = (PARAFORMAT *)lp;
         if (pf && pf->cbSize >= sizeof(UINT) + sizeof(DWORD)) { pf->dwMask = 0; }
@@ -1126,12 +1187,45 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
 }
 
 /* ---- drawing ------------------------------------------------------------ */
+typedef struct { HDC dc; COLORREF c; } GDIBAR;
+static void gdi_bar(void *ctx, LONG l, LONG tp, LONG r, LONG b)
+{
+    GDIBAR *g = ctx;
+    RECT rc;
+    HBRUSH br = CreateSolidBrush(g->c);
+    SetRect(&rc, l, tp, r, b);
+    FillRect(g->dc, &rc, br);
+    DeleteObject(br);
+}
+
+/* characters [a, b) of a line (@s as shown, @dx its widths) from x0, each
+ * run in its format's font, colour, underline and strikethrough: @fg is
+ * the automatic colour, or (@sel, over the selection's highlight) all of
+ * them */
+static void draw_runs(TS *t, HDC dc, const WCHAR *s, const int *dx, LONG start, LONG a, LONG b, LONG x0, LONG y,
+                      COLORREF fg, BOOL sel)
+{
+    LONG i, j;
+    for (i = a; i < b; i = j) {
+        int f = fmt_at(t, start + i);
+        LONG xa = x0 + (i ? dx[i - 1] : 0), xb;
+        GDIBAR g;
+        for (j = i + 1; j < b && fmt_at(t, start + j) == f; j++) ;
+        xb = x0 + dx[j - 1];
+        g.dc = dc;
+        g.c = (sel || t->mono == 2) ? fg : fmt_color(t, f, fg);
+        SelectObject(dc, fmt_font(t, fmt_key(t, f)));
+        SetTextColor(dc, g.c);
+        ExtTextOutW(dc, xa, y, 0, 0, s + i, (UINT)(j - i), 0);
+        fmt_decorate(t, fmt_effects(t, f), xa, xb, y, gdi_bar, &g);
+    }
+}
+
 static void draw(TS *t, HDC dc, const RECT *bounds)
 {
     RECT rc = *bounds, cl;
     TXTBACKSTYLE back = TXTBACK_OPAQUE;
-    COLORREF fg = (t->cf.cf.dwEffects & CFE_AUTOCOLOR) || !(t->cf.cf.dwMask & CFM_COLOR)
-                  ? syscolor(t, COLOR_WINDOWTEXT) : t->cf.cf.crTextColor;
+    COLORREF fg = syscolor(t, COLOR_WINDOWTEXT);    /* (the automatic colour: fmt_color gives each run's) */
     COLORREF selbg = syscolor(t, COLOR_HIGHLIGHT), selfg = syscolor(t, COLOR_HIGHLIGHTTEXT);
     BOOL showsel = t->focus || !(t->bits & TXTBIT_HIDESELECTION);
     LONG smin = selmin(t), smax = selmax(t);
@@ -1159,32 +1253,29 @@ static void draw(TS *t, HDC dc, const RECT *bounds)
     SetBkMode(dc, TRANSPARENT);
     for (i = 0; i < t->nlines; i++) {
         LINE *ln = &t->lines[i];
-        LONG y = rc.top + i * t->lineh - t->scrolly, n = ln->len, k;
+        LONG y = rc.top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc.left - t->scrollx;
         WCHAR stackbuf[256], *s = stackbuf;
         int *dx = 0;
         if (y + t->lineh <= rc.top || y >= rc.bottom) continue;
         if (n > 256) s = alloc(n * sizeof(WCHAR));
+        if (n && !(dx = alloc(n * sizeof(int)))) { if (s != stackbuf) release(s); continue; }
         for (k = 0; k < n; k++) s[k] = shown(t, ln->start + k) == L'\t' ? L' ' : shown(t, ln->start + k);
-        SetTextColor(dc, fg);
-        if (n) ExtTextOutW(dc, rc.left - t->scrollx, y, 0, 0, s, (UINT)n, 0);
+        if (n) measure(t, dc, ln->start, n, dx, 0);
+        draw_runs(t, dc, s, dx, ln->start, 0, n, x0, y, fg, FALSE);
         /* the selected part again, over its highlight */
         if (showsel && smin < smax && smax > ln->start && smin <= ln->start + n) {
             LONG a = smin > ln->start ? smin - ln->start : 0, b = smax < ln->start + n ? smax - ln->start : n;
             BOOL eol = smax > ln->start + n && i + 1 < t->nlines;   /* (the paragraph mark) */
-            if (n && (dx = alloc(n * sizeof(int)))) measure(t, dc, ln->start, n, dx, 0);
-            {
-                LONG x0 = rc.left - t->scrollx + (a ? dx[a - 1] : 0);
-                LONG x1 = rc.left - t->scrollx + (b ? dx[b - 1] : 0) + (eol ? t->lineh / 3 : 0);
-                RECT sr;
-                HBRUSH br = CreateSolidBrush(selbg);
-                SetRect(&sr, x0, y, x1, y + t->lineh);
-                FillRect(dc, &sr, br);
-                DeleteObject(br);
-                SetTextColor(dc, selfg);
-                if (b > a) ExtTextOutW(dc, x0, y, 0, 0, s + a, (UINT)(b - a), 0);
-            }
-            release(dx);
+            LONG xa = x0 + (a ? dx[a - 1] : 0);
+            LONG xb = x0 + (b ? dx[b - 1] : 0) + (eol ? t->lineh / 3 : 0);
+            RECT sr;
+            HBRUSH br = CreateSolidBrush(selbg);
+            SetRect(&sr, xa, y, xb, y + t->lineh);
+            FillRect(dc, &sr, br);
+            DeleteObject(br);
+            draw_runs(t, dc, s, dx, ln->start, a, b, x0, y, selfg, TRUE);
         }
+        release(dx);
         if (s != stackbuf) release(s);
     }
     SelectObject(dc, old);
@@ -1525,9 +1616,11 @@ static ULONG STDMETHODCALLTYPE in_release(IUnknown *me)
         clear_stack(t->undo, &t->nundo);
         clear_stack(t->redo, &t->nredo);
         if (t->font) DeleteObject(t->font);
+        fmt_free_fonts(t);
         if (t->memdc) DeleteDC(t->memdc);
         release(t->lines);
         release(t->text);
+        release(t->fmt);
         release(t);
     }
     return (ULONG)r;
@@ -1554,6 +1647,9 @@ __declspec(dllexport) HRESULT WINAPI CreateTextServices(IUnknown *outer, ITextHo
     t->undolimit = UNDO_MAX;
     t->targetx = -1;
     t->textmode = TM_RICHTEXT;
+    t->insfmt = -1;
+    t->nfmts = 1;
+    t->accels = CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE;
     reserve(t, 0);
     tom_init(t);
     refresh_bits(t);

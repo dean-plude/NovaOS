@@ -1812,6 +1812,32 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../Lin
     tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _GRADIENTS)
 CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../LinearGradientBrush.cpp',
                                                                              '../LinearGradientBrushMap.cpp')
+# (step 32.6, the panel a list's template lays its items out in, the
+# ListView's (Pulsar item 3, slice 29): ItemsStackPanel, over the modern
+# collection panel every virtualizing list panel shares
+# (ModernCollectionBasePanel: its container and header mapping, its cache
+# and window management, its viewport, its sticky headers, its snap points,
+# its interaction and the iterators its container content changing phases
+# walk), which lays out through a layout strategy: the stacking one
+# (StackingLayoutStrategy and its implementation, with the layout strategy
+# base, in components/moco), each its generated class and its partial one.
+# The wrapping and calendar strategies (ItemsWrapGrid, the CalendarView)
+# join later)
+_ITEMS_STACK_PANEL = ('ModernCollectionBasePanel', 'ItemsStackPanel', 'StackingLayoutStrategy')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'ModernCollectionBasePanel_Partial', 'ModernCollectionBasePanel_CacheManager_Partial',
+    'ModernCollectionBasePanel_CollectionIterator_Partial', 'ModernCollectionBasePanel_ContainerContentChangingIterator',
+    'ModernCollectionBasePanel_ContainerMapper_Partial', 'ModernCollectionBasePanel_ICTCP_Partial',
+    'ModernCollectionBasePanel_IICG2_Partial', 'ModernCollectionBasePanel_IICM_Partial',
+    'ModernCollectionBasePanel_IItemsLookupAndIPaginatedPanel', 'ModernCollectionBasePanel_Interaction_Partial',
+    'ModernCollectionBasePanel_LayoutDataInfoProvider', 'ModernCollectionBasePanel_SnapPoints',
+    'ModernCollectionBasePanel_StickyHeaders', 'ModernCollectionBasePanel_ViewportManagement_Partial',
+    'ModernCollectionBasePanel_WindowManagement_Partial', 'ItemsStackPanel_Partial',
+    'StackingLayoutStrategy_Partial')) + tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _ITEMS_STACK_PANEL)
+COMPONENT_INCLUDES.append('components/moco/inc')
+_MOCO = 'components/moco/lib/Microsoft.UI.Xaml.Components.Moco.vcxproj'
+CORE_LIBRARIES.append((_MOCO, _MOCO, 'components/pch/precomp.h', []))
+CORE_SOURCES[_MOCO] = ('LayoutStrategyBase.cpp', 'StackingLayoutStrategyImpl.cpp')
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

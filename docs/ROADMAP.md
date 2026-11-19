@@ -1698,6 +1698,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   panel a list lays its items out in, which NovaOS does not build yet.
   Next: `ItemsStackPanel`, then the CI check that Calculator computes
   `2 + 2`, which ticks this step.
+  Thirty-fifth part done (Pulsar item 3, twenty-ninth slice): the
+  framework's `ItemsStackPanel`, the panel a `ListView`'s template lays
+  its items out in, over `ModernCollectionBasePanel` and the stacking
+  layout strategy, built for Calculator's history and memory lists.  Test
+  `wuxamltest`.  Calculator's page gets past its lists' panel and stops
+  next at a `HyperlinkButton`, which NovaOS does not build yet.  Next:
+  `HyperlinkButton`, then the CI check that Calculator computes `2 + 2`,
+  which ticks this step.
 
 ---
 

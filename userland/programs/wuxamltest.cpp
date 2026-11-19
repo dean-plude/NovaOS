@@ -888,6 +888,28 @@ static void list_view_checks()
           SUCCEEDED(selector->get_SelectedIndex(&selected)) && selected == -1);
 }
 
+/* an ItemsStackPanel from markup, the panel the ListView's template lays its
+ * items out in (Calculator's history and memory lists'): Windows'
+ * ItemsStackPanel (a Panel), its Orientation and CacheLength read back */
+static void items_stack_panel_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> panelObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<ItemsStackPanel " XMLNS L"Orientation='Horizontal' "
+                                                    L"CacheLength='2'/>").Get(),
+                     panelObject.GetAddressOf()) : E_FAIL;
+    CHECK("an ItemsStackPanel from markup", SUCCEEDED(hr) && panelObject);
+    ctl::ComPtr<wuxc::IItemsStackPanel> panel;
+    ctl::ComPtr<wuxc::IPanel> basePanel;
+    wuxc::Orientation orientation = wuxc::Orientation_Vertical;
+    DOUBLE cacheLength = 0;
+    CHECK("it is Windows' ItemsStackPanel (a Panel), Horizontal, its CacheLength 2", panelObject &&
+          SUCCEEDED(panelObject.As(&panel)) && SUCCEEDED(panelObject.As(&basePanel)) &&
+          SUCCEEDED(panel->get_Orientation(&orientation)) && orientation == wuxc::Orientation_Horizontal &&
+          SUCCEEDED(panel->get_CacheLength(&cacheLength)) && cacheLength == 2.0);
+}
+
 /* a LinearGradientBrush from markup, as Calculator's page paints with: its
  * EndPoint and its two GradientStops (their Offset and Color) read back */
 static void gradient_checks()
@@ -992,6 +1014,7 @@ public:
         menu_flyout_checks();
         list_view_checks();
         gradient_checks();
+        items_stack_panel_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();
